@@ -9001,7 +9001,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
   }
 
   it('器が無ければ 503（「置いていない」と「口が無い」を分ける）', async () => {
-    // 既定の `app`（`beforeEach`）は `credentials` を渡していない
     expect((await app.request('/credentials')).status).toBe(503);
   });
 
@@ -9032,7 +9031,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
       { runnerId: 'runner-1', ok: true, credentials: expect.anything() },
     ]);
     expect(runner.held.get('NPM_TOKEN')).toBe(DUMMY_VALUE);
-    // 器を作り直しても戻せる（正本に在る）
     expect((await stores.credentials.list()).map((row) => row.name)).toEqual([
       'GIT_AUTHOR_NAME',
       'NPM_TOKEN',
@@ -9047,7 +9045,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     expect(response.status).toBe(200);
     expect(await response.text()).not.toContain(DUMMY_VALUE);
 
-    // 読み出す口の側も同じ
     const read = await withVault.request('/credentials');
     expect(await read.text()).not.toContain(DUMMY_VALUE);
   });
@@ -9062,10 +9059,7 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
 
     expect(response.status).toBe(400);
     const text = await response.text();
-    // **理由が読めること。** 「置けなかった」だけでは、名前を疑うのか権限を疑うのか
-    // 分からない（人間は PAT の権限を疑いに行く）。
     expect(text).toContain('alteroid token add');
-    // **値は出ない。**
     expect(text).not.toContain(DUMMY_VALUE);
     expect(await stores.credentials.list()).toEqual([]);
     expect(runner.receivedCredentials).toEqual([]);
@@ -9111,16 +9105,7 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     expect((await stores.credentials.list()).map((row) => row.name)).toEqual(['NPM_TOKEN']);
   });
 
-  /**
-   * 差し替えた事実が日誌に残ること（Issue #1733。#1717 のレビューで見つかった
-   * 不揃い——`PUT /mcp-servers` / `profile_write` は残していたが、`PUT /profile`
-   * `PUT /credentials` だけ残していなかった）。
-   *
-   * **`secret: false` の行も混ぜる。** `CredentialService.apply()` が返す
-   * `result.fingerprints` は、secret でない行に限って `value`（平文）を伴う
-   * （`credential-service.ts` の `fingerprintOfRow`）——ここを見落として
-   * 丸ごと日誌へ流すと、値が1文字も書かれていないはずの日誌に鍵が漏れる。
-   */
+  // secret: false の行も混ぜる: その行の fingerprints は平文の value を伴うため、丸ごと日誌へ流すと漏れる。
   it('日誌に、名前と指紋・配布の成否まで残り、値は1文字も書かない（secret:false でも）', async () => {
     const runner = fakeRunner('runner-1');
     const withVault = withCredentials([runner]);
@@ -9153,7 +9138,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     const decisions = journal
       .map((e) => (e.type === 'decision' ? e.decision : ''))
       .filter((decision) => decision.includes('環境変数（鍵）'));
-    // journal.list の既定は 'desc'（新しい順）——直近（先頭）が2回目の PUT。
     expect(decisions[0]).toContain('外した: NPM_TOKEN');
   });
 
@@ -9175,16 +9159,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     expect(serialized).not.toContain(DUMMY_VALUE);
   });
 
-  /**
-   * **⚠️ 2026-09-29（issue #2123）: 期待を反転した。** `PUT /credentials` を
-   * 「日誌を先に書く」形へ動かした以上、`deps.credentials.apply`（検証と
-   * 実際の保存が同じ1呼びの中にある）が検証で断った回も「差し替えようと
-   * している」の1行と、打ち消しの1行が残る（記録が多すぎる側の穴で、記録の
-   * 無い差し替えより安全側と判断した。teto の判断）。元は「1文字も置いて
-   * いないので日誌にも残らない」ことを固定していたが、それは差し替えが
-   * 日誌の後にあった旧い形の帰結だった。**値（鍵そのもの）は今までどおり
-   * 1文字も書かない**——ここで固定するのは名前だけである。
-   */
   it('置かせない名前・伏せる鍵は 400 のまま。差し替えようとした行と打ち消しの行は残るが、値は1文字も書かない', async () => {
     const withVault = withCredentials();
     const r1 = await put(withVault, [{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: DUMMY_VALUE }]);
@@ -9193,7 +9167,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
       { name: 'ALTEROID_DATABASE_URL', value: 'postgres://stolen' },
     ]);
     expect(r2.status).toBe(400);
-    // 置かせない名前なので、正本には1件も置かれていない。
     expect(await stores.credentials.list()).toEqual([]);
 
     const decisions = (await stores.journal.list({ types: ['decision'] }))
@@ -9207,25 +9180,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     expect(serialized).not.toContain('postgres://stolen');
   });
 
-  /**
-   * （以下は 2026-09-29 以前の形。issue #2123 で反転）
-   *
-   * **⚠️ `PUT /credentials` は Issue #2037 の `appendJournalOrDrop` の対象外
-   * （マネージャー判断。`app.ts` の `appendJournalOrDrop` の doc「当てていない
-   * 口」）。** 鍵の差し替えは日誌より前に runner へ配られ、効いている——
-   * それでも日誌の行が「誰が鍵を差し替えたか」の唯一の記録である以上、
-   * ここだけは書けなかったら今までどおり 500 のままにする（跡は stderr にも
-   * 残る）。この歯はその「変えていないこと」を固定する。
-   *
-   * **⚠️ 2026-09-29（issue #2123）: 期待を反転した。** `PUT /credentials` は
-   * 能力を広げる口だと teto が判断し、`/access/:accountId/grant` と同じ
-   * 「日誌を先に書き、書けなければ状態を変えずに 500」へ動いた。元は
-   * 「差し替え（`deps.credentials.apply`）が先・日誌が後」だったので、日誌
-   * への追記だけが落ちても差し替えは効いたままだった——この歯はその「差し
-   * 替えは効いたまま」を固定していた（直上の段落、当時のマネージャー
-   * 判断）。いまは日誌が先なので、日誌が書けなければ差し替えそのものが
-   * 起きない——`deps.credentials.apply` は一度も呼ばれず、鍵は置かれない。
-   */
   it('日誌への先書きが落ちると 500 で、鍵は置かれない（issue #2123）', async () => {
     const runner = fakeRunner('runner-1');
     const failingJournal: Stores = {
@@ -9254,29 +9208,12 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
       expect(response.status).toBe(500);
     });
 
-    // （以下は 2026-09-29 以前の形。issue #2123 で反転）
-    // 鍵そのものは既に置かれている（応答は 500 でも操作は効いている）。
-    // ↑ いまは逆——日誌が先に落ちたので、差し替え（`apply`）そのものが
-    // 起きていない（鍵は置かれない）。
     expect((await stores.credentials.list()).map((row) => row.name)).toEqual([]);
     expect(runner.held.has('NPM_TOKEN')).toBe(false);
-    // （以下は 2026-09-29 以前の形。issue #2123 で反転）
-    // **`appendJournalOrDrop` を通らないので、`noteDroppedRecord` の跡は出ない**
-    // （握っていない証拠——出ていたら 500 と矛盾する形で握っていることになる）。
-    // ↑ 結論（跡が出ない）は変わらないが、理由は変わった——打ち消しの行を
-    // 書く前段（先書き）で落ちたので、そこにも進んでいない。
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
     expect(dropped).toHaveLength(0);
   });
 
-  /**
-   * **issue #2123。** 日誌は書けたが、状態変更（正本への保存。
-   * `stores.credentials.put`）そのものが投げたとき——`deps.credentials.apply`
-   * は検証と実際の保存が同じ1呼びの中にあるので、ここからは「検証で断った」
-   * のと同じ形（400）に見える。**差し替えようとした行と打ち消しの行の両方が
-   * 日誌に残ることは grant と同じ**（`{ error: String(error) }` の 400、
-   * 「今と同じエラー応答」）。
-   */
   it('状態変更（正本への保存）が投げたときは、差し替えようとした行と打ち消しの行の両方が日誌に残る', async () => {
     const throwingStores: Stores = {
       ...stores,
@@ -9314,11 +9251,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
   });
 });
 
-/**
- * `POST /runners/credentials`（登録されている全 runner へ鍵を配る口）に
- * 日誌の先書きを足す（issue #2198）。`PUT /credentials` と同じ形——
- * **日誌を先に書き、書けなければ1本も配らずに 500。**
- */
 describe('runner への鍵配布を日誌へ残す（POST /runners/credentials。issue #2198）', () => {
   const DUMMY_VALUE = 'CRED-RUNNERS-DUMMY';
 
