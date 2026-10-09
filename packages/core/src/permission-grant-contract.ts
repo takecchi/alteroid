@@ -205,6 +205,7 @@ export async function verifyPermissionGrantStoreContract(
   }
 
   const listBeforeRead = await store.list();
+  // 読むだけの口は投げず「無い」と同じ結果を返す: 書き込みでは NUL の鍵を断るので、NUL を含む id の行はどの器にも存在しえない。
   const nulId = 'permission-grant-contract-n\u0000ul';
   const readOutcomes: Array<[string, () => Promise<unknown>, unknown]> = [
     ['get(NULを含むid)はnull', () => store.get(nulId), null],

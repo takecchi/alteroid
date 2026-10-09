@@ -109,6 +109,7 @@ export function summarizeGithubObservations(
           : { ciUnavailable: entry.result.ciUnavailable }),
       };
     } else {
+      // 失敗の回に数は無い: 直前の成功の数を失敗の回へ写さない（取れなかった回に数を作らない）。
       row.latestFailed ??= { ...common, reason: entry.result.reason };
     }
   }

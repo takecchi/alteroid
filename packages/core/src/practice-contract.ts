@@ -63,6 +63,7 @@ export async function verifyPracticeStoreContract(
     fail(`list() が slug の昇順になっていない: ${listed.join(',')}`);
   }
 
+  // `kind` を列挙で弾かない: ここが落ちる器は、知らない種類のやり方を人間が書けない。
   const exotic = await practices.write({
     slug: 'contract-d',
     kind: '外部サービスの確認',

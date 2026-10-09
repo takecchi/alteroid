@@ -39,7 +39,11 @@ export async function readUnreadableJobsForCommitments(
   return stores.jobs.listUnreadableJobs();
 }
 
-/** `readJobs` は、呼び手が既に job 一覧を読んでいるときに二重に読まないための差し込み口。 */
+/**
+ * `GET /progress`・`GET /commitments`・クローンの道具 `progress_read` が同じ組み立てを使う:
+ * 口ごとにずれると数が食い違う（一覧の「返答済み」と集計の `byState.responded` など）。
+ * `readJobs` は、呼び手が既に job 一覧を読んでいるときに二重に読まないための差し込み口。
+ */
 export async function buildCommitmentDerivations(
   stores: Stores,
   entries: readonly Commitment[],

@@ -13,7 +13,10 @@ export const PERMISSION_MODES = [
 
 export type PermissionModeName = (typeof PERMISSION_MODES)[number];
 
-/** `default` に倒さない: canUseTool を渡していない query() では ask がそのまま拒否になり、答える相手の居ない確認が出るから。 */
+/**
+ * `default` に倒さない: canUseTool を渡していない query() では ask がそのまま拒否になり、答える相手の居ない確認が出るから。
+ * `auto` は緩めているのではなく、人間が Claude Code を開いたときと同じ（モードは実行環境の設定で、締めても道具は減らない）。
+ */
 export const DEFAULT_PERMISSION_MODE: PermissionModeName = 'auto';
 
 /** 既定との比較にしない（既定と同じ値でも「置いた」）。不正な値も `null` にしない（弾くのは {@link resolvePermissionModeFor}）。 */

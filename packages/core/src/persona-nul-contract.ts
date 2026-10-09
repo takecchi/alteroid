@@ -18,6 +18,7 @@ export async function verifyPersonaNulContract(persona: PersonaStore): Promise<v
     fail(`appendで NUL が残る・欠ける: ${JSON.stringify(appended.content)}`);
   }
 
+  // 末尾が `\n\0` の本文は NUL を先に落としてから末尾の改行を足す: 足してから落とすと空行が1つ余る。
   const tail = await persona.write(slug, 'x\n\u0000');
   if (tail.content !== 'x\n')
     fail(`write('x\\n\\0')の返り値の末尾に空行が余る・欠ける: ${JSON.stringify(tail.content)}`);

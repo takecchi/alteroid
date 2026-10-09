@@ -607,6 +607,7 @@ export function createProfileApplier(options: ProfileApplierOptions): ProfileApp
       }
 
       return {
+        // 指紋は本文から先に決める: 置く前に呼び出し側へ返せないと、保存の順序を組み替えられない。
         profile: {
           sha256: fingerprintOf(script),
           bytes: Buffer.byteLength(script),
