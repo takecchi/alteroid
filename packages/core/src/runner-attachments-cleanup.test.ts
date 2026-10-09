@@ -31,7 +31,6 @@ describe('placeRunnerAttachments の失敗時の掃除', () => {
     const earlier = first[0]?.path as string;
     await expect(readFile(earlier, 'utf8')).resolves.toBe('前のメッセージの中身');
 
-    // 同じ id の再送（resume の作り直し・再試行）。2つ目の置き先が symlink で、置けずに落ちる。
     const outside = await makeTempDir('runner-att-cleanup-outside-');
     await symlink(outside, join(root, 'mgr-abc123', 'att-2'));
     await expect(
@@ -42,7 +41,6 @@ describe('placeRunnerAttachments の失敗時の掃除', () => {
       }),
     ).rejects.toBeInstanceOf(RunnerAttachmentRejectedError);
 
-    // 落ちた呼び出しが作ったものではない dir（以前に置いた att-1/a.txt）が、掃除に巻き込まれて消えていないこと。
     await expect(readFile(earlier, 'utf8')).resolves.toBe('前のメッセージの中身');
   });
 
@@ -76,7 +74,6 @@ describe('placeRunnerAttachments の失敗時の掃除', () => {
         attachments: [attachmentOf('att-1', 'a.txt', '新規'), attachmentOf('att-2', 'c.txt', 'x')],
       }),
     ).rejects.toBeInstanceOf(RunnerAttachmentRejectedError);
-    // 置いた att-1（この呼び出しが作った dir）は、半端に残らない。
     await expect(access(join(root, 'mgr-abc123', 'att-1'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
@@ -99,7 +96,6 @@ describe('placeRunnerAttachments の失敗時の掃除', () => {
       }),
     ).rejects.toBeInstanceOf(RunnerAttachmentRejectedError);
     await expect(readFile(first[0]?.path as string, 'utf8')).resolves.toBe('前の中身');
-    // この呼び出しが att-1 に置いた b.txt は残さない。
     await expect(access(join(root, 'mgr-abc123', 'att-1', 'b.txt'))).rejects.toMatchObject({
       code: 'ENOENT',
     });

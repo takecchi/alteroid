@@ -11,12 +11,6 @@ import { createLocalRunner } from './runner-local.js';
 import type { RunnerAttachment, RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-/**
- * 担い手（マネージャー）への添付の受け渡し（Issue #3111 段3）の、runner（Host）側。
- * start / send / resume のどれでも、添付が (1) sha256 を照合されて置かれ、(2) 入力に通知行（path）と
- * image ブロックが載ることを、偽の Claude SDK が読み取った入力で確かめる。
- */
-
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   'base64',
@@ -38,7 +32,6 @@ function attachmentOf(
   };
 }
 
-/** SDK が `prompt` から読んだ入力を全部記録する偽物。 */
 function fakeSdk(): { fn: typeof sdkQuery; received: { content: unknown }[] } {
   const received: { content: unknown }[] = [];
   let count = 0;
@@ -98,12 +91,10 @@ async function setup(): Promise<{
   return { host, root, fake };
 }
 
-/** 条件が成り立つまで待つ（vitest の `waitFor`。テスト側で実時間の待ちを書かない）。 */
 async function until(predicate: () => boolean): Promise<void> {
   await vi.waitFor(() => expect(predicate()).toBe(true));
 }
 
-/** 入力（content は文字列か、text + image ブロックの配列）を、本文と画像ブロックに割る。 */
 function split(content: unknown): { text: string; images: unknown[] } {
   if (typeof content === 'string') return { text: content, images: [] };
   const blocks = content as { type: string; text?: string }[];

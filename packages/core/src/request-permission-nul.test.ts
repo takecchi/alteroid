@@ -4,14 +4,6 @@ import { validatePermissionRequest } from './permission-rule.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * `request_permission` の検算（`validatePermissionRequest`）は、承認の行に残る値（入口で NUL を落とした後。
- * `prepareApprovalForWrite` の `stripNulDeep`）と同じ値で行う。落とす前の値で検算すると、検算を通ったはずの
- * 要求が残った値では自己矛盾する（denies が規則に一致する・規則が空になって不正になる）。
- *
- * **`tools.test.ts` の harness は使わない。** 末尾への追記が他の PR と衝突するのを避けて別ファイルにした
- * ので、この歯に要る最小限（stores と道具の呼び出し）だけを組む。`request_permission` は managers を使わない。
- */
 function harness() {
   const stores = createMemoryStores();
   const tools = createCloneTools({

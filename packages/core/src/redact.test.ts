@@ -7,7 +7,6 @@ import {
   redactedExcerpt,
 } from './redact.js';
 
-// 偽の値だけを使う（本物の鍵は使わない）。
 const FAKE_GHP = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
 
 describe('redactedExcerpt（issue #2418。伏せてから切る）', () => {
@@ -29,9 +28,7 @@ describe('redactedExcerpt（issue #2418。伏せてから切る）', () => {
   });
 
   it('切り口で割れたトークンの断片を残さない（伏せてから切る）', () => {
-    // トークンが上限をまたぐ位置に置く。先に切ると断片が残る。
     const text = `${'x '.repeat(10)}${FAKE_GHP}`;
-    // 先に 35 字で切ると `ghp_` + 15 字が残る（20 字未満なので規則に合わない）。
     const out = redactedExcerpt(text, 35, undefined);
     expect(out).not.toContain('ghp_');
     expect(out).toContain('[REDACTED]');
@@ -51,7 +48,6 @@ describe('redactedExcerpt（issue #2418。伏せてから切る）', () => {
 });
 
 describe('redactSecretsInBody（issue #2600。本文に掛ける狭い網）', () => {
-  // 本物の秘密の形。どれも狭い網で伏せられること。
   const SECRETS: ReadonlyArray<readonly [string, string, string]> = [
     ['GitHub の旧形式のトークン', `見て ${FAKE_GHP} ね`, FAKE_GHP],
     ['GitHub の新形式のトークン', `pat github_pat_${'A1b2C3d4E5'.repeat(3)} を`, 'github_pat_'],
@@ -79,7 +75,6 @@ describe('redactSecretsInBody（issue #2600。本文に掛ける狭い網）', (
     expect(out).toBe('値は [REDACTED] です');
   });
 
-  // 報告や日誌に普通に現れる識別子。化けると観測として使えなくなる。
   const IDENTIFIERS: ReadonlyArray<readonly [string, string]> = [
     ['40桁のコミット sha', 'commit 3b29eb9233915c325d60abff85909847ec43dc53 を見た'],
     ['短い sha', 'sha 3b29eb92 と d65c91ee'],

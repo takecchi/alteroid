@@ -4,60 +4,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
-/**
- * **`awaitingBackground` —— 背景処理の完了待ちで畳んだターンの報告に印を付ける。**
- *
- * 実測の経緯（依頼者が生ログで実測）: マネージャーが `Bash` を
- * `run_in_background: true` で起こした直後、「完了を待つ」とだけ言って
- * `end_turn` で畳むと、その最後の発話がそのまま「報告」としてクローンへ
- * 配られ、クローンのターンを1本無駄に起こしていた。`contentless`
- * （`runner-contentless.test.ts`）と同型の直しなので、ここも同じ足場
- * （`createRunnerHost` の生の `RunnerEvent` を直接見る）を使う。
- */
-
 interface FakeSession {
-  /** マネージャーが本文を1つ喋る。 */
   say(text: string, options?: { error?: string }): Promise<void>;
-  /** SDK が背景タスクの在り高を通知する（REPLACE 意味論）。 */
   backgroundTasksChanged(
     tasks: readonly { id: string; taskType: string; ambient?: boolean }[],
   ): Promise<void>;
-  /** 1ターンを畳む。既定は成功。 */
   finish(text: string, options?: { subtype?: string; isError?: boolean }): Promise<void>;
   /**
-   * もう一度 `init`（`session_started`）を流す。**`sessionId` を明示させる。**
-   *
-   * 同じ値を渡せば「同じ器のまま次のターンが始まっただけ」を、違う値を渡せば
-   * 「SDK 側でセッションが差し替わった」を表す——前者は `SDKSystemMessage` の
-   * JSDoc（逐語）: [sdk-verbatim SDKSystemMessage]
+   * `sessionId` を明示させる: 同じ値は次のターンの `init`、違う値はセッションの差し替えを表し、
+   * `init` の再送という見た目だけでは区別できない。前者は [sdk-verbatim SDKSystemMessage]
    * emits at the start of each turn
    *
-   * 後者は `SDKBackgroundTasksChangedMessage` の JSDoc（逐語）: [sdk-verbatim SDKBackgroundTasksChangedMessage]
+   * 後者は [sdk-verbatim SDKBackgroundTasksChangedMessage]
    * (re)starts
-   *
-   * ——**この2つは SDK の別々の JSDoc が指す別の事象で、
-   * `init` の再送という見た目だけでは区別できない**（`runner.ts` の
-   * `case 'session_started'` のコメント）。呼び出し側にどちらのつもりかを
-   * 毎回書かせることで、このテストファイル自身が両者を混同しないようにする。
-   *
-   * ⚠️ 以前はここが引数を取らず、常に同じ `session_id` を流していた
-   * （＝実質「ターン境界の再 init」しか表せていなかった）にもかかわらず、
-   * コメントは「器（CLI プロセス）が入れ替わったことにする」と名乗っていた。
-   * この食い違いが、直した穴そのものの誤読と同型である。
    */
   restart(sessionId: string): Promise<void>;
-  /**
-   * クエリのストリームを閉じる（`null` を流して generator を終える）。
-   * `#recoverFromFailedResume` の「手が動かないまま閉じた」経路を踏むために
-   * 使う（`resume()` 直後、進捗が1つも無い状態で呼ぶこと）。
-   */
   close(): void;
-  /**
-   * マネージャーが確認を上げる（`waiting_human` を作る）。**わざと待たない**
-   * ——`#onPermission` は最初の `await` の手前で `#pending` へ同期的に積むので
-   * （`runner.ts` の `#onPermission`）、この呼び出しが返るのを待つ必要が無い。
-   * 返す `Promise` は誰も解決しないまま残る（このテストでは答えないため）。
-   */
   ask(toolName: string, input: Record<string, unknown>): void;
 }
 
@@ -125,10 +87,7 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
       ask(toolName, input) {
         const canUseTool = (params.options ?? {}).canUseTool;
         if (canUseTool === undefined) throw new Error('canUseTool が配線されていない');
-        // **わざと await しない。** `#onPermission` は最初の await の手前で
-        // `#pending` へ同期的に積む（`runner.ts` の `#onPermission`）ので、
-        // ここで返る Promise を待つ必要が無い——待つと `waiting_human` の
-        // まま `finish()` を呼ぶテストが書けなくなる（誰も答えないため）。
+        // await しない: 誰も答えないので、待つと `waiting_human` のまま `finish()` を呼べなくなる。
         void canUseTool(toolName, input, {
           signal: new AbortController().signal,
           toolUseID: `tool-${String(Math.random())}`,
@@ -205,7 +164,6 @@ async function firstSession(sessions: readonly FakeSession[]): Promise<FakeSessi
   });
 }
 
-/** `#open()` が同じ `Host` インスタンス内で作り直した2本目のセッション。 */
 async function secondSession(sessions: readonly FakeSession[]): Promise<FakeSession> {
   return vi.waitFor(() => {
     const found = sessions[1];
@@ -275,9 +233,6 @@ describe('report イベントの awaitingBackground（3条件すべてを満た�
     const session = await firstSession(s.sessions);
 
     await session.backgroundTasksChanged([{ id: 'bg-1', taskType: 'shell' }]);
-    // 答えないまま確認を1件開く（`ask()` の doc）——`#pending` が非空のまま
-    // `result` が来るので、`this.#status` は `done` ではなく `waiting_human`
-    // になる（`runner.ts` の `#apply` の `case 'turn_ended'`）。
     session.ask('Bash', { command: 'echo hi' });
     await session.finish('確認をお願いします');
 
@@ -288,26 +243,13 @@ describe('report イベントの awaitingBackground（3条件すべてを満た�
 });
 
 describe('在り高のリセット — 器（CLI プロセス）が本当に入れ替わったときだけ', () => {
-  /**
-   * **これが直した穴そのものである。** `SDKSystemMessage` の JSDoc（逐語）: [sdk-verbatim SDKSystemMessage]
-   * 「Session metadata the CLI emits at the start of each turn, normally ahead of every other message of that turn」
-   *
-   * ——`init` はターンの頭ごとに来る。器が入れ替わっていなくても来る。
-   *
-   * 実測の再現（依頼者が生ログで確認済み）: ターンAで
-   * `backgroundTasksChanged([bg-1,bg-2,bg-3])` → `finish` →
-   * `awaitingBackground={count:3}` ✅ のあと、ターン間で
-   * `backgroundTasksChanged([bg-2,bg-3])` → **同じ `session_id` のまま
-   * `init` を再送** → `finish` → `awaitingBackground=undefined` ❌
-   * （直す前はここで無条件にリセットしていた）。このテストはこの並びを
-   * そのまま再現する。
-   */
+  // `init` は器が入れ替わっていなくてもターンの頭ごとに来る。[sdk-verbatim SDKSystemMessage]
+  // 「Session metadata the CLI emits at the start of each turn, normally ahead of every other message of that turn」
   it('同じ session_id のままターン境界の init が来ても在り高を保つ', async () => {
     const s = setup();
     await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
     const session = await firstSession(s.sessions);
 
-    // ターンA: 3件の背景タスクが在るまま終わる。
     await session.backgroundTasksChanged([
       { id: 'bg-1', taskType: 'local_agent' },
       { id: 'bg-2', taskType: 'local_agent' },
@@ -319,8 +261,6 @@ describe('在り高のリセット — 器（CLI プロセス）が本当に入�
     const [firstReport] = await reportEvents(s.events, 1);
     expect(firstReport?.awaitingBackground).toEqual({ count: 3, breakdown: 'local_agent×3' });
 
-    // ターン間: 1件片付き、2件が残る。session_id は変えない
-    // （＝器は入れ替わっていない、ターンが変わっただけ）。
     await session.backgroundTasksChanged([
       { id: 'bg-2', taskType: 'local_agent' },
       { id: 'bg-3', taskType: 'local_agent' },
@@ -339,9 +279,6 @@ describe('在り高のリセット — 器（CLI プロセス）が本当に入�
     const session = await firstSession(s.sessions);
 
     await session.backgroundTasksChanged([{ id: 'bg-1', taskType: 'shell' }]);
-    // **SDK 側でセッションが差し替わった場合の保険**（`case 'session_started'`
-    // のコメント）。`init` の再送そのものではなく、session_id が変わったこと
-    // がリセットの契機である。
     await session.restart('sess-mgr-2');
     await session.say('完了を待つ');
     await session.finish('完了を待つ');
@@ -350,22 +287,6 @@ describe('在り高のリセット — 器（CLI プロセス）が本当に入�
     expect(report?.awaitingBackground).toBeUndefined();
   });
 
-  /**
-   * **`#open()` が同じ `RunnerSession` インスタンスの中で開き直す経路**
-   * （`#recoverFromFailedResume` の `recovered` 分岐）を通しても、在り高が
-   * リセットされることを確かめる。
-   *
-   * ⚠️ **この経路では `#sessionId` も同時に `undefined` へ戻される**
-   * （`#recoverFromFailedResume` が resume 失敗の作り直し時に行う）ので、
-   * このテストは「`#open()` の再オープンそのもの」と「session_id が
-   * `undefined` に変わったこと」のどちらが効いているかまでは分離できない
-   * ——3つの契機のうち2番目単独を隔離して踏める経路は、いまの `#open()` の
-   * 3つの呼び出し元（`begin()` / `resume()` / このリカバリ経路）を洗った
-   * 限り見つからなかった（`begin()` は初回で `#sessionId` が既に
-   * `undefined`、`resume()` は必ず新しいインスタンス）。それでも、
-   * `#open()` の再オープン経路そのものが在り高をリセットすることの
-   * 回帰は、このテストが見る。
-   */
   it('#open() が同じインスタンスで開き直すと在り高をリセットする（resume 失敗からの回復経路）', async () => {
     const s = setup();
     await s.host.resume({
@@ -373,16 +294,12 @@ describe('在り高のリセット — 器（CLI プロセス）が本当に入�
       sessionId: 'sess-mgr',
       cwd: '/work/project',
       request: '調べて',
-      // renderSessionLog が null を返すと `unresumable`（作り直さない）へ
-      // 倒れてしまうため、読める材料を1件だけ渡す。
+      // renderSessionLog が null を返すと `unresumable`（作り直さない）へ倒れるので、読める材料を1件渡す。
       entries: [{ type: 'user', message: { role: 'user', content: 'つづき' } }],
     });
     const first = await firstSession(s.sessions);
 
     await first.backgroundTasksChanged([{ id: 'bg-1', taskType: 'shell' }]);
-    // 手が動く前にストリームを閉じる —— `#recoverFromFailedResume` が
-    // 「resume は効かなかった」と判定し、同じインスタンスの `#open()` を
-    // 作り直す（`runner.ts` の `#recoverFromFailedResume`）。
     first.close();
 
     const second = await secondSession(s.sessions);
@@ -404,8 +321,6 @@ describe('REPLACE 意味論（差分ではなく、2回目のペイロードが1
       { id: 'bg-1', taskType: 'shell' },
       { id: 'bg-2', taskType: 'shell' },
     ]);
-    // **加算ではなく置き換え。** 2回目は1件だけ——1回目の2件と合算されて
-    // 3件になってはいけない。
     await session.backgroundTasksChanged([{ id: 'bg-3', taskType: 'shell' }]);
     await session.say('完了を待つ');
     await session.finish('完了を待つ');

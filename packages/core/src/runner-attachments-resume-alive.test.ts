@@ -112,12 +112,9 @@ describe('resume が生きたセッションへ短絡した回の添付', () => 
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error }),
       );
-    // resume は添付を置く await で止まっている。その間に停止が掛かる。
     const stopping = host.stop('mgr-abc123');
     const outcome = await resuming;
     await stopping;
-    // 「追加の一言は届いていないのに、reusedLiveSession: true で成功した」を許さない。
-    // 届かなかったなら、成功と答えてはいけない（send は同じ競りで false を返す）。
     if (outcome.ok && outcome.value.reusedLiveSession) {
       expect(fake.received).toHaveLength(2);
     }
@@ -179,7 +176,6 @@ describe('作り直しの resume が添付を置いている間に、別の resu
     expect(results[0]?.sessionGeneration).toBe(results[1]?.sessionGeneration);
     expect(fake.opened()).toBe(1);
     expect(host.list().map((state) => state.managerId)).toEqual(['mgr-abc123']);
-    // 作り直した1本が起動時の一言、合流した1本が追加の一言を、同じセッションへ届ける。
     await vi.waitFor(() => expect(fake.received).toHaveLength(2));
     expect(fake.received.every((r) => JSON.stringify(r.content).includes('続きです'))).toBe(true);
   });

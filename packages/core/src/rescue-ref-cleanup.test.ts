@@ -16,10 +16,6 @@ import {
 } from './rescue-ref.js';
 import type { ProcessSpawnFn } from './unpushed-work.js';
 
-/**
- * 退避 ref の**後始末**（Issue #1266）の runner 側。実 git とローカルの bare で見る
- * （実リポジトリの ref は作らない・消さない）。足場は `rescue-ref.test.ts` と同じ作り。
- */
 const GIT_ENV: Record<string, string> = {
   PATH: process.env.PATH ?? '',
   HOME: '/nonexistent',
@@ -105,7 +101,6 @@ describe('退避 ref の後始末（runner 側。#1266）', () => {
     await writeFile(path.join(repo, 'a.txt'), 'edited\n');
     const [first] = await run(memory);
     expect(first?.pushed?.landedAt).toBeUndefined();
-    // コミットして push する（作業ツリーの内容は退避 commit の tree と同じになる）。
     g(repo, 'commit', '-qam', 'ship it');
     g(repo, 'push', '-q', 'origin', 'main');
     const [second] = await run(memory);
@@ -120,7 +115,6 @@ describe('退避 ref の後始末（runner 側。#1266）', () => {
     expect(first?.pushed).toBeDefined();
     g(repo, 'checkout', '--', 'a.txt');
     const second = await run(memory);
-    // 変化の報告が出ても出なくても、landed は立たない。
     for (const report of second) expect(report.pushed?.landedAt).toBeUndefined();
   });
 
@@ -132,7 +126,6 @@ describe('退避 ref の後始末（runner 側。#1266）', () => {
     const result = await del(pushed.ref, pushed.commit);
     expect(result).toEqual({ outcome: 'removed', alreadyGone: false });
     expect(refsInBare()).toBe('');
-    // 一時の bare は残さない。
     expect(await readdir(tmp)).toEqual([]);
   });
 
@@ -231,7 +224,6 @@ describe('退避 ref の後始末（runner 側。#1266）', () => {
     expect(redactRemoteUrl('https://tokenuser@github.com/o/r.git')).toBe(
       'https://github.com/o/r.git',
     );
-    // ssh はパスワードだけ落とし、ユーザー名は残す。
     expect(redactRemoteUrl('ssh://git:pw@example.com:2222/o/r.git')).toBe(
       'ssh://git@example.com:2222/o/r.git',
     );
@@ -285,7 +277,6 @@ describe('退避 ref の後始末（runner 側。#1266）', () => {
     const [report] = await run();
     const pushed = report?.pushed as NonNullable<typeof report>['pushed'] & object;
     const controller = new AbortController();
-    // push を撃つ瞬間に abort する（一時 bare は init で出来上がっている）。
     const abortingSpawn: ProcessSpawnFn = (o) => {
       if (o.args.includes('push')) controller.abort();
       return realSpawn(o);

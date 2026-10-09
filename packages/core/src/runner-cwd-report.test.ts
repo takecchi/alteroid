@@ -13,31 +13,6 @@ import {
 import type { InboxEvent, Job, JournalEntry } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * runner が実際に開いた `cwd` を start / resume の応答で返し、デーモンが
- * それを表示・台帳へ反映すること（Issue #1814。前提は #1783 / PR #1807）。
- *
- * PR #1807 で runner の `Host#resolveCwd()` は、明示の `cwd` が実在しなければ
- * `workspacePath` へ倒すようになったが、倒れた事実を呼び出し元（デーモン）へ
- * 返す経路が無かった。ここでは、その経路（`RunnerClient.start` /
- * `RunnerClient.resume` の戻り値）を使う側（`manager.ts`）が、次の3通りを
- * 正しく扱うことを固定する:
- *
- * 1. 実際の値が返り、頼んだ値と同じ
- * 2. 実際の値が返り、頼んだ値と違う（倒れた）
- * 3. 応答が `cwd` を返さない（古い runner）——**このとき、頼んだ値を
- *    実際の値として名乗らないこと**を固定する（表示・台帳のどちらも）。
- *
- * `start()` は `manager_start` の応答（`ManagerSummary.cwd` /
- * `cwdConfirmed` / `requestedCwd`）で固定し、`resume()` は台帳
- * （`pool.list()` の `cwd`）・追加で送る一言（`runner.send()`）・日誌の3点で
- * 固定する。`resume()` 側は `manager-workspace-nudge.test.ts` の
- * `swappableRunner` / `runnerSwapNudge` と同じ「`restore()` → `swap()`」の
- * 形を使う——器の入れ替えで `#reattach` 経由の resume が実際に起きる、
- * この repo で唯一確立された手段だからである。
- */
-
-/** `start` / `resume` の戻り値を、テストから1回ずつ差し替えられる偽 runner。 */
 function fakeRunner(runnerId = 'runner-primary') {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const state = {
@@ -45,11 +20,6 @@ function fakeRunner(runnerId = 'runner-primary') {
     startCalls: [] as RunnerStartCommand[],
     resumeCalls: [] as RunnerResumeCommand[],
     sendCalls: [] as { managerId: string; text: string }[],
-    /**
-     * 呼ばれるたびに先頭から1つ取り出す（尽きたら `{}`＝古い runner を模す）。
-     * `start` は普段1回、`resume` は「restore() の分」「swap() 後の分」の
-     * 2回を積んで使う。
-     */
     startResults: [] as { cwd?: string }[],
     resumeResults: [] as { cwd?: string }[],
   };
@@ -121,7 +91,6 @@ function fakeRunner(runnerId = 'runner-primary') {
   return {
     runner,
     state,
-    /** 器を作り直す ＝ 中のセッションは消え、新しいストリームが名乗り直す。 */
     swap() {
       state.alive = [];
       emit?.({ type: 'hello', runnerId });
@@ -129,7 +98,6 @@ function fakeRunner(runnerId = 'runner-primary') {
   };
 }
 
-/** `manager-workspace-nudge.test.ts` の `setup` と同じ縮小版。 */
 function setup(stores: ReturnType<typeof createMemoryStores>, runner: RunnerClient) {
   const inbox: InboxEvent[] = [];
   const registry = createRunnerRegistry([runner]);
@@ -142,11 +110,7 @@ function setup(stores: ReturnType<typeof createMemoryStores>, runner: RunnerClie
   return { pool, inbox };
 }
 
-/**
- * `JournalEntry` は discriminated union で、`Array#filter` の素の述語では
- * 絞った後の要素型が narrow されない（`type === 'exchange'` を確かめても、
- * 返る配列の要素型は union のまま）。`flatMap` + 型ガードで確実に絞る。
- */
+/** `filter` では要素型が union のまま narrow されないので、`flatMap` で絞る。 */
 function exchangeTexts(entries: readonly JournalEntry[]): string[] {
   return entries.flatMap((entry) => (entry.type === 'exchange' ? [entry.text] : []));
 }
@@ -194,8 +158,6 @@ describe('manager_start: 実際の cwd の報告（Issue #1814）', () => {
     expect(started.cwdConfirmed).toBe(true);
     expect(started.requestedCwd).toBe('/does-not-exist');
 
-    // **台帳（list()）も実際の値へ揃っている。** manager_list / Web UI が
-    // 頼んだ値（倒れる前の値）を「実際の cwd」として名乗り続けない。
     const listed = await pool.list();
     expect(listed.find((m) => m.managerId === started.managerId)?.cwd).toBe('/workspace');
 
@@ -224,8 +186,8 @@ describe('resume（移送・器の入れ替え）: 実際の cwd の報告（Iss
     const job = jobWith('mgr-same', '/work/project');
     await stores.jobs.putJob(job);
     const fake = fakeRunner();
-    fake.state.resumeResults.push({ cwd: '/work/project' }); // restore() の分
-    fake.state.resumeResults.push({ cwd: '/work/project' }); // swap() 後の分
+    fake.state.resumeResults.push({ cwd: '/work/project' });
+    fake.state.resumeResults.push({ cwd: '/work/project' });
     const { pool } = setup(stores, fake.runner);
 
     await pool.restore();
@@ -251,8 +213,8 @@ describe('resume（移送・器の入れ替え）: 実際の cwd の報告（Iss
     const job = jobWith('mgr-swap', '/work/project');
     await stores.jobs.putJob(job);
     const fake = fakeRunner();
-    fake.state.resumeResults.push({ cwd: '/work/project' }); // restore() の分（倒れない）
-    fake.state.resumeResults.push({ cwd: '/workspace' }); // swap() 後の分（倒れた）
+    fake.state.resumeResults.push({ cwd: '/work/project' });
+    fake.state.resumeResults.push({ cwd: '/workspace' });
     const { pool } = setup(stores, fake.runner);
 
     await pool.restore();
@@ -286,8 +248,8 @@ describe('resume（移送・器の入れ替え）: 実際の cwd の報告（Iss
     const job = jobWith('mgr-unconfirmed', '/work/project');
     await stores.jobs.putJob(job);
     const fake = fakeRunner();
-    fake.state.resumeResults.push({ cwd: '/work/project' }); // restore() の分
-    fake.state.resumeResults.push({}); // swap() 後、古い runner を模す
+    fake.state.resumeResults.push({ cwd: '/work/project' });
+    fake.state.resumeResults.push({});
     const { pool } = setup(stores, fake.runner);
 
     await pool.restore();

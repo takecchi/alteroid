@@ -9,8 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import type { RunnerAttachment, RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-// 畳みの `onClosed` が `void removeManagerAttachments(...)` で完了を待たないことの帰結を確かめるため、
-// 委譲の置き場ごとの再帰削除（`rm(<root>/<managerId>, { recursive: true })`）だけを、門が開くまで遅らせる。
 const gate = vi.hoisted(() => {
   const state: { open: Promise<void> | null; blocked: number; done: Promise<unknown>[] } = {
     open: null,
@@ -86,8 +84,6 @@ function fakeSdk(): { fn: typeof sdkQuery; received: { content: unknown }[] } {
   return { fn, received };
 }
 
-// 実時間は待たずに、`setImmediate` を回して他の非同期の仕事を進める。`done` が真になれば早く抜ける
-// （上限まで回っても真にならなければ、そのまま返す）。
 async function yieldUntil(done: () => Promise<boolean>, maxTurns: number): Promise<void> {
   for (let i = 0; i < maxTurns; i += 1) {
     if (await done()) return;
@@ -138,8 +134,6 @@ describe('畳みの添付削除が完了を待たない（onClosed の void remo
     });
     const stopping = host.stop('mgr-abc123');
     await stopping;
-    // 畳みの削除は門で止まっている。ここで resume に先へ進む余地を与えてから門を開ける。
-    // 修正前は、その間に resume が添付を置き直す（削除を待たない）。修正後は、削除の完了を待って置く。
     expect(gate.blocked).toBeGreaterThan(0);
     const expected = join(root, 'mgr-abc123', 'att-1', 'a.txt');
     await yieldUntil(
@@ -154,12 +148,10 @@ describe('畳みの添付削除が完了を待たない（onClosed の void remo
     const result = await resuming;
     expect(result.reusedLiveSession).toBe(false);
     await vi.waitFor(() => expect(fake.received).toHaveLength(2));
-    // 遅らせた削除が走り切るのを、その完了そのもので待つ（実時間は待たない）。
     await Promise.all(gate.done);
     const text = JSON.stringify(fake.received[1]?.content);
     const path = /path=(.+?)（Read/.exec(text)?.[1];
     expect(path).toBeDefined();
-    // 作り直した担い手へ「Read で開ける」と通知した添付が、まだ在ること。
     await expect(readFile(path as string, 'utf8')).resolves.toBe('中身X');
   });
 
@@ -188,10 +180,8 @@ describe('畳みの添付削除が完了を待たない（onClosed の void remo
       release = resolve;
     });
     await host.stop('mgr-abc123');
-    // 畳みの削除は門で止まったまま。
     expect(gate.blocked).toBeGreaterThan(0);
 
-    // 添付の無い resume は、止まった削除を待たずに作り直しまで進む（門は閉じたまま返る）。
     const resumed = await host.resume({
       managerId: 'mgr-abc123',
       sessionId: 'sess-old',
@@ -201,7 +191,6 @@ describe('畳みの添付削除が完了を待たない（onClosed の void remo
     });
     expect(resumed.reusedLiveSession).toBe(false);
     await vi.waitFor(() => expect(fake.received).toHaveLength(2));
-    // 添付の無い send も、止まった削除を待たずに積まれる。
     await expect(host.send('mgr-abc123', '追加の一言')).resolves.toBe(true);
     await vi.waitFor(() => expect(fake.received).toHaveLength(3));
 

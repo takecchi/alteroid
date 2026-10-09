@@ -10,19 +10,6 @@ import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * issue #1984。`Clone#pump()` は起動時に `#restoreUnread()` を**待たずに**始め、
- * `#restoreUnreadPass()` が `stores.inbox.claimPending()` で前の器の未読を配り直す。
- * 一方、起動直後に `post(event)` された合図は、その場で生きている待ち行列へ入り、
- * 同時に `#remember` が同じ受信箱へ `put` する（これも待たない）。⟹ `claimPending()`
- * がその `put` の後の受信箱を読むと、たった今 `post` で配った合図を「前の器が
- * 残した未読」としてもう一度配る——同じ発言に2回応える形になる。
- *
- * ここでは `claimPending()` を、テストが握った約束で待たせる。その間に `post` し、
- * 受信箱への書き込みが着いたのを見てから約束を解く。そのうえで、同じ合図が
- * ターンの入力に何回出るかを数える。
- */
-
 interface Fake {
   fn: typeof sdkQuery;
   inputs: string[];
@@ -80,7 +67,6 @@ function bootClone(stores: Stores): Fake & { clone: CloneHost } {
   return { ...fake, clone };
 }
 
-/** `claimPending()` だけを、テストが解くまで待たせるストア。 */
 function storesWithHeldClaim(): { stores: Stores; release: () => void } {
   const base = createMemoryStores();
   let release: () => void = () => undefined;
@@ -122,8 +108,6 @@ describe('起動直後に post した合図が、未読の配り直しで二重�
     } as unknown as InboxEvent;
     clone.post(event);
 
-    // post の永続化（`#remember`）が受信箱へ着くまで待つ——これで claimPending() が
-    // 後から読む受信箱に、同じ合図が在る状態になる。
     await waitFor(
       async () =>
         (await stores.inbox.peekPending()).entries.some((p) => p.event.id === 'evt-live-1'),
@@ -132,7 +116,6 @@ describe('起動直後に post した合図が、未読の配り直しで二重�
     release();
 
     await waitFor(() => inputs.some((input) => input.includes(MARK)), '1回目の配達');
-    // 2回目が来るなら、この間に来る。
     await new Promise((resolve) => setTimeout(resolve, 150));
 
     expect(inputs.filter((input) => input.includes(MARK))).toHaveLength(1);
