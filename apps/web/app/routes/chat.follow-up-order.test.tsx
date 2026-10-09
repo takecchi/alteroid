@@ -68,7 +68,12 @@ const countOf = (shown: string[], text: string) =>
 
 type Message = { id: string; at: string; role: 'inbound' | 'outbound'; text: string };
 
-const question: Message = { id: 'm1', at: '2026-10-10T01:00:00.000Z', role: 'inbound', text: QUESTION };
+const question: Message = {
+  id: 'm1',
+  at: '2026-10-10T01:00:00.000Z',
+  role: 'inbound',
+  text: QUESTION,
+};
 const follow: Message = { id: 'm3', at: '2026-10-10T01:00:20.000Z', role: 'inbound', text: FOLLOW };
 
 describe.each([

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
-import type { Clone } from './clone.js';
+import type { CloneHost } from './host.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeSdk, fakeScriptedSdk, waitForTerminal, wireEvents } from './clone-test-harness.js';
 import type { ScriptedStep } from './clone-test-harness.js';
@@ -22,11 +22,10 @@ async function conversation(stores: ReturnType<typeof createMemoryStores>): Prom
     .map((row) => `${row.role === 'inbound' ? '人間' : 'クローン'}: ${row.text}`);
 }
 
-function setup(script: (turnIndex: number, clone: () => Clone) => ScriptedStep[]) {
+function setup(script: (turnIndex: number, clone: () => CloneHost) => ScriptedStep[]) {
   const stores = createMemoryStores();
-  let self: Clone | undefined;
-  const { fn } = fakeScriptedSdk((turnIndex) => script(turnIndex, () => self!));
-  const clone = createClone({
+  const { fn } = fakeScriptedSdk((turnIndex) => script(turnIndex, () => clone));
+  const clone: CloneHost = createClone({
     redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
@@ -35,7 +34,6 @@ function setup(script: (turnIndex: number, clone: () => Clone) => ScriptedStep[]
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
   });
-  self = clone;
   const { events } = wireEvents(clone, 'conv-1');
   return { clone, stores, events };
 }
