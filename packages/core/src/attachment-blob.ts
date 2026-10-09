@@ -78,6 +78,7 @@ export const ATTACHMENT_ID_PATTERN =
  */
 export const ATTACHMENT_ORPHAN_BLOB_GRACE_MS = 24 * 60 * 60_000;
 
+/** `prefix` の下の、掃除の対象になりうる key の接頭辞（`<prefix>attachments/`）。 */
 export function attachmentBlobListPrefix(prefix = ''): string {
   return attachmentBlobKey('', prefix);
 }

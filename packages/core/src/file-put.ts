@@ -125,6 +125,7 @@ export async function putLocalFile(
   input: {
     readonly path: string;
     readonly name?: string | undefined;
+    /** true なら保存の印つきで入れる（期限なし・未結び付け1時間の掃除にも掛からない）。 */
     readonly keep?: boolean | undefined;
   },
   options: PutLocalFileOptions,

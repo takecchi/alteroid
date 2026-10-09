@@ -244,6 +244,7 @@ describe('GET /attachments（置き場の一覧と使用量）', () => {
     expect(
       (await app.request(`/attachments/${expiring.id}/meta`, { headers: OPERATOR })).status,
     ).toBe(404);
+    // 期限切れには保存の印も付けられず、消す操作も「無い」
     expect((await patch(expiring.id, { kept: true })).status).toBe(404);
     expect((await del(expiring.id)).status).toBe(404);
   });

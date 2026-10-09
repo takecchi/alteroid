@@ -225,6 +225,7 @@ export interface StageRunnerAttachmentOptions {
   readonly name: string;
   readonly size: number;
   readonly sha256: string;
+  /** 中身（流れてくるまま。溜めない）。 */
   readonly body: AsyncIterable<Uint8Array>;
   readonly limit: number;
   readonly childGid?: number;

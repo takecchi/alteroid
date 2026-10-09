@@ -38,6 +38,7 @@ export interface AttachmentMeta {
   readonly createdAt: string;
   /** 保存中（`keptAt` がある間）は持たない。 */
   readonly expiresAt?: string;
+  /** 保存の印を付けた時刻。在る間は期限（`expiresAt`）でも未結び付け1時間の掃除でも消えない。外すと無くなる。 */
   readonly keptAt?: string;
   /** 在るものには未結び付け1時間の掃除を掛けない: 一度保存されたものは「上げただけで使わなかった残骸」ではないため。 */
   readonly releasedAt?: string;
@@ -72,6 +73,7 @@ export interface AttachmentStore {
    * 断った時・`body` が途中で投げた時は、控えも中身も残さない（`body` の例外はそのまま投げる）。
    */
   putStream(input: AttachmentPutStreamInput): Promise<AttachmentMeta>;
+  /** 期限切れ・無いものは {@link get} と同じ判定で `undefined`。 */
   open(id: string): Promise<{ meta: AttachmentMeta; stream: Readable } | undefined>;
   getMeta(id: string): Promise<AttachmentMeta | undefined>;
   bind(ids: readonly string[], conversationId: string): Promise<AttachmentBindResult>;
@@ -842,6 +844,7 @@ export class AttachmentStreamMeter {
   }
 }
 
+/** 上限つきで全部集める: 超えた時点で読むのを止める。 */
 export async function collectAttachmentStream(
   body: AsyncIterable<Uint8Array>,
   plan: AttachmentStreamPlan,
@@ -897,6 +900,7 @@ function buildAttachmentMeta(
   };
 }
 
+/** 保持日数から数えた期限。作成時と、保存を外したときの両方がこれを使う（揃えておく）。 */
 export function attachmentExpiryFrom(
   now: Date,
   limits: Pick<AttachmentLimits, 'retentionDays'>,
@@ -967,6 +971,7 @@ export function attachmentBindValueOf(target: AttachmentBindTarget): string {
   return (target as Record<AttachmentBindKey, string>)[attachmentBindKeyOf(target)];
 }
 
+/** 未結び付けの掃除と「別の宛先に結び付いた添付は使えない」の判定は、どちらもこれを使う。 */
 export function isAttachmentBound(meta: AttachmentMeta): boolean {
   return ATTACHMENT_BIND_KEYS.some((key) => meta[key] !== undefined);
 }

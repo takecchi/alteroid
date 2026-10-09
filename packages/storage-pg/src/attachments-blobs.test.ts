@@ -151,6 +151,7 @@ describe('PgAttachmentStore + blobs（外部ストレージ。#4128 段2）', ()
     expect(blobs.keys()).not.toContain(`attachments/${removed.id}`);
     expect(blobs.keys()).toHaveLength(2);
 
+    // 結び付けのない残骸は 1 時間たてば prune が消す
     expect(await store.prune(new Date(Date.now() + 2 * 3_600_000))).toBe(2);
     expect(blobs.keys()).toEqual([]);
     expect(await store.getMeta(pruned.id)).toBeUndefined();

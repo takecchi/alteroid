@@ -667,11 +667,13 @@ async function verifyKeptAndListing(
     fail('NUL を含む id の setKept');
   if ((await store.setKept('no-such-id', false, clock)) !== undefined)
     fail('無い id の setKept(false)');
+  // 保存していないものを外しても、期限は動かない
   const bBefore = await store.getMeta(b.id);
   const unkeptB = await store.setKept(b.id, false, clock);
   if (JSON.stringify(unkeptB) !== JSON.stringify(bBefore))
     fail('保存していないものの setKept(false) が控えを変えた（期限を延ばした）');
 
+  // 保存中は期限でも未結び付け1時間でも消えない
   const farFuture = at(400 * DAY);
   clock = farFuture;
   const unkeptIds = [b, c, d, e, f, g, h].map((meta) => meta.id);
@@ -693,6 +695,7 @@ async function verifyKeptAndListing(
     fail('保存中のもの（未結び付け・期限超過）が掃除で消えた');
   if ((await store.prune(farFuture)) !== 0) fail('保存中のものが2度目の掃除で消えた');
 
+  // 保存を外すと、外した時刻から保持日数後に期限が入る（作成から1年以上たっていても、外した瞬間には消えない）
   clock = at(401 * DAY);
   // 一度保存されたものは「上げただけの残骸」ではないので、外しても未結び付け1時間の規則では消えない
   const unkeptA = await store.setKept(a.id, false, clock);
@@ -712,6 +715,7 @@ async function verifyKeptAndListing(
   if ((await store.prune(new Date(dueAt))) !== 1) fail('外した期限ちょうどで消えない');
   if ((await store.getMeta(a.id)) !== undefined) fail('外した期限ちょうどで控えが残った');
 
+  // 付け直すと外した印（releasedAt）は無くなり、また保存中として消えない。外し直せば数え直す
   clock = at(402 * DAY);
   const flip = await store.put({ name: 'flip.txt', mediaType: 'text/plain', bytes: PNG });
   await store.setKept(flip.id, true, clock);
@@ -892,6 +896,7 @@ async function verifyWithSmallLimits(
   if ((await clocked.prune(new Date(unboundAt))) !== 1) fail('未結び付けが1時間ちょうどで消えない');
   if ((await clocked.getMeta(unbound.id)) !== undefined) fail('未結び付けが1時間ちょうどで残った');
 
+  // 報告へ結び付けたものは、未結び付けの1時間の掃除に掛からない
   const reported = await clocked.put({ name: 'rp.txt', mediaType: 'text/plain', bytes: PNG });
   const looseTwin = await clocked.put({ name: 'lt.txt', mediaType: 'text/plain', bytes: PNG });
   await clocked.bindToManagerReport([reported.id], 'rep-prune');

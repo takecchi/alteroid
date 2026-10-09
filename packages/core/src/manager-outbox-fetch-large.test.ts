@@ -110,6 +110,7 @@ describe('(d) デーモンの大きいファイルの取り込み', () => {
   it('外部ストレージが無効（maxLargeFileBytes が 0）なら、理由つきで取りに行かない', async () => {
     const { result, opened, deleted } = await run({ ...base, maxLargeFileBytes: 0 });
     expect(opened).toEqual([]);
+    // 二度と取りに行かないので、runner の退避先から消させる（24時間の掃除まで溜めない）
     expect(deleted).toEqual(['f1']);
     expect(result.attachments).toEqual([]);
     expect(result.rejected).toEqual([

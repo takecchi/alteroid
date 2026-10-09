@@ -179,6 +179,7 @@ export class FsAttachmentStore implements AttachmentStore {
     }
   }
 
+  /** `get` と同じ判定（排他は `get` と同じく取らない。消えていれば `undefined`）。 */
   async open(id: string): Promise<{ meta: AttachmentMeta; stream: Readable } | undefined> {
     const dir = this.#idDir(id);
     if (dir === undefined) return undefined;
@@ -465,6 +466,7 @@ export class FsAttachmentStore implements AttachmentStore {
     }
   }
 
+  /** 期限内の控えを全部読む（meta.json だけ。中身の `data` は読まない）。 */
   async #readAllLive(): Promise<AttachmentMeta[]> {
     const metas: AttachmentMeta[] = [];
     for (const name of await this.#idDirNames()) {

@@ -40,6 +40,7 @@ export function outboxFetchDeadlineMs(size: number): number {
   return Math.min(ATTACHMENT_REQUEST_TIMEOUT_MS, Math.max(OUTBOX_FETCH_FILE_TIMEOUT_MS, scaled));
 }
 
+/** 既定の 90 秒に、各ファイルの期限が既定の 30 秒を超えて延びた分だけを足す（小さいファイルだけの報告は延びない）。上限は1時間。 */
 export function outboxFetchTotalDeadlineMs(fileDeadlinesMs: readonly number[]): number {
   const extension = fileDeadlinesMs.reduce(
     (acc, ms) => acc + Math.max(0, ms - OUTBOX_FETCH_FILE_TIMEOUT_MS),
@@ -274,6 +275,7 @@ type FetchOneInput = Parameters<typeof fetchOne>[0];
 
 class OutboxStreamStop extends Error {}
 
+/** 画像でないファイルは集めずに置き場へ流す。申告を超えたら打ち切り、流し終えて申告と合わなければ入れたものを消す。 */
 async function streamToStore(
   input: FetchOneInput,
   body: AsyncIterable<Uint8Array>,
@@ -346,6 +348,7 @@ async function streamToStore(
   }
   const mismatch = mismatchOf(file, total, hash);
   if (mismatch !== undefined) {
+    // 照合に落ちたら、入れたものを消す（置き場に残さない）。
     await input.store.remove(meta.id).catch(() => undefined);
     return { ok: false, reason: mismatch };
   }

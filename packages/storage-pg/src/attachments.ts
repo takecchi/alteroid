@@ -330,6 +330,7 @@ export class PgAttachmentStore implements AttachmentStore {
     return { meta: toMeta(row), bytes: row.bytes, blobKey: row.blobKey };
   }
 
+  /** 置き場が無い（設定を外した）・blob が無い（消えた）なら `undefined`。 */
   async #openBlob(blobKey: string): Promise<Readable | undefined> {
     const blobs = this.#options.blobs;
     if (blobs === undefined) {

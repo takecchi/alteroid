@@ -205,6 +205,7 @@ interface CollectContext {
   readonly maxLargeFileBytes: number;
   readonly totalLimit: number;
   totalBytes: number;
+  /** 大きいファイルだけの、この報告の合計の上限（退避先の予算の残りも織り込む）。 */
   readonly largeTotalLimit: number;
   largeTotalBytes: number;
   readonly afterFirstChunk?: () => Promise<void>;
@@ -341,6 +342,7 @@ export async function collectManagerOutbox(
   ensureOwnDirectorySync(resolve(stagedRoot), 0o700, { recursive: true });
   const stagedDir = resolve(stagedRoot, managerId);
   ensureOwnDirectorySync(stagedDir, 0o700);
+  // 大きいファイルは別の予算: 1報告の合計は1つの上限（`maxLargeFileBytes`）、退避先はその `LARGE_STAGED_BUDGET_FACTOR` 倍。
   const largeReportLimit = options.maxLargeFileBytes ?? readRunnerAttachmentStageLimit();
   const maxLargeFileBytes = Math.max(limits.maxFileBytes, largeReportLimit);
   const staged = await stagedBytesOf(stagedDir, limits.maxFileBytes);
