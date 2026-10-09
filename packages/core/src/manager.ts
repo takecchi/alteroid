@@ -39,6 +39,7 @@ import {
 import { classifyManagerActivity, describeManagerActivityForFlush } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
 import type { AgentPluginLoad } from './agent-events.js';
+import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { codeSpan } from './markdown-span.js';
 import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
 import type { CredentialService } from './credential-service.js';
@@ -5846,6 +5847,8 @@ class Pool implements ManagerPool {
    * `at` が観測の古さを名乗る）。
    */
   readonly #pluginLoad = new Map<string, RunnerPluginLoadObservation>();
+  /** マネージャーごとに、前回日誌へ書いた plugin の読み込み結果の指紋（`#onEvent` の `session`）。プロセス内の記憶。 */
+  readonly #pluginLoadDigests = new Map<string, string>();
   /**
    * 押し込みが失敗した runner へ、諦めずに挑み直す予約（`#scheduleReattach`と
    * 同じ形）。**`#reattachTimers` とは別のタイマーである**——繋ぎ直し
@@ -12517,6 +12520,17 @@ class Pool implements ManagerPool {
             managerId: event.managerId,
             pluginLoad: event.pluginLoad,
           });
+          // 届いたかの確認（#3815）: マネージャーごとに、前回と変わったときだけ日誌へ残す（クローンの `#plugins` と同じ形）
+          const described = describePluginLoadForJournal(event.pluginLoad);
+          if (this.#pluginLoadDigests.get(event.managerId) !== described.digest) {
+            this.#pluginLoadDigests.set(event.managerId, described.digest);
+            await this.#journal({
+              type: 'exchange',
+              with: 'manager',
+              role: 'inbound',
+              text: `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] ${described.text}`,
+            });
+          }
         }
         record.job.sessionId = event.sessionId;
         record.attached = true;

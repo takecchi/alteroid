@@ -36,22 +36,23 @@ afterEach(async () => {
 });
 
 async function sessionEventOf(initExtras: Record<string, unknown>): Promise<RunnerEvent> {
-  const events: RunnerEvent[] = [];
+  // 壁時計で待たず、session が出た瞬間に解く
+  let onSession: (event: RunnerEvent) => void = () => undefined;
+  const sessionSeen = new Promise<RunnerEvent>((resolve) => {
+    onSession = resolve;
+  });
   const host = createRunnerHost({
     runnerId: 'runner-test',
     workspacePath: '/work/project',
-    emit: (event) => events.push(event),
+    emit: (event) => {
+      if (event.type === 'session') onSession(event);
+    },
     queryFn: fakeSdkWithInit(initExtras),
     env: { PATH: '/usr/bin' },
   });
   hosts.push(host);
   await host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
-  const deadline = Date.now() + 2000;
-  while (!events.some((event) => event.type === 'session')) {
-    if (Date.now() > deadline) throw new Error('session が出なかった');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  return events.find((event) => event.type === 'session')!;
+  return sessionSeen;
 }
 
 describe('runner の session イベントの pluginLoad', () => {
