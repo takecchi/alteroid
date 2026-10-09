@@ -1361,102 +1361,19 @@ function buildMemoryDocumentSections(
 }
 
 export interface RenderMemoryDocumentsOptions {
-  // 型は slug の集合ではなく文書そのもの: 循環の検出が在否だけでなく parent まで引ける必要があるため
   presentInMemory?: readonly MemoryPart[];
-
-  /**
-   * **クローンが既に見ている版**（slug → その時点の `content`）。
-   * 載せ直す呼び手（`clone.ts` の `#withFreshMemory`）だけが渡す。
-   *
-   * 渡すと、premise は**全文ではなく変わった範囲だけ**が描かれる
-   * （差分にする価値があるときだけ。`renderPremiseDelta`）。
-   * **渡さなければ出力は1バイトも変わらない**——システムプロンプトへの
-   * 焼き込みと `measureMemoryFloor`（床の測定）はどちらも渡さないので、
-   * 「毎ターンの床」の値はこの引数の存在によって1文字も動かない。
-   *
-   * **`fact` には効かない。** fact はもともと目次の1行しか載らないので、
-   * 差分にする余地が無い（`buildMemoryDocumentSections` は premise の枝でしか
-   * これを見ない）。
-   */
   seenContent?: ReadonlyMap<string, string>;
 }
 
-/**
- * 焼き込みの中で塊を繋ぐ区切り。**`premise` のカード同士・カードと断り書き・
- * `premise` の節と `fact` の目次の、3箇所すべてがこれを使う。**
- *
- * **リテラルで書き散らさない理由は、この区切りが予算の計算に入るからである。**
- * {@link selectPremiseCards} は「カードを1枚足したら全体が何文字になるか」を
- * 区切りぶんも含めて数える。⟹ 繋ぐ側と数える側で別のリテラルを持つと、
- * **蓋が予算をわずかに超えて通る**（`measureMemoryFloor` の doc「数え方を2本に
- * 割ると、どちらかだけを直したときにメーターが黙って嘘をつく」と同じ形）。
- */
+// リテラルで書き散らさない: この区切りが予算の計算に入り、繋ぐ側と数える側で別のリテラルを持つと蓋が予算をわずかに超えて通るため
 const MEMORY_SECTION_JOIN = '\n\n';
 
-/**
- * 区分ごとの節を、実際に焼き込む1本の文字列へ繋ぐ。**可変長の引数を取る**
- * （2026-09-11 に `indexed` の節を挟むため2引数から3引数対応へ拡張した）。
- * 空文字の節は素通りするので、`indexed` を1件も持たない入力では出力が
- * 従来と1バイトも変わらない（不変条件3）。
- *
- * **区切りは {@link MEMORY_SECTION_JOIN} である**——繋ぐ側と数える側で別の
- * リテラルを持つと蓋が予算をわずかに超えて通る（直上の doc）。
- */
 function joinMemorySections(...sections: readonly string[]): string {
   return sections.filter((section) => section.length > 0).join(MEMORY_SECTION_JOIN);
 }
 
-/**
- * 記憶をクローンの文脈へ載せる、唯一の入口。
- *
- * **区分ごとに載り方を変える**（4-1「B. 区分と載せ方」。`indexed` は
- * 2026-09-11 に追加した3つ目の区分）:
- * - `premise`（判断の前提。既定でもある） — **要旨と節の目次**
- *   （`renderPremiseCard`）。本文は `memory_section_read` で節id を指して開く
- * - `indexed`（特定のプロジェクトでしか使わない記憶） — **要旨だけ**
- *   （`renderIndexedCard`）。節の目次は焼かれない——節を確かめるにはまず
- *   `memory_outline` を呼ぶ必要がある（premise は焼き込みにある目次から
- *   節id をそのまま拾えるが、`indexed` にはその近道が無い）
- * - `fact`（事実と蓄積） — **目次の1行だけ**。本文は `memory_read` で開く
- *
- * **⚠️ かつてここは「`premise` は全文。切り詰めない（切り詰めた前提は『持って
- * いない前提』と区別できない）」だった。人間が実測を見たうえで反転させた**
- * （2026-09-08。経緯と数は `renderPremiseCard` の doc）。**本文が消えたのでは
- * なく、開く口が別に在る**（`memory_section_read`）——「切り詰め」ではないと
- * 言えるのはその口が在るからで、**口を消したらこの載せ方は能力の削除になる。**
- *
- * **どの文書も、カードか目次行かの「どちらか一方」に必ず現れる**（二重に
- * 載せない・取りこぼさない）。文書の順序は呼び手（ストア）が決めた順
- * そのまま（`premise` は slug 昇順のまま連結、`fact` は目次側で
- * 階層・slug 昇順に並べ直す）。
- *
- * frontmatter を1つも持たない文書の集合（`kind: 'none'` のみ）に対しては、
- * 全件が `premise` に分類される——**区分の既定は変えていない。** ただし
- * `premise` の載り方そのものが全文からカードへ変わったので、**「frontmatter
- * 導入前と1バイトも変わらない」はもう成り立たない**（かつてここに在った
- * 受け入れ基準は、人間が載せ方を反転させた時点で意味を失った。歯も同じ
- * 理由で書き換えてある）。
- *
- * ## ⚠️ `documents` が「記憶の全部」でない呼び方がある
- *
- * 上の不変条件（どの文書も全文か目次行のどちらか一方に必ず現れる）は、**記憶の
- * 全体を渡したときの約束である。** `clone.ts` の `#withFreshMemory` は
- * **変わった文書だけ**を渡す——そのとき「渡されなかった文書」は上にも下にも
- * 現れない。**その状態を「存在しない」と報告しないために、部分だけを渡す呼び手は
- * `options.presentInMemory` に記憶の全体の文書を渡すこと**（渡さないと、親が
- * 今回変わっていないだけで「親 X が見つからない」と出る）。
- *
- * ## ⚠️ `options.seenContent` を渡すと premise が全文でなくなる
- *
- * 上の「`premise` は全文。切り詰めない」は、**`seenContent` を渡さない呼び手に
- * 対する約束である。** 渡した呼び手（載せ直し）には、変わった範囲だけが返る
- * ——省いた側は必ず行数と文字数で名乗る（`renderPremiseDelta`）。
- *
- * **これは「切り詰め」ではない。** 切り詰めは「全体を渡すつもりで一部を落と
- * す」ことで、落ちた分が読み手から見えなくなる。こちらは**渡す集合そのものが
- * 「今回変わった範囲」**であり、変わっていない側は同じ文脈の別の場所
- * （システムプロンプトの「現在の記憶」）に全文で載っている。
- */
+// premise の本文が消えたのではなく、開く口が別に在る（memory_section_read）: 口を消したらこの載せ方は能力の削除になる
+// （かつてここに在った受け入れ基準は、人間が載せ方を反転させた時点で意味を失った。歯も同じ理由で書き換えてある）
 export function renderMemoryDocuments(
   documents: readonly MemoryPart[],
   options: RenderMemoryDocumentsOptions = {},
@@ -1469,28 +1386,7 @@ export function renderMemoryDocuments(
   return brandRenderedMemory(joinMemorySections(premiseSection, indexedSection, tocSection));
 }
 
-/**
- * 「記憶の肥大」を測る——毎ターン焼き込みへ実際に載る分量。
- *
- * **`renderMemoryDocuments` と同じ下ごしらえ（`buildMemoryDocumentSections`）を
- * 共有する。** 数え方を2本に割ると、どちらかだけを直したときにメーターが
- * 黙って嘘をつく（このファイル冒頭の見出しの話と同じ形の前科——器ごとに
- * 別々に書いていた載せ方が実際に食い違った）。
- *
- * **`totalChars` は `renderMemoryDocuments(documents).length` と厳密に一致する
- * ことを歯で固定する。** 一致を「たぶん同じ」で済ませない——`joinMemorySections`
- * を両方から呼ぶことで、実装として一致を強制する。
- *
- * **単位は文字（`String.length`）であって bytes ではない。** self_status が
- * 総文字数と文書ごとの bytes を混在させていたことで、依頼者は実際に bytes から
- * 文字数を割り戻して読んでいた——ここで bytes を返すと、対策自身がその誤りを
- * 再生産する。
- *
- * **各 premise の文字数は `content.length` ではなく `renderPremisePart` の
- * 結果の長さで数える**（`tools.ts` の「クローンの文脈へ実際に載る形で数える」と
- * 同じ理由——malformed な frontmatter は説明の1行が前に付くので、`content` だけ
- * を足すと実物より少ない数を「毎ターンの床」として名乗ることになる）。
- */
+// 単位は文字（bytes ではない）: bytes を返すと、self_status で起きた bytes から文字数を割り戻す誤読を再生産するため。premise の文字数は `content.length` ではなく描いた結果の長さで数える: malformed な frontmatter は説明の1行が前に付き、実物より少ない数を名乗ることになるため
 export function measureMemoryFloor(documents: readonly MemoryPart[]): MemoryFloor {
   const {
     premiseParts,
@@ -1519,9 +1415,7 @@ export function measureMemoryFloor(documents: readonly MemoryPart[]): MemoryFloo
     }
   }
 
-  // **束ねた蓋（`demotedPremise`）で1行に落ちた文書は除外する**——目次そのものが
-  // 焼かれていないので、「目次が予算で切れている」と名乗ると嘘になる
-  // （`MemoryFloor.outlineSaturatedPremise` の doc）。
+  // demotedPremise は除外する: 目次そのものが焼かれていないので、「目次が予算で切れている」と名乗ると嘘になるため
   const demotedSlugs = new Set(demotedPremise.map((part) => part.slug));
   const outlineSaturatedPremise: PremiseOutlineFit[] = [];
   for (const part of premiseParts) {
@@ -1545,11 +1439,6 @@ export function measureMemoryFloor(documents: readonly MemoryPart[]): MemoryFloo
   };
 }
 
-// ---------------------------------------------------------------------------
-// 一覧（`memory_list` / `GET /memory` / CLI / Web が使う。全区分を対象にする）
-// ---------------------------------------------------------------------------
-
-/** `memory_list` 等の一覧に出す1件。`MemoryDocumentMeta` はこれを満たす。 */
 export interface MemoryListingEntry {
   slug: string;
   title: string;
@@ -1561,33 +1450,7 @@ export interface MemoryListingEntry {
   createdAt: MemoryCreatedAt;
 }
 
-/**
- * 記憶の一覧を人間可読な形にする（`memory_list` ツールの出力）。
- *
- * **プロンプトへ焼き込む目次（`renderMemoryDocuments` の TOC 節）とは別物。**
- * あちらは `fact` だけを対象にする（`premise` は全文で載っているので二重に
- * 載せない）が、こちらは**全区分を対象にする**——一覧はクローンが「何が
- * あるか」を把握するための道具であり、`premise` の文書も一覧には出ている
- * べきである（全文がどこかに焼かれていることと、一覧に載ることは別の話）。
- *
- * 階層の組み立て（循環・存在しない親の扱い）は目次と同じ実装を共有する。
- *
- * **上限は件数ではなく文字数で持つ。** ここが無上限だったあいだ、
- * `MEMORY_TOC_ENTRY_LIMIT` はプロンプトへ焼く目次（`renderMemoryToc`）にだけ
- * 効いていて、同じものを返す道具（`memory_list`）は全件を返していた。
- *
- * そして**件数だけでは足りない。** 300件 × 1行200字で 60,000 字になり、
- * `manager_list` が実際に溢れた 52,997 字を超える。件数から出力量を決めると
- * 何件で壊れるかが運任せになる——だから他の一覧（`journal_read` /
- * `manager_list` / `approvals_list` / `schedule_list` / `runner_list`）と
- * 同じ `renderListing` を通し、**文字数の予算**で締める。
- */
-/**
- * @param paging - **道具（`memory_list`）から呼ぶときだけ渡す。**渡すと、予算で
- * 落ちた分の断り書きが `cursor` を案内する形になる（#662）。⛔ **省略時の文言は
- * 1文字も変わらない**——プロンプトへの焼き込みなど、続きを取る口が無い呼び手が
- * 他に在るので、そちらの出力を動かさない。
- */
+// 上限は件数ではなく文字数で持つ: 件数から出力量を決めると何件で壊れるかが運任せになるため
 export function renderMemoryListing(
   entries: readonly MemoryListingEntry[],
   paging?: { total: number; anchor?: string },
@@ -1595,9 +1458,7 @@ export function renderMemoryListing(
   if (entries.length === 0) return '（記憶はまだ空）';
 
   const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
-  // **錨（続きの頁の先頭。#2510）は親から切り離して root の先頭に描く。**
-  // 親が view に在ると錨が子として親の後ろへ回って落ち、同じ cursor が返り
-  // 続ける（`memory-cursor.ts` の「頁が必ず進むこと」）。
+  // 錨は親から切り離して root の先頭に描く: 親が view に在ると錨が子として親の後ろへ回って落ち、同じ cursor が返り続けるため
   const anchor = paging?.anchor;
   const tocEntries: MemoryTocEntry[] = entries.map((entry) => ({
     slug: entry.slug,
@@ -1619,10 +1480,6 @@ export function renderMemoryListing(
     const meta = bySlug.get(node.entry.slug);
     const indent = '  '.repeat(node.depth);
     const kindTag = meta === undefined ? '' : `[${meta.kind}] `;
-    // ラベルの語彙・順序（`作成: … / 更新: …`）は `manager_list` / `schedule_list`
-    // に既に在るもの（`tools.ts`）と揃えてある——同じ人間の依頼（id + 名前 + 概要 +
-    // updated_at + created_at）に対する3本目の一覧なので、ここだけ違う言い方を
-    // 発明しない。
     const updatedAt =
       meta === undefined
         ? ''
@@ -1637,23 +1494,14 @@ export function renderMemoryListing(
   return renderListing(items, {
     budget: MEMORY_LISTING_BUDGET,
     omitted: ({ rest, shown, total }) => {
-      // **母数は cursor を当てる前の全件**（頁が進んでもこの数は変わらない）。
-      // `renderListing` が渡す `total` は今回の view の件数なので、道具から
-      // 呼ばれたときは `paging.total` を優先する（`schedule_list` が同じ理由で
-      // 同じことをしている）。
+      // 母数は cursor を当てる前の全件を優先する: renderListing が渡す total は今回の view の件数のため
       const whole = paging?.total ?? total;
       const head = `…ほか ${rest} 件は省略（記憶は全 ${whole} 件あり、${shown} 件だけ出した）。`;
       if (paging === undefined) {
-        // 続きを取る口が無い呼び手（プロンプトへの焼き込み等）。**文言は従来どおり。**
+        // 続きを取る口が無い呼び手（プロンプトへの焼き込み等）の文言は動かさない
         return head + '狙った文書が出ていなければ memory_read slug=<slug> で直接開けること。';
       }
-      // **落ちた中でいちばん小さい slug から（含む）**続ける。描く順（木の DFS）と
-      // 錨の順（slug 昇順）が一致しないので、「最後に出した行の後ろから」では
-      // 行が飛ぶ——理由の全文は `memory-cursor.ts` の
-      // 「`schedule-cursor.ts` とあえて違えた点」に在る。
-      // 「いちばん小さい」は **entries（＝view＝ストア順）での最初**で取る。JS の
-      // 文字列比較で取ると、view を切った順序（照合順序）と食い違ったとき間の
-      // 文書が飛ぶ。錨は必ず出ているので、from は錨より厳密に後ろ（頁が進む）。
+      // 「最後に出した行の後ろから」にしない: 描く順（木の DFS）と錨の順（slug 昇順）が一致せず行が飛ぶため。落ちた中の最初は entries（view＝ストア順）で取る: JS の文字列比較だと照合順序と食い違ったとき間の文書が飛ぶため
       const omittedSlugs = new Set(flat.slice(shown).map((node) => node.entry.slug));
       const from = entries.find((entry) => omittedSlugs.has(entry.slug))!.slug;
       return (
@@ -1666,109 +1514,18 @@ export function renderMemoryListing(
   });
 }
 
-// ---------------------------------------------------------------------------
-// memory_write / memory_append の応答に添える差分の要約（#318 案 (d)）
-// ---------------------------------------------------------------------------
-
-/**
- * なぜ要るか。
- *
- * クローンが `memory_write` で全文を再生成するとき、ツール呼び出しの
- * 中で本文を作り直す。その本文が途中で切れても、記憶には控えも履歴も
- * 無いので突き合わせる相手が存在しない——だからクローンは全文置換を
- * 安全に選べない。ここは「そもそも切れない」ようにするものではなく、
- * **切れたことにその場で気づけるようにする**ものである。
- *
- * `memory_append` にも同じ要約を付ける。追記も、追記しようとした文字列
- * そのものがツール呼び出しの中で切れれば、足りない分は静かに失われる。
- * ただし append は既存を消さないので、「消えた見出し」は理屈のうえでは
- * 常に 0 件のはずである——0 件でないなら append の異常（呼び手のバグや
- * ストア側の想定外の挙動）を疑う根拠になる。
- *
- * **この「常に」が何に依っているかを書いておく（#354）。** 依っているのは
- * 「消さない」ことではなく、**追記が `before` を*行の境界を保ったまま*
- * 前置きすること**である。`PersonaStore.append` の実装が
- * `${existing.content}${content}`（あいだに改行を挟まない形）になると、
- * **末尾の行が見出しだった文書でその見出しが追記の1行目と融合し、消えた
- * 見出しとして名指しされる**——`tsc` は落ちず、説明文（`memory_append`）
- * だけが静かに嘘になる。
- *
- * **実装は3つ在るので、歯も3つに置いてある**（1つを測って3つとも測った
- * ことにしない）: `tools.test.ts`（`testing.ts` のインメモリ実装。道具の
- * 応答まで通す）・`packages/storage-fs/src/index.test.ts`・
- * `packages/storage-pg/src/index.persona.test.ts`。**fs と pg は書き込みのたびに
- * 本文を `ensureTrailingNewline` に通すので二重に守られており、`append`
- * 側の連結だけを壊しても落ちない**（#354 の変異試験で実測した）。
- * **単一点なのは `testing.ts` のインメモリ実装だけである。**
- *
- * **単位は文字数で統一する**（`content.length`）。日誌の `bytesBefore` /
- * `bytesAfter`（バイト）はそのまま——機械可読な面はバイト、人が読む面は
- * 文字という既にある二重構造（`memory_delete` の「削除直前 N 文字」と
- * 同じ軸）を壊さない。バイトと文字を1つの文に混ぜない。
- *
- * **本文そのものは載せない**（AGENTS.md「秘密の扱い」）。載せるのは
- * 見出しの文字列と数だけである。
- */
-
-/** 消えた見出しの列挙を切るときの予算（文字数）。`renderListing` と同じ規律。 */
 export const MEMORY_MISSING_HEADINGS_BUDGET = 600;
 
 function formatMemoryCharCount(value: number): string {
   return value.toLocaleString('en-US');
 }
 
-/** 増減の文字数。0 以上には `+` を付け、符号を持たない生の数と区別する。 */
 function formatMemoryCharDelta(delta: number): string {
   return delta >= 0 ? `+${formatMemoryCharCount(delta)}` : formatMemoryCharCount(delta);
 }
 
-/**
- * Markdown の ATX 見出し（行頭の `#` 〜 `######`）を抜き出す。
- *
- * **行頭に限る。** 行の途中に `#` があるだけの行（インラインの `#`）は
- * 見出しではない——ここを緩めると、本文中の `#` がすべて「見出し」として
- * 数えられてしまう。
- *
- * ## ⚠️ 過剰に拾う側へ「意図して」倒してある（#354）
- *
- * この関数を呼ぶのは `missingMemoryHeadings` だけで、そこでの誤りは2方向
- * にしか出ない。**その2つは対称ではない。**
- *
- * | 誤りの向き               | 何が起きるか                                                                     |
- * | ------------------------ | -------------------------------------------------------------------------------- |
- * | **拾いすぎ（偽陽性）**   | 見出しでないものが「消えた見出し」に名指しされる。呼び手が余分に1つ確かめて済む  |
- * | **拾い漏れ（偽陰性）**   | 本物の見出しが消えたのに「消えた見出し: なし」と返る。**その場で気づく手段が無い** |
- *
- * 差分の要約が在る理由は「全文置換で本文が途中で切れたことに**その場で**
- * 気づく」ことだけで、記憶には控えも履歴も無い（`describeMemoryWriteDiff`
- * の doc）。**見落としたらそこで終わる。** だから拾いすぎを受け入れて
- * 拾い漏れを潰す側へ倒す。**これは #338 の実装がたまたまそうなっていた
- * 向きを、意図として固定したものである（#354）。**
- *
- * ### 次に触る人へ — 以下は欠陥ではない。「直す」と検出器が弱くなる
- *
- * - **コードフェンス（```` ``` ````）の中を除外していない。** フェンスの中の
- *   `# コメント`（シェル・設定ファイルの例）も見出しとして数える。**除外する
- *   実装を足さないこと** — フェンスの開閉が非対称な本文（**途中で切れた本文が
- *   まさにそうなる**）ではフェンスの内外を見誤り、そこから先の本物の見出しを
- *   丸ごと落とす。**この検出器がいちばん働くべき入力で、いちばん壊れる。**
- * - **setext 見出し（`===` / `---` の下線）は数えていない。** こちらは逆向きの
- *   拾い漏れで、上の方針からは足すほうが正しい。足していないのは、`---` が
- *   frontmatter の閉じと同じ形で、区別に本文全体の文脈が要るからである。
- *   **限界として道具の説明文（`memory_write` / `memory_append`）にも書いてある**
- *   ので、足すならそちらも直すこと。
- *
- * **単位は文字（`content.length`）である。** 日誌の `bytesBefore` /
- * `bytesAfter` はバイトで、別物である（`describeMemoryWriteDiff` の doc の
- * 「バイトと文字を1つの文に混ぜない」）。
- *
- * ### ⚠️ ただし「見落とす側」の限界が1つ在る。ここではなく呼び手にある
- *
- * この関数の倒し方（拾いすぎる側）だけを読んで「見落としは無い」と結論
- * しないこと。**`missingMemoryHeadings` は見出しを集合で比べるので、同じ
- * 見出しが他所に残っていれば節を丸ごと消しても検出されない**——向きが逆の
- * 限界で、そちらの doc に実測ごと書いてある（#354）。
- */
+// 拾いすぎる側へ倒す: 拾い漏れは本物の見出しが消えたのに「なし」と返ってその場で気づく手段が無いが、拾いすぎは呼び手が余分に1つ確かめて済むため。コードフェンスの中を除外しない: 途中で切れた本文ではフェンスの内外を見誤り、以降の本物の見出しを丸ごと落とすため
+// setext 見出しは数えない: `---` が frontmatter の閉じと同じ形で、区別に本文全体の文脈が要るため
 function extractMemoryHeadings(content: string): string[] {
   const headings: string[] = [];
   for (const line of content.split('\n')) {
@@ -1778,48 +1535,7 @@ function extractMemoryHeadings(content: string): string[] {
   return headings;
 }
 
-/**
- * `before` に在って `after` に無い見出しを、重複を畳んで返す（出現順）。
- *
- * 見出しは集合として比べる——同じ見出しが `before` に複数回出ていても、
- * `after` のどこかに1つでも残っていれば「消えた」とは数えない。
- *
- * ## ⚠️ この設計が生む見落とし（#354）
- *
- * 直上の1文は**挙動**であって、**その結果どういう見落としが起きるか**を
- * 言っていない。言うとこうなる:
- *
- * > **同じ見出しが文書の他所に1つでも残っていれば、その見出しの節を
- * > 丸ごと消しても「消えた見出し: なし」が返る。**
- *
- * 実測（この2関数をそのまま走らせたもの）:
- *
- * ```
- * before の見出し: ["# 私について","### だから","## 経歴","### だから"]
- * after  の見出し: ["# 私について","### だから","## 経歴"]
- * missingMemoryHeadings = []      // ← 2つ目の「### だから」の節が丸ごと消えている
- * ```
- *
- * **これは `extractMemoryHeadings` の doc に在る限界とは向きが逆で、その
- * ぶん重い。** あちらは拾いすぎる（偽陽性）側だが、こちらは**見落とす
- * （偽陰性）側**である。この場合に残る手がかりは、同じ行に並ぶ文字数の
- * 増減（`describeMemoryWriteDiff`）だけになる。
- *
- * ## それでも集合で比べる——直さないこと
- *
- * **多重度を保つ形（`### だから` が2回 → 1回なら1件消えたと数える）へ
- * 変えないこと。** 同じ見出し（`### だから` のような定型の小見出し）を
- * 何度も使う記憶では、**多重度を見ると誤検出のほうが増える**——節の並べ
- * 替えや統合のたびに「消えた」が鳴り、鳴りっぱなしの警報は読まれなく
- * なる。**#338 のレビューで承認された設計判断であって、欠陥ではない。**
- *
- * 限界のほうは道具の説明文（`memory_write` / `memory_append`）にも書いて
- * あるので、ここを変えるならそちらも直すこと。**歯は `tools.test.ts` に
- * 在り、この見落としを「仕様」として固定している**（反転しに来ないこと）。
- *
- * **偽陽性と偽陰性のどちらへ倒してあるかの全体像は `extractMemoryHeadings`
- * の doc に在る。** ここを厳しくする変更は、そちらを読んでからにすること。
- */
+// 見出しを集合で比べる（多重度を保たない）: 定型の小見出しを何度も使う記憶では、並べ替えや統合のたびに「消えた」が鳴りっぱなしの警報になって読まれなくなるため
 function missingMemoryHeadings(before: string, after: string): string[] {
   const beforeHeadings = extractMemoryHeadings(before);
   const afterHeadings = new Set(extractMemoryHeadings(after));
@@ -1834,20 +1550,7 @@ function missingMemoryHeadings(before: string, after: string): string[] {
   return missing;
 }
 
-/**
- * **⚠️ #662。省略された分へ到達する手は無い——ここは「口が無い」ではなく
- * 「継続点の指す先が存在しない」側である。** 他の一覧（`schedule_list` /
- * `manager_list` / `memory_list` / `token_list` / `runner_list` /
- * `approvals_list`）が予算で切ったときに `cursor` / `offset` を案内できる
- * のは、切った側の中身が呼び手の到達できる場所（ストアや帳面）に残って
- * いるからである。**ここは違う。** `before` はこの関数の呼び出しが返る
- * 時点で既に上書きされていて（`PersonaStore` に控えも履歴も無い——
- * `describeMemoryWriteDiff` の doc の「記憶には控えも履歴も無いので突き
- * 合わせる相手が存在しない」）、消えた見出しの文字列はこの1行の外の
- * どこにも残っていない。**だから「言えないと書く」のが正しい**（#662 の
- * 逐語）。`token_list` が到達手段を持たなかった頃に使っていた自己申告
- * （`残りを見る手はこの道具に無い`）に字面を寄せてある。
- */
+// 省略分に cursor / offset を案内しない: before は既に上書きされ、消えた見出しの文字列はこの1行の外のどこにも残っていないため
 function describeMemoryHeadingDiff(before: string, after: string): string {
   const missing = missingMemoryHeadings(before, after);
   if (missing.length === 0) return '消えた見出し: なし。';
@@ -1865,15 +1568,6 @@ function describeMemoryHeadingDiff(before: string, after: string): string {
   ].join('\n');
 }
 
-/**
- * `memory_write` / `memory_append` が成功したときに返す差分の要約。
- *
- * `before` は書き込み前の本文（無ければ `null`）、`after` は書き込み後の
- * 本文（ストアが返した実際の値——呼び手が計算し直さない）。
- *
- * **新規作成（`before === null`）は「前」が無いので、増減ではなくそう
- * 分かる形にする。** 見出しの比較も行わない（比べる相手が無い）。
- */
 export function describeMemoryWriteDiff(before: string | null, after: string): string {
   if (before === null) {
     return `新規作成（${formatMemoryCharCount(after.length)} 文字）。`;
