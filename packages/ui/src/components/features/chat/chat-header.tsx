@@ -1,4 +1,4 @@
-import { OctagonPause, PanelLeft } from 'lucide-react';
+import { CircleCheck, OctagonPause, PanelLeft, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -34,11 +34,14 @@ export function ChatHeader({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const gutter =
     'pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]';
+  // 狭い画面ではボタンを文字にしない: 見出しの列が押し潰され、説明が数文字ごとに折り返されてヘッダーが縦に伸びるため（#4340）
+  const iconOnNarrow = 'max-md:w-11 max-md:px-0';
   return (
     <>
       <header
         data-conversation-id={conversationId}
-        className={`flex shrink-0 items-center justify-between gap-4 border-b border-border py-4 md:pt-[calc(1rem+var(--safe-top))] ${gutter}`}
+        // 狭い画面では説明を2行目の全幅へ回す（`contents` で見出しと説明を header の直接の子にする）: 細い列で切り詰めると開始時刻と発言数が消えるため
+        className={`flex shrink-0 items-center justify-between gap-4 border-b border-border py-4 max-md:flex-wrap max-md:gap-x-2 max-md:gap-y-0 max-md:py-2 md:pt-[calc(1rem+var(--safe-top))] ${gutter}`}
       >
         {onOpenList !== undefined && (
           <button
@@ -50,10 +53,12 @@ export function ChatHeader({
             <PanelLeft className="size-5" aria-hidden />
           </button>
         )}
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 max-md:contents">
           <DocumentTitle>会話</DocumentTitle>
-          <h1 className="text-base font-semibold">会話</h1>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
+          <h1 className="text-base font-semibold max-md:min-w-0 max-md:flex-1">会話</h1>
+          <p
+            className={`mt-0.5 text-[11px] text-muted-foreground max-md:order-last max-md:mt-0 max-md:mb-1 max-md:basis-full max-md:truncate ${onOpenList !== undefined ? 'max-md:pl-13' : ''}`}
+          >
             クローンと話す
             {(conversationId === undefined || subtitle !== undefined) && (
               <>
@@ -65,7 +70,7 @@ export function ChatHeader({
         </div>
         {conversationId !== undefined &&
           (onInterrupt !== undefined || onEnd !== undefined || onDelete !== undefined) && (
-            <div className="flex shrink-0 items-center gap-3">
+            <div className="flex shrink-0 items-center gap-1 md:gap-3">
               {onInterrupt !== undefined && (
                 // `sending` では出し分けない: 走っているターンはこの画面が起こしたものとは限らないため
                 <Button
@@ -75,6 +80,7 @@ export function ChatHeader({
                   loading={interrupting}
                   title="いま走っているクローンのターンだけを止める。会話とセッションはそのまま残り、次の合図で次のターンが始まる"
                   aria-label="クローンのターンを止める"
+                  className={iconOnNarrow}
                 >
                   <OctagonPause className="size-3.5" aria-hidden />
                   <span className="hidden md:inline">ターンを止める</span>
@@ -86,9 +92,12 @@ export function ChatHeader({
                   onClick={() => setConfirmingEnd(true)}
                   data-chat-end
                   loading={ending}
-                  title="クローンがここまでの学びを記憶にまとめる"
+                  title="会話を終える。クローンがここまでの学びを記憶にまとめる"
+                  aria-label="会話を終える"
+                  className={iconOnNarrow}
                 >
-                  会話を終える
+                  <CircleCheck className="size-3.5" aria-hidden />
+                  <span className="hidden md:inline">会話を終える</span>
                 </Button>
               )}
               {onDelete !== undefined && (
@@ -98,9 +107,12 @@ export function ChatHeader({
                   onClick={() => setConfirmingDelete(true)}
                   data-chat-delete
                   loading={deleting}
-                  title="この会話を、どの画面・クローンからも読めなくする。元に戻せない"
+                  title="会話を削除。この会話を、どの画面・クローンからも読めなくする。元に戻せない"
+                  aria-label="会話を削除"
+                  className={iconOnNarrow}
                 >
-                  会話を削除
+                  <Trash2 className="size-3.5" aria-hidden />
+                  <span className="hidden md:inline">会話を削除</span>
                 </Button>
               )}
             </div>
