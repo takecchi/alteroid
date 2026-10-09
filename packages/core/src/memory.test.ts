@@ -64,17 +64,6 @@ import { listPageByOverfetch } from './journal-page.js';
 import { JournalAnchorNotFoundError } from './store.js';
 import type { JournalQuery, JournalStore } from './store.js';
 
-/**
- * 記憶をクローンの文脈へ載せる形。
- *
- * **ここが器（fs / pg / インメモリ）から移ってきたもの**なので、形そのものを
- * 1か所で固定する。器ごとに持っていた頃、インメモリ実装だけが見出しを付けて
- * おらず、しかもそれに気づける検査がどこにも無かった。
- *
- * 見出しの形（`<!-- memory: slug.md -->`）は**上の層が依存している**。走行中に
- * 変わった文書だけを載せ直すとき、システムプロンプトに載っている塊と同じ見出しで
- * 指せることが前提になっている（`clone.ts` の `#withFreshMemory`）。
- */
 describe('記憶の載せ方', () => {
   it('人間が開くファイル名と同じ見出しを付ける', () => {
     expect(renderMemoryDocument({ slug: 'values', content: '# 価値観\n\nあ' })).toBe(
@@ -82,10 +71,6 @@ describe('記憶の載せ方', () => {
     );
   });
 
-  /**
-   * 末尾の空白を落とす。**落とさないと文書の境目が見た目で動く** — 人間が
-   * エディタで末尾に改行を足しただけで、載せ直しの差分に出る本文が変わる。
-   */
   it('末尾の空白だけを落とす（先頭と本文には触らない）', () => {
     const rendered = renderMemoryDocument({ slug: 'a', content: '\n  先頭は残す\n\n\n' });
 
@@ -93,15 +78,6 @@ describe('記憶の載せ方', () => {
     expect(rendered.endsWith('先頭は残す')).toBe(true);
   });
 
-  /**
-   * **かつてここは本文（`に` / `い`）が並ぶことまで固定していた。** premise の
-   * 載り方が全文からカード（要旨＋節の目次）へ変わったので（`memory.ts` の
-   * `renderPremiseCard`）、本文は載らなくなった。
-   *
-   * **この歯が測っているのは本文ではなく「並び」である**——渡した順序のまま、
-   * 文書のあいだが空行1つで区切られること。**その保証は1ミリも弱まっていない**
-   * （むしろ、カードの見出しに slug が入るので並びの確認はより直接になった）。
-   */
   it('文書のあいだは空行1つで、渡された順序のまま並ぶ', () => {
     const rendered = renderMemoryDocuments([
       { slug: 'b', content: '# に\n' },
@@ -111,7 +87,6 @@ describe('記憶の載せ方', () => {
 
     expect(heads[0]?.startsWith('<!-- memory: b.md（premise')).toBe(true);
     expect(heads[1]?.startsWith('<!-- memory: a.md（premise')).toBe(true);
-    // 区切りは空行ちょうど1つ（2つ以上でも0でもない）。
     expect(rendered.split('\n\n').length).toBe(2);
     expect(rendered).not.toContain('\n\n\n');
   });
@@ -121,21 +96,6 @@ describe('記憶の載せ方', () => {
   });
 });
 
-/**
- * `MemoryProtectionStatus` の3状態の網羅性。
- *
- * **`unknown` を `clone-only` に畳まないこと。** 判定（`memoryProtectionAllowsFullReplace`）
- * と描画（`describeMemoryProtectionStatus`）のどちらも `switch` の `default` で
- * `assertNeverMemoryProtectionStatus`（引数の型は `never`）へ渡している。
- *
- * **これが型レベルの網羅性チェックである。** 状態を1つ足すと、その `switch` の
- * どの分岐にも当たらなくなった値が `default` まで落ち、`never` へ代入できずに
- * `tsc` が落ちる——分岐を書き足し忘れたまま黙って `unknown` 側に倒れる実装を
- * 防いでいる。ここでは同じ構造の**実行時の裏付け**を確かめる: 3状態それぞれで
- * 例外を投げずに判定・描画ができること（正の保証）と、型で弾かれるはずの
- * 未知の状態が来たら `default` 節が実際に例外を投げること（負の保証。
- * 黙って何かを返して嘘をつかないことの確認）。
- */
 describe('MemoryProtectionStatus の網羅性', () => {
   const ALL_STATUSES: MemoryProtectionStatus[] = [
     { kind: 'human' },
@@ -162,9 +122,6 @@ describe('MemoryProtectionStatus の網羅性', () => {
   });
 
   it('未知の状態（型では弾かれるはずの値）が来たら、黙って倒れず例外を投げる', () => {
-    // `as unknown as MemoryProtectionStatus` は型チェックを迂回する——ここは
-    // 「実行時にここへ来たら」という if の話であって、通常の呼び出し経路では
-    // 型で弾かれる（switch の default が `never` を要求するのがその強制力）。
     const unknownVariant = { kind: 'new-kind' } as unknown as MemoryProtectionStatus;
 
     expect(() => memoryProtectionAllowsFullReplace(unknownVariant)).toThrow();
@@ -177,20 +134,6 @@ describe('MemoryProtectionStatus の網羅性', () => {
   });
 });
 
-/**
- * `deriveMemoryCreatedAtFromJournal` / `deriveHumanTouchedAtFromJournal` に
- * 渡すフェイク journal。
- *
- * **`order` / `limit` / `after` / `types` を実際に解釈する。** Issue #1283 で
- * この2関数がページへ区切って（`order:'asc'` + `after` カーソルで）読み継ぐ
- * ようになったため、素朴に配列をそのまま返すだけのフェイクでは正しさを
- * 測れない——`order:'asc'` を要求しても desc のまま返ると、折り畳みの前提
- * （「asc で読めば同じ値になる」）が検算できない。3実装（`testing.ts` /
- * `storage-fs` / `storage-pg`）が従う契約と同じ意味論の縮小版をここに持つ。
- *
- * `entries` は**新しい順（desc）**で渡す——既存のテストの慣習（下のコメント
- * 「journal.list() は新しい順に返るので、新しい順に並べて渡す」）を保つ。
- */
 function fakeJournal(entries: JournalEntry[]): Pick<JournalStore, 'list' | 'listPage'> {
   const journal: Pick<JournalStore, 'list' | 'listPage'> = {
     async listPage(query: JournalQuery = {}) {
@@ -220,7 +163,6 @@ function fakeJournal(entries: JournalEntry[]): Pick<JournalStore, 'list' | 'list
   return journal;
 }
 
-/** `memory_update` の日誌エントリを1件作る（テストの意図を読みやすくする）。 */
 function memoryUpdateEntry(
   slug: string,
   at: string,
@@ -245,20 +187,8 @@ describe('MemoryCreatedAt の網羅性', () => {
   });
 });
 
-/**
- * `deriveMemoryCreatedAtFromJournal` — 記憶の `createdAt` の根拠のひとつ。
- *
- * **唯一の根拠ではない。** 第一の出所は書き込み経路自身（fs の `#writeNow` /
- * pg の `write` と `append`）で、これはその配線より前に作られた行を埋める
- * backfill（`markCreatedAt`）が使う導出関数である（記憶の `createdAt` 対応）。
- *
- * `deriveHumanTouchedAtFromJournal` と対になるが見るものが逆——あちらは
- * `cause:'human'` に絞って**最後**（新しいほう）を残すのに対し、こちらは
- * `cause` を問わず `action:'write'` だけに絞って**最初**（古いほう）を残す。
- */
 describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠を導出する', () => {
   it('その slug の最初の write の at が採られる（新しいほうが採られないこと）', async () => {
-    // journal.list() は新しい順に返るので、新しい順に並べて渡す。
     const journal = fakeJournal([
       memoryUpdateEntry('notes', '2026-03-01T00:00:00.000Z', 'write'),
       memoryUpdateEntry('notes', '2026-02-01T00:00:00.000Z', 'append'),
@@ -267,8 +197,6 @@ describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠�
 
     const result = await deriveMemoryCreatedAtFromJournal(journal);
 
-    // 一番新しい write（3/1）でも、間の append（2/1）でもなく、
-    // 一番古い write（1/1）が採られる。
     expect(result.get('notes')).toBe('2026-01-01T00:00:00.000Z');
   });
 
@@ -307,14 +235,6 @@ describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠�
   });
 });
 
-/**
- * `deriveHumanTouchedAtFromJournal` — 記憶の human guard（保護状態）の根拠。
- *
- * **専用の単体テストがこれまで無かった。** fs / pg の persona テストと
- * `apps/daemon/src/storage.test.ts` が間接的に通していたが、この関数だけを
- * 狙った境界（cause / action の絞り、新しいほうが残ること）を確かめる歯は
- * このファイルに無かった（Issue #1283 のページング対応のついでに足す）。
- */
 describe('deriveHumanTouchedAtFromJournal — 日誌から human guard の根拠を導出する', () => {
   it('その slug の最後（最新）の human 書き込みの at が採られる', async () => {
     const journal = fakeJournal([
@@ -355,28 +275,15 @@ describe('deriveHumanTouchedAtFromJournal — 日誌から human guard の根拠
   });
 });
 
-/**
- * ページング境界（Issue #1283）。
- *
- * **`deriveHumanTouchedAtFromJournal` / `deriveMemoryCreatedAtFromJournal`
- * は、`pageSize` をいくつに設定しても同じ値を返さなければならない。** 導出
- * する `Map` はページの切れ目とは無関係な集計なので、ページを跨いでも
- * 跨がなくても結果は1バイトも変わらないはずである——ここではその不変性を、
- * 0件・1件・ページちょうど・ページ+1件の4点で測る（`pageSize` を小さく
- * 差し替えて、実際にページを複数回読ませる）。
- */
 describe('ページング（Issue #1283）— pageSize を変えても導出結果が変わらない', () => {
   const PAGE_SIZE = 3;
 
-  /** slug ごとに1件、`count` 件ぶんの write エントリを新しい順で作る。 */
   function manyWriteEntries(count: number): JournalEntry[] {
     const entries: JournalEntry[] = [];
     for (let i = 0; i < count; i += 1) {
-      // 新しい順（desc）で渡す規約に合わせ、番号が大きいほど新しい時刻にする。
       const at = new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString();
       entries.push(memoryUpdateEntry(`slug-${i}`, at, 'write', { id: `id-${i}` }));
     }
-    // 呼び出し側は新しい順で渡す規約——番号が大きい（＝新しい）ものを先頭にする。
     return entries.reverse();
   }
 
@@ -427,8 +334,6 @@ describe('ページング（Issue #1283）— pageSize を変えても導出結�
     }
     entries.reverse();
     const inner = fakeJournal(entries);
-    // pg の list() と同じ形: LIMIT の後で壊れた行を捨てる（ここでは id-1）。
-    // 継続点は捨てた行を含む生の最後の行。
     const dropping: Pick<JournalStore, 'listPage'> = {
       listPage: async (query) => {
         const page = await inner.listPage(query);
@@ -453,7 +358,6 @@ describe('ページング（Issue #1283）— pageSize を変えても導出結�
     }
     entries.reverse();
     const inner = fakeJournal(entries);
-    // PAGE_SIZE=3 の 2 ページ目（asc で id-3..id-5）が全部壊れている。
     const broken = new Set(['id-3', 'id-4', 'id-5']);
     const dropping: Pick<JournalStore, 'listPage'> = {
       listPage: async (query) => {
@@ -469,9 +373,6 @@ describe('ページング（Issue #1283）— pageSize を変えても導出結�
   });
 
   it('既定の pageSize（MEMORY_JOURNAL_SCAN_PAGE_SIZE）を省略しても動く（境界の桁だけ確認）', async () => {
-    // 既定値そのものを1001件生成して確かめるのは重いので、ここでは既定値が
-    // 有効な正の整数であることと、省略時に動作すること（例外にならない）だけ
-    // を確認する——桁の実測は上の `PAGE_SIZE=3` の歯が担う。
     expect(MEMORY_JOURNAL_SCAN_PAGE_SIZE).toBeGreaterThan(0);
     const result = await deriveMemoryCreatedAtFromJournal(
       fakeJournal([memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write')]),
@@ -480,11 +381,6 @@ describe('ページング（Issue #1283）— pageSize を変えても導出結�
   });
 });
 
-// =============================================================================
-// #170「目次 → 詳細（オンデマンド）＋ 階層」
-// =============================================================================
-
-/** 目次（fact）に載る1件を作る小さなヘルパー。テストの意図を読みやすくする。 */
 function fact(
   slug: string,
   options: {
@@ -518,15 +414,6 @@ function premise(slug: string, body = '本文'): MemoryPart {
   return { slug, content: `# ${slug}\n${body}` };
 }
 
-/**
- * 節数 `n`・見出し長 `headingLength` の premise を作る（frontmatter 無し＝
- * 既定で premise。`resolveMemoryDocKind` の doc）。
- *
- * **`measurePremiseOutlineFit` / `MemoryFloor.outlineSaturatedPremise` /
- * `describeMemoryFloor` の A/B/C の歯が共有する**——1文書あたりの目次の
- * 予算に対する飽和・非飽和を、節数だけで作り分けられるようにするための
- * 器である。
- */
 function manySectionPremise(slug: string, n: number, headingLength = 40): MemoryPart {
   const heading = (i: number) => `${'あ'.repeat(headingLength)}${String(i).padStart(4, '0')}`;
   const body = Array.from({ length: n }, (_, i) => `# ${heading(i)}\n本文`).join('\n');
@@ -574,14 +461,6 @@ describe('frontmatter の解釈（parseMemoryFrontmatter）— 3状態、畳ま�
   });
 });
 
-/**
- * `applyMemoryFrontmatterPatch` — #318 案 (a) の中核。
- *
- * **本文が1バイトも変わらないことを、複数見出しを持つ長い本文で確かめる**
- * （マネージャーの指定どおり）。ここが崩れると「本文がツール呼び出しの中に
- * 一度も現れない」という性質（`memory_frontmatter_set` の存在理由そのもの）
- * が壊れる。
- */
 describe('applyMemoryFrontmatterPatch — frontmatter のキーだけを差し替える。本文には触れない', () => {
   const longBody = [
     '# 価値観',
@@ -604,7 +483,6 @@ describe('applyMemoryFrontmatterPatch — frontmatter のキーだけを差し�
   it('frontmatter が無い（none）文書には、先頭に新しく作って足す。本文は無傷', () => {
     const next = applyMemoryFrontmatterPatch(longBody, { description: '新しい要旨' });
     expect(next).toBe(`---\ndescription: 新しい要旨\n---\n${longBody}`);
-    // 本文がそのまま、1文字も変わらずに残っている。
     expect(next.endsWith(longBody)).toBe(true);
   });
 
@@ -627,7 +505,7 @@ describe('applyMemoryFrontmatterPatch — frontmatter のキーだけを差し�
   it('本文は1バイトも変わらない（見出しを複数持つ長い本文で確かめる）', () => {
     const original = `---\ndescription: 古い要旨\ntype: premise\n---\n${longBody}`;
     const next = applyMemoryFrontmatterPatch(original, { type: 'fact' });
-    const body = next.split('\n').slice(4).join('\n'); // 3行の frontmatter + 閉じの --- の次から
+    const body = next.split('\n').slice(4).join('\n');
     expect(body).toBe(longBody);
   });
 
@@ -652,26 +530,11 @@ describe('applyMemoryFrontmatterPatch — frontmatter のキーだけを差し�
     expect(() => applyMemoryFrontmatterPatch(malformed, { description: 'x' })).toThrow();
   });
 
-  /**
-   * 本文が空（frontmatter だけ）の文書（#354 のコメント）。
-   *
-   * **ここを測るものが1本も無かった。** `frontmatterBody` は
-   * `---\n…\n---\n` と `---\n…\n---` の両方に対して空文字を返すので、
-   * **本文が空のときだけ、閉じの `---` の後ろの改行の有無が `body` から
-   * 復元できない。** 実装は `content` の末尾でそれを決めている。
-   *
-   * **2本ある理由は、片方だけでは倒れる向きを固定できないからである** ——
-   * 「改行を保つ」だけを測ると `${header}\n` を無条件で返す実装が通り、
-   * 「改行を足さない」だけを測ると `header` を無条件で返す実装（#338 以降の
-   * 挙動そのもの）が通る。**両方が同時に在ってはじめて、片側の1バイトを
-   * もう片側の1バイトに付け替える変更が落ちる。**
-   */
   describe('本文が空（frontmatter だけの文書）— 閉じの --- の後ろの改行は元のまま', () => {
     it('元が末尾に改行を持つなら、閉じの --- の後ろの改行が残る（1バイトも減らない）', () => {
       const original = '---\ndescription: 旧\n---\n';
       const next = applyMemoryFrontmatterPatch(original, { description: '新' });
       expect(next).toBe('---\ndescription: 新\n---\n');
-      // 落ちていたのはこの1バイトである（#354 のコメント）。
       expect(next.endsWith('---\n')).toBe(true);
       expect(next.length).toBe(original.length);
     });
@@ -722,26 +585,12 @@ describe('区分の解決（resolveMemoryDocKind）— 既定は premise（4-11 
     expect(resolveMemoryDocKind({ kind: 'parsed', type: 'indexed' })).toBe('indexed');
   });
 
-  /**
-   * ⚠️ 安全弁の回帰確認（`indexed` を既知にした後でも壊れていないこと）。
-   * `indexed` を足す前は綴り違い・大文字は無条件で premise へ倒れていた——
-   * `indexed` を既知の値へ加えたことで、**未知の値の判定基準そのものが
-   * 変わっていないか**を確かめる。`Indexed`（大文字）は依然として未知の
-   * 値なので premise へ倒れる。
-   */
   it('⚠️ indexed を追加した後も、綴り違い（大文字）は premise へ倒れる（安全弁は壊れていない）', () => {
     expect(resolveMemoryDocKind({ kind: 'parsed', type: 'Indexed' })).toBe('premise');
     expect(resolveMemoryDocKind({ kind: 'parsed', type: 'indexeds' })).toBe('premise');
   });
 });
 
-/**
- * `isKnownMemoryDocKind` — 書き込み側の入口（`memory_frontmatter_set`）が
- * 「渡された値をそのまま frontmatter へ書いてよいか」を判定するための関数。
- * `resolveMemoryDocKind` の「未知の値は premise へ倒す」読み出し側の安全弁
- * とは別の使い道である（同じ集合を共有するので、既知の値の判定そのものは
- * 一致する）。
- */
 describe('isKnownMemoryDocKind — 書き込み側の入口が使う判定', () => {
   it('premise と fact と indexed は既知', () => {
     expect(isKnownMemoryDocKind('premise')).toBe(true);
@@ -760,12 +609,6 @@ describe('isKnownMemoryDocKind — 書き込み側の入口が使う判定', () 
   });
 });
 
-/**
- * `containsMemoryFrontmatterLineBreak` — `memory_frontmatter_set`（tools.ts）
- * が入口で断るために使う検査。改行を含む値を `serializeMemoryFrontmatter`
- * （1キー1行の形）へそのまま渡すと、値の続きが別の行として紛れ込む
- * （本文は失われないが、値から本文へ文字列が混ざる経路ができる）。
- */
 describe('containsMemoryFrontmatterLineBreak — 改行を含む値の検出', () => {
   it('\\n を含めば true', () => {
     expect(containsMemoryFrontmatterLineBreak('a\nb')).toBe(true);
@@ -782,15 +625,6 @@ describe('containsMemoryFrontmatterLineBreak — 改行を含む値の検出', (
     expect(containsMemoryFrontmatterLineBreak('')).toBe(false);
   });
 
-  /**
-   * ⚠️ 差し戻しで見つかった実際の混入を再現する（回帰確認）。
-   *
-   * `applyMemoryFrontmatterPatch` 自体は改行を検査しない
-   * （検査は呼び手＝ `memory_frontmatter_set` の入口の責務——`type` の
-   * 検査と同じ設計）。ここでは「検査を挟まずに直接呼んだら何が起きるか」
-   * を固定し、`containsMemoryFrontmatterLineBreak` が本当にこの形を
-   * 捕まえる値を検出することを確かめる。
-   */
   it('検査を挟まないまま渡すと、値の続きが本文の先頭へ紛れ込む（再現）', () => {
     const original = '---\ndescription: 古\n---\n# 見出し\n\n本文である';
     const injected = applyMemoryFrontmatterPatch(original, {
@@ -798,21 +632,12 @@ describe('containsMemoryFrontmatterLineBreak — 改行を含む値の検出', (
       type: 'fact',
     });
     expect(parseMemoryFrontmatter(injected)).toEqual({ kind: 'parsed', description: 'a' });
-    // 本文そのものは失われていない（末尾に残っている）。
     expect(injected.endsWith('本文である')).toBe(true);
-    // だが値の続き（'b' や 'type: fact' や '---'）が本文の先頭として紛れ込む。
     expect(injected).toContain('b\ntype: fact\n---\n# 見出し');
-    // これが `containsMemoryFrontmatterLineBreak` が入口で断るべき理由である。
     expect(containsMemoryFrontmatterLineBreak('a\n---\nb')).toBe(true);
   });
 });
 
-/**
- * `findMemoryFrontmatterLineBreak` — #1213。断る判断そのものは
- * `containsMemoryFrontmatterLineBreak` と1文字も変えていない
- * （`/[\r\n]/` をそのまま流用する）。ここで測るのは、断るときに名乗る
- * 証拠（位置・種類・前後の抜粋）が正しく組まれることだけである。
- */
 describe('findMemoryFrontmatterLineBreak — 断りに名乗る証拠（位置・種類・抜粋）', () => {
   it('改行が無ければ null（containsMemoryFrontmatterLineBreak が false を返す値と同じ）', () => {
     expect(findMemoryFrontmatterLineBreak('a')).toBeNull();
@@ -846,7 +671,6 @@ describe('findMemoryFrontmatterLineBreak — 断りに名乗る証拠（位置�
   it('抜粋は前後の短い窓を持ち、改行そのものは \\n / \\r という見える形になる（生の改行を含まない）', () => {
     const found = findMemoryFrontmatterLineBreak('前置き\n後書き');
     expect(found?.excerpt).toBe('前置き\\n後書き');
-    // 生の改行は1文字も残っていない。
     expect(found?.excerpt).not.toMatch(/[\r\n]/);
   });
 
@@ -856,7 +680,6 @@ describe('findMemoryFrontmatterLineBreak — 断りに名乗る証拠（位置�
     const found = findMemoryFrontmatterLineBreak(`${before}\n${after}`);
     expect(found?.excerpt.startsWith('…')).toBe(true);
     expect(found?.excerpt.endsWith('…')).toBe(true);
-    // 窓の中身は改行の前後20文字ずつ。
     expect(found?.excerpt).toBe(`…${'あ'.repeat(20)}\\n${'い'.repeat(20)}…`);
   });
 
@@ -951,33 +774,12 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
       staleForMs: 30 * 24 * 60 * 60 * 1000,
       drift: { kind: 'measured', describedBytes: 500, currentBytes: 700, deltaBytes: 200 },
     });
-    // 差そのものが違う値であることを直接確かめる——「stale というラベルが
-    // 出た」ではなく「差が動いた」ことを見る。
     expect(oneHour.kind === 'stale' && thirtyDays.kind === 'stale').toBe(true);
     if (oneHour.kind === 'stale' && thirtyDays.kind === 'stale') {
       expect(oneHour.staleForMs).not.toBe(thirtyDays.staleForMs);
     }
   });
 
-  /**
-   * ⚠️ `stale` を決める比較（文字列の辞書式）と、差を作る比較（`Date.parse`
-   * の数値）は別物である——精度（小数秒の桁数）が違う2つの ISO 8601 文字列
-   * では、辞書式が「小さい」と判定した側が、数値としては後（＝大きい）で
-   * ありうる。
-   *
-   * ここでは `describedAt = '...T10:00:00.500Z'`（小数点あり）・
-   * `updatedAt = '...T10:00:00Z'`（小数点なし）を渡す。辞書式では `'.'`
-   * （0x2E）が `'Z'`（0x5A）より小さいので `describedAt < updatedAt` が
-   * 真になり `stale` へ入るが、数値としては `describedAt` の方が500ミリ秒
-   * 後（＝大きい）——clamp が無ければ `staleForMs` は `-500` になる。
-   *
-   * **`Math.max(0, ...)` を外す変異（マネージャー指摘、条件1の直接の歯）は
-   * ここで捕まる。** 負の値が「0（＝最新）」以外の意味を持ってはいけない
-   * ——このテストは「0になる」ことそのものを固定する（負のまま漏れる／
-   * NaN になる、のどちらでもないことを確かめる）。**`describedBytes` は
-   * 渡さない**（`unrecorded`）——このテストの関心は `staleForMs` の丸めで
-   * あって `drift` ではないため。
-   */
   it('精度違いで辞書式と数値の順序が食い違っても、staleForMs は負にならない（0 に丸める）', () => {
     const result = resolveMemoryDescriptionFreshness({
       description: '要旨',
@@ -1001,13 +803,6 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
   });
 });
 
-/**
- * #913 / #821 残課題: `drift`（本文の変化量）の組み立て。
- * `resolveMemoryDescriptionFreshness` の `stale` 分岐が内部で使う
- * `resolveMemoryDescriptionDrift` は export していないので、
- * `resolveMemoryDescriptionFreshness` 経由で測る（`stale` になる入力を
- * 固定し、`drift` に効くパラメータだけを変える）。
- */
 describe('#913 / #821 残課題: stale に添える drift（本文の変化量）', () => {
   const stale = (
     describedBytes: number | undefined,
@@ -1056,8 +851,6 @@ describe('#913 / #821 残課題: stale に添える drift（本文の変化量�
   });
 
   it('describedBytesAt が describedAt 以下（同時刻含む）なら measured（#821 残課題）', () => {
-    // describedAt は '2026-08-20T00:00:00Z'。同時刻を渡す——要旨を書き直した
-    // 瞬間に基準点も測られた、という通常経路の形。
     expect(stale(1000, 1200, '2026-08-20T00:00:00Z')).toEqual({
       kind: 'stale',
       staleForMs: 24 * 60 * 60 * 1000,
@@ -1079,10 +872,6 @@ describe('#913 / #821 残課題: stale に添える drift（本文の変化量�
     });
   });
 
-  /**
-   * ⭐ 条件2（語ではなく数で測る）を `at-least` にも適用する。基準点の
-   * バイト数を変えると `deltaBytes` が動くことを、2点で撃つ。
-   */
   it('at-least でも、基準点のバイト数を変えると deltaBytes が動く（#821 条件2と同じ形）', () => {
     const smallDelta = stale(1000, 1100, '2026-08-20T12:00:00Z');
     const largeDelta = stale(500, 1100, '2026-08-20T12:00:00Z');
