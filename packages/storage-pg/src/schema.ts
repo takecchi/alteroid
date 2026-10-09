@@ -328,6 +328,21 @@ export const integrationKeys = pgTable(
   (table) => [uniqueIndex('integration_keys_sha256_idx').on(table.sha256)],
 );
 
+export const eventReceipts = pgTable(
+  'event_receipts',
+  {
+    scope: text('scope').notNull(),
+    source: text('source').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    eventId: text('event_id').notNull(),
+    at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.scope, table.source, table.idempotencyKey] }),
+    index('event_receipts_at_idx').on(table.at),
+  ],
+);
+
 export const usageDaily = pgTable(
   'usage_daily',
   {

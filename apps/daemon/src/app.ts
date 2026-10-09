@@ -203,7 +203,9 @@ import {
   readAttachmentLimits,
   removeAttachmentCopy,
   stripNul,
+  EVENT_IDEMPOTENCY_KEY_MAX_LENGTH,
   type AttachmentLimits,
+  type EventReceipt,
 } from '@alteroid/core';
 
 import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal } from './auth.js';
@@ -539,6 +541,12 @@ const eventBody = z.object({
   source: z.string().min(1),
   payload: z.unknown().optional(),
   attachments: z.array(z.string().min(1)).optional(),
+  idempotencyKey: z
+    .string()
+    .min(1)
+    .max(EVENT_IDEMPOTENCY_KEY_MAX_LENGTH)
+    .refine((value) => !hasNul(value), 'NUL を含められない')
+    .optional(),
 });
 // 本文まるごとが payload なので、添付の id はクエリで運ぶ。空の値は無いものとして扱う: `?attachments=` を付けていた呼び手を壊さない。
 const eventSourceQuery = z.object({
@@ -1646,6 +1654,62 @@ export function createApp(deps: AppDeps) {
     }
     if (outcome === 'unavailable') await releaseQuietly();
     return outcome;
+  }
+
+  // 同じ重複キーの要求はこのデーモンの中で1本ずつ通す: 並んだ2本が両方「記録が無い」を見て、両方積むのを防ぐため。
+  // 器（pg）の主キーは記録を1行に保つが、積んだ後の衝突では2件目の出来事を取り消せない。
+  const eventReceiptLocks = new Map<string, Promise<unknown>>();
+  function withEventReceiptLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prior = eventReceiptLocks.get(key) ?? Promise.resolve();
+    const run = prior.then(fn);
+    const tail = run.catch(() => undefined);
+    eventReceiptLocks.set(key, tail);
+    void tail.finally(() => {
+      if (eventReceiptLocks.get(key) === tail) eventReceiptLocks.delete(key);
+    });
+    return run;
+  }
+
+  function eventReceiptScopeOf(principal: Principal): string {
+    switch (principal.kind) {
+      case 'integration':
+        return `integration:${principal.keyId}`;
+      case 'account':
+        return `account:${principal.account.id}`;
+      case 'operator':
+        return 'operator';
+    }
+  }
+
+  // 記録が読めない・書けないときは積む側へ倒す: 重複キーは送り直しを畳むためのもので、読めないからと断ると出来事そのものを落とすため。
+  async function findEventReceiptQuietly(
+    scope: string,
+    source: string,
+    idempotencyKey: string,
+  ): Promise<EventReceipt | null> {
+    try {
+      return await stores.eventReceipts.findEventReceipt(
+        scope,
+        source,
+        idempotencyKey,
+        new Date().toISOString(),
+      );
+    } catch (error) {
+      process.stderr.write(
+        `alteroidd: 外部イベントの重複キーの記録が読めない（重複かどうか確かめずに積む）: ${reasonOf(error)}\n`,
+      );
+      return null;
+    }
+  }
+
+  async function recordEventReceiptQuietly(receipt: EventReceipt): Promise<void> {
+    try {
+      await stores.eventReceipts.recordEventReceipt(receipt);
+    } catch (error) {
+      process.stderr.write(
+        `alteroidd: 外部イベント ${receipt.eventId} の重複キーを記録できなかった（同じキーの送り直しは二重に積まれうる）: ${reasonOf(error)}\n`,
+      );
+    }
   }
 
   // 購読はデーモンが起きている間ずっと続くので解除しない。
@@ -5402,11 +5466,15 @@ export function createApp(deps: AppDeps) {
           '（画像はモデルへの入力として、すべての添付は通知行として）。** 検証と結び付けは投函の前に行い、' +
           '断るときはイベントを投函しない。**連携の鍵（`altk_`）で送るときは、その鍵自身が' +
           '`POST /attachments` で上げた添付だけ**付けられる（別の鍵・アカウント・operator が上げたものは 400）。' +
-          '人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。',
+          '人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。' +
+          '**`idempotencyKey`（任意。1〜200字）— 送り直しを見分ける目印。** 同じ送り手（連携の鍵ごと・アカウントごと・operator）・' +
+          '同じ source・同じ目印の2件目は、積まずに1件目と同じ `id` を `duplicate: true` 付きの 200 で返す。' +
+          '覚えておくのは受けてから7日。2件目の本文と添付は見ない（目印が同じなら同じ出来事として扱う）。',
         responses: {
           200: {
             description:
-              '受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（二重に届く）。',
+              '受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**' +
+              '（`idempotencyKey` を付けていなければ二重に届く）。`duplicate: true` は、同じ目印の出来事を既に受けていて、今回は積まなかったことを表す。',
             content: { 'application/json': { schema: resolver(eventAcceptedResponseSchema) } },
           },
           503: eventNotPersistedResponse(),
@@ -5424,7 +5492,12 @@ export function createApp(deps: AppDeps) {
         error: 'source/payload の形が不正' + (where === '' ? '' : `: ${where}`),
       })),
       async (c) => {
-        const { source, payload, attachments: attachmentIds } = c.req.valid('json');
+        const {
+          source,
+          payload,
+          attachments: attachmentIds,
+          idempotencyKey,
+        } = c.req.valid('json');
         const principal = c.get('principal');
         // 連携の鍵は本文の source が鍵の source と一致するときだけ通す（不一致は 403。日誌には書かない）。
         if (principal.kind === 'integration' && source !== principal.source) {
@@ -5434,36 +5507,51 @@ export function createApp(deps: AppDeps) {
         // 予約語は正規化の後で断る。添付の検査より前: 何も結ばず何も積まない。
         if (isMalformedEventSource(source)) return c.json(INVALID_SOURCE_BODY, 400);
         if (isReservedEventSource(source)) return c.json(RESERVED_SOURCE_BODY, 400);
-        const id = randomUUID();
-        const attached = await bindEventAttachments(attachmentIds, id, principal);
-        if (!attached.ok) return c.json(attached.body, attached.status);
-        const at = new Date().toISOString();
-        // 受信箱へ永続化できたときだけ 200 を返す: 書けなかったら 503 で、受信箱のメモリにも積まない。
-        const outcome = await postExternalPersisted(
-          {
-            type: 'external',
-            id,
-            at,
-            source,
-            payload,
-            ...(principal.kind === 'integration'
-              ? { via: { keyId: principal.keyId, name: principal.name } }
-              : {}),
-            ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-          },
-          attached.refs,
-        );
-        if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
-        // 日誌の external_event は使わない: クローンが取り出した時刻なので、受け付けた時刻で光らせる。
-        if (principal.kind === 'integration') {
-          topologyActivity.recordExternal({
-            keyId: principal.keyId,
-            name: principal.name,
-            source,
-            at,
-          });
-        }
-        return c.json({ ok: true, id });
+        const accept = async (onPersisted?: (id: string, at: string) => Promise<void>) => {
+          const id = randomUUID();
+          const attached = await bindEventAttachments(attachmentIds, id, principal);
+          if (!attached.ok) return c.json(attached.body, attached.status);
+          const at = new Date().toISOString();
+          // 受信箱へ永続化できたときだけ 200 を返す: 書けなかったら 503 で、受信箱のメモリにも積まない。
+          const outcome = await postExternalPersisted(
+            {
+              type: 'external',
+              id,
+              at,
+              source,
+              payload,
+              ...(principal.kind === 'integration'
+                ? { via: { keyId: principal.keyId, name: principal.name } }
+                : {}),
+              ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+            },
+            attached.refs,
+          );
+          if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
+          await onPersisted?.(id, at);
+          // 日誌の external_event は使わない: クローンが取り出した時刻なので、受け付けた時刻で光らせる。
+          if (principal.kind === 'integration') {
+            topologyActivity.recordExternal({
+              keyId: principal.keyId,
+              name: principal.name,
+              source,
+              at,
+            });
+          }
+          return c.json({ ok: true as const, id });
+        };
+        if (idempotencyKey === undefined) return accept();
+        const scope = eventReceiptScopeOf(principal);
+        return withEventReceiptLock(JSON.stringify([scope, source, idempotencyKey]), async () => {
+          // 添付を結ぶ前に見分ける: 結んでからだと、1件目が結んだ添付で2件目が `attachment_conflict` になるため
+          const prior = await findEventReceiptQuietly(scope, source, idempotencyKey);
+          if (prior !== null) {
+            return c.json({ ok: true as const, id: prior.eventId, duplicate: true as const });
+          }
+          return accept((eventId, at) =>
+            recordEventReceiptQuietly({ scope, source, idempotencyKey, eventId, at }),
+          );
+        });
       },
     )
 

@@ -19484,10 +19484,10 @@
         "operationId": "postEvents",
         "tags": ["events"],
         "summary": "外部イベントをクローンへ届ける",
-        "description": "自作ツール・ショートカット・CI からクローンへ出来事を届ける。何をするかはここで決めない（対応表を持った瞬間に自動化ジョブに戻る）。**`attachments`（任意）— `POST /attachments` が返した id を渡すと、その添付がクローンのターンへ届く（画像はモデルへの入力として、すべての添付は通知行として）。** 検証と結び付けは投函の前に行い、断るときはイベントを投函しない。**連携の鍵（`altk_`）で送るときは、その鍵自身が`POST /attachments` で上げた添付だけ**付けられる（別の鍵・アカウント・operator が上げたものは 400）。人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。",
+        "description": "自作ツール・ショートカット・CI からクローンへ出来事を届ける。何をするかはここで決めない（対応表を持った瞬間に自動化ジョブに戻る）。**`attachments`（任意）— `POST /attachments` が返した id を渡すと、その添付がクローンのターンへ届く（画像はモデルへの入力として、すべての添付は通知行として）。** 検証と結び付けは投函の前に行い、断るときはイベントを投函しない。**連携の鍵（`altk_`）で送るときは、その鍵自身が`POST /attachments` で上げた添付だけ**付けられる（別の鍵・アカウント・operator が上げたものは 400）。人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。**`idempotencyKey`（任意。1〜200字）— 送り直しを見分ける目印。** 同じ送り手（連携の鍵ごと・アカウントごと・operator）・同じ source・同じ目印の2件目は、積まずに1件目と同じ `id` を `duplicate: true` 付きの 200 で返す。覚えておくのは受けてから7日。2件目の本文と添付は見ない（目印が同じなら同じ出来事として扱う）。",
         "responses": {
           "200": {
-            "description": "受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（二重に届く）。",
+            "description": "受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（`idempotencyKey` を付けていなければ二重に届く）。`duplicate: true` は、同じ目印の出来事を既に受けていて、今回は積まなかったことを表す。",
             "content": {
               "application/json": {
                 "schema": {
@@ -19499,6 +19499,10 @@
                     },
                     "id": {
                       "type": "string"
+                    },
+                    "duplicate": {
+                      "type": "boolean",
+                      "const": true
                     }
                   },
                   "required": ["ok", "id"]
@@ -19655,6 +19659,11 @@
                       "type": "string",
                       "minLength": 1
                     }
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
                   }
                 },
                 "required": ["source"]
@@ -19693,6 +19702,10 @@
                     },
                     "id": {
                       "type": "string"
+                    },
+                    "duplicate": {
+                      "type": "boolean",
+                      "const": true
                     }
                   },
                   "required": ["ok", "id"]
@@ -28759,6 +28772,10 @@
                     },
                     "id": {
                       "type": "string"
+                    },
+                    "duplicate": {
+                      "type": "boolean",
+                      "const": true
                     }
                   },
                   "required": ["ok", "id"]

@@ -90,6 +90,12 @@ import {
   type IntegrationKeyRecord,
   type IntegrationKeyStore,
 } from './integration-key.js';
+import {
+  assertEventReceiptWritable,
+  eventReceiptCutoff,
+  type EventReceipt,
+  type EventReceiptStore,
+} from './event-receipt.js';
 import type {
   CredentialVaultStore,
   EnvProfileEntry,
@@ -1026,6 +1032,31 @@ export function createMemoryStores(): Stores {
   const compareAccessTokenOrder = (a: AccessTokenRecord, b: AccessTokenRecord): number =>
     compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 
+  // 鍵は JSON の配列にする: 区切り文字を挟む形だと、区切り文字を含む値どうしが同じ鍵になりうるため
+  const eventReceiptRows = new Map<string, EventReceipt>();
+  const eventReceiptKey = (scope: string, source: string, idempotencyKey: string): string =>
+    JSON.stringify([scope, source, idempotencyKey]);
+  const eventReceipts: EventReceiptStore = {
+    async findEventReceipt(scope, source, idempotencyKey, now) {
+      if (hasNul(scope) || hasNul(source) || hasNul(idempotencyKey)) return null;
+      const row = eventReceiptRows.get(eventReceiptKey(scope, source, idempotencyKey));
+      if (row === undefined || compareIsoInstant(row.at, eventReceiptCutoff(now)) < 0) return null;
+      return { ...row };
+    },
+    async recordEventReceipt(receipt) {
+      assertEventReceiptWritable(receipt);
+      const cutoff = eventReceiptCutoff(receipt.at);
+      for (const [key, row] of eventReceiptRows) {
+        if (compareIsoInstant(row.at, cutoff) < 0) eventReceiptRows.delete(key);
+      }
+      const key = eventReceiptKey(receipt.scope, receipt.source, receipt.idempotencyKey);
+      const existing = eventReceiptRows.get(key);
+      if (existing !== undefined) return { ...existing };
+      eventReceiptRows.set(key, { ...receipt });
+      return { ...receipt };
+    },
+  };
+
   const integrationKeyRows = new Map<string, IntegrationKeyRecord>();
   const integrationKeys: IntegrationKeyStore = {
     async putIntegrationKey(key) {
@@ -1831,6 +1862,7 @@ export function createMemoryStores(): Stores {
     sessions,
     auth,
     integrationKeys,
+    eventReceipts,
     permissionGrants,
     profile,
     credentials,

@@ -1374,6 +1374,15 @@ export {
 } from './integration-key.js';
 export { verifyIntegrationKeyStoreContract } from './integration-key-contract.js';
 export {
+  EVENT_IDEMPOTENCY_KEY_MAX_LENGTH,
+  EVENT_RECEIPT_RETENTION_MS,
+  assertEventReceiptWritable,
+  eventReceiptCutoff,
+  type EventReceipt,
+  type EventReceiptStore,
+} from './event-receipt.js';
+export { verifyEventReceiptStoreContract } from './event-receipt-contract.js';
+export {
   attachmentTooLargeMessage,
   attachmentTooManyMessage,
   attachmentTotalTooLargeMessage,
