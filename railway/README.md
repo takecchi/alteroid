@@ -626,16 +626,16 @@ alteroid chat
 
 **Shared Variables には置かない**（資格を runner へ配らないため。`ALTEROID_DATABASE_URL` と同じ扱い）。**`app` の Service 変数だけ**に置く。
 
-| 変数                                       | 値                                                           | なぜ                                                                                            |
-| ------------------------------------------ | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `ALTEROID_ATTACHMENT_S3_BUCKET`            | バケット名                                                   | **これが空なら使わない**（off）                                                                 |
-| `ALTEROID_ATTACHMENT_S3_ENDPOINT`          | S3 の endpoint（https の URL）                               | https だけを受ける（http は手元の MinIO 用の `ALTEROID_ATTACHMENT_S3_ALLOW_HTTP=1` のときだけ） |
-| `ALTEROID_ATTACHMENT_S3_REGION`            | リージョン（既定 `auto`）                                    | バケットが名乗る値に合わせる                                                                    |
-| `ALTEROID_ATTACHMENT_S3_ACCESS_KEY_ID`     | アクセスキー                                                 | 欠けていると使わずに起動する（stderr に理由が1行出る）                                          |
-| `ALTEROID_ATTACHMENT_S3_SECRET_ACCESS_KEY` | シークレット                                                 | 同上。**値を `railway variable list` の出力や PR・Issue へ貼らない**                            |
-| `ALTEROID_ATTACHMENT_S3_PREFIX`            | （任意）key の前に付ける接頭辞                               | 1つのバケットを他の用途と分けるとき                                                             |
-| `ALTEROID_ATTACHMENT_S3_FORCE_PATH_STYLE`  | （任意）`1` / `true`                                         | endpoint が仮想ホスト形式（`<bucket>.<host>`）に対応していないとき                              |
-| `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES` | （任意）画像以外1つの別枠（バイト。既定 2147483648 = 2 GiB） | **外部ストレージが有効なときだけ効く**                                                          |
+| 変数                                       | 値                                                           | なぜ                                                                                                                                                                                      |
+| ------------------------------------------ | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALTEROID_ATTACHMENT_S3_BUCKET`            | バケット名                                                   | **これが空なら使わない**（off）                                                                                                                                                           |
+| `ALTEROID_ATTACHMENT_S3_ENDPOINT`          | S3 の endpoint（https の URL）                               | https だけを受ける（http は手元の MinIO 用の `ALTEROID_ATTACHMENT_S3_ALLOW_HTTP=1` のときだけ）                                                                                           |
+| `ALTEROID_ATTACHMENT_S3_REGION`            | リージョン（既定 `auto`）                                    | バケットが名乗る値に合わせる                                                                                                                                                              |
+| `ALTEROID_ATTACHMENT_S3_ACCESS_KEY_ID`     | アクセスキー                                                 | 欠けていると使わずに起動する（stderr に理由が1行出る）                                                                                                                                    |
+| `ALTEROID_ATTACHMENT_S3_SECRET_ACCESS_KEY` | シークレット                                                 | 同上。**値を `railway variable list` の出力や PR・Issue へ貼らない**                                                                                                                      |
+| `ALTEROID_ATTACHMENT_S3_PREFIX`            | （任意）key の前に付ける接頭辞                               | 1つのバケットを他の用途と分けるとき。**複数の alteroid（環境ごとなど）で1つのバケットを共有するなら必ず分ける**（分けないと、互いの中身を「控えの無い blob」として掃除で消し合う。#4314） |
+| `ALTEROID_ATTACHMENT_S3_FORCE_PATH_STYLE`  | （任意）`1` / `true`                                         | endpoint が仮想ホスト形式（`<bucket>.<host>`）に対応していないとき                                                                                                                        |
+| `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES` | （任意）画像以外1つの別枠（バイト。既定 2147483648 = 2 GiB） | **外部ストレージが有効なときだけ効く**                                                                                                                                                    |
 
 **Railway の bucket が出す変数を、Service 変数から参照する書き方（`${{…}}`）は、確かめていない。** Railway の画面で bucket の接続情報（endpoint・バケット名・キー）の変数名を見て、上の変数へ写すこと。参照の形で置けるなら、値を手で写すより参照のほうがよい（キーを回したときに追従する）が、変数名と参照の可否は Railway の側の仕様で、この文書は未確認である。
 
