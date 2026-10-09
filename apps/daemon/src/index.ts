@@ -409,8 +409,7 @@ function assertTokenRotationEventHandled(event: never): never {
 
 /**
  * もう読まない層の provider の変数（`ALTEROID_CLONE_PROVIDER` / `ALTEROID_MANAGER_PROVIDER` /
- * `ALTEROID_CLONE_PEERS`。2026-10-07 の決定）が器に残っていれば、名前だけを1行ずつ stderr へ出す
- * （起動は止めない）。黙って無視すると、置いた人間は効いていると思ったままになる。
+ * `ALTEROID_CLONE_PEERS`）が器に残っていても起動は止めず、名前だけを stderr へ出す。黙って無視すると、置いた人間は効いていると思ったままになる。
  */
 export function reportRetiredLayerProviderEnv(
   env: NodeJS.ProcessEnv,
@@ -613,17 +612,13 @@ export async function main(): Promise<void> {
     marketplaceUrl: resolveMarketplaceUrl(bootEnvSnapshot.ALTEROID_PLUGIN_MARKETPLACE_URL),
   });
 
-  // Codex の ChatGPT ログインの正本（#3939）。インスタンスは1つだけ作り、HTTP の口とマネージャーの
-  // プール（runner の名乗りのたびの降ろし直し・書き戻し）の両方へ渡す。
   const codexAuthService = createCodexChatgptAuthService({
     store: stores.codexAuth,
     runners,
     journal: async (entry) => {
       await stores.journal.append(entry);
     },
-    // ログインはデーモンの器で、一時的な CODEX_HOME の app-server で回す（イメージは1つで、codex は
-    // デーモンの器にも在る）。**記憶ストアの鍵などデーモンの env を子へ渡さない** —— 渡すのは
-    // 道具を探す PATH と、外へ出るための名前（プロキシ・証明書）だけ。
+    // デーモンの env をそのまま子へ渡さない: 記憶ストアの鍵などが漏れるため。渡すのは PATH とプロキシ・証明書の名前だけ。
     startDeviceLogin: () => startCodexDeviceLogin({ env: codexLoginEnvOf(bootEnvSnapshot) }),
   });
 
@@ -766,7 +761,7 @@ export async function main(): Promise<void> {
   const clone = createClone({
     childEnvBase: bootEnvSnapshot,
     stores,
-    // 置き場の実際の構成から決めた上限を渡す（道具・担い手のプールが env を読み直して枠が開くのを避ける。#4128 段2）
+    // 上限は env から読み直さず置き場の構成から渡す: 道具・担い手のプールが読み直すと枠が開くため。
     attachmentLimits: storage.attachmentLimits,
     accountUsage: () => usagePoller.state(),
     scheduler: () => scheduler.list(),
@@ -819,7 +814,7 @@ export async function main(): Promise<void> {
         : true,
   });
 
-  // 袋・プロファイル・プールが乗った後（プロファイルは `restore()` が評価済み、プールは `restore()` が撒き済み）に出す。正本の写しは非同期で読むので、読み直してから見る: 空のまま見ると正本に置かれた接続先を見落とす（#4263・#4261）。
+  // 写しを読み直してから見る: 非同期で読むため、空のまま見ると正本に置かれた接続先を見落とす。
   await credentialService.fingerprints().catch(() => undefined);
   for (const line of clone.anthropicRoute?.() ?? []) process.stdout.write(`alteroidd: ${line}\n`);
 
