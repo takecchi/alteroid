@@ -248,7 +248,6 @@ function serializeMemoryFrontmatter(fields: MemoryFrontmatterPatch): string {
 }
 
 export interface MemoryFrontmatterLineBreak {
-  /** 最初に見つかった改行の位置（1始まりの文字目）。 */
   position: number;
   char: '\n' | '\r';
   excerpt: string;
@@ -1373,7 +1372,6 @@ function joinMemorySections(...sections: readonly string[]): string {
 }
 
 // premise の本文が消えたのではなく、開く口が別に在る（memory_section_read）: 口を消したらこの載せ方は能力の削除になる
-// （かつてここに在った受け入れ基準は、人間が載せ方を反転させた時点で意味を失った。歯も同じ理由で書き換えてある）
 export function renderMemoryDocuments(
   documents: readonly MemoryPart[],
   options: RenderMemoryDocumentsOptions = {},
@@ -2132,7 +2130,6 @@ function renderMemoryOutlineBudgetNote(): string {
 export interface MemoryOutlineOptions {
   side?: MemoryOutlineSide;
   q?: string;
-  /** 0起点。 */
   offset?: number;
 }
 
