@@ -145,6 +145,8 @@ export type MdastOptions = {
   display?: (text: string) => string;
   // false のとき、外部の画像を `<img>` にせず「画像: 説明」のリンクへ落とす。描画しただけで読み込みが起き、閲覧の時刻や IP が外へ伝わるため。既定は描く
   remoteImages?: boolean;
+  // true を返した src は `remoteImages: false` でも `<img>` のまま残す。いま接続しているデーモンの添付で、外へ読みに行かず、認証付きで取り出して見せるため
+  keepImage?: (src: string) => boolean;
 };
 
 function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
@@ -235,7 +237,7 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
       }
       case 'image': {
         const src = safeUrl(node.url);
-        if (options.remoteImages === false && src !== '') {
+        if (options.remoteImages === false && src !== '' && !options.keepImage?.(src)) {
           return imageLink(src, node.alt, node.title);
         }
         const p: Record<string, unknown> = { src };
@@ -256,7 +258,7 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
         const def = definitions.get(String(node.identifier).toUpperCase());
         if (!def) return undefined;
         const src = safeUrl(def.url || '');
-        if (options.remoteImages === false && src !== '') {
+        if (options.remoteImages === false && src !== '' && !options.keepImage?.(src)) {
           return imageLink(src, node.alt, def.title);
         }
         const p: Record<string, unknown> = {
