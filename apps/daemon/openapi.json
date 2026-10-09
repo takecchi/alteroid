@@ -19662,7 +19662,6 @@
                   },
                   "idempotencyKey": {
                     "type": "string",
-                    "minLength": 1,
                     "maxLength": 200
                   }
                 },
@@ -19702,10 +19701,6 @@
                     },
                     "id": {
                       "type": "string"
-                    },
-                    "duplicate": {
-                      "type": "boolean",
-                      "const": true
                     }
                   },
                   "required": ["ok", "id"]
@@ -28772,10 +28767,6 @@
                     },
                     "id": {
                       "type": "string"
-                    },
-                    "duplicate": {
-                      "type": "boolean",
-                      "const": true
                     }
                   },
                   "required": ["ok", "id"]

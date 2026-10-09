@@ -204,11 +204,11 @@ describe('POST /events の idempotencyKey — 送り直しを積まない（#353
     expect(lines.join('')).toContain('重複キー');
   });
 
-  it('空・長すぎる・NUL を含む目印は 400 で断り、積まない', async () => {
+  it('空・空白だけ・長すぎる・NUL や孤立サロゲートを含む目印は 400 で断り、積まない', async () => {
     const app = buildApp();
     const key = await issueKey(app);
 
-    for (const idempotencyKey of ['', 'x'.repeat(201), 'a\u0000b']) {
+    for (const idempotencyKey of ['', ' \t', 'x'.repeat(201), 'a\u0000b', 'a\uD800b']) {
       expect((await send(app, key, { idempotencyKey })).status).toBe(400);
     }
     expect(posted).toHaveLength(0);

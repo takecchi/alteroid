@@ -274,6 +274,7 @@ import {
   JOURNAL_WRITE_FAILED_MESSAGE,
   journalWriteFailedResponseSchema,
   eventAcceptedResponseSchema,
+  eventPostAcceptedResponseSchema,
   githubObservationRequestSchema,
   healthResponseSchema,
   statusResponseSchema,
@@ -543,9 +544,11 @@ const eventBody = z.object({
   attachments: z.array(z.string().min(1)).optional(),
   idempotencyKey: z
     .string()
-    .min(1)
     .max(EVENT_IDEMPOTENCY_KEY_MAX_LENGTH)
+    // 空白だけの目印は断る: 黙って無視して積むと、送り手は重複が畳まれていると信じたまま二重に積む
+    .refine((value) => value.trim() !== '', '空白だけの目印は使えない')
     .refine((value) => !hasNul(value), 'NUL を含められない')
+    .refine(isWellFormedString, '孤立サロゲートを含められない')
     .optional(),
 });
 // 本文まるごとが payload なので、添付の id はクエリで運ぶ。空の値は無いものとして扱う: `?attachments=` を付けていた呼び手を壊さない。
@@ -5475,7 +5478,7 @@ export function createApp(deps: AppDeps) {
             description:
               '受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**' +
               '（`idempotencyKey` を付けていなければ二重に届く）。`duplicate: true` は、同じ目印の出来事を既に受けていて、今回は積まなかったことを表す。',
-            content: { 'application/json': { schema: resolver(eventAcceptedResponseSchema) } },
+            content: { 'application/json': { schema: resolver(eventPostAcceptedResponseSchema) } },
           },
           503: eventNotPersistedResponse(),
           403: {

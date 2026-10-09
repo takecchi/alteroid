@@ -512,10 +512,11 @@ export const unreadableRowsRemoveResponseSchema = z.object({
   count: z.number().int().positive(),
 });
 
-export const eventAcceptedResponseSchema = z.object({
-  ok: z.literal(true),
-  id: z.string(),
-  // 同じ目印（`POST /events` の `idempotencyKey`）の出来事を既に受けていて、今回は積まなかったときだけ付く
+export const eventAcceptedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
+
+// `POST /events` だけが目印を受ける: 受けない口（`POST /events/:source` など）の応答に `duplicate` を載せない
+export const eventPostAcceptedResponseSchema = eventAcceptedResponseSchema.extend({
+  // 同じ目印（`idempotencyKey`）の出来事を既に受けていて、今回は積まなかったときだけ付く
   duplicate: z.literal(true).optional(),
 });
 
