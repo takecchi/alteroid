@@ -2210,6 +2210,7 @@ function reportSeenInSession(
   turnStartedAt?: string | undefined,
 ): 'seen' | 'none' | 'unknown' {
   if (lastReportAt === undefined) return 'none';
+  // セッションの始まりとターンの始まりの遅いほうを境にする: 同じセッションの2ターン目が report 無しで閉じた回を、1ターン目の report で「受け取った」と読まないため。
   const since = laterIso(runnerSessionSince, turnStartedAt);
   if (since === undefined) return 'unknown';
   const reportMs = Date.parse(lastReportAt);
@@ -3575,6 +3576,7 @@ class Pool implements ManagerPool {
     this.#noteMissingSessions();
     const silent = this.#silentRunners();
     const runnerSessions = this.#runnerSessions();
+    // 一覧を作っている間に名簿が動いても、同じ応答の中では全件を同じ像で比べる: 1回だけ引き、呼び出しごとに読み直さない。
     const registeredRunnerIds = this.#registeredRunnerIds();
     const activeTokenGeneration = this.#tokenIdentity?.()?.generation;
     const tokenGenerationPoolWired = this.#tokenIdentity !== undefined;
@@ -7663,6 +7665,7 @@ class Pool implements ManagerPool {
           const write = await this.#stores.archive.archive(event.managerId, event.body);
           record.job.archiveIds = [...(record.job.archiveIds ?? []), write.id];
           await this.#persist(record);
+          // `#journal` は自分で失敗を握るので、退避と台帳への記録の成功を日誌の失敗に道連れにしない。
           const continuityText = describeArchiveContinuityForJournal({
             caller: 'マネージャーの生ログの退避',
             sessionId: event.managerId,
@@ -8734,6 +8737,7 @@ class Pool implements ManagerPool {
       kind,
       text: outgoing,
       ...(requestId === undefined ? {} : { requestId }),
+      // 取れない軸に値を作らない: `markup` が `undefined` のときはキーごと書かない。
       ...(markup === undefined ? {} : { markup }),
       ...this.#statusAtDelivery(managerId),
       ...(synthesized ? { synthesized: true as const } : {}),
@@ -8841,6 +8845,7 @@ class Pool implements ManagerPool {
         suppressedArrived: 0,
       });
     }
+    // 消えてよいのはクローンを起こすことだけで、記録ではない: 個々の知らせは積んだ時点で既に日誌に書かれており、ここで足すのは「まとめた」1行だけ。
     void this.#journal({
       type: 'exchange',
       with: 'manager',
@@ -9507,6 +9512,7 @@ function summaryOf(
     ...(turnEndedAt === undefined ? {} : { turnEndedAt }),
     ...(turnEndReason === undefined ? {} : { turnEndReason }),
     ...(turnEndTail === undefined ? {} : { turnEndTail }),
+    // `toolUseStallAt` は元の行が `timestamp` を持たないと単独で欠けうるので、`turnEnded*` と独立に出し分ける（片方の有無でもう片方を畳まない）。
     ...(toolUseStallAt === undefined ? {} : { toolUseStallAt }),
     ...(toolUseStallPending === undefined ? {} : { toolUseStallPending }),
     cwd: job.cwd ?? '',
@@ -9534,6 +9540,7 @@ function summaryOf(
       ? {}
       : { lastUnpushedWorkObservation: job.lastUnpushedWorkObservation }),
     ...(job.lastRescue === undefined ? {} : { lastRescue: job.lastRescue }),
+    // `live` と同じく引数で運ぶ（省略可能にしない）: 既定を置くと、足す人が考えなかったことが「背景処理は待っていない」という主張になって外へ出る。
     ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
     // `tokenGeneration` が無ければ `activeTokenGeneration` も出さない: 比べる相手が無い判定を作らない。
     ...(tokenGeneration === undefined
