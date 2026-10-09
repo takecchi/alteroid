@@ -664,6 +664,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     // `operator` / `account:<id>`（添付の `uploadedBy` と同じ書き方）
     deletedBy: z.string(),
     hiddenCount: z.number().int().nonnegative(),
+    // 会話 id を持たないが、この会話から生まれた本文を写している日誌の行（台帳へ積んだ・直した・片付けた `decision`。#4355）。読む口はこの id の行も外す。行そのものは書き換えない
+    hiddenEntryIds: z.array(z.string()).optional(),
   }),
 ]);
 

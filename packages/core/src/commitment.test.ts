@@ -1890,7 +1890,7 @@ describe('台帳の契約（インメモリ）', () => {
     await verifyCommitmentEditIfMatchContract(createMemoryStores().commitments);
   });
 
-  it('removeForConversation の契約（#4218。3実装で同じことを測る。human かつ source 一致の行だけを未了・片付いたとも物理的に消す）', async () => {
+  it('removeForConversation の契約（#4218・#4355。3実装で同じことを測る。human / self かつ source 一致の行だけを未了・片付いたとも物理的に消す）', async () => {
     await verifyCommitmentRemoveForConversationContract(createMemoryStores().commitments);
   });
 

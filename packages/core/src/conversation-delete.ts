@@ -59,7 +59,7 @@ export const CONVERSATION_DELETE_REMAINS: readonly string[] = [
   '既に蒸留された記憶と、書き終えた日報に写っている可能性がある。記憶と日報を確かめること',
   'この会話に結び付いた承認（ask_human・request_permission）の問いと答えの本文は消していない（決着の記録なので外さない。台帳に残る「承認待ち … への回答」の行も同じ）。承認の一覧・各承認の画面・台帳で確かめること',
   '会話 id を持たない日誌の行（ask_human の問いと答え・クローンの道具の呼び出しの入力・マネージャーとの往復）には、言い換えや写しが残りうる',
-  '台帳で消したのは、人間の手で積んだこの会話の行だけである。クローンが自分で載せた行は、出どころがこの会話でも残っている。台帳へ積んだときと直したときの日誌の行には、台帳の本文がそのまま写っている（会話 id を持たないので外れない）。台帳と日誌で確かめること',
+  '台帳のこの会話の行（人間の手で積んだ行とクローンが載せた行）は消し、その本文を写した日誌の行（積んだ・直した・片付けたとき）も読む口から外した。ただし、台帳をまとめて片付けた日誌の行（閉じた id の並びと理由）と、クローンが自分の言葉で言い換えて日誌に書いた行は、会話との結び付きが分からないので残りうる',
   'クローンやマネージャーが作業ディレクトリへ写した添付は、時間で消えるまで残る',
 ];
 
@@ -80,6 +80,39 @@ export async function isConversationDeleted(
     return !deleted;
   });
   return deleted;
+}
+
+/**
+ * この会話から生まれた台帳の行（`removeForConversation` が消す行）の本文を写した日誌の `decision` 行の id（#4355）。
+ *
+ * 台帳へ積む・直す・片付けるときの `decision` は、台帳の行の id を `（<id>）` の形で含む
+ * （`人間が引き受けた仕事を台帳へ積んだ（<id>）: <本文>`・`引き受けた仕事の本文を直した（<id>）: 編集前「…」→ 編集後「…」` など）。
+ * その行は会話 id を持たないので、墓標の会話 id では外れない。墓標に id を持たせて外す。
+ *
+ * 一括で片付けた行（`閉じた id: a b c`）は拾わない: 本文を写しておらず、ほかの台帳の行の記録も含むため。
+ * 墓標を積む前に集める。集められなければ投げて、何も変えない（隠しそこねた写しを残したまま「消した」と言わないため）。
+ */
+async function findCommitmentCopies(
+  stores: Pick<Stores, 'journal' | 'commitments'>,
+  conversationId: string,
+): Promise<string[]> {
+  const { entries } = await stores.commitments.list({ includeClosed: true });
+  const markers = entries
+    .filter(
+      (entry) =>
+        (entry.origin === 'human' || entry.origin === 'self') && entry.source === conversationId,
+    )
+    .map((entry) => `（${entry.id}）`);
+  if (markers.length === 0) return [];
+  const found: string[] = [];
+  await scanJournalPages(stores.journal, { types: ['decision'] }, (page) => {
+    for (const entry of page) {
+      if (entry.type !== 'decision') continue;
+      if (markers.some((marker) => entry.decision.includes(marker))) found.push(entry.id);
+    }
+    return true;
+  });
+  return found;
 }
 
 export async function deleteConversation(
@@ -103,11 +136,14 @@ export async function deleteConversation(
     return true;
   });
 
+  const hiddenEntryIds = await findCommitmentCopies(stores, conversationId);
+
   const tombstone = await stores.journal.append({
     type: 'conversation_deleted',
     deletedConversationId: conversationId,
     deletedBy,
     hiddenCount,
+    ...(hiddenEntryIds.length === 0 ? {} : { hiddenEntryIds }),
   });
 
   const incomplete: string[] = [];

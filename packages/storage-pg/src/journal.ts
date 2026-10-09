@@ -204,8 +204,9 @@ export class PgJournalStore implements JournalStore {
 
 // 墓標（`conversation_deleted`）のある会話の `exchange` を外す条件（#4218）。部分式索引 `journal_conversation_deleted_idx` で引く。
 // 外側の表の列は `sql.raw` で修飾して書く: drizzle は単表の select の列を修飾しない場合があり、内側（別名 `t`）の列と取り違えるため。
+// 墓標が名指しした日誌の行（`hiddenEntryIds`。会話 id を持たない本文の写し。#4355）も外す。墓標は会話の数に比べて少ないので、墓標の種別で絞った行だけを見る
 function hiddenConversationExchangeExcluded(): SQL {
-  return sql`NOT (${sql.raw('"journal"."type"')} = 'exchange' AND EXISTS (SELECT 1 FROM journal t WHERE t.type = 'conversation_deleted' AND t.entry->>'deletedConversationId' = ${sql.raw('"journal"."entry"')}->>'conversationId'))`;
+  return sql`NOT (${sql.raw('"journal"."type"')} = 'exchange' AND EXISTS (SELECT 1 FROM journal t WHERE t.type = 'conversation_deleted' AND t.entry->>'deletedConversationId' = ${sql.raw('"journal"."entry"')}->>'conversationId')) AND NOT EXISTS (SELECT 1 FROM journal h WHERE h.type = 'conversation_deleted' AND h.entry->'hiddenEntryIds' ? ${sql.raw('"journal"."id"')})`;
 }
 
 // `JSON.stringify` へ戻して数える: pg の駆動子は渡す時点で JSON を解いてしまい、生の行文字列の長さが取れないため。

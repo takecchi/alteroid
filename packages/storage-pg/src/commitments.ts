@@ -263,7 +263,8 @@ export class PgCommitmentStore implements CommitmentStore {
     const removed = await this.#db
       .delete(commitments)
       .where(
-        sql`${commitments.commitment}->>'origin' = 'human' and ${commitments.commitment}->>'source' = ${conversationId}`,
+        // クローンが載せた行（`self`）も消す（#4355）: その会話から生まれた仕事で、本文は人間の発言の言い換えを含みうるため
+        sql`${commitments.commitment}->>'origin' in ('human', 'self') and ${commitments.commitment}->>'source' = ${conversationId}`,
       )
       .returning({ id: commitments.id });
     return removed.length;

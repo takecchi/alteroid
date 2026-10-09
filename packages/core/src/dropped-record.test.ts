@@ -1540,6 +1540,10 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       },
       deletedBy: { emit: 'never', why: '消した主体の識別子。跡の見分けに要らない。' },
       hiddenCount: { emit: 'raw', token: 'hiddenCount' },
+      hiddenEntryIds: {
+        emit: 'never',
+        why: '外した日誌の行の id の並び（#4355）。数が多くなりうるうえ、跡の見分けに要らない。',
+      },
     },
   } satisfies { [T in JournalEntryType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
@@ -1831,6 +1835,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       deletedConversationId: SECRET,
       deletedBy: SECRET,
       hiddenCount: 4,
+      hiddenEntryIds: [SECRET],
     },
   };
 

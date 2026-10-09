@@ -3207,7 +3207,7 @@ export function createApp(deps: AppDeps) {
           '`GET /conversations`・`/conversations/:id`・未読数・`GET /journal`・`/journal/stream`・' +
           'クローンの `conversation_read` / `journal_read` を含む、日誌を読むすべての口から外す。' +
           '**本文はどこにも写さない。** 日誌の行は書き換えない（DB には残る。論理削除）。' +
-          'その会話の発言に付いた添付と、台帳（`/commitments`）のうち人間の手で積んだその会話の行は物理的に消す（クローンが載せた行と、台帳の本文を写した日誌の行は残り、`remainsIn` で言う）。' +
+          'その会話の発言に付いた添付と、台帳（`/commitments`）のその会話の行（人間の手で積んだ行とクローンが載せた行）は物理的に消す。台帳の本文を写した日誌の行（積んだ・直した・片付けた `decision`）は、墓標の `hiddenEntryIds` で読む口から外す（行は書き換えない）。' +
           '受信箱の未処理の発言を外し、開いている `GET /chat/:id/stream` を閉じる（以後は 404）。' +
           '消した会話へは書けない（`POST /chat` は 404）。' +
           '**消せないもの**（クローンの SDK セッションの生ログ・archive・いまの文脈・蒸留済みの記憶・日報）は `remainsIn` に文で返す。' +

@@ -9,7 +9,7 @@ import { createMemoryStores } from './testing.js';
  * `packages/storage-pg/src/index.journal-jobs-schedule.test.ts` に同じ形の歯が在る。
  */
 describe('JournalStore の墓標の契約（インメモリ実装）', () => {
-  it('墓標の後は list/listPage/get/q/with から外れる／別の会話と墓標は外れない／limit より前に効く／墓標の後の行も外れる', async () => {
+  it('墓標の後は list/listPage/get/q/with から外れる／別の会話と墓標は外れない／limit より前に効く／墓標の後の行も外れる／墓標が名指しした行も外れる（#4355）', async () => {
     const stores = createMemoryStores();
 
     await expect(

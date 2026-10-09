@@ -474,6 +474,13 @@ export function createMemoryStores(): Stores {
         entry.type === 'conversation_deleted' ? [entry.deletedConversationId] : [],
       ),
     );
+  // 墓標が名指しした日誌の行（会話 id を持たない本文の写し。#4355）
+  const hiddenEntryIds = (): Set<string> =>
+    new Set(
+      entries.flatMap((entry) =>
+        entry.type === 'conversation_deleted' ? (entry.hiddenEntryIds ?? []) : [],
+      ),
+    );
 
   const journal: JournalStore = {
     async append(input: JournalEntryInput) {
@@ -492,6 +499,7 @@ export function createMemoryStores(): Stores {
       const order = query.order ?? 'desc';
       let found = (order === 'desc' ? [...entries].reverse() : [...entries]).map(isolate);
       const tombstoned = deletedConversationIds();
+      const hiddenIds = hiddenEntryIds();
 
       // `after` は絞り込みより前に効かせる: 錨の位置は絞り込み前の全順序で決める。見つからなければ黙って先頭から返さず投げる。
       if (query.after !== undefined) {
@@ -515,7 +523,7 @@ export function createMemoryStores(): Stores {
             entry.type === 'exchange' &&
             entry.conversationId !== undefined &&
             tombstoned.has(entry.conversationId)
-          ),
+          ) && !hiddenIds.has(entry.id),
       );
       // `with` は `limit` より前で効かせる。
       if (query.with !== undefined) {
@@ -551,6 +559,7 @@ export function createMemoryStores(): Stores {
       ) {
         return null;
       }
+      if (found !== null && hiddenEntryIds().has(found.id)) return null;
       return found;
     },
     async oldestAt() {
@@ -795,7 +804,10 @@ export function createMemoryStores(): Stores {
       if (hasNul(conversationId)) return 0;
       let removed = 0;
       for (const [id, entry] of [...commitments]) {
-        if (entry.origin === 'human' && entry.source === conversationId) {
+        if (
+          (entry.origin === 'human' || entry.origin === 'self') &&
+          entry.source === conversationId
+        ) {
           commitments.delete(id);
           removed += 1;
         }

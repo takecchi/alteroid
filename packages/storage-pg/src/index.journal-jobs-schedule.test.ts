@@ -361,7 +361,7 @@ describe('PgJournalStore', () => {
   });
 
   describe('墓標の契約（issue #4218）', () => {
-    it('墓標の後は list/listPage/get/q/with から外れる／別の会話と墓標は外れない／limit より前に効く／墓標の後の行も外れる', async () => {
+    it('墓標の後は list/listPage/get/q/with から外れる／別の会話と墓標は外れない／limit より前に効く／墓標の後の行も外れる／墓標が名指しした行も外れる（#4355）', async () => {
       await verifyJournalStoreDeletedConversationContract(stores.journal);
     });
   });
@@ -420,7 +420,7 @@ describe('PgJournalStore', () => {
       await verifyCommitmentEditIfMatchContract(stores.commitments);
     });
 
-    it('removeForConversation の契約（#4218。3実装で同じことを測る。human かつ source 一致の行だけを未了・片付いたとも物理的に消す）', async () => {
+    it('removeForConversation の契約（#4218・#4355。3実装で同じことを測る。human / self かつ source 一致の行だけを未了・片付いたとも物理的に消す）', async () => {
       await verifyCommitmentRemoveForConversationContract(stores.commitments);
     });
 

@@ -275,8 +275,55 @@ describe('DELETE /conversations/:id（#4218）', () => {
     expect(joined).toContain('#4173');
     expect(joined).toContain('記憶');
     expect(joined).toContain('承認');
-    // #4355: 台帳のクローンの行と、台帳の本文を写した日誌の行が残ることも言う
-    expect(joined).toContain('クローンが自分で載せた行');
-    expect(joined).toContain('台帳の本文がそのまま写っている');
+    // #4355: 台帳の行と、その本文の日誌の写しは消す・外す。それでも残りうるもの（一括で片付けた行・言い換え）を言う
+    expect(joined).toContain('台帳のこの会話の行（人間の手で積んだ行とクローンが載せた行）は消し');
+    expect(joined).toContain('台帳をまとめて片付けた日誌の行');
+  });
+
+  it('その会話から生まれた台帳の行（人間の手・クローン）と、本文を写した日誌の行は、どの読む口からも出ない（#4355）', async () => {
+    const { app, stores } = setupApp();
+    await seedConversation(stores, 'conv-x', `鍵は ${SECRET}`);
+    await seedConversation(stores, 'conv-keep', '残る会話');
+
+    // 人間の手で積む: デーモンが本文を写した decision を書く
+    const posted = await request(app, 'POST', '/commitments', {
+      body: `鍵 ${SECRET} を確認`,
+      source: 'conv-x',
+    });
+    expect(posted.status).toBeLessThan(300);
+    // クローンが載せて直した形（道具が書くのと同じ文の形の decision）
+    await stores.commitments.open({
+      id: 'self-1',
+      at: new Date().toISOString(),
+      origin: 'self',
+      source: 'conv-x',
+      body: `鍵 ${SECRET} を忘れずに`,
+    });
+    const selfCopy = await stores.journal.append({
+      type: 'decision',
+      decision: `引き受けた仕事として台帳に載せた（self-1）: 鍵 ${SECRET} を忘れずに`,
+      grounds: 'クローン自身が commitment_open で載せた',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: `引き受けた仕事の本文を直した（self-1）: 編集前「鍵 ${SECRET}」→ 編集後「鍵を確認」`,
+      grounds: '自分で載せた行の本文を自分で直した',
+    });
+    // 別の会話の台帳の行とその写しは残る
+    await request(app, 'POST', '/commitments', { body: '残る仕事', source: 'conv-keep' });
+
+    expect((await request(app, 'DELETE', '/conversations/conv-x')).status).toBe(200);
+
+    const commitments = await (await request(app, 'GET', '/commitments?includeClosed=true')).text();
+    expect(commitments).not.toContain(SECRET);
+    expect(commitments).toContain('残る仕事');
+    const journal = await (await request(app, 'GET', '/journal?limit=500')).text();
+    expect(journal).not.toContain(SECRET);
+    expect(journal).toContain('残る仕事');
+    expect((await request(app, 'GET', `/journal/${selfCopy.id}`)).status).toBe(404);
+    const searched = await (
+      await request(app, 'GET', `/journal?q=${encodeURIComponent('秘密の鍵')}&limit=50`)
+    ).text();
+    expect(searched).not.toContain(SECRET);
   });
 });
