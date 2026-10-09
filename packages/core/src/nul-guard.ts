@@ -1,42 +1,21 @@
 /**
- * ストアの入口で、NUL（`\u0000`）の扱いを3実装（fs・pg・インメモリ）で揃える
- * ための共通部品（issue #2927。先例は #2233 の `archive-session-id.ts`）。
+ * ストアの入口で、NUL（`\u0000`）の扱いを3実装（fs・pg・インメモリ）で揃えるための共通部品。
  *
- * ## 決め（teto の判断、2026-10-05）
+ * - 鍵（name・id・参照キー）と環境変数になる値に NUL があれば断る: 鍵は pg だけ落とすと
+ *   fs / インメモリと同じ文字列が別の行を指し、環境変数の値は `execve` が途中で切るので、
+ *   落として残すと別の値になる。
+ * - 鍵で引く読むだけの口は断らず「無い」と同じ結果を返す: NUL の鍵の行は書き込みで断るので
+ *   存在しえず、pg は DB が NUL 入り text をエラーにするので入口で短絡する。
+ *   `UsageStore.aggregate()` の絞り込みだけは、書き込みが落として残すので落としてから引く。
+ * - それ以外の本文は NUL を落として残す: pg の `stripNulls` と同じく、器の都合で記録を失わない。
+ * - 記録を失うほうが害が大きい台帳の欄は、外から来る鍵でも断らず落として残す
+ *   （`UsageStore` の `managerId`・`model`・`tokenId`、`CommitmentStore` の `source`、
+ *   `JobStore` の参照キー・印と承認待ちの `questions` / `selections` の文字列）。
+ *   行を指す鍵（`id`）は断る。部品は `usage-input.ts`・`job-input.ts`。
  *
- * - **鍵（name・id・参照キー）と、環境変数になる値（credentials の value・
- *   profile の script）に NUL があれば、入口で {@link NulNotAllowedError} を
- *   投げて断る。** 鍵に NUL が混ざると、pg だけ落として除くと fs / インメモリと
- *   同じ文字列が別の行を指す。環境変数の値に NUL は入れられない（`execve` が
- *   途中で切る）ので、落として残すと別の値になる。
- * - **読むだけの口（`get`・`revoke`・`markUsed` など、鍵で引く口）は断らず、「無い」と同じ結果を返す**
- *   （issue #3005）。書き込みで NUL の鍵を断るので、NUL を含む鍵の行はどの器にも存在しえない。
- *   pg は DB に投げる前に入口で短絡する（DB は NUL を含む text を受け付けず、エラーで投げる）。
- *   例外は `UsageStore.aggregate()` の絞り込みで、書き込みが落として残している以上、落としてから引く。
- * - **それ以外の本文は、fs も含めて NUL を落として残す**（{@link stripNul}）。
- *   pg の `stripNulls`（`storage-pg/src/db.ts`）の「器の都合で記録を失うくらいなら、
- *   1文字を落として残す」に揃える。
- * - **例外: 外から来る鍵でも、記録そのものを失わない種類の台帳（消費の台帳 `UsageStore`）では
- *   落として残す**（teto の判断、2026-10-05）。`managerId`・`model`・`tokenId` は集計の切り口で、
- *   特定の1行を指して書き換える鍵ではない。`model` は SDK の `modelUsage` のキー（外から来る）で、
- *   断ると消費の記録が丸ごと台帳から消える（呼び出し側は失敗を握りつぶして日誌に残すだけ）。
- *   害が大きいのは記録を失うほうである。部品は `usage-input.ts`。
- * - **同じ例外: 引き受けた仕事の台帳（`CommitmentStore`）の `source`**（teto の判断、2026-10-06。issue #3011）。
- *   マネージャー id・会話 id・承認 id などの出所の注記で、行を指す鍵ではない（行を指すのは `id` で、こちらは断る）。
- *   断ると引き受けた仕事が台帳から消える。落として残し、畳み込み（同一マネージャー×同一本文）の判定も
- *   落とした値で3実装が揃う。
- * - **同じ例外: ジョブと承認待ち（`JobStore`）の参照キー・印**（`conversationId`・`managerId`・`sessionId`・`projectKey`・
- *   `runnerId`・`jobId`・`requestId` など）と、承認待ちの `questions` / `selections` の中の文字列（選択肢の文言・`other`・
- *   `questionId` など）（teto の判断、2026-10-06。issue #3011）。自分の行を指す鍵ではなく、よそへの参照や印で、
- *   断ると記録が丸ごと落ちる。参照先の id は器が払い出すので、NUL だけが違う2つの値は実際には生まれない。
- *   ジョブと承認自身の `id` は、行を指す鍵なので断る。部品は `job-input.ts`。
- *
- * **例外の文に値を載せない。** どこから来た値か分からない（資格かもしれない）ので、
- * 何が入っているかをログへ流さない。載せるのは「どの欄か」だけ。型で見分けること
- * （文言で見分けない）。
+ * 例外の文に値を載せない: 資格かもしれず、載せるのは「どの欄か」だけ。型で見分け、文言で見分けない。
  */
 export class NulNotAllowedError extends Error {
-  /** どの欄か（`credential.name` など。値ではない）。 */
   readonly field: string;
 
   constructor(field: string) {
@@ -46,36 +25,24 @@ export class NulNotAllowedError extends Error {
   }
 }
 
-/** `value` に NUL が含まれるなら `NulNotAllowedError(field)` を投げる。 */
 export function assertNoNul(field: string, value: string): void {
   if (value.includes('\u0000')) throw new NulNotAllowedError(field);
 }
 
-/** `value` に NUL が含まれるか。読むだけの口が、DB へ投げる前に「無い」と答えるのに使う（issue #3005）。 */
 export function hasNul(value: string): boolean {
   return value.includes('\u0000');
 }
 
-/** 本文から NUL を落とす（無ければ同じ文字列をそのまま返す）。 */
 export function stripNul(value: string): string {
   return value.includes('\u0000') ? value.replaceAll('\u0000', '') : value;
 }
 
-/**
- * 本文から NUL を落とし、孤立サロゲートを U+FFFD に置き換える（正しいサロゲート対は変えない）。
- * pg の `stripNulls`（`storage-pg/src/db.ts`）が文字列1本に掛ける規則と同じ（#3055）。
- * pg の日誌が残す本文と、受け取ったままの本文を、同じ形に揃えて比べたいときに使う（#3634）。
- */
 export function stripNulWellFormed(value: string): string {
   // `toWellFormed`（ES2024）は tsconfig の `lib`（ES2023）に型が無いので、最小の型だけ足して呼ぶ。
   return (stripNul(value) as string & { toWellFormed(): string }).toWellFormed();
 }
 
-/**
- * 構造のある本文（日誌の1行など）の文字列と、オブジェクトの欄名から NUL を落とす（issue #3011）。
- * pg の `stripNulls`（`storage-pg/src/db.ts`）と同じ規則で、fs・インメモリが同じ結果になるように置く。
- * 鍵には使わない（鍵は {@link assertNoNul} で断る）。
- */
+/** 鍵には使わない（鍵は {@link assertNoNul} で断る）。 */
 export function stripNulDeep<T>(value: T): T {
   if (typeof value === 'string') return stripNul(value) as T;
   if (Array.isArray(value)) return value.map((item) => stripNulDeep(item)) as T;

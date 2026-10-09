@@ -5,13 +5,6 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * 配列の要素が「NUL だけ」の呼びを、入口の空の検査が空として断るか
- * （`describeStringArrayElementLengthViolation` は NUL を落とす前の値で見ている）。
- * 対象は `commitment_close_many.source` / `inbox_remove_many.sources` /
- * `archive_remove_many.sessionIds`。
- */
-
 function caller(stores: Stores, name: string) {
   const tools = createCloneTools({
     stores,

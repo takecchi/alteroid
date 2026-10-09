@@ -3,26 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { createMemoryStores } from './testing.js';
 import { createCloneMcpServer, MCP_INPUT_VALIDATION_ERROR_MARKER } from './tools.js';
 
-/**
- * r1 の横断レビュー（13回目）用の再現テスト。
- *
- * PR #1729（issue #1720）は「数値の欄」だけをハンドラ側の検査へ移し、
- * 「非数値の欄（文字列 `.min()`/`.max()`・配列 `.min()`）」は PR 本文の
- * 表に17件を数え上げたうえで「範囲は数値の欄で閉じる、という指示のとおり、
- * ここは直していない（報告のみ）」と明記している。
- *
- * これは #1729 が作った穴ではなく、意図して範囲外にした既知の残存である。
- * このテストは、その残存が実際に main 上で同じ機構（SDK がハンドラより
- * 手前の JSON Schema 検証で落とし、英語の zod JSON がマーカー付きで返る）
- * で再現することを、配列 `.min(1)` のケースで確かめる。
- *
- * `commitment_open.body`（string `.min(1)`）の単独ケースは
- * `commitment-open-body-min-validation.tie-repro.test.ts` に分けてある。
- *
- * issue #1752 でこの穴を直した。直した後は、下の1本は「マーカーが付か
- * ない・isError が立たない」という緑として通る——テストの中身は issue
- * 本文から1文字も変えていない（期待値も変えていない）。
- */
 interface Rpc {
   call(method: string, params: unknown): Promise<Record<string, unknown>>;
 }
@@ -108,7 +88,6 @@ describe('inbox_remove_many — sources が空配列のときの扱い（配列 
       dryRun: true,
     });
 
-    // 【赤の意味】配列の `.min(1)` にも、数値の欄と同じ機構の穴が残っている。
     expect(result.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
     expect(result.isError, result.text).toBe(false);
   });

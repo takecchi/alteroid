@@ -2,10 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { nonBlankString } from './non-blank-string.js';
 
-/**
- * `nonBlankString` の「空」の検査は、ストアが NUL を落として残すので、NUL を落とした後で行う
- * （#3361 / #3384 / #3388 と同じ形。issue #3434）。値は書き換えない（検査だけ）。
- */
 describe('nonBlankString が NUL だけ・NUL と空白だけを通す', () => {
   it.each(['\u0000', '\u0000\u0000', ' \u0000 ', '\u0000\n'])('%j を断る', (value) => {
     expect(nonBlankString.safeParse(value).success).toBe(false);

@@ -1,10 +1,6 @@
 import { NulNotAllowedError } from './nul-guard.js';
 
-/**
- * NUL の契約（issue #2927）が共有する小道具。vitest に依存しない。
- * `fn` が `NulNotAllowedError` を投げたことを確かめ、文に `secret`（値・名前の一部）が
- * 載っていないことも確かめる。違えば `fail` で落とす。
- */
+// vitest に依存しない: 失敗の出し方は `fail` で受ける。
 export async function expectNulRejected(
   fail: (message: string) => never,
   label: string,

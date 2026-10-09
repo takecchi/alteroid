@@ -3,16 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { MERGED_BATCH_SIZE_LIMIT_ENV_KEY, resolveMergedBatchSizeLimit } from './clone.js';
 import { captureStderr } from './testing.js';
 
-/**
- * `resolveMergedBatchSizeLimit`（`ALTEROID_MERGED_BATCH_SIZE_LIMIT`）を固定する。
- * `resolveSynthesizedNoticeWindowMs`（`synthesized-notice-window-ms.test.ts`）と
- * 同じ作法——env は必ず引数で渡し、`process.env` を書き換えない。
- *
- * **既定は動かさない。** `clone.ts` の `MERGED_BATCH_SIZE_LIMIT`（50件）と
- * 同じ値をここでも直書きしている——エクスポートされていない内部定数なので、
- * 試験側で独立して値を持つ（`synthesized-notice-window-ms.test.ts` の
- * `DEFAULT_MS` と同じ理由）。
- */
+// `clone.ts` の `MERGED_BATCH_SIZE_LIMIT` はエクスポートされていないので、試験側で独立して値を持つ。
 const DEFAULT_LIMIT = 50;
 
 describe('resolveMergedBatchSizeLimit', () => {
@@ -50,10 +41,6 @@ describe('resolveMergedBatchSizeLimit', () => {
   });
 });
 
-/**
- * **「置かなかった」と「置いたのに読めなかった」を同じ沈黙に潰さない**
- * （`resolveSynthesizedNoticeWindowMs` の跡の describe と同じ理由・同じ形）。
- */
 describe('resolveMergedBatchSizeLimit の跡（置いたのに読めなかったときだけ鳴る）', () => {
   it('非空だが数値として読めないときは跡を残す（値そのものは載せない）', async () => {
     const lines = await captureStderr(() => {

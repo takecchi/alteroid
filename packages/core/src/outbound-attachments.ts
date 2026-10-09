@@ -9,20 +9,12 @@ import {
 import { reasonOf } from './dropped-record.js';
 import type { AttachmentRef } from './schema.js';
 
-/**
- * クローンが人間へ返す発言（`reply_attach` / `conversation_post`）に添付を添える段取り（Issue #4126）。
- *
- * 人間・連携の鍵の経路（`apps/daemon/src/attachment-batch.ts`）と同じ「存在 → 上限 → 結び付け」の順で、
- * 1つでも落ちたら何も添えない。**違うのは「別の宛先」の扱いだけ**: クローンは全部読める主体なので、
- * すでに別の会話・外部イベントへ結ばれている添付は結び直さず、そのまま控えで指す（宛先の検査を掛けない）。
- */
+// 宛先の検査を掛けない: クローンは全部読める主体なので、別の会話・外部イベントへ結ばれた添付は結び直さず控えで指す。
 
 export type OutboundAttachmentResult =
   | {
       readonly ok: true;
-      /** この呼び出しで新しく添える控え（すでにこのターンで添えた分は含まない）。 */
       readonly refs: AttachmentRef[];
-      /** この呼び出しで新しく会話へ結んだ id。あとで失敗したときに戻してよいのはこれだけ。 */
       readonly newlyBound: string[];
     }
   | { readonly ok: false; readonly message: string };
@@ -30,7 +22,6 @@ export type OutboundAttachmentResult =
 export interface OutboundAttachmentOptions {
   readonly conversationId: string;
   readonly limits: AttachmentLimits;
-  /** このターンの返信にすでに添えた控え。個数・合計は新しい分と合わせて数える。 */
   readonly alreadyAttached?: readonly AttachmentRef[];
 }
 
@@ -60,7 +51,6 @@ function refOf(meta: AttachmentMeta): AttachmentRef {
 }
 
 function isUnbound(meta: AttachmentMeta): boolean {
-  // 報告（`managerReportId`。#4126 P2b）へ結ばれたものも、別の宛先に結ばれたものとして結び直さない
   return !isAttachmentBound(meta);
 }
 
@@ -148,7 +138,6 @@ async function checkAndBind(
   return { ok: true, refs: metas.map(refOf), newlyBound };
 }
 
-/** 添えたあとの段（日誌への書き込みなど）が失敗したとき、この呼び出しで新しく結んだぶんだけを未結び付けへ戻す。 */
 export async function releaseOutboundAttachments(
   stores: { readonly attachments: AttachmentStore },
   newlyBound: readonly string[],

@@ -5,14 +5,6 @@ import type { ManagerPool } from './manager.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * インメモリの archive は、同じミリ秒・同じセッションへ10本以上積んでも、
- * 畳み対象の選定が積んだ順と一致する（#2459）。
- *
- * 旧実装の id は `${sessionId}-id-${n}` で、`archiveIdBranch` が解析できず、
- * `selectArchiveRemovalTargets` の同着が id の字面に落ちて `id-10 < id-9` になり、
- * 本当の最新（10本目）が削除対象に入っていた。
- */
 async function withFrozenNow<T>(frozenMs: number, run: () => Promise<T>): Promise<T> {
   const RealDate = Date;
   const FrozenDate = new Proxy(RealDate, {
@@ -38,7 +30,6 @@ describe('インメモリの archive は、同じミリ秒に10本以上積ん�
     const stores = createMemoryStores();
     const ids: string[] = [];
     await withFrozenNow(Date.now(), async () => {
-      // 各行が前の行を前方一致で含む（含有の証明が通る形）。
       for (let n = 1; n <= 12; n += 1) {
         ids.push((await stores.archive.archive('s', 'A'.repeat(n))).id);
       }

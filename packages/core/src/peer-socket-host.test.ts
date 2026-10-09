@@ -38,7 +38,6 @@ describe('peer-socket-host', () => {
     await created;
     expect(made).toBe(1);
     first.destroy();
-    // 2回目: 消費済みの token は、サーバが接続を切る（close を待つ。実時間では待たない）。
     const second = await open();
     const closed = new Promise<void>((resolve) => second.once('close', resolve));
     second.write(`${token}\n`);
