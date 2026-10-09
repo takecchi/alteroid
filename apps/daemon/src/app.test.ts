@@ -8186,12 +8186,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect(fake.managerAborts).toEqual([{ managerId: 'mgr-1', reason: '方針が変わった' }]);
   });
 
-  /**
-   * **`not_stopped` / `unknown` は 200 のまま、`outcome` で言い分ける。**
-   *
-   * どちらも「そのマネージャーは居る」ことは確かなので、リクエスト自体は正しく
-   * 処理できている——404 にすると「居ない」と紛れる。404 は `absent` だけである。
-   */
+  // 404 にしない: そのマネージャーは居るので、404 にすると「居ない」(absent) と紛れる。
   it('止まっていない・確かめられなかったときも 200 で outcome を返す（404 にしない）', async () => {
     fake.managerList.push({
       managerId: 'mgr-1',
@@ -9327,17 +9322,10 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
 
     const response = await distribute(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
     expect(response.status).toBe(500);
-    // 日誌が先に落ちたので、配布（`registry.list()`・`runner.setCredentials`）
-    // そのものが起きていない。
     expect(runner.receivedCredentials).toEqual([]);
     expect(runner.held.has('NPM_TOKEN')).toBe(false);
   });
 
-  /**
-   * **`registry.list()` 自体が投げた場合**（個々の runner への配布は
-   * ハンドラの内側の `try/catch` で既に捕まえており、そちらは 200 のまま
-   * `ok: false` を返す——ここで見るのは配布の一段外側で投げたときの形）。
-   */
   it('配布が投げたとき、先の行と打ち消しの行の両方が残る', async () => {
     const throwingRegistry = {
       async list() {
@@ -9371,13 +9359,6 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
     expect(JSON.stringify(ours)).not.toContain(DUMMY_VALUE);
   });
 
-  /**
-   * **配布が失敗したとき、error の文面（`message`）を応答・日誌・stderr へ載せない**
-   * （issue #2407）。例外は失敗した呼び出しのパラメータを添えてくることがある——
-   * 実物の runner は固定文言を返すが、`RunnerHttpError` は runner（や間の中継）の
-   * 応答本文をそのまま `message` に入れる作りなので、本文が送った値を写せば載る。
-   * ここは偽の値だけを使う。
-   */
   describe('配布の失敗に鍵の値を載せない（issue #2407）', () => {
     const FAKE_SECRET = 'FAKE_SECRET_VALUE_2407';
 
@@ -9413,7 +9394,6 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
           ok: false,
           error: '鍵の配布に失敗した（FakeRpcError）',
         });
-        // 対照: もう1台には普通に配れている。
         expect(body.results[1]).toMatchObject({ runnerId: 'runner-good', ok: true });
       });
       expect(lines.join('\n')).not.toContain(FAKE_SECRET);
@@ -9430,7 +9410,6 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
         if (url.pathname === '/health') {
           return Response.json({ ok: true, runnerId: 'runner-http', workspacePath: '/work' });
         }
-        // 送られた本文をそのまま写して 500 を返す runner（または間の中継）。
         return new Response(`echo: ${String(init?.body)}`, { status: 500 });
       }) as typeof fetch;
       const httpRunner = await createHttpRunner({
@@ -9439,7 +9418,6 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
         fetchFn,
       });
       try {
-        // 前提: この error の message には値が載っている（歯が空撃ちでないこと）。
         const raw = await httpRunner
           .setCredentials([{ name: 'NPM_TOKEN', value: FAKE_SECRET }])
           .then(
@@ -9489,8 +9467,6 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
         runners: throwingRegistry,
       });
 
-      // 日誌の検査が対象。500 の後始末（`base.onError`）が stderr に書く1行は
-      // 元から変えていない口なので、ここでは見ない。
       const response = await distribute(target, [{ name: 'NPM_TOKEN', value: FAKE_SECRET }]);
       expect(response.status).toBe(500);
       expect(await response.text()).not.toContain(FAKE_SECRET);
@@ -9503,24 +9479,8 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
   });
 });
 
-/**
- * `PUT /profile` の応答が宣言（`profileUpdateResponseSchema`）どおりであること。
- *
- * `result.clone`（`ApplyProfileResult['clone']`、core の `ProfileApplyResult`。
- * `packages/core/src/profile.ts`）は、置いたものが実際に読めたときに
- * `profile: ProfileFingerprint` を持つ（`createProfileApplier().prepare()` が
- * 評価に成功すると必ず付ける）。しかし宣言（`profileUpdateResponseSchema.clone`、
- * `apps/daemon/src/openapi.ts`）にこのフィールドは無い — `sha256` / `bytes` /
- * `updatedAt` と完全に冗長なため（どちらも同じ本文から `fingerprintOf` した値）。
- * `.parse()` を通さなければ、これが黙って応答へ出る。
- *
- * **`app.test.ts` 内の `profileService()` ヘルパーはここでは使わない。** あちらの
- * `prepare()` は `{ ok: true, names: [] }` しか返さず `profile` を一度も生成
- * しないので、`.parse()` を外してもこのテストは何も検知しない（空撃ち）。
- * ここでは core の本物（`createProfileApplier` + `createProfileVessel`）を配線し、
- * 実際にシェルスクリプトを評価させて `clone.profile` を生成させる。
- */
 describe('宣言と実物の一致（/profile）', () => {
+  // profileService() を使わない: その prepare() は profile を生成しないため、.parse() を外しても検知できない。
   function withRealApplier() {
     const dir = makeTempDirSync('alteroid-app-profile-');
     const vessel = createProfileVessel({ path: join(dir, 'profile.sh') });
@@ -9546,11 +9506,7 @@ describe('宣言と実物の一致（/profile）', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { clone: Record<string, unknown> };
 
-    // **applier がある経路を通っていること。** ここで `clone.ok` が `true` に
-    // なっているのは、本物の `ProfileApplier` がスクリプトを実際に評価して
-    // 通したからである（`profileService()` の空スタブでは `names` すら
-    // 生成されない）。この確認が無いと、下の `not.toHaveProperty` が
-    // 「そもそも clone.profile を生成できていないだけ」で通ってしまう。
+    // ok を先に確かめる: 無いと、そもそも clone.profile を生成できていないだけで下の not.toHaveProperty が通る。
     expect(body.clone.ok).toBe(true);
     expect(body.clone).not.toHaveProperty('profile');
   });
@@ -9578,15 +9534,6 @@ describe('宣言と実物の一致（/profile）', () => {
   });
 });
 
-/**
- * 認証トークンのプール（Issue #393「PR1 プールの器」）。
- *
- * **回さない。** ここで固定するのは器の口（`GET` / `PUT` / `PUT .../policy`）が
- * 正しく認証の門（`authenticate`）を通ること、値が応答のどこにも出ないこと、
- * プールが空の既定構成の挙動が変わらないことの3つである。検知・切替（PR2 以降）
- * はここに無い。**⚠️ 2026-09-06 のオーナー決定で、この3経路から `requireOperator`
- * は外れた**（下の「alteroid を使う許可があれば実行環境の持ち主と同格」参照）。
- */
 describe('認証トークンのプール', () => {
   it('プールが空でも 200 を返し、既定の設定（free_exhausted）を返す（受け入れ基準7）', async () => {
     const withTokens = createApp({
