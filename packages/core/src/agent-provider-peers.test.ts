@@ -4,7 +4,6 @@ import type { AgentProviderId } from './agent-ports.js';
 import {
   CODEX_PEER_CLOSED_REASON,
   MANAGER_PEER_CODEX_MODELS_ENV_KEY,
-  PEER_DEFAULT_MODELS,
   PEER_PROVIDER_IDS,
   managerPeerModelsEnvKey,
   parsePeerModels,
@@ -13,9 +12,11 @@ import {
   resolvePeerOpening,
   samePeerOpening,
 } from './agent-provider-peers.js';
-import { CODEX_DEFAULT_PEER_MODELS, CODEX_PRICING } from './codex-pricing.js';
+import { agentProviderOf } from './agent-provider-selection.js';
 
 const CODEX: AgentProviderId = 'codex';
+const DEFAULTS: readonly string[] = ['model-a', 'model-b'];
+const defaultsOf = (provider: AgentProviderId) => (provider === CODEX ? DEFAULTS : undefined);
 
 describe('peer を開く条件は Codex の資格である（#4118）', () => {
   it('peer になれるのは Codex だけ（層の provider = Claude は入らない）', () => {
@@ -81,43 +82,47 @@ describe('ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS の解釈（#3934）', () => {
 
   it('置かれた一覧は、開いているかどうかに依らず採る（資格は後から届くため）', () => {
     const env = { [MANAGER_PEER_CODEX_MODELS_ENV_KEY]: 'gpt-5.5' };
-    expect(resolvePeerModels(env)).toEqual({ codex: ['gpt-5.5'] });
+    expect(resolvePeerModels(env, defaultsOf)).toEqual({ codex: ['gpt-5.5'] });
   });
 
-  it('未設定・空・空白だけなら Codex は既定の一覧（astra と sol を含む）', () => {
+  it('未設定・空・空白だけなら既定の一覧', () => {
     for (const raw of [undefined, '', '   ']) {
       const env = raw === undefined ? {} : { [MANAGER_PEER_CODEX_MODELS_ENV_KEY]: raw };
-      expect(resolvePeerModels(env)).toEqual({ codex: [...CODEX_DEFAULT_PEER_MODELS] });
-      expect(resolvePeerModelsOf(env, CODEX)?.source).toBe('default');
+      expect(resolvePeerModels(env, defaultsOf)).toEqual({ codex: [...DEFAULTS] });
+      expect(resolvePeerModelsOf(env, CODEX, defaultsOf)?.source).toBe('default');
     }
-    expect(CODEX_DEFAULT_PEER_MODELS).toEqual(
-      expect.arrayContaining(['gpt-6-astra', 'gpt-6.1-sol']),
-    );
+  });
+
+  it('既定の一覧も変数も無い provider は載せない（model 引数を出さない）', () => {
+    expect(resolvePeerModels({}, () => undefined)).toEqual({});
+    expect(resolvePeerModels({}, () => [])).toEqual({});
   });
 
   it('置かれた一覧は既定に足さず置き換える', () => {
     const env = { [MANAGER_PEER_CODEX_MODELS_ENV_KEY]: 'gpt-6-astra' };
-    expect(resolvePeerModels(env)).toEqual({ codex: ['gpt-6-astra'] });
-    expect(resolvePeerModelsOf(env, CODEX)).toEqual({ models: ['gpt-6-astra'], source: 'env' });
-  });
-
-  it('既定の一覧は、どれも単価表に在る（費用を「単価不明」にしない）', () => {
-    for (const models of Object.values(PEER_DEFAULT_MODELS)) {
-      for (const model of models ?? []) {
-        expect(Object.hasOwn(CODEX_PRICING, model), model).toBe(true);
-      }
-    }
+    expect(resolvePeerModels(env, defaultsOf)).toEqual({ codex: ['gpt-6-astra'] });
+    expect(resolvePeerModelsOf(env, CODEX, defaultsOf)).toEqual({
+      models: ['gpt-6-astra'],
+      source: 'env',
+    });
   });
 
   it('既定の一覧を返しても、持ち主の定数は書き換わらない', () => {
-    const got = resolvePeerModelsOf({}, CODEX)!.models as string[];
+    const got = resolvePeerModelsOf({}, CODEX, defaultsOf)!.models as string[];
     got.push('x');
-    expect(CODEX_DEFAULT_PEER_MODELS).not.toContain('x');
+    expect(DEFAULTS).not.toContain('x');
+  });
+
+  it('記述子の既定の一覧: Codex は astra と sol を含み、Claude は持たない', () => {
+    expect(agentProviderOf(CODEX).defaultPeerModels).toEqual(
+      expect.arrayContaining(['gpt-6-astra', 'gpt-6.1-sol']),
+    );
+    expect(agentProviderOf('claude').defaultPeerModels).toBeUndefined();
   });
 
   it('層の provider（Claude）の一覧は読まない', () => {
-    expect(resolvePeerModels({ ALTEROID_MANAGER_PEER_CLAUDE_MODELS: 'opus' })).toEqual({
-      codex: [...CODEX_DEFAULT_PEER_MODELS],
+    expect(resolvePeerModels({ ALTEROID_MANAGER_PEER_CLAUDE_MODELS: 'opus' }, defaultsOf)).toEqual({
+      codex: [...DEFAULTS],
     });
   });
 });

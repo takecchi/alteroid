@@ -6,12 +6,25 @@ import {
   computeCodexCostUSD,
   type CodexUsageForPricing,
 } from './codex-pricing.js';
+import { CODEX_DEFAULT_PEER_MODELS, CODEX_PROVIDER } from './codex-provider.js';
 
 const usage = (over: Partial<CodexUsageForPricing> = {}): CodexUsageForPricing => ({
   inputTokens: 0,
   cachedInputTokens: 0,
   outputTokens: 0,
   ...over,
+});
+
+describe('CODEX_DEFAULT_PEER_MODELS', () => {
+  it('どれも単価表に在る（費用を「単価不明」にしない）', () => {
+    for (const model of CODEX_DEFAULT_PEER_MODELS) {
+      expect(Object.hasOwn(CODEX_PRICING, model), model).toBe(true);
+    }
+  });
+
+  it('Codex の記述子が持つ既定の一覧はこの定数である', () => {
+    expect(CODEX_PROVIDER.defaultPeerModels).toBe(CODEX_DEFAULT_PEER_MODELS);
+  });
 });
 
 describe('computeCodexCostUSD', () => {

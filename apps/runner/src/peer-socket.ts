@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 
 import {
+  agentProviderOf,
   createPeerSocketHost,
   DEFAULT_PEER_SOCKET_DIR,
   PEER_PROVIDER_IDS,
@@ -27,15 +28,20 @@ export interface PeerSocketPlan {
   readonly notices: readonly string[];
 }
 
+/** 名指しの既定の一覧は provider の記述子が持つ。 */
+export function peerDefaultModelsOf(provider: AgentProviderId): readonly string[] | undefined {
+  return agentProviderOf(provider).defaultPeerModels;
+}
+
 export function planPeerSocket(
   env: NodeJS.ProcessEnv,
   childUser: RunnerChildUser | undefined,
   dir: string = DEFAULT_PEER_SOCKET_DIR,
 ): PeerSocketPlan {
   // 綴りの不正は起動時に止める（資格が届いてからでは、誰も見ていないところで落ちる）
-  const models = resolvePeerModels(env);
+  const models = resolvePeerModels(env, peerDefaultModelsOf);
   const notices = PEER_PROVIDER_IDS.map((provider) => {
-    const open = resolvePeerModelsOf(env, provider);
+    const open = resolvePeerModelsOf(env, provider, peerDefaultModelsOf);
     return (
       `alteroid-runner: peer（${provider}）は、${provider} の資格（ログインか CODEX_API_KEY）が` +
       `この器に届いたら開きます（再起動は要りません）。` +

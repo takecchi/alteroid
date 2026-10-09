@@ -1458,7 +1458,6 @@ export {
 export {
   CODEX_PEER_CLOSED_REASON,
   MANAGER_PEER_CODEX_MODELS_ENV_KEY,
-  PEER_DEFAULT_MODELS,
   PEER_PROVIDER_IDS,
   managerPeerModelsEnvKey,
   parsePeerModels,
@@ -1468,6 +1467,7 @@ export {
   samePeerOpening,
   type PeerClosed,
   type PeerCredentialPresence,
+  type PeerDefaultModelsOf,
   type PeerModelsSource,
   type PeerOpening,
 } from './agent-provider-peers.js';

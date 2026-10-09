@@ -1,5 +1,4 @@
 import type { AgentProviderId } from './agent-ports.js';
-import { CODEX_DEFAULT_PEER_MODELS } from './codex-pricing.js';
 
 /**
  * マネージャー層の MCP `peer` を開く条件（#4118。2026-10-08 のオーナー決定）。
@@ -93,12 +92,11 @@ export function parsePeerModels(raw: string | undefined, key: string): string[] 
 }
 
 /**
- * 環境変数が未設定・空のときに名指しできるモデル（provider ごと）。置かれた値はこれに足さず置き換える。
- * Codex の一覧の持ち主は単価表の隣（{@link CODEX_DEFAULT_PEER_MODELS}）。
+ * 環境変数が未設定・空のときに名指しできるモデルを引く口。置かれた値はこれに足さず置き換える。
+ * 持ち主は各 provider の記述子（`AgentProvider.defaultPeerModels`）で、呼び出し側が `agentProviderOf` から渡す。
+ * ここで記述子の登録簿を import しない: 束ねた core で循環になり、登録簿が初期化前に読まれるため。
  */
-export const PEER_DEFAULT_MODELS: Partial<Record<AgentProviderId, readonly string[]>> = {
-  codex: CODEX_DEFAULT_PEER_MODELS,
-};
+export type PeerDefaultModelsOf = (provider: AgentProviderId) => readonly string[] | undefined;
 
 /** 名指しできるモデルの一覧が、環境変数から来たか既定から来たか。 */
 export type PeerModelsSource = 'env' | 'default';
@@ -107,11 +105,12 @@ export type PeerModelsSource = 'env' | 'default';
 export function resolvePeerModelsOf(
   env: NodeJS.ProcessEnv,
   provider: AgentProviderId,
+  defaultsOf: PeerDefaultModelsOf,
 ): { readonly models: readonly string[]; readonly source: PeerModelsSource } | undefined {
   const key = managerPeerModelsEnvKey(provider);
   const list = parsePeerModels(env[key], key);
   if (list.length > 0) return { models: list, source: 'env' };
-  const fallback = PEER_DEFAULT_MODELS[provider];
+  const fallback = defaultsOf(provider);
   if (fallback === undefined || fallback.length === 0) return undefined;
   return { models: [...fallback], source: 'default' };
 }
@@ -122,11 +121,12 @@ export function resolvePeerModelsOf(
  */
 export function resolvePeerModels(
   env: NodeJS.ProcessEnv,
+  defaultsOf: PeerDefaultModelsOf,
   providers: readonly AgentProviderId[] = PEER_PROVIDER_IDS,
 ): Partial<Record<AgentProviderId, readonly string[]>> {
   const models: Partial<Record<AgentProviderId, readonly string[]>> = {};
   for (const provider of providers) {
-    const resolved = resolvePeerModelsOf(env, provider);
+    const resolved = resolvePeerModelsOf(env, provider, defaultsOf);
     if (resolved !== undefined) models[provider] = resolved.models;
   }
   return models;

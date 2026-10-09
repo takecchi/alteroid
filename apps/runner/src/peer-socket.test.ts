@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
-import { PEER_DEFAULT_MODELS, PEER_SOCKET_FILENAME, type PeerSocketHost } from '@alteroid/core';
-import { planPeerSocket } from './peer-socket.js';
+import { PEER_SOCKET_FILENAME, type PeerSocketHost } from '@alteroid/core';
+import { peerDefaultModelsOf, planPeerSocket } from './peer-socket.js';
 
 describe('planPeerSocket（マネージャーの peer 専用ソケット。開く条件は Codex の資格。#4118）', () => {
   let opened: PeerSocketHost | undefined;
@@ -18,7 +18,7 @@ describe('planPeerSocket（マネージャーの peer 専用ソケット。開�
   it('起動時にはソケットを作らない（資格が届いて Host が開くまで）', () => {
     const dir = join(makeTempDirSync('peer-sock-'), 'peer');
     const plan = planPeerSocket({}, undefined, dir);
-    expect(plan.models).toEqual({ codex: [...PEER_DEFAULT_MODELS.codex!] });
+    expect(plan.models).toEqual({ codex: [...peerDefaultModelsOf('codex')!] });
     expect(existsSync(dir)).toBe(false);
   });
 
@@ -49,7 +49,7 @@ describe('planPeerSocket（マネージャーの peer 専用ソケット。開�
     expect(plan.notices[0]).toContain(
       '名指しできるモデル: gpt-5.5, gpt-5.5-codex（ALTEROID_MANAGER_PEER_CODEX_MODELS）',
     );
-    const defaults = PEER_DEFAULT_MODELS.codex!;
+    const defaults = peerDefaultModelsOf('codex')!;
     expect(defaults).toEqual(expect.arrayContaining(['gpt-6-astra', 'gpt-6.1-sol']));
     const byDefault = planPeerSocket({}, undefined, '/nonexistent');
     expect(byDefault.models).toEqual({ codex: [...defaults] });
