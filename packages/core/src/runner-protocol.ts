@@ -24,6 +24,7 @@ const isoDateTime = z.string().datetime({ offset: true });
  * 同一プロセスだと `{ input: undefined }` のキーが残り、zod 4 の必須欄が `safeParse` を通ってしまうため。
  */
 
+// 定義を1箇所にする: `ask` イベントと `state()` が返す `waiting` の両方が同じ2値を指すようにするため。
 export const waitingKindSchema = z.enum(['question', 'permission']);
 
 export type WaitingKind = z.infer<typeof waitingKindSchema>;
@@ -135,7 +136,7 @@ export const runnerResumeCommandSchema = z.object({
   message: z.string().optional(),
   entries: z.array(z.unknown()).optional(),
   lease: runnerLeaseSchema.optional(),
-  /** `message` が無ければ使わない。 */
+  /** `message` が無ければ使わない。`manager_send` が resume から入り直す回に、添付を黙って落とさないために要る。 */
   attachments: z.array(runnerAttachmentSchema).optional(),
 });
 
@@ -304,7 +305,7 @@ export const runnerRetainPluginsCommandSchema = z.object({
 
 export type RunnerRetainPluginsCommand = z.infer<typeof runnerRetainPluginsCommandSchema>;
 
-/** files の中身は返さない。 */
+/** files の中身は返さない（名前・取り元の sha・中身の指紋だけで、どれも秘密ではない）。 */
 export const runnerPluginFingerprintEntrySchema = z.object({
   name: z.string(),
   sha: z.string(),
@@ -340,7 +341,12 @@ export const runnerExecutionResourcesSchema = z.object({
     .optional(),
   /** `source` を持たない: pids には cgroup が読めないとき倒れる先（ホストの値）が無く、読めなければまるごと省略する。 */
   pids: z.object({ current: z.number().nonnegative(), max: z.number().positive() }).optional(),
-  /** `pids` の中には入れず兄弟として置く: `chooseByResources` が `pids: { current, max }` の配置そのものを読むため。 */
+  /**
+   * `pids` の中には入れず兄弟として置く: `chooseByResources` が `pids: { current, max }` の配置そのものを読むため。
+   * `.optional()` は、この機能より前の runner が欄自体を持たない窓のため。
+   * `pids.current` と厳密に一致するとは限らない: 測る主体（走査している runner 自身）が走査中に増減するので、1〜数本ずれる。
+   * 生存プロセスの素性は含まない: 出るのは数（`threads` / `processes` / `zombies`）とゾンビの `comm` だけ。
+   */
   tasks: z
     .object({
       threads: z.number().int().nonnegative(),
@@ -352,14 +358,18 @@ export const runnerExecutionResourcesSchema = z.object({
       oldestZombieSeconds: z.number().int().nonnegative().optional(),
       /**
        * `mode` は `'observe'` と `'reclaim'` の両方を受け付ける: 受け取る側を先に広げないと、版がずれた窓でこの欄が丸ごと落ちる。
-       * `signalled` / `killed` / `freedThreads` は撃っていない回も0で、欄は省かない。
+       * `signalled` / `killed` / `freedThreads` は撃っていない回も0で、欄は省かない: 欄が生えたように見せると、撃たない観測と撃つ観測が別物に見える。
        * 走査が読めなかった回は欄ごと出さないので、`candidates: 0` は「数え切って0本」を意味する。
+       * `.optional()` は、この機能より前の runner が欄自体を持たない窓のため（`tasks` 自身と同じ先例）。
+       * 生存プロセスの素性は入れない: 出るのは数と時刻だけで、判定に使う材料も `stat` と `/proc/<pid>` ディレクトリの所有 UID まで
+       * （`cmdline` / `cwd` / `environ` は読んでいない）。
        */
       reclaim: z
         .object({
           mode: z.enum(['observe', 'reclaim']),
           candidates: z.number().int().nonnegative(),
           candidateThreads: z.number().int().nonnegative(),
+          /** `.optional()`: この機能より前の runner が欄自体を持たない窓がある（`reclaim` 自身と同じ先例）。 */
           roots: z.number().int().nonnegative().optional(),
           largestTreeCandidates: z.number().int().nonnegative().optional(),
           singletonTrees: z.number().int().nonnegative().optional(),
@@ -381,7 +391,10 @@ export const runnerExecutionResourcesSchema = z.object({
           pidsAtScan: z
             .object({ current: z.number().nonnegative(), max: z.number().positive() })
             .optional(),
-          /** 数えるだけで、撃つ判定には効かない。`held` / `bySid` は判定材料が無い runner では出ない（「取れない」を0に潰さない）。 */
+          /**
+           * 数えるだけで、撃つ判定には効かない。`held` / `bySid` は判定材料が無い runner では出ない（「取れない」を0に潰さない）。
+           * `.optional()` は、この欄より前の runner が持たない窓のため。
+           */
           notFired: z
             .object({
               outsideRoots: z.object({
@@ -561,6 +574,7 @@ export const unpushedWorkTreeSchema = z.object({
 });
 export type UnpushedWorkTree = z.infer<typeof unpushedWorkTreeSchema>;
 
+// `job.cwd` の下に見つかった作業ツリーを全部持つ: 1本目だけを返さない（マネージャーが作業者へ別ツリーを切る運用を `AGENTS.md` が許容しているため）。
 export const unpushedWorkResultSchema = z.object({
   cwd: z.string(),
   worktrees: z.array(unpushedWorkTreeSchema),
@@ -645,7 +659,10 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     /** 無ければ「不明」と読み、既定の帯で埋めない。値域を縛らない: 帯の名前を足した新しい runner の名乗りを旧いデーモンが捨てないため。 */
     managerModel: z.string().optional(),
     workerModel: z.string().optional(),
-    /** 器ごとの事実を名乗らせる（デーモンの設定と二重管理にしない）。無ければデーモン側の既定値で検める。 */
+    /**
+     * 器ごとの事実を名乗らせる（デーモンの設定と二重管理にしない）。無ければデーモン側の既定値で検める。
+     * `capabilities` は名前の集合で値を持てないので、別の optional 欄にした。
+     */
     attachmentBodyLimit: z.number().int().positive().optional(),
     /** 無い（旧い版）なら別口を持たないので、デーモンは大きいファイルを送らずに断る（#4128 段3a）。 */
     attachmentStageLimit: z.number().int().positive().optional(),
@@ -1175,7 +1192,10 @@ export function isFencedRunnerError(error: unknown): boolean {
   return error instanceof RunnerHttpError && error.status === 409;
 }
 
-/** status が分からない失敗（`fetch failed`・器が起き上がりきっていない）は「待てば直る」側に寄せる: 諦めると走行中の仕事が `running` のまま残る。 */
+/**
+ * status が分からない失敗（`fetch failed`・器が起き上がりきっていない）は「待てば直る」側に寄せる: 諦めると走行中の仕事が `running` のまま残る。
+ * 4xx は runner が「その命令は受け取れない」と答えているので、同じものを投げ直しても同じ答えが返る（混雑を表す 408 / 429 だけは別）。
+ */
 export function isRetryableRunnerError(error: unknown): boolean {
   if (!(error instanceof RunnerHttpError)) return true;
   if (error.status === 408 || error.status === 429) return true;
@@ -1866,6 +1886,7 @@ class Registry implements RunnerRegistry {
   async register(source: RunnerSource): Promise<void> {
     if (this.#stopped) return;
     const existing = this.#entries.get(source.label);
+    // 既に開けている宛先を登録し直しても、繋ぎ直さない（同じものが二重に載らない）。
     if (existing?.state === 'connected') return;
     // 予約を畳んでから入れ替える: 設定を直して登録し直した場合、古い開き方で挑み続ける予約が残ると直したものが効かない。
     if (existing !== undefined && existing.timer !== null) clearTimeout(existing.timer);
@@ -2137,6 +2158,7 @@ class Registry implements RunnerRegistry {
       try {
         const client = await entry.source.open();
         if (this.#stopped || this.#entries.get(entry.source.label) !== entry) {
+          // 開いている間に外された（か止まった）。握り潰さずに閉じる。
           await client.close().catch(() => undefined);
           return;
         }
@@ -2201,6 +2223,7 @@ class Registry implements RunnerRegistry {
     if (this.#stopped) return;
     const at = Date.now();
     for (const entry of [...this.#entries.values()]) {
+      // 開けていない宛先は挑み直しの担当。ここで二重に叩かない。
       if (entry.client === null) continue;
       // 待たずに次を投げる: 直列だと、返らない1台の後ろに全台が並び、1台の沈黙が名簿全体の生死判定を止める。
       void this.#probe(entry, at);
