@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3751。書きかけ（本文の編集の下書き・片付けた理由）か出したままの失敗がある行が、裏で片付いて
- * 未了の一覧から外れても、黙って消さない。「既に片付いた」と断って残し、写せて、閉じられる。
- * 承認の画面の #3527 / #3515（`approvals.draft-kept-typed.test.tsx`）と同じ形。
- *
- * 一覧の取り直しは、画面の「積む」（自分の別の書き込み）で起こす。実時間の待ちは書かない。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -35,10 +28,6 @@ const ENTRY: Commitment = {
   body: 'もとの本文',
 };
 
-/**
- * 台帳の代役。`entries` を書き換えると、次の一覧の取得からその状態が返る（裏で片付いた・消えた）。
- * `conflict` を立てると、片付ける・保存が 409 で断られる。
- */
 function stubServer() {
   const server = {
     entries: [ENTRY] as Commitment[],
@@ -77,7 +66,6 @@ function renderPage() {
   );
 }
 
-/** 本文の編集欄を開いて、編集タブへ下書きを打つ。 */
 async function typeDraft(text: string) {
   fireEvent.click(screen.getByRole('button', { name: /の本文を編集$/ }));
   const tabsRoot = screen.getByRole('tablist').parentElement!;
@@ -86,7 +74,6 @@ async function typeDraft(text: string) {
   fireEvent.change(textarea, { target: { value: text } });
 }
 
-/** 自分の別の書き込み（積む）で一覧を取り直させる。 */
 async function refetchViaPush(server: ReturnType<typeof stubServer>) {
   fireEvent.change(screen.getByLabelText('何を引き受けたか'), { target: { value: 'ほかの件' } });
   fireEvent.click(screen.getByRole('button', { name: '積む' }));
@@ -109,7 +96,6 @@ describe('書きかけのある行が、裏で片付いて一覧から外れた�
 
     expect(await screen.findByText(/この仕事は既に片付いた/)).toBeTruthy();
     expect(screen.getByText('書きかけの本文を直した')).toBeTruthy();
-    // 行そのものは未了から外れている（編集欄も、片付ける欄も残らない）。
     expect(screen.queryByRole('button', { name: '保存' })).toBeNull();
     expect(screen.queryByLabelText(/を片付けた理由$/)).toBeNull();
   });
@@ -202,7 +188,6 @@ describe('保存・片付けが 409 で断られたとき（#3751）', () => {
     renderPage();
     await screen.findByText('もとの本文');
     fireEvent.change(screen.getByLabelText(/を片付けた理由$/), { target: { value: '直した' } });
-    // 別経路で先に片付いた: 書き込みは 409、取り直した一覧には行が無い。
     server.conflict = true;
     server.entries = [];
     fireEvent.click(screen.getByRole('button', { name: /が片付いた$/ }));

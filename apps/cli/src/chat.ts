@@ -99,36 +99,22 @@ import { parseSSEChunk, type SSEEvent } from './sse-frame.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { describeUsageDateOrder, narrowUsageAxis, renderUsage } from './usage.js';
 
-/**
- * 入力待ちでない区間の Ctrl+C の向き（#3818）。クローンの応答を描いている間（`clone`）はターンを止める
- * （`POST /clone/interrupt`）。それ以外の手元のコマンドの通信（`local`）は、その通信だけを abort する。
- */
 type Activity =
   | { kind: 'clone'; turn?: TurnHandle }
   | {
       kind: 'local';
       abort: AbortController;
-      /** 取り消したことを1行で言う文。 */
       notice: string;
-      /** 通信が signal を見ない処理でも、待っている側を先へ進める。 */
       cancel: () => void;
       cancelled: Promise<typeof CANCELLED>;
     };
 
-/** 手元のコマンドが Ctrl+C で取り消されたことを表す値。 */
 const CANCELLED = Symbol('cancelled');
 
 const READ_CANCELLED_NOTICE =
   '（既読付けを取り消しました。返答は表示済みです。クローンのターンには触れていません）';
 
-/**
- * いま送った発言（#3956）。Ctrl+C はこの発言のターンだけを止める。`conversationId` は `open` を受けるまで
- * 分からない（新しい会話）。`withdrawn` は順番待ちを取り下げた印で、サーバは取り下げた発言の SSE に終端を流さない
- * ので、呼び手が自分でストリームを閉じる（`withdraw`）。
- *
- * `/resume` の再生は自分が打った発言ではないので、`open` の `pending` から決める（#3990）。決められない間は
- * `clientMessageId` が `null` で、Ctrl+C は呼ばずに対象が分からないと言う（対象を省くと先客のターンを止める）。
- */
+/** `clientMessageId` が `null` の間は Ctrl+C で対象を省かない: 省くと先客のターンを止めるため。 */
 export interface TurnHandle {
   clientMessageId: string | null;
   conversationId: string | null;
@@ -136,25 +122,11 @@ export interface TurnHandle {
   withdraw: () => void;
 }
 
-/** `chat` が `sendMessage` などへ渡す、Ctrl+C の向きを切り替える口（#3818）。 */
 export interface ReplHooks {
-  /**
-   * クローンの応答を待つ・描く区間に入る。以降の Ctrl+C はターンを止める。`turn` を渡すと、その発言のターンだけを
-   * 止める。渡さない経路（`/resume` の再生など、対象の発言が分からないもの）は、従来どおり走っているターンを止める。
-   */
   toTurn?: (turn?: TurnHandle) => void;
-  /** 手元の通信の区間に入る（既読付けなど）。以降の Ctrl+C はその通信を abort する。 */
   toLocal?: (notice: string) => AbortSignal;
 }
 
-/**
- * `alteroid chat` — クローンとの会話。
- *
- * 3層（日報・日誌・セッションログ）は chat と HTTP API の両方から読める必要が
- * ある（PRD「可観測性」）。chat ではスラッシュコマンドがその入口になり、
- * 普段は `/report` だけ読んで暮らせて、掘りたくなったら `/journal` →
- * `/manager` `/archive` と一本道で降りられる。
- */
 export async function chatCommand(): Promise<void> {
   const target = await resolveTarget();
   if (target.note !== null) {
@@ -163,14 +135,10 @@ export async function chatCommand(): Promise<void> {
   }
   const base = target.baseUrl;
   const client = createClient(base, target.headers);
-  // 非対話（パイプ）の入力では、スラッシュコマンドが HTTP で失敗したら（非 2xx・繋がらない）そこで止める（#3413）。
-  // コマンドは失敗を文にして書くだけで例外にしないので、通信の口で見る。端末なら今まで通り続ける。
+  // コマンドは失敗を文にして書くだけで例外にしないので、非対話の失敗は通信の口で見る。
   let slashFailure: string | null = null;
   const interactive = stdin.isTTY === true;
-  // いま入力待ちでない区間で何をしているか（#3818）。`clone` はクローンの応答を描いている間（Ctrl+C はターンを止める）、
-  // `local` は手元のコマンドの通信など（Ctrl+C はその通信だけを abort する）。入力待ちの間は `null`（`waiter` で見る）。
   let activity: Activity | null = null;
-  // 手元のコマンドの通信は、いまの `local` の signal で abort できるようにする。取り消した通信は「失敗」に数えない。
   const localFetch =
     (countFailure: boolean, resultStatuses: readonly number[] = []): typeof fetch =>
     async (input, init) => {
@@ -200,24 +168,17 @@ export async function chatCommand(): Promise<void> {
       }
     };
   const slashClient = createClient(base, target.headers, localFetch(true));
-  // 付随の取得（未読の総数・会話の承認）用。失敗は取得する側が1行で言い、本体は出ているので、通信の口では止める判断に数えない（#3994）。
-  // HTTP の失敗を「コマンドの失敗」の代わりに使うと、本体が成功したコマンドまで止まる。
+  // 付随の取得は失敗を数えない: 数えると、本体が成功したコマンドまで止まる。
   const auxClient = createClient(base, target.headers, localFetch(false));
-  // 「無い」を正常な結果として文にしている取得（日報・記憶・マネージャーの生ログ）用。404 だけ数えず、ほかの失敗は止める（#4002）。
   // 指した会話・承認・マネージャーが見つからない 404 は使い手の指定の誤りなので、これでなく `slashClient` のまま数える。
-  // 410（本文を消した）も、マネージャーの生ログでは正常な結果として数えない（#4023）。
   const absentOkClient = createClient(base, target.headers, localFetch(true, [404, 410]));
-  // `/archive <id>` 用。404 は指した id の誤りなので数え、410（本文を消した）だけ数えない（#4023）。
   const removedOkClient = createClient(base, target.headers, localFetch(true, [410]));
 
   const rl = createInterface({ input: stdin, output: process.stdout });
-  // 入力の行は `line` イベントで受けて積み、`ask` が順に取り出す（#3262）。`question()` は、待って
-  // いない間に届いた行（応答待ちの間にパイプで流れ込んだ2行目以降）をどこにも渡さず捨てる。
-  // 積むのはパイプ（非対話）だけ。端末で積んで次の `ask` が黙って返すと、読む前に打った行が送られ、確認の答えにもなる（#3955）。
+  // `question()` を使わない: 待っていない間に届いた行（パイプの2行目以降）を捨てるため。
+  // 積むのはパイプだけ。端末で積むと、読む前に打った行が送られ、確認の答えにもなる。
   const pendingLines: string[] = [];
-  // 端末で、応答中（入力待ちでない間）に打った行。送らずに取っておき、次のプロンプトの入力欄へ戻す。
   const typeahead: string[] = [];
-  // 入力欄へ戻した複数行（1行の入力欄には戻せない）を `continued` に持っている間は、空の Enter でそれを送る。
   let heldDraft = false;
   let waiter: {
     resolve: (line: string) => void;
@@ -235,9 +196,6 @@ export async function chatCommand(): Promise<void> {
     waiter = null;
     resolve(text);
   };
-  // 複数行の入れ方（#3412）。(1) 端末の貼り付け（bracketed paste）の間に届いた行は、1つの発言へまとめる。
-  // 貼り付けの終わりのあと、次の Enter で（打ち足した分と一緒に）送る。(2) 行末の `\` で次の行へ続ける
-  // （TUI の `\` + Enter と同じ。`/` で始まるコマンドは続けない。パスが `\` で終わりうる）。
   let pasting = false;
   const pasteLines: string[] = [];
   const continued: string[] = [];
@@ -245,7 +203,6 @@ export async function chatCommand(): Promise<void> {
     if (key?.name === 'paste-start') pasting = true;
     else if (key?.name === 'paste-end') {
       pasting = false;
-      // 貼った行は、まだ送っていない。次の Enter で送ると分かるようにする（送ったと思わせない）。
       const partial = (rl as { line?: unknown }).line;
       const count = pasteLines.length + (typeof partial === 'string' && partial !== '' ? 1 : 0);
       if (pasteLines.length > 0) {
@@ -255,8 +212,7 @@ export async function chatCommand(): Promise<void> {
     }
   };
   stdin.on('keypress', onKeypress);
-  // 入力欄へ戻した1行（`refilled`）は、Enter を待つ書きかけ。入力が閉じたとき readline が書きかけを最後の行として
-  // 流すことがある（端末でない入力・端末が落ちた場合）ので、それを送らない。readline の `end` より先に印を付ける。
+  // 入力が閉じたとき readline が書きかけ（`refilled`）を最後の行として流すことがあるので、送らない。readline の `end` より先に印を付ける。
   let refilled: string | null = null;
   let inputEnded = false;
   stdin.prependListener('end', () => {
@@ -279,8 +235,7 @@ export async function chatCommand(): Promise<void> {
       }
     }
     const head = (continued[0] ?? segment).trimStart();
-    // `//` で始まる行はコマンドではなく発言（下の脱出）なので、ほかの文と同じく `\` で続けられる。
-    // コマンドの行は `\` を畳まない（パスの `\` がそのまま要る）。
+    // コマンドの行は `\` を畳まない: パスの `\` がそのまま要る。
     if (!head.startsWith('/') || head.startsWith('//')) {
       const folded = foldTrailingBackslashes(segment);
       if (folded.continues) {
@@ -302,15 +257,12 @@ export async function chatCommand(): Promise<void> {
     pasteLines.splice(0);
     if (discarded > 0) stderr.write('\n（書きかけの入力を捨てました。送っていません）\n');
   };
-  // 入力が閉じたら、待っている質問を打ち切る（#3217）。node v22 は、パイプの EOF では
-  // `question()` を resolve も reject もしない。積んだ行は閉じた後でも先に読ませ、尽きたら reject する。
+  // node v22 は、パイプの EOF で `question()` を resolve も reject もしないので、自分で打ち切る。
   rl.once('close', () => {
-    // 入力欄へ戻しただけの複数行は、Enter で確かめる前に閉じたら送らない（#3955）。
     if (heldDraft) {
       continued.splice(0);
       heldDraft = false;
     }
-    // 端末の Ctrl-D は「終わる」であって「送る」ではない。まだ Enter で送っていない書きかけは、Ctrl+C と同じく捨てる（#4087）。
     if (stdin.isTTY === true) {
       discardDraft();
       inputClosed = true;
@@ -318,7 +270,6 @@ export async function chatCommand(): Promise<void> {
       waiter = null;
       return;
     }
-    // パイプは、続きの途中・貼り付けの途中で閉じたら、そこまでを1発言として渡す（#3217）。
     const rest = [
       ...continued.splice(0),
       ...(pasteLines.length > 0 ? [pasteLines.splice(0).join('\n')] : []),
@@ -328,17 +279,13 @@ export async function chatCommand(): Promise<void> {
     waiter?.reject(new Error('input closed'));
     waiter = null;
   });
-  // 応答中の Ctrl+C は、走っているターンを止めて REPL は続ける（#3411。TUI と同じ約束）。入力を待って
-  // いる間（プロンプト）の Ctrl+C は、今まで通り終了する。`SIGINT` を購読すると readline は自分では
-  // 閉じなくなるので、閉じる側はここで担う。
+  // `SIGINT` を購読すると readline は自分では閉じなくなるので、閉じる側はここで担う。
   let interrupting = false;
   rl.on('SIGINT', () => {
-    // 確認の入力欄（`confirmInRepl`）の Ctrl+C は、その確認だけの取り消し。ここで入力ごと閉じると、
-    // 「やめる」つもりの1回で chat が終わり、終了時の送信と蒸留まで走る（#3954）。
+    // 確認の Ctrl+C で入力ごと閉じない: 「やめる」つもりの1回で chat が終わり、終了時の送信と蒸留まで走る。
     if (waiter?.cancelOnSigint === true) {
       const { reject } = waiter;
       waiter = null;
-      // 打ちかけの答えを次の入力へ持ち越さない。
       (rl as { write?: (data: null, key: { ctrl: boolean; name: string }) => void }).write?.(null, {
         ctrl: true,
         name: 'u',
@@ -348,13 +295,11 @@ export async function chatCommand(): Promise<void> {
       return;
     }
     if (waiter !== null || inputClosed) {
-      // Ctrl+C は取り消し。書きかけ（`\` の続き・貼り付け）は送らず捨てる（#3682）。close の後始末が渡してしまうので先に空にする。
+      // close の後始末が書きかけを渡してしまうので、先に空にする。
       discardDraft();
       rl.close();
       return;
     }
-    // クローンの応答を描いている間ではなく、手元のコマンドの通信の最中なら、その通信だけを取り消す。
-    // クローンのターンには触れない（#3818）。
     if (activity?.kind === 'local') {
       if (activity.abort.signal.aborted) return;
       activity.abort.abort();
@@ -364,12 +309,10 @@ export async function chatCommand(): Promise<void> {
       return;
     }
     if (interrupting) return;
-    // 対象の発言があるなら、その発言のターンだけを止める（先客のターンを止めない。#3956）。
     const turn = activity?.kind === 'clone' ? activity.turn : undefined;
     let aim: InterruptTarget | undefined;
     if (turn !== undefined) {
       if (turn.conversationId === null) {
-        // 会話が分からないまま対象を省くと、先客のターンを止めてしまう。
         flushRenderedText?.();
         stdout.write(
           '\n会話がまだ確定していないので、何も止めていません。少し待ってから、もう一度 Ctrl+C を押してください。\n',
@@ -391,7 +334,6 @@ export async function chatCommand(): Promise<void> {
         (outcome) => {
           // 取り下げた発言の SSE には終端が流れないので、自分で閉じる。
           if (outcome === 'withdrawn') turn?.withdraw();
-          // 先に届いていた改行前の断片を書き切ってから、止めた文を出す（#3769）。
           flushRenderedText?.();
           stdout.write(`\n${describeInterruptOutcome(outcome)}\n`);
         },
@@ -404,12 +346,9 @@ export async function chatCommand(): Promise<void> {
         interrupting = false;
       });
   });
-  // 端末なら、貼り付けを括る印を送ってもらう。
   const bracketedPaste = stdin.isTTY === true && process.stdout.isTTY === true;
   if (bracketedPaste) process.stdout.write('\x1b[?2004h');
-  // 非対話（パイプ）の入力では、送信が失敗したらそこで止まり、非 0 で終える（#3413）。
   let abortReason: string | null = null;
-  // `restoreTyped: false` は確認の入力欄。先に打った行は答えにせず、次の通常のプロンプトまで取っておく。
   const ask = (
     question: string,
     options?: { restoreTyped?: boolean; cancelOnSigint?: boolean },
@@ -450,14 +389,12 @@ export async function chatCommand(): Promise<void> {
       rl.write(refilled);
       return promise;
     }
-    // `\` で続けている途中は、続きの形のプロンプトにする（まだ送っていないと分かる）。
     rl.setPrompt(continued.length > 0 ? '… ' : question);
     rl.prompt();
     return new Promise((resolve, reject) => {
       waiter = { resolve, reject, cancelOnSigint: options?.cancelOnSigint === true };
     });
   };
-  // 手元のコマンドの区間に入る。`toLocal` は呼ばれたあとの通信の signal を返す。
   const enterLocal = (notice: string) => {
     const abort = new AbortController();
     let cancel = (): void => {};
@@ -472,14 +409,12 @@ export async function chatCommand(): Promise<void> {
   };
   const hooks: ReplHooks = {
     toTurn: (turn) => {
-      // 送信が渡した対象を、描く区間の入り直し（`turn` 無し）で落とさない。
+      // 描く区間の入り直し（`turn` 無し）で、送信が渡した対象を落とさない。
       if (turn === undefined && activity?.kind === 'clone') return;
       activity = turn === undefined ? { kind: 'clone' } : { kind: 'clone', turn };
     },
     toLocal: (notice) => enterLocal(notice).abort.signal,
   };
-  // 手元のコマンド（スラッシュコマンド・添付のアップロード・`/resume` の探索など）を実行する。Ctrl+C で取り消されたら
-  // `CANCELLED` を返す。操作が途中でクローンの応答を描く区間へ移ったら（`hooks.toTurn`）、そこからは取り消さない。
   const runLocal = async <T>(
     notice: string,
     op: (signal: AbortSignal) => Promise<T>,
@@ -494,7 +429,6 @@ export async function chatCommand(): Promise<void> {
       activity = null;
     }
   };
-  // 送ろうとして、サーバが受けなかった本文（#3686）。失敗したら、使い手が打ったままを端末へ戻す。
   let unsent = null as string | null;
   const reprintUnsent = (): void => {
     const body = unsent;
@@ -502,11 +436,9 @@ export async function chatCommand(): Promise<void> {
     if (body === null || body.length === 0) return;
     const out = interactive ? stdout : stderr;
     out.write('送れなかった本文:\n');
-    // 行末の `\` は倍にして戻す。そのまま貼り直すと、末尾の `\` 1つが続きの印になり別の本文になる。
+    // 行末の `\` は倍にして戻す: そのまま貼り直すと、末尾の `\` 1つが続きの印になり別の本文になる。
     out.writeRaw(`${body.replace(/\\+(?=\n|$)/g, (run) => run + run)}\n`);
   };
-  // 取り下げた発言に添えていたファイル。受け取られた時点で添えかけから外れているので、本文のようには戻せない。
-  // 本文が空（添付だけの発言）でも言うので、`reprintUnsent` とは別に出す。
   const reportWithdrawnFiles = (files: readonly DraftFile[]): void => {
     if (files.length === 0) return;
     const out = interactive ? stdout : stderr;
@@ -515,15 +447,11 @@ export async function chatCommand(): Promise<void> {
         '送り直すなら /attach で添え直してください\n',
     );
   };
-  // 次に送る発言へ添えかけのファイル（`/attach`）。
   const draft = createAttachmentDraft(target);
-  // `/edit <番号|id>` で始めた編集（確定か `/edit-cancel` まで。#3642）。中は `draft` が元の添付も持つ。
   let editing: EditInProgress | null = null;
   let conversationId: string | null = null;
-  // 新しい会話で、2xx のあと `open` の前に SSE が終わった送信の `clientMessageId`（#3304）。次の送信の前に、
-  // `GET /client-messages/:id` で会話を引き直す（引かずに送ると、次の発言が新しい会話に入って会話が黙って分かれる）。
+  // 引き直さずに送ると、次の発言が新しい会話に入って会話が黙って分かれる。
   let unopened: string | null = null;
-  // 直前に一覧したもの。番号で引けるようにするため覚えておく。
   const listed: Listed = {
     approvals: [],
     managerAnchors: {},
@@ -546,8 +474,6 @@ export async function chatCommand(): Promise<void> {
       unsent = null;
       let line: string;
       let typed: string;
-      // 送る本文。先頭の空白（コードのインデント）は打ったままにし、末尾の空白・改行だけ落とす。
-      // 空判定とコマンドの見分けは trim した `line` で行う。
       let body: string;
       try {
         const raw = await ask('> ');
@@ -557,12 +483,8 @@ export async function chatCommand(): Promise<void> {
       } catch {
         break; // Ctrl-C・入力の終わり（EOF）
       }
-      // 通信の例外（fetch の失敗・デーモンの再起動中など）は、1行言って入力に戻る（#3218）。
-      // 添えかけ（`draft`）と会話 id はここで失わない。`break` / `continue` は try の外へ効く。
       try {
-        // 空行は、添えかけが無ければ送らない。あれば添付だけの発言として送る。
         if (line.length === 0 && draft.count === 0) {
-          // 編集中に何も無いまま確定しても送らない（Web と同じ。本文か添付のどちらかは要る）。
           if (editing !== null) stdout.write(`${EDIT_EMPTY_MESSAGE}\n`);
           continue;
         }
@@ -620,8 +542,6 @@ export async function chatCommand(): Promise<void> {
           continue;
         }
 
-        // `//` で始めると、先頭の `/` を 1 つ外した発言として送る（`/` で始まる文を送るための抜け道。
-        // TUI の `resolveCommand` と同じ規則。#3768）。以降は発言として扱う。
         if (line.startsWith('//')) {
           body = body.replace('/', '');
         } else if (line.startsWith('/')) {
@@ -635,13 +555,10 @@ export async function chatCommand(): Promise<void> {
                 listed,
                 conversationId,
                 target,
-                // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
                 async (summary) => {
                   const confirmed = await confirmInRepl(summary, (question) =>
                     ask(question, { restoreTyped: false, cancelOnSigint: true }),
                   );
-                  // パイプでは常に断る。実行していないことを、通信の失敗と同じく止める理由にする（#3993）。
-                  // 端末で人間が「いいえ」と答えたのは失敗ではないので、非対話のときだけ。
                   if (!confirmed && !interactive) {
                     slashFailure ??= `確認できないので実行していない。${NON_TTY_HOW_TO}`;
                   }
@@ -668,8 +585,7 @@ export async function chatCommand(): Promise<void> {
           continue;
         }
 
-        // 前の送信が `open` の前に終わっていたら、受け取られたかを引いて会話を取り直す。引けなかったら、
-        // 黙って新しい会話として送らない（readline は入力を残せないので、もう一度送ってもらう）。
+        // 引けなかったら黙って新しい会話として送らない（readline は入力を残せないので、もう一度送ってもらう）。
         if (editing === null && conversationId === null && unopened !== null) {
           try {
             const unopenedId = unopened;
@@ -699,7 +615,6 @@ export async function chatCommand(): Promise<void> {
           }
         }
 
-        // 添えかけがあれば先に上げる。失敗したら送らず、添えかけを残して理由を出す。
         let attachmentIds: string[] | undefined;
         let sentFiles: DraftFile[] = [];
         if (draft.count > 0) {
@@ -727,11 +642,8 @@ export async function chatCommand(): Promise<void> {
         }
         let sendFailure: string | null = null;
         let withdrawn = false;
-        // 受け取られたあとに取り下げたときだけ、添付は添えかけから外れている（受け取られる前なら残っている）。
         let accepted = false;
-        // 送れなかったとき、本文を端末へ戻すための控え。サーバが受けたら外す（#3686）。
         unsent = typed;
-        // 編集の確定は、編集する発言の会話へ `supersedes` 付きで送る（いま話している会話は変えない）。
         const edit = editing;
         const sentTo = await sendMessage(
           target,
@@ -742,15 +654,12 @@ export async function chatCommand(): Promise<void> {
             onFailed: (reason) => {
               sendFailure = reason;
             },
-            // 順番待ちのうちに取り下げた発言は、配られていない。打ったままを戻し、編集は続きから打ち直せるようにする。
-            // 上げ済みの添付は受け取られた時点で添えかけから外れているので、戻らない（下で言う）。
             onWithdrawn: () => {
               withdrawn = true;
               unsent = typed;
               if (edit !== null) editing = edit;
             },
             ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
-            // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。編集はここで終わる。
             onAccepted: () => {
               unsent = null;
               accepted = true;
@@ -760,12 +669,9 @@ export async function chatCommand(): Promise<void> {
                 retireListedMessage(listed, edit.id);
               }
             },
-            // 新しい会話で `open` の前に終わったら、次の送信の前に会話を引き直せるよう id を覚える（#3304）。
             onUnopened: (clientMessageId) => {
               unopened = clientMessageId;
             },
-            // 添付が期限切れ（サーバが掃除した）なら、上げ済みの印を捨てて、次の送信で上げ直す（#3246）。
-            // 編集で引き継いだ元の添付は上げ直せないので、外すか編集をやめるかを案内する（#3642）。
             onAttachmentMissing: (message) => {
               stdout.write(`${expireUploads(sentFiles, message)}\n`);
             },
@@ -782,7 +688,6 @@ export async function chatCommand(): Promise<void> {
           break;
         }
       } catch (error) {
-        // 繋がらないときは、単発のコマンドと同じ直し方の案内にする（#3995）
         const reason = describeCliFailure(error);
         stdout.write(`エラー: ${reason}\n`);
         reprintUnsent();
@@ -798,11 +703,9 @@ export async function chatCommand(): Promise<void> {
     if (bracketedPaste) process.stdout.write('\x1b[?2004l');
     rl.close();
     if (conversationId) {
-      // 会話終了は蒸留の契機（寿命モデル: 蒸留は生存条件）
       await endConversationOnExit(client, target, conversationId);
     }
   }
-  // 会話を閉じたあと、非 0 で終える（理由は入口が標準エラーへ出す）。残りの行は読んでいない。
   if (abortReason !== null) {
     throw new Error(
       `${abortReason}。入力が端末でないので、ここで止めました（残りの入力は読んでいません）`,
@@ -810,10 +713,7 @@ export async function chatCommand(): Promise<void> {
   }
 }
 
-/**
- * 行末の `\` を、案内どおりに読む。`\\` は1文字の `\`、奇数個なら最後の1つが続きの印（外す）。
- * 畳まずに送ると `\` で終わる本文を送る方法が無くなる（#3952）。
- */
+// 畳まずに送ると `\` で終わる本文を送る方法が無くなる。
 export function foldTrailingBackslashes(line: string): { text: string; continues: boolean } {
   const trailing = /\\+$/.exec(line);
   if (trailing === null) return { text: line, continues: false };
@@ -824,13 +724,11 @@ export function foldTrailingBackslashes(line: string): { text: string; continues
   };
 }
 
-/** 行末が、奇数個の `\` で終わるか（続きの行がある印。`\\` は1文字の `\` の書き方として続けない）。 */
 export function continuesLine(line: string): boolean {
   const trailing = /\\+$/.exec(line);
   return trailing !== null && trailing[0].length % 2 === 1;
 }
 
-/** `confirm` が渡されていなければ確認できないので、実行しない（#3141）。 */
 async function confirmRepl(
   confirm: ((summary: string) => Promise<boolean>) | undefined,
   summary: string,
@@ -850,34 +748,18 @@ export async function sendMessage(
   target: Target,
   text: string,
   conversationId: string | null,
-  /**
-   * **送信済みの人間の発言を編集する口**（issue「チャットの送信済み
-   * メッセージを編集する」）。値はその発言（自分の過去の `role: inbound`）の
-   * 日誌エントリ id。`POST /chat` の本文へそのまま載せる——新しい HTTP 経路は
-   * 足さない（案A: 既存の `/chat` に乗せる）。
-   */
   supersedes?: string,
   options: {
-    /** `POST /attachments` が返した id（発言へ結び付ける）。 */
     attachments?: string[];
-    /** サーバが発言を受けた（HTTP 2xx）とき。添えかけを空にする合図。 */
     onAccepted?: () => void;
-    /**
-     * 新しい会話（`conversationId` 無し）の送信が、2xx のあと `open` を見ないまま終わったとき。受け取られたかは
-     * 分からない。この発言の `clientMessageId` を渡す（あとで `findClientMessage` で引く。#3304）。
-     */
     onUnopened?: (clientMessageId: string) => void;
-    /** `400 attachment_missing`（添付が無い・期限切れ）で断られたとき。サーバの理由の文を渡す（#3246）。 */
     onAttachmentMissing?: (message: string) => void;
-    /** サーバが発言を受け取らなかった（HTTP 非 2xx）とき、または応答が `error`・切断・終端の無い終わりになったとき。理由の文を渡す（非対話の入力で止める判断に使う。#3413・#3684）。 */
     onFailed?: (reason: string) => void;
-    /** Ctrl+C で順番待ちの発言を取り下げ、ストリームを閉じたとき（配られていない。#3956）。 */
     onWithdrawn?: () => void;
-    /** Ctrl+C の向きの切り替え（#3818）。 */
     hooks?: ReplHooks;
   } = {},
 ): Promise<string | null> {
-  // 送信ごとに新しい id。取り下げた id での再送は重複として受理されて配られないので、送り直しは必ず新しい id になる。
+  // 送信ごとに新しい id: 取り下げた id での再送は重複として受理されて配られない。
   const clientMessageId = randomUUID();
   const stream = new AbortController();
   const turn: TurnHandle = {
@@ -889,10 +771,8 @@ export async function sendMessage(
       stream.abort();
     },
   };
-  // 送ってから応答を描き終えるまでは、クローンのターンの区間（Ctrl+C はこの発言のターンを止める）。
   options.hooks?.toTurn?.(turn);
-  // SSE は hono/client ではなく生の fetch で受ける（EventSource は POST も
-  // ヘッダ付与もできない）。認証ヘッダはここにも要る。
+  // SSE は hono/client ではなく生の fetch で受ける: EventSource は POST もヘッダ付与もできない。
   const response = await fetch(`${target.baseUrl}/chat`, {
     method: 'POST',
     signal: stream.signal,
@@ -900,7 +780,6 @@ export async function sendMessage(
     body: JSON.stringify({
       text,
       conversationId: conversationId ?? undefined,
-      // 発言ごとに名乗る（Issue #3203）。新しい会話で `open` の前に終わった送信は、この id で会話を引き直す（#3304）。
       clientMessageId,
       ...(supersedes === undefined ? {} : { supersedes }),
       ...(options.attachments === undefined || options.attachments.length === 0
@@ -908,7 +787,6 @@ export async function sendMessage(
         : { attachments: options.attachments }),
     }),
   }).catch((error: unknown) => {
-    // 応答の頭が来る前に取り下げた（既存の会話は、送るとすぐ対象が分かる）。
     if (turn.withdrawn) return null;
     throw error;
   });
@@ -926,10 +804,7 @@ export async function sendMessage(
     }
     const failed = { status: response.status, body: await response.json().catch(() => null) };
     const missing = attachmentMissingMessageOf(failed.body);
-    // **本文の `error` をそのまま出す。** `supersedes` の検証（400）は4通り
-    // あり、どれも「次に何を打てばよいか」まで書いてある（`apps/daemon/src/app.ts`
-    // の手前検証）。ここで一律「デーモンが応答しません」に潰すと、`/edit` が
-    // クローンの応答を指したときの案内（制約(C)）が人間に届かない。
+    // 本文の `error` をそのまま出す: 一律に潰すと、`/edit` がクローンの応答を指したときの案内が人間に届かない。
     const detail = await errorDetail({
       status: failed.status,
       json: () => Promise.resolve(failed.body),
@@ -955,11 +830,7 @@ export async function sendMessage(
   return next;
 }
 
-/**
- * **`clientMessageId` から、受け取り済みの発言の会話を引く**（`GET /client-messages/:clientMessageId`。#3304）。
- * 受け取っていれば会話の id、**受け取っていなければ（404）`undefined`**。それ以外の失敗（5xx・繋がらない・認証）は
- * 投げる——「受け取っていない」と「確かめられなかった」を取り違えない。
- */
+// 404 以外の失敗は投げる: 「受け取っていない」と「確かめられなかった」を取り違えない。
 export async function findClientMessage(
   target: Target,
   clientMessageId: string,
@@ -986,52 +857,34 @@ export async function findClientMessage(
   return id;
 }
 
-/** 描いている応答が、改行前のまま溜めている本文の断片を書き切る口（描いていなければ `null`）。 */
 let flushRenderedText: (() => void) | null = null;
 
-/**
- * chat の SSE（`POST /chat` と `GET /chat/{id}/stream` の応答）を端末へ描く。
- *
- * **`sendMessage` の本体を切り出したもの。** `/resume`（進行中のターンへ戻る）が
- * `GET /chat/{id}/stream` の応答を同じ描き方で読めるようにするため。切り出しただけで、
- * 出力・既読にする条件・戻り値は `sendMessage` に在ったときと同じである（描き方を
- * 2か所に写すと、片方の伏せ字や既読の扱いだけがずれる）。
- */
 async function renderChatEvents(
   target: Target,
   events: AsyncIterable<SSEEvent>,
   conversationId: string | null,
-  /** 応答が `error`・切断・終端の無い終わりで終わったとき、理由の文を渡す（非対話の入力で止める判断に使う。#3684）。`usage_limited` は呼ばない。 */
   onFailed?: (reason: string) => void,
-  /** `/resume` の再生か。例外で切れたときの文を「戻れませんでした」の形にする（切断を1つの文で言う。#3767）。 */
   resuming = false,
   hooks?: ReplHooks,
-  /** いま送った発言（`sendMessage` のみ）。`open` で会話が分かったら控える。取り下げて閉じたストリームの終わりは、切断として言わない。 */
   turn?: TurnHandle,
 ): Promise<string | null> {
-  // 応答を描いている間は、Ctrl+C がクローンのターンを止める側（#3818）。
   hooks?.toTurn?.(turn);
   let nextConversationId = conversationId;
   let wrote = false;
-  // 返答が最後まで表示されたか（`done` が来て、`error` / `usage_limited` が無かった）。既読にする条件。
   let completed = false;
   let failedOrLimited = false;
-  // `done` / `error` / `usage_limited` のどれかで終わったか（例外で切れたときも、そちらの文で言うので真にする）。
   let ended = false;
   let sawEvent = false;
-  // **本文は改行までためて、行ごとに伏せてから書く**（#2635）。チャンクごとに伏せると、
-  // 2つのチャンクにまたがったトークンはどちらの断片も規則に合わずに出る。端末へ書いた
-  // ものは取り消せないので、まだ改行の来ていない残りは `pending` に持ち、ほかの出来事の
-  // 前と終わりに伏せてから書き出す。本文の網の規則は、どれも1行の中で完結する。
+  // 本文は改行までためて、行ごとに伏せてから書く: チャンクごとに伏せると、2つのチャンクにまたがったトークンは
+  // どちらの断片も規則に合わずに出る。端末へ書いたものは取り消せない。
   let pending = '';
   const flushPending = (): void => {
     if (pending === '') return;
     stdout.write(redactBody(pending));
     pending = '';
   };
-  // **順番待ち・考え始めは、端末のときだけ、上書きされる1行で出す**（#3829）。パイプへは足さない
-  // （出力を読む道具に、本文でない行を混ぜない）。本文を書いたあとは出さない: 改行の無い本文の
-  // 行の途中へ書くと、次の消去がその本文の行を消してしまう。
+  // パイプへは足さない: 出力を読む道具に、本文でない行を混ぜない。本文を書いたあとは出さない:
+  // 改行の無い本文の行の途中へ書くと、次の消去がその本文の行を消してしまう。
   let statusShown = false;
   const clearStatus = (): void => {
     if (!statusShown) return;
@@ -1043,7 +896,6 @@ async function renderChatEvents(
     stdout.writeRaw(`  … ${label}`);
     statusShown = true;
   };
-  // 描いている間だけ、溜めた断片を書き切る口を公開する。Ctrl-C で止めた文は、先に届いていた断片の後ろへ回さない（#3769）。
   const outerFlush = flushRenderedText;
   flushRenderedText = flushPending;
 
@@ -1092,7 +944,6 @@ async function renderChatEvents(
           }
           break;
         }
-        // クローンが返信に添えた添付（#4126）。`tool` / `ask_human` と同じく付随情報として stdout に出す（端末だけの行ではない）
         case 'attachments': {
           const data = event.json<{
             attachments: { id: string; name: string; mediaType: string; size: number }[];
@@ -1144,7 +995,6 @@ async function renderChatEvents(
       }
     }
   } catch (error) {
-    // 応答の途中で切れた（SSE の切断）。ここまでに知った会話 id を返し、REPL が続けられるようにする。
     clearStatus();
     flushPending();
     ended = true;
@@ -1157,7 +1007,7 @@ async function renderChatEvents(
       onFailed?.(described);
     } else {
       stdout.write(`\nエラー: 応答が途中で切れました（${reason}）\n`);
-      // 何も受け取る前の切断は、デーモンがターンを受けたかが分からないので、続いているとは言わない。
+      // 何も受け取る前の切断は、デーモンがターンを受けたか分からないので、続いているとは言わない。
       if (sawEvent) {
         stdout.write(
           '  ターンはデーモンで続いています。/resume で戻れます（頭から流れ直すので、見えた分と重なります）。\n' +
@@ -1174,7 +1024,6 @@ async function renderChatEvents(
   flushRenderedText = outerFlush;
   if (wrote) stdout.write('\n');
   if (!ended && turn?.withdrawn !== true) {
-    // 終端が無いまま正常に閉じた（プロキシ・再起動など）。途中までの返答を、完成したものに見せない（#3410）。
     stdout.write(
       !sawEvent
         ? '  ! 応答が来ないまま接続が閉じました。発言が受け取られたかは分かりません\n'
@@ -1183,7 +1032,6 @@ async function renderChatEvents(
     onFailed?.('応答が終端の無いまま切れた（done も error も来なかった）');
   }
   if (completed && !failedOrLimited && nextConversationId !== null) {
-    // 既読付けは、ターンが終わったあとの手元の通信。Ctrl+C はこれだけを取り消す（#3818）。
     const signal = hooks?.toLocal?.(READ_CANCELLED_NOTICE);
     await markConversationReadAfterReply(target, nextConversationId, signal);
   }
@@ -1213,13 +1061,8 @@ async function* readSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEve
   }
 }
 
-/** `/resume`（id 無し）が進行中かを確かめに行く会話の数（履歴の新しい順）。TUI の `RESUME_PROBE_LIMIT` と同じ。 */
 const RESUME_PROBE_LIMIT = 5;
 
-/**
- * `GET /chat/{id}/stream` を張る。繋がれなければ理由つきの `Error` を投げる
- * （TUI の `chatStream` と同じ「進行中の応答に戻れませんでした」）。
- */
 async function openChatStream(
   target: Target,
   conversationId: string,
@@ -1234,7 +1077,6 @@ async function openChatStream(
       signal,
     });
   } catch (error) {
-    // 繋がらないときは、単発のコマンドと同じ直し方の案内にする（#3995）
     throw new Error(
       isConnectionFailure(error)
         ? `${what}: ${describeCliFailure(error)}`
@@ -1249,14 +1091,8 @@ async function openChatStream(
   return response.body;
 }
 
-/**
- * `/resume` の再生で Ctrl+C が止める発言を、`open.pending` から決める（#3990）。`running`、無ければ `starting`
- * の先頭。まとめ読みで複数あっても、同じターンなので1件で止まる（デーモンは対象のどれかが処理中なら止める）。
- *
- * `held`・`queued` は選ばない: 再生しているのは走っているターンで、それが `pending` に無い（`clientMessageId` を
- * 持たない別の起点）のに順番待ちを選ぶと、見ているターンは止まらず、別の発言を取り下げてしまう。
- * `pending` を返さない古いデーモンも `null`（対象を省くと先客のターンを止めうる）。
- */
+// `held`・`queued` は選ばない: 再生しているのは走っているターンで、それが `pending` に無いのに順番待ちを選ぶと、
+// 見ているターンは止まらず、別の発言を取り下げてしまう。
 function pickResumeTarget(pending: unknown): string | null {
   if (!Array.isArray(pending)) return null;
   const entries = pending.filter(
@@ -1273,7 +1109,6 @@ function pickResumeTarget(pending: unknown): string | null {
   return null;
 }
 
-/** `GET /chat/{id}/stream` の最初の `open` だけ読み、`inProgress` を返して接続を閉じる。 */
 async function probeInProgress(
   target: Target,
   conversationId: string,
@@ -1293,35 +1128,21 @@ async function probeInProgress(
   }
 }
 
-/**
- * `/resume [id]`（TUI の `/resume` と同じ）。明示したときだけ、進行中のターンのある会話へ戻る
- * （起動時に自動では戻らない）。`id` があればその会話、無ければ履歴の新しい順に最大
- * {@link RESUME_PROBE_LIMIT} 件を見て、最初に進行中だったもの。進行中の会話の一覧を返す口は
- * daemon に無いので、会話ごとに `GET /chat/{id}/stream` を張って `open.inProgress` だけ読む。
- * 見つかったらもう一度張り、途中経過の再生と続きを `sendMessage` と同じ描き方で流す。
- * 返答が最後まで描かれたら、`sendMessage` と同じく既読にする。
- *
- * 戻り値は、以後の発言がつながる会話 id。戻れなかったら `null`（今の会話のまま）。
- * 離れても（接続が切れても）ターン自体は止めない（この口は発言も中断も送らない）。
- */
+// 進行中の会話の一覧を返す口は daemon に無いので、会話ごとに stream を張って `open.inProgress` だけ読む。
 export async function runResumeCommand(
   line: string,
   target: Target,
   onFailed?: (reason: string) => void,
-  /** `signal` は手元の探索（一覧・進行中かの確認・接続）を取り消す口。応答を描き始めたら `toTurn` で Ctrl+C の向きが変わる（#3818）。 */
   hooks?: ReplHooks & { signal?: AbortSignal },
-  /** 直前の `/conversations` が振った番号→id。省略したら番号は引けない（数字は一覧にないものとして断る）。 */
   listed?: Listed,
 ): Promise<string | null> {
   const fail = (error: unknown): null => {
-    // Ctrl+C で取り消した探索は失敗ではない（取り消した旨は Ctrl+C の側が言う）。
     if (hooks?.signal?.aborted === true) return null;
     const reason = describeCliFailure(error);
     stdout.write(`エラー: ${reason}\n`);
     onFailed?.(reason);
     return null;
   };
-  // 他のコマンド（`/conversation` 等）と同じく「番号|id」を1つだけ受ける。番号は直前の `/conversations` の並び。
   const [reference, ...extra] = line
     .split(/\s+/)
     .slice(1)
@@ -1385,7 +1206,7 @@ export async function runResumeCommand(
     return null;
   }
   const abort = new AbortController();
-  // 対象は再生の `open` で決める（探した時点の `pending` は、その後に変わりうる）。それまでは会話も未確定扱い。
+  // 対象は再生の `open` で決める: 探した時点の `pending` は、その後に変わりうる。
   const turn: TurnHandle = {
     clientMessageId: null,
     conversationId: null,
@@ -1405,7 +1226,6 @@ export async function runResumeCommand(
   } catch (error) {
     return fail(error);
   }
-  // 例外で切れたら `renderChatEvents` の catch が、描きかけの行を書き切ったうえで切断の文を1つだけ言う。
   return renderChatEvents(target, readSSE(body), found, onFailed, true, hooks, turn);
 }
 
@@ -1495,135 +1315,52 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
 /quit                終了
 `;
 
-/**
- * 直前に一覧したものの id を、番号で引けるように覚えておく置き場。
- *
- * **承認待ち・台帳・会話・マネージャー・待ちで別々に持つ。** 1本にまとめると
- * `/approvals` の直後の `/done 1` が承認待ちの id を閉じに行く（どれも「番号で
- * 指す一覧」なので、混ざったことに人間が気づく手がかりが無い）。会話・マネー
- * ジャー・待ちを足すときも既存のフィールドへ相乗りさせず、独立したフィールド
- * にしてある。
- *
- * **`managers` と `waiting` は別物である（#336）。** 答える相手は「マネージャー」
- * ではなく「その中の1件の確認」なので、番号は待ちの側（`waiting`）に要る。
- * `/managers` の直後に `/reply 1` を打ったとき、マネージャーの id が requestId
- * として使われてはいけない — 1本にまとめていたら、それが起きる。
- */
+// 承認待ち・台帳・会話・マネージャー・待ちは別々に持つ: 1本にまとめると `/approvals` の直後の `/done 1` が
+// 承認待ちの id を閉じに行く。`managers` と `waiting` も別物で、`/managers` の直後の `/reply 1` で
+// マネージャーの id が requestId として使われてはいけない。
 export interface Listed {
   approvals: string[];
   commitments: string[];
   conversations: string[];
-  /** `/managers` の並び。`/manager` `/stop` `/msg` `/managers after=` が引く。 */
   managers: string[];
-  /**
-   * `/managers` の直前の一覧に出た行の錨（`managerId` → `startedAt`）。
-   * `/managers after=<番号|id>` が引く（issue #670）。
-   *
-   * **`managers` へ相乗りさせず独立に持つ**（この interface の doc の規律）。
-   * あちらは `string[]`（`resolveListedId` が番号を引くための並び）で、
-   * ここは順序を要らない引き当てである——`GET /managers` の錨は
-   * `(afterId, afterStartedAt)` の**組**なので、`managerId` だけでは続きの
-   * 起点が決まらない（`apps/daemon/src/app.ts` の `ManagerPagingKey`）。
-   *
-   * **`startedAt` を人間に打たせない**ためにここが在る。ミリ秒精度の ISO を
-   * 手で写させる形は、CLI にだけ「打ち間違えると 400」という段差を作る。
-   */
+  // `startedAt` を人間に打たせない: ミリ秒精度の ISO を手で写させると、CLI にだけ「打ち間違えると 400」という段差ができる。
+  // `GET /managers` の錨は `(afterId, afterStartedAt)` の組なので、`managerId` だけでは続きの起点が決まらない。
   managerAnchors: Record<string, string>;
-  /** `/waiting` の並び。`/reply` `/allow` `/deny` が引く。 */
   waiting: { managerId: string; requestId: string }[];
-  /**
-   * 直前の `/conversation` が振った、**人間の発言だけ**の番号→id。`/edit` が引く。
-   *
-   * **クローンの応答（outbound）には番号を振らない。** 編集できるのは人間の
-   * 発言だけという制約(C)を、番号選択の時点で自然に満たすためである
-   * （サーバ側の 400 はこれをすり抜けた——番号ではなく id を直に打った——
-   * 場合の保険であって、ここが主な防御線である）。
-   *
-   * **既に別の編集で畳まれた発言にも番号を振らない。** 畳まれた発言を再度
-   * 指すと、サーバは「既に別の編集に置き換えられている」で 400 を返す
-   * （`computeSupersededIds`）。既定の `/conversation` は畳まれた発言を表示
-   * しないので、これは自然に満たされる。
-   */
+  // クローンの応答（outbound）には番号を振らない: 編集できるのは人間の発言だけで、その制約を番号選択の時点で満たす。
+  // 既に別の編集で畳まれた発言にも振らない（指すと、サーバが 400 を返す）。
   messages: string[];
-  /**
-   * 上の番号が属する会話 id（`/edit` が `POST /chat` の `conversationId` に
-   * 添える）。**`/edit` の対象は「いま話している会話」ではなく「直前に
-   * `/conversation` で開いた会話」である**——編集は会話内のどの過去の人間の
-   * 発言も対象にできる（直近に限らない）ので、この2つは別物として持つ。
-   * まだ何も見ていなければ `null`。
-   */
+  // `/edit` の対象は、いま話している会話ではなく直前に `/conversation` で開いた会話。
   messagesConversationId: string | null;
-  /**
-   * 上の `messages` の各発言に付いていた添付の id（発言 id → 添付 id の並び。添付の無い発言は持たない）。
-   * `/edit` が新しい版の `POST /chat` の `attachments` に付けて送る（Web の編集と同じ。#3399 決定 a・#3630）。
-   * 出所は Web の `line.attachments` と同じ、`/conversation` が読んだ発言の `attachments`。
-   * 編集の開始（`/edit <番号|id>`）は、これを添えかけへ「上げ済み」として載せる（#3642）ので、名前・型・大きさも持つ。
-   */
   messageAttachments: Record<
     string,
     { id: string; name: string; mediaType: string; size: number }[]
   >;
-  /** 上の `messages` の各発言の本文（発言 id → 本文）。編集の開始で元の本文を見せる（#3642）。 */
   messageTexts: Record<string, string>;
 }
 
-/**
- * **ここの `!response.ok` は例外を投げない（`stdout.write` して `'ok'` を返す）。**
- * #1641 / PR #1642 で変更系コマンド（`reset.ts` / `access.ts` / `token.ts` /
- * `memory.ts` / `practice.ts` 等）は HTTP の失敗で例外を投げる形に揃えたが、
- * ここは意図して揃えていない——1つの操作の失敗で、無関係な会話の続きまで失わせない
- * ためである（オーナー了承済み）。
- *
- * **了承の範囲は「HTTP の失敗で例外を投げない」まで。** 通信そのものの例外（`$get()`
- * の fetch 失敗・SSE の切断）で REPL ごと落ちてよい、までは含まない（#3218）。以前は
- * `chatCommand` の読み取りループに `try/catch` が無く、ここの注釈が「呼び出し側が
- * 受けない」ことを理由にしていたが、いまはループが例外を受けて 1 行言って入力に戻る
- * （添えかけと会話 id は保つ）。
- */
+// `!response.ok` で例外を投げず `stdout.write` して `'ok'` を返す: 1つの操作の失敗で、無関係な会話の続きまで失わせない。
+// 通信そのものの例外は呼び手のループが受ける。
 export async function runSlashCommand(
   line: string,
   client: ReturnType<typeof createClient>,
   listed: Listed,
-  /**
-   * いまの会話 id。台帳へ積むときの「どこから来たか」に使う（`Commitment.source`）。
-   * まだ一言も話していなければ `null` で、そのときは source を付けない。
-   */
   conversationId: string | null = null,
-  /**
-   * `/edit` が `POST /chat` を叩くのに要る（SSE は hono/client ではなく生の
-   * fetch で受けるため。`sendMessage` と同じ理由）。**この関数の他のどの
-   * 分岐にも要らない**——ここにしか無い実行時の口（`target.baseUrl` /
-   * `target.headers`）を、この1コマンドのためだけに引き回している。
-   * 呼び出し元（`chatCommand`）は常に渡すが、テストの大半は `/edit` を
-   * 試さないので省略できるよう任意にしてある。
-   */
   target?: Target,
-  /**
-   * 戻せない操作（`/stop`・`/archive remove`）の確認（Issue #3141）。進めてよければ `true`。
-   * 呼び出し元（`chatCommand`）は REPL の readline で聞く。**省略したときは確認できないので
-   * 実行しない**（確認の無いまま消さない）。
-   */
   confirm?: (summary: string) => Promise<boolean>,
-  /** 通信の口を通らない失敗（`/edit` の送信）を呼び手へ知らせる。非対話の入力で止める判断に使う（#3685）。 */
   onFailed?: (reason: string) => void,
-  /** `/edit` の送信が応答を描く間は、Ctrl+C がクローンのターンを止める側へ切り替わる（#3818）。 */
   hooks?: ReplHooks,
-  /** 付随の取得（未読の総数・会話の承認）の口。失敗しても本体の成否に数えない（#3994）。省略したら `client`。 */
   auxClient: ReturnType<typeof createClient> = client,
-  /** 「無い」を正常な結果として文にする取得の口。404 だけ失敗に数えない（#4002）。省略したら `client`。 */
   absentOkClient: ReturnType<typeof createClient> = client,
-  /** `/archive <id>` の口。410（本文を消した）だけ失敗に数えない（#4023）。省略したら `client`。 */
   removedOkClient: ReturnType<typeof createClient> = client,
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
-  // 使い方の誤り: 案内を出し、非対話の入力で止める判断のために失敗として知らせる（#3768）。
   const usageError = (message: string): 'ok' => {
     stdout.write(message);
     onFailed?.(`使い方の誤り（${command ?? ''}）`);
     return 'ok';
   };
 
-  // 参照を省いて `scan=500` のように書くと、キーを id と取り違えてデーモンへ飛ばしてしまう。飛ばす前に断る。
   if (command !== undefined && REFERENCE_FIRST_COMMANDS.has(command)) {
     const first = rest[0];
     if (first !== undefined && isKeyValueToken(first)) {
@@ -1636,7 +1373,6 @@ export async function runSlashCommand(
       stdout.write(HELP);
       return 'ok';
 
-    // --- 日報（人間の普段の接点はほぼこれだけ） -----------------------------
     case '/report': {
       const date = rest[0];
       if (date) {
@@ -1686,13 +1422,6 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    // --- 自律（時間起点と外部イベント） -------------------------------------
-    /**
-     * 引数なしなら一覧、あれば仕込む。
-     *
-     * **人間の側にも仕込む口を置く。** 外せるのに足せないのは不揃いで、
-     * 「クローンに頼めばよい」で済ませると人間の手が API を直に叩くしかなくなる。
-     */
     case '/schedule': {
       if (rest.length >= 3) {
         const [kind] = rest;
@@ -1725,7 +1454,6 @@ export async function runSlashCommand(
         return 'ok';
       }
       const { entries, unreadable = [] } = await response.json();
-      // 読めない行が在るのに「仕込まれていません」とだけ言わない（issue #2343）。
       if (entries.length === 0) {
         stdout.write(
           unreadable.length === 0
@@ -1737,15 +1465,10 @@ export async function runSlashCommand(
         stdout.write(
           `  ${entry.kind}  次: ${entry.nextAt}\n      ${redactBody(entry.description)}\n`,
         );
-        // 継続中の依頼だけが持つもの。何を頼まれたままなのかが人間に見えること
         if (entry.request !== undefined) {
-          // **概要（何を頼まれたままなのか）。** ここが出ていなかったので、
-          // 人間は kind と次の発火時刻しか見えていなかった。
           stdout.write(`      依頼: ${summarizeText(entry.request)}\n`);
         }
-        // **「無い」を黙らせない。** 既定の日報・発意はコードに書かれた既定で、
-        // 仕込まれたレコードではないので**作成という出来事が存在しない**。
-        // 空欄や `—` にすると「取れなかった」と読まれる（探しに行く人が出る）。
+        // 既定の日報・発意は仕込まれたレコードではなく作成という出来事が無い。空欄や `—` にすると「取れなかった」と読まれる。
         stdout.write(
           entry.createdAt === undefined
             ? '      作成・更新: 無し（コードに書かれた既定の仕込みで、仕込まれた記録がありません）\n'
@@ -1760,14 +1483,7 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * 定期ジョブの1件を、依頼を80字で切らずに全文で読む（#4048）。`/schedule` の行の
-     * kind を渡す。**1件を引く口は daemon に無い**（`GET /schedule` は全件で、依頼を
-     * 切らずに載せる）ので、一覧から kind で選ぶ。`/schedule <kind> …`（仕込む）に
-     * 相乗りせず別の名前にしたのは、引数1個の `/schedule <kind>` が今は使い方の誤りで、
-     * 仕込む口の引数の数で意味が変わるのを避けるため（日誌の `/journal-show` と同じ）。
-     * 伏せ字は一覧と同じ `redactBody` を、どの欄にも掛ける。
-     */
+    // `/schedule <kind>` に相乗りしない: 仕込む口の引数の数で意味が変わるのを避ける。
     case '/schedule-show': {
       const kind = rest[0];
       if (kind === undefined || rest.length > 1) {
@@ -1781,7 +1497,6 @@ export async function runSlashCommand(
       const { entries, unreadable = [] } = await response.json();
       const found = entries.find((entry) => entry.kind === kind);
       if (found === undefined) {
-        // 読めない行は「無い」と言わない（#2343）。kind が取れていれば名指しで断る。
         stdout.write(
           unreadable.some((row) => row.kind === kind)
             ? `${kind} は在るが読めない形で入っている（消されたのではない。/schedule の末尾の案内を見てください）\n`
@@ -1837,8 +1552,7 @@ export async function runSlashCommand(
       if (!source) {
         return usageError('使い方: /event <source> [本文]（本文が JSON ならその値として届ける）\n');
       }
-      // 本文は空白を畳まない生の残りを使う（`rest` は空白で割ってあり、JSON の文字列や
-      // 本文の中の連続した空白を壊す）。解釈は Web の予定の画面と同じ（issue #3146）。
+      // 空白を畳まない生の残りを使う: `rest` は空白で割ってあり、JSON の文字列や本文の連続した空白を壊す。
       const body = line.replace(/^\S+\s+\S+\s*/, '').trimEnd();
       const response = await client.events.$post({
         json: { source, payload: parseEventPayload(body) },
@@ -1868,12 +1582,6 @@ export async function runSlashCommand(
         }
         const { documents } = await response.json();
         if (documents.length === 0) stdout.write('（記憶はまだ空）\n');
-        // **表記は `alteroid memory list`（`memory.ts`）に寄せる。** 同じ
-        // `GET /memory` を見ながら、ここは slug と title しか出していなかった
-        // （#235 はトップレベルの `alteroid memory list` だけを直し、この
-        // `chat` の中の重複実装を残していた——同じ記憶を同じセッションの中で
-        // 違う答えで出す形になっていた）。新しい言い方を発明せず、
-        // `memory.ts` の `formatCreatedAt` / `freshnessMarker` をそのまま使う。
         for (const doc of documents) {
           const marker = freshnessMarker(doc.descriptionFreshness);
           const desc = doc.description === undefined ? '' : ` — ${marker}${doc.description}`;
@@ -1902,15 +1610,6 @@ export async function runSlashCommand(
     }
 
     case '/journal': {
-      // **`q=` は行末までを1つの語として取る**（`parseJournalSearchTokens`）。
-      // 語で探す口に空白が入らないのは実用にならない — `/usage` /
-      // `/conversations` の `key=value` の慣習は保ったまま、値の側だけ
-      // 行末まで伸ばす。
-      //
-      // **知らない `type=` は 400 を待たずにその場で断る**（`/managers` の
-      // `status=` / `/usage` の `layer=`・`site=` と同じ慣習）。デーモンへ
-      // 問い合わせる前に `parseJournalSearchTokens` が検査するので、
-      // `parsed.ok` を先に見る。
       const parsed = parseJournalSearchTokens(rest);
       if (!parsed.ok) return usageError(`${parsed.message}\n`);
       const { limit: limitToken, q, type } = parsed;
@@ -1930,14 +1629,8 @@ export async function runSlashCommand(
       }
       const { entries } = await response.json();
       if (entries.length === 0) {
-        // **0件のとき、探す対象に入っていない欄が在ることまで言う**
-        // （`journal_read` の同じ場面と同じ扱い）。黙ると「日誌にその語は
-        // 無い」と読めるが、実際には tool_use の input に書かれているかも
-        // しれない（AGENTS.md「静かに失敗する道具」）。
-        //
-        // **`type=` で絞った上での0件を「日誌はまだ空」と言わない。** 絞り込み
-        // が効いた結果の0件を全体の空と混ぜると、絞りを外せば見えるはずの
-        // 日誌まで「無い」と読める（嘘の観測）。
+        // 探す対象に入っていない欄が在ることまで言う: 黙ると「日誌にその語は無い」と読めるが、tool_use の input に書かれているかもしれない。
+        // `type=` で絞った0件を「日誌はまだ空」と言わない: 絞りを外せば見える日誌まで「無い」と読める。
         if (q === undefined && type === undefined) {
           stdout.write('（日誌はまだ空）\n');
         } else if (q === undefined) {
@@ -1955,22 +1648,13 @@ export async function runSlashCommand(
       }
       for (const entry of entries) {
         stdout.write(`  ${entry.at}  [${entry.type}] ${summarize(entry)}\n`);
-        // **id を出す。** 全 variant が持っているのに、ここでは1度も出て
-        // いなかった。日誌の1件を後から名指しで辿る手がかりが無かった。
         stdout.write(`      id: ${entry.id}\n`);
       }
       noteIfAtLimit(entries.length, limit, '日誌');
       return 'ok';
     }
 
-    /**
-     * 日誌の1件を、80字で切らずに全文で読む（#4049）。`/journal` の行の `id:` を渡す。
-     * 一覧に番号は振っていないので、受けるのは id だけである。窓の外の記録も引ける
-     * （`GET /journal/:id`）。伏せ字は一覧と同じ `redactBody` を、どの欄にも掛ける。
-     *
-     * 404 は指した id の誤りなので、`/conversation` と同じく失敗として数える（`absentOkClient` を使わない）。
-     * 409（在るが読めない行）は「無い」と言わない。
-     */
+    // 404 は指した id の誤りなので失敗として数える（`absentOkClient` を使わない）。409（在るが読めない行）は「無い」と言わない。
     case '/journal-show': {
       const id = rest[0];
       if (id === undefined || rest.length > 1) {
@@ -1997,20 +1681,6 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * 会話の一覧。**`POST /chat` の SSE は流すだけで、後から読み直す口が
-     * chat スラッシュコマンドの側には無かった**（CLI サブコマンドは
-     * `alteroid conversations list` / `show` にある）。器（端末・タブ・アプリ）を
-     * 替えても続きから話せることは PRD「インターフェース」の等価性そのもの。
-     *
-     * **`scanned` を必ず出す。** 日誌から組み立てているので、遡り切れていない
-     * ことがある（黙って打ち切らない — #108 / #109 と同じ理由）。
-     *
-     * **`limit=` / `scan=` で窓を広げられる**（`/usage from=… to=…` と同じ
-     * `key=value` の慣習。`parseUsageFilters` 参照）。既定は変えていない —
-     * 何も指定しなければ従来どおりデーモンの既定（`limit=20` `scan=2000`
-     * 相当）のままで、既定の重さを全員に配ってはいない。
-     */
     case '/conversations': {
       const parsed = parseKeyValueTokens(rest, ['limit', 'scan', 'cursor']);
       if (!parsed.ok) return usageError(`${parsed.message}\n`);
@@ -2029,7 +1699,6 @@ export async function runSlashCommand(
       }
       const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } =
         await response.json();
-      // 未読の総数の1行は `alteroid conversations list` と同じ関数（取れなくても一覧は出す）。
       stdout.write(`${await fetchUnreadTotalLine(auxClient)}\n`);
       listed.conversations.length = 0;
       if (conversations.length === 0) {
@@ -2037,9 +1706,6 @@ export async function runSlashCommand(
       } else {
         conversations.forEach((conversation, index) => {
           listed.conversations.push(conversation.conversationId);
-          // **作成（`startedAt`）を足す。** `conversations.ts` の
-          // `renderConversationsList` と同じ欠落（#214）。同じ `GET /conversations`
-          // を見ながら、こちらの重複実装も `startedAt` を出していなかった。
           stdout.write(
             `  [${index + 1}] ${conversation.conversationId}` +
               `  作成: ${conversation.startedAt}  更新: ${conversation.updatedAt}` +
@@ -2048,26 +1714,14 @@ export async function runSlashCommand(
           stdout.write(`      ${redactBody(conversation.preview)}\n`);
         });
       }
-      // **0件でも scanned を出す。** ここで打ち切ると、0件が「本当に無い」の
-      // か「窓の外に残っている（判定できない）」のかを人間が区別できなくなる
-      // （#108 / #109 が塞いだ「黙って打ち切る」の再導入）。サブコマンド面
-      // （`conversations.ts` の `renderConversationsList`）と同じ形にしてある。
-      //
-      // **打ち切られているかもしれないなら、広げる手の在り処を示す。** chat
-      // 自身も `/conversations scan=<N>` で広げられるが、それでも「これで
-      // 全部」ではない（`scan` を増やしても遡り切ったとは限らない）ので、
-      // 手の在り処自体は常に示す。手を隠すと、人間は「広げる必要があるかも
-      // しれない」ことにすら気づけなくなる。
+      // 0件でも scanned を出す: 0件が「本当に無い」か「窓の外に残っている」かを人間が区別できなくなる。
+      // 広げる手の在り処は常に示す: 隠すと、広げる必要があるかもしれないことにすら気づけない。
       stdout.write(
         `  （人間との往復を新しい方から ${scanned} 件見て集計した。これより古い会話は窓の外に` +
           '残っているかもしれません — 判定できません。さらに見るには ' +
           '`/conversations scan=<N>`（表示件数を増やすには limit=<N>。' +
           'alteroid conversations list --scan / --limit でも同じことができます）\n',
       );
-      // **`reachedStart` / `hiddenByLimit` も出す（#418 の裏返し）。**
-      // `conversations.ts` の `renderConversationsList` と同じ形（`false`
-      // のときだけ、`>0` のときだけ）。サーバとクローンの道具は既に言って
-      // いるので、この重複実装だけが黙っていると端末では気づけなくなる。
       if (!reachedStart) {
         stdout.write(
           `  （人間との往復を ${scanned} 件遡ったが、先頭には届いていない。これより古い会話が` +
@@ -2080,8 +1734,7 @@ export async function runSlashCommand(
             `新しい順に ${conversations.length} 件だけ出した）\n`,
         );
       }
-      // `limit` の上限 200 や `scan` の窓の外は、増やしても出ない。継続点だけが辿る手段
-      // （`renderConversationsList` と同じ判断。#3550 / #3830）。
+      // `limit` の上限 200 や `scan` の窓の外は、増やしても出ない。継続点だけが辿る手段。
       if (nextCursor !== undefined) {
         stdout.write(`  続きを読むには: /conversations cursor=${nextCursor}\n`);
       }
@@ -2104,13 +1757,6 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /conversations の一覧にありません\n`);
         return 'ok';
       }
-      // **`scan=` で窓を広げられる**（`/conversations` と同じ `key=value` の
-      // 慣習）。`limit` はこの経路には無い（1件の中身を読むだけで件数の
-      // 絞り込みが要らない）。
-      //
-      // **`includeSuperseded=true` — チャットの編集で既定ビューから畳まれた
-      // 旧発言・その応答も含めて読む**（制約(A)。既定は含めない——デーモンの
-      // 既定と同じ重さを、指定しなかった呼び出し全部に配らない）。
       const parsedQuery = parseKeyValueTokens(rest.slice(1), ['scan', 'includeSuperseded']);
       if (!parsedQuery.ok) return usageError(`${parsedQuery.message}\n`);
       const rawQuery = parsedQuery.values;
@@ -2130,8 +1776,6 @@ export async function runSlashCommand(
       };
       const response = await client.conversations[':id'].$get({ param: { id }, query });
       if (response.status === 404) {
-        // **遡り切れた場合だけ 404**（デーモン側の約束）。判定できないときは
-        // 200 に空の `messages` と `reachedStart: false` が来る。
         stdout.write(`そんな会話はありません: ${id}\n`);
         return 'ok';
       }
@@ -2142,20 +1786,10 @@ export async function runSlashCommand(
         return 'ok';
       }
       const { messages, scanned, reachedStart, supersededCount } = await response.json();
-      /**
-       * **番号を振り直す。`/edit` がこの並びを引く。**
-       *
-       * 対象は「まだ畳まれていない、人間の発言」だけである——クローンの
-       * 応答は編集できず（制約C）、既に別の編集に置き換えられた発言も
-       * サーバの4つ目の検証で弾かれるので、番号選択の時点でどちらも自然に
-       * 除ける（`--include-superseded` 相当を付けて畳まれた発言を表示した
-       * ときも、その行には番号を振らない）。
-       */
       listed.messages.length = 0;
       listed.messageAttachments = {};
       listed.messageTexts = {};
       listed.messagesConversationId = id;
-      // その会話のターンから積まれた承認を時刻順の位置に1行で出す（#3261）。取れなくても会話は出す。
       const approvalsRead = await fetchConversationApprovals(auxClient, id);
       const timeline = interleaveApprovals(messages, approvalsRead.approvals);
       if (timeline.length === 0) {
@@ -2173,7 +1807,7 @@ export async function runSlashCommand(
           }
           const message = item.message;
           const speaker = message.role === 'inbound' ? '人間' : 'クローン';
-          // 取り下げた発言は配られていないので、編集の番号を振らない（#3990）
+          // 取り下げた発言は配られていないので、編集の番号を振らない。
           const withdrawn = message.delivery === 'withdrawn';
           const editable =
             message.role === 'inbound' && message.supersededBy === undefined && !withdrawn;
@@ -2190,15 +1824,12 @@ export async function runSlashCommand(
             }
           }
           const label = editable ? `[${listed.messages.length}]` : '   ';
-          // **どれが畳まれた版で、どの編集に置き換えられたかを読める形に
-          // する。** `includeSuperseded=true` のときだけ、どちらかが付きうる。
           const edit =
             message.supersededBy !== undefined
               ? `  [畳まれた版 → ${message.supersededBy} に置き換えられた]`
               : message.supersedes !== undefined
                 ? `  [編集後の発言 — ${message.supersedes} を置き換えた]`
                 : '';
-          // 取り下げた発言は本文を畳み、「（取り下げた発言）」と分かる形で出す（普通の吹き出しにしない）
           const body = withdrawn
             ? withdrawnMessageText(redactBody(message.text))
             : redactBody(message.text);
@@ -2216,9 +1847,7 @@ export async function runSlashCommand(
               '残っているかもしれません — /conversation <番号|id> scan=<N>（または ' +
               'alteroid conversations show --scan）で広げられます）\n',
       );
-      // **`includeSuperseded` の値によらず常に出す（0件なら出さない）。**
-      // 制約(A)——出ないと、この会話に編集で畳まれた版が在ることに、人間の
-      // 側の器も気づけなくなる。
+      // `includeSuperseded` の値によらず常に出す: 出ないと、編集で畳まれた版が在ることに気づけない。
       if (supersededCount > 0) {
         stdout.write(
           `  （この会話にはチャットの編集で畳まれた版が ${supersededCount} 件ある。中身を読むには ` +
@@ -2233,28 +1862,9 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * 送信済みの自分（人間）の発言を編集する（issue「チャットの送信済み
-     * メッセージを編集する」）。Web UI のチャット画面の鉛筆アイコンと同じ能力
-     * を CLI にも出す（north_star「入口の等価性」——画面にしかできないことを
-     * 作らない）。
-     *
-     * **番号は直前の `/conversation` が振ったものだけを引く。** `/conversation`
-     * は人間の発言（かつ、まだ畳まれていないもの）にしか番号を振らないので
-     * （`Listed.messages` の doc）、番号で指す限り**クローンの応答を編集対象に
-     * できない**——制約(C)の主な防御線はここである。id を直に打った場合は
-     * この防御を素通りしうるが、そのときはサーバの4種の検証（`apps/daemon/src/app.ts`
-     * の `POST /chat`）が 400 で弾き、その理由（`errorDetail`）をそのまま出す。
-     *
-     * **`conversationId` は「いま話している会話」ではなく「直前に `/conversation`
-     * で開いた会話」を使う。** 編集は会話内のどの過去の人間の発言も対象にでき
-     * （直近に限らない）、その会話は今の対話中の会話と別物でありうるため
-     * （`Listed.messagesConversationId` の doc）。
-     *
-     * **副作用は一切巻き戻さない（制約B）。** ここは `supersedes` を積んだ
-     * `POST /chat` を打つだけで、編集前のターンが起こした記憶・承認待ち・
-     * マネージャー・台帳の行には触れない——巻き戻しのロジックは無い。
-     */
+    // 番号は直前の `/conversation` が振ったものだけを引く: 人間の発言にしか番号が無いので、クローンの応答を編集対象にできない（制約C。
+    // id を直に打った場合はサーバの検証が 400 で弾く）。`conversationId` は、いま話している会話ではなく直前に開いた会話を使う。
+    // 副作用は巻き戻さない（制約B）。
     case '/edit': {
       const [reference] = rest;
       const text = rawTail(line, 2);
@@ -2280,13 +1890,9 @@ export async function runSlashCommand(
         return 'ok';
       }
       if (target === undefined) {
-        // **実運用では常に渡る**（`chatCommand` が渡す）。防御的な分岐——
-        // このコマンドだけが要る実行時の口（`target`）が無い呼び出しに備える。
         stdout.write('編集を送れませんでした（接続先が分かりません）\n');
         return 'ok';
       }
-      // 元の発言に付いていた添付は、外さずに新しい版へ引き継ぐ（上げ直さない。Web と同じ。#3399 決定 a・#3630）。
-      // 期限切れで無くなっていれば、サーバが 400 attachment_missing で断り、sendMessage が理由を出す。
       const carried = (listed.messageAttachments[id] ?? []).map((a) => a.id);
       await sendMessage(target, text, owningConversationId, id, {
         attachments: carried,
@@ -2299,30 +1905,15 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * マネージャーの一覧（issue #670）。
-     *
-     * **台帳（`jobs`）に行を消す口が無い**ので、ここは「その環境で今までに
-     * 起こした委譲の総数」を毎回出す口だった。**直し方は「消す」ではなく
-     * 絞り込みと窓である**——上限で古いものを刈る形は north_star 禁止2 に触れる
-     * （`packages/core/src/manager.ts` の `#retire` の doc が逐語で禁じている）。
-     *
-     * **`status=` / `limit=` / `after=` を1つも渡さなければ、応答は従来と
-     * 1バイト違わない**（あの口の opt-in は生のクエリで判定される）。既定を
-     * 絞らないのは Web と同じ判断で、**到達できない行を作らない**ためである。
-     */
     case '/managers': {
       const parsed = parseManagerFilters(rest);
       if (!parsed.ok) return usageError(`${parsed.message}\n`);
-      // **錨は組で渡す**（`afterId` だけでは 400）。`startedAt` は人間に打たせず
-      // 直前の一覧から引く（`Listed.managerAnchors` の doc）。
       let anchor: { afterId: string; afterStartedAt: string } | undefined;
       if (parsed.after !== undefined) {
         const afterId = resolveListedId(parsed.after, listed.managers);
         const afterStartedAt = afterId === null ? undefined : listed.managerAnchors[afterId];
         if (afterId === null || afterStartedAt === undefined) {
-          // **「直前の一覧に無い」と言う。** id を直に書いても、その行が直前の
-          // 一覧に出ていなければ `startedAt` が手元に無く、錨を組めない。
+          // id を直に書いても、直前の一覧に出ていなければ `startedAt` が手元に無く、錨を組めない。
           stdout.write(
             `[${parsed.after}] は直前の /managers の一覧にありません` +
               '（after= には直前に出た番号か id を指してください）\n',
@@ -2336,56 +1927,28 @@ export async function runSlashCommand(
         query: { ...parsed.query, ...(anchor ?? {}) },
       });
       if (!response.ok) {
-        // **400 の本文をそのまま出す。** この口は3つの理由で断る（知らない
-        // `status` / 錨の片割れ / 指す行が見当たらない）ので、ひとまとめの
-        // 一言に畳むとどれなのかが読めなくなる——次の一手が決まらない。
+        // 400 の本文をそのまま出す: 3つの理由で断るので、一言に畳むとどれなのか読めなくなる。
         stdout.write(`マネージャーの一覧を読めませんでした — ${await errorDetail(response)}\n`);
         return 'ok';
       }
       const { managers, unreadable = [] } = await response.json();
-      // **番号を振る。** `/manager` `/stop` `/msg` がこの並びを引く（#336）。
       listed.managers.length = 0;
       listed.managers.push(...managers.map((entry) => entry.managerId));
-      // **錨も同じ一覧から作り直す**（`after=` が引く）。前の一覧の分を残すと、
-      // いま画面に出ていない行を起点にできてしまい、番号と錨が食い違う。
+      // 錨も同じ一覧から作り直す: 前の分を残すと、いま画面に出ていない行を起点にできてしまい、番号と錨が食い違う。
       for (const key of Object.keys(listed.managerAnchors)) delete listed.managerAnchors[key];
       for (const entry of managers) listed.managerAnchors[entry.managerId] = entry.startedAt;
       stdout.write(`${renderManagerList(managers, parsed.query.status, unreadable)}\n`);
-      // **読めない行は「居ない」と分けて言う**（issue #2345）。0件なら何も足さない。
       const unreadableJobNote = renderUnreadableJobNotice(unreadable);
       if (unreadableJobNote !== '') stdout.write(`${unreadableJobNote}\n`);
-      // **切ったなら黙らない**（`renderManagersWindowNote` の doc）。
       const note = renderManagersWindowNote(managers.length, parsed.query);
       if (note !== null) stdout.write(note);
       return 'ok';
     }
 
-    /**
-     * マネージャーの返事待ち一覧。`/approvals` のマネージャー版（#336）。
-     *
-     * **`/managers` とは別の番号を振る。** 答える相手は「マネージャー」では
-     * なく「その中の1件の確認」で、1本のマネージャーが同時に複数を待つことも
-     * ある（並列に呼ばれた道具はそれぞれ別の確認として降りてくる）。
-     */
     case '/waiting': {
       const response = await client.managers.$get({
-        /**
-         * **ここは窓も絞りも渡さない（issue #670）。意図である。**
-         *
-         * この一覧が数えているのは「マネージャー」ではなく `waiting`（1件の
-         * 確認）で、**件数を決めるのは台帳に積まれた委譲の総数ではなく、いま
-         * 未回答の確認の数である**——`/managers` を膨らませていた「終端した
-         * 委譲も残る」がここには効かない（終端した行の `waiting` は空）。
-         *
-         * **`status=waiting_human` で絞らない。** 絞れば速くなるが、
-         * 「`waiting` が空でない行の `status` は必ず `waiting_human`」を
-         * **確かめていない**——`ask` は両方を立て（`record.job.status =
-         * 'waiting_human'`）、`settled` と `abort()` は両方を畳むが、
-         * `done` / `failed` / `lost` へ落ちる経路が `waiting` を空にしている
-         * かは追っていない。⟹ 絞ると、**人間が答えれば進む確認が黙って
-         * 一覧から消えうる**（north_star 禁止1）。「判定できない」を
-         * 「消してよい」へ倒さない側に置く。
-         */
+        // `status=waiting_human` で絞らない: 「`waiting` が空でない行の `status` は必ず `waiting_human`」を確かめていない。
+        // 絞ると、人間が答えれば進む確認が黙って一覧から消えうる。
         query: {},
       });
       if (!response.ok) {
@@ -2407,18 +1970,6 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * この仕事だけをやめさせる。
-     *
-     * **`/managers` で状態を読めるのに、止める手が CLI に無かった。** 画面
-     * （`apps/web/app/routes/manager-detail.tsx`）にはあり、PRD「インターフェース」は
-     * 3面で同じことができると書いている（起こせることの列挙に「委譲の停止」がある）。
-     * 読めるだけで手が出せない面があると、その面の人間は器ごと落とすしかなくなり、
-     * 関係の無い仕事まで道連れになる（それがこの口の存在理由そのものである）。
-     *
-     * **理由を書ける形にしてある。** 止めた事実は日誌に残るので、そこに「なぜ」が
-     * 無いと、後から見た人間（とクローン）が判断を再構成できない。
-     */
     case '/stop': {
       const reference = rest[0];
       if (!reference) {
@@ -2429,7 +1980,6 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /managers の一覧にありません\n`);
         return 'ok';
       }
-      // 止めた仕事は終わり、走っていた途中の作業は戻らない（TUI の `confirmStop` と同じ線。#3141）。
       if (
         !(await confirmRepl(
           confirm,
@@ -2442,14 +1992,11 @@ export async function runSlashCommand(
       const reason = rawTail(line, 2);
       const response = await client.managers[':id'].$delete({
         param: { id },
-        // 空文字を送らない（`reason` は `min(1)`）。**書かなかったことを空文字で
-        // 埋めると、日誌に「理由：（空）」が残って、書き忘れと区別が付かない。**
+        // 空文字を送らない: 書かなかったことを空文字で埋めると、日誌に「理由：（空）」が残って書き忘れと区別が付かない。
         json: reason === '' ? {} : { reason },
       });
       if (!response.ok) {
-        // 404 だけ「見つからない」と言う。それ以外（400・5xx 等）はサーバの
-        // 理由（`errorDetail`）をそのまま出す — 状態コードだけを見せて
-        // 「打ち間違えた」と誤読させない（issue #2172、`/commit-edit` と同じ形）。
+        // 404 以外はサーバの理由をそのまま出す: 状態コードだけを見せて「打ち間違えた」と誤読させない。
         stdout.write(
           `${
             response.status === 404
@@ -2459,14 +2006,11 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      // **応答をそのまま出す。** 「止めた」と言い換えると、器の側が別の結果
-      // （既に終わっていた等）を返しても同じ顔になる。
       reportOutcome(await response.json(), STOPPED_OUTCOMES, onFailed);
       return 'ok';
     }
 
     case '/manager': {
-      // 日誌で足りないときに、manager_id からそのセッションの生ログへ降りる
       const reference = rest[0];
       if (!reference) {
         return usageError('使い方: /manager <番号|manager_id>\n');
@@ -2494,15 +2038,7 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * 追加指示。**`requestId` も `decision` も付けない。**
-     *
-     * これが `/reply` と分かれている理由そのもの — マネージャーが確認を待って
-     * いても、この一言は回答として消費されず、追加指示として流れる
-     * （`packages/core/src/manager.ts` の `send` の doc「宛先を推測しない」）。
-     * ここで `requestId`/`decision` を足すと、待ちが在るときに追加指示が
-     * 回答へ化ける形になり、#313 と同じ穴を CLI 側に開けることになる。
-     */
+    // `requestId` も `decision` も付けない: 足すと、確認の待ちが在るときに追加指示が回答へ化ける。
     case '/msg': {
       const [reference] = rest;
       const text = rawTail(line, 2);
@@ -2519,8 +2055,6 @@ export async function runSlashCommand(
         json: { text },
       });
       if (!response.ok) {
-        // 404 だけ「見つからない」と言う。それ以外はサーバの理由をそのまま出す
-        // （issue #2172、`/commit-edit` と同じ形）。
         stdout.write(
           `${
             response.status === 404
@@ -2534,12 +2068,7 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * マネージャーの質問（`AskUserQuestion`）に、人間が自分の言葉で答える。
-     *
-     * **`requestId` だけを添える。`decision` は付けない** — 質問には
-     * 許可/拒否の意思が無い（`apps/web` の `QuestionWaitingRow` と同じ約束）。
-     */
+    // `decision` は付けない: 質問には許可/拒否の意思が無い。
     case '/reply': {
       const [reference] = rest;
       const text = rawTail(line, 2);
@@ -2556,8 +2085,6 @@ export async function runSlashCommand(
         json: { text, requestId: target.requestId },
       });
       if (!response.ok) {
-        // 404 だけ「見つからない」と言う。それ以外はサーバの理由をそのまま出す
-        // （issue #2172、`/commit-edit` と同じ形）。
         stdout.write(
           `${
             response.status === 404
@@ -2571,25 +2098,9 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * 実行許可の確認に答える（許可／拒否）。
-     *
-     * **引数が1つも無ければ「宛先を書かずに decision だけ送る」形になる**
-     * （#336）。番号|requestId の形は第1引数が常に宛先になるので、この分岐
-     * だけがその形を表す。宛先を CLI 側で当てずに、デーモンの
-     * `#choosePending`（`packages/core/src/manager.ts`）へそのまま委ねる —
-     * ただし `#choosePending` はマネージャー1本の中の曖昧さしか見ない
-     * （HTTP の経路が `managerId` を要求するため）。**どのマネージャーへ送る
-     * かは CLI 側で決めなければならず、そこは絶対に当てない** — 返事待ちの
-     * マネージャーが2本以上あれば、どちらへも送らずに候補を出す。1本だけなら
-     * その1本へ decision だけを渡し、複数の確認を待っていた場合はデーモンが
-     * requestId の一覧を添えて断ってくる（その応答をそのまま出す）。
-     *
-     * **理由（本文）は省略できる。** 未指定なら Web UI の固定文言
-     * （`apps/web/app/routes/manager-detail.tsx` の `PermissionWaitingRow`）に
-     * 揃える。理由を必須にすると、API が要求していない制約を CLI 側で足す
-     * ことになる（north_star 禁止2）。
-     */
+    // 引数が無ければ宛先を書かずに decision だけ送る。どのマネージャーへ送るかは CLI 側で決め、当てない:
+    // 返事待ちが2本以上あれば、どちらへも送らずに候補を出す。
+    // 理由は省略できる: 必須にすると、API が要求していない制約を CLI 側で足すことになる。
     case '/allow':
     case '/deny': {
       const decision: 'allow' | 'deny' = command === '/allow' ? 'allow' : 'deny';
@@ -2606,8 +2117,6 @@ export async function runSlashCommand(
           json: { text: defaultText, decision },
         });
         if (!response.ok) {
-          // 404 だけ「見つからない」と言う。それ以外はサーバの理由をそのまま出す
-          // （issue #2172、`/commit-edit` と同じ形）。
           stdout.write(
             `${
               response.status === 404
@@ -2637,8 +2146,6 @@ export async function runSlashCommand(
         },
       });
       if (!response.ok) {
-        // 404 だけ「見つからない」と言う。それ以外はサーバの理由をそのまま出す
-        // （issue #2172、`/commit-edit` と同じ形）。
         stdout.write(
           `${
             response.status === 404
@@ -2653,11 +2160,8 @@ export async function runSlashCommand(
     }
 
     case '/archive': {
-      // 可観測性の最下段。日誌で足りないときの最後の拠り所へ、chat から降りられる。
       const sub = rest[0];
 
-      // sessionId ごとの行数・使用量の集計(#698)。⭐ 依頼の動機そのもの
-      // ——「1本が何度積まれているか」は、個々の大きさより先に問題を特定する。
       if (sub === 'sessions') {
         const response = await client.archive.sessions.$get();
         if (!response.ok) {
@@ -2676,15 +2180,6 @@ export async function runSlashCommand(
         return 'ok';
       }
 
-      /**
-       * 本文だけを消す（tombstone。行は残る。#698 で HTTP/クローンの道具に
-       * 入った `remove` を、人間の対話面（CLI）へも出す（#776）。
-       *
-       * **走行中のマネージャーの退避は既定で拒まれる。** `overrideReason` を
-       * 付けずに叩いて 409 が返ったら、サーバの断り文言をそのまま出し
-       * （`/done` 等と同じ「応答をそのまま出す」約束）、理由を付けて打ち直す
-       * 形を案内する——黙って失敗させない。
-       */
       if (sub === 'remove') {
         const removeId = rest[1];
         if (!removeId) {
@@ -2693,7 +2188,6 @@ export async function runSlashCommand(
         if (isKeyValueToken(removeId)) {
           return usageError(keyValueIdMessage('/archive remove', removeId));
         }
-        // 本文は消すと戻らない（行と大きさだけが残る）。確認は叩く前に取る（#3141）。
         if (
           !(await confirmRepl(
             confirm,
@@ -2706,8 +2200,6 @@ export async function runSlashCommand(
         const reason = rawTail(line, 3);
         const response = await client.archive[':id'].$delete({
           param: { id: removeId },
-          // 空文字を送らない（/stop と同じ約束——書かなかったことと空文字を
-          // 区別する）。
           query: reason === '' ? {} : { overrideReason: reason },
         });
         if (response.status === 404) {
@@ -2722,8 +2214,6 @@ export async function runSlashCommand(
           return 'ok';
         }
         if (!response.ok) {
-          // 404・409 以外（400・5xx 等）はサーバの理由（`errorDetail`）をそのまま出す
-          // （issue #2172 / PR #2175 と同じ形）。状態コードだけでは何が悪いか分からない。
           stdout.write(`${await errorDetail(response)}\n`);
           return 'ok';
         }
@@ -2776,17 +2266,11 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * 溜まった保留を人間がまとめて片付けるための一覧。番号を振るのは、
-     * 人間が席に戻ったときに UUID を写す作業をさせないためである。
-     */
     case '/approvals': {
-      // **回答済みの見方（#3239。Web の「回答済み」ページと同じ口）。** 既存の `/approvals` と
-      // `/approvals all` の挙動は変えない。**番号は振らず `listed.approvals` も触らない**——
-      // `/answer <番号>` が指す「未回答の一覧」を、答えようのない行で書き換えないため。
+      // 番号は振らず `listed.approvals` も触らない: `/answer <番号>` が指す未回答の一覧を、答えようのない行で書き換えないため。
       if (rest[0] === 'answered') {
         const args = rest.slice(1);
-        // `limt=3` を日付として読むと、デーモンの日付の形の 400 が「キーの綴り違い」を隠す（#3996）。
+        // `limt=3` を日付として読むと、デーモンの日付の形の 400 が「キーの綴り違い」を隠す。
         const dayArg = args.find((arg) => !arg.includes('='));
         if (dayArg !== undefined) {
           if (args.length > 1) {
@@ -2794,7 +2278,6 @@ export async function runSlashCommand(
           }
           const response = await client.approvals.$get({ query: { answeredOn: dayArg } });
           if (!response.ok) {
-            // 日付の形が不正なら 400。デーモンの文言（`answeredOn は YYYY-MM-DD で指定する`）をそのまま出す。
             stdout.write(
               `${await withDetail(`${dayArg} に決着した承認を読めませんでした`, response)}\n`,
             );
@@ -2848,30 +2331,16 @@ export async function runSlashCommand(
         noteIfAtLimit(dates.length, limit, '日');
         return 'ok';
       }
-      // **`all` で回答済み・取り下げ済みも含める（#963。`/commitments all` と
-      // 同じ約束）。** 既定は未回答かつ未取り下げのみ——番号を振って
-      // `/answer` に使わせる一覧を、答えようがない行で埋めないため。
       const includeSettled = rest[0] === 'all';
-      // `/approvals foo` が未回答の一覧を返すと、`all` のつもりの綴り違いが「回答済みは無い」と読める（#3996）。
+      // `/approvals foo` が未回答の一覧を返すと、`all` のつもりの綴り違いが「回答済みは無い」と読める。
       const surplus = rest.slice(includeSettled ? 1 : 0).find((token) => token.length > 0);
       if (surplus !== undefined) {
         return usageError(
           `使わない語です: ${surplus}（使えるのは /approvals、/approvals all、/approvals answered …）\n`,
         );
       }
-      // **`order` を明示して呼ぶ。窓（`limit` / `cursor`）は作らない。**
-      // 直しているのは並びの不安定さであって、件数の可視化ではない（ここは全件を
-      // 受け取っているので、応答へ載る `total` は受け取った配列の長さと必ず一致する
-      // 冗長な値である。**だから出さない**）。
-      //
-      // どれも渡さない呼びはストアの生の並びがそのまま返り、その並びは実装ごとに
-      // 違う — `storage-fs` / `testing.ts` は挿入順（`putApproval` が既存の id を
-      // 末尾へ動かす）、`storage-pg` は `createdAt` の昇順。⟹ **どの永続化層で
-      // 動いているかで並びが変わっていた。** `order` を明示するとデーモンが
-      // `(createdAt, id)` の昇順へ揃えるので、実装によらず同じ順になる。
-      //
-      // **ここで番号を振って `/approve <番号>` に使わせている以上、並びが動くのは
-      // そのまま誤爆の経路である**（人間が見た番号と、次に打つ番号がずれる）。
+      // `order` を明示する: 渡さないとストアの生の並びが返り、永続化層ごとに並びが変わる。
+      // 番号を振って `/answer` に使わせる以上、並びが動くと人間が見た番号と次に打つ番号がずれて誤爆する。
       const response = await client.approvals.$get({
         query: { order: 'asc', ...(includeSettled ? { pending: 'false' as const } : {}) },
       });
@@ -2882,7 +2351,6 @@ export async function runSlashCommand(
       const { approvals, unreadable = [] } = await response.json();
       listed.approvals.length = 0;
       if (approvals.length === 0) {
-        // 読めない行が在るのに「ありません」とだけ言わない（issue #2298）。
         stdout.write(
           unreadable.length === 0
             ? '（承認待ちはありません）\n'
@@ -2894,12 +2362,7 @@ export async function runSlashCommand(
       }
       approvals.forEach((approval, index) => {
         listed.approvals.push(approval.id);
-        // **札は質問の1行目。** 全文をそのまま先頭行へ出していたので、改行を
-        // 含む質問では `[1] ` の行が途中で折れて、番号と質問の対応が崩れていた
-        // （クローン側は #215 で1行目を札にしてある）。
-        //
-        // **残りの行は落とさない。** CLI は人間へ返す口なので、切れば能力を削る
-        // （north_star 禁止1）。札の下へそのまま続ける。
+        // 札は質問の1行目: 全文を先頭行へ出すと、改行を含む質問で `[1] ` の行が折れて番号と質問の対応が崩れる。残りの行は落とさず札の下へ続ける。
         const [head, ...restLines] = redactBody(approval.question).split('\n');
         stdout.write(`  [${index + 1}] ${head ?? ''}\n`);
         for (const line of restLines) stdout.write(`      ${line}\n`);
@@ -2909,18 +2372,12 @@ export async function runSlashCommand(
         );
         if (approval.jobId) stdout.write(`      マネージャー: ${approval.jobId}\n`);
         if (approval.context) stdout.write(`      背景: ${summarizeText(approval.context)}\n`);
-        // **設問は件数だけ（一覧は短く。issue #2525）。** 選択肢・推奨・id は `/approval` で読む。
         if (approval.questions !== undefined && approval.questions.length > 0) {
           stdout.write(
             `      ${summarizeQuestions(approval.questions)}` +
               `（/approval ${index + 1} で選択肢を読める）\n`,
           );
         }
-        // **取り下げ済み・回答済みの状態を出す（#963）。** `/approvals all` で
-        // 初めて視界に入る2状態——`approval_withdraw` はクローンが起こす行為
-        // なので人間に取り下げボタンは無いが、取り下げられた事実と理由は
-        // CLI からも読めること（issue #963 §5「少なくとも…読めることは要る」
-        // をこの口にも揃える）。
         if (approval.withdrawnAt) {
           stdout.write(`      状態: 取り下げ済み（${approval.withdrawnAt}）\n`);
           stdout.write(
@@ -2929,28 +2386,12 @@ export async function runSlashCommand(
         } else if (approval.answeredAt) {
           stdout.write(`      状態: 回答済み（${approval.answeredAt}）\n`);
           if (approval.answer) stdout.write(`      回答: ${redactBody(approval.answer)}\n`);
-          // **回答経路（Issue #1479）。** 記録が無い（古い経路で答えられた）行では
-          // 出さない——「わからない」を「operator ではない」に化けさせない。
+          // 記録が無い行では出さない: 「わからない」を「operator ではない」に化けさせない。
           if (approval.answeredVia) {
             stdout.write(`      回答経路: ${describeAnsweredVia(approval.answeredVia)}\n`);
           }
         }
-        // **この確認が上がった会話を辿れるようにする（issue #877）。** Web の
-        // 承認画面（`apps/web/app/routes/approvals.tsx` の `ConversationPanel`）
-        // は `approval.conversationId` から会話を復元して出すが、CLI はここが
-        // 空で、`/approvals` を見ても`ask_human` の問いがどの会話から出たのか
-        // 辿る手がかりが無かった。**`GET /approvals` は元から
-        // `conversationId` を返している**（#773／`pendingApprovalSchema`）ので、
-        // 読み側だけで揃う。
-        //
-        // **会話の中身はここでは出さない。** 一覧に本文を全文で載せると件数で
-        // 溢れる（north_star 禁止1、地雷表「エージェントへ返す一覧に本文を
-        // 全文で載せる」）うえ、承認1件ごとに会話を1本取りに行く形は承認が
-        // 溜まるほどリクエストが線形に増える（同じ issue が範囲外として
-        // 挙げている懸念そのもの）。CLI には既に会話の中身を読む専用コマンド
-        // （`/conversation <番号|id>`。id は生の文字列も直接渡せる——
-        // `resolveListedId` 参照）があるので、ここでは id を出して案内するだけ
-        // にする。
+        // 会話の中身は出さない: 一覧に全文を載せると溢れ、承認1件ごとに会話を取りに行くと承認が溜まるほどリクエストが増える。
         stdout.write(
           approval.conversationId
             ? `      会話: ${approval.conversationId}` +
@@ -2965,14 +2406,6 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * 承認の答えと、その後にクローンが取った行動を対で見る（issue #847 の案B）。
-     *
-     * **デーモンの `GET /approvals/:id/trace` を読み、クローンの `approval_trace` と
-     * 同じ `renderApprovalTrace` で文字にする**——口ごとに出す中身を違えない。
-     * 違うのは切らないことだけ（人間へ返す口なので、抜粋にすれば能力を削る。
-     * north_star 禁止1）。
-     */
     case '/approval-trace': {
       const [reference] = rest;
       if (!reference) {
@@ -3005,11 +2438,6 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * 承認待ち1件の詳細（issue #2525）。`/approvals` は件数だけにして短く保ち、設問と選択肢
-     * （推奨の印・単一か複数か・その他を書けるか・答えるときの id）はここで全部出す。
-     * 回答済み・取り下げ済みの件も開ける（番号は `/approvals` の並び）。
-     */
     case '/approval': {
       const reference = rest[0];
       if (!reference) {
@@ -3020,8 +2448,6 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /approvals の一覧にありません\n`);
         return 'ok';
       }
-      // **id（番号でない参照）は、id で1件引く口（`GET /approvals/:id`）1回で済ませる。**
-      // 番号は `/approvals` の並びから id を引いた後も、従来どおり全件から探す。
       let approval;
       if (/^\d+$/.test(reference)) {
         const response = await client.approvals.$get({
@@ -3035,7 +2461,6 @@ export async function runSlashCommand(
         approval = approvals.find((entry) => entry.id === id);
       } else {
         const response = await client.approvals[':id'].$get({ param: { id } });
-        // 404 だけが「見つからない」。それ以外の失敗（409＝読めない行・5xx）は、読めなかったと言う。
         if (response.status !== 404 && !response.ok) {
           stdout.write(`${await withDetail('承認待ちを読めませんでした', response)}\n`);
           return 'ok';
@@ -3079,14 +2504,9 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /approvals の一覧にありません\n`);
         return 'ok';
       }
-      // **構造化した回答として読むのは、その承認待ちが設問（`questions`）を持つときだけ**
-      // （issue #2583）。`--select` / `--other` の字面が行にあるときだけ、その1件を取ってきて
-      // 確かめる。設問の無い承認待ちには、残り全部を今までどおり1つの自由文として送る
-      // （引用符も解釈しない）。**取れなかったときに黙って自由文へ倒さない** — 設問つきの
-      // 承認待ちへ、構造化のつもりの字面をそのまま自由文として送ってしまうため。
+      // 取れなかったときに黙って自由文へ倒さない: 設問つきの承認待ちへ、構造化のつもりの字面をそのまま自由文として送ってしまう。
       let structured: ReturnType<typeof parseStructuredAnswer> | null = null;
       if (/(^|\s)--(select|other)(=|\s|$)/.test(line)) {
-        // id（番号でない参照）は `GET /approvals/:id` 1回。番号は従来どおり全件から探す。
         let target;
         if (/^\d+$/.test(reference)) {
           const lookup = await client.approvals.$get({
@@ -3102,7 +2522,6 @@ export async function runSlashCommand(
           target = approvals.find((entry) => entry.id === id);
         } else {
           const lookup = await client.approvals[':id'].$get({ param: { id } });
-          // 404 だけが「見つからない」。409（読めない行）・5xx は読めなかったと言う。
           if (lookup.status !== 404 && !lookup.ok) {
             stdout.write(
               `${await withDetail('承認待ちを読めなかったので、回答を送っていません', lookup)}\n`,
@@ -3143,22 +2562,9 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * 溜まった承認待ちにまとめて答える（`POST /approvals/answer`）。
-     *
-     * **`/answer` は変えない。** あれは「番号|id と、残り全部を1つの自由文として
-     * 答える」形で、複数件を1行に混ぜようとすると自由文とどこで区切るかが
-     * 決められない（引用符を要求すると今の使い方を壊す）。だから複数件は
-     * 別コマンドにして、**各件の回答は1語（複数語なら引用符で囲む）** という
-     * 別の約束にする。/answer の自由文はそのまま残る。
-     *
-     * **1件飛ばせる**（対象の番号を書かなければ良い）・**途中でやめられる**
-     * （書いた分だけで Enter を押せば良い）ので、一覧を全部読んで一括で allow
-     * するしかない、という形にはならない。
-     */
+    // `/answer` に相乗りしない: 複数件を1行に混ぜると自由文との区切りが決められない（引用符を要求すると今の使い方を壊す）。
     case '/answers': {
-      // `line` は先頭で `/\s+/` 分割済みだが、それでは引用符の中の空白が
-      // 保てない。引用符を活かすため、コマンド名の後ろの生の文字列から読み直す。
+      // `line` は `/\s+/` 分割済みで引用符の中の空白が保てないので、生の文字列から読み直す。
       const argsText = line.replace(/^\S+\s*/, '');
       const tokens = tokenizeQuoted(argsText);
       const pairs = parseAnswerPairs(tokens);
@@ -3191,8 +2597,6 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      // **成功件数だけを言わない。** 1件が駄目でも残りは進む設計なので、
-      // どの id が通らなかったかを人間が見られること。
       const { results } = await response.json();
       const failures: string[] = [];
       for (const result of results) {
@@ -3204,27 +2608,11 @@ export async function runSlashCommand(
         stdout.write(`  ${failure}\n`);
         failures.push(failure);
       }
-      // 全件を出し終えてから知らせる: 通った件と通らなかった件を人間が見分けられるように
+      // 全件を出し終えてから知らせる: 通った件と通らなかった件を人間が見分けられるように。
       if (failures.length > 0) onFailed?.(failures.join(' / '));
       return 'ok';
     }
 
-    /**
-     * 引き受けたまま終わっていない仕事の台帳（`schema.ts` の `commitmentSchema`）。
-     *
-     * **承認待ちとは別のものである。** あちらは「クローンが人間の答えを待って
-     * 止まっている」で、こちらは「頼まれたことがまだ片付いていない」。止まって
-     * いなくても片付いていない仕事はあるので、片方で他方は代用できない。
-     *
-     * 既定では未了だけを出す。`all` で片付けたものも出すのは、日報の材料に
-     * なるのが「何を片付けたか」の側だからである。
-     *
-     * **⚠️ 「器は行を消さない」は契約であって、fs 版が完全に守れているわけ
-     * ではない（issue #416）。** `CLOSED_HISTORY_LIMIT`（`packages/storage-fs/
-     * src/commitments.ts`）を超えた古い片付き行は物理削除される。削除された
-     * 累計件数は `trimmedClosed` として応答に載るので、`renderCommitments` へ
-     * 渡して人間にも見える形にする。
-     */
     case '/commitments': {
       const includeClosed = rest[0] === 'all';
       const response = await client.commitments.$get({
@@ -3245,15 +2633,6 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * 台帳の1件を、本文・片付けた理由を80字で切らずに全文で読む（#4048）。
-     * `/done`・`/commit-edit` と同じく、`/commitments` の並びの番号か id で引く。
-     *
-     * **1件を引く口は daemon に無い**ので、`GET /commitments?includeClosed=true`
-     * （全件・各行は全文）から id で選ぶ。片付けた行も引ける。番号は直前の一覧の並び
-     * （`all` を付けて一覧した並びも含む）から id へ直してから探す。
-     * 伏せ字は一覧と同じ `redactBody` を、どの欄にも掛ける。
-     */
     case '/commitment': {
       const [reference] = rest;
       if (reference === undefined || rest.length > 1) {
@@ -3272,7 +2651,6 @@ export async function runSlashCommand(
       const { entries, unreadable, trimmedClosed } = await response.json();
       const found = entries.find((entry) => entry.id === id);
       if (found === undefined) {
-        // 読めない行・保持上限で消えた行を、「無い」の一言に畳まない。
         const notes = [
           unreadable?.some((row) => row.id === id) === true
             ? '在るが読めない形で入っている（消されたのではない）'
@@ -3296,13 +2674,6 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * 人間の手でも積めるようにする（`/schedule` に仕込む口を置いたのと同じ理由）。
-     *
-     * クローンに頼めばよい、で済ませると「人間は台帳を読めるが書けない」という
-     * 不揃いが残る。しかも積みたい場面はたいてい「いま言ったことを忘れられたら
-     * 困る」ときなので、クローンのターンを1回起こさないと書けないのは重い。
-     */
     case '/commit': {
       const body = rawTail(line, 1);
       if (body.length === 0) {
@@ -3311,8 +2682,7 @@ export async function runSlashCommand(
       const response = await client.commitments.$post({
         json: {
           body,
-          // どこから来たかは会話 id で表す（`Commitment.source`）。まだ会話が
-          // 始まっていなければ付けない — 嘘の出どころを埋めない。
+          // 会話が始まっていなければ付けない: 嘘の出どころを埋めない。
           ...(conversationId === null ? {} : { source: conversationId }),
         },
       });
@@ -3320,8 +2690,6 @@ export async function runSlashCommand(
         stdout.write('台帳に積みました（/commitments で確認できます）\n');
         return 'ok';
       }
-      // 404 だけ今の文言を保つ。それ以外（400・5xx 等）はサーバの理由
-      // （`errorDetail`）をそのまま出す（issue #2172、`/commit-edit` と同じ形）。
       stdout.write(
         `${response.status === 404 ? '台帳に積めませんでした' : await errorDetail(response)}\n`,
       );
@@ -3330,9 +2698,7 @@ export async function runSlashCommand(
 
     case '/done': {
       const [reference] = rest;
-      // **理由は必須**（Web の `commitments.tsx` の `reason.trim() === ''` と同じ。
-      // issue #3143）。閉じた理由は人間が後から読んで否定する材料なので、
-      // 書かれていないまま「閉じた」事実だけを残さない。送る前に断る。
+      // 理由は必須: 書かれていないまま「閉じた」事実だけを残さない。
       const reason = rawTail(line, 2);
       if (!reference || reason.length === 0) {
         return usageError(
@@ -3353,8 +2719,7 @@ export async function runSlashCommand(
         stdout.write('片付いたことを記録しました\n');
         return 'ok';
       }
-      // **失敗の理由を1つに畳まない。** 「既に片付いている」と「そんな id は無い」は
-      // 次の一手が違う（前者は何もしなくてよく、後者は一覧を取り直す必要がある）。
+      // 失敗の理由を1つに畳まない: 「既に片付いている」と「そんな id は無い」は次の一手が違う。
       stdout.write(
         `${
           response.status === 409
@@ -3367,23 +2732,8 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    /**
-     * 台帳の本文を後から直す（#1058。`PATCH /commitments/:id`）。
-     *
-     * **⚠️ `/edit` に相乗りさせていない。** あれは**自分のチャット発言**の編集で、
-     * 引く番号の置き場が違う（`listed.conversation` vs `listed.commitments`）。
-     * この repo は番号の置き場を面ごとに分けてあり、混ぜると
-     * 「`/commitments` の直後の `/edit 1`」が会話の発言を指す。
-     *
-     * ## ⛔ 直せる行の条件をここへ写さないこと
-     *
-     * 断るのはサーバで、403 の本文が**その行の `origin` を名指しして理由と出口まで
-     * 書く**（`apps/daemon/src/app.ts` の `PATCH /commitments/:id` が「ここが
-     * 『なぜ押せないか』の唯一の持ち主である」と逐語で言っている）。**Web UI も
-     * 断りの文面を1文字も持っていない。** ⟹ CLI も持たない —— `errorDetail()` で
-     * サーバの文をそのまま出す。写すと、サーバ側の線が動いた日に CLI だけが
-     * 静かに嘘になる。
-     */
+    // `/edit` に相乗りしない: 番号の置き場が違い、混ぜると `/commitments` の直後の `/edit 1` が会話の発言を指す。
+    // 直せる行の条件をここへ写さない: 断るのはサーバで、写すとサーバ側の線が動いた日に CLI だけが静かに嘘になる。
     case '/commit-edit': {
       const [reference] = rest;
       const body = rawTail(line, 2);
@@ -3405,17 +2755,10 @@ export async function runSlashCommand(
         stdout.write('本文を直しました（直す前の本文は日誌に逐語で残っています）\n');
         return 'ok';
       }
-      // **サーバの文をそのまま出す**（上の doc）。状態コードで言い換えない。
       stdout.write(`${await errorDetail(response)}\n`);
       return 'ok';
     }
 
-    /**
-     * いくら使ったか。**人間が見られるものは、クローンが `usage_read` で見て
-     * いるのと同じもの**（PRD 可観測性・north_star 禁止1）。経路は `GET /usage`
-     * の1本だけで、表示は `usage.ts` の `renderUsage` に寄せてある
-     * （CLI 本体の `alteroid usage` と表示を揃えるため）。
-     */
     case '/usage': {
       const parsed = parseUsageFilters(rest);
       if (!parsed.ok) return usageError(`${parsed.message}\n`);
@@ -3427,9 +2770,6 @@ export async function runSlashCommand(
         return 'ok';
       }
       const aggregate = await response.json();
-      // issue #2155: `to` が `from` より前だと常に0件になり、「その範囲には
-      // 記録が無い。」だけでは「期間の指定が逆」と区別できない
-      // （`usage.ts` の `alteroid usage` と同じ穴・同じ注記）。
       const dateOrderNotice = describeUsageDateOrder(parsed.filters.from, parsed.filters.to);
       if (dateOrderNotice !== null) {
         stdout.write(`${dateOrderNotice}\n`);
@@ -3445,26 +2785,8 @@ export async function runSlashCommand(
   }
 }
 
-/**
- * 日報1件ぶんの表示。
- *
- * **日報の行は、日報が書けなかった印であることがある**（`unavailable`。
- * `packages/core/src/schema.ts` の doc が正本）。**その本文を素で出さないこと** —
- * 実際に起きた壊れ方は、日報の本文が丸ごと
- * `You've hit your org's monthly spend limit …` になっていた、というものである。
- * 見出しを `── <日付> の日報 ──` のまま出すと、人間はエラー文を「クローンが書いた
- * その日のまとめ」として読む（＝直した穴が人間の面で開き直る）。
- *
- * **理由は言い換えずに出す。** SDK の文言のまま置いてあるので、人間がそれで検索
- * できる（`usage-limits.ts` の「言い換えないこと」と同じ約束）。
- *
- * **次にどこを見ればよいかまで書く。** 「作れなかった」で終わると、その日の記録が
- * 消えたと読める。実際には日誌には全部残っているので、降りる先を名指しする
- * （PRD「可観測性」の一本道）。
- *
- * 表示を関数に出して export してあるのは `renderManagerList` / `renderUsage` と
- * 同じ理由 — 何を出しているかを端末なしで確かめられるようにするためである。
- */
+// `unavailable` の本文を素で出さない: エラー文を「クローンが書いたその日のまとめ」として読んでしまう。
+// 理由は言い換えずに出す: SDK の文言のまま検索できる。次に見る場所まで書く: 「作れなかった」だけだと記録が消えたと読める。
 export function renderReport(report: {
   date: string;
   body: string;
@@ -3481,19 +2803,8 @@ export function renderReport(report: {
   return `── ${report.date} の日報 ──\n${redactBody(report.body)}\n`;
 }
 
-/**
- * 一覧（`/reports`）の1行。
- *
- * **ここでも本文を素で出さない。** 一覧は日付が並ぶだけの面なので、印の行を
- * 本文の抜粋で出すと「その日は上限に当たった話が日報に書かれている」と読める。
- *
- * **`at`（書かれた時刻）を足す。** `date` だけだと、同じ日に日報が2本あると
- * 見分けが付かない（#214）。`dailyReportEntrySchema` は元から `at` を持ち、
- * Web（`apps/web/app/routes/reports.tsx` の `reportLabel`）は `date` と時刻を
- * 並べて出している——CLI にだけこの区別が無かった。**ISO をそのまま出す**
- * （ロケール依存の整形はしない。この一覧の他の欄——`作成`/`更新`——もすべて
- * 生の ISO で、ここだけ変えると読み方が揃わなくなる）。
- */
+// 印の行を本文の抜粋で出さない: 「その日は上限に当たった話が日報に書かれている」と読める。
+// `at` を足す: `date` だけだと同じ日に日報が2本あると見分けが付かない。ISO をそのまま出す: 他の欄も生の ISO で、ここだけ変えると揃わない。
 export function renderReportLine(report: {
   date: string;
   at: string;
@@ -3513,108 +2824,39 @@ function writeReport(report: { date: string; body: string; unavailable?: string 
   stdout.write(renderReport(report));
 }
 
-/**
- * `/reports` `/journal` が「切ったなら切ったと言う」ための共通の断り書き
- * （Issue #426 の G3）。**窓の大きさ（`/reports` の既定14件・`/journal` の
- * 既定20件）はここでは変えない** — 決め方が未決だと Issue 本文が書いている
- * ので、決まっていない基準で動かすより「切ったことと定量を言う」ほうを
- * 先に片付ける。
- *
- * **`GET /reports` `GET /journal` はどちらも総件数を返さない**
- * （`apps/daemon/src/app.ts` の `describeRoute`、逐語: 「封筒は持たない ——
- * 続きが在るかは `limit` 件ちょうど返ったかで判る」。
- * `grep -Fn -- 'ちょうど返ったかで判る' apps/daemon/src/app.ts` で当たる）。
- * だから `excerpt.ts` が課す規律
- * （何件省いたか／全何件か）をそのままの形では守れない —— 正確な省略件数・
- * 全体件数はどちらも言えない。**言えるのは「返った件数が要求した上限と
- * ちょうど一致した」という、この API 自身が定めた唯一の合図だけである。**
- * 黙って切り捨てず、その事実だけを言う（`apps/web` 側の同じ形は
- * `tokens.tsx` の `RotationHistory` / `reports.tsx` の `isReportsWindowFull`）。
- */
+// `GET /reports` `GET /journal` は総件数を返さない（`grep -Fn -- 'ちょうど返ったかで判る' apps/daemon/src/app.ts` で当たる）。
+// 言えるのは「返った件数が要求した上限とちょうど一致した」という、この API 自身が定めた唯一の合図だけ。
 function noteIfAtLimit(count: number, limit: string, label: string): void {
   if (count !== Number(limit)) return;
   stdout.write(`直近 ${limit} 件のみ表示している。これより古い${label}があるかもしれない。\n`);
 }
 
-/** 一覧で拒否を出す道具の種類数（多い分は件数だけ言う）。 */
 const LIST_DENIED_TOOLS = 3;
 
-/**
- * `GET /managers` が返す1本ぶん。**クライアントが実際に受け取る形**から導く
- * （core の `ManagerSummary` ではない — 拒否件数はデーモンの外向きの面でだけ
- * 合流するので、そちらには無い）。
- *
- * **status（`200`）を明示するのは issue #670 で 400 が生えたからである。**
- * あの口は `status` / `limit` / 錨（`afterId` ＋ `afterStartedAt`）を受け取る
- * ようになり、不正なクエリ・見当たらない錨を 400 で断る ⟹ `$get` の返りが
- * 応答の union になり、`InferEndpointType`（`hono@4.13.1` の
- * `dist/types/client/types.d.ts`）の `U extends ClientResponse<infer O, ...>`
- * が union の上では解けなくなった。**200 を名指しすれば元の1本に戻る。**
- *
- * **`/managers` は窓を使う側になった**（issue #670 の続き。`status=` / `limit=` /
- * `after=` を受ける。`parseManagerFilters`）。**`/waiting` は使わない**——理由は
- * そちらの `query: {}` の doc に在る（絞ると答えれば進む確認が消えうる）。
- * **クローンの `manager_list` はいまも窓を持たない**。あちらは並びの向きを
- * 決めることが先なので #662 が持っている。
- */
+// status（`200`）を明示する: 400 が生えて `$get` の返りが応答の union になり、`InferEndpointType` が union の上では解けなくなる。
+// 200 を名指しすれば元の1本に戻る。
 type ManagerListItem = InferResponseType<DaemonClient['managers']['$get'], 200>['managers'][number];
 type ManagerDenial = NonNullable<ManagerListItem['denials']>[number];
-/** `lastUnpushedWorkObservation` 単体（discriminated union。Issue #1883）。 */
 type ManagerUnpushedWorkObservation = NonNullable<ManagerListItem['lastUnpushedWorkObservation']>;
 
-/**
- * `ManagerDenial.actor` を一行に添える短い印にする。
- *
- * **`packages/core/src/tools.ts` の `denialActorTag` と同じ書式に揃えてある。**
- * 片方だけ直すと、クローンが見る `manager_list` と人間が見るこの CLI とで
- * 同じ拒否を見て違う判断をする（Issue #373、2026-08-24 コメント
- * #5393921053）。`undefined`（層が取れていない）を黙って消したり、
- * マネージャー側へ混ぜたりしない——3値のまま出す。
- */
+// `packages/core/src/tools.ts` の `denialActorTag` と同じ書式に揃える: 片方だけ直すと、クローンと人間が同じ拒否を見て違う判断をする。
+// `undefined`（層が取れていない）を消したりマネージャー側へ混ぜたりしない。
 function denialActorTag(actor: ManagerDenial['actor']): string {
   return actor === 'manager' ? ' [マネージャー]' : actor === 'worker' ? ' [作業者]' : ' [層不明]';
 }
 
-/**
- * 状態に添える「確認へ上がらず止められた」件数の一行。
- *
- * **状態を置き換えない。** 確認へ上がらず止められると、その仕事は `running`
- * のまま手が止まって見える。札は `[running]` のまま残し、その下に並べる。
- *
- * **⚠ ただし拒否の出所は、この数からは取れない（Issue #1267 / #1289）。** 器の
- * モデル分類器・deny 規則の拒否と、alteroid 自身の `PreToolUse` フック
- * （`bash-wait-guard.ts` 等）の拒否は同じイベントとして通るが、帰結が違う
- * ——前者は確認がクローンへ回らないので担い手は本当に詰むが、後者は理由と
- * 代替案が担い手自身へ直接返っているので自力で抜けられることがある
- * （`manager.ts` の `case 'permission_denied'`）。だから断定はせず、(b) の
- * 可能性を残す。
- *
- * **人間が読む面は3つある。** クローンは `manager_list` で、Web UI は一覧で
- * 同じものを見ているのに、端末だけが「実行中」としか言わなかった。同じ仕事を
- * 見て人間とクローンが違う判断をするのは、北極星 禁止1（デグレード禁止）を
- * いつもと逆の向きに踏むことである。
- *
- * **畳み方は他の2面と同じ**（新しい側から3種＋切った分）。デーモンは古い順で
- * 返すので末尾から採る — 知りたいのはいま何で止まっているかである。
- *
- * **拒否が無いときは何も足さない。** `denials` が無いのと `[]` は別で、常に
- * 何か書くと「0 件だった」と読める。件数はデーモンのプロセス内にしか無く、
- * 器を作り直せば数え直しなので、作り直した直後がいちばん静かに見える形にしない。
- *
- * 端末は1本ぶんに割ける行が少ないので、但し書きは Web UI より短くしてある。
- * ただし「止まっている**可能性がある**」までは削らない — 数えているのは拒否
- * そのものであって、それで止まったかどうかはデーモンから見えていない。
- *
- * **各件に `denialActorTag` で層を添える**（Issue #373）。
- */
+// 状態を置き換えない: 札は `[running]` のまま残し、その下に並べる。
+// 拒否の出所はこの数からは取れない: 器の分類器・deny 規則の拒否なら担い手は本当に詰むが、alteroid 自身の `PreToolUse` フックの拒否なら
+// 理由と代替案が担い手へ直接返っており自力で抜けられる。だから断定せず (b) の可能性を残す。
+// 拒否が無いときは何も足さない: `denials` が無いのと `[]` は別で、常に書くと「0 件だった」と読める。
+// 但し書きを短くしても「止まっている可能性がある」までは削らない: 数えているのは拒否そのもので、止まったかどうかはデーモンから見えていない。
 function denialLine(
   denials: ManagerDenial[] | undefined,
   lastReportAt: string | undefined,
 ): string | null {
   if (denials === undefined || denials.length === 0) return null;
-  // 止められた後に報告が届いたか（#1455）。字面の生成元はクローンの面と同じ関数。
   const followUp = describeDenialFollowUp(denials, lastReportAt);
-  // 帳面は古い順に積まれている。**新しい側から**採る。
+  // 帳面は古い順に積まれている。新しい側から採る。
   const recent = [...denials].reverse();
   const shown = recent.slice(0, LIST_DENIED_TOOLS);
   const rest = recent.length - shown.length;
@@ -3629,59 +2871,11 @@ function denialLine(
   );
 }
 
-/**
- * 直近の1ターンが**報告ではなく失敗**で終わったことを、状態に添える一行。
- *
- * **`status` を置き換えない。** 支出上限に当たった回もセッションは生きているので
- * 台帳の `status` は `done`（＝終えて待機中。話しかければ続く）のままである
- * （`packages/core/src/schema.ts` の `lastFailure` の doc）。札を `failed` へ倒すと
- * 嘘になり、人間は「もう続けられない」と読んで起こし直す判断を誤る。
- *
- * **SDK の語（`code` / `via`）をそのまま出す。** 言い換えると、人間が SDK の型定義や
- * ログで引ける手がかりが消える。`billing_error` と `rate_limit` は次の一手が違う
- * （前者は人間が枠を上げる話で、後者は待てば直る）。
- *
- * **何をすればよいかまで書く。** 「失敗した」だけだと、この仕事が死んだのか
- * 話しかければ続くのかが読めない。続けられるという事実そのものが、この
- * `status` と `lastFailure` を分けた理由である。
- *
- * ## ⚠️ Issue #1882: `status` が既にセッションの死を確定させている回は分けて言う
- *
- * `lastFailure` は `packages/core/src/manager.ts` の `case 'report'` が書く欄で、
- * 次の `report` が届くまで消えない。だから、枠(429)などで畳まれた回の直後に
- * セッションそのものが `failed` / `lost`（誰も望まない終わり方）や `stopped`
- * （人間・クローンが明示的に止めた終わり方）へ確定しても、この行は上の
- * 「セッションは生きているので……」という古い前提を言い続ける——同じ画面の
- * 状態バッジは終端の札を出しているので、1画面の中で言い切りが事実と矛盾する
- * （Issue #1882 本文の実測）。
- *
- * **`status` を追加の引数として受け取り、`failed` / `lost`（core の
- * `isManagerOutcomeUnobserved` と同じ判定: `status === 'failed' ||
- * status === 'lost'`）と `status === 'stopped'` の2分岐で言い分ける**
- * （core の `describeManagerFailure`（PR #1904）・Web の `terminalFailureNote`
- * （PR #1889）と同じ2分岐・同じ意味）。**生きている3値（`running` /
- * `waiting_human` / `done`）の文言は1文字も変えない。**
- *
- * **`manager_send` は実際に `stopped` へも resume を試みうる**（core の
- * `manager.ts` の `send()` は `status` を見ずに `#load()` で `ManagerRecord`
- * を作り直し、`#resume()` もその印が無ければ素通りする——core PR #1904 が
- * 現物で確かめた事実）。⟹ **「もう続かない」とまでは言わない**——続ける
- * 手段（話しかける）は塞がっていないが、届く保証は無いとまで言う。
- *
- * **CLI の次の一手の語はこの面のものを使う（`/msg`）。** `runnerLostSince` の
- * 行（直下）が同じ理由で `manager_send` ではなく `/msg` を名指ししている
- * ——ここも揃える。
- *
- * ## `lastFoldedTurn` が在る回は出さない
- *
- * `lastFailure` は `case 'report'` が `status === 'stopped'` の間は一切
- * 触らない欄（`lastFoldedTurn` だけを書いて早期 return する分岐）——
- * `lastFoldedTurn` が在る回の `lastFailure` は、畳まれる**前**の無関係な
- * 古いターンを指す。core の `manager_report`（Issue #1798。`foldedTurn !==
- * undefined` の回は `describeManagerFailure` を呼ばない）・Web の
- * `FailureNote`（PR #1889。同じ回に `null` を返す）と同じ線で、ここも
- * `null` を返す。
- */
+// `status` を置き換えない: 支出上限に当たった回もセッションは生きているので `status` は `done` のまま。`failed` へ倒すと嘘になる。
+// SDK の語（`code` / `via`）をそのまま出す: 言い換えると、SDK の型定義やログで引ける手がかりが消える。
+// `status` が既に `failed` / `lost` / `stopped` なら分けて言う: `lastFailure` は次の `report` まで消えず、終端の札と矛盾する。
+// 「もう続かない」とまでは言わない: `stopped` へも resume を試みうる。届く保証は無いとまで言う。
+// `lastFoldedTurn` が在る回は出さない: その回の `lastFailure` は、畳まれる前の無関係な古いターンを指す。
 function failureLine(
   failure: ManagerListItem['lastFailure'],
   status: ManagerListItem['status'],
@@ -3707,41 +2901,12 @@ function failureLine(
   return `${opening}。セッションは生きているので、原因が解ければ話しかければ続きます`;
 }
 
-/**
- * 枠(利用上限)で止まっている委譲の1行（Issue #1883。GET /managers が返す
- * `usageStoppedAt`）。
- *
- * **core の `packages/core/src/tools.ts` の `describeUsageStopped` と同じ
- * 3分岐を複製する。** あの関数は `export` されていない（`manager_list` 専用の
- * 私用関数）——`apps/cli` は `@alteroid/core` の公開面（`index.ts` が
- * re-export するものと、`./mask-url` のような軽い口）しか import できない
- * 前提なので、ここは複製である（`failureLine` が `isManagerOutcomeUnobserved`
- * の判定を複製しているのと同じ理由・同じ形）。
- *
- * **#1882 と同じ穴を作らない。** `failureLine` と同じ2分岐——
- * `status === 'failed' || status === 'lost'`（core の `isManagerOutcomeUnobserved`
- * と同じ判定）と `status === 'stopped'`——で「セッションは生きている」を
- * 言い切らない。**生きている3値（`running`/`waiting_human`/`done`）の文言は
- * `describeUsageStopped` の第3分岐と同じ意味で書く。**
- *
- * **`stopped` 枝にも resume の一文を付ける（PR #1904 で core が揃えた形）。**
- * core の `describeUsageStopped` は元は `failed`/`lost` 枝にだけ「起こし直すには
- * manager_send で resume を試みるしかなく、届く保証は無い」を持ち、`stopped` 枝は
- * それを欠いていた——#1904 がここを揃えた（`grep -Fn -- '起こし直すには
- * manager_send で resume を試みるしかなく、届く保証は無い' packages/core/src/tools.ts`
- * が `describeUsageStopped` 内で2箇所ヒットする——`failed`/`lost` 枝と `stopped` 枝の
- * 両方が同じ resume の一文を持つ）。CLI 版も同じ穴を作らないよう、`stopped` 枝に
- * `/msg` での resume の一文を足す。
- *
- * **Web の `DiagnosticsCard`（`manager-detail.tsx`）はこの欄を独立した行として
- * 出さないと決めている**（`ResetTimeSkewNote` 自身が「枠で止まっている間だけ
- * 意味を持つ」と書くので、という理由）。**CLI はここで core 側の判断を採る**——
- * Web の詳細画面と違い、CLI の `/managers` には別建ての詳細画面が無く
- * （`/manager` はセッション生ログで診断カードの代わりにならない）、
- * `resetTimeSkewMatch` が `undefined`（枠に当たった直後でまだ429の文言と
- * 突き合わせていない・プール未配線 等）の間はこの行だけが唯一の手がかりに
- * なる。出さないと「枠に当たっている」という事実そのものが CLI から消える。
- */
+// core の `describeUsageStopped`（`packages/core/src/tools.ts`）は export されていないので、3分岐を複製する。
+// `failureLine` と同じ2分岐で「セッションは生きている」を言い切らない。
+// `stopped` 枝にも resume の一文を付ける: core は `failed`/`lost` 枝と `stopped` 枝の両方が同じ resume の一文を持つ
+// （`grep -Fn -- '起こし直すには
+// manager_send で resume を試みるしかなく、届く保証は無い' packages/core/src/tools.ts` が `describeUsageStopped` 内で2箇所ヒットする）。
+// Web と違い CLI の `/managers` には別建ての詳細画面が無く、この行だけが枠に当たっている事実の唯一の手がかりになるので、独立した行として出す。
 function usageStoppedLine(
   usageStoppedAt: ManagerListItem['usageStoppedAt'],
   status: ManagerListItem['status'],
@@ -3773,22 +2938,8 @@ function usageStoppedLine(
   );
 }
 
-/**
- * セッションが `failed` として畳まれたときの、Node が構造として持つ失敗の
- * 分類（Issue #1883。GET /managers が返す `lastSystemError`）。
- *
- * **文言は core と同じ正本から引く**（`@alteroid/core/system-error-format` の
- * `formatSystemErrorFacts` / `formatSystemErrorUnknownNote`）。この2つは
- * ブラウザへ出す軽い口として作られていて（zod を持たない）、Web の
- * `SystemErrorNote`（`manager-detail.tsx`）も同じ2つから文言を引く——CLI も
- * ここに合流させ、3つ目の複製を作らない。**ゲート（`status !== 'failed'` なら
- * `null`）だけは、この関数側で複製する**——ゲートそのものは軽い口に無い
- * （`describeManagerSystemError` の doc と同じ理由）。
- *
- * **末尾の指し先だけ CLI 向けに変える**（Web が画面のセクション名を指すのと
- * 同じ作法）——core 向けの `lastFailure`（MCP の欄名）ではなく、CLI の
- * `failureLine` が出す見出し文言を指す。
- */
+// 文言は core と同じ正本（`@alteroid/core/system-error-format`）から引き、3つ目の複製を作らない。ゲートだけはこの関数側で複製する:
+// ゲートそのものは軽い口に無い。末尾の指し先だけ、`lastFailure`（MCP の欄名）ではなく CLI の `failureLine` の見出しに変える。
 function systemErrorLine(
   status: ManagerListItem['status'],
   lastSystemError: ManagerListItem['lastSystemError'],
@@ -3806,14 +2957,6 @@ function systemErrorLine(
   );
 }
 
-/**
- * セッションが `failed` として畳まれたときの cgroup の pids/OOM カウンタの
- * 差分（Issue #1883。GET /managers が返す `lastCgroupEvents`）。
- *
- * **`systemErrorLine` と対で読むが軸は別**（`describeManagerCgroupEvents` の
- * doc と同じ注意——因果は名乗らない）。文言は同じく軽い口
- * （`@alteroid/core/cgroup-events-format`）から引く。
- */
 function cgroupEventsLine(
   status: ManagerListItem['status'],
   lastCgroupEvents: ManagerListItem['lastCgroupEvents'],
@@ -3825,35 +2968,8 @@ function cgroupEventsLine(
   return `      ${formatCgroupEventsNote(lastCgroupEvents)}（${lastCgroupEvents.at}）。`;
 }
 
-/**
- * `tokenGeneration` が `undefined` のときに、なぜ分からないかを言う
- * （Issue #1883。GET /managers が返す `tokenGenerationUnknownReason`）。
- *
- * core の `describeTokenGenerationUnknownReason`（`tools.ts`）と同じ3分岐を
- * 複製する（export されていない私用関数——`usageStoppedLine` の doc と同じ
- * 理由）。
- *
- * **`tokenGeneration` / `activeTokenGeneration`（世代の生の番号）はここでは
- * 出さないと決めた。** Web の `DiagnosticsCard` が「生の世代番号を並べても
- * 人間の次の一手は増えない」と決めた理由（`resetTimeSkewMatch` が既に
- * 人間向けの結論を出している）は CLI にもそのまま当てはまる——CLI と Web で
- * 揃える。**`tokenGenerationUnknownReason` はこの2つとは別の性質**——生の
- * 番号ではなく「なぜ分からないか」という説明そのものなので、除く理由が
- * 当てはまらない。しかも `tokenGeneration` が定義されているときはこの欄
- * ごと消える（daemon 側の不変条件。`openapi.ts` の doc）ので、ここで
- * `tokenGeneration` を見る必要が無い。
- *
- * **`reattached-across-restart` の対処（core は
- * `manager_stop → manager_start`）は、CLI の語へ言い換える。** core の助言
- * 定数（`STALE_TOKEN_RESTART_ADVICE`）の逐語をそのまま複製すると
- * `pnpm check:stale-token-restart-advice` に引っかかる
- * （`scripts/check-stale-token-restart-advice-core.mjs` の `BANNED_PHRASES`）
- * ——生成元の外でその逐語を持ってよいのは `*.test.ts` だけである。Web の
- * `resetTimeSkewText` も同じ理由で言い換えている（`manager-detail.tsx` の
- * doc）ので、ここも同じ2つの核（(1) 止める前に外へ出た成果を確かめる (2) 失われる
- * のは会話だけではない）を CLI の言葉（`/stop` ではなく `/msg` — この委譲は
- * まだ止まっていない）で運ぶ。
- */
+// 世代の生の番号は出さない: 人間の次の一手は増えない。`reattached-across-restart` の対処は CLI の語へ言い換える:
+// core の助言定数（`STALE_TOKEN_RESTART_ADVICE`）の逐語を複製すると `pnpm check:stale-token-restart-advice` に引っかかる。
 function tokenGenerationUnknownReasonLine(
   tokenGenerationUnknownReason: ManagerListItem['tokenGenerationUnknownReason'],
 ): string | null {
@@ -3890,31 +3006,16 @@ function tokenGenerationUnknownReasonLine(
   );
 }
 
-/**
- * 429の文言の `resets` 時刻を、プールの各鍵の `cooldownUntil` と突き合わせた
- * 結果（Issue #1883。GET /managers が返す `resetTimeSkewMatch`）。
- *
- * **core の `describeResetTimeSkew` との違い**——あちらは `tokenGeneration` /
- * `activeTokenGeneration`（世代の生の番号）が既に食い違いを名指ししている
- * ときは二重に鳴らさないよう抑える分岐を持つ。**CLI はその生の番号を出さない
- * と決めた**（`tokenGenerationUnknownReasonLine` の doc）ので、抑える判定に
- * 使う材料そのものが無い——Web の `resetTimeSkewText` と同じ理由で、抑えずに
- * そのまま出す（二重に鳴る先が無いので実害は無い）。
- *
- * **未知の値でも落ちない。** 版のずれ（新しいデーモンが第3の値を返す）は
- * 型では防げない——`describeWaitingKind`（このファイル）と同じ作法で、
- * 知らない値をそのまま名乗る。
- *
- * **`'stale'` の対処は CLI の語へ言い換える**
- * （`tokenGenerationUnknownReasonLine` の doc と同じ理由・同じ2つの核）。
- */
+// core の `describeResetTimeSkew` と違い、二重に鳴らさないための抑えは無い: CLI は世代の生の番号を出さないので、抑える材料が無い。
+// 未知の値でも落ちない: 版のずれ（新しいデーモンが第3の値を返す）は型では防げないので、知らない値をそのまま名乗る。
+// `'stale'` の対処は CLI の語へ言い換える（`tokenGenerationUnknownReasonLine` と同じ理由）。
 function resetTimeSkewLine(
   resetTimeSkewMatch: ManagerListItem['resetTimeSkewMatch'],
   hasUnpushedWorkObservationLine: boolean,
 ): string | null {
   if (resetTimeSkewMatch === undefined) return null;
   if (resetTimeSkewMatch === 'stale') {
-    // 「下の『未push観測』」は、その行が実際に出るときだけ指す（0本で省かれた行を指さない）。
+    // 「下の『未push観測』」は、その行が実際に出るときだけ指す: 0本で省かれた行を指さない。
     const unpushedNote = !hasUnpushedWorkObservationLine
       ? ''
       : '下の「未push観測」にも最後の観測が出ている（いまの状態ではない）ので、合わせて見ること。';
@@ -3941,9 +3042,7 @@ function resetTimeSkewLine(
   );
 }
 
-/** `observation.worktrees` を1行にする。core の `formatUnpushedWorkObservationWorktrees`
- * （`tools.ts`、export されていない）と同じ判断の複製（Issue #1883）。
- */
+// core の `formatUnpushedWorkObservationWorktrees`（`tools.ts`、export されていない）と同じ判断の複製。
 function formatUnpushedWorkObservationWorktrees(
   worktrees: readonly { relativePath: string; branch: string | null }[],
 ): string {
@@ -3957,36 +3056,6 @@ function formatUnpushedWorkObservationWorktrees(
         .join(' / ');
 }
 
-/**
- * `/stop`（running・非force）の断り、ターンが `report` で終わったとき、
- * Bash で `git push` か新しい枝を作る操作を検出したとき、または止める操作
- * そのもの（`/stop` の force・`done`/`waiting_human` の非force・人間の停止・
- * 自動畳み。Issue #1266 残り2）で取った最後の未push観測（Issue #1883。
- * GET /managers が返す `lastUnpushedWorkObservation`）。
- *
- * **core の `describeUnpushedWorkObservation`（`tools.ts`）と同じ2つの分岐を
- * 複製する**（export されていない私用関数）。
- *
- * ## 器の入れ替え（redeploy 等）で応答不能な委譲は、別の言い方をする
- *
- * `manager.sessionMissingSince !== undefined` の間は、上の一般論ではなく
- * `manager.shutdownObservationArrivedAfterSwap` の値で言い分ける——core の
- * doc と同じ判断: 届いた（`true`）なら「器が止まる直前の観測」と言い切り、
- * 届いていない（`false`・観測が無い・古いセッションのもの・`source` が
- * `'shutdown'` ではない のどれか）なら、その旨を明示したうえで、いま表示中の
- * 観測（在れば）を添える。
- *
- * **`cwd`（探索の起点の絶対パス）は載せない。** `observedWorktreeBranchSchema`
- * の doc が引く「出してよい範囲」をそのまま継ぐ——core と同じ線。
- *
- * **`kind: 'observed'` の3箇所すべてに「探しきれていない」の注記を足す
- * （Issue #1885 / PR #1896。main へ入って CLI がまた1歩遅れていた）。** 文言は
- * core・Web と同じ正本（`@alteroid/core/unpushed-work-observation-format` の
- * `describeUnpushedWorkObservationIncompleteness`）から引く——ここも軽い口
- * なので複製にならない（`system-error-format` / `cgroup-events-format` と
- * 同じ形）。4欄がどれも無ければ空文字を返すので、健全な観測では1文字も
- * 増えない。
- */
 function unpushedWorkObservationIncompleteSuffix(
   observation: Extract<ManagerUnpushedWorkObservation, { kind: 'observed' }>,
 ): string {
@@ -3994,6 +3063,8 @@ function unpushedWorkObservationIncompleteSuffix(
   return note === null ? '' : `\n      ${note}`;
 }
 
+// core の `describeUnpushedWorkObservation`（`tools.ts`）と同じ分岐の複製。`cwd`（探索の起点の絶対パス）は載せない。
+// 器の入れ替えで応答不能な委譲は、`shutdownObservationArrivedAfterSwap` で言い分ける。
 function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
   const observation = manager.lastUnpushedWorkObservation;
 
@@ -4005,7 +3076,6 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
           redactBody(observation.reason)
         );
       }
-      // 作業ツリー0本で探索の失敗も無いなら行を省く（Issue #2970）。
       if (isEmptyCompleteUnpushedWorkObservation(observation)) return null;
       return (
         `      未push観測: 器が止まる直前（${observation.at}）の観測: ` +
@@ -4028,7 +3098,6 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
   }
 
   if (observation === undefined) return null;
-  // 作業ツリー0本で探索の失敗も無いなら行を省く（Issue #2970）。
   if (isEmptyCompleteUnpushedWorkObservation(observation)) return null;
   const provenance = describeUnpushedWorkObservationProvenance(observation.source, 'この一覧');
   if (observation.kind === 'unavailable') {
@@ -4044,20 +3113,7 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
   );
 }
 
-/**
- * マネージャーの一覧を、人間が読める形へ（`/managers`）。
- *
- * 表示を関数に出してあるのは、`renderUsage`（`usage.ts`）と同じ理由 —
- * 何を出しているかを端末なしで確かめられるようにするためである。
- *
- * **`status` は絞りの有無だけを渡す（#2203）。** `renderManagerList` は
- * 一覧しか受け取っておらず、`status=` で絞った0件と絞っていない0件が
- * 同じ「（マネージャーは1本も居ません）」になっていた——絞りを外せば
- * 見えるはずの一覧まで「1本も居ない」と読める（嘘の観測）。手本は CLI
- * `/journal` の `type=` 0件（#2073 / PR #2089）。**絞っていない0件の
- * 文言は変えない** — 呼び出し元が `status` を渡さなければ、この関数は
- * 1文字も変わらない。
- */
+// `status` を受ける: 絞った0件と絞っていない0件を同じ「1本も居ません」にすると、絞りを外せば見える一覧まで「居ない」と読める。
 export function renderManagerList(
   managers: ManagerListItem[],
   status?: string,
@@ -4065,8 +3121,7 @@ export function renderManagerList(
   now: Date = new Date(),
 ): string {
   if (managers.length === 0) {
-    // **読めない行が在るときは「居ない」と言わない**（issue #2345）。読めない行は状態も
-    // 取れないので、`status` で絞った先に居ないとも言えない。
+    // 読めない行は状態も取れないので、`status` で絞った先に居ないとも言えない。
     if (unreadable.length > 0) {
       return status === undefined
         ? '（読めたマネージャーは居ません。居ないとは言えません）'
@@ -4079,67 +3134,18 @@ export function renderManagerList(
 
   const lines: string[] = [];
   managers.forEach((manager, index) => {
-    // **字面は `describeManagerState` から取る（唯一の生成元）。** ここは同じ
-    // 意味の字面を自前で組んでいて、`live` を真偽値としてしか扱えなかった——
-    // **「取れていない」（`undefined`）を表せず、取れていない回まで
-    // 「話しかけられる」側へ倒れていた。** クローンの `manager_list` と digest は
-    // 既にこの関数を通しており、人間の入口だけが別の字面を出していた。
-    //
-    // **依頼文も抜粋にする。** 同じ関数の中で `waiting` と `lastReport` だけを
-    // 畳んでいたので、数千字の依頼が来ると一覧そのものが流れて読めなくなった。
-    //
-    // **番号を振る。** `/manager` `/stop` `/msg` がこの並びを引く（#336）。
+    // 字面は `describeManagerState` から取る（唯一の生成元）: 自前で組むと、`live` の「取れていない」（`undefined`）を表せず、
+    // 面によって字面が割れる。第3引数まで通す。
     lines.push(
       `  [${index + 1}] ${manager.managerId}  ` +
-        // **第3引数まで通す（#621 / #643）。** ここで落とすと、人間の入口
-        // だけが「手が空いた」と「背景処理の完了を待って畳んだ」を潰した字面を
-        // 出すことになる（この関数がそもそも直した「面によって字面が割れる」形の
-        // 再発である）。
         `[${describeManagerState(manager.status, manager.live, manager.awaitingBackground)}]  ` +
         `${summarizeText(manager.request)}`,
     );
     lines.push(`      cwd: ${manager.cwd}`);
-    // **作成と更新。** 値は `GET /managers` が既に返していて、ここが出して
-    // いなかっただけである（クローンの `manager_list` には #208 から出ている）。
     lines.push(`      作成: ${manager.startedAt}  更新: ${manager.updatedAt}`);
-    // **`live: false` の理由を、分かる分だけ名指しする。** 状態名だけだと
-    // 「セッションが終わった」のか「宛先の器が消えた」のかが読めず、人間の
-    // 打つ手（起こし直すのか、器の側を見るのか）が決まらない。
-    //
-    // **断定は「器が黙っている」までである** —— その中で走っていたかどうかは
-    // この観測からは言えない（`lost` の但し書きと同じ線引き）。
-    //
-    // **⚠️ 「いま話しかけられない」と書かないこと。実測して嘘だと分かっている。**
-    //
-    // 2026-08-28 まで、ここは「新しい委譲の宛先からも外れているので、いま
-    // 話しかけられない」と書いていた。**`packages/core` の足場で実測したら偽だった**
-    // —— 名簿が `state: 'lost'` と判定した器に載っている委譲へ `ManagerPool.send()`
-    // を撃つと `{ outcome: 'delivered', detail: '追加指示として届けた。' }` が返り、
-    // runner の resume の口が実際に叩かれる。構造の理由: `#markSilent` は
-    // `entry.state` を `'lost'` にするだけで **`entry.client` を落とさず**、
-    // `Registry#get()` は `entry.state` を見ない（`list()` は `lost` を除くが
-    // `get()` は除かない）。`send()` は `job.runnerId` が在れば `#runnerOf` →
-    // `get()` を通り、**`runnerLostSince` が立つのは `runnerId` が在るときだけ**
-    // なので必ずこちら側である。
-    //
-    // **これは一度閉じた欠陥と同じ形である。** `ba4053d`（#67「「いま送っても
-    // 届かず」の真下に、届く送信ボタンが並んでいた」）は、届く相手に「届かない」と
-    // 書いた**注記のほうを**直した（送信は塞がなかった —— 塞ぐと「人間が自分の言葉で
-    // 繋ぎ直す唯一の手」が消える。north_star 禁止1）。
-    //
-    // **⚠️ #67 の commit 本文が持つ実測表（`delivered` / `unknown` の2値）を
-    // そのまま当てないこと。あれは古い。** `0fb068f`（PR #571「manager_send が
-    // [running] の相手へ 404 を貫通させる」#563）で `ManagerSendResult.outcome` は
-    // **4値**（`answered` / `delivered` / `session_missing` / `unknown`）になった。
-    // **commit 本文は書き換わらないので、いつ偽になったかが本文からは読めない。**
-    //
-    // ⟹ **残してよいのは「新しい委譲の宛先からは外れている」まで**（`list()` が
-    // `lost` を除くので実測で真）。落とすのは送信可否の推論だけである。生の値は
-    // PR #586 のコメント（`pull/586#issuecomment-5450674492`）に在る。
-    //
-    // **次の一手の語はこの面のものを使う。** CLI には器（runner）を見る命令が
-    // 無いので、`tools.ts` のように `runner_list` を名指ししない（Web UI が
-    // 同じ理由で画面に無いものを名指ししていないのと同じ形）。
+    // 断定は「器が黙っている」まで: その中で走っていたかどうかはこの観測から言えない。
+    // 「いま話しかけられない」と書かない: 実測で偽だった。`lost` の器に載っている委譲へも `ManagerPool.send()` は届き、resume の口が叩かれる。
+    // 書いてよいのは「新しい委譲の宛先からは外れている」まで。CLI には器を見る命令が無いので `runner_list` を名指ししない。
     if (manager.runnerLostSince !== undefined) {
       lines.push(
         `      ⚠ 宛先の器は ${manager.runnerLostSince} 以降 名乗っていない。` +
@@ -4151,17 +3157,7 @@ export function renderManagerList(
           '打つ手はこの委譲の側ではなく器の側にある — 名乗らなくなった器そのものを確かめること',
       );
     }
-    // **宛先の器が名簿から entry ごと消えている**（Issue #1212 running 側。段1。
-    // `ManagerSummary.runnerVanished`）。上の `runnerLostSince`（entry は残って
-    // いるが黙っている）とは別の集合で、排他ではない。文言の核は `manager_list`
-    // （`packages/core/src/tools.ts` の `describeRunnerVanished`）と揃える。
-    // 消えた時刻は持たない——名簿に残っていない。
-    //
-    // **走り始めの時刻（`startedAt`）は core 版に揃えて足す（Issue #1883の
-    // 「軽微な点」）。** core の `describeRunnerVanished` は「この委譲の走り
-    // 始めは ${manager.startedAt}」を含めるが、CLI 版はここを手で写した際に
-    // 落としていた——矛盾ではないが揃っていなかった（同じ関数の中の変更
-    // なので、この PR で一緒に直す）。
+    // `runnerLostSince`（entry は残っているが黙っている）とは別の集合で、排他ではない。文言の核は `describeRunnerVanished`（`tools.ts`）と揃える。
     if (manager.runnerVanished === true) {
       lines.push(
         `      ⚠ 宛先の器が名簿から消えている（この委譲の走り始めは ${manager.startedAt}。` +
@@ -4170,21 +3166,13 @@ export function renderManagerList(
           '状態は走行中のまま残っている — 確かめる前に起こし直さないこと（同じ仕事が2本になる）',
       );
     }
-    // **`runnerLostSince` とは別の欄である（#563）。** あちらは器が黙った
-    // （`live` が落ちる）。こちらは**器は答えている**が、この委譲のセッションだけが
-    // 無い——`sessionId` が在れば resume から入り直せるので `live` は落ちない。
-    // ⟹ 状態は `[running]` のままで、この行だけが5つ目の形を名指しする。
-    //
-    // **「失われた」と読ませない。** 完遂した後にセッションが畳まれ、終端イベント
-    // だけが届かなかった回も同じ形に見え、デーモンには区別する材料が無い
-    // （`packages/core/src/manager.ts` の `sendFailureDetail` の doc）。
+    // `runnerLostSince` とは別の欄: 器は答えているが、この委譲のセッションだけが無い。`live` は落ちない。
+    // 「失われた」と読ませない: 完遂した後にセッションが畳まれ、終端イベントだけが届かなかった回も同じ形に見え、区別する材料が無い。
     if (manager.sessionMissingSince !== undefined) {
       lines.push(
         `      ⚠ 宛先の runner は ${manager.sessionMissingSince} の時点で、この委譲のセッションを持っていなかった` +
           '（runner がそう答えた。聞けなかったのではない）。' +
-          // **由来を畳まない（#579）。** クローンの面（`manager_list`）と同じ
-          // 生成元（`describeSessionMissingKind`）から取る——ここで自前で書くと、
-          // 同じ状態が面によって違う次の一手を指すことになる。
+          // 由来はクローンの面と同じ生成元から取る: 自前で書くと、同じ状態が面によって違う次の一手を指す。
           describeSessionMissingKind(manager.sessionMissingKind) +
           '**この委譲が失われたという意味ではない** — ' +
           '完遂した後にセッションが畳まれ、終端の合図だけが届かなかった回も同じ形に見える。' +
@@ -4192,13 +3180,7 @@ export function renderManagerList(
           'そこに書き終えた報告が残っていることがある）。話しかければ resume から入り直す',
       );
     }
-    // **`lost` を状態名だけで済ませない。** クローン（`manager_list`）と Web UI には
-    // 但し書きが出るのに、ここだけ `[lost]` としか出ていなかった＝同じ状態を見て
-    // 人間とクローンが違う判断をする形になっていた。
-    //
-    // 言い切れるのは観測した分までである（PR #60）。デーモンが見ているのは
-    // 「前のセッションへ戻れたか」だけで、成果の有無は見ていない — 落ちる直前に
-    // PR をマージまで済ませていた仕事が `lost` になった実例がある。
+    // 言い切れるのは観測した分まで: デーモンが見ているのは「前のセッションへ戻れたか」だけで、成果の有無は見ていない。
     if (manager.status === 'lost') {
       lines.push(
         '      ⚠ 前のセッションへ戻れなかった。見ているのは戻れたかどうかだけで、' +
@@ -4206,146 +3188,76 @@ export function renderManagerList(
           '起こし直す前にそこを確かめること',
       );
     }
-    // **Issue #2428**: 依頼者が何を観測していないか（`lost` / `failed` の但し書き）。
-    // 字面は `manager_list` の `unobservedOutcomeLine` と同じ生成元
-    // （`describeUnobservedOutcome`）から取る。対象外の委譲では `null` で 1 文字も足さない。
     const unobserved = describeUnobservedOutcome(manager);
     if (unobserved !== null) lines.push(`      ${unobserved}`);
     const denied = denialLine(manager.denials, manager.lastReportAt);
     if (denied !== null) lines.push(`      ${denied}`);
-    // **`kind`（質問／実行許可）と `askedAt` も出す（#336）。** 種別が読めない
-    // と、人間は `/reply` と `/allow` のどちらを打つべきか分からない。どちらも
-    // 版のずれの窓（旧 runner の応答）では欠けうる — 欠けても行そのものは
-    // 出す（`describeWaitingKind` / `describeAskedAt` の doc）。
     for (const item of manager.waiting) {
       lines.push(
         `      返事待ち (${item.requestId})  種別: ${describeWaitingKind(item.kind)}` +
           `${describeAskedAt(item.askedAt)}: ${summarizeText(item.summary)}`,
       );
     }
-    // **失敗は報告の**上**に置く。** 下に置くと、包まれたエラー文（`lastReport`）を
-    // 先に読んでから「実は報告ではない」と分かる順になる。
+    // 失敗は報告の上に置く: 下に置くと、包まれたエラー文（`lastReport`）を先に読んでから「実は報告ではない」と分かる順になる。
+    // 枠・システムエラー・cgroup の行は `lastFailure` とは別の軸で、同時に出ることがある。
     const failed = failureLine(manager.lastFailure, manager.status, manager.lastFoldedTurn);
     if (failed !== null) lines.push(`      ${failed}`);
-    // **枠(利用上限)で止まっている委譲も、同じ「失敗は報告の上」の順で置く
-    // （Issue #1883）。** `lastFailure` の行（すぐ上）とは別の軸なので別行
-    // ——両方が同時に出ることがある（`usageStoppedLine` の doc、core と同じ
-    // 排他にしない決定）。
     const usageStopped = usageStoppedLine(manager.usageStoppedAt, manager.status);
     if (usageStopped !== null) lines.push(usageStopped);
-    // **セッションそのものが `failed` として畳まれた落ち方も、同じ順で置く
-    // （Issue #1883）。** `lastFailure` とは別の軸なので別行——両方が同時に
-    // 出ることがある（`systemErrorLine` の doc）。
     const systemError = systemErrorLine(manager.status, manager.lastSystemError);
     if (systemError !== null) lines.push(systemError);
-    // **同じ順で置く（Issue #1883）。** `systemErrorLine`（すぐ上）とは別の軸
-    // なので別行——両方が同時に出ることがある。
     const cgroupEvents = cgroupEventsLine(manager.status, manager.lastCgroupEvents);
     if (cgroupEvents !== null) lines.push(cgroupEvents);
-    // **失敗した回は「報告」と呼ばない。** 本文は runner 側で
-    // 「（このターンは応答を返さずに終わった: …）」と包まれているが、見出しが
-    // 「直近の報告」のままだと、人間は包みの内側だけを読んで報告として扱う。
-    //
-    // **Issue #1882: `lastFoldedTurn` が在る回は、その材料で組む。**
-    // `manager.lastReport` は `case 'report'`（`packages/core/src/manager.ts`）
-    // の `status === 'stopped'` 早期 return では更新されない——`lastFoldedTurn`
-    // が在る回の `lastReport` は畳まれる**前**の無関係な古いターンのままである。
-    // それを「直近の報告」「直近のターンの中身」と呼ぶと、実際に直近届いた
-    // 本文（`lastFoldedTurn.text`）とは違うものを「直近」と呼ぶことになる
-    // ——core の `manager_report`（Issue #1038）が使う見出し「停止後に届いた、
-    // 畳まれたターンの中身」と同じ意味で、受信時刻つきで出す。
+    // 失敗した回は「報告」と呼ばない。`lastFoldedTurn` が在る回の `lastReport` は畳まれる前の無関係な古いターンのままなので、
+    // 直近届いた本文（`lastFoldedTurn.text`）を受信時刻つきで出す。
     if (manager.lastFoldedTurn !== undefined) {
       lines.push(
         `      停止後に届いた、畳まれたターンの中身（${manager.lastFoldedTurn.at} 受信）: ` +
           summarizeText(manager.lastFoldedTurn.text),
       );
     } else if (manager.lastReport) {
-      // **Issue #2428**: `result` を受け取らないまま畳まれた回（`lastUnreported`）も
-      // 「報告」と呼ばない。判定は `manager_list` と同じ `isFoldedTurnReport`。
       const label = isFoldedTurnReport(manager) ? '直近のターンの中身' : '直近の報告';
       lines.push(`      ${label}: ${summarizeText(manager.lastReport)}`);
     }
-    // **Issue #2432**: 受信した報告の status と、いまの status の食い違い。判定も字面も
-    // `manager_list` の「（… 受信、⚠ status 食い違い）」と同じ関数（`describeReportDriftMark`）
-    // から取る。CLI の報告の行には受信時刻が無く、足すと既存の行の形が変わるので、
-    // 印だけを報告の行の直後に別の行で出す。`now` は引数（テストで固定する）。
-    // 食い違いが無い・欄が無い（古い daemon）ときは `null` で、何も出さない。
+    // 報告の行には受信時刻が無く、足すと既存の行の形が変わるので、食い違いの印は別の行で出す。
     const reportDrift = describeReportDriftMark(manager, now);
     if (reportDrift !== null) lines.push(`      ${reportDrift}`);
-    // **Issue #2428**: ターン終了の報告漏れ（`describeTurnEnd`）と、道具の応答待ちの
-    // 矛盾／実行中（`describeToolUseStall`）。**判定も字面も `manager_list`
-    // （`packages/core/src/tools.ts`）と同じ関数を呼ぶ**——ここで組み直さない。
-    // 欄が無い（古い daemon）・健全な委譲では `null` で、何も出さない（0 や「無い」は書かない）。
-    // 返る文字列は `manager_list` の行頭インデント（2 桁）を含むので、この面の深さへ替える。
+    // 判定も字面も `manager_list` と同じ関数を呼び、ここで組み直さない。返る文字列は行頭インデント（2 桁）を含むので、この面の深さへ替える。
     const turnEnd = describeTurnEnd(manager);
     if (turnEnd !== null) lines.push(`      ${turnEnd.trimStart()}`);
     const toolUseStall = describeToolUseStall(manager);
     if (toolUseStall !== null) lines.push(`      ${toolUseStall.trimStart()}`);
-    // **Issue #1883**: この委譲が抱えている認証トークンの世代が分からない
-    // ときに、なぜ分からないかを添える（`tokenGenerationUnknownReasonLine` の
-    // doc）。
     const tokenGenerationUnknown = tokenGenerationUnknownReasonLine(
       manager.tokenGenerationUnknownReason,
     );
     if (tokenGenerationUnknown !== null) lines.push(tokenGenerationUnknown);
-    // **Issue #1883**: 429の文言のresets時刻を、プールのcooldownUntilと
-    // 突き合わせた結果を添える（`resetTimeSkewLine` の doc）。
     const resetTimeSkew = resetTimeSkewLine(
       manager.resetTimeSkewMatch,
       unpushedWorkObservationLine(manager) !== null,
     );
     if (resetTimeSkew !== null) lines.push(resetTimeSkew);
-    // **Issue #1883**: `/stop`（running・非force）の断りが最後に取った、
-    // 未 push の作業ツリーの観測を添える（`unpushedWorkObservationLine` の
-    // doc）。
     const unpushedWork = unpushedWorkObservationLine(manager);
     if (unpushedWork !== null) lines.push(unpushedWork);
   });
   return lines.join('\n');
 }
 
-/** `GET /managers` が返す1件の `waiting`（1本の確認）。 */
 type ManagerWaitingItem = ManagerListItem['waiting'][number];
 
-/**
- * 種別（質問／実行許可）を人間が読める語へ。
- *
- * **`kind` は省略されうる。** 新しいデーモンが `drainingSeconds` の猶予中の
- * 旧 runner へ問い合わせる窓があり、そちらの応答には `kind` が乗らない
- * （`railway/README.md`「4. 落ちた側を待つ / 取り直す」）。**分からないものを
- * 分かった顔で書かない** — 「実行許可」と決めつけると、実際は質問だった
- * ときに人間が `/allow` を打ってしまう。
- */
+// `kind` は省略されうる（猶予中の旧 runner の応答には乗らない）: 「実行許可」と決めつけると、実際は質問だったときに人間が `/allow` を打ってしまう。
 function describeWaitingKind(kind: ManagerWaitingItem['kind']): string {
   if (kind === 'question') return '質問';
   if (kind === 'permission') return '実行許可';
   return '種別不明';
 }
 
-/**
- * `askedAt` を人間が読める形へ（無ければ欄そのものを出さない）。
- *
- * **絶対値をそのまま出す。** `renderManagerList` の他の欄（`作成`/`更新`）と
- * 同じ約束で、相対表現（「4時間前」）はここで作らない（`AGENTS.md`「時刻の
- * 扱い」）。**無いときは空文字や `-` で埋めない** — それ自体が「取れない軸に
- * 意味の決まっていない値を作る」ことになる（`kind` と同じ版ずれの窓で欠ける）。
- */
+// 絶対値をそのまま出す: 相対表現（「4時間前」）は作らない（AGENTS.md「時刻の扱い」）。無いときは `-` で埋めない: 意味の決まっていない値を作ることになる。
 function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
   return askedAt === undefined ? '' : `  確認: ${askedAt}`;
 }
 
-/**
- * マネージャーの返事待ちを、番号付きで人間が読める形へ（`/waiting`）。
- *
- * `/approvals` の一覧（`renderCommitments` と同じ形 — 表示と番号の対応を
- * ここで一緒に作って返す）に揃えてある。番号と (managerId, requestId) の
- * 対応を表示側と別々に作ると、ずれた瞬間に**人間が見ていない確認**へ答える
- * ことになる。
- *
- * **`kind`/`askedAt` が欠けていても行は出す。** 版のずれの窓（旧 runner への
- * 問い合わせ）でも人間の手が残ることを、ここで保証する——欠けたら丸ごと
- * 落とすと、いちばん要るとき（人間の返事を待っている最中）に口が消える。
- */
+// 表示と番号の対応を一緒に作って返す: 別々に作ると、ずれた瞬間に人間が見ていない確認へ答える。
+// `kind`/`askedAt` が欠けていても行は出す: 丸ごと落とすと、人間の返事を待っている最中に口が消える。
 export function renderWaitingList(managers: ManagerListItem[]): {
   text: string;
   entries: { managerId: string; requestId: string }[];
@@ -4375,22 +3287,13 @@ type ScheduleSpecInput =
   | { type: 'every'; minutes: number }
   | { type: 'cron'; expression: string };
 
-/**
- * 人間が書く周期の言い方を、先頭から必要なぶんだけ読む。
- *
- * `09:00` なら毎日その時刻、`30m` / `30` なら分ごと、`cron` なら**続く5項目**が式。
- * cron 式は空白を含むので、依頼の本文との境目を語数で決める（引用符を人間に
- * 要求すると、シェルの引用と混ざって書けなくなる）。読めなければ null。
- * 依頼の本文は、周期の部分（cron なら `cron` と5項目）の後ろの生の文字列をそのまま返す
- * （改行・インデント・連続した空白を潰さない）。
- */
+// cron 式は空白を含むので、依頼の本文との境目を語数で決める: 引用符を要求すると、シェルの引用と混ざって書けなくなる。
+// 依頼の本文は生の文字列のまま返す: 改行・インデント・連続した空白を潰さない。
 function takeWhen(when: string): { spec: ScheduleSpecInput; request: string } | null {
-  // `when` は `/schedule <kind>` の後ろの生の文字列。依頼文は生のまま返す（#3723。#3683 と同じ）。
   const [head, ...tail] = when.trim().split(/\s+/);
   if (head === undefined || head === '') return null;
 
   if (head === 'cron') {
-    // cron の標準は5項目（分・時・日・月・曜日）
     if (tail.length < 6) return null;
     return {
       spec: { type: 'cron', expression: tail.slice(0, 5).join(' ') },
@@ -4408,23 +3311,12 @@ function takeWhen(when: string): { spec: ScheduleSpecInput; request: string } | 
   return parsed >= 1 ? { spec: { type: 'every', minutes: parsed }, request } : null;
 }
 
-/**
- * `/usage from=2026-08-01 to=2026-08-14 manager=abc` のような `key=value` を読む。
- * 順不同・省略可。知らない key は無視する（typo で無言のまま無視されるより、
- * 全期間を見せて「絞れていない」と気づける形にする）。
- */
 interface UsageFilters {
   from?: string;
   to?: string;
   managerId?: string;
   layer?: UsageLayer;
   site?: UsageSite;
-  /**
-   * どの認証トークンで（issue #2079）。**値の集合は閉じていない**（プールの
-   * 中身は器ごとに違う）ので、`layer`/`site` と違って検査しない——`usage.ts`
-   * の `UsageOptions.token` の doc と同じ理由。存在しない id を弾かず、
-   * そのままデーモンへ渡す。
-   */
   tokenId?: string;
 }
 
@@ -4432,15 +3324,7 @@ type ParsedUsageFilters = { ok: true; filters: UsageFilters } | { ok: false; mes
 
 type KeyValueTokens = { ok: true; values: Record<string, string> } | { ok: false; message: string };
 
-/**
- * `key=value` トークン列を Record へ。**知らないキー・`=` の無い語・値が空のトークンは
- * 黙って落とさず、使い方の誤りとして返す**（#3996）。落とすと `/usage mgr=abc` が
- * 絞らない全体の数字を返し、絞ったつもりの人間がそれを読み違える。
- *
- * `/usage from=… to=…`（`parseUsageFilters`）と `/conversations limit=… scan=…`
- * `/conversation <id> scan=…` が共有する慣習。窓を広げる知識（何が読めない値
- * かの判定）は呼び出し側が持つ — ここは字面を割るだけ。
- */
+// 知らないキー・`=` の無い語・値が空のトークンは黙って落とさない: 落とすと `/usage mgr=abc` が絞らない全体の数字を返し、人間が読み違える。
 function parseKeyValueTokens(tokens: string[], allowedKeys: readonly string[]): KeyValueTokens {
   const allowed = allowedKeys.map((key) => `${key}=`).join(' / ');
   const values: Record<string, string> = {};
@@ -4463,37 +3347,13 @@ function parseKeyValueTokens(tokens: string[], allowedKeys: readonly string[]): 
   return { ok: true, values };
 }
 
-/** `/journal [件数] [type=<種別1,種別2>] [q=<語>]` を解いた結果（issue #2073）。 */
 export type ParsedJournalSearchTokens =
   { ok: true; limit?: string; type?: string; q?: string } | { ok: false; message: string };
 
-/**
- * `/journal [件数] [type=<種別1,種別2>] [q=<語>]` を解く。
- *
- * **`q=` は、そのトークンから行末までを1つの語として扱う。** 呼び出し元は
- * 行を空白で割った後のトークン列を渡してくる（`line.split(/\s+/)`）ので、
- * `parseKeyValueTokens` をそのまま使うと **空白を含む語で探せない** ——
- * 「語で探す」口としては使いものにならない。`/usage` / `/conversations` の
- * `key=value` の慣習は保ったまま、値の側だけ行末まで伸ばす。だから
- * `type=` も `q=` と同じ「行末まで読む」領域には置かず、`q=` より前
- * （`before`）だけを見る——`type=` の値そのものにカンマ以外の区切りは
- * 無いので、行末まで伸ばす理由が無い。
- *
- * **件数は従来どおり先頭の位置引数である**（`/journal 50`）。既存の呼びを
- * 1文字も変えないため、`type=` にも `q=` にも当たらない最初のトークンを
- * 件数として読む——`type=` を素通しで「最初の非空トークン」と読むと、
- * `/journal type=decision 50` のような並びで `type=decision` を件数として
- * 誤読する。
- *
- * **`q=`・`type=` の値が空、知らないキー、2つ目以降の位置引数は使い方の誤りとして返す**
- * （#3996）。HTTP 側は空文字列を「絞らない」に倒すので、黙って通すと絞ったつもりの
- * 人間が全件の日誌を読む。
- *
- * **知らない種別は 400 を待たずにその場で断る**（`/managers` の `status=`・
- * `/usage` の `layer=`/`site=` と同じ慣習）。種別の集合は core の
- * `JOURNAL_ENTRY_TYPES` だけが持つので、書き写さずそこから使える値の一覧を
- * 組む。
- */
+// `q=` はそのトークンから行末までを1つの語として扱う: 空白で割った後のトークン列では、空白を含む語で探せない。
+// `type=` は `q=` より前だけを見る。件数は `type=` にも `q=` にも当たらない最初のトークン: 「最初の非空トークン」と読むと `type=decision` を件数と誤読する。
+// 値が空・知らないキー・2つ目以降の位置引数は使い方の誤りにする: HTTP 側は空文字列を「絞らない」に倒すので、黙って通すと全件を読む。
+// 種別の集合は core の `JOURNAL_ENTRY_TYPES` だけが持つので、書き写さずそこから組む。
 export function parseJournalSearchTokens(tokens: string[]): ParsedJournalSearchTokens {
   const qIndex = tokens.findIndex((token) => token.startsWith('q='));
   const before = qIndex === -1 ? tokens : tokens.slice(0, qIndex);
@@ -4551,18 +3411,8 @@ export function parseJournalSearchTokens(tokens: string[]): ParsedJournalSearchT
   };
 }
 
-/**
- * `/usage from=… to=… manager=… layer=… site=… token=…` を解く。
- *
- * **層と場所の値の集合は core の schema だけが持つ**（`narrowUsageAxis`）。chat 側に
- * 書き写すと、値が増えたときにここだけ古くなる。読めない値は 400 を待たずにその場で
- * 「どれを指定すればよいか」を返す。
- *
- * **`token=` は検査しない（issue #2079）。** 値の集合が閉じていない（認証
- * トークンのプールは器ごとに違う）ので、CLI が許された値の一覧を持てない
- * ——`usage.ts` の `UsageOptions.token` / `alteroid usage --token` と同じ
- * 受け渡し。
- */
+// 層と場所の値の集合は core の schema だけが持つ: chat 側に書き写すと、値が増えたときにここだけ古くなる。
+// `token=` は検査しない: 値の集合が閉じていない（プールは器ごとに違う）。
 function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
   const parsed = parseKeyValueTokens(tokens, ['from', 'to', 'manager', 'layer', 'site', 'token']);
   if (!parsed.ok) return parsed;
@@ -4584,12 +3434,10 @@ function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
   };
 }
 
-/** `scan=500` のような `key=value` の語か。会話・仕事・承認などの id には `=` を含むものが無いので、参照とは取らない。 */
 function isKeyValueToken(token: string): boolean {
   return token.includes('=');
 }
 
-/** 参照（番号|id）を書くべき位置に `key=value` が来たときの使い方の誤り。id として扱わず、デーモンへも送らない。 */
 function keyValueReferenceMessage(command: string, token: string): string {
   return (
     `使い方の誤り: ${command} は先頭に <番号|id> が要ります。[${token}] は key=value の形で、参照ではありません` +
@@ -4597,12 +3445,10 @@ function keyValueReferenceMessage(command: string, token: string): string {
   );
 }
 
-/** id だけを取るコマンド（`/journal-show`・`/archive`）の同じ誤り。key=value を取らないので、後ろに書けとは言わない。 */
 function keyValueIdMessage(command: string, token: string): string {
   return `使い方の誤り: ${command} は <id> が要ります。[${token}] は key=value の形で、id ではありません\n`;
 }
 
-/** 先頭に「番号|id」の参照を取るコマンド。ここで `key=value` が先頭に来たら、参照が無いものとして断る。 */
 const REFERENCE_FIRST_COMMANDS: ReadonlySet<string> = new Set([
   '/conversation',
   '/edit',
@@ -4620,29 +3466,12 @@ const REFERENCE_FIRST_COMMANDS: ReadonlySet<string> = new Set([
   '/commit-edit',
 ]);
 
-/** 番号（直前の一覧の並び）でも id そのままでも指せるようにする。 */
 function resolveListedId(reference: string, listed: string[]): string | null {
   if (/^\d+$/.test(reference)) return listed[Number(reference) - 1] || null;
   return reference;
 }
 
-/**
- * 失敗した応答から、人間に見せる理由を1行取り出す（issue #670）。
- *
- * **デーモンが書いた文をそのまま使う。** `/managers` の 400 は3種類あり、
- * どれも「次に何を打てばよいか」まで書いてある（`apps/daemon/src/app.ts` の
- * `parseManagerStatuses` の呼び出し側と錨の実在検査）。CLI 側で言い換えると
- * その案内が消えるうえ、断り方が増えたときにここだけ古くなる。
- *
- * **読めなければ状態コードだけを言う**——`access.ts` / `profile.ts` /
- * `login.ts` が既に同じ倒し方をしている（`typeof body.error === 'string'`）。
- * **黙って空文字を返さない**（理由が無いのと、理由が読めないのを混ぜない）。
- */
-/**
- * 既存の文言の後ろへ、`errorDetail` を足す（`マネージャーの一覧を読めませんでした — …`
- * の形。issue #2172 / PR #2175 と同じ）。**固定の文言だけを返して状態コードも理由も
- * 捨てる口を作らないための、口ごとに共通の1本。**
- */
+// 固定の文言だけを返して状態コードも理由も捨てる口を作らないための、口ごとに共通の1本。
 async function withDetail(
   message: string,
   response: { status: number; json: () => Promise<unknown> },
@@ -4650,11 +3479,7 @@ async function withDetail(
   return `${message} — ${await errorDetail(response)}`;
 }
 
-/**
- * 410 `{ error: 'removed', removedAt, bytes, archiveId? }` を、失敗の文にせず「いつ消したか・何バイトだったか」で言う
- * （Web の `archive-detail` と同じ趣旨。日時は `/archive` の一覧と同じ ISO のまま出す）。
- * 本文が読めなくても削除済みとは言える: 410 という状態そのものが「消した」を表すため。
- */
+// 本文が読めなくても削除済みとは言える: 410 という状態そのものが「消した」を表すため。
 async function describeRemovedBody(
   subject: string,
   response: { json: () => Promise<unknown> },
@@ -4676,17 +3501,13 @@ async function describeRemovedBody(
   );
 }
 
-/** 追加指示・回答として「届いた」と数える outcome。`session_missing`・`declined` は HTTP 200 でも届いていない（TUI の #3487 と同じ）。 */
+// `session_missing`・`declined` は HTTP 200 でも届いていない。
 const DELIVERED_OUTCOMES: ReadonlySet<string> = new Set(['delivered', 'answered']);
 
-// `not_stopped`・`unknown` を止まったとみなさない: 止まったと確かめられていないため（TUI の #3519 と同じ）
+// `not_stopped`・`unknown` を止まったとみなさない: 止まったと確かめられていないため。
 const STOPPED_OUTCOMES: ReadonlySet<string> = new Set(['stopped']);
 
-/**
- * デーモンの `{ outcome, detail }` を、言い換えずに出す。許可リストに無い outcome は `✗` を付け、
- * `onFailed` で呼び手へ知らせる（パイプではそこで止まる）。
- * 拒否リスト（`session_missing` 等）にしない: デーモンが値を足したとき、黙って成功になるため。
- */
+// 拒否リスト（`session_missing` 等）にしない: デーモンが値を足したとき、黙って成功になるため。
 function reportOutcome(
   result: { outcome: string; detail: string },
   succeeded: ReadonlySet<string>,
@@ -4714,11 +3535,7 @@ async function errorDetail(response: { status: number; json: () => Promise<unkno
   return `HTTP ${response.status}（理由は読めませんでした）`;
 }
 
-/**
- * 抜けるときの `POST /chat/:id/end`。**要求が通ってから**「蒸留しています」と言う。失敗
- * （例外・非 ok）は、会話は終わっておらず蒸留も走っていないこと、あとで終えられることを
- * 出す。終了コードは変えない（REPL の他のエラーと同じく、書いて正常に戻る）。
- */
+// 要求が通ってから「蒸留しています」と言う: 失敗したときに、走っていない蒸留を走っているとは言わない。
 export async function endConversationOnExit(
   client: DaemonClient,
   target: Target,
@@ -4737,8 +3554,7 @@ export async function endConversationOnExit(
     }
     reason = describeAuthFailure(response.status, target) ?? (await errorDetail(response));
   } catch (error) {
-    // 繋がらないときは、単発のコマンドと同じ直し方の案内にする（#4003）。案内の文は句点で終わるので、括弧の中では句点を外す。
-    // 接続の失敗でない例外の文は変えない。
+    // 案内の文は句点で終わるので、括弧の中では句点を外す。
     reason = isConnectionFailure(error)
       ? describeCliFailure(error).replace(/。$/, '')
       : redactError(error instanceof Error ? error.message : String(error));
@@ -4750,50 +3566,23 @@ export async function endConversationOnExit(
   );
 }
 
-/** `/managers [status=…] [limit=…] [after=…]` を解いた結果（issue #670）。 */
 export type ParsedManagerFilters =
   | {
       ok: true;
-      /**
-       * `GET /managers` へそのまま渡す絞り込みと窓の大きさ。**1つも無ければ
-       * `$get` へ渡るクエリは空になり、応答は従来と1バイト違わない**（あの口の
-       * opt-in は生のクエリで判定される。`apps/daemon/src/app.ts` の `optedIn`）。
-       */
       query: { status?: string; limit?: string };
-      /**
-       * 錨の**参照**（番号か id）。`startedAt` はここには無い——組にするのは
-       * `Listed.managerAnchors` を引ける呼び出し側の仕事である（そちらの doc）。
-       */
       after?: string;
     }
   | { ok: false; message: string };
 
-/**
- * `/managers` の絞り込みと窓を解く（issue #670）。
- *
- * **`status=` の値の集合は core の schema だけが持つ**（`parseUsageFilters` の
- * `narrowUsageAxis` と同じ理由——chat 側に書き写すと札が増えたときにここだけ
- * 古くなる）。**読めない値は 400 を待たずにその場で「どれを指定すればよいか」を
- * 返す。** デーモンも同じ検査を持っているので、これは二重の門であって唯一の
- * 門ではない（`apps/daemon/src/app.ts` の `parseManagerStatuses`）。
- *
- * **`limit=` は検査しない。** 範囲（1〜1000）を持つのはデーモンの側で、ここに
- * 数を書き写すと片方だけ動いたときに CLI が「通るはずの値」を拒む側になる。
- * 落ちたら 400 の本文をそのまま出す（`/managers` のハンドラ）。
- *
- * **`after=` は錨の *片方* しか受け取らない。** 残りの `startedAt` は
- * `Listed.managerAnchors` から引く（そちらの doc）ので、この関数は文字列を
- * 解くだけで、引き当ての失敗は呼び出し側が言う。
- */
+// `status=` の値の集合は core の schema だけが持つ: chat 側に書き写すと札が増えたときにここだけ古くなる。
+// `limit=` は検査しない: 範囲を持つのはデーモンの側で、書き写すと片方だけ動いたときに CLI が「通るはずの値」を拒む側になる。
 export function parseManagerFilters(tokens: string[]): ParsedManagerFilters {
   const parsed = parseKeyValueTokens(tokens, ['status', 'limit', 'after']);
   if (!parsed.ok) return parsed;
   const raw = parsed.values;
 
   if (raw.status !== undefined) {
-    // **空の要素（`status=a,,b`）は落とす。** デーモンの `parseManagerStatuses`
-    // が同じ落とし方をするので、ここで知らない値として数えると CLI だけが
-    // 断る形になる。
+    // 空の要素（`status=a,,b`）は落とす: デーモンの `parseManagerStatuses` が同じ落とし方をするので、数えると CLI だけが断る形になる。
     const unknown = raw.status
       .split(',')
       .filter((value) => value.length > 0)
@@ -4818,31 +3607,15 @@ export function parseManagerFilters(tokens: string[]): ParsedManagerFilters {
   };
 }
 
-/**
- * 窓がいっぱいだったことと、続きの打ち方を出す（issue #670）。
- *
- * **言えるのは「要求した上限とちょうど同じ件数が返った」という1つの事実だけ
- * である**——`GET /managers` は封筒（`total` / `nextCursor`）を持たないので、
- * 残りが何件かも、そもそも残っているかも言えない（`noteIfAtLimit` の doc が
- * 同じ線を引いている）。**黙って切らないためだけに出す。**
- *
- * **`noteIfAtLimit` を使わずに別に持つ理由は、続きの打ち方まで出すことである。**
- * 錨は「直前の一覧の最後の番号」なので、この一覧の件数がそのまま次の `after=`
- * になる——`/conversation <番号|id> scan=<N>` と同じで、次の一手を人間に
- * 組み立てさせない。**`status=` は打たれた字面をそのまま繰り返す**（絞りを
- * 外した命令を案内すると、続きを読んだつもりで別の一覧へ移る）。
- *
- * `limit=` を渡していないときは `null`（窓を掛けていないので、切れていない）。
- */
+// 言えるのは「要求した上限とちょうど同じ件数が返った」という1つの事実だけ: `GET /managers` は封筒を持たない。
+// `noteIfAtLimit` を使わない理由は、続きの打ち方まで出すこと。`status=` は打たれた字面をそのまま繰り返す: 絞りを外した命令を案内すると別の一覧へ移る。
 export function renderManagersWindowNote(
   count: number,
   query: { status?: string; limit?: string },
 ): string | null {
   const { limit, status } = query;
   if (limit === undefined) return null;
-  // **`Number(limit)` が NaN なら黙る。** 読めない値はデーモンが 400 で断る側
-  // なので、ここへ来たなら数として通っている——それでも `!==` は NaN で必ず
-  // 真になり、切れていない一覧に注記を付けてしまう。
+  // `Number(limit)` が NaN なら黙る: `!==` は NaN で必ず真になり、切れていない一覧に注記を付けてしまう。
   if (!Number.isFinite(Number(limit)) || count !== Number(limit)) return null;
   const statusPart = status === undefined ? '' : ` status=${status}`;
   return (
@@ -4851,24 +3624,11 @@ export function renderManagersWindowNote(
   );
 }
 
-/** `/reply` `/allow` `/deny` の宛先解決の結果。 */
 type WaitingTarget =
   { ok: true; managerId: string; requestId: string } | { ok: false; message: string };
 
-/**
- * `/reply` `/allow` `/deny` の第1引数を (managerId, requestId) へ解く。
- *
- * **番号なら `/waiting` の並びをそのまま引く**（`Listed.waiting`）。数字で
- * なければ **`requestId` そのもの**として受け、**`GET /managers` を引き直して
- * その `requestId` を持つマネージャーを探す** — 先に `/waiting` を打っていな
- * くても効くようにするためである（#336）。
- *
- * **宛先を CLI 側で当てない。** 同じ `requestId` を複数のマネージャーが持つ
- * ことは、`requestId` が SDK 側の識別子である以上、原理的には否定できない
- * （`AGENTS.md`「踏みやすい地雷」）。見つかったものが2件以上なら、どちらへも
- * 送らず両方の `managerId` を出す — 先頭を選ばない。0件なら「待っている
- * マネージャーは居ません」と言って終わる（推測しない）。
- */
+// 宛先を CLI 側で当てない: 同じ `requestId` を複数のマネージャーが持つことは原理的に否定できない（AGENTS.md「踏みやすい地雷」）。
+// 2件以上ならどちらへも送らず両方を出し、先頭を選ばない。
 async function resolveWaitingTarget(
   reference: string,
   listedWaiting: Listed['waiting'],
@@ -4883,9 +3643,6 @@ async function resolveWaitingTarget(
   }
 
   const response = await client.managers.$get({
-    // **窓は渡さない**（issue #670。渡さなければ応答は1バイトも変わらない
-    // ＝この呼びの挙動は何も変えていない。CLI へ窓を通すかは別 issue で、
-    // ここは 型の追随だけである。`ManagerListItem` の doc）。
     query: {},
   });
   if (!response.ok) {
@@ -4922,26 +3679,13 @@ async function resolveWaitingTarget(
   return { ok: true, managerId: owner.managerId, requestId: reference };
 }
 
-/** `/allow` `/deny` を引数なしで打ったときの宛先解決の結果。 */
 type DecisionOnlyTarget = { ok: true; managerId: string } | { ok: false; message: string };
 
-/**
- * `/allow` `/deny` を引数なしで打ったとき（宛先を書かずに decision だけ送る形）
- * の、宛先（マネージャー）解決。
- *
- * `POST /managers/:id/messages` は `managerId` を URL に要求するので、
- * `requestId` を省いても宛先そのものは要る。**ここでも当てない** —
- * 返事待ちのマネージャーが2本以上あれば、どちらへも送らず候補を出す。1本
- * だけなら、その1本の中の曖昧さ（複数の確認を同時に待っている場合）は
- * デーモンの `#choosePending`（`packages/core/src/manager.ts`）が解く。
- */
+// ここでも宛先を当てない: 返事待ちのマネージャーが2本以上あれば、どちらへも送らず候補を出す。
 async function resolveDecisionOnlyManager(
   client: ReturnType<typeof createClient>,
 ): Promise<DecisionOnlyTarget> {
   const response = await client.managers.$get({
-    // **窓は渡さない**（issue #670。渡さなければ応答は1バイトも変わらない
-    // ＝この呼びの挙動は何も変えていない。CLI へ窓を通すかは別 issue で、
-    // ここは 型の追随だけである。`ManagerListItem` の doc）。
     query: {},
   });
   if (!response.ok) {
@@ -4970,14 +3714,6 @@ async function resolveDecisionOnlyManager(
   return { ok: true, managerId: only.managerId };
 }
 
-/**
- * 引用符（`"..."` / `'...'`）を1トークンとして保つ簡易トークナイザ。
- *
- * `/answers` の各回答は1語だが、複数語にしたいときだけ引用符で囲めるように
- * するための道具。`line.split(/\s+/)` では引用符の中の空白ごと割れてしまう
- * ので、コマンド本体は `/answers` の処理でだけこちらを使う（他のコマンドの
- * 単純な空白分割は変えない）。
- */
 function tokenizeQuoted(text: string): string[] {
   const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
   const tokens: string[] = [];
@@ -4987,11 +3723,7 @@ function tokenizeQuoted(text: string): string[] {
   return tokens;
 }
 
-/**
- * シェルに近い分け方: 空白で割るが、引用符（`"..."` / `'...'`）の中の空白は保ち、**語の途中の
- * 引用符も効く**（`--other q2="ただし 来週"` が1語になる）。`tokenizeQuoted`（`/answers` 用）は
- * 引用符が語の先頭にあるときだけ効くので、`設問id=文` の形には使えない。
- */
+// `tokenizeQuoted` は引用符が語の先頭にあるときだけ効くので、`設問id=文`（`--other q2="ただし 来週"`）の形には使えない。
 function tokenizeWithQuotes(text: string): QuotedToken[] {
   const tokens: QuotedToken[] = [];
   let current = '';
@@ -5022,27 +3754,19 @@ function tokenizeWithQuotes(text: string): QuotedToken[] {
   return tokens;
 }
 
-/** `tokenizeWithQuotes` の1語。`start`/`end` は元の文字列での位置（引用符を含む）。 */
 interface QuotedToken {
   value: string;
   start: number;
   end: number;
 }
 
-/**
- * `/answer <番号|id> --select q1=a --select q2=a,b --other q2=テキスト [補足]` の、番号の後ろの
- * トークンを読む（issue #2525）。`--select` は `<設問id>=<選択肢id>[,<選択肢id>...]`、
- * `--other` は `<設問id>=<文>`（文に `=` があってもよい。最初の `=` で割る）。どちらも `--名前 値` と
- * `--名前=値` の両方で書け、同じ設問に何度書いてもよい（選択肢は書いた順に足す）。残りの
- * トークンは補足の自由文になる。**突き合わせはデーモンが行う**（知らない id は 400 で返る）。
- */
+// 突き合わせはデーモンが行う: 知らない id は 400 で返る。
 function parseStructuredAnswer(
   text: string,
 ): { selections: ApprovalSelection[]; supplement: string } | { error: string } {
   const tokens = tokenizeWithQuotes(text);
   const selections: ApprovalSelection[] = [];
-  // 補足は、隣り合う語の間の生の空白（改行・インデント・連続した空白）を保って繋ぐ（#3723）。
-  // フラグを挟んだ語どうしは、空白1つで繋ぐ。
+  // 補足は、隣り合う語の間の生の空白（改行・インデント・連続した空白）を保って繋ぐ。フラグを挟んだ語どうしは空白1つで繋ぐ。
   let supplement = '';
   let lastSupplement = -1;
   const entryOf = (questionId: string): ApprovalSelection => {
@@ -5099,18 +3823,12 @@ function parseStructuredAnswer(
   return { selections, supplement };
 }
 
-/** `/answers` の1件ぶん — どの承認待ちに、何を答えるか。 */
 interface AnswerPair {
   reference: string;
   answer: string;
 }
 
-/**
- * `/answers` のトークン列を (番号|id, 回答) の対へ読む。
- *
- * トークン数が偶数でない・答えが空、のどちらかがあれば全体を不正として
- * `null` を返す（一部だけ解釈して送ると、書いたつもりの件が黙って落ちる）。
- */
+// 一部だけ解釈して送ると、書いたつもりの件が黙って落ちるので、不正なら全体を `null` にする。
 function parseAnswerPairs(tokens: string[]): AnswerPair[] | null {
   if (tokens.length === 0 || tokens.length % 2 !== 0) return null;
   const pairs: AnswerPair[] = [];
@@ -5123,10 +3841,6 @@ function parseAnswerPairs(tokens: string[]): AnswerPair[] | null {
   return pairs;
 }
 
-// ---------------------------------------------------------------------------
-// 引き受けたまま終わっていない仕事の台帳
-// ---------------------------------------------------------------------------
-
 const COMMITMENT_ORIGIN_LABEL: Record<Commitment['origin'], string> = {
   human: '人間',
   manager: 'マネージャー',
@@ -5134,18 +3848,7 @@ const COMMITMENT_ORIGIN_LABEL: Record<Commitment['origin'], string> = {
   self: '自分',
 };
 
-/**
- * 読めない行が在ることの断り（issue #296）。無ければ空文字。
- *
- * **id が取れない行は件数だけに数える**（`packages/core/src/tools.ts` の
- * `commitment_list` ・`packages/core/src/digest.ts` ・`apps/web` の
- * `UnreadableNote` と同じ扱い。行が壊れている以上、id という材料が
- * そもそも無いことがある）。
- *
- * **「片付いたのではない」を落とさないこと。** これを落とすと、読めない行が
- * 静かに未了から消えたのと区別が付かなくなる（`packages/core/src/store.ts` の
- * `CommitmentList` の doc と同じ理由）。
- */
+// 「片付いたのではない」を落とさない: 落とすと、読めない行が静かに未了から消えたのと区別が付かない。
 function renderUnreadableNotice(unreadable: UnreadableCommitment[]): string {
   if (unreadable.length === 0) return '';
   const ids = unreadable.map((entry) => entry.id).filter((id): id is string => id !== undefined);
@@ -5156,11 +3859,7 @@ function renderUnreadableNotice(unreadable: UnreadableCommitment[]): string {
   );
 }
 
-/**
- * 読めない承認待ちの断り（issue #2298。`renderUnreadableNotice` と同じ形）。0件なら空文字。
- * **「壊れた行であって、回答済み・取り下げ済みではない」を落とさない。** 番号は振らない
- * （読めない行へは `/answer` できない）。
- */
+// 「壊れた行であって、回答済み・取り下げ済みではない」を落とさない。番号は振らない: 読めない行へは `/answer` できない。
 function renderUnreadableApprovalNotice(unreadable: UnreadableApproval[]): string {
   if (unreadable.length === 0) return '';
   const ids = unreadable.map((entry) => entry.id).filter((id): id is string => id !== undefined);
@@ -5171,11 +3870,7 @@ function renderUnreadableApprovalNotice(unreadable: UnreadableApproval[]): strin
   );
 }
 
-/**
- * 読めない委譲の断り（issue #2345。`renderUnreadableApprovalNotice` と同じ形）。
- * 0件なら空文字。**「壊れた行であって、居ないのでも、畳まれたのでもない」を落とさない。**
- * 番号は振らない（読めない行へは `/msg` も `/stop` もできない）。
- */
+// 「壊れた行であって、居ないのでも、畳まれたのでもない」を落とさない。番号は振らない: 読めない行へは `/msg` も `/stop` もできない。
 function renderUnreadableJobNotice(unreadable: readonly UnreadableJob[]): string {
   if (unreadable.length === 0) return '';
   const ids = unreadable.map((entry) => entry.id).filter((id): id is string => id !== undefined);
@@ -5186,11 +3881,7 @@ function renderUnreadableJobNotice(unreadable: readonly UnreadableJob[]): string
   );
 }
 
-/**
- * 読めない継続中の依頼の断り（issue #2343。`renderUnreadableApprovalNotice` と同じ形）。
- * 0件なら空文字。**「壊れた行であって、消された依頼ではない」を落とさない。**
- * kind が取れた行は `/unschedule <kind>` で外せる（ストアの `removeIfPresent` は読めない行も外す）。
- */
+// 「壊れた行であって、消された依頼ではない」を落とさない。
 function renderUnreadableScheduleNotice(unreadable: UnreadableSchedule[]): string {
   if (unreadable.length === 0) return '';
   const kinds = unreadable
@@ -5204,13 +3895,6 @@ function renderUnreadableScheduleNotice(unreadable: UnreadableSchedule[]): strin
   );
 }
 
-/**
- * 保持上限を超えて物理削除された片付き行の断り（issue #416）。0件なら空文字。
- *
- * **`renderUnreadableNotice` と同じ形にする。** どちらも `CommitmentList`
- * （`packages/core/src/store.ts`）の「無い」でも「片付いた」でもない状態を運ぶ
- * ——`unreadable` は読めなかった行、こちらは既に消えた行という違いだけである。
- */
 function renderTrimmedClosedNotice(trimmedClosed: number): string {
   if (trimmedClosed === 0) return '';
   return (
@@ -5219,33 +3903,16 @@ function renderTrimmedClosedNotice(trimmedClosed: number): string {
   );
 }
 
-/**
- * 台帳を、人間が読む形へ（`/commitments`）。
- *
- * **番号と id の対応をここで一緒に作って返す。** 表示側と `/done` 側で別々に
- * 並べ直すと、ずれた瞬間に**人間が見ていないものを閉じる**。番号は片付いたものにも
- * 振る — 抜け番にすると、人間が数え直して指すことになる。
- *
- * 表示を関数に出してあるのは `renderManagerList` / `renderUsage` と同じ理由で、
- * 何を出しているかを端末なしで確かめられるようにするためである。
- */
+// 番号と id の対応をここで一緒に作って返す: 別々に並べ直すと、ずれた瞬間に人間が見ていないものを閉じる。
+// 番号は片付いたものにも振る: 抜け番にすると、人間が数え直して指すことになる。
 export function renderCommitments(
   commitments: Commitment[],
   now: number = Date.now(),
   unreadable: UnreadableCommitment[] = [],
   trimmedClosed = 0,
 ): { text: string; ids: string[] } {
-  // **読めない行の断りを、読める行が0件のときも出す（issue #296）。** これを
-  // 下の早期 return より後ろへ置くと、台帳が読めない行だけになったときに
-  // 「引き受けたまま終わっていない仕事はありません」とだけ出る ——
-  // **いちばん危ない状態が、いちばん安心な文言で出る。**
-  //
-  // **CLI にも出すのは、口ごとに能力差を作らないためである**（`docs/PRD.md`
-  // 「要件: インターフェース（CLI・HTTP API・Web UI）」）。Web
-  // （`apps/web/app/routes/commitments.tsx` の `UnreadableNote`）と
-  // クローン（`packages/core/src/tools.ts` の `commitment_list`）にだけ在って
-  // ここに無いと、**CLI で台帳を読んだ人間だけが、読めない行の存在を知らない。**
-  // **保持上限の削除（issue #416）も同じ理由で同じ扱いにする。**
+  // 読めない行の断りを、読める行が0件のときも出す: 下の早期 return より後ろへ置くと、
+  // 読めない行だけの台帳が「仕事はありません」という安心な文言で出る。
   const notices = [renderUnreadableNotice(unreadable), renderTrimmedClosedNotice(trimmedClosed)]
     .filter((line) => line !== '')
     .join('\n');
@@ -5267,16 +3934,11 @@ export function renderCommitments(
   commitments.forEach((commitment, index) => {
     ids.push(commitment.id);
     const closed = commitment.closedAt !== undefined;
-    // **本文は畳む。** 器は全文を持つ（要約を持たせない）ので、切るのは表示側の
-    // 仕事である。畳まないと、数千字の依頼1本で一覧が流れて読めなくなる。
     lines.push(`  [${index + 1}] ${closed ? '✓ ' : ''}${summarizeText(commitment.body)}`);
     const from =
       COMMITMENT_ORIGIN_LABEL[commitment.origin] +
       (commitment.source === undefined ? '' : `(${commitment.source})`);
-    // **5項目を揃える**（人間の依頼: id + 名前 + 概要 + updated_at + created_at）。
-    // 名前は「起点」、概要は上の本文の抜粋、作成は受け取った時刻、更新は
-    // 片付けた時刻（まだなら受け取った時刻）。**齢の表示は残す** — 人間が
-    // 一覧を読むときに効くのはそこで、ISO を足したから要らなくなるものではない。
+    // 齢の表示は残す: 人間が一覧を読むときに効くのはそこで、ISO を足したから要らなくなるものではない。
     lines.push(
       `      id: ${commitment.id}  起点: ${from}  作成: ${commitment.at}` +
         `（${formatElapsedAgo(commitment.at, now)}）  更新: ${commitmentUpdatedAt(commitment)}`,
@@ -5291,12 +3953,6 @@ export function renderCommitments(
   return { text: lines.join('\n'), ids };
 }
 
-/**
- * 台帳・定期ジョブの1件を、全欄・全文で読める形にする（`/commitment`・`/schedule-show`。#4048）。
- * 落とす欄は `skip`（見出しに出した欄）だけ。文字列の欄は改行ごとに字下げして全文を、
- * それ以外（入れ子・数値）は1行の JSON で出す。値の無い欄（`undefined`）は出さない。
- * **伏せ字は一覧と同じ `redactBody` を、出す前のどの値にも掛ける。**
- */
 function formatEntryFull(
   heading: string,
   entry: Record<string, unknown>,
@@ -5324,17 +3980,10 @@ function summarize(entry: Record<string, unknown>): string {
     const value = entry[key];
     if (typeof value === 'string') return summarizeText(value);
   }
-  // **`worker_wait` / `turn_usage` / `context_usage` / `inbox_flow`（と、下の `github_observation`）は
-  // 上の6キーのどれも持たず、ここまで来ると要約が空欄のまま出ていた**
-  // （issue #2016）。Web（`packages/swr/src/hooks/queries.ts` の
-  // `summarizeJournalEntry`）と同じ文言を、共有の口
-  // （`@alteroid/core/journal-diagnostics-format`）から借りる——2箇所で
-  // 複製しない。残り9種（この6キーで拾えている種別）は1文字も変えない。
+  // 上の6キーを持たない診断系は、Web と同じ文言を共有の口（`@alteroid/core/journal-diagnostics-format`）から借りる: 2箇所で複製しない。
   if (isJournalDiagnosticsEntry(entry)) return summarizeJournalDiagnosticsEntry(entry);
-  // **`github_observation`（#2245）も6キーのどれも持たない**（本文は `result` の中）。repo・観測者
-  // （申告であることを落とさない）・ok なら件数、failed なら理由を出す。failed に数は無い。
+  // 観測者は申告であることを落とさない。
   if (entry.type === 'github_observation') return summarizeGithubObservation(entry);
-  // **`conversation_deleted`（#4218）も6キーのどれも持たない**（墓標。本文は無く、消した会話の id・件数・主体だけ）。
   if (entry.type === 'conversation_deleted') {
     return summarizeText(
       `会話 ${String(entry.deletedConversationId)} を削除した（${String(entry.hiddenCount)} 件。${String(entry.deletedBy)}）`,
@@ -5343,11 +3992,6 @@ function summarize(entry: Record<string, unknown>): string {
   return '';
 }
 
-/**
- * 日誌の1件を、全欄・全文で読める形にする（`/journal-show`。#4049）。落とす欄は無い。
- * 文字列の欄は改行ごとに字下げして全文を、それ以外（入れ子・数値）は1行の JSON で出す。
- * **伏せ字は一覧の `summarizeText` と同じ `redactBody` を、出す前のどの値にも掛ける。**
- */
 function formatJournalEntryFull(entry: Record<string, unknown>): string {
   const lines = [`  ${String(entry.at)}  [${String(entry.type)}]`, `      id: ${String(entry.id)}`];
   for (const [key, value] of Object.entries(entry)) {
@@ -5391,14 +4035,7 @@ function summarizeGithubObservation(entry: Record<string, unknown>): string {
   return head;
 }
 
-/**
- * `entry.type` が `JOURNAL_DIAGNOSTICS_TYPES`（4種）のどれかであることの
- * 判別。**欄の形までは検査しない**——`GET /journal` はサーバ側で
- * `journalEntrySchema` を通った行しか返さないので、`type` が一致すれば
- * 欄の形も一致する前提を置く（`entry` を `Record<string, unknown>` で
- * 緩く受けているのはこの関数の呼び出し元と同じ理由——`chat.test.ts` の
- * `JournalEntryLike` と同じ緩さ）。
- */
+// 欄の形までは検査しない: `GET /journal` はサーバ側で `journalEntrySchema` を通った行しか返さないので、`type` が一致すれば欄の形も一致する前提を置く。
 function isJournalDiagnosticsEntry(
   entry: Record<string, unknown>,
 ): entry is JournalDiagnosticsEntryLike {
@@ -5409,23 +4046,19 @@ function isJournalDiagnosticsEntry(
 }
 
 function summarizeText(value: string): string {
-  // 伏せ字を先に掛ける（切ってからだとトークンの途中で切れて形が崩れ、取りこぼす）。
+  // 伏せ字を先に掛ける: 切ってからだとトークンの途中で切れて形が崩れ、取りこぼす。
   const single = redactBody(value).replace(/\s+/g, ' ').trim();
   return single.length > 80 ? `${single.slice(0, codePointBoundary(single, 80))}…` : single;
 }
 
-/** 始めた編集（`/edit <番号|id>`）。確定すると、この発言を `supersedes` に、この会話へ送る。 */
 export interface EditInProgress {
   readonly id: string;
   readonly conversationId: string;
 }
 
-/**
- * 編集が受け付けられたら、置き換えた前の発言の番号を使えなくする（#4088）。
- * 配列から抜くと後ろの番号がずれ、同じ番号が別の発言を指す。かといって全部を無効にすると、続けて別の発言を
- * 編集できなくなる。並びを読み直すにはスキャン窓や `includeSuperseded` を覚えておく必要があり、通信の失敗も抱える。
- * だから位置は保ったまま、その1つだけを空にして（`resolveListedId` は空を引けないものとして扱う）、読み直しを案内する。
- */
+// 配列から抜かない: 後ろの番号がずれ、同じ番号が別の発言を指す。全部を無効にもしない: 続けて別の発言を編集できなくなる。
+// 並びを読み直すにはスキャン窓や `includeSuperseded` を覚えておく必要があり、通信の失敗も抱える。
+// だから位置は保ったまま、その1つだけを空にして（`resolveListedId` は空を引けないものとして扱う）、読み直しを案内する。
 export function retireListedMessage(listed: Listed, id: string): void {
   const index = listed.messages.indexOf(id);
   if (index >= 0) listed.messages[index] = '';
@@ -5436,18 +4069,10 @@ export function retireListedMessage(listed: Listed, id: string): void {
   );
 }
 
-/** 編集中に、本文も添付も無いまま確定しようとしたとき（Web と同じ。送らない）。 */
 export const EDIT_EMPTY_MESSAGE =
   '本文も添付も無いので送っていません（本文を打つか、/attach で添付を足してください。やめるなら /edit-cancel）';
 
-/**
- * `/edit <番号|id>`（編集を始める）と `/edit-cancel`（やめる）。Web の編集欄と同じ流れを、添えかけ（`draft`）で持つ（#3642）。
- * - 始める: 元の本文と添付を出し、元の添付を上げ済みとして `draft` へ載せる（上げ直さない）。確定は、本文の行
- *   （添付が残っていれば空行でも）が送られるとき（`chatCommand`）。
- * - 既存の1行の形 `/edit <番号|id> <新しい本文>` は `handled: false` で `runSlashCommand` へ渡す（元の添付を付けて即送る）。
- *   ただし編集の途中では、混ざらないよう断る。
- * 添えかけに別の添付が残っているときは始めない（元の添付と混ざり、取り消しで巻き添えにするため）。
- */
+// 添えかけに別の添付が残っているときは始めない: 元の添付と混ざり、取り消しで巻き添えにする。
 export function runEditDraftCommand(
   line: string,
   listed: Listed,
@@ -5508,7 +4133,6 @@ export function runEditDraftCommand(
   return { handled: true, editing: { id, conversationId: owning } };
 }
 
-/** `/attach <path>` / `/attachments` / `/detach <番号|all>`（添えかけの操作。送るときに上がる）。 */
 export async function runAttachmentCommand(
   line: string,
   draft: AttachmentDraft,
@@ -5552,15 +4176,7 @@ export async function runAttachmentCommand(
   );
 }
 
-/**
- * `/event` の本文を API の payload（JSON）にする。**Web の予定の画面
- * （`apps/web/app/routes/schedule.tsx` の `EventForm`）と同じ解釈**で、webhook の
- * `POST /events/:source` とも同じ（issue #3146）: JSON として読めればその値、読めなければ
- * 文字列のまま。空の本文は JSON として読めないので空文字列になる（Web が source だけで
- * 送れるのと同じ）。入口ごとに解釈が違うと、同じ `{"a":1}` でもクローンが読む本文と
- * 重複判定の鍵（`JSON.stringify(payload)`）が入口で変わってしまう。
- * 共有の純関数は無いので同じ規則を書いてある（Web 側は変えていない）。
- */
+// Web の予定の画面・webhook と同じ解釈にする: 入口ごとに解釈が違うと、同じ `{"a":1}` でもクローンが読む本文と重複判定の鍵が入口で変わる。
 export function parseEventPayload(body: string): unknown {
   try {
     return JSON.parse(body) as unknown;
@@ -5569,11 +4185,6 @@ export function parseEventPayload(body: string): unknown {
   }
 }
 
-/**
- * スラッシュコマンドの行から、先頭の `skip` 個のトークン（コマンド名・参照など）と、その直後の
- * 区切りの空白を除いた残りを、生のまま返す（#3683）。本文の中の改行・インデント・連続した空白は
- * 潰さない。末尾の空白だけ落とす。
- */
 export function rawTail(line: string, skip: number): string {
   let rest = line.trimStart();
   for (let i = 0; i < skip; i += 1) rest = rest.replace(/^\S+\s*/, '');

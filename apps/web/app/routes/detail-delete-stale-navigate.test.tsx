@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 記憶・やり方・マネージャーの詳細で、削除（停止）の応答を待つあいだに別の項目へ移ったとき、
- * 成功のあとに一覧へ飛ばさない（#3802）。
- *
- * 一覧と詳細が並ぶ本番と同じ入れ子（親の経路 + 子の `:slug` / `:id`）で、DELETE をゲートで
- * 止めたまま別の項目を開き、表示を待ってから通す。**移っていなければ従来どおり一覧へ移る**
- * 歯も同じ形で置く（直し方が「常に移らない」へ倒れないように）。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -37,7 +29,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** DELETE だけ `release` まで止める。それ以外は `handle` に任せ、知らない URL は繋がらない。 */
 function stubWithGatedDelete(handle: (url: string) => Response | undefined) {
   const delete_ = gate();
   let deleteSeen = false;
@@ -65,8 +56,7 @@ function mount(router: ReturnType<typeof createMemoryRouter>) {
 }
 
 async function settle(router: { state: { location: { pathname: string } } }, pathname: string) {
-  // 一覧へ移る経路は非同期（応答の読み取り → then → navigate）。移らないことを見るので、
-  // 実時間は待たず（#2146）、マクロタスクを何周か回して、応答の処理が済んでから確かめ直す。
+  // 移らないことを見るので、実時間は待たずマクロタスクを何周か回す。
   await waitFor(() => expect(router.state.location.pathname).toBe(pathname));
   for (let turn = 0; turn < 20; turn += 1) {
     await act(async () => {
@@ -151,7 +141,6 @@ describe('記憶の削除', () => {
     release();
     await settle(router, '/memory/bbb');
 
-    // 書きかけのまま離れようとすると、確認が出て、止まる。
     void router.navigate('/memory');
     expect(await screen.findByRole('button', { name: '破棄して離れる' })).toBeTruthy();
     expect(router.state.location.pathname).toBe('/memory/bbb');

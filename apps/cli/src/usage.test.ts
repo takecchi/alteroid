@@ -4,18 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureStdout } from './test-support.js';
 import { describeUsageDateOrder, renderUsage, usageCommand, type UsageView } from './usage.js';
 
-/**
- * #361: `renderUsage`（文字列を返す純粋関数）だけでなく、実際に端末へ書く
- * `usageCommand`（書く側）も測る。`renderUsage` のテストが緑でも、
- * `usageCommand` が別のものを書く・書かない・書く先を間違える欠陥は別に
- * 測らないと緑のまま通る（`captureStdout` の doc に同じ注意がある。#333 の
- * 実例と同じ形）。`fetch` を差し替えて本物の型付きクライアント（`hono/client`）を
- * 通す形は `conversations.test.ts` / `memory.test.ts` と同じ。
- */
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
-  // `vi.fn()` にしてあるのは、「ログインしていない」note 分岐だけ1件
-  // `mockResolvedValueOnce` で上書きしたいため（`login.test.ts` と同じ理由）。
+  // `vi.fn()` にしてあるのは、「ログインしていない」note 分岐だけ1件 `mockResolvedValueOnce` で上書きしたいため。
   resolveTarget: vi.fn(() =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
   ),
@@ -23,7 +14,6 @@ vi.mock('./target.js', async (importOriginal) => ({
 
 const target = await import('./target.js');
 
-/** 失敗（reject）した Error を取り出す。resolve したらテストを落とす。 */
 async function failureOf(promise: Promise<unknown>): Promise<Error> {
   try {
     await promise;
@@ -95,24 +85,14 @@ function row(
   };
 }
 
-/**
- * `GET /usage` の応答。
- *
- * **`account`（アカウント全体の残り）を既定で `unknown` にしてある。** ここを
- * 省略できる形にすると、渡し忘れた口が黙って落とせてしまう — それが実際に起きて
- * いた欠陥である（読んでいたのはクローンの `usage_read` だけだった）。
- */
+/** `account` を既定で `unknown` にする: 省略できる形にすると、渡し忘れた口が黙って落とせてしまう。 */
 function aggregate(over: Partial<UsageView>): UsageView {
   return {
     rows: [],
     since: '2026-08-01T00:00:00.000Z',
     layersSince: '2026-08-01T00:00:00.000Z',
-    // **トークンの軸も既定で「観測している」側にしてある。** ここを null にすると
-    // 全テストの出力に「まだ1件も記録していない」の行が入り、その行がある状態を
-    // 正常として固定してしまう（この軸を測るテストは自分で null を渡す）。
+    // 軸は既定で「観測している」側にする: null にすると全テストの出力に「まだ1件も記録していない」の行が入り、正常として固定してしまう。
     tokensSince: '2026-08-01T00:00:00.000Z',
-    // **回数の軸も同じ理由で「観測している」側にしてある。** CLI はこの値を
-    // 表示に使わない（`summarizeUsage` へ渡すだけ）ので、他の軸と揃えておく。
     turnRows: [],
     turnsSince: '2026-08-01T00:00:00.000Z',
     beforeTurns: false,
@@ -121,8 +101,6 @@ function aggregate(over: Partial<UsageView>): UsageView {
     beforeTokens: false,
     notice: USAGE_ESTIMATE_NOTICE,
     account: { state: 'unknown' },
-    // **既定で「取りこぼしは無い」側にしてある**（他の軸と同じ理由）。この軸を
-    // 測るテストは自分で渡す。
     unrecordedManagers: [],
     ...over,
   };
@@ -134,7 +112,6 @@ describe('renderUsage', () => {
 
     expect(text).not.toContain('$0.00');
     expect(text).toContain('まだ1件も記録が無い');
-    // まだ何も出せていなくても但し書きは必ず添える。
     expect(text).toContain(USAGE_ESTIMATE_NOTICE);
   });
 
@@ -186,8 +163,7 @@ describe('renderUsage', () => {
   });
 
   it('層別（誰が）と場所別（どこで）も出す', () => {
-    // **モデル名では層を見分けられない。** 3行とも同じモデル帯にしてあるのは、
-    // `ALTEROID_CLONE_MODEL` を置いたときに実際に起きる並びだからである。
+    // 3行とも同じモデル帯にする: `ALTEROID_CLONE_MODEL` を置くと実際にそうなり、モデル名では層を見分けられない。
     const rows = [
       row({ managerId: 'clone', model: 'opus', layer: 'clone', site: 'session', costUsd: 1.5 }),
       row({ managerId: 'clone', model: 'opus', layer: 'clone', site: 'distill', costUsd: 0.5 }),
@@ -204,7 +180,6 @@ describe('renderUsage', () => {
   });
 
   it('層の軸の始点を台帳の始点と混ぜない', () => {
-    // 台帳（#45）より層の軸のほうが後から入った器では、始点が2つある。
     const text = renderUsage(
       aggregate({
         rows: [row({ managerId: 'm1', costUsd: 1 })],
@@ -218,7 +193,6 @@ describe('renderUsage', () => {
   });
 
   it('beforeLayers が真なら、その範囲の層と場所は観測ではないと書く', () => {
-    // ここを黙ると「クローンは使っていなかった」「蒸留は起きていなかった」と読める。
     const text = renderUsage(
       aggregate({ rows: [row({ managerId: 'm1', costUsd: 1 })], beforeLayers: true }),
     );
@@ -240,13 +214,6 @@ describe('renderUsage', () => {
   });
 });
 
-/**
- * Web 検索の回数（`webSearchRequests`。Issue #1950）。
- *
- * **0 のときは1文字も増やさない**（AGENTS.md 地雷表）。文言は core の
- * `describeWebSearchRequests` が1箇所で持つ（`usage-format.test.ts` が本体を
- * 測る）ので、ここで測るのは「合計の内訳行に実際に繋がっているか」だけである。
- */
 describe('renderUsage の Web 検索の回数（webSearchRequests）', () => {
   it('合計が 0 のときは Web検索 の行を出さない', () => {
     const text = renderUsage(
@@ -266,13 +233,6 @@ describe('renderUsage の Web 検索の回数（webSearchRequests）', () => {
   });
 });
 
-/**
- * 取れなかった区切りの1行（`describeUnreadableUsage`。Issue #2086）。
- *
- * 文言そのものは core（`describeUnreadableUsage`）が1箇所で持つ。ここで測るのは
- * 「合計の内訳行の直後に実際に繋がっているか」と「無ければ1文字も増やさない
- * こと」だけである（`describeWebSearchRequests` と同じ形の歯）。
- */
 describe('renderUsage の取れなかった区切り（unreadable）', () => {
   it('unreadable が無ければ、それらしい行を出さない', () => {
     const text = renderUsage(aggregate({ rows: [row({ managerId: 'm1', costUsd: 1 })] }));
@@ -292,13 +252,6 @@ describe('renderUsage の取れなかった区切り（unreadable）', () => {
   });
 });
 
-/**
- * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
- *
- * **合計値の隣に必ず出す。** 文言そのものは `describeUnrecordedManagers`
- * （core）が1箇所で持つので、ここで測るのは「渡された内容がそのまま出るか」と
- * 「合計の近くという位置」である。
- */
 describe('renderUsage は台帳に1行も無い委譲を合計値の隣に出す', () => {
   it('1件以上あれば、合計の直後に managerId と status と起こした時刻を出す', () => {
     const text = renderUsage(
@@ -314,8 +267,6 @@ describe('renderUsage は台帳に1行も無い委譲を合計値の隣に出す
     expect(text).toContain('running');
     expect(text).toContain('2026-08-25T12:00:00.000Z');
 
-    // **合計値の隣**——「合計 …」の行より後、マネージャー別などの軸の見出しより
-    // 前に出ることを、出現位置の順序で確かめる。
     const totalIndex = text.indexOf('合計 $1.00');
     const unrecordedIndex = text.indexOf('mgr-unrecorded');
     const managerAxisIndex = text.indexOf('マネージャー別:');
@@ -324,10 +275,6 @@ describe('renderUsage は台帳に1行も無い委譲を合計値の隣に出す
     expect(unrecordedIndex).toBeLessThan(managerAxisIndex);
   });
 
-  /**
-   * **0件のときも黙らない。** 空配列は「取りこぼしが無い」であって「調べていない」
-   * ではない——そう読める形で、0件でも必ず1行出す。
-   */
   it('0件のときは「0件」と明示する（黙らない）', () => {
     const text = renderUsage(
       aggregate({
@@ -369,16 +316,6 @@ describe('renderUsage は台帳に1行も無い委譲を合計値の隣に出す
   });
 });
 
-/**
- * アカウント全体の残り（claude.ai 側の値）を、**人間の面にも出す。**
- *
- * `GET /usage` は最初からこれを返していたが、読んでいたのはクローンの
- * `usage_read` だけだった。クローンに見えているものが人間に見えないのは能力の
- * 差である（north_star 禁止1）。
- *
- * ここで見るのは「出ていること」と「取れなかったものを 0 と書かないこと」。
- * 文言そのものの試験は core（`describeAccountUsage`）が持つ。
- */
 describe('renderUsage はアカウント全体の残りも出す', () => {
   it('台帳に記録があるときに出る', () => {
     const text = renderUsage(
@@ -405,7 +342,6 @@ describe('renderUsage はアカウント全体の残りも出す', () => {
     expect(text).toContain('アカウント全体の残り（claude.ai 側の値）');
     expect(text).toContain('Claude Max');
     expect(text).toContain('42% 使用');
-    // 端末は Markdown を解釈しないので、強調記号を素で出さない。
     expect(text).not.toContain('**');
   });
 
@@ -435,13 +371,6 @@ describe('renderUsage はアカウント全体の残りも出す', () => {
   });
 });
 
-/**
- * 集計で読めずに外した行（`describeUnreadableUsageRows`。Issue #2427）。
- *
- * 文言そのものは core が1箇所で持つ。ここで測るのは「合計の隣に繋がっているか」「記録が
- * 無いだけの出力で終わらないか」「欄の無い古いデーモンの応答で `undefined` を書かず、
- * 0 件とも言わないか」（#2382 と同じ作法）と、「無ければ1文字も増やさないこと」。
- */
 describe('renderUsage / usageCommand の読めずに外した行（unreadableRows）', () => {
   const UNREADABLE = [
     { table: 'usage_daily' as const, date: '2026-08-13', fields: ['layer'] },
@@ -487,7 +416,6 @@ describe('renderUsage / usageCommand の読めずに外した行（unreadableRow
   });
 
   it('usageCommand: 欄の無い古いデーモンの応答でも「undefined」を書かず、何も言わない', async () => {
-    // 応答は型で検査されない（`response.json()` をそのまま渡す）。欄が無いまま届く。
     replies.push({
       status: 200,
       body: aggregate({ rows: [row({ managerId: 'm1', costUsd: 1 })] }),
@@ -518,11 +446,6 @@ describe('renderUsage / usageCommand の読めずに外した行（unreadableRow
   });
 });
 
-/**
- * #361: 「書く側」— `renderUsage` が正しい文字列を作っても、`usageCommand` が
- * それを書かない・別のものを書く・書く先を間違えれば、上の `renderUsage` の
- * テストは全部緑のまま通る。ここではその経路自体を測る。
- */
 describe('usageCommand', () => {
   it('GET /usage を叩き、renderUsage の出力をそのまま端末へ書く', async () => {
     const view = aggregate({ rows: [row({ managerId: 'm1', costUsd: 1.5 })] });
@@ -534,9 +457,6 @@ describe('usageCommand', () => {
     expect(sent).toHaveLength(1);
     const url = new URL(sent[0]?.url ?? '');
     expect(url.pathname).toBe('/usage');
-    // **書く側が別のものを書く／書き忘れる変異を狙って名指す。** 「何か出た」では
-    // なく、`renderUsage` がこの入力に対して作る文字列そのものと一致することを
-    // 見る（末尾の改行1つも含めて）。
     expect(read()).toBe(`${renderUsage(view)}\n`);
   });
 
@@ -562,7 +482,6 @@ describe('usageCommand', () => {
   });
 
   it('--layer が許された値でなければ、そう書いて叩かない', async () => {
-    // 引数の誤りは例外（終了コードが 0 でなくなる。#2856）。
     const error = await failureOf(usageCommand({ layer: 'not-a-layer' }));
 
     expect(sent).toHaveLength(0);
@@ -596,8 +515,6 @@ describe('usageCommand', () => {
   it('応答が失敗（ok でない）なら、読めなかったと書く（renderUsage は呼ばない）', async () => {
     replies.push({ status: 500, body: {} });
 
-    // 理由が読めない本文（`{}`）でも、状態コードは載せる（固定の文言だけにしない）。
-    // 失敗は例外（終了コードが 0 でなくなる。#2856）。
     await expect(usageCommand({})).rejects.toThrow(
       new Error('利用状況を読めませんでした（HTTP 500。クエリの形を確かめてください）'),
     );
@@ -622,12 +539,6 @@ describe('usageCommand', () => {
     );
   });
 
-  /**
-   * issue #2155: `to` が `from` より前だと絞り込みは常に0件になり、
-   * `renderUsage` は「その範囲には記録が無い。」としか書かないので「期間の
-   * 指定が逆」と区別が付かない。`describeUsageDateOrder` の注記を
-   * `renderUsage` の出力より前に書く（Web の `filterNotices` と同じ並び）。
-   */
   it('to が from より前なら、renderUsage の出力の前に注記を書く', async () => {
     const view = aggregate({ rows: [] });
     replies.push({ status: 200, body: view });
@@ -660,11 +571,6 @@ describe('usageCommand', () => {
   });
 });
 
-/**
- * issue #2155 の純粋関数部分。**`alteroid usage`（本体）と chat の
- * `/usage` の両方から同じ関数を呼ぶ**（`usage.ts` / `chat.ts` のコメント
- * 参照）ので、ここでは文言と境界（`==` では出ない）だけを測る。
- */
 describe('describeUsageDateOrder', () => {
   it('to が from より前なら注記の文字列を返す', () => {
     expect(describeUsageDateOrder('2026-09-10', '2026-09-01')).toBe(
@@ -687,12 +593,6 @@ describe('describeUsageDateOrder', () => {
   });
 });
 
-/**
- * 消費を報告しない provider のターン（`unmeteredRows`。Issue #486 M7）。文言は core の
- * `describeUnmeteredUsage` が1箇所で持つ。ここで測るのは「合計の隣に繋がっているか」「記録が
- * 無いだけの出力で終わらないか」「欄の無い応答（Claude だけの器・古いデーモン）で1文字も
- * 増えないか」。
- */
 const EXPECTED_WITHOUT_UNMETERED = [
   '合計 $1.00',
   '  入力 0 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0',
@@ -761,7 +661,6 @@ describe('renderUsage の無報告の provider（unmeteredRows）', () => {
     const without = renderUsage(aggregate(base));
     expect(renderUsage(aggregate({ ...base, unmeteredRows: [] }))).toBe(without);
     expect(without).not.toContain('報告しない provider');
-    // 導入前（origin/main）の出力そのもの。
     expect(without).toBe(EXPECTED_WITHOUT_UNMETERED);
   });
 });

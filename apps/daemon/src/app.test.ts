@@ -78,7 +78,6 @@ import {
 } from './openapi.js';
 import { startUsagePolling } from './usage-poller.js';
 
-/** クローンの代わり。HTTP 層だけを検証する。 */
 function fakeClone() {
   const listeners = new Map<string, Set<(event: ChatStreamEvent) => void>>();
   const ended: string[] = [];
@@ -89,16 +88,9 @@ function fakeClone() {
     selections?: readonly ApprovalSelection[];
   }[] = [];
   const posted: InboxEvent[] = [];
-  /** 進行中のターンの途中経過（会話ごと。`attach` が写しを返す。Issue #2652）。 */
   const inProgress = new Map<string, ChatStreamEvent[]>();
-  /** `attach` が呼ばれた会話 id（別の会話の途中経過を引いていないことを見る）。 */
   const attachCalls: string[] = [];
-  /** 答えを待っている発言（会話ごと。`attach` が返す。#3990）。 */
   const pending = new Map<string, PendingMessage[]>();
-  /**
-   * `CloneHost.dropQueuedInboxEvents` が受け取った id の塊（issue #1049）。
-   * **塊ごとに1要素**（`POST /inbox/remove` は id を塊に分けて回す）。
-   */
   const droppedFromDelivery: string[][] = [];
   let reply: ChatStreamEvent[] = [{ type: 'text', text: 'やあ' }, { type: 'done' }];
 
@@ -108,33 +100,20 @@ function fakeClone() {
 
   const managerList: ManagerSummary[] = [];
   const managerDenials = new Map<string, ManagerDenial[]>();
-  /** `ManagerPool.runnerReportedModels()` の返り値。無ければ不明。 */
   const runnerModels = new Map<string, { manager?: string; worker?: string }>();
   const transcripts = new Map<string, string>();
-  /** `transcript()` を `kind: 'removed'` にする（#698）。 */
   const removedTranscripts = new Map<
     string,
     { archiveId: string; removedAt: string; bytes: number }
   >();
-  /** `ManagerPool.runningManagerOwning()` の返り値（#698）。 */
   const runningOwners = new Map<string, string>();
   const managerSends: { managerId: string; text: string; requestId?: string }[] = [];
   const managerAborts: { managerId: string; reason?: string }[] = [];
-  // `POST /runners/vacate` が `ManagerPool.vacate()` へ渡した runnerId を記録する。
   const vacateCalls: string[] = [];
-  // `ManagerPool.vacate()` の戻り値（#2376。既定は握手を飛ばさなかった普通の成功）。
   let vacateResult: VacateResult = {};
-  // `DELETE /managers/:id` が outcome ごとに正しい HTTP ステータスを写すことを見る
-  // ためのノブ。既定は従来どおり `'stopped'`（居れば必ず止まる）。
   let abortOutcome: 'stopped' | 'not_stopped' | 'unknown' = 'stopped';
-  // `POST /managers/:id/messages` が outcome ごとに正しい HTTP ステータスを写すことを
-  // 見るためのノブ（#563）。既定は従来どおり `'delivered'`。
   let sendOutcome: 'answered' | 'delivered' | 'session_missing' = 'delivered';
-  // `GET /runners` が `ManagerPool.pushHealthOf(runnerId)` をそのまま出すことを
-  // 見るためのノブ。既定は空（一度も繋がっていない runner と同じ「無い」）。
   const pushHealthByRunnerId = new Map<string, RunnerPushHealth>();
-  // `GET /runners` が `ManagerPool.pluginLoadOf(runnerId)` / `CloneHost.pluginLoad()` をそのまま出す
-  // ことを見るためのノブ（Issue #3816）。既定は「観測なし」。
   const pluginLoadByRunnerId = new Map<string, RunnerPluginLoadObservation>();
   let clonePluginLoad: ClonePluginLoadObservation | undefined;
 
@@ -161,9 +140,6 @@ function fakeClone() {
     },
     async abort(managerId, reason) {
       if (!managerList.some((entry) => entry.managerId === managerId)) {
-        // **2026-08-21 に改名。** 「居ない」は `'unknown'`（確かめられなかった）と
-        // 紛れる別の観測なので `'absent'` に改名した（`manager.ts` の
-        // `ManagerAbortResult` の doc）。
         return { outcome: 'absent' as const, detail: `${managerId} は居ない` };
       }
       managerAborts.push({ managerId, ...(reason === undefined ? {} : { reason }) });
@@ -178,10 +154,7 @@ function fakeClone() {
     async list() {
       return managerList;
     },
-    /**
-     * **固定値を返さない。** ここが常に `[]` を返すスタブのままだと、拒否件数が
-     * 外向きの面に載っているかを見るテストが、何も見ずに通ってしまう。
-     */
+    // 固定値を返さない: 常に `[]` のスタブだと、拒否件数が外向きの面に載っているかを見るテストが何も見ずに通るため
     denials(managerId) {
       return managerDenials.get(managerId) ?? [];
     },
@@ -194,14 +167,9 @@ function fakeClone() {
     async runnerIdOf(managerId) {
       return managerList.find((manager) => manager.managerId === managerId)?.runnerId;
     },
-    // **HTTP の面には出ていない。** `GET /runners` は `deps.runners`
-    // （`RunnerRegistry`）を直に読み、`ManagerPool.runners()` は経由しない
-    // （クローンの道具専用）ので、ここでは型を満たすだけの空スタブで足りる。
     async runners() {
       return { runners: [], unassigned: [], daemonRevision: { status: 'unknown' } };
     },
-    // `GET /runners` は `pushHealthOf()` だけを直接呼ぶ（`runners()` 経由ではない）。
-    // push health を検証したいテストは `setPushHealth()` で個別に設定する。
     pushHealthOf(runnerId) {
       return pushHealthByRunnerId.get(runnerId);
     },
@@ -214,10 +182,7 @@ function fakeClone() {
       const body = transcripts.get(managerId);
       return body === undefined ? { kind: 'missing' as const } : { kind: 'body' as const, body };
     },
-    // このテストダブルの主題は #1039 ではない。この HTTP 面（daemon の
-    // 公開 app.ts）に unpushedWork の口は無い（Issue #1039 が触るのは
-    // apps/runner/src/app.ts と manager_stop の道具だけ）ので、呼ばれない
-    // 前提で置く——呼ばれたら歯が落ちる形にして、静かに乖離させない。
+    // 空スタブにしない: この HTTP 面に unpushedWork の口は無く、呼ばれたら落として静かに乖離させないため
     async unpushedWork() {
       throw new Error('この検証では呼ばれないはず（#1039 は daemon の公開 HTTP 面を触らない）');
     },
@@ -227,28 +192,20 @@ function fakeClone() {
     async restore() {
       return [];
     },
-    // 同じく触らない（枠で止まった委譲の起こし直しも契機は回し手の側にある）。
     async resumeStoppedByUsage() {
       return [];
     },
-    // HTTP 境界の検証では触らない（引き取りの契機はデーモンの配線側にある）。
     async reattachRunner() {},
-    // HTTP 境界の検証では触らない（移送の契機もデーモンの配線側、`onLost` にある）。
     relocateFrom() {},
-    // **HTTP 境界そのものが検証対象。** `POST /runners/vacate` がこの口へ
-    // `runnerId` を渡していることを確かめるため、固定値を返す空スタブではなく
-    // 呼ばれた引数を記録する。
     async vacate(runnerId) {
       vacateCalls.push(runnerId);
       return vacateResult;
     },
-    // HTTP 境界の検証では触らない（#567 の計算はデーモンのポーラーが起こす）。
     async probeTurnEnds() {},
     async flushWithheldReports() {},
     async settleStalledUsageWakes() {
       return [];
     },
-    // HTTP 境界の検証では触らない（issue #1105 C。契機はデーモンのポーラーにある）。
     async renotifyStalledDenials() {},
     async stop() {},
   };
@@ -259,16 +216,12 @@ function fakeClone() {
       return 'persisted';
     },
     managers,
-    // 認証トークンの切替（#393 PR4）。HTTP 境界の検証では触らない。
     recycleSessionForToken() {},
     pluginLoad() {
       return clonePluginLoad;
     },
-    // クローンへ配るか畳むか（Issue #783）。HTTP 境界の検証では触らない
-    // （門の判定はデーモンの配線側 `wake()` にある）。
     usageBlocked: false,
     usageReleasePending: false,
-    // 止まりの resetsAt / いまの鍵の id（Issue #1223 再発）。同じ理由で触らない。
     usageBlockedResetsAt: undefined,
     usageBlockedTokenId: undefined,
     post(event) {
@@ -307,9 +260,6 @@ function fakeClone() {
         ...(selections === undefined ? {} : { selections }),
       });
     },
-    // 消した合図の配達を止める（issue #1049）。**何を渡されたかを記録する** ——
-    // `POST /inbox/remove` が器から消すだけで終わっていないことを、応答の文言
-    // ではなく「この口が実際に呼ばれた実物」で測るため。
     async dropQueuedInboxEvents(ids) {
       droppedFromDelivery.push([...ids]);
       return ids.length;
@@ -361,7 +311,6 @@ function fakeClone() {
   };
 }
 
-/** スケジューラの代わり。HTTP 層から起こせることだけを見る。 */
 function fakeScheduler() {
   const ran: string[] = [];
   let refreshed = 0;
@@ -369,7 +318,6 @@ function fakeScheduler() {
     async refresh() {
       refreshed += 1;
     },
-    // 位相の保存は HTTP 層から観測しない（ここで見るのは「起こせるか」だけ）。
     async settled() {},
     start() {},
     stop() {},
@@ -382,8 +330,6 @@ function fakeScheduler() {
         },
       ];
     },
-    // 読めない行はこのフェイクでは持たない（本物のスケジューラ越しの歯は
-    // `schedule-unreadable-list.test.ts`）。
     unreadable() {
       return [];
     },
@@ -433,48 +379,15 @@ const json = (body: unknown) => ({
   body: JSON.stringify(body),
 });
 
-/** 本文を持たない POST（CLI はこれに content-type を付けて叩く）。 */
 const post = { method: 'POST', headers: { 'content-type': 'application/json' } };
 
-/**
- * ブラウザの単純リクエスト。人間が開いた任意のページから 127.0.0.1 へ投げられる形。
- * 応答は読めないが、送信は成立する。
- */
 const simpleRequest = (body = 'x') => ({
   method: 'POST',
   headers: { 'content-type': 'text/plain;charset=UTF-8' },
   body,
 });
 
-/**
- * 再発防止の歯（管理者からの依頼、疑いが実測で確認できた後に追加）。
- *
- * `ManagerSummary`（core の TS interface。`packages/core/src/manager.ts`）に
- * キーを1つ足しても、`managerSummarySchema`（このファイル冒頭で import した
- * `openapi.ts` のもの。**手書きの再宣言**）に対応する宣言を足し忘れると、
- * `GET /managers` / `GET /managers/:id` の `.parse()` がその欄を黙って落とす
- * ——実際に `lastCgroupEvents`（#1517）と `lastUnpushedWorkObservation`
- * （#1266）がこの形で欠けていた（直上の赤テストで実測した）。
- *
- * ここでは、その食い違いを compile time と runtime の両方で検出する。
- *
- * **compile time**: `coverage` の型を `Record<keyof ManagerSummary, true>` に
- * してある——`Record` はキーをすべて必須にするので、`ManagerSummary` に
- * オプショナルも含めて新しいキーが増えると、`coverage` の**この場所**が
- * 型エラーで落ちる（足し忘れではなく、コンパイルが強制的に追記させる）。
- *
- * **runtime**: `coverage` のキー一覧と `managerSummarySchema.shape` の
- * キー一覧を突き合わせ、`coverage` にあるのに schema に無いキーがあれば
- * 落とす（`managerSummarySchema` から1行消す変異で赤くなることを確かめて
- * ある）。
- *
- * **意図して HTTP へ出さない欄はここに無い（2026-09-26 時点の全キーで
- * 確認済み）。** もし今後そういう欄を足すなら、`coverage` からはその欄を
- * 除き、除いた理由を `managerSummarySchema` の該当欄の直前（無ければ
- * その名前で）に書くこと——`ManagerDenial.reasonType` / `inputHead` が
- * 「クローン向けの `manager_list` にだけ出す設計」と逐語で書いている
- * のと同じ作法。
- */
+// coverage は `Record<keyof ManagerSummary, true>` にする: キーを全部必須にして、足し忘れを型エラーで強制するため
 describe('managerSummarySchema と ManagerSummary のキーの一致（再発防止の歯）', () => {
   it('ManagerSummary の全キーが managerSummarySchema に宣言されている', () => {
     const coverage: Record<keyof ManagerSummary, true> = {
@@ -535,8 +448,6 @@ describe('HTTP API', () => {
 
     const body = (await response.json()) as Record<string, unknown>;
     expect(body).toMatchObject({ ok: true, operator: false });
-    // かつてはここに token を載せていた。いまはこれ1本で access grant まで通るので、
-    // 無認証で読める応答に置いてはいけない。
     expect(body).not.toHaveProperty('token');
     expect(JSON.stringify(body)).not.toContain('test-token');
   });
@@ -583,7 +494,6 @@ describe('HTTP API', () => {
 
     it('GET /status は、安全分類器に弾かれ続けているときだけ cloneSessionRefusal を返す（#4173）', async () => {
       const headers = { authorization: 'Bearer test-token' };
-      // 窓を持たない器・弾かれていない（null）器は、欄ごと出さない
       const absent = await appWithStorage().request('/status', { headers });
       expect(await absent.json()).not.toHaveProperty('cloneSessionRefusal');
       fake.clone.sessionRefusal = () => null;
@@ -617,7 +527,6 @@ describe('HTTP API', () => {
   });
 
   it('/chat は会話 id を引き継げる', async () => {
-    // #4149 から在る会話へしか送れない。
     await stores.journal.append({
       type: 'exchange',
       with: 'human',
@@ -631,19 +540,6 @@ describe('HTTP API', () => {
     expect(fake.posted[0]).toMatchObject({ conversationId: 'conv-x' });
   });
 
-  /**
-   * **`open` が届いた時点で、発言はもう受信箱に在る。**
-   *
-   * Web UI の追送（受信中に続けて打った発言）は、2本目の購読を張らないために
-   * `open` を見た時点で接続を捨てる（`apps/web/app/routes/chat.tsx` の `followUp`）。
-   * その判断が成り立つのは、投函が `open` より前に済んでいるからである。
-   *
-   * **この試験は、いまの実装の2つの順序を見分けられない。** `await
-   * stream.writeSSE(open)` の直後に同期で `clone.post` を呼ぶ形（元の順序）でも、
-   * 読み手が `open` を受け取るころには post は済んでいるので通る（実測でも通った）。
-   * ここが捕まえるのは、**投函と `open` のあいだに本物の待ちが入る変更**である
-   * — 積むのを await の後ろへ動かした瞬間に落ちる。
-   */
   it('/chat は `open` を書く前に受信箱へ積む（追送が open を投函の合図に使える）', async () => {
     const response = await app.request('/chat', json({ text: 'やあ' }));
     const body = response.body;
@@ -657,7 +553,7 @@ describe('HTTP API', () => {
       if (done) break;
       seen += decoder.decode(value, { stream: true });
     }
-    // 読み終える前に見る。**全部読んでから見ると順序の情報が消える。**
+    // 全部読んでから見ない: 投函と open の順序の情報が消えるため
     expect(seen).toContain('event: open');
     expect(fake.posted).toHaveLength(1);
     expect(fake.posted[0]).toMatchObject({ type: 'human_message', text: 'やあ' });
@@ -665,16 +561,10 @@ describe('HTTP API', () => {
     await reader.cancel();
   });
 
-  /**
-   * **`GET /chat/:conversationId/stream`（Issue #2652）。** 投函せずに購読だけを張り、
-   * 進行中のターンの「いままでの分」を先に、続きを後に流す。
-   */
   describe('GET /chat/:conversationId/stream', () => {
-    /** 本文を最後まで読む。**壁時計の期限を持たない**（閉じなければテストの寿命で切れる）。 */
     async function readAll(response: Response): Promise<string> {
       return await response.text();
     }
-    /** 読んだ本文に `needle` が現れるまで読む（正の待ち）。 */
     async function readUntil(
       reader: ReadableStreamDefaultReader<Uint8Array>,
       needle: string,
@@ -688,7 +578,6 @@ describe('HTTP API', () => {
       }
       return seen;
     }
-    /** SSE 本文を `{event, data}` の列に割る（コメント行は捨てる）。 */
     function frames(body: string): { event: string; data: unknown }[] {
       return body
         .split('\n\n')
@@ -711,7 +600,6 @@ describe('HTTP API', () => {
       const reader = (response.body as ReadableStream<Uint8Array>).getReader();
       let seen = await readUntil(reader, '途中まで');
 
-      // 続きは replay のあとに届く
       fake.emit('conv-a', { type: 'tool', tool: 'shell' });
       fake.emit('conv-a', { type: 'text', text: '続き' });
       fake.emit('conv-a', { type: 'done' });
@@ -731,7 +619,6 @@ describe('HTTP API', () => {
         { event: 'text', data: { type: 'text', text: '続き' } },
         { event: 'done', data: { type: 'done' } },
       ]);
-      // 投函していない・購読は解除されている
       expect(fake.posted).toEqual([]);
       expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(0);
     });
@@ -749,7 +636,6 @@ describe('HTTP API', () => {
         seen += decoder.decode(value, { stream: true });
       }
       expect(frames(seen).map((f) => f.event)).toEqual(['open', 'thinking', 'error']);
-      // 種別は SSE の本文にそのまま載る（Web が文面から推し量らずに済む）。
       expect(frames(seen).find((f) => f.event === 'error')?.data).toEqual({
         type: 'error',
         message: '壊れた',
@@ -856,20 +742,6 @@ describe('HTTP API', () => {
     expect((await app.request('/chat', json({ text: '' }))).status).toBe(400);
   });
 
-  /**
-   * **クローンが黙っているあいだも、SSE には何かが流れる。**
-   *
-   * ここで見たいのは「TCP が切れずデータも流れない切断」を掃除する契機が
-   * サーバ側に在ることで、その契機が heartbeat の書き込みそのものである
-   * （`@alteroid/core` の `sse-heartbeat.ts` の JSDoc）。**掃除が起きたことはここでは見ていない**
-   * —— 掃除は Node の `outgoing` の `close` / `error` を経由する経路で、
-   * `app.request()`（実際の socket を持たない）では再現できない。**見ているのは
-   * 「無音のときに書き込みが発生するか」までである。**
-   *
-   * クローンの返答は `done` を出さない形にしてストリームを開いたままにする
-   * （`done` / `error` でループが抜けるので、既定の返答だと heartbeat の前に
-   * 終わってしまう）。
-   */
   it('/chat はクローンが黙っていても heartbeat のコメント行を流す', async () => {
     fake.setReply([{ type: 'text', text: 'やあ' }]);
     const beating = createApp({
@@ -889,35 +761,21 @@ describe('HTTP API', () => {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let seen = '';
-    // **`: hb` と `event: text` の両方が見えるまで読む**（#1988）。偽のクローンは
-    // 返答を `setTimeout(0)` で流し、heartbeat は 5ms ごとに書かれるので、どちらが
-    // 先に届くかは器の混み具合で変わる。`: hb` だけを待つと、返答より先に
-    // heartbeat が届いた回に `event: text` を読む前に抜けて落ちる（main の CI で
-    // 1回起きた）。heartbeat は繰り返し届くので、両方を待っても待ち時間は延びない。
+    // `: hb` だけを待たない: hb と text のどちらが先に届くかは混み具合で変わり、hb が先だと text を読む前に抜けて落ちるため
     while (!(seen.includes(': hb') && seen.includes('event: text'))) {
       const { value, done } = await reader.read();
       if (done) break;
       seen += decoder.decode(value, { stream: true });
     }
 
-    // heartbeat が来ている。そして既存のフレームを壊していない
     expect(seen).toContain(': hb');
     expect(seen).toContain('event: open');
     expect(seen).toContain('event: text');
-    // **コメント行が他のフレームへ食い込んでいない。** 1回の `write()` で
-    // 書き切っているので、`data:` の途中に `: hb` が挟まることはない
     expect(seen).not.toMatch(/data:[^\n]*: hb/);
 
     await reader.cancel();
   });
 
-  /**
-   * **上の試験に歯が在ることの裏取り（陰性対照）。**
-   *
-   * 間隔を十分長くすれば、同じ読み方をしても `: hb` は来ない。これが無いと、
-   * 「`: hb` を含む」は他の何か（たとえばフレームの区切り方）を拾っただけでも
-   * 通ってしまう。
-   */
   it('間隔より短いあいだは heartbeat は流れない（上の試験が周期を見ている証拠）', async () => {
     fake.setReply([{ type: 'text', text: 'やあ' }]);
     const quiet = createApp({
@@ -937,7 +795,6 @@ describe('HTTP API', () => {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let seen = '';
-    // `text` まで読んだら、その後100msぶん待って何も来ないことを見る
     while (!seen.includes('event: text')) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -1118,16 +975,10 @@ describe('HTTP API', () => {
     const body = (await read.json()) as { document: { content: string } };
     expect(body.document.content).toContain('人間が API から書き換えた');
 
-    // 人間による書き換えも日誌に残る
     const entries = await stores.journal.list({ types: ['memory_update'] });
     expect(entries[0]).toMatchObject({ cause: 'human', slug: 'values' });
   });
 
-  /**
-   * Issue #2743。人間の書き換え（PUT）は、読んだ版を前提に付けられる（`ifMatch`）。
-   * 読んでから書くまでの間にクローンが書いていたら、黙って上書きせず 409 で返し、
-   * **いまの版を一緒に返す**（人間が自分の編集を捨てずに見比べられる）。
-   */
   describe('PUT /memory/:slug の前提版（ifMatch、Issue #2743）', () => {
     const put = (body: unknown) => app.request('/memory/values', { ...json(body), method: 'PUT' });
     const readVersion = async () =>
@@ -1137,7 +988,6 @@ describe('HTTP API', () => {
       await stores.persona.write('values', '# 価値観\n\nV1\n');
       const version = await readVersion();
 
-      // 人間がエディタを開いている間に、クローンが同じ文書へ書く（V2）。
       await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンが蒸留した判断\n');
 
       const res = await put({
@@ -1151,7 +1001,6 @@ describe('HTTP API', () => {
       };
       expect(body.current?.document.content).toContain('クローンが蒸留した判断');
 
-      // 黙って上書きされていない。日誌にも人間の書き込みは積まれない。
       expect((await stores.persona.read('values'))?.content).toContain('クローンが蒸留した判断');
       expect(await stores.journal.list({ types: ['memory_update'] })).toEqual([]);
     });
@@ -1195,10 +1044,6 @@ describe('HTTP API', () => {
     });
   });
 
-  /**
-   * Issue #2881。人間の削除（DELETE）も、読んだ版を前提に付けられる（`ifMatch`、クエリ）。
-   * 読んでから消すまでの間にクローンが書いていたら、**消さず** 409 でいまの版を返す。
-   */
   describe('DELETE /memory/:slug の前提版（ifMatch、Issue #2881）', () => {
     const del = (query = '') => app.request(`/memory/values${query}`, { method: 'DELETE' });
     const readVersion = async () =>
@@ -1282,21 +1127,10 @@ describe('HTTP API', () => {
     expect(entries[0]).toMatchObject({ action: 'write' });
   });
 
-  /**
-   * human guard（記憶の保護状態）は「誰も送らない導出値」である
-   * （PR「人間が一度でも書いた記憶を、統合の走行が黙って壊せないようにする」）。
-   *
-   * **入口の入力スキーマを1つも変えていないこと**が要件——`PUT /memory/:slug`
-   * の body は `{ content }` のままで、保護状態はサーバ側だけで決まる。
-   * `content` 以外を足しても（`cause` や `humanTouchedAt` のような、保護状態を
-   * 自称できてしまいそうなフィールドを混ぜても）黙って無視され、書き込みは
-   * `content` だけで完結する——書き手を選べる口ではない。
-   */
   it('PUT /memory/:slug の body は content だけのまま（human guard は入口を増やしていない）', async () => {
     const put = await app.request('/memory/values', {
       ...json({
         content: '# 価値観\n\n最小の body\n',
-        // 保護状態に見えるフィールドを混ぜても、入力スキーマには無いので無視される。
         humanTouchedAt: '2020-01-01T00:00:00.000Z',
         cause: 'clone',
       }),
@@ -1309,7 +1143,6 @@ describe('HTTP API', () => {
     expect(body.document).not.toHaveProperty('cause');
     expect(body.document).not.toHaveProperty('humanTouchedAt');
 
-    // PUT は常に人間の書き込みとして扱われる（body の cause: 'clone' は効かない）。
     const entries = await stores.journal.list({ types: ['memory_update'] });
     expect(entries[0]).toMatchObject({ cause: 'human' });
     expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
@@ -1352,13 +1185,10 @@ describe('HTTP API', () => {
 
       expect(response?.status).toBe(200);
 
-      // 書き換え自体は効いている(同じストアを見ている元の app 経由で確認)。
       const read = await app.request('/memory/journal-drop-memory');
       const body = (await read.json()) as { document: { content: string } };
       expect(body.document.content).toContain('SECRET-NEW-CONTENT');
 
-      // markHumanTouched は呼ばれていない——保護状態は "human" になっていない
-      // （`write()` はハッシュも一緒に更新するので "clone-only" のまま）。
       expect(await stores.persona.protectionStatus('journal-drop-memory')).toEqual({
         kind: 'clone-only',
       });
@@ -1373,13 +1203,6 @@ describe('HTTP API', () => {
     expect((await app.request('/memory/nope')).status).toBe(404);
   });
 
-  /**
-   * 仕事のやり方（PracticeStore、#1055 段3③）。`記憶` の HTTP 口
-   * （`GET`/`PUT`/`DELETE /memory(/:slug)`）と対をなす、人間の3つ目の入口。
-   *
-   * **⛔ `apply` / `enforce` に当たる経路は無い。** 読み書き一覧の3操作
-   * （list/read/write/remove）しか無いことを、この一群のテストで踏む。
-   */
   it('やり方を API から読んで書き換えられる（人間の3入口の1つ）', async () => {
     await stores.practices.write({
       slug: 'daily-report',
@@ -1404,9 +1227,6 @@ describe('HTTP API', () => {
     expect(body.practice.content).toContain('人間が API から書き換えた');
     expect(body.practice.title).toBe('書き直した題');
 
-    // 人間による書き換えも日誌に残る（`practice_write` クローンの道具と
-    // 同じ type: 'decision' に揃えてある——PracticeStore は memory の
-    // `markHumanTouched` に当たる保護状態を持たないため）。
     const entries = await stores.journal.list({ types: ['decision'] });
     expect(entries[0]).toMatchObject({
       decision: expect.stringContaining('daily-report') as unknown as string,
@@ -1436,21 +1256,6 @@ describe('HTTP API', () => {
     expect(put.status).toBe(400);
   });
 
-  /**
-   * **`GET /practices` / `GET /practices/:slug` の応答が、`describeRoute` へ
-   * 渡した OpenAPI 応答スキーマの形と実際に一致することを検算する。**
-   *
-   * ⚠️ この2つのハンドラは（`memory` の GET と同じく）応答を作る前に
-   * `practiceListResponseSchema.parse()` / `practiceReadResponseSchema.parse()`
-   * を通していない——`hono-openapi` の `resolver()` は spec 生成にしか使われず、
-   * 実行時の応答を検証しない。⟹ `openapi.ts` 側の宣言スキーマからフィールドを
-   * 落としても（例: `practiceReadResponseSchema` を `practiceSchema` から
-   * `practiceMetaSchema` へ差し替えて `content` を落とす）、ハンドラの実際の
-   * 応答は1文字も変わらないので、他のどのテストも落ちない
-   * （変異試験で確認済み——`.parse()` を通さない GET の宣言スキーマは
-   * ノーガードだった）。**このテストが無い状態では、その差し替えは緑のまま
-   * 通っていた。**
-   */
   it('GET /practices(/:slug) の実際の応答は、宣言した OpenAPI 応答スキーマの形と一致する', async () => {
     await stores.practices.write({
       slug: 'shape-check',
@@ -1465,11 +1270,7 @@ describe('HTTP API', () => {
 
     const read = await app.request('/practices/shape-check');
     const parsedRead = practiceReadResponseSchema.parse(await read.json());
-    // **ここが本題。** `.parse()` は宣言していない余剰フィールドを黙って
-    // 落とすので（zod の既定挙動）、`practiceReadResponseSchema` が
-    // `practiceMetaSchema`（`content` を持たない）に差し替わっていても
-    // `.parse()` 自体は例外を投げない——投げないことではなく、パース後の
-    // 値に `content` が生き残っているかで検算する。
+    // parse が投げないことでは検算しない: zod は余剰フィールドを黙って落とすため、パース後に content が残るかを見る
     expect(parsedRead.practice.content).toBe('本文\n');
   });
 
@@ -1481,10 +1282,6 @@ describe('HTTP API', () => {
     expect(put.status).toBe(400);
   });
 
-  /**
-   * Issue #2853。やり方の書き換え（PUT）も、読んだ版を前提に付けられる（`ifMatch`。
-   * 記憶の #2743 と同じ形）。衝突したら書かず・日誌にも版の履歴にも積まず 409、いまの版を返す。
-   */
   describe('PUT /practices/:slug の前提版（ifMatch、Issue #2853）', () => {
     const put = (body: unknown) =>
       app.request('/practices/daily-report', { ...json(body), method: 'PUT' });
@@ -1496,7 +1293,6 @@ describe('HTTP API', () => {
     it('読んだ後に別の書き手が書いたなら、ifMatch 付きの PUT は 409 で、先の書き込みは消えない', async () => {
       await stores.practices.write({ slug: 'daily-report', ...base, content: 'V1' });
       const version = await readVersion();
-      // 人間が編集画面を開いている間に、クローンが同じやり方を書く。
       await stores.practices.write({ slug: 'daily-report', ...base, content: 'クローンが書いた' });
       const journalBefore = await stores.journal.list({ types: ['decision'] });
 
@@ -1510,7 +1306,6 @@ describe('HTTP API', () => {
       expect(body.current?.practice.content).toBe('クローンが書いた\n');
       expect(body.error).toContain('書き換えていません');
       expect((await stores.practices.read('daily-report'))?.content).toBe('クローンが書いた\n');
-      // 版の履歴にも日誌にも積まれない。
       expect(await stores.practices.listVersions('daily-report')).toHaveLength(2);
       expect(await stores.journal.list({ types: ['decision'] })).toEqual(journalBefore);
     });
@@ -1583,11 +1378,6 @@ describe('HTTP API', () => {
     });
   });
 
-  /**
-   * Issue #2959。人間の削除（DELETE）も、読んだ版を前提に付けられる（`ifMatch`、クエリ。
-   * 記憶の #2881 と同じ段階1）。読んでから消すまでの間にクローンが書いていたら、
-   * **消さず**・日誌にも積まず 409 でいまの版を返す。
-   */
   describe('DELETE /practices/:slug の前提版（ifMatch、Issue #2959）', () => {
     const del = (query = '') =>
       app.request(`/practices/daily-report${query}`, { method: 'DELETE' });
@@ -1671,25 +1461,8 @@ describe('HTTP API', () => {
     expect((await app.request('/practices/never-existed', { method: 'DELETE' })).status).toBe(404);
   });
 
-  /**
-   * **issue #1634 の範囲外の気づき（この Issue そのものではない——別 PR）。**
-   *
-   * `PUT /practices/:slug` と `DELETE /practices/:slug` はどちらもハンドラの
-   * 先頭で `practiceSlugSchema.safeParse(slug)` を検査し、落ちれば
-   * `{ error: 'やり方のスラッグが不正' }` を 400 で返す。**`GET /practices/:slug`
-   * にはこの検査が無かった。**
-   *
-   * `GET /memory/:slug`（#1634/#1636）と違い、`PracticeStore` の
-   * `read()`（in-memory・fs のどちらも）は不正なスラッグで例外を投げない
-   * ——`Map`/JSON ファイルから単純に「見つからない」扱いになるだけなので、
-   * 直す前もクラッシュはせず 404 を返していた。**それでも `PUT`/`DELETE`
-   * とは異なる応答（ステータスも本文も違う）になっていたので、
-   * オーナーの判断で `GET` にも同じ 400 の門を足して揃えた。**
-   */
   describe('GET /practices/:slug は不正なスラッグを 400 で断る', () => {
     it('PUT・DELETE と同じ 400・同じ本文になる（直す前は 404 だった）', async () => {
-      // `practiceSlugSchema` に落ちる——先頭が大文字（PUT の既存の歯
-      // 「不正な slug は 400」と同じ値）。
       const badSlug = 'Not_Valid_SLUG!';
 
       const putRes = await app.request(`/practices/${badSlug}`, {
@@ -1712,19 +1485,13 @@ describe('HTTP API', () => {
       ).toBe(400);
       const getBody = (await getRes.json()) as { error: string };
 
-      // **本文の文言も PUT/DELETE と揃える。**
       expect(getBody).toEqual(putBody);
       expect(getBody).toEqual(deleteBody);
       expect(getBody).toEqual({ error: 'やり方のスラッグが不正' });
     });
   });
 
-  /**
-   * やり方の追記専用の版の履歴（#1309）。
-   * `GET /practices/:slug/versions` と `GET /practices/:slug/versions/:version`。
-   */
   describe('やり方の版の履歴（#1309）', () => {
-    /** 読んだ版を付けて消す（版なしの DELETE は 428 で断られる。#2959）。消えたことまで確かめる。 */
     const removeWithVersion = async (slug: string) => {
       const { version } = (await (await app.request(`/practices/${slug}`)).json()) as {
         version: string;
@@ -1826,18 +1593,6 @@ describe('HTTP API', () => {
       expect(await list.json()).toEqual({ versions: [] });
     });
 
-    /**
-     * **issue #1670。**
-     *
-     * `GET`/`PUT`/`DELETE /practices/:slug`（#1647/#1634）と同じ
-     * `practiceSlugSchema` の 400 の門が、`GET /practices/:slug/versions` と
-     * `GET /practices/:slug/versions/:version` には無かった。in-memory /
-     * fs 実装では `PracticeStore` が不正な slug で例外を投げないので、
-     * 直す前は 200（空配列）/ 404 に落ちるだけで再現しない——**pg 実装
-     * （`PgPracticeStore#slug()`）では同じ入力が 500 になることを、
-     * `practice-versions-slug-pg-1670.test.ts` が PGlite で確かめている。**
-     * ここでは HTTP 層の応答の形と文言を `GET /practices/:slug` と揃える。
-     */
     describe('GET /practices/:slug/versions* は不正なスラッグを 400 で断る（issue #1670）', () => {
       const badSlug = 'Not_Valid_SLUG!';
 
@@ -1869,8 +1624,6 @@ describe('HTTP API', () => {
       });
 
       it('版番号が不正でも、スラッグの不正が先に断る', async () => {
-        // スラッグが不正なら、版番号の妥当性を見るまでもなく 400。
-        // 「版番号が不正」ではなく「スラッグが不正」の文言で断ることを固定する。
         const res = await app.request(`/practices/${badSlug}/versions/not-a-number`);
         expect(res.status).toBe(400);
         expect(await res.json()).toEqual({ error: 'やり方のスラッグが不正' });
@@ -1888,7 +1641,6 @@ describe('HTTP API', () => {
   });
 
   it('利用状況を層と場所で絞れる（4つの口に同じ絞り込みがある）', async () => {
-    // **API にだけ無い／API にだけある絞り込みを作らない**（PRD「インターフェース」）。
     const record = async (layer: 'clone' | 'manager', site: 'session' | 'distill', usd: number) => {
       await stores.usage.record({
         layer,
@@ -1934,18 +1686,10 @@ describe('HTTP API', () => {
   });
 
   it('読めない層・場所は 400（黙って全件を返さない）', async () => {
-    // 絞ったつもりの照会が全件を返すと、その数字は「絞り込んだ結果」として読まれる。
     expect((await app.request('/usage?layer=worker')).status).toBe(400);
     expect((await app.request('/usage?site=compaction')).status).toBe(400);
   });
 
-  /**
-   * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
-   *
-   * **判定は「台帳に1行も無いか」の1つだけ。** `status` では絞らない——`running`
-   * のまま台帳に行が無い委譲も、`done` / `lost` のまま行が無い委譲も、同じく
-   * 取りこぼしとして数える。
-   */
   describe('台帳に1行も無い委譲（Issue #98）', () => {
     async function record(managerId: string, date: string, at: string, costUsd: number) {
       await stores.usage.record({
@@ -1996,15 +1740,7 @@ describe('HTTP API', () => {
       ]);
     });
 
-    /**
-     * ⚠️ **期間で絞ると壊れることを測る歯。** 照会範囲の外（古い日付）で記録された
-     * 委譲は、狙って狭い `from` / `to` を渡しても「記録が無い」に化けてはならない
-     * ——`aggregate.rows` から「行が在る managerId の集合」を作っていたら、この
-     * テストは red になる。
-     */
     it('期間で絞っても、範囲の外で記録された委譲は unrecordedManagers に出ない', async () => {
-      // 台帳の since を1月に固定する（この委譲自体は範囲外の記録が在ることの
-      // 主役ではない——since の cutoff とこのテストの主題を混同しないため）。
       await record('mgr-anchor', '2026-01-01', '2026-01-01T00:00:00.000Z', 1);
 
       fake.managerList.push({
@@ -2017,12 +1753,8 @@ describe('HTTP API', () => {
         updatedAt: '2026-05-01T01:00:00.000Z',
         waiting: [],
       });
-      // since（1月）より後、かつ照会する8月より前の5月に record する——
-      // 「since より前だから除外される」のではなく「行が範囲の外に在る」ことを
-      // 単独で確かめるための配置。
       await record('mgr-old-record', '2026-05-01', '2026-05-01T00:30:00.000Z', 3);
 
-      // 8月だけを狭く照会する——1月・5月の行は範囲の外に落ちる。
       const narrow = (await (await app.request('/usage?from=2026-08-01&to=2026-08-31')).json()) as {
         rows: unknown[];
         unrecordedManagers: { managerId: string }[];
@@ -2032,13 +1764,7 @@ describe('HTTP API', () => {
       expect(narrow.unrecordedManagers).toEqual([]);
     });
 
-    /**
-     * `usageAggregate.since` より前に立った委譲（`createdAt` が古いもの）は
-     * 数えない。あれは「記録が無い」ではなく「台帳が無かった」で、その但し書きは
-     * すでに `beforeLedger` が持っている。
-     */
     it('since より前に createdAt を持つ委譲は unrecordedManagers に出さない', async () => {
-      // 台帳の since はこの record で 2026-08-20 に決まる。
       await record('mgr-recorded', '2026-08-20', '2026-08-20T00:00:00.000Z', 1);
       fake.managerList.push({
         managerId: 'mgr-before-ledger',
@@ -2152,7 +1878,6 @@ describe('HTTP API', () => {
   it('日誌は until で窓の終端を閉じられる（人間も過去の一区間を取れる）', async () => {
     await stores.journal.append({ type: 'decision', decision: 'いまの分', grounds: 'g' });
 
-    // 返るのは新しい順なので、終端を閉じられないと過去の一点には届かない。
     const past = await app.request(`/journal?until=${encodeURIComponent('2020-01-01T00:00:00Z')}`);
     expect((await past.json()) as { entries: unknown[] }).toMatchObject({ entries: [] });
 
@@ -2173,18 +1898,11 @@ describe('HTTP API', () => {
 
     const answer = await app.request('/approvals/ap-1/answer', json({ answer: 'よい' }));
     expect(answer.status).toBe(200);
-    // **既定（認証を要求しない構成）では、全リクエストが operator として通る**
-    // （Issue #863。`answerApprovalViaOf` が `c.get('principal')` から作る）。
-    // **`auth: 'disabled'`（Issue #1479）——認証を設定していない構成を通った印。**
     expect(fake.answered).toEqual([
       { id: 'ap-1', answer: 'よい', via: { kind: 'operator', auth: 'disabled' } },
     ]);
   });
 
-  /**
-   * issue #2525: `selections` は `questions` と突き合わせ、合わないものは何も答えずに 400。
-   * 突き合わせの全パターンの歯は `packages/core/src/approval-choices.test.ts`。ここは口の配線。
-   */
   describe('selections つきの回答（issue #2525）', () => {
     const questions = [
       {
@@ -2399,11 +2117,6 @@ describe('HTTP API', () => {
     expect((await app.request('/approvals/nope/answer', json({ answer: 'x' }))).status).toBe(404);
   });
 
-  /**
-   * issue #2007: 先の判定（回答済み・取り下げ済みなら 409）を通った後に、別の回答や
-   * 取り下げが先に届いていた場合、`Clone#answerApproval` は `ApprovalAlreadySettledError`
-   * を投げて断る。2つの回答の口は、それを先の判定と同じ語の 409 相当に写す。
-   */
   it('answerApproval が既に終わった承認として断ったら、単発の口は 409、一括の口はその件を失敗で返す', async () => {
     await stores.jobs.putApproval({
       id: 'ap-race',
@@ -2435,11 +2148,6 @@ describe('HTTP API', () => {
     }
   });
 
-  /**
-   * issue #2026（#2007 の歯の欠け）: 上の歯は `settled: 'withdrawn'` しか作っておらず、
-   * `'answered'` の枝（409 `already answered`）を外しても緑だった（C の4回目の横断
-   * レビュー）。その枝が消えると、単発の口は例外を投げ直して 500 になる。
-   */
   it('answerApproval が回答済みの承認として断ったら、単発の口は 409 already answered、一括の口はその件を already answered で返す', async () => {
     await stores.jobs.putApproval({
       id: 'ap-race-answered',
@@ -2474,11 +2182,6 @@ describe('HTTP API', () => {
     }
   });
 
-  /**
-   * 答えとその後の行動の対（issue #847 の案B）。クローンの `approval_trace` と
-   * 同じ `traceApproval` を通ることは、同じ日誌から同じ行が返ることで測る
-   * （状態の分け方そのものの歯は `packages/core/src/approval-trace.test.ts`）。
-   */
   it('GET /approvals/:id/trace は答えと、その承認の印を持つ行動を返し、知らない id は 404', async () => {
     const answeredAt = new Date(Date.now() - 1_000).toISOString();
     await stores.jobs.putApproval({
@@ -2539,14 +2242,6 @@ describe('HTTP API', () => {
     expect(body).toMatchObject({ state: 'no_actions', actions: [] });
   });
 
-  /**
-   * `updatedAt` は新しい情報ではなく、応答に既に載っている `createdAt` /
-   * `answeredAt` から `packages/core/src/schema.ts` の `approvalUpdatedAt` が
-   * 導くだけの派生欄（#269 / このスキーマの `.extend()` を土台にした宣言は
-   * `openapi.ts` を見ること）。**片方の枝だけ測ると導出を潰す変異が生き残る**
-   * ので、回答待ち（右枝＝`createdAt`）と回答済み（左枝＝`answeredAt`）の
-   * 両方を測る。
-   */
   it('一覧の updatedAt は approvalUpdatedAt と一致する（回答待ちは作成時刻、回答済みは回答時刻）', async () => {
     await stores.jobs.putApproval({
       id: 'ap-updated-at',
@@ -2558,12 +2253,10 @@ describe('HTTP API', () => {
       approvals: { id: string; createdAt: string; updatedAt: string }[];
     };
     const pendingEntry = pendingList.approvals.find((a) => a.id === 'ap-updated-at');
-    // 未回答は「作成時刻」と一致する（`answeredAt` が無いので右枝）
     expect(pendingEntry?.updatedAt).toBe('2026-01-01T00:00:00.000Z');
     expect(pendingEntry?.updatedAt).toBe(pendingEntry?.createdAt);
 
-    // 回答を付ける（HTTP の /answer 経路はこのテストの偽クローンでは店に書き戻さない
-    // ので、器へ直接書く — 上の「片付けたものは…」と同じやり方）
+    // /answer 経由にしない: 偽クローンは店へ書き戻さないので、器へ直接書く
     await stores.jobs.putApproval({
       id: 'ap-updated-at',
       createdAt: '2026-01-01T00:00:00.000Z',
@@ -2572,15 +2265,11 @@ describe('HTTP API', () => {
       answer: 'よい',
     });
 
-    // 既定（未回答のみ）では回答済みは一覧から消える
     const stillDefault = (await (await app.request('/approvals')).json()) as {
       approvals: { id: string }[];
     };
     expect(stillDefault.approvals.find((a) => a.id === 'ap-updated-at')).toBeUndefined();
 
-    // **`pending=false` が、呼び出し元から `approvalUpdatedAt` の左枝
-    // （`answeredAt` 有り）へ実際に到達する初めての経路である**
-    // （`schema.ts` の `approvalUpdatedAt` の doc の2026-08-23 訂正を見ること）。
     const allList = (await (await app.request('/approvals?pending=false')).json()) as {
       approvals: { id: string; answeredAt?: string; updatedAt: string }[];
     };
@@ -2589,13 +2278,6 @@ describe('HTTP API', () => {
     expect(answeredEntry?.updatedAt).toBe(answeredEntry?.answeredAt);
   });
 
-  /**
-   * #963: クローンが `approval_withdraw` で取り下げた件も、回答済みと同じ形で
-   * 既定の一覧（未回答のみ）から消え、`pending=false` で理由ごと読める。
-   * `withdrawnAt` / `withdrawnReason` は `pendingApprovalSchema` の欄で、
-   * `/approvals` の応答はそれをそのまま素通しする（`approvalsResponseSchema`
-   * が `pendingApprovalSchema.extend()` を土台にしているため）。
-   */
   it('取り下げた承認待ちは、既定の一覧から消え、pending=false で理由ごと読める', async () => {
     await stores.jobs.putApproval({
       id: 'ap-withdrawn',
@@ -2643,12 +2325,7 @@ describe('HTTP API', () => {
     expect(await read.text()).toBe('{"a":1}\n');
   });
 
-  /**
-   * `GET /archive` の応答が id だけの文字列配列ではなく `ArchiveEntry[]`
-   * であること（#698）。`storedBytes` の絶対値はここでは検査しない——実装
-   * （インメモリ）ごとに単位が違うので、値の存在と形だけを見る
-   * （`ArchiveEntry.storedBytes` の doc「置き場をまたいで比較しない」）。
-   */
+  // storedBytes の絶対値は検査しない: 実装ごとに単位が違うため、値の存在と形だけを見る
   it('GET /archive は大きさ(storedBytes)と時刻(at)を返す（#698）', async () => {
     const id = (await stores.archive.archive('sess-sizes', 'HELLO\n')).id;
 
@@ -2664,11 +2341,6 @@ describe('HTTP API', () => {
     expect(entry?.storedBytes).toBeGreaterThan(0);
   });
 
-  /**
-   * `GET /archive/sessions`（#698）——sessionId ごとの行数と使用量。
-   * ⭐ 依頼の動機そのもの: 同一セッションを複数回 archive すると rows が
-   * その回数を数える（tombstone 済みでも減らない）。
-   */
   it('GET /archive/sessions は sessionId ごとの rows とstoredBytesを返す（複数回archiveしたセッション）', async () => {
     const idA1 = (await stores.archive.archive('sess-repeated', 'A\n')).id;
     await stores.archive.archive('sess-repeated', 'BB\n');
@@ -2698,16 +2370,11 @@ describe('HTTP API', () => {
 
     const repeated = body.sessions.find((s) => s.sessionId === 'sess-repeated');
     expect(repeated).toBeDefined();
-    // ⭐ 3回積んだうち1本を消しても rows は3のまま(行は残る)。
     expect(repeated?.rows).toBe(3);
     expect(repeated?.storedBytes).toBeGreaterThanOrEqual(0);
     expect(repeated?.maxStoredBytes).toBeGreaterThan(0);
     expect(Number.isNaN(Date.parse(repeated?.firstAt ?? ''))).toBe(false);
     expect(Number.isNaN(Date.parse(repeated?.lastAt ?? ''))).toBe(false);
-    // continuity（#698 続き）: 'A\n' → first、'BB\n' / 'CCC\n' は前方一致しない
-    // ので diverged（1つ目の bodyChars=2 分だけ切った 'BB' が 'A\n' と md5 が
-    // 合わない）。HTTP の口が sessions() の内訳をそのまま橋渡ししていることを
-    // 見る——判定そのものの正しさは archive-contract.ts の契約テストが測る。
     expect(repeated?.continuity).toEqual({
       first: 1,
       continues: 0,
@@ -2727,18 +2394,10 @@ describe('HTTP API', () => {
       absent: 0,
     });
 
-    // idA3 は消していないので list() 側で確認できる（sessions() の
-    // storedBytes が list() の集計と一致することは archive-contract.ts の
-    // 契約テストが測る——ここは HTTP の口が sessions() を正しく橋渡しして
-    // いることだけを見る）。
     const list = await (await app.request('/archive')).json();
     expect((list as { entries: { id: string }[] }).entries.some((e) => e.id === idA3)).toBe(true);
   });
 
-  /**
-   * `DELETE /archive/:id`（#698）。**行は消えない**——`GET /archive` の一覧には
-   * 引き続き出る。存在しない id は 404、走行中のマネージャーの退避は 409。
-   */
   it('DELETE /archive/:id は本文だけを落とす（行は list に残る）', async () => {
     const id = (await stores.archive.archive('sess-remove', 'BODY\n')).id;
 
@@ -2751,7 +2410,6 @@ describe('HTTP API', () => {
       alreadyRemoved: false,
     });
 
-    // 行は list に残る。tombstone 済みなので removedAt / removedBytes を伴う。
     const list = await app.request('/archive');
     expect(await list.json()).toMatchObject({
       entries: [
@@ -2764,7 +2422,6 @@ describe('HTTP API', () => {
       ],
     });
 
-    // GET は 410（missing の 404 とは別のステータス）で詳細を返す。
     const read = await app.request(`/archive/${id}`);
     expect(read.status).toBe(410);
     expect(await read.json()).toMatchObject({
@@ -2799,11 +2456,6 @@ describe('HTTP API', () => {
     expect(await second.json()).toMatchObject({ ok: true, id, alreadyRemoved: true });
   });
 
-  /**
-   * ⭐ 走行中のマネージャーの退避は、HTTP の口からは消せない（#698）。
-   * クローンの道具（`archive_remove`）側の同じ守りは `tools.test.ts` が測る——
-   * 判定所は `ManagerPool.runningManagerOwning()` 1箇所である。
-   */
   it('DELETE /archive/:id は走行中のマネージャーの退避を拒む（409。どのマネージャーかを言う）', async () => {
     const id = (await stores.archive.archive('sess-running', 'BODY\n')).id;
     fake.runningOwners.set(id, 'mgr-running-1');
@@ -2813,17 +2465,10 @@ describe('HTTP API', () => {
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('mgr-running-1');
 
-    // 本文は落ちていない（拒んだので何も変わっていない）。
     const read = await app.request(`/archive/${id}`);
     expect(await read.text()).toBe('BODY\n');
   });
 
-  /**
-   * ⭐ north_star 禁止2（追加制限禁止）——既定拒否は方針であり、方針は
-   * 設定で開けられなければならない。`overrideReason` クエリ引数が開ける口。
-   * **理由を残さず黙って通る経路は無い**——override したら journal と
-   * 応答の両方にその事実と理由が載ることを測る。
-   */
   it('DELETE /archive/:id は overrideReason を渡せば走行中でも消せる（理由が journal と応答に残る）', async () => {
     const id = (await stores.archive.archive('sess-override', 'BODY\n')).id;
     fake.runningOwners.set(id, 'mgr-running-2');
@@ -2842,11 +2487,9 @@ describe('HTTP API', () => {
       reason: '本番障害の調査で緊急に消す必要があった',
     });
 
-    // 本文は落ちている（override が実際に通った）。
     const read = await app.request(`/archive/${id}`);
     expect(read.status).toBe(410);
 
-    // journal に override の事実と理由が残る。
     const journalEntries = await stores.journal.list({ types: ['decision'] });
     const entry = journalEntries.find((e) => e.type === 'decision' && e.decision.includes(id)) as
       { type: 'decision'; decision: string; grounds: string } | undefined;
@@ -2892,7 +2535,6 @@ describe('HTTP API', () => {
       expect(response?.status).toBe(200);
       expect(await response?.json()).toMatchObject({ ok: true, id });
 
-      // 本文の削除は効いている（同じストアを見ている元の app 経由で確認）。
       const read = await app.request(`/archive/${id}`);
       expect(read.status).toBe(410);
 
@@ -2902,13 +2544,6 @@ describe('HTTP API', () => {
     },
   );
 
-  /**
-   * `POST /inbox/remove`（issue #972）。`commitment_close_many`（#844）を
-   * 参照モデルにした、人間の入口からの絞り込み一括削除。⚠️ クローン自身の
-   * 道具（`inbox_remove_many`）はまだ無い——#972 本文の保留（「クローン自身の
-   * 道具にするかは別途の判断」）を尊重し、いったん取り下げた（別 PR で
-   * draft 提案中）。
-   */
   describe('POST /inbox/remove', () => {
     const managerReport = (id: string, at: string, managerId = 'mgr-1'): InboxEvent => ({
       type: 'manager_message',
@@ -2951,7 +2586,6 @@ describe('HTTP API', () => {
         remaining: 0,
       });
 
-      // 本当に1件も消えていない。
       expect(await stores.inbox.pending()).toEqual({
         count: 2,
         oldestAt: '2026-08-10T00:00:00.000Z',
@@ -2983,7 +2617,6 @@ describe('HTTP API', () => {
         remaining: 0,
       });
 
-      // manager_message だけが消え、human_message は残る。
       const rest = (await stores.inbox.peekPending()).entries;
       expect(rest.map((r) => r.event.id)).toEqual(['evt-2']);
 
@@ -3056,9 +2689,6 @@ describe('HTTP API', () => {
       expect(response.status).toBe(400);
     });
 
-    // #3358。`Date.parse` は存在しない日付（9/31 → 10/1）を別の時刻へずらし、日付でない
-    // 文字列（`foo 1`）も 2001 年として読む。消す口なので、読めない値は例つきで断り、
-    // 何も消さない。受け付ける形（日付・Z・オフセット）は従来どおり通る。
     it('before が存在しない日付・日付でない文字列なら、例つきの文言で400にして何も消さない（#3358）', async () => {
       await stores.inbox.put(
         managerReport('evt-old', '2026-08-10T00:00:00.000Z'),
@@ -3076,7 +2706,6 @@ describe('HTTP API', () => {
         expect(body.error).toContain('1件も消していない');
         expect(await stores.inbox.pending()).toMatchObject({ count: 1 });
       }
-      // 日付だけ（`2026-10-06`）は #3390 から 400（時差が無い。歯は bulk-remove-before-boundary.test.ts）。
       for (const readable of ['2026-10-06T09:00:00Z', '2026-10-06T09:00:00+09:00']) {
         const response = await app.request(
           '/inbox/remove',
@@ -3146,16 +2775,6 @@ describe('HTTP API', () => {
       expect(rest.map((r) => r.event.id)).toEqual(['evt-3']);
     });
 
-    /**
-     * **消した合図の配達も止める**（issue #1049）。この口はかつて器
-     * （`InboxStore`）の行しか消さず、それでも応答は `removedIds` を並べて
-     * 「消した」と名乗っていた —— クローンのメモリ上の待ち行列へ既に載った
-     * 合図は配られ続けた。
-     *
-     * ⭐ **応答のフィールドだけを見て終わりにしない**（同じ describe の
-     * `POST /archive/remove` が置いている作法と同じ）。**クローンの口が実際に
-     * 呼ばれた実物**（`fake.droppedFromDelivery`）で測る。
-     */
     it('消した id を、クローンの配達停止の口へ実際に渡す（応答にも件数が出る）', async () => {
       await stores.inbox.put(
         managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
@@ -3176,7 +2795,6 @@ describe('HTTP API', () => {
         removedIds: ['evt-1', 'evt-2'],
         droppedFromDelivery: 2,
       });
-      // 🔴 器から消すだけで終わっていないことを、呼ばれた実物で測る。
       expect(fake.droppedFromDelivery).toEqual([['evt-1', 'evt-2']]);
     });
 
@@ -3197,21 +2815,7 @@ describe('HTTP API', () => {
     });
   });
 
-  /**
-   * `GET /inbox`（issue #783 段0の最後の欠落）。クローンの道具 `manager_list`
-   * の中にしか出ていなかった内訳（`summarizeInboxBacklog`）を、器の外
-   * （HTTP）から読む。ここで固定したいのは3つ——(1) 0件のときに値を作らない
-   * （`InboxBacklogBreakdown` の doc と同じ作法）、(2) 集計そのもの
-   * （複数の型・複数回配達された行を渡して、既存の `summarizeInboxBacklog`
-   * の契約どおりに描けているか）、(3) **呼んでも `deliveries` が1つも
-   * 進まない**——`claimPending()` を使っていたらここが壊れる、この口の
-   * いちばんの歯。
-   */
   describe('GET /inbox', () => {
-    // 直上の `describe('POST /inbox/remove', ...)` が持つ `managerReport` /
-    // `humanMsg` と同じ形だが、姉妹の `describe` からは見えないので同じ形を
-    // ここでも持つ（複製ではなく、同じ動機——issue #972 のテストにある
-    // フィクスチャそのものの作り方に合わせてある）。
     const managerReport = (id: string, at: string, managerId = 'mgr-1'): InboxEvent => ({
       type: 'manager_message',
       id,
@@ -3269,7 +2873,6 @@ describe('HTTP API', () => {
           { source: 'manager:mgr-2', count: 1 },
         ]),
       );
-      // `human_message` は送信元を言えない型なので `bySourceUnknownCount` へ。
       expect(body.bySourceUnknownCount).toBe(1);
       expect(body.humanOriginated).toMatchObject({ total: 1, undelivered: 1 });
     });
@@ -3280,15 +2883,11 @@ describe('HTTP API', () => {
         '2026-08-10T00:00:00.000Z',
       );
 
-      // 3回叩く——`claimPending()` を使っていれば、この時点で deliveries が
-      // 3まで進んでしまう。
       for (let i = 0; i < 3; i += 1) {
         const response = await app.request('/inbox');
         expect(response.status).toBe(200);
       }
 
-      // `claimPending()` で実際に進め、初回の配達であることを確かめる
-      // （0回入れ替わった状態のまま、という直接の証拠）。
       const claimed = await stores.inbox.claimPending();
       expect(claimed).toHaveLength(1);
       expect(claimed[0]?.deliveries).toBe(1);
@@ -3309,27 +2908,12 @@ describe('HTTP API', () => {
 
       const response = await app.request('/inbox');
       const body = (await response.json()) as InboxBacklogBreakdown;
-      // `observedAt` は呼び出しごとに変わりうる（`Date.now()`）ので、そこだけ
-      // 除いて突き合わせる。`toEqual` にしてあるのは、応答スキーマ
-      // （`inboxBacklogResponseSchema`。`z.object` は知らない欄を黙って落とす）が
-      // core の欄を1つでも取りこぼしたら赤くするためである。
-      // ⚠ **測っているのは HTTP と core の集計の一致までである。** CLI と
-      // `manager_list` が同じ関数を通ることは、この歯ではなく import の形で
-      // 保たれている（CLI の描画は `apps/cli/src/inbox.test.ts`）。
+      // toEqual にする: z.object は知らない欄を黙って落とすので、core の欄の取りこぼしを赤くするため
       expect(typeof body.observedAt).toBe('string');
       expect({ ...body, observedAt: expected.observedAt }).toEqual(expected);
     });
   });
 
-  /**
-   * `POST /archive/remove`（issue #698）。`POST /inbox/remove`（#972）と同じ
-   * 設計——絞り込み・既定（`dryRun` 省略で試算）・「絞り込みの無い呼びを断る」・
-   * 塊ごとに日誌を交互に書く。
-   *
-   * ⭐ #1049（「消した」と名乗った応答の後もクローンへ配達され続けた事故）と
-   * 同じ形を撃つ——**応答の `dryRun` / `ok` フィールドだけを見て終わりにせず、
-   * 実際に読む口（`GET /archive/:id` / `GET /archive`）で確かめる。**
-   */
   describe('POST /archive/remove', () => {
     it('reason が空白だけだと400', async () => {
       const response = await app.request(
@@ -3341,7 +2925,7 @@ describe('HTTP API', () => {
 
     it('既定（dryRun省略）は試算だけで1件も消さない（GET /archive/:id が本文を返し続ける）', async () => {
       const idA = (await stores.archive.archive('sess-dry', 'A')).id;
-      await stores.archive.archive('sess-dry', 'AB'); // newest, idA を含む(前方一致)
+      await stores.archive.archive('sess-dry', 'AB');
 
       const response = await app.request(
         '/archive/remove',
@@ -3350,7 +2934,6 @@ describe('HTTP API', () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ ok: true, dryRun: true, targeted: 1 });
 
-      // ⭐ 応答の dryRun:true を見て終わりにせず、読む口そのもので確かめる。
       const read = await app.request(`/archive/${idA}`);
       expect(read.status).toBe(200);
       expect(await read.text()).toBe('A');
@@ -3358,7 +2941,7 @@ describe('HTTP API', () => {
 
     it('dryRun:false で実行後、GET /archive/:id は410になり、GET /archive には removedAt/removedBytes 付きで残る', async () => {
       const idA = (await stores.archive.archive('sess-exec', 'A')).id;
-      const idB = (await stores.archive.archive('sess-exec', 'AB')).id; // newest
+      const idB = (await stores.archive.archive('sess-exec', 'AB')).id;
 
       const response = await app.request(
         '/archive/remove',
@@ -3373,7 +2956,6 @@ describe('HTTP API', () => {
         removedBytes: Buffer.byteLength('A', 'utf8'),
       });
 
-      // 読む口そのもので「消えたことが後から分かる」ことを確かめる。
       const read = await app.request(`/archive/${idA}`);
       expect(read.status).toBe(410);
       expect(await read.json()).toMatchObject({ error: 'removed' });
@@ -3386,7 +2968,6 @@ describe('HTTP API', () => {
         removedAt: expect.any(String),
         removedBytes: Buffer.byteLength('A', 'utf8'),
       });
-      // idB(最新行)は行そのものは変わらず残る（removedAt が付かない）。
       const rowB = list.entries.find((e) => e.id === idB);
       expect(rowB?.removedAt).toBeUndefined();
     });
@@ -3412,7 +2993,7 @@ describe('HTTP API', () => {
 
     it('走行中の委譲が抱えている行は消えず skipped.inUse に数えられ、本文が読めたまま', async () => {
       const idA = (await stores.archive.archive('sess-running', 'A')).id;
-      await stores.archive.archive('sess-running', 'AB'); // newest
+      await stores.archive.archive('sess-running', 'AB');
       fake.runningOwners.set(idA, 'mgr-running-archive');
 
       const response = await app.request(
@@ -3421,19 +3002,6 @@ describe('HTTP API', () => {
       );
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
-        // targeted は選定（selectArchiveRemovalTargets）が選んだ件数——
-        // 走行中で実行時に弾かれた分もここには数える。実際に消せたかは
-        // removedIds / skipped.inUse を見ること。
-        //
-        // ⚠️ 2026-09-16 反転（#698 欠陥1）: 上のコメントが固定していた
-        // `targeted: 1` は、guard で飛ばした行を `targeted` と
-        // `skipped.inUse` の両方で数える壊れた不変条件
-        // （`matched === targeted + skipped5欄 + remaining` が
-        // 1 ≠ 2 で破れる）をそのまま仕様として固定していた。
-        // `targeted` は「guard を通った後の件数」（＝実際に消しにいった
-        // 件数）に直した——guard で飛ばした行は `skipped.inUse` だけに
-        // 数える。あわせて欠陥3（missing の行がどの欄にも現れない）を
-        // 直す `raced` を応答に足したので、ここでも0を明示して撃つ。
         targeted: 0,
         removedIds: [],
         removedBytes: 0,
@@ -3446,27 +3014,17 @@ describe('HTTP API', () => {
       expect(await read.text()).toBe('A');
     });
 
-    /**
-     * ⭐ **数の帳尻そのものを撃つ歯**（#698 欠陥1・欠陥3）。
-     *
-     * 応答の欄を1つずつ確かめる歯は「その欄が正しいか」しか言わない。
-     * **1行が0回または2回数えられている**という壊れ方は、欄を個別に見ても
-     * 見つからない——実際、guard で飛ばした行を `targeted` と
-     * `skipped.inUse` の両方で数える欠陥は、既存の歯を全部通り抜けていた。
-     * ⟹ **等式そのものを不変条件として撃つ。**
-     */
     it('数の不変条件: matched === targeted + remaining + skipped5欄（下見でも実行でも）', async () => {
-      // 5つの欄が全部1以上になるように仕込む。
-      const idOld = (await stores.archive.archive('sess-inv-chain', 'A')).id; // 消せる
-      await stores.archive.archive('sess-inv-chain', 'AB'); // このセッションの最新 → newest
+      const idOld = (await stores.archive.archive('sess-inv-chain', 'A')).id;
+      await stores.archive.archive('sess-inv-chain', 'AB');
       const idRunning = (await stores.archive.archive('sess-inv-run', 'R')).id;
-      await stores.archive.archive('sess-inv-run', 'RR'); // newest
-      fake.runningOwners.set(idRunning, 'mgr-inv'); // → inUse
+      await stores.archive.archive('sess-inv-run', 'RR');
+      fake.runningOwners.set(idRunning, 'mgr-inv');
       const idGone = (await stores.archive.archive('sess-inv-gone', 'G')).id;
-      await stores.archive.archive('sess-inv-gone', 'GG'); // newest
-      await stores.archive.remove(idGone); // → alreadyRemoved
-      await stores.archive.archive('sess-inv-div', 'XYZ'); // 前方一致しない → notContained
-      await stores.archive.archive('sess-inv-div', 'QQQ'); // newest
+      await stores.archive.archive('sess-inv-gone', 'GG');
+      await stores.archive.remove(idGone);
+      await stores.archive.archive('sess-inv-div', 'XYZ');
+      await stores.archive.archive('sess-inv-div', 'QQQ');
 
       const check = async (dryRun: boolean) => {
         const response = await app.request(
@@ -3494,10 +3052,7 @@ describe('HTTP API', () => {
           body.skipped.newest +
           body.skipped.notContained +
           body.skipped.inUse;
-        // 🔑 これが本体。1行は必ず1回だけ数えられる。
         expect(body.targeted + body.remaining + skippedTotal).toBe(body.matched);
-        // 仕込んだ4つの理由が実際に1件以上ずつ立っていること——立っていないと
-        // 「等式は成り立ったが、そもそもどの欄も0だった」という空振りになる。
         expect(body.skipped.newest).toBeGreaterThan(0);
         expect(body.skipped.alreadyRemoved).toBeGreaterThan(0);
         expect(body.skipped.notContained).toBeGreaterThan(0);
@@ -3507,25 +3062,16 @@ describe('HTTP API', () => {
 
       const preview = await check(true);
       const executed = await check(false);
-      // `targeted === removedIds.length + raced`（実行時のみ。#698 欠陥3）。
       expect(executed.removedIds.length + executed.raced).toBe(executed.targeted);
       expect(idOld).toBeDefined();
       expect(preview.targeted).toBeGreaterThan(0);
     });
 
-    /**
-     * ⭐ **下見が実行の予告になっていることを撃つ歯**（#698 欠陥2）。
-     *
-     * この口は「下見を既定にして、見てから押す」ことを設計の中心に置いている。
-     * 下見が guard を評価していないと、下見は「N件消える」と言い、実行は
-     * 走行中の委譲のぶんだけ少なく消す——**しかも減った理由は実行するまで
-     * 見えない。** それでは中心が成り立たない。
-     */
     it('下見と実行が同じ targeted / skipped.inUse を返す（走行中の委譲が混ざっていても）', async () => {
       const idRunning = (await stores.archive.archive('sess-preview', 'P')).id;
       const idFree = (await stores.archive.archive('sess-preview-free', 'F')).id;
-      await stores.archive.archive('sess-preview', 'PP'); // newest
-      await stores.archive.archive('sess-preview-free', 'FF'); // newest
+      await stores.archive.archive('sess-preview', 'PP');
+      await stores.archive.archive('sess-preview-free', 'FF');
       fake.runningOwners.set(idRunning, 'mgr-preview');
 
       const ask = async (dryRun: boolean) =>
@@ -3541,7 +3087,6 @@ describe('HTTP API', () => {
 
       expect(preview.targeted).toBe(executed.targeted);
       expect(preview.skipped.inUse).toBe(executed.skipped.inUse);
-      // 下見が名指しした id が、実行で実際に消えた id と一致すること。
       expect(preview.removedIds).toEqual(executed.removedIds);
       expect(preview.removedIds).toContain(idFree);
       expect(preview.removedIds).not.toContain(idRunning);
@@ -3549,7 +3094,7 @@ describe('HTTP API', () => {
 
     it('冪等: 同じ呼びを2回実行しても2回目は removedBytes を二重に数えず例外も出ない', async () => {
       const idA = (await stores.archive.archive('sess-idempotent', 'A')).id;
-      await stores.archive.archive('sess-idempotent', 'AB'); // newest
+      await stores.archive.archive('sess-idempotent', 'AB');
 
       const filter = json({ minStoredBytes: 0, reason: '2回叩く', dryRun: false });
       const first = await app.request('/archive/remove', filter);
@@ -3568,16 +3113,11 @@ describe('HTTP API', () => {
         skipped: expect.objectContaining({ alreadyRemoved: 1 }),
       });
 
-      // 二重に消してもバイト数の帳尻・応答のどちらも壊れていない。
       const read = await app.request(`/archive/${idA}`);
       expect(read.status).toBe(410);
       expect(await read.json()).toMatchObject({ bytes: Buffer.byteLength('A', 'utf8') });
     });
 
-    /**
-     * 400の4通り。**実行前後で `GET /archive` が変わらないこと**まで見る
-     * ——応答が400でも、その手前で何かを消してしまっていないかを確かめる。
-     */
     describe('400（絞り込みの無い呼び／不正な入力）— どれも1件も消さない', () => {
       const snapshot = async () => (await (await app.request('/archive')).json()) as unknown;
 
@@ -3604,7 +3144,6 @@ describe('HTTP API', () => {
         expect(await snapshot()).toEqual(before);
       });
 
-      // #3358。存在しない日付・日付でない文字列を別の時刻として読んで消さない。
       it('before が存在しない日付・日付でない文字列なら、例つきの文言で400にして何も消さない（#3358）', async () => {
         await stores.archive.archive('sess-400-d', 'A');
         const before = await snapshot();
@@ -3621,7 +3160,6 @@ describe('HTTP API', () => {
           expect(body.error).toContain('1件も消していない');
           expect(await snapshot()).toEqual(before);
         }
-        // 日付だけ（`2026-10-06`）は #3390 から 400（時差が無い。歯は bulk-remove-before-boundary.test.ts）。
         for (const readable of ['2026-10-06T09:00:00Z', '2026-10-06T09:00:00+09:00']) {
           const response = await app.request(
             '/archive/remove',
@@ -3665,9 +3203,6 @@ describe('HTTP API', () => {
         expect(await snapshot()).toEqual(before);
       });
 
-      // `limit` の型検証（負数・0・小数・文字列・巨大値）。
-      // スキーマは `z.number().int().min(1).optional()`（openapi.ts）——
-      // これが実際にどの入力を弾くかを HTTP 層で撃つ。
       it.each([
         ['0', 0],
         ['負数', -5],
@@ -3692,33 +3227,11 @@ describe('HTTP API', () => {
       });
     });
 
-    /**
-     * `POST /archive/remove` が `requireContainment` の
-     * 実効値（`requireContainment ?? true`）を `guardArchiveRemoval` の第4引数へ
-     * 正しく渡しているか——この口自身の `describe` に在る他のテストは全部
-     * `fakeClone()` の `managers`（`runningManagerPinning` を実装しない像）を
-     * 使っているため、狭め判定（`runningManagerOwning` の全件保護 vs
-     * `runningManagerPinning` の末尾1本だけの保護）が実際に効くかどうかを
-     * 一度も観測していない——`guardArchiveRemoval` の4引数目に何を渡しても、
-     * この偽物では `managers.runningManagerPinning !== undefined` が常に偽なので
-     * 挙動が変わらない（`packages/core/src/manager.ts` の `guardArchiveRemoval`
-     * doc「`runningManagerPinning` を持たない像では…狭めず安全側へ倒す」）。
-     * `apps/daemon/src/archive-folder.test.ts` の `fakeManagersWithPinning` と
-     * 同じ手口（本物の `Pool` は使わず、2メソッドだけ実装した像を手で組む）で、
-     * この口自身についても同じ観測点を作る。
-     */
     describe('requireContainment の狭め（runningManagerPinning）が HTTP 層でも効くか', () => {
-      /**
-       * 1セッションに3行（first → continues → continues=newest）を積み、
-       * 走行中の1マネージャーがその3行すべてを `archiveIds` として抱えている
-       * 状態を模す。`runningManagerOwning` は3行とも保護し（狭める前）、
-       * `runningManagerPinning` は末尾（`idNew`）だけを保護する
-       * （`archive-folder.test.ts` の `fakeManagersWithPinning` と同じ形）。
-       */
       async function seedChainOwnedByOneManager() {
-        const idOld = (await stores.archive.archive('sess-pin-http', 'A')).id; // first
-        const idMid = (await stores.archive.archive('sess-pin-http', 'AB')).id; // continues
-        const idNew = (await stores.archive.archive('sess-pin-http', 'ABC')).id; // continues, newest
+        const idOld = (await stores.archive.archive('sess-pin-http', 'A')).id;
+        const idMid = (await stores.archive.archive('sess-pin-http', 'AB')).id;
+        const idNew = (await stores.archive.archive('sess-pin-http', 'ABC')).id;
         const managerId = 'mgr-pin-http';
         const ownedIds = [idOld, idMid, idNew];
         const managersWithPinning: ManagerPool = {
@@ -3752,9 +3265,6 @@ describe('HTTP API', () => {
           removedIds: string[];
           skipped: { newest: number; inUse: number };
         };
-        // 狭め（既定 true）が効いていれば、old/mid は runningManagerPinning が
-        // 保護しないので guard を通り、実際に消える。newest は selectArchiveRemovalTargets
-        // の安全弁（skipped.newest）で守られる——guard 以前の話。
         expect(body.skipped.newest).toBe(1);
         expect(body.skipped.inUse).toBe(0);
         expect(body.targeted).toBe(2);
@@ -3782,10 +3292,6 @@ describe('HTTP API', () => {
           removedIds: string[];
           skipped: { newest: number; inUse: number };
         };
-        // `requireContainment: false` は狭め判定を使わない
-        // （`guardArchiveRemoval` の doc「`false` or `undefined` のとき、
-        // 狭めた判定は一切使わない」）——`runningManagerOwning` の全件保護の
-        // まま、old/mid も inUse に落ちて消えない。
         expect(body.skipped.newest).toBe(1);
         expect(body.skipped.inUse).toBe(2);
         expect(body.targeted).toBe(0);
@@ -3800,7 +3306,7 @@ describe('HTTP API', () => {
 
     it('日誌に理由と消した id が残る', async () => {
       const idA = (await stores.archive.archive('sess-journal', 'A')).id;
-      await stores.archive.archive('sess-journal', 'AB'); // newest
+      await stores.archive.archive('sess-journal', 'AB');
 
       await app.request(
         '/archive/remove',
@@ -3819,20 +3325,11 @@ describe('HTTP API', () => {
       expect(entry?.grounds).toBe('人間が直接 API から操作した');
     });
 
-    /**
-     * Issue #2037: 塊ごとに「消す → 日誌へ書く」を交互に回す形で、**1塊目の
-     * 日誌への追記だけが落ちても、2塊目以降は消すのを続ける**こと、応答の件数が
-     * 全件と合うことを撃つ。
-     *
-     * 2塊に割れるように、id 自体が長くなる長い sessionId を使う
-     * （`chunkIdsByChars` の予算 `ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS`＝3,600
-     * 文字。2,000文字超の sessionId なら id が2つで budget を超え、1id ずつ2塊に割れる）。
-     */
     it('1塊目の日誌への追記が落ちても2塊目以降は消え続け、応答の件数は全件と合う（Issue #2037）', async () => {
       const bigSessionId = `sess-chunk-${'x'.repeat(2000)}`;
       await stores.archive.archive(bigSessionId, 'A');
       await stores.archive.archive(bigSessionId, 'AB');
-      const idNewest = (await stores.archive.archive(bigSessionId, 'ABC')).id; // 最新行、保護される
+      const idNewest = (await stores.archive.archive(bigSessionId, 'ABC')).id;
 
       let callCount = 0;
       const failingJournal: Stores = {
@@ -3841,7 +3338,6 @@ describe('HTTP API', () => {
           ...stores.journal,
           append: async (entry) => {
             callCount += 1;
-            // 1回目（1塊目）だけ落ちる。2回目以降（2塊目以降）は普通に書ける。
             if (callCount === 1) throw new Error('journal store unavailable (test)');
             return stores.journal.append(entry);
           },
@@ -3868,16 +3364,13 @@ describe('HTTP API', () => {
         removedIds: string[];
         removedBytes: number;
       };
-      // 2件（2塊、1id ずつ）とも消えている——1塊目の日誌が落ちても件数は全件と合う。
       expect(body.targeted).toBe(2);
       expect(body.removedIds).toHaveLength(2);
 
-      // 実際に本文が消えていることを、同じストアを見ている元の app 経由で確認する。
       for (const id of body.removedIds) {
         const read = await app.request(`/archive/${id}`);
         expect(read.status).toBe(410);
       }
-      // 最新行は守られたまま。
       const readNewest = await app.request(`/archive/${idNewest}`);
       expect(readNewest.status).toBe(200);
 
@@ -3886,37 +3379,20 @@ describe('HTTP API', () => {
       expect(dropped[0]).not.toContain('SECRET-REASON-INSTRUCTION');
     });
 
-    /**
-     * ⭐ **`already` も `raced` に数えることを、HTTP の口そのもので撃つ歯**（#1706 / #1707）。
-     *
-     * `archive_remove_many`（`packages/core/src/archive-remove-many-raced.test.ts`）と
-     * `foldArchiveOnce`（`apps/daemon/src/archive-folder.test.ts`）には同じ形の歯が
-     * あるが、`POST /archive/remove` 自身（この HTTP の口）には無かった——3か所とも
-     * 同じ実行ループの形（`result.kind === 'missing' || result.kind === 'already'`）を
-     * 持つのに、HTTP 層だけ「選んだ後に他経路が先に消していた行を、この呼びが
-     * 消したことにしない」ことを確かめる歯が欠けていた。
-     *
-     * 競合は、この HTTP ハンドラ自身がその id に `remove()` を呼ぶ瞬間に、本物の
-     * `remove()` を1回先に打つラッパーで作る（フェイクの `kind` を手で組み立てない
-     * ——`archive-remove-many-raced.test.ts` と同じ手口）。
-     */
     it('選んだ後に他経路が先に本文を墓標にしていた行（remove() が already を返す）は raced に数え、removedIds/removedBytes/日誌には載せない', async () => {
       const idOld = (await stores.archive.archive('sess-http-race', 'AAA')).id;
-      const rowNew = await stores.archive.archive('sess-http-race', 'AAABBB'); // newest, 前方一致
+      const rowNew = await stores.archive.archive('sess-http-race', 'AAABBB');
       expect(rowNew.continuity, '前方一致の前提が崩れている（テストの組み立てミス）').toBe(
         'continues',
       );
 
-      // list() の時点ではまだ生きている必要があるので、事前に消すのではなく、
-      // ハンドラ自身の remove() 呼び出しを横取りして、内側でもう1回 remove()
-      // を先打ちする（「別経路が list() の後・remove() の前に消した」を、
-      // 本物の ArchiveStore.remove() の返り値だけで再現する）。
+      // 事前に消さない: list() の時点ではまだ生きている必要があるので、remove() の呼び出しを横取りして先打ちする。
       const originalRemove = stores.archive.remove.bind(stores.archive);
       let armed = true;
       stores.archive.remove = async (id: string) => {
         if (id === idOld && armed) {
           armed = false;
-          await originalRemove(id); // 「別の経路」が先に消す
+          await originalRemove(id);
         }
         return originalRemove(id);
       };
@@ -3933,12 +3409,8 @@ describe('HTTP API', () => {
         raced: number;
       };
 
-      // 実状態: idOld は（他経路によって）確かに tombstone されている。
       expect(await stores.archive.read(idOld)).toMatchObject({ kind: 'removed' });
 
-      // この呼びは idOld を自分では tombstone していない——raced に数え、
-      // removedIds / removedBytes には載せない（発見の本体。直し前は
-      // removedIds に idOld を含め、removedBytes を二重に数えていた）。
       expect(body.targeted).toBe(1);
       expect(body.raced).toBe(1);
       expect(body.removedIds).toEqual([]);
@@ -3991,10 +3463,6 @@ describe('HTTP API', () => {
     expect((await app.request('/managers/nope/transcript')).status).toBe(404);
   });
 
-  /**
-   * `GET /managers/:id/transcript` は、生ログが「無い」(404) と「退避された
-   * あと本文を消された」(410) を区別する（#698）。
-   */
   it('GET /managers/:id/transcript は本文が消されていると410で詳細を返す', async () => {
     fake.managerList.push({
       managerId: 'mgr-removed',
@@ -4022,24 +3490,6 @@ describe('HTTP API', () => {
     });
   });
 
-  /**
-   * **`kind`/`askedAt` を持たない `waiting` を抱えたマネージャーが1件でも
-   * いると、それだけで `GET /managers` そのものが例外で落ちる穴が在った。**
-   *
-   * `/managers` と `/managers/:id` は、応答を返す前に `managerSummarySchema`
-   * （`managerWaitingSchema` を含む）を `.parse()` に通す（`.safeParse()` では
-   * ない。上の「宣言していないものは外へ出ない」の doc）。旧 runner は
-   * `drainingSeconds` の猶予中、`kind`/`askedAt` を持たない `waiting` を返す
-   * 窓がある（`packages/core/src/runner-protocol.ts` の `runnerWaitingSchema`
-   * の doc、#334）。`managerWaitingSchema` の `kind`/`askedAt` が必須のまま
-   * だと、その窓に入ったマネージャーが1件でもいるだけで `.parse()` が投げ、
-   * **一覧そのものが1本も読めなくなる**——`HttpRunner#list()` が
-   * `safeParse` で要素ごと黙って捨てる形（歯は
-   * `apps/daemon/src/runner-client.test.ts`）より広く壊れる。
-   *
-   * ここで見るのは状態コードだけではない——`waiting` の要素が本文に残って
-   * いること（200 を返しても中身が消えていたら意味が無い）。
-   */
   it('kind / askedAt を持たない waiting を抱えたマネージャーでも /managers と /managers/:id は 200 を返す', async () => {
     fake.managerList.push({
       managerId: 'mgr-legacy',
@@ -4072,20 +3522,7 @@ describe('HTTP API', () => {
     expect(detailBody.manager.waiting[0]?.summary).toBe('Bash の実行許可');
   });
 
-  /**
-   * **宣言していないものは外へ出ない。**
-   *
-   * `describeRoute` の `resolver()` は `openapi.json` を作るだけで、ハンドラが
-   * 何を返したかは検査しない。なので「スキーマを書いた」だけでは、`ManagerSummary`
-   * にフィールドが1つ増えた日に spec に無いものが黙って外へ出る。
-   *
-   * ここで見るのは**宣言に無いフィールドを混ぜても応答に現れないこと**である。
-   * 応答が spec を通ってから出ていることは、これでしか確かめられない
-   * （宣言どおりのものが出るのを見るだけなら、parse を外しても通ってしまう）。
-   */
   it('マネージャーの応答は、宣言していないフィールドを外へ出さない', async () => {
-    // core の interface にフィールドが増えた日を再現する。`ManagerSummary` の
-    // 定義を触らずに済むよう、ここでだけ型を外して混ぜる。
     fake.managerList.push({
       managerId: 'mgr-leak',
       status: 'running',
@@ -4101,7 +3538,6 @@ describe('HTTP API', () => {
     const list = (await (await app.request('/managers')).json()) as {
       managers: Record<string, unknown>[];
     };
-    // 宣言したものは出る（parse が中身を空にしていないこと）。
     expect(list.managers[0]).toMatchObject({ managerId: 'mgr-leak', cwd: '/work/project' });
     expect(list.managers[0]).not.toHaveProperty('internalNote');
 
@@ -4112,16 +3548,6 @@ describe('HTTP API', () => {
     expect(detail.manager).not.toHaveProperty('internalNote');
   });
 
-  /**
-   * **人間の画面にだけ見えないものを作らない。**
-   *
-   * PR #60 でクローンは `manager_list` から拒否件数を読めるようになったが、
-   * `GET /managers` は「実行中」としか言わないままだった。人間の画面が読むのは
-   * こちらなので、同じ仕事を見て人間とクローンで見えているものが食い違う。
-   *
-   * **状態は置き換えない。** 拒否は `running` に映らない（拒否があったことしか
-   * 観測していない）ので、`status` はそのままにして添える。
-   */
   it('モデルの表記は、名乗りのある runner の委譲にだけ一覧と詳細へ載る（取れなければ欄ごと無い。#3921）', async () => {
     const base = {
       status: 'running' as const,
@@ -4145,10 +3571,8 @@ describe('HTTP API', () => {
     const list = (await (await app.request('/managers')).json()) as { managers: Row[] };
     const byId = new Map(list.managers.map((m) => [m.managerId, m]));
     expect(byId.get('mgr-named')).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
-    // 片方だけ名乗られたら名乗られた側だけ。もう一方を既定の帯で埋めない。
     expect(byId.get('mgr-half')).toMatchObject({ workerModel: 'haiku' });
     expect(byId.get('mgr-half')).not.toHaveProperty('managerModel');
-    // 名乗りを受けていない旧い runner・置き先の無い委譲は、欄ごと無い。
     for (const id of ['mgr-old', 'mgr-unplaced']) {
       expect(byId.get(id)).not.toHaveProperty('managerModel');
       expect(byId.get(id)).not.toHaveProperty('workerModel');
@@ -4256,7 +3680,6 @@ describe('HTTP API', () => {
     const list = (await (await app.request('/managers')).json()) as {
       managers: { status: string; denials?: { tool: string; count: number }[] }[];
     };
-    // 状態の値は動かさない。
     expect(list.managers[0]?.status).toBe('running');
     expect(list.managers[0]?.denials).toEqual([
       { tool: 'Bash', count: 4 },
@@ -4273,13 +3696,6 @@ describe('HTTP API', () => {
     ]);
   });
 
-  /**
-   * **Issue #373 — `actor` を宣言しないと、値が在っても `.parse()` で黙って
-   * 落ちる。** `managerDenialSchema`（`openapi.ts`）にこの欄を足しただけで、
-   * ハンドラの `c.json(...)` 前に通す `.parse()` がここで確かに欄を通すことを
-   * 固定する（宣言だけして通し忘れる事故を防ぐ——`openapi.ts` 冒頭の doc の
-   * 「宣言していないものが載らないだけになる」という約束の裏返し）。
-   */
   it('拒否の層（actor）が、状態を置き換えずに一覧と詳細へ載る', async () => {
     fake.managerList.push({
       managerId: 'mgr-denied-layered',
@@ -4294,7 +3710,6 @@ describe('HTTP API', () => {
     fake.managerDenials.set('mgr-denied-layered', [
       { tool: 'Bash', count: 3, actor: 'worker' },
       { tool: 'Write', count: 1, actor: 'manager' },
-      // 層が取れていない回（`via: 'result'`）は `actor` キーそのものが無い。
       { tool: 'Edit', count: 2 },
     ]);
 
@@ -4306,7 +3721,6 @@ describe('HTTP API', () => {
       { tool: 'Write', count: 1, actor: 'manager' },
       { tool: 'Edit', count: 2 },
     ]);
-    // 「取れていない」がキーごと省かれたままで、`'manager'` へ化けていない。
     expect(list.managers[0]?.denials?.[2]).not.toHaveProperty('actor');
 
     const detail = (await (await app.request('/managers/mgr-denied-layered')).json()) as {
@@ -4319,16 +3733,6 @@ describe('HTTP API', () => {
     ]);
   });
 
-  /**
-   * **issue #1105 後半 — `reasonType` / `reason` / `message` と同じ判断で、
-   * `inputHead`（拒否より前に見た入力の先頭）も HTTP へは意図して出さない。**
-   *
-   * `managerDenialSchema`（`openapi.ts`）はこの欄を宣言していないので、
-   * `.parse()` が黙って落とす——`/managers` と `/managers/:id` はこの欄が
-   * 増える前と応答が1バイトも変わらない。クローン向けの `manager_list` /
-   * `manager_report`（`tools.ts`）にだけ出す設計であることを、HTTP の面から
-   * も確かめる（`ManagerDenial.inputHead` の doc）。
-   */
   it('入力の先頭（inputHead）は一覧にも詳細にも出ない', async () => {
     fake.managerList.push({
       managerId: 'mgr-denied-input-head',
@@ -4365,13 +3769,6 @@ describe('HTTP API', () => {
     expect(detail.manager.denials?.[0]).not.toHaveProperty('inputHead');
   });
 
-  /**
-   * **「数えていない」を「0 件だった」に見せない。**
-   *
-   * 拒否の帳面はデーモンのプロセス内にしかなく、器を作り直せば数え直しになる。
-   * 常に `denials: []` を載せると、作り直した直後がいちばん「止められていない」
-   * ように見える。`manager_list` が拒否ゼロの行に何も足さないのと揃える。
-   */
   it('拒否の最後の時刻（lastAt。#1455）が GET /managers まで落ちずに届く', async () => {
     fake.managerList.push({
       managerId: 'mgr-denied-lastat',
@@ -4386,8 +3783,6 @@ describe('HTTP API', () => {
     fake.managerDenials.set('mgr-denied-lastat', [
       { tool: 'Bash', count: 1, actor: 'worker', lastAt: '2026-09-24T07:00:00.000Z' },
     ]);
-    // **`managerDenialSchema`（openapi.ts）が宣言していなければ、`.parse()` がここで
-    // 黙って落とす** —— 人間の入口（CLI・Web）だけが止められた後の動きを読めなくなる。
     const list = (await (await app.request('/managers')).json()) as {
       managers: { managerId: string; denials?: { lastAt?: string }[] }[];
     };
@@ -4414,22 +3809,6 @@ describe('HTTP API', () => {
     expect(list.managers[0]).not.toHaveProperty('denials');
   });
 
-  /**
-   * **人間の面が読む値は、この経路を通った分だけである。**
-   *
-   * `lastFailure`（`schema.ts`）は「直近の1ターンが報告ではなく失敗で終わった」
-   * ことで、これが無いと人間の画面には「報告が来た」としか出ない — 直す前は
-   * `You've hit your org's monthly spend limit …` が最後の報告としてそのまま
-   * 出ていた（`packages/core/src/sdk-failure.ts` の doc）。
-   *
-   * **宣言していないものは外へ出ない**のがこの面の規約なので（真上の
-   * 「宣言していないフィールドを外へ出さない」）、`managerSummarySchema` から
-   * `lastFailure` が落ちると、`ManagerSummary` に値があっても**黙って消える**。
-   * それは CLI・Web の両方が同時に盲目になる形で、画面のテストでは捕まらない。
-   *
-   * **状態は置き換えない。** 支出上限に当たった回もセッションは生きているので
-   * `status` は `done`（終えて待機中）のままである。
-   */
   it('直近のターンの失敗が、状態を置き換えずに一覧と詳細へ載る', async () => {
     fake.managerList.push({
       managerId: 'mgr-billing',
@@ -4451,7 +3830,7 @@ describe('HTTP API', () => {
     const list = (await (await app.request('/managers')).json()) as {
       managers: { status: string; lastFailure?: unknown }[];
     };
-    // 状態の値は動かさない（`failed` へ倒すと「もう続けられない」と読まれる）。
+    // `failed` へ倒さない: 「もう続けられない」と読まれるから。
     expect(list.managers[0]?.status).toBe('done');
     expect(list.managers[0]?.lastFailure).toEqual({
       code: 'billing_error',
@@ -4470,12 +3849,6 @@ describe('HTTP API', () => {
     });
   });
 
-  /**
-   * **宣言していない欄は外へ出ない**（この面の規約）。`ManagerSummary` に足した
-   * だけでは `.parse()` がここで黙って落とし、**CLI と Web の両方が同時に
-   * 盲目になる** —— クローンの `manager_list` にだけ出て、人間の入口には
-   * 出ない形になる（`lastFailure` / `lastReportAt` と同じ穴）。
-   */
   it('宛先の器が黙ったという判定が、一覧と詳細の両方へ載る', async () => {
     fake.managerList.push({
       managerId: 'mgr-orphan',
@@ -4494,7 +3867,6 @@ describe('HTTP API', () => {
     };
     expect(list.managers[0]?.live).toBe(false);
     expect(list.managers[0]?.runnerLostSince).toBe('2026-08-27T09:00:00.000Z');
-    // **`status` は動かさない。** 「黙った器に載っている」は「戻れなかった」ではない。
     expect(list.managers[0]?.status).toBe('running');
 
     const detail = (await (await app.request('/managers/mgr-orphan')).json()) as {
@@ -4503,19 +3875,11 @@ describe('HTTP API', () => {
     expect(detail.manager.runnerLostSince).toBe('2026-08-27T09:00:00.000Z');
   });
 
-  /**
-   * **5つ目の形（#563）。** `runnerLostSince` とは別の欄で、**同居しうる**わけでは
-   * なく由来が違う——あちらは器が黙った（`live: false`）。こちらは**器は答えている**
-   * が、この委譲のセッションだけが無い（`sessionId` が在れば resume から入り直せる
-   * ので `live` は落ちない）。⟹ **`live: true` とこの欄の組**が5つ目の形である。
-   *
-   * 宣言していない欄は `.parse()` で黙って落ちるので、真上の1本と同じ理由でここを見る。
-   */
   it('runner にセッションが無いという観測が、一覧と詳細の両方へ載る', async () => {
     fake.managerList.push({
       managerId: 'mgr-missing',
       status: 'running',
-      // **落とさない。** `sessionId` が在れば話しかけられる（resume から入り直す）。
+      // 落とさない: `sessionId` が在れば resume から入り直せるから。
       live: true,
       sessionMissingSince: '2026-08-27T09:00:00.000Z',
       cwd: '/work/project',
@@ -4530,9 +3894,7 @@ describe('HTTP API', () => {
       managers: { status: string; live: boolean; sessionMissingSince?: string }[];
     };
     expect(list.managers[0]?.sessionMissingSince).toBe('2026-08-27T09:00:00.000Z');
-    // **`live` は落ちない**（`runnerLostSince` の1本との違いはここである）。
     expect(list.managers[0]?.live).toBe(true);
-    // **`status` は動かさない。**
     expect(list.managers[0]?.status).toBe('running');
 
     const detail = (await (await app.request('/managers/mgr-missing')).json()) as {
@@ -4541,7 +3903,6 @@ describe('HTTP API', () => {
     expect(detail.manager.sessionMissingSince).toBe('2026-08-27T09:00:00.000Z');
   });
 
-  /** 観測していない回に空の値を載せない（真上の `runnerLostSince` と同じ理由）。 */
   it('セッションが在るマネージャーには sessionMissingSince を載せない', async () => {
     fake.managerList.push({
       managerId: 'mgr-ok2',
@@ -4560,7 +3921,6 @@ describe('HTTP API', () => {
     expect(list.managers[0]).not.toHaveProperty('sessionMissingSince');
   });
 
-  /** 黙っていない回に空の値を載せない（「黙っていない」と「見ていない」を混ぜない）。 */
   it('宛先の器が黙っていないマネージャーには runnerLostSince を載せない', async () => {
     fake.managerList.push({
       managerId: 'mgr-ok',
@@ -4579,23 +3939,11 @@ describe('HTTP API', () => {
     expect(list.managers[0]).not.toHaveProperty('runnerLostSince');
   });
 
-  /**
-   * **`running` のまま、宛先の runner が名簿から entry ごと消えている**という
-   * 5つ目とは別の形（Issue #1212 running 側。段1）。`runnerLostSince` とは
-   * 材料が違う——あちらは entry が名簿に残っているが `state: 'lost'`。こちらは
-   * entry がまるごと消えている（`packages/core/src/manager.ts` の
-   * `ManagerSummary.runnerVanished` の doc）。
-   *
-   * 宣言していない欄は `.parse()` で黙って落ちるので、`runnerLostSince` と
-   * 同じ理由でここを見る（`apps/daemon/src/openapi.ts` の
-   * `managerSummarySchema.runnerVanished`）。
-   */
   it('宛先の runner が名簿から entry ごと消えているという判定が、一覧と詳細の両方へ載る', async () => {
     fake.managerList.push({
       managerId: 'mgr-vanished',
       status: 'running',
-      // **`isLive()` は動かさない。** entry が消えていても `sessionId` が
-      // 残っていれば resume から入り直せることがある。
+      // `isLive()` を動かさない: entry が消えていても `sessionId` が残っていれば resume から入り直せるから。
       live: true,
       runnerVanished: true,
       cwd: '/work/project',
@@ -4610,7 +3958,6 @@ describe('HTTP API', () => {
     };
     expect(list.managers[0]?.live).toBe(true);
     expect(list.managers[0]?.runnerVanished).toBe(true);
-    // **`status` は動かさない。** 名簿から消えていても `status` は `running` のまま。
     expect(list.managers[0]?.status).toBe('running');
 
     const detail = (await (await app.request('/managers/mgr-vanished')).json()) as {
@@ -4619,7 +3966,6 @@ describe('HTTP API', () => {
     expect(detail.manager.runnerVanished).toBe(true);
   });
 
-  /** 観測していない回に空の値を載せない（`runnerLostSince` と同じ理由）。 */
   it('宛先の runner が名簿から消えていないマネージャーには runnerVanished を載せない', async () => {
     fake.managerList.push({
       managerId: 'mgr-ok3',
@@ -4638,7 +3984,6 @@ describe('HTTP API', () => {
     expect(list.managers[0]).not.toHaveProperty('runnerVanished');
   });
 
-  /** 失敗していない回に空の値を載せない（「失敗していない」と「見ていない」を混ぜない）。 */
   it('失敗していないマネージャーには lastFailure を載せない', async () => {
     fake.managerList.push({
       managerId: 'mgr-fine',
@@ -4665,7 +4010,6 @@ describe('HTTP API', () => {
 
     const list = await app.request('/reports?limit=7');
     const body = (await list.json()) as { reports: { date: string }[] };
-    // 新しい順
     expect(body.reports.map((report) => report.date)).toEqual(['2026-08-12', '2026-08-11']);
 
     const one = await app.request('/reports/2026-08-11');
@@ -4675,19 +4019,7 @@ describe('HTTP API', () => {
     expect((await app.request('/reports/2026%2F08%2F10')).status).toBe(400);
   });
 
-  /**
-   * ⭐ 上の1本は「追記した順の逆」でも通る（08-11 → 08-12 の順に積んでいるので、
-   * 書いた順と日付順が一致している）。**実際に人間が見た壊れ方はここにある** —
-   * 起動時の遡り生成では前の日ぶんの日報が今日書かれるので、**最後に書かれた行が
-   * いちばん古い日付**になる。その状態で書いた順に返すと、一覧の先頭が古い日付に
-   * なる（「WebUI の日報の並び順が変」という申告そのもの）。
-   *
-   * 並びの規則そのものの検査は `reports.test.ts` にある。ここで見るのは
-   * **HTTP の口がその規則を通っていること**（`/reports` が日誌の並びを素通しして
-   * いないこと）だけである。
-   */
   it('遡り生成で後から書かれた古い日付の日報を、一覧の先頭に出さない', async () => {
-    // 追記の順＝書いた順。日付の順とは逆にする（後追いが最後に走った状態）。
     await stores.journal.append({ type: 'daily_report', date: '2026-08-21', body: '08-21' });
     await stores.journal.append({ type: 'daily_report', date: '2026-08-19', body: '08-19' });
 
@@ -4695,8 +4027,6 @@ describe('HTTP API', () => {
     const body = (await list.json()) as { reports: { date: string }[] };
     expect(body.reports.map((report) => report.date)).toEqual(['2026-08-21', '2026-08-19']);
 
-    // `limit=1` は「最新の日報」を出す口（ダッシュボードの1枚と CLI の `/report`）。
-    // 最後に書かれた行ではなく、日付がいちばん新しい日報でなければならない。
     const latest = await app.request('/reports?limit=1');
     const latestBody = (await latest.json()) as { reports: { date: string }[] };
     expect(latestBody.reports.map((report) => report.date)).toEqual(['2026-08-21']);
@@ -4737,20 +4067,11 @@ describe('HTTP API', () => {
     expect(fake.posted[0]).toMatchObject({ source: 'mail', payload: 'ただの文章' });
   });
 
-  /**
-   * 127.0.0.1 で待つことはブラウザからの保護にならない。人間が開いた任意のページが
-   * 単純リクエストを投げられ、応答が読めなくても**送信は成立する**。クローンのターンを
-   * 他人が起こせる状態を残さない（塞ぐのは能力側ではなく実行環境の境界）。
-   */
   it('ブラウザの単純リクエストでは、状態を変える POST を叩けない', async () => {
     const cases = [
-      // 他人が判断材料を書き込める
       { path: '/events/github', body: '{"action":"注入"}' },
-      // 他人が自律ターン（モデル利用・委譲の判断）を起こせる
       { path: '/schedule/self_initiative/run' },
-      // 他人が蒸留ターンを起こせる
       { path: '/chat/conv-x/end' },
-      // 他人がデーモンを止められる
       { path: '/shutdown' },
     ];
 
@@ -4759,7 +4080,6 @@ describe('HTTP API', () => {
       expect(response.status, path).toBe(415);
     }
 
-    // どれも通っていない
     expect(fake.posted).toEqual([]);
     expect(fake.ended).toEqual([]);
     expect(schedule.ran).toEqual([]);
@@ -4782,11 +4102,6 @@ describe('HTTP API', () => {
     expect(schedule.ran).toEqual([]);
   });
 
-  /**
-   * ブラウザが単純リクエストか否かを決めるのは MIME essence（`;` より前）だけである。
-   * パラメータに `application/json` と書いても safelist のまま preflight 無しで飛ぶので、
-   * 部分一致で判定すると門番があるつもりで通ってしまう。
-   */
   it('パラメータに application/json と書いた safelist な content-type を受けない', async () => {
     const disguises = [
       'text/plain; note=application/json',
@@ -4833,22 +4148,9 @@ describe('HTTP API', () => {
     expect(schedule.ran).toEqual(['daily_report', 'daily_report', 'daily_report']);
   });
 
-  /**
-   * 本文検査つきの経路（`validator('json', ...)`）も、同じ単純リクエストで叩ける
-   * 位置にある。こちらは `deliberateClient` を通っていないので落ち方が違う —
-   * hono の json validator は content-type が application/json でなければ本文を
-   * **読まない**ので、空の入力がスキーマ検査に落ちて 400 になる（415 ではない）。
-   *
-   * 落ち方が違っても守っているものは同じで、**ハンドラまで届かない**ことである。
-   * #22 で検査の実装を `@hono/zod-validator` から hono-openapi の `validator` へ
-   * 差し替えたので、その一線をここで固定しておく（次の差し替えで薄まったら
-   * 気づけるように）。
-   */
   it('本文検査つきの経路も、ブラウザの単純リクエストでは叩けない', async () => {
     const cases = [
-      // 他人が判断材料を書き込める
       { path: '/events', body: '{"source":"github","payload":{"action":"注入"}}' },
-      // 他人がクローンの代わりに承認へ答えられる
       { path: '/approvals/answer', body: '{"answers":[{"id":"ap-1","answer":"よい"}]}' },
       { path: '/approvals/ap-1/answer', body: '{"answer":"よい"}' },
     ];
@@ -4857,7 +4159,6 @@ describe('HTTP API', () => {
       const response = await app.request(path, simpleRequest(body));
       expect(response.status, path).toBe(400);
 
-      // safelist に見せかけた content-type でも同じ（MIME essence で判定される）
       for (const contentType of [
         'text/plain;application/json',
         'application/x-www-form-urlencoded',
@@ -4872,7 +4173,6 @@ describe('HTTP API', () => {
       }
     }
 
-    // どれもハンドラまで届いていない
     expect(fake.posted).toEqual([]);
     expect(fake.answered).toEqual([]);
   });
@@ -4910,10 +4210,6 @@ describe('HTTP API', () => {
       { kind: 'issue-round', spec: { type: 'daily', at: '09:00' } },
     ]);
     expect(schedule.refreshCount()).toBe(before + 1);
-    // 人間が仕込んだことも日誌に残る（後から辿れること）
-    // （issue #2123 で「日誌を先に書く」形へ変えたので、先に書いた行（区別を
-    // 含まない）と、後で分かった「仕込んだ／直した」の区別を足す2行目の、
-    // 2行になる。）
     const decisions = (await stores.journal.list({ types: ['decision'] }))
       .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
       .reverse();
@@ -4926,12 +4222,6 @@ describe('HTTP API', () => {
     );
   });
 
-  /**
-   * **issue #2123。** 状態変更（`stores.schedules.editRequest`）そのものが
-   * 投げたときは、先に書いた行と打ち消しの行の両方が日誌に残り、応答は
-   * 500 になる（grant の「状態変更（grantAccess）が投げたときは、付与の行と
-   * 打ち消しの行の両方が日誌に残り、500になる」と同じ形）。
-   */
   it('状態変更（editRequest）が投げたときは、設定しようとした行と打ち消しの行の両方が日誌に残り、500 になる', async () => {
     const throwingStores: Stores = {
       ...stores,
@@ -4965,11 +4255,6 @@ describe('HTTP API', () => {
     expect(decisions[1]).toBe('人間が定期の依頼を設定できなかった: issue-round: 新しい依頼');
   });
 
-  /**
-   * Issue #1654（バグ探しで見つかった lost update）。`packages/core/src/tools
-   * .test.ts` の同名 Issue の歯（`schedule_create` 側）と対になる、
-   * `POST /schedule`（人間の API）側の再現。
-   */
   it('claimRun が成立した直後に POST /schedule で本文だけ直しても、pendingRun / lastRunAt は消えない（Issue #1654）', async () => {
     await stores.schedules.put({
       kind: 'issue-round',
@@ -5010,8 +4295,6 @@ describe('HTTP API', () => {
   });
 
   it('読めない時刻は API でも弾く（道具と同じ真実を持つ）', async () => {
-    // 通ると一覧に「毎日 25:99」と出るのに実際は 00:00 に起きる、という
-    // 人間が読んで矛盾する状態が作れてしまう
     for (const at of ['25:99', '99:00', '9:5', 'あさ']) {
       const response = await app.request(
         '/schedule',
@@ -5057,10 +4340,6 @@ describe('HTTP API', () => {
     expect((await stores.schedules.list()).entries).toEqual([]);
   });
 
-  /**
-   * Issue #3821。`ifMatch`（読んだ時の `updatedAt`）で、読んだ後に変わった予定を黙って上書きしない。
-   * 記憶・やり方の `ifMatch` と同じ形（409 の本文は `{ error, current }`）。
-   */
   describe('POST /schedule の ifMatch（Issue #3821）', () => {
     const spec = { type: 'daily', at: '09:00' } as const;
     const base = {
@@ -5090,7 +4369,6 @@ describe('HTTP API', () => {
 
     it('版が古ければ 409 で書かれず、current にいまの依頼が載る。予定の名前の 409 とは current で見分ける', async () => {
       await stores.schedules.put(base);
-      // 読んだ後に別の書き手（クローンの道具など）が直した
       await stores.schedules.editRequest(
         'issue-round',
         { request: '別の書き手', spec },
@@ -5116,7 +4394,6 @@ describe('HTTP API', () => {
       expect(reserved.status).toBe(409);
       expect(await reserved.json()).toEqual({ error: 'reserved kind' });
 
-      // 書いていないので、打ち消しの日誌が残る
       const decisions = (await stores.journal.list({ types: ['decision'] })).flatMap((entry) =>
         entry.type === 'decision' ? [entry.decision] : [],
       );
@@ -5191,22 +4468,6 @@ describe('HTTP API', () => {
     expect(missing.status).toBe(404);
   });
 
-  /**
-   * issue #1982。#1944（PR #1964）の後、行の形が壊れている継続中の依頼は
-   * `list()` からは消える（跡は stderr）が、`get(kind)` は「消された」
-   * （`null`）と「読めない」（throw）を区別する契約のまま投げ続ける
-   * （`ScheduleStore.get` の doc）。かつての `DELETE /schedule/:kind` は
-   * 先に `get(kind)` を呼んでいたので、壊れた依頼を外そうとすると 500 に
-   * なっていた——「外したい」のに、同じ kind で作り直す（`POST /schedule`）
-   * しか手が無い、という口の欠落。
-   *
-   * fs / pg の実物を持ち出さずに再現するため、`stores.schedules` を
-   * 「`get('broken')` は読めない行として投げる／`removeIfPresent('broken')`
-   * は在ったが読めなかった行として消せる」二重store（他の kind は実物へ
-   * 委譲）へ差し替える——`packages/core/src/tools.test.ts` の同名 issue の
-   * 歯と対（`commitments` の「unreadable は窓で切られない」テストが
-   * `stores.commitments.list` を同じ形で差し替えているのと同じ作法）。
-   */
   it('読めない形で入っていた継続中の依頼も DELETE で外せる（issue #1982）', async () => {
     const real = stores.schedules;
     let brokenPresent = true;
@@ -5236,18 +4497,14 @@ describe('HTTP API', () => {
     });
     expect(removed.status).toBe(200);
 
-    // 外した後は「消された」——read-then-remove の隙間を挟まないので、
-    // 以後 get('broken') はもう投げない（brokenPresent が false になった）。
     await expect(stores.schedules.get('broken')).resolves.toBeNull();
 
-    // 日誌には本文（request）の代わりに「読めない形で入っていた」とだけ残る。
     const decisions = await stores.journal.list({ types: ['decision'] });
     expect(decisions).toHaveLength(1);
     expect(decisions[0]).toMatchObject({
       decision: expect.stringContaining('読めない形で入っていた'),
     });
 
-    // 本当に無い kind は、これまでどおり 404。
     const missing = await app.request('/schedule/nope', {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
@@ -5255,11 +4512,6 @@ describe('HTTP API', () => {
     expect(missing.status).toBe(404);
   });
 
-  /**
-   * 台帳（引き受けたまま終わっていない仕事）。クローンは `commitment_*` を持っている
-   * ので、人間の側から読めない・積めない・閉じられないと、頼んだことがどう扱われて
-   * いるかを人間が確かめられない（PRD「可観測性」/「インターフェース」の等価性）。
-   */
   it('人間が台帳へ積んだものが一覧に出る（origin は human で、id が返る）', async () => {
     const opened = await app.request(
       '/commitments',
@@ -5277,19 +4529,10 @@ describe('HTTP API', () => {
       entries: [{ id, origin: 'human', source: 'gh-42', body: 'issue #42 のレビュー指摘を直す' }],
     });
 
-    // 器にも同じものが入っている（応答だけが正しい、という形になっていない）
     expect((await stores.commitments.list()).entries).toMatchObject([{ id, origin: 'human' }]);
-    // chat の外から積んだものは、日誌に残さなければどこにも跡が無い
     expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(1);
   });
 
-  /**
-   * 「放置」と「進行中」の見分け（issue #1003）——`GET /commitments` が
-   * `respondedAt` を組み立てて返すこと。導出そのものの枝分かれ（昇順の並び・
-   * `origin` / `source` のガード）は `packages/core/src/schema.test.ts` の
-   * `commitmentRespondedAt` が別に固定している。ここで見たいのは、ハンドラが
-   * 日誌から会話ごとの返答時刻を正しく組み立てて渡していることだけである。
-   */
   it('チャットで積んだ行に、その会話への返答が日誌にあれば respondedAt が付く', async () => {
     await stores.commitments.open({
       id: 'cmt-answered',
@@ -5312,8 +4555,6 @@ describe('HTTP API', () => {
   });
 
   it('返答が commitment.at より前にしか無ければ respondedAt は付かない（別の依頼への返答）', async () => {
-    // 先に返答が積まれ、その後で同じ会話に新しい依頼が積まれた形——古い返答は
-    // この新しい行への返答ではない。
     await stores.journal.append({
       type: 'exchange',
       with: 'human',
@@ -5334,13 +4575,6 @@ describe('HTTP API', () => {
     expect(body.entries.find((entry) => entry.id === 'cmt-new')?.respondedAt).toBeUndefined();
   });
 
-  /**
-   * 「進行中（委譲あり）」の見分け（issue #1003 段2）——`GET /commitments` が
-   * `activeManagerIds` を組み立てて返すこと。導出そのものの枝分かれは
-   * `packages/core/src/schema.test.ts` の `commitmentActiveDelegationIds` が
-   * 別に固定している。ここで見たいのは、ハンドラが `stores.jobs.listJobs()`
-   * から会話ごとの走行中マネージャーを正しく組み立てて渡していることだけ。
-   */
   it('その会話で、行より後に始まった走行中のマネージャーが在れば activeManagerIds が付く', async () => {
     await stores.commitments.open({
       id: 'cmt-delegated',
@@ -5392,8 +4626,7 @@ describe('HTTP API', () => {
   });
 
   it('積んだ側が自分で選べるのは本文と出所だけ（origin を human 以外にできない）', async () => {
-    // ここを人間に選ばせると、人間が積んだものが `self` を名乗れてしまい、
-    // 「人間との約束か、自分で思い立ったことか」をクローンが区別できなくなる。
+    // 人間に選ばせない: 人間が積んだものが `self` を名乗れてしまい、クローンが約束の由来を区別できなくなるから。
     const response = await app.request(
       '/commitments',
       json({ body: '出所を偽る', origin: 'self', id: 'なりすまし' }),
@@ -5404,13 +4637,6 @@ describe('HTTP API', () => {
     expect((await stores.commitments.list()).entries[0]?.id).not.toBe('なりすまし');
   });
 
-  /**
-   * 疑い（管理者から）: `ManagerSummary`（core）が持つ `lastCgroupEvents`（#1517）と
-   * `lastUnpushedWorkObservation`（#1266）は `managerSummarySchema`（openapi.ts）に
-   * 宣言されていないように見える。`/managers` は応答を `.parse()` に通すので、
-   * 宣言に無い欄は zod が黙って落とす（zod の `z.object` の既定の挙動）。
-   * ここではその2欄が実際に応答へ届くかを、直で確かめる。
-   */
   it('lastCgroupEvents（#1517）と lastUnpushedWorkObservation（#1266）が GET /managers の応答まで届く', async () => {
     fake.managerList.push({
       managerId: 'mgr-cgroup-unpushed',
@@ -5456,14 +4682,6 @@ describe('HTTP API', () => {
     expect(single.manager.lastUnpushedWorkObservation).toBeDefined();
   });
 
-  /**
-   * #1885: 台帳の未 push の観測（`kind: 'observed'`）は、「打ち切った／読めなかった」
-   * の4欄（`truncatedAtCount` / `stoppedEarly` / `scratchRootsUnknown` /
-   * `unreadableDirCount`）を持つ。`managerSummarySchema` は `jobSchema.shape` の
-   * この欄を借りているが、借りる形が変わると zod が4欄を黙って落とし、画面と
-   * CLI では「探しきった観測」に見える。応答から読んで、4欄が届くことを見る
-   * （`unreadableDirSample` は台帳へ写さない約束なので、ここにも無い）。
-   */
   it('未 push の観測の「打ち切った／読めなかった」の4欄（#1885）が GET /managers と GET /managers/:id の応答まで届く', async () => {
     const observation = {
       kind: 'observed' as const,
@@ -5516,7 +4734,6 @@ describe('HTTP API', () => {
       unreadable: [],
       trimmedClosed: 0,
     });
-    // **`false` が `false` として効く**（`z.coerce.boolean()` だと真になる）
     expect(await (await app.request('/commitments?includeClosed=false')).json()).toEqual({
       entries: [],
       unreadable: [],
@@ -5527,22 +4744,11 @@ describe('HTTP API', () => {
     expect(await all.json()).toMatchObject({
       entries: [{ id, body: '日報の体裁を直す', closedReason: '直して PR を出した' }],
     });
-    // **`POST /commitments/:id/close` は `closedBy: 'human'` を書く**（issue #286）。
-    // `commitment_close` ツール（クローン）と同じ欄を、どちらから来たか記録して分ける。
     expect((await stores.commitments.get(id))?.closedBy).toBe('human');
-    // 行そのものは消えていない（何を片付けたかが日報の材料に残る）
     expect(await stores.commitments.get(id)).not.toBeNull();
-    // 閉じたことも日誌に残る（積んだ1件と合わせて2本）
     expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(2);
   });
 
-  /**
-   * `updatedAt` は新しい情報ではなく、応答に既に載っている `at` / `closedAt`
-   * から `packages/core/src/schema.ts` の `commitmentUpdatedAt` が導くだけの
-   * 派生欄（#269 / `.extend()` を土台にした宣言は `openapi.ts` を見ること）。
-   * **片方の枝だけ測ると導出を潰す変異が生き残る**ので、未了（右枝＝`at`）と
-   * 片付いた（左枝＝`closedAt`）の両方を測る。
-   */
   it('一覧の updatedAt は commitmentUpdatedAt と一致する（未了は受け取った時刻、片付いたら片付けた時刻）', async () => {
     await stores.commitments.open({
       id: 'cm-updated-at',
@@ -5555,7 +4761,6 @@ describe('HTTP API', () => {
       entries: { id: string; at: string; updatedAt: string }[];
     };
     const openEntry = openList.entries.find((e) => e.id === 'cm-updated-at');
-    // 未了は「受け取った時刻」と一致する（`closedAt` が無いので右枝）
     expect(openEntry?.updatedAt).toBe('2026-01-01T00:00:00.000Z');
     expect(openEntry?.updatedAt).toBe(openEntry?.at);
 
@@ -5570,7 +4775,6 @@ describe('HTTP API', () => {
       entries: { id: string; at: string; closedAt: string; updatedAt: string }[];
     };
     const closedEntry = closedList.entries.find((e) => e.id === 'cm-updated-at');
-    // 片付いたら「片付けた時刻」と一致する（受け取った時刻ではない — 左枝）
     expect(closedEntry?.updatedAt).toBe('2026-02-02T00:00:00.000Z');
     expect(closedEntry?.updatedAt).toBe(closedEntry?.closedAt);
     expect(closedEntry?.updatedAt).not.toBe(closedEntry?.at);
@@ -5593,19 +4797,15 @@ describe('HTTP API', () => {
 
     const again = await app.request(`/commitments/${id}/close`, json({ reason: '後から来た始末' }));
     expect(again.status).toBe(409);
-    // **最初の理由が残っている。** 上書きされると、人間が読む「何をもって終わりと
-    // したか」が後から来たほうへ静かに入れ替わる
     expect(((await again.json()) as { error: string }).error).toContain('最初の始末');
     expect(await stores.commitments.get(id)).toMatchObject({ closedReason: '最初の始末' });
 
-    // 理由の無い close は受け付けない（否定する材料が残らない閉じ方）
     const openedAgain = await app.request('/commitments', json({ body: '理由なしの確認' }));
     const other = (await openedAgain.json()) as { id: string };
     expect((await app.request(`/commitments/${other.id}/close`, json({ reason: '' }))).status).toBe(
       400,
     );
     expect((await stores.commitments.get(other.id))?.closedAt).toBeUndefined();
-    // 空白だけの理由も同じ（trim 後に空）
     expect(
       (await app.request(`/commitments/${other.id}/close`, json({ reason: ' \n ' }))).status,
     ).toBe(400);
@@ -5646,7 +4846,6 @@ describe('HTTP API', () => {
       expect(response?.status).toBe(200);
       expect(await response?.json()).toEqual({ ok: true });
 
-      // 片付け自体は効いている（同じストアを見ている元の app 経由で確認）。
       expect(await stores.commitments.get(id)).toMatchObject({
         closedReason: 'SECRET-CLOSE-REASON',
       });
@@ -5657,11 +4856,6 @@ describe('HTTP API', () => {
     },
   );
 
-  /**
-   * `PATCH /commitments/:id`（本 PR）。編集できるのは `origin: 'human'` かつ
-   * 未了の行の `body` だけ——`commitmentSchema.editedAt` の doc、
-   * `CommitmentStore.editBody` の doc。
-   */
   it('人間が積んだ未了の行は本文を直せる（editedAt/editedBy が入り、他の欄は不変）', async () => {
     const opened = await app.request('/commitments', json({ body: 'もとの依頼', source: 'gh-1' }));
     const { id } = (await opened.json()) as { id: string };
@@ -5677,12 +4871,10 @@ describe('HTTP API', () => {
     expect(entry?.body).toBe('直した依頼');
     expect(entry?.editedBy).toBe('human');
     expect(entry?.editedAt).not.toBeUndefined();
-    // 他の欄は不変
     expect(entry?.origin).toBe('human');
     expect(entry?.source).toBe('gh-1');
     expect(entry?.closedAt).toBeUndefined();
 
-    // 編集の前後の本文が日誌に逐語で残る（積んだ1件と合わせて2本）
     const decisions = await stores.journal.list({ types: ['decision'] });
     expect(decisions).toHaveLength(2);
     const decisionTexts = decisions.map((d) => (d.type === 'decision' ? d.decision : ''));
@@ -5712,19 +4904,10 @@ describe('HTTP API', () => {
       });
       expect(response.status, id).toBe(403);
     }
-    // 書き換わっていない
     expect((await stores.commitments.get('cm-self'))?.body).toBe('クローンが自分で立てた仕事');
     expect((await stores.commitments.get('cm-manager'))?.body).toBe('マネージャーの報告');
   });
 
-  /**
-   * **この歯が固定したいのは「出口の案内が在るか／無いか」だけである**（issue
-   * #580 の (B) と (C) の接ぎ目）。断りの文面はこの口が持ち、画面はそれをその
-   * まま出す（`apps/web/app/routes/commitments.tsx`）ので、**`self` の行には
-   * 出口の名前が載っていること・`manager` の行には載っていないこと**の2つを
-   * 見る。**文面そのものは固定しない** — 言い回しを良くする PR をここで赤く
-   * しないため（見るのは道具の名前の有無だけである）。
-   */
   it('403 の本文は、出口が在る self にだけ commitment_edit を名指しする（manager には出さない）', async () => {
     await stores.commitments.open({
       id: 'cm-self',
@@ -5751,9 +4934,7 @@ describe('HTTP API', () => {
       }),
     );
 
-    // self には出口が在るので名指しする
     expect(failures[0]).toContain('commitment_edit');
-    // manager には出口が無いので、無い出口を案内しない
     expect(failures[1]).not.toContain('commitment_edit');
   });
 
@@ -5777,7 +4958,6 @@ describe('HTTP API', () => {
     });
     expect(patched.status).toBe(409);
     expect(((await patched.json()) as { error: string }).error).toContain('もう片付いた');
-    // 書き換わっていない
     expect((await stores.commitments.get(id))?.body).toBe('片付け済みの確認');
   });
 
@@ -5793,10 +4973,6 @@ describe('HTTP API', () => {
     expect((await stores.commitments.get(id))?.body).toBe('空の確認');
   });
 
-  /**
-   * Issue #3786。`ifMatch`（読んだ時の `editedAt ?? at`）で、読んだ後に変わった本文を黙って上書きしない。
-   * 409 の本文は `{ error, current }`（記憶・予定の `ifMatch` と同じ形）。
-   */
   describe('PATCH /commitments/:id の ifMatch（Issue #3786）', () => {
     const at = '2026-08-12T00:00:00.000Z';
     const patch = (id: string, body: unknown) =>
@@ -5821,7 +4997,6 @@ describe('HTTP API', () => {
 
     it('版が古ければ 409 で書かれず、current が最新の行。片付き済みの 409 とは current の鍵で見分ける', async () => {
       await openHuman();
-      // 読んだ（版 = at）後に別の書き手が直した
       await stores.commitments.editBody('cm-1', '別の書き手', '2026-08-13T00:00:00.000Z', 'human');
       const stale = await patch('cm-1', { body: '古い版から', ifMatch: at });
       expect(stale.status).toBe(409);
@@ -5832,7 +5007,6 @@ describe('HTTP API', () => {
         editedAt: '2026-08-13T00:00:00.000Z',
       });
       expect((await stores.commitments.get('cm-1'))?.body).toBe('別の書き手');
-      // 書いていないので、編集の日誌は積まれない
       expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(0);
 
       await openHuman('cm-2');
@@ -5844,7 +5018,6 @@ describe('HTTP API', () => {
 
     it('読んだ後に行が消えていれば 409 で current は null', async () => {
       await openHuman();
-      // ハンドラの事前の get をすり抜けて消える競合を、editBody の手前で消して作る
       const original = stores.commitments.editBody.bind(stores.commitments);
       stores.commitments.editBody = async (...args) => {
         await stores.commitments.clear();
@@ -5868,16 +5041,6 @@ describe('HTTP API', () => {
     });
   });
 
-  /**
-   * 台帳の口も、人間が開いた任意のページから投げられる位置にある。積まれれば
-   * クローンの次のターンに他人の宿題が載り、閉じられれば人間が頼んだことが
-   * 黙って消える。`validator('json', ...)` を通っているのでハンドラまで届かない。
-   *
-   * **`PATCH /commitments/:id`（本文の編集）も同じ位置にある。** 積む・閉じる
-   * と同じ `jsonBody` を通っているので、`method` だけを変えて同じ形で撃つ
-   * （`simpleRequest` は既定で `POST` を返すので、この1件だけ `method` で
-   * 上書きする）。
-   */
   it('ブラウザの単純リクエストでは台帳を積めない・閉じられない・本文も直せない', async () => {
     await stores.commitments.open({
       id: 'cm-1',
@@ -5896,7 +5059,6 @@ describe('HTTP API', () => {
         path,
       ).toBe(400);
 
-      // safelist に見せかけた content-type でも同じ（MIME essence で判定される）
       for (const contentType of [
         'text/plain;application/json',
         'application/x-www-form-urlencoded',
@@ -5911,7 +5073,6 @@ describe('HTTP API', () => {
       }
     }
 
-    // 積まれても閉じられても直されてもいない
     expect(await stores.commitments.list({ includeClosed: true })).toEqual({
       entries: [
         { id: 'cm-1', at: '2026-08-12T00:00:00.000Z', origin: 'human', body: '人間が頼んだこと' },
@@ -5949,8 +5110,6 @@ describe('HTTP API', () => {
         { id: 'ap-2', ok: true },
       ],
     });
-    // 既定（認証を要求しない構成）では operator 経由になる（Issue #863。直上のテストと同じ理由）。
-    // **`auth: 'disabled'`（Issue #1479）——認証を設定していない構成を通った印。**
     expect(fake.answered).toEqual([
       { id: 'ap-1', answer: 'よい', via: { kind: 'operator', auth: 'disabled' } },
       { id: 'ap-2', answer: 'だめ', via: { kind: 'operator', auth: 'disabled' } },
@@ -5980,14 +5139,6 @@ describe('HTTP API', () => {
     expect(fake.answered).toEqual([]);
   });
 
-  /**
-   * #963: 逆向きの整合性——クローンが取り下げた件に人間が回答すると、
-   * `putApproval` の上書きで `withdrawnAt` と `answeredAt` が同時に立った
-   * 行ができてしまい、クローンが止めたつもりの仕事が人間の回答で再開しうる
-   * （`clone.ts` の `case 'human_answer'` は `answeredAt` の有無しか見ない）。
-   * 「回答済みは取り下げられない」の逆（「取り下げ済みは答えられない」）を
-   * 同じ強さで断る。
-   */
   it('取り下げ済みの承認待ちには答えられない', async () => {
     await stores.jobs.putApproval({
       id: 'ap-1',
@@ -6026,11 +5177,6 @@ describe('HTTP API', () => {
   });
 });
 
-/**
- * `POST /reset`（Issue #2037）。取り消せない操作なので、`cleared`（消した件数の
- * 内訳）を応答から失わないことが特に重要——リセット自体はもう空にしてしまった
- * 後なので、やり直しても件数は変わらない（0 のまま）。
- */
 describe('POST /reset の日誌追記が落ちたとき（Issue #2037）', () => {
   it(
     '日誌への追記が落ちても、リセット自体は効いていて cleared の内訳ごと応答が返る。' +
@@ -6067,11 +5213,9 @@ describe('POST /reset の日誌追記が落ちたとき（Issue #2037）', () =>
 
       expect(response?.status).toBe(200);
       const body = (await response?.json()) as { cleared: Record<string, number> };
-      // リセット自体は効いている——消した件数の内訳が応答から失われていない。
       expect(body.cleared.memory).toBe(1);
       expect(body.cleared.commitments).toBe(1);
 
-      // 実際に消えていることを、同じストアを見ている元の app 経由で確認する。
       expect(await stores.persona.list()).toEqual([]);
       expect((await stores.commitments.list()).entries).toEqual([]);
 
@@ -6081,24 +5225,6 @@ describe('POST /reset の日誌追記が落ちたとき（Issue #2037）', () =>
   );
 });
 
-/**
- * ⭐ **issue #2224。`POST /reset` の OpenAPI description が「仕事のやり方」を
- * 含まなくなっていた**（#2199 は CLI・Web の確認の文だけ直し、ここは3か所目
- * として見つかった）。いまは description を `describeResetTargets()`
- * （`@alteroid/core`。出所は `RESET_CONFIRM_GROUPS`）から組み立てる——`POST
- * /schedule` の `RESERVED_SCHEDULE_KINDS` と同じ族の歯（#701 / #756）。
- *
- * ## この歯が測っていないこと
- *
- * - **`RESET_CONFIRM_GROUPS` の keys が `WorkspaceResetSummary` の全キーを
- *   覆っているかは測っていない**（そちらは
- *   `packages/core/src/workspace-reset.test.ts` が持つ）。ここが測るのは
- *   「description が `RESET_CONFIRM_GROUPS` の全ラベルを字面として持つか」
- *   だけである
- * - `apps/daemon/openapi.json`（焼かれた生成物）そのものは見ていない。
- *   生成物が最新であることは門の
- *   `git diff --exit-code HEAD -- apps/daemon/openapi.json` が守る
- */
 describe('POST /reset の description（issue #2224）', () => {
   it('description が RESET_CONFIRM_GROUPS の全ラベルを字面として持つ', async () => {
     const spec = (await (await app.request('/openapi.json')).json()) as {
@@ -6119,30 +5245,11 @@ describe('POST /reset の description（issue #2224）', () => {
         '（この description は openapi.json へ焼かれる）。',
     ).toEqual([]);
 
-    // 残す3ストア（トークン・環境変数・ログイン）に触れないことと、取り消せ
-    // ないことは、CONFIRM_GROUPS の一覧の外にある固定文言なので別に見る。
     expect(description).toContain('認証トークンのプール・マネージャーへ降ろす環境変数・Web UI の');
     expect(description).toContain('取り消せない');
   });
 });
 
-/**
- * **`appendJournalOrDrop` を当てた残りの口を、安く1本の表で撃つ（Issue #2037）。**
- *
- * 3本の代表的な歯（`PUT /memory/:slug`・`POST /commitments/:id/close`・
- * `POST /reset`、それぞれ上のテストで別撃ち）は状態変更が効いていること・
- * stderr の跡の中身・本文が載らないことまで詳しく見ている。ここでは軽く——
- * 残りの口それぞれについて「日誌への追記が落ちても 500 にならない」ことと
- * 「stderr に跡が最低1行出る」ことだけを、1つの表駆動テストでまとめて撃つ。
- *
- * **⚠️ 2026-09-29（issue #2123）: `POST /schedule` ・ `PUT /mcp-servers` は
- * この表から外していない——期待を反転した。** この2口は能力を広げる口だと
- * teto が判断し、`/access/:accountId/grant` と同じ「日誌を先に書き、書けな
- * ければ状態を変えずに 500」へ動いた（#2067 時点ではまだこの表と同じ
- * 「状態変更はもう効いている」型だったので、この歯は当時のその形を固定して
- * いた）。以下の2口は `widened: true` を付け、逆に「500 になり、状態が
- * 変わっていない」ことを固定する。
- */
 describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 500 にならない（Issue #2037）', () => {
   it('各口とも、日誌への追記が落ちても応答は 500 にならず、stderr に跡が出る。能力を広げる2口（issue #2123）は逆に 500 で状態も変わらない', async () => {
     await stores.persona.write('table-memory', '# 元の内容\n');
@@ -6186,7 +5293,6 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
     const cases: {
       name: string;
       request: () => Response | Promise<Response>;
-      /** issue #2123: 能力を広げる口は逆に 500・状態は変わらない。 */
       widened?: true;
     }[] = [
       {
@@ -6268,8 +5374,6 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
       }
     });
 
-    // 能力を広げる2口（issue #2123）は、日誌が先に落ちたので状態も変わって
-    // いない——新しい kind は作られず、MCP サーバの登録も置かれていない。
     expect(await stores.schedules.get('table-new-kind')).toBeNull();
     expect(await stores.mcpServers.read()).toBeNull();
 
@@ -6279,36 +5383,6 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
   });
 });
 
-/**
- * `GET /approvals` の `order` / `limit` / `cursor`（issue #432）。
- *
- * **既定の応答が1バイトも変わらないことが最重要の保証である。** opt-in
- * （`order` / `limit` / `cursor` のいずれかを明示したときだけ `total` /
- * `nextCursor` が応答へ載る）が壊れると、既存の呼び手（画面・CLI）の応答が
- * 静かに変わる——`toMatchObject` ではなく `Object.keys` で鍵の集合そのものを
- * 留める（`toMatchObject` は余分な鍵を見逃す。`AGENTS.md`「報告の形」と同じ
- * 理由で、判定できることは判定できる形で書く）。
- */
-/**
- * **issue #1634。**
- *
- * `PUT /memory/:slug` と `DELETE /memory/:slug` はどちらもハンドラの先頭で
- * `memorySlugSchema.safeParse(slug)` を明示的に検査し、落ちれば
- * `{ error: '記憶のスラッグが不正' }` を 400 で返す
- * （`grep -Fn -- "記憶のスラッグが不正" apps/daemon/src/app.ts`）。
- *
- * **`GET /memory/:slug` にはこの検査が無かった。** `stores.persona.read(c.req.param('slug'))`
- * を直接呼ぶだけだった。`packages/core/src/testing.ts` の in-memory 実装は
- * ただの `Map` の参照なので不正なスラッグでも例外を投げず 404 に落ちるが、
- * 本番で使う `FsPersonaStore`（`packages/storage-fs/src/persona.ts`）の
- * `#path(slug)` は `memorySlugSchema.safeParse` に落ちると同期的に
- * `throw new Error('記憶のスラッグが不正: ...')` する
- * （`grep -Fn -- "記憶のスラッグが不正: " packages/storage-fs/src/persona.ts`）。
- * この例外は `read()` の try/catch の外（`#path` の呼び出し自体）で投げられる
- * ので、ハンドラが捕まえなければ `createApp` の `base.onError` まで抜けて
- * 500 Internal Server Error になる——`PUT`/`DELETE` の同じ入力は 400 で
- * 断っているのに、`GET` だけ形も status も違っていた。
- */
 describe('GET /memory/:slug は不正なスラッグを 400 で断る（issue #1634）', () => {
   it('PUT・DELETE と同じ 400 になる（fs 実装。直す前は 500 だった）', async () => {
     const dir = await makeTempDir('alteroid-memory-slug-');
@@ -6321,7 +5395,6 @@ describe('GET /memory/:slug は不正なスラッグを 400 で断る（issue #1
       shutdown: () => undefined,
     });
 
-    // `memorySlugSchema`（`/^[a-z0-9][a-z0-9._-]*$/`）に落ちる——先頭が大文字。
     const badSlug = 'UPPER';
 
     const putRes = await fsApp.request(`/memory/${badSlug}`, {
@@ -6339,7 +5412,6 @@ describe('GET /memory/:slug は不正なスラッグを 400 で断る（issue #1
         '（直す前は FsPersonaStore#path が投げた例外が onError まで素通りして500だった）。',
     ).toBe(400);
     const getBody = (await getRes.json()) as { error: string };
-    // **本文の文言も PUT/DELETE と揃える。**
     expect(getBody).toEqual(putBody);
     expect(getBody).toEqual({ error: '記憶のスラッグが不正' });
   });
@@ -6356,8 +5428,6 @@ describe('GET /approvals の order/limit/cursor（issue #432）', () => {
     const body = (await (await app.request('/approvals')).json()) as Record<string, unknown>;
     expect(Object.keys(body)).toEqual(['approvals']);
 
-    // `pending=false` のような既存のパラメータを渡しても、opt-in の対象
-    // （order/limit/cursor）ではないので同じく増えない。
     const withPending = (await (await app.request('/approvals?pending=false')).json()) as Record<
       string,
       unknown
@@ -6454,12 +5524,6 @@ describe('GET /approvals の order/limit/cursor（issue #432）', () => {
     expect(res.status).toBe(400);
   });
 
-  /**
-   * **位置ではなく `(createdAt, id)` の比較で辿ることの直接の効果。** カーソルが
-   * 指していた行が答えられて `pending` の絞りから消えても、400 にならず・
-   * 続きを飛ばさない。`packages/storage-fs` の実装がまさにこの形で行を動かす
-   * ことは `packages/storage-fs/src/index.test.ts` の歯が固定している。
-   */
   it('カーソルが指す行が答えられて消えても、続きは400にならず飛ばさない', async () => {
     for (let i = 0; i < 5; i += 1) {
       await stores.jobs.putApproval({
@@ -6477,7 +5541,6 @@ describe('GET /approvals の order/limit/cursor（issue #432）', () => {
     const cursor1 = page1.nextCursor;
     expect(cursor1).toBeTruthy();
 
-    // カーソルが指す行そのもの（ap-1）に答える —— pending の絞りから消える。
     const existing = await stores.jobs.getApproval('ap-1');
     await stores.jobs.putApproval({
       ...(existing as NonNullable<typeof existing>),
@@ -6492,14 +5555,6 @@ describe('GET /approvals の order/limit/cursor（issue #432）', () => {
   });
 });
 
-/**
- * `GET /approvals` の `conversationId`（issue #782 の2）。
- *
- * **チャット画面が「表示中の会話に上がった確認だけ」を読むための絞り込み。**
- * `pending` と同じ側（絞り込み）であって opt-in（`order`/`limit`/`cursor`）の
- * 対象ではないので、既定の応答の鍵は増えない——ここは `pending` の歯
- * （直上）と同じ形で確かめる。
- */
 describe('GET /approvals の conversationId（issue #782 の2）', () => {
   it('conversationId で、その会話の確認だけに絞る', async () => {
     await stores.jobs.putApproval({
@@ -6520,8 +5575,6 @@ describe('GET /approvals の conversationId（issue #782 の2）', () => {
       question: 'conv-b の1件目',
       conversationId: 'conv-b',
     });
-    // 会話に紐づかない確認（マネージャー発・内部ターン）も混ぜる——絞りに
-    // よって混入しないことを確かめる。
     await stores.jobs.putApproval({
       id: 'ap-no-conv',
       createdAt: '2026-01-04T00:00:00.000Z',
@@ -6549,10 +5602,7 @@ describe('GET /approvals の conversationId（issue #782 の2）', () => {
       answeredAt: '2026-01-02T01:00:00.000Z',
       answer: 'よい',
     });
-    // **別の会話の確認を混ぜる。** 混ぜないと、この歯は絞り込みが効いて
-    // いなくても緑になる（conv-a しか存在しないので、絞る前と後で件数が
-    // 同じになる）——`total` の期待値が「絞り込みを当てた後の件数」を
-    // 測っていることにならない。
+    // 別の会話の確認を混ぜる: 混ぜないと、絞り込みが効いていなくても件数が同じで緑になるから。
     await stores.jobs.putApproval({
       id: 'ap-other-conv',
       createdAt: '2026-01-03T00:00:00.000Z',
@@ -6560,20 +5610,15 @@ describe('GET /approvals の conversationId（issue #782 の2）', () => {
       conversationId: 'conv-b',
     });
 
-    // 既定（pending=true）では回答済みが落ちる。
     const pendingOnly = (await (await app.request(`/approvals?conversationId=conv-a`)).json()) as {
       approvals: { id: string }[];
     };
     expect(pendingOnly.approvals.map((a) => a.id)).toEqual(['ap-1']);
 
-    // pending=false で両方——チャット画面が質問と回答の両方を復元するために
-    // 使う組み合わせ（`useConversationApprovals` の doc）。
     const both = (await (
       await app.request(`/approvals?conversationId=conv-a&pending=false&order=asc`)
     ).json()) as { approvals: { id: string }[]; total?: number };
     expect(both.approvals.map((a) => a.id)).toEqual(['ap-1', 'ap-2']);
-    // order を明示した（opt-in した）ので total が乗り、絞り込み後の件数になる
-    // （絞る前の3件ではなく、conv-a の2件）。
     expect(both.total).toBe(2);
   });
 
@@ -6603,20 +5648,6 @@ describe('GET /approvals の conversationId（issue #782 の2）', () => {
   });
 });
 
-/**
- * `GET /commitments` の `limit` / `cursor`（2026-08-25、人間の明示の「はい」を受けて
- * opt-in で足した窓）。
- *
- * **既定の応答に、窓（`limit`/`cursor`）由来の鍵（`total`/`nextCursor`）が
- * 増えないことが最重要の保証である**（`/approvals` の `order`/`limit`/`cursor` と
- * 同じ理由——`toMatchObject` ではなく `Object.keys` で鍵の集合そのものを留める）。
- * **鍵の集合を永久に凍結する保証ではない** — `unreadable`（issue #296）と
- * `trimmedClosed`（issue #416）は窓の opt-in とは無関係にどちらの呼びでも
- * 常に載る鍵で、ここで固定しているのは「それ以外（`total`/`nextCursor`）が
- * 増えないこと」である。並びは `CommitmentStore.list` の契約が固定している
- * （未了は `at` 昇順、片付いたものは `closedAt` 降順で未了の後ろ）ので、
- * ここでは並べ替えを検査しない——窓（`limit`/`cursor`）だけを検査する。
- */
 describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () => {
   it('既定の呼び（limit/cursor を渡さない）では窓由来の鍵（total/nextCursor）が増えない', async () => {
     await stores.commitments.open({
@@ -6629,8 +5660,6 @@ describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () =>
     const body = (await (await app.request('/commitments')).json()) as Record<string, unknown>;
     expect(Object.keys(body)).toEqual(['entries', 'unreadable', 'trimmedClosed']);
 
-    // `includeClosed=true` のような既存のパラメータを渡しても、窓の opt-in
-    // 対象（limit/cursor）ではないので同じく増えない。
     const withIncludeClosed = (await (
       await app.request('/commitments?includeClosed=true')
     ).json()) as Record<string, unknown>;
@@ -6688,12 +5717,6 @@ describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () =>
     expect(collected).toEqual(full.entries.map((e) => e.id));
   });
 
-  /**
-   * **2段（open/closed）を跨いだ頁送りの直接の効果。** 未了3件・片付き3件を用意し、
-   * `limit=2` で頁の境界がちょうど段の境界に掛かるようにする（2頁目が
-   * `[未了の最後の1件, 片付きの最初の1件]` になる）。錨が `segment` を名乗る
-   * ことで、この跨ぎが正しく続くことを見る。
-   */
   it('includeClosed=true で2段を跨いで辿れる（未了を古い順→片付きを新しい順）', async () => {
     for (let i = 1; i <= 3; i += 1) {
       await stores.commitments.open({
@@ -6717,8 +5740,6 @@ describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () =>
     const full = (await (await app.request('/commitments?includeClosed=true')).json()) as {
       entries: { id: string }[];
     };
-    // 未了は at 昇順（open-1, open-2, open-3）、片付きは closedAt 降順
-    // （closed-3, closed-2, closed-1）で、その順に連結される。
     expect(full.entries.map((e) => e.id)).toEqual([
       'open-1',
       'open-2',
@@ -6773,11 +5794,6 @@ describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () =>
     expect((await app.request('/commitments?limit=abc')).status).toBe(400);
   });
 
-  /**
-   * **id（行）の実在は検査しない。** カーソルが指していた行が閉じられて段
-   * （segment）を移っていても、`(segment, key, id)` の比較さえできれば続きは
-   * 正しく決まる（`/approvals` の同種のテストと同じ理由）。
-   */
   it('カーソルが指す行が閉じられて段を移っても、続きは400にならず飛ばさない', async () => {
     for (let i = 1; i <= 3; i += 1) {
       await stores.commitments.open({
@@ -6796,7 +5812,6 @@ describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () =>
     const cursor1 = page1.nextCursor;
     expect(cursor1).toBeTruthy();
 
-    // カーソルが指す行そのもの（cm-1）を閉じる —— open 段から closed 段へ移る。
     await stores.commitments.close('cm-1', '2026-05-01T00:00:00.000Z', '先に片付いた', 'human');
 
     const page2 = (await (
@@ -6804,20 +5819,9 @@ describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () =>
         `/commitments?includeClosed=true&limit=1&cursor=${encodeURIComponent(cursor1 as string)}`,
       )
     ).json()) as { entries: { id: string }[] };
-    // cm-1 は答えられて open 段から消えたが、比較（keyset）で辿るので cm-2 を
-    // 飛ばさずに続く。
     expect(page2.entries.map((e) => e.id)).toEqual(['cm-2']);
   });
 
-  /**
-   * **`unreadable` は絶対に窓で切らない。** これは「無い」でも「片付いた」でも
-   * ない第3の状態（issue #296）で、窓で切ると2頁目以降から読めない行が消え、
-   * まさに #296 が塞いだ穴が再び開く。
-   *
-   * `createMemoryStores` の commitment ストアは `unreadable` を常に空にする
-   * ので（`packages/core/src/testing.ts` の `commitmentStore.list` の doc）、
-   * この歯だけは `stores.commitments.list` を差し替えた偽物で書く。
-   */
   it('unreadable は窓で切られない（limit=1 でも全件返る）', async () => {
     const real = stores.commitments;
     const unreadableRows = [
@@ -6853,20 +5857,10 @@ describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () =>
     };
     expect(body.entries).toHaveLength(1);
     expect(body.unreadable).toEqual(unreadableRows);
-    // **`trimmedClosed` も窓の影響を受けない（issue #416）。** 頁ではなく
-    // 累計件数そのものなので、`unreadable` と同じくそもそも切る対象ではない。
     expect(body.trimmedClosed).toBe(9);
   });
 });
 
-/**
- * `GET /reports` の `beforeDate` / `beforeAt`（issue #432）。
- *
- * この口は封筒（`total` / `nextCursor`）を持たない——応答は
- * `beforeDate`/`beforeAt` を渡しても渡さなくても`reports`の1鍵のまま。続きが
- * 在るかは「`limit` 件ちょうど返ったか」で呼ぶ側が判る（`journalQuery` の
- * `since` と同じ考え方）。
- */
 describe('GET /reports の beforeDate/beforeAt（issue #432）', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -6961,19 +5955,6 @@ describe('GET /reports の beforeDate/beforeAt（issue #432）', () => {
     expect(withOrderBody.reports.map((r) => r.id)).toEqual(plainBody.reports.map((r) => r.id));
   });
 
-  /**
-   * **窓の穴（issue #432 の設計訂正で警告されたもの）。**
-   *
-   * `limit` の窓（`limit + REPORT_WINDOW_SLACK`）ぶんしか読んでいない状態で
-   * 境界がその窓のいちばん古い行を指すと、`picked`（境界より後ろだけに絞った
-   * 結果）が空になる。**素朴な `isSettled` だけに頼ると、`picked` が空なら
-   * 無条件で「動かせない」と判定して `[]` を返してしまう**——実際には窓の外
-   * （まだ読んでいない、もっと古い側）に続きが残っている。
-   *
-   * 40日分の日報を積み、`limit=1` で境界を「初回の窓（33件）のいちばん古い日
-   * （8日目）」に置く。窓の外に残っているのは1〜7日目の7件で、正しい応答は
-   * 「7日目の1件」——`[]` ではない。
-   */
   it('境界が初回の窓のいちばん古い行を指しても、窓の外の続きを取りこぼさない', async () => {
     vi.useFakeTimers();
     let boundary: { date: string; at: string } | undefined;
@@ -6984,8 +5965,6 @@ describe('GET /reports の beforeDate/beforeAt（issue #432）', () => {
         date: `2026-01-${String(i).padStart(2, '0')}`,
         body: `day ${i}`,
       });
-      // limit=1 の初回の窓は 1 + REPORT_WINDOW_SLACK(32) = 33 件——
-      // 直近33日（8日目〜40日目）だけを読む。窓のいちばん古い行は8日目。
       if (i === 8) boundary = entry as unknown as { date: string; at: string };
     }
     vi.useRealTimers();
@@ -6998,31 +5977,10 @@ describe('GET /reports の beforeDate/beforeAt（issue #432）', () => {
     const body = (await (await app.request(`/reports?${qs.toString()}`)).json()) as {
       reports: { date: string }[];
     };
-    // 窓の外（1〜7日目）のうち、いちばん新しい7日目が1件だけ返るはず。
     expect(body.reports.map((r) => r.date)).toEqual(['2026-01-07']);
   });
 });
 
-/**
- * `GET /journal` の `order` / `afterId` / `afterAt`（issue #432 の2本目）。
- *
- * この口も封筒（`total` / `nextCursor`）を持たない——応答は
- * `afterId`/`afterAt` を渡しても渡さなくても `entries` の1鍵のまま。続きが
- * 在るかは `limit` 件ちょうど返ったかで呼ぶ側が判る（`/reports` の
- * `beforeDate`/`beforeAt` と同じ考え方）。
- *
- * **`before` ではなく `after` を使う理由**（`journalQuery` の doc）: `/journal`
- * には `order` が在って両向きに動くので、`before` は `order=asc` のとき嘘に
- * なる。`after` は返る順序における次を指し、時間の意味ではない
- * ——`order=desc`（既定）では、指した行より**古い**行が返る。
- */
-/**
- * `GET /journal` の `q`（本文を語で探す。issue #250）。
- *
- * **ストア側の契約は `journal-search-contract.ts` が3実装ぶん測る。**
- * ここで測るのは、**HTTP の口がそれを本当に通しているか**だけである
- * ——「4口すべてに `q` が入る」の HTTP のぶんがこれに当たる。
- */
 describe('GET /journal の q（issue #250）', () => {
   it('本文にその語を含む行だけを返す（大文字小文字を区別しない部分一致）', async () => {
     await stores.journal.append({
@@ -7045,7 +6003,6 @@ describe('GET /journal の q（issue #250）', () => {
     };
     expect(hit.entries).toHaveLength(1);
 
-    // 大文字小文字を区別しない（先例 `conversation_read` と同じ契約）。
     const lowered = (await (await app.request('/journal?q=tomato')).json()) as {
       entries: { id: string }[];
     };
@@ -7067,10 +6024,6 @@ describe('GET /journal の q（issue #250）', () => {
     expect(body.entries[0]?.type).toBe('decision');
   });
 
-  /**
-   * **`q=`（空）は絞らない。** 0件へ倒すと、検索欄を空にした画面が
-   * 「記録が消えた」ように見える（`journalQuery` の `q` の doc）。
-   */
   it('q=（空文字列）は絞らない', async () => {
     await stores.journal.append({ type: 'decision', decision: 'なんでもよい', grounds: 'g' });
 
@@ -7080,13 +6033,6 @@ describe('GET /journal の q（issue #250）', () => {
     expect(empty.entries.length).toBeGreaterThan(0);
   });
 
-  /**
-   * **`%` はワイルドカードではない。** pg 実装が `ILIKE` を使うので、
-   * ここが崩れると pg でだけ全件が返る（`journal-search-contract.ts` の契約4）。
-   * **この歯はインメモリのストアを通るので pg の穴そのものは踏めない** ——
-   * ここで測っているのは「HTTP がクエリ文字列を素通しし、余計な解釈を
-   * 足していないか」までである。
-   */
   it('q に % を渡しても全件にはならない', async () => {
     await stores.journal.append({ type: 'decision', decision: '進捗は50%だった', grounds: 'g' });
     await stores.journal.append({ type: 'decision', decision: '当たらない行', grounds: 'g' });
@@ -7096,10 +6042,6 @@ describe('GET /journal の q（issue #250）', () => {
     expect(body.entries).toHaveLength(1);
   });
 
-  /**
-   * **応答の封筒を増やさない**（`journalQuery` の doc「応答に新しい欄を1つも
-   * 足さなくてよい」）。`q` は絞りであって、頁の話ではない。
-   */
   it('q を渡しても応答の鍵は増えない', async () => {
     await stores.journal.append({ type: 'decision', decision: 'トマト', grounds: 'g' });
 
@@ -7151,7 +6093,6 @@ describe('GET /journal の order/afterId/afterAt（issue #432 の2本目）', ()
     const all = await get('limit=100');
     expect(seen).toEqual(all.entries.map((e) => e.id));
     expect(all.next).toBeNull();
-    // limit がちょうど総数でも、先は無い。
     expect((await get('limit=5')).next).toBeNull();
     expect((await get('limit=4')).next).not.toBeNull();
   });
@@ -7224,11 +6165,6 @@ describe('GET /journal の order/afterId/afterAt（issue #432 の2本目）', ()
     expect(res.status).toBe(400);
   });
 
-  /**
-   * **同じミリ秒に積んだ2行をまたいでも、飛ばさず重複しない（issue #432 の
-   * 2本目、契約9の HTTP 版）。** `vi.useFakeTimers()` + `vi.setSystemTime()`
-   * で時刻を固定し、確実に同じ `at` を持つ2行を作る。
-   */
   it('同じミリ秒に積んだ2行をまたいでも、afterId/afterAt が飛ばさず重複しない', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0));
@@ -7254,15 +6190,6 @@ describe('GET /journal の order/afterId/afterAt（issue #432 の2本目）', ()
   });
 });
 
-/**
- * `GET /journal` の `since`/`until` の正規化（issue #1515）。
- *
- * **クローンの道具（`journal_read`）と同じ穴を、HTTP の口としても持っていた。**
- * fs・インメモリは文字列比較なので、秒省略（`…T20:21Z`）やオフセット付き
- * （`+09:00`）の `since`/`until` で pg と答えが割れる（`journal-time.ts` の
- * doc）。ここでは `createMemoryStores`（インメモリ実装）に対して同じ壊れ方を
- * 固定する（修正前は赤くなる）。読めない値は `afterAt` と同じ形で 400。
- */
 describe('GET /journal の since/until の正規化（issue #1515）', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -7270,7 +6197,6 @@ describe('GET /journal の since/until の正規化（issue #1515）', () => {
 
   it('秒を省いた since（…T20:21Z）でも、その分内に積まれた行を正しく含める', async () => {
     vi.useFakeTimers();
-    // issue #1515 の実例そのもの。
     vi.setSystemTime(new Date('2026-09-12T20:21:05.123Z'));
     const entry = await stores.journal.append({
       type: 'decision',
@@ -7294,10 +6220,6 @@ describe('GET /journal の since/until の正規化（issue #1515）', () => {
       grounds: '記憶',
     });
 
-    // `2026-09-13T05:21:00+09:00` は UTC で `2026-09-12T20:21:00.000Z`
-    // ——上の entry の瞬間 (.123Z) より前。正規化していないと日付の桁
-    // （12 と 13）が食い違う文字列比較になり、この行を含めてしまう
-    // （日付が違う分、秒省略の食い違いよりさらに大きくずれる）。
     const res = await app.request(
       `/journal?until=${encodeURIComponent('2026-09-13T05:21:00+09:00')}`,
     );
@@ -7322,8 +6244,6 @@ describe('GET /journal の since/until の正規化（issue #1515）', () => {
     expect(body.error).toContain('until に渡された「not-a-datetime」は日時として読めない');
   });
 
-  // #3287。`Date.parse` が緩く読む「foo 1」と、3/3 へずれる実在しない日付を断る。
-  // 断る文言には受け付ける形の例が入る。
   it.each(['foo 1', '2026-02-31'])('since=%s は400で、受け付ける形の例を添える', async (since) => {
     await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
     const res = await app.request(`/journal?since=${encodeURIComponent(since)}`);
@@ -7334,15 +6254,6 @@ describe('GET /journal の since/until の正規化（issue #1515）', () => {
   });
 });
 
-/**
- * `GET /journal` の日誌の地平（issue #1510 の積み残し）。
- *
- * **`journal_read`（`packages/core/src/tools.test.ts` の「journal_read が
- * 日誌の地平を伝える」）と同じ場合分けを、HTTP の口としても固定する。** 違いは
- * 出し方だけ——`journal_read` は日本語の注記を1本の文字列で返すが、ここは
- * `oldestAt`/`crossesHorizon` を**構造化された欄**として返す（判定条件は
- * `journalWindowCrossesHorizon` を共有しており、2箇所に書き写していない）。
- */
 describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () => {
   it('since/until を指定しなければ、oldestAt/crossesHorizon は付かない（既存の応答は1バイトも変わらない）', async () => {
     await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
@@ -7420,12 +6331,6 @@ describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () 
     expect(body.crossesHorizon).toBe(false);
   });
 
-  /**
-   * `horizon=true`（issue #1530）。**「絞らずに地平だけ欲しい」を明示する口**
-   * ——Web の初期読み込みは `since`/`until` を送らないので、この口が無いと
-   * 日誌が1ページに収まるほど短いストアでは地平の注記の材料が最初の1回で
-   * 二度と届かない（「もっと遡る」を撃つ機会自体が無い）。
-   */
   describe('horizon=true（since/until 省略でも地平を返す。issue #1530）', () => {
     it('horizon を渡さなければ、既存の呼びと1バイトも変わらない（応答の欄が増えない）', async () => {
       await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
@@ -7455,9 +6360,6 @@ describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () 
         crossesHorizon: boolean;
       };
 
-      // **判定は `journalWindowCrossesHorizon` をそのまま使う——`since` が
-      // 無ければ始点は `-∞`** なので、日誌が非空なら必ず真になる（窓が
-      // まるごと地平より後ろになりようがない）。
       expect(body.oldestAt).toBe(entry.at);
       expect(body.crossesHorizon).toBe(true);
     });
@@ -7489,29 +6391,8 @@ describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () 
   });
 });
 
-/**
- * `GET /managers` の `status` / `limit` / 錨（issue #670）。
- *
- * **台帳（`jobs`）に行を消す口が無いので、一覧の件数はその環境で今までに
- * 起こした委譲の総数と等しくなる。** 直し方は「古い行を消す」ではなく
- * 絞り込みと窓である（`ManagerPool#retire` の doc が上限で刈る形を逐語で
- * 禁じている——north_star 禁止2）。
- *
- * ここで固定するのは4つ。
- *
- * 1. **クエリを渡さない呼びの応答が1バイトも変わらない**（opt-in）
- * 2. 絞り込み・窓・錨が効き、**判定できない入力は黙って倒さず 400**
- * 3. **当てる順序が `status` 絞り → 錨 → `limit`** である（順序を入れ替えると
- *    答えが変わる入力で測る）
- * 4. 錨で辿った結果が、窓を掛けない全件と重複なく一致する
- */
 describe('GET /managers の status/limit/錨（issue #670）', () => {
-  /**
-   * **`startedAt` は降順に並ぶように置く（`ManagerPool.list()` の契約）。**
-   * 偽クローンの `list()` は `managerList` をそのまま返すので、並べ替えは
-   * ここで自分で用意する——実装が opt-in のときにだけ並べ直すことを測るには、
-   * 素の並びが既に降順であるほうが「並べ替えたから通った」と紛れない。
-   */
+  // 素の並びを降順にしておく: 昇順で積むと「並べ直したから通った」のか区別できない。
   function seed(entries: { managerId: string; status: ManagerSummary['status'] }[]): void {
     entries.forEach((entry, index) => {
       fake.managerList.push({
@@ -7520,7 +6401,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
         live: true,
         cwd: '/work/project',
         request: `req-${entry.managerId}`,
-        // index が大きいほど古い（降順に並ぶ）。
         startedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 0) - index * 60_000).toISOString(),
         updatedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 0) - index * 60_000).toISOString(),
         waiting: [],
@@ -7535,14 +6415,7 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     return body.managers.map((m) => m.managerId);
   }
 
-  /**
-   * **いちばん重い保証。** ここが落ちたら、クエリを渡していない既存の呼び手
-   * （dashboard・CLI・`GET /managers` を直に叩くもの）の応答が変わっている。
-   *
-   * **`toMatchObject` を使わない**——あれは「宣言した分が入っているか」しか
-   * 見ないので、鍵が増えても緑のまま通る（#435）。`Object.keys` を
-   * `toEqual` で留める。
-   */
+  // toMatchObject を使わない: 鍵が増えても緑のまま通るので、Object.keys を toEqual で留める。
   it('クエリを渡さない呼びは、応答の鍵も件数も並びも変わらない', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -7556,22 +6429,7 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect(await ids('/managers')).toEqual(['mgr-a', 'mgr-b', 'mgr-c']);
   });
 
-  /**
-   * **既定の呼びは並べ直しを1回も通らない。**
-   *
-   * 直上の歯では測れない——`startedAt` が降順に並んだ足場では、並べ直しても
-   * 同じ並びになる（**変異試験で実測した。`optedIn` を `true` に固定する変異が
-   * 生き残る**）。⟹ **`ManagerPool.list()` の並びと、実装の並べ直しの結果が
-   * 食い違う足場を作る必要がある。**
-   *
-   * `startedAt` が同着の2本を「b → a」の順で積む。`list()` の契約は `startedAt`
-   * だけで決まるので同着の相対順は積んだ順のまま（＝ b, a）だが、
-   * `compareManagerPagingKey` は補助キー（`managerId` の降順）まで見るので
-   * 並べ直すと「b, a」…ではなく `managerId` 降順の「mgr-tie-b, mgr-tie-a」に
-   * なる。**だから積む順を `managerId` 昇順（a → b）にしておく**——そうすれば
-   * `list()` の順（a, b）と並べ直しの順（b, a）が食い違い、既定の呼びが
-   * どちらを返したかが観測できる。
-   */
+  // startedAt 同着の2本を managerId 昇順で積む: 降順の足場では並べ直しても同じ並びになり、並べ直しの有無を測れない。
   it('既定の呼びは並べ直しを通らない（list() の並びをそのまま返す）', async () => {
     const at = '2026-01-01T00:00:00.000Z';
     for (const managerId of ['mgr-tie-a', 'mgr-tie-b']) {
@@ -7587,17 +6445,10 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
       });
     }
 
-    // `list()` が返した順（積んだ順）そのまま。**並べ直すと逆になる。**
     expect(await ids('/managers')).toEqual(['mgr-tie-a', 'mgr-tie-b']);
-    // 対照: opt-in すると並べ直しを通り、`managerId` の降順になる。
     expect(await ids('/managers?limit=2')).toEqual(['mgr-tie-b', 'mgr-tie-a']);
   });
 
-  /**
-   * **窓を渡しても応答の封筒は増えない**（`managersQuery` の doc「応答に新しい
-   * 欄を1つも足さなくてよい」）。続きが在るかは `limit` 件ちょうど返ったかで
-   * 判る形なので、`total` / `nextCursor` は持たない。
-   */
   it('status / limit / 錨 を渡しても応答の鍵は増えない', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -7645,18 +6496,12 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect(await ids('/managers?status=running,lost')).toEqual(['mgr-a', 'mgr-c']);
   });
 
-  /**
-   * **黙って無視しない。** 綴りを間違えた呼びを 200 で通すと、「その状態の
-   * ものは0件」として返り、絞り込みが効いていないことに気づけない
-   * （AGENTS.md「静かに失敗する道具」の形をこちらから作ることになる）。
-   */
   it('status に知らない値を渡すと400（黙って無視して全件へ倒さない）', async () => {
     seed([{ managerId: 'mgr-a', status: 'running' }]);
 
     const response = await app.request('/managers?status=runnnig');
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error?: string };
-    // 使える値を出力に書く（読んだ人が自分で直せる形にする）。
     expect(body.error).toContain('runnnig');
     expect(body.error).toContain('waiting_human');
   });
@@ -7667,7 +6512,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect((await app.request('/managers?status=running,nope')).status).toBe(400);
   });
 
-  /** `status=`（空）は絞らない（`/journal` の `type=` と同じ形）。 */
   it('status=（空文字列）は絞らない', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -7691,7 +6535,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     seed([{ managerId: 'mgr-a', status: 'running' }]);
 
     expect((await app.request('/managers?limit=1001')).status).toBe(400);
-    // 上限そのものは通る（境界を off-by-one で締めていない）。
     expect((await app.request('/managers?limit=1000')).status).toBe(200);
   });
 
@@ -7757,11 +6600,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect(collected).toEqual(full);
   });
 
-  /**
-   * **同じミリ秒に始まった2本をまたいでも飛ばさず重複しない。**
-   * `ManagerPool.list()` の並びは `startedAt` だけで決まるので、補助キー
-   * （`managerId`）が無いとここが割れる（`compareManagerPagingKey` の doc）。
-   */
   it('startedAt が同着の2本をまたいでも、錨が飛ばさず重複しない', async () => {
     const at = '2026-01-01T00:00:00.000Z';
     fake.managerList.push(
@@ -7796,7 +6634,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     });
     const second = await ids(`/managers?${qs.toString()}`);
     expect(second).toHaveLength(1);
-    // 飛ばさず（2本とも出た）重複しない（同じ id が2回出ない）。
     expect(new Set([...first, ...second]).size).toBe(2);
   });
 
@@ -7821,11 +6658,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     ).toBe(400);
   });
 
-  /**
-   * **黙って先頭から返さない**（`apps/daemon/src/cursor.ts` の
-   * 「判定できないという3つ目の状態を持つ」）。ここを 200 で通すと、
-   * 呼ぶ側は同じ頁を無限に読み続ける（終端に着いたことが分からない）。
-   */
   it('実在しない錨を渡すと400（黙って先頭から返さない）', async () => {
     seed([{ managerId: 'mgr-a', status: 'running' }]);
 
@@ -7847,12 +6679,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect((await app.request(`/managers?${qs.toString()}`)).status).toBe(400);
   });
 
-  /**
-   * **当てる順序 1/3: `status` 絞り → `limit`。**
-   *
-   * 逆（`limit` → `status`）だと、先頭の1件が絞りに当たらないだけで 0 件が
-   * 返る——「その状態のものが全部で何件あるか」に一切届かない形になる。
-   */
   it('順序: status で絞ってから limit を当てる（先に切ると 0 件になる入力で測る）', async () => {
     seed([
       { managerId: 'mgr-a', status: 'done' },
@@ -7860,17 +6686,9 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
       { managerId: 'mgr-c', status: 'running' },
     ]);
 
-    // 先に limit=1 を当てると `mgr-a`(done) だけが残り、status=running で 0 件になる。
     expect(await ids('/managers?status=running&limit=1')).toEqual(['mgr-b']);
   });
 
-  /**
-   * **当てる順序 2/3: 錨 → `limit`。**
-   *
-   * 逆（`limit` → 錨）だと、`limit=1` で先頭1件に切った後にその先頭を錨で
-   * 落とすので 0 件になる（issue #418 が `/commitments` で塞いだ穴と同じ形——
-   * 継続点を切った後に解決すると次の頁の起点がずれる）。
-   */
   it('順序: 錨を解決してから limit を当てる（先に切ると 0 件になる入力で測る）', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -7889,14 +6707,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect(await ids(`/managers?${qs.toString()}`)).toEqual(['mgr-b']);
   });
 
-  /**
-   * **当てる順序 3/3: `status` 絞り → 錨。**
-   *
-   * 錨を先に解決すると、絞りに当たらない行を錨として受け付けてしまう
-   * （`done` の行を錨にして `status=running` の続きが返る）。**それは
-   * 「刷っていない錨」である**——`status=running` の一覧にその行は1度も
-   * 載っていないので、呼ぶ側がその値を応答から得る経路が無い。
-   */
   it('順序: status で絞ってから錨を解決する（絞りの外の錨は 400 になる）', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -7912,7 +6722,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
       startedAt: string;
     };
 
-    // 絞りの外の錨: 400（順序が逆なら 200 で `mgr-c` が返る）。
     const outside = new URLSearchParams({
       status: 'running',
       afterId: done.managerId,
@@ -7920,7 +6729,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     });
     expect((await app.request(`/managers?${outside.toString()}`)).status).toBe(400);
 
-    // 対照: 絞りの中の錨なら通り、続きが返る。
     const inside = new URLSearchParams({
       status: 'running',
       afterId: 'mgr-a',
@@ -7929,10 +6737,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect(await ids(`/managers?${inside.toString()}`)).toEqual(['mgr-c']);
   });
 
-  /**
-   * **札・注記の材料を窓が落とさない。** 窓は行を選ぶだけで、選んだ行の欄を
-   * 削らない（`managerView` を通した後の形が変わっていないこと）。
-   */
   it('窓を掛けても、返る1行の欄は素の呼びと同じ', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -7951,14 +6755,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
   });
 });
 
-/**
- * `GET /dropped`（#242 の HTTP 面。PRD「入口の等価性」）。
- *
- * **`recentDroppedTraces()` の帳面はプロセス（＝このテストファイル）の生存中
- * ずっと1つを共有する。** 他の it が積んだ跡と混ざらないよう、断言の前に
- * 必ず `clearRecentTracesForTesting()` で空にする
- * （`dropped-record.test.ts` の doc と同じ作法）。
- */
 describe('GET /dropped（#242 の HTTP 面）', () => {
   it('跡が0件でも 200 を返す（404 やエラーにしない）', async () => {
     clearRecentTracesForTesting();
@@ -7976,7 +6772,6 @@ describe('GET /dropped（#242 の HTTP 面）', () => {
     expect(body.total).toBe(0);
     expect(body.traces).toEqual([]);
     expect(body.origin).toBe('daemon');
-    // ISO 8601 の時刻であること。
     expect(body.since).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/u);
     expect(Number.isNaN(Date.parse(body.since))).toBe(false);
   });
@@ -7997,7 +6792,6 @@ describe('GET /dropped（#242 の HTTP 面）', () => {
 
     expect(body.total).toBe(3);
     expect(body.traces).toEqual(expected);
-    // 古い順（末尾が最新）——先頭が probe-1、末尾が probe-3。
     expect(body.traces[0]).toContain('probe-1');
     expect(body.traces[2]).toContain('probe-3');
   });
@@ -8034,12 +6828,6 @@ describe('GET /dropped（#242 の HTTP 面）', () => {
   });
 });
 
-/**
- * `GET /progress`（#2241 の 2）。中身の数え方（窓の境界・見込みの判定順など）は
- * `packages/core/src/progress.test.ts` が固定している。ここで見るのは、ハンドラが
- * 正しい材料（台帳・委譲・導出値・「取れない」の情報）を core へ渡し、応答へ
- * `observedAt` と `github` を足し、不正な窓を 400 にすることだけである。
- */
 describe('GET /progress（#2241 の HTTP 面）', () => {
   const HOUR = 3_600_000;
   const ago = (hours: number) => new Date(Date.now() - hours * HOUR).toISOString();
@@ -8088,7 +6876,6 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(Number.isNaN(Date.parse(body.observedAt))).toBe(false);
     expect(body.observedAt).toBe(body.window.to);
     expect(body.backlog.total).toBe(0);
-    // 未了が0件の「最古」「中央値」は 0 ではなく null（AGENTS.md「取れない軸に 0 の行を作る」）
     expect(body.backlog.age.oldestAt).toBeNull();
     expect(body.backlog.age.medianHours).toBeNull();
     expect(body.inProgress.lastReport).toEqual({
@@ -8099,12 +6886,9 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(body.forecast.state).toBe('unavailable');
     expect(body.forecast.reason).toBe('ledger_younger_than_window');
     expect(body.throughput.delegationsEnded).toEqual({ count: 0, basis: 'updatedAt' });
-    // 刈りが無いので、窓の中の件数は数え落としていない（#3698）。
     expect(body.throughput.mayBeUndercounted).toBe(false);
   });
 
-  // **#2245 段1で反転した。** 以前は「github は常に not_observed」を固定していた（観測を載せる
-  // 口が無かったので）。いまは記録が無いときだけ not_observed——0 件とは言わない。
   it('観測の記録が無ければ github は not_observed で、理由が付く（0 件とは言わない）', async () => {
     const body = await read();
     expect(body.github.state).toBe('not_observed');
@@ -8113,7 +6897,6 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
   });
 
   it('台帳と委譲の数が core の summarizeProgress と一致する（入力は /commitments と同じ導出値つきの行）', async () => {
-    // 未了4件（窓より前に積んだ）+ 窓の中で閉じた3件
     await stores.commitments.open({
       id: 'o-responded',
       at: ago(250),
@@ -8212,14 +6995,10 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(body.inProgress.lastReport.withoutReport).toBe(1);
     expect(body.throughput.commitmentsClosed).toBe(3);
     expect(body.throughput.commitmentsOpened).toBe(0);
-    // 終端（done / failed / lost / stopped）で updatedAt が窓の中: job-done-recent と job-lost。
-    // job-done-old は窓の外なので数えない
     expect(body.throughput.delegationsEnded.count).toBe(2);
-    // 4 / (3 / 168) = 224。流入は窓の中に無いので not_converging ではない
     expect(body.forecast.state).toBe('estimated');
     expect(body.forecast.hoursToDrain).toBeCloseTo(224, 6);
 
-    // core を、別の口（/commitments）が返した導出値つきの行で直接呼んだ結果と一致する
     const ledger = (await (await app.request('/commitments?includeClosed=true')).json()) as {
       entries: never[];
       unreadable: never[];
@@ -8232,7 +7011,6 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       now: new Date(body.observedAt),
       windowHours: 168,
     });
-    // core の出力に無い2欄（daemon が足す `observedAt` / `github`）だけを外して突き合わせる
     expect({ ...body, observedAt: undefined, github: undefined }).toEqual({
       ...JSON.parse(JSON.stringify(expected)),
       observedAt: undefined,
@@ -8306,7 +7084,6 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       },
     };
     const body = await read();
-    // 委譲の欠け（`unreadableJobs`）は別の欄。この台帳の欠けには混ざらない（#2345）。
     expect(body.backlog.completeness).toEqual({
       unreadable: 2,
       trimmedClosed: 7,
@@ -8346,11 +7123,7 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
   it('応答は宣言した OpenAPI 応答スキーマを通っている（余剰も欠けも無い）', async () => {
     await stores.commitments.open({ id: 'cmt-1', at: ago(300), origin: 'human', body: 'x' });
     const body = await read();
-    // `.parse()` は宣言していない欄を黙って落とす。ハンドラが `.parse()` を通していなければ、
-    // core が返す欄がスキーマから抜けても気づけない——パース後と生の応答が一致することで、
-    // 宣言が core の出力の全欄を覆っていることを測る。
     expect(progressResponseSchema.parse(body)).toEqual(body);
-    // 最上位の鍵の集合を固定する（欄落ち・余剰の検出）
     expect(Object.keys(body).sort()).toEqual([
       'backlog',
       'forecast',
@@ -8363,10 +7136,6 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
   });
 });
 
-/**
- * `POST /github-observations`（#2245 段1）。観測した側が数えた GitHub の数を日誌へ置き、
- * `GET /progress` の `github` がそれを返す。**デーモンは GitHub を見に行かない**——値は申告。
- */
 describe('POST /github-observations（#2245 段1）', () => {
   type GithubBody = {
     state: string;
@@ -8422,7 +7191,6 @@ describe('POST /github-observations（#2245 段1）', () => {
       openPulls: 3,
       truncated: false,
     });
-    // 観測時刻はデーモンが記録を受けた時刻（観測した側の時計ではない）
     expect(row.latestOk!.observedAt).toBe(rows[0]!.at);
   });
 
@@ -8544,7 +7312,6 @@ describe('POST /github-observations（#2245 段1）', () => {
       const response = await withFailingJournal.request('/github-observations', json(okBody()));
       expect(response.status).toBe(500);
     });
-    // 例外の文面は `reasonOf` を通った形で stderr へ（応答へは出ない）
     expect(lines.join('')).toContain('journal store unavailable (test)');
     expect(await stores.journal.list({ types: ['github_observation'] })).toEqual([]);
     expect((await github()).state).toBe('not_observed');
@@ -8598,34 +7365,17 @@ describe('POST /github-observations（#2245 段1）', () => {
   });
 });
 
-/** `findRouteStatusMismatches` が Hono のチェーンとして経路の宣言とみなす、プロパティ名の集合。 */
 const HTTP_METHOD_NAMES_FOR_STATUS_AUDIT = new Set(['get', 'post', 'put', 'delete', 'patch']);
-/** `findRouteStatusMismatches` が「実際にステータスを返す口」とみなす、`c.` のプロパティ名の集合。 */
 const RESPONSE_METHOD_NAMES_FOR_STATUS_AUDIT = new Set(['json', 'html', 'text', 'body']);
 
 interface RouteStatusMismatch {
-  /** `` `${METHOD} ${path}` ``（`path` は配線に書いた元の形——`:provider` のように `{}` へ変換する前）。 */
   route: string;
   declared: string[];
   actual: string[];
   undeclared: string[];
 }
 
-/**
- * その経路の呼び出し（1本の `.get(...)` / `.post(...)` 等）の**引数だけ**を
- * 走査し、`describeRoute({ responses: { <数値>: {...}, ... } })` から宣言済み
- * ステータスの一覧を拾う。詳細は `describe('OpenAPI', …)` 内の歯の doc を見よ。
- *
- * **⚠️ `node`（CallExpression）そのものではなく `node.arguments` から辿ること。**
- * Hono のチェーン（`base.use(...).get(...).post(...)…`）は、後続の呼び出しの
- * `CallExpression.expression`（呼び出し先）が**直前までの呼び出し全体**に
- * なる——`x.a().b()` の `.b()` 呼び出しの `expression` は `x.a()` という
- * CallExpression そのものである。`node` から素朴に `ts.forEachChild` すると
- * `node.expression`（＝それより前の経路が全部）まで辿ってしまい、後ろの経路
- * ほど前の経路の宣言・応答を巻き込んで数える（実測: この巻き込みのせいで、
- * ある経路の 400 宣言を消しても他の経路の 400 宣言が「巻き込みで見える」ため
- * 赤くならなかった。`node.arguments` だけを辿るここの実装で直っている）。
- */
+// node ではなく node.arguments から辿る: Hono のチェーンでは node.expression に前の経路の呼び出し全体が入り、前の経路の宣言まで数えてしまう。
 function collectDeclaredStatuses(node: ts.CallExpression): string[] {
   const found: string[] = [];
   const visit = (n: ts.Node): void => {
@@ -8657,17 +7407,7 @@ function collectDeclaredStatuses(node: ts.CallExpression): string[] {
   return found;
 }
 
-/**
- * その経路の呼び出し（1本ぶん）の**引数だけ**を走査し、`c.json(...)` /
- * `c.html(...)` / `c.text(...)` / `c.body(...)` へ渡されている、最後の引数が
- * 数値リテラルのものだけを「実際に返しているステータス」として拾う。詳細は
- * `describe('OpenAPI', …)` 内の歯の doc（「静的走査の限界」）を見よ。
- *
- * **⚠️ `collectDeclaredStatuses` と同じ理由で `node.arguments` だけを辿る。**
- * `node`（CallExpression）そのものから辿ると、Hono のチェーン構造上
- * `node.expression` に前の経路の呼び出し全体が入っており、前の経路が返す
- * ステータスまで「この経路が返した」と誤って数えてしまう。
- */
+// node ではなく node.arguments から辿る: collectDeclaredStatuses と同じ理由。
 function collectActualStatuses(node: ts.CallExpression): string[] {
   const found: string[] = [];
   const visit = (n: ts.Node): void => {
@@ -8687,11 +7427,6 @@ function collectActualStatuses(node: ts.CallExpression): string[] {
   return found;
 }
 
-/**
- * `app.ts` の全経路について、`describeRoute` の宣言ステータスと、ハンドラが
- * 実際に返すリテラルのステータスを突き合わせ、宣言に無い実際のステータスが
- * あった経路だけを返す（issue #1633 の再発防止）。
- */
 function findRouteStatusMismatches(sourceText: string, fileName = 'app.ts'): RouteStatusMismatch[] {
   const sourceFile = ts.createSourceFile(
     fileName,
@@ -8730,24 +7465,7 @@ function findRouteStatusMismatches(sourceText: string, fileName = 'app.ts'): Rou
   return mismatches;
 }
 
-/**
- * OpenAPI の配信（Issue #20）。
- *
- * spec が経路の実装とずれたら「外から API を叩けます」という主張そのものが
- * 嘘になる。ここでは「全経路が載っている」「SSE が SSE として書いてある」
- * 「人間向け画面が出る」の3点だけを見る（内容の細部は `apps/daemon/openapi.json`
- * 自体が machine-generated で、`pnpm build` のたびに作り直される）。
- */
 describe('OpenAPI', () => {
-  /**
-   * **issue #1633。**
-   *
-   * `GET /auth/:provider/callback` のハンドラは実際に3つの分岐で `400` を
-   * 返す（プロバイダ拒否 `?error=`／`code`・`state` の欠落／`completeLogin`
-   * のエラー）が、`describeRoute` の `responses` には `200` しか宣言して
-   * いなかった。生成物 `apps/daemon/openapi.json` にも `400` は現れて
-   * いなかった。
-   */
   it('GET /auth/:provider/callback: 実際に返る 400 が openapi.json の宣言にも現れる（issue #1633）', async () => {
     const response = await app.request('/auth/fake/callback');
     expect(response.status).toBe(400);
@@ -8763,55 +7481,7 @@ describe('OpenAPI', () => {
     ).toContain('400');
   });
 
-  /**
-   * **issue #1633 の再発防止。**
-   *
-   * 上のテストは1経路（`GET /auth/:provider/callback`）だけを名指しで見る。
-   * ここは同じ形の見落とし——**ハンドラが実際に返すステータスが
-   * `describeRoute` の `responses` に宣言されていない**——を、`app.ts` の
-   * **全経路**について機械的に突き合わせる。
-   *
-   * ## なぜ正規表現ではなく TypeScript の AST を読むか
-   *
-   * `scripts/require-operator-routes.test.ts` と同じ理由——この repo の
-   * コメントは日本語の説明文の中に3桁の数字が頻出する（「200字で切る」
-   * 「1000件」等）。正規表現で「3桁の数字」を拾うと、コメントの中の数字を
-   * 宣言や実際の応答と誤読する誤陽性の工場になる。AST なら、`describeRoute`
-   * の `responses` オブジェクトの**プロパティ名**と、`c.json`/`c.html`/
-   * `c.text`/`c.body` への**実引数**だけを構文的に見分けられる（コメントは
-   * トリビアなので構文木のノードにならず、最初から数えられない）。
-   *
-   * ## 抽出の条件
-   *
-   * - 経路とみなすのは、プロパティ名が `get`/`post`/`put`/`delete`/`patch`
-   *   の呼び出しで、第1引数が `/` から始まる文字列リテラルのもの
-   *   （`findRouteDeclarations` と同じ条件）。
-   * - 「宣言したステータス」は、その経路の呼び出し全体（`describeRoute` を
-   *   含む）に現れる `responses: { <数値キー>: {...} }` のキー全部。
-   * - 「実際のステータス」は、その経路の呼び出し全体に現れる
-   *   `c.json(...)`/`c.html(...)`/`c.text(...)`/`c.body(...)` の**最後の
-   *   引数**が数値リテラルであるものだけ（`c.json(body, 400)` の形）。
-   *
-   * ## ⚠️ この歯が測っていないこと（静的走査の限界）
-   *
-   * - **リテラルでないステータスは見ない。** `c.json(body, someVariable)`
-   *   のように変数・式でステータスを渡す形は検出できない——実測
-   *   （2026-09-26、`app.ts` の全75経路）では全経路がリテラルの数値で
-   *   ステータスを渡しており見逃しは無かったが、将来リテラルでない形が
-   *   増えたら、この歯は「何も見つからない」まま黙って通り過ぎる。
-   * - **`jsonBody(schema, onInvalid)` ラッパーの中で発生する 400 は見ない。**
-   *   実際に `c.json(onInvalid(...), 400)` を呼ぶコードは `jsonBody` 関数
-   *   定義の中にあり、各経路の呼び出し箇所（このテストが走査する範囲）には
-   *   現れない。この repo で `jsonBody` を使う経路は実測では例外なく
-   *   `describeRoute` に `400` を宣言済みなので見逃しは起きていないが、
-   *   これは「たまたま揃っている」であって、この歯が保証しているわけでは
-   *   ない。
-   * - **ミドルウェア層**（`authenticate`/`requireOperator`/`requireOwner`
-   *   が返す 401/403、`onError` が返す 500）は経路ごとの宣言と紐付けない
-   *   ——この歯が見るのはハンドラ本体が直接返す応答だけである。
-   * - **チェーンに載せていない配線**（`app.get('/openapi.json', ...)` 等）は
-   *   対象外——上の抽出条件に一致しないため、そもそも走査に現れない。
-   */
+  // 正規表現で3桁の数字を拾わない: コメントや説明文中の数字を宣言・応答と誤読するため、AST で読む。
   it('describeRoute の宣言ステータスと、ハンドラが実際に返すリテラルのステータスが一致する（#1633 再発防止）', () => {
     const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
     const mismatches = findRouteStatusMismatches(source);
@@ -8829,50 +7499,6 @@ describe('OpenAPI', () => {
     ).toEqual([]);
   });
 
-  /**
-   * **13回目の横断レビューで見つかった穴（PR #1747 の積み残し）。**
-   *
-   * PR #1747 は 400 の宣言を9経路で「実際の応答の形（`{ error: string }`）」に
-   * 揃えたと書いていたが、`describeRoute` 自体に 400 を書いていない経路が
-   * 2本残っていた（`POST /runners/vacate` / `DELETE /archive/{id}`）。
-   *
-   * **機序**: `hono-openapi`（`node_modules/hono-openapi/dist/index.js` の
-   * `describeResponse`）は、経路に validator 系ミドルウェアが1つでも付いていて
-   * （`hasValidation`）、かつ `describeRoute` の `responses` に `400` が
-   * **無ければ**、既定の validation error 用スキーマ
-   * （`{ success: boolean（enum:false）, error: array, data: {} }`）を自動で
-   * 差し込む（`ctx.options.defaultValidationErrorResponse !== false &&
-   * !schema.responses["400"]` の分岐）。これは実装の `jsonBody`/`queryParams`
-   * の hook が実際に返す形（`errorResponseSchema`＝ `{ error: string }` だけ）
-   * とは無関係に、**宣言が無いというだけで**自動生成される——実際に
-   * `POST /runners/vacate` へ壊れた本文を送って確かめると、実際の応答は
-   * `{ error: string }` だけで `data`/`success` は無い（上の
-   * 「POST /runners/vacate（#485 PR-2）」の歯が実測している）。
-   *
-   * ⟹ 直し方は他の9経路と同じ——`describeRoute` に `400` を明示し、
-   * `resolver(errorResponseSchema)` を宣言する（宣言さえあれば
-   * `hono-openapi` は自動生成をしない）。
-   *
-   * ここは生成物 `apps/daemon/openapi.json`（`pnpm build` の出力そのもの。
-   * 手では書いていない）を読み、**全経路**の全ステータスの中に、旧い形
-   * （`success`/`data` を持つスキーマ）を宣言している 400 が1つも無いことを
-   * 機械的に確かめる——次にまた「describeRoute に 400 を書き忘れる」経路が
-   * 増えても、この歯が拾う。
-   *
-   * ## ⚠️ この歯が測っていないこと
-   *
-   * - **生成物が最新であることはこの歯自身では確かめない**——それは門
-   *   （`git diff --exit-code -- apps/daemon/openapi.json`）が持つ。ここは
-   *   コミット済みの生成物の中身だけを見る
-   * - **`DELETE /archive/{id}` の 400 が実際に HTTP から到達可能かは測って
-   *   いない。** クエリ引数 `overrideReason` は `z.string().optional()` だけで、
-   *   Hono の `c.req.query()` は同名キーの重複を単一の文字列（後勝ち）に畳む
-   *   ため、通常の HTTP リクエストではこの経路の query バリデータが失敗する
-   *   入力を作れなかった（実測——重複クエリを送っても 404 になり、400 には
-   *   ならなかった）。それでも `queryParams()` というバリデータ付きの
-   *   ミドルウェアが付いている以上 `hono-openapi` は 400 を自動生成するため、
-   *   宣言の食い違いという穴そのものは実在する
-   */
   it('生成物 openapi.json のどの経路の 400 も、旧い形（success/data を持つ）を宣言していない', () => {
     interface JsonSchema {
       properties?: Record<string, unknown>;
@@ -8904,27 +7530,6 @@ describe('OpenAPI', () => {
     ).toEqual([]);
   });
 
-  /**
-   * ⭐ **HTTP の面の description も、同じ族である（#701 / #756）。**
-   *
-   * `POST /schedule` の description は「既定の定期ジョブの名前は奪えない」と言い、
-   * **その名前を数え直していた** —— `memory_tidy` が足された後も
-   * `daily_report / self_initiative` の2つのまま取り残されていた。
-   * **しかもこの description は `apps/daemon/openapi.json` へ焼かれる**ので、
-   * 生成物のほうも同じ嘘を持っていた（外から API を叩く人が読む面である）。
-   *
-   * ⟹ いまは `RESERVED_SCHEDULE_KINDS` から導出している。ここはそれを留める。
-   *
-   * ## ⚠️ この歯が測っていないこと
-   *
-   * - **description の日本語が実装のふるまいと合っているかは測っていない。**
-   *   測るのは予約 kind の名前が全部字面として現れることだけである
-   * - **409 を実際に返すかはここでは測っていない**（そちらは同じファイルの
-   *   `POST /schedule` のハンドラの歯が持つ）
-   * - `apps/daemon/openapi.json`（焼かれた生成物）そのものは見ていない。
-   *   生成物が最新であることは門の
-   *   `git diff --exit-code HEAD -- apps/daemon/openapi.json` が守る
-   */
   it('POST /schedule の description が、予約 kind を実装と同じだけ名乗る', async () => {
     const spec = (await (await app.request('/openapi.json')).json()) as {
       paths: Record<string, { post?: { description?: string } }>;
@@ -8952,8 +7557,6 @@ describe('OpenAPI', () => {
     };
     expect(spec.openapi).toBe('3.1.0');
 
-    // 手で削らない限りここに載る経路数（約30本）を大きく下回っていないか、
-    // 個別の経路名で確かめる。`/openapi.json` `/docs` 自身は載らない。
     const paths = Object.keys(spec.paths);
     for (const path of [
       '/health',
@@ -9009,18 +7612,6 @@ describe('OpenAPI', () => {
     expect(Object.keys(journalStreamContent ?? {})).toContain('text/event-stream');
   });
 
-  /**
-   * **`/managers` の窓が spec の面まで届いているか**（issue #670）。
-   *
-   * spec は `validator('query', managersQuery)` から機械生成されるので、
-   * `validator` を外す・スキーマから欄を落とすと、**ハンドラは 200 を返し
-   * 続けるのに spec からだけ静かに消える**（`apps/api-client` の生成型も
-   * 一緒に消え、Web が `params.query` を渡せなくなる）。
-   *
-   * **`offset` という名前が入っていないことも併せて測る**
-   * （`apps/daemon/src/cursor.ts` の doc が引く線——HTTP の口に `offset` は
-   * 1つも無い）。
-   */
   it('/managers に status / limit / afterId / afterStartedAt のクエリが載る（offset は増えない）', async () => {
     const spec = (await (await app.request('/openapi.json')).json()) as {
       paths: Record<
@@ -9032,28 +7623,12 @@ describe('OpenAPI', () => {
     const names = parameters.filter((p) => p.in === 'query').map((p) => p.name);
     expect(names).toEqual(['status', 'limit', 'afterId', 'afterStartedAt']);
     expect(names).not.toContain('offset');
-    // 上限も spec に出る（呼ぶ側が 400 を踏む前に読める）。
     const limit = parameters.find((p) => p.name === 'limit');
     expect(limit?.schema).toMatchObject({ minimum: 1, maximum: 1000 });
-    // **既定値を持たない**（未指定＝全件。既定で切ると渡していない呼びの応答が変わる）。
+    // 既定値を持たない: 既定で切ると、limit を渡していない呼びの応答が変わるため。
     expect(limit?.schema).not.toHaveProperty('default');
   });
 
-  /**
-   * **`vacating`（#485 PR-1）が spec の面まで届いているかを見る歯。**
-   *
-   * `openapi.ts` の `runnerSummarySchema.state` は手書きの `z.enum([...])` を
-   * やめ、`@alteroid/core` の `runnerLivenessSchema` から引く形にした——ここが
-   * 効いていないと、`RunnerLiveness` に値を足しても `typecheck` は何も言わず、
-   * その値だけが HTTP の面から黙って消える（PR 本文が説明する穴そのもの）。
-   *
-   * **この歯が測っているのは「`runnerLivenessSchema` の値の集合が、生成された
-   * spec の面までそのまま届いていること」である。** ⚠️ **手書きの `z.enum([...])`
-   * への逆行そのものは、この歯では捕まらない。** 6値を漏らさず正しく書き写して
-   * 手書きへ戻せば（結び目を切っても）、`arrayContaining` も `toHaveLength(6)`
-   * も変わらず通る——この歯が実際に落ちるのは「手書きへ戻し、かつ値の集合が
-   * 食い違ったとき」だけである（変異で実測済み。#485 PR-1 の報告に生出力あり）。
-   */
   it('/runners の state に vacating を含む6値が出る（runnerLivenessSchema の値が spec まで届くことを固定する）', async () => {
     const spec = (await (await app.request('/openapi.json')).json()) as {
       paths: Record<
@@ -9107,13 +7682,6 @@ describe('OpenAPI', () => {
   });
 });
 
-/**
- * **HTTP の面がここで見るのは「配線」だけである。** `runnerId` を本文から
- * 読んで `ManagerPool.vacate()` へそのまま渡すこと・応答の形だけを見る。
- * `vacate()` 自身の振る舞い（`'vacating'` を先に立てる順序・`status` を
- * `'stopped'` にしない・`relocateFrom` へ繋ぐ）は `packages/core` の
- * `manager-relocate.test.ts` が持つ（HTTP 層で二重に測らない）。
- */
 describe('POST /runners/vacate（#485 PR-2）', () => {
   it('本文の runnerId を ManagerPool.vacate() へそのまま渡し、200 で { ok: true } を返す', async () => {
     const response = await app.request('/runners/vacate', json({ runnerId: 'runner-a' }));
@@ -9135,7 +7703,6 @@ describe('POST /runners/vacate（#485 PR-2）', () => {
       expect(await response.json()).toEqual({ ok: true, handshakeSkipped });
     }
 
-    // 対照: 飛ばさなかった回は今までと同じ `{ ok: true }`（欄のキーそのものが無い）。
     fake.setVacateResult({});
     const plain = await app.request('/runners/vacate', json({ runnerId: 'runner-a' }));
     expect(plain.status).toBe(200);
@@ -9147,12 +7714,6 @@ describe('POST /runners/vacate（#485 PR-2）', () => {
     expect(response.status).toBe(400);
     expect(fake.vacateCalls).toEqual([]);
 
-    // **横断レビュー（13回目）で見つかった穴（PR #1747 の積み残し）。** `jsonBody`
-    // の hook は実際には `{ error: string }` しか返さないのに、`describeRoute` が
-    // 400 を宣言していなかったため、hono-openapi が既定の旧い形
-    // （`{ data, error, success }`）を openapi.json へ自動で差し込んでいた。
-    // ここは実際の応答本文がその旧い形を持たないことを見る（宣言側の歯は
-    // 'OpenAPI' describe の対応するテストが持つ）。
     const body = (await response.json()) as Record<string, unknown>;
     expect(body).not.toHaveProperty('data');
     expect(body).not.toHaveProperty('success');
@@ -9160,13 +7721,6 @@ describe('POST /runners/vacate（#485 PR-2）', () => {
   });
 });
 
-/**
- * 器を替えても続きから話せること、聞きに行かなくても気づけること、人間が
- * 自分の言葉を自分で届けられること。
- *
- * どれも「読む口はあるのに触る口が無い」ために、画面や別の器から使おうとした
- * 瞬間に能力の差として現れていた穴である（north_star 禁止1）。
- */
 describe('会話・出来事・マネージャーへの手出し', () => {
   async function exchange(conversationId: string, role: 'inbound' | 'outbound', text: string) {
     return stores.journal.append({ type: 'exchange', with: 'human', role, text, conversationId });
@@ -9183,7 +7737,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
 
     expect(body.conversations.map((entry) => entry.conversationId)).toEqual(['conv-b', 'conv-a']);
     expect(body.conversations[1]?.messages).toBe(2);
-    // 抜粋はその会話のいちばん新しい発言
     expect(body.conversations[1]?.preview).toBe('はい');
   });
 
@@ -9199,10 +7752,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
       { role: 'inbound', text: 'ひとつめ' },
       { role: 'outbound', text: 'ふたつめ' },
     ]);
-    // **項目が増えていないことも見る。** `toMatchObject` は余分な鍵を無視し、
-    // 応答スキーマは実行時に本体を削らない（`resolver()` は文書化だけ）ので、
-    // 共有した組み立て（`conversation.ts` は `conversationId` も持つ）から
-    // 1項目余って出ても、上のアサーションは通ってしまう。
+    // toMatchObject は余分な鍵を無視するため、鍵の集合を別に確かめる。
     expect(Object.keys(body.messages[0]!).sort()).toEqual(['at', 'id', 'role', 'text']);
   });
 
@@ -9239,14 +7789,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect('turnFailureKind' in (byText('失敗でない発言') ?? {})).toBe(false);
   });
 
-  /**
-   * **「無い」と「遡り切れていない」を同じ応答にしない。**
-   *
-   * この口は日誌の新しい方から `scan` 件しか見ない。一律 404 にしていたので、
-   * 窓より古い会話が「そんな会話は無い」として返っていた（消えた会話と、まだ
-   * 見ていない会話が呼ぶ側から区別できない）。判定できないという3つ目の状態を
-   * 持たないと、判定できない場合が黙ってどちらかへ倒れる。
-   */
   it('遡り切れていれば「無い」と言ってよい（scanned と reachedStart を添える）', async () => {
     await exchange('conv-a', 'inbound', 'ひとつめ');
 
@@ -9254,18 +7796,15 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     const body = (await response.json()) as { scanned: number; reachedStart: boolean };
 
     expect(response.status).toBe(200);
-    // 日誌の exchange は1件だけ＝既定の scan（2000）に届かない＝先頭まで見た
     expect(body).toMatchObject({ scanned: 1, reachedStart: true });
     expect((await app.request('/conversations/does-not-exist')).status).toBe(404);
   });
 
   it('遡り切れていなければ 404 を返さず、判定できないことを返す', async () => {
-    // 古い会話を先に積み、そのあと新しい会話で窓を埋める
     await exchange('conv-old', 'inbound', '古い発言');
     await exchange('conv-new', 'inbound', '新しい発言1');
     await exchange('conv-new', 'inbound', '新しい発言2');
 
-    // 窓は新しい2件（conv-new）だけ。conv-old はその外にある
     const response = await app.request('/conversations/conv-old?scan=2');
     const body = (await response.json()) as {
       messages: unknown[];
@@ -9273,13 +7812,11 @@ describe('会話・出来事・マネージャーへの手出し', () => {
       reachedStart: boolean;
     };
 
-    // **404 ではない。** 無いのではなく、この窓では言えないだけである
     expect(response.status).toBe(200);
     expect(body.messages).toEqual([]);
     expect(body.reachedStart).toBe(false);
     expect(body.scanned).toBe(2);
 
-    // 窓を広げれば見える（＝「無い」が誤りだったことの裏返し）
     const wider = await app.request('/conversations/conv-old?scan=10');
     const widerBody = (await wider.json()) as {
       messages: { text: string }[];
@@ -9302,18 +7839,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect((await app.request('/conversations/conv-a')).status).toBe(404);
   });
 
-  /**
-   * **issue #418 の症状そのものを固定する歯。**
-   *
-   * `GET /conversations` と `GET /conversations/:id` はどちらも `scan` で
-   * 日誌を遡ってから会話へ畳み直す。以前は `types: ['exchange']` だけで窓を
-   * 切ってから `with === 'human'` に絞っていたため、マネージャーとの往復
-   * （`with: 'manager'`）が `scan` の予算を食い尽くし、人間の会話が窓の外へ
-   * 落ちていた。**「絞りが効いている」だけでは弱い**（`scan` が十分大きければ
-   * 旧実装でも同じ結果になる）ので、ここでは `scan` を症状が出るほど小さくし、
-   * マネージャーとの往復を `scan` より多く積んでも、人間の会話が窓に食われない
-   * ことを両エンドポイントで確かめる。
-   */
   describe('マネージャーとの往復に埋もれても、人間の会話は窓に食われない（issue #418）', () => {
     async function fillManagerNoise(count: number) {
       for (let i = 0; i < count; i += 1) {
@@ -9329,8 +7854,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     it('GET /conversations: scan より多いマネージャーの往復があっても、人間の会話が一覧に出る', async () => {
       await exchange('conv-a', 'inbound', '人間の質問');
       await exchange('conv-a', 'outbound', 'クローンの返答');
-      // conv-a の後に、scan（3）よりずっと多いマネージャーとの往復を積む
-      // （新しい順に返るストアでは、これらのほうが conv-a より「新しい」）。
       await fillManagerNoise(10);
 
       const body = (await (await app.request('/conversations?scan=3')).json()) as {
@@ -9338,10 +7861,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
         scanned: number;
       };
 
-      // 旧実装だと scan=3 で返る3件はすべてマネージャーとの往復になり、
-      // conv-a は一覧から消えていた。
       expect(body.conversations.map((c) => c.conversationId)).toEqual(['conv-a']);
-      // scanned はいまや「人間との往復を何件見たか」——conv-a の2発言だけ。
       expect(body.scanned).toBe(2);
     });
 
@@ -9364,15 +7884,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     });
   });
 
-  /**
-   * **#418 の裏返し。** `GET /conversations` は `scan` の窓に加えて `limit`
-   * でも黙って会話数を切っていた（`collectConversations(entries).slice(0,
-   * limit)`）。個別会話側（`GET /conversations/:id`）とクローンの道具
-   * （`conversation_read` の `hiddenByLimit`）は既に言っているのに、この
-   * 一覧の口だけが黙っていた。`reachedStart` は `/conversations/:id` と
-   * 同じ関数・同じ意味で、`hiddenByLimit` はこの窓の中で `limit` に収まら
-   * なかった会話の数である。
-   */
   describe('会話一覧が limit で切った件数を黙って捨てない（#418 の裏返し）', () => {
     it('窓を出し切ったとき reachedStart: true', async () => {
       await exchange('conv-a', 'inbound', '質問');
@@ -9381,7 +7892,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
         reachedStart: boolean;
       };
 
-      // 日誌の human 往復は1件だけ＝既定の scan（10）に届かない＝先頭まで見た
       expect(body.reachedStart).toBe(true);
     });
 
@@ -9411,9 +7921,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
         hiddenByLimit: number;
       };
 
-      // **`conversations` の件数が `limit` を超えない。**
       expect(body.conversations.length).toBe(2);
-      // 窓の中に5会話あり、そのうち2件を返した＝残り3件が limit で落ちた
       expect(body.hiddenByLimit).toBe(3);
     });
 
@@ -9431,10 +7939,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     });
   });
 
-  /**
-   * **#3550。** `cursor` / `nextCursor`（`/approvals` / `/commitments` と同じ形）で、201 件目以降と
-   * `scan` の窓の外へも辿れる。続きが無ければ `nextCursor` は鍵ごと無い。
-   */
   describe('会話一覧の cursor（#3550）', () => {
     interface ListBody {
       conversations: { conversationId: string }[];
@@ -9481,7 +7985,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
         await exchange(id, 'inbound', id);
       }
 
-      // 窓は2件。limit は余裕があるので hiddenByLimit は 0 だが、窓の外が残るので続きが在る。
       const first = await get('scan=2&limit=20');
       expect(ids(first)).toEqual(['conv-e', 'conv-d']);
       expect(first.hiddenByLimit).toBe(0);
@@ -9537,7 +8040,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
 
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
-    // 最初のフレームは open
     await reader.read();
 
     await stores.journal.append({
@@ -9556,21 +8058,12 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     const { value } = await reader.read();
     const frame = decoder.decode(value);
 
-    // 絞り込んだ種別だけが届く。絞り込みを決めるのは呼ぶ側である
     expect(frame).toContain('escalation');
     expect(frame).toContain('消してよいか');
     expect(frame).not.toContain('流れてはいけない');
     await reader.cancel();
   });
 
-  /**
-   * **日誌に何も載らないあいだも heartbeat が流れる。**
-   *
-   * `/journal/stream` は `/chat` と違って**そもそも長時間無音が普通**である
-   * （承認待ちが出るまで何も起きない）。だから無音死がいちばん出るのはこの経路で、
-   * `apps/web` がこの口で自前の再接続を持っているのもそれが理由だった
-   * （`packages/swr/src/hooks/use-journal-live.ts` の冒頭コメント）。
-   */
   it('日誌が無音でも heartbeat のコメント行が流れる（承認待ちを待つ長時間接続）', async () => {
     const beating = createApp({
       clone: fake.clone,
@@ -9588,7 +8081,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
     let seen = '';
-    // **日誌へは1件も追記しない。** それでも読めるものが来ることを見る
     while (!seen.includes(': hb')) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -9596,9 +8088,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     }
 
     expect(seen).toContain(': hb');
-    // 最初のフレームは open のまま（heartbeat が先に割り込んでいない）。
-    // **先に open が在ることを確定させる**（#2003）——無いと `indexOf` が -1 になり、
-    // 下の順序の比較は `-1 < n` で素通りする。
+    // 先に open の存在を確かめる: 無いと indexOf が -1 になり、下の順序の比較が素通りするため。
     expect(seen).toContain('event: open');
     expect(seen.indexOf('event: open')).toBeLessThan(seen.indexOf(': hb'));
 
@@ -9647,20 +8137,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect(fake.managerSends).toEqual([]);
   });
 
-  /**
-   * **`session_missing` は 404 でも 500 でもない**（#563）。
-   *
-   * かつて `Pool#send()` は runner の 404 を例外のまま貫通させており、この口は
-   * ハンドラまで到達せずに `base.onError` が **`500 Internal Server Error`**
-   * （text/plain）を作っていた——**404 という情報も文言も応答本文に1文字も出ず、**
-   * 跡は stderr にしか残らなかった。⟹ クローンには文言が届き、人間には 500 しか
-   * 届かないという非対称ができていた。
-   *
-   * **そして 404 へも寄せない。** `ManagerAbortResult` の doc が逐語で否定した形
-   * （待てば直る状態を 404 という機械可読な終端で返す）になる。`session_missing`
-   * は**「そのものは居る」側**——委譲は台帳に在り、時間で解ける理由なら送り直しで
-   * 通る。**200 + `outcome`** で返し、読み手に解釈の余地を残す。
-   */
+  // 404 へ寄せない: 待てば直る状態を 404 という機械可読な終端で返す形になる（ManagerAbortResult の doc が否定している）ため。
   it('runner にセッションが無い相手へ送ったら、200 + outcome で返る（404 にも 500 にもしない）', async () => {
     fake.managerList.push({
       managerId: 'mgr-1',
@@ -9682,10 +8159,8 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect(response.status).toBe(200);
     expect(response.status).not.toBe(404);
     expect(response.status).not.toBe(500);
-    // **`outcome` として機械可読に返る**（`detail` の文言に頼らせない）。
     const body = (await response.json()) as { outcome: string; detail: string };
     expect(body.outcome).toBe('session_missing');
-    // 応答本文が JSON であること自体も見る（500 は text/plain だった）。
     expect(typeof body.detail).toBe('string');
   });
 
@@ -9711,12 +8186,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect(fake.managerAborts).toEqual([{ managerId: 'mgr-1', reason: '方針が変わった' }]);
   });
 
-  /**
-   * **`not_stopped` / `unknown` は 200 のまま、`outcome` で言い分ける。**
-   *
-   * どちらも「そのマネージャーは居る」ことは確かなので、リクエスト自体は正しく
-   * 処理できている——404 にすると「居ない」と紛れる。404 は `absent` だけである。
-   */
+  // 404 にしない: そのマネージャーは居るので、404 にすると「居ない」(absent) と紛れる。
   it('止まっていない・確かめられなかったときも 200 で outcome を返す（404 にしない）', async () => {
     fake.managerList.push({
       managerId: 'mgr-1',
@@ -9790,19 +8260,10 @@ describe('会話・出来事・マネージャーへの手出し', () => {
 
   it('無い記憶を消しても、消えたことにしない', async () => {
     expect((await app.request('/memory/missing', { method: 'DELETE' })).status).toBe(404);
-    // 形が不正なものは 400（無いのか、そもそも名前として成立しないのかを分ける）
     expect((await app.request('/memory/居ない', { method: 'DELETE' })).status).toBe(400);
   });
 });
 
-/**
- * `POST /chat` の `supersedes` — 送信済みの人間の発言を編集する
- * （issue「チャットの送信済みメッセージを編集する」）。
- *
- * **弾いたときは `clone.post` を呼ばない**（日誌に何も積まない）ことを、
- * 4つの 400 条件それぞれで確かめる。正常系は `clone.post` へ `supersedes`
- * がそのまま渡ることを確かめる。
- */
 describe('POST /chat — supersedes（送信済みの人間の発言を編集する）', () => {
   it('conversationId が無いのに supersedes があると 400 で弾き、clone.post を呼ばない', async () => {
     const response = await app.request('/chat', json({ text: '直した本文', supersedes: 'evt-1' }));
@@ -9812,7 +8273,6 @@ describe('POST /chat — supersedes（送信済みの人間の発言を編集す
   });
 
   it('supersedes が指す id が存在しないと 400 で弾き、clone.post を呼ばない', async () => {
-    // #4149 から在る会話へしか送れない。
     await stores.journal.append({
       type: 'exchange',
       with: 'human',
@@ -9830,7 +8290,6 @@ describe('POST /chat — supersedes（送信済みの人間の発言を編集す
   });
 
   it('supersedes が指す id が別の会話のものだと 400 で弾く', async () => {
-    // #4149 から在る会話へしか送れない。
     await stores.journal.append({
       type: 'exchange',
       with: 'human',
@@ -9883,7 +8342,6 @@ describe('POST /chat — supersedes（送信済みの人間の発言を編集す
       text: '元の発言',
       conversationId: 'conv-1',
     });
-    // 1回目の編集で original は既に畳まれている。
     await stores.journal.append({
       type: 'exchange',
       with: 'human',
@@ -9929,10 +8387,6 @@ describe('POST /chat — supersedes（送信済みの人間の発言を編集す
   });
 });
 
-/**
- * `GET /conversations/:id` の `includeSuperseded` — チャットの
- * 「メッセージを編集する」機能で畳まれた版へ届く口（制約(A)）。
- */
 describe('GET /conversations/:id — includeSuperseded（編集で畳まれた版）', () => {
   async function exchange(conversationId: string, role: 'inbound' | 'outbound', text: string) {
     return stores.journal.append({ type: 'exchange', with: 'human', role, text, conversationId });
@@ -10023,20 +8477,10 @@ describe('GET /conversations/:id — includeSuperseded（編集で畳まれた�
   });
 });
 
-/**
- * 実行環境プロファイル（`.zprofile` 相当）。
- *
- * 固定しているのは「器を作り直さずに環境を差し替えられること」と、
- * 「壊れたものを保存も配布もしないこと」の2つである。前者が無いと、道具の鍵を
- * 1つ足すたびに `compose.yaml` を直して器を焼き直すことになり（＝走行中の仕事が
- * 死ぬ）、後者が無いと、構文を間違えた1回で以後すべてのコマンドが壊れた環境で
- * 走り続ける。
- */
 describe('実行環境プロファイル', () => {
   it('置いていなければ空を返す', async () => {
     const response = await app.request('/profile');
     expect(response.status).toBe(200);
-    // 2026-10-03: 名前付きの行になった。行・合成後の指紋が足され、旧来の `script` は空文字のまま残る。
     expect(await response.json()).toEqual({ entries: [], clone: {}, runner: {}, script: '' });
   });
 
@@ -10057,15 +8501,10 @@ describe('実行環境プロファイル', () => {
     expect(put.status).toBe(200);
 
     const read = (await (await withProfile.request('/profile')).json()) as { script: string };
-    // 入口で末尾の改行だけ整える（保存・配布・指紋が同じ文字列を見るため）。
     expect(read.script).toBe('export SOME_API_TOKEN=abc123\n');
   });
 
   it('PUT が返す指紋と GET が返す指紋が一致する', async () => {
-    // **ここが食い違うと、届いているかを見る道具そのものが嘘をつく。**
-    // 置き場が末尾の改行を足すだけで「置いた指紋」と「読んだ指紋」がずれ、
-    // `alteroid profile status` が永久に「届いていない」と言い続ける
-    // （鍵の指紋でも同じ失敗をしている）。
     const withProfile = createApp({
       clone: fake.clone,
       stores,
@@ -10074,7 +8513,6 @@ describe('実行環境プロファイル', () => {
       profile: profileService(stores),
     });
 
-    // 末尾に改行が無い本文（人間が普通に書く形）
     const put = (await (
       await withProfile.request('/profile', {
         method: 'PUT',
@@ -10110,11 +8548,6 @@ describe('実行環境プロファイル', () => {
     expect(runner.received).toEqual(['export OK=1\n']);
   });
 
-  /**
-   * 名前付きの行と撒く先（2026-10-03。オーナーの決定: DB の行ごとに設定できる・行ごとに
-   * 撒く先〈all/app/runner、既定 all〉・つなげる順番は名前の辞書順）。`PUT /profile`
-   * （全部差し替え）は互換のために残してある。
-   */
   describe('行ごとの口（PUT・DELETE /profile/:name）', () => {
     function appWithRunner() {
       const runner = fakeRunner('runner-primary');
@@ -10150,7 +8583,6 @@ describe('実行環境プロファイル', () => {
       const defaulted = await put('base', { script: 'export BASE_SECRET_2690=1' });
       expect(defaulted.status).toBe(200);
       const body = (await defaulted.json()) as { entries: unknown[] };
-      // 更新の応答は本文を往復させない（値は送った本人が持っている）。
       expect(JSON.stringify(body)).not.toContain('BASE_SECRET_2690');
       expect(body.entries).toMatchObject([{ name: 'base', scope: 'all' }]);
 
@@ -10161,7 +8593,6 @@ describe('実行環境プロファイル', () => {
         ['base', 'all'],
         ['rust', 'runner'],
       ]);
-      // 互換の旧欄: 全行を名前の順につないだもの。
       expect(read.script).toBe('export BASE_SECRET_2690=1\n\nexport RUST=1\n');
     });
 
@@ -10186,7 +8617,6 @@ describe('実行環境プロファイル', () => {
 
       await remove('a');
       await remove('b');
-      // 残るのは app 専用の c だけ → runner へは空（外す）。
       expect(runner.received.at(-1)).toBe('');
     });
 
@@ -10293,18 +8723,10 @@ describe('実行環境プロファイル', () => {
     });
 
     expect(response.status).toBe(400);
-    // 保存されていない ＝ 器を作り直しても、前の効くプロファイルが戻る
     expect((await stores.profile.list())[0]?.script).toBe('export GOOD=1');
-    // 降ろしてもいない
     expect(runner.received).toEqual([]);
   });
 
-  /**
-   * 差し替えた事実が日誌に残ること（Issue #1733）。`profile_write`
-   * （`packages/core/src/tools.ts`）と同じ深さ（sha256）まで、`PUT /mcp-servers`
-   * と同じ形（runner ごとの名前と成否だけ）で残す。**スクリプト本文は1文字も
-   * 書かない**——鍵の値がそのまま入りうる本文だからである。
-   */
   it('日誌に、sha256 と配布の成否まで残り、スクリプト本文は1文字も書かない', async () => {
     const runner = fakeRunner('runner-primary');
     const withProfile = createApp({
@@ -10361,7 +8783,6 @@ describe('実行環境プロファイル', () => {
     const decisions = journal
       .map((e) => (e.type === 'decision' ? e.decision : ''))
       .filter((decision) => decision.includes('実行環境プロファイル'));
-    // journal.list の既定は 'desc'（新しい順）——直近（先頭）が2回目の PUT。
     expect(decisions[0]).toContain('外した');
   });
 
@@ -10396,14 +8817,6 @@ describe('実行環境プロファイル', () => {
     expect(serialized).not.toContain('DUMMY_PROFILE_SECRET_MARKER');
   });
 
-  /**
-   * **⚠️ 2026-09-29（issue #2123）: 期待を反転した。** 差し替え（保存・配布を
-   * 含む `deps.profile.apply`）を「日誌を先に書く」形へ動かした以上、評価で
-   * 断られた回も「差し替えようとしている」の1行と、打ち消しの1行が残る
-   * （記録が多すぎる側の穴で、記録の無い差し替えより安全側と判断した。teto の
-   * 判断）。元は「1文字も置いていないので日誌にも残らない」ことを固定して
-   * いたが、それは差し替えが日誌の後にあった旧い形の帰結だった。
-   */
   it('読めなかった（保存していない）ときも、差し替えようとした行と打ち消しの行が残り、400 のまま', async () => {
     const withProfile = createApp({
       clone: fake.clone,
@@ -10419,7 +8832,6 @@ describe('実行環境プロファイル', () => {
       body: JSON.stringify({ script: 'if [ ; then' }),
     });
     expect(response.status).toBe(400);
-    // 保存していない——前のもの（無い）が残る。
     expect(await stores.profile.list()).toEqual([]);
 
     const decisions = (await stores.journal.list({ types: ['decision'] }))
@@ -10430,13 +8842,6 @@ describe('実行環境プロファイル', () => {
     expect(decisions.some((d) => d.includes('差し替えられなかった'))).toBe(true);
   });
 
-  /**
-   * **issue #2123。** 評価は通ったが、状態変更（正本への保存。
-   * `stores.profile.write`）そのものが投げたときは、差し替えようとした行と
-   * 打ち消しの行の両方が日誌に残り、応答は 500 になる（grant の「状態変更
-   * （grantAccess）が投げたときは、付与の行と打ち消しの行の両方が日誌に
-   * 残り、500になる」と同じ形）。
-   */
   it('状態変更（正本への保存）が投げたときは、差し替えようとした行と打ち消しの行の両方が日誌に残り、500 になる', async () => {
     const throwingStores: Stores = {
       ...stores,
@@ -10472,15 +8877,6 @@ describe('実行環境プロファイル', () => {
     expect(decisions[1]).toBe('実行環境プロファイルを差し替えられなかった');
   });
 
-  /**
-   * **issue #2163。** 反映（`prepared.commit()`）が落ち、正本への書き戻し
-   * （`stores.profile.revert(previous)`）まで落ちたときは、正本だけが新しい版の
-   * まま残る（クローンは前の版）——直前のテストと違い、**この状態で
-   * 「差し替えられなかった」と書くと事実と逆になる。** 決定の行は状態どおり
-   * （正本は新しい版のまま・クローンは前の版）にする。**文言（例外の message）
-   * ではなく `ProfileRollbackFailedError` という型で見分ける**（issue の
-   * 「例外の文言で見分けない」という指定どおり）。
-   */
   it('反映も書き戻しも落ちたときは、日誌の決定の行が状態どおりになり、「差し替えられなかった」は出ない', async () => {
     const throwingStores: Stores = {
       ...stores,
@@ -10538,12 +8934,6 @@ describe('実行環境プロファイル', () => {
     expect(decisions[1]).not.toContain('差し替えられなかった');
   });
 
-  /**
-   * **issue #2123。** `PUT /credentials` の同じ歯（`日誌への先書きが落ちると
-   * 500 で、鍵は置かれない`）と同じ形。日誌への先書きが落ちると 500 で、
-   * 差し替わらない——正本の profile が書かれていない・runner へ配られて
-   * いない・`deps.profile.apply` が呼ばれていない。
-   */
   it('日誌への先書きが落ちると 500 で、差し替わらない（正本が書かれていない・runner へ配られていない）', async () => {
     const runner = fakeRunner('runner-primary');
     const failingJournal: Stores = {
@@ -10573,27 +8963,13 @@ describe('実行環境プロファイル', () => {
       expect(response.status).toBe(500);
     });
 
-    // 日誌が先に落ちたので、`deps.profile.apply` そのものが呼ばれていない
-    // ——正本には書かれておらず、runner へも配られていない。
     expect(await stores.profile.list()).toEqual([]);
     expect(runner.received).toEqual([]);
-    // **`appendJournalOrDrop` は通らない**（打ち消しの行を書く前段——先書き
-    // ——で落ちたので、そこにも進んでいない）。
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
     expect(dropped).toHaveLength(0);
   });
 });
 
-/**
- * マネージャーへ降ろす環境変数（`/credentials`）。
- *
- * 固定しているのは4つである:
- *
- * 1. **任意の名前で置ける**（用途が増えるたびに器を焼き直さない）
- * 2. **値は1文字も外へ出ない**（返るのは指紋だけ）
- * 3. **置かせない名前は 400 で、理由が返る**（名前を疑うのか権限を疑うのかが分かる）
- * 4. **正本へ置いてから配る**（器を作り直しても `hello` で降り直せる）
- */
 describe('マネージャーへ降ろす環境変数（/credentials）', () => {
   const DUMMY_VALUE = 'CRED-VAULT-DUMMY';
 
@@ -10620,7 +8996,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
   }
 
   it('器が無ければ 503（「置いていない」と「口が無い」を分ける）', async () => {
-    // 既定の `app`（`beforeEach`）は `credentials` を渡していない
     expect((await app.request('/credentials')).status).toBe(503);
   });
 
@@ -10651,7 +9026,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
       { runnerId: 'runner-1', ok: true, credentials: expect.anything() },
     ]);
     expect(runner.held.get('NPM_TOKEN')).toBe(DUMMY_VALUE);
-    // 器を作り直しても戻せる（正本に在る）
     expect((await stores.credentials.list()).map((row) => row.name)).toEqual([
       'GIT_AUTHOR_NAME',
       'NPM_TOKEN',
@@ -10666,7 +9040,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     expect(response.status).toBe(200);
     expect(await response.text()).not.toContain(DUMMY_VALUE);
 
-    // 読み出す口の側も同じ
     const read = await withVault.request('/credentials');
     expect(await read.text()).not.toContain(DUMMY_VALUE);
   });
@@ -10681,10 +9054,7 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
 
     expect(response.status).toBe(400);
     const text = await response.text();
-    // **理由が読めること。** 「置けなかった」だけでは、名前を疑うのか権限を疑うのか
-    // 分からない（人間は PAT の権限を疑いに行く）。
     expect(text).toContain('alteroid token add');
-    // **値は出ない。**
     expect(text).not.toContain(DUMMY_VALUE);
     expect(await stores.credentials.list()).toEqual([]);
     expect(runner.receivedCredentials).toEqual([]);
@@ -10730,16 +9100,7 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     expect((await stores.credentials.list()).map((row) => row.name)).toEqual(['NPM_TOKEN']);
   });
 
-  /**
-   * 差し替えた事実が日誌に残ること（Issue #1733。#1717 のレビューで見つかった
-   * 不揃い——`PUT /mcp-servers` / `profile_write` は残していたが、`PUT /profile`
-   * `PUT /credentials` だけ残していなかった）。
-   *
-   * **`secret: false` の行も混ぜる。** `CredentialService.apply()` が返す
-   * `result.fingerprints` は、secret でない行に限って `value`（平文）を伴う
-   * （`credential-service.ts` の `fingerprintOfRow`）——ここを見落として
-   * 丸ごと日誌へ流すと、値が1文字も書かれていないはずの日誌に鍵が漏れる。
-   */
+  // secret: false の行も混ぜる: その行の fingerprints は平文の value を伴うため、丸ごと日誌へ流すと漏れる。
   it('日誌に、名前と指紋・配布の成否まで残り、値は1文字も書かない（secret:false でも）', async () => {
     const runner = fakeRunner('runner-1');
     const withVault = withCredentials([runner]);
@@ -10772,7 +9133,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     const decisions = journal
       .map((e) => (e.type === 'decision' ? e.decision : ''))
       .filter((decision) => decision.includes('環境変数（鍵）'));
-    // journal.list の既定は 'desc'（新しい順）——直近（先頭）が2回目の PUT。
     expect(decisions[0]).toContain('外した: NPM_TOKEN');
   });
 
@@ -10794,16 +9154,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     expect(serialized).not.toContain(DUMMY_VALUE);
   });
 
-  /**
-   * **⚠️ 2026-09-29（issue #2123）: 期待を反転した。** `PUT /credentials` を
-   * 「日誌を先に書く」形へ動かした以上、`deps.credentials.apply`（検証と
-   * 実際の保存が同じ1呼びの中にある）が検証で断った回も「差し替えようと
-   * している」の1行と、打ち消しの1行が残る（記録が多すぎる側の穴で、記録の
-   * 無い差し替えより安全側と判断した。teto の判断）。元は「1文字も置いて
-   * いないので日誌にも残らない」ことを固定していたが、それは差し替えが
-   * 日誌の後にあった旧い形の帰結だった。**値（鍵そのもの）は今までどおり
-   * 1文字も書かない**——ここで固定するのは名前だけである。
-   */
   it('置かせない名前・伏せる鍵は 400 のまま。差し替えようとした行と打ち消しの行は残るが、値は1文字も書かない', async () => {
     const withVault = withCredentials();
     const r1 = await put(withVault, [{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: DUMMY_VALUE }]);
@@ -10812,7 +9162,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
       { name: 'ALTEROID_DATABASE_URL', value: 'postgres://stolen' },
     ]);
     expect(r2.status).toBe(400);
-    // 置かせない名前なので、正本には1件も置かれていない。
     expect(await stores.credentials.list()).toEqual([]);
 
     const decisions = (await stores.journal.list({ types: ['decision'] }))
@@ -10826,25 +9175,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     expect(serialized).not.toContain('postgres://stolen');
   });
 
-  /**
-   * （以下は 2026-09-29 以前の形。issue #2123 で反転）
-   *
-   * **⚠️ `PUT /credentials` は Issue #2037 の `appendJournalOrDrop` の対象外
-   * （マネージャー判断。`app.ts` の `appendJournalOrDrop` の doc「当てていない
-   * 口」）。** 鍵の差し替えは日誌より前に runner へ配られ、効いている——
-   * それでも日誌の行が「誰が鍵を差し替えたか」の唯一の記録である以上、
-   * ここだけは書けなかったら今までどおり 500 のままにする（跡は stderr にも
-   * 残る）。この歯はその「変えていないこと」を固定する。
-   *
-   * **⚠️ 2026-09-29（issue #2123）: 期待を反転した。** `PUT /credentials` は
-   * 能力を広げる口だと teto が判断し、`/access/:accountId/grant` と同じ
-   * 「日誌を先に書き、書けなければ状態を変えずに 500」へ動いた。元は
-   * 「差し替え（`deps.credentials.apply`）が先・日誌が後」だったので、日誌
-   * への追記だけが落ちても差し替えは効いたままだった——この歯はその「差し
-   * 替えは効いたまま」を固定していた（直上の段落、当時のマネージャー
-   * 判断）。いまは日誌が先なので、日誌が書けなければ差し替えそのものが
-   * 起きない——`deps.credentials.apply` は一度も呼ばれず、鍵は置かれない。
-   */
   it('日誌への先書きが落ちると 500 で、鍵は置かれない（issue #2123）', async () => {
     const runner = fakeRunner('runner-1');
     const failingJournal: Stores = {
@@ -10873,29 +9203,12 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
       expect(response.status).toBe(500);
     });
 
-    // （以下は 2026-09-29 以前の形。issue #2123 で反転）
-    // 鍵そのものは既に置かれている（応答は 500 でも操作は効いている）。
-    // ↑ いまは逆——日誌が先に落ちたので、差し替え（`apply`）そのものが
-    // 起きていない（鍵は置かれない）。
     expect((await stores.credentials.list()).map((row) => row.name)).toEqual([]);
     expect(runner.held.has('NPM_TOKEN')).toBe(false);
-    // （以下は 2026-09-29 以前の形。issue #2123 で反転）
-    // **`appendJournalOrDrop` を通らないので、`noteDroppedRecord` の跡は出ない**
-    // （握っていない証拠——出ていたら 500 と矛盾する形で握っていることになる）。
-    // ↑ 結論（跡が出ない）は変わらないが、理由は変わった——打ち消しの行を
-    // 書く前段（先書き）で落ちたので、そこにも進んでいない。
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
     expect(dropped).toHaveLength(0);
   });
 
-  /**
-   * **issue #2123。** 日誌は書けたが、状態変更（正本への保存。
-   * `stores.credentials.put`）そのものが投げたとき——`deps.credentials.apply`
-   * は検証と実際の保存が同じ1呼びの中にあるので、ここからは「検証で断った」
-   * のと同じ形（400）に見える。**差し替えようとした行と打ち消しの行の両方が
-   * 日誌に残ることは grant と同じ**（`{ error: String(error) }` の 400、
-   * 「今と同じエラー応答」）。
-   */
   it('状態変更（正本への保存）が投げたときは、差し替えようとした行と打ち消しの行の両方が日誌に残る', async () => {
     const throwingStores: Stores = {
       ...stores,
@@ -10933,11 +9246,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
   });
 });
 
-/**
- * `POST /runners/credentials`（登録されている全 runner へ鍵を配る口）に
- * 日誌の先書きを足す（issue #2198）。`PUT /credentials` と同じ形——
- * **日誌を先に書き、書けなければ1本も配らずに 500。**
- */
 describe('runner への鍵配布を日誌へ残す（POST /runners/credentials。issue #2198）', () => {
   const DUMMY_VALUE = 'CRED-RUNNERS-DUMMY';
 
@@ -11014,17 +9322,10 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
 
     const response = await distribute(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
     expect(response.status).toBe(500);
-    // 日誌が先に落ちたので、配布（`registry.list()`・`runner.setCredentials`）
-    // そのものが起きていない。
     expect(runner.receivedCredentials).toEqual([]);
     expect(runner.held.has('NPM_TOKEN')).toBe(false);
   });
 
-  /**
-   * **`registry.list()` 自体が投げた場合**（個々の runner への配布は
-   * ハンドラの内側の `try/catch` で既に捕まえており、そちらは 200 のまま
-   * `ok: false` を返す——ここで見るのは配布の一段外側で投げたときの形）。
-   */
   it('配布が投げたとき、先の行と打ち消しの行の両方が残る', async () => {
     const throwingRegistry = {
       async list() {
@@ -11058,13 +9359,6 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
     expect(JSON.stringify(ours)).not.toContain(DUMMY_VALUE);
   });
 
-  /**
-   * **配布が失敗したとき、error の文面（`message`）を応答・日誌・stderr へ載せない**
-   * （issue #2407）。例外は失敗した呼び出しのパラメータを添えてくることがある——
-   * 実物の runner は固定文言を返すが、`RunnerHttpError` は runner（や間の中継）の
-   * 応答本文をそのまま `message` に入れる作りなので、本文が送った値を写せば載る。
-   * ここは偽の値だけを使う。
-   */
   describe('配布の失敗に鍵の値を載せない（issue #2407）', () => {
     const FAKE_SECRET = 'FAKE_SECRET_VALUE_2407';
 
@@ -11100,7 +9394,6 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
           ok: false,
           error: '鍵の配布に失敗した（FakeRpcError）',
         });
-        // 対照: もう1台には普通に配れている。
         expect(body.results[1]).toMatchObject({ runnerId: 'runner-good', ok: true });
       });
       expect(lines.join('\n')).not.toContain(FAKE_SECRET);
@@ -11117,7 +9410,6 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
         if (url.pathname === '/health') {
           return Response.json({ ok: true, runnerId: 'runner-http', workspacePath: '/work' });
         }
-        // 送られた本文をそのまま写して 500 を返す runner（または間の中継）。
         return new Response(`echo: ${String(init?.body)}`, { status: 500 });
       }) as typeof fetch;
       const httpRunner = await createHttpRunner({
@@ -11126,7 +9418,6 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
         fetchFn,
       });
       try {
-        // 前提: この error の message には値が載っている（歯が空撃ちでないこと）。
         const raw = await httpRunner
           .setCredentials([{ name: 'NPM_TOKEN', value: FAKE_SECRET }])
           .then(
@@ -11176,8 +9467,6 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
         runners: throwingRegistry,
       });
 
-      // 日誌の検査が対象。500 の後始末（`base.onError`）が stderr に書く1行は
-      // 元から変えていない口なので、ここでは見ない。
       const response = await distribute(target, [{ name: 'NPM_TOKEN', value: FAKE_SECRET }]);
       expect(response.status).toBe(500);
       expect(await response.text()).not.toContain(FAKE_SECRET);
@@ -11190,24 +9479,8 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
   });
 });
 
-/**
- * `PUT /profile` の応答が宣言（`profileUpdateResponseSchema`）どおりであること。
- *
- * `result.clone`（`ApplyProfileResult['clone']`、core の `ProfileApplyResult`。
- * `packages/core/src/profile.ts`）は、置いたものが実際に読めたときに
- * `profile: ProfileFingerprint` を持つ（`createProfileApplier().prepare()` が
- * 評価に成功すると必ず付ける）。しかし宣言（`profileUpdateResponseSchema.clone`、
- * `apps/daemon/src/openapi.ts`）にこのフィールドは無い — `sha256` / `bytes` /
- * `updatedAt` と完全に冗長なため（どちらも同じ本文から `fingerprintOf` した値）。
- * `.parse()` を通さなければ、これが黙って応答へ出る。
- *
- * **`app.test.ts` 内の `profileService()` ヘルパーはここでは使わない。** あちらの
- * `prepare()` は `{ ok: true, names: [] }` しか返さず `profile` を一度も生成
- * しないので、`.parse()` を外してもこのテストは何も検知しない（空撃ち）。
- * ここでは core の本物（`createProfileApplier` + `createProfileVessel`）を配線し、
- * 実際にシェルスクリプトを評価させて `clone.profile` を生成させる。
- */
 describe('宣言と実物の一致（/profile）', () => {
+  // profileService() を使わない: その prepare() は profile を生成しないため、.parse() を外しても検知できない。
   function withRealApplier() {
     const dir = makeTempDirSync('alteroid-app-profile-');
     const vessel = createProfileVessel({ path: join(dir, 'profile.sh') });
@@ -11233,11 +9506,7 @@ describe('宣言と実物の一致（/profile）', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { clone: Record<string, unknown> };
 
-    // **applier がある経路を通っていること。** ここで `clone.ok` が `true` に
-    // なっているのは、本物の `ProfileApplier` がスクリプトを実際に評価して
-    // 通したからである（`profileService()` の空スタブでは `names` すら
-    // 生成されない）。この確認が無いと、下の `not.toHaveProperty` が
-    // 「そもそも clone.profile を生成できていないだけ」で通ってしまう。
+    // ok を先に確かめる: 無いと、そもそも clone.profile を生成できていないだけで下の not.toHaveProperty が通る。
     expect(body.clone.ok).toBe(true);
     expect(body.clone).not.toHaveProperty('profile');
   });
@@ -11265,15 +9534,6 @@ describe('宣言と実物の一致（/profile）', () => {
   });
 });
 
-/**
- * 認証トークンのプール（Issue #393「PR1 プールの器」）。
- *
- * **回さない。** ここで固定するのは器の口（`GET` / `PUT` / `PUT .../policy`）が
- * 正しく認証の門（`authenticate`）を通ること、値が応答のどこにも出ないこと、
- * プールが空の既定構成の挙動が変わらないことの3つである。検知・切替（PR2 以降）
- * はここに無い。**⚠️ 2026-09-06 のオーナー決定で、この3経路から `requireOperator`
- * は外れた**（下の「alteroid を使う許可があれば実行環境の持ち主と同格」参照）。
- */
 describe('認証トークンのプール', () => {
   it('プールが空でも 200 を返し、既定の設定（free_exhausted）を返す（受け入れ基準7）', async () => {
     const withTokens = createApp({
@@ -11293,9 +9553,6 @@ describe('認証トークンのプール', () => {
   });
 
   it('止まった記録が付いた行は、回復の見込みまで GET から読める（Issue #393）', async () => {
-    // **HTTP の応答に載ることまで見る。** core 側で導けていても、外向きの顔の
-    // schema が `recovery` を落としていれば人間には届かない（`tokensResponseSchema`
-    // は `agentTokenViewSchema` をそのまま使うので、落ちるとしたらここで出る）。
     const service = createTokenPoolService({ stores, newId: () => 'tok-a' });
     const withTokens = createApp({
       clone: fake.clone,
@@ -11317,9 +9574,7 @@ describe('認証トークンのプール', () => {
     };
     expect(body.tokens[0]?.recovery).toBe('time');
     expect(body.tokens[0]?.createdAt).toBeDefined();
-    // 文言はそのまま出す（人間が claude.ai と突き合わせられる形）。
     expect(body.tokens[0]?.lastRejectedReason).toBe("You've hit your org's monthly spend limit");
-    // 値はどこにも出ない。
     expect(JSON.stringify(body)).not.toContain('tok-secret-value');
   });
 
@@ -11381,9 +9636,7 @@ describe('認証トークンのプール', () => {
         label: 'primary',
         order: 0,
         sha256: expect.any(String),
-        // **後から足した列**（Issue #393）。新規行なので両方立つ。**`toEqual` の
-        // ままにしてある**——ここは「これ以外の項目が付いていない」ことを見る歯で
-        // あり、`toMatchObject` へ替えると `value` が混ざっても通ってしまう。
+        // `toMatchObject` にしない: `value` が混ざっても通ってしまうから。
         createdAt: expect.any(String),
         updatedAt: expect.any(String),
       },
@@ -11413,19 +9666,7 @@ describe('認証トークンのプール', () => {
     expect(await stores.tokens.list()).toEqual([]);
   });
 
-  /**
-   * **スキーマ検証（`validator('json', …)`）で落ちた 400 にも値を出さない。**
-   *
-   * 実測（2026-08-24 観測、`@hono/standard-validator@0.4.0` の `dist/index.mjs`）:
-   * `hook` を渡さないと `c.json({ data: value, error, success: false }, 400)` を
-   * 返し、この `data` は**リクエスト本文そのもの**である。`sanitizeIssues` が
-   * 見る `RESTRICTED_DATA_FIELDS` は `header: ['cookie']` だけなので、`json` は
-   * 素通しになる。
-   *
-   * **⟹ `label` を1つ書き忘れただけで、その回に送った *全部* の値が応答へ載る。**
-   * 下で2本送っているのはそのためで、**壊れていないほうの値まで漏れる**ことを
-   * 固定する（1本だけだと「壊れた行だけ出さない」形の直しでも緑になる）。
-   */
+  // 2本送る: 1本だと「壊れた行だけ出さない」直しでも緑になるから。
   it('スキーマ検証で落ちた 400 にも、同じ回に送った値が1つも出ない', async () => {
     const withTokens = createApp({
       clone: fake.clone,
@@ -11440,7 +9681,6 @@ describe('認証トークンのプール', () => {
     const response = await withTokens.request('/tokens', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      // 2本目に label が無い＝トップレベルのスキーマ検証で落ちる。
       body: JSON.stringify({ tokens: [{ label: 'primary', value: GOOD }, { value: BAD }] }),
     });
 
@@ -11452,18 +9692,6 @@ describe('認証トークンのプール', () => {
     expect(await stores.tokens.list()).toEqual([]);
   });
 
-  /**
-   * **保存が「値を含むメッセージ」で落ちても、応答にも stderr にも値を出さない。**
-   *
-   * ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがある
-   * （`dropped-record.ts` の `reasonOf` の doc）。実測（2026-08-24 観測、
-   * `drizzle-orm@0.45.2`）: `PgPreparedQuery` の `queryWithCache` が
-   * `DrizzleQueryError(queryString, params, e)` で包み直し、その `message` は
-   * `Failed query: <sql>` の次の行に `params: <params>` を持つ。`agent_tokens`
-   * への insert なら、そこにトークンの値がそのまま並ぶ。
-   *
-   * 下の偽物のストアが投げる文言は、その実測した形を写したものである。
-   */
   it('保存が値を含むメッセージで落ちても、応答にも stderr にも値が出ない', async () => {
     const SECRET = 'tok-inside-driver-error';
     const failing: Stores = {
@@ -11495,21 +9723,13 @@ describe('認証トークンのプール', () => {
       });
     });
 
-    // **入力は正しいので 400 ではない。** 落ちたのは保存であり、入力のせいにしない。
     expect(response?.status).toBe(500);
     const text = await (response as Response).text();
     expect(text).not.toContain(SECRET);
-    // **跡は残す。ただし本文は出さない**（`dropped-record.ts` の作法）。
     expect(lines.join('\n')).not.toContain(SECRET);
     expect(lines.join('\n')).not.toBe('');
   });
 
-  /**
-   * issue #2415: `base.onError` の stderr は、例外の文を**伏せ字を通して**出す。
-   * 上のテストは値が2行目（`params:` の次の行）にあるので「1行目だけ」で落ちるが、
-   * ここは値が**1行目**にある形（URL の資格・Bearer・同じ行の `params:`）を測る。
-   * 診断（SQL 文・host）は残る。値はすべて偽である。
-   */
   it('base.onError: 例外の1行目に値があっても stderr に出ない（診断は残る）', async () => {
     const FAKE = 'FAKE_SECRET_VALUE_2415B';
     const failing: Stores = {
@@ -11564,23 +9784,9 @@ describe('認証トークンのプール', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { rotateOn: string; cooldownMs: number };
     expect(body.rotateOn).toBe('overage_exhausted');
-    // 省略した項目（cooldownMs）は既定のまま。
     expect(body.cooldownMs).toBe(5 * 60 * 60 * 1000);
   });
 
-  /**
-   * issue #2095。回す契機・冷却の設定（`TokenPoolStore.readSettings()`）が
-   * `UnreadableTokenSettingsError`（issue #2053, `store.ts`）で壊れていても、
-   * `GET /tokens` は 500 にならず、読めているプールの一覧はそのまま返る。
-   *
-   * **直す前は、ここが 500 になっていた。** `TokenPoolService` の
-   * `currentView()` が `Promise.all([tokens, settings])` で結んでいたので、
-   * 設定が読めないと一覧ごと reject していた（`token-pool-service.ts`）。
-   *
-   * **既定値へすり替わっていないことも見る。** `settings` を返さず
-   * `settingsUnreadable.reason` を返す——`free_exhausted` 等の既定で埋めると
-   * `off` にしてあった回転を実装が黙って戻すことになる。
-   */
   it('GET /tokens: 設定が読めなくても 500 にならず、一覧は返り settingsUnreadable が付く（issue #2095）', async () => {
     const service = createTokenPoolService({ stores, newId: () => 'tok-unreadable-a' });
     await service.replace([{ label: 'work', value: 'tok-secret-value' }]);
@@ -11616,10 +9822,6 @@ describe('認証トークンのプール', () => {
     expect(body.settingsUnreadable).toEqual({ reason: REASON });
   });
 
-  /**
-   * issue #2095。`PUT /tokens` も同じ形——置換そのものは `settings` に
-   * 触れないので、設定が読めないことを理由に保存まで止めない。
-   */
   it('PUT /tokens: 設定が読めなくても保存でき、応答は settingsUnreadable の形（issue #2095）', async () => {
     const REASON = 'cooldownMs が数値でない（テスト用）';
     const brokenStores: Stores = {
@@ -11657,30 +9859,6 @@ describe('認証トークンのプール', () => {
     expect(body.settingsUnreadable).toEqual({ reason: REASON });
   });
 
-  /**
-   * `requireOperator` に落ちること。`/profile` と同じ強さの口である
-   * （課金の主体を決める操作なので、`access grant` を通しただけのアカウントには
-   * 開けない）。認証境界そのものの網羅は `auth.test.ts` に寄せてあるので、ここでは
-   * 「この3経路が確かに `requireOperator` を通っている」ことだけを見る——
-   * **許可されたアカウントでも 403** になることまで確かめる（`OPERATOR` トークンだけ
-   * 通って「許可されてさえいれば通る」ように見えるのを防ぐため）。
-   *
-   * **⚠️ 2026-09-06、オーナー決定でここを反転した。** alteroid を使う許可
-   * （`access grant` 済み）を実行環境の持ち主と同格に扱う——`GET/PUT /tokens`
-   * `PUT /tokens/policy` `GET /access` `POST /access/:id/grant`
-   * `POST /access/:id/revoke` の6経路から `requireOperator` を外し、資格は
-   * `authenticate` だけにした。**上のコメントが書いていた「許可されたアカウントでも
-   * 403」は、いまこの6経路には当てはまらない**——`/profile` の GET/PUT だけは
-   * 変えていない（`auth.test.ts`「実行環境プロファイルは宣言済み owner まで」が固定してい
-   * て、ここでは触らない。2026-09-24 に門は `requireOwner` へ移った。#1122）。この describe がいま測るのは次の4つである:
-   * ①実行環境の持ち主は今日どおり6経路とも通る ②許可されたアカウントも同格に
-   * 通る（新しく足したもの） ③境界そのもの（未ログイン＝401、ログイン済みだが
-   * 未 grant＝403）は変わっていない ④同格になった側から grant を叩くと、2人目も通る。
-   *
-   * **⚠️ ④は 2026-09-09 に反転した。** それまでは「『持ち主は高々1つ』
-   * （`grantExclusive`）は同格になった側から叩いても崩れない」で、2人目は 409 だった。
-   * 上限が消えたので、**同格化と揃って、いま初めて許可が伝播する。**
-   */
   describe('alteroid を使う許可があれば実行環境の持ち主と同格（6経路）', () => {
     let nextSubject = 'sub-tokens-test';
     const FAKE_PROVIDER = {
@@ -11728,7 +9906,6 @@ describe('認証トークンのプール', () => {
       });
     }
 
-    /** ログインだけさせる（許可はしない）。`nextSubject` を先に変えて呼ぶこと。 */
     async function loginOnly(
       app: ReturnType<typeof createApp>,
     ): Promise<{ token: string; accountId: string }> {
@@ -11746,7 +9923,6 @@ describe('認証トークンのプール', () => {
       return { token: claimed.token, accountId: claimed.account.id };
     }
 
-    /** ログインさせて、実行環境の持ち主として許可（grant）まで通す。 */
     async function grantedAccountToken(
       app: ReturnType<typeof createApp>,
     ): Promise<{ token: string; accountId: string }> {
@@ -11827,7 +10003,6 @@ describe('認証トークンのプール', () => {
       const { token, accountId } = await grantedAccountToken(withAuth);
       const granted = { authorization: `Bearer ${token}` };
 
-      // 許可されている ＝ 他の経路（記憶）には触れる、という前提を先に確かめる。
       expect((await withAuth.request('/memory', { headers: granted })).status).toBe(200);
 
       expect((await withAuth.request('/tokens', { headers: granted })).status).toBe(200);
@@ -11850,8 +10025,6 @@ describe('認証トークンのプール', () => {
         ).status,
       ).toBe(200);
       expect((await withAuth.request('/access', { headers: granted })).status).toBe(200);
-      // 既に許可済みの自分自身への grant は冪等に 200
-      // （`grantAccess` は書き込まずに `granted` を返す）。
       expect(
         (
           await withAuth.request(`/access/${accountId}/grant`, {
@@ -11860,8 +10033,6 @@ describe('認証トークンのプール', () => {
           })
         ).status,
       ).toBe(200);
-      // revoke は最後に——自分自身の許可を手放す操作なので、これ以降の
-      // アサーションには使わない。
       expect(
         (
           await withAuth.request(`/access/${accountId}/revoke`, {
@@ -11915,20 +10086,6 @@ describe('認証トークンのプール', () => {
       ).toBe(200);
     });
 
-    /**
-     * ⚠️ **2026-09-09 に期待値を反転した（409 → 200）。** 反転前の名前は
-     * 「④持ち主は高々1つのまま——同格になった側が grant を叩いても2人目は409」で、
-     * 本文にはこう書いてあった —— *「ここが 409 のままであることが、『①を複数人に
-     * する話ではない』ことの証明になる」*。
-     *
-     * **その読みは 2026-09-06 の時点では正しかった。** 同格化が開いたのは
-     * 「誰が叩けるか」だけで、「何人まで通せるか」は別の錠が閉めていた。
-     * **2026-09-09 にオーナーがその錠を開けたので、2つが揃って許可が伝播する。**
-     *
-     * ⟹ **ここで測る先を変えた** —— 「通らないこと」ではなく、
-     * **「通って、誰が通したかが残ること」**である。伝播そのものは受け入れた以上、
-     * 弱くなってはいけないのは記録の側である。
-     */
     it('④同格になった側が grant を叩くと2人目も通る（誰が通したかは残る）', async () => {
       const withAuth = buildAuthedApp();
       const first = await grantedAccountToken(withAuth);
@@ -11937,8 +10094,6 @@ describe('認証トークンのプール', () => {
       nextSubject = 'sub-second-account';
       const second = await loginOnly(withAuth);
 
-      // ⚠️ 叩いているのは OPERATOR ではなく、同格になった側（許可された
-      // アカウント自身のトークン）である。
       const response = await withAuth.request(`/access/${second.accountId}/grant`, {
         ...post,
         headers: { ...post.headers, ...granted },
@@ -11946,27 +10101,13 @@ describe('認証トークンのプール', () => {
       expect(response.status).toBe(200);
 
       const body = (await response.json()) as { account: { grantedBy: string | null } };
-      // **`operator` に化けていないこと。** 化けると、人間が通したのか
-      // アカウントが伝播させたのかが記録から消える。
       expect(body.account.grantedBy).toBe(first.accountId);
     });
   });
 });
 
-/**
- * ⚠️ 狭めすぎていないことの証明——認証を設定していない既定構成（`ALTEROID_AUTH`
- * 未設定など）では、`/access/*` `/tokens*` も含めて今日どおり無条件に素通りする。
- * `requireOperator` を外した6経路が、副作用として「既定でも認証を要求する」側へ
- * 倒れていないことを確かめる（north_star 禁止「境界の導入をデグレードにしない」
- * と同じ形——ここでは逆に「境界を広げた変更が、無効な構成の挙動まで変えていない
- * こと」を見る）。
- */
 describe('認証が無効な既定構成では /access も /tokens も今日どおり素通りする', () => {
   it('狭めていない: 未ログイン・トークン無しでも6経路とも通る', async () => {
-    // **トークンのプールの器を配線した専用の app を使う。** 共有 `app`
-    // フィクスチャは `tokens` を渡していないので、`PUT /tokens` `PUT
-    // /tokens/policy` は `deps.tokens === undefined` の 400 に落ちる——それは
-    // 認証境界とは無関係な別の分岐であり、ここで見たいものではない。
     const passthrough = createApp({
       clone: fake.clone,
       stores,
@@ -12026,18 +10167,6 @@ describe('認証が無効な既定構成では /access も /tokens も今日ど�
   });
 });
 
-/**
- * `GET /schedule` の応答が宣言（`scheduleListResponseSchema` → `scheduleStatusSchema`）
- * どおりであること。
- *
- * `deps.scheduler?.list()` は core の `Scheduler` 実装が返す `ScheduleStatus[]` を
- * そのまま渡している。ここに宣言に無いフィールドが増えても `describeRoute` の
- * `resolver()` は検査しない（spec を作るだけ）。`.parse()` を外すと、
- * スケジューラが返したものがそのまま応答へ出る。
- *
- * **本物のハンドラを本物の経路で叩く。** `fakeScheduler()` を丸ごと差し替えず、
- * `list()` だけを宣言に無いフィールド混じりの値にすり替えた `Scheduler` を渡す。
- */
 describe('宣言と実物の一致（/schedule）', () => {
   it('応答のキー集合が宣言のキー集合と一致する（余分なフィールドは外へ出ない）', async () => {
     const leakyEntry = {
@@ -12046,16 +10175,9 @@ describe('宣言と実物の一致（/schedule）', () => {
       nextAt: '2026-08-12T13:00:00.000Z',
       request: '例の件を毎朝報告して',
       lastRunAt: '2026-08-11T13:00:00.000Z',
-      // **宣言に在る欄は全部埋める。** この試験は応答のキー集合と宣言のキー集合の
-      // **一致**を見る（`toEqual`）ので、足場が宣言済みの欄を欠くと、漏れでも
-      // 落ちるが**欠けでも落ちる。** `createdAt` / `updatedAt` は #235 で、
-      // `spec` は編集画面の prefill 用に `optional` として宣言に加わったもので、
-      // **アサーションは1文字も変えていない**（緩めると「余分なフィールドは
-      // 外へ出ない」の保証が消える）。
       spec: { type: 'daily', at: '09:00' },
       createdAt: '2026-08-01T00:00:00.000Z',
       updatedAt: '2026-08-05T00:00:00.000Z',
-      // 宣言（scheduleStatusSchema）に無いフィールド。
       secretDebugField: 'should-not-escape',
     } as unknown as ScheduleStatus;
 
@@ -12072,8 +10194,6 @@ describe('宣言と実物の一致（/schedule）', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { entries: Record<string, unknown>[] };
 
-    // **「宣言どおりのものが出る」だけを見ない。** それだけでは `.parse()` を
-    // 外しても、たまたま拾った実物のキーが宣言と一致していれば通ってしまう。
     expect(JSON.stringify(body)).not.toContain('secretDebugField');
 
     const entry = body.entries[0];
@@ -12083,12 +10203,6 @@ describe('宣言と実物の一致（/schedule）', () => {
     expect(actualKeys).toEqual(declaredKeys);
   });
 
-  /**
-   * 編集画面が周期を prefill するための `spec`（#496）が、経路の途中で
-   * 落とされずに届くこと。仕込まれた依頼には出て、既定の日報・発意 tick には
-   * 出ないこと（`ScheduleStatus.spec` の doc「あれはコードに書かれた既定で、
-   * `spec` という値そのものが存在しない」）。
-   */
   it('仕込まれた依頼には spec が出て、既定の日報・発意には出ない', async () => {
     const seeded = {
       kind: 'issue-round',
@@ -12124,19 +10238,7 @@ describe('宣言と実物の一致（/schedule）', () => {
   });
 });
 
-/**
- * Issue #424。`validator('json', …)` に `hook` を渡していない経路は、hono の
- * 既定の 400（`@hono/standard-validator` の `sanitizeIssues`）が
- * `c.json({ data: <リクエスト本文そのもの>, error, success: false }, 400)` を
- * 返す——`data` は本文の丸写しで、`RESTRICTED_DATA_FIELDS` は
- * `header: ['cookie']` だけなので `json` は素通しになる（#422 が `PUT /tokens`
- * に足した歯・実装と同じ実測）。ここは資格そのものを運ぶ2経路
- * （`POST /runners/credentials` と `PUT /profile`）で同じ穴を塞ぐ。
- *
- * **2本の値を送るのは「壊れた行だけ伏せる」直しでも緑になるのを防ぐため**
- * （#422 の「スキーマ検証で落ちた 400 にも、同じ回に送った値が1つも出ない」の
- * doc と同じ理由）——1本だけだと、壊れた行の値だけを消す直しでも通ってしまう。
- */
+// 値を2本送る: 1本だと「壊れた行だけ伏せる」直しでも緑になるから。
 describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値が漏れない（#424）', () => {
   it('POST /runners/credentials: 2本目の name が不正でも、同じ回に送った値が1つも出ない', async () => {
     const FIRST = 'CRED-FIRST-DUMMY';
@@ -12147,7 +10249,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       json({
         credentials: [
           { name: 'GH_TOKEN', value: FIRST },
-          // `name` が `/^[A-Z][A-Z0-9_]*$/`（`runnerCredentialSchema`）に落ちる。
           { name: 'not-upper-case', value: SECOND },
         ],
       }),
@@ -12158,10 +10259,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
     expect(text).not.toContain(FIRST);
     expect(text).not.toContain(SECOND);
 
-    // **既定の `{ data, error, success }` の形が返っていないこと。** `data` が
-    // 無く、`error` が配列ではなく文字列であることまで見る——`data` キーだけを
-    // 消して `error`（issue の配列）をそのまま残す直しでも、配列の中に
-    // 送った値が残っていることがある。
     const body = JSON.parse(text) as Record<string, unknown>;
     expect(body).not.toHaveProperty('data');
     expect(typeof body.error).toBe('string');
@@ -12170,17 +10267,9 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
   it('PUT /profile: script を打ち間違えた本文でも、送った値が1つも出ない', async () => {
     const SECRET = 'CRED-PROFILE-DUMMY';
 
-    // **`requireOperator` を先に通す必要がある。** 上の `beforeEach` が作る
-    // `app` は `auth` を渡していないので `authPlan.enabled` が false になり
-    // （`app.ts` の `authenticate` の doc）、全リクエストが `operator` として
-    // 通る——`実行環境プロファイル` describe の既存テスト（`PUT /profile` を
-    // 素のヘッダだけで叩いて 200 を得ている）と同じ前提であることを、ここでも
-    // その既存テストの結果（200 が返ること）を根拠に流用する。
     const response = await app.request('/profile', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      // `script` を書き忘れた本文。`profileUpdateRequestSchema` は
-      // `{ script: string }` を要求するので、必須項目の欠落で落ちる。
       body: JSON.stringify({ notScript: `export SECRET_IN_PROFILE=${SECRET}` }),
     });
 
@@ -12193,15 +10282,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
     expect(typeof body.error).toBe('string');
   });
 
-  /**
-   * `GET /permission-grants` / `POST /permission-grants/:id/revoke`（Issue #863）。
-   *
-   * **`via` の伝播そのもの**（account 経路で `clone.answerApproval` へ
-   * `{ kind: 'account', accountId }` が渡ること）は、上の「既定（認証を要求
-   * しない構成）では operator として通る」の2件が operator 側を、この
-   * describe が account 側を測る——両方揃って初めて「経路で分岐している」
-   * ことが言える。
-   */
   describe('/permission-grants（Issue #863）', () => {
     const FAKE_PROVIDER = {
       kind: 'oauth2' as const,
@@ -12245,7 +10325,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       return { app: authedApp, stores: authStores, fake: authFake };
     }
 
-    /** ログインさせて、実行環境の持ち主として許可（grant）まで通す。 */
     async function grantedAccountToken(
       authedApp: ReturnType<typeof createApp>,
     ): Promise<{ token: string; accountId: string }> {
@@ -12322,7 +10401,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
         ),
       ).toBe(true);
 
-      // 既に取り消し済みでも 200 で、revokedAt を上書きしない。
       const second = await app.request('/permission-grants/grant-1/revoke', post);
       expect(second.status).toBe(200);
       const stillRevoked = await stores.permissionGrants.get('grant-1');
@@ -12395,9 +10473,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
           route: { principalKind: 'account', accountId: 'acc-x' },
         });
 
-        // `revoke`（HTTP 経由）と `markUsed`（クローンの `#onPreToolUse` が
-        // 呼ぶもの）を同時に叩く。**修正後はどちらも「読んでから書く」を
-        // アプリ層に持たない**ので、順序に関わらず両方の効果が残るはず。
         const [response, used] = await Promise.all([
           app.request('/permission-grants/grant-1/revoke', post),
           stores.permissionGrants.markUsed('grant-1', '2026-01-02T00:00:00.000Z'),
@@ -12406,8 +10481,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
 
         const after = await stores.permissionGrants.get('grant-1');
         expect(after?.revokedAt).toBeDefined();
-        // どちらが先かは決まらない。markUsed が先なら記録して true、取り消しが先なら
-        // 記録せず false（Issue #1687）——戻り値と記録が必ず一致する。
         expect(after?.lastUsedAt).toBe(used ? '2026-01-02T00:00:00.000Z' : undefined);
       },
     );
@@ -12464,21 +10537,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
     });
   });
 
-  /**
-   * **残り13経路（#424 の「終わる条件」の1点目）。** 題が名指しした2経路だけを
-   * 塞いでも穴は残る——`validator('json', …)` を素で書ける限り「hook を渡し
-   * 忘れた経路」が作れてしまい、実際 `PUT /tokens` は #422 のレビュー中に
-   * 見つかるまで塞がっていなかった。ここは `jsonBody` を通した**全経路**に
-   * ついて、検査に落ちた 400 の本文へ**送った値が1文字も出ない**ことを、
-   * `createApp` を実際に叩いて固定する。
-   *
-   * 各ケースは「**正しい形の項目に値を載せ、別の項目だけを壊す**」形にしてある
-   * ——既定のフックは `data` にリクエスト本文を丸写しするので、壊れていない
-   * ほうの項目に載せた値まで一緒に出る。これが Issue 本文の実測そのものである。
-   *
-   * **値はすべてダミーである**（`CRED-SECRET-VALUE`）。本物のトークンでは
-   * 試さない（AGENTS.md「秘密の扱い」）。
-   */
   const DUMMY = 'CRED-SECRET-VALUE';
   const hookedRoutes: { name: string; path: string; method: string; body: unknown }[] = [
     {
@@ -12492,7 +10550,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       name: 'POST /approvals/answer',
       path: '/approvals/answer',
       method: 'POST',
-      // 2件目に `id` が無い＝トップレベルで落ちる。1件目の値まで出ることを見る。
       body: { answers: [{ id: 'ap-1', answer: DUMMY }, { answer: DUMMY }] },
     },
     {
@@ -12505,7 +10562,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       name: 'POST /events',
       path: '/events',
       method: 'POST',
-      // `payload` は `z.unknown()`＝何でも載る。webhook の中身がそのまま来る口である。
       body: { source: '', payload: { token: DUMMY } },
     },
     {
@@ -12542,8 +10598,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       name: 'PUT /credentials',
       path: '/credentials',
       method: 'PUT',
-      // 名前の形（英大文字・数字・_）に落ちる。**値を載せた行ごと**落とすので、
-      // 既定のフックなら値がそのまま応答へ出る。
       body: { credentials: [{ name: 'npm_token', value: DUMMY }] },
     },
     {
@@ -12578,34 +10632,20 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       const text = await response.text();
       expect(text).not.toContain(DUMMY);
 
-      // **`data` キーが無く、`error` が文字列であること。** ここまで見ないと、
-      // `data` だけ消して `error`（issue の配列）を残す直しで緑になる——issue の
-      // `path` は残ってよいが、`input` を含む形の issue を素通しにすると値が戻る。
       const body = JSON.parse(text) as Record<string, unknown>;
       expect(body).not.toHaveProperty('data');
       expect(typeof body.error).toBe('string');
     });
   }
 
-  /**
-   * **⭐3案目（#424 の「終わる条件」の2点目）の歯。** 上の13本は「いま在る経路」
-   * しか見ない——**次に足される経路**が `validator('json', …)` を素で書けば、
-   * 何も鳴らないまま同じ穴が開く。ここは `app.ts` の原文を読んで、
-   * `jsonBody` の中の1箇所を除いて `validator('json'` の直書きが**0件**である
-   * ことを見る。**新しい経路を素の `validator` で足した瞬間に赤くなる。**
-   *
-   * 原文を読むのは、型でも実行時でもこの不変条件を表せないからである
-   * （`validator` は hono-openapi の公開 API なので、import を禁じる手が無い）。
-   */
+  // 原文を読む: 型でも実行時でもこの不変条件を表せない（`validator` は公開 API で import を禁じられない）から。
   it("app.ts に validator('json' の直書きが1件も無い（jsonBody の中の1箇所を除く）", () => {
     const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
     const bare = source
       .split('\n')
       .map((line, index) => ({ line: index + 1, text: line }))
       .filter((entry) => entry.text.includes("validator('json'"))
-      // 注釈（`*` / `//` で始まる行）は経路ではない。
       .filter((entry) => !/^\s*(\*|\/\/)/.test(entry.text))
-      // `jsonBody` の実体そのもの。ここだけが素の `validator` を呼んでよい。
       .filter((entry) => !entry.text.includes('return validator('));
 
     expect(bare).toEqual([]);
@@ -12620,13 +10660,7 @@ function fakeRunner(
   const receivedCredentials: { name: string; value: string }[][] = [];
   return {
     runnerId,
-    // **既定は `true`（既存テストの前提を変えない）。** `false` を渡すと
-    // 「`/health` から一度も `runnerId` を受け取れていない」状態を再現できる
-    // （#330 の歯のために足した）。
     runnerIdKnown: options.runnerIdKnown ?? true,
-    // **既定は `true`（既存テストの前提を変えない）。** `false` を渡すと
-    // 「`/health` から一度も `workspacePath` を受け取れていない」状態を
-    // 再現できる（#389 の歯のために足した）。
     workspacePathKnown: options.workspacePathKnown ?? true,
     workspacePath: options.workspacePath ?? '/work',
     received,
@@ -12637,12 +10671,6 @@ function fakeRunner(
     async profile() {
       return undefined;
     },
-    /**
-     * 降ってきた鍵。**器の側の振る舞いを最小限まねる**（空文字は外す）。
-     *
-     * 既存の `credentials()` は常に空を返していたが、それでは「差があるものだけ
-     * 降ろす」を確かめられない（何を持っているかを答えられない器になる）。
-     */
     held: new Map<string, string>(),
     async credentials() {
       return [...this.held].map(([name, value]) => ({
@@ -12681,11 +10709,7 @@ function registryOf(runners: ReturnType<typeof fakeRunner>[]) {
   } as never;
 }
 
-/**
- * **本番と同じ1本道を通す。** 器（評価）の成否だけを差し替える。
- *
- * ここを偽物のサービスにすると、直列化も検査もテストの外に出てしまう。
- */
+// サービスごと偽物にしない: 直列化も検査もテストの外に出てしまうから。
 function profileService(
   target: Stores,
   options: { rejects?: string; runners?: ReturnType<typeof fakeRunner>[] } = {},
@@ -12701,8 +10725,6 @@ function profileService(
         if (prepared.ok) await prepared.commit();
         return prepared;
       },
-      // **`prepare` が本体である。** 本物も評価と反映を分けている（正本へ書けなかった
-      // 更新がクローンにだけ残らないようにするため）。
       async prepare(script: string) {
         const base =
           options.rejects === undefined
@@ -12715,13 +10737,6 @@ function profileService(
   });
 }
 
-/**
- * 画面（apps/web）を別オリジンに置けるようにするための境界。
- *
- * ここで守っているのは「開けたつもりの範囲」と「実際に通る範囲」を一致させること
- * である。CORS を雑に開けると `deliberateClient` の前提（preflight が通らない）が
- * 消え、人間が開いた任意のページからクローンのターンを起こせる状態に戻る。
- */
 describe('ブラウザからの呼び出しを許すオリジン', () => {
   const stores = createMemoryStores();
 
@@ -12735,8 +10750,6 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
     });
   }
 
-  // `requestedMethod` は既定で `POST`（既存の呼び方を1件も変えないため）。
-  // PATCH の preflight を組むときだけ明示で渡す。
   const preflight = (origin: string, requestedMethod = 'POST') => ({
     method: 'OPTIONS',
     headers: {
@@ -12747,7 +10760,6 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
   });
 
   it('既定（列挙なし）では CORS ヘッダを返さない', async () => {
-    // ここが今までの姿勢。既定で1バイトも変わらないことを固定する。
     const app = appWith([]);
     const response = await app.request('/health', { headers: { origin: 'https://evil.example' } });
 
@@ -12761,7 +10773,6 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
     });
 
     expect(response.headers.get('access-control-allow-origin')).toBe('https://www.example.com');
-    // Cookie は運ばせない設計なので、資格情報の許可は返さない。
     expect(response.headers.get('access-control-allow-credentials')).toBeNull();
   });
 
@@ -12769,7 +10780,6 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
     const app = appWith(['https://www.example.com']);
     const response = await app.request('/chat', preflight('https://evil.example'));
 
-    // 許可ヘッダが返らない＝ブラウザが本リクエストを送らない。
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
   });
 
@@ -12783,7 +10793,6 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
   });
 
   it('CORS を開けても、単純リクエストは 415 のまま', async () => {
-    // 許可したオリジンからでも、本文検査の無い POST は content-type を要求する。
     const app = appWith(['https://www.example.com']);
     const response = await app.request('/shutdown', {
       method: 'POST',
@@ -12795,11 +10804,6 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
   });
 
   it('PATCH（台帳の本文を後から直す）の preflight が通る（Issue #580）', async () => {
-    // **人間の困りごとに直接対応する歯。** `PATCH /commitments/:id` は
-    // アプリ全体で唯一の PATCH 経路（台帳の編集）で、`allowMethods` に
-    // `PATCH` が無かった間はここだけが選択的に落ちていた——一覧・積む・
-    // 閉じる（いずれも GET/POST）は無傷のまま「編集だけできない」という
-    // 症状になる。
     const app = appWith(['https://www.example.com']);
     const response = await app.request(
       '/commitments/some-id',
@@ -12811,21 +10815,11 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
   });
 
   it('アプリが出しているメソッドは全部 CORS が許している（取りこぼしを名指しに頼らず拾う）', async () => {
-    // **`PATCH` を名指しで固定するだけでは同じ穴がまた開く。** 次に新しい
-    // メソッドの経路が増えても `allowMethods` の更新を忘れうるので、実際に
-    // 登録されている経路（`app.routes`）から使われているメソッドの集合を
-    // 導き、CORS が返す許可集合がそれを覆っているかをここで確かめる。
-    //
-    // `'ALL'` は `.use('*', ...)` のようなミドルウェア登録が持つ印で、
-    // ブラウザが `access-control-request-method` に積む実在のHTTPメソッドで
-    // はないので対象から外す。`OPTIONS` は preflight 自身が使うメソッドで
-    // hono の `cors()` が別枠で処理するため、経路としては登録されない。
+    // メソッドを名指しで固定しない: 次のメソッド追加で `allowMethods` の更新を忘れても拾うため。
     const app = appWith(['https://www.example.com']);
     const declaredMethods = [
       ...new Set(app.routes.map((route) => route.method).filter((method) => method !== 'ALL')),
     ];
-    // ここが0件だと「見ていない」を「無かった」と読み違える（歯自身の前提が
-    // 崩れていないことをまず確かめる）。
     expect(declaredMethods.length).toBeGreaterThan(0);
 
     const response = await app.request('/health', preflight('https://www.example.com'));
@@ -12871,15 +10865,8 @@ describe('parseAllowedOrigins', () => {
   });
 });
 
-/**
- * `GET /runners` は runner の一覧であって、**繋がっている runner の一覧ではない。**
- *
- * 上がってこない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
- * 「上がってこない」のかが区別できない（roadmap M5「runner の登録・生存判定」）。
- */
 describe('runner の生死', () => {
   it('繋がっていない runner も、宛先と状態付きで並ぶ', async () => {
-    // 挑み直しの間隔は長めに取る（この検証で見たいのは1回目の失敗の見え方）。
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
       label: 'http://runner:4518',
@@ -12903,7 +10890,6 @@ describe('runner の生死', () => {
     };
 
     expect(body.runners).toMatchObject([
-      // 繋がっていないので runner_id は無い。**宛先は言える。**
       { label: 'http://runner:4518', state: 'unreachable' },
       { label: '同一プロセス', state: 'connected', runnerId: 'runner-primary' },
     ]);
@@ -12926,13 +10912,6 @@ describe('runner の生死', () => {
     expect('cloneProvider' in body).toBe(false);
   });
 
-  /**
-   * **#330 の罠そのもの。** `runnerId` は常に文字列を持つ（`HttpRunner` の既定値
-   * `'runner-primary'`）ので、`entry.client !== null` だけを根拠に出すと、
-   * `/health` から一度も `runnerId` を受け取れていない相手についても「受け取った
-   * 値」の顔で出てしまう。繋がってはいる（`state: 'connected'`）が、まだ聞けて
-   * いない runner が、既定値をそのまま名乗って見えないことを確かめる。
-   */
   it('繋がっていても runnerId を聞けていない runner は、runnerId を出さない（#330）', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
@@ -12953,20 +10932,11 @@ describe('runner の生死', () => {
     };
 
     expect(body.runners).toMatchObject([{ label: '旧版の runner', state: 'connected' }]);
-    // **既定値 `'runner-primary'` が「聞けた値」の顔で出ていないことを名指しで見る。**
     expect(body.runners[0]).not.toHaveProperty('runnerId');
 
     await registry.stop();
   });
 
-  /**
-   * **#330 と同じ形の罠が `workspacePath` にも在った（#389）。** `workspacePath`
-   * も常に文字列を持つ（`HttpRunner` の既定値 `''`）ので、`entry.client !== null`
-   * だけを根拠に出すと、`/health` から一度も `workspacePath` を受け取れていない
-   * 相手についても「受け取った値」の顔で出てしまう。繋がってはいる
-   * （`state: 'connected'`）が、まだ聞けていない runner が、既定値をそのまま
-   * 名乗って見えないことを確かめる。
-   */
   it('繋がっていても workspacePath を聞けていない runner は、workspacePath を出さない（#389）', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
@@ -12987,20 +10957,11 @@ describe('runner の生死', () => {
     };
 
     expect(body.runners).toMatchObject([{ label: '旧版の runner', state: 'connected' }]);
-    // **既定値 `''` が「聞けた値」の顔で出ていないことを名指しで見る。**
     expect(body.runners[0]).not.toHaveProperty('workspacePath');
 
     await registry.stop();
   });
 
-  /**
-   * **歯（iii）— 本当に `''` を名乗った相手については `''` が出ること（#389）。**
-   * 上のテストと `workspacePath` の値だけを見ると同じ（どちらも `''`）だが、
-   * `workspacePathKnown` が違う。ここを区別できないと、「聞けたか」の判定を
-   * 値そのもの（`=== ''`）で代用したときと同じ害に戻る——本当に空の作業
-   * ディレクトリを名乗る runner と、一度も聞けていない runner が見分けられ
-   * なくなる。
-   */
   it('workspacePath を聞けていて、それが空文字なら、空文字のまま出す（#389）', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
@@ -13024,22 +10985,12 @@ describe('runner の生死', () => {
     expect(body.runners).toMatchObject([
       { label: '空の作業ディレクトリを名乗る runner', state: 'connected' },
     ]);
-    // **聞けている以上、空文字であってもキー自体は出る。** 消えるのは
-    // 「聞けていない」ときだけである。
     expect(body.runners[0]).toHaveProperty('workspacePath', '');
 
     await registry.stop();
   });
 
-  /**
-   * 一度は繋がった runner が黙ったことも、ここから見える。
-   *
-   * **`unreachable` と同じ扱いにしない。** あちらは「まだ開けていない」宛先で、
-   * こちらは「開けていた」宛先＝走っていた仕事ごと黙った可能性がある。人間が
-   * 見に来る場所で混ぜると、器を作り直すべきかどうかの判断が付かない。
-   *
-   * 時計は手で進める（30秒を実時間で待つと CI が遅く・不安定になる）。
-   */
+  // 時計は手で進める: 30秒を実時間で待つと CI が遅く不安定になるから。
   it('名乗らなくなった runner は lost として並ぶ', async () => {
     vi.useFakeTimers();
     try {
@@ -13049,7 +11000,6 @@ describe('runner の生死', () => {
         open: async () =>
           ({
             ...fakeRunner('runner-primary'),
-            // 器は繋がったまま黙った（電源が抜けた・経路だけが切れた）。
             ping: () => Promise.reject(new Error('fetch failed')),
           }) as never,
       });
@@ -13062,7 +11012,6 @@ describe('runner の生死', () => {
         runners: registry,
       });
 
-      // 3回分の名乗りが returns しないところまで進める。
       await vi.advanceTimersByTimeAsync(30_000);
 
       const body = (await (await withRunners.request('/runners')).json()) as {
@@ -13079,15 +11028,6 @@ describe('runner の生死', () => {
     }
   });
 
-  /**
-   * 【A-1】繋がっていない runner は、聞いたことにしない。
-   *
-   * 指紋は runner が持つので、繋がっていない相手には聞きに行かない
-   * （`app.ts` の `probe()`）。名簿に登録はあるが一度も開けていない runner が
-   * `credentialsProbe` / `profileProbe` を `'unheard'` と言い、`credentials` は
-   * 空配列のままであることを見る——ここで `'failed'` や `'asked'` に化けると、
-   * 「確かめられなかった」が「叩いた」に見えてしまう。
-   */
   it('繋がっていない runner は、聞いたことにしない', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
@@ -13119,7 +11059,6 @@ describe('runner の生死', () => {
     await registry.stop();
   });
 
-  /** 【A-2】叩いて失敗したら、失敗として残る。 */
   it('叩いて失敗したら、失敗として残る', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
@@ -13158,14 +11097,6 @@ describe('runner の生死', () => {
     await registry.stop();
   });
 
-  /**
-   * 【A-3】要である。叩いて0件なら、0件だと言う。
-   *
-   * これが無いと、実装が常に `unheard` / `failed` を返す方向へ倒れても緑のまま
-   * になる。繋がって `credentials()` が `[]`・`profile()` が `undefined` を
-   * 返す（＝聞けたうえで中身が無かった）runner を見て、両方の probe が
-   * `'asked'` になることを確かめる——両方向を測るための1本である。
-   */
   it('叩いて0件なら、0件だと言う', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
@@ -13198,19 +11129,7 @@ describe('runner の生死', () => {
   });
 });
 
-/**
- * `DELETE /managers/:id` が「宛先が名簿に開いていないだけ」を 404 と畳まなく
- * なったことを、HTTP まで通して固定する。
- *
- * **`fakeClone()` では測れない。** あの偽物の `abort()` は、台帳に居ないときだけ
- * `'absent'` を返す作りで、「台帳には居るが宛先が名簿に開いていない」という今回の
- * 状態そのものを表現できない（`fake.managerList` に積むか積まないかの2値しか
- * 無い）。`outcome` の値だけを測ると「文言だけ直して 404 が残る」を見逃すので、
- * ここでは `fakeClone()` の `managers` を実物の `createManagerPool` へ差し替えて
- * `createApp` に繋ぐ——`packages/core/src/manager.test.ts` の
- * `describe('abort() は宛先が名簿に開いていないことを absent と言わない', ...)` と
- * 同じ足場（開けない宛先だけの名簿＋台帳にジョブ1本）を HTTP 層まで持ち上げた形。
- */
+// `fakeClone()` の managers を使わない: その `abort()` は「台帳には居るが宛先が名簿に開いていない」状態を表せないから。
 describe('DELETE /managers/:id と実物の ManagerPool（absent と unreachable を混ぜない）', () => {
   const runningAway: Job = {
     id: 'mgr-running-away',
@@ -13225,11 +11144,6 @@ describe('DELETE /managers/:id と実物の ManagerPool（absent と unreachable
     sessionId: 'sess-before-swap',
   };
 
-  /**
-   * 台帳にジョブを1本置き、名簿には**開けない宛先だけ**を登録した実物の
-   * `ManagerPool` を `createApp` へ繋ぐ。`register()` は `#open()` を `await`
-   * するので、戻った時点で名簿の状態は `unreachable` に確定している。
-   */
   async function appWithUnreachableRunner() {
     const realStores = createMemoryStores();
     await realStores.jobs.putJob(runningAway);
@@ -13287,25 +11201,11 @@ describe('DELETE /managers/:id と実物の ManagerPool（absent と unreachable
   });
 });
 
-/**
- * `GET /runners` の `revision`（roadmap M5 相当。「自分がどのコミットで走って
- * いるか」）——デーモンと runner が別々にデプロイされて別コミットで走る窓に
- * 気づくための計器。
- *
- * **本体はここ。** `unknown`（名乗ったが runner が版を知らない）と `unheard`
- * （名乗り自体をまだ聞けていない）が同じ値へ潰れていないことを、**1つのテストの
- * 中で**確かめる——別々に測ると、両方が同じ値へ潰れる実装でも両方緑になる。
- *
- * 値は名簿（`RunnerRegistry#entries()`）が heartbeat で既に拾ったものをそのまま
- * 出すだけである（`app.ts` の `GET /runners` は新たに runner を叩かない）ので、
- * ここでは実際に heartbeat を1周させて `entries()` を更新させてから読む。
- */
 describe('runner の版（GET /runners revision）', () => {
   it('unknown（名乗ったが版を知らない）と unheard（名乗りをまだ聞けていない）は別の値として並ぶ', async () => {
     vi.useFakeTimers();
     try {
       const registry = createRunnerRegistry();
-      // 繋がって名乗るが、版を知らない runner。
       await registry.register({
         label: 'http://runner-unknown-revision:4518',
         open: async () =>
@@ -13316,7 +11216,6 @@ describe('runner の版（GET /runners revision）', () => {
             },
           }) as never,
       });
-      // 一度も繋がらない runner——名乗り自体を聞けていない。
       await registry.register({
         label: 'http://runner-never-connects:4518',
         open: () => Promise.reject(new Error('fetch failed')),
@@ -13330,7 +11229,6 @@ describe('runner の版（GET /runners revision）', () => {
         runners: registry,
       });
 
-      // 1回分の heartbeat を進めて、繋がった方の revision を probe させる。
       await vi.advanceTimersByTimeAsync(10_000);
 
       const body = (await (await withRunners.request('/runners')).json()) as {
@@ -13346,7 +11244,6 @@ describe('runner の版（GET /runners revision）', () => {
 
       expect(knownButUnknown?.revision).toEqual({ status: 'unknown' });
       expect(neverConnected?.revision).toEqual({ status: 'unheard' });
-      // **本体はここ。** 2状態が同じ値へ畳まれていないことを、同じテストの中で見る。
       expect(knownButUnknown?.revision).not.toEqual(neverConnected?.revision);
 
       await registry.stop();
@@ -13398,17 +11295,6 @@ describe('runner の版（GET /runners revision）', () => {
     }
   });
 
-  /**
-   * **`RunnerRevisionStatus` は `RunnerLiveness`（`state`）から導出できない。**
-   *
-   * `#markSilent`（`runner-protocol.ts`）は `state` を `'lost'` にするとき、
-   * それまでに学習した情報（`entry.client` も `entry.revision` も）を捨てない。
-   * つまり「黙る直前まで、この版で走っていた」という情報は残り、それ自体が
-   * 価値のある情報である。この歯は、将来誰かが「revision は state から
-   * 導けるのでは」と簡約しに来たときに落ちる場所として置いてある
-   * （`state === 'connected' ? known/unknown : unheard` のような導出へ書き換える
-   * と、`lost` になった瞬間に version が消えて `unheard` へ化ける）。
-   */
   it('state が lost になっても、直前に聞けた known な版は残る（state からは導出できない）', async () => {
     vi.useFakeTimers();
     try {
@@ -13426,7 +11312,6 @@ describe('runner の版（GET /runners revision）', () => {
           ({
             ...fakeRunner('runner-lost-but-known'),
             async identity() {
-              // 最初の1回だけ名乗り、以後は黙る（電源が抜けた・経路だけが切れた）。
               if (!heard) {
                 heard = true;
                 return { runnerId: 'runner-lost-but-known', revision: rev };
@@ -13444,8 +11329,6 @@ describe('runner の版（GET /runners revision）', () => {
         runners: registry,
       });
 
-      // 1本目の heartbeat（t=10s）で known を覚える。以後3回（t=20s/30s/40s）
-      // 黙り続け、t=40s の時点で HEARTBEAT_LOST_MS（30s）を超えて lost へ遷移する。
       await vi.advanceTimersByTimeAsync(40_000);
 
       const body = (await (await withRunners.request('/runners')).json()) as {
@@ -13454,7 +11337,6 @@ describe('runner の版（GET /runners revision）', () => {
       const entry = body.runners.find((r) => r.label === 'http://runner-lost-but-known:4518');
 
       expect(entry?.state).toBe('lost');
-      // **本体はここ。** state が lost でも revision は known のまま。
       expect(entry?.revision).toEqual(rev);
 
       await registry.stop();
@@ -13469,7 +11351,6 @@ describe('runner の版（GET /runners revision）', () => {
       stores,
       token: 'test-token',
       shutdown: () => undefined,
-      // `runners` を渡さない＝名簿そのものが無い構成。
     });
 
     const body = (await (await withoutRunners.request('/runners')).json()) as {
@@ -13478,18 +11359,11 @@ describe('runner の版（GET /runners revision）', () => {
     };
 
     expect(body.runners).toEqual([]);
-    // **デーモン自身の版が同じ応答に出ている**（1回の読みで runner の版と
-    // 比較できる、が受け入れの本体）。値そのものはこのプロセスの焼き込み状態に
-    // 依存するので、期待するのは「known か unknown のどちらかであり、
-    // プレースホルダではない」ことだけである。
+    // 値はこのプロセスの焼き込み状態に依存するので、known か unknown のどちらかとだけ見る。
     expect(['known', 'unknown']).toContain(body.daemonRevision.status);
   });
 });
 
-/**
- * **`GET /runners` の `managerPeers`（#3940）。** `pushHealth` と同じく `clone.managers.managerPeersOf` を
- * 直接呼ぶ。読み口を持たないプール（旧い実装・テスト用）では「不明」に倒し、「頼めない」と埋めない。
- */
 describe('runner の peer の名乗り（GET /runners managerPeers）', () => {
   async function runnersBody(managers: typeof fake.clone.managers) {
     const registry = createRunnerRegistry();
@@ -13533,13 +11407,6 @@ describe('runner の peer の名乗り（GET /runners managerPeers）', () => {
   });
 });
 
-/**
- * **`GET /runners` の `pushHealth`。** `app.ts` のハンドラは `entry`/`registry`
- * からは取れず、`clone.managers.pushHealthOf(runnerId)` を直接呼んで結果を
- * 差し込む——`runners()`（クローンの道具専用の経路）は経由しない。ここでは
- * その配線だけを見る（`ManagerPool` 内部の押し込みロジック自体は
- * `manager.test.ts` の担当）。
- */
 describe('runner の押し込み結果（GET /runners pushHealth）', () => {
   it('pushHealthOf() が返した値が、そのまま該当 runner の行に出る', async () => {
     const registry = createRunnerRegistry();
@@ -13579,7 +11446,6 @@ describe('runner の押し込み結果（GET /runners pushHealth）', () => {
       label: 'http://runner-without-health:4518',
       open: async () => fakeRunner('runner-without-health') as never,
     });
-    // `fake.setPushHealth` を一度も呼ばない＝既定のまま（`undefined`）。
 
     const withRunners = createApp({
       clone: fake.clone,
@@ -13595,19 +11461,12 @@ describe('runner の押し込み結果（GET /runners pushHealth）', () => {
     const entry = body.runners.find((r) => r.runnerId === 'runner-without-health');
 
     expect(entry).toBeDefined();
-    // **取れない軸に 0 の行を作らない。** キー自体が無いことを確かめる
-    // （`pushHealth: undefined` のような値を作って畳んでいないこと）。
     expect(entry).not.toHaveProperty('pushHealth');
 
     await registry.stop();
   });
 });
 
-/**
- * **`GET /runners` の plugin の読み込み結果（Issue #3816）。** クローンの分は `clone.pluginLoad()`、
- * runner の分は `clone.managers.pluginLoadOf(runnerId)` をそのまま差し込む。観測が無いときは欄ごと省く
- * （「0件」「失敗」と読める値を作らない）。
- */
 describe('plugin の読み込み結果（GET /runners clonePluginLoad / pluginLoad）', () => {
   type PluginLoadBody = {
     clonePluginLoad?: unknown;
@@ -13688,25 +11547,7 @@ describe('plugin の読み込み結果（GET /runners clonePluginLoad / pluginLo
   });
 });
 
-/**
- * ⭐⭐ GET /usage の応答本文そのものに対する通しの否定の歯（#706 の本題）。
- *
- * **欄単位ではなく、組み立て終わった応答全体を文字列にして撃つ。** `tokenSource`
- * 以外の経路から生値が漏れても捕まるようにするためで、`packages/core` の単体
- * テスト（`usage-snapshot.test.ts`）はここまで届かない——`AccountUsage` が
- * 正しい形をしていることは確かめられても、`app.ts` がそれをそのまま
- * `c.json()` に渡すところまでは通っていない。
- *
- * **実物の経路を通す。** `deps.accountUsage` に固定のオブジェクトを渡すのでは
- * なく、`usage-poller.ts` の {@link startUsagePolling}（本番と同じ実装）に
- * 偽の SDK probe（`queryFn`）を渡し、その `poller.state()` を `createApp` へ
- * 渡す。**目印（マーカー）は SDK の `accountInfo().tokenSource` という、生の
- * 値が入る最初の場所に置く**——`fetchAccountUsage` → `toAccountUsage` →
- * `toTokenSourcePresence` → `app.ts` の `c.json()` まで、実装を1つも
- * モックせずに通す。
- */
 describe('GET /usage: 応答本文に tokenSource の生値が1文字も出ない（#706）', () => {
-  /** control channel だけを持つ偽の probe（`usage-poller.test.ts` と同じ形）。 */
   function probe(answers: { account?: unknown; usage?: unknown }): UsageProbeQuery {
     return () => {
       const handle: UsageProbeHandle = {
@@ -13721,7 +11562,6 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
   }
 
   it('present（値が届いている）でも、応答本文のどこにも目印が現れない', async () => {
-    // 意味の無い短い文字列（前例: #704 の 'zz'）を使う。鍵に見える値は作らない。
     const marker = 'zz';
     const poller = startUsagePolling({
       queryFn: probe({
@@ -13733,7 +11573,6 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
       }),
       cwd: '/work',
     });
-    // 起動直後の1回ぶんの観測が終わるのを待つ（`startUsagePolling` の doc）。
     await poller.refresh();
 
     const withUsage = createApp({
@@ -13748,9 +11587,6 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
     const text = await response.text();
 
     expect(response.status).toBe(200);
-    // 実際に 'ok' 状態（present）まで届いていることを先に確かめる——
-    // そうでなければ「目印が無い」が「そもそも tokenSource を読んでいない」の
-    // 誤検出になる（`mutation-testing` skill 「0件を先に確かめる」と対の校正）。
     expect(text).toContain('"tokenSourcePresence":"present"');
     expect(text).not.toContain(marker);
 
@@ -13760,8 +11596,6 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
   it('empty / not_returned でも、応答本文のどこにも目印が現れない', async () => {
     const marker = 'zz';
     const poller = startUsagePolling({
-      // account 自体は marker を含まないが、usage 側に紛れ込んでも漏れないことも
-      // 併せて確かめる（tokenSource 以外の経路からの漏れも拾う、という通しの歯の趣旨）。
       queryFn: probe({
         account: { subscriptionType: 'Claude Max', apiProvider: 'firstParty', tokenSource: '   ' },
         usage: {
@@ -13790,14 +11624,6 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
   });
 });
 
-/**
- * 人間の MCP 連携の登録（`/mcp-servers`。#325 段1）。
- *
- * 固定しているのは3つ —— ①`.mcp.json` をそのまま貼れる形で往復する
- * ②**値（鍵が入りうる）を、応答の 400・`PUT` の応答・日誌のどこにも載せない**
- * ③alteroid 自身の名前と未知の欄は保存しない（前のものが残る）。門（`requireOwner`）
- * は `auth.test.ts` が撃つ。
- */
 describe('MCP サーバの登録（/mcp-servers）', () => {
   const put = (body: unknown) =>
     app.request('/mcp-servers', {
@@ -13815,10 +11641,6 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
     });
   });
 
-  /**
-   * **Issue #3984。** 読んだ版（`GET` の `version`）を `ifMatch` で送る。合えば書け、
-   * 省略は後勝ち、古ければ 409 で書かれず `current` が最新。
-   */
   describe('ifMatch（Issue #3984）', () => {
     const readBody = async () =>
       (await (await app.request('/mcp-servers')).json()) as { version: string };
@@ -13848,7 +11670,6 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
     it('古ければ 409 で書かれず、current が最新（error と current の鍵で他の 409 と見分けられる）', async () => {
       await put({ mcpServers: { one: { command: 'dummy-one' } } });
       const { version } = await readBody();
-      // 別の経路が足した
       await stores.mcpServers.write({
         one: { command: 'dummy-one' },
         added: { command: 'dummy-added' },
@@ -13922,12 +11743,6 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
     expect(await stores.mcpServers.read()).toBeNull();
   });
 
-  /**
-   * **issue #2123。** 状態変更（保存。`stores.mcpServers.write`）そのものが
-   * 投げたときは、先に書いた行と打ち消しの行の両方が日誌に残り、応答は
-   * 500 になる（grant の「状態変更（grantAccess）が投げたときは、付与の行と
-   * 打ち消しの行の両方が日誌に残り、500になる」と同じ形）。
-   */
   it('状態変更（保存）が投げたときは、差し替えようとした行と打ち消しの行の両方が日誌に残り、500 になる', async () => {
     const throwingStores: Stores = {
       ...stores,
@@ -13960,10 +11775,6 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
     expect(decisions[1]).toContain('MCP サーバの登録を差し替えられなかった（github）');
   });
 
-  /**
-   * **既定の 400 は本文をそのまま `data` に載せて返す**（`PUT /profile` の hook の
-   * doc）。ここで値が返ると、欄の綴りを1つ間違えただけで鍵が応答へ載る。
-   */
   it('形が不正なら保存せず、400 の本文に送られた値を載せない', async () => {
     await put({ mcpServers: { github: { command: 'gh-mcp' } } });
 
@@ -13977,18 +11788,11 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
       expect(response.status).toBe(400);
       expect(await response.text()).not.toContain('SECRET');
     }
-    // 前のものが残る。
     expect((await stores.mcpServers.read())?.mcpServers).toEqual({
       github: { command: 'gh-mcp' },
     });
   });
 
-  /**
-   * **issue #2489。** 保存済みの登録が壊れていて `read()` が投げても、置き直す口は
-   * 塞がない。前の登録は日誌の名前のためにしか使わない（差分の計算も配布も
-   * 前の登録を見ない全文置換）ので、読めなかったことを日誌に書いて進む。
-   * 登録の中身（値）は日誌にも応答にも出さない。
-   */
   describe('保存済みの登録が壊れていて読めないとき（#2489）', () => {
     const FAKE = 'FAKE_SECRET_VALUE_2489';
     const corruptedApp = () => {
@@ -13999,7 +11803,6 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
           ...stores.mcpServers,
           read: () => {
             if (!corrupted) return stores.mcpServers.read();
-            // 器の `read()` と同じ検査（予約名 alteroid が入っている）で投げる。
             return Promise.resolve().then(() => {
               parseMcpServers({ alteroid: { command: 'x', env: { K: FAKE } } });
               throw new Error('unreachable');
@@ -14068,14 +11871,6 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
   });
 });
 
-/**
- * `PUT /mcp-servers` が runner へも降ろし、runner ごとの結果を返す（#325 段3）。
- *
- * 固定しているのは3つ —— ①保存した登録が繋がっている runner へ届く（指紋が正本と
- * 一致する） ②**応答にも日誌にも値を載せない**（名前・指紋・成否だけ） ③古い
- * runner（口が無い）は `unsupported` として一時障害と分けて返し、保存そのものは
- * 成功する（次の名乗りで降ろし直す）。
- */
 describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#325 段3）', () => {
   const REGISTRATION = {
     github: { command: 'gh-mcp', env: { GITHUB_TOKEN: 'SECRET-IN-ENV' } },
@@ -14137,13 +11932,10 @@ describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#32
       ok: true,
       mcpServers: { sha256: want, names: ['github'] },
     });
-    // 古い runner は一時障害と分けて返す。保存そのものは成功している（200）。
     expect(byId.get('runner-old')).toMatchObject({ ok: false, unsupported: true });
 
-    // 実際に届いている（指紋は正本と一致する）。
     expect((await fresh.mcpServers?.())?.sha256).toBe(want);
 
-    // 日誌には配布の成否まで残り、値は書かない。
     const journal = await stores.journal.list({ types: ['decision'] });
     const entry = journal.find(
       (e) => e.type === 'decision' && e.decision.includes('MCP サーバの登録'),

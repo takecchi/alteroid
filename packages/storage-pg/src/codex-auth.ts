@@ -34,11 +34,7 @@ function columnsOf(record: CodexChatgptAuthRecord): Omit<Row, 'id'> {
   };
 }
 
-/**
- * Codex の ChatGPT ログインの正本（#3939）。**書き戻しは1文の条件付き `update`**
- * （`where revision = <読んだ版>`）で決める——読んでから書く形に割ると、5台の runner の
- * 書き戻しが並んだときに古い値で新しい値を潰す。
- */
+/** 書き戻しは1文の条件付き `update`（`where revision = <読んだ版>`）で決める: 読んでから書く形に割ると、並んだ書き戻しが古い値で新しい値を潰す。 */
 export class PgCodexChatgptAuthStore implements CodexChatgptAuthStore {
   readonly #db: Db;
 

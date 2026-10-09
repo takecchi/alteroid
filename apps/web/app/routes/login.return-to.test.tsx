@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-/**
- * ログインし直すと、開こうとしていた画面へ戻る（#3892）。
- */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

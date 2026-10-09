@@ -14,7 +14,6 @@ type Json = Record<string, unknown>;
 
 const AUTH_JSON = JSON.stringify({ tokens: { refresh_token: 'rt-fake-not-real' } });
 
-/** デバイスコードのログインを演じる app-server。 */
 class FakeLoginServer extends EventEmitter {
   readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
@@ -149,7 +148,6 @@ describe('Codex のデバイスコードのログイン（#3939）', () => {
     });
     const home = h.fs.made[0];
     expect(home).toBeDefined();
-    // 子は一時 CODEX_HOME で、保存先を file に固定して起きる。API キーは渡さない。
     expect(h.spawned[0]?.env['CODEX_HOME']).toBe(home);
     expect(h.spawned[0]?.env['CODEX_API_KEY']).toBeUndefined();
     expect(h.spawned[0]?.args).toEqual([
@@ -163,7 +161,6 @@ describe('Codex のデバイスコードのログイン（#3939）', () => {
       h.server.received.find((m) => m['method'] === 'account/login/start')?.['params'],
     ).toEqual({ type: 'chatgptDeviceCode' });
 
-    // 人間がブラウザで承認した: app-server が auth.json を書き、完了を知らせる。
     h.fs.files.set(`${home}/auth.json`, AUTH_JSON);
     h.server.notify('account/login/completed', { success: true, loginId: 'login-1' });
     const outcome = await login.outcome;

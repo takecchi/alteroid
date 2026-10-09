@@ -16,116 +16,32 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
-/**
- * クラウド段のテーブル定義（docs/architecture.md「ストレージ」）。
- *
- * fs ドライバと同じ IF を満たすための器であって、新しい概念は足さない。
- * **記憶は Markdown のまま**テーブルに入る。人間が読んで直せること（提供価値1）は
- * ここでも要件なので、行に切り刻んで構造化しない — CLI / HTTP API から出し入れ
- * するのは fs 版と同じ1枚の Markdown 文書である。
- */
-
-/** 記憶 = Markdown 文書。1行1文書。 */
 export const memory = pgTable('memory', {
   slug: text('slug').primaryKey(),
   content: text('content').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
-  /**
-   * 保護状態（human guard）の派生値。**新しい真実ではない** — 実体は日誌
-   * （`memory_update.cause`）にあり、この2列は読み出しを安くするためのキャッシュ
-   * である（`packages/core` の `PersonaStore.protectionStatus` の doc）。
-   *
-   * **ここは「誰も送らない導出値」だけを追記で伸ばす場所である。** 人間・クローンが
-   * 書く値は `content` 列の側に置く——入口のスキーマ（`memory_write` /
-   * `PUT /memory/:slug` の body）を1つも変えないことが要件だからである。
-   *
-   * `humanTouchedAt`: 最後に `cause:'human'` の書き込みが記録された時刻。
-   * **一度立ったら降ろさない**（クローンの書き込みで null に戻さない — 更新対象
-   * に含めないことで保証する。fs 版は `persona.ts` の `#writeNow` を、pg 版は
-   * 同じファイルの `write()` / `append()` を見よ）。
-   */
+  // 一度立ったら降ろさない: クローンの書き込みで null に戻さないよう、更新対象に含めない。
+  // 実体は日誌（`memory_update.cause`）で、この列は読み出しを安くするキャッシュ。
   humanTouchedAt: timestamp('human_touched_at', { withTimezone: true, mode: 'date' }),
   /**
-   * デーモン経由で最後に書いた本文のハッシュ（sha256 hex）。外部編集の検出に使う。
-   *
-   * **更新する場所は `persona.ts` の `write()` / `append()` の2箇所——意識して
-   * 両方揃えること。** fs 版（`FsPersonaStore`）は `#writeNow` が両方の唯一の
-   * 通り道なので1点で済むが、pg はこのテーブルへの書き込み経路が
-   * `write()` / `append()` で独立した2メソッドに分かれている。**片方だけ
-   * 直すと、もう片方の経路（たとえば append）だけが外部編集と誤検出される
-   * 穴になる。**
+   * 更新する場所は `persona.ts` の `write()` / `append()` の2箇所で、両方揃えること:
+   * pg は書き込み経路が独立した2メソッドに分かれ、片方だけ直すともう片方だけが外部編集と誤検出される。
    */
   contentSha256: text('content_sha256'),
-  /**
-   * #170（記憶の目次化）が要る導出値。**#173 が置いた上の2列の隣へ追記で
-   * 足す**（未実装の宣言を実装済みの列の隣に置くと、未実装だったことが
-   * 隠れる、という #173 の doc の約束のとおり）。
-   *
-   * 最後に `content` 先頭の frontmatter の `description` が変わったと確定した
-   * 時刻。**書き手は書けない** — `write()` / `append()` が新旧の `description`
-   * を比べて進めるか据え置くかを決める（`@alteroid/core` の
-   * `nextDescribedState` の doc）。`updatedAt` と比べて要旨の鮮度
-   * （fresh / stale / unknown / absent）を出す。
-   */
   describedAt: timestamp('described_at', { withTimezone: true, mode: 'date' }),
-  /**
-   * `describedAt` を立てた時点の本文サイズ（bytes、#913）。**`described_at`
-   * の隣へ追記で足す**（同じ約束。列の追加は `migrate.ts` の `STATEMENTS`
-   * 末尾で行う——索引は足さない）。`describedAt` と必ず同時に進む
-   * （`nextDescribedState` が1つのオブジェクトで両方を返すので、片方だけ
-   * 進む形はコードの側で作れない）。`toDocument` が返す `bytes`
-   * （`Buffer.byteLength(row.content, 'utf8')`）と同じ測り方——ここが
-   * ずれると、全文書が「要旨を書いた直後から少し変わっている」に化ける。
-   */
+  // `toDocument` が返す `bytes` と同じ測り方にする: ずれると全文書が「要旨を書いた直後から少し変わっている」に化ける。
   describedBytes: integer('described_bytes'),
-  /**
-   * `describedBytes` を測った時刻（#821 残課題）。**`described_bytes` の隣へ
-   * 追記で足す**（同じ約束。列の追加は `migrate.ts` の `STATEMENTS` 末尾で
-   * 行う——索引は足さない）。
-   *
-   * **`describedAt` とは限らない。** #821 の残課題（本文だけの書き込みが
-   * 要旨の書き直しよりずっと高頻度なので、基準点が永久に立たない）を直す
-   * ため、この PR から「基準点が無ければ、本文だけの書き込みでもその
-   * 書き込みの直前の状態を基準点にする」ようになった——そのときの
-   * `describedBytesAt` は「その書き込みの直前の `updated_at`」であって、
-   * 要旨を書き直した時刻ではない（`@alteroid/core` の `nextDescribedState`
-   * の doc）。`describedAt` と `describedBytesAt` を突き合わせて、基準点が
-   * 「要旨を書いた瞬間に測られたもの」（`measured`）か「後から立てられた
-   * 下限」（`at-least`）かを判定する（`resolveMemoryDescriptionDrift` の doc）。
-   */
+  // `describedAt` とは限らない: 基準点が無ければ本文だけの書き込みの直前の `updated_at` が入る。
   describedBytesAt: timestamp('described_bytes_at', { withTimezone: true, mode: 'date' }),
-  /**
-   * この slug が作られた時刻。**#173 が置いた列の隣へ追記で足す**（同じ約束）。
-   *
-   * **値が入る経路は2つ。** (1) 第一の出所は `persona.ts` の `write` /
-   * `append` 自身——`insert().values({ ..., createdAt: now })` で、新規作成
-   * （insert）のときだけ入る。`onConflictDoUpdate` の `set` にはこの列を
-   * 含めないので、更新（conflict）のときは既存の値がそのまま保たれる。
-   * (2) この配線より前に作られた行は `markCreatedAt`（デーモン起動時の
-   * backfill）が日誌の最初の `memory_update`（`action:'write'`）から埋める。
-   *
-   * **`humanTouchedAt` と完全に同じ形——素の nullable。**`unknown` という値を
-   * ここへ書き込まない。無いこと自体が「(1)(2) どちらの根拠も無い」を表す
-   * （`@alteroid/core` の `memoryCreatedAtSchema` の doc）。
-   *
-   * **`humanTouchedAt` の単調非減少とも違う——一度きりの確定値。** `persona.ts`
-   * の `markCreatedAt` が `isNull` を条件にした `UPDATE` で「既に値が入って
-   * いれば何もしない」を保証し、`write` / `append` は `onConflictDoUpdate` の
-   * `set` にこの列を含めないことで同じ約束を守る。
-   */
+  // 一度きりの確定値: `write` / `append` の `onConflictDoUpdate` の `set` に含めず、`markCreatedAt` は `isNull` 条件の UPDATE。
+  // `unknown` という値は書き込まない（null が「根拠が無い」を表す）。
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }),
 });
 
-/**
- * 日誌 = 追記専用。
- *
- * `seq` を持つのは順序のためである。`at` は ISO の文字列時刻で、同一ミリ秒の
- * 追記が同じ値を持ちうる。fs 版（JSONL の行順）と同じ「追記した順」を返すには
- * 時刻とは別の単調な軸が要る。
- */
 export const journal = pgTable(
   'journal',
   {
+    // `at` は同一ミリ秒の追記が同じ値を持ちうるので、「追記した順」を返すには時刻とは別の単調な軸が要る。
     seq: bigserial('seq', { mode: 'number' }).primaryKey(),
     id: text('id').notNull().unique(),
     at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
@@ -135,28 +51,14 @@ export const journal = pgTable(
   (table) => [
     index('journal_at_idx').on(table.at),
     index('journal_type_at_idx').on(table.type, table.at),
-    /**
-     * `journal.ts` の `list()` が `with` を `seq` の降順（新しい順）と
-     * 組み合わせて絞るための式索引（issue #418）。
-     *
-     * 絞りを `limit` より前へ移した結果、pg は「`with` に当たる行が `scan`
-     * 件見つかるまで `seq` を逆順に辿る」形になる。既定 `scan=2000` でも、
-     * マネージャーとの往復が多い日誌では実質フルスキャンになりうる —
-     * この索引が無いと `journal_type_at_idx`（`type, at`）では `with` の
-     * 絞りにも `seq` の順序にも効かない。
-     */
+    // 外さない: 無いと `journal_type_at_idx` は `with` の絞りにも `seq` の順序にも効かず、往復の多い日誌で実質フルスキャンになる。
     index('journal_exchange_with_seq_idx').on(sql`(${table.entry}->>'with')`, table.seq),
-    /**
-     * 墓標（`conversation_deleted`。#4218）を会話 id で引く部分式索引。`journal.ts` の
-     * `list()` / `get()` が exchange の行ごとに「同じ会話の墓標が在るか」を引く。
-     */
     index('journal_conversation_deleted_idx')
       .on(sql`(${table.entry}->>'deletedConversationId')`)
       .where(sql`${table.type} = 'conversation_deleted'`),
   ],
 );
 
-/** ジョブ台帳（manager_id ↔ SDK session_id の対応もここ）。 */
 export const jobs = pgTable('jobs', {
   id: text('id').primaryKey(),
   status: text('status').notNull(),
@@ -165,54 +67,22 @@ export const jobs = pgTable('jobs', {
   job: jsonb('job').notNull(),
 });
 
-/**
- * 承認待ちキュー。
- *
- * 会話での絞り（`listApprovals({ conversationId })`、#3290）は jsonb の
- * `approval->>'conversationId'` を引く。索引 `approvals_conversation_id_idx` は式索引で、
- * drizzle の表定義には書かず `migrate.ts` だけが持つ（列を足していない）。
- */
+// 索引 `approvals_conversation_id_idx`（式索引）は表定義に書かず `migrate.ts` だけが持つ。
 export const approvals = pgTable('approvals', {
   id: text('id').primaryKey(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
   answeredAt: timestamp('answered_at', { withTimezone: true, mode: 'date' }),
-  /**
-   * クローンが `approval_withdraw` で取り下げた時刻（#963）。`answered_at` と
-   * 同じ形の派生列 — 本体は `approval`（jsonb）に既に入っているが、
-   * `listApprovals({ pendingOnly: true })` の絞り込みに `answered_at` と
-   * 同じ索引の効く列を使うため、専用の列としても持つ（`migrate.ts` の
-   * `withdrawn_at` の doc）。
-   */
+  // 本体は `approval`（jsonb）に在るが、`pendingOnly` の絞りが `answered_at` と同じ形で効くよう専用の列としても持つ。
   withdrawnAt: timestamp('withdrawn_at', { withTimezone: true, mode: 'date' }),
   approval: jsonb('approval').notNull(),
 });
 
-/**
- * 継続中の依頼（時間起点の仕込み）。
- *
- * `kind` が主キーなのは、同じ名前の依頼を二重に持たないためである（同じ名前で
- * 仕込み直したら置き換わるのが正しい）。本文は jsonb にそのまま入れる。
- */
-/**
- * 人間が承認した Bash 許可の記録（Issue #863）。`approvals` と同じ形——本体は
- * jsonb（`grant`）にそのまま入れ、絞り込みに使う欄（`granted_at` /
- * `revoked_at`）だけ派生列として持つ。
- */
 export const permissionGrants = pgTable('permission_grants', {
   id: text('id').primaryKey(),
   grantedAt: timestamp('granted_at', { withTimezone: true, mode: 'date' }).notNull(),
   revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
-  /**
-   * ⚠️ **設計メモは列名を `grant` としていたが、`GRANT` は PostgreSQL の予約語**
-   * ——`create table ... (grant jsonb not null)` は素の DDL では構文エラーになる
-   * （実測: PGlite で `syntax error at or near "grant"`）。drizzle 経由の
-   * 通常のクエリは列名を自動で二重引用符に包むので実害は出ないが、`migrate.ts`
-   * はここを生の SQL 文字列として書いており、二重引用符を足すだけの回避は
-   * 「以後この列だけ引用が必須」という別の罠を残す。**列名そのものを
-   * `record` へ変える**——`approvals` / `schedules` / `authLoginRequests`
-   * が blob 列をそれぞれ `approval` / `plan` / `request` と呼ぶのと同じ
-   * 「その表が持つ1件」を指す一般名の作法。
-   */
+  // 列名を `grant` にしない: `GRANT` は予約語で素の DDL では構文エラーになり、
+  // 二重引用符で回避すると「この列だけ引用が必須」という別の罠が残る。
   record: jsonb('record').notNull(),
 });
 
@@ -224,212 +94,98 @@ export const schedules = pgTable('schedules', {
   plan: jsonb('plan').notNull(),
 });
 
-/**
- * 既定の仕込み（日報・発意 tick）の位相。
- *
- * **`schedules` と同じ表に入れないのは意図である。** あちらは人間とクローンが読み書き
- * する「継続中の依頼」で、`schedule_list` はその `list()` を直に読む。既定の仕込みを
- * 行として混ぜると、クローンからは依頼に見えて `schedule_remove` で消せてしまう
- * （`schedulePhaseSchema` に同じことを書いてある）。
- *
- * 持つのは「前回いつ動いたか」だけで、本文も周期も無い。**これが無いと器を作り直す
- * たびに位相が捨てられ、周期より短い間隔で再デプロイが続くと発意 tick が一度も
- * 発火しない。**
- */
+// `schedules` と同じ表に入れない: 混ぜるとクローンからは依頼に見えて `schedule_remove` で消せてしまう。
+// 無いと器を作り直すたびに位相が捨てられ、周期より短い間隔で再デプロイが続くと発意 tick が一度も発火しない。
 export const schedulePhases = pgTable('schedule_phases', {
   kind: text('kind').primaryKey(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
   phase: jsonb('phase').notNull(),
 });
 
-/**
- * 引き受けたまま終わっていない仕事の台帳（`store.ts` の `CommitmentStore`）。
- *
- * `id` が主キーなのは、**`open` の冪等性をここで強制するため**である。「select して
- * から insert」に割ると、同じ id の並行 open が両方すり抜けて後の書き込みが先の
- * 行を上書きする ＝ 一度片付けた仕事が配り直しのたびに開き直る。主キーがあれば
- * `insert ... on conflict do nothing` の1操作で済み、割り込む隙間そのものが無い。
- *
- * 列に出すのは並べ替えと絞り込みに使う `at` / `closed_at` だけで、本体は jsonb に
- * そのまま入れる（`schedules` と同じ作法）。クローンが読むのは jsonb の側である。
- */
+// `id` を主キーにする: 「select してから insert」に割ると同じ id の並行 open がすり抜け、片付けた仕事が開き直る。
 export const commitments = pgTable(
   'commitments',
   {
     id: text('id').primaryKey(),
-    /** 引き受けた時刻。未了を古い順に並べる軸（＝齢の出所）。 */
     at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
-    /** 片付いた時刻。null なら未了。`close` はこの列が null の行だけを更新する。 */
     closedAt: timestamp('closed_at', { withTimezone: true, mode: 'date' }),
     commitment: jsonb('commitment').notNull(),
-    /**
-     * 入れた順（挿入順）。同じ `at` の未了の行の決め手で、`list()` は `order by at, seq`
-     * （issue #3285。fs / in-memory の安定整列と同じ並び）。`commitments_seq_seq` が既定で
-     * 振るので、書き直し（`jsonb_set`）では動かない。**null は migrate が振る前の行**で、
-     * 並びでは最後に来る。
-     */
+    // null は migrate が振る前の行で、並びでは最後に来る。書き直し（`jsonb_set`）では動かない。
     seq: bigint('seq', { mode: 'number' }).default(sql`nextval('commitments_seq_seq')`),
   },
-  // 一覧の主経路は「未了だけを古い順」なので、部分索引にして片付いた行を載せない
-  // （自動 open は人間の発言のたびに1行増えるため、閉じた行はいずれ大半を占める）。
+  // 部分索引にして片付いた行を載せない: 自動 open で閉じた行がいずれ大半を占める。
   (table) => [
     index('commitments_open_idx')
       .on(table.at)
       .where(sql`closed_at is null`),
-    /**
-     * 同一マネージャー×同一本文×未了を **DB が拒む**（issue #1041）。
-     *
-     * **⚠️ この索引だけは `migrate` が無条件には作らない。** 既存の重複行が在ると
-     * 作成そのものが落ち、起動のたびに通る `STATEMENTS` に置けば**デーモンが二度と
-     * 上がらなくなる**ので、`ensureOpenManagerBodyIndex` が重複を数えてから作る
-     * （在れば作らずに警告して進む）。⟹ **在る DB と無い DB が両方ありうる。**
-     * `PgCommitmentStore.open` はどちらでも正しく動くように書いてある。
-     *
-     * 鍵が `md5(body)` なのは btree の索引行のサイズ上限のためで、その代償は
-     * `PgCommitmentStore.open` の doc に全文で書いてある。
-     */
+    // `migrate` が無条件には作らない: 既存の重複行が在ると作成が落ち、`STATEMENTS` に置くとデーモンが上がらなくなる。
+    // `ensureOpenManagerBodyIndex` が数えてから作るので、在る DB と無い DB の両方がありうる。
+    // 鍵が `md5(body)` なのは btree の索引行のサイズ上限のため。
     uniqueIndex('commitments_open_manager_body_idx')
       .on(sql`(${table.commitment}->>'source')`, sql`md5(${table.commitment}->>'body')`)
       .where(sql`closed_at is null and commitment->>'origin' = 'manager'`),
   ],
 );
 
-/**
- * まだ処理し終えていない受信箱の合図（`store.ts` の `InboxStore`）。
- *
- * `id` が主キーなのは、同じ合図が二重に積まれないためである（`put` は同じ id なら
- * 上書きし、`deliveries` は引き継ぐ）。本文（`InboxEvent`）は jsonb にそのまま入れる
- * — 記録の意味は fs 版（`inbox.json`）と同じで、器が違うだけである。
- */
+// `id` を主キーにする: 同じ合図が二重に積まれないため。
 export const inboxEvents = pgTable(
   'inbox_events',
   {
     id: text('id').primaryKey(),
     event: jsonb('event').notNull(),
-    /** `post` が受理した時刻。古い順に配るための軸。 */
     at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
-    /** 何度目の配達か。`claimPending` が読みと同時に進める。 */
     deliveries: integer('deliveries').notNull().default(0),
-    /**
-     * 入れた順。同じ `at` の決め手で、`(at, seq)` で並べる（#4059）。再 put は `nextval` で
-     * 取り直す（fs / in-memory と同じく末尾へ）。**null は migrate が振る前の行**で、並びでは最後に来る。
-     */
+    // 再 put は `nextval` で取り直す（fs / in-memory と同じく末尾へ）。null は migrate が振る前の行で、並びでは最後に来る。
     seq: bigint('seq', { mode: 'number' }).default(sql`nextval('inbox_events_seq_seq')`),
   },
   (table) => [index('inbox_events_at_idx').on(table.at)],
 );
 
-/**
- * セッション生ログの退避先（PreCompact で落とした全文）。
- *
- * `removedAt` / `removedBytes`（#698）は tombstone 用——`remove()` が本文を
- * 落としたときだけ埋まる。**`body` の `not null` は外していない**（空文字を
- * 入れる。列の削除・型変更・RENAME は一切しない）。判定は `removedAt` が
- * `null` かどうかだけで行う——`body` が空文字であることを「消された」の根拠に
- * 使わない（空の生ログは正当にありえる）。
- *
- * `bodyChars` / `bodyMd5` / `continuity`（#698「畳んでよいかを積む瞬間に判定
- * する門」）は本文の指紋と、直前の退避との連続性判定。**すべて nullable**——
- * この機能より前に積まれた行にはどれも無い（`classifyArchiveContinuity` が
- * `bodyChars` / `bodyMd5` の欠落を `'unknown'` へ落とす）。`PgTranscriptArchive`
- * の `archive()` は `body`（`stripNulls` 後の値）に対して指紋を取る——fs /
- * インメモリは `stripNulls` を行わないので、NUL を含む本文では3実装の判定が
- * 揃わない可能性がある（`archive-continuity.ts` の doc 参照。`stripNulls` は
- * pg だけが持つ必須の変換で、指紋はストアに実際に入る値を表すべきだから）。
- */
 export const archive = pgTable('archive', {
   id: text('id').primaryKey(),
   sessionId: text('session_id').notNull(),
   at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+  // `not null` を外さず、消すときは空文字を入れる。「消された」は `removedAt` だけで判定する: 空の生ログは正当にありうる。
   body: text('body').notNull(),
-  /** 本文を落とした時刻。**これだけが「消された」の判定材料である。** */
   removedAt: timestamp('removed_at', { withTimezone: true, mode: 'date' }),
-  /** 落とす直前のバイト数（`octet_length(body)`）。 */
   removedBytes: integer('removed_bytes'),
-  /** 本文の長さ（UTF-16 コード単位。`ArchiveBodyFingerprint.bodyChars` の doc）。 */
+  // 指紋は `stripNulls` 後の `body` に対して取る: ストアに実際に入る値を表すため。fs / インメモリは
+  // `stripNulls` をしないので NUL を含む本文では判定が揃わない可能性がある（`archive-continuity.ts`）。
+  // すべて nullable: 欠落は `classifyArchiveContinuity` が `'unknown'` へ落とす。
   bodyChars: integer('body_chars'),
-  /** 本文の md5（照合専用）。 */
   bodyMd5: text('body_md5'),
-  /** 直前の退避との連続性判定（`ArchiveContinuity`）。 */
   continuity: text('continuity'),
 });
 
-/** デーモンの内部状態（クローンの session id など）。消えても記憶から戻る。 */
 export const daemonState = pgTable('daemon_state', {
   key: text('key').primaryKey(),
   value: text('value'),
 });
 
-/**
- * 実行環境プロファイルの**旧形式**（人間の `.zprofile` に当たるもの。高々1行）。
- *
- * **新しい `envProfileEntries` へ移した（2026-10-03）が、この表は消さない。**
- * 巻き戻した旧デーモンがここを読むので、消すと旧版が「プロファイルが無い」と読み、
- * 次の起動で環境が黙って痩せる。**新版はここへ書かない**（`clear()` だけはここも空に
- * する）。写し方は `migrate.ts`（1度だけ。印は `daemon_state`）。
- */
+// 消さない: 巻き戻した旧デーモンがここを読むので、消すと環境が黙って痩せる。新版は書かない（`clear()` だけは空にする）。
 export const envProfile = pgTable('env_profile', {
   id: text('id').primaryKey(),
   script: text('script').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 });
 
-/**
- * 実行環境プロファイル（人間の `.zprofile` / `/etc/profile.d/*.sh` に当たるもの）。
- * **名前付きの行を複数持つ。** 1行 ＝ 名前・本文（何行でもよい）・撒く先・更新日時。
- * つなげる順番は名前のコード単位順（`core` の `composeProfileScript`）。
- *
- * かつては「高々1行。用途ごとに行を増やせる形にしない — 増やせるようにした瞬間、
- * 『どの行がどの層に効くか』の対応表が要るようになり、それは行為ごとの許可一覧と
- * 同じ形をしている（AGENTS.md 地雷3）。効かせ分けが要るなら本文の中でシェルとして
- * 分岐すればよい」という形だった。**この判断は人間の明示的な決定で上書きした**
- * （2026-10-03。オーナーの逐語:「env-profileを環境変数と同じように指定できるように
- * して欲しい」「デフォルトは両方です」、続く決定: DB の行ごとに設定できる・1行には
- * 何行でもシェルスクリプトを入れられ行ごとに撒く先を持つ・つなげる順番は名前の
- * 辞書順）。本文の中での分岐が効かないのは、器（app と runner）の違いが本文から
- * 見えない（同じ本文が両方へ降りる）からである。
- *
- * **`manager_credentials.scope`（2026-09-14）と同じ理由・同じ形**で、`scope` は
- * 確認・許可の話ではなく**プロセストポロジーの表現**である
- * （`packages/core/src/store.ts` の `EnvProfileEntry` の doc）。**runner から読ませない**
- * （M4 受け入れ基準3）— runner へはデーモンが制御面で降ろす。
- */
+// 行を持たせる: 本文の中のシェル分岐では効かせ分けられない（app と runner の違いが本文から見えず、同じ本文が両方へ降りる）。
+// `scope` は確認・許可の話ではなくプロセストポロジーの表現（`packages/core/src/store.ts` の `EnvProfileEntry`）。
+// runner から読ませない: runner へはデーモンが制御面で降ろす。
 export const envProfileEntries = pgTable('env_profile_entries', {
   name: text('name').primaryKey(),
   script: text('script').notNull(),
-  /** 撒く先（`'all' | 'app' | 'runner'`）。既定は `'all'`。 */
   scope: text('scope').notNull().default('all'),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 });
 
-/**
- * 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形。#325 段1）。**高々1行**。
- *
- * `envProfile` と同じ理由で行を増やす形にしない —— 登録は1つの文書として全文置換
- * され、名前ごとの効かせ分けは持たない。**runner から読ませない**（M4 受け入れ
- * 基準3。マネージャー・作業者へ降ろすのはデーモンの仕事で、#325 段3 で足す）。
- */
+// 行を増やす形にしない: 登録は1つの文書として全文置換され、名前ごとの効かせ分けは持たない。runner から読ませない。
 export const mcpServers = pgTable('mcp_servers', {
   id: text('id').primaryKey(),
   servers: jsonb('servers').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 });
 
-/**
- * マネージャーへ降ろす環境変数の正本（名前→値）。**1名前1行。**
- *
- * `env_profile` が高々1行なのに対してこちらが行を持つのは、**名前ごとに配る
- * 必要があるから**である（器の側も名前ごとのファイルで、走行中の道具はその
- * ファイルを読み直す）。「どの行がどの層に効くか」の対応表にはならない——
- * 行は名前で、層による効かせ分けは持たない（AGENTS.md 地雷3 に触れない）。
- *
- * **値は平文で持つ**（`agent_tokens.value` と同じ扱い）。外へ出るのは指紋だけ
- * である（`GET /credentials`）。
- */
-/**
- * Codex の ChatGPT ログイン（`auth.json` の中身）の正本（#3939）。**高々1行**（鍵は固定）。
- * 書き戻しは `revision` の compare-and-swap（`PgCodexChatgptAuthStore`）。
- */
 export const codexChatgptAuth = pgTable('codex_chatgpt_auth', {
   id: text('id').primaryKey(),
   value: text('value').notNull(),
@@ -442,37 +198,21 @@ export const codexChatgptAuth = pgTable('codex_chatgpt_auth', {
 });
 
 export const managerCredentials = pgTable('manager_credentials', {
-  /** 環境変数の名前そのもの（`CREDENTIAL_NAME` の形）。 */
   name: text('name').primaryKey(),
+  // 値は平文で持つ（`agent_tokens.value` と同じ扱い）。外へ出るのは指紋だけ。
   value: text('value').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
-  /**
-   * 撒く先（`'all' | 'app' | 'runner'`）。2026-09-14 に追加。**既定は `'all'`**
-   * ——この列が無かった頃の全行は実際に両方へ撒かれていたので、`default 'all'`
-   * は過去を捏造しない（`migrate.ts` の該当 `alter table` のコメントを見よ）。
-   */
+  // 既定は過去を捏造しない: この列が無かった頃の全行は両方へ撒かれ、値を返さない挙動だった。
   scope: text('scope').notNull().default('all'),
-  /**
-   * シークレット可否。2026-09-14 に追加。**既定は `true`**——この列が無かった
-   * 頃の全行は実際に「値を絶対に返さない」挙動だったので、これも過去を
-   * 捏造しない既定である。
-   */
   secret: boolean('secret').notNull().default(true),
 });
 
-/**
- * SDK の SessionStore が預ける生ログ1行。
- *
- * `uuid` を持つ行は冪等キーとして扱う（SDK が再送・再取り込みしうる）。
- * 持たない行（タイトル・タグ等）はそのまま積む。
- */
 export const sessionEntries = pgTable(
   'session_entries',
   {
     seq: bigserial('seq', { mode: 'number' }).primaryKey(),
     projectKey: text('project_key').notNull(),
     sessionId: text('session_id').notNull(),
-    /** 主トランスクリプトは空文字。SDK 側の `subpath` 省略に対応する。 */
     subpath: text('subpath').notNull().default(''),
     uuid: text('uuid'),
     entry: jsonb('entry').notNull(),
@@ -484,13 +224,13 @@ export const sessionEntries = pgTable(
       table.subpath,
       table.seq,
     ),
+    // `uuid` を持つ行だけ冪等キーにする: SDK が再送・再取り込みしうる。持たない行（タイトル・タグ等）はそのまま積む。
     uniqueIndex('session_entries_uuid_idx')
       .on(table.projectKey, table.sessionId, table.subpath, table.uuid)
       .where(sql`uuid is not null`),
   ],
 );
 
-/** セッションの索引（`listSessions` の mtime をここで持つ）。 */
 export const sessions = pgTable(
   'sessions',
   {
@@ -505,62 +245,31 @@ export const sessions = pgTable(
   ],
 );
 
-/**
- * ログインしたアカウント。**マルチユーザーのための表ではない**（PRD 非ゴール）。
- * 持ち主が複数の端末・複数のログイン手段から入れるようにするための層である。
- *
- * ⚠️ **許可された行が複数在りうる**（2026-09-09 のオーナー決定。それ以前は
- * 部分一意索引で1行に絞っていた）。**それでもこの表はマルチユーザーのためのもの
- * ではない** — 分けていないのは*データ*のほうで、`account_id` で記憶や日誌を
- * 引く列を足したくなったら、そこが PRD 非ゴールの境界である。
- *
- * `granted_at` が許可の2値。行為ごとのスコープ列は**置かない** — 置いた瞬間に
- * 「確認が要る行為の一覧」に化け、PRD「権限境界」と衝突する。
- */
+// マルチユーザーのための表ではない（PRD 非ゴール）: 許可された行が複数在っても、`account_id` で記憶や日誌を引く列は足さない。
+// 行為ごとのスコープ列を置かない: 「確認が要る行為の一覧」に化け、PRD「権限境界」と衝突する。
 export const authAccounts = pgTable(
   'auth_accounts',
   {
     id: text('id').primaryKey(),
     displayName: text('display_name'),
-    /** 本人が選んだ連絡先。検証済みのものだけが入る（不変条件）。 */
+    // 検証済みのものだけが入る（不変条件）。
     email: text('email'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }),
     grantedAt: timestamp('granted_at', { withTimezone: true, mode: 'date' }),
     grantedBy: text('granted_by'),
-    /**
-     * **実行環境の持ち主として宣言された日時**（issue #1198）。`null` なら
-     * 誰も owner ではない。立てられるのは operator トークンだけ
-     * （`packages/storage-pg/src/auth.ts` の `setAccountOwner`、
-     * `where granted_at is not null` の条件付き UPDATE）。
-     */
-    // 注記: 資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。列は当面残してある。
+    // 資格の判断には使わない（ログインできる人＝持ち主）。列は当面残す。
     ownerDeclaredAt: timestamp('owner_declared_at', { withTimezone: true, mode: 'date' }),
   },
   (table) => [
-    /**
-     * **⚠️ この索引だけは `migrate` が無条件には作らない。** メールの大小文字は
-     * 区別しない（#1702）ので、鍵は `lower(email)`。既存の重複行（大小文字だけが
-     * 違う2行）が在ると作成そのものが落ち、起動のたびに通る `STATEMENTS` に
-     * 置けば**デーモンが二度と上がらなくなる**ので、
-     * `ensureAuthAccountsEmailLowerIndex` が重複を数えてから作る
-     * （在れば作らずに警告して進む。`commitments_open_manager_body_idx` と
-     * 同じ形）。⟹ **在る DB と無い DB が両方ありうる。**
-     *
-     * 旧索引 `auth_accounts_email_idx`（大小文字を区別する。email だけの鍵）は
-     * `migrate.ts` の側で drop する（2026-09-09 に落とした
-     * `auth_accounts_single_owner_idx` と同じ「create は配列から消し、drop だけ
-     * 残す」の形）。
-     */
+    // `migrate` が無条件には作らない: 既存の重複行（大小文字だけが違う2行）が在ると作成が落ち、
+    // `STATEMENTS` に置くとデーモンが上がらなくなる。`ensureAuthAccountsEmailLowerIndex` が数えてから作るので、
+    // 在る DB と無い DB の両方がありうる。旧索引 `auth_accounts_email_idx` と `auth_accounts_single_owner_idx` は
+    // `migrate.ts` で create を消し、drop だけ残す。
     uniqueIndex('auth_accounts_email_lower_idx').on(sql`lower(${table.email})`),
-    // ⚠️ **`auth_accounts_single_owner_idx`（granted_at が入る行をテーブル全体で
-    // 1行に絞る部分一意索引）が在った。2026-09-09 のオーナー決定で落とした。**
-    // `migrate.ts` の側は create を消して drop を足してある（残すと次の起動で
-    // 索引を作りに行って落ちる）。
   ],
 );
 
-/** 外部プロバイダ上の identity。`(provider, subject)` が一意。 */
 export const authIdentities = pgTable(
   'auth_identities',
   {
@@ -578,10 +287,7 @@ export const authIdentities = pgTable(
   ],
 );
 
-/**
- * 発行済みアクセストークン。**素の値は入れない**（sha256 だけ）。
- * 漏れた保管先から復元できてはいけない（記憶へ到達できる鍵であるため）。
- */
+// 素の値は入れない（sha256 だけ）: 漏れた保管先から復元できてはいけない。
 export const authAccessTokens = pgTable(
   'auth_access_tokens',
   {
@@ -600,11 +306,7 @@ export const authAccessTokens = pgTable(
   ],
 );
 
-/**
- * 連携の鍵。**素の値は入れない**（sha256 だけ。`integration-key.ts`）。
- * 鍵の種類そのものが「固定の1 source で外部イベントを送る」という1つの能力だけを表すので、
- * 許可の一覧（scopes）の列は置かない。
- */
+// 素の値は入れない（sha256 だけ）。許可の一覧（scopes）の列を置かない: 鍵は「固定の1 source で外部イベントを送る」1つの能力だけを表す。
 export const integrationKeys = pgTable(
   'integration_keys',
   {
@@ -623,24 +325,12 @@ export const integrationKeys = pgTable(
   (table) => [uniqueIndex('integration_keys_sha256_idx').on(table.sha256)],
 );
 
-/**
- * 利用状況の台帳（`usage.ts` の `UsageStore`）。4つに分けている。
- *
- * - `usageDaily`: 増分を「日 × マネージャー × モデル」で足し込んだ行。集計の主体
- * - `usageBaseline`: マネージャー1本ごとの前回累積（差分を取るための基準）
- * - `usageLedger`: 台帳が記録を始めた時刻。単一行（`id = 'default'`）で持つ —
- *   `aggregate` が返す `since` の元になる（1件も record していなければ行が無い）
- * - `usageTurns`: 「起きた回数」を「日 × マネージャー × 層 × 場所 × トークン」で
- *   足し込んだ行。`model` を鍵に持たない別会計（`usageTurns` 自身の doc参照）
- */
 export const usageDaily = pgTable(
   'usage_daily',
   {
     date: text('date').notNull(),
     managerId: text('manager_id').notNull(),
     model: text('model').notNull(),
-    // トークン数は SDK 側でも巨大になりうるので bigint。`mode: 'number'` で
-    // JS 側は number として扱う（drizzle が mapFromDriverValue で変換する）。
     inputTokens: bigint('input_tokens', { mode: 'number' }).notNull().default(0),
     outputTokens: bigint('output_tokens', { mode: 'number' }).notNull().default(0),
     cacheReadInputTokens: bigint('cache_read_input_tokens', { mode: 'number' })
@@ -651,46 +341,14 @@ export const usageDaily = pgTable(
       .default(0),
     webSearchRequests: bigint('web_search_requests', { mode: 'number' }).notNull().default(0),
     costUsd: doublePrecision('cost_usd').notNull().default(0),
-    /**
-     * **誰が**使ったか（`clone` / `manager`）。既定は `manager` である。
-     *
-     * この列より前に入っていた行はすべてマネージャーの分なので、既定が真になる
-     * （クローンの分は1バイトも記録されていなかった）。**ただしその既定は観測
-     * ではない** — どこからが観測かは `usage_ledger.layered_at` が持つ。
-     */
+    // 既定 `manager` は観測ではない: どこからが観測かは `usage_ledger.layered_at` が持つ。
     layer: text('layer').notNull().default('manager'),
-    /** **どこで**使ったか（`session` / `distill`）。既定は `session`。 */
     site: text('site').notNull().default('session'),
-    /**
-     * **どの認証トークンで**使ったか（`agent_tokens.id`。Issue #393 受け入れ基準6）。
-     *
-     * **`not null default ''` である。null にしない。** PostgreSQL の一意索引は
-     * null を互いに重複と見なさないので（`nulls distinct` が既定）、null を許すと
-     * **帰属の無い行が `on conflict` に当たらず、record のたびに新しい行が挿さって
-     * 積み上がらなくなる。** それはプールを使っていない器 ＝ 既定の構成で起きる
-     * （受け入れ基準7 を真正面から壊す）。
-     *
-     * **空文字は「トークンが無い」の印であって、トークンではない。** 読むときに
-     * `undefined` へ戻し（`PgUsageStore` の `#toRow`）、外へ出す顔には現れない。
-     * **`agent_tokens.id` に空文字は無い**（`AgentToken.id` は `min(1)`）ので、
-     * 本物の id とぶつからない。
-     *
-     * **既定は「古い行にとって真」ではない。** `layer` / `site` は暗黙だったものを
-     * 明示しただけだったが、こちらは**真になる値が存在しない** — この列より前の
-     * 行がどのトークンで走ったかは、どこにも記録されていない。だから
-     * `usage_ledger.tokens_at` が別に要る（そちらの doc）。
-     */
+    // null にしない: 一意索引は null を重複と見なさず、帰属の無い行が `on conflict` に当たらずに record のたびに行が挿さる。
+    // 空文字は「トークンが無い」の印で、読むときに `undefined` へ戻す（`PgUsageStore` の `#toRow`）。
+    // 古い行にとって真になる値は無い: どこからが観測かは `usage_ledger.tokens_at` が持つ。
     tokenId: text('token_id').notNull().default(''),
-    /**
-     * 欄ごとの「読めなかった区切りの数」（Issue #2086）。**既定 0。**
-     *
-     * **既定は「古い行にとって真」である**（`layer` / `site` と同じ形）。
-     * この列より前の行は「読めなかった」を数える機構そのものが無かったので、
-     * 0 は「数えたら0件だった」ではなく「まだ数えていなかった」だが、
-     * 出力側は両者を区別しない（`usage.ts` の `#toRow` の doc）——`unreadable`
-     * を**欄そのものが無い形**で返すのが読み手からの区別であって、この列の
-     * 値そのものは常に整数として持つ。
-     */
+    // 常に整数として持つ: 出力側は `unreadable` を欄そのものが無い形で返して区別する（`usage.ts` の `#toRow`）。
     unreadableInputTokens: bigint('unreadable_input_tokens', { mode: 'number' })
       .notNull()
       .default(0),
@@ -714,17 +372,10 @@ export const usageDaily = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
   },
   (table) => [
-    // **主キーではなく一意索引で持つ。** 層と場所は後から足した列で、既にある DB の
-    // 3列 primary key を差し替える必要がある。`create unique index if not exists` は
-    // 2回目以降が本当の no-op になるのに対し、`drop constraint` + `add primary key`
-    // はデーモンが起動するたびに索引を作り直す（毎回 ACCESS EXCLUSIVE を取る）。
-    // 意味は同じである — 5列すべて not null なので、一意索引は主キーと同じ強さで
-    // 重複を拒む。`on conflict` の推論もこの索引が受ける。
-    // **索引の名前を変えてある**（`usage_daily_key_idx` → `usage_daily_token_key_idx`）。
-    // `create unique index if not exists` は**名前だけ**を見るので、同じ名前のまま
-    // 列を足しても**既にある DB では何も起きない** — 鍵は5列のまま残り、
-    // `on conflict` は別のトークンの増分を先にある行へ足し込む。テストは空の DB から
-    // 作るので通り、**本番だけが古い鍵で走る**（`migrate.ts` の該当箇所を参照）。
+    // 主キーではなく一意索引で持つ: `drop constraint` + `add primary key` は起動のたびに索引を作り直す（ACCESS EXCLUSIVE）。
+    // 全列 not null なので強さは同じで、`on conflict` の推論も受ける。
+    // 名前を `usage_daily_key_idx` のままにしない: `create unique index if not exists` は名前だけを見るので、
+    // 既にある DB では鍵が古いまま残る。空の DB から作る試験は通り、本番だけが古い鍵で走る（`migrate.ts`）。
     uniqueIndex('usage_daily_token_key_idx').on(
       table.date,
       table.managerId,
@@ -733,92 +384,47 @@ export const usageDaily = pgTable(
       table.site,
       table.tokenId,
     ),
-    // pk の先頭が date なので、date だけの絞り込みは pk の索引がそのまま前方一致で
-    // 効く（別に (date) 索引を足すのは冗長）。(manager_id, date) は pk に無い並びで、
-    // 「このマネージャーが期間中いくら使ったか」を date を先に決めずに引く経路になる
-    // ので、こちらだけを足す。
+    // (manager_id, date) は鍵の並びに無く、date を先に決めずに「このマネージャーが期間中いくら使ったか」を引くために足す。
     index('usage_daily_manager_date_idx').on(table.managerId, table.date),
   ],
 );
 
-/** マネージャー1本につき1行。前回読んだ累積スナップショット（差分の基準）。 */
 export const usageBaseline = pgTable(
   'usage_baseline',
   {
     managerId: text('manager_id').notNull(),
-    /**
-     * どの層の累積か。既定は `manager`（この列より前の基準はすべてマネージャーの分）。
-     *
-     * **actor の id だけを鍵にしないこと。** 層をまたいで同じ id が来たときに、
-     * 別の累積が1つの基準を共有して差分がまるごと嘘になる。
-     */
+    // actor の id だけを鍵にしない: 層をまたいで同じ id が来ると別の累積が1つの基準を共有し、差分がまるごと嘘になる。
     layer: text('layer').notNull().default('manager'),
     sessionId: text('session_id'),
     models: jsonb('models').notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
     resets: integer('resets').notNull().default(0),
     lastResetAt: timestamp('last_reset_at', { withTimezone: true, mode: 'date' }),
-    /**
-     * runner ごとの最後の累積（`runner_id` → モデル id → 累積。Issue #3022 仮説1）。null は
-     * 「覚えていない」（この列が入る前の行を含む。後方互換の足し方は `migrate.ts`）。
-     */
+    // null は「覚えていない」（この列が入る前の行を含む）。
     byRunner: jsonb('by_runner'),
   },
-  // `usage_daily` と同じ理由で一意索引（migrate.ts の「鍵を差し替える」参照）。
-  // 既定 `'manager'` が入るので、既にある基準はそのまま同じ主体として引ける
-  // （引けなくなると「基準が無い」と読まれ、次の1回で累積の全量が積まれる
-  // ＝ 記録済みの分の二重計上になる）。
+  // `usage_daily` と同じ理由で一意索引。既定 `'manager'` で既にある基準を同じ主体として引ける:
+  // 引けないと「基準が無い」と読まれ、累積の全量が二重計上される。
   (table) => [uniqueIndex('usage_baseline_key_idx').on(table.layer, table.managerId)],
 );
 
-/**
- * 台帳が記録を始めた時刻。**単一行**（`id` は常に `'default'`）。
- *
- * `aggregate` の `since` はここから返す。行が無ければ「まだ一度も record して
- * いない」＝ `null`。行があれば、それより前を照会した範囲は「0」ではなく
- * 「記録が無い」として扱う（`beforeLedger`）。
- */
+// 単一行（`id` は常に `'default'`）。行が無ければ「まだ一度も record していない」で、
+// それより前を照会した範囲は「0」ではなく「記録が無い」として扱う（`beforeLedger`）。
 export const usageLedger = pgTable('usage_ledger', {
   id: text('id').primaryKey(),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'date' }).notNull(),
-  /**
-   * **層と場所の軸**が記録を始めた時刻。まだ一度も記録していなければ null。
-   *
-   * `started_at` と分けて持つ。台帳（#45）より層の軸のほうが後から入ったので、
-   * その間の行の `layer` / `site` は既定値であって観測ではない。1つにすると、
-   * 層を足す前の期間が「クローンは使っていなかった」「蒸留は起きていなかった」と
-   * 読める（`aggregate` はここから `beforeLayers` を返す）。
-   */
+  // `started_at` と分けて持つ: 層の軸は台帳より後から入ったので、その間の行の `layer` / `site` は既定値であって観測ではない。
+  // 1つにすると、層を足す前の期間が「クローンは使っていなかった」と読める（`aggregate` が `beforeLayers` を返す）。
   layeredAt: timestamp('layered_at', { withTimezone: true, mode: 'date' }),
-  /**
-   * **認証トークンの軸**が記録を始めた時刻。まだ1件も**帰属付きで**記録して
-   * いなければ null（Issue #393 受け入れ基準6）。
-   *
-   * **`layered_at` と入れる時機が違う。** あちらは最初の record で入る（層と場所は
-   * 必ず取れる）。こちらは **`token_id` が付いた record で初めて入る** — プールを
-   * 使っていない器では最後まで null である。揃えて入れると、トークンを1本も
-   * 持っていない器が「トークン軸を観測している」と名乗り、`byToken` が返す
-   * `null` の1件が「1本のトークンで全部使った」と読める。
-   */
+  // `layered_at` と揃えて入れない: `token_id` が付いた record で初めて入れる。揃えると、トークンを持たない器が
+  // 「トークン軸を観測している」と名乗り、`byToken` の `null` の1件が「1本のトークンで全部使った」と読める。
   tokensAt: timestamp('tokens_at', { withTimezone: true, mode: 'date' }),
-  /**
-   * **回数の軸**が記録を始めた時刻。まだ1件も数えていなければ null。
-   *
-   * `layered_at` と同じ時機（最初の record で入る）だが、**同じ record では
-   * 入らないことがある** — 増分が空の record（`fold.delta` が空）では回数を
-   * 数えないので、`layered_at` が先に入って `turns_at` が後から入る器がありうる
-   * （`usage.ts` の `usageAggregateSchema` の `turnsSince`）。
-   */
+  // `layered_at` と同じ record では入らないことがある: 増分が空の record は回数を数えない。
   turnsAt: timestamp('turns_at', { withTimezone: true, mode: 'date' }),
 });
 
-/**
- * 台帳の「起きた回数」（`usage.ts` の `usageTurnRowSchema`）。**`usage_daily` とは
- * 別テーブル。** 鍵に `model` を持たない — 1回の `record` が `fold.delta` の
- * モデルごとに `usage_daily` の行を複数書く（同ファイルの `usageDaily` の doc）
- * ので、鍵にモデルを含めると合計が「ターン数」ではなく「ターン×モデル数」に
- * なる。
- */
+// `usage_daily` と別テーブルにし、鍵に `model` を持たない: 1回の `record` がモデルごとに `usage_daily` の行を複数書くので、
+// 鍵にモデルを含めると合計が「ターン数」ではなく「ターン×モデル数」になる。
 export const usageTurns = pgTable(
   'usage_turns',
   {
@@ -826,17 +432,13 @@ export const usageTurns = pgTable(
     managerId: text('manager_id').notNull(),
     layer: text('layer').notNull(),
     site: text('site').notNull(),
-    // **`not null default ''` である理由は `usageDaily.tokenId` と同じ**
-    // （PostgreSQL の一意索引は既定で null を重複と見なさないので、null を
-    // 許すと帰属の無い行が積み上がらない）。
+    // `not null default ''` は `usageDaily.tokenId` と同じ理由（null を許すと帰属の無い行が積み上がらない）。
     tokenId: text('token_id').notNull().default(''),
     turns: bigint('turns', { mode: 'number' }).notNull().default(0),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
   },
   (table) => [
-    // **主キーではなく一意索引で持つ**（`usage_daily` と同じ判断。
-    // `migrate.ts` 冒頭「鍵を差し替える」参照——ただしこのテーブルは新規なので
-    // 差し替えは起こらない。最初から一意索引で持つだけである）。
+    // 主キーではなく一意索引で持つ（`usage_daily` と同じ判断）。
     uniqueIndex('usage_turns_key_idx').on(
       table.date,
       table.managerId,
@@ -847,15 +449,8 @@ export const usageTurns = pgTable(
   ],
 );
 
-/**
- * 消費を報告しない provider（`capabilities.usage === false`）のターン数
- * （`usage.ts` の `usageUnmeteredRowSchema`。Issue #486 M7）。**消費の値の列を
- * 持たない** — 0 を積むとその層が安いと読めるので、「報告が無いターンが何回あったか」
- * だけを数え、`usage_daily` / `usage_turns` の合計には混ぜない。
- *
- * `provider` を鍵に持つので、provider が複数あっても行が混ざらない。`usage_daily` へ
- * provider 列は足さない（既存の行を1バイトも変えないため）。
- */
+// 消費の値の列を持たず、`usage_daily` / `usage_turns` の合計に混ぜない: 0 を積むとその層が安いと読める。
+// `usage_daily` へ provider 列を足さない: 既存の行を1バイトも変えないため。
 export const usageUnmetered = pgTable(
   'usage_unmetered',
   {
@@ -864,13 +459,13 @@ export const usageUnmetered = pgTable(
     layer: text('layer').notNull(),
     site: text('site').notNull(),
     provider: text('provider').notNull(),
-    // **`not null default ''` である理由は `usageDaily.tokenId` と同じ。**
+    // `not null default ''` は `usageDaily.tokenId` と同じ理由。
     tokenId: text('token_id').notNull().default(''),
     turns: bigint('turns', { mode: 'number' }).notNull().default(0),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
   },
   (table) => [
-    // 主キーではなく一意索引で持つ（`usage_turns` と同じ。`migrate.ts` 冒頭参照）。
+    // 主キーではなく一意索引で持つ（`usage_turns` と同じ）。
     uniqueIndex('usage_unmetered_key_idx').on(
       table.date,
       table.managerId,
@@ -882,93 +477,48 @@ export const usageUnmetered = pgTable(
   ],
 );
 
-/**
- * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここが
- * 持つのは正本の置き場だけで、検知・切替はここに無い（`@alteroid/core` の
- * `createTokenRotator`）。
- *
- * `value` は素の文字列のまま入れる（sha256 化した鍵とは違う）——ここが正本を
- * 持つ唯一の場所であり、外へ出す顔（`AgentTokenView`）は上の層が作る。
- *
- * `order` は SQL の予約語なので、列名は `order_index` に逃がす
- * （JS 側のプロパティ名は `order` のまま——`AgentToken.order` と揃える）。
- */
+// `order` は SQL の予約語なので、列名は `order_index` に逃がす（JS 側は `AgentToken.order` と揃える）。
+// `value` は素の文字列のまま入れる: ここが正本を持つ唯一の場所で、外へ出す顔は上の層が作る。
 export const agentTokens = pgTable('agent_tokens', {
   id: text('id').primaryKey(),
   label: text('label').notNull(),
-  /**
-   * 本体。**`source = 'env'` の行は持たない**ので null を許す
-   * （`@alteroid/core` の `AgentToken.value` の doc）。
-   */
+  // `source = 'env'` の行は持たないので null を許す。
   value: text('value'),
-  /** 資格の出所。null は `stored`（後から足した列なので、既存の行は null である）。 */
+  // null は `stored`（後から足した列なので既存の行は null）。
   source: text('source'),
   order: integer('order_index').notNull(),
   disabledAt: timestamp('disabled_at', { withTimezone: true, mode: 'date' }),
-  /** epoch ミリ秒（`AgentToken.cooldownUntil` と同じ単位）。 */
   cooldownUntil: bigint('cooldown_until', { mode: 'number' }),
-  /**
-   * 上の期限をどこから採ったか（#683。`@alteroid/core` の `CooldownSource`）。
-   *
-   * **null を `default` と読まないこと。** 後から足した列なので、既存の行は
-   * null である —— 「推測だった」ではなく「言えなかった」である
-   * （`created_at` / `updated_at` を `default now()` で埋めないのと同じ理由）。
-   * **`default` を DB の既定値にもしないこと。**
-   */
+  // null を `default` と読まず、DB の既定値も付けない: 既存の行は「推測だった」ではなく「言えなかった」。
   cooldownSource: text('cooldown_source'),
   lastRejectedAt: timestamp('last_rejected_at', { withTimezone: true, mode: 'date' }),
   lastRejectedReason: text('last_rejected_reason'),
-  /**
-   * トークンが恒常的に通らないと確定した時刻。`cooldownUntil`（戻る）とも
-   * `disabledAt`（人間が外した。戻らない）とも違う3つ目の状態
-   * （`@alteroid/core` の `AgentToken.invalidatedAt` の doc）。
-   */
+  // `cooldownUntil`（戻る）とも `disabledAt`（人間が外した。戻らない）とも違う3つ目の状態。
   invalidatedAt: timestamp('invalidated_at', { withTimezone: true, mode: 'date' }),
-  /**
-   * 上の理由。**解釈しない文字列**——SDK やプローブが返した語をそのまま持つ
-   * （`@alteroid/core` の `AgentToken.invalidatedReason` の doc）。
-   */
+  // 解釈しない文字列: SDK やプローブが返した語をそのまま持つ。
   invalidatedReason: text('invalidated_reason'),
-  /**
-   * 行が作られた時刻 / 最後に変わった時刻。**どちらも null を許す**——PR1 の版が
-   * 書いた行には無いので（`@alteroid/core` の `AgentToken.createdAt` の doc）、
-   * `default now()` で埋め直さない。埋めると「いま作られた」という嘘になる。
-   */
+  // どちらも null を許し、`default now()` で埋め直さない: 埋めると「いま作られた」という嘘になる。
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }),
 });
 
-/**
- * 回す契機と冷却の既定（Issue #393）。**高々1行**（`id = 'default'`）。
- *
- * `env_profile` と同じ形——用途ごとに行を増やせるようにしない（増やせる形に
- * した瞬間、「どの行がどの層に効くか」の対応表が要るようになる）。
- */
-/**
- * いま撒いてある現役の指名（Issue #393 PR3）。**高々1行**（`id = 'default'`）。
- *
- * **`agent_tokens` に `active` の列を置かない。** 置くと2行が同時に現役だと主張
- * する形が作れる。**`agent_token_settings` にも混ぜない** — あちらの `updated_at`
- * は「人間かクローンが設定を変えた時刻」で、回し手の書き込みを混ぜるとその意味が
- * 壊れる（`@alteroid/core` の `ActiveAgentToken` の doc）。
- */
+// `agent_tokens` に `active` の列を置かない: 2行が同時に現役だと主張する形が作れる。
+// `agent_token_settings` にも混ぜない: あちらの `updated_at` は「人間かクローンが設定を変えた時刻」で、回し手の書き込みを混ぜると意味が壊れる。
 export const agentTokenActive = pgTable('agent_token_active', {
   id: text('id').primaryKey(),
   tokenId: text('token_id').notNull(),
-  /** 回すたびに1つ増える。`bigint` は `cooldown_ms` と同じ理由。 */
   generation: bigint('generation', { mode: 'number' }).notNull(),
   rotatedAt: timestamp('rotated_at', { withTimezone: true, mode: 'date' }).notNull(),
 });
 
+// 用途ごとに行を増やせるようにしない: 増やせる形にすると「どの行がどの層に効くか」の対応表が要るようになる。
 export const agentTokenSettings = pgTable('agent_token_settings', {
   id: text('id').primaryKey(),
   rotateOn: text('rotate_on').notNull(),
-  /** ミリ秒。`bigint` にしてあるのは `usage_daily` のトークン数列と同じ理由（巨大になりうる値を number として扱う）。 */
   cooldownMs: bigint('cooldown_ms', { mode: 'number' }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }),
 });
 
-/** 進行中のログイン試行（CLI とブラウザの往復を繋ぐ一時的な行）。 */
 export const authLoginRequests = pgTable(
   'auth_login_requests',
   {
@@ -979,43 +529,22 @@ export const authLoginRequests = pgTable(
   (table) => [index('auth_login_requests_expires_idx').on(table.expiresAt)],
 );
 
-/**
- * 仕事のやり方（#1055 段3）。1行1やり方。
- *
- * **本文以外を列に切ってあるのは `list()` のためである** —— 一覧が返すのは
- * `PracticeMeta`（本文を含まない）なので、jsonb 1列にすると一覧の1行のために
- * 全文を運ぶことになる。理由の全文は `PgPracticeStore` の doc。
- *
- * ⛔ **「実行される」欄をここへ足さないこと**（`practiceSchema` の doc）。器が
- * 持つのは「こう書いてある」までで、「こう実行せよ」ではない。
- */
+// 本文以外を列に切る: 一覧が返す `PracticeMeta` は本文を含まず、jsonb 1列だと一覧の1行のために全文を運ぶことになる。
+// 「実行される」欄を足さない（`practiceSchema`）: 器が持つのは「こう書いてある」までで、「こう実行せよ」ではない。
 export const practices = pgTable('practices', {
   slug: text('slug').primaryKey(),
-  /** 仕事の種類。**自由文字列である**（列挙にしない理由は `practiceKindSchema`）。 */
+  // 自由文字列（列挙にしない理由は `practiceKindSchema`）。
   kind: text('kind').notNull(),
   title: text('title').notNull(),
   content: text('content').notNull(),
-  // ⛔ **`chars`（旧 `bytes`）の列はここに無い。#1340 で保存をやめた**——
-  // 正規化後の本文の文字数（コードポイント数）は `char_length(content)` で
-  // 都度導出する（`PgPracticeStore` の doc）。保存しない理由は
-  // `practiceMetaSchema` の doc（`packages/core/src/schema.ts`）。
+  // 文字数の列を持たない: `char_length(content)` で都度導出する（保存しない理由は `packages/core/src/schema.ts` の `practiceMetaSchema`）。
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
 });
 
-/**
- * やり方の追記専用の版の履歴（#1309）。1行1版。
- *
- * **`practices` の行が消えても、対応する版は消えない**——`PgPracticeStore.remove`
- * は `practices` の `delete` しか呼ばない。人間が明示的に「全部忘れる」と決めた
- * ときだけ（`PgPracticeStore.clear`）、`practices` と一緒にここも空にする。
- *
- * **主キーは `(slug, version)` の複合キーである。** `version` を `serial` に
- * しなかったのは、番号が「slug ごとに独立した1始まりの連番」でなければならない
- * ためである（`PracticeVersionMeta.version` の doc）——グローバルな連番
- * （`serial`）では slug をまたいで番号が飛ぶ。`PgPracticeStore.write` が
- * `slug` ごとに `max(version) + 1` を計算して入れる。
- */
+// `practices` の行が消えても版は消さない（`PgPracticeStore.remove` は `practices` の `delete` だけ。`clear` でだけ一緒に空にする）。
+// `version` を `serial` にしない: 番号は slug ごとに独立した1始まりの連番で、グローバルな連番だと slug をまたいで飛ぶ。
+// `PgPracticeStore.write` が `max(version) + 1` を入れる。
 export const practiceVersions = pgTable(
   'practice_versions',
   {
@@ -1024,57 +553,37 @@ export const practiceVersions = pgTable(
     kind: text('kind').notNull(),
     title: text('title').notNull(),
     content: text('content').notNull(),
-    /** この版が書かれた時刻（`PracticeVersionMeta.at` の doc）。 */
     at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
   },
   (table) => [primaryKey({ columns: [table.slug, table.version] })],
 );
 
-/**
- * 会話の既読の位置。**会話ごとに1行**（全員で1組。`ConversationReadStore` の doc）。
- * `readThrough` は最後に読んだ発言の `at` で、戻らない（`greatest` の upsert）。
- */
+// `readThrough` は戻らない（`greatest` の upsert）。
 export const conversationRead = pgTable('conversation_read', {
   conversationId: text('conversation_id').primaryKey(),
   readThrough: timestamp('read_through', { withTimezone: true, mode: 'date' }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
 });
 
-/**
- * 会話の既読の基準時刻。**高々1行**（`env_profile` と同じく鍵は固定）。位置の記録が無い会話は
- * 「この時刻以前の発言は既読、以後は未読」と判定する。**一度決まったら変えない**
- * （`on conflict do nothing`）。
- */
+// 一度決まったら変えない（`on conflict do nothing`）。
 export const conversationReadBaseline = pgTable('conversation_read_baseline', {
   id: text('id').primaryKey(),
   at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
-  /** 索引の取り込み済みの印（`ConversationOutboundIndex.watermark`）。 */
   scannedThrough: timestamp('scanned_through', { withTimezone: true, mode: 'date' }),
 });
 
-/**
- * 会話ごとの最後のクローン側発言の時刻（日誌の写し。`ConversationOutboundIndex`）。
- * 未読のある会話の数を、日誌を広く遡らずに数えるためのもの。
- */
 export const conversationOutboundLatest = pgTable('conversation_outbound_latest', {
   conversationId: text('conversation_id').primaryKey(),
   at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
 });
 
-/** `bytea` 列（Node では `Buffer`）。 */
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType() {
     return 'bytea';
   },
 });
 
-/**
- * 添付ファイル（#3111 段1a。`AttachmentStore`）。記憶とは独立。
- *
- * `bytes` は中身そのもの。**`getMeta` と `prune` は `bytes` を読まない**ので、控えだけの問い合わせが
- * 大きな列を引かない。`conversation_id` が `null` のうち作成から1時間たったものと、`expires_at` を
- * 過ぎたものが掃除の対象（`prune`）。
- */
+// `getMeta` と `prune` は `bytes` を読まない: 控えだけの問い合わせが大きな列を引かないため。
 export const attachments = pgTable(
   'attachments',
   {
@@ -1083,7 +592,7 @@ export const attachments = pgTable(
     mediaType: text('media_type').notNull(),
     name: text('name').notNull(),
     size: bigint('size', { mode: 'number' }).notNull(),
-    // 中身の置き場は `bytes`（pg の bytea）か `blob_key`（外部ストレージ。#4128 段2）のどちらか一方だけ
+    // 中身の置き場は `bytes`（pg の bytea）か `blob_key`（外部ストレージ）のどちらか一方だけ。
     bytes: bytea('bytes'),
     blobKey: text('blob_key'),
     conversationId: text('conversation_id'),
@@ -1091,10 +600,10 @@ export const attachments = pgTable(
     managerReportId: text('manager_report_id'),
     uploadedBy: text('uploaded_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
-    // 保存中（`keptAt` あり）は null（期限なし。#4126 P4）
+    // 保存中（`keptAt` あり）は null（期限なし）。
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }),
     keptAt: timestamp('kept_at', { withTimezone: true, mode: 'date' }),
-    // 保存の印を外した時刻。在るものには未結び付け1時間の掃除を掛けない（#4126 P4）
+    // 在るものには未結び付け1時間の掃除を掛けない。
     releasedAt: timestamp('released_at', { withTimezone: true, mode: 'date' }),
   },
   (table) => [
@@ -1107,20 +616,12 @@ export const attachments = pgTable(
   ],
 );
 
-/**
- * 人間が入れた plugin（`PluginStore`）。**1 plugin = 1行**（名前が鍵）。
- *
- * 取り元（`source`）は検査済みの小さな JSON なので jsonb。**本体のファイルは `plugin_files` の
- * 行（`bytea`）に分けて持つ**: jsonb は NUL を持てず、バイナリを入れるには base64 にして
- * 3分の1ふくらむうえ、1つの値の上限（256MB）に本体の合計が縛られる。`file_count` /
- * `total_bytes` は要約（`list()`）が `plugin_files` を引かないための派生列。
- */
+// 本体のファイルは `plugin_files`（bytea）に分ける: jsonb は NUL を持てず、base64 にすると3分の1ふくらみ、
+// 1つの値の上限（256MB）に本体の合計が縛られる。`file_count` / `total_bytes` は `list()` が `plugin_files` を引かないための派生列。
 export const plugins = pgTable('plugins', {
   name: text('name').primaryKey(),
-  /** plugin.json の説明。null は説明なし（足す前の行を含む）。 */
   description: text('description'),
   source: jsonb('source').notNull(),
-  /** 撒く先（`'all' | 'app' | 'runner'`。実行環境プロファイルと同じ3値）。 */
   scope: text('scope').notNull().default('all'),
   enableHooks: boolean('enable_hooks').notNull().default(false),
   enableMcp: boolean('enable_mcp').notNull().default(false),
@@ -1131,7 +632,6 @@ export const plugins = pgTable('plugins', {
   installedBy: text('installed_by').notNull(),
 });
 
-/** plugin の本体の1ファイル。plugin を外すと一緒に消える（外部キーの cascade）。 */
 export const pluginFiles = pgTable(
   'plugin_files',
   {

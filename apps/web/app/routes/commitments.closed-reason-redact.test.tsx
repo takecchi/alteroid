@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3870。片付けた理由（`closedReason`）は本文と同じく `redactBody` を通して出す。
- * `closedBy` の4状態（clone・human・無い・未知）と、「既に片付いた」の断りの3経路すべてで測る
- * （経路ごとに描き方が違い、素の `<p>` に出す経路が伏せ忘れの出どころだった）。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

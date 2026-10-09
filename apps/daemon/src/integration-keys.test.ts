@@ -12,15 +12,6 @@ import { createApp } from './app.js';
 import type { AuthPlan } from './auth.js';
 import { createFixedWindowRateLimiter, judgeIntegrationRoute } from './integration-gate.js';
 
-/**
- * **連携の鍵（`altk_`）— 第3の資格**（#3113 段1）。
- *
- * 守るもの: ①未知・失効・期限切れは 401 ②通るのは固定の1 source の外部イベントの口だけで、それ以外は
- * **すべて 403**（既定で拒否。openapi の全ルートを回して確かめる）③上限（413・429・Retry-After）は
- * この資格にだけ掛かる ④認証が無効の構成でも `altk_` には制限が掛かる ⑤値は発行の応答にしか出ない
- * ⑥日誌が書けなければ発行も失効も状態を変えない。**時計は偽物で、実時間は待たない。**
- */
-
 const OPERATOR = { authorization: 'Bearer test-token' };
 const JSON_HEADERS = { 'content-type': 'application/json' };
 const T0 = Date.parse('2026-06-01T00:00:00.000Z');
@@ -28,7 +19,6 @@ const T0 = Date.parse('2026-06-01T00:00:00.000Z');
 let nowMs = T0;
 let stores: Stores;
 let posted: InboxEvent[] = [];
-/** `postPersisted` の結果。'unavailable' は受信箱へ書けなかった（#3679。応答は 503）。 */
 let persistOutcome: 'persisted' | 'unavailable' | 'throws' = 'persisted';
 
 function fakeClone(): CloneHost {
@@ -45,7 +35,6 @@ function fakeClone(): CloneHost {
     },
     subscribe: () => () => undefined,
     stop: () => Promise.resolve(),
-    // `GET /topology` が読む分（#3676 の稼働状況の図の歯）。
     usageBlocked: false,
     managers: { list: () => Promise.resolve([]) },
   } as unknown as CloneHost;
@@ -138,7 +127,6 @@ describe('連携の鍵の発行・一覧・失効', () => {
         limits: { maxBodyBytes: 1024 * 1024, ratePerMinute: 60 },
       });
 
-      // 失効・断った試み（stderr に出る）まで通してから、日誌と stderr を調べる。
       await app.request('/events/ci.main', {
         ...events('ci.main'),
         headers: bearer('altk_unknown'),
@@ -158,7 +146,6 @@ describe('連携の鍵の発行・一覧・失効', () => {
       expect(journal).toContain('連携の鍵を発行');
       expect(journal).toContain(sha.slice(0, 12));
       expect(journal).toContain('連携の鍵を失効');
-      // 後で stderr を調べるために値を持ち出す。
       (globalThis as { __altkTest?: string }).__altkTest = value;
     });
     const value = (globalThis as { __altkTest?: string }).__altkTest ?? '';
@@ -252,7 +239,6 @@ describe('門番: 鍵の照合（401）', () => {
       expiresAt: new Date(T0 + 60_000).toISOString(),
     });
 
-    // 陽性対照: 生きている鍵・期限内の鍵は通る。
     expect(
       (
         await app.request('/events', {
@@ -287,7 +273,6 @@ describe('門番: 鍵の照合（401）', () => {
       expect((await attempt(revoked.value)).status).toBe(401);
       expect((await attempt(expiring.value)).status).toBe(401);
     });
-    // 陰性対照: 同じ時刻で、生きている鍵は通る。
     expect((await attempt(live.value)).status).toBe(200);
   });
 
@@ -335,13 +320,11 @@ describe('門番: 既定で拒否（403）', () => {
         via: { keyId: id, name: 'ビルド' },
       });
     }
-    // 人間の経路には via が付かない。
     await app.request('/events', {
       ...events('anything'),
       headers: { ...OPERATOR, ...JSON_HEADERS },
     });
     expect((posted[2] as { via?: unknown }).via).toBeUndefined();
-    // 本文から via を立てられない。
     await app.request('/events', {
       ...events('ci.main', { via: { keyId: 'forged', name: 'forged' } }),
       headers: h,
@@ -350,7 +333,6 @@ describe('門番: 既定で拒否（403）', () => {
 
     const before = posted.length;
     await captureStderr(async () => {
-      // source の不一致（本文・パス）は 403。パスのエンコード違いでも一致しない別名は通らない。
       expect((await app.request('/events', { ...events('ci.other'), headers: h })).status).toBe(
         403,
       );
@@ -364,11 +346,9 @@ describe('門番: 既定で拒否（403）', () => {
       expect(
         (await app.request('/events/%E0%A4%A', { method: 'POST', headers: h, body: '{}' })).status,
       ).toBe(403);
-      // メソッド違い。
       expect((await app.request('/events', { headers: bearer(value) })).status).toBe(403);
     });
     expect(posted).toHaveLength(before);
-    // 断った試みは日誌に書かない。
     const journal = JSON.stringify(await stores.journal.list());
     expect(journal).not.toContain('ci.other');
   });
@@ -383,7 +363,6 @@ describe('門番: 既定で拒否（403）', () => {
     const routes = Object.entries(spec.paths).flatMap(([path, item]) =>
       methods.filter((m) => m in item).map((method) => ({ method, path })),
     );
-    // 列挙が空振りしていない（陽性対照の前提）。
     expect(routes.length).toBeGreaterThan(80);
     expect(routes).toContainEqual({ method: 'post', path: '/events' });
     expect(routes).toContainEqual({ method: 'post', path: '/events/{source}' });
@@ -410,12 +389,9 @@ describe('門番: 既定で拒否（403）', () => {
         const response = await app.request(url, {
           method: method.toUpperCase(),
           headers: { ...bearer(value), ...JSON_HEADERS },
-          // 本文のある口へは「別の source」を名乗る本文を送る（`POST /events` が 403 になることの確認）。
           ...(hasBody ? { body: JSON.stringify({ source: 'other.src' }) } : {}),
         });
-        // `POST /events/{source}` はパスの `x` が鍵の source（ci.main）と違うので 403。
-        // `POST /attachments` は門を通る（ここでは content-type が octet-stream でないので、その口自身の 415 で
-        // 止まる。**403 でないこと**が「門を通った」の証拠）。
+        // POST /attachments は content-type 違いで自身の 415 に止まる: 403 でないことが「門を通った」の証拠。
         if (response.status === 403) denied.push(`${method} ${path}`);
         else if (method === 'post' && path === '/attachments' && response.status === 415) {
           passedGate.push(`${method} ${path}`);
@@ -424,7 +400,6 @@ describe('門番: 既定で拒否（403）', () => {
     });
     expect(wrongly).toEqual([]);
     expect(passedGate).toEqual(['post /attachments']);
-    // 添付の読み出しは鍵には開かない（上げるだけで、読めない）。
     expect(denied).toContain('get /attachments/{id}');
     expect(denied).toContain('get /attachments/{id}/meta');
     expect(denied).toContain('post /events/{source}');
@@ -445,7 +420,6 @@ describe('門番: 既定で拒否（403）', () => {
     for (const path of ['/integration-keys', '/access', '/status']) {
       expect((await app.request(path, { headers: bearer(value) })).status, path).toBe(403);
     }
-    // 鍵の管理の口は、鍵では叩けない（鍵が鍵を発行・失効できない）。
     const created = await app.request('/integration-keys', {
       method: 'POST',
       headers: { ...bearer(value), ...JSON_HEADERS },
@@ -484,7 +458,6 @@ describe('上限は連携の鍵にだけ掛かる（413・429・Retry-After）',
       ).toBe(413);
     });
     expect(posted).toHaveLength(0);
-    // 陽性対照: 上限内は通る。
     expect((await app.request('/events', { ...events('ci.main'), headers: h })).status).toBe(200);
 
     const def = await issue(app, { name: '既定' });
@@ -532,7 +505,7 @@ describe('上限は連携の鍵にだけ掛かる（413・429・Retry-After）',
     const send = (value: string, source = 'ci.main') =>
       app.request('/events', { ...events(source), headers: { ...bearer(value), ...JSON_HEADERS } });
 
-    nowMs = T0 + 20_000; // 窓の 20 秒目
+    nowMs = T0 + 20_000;
     for (let i = 0; i < 3; i += 1) expect((await send(limited.value)).status).toBe(200);
     await captureStderr(async () => {
       const over = await send(limited.value);
@@ -541,9 +514,7 @@ describe('上限は連携の鍵にだけ掛かる（413・429・Retry-After）',
       nowMs = T0 + 59_000;
       expect((await send(limited.value)).headers.get('retry-after')).toBe('1');
     });
-    // 他の鍵は数えを共有しない。
     expect((await send(other.value, 'ci.other')).status).toBe(200);
-    // 次の窓。
     nowMs = T0 + 60_000;
     expect((await send(limited.value)).status).toBe(200);
     expect(posted.filter((e) => e.type === 'external' && e.source === 'ci.main')).toHaveLength(4);
@@ -567,10 +538,8 @@ describe('上限は連携の鍵にだけ掛かる（413・429・Retry-After）',
 describe('認証が無効の構成でも altk_ には照合と制限が掛かる', () => {
   it('bearer 無しは今までどおり素通し。altk_ は照合され、既定で拒否され、上限が掛かる', async () => {
     const app = buildApp({ enabled: false });
-    // 無効の構成でも発行できる（素通しの operator 扱い）。本文の source 違いの 403 と 413 になった試みも回数に数える（4回のうち2回）。
     const { value } = await issue(app, { name: '無効構成', maxBodyBytes: 100, ratePerMinute: 4 });
 
-    // bearer 無し: 素通し（今までどおり）。
     expect((await app.request('/status')).status).toBe(200);
     expect((await app.request('/events', events('anything'))).status).toBe(200);
 
@@ -677,8 +646,6 @@ describe('稼働状況の図の外部サービスの線（#3676）', () => {
       headers: { ...bearer(value), ...JSON_HEADERS },
     });
     expect(accepted.status).toBe(200);
-    // 偽のクローンは日誌に何も書かない（取り出していない）。それでも受け付けた時刻
-    // （受信箱へ積んだ event.at と同じ値）で光る。
     expect(posted).toHaveLength(1);
     const at = posted[0]!.at;
     const body = await topology(app);
@@ -708,7 +675,6 @@ describe('稼働状況の図の外部サービスの線（#3676）', () => {
       headers: { ...bearer(value), ...JSON_HEADERS },
     });
     expect(accepted.status).toBe(200);
-    // 受信箱には operator の分と鍵の分の2件。光るのは鍵の分の時刻だけ。
     expect(posted).toHaveLength(2);
     const after = await topology(app);
     expect(after.links).toContainEqual({
@@ -717,8 +683,7 @@ describe('稼働状況の図の外部サービスの線（#3676）', () => {
     });
   });
 
-  // 受信箱へ書けずに 503 を返した呼び出しは、クローンに届いていない。光らせると、届いていないものを
-  // 「届いた」と地図が言う（#3679。記録を永続化の前へ戻すと赤になる）。
+  // 記録を永続化の前へ戻さない: 503 で届いていない呼び出しを、地図が「届いた」と光らせてしまうため。
   for (const [label, path] of [
     ['POST /events', '/events'],
     ['POST /events/:source', '/events/ci.main'],
@@ -748,8 +713,7 @@ describe('稼働状況の図の外部サービスの線（#3676）', () => {
     });
   }
 
-  // 503 は「送り直してよい」の約束。添付が死んだ id に結ばれたままだと、同じ添付での送り直しが
-  // attachment_conflict で通らない（#3853。戻す処理を外すと2口とも赤になる）。
+  // 結び付けを戻す処理を外さない: 503 は「送り直してよい」の約束で、添付が死んだ id に結ばれたままだと attachment_conflict で通らないため。
   for (const label of ['POST /events', 'POST /events/:source'] as const) {
     it(`${label}: 添付つきで 503 のあと、同じ添付で送り直すと 200 になる`, async () => {
       const app = buildApp();
@@ -793,12 +757,11 @@ describe('稼働状況の図の外部サービスの線（#3676）', () => {
     });
   }
 
-  // 戻す unbind 自体が投げても、結果は変わらない（#3997）。外へ投げると 503 が 500 に化け、
-  // postPersisted の元の例外も unbind の例外に置き換わる。外すと各口とも赤になる。
+  // unbind の例外は外へ投げない: 503 が 500 に化け、postPersisted の元の例外も置き換わるため。
   for (const label of ['POST /events', 'POST /events/:source'] as const) {
     describe(`${label}: unbind が投げるストア`, () => {
       async function setup() {
-        // メモリ版は私有フィールドを持つので、展開やプロトタイプ継承ではなく、束縛した窓口を通す。
+        // 展開やプロトタイプ継承にしない: メモリ版は私有フィールドを持つため、束縛した窓口を通す。
         const real = stores.attachments;
         const attachments = new Proxy(real, {
           get: (target, prop) => {
@@ -890,7 +853,6 @@ describe('部品', () => {
       ['POST', '/event'],
       ['POST', '/integration-keys'],
       ['PUT', '/events/ci'],
-      // 添付は上げるだけ。読み出し・ほかの形は通さない。
       ['GET', '/attachments'],
       ['GET', '/attachments/x'],
       ['GET', '/attachments/x/meta'],

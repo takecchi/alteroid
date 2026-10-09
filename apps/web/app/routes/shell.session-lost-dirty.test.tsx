@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 書きかけのまま認証が切れても、書きかけを黙って失わない（#3912）。
- *
- * 書きかけが無ければ従来どおり `/login` へ移る（#3892 / #3911 の `state.from` も保つ）。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';

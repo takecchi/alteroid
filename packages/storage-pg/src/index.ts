@@ -56,35 +56,16 @@ export type { Db } from './db.js';
 export * as tables from './schema.js';
 
 /**
- * @alteroid/storage-pg — クラウド用ストレージドライバ（PostgreSQL / drizzle）。
- *
- * fs ドライバと同じ IF を満たす別の器であって、能力の差を作らない。ローカルで
- * 動いたものがそのままコンテナで動くこと（受け入れ基準1）が M4 の要件である。
- *
- * **この接続情報を持つのはデーモンプロセスだけである。** マネージャー子プロセスの
- * 環境変数には渡さない — 上向きの不可視をツール削除ではなく認証情報の配布範囲で
- * 守るのがこの設計の本命で、その強制がここで初めて構造的に成立する
- * （docs/architecture.md「非対称な可視性」）。
+ * 接続情報はデーモンプロセスだけが持つ。マネージャー子プロセスの環境変数には渡さない:
+ * 上向きの不可視を認証情報の配布範囲で守るため（docs/architecture.md「非対称な可視性」）。
  */
 export interface PgStores extends Stores {
-  /**
-   * SDK のセッション永続化先（クローン・マネージャーの生ログ）。
-   *
-   * **`Stores.sessionTranscriptTail` も同じ実体である**（`PgSessionStore` が両方の
-   * 口を持つ）。⟹ 預けた先と、末尾だけ読む先が食い違う形にならない。
-   */
   sessionStore: PgSessionStore;
   db: Db;
-  /** 接続を閉じる。デーモンの停止時に呼ぶ。 */
   close(): Promise<void>;
 }
 
-/**
- * 生ログの預け先と、その末尾だけを読む口。**同じ実体を2つの名前で渡す。**
- *
- * 別々に `new` すると、片方だけ差し替えたときに**預けた先と読む先が食い違う**
- * （そして食い違っても型では落ちない）。
- */
+// 別々に `new` しない: 片方だけ差し替えると預けた先と読む先が食い違い、型では落ちない。
 function sessionStores(db: Db): {
   sessionStore: PgSessionStore;
   sessionTranscriptTail: PgSessionStore;
@@ -94,44 +75,26 @@ function sessionStores(db: Db): {
 }
 
 export interface CreatePgStoresOptions {
-  /** `postgres://user:pass@host:5432/db` */
   url: string;
-  /** 接続プールの上限。既定は node-postgres のまま。 */
   max?: number;
-  /** 添付の置き場の設定（上限・外部ストレージ。#4128 段2）。 */
   attachments?: PgAttachmentStoreOptions;
   /**
-   * 接続の異常を受け取る先。既定は stderr（{@link describePgConnectionError}）。
-   *
-   * **握り潰さない。** node-postgres の Pool は idle 接続のエラー（DB 再起動・
-   * ネットワーク断）を `error` として投げ、受け手が居ないと Node ごと落ちる。
-   * デーモンが落ちれば走行中のマネージャーも巻き添えになる — 常駐は自律の前提
-   * なので、記憶の器の瞬断でクローンを殺さない。
+   * 握り潰さない: Pool は idle 接続のエラーを `error` として投げ、受け手が居ないと
+   * Node ごと落ちる。記憶の器の瞬断でデーモンと走行中のマネージャーを殺さないため。
    */
   onError?: (error: Error) => void;
 }
 
-/**
- * 既定の idle 接続エラーハンドラが書く1行（テストから直接呼べるよう分離。
- * Issue #1229）。
- *
- * **`collapseErrorCause` を通す。** 以前は `error.message` をそのまま出して
- * いたので、SQLSTATE 等の識別子が乗っていても捨てていた——`journal` /
- * `approvals` は同じ `Pool` を共有するので、この1行が「両方の書き込みが
- * 同時に塞がる窓」で残る唯一の跡になりうる（Issue #1229 受け入れ基準2）。
- */
+// `error.message` だけにしない: SQLSTATE 等の識別子が落ちる。`collapseErrorCause` を通す。
 export function describePgConnectionError(error: Error): string {
   return `alteroid: PostgreSQL の接続でエラー: ${collapseErrorCause(error)}\n`;
 }
 
-/** 既存の drizzle ハンドルからストア一式を組む（ドライバを問わない）。 */
 export function createPgStoresFromDb(
   db: Db,
   close?: () => Promise<void>,
   attachmentOptions?: PgAttachmentStoreOptions,
 ): PgStores {
-  // `PgPersonaStore` は保護状態の派生値を失った行を、その場で日誌から
-  // 組み直す（`persona.ts` の `#healRow` の doc）ので journal を要る。
   const journal = new PgJournalStore(db);
   return {
     db,
@@ -161,12 +124,7 @@ export function createPgStoresFromDb(
   };
 }
 
-/**
- * 接続してスキーマを用意し、ストア一式を返す。
- *
- * マイグレーションをここで通すのは、`docker compose up` だけで上がることが
- * 受け入れ基準だからである（人間の手順を足さない）。
- */
+// マイグレーションをここで通す: `docker compose up` だけで上がるようにするため（人間の手順を足さない）。
 export async function createPgStores(options: CreatePgStoresOptions | string): Promise<PgStores> {
   const config = typeof options === 'string' ? { url: options } : options;
   const pool = new Pool({
@@ -174,7 +132,6 @@ export async function createPgStores(options: CreatePgStoresOptions | string): P
     ...(config.max === undefined ? {} : { max: config.max }),
   });
 
-  // idle 接続のエラーを受ける。受けなければ uncaughtException でデーモンごと死ぬ。
   const onError =
     config.onError ??
     ((error: Error) => {
@@ -194,12 +151,7 @@ export async function createPgStores(options: CreatePgStoresOptions | string): P
   );
 }
 
-/**
- * 記憶が空なら種の記憶を1枚だけ置く（fs の `initWorkspace` と同じ役割）。
- *
- * ここでも「確認が要る行為の一覧」は書かない。既定の権限境界を置いた瞬間に、
- * 人による違い＝クローンが記憶として持つべきものが潰れる（PRD「権限境界」）。
- */
+// 「確認が要る行為の一覧」を書かない: 既定の権限境界を置くと、クローンが記憶として持つべき人による違いが潰れる（PRD「権限境界」）。
 export async function seedPgWorkspace(stores: Stores): Promise<boolean> {
   const documents = await stores.persona.list();
   if (documents.length > 0) return false;

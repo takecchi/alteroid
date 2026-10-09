@@ -168,14 +168,7 @@ import {
   type UsageUnmeteredRow,
 } from './usage.js';
 
-/**
- * 台帳の行の鍵。**層と場所を鍵から外さないこと。**
- *
- * クローンは自分のセッション本体と要約の蒸留の両方で使うので、同じ actor・同じ日・
- * 同じモデルで意味の違う行が2つ立つ。鍵が足りないと増分が先にある行へ足し込まれ、
- * 層と場所は先に入った側の値のまま残る ＝ 出力から見分けられない誤帰属になる
- * （`@alteroid/storage-fs` の `rowKey` / pg の一意索引と同じ話）。
- */
+/** 層と場所を鍵から外さない: 同じ actor・日・モデルで意味の違う行が足し込まれ、誤帰属になる。 */
 function usageRowKey(
   date: string,
   managerId: string,
@@ -184,23 +177,14 @@ function usageRowKey(
   site: UsageSite,
   tokenId: string | undefined,
 ): string {
-  // **区切りもドライバと同じ制御文字にする。** 空白にすると、id に空白を含む actor で
-  // この器だけが鍵をぶつける（あるいはぶつけない）＝ 本物と違う結果を静かに返す。
-  //
-  // **トークンも鍵に入れる**（ドライバと同じ）。外すと、回した前後の増分が同じ行へ
-  // 足し込まれる形をこの器だけが通してしまい、誤帰属のテストが緑になる。
+  // 区切りは制御文字、トークンも鍵に入れる（ドライバと同じ）: 変えるとこの器だけ鍵の衝突が本物と違う。
   return `${date}\u0000${managerId}\u0000${model}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
 }
 
-/** 累積の基準の鍵。**主体は「層 × actor」である**（`usage.ts` の `usageBaselineSchema`）。 */
 function usageBaselineKey(layer: UsageLayer, managerId: string): string {
   return `${layer}\u0000${managerId}`;
 }
 
-/**
- * 「起きた回数」の鍵。**`model` を持たない4軸+トークン**（ドライバの `turnKey` /
- * `usageTurns` の一意索引と同じ軸。`usage.ts` の `usageTurnRowSchema` の doc）。
- */
 function usageTurnKey(
   date: string,
   managerId: string,
@@ -211,26 +195,14 @@ function usageTurnKey(
   return `${date}\u0000${managerId}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
 }
 
-/**
- * 照会範囲の一部でも始点より前にかかっていたか（台帳の始点にも層の軸の始点にも使う）。
- *
- * **ドライバと同じ3分岐にすること。** 一度も記録していなければ始まっている期間が
- * そもそも無いので常に真、下限の無い照会（`from` 省略）はその前を含みうるので真、
- * 下限があるときだけ始点の日付と比べる。fs / pg の `isBeforeLedger` と同じ判断で、
- * 器ごとに置いてあるのも同じ理由である（どちらのドライバの内部実装にも属さない補助）。
- */
+/** ドライバ（fs / pg の `isBeforeLedger`）と同じ3分岐にする: 器だけ違う判断をすると本物と違う結果を返す。 */
 function isBeforeUsageStart(start: string | null, from: string | undefined): boolean {
   if (start === null) return true;
   if (from === undefined) return true;
   return from < usageDate(new Date(start));
 }
 
-/**
- * `createMemoryStores()` が作った `archive`（`TranscriptArchive`）ごとの内部
- * 状態への裏口（#698）。**`TranscriptArchive` interface にはメソッドを足さ
- * ない**——足すと3実装（インメモリ / fs / pg）すべてに同じメソッドが要ることに
- * なる。この `WeakMap` は `seedFingerprintlessArchiveRow` のためだけに在る。
- */
+/** `TranscriptArchive` にメソッドを足さない: 足すと3実装すべてに要る。この裏口は `seedFingerprintlessArchiveRow` 専用。 */
 const archiveInternalsRegistry = new WeakMap<
   TranscriptArchive,
   {
@@ -249,15 +221,7 @@ const archiveInternalsRegistry = new WeakMap<
   }
 >();
 
-/**
- * インメモリ実装（`createMemoryStores().archive`）に、**指紋を持たない行**を
- * 直接登録する（#698）。`archive()` を経由すると必ず指紋が付くので、
- * この機能より前に積まれた行（本番の5.4GBの既存行）を再現するにはこの口が
- * 要る——`verifyTranscriptArchiveContract` の `seedFingerprintlessRow` に渡す
- * ためのものであり、`archive-contract.test.ts` 以外から呼ぶ想定は無い。
- *
- * `createMemoryStores()` が作った `archive` 以外を渡すと例外を投げる。
- */
+/** 指紋を持たない行を直接登録する。`archive()` 経由だと必ず指紋が付くので、指紋導入前の既存行の再現にはこの口が要る。 */
 export async function seedFingerprintlessArchiveRow(
   archive: TranscriptArchive,
   sessionId: string,
@@ -271,8 +235,7 @@ export async function seedFingerprintlessArchiveRow(
   }
   const id = `${sessionId}-fingerprintless-${internals.archiveMeta.size}`;
   internals.archives.set(id, body);
-  // **意図して bodyChars / bodyMd5 / continuity を入れない**——指紋を持たない
-  // 行を再現するのがこの関数の目的である。
+  // bodyChars / bodyMd5 / continuity を入れない: 指紋の無い行を作るのが目的。
   internals.archiveMeta.set(id, {
     sessionId,
     at: new Date().toISOString(),
@@ -281,33 +244,16 @@ export async function seedFingerprintlessArchiveRow(
   return id;
 }
 
-/**
- * テスト用のインメモリストア。storage-fs の代わりに core のテストで使う。
- * 本番の配線には出てこない（永続化は必ずドライバ側）。
- */
+/** テスト用のインメモリストア。本番の配線には出ない。 */
 export function createMemoryStores(): Stores {
   const documents = new Map<string, MemoryDocument>();
-  // 保護状態（human guard）の派生値。fs / pg と同じ形（新しい真実ではなく、
-  // journal.append(cause:'human') 相当の呼び出しから反映される派生値）。
   const humanTouchedAt = new Map<string, string>();
   const contentSha256 = new Map<string, string>();
-  // #170（記憶の目次化）の派生値。fs の `.index.json` / pg の `described_at`
-  // 列と同じ形——書き手は書けず、write() が新旧の description を比べて進める。
   const describedAt = new Map<string, string>();
-  // #913 / #821 残課題: 基準点。fs の `.index.json` の `describedBytes` /
-  // pg の `described_bytes` 列と同じ形。**`describedAt` と必ず同時に進む
-  // わけではない**——本文だけの書き込みでも、基準点が無ければここが立つ
-  // （`nextDescribedState` の doc の分岐3）。
+  // `describedAt` と必ず同時に進むわけではない: 本文だけの書き込みでも基準点が無ければ立つ。
   const describedBytes = new Map<string, number>();
-  // #821 残課題: `describedBytes` を測った時刻。fs の `.index.json` の
-  // `describedBytesAt` / pg の `described_bytes_at` 列と同じ形。
   const describedBytesAt = new Map<string, string>();
-  // 記憶の `createdAt`。fs の `.index.json` / pg の `created_at` 列と同じ形
-  // ——素の optional。「unknown」という値をここへ書き込まない。値が無いのは
-  // (1) この配線より前に作られ (2) 日誌にも根拠が無い、両方を満たす昔の行
-  // だけである（`read()` / `list()` が組み立てる）。値が入る経路は2つ——
-  // `write()` がその場で立てる（第一の出所）か、`markCreatedAt`（backfill）
-  // が日誌から埋めるかのどちらか。
+  // 「unknown」という値を書き込まない: 値が無い行は素の optional のまま `read()` / `list()` が組み立てる。
   const createdAtStore = new Map<string, string>();
   const entries: JournalEntry[] = [];
   const jobs = new Map<string, Job>();
@@ -317,22 +263,11 @@ export function createMemoryStores(): Stores {
   const schedulePhases = new Map<string, SchedulePhase>();
   const commitments = new Map<string, Commitment>();
   const practices = new Map<string, Practice>();
-  /**
-   * やり方の追記専用の版の履歴（#1309）。**`practices` の削除に連動しない**
-   * ——slug ごとに配列を持ち、`remove()` で `practices` から消えても、ここは
-   * そのまま残る。番号は `write()` のたびに配列末尾へ足すだけなので、自然に
-   * 1始まりの連番かつ「消える前の続きから」になる（消しても配列を切り詰めない）。
-   */
+  // `practices` の削除に連動しない: `remove()` 後も配列を切り詰めず、番号は消える前の続きから振る。
   const practiceVersions = new Map<string, PracticeVersion[]>();
   const archives = new Map<string, string>();
-  /** tombstone（#698）。行（`archives` のキー）は消さず、ここへ印だけを持つ。 */
   const archiveRemovals = new Map<string, { removedAt: string; bytes: number }>();
-  /**
-   * `list()` / `sessions()` が返すメタ（#698）。**本文（`archives`）とは別に持つ**
-   * ——tombstone で本文が `''` になっても `sessionId` と `at` は残る（pg 側で
-   * 列が残るのと同じ）。`seq` は積んだ順で、`at` が同じミリ秒に並んだときの
-   * 並びを決めるためだけに在る（pg 側の `order by at desc, id desc` の代わり）。
-   */
+  // 本文（`archives`）とは別に持つ: tombstone で本文が空になっても `sessionId` と `at` は残る。
   const archiveMeta = new Map<
     string,
     {
@@ -357,23 +292,7 @@ export function createMemoryStores(): Stores {
   const toMemoryCreatedAt = (at: string | undefined): MemoryCreatedAt =>
     at === undefined ? { kind: 'unknown' } : { kind: 'known', at };
 
-  /**
-   * **本物（fs の `#checkSlug` / pg の `#slug`）と同じ slug の検査を掛ける。**
-   * かつてはインメモリだけが何でも受け付けたので、クローンの道具へ不正な
-   * slug を渡す歯が本物では例外になる入力を「書けた」として通していた
-   * （2026-09-26 のバグ探しで見つけた差、#1640）。
-   *
-   * **掛けるのは `read` / `write` / `append` / `remove` / `protectionStatus`
-   * / `markHumanTouched` / `markCreatedAt` の全部である（issue #1700）。**
-   * かつてここは「fs と pg の両方が検査しているメソッドだけに掛ける。片方
-   * だけが検査するメソッドまで締めると、今度は本物より厳しい逆向きの差に
-   * なる」と断っていたが、それは現物と食い違っていた——`protectionStatus`
-   * は pg だけが検査し、`markHumanTouched` / `markCreatedAt` は pg が直接
-   * 検査し、fs も（`read()` 経由の間接検査で）実質的に検査していた。**3実装
-   * とも検査しているのに、インメモリだけが検査していない**という #1634 と
-   * 同じ形の穴が3つとも残っていたので、#1700 で fs 側の間接検査を直接検査に
-   * 直したうえで、この3メソッドもここへ含めた。文言も本物と同じにする。
-   */
+  /** 本物と同じ slug 検査を全メソッドに掛ける（文言も同じ）: 外すと本物で例外になる入力を「書けた」として通す。 */
   const checkMemorySlug = (slug: string): void => {
     if (!memorySlugSchema.safeParse(slug).success) throw new Error(`記憶のスラッグが不正: ${slug}`);
   };
@@ -396,10 +315,7 @@ export function createMemoryStores(): Stores {
             slug,
             title,
             updatedAt,
-            // **書き込み時にキャッシュした値ではなく、その場で組み立てる。**
-            // fs（索引を都度読む） / pg（列を都度 SELECT する）と同じく、
-            // `markCreatedAt` が write() の後に別途反映されても読み出しに
-            // 反映されるようにするため。
+            // 書き込み時にキャッシュしない: `markCreatedAt` が write() の後に反映されても読み出しに出るようにする。
             createdAt: toMemoryCreatedAt(createdAtStore.get(slug)),
             bytes,
             frontmatter,
@@ -420,7 +336,6 @@ export function createMemoryStores(): Stores {
     async write(slug, content, options) {
       checkMemorySlug(slug);
       const before = documents.get(slug);
-      // 前提の版（Issue #2743）。fs / pg と同じ挙動——合わなければ書かずに投げる。
       if (!memoryVersionMatches(before ?? null, options?.ifMatch)) {
         throw new MemoryConflictError(
           slug,
@@ -430,24 +345,10 @@ export function createMemoryStores(): Stores {
         );
       }
       const updatedAt = new Date().toISOString();
-      // **保存する形へ正規化してから、以降は正規化した本文だけを使う。**
-      // `PersonaStore.write` の契約（`store.ts`）であり、fs（`#writeNow` が
-      // `writeFile` へ渡す直前）/ pg（`write` が `body` を作る所）と同じ位置に
-      // ある。**ここが無かったせいで、同じ `write` に対して `read` が返す値が
-      // インメモリだけ違っていた**（#370）。派生値（title / bytes / 要旨 /
-      // ハッシュ）も本物と同じく正規化した後の本文から作る——`bytes` は fs では
-      // ファイルの `stats.size` なので、正規化前の長さを数えると本物と1バイト
-      // ずれる。
+      // 正規化は `PersonaStore.write` の契約（`store.ts`）: 派生値（title / bytes / 要旨 / ハッシュ）も
+      // 正規化後の本文から作る。正規化前の長さで `bytes` を数えると fs の `stats.size` と1バイトずれる。
       const body = ensureTrailingNewline(stripNul(content));
-      // **write() と append()（下）の唯一の通り道。** fs / pg と同じく、誰が
-      // 書いたかを問わずここでハッシュ・describedAt/describedBytes を更新する。
-      // human 印には触らない。describedAt/describedBytes は書き手が書けない
-      // （`nextDescribedState` の doc）。
-      // **`createdAt` は本物（fs / pg）と同じく、この書き込みが文書を作った
-      // ときだけ立てる。** `before === undefined`（＝この slug の実体が
-      // 無かった）かつ、まだ値を持っていないときだけ set する——一度立てたら
-      // 二度と触らない一度きりの確定（`markCreatedAt` による backfill は昔の
-      // 行の後始末で、ここでは何もしない）。
+      // `createdAt` は文書を作った書き込みでだけ、一度だけ立てる（`markCreatedAt` の backfill とは別）。
       if (before === undefined && !createdAtStore.has(slug)) createdAtStore.set(slug, updatedAt);
       const writtenBytes = Buffer.byteLength(body);
       const next = nextDescribedState({
@@ -495,13 +396,7 @@ export function createMemoryStores(): Stores {
     async append(slug, content) {
       checkMemorySlug(slug);
       const existing = documents.get(slug);
-      // **既存の本文を `ensureTrailingNewline` に通してから連結する。** 上の
-      // `write` が既に正規化しているので冗長に見えるが、fs
-      // （`ensureTrailingNewline(existing.content)` ＋ `#writeNow` の正規化）/
-      // pg（`right(content, 1) = E'\n'` の場合分け ＋ `write` の正規化）と
-      // 同じ二重の守りに揃えてある。**片方だけ外しても追記の歯は落ちない**
-      // ——落ちないことは「守られていない」ではなく、もう片方が効いていると
-      // いう意味である（#354 の変異試験が fs / pg で実測した形）。
+      // `ensureTrailingNewline` を外さない: `write` の正規化と重複して見えるが、fs / pg と同じ二重の守りに揃えてある。
       return persona.write(
         slug,
         existing ? `${ensureTrailingNewline(existing.content)}\n${content}` : content,
@@ -519,8 +414,6 @@ export function createMemoryStores(): Stores {
         );
       }
       documents.delete(slug);
-      // fs / pg と同じく、実体が消えれば派生値も消える（過去に human で書かれた
-      // 事実そのものは journal に残るので、backfill が立て直す）。
       humanTouchedAt.delete(slug);
       contentSha256.delete(slug);
       describedAt.delete(slug);
@@ -539,32 +432,22 @@ export function createMemoryStores(): Stores {
     },
     async markHumanTouched(slug, at) {
       checkMemorySlug(slug);
-      // 実体も索引も無い slug には新しく行を作らない（fs / pg と同じ約束）。
       if (!documents.has(slug) && !humanTouchedAt.has(slug)) return;
       const prior = humanTouchedAt.get(slug);
       if (prior === undefined || at > prior) humanTouchedAt.set(slug, at);
     },
     async markCreatedAt(slug, at) {
       checkMemorySlug(slug);
-      // 実体も index も無い slug には新しく行を作らない（`markHumanTouched` と
-      // 同じ約束）。**一度きりの確定**——既に値が入っていれば何もしない
-      // （絶対条件2「埋めるのは値が無いときだけ」。fs / pg と同じ）。
       if (!documents.has(slug) && !createdAtStore.has(slug)) return false;
       if (createdAtStore.has(slug)) return false;
       createdAtStore.set(slug, at);
       return true;
     },
-    // **`slug` 昇順で、本文ごと返す。** ここが本物（fs / pg）と同じ順序・同じ中身で
-    // ないと、上の層の「どの文書が変わったか」がテストでは確かめられない。
-    // かつてここは `concat()` で、しかも本物と違って `<!-- memory: slug.md -->` の
-    // 見出しを付けていなかった（AGENTS.md「固定値を返すスタブはテストを緑にしたまま
-    // 分岐を殺す」の一例。載せ方が core へ移ったので、この食い違いは構造的に消えた）。
     async documents() {
       const metas = await persona.list();
       const found: MemoryDocument[] = [];
       for (const meta of metas) {
-        // `read()` を通す——`documents` の生キャッシュには `markCreatedAt` が
-        // 別途反映した最新の `createdAt` が乗っていない（`read()` の doc）。
+        // `read()` を通す: `documents` の生キャッシュには `markCreatedAt` 後の `createdAt` が乗らない。
         const doc = await persona.read(meta.slug);
         if (doc) found.push(doc);
       }
@@ -583,7 +466,7 @@ export function createMemoryStores(): Stores {
     },
   };
 
-  // 積んだ行から墓標の集合を導く（#4218）。別に持たないので、`clear()` と食い違わない。
+  // 墓標の集合は積んだ行から導く: 別に持つと `clear()` と食い違う。
   const deletedConversationIds = (): Set<string> =>
     new Set(
       entries.flatMap((entry) =>
@@ -593,30 +476,23 @@ export function createMemoryStores(): Stores {
 
   const journal: JournalStore = {
     async append(input: JournalEntryInput) {
-      // fs（`FsJournalStore.append`）/ pg（`PgJournalStore.append`）と同じく、
-      // 形の崩れた entry を書く前に拒む（issue #1668。InboxStore.put と同じ穴）。
-      // 日誌の本文の NUL は落として残す（issue #3011。pg の `stripNulls` と同じ）。
       const entry = journalEntrySchema.parse({
         ...stripNulDeep(input),
         id: nextId(),
         at: new Date().toISOString(),
       });
       entries.push(entry);
-      // **返すのは写しである**（#1072）。返した行を呼び出し元が書き換えると、
-      // fs / pg では店は汚れないが、ここでは汚れていた。
+      // 写しを返す: 呼び出し元の書き換えで店が汚れるのは fs / pg と違う。
       return isolate(entry);
     },
     async list(query: JournalQuery = {}) {
-      // **`order` は全順序を決めるところで最初に効かせる。** 既定 `desc` は
-      // 従来どおり push の逆順（新しい順）。`asc` は push 順そのまま。
+      // `order` は全順序を決めるところで最初に効かせる: 既定 `desc` は push の逆順、`asc` は push 順そのまま。
+      // 件数で切る（下の slice）より後だと反対側の端を切る。
       const order = query.order ?? 'desc';
       let found = (order === 'desc' ? [...entries].reverse() : [...entries]).map(isolate);
       const tombstoned = deletedConversationIds();
 
-      // **`after` は `types` / `with` / `since` / `until` / `limit` より前に
-      // 効かせる**（`JournalQuery.after` の doc、issue #432 の2本目）。錨の
-      // 位置は絞り込み前の全順序の中で決める——見つからなければ
-      // `JournalAnchorNotFoundError` を投げる（黙って先頭から返さない）。
+      // `after` は絞り込みより前に効かせる: 錨の位置は絞り込み前の全順序で決める。見つからなければ黙って先頭から返さず投げる。
       if (query.after !== undefined) {
         const after = query.after;
         const anchorIndex = found.findIndex(
@@ -631,8 +507,7 @@ export function createMemoryStores(): Stores {
       }
 
       if (query.types) found = found.filter((entry) => query.types?.includes(entry.type));
-      // **墓標のある会話の `exchange` は `limit`（下の slice）より前で外す**（#4218。
-      // `with` と同じ段。後ろで外すと窓が短くなり、`reachedStart` が誤る）。
+      // 墓標のある会話の `exchange` は `limit` より前で外す: 後ろで外すと窓が短くなり `reachedStart` が誤る。
       found = found.filter(
         (entry) =>
           !(
@@ -641,18 +516,14 @@ export function createMemoryStores(): Stores {
             tombstoned.has(entry.conversationId)
           ),
       );
-      // **`with` は `limit`（下の slice）より前で効かせる**（issue #418 の穴の本体）。
-      // `with` を持つのは `exchange` だけなので、非 exchange はここで落ちる —
-      // `types` を明示していなくても、`with` を指定した時点で絞られる。
+      // `with` は `limit` より前で効かせる。
       if (query.with !== undefined) {
         const withValues = query.with;
         found = found.filter(
           (entry) => entry.type === 'exchange' && withValues.includes(entry.with),
         );
       }
-      // **`q` も `limit`（下の slice）より前で効かせる**（issue #250。
-      // `with` と同じ段）。照合そのものは `journal-search.ts` が持つ —— 3実装が
-      // 同じ答えを出すために、欄の選び方をここへ書き写さない。
+      // 照合は `journal-search.ts` に任せる: 欄の選び方をここへ書き写すと3実装の答えがずれる。
       if (query.q !== undefined) {
         const q = query.q;
         found = found.filter((entry) => matchesJournalSearch(entry, q));
@@ -682,8 +553,6 @@ export function createMemoryStores(): Stores {
       return found;
     },
     async oldestAt() {
-      // `entries` は push 順＝追記順そのもの（`list()` の `order:'asc'` と
-      // 同じ前提）。先頭が最古——全件走査ではなく1要素を見るだけで済む。
       return entries[0]?.at ?? null;
     },
     async clear() {
@@ -694,24 +563,9 @@ export function createMemoryStores(): Stores {
   };
 
   /**
-   * **境界で写しを取る**（#1072）。
-   *
-   * ## なぜ偽物にこれが要るのか
-   *
-   * **fs / pg は JSON を経由するので必ず写しになる**（ファイルへ書いて読み直す /
-   * jsonb へ入れて取り出す）。この偽物が `Map` に参照をそのまま入れていたあいだ、
-   * **「台帳から読んで書き換える」形のコードが、呼び出し元が握っている同じ
-   * オブジェクトまで書き換えていた** —— ⟹ その差に依存するバグが、歯の上では
-   * 起きない。**本番でだけ壊れる。**
-   *
-   * ⭐ **実際に歯を殺した（#1054 の作業中に変異試験で発見）。**
-   * `ManagerPool` の孤児ジョブ分岐の踏み消しを測る歯へ、わざと壊す変異を当てても
-   * **6件とも緑のまま**だった。契約は `store-isolation-contract.ts` が持つ。
-   *
-   * **`structuredClone` を使う。** ここに入るのは zod を通った素のデータだけで
-   * （関数も class も入らない）、`JSON.parse(JSON.stringify(...))` と違って
-   * `undefined` の欄を落とさない —— 落とすと「無い」と「undefined として在る」の
-   * 区別が偽物の側だけで消える。
+   * 境界で写しを取る: fs / pg は JSON を経由して必ず写しになるので、参照を返すと本番でだけ壊れるバグを歯が通す
+   * （契約は `store-isolation-contract.ts`）。`JSON.parse(JSON.stringify(...))` にしない:
+   * `undefined` の欄が落ち、「無い」と「undefined として在る」の区別が偽物の側だけで消える。
    */
   const isolate = <T>(value: T): T => structuredClone(value);
 
@@ -719,37 +573,24 @@ export function createMemoryStores(): Stores {
     async listJobs() {
       return [...jobs.values()].map(isolate);
     },
-    // 読めない行は持てない（`putJob` がスキーマを通す）ので常に空（issue #2345）。
     async listUnreadableJobs() {
       return [];
     },
     async putJob(job) {
-      // 本物（fs / pg）と同じく `jobSchema` を通す（issue #1715。同じストアの
-      // `updateJob` は #1652 で先に直っていたが、`putJob` だけ食い違って残った）。
       jobs.set(job.id, isolate(prepareJobForWrite(jobSchema.parse(job))));
     },
-    // **判定と書き込みのあいだに `await` を1つも挟まないこと（issue #1041 と
-    // 同じ理由）。** プロセス内の `Map` は同期アクセスなので、fs の
-    // `withPathLock` / pg の `select … for update` に相当する排他は要らない
-    // ——読みと書きの間に他の呼び出しが割り込む隙間が無い（Issue #1674。
-    // `JobStore.updateJob` の doc）。
+    // 判定と書き込みのあいだに `await` を挟まない: 同期の `Map` なので、これで fs / pg の排他の代わりになる。
     async updateJob(id, mutate) {
       const found = jobs.get(id);
       if (found === undefined) return null;
-      // `mutate` へは独立したコピーを渡す（`isolate`）——`mutate` が引数を
-      // その場で書き換えて返す形（`ManagerPool` の孤児ジョブ分岐と
-      // 同じ書き方）でも、`jobSchema.parse` が投げて書き込みに至らなかった
-      // ときに `Map` の中身を汚さないため。
-      // 本物（fs / pg）と同じく `jobSchema` を通す（issue #1652 と同じ理由）。
+      // `mutate` へは写しを渡す: 引数をその場で書き換えて返す形で `parse` が投げても `Map` を汚さない。
       const next = prepareJobForWrite(jobSchema.parse(mutate(isolate(found))));
       jobs.set(id, isolate(next));
       return isolate(next);
     },
     async listApprovals(options = {}) {
       const all = [...approvals.values()].map(isolate);
-      // 未回答かつ未取り下げだけを「保留」とする（#963。3実装で揃える）。
-      // 読めない行は持てない（`putApproval` がスキーマを通す）ので `unreadable` は常に空。
-      // `conversationId` の絞りも同じ（#3290。`unreadable` は絞らない）。
+      // `unreadable` は絞らない。
       const pending = options.pendingOnly
         ? all.filter((a) => a.answeredAt === undefined && a.withdrawnAt === undefined)
         : all;
@@ -765,19 +606,13 @@ export function createMemoryStores(): Stores {
       const found = approvals.get(id);
       return found === undefined ? null : isolate(found);
     },
+    // 並びは `Map` の挿入順で、pg の `createdAt` 昇順とは違う: 呼び出し側は `order` を明示して揃える。
     async putApproval(approval) {
-      // 本物（fs / pg）と同じく `pendingApprovalSchema` を通す（issue #2012。
-      // `putJob`（#1715）・`updateApproval`（#2007。すぐ下）は先に直っていたが、
-      // `putApproval` だけ食い違って残った）。
       approvals.set(
         approval.id,
         isolate(prepareApprovalForWrite(pendingApprovalSchema.parse(approval))),
       );
     },
-    // `updateJob`（すぐ上）と同じ理由・同じ形（issue #2007）——プロセス内の
-    // `Map` は同期アクセスなので、判定と書き込みのあいだに `await` を挟まなければ
-    // 排他は要らない。`mutate` が `null` を返したら何も書かない
-    // （`JobStore.updateApproval` の doc「`updateJob` には無い拡張」）。
     async updateApproval(id, mutate) {
       const found = approvals.get(id);
       if (found === undefined) return null;
@@ -797,7 +632,6 @@ export function createMemoryStores(): Stores {
 
   const scheduleStore: ScheduleStore = {
     async list() {
-      // 読めない行は持てない（`put` がスキーマを通す）ので `unreadable` は常に空。
       return {
         entries: [...schedules.values()]
           .sort((a, b) => compareCodeUnits(a.kind, b.kind))
@@ -810,7 +644,6 @@ export function createMemoryStores(): Stores {
       return found === undefined ? null : isolate(found);
     },
     async put(entry, options) {
-      // 前提の版（Issue #3821）。同期の区間なので比較と書き込みの間に割り込みは無い。
       const current = schedules.get(entry.kind);
       if (!scheduleVersionMatches(current ?? null, options?.ifMatch)) {
         throw new ScheduleConflictError(
@@ -818,10 +651,6 @@ export function createMemoryStores(): Stores {
           current === undefined ? null : isolate(current),
         );
       }
-      // 本物（fs / pg）と同じく `scheduledRequestSchema` を通す（issue #1652）。
-      // かつてはインメモリだけが何でも受け付けたので、`request` が空文字の
-      // ような形式不正な entry も「書けた」として通していた。
-      // kind の NUL は入口のスキーマが弾く。本文は落として残す（issue #3011）。
       schedules.set(
         entry.kind,
         isolate(scheduledRequestSchema.parse({ ...entry, request: stripNul(entry.request) })),
@@ -831,30 +660,18 @@ export function createMemoryStores(): Stores {
       schedules.delete(kind);
     },
     async removeIfPresent(kind) {
-      // `ScheduleStore.removeIfPresent` の doc（issue #1982）。この足場は
-      // `scheduledRequestSchema.parse` を通った値しか `Map` に持たない
-      // （`put` を見よ）ので、`'unreadable'` は本物（fs / pg）の壊れた行を
-      // 模すテストが `stores.schedules` を差し替えたときにしか出ない——
-      // ここでは常に「在って読めた」か「無かった」の2値になる。
+      // `'unreadable'` を返さない: `Map` には `parse` を通った値しか入らない。
       const found = schedules.get(kind);
       if (found === undefined) return null;
       schedules.delete(kind);
       return isolate(found);
     },
     async editRequest(kind, changes, updatedAt, options) {
-      // fs / pg と同じ形（Issue #1654）——現在値（この in-memory 実装では常に
-      // 最新の `Map` の値そのもの）から `pendingRun` / `lastRunAt` /
-      // `lastScheduledRunAt` / `createdAt` を引き継ぐ。プロセス内の `Map` は
-      // 同期アクセスなので、fs の `withPathLock` / pg の `for update` に相当する
-      // 排他は要らない——読みと書きの間に他の呼び出しが割り込む隙間が無い。
       const found = schedules.get(kind);
-      // 前提の版（Issue #3821）。無い kind への `null` は従来どおり（呼び出し側が作る）。
       if (!scheduleVersionMatches(found ?? null, options?.ifMatch)) {
         throw new ScheduleConflictError(kind, found === undefined ? null : isolate(found));
       }
       if (!found) return null;
-      // 本物（fs / pg）と同じく `scheduledRequestSchema` を通す（issue #1652 と
-      // 同じ理由）。
       const next = scheduledRequestSchema.parse({
         ...found,
         request: stripNul(changes.request),
@@ -885,8 +702,7 @@ export function createMemoryStores(): Stores {
     },
     async putPhase(phase) {
       assertNoNul('schedulePhase.kind', phase.kind);
-      // **本物と同じく parse を通す。** 通さないと、この足場でだけ通る形の位相を
-      // 書いたテストが緑になり、fs / pg では落ちる（動くのに嘘をつくスタブ）。
+      // parse を外さない: この足場でだけ通る形の位相を書いたテストが緑になり、fs / pg では落ちる。
       schedulePhases.set(phase.kind, schedulePhaseSchema.parse(phase));
     },
     async clear() {
@@ -897,37 +713,21 @@ export function createMemoryStores(): Stores {
     },
   };
 
-  /**
-   * 引き受けたまま終わっていない仕事の台帳。
-   *
-   * **`open` の冪等性を本物と同じにしてあること。** ここを「常に上書き」にすると、
-   * 配り直しで閉じた未了が開き直る壊れ方がテストから見えなくなる（本物の器では
-   * 起きるのに、テストは緑のまま通る）。
-   */
+  // `open` の冪等性を本物と同じにする: 「常に上書き」だと、配り直しで閉じた未了が開き直る壊れ方がテストから見えない。
   const commitmentStore: CommitmentStore = {
     async list(options) {
       const all = [...commitments.values()].map(isolate);
       const open = all
         .filter((entry) => entry.closedAt === undefined)
-        // 実時刻で比べる（issue #2451。`compareIsoInstant` の doc——文字列比較だと
-        // オフセット表記の違う行で pg の `asc(at)` と並びが食い違う）
+        // 実時刻で比べる: 文字列比較だとオフセット表記の違う行で pg の `asc(at)` と並びが食い違う
         .sort((a, b) => compareIsoInstant(a.at, b.at));
-      // **この偽物は `unreadable` を常に空にする。** ここが持つのは常に
-      // `commitmentSchema.parse` を経た `Commitment` だけで（`open()` を見よ）、
-      // 保存層のように行が壊れた形で入る経路が無い。`entries` /
-      // `unreadable` という型そのものは本物と揃えること（issue #296。
-      // `CommitmentStore.list` の返り値、`store.ts` の `CommitmentList`）。
-      //
-      // **`trimmedClosed` も常に `0`。** ここは `Map` に溜まるだけで、
-      // 保持上限も削除経路も無い——fs 版（`storage-fs/src/commitments.ts`）
-      // だけが `CLOSED_HISTORY_LIMIT` を超えた片付き行を物理削除する
-      // （issue #416）。ここを揃えていないので、fs だけを踏む歯はこの
-      // 偽物では書けない（`packages/storage-fs/src/index.test.ts` 側で書く）。
+      // `unreadable` は常に空: ここは `commitmentSchema.parse` を経た行しか持たない。
+      // `trimmedClosed` も常に `0`: 保持上限も削除経路も無い（fs だけが `CLOSED_HISTORY_LIMIT` を超えた行を消す）。
+      // fs だけを踏む歯はこの偽物では書けない。
       if (options?.includeClosed !== true)
         return { entries: open, unreadable: [], trimmedClosed: 0 };
       const closed = all
         .filter((entry) => entry.closedAt !== undefined)
-        // 実時刻の降順（issue #2451。pg の `desc(closedAt)` と揃える）
         .sort((a, b) => compareIsoInstant(b.closedAt ?? '', a.closedAt ?? ''));
       return { entries: [...open, ...closed], unreadable: [], trimmedClosed: 0 };
     },
@@ -935,17 +735,9 @@ export function createMemoryStores(): Stores {
       const found = commitments.get(id);
       return found === undefined ? null : isolate(found);
     },
-    // **判定と書き込みのあいだに `await` を1つも挟まないこと（issue #1041）。**
-    // ここが原子なのは「同期のまま最後まで書く」からであって、`async` が
-    // 守ってくれるからではない——途中に `await` を入れた瞬間、同じストアを
-    // 共有する2つの `Clone` のあいだで本物の器と同じ競合が生まれる。
+    // 判定と書き込みのあいだに `await` を挟まない: 原子なのは同期のまま書くからで、挟むと2つの `Clone` のあいだで競合が生まれる。
     async open(entry) {
-      // 本物（fs / pg）と同じく `commitmentSchema` を通す（issue #1652）。
-      // かつてはインメモリだけが何でも受け付けたので、`at` が ISO 8601 で
-      // ないような形式不正な entry も「開けた」として通していた。
-      // ⚠️ 同期のまま最後まで判定して書く（`await` を挟まない）——`.parse()`
-      // は同期なので、直上のコメント（issue #1041）の性質を壊さない。
-      // id（鍵）の NUL は断り、本文と source（出所の注記。鍵ではない）は落として残す（issue #3011）。
+      // id（鍵）の NUL は断り、本文と source（鍵ではない）は落として残す。
       assertNoNul('commitment.id', entry.id);
       const parsed = commitmentSchema.parse({
         ...entry,
@@ -969,11 +761,7 @@ export function createMemoryStores(): Stores {
       });
       return true;
     },
-    // **本物（fs / pg）と同じ意味論——実際に閉じた id だけを返す。** 存在しない
-    // id・既に閉じている id は戻り値に含めない。`ids` が空なら何も変えずに
-    // `[]` を返す（本物と同じく、この偽物も `Map` へ一切触れない）。同じ id が
-    // 重複していても `Map` の1エントリを一度書き換えるだけなので、二重に閉じる
-    // ことも戻り値に重複が出ることも無い（`CommitmentStore.closeMany` の doc）。
+    // 実際に閉じた id だけを返す。重複 id は `Set` で畳む（`CommitmentStore.closeMany` の doc）。
     async closeMany(ids: readonly string[], at, reason, by: CommitmentClosedBy) {
       const closedIds: string[] = [];
       for (const id of new Set(ids)) {
@@ -989,8 +777,7 @@ export function createMemoryStores(): Stores {
       }
       return closedIds;
     },
-    // **`origin` の判定はしない**（`CommitmentStore.editBody` の doc）。呼び出し側
-    // （`apps/daemon/src/app.ts` の `PATCH /commitments/:id`）が確かめてから呼ぶ。
+    // `origin` の判定はしない: 呼び出し側（`PATCH /commitments/:id`）が確かめてから呼ぶ（`CommitmentStore.editBody` の doc）。
     async editBody(id, body, at, by: CommitmentEditedBy, options) {
       const existing = commitments.get(id);
       if (!existing && options?.ifMatch !== undefined) throw new CommitmentConflictError(id, null);
@@ -1001,7 +788,6 @@ export function createMemoryStores(): Stores {
       commitments.set(id, { ...existing, body: stripNul(body), editedAt: at, editedBy: by });
       return true;
     },
-    // `origin: human` かつ `source === conversationId` の行を、未了・片付いたの両方とも物理的に消す（#4218）。
     async removeForConversation(conversationId) {
       if (hasNul(conversationId)) return 0;
       let removed = 0;
@@ -1021,20 +807,9 @@ export function createMemoryStores(): Stores {
   };
 
   /**
-   * `list()` と `sessions()` が共通で使う1行の組み立て（#698）。2箇所に同じ
-   * 組み立てを書くと、片方だけ直したときに黙ってズレるため1つにまとめてある。
-   *
-   * **`storedBytes` は文字列長である**（この置き場がこの行に使っている量）。
-   * pg の圧縮後バイト数・fs のファイル長とは単位が違う——`ArchiveEntry` の
-   * doc のとおり、置き場をまたいで比較してはならない。
-   *
-   * 並びは新しい順（`at` の降順）。**同じミリ秒で違うセッションなら `sessionId` の
-   * 昇順、同じセッションなら積んだ順の降順**——fs / pg が共有する
-   * `compareArchiveEntriesNewestFirst`（`archive-id.ts`）と同じ規則にそろえる。以前は
-   * 同着をセッションを問わず積んだ順で並べていて、違うセッションの同着だけ fs / pg と
-   * 並びが食い違っていた（契約テストはこの形を一度も作っていなかった）。共有の関数を
-   * そのまま使わないのは、インメモリの id（`<sessionId>-id-<n>`）が枝番の形を持たず、
-   * 同じセッション内の同着を `archiveIdBranch` で決められないからである。
+   * 並びは `compareArchiveEntriesNewestFirst`（`archive-id.ts`）と同じ規則（同着は `sessionId` 昇順、
+   * 同じセッションなら積んだ順の降順）。共有の関数を使わない: 同じセッション内の同着を `archiveIdBranch` で決められない。
+   * `storedBytes` は文字列長で、fs / pg とは単位が違う。
    */
   const buildArchiveEntries = (): ArchiveEntry[] =>
     [...archives.entries()]
@@ -1063,12 +838,7 @@ export function createMemoryStores(): Stores {
       })
       .map(({ entry }) => entry);
 
-  /**
-   * 「直前の退避」＝同じ `sessionId` の行のうち `at` が最大（同値なら `seq`
-   * が最大）のもの（#698）。**`removedAt` で絞らない**——tombstone された
-   * 行の指紋も、当時の本文を表す有効な情報である（pg / fs 実装の doc と
-   * 同じ理由）。`archiveMeta` だけを見る（`archives` の本文には触れない）。
-   */
+  // `removedAt` で絞らない: tombstone された行の指紋も当時の本文を表す。
   const findPreviousArchiveForSession = (
     sessionId: string,
   ): { id: string; bodyChars?: number; bodyMd5?: string } | null => {
@@ -1084,21 +854,10 @@ export function createMemoryStores(): Stores {
   };
 
   const archive: TranscriptArchive = {
-    /**
-     * **「直前を引く → 判定する → 書く」のあいだに `await` を1つも挟まない（#1722 / #1732）。**
-     * 同じセッションへの並行 `archive()` が同じ「直前」を見ないのは、JS が1本の
-     * スレッドでこの同期の区間を割り込ませずに走らせるからであって、排他の仕組みを
-     * 持っているからではない。fs は `withPathLock`、pg は `pg_advisory_xact_lock` で
-     * 同じことを守っている（PR #1735）。ここに `await` を足すと窓が開く。そのときは
-     * `archive-contract.ts` の並行の検査（#1732）が赤くなる。
-     */
+    /** 「直前を引く → 判定する → 書く」のあいだに `await` を挟まない: 排他の仕組みは無く、同期の区間だから並行 `archive()` が同じ「直前」を見ない。 */
     async archive(sessionId, transcript): Promise<ArchiveWrite> {
-      // 積めない sessionId は、3実装とも同じ例外で断る（issue #2233）。
       assertArchivableSessionId(sessionId);
-      // id は fs / pg と同じ形（`<sessionId>-<stamp>(-<枝番>).jsonl`、#2459）。
-      // 旧実装の `${sessionId}-id-${n}` は `archiveIdBranch` が解析できず、
-      // `selectArchiveRemovalTargets` の同着が id の字面に落ちて `id-10 < id-9` になった。
-      // 枝番は空いている最小の番号（fs の排他作成と同じ。1本目は枝番無し）。
+      // id は `archiveIdBranch` が解析できる形（枝番は空いている最小の番号）にする: `${sessionId}-id-${n}` だと同着が字面で決まり `id-10 < id-9` になる。
       const at = new Date().toISOString();
       const base = `${sessionId}-${at.replace(/[:.]/g, '-')}`;
       let id = `${base}.jsonl`;
@@ -1106,7 +865,7 @@ export function createMemoryStores(): Stores {
       const previous = findPreviousArchiveForSession(sessionId);
       const fingerprint = fingerprintArchiveBody(transcript);
       const { continuity, comparedTo } = classifyArchiveContinuity(previous, transcript);
-      // 本文の NUL は落として残す（issue #3011。pg と同じ）。指紋と連続性は生の本文で取る（pg と同じ）。
+      // 本文の NUL は落とすが、指紋と連続性は生の本文で取る（pg と同じ）。
       archives.set(id, stripNul(transcript));
       archiveMeta.set(id, {
         sessionId,
@@ -1122,9 +881,6 @@ export function createMemoryStores(): Stores {
       return buildArchiveEntries();
     },
     async sessions(): Promise<ArchiveSessionSummary[]> {
-      // **2パス**: まず sessionId ごとに行をまとめ、それぞれをまとめて畳む
-      // （#698 続き。旧実装の逐次マージだと、内訳のために毎行
-      // `tallyArchiveContinuity` を呼び直すことになり無駄が積み上がる）。
       const bySessionId = new Map<string, ArchiveEntry[]>();
       for (const entry of buildArchiveEntries()) {
         const group = bySessionId.get(entry.sessionId);
@@ -1151,35 +907,15 @@ export function createMemoryStores(): Stores {
       );
     },
     async read(id) {
-      // **印（`archiveRemovals`）を先に見る。** `archives.get(id)` が `''`
-      // （空の生ログ）を返す場合と「消された」を区別するのはこの順序である
-      // ——本文の中身では判定しない（`ArchiveRead` interface doc）。
+      // 印（`archiveRemovals`）を先に見る: 本文の中身で判定しない。空の生ログと「消された」を区別できなくなる。
       const removal = archiveRemovals.get(id);
       if (removal !== undefined) return { kind: 'removed', ...removal };
       const body = archives.get(id);
       if (body === undefined) return { kind: 'missing' };
       return { kind: 'body', body };
     },
-    // 末尾だけを読む（#1283 の OOM、読み出し側。`TranscriptArchive.readTail`）。
-    // インメモリなので既に文字列としてヒープに在り、削れる読み込みは無い
-    // ——ここでの契約の本体は「末尾を返す」「maxChars 以下なら全文」の2つで、
-    // 判定の順序（印を先に見る）は read() と揃える。
-    //
-    // **`maxChars` はコードポイント数で数える（issue #1829）。** 以前は
-    // `body.length`（JS の UTF-16 コード単位）で判定し `body.slice(-(maxChars+1))`
-    // で切っていた——補助面の文字（絵文字の多く）を含む本文では、pg
-    // （PostgreSQL の `right()`。コードポイント数で数える）と食い違ったり、
-    // サロゲートペアの途中で切って孤立サロゲートを作ったりしていた
-    // （`readTail` interface doc）。単位の変換は `tailByCodePoints`
-    // （`excerpt.ts`）の唯一の出所へ寄せる。
-    //
-    // **切り詰めるときは `maxChars + 1` コードポイントを返す**（`maxChars`
-    // ちょうどにしない）——`readTail` interface doc の「本文が `maxChars`
-    // より長いとき、返す量は `maxChars` を厳密に上回ること」に従う。ここを
-    // `maxChars` ちょうどにすると、呼び出し側の `tailOf`（`clone.ts`）が
-    // 「切り詰め済みの窓」を「本文がもとから短かった」と誤読し、行の途中の
-    // 窓がそのまま蒸留へ渡る（`clone-grave-pickup-startup.test.ts`（旧 `clone.test.ts`。
-    // #1744 で分割済み）の「歯2」で実測）。
+    // `maxChars` は UTF-16 の `length` / `slice` で数えない: pg の `right()` はコードポイント数で、絵文字で食い違い孤立サロゲートも作る。`tailByCodePoints` に寄せる。
+    // 切り詰めるときは `maxChars + 1` を返す（ちょうどにしない）: 呼び出し側の `tailOf` が「切り詰め済み」を「もとから短い」と誤読し、行の途中の窓が蒸留へ渡る（`readTail` interface doc）。
     async readTail(id, maxChars) {
       if (!Number.isInteger(maxChars) || maxChars <= 0) {
         throw new Error(
@@ -1199,7 +935,7 @@ export function createMemoryStores(): Stores {
       if (body === undefined) return { kind: 'missing' };
       const bytes = Buffer.byteLength(body, 'utf8');
       const removedAt = new Date().toISOString();
-      // **行は残す**（`archives` から消さない）。本文だけを落とす。
+      // 行は `archives` から消さない: 本文だけを落とす。
       archives.set(id, '');
       archiveRemovals.set(id, { removedAt, bytes });
       return { kind: 'removed', bytes };
@@ -1212,11 +948,7 @@ export function createMemoryStores(): Stores {
       return removed;
     },
   };
-  // **テストが指紋を持たない行を作れるようにする口**（#698。
-  // `seedFingerprintlessArchiveRow` の doc）。`TranscriptArchive` interface に
-  // メソッドを足すと3実装すべてに同じメソッドが要ることになるので、この
-  // インメモリ実装だけが持つ内部状態への出入口を、`archive` オブジェクトを鍵に
-  // した `WeakMap` 越しに公開する。
+  // `TranscriptArchive` にメソッドを足さず、`WeakMap` 越しに内部状態を出す（`seedFingerprintlessArchiveRow` 用）。
   archiveInternalsRegistry.set(archive, { archives, archiveMeta });
 
   const sessions: SessionRegistry = {
@@ -1233,9 +965,7 @@ export function createMemoryStores(): Stores {
     async setTranscriptGrave(grave) {
       transcriptGrave = grave;
     },
-    // **判定と書き込みの間に `await` を置かない**（`SessionRegistry.clearTranscriptGraveIf`
-    // の doc）。この器はプロセスの中の変数なので、同期で読んで同期で消せば
-    // 割り込まれる窓そのものが無い——**`await` を挟んだ瞬間に窓が生まれる。**
+    // 判定と書き込みの間に `await` を置かない: 同期なら割り込まれる窓が無く、挟むと窓が生まれる（`SessionRegistry.clearTranscriptGraveIf` の doc）。
     async clearTranscriptGraveIf(archiveId) {
       if (transcriptGrave?.archiveId !== archiveId) return false;
       transcriptGrave = null;
@@ -1247,7 +977,6 @@ export function createMemoryStores(): Stores {
     async setLostSessionGrave(grave) {
       lostSessionGrave = grave;
     },
-    /** 形と理由は `clearTranscriptGraveIf` と同じである。 */
     async clearLostSessionGraveIf(sessionId) {
       if (lostSessionGrave?.sessionId !== sessionId) return false;
       lostSessionGrave = null;
@@ -1278,55 +1007,25 @@ export function createMemoryStores(): Stores {
   const loginRequests = new Map<string, LoginRequest>();
   const identityKey = (provider: string, subject: string) => `${provider} ${subject}`;
 
-  /**
-   * `createdAt` の**実時刻**昇順（issue #1676。fs 版と同じ理由・同じ形
-   * ——`packages/storage-fs/src/auth.ts` の `compareCreatedAt` の doc）。
-   * **単独では使わない**——同着（`createdAt` が完全に同じ）行どうしの相対順
-   * を決めないため（issue #1688）。並び全体を決めるのは直下の
-   * `compareAccountOrder` / `compareIdentityOrder` / `compareAccessTokenOrder`
-   * である。
-   *
-   * **文字列の `localeCompare` を使わないこと。** `isoDateTime` はオフセット
-   * 付きの任意の表記を許すので、同じ瞬間でも書き方は一意ではない。文字列比較
-   * だとオフセット表記が違う行で実時刻の順が崩れる——pg（`timestamptz` 列の
-   * `asc()`）は崩れないので、fs / メモリもここで揃える。
-   */
+  // 実時刻で比べる（文字列比較にしない）: `isoDateTime` はオフセット表記が一意でなく、pg の `asc()` と順が食い違う。同着の順は決めないので単独では使わず、下の `compare*Order` を使う。
   const compareCreatedAt = (a: { createdAt: string }, b: { createdAt: string }): number =>
     Date.parse(a.createdAt) - Date.parse(b.createdAt);
 
-  /**
-   * `listAccounts` の並び全体（issue #1688。fs 版と同じ形——
-   * `packages/storage-fs/src/auth.ts` の `compareAccountOrder` の doc）。
-   * `createdAt` の実時刻 → `id`。
-   *
-   * **挿入順を約束にしない。** `Map.set` は既存キーの反復順を動かさないので
-   * 挿入順どおりに見えるが、それは実装の偶然であって契約ではない——pg は
-   * 2次キーの無い `ORDER BY` では同着の順を保証しないので、fs / メモリの
-   * どちらも「Map/配列がたまたまその順だから」ではなく、`id` という明示的な
-   * 2次キーで並びを決める。
-   */
+  // 挿入順を約束にしない: `Map` の反復順は偶然で、pg は2次キーの無い `ORDER BY` の同着順を保証しない。`id` の2次キーで決める。
   const compareAccountOrder = (a: AuthAccount, b: AuthAccount): number =>
     compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 
-  /**
-   * `listIdentities` の並び全体（issue #1688）。
-   * `createdAt` の実時刻 → `provider` → `subject`。
-   */
   const compareIdentityOrder = (a: AuthIdentity, b: AuthIdentity): number =>
     compareCreatedAt(a, b) ||
     compareCodeUnits(a.provider, b.provider) ||
     compareCodeUnits(a.subject, b.subject);
 
-  /**
-   * `listAccessTokens` の並び全体（issue #1688）。`createdAt` の実時刻 → `id`。
-   */
   const compareAccessTokenOrder = (a: AccessTokenRecord, b: AccessTokenRecord): number =>
     compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 
   const integrationKeyRows = new Map<string, IntegrationKeyRecord>();
   const integrationKeys: IntegrationKeyStore = {
     async putIntegrationKey(key) {
-      // 本物（fs / pg）と同じくスキーマを通し、NUL を整える。検査から書き込みまでの間に await を挟まない。
       const parsed = prepareIntegrationKeyForWrite(integrationKeyRecordSchema.parse(key));
       if (integrationKeyRows.has(parsed.id)) throw new Error('integration key: 同じ id が既に在る');
       for (const row of integrationKeyRows.values()) {
@@ -1346,10 +1045,8 @@ export function createMemoryStores(): Stores {
       return [...integrationKeyRows.values()].sort(compareIntegrationKeyOrder);
     },
     async listUnreadableIntegrationKeys() {
-      // 読めない行は持てない（`putIntegrationKey` がスキーマを通す）。常に空。
       return [];
     },
-    // インメモリは読めない行を持てないので、消すものが無い（issue #3216）。
     async removeUnreadableIntegrationKeys(ids) {
       return { kind: 'unknown', count: new Set(ids).size };
     },
@@ -1375,7 +1072,6 @@ export function createMemoryStores(): Stores {
       return [...accounts.values()].sort(compareAccountOrder);
     },
     async listUnreadableAccounts() {
-      // 読めない行は持てない（`putAccount` がスキーマを通す）。常に空。
       return [];
     },
     async getAccount(id) {
@@ -1384,7 +1080,6 @@ export function createMemoryStores(): Stores {
     },
     async findAccountByEmail(email) {
       if (hasNul(email)) return null;
-      // 大小文字を区別しない（#1702）。fs / pg の実装と同じ規約。
       const needle = email.toLowerCase();
       return (
         [...accounts.values()].find(
@@ -1393,20 +1088,15 @@ export function createMemoryStores(): Stores {
       );
     },
     async putAccount(account) {
-      // 本物（fs / pg）と同じく `authAccountSchema` を通す（issue #1715）。
       const parsed = prepareAccountForWrite(authAccountSchema.parse(account));
       accounts.set(parsed.id, parsed);
     },
-    // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由。issue #1870）。
     async markAccountLoggedIn(accountId, at) {
       if (hasNul(accountId)) return;
       const account = accounts.get(accountId);
       if (account === undefined) return;
       accounts.set(accountId, authAccountSchema.parse({ ...account, lastLoginAt: at }));
     },
-    // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由。issue #1915）。
-    // インメモリは読めない行を持てない（`Map` への書き手は常に `authAccountSchema` を通す）ので、
-    // 消すものが無い（issue #2440）。指された id はすべて「読めない行に無い」。
     async removeUnreadableAccounts(ids) {
       return { kind: 'unknown', count: new Set(ids).size };
     },
@@ -1430,26 +1120,19 @@ export function createMemoryStores(): Stores {
     },
     async listIdentities(accountId) {
       if (hasNul(accountId)) return [];
-      // fs と同じ理由で明示的に並べる（`compareIdentityOrder` の doc）。
       return [...identities.values()]
         .filter((identity) => identity.accountId === accountId)
         .sort(compareIdentityOrder);
     },
     async putIdentity(identity) {
-      // 本物（fs / pg）と同じく `authIdentitySchema` を通す（issue #1715）。
       const parsed = prepareIdentityForWrite(authIdentitySchema.parse(identity));
       identities.set(identityKey(parsed.provider, parsed.subject), parsed);
     },
-    // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由——
-    // 挟むと同じ identity を作ろうとする2本目が割り込む窓ができる。issue #1714）。
+    // 検査から書き込みまでの間に await を挟まない: 同じ identity を作ろうとする2本目が割り込む窓ができる。
     async createAccountWithIdentity({ account, identity }) {
       const key = identityKey(identity.provider, identity.subject);
       const existing = identities.get(key);
       if (existing !== undefined) return { created: false, existing };
-      // **検証済みメールの衝突検査もここで行う（issue #1751 / #1741）。**
-      // 大小文字を区別しない（`findAccountByEmail` と同じ比較）。ここも
-      // 同期のまま判定から書き込みまで進む——await を挟まないので、別々の
-      // identity を同時に作ろうとする2本目が割り込む窓は無い。
       const needle = account.email?.toLowerCase() ?? null;
       const emailCollides =
         needle !== null &&
@@ -1457,8 +1140,7 @@ export function createMemoryStores(): Stores {
           (other) => other.email !== null && other.email.toLowerCase() === needle,
         );
       const accountToSave = emailCollides ? { ...account, email: null } : account;
-      // 本物（fs / pg）と同じく `authAccountSchema` / `authIdentitySchema` を
-      // 通す（issue #1715。fs と同じ並び——account を先に parse する）。
+      // account を先に parse する（fs と同じ並び）。
       const parsedAccount = prepareAccountForWrite(authAccountSchema.parse(accountToSave));
       const parsedIdentity = prepareIdentityForWrite(authIdentitySchema.parse(identity));
       accounts.set(parsedAccount.id, parsedAccount);
@@ -1466,11 +1148,9 @@ export function createMemoryStores(): Stores {
       return { created: true, account: parsedAccount };
     },
     async putAccessToken(token) {
-      // 本物（fs / pg）と同じく `accessTokenRecordSchema` を通す（issue #1715）。
       const parsed = prepareAccessTokenForWrite(accessTokenRecordSchema.parse(token));
       accessTokens.set(parsed.id, parsed);
     },
-    // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由。issue #1782）。
     async markAccessTokenUsed(id, at) {
       if (hasNul(id)) return;
       const token = accessTokens.get(id);
@@ -1483,24 +1163,20 @@ export function createMemoryStores(): Stores {
     },
     async listAccessTokens(accountId) {
       if (hasNul(accountId)) return [];
-      // fs と同じ理由で明示的に並べる（`compareAccessTokenOrder` の doc）。
       return [...accessTokens.values()]
         .filter((token) => token.accountId === accountId)
         .sort(compareAccessTokenOrder);
     },
-    // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由。issue #1757）。
     async revokeAccessToken(id, at) {
       if (hasNul(id)) return { status: 'not_found' };
       const token = accessTokens.get(id);
       if (token === undefined) return { status: 'not_found' };
       if (token.revokedAt !== null) return { status: 'already_revoked', token };
-      // 本物（fs / pg）と同じく `accessTokenRecordSchema` を通す（issue #1715 と同じ規約）。
       const revoked = accessTokenRecordSchema.parse({ ...token, revokedAt: at });
       accessTokens.set(id, revoked);
       return { status: 'revoked', token: revoked };
     },
     async putLoginRequest(request) {
-      // 本物（fs / pg）と同じく `loginRequestSchema` を通す（issue #1715）。
       const parsed = prepareLoginRequestForWrite(loginRequestSchema.parse(request));
       loginRequests.set(parsed.id, parsed);
     },
@@ -1510,7 +1186,6 @@ export function createMemoryStores(): Stores {
     },
     async beginLoginExchange(id) {
       if (hasNul(id)) return null;
-      // 検査から書き込みまでの間に await を挟まない（挟むと2本目が割り込む）。
       const found = loginRequests.get(id);
       if (found === undefined || found.status !== 'pending') return null;
       const processing = { ...found, status: 'processing' as const };
@@ -1519,12 +1194,9 @@ export function createMemoryStores(): Stores {
     },
     async claimLoginRequest(id, issue) {
       if (hasNul(id)) return null;
-      // 検査から書き込みまでの間に await を挟まない（挟むと他の claim が割り込む）。
       const found = loginRequests.get(id);
       if (found === undefined || found.status !== 'authenticated') return null;
       const consumed = { ...found, status: 'consumed' as const };
-      // 本物（fs / pg）と同じく、issue() が返した値も `accessTokenRecordSchema`
-      // を通す（issue #1715）。
       const token = prepareAccessTokenForWrite(accessTokenRecordSchema.parse(issue(consumed)));
       loginRequests.set(id, consumed);
       accessTokens.set(token.id, token);
@@ -1536,56 +1208,38 @@ export function createMemoryStores(): Stores {
       const account = accounts.get(accountId);
       if (account === undefined) return { status: 'not_found' };
       if (account.grantedAt !== null) return { status: 'granted', account };
-      // 本物（fs / pg）と同じく `authAccountSchema` を通す（issue #1715）。
       const granted = authAccountSchema.parse({ ...account, grantedAt: at, grantedBy: by });
       accounts.set(accountId, granted);
       return { status: 'granted', account: granted };
     },
     async setAccountOwner(accountId, declaredAt) {
       if (hasNul(accountId)) return { status: 'not_found' };
-      // 検査から書き込みまでの間に await を挟まない（他の実装と同じ理由——
-      // 挟むと「読む→検査→書く」に割れて、宣言と許可の不変条件が崩れる窓ができる）。
+      // 検査から書き込みまでの間に await を挟まない: 挟むと宣言と許可の不変条件が崩れる窓ができる。
       const account = accounts.get(accountId);
       if (account === undefined) return { status: 'not_found' };
       if (declaredAt !== null && account.grantedAt === null) return { status: 'not_granted' };
-      // 本物（fs / pg）と同じく `authAccountSchema` を通す（issue #1715）。
       const updated = authAccountSchema.parse({ ...account, ownerDeclaredAt: declaredAt });
       accounts.set(accountId, updated);
       return { status: 'ok', account: updated };
     },
   };
 
-  /** 人間が承認した Bash 許可の記録（インメモリ。Issue #863）。 */
   const permissionGrants: PermissionGrantStore = {
     async list() {
-      // 実時刻で比べる（issue #2451。pg の `asc(grantedAt)` と揃える）
       return [...permissionGrantRows.values()].sort((a, b) =>
         compareIsoInstant(a.grantedAt, b.grantedAt),
       );
     },
     async listUnreadable() {
-      // 読めない行は持てない（`put` がスキーマを通す）。常に空。
       return [];
     },
-    // 読むだけの口の NUL（issue #3005）: NUL を含む id の行は存在しえない（`put` が断る）ので、
-    // `Map` を引けば自然に「無い」になる。pg は DB に投げる前に短絡して揃える。
     async get(id) {
       return permissionGrantRows.get(id) ?? null;
     },
     async put(grant) {
-      // 本物（fs / pg）と同じく `permissionGrantSchema` を通す（issue #2052）。
-      // 以前は素通しだったので、fs / pg なら弾かれる不正な grant（必須欄の
-      // 欠落など）もここでは例外無しで保存できていた——同じストアの
-      // `revoke` / `markUsed` は既に `permissionGrantSchema.parse` を通して
-      // いるので、`put` だけが食い違って残っていた。
       const parsed = preparePermissionGrantForPut(permissionGrantSchema.parse(grant));
       permissionGrantRows.set(parsed.id, parsed);
     },
-    // fs / pg と同じ形（lost update・#1654 と同型）——現在値（この in-memory
-    // 実装では常に最新の `Map` の値そのもの）から判断する。プロセス内の
-    // `Map` は同期アクセスなので、fs の `withPathLock` / pg の条件付き
-    // UPDATE に相当する排他は要らない——読みと書きの間に他の呼び出しが
-    // 割り込む隙間が無い。
     async revoke(id, at) {
       const found = permissionGrantRows.get(id);
       if (found === undefined) return null;
@@ -1593,16 +1247,13 @@ export function createMemoryStores(): Stores {
       permissionGrantRows.set(id, next);
       return next;
     },
-    // インメモリは読めない行を持てない（書き手は常に `permissionGrantSchema` を通す）ので、
-    // 消すものが無い（issue #2440）。指された id はすべて「読めない行に無い」。
     async removeUnreadable(ids) {
       return { kind: 'unknown', count: new Set(ids).size };
     },
     async markUsed(id, at) {
       const found = permissionGrantRows.get(id);
-      // 無い・取り消し済みなら記録しない（Issue #1687。`PermissionGrantStore.markUsed` の doc）。
+      // 取り消し済みは記録せず、古い時刻では戻さない（`PermissionGrantStore.markUsed` の doc）。
       if (found === undefined || found.revokedAt !== undefined) return false;
-      // 既存より古い時刻では戻さない（`PermissionGrantStore.markUsed` の doc）。
       if (found.lastUsedAt !== undefined && compareIsoInstant(found.lastUsedAt, at) >= 0)
         return true;
       const next = permissionGrantSchema.parse({ ...found, lastUsedAt: at });
@@ -1636,7 +1287,6 @@ export function createMemoryStores(): Stores {
       return count;
     },
   };
-  /** Codex の ChatGPT ログインの正本（インメモリ。契約は `codex-chatgpt-auth.ts`）。 */
   let codexAuthRecord: CodexChatgptAuthRecord | null = null;
   const codexAuth: CodexChatgptAuthStore = {
     async get() {
@@ -1656,7 +1306,6 @@ export function createMemoryStores(): Stores {
       return had;
     },
   };
-  /** 会話の既読の位置と基準時刻（インメモリ。契約は `conversation-read.ts`）。 */
   let conversationReadBaseline: string | null = null;
   const conversationReadPositions = new Map<string, ConversationReadPosition>();
   let outboundWatermark: string | null = null;
@@ -1711,7 +1360,6 @@ export function createMemoryStores(): Stores {
     },
   };
 
-  /** 人間の MCP 連携の登録（インメモリ。契約は `mcp-server-contract.ts`）。 */
   const mcpServers: McpServerStore = {
     async read() {
       return storedMcpServers === null
@@ -1722,9 +1370,7 @@ export function createMemoryStores(): Stores {
           };
     },
     async write(input, options) {
-      // **書く前に検査する**（3実装が同じ関数を通す。`McpServerStore.write` の doc）。
       const servers = parseMcpServers(prepareMcpServersForWrite(input));
-      // 比較から代入までに await が無い（同期の区間）ので、同時の書き込みは割り込めない。
       if (
         options?.ifMatch !== undefined &&
         options.ifMatch !== mcpServersVersionOf(storedMcpServers)
@@ -1745,7 +1391,6 @@ export function createMemoryStores(): Stores {
     },
   };
 
-  /** 人間が入れた plugin（インメモリ。契約は `plugin-store-contract.ts`）。 */
   const pluginRows = new Map<string, StoredPlugin>();
   const clonePlugin = (plugin: StoredPlugin): StoredPlugin =>
     parseStoredPlugin({
@@ -1762,7 +1407,6 @@ export function createMemoryStores(): Stores {
       return row === undefined ? null : clonePlugin(row);
     },
     async put(input) {
-      // **書く前に検査する**（3実装が同じ関数を通す。`PluginStore.put` の doc）。
       const plugin = parsePluginInput(input);
       for (const existing of pluginRows.keys()) {
         if (pluginNamesCollide(plugin.name, existing)) {
@@ -1777,15 +1421,8 @@ export function createMemoryStores(): Stores {
     },
   };
 
-  /**
-   * マネージャーへ降ろす環境変数の正本（インメモリ）。
-   *
-   * **3実装（インメモリ / fs / pg）で同じ答えにすること。** 空文字は「外す」で、
-   * `put` は入力に無い名前を触らない（部分更新である）。ここだけ全文置換にすると、
-   * 「テストの器では通るのに本物では他の鍵が消える」というずれ方をする。
-   */
+  // `put` は全文置換にしない: 空文字は「外す」で、入力に無い名前は触らない。ここだけ全文置換だと本物で他の鍵が消える。
   const credentialRows = new Map<string, StoredCredential>();
-  /** `seedOnce` の印（fs は `credentials.json`、pg は `daemon_state`）。 */
   const credentialSeedMarkers = new Set<string>();
 
   const credentials: CredentialVaultStore = {
@@ -1800,9 +1437,7 @@ export function createMemoryStores(): Stores {
           credentialRows.delete(entry.name);
           continue;
         }
-        // **呼び手（`credential-service.ts` の `resolveEntryForWrite`）が scope・
-        // secret を必ず解決してから渡す。** ここでは受け取ったものをそのまま
-        // 持つだけで、既定値の補完はしない（fs/pg 実装と同じ分担）。
+        // 既定値は補わない: 呼び手の `resolveEntryForWrite`（`credential-service.ts`）が scope・secret を解決して渡す。
         credentialRows.set(entry.name, {
           name: entry.name,
           value: entry.value,
@@ -1834,10 +1469,6 @@ export function createMemoryStores(): Stores {
     },
   };
 
-  /**
-   * 認証トークンのプール（インメモリ）。**回さない**——ここも fs / pg と同じく
-   * 器と口だけを持つ（Issue #393「PR1 プールの器」）。
-   */
   let tokenPool: AgentToken[] = [];
   let tokenRotationSettings: TokenRotationSettings | null = null;
   let activeAgentToken: ActiveAgentToken | null = null;
@@ -1847,17 +1478,12 @@ export function createMemoryStores(): Stores {
       return [...tokenPool].sort((a, b) => a.order - b.order);
     },
     async listUnreadable() {
-      // 読めない行は持てない（`replace` がスキーマを通す）ので常に空。
       return [];
     },
     async removeUnreadable() {
-      // 読めない行は持てないので、消すものが無い（`TokenPoolStore.removeUnreadable` の doc）。
       return [];
     },
     async replace(next) {
-      // **本物（fs の `agentTokenRowSchema` / pg の `order` 列の SQL 整数型）と
-      // 同じ検査を掛ける。** かつてはインメモリだけが何でも受け付けたので、
-      // `order` が非整数の行を「書けた」として通していた（issue #1652）。
       tokenPool = prepareTokensForReplace(next).map((token) => agentTokenSchema.parse(token));
       return tokens.list();
     },
@@ -1865,42 +1491,21 @@ export function createMemoryStores(): Stores {
       return tokenRotationSettings ?? DEFAULT_TOKEN_ROTATION_SETTINGS;
     },
     async writeSettings(settings) {
-      // 本物（fs / pg）と同じく `tokenRotationSettingsSchema` を通す（#1652）。
       tokenRotationSettings = tokenRotationSettingsSchema.parse(settings);
       return tokenRotationSettings;
     },
     async readActive() {
-      // **無いものを「1本目が現役」で埋めない**（`TokenPoolStore.readActive` の doc）。
-      // 3実装（インメモリ / fs / pg）で同じ答えでなければ、上の層が器によって
-      // 違う挙動になる。
+      // 無いものを「1本目が現役」で埋めない（`TokenPoolStore.readActive` の doc）。
       return activeAgentToken;
     },
     async writeActive(active) {
       assertValidActiveToken(active);
-      // 本物（fs）と同じく `activeAgentTokenSchema` を通す（#1652）。
       activeAgentToken = activeAgentTokenSchema.parse(active);
       return activeAgentToken;
     },
   };
 
-  /**
-   * 利用状況の台帳（インメモリ）。
-   *
-   * **差分ロジックも鍵の作り方もドライバと共有する** — 差分は
-   * `foldUsageSnapshot` / `foldOneshotUsage` を呼び、行の鍵は
-   * 日 × actor × モデル × 層 × 場所、基準の鍵は 層 × actor で作る。ここだけ
-   * 別の算術や別の鍵を持つと、「テストの器では通るのに本物では二重計上する」
-   * というずれ方をする（`@alteroid/storage-fs` の `usage.ts` と同じ形）。
-   *
-   * **`beforeLedger` / `beforeLayers` の真偽もドライバと同じにすること。**
-   * ここが緩いと、テストは緑のまま「記録が無い」と言うべき場面で「0 だった」と
-   * 言う実装を通す — #45 の要件そのものが黙って消える。実際に `from` 省略時の
-   * `beforeLedger` がドライバ（真）と食い違って偽を返していた。
-   *
-   * **回数（`turnRows` / `turnsSince` / `beforeTurns`）も同じ形で持つ。** 鍵は
-   * `model` を抜いた4軸+トークンで、増分が空の record（`fold.delta` が空）は
-   * 数えない——ドライバ2つと同じ判定（`usage.ts` の `usageTurnRowSchema` の doc）。
-   */
+  // 差分も鍵もドライバと共有し、`before*` の真偽もドライバと同じにする: ここだけ別だと本物では二重計上し、「記録が無い」と言うべき場面で「0 だった」と答える実装を通す。
   const usageRows = new Map<string, UsageRow>();
   const usageBaselines = new Map<string, UsageBaseline>();
   const usageTurns = new Map<string, UsageTurnRow>();
@@ -1915,12 +1520,9 @@ export function createMemoryStores(): Stores {
     async record(input) {
       const { layer, site, managerId, date, at, snapshot, accumulation, tokenId, runner } =
         stripNulFromUsageRecord(input);
-      // 累積の器は `query()` 呼び出しの寿命で閉じる（`usage.ts` の
-      // `usageAccumulationSchema`）。1回で閉じる呼び出しに基準を持たせると、
-      // 前回より高くついた回だけが差に縮んで黙って目減りする。
+      // `oneshot` に基準を持たせない: 前回より高くついた回だけが差に縮んで黙って目減りする。
       const baseKey = usageBaselineKey(layer, managerId);
       const baseline = accumulation === 'oneshot' ? null : (usageBaselines.get(baseKey) ?? null);
-      // 差分の計算と runner ごとの控えの扱いは、3実装が同じ関数を通す（`usage.ts`）。
       const { fold, nextBaseline } = foldRecordForStore(baseline, {
         layer,
         managerId,
@@ -1929,30 +1531,20 @@ export function createMemoryStores(): Stores {
         accumulation,
         ...(runner === undefined ? {} : { runner }),
       });
-      // `oneshot` は基準を持たない。既にある基準を消しもしない
-      // （同じ主体が cumulative でも記録していることがある）。
+      // 既にある基準は oneshot でも消さない: 同じ主体が cumulative でも記録していることがある。
       if (nextBaseline !== null) usageBaselines.set(baseKey, nextBaseline);
       usageStartedAt ??= at;
-      // 層の軸の始点も1度だけ。**`usageStartedAt` と揃えて入れない** — 台帳の
-      // ほうが先に始まっている器では別の時刻になる。
+      // `usageStartedAt` と揃えて入れない: 台帳のほうが先に始まっている器では別の時刻になる。
       usageLayeredAt ??= at;
-      // **トークンの軸は帰属が付いた record でだけ始まる**（ドライバと同じ）。
-      // `??= at` だけにすると、この器はプールを持たない構成でも「トークン軸を
-      // 観測している」と答え、`beforeTokens` が偽になる ＝ 本物より緩い。
+      // トークンの軸は帰属が付いた record でだけ始める（ドライバと同じ）: 無条件だとプール無しでも `beforeTokens` が偽になり本物より緩い。
       if (tokenId !== undefined) usageTokensAt ??= at;
-      // **「起きた（＝ターン1回）」の判定。** 台帳の行が動いた回（`fold.delta` が
-      // 空でない回）だけを1回と数える——ドライバ2つと同じ判定。
       const turned = Object.keys(fold.delta).length > 0;
-      // 回数の軸は「起きた record」でだけ始まる。`usageLayeredAt` と揃えて
-      // `??= at` にすると、増分が空の record でも軸が始まったことになる
-      // ＝ 本物より緩い（ドライバ2つと同じ判断）。
+      // 回数の軸は増分のある record でだけ始める: 空の record で始まると `beforeTurns` が本物より緩くなる。
       if (turned) usageTurnsAt ??= at;
       for (const [model, delta] of Object.entries(fold.delta)) {
         const key = usageRowKey(date, managerId, model, layer, site, tokenId);
         const before = usageRows.get(key)?.totals ?? ZERO_USAGE;
-        // **`unreadable` も足し込む**（Issue #2086。ドライバ2つの `addTotals` と
-        // 同じ理由・同じ形——ここだけ別の算術だと「テストの器では通るのに本物
-        // では取りこぼす」というずれ方をする）。
+        // `unreadable` も足し込む: ドライバの `addTotals` と同じ算術にしないと本物では取りこぼす。
         const unreadable = addUnreadableCounts(before.unreadable, delta.unreadable);
         usageRows.set(key, {
           date,
@@ -1974,9 +1566,7 @@ export function createMemoryStores(): Stores {
           updatedAt: at,
         });
       }
-      // **回数を足し込む。`turned` のときだけ**（0 の行は作らない）。鍵は
-      // `usage_daily` から `model` を抜いた4軸+トークン——1ターンにつき
-      // ちょうど1だけ足す（モデルが何本立ってもここは1のまま）。
+      // 1ターンにつき1だけ足す（モデルが何本立っても1。0 の行は作らない）。
       if (turned) {
         const key = usageTurnKey(date, managerId, layer, site, tokenId);
         const before = usageTurns.get(key)?.turns ?? 0;
@@ -1998,7 +1588,7 @@ export function createMemoryStores(): Stores {
       };
     },
     async aggregate(rawQuery) {
-      // 書き込みが鍵列の NUL を落として残すので、絞り込みも落としてから引く（issue #3005）。
+      // 書き込みが鍵列の NUL を落とすので、絞り込みも落としてから引く。
       const query = stripNulFromUsageQuery(rawQuery);
       const rows = [...usageRows.values()]
         .filter((row) => {
@@ -2017,8 +1607,7 @@ export function createMemoryStores(): Stores {
             compareCodeUnits(a.model, b.model) ||
             compareCodeUnits(a.layer, b.layer) ||
             compareCodeUnits(a.site, b.site) ||
-            // 帰属の無い行は最後（ドライバ2つと同じ向き。`@alteroid/storage-fs` の
-            // `compareTokenId` / pg の `nullif(...) asc nulls last`）。
+            // 帰属の無い行は最後（ドライバと同じ向き）。
             (a.tokenId === b.tokenId
               ? 0
               : a.tokenId === undefined
@@ -2027,8 +1616,6 @@ export function createMemoryStores(): Stores {
                   ? -1
                   : compareCodeUnits(a.tokenId, b.tokenId)),
         );
-      // **`rows` と同じ述語で絞る**（ドライバ2つと同じ——`UsageQuery` はモデルの
-      // 絞りを持たないので、この2つの照会は完全に同じ条件になる）。
       const turnRows = [...usageTurns.values()]
         .filter((row) => {
           if (query.from !== undefined && row.date < query.from) return false;
@@ -2078,17 +1665,11 @@ export function createMemoryStores(): Stores {
         since: usageStartedAt,
         layersSince: usageLayeredAt,
         tokensSince: usageTokensAt,
-        // 台帳が始まる前を照会されたら、0 ではなく「記録が無い」と言えるように。
         beforeLedger: isBeforeUsageStart(usageStartedAt, query.from),
-        // 層の軸が始まる前の行の layer / site は既定値であって観測ではない。
         beforeLayers: isBeforeUsageStart(usageLayeredAt, query.from),
-        // **トークンの軸は始まっていないことが正常でありうる**（プールを使って
-        // いない構成）。ここが偽を返すと「帰属が取れている」と読める。
         beforeTokens: isBeforeUsageStart(usageTokensAt, query.from),
         turnRows,
         turnsSince: usageTurnsAt,
-        // **回数の軸も始まっていないことが正常でありうる**（増分が空の record
-        // しか無い期間）。ここが偽を返すと「回数が取れている」と読める。
         beforeTurns: isBeforeUsageStart(usageTurnsAt, query.from),
         notice: USAGE_ESTIMATE_NOTICE,
       };
@@ -2112,12 +1693,7 @@ export function createMemoryStores(): Stores {
     async baseline(layer, managerId) {
       return usageBaselines.get(usageBaselineKey(layer, stripNul(managerId))) ?? null;
     },
-    /**
-     * **ドライバと同じく、引数を持たず全期間から作る**（`store.ts` の
-     * `UsageStore.recordedManagerIds` の doc）。ここが `aggregate()` の絞り込みを
-     * 受け付ける形だと、テストの器だけが「照会範囲の外の委譲を記録が無いに
-     * 数える」事故を検出できなくなる。
-     */
+    // 引数を持たず全期間から作る（`store.ts` の `UsageStore.recordedManagerIds` の doc）: 絞り込みを受けると、範囲外の委譲を「記録が無い」と数える事故をこの器だけ検出できない。
     async recordedManagerIds() {
       return new Set([...usageRows.values()].map((row) => row.managerId));
     },
@@ -2140,14 +1716,9 @@ export function createMemoryStores(): Stores {
     },
   };
 
-  /**
-   * やり方の器（#1055 段3）。**本物と同じく `ensureTrailingNewline` を通す。**
-   * ここで独自に正規化を書くと、記憶が踏んだ穴（3実装のうち1つだけ振る舞いが
-   * 違い、単体テストが当たるのは乖離している側だけ。#370）をそのまま再現する。
-   */
+  // 独自に正規化せず `ensureTrailingNewline` を通す: 3実装の1つだけ振る舞いが違うと、単体テストは乖離した側にしか当たらない。
   const practiceStore: PracticeStore = {
     async list() {
-      // 読めない行は持てない（`write` がスキーマを通す）ので `unreadable` は常に空。
       return {
         entries: [...practices.values()]
           .sort((a, b) => compareCodeUnits(a.slug, b.slug))
@@ -2169,13 +1740,12 @@ export function createMemoryStores(): Stores {
       return found === undefined ? null : isolate(found);
     },
     async write(input, options) {
-      // 本文（kind・title・content）の NUL は、検証の前に落として残す（issue #3011）。slug は下のスキーマが弾く。
+      // 本文の NUL は検証の前に落とす。slug は下のスキーマが弾く。
       const content = ensureTrailingNewline(stripNul(input.content));
       const kind = stripNul(input.kind);
       const title = stripNul(input.title);
       const now = new Date().toISOString();
       const existing = practices.get(input.slug);
-      // 前提の版（Issue #2853）。fs / pg と同じ挙動——合わなければ書かず・版も足さずに投げる。
       if (!practiceVersionMatches(existing ?? null, options?.ifMatch)) {
         throw new PracticeConflictError(
           input.slug,
@@ -2187,18 +1757,13 @@ export function createMemoryStores(): Stores {
         kind,
         title,
         content,
-        // **上書きで作成時刻を捏造しない**（`PracticeStore.write` の doc）。
+        // 上書きで作成時刻を捏造しない（`PracticeStore.write` の doc）。
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
-        // コードポイント数（UTF-16 のコード単位数ではない。fs/pg 実装と同じ
-        // 数え方——#1340）。
+        // コードポイント数で数える（UTF-16 のコード単位数にしない）。
         chars: [...content].length,
       });
       practices.set(input.slug, isolate(next));
-      // ⭐ **書いた後の本文を版として追記する（#1309）。** `practices` とは別の
-      // Map なので、`remove()` がこの後の呼び出しで `practices` から消しても
-      // ここは影響を受けない。番号は既存の配列の長さ+1——`remove()` は配列を
-      // 切り詰めないので、作り直しでも自然に続きから振られる。
       const history = practiceVersions.get(input.slug) ?? [];
       const version = practiceVersionSchema.parse({
         slug: input.slug,
@@ -2213,7 +1778,6 @@ export function createMemoryStores(): Stores {
       return isolate(next);
     },
     async remove(slug, options) {
-      // 前提の版（Issue #2923）。合わなければ消さずに投げる（同期の区間なので排他の中）。
       const existing = practices.get(slug);
       if (
         options?.ifMatch !== undefined &&
@@ -2221,15 +1785,13 @@ export function createMemoryStores(): Stores {
       ) {
         throw new PracticeConflictError(slug, existing === undefined ? null : isolate(existing));
       }
-      // **版は消さない**（`PracticeStore.remove` の doc、#1309）。`practices`
-      // からだけ消す——`practiceVersions` には触れない。
+      // 版（`practiceVersions`）は消さない（`PracticeStore.remove` の doc）。
       practices.delete(slug);
     },
     async clear() {
       const removed = practices.size;
       practices.clear();
-      // **版もここでは消す**（`PracticeStore.clear` の doc、#1309）——`clear()`
-      // は人間が明示的に「全部忘れる」と決めたリセット専用の操作である。
+      // 版もここでは消す: `clear()` は「全部忘れる」リセット専用（`PracticeStore.clear` の doc）。
       practiceVersions.clear();
       return removed;
     },
@@ -2276,32 +1838,17 @@ export function createMemoryStores(): Stores {
   };
 }
 
-/**
- * 未読の受信箱をインメモリで持つ器。
- *
- * **「プロセスが死ぬ」をテストで再現するための土台**でもある。`Clone` を捨てて
- * 同じ `Stores` から作り直せば、器だけが入れ替わった再起動と同じ形になる
- * （ここを `Clone` の内側に持たせると、その再現ができなくなる）。
- */
+// `Clone` の内側に持たせない: `Clone` を捨てて同じ `Stores` から作り直す再起動の再現ができなくなる。
 function createMemoryInboxStore(): InboxStore {
   const unread = new Map<string, PendingInboxEvent>();
 
   return {
     async put(event: InboxEvent, at: string): Promise<void> {
-      // fs（`FsInboxStore.put`）/ pg（`PgInboxStore.put`）と同じく、形の
-      // 崩れた event を書く前に拒む（issue #1668）。
       const value = inboxEventSchema.parse(event);
-      // 外側の `at` は fs（`FsInboxStore.put`）/ pg と同じ `Z` 付きの ISO 表記に正規化して保存する
-      // （issue #2927 項目2・#3292）。読めない時刻は `RangeError` で拒み、何も保存しない
-      // （pg の `new Date(at)` も同じ）。
+      // 読めない時刻は `RangeError` で拒む（pg の `new Date(at)` と同じ）。
       const normalizedAt = new Date(at).toISOString();
-      // 配達回数は保つ（本文だけを差し替える）。
       const deliveries = unread.get(value.id)?.deliveries ?? 0;
-      // **既存の行を一旦 `delete` してから `set` し直す。** `Map` はキーの
-      // 再設定では挿入順を動かさない仕様なので、`delete` を挟まずに
-      // `set` するだけだと再配達された行が元の位置に留まり、fs / pg
-      // （どちらも「既存の行を除いてから足す」形で末尾へ回る）と同着
-      // （同じ `at`）のときの並びが食い違っていた（issue #1652）。
+      // `set` だけにしない: `Map` は再設定で挿入順を動かさず、再配達された行が元の位置に留まり、fs / pg（末尾へ回る）と同着の並びが食い違う。
       unread.delete(value.id);
       unread.set(value.id, { event: value, at: normalizedAt, deliveries });
     },
@@ -2309,9 +1856,7 @@ function createMemoryInboxStore(): InboxStore {
       unread.delete(id);
     },
     async claimPending(): Promise<PendingInboxEvent[]> {
-      // 実時刻で比べる（issue #2451。pg は `at`〈timestamptz〉の `getTime()` で並べる）
       const rows = [...unread.values()].sort((a, b) => compareIsoInstant(a.at, b.at));
-      // 読むことと回数を進めることを1操作に閉じる（`InboxStore.claimPending`）。
       return rows.map((row) => {
         const next = { ...row, deliveries: row.deliveries + 1 };
         unread.set(row.event.id, next);
@@ -2319,17 +1864,13 @@ function createMemoryInboxStore(): InboxStore {
       });
     },
     async pending(): Promise<{ count: number; oldestAt?: string }> {
-      // **`claimPending` と違い、`unread` を1文字も書き換えない**
-      // （`InboxStore.pending` の doc）。
+      // `claimPending` と違い `unread` を書き換えない（`InboxStore.pending` の doc）。
       const rows = [...unread.values()];
-      // 実時刻でいちばん古いもの（issue #2451。pg の `min(at)` と揃える）
       const oldest = earliestIsoInstant(rows.map((row) => row.at));
       return { count: rows.length, ...(oldest === undefined ? {} : { oldestAt: oldest }) };
     },
     async peekPending(): Promise<InboxPeek> {
-      // **`claimPending` と違い、`unread` を1文字も書き換えない**
-      // （`InboxStore.peekPending` の doc。`pending()` と同じ倒れ先）。
-      // メモリ実装は `put()` がスキーマを通すので、壊れた行を持てない（`unreadable` は常に空）。
+      // `claimPending` と違い `unread` を書き換えない（`InboxStore.peekPending` の doc）。
       return {
         entries: [...unread.values()].sort((a, b) => compareIsoInstant(a.at, b.at)),
         unreadable: [],
@@ -2361,21 +1902,9 @@ export function humanMessage(text: string, conversationId = 'conv-1'): InboxEven
 }
 
 /**
- * stderr へ出た行を集める。
+ * stderr へ出た行を集める。記録の書き込み失敗の跡は stderr にしか出ない（本文をログへ落とさない）ので、これが無いと「黙って消える」に戻っても気づけない。
  *
- * 記録の書き込みに失敗したときの跡は stderr にしか出ない（本文をログへ
- * 落とさないため、日誌にもストアにも残せない）。**そこを見る手段が無いと、
- * 「黙って消える」に戻っていても誰も気づけない。**
- *
- * **2本の経路を両方差し替える。**
- * - `process.stderr.write`（`note()` 以外がまだ直接呼んでいる経路。今回は
- *   これは無い想定だが、将来また増えても拾えるように残す）
- * - `dropped-record.ts` の `note()` が使う `fs.writeSync(2, …)`（#248）。
- *   これは `process.stderr.write` の差し替えを**通らない**ので、
- *   `setStderrSinkForTesting` で別に差し替える。
- *
- * 差し替えは `finally` で必ず戻すこと。戻し忘れると以降のテストの出力が
- * 丸ごと消え、失敗の理由が読めなくなる。
+ * `process.stderr.write` だけでは足りない: `dropped-record.ts` の `note()` は `fs.writeSync(2, …)` を使うので `setStderrSinkForTesting` でも差し替える。差し替えは `finally` で戻す（戻し忘れると以降のテストの出力が消える）。
  */
 export async function captureStderr(body: () => void | Promise<void>): Promise<string[]> {
   const lines: string[] = [];
@@ -2396,13 +1925,7 @@ export async function captureStderr(body: () => void | Promise<void>): Promise<s
   return lines;
 }
 
-/**
- * 特定のストア操作だけを失敗させる。
- *
- * 片付けの途中（ストアを閉じた後）に書き込みが落ちる形を、実際に閉じずに
- * 再現するためのもの。**読みは通す** — 読みまで落とすと、起動そのものが
- * 失敗して「書けなかったときどうなるか」を見られない。
- */
+// 読みは通す: 読みまで落とすと起動そのものが失敗し、「書けなかったときどうなるか」を見られない。
 export function failingJournalAppend(stores: Stores, reason: string): Stores {
   return {
     ...stores,
@@ -2413,12 +1936,7 @@ export function failingJournalAppend(stores: Stores, reason: string): Stores {
   };
 }
 
-/**
- * 未読の書き出しだけを失敗させる（読み直しと消し込みは通す）。
- *
- * ここが落ちても `post` は落ちてはいけない — 未読を書けないことでその合図の処理
- * まで止めたら、いま塞いでいる穴より広い穴になる。跡は stderr にしか出ない。
- */
+// 読み直しと消し込みは通す。ここが落ちても `post` は落ちてはいけない: 未読を書けないことで合図の処理まで止めると穴が広がる。
 export function failingInboxPut(stores: Stores, reason: string): Stores {
   return {
     ...stores,
@@ -2429,14 +1947,7 @@ export function failingInboxPut(stores: Stores, reason: string): Stores {
   };
 }
 
-/**
- * `inbox.remove` を最初の `failCount` 回だけ失敗させ、それ以降は本物へ委ねる。
- *
- * **`#forget` の拾い直し（issue #256、`FORGET_RETRY_ATTEMPTS`）を試すためのもの。**
- * `#forget` は「消せると確定するまでメモリ上の印を消さない」ので、`remove` が
- * 一時的に失敗しても拾い直せば実際に消える——これを黒箱（`stores.inbox` の
- * 中身）から確かめる。呼ばれた `id` は `calls` に積む。
- */
+/** `inbox.remove` を最初の `failCount` 回だけ失敗させる（`#forget` の拾い直し用）。呼ばれた `id` は `calls` に積む。 */
 export function flakyInboxRemove(
   stores: Stores,
   failCount: number,
@@ -2463,14 +1974,7 @@ export function flakyInboxRemove(
   };
 }
 
-/**
- * `inbox.put` を最初の `failCount` 回だけ失敗させ、それ以降は本物へ委ねる。
- *
- * **`#remember` の拾い直し（issue #1085、`REMEMBER_RETRY_ATTEMPTS`）を試す
- * ためのもの。** `flakyInboxRemove` の書き込み版——`#remember` は一時的な
- * 失敗を拾い直せば実際に書ける、というのを黒箱（`stores.inbox` の中身）
- * から確かめる。呼ばれた event の `id` は `calls` に積む。
- */
+/** `inbox.put` を最初の `failCount` 回だけ失敗させる（`#remember` の拾い直し用）。呼ばれた event の `id` は `calls` に積む。 */
 export function flakyInboxPut(
   stores: Stores,
   failCount: number,

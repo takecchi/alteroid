@@ -16,72 +16,33 @@ import { redactBody } from './redact.js';
 import { withdrawnMessageText } from './withdrawn-message.js';
 
 /**
- * `alteroid conversations` — 会話（chat の履歴）の一覧・中身を読む。
- *
- * **`GET /conversations` と `GET /conversations/{id}` は既にあったが、CLI から
- * 到達できなかった。** Web（`apps/web/app/routes/chat.tsx` の一覧・
- * `packages/swr/src/hooks/queries.ts` の `useConversation`）は使っているのに、
- * `apps/cli/src` に `conversations` という文字列が0件だった。`docs/PRD.md`
- * 「インターフェース」は3面（CLI・HTTP API・Web UI）で同じことができると書いており、
- * 片方でしかできないことを作らない（north_star 禁止1）。
- *
- * 形は `alteroid memory`（同じ「一覧して、id で1件読む」の形）に合わせてある。
- *
- * **黙って打ち切らない。** どちらの経路も日誌から組み立てているので、遡り切れて
- * いるとは限らない（`apps/daemon/src/app.ts` の `scanned` / `reachedStart` の
- * 注記）。ここで打ち切りを黙って握り潰すと、直したつもりの入口に同じ欠陥
- * （#108 / #109 が塞いだもの）を作ることになる。
+ * 黙って打ち切らない: 一覧も中身も日誌から組み立てていて遡り切れているとは限らないので、
+ * 打ち切りを握り潰すと同じ欠陥の入口を作る。
  */
 
-/** 一覧に出す1件（`GET /conversations` の要素）。 */
 export interface ConversationSummary {
   conversationId: string;
   startedAt: string;
   updatedAt: string;
   messages: number;
   preview: string;
-  /** 未読の数（クローン側の発言だけ。無ければ未読なし）。 */
   unreadCount?: number;
 }
 
-/** 1つの会話の中の1発言（`GET /conversations/:id` の要素）。 */
 export interface ConversationMessage {
   id: string;
   at: string;
-  /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
   role: 'inbound' | 'outbound';
   text: string;
-  /**
-   * 取り下げた発言（順番待ちのうちに取り下げ、配らなかったもの）だけが `withdrawn` を持つ。
-   * 古いデーモンは付けない（その場合は今までどおり普通の発言として出す）。
-   */
   delivery?: 'withdrawn';
-  /**
-   * この発言が置き換える、過去の人間の発言の id（編集後の発言が持つ）。
-   * チャットの「メッセージを編集する」機能（issue #edit-message）。
-   */
   supersedes?: string;
-  /**
-   * この発言を隠している編集の id（`includeSuperseded=true` のときだけ、
-   * 畳まれた側に付く）。
-   */
   supersededBy?: string;
-  /** 発言に添えた添付のメタデータ（中身は `alteroid attachments get`）。 */
   attachments?: { id: string; name: string; mediaType: string; size: number }[];
 }
 
 export interface ConversationsListOptions {
-  /** 返す最大件数（デーモンの既定 20、最大 200）。 */
   limit?: string;
-  /**
-   * 人間との往復をどこまで遡って集計するか（デーモンの既定 2000、最大
-   * 10000）。マネージャーとの往復・内部ターンは数えない（issue #418）。
-   */
   scan?: string;
-  /**
-   * 続きの頁（前の一覧の最後に出た `--cursor` の値をそのまま渡す。#3550）。**`--limit` の上限 200 や
-   * `--scan` の窓の外の会話は、これを辿って読む。**
-   */
   cursor?: string;
 }
 
@@ -92,9 +53,7 @@ export async function conversationsListCommand(
   const conn = await connect();
   if (conn === null) return;
   const { client, target } = conn;
-  // **`query` は常に渡す。** 型上は省略できない（デーモン側のクエリ検査が
-  // `.default()` 付きでも hono/client の型は `query` キー自体を必須にする）。
-  // 中身が空でも URL に意味の無い `?` が付くだけで、サーバ側には無害である。
+  // `query` は常に渡す: hono/client の型は `.default()` 付きでも `query` キー自体を必須にする。
   const response = await client.conversations.$get({
     query: {
       ...(options.limit === undefined ? {} : { limit: options.limit }),
@@ -103,7 +62,6 @@ export async function conversationsListCommand(
     },
   });
   if (!response.ok) {
-    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#2856）。
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     throw new Error(
@@ -114,12 +72,7 @@ export async function conversationsListCommand(
     );
   }
   const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } = await response.json();
-  // `renderConversationsList` は改行で終わらずに返す（末尾に改行が無いことは
-  // `.claude/skills/mutation-testing/mutate-selftest.mjs` が固定している）。
-  // 端末の次のプロンプトや後続の書き込みが最終行へ食い込まないよう、ここで足す（#326）。
-  // **総数の取得は一覧の後で、失敗しても一覧を奪わない。** 一覧は `--limit` の外の
-  // 会話を数えない。Web の左ナビのバッジと同じ数（`GET /conversations/unread-count`）を
-  // 見出しに1行足す。
+  // `renderConversationsList` は改行で終わらずに返す（`mutate-selftest.mjs` が固定している）ので、ここで足す。
   const unreadLine = await fetchUnreadTotalLine(client);
   stdout.write(
     `${unreadLine}\n${renderConversationsList(conversations, scanned, reachedStart, hiddenByLimit, now, nextCursor)}\n`,
@@ -127,11 +80,8 @@ export async function conversationsListCommand(
 }
 
 /**
- * 「未読のある会話 N 件」の1行（Web の左ナビのバッジ `shell.tsx` と同じ数・同じ意味）。
- *
- * **取れなかったときは黙らず、取れなかったと1行で言う**（数を 0 として出さない——「未読なし」と
- * 読める）。ここで例外を投げると、取れている一覧まで出なくなる（一過性の失敗で一覧を奪わない）ので
- * 投げない。古いデーモンは 404 を返す（口が無い）ので、それも一覧を壊さず1行で言う。
+ * 取れなかったときは数を 0 として出さず（「未読なし」と読める）、取れなかったと1行で言う。
+ * 例外は投げない: 取れている一覧まで出なくなる。
  */
 export async function fetchUnreadTotalLine(client: DaemonClient): Promise<string> {
   const unavailable = (reason: string): string =>
@@ -143,11 +93,9 @@ export async function fetchUnreadTotalLine(client: DaemonClient): Promise<string
     }
     if (!response.ok) return unavailable(`HTTP ${String(response.status)}`);
     const body: Partial<Awaited<ReturnType<typeof response.json>>> = await response.json();
-    // Web と同じく、形の違う応答・既読の記録が読めない旨の応答は「読めていない」側へ倒す。
     if (typeof body.count !== 'number' || body.readStateUnreadable !== undefined) {
       return unavailable('既読の記録が読めないか、応答の形が想定と違う');
     }
-    // `capped` のときの `count` は下限（Web は「N+」）。
     return body.capped === true
       ? `未読のある会話 ${body.count} 件以上（数え切れていない）`
       : `未読のある会話 ${body.count} 件`;
@@ -157,20 +105,8 @@ export async function fetchUnreadTotalLine(client: DaemonClient): Promise<string
 }
 
 /**
- * 一覧を、人間が読める形へ。
- *
- * **`scanned` は常に出す。** デーモンは「窓の外はある」と言っているだけで
- * 「窓の外は無い」とは言っていない。ここを省くと、返ってきた件数が
- * 「これで全部」に見えてしまう。
- *
- * **`reachedStart` / `hiddenByLimit` も出す（#418 の裏返し）。** どちらも
- * サーバ（`GET /conversations`）とクローンの道具（`conversation_read`）は
- * 既に言っているのに、CLI だけが黙っていると端末では気づけなくなる
- * （「片方でしかできないこと」を作らないのが PRD「インターフェース」の
- * 要件）。`reachedStart` は窓（`scan`）が日誌の先頭に届いたか、
- * `hiddenByLimit` はその窓の**中で** `--limit` に収まらず落とした会話の数
- * （窓の外は数えていない）。2つは別の条件なので、両方出ることも片方だけの
- * こともある。
+ * `scanned` は常に出す: 省くと、返ってきた件数が「これで全部」に見えてしまう。
+ * `reachedStart`（窓が日誌の先頭に届いたか）と `hiddenByLimit`（窓の中で `--limit` に収まらず落とした数）は別の条件。
  */
 export function renderConversationsList(
   conversations: ConversationSummary[],
@@ -185,11 +121,6 @@ export function renderConversationsList(
     lines.push('会話はまだありません。');
   } else {
     conversations.forEach((conversation, index) => {
-      // **作成（`startedAt`）を足す。** 値は `GET /conversations` が元から
-      // 返していて（`ConversationSummary` にも在る）、ここが出していな
-      // かっただけである（#214）。
-      // **経過（issue #2141 段1）を、作成・更新それぞれの横に添える。** ISO は
-      // そのまま残す。
       lines.push(
         `  [${index + 1}] ${conversation.conversationId}` +
           `  作成: ${conversation.startedAt}（${formatElapsedAgo(conversation.startedAt, now)}）` +
@@ -205,25 +136,19 @@ export function renderConversationsList(
     `（人間との往復を新しい方から ${scanned} 件見て集計した。これより古い会話・古い発言は窓の外に` +
       '残っているかもしれない（判定できない） — 広げるには --scan、表示件数を増やすには --limit）',
   );
-  // **`reachedStart` が真のときは出さない。** 窓が先頭に届いているなら、
-  // そこに但し書きを出すと「常に出ているもの」になって情報でなくなる
-  // （`apps/web/app/routes/chat.tsx` の `ChatPane` と同じ判断）。
+  // `reachedStart` が真のときは出さない: 常に出ているものになって情報でなくなる。
   if (!reachedStart) {
     lines.push(
       `（人間との往復を ${scanned} 件遡ったが、先頭には届いていない。これより古い会話が残っている` +
         'かもしれない）',
     );
   }
-  // **`hiddenByLimit > 0` のときだけ出す。** 語彙はクローンの道具（`tools.ts`
-  // の「…ほか N 件は省略」）に寄せる。
   if (hiddenByLimit > 0) {
     lines.push(
       `…ほか ${hiddenByLimit} 件は省略（この窓に ${conversations.length + hiddenByLimit} 件あり、` +
         `新しい順に ${conversations.length} 件だけ出した）。--limit を増やせば出る。`,
     );
   }
-  // **続きが在るときだけ出す（#3550）。** `--limit` の上限 200 や `--scan` の窓の外は、増やしても
-  // 出ない。継続点を渡せば、その続きから読める。
   if (nextCursor !== undefined) {
     lines.push(`続きを読むには: alteroid conversations list --cursor ${nextCursor}`);
   }
@@ -231,23 +156,12 @@ export function renderConversationsList(
   return lines.join('\n');
 }
 
-/** 未読があるときだけ付ける小さな印。 */
 export function unreadMark(unreadCount: number | undefined): string {
   return unreadCount !== undefined && unreadCount > 0 ? `  未読 ${unreadCount}` : '';
 }
 
 export interface ConversationsShowOptions {
-  /**
-   * 人間との往復をどこまで遡って探すか（デーモンの既定 2000、最大 10000）。
-   * マネージャーとの往復・内部ターンは数えない（issue #418）。
-   */
   scan?: string;
-  /**
-   * チャットの編集で既定ビューから畳まれた旧発言・その応答も含めて読むか
-   * （issue「チャットの送信済みメッセージを編集する」。制約(A)——`conversation_read`
-   * だけでなく、この口からも畳まれた版へ届く必要がある）。既定は含めない
-   * （デーモンの既定と同じ）。
-   */
   includeSuperseded?: boolean;
 }
 
@@ -262,14 +176,10 @@ export async function conversationsShowCommand(
     param: { id },
     query: {
       ...(options.scan === undefined ? {} : { scan: options.scan }),
-      // **`true` のときだけ渡す。** デーモンの既定（`false`）と1バイトも
-      // 違わない応答を、渡さなかった呼び出し全部に配り続ける。
       ...(options.includeSuperseded === true ? { includeSuperseded: 'true' as const } : {}),
     },
   });
   if (response.status === 404) {
-    // **遡り切れている場合だけ 404 が返る**（デーモン側の約束）。判定できない
-    // ときは 200 に空の `messages` と `reachedStart: false` が来る。
     throw new Error(`そんな会話はありません: ${id}`);
   }
   if (!response.ok) {
@@ -283,25 +193,15 @@ export async function conversationsShowCommand(
     );
   }
   const { messages, scanned, reachedStart, supersededCount } = await response.json();
-  // その会話のターンから積まれた承認を時刻順の位置に出す（#3261）。**取れなくても会話は出す。**
   const approvals = await fetchConversationApprovals(client, id);
-  // `renderConversationDetail` も改行で終わらずに返す（理由は上の
-  // `renderConversationsList` の呼び出しと同じ。#326）。
   stdout.write(
     `${renderConversationDetail(id, messages, scanned, reachedStart, supersededCount, approvals)}\n`,
   );
 }
 
 /**
- * 1つの会話の中身を、人間が読める形へ（古い順）。
- *
- * **「無い」と「判定できない」を混ぜない。** `messages` が空でも `reachedStart`
- * が偽なら、それは「発言が無かった」ではなく「この窓では見えなかった」である
- * （デーモン側の `conversationDetailResponseSchema` の注記どおり）。
- *
- * **`supersededCount` は `--include-superseded` の値によらず常に出す**
- * （0件なら出さない）。制約(A)——出ないと、この会話に編集で畳まれた版が
- * 在ることに、人間の側の器も気づけなくなる。
+ * 「無い」と「判定できない」を混ぜない: `messages` が空でも `reachedStart` が偽なら「この窓では見えなかった」である。
+ * `supersededCount` は `--include-superseded` によらず常に出す（0件なら出さない）: 出ないと畳まれた版の存在に気づけない。
  */
 export function renderConversationDetail(
   id: string,
@@ -328,18 +228,12 @@ export function renderConversationDetail(
       }
       const message = item.message;
       const speaker = message.role === 'inbound' ? '人間' : 'クローン';
-      // **どれが畳まれた版で、どの編集に置き換えられたかを読める形にする。**
-      // `--include-superseded` を付けたときだけ、どちらかが付きうる
-      // （デーモン側の約束。両方付くことは無い——`supersedes` は編集後の
-      // 発言、`supersededBy` は畳まれた側が持つ）。
       const edit =
         message.supersededBy !== undefined
           ? `  [畳まれた版 — ${message.supersededBy} に置き換えられた]`
           : message.supersedes !== undefined
             ? `  [編集後の発言 — ${message.supersedes} を置き換えた]`
             : '';
-      // **id を出す。** 編集（`supersedes`）の対象を指すのに要る。
-      // 取り下げた発言は、本文を畳んで「（取り下げた発言）」と分かる形で出す（配られていない。#3990）
       const body =
         message.delivery === 'withdrawn'
           ? withdrawnMessageText(redactBody(message.text))
@@ -369,20 +263,12 @@ export function renderConversationDetail(
   return lines.join('\n');
 }
 
-/**
- * `alteroid conversations read <id>` — 会話を、いちばん新しい発言まで既読にする。
- *
- * 既読の位置は全員で1組で、Web の画面と同じものを進める（入口によって未読が違って見えない）。
- * **進めるのは、いま読み出した最新の発言まで**——読み出した後に届いた発言は未読のまま残る。
- */
+/** 進めるのは、いま読み出した最新の発言まで: 読み出した後に届いた発言は未読のまま残る。 */
 export async function conversationsReadCommand(id: string): Promise<void> {
-  // 状態を変える口（既読の位置を進める）なので、未ログインの遠隔先は例外で終える
-  // （#2456 の書き込み系と同じ。#3447）。
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
   const detail = await client.conversations[':id'].$get({ param: { id }, query: {} });
-  // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#2856 の `show` と同じ）。
   if (detail.status === 404) throw new Error(`そんな会話はありません: ${id}`);
   if (!detail.ok) {
     const described = describeAuthFailure(detail.status, target);
@@ -395,9 +281,7 @@ export async function conversationsReadCommand(id: string): Promise<void> {
   const { messages } = body;
   const latest = messages[messages.length - 1];
   if (latest === undefined) {
-    // 見える範囲に発言が無い。未読が無いと確かめられるときだけ、何もせず成功で終える。
-    // 未読が残る・数えられない（既読の状態が読めない）ときは、既読にできていないので
-    // 成功に見せずに例外で終える（#3447。終了コードが 0 でなくなる）。
+    // 未読が無いと確かめられるときだけ成功で終える。残る・数えられないときは、既読にできていないので成功に見せない。
     const unread: unknown = body.unreadCount;
     if (unread === 0 && !('readStateUnreadable' in body)) {
       stdout.write(`未読の発言はありません: ${id}\n`);
@@ -430,18 +314,13 @@ export async function conversationsReadCommand(id: string): Promise<void> {
 const DELETE_WARNING = 'この会話の発言は、どの画面・クローンからも読めなくなる。元に戻せない。';
 
 /**
- * `alteroid conversations delete <id>` — 会話を削除する（論理削除。どの読む口からも出なくなる。Issue #4218）。
- *
- * 取り返しがつかないので、実行前に確認する。`--yes` で省く。**端末でない（stdin が TTY でない）のに
- * `--yes` が無いときは、消さずに非0で終える**（パイプの中身を答えと取り違えて消さない）。
- * 結果は件数・`incomplete`（空でなければ警告）・`remainsIn`（消せないものの案内）を省かずに出す。
+ * 端末でないのに `--yes` が無いときは、消さずに非0で終える: パイプの中身を答えと取り違えて消さないため。
  */
 export async function conversationsDeleteCommand(
   id: string,
   options: { yes?: boolean } = {},
   io: ConfirmIo = defaultConfirmIo(),
 ): Promise<void> {
-  // 状態を変える口なので、未ログインの遠隔先は例外で終える（`read` と同じ）
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
@@ -461,7 +340,6 @@ export async function conversationsDeleteCommand(
 
   const response = await client.conversations[':id'].$delete({ param: { id } });
   if (response.status === 404) {
-    // 404 は daemon の `error` をそのまま出す（言い換えない）
     const reason = await errorReason(response);
     throw new Error(reason ?? `そんな会話はありません: ${id}`);
   }
@@ -500,21 +378,12 @@ export async function conversationsDeleteCommand(
 }
 
 /**
- * `alteroid chat`（REPL）が返答を表示し終えたとき、その会話を既読にする
- * （`docs/architecture.md`「会話の既読」の「送信して返答が画面に表示されたとき」）。
- *
- * Web（`useMarkConversationRead`）と同じ意味にしてある: SSE は発言の id を運ばないので、
- * 返答が日誌に載った後に `GET /conversations/:id` を取り直し、既定ビューの最後の発言
- * （編集で畳まれた `supersededBy` 付きは除く）を `through` に `POST /conversations/:id/read` する。
- * 時刻はサーバが引く。
- *
- * **失敗しても投げない。** 返答はもう表示してあり、既読にできなかったことで会話を奪わない。
- * 黙って捨てず、1行だけ出す（次の返答で、また試す）。
+ * SSE は発言の id を運ばないので、返答が日誌に載った後に取り直して最後の発言を `through` にする。
+ * 失敗しても投げない: 返答はもう表示してあり、既読にできなかったことで会話を奪わない。
  */
 export async function markConversationReadAfterReply(
   target: Target,
   conversationId: string,
-  /** 渡されたら、Ctrl+C などでの取り消しに使う。取り消したら何も言わずに終える（取り消した旨は呼び手が言う）。 */
   signal?: AbortSignal,
 ): Promise<void> {
   const options = signal === undefined ? undefined : { init: { signal } };
@@ -557,10 +426,7 @@ export async function markConversationReadAfterReply(
   }
 }
 
-/**
- * 繋ぎ先を決めて型付きクライアントを作る。**繋げない理由はそのまま出す。**
- * `memory.ts` の同名関数と同じ理由（例外にすると人間向けの案内が例外の見た目になる）。
- */
+/** 読む口では繋げない理由を例外にしない: 人間向けの案内が例外の見た目になる。 */
 async function connect(
   access: 'read' | 'write' = 'read',
 ): Promise<{ client: DaemonClient; target: Target } | null> {

@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 連携の鍵の発行の応答を待つ間に打ち足した文字を、成功のあとも残す（issue #3891）。
- * 応答を返す時期は Promise を手で解決して操る（実時間の待ちは書かない）。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -101,7 +97,6 @@ describe('連携の鍵の発行中に打ち足した文字', () => {
     fill('source', 'ci.main');
     fill(/期限/, '2099-02-02T00:00');
     fill('本文の上限（バイト）', '1000');
-    // 1分あたりの回数は触らない（送った値のまま = 空に戻る）
     server.releaseNextPost();
 
     await waitFor(() => expect(valueOf('1分あたりの回数')).toBe(''));

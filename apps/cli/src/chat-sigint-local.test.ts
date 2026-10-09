@@ -9,11 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { captureStdout } from './test-support.js';
 
-/**
- * `chat`（REPL）の応答中でない区間の Ctrl+C（#3818）。クローンの応答を描いている間だけが
- * `POST /clone/interrupt` で、それ以外（スラッシュコマンドの通信待ち・添付のアップロード・`/resume` の探索）は
- * 手元のコマンドだけを abort し、クローンのターンには触れない。偽の readline を使うので実時間の待ちは無い。
- */
 class FakeRl extends EventEmitter {
   closed = false;
   prompts = 0;
@@ -71,7 +66,6 @@ const flush = async (): Promise<void> => {
   for (let i = 0; i < 5; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
 };
 
-/** `hang` に当たるパスは、abort されるまで応答しない（abort されたら AbortError で落ちる）。 */
 function stubFetch(
   hang: (path: string, method: string) => boolean,
   handler: (path: string) => Response | Promise<Response>,
@@ -118,12 +112,11 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
     expect(rl.closed).toBe(false);
     expect(out()).toContain('取り消しました');
 
-    // 入力待ちに戻っている（次の行を受ける）。
     rl.emit('line', '/report');
     await flush();
     rl.emit('SIGINT');
     await flush();
-    rl.emit('SIGINT'); // 入力待ちの Ctrl+C は終了
+    rl.emit('SIGINT');
     await done;
     expect(rl.closed).toBe(true);
     expect(calls.map((c) => c.path)).not.toContain('/clone/interrupt');
@@ -143,7 +136,6 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
     const done = chatCommand();
     await flush();
     rl.emit('line', `/attach ${file}`);
-    // 端末では、コマンドの実行中に打った行は送らずに取っておく（#3955）。入力待ちに戻ってから打つ。
     await vi.waitFor(() => {
       expect(rl.prompts).toBeGreaterThanOrEqual(2);
     });
@@ -207,7 +199,6 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
       (path) => {
         if (path === '/chat/c9/stream') {
           streams += 1;
-          // 1回目は探索（open だけ）、2回目が再生。
           return streams === 1
             ? sse('event: open\ndata: {"conversationId":"c9","inProgress":true}\n\n')
             : sse(body as unknown as string);
@@ -285,7 +276,6 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
     expect(out()).toContain('取り消しました。何も変更していません。');
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
 
-    // 確認は片付き、通常の入力待ちに戻っている。そこでの Ctrl+C は今までどおり終了する。
     rl.emit('SIGINT');
     await done;
     expect(rl.closed).toBe(true);

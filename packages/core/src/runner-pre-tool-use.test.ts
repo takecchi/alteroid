@@ -15,49 +15,12 @@ import { BASH_GUARD_ENV } from './bash-guard-mode.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
 
-/**
- * この試験が固定するのは、Bash の門を `deny`（止める）にした設定の挙動である（`ALTEROID_BASH_GUARD=deny`）。
- * 既定（`ask`）の挙動は `runner-bash-guard-ask.test.ts` が固定する（issue #2884）。
- */
 const DENY_ENV = { [BASH_GUARD_ENV]: 'deny' };
-
-/**
- * `PreToolUse` の配線（#894 段1・案(A)）を確かめる。
- *
- * **`runner-stop.test.ts` と同じ足場・同じ作法である**（`fakeRunnerSdk` /
- * `setup` / `startSession`）。あちらが「Stop は何も判断せず、何も抑制しない」
- * ことを固定していたのに対し、こちらは向きが逆 —— **`PreToolUse` だけは
- * 実際にブロックすること**を固定する。
- *
- * **固定するのは3つである。**
- *
- * 1. **配線そのもの。** マネージャーの `Options` に `PreToolUse` フックが
- *    1本だけ載っていて、既存の6本（`PostToolUse` / `PreCompact` /
- *    `UserPromptSubmit` / `SubagentStop` / `Stop`。`canUseTool` はフックでは
- *    ないので数えない）を落としていないこと。
- * 2. **`Bash` 以外は素通しすること。** 判定器（`bash-wait-guard.ts`）は
- *    `Bash` の `command` しか読めないので、他のツールを弾く経路が無いことを
- *    検算する。
- * 3. **弾いたときの戻り値と note。** `hookSpecificOutput.permissionDecision`
- *    が `'deny'` で、理由に代替が含まれること。日誌には `escalate` を立てない
- *    `note` が1本出ること。
- *
- * ## ⚠️ この歯の弱さ（`runner-stop.test.ts` と同じ断り）
- *
- * 下のフィクスチャは手書きのオブジェクトリテラルであり、実物の SDK フック
- * JSON を読み込んでいない。`bash-wait-guard.ts` 自体の判定ロジックの網羅性は
- * `bash-wait-guard.test.ts` が持つ —— ここで固定するのは「配線」だけである。
- */
 
 interface Started {
   options: Options;
   finish: () => void;
-  /**
-   * セッション開始後に、追加の SDK メッセージを流し込む（issue #1105 の
-   * テストのため）。**保留中の `emit` が無ければバッファへ積む**
-   * （`permission-denied.test.ts` の `fakeManagerSdk` と同じ形）——押した
-   * 直後に読まれる保証が無いため、素の resolve だけでは取りこぼす。
-   */
+  /** 保留中の `emit` が無ければバッファへ積む: 素の resolve だけでは、押した直後に読まれる保証が無く取りこぼす。 */
   push: (message: SDKMessage) => void;
 }
 
@@ -112,7 +75,6 @@ function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
   return { fn, started };
 }
 
-/** `options.hooks.PreToolUse[0].hooks[0]` を直接叩く。 */
 async function firePreToolUse(
   options: Options,
   input: Record<string, unknown>,
@@ -122,7 +84,6 @@ async function firePreToolUse(
   return hook(input as never, undefined, { signal: new AbortController().signal });
 }
 
-/** `options.hooks.PostToolUse[0].hooks[0]` を直接叩く（issue #1105、控えの消費を確かめるため）。 */
 async function firePostToolUse(
   options: Options,
   input: Record<string, unknown>,
@@ -132,7 +93,6 @@ async function firePostToolUse(
   return hook(input as never, undefined, { signal: new AbortController().signal });
 }
 
-/** `options.hooks.PostToolUseFailure[0].hooks[0]` を直接叩く（同上）。 */
 async function firePostToolUseFailure(
   options: Options,
   input: Record<string, unknown>,
@@ -163,11 +123,7 @@ function permissionDeniedEvents(events: readonly RunnerEvent[]): PermissionDenie
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-/**
- * 走行中の合図（`system/permission_denied`）を、実機の SDK が実際に送ってくる
- * 形で作る（`permission-denied.test.ts` の `liveDenialAsSdkSends` と同じ形。
- * `tool_input` を持たない）。
- */
+/** 実機の SDK が送ってくる形（`tool_input` を持たない）で作る。 */
 function liveDenialAsSdkSends(tool: string, toolUseId: string): SDKMessage {
   return {
     type: 'system',
@@ -203,7 +159,7 @@ function setup(): { host: RunnerHost; events: RunnerEvent[]; started: Started[] 
     emit: (event) => events.push(event),
     queryFn: fn,
     env: DENY_ENV,
-    // 既定の根（os.tmpdir() 配下の共有の名前）に触らない: runner の器では root 所有で作れず、余計な note が出るため（#4199）
+    // 既定の根（os.tmpdir() 配下の共有の名前）に触らない: runner の器では root 所有で作れず、余計な note が出るため
     ...outboxRoots(),
   });
   return { host, events, started };
@@ -224,8 +180,6 @@ describe('PreToolUse の配線（#894 段1・案(A)）', () => {
     expect(started.options.hooks?.PreToolUse?.[0]?.hooks?.length).toBe(1);
   });
 
-  // **配線した6本を落としていないことの検算**（この PR は足すだけで、既存の
-  // 観測を1つも外していない。`runner-stop.test.ts` の同名の歯と対になる）。
   it('既存の5本（PostToolUse / PreCompact / UserPromptSubmit / SubagentStop / Stop）はそのまま載っている', async () => {
     const { started } = await startSession();
     const hooks = started.options.hooks;
@@ -340,14 +294,6 @@ describe('Bash の有界な形は通す', () => {
   }
 });
 
-/**
- * `run_in_background` の配線（AGENTS.md「CI の完了を待つ形」）。
- *
- * **ここでしか測れないものが1つある** —— `tool_input.run_in_background` は
- * コマンド文字列に1文字も現れないので、`bash-wait-guard.test.ts` 側は
- * 「渡されたら弾く」までしか固定できない。**渡っていること自体を測るのは
- * ここである。**
- */
 describe('run_in_background を判定器へ渡す', () => {
   it('背景の gh run watch を deny し、note に形を書く', async () => {
     const { started, events } = await startSession();
@@ -370,8 +316,6 @@ describe('run_in_background を判定器へ渡す', () => {
     expect(notes[0]?.escalate).toBeUndefined();
   });
 
-  // ⭐ 同じコマンドが、前景なら通る。**この対が「弾いているのは形であって
-  // コマンドではない」ことを固定する。**
   it('同じコマンドでも run_in_background が無ければ通す', async () => {
     const { started, events } = await startSession();
     const result = await firePreToolUse(started.options, {
@@ -385,8 +329,6 @@ describe('run_in_background を判定器へ渡す', () => {
     expect(waitGuardNotes(events).length).toBe(0);
   });
 
-  // fail-open: 形が崩れた入力は「背景ではない」へ倒れる（`#onPreToolUse` の
-  // `=== true`）。⛔ 迷ったら止める、にしない。
   it('run_in_background が真偽値でなければ前景として扱う', async () => {
     const { started, events } = await startSession();
     const result = await firePreToolUse(started.options, {
@@ -398,7 +340,6 @@ describe('run_in_background を判定器へ渡す', () => {
     expect(waitGuardNotes(events).length).toBe(0);
   });
 
-  // ⭐ 偽陽性の側。**背景指定そのものを禁止にしていないこと**を固定する。
   it('背景でも、普通のコマンドは通す', async () => {
     const { started, events } = await startSession();
     for (const command of [
@@ -419,17 +360,6 @@ describe('run_in_background を判定器へ渡す', () => {
   });
 });
 
-/**
- * **issue #1105 — `PreToolUse` が拒否より前に見た入力の先頭が、同じ
- * `tool_use_id` の走行中の拒否（`system/permission_denied`）へ `inputHead`
- * として乗る。**
- *
- * SDK の走行中の合図自体には `tool_input` が原理的に付かない
- * （`liveDenialAsSdkSends` の doc）。ここで固定するのは、その欠落を
- * `#onPreToolUse` が拒否より前に見た値で埋める配線そのもの——`#capturePreToolInputHead`
- * が全道具で控え、`#noteDenial` が同じ `tool_use_id` で引いて `inputHead` へ
- * 載せ、`#onPostToolUse` / `#onPostToolUseFailure` が決着済みの分を消す。
- */
 describe('inputHead — PreToolUse が見た入力を拒否の合図へ運ぶ（issue #1105）', () => {
   it('Bash 以外（Edit）でも、拒否より前に見た入力が inputHead に乗る', async () => {
     const { started, events } = await startSession();
@@ -453,8 +383,6 @@ describe('inputHead — PreToolUse が見た入力を拒否の合図へ運ぶ（
     expect(denials[0]?.inputHead).toBe(
       '{"file_path":"apps/web/app/routes/chat.test.tsx","old_string":"x","new_string":"y"}',
     );
-    // **`input` の欄には絶対に詰めない**（走行中の合図は `tool_input` を
-    // 持たないので、runner はここへ何も作り物を置かない）。
     expect(denials[0]?.input).toBeUndefined();
     expect(() => runnerEventSchema.parse(denials[0])).not.toThrow();
   });
@@ -497,8 +425,6 @@ describe('inputHead — PreToolUse が見た入力を拒否の合図へ運ぶ（
     expect(denials).toHaveLength(1);
     const head = denials[0]?.inputHead;
     expect(head).toBeDefined();
-    // 160字で切って印（`…`）を1文字足すので、全体は161文字になる
-    // （`denial-input-head.test.ts` が固定する形と同じ）。
     expect(head).toBe(`${longCommand.slice(0, 160)}…`);
   });
 
@@ -510,7 +436,6 @@ describe('inputHead — PreToolUse が見た入力を拒否の合図へ運ぶ（
       tool_name: 'Bash',
       tool_input: { command: 'echo hi' },
     });
-    // 成功で決着（同じ tool_use_id）。
     await firePostToolUse(started.options, {
       hook_event_name: 'PostToolUse',
       tool_use_id: 'tu-1',
@@ -519,9 +444,6 @@ describe('inputHead — PreToolUse が見た入力を拒否の合図へ運ぶ（
       tool_response: { output: 'hi' },
     });
 
-    // **同じ tool_use_id が別の呼び出しで再利用されることは実機では無いはず
-    // だが、帳面が本当に消えたかを確かめるにはこの形しかない** —— 消えて
-    // いなければここで前の入力の先頭が漏れて出てくる。
     started.push(liveDenialAsSdkSends('Bash', 'tu-1'));
     await tick();
 
@@ -557,7 +479,6 @@ describe('inputHead — PreToolUse が見た入力を拒否の合図へ運ぶ（
   it('PreToolUse を経由しなかった回（toolUseId が取れない）は inputHead を作り物で埋めない', async () => {
     const { started, events } = await startSession();
 
-    // PreToolUse を一度も呼ばずに、いきなり拒否が来る形。
     started.push(liveDenialAsSdkSends('Bash', 'tu-never-seen'));
     await tick();
 
@@ -567,15 +488,6 @@ describe('inputHead — PreToolUse が見た入力を拒否の合図へ運ぶ（
   });
 });
 
-/**
- * issue #1960: Bash のガードが「弾く」と決めた後、deny を返す前に呼ぶ `emit`（note の
- * 送り出し。runner の外から渡される関数）が投げると、以前は `#onPreToolUse` 自体が
- * 例外で終わり、deny が返らなかった。SDK はフックの例外を CLI へ error として返し、
- * CLI はそれを「ブロックしない」として通常の許可の流れへ戻す（`hook_callback_failed`
- * → `blocked: false`。issue #1960 の実測）——つまりガードが素通りになる。
- *
- * ここでは、note の送り出しが投げても deny が返ることを固定する。
- */
 describe('ガードの deny は、判定の周りの例外で消えない（issue #1960）', () => {
   function setupWithThrowingNoteEmit(): { host: RunnerHost; started: Started[] } {
     const { fn, started } = fakeRunnerSdk();
@@ -625,16 +537,6 @@ describe('ガードの deny は、判定の周りの例外で消えない（issu
   });
 });
 
-/**
- * issue #2088 — ツールの `timeout` 引数が、コマンドの中の `timeout` より短い
- * 呼び出しは、弾かずに `updatedInput` で引き上げる（判定は `bash-tool-timeout.ts`）。
- *
- * ここで測るのは配線である —— `tool_input` の `timeout` / `run_in_background`
- * が判定へ渡っていること、SDK へ返す形（`permissionDecision` を付けない
- * `updatedInput` と `additionalContext`）、日誌の note。`permissionDecision` を
- * 付けなくても本体が `updatedInput` を適用することは、
- * `real-cli-pre-tool-use-rewrite.test.ts` が本物の本体で測る。
- */
 describe('Bash のツールの timeout 引数を引き上げる（#2088）', () => {
   function timeoutNotes(events: readonly RunnerEvent[]): NoteEvent[] {
     return noteEvents(events).filter((note) => note.text.includes('形=bash-tool-timeout-raised'));
@@ -659,11 +561,9 @@ describe('Bash のツールの timeout 引数を引き上げる（#2088）', () 
         },
       },
     });
-    // 判断ではない —— permissionDecision は付けない（確認の流れはそのまま）。
     const output = (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput;
     expect(output).not.toHaveProperty('permissionDecision');
     expect(String(output?.additionalContext)).toContain('310000ms');
-    // 元の入力オブジェクトは書き換えない。
     expect(toolInput).toEqual({ command: 'timeout 300 pnpm test', description: 'テストを回す' });
 
     const notes = timeoutNotes(events);

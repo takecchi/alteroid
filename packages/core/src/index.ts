@@ -1464,10 +1464,13 @@ export {
   managerPeerModelsEnvKey,
   parsePeerModels,
   resolvePeerModels,
+  resolvePeerModelsOf,
   resolvePeerOpening,
   samePeerOpening,
   type PeerClosed,
   type PeerCredentialPresence,
+  type PeerDefaultModelsOf,
+  type PeerModelsSource,
   type PeerOpening,
 } from './agent-provider-peers.js';
 /** `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。本文の先頭に固定の印を置き、前方一致で復元する（`exchange-kind.ts` の doc）。 */

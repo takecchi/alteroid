@@ -4,11 +4,7 @@ import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
 
-/**
- * `alteroid codex login|status|logout`（#3939）。Codex を ChatGPT のサブスクリプション（ChatGPT
- * ログイン）で動かすための資格を、デーモンの正本に置く・見る・消す。口は HTTP（`/codex/*`）・
- * Web と同じ API の上に乗る（片方でしかできないことを作らない）。**値は1文字も出さない。**
- */
+/** 値は1文字も出さない。 */
 
 interface CodexAuthStatus {
   loggedIn: boolean;
@@ -42,7 +38,6 @@ export function describeCodexAuthStatus(status: CodexAuthStatus): string {
     `  アカウント ${status.email ?? '(不明)'} / プラン ${status.planType ?? '(不明)'}`,
     `  最終更新 ${status.updatedAt ?? '(不明)'} / 指紋 sha256=${status.fingerprint ?? '(不明)'}`,
     '  （CODEX_API_KEY が正本に在れば、そちらが先に使われる）',
-    // 開く条件はこのログイン（#4118）。器ごとに開いたかは runner の名乗りにしか無い
     '  マネージャーの peer（Codex）は、このログインが runner に届くと開く（器ごとの開閉は alteroid runners）',
   ];
   if (status.failure !== null) {
@@ -65,11 +60,8 @@ export async function codexStatusCommand(): Promise<void> {
 }
 
 export interface CodexLoginOptions {
-  /** 進み具合を見に行く間隔（既定 2 秒）。 */
   pollMs?: number;
-  /** 待ち（テストの差し替え口）。 */
   sleep?: (ms: number) => Promise<void>;
-  /** 取り消しの合図（既定は Ctrl-C）。 */
   signal?: AbortSignal;
 }
 

@@ -11,14 +11,6 @@ import { runnerEventSchema } from './runner-protocol.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-/**
- * **走行中の定期的な退避 ref の配線（Issue #1266）。** `rescue-ref.test.ts` が
- * 作り方（作業ツリーを動かさない・歯・分類）を持つ。ここは `RunnerHost` のタイマーが
- * 走行中の各セッションを撃ち、`rescue_ref` を（境界を通る形で）emit すること、
- * 前回と同じなら黙ること、畳む直前にも1回撃つことだけを、本物の git と
- * ローカルの bare リポジトリで固定する。
- */
-
 function fakeSdk(): typeof sdkQuery {
   return ((params: { prompt: AsyncIterable<unknown> }) => {
     let finish: (() => void) | null = null;
@@ -129,13 +121,10 @@ describe('走行中の退避 ref の配線（Issue #1266）', () => {
     expect(tree?.untracked?.paths).toEqual(['scratch.txt']);
     expect(g(bare, 'show', `${tree?.pushed?.ref as string}:a.txt`)).toBe('edited\n');
 
-    // 何も変わらない周期は黙る。周期は本物の git の子プロセスを起こすので偽の時計では回せず、
-    // ここだけ実時間で待つ（scripts/wallclock-waits-baseline.json に1件として載せてある。#2146）。
-    // 器が混んで周期が回りきらなくても、落ちる側ではなく「確かめが弱まる」側に倒れる。
+    // 偽の時計にしない: 周期は本物の git の子プロセスを起こすので回らない。実時間で待つ（scripts/wallclock-waits-baseline.json に載せてある）。
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(rescueEvents(events)).toHaveLength(1);
 
-    // 変わったらまた送る。
     await writeFile(path.join(repo, 'a.txt'), 'edited again\n');
     await vi.waitFor(() => expect(rescueEvents(events)).toHaveLength(2), { timeout: 5000 });
   });
@@ -148,7 +137,7 @@ describe('走行中の退避 ref の配線（Issue #1266）', () => {
 
     await host.shutdown();
 
-    // B3: 既存の shutdown_unpushed_work は退避（最大20秒）を待たず、先に emit する（#2749 の窓を広げない）。
+    // shutdown_unpushed_work は退避（最大20秒）を待たず先に emit する: 待つと通知の窓が広がる。
     const types = events.map((e) => e.type);
     expect(types.indexOf('shutdown_unpushed_work')).toBeLessThan(types.indexOf('rescue_ref'));
     const found = rescueEvents(events);

@@ -61,29 +61,20 @@ import type {
 
 /**
  * ストアのインターフェース（docs/architecture.md「ストレージ」）。
- * ドライバは storage-fs（ローカル）/ storage-pg（M4）で差し替える。
- *
- * 接続情報を持つのはデーモンプロセスだけである（非対称な可視性）。
- * マネージャー子プロセスへこれらの実装を渡してはいけない。
+ * 接続情報を持つのはデーモンプロセスだけである。マネージャー子プロセスへこれらの実装を渡さない。
  */
 
 /**
- * 記憶の本文を保存する形へ正規化する — 末尾に改行が1つある形にする。
- *
- * **`PersonaStore` を実装する側は、これを自分で書き直さないでここを呼ぶこと。**
- * 出所がここに在るのは、複製された結果が実際に食い違ったからである（下の
- * `write` の doc、および #370）。
+ * 記憶の本文を保存する形へ正規化する（末尾に改行が1つある形）。
+ * `PersonaStore` の実装は自分で書き直さずここを呼ぶ: 複製すると3実装の読み戻しが食い違うため。
  */
 export function ensureTrailingNewline(text: string): string {
   return text.endsWith('\n') ? text : `${text}\n`;
 }
 
 /**
- * 記憶文書の「版」。**保存された本文（正規化後。`read()` が返す `content`）の
- * sha256 hex。** 読んだ側が持ち回り、書くときに `WriteMemoryOptions.ifMatch` へ
- * 渡す（Issue #2743）。`updatedAt` でなく本文のハッシュにしたのは、fs の mtime の
- * 精度（同じ時刻内の2回の書き込みを区別できない）に依らないため、
- * かつ3実装（fs / pg / インメモリ）が同じ式で同じ値を出せるためである。
+ * 記憶文書の「版」。保存された本文（正規化後の `content`）の sha256 hex。
+ * `updatedAt` にしない: fs の mtime の精度では同じ時刻内の2回の書き込みを区別できず、3実装が同じ式で出せないため。
  */
 export function memoryVersion(content: string): string {
   return createHash('sha256').update(content).digest('hex');
@@ -91,26 +82,17 @@ export function memoryVersion(content: string): string {
 
 /** `PersonaStore.write` の任意の引数。 */
 export interface WriteMemoryOptions {
-  /**
-   * 前提の版（`memoryVersion` の値）。**書く瞬間の版がこれと違えば書かず、
-   * `MemoryConflictError` を投げる**（比較と書き込みは1つの排他の中で行う）。
-   * `null` は「読んだ時には無かった」——いまも無いときだけ書ける。
-   * **省略（`undefined`）は従来どおり後勝ち**（クローンの道具など、前提を
-   * 持たない書き手のため）。`ScheduleStore.claimRun` の `expectedUpdatedAt` と同じ形。
-   */
+  /** 前提の版（`memoryVersion`）。書く瞬間の版と違えば書かず `MemoryConflictError`。`null` は「無いときだけ書ける」、省略は後勝ち。 */
   ifMatch?: string | null;
 }
 
-/** `PersonaStore.remove` の任意の引数（Issue #2881）。 */
+/** `PersonaStore.remove` の任意の引数。 */
 export interface RemoveMemoryOptions {
-  /** 前提の版（`memoryVersion` の値）。合わなければ消さず `MemoryConflictError`。省略は無条件。 */
+  /** 前提の版（`memoryVersion`）。合わなければ消さず `MemoryConflictError`。省略は無条件。 */
   ifMatch?: string;
 }
 
-/**
- * 前提の版が合わず、書かなかった。`current` は**いまの文書**（無ければ `null`）
- * ——書き手が自分の内容を捨てずに見比べられるよう、呼び出し側へ返す。
- */
+/** 前提の版が合わず、書かなかった。`current` はいまの文書（無ければ `null`）。 */
 export class MemoryConflictError extends Error {
   readonly current: MemoryDocument | null;
   constructor(slug: string, current: MemoryDocument | null) {
@@ -135,178 +117,68 @@ export interface PersonaStore {
   /**
    * **slug の昇順。**（#662 の継続点が依拠する契約）
    *
-   * **宣言する前から3実装とも満たしていた**（pg: `.orderBy(asc(memory.slug))`、
-   * fs: `names.sort()`、in-memory: `.sort((a, b) => a.slug.localeCompare(b.slug))`）。
-   * ⟹ ここで書き足したのは**振る舞いではなく契約**である——`memory_list` の
-   * 継続点（`memory-cursor.ts`）が「一覧が並んでいる」ことに全面的に依拠する
-   * ので、偶然揃っている状態のままでは置けない。
-   *
-   * ⚠️ **照合順序の厳密な一致までは保証しない**（JS の `localeCompare` /
-   * コードポイント順 / pg の `asc` は記号混じりで食い違う余地がある）。
-   * ⟹ 継続点は**位置の探索を第一の手段**にし、比較は錨が消えていたときの
-   * 保険に留めること（`schedule-cursor.ts` の「第二の手段の限界」と同じ）。
+   * `memory_list` の継続点（`memory-cursor.ts`）が並びに全面的に依拠するので、偶然揃っている状態にしない。
+   * 照合順序の厳密な一致までは保証しない: 継続点は位置の探索を第一にし、比較は錨が消えたときの保険に留める。
    */
   list(): Promise<MemoryDocumentMeta[]>;
   read(slug: string): Promise<MemoryDocument | null>;
   /**
    * 全文置換。存在しなければ作る。
    *
-   * **契約: 書いた本文は、末尾の改行が正規化されて読み戻る。**
-   * `write(slug, '# X')` の直後の `read(slug)` が返す `content` は `'# X\n'`
-   * であって `'# X'` ではない。既に `\n` で終わっているなら足さない。
-   * `bytes` も `content_sha256` も、この正規化を通した後の本文に対して数える。
-   * **実装する側はこの正規化を自分で書かず、上の `ensureTrailingNewline` を
-   * 通すこと。**
+   * **書いた本文は、末尾の改行が正規化されて読み戻る**（`write(slug, '# X')` → `read` は `'# X\n'`）。
+   * `bytes` も `content_sha256` も正規化後の本文で数える。実装は自分で正規化せず `ensureTrailingNewline` を通す:
+   * 複製したせいでインメモリだけ読み戻しが違い、単体テストが乖離した側だけを測っていた。
+   * 実装を足すときは、fs / pg / インメモリ（`persona-contract.test.ts`）と同じ歯を足す。
    *
-   * **この契約は、かつて3実装のうち1つで守られていなかった（#370）。**
-   * `ensureTrailingNewline` は `storage-fs` と `storage-pg` に逐語で複製されて
-   * いて共有の出所が無く、3つ目（`testing.ts` のインメモリ）はそれを持たない
-   * まま書かれた。結果、同じ `write(slug, '# X')` に対して `read()` が返す値が
-   * 実装ごとに違い（fs / pg は `'# X\n'`、インメモリは `'# X'`）、
-   * **`packages/core` の単体テストが当たるのは乖離を持っているインメモリの
-   * ほうだけだった** — 本番と違う形のものを測って、本番を測ったことにして
-   * いた。**同型の前科がもう1件、`memory.ts` の冒頭に記録されている**
-   * （見出しを付けるか否かで、やはりインメモリだけが違っていた）。
-   *
-   * **いまは3実装とも上の `ensureTrailingNewline` を通していて、この契約には
-   * 3実装それぞれに歯が当たっている**（fs: `packages/storage-fs/src/index.test.ts`
-   * / pg: `packages/storage-pg/src/index.persona.test.ts` / インメモリ:
-   * `packages/core/src/persona-contract.test.ts`）。**4つ目を足すときは、
-   * その歯も4つ目にする。** 1つで測って3つとも測ったことにしないのが、
-   * この Issue の主題そのものである。
-   *
-   * **`options.ifMatch`（Issue #2743）で前提の版を持てる。** 合わなければ
-   * 何も書かず `MemoryConflictError`。比較は書き込みと同じ排他の中で行う
-   * （fs: `#serialize` の内側、pg: 条件付きの1文）。3実装とも同じ挙動で、
-   * `persona-contract.test.ts` / fs / pg の各テストに歯がある。
-   *
-   * **本文の NUL は、fs も含めて落として残す**（issue #2927。teto の判断、2026-10-05。slug は `memorySlugSchema` が NUL を含めて弾く）。
+   * `options.ifMatch` の比較は書き込みと同じ排他の中で行う（fs: `#serialize` の内側、pg: 条件付きの1文）。
+   * 本文の NUL は、fs も含めて落として残す（slug は `memorySlugSchema` が NUL ごと弾く）。
    */
   write(slug: string, content: string, options?: WriteMemoryOptions): Promise<MemoryDocument>;
   /**
    * 末尾に追記。存在しなければ作る。
-   *
-   * **契約: 既存の本文と追記の本文のあいだには、必ず空行が1つ入る。**
-   * 既存が改行で終わっているかどうかで結果が変わってはいけない — 上の `write`
-   * の正規化に頼らず、`append` の側でも `ensureTrailingNewline` を通すこと
-   * （fs / pg はどちらもそうしている。#354 の変異試験は、この二重の守りの
-   * 片方だけを外しても歯が落ちないことを実測している）。
+   * 既存の本文とのあいだには必ず空行が1つ入る: `write` の正規化に頼らず `append` でも `ensureTrailingNewline` を通す（二重の守り）。
    */
   append(slug: string, content: string): Promise<MemoryDocument>;
-  /**
-   * 文書を消す。無ければ何もしない（冪等）。
-   *
-   * **`options.ifMatch`（Issue #2881）で前提の版を持てる。** いまの版と違えば
-   * 何も消さず `MemoryConflictError`（`write` と同じ。比較は消すのと同じ排他の中で行う）。
-   * 省略は従来どおり無条件に消す（段階1。`PUT` と違い、版を持たない呼び出しを
-   * いずれ必須にする予定は PRD に在る）。
-   */
+  /** 文書を消す。無ければ何もしない（冪等）。`options.ifMatch` の比較は排他の中（`write` と同じ）。 */
   remove(slug: string, options?: RemoveMemoryOptions): Promise<void>;
   /**
    * 全文書を本文ごと、`slug` の昇順で返す。
-   *
-   * **かつてここは `concat(): Promise<string>` だった。** 器の側で1つの文字列に
-   * 潰していたので、上の層は「どの文書が変わったか」を問えず、走行中に人間が1行
-   * 直しただけで**記憶の全文をもう一度クローンの文脈へ載せていた**（システム
-   * プロンプトに載っている分と合わせて二重に載る）。載せ方は
-   * `renderMemoryDocuments`（`memory.ts`）が持ち、器は文書を渡すだけにする。
+   * 器は文書を渡すだけにする: 1つの文字列に潰すと、人間が1行直しただけで記憶の全文をクローンの文脈へ載せ直すことになる
+   * （載せ方は `renderMemoryDocuments`〈`memory.ts`〉が持つ）。
    */
   documents(): Promise<MemoryDocument[]>;
 
-  /**
-   * 全文書を消す（ワークスペースのリセット専用。#workspace-reset）。
-   *
-   * **`remove()` を文書の数だけ呼ぶのと同じ意味だが、器ごとに1操作で済ませる**
-   * （fs は memory ディレクトリごと作り直す、pg は `truncate`）。保護状態
-   * （`human_touched_at` 等）も同じ行・同じファイルに乗っているので一緒に消える
-   * ——過去に human で書かれた事実そのものは日誌に残るので、リセット後に新しく
-   * 書かれた記憶へは backfill が改めて印を立てられる。
-   *
-   * 消した件数を返す（`WorkspaceResetSummary` が申告に使う）。
-   */
+  /** 全文書を消す（ワークスペースのリセット専用）。保護状態（`human_touched_at` 等）も同じ行・ファイルに乗っているので一緒に消える。消した件数を返す。 */
   clear(): Promise<number>;
 
   /**
-   * この文書の保護状態（`schema.ts` の `MemoryProtectionStatus`）を返す。
-   *
-   * **新しい真実ではない。** 実体は日誌（`memory_update.cause`）にあり、ここは
-   * その派生値（pg: `memory` テーブルの2列 / fs: `.index.json`）を読んだ結果を
-   * 返すだけである。派生値を失った・信用できないとき（fs で索引ファイルが無い・
-   * 壊れている／内容のハッシュが `content_sha256` と一致しない＝デーモンを
-   * 通さず誰かが書き換えた可能性がある）は `unknown`（守る側）を返す。
-   *
-   * **誰にも送られない。** HTTP / CLI / 道具のどの入力スキーマにも登場しない
-   * — `tools.ts` の distill ガードと、状態を人間可読にする表示のためだけに
-   * 内部で使う値である。
+   * この文書の保護状態。新しい真実ではなく、日誌（`memory_update.cause`）の派生値（pg: `memory` テーブルの2列 / fs: `.index.json`）を読むだけ。
+   * 派生値を失った・信用できないとき（索引が無い・壊れている・内容のハッシュが `content_sha256` と不一致）は `unknown`（守る側）を返す。
+   * 誰にも送られない（HTTP / CLI / 道具の入力スキーマに出さない）。
    */
   protectionStatus(slug: string): Promise<MemoryProtectionStatus>;
 
   /**
-   * `cause:'human'` の `memory_update`（`action:'write'`）が記録されたことを、
-   * 保護状態の派生値へ反映する。
+   * `cause:'human'` の `memory_update`（`action:'write'`）が記録されたことを、保護状態の派生値へ反映する。
+   * 呼ぶのは日誌へ `cause:'human'` を書く箇所（`PUT /memory/:slug`）と起動時の backfill だけで、配線を増やす場所ではない。
    *
-   * 呼ぶのは日誌へ `cause:'human'` を書く箇所（`apps/daemon/src/app.ts` の
-   * `PUT /memory/:slug`）と、デーモン起動時の backfill（`apps/daemon/src/storage.ts`）
-   * だけである。**新しく配線を増やす場所ではない。**
-   *
-   * **一度立てたら降ろさない。** `at` はその時点で分かっている human 書き込みの
-   * 時刻で、既に持っている値より古ければ何もしない（新しい順に舐める backfill が
-   * 呼んでも巻き戻らないため）。実体（`.md` ファイル / `memory` テーブルの行）が
-   * 既に無い slug に対して呼ばれても、新しく行を作ってはいけない — 削除済みの
-   * slug が空文字の「文書」として `list()` / `read()` に化けて出てくる。
+   * 一度立てたら降ろさない: 既に持つ値より古い `at` では何もしない（新しい順に舐める backfill で巻き戻らないため）。
+   * 実体が無い slug に対して行を作らない: 削除済みの slug が空文字の「文書」として `list()` / `read()` に化ける。
    */
   markHumanTouched(slug: string, at: string): Promise<void>;
 
   /**
-   * `createdAt` の派生値へ、日誌から導出した「最初に `action:'write'` で
-   * 書かれた時刻」を反映する。
-   *
-   * 呼ぶのはデーモン起動時の backfill（`apps/daemon/src/storage.ts`）だけである。
-   * **新しく配線を増やす場所ではない**（`markHumanTouched` と同じ約束）。
-   *
-   * **`createdAt` の第一の出所はこのメソッドではない。** ストア自身が
-   * 書き込み経路（fs の `#writeNow` / pg の `write` と `append`）の中で、
-   * その書き込みが文書を作った瞬間に直接 `createdAt` を立てる（記憶の
-   * `createdAt` 対応）。このメソッドが担うのは、**その配線より前に作られた
-   * 行**——書き込み経路がまだ見ていない昔の記憶——を日誌から埋める後始末
-   * だけである。新しく作られる記憶にとって、このメソッドは通常呼ばれても
-   * 何もしない（既に書き込み経路で値が入っているため、絶対条件2の
-   * 「値が無いときだけ」に当たらない）。
-   *
-   * **`markHumanTouched` と違い、単調非減少ではない——一度きりの確定である。**
-   * 既に値が入っている slug には何もしない（**冪等**。2回目以降の backfill は
-   * 何も変えない）。実体が既に無い slug に対して呼ばれても、新しく行を作っては
-   * いけない（`markHumanTouched` と同じ理由）。
-   *
-   * **`unknown` という値をストアへ書き込む口ではない。** 根拠が無い slug に
-   * ついてはこのメソッドを呼ばないこと——値が無いこと自体が「根拠が無い」を
-   * 表す（`memoryCreatedAtSchema` の doc）。読み出し側（`list()` / `read()`）が
-   * 値の無い slug を `{ kind: 'unknown' }` として組み立てる。
-   *
-   * **戻り値は「実際に書いたか」。** `markHumanTouched` と違って `boolean` を
-   * 返すのは、backfill が「何件埋めたか」を観測できる必要があるからである
-   * （記憶の絶対条件5）。既に値が入っていた・実体が無い、のどちらでも `false`。
+   * `createdAt` の派生値へ、日誌から導出した「最初に `action:'write'` で書かれた時刻」を反映する。呼ぶのは起動時の backfill だけ。
+   * `markHumanTouched` と違い一度きりの確定: 既に値がある slug には何もしない。実体が無い slug に行を作らない。
+   * 根拠が無い slug には呼ばない（値が無いこと自体が「根拠が無い」を表す。`memoryCreatedAtSchema`）。戻り値は「実際に書いたか」（backfill が何件埋めたかの観測に要る）。
    */
   markCreatedAt(slug: string, at: string): Promise<boolean>;
 }
 
-/**
- * `exchange` の `with`（誰との往復か）。`journalEntrySchema` の `exchange` 枝
- * （`schema.ts`）から型だけを取り出す — 値の一覧をここへ複製しない。`with` を
- * 持つのは `exchange` だけである。
- */
+/** `exchange` の `with`（誰との往復か）。`journalEntrySchema` から型だけを取り出す（値の一覧を複製しない）。 */
 export type ExchangeWith = Extract<JournalEntry, { type: 'exchange' }>['with'];
 
-/**
- * `ExchangeWith` の値の一覧（`journal_read` ツールの zod の `enum` を組み立てる
- * ために要る——zod は型だけからは実行時の値を取り出せない）。
- *
- * **`schema.ts` の `journalEntrySchema`（正本）の値をここへ書き写したもので
- * はない——`satisfies Record<ExchangeWith, true>` で縛ってあるので、正本の
- * `with` に値が増減して `ExchangeWith` が変われば、ここがコンパイルエラーに
- * なる（`schema.ts` の `journalEntryTypeNames` が `JOURNAL_ENTRY_TYPES` を
- * 作るのと同じ形。あちらを踏襲した——`types` と `with` で違う流儀を作らない）。**
- */
+/** `satisfies Record<ExchangeWith, true>` で縛ってあり、正本の `with` が増減すればここがコンパイルエラーになる。 */
 const exchangeWithNames = {
   human: true,
   manager: true,
@@ -320,184 +192,60 @@ export const EXCHANGE_WITH_VALUES = Object.keys(exchangeWithNames) as [
 
 export interface JournalQuery {
   /**
-   * 返す最大件数。
-   *
-   * **`0` = 0件（issue #425）。** 「絞らない」ではなく「0件くれ」という指定
-   * として扱う——`with: []` と同じ理由（下の `with` の doc）。**契約
-   * （3実装で揃える。`journal-query-edge-contract.ts` の
-   * `verifyJournalStoreQueryEdgeContract` が測る）:**
-   *
-   * - `limit: 0` = 0件
-   * - `limit: N`（`N >= 1`）は従来どおり N 件で切る——1文字も変えていない
-   *
-   * **⚠️ この契約が掛かるのは「ストアの問い合わせ」の引数だけである。** 面の側の
-   * 絞り（ストアを1文字も通らないもの）は別で、`manager_list`（`tools.ts`）の
-   * `status` は **`[]` を「絞らない」へ倒してある**（理由はそちらの doc。逐語:
-   * `grep -Fn -- 'は「絞らない」へ倒す。**この面の他の一覧とは逆である**' packages/core/src/tools.ts`）。
+   * 返す最大件数。**`0` = 0件**（「絞らない」ではない。`with: []` と同じ）。
+   * 3実装で揃える契約は `verifyJournalStoreQueryEdgeContract` が測る。掛かるのは「ストアの問い合わせ」の引数だけで、面の側の絞り（`manager_list` の `status` など）は別。
    */
   limit?: number;
-  /**
-   * エントリの種別で絞る。
-   *
-   * **`types: []`（空配列）= 0件（issue #425）。** 「絞らない」ではなく
-   * 「どれにも当たらない」という指定として扱う——`with: []` が #418 で
-   * 「0件」に決まっている（下の `with` の doc）ので、それに揃えた。
-   * **以前は pg だけが `types: []` を「絞らない」に倒していた**（`length
-   * === 0` を特別扱いする条件を持っていたのが `types` の pg 実装だけ
-   * だった。`packages/storage-pg/src/journal.ts` の `types` の行を参照）。
-   * **契約（3実装で揃える。`journal-query-edge-contract.ts` の
-   * `verifyJournalStoreQueryEdgeContract` が測る）:**
-   *
-   * - 未指定 = 絞らない（既存の挙動を1文字も変えない）
-   * - 指定 = その種別だけを返す
-   * - `[]` = 0件
-   *
-   * **⚠️ この契約が掛かるのは「ストアの問い合わせ」の引数だけである。** 面の側の
-   * 絞り（ストアを1文字も通らないもの）は別で、`manager_list`（`tools.ts`）の
-   * `status` は **`[]` を「絞らない」へ倒してある**（理由はそちらの doc。逐語:
-   * `grep -Fn -- 'は「絞らない」へ倒す。**この面の他の一覧とは逆である**' packages/core/src/tools.ts`）。
-   */
+  /** エントリの種別で絞る。未指定 = 絞らない、`[]` = 0件（`with: []` と揃える。契約は `verifyJournalStoreQueryEdgeContract`）。 */
   types?: JournalEntryType[];
   /** ISO 8601。この時刻以降のエントリだけ返す。 */
   since?: string;
   /**
    * ISO 8601。この時刻以前のエントリだけ返す。
-   *
-   * **`since` だけでは過去の一区間を取れない。** 返るのは新しい順なので、
-   * 「9時に何があったか」を聞いても手前に積まれた最新のものが `limit` を
-   * 食い尽くし、狙った時刻には決して届かない（実際にそれで届かなかった）。
-   * 窓の終端を閉じられて初めて、過去の一点を掘れる。
+   * 閉じない: `since` だけだと返るのは新しい順なので、手前の最新が `limit` を食い尽くして過去の一点に届かない。
    */
   until?: string;
   /**
-   * `exchange` を `with` で絞る（issue #418）。
+   * `exchange` を `with` で絞る。契約は `verifyJournalStoreWithContract` が3実装に当てる:
    *
-   * **契約（3実装 — `testing.ts` のインメモリ / `storage-fs` / `storage-pg` —
-   * で揃える。3つとも歯を持つ。`journal-with-contract.ts` の
-   * `verifyJournalStoreWithContract` が単一の契約として測る）:**
+   * - 未指定 = 絞らない。指定 = その値の `exchange` だけ（`with` を持たない種別は1件も返らない）。`[]` = 0件
+   * - **`limit` より前に効く**: 件数の窓を切ってから絞ると、他の `with` の行が `scan` の予算を食い尽くし、人間との会話が窓の外へ落ちる
    *
-   * - **未指定 = 絞らない。** 既存の挙動を1文字も変えない
-   * - **指定 = その値の `exchange` だけを返す。** `with` を持たない種別
-   *   （`decision` / `tool_use` 等）は `with` を持たないので、絞りを指定した
-   *   時点で1件も返らない — `types` でそれらを別途除く必要はない
-   * - **`[]`（空配列）= 0件。** 「どれにも当たらない」という指定として扱う。
-   *   **この issue（#418）の時点では `types: []` の挙動が実装間で食い違って
-   *   おり（インメモリ / fs は0件、pg は絞らない）、ここは`別に決めた`契約
-   *   だった。#425 で `types` もここへ揃えた**（上の `types` の doc）ので、
-   *   いまは同じ契約である
-   *   - **⚠️ この契約が掛かるのは「ストアの問い合わせ」の引数だけである。** 面の
-   *     側の絞り（ストアを1文字も通らないもの）は別で、`manager_list`
-   *     （`tools.ts`）の `status` は **`[]` を「絞らない」へ倒してある**
-   *     （人間の `GET /managers?status=` との等価性が、あの引数を足した理由
-   *     そのものだからである。逐語:
-   *     `grep -Fn -- 'は「絞らない」へ倒す。**この面の他の一覧とは逆である**' packages/core/src/tools.ts`）。
-   *     **ここを新しい絞りの正本として読む人が、その例外に気づけるようにする
-   *     ための1行である**（`manager_list` 側にしか記録が無いと、この doc から
-   *     見ると存在しないのと同じになる）
-   * - **`limit` より前に効く。** ここが要点である — `GET /conversations` /
-   *   `GET /conversations/:id` / `conversation_read` はいずれも
-   *   `types: ['exchange']` で件数の窓を切ってから `with === 'human'` に
-   *   絞っていたため、`with: 'manager'` / `with: 'self'` の行が `scan` の
-   *   予算を食い尽くし、人間との会話が窓の外へ落ちていた（#418）。絞りを
-   *   `limit` より前（ストアの側）へ移すことで、`scan` の予算を食うのは
-   *   その `with` に当たる行だけになる。
-   *
-   * 組み立てるのは `conversation.ts` の `readConversationWindow` 1か所だけに
-   * すること — 呼び出し口ごとに手で組むと、直したほうと忘れたほうで挙動が
-   * ずれる（この issue の症状そのものの再発）。
+   * 組み立てるのは `conversation.ts` の `readConversationWindow` 1か所だけにする: 呼び出し口ごとに手で組むと、直したほうと忘れたほうで挙動がずれる。
    */
   with?: ExchangeWith[];
   /**
-   * 本文を語で探す（issue #250）。
+   * 本文を語で探す。意味論は `conversation_read` の `q`（`conversation.ts` の `searchExchanges`）を踏襲し、
+   * 大文字小文字を区別しない単純な部分一致だけ（新しい検索の意味論を発明しない）。どの欄を本文と見るかの正本は `journal-search.ts` の `SEARCHABLE_FIELDS_BY_TYPE`。
+   * 契約は `verifyJournalStoreSearchContract` が3実装に当てる:
    *
-   * **意味論は `conversation_read` の `q` をそのまま踏襲する。新しい検索の
-   * 意味論を発明しない** —— `conversation.ts` の `searchExchanges`（「語で探す。
-   * **大文字小文字を区別しない単純な部分一致だけを持つ。**」）と同じである。
-   * 正規表現も AND/OR も無い。
-   *
-   * **どの欄を本文と見るかは `journal-search.ts` の
-   * `SEARCHABLE_FIELDS_BY_TYPE` が唯一の正本である**（3実装がそこから式を
-   * 組み立てる）。**`tool_use` の `input` / `worker_wait` / `turn_usage` は
-   * 対象外** —— 理由と、そこから来る「当たらない ≠ 日誌に無い」は同ファイルの
-   * doc が持つ。ここに書き写さない。
-   *
-   * **契約（3実装で揃える。`journal-search-contract.ts` の
-   * `verifyJournalStoreSearchContract` が測る）:**
-   *
-   * - **未指定 = 絞らない**（既存の挙動を1文字も変えない）
-   * - **指定 = 本文にその語を含む行だけを返す（大文字小文字を区別しない
-   *   部分一致）**
-   * - **`''`（空文字列）= 絞らない。** `types: []` / `with: []` の「0件」とは
-   *   逆に見えるが逆ではない（`matchesJournalSearch` の doc —— あちらは許す値
-   *   の集合で、空集合は何も許さない。こちらは探す語で、空の語はどの文字列にも
-   *   含まれる）
-   * - **`%` と `_` はワイルドカードではない。** pg 実装が `ILIKE` を使うので、
-   *   ここを塞がないと **pg だけ**が `q: '50%'` で全件を返す。3実装で揃える
-   *   対象そのものである
-   * - **`limit` より前に効く**（`with` と同じ。#418 の穴の本体）。ここが崩れて
-   *   いると、当たらない行が `limit` の予算を食い尽くし、狙った行が窓の外へ
-   *   落ちる
-   * - **適用順序は `types` / `with` / `since` / `until` と同じ段である**
-   *   （下の `after` の doc の「`after` → 絞り込み → `limit`」の、絞り込みの側）
+   * - 未指定も `''` も絞らない（空の語はどの文字列にも含まれる）
+   * - `%` と `_` はワイルドカードではない: pg が `ILIKE` を使うので、塞がないと pg だけが `q: '50%'` で全件を返す
+   * - `limit` より前に効く（`with` と同じ。適用順序は `after` → 絞り込み → `limit`）
    */
   q?: string;
-  /**
-   * 返す順序（issue #432 の2本目）。**既定 `'desc'`**（新しい順＝従来の挙動を
-   * 1バイトも変えない）。`'asc'` で古い順にできる。
-   */
+  /** 返す順序。既定 `'desc'`（新しい順）。`'asc'` で古い順。 */
   order?: 'asc' | 'desc';
   /**
-   * ページングの錨（issue #432 の2本目）。**この行の「次」（＝返る順序における
-   * 次）から返す。** `order: 'desc'`（既定）なら錨より**古い**側、
-   * `order: 'asc'` なら錨より**新しい**側が返る——「次」は時間の意味ではなく
-   * 返る順序の意味である。
+   * ページングの錨。**この行の「次」（返る順序における次）から返す。**
+   * `desc` なら錨より古い側、`asc` なら錨より新しい側。
    *
-   * **なぜ位置ではなく `(id, at)` の値で錨を指すか。** 日誌は追記専用で
-   * `JournalStore`（本ファイル）に更新・削除の口が無い——既存の行どうしの
-   * 前後関係は永久に変わらない。だから値そのものを錨にしても、頁の間に
-   * 新しい行が追記されても位置がずれない（`/approvals` のカーソルが
-   * `putApproval` による行の移動に耐えるために `(createdAt, id)` を使うのと
-   * 同じ理由。あちらは移動に耐えるためだが、こちらは日誌が構造的に移動しない
-   * ことそのものが理由である）。
+   * `(id, at)` の値で錨を指す: 日誌は追記専用で行どうしの前後関係が永久に変わらないので、頁の間に追記されても位置がずれない。
+   * `id` だけでは足りない: fs は `at` からファイルを決める都合で `at` に依存し、pg / インメモリが `at` を見なければ実装ごとに答えが違う。
+   * `at` だけでも足りない: ミリ秒精度なので同着がありうる。
    *
-   * **`id` だけでは足りない。** `id` の一致だけで錨を引くと、fs 実装は
-   * `at` からファイルを決める都合上 `at` に依存しており、pg / インメモリが
-   * `at` を見なければ同じ入力で実装ごとに答えが違いうる。だから3実装とも
-   * `id` **と** `at` の両方が一致する行を探すこと。
+   * 契約は `verifyJournalStoreOrderContract` が3実装に当てる:
    *
-   * **`at` だけでは足りない。** `at` はミリ秒精度の `new Date().toISOString()`
-   * なので、同じミリ秒に2行積まれることがある（`id` はその同着を割るための
-   * 補助キーである）。
-   *
-   * **契約（3実装 — `testing.ts` のインメモリ / `storage-fs` / `storage-pg` —
-   * で揃える。3つとも歯を持つ。`journal-order-with-contract.ts` の
-   * `verifyJournalStoreOrderContract` が単一の契約として測る）:**
-   *
-   * - **`id` と `at` の両方が一致する行が無ければ `JournalAnchorNotFoundError`
-   *   を投げる。** 黙って「先頭から」に倒さない——判定できないという第3の
-   *   状態を持つ（AGENTS.md「静かに失敗する道具」）。
-   * - **適用順序: `after` → `types` / `with` / `q` / `since` / `until` → `limit`。**
-   *   錨の位置は全順序（絞り込み前）の中で決め、そこから先を絞って、最後に
-   *   切る。この順序が逆だと、絞りに当たらない行が錨と `limit` のあいだに
-   *   挟まったとき（あるいは錨自体が絞りに当たらない種別のとき）に頁の連結が
-   *   壊れる。
+   * - 一致する行が無ければ `JournalAnchorNotFoundError`。黙って「先頭から」に倒さない（判定できないという第3の状態）
+   * - 適用順序: `after` → `types` / `with` / `q` / `since` / `until` → `limit`。錨の位置は絞り込み前の全順序で決める
+   *   （逆だと、絞りに当たらない行が錨と `limit` のあいだに挟まったとき頁の連結が壊れる）
    */
   after?: { id: string; at: string };
 }
 
 /**
- * `JournalStore.list` の `after` で指定した錨（`{ id, at }`）が、`id` と `at`
- * の両方が一致する行として見つからないときに投げる専用のエラー型
- * （issue #432 の2本目）。
- *
- * **黙って「先頭から」に倒さないための型。** `after` が指す行は頁の継続点
- * そのものなので、見つからないことは「判定できない」という第3の状態であって
- * 「無かったので最初から返す」ではない（AGENTS.md「静かに失敗する道具」
- * 「判定できないという3つ目の状態を持つ」）。呼び出し側（`apps/daemon/src/app.ts`
- * の `GET /journal`）はこれを `instanceof` で捕まえて 400 へ変換する。
- *
- * `UnreadableCommitmentError` と同じ形（メッセージの文字列ではなく型で
- * 判定できるようにする）。
+ * `JournalQuery.after` の錨（`{ id, at }`）が見つからないときに投げる。
+ * 黙って「先頭から」に倒さない: `after` は頁の継続点そのものなので、見つからないことは「判定できない」である。
  */
 export class JournalAnchorNotFoundError extends Error {
   constructor(message: string) {
@@ -507,114 +255,60 @@ export class JournalAnchorNotFoundError extends Error {
 }
 
 /**
- * 日誌の頁の継続点。`JournalQuery.after` へそのまま渡せる形（`{ id, at }`）。
- *
- * **返ってきた行の最後ではなく、ストアが実際に読んだ最後の行（形が合わず捨てた
- * 行を含む）を指す。** 捨てた行も `id` と `at` の両方が一致する行としては在る
- * ので、`after` の錨として引ける。
+ * 日誌の頁の継続点。`JournalQuery.after` へそのまま渡せる形。
+ * 返った行の最後ではなく、ストアが実際に読んだ最後の行（形が合わず捨てた行を含む）を指す。
  */
 export type JournalCursor = { id: string; at: string };
 
-/** `JournalStore.listPage` の返り値（Issue #2604 / #2605）。 */
+/** `JournalStore.listPage` の返り値。 */
 export interface JournalPage {
-  /** `list()` と同じ中身（読めた行だけ。捨てた行は含まない）。 */
+  /** `list()` と同じ中身（読めた行だけ）。 */
   entries: JournalEntry[];
-  /**
-   * 次の頁の継続点。**`null` = ストアの上でもうこの先に行が無い（本当の終端）。**
-   * 非 `null` = まだ先に行が在る。`entries` が空でも非 `null` でありうる——
-   * 頁の行が全部読めずに捨てられたとき（`list()` では「空」と「終端」を区別
-   * できなかった）。次の頁は `list({ ...query, after: next })` で読む。
-   */
+  /** 次の頁の継続点。`null` = ストアの上でもうこの先に行が無い。非 `null` なら `entries` が空でもありうる（頁の行が全部読めずに捨てられたとき）。 */
   next: JournalCursor | null;
 }
 
 /** 日誌 = 追記専用の記録（PRD「可観測性」）。 */
 export interface JournalStore {
   append(entry: JournalEntryInput): Promise<JournalEntry>;
-  /**
-   * 既定は新しい順（`order: 'desc'`）。**未指定は従来の挙動と1バイトも
-   * 変わらない。** `order: 'asc'` で古い順に、`after` で頁の継続点を指定できる
-   * （issue #432 の2本目。`JournalQuery.order` / `JournalQuery.after` の doc）。
-   */
+  /** 既定は新しい順（`order: 'desc'`）。`order` / `after` は `JournalQuery` の doc。 */
   list(query?: JournalQuery): Promise<JournalEntry[]>;
   /**
-   * `list()` と同じ問い合わせに、**続きの有無と次の頁の継続点**を添えて返す
-   * （Issue #2604 / #2605）。
+   * `list()` と同じ問い合わせに、続きの有無と次の頁の継続点を添えて返す。
    *
-   * **なぜ要るか。** pg の `list()` は SQL の `LIMIT` を掛けた**後で**形の合わない
-   * 行を捨てる。だから「要求した `limit` より少ない」も「空」も、「その先に行が
-   * 無い」を意味しない。件数や空ページから終端を推すと、読めない行の向こうにある
-   * 古い行を静かに取りこぼす。ここは終端をストア自身が言う。
-   *
-   * 契約（fs・インメモリ・pg と中継層で揃える）:
-   * - `entries` は同じ問い合わせの `list()` と同じ
-   * - `next === null` は、この問い合わせの続きが（読めない行も含めて）もう
-   *   無いことだけを意味する。`limit` 未指定・`0` のときは常に `null`
-   * - `next` が非 `null` なら、`list({ ...query, after: next })` の先頭は
-   *   `entries` の続きである
+   * 終端をストア自身が言う: pg の `list()` は `LIMIT` の後で形の合わない行を捨てるので、件数が少ないことも空であることも「その先に行が無い」を意味しない。
+   * そこから終端を推すと、読めない行の向こうの古い行を静かに取りこぼす。
+   * `next === null` は、読めない行も含めて続きがもう無いことだけを意味する（`limit` 未指定・`0` のときは常に `null`）。
    */
   listPage(query?: JournalQuery): Promise<JournalPage>;
   /**
-   * 1件を id で引く。
+   * 1件を id で引く。一覧を抜粋にするなら全文への行き先が要る（無いと長い記録がクローンから永久に読めなくなる＝能力の削除。north_star 禁止1）。
    *
-   * **一覧を抜粋にするなら、全文への行き先が要る**（`manager_list` ↔
-   * `manager_report` と同じ形）。無いと、抜粋にした時点で長い記録は
-   * クローンから永久に読めなくなる＝能力の削除（north_star 禁止1）。
+   * `id`・`after.id`・`q` に NUL があっても断らず、「無い」と同じ結果（`get` は `null`、`after` は `JournalAnchorNotFoundError`、`q` は0件）を返す。本文の NUL は落として残す（3実装とも）。
    *
-   * **NUL（issue #3011）。** `id`・`after.id`・`q` に NUL があっても断らず、「無い」と同じ結果（`get` は `null`、
-   * `after` は `JournalAnchorNotFoundError`、`q` は0件）を返す。書き込み（`append`）は鍵を持たず（id は store が振る）、
-   * 本文の NUL は落として残す（3実装とも）。
-   *
-   * **「無い」と「在るが読めない」を分ける（issue #3288）。** 無い id は `null`。id の行が在るのに
-   * `journalEntrySchema` に合わない（未知の `type`・版ずれ・手編集）ときは `null` に畳まず
-   * `UnreadableJournalEntryError`（本ファイル）を投げる——`null` だと呼び出し元が「まだ書かれていない」
-   * と言ってしまう（`UnreadableApprovalError` と同じ線）。fs・pg が投げる
-   * （`verifyJournalStoreUnreadableGetContract` が測る）。インメモリは読めない行を持てないので投げない
-   * （`UnreadableJournalEntryError` の doc）。`list()` / `listPage()` は従来どおり読めない行を飛ばす。
+   * 「無い」と「在るが読めない」を分ける: 無い id は `null`、行が在るのに `journalEntrySchema` に合わないときは `UnreadableJournalEntryError`
+   * （`null` に畳むと呼び出し元が「まだ書かれていない」と言ってしまう）。fs・pg が投げ（`verifyJournalStoreUnreadableGetContract`）、インメモリは読めない行を持てないので投げない。
    */
   get(id: string): Promise<JournalEntry | null>;
 
   /**
-   * 日誌の地平（最古の行の `at`）。1件も無ければ `null`（issue #1510）。
-   *
-   * **なぜ要るか。** `journal_read`（`tools.ts`）が `since`/`until` で過去を
-   * 掘って0件が返ったとき、「その窓に該当の行が無かった」のか「日誌がその
-   * 窓まで遡れない（分母が0）」のかは、`list()` の0件という結果だけからは
-   * 区別できない——両方とも同じ「0件」を返す。`GET /usage` が `since` /
-   * `beforeLedger` で「0 ではなく記録が無い」と言えるようにしているのと
-   * 同じ理由である（`usage.ts` の `usageAggregateSchema.since` の doc）。
-   *
-   * **毎回全件走査で取らないこと。** 3実装とも、挿入順や時刻の索引に乗る形で
-   * 最初の1行だけを引く——fs はファイル名の昇順一覧の先頭ファイルだけを開き、
-   * pg は `journal_at_idx` に乗る `ORDER BY at ASC LIMIT 1` を使う。
+   * 日誌の地平（最古の行の `at`）。1件も無ければ `null`。
+   * `since`/`until` で掘って0件のとき、「その窓に行が無い」のか「日誌がその窓まで遡れない」のかを `list()` の0件からは区別できない。
+   * 毎回全件走査で取らない: 3実装とも索引に乗る形で最初の1行だけを引く（pg は `journal_at_idx` の `ORDER BY at ASC LIMIT 1`）。
    */
   oldestAt(): Promise<string | null>;
 
   /**
-   * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。
-   *
-   * **これは「追記専用」の契約（`append` しか書き込みの口を持たない）への
-   * 例外である。** 通常運用でこの口を呼ぶ経路は無い——呼ぶのは
-   * `resetWorkspaceState`（`workspace-reset.ts`）だけで、依頼者が明示的に
-   * 「トークン情報以外を全部消す」と決めたときにしか届かない。日誌が守っている
-   * 「聞かずに実行した判断は必ず残る」という性質は、通常運用で消せないことに
-   * よってではなく、リセットが常に人間の明示的な決定を経由することによって
-   * 保たれる。
-   *
-   * 消した件数を返す。
+   * 全件を消す（ワークスペースのリセット専用）。「追記専用」の契約への例外で、呼ぶのは `resetWorkspaceState` だけ。
+   * 日誌の「聞かずに実行した判断は必ず残る」は、通常運用で消せないことではなく、リセットが常に人間の明示的な決定を経ることで保たれる。消した件数を返す。
    */
   clear(): Promise<number>;
 }
 
 /**
- * `JobStore.updateJob()` が、id の行は**在るが読めない**（`jobSchema` に合わない。
- * 版ずれ・手編集）ときに投げる専用のエラー型。`UnreadableScheduleError` /
- * `UnreadablePracticeError` と同じ線——「無い」（`null`）と「在ったが読めない」
- * （throw）を区別する。`instanceof` で見分けること（メッセージの文字列で
- * 判定しない）。
- *
- * **id 以外の値は持たない。** job の欄には人間の依頼文・マネージャーの報告が
- * そのまま入りうるので、メッセージにも載せない（stderr の跡と同じ理由、#52）。
+ * `JobStore.updateJob()` が、id の行は在るが読めない（`jobSchema` に合わない）ときに投げる。
+ * `instanceof` で見分けること: メッセージの文字列で判定すると言い回しの修正で静かに外れる。
+ * id 以外の値は持たない: job の欄には人間の依頼文・マネージャーの報告がそのまま入りうる。
  */
 export class UnreadableJobError extends Error {
   readonly id: string;
@@ -630,14 +324,8 @@ export class UnreadableJobError extends Error {
 }
 
 /**
- * `JobStore.getApproval()` / `JobStore.updateApproval()` が、id の行は**在るが
- * 読めない**（`pendingApprovalSchema` に合わない。版ずれ・手編集）ときに投げる
- * 専用のエラー型。`UnreadableJobError` と同じ線——「無い」（`null`）と「在った
- * が読めない」（throw）を区別する。`instanceof` で見分けること（メッセージの
- * 文字列で判定しない）。
- *
- * **id 以外の値は持たない。** 承認の欄には質問文・文脈・人間の回答がそのまま
- * 入りうるので、メッセージにも載せない（stderr の跡と同じ理由、#52）。
+ * `JobStore.getApproval()` / `updateApproval()` が、id の行は在るが読めないときに投げる（`UnreadableJobError` と同じ線）。
+ * id 以外の値は持たない: 承認の欄には質問文・人間の回答がそのまま入りうる。
  */
 export class UnreadableApprovalError extends Error {
   readonly id: string;
@@ -653,19 +341,9 @@ export class UnreadableApprovalError extends Error {
 }
 
 /**
- * `JournalStore.get()` が、id の行は**在るが読めない**（`journalEntrySchema` に合わない。
- * 未知の `type`・版ずれ・手編集）ときに投げる専用のエラー型（issue #3288）。
- * `UnreadableApprovalError` と同じ線——「無い」（`null`）と「在ったが読めない」（throw）を
- * 区別する。`instanceof` で見分けること（メッセージの文字列で判定しない）。
- *
- * **投げるだけで、行は1バイトも変えない**（日誌は追記専用）。`list()` は従来どおり読めない行を
- * 飛ばして跡（stderr の集計）を残す。
- *
- * **id 以外の値は持たない。** 日誌の欄には人間の発言・クローンの判断の本文がそのまま入りうるので、
- * メッセージにも載せない（stderr の跡と同じ理由、#52）。
- *
- * **インメモリ実装（`testing.ts`）はこれを投げない。** `append` が `journalEntrySchema` で断り、
- * 行は private な配列にしか入らないので、読めない行を持てない（fs・pg は外から書かれた行を持ちうる）。
+ * `JournalStore.get()` が、id の行は在るが読めないときに投げる（`UnreadableApprovalError` と同じ線）。行は1バイトも変えない（日誌は追記専用）。
+ * id 以外の値は持たない: 日誌の欄には人間の発言・クローンの判断の本文がそのまま入りうる。
+ * インメモリ実装（`testing.ts`）は投げない: `append` が `journalEntrySchema` で断るので読めない行を持てない。
  */
 export class UnreadableJournalEntryError extends Error {
   readonly id: string;
@@ -681,17 +359,9 @@ export class UnreadableJournalEntryError extends Error {
 }
 
 /**
- * `PermissionGrantStore.revoke()` が、id の行は**在るが読めない**（`permissionGrantSchema`
- * に合わない。版ずれ・手編集）ときに投げる専用のエラー型（issue #2425）。
- * `UnreadableJobError` と同じ線——「無い」（`null`）と「在ったが読めない」（throw）を
- * 区別する。`instanceof` で見分けること。
- *
- * **投げるだけで、行は1バイトも変えない。** 取り消しは効いていない——呼び手（daemon の
- * `POST /permission-grants/:id/revoke`）は「取り消した」とも「無い」とも言わず、
- * 「読めない形で入っている」と言う。**許可が余計に通る向きにはならない**（読めない行は
- * `list()` / `get()` に現れず、`#onPreToolUse` からは「許可が無い」ものとして扱われる）。
- *
- * **id 以外の値は持たない。** 許可の欄には人間の回答の原文が入りうる。
+ * `PermissionGrantStore.revoke()` が、id の行は在るが読めないときに投げる（`UnreadableJobError` と同じ線）。行は1バイトも変えない。
+ * 取り消しは効いていないので、呼び手は「取り消した」とも「無い」とも言わず「読めない形で入っている」と言う。
+ * 許可が余計に通る向きにはならない（読めない行は `list()` / `get()` に現れず「許可が無い」扱い）。id 以外の値は持たない: 許可の欄には人間の回答の原文が入りうる。
  */
 export class UnreadablePermissionGrantError extends Error {
   readonly id: string;
@@ -707,11 +377,8 @@ export class UnreadablePermissionGrantError extends Error {
 }
 
 /**
- * `AuthStore.revokeAccountAccess()` が、id の行は**在るが読めない**（`authAccountSchema`
- * に合わない。版ずれ・手編集）ときに投げる専用のエラー型（issue #2425）。
- * `UnreadablePermissionGrantError` と同じ線。行は変えない（許可は落ちていない）。
- * 読めない行は `getAccount()` / `listAccounts()` に現れないので、認可は通らない
- * （fail-closed）。id 以外の値は持たない。
+ * `AuthStore.revokeAccountAccess()` が、id の行は在るが読めないときに投げる（`UnreadablePermissionGrantError` と同じ線）。
+ * 読めない行は `getAccount()` / `listAccounts()` に現れないので認可は通らない（fail-closed）。id 以外の値は持たない。
  */
 export class UnreadableAccountError extends Error {
   readonly id: string;
@@ -727,32 +394,21 @@ export class UnreadableAccountError extends Error {
 }
 
 /**
- * `JobStore.listApprovals` の返り値（issue #2298。`CommitmentList` と同じ形）。
- *
- * **`PendingApproval[]` のままにしなかったのは、呼び出し側が読めない行を握り潰せない
- * 形にするため。** 読めない行を空配列（無い）へ潰すと、人間もクローンも「読めない
- * 承認待ちが在る」ことに気づけない。`entries` だけを見て `unreadable` を読み飛ばす
- * ことは書けても、`ApprovalList` を受け取っておいて `unreadable` がコンパイラの目に
- * 触れないことはできない。
+ * `JobStore.listApprovals` の返り値（`CommitmentList` と同じ形）。
+ * `PendingApproval[]` のままにしない: 読めない行を空配列へ潰すと、人間もクローンも読めない承認待ちが在ることに気づけない。
  */
 export interface ApprovalList {
   entries: PendingApproval[];
   /**
-   * 読めなかった行。**「無い」でも「回答済み」でもない第3の状態。** 一覧全体は落とさない。
-   * `pendingOnly: true` のとき、回答済み・取り下げ済みと分かる行は含めない（pg は列で、
-   * fs は生の行の `answeredAt` / `withdrawnAt` で見る）。**どちらも取れない行は含める**
-   * （数える側へ倒す。「回答済みだったかもしれない」を理由に消さない）。
+   * 読めなかった行。「無い」でも「回答済み」でもない第3の状態。一覧全体は落とさない。
+   * `pendingOnly: true` のとき、回答済み・取り下げ済みと分かる行は含めない（pg は列で、fs は生の行の `answeredAt` / `withdrawnAt` で見る）。どちらも取れない行は含める（数える側へ倒す）。
    */
   unreadable: UnreadableApproval[];
 }
 
 /**
- * 読めない承認待ちが在るときの1文（0件なら `null`。**0件のときは何も出さない**——
- * 「読めない承認待ちは 0 件」の行を作らない。AGENTS.md「取れない軸に 0 の行を作る」）。
- *
- * クローンの道具（`approvals_list`）と digest が同じ文面を使う。id が取れた行は
- * 上限つきで並べ、取れない行は件数だけで言う。本文は載せない
- * （`unreadableApprovalSchema` の doc）。
+ * 読めない承認待ちが在るときの1文（0件なら `null`）。
+ * 0件のときは何も出さない: 「読めない承認待ちは 0 件」の行を作らない（AGENTS.md「取れない軸に 0 の行を作る」）。本文は載せない（`unreadableApprovalSchema` の doc）。
  */
 export function describeUnreadableApprovals(
   unreadable: readonly UnreadableApproval[],
@@ -777,14 +433,7 @@ export function describeUnreadableApprovals(
   );
 }
 
-/**
- * 読めない委譲の行が在るときの1文（0件なら `null`。**0件のときは何も出さない**——
- * 「読めない委譲は 0 件」の行を作らない。AGENTS.md「取れない軸に 0 の行を作る」）。
- *
- * クローンの道具（`manager_list`）・digest・進捗・HTTP・CLI・画面が同じ文面の骨を使う
- * （issue #2345）。id が取れた行は上限つきで並べ、取れない行は件数だけで言う。
- * 本文は載せない（`unreadableJobSchema` の doc）。
- */
+/** 読めない委譲の行が在るときの1文（0件なら `null`。0件のときは何も出さない）。本文は載せない（`unreadableJobSchema` の doc）。 */
 export function describeUnreadableJobs(
   unreadable: readonly UnreadableJob[],
   options: { idLimit?: number } = {},
@@ -809,11 +458,7 @@ export function describeUnreadableJobs(
 }
 
 /**
- * **id を1本指して引いたとき、その id の行が読めない形で在る**ことの1文（issue #2359）。
- * 「${id} は居ない」と言い分ける先（`manager_stop` / `manager_send` / `manager_transcript` と、
- * 対応する HTTP の口）がここを共有する。`describeUnreadableJobs`（一覧の骨）の単票版。
- *
- * **本文は載せない**（`unreadableJobSchema` の doc）。理由は不正な欄名だけ。
+ * id を1本指して引いたとき、その id の行が読めない形で在ることの1文（`describeUnreadableJobs` の単票版）。本文は載せない。
  * 見つからなかったときだけ `JobStore.listUnreadableJobs()` を読んで使う。
  */
 export function describeUnreadableManagerRow(id: string, reason: string): string {
@@ -824,322 +469,166 @@ export function describeUnreadableManagerRow(id: string, reason: string): string
 }
 
 /**
- * 会話の既読の位置と基準時刻（`conversation-read.ts` の doc）。**全員で1組**——PRD
- * 「非ゴール」の「利用者ごとにデータを分けない」の線で、アカウントごとの既読は持たない。
+ * 会話の既読の位置と基準時刻（`conversation-read.ts`）。全員で1組（PRD「非ゴール」: 利用者ごとにデータを分けない）。
  *
- * **`clear()` を持たない**（`POST /reset` はここに触れない。リセットで会話の日誌は消え、
- * 残った位置が既読にする相手は居ない。基準時刻が残るので、リセット後に始まった会話は
- * 基準時刻より新しく、未読になる）。
+ * `clear()` を持たない: `POST /reset` で会話の日誌は消え、残った位置が既読にする相手は居ない。
+ * 基準時刻が残るので、リセット後に始まった会話は未読になる。
  */
 export interface ConversationReadStore {
   /** 基準時刻と位置のすべて。読めなければ `unreadable`（「無い」と混ぜない）。 */
   read(): Promise<ConversationReadRead>;
-  /**
-   * 基準時刻が無ければ `at` で決め、在れば**何もしない**。決まった基準時刻を返す。
-   * 並行して呼ばれても1つに決まる。記録が読めないときは書き換えず `unreadable` を返す。
-   */
+  /** 基準時刻が無ければ `at` で決め、在れば何もしない。並行して呼ばれても1つに決まる。記録が読めないときは書き換えず `unreadable` を返す。 */
   ensureBaseline(at: string): Promise<ConversationBaselineResult>;
   /**
-   * 会話 `conversationId` の位置を `readThrough` まで進める。**戻らない**——いまの位置より
-   * 古い値を渡すと何もせず、いまの位置を返す（並行2本でも単調）。記録が読めない状態なら
-   * この会話の位置で書き直す。返すのは書いた後の位置。
-   *
-   * `conversationId` は鍵なので、NUL があれば `NulNotAllowedError` で断る（issue #2927）。
+   * 会話 `conversationId` の位置を `readThrough` まで進める。戻らない（いまの位置より古い値では何もせず、いまの位置を返す。並行2本でも単調）。
+   * 記録が読めない状態ならこの会話の位置で書き直す。`conversationId` は鍵なので、NUL があれば `NulNotAllowedError`。
    */
   advance(conversationId: string, readThrough: string): Promise<ConversationReadPosition>;
   /** 「会話ごとの最後のクローン側発言の時刻」の索引（`ConversationOutboundIndex`）。 */
   readOutboundIndex(): Promise<ConversationOutboundIndexRead>;
-  /**
-   * 索引へ足す。**単調**——会話ごとの時刻と `watermark` は、古い値では戻らない
-   * （`watermark: null` は「進めない」）。位置・基準時刻には触れない。
-   *
-   * `lastOutbound` の会話 id に NUL があれば `NulNotAllowedError` で断る（issue #2927。何も足さない）。
-   */
+  /** 索引へ足す。単調（古い値では戻らない。`watermark: null` は「進めない」）。`lastOutbound` の会話 id に NUL があれば `NulNotAllowedError` で、何も足さない。 */
   mergeOutboundIndex(update: ConversationOutboundIndex): Promise<void>;
   /** 索引だけを空にする（`POST /reset` が日誌を消すとき、消えた会話を未読に数え続けないため）。 */
   clearOutboundIndex(): Promise<void>;
 }
 
 /**
- * ジョブと承認待ちキュー。M1 では承認待ちだけを使う。
+ * ジョブと承認待ちキュー。
  *
- * **NUL（issue #3011。teto の判断、2026-10-06）。** `putJob`・`putApproval` の `id`（鍵）の NUL は `NulNotAllowedError` で断り、
- * 本文（`summary`・`request`・`lastReport`・`question`・`context`・`answer`）の NUL は落として残す（3実装とも。`job-input.ts`）。
- * 読むだけの口（`getApproval`・`updateJob`・`updateApproval`）は、NUL を含む `id` でも断らず `null` を返す（`mutate` は呼ばない）。
- * 参照キー・印（`conversationId`・`managerId`・`jobId`・`requestId` など）と、`questions` / `selections` の中の文字列も、
- * 断らず落として残す（3実装とも。自分の行を指す鍵ではなく、よそへの参照や印で、断ると記録が丸ごと落ちる）。
+ * NUL: `putJob`・`putApproval` の `id`（鍵）は `NulNotAllowedError` で断り、本文（`summary`・`request`・`lastReport`・`question`・`context`・`answer`）は落として残す（3実装とも）。
+ * 読むだけの口（`getApproval`・`updateJob`・`updateApproval`）は NUL を含む `id` でも断らず `null` を返す（`mutate` は呼ばない）。
+ * 参照キー・印（`conversationId`・`managerId`・`jobId`・`requestId` など）と `questions` / `selections` の中の文字列も落として残す:
+ * 自分の行を指す鍵ではなく、断ると記録が丸ごと落ちる。
  */
 export interface JobStore {
   listJobs(): Promise<Job[]>;
   /**
-   * **`listJobs()` が読み飛ばした行**（`jobSchema` に合わない行）を、本文を含まない形で
-   * 返す（issue #2345）。**0件のときだけ「委譲は居ない」と言える**——読めない行が在る
-   * のに台帳を空と見せない（`listApprovals()` の `unreadable` と対）。
+   * `listJobs()` が読み飛ばした行（`jobSchema` に合わない行）を、本文を含まない形で返す。
+   * 0件のときだけ「委譲は居ない」と言える（`listApprovals()` の `unreadable` と対）。メモリ実装は常に空。
    *
-   * **`listJobs()` の戻り型を変えなかった理由**: 本番の呼び手が約64か所（`manager.ts` の
-   * `find` 群・`clone.ts`・`runner-swap-notice.ts` など）あり、その大半は id で1本を
-   * 探す・読んだ行をそのまま書き戻すなど、読めない行を見せる先を持たない。型を変えても
-   * 気づける呼び手が増えない。見せる先（`manager_list`・`GET /managers`・digest・進捗）は
-   * 少数で、この口を呼ぶ（`TokenPoolStore.listUnreadable()` と同じ向き）。
-   *
-   * **⚠️ 本文は返さない**（`unreadableJobSchema` の doc）。メモリ実装（`testing.ts`）は
-   * 常に空（`putJob` がスキーマを通すので壊れた行を持てない）。
+   * `listJobs()` の戻り型を変えない: 呼び手が約64か所あり、大半は読めない行を見せる先を持たないので、型を変えても気づける呼び手が増えない。
+   * 見せる先（`manager_list`・`GET /managers`・digest・進捗）だけがこの口を呼ぶ。本文は返さない（`unreadableJobSchema` の doc）。
    */
   listUnreadableJobs(): Promise<UnreadableJob[]>;
   putJob(job: Job): Promise<void>;
 
   /**
-   * 現在の値を排他区間の中で読み直し、`mutate` で書き換えて書く（Issue #1674）。
+   * 現在の値を排他区間の中で読み直し、`mutate` で書き換えて書く。書き込んだ後の値を返す。
+   * `listJobs()` → `putJob()` の間に別の書き込みが挟まると、その書き込みが古いスナップショットに丸ごと上書きされて消える。
    *
-   * **なぜ要るか。** `listJobs()` で読んでから `putJob()` で書くまでの間に別の
-   * 書き込みが挟まると、その書き込みは古いスナップショットに丸ごと上書きされて
-   * 消える——`ScheduleStore.editRequest`（#1654）が `put()` の read-modify-write
-   * を塞いだのと同じ形の穴であり、`CommitmentStore.open`（#1041）が
-   * 「読んでから書く」をアプリ層から追い出したのとも同じ理由である。**実際に
-   * `ManagerPool` の孤児ジョブ分岐（`#records` に像を持たない委譲）が
-   * この形で割り込まれた書き込みを踏み消していた**（Issue #1674 の実測）。
-   *
-   * **`mutate` は同期の関数である。** 区間の中で `await` を挟むと、区間が
-   * 排他している意味そのものが崩れる——fs は `withPathLock`、pg は
-   * `select … for update` で押さえた1つのトランザクションの中でだけ意味を
-   * 持つので、その中で他の I/O を待つと排他の外へ出てしまう
-   * （`CommitmentStore.open` の「判定と書き込みのあいだに `await` を1つも
-   * 挟まないこと」と同じ注意）。
-   *
-   * **無ければ何もせず `null`。`mutate` は呼ばれない**——存在しない行に対して
-   * 書き換えの結果を作らせても、書く先が無い。
-   *
-   * **読めない行（版ずれ・手編集でスキーマに合わなくなった行）は `null` では
-   * なく `UnreadableJobError`（本ファイル）を投げる。`mutate` は呼ばれず、行にも
-   * 触れない**（issue #2051 で「投げる」→「`null`」に倒し、この直しで「無い」と
-   * 「読めない」を分けた）。`null` に畳むと、呼び出し元が「台帳に居ない」と
-   * 言い切ってしまう（`ManagerPool` の孤児ジョブ分岐がそうだった）。版ずれの行を古い版が
-   * 誤って上書きしないためでもある——`current` を作れない以上、`mutate` に渡す
-   * 値そのものが無い。**メモリ実装（`testing.ts`）は投げない**——`putJob` が
-   * `jobSchema.parse` を通すので、壊れた行を持てない。
-   *
-   * 返すのは書き込んだ後の値。
+   * `mutate` は同期の関数: 区間の中で `await` を挟むと排他の外へ出る（fs は `withPathLock`、pg は `select … for update` のトランザクションの中でだけ意味を持つ）。
+   * 無ければ何もせず `null`。読めない行は `null` ではなく `UnreadableJobError`（`mutate` は呼ばれず、行にも触れない）:
+   * `null` に畳むと呼び出し元が「台帳に居ない」と言い切るうえ、版ずれの行を古い版が上書きしてしまう。メモリ実装は `putJob` がスキーマを通すので投げない。
    */
   updateJob(id: string, mutate: (current: Job) => Job): Promise<Job | null>;
 
   /**
-   * 承認待ちの一覧。**読めない行（`pendingApprovalSchema` に合わない行）は一覧全体を
-   * 落とさず、`unreadable` に別欄で返す**（issue #2298。`CommitmentStore.list` と同じ形）。
-   * **メモリ実装（`testing.ts`）は常に空**——`putApproval` がスキーマを通すので、壊れた行を
-   * 持てない。
+   * 承認待ちの一覧。読めない行（`pendingApprovalSchema` に合わない行）は一覧全体を落とさず `unreadable` に別欄で返す
+   * （`CommitmentStore.list` と同じ形）。メモリ実装は常に空。並び順は契約しない。
    *
-   * **`conversationId` を渡すと、`entries` をその会話で上がった確認（`conversationId`
-   * が一致するもの）だけに絞る**（issue #3290。`GET /approvals?conversationId=` が
-   * 全件を取ってメモリで絞っていたのをストアへ寄せた）。`pendingOnly` と併用でき、
-   * 絞りだけで並びは変えない。**`unreadable` も会話で絞る**（#3319）—— 生の行の
-   * `conversationId`（jsonb / JSON の値そのもの）がその会話と一致する読めない行だけが
-   * 載る。**会話の id すら読めない行と、ほかの会話の壊れた行は載らない**（全行を検査せずに
-   * 済ませるため。壊れた行は `conversationId` を渡さない呼びで全件見える）。`conversationId`
-   * を渡さない呼びは、今までどおり読めない行を全件返す。3実装（fs / pg / インメモリ）で
-   * 揃えること（`verifyApprovalConversationFilterContract`）。
+   * `conversationId` を渡すと `entries` をその会話の確認だけに絞る（`pendingOnly` と併用可。並びは変えない）。
+   * `unreadable` も会話で絞る: 生の行の `conversationId` がその会話と一致する読めない行だけが載る。
+   * 会話の id すら読めない行と他の会話の壊れた行は載らない（全行を検査せずに済ませるため。壊れた行は `conversationId` なしの呼びで全件見える）。
+   * 3実装で揃える（`verifyApprovalConversationFilterContract`）。
    */
   listApprovals(options?: {
     pendingOnly?: boolean;
     conversationId?: string;
   }): Promise<ApprovalList>;
-  /**
-   * 承認待ち1件を id で読む。**無ければ `null`。在るが読めない行（版ずれ・手編集で
-   * `pendingApprovalSchema` に合わなくなった行）は `null` ではなく
-   * `UnreadableApprovalError`（本ファイル）を投げる**——`null` に畳むと、呼び出し元が
-   * 「存在しない」「id が違う」と言い切ってしまう。**メモリ実装（`testing.ts`）は
-   * 投げない**——`putApproval` がスキーマを通すので、壊れた行を持てない。
-   * `listApprovals()` は一覧全体を落とさず、読めない行を `unreadable` に返す。
-   */
+  /** 承認待ち1件を id で読む。無ければ `null`。在るが読めない行は `UnreadableApprovalError`（`null` に畳むと呼び出し元が「存在しない」と言い切る）。メモリ実装は投げない。 */
   getApproval(id: string): Promise<PendingApproval | null>;
   putApproval(approval: PendingApproval): Promise<void>;
 
   /**
-   * 現在の値を排他区間の中で読み直し、`mutate` で書き換えて書く
-   * （Issue #2007。`updateJob`（すぐ上、#1674）と同じ形）。
+   * 現在の値を排他区間の中で読み直し、`mutate` で書き換えて書く（`updateJob` と同じ形）。
+   * 回答と取り下げが「読んでから書く」だと排他が無く、ほぼ同時の2つの回答が両方「まだ回答済みではない」と読んで仕事が2回再開しうる。
+   * 取り下げと回答が重なると、取り下げたはずの承認に回答が立って再開まで進みうる。
    *
-   * **なぜ要るか。** 承認への回答（`Clone#answerApproval`）と取り下げ
-   * （`approval_withdraw`）は、どちらも `getApproval()` で読んでから
-   * `putApproval()` で丸ごと書き戻す「読んでから書く」形だった——判定と
-   * 書き込みの間に排他が無いので、ほぼ同時の2つの回答が両方とも
-   * 「まだ回答済みではない」と読み、同じ承認に紐づく仕事が2回再開しうる
-   * （回答どうしの競合）。クローンの取り下げと人間の回答が重なると、
-   * 取り下げたはずの承認に回答が立ち、配達と再開まで進みうる（取り下げと
-   * 回答の競合）。`updateJob` が `ManagerPool` の孤児ジョブ分岐で
-   * 実際に踏み消された書き込みを塞いだのと同じ形の穴が、承認待ちの側にも
-   * 対になって存在していた。
-   *
-   * **`mutate` は同期の関数である。** 区間の中で `await` を挟むと排他の
-   * 意味が崩れる——`updateJob` の同じ注意がそのまま当てはまる（fs は
-   * `withPathLock`、pg は `select … for update` で押さえた1つの
-   * トランザクションの中でだけ意味を持つ）。
-   *
-   * **無ければ何もせず `null`。`mutate` は呼ばれない**——`updateJob` と同じ。
-   *
-   * **在るが読めない行（`pendingApprovalSchema` に合わない）は `null` ではなく
-   * `UnreadableApprovalError`（本ファイル）を投げる。`mutate` は呼ばれず、行にも
-   * 触れない**（`updateJob` の `UnreadableJobError` と同じ線）。
-   *
-   * **`mutate` が書かないと決めたときも `null` を返す（`updateJob` には無い
-   * 拡張）。** `mutate` は `current` を見て「もう終端に達している」
-   * （`answeredAt` か `withdrawnAt` が既に立っている）と判定したら `null` を
-   * 返せる——このとき `updateApproval` は何も書かず、呼び出し側へも `null`
-   * を返す。呼び出し側（`answerApproval` / `approval_withdraw`）は、`mutate`
-   * が呼ばれたかどうか（＝行が実在したかどうか）を自分の外側のクロージャで
-   * 覚えておくことで、「行が無い」（`mutate` 未呼び出し）と「行はあるが
-   * `mutate` が断った」（`mutate` 呼び出し済み）を区別できる——`updateApproval`
-   * 自身はこの2つを同じ `null` として返す（`mutate` を呼んだかどうかの記録は
-   * 呼び出し側の責務であって、この口の契約には含めない）。
-   *
-   * 返すのは書き込んだ後の値（`mutate` が断ったときは `null`）。
+   * 無ければ何もせず `null`。読めない行は `UnreadableApprovalError`（`mutate` は呼ばれず、行にも触れない）。
+   * `mutate` が書かないと決めたとき（既に `answeredAt` か `withdrawnAt` が立っている）は `null` を返せて、何も書かない。
+   * 「行が無い」と「`mutate` が断った」は同じ `null` なので、区別したい呼び出し側は `mutate` が呼ばれたかを自分のクロージャで覚える。
    */
   updateApproval(
     id: string,
     mutate: (current: PendingApproval) => PendingApproval | null,
   ): Promise<PendingApproval | null>;
 
-  /**
-   * ジョブと承認待ちを両方とも消す（ワークスペースのリセット専用。
-   * #workspace-reset）。**この2つは1枚のストアなので、一緒に1操作で消す。**
-   */
+  /** ジョブと承認待ちを両方とも消す（ワークスペースのリセット専用）。この2つは1枚のストアなので1操作で消す。 */
   clear(): Promise<{ jobs: number; approvals: number }>;
 }
 
-/**
- * 読めない行を id で指して消す口（`PermissionGrantStore.removeUnreadable` /
- * `AuthStore.removeUnreadableAccounts`）の追加の引数（issue #2440。トークンの
- * `RemoveUnreadableOptions`〈#2354〉と同じ形）。
- */
+/** 読めない行を id で指して消す口（`PermissionGrantStore.removeUnreadable` / `AuthStore.removeUnreadableAccounts`）の追加の引数。 */
 export interface RemoveUnreadableRowsOptions {
   /**
-   * 消すと決まった id（読めない行に実在するものだけ）を、**消す前に**渡して呼ぶ。
-   * 書き込みの排他区間の中で呼ぶ。**投げたら何も消さずに投げ直す**（日誌を先に書き、
-   * 書けなければ状態を変えない作法のための口）。
+   * 消すと決まった id（読めない行に実在するものだけ）を、消す前に、書き込みの排他区間の中で呼ぶ。
+   * 投げたら何も消さずに投げ直す（日誌を先に書き、書けなければ状態を変えない作法のための口）。
    */
   beforeRemove?: (ids: readonly string[]) => Promise<void>;
 }
 
-/**
- * 読めない行を id で指して消した結果（issue #2440）。
- * **値（行の中身）は持たない。** 件数と id だけである。
- */
+/** 読めない行を id で指して消した結果。値（行の中身）は持たず、件数と id だけ。 */
 export type RemoveUnreadableRowsResult =
-  /** 消した。`ids` は消した id（重複なし）。 */
-  | { kind: 'removed'; ids: string[] }
-  /**
-   * 指された id のうち `count` 件が読めない行に無かった（読める行・無い id・id が取れない行を
-   * 指した場合を含む）。**何も消していない。件数だけで、指された文字列は持たない。**
-   */
-  | { kind: 'unknown'; count: number };
+  { kind: 'removed'; ids: string[] } | { kind: 'unknown'; count: number };
 
 /**
- * 人間が承認した Bash 許可の記録（Issue #863）。
+ * 人間が承認した Bash 許可の記録。
  *
- * **`clear()` を持たない——意図してである。** `POST /reset`（`workspace-reset.ts`）
- * はこのストアに触れない。人間が承認した許可は、記憶や日誌をリセットしても
- * 黙って失われるべきではない（消したいなら `revoke` を明示的に叩く）。
+ * `clear()` を持たない（意図してである）: `POST /reset` はこのストアに触れない。
+ * 人間が承認した許可は、記憶や日誌をリセットしても黙って失われるべきではない（消したいなら `revoke` を明示的に叩く）。
  *
- * **`list()` を「毎回ストアを引き直す」前提で使う呼び手が居る**
- * （`clone.ts` の `#onPreToolUse`——Bash 呼び出しのたびに呼ぶ）。キャッシュを
- * 実装側に足さないこと。足すと「取り消しは次の呼び出しから効く」が崩れる。
+ * `list()` を毎回ストアを引き直す前提で使う呼び手が居る（`clone.ts` の `#onPreToolUse`。Bash 呼び出しのたびに呼ぶ）。
+ * キャッシュを実装側に足さない: 「取り消しは次の呼び出しから効く」が崩れる。
  */
 export interface PermissionGrantStore {
   list(): Promise<PermissionGrant[]>;
   get(id: string): Promise<PermissionGrant | null>;
   /**
-   * 新規作成専用（`JobStore.putApproval` と同じ形）。**既存行の更新には使わない
-   * こと** —— `revoke` / `markUsed` が居る理由の doc を見よ。呼び手は
-   * `clone.ts` の `answerApproval` の1箇所だけで、常に新しい `id` を渡す。
+   * 新規作成専用。既存行の更新には使わない（`revoke` / `markUsed` が居る理由は各 doc）。
    *
-   * `id`・`approvalId`・`route.accountId`（鍵・参照キー）に NUL があれば `NulNotAllowedError` で断る。`rule`・`allows`・`denies`・`answer`（本文）の NUL は落として残す（issue #2927）。
-   *
-   * **読むだけの口（`get`・`revoke`・`markUsed`・`removeUnreadable`）は、NUL を含む `id` で引かれても断らず、「無い」と同じ結果を返す**
-   * （`get` は `null`、`revoke` は `null`、`markUsed` は `false`、`removeUnreadable` は `unknown`。3実装とも。issue #3005）。
-   * 書き込みで NUL の鍵を断るので、NUL を含む `id` の行はどの器にも存在しえない。pg は DB に投げる前に短絡する。
+   * `id`・`approvalId`・`route.accountId`（鍵・参照キー）に NUL があれば `NulNotAllowedError` で断る。`rule`・`allows`・`denies`・`answer`（本文）は落として残す。
+   * 読むだけの口（`get`・`revoke`・`markUsed`・`removeUnreadable`）は、NUL を含む `id` でも断らず「無い」と同じ結果
+   * （`get` / `revoke` は `null`、`markUsed` は `false`、`removeUnreadable` は `unknown`）を返す。pg は DB に投げる前に短絡する。
    */
   put(grant: PermissionGrant): Promise<void>;
 
   /**
-   * 取り消す（人間の `POST /permission-grants/:id/revoke`）。**排他区間の中で
-   * 現在値を読み直し、`revokedAt` だけを立てる。** 無ければ `null`。既に
-   * 取り消し済みなら元の `revokedAt` を保つ（上書きしない）。書いた後の全体を
-   * 返す。
+   * 取り消す（人間の `POST /permission-grants/:id/revoke`）。排他区間の中で現在値を読み直し、`revokedAt` だけを立てる。
+   * 無ければ `null`。既に取り消し済みなら元の `revokedAt` を保つ。書いた後の全体を返す。
    *
-   * **`get()` → `put({ ...grant, revokedAt })` の代わりにこれを使う理由 ——
-   * lost update（#1654 と同じ形）。** かつての `apps/daemon/src/app.ts` の
-   * 取り消しは「`get(id)` で読んだ `grant` に `revokedAt` を足して `put()` する」
-   * 形だった。`put()` は無条件の全置換で版チェックを持たないので、この
-   * 「読んでから書く」の間に `clone.ts` の `#onPreToolUse`（`markUsed` の
-   * 前身——`list()` で読んだ古い写しに `lastUsedAt` を足して `put()` していた）
-   * が割り込むと、**割り込んだ側が持っていた「`revokedAt` が無い」古い写しが
-   * そのまま書き戻り、人間が取り消した許可が生き返っていた。** `#1041` の
-   * `CommitmentStore.open()` / `#1667` の `ScheduleStore.editRequest` と同じ
-   * 理由・同じ形（アプリ層の「読んでから書く」をストア側の排他区間へ引き取る）。
+   * `get()` → `put({ ...grant, revokedAt })` で代用しない: `put()` は無条件の全置換で、間に `#onPreToolUse` の古い写し
+   * （`revokedAt` が無い）の書き戻しが割り込むと、取り消した許可が生き返る。
    *
-   * **読めない行（版ずれ・手編集）は書き換えない**（fs / pg で揃える。issue
-   * #2158）。**ただし「無い」（`null`）とは分ける**——`UnreadablePermissionGrantError`
-   * を投げる（issue #2425）。`null` にすると呼び手が「無い」と言い切り、取り消した
-   * つもりの行が残ったまま、後で読めるようになったときに許可が生き返る。読めない
-   * 行の許可は `list()` / `get()` に現れず「許可が無い」ものとして扱われるので、
-   * 投げても許可が余計に通ることは無い（fail-closed のまま）。
+   * 読めない行は書き換えず、「無い」（`null`）とは分けて `UnreadablePermissionGrantError` を投げる:
+   * `null` にすると呼び手が「無い」と言い切り、取り消したつもりの行が残ったまま、後で読めるようになったときに許可が生き返る。
+   * 読めない行の許可は「許可が無い」扱いなので、投げても許可が余計に通ることは無い（fail-closed）。
    */
   revoke(id: string, at: string): Promise<PermissionGrant | null>;
 
   /**
-   * `#onPreToolUse` が許可を消費するたびに `lastUsedAt` を進める。**排他区間の
-   * 中で現在値を読み直し、`lastUsedAt` だけを更新する。他の欄（`revokedAt` を
-   * 含む）には一切触らない。** 無ければ何もしない。
+   * `#onPreToolUse` が許可を消費するたびに `lastUsedAt` だけを進める（排他区間の中で現在値を読み直す。`revokedAt` を含む他の欄には触れない）。無ければ何もしない。
    *
-   * **既存より古い時刻では戻さないこと。** `#onPreToolUse` はキャッシュを
-   * 持たないので、遅延した呼び出しが後から追いついて新しいほうを巻き戻す
-   * ことがありうる——観測用の値なので巻き戻る実害は小さいが、「最後に使った
-   * 時刻」という名前の意味は保つ。
+   * 既存より古い時刻では戻さない: 遅延した呼び出しが新しいほうを巻き戻すと「最後に使った時刻」の意味が崩れる。
+   * `get()` → `put({ ...grant, lastUsedAt })` で代用しない: 間に人間の `revoke` が割り込むと、古い写しの書き戻しで取り消しが消える。
    *
-   * **`get()` → `put({ ...grant, lastUsedAt })` の代わりにこれを使う理由 ——
-   * `revoke` と対になる lost update。** かつての `#onPreToolUse` は `list()` で
-   * 読んだ古い写しに `lastUsedAt` を足して `put()` していた。この読んでから
-   * 書くまでの間に人間の `revoke` が割り込むと、**`#onPreToolUse` 側が
-   * 持っていた「`revokedAt` が無い」古い写しがそのまま書き戻り、取り消しが
-   * 消えていた**（`revoke` の doc の実測はこの逆方向）。
-   *
-   * **取り消されていれば記録せず `false` を返す（Issue #1687）。** 返すのは
-   * 「排他区間の中で見たとき、許可が在り、取り消されていなかったか」で、
-   * `lastUsedAt` を進めたかどうかではない（既存より古い時刻で進めなかった回も
-   * `true`）。`#onPreToolUse` は `list()` の写しで照合するので、読んだ後に人間の
-   * 取り消しが完了すると、写しの上では生きている許可で道具が1回通っていた。
-   * 判断をこの戻り値に寄せることで、「取り消した」が人間に返った後に、その許可で
-   * 通ることは無くなる（判断と記録が同じ区間に入る）。無い id も `false`。
-   *
-   * **読めない行（版ずれ・手編集）は無いと同じ。書き換えない**（fs / pg で
-   * 揃える。issue #2158）。
+   * 取り消されていれば記録せず `false`。返すのは「排他区間の中で、許可が在り取り消されていなかったか」で、`lastUsedAt` を進めたかではない
+   * （古い時刻で進めなかった回も `true`）。`#onPreToolUse` は `list()` の写しで照合するので、判断をこの戻り値に寄せないと、
+   * 「取り消した」が人間に返った後にもその許可で道具が通りうる。無い id・読めない行も `false`。
    */
   markUsed(id: string, at: string): Promise<boolean>;
 
   /**
-   * **`list()` が読み飛ばした行**（`permissionGrantSchema` に合わない行。fs の `invalidGrantsRaw`、
-   * pg の合わない `record`）を、**本文を含まない形**（id と不正な欄名だけ）で返す（issue #2536。
-   * トークンの `TokenPoolStore.listUnreadable` と同じ線）。読めない行しか無いと `list()` は空で、
-   * 「許可が無い」と読める——その言い分けの元になる。id を指して消すのは `removeUnreadable`。
-   *
-   * **⚠️ 許可の本文（`allows` / `denies` / `answer` など）は決して返さない**
-   * （`unreadablePermissionGrantSchema` の doc）。id が取れない行（fs のみ）は `id` を持たない。
-   * メモリ実装は常に空（スキーマを通した行しか持てない）。
+   * `list()` が読み飛ばした行（`permissionGrantSchema` に合わない行）を、本文を含まない形（id と不正な欄名だけ）で返す
+   * （`TokenPoolStore.listUnreadable` と同じ線）。読めない行しか無いと `list()` は空で「許可が無い」と読める。
+   * 許可の本文（`allows` / `denies` / `answer` など）は決して返さない（`unreadablePermissionGrantSchema`）。id が取れない行（fs のみ）は `id` を持たない。メモリ実装は常に空。
    */
   listUnreadable(): Promise<UnreadablePermissionGrant[]>;
 
   /**
-   * **読めない行を、id で指して消す**（issue #2440。トークンの `TokenPoolStore.removeUnreadable`
-   * 〈#2354〉と同じ形）。読めない行（版ずれ・手編集。fs の `invalidGrantsRaw`、pg の
-   * `permissionGrantSchema` に合わない `record`）は `revoke` が `UnreadablePermissionGrantError`
-   * を投げて触らないので、片付ける口はこれだけである。
+   * 読めない行を、id で指して消す。読めない行は `revoke` が投げて触らないので、片付ける口はこれだけ。
    *
-   * - `ids` のどれかが**読めない行に無ければ**（読める行・無い id を含む）、**何も消さずに**
-   *   `{ kind: 'unknown' }` を返す（全部か無か。打ち間違いで読める許可を消さない）。
-   *   件数だけで、指された文字列は返さない。
-   * - 消すと決まったら、{@link RemoveUnreadableRowsOptions.beforeRemove} を**排他区間の中で
-   *   先に**呼ぶ。**投げたら何も消さずに投げ直す。**
-   * - **id が取れない行（fs のみ。`id` 欄が無い・文字列でない）は、この口では消せない**
-   *   （指す名前が無い。`permission-grants.json` を手で直す）。
-   * - 読める行には一切触れない。読める許可が消えることは無い。
+   * - `ids` のどれかが読めない行に無ければ（読める行・無い id を含む）何も消さずに `{ kind: 'unknown' }`（全部か無か。打ち間違いで読める許可を消さない）。件数だけで、指された文字列は返さない
+   * - 消すと決まったら、{@link RemoveUnreadableRowsOptions.beforeRemove} を排他区間の中で先に呼ぶ。投げたら何も消さずに投げ直す
+   * - id が取れない行（fs のみ）は消せない（指す名前が無い。`permission-grants.json` を手で直す）。読める行には一切触れない
    */
   removeUnreadable(
     ids: readonly string[],
@@ -1148,18 +637,9 @@ export interface PermissionGrantStore {
 }
 
 /**
- * `ScheduleStore.get(kind)` が、その行を `scheduledRequestSchema` として
- * 読めなかったときに投げる専用のエラー型（issue #2177）。`UnreadablePracticeError`
- * （本ファイル）と同じ形——「無い」（`null`）と「読めない」（throw）の区別を、
- * 呼び出し側が `instanceof` で見分けられるようにする。メッセージの文字列
- * （`/読めない形/` 等）で判定すると、言い回しを直しただけで判定が静かに外れる。
- *
- * **メッセージの文言はこの型を導入する前と変えていない**——fs
- * （`FsScheduleStore.get`）・pg（`PgScheduleStore` の `parsePlan`）どちらも、
- * issue #1944 の時点で確立した文言をそのまま `super()` へ渡すだけである。
- * `kind` を専用のフィールドとして持つのは、`schedule_list`（`tools.ts`）が
- * 「継続中の依頼 X は読めない形で入っている」の X を、メッセージの文字列
- * 解析ではなく構造化フィールドから取れるようにするためである。
+ * `ScheduleStore.get(kind)` が、その行を `scheduledRequestSchema` として読めなかったときに投げる。
+ * `instanceof` で見分ける（メッセージの文字列で判定すると言い回しの修正で静かに外れる）。
+ * `kind` を専用のフィールドに持つのは、`schedule_list` がメッセージの文字列解析なしで取れるようにするため。
  */
 export class UnreadableScheduleError extends Error {
   readonly kind: string;
@@ -1172,29 +652,17 @@ export class UnreadableScheduleError extends Error {
 }
 
 /**
- * `ScheduleStore.list` の返り値（issue #2343。`ApprovalList` / `CommitmentList` と同じ形）。
- *
- * **`ScheduledRequest[]` のままにしなかったのは、呼び出し側が読めない行を握り潰せない形に
- * するため。** 読めない行を空配列（無い）へ潰すと、クローンも人間も「読めない依頼が在る」
- * ことに気づけない。`unreadable` はコンパイラの目に触れる。
+ * `ScheduleStore.list` の返り値（`ApprovalList` / `CommitmentList` と同じ形）。
+ * `ScheduledRequest[]` のままにしない: 読めない行を空配列へ潰すと、クローンも人間も読めない依頼が在ることに気づけない。
  */
 export interface ScheduleList {
   /** 読めた行。kind の昇順。 */
   entries: ScheduledRequest[];
-  /**
-   * 読めなかった行。**「無い」でも「消された」でもない第3の状態。** 一覧全体は落とさない。
-   * 行そのものは消さない（`get(kind)` は投げ、`remove` / `removeIfPresent` で外せる）。
-   */
+  /** 読めなかった行。「無い」でも「消された」でもない第3の状態。一覧全体は落とさず、行そのものも消さない（`get(kind)` は投げ、`remove` / `removeIfPresent` で外せる）。 */
   unreadable: UnreadableSchedule[];
 }
 
-/**
- * 読めない継続中の依頼が在るときの1文（0件なら `null`。**0件のときは何も出さない**——
- * 「読めない依頼は 0 件」の行を作らない。AGENTS.md「取れない軸に 0 の行を作る」）。
- *
- * クローンの道具（`schedule_list`）と digest が同じ文面を使う。kind が取れた行は上限つきで
- * 並べ、取れない行は件数だけで言う。本文は載せない（`unreadableScheduleSchema` の doc）。
- */
+/** 読めない継続中の依頼が在るときの1文（0件なら `null`。0件のときは何も出さない）。本文は載せない（`unreadableScheduleSchema` の doc）。 */
 export function describeUnreadableSchedules(
   unreadable: readonly UnreadableSchedule[],
   options: { kindLimit?: number } = {},
@@ -1219,10 +687,7 @@ export function describeUnreadableSchedules(
   );
 }
 
-/**
- * 読めない行への編集（`POST /schedule`・`schedule_create`）を断る文。
- * 本文は載せない（kind だけ）。
- */
+/** 読めない行への編集（`POST /schedule`・`schedule_create`）を断る文。本文は載せない（kind だけ）。 */
 export function describeUnreadableScheduleEdit(error: UnreadableScheduleError): string {
   return (
     `継続中の依頼 ${error.kind} は読めない形で入っているので編集できない（書き換えていない）。` +
@@ -1231,26 +696,15 @@ export function describeUnreadableScheduleEdit(error: UnreadableScheduleError): 
 }
 
 /**
- * 予定の「版」は `ScheduledRequest.updatedAt` である（Issue #3821）。本文の編集
- * （`editRequest` / `put`）では進み、**発火（`claimRun` / `completeRun`）では動かない**
- * （`claimRun` が `expectedUpdatedAt` の照合に使っている値と同じ）。記憶・やり方の版
- * （本文の sha256）と違って時刻なので、同じミリ秒に2回書かれると区別できない。
+ * 予定の「版」は `ScheduledRequest.updatedAt`。本文の編集（`editRequest` / `put`）では進み、発火（`claimRun` / `completeRun`）では動かない
+ * （`claimRun` の `expectedUpdatedAt` の照合に使う値と同じ）。時刻なので、同じミリ秒に2回書かれると区別できない。
  */
 export interface WriteScheduleOptions {
-  /**
-   * 前提の版（読んだ時の `updatedAt`）。**書く瞬間の版がこれと違えば書かず、
-   * `ScheduleConflictError` を投げる**（比較と書き込みは1つの排他の中で行う）。
-   * `null` は「読んだ時には無かった」——いまも無いときだけ書ける。
-   * **省略（`undefined`）は従来どおり後勝ち**（クローンの道具・CLI のため）。
-   * `WriteMemoryOptions.ifMatch` / `WritePracticeOptions.ifMatch` と同じ形。
-   */
+  /** 前提の版（読んだ時の `updatedAt`）。書く瞬間の版と違えば書かず `ScheduleConflictError`。`null` は「無いときだけ書ける」、省略は後勝ち。 */
   ifMatch?: string | null;
 }
 
-/**
- * 前提の版が合わず、書かなかった。`current` は**いまの依頼**（無ければ `null`。
- * 読めない形で入っているときも `null`）。
- */
+/** 前提の版が合わず、書かなかった。`current` はいまの依頼（無ければ、読めない形のときも `null`）。 */
 export class ScheduleConflictError extends Error {
   readonly current: ScheduledRequest | null;
   constructor(kind: string, current: ScheduledRequest | null) {
@@ -1271,115 +725,49 @@ export function scheduleVersionMatches(
 }
 
 /**
- * 継続中の定期の依頼（PRD「自律」の起点②）。
- *
- * **人間の依頼のうち「これから先ずっと」の部分を持つ器である。** 会話は消え、
- * 受信箱は揮発し、記憶は根拠を持つ場所であって時計を持たない。ここが無いと
- * 「定期的に見ておいて」は次の compaction かデーモン再起動で静かに消える。
- *
- * 人間もここを読んで直せること（CLI / HTTP API）が要件である — 人間の制御手段は
- * 記憶・日誌・境界の3つだが、自分が出した継続の依頼が見えないのは可観測性の穴になる。
+ * 継続中の定期の依頼（PRD「自律」の起点②）。人間の依頼のうち「これから先ずっと」の部分を持つ器。
+ * 会話は消え、受信箱は揮発し、記憶は時計を持たない。ここが無いと「定期的に見ておいて」は compaction かデーモン再起動で静かに消える。
+ * 人間もここを読んで直せること（CLI / HTTP API）が要件: 自分が出した継続の依頼が見えないのは可観測性の穴になる。
  */
 export interface ScheduleStore {
-  /**
-   * 継続中の依頼の一覧。**読めない行（`scheduledRequestSchema` に合わない行）は一覧全体を
-   * 落とさず、`unreadable` に別欄で返す**（issue #2343。`JobStore.listApprovals` の
-   * `ApprovalList` と同じ形）。`entries` は kind の昇順。**メモリ実装（`testing.ts`）は
-   * `unreadable` が常に空**——`put()` がスキーマを通すので、壊れた行を持てない。
-   */
+  /** 継続中の依頼の一覧。読めない行は一覧全体を落とさず `unreadable` に別欄で返す。`entries` は kind の昇順。メモリ実装は `unreadable` が常に空。 */
   list(): Promise<ScheduleList>;
   /**
-   * 無ければ `null`（「読めない」は throw。`PracticeStore.read` /
-   * `CommitmentStore.get` と同じ線）。投げるのは `UnreadableScheduleError`
-   * （本ファイル、issue #2177）——`instanceof` で見分けられる。メッセージの
-   * 文字列（`/読めない形/` 等）で判定しないこと。fs / pg どちらの実装も、この
-   * 型を導入する前から使っていたメッセージの文言はそのまま引き継いでいる
-   * （変えたのは型だけ）。
+   * 無ければ `null`。読めないは throw（`UnreadableScheduleError`）。
    *
-   * **NUL（issue #3011）。** 読むだけの口（`get`・`remove`・`removeIfPresent`・`editRequest`・`claimRun`・`completeRun`・
-   * `getPhase`）は、NUL を含む kind でも断らず「無い」と同じ結果を返す。書き込みは、依頼の kind を入口のスキーマが弾き、
-   * 位相の kind（`putPhase`）は `NulNotAllowedError` で断る。`request`（本文）の NUL は落として残す。
+   * NUL: 読むだけの口（`get`・`remove`・`removeIfPresent`・`editRequest`・`claimRun`・`completeRun`・`getPhase`）は、NUL を含む kind でも断らず「無い」と同じ結果を返す。
+   * 書き込みは、依頼の kind を入口のスキーマが弾き、位相の kind（`putPhase`）は `NulNotAllowedError` で断る。`request`（本文）の NUL は落として残す。
    *
-   * **インメモリ実装（`testing.ts`）は投げない。** `put()` の時点で
-   * `scheduledRequestSchema.parse` を通すため、壊れた行をそもそも持てない
-   * ——テストで再現するときは `stores.schedules.get` を丸ごと差し替える
-   * （`tools.test.ts` の issue #1982 の歯、`schedule_remove` のテストを参照）。
+   * インメモリ実装は投げない: `put()` が `scheduledRequestSchema.parse` を通すので壊れた行を持てない（テストで再現するときは `stores.schedules.get` を丸ごと差し替える）。
    */
   get(kind: string): Promise<ScheduledRequest | null>;
   /**
    * 同じ kind があれば置き換える（`createdAt` は呼び出し側が引き継ぐ）。
-   *
-   * **`options.ifMatch`（Issue #3821）で前提の版を持てる。** 合わなければ何も書かず
-   * `ScheduleConflictError`。比較は書き込みと同じ排他の中で行う。`null` なら
-   * 「無いときだけ作る」。省略は従来どおり無条件。
-   *
-   * 版つきの `put` は、読めない行に `UnreadableScheduleError`。省略（無条件）は読めない行を
-   * 置き換える。壊れた行を直す口を塞がないため。
+   * `options.ifMatch` の比較は書き込みと同じ排他の中。版つきの `put` は読めない行に `UnreadableScheduleError`。
+   * 省略（無条件）は読めない行を置き換える: 壊れた行を直す口を塞がないため。
    */
   put(entry: ScheduledRequest, options?: WriteScheduleOptions): Promise<void>;
   remove(kind: string): Promise<void>;
 
   /**
-   * kind が在れば消す。**`get(kind)` と違い、読めない行でも投げない**
-   * （issue #1982）。戻り値は「消す前にどんな状態で在ったか」の3値 ——
-   * 無かった（`null`）／読めた（消した値そのものを返す）／在ったが読めな
-   * かった（`'unreadable'`）。
+   * kind が在れば消す。`get(kind)` と違い、読めない行でも投げない。
+   * 戻り値は消す前の状態の3値: 無かった（`null`）／読めた（消した値）／在ったが読めなかった（`'unreadable'`）。
    *
-   * **なぜ要るか。** `DELETE /schedule/:kind`（`apps/daemon/src/app.ts`）と
-   * `schedule_remove`（`tools.ts`）は、無い kind を 404 にし、消せた kind は
-   * 日誌へ書くために、かつて `get(kind)` → `remove(kind)` の順で呼んでいた。
-   * `get(kind)` は「消された」（`null`）と「読めない」（throw）を区別する
-   * 契約のまま変えない（`get` の doc）ので、壊れた行を外そうとすると `get`
-   * の例外がそのまま上がり、`remove` まで届かなかった——同じ kind で
-   * `put()` して上書きする（＝作り直す）以外に、壊れた依頼を片付ける手が
-   * 無かった。
-   *
-   * **例外の型やメッセージでは見分けない。** `UnreadableCommitmentError`
-   * （本ファイル）と違う形を選んだのは、`get` → `remove` の2操作のままだと
-   * 「読んでから書くまでの隙間」が残るため——`editRequest` / `PermissionGrantStore
-   * .revoke` / `.markUsed` と同じ理由で、読んでから書くをアプリ層に残さず
-   * ストアの排他区間へ1操作として引き取る。呼び出し側は `instanceof` も
-   * メッセージの文字列判定も要らない。
-   *
-   * **`remove(kind)` は置き換えない。** 「在ったか」を要らない既存の呼び手
-   * （`clear()` の内部実装など、無ければ何もしないで十分な箇所）はそのまま
-   * `remove` を使ってよい。
+   * `get` → `remove` の2操作にしない: 読んでから書くまでの隙間が残るうえ、`get` が読めない行で投げて壊れた依頼を片付ける手が無くなる
+   * （`editRequest` / `PermissionGrantStore.revoke` と同じ理由）。
    */
   removeIfPresent(kind: string): Promise<ScheduledRequest | 'unreadable' | null>;
 
   /**
-   * 依頼の「人間・クローンが直す欄」（`request` / `spec`）だけを差し替える
-   * （Issue #1654）。**排他区間の中で読み直した現在値から `pendingRun` /
-   * `lastRunAt` / `lastScheduledRunAt` / `createdAt` をそのまま引き継ぎ、
-   * `request` / `spec` / `updatedAt` だけを渡された値へ差し替える。**
+   * 依頼の「人間・クローンが直す欄」（`request` / `spec`）だけを差し替える。
+   * 排他区間の中で読み直した現在値から `pendingRun` / `lastRunAt` / `lastScheduledRunAt` / `createdAt` を引き継ぎ、`request` / `spec` / `updatedAt` だけを差し替えて、書き込んだ後の全体を返す。
    *
-   * **`put()` に無い理由 —— `put()` は無条件の全置換で、版チェックを持たない。**
-   * `schedule_create`（`tools.ts`）や `POST /schedule`（`apps/daemon/src/app.ts`）が
-   * かつてやっていた形（`get()` で読んだ `existing` から3欄をコピーし、新しい
-   * `updatedAt` を付けて `put()` する）は、**読んでから書くまでの間**に
-   * `claimRun()` が成立すると、その `pendingRun` / `lastRunAt` を丸ごと消して
-   * いた——`claimRun` 自身の doc が「claim の直後に器が落ちても消えないため」と
-   * 言っている印が、器が落ちなくても**同じ kind への `put()` 1回**で消える形
-   * だった（#1041 の `CommitmentStore.open()` が「読んでから書く」をアプリ層から
-   * 追い出したのと同じ理由・同じ形。実測は `packages/storage-fs/src/schedule
-   * -edit-keeps-claim.test.ts` / `packages/storage-pg/src/schedule-edit-keeps
-   * -claim.test.ts`）。
+   * `put()` で代用しない: `put()` は無条件の全置換で版チェックが無いので、`get()` → コピー → `put()` の間に `claimRun()` が成立すると、
+   * その `pendingRun` / `lastRunAt` を丸ごと消す（claim の印が、器が落ちなくても消える）。
+   * 無ければ何もせず `null`（新規作成は `put()`）。
    *
-   * **無ければ何もせず `null`。** 呼び出し側はこれで新規作成しない——
-   * `schedule_create` / `POST /schedule` は作成と編集を兼ねるが、新規作成には
-   * 引き継ぐべき状態がそもそも無いので、そちらは引き続き `put()` を使う
-   * （`null` が返ったら `put()` で新規に作る、という順で呼ぶ）。
-   *
-   * 返すのは書き込んだ後の全体。
-   *
-   * **`options.ifMatch`（Issue #3821）で前提の版（`updatedAt`）を持てる。** 合わなければ
-   * 何も書かず `ScheduleConflictError`（`current` は現在値）。**無い kind に版つき
-   * （文字列）で呼ぶのも「読んだ後に消された」衝突**（`current: null`）。`ifMatch: null`
-   * で無いときは、従来どおり `null` を返す（呼び出し側が `put(…, { ifMatch: null })`
-   * で、無いときだけ作る）。省略は従来どおり無条件。
-   *
-   * 在るが読めない行は `UnreadableScheduleError`（`ifMatch` を問わない）。「無い」（`null`）に
-   * すると、呼び出し側が続く `put()` で壊れた行を黙って置き換えてしまう。
+   * `options.ifMatch` が合わなければ何も書かず `ScheduleConflictError`（`current` は現在値）。無い kind に版つき（文字列）で呼ぶのも「読んだ後に消された」衝突（`current: null`）。
+   * 在るが読めない行は `UnreadableScheduleError`（`ifMatch` を問わない）: `null` にすると続く `put()` で壊れた行を黙って置き換えてしまう。
    */
   editRequest(
     kind: string,
@@ -1389,27 +777,15 @@ export interface ScheduleStore {
   ): Promise<ScheduledRequest | null>;
 
   /**
-   * 発火を確定させる。**読むことと記録することを1操作に閉じる。**
+   * 発火を確定させる。読むことと記録することを1操作に閉じる。
    *
-   * `expectedUpdatedAt` と同じ版がまだ在るときだけ記録し、**確定した依頼（記録を
-   * 進める前の姿）** を返す。消えていた・書き換わっていたら null。
-   * 在るが読めない行は `UnreadableScheduleError`（版を問わない）。`null` は「消された・
-   * 書き換わった」だけの意味に保つ。
+   * `expectedUpdatedAt` と同じ版がまだ在るときだけ記録し、確定した依頼（記録を進める前の姿。呼び出し側が「前回いつ動いたか」を要る）を返す。消えていた・書き換わっていたら `null`。
+   * 在るが読めない行は `UnreadableScheduleError`（版を問わない）: `null` は「消された・書き換わった」だけの意味に保つ。
    *
-   * **これが2操作に分かれていると、読んでから記録するまでの隙間で人間が消した・
-   * 直した依頼が古い本文で走る。** 「本文は処理する瞬間にストアから読む」という
-   * 約束は、競合したときにこそ効かないと意味がない（消した依頼が外の世界に手を
-   * 出したら取り返せない）。返り値が更新前の姿なのは、呼び出し側が「前回いつ
-   * 動いたか」を材料として要るからである。
+   * 2操作に分けない: 読んでから記録するまでの隙間で人間が消した・直した依頼が古い本文で走り、外の世界に手を出したら取り返せない。
    *
-   * ここで付けるのは **`pendingRun`（引き受けた印）と `lastRunAt`（観測用）だけ**で、
-   * 定期の予定の基準（`lastScheduledRunAt`）は `completeRun` まで進めない。claim の
-   * 直後に器が落ちたとき、その回が「もう動いた」ことになって消えないようにするため。
-   *
-   * **同じ kind の「本文だけ直す」編集でも消えない（Issue #1654）。** `editRequest`
-   * が現在値から `pendingRun` / `lastRunAt` を引き継ぐので、claim の直後に
-   * `editRequest` が割り込んでもこの印は残る——`put()` を使う経路（新規作成）
-   * にだけ、この保護は掛からない。
+   * ここで付けるのは `pendingRun`（引き受けた印）と `lastRunAt`（観測用）だけ。定期の予定の基準（`lastScheduledRunAt`）は `completeRun` まで進めない:
+   * claim の直後に器が落ちたとき、その回が「もう動いた」ことになって消えないようにするため。本文だけ直す編集（`editRequest`）が割り込んでも、この印は引き継がれて残る。
    */
   claimRun(
     kind: string,
@@ -1419,50 +795,29 @@ export interface ScheduleStore {
   ): Promise<ScheduledRequest | null>;
 
   /**
-   * 引き受けた発火が終わったことを記録する。`pendingRun` を消し、`schedule` なら
-   * 定期の予定の基準（`lastScheduledRunAt`）を進める。
-   *
-   * **`manual` では基準を動かさない**（手で起こした1回で予定をずらさない）。
-   * 消えている kind、別の発火の印が付いている場合は何もしない。
+   * 引き受けた発火が終わったことを記録する。`pendingRun` を消し、`schedule` なら定期の予定の基準（`lastScheduledRunAt`）を進める。
+   * `manual` では基準を動かさない（手で起こした1回で予定をずらさない）。消えている kind、別の発火の印が付いている場合は何もしない。
    */
   completeRun(kind: string, at: string, cause: 'schedule' | 'manual'): Promise<void>;
 
   /**
    * 既定の仕込み（日報・発意 tick）の位相を読む。無ければ null。
-   *
-   * **依頼（`list()` / `get()`）とは別の器である。** 理由は `schedulePhaseSchema` に
-   * 書いてある（1つにまとめると、既定の仕込みがクローンから継続中の依頼に見えて
-   * `schedule_remove` で消せる）。**だから `list()` にこれを混ぜないこと。**
+   * 依頼（`list()` / `get()`）とは別の器: 混ぜると既定の仕込みがクローンから継続中の依頼に見えて `schedule_remove` で消せる（`schedulePhaseSchema`）。
    */
   getPhase(kind: string): Promise<SchedulePhase | null>;
 
   /** 同じ kind があれば置き換える。 */
   putPhase(phase: SchedulePhase): Promise<void>;
 
-  /**
-   * 継続中の依頼と、既定の仕込みの位相を両方とも消す（ワークスペースのリセット
-   * 専用。#workspace-reset）。**この2つは1枚のストア（fs は同じファイル、pg は
-   * 別テーブルだが同じ意味の単位）なので、一緒に1操作で消す。**
-   */
+  /** 継続中の依頼と既定の仕込みの位相を両方とも消す（ワークスペースのリセット専用）。この2つは1枚のストアなので1操作で消す。 */
   clear(): Promise<{ schedules: number; phases: number }>;
 }
 
 /**
- * `CommitmentStore.get(id)` が、その行を `commitmentSchema` として読めなかった
- * ときに投げる専用のエラー型（issue #296）。
- *
- * **なぜ型を分けるか。** `get` は「無い（`null`）」と「読めない（throw）」を
- * 区別する契約のままだが（`CommitmentStore.get` の doc）、呼び出し側
- * （`commitment_list` ツールの全文モード、`tools.ts`）はその throw をさらに
- * 2種類へ割る必要がある — **台帳の1行が壊れているという性質**（`entries` /
- * `unreadable` と同じ第3の状態。安全側は「読めない」と伝えて返す）と、
- * **DB が落ちた・ファイルが読めない等の器そのものの障害**（安全側は握り潰さず
- * 上へ投げる）である。前者を後者と同じ扱いで握り潰すと、器の異常が
- * 「台帳が壊れている」に化けて見えなくなる。
- *
- * メッセージの文字列（`/読めない形/` 等）で判定するのは、メッセージの言い回し
- * を直しただけで判定が静かに外れる脆さがあるので、`instanceof` で見分けられる
- * 専用のクラスを立てる。
+ * `CommitmentStore.get(id)` が、その行を `commitmentSchema` として読めなかったときに投げる。
+ * 呼び出し側（`commitment_list` の全文モード）は throw を、台帳の1行が壊れている（安全側は「読めない」と伝えて返す）と、
+ * 器そのものの障害（安全側は握り潰さず上へ投げる）に割る必要がある。前者を後者と同じに握り潰すと器の異常が「台帳が壊れている」に化ける。
+ * `instanceof` で見分ける（メッセージの文字列で判定すると言い回しの修正で静かに外れる）。
  */
 export class UnreadableCommitmentError extends Error {
   constructor(message: string) {
@@ -1472,33 +827,11 @@ export class UnreadableCommitmentError extends Error {
 }
 
 /**
- * `UnreadableCommitmentError` を、呼び出し側が人間・クローンへ返す1文へ
- * 変換する共通の文面（issue #2148）。
+ * `UnreadableCommitmentError` を人間・クローンへ返す1文へ変換する共通の文面。
+ * HTTP の口と道具が別ファイルなので、同じ状況の説明を手で書くと片方だけ直して食い違う。
  *
- * **なぜ1箇所に置くか。** 台帳を読んでから操作する口
- * （`PATCH /commitments/:id`・道具 `commitment_edit`。`commitment_close` は別の扱い
- * ——下の「なぜ `commitment_close` を含めないか」を見よ）が、先に呼ぶ
- * `get(id)` から同じ `UnreadableCommitmentError` を受け取る。HTTP の口は
- * `apps/daemon/src/app.ts`、道具は `packages/core/src/tools.ts` と別ファイル
- * に分かれているので、同じ状況の説明文をそれぞれ手で書くと、`commitmentPosition`
- * （このファイル冒頭の doc）と同じ理由で片方だけ直して食い違う。
- *
- * **`error.message` をそのまま使う。** fs / pg 両方の `UnreadableCommitmentError`
- * は既に「${id} が読めない形で入っている（片付いたのではない）: ${reason}」
- * という、id と理由を含む1文を持っている（`storage-fs/src/commitments.ts` /
- * `storage-pg/src/commitments.ts` の `get` の doc）——ここへさらに id を
- * 埋め込み直すと二重に名乗ることになるので、その1文の末尾へ「できること・
- * できないこと」を1文足すだけにする。
- *
- * **「閉じることはできる」は常に言ってよい。** `POST /commitments/:id/close`
- * と道具 `commitment_close` は、この関数を呼ぶ口とは別に読めない行を閉じ
- * られる（issue #2148 の決定 (1)）——だからここで説明する口がどれであっても、
- * 「別の口（close）からなら閉じられる」という事実は変わらない。
- *
- * **本文の書き直しは、この関数を呼ぶどの口からもできない**（issue #2148
- * の決定 (2)。本文が本当に読める形へ戻るという保証が無い書き直しは、この
- * issue の範囲では入れない判断——`docs/` 相当の決定は Issue 本文とマネージャー
- * のコメントを見よ）。
+ * 「閉じることはできる」は常に言ってよい: `POST /commitments/:id/close` と `commitment_close` は読めない行を閉じられる。
+ * 本文の書き直しは、この関数を呼ぶどの口からもできない（本文が読める形へ戻る保証が無い）。
  */
 export function describeUnreadableCommitment(error: UnreadableCommitmentError): string {
   return (
@@ -1509,124 +842,54 @@ export function describeUnreadableCommitment(error: UnreadableCommitmentError): 
 }
 
 /**
- * `CommitmentStore.list` の返り値（issue #296）。
- *
- * **`Commitment[]` のままにしなかったのは、呼び出し側が握り潰せない形にする
- * ためである。** 台帳の1行が保存されている形（enum の値など）と、いま動いて
- * いるコードが読める形は、将来ずれうる（`schema.ts` の `unreadableCommitmentSchema`
- * の doc）。ずれた行を空配列（無い）へ潰すと、`parseCommitment`
- * （`packages/storage-pg/src/commitments.ts`）の doc が防ごうとしている結末 —
- * クローンが引き受けたことを二度と思い出さない — へそのまま着く。件数や
- * ログではなく型を変えるのは、`entries` だけを見て `unreadable` を読み飛ばす
- * ことは書けても、`CommitmentList` を受け取っておいて `unreadable` が
- * コンパイラの目に触れないことはできない、という違いのためである。
+ * `CommitmentStore.list` の返り値。
+ * `Commitment[]` のままにしない: 保存された形と、いま動いているコードが読める形は将来ずれうる。ずれた行を空配列へ潰すと、
+ * クローンが引き受けたことを二度と思い出さない。型に載せれば `unreadable` の読み飛ばしがコンパイラの目に触れる。
  */
 export interface CommitmentList {
   entries: Commitment[];
-  /** 読めなかった行。**「無い」でも「片付いた」でもない第3の状態。** */
+  /** 読めなかった行。「無い」でも「片付いた」でもない第3の状態。 */
   unreadable: UnreadableCommitment[];
   /**
-   * `close()` の契約（「行は消さない」）を実装が守れなかった回数の累計 — 保持
-   * 上限を超えて物理削除された、片付いた行の件数（issue #416）。
-   *
-   * **`unreadable` と同じ理由で型に足す。** 削除という事象を件数やログではなく
-   * 型で持たせるのは、`CommitmentList` を受け取っておいて `unreadable` は読んで
-   * `trimmedClosed` は読み飛ばす、ということは書けても、このフィールドそのものが
-   * コンパイラの目に触れないことはできないからである。「合図が無い」
-   * （issue #416 の1点目）はこの欄が塞ぐ。
-   *
-   * **契約を守れている実装は常に `0` を返す。** いまのところ `storage-pg`
-   * （`PgCommitmentStore`）と in-memory（`packages/core/src/testing.ts`）が
-   * それで、`storage-fs`（`FsCommitmentStore`）だけが `CLOSED_HISTORY_LIMIT`
-   * （`packages/storage-fs/src/commitments.ts`）を超えた古い片付き行を物理削除
-   * するのでこの値を増やしうる。**0 は「削除を数えていない」ではなく「削除が
-   * 起きていない」を意味する** — 契約を守る実装には削除という事象自体が無い。
-   *
-   * **3実装の保持方針を揃えるかどうかは、この欄の追加では決まらない**
-   * （issue #416 のコメントに測った根拠を置いてある）。揃っていない事実を
-   * 隠さずに運ぶのがこの欄の役目であって、揃える判断そのものは別に要る。
+   * `close()` の契約（「行は消さない」）を実装が守れなかった累計 — 保持上限を超えて物理削除された、片付いた行の件数。
+   * 契約を守れている実装は常に `0` を返す（`storage-pg` とインメモリ。`storage-fs` だけが `CLOSED_HISTORY_LIMIT` を超えた古い片付き行を物理削除する）。
+   * 0 は「削除を数えていない」ではなく「削除が起きていない」を意味する。揃っていない保持方針の事実を隠さずに運ぶのがこの欄の役目。
    */
   trimmedClosed: number;
 }
 
 /**
- * 引き受けたまま終わっていない仕事の台帳（`schema.ts` の `Commitment`）。
+ * `CommitmentStore.open` が実際に何をしたか。
  *
- * **受信箱（`InboxStore`）とは守るものが違う。** あちらが持つのは「その合図がまだ
- * モデルに届いていない」という配達の状態で、ターンが終われば消える。こちらが持つのは
- * 「頼まれたことがまだ片付いていない」という**仕事の状態**で、ターンが終わっても
- * 残る。片方でもう片方を代用できないので、両方要る。
- *
- * **省略可能にしないこと**（`schedules` / `inbox` と同じ理由）。ここが任意だと、
- * 片方の器でだけ依頼が黙って消えるという能力差が生まれる（north_star 禁止1）。
- */
-/**
- * `CommitmentStore.open` が実際に何をしたか（issue #1041）。
- *
- * **`boolean` から変えた。** 開かなかった理由が2つに増えたためである——「同じ id が
- * 既に在った」（`open` の冪等性そのもの）と「同一マネージャー×同一本文の未了が
- * 既に在ったので、その行へ任せた」（{@link findOpenManagerDuplicate}）。**この2つを
- * 1つの `false` へ潰すと、`Clone` 側の {@link https://github.com/takecchi/alteroid/issues/856 issue #856}
- * の区別（`CommitOutcome` の `'existed'` と `'folded'`）が器の側で失われる。**
- *
- * **⚠️ 文字列の union（`'opened' | 'existed' | 'folded'`）にはしない。** `'existed'`
- * も `'folded'` も truthy なので、`if (await store.open(entry))` と書いてある
- * 呼び出しが**型検査を通ったまま意味を反転させる**——`open` の呼び出しは
- * テストを含めて180件を超えており、型が守ってくれない変更をここへ入れない。
+ * `boolean` のままにしない: 開かなかった理由が「同じ id が既に在った」（冪等性）と「同一マネージャー×同一本文の未了へ任せた」
+ * （{@link findOpenManagerDuplicate}）の2つあり、1つの `false` へ潰すと `Clone` 側の区別（`CommitOutcome` の `'existed'` と `'folded'`）が失われる。
+ * 文字列の union にもしない: `'existed'` も `'folded'` も truthy なので、`if (await store.open(entry))` と書いた呼び出しが型検査を通ったまま意味を反転させる。
  */
 export interface CommitmentOpenResult {
   /** 新しい行を開いたか。 */
   readonly opened: boolean;
-  /**
-   * 同一マネージャー×同一本文の未了へ任せたか（＝畳んだか）。
-   *
-   * **`opened` が `true` なら必ず `false` である。** 両方 `false` なら「同じ id が
-   * 既に在った」を意味する。
-   */
+  /** 同一マネージャー×同一本文の未了へ任せたか（畳んだか）。`opened` が `true` なら必ず `false`。両方 `false` なら「同じ id が既に在った」。 */
   readonly folded: boolean;
   /**
    * 畳んだ先の行の id。
-   *
-   * **⚠️ 畳んだのに分からないことがある。** `storage-pg` は「既存の行を探す」と
-   * 「入れる」を1文に畳んでいるので、**同じ文が同時に走って DB の制約側で弾かれた
-   * 場合**、その文が見ている読み取りスナップショットにはまだ相手の行が無い——
-   * 畳んだことは分かるが、畳んだ先は分からない。**そこで嘘の id を埋めないために
-   * 任意にしてある**（分からないことを分からないまま返す）。fs と in-memory は
-   * 常に持つ。
+   * 畳んだのに分からないことがある: `storage-pg` は「探す」と「入れる」を1文に畳んでいるので、同じ文が同時に走って DB の制約で弾かれた場合、
+   * 読み取りスナップショットに相手の行が無い。嘘の id を埋めないために任意にしてある（fs と in-memory は常に持つ）。
    */
   readonly foldedInto?: string;
 }
 
 /**
- * `entry` と同じマネージャー（`origin: 'manager'` かつ同じ `source`）× 同じ
- * `body` の**未了**行を `entries` から探す（issue #954 提案3 / issue #1041）。
+ * `entry` と同じマネージャー（`origin: 'manager'` かつ同じ `source`）× 同じ `body` の未了行を `entries` から探す。
+ * 判定の規則をここに1本だけ置く: 3実装がそれぞれ持つと必ずずれる。`storage-pg` だけが同じ規則を SQL で書き直す
+ * （DB の制約にしないとプロセスを跨げない）ので、3実装が同じ答えを返すことを `commitment-fold-contract.ts` が測る。
  *
- * **判定の規則をここに1本だけ置く理由。** 同じ規則を3実装（fs / pg / in-memory）が
- * それぞれ持つと、必ずずれる。fs と in-memory はこの関数をそのまま呼び、
- * `storage-pg` だけは同じ規則を SQL で書き直す（DB の制約にしないと
- * プロセスを跨げないため）——**だから3実装が同じ答えを返すことを契約の歯で測る**
- * （`commitment-fold-contract.ts`）。
+ * 対象はマネージャー起因の行だけ: 無限連投の形（同一マネージャーの合成通知が同文のまま連投される）は `origin: 'manager'` にしか出ない。
+ * 人間の発言・回答・外部イベントまで畳むと、たまたま同じ文言になった別々の発言を1件に潰しかねない。
+ * `source` が無い行どうしは重複と数えない（出所の分からない行どうしを「同じマネージャー」とは言えない。pg の `foldable` と同じ）。
+ * 閉じたあとの同文は畳まない: 「二度と報告できなくなる」側には倒さない。
  *
- * **対象はマネージャー起因の行だけに絞る。** 実測（issue #954）が示した無限連投の
- * 形——同一マネージャーの合成通知（`turn_failed` 等）が同文のまま連投される——は
- * `origin: 'manager'` の行にしか出ない。人間の発言・人間の回答・外部イベントまで
- * 同じ基準で畳むと、たまたま同じ文言になった別々の発言（例: 2人の人間が同じ一言を
- * 別の会話で送る）まで1件に潰しかねない——その保証を弱める理由がここには無い。
- *
- * **`source` が無い行（`undefined`）どうしは重複と数えない。** `manager_message`
- * の `commitmentFor` は必ず `source` を持つが、API が直接受けた `origin: 'manager'`
- * の行は `source` を持たないことがある。出所の分からない行どうしを「同じマネージャー」
- * とは言えないので畳まない（pg の `foldable` と同じ。直す前は `undefined === undefined`
- * で畳み、fs / in-memory だけが pg と割れていた。#3056）。
- *
- * **閉じたあとの同文は畳まない。** 一度閉じれば「未了」ではなくなるので、同じ
- * マネージャーが同じ文言をもう一度報告してきても、それは新しい未了として台帳に
- * 載る——「二度と報告できなくなる」側には倒れない。
- *
- * **見つかった行を返す**（`boolean` ではない）。呼び出し側は
- * {@link CommitmentOpenResult.foldedInto} へその id を載せる義務がある——「畳んだ」
- * とだけ言われても、どの行へ任せたのかが分からなければ、クローンはその仕事を
- * 閉じる手段を持たない。
+ * 見つかった行を返す（`boolean` ではない）。呼び出し側は {@link CommitmentOpenResult.foldedInto} へその id を載せる義務がある:
+ * どの行へ任せたか分からないと、クローンはその仕事を閉じる手段を持たない。
  */
 export function findOpenManagerDuplicate(
   entries: readonly Commitment[],
@@ -1643,10 +906,8 @@ export function findOpenManagerDuplicate(
 }
 
 /**
- * 台帳の行の本文の「版」（Issue #3786）。`editedAt ?? at` で、`GET /commitments` の
- * 行の `editedAt` と `at` からクライアントが同じ式で出せる（欄は足さない）。
- * `commitmentUpdatedAt`（`closedAt ?? at`）とは別物で、本文の編集では動かない。
- * 時刻なので、同じミリ秒に2回書かれると区別できない。
+ * 台帳の行の本文の「版」。`editedAt ?? at` で、クライアントが `GET /commitments` の行から同じ式で出せる（欄は足さない）。
+ * `commitmentUpdatedAt`（`closedAt ?? at`）とは別物で、本文の編集では動かない。時刻なので、同じミリ秒に2回書かれると区別できない。
  */
 export function commitmentBodyVersion(entry: Pick<Commitment, 'at' | 'editedAt'>): string {
   return entry.editedAt ?? entry.at;
@@ -1654,11 +915,7 @@ export function commitmentBodyVersion(entry: Pick<Commitment, 'at' | 'editedAt'>
 
 /** `CommitmentStore.editBody` の任意の引数。 */
 export interface EditCommitmentBodyOptions {
-  /**
-   * 前提の版（読んだ時の `commitmentBodyVersion`）。書く瞬間の版と違えば書かず
-   * `CommitmentConflictError`（照合と書き込みは1つの排他の中）。省略は従来どおり後勝ち。
-   * 無い行は `current: null` の衝突。片付いている行は版を見ず `false`。
-   */
+  /** 前提の版（`commitmentBodyVersion`）。書く瞬間の版と違えば書かず `CommitmentConflictError`。省略は後勝ち。無い行は `current: null` の衝突。片付いている行は版を見ず `false`。 */
   ifMatch?: string;
 }
 
@@ -1681,134 +938,65 @@ export function commitmentVersionMatches(
   return current !== null && commitmentBodyVersion(current) === ifMatch;
 }
 
+/**
+ * 引き受けたまま終わっていない仕事の台帳（`schema.ts` の `Commitment`）。
+ * 受信箱（`InboxStore`）とは守るものが違う: あちらは配達の状態（ターンが終われば消える）、こちらは仕事の状態（ターンが終わっても残る）で、片方でもう片方を代用できない。
+ */
 export interface CommitmentStore {
   /**
-   * 台帳を返す。**未了は古い順**（齢が判断の材料なので、古いものから見せる）、
-   * 片付いたものは新しい順で未了の後ろに続く。
-   *
-   * `includeClosed` を省いたら未了だけ。
-   *
-   * **1行が読めなくても、その行だけが `unreadable` へ回り `entries` は返る**
-   * （issue #296）。`entries` の順序・件数は「読めた行だけで見たときの」台帳の
-   * 姿であって、読めなかった行はどこにも数え上げに紛れ込まない。
+   * 台帳を返す。**未了は古い順**（齢が判断の材料なので古いものから見せる）、片付いたものは新しい順で未了の後ろに続く。`includeClosed` を省いたら未了だけ。
+   * 1行が読めなくても、その行だけが `unreadable` へ回り `entries` は返る。`entries` の順序・件数は読めた行だけで見た台帳の姿で、読めなかった行は数え上げに紛れ込まない。
    */
   list(options?: { includeClosed?: boolean }): Promise<CommitmentList>;
 
   /**
-   * 1件を読む。**「無い（`null`）」と「読めない」は別物**——単票なので
-   * `list()` のように隔離する一覧が無く、この区別を型（`CommitmentList`）へ
-   * 逃がす先も無い。読めない行は `UnreadableCommitmentError`（本ファイル）を
-   * 投げる。呼び出し側（`commitment_list` ツール、`tools.ts`）はこれを
-   * `instanceof` で捕まえ、「読めない」を text として返す——それ以外の
-   * 例外（器そのものの障害）は捕まえずに上へ通す。
+   * 1件を読む。「無い（`null`）」と「読めない」は別物: 単票なので型へ逃がす先が無く、読めない行は `UnreadableCommitmentError` を投げる。
+   * 呼び出し側（`commitment_list`）は `instanceof` で捕まえて「読めない」を返し、それ以外の例外（器そのものの障害）は上へ通す。
    *
-   * **NUL（issue #3011）。** 読むだけの口（`get`・`close`・`closeMany`・`editBody` の id）は、NUL を含む id でも断らず
-   * 「無い」と同じ結果（`null`・`false`・閉じた id に含めない）を返す。`open` は `id` の NUL を `NulNotAllowedError` で断り、
-   * `body`・`closedReason` の NUL は落として残す（3実装とも）。`source`（出所の注記。行を指す鍵ではない）の NUL は、断らず落として残す（3実装とも。畳み込みの判定も落とした値で揃う）。断ると引き受けた仕事が台帳から消え、害が大きいのはそちらである（`UsageStore` と同じ事情）。
+   * NUL: 読むだけの口（`get`・`close`・`closeMany`・`editBody` の id）は NUL を含む id でも断らず「無い」と同じ結果（`null`・`false`・閉じた id に含めない）を返す。
+   * `open` は `id` の NUL を `NulNotAllowedError` で断り、`body`・`closedReason` の NUL は落として残す（3実装とも）。
+   * `source`（出所の注記。行を指す鍵ではない）の NUL も断らず落として残す（畳み込みの判定も落とした値で揃う）:
+   * 断ると引き受けた仕事が台帳から消え、害が大きいのはそちら（`UsageStore` と同じ事情）。
    */
   get(id: string): Promise<Commitment | null>;
 
   /**
    * 未了として開く。**同じ id が既に在れば何もしない**（開いたら `opened: true`）。
    *
-   * **冪等であることがこの器の要である。** 受信箱の合図は配り直されうるので
-   * （`InboxStore` の取引）、その id をそのまま使う自動 open は同じ id で二度呼ばれる。
-   * 上書きしてしまうと、**一度片付けた仕事が配り直しのたびに開き直る** — 器が落ちる
-   * たびに終わったはずの依頼が蘇り、クローンが同じ仕事を二度起こす。
+   * 冪等であることがこの器の要: 受信箱の合図は配り直されうるので、その id を使う自動 open は同じ id で二度呼ばれる。上書きすると、一度片付けた仕事が配り直しのたびに開き直る。
    *
-   * **⭐ 同一マネージャー×同一本文×未了も開かない（issue #1041）。** 判定の規則は
-   * {@link findOpenManagerDuplicate} に1本だけ置いてある。**この判定を呼び出し側
-   * （読んでから書く形）へ戻さないこと** — それが #1041 そのものであり、
-   * `Clone#commit` が `list()` → 判定 → `open()` と割っていたために、同じストアを
-   * 指す2つのデーモンが同時に post すると台帳が2行に割れた。
+   * 同一マネージャー×同一本文×未了も開かない（規則は {@link findOpenManagerDuplicate}）。この判定を呼び出し側（読んでから書く形）へ戻さない:
+   * `list()` → 判定 → `open()` と割ると、同じストアを指す2つのデーモンが同時に post したときに台帳が2行に割れる。
    *
-   * **⚠️ 「読みと書きを同じ排他区間に入れる」だけでは、実装によって足りうる強さが違う。**
-   * in-memory（`packages/core/src/testing.ts`）の排他はプロセスの中の `Map`
-   * でしかなく、**同じストアを2つのプロセスが指した瞬間に効かなくなる。**
-   * fs（`FsCommitmentStore`）は issue #1113 / #1050 で `withPathLock`
-   * （`packages/storage-fs/src/file-lock.ts`）による advisory（勧告的）な
-   * ファイルロックを足し、**このクラスを経由して書く別プロセス同士のあいだ
-   * では**排他がプロセスを跨ぐようになった——ただしロックを見ない書き手が
-   * 同じファイルを直接触れば守れず、`staleMs` を過ぎた古いロックの回収は
-   * lease（元の持ち主と新しい持ち主が同時に区間へ入りうる）なので、
-   * `storage-pg`（`PgCommitmentStore`）が持つ DB の制約と同じ強さではない。
-   * **`storage-pg` だけが、書き手が何であっても拒む強さでプロセスを跨いで
-   * 原子である。** 本番の記憶ストアは PostgreSQL なので、毎日のデプロイで
-   * 開く窓はそこで閉じている（fs の advisory ロックは別件。同じ穴は `open`
-   * の id 判定にも最初から在る）。**3実装の契約の歯
-   * （`commitment-fold-contract.ts`）が測っているのはいまも同一プロセスの
-   * 同期区間までで、それ以上（プロセスを跨いだ強さの違い）をこの歯だけで
-   * 名乗らせないこと。**
+   * 「読みと書きを同じ排他区間に入れる」だけでは実装によって強さが違う: in-memory の排他はプロセス内の `Map` で、2プロセスが同じストアを指すと効かない。
+   * fs は `withPathLock`（advisory なファイルロック）で、ロックを見ない書き手は防げず、`staleMs` を過ぎた古いロックの回収は lease（同時に区間へ入りうる）。
+   * 書き手が何であっても拒む強さでプロセスを跨いで原子なのは `storage-pg` だけ。契約の歯（`commitment-fold-contract.ts`）が測るのは同一プロセスの同期区間までで、それ以上をこの歯だけで名乗らせない。
    */
   open(entry: Commitment): Promise<CommitmentOpenResult>;
 
   /**
    * 片付いたことを記録する。閉じたら `true`、無い id と既に閉じているものは `false`。
    *
-   * **契約は「行は消さない」である。** 消すと「何を片付けたか」が日報の材料から
-   * 落ちる。人間が普段読むのは日報だけである（PRD「可観測性」）。
+   * 契約は「行は消さない」: 消すと「何を片付けたか」が日報の材料から落ちる（人間が普段読むのは日報だけ。PRD「可観測性」）。
+   * ただし `storage-fs` は毎回ファイル全体を書き直す器なので、片付いた行が積もると書き込み費用が台帳の齢に比例して増える。
+   * それを避けるため `CLOSED_HISTORY_LIMIT` 件を超えた古い片付き行を物理削除する（`trimClosed`）。`storage-pg` とインメモリは行を消さない。
+   * 実装が行を消したら、消した累計件数を `CommitmentList.trimmedClosed` で申告すること: 契約からの逸脱を型の外で握り潰さない。
    *
-   * **⚠️ ただし `storage-fs`（`FsCommitmentStore`）はこの契約を完全には守れて
-   * いない（issue #416）。** fs 版は毎回ファイル全体を書き直す器なので、片付いた
-   * 行を無限に積むと1回の書き込み費用が台帳の齢に比例して増える——それを避ける
-   * ため `CLOSED_HISTORY_LIMIT`（`packages/storage-fs/src/commitments.ts`）件を
-   * 超えた古い片付き行を新しい順に切り詰め、超えた分は物理削除する（`trimClosed`）。
-   * **`storage-pg` と in-memory（`packages/core/src/testing.ts`）はこの上限を
-   * 持たず、契約どおり行を消さない。** 3実装の保持方針をどちらへ揃えるかは別途の
-   * 判断であって、この doc の修正だけでは揃わない。
-   * **実装が行を消したら、消した累計件数を `CommitmentList.trimmedClosed` で
-   * 申告すること** — 契約からの逸脱を型の外で握り潰さない（`CommitmentList`
-   * の doc）。
-   *
-   * **`by` は必須である。** optional にすると、呼び出し側が「誰が閉じたか」を
-   * 決めずに通せてしまう — 実際には全ての呼び出し元（`commitment_close` ツール /
-   * `POST /commitments/:id/close`）が閉じた主体を知っているので、必須にすれば
-   * 決めていない呼び出しはコンパイルエラーで立ち止まる（issue #286）。
+   * `by` は必須: optional にすると「誰が閉じたか」を決めずに通せてしまう。必須にすれば決めていない呼び出しはコンパイルエラーで立ち止まる。
    */
   close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean>;
 
   /**
-   * 複数件を1回でまとめて片付いたことを記録する（issue #844）。
+   * 複数件を1回でまとめて片付いたことを記録する。
    *
-   * **`close()` を `ids` の件数だけ呼び出し側でループしてはいけない理由がこの
-   * メソッドの出所である。** `storage-fs`（`FsCommitmentStore`）は `close()` の
-   * たびに台帳の JSON 全体を tmp へ書いて置き換える器（`packages/storage-fs/
-   * src/index.test.ts` の「open / close のたびに JSON 全体を tmp へ書いて」の
-   * 注記）なので、500件を `close()` のループで閉じれば500回の全体書き直しに
-   * なる——それは issue #844 が直そうとしている「一括で閉じる手段が構造的に
-   * 到達できない」を、道具を足したその場で別の形に作り直すことになる。
-   * `closeMany` は実装ごとに複数件を1回の排他区間・1回の更新へ畳む口を持つ
-   * ——`storage-pg` は `inArray` を使った UPDATE 1本、`storage-fs` は
-   * `#update` の排他区間を1回だけ使う（各実装の doc を見よ）。
+   * `close()` を `ids` の件数だけ呼び出し側でループしない: `storage-fs` は `close()` のたびに台帳の JSON 全体を tmp へ書いて置き換えるので、
+   * 500件を閉じれば500回の全体書き直しになる。`closeMany` は複数件を1回の排他区間・1回の更新へ畳む（`storage-pg` は `inArray` の UPDATE 1本、`storage-fs` は `#update` の排他区間を1回）。
    *
-   * **戻り値は「実際に閉じた id」の配列であって件数ではない。** `close()` が
-   * `boolean`（閉じたか）で返す意味を集合へそのまま広げたもので、存在しない
-   * id・既に閉じていた id は含まない。**件数ではなく id の配列にしたのは、
-   * 呼び出し側（`tools.ts` の一括 close）に「閉じた id を全部日誌へ残す」
-   * 義務があるためである** — 件数だけでは、後から「実際に何が閉じられたか」
-   * を日誌からもう一度組み立てる材料が無い。
-   *
-   * **`ids` が空なら何も書かずに `[]` を返す。** 空集合を渡された時点で
-   * 「閉じる対象が無い」と判定でき、この場合に限りストアへの書き込みを
-   * 一切発生させない（実装の歯は、ファイルの中身が1文字も変わらないことで
-   * これを測る）。
-   *
-   * **`ids` の件数に上限を持たない。** 呼び出し側が既に1回あたりの上限
-   * （2000件以下）で抑えている——ここにも上限を持たせると、実際に効いた
-   * のが呼び出し側の上限かここの上限かが、外からは読めなくなる。
-   *
-   * **同じ id を重複して渡しても、二重に閉じない・返る id は重複しない。**
-   * 対象は「行」であって「渡された id の個数」ではないので、同じ id が
-   * 複数回入っていても閉じるのは高々1回であり、戻り値にもその id は1回しか
-   * 現れない。
-   *
-   * **行は消さない。** `close()` の契約（「行は消さない」、上の doc）をその
-   * まま継承する。fs 版の保持上限（`CLOSED_HISTORY_LIMIT` を超えた古い
-   * 片付き行の物理削除）の扱いも `close()` と同じで、`closeMany` がこの
-   * 挙動を変えることはない。
-   *
-   * **`by` は必須である。** 理由は `close()` の `by` と同じ——誰が閉じたか
-   * が記録されないと表示規則を当てられない（issue #286）。
+   * 戻り値は実際に閉じた id の配列で、件数ではない（存在しない id・既に閉じていた id は含まない）:
+   * 呼び出し側（`tools.ts` の一括 close）に「閉じた id を全部日誌へ残す」義務があり、件数だけでは後から組み立てる材料が無い。
+   * `ids` が空なら何も書かずに `[]`。同じ id を重複して渡しても二重に閉じず、返る id も重複しない。
+   * `ids` の件数に上限を持たない: 呼び出し側が既に1回あたりの上限（2000件以下）で抑えており、ここにも持たせると、どちらの上限が効いたのか外から読めなくなる。
+   * 行は消さない（`close()` の契約を継承）。`by` は必須（理由は `close()`）。
    */
   closeMany(
     ids: readonly string[],
@@ -1818,41 +1006,17 @@ export interface CommitmentStore {
   ): Promise<string[]>;
 
   /**
-   * `body` を書き換える。**まだ片付いていない行だけを書き換える** — 片付いて
-   * いる行・無い id は `false` を返す。
+   * `body` を書き換える。まだ片付いていない行だけ: 片付いている行・無い id は `false`。
+   * 書き換えるのは `body` / `editedAt` / `editedBy` の3つだけで、`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` には触れない。
    *
-   * **書き換えるのは `body` / `editedAt` / `editedBy` の3つだけである。**
-   * `origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` には
-   * 触れない。
+   * `origin` の判定はここでは行わない: `origin` は開いたときから変わらず並行に呼ばれても競合しない。
+   * 競合しうる不変条件（まだ閉じていない）だけをストアの1操作へ畳み、競合しない方針判断（どの `origin` の行を直してよいか）は呼び出し側に残す
+   * （AGENTS.md「不変条件はストアの1操作に閉じること」）。
    *
-   * **`origin` が何であるかの判定はここでは行わない。** `origin` は
-   * 開いたときから決して変わらない値なので、並行に呼ばれても競合しない——
-   * 競合しうるのは「まだ閉じていない」という不変条件だけである。**競合する
-   * 不変条件だけを台帳の1操作へ畳み、競合しない方針判断（どの `origin` の行を
-   * 直してよいか）は呼び出し側へ残す**（AGENTS.md「不変条件はストアの1操作に
-   * 閉じること」と同じ考え方——`close()` が `where ... and closed_at is null`
-   * だけを SQL 側へ畳み、`by` の決定は呼び出し側に残しているのと対になる）。
+   * `by` は必須（理由は `close` の `by`）。`PATCH /commitments/:id` は `origin: 'human'` の行だけを直し `'human'` を、`commitment_edit` は `origin: 'self'` の行だけを直し `'clone'` を渡す。
    *
-   * **`by` は必須である。** 理由は `close` の `by` と同じ（`close` の doc を
-   * 見よ）——optional にすると、呼び出し側が「誰が直したか」を決めずに通せて
-   * しまう。呼び出し元は2つあり、**どちらも「自分が書いた行を自分で直す」形に
-   * なっている**（`commitmentSchema.editedAt` の doc）：
-   *
-   * - `PATCH /commitments/:id`（`apps/daemon/src/app.ts`）— `origin: 'human'`
-   *   の行だけを直し、`'human'` を渡す
-   * - `commitment_edit`（`packages/core/src/tools.ts`）— `origin: 'self'`
-   *   の行だけを直し、`'clone'` を渡す（issue #580 の (B)）
-   *
-   * **⚠️ かつてここには「実際の呼び出し元（`PATCH /commitments/:id`）は常に
-   * `'human'` を渡す（クローン向けの編集ツールは無い）」と書いてあった。
-   * issue #580 でそれが偽になった。**
-   *
-   * **⚠️ そして呼び出し側にはもう1つ義務がある — 編集の前後の本文を日誌へ
-   * 逐語で残すこと。** 台帳が守っているのは不変性ではなく追跡可能性なので
-   * （`commitmentSchema.editedAt` の doc）、原文が日誌から読み戻せない編集の
-   * 口を足すと、その線が壊れる。**ここ（ストア）はそれを強制できない** —
-   * 日誌は別のストアであり、この署名からは見えない。新しい呼び出し元を足す
-   * なら、`journal.append` を必ず対にすること。
+   * 呼び出し側は、編集の前後の本文を日誌へ逐語で残すこと。台帳が守っているのは不変性ではなく追跡可能性で（`commitmentSchema.editedAt`）、
+   * 原文が日誌から読み戻せない編集の口はその線を壊す。日誌は別のストアなのでストアは強制できない: 新しい呼び出し元を足すなら `journal.append` を必ず対にする。
    */
   editBody(
     id: string,
@@ -1863,27 +1027,19 @@ export interface CommitmentStore {
   ): Promise<boolean>;
 
   /**
-   * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。**未了・
-   * 片付いた行の両方、`unreadable`（issue #296）に回っていた読めない行も
-   * 含めて消す。** `close()` / `closeMany()` の「行は消さない」契約とは別の
-   * 操作である——あちらは日常運用の一部として通り、こちらは人間が明示的に
-   * 「引き受けた仕事ごと全部忘れる」と決めたときにしか呼ばれない。
-   *
-   * 消した件数を返す。
+   * 全件を消す（ワークスペースのリセット専用）。未了・片付いた行の両方、`unreadable` に回っていた読めない行も含めて消す。消した件数を返す。
+   * `close()` / `closeMany()` の「行は消さない」契約とは別の操作で、人間が明示的に「引き受けた仕事ごと全部忘れる」と決めたときにしか呼ばれない。
    */
   clear(): Promise<number>;
 
   /**
-   * ある会話から自動で開いた行を、**物理的に**消す（会話の削除 #4218）。`origin: 'human'` かつ
-   * `source === conversationId` の行を、**未了・片付いた行の両方とも**消し、消した件数を返す。
-   * 別の会話の行・`origin: 'self'` / `'manager'` の行には触れない。`close()` の「行は消さない」契約とは別の操作で、
-   * 呼ばれるのは人間が会話の削除を明示したときだけである。
+   * ある会話から自動で開いた行を、物理的に消す（会話の削除）。`origin: 'human'` かつ `source === conversationId` の行を、
+   * 未了・片付いた行の両方とも消し、消した件数を返す。別の会話の行・`origin: 'self'` / `'manager'` の行には触れない。
+   * `close()` の「行は消さない」契約とは別の操作で、呼ばれるのは人間が会話の削除を明示したときだけ。
    *
-   * **`editBody` で本文を空にする形で代用しない**: 編集の前後の本文は日誌へ逐語で残す決まりで、秘密を日誌へ写し直すことになるため。
-   *
-   * **読めない行（`list()` の `unreadable`）の扱いは `clear()` / `closeMany()` と同じ作法で、生の値の `origin` / `source` が
-   * 一致すれば消す**（3実装で揃える。pg は jsonb の欄をそのまま見る）。`conversationId` に NUL を含むときは「無い」と同じ（0件）。
-   * 刈られた id（fs の `trimmedClosedIds`）は触らない。
+   * `editBody` で本文を空にして代用しない: 編集の前後の本文は日誌へ逐語で残す決まりで、秘密を日誌へ写し直すことになる。
+   * 読めない行（`list()` の `unreadable`）も `clear()` / `closeMany()` と同じ作法で、生の値の `origin` / `source` が一致すれば消す（3実装で揃える。pg は jsonb の欄をそのまま見る）。
+   * `conversationId` に NUL を含むときは「無い」と同じ（0件）。刈られた id（fs の `trimmedClosedIds`）は触らない。
    */
   removeForConversation(conversationId: string): Promise<number>;
 }
@@ -1891,165 +1047,85 @@ export interface CommitmentStore {
 /**
  * まだ処理し終えていない受信箱の合図（PRD「可観測性」/ architecture.md「同時実行モデル」）。
  *
- * **受信箱そのものはインメモリでよい。ここが持つのは「まだ終えていない」という事実だけ**
- * である。デーモンが落ちたとき、`Inbox` の `#queue` に居たものも、`#waiters` へ直接
- * 渡されて一度も queue を通らなかったものも、同じように消える。消えるのは人間の発言・
- * webhook・マネージャーの報告＝**判断の材料**であって、失われたことに気づく手段も無い。
- *
- * **境界は「`post` が受理した時点」であって「queue に入った時点」ではない。** クローンが
- * 暇なときに届いた合図は `Inbox#push` の waiter 経路を通って queue を素通りするので、
+ * 受信箱そのものはインメモリでよい。ここが持つのは「まだ終えていない」という事実だけ。
+ * 境界は「`post` が受理した時点」であって「queue に入った時点」ではない: 暇なクローンへ届いた合図は `Inbox#push` の waiter 経路で queue を素通りするので、
  * 「落ちる前に queue を吐き出す」形の永続化はその経路を1件も救わない。
- *
- * **消し込みは「処理を終えた時点」である**（取り出した時点ではない）。取り出した時点で
- * 消すと、処理の途中でプロセスが死んだものが失われる＝いま塞いでいる穴がそのまま残る。
- * したがって同じ合図が二度処理されうるが、**二度届く（雑音）より消える（判断材料の
- * 喪失）方が高い**。二度目だと分かる形にすることでこの取引を成立させる（`deliveries`）。
- *
- * **本文を持つ。** ここは日誌やジョブ台帳と同じ記憶ストアの中で、本文を持つ器は既に
- * ある（新しい露出面ではない）。持たなければ拾い直せないので、持たない選択は無い。
- * ただし**書けなかったときに外へ出す跡には本文を載せない**（`dropped-record.ts`）。
+ * 消し込みは「処理を終えた時点」（取り出した時点ではない）: 取り出した時点で消すと、処理の途中でプロセスが死んだものが失われる。
+ * そのため同じ合図が二度処理されうるが、二度届く（雑音）より消える（判断材料の喪失）方が高い。二度目だと分かる形にして取引を成立させる（`deliveries`）。
+ * 本文を持つ: 持たなければ拾い直せない。ただし書けなかったときに外へ出す跡には本文を載せない（`dropped-record.ts`）。
  */
 export interface InboxStore {
   /**
    * 受け取った合図を未読として置く。同じ id なら上書きする（配達回数は保つ）。
-   *
-   * **外側の `at` は、fs も pg も `Z` 付きの ISO 表記（`new Date(at).toISOString()`）に正規化して
-   * 保存・返す**（`+09:00` を渡すと `Z` で返る）。読めない時刻は拒む（throw する）。`event` の中の `at` は触らない。
-   *
-   * **`post` が受理した順に呼ばれるが、書けた順は保証されない。** 呼び出し側は
-   * 消し込みがこの書き込みを追い越さないようにすること（追い越すと、消したはずの
-   * 合図が後から書かれて永久に配り直される）。
+   * 外側の `at` は `Z` 付きの ISO 表記（`new Date(at).toISOString()`）に正規化して保存・返す。読めない時刻は拒む（throw）。`event` の中の `at` は触らない。
+   * 呼び出し側は、消し込みがこの書き込みを追い越さないようにする（追い越すと、消したはずの合図が後から書かれて永久に配り直される）。
    */
   put(event: InboxEvent, at: string): Promise<void>;
 
   /**
    * 処理を終えた合図を消す。無ければ何もしない。
-   *
-   * **id を名指しした削除は、読めない行（`peekPending().unreadable`）にも効く**（issue #3056 の 1。
-   * 3実装で同じ。`removeMany` も同じ）。「読めない行は消さずに残す」（#1966 / #2024）は
-   * まとめての削除・自動の片付けで黙って失わないための線で、名指しは意図した操作である。
+   * id を名指しした削除は、読めない行（`peekPending().unreadable`）にも効く（3実装で同じ。`removeMany` も同じ）:
+   * 「読めない行は消さずに残す」は、まとめての削除・自動の片付けで黙って失わないための線で、名指しは意図した操作である。
    */
   remove(id: string): Promise<void>;
 
   /**
    * 残っている未読を古い順に返し、**同時に配達回数を1つ進める**。
    *
-   * **進めるのは、呼び出した時点で残っている未読の全行である**（pg は `WHERE` 句の
-   * 無い `UPDATE`、fs は全件の map）。⟹ **回数が数えているのは「器が入れ替わった
-   * 回数」であって、「この合図の処理が落ちた回数」ではない。待ち行列に居ただけで
-   * 一度も処理されていない合図も、同じだけ増える。** この事実は fs / pg の実装
-   * コメントにしか無かったが、**この口を使う側はここしか読まない** — 無いと因果を
-   * 誤読する（実測 2026-09-08: 未読 104 件の器で「4 回目の配達」と名乗る合図が届き、
-   * クローンは「なぜ落ちたか」を調べてターンを1本使った。答えは「この合図は一度も
-   * 処理されていなかった」だった。#700）。
+   * 進めるのは、呼び出した時点で残っている未読の全行（pg は `WHERE` 句の無い `UPDATE`、fs は全件の map）。
+   * 回数が数えているのは「器が入れ替わった回数」であって「この合図の処理が落ちた回数」ではない。
+   * 待ち行列に居ただけで一度も処理されていない合図も同じだけ増える。この口を使う側はここしか読まないので、無いと因果を誤読する
+   * （未読 104 件の器で「4 回目の配達」と名乗る合図が届き、クローンは「なぜ落ちたか」を調べてターンを1本使った。答えは「一度も処理されていなかった」）。
    *
-   * **読むことと回数を進めることを1操作に閉じること**（`ScheduleStore.claimRun` と
-   * 同じ作法）。分けると、配り直しの途中で落ちたときに回数が進まず、「何回目の配達か」
-   * が嘘になる。回数はクローンが毒（＝配り直すたびに器ごと落ちる合図）を見分ける
-   * ための材料だが、**それが言えるのは同時に拾い直したのが1件だけのときに限る**
-   * （2件以上ならどれが原因かは1文字も言えない。名乗り分けは `Clone` の
-   * `#restoredCohort`）。いずれにせよ**これは実行回数の制限ではない**
-   * （AGENTS.md 地雷2）— 何回目であっても配ることは変わらない。
+   * 読むことと回数を進めることを1操作に閉じる（`ScheduleStore.claimRun` と同じ作法）: 分けると、配り直しの途中で落ちたときに回数が進まず「何回目の配達か」が嘘になる。
+   * 回数はクローンが毒（配り直すたびに器ごと落ちる合図）を見分ける材料だが、言えるのは同時に拾い直したのが1件だけのときに限る
+   * （2件以上ならどれが原因かは言えない。名乗り分けは `Clone` の `#restoredCohort`）。これは実行回数の制限ではない（AGENTS.md 地雷2）: 何回目でも配ることは変わらない。
    */
   claimPending(): Promise<PendingInboxEvent[]>;
 
   /**
-   * 残っている未読の件数と、いちばん古いものが積まれた時刻（#358）。
-   * **`claimPending()` と違い、配達回数を進めない。**
-   *
-   * `manager_list` のような一覧が「デーモン→クローンの脚で詰まっているか」を
-   * 覗くための読み取り専用の口。配達回数（`deliveries`）は「配り直された」
-   * ことを示す唯一の材料（`claimPending` の doc）で、覗いただけで進めると、
-   * まだ一度も配っていない合図が「前に配ったが終わらなかった」と嘘をつく。
-   *
-   * 1件も無ければ `oldestAt` は無い（0件のときに値を作らない。AGENTS.md
-   * 「取れない軸に0の行を作る」）。
+   * 残っている未読の件数と、いちばん古いものが積まれた時刻。`claimPending()` と違い配達回数を進めない。
+   * `manager_list` のような一覧が「デーモン→クローンの脚で詰まっているか」を覗く読み取り専用の口。
+   * 覗いただけで回数を進めると、まだ一度も配っていない合図が「前に配ったが終わらなかった」と嘘をつく（`deliveries` は配り直しを見分ける唯一の材料）。
+   * 1件も無ければ `oldestAt` は無い（0件のときに値を作らない。AGENTS.md「取れない軸に0の行を作る」）。
    */
   pending(): Promise<{ count: number; oldestAt?: string }>;
 
   /**
-   * 残っている未読を古い順に返す。**`claimPending()` と違い、配達回数を
-   * 1つも進めない**（`pending()` と同じ倒れ先。違うのは返す形だけである）。
-   *
-   * `pending()` が件数と最古時刻だけを安く返す（fs は全件読むだけ、pg は
-   * `count(*)` / `min(at)` の1発）のに対し、こちらは内訳
-   * （`inbox-backlog.ts` の `summarizeInboxBacklog`）を出すために本文まで
-   * 返す。**毎ターン呼ぶ口ではない** — `clone.ts` の `#situationNoticeFor`
-   * は安い `pending()` を使い、この口は `manager_list`（明示的に内訳を
-   * 求めたときだけ呼ばれる）からのみ呼ぶ。
+   * 残っている未読を古い順に返す。`claimPending()` と違い配達回数を進めない（`pending()` と同じ）。
+   * 内訳（`summarizeInboxBacklog`）のために本文まで返すので、毎ターン呼ぶ口ではない: `clone.ts` の `#situationNoticeFor` は安い `pending()` を使い、この口は `manager_list`（明示的に内訳を求めたとき）からだけ呼ぶ。
    */
   peekPending(): Promise<InboxPeek>;
 
   /**
-   * 絞り込みで選んだ複数件を、まとめて消す（issue #972）。
+   * 絞り込みで選んだ複数件を、まとめて消す。
    *
-   * **`remove()` を `ids.length` 回ループしてはいけない理由がこのメソッドの
-   * 出所である。** `storage-fs`（`FsInboxStore`）は `remove()` のたびに
-   * `inbox.json` 全体を tmp へ書いて置き換える器（`CommitmentStore.closeMany`
-   * の doc と同じ理由）なので、3,000件を `remove()` のループで消せば3,000回の
-   * 全体書き直しになる。`removeMany` は実装ごとに複数件を1回の排他区間・
-   * 1回の更新へ畳む口を持つ——`storage-pg` は `inArray` を使った DELETE 1本、
-   * `storage-fs` は `#update` の排他区間を1回だけ使う（各実装の doc を見よ）。
+   * `remove()` を `ids.length` 回ループしない: `storage-fs` は `remove()` のたびに `inbox.json` 全体を書き直す（`CommitmentStore.closeMany` と同じ理由）ので、
+   * 3,000件なら3,000回の全体書き直しになる。`removeMany` は1回の排他区間・1回の更新へ畳む。
    *
-   * **どの id を対象にするかはここでは決めない。** 種類・送信元・齢での絞り
-   * 込みは `peekPending()` が返した行に対して呼び出し側
-   * （`apps/daemon/src/app.ts` の `POST /inbox/remove`）が当てる。
-   * `inboxBacklogDedupeKey`（`inbox-backlog.ts` の doc「なぜ1箇所に閉じるか」）
-   * と同じ理由で、この判定を SQL 側にも複製しない——1箇所（`inbox-backlog.ts`
-   * の `matchesInboxRemoveManyFilter`）に保つ。ここが保証するのは「渡された
-   * id をまとめて消す」ことだけである（`CommitmentStore.closeMany` が `ids`
-   * を受け取るだけで絞り込みの判定を持たないのと同じ役割分担）。
-   *
-   * **戻り値は実際に消えた（存在した）id の配列であって件数ではない。**
-   * `remove()` が個別に返さない理由（何も返さない）とは違い、集合の操作
-   * なので「実際に何を消したか」を呼び出し側が日誌へ残せるようにする
-   * （`CommitmentStore.closeMany` の doc と同じ理由）。存在しない id は
-   * 含まない。
-   *
-   * `ids` に重複があっても、対象は id ごとに高々1行なので二重に数えない
-   * （戻り値にも同じ id は1回しか現れない）。`ids` が空なら何も書かずに
-   * `[]` を返す。
+   * どの id を対象にするかはここでは決めない: 絞り込みは `peekPending()` が返した行に呼び出し側（`POST /inbox/remove`）が当てる。
+   * 判定を SQL 側に複製しない（1箇所の `matchesInboxRemoveManyFilter` に保つ。`inboxBacklogDedupeKey` と同じ理由）。
+   * 戻り値は実際に消えた（存在した）id の配列で、件数ではない: 呼び出し側が実際に何を消したかを日誌へ残せるようにする。`ids` が空なら何も書かずに `[]`。
    */
   removeMany(ids: readonly string[]): Promise<string[]>;
 
-  /**
-   * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。配達回数
-   * （`deliveries`）ごと消える——残すべき理由が無い（次に同じ合図が来ても
-   * 初回として配ればよい）。
-   *
-   * 消した件数を返す。
-   */
+  /** 全件を消す（ワークスペースのリセット専用）。配達回数（`deliveries`）ごと消える: 次に同じ合図が来ても初回として配ればよい。消した件数を返す。 */
   clear(): Promise<number>;
 }
 
 /**
- * `InboxStore.peekPending` の返り値（issue #2344。`ApprovalList` と同じ形）。
- *
- * **`PendingInboxEvent[]` のままにしなかったのは、呼び出し側が読めない行を握り潰せない形に
- * するため。** 読めない行を空（無い）へ潰すと、人間の発言が壊れていても受信箱が空に見える。
- * `entries.length + unreadable.length` は `pending().count` に一致する（fs も pg も、
- * `pending()` は壊れた行も数える）。
- *
- * **配る側（`claimPending`）は変えていない。** 読めない行は配らない（配れない）。
- * 見せるのはこちらの口だけである。
+ * `InboxStore.peekPending` の返り値（`ApprovalList` と同じ形）。
+ * `PendingInboxEvent[]` のままにしない: 読めない行を空へ潰すと、人間の発言が壊れていても受信箱が空に見える。
+ * `entries.length + unreadable.length` は `pending().count` に一致する。配る側（`claimPending`）は変えない: 読めない行は配れない。
  */
 export interface InboxPeek {
   /** 読めた行。古い順。 */
   entries: PendingInboxEvent[];
-  /**
-   * 読めなかった行。**「無い」でも「処理済み」でもない第3の状態。** 全体は落とさない。
-   * 行そのものは消さない。本文は載せない（`unreadableInboxEventSchema` の doc）。
-   */
+  /** 読めなかった行。「無い」でも「処理済み」でもない第3の状態。全体は落とさず、行そのものは消さない。本文は載せない（`unreadableInboxEventSchema`）。 */
   unreadable: UnreadableInboxEvent[];
 }
 
-/**
- * 読めない合図が在るときの1文（0件なら `null`。**0件のときは何も出さない**——
- * 「読めない合図は 0 件」の行を作らない。AGENTS.md「取れない軸に 0 の行を作る」）。
- *
- * `manager_list`・CLI が同じ文面を使う。id が取れた行は上限つきで並べ、取れない行は
- * 件数だけで言う。本文は載せない。
- */
+/** 読めない合図が在るときの1文（0件なら `null`。0件のときは何も出さない）。本文は載せない。 */
 export function describeUnreadableInboxEvents(
   unreadable: readonly UnreadableInboxEvent[],
   options: { idLimit?: number } = {},
@@ -2079,42 +1155,25 @@ export interface PendingInboxEvent {
   /** `post` が受理した時刻（ISO 8601）。 */
   at: string;
   /**
-   * 何度目の配達か。`1` は「初めて配る」＝一度も配られずに器が落ちた。
-   *
-   * ⚠ **`2` 以上を「前に配ったが、終える前にまた落ちた」と読まないこと。**
-   * `claimPending()` は残っている未読の**全行**を一緒に進めるので、待ち行列に
-   * 居ただけで一度も配られていない合図も同じだけ増える（`claimPending` の doc）。
-   * ⟹ `2` 以上から言えるのは「**器がそれだけ入れ替わった**」ことまでである。
+   * 何度目の配達か。`1` は「初めて配る」。
+   * `2` 以上を「前に配ったが、終える前にまた落ちた」と読まない: `claimPending()` は残っている未読の全行を一緒に進めるので、
+   * 待ち行列に居ただけの合図も同じだけ増える。`2` 以上から言えるのは「器がそれだけ入れ替わった」ことまで。
    */
   deliveries: number;
 }
 
 /**
- * `TranscriptArchive.read()` が返す3つの顔（#698）。
+ * `TranscriptArchive.read()` が返す3つの顔。
  *
- * **`null` へ畳まない。** 消す口（`remove()`）が無かった頃は「無い」の意味は
- * 1つ（そもそも積まれていない）しかなく、`string | null` で十分だった。
- * `remove()` を足すと「積まれたが本文を落とした」という**2つ目の『無い』**が
- * 生まれる——同じ `null` へ両方を畳むと、消す口を足したことで逆に
- * `manager_transcript` / `GET /archive/:id` の呼び出し元は「どこにも無かった」
- * としか言えなくなり、この PR の主目的（`null` の畳み込みを解くこと）が
- * 消す口を足した瞬間に自分自身で壊れる。
+ * `null` へ畳まない: `remove()` を足すと「積まれたが本文を落とした」という2つ目の『無い』が生まれ、同じ `null` へ畳むと
+ * `manager_transcript` / `GET /archive/:id` の呼び出し元は「どこにも無かった」としか言えなくなる。
  *
- * - **`body`** — 本文がある（消されていない）。
- * - **`removed`** — 退避そのものは在った（id は実在した）が、`remove()` で
- *   本文だけを落とした。**行は残る**（`list()` に出続ける）——`kind: 'removed'`
- *   は「本文を落とした」であって「行が消えた」ではない。
- * - **`missing`** — id 自体が存在しない（一度も積まれていない、あるいは
- *   器の外で失われた）。
+ * - `body` — 本文がある（消されていない）。
+ * - `removed` — 退避は在ったが `remove()` で本文だけを落とした。行は残る（`list()` に出続ける）。
+ * - `missing` — id 自体が存在しない。
  *
- * 🔴 **`removed` の `bytes` は本文の素の UTF-8 バイト数**（`Buffer.byteLength(body,
- * 'utf8')` 相当）——3実装（`packages/core/src/archive-contract.ts` の
- * `verifyTranscriptArchiveContract()`）がこの値で一致することを固定している。
- * **`ArchiveEntry.storedBytes`（その置き場が実際に使っている量。pg は TOAST
- * 圧縮後、fs はファイル実バイト数、インメモリは文字列長）とは単位が違う——
- * 置き場で解放した量ではない。** pg では本文の圧縮が効くほど、この `bytes` は
- * `storedBytes` より大きく見える（Issue #2074 の実測: 高圧縮な1MBの本文で
- * 約87倍。`storedBytes` は11,452・`bytes` は1,000,000）。
+ * `removed` の `bytes` は本文の素の UTF-8 バイト数（3実装が `verifyTranscriptArchiveContract()` で一致を固定）。
+ * `ArchiveEntry.storedBytes`（その置き場が実際に使っている量。pg は TOAST 圧縮後）とは単位が違い、置き場で解放した量ではない。
  */
 export type ArchiveRead =
   | { readonly kind: 'body'; readonly body: string }
@@ -2122,25 +1181,16 @@ export type ArchiveRead =
   | { readonly kind: 'missing' };
 
 /**
- * `TranscriptArchive.remove()` の結果（#698）。
+ * `TranscriptArchive.remove()` の結果。
  *
- * **存在しない id を黙って成功にしない。** `memory_delete` / `DELETE /memory/:slug`
- * と同じ作法——消せなかったことと消せたことを同じ応答に畳むと、呼び出し側は
- * 「消したつもりで何も変わっていない」を検出できなくなる。
+ * 存在しない id を黙って成功にしない（`memory_delete` / `DELETE /memory/:slug` と同じ作法）: 消せなかったことと消せたことを畳むと、
+ * 「消したつもりで何も変わっていない」を検出できない。
  *
- * - **`removed`** — いま消した（本文を落とした）。落とす直前のバイト数を返す。
- * - **`already`** — 前から消されていた（冪等な再実行）。前に消した時刻と
- *   バイト数を返す——「いま消した」と「前から消えていた」を同じ応答に畳むと、
- *   `remove()` を呼んだ側は自分の呼び出しが実際に何をしたのかを見失う。
- * - **`missing`** — id 自体が存在しない。**これだけが失敗である**
- *   （`removed` / `already` はどちらも「その id はいま本文を持たない」という
- *   同じ状態への到達を表す、成功側の2つの経路）。
+ * - `removed` — いま消した。落とす直前のバイト数を返す。
+ * - `already` — 前から消されていた（冪等な再実行）。「いま消した」と畳むと、呼んだ側は自分の呼び出しが何をしたのか見失う。
+ * - `missing` — id 自体が存在しない。これだけが失敗。
  *
- * 🔴 **`removed` / `already` の `bytes` は本文の素の UTF-8 バイト数**
- * （`ArchiveRead` の `removed` の `bytes` と同じ契約）。**`ArchiveEntry.storedBytes`
- * とは単位が違い、置き場で解放した量でもない**——`archive_remove_many`
- * （`minStoredBytes` で絞る）が返す合計を読むときは、この違いを踏まえること
- * （Issue #2074）。
+ * `bytes` の単位は `ArchiveRead` の `removed` と同じ（`ArchiveEntry.storedBytes` とは違う）。
  */
 export type ArchiveRemoval =
   | { readonly kind: 'removed'; readonly bytes: number }
@@ -2148,28 +1198,12 @@ export type ArchiveRemoval =
   | { readonly kind: 'missing' };
 
 /**
- * `TranscriptArchive.list()` の1行（#698）。
+ * `TranscriptArchive.list()` の1行。
  *
- * Issue #698（「`archive` が DB の89%を占める」という見立てを測ろうとしたら、
- * サンクションされた口では大きさも時刻も取れず、本番 DB へ直接降りるしか
- * なかった）を受けて、`list()` の戻り値を id の文字列配列から拡張した。
- *
- * **`storedBytes` はその置き場がこの行に実際に使っている量である。** pg は
- * 圧縮後のバイト数（TOAST 後、`pg_column_size`）、fs はファイルのバイト数
- * （`stat().size`）、インメモリは文字列長。**生ログの文字数ではない**し、
- * **置き場をまたいで比較してはならない**——同じ内容でも実装ごとに値の単位・
- * 大小関係が揃わない。**Issue #698 では、まさにこの2つ（展開後の文字数と
- * 圧縮後のバイト数）を取り違えた比較が実際に起きた。**
- *
- * `removedAt` / `removedBytes` は `remove()`（tombstone）が起きた行にだけ
- * 載る——`ArchiveRemoval` / `ArchiveRead` の `removed` と同じ情報を、一覧の
- * 面でも見えるようにしたもの。**`removedBytes` の単位も `ArchiveRemoval` の
- * `removed` と同じ（本文の素の UTF-8 バイト数）——上の `storedBytes` とは
- * 単位が違い、置き場で解放した量でもない（Issue #2074）。**
- *
- * `continuity`（#698）は `archive()` が積んだ瞬間に判定した、同じ `sessionId`
- * の直前の退避との連続性（`ArchiveContinuity` の doc）。**この機能より前に
- * 積まれた行には無いので optional。**
+ * `storedBytes` はその置き場がこの行に実際に使っている量（pg は圧縮後のバイト数、fs は `stat().size`、インメモリは文字列長）。
+ * 生ログの文字数ではなく、置き場をまたいで比較してはならない（展開後の文字数と圧縮後のバイト数を取り違えた比較が実際に起きた）。
+ * `removedAt` / `removedBytes` は `remove()`（tombstone）が起きた行にだけ載る（`removedBytes` の単位は `ArchiveRemoval` と同じ）。
+ * `continuity` は `archive()` が積んだ瞬間に判定した直前の退避との連続性。この機能より前に積まれた行には無いので optional。
  */
 export interface ArchiveEntry {
   readonly id: string;
@@ -2183,12 +1217,8 @@ export interface ArchiveEntry {
 }
 
 /**
- * `TranscriptArchive.archive()` の戻り値（#698）。
- *
- * **畳まない設計の門である。** `continuity` / `comparedTo` は判定結果を
- * 呼び出し側（`clone.ts` / `manager.ts`）へ渡すためのもので、これを受けて
- * `remove()` を呼ぶコードは1行も無い——この PR は判定を記録するところまでで、
- * 畳むのは次の PR である（`ArchiveContinuity` の doc）。
+ * `TranscriptArchive.archive()` の戻り値。
+ * `continuity` / `comparedTo` は判定結果を呼び出し側へ渡すためのもので、これを受けて `remove()` を呼ぶコードは無い（判定を記録するだけで、畳まない）。
  */
 export interface ArchiveWrite {
   readonly id: string;
@@ -2198,34 +1228,13 @@ export interface ArchiveWrite {
 }
 
 /**
- * `ArchiveSessionSummary.continuity` の内訳（#698 続き）。
+ * `ArchiveSessionSummary.continuity` の内訳。
  *
- * PR #873 が「積む瞬間に連続性を判定して記録する門」（`ArchiveContinuity` の
- * doc）を入れたが、記録した `continuity` を**数える口**がどこにも無かった
- * ——`GET /archive` は1行ずつ返すだけ、`GET /archive/sessions` の集計には
- * 内訳が無く、本番 DB へ `psql` で降りられる人も居ない。⟹「畳んでよい行が
- * 何割か」を誰も測れないまま、畳む実装（次の PR）へ進めなかった。この型は
- * その口を塞ぐ——**数えるだけで、まだ何も畳まない**（`ArchiveWrite` の doc
- * と同じ境界線）。
+ * `absent` と `unknown` を畳まない: `unknown` は門は走ったが直前の行が指紋を持っていなかった（確かめようとしたが材料が無かった）、
+ * `absent` は行自体が門より前に積まれた（確かめる機会自体が無かった）。1つへ畳むと確かめていないことを確かめた側へ寄せてしまう
+ * （`archive-continuity.ts` の「`'unknown'` を `'continues'` に倒さない」と同じ種類の誤り）。
  *
- * **⛔ `absent` と `unknown` を畳まないこと。ここが設計の核心である:**
- *
- * - **`unknown`** — 門は走ったが、**直前の行が指紋（`bodyChars` /
- *   `bodyMd5`）を持っていなかった**（`classifyArchiveContinuity` が返す4値
- *   の1つ。`ArchiveContinuity` の doc）。判定はできた——「前方一致するか
- *   確かめる材料が無い」と申告した結果である。
- * - **`absent`** — **その行自体が門より前に積まれた**——pg は `continuity`
- *   列が `null`、fs / インメモリはメタに `continuity` が無い。門を一度も
- *   通っていないので、そもそも判定した値が存在しない。
- *
- * 前者は「確かめようとしたが確かめられなかった」、後者は「確かめる機会
- * 自体が無かった」であって、**同じ『分からない』に見えても理由が違う。**
- * これを1つへ畳むと、`archive-continuity.ts` が「⛔ `'unknown'` を
- * `'continues'` に倒さない」で禁じているのと同じ種類の誤りになる——
- * 確かめていないことを、確かめた側へ寄せてしまう。
- *
- * **不変条件: `first + continues + diverged + unknown + absent === rows`。**
- * `verifyTranscriptArchiveContract()` がこれを全 `sessionId` について測る。
+ * 不変条件: `first + continues + diverged + unknown + absent === rows`（`verifyTranscriptArchiveContract()` が全 `sessionId` について測る）。
  */
 export interface ArchiveContinuityTally {
   readonly first: number;
@@ -2236,24 +1245,11 @@ export interface ArchiveContinuityTally {
 }
 
 /**
- * `TranscriptArchive.sessions()` の1行——`sessionId` ごとの集計(#698)。
+ * `TranscriptArchive.sessions()` の1行 — `sessionId` ごとの集計。
  *
- * **`rows` が数えるのは `archive()` が呼ばれた回数**（tombstone 済みの行も
- * 含む——`list()` と同じく、`remove()` は本文だけを落とし行は残るため）。
- * ⭐ **Issue #698 でいちばん効いたのはこの `rows` である。** 個々の
- * `storedBytes` の大小ではなく「同じセッションの生ログが68回積まれている」
- * という重複の事実のほうが、先に問題の所在を特定した。
- *
- * `storedBytes` / `maxStoredBytes` は、この `sessionId` に属する全行の
- * `ArchiveEntry.storedBytes`（現在の実使用量。tombstone 済みの行はほぼ0に
- * 畳まれる）の合計と最大値。単位・比較不可の制約は `ArchiveEntry.storedBytes`
- * の doc をそのまま継承する。
- *
- * `continuity`（#698 続き）はこの `sessionId` に属する全行の `continuity`
- * の内訳。**どのセッションにも内訳は在るので optional にしない**——
- * `ArchiveEntry.continuity` は行そのものが機能より前に積まれていれば無い
- * (optional) が、こちらは無い行を `absent` として数えるので、集計自体は
- * 常に存在する（`ArchiveContinuityTally` の doc）。
+ * `rows` は `archive()` が呼ばれた回数（tombstone 済みの行も含む）。同じセッションの生ログが何度も積まれているという重複の事実が、個々の `storedBytes` の大小より先に問題の所在を特定した。
+ * `storedBytes` / `maxStoredBytes` の単位・比較不可の制約は `ArchiveEntry.storedBytes` を継承する。
+ * `continuity` は無い行を `absent` として数えるので、集計自体は常に存在する（optional にしない）。
  */
 export interface ArchiveSessionSummary {
   readonly sessionId: string;
@@ -2268,292 +1264,163 @@ export interface ArchiveSessionSummary {
 /**
  * セッションの生ログ退避先（PreCompact フックで落とす）。
  *
- * **⛔ `remove()` は行を消さない。** 本文だけを落とす（tombstone）——`archive`
- * テーブル／ファイルの行そのものは残る。走行中の委譲の生ログを消せない守りは
- * ここ（インターフェース）ではなく `ManagerPool.runningManagerOwning()` が持つ
- * （HTTP の口とクローンの道具の両方がそこを通ることで、守りを1箇所に保つ）。
+ * `remove()` は行を消さない。本文だけを落とす（tombstone）。走行中の委譲の生ログを消せない守りはここではなく
+ * `ManagerPool.runningManagerOwning()` が持つ（HTTP の口と道具の両方がそこを通ることで、守りを1箇所に保つ）。
  */
 export interface TranscriptArchive {
   /**
-   * 退避したアーカイブの id と、直前の退避との連続性判定（#698）を返す。
+   * 退避したアーカイブの id と、直前の退避との連続性判定を返す。判定するだけで畳まない:
+   * `continuity` が `'diverged'` / `'unknown'` でも、この呼び出しの中で古い行を `remove()` しない。
    *
-   * **判定するだけで、畳まない。** `continuity` が `'diverged'` /
-   * `'unknown'` でも、この呼び出しの中で古い行を `remove()` したりしない
-   * （`ArchiveWrite` の doc）。
-   *
-   * **NUL（issue #3011）。** `sessionId` の NUL は `InvalidArchiveSessionIdError` で断る（issue #2233）。`transcript`（本文）の NUL は
-   * 落として残す（3実装とも。指紋と連続性は落とす前の本文で取る）。読むだけの口（`read`・`readTail`・`remove`）は、
-   * NUL を含む id でも断らず `missing` を返す。
+   * NUL: `sessionId` の NUL は `InvalidArchiveSessionIdError` で断る。`transcript`（本文）の NUL は落として残す（3実装とも。指紋と連続性は落とす前の本文で取る）。
+   * 読むだけの口（`read`・`readTail`・`remove`）は NUL を含む id でも断らず `missing` を返す。
    */
   archive(sessionId: string, transcript: string): Promise<ArchiveWrite>;
-  /** 新しい順（#698）。 */
+  /** 新しい順。 */
   list(): Promise<ArchiveEntry[]>;
   /**
-   * `sessionId` ごとの集計（#698）。3実装の一致は `verifyTranscriptArchiveContract()` が測る。
-   *
-   * **並びは `storedBytes` の降順、同値なら `sessionId` の昇順。** ⚠ 並びを
-   * 決めずに置くと、同じ問い合わせが呼ぶたびに違う順で返りうる——容量を追う面
-   * （大きいセッションから見たい）では、それは黙った揺れになる。
+   * `sessionId` ごとの集計。3実装の一致は `verifyTranscriptArchiveContract()` が測る。
+   * 並びは `storedBytes` の降順、同値なら `sessionId` の昇順: 並びを決めないと同じ問い合わせが呼ぶたびに違う順で返りうる（容量を追う面では黙った揺れになる）。
    */
   sessions(): Promise<ArchiveSessionSummary[]>;
   read(id: string): Promise<ArchiveRead>;
   /**
-   * 末尾だけを読む（#1283 の OOM、読み出し側）。
+   * 末尾だけを読む。`read()` を使わない: 本文の全体を返し、`archive` の1行は最大 78.3 MB に育つ。
+   * 起動のたびに自動で走る拾い直し（`clone.ts` の `#pickUpTranscriptGrave`）が全文をヒープへ載せてから末尾だけを使っていたのが OOM の原因だった。
    *
-   * ## なぜ `read()` を使わないのか
+   * 契約:
+   * - 戻りの形は `read()` と同じ3状態（`body` / `removed` / `missing`）。`#pickUpTranscriptGrave` が日誌の文面を分けているので区別を潰さない。
+   * - `maxChars` はコードポイント数で数える。UTF-16 コード単位（`.length`）ではない: 補助面の文字でずれ、実装ごとに数えが違うと、
+   *   本当は消えるはずのない本文の先頭が静かに消える・サロゲートペアの途中で切って孤立サロゲートを作る。
+   *   単位の変換は `tailByCodePoints`（`excerpt.ts`）の唯一の出所へ寄せ、実装ごとに手で書き直さない。
+   * - `kind: 'body'` のとき返すのは本文の末尾から少なくとも `maxChars` コードポイント（実装が窓をバイトで切る都合で、それより多く返してよい）。本文が `maxChars` 以下なら全文。
+   * - 本文が `maxChars` より長いとき、返す量は `maxChars` を厳密に上回ること（同じ数で切り詰めない）。
+   *   呼び出し側（`tailOf`）は「`tailByCodePoints(transcript, DISTILL_TRANSCRIPT_TAIL_CHARS)` の結果が元の文字列と一致するか」で切り詰めが要るかを判定する。
+   *   ちょうど `maxChars` だと「切り詰め済みの窓」か「もとから短い本文」か区別できず、行の途中の窓をそのまま蒸留へ渡してしまう。
+   *   切り詰めが起きるときは必ず `maxChars + 1` コードポイント以上を返す（pg は `right(body, maxChars + 1)`、fs は窓のバイト数を `(maxChars + 1) * MAX_UTF8_BYTES_PER_CODE_POINT` にして `tailByCodePoints` で揃える、インメモリは `tailByCodePoints(body, maxChars + 1)`）。
+   * - 行の途中・文字の途中から始まりうる。整えるのは呼び出し側（`tailOf`）: 器ごとに整え方が分かれると蒸留へ渡るものが器で変わる。
+   * - 実装は本文の全体を呼び出し側のメモリへ載せない: 避けたい OOM をこの関数自身が起こす。
+   * - `maxChars` は正の整数。不正な値は fail-closed で拒む（黙って全文へ倒さない）。
    *
-   * あちらは本文の**全体**を返す。実測で `archive` の1行は最大 78.3 MB に
-   * 育つ（`boot-storage-footprint` の `external_event`、
-   * 2026-09-22T22:06:56.256Z 観測）。**起動のたびに自動で走る拾い直し**
-   * （`clone.ts` の `#pickUpTranscriptGrave`。`#pump` が待たずに起こす——
-   * 人間の操作は要らない）が、以前は `read()` で全文をヒープへ載せたうえで
-   * `tailOf` に末尾だけを使わせていた——絞り込みが「読んだ後」に在ったのが
-   * #1283 の欠陥そのものである。⟹ 末尾を返す口を分ける
-   * （`SessionTranscriptTail.readTail` と同じ形。あちらは pg の生ログ、
-   * こちらは退避（`archive`）本体。`readTail` という名前もそちらに揃えた）。
-   *
-   * ## 契約
-   *
-   * - **戻りの形は `read()` と同じ3状態**（`body` / `removed` / `missing`）。
-   *   `#pickUpTranscriptGrave` はこの3状態で日誌の文面を分けているので、
-   *   区別を潰さないこと。
-   * - 🔴 **`maxChars` はコードポイント数で数える（issue #1829）。** JS の
-   *   `.length`（UTF-16 コード単位）ではない——補助面の文字（絵文字の多く）
-   *   は 1 コードポイントが 2 コード単位になるため、この2つはずれる
-   *   （`ArchiveBodyFingerprint.bodyChars` の doc と同じ区別。あちらは
-   *   `archive()` の指紋、こちらは `readTail()` の読み出し量で、対象は
-   *   違うが単位の注意は同じ）。**以前は pg だけがコードポイント数
-   *   （PostgreSQL の `right()`）で数え、fs・インメモリ・呼び出し側の
-   *   `tailOf`（`clone.ts`）は UTF-16 コード単位で数えていた**——補助面の
-   *   文字が境目に絡むと、pg が「まだ短い（切り詰め不要）」と判定した本文を
-   *   他の実装・`tailOf` は「もう長い」と誤判定し、本当は消えるはずのない
-   *   本文の先頭が静かに消える、あるいはサロゲートペアの途中で切って孤立
-   *   サロゲート（不正な UTF-16）を作っていた。単位の変換は
-   *   `tailByCodePoints`（`excerpt.ts`）の唯一の出所へ寄せる——実装ごとに
-   *   手で書き直さない。
-   * - `kind: 'body'` のとき返すのは、**本文の末尾から少なくとも `maxChars`
-   *   コードポイントぶん**。実装が窓をバイトで切る都合で、**それより多く
-   *   返してよい**（`clone.ts` の `readTranscriptTail` と同じ）。本文が
-   *   `maxChars` 以下なら全文を返す。
-   * - 🔴 **本文が `maxChars` より長いとき、返す量は `maxChars` を
-   *   **厳密に**上回ること（同じ数で切り詰めない）。** 呼び出し側
-   *   （`tailOf`）は「`tailByCodePoints(transcript, DISTILL_TRANSCRIPT_TAIL_CHARS)`
-   *   の結果が元の文字列と一致するか」で「切り詰めが要るか」を判定する
-   *   ——ここで「ちょうど `maxChars`」を返すと、それが「切り詰め済みの窓」
-   *   なのか「本文がもとから短かった」なのかを呼び出し側は区別できず、
-   *   前者を後者と誤読して行の途中の窓をそのまま蒸留へ渡してしまう
-   *   （`clone-grave-pickup-startup.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の
-   *   「歯2」で実測。窓の境界をちょうど `maxChars` に合わせる
-   *   実装で実際に踏んだ）。⟹ **実装は、切り詰めが起きるときは必ず
-   *   `maxChars + 1` コードポイントぶん以上を返すこと**（pg は
-   *   `right(body, maxChars + 1)`、fs は窓のバイト数を
-   *   `(maxChars + 1) * MAX_UTF8_BYTES_PER_CODE_POINT` にしたうえで
-   *   `tailByCodePoints` で正確に揃える、インメモリは
-   *   `tailByCodePoints(body, maxChars + 1)`）。
-   * - **サロゲートペアの途中では切らない**（`tailByCodePoints` の doc）。
-   * - **行の途中・文字の途中から始まりうる。整えるのは呼び出し側
-   *   （`tailOf`）である**——器ごとに整え方が分かれると、蒸留へ渡るものが
-   *   器で変わる（`SessionTranscriptTail.readTail` の doc、逐語で同じ注意）。
-   * - **実装は本文の全体を呼び出し側のメモリへ載せないこと。** 載せれば、
-   *   避けたいはずの OOM をこの関数自身が起こす
-   *   （`SessionTranscriptTail.measureSize` の doc と同じ規律）。
-   * - `maxChars` は正の整数。**不正な値は fail-closed で拒む**（黙って
-   *   全文へ倒さない）。
-   *
-   * ⚠️ **`SessionTranscriptTail.readTail`（`packages/storage-pg/src/session-store.ts`
-   * の `PgSessionStore`）は別のインターフェースで、この doc が説明する統一
-   * （#1829・PR #1839）の対象ではなかった。** PR #1839 の時点ではあちらは
-   * JS の `.length`（UTF-16 コード単位）で `maxChars` を数えたままで、
-   * `#pickUpLostSession` が `tailOf` へ渡す前段として同じ族の単位の不整合を
-   * 持ちうることが「確かめていないこと」として明記されていた。**その後
-   * issue #1849 で実際に赤（絵文字混じりの本文で古い行が静かに落ちる）が
-   * 出ることを確かめ、`tailByCodePoints` ベースへ揃えて直した**——いまは
-   * `TranscriptArchive` の3実装・`tailOf`・`SessionTranscriptTail.readTail`
-   * のすべてがコードポイント数で `maxChars` を数える。
+   * `SessionTranscriptTail.readTail`（別のインターフェース）も同じくコードポイント数で `maxChars` を数える。
    */
   readTail(id: string, maxChars: number): Promise<ArchiveRead>;
   /**
    * 本文だけを落とす（tombstone。`DELETE` ではない）。
-   *
-   * **`body` の「空である」ことを判定に使わない。** 空の生ログは正当にありえる
-   * ——実装（`storage-pg` の `removed_at is not null`／`storage-fs` の脇の印
-   * ファイル）は、本文の中身を一切見ずに判定する。
+   * `body` が空であることを判定に使わない: 空の生ログは正当にありえる（`storage-pg` は `removed_at is not null`、`storage-fs` は脇の印ファイルで、本文の中身を見ずに判定する）。
    */
   remove(id: string): Promise<ArchiveRemoval>;
 
-  /**
-   * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。
-   * **`remove()`（tombstone）とは違う——行そのものを消す。** 本文を落として
-   * 行を残す通常の消し込みとは、消える対象の大きさが違う（`archive` は
-   * 3層のうち最も生々しい生ログを持つ、可観測性の最下段）。
-   *
-   * 消した件数を返す。
-   */
+  /** 全件を消す（ワークスペースのリセット専用）。`remove()`（tombstone）とは違い行そのものを消す。消した件数を返す。 */
   clear(): Promise<number>;
 }
 
 /**
  * 実行環境プロファイル（人間の `.zprofile` / `.zshenv` / `/etc/profile.d/*.sh` に当たるもの）の1行。
  *
- * **記憶ではない。** 人格は記憶（Markdown）に宿るのであって、鍵や `PATH` の話は
- * そこに混ぜない。器を作り直しても残るという性質だけが同じなので、同じストアの
- * 一員として持つ。
+ * 記憶ではない: 人格は記憶（Markdown）に宿るのであって、鍵や `PATH` の話はそこに混ぜない。器を作り直しても残るという性質だけが同じなので、同じストアの一員として持つ。
+ * 持つのはデーモンだけ: runner は自分で読みに行かず、降ってきたものを器に置くだけにする
+ * （読みに行けるなら runner から記憶ストアへの経路があることになり、M4 の受け入れ基準3 が無いと言っているもの）。
  *
- * 持つのはデーモンだけである。runner は自分で読みに行かず、**降ってきたものを
- * 器に置くだけ**にしてある（読みに行けるということは、runner から記憶ストアへの
- * 経路があるということで、それは M4 の受け入れ基準3 が無いと言っているものである）。
- *
- * ## 名前付きの行を複数持つ（2026-10-03）
- *
- * プロファイルはかつて「高々1本のスクリプト・層による効かせ分けを持たない」形だった
- * （AGENTS.md 地雷3「確認が要る行為の一覧を作る」と同じ形になることを避けるため）。
- * **この形は人間の明示的な決定で作り替えた**（2026-10-03。オーナーの逐語:
- * 「env-profileを環境変数と同じように指定できるようにして欲しい」「デフォルトは両方です」、
- * 続く決定: DB の行ごとに設定できる・1行には何行でもシェルスクリプトを入れられ行ごとに
- * 撒く先を持つ・つなげる順番は名前の辞書順〈`/etc/profile.d` と同じ方式〉）。
- * きっかけは、runner にだけ要る Rust の `PATH` / `RUSTUP_HOME` を書くとクローン（app）
- * にも届いてしまうことだった。
- *
- * **環境変数の `StoredCredential.scope`（2026-09-14）と同じ理由・同じ形である。**
- * 地雷3 が禁じるのは「行為の確認要否を配線で固定する」ことで、ここで持たせる
- * `scope` は確認・許可の話ではなく、**「どのプロセスにとってこの環境が意味を持つか」
- * というプロセストポロジーの表現**である。クローンは `scope` が `runner` の行も
- * `profile_read` で読める（読む口は `scope` で変わらない）。
+ * 名前付きの行を複数持つ。かつての「高々1本のスクリプト・層による効かせ分けを持たない」形は、人間の明示的な決定で作り替えた
+ * （オーナーの逐語:「env-profileを環境変数と同じように指定できるようにして欲しい」「デフォルトは両方です」）。
+ * `StoredCredential.scope` と同じ理由・同じ形: AGENTS.md 地雷3が禁じるのは「行為の確認要否を配線で固定する」ことで、
+ * `scope` は確認・許可の話ではなく「どのプロセスにとってこの環境が意味を持つか」というプロセストポロジーの表現である。
+ * クローンは `scope` が `runner` の行も `profile_read` で読める（読む口は `scope` で変わらない）。
  */
 export interface EnvProfileEntry {
   /** 行の名前（`PROFILE_ENTRY_NAME` の形。つなげる順番はこの名前のコード単位順）。 */
   name: string;
   /** 人間が書いたシェルスクリプトそのもの（何行でもよい）。器は中身を解釈しない。 */
   script: string;
-  /**
-   * 撒く先。`'all'`（クローンと runner の両方）/ `'app'`（クローン＝デーモンだけ）/
-   * `'runner'`（runner＝マネージャー・作業者だけ）。**既定は常に `'all'`**。
-   */
+  /** 撒く先。`'all'`（クローンと runner の両方）/ `'app'`（クローン＝デーモンだけ）/ `'runner'`（runner＝マネージャー・作業者だけ）。既定は常に `'all'`。 */
   scope: EnvProfileScope;
   updatedAt: string;
 }
 
 /**
- * {@link EnvProfileEntry.scope} の3値（実行時の一覧）。環境変数（{@link StoredCredential.scope}）と同じ。
- * **型はここから導く**。plugin の撒く先（`plugins.ts`）も同じ値を使う（重複して書くと片方だけ増える）。
+ * {@link EnvProfileEntry.scope} の3値。環境変数（{@link StoredCredential.scope}）と同じ。
+ * plugin の撒く先（`plugins.ts`）も同じ値を使う（重複して書くと片方だけ増える）。
  */
 export const ENV_PROFILE_SCOPES = ['all', 'app', 'runner'] as const;
 
-/** {@link EnvProfileEntry.scope}。環境変数（{@link StoredCredential.scope}）と同じ3値。 */
 export type EnvProfileScope = (typeof ENV_PROFILE_SCOPES)[number];
 
 /**
- * 行の名前の形。**器の中のファイル名になる**（fs 版は `profile.d/<name>.sh`）ので、
- * パスとして解釈されうる形（`/`・先頭の `.`・`..`）を最初から認めない。
- * 置き場を読む側（fs 版の一覧）でも同じ検査をする（`credentials.ts` の
- * `CREDENTIAL_NAME` と同じ理由 — 人間が手で書き換えられる）。
+ * 行の名前の形。器の中のファイル名になる（fs 版は `profile.d/<name>.sh`）ので、パスとして解釈されうる形（`/`・先頭の `.`・`..`）を最初から認めない。
+ * 置き場を読む側（fs 版の一覧）でも同じ検査をする（人間が手で書き換えられる。`credentials.ts` の `CREDENTIAL_NAME` と同じ理由）。
  */
 export const PROFILE_ENTRY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
-/** 名前のコード単位順（`<` 比較。**ロケールに依存させない**。`/etc/profile.d` の辞書順と同じ）。 */
+/** 名前のコード単位順（`<` 比較。ロケールに依存させない。`/etc/profile.d` の辞書順と同じ）。 */
 export function compareProfileEntryNames(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
 export interface ProfileStore {
-  /** 置かれている全行。**名前のコード単位順**（つなげる順番そのもの）。 */
+  /** 置かれている全行。名前のコード単位順（つなげる順番そのもの）。 */
   list(): Promise<EnvProfileEntry[]>;
   /**
-   * 1行を置く（無ければ作り、在れば本文・撒く先・更新日時を入れ替える）。
-   * 呼び出し側が名前（`PROFILE_ENTRY_NAME`）と本文が空でないことを検査して渡す。
-   *
-   * `name`（鍵）・`script`（環境変数になる値）に NUL があれば `NulNotAllowedError` で断る（issue #2927。teto の判断、2026-10-05）。
+   * 1行を置く（無ければ作り、在れば本文・撒く先・更新日時を入れ替える）。呼び出し側が名前（`PROFILE_ENTRY_NAME`）と本文が空でないことを検査して渡す。
+   * `name`（鍵）・`script`（環境変数になる値）に NUL があれば `NulNotAllowedError` で断る。
    */
   set(name: string, script: string, scope: EnvProfileScope): Promise<EnvProfileEntry>;
   /** 1行を外す。在れば `true`、無ければ `false`。 */
   remove(name: string): Promise<boolean>;
   /**
-   * **取り消した更新をなかったことにする**（行の集合を、本文・撒く先・更新日時ごと
-   * 組で戻す）。入力に無い行は消える。
+   * 取り消した更新をなかったことにする（行の集合を、本文・撒く先・更新日時ごと組で戻す）。入力に無い行は消える。
    *
-   * 通常の書き込みで戻すと、本文は元に戻っても `updatedAt` が失敗した時刻へ進む。
-   * そこは「人間かクローンが最後に**本文を変えた**時刻」であって、`profile status`
-   * と `GET /profile` が見せる監査情報である。成功していない更新でそこが動くと、
-   * 起動のたびに動いていたときと同じ意味の壊れ方をする。**通常の書き込みに使わない
-   * こと** — 更新日時を呼び出し側が決められる口なので、失敗の巻き戻し専用である。
-   *
-   * `set` と同じく、`name`・`script` の NUL は `NulNotAllowedError` で断る（全行を先に検査し、1行でも不正なら何も書かない。issue #2927）。
+   * 通常の書き込みで戻さない: 本文は戻っても `updatedAt` が失敗した時刻へ進み、「最後に本文を変えた時刻」（`profile status` と `GET /profile` の監査情報）が成功していない更新で動いてしまう。
+   * 更新日時を呼び出し側が決められる口なので、失敗の巻き戻し専用で、通常の書き込みには使わない。
+   * `set` と同じく `name`・`script` の NUL は `NulNotAllowedError` で断る（全行を先に検査し、1行でも不正なら何も書かない）。
    */
   replaceAll(previous: readonly EnvProfileEntry[]): Promise<void>;
 
-  /**
-   * 置かれていた行を全部外す（ワークスペースのリセット専用。#workspace-reset）。
-   * 専用の口として持つことで「リセットが呼んだ」ことを実装の側で区別できるように
-   * してある。
-   *
-   * 消した行数を返す（0 なら何も置かれていなかった）。
-   */
+  /** 置かれていた行を全部外す（ワークスペースのリセット専用）。消した行数を返す。 */
   clear(): Promise<number>;
 }
 
 /**
- * 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）の置き場（#325 段1）。
- *
- * **`ProfileStore` と同じ形である**（正本はデーモンが持ち、器違い（fs / pg）は
- * 挙動を変えない。高々1つの文書を全文置換する）。`Stores` の一員として持つのは、
- * 器を作り直しても残るという性質が同じだからである —— Railway には volume が
- * 無いので、`.mcp.json` をファイルで置くと器と一緒に消える（#325 本文）。
- *
- * **記憶ではない。** `env` / `headers` に鍵が入りうるので `memory/` には置かない
- * （置けばクローンのシステムプロンプトに鍵が載る）。形と検査の正本は
- * `mcp-servers.ts`。
+ * 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）の置き場。
+ * `ProfileStore` と同じ形（正本はデーモンが持ち、器違い（fs / pg）は挙動を変えない。高々1つの文書を全文置換する）。
+ * `Stores` の一員にするのは、器を作り直しても残るため（Railway には volume が無く、ファイルで置くと器と一緒に消える）。
+ * 記憶ではない: `env` / `headers` に鍵が入りうるので `memory/` には置かない（置けばクローンのシステムプロンプトに鍵が載る）。形と検査の正本は `mcp-servers.ts`。
  */
 export interface McpServerStore {
   /**
    * 置かれていなければ null（空の登録も null として読む）。
-   *
-   * **返すサーバーは、名前の `compareCodeUnits` 順に並べる**（`write()` の戻り値も同じ。3実装とも
-   * `sortMcpServers` を通す。pg の jsonb の並びに依らない。issue #2927 項目6）。
+   * 返すサーバーは名前の `compareCodeUnits` 順（`write()` の戻り値も同じ。3実装とも `sortMcpServers` を通す。pg の jsonb の並びに依らない）。
    */
   read(): Promise<StoredMcpServers | null>;
   /**
-   * 全文置換。**空の登録（`{}`）は「登録を外す」**（`ProfileStore.write()` と
-   * 同じ約束）。
+   * 全文置換。空の登録（`{}`）は「登録を外す」（`ProfileStore.write()` と同じ約束）。
+   * `options.ifMatch`（`mcpServersVersionOf`）が書く瞬間の版と違えば何も書かず `McpServersConflictError`（比較と書き込みは1つの排他の中）。
    *
-   * `options.ifMatch`（`mcpServersVersionOf`）があれば、書く瞬間の版と比べ、違えば
-   * 何も書かず `McpServersConflictError`（3実装とも、比較と書き込みは1つの排他の中）。
-   *
-   * **書く前に `parseMcpServers` を通すこと**（3実装とも）。器ごとに検査を
-   * 書き分けると、1つだけ緩い器が生まれる。不正なら投げ、前のものが残る。
-   *
-   * サーバー名と `env` の名前・値の NUL は `NulNotAllowedError` で断る。`command`・`args`・`url`・`headers` などの本文の NUL は落として残す（issue #2927。teto の判断、2026-10-05）。
+   * 書く前に `parseMcpServers` を通す（3実装とも）: 器ごとに検査を書き分けると1つだけ緩い器が生まれる。不正なら投げ、前のものが残る。
+   * サーバー名と `env` の名前・値の NUL は `NulNotAllowedError` で断る。`command`・`args`・`url`・`headers` などの本文の NUL は落として残す。
    */
   write(servers: McpServers, options?: WriteMcpServersOptions): Promise<StoredMcpServers>;
 }
 
 /**
- * 人間が入れた plugin（skill を含む）の置き場。**1 plugin = 1 行（名前が鍵）。**
- *
- * `McpServerStore` と同じ理由で `Stores` の一員にしてある —— Railway には volume が無く、
- * 器のファイル（`~/.claude`・`/home/worker`）に置いても器と一緒に消える。本体（files）を
- * 取り込んだ時点の中身のまま持つので、取り元が消えても書き換えられても、動くものは変わらない。
- *
- * **記憶ではない**（`memory/` には置かない）。形と検査の正本は `plugins.ts`。
- * **この段は保存だけ**で、展開・配布・API・CLI は後の PR。
+ * 人間が入れた plugin（skill を含む）の置き場。1 plugin = 1 行（名前が鍵）。
+ * `McpServerStore` と同じ理由で `Stores` の一員にする（Railway には volume が無く、器のファイルに置くと器と一緒に消える）。
+ * 取り込んだ時点の中身のまま持つので、取り元が消えても書き換えられても動くものは変わらない。記憶ではない。形と検査の正本は `plugins.ts`。
  */
 export interface PluginStore {
   /**
-   * 置かれている全 plugin の要約（**files を含まない**）。名前の `compareCodeUnits` 順。
+   * 置かれている全 plugin の要約（files を含まない）。名前の `compareCodeUnits` 順。
    * 読めない行があれば投げる（黙って飛ばすと「入れたのに無い」が原因の出ない形で起きる）。
    */
   list(): Promise<PluginSummary[]>;
   /**
-   * 1つを files ごと返す。無ければ null。**名前が形に合わない・NUL を含むときも投げず null**
-   * （書き込みで断るので、そのような行はどの器にも存在しえない）。
+   * 1つを files ごと返す。無ければ null。名前が形に合わない・NUL を含むときも投げず null（書き込みで断るので、そのような行はどの器にも存在しえない）。
    * 読むときに形と `contentSha256` を検査し、合わなければ投げる（SQL や手での書き換え）。
    */
   get(name: string): Promise<StoredPlugin | null>;
   /**
-   * 置く。**同名は置き換え**（files も新しいものだけが残る）。
-   *
-   * **書く前に `parsePluginInput` を通すこと**（3実装とも。`contentSha256` はそこで計算する）。
-   * 不正なら投げ、前のものが残る。大文字小文字だけが違う名前が既にあれば
-   * `PluginNameConflictError`（大文字小文字を区別しないファイルシステムで衝突するため）。
+   * 置く。同名は置き換え（files も新しいものだけが残る）。書く前に `parsePluginInput` を通す（3実装とも。`contentSha256` はそこで計算する）。不正なら投げ、前のものが残る。
+   * 大文字小文字だけが違う名前が既にあれば `PluginNameConflictError`（大文字小文字を区別しないファイルシステムで衝突するため）。
    */
   put(input: PluginInput): Promise<PluginSummary>;
   /** 外す。在れば `true`、無ければ `false`（形に合わない名前も `false`）。 */
@@ -2563,57 +1430,32 @@ export interface PluginStore {
 /**
  * マネージャーへ降ろす環境変数の正本1行（名前と値）。
  *
- * **鍵に限らない。** `GH_TOKEN` のような秘密も `GIT_AUTHOR_NAME` のような身元も
- * 同じ形で持つ——器（`credentials.ts` の `CredentialStore`）は中身の意味を知らず、
- * 名前と値の対として置くだけである。**だから用途が増えても実装を直さない**
- * （`compose.yaml` へ環境変数を足していく形＝器を焼き直す形にしないため。
- * AGENTS.md 地雷表「用途が増えるたびに `compose.yaml` へ環境変数を足す」）。
+ * 鍵に限らない: `GH_TOKEN` のような秘密も `GIT_AUTHOR_NAME` のような身元も同じ形で持つ。器（`credentials.ts` の `CredentialStore`）は中身の意味を知らず、
+ * 用途が増えても実装を直さない（`compose.yaml` へ環境変数を足していく形にしない。AGENTS.md 地雷表「用途が増えるたびに `compose.yaml` へ環境変数を足す」）。
  *
- * **実行環境プロファイル（`EnvProfileEntry`）との違いは、読む側の性質である。**
- * あちらは名前付きのシェルスクリプトの行で、届くのは SDK 子プロセスの起動時（＝走行中の
- * 仕事には届かない）。こちらは名前ごとにファイルへ落ちるので、`gh` シムのように
- * **呼ばれるたびに読み直す道具には走行中でも届く**（`credentials.ts` のモジュール
- * doc）。そして `GET /profile` が本文ごと返すのに対し、こちらは指紋しか返さない。
- * **秘密の正本はこちら側に置く。**
+ * 実行環境プロファイル（`EnvProfileEntry`）との違いは読む側の性質: あちらは名前付きのシェルスクリプトで、届くのは SDK 子プロセスの起動時（走行中の仕事には届かない）。
+ * こちらは名前ごとにファイルへ落ちるので、`gh` シムのように呼ばれるたびに読み直す道具には走行中でも届く。
+ * `GET /profile` が本文ごと返すのに対し、こちらは指紋しか返さない。秘密の正本はこちら。
  */
 export interface StoredCredential {
   /** 環境変数の名前そのもの（`CREDENTIAL_NAME` の形）。 */
   name: string;
-  /** 値。**平文で持つ**（`agent_tokens.value` と同じ扱い。器の外へは指紋しか出ない）。 */
+  /** 値。平文で持つ（`agent_tokens.value` と同じ扱い。器の外へは指紋しか出ない）。 */
   value: string;
   updatedAt: string;
   /**
-   * 撒く先。既定は `'all'`（クローン・マネージャー双方）。
+   * 撒く先。既定は `'all'`（クローン・マネージャー双方）。per-row の使い分けは「どうしても要るとき」だけの例外。
    *
-   * ## なぜ行ごとの列を持つのか（`env_profile` / この表自体が元々避けていた形）
-   *
-   * `env_profile` と、この表がかつて持っていた形は「行を増やさない／層による
-   * 効かせ分けを列に持たない」だった（`packages/storage-pg/src/schema.ts` の
-   * `envProfile` / `managerCredentials` の doc — AGENTS.md 地雷3「確認が要る
-   * 行為の一覧を作る」と同じ形になることを避けるため）。
-   *
-   * **今回はその判断を人間の明示的な指示で上書きしている**（2026-09-14）。
-   * 地雷3が禁じるのは「行為の確認要否を配線で固定する」ことで、権限境界は
-   * クローンの判断であって設定であってはならない、という話である。ここで
-   * 持たせる `scope` はそれとは軸が違う——**「どのプロセスにとってこの環境変数が
-   * 意味を持つか」というプロセストポロジーの表現**であり、確認・許可の話では
-   * ない（`GOOGLE_CLIENT_SECRET` はマネージャーの Bash 環境には意味を持たない、
-   * という既存の事実の裏付けと同じ性質）。**既定は常に `all`** ——per-row の
-   * 使い分けは「どうしても要るとき」だけの例外である。
+   * 行ごとの列を持つのは、人間の明示的な指示で `env_profile` / この表が避けていた形を上書きしたため。
+   * AGENTS.md 地雷3が禁じるのは「行為の確認要否を配線で固定する」ことで、`scope` は確認・許可の話ではなく
+   * 「どのプロセスにとってこの環境変数が意味を持つか」というプロセストポロジーの表現である（`GOOGLE_CLIENT_SECRET` はマネージャーの Bash 環境には意味を持たない）。
    */
   scope?: 'all' | 'app' | 'runner';
   /**
-   * この行が API/CLI/Web UI に対して値を伏せる（`secret: true`）か、そのまま
-   * 見せてよい（`secret: false`）か。**配布（クローン・マネージャーへ渡る実値）
-   * には一切影響しない**——configure された側は secret かどうかに関わらず
-   * 常に実値を受け取る（動くために実値が要るのは当然のため）。効くのは
-   * 読み出し API の応答に `value` を載せるかどうかだけである。
-   *
-   * **一度作った行では変更できない**（`assertEntries` が検査する）。TZ の
-   * ような非秘密の値を後から秘密化・その逆をすると、UI 上で「見えていた値が
-   * 突然消える／秘密のはずが見えるようになる」という驚きを生むため。
-   *
-   * 既定は `true`（この列が無かった頃の全行の挙動——値は絶対に返さない）。
+   * この行が API/CLI/Web UI に対して値を伏せる（`secret: true`）か、そのまま見せてよい（`secret: false`）か。
+   * 配布（クローン・マネージャーへ渡る実値）には一切影響しない: 効くのは読み出し API の応答に `value` を載せるかどうかだけ。
+   * 一度作った行では変更できない（`assertEntries` が検査する）: 後から秘密化・その逆をすると、UI 上で見えていた値が突然消える／秘密のはずが見えるようになる。
+   * 既定は `true`（この列が無かった頃の全行の挙動）。
    */
   secret?: boolean;
 }
@@ -2621,173 +1463,95 @@ export interface StoredCredential {
 /**
  * マネージャーへ降ろす環境変数の正本（名前→値）。
  *
- * **持つのはデーモンだけである。** runner は自分で読みに行かず、降ってきたものを
- * 器に置くだけにしてある（読みに行けるということは runner に記憶ストアの鍵がある
- * ということで、それは M4 受け入れ基準3 が無いと言っているものである）。
- *
- * **`env_profile` と同じ形**（正本はデーモンが持ち、器違い（fs / pg）は挙動を
- * 変えない）。`Stores` の一員として持つのは、器を作り直しても残るという性質が
- * 同じだからである——**それが無いと、器を作り直した runner は鍵を失ったまま
- * 上がってくる**（Railway には volume が無いので、runner 側の器は器と一緒に消える）。
+ * 持つのはデーモンだけ: runner は自分で読みに行かず、降ってきたものを器に置くだけ（読みに行けるなら runner に記憶ストアの鍵があることになり、M4 受け入れ基準3 が無いと言っているもの）。
+ * `Stores` の一員にするのは、器を作り直しても残るため: 無いと、器を作り直した runner は鍵を失ったまま上がってくる。
  */
 export interface CredentialVaultStore {
-  /** 置いてある全行（**値を含む**。正本を返す口はここだけである）。`name` 昇順。 */
+  /** 置いてある全行（値を含む。正本を返す口はここだけ）。`name` 昇順。 */
   list(): Promise<StoredCredential[]>;
   /**
-   * 名前ごとに置き換える。**入力に無い名前は触らない**（全文置換ではない）。
+   * 名前ごとに置き換える。入力に無い名前は触らない（全文置換ではない）。
+   * 空文字は「その名前を外す」（`CredentialStore#set` と同じ約束。器と正本で「外す」の表し方が違うと片方だけ残る）。
+   * 返すのは置き換えた後の全行: 呼ぶ側（`CredentialService`）がそのまま配るので、部分更新のつもりが一部しか降りない形を作らない。
    *
-   * 空文字は「その名前を外す」。`CredentialStore#set` と同じ約束にしてある——
-   * 器と正本で「外す」の表し方が違うと、片方だけ残る。
-   *
-   * 返すのは**置き換えた後の全行**。呼ぶ側（`CredentialService`）はそれをそのまま
-   * 配るので、部分更新のつもりが一部しか降りない、という形を作らない。
-   *
-   * **入口で断る（3実装とも同じ型付きの例外。issue #2927。teto の判断、2026-10-05）**:
-   * 名前・値に NUL があれば `NulNotAllowedError`、`CREDENTIAL_NAME` に合わない名前
-   * （空文字を含む）は `InvalidCredentialNameError`。1件でも断れば何も書かない。
+   * 入口で断る（3実装とも同じ型付きの例外）: 名前・値に NUL があれば `NulNotAllowedError`、`CREDENTIAL_NAME` に合わない名前（空文字を含む）は `InvalidCredentialNameError`。1件でも断れば何も書かない。
    */
   put(entries: readonly CredentialEntry[]): Promise<StoredCredential[]>;
   /**
-   * **名前付きの印が無いときだけ、行が無い名前を1度だけ書く**（2026-10-06）。
-   * 返すのは**実際に書いた名前**（印が既にあれば空）。
+   * 名前付きの印が無いときだけ、行が無い名前を1度だけ書く。返すのは実際に書いた名前（印が既にあれば空）。
+   * 器の環境変数にだけ置かれていた鍵（`GH_TOKEN` 等）を、器の env を土台にする経路を撤去する際に正本へ移す1回きりの移行用
+   * （`env-vars-boot.ts` の `migrateEnvBaseCredentialsOnce`）。印を持つのは「画面で消した後の再起動で蘇らせない」ため
+   * （無いと、正本から消した名前が器の env から毎回戻ってくる。`env_profile_entries_migrated` と同じ理由）。
    *
-   * 用途は、器の環境変数にだけ置かれていた鍵（`GH_TOKEN` 等）を、器の env を
-   * 土台にする経路を撤去する際に正本へ移す1回きりの移行である
-   * （`env-vars-boot.ts` の `migrateEnvBaseCredentialsOnce`）。**印を持つのは
-   * 「画面で消した後の再起動で蘇らせない」ため**——印が無いと、正本から消した
-   * 名前が器の env から毎回戻ってくる（`env_profile_entries_migrated` と同じ理由）。
-   *
-   * **既に行が在る名前は上書きしない**（人間が置いたものが勝つ）。**書いても書かなくても
-   * 印は立てる**——印は「この移行を試した」を表し、2回目以降は何もしない。
-   * **印の確認・行の書き込み・印を立てる操作は1つの区間で行う**（3実装とも）。
-   * 入口の検査は `put` と同じ（`NulNotAllowedError` / `InvalidCredentialNameError`）。
+   * 既に行が在る名前は上書きしない（人間が置いたものが勝つ）。書いても書かなくても印は立てる。
+   * 印の確認・行の書き込み・印を立てる操作は1つの区間で行う（3実装とも）。入口の検査は `put` と同じ。
    */
   seedOnce(marker: string, entries: readonly CredentialEntry[]): Promise<string[]>;
 }
 
 /**
- * 認証トークンのプール（Issue #393「プールの器」）。**回さない。** 検知も切替も
- * ここには無い——ここが持つのは置き場と、置いたものを読み書きする口だけである。
- *
- * `env_profile` と同じ形（正本はデーモンが持ち、器違い（fs / pg）は挙動を変えない）。
- * `Stores` の一員として持つのは、環境を作り直しても残るという性質が同じだからである。
+ * 認証トークンのプール。回さない: 検知も切替もここには無く、ここが持つのは置き場と、置いたものを読み書きする口だけ。
+ * `env_profile` と同じ形（正本はデーモンが持ち、器違いは挙動を変えない）。`Stores` の一員にするのは、環境を作り直しても残るため。
  */
 export interface TokenPoolStore {
   /**
-   * プールの全行（**値を含む**。正本を返す口はここだけである）。`order` 昇順。
-   *
-   * **`settings` / `active` が壊れていても道連れにしない**（issue #2053）。
-   * `tokens` はそちらとは独立に読める——`list()` が投げてよいのは `tokens`
-   * 自体の形が壊れているとき（配列でない等）だけである。
+   * プールの全行（値を含む。正本を返す口はここだけ）。`order` 昇順。
+   * `settings` / `active` が壊れていても道連れにしない: `list()` が投げてよいのは `tokens` 自体の形が壊れているとき（配列でない等）だけ。
    */
   list(): Promise<AgentToken[]>;
   /**
-   * **`list()` が読み飛ばした行**（`agentTokenSchema` に合わない行）を、値を含まない形で
-   * 返す（issue #2346）。**0件のときだけ「登録されていない」と言える**——読めない行が
-   * 在るのにプールを空と見せない（`readSettings()` の `UnreadableTokenSettingsError`
-   * が設定について言い分けているのと対）。
+   * `list()` が読み飛ばした行（`agentTokenSchema` に合わない行）を、値を含まない形で返す。
+   * 0件のときだけ「登録されていない」と言える（`readSettings()` の `UnreadableTokenSettingsError` が設定について言い分けているのと対）。
    *
-   * **`list()` の戻り型を変えなかった理由**: `list()` は回し手（`token-rotator.ts`）の
-   * 読み直しが十数か所で使い、読んだ行をそのまま `replace()` で書き戻す。そこには
-   * 読めない行を見せる先が無く、型を変えても気づける呼び手が増えない。見せる先
-   * （`TokenPoolService.list()` の `rowsUnreadable` 経由の HTTP・CLI・Web と、
-   * `token_list`）は、読めない行が在るときだけ載る別欄として受ける。
-   *
-   * **⚠️ 値（`value`）は決して返さない**（`unreadableTokenSchema` の doc）。
-   * メモリ実装（`testing.ts`）は常に空（`replace()` がスキーマを通すので壊れた行を
-   * 持てない）。pg 実装も常に空（正規化された列で持ち、型が合わない行を作れない。
-   * 読み捨てるのは過去の `source = 'env'` の行だけで、これは「読めない」ではない）。
+   * `list()` の戻り型を変えない: 回し手（`token-rotator.ts`）が十数か所で読み直し、読んだ行をそのまま `replace()` で書き戻すので、読めない行を見せる先が無い。
+   * 見せる先（`TokenPoolService.list()` の `rowsUnreadable` 経由の HTTP・CLI・Web と `token_list`）は別欄で受ける。
+   * 値（`value`）は決して返さない（`unreadableTokenSchema`）。メモリ実装は常に空。pg 実装も常に空
+   * （正規化された列で持ち、型が合わない行を作れない。読み捨てるのは過去の `source = 'env'` の行だけで、これは「読めない」ではない）。
    */
   listUnreadable(): Promise<UnreadableToken[]>;
   /**
-   * 全文置換。**入力に無い（読めた）行は消える。読めない行は消さずに持ち越す**
-   * （issue #2354 の決定。fs 実装。`FsTokenPoolStore.replace` の doc）。
+   * 全文置換。入力に無い（読めた）行は消える。**読めない行は消さずに持ち越す**（fs 実装。`FsTokenPoolStore.replace`）。
    *
-   * **理由（#2354 の決定）**: トークンを登録・無効化するのは人の手で、クローンにも
-   * 回し手にもその権限は無い。人が入れた行を、自動の回転（回し手の書き戻しも
-   * この口を通る）が知らせずに消してよい理由が無い。「普段の書き戻しでは生の行を
-   * 残す」という #1942 の半分とも揃う。失うものの重さも違う——捨てた跡が残っても
-   * 鍵そのものは戻らない。持ち越して失うのは「全文置換の意味の純粋さ」だけである。
-   * 読めない行を消したいときは {@link TokenPoolStore.removeUnreadable}（id で指す）を使う。
+   * 持ち越す理由: トークンを登録・無効化するのは人の手で、クローンにも回し手にもその権限が無い。人が入れた行を、自動の回転
+   * （回し手の書き戻しもこの口を通る）が知らせずに消してよい理由が無い。捨てた跡が残っても鍵そのものは戻らない。
+   * 失うのは「全文置換の意味の純粋さ」だけ。読めない行を消したいときは {@link TokenPoolStore.removeUnreadable}（id で指す）を使う。
+   * pg 実装とインメモリ実装は読めない行を持てないので、持ち越すものが無く挙動は変わらない。
    *
-   * **pg 実装とインメモリ実装は、そもそも読めない行を持てない**（正規化された列・
-   * スキーマ検査済みの配列）ので、持ち越すものが無く、挙動は変わらない
-   * （`listUnreadable()` が常に空）。
-   *
-   * `settings` / `active` が壊れていても道連れにしない（`list()` の doc と
-   * 同じ理由。issue #2053）——この操作が全文置換するのは `tokens` だけで、
-   * `settings` / `active` の値には触れない。
-   *
-   * **入口で断る（3実装とも同じ型付きの例外。issue #2927。teto の判断、2026-10-05）**:
-   * 同じ `id` が2行以上なら `DuplicateTokenIdError`、`id`・`value`（資格）に NUL があれば
-   * `NulNotAllowedError`。1件でも断れば何も変えない。`label`・`lastRejectedReason` などの
-   * 本文の NUL は、fs も含めて落として残す。
+   * 入口で断る（3実装とも同じ型付きの例外）: 同じ `id` が2行以上なら `DuplicateTokenIdError`、`id`・`value`（資格）に NUL があれば `NulNotAllowedError`。1件でも断れば何も変えない。
+   * `label`・`lastRejectedReason` などの本文の NUL は、fs も含めて落として残す。
    */
   replace(tokens: readonly AgentToken[]): Promise<AgentToken[]>;
   /**
-   * **読めない行を、id で指して消す**（issue #2354）。`listUnreadable()` が返す `id` と
-   * 一致する読めない行だけを消し、読めた行・`settings` / `active` には触れない。
-   * 消した行の id を返す（指された id のうち、読めない行に無かったものは含まれない
-   * ——呼び手が突き合わせる）。
-   *
-   * **id が取れない読めない行（`UnreadableToken.id` が無い行）は、この口では消せない**
-   * （指す名前が無い。`tokens.json` を手で直す）。同じ id の読めない行が複数あれば
-   * まとめて消える。pg・インメモリは読めない行を持てないので、常に空を返す。
-   * **⚠️ 値（`value`）は返さない。**
+   * 読めない行を、id で指して消す。`listUnreadable()` が返す `id` と一致する読めない行だけを消し、読めた行・`settings` / `active` には触れない。
+   * 消した行の id を返す（指された id のうち読めない行に無かったものは含まれない — 呼び手が突き合わせる）。
+   * id が取れない読めない行は、この口では消せない（指す名前が無い。`tokens.json` を手で直す）。pg・インメモリは常に空を返す。
    */
   removeUnreadable(ids: readonly string[]): Promise<string[]>;
   /**
-   * 回す契機と冷却の既定。置かれていなければ core の既定
-   * （`DEFAULT_TOKEN_ROTATION_SETTINGS`）を返す。
+   * 回す契機と冷却の既定。置かれていなければ core の既定（`DEFAULT_TOKEN_ROTATION_SETTINGS`）を返す。
    *
-   * **置かれている値が壊れていて読めないときは、既定へすり替えずに
-   * `UnreadableTokenSettingsError`（本ファイル）を投げる**（issue #2053）。
-   * 版ずれ・手編集で `rotateOn` が enum の外になっている、等——「無い」と
-   * 「読めない」は別の状態であり、既定へ潰すと `off` にしてあった回転を
-   * 実装が黙って戻すことになる。**`writeSettings()` はこの状態でも上書き
-   * できる**（読まずに書けるので、壊れた既存値がある間も書き直しの口は
-   * 塞がらない）。
+   * 置かれている値が壊れて読めないときは、既定へすり替えず `UnreadableTokenSettingsError` を投げる:
+   * 「無い」と「読めない」は別の状態で、既定へ潰すと `off` にしてあった回転を実装が黙って戻す。
+   * `writeSettings()` はこの状態でも上書きできる（読まずに書けるので、書き直しの口は塞がらない）。
    */
   readSettings(): Promise<TokenRotationSettings>;
   writeSettings(settings: TokenRotationSettings): Promise<TokenRotationSettings>;
   /**
-   * いま撒いてある現役の指名（Issue #393 PR3）。**まだ一度も指名していなければ
-   * `null`。**
+   * いま撒いてある現役の指名。まだ一度も指名していなければ `null`。
    *
-   * **`null` を「1本目が現役」で埋めないこと。** 器の環境変数だけで走っている
-   * 既定の構成と、プールの1本目を撒いた後は別の状態である——前者では runner にも
-   * クローンにも何も降ろしていない。埋めると、撒いていないものを撒いたことに
-   * なる（受け入れ基準7: 既定の構成の挙動を1文字も変えない）。
-   *
-   * **置かれている値が壊れていて読めないときは `null`（無い）へすり替えずに
-   * `UnreadableActiveTokenError`（本ファイル）を投げる**（issue #2053。
-   * `readSettings()` と同じ理由・同じ形）。`writeActive()` はこの状態でも
-   * 上書きできる。
+   * `null` を「1本目が現役」で埋めない: 器の環境変数だけで走っている既定の構成と、プールの1本目を撒いた後は別の状態で、
+   * 前者では runner にもクローンにも何も降ろしていない。埋めると、撒いていないものを撒いたことになる（既定の構成の挙動を1文字も変えない）。
+   * 置かれている値が壊れて読めないときは `null` へすり替えず `UnreadableActiveTokenError`（`readSettings()` と同じ理由・同じ形）。`writeActive()` はこの状態でも上書きできる。
    */
   readActive(): Promise<ActiveAgentToken | null>;
-  /**
-   * 現役を指名し直す。**世代を増やすのは呼ぶ側**（この口は受けた値を書くだけ）。
-   * `tokenId` は鍵なので、NUL があれば `NulNotAllowedError`（issue #2927）で断る。
-   */
+  /** 現役を指名し直す。世代を増やすのは呼ぶ側（この口は受けた値を書くだけ）。`tokenId` は鍵なので、NUL があれば `NulNotAllowedError` で断る。 */
   writeActive(active: ActiveAgentToken): Promise<ActiveAgentToken>;
 }
 
 /**
- * `TokenPoolStore.readSettings()` が、置かれている回転設定を
- * `tokenRotationSettingsSchema` として読めなかったときに投げる専用のエラー型
- * （issue #2053）。`UnreadableCommitmentError` / `UnreadablePracticeError`
- * （本ファイル）と同じ形——「無い」（既定値）と「読めない」（throw）の区別を、
- * 呼び出し側が `instanceof` で見分けられるようにする。メッセージの文字列で
- * 判定すると、言い回しを直しただけで判定が静かに外れる。
- *
- * **メッセージは「どの欄が」だけを含み、値そのもの（`rotateOn` の実際の値
- * など）は含めない。** 消えたのではなく壊れているだけだと伝えるためのもの
- * なので、文言にもそれを書く（3実装＝fs / pg で共通）。
- *
- * `TokenPoolService.setSettings`（`token-pool-service.ts`）は、この型を
- * 捕まえたとき、`patch` が `rotateOn` と `cooldownMs` の両方を持っていれば、
- * 読めない現在値を読まずに新しい値だけで書き直す。片方しか無ければ埋める元が
- * 無いので、そのまま呼び出し側へ投げ返す。
+ * `TokenPoolStore.readSettings()` が、置かれている回転設定を `tokenRotationSettingsSchema` として読めなかったときに投げる。
+ * `instanceof` で見分ける（メッセージの文字列で判定すると言い回しの修正で静かに外れる）。メッセージは「どの欄が」だけを含み、値そのものは含めない。
+ * `TokenPoolService.setSettings` は、`patch` が `rotateOn` と `cooldownMs` の両方を持っていれば、読めない現在値を読まずに新しい値だけで書き直す。片方しか無ければ埋める元が無いので投げ返す。
  */
 export class UnreadableTokenSettingsError extends Error {
   constructor(message: string) {
@@ -2796,12 +1560,7 @@ export class UnreadableTokenSettingsError extends Error {
   }
 }
 
-/**
- * `TokenPoolStore.readActive()` が、置かれている現役の指名を
- * `activeAgentTokenSchema` として読めなかったときに投げる専用のエラー型
- * （issue #2053）。`UnreadableTokenSettingsError`（本ファイル）と同じ形・
- * 同じ理由。
- */
+/** `TokenPoolStore.readActive()` が、置かれている現役の指名を `activeAgentTokenSchema` として読めなかったときに投げる（`UnreadableTokenSettingsError` と同じ形・同じ理由）。 */
 export class UnreadableActiveTokenError extends Error {
   constructor(message: string) {
     super(message);
@@ -2812,46 +1571,30 @@ export class UnreadableActiveTokenError extends Error {
 /**
  * 利用状況の台帳（`usage.ts`）。
  *
- * **持つのはデーモンだけである。** runner に持たせると記憶ストアの鍵が要る
- * （M4 受け入れ基準3）。runner から降りてくるのは累積スナップショットという
- * 事実だけで、差分にして積むのはここ。
+ * 持つのはデーモンだけ: runner に持たせると記憶ストアの鍵が要る（M4 受け入れ基準3）。runner から降りてくるのは累積スナップショットという事実だけで、差分にして積むのはここ。
  *
- * **鍵列（`managerId`・`model`・`tokenId`・`provider`・`sessionId`）の NUL は、断らずに落として残す
- * （issue #2927。teto の判断、2026-10-05。3実装とも）。** 外から来る鍵でも、記録そのものを失わない
- * 種類の台帳（消費）では落として残す——これらは集計の切り口で、特定の1行を指して書き換える鍵では
- * ない。断ると、NUL を含む `model` のターンの消費が台帳から丸ごと消える（呼び出し側は失敗を握りつぶして
- * 日誌に残すだけ）。害が大きいのは記録を失うほうである。他のストアが鍵の NUL を断るのとは逆の
- * 向きの例外である（`nul-guard.ts`）。同じ理由の例外がもう1つある: 台帳 `CommitmentStore` の `source`（出所の注記。
- * issue #3011。teto の判断、2026-10-06）。断ると引き受けた仕事が台帳から消えるので、落として残す。
- * ジョブと承認待ち（`JobStore`）の参照キー・印と `questions` / `selections` の中の文字列も同じ（`id` 自身は断る）。
+ * 鍵列（`managerId`・`model`・`tokenId`・`provider`・`sessionId`）の NUL は、断らずに落として残す（3実装とも）。
+ * これらは集計の切り口で、特定の1行を指して書き換える鍵ではない。断ると、NUL を含む `model` のターンの消費が台帳から丸ごと消える
+ * （呼び出し側は失敗を握りつぶして日誌に残すだけ）。害が大きいのは記録を失うほうで、他のストアが鍵の NUL を断るのとは逆の向きの例外である（`nul-guard.ts`）。
+ * 同じ理由の例外がもう1つある: `CommitmentStore` の `source`。ジョブと承認待ち（`JobStore`）の参照キー・印と `questions` / `selections` の中の文字列も同じ（`id` 自身は断る）。
  *
- * **`aggregate()` の絞り込み（`managerId`・`tokenId`）の NUL は、落としてから引く**（issue #3005。3実装とも）。
- * 書き込みが落として残しているので、引くほうも落とすのが対称になる。投げず、一致しなければ空の集計を返す。
- *
- * **NUL だけの `tokenId`（落とすと空文字になるもの）は、固定の目印 `'(nul-only)'`
- * （`USAGE_NUL_ONLY_TOKEN_ID`）に置き換えて記録する**（issue #3011。teto の判断）。pg の空文字は
- * 「帰属なし」の行なので、そのまま落とすと混ざる。記録は残しつつ区別がつくようにする。`aggregate()` の
- * 絞り込みも同じ置き換えを通す。目印を選んだ理由: 本物のトークン id は `randomUUID()`（16進とハイフン）で
- * 作られ、呼び出し側は新しい id を指定できない。丸括弧は UUID に現れないので衝突しない。
- *
- * **`aggregate()` の `from` / `to` に NUL を含む日付は「読めない範囲」で、3実装とも一致なし（空の集計）。**
- * 日付は鍵ではなく、落として引くと別の日に一致してしまう。
+ * `aggregate()` の絞り込み（`managerId`・`tokenId`）の NUL は、落としてから引く（3実装とも）: 書き込みが落として残しているので対称にする。投げず、一致しなければ空の集計を返す。
+ * NUL だけの `tokenId`（落とすと空文字になるもの）は、固定の目印 `'(nul-only)'`（`USAGE_NUL_ONLY_TOKEN_ID`）に置き換えて記録する: pg の空文字は「帰属なし」の行なので、そのまま落とすと混ざる。
+ * `aggregate()` の絞り込みも同じ置き換えを通す。目印の丸括弧は、`randomUUID()`（16進とハイフン）で作られる本物のトークン id に現れないので衝突しない。
+ * `aggregate()` の `from` / `to` に NUL を含む日付は「読めない範囲」で、3実装とも一致なし（空の集計）: 日付は鍵ではなく、落として引くと別の日に一致してしまう。
  */
 export interface UsageStore {
   /**
    * 累積スナップショットを台帳へ畳み込む。
    *
-   * **読むことと書くことを1操作に閉じること。** 基準を読んでから増分を書くまでの
-   * 隙間で同じマネージャーの次の `result` が届くと、同じ増分が2回積まれる。
-   * pg はトランザクション、fs は1回の書き込みで守る（`auth-service` と同じ作法）。
-   *
-   * 返すのは**実際に積んだ増分**と、数え直しが起きたならその事実。呼び出し側は
-   * それを日誌へ落とす（黙って数え直さない）。
+   * 読むことと書くことを1操作に閉じる: 基準を読んでから増分を書くまでの隙間で同じマネージャーの次の `result` が届くと、同じ増分が2回積まれる
+   * （pg はトランザクション、fs は1回の書き込みで守る。`auth-service` と同じ作法）。
+   * 返すのは実際に積んだ増分と、数え直しが起きたならその事実。呼び出し側はそれを日誌へ落とす（黙って数え直さない）。
    */
   record(input: {
-    /** **誰が**使ったか。モデル id で代用しないこと（`usage.ts` の `usageLayerSchema`）。 */
+    /** 誰が使ったか。モデル id で代用しない（`usage.ts` の `usageLayerSchema`）。 */
     layer: UsageLayer;
-    /** **どこで**使ったか。 */
+    /** どこで使ったか。 */
     site: UsageSite;
     /** 誰の分か（マネージャーの id か `CLONE_ACTOR_ID`）。 */
     managerId: string;
@@ -2860,47 +1603,31 @@ export interface UsageStore {
     at: string;
     snapshot: UsageSnapshot;
     /**
-     * 累積の器がどこで閉じるか。**既定を持たせないこと。**
-     *
-     * 黙って `cumulative` に倒すと、1回で閉じる `query()` の高くついた回だけが
-     * 目減りする（`usage.ts` の {@link foldOneshotUsage}）。呼ぶ側が毎回言う。
+     * 累積の器がどこで閉じるか。**既定を持たせない**: 黙って `cumulative` に倒すと、1回で閉じる `query()` の高くついた回だけが目減りする
+     * （`usage.ts` の {@link foldOneshotUsage}）。呼ぶ側が毎回言う。
      */
     accumulation: UsageAccumulation;
     /**
-     * **どの認証トークンで**使ったか（`AgentToken.id`。Issue #393 受け入れ基準6）。
-     *
-     * **省略は「取れなかった」であって「既定のトークン」ではない。** プールが空の
-     * 器では現役の指名が無いので毎回省略される。**呼ぶ側は分からないときに何かを
-     * 埋めないこと** — 埋めた瞬間、その id で使った分として集計に出る（AGENTS.md
-     * 地雷表「取れない軸に 0 の行を作る」の同型）。
-     *
-     * **渡すのは「そのセッションが起きた瞬間の身元」である。** 観測のたびに現役を
-     * 読み直すと、回した後に届いた前のセッションぶんの消費が新しいトークンに付く
+     * どの認証トークンで使ったか（`AgentToken.id`）。
+     * 省略は「取れなかった」であって「既定のトークン」ではない（プールが空の器では毎回省略される）。
+     * 呼ぶ側は分からないときに何かを埋めない: 埋めた瞬間、その id で使った分として集計に出る（AGENTS.md 地雷表「取れない軸に 0 の行を作る」の同型）。
+     * 渡すのは「そのセッションが起きた瞬間の身元」: 観測のたびに現役を読み直すと、回した後に届いた前のセッションぶんの消費が新しいトークンに付く
      * （`manager.ts` の `#tokenIdentities` が同じ理由で在る）。
      */
     tokenId?: string;
     /**
-     * **どの runner の累積か**（Issue #3022 仮説1。マネージャー層の `cumulative` だけが渡す）。
-     * 台帳は runner ごとの最後の累積を基準の行に持つ（`UsageBaseline.byRunner`）ので、
-     * **デーモンを再起動しても消えない**。`superseded: true` は「委譲がもう別の runner へ移った後に、
-     * 古い runner から届いた累積」で、**基準の高さ（現役の runner の累積）へは畳まず、その runner
-     * 自身の前回との差だけを積む**（`foldRecordForStore`）。控えが無い・累積が減っていたときは積まず、
-     * 返り値の `skipped` に理由を載せる（呼び出し側が日誌に残す）。省略は従来どおり。3実装とも同じ。
+     * どの runner の累積か（マネージャー層の `cumulative` だけが渡す）。台帳は runner ごとの最後の累積を基準の行に持つ（`UsageBaseline.byRunner`）ので、デーモンを再起動しても消えない。
+     * `superseded: true` は「委譲がもう別の runner へ移った後に、古い runner から届いた累積」で、基準の高さ（現役の runner の累積）へは畳まず、
+     * その runner 自身の前回との差だけを積む（`foldRecordForStore`）。控えが無い・累積が減っていたときは積まず、返り値の `skipped` に理由を載せる（呼び出し側が日誌に残す）。
      */
     runner?: UsageRecordRunner;
   }): Promise<UsageFold>;
 
   /**
-   * 消費を報告しない provider（`capabilities.usage === false`）のターンを1回数える
-   * （Issue #486 M7）。
-   *
-   * **消費の値を積まない。** `usage_daily` / `usage_turns` / 基準 / 台帳の始点には
-   * 触らず、別の行（`UsageUnmeteredRow`）だけを足す。0 を積むとその層が安いと読める
-   * ため、「取れなかった」として `aggregate().unmeteredRows` に出す。
-   *
-   * **呼ぶ側は `usage === undefined` を理由に呼ばないこと。** 起こす条件は
-   * provider の `capabilities.usage === false` である（Claude の失敗 result は
-   * usage が無いが無報告ではない）。
+   * 消費を報告しない provider（`capabilities.usage === false`）のターンを1回数える。
+   * 消費の値を積まない: `usage_daily` / `usage_turns` / 基準 / 台帳の始点には触れず、別の行（`UsageUnmeteredRow`）だけを足す。
+   * 0 を積むとその層が安いと読めるため、「取れなかった」として `aggregate().unmeteredRows` に出す。
+   * 呼ぶ側は `usage === undefined` を理由に呼ばない: 起こす条件は provider の `capabilities.usage === false`（Claude の失敗 result は usage が無いが無報告ではない）。
    */
   recordUnmetered(input: {
     layer: UsageLayer;
@@ -2916,84 +1643,44 @@ export interface UsageStore {
   /**
    * 期間の集計。日 × actor × モデル × 層 × 場所 × 認証トークンの行を返す。
    *
-   * **`since` を必ず載せること。** 台帳が始まる前を照会されたら 0 ではなく
-   * 「記録が無い」と言えるようにするためである（過去分の掘り起こしはしない）。
-   *
-   * **`layersSince` も必ず載せること。** 層の軸は台帳より後から入ったので、
-   * それより前の行の `layer` / `site` は既定値であって観測ではない。
-   *
-   * **`tokensSince` も必ず載せること。** トークンの軸は後から入ったうえに、
-   * **プールを使っていない器では最後まで始まらない。** ここが null のまま
-   * `since` だけ載っていると、読む側は「トークンの内訳が空」を「1本のトークンで
-   * 全部使った」と読みうる。
+   * `since` / `layersSince` / `tokensSince` を必ず載せる: 台帳が始まる前を照会されたら 0 ではなく「記録が無い」と言えるようにする。
+   * 層・トークンの軸は台帳より後から入ったので、それより前の行の `layer` / `site` は既定値であって観測ではなく、プールを使っていない器ではトークンの軸は最後まで始まらない。
+   * ここが null のまま `since` だけ載っていると、読む側は「トークンの内訳が空」を「1本のトークンで全部使った」と読みうる。
    */
   aggregate(query: UsageQuery): Promise<UsageAggregate>;
 
   /**
    * 累積を持つ主体1つの現在の基準（前回読んだ累積）。無ければ null。
-   *
-   * **鍵は「層 × actor」である。** actor の id だけで引くと、層をまたいで同じ id が
-   * 来たときに別の累積が1つの基準を共有し、差分がまるごと嘘になる。
+   * 鍵は「層 × actor」: actor の id だけで引くと、層をまたいで同じ id が来たときに別の累積が1つの基準を共有し、差分がまるごと嘘になる。
    */
   baseline(layer: UsageLayer, managerId: string): Promise<UsageBaseline | null>;
 
   /**
-   * 台帳（`usage_daily`）に1行でも行が在る managerId の集合（Issue #98
-   * 「台帳が取りこぼした委譲」）。
+   * 台帳（`usage_daily`）に1行でも行が在る managerId の集合（台帳が取りこぼした委譲を見つけるため）。
    *
-   * **引数を持たない。** `aggregate()` のように `from` / `to` で絞れる形にすると、
-   * 呼ぶ側が誤って絞り込んだ結果を「行が在る managerId の集合」として使いうる —
-   * それをやると、照会範囲の外で記録された委譲が「記録が無い」に化ける（5月に
-   * 走った委譲を今日の範囲で照会したときに取りこぼしとして数えられる）。**この
-   * 判定は全期間でなければ成り立たない**ので、引数を持たせないこと自体で
-   * その事故を構造的に防ぐ。
+   * 引数を持たない: `from` / `to` で絞れる形にすると、呼ぶ側が絞り込んだ結果を「行が在る managerId の集合」として使いうる。
+   * それをやると照会範囲の外で記録された委譲が「記録が無い」に化ける。この判定は全期間でなければ成り立たない。
+   * `aggregate()` の `rows` から作らない: 全件を毎回読み直す高コストな経路になる。器（fs / pg）の索引や集合演算で答える別の口として持つ。
+   * 基準（`usage_baseline`）ではなく行（`usage_daily`）を見る: 基準はゼロだけのスナップショットからでも作られうる（`foldUsageSnapshot`）ので、基準の有無で数えると「記録が無い」と「$0.00 使った」が混ざる。
    *
-   * **`aggregate()` の `rows` から作らないこと。** 呼び出し側が `aggregate({})`
-   * （絞り込み無し）を呼べば同じ集合が作れるように見えるが、それは「今この瞬間の
-   * 全件」を毎回読み直す高コストな経路になる。ここは器（fs / pg）が持つ索引や
-   * 集合演算で答えられる別の口として持つ——pg なら `usage_daily` の
-   * `(manager_id, date)` 索引を使った `distinct` で足りる。
-   *
-   * **基準（`usage_baseline`）ではなく行（`usage_daily`）を見ること。** 基準は
-   * ゼロだけのスナップショットからでも作られうる（`foldUsageSnapshot` の
-   * doc）ので、基準の有無で数えると「記録が無い」と「$0.00 使った」が混ざる。
-   *
-   * 使うのは `ManagerPool.list()` で得た全委譲との突き合わせ
-   * （{@link findUnrecordedManagers}、`usage-format.ts`）だけである——`UsageStore`
-   * は `ManagerPool` を知らないので、突き合わせそのものは呼び出し側（`app.ts` /
-   * `tools.ts`）が行う。
+   * 使うのは `ManagerPool.list()` の全委譲との突き合わせ（{@link findUnrecordedManagers}、`usage-format.ts`）だけ。`UsageStore` は `ManagerPool` を知らないので突き合わせは呼び出し側（`app.ts` / `tools.ts`）が行う。
    */
   recordedManagerIds(): Promise<Set<string>>;
 
   /**
-   * 台帳（`usage_daily` / `usage_baseline` / `usage_ledger` / `usage_turns`
-   * に当たる4つの単位）を丸ごと消す（ワークスペースのリセット専用。
-   * #workspace-reset）。**`since` / `layersSince` / `tokensSince` /
-   * `turnsSince` も一緒に消える** — 台帳そのものを空にする以上、「いつから
-   * 記録しているか」も同時に無かったことになる。中途半端に日次行だけを
-   * 消して開始時刻だけ残すと、`aggregate()` が「記録の空白期間」と「本当に
-   * 使っていない期間」を見分けられなくなる。
-   *
+   * 台帳（`usage_daily` / `usage_baseline` / `usage_ledger` / `usage_turns` に当たる4つの単位）を丸ごと消す（ワークスペースのリセット専用）。
+   * `since` / `layersSince` / `tokensSince` / `turnsSince` も一緒に消える: 日次行だけを消して開始時刻だけ残すと、`aggregate()` が「記録の空白期間」と「本当に使っていない期間」を見分けられなくなる。
    * 消した行数の内訳を返す。
    */
   clear(): Promise<{ daily: number; baseline: number; ledger: number; turns: number }>;
 }
 
 /**
- * **記憶へ移せなかった区間の墓標**（Issue #564 E1b）。
+ * 記憶へ移せなかった区間の墓標。退避（`TranscriptArchive.archive`）は済んでいるが蒸留が落ちた区間を指し、次の起動が `archive.read(archiveId)` で拾い直して蒸留できる。
  *
- * 退避（`TranscriptArchive.archive`）は済んでいるが、蒸留が落ちた区間を指す。
- * ⟹ 次の起動が `archive.read(archiveId)` で拾い直して蒸留できる。
- *
- * ## なぜ指すのが `archive` の id で、セッション id ではないのか
- *
- * **印を立てるのは蒸留が落ちた後であり、その時点でセッション id は既に捨てられている**
- * （`clone.ts` の「resume すると同じ長すぎる会話が戻ってくる」の枝が、畳むと決めた
- * 瞬間に `setCloneSessionId(null)` を打つ）。⟹ セッション id を控える形にすると
- * 「捨てるのと印を立てるのを同じ操作にする」という順序の約束が要る。
- *
- * **`archive` の id はセッション id の生死と無関係なので、その約束が要らない。**
- * ⟹ 順序を守り損ねて静かに拾えなくなる形が、構造的に消える。
+ * 指すのは `archive` の id で、セッション id ではない: 印を立てるのは蒸留が落ちた後で、その時点でセッション id は既に捨てられている
+ * （`clone.ts` の「resume すると同じ長すぎる会話が戻ってくる」の枝が、畳むと決めた瞬間に `setCloneSessionId(null)` を打つ）。
+ * セッション id を控える形にすると「捨てるのと印を立てるのを同じ操作にする」順序の約束が要り、守り損ねると静かに拾えなくなる。
  */
 export interface TranscriptGrave {
   /** `TranscriptArchive.archive()` が返した id。 */
@@ -3001,118 +1688,65 @@ export interface TranscriptGrave {
 }
 
 /**
- * クローンのセッション id と、記憶へ移せなかった区間の墓標を跨いで覚えておくための
- * 最小の永続化。
+ * クローンのセッション id と、記憶へ移せなかった区間の墓標を跨いで覚えておくための最小の永続化。
  *
- * ## ⚠️ 墓標はセッション id と**別の欄**に置くこと（器の実装の約束）
- *
- * `setCloneSessionId(null)` は resume 素材を捨てる操作であり、**fs 実装は置き場の
- * ファイルを丸ごと消す。** ⟹ 同じレコードに同居させると、resume を捨てた瞬間に
- * 墓標も消える —— **拾い直すために立てた印が、拾う理由ができた瞬間に消える。**
+ * 墓標はセッション id と別の欄に置く（器の実装の約束）: `setCloneSessionId(null)` は resume 素材を捨てる操作で、fs 実装は置き場のファイルを丸ごと消す。
+ * 同じレコードに同居させると、resume を捨てた瞬間に墓標も消え、拾い直すために立てた印が拾う理由ができた瞬間に消える。
  */
 export interface SessionRegistry {
   getCloneSessionId(): Promise<string | null>;
-  /** NUL を含む id は `NulNotAllowedError` で断る（issue #2927）。墓標は JSON 文字列で持つので NUL を含んでも往復する（現状のまま）。 */
+  /** NUL を含む id は `NulNotAllowedError` で断る。墓標は JSON 文字列で持つので NUL を含んでも往復する。 */
   setCloneSessionId(sessionId: string | null): Promise<void>;
   /**
    * 墓標を読む。**高々1つしか持たない。**
-   *
-   * 代償: **2回続けて蒸留に失敗すると、古い方が失われる。** 数える単位を増やす
-   * （列にする）と、拾い切れなかった墓標が積もる側の面倒が入れ替わりで増える。
-   * ⟹ #564 が数えているのは「1区間」なので、高々1つで釣り合う。
+   * 代償: 2回続けて蒸留に失敗すると古い方が失われる。数える単位を増やす（列にする）と、拾い切れなかった墓標が積もる側の面倒が入れ替わりで増える。
    */
   getTranscriptGrave(): Promise<TranscriptGrave | null>;
   setTranscriptGrave(grave: TranscriptGrave | null): Promise<void>;
   /**
-   * **いま立っているのが `archiveId` の墓標であるときにだけ下ろす**（issue #1157）。
-   * 下ろしたら `true`、既に別の墓標へ入れ替わっていたら `false`。
+   * いま立っているのが `archiveId` の墓標であるときにだけ下ろす。下ろしたら `true`、既に別の墓標へ入れ替わっていたら `false`。
    *
-   * ## なぜ `get` → 比較 → `set(null)` では足りないのか
-   *
-   * 拾い上げ（`Clone#pickUpTranscriptGrave`）は `#pump` から待たれずに走るので、
-   * **拾っている間に新しい墓標が立つ**（文脈窓で畳む回はいつでも起きる）。素で
-   * `null` を書くとその新しい方を消す ⟹ **その区間は二度と拾われない。**
-   *
-   * **⚠️ 呼び出し側で引き直して比べる形は、窓を狭めるだけで閉じない。** 読みと
-   * 書きが別々の `await` なので、**引き直しの後・下ろす書き込みが効く前**に
-   * 新しい墓標が landing しうる —— **プロセスを跨がなくても起きる**（単一
-   * プロセスの中で割り込める）。実測で再現した（`clone-grave-pickup-race.test.ts`）。
-   *
-   * ⟹ **判定と書き込みを1操作へ畳む。** これは `CommitmentStore.open` が
-   * #1041 で採ったのと同じ形であり、同じ理由である —— **直す場所は呼び出し側
-   * ではなくストア自身でなければならない。**
-   *
-   * ⛔ **呼び出し側の壁（ロック）では代わりにならない。** ストアのロックは1回の
-   * 呼び出しの中にしか掛からず、この区間は2回の呼び出しに跨がっている。
+   * `get` → 比較 → `set(null)` で代用しない: 拾い上げ（`Clone#pickUpTranscriptGrave`）は `#pump` から待たれずに走るので、拾っている間に新しい墓標が立ち（文脈窓で畳む回はいつでも起きる）、
+   * 素で `null` を書くとその新しい方を消して、その区間は二度と拾われない。
+   * 呼び出し側で引き直して比べる形は窓を狭めるだけで閉じない: 読みと書きが別々の `await` なので、引き直しの後・書き込みが効く前に新しい墓標が landing しうる。
+   * 判定と書き込みを1操作へ畳む（`CommitmentStore.open` と同じ形・同じ理由）。呼び出し側の壁（ロック）では代わりにならない: ストアのロックは1回の呼び出しの中にしか掛からず、この区間は2回の呼び出しに跨がる。
    */
   clearTranscriptGraveIf(archiveId: string): Promise<boolean>;
   /**
-   * **resume 素材を捨てた回の墓標**（#564 E1b。`TranscriptGrave` とは別の欄）。
-   *
-   * ## なぜ `TranscriptGrave` と同じ欄にしないのか
-   *
-   * **同時に立ちうるからである。** 文脈窓で畳む回（退避は済んでいる）と、次の起動が
-   * セッションを開けなかった回（退避が無い）は**別々に起きる。** 1つの欄に相乗りさせると、
-   * **後に立った方が前の方を消す** —— 消えた側は誰も拾わない。
-   *
-   * ⟹ 指す先が違い（`archive` / pg の生ログ）、立つ契機も違うので、欄を分ける。
-   * **どちらも「高々1つ」である**（同じ種類が2回続いたら古い方が失われる、は変わらない）。
+   * resume 素材を捨てた回の墓標（`TranscriptGrave` とは別の欄）。
+   * 同じ欄にしない: 文脈窓で畳む回（退避は済んでいる）と、次の起動がセッションを開けなかった回（退避が無い）は別々に同時に立ちうる。
+   * 1つの欄に相乗りさせると後に立った方が前の方を消し、消えた側は誰も拾わない。どちらも「高々1つ」。
    */
   getLostSessionGrave(): Promise<LostSessionGrave | null>;
   setLostSessionGrave(grave: LostSessionGrave | null): Promise<void>;
-  /**
-   * **いま立っているのが `sessionId` の墓標であるときにだけ下ろす**（issue #1157）。
-   * 理由と形は {@link SessionRegistry.clearTranscriptGraveIf} と同じである。
-   */
+  /** いま立っているのが `sessionId` の墓標であるときにだけ下ろす。理由と形は {@link SessionRegistry.clearTranscriptGraveIf} と同じ。 */
   clearLostSessionGraveIf(sessionId: string): Promise<boolean>;
   /**
-   * SDK が生ログを預けるときの scope（`SessionKey.projectKey`）を、**器を跨いで**覚える。
-   *
-   * ## なぜ持ち越す必要があるのか
-   *
-   * この値は `append` が渡してくるものなので、**`append` が1度も来ていないプロセスは
-   * 知らない。** そして墓標を立てたい回（`init` すら来ずに落ちた回）は、まさに
-   * **そのプロセスで `append` が1度も来ていない回である** —— 起き直して resume に
-   * 失敗した直後がそれで、`#564` が数えている経路そのものである。
-   *
-   * ⟹ 前の器が覚えた値をここから読む。**`cwd` から計算し直さないこと**
-   * （`LostSessionGrave` の doc）。
-   *
-   * ⚠️ **配備してから1度も `append` が来ていないうちは `null` である。** その窓で
-   * 落ちた回は墓標が立たない（拾う鍵が無い）。
+   * SDK が生ログを預けるときの scope（`SessionKey.projectKey`）を、器を跨いで覚える。
+   * `append` が渡してくる値なので `append` が1度も来ていないプロセスは知らず、墓標を立てたい回（`init` すら来ずに落ちた回）はまさにその回（起き直して resume に失敗した直後）である。
+   * 前の器が覚えた値をここから読む。`cwd` から計算し直さない（`LostSessionGrave`）。配備してから1度も `append` が来ていないうちは `null`: その窓で落ちた回は墓標が立たない（拾う鍵が無い）。
    */
   getProjectKey(): Promise<string | null>;
-  /** NUL を含む鍵は `NulNotAllowedError` で断る（issue #2927）。 */
+  /** NUL を含む鍵は `NulNotAllowedError` で断る。 */
   setProjectKey(projectKey: string): Promise<void>;
 
   /**
-   * ここが持つ4つの欄（クローンのセッション id・2つの墓標・生ログの scope）を
-   * すべて消す（ワークスペースのリセット専用。#workspace-reset）。
-   *
-   * **これは resume を諦める操作である。** クローンの同一性は記憶に宿るので
-   * （`architecture.md`「寿命モデル」）、ここが空でも次のターンからクローンは
-   * 記憶を通じて再構成される——失うのはいま走っていたセッションへ戻る手段
-   * だけである。
-   *
+   * ここが持つ4つの欄（クローンのセッション id・2つの墓標・生ログの scope）をすべて消す（ワークスペースのリセット専用）。
+   * resume を諦める操作で、失うのは走っていたセッションへ戻る手段だけ（クローンの同一性は記憶に宿るので、次のターンから記憶を通じて再構成される。`architecture.md`「寿命モデル」）。
    * 消した欄の数（0〜4）を返す。
    */
   clear(): Promise<number>;
 }
 
 /**
- * **resume 素材を捨てた回に、その区間を後から引くための鍵**（#564 E1b）。
+ * resume 素材を捨てた回に、その区間を後から引くための鍵。
+ * `init` すら来ずにセッションが落ちた回は、`clone.ts` が resume 素材（セッション id）を捨てる。その id が pg に載っている生ログを引く唯一の鍵なので、捨てる前にここへ写しておかないと誰も引けなくなる。
  *
- * `init` すら来ずにセッションが落ちた回は、`clone.ts` が resume 素材（セッション id）を
- * 捨てる。**そこで捨てた id が、pg に載っている生ログを引く唯一の鍵である。**
- * ⟹ 捨てる前にここへ写しておかないと、区間は pg に在るのに誰も引けなくなる。
- *
- * ## なぜ `projectKey` も要るのか
- *
- * SDK の `SessionStore` は `projectKey` + `sessionId` の対で引く口しか持たない。
- * そして **`projectKey` を `cwd` から計算し直さないこと** —— SDK の型定義が逐語で
- * 「Default: sanitized cwd.」 [sdk-verbatim SessionKey.projectKey] と言い、
- * 長すぎるパス（200文字超）については「characters are truncated and suffixed with a portable djb2 hash」 [sdk-verbatim SessionKey.projectKey] とも言っており、再実装は静かにずれる。
- * ⟹ `append` が渡してくる値をそのまま控える（`clone.ts` の `withProjectKeyProbe`）。
+ * `projectKey` を `cwd` から計算し直さない: SDK の型定義が逐語で
+ * 「Default: sanitized cwd.」 [sdk-verbatim SessionKey.projectKey]
+ * と言い、長すぎるパス（200文字超）については
+ * 「characters are truncated and suffixed with a portable djb2 hash」 [sdk-verbatim SessionKey.projectKey]
+ * とも言っており、再実装は静かにずれる。`append` が渡してくる値をそのまま控える（`clone.ts` の `withProjectKeyProbe`）。
  */
 export interface LostSessionGrave {
   projectKey: string;
@@ -3120,114 +1754,46 @@ export interface LostSessionGrave {
 }
 
 /**
- * pg に載っている生ログの**末尾だけ**を読む口（#564 E1b）。
+ * pg に載っている生ログの末尾だけを読む口。
  *
- * ## なぜ `SessionStore.load()` を使わないのか
- *
- * あちらは**全件**を戻す。実測でクローンの生ログは 1 セッションで 580 MB 級に育ち、
- * SDK は `load()` に **60 秒の予算**を掛けている（`Options.loadTimeoutMs` の既定）。
- * ⟹ 拾い直しのために全件を戻すと、**その予算に設計が自分から当たりに行く。**
- *
- * **蒸留が読むのは末尾だけである**（`clone.ts` の `tailOf`）。⟹ 末尾を返す口を分ける。
- *
- * ## ⚠️ pg 構成でだけ付く
- *
- * `sessionStore` と同じである（`Stores.sessionStore` の doc）。fs 構成には生ログの
- * 預け先そのものが無いので、**この口も無い。**
+ * `SessionStore.load()` を使わない: 全件を戻し（クローンの生ログは 1 セッションで 580 MB 級に育つ）、SDK は `load()` に 60 秒の予算（`Options.loadTimeoutMs` の既定）を掛けているので、
+ * 拾い直しのために全件を戻すとその予算に設計が自分から当たりに行く。蒸留が読むのは末尾だけ（`clone.ts` の `tailOf`）なので、末尾を返す口を分ける。
+ * pg 構成でだけ付く（`Stores.sessionStore` と同じ。fs 構成には生ログの預け先そのものが無いので、この口も無い）。
  */
 export interface SessionTranscriptTail {
   /**
-   * 末尾から `maxChars` 文字ぶんを返す。**1本も無ければ `null`。**
+   * 末尾から `maxChars` 文字ぶんを返す。1本も無ければ `null`。
+   * 生ログ（JSONL）の形そのままで、行の途中から始まりうる。整えるのは呼び出し側（`tailOf`）: 器ごとに整え方が分かれると蒸留へ渡るものが器で変わる。
    *
-   * 返すのは生ログ（JSONL）の形そのままで、**行の途中から始まりうる。** 整えるのは
-   * 呼び出し側（`tailOf`）である —— 器ごとに整え方が分かれると、蒸留へ渡るものが
-   * 器で変わる。
-   *
-   * ## 契約
-   *
-   * 🔴 **`maxChars` はコードポイント数で数える（issue #1849）。** JS の
-   * `.length`（UTF-16 コード単位）ではない——補助面の文字（絵文字の多く）
-   * は 1 コードポイントが 2 コード単位になるため、この2つはずれる
-   * （`TranscriptArchive.readTail` interface doc・`tailByCodePoints`
-   * （`packages/core/src/excerpt.ts`）の doc と同じ区別）。単位の変換は
-   * `tailByCodePoints` の唯一の出所へ寄せる——実装ごとに手で書き直さない。
-   *
-   * 🔴 **本文が `maxChars` より長いとき、返す量は `maxChars` を厳密に
-   * 上回ること（同じ数で切り詰めない）。** `TranscriptArchive.readTail`
-   * （`readTail` interface doc）と同じ契約である——呼び出し側（`tailOf`）は
-   * `tailByCodePoints(transcript, DISTILL_TRANSCRIPT_TAIL_CHARS)` の結果が
-   * 元の文字列と一致するかで「切り詰めが要ったか」を**コードポイント数**で
-   * 判定するので、ここで「ちょうど `maxChars`」以下を返すと、実際には
-   * 切り捨てた行があるのに「本文がもとから短かった」と誤読される
-   * （#1718 で見つかった——`PgSessionStore.readTail` の停止条件が返す長さ
-   * ではなく積んだ累計文字数を見ていたため、境界ちょうどで `maxChars - 1`
-   * 文字しか返さなかった。テストで再現したものであって、本番でこの境界を
-   * 実際に踏んだ観測ではない。**その後、単位そのものが UTF-16 コード単位の
-   * ままだったことも同じ族の穴として見つかった（#1849）——境界ちょうどを
-   * 狙わなくても、絵文字が十分に多い本文では恒常的に起こりえた**）。本文が
-   * `maxChars` 以下なら全文を返す。
-   *
-   * ⚠️ **この契約の食い違いは、いまの唯一の呼び出し側 `#pickUpLostSession`
-   * （`clone.ts`）では症状として顕在化しない。** `tailOf` は受け取った文字列を
-   * そのまま蒸留へ渡すので、境界ちょうどの回でも渡る内容自体は破損しない
-   * （古い行が1本欠けるだけで、行の途中や壊れた文字は混ざらない）——気づける
-   * 手がかりが無いだけである。**症状が出ていないのは仕組みで防いでいるからでは
-   * なく、いまの呼び出し側の使い方がたまたまこの欠陥をやり過ごせる形だから**
-   * である（`tailOf` の判定自体は「長ければ `maxChars` を超えて返る」という、
-   * この契約が守られている前提の上でしか安全ではない）。
+   * 契約:
+   * - `maxChars` はコードポイント数で数える。UTF-16 コード単位（`.length`）ではない: 補助面の文字でずれる
+   *   （`TranscriptArchive.readTail`・`tailByCodePoints`〈`excerpt.ts`〉と同じ区別）。単位の変換は `tailByCodePoints` の唯一の出所へ寄せる。
+   * - 本文が `maxChars` より長いとき、返す量は `maxChars` を厳密に上回ること（同じ数で切り詰めない。`TranscriptArchive.readTail` と同じ契約）。
+   *   呼び出し側（`tailOf`）は `tailByCodePoints(transcript, DISTILL_TRANSCRIPT_TAIL_CHARS)` の結果が元の文字列と一致するかで「切り詰めが要ったか」を判定するので、
+   *   ちょうど `maxChars` 以下を返すと、切り捨てた行があるのに「本文がもとから短かった」と誤読される。本文が `maxChars` 以下なら全文を返す。
    */
   readTail(key: LostSessionGrave, maxChars: number): Promise<string | null>;
 
   /**
-   * その鍵のセッションが占める、おおよその大きさ（バイト）を**本文を1バイトも
-   * 読まずに**測る（#1283 の OOM、段1）。
+   * その鍵のセッションが占める、おおよその大きさ（バイト）を、本文を1バイトも読まずに測る。
+   * `SessionStore.load()` は全件を返す契約で削れないので、大きすぎる鍵は `load()` を呼ぶ前に避けるしかない（呼び出し側は `clone.ts` の `#ensureQuery` 周辺）。
    *
-   * ## なぜ要るのか
-   *
-   * SDK の `SessionStore.load()` は全件を返す契約で、削れない（`readTail` の
-   * doc「あちらは全件を戻す」）。⟹ 大きすぎる鍵は `load()` を**呼ぶ前に**避ける
-   * しかない。避けるかどうかを決めるために、本文へ触れずに大きさだけを知る口が
-   * ここである（呼び出し側は `clone.ts` の `#ensureQuery` 周辺）。
-   *
-   * ## 契約
-   *
-   * - **返すのは実テキストのバイト数**（`JSON.parse` が展開する量）であって、
-   *   ディスク上の格納バイト数ではない。**圧縮後の格納バイトを返してはいけない**
-   *   —— 予算は初めから実テキストの量として導かれており（`clone.ts` の
-   *   `RESUME_SIZE_BUDGET_BYTES`）、圧縮後の値と比べると**いちばん圧縮の効く
-   *   ＝いちばん大きいセッションをいちばん小さく見積もる**（実測で約85倍の
-   *   過小申告。`packages/storage-pg/src/session-store.ts` の
-   *   `measureSize` の doc「訂正の記録」）。
-   * - **実装は本文（`entry` そのもの）を呼び出し側のメモリへ載せないこと。**
-   *   載せれば、避けたいはずの OOM をこの関数自身が起こしかねない。pg 実装は
-   *   `sum(octet_length(entry::text))` で測る —— DB 側では伸長するが、戻るのは
-   *   長さを表す1つの数値だけである（`packages/storage-pg/src/footprint.ts` の
-   *   「契約」節と同じ）。**伸長するぶんコストの上限が要る**ので、pg 実装は
-   *   `statement_timeout` を掛けて撃ち、打ち切られたら下の `null` に倒す。
-   * - **測れないときは `null`。実装が対応していない、またはエラーが出たとき。**
-   *   **`0` を返さないこと** —— `0` は「測って0バイトだった（その鍵に行が
-   *   無い等）」という実測であって、「測れなかった」の代用にしない
-   *   （AGENTS.md 地雷表「取れない軸に 0 の行を作る」）。
+   * 契約:
+   * - 返すのは実テキストのバイト数（`JSON.parse` が展開する量）で、ディスク上の格納バイト数ではない。
+   *   圧縮後の格納バイトを返さない: 予算は実テキストの量として導かれており（`clone.ts` の `RESUME_SIZE_BUDGET_BYTES`）、圧縮後の値と比べると
+   *   いちばん圧縮の効く＝いちばん大きいセッションをいちばん小さく見積もる（実測で約85倍の過小申告。`packages/storage-pg/src/session-store.ts` の `measureSize`）。
+   * - 実装は本文（`entry` そのもの）を呼び出し側のメモリへ載せない: 載せれば避けたい OOM をこの関数自身が起こしかねない。
+   *   pg 実装は `sum(octet_length(entry::text))` で測り、伸長するぶんコストの上限が要るので `statement_timeout` を掛け、打ち切られたら `null` に倒す。
+   * - 測れないとき（実装が対応していない、またはエラー）は `null`。`0` を返さない: `0` は「測って0バイトだった」という実測で、「測れなかった」の代用にしない（AGENTS.md 地雷表「取れない軸に 0 の行を作る」）。
    */
   measureSize(key: LostSessionGrave): Promise<number | null>;
 }
 
 /**
- * `PracticeStore.read(slug)` / `PracticeStore.readVersion(slug, version)` が、
- * その行を `practiceSchema` / `practiceVersionSchema` として読めなかったときに
- * 投げる専用のエラー型（issue #2011）。`UnreadableCommitmentError`（本ファイル）
- * と同じ形——「無い」（`null`）と「読めない」（throw）の区別を、呼び出し側が
- * `instanceof` で見分けられるようにする。メッセージの文字列（`/読めない形/` 等）
- * で判定すると、言い回しを直しただけで判定が静かに外れる。
- *
- * **`slug` と、版を読んでいたときは `version` も持つ**——`PUT`/`DELETE
- * /practices/:slug`（`apps/daemon/src/app.ts`）と `practice_write` /
- * `practice_remove`（`packages/core/src/tools.ts`）が、`read()` を「無いか
- * どうか」の判定にしか使っていないのに、壊れた行では `read()` 自体が投げて
- * `write()` / `remove()` まで届かなくなる穴があった（fs 側は issue #1975 の時点
- * から、pg 側は issue #2011 のこの直しの時点から）。この4つの口は
- * `UnreadablePracticeError` を捕まえたら「在ったが読めない」として扱い、
- * 書き直し・削除まで進む——`slug` はその分岐にも日誌の文言にも使う。
+ * `PracticeStore.read(slug)` / `readVersion(slug, version)` が、その行を `practiceSchema` / `practiceVersionSchema` として読めなかったときに投げる。
+ * `instanceof` で見分ける（メッセージの文字列で判定すると言い回しの修正で静かに外れる）。
+ * `slug` と、版を読んでいたときは `version` も持つ: `PUT`/`DELETE /practices/:slug` と `practice_write` / `practice_remove` は `read()` を「無いかどうか」の判定にしか使っていないので、
+ * 壊れた行で `read()` が投げて `write()` / `remove()` まで届かない穴を塞ぐ。この4つの口はこれを捕まえたら「在ったが読めない」として扱い、書き直し・削除まで進む。
  */
 export class UnreadablePracticeError extends Error {
   readonly slug: string;
@@ -3242,30 +1808,17 @@ export class UnreadablePracticeError extends Error {
 }
 
 /**
- * `PracticeStore.list` の返り値（issue #2346。`ScheduleList` と同じ形）。
- *
- * **`PracticeMeta[]` のままにしなかったのは、呼び出し側が読めない行を握り潰せない形に
- * するため。** 読めない行を空配列（無い）へ潰すと、「やり方はまだ1件も無い。正常」と
- * 言い切れてしまう。`unreadable` はコンパイラの目に触れる。
+ * `PracticeStore.list` の返り値（`ScheduleList` と同じ形）。
+ * `PracticeMeta[]` のままにしない: 読めない行を空配列へ潰すと、「やり方はまだ1件も無い。正常」と言い切れてしまう。
  */
 export interface PracticeList {
   /** 読めた行。slug の昇順。 */
   entries: PracticeMeta[];
-  /**
-   * 読めなかった行。**「無い」でも「消された」でもない第3の状態。** 一覧全体は落とさない。
-   * 行そのものは消さない（`read(slug)` は投げ、`remove` で外せる）。
-   */
+  /** 読めなかった行。「無い」でも「消された」でもない第3の状態。一覧全体は落とさず、行そのものも消さない（`read(slug)` は投げ、`remove` で外せる）。 */
   unreadable: UnreadablePractice[];
 }
 
-/**
- * 読めないやり方が在るときの1文（0件なら `null`。**0件のときは何も出さない**——
- * 「読めないやり方は 0 件」の行を作らない。AGENTS.md「取れない軸に 0 の行を作る」）。
- *
- * クローンの道具（`practice_list`）・HTTP・CLI・画面が同じ文面の骨を使う。slug が取れた
- * 行は上限つきで並べ、取れない行は件数だけで言う。本文・題は載せない
- * （`unreadablePracticeSchema` の doc）。
- */
+/** 読めないやり方が在るときの1文（0件なら `null`。0件のときは何も出さない）。本文・題は載せない（`unreadablePracticeSchema`）。 */
 export function describeUnreadablePractices(
   unreadable: readonly UnreadablePractice[],
   options: { slugLimit?: number } = {},
@@ -3289,12 +1842,7 @@ export function describeUnreadablePractices(
   );
 }
 
-/**
- * 読めない認証トークンの行が在るときの1文（0件なら `null`。0件のときは何も出さない）。
- *
- * **トークンの値は載せない**（`unreadableTokenSchema` の doc）。識別は id とラベルだけ。
- * 取れた行は上限つきで並べ、取れない行は件数だけで言う。
- */
+/** 読めない認証トークンの行が在るときの1文（0件なら `null`。0件のときは何も出さない）。トークンの値は載せない（`unreadableTokenSchema`）。識別は id とラベルだけ。 */
 export function describeUnreadableTokens(
   unreadable: readonly UnreadableToken[],
   options: { rowLimit?: number } = {},
@@ -3336,37 +1884,9 @@ export function describeUnreadableTokens(
 }
 
 /**
- * 仕事の**やり方** = クローンが読む素材（#1055 段3）。
- *
- * ## ⛔ 器が実行を強制しない（ここが壊れると北極星が壊れる）
- *
- * 持っているのは読み書きの4つだけで、**「このやり方を適用せよ」に当たる操作が
- * 1つも無い。** これは書き忘れではなく設計である —— 従わせた時点でクローンは
- * 「制限された自動化ジョブ」に戻る（`practiceSchema` の doc、`docs/north_star.md`）。
- *
- * ⟹ **この interface に `apply` / `enforce` / `requiredFor` を足さないこと。**
- * 足したくなったら、それは器ではなく指示文の側でやること（読む素材として渡す）。
- *
- * ## やり方が1件も無いのは正常な状態である
- *
- * `list()` が空を返すことは、どこかの前提を崩してはいけない（段3 の受け入れ基準
- * 「やり方が書かれていない仕事も普通に進む」）。**空を「未設定」の異常として
- * 扱わないこと。**
- *
- * **⚠️ ただし「正常」と言えるのは、読めない行も0件のときだけである**（issue #2346。
- * `PracticeList.unreadable`）。読めない行を飛ばして「1件も無い。正常」と言うと、
- * 壊れた行が在るのに無いと見せることになる。
- */
-/**
- * やり方の「版」（Issue #2853。記憶の `memoryVersion` と同じ考え方）。**保存された
- * `kind` / `title` / `content`（正規化後。`read()` が返す値）の sha256 hex。**
- * 読んだ側が持ち回り、書くときに `WritePracticeOptions.ifMatch` へ渡す。
- *
- * ⚠️ **版の履歴の番号（`listVersions` の `version`。1 始まりの連番）ではない。**
- * 履歴の番号は読み口（`GET /practices/:slug`）が持たず、履歴の整合（壊れた行・
- * `remove()` 後の続き番号）に依存する。本文のハッシュなら、3実装（fs / pg /
- * インメモリ）が同じ式で同じ値を出せ、比較を書き込みと同じ排他の中で行える。
- * `updatedAt` を使わないのも `memoryVersion` と同じ理由（時刻の精度に依らない）。
+ * やり方の「版」（記憶の `memoryVersion` と同じ考え方）。保存された `kind` / `title` / `content`（正規化後。`read()` が返す値）の sha256 hex。
+ * 版の履歴の番号（`listVersions` の `version`）にしない: 履歴の番号は読み口（`GET /practices/:slug`）が持たず、履歴の整合（壊れた行・`remove()` 後の続き番号）に依存する。
+ * `updatedAt` を使わないのも `memoryVersion` と同じ理由。
  */
 export function practiceVersion(practice: Pick<Practice, 'kind' | 'title' | 'content'>): string {
   return createHash('sha256')
@@ -3376,20 +1896,11 @@ export function practiceVersion(practice: Pick<Practice, 'kind' | 'title' | 'con
 
 /** `PracticeStore.write` の任意の引数。 */
 export interface WritePracticeOptions {
-  /**
-   * 前提の版（`practiceVersion` の値）。**書く瞬間の版がこれと違えば書かず、
-   * `PracticeConflictError` を投げる**（比較と書き込みは1つの排他の中で行う）。
-   * `null` は「読んだ時には無かった」——いまも無いときだけ書ける。
-   * **省略（`undefined`）は従来どおり後勝ち**（クローンの道具・CLI など、前提を
-   * 持たない書き手のため）。`WriteMemoryOptions.ifMatch` と同じ形。
-   */
+  /** 前提の版（`practiceVersion`）。書く瞬間の版と違えば書かず `PracticeConflictError`。`null` は「無いときだけ書ける」、省略は後勝ち。 */
   ifMatch?: string | null;
 }
 
-/**
- * 前提の版が合わず、書かなかった。`current` は**いまのやり方**（無ければ `null`。
- * 読めない形で入っているときも `null`）——書き手が自分の内容を捨てずに見比べられる。
- */
+/** 前提の版が合わず、書かなかった。`current` はいまのやり方（無ければ、読めない形のときも `null`）。 */
 export class PracticeConflictError extends Error {
   readonly current: Practice | null;
   constructor(slug: string, current: Practice | null) {
@@ -3399,9 +1910,9 @@ export class PracticeConflictError extends Error {
   }
 }
 
-/** `PracticeStore.remove` の任意の引数（Issue #2923）。 */
+/** `PracticeStore.remove` の任意の引数。 */
 export interface RemovePracticeOptions {
-  /** 前提の版（`practiceVersion` の値）。合わなければ消さず `PracticeConflictError`。省略は無条件。 */
+  /** 前提の版（`practiceVersion`）。合わなければ消さず `PracticeConflictError`。省略は無条件。 */
   ifMatch?: string;
 }
 
@@ -3415,102 +1926,71 @@ export function practiceVersionMatches(
   return current !== null && practiceVersion(current) === ifMatch;
 }
 
+/**
+ * 仕事のやり方 = クローンが読む素材。
+ *
+ * 器が実行を強制しない（壊れると北極星が壊れる）: 持っているのは読み書きだけで、「このやり方を適用せよ」に当たる操作が1つも無い。
+ * 従わせた時点でクローンは「制限された自動化ジョブ」に戻る（`practiceSchema`、`docs/north_star.md`）。
+ * この interface に `apply` / `enforce` / `requiredFor` を足さない。足したくなったら、器ではなく指示文の側でやる（読む素材として渡す）。
+ *
+ * やり方が1件も無いのは正常な状態で、`list()` が空を返してもどこかの前提を崩さない（空を「未設定」の異常として扱わない）。
+ * ただし「正常」と言えるのは読めない行も0件のときだけ（`PracticeList.unreadable`）: 読めない行を飛ばして「1件も無い」と言うと壊れた行を無いと見せる。
+ */
 export interface PracticeStore {
   /**
-   * **`entries` は slug の昇順。**（`PersonaStore.list` と同じ理由で契約にしてある ——
-   * 続きを取る口（#662 の形）を後から足すとき、一覧が並んでいることに全面的に依拠する。
-   * 偶然揃っている状態のままでは置けない。）
+   * **`entries` は slug の昇順。**（`PersonaStore.list` と同じ理由で契約にしてある — 続きを取る口を後から足すとき、一覧が並んでいることに依拠する。）
+   * 照合順序の厳密な一致までは保証しない（`PersonaStore.list` と同じ）。
    *
-   * ⚠️ 照合順序の厳密な一致までは保証しない（`PersonaStore.list` の doc と同じ）。
-   *
-   * **読めない行（`practiceMetaSchema` に合わない行）は一覧全体を落とさず、`unreadable`
-   * に別欄で返す**（issue #2346。`ScheduleStore.list` の `ScheduleList` と同じ形）。
-   * **メモリ実装（`testing.ts`）は `unreadable` が常に空**——`write()` がスキーマを
-   * 通すので、壊れた行を持てない。
+   * 読めない行（`practiceMetaSchema` に合わない行）は一覧全体を落とさず、`unreadable` に別欄で返す。メモリ実装は `unreadable` が常に空。
    */
   list(): Promise<PracticeList>;
   /**
-   * 無ければ `null`（「読めない」は throw。`CommitmentStore.get` と同じ線）。
-   * 投げるのは `UnreadablePracticeError`（本ファイル、issue #2011）——
-   * `instanceof` で見分けられる。
+   * 無ければ `null`。読めないは throw（`UnreadablePracticeError`）。
    *
-   * **NUL（issue #3011）。** 書く口は、slug の NUL を入口のスキーマ（`practiceSlugSchema`）が弾く（3実装とも投げる）。
-   * 本文（`kind`・`title`・`content`）の NUL は落として残す。読むだけの口（`read`・`readVersion`・`listVersions`・`remove`）は、
-   * NUL を含む slug でも断らず「無い」と同じ結果（`null`・`null`・空・何もしない）を返す。
+   * NUL: 書く口は、slug の NUL を入口のスキーマ（`practiceSlugSchema`）が弾く（3実装とも投げる）。本文（`kind`・`title`・`content`）の NUL は落として残す。
+   * 読むだけの口（`read`・`readVersion`・`listVersions`・`remove`）は、NUL を含む slug でも断らず「無い」と同じ結果（`null`・`null`・空・何もしない）を返す。
    */
   read(slug: string): Promise<Practice | null>;
   /**
    * 全文置換。存在しなければ作る。
    *
-   * **契約: 書いた本文は、末尾の改行が正規化されて読み戻る。**
-   * `write({ ..., content: '# X' })` の直後の `read()` が返す `content` は
-   * `'# X\n'` であって `'# X'` ではない。既に `\n` で終わっているなら足さない。
-   * `chars` もこの正規化を通した後の本文に対して数える（コードポイント数。
-   * `bytes` から `chars` へ改名し、保存せず導出する形にした——#1340）。
+   * 書いた本文は、末尾の改行が正規化されて読み戻る（`write({ ..., content: '# X' })` → `read()` は `'# X\n'`）。`chars`（コードポイント数）も正規化後の本文で数える。
+   * 実装は自分で正規化せず `ensureTrailingNewline` を通す（出所が1つに無かったせいで3実装のうち1つだけ振る舞いが違った前科がある。`PersonaStore.write`）。
+   * `createdAt` は最初に作られたときのものを引き継ぐ（上書きで作成時刻を捏造しない）。`updatedAt` は毎回進む。
    *
-   * **実装する側はこの正規化を自分で書かず、上の `ensureTrailingNewline` を
-   * 通すこと。** 出所が1つに無かったせいで3実装のうち1つだけ振る舞いが違い、
-   * しかも `packages/core` の単体テストが当たるのは乖離している側だけだった、
-   * という前科がある（`PersonaStore.write` の doc と #370）。
+   * 書いた後の本文を、1つの版として追記専用の履歴へ足す。版番号は slug ごとに 1 始まりの連番で、`remove()` しても版は消えず、作り直したら続きから振られる。
+   * この追記は `write()` と同じ操作の中で行う: 別操作に割ると、途中で落ちたときに「本体は書き変わったが版は増えていない」食い違いが生まれる。
    *
-   * `createdAt` は**最初に作られたときのものを引き継ぐ**（上書きで作成時刻を
-   * 捏造しない）。`updatedAt` は毎回進む。
-   */
-  /**
-   * ⭐ **書いた後の本文を、1つの版として追記専用の履歴へ足す（#1309）。**
-   * 版番号は slug ごとに 1 始まりの連番——`remove()` しても版は消えないので、
-   * 同じ slug を作り直したら消える前の続きから振られる（`listVersions` の doc）。
-   * この追記は `write()` と同じ操作の中で行うこと——別操作に割ると、途中で
-   * 落ちたときに「本体は書き変わったが版は増えていない」という食い違いが生まれる。
-   */
-  /**
-   * **`options.ifMatch`（Issue #2853）で前提の版を持てる。** 合わなければ何も書かず
-   * （版の履歴にも足さず）`PracticeConflictError`。比較は書き込みと同じ排他の中で行う
-   * （fs: `withPathLock` 内、pg: 行ロックつきのトランザクション内、インメモリ: 同期の区間）。
-   * 3実装とも同じ挙動で、`verifyPracticeStoreContract` が3つに同じ歯を当てる。
+   * `options.ifMatch` が合わなければ何も書かず（版の履歴にも足さず）`PracticeConflictError`。比較は書き込みと同じ排他の中（fs: `withPathLock` 内、pg: 行ロックつきのトランザクション内、インメモリ: 同期の区間）。
+   * `verifyPracticeStoreContract` が3実装に同じ歯を当てる。
    */
   write(
     input: { slug: string; kind: string; title: string; content: string },
     options?: WritePracticeOptions,
   ): Promise<Practice>;
   /**
-   * **`options.ifMatch`（Issue #2923）で前提の版を持てる。** 合わなければ何も消さず
-   * `PracticeConflictError`（`current` はいまのやり方。無ければ `null`）。比較は消すのと同じ
-   * 排他の中で行う（fs: `withPathLock` 内、pg: 行ロックつきのトランザクション内、
-   * インメモリ: 同期の区間）。**省略は従来どおり無条件**（HTTP の `DELETE` を壊さない）。
-   * 読めない形の行は版が無いので「無い」側に数える（`write` と同じ）。
+   * `options.ifMatch` が合わなければ何も消さず `PracticeConflictError`（`current` はいまのやり方。無ければ `null`）。比較は消すのと同じ排他の中（`write` と同じ）。
+   * 省略は無条件（HTTP の `DELETE` を壊さない）。読めない形の行は版が無いので「無い」側に数える。
    *
-   * **版は消さない（#1309）。** `remove()` が消すのは「いまのやり方」の1件だけで、
-   * `listVersions` / `readVersion` で読める追記専用の履歴は、消した後もそのまま
-   * 残る——同じ slug を後で作り直したときに、前の系統の版を失わないためである。
+   * 版は消さない: `remove()` が消すのは「いまのやり方」の1件だけで、`listVersions` / `readVersion` の追記専用の履歴は残る
+   * （同じ slug を後で作り直したときに前の系統の版を失わないため）。
    */
   remove(slug: string, options?: RemovePracticeOptions): Promise<void>;
   /**
-   * 全部消す（ワークスペースのリセット専用。`PersonaStore.clear` と同じ形）。
-   * 消した件数を返す —— `WorkspaceResetSummary` が申告に使う。**消したのに申告に
-   * 出ない形を作らないこと**（静かに消える）。
-   *
-   * ⚠️ **版の履歴（`listVersions` / `readVersion`）も一緒に消える（#1309）。**
-   * `remove()` は版を残すが、`clear()` は人間が明示的に「全部忘れる」と決めた
-   * ワークスペースリセット専用の操作なので、`PersonaStore.clear` が保護状態
-   * （`human_touched_at` 等）ごと消すのと同じ理由で、版もろとも消してよい。
+   * 全部消す（ワークスペースのリセット専用。`PersonaStore.clear` と同じ形）。消した件数を返す（`WorkspaceResetSummary` が申告に使う）。消したのに申告に出ない形を作らない。
+   * 版の履歴（`listVersions` / `readVersion`）も一緒に消える: `clear()` は人間が明示的に「全部忘れる」と決めた操作なので、`PersonaStore.clear` が保護状態ごと消すのと同じ理由で版もろとも消してよい。
    */
   clear(): Promise<number>;
 
   /**
-   * ある slug の版の一覧（メタだけ。本文は含まない。#1309）。**版番号の昇順。**
-   *
-   * 無い slug には空配列を返す（throw しない——`list()` が空を正常として扱う
-   * のと同じ線）。`remove()` 後も、消える前に積んだ版はここに残り続ける。
+   * ある slug の版の一覧（メタだけ。本文は含まない）。版番号の昇順。
+   * 無い slug には空配列を返す（throw しない — `list()` が空を正常として扱うのと同じ線）。`remove()` 後も消える前に積んだ版は残り続ける。
    */
   listVersions(slug: string): Promise<PracticeVersionMeta[]>;
 
   /**
-   * 版を1つ、本文まで読む（#1309）。無ければ `null`
-   * （`read()` と同じ線——「無い」は throw ではない）。読めない行は
-   * `UnreadablePracticeError`（`version` も持つ）を投げる（issue #2011）。
-   *
-   * `remove()` された slug の版も読める——版は「いまのやり方」の存在に依存しない。
+   * 版を1つ、本文まで読む。無ければ `null`（`read()` と同じ線）。読めない行は `UnreadablePracticeError`（`version` も持つ）。
+   * `remove()` された slug の版も読める（版は「いまのやり方」の存在に依存しない）。
    */
   readVersion(slug: string, version: number): Promise<PracticeVersion | null>;
 }
@@ -3523,152 +2003,115 @@ export interface Stores {
   /**
    * 継続中の定期の依頼。
    *
-   * **省略可能にしないこと。** 器（fs / pg）が違うだけで上の層が見るものは同じで
-   * ある、が M4 の要件である。ここを任意にすると、片方の器では「定期的にやって」が
-   * 効かないという能力差が生まれる（north_star 禁止1）。
+   * **省略可能にしないこと。** 器（fs / pg）が違うだけで上の層が見るものは同じである、が M4 の要件。
+   * ここを任意にすると、片方の器では「定期的にやって」が効かないという能力差が生まれる（north_star 禁止1）。
    */
   schedules: ScheduleStore;
   /**
    * まだ処理し終えていない受信箱の合図。
    *
-   * **省略可能にしないこと**（`schedules` / `usage` と同じ理由）。ここが任意だと、
-   * 片方の器でだけデーモンの死で未読が消えるという能力差が生まれる（north_star 禁止1）。
+   * **省略可能にしないこと**（`schedules` / `usage` と同じ理由）。ここが任意だと、片方の器でだけデーモンの死で未読が消えるという能力差が生まれる（north_star 禁止1）。
    */
   inbox: InboxStore;
   /**
    * 引き受けたまま終わっていない仕事の台帳。
    *
-   * **省略可能にしないこと**（`inbox` と同じ理由）。ここが任意だと、片方の器でだけ
-   * 「その場で着手しなかった依頼が黙って消える」という能力差が生まれる。
+   * **省略可能にしないこと**（`inbox` と同じ理由）。ここが任意だと、片方の器でだけ「その場で着手しなかった依頼が黙って消える」という能力差が生まれる。
    */
   commitments: CommitmentStore;
   /**
-   * 仕事のやり方（#1055 段3）。
+   * 仕事のやり方。
    *
-   * **省略可能にしないこと**（`commitments` / `schedules` と同じ理由）。ここが
-   * 任意だと、片方の器でだけ「人間が書いたやり方が読めない」という能力差が
-   * 生まれる（north_star 禁止1）。
+   * **省略可能にしないこと**（`commitments` / `schedules` と同じ理由）。ここが任意だと、片方の器でだけ「人間が書いたやり方が読めない」という能力差が生まれる（north_star 禁止1）。
    */
   practices: PracticeStore;
   archive: TranscriptArchive;
   sessions: SessionRegistry;
   /**
    * ログインしたアカウントと、alteroid を使ってよいかの2値（`auth.ts`）。
+   * 「誰がこの API に触れるか」の話で、PRD「権限境界」（クローンが記憶を根拠に何を人間へ確認するか）とは別の層。混ぜない。
    *
-   * **これは「誰がこの API に触れるか」の話であって、PRD「権限境界」（クローンが
-   * 記憶を根拠に何を人間へ確認するか）とは別の層である。** 混ぜてはいけない。
-   *
-   * **NUL（issue #3011。teto の判断、2026-10-05・10-06。3実装とも）。**
-   *
-   * **読むだけの口は、NUL を含む鍵で引かれても断らず、「無い」と同じ結果を返す。**
-   * `getAccount`・`findIdentity`・`findAccessTokenBySha256`・`getLoginRequest`・`findAccountByEmail` は `null`、
-   * `listIdentities`・`listAccessTokens` は空配列、`markAccountLoggedIn`・`revokeAccountAccess`・`markAccessTokenUsed` は何もしない（投げない）、
-   * `removeUnreadableAccounts` は `unknown`、`revokeAccessToken`・`grantAccess`・`setAccountOwner` は `not_found`、
-   * `beginLoginExchange`・`claimLoginRequest` は `null`（`claimLoginRequest` は `issue` を呼ばない）。
+   * NUL（3実装とも）: 読むだけの口は、NUL を含む鍵で引かれても断らず「無い」と同じ結果を返す
+   * （`getAccount`・`findIdentity`・`findAccessTokenBySha256`・`getLoginRequest`・`findAccountByEmail` は `null`、`listIdentities`・`listAccessTokens` は空配列、
+   * `markAccountLoggedIn`・`revokeAccountAccess`・`markAccessTokenUsed` は何もしない、`removeUnreadableAccounts` は `unknown`、
+   * `revokeAccessToken`・`grantAccess`・`setAccountOwner` は `not_found`、`beginLoginExchange`・`claimLoginRequest` は `null`〈`claimLoginRequest` は `issue` を呼ばない〉）。
    * 書き込みで NUL の鍵を断るので、NUL を含む鍵の行はどの器にも存在しえない。既存の鍵に NUL を足した値でも一致させない。pg は DB に投げる前に短絡する。
    *
-   * **書く口は、鍵・参照キー・突き合わせに使う値の NUL を `NulNotAllowedError` で断り、本文の NUL は落として残す。**
+   * 書く口は、鍵・参照キー・突き合わせに使う値の NUL を `NulNotAllowedError` で断り、本文の NUL は落として残す。
    * - 断る: アカウントの `id`・`grantedBy`・`email`、identity の `subject`・`accountId`、トークンの `id`・`accountId`・`sha256`、
-   *   ログイン要求の `id`・`nonce`・`codeVerifier`・`claimSha256`・`redirectUri`・`accountId`、`grantAccess` の `by`
-   *   （`createAccountWithIdentity` と `claimLoginRequest` が発行するトークンも同じ）。
+   *   ログイン要求の `id`・`nonce`・`codeVerifier`・`claimSha256`・`redirectUri`・`accountId`、`grantAccess` の `by`（`createAccountWithIdentity` と `claimLoginRequest` が発行するトークンも同じ）。
    * - 落として残す: `displayName`、トークンの `label`、ログイン要求の `label`・`error`、identity の `email`。
    *
-   * **メールアドレス。** `AuthAccount.email` は一意の索引と衝突の検査に使うので鍵として断る（落とすと別のアカウントと一致しうる）。
-   * `AuthIdentity.email` はプロバイダの申告で毎回上書きされる本文なので落として残す。`findAccountByEmail` は NUL を含めば `null`。
-   * 例外の文には欄名だけを載せ、値は載せない。部品は `auth-input.ts`。
+   * メールアドレス: `AuthAccount.email` は一意の索引と衝突の検査に使うので鍵として断る（落とすと別のアカウントと一致しうる）。
+   * `AuthIdentity.email` はプロバイダの申告で毎回上書きされる本文なので落として残す。`findAccountByEmail` は NUL を含めば `null`。例外の文には欄名だけを載せ、値は載せない。部品は `auth-input.ts`。
    */
   auth: AuthStore;
-  /**
-   * 連携の鍵（外のサービスへ渡す、固定の1 source で外部イベントを送るだけの鍵。`integration-key.ts`）。
-   * アクセストークン（`auth`）と同じ層で、素の値は持たず sha256 だけを持つ。**3実装とも同じ IF を満たす。**
-   */
+  /** 連携の鍵（外のサービスへ渡す、固定の1 source で外部イベントを送るだけの鍵。`integration-key.ts`）。素の値は持たず sha256 だけを持つ。 */
   integrationKeys: IntegrationKeyStore;
   /**
-   * 人間が承認した Bash 許可の記録（Issue #863）。**省略可能にしないこと**
-   * （`schedules` / `inbox` と同じ理由——器が違うだけで上の層が見るものは
-   * 同じである、が M4 の要件で、片方の器でだけ「以降許可」が効かないという
-   * 能力差を作らない）。
+   * 人間が承認した Bash 許可の記録。
+   *
+   * **省略可能にしないこと**（`schedules` / `inbox` と同じ理由）。片方の器でだけ「以降許可」が効かないという能力差を作らない。
    */
   permissionGrants: PermissionGrantStore;
-  /**
-   * 実行環境プロファイル（`.zprofile` 相当）。**環境変数を器に増やす代わりの口**で
-   * あり、用途が増えるたびに実装を直さずに済ませるためにここに置く。
-   */
+  /** 実行環境プロファイル（`.zprofile` 相当）。環境変数を器に増やす代わりの口で、用途が増えるたびに実装を直さずに済ませるためにここに置く。 */
   profile: ProfileStore;
   /**
    * マネージャーへ降ろす環境変数の正本（名前→値）。
    *
-   * **省略可能にしないこと**（`schedules` / `inbox` と同じ理由）。ここを任意にすると、
-   * 片方の器でだけ「器を作り直しても鍵が戻る」という能力差が生まれる
-   * （north_star 禁止1）。
+   * **省略可能にしないこと**（`schedules` / `inbox` と同じ理由）。ここを任意にすると、片方の器でだけ「器を作り直しても鍵が戻る」という能力差が生まれる（north_star 禁止1）。
    */
   credentials: CredentialVaultStore;
   /**
-   * 人間の MCP 連携の登録（#325 段1）。
+   * 人間の MCP 連携の登録。
    *
-   * **省略可能にしないこと**（`credentials` と同じ理由）。ここを任意にすると、
-   * 片方の器でだけ「人間が使っている連携がクローンからも使える」が成り立たない
-   * という能力差が生まれる（north_star 禁止1）。
+   * **省略可能にしないこと**（`credentials` と同じ理由）。ここを任意にすると、片方の器でだけ「人間が使っている連携がクローンからも使える」が成り立たないという能力差が生まれる（north_star 禁止1）。
    */
   mcpServers: McpServerStore;
   /**
    * 人間が入れた plugin。
    *
-   * **省略可能にしないこと**（`mcpServers` と同じ理由。ここを任意にすると、片方の器でだけ
-   * 「入れた plugin が器を作り直しても残る」が成り立たないという能力差が生まれる）。
+   * **省略可能にしないこと**（`mcpServers` と同じ理由）。ここを任意にすると、片方の器でだけ「入れた plugin が器を作り直しても残る」が成り立たないという能力差が生まれる。
    */
   plugins: PluginStore;
   /**
    * 会話の既読の位置と基準時刻（全員で1組）。
    *
-   * **省略可能にしないこと**（`mcpServers` と同じ理由。ここが任意だと、片方の器でだけ
-   * 既読がデーモンの作り直しで消えるという能力差が生まれる）。
+   * **省略可能にしないこと**（`mcpServers` と同じ理由）。ここが任意だと、片方の器でだけ既読がデーモンの作り直しで消えるという能力差が生まれる。
    */
   conversationReads: ConversationReadStore;
   /**
-   * 認証トークンのプール（Issue #393）。
+   * 認証トークンのプール。
    *
-   * **省略可能にしないこと**（`schedules` / `inbox` と同じ理由）。器が違うだけで
-   * 上の層が見るものは同じである、という約束をここでも保つ——ここを任意にすると、
-   * 片方の器でだけ「枠に当たったときに他のトークンへ回せる」という能力差が
-   * 生まれる（north_star 禁止1）。
+   * **省略可能にしないこと**（`schedules` / `inbox` と同じ理由）。ここを任意にすると、片方の器でだけ「枠に当たったときに他のトークンへ回せる」という能力差が生まれる（north_star 禁止1）。
    */
   tokens: TokenPoolStore;
   /**
-   * Codex の ChatGPT ログイン（`auth.json` の中身）の正本（#3939。`codex-chatgpt-auth.ts`）。
+   * Codex の ChatGPT ログイン（`auth.json` の中身）の正本（`codex-chatgpt-auth.ts`）。
    *
-   * **省略可能にしないこと**（`tokens` と同じ理由）。ここを任意にすると、片方の器でだけ
-   * 「ログインが器を作り直しても残る」が成り立たないという能力差が生まれる（north_star 禁止1）。
+   * **省略可能にしないこと**（`tokens` と同じ理由）。ここを任意にすると、片方の器でだけ「ログインが器を作り直しても残る」が成り立たないという能力差が生まれる（north_star 禁止1）。
    */
   codexAuth: CodexChatgptAuthStore;
   /**
    * 利用状況の台帳。
    *
-   * **省略可能にしないこと**（`schedules` と同じ理由）。器が違うだけで上の層が
-   * 見るものは同じである、が M4 の要件で、ここを任意にすると「pg では消費が
-   * 見えるが fs では見えない」という能力差が生まれる（north_star 禁止1）。
+   * **省略可能にしないこと**（`schedules` と同じ理由）。ここを任意にすると「pg では消費が見えるが fs では見えない」という能力差が生まれる（north_star 禁止1）。
    */
   usage: UsageStore;
   /**
-   * 添付ファイル（画像・動画・ファイル）の置き場（Issue #3111）。記憶（memory）とは独立で、期限つきで預かる。
+   * 添付ファイル（画像・動画・ファイル）の置き場。記憶（memory）とは独立で、期限つきで預かる。
    *
    * **省略可能にしないこと**（`usage` と同じ理由。片方の器でだけ添付が預けられない能力差を作らない）。
    */
   attachments: AttachmentStore;
   /**
    * SDK のセッション生ログの預け先（M4 のクラウド構成でだけ付く）。
-   *
-   * **manager-runner はこれを持たない。** runner から預かった生ログをここへ落とすのは
-   * デーモンであり、runner には記憶ストアへ到達する鍵を渡さない
-   * （docs/architecture.md「非対称な可視性」）。
+   * manager-runner はこれを持たない: runner から預かった生ログをここへ落とすのはデーモンで、runner には記憶ストアへ到達する鍵を渡さない（docs/architecture.md「非対称な可視性」）。
    */
   sessionStore?: SessionStore;
   /**
-   * 預けた生ログの**末尾だけ**を読む口（#564 E1b）。`sessionStore` と対で付く。
-   *
-   * **省略可能なのは `sessionStore` と同じ理由である**（M4 のクラウド構成でだけ付く）。
-   * ⟹ fs 構成では拾い直せない。それは能力差だが、**fs には生ログの預け先そのものが
-   * 無い**ので、ここだけ揃えても埋まらない（`SessionTranscriptTail` の doc）。
+   * 預けた生ログの末尾だけを読む口。`sessionStore` と対で付く。
+   * 省略可能なのは `sessionStore` と同じ理由（M4 のクラウド構成でだけ付く）。fs 構成では拾い直せないが、fs には生ログの預け先そのものが無いので、ここだけ揃えても埋まらない（`SessionTranscriptTail`）。
    */
   sessionTranscriptTail?: SessionTranscriptTail;
 }

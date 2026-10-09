@@ -7,17 +7,7 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { readCgroupEventCounters, readExecutionResources } from './runner-resources.js';
 
-/**
- * 実行環境の資源の読み方（roadmap M5 / PR3「cgroup v2 で読む」）。
- *
- * **ここはメモリで押さえてある。** CPU 数だけで確かめると、器の絞り方によっては
- * cgroup とホストの数が偶然一致し、`os` モジュールを読む実装でも「正しく見える」
- * ことがある（値が合っているので違和感が出ない）。メモリは桁が違うので誤魔化せない —
- * 実測した runner の器では cgroup が 32GB、`os.totalmem()` が 346GB で **10.8倍**
- * 離れていた。
- */
-
-/** 実測値（runner の器の中・2026-08-19）。**ホストの値と混ぜないための対照である。** */
+/** CPU 数だけで確かめない: cgroup とホストの数が偶然一致すると `os` を読む実装でも通る。メモリは桁が違うので誤魔化せない。 */
 const HOST = { cores: 48, totalBytes: 346_488_946_688, freeBytes: 165_950_504_960 };
 
 let root: string;
@@ -26,7 +16,6 @@ beforeEach(() => {
   root = makeTempDirSync('alteroid-cgroup-');
 });
 
-/** cgroup v2 の器を偽装する（実測した書式そのまま）。 */
 function place(dir: string, files: Record<string, string>): void {
   mkdirSync(dir, { recursive: true });
   for (const [name, body] of Object.entries(files)) {
@@ -58,12 +47,9 @@ describe('実行環境の資源', () => {
 
     expect(resources.memory?.source).toBe('cgroup');
     expect(resources.memory?.limitBytes).toBe(32_000_000_000);
-    // **ここが押さえどころである。** `os.totalmem()` を読む実装はこの器で 346GB を
-    // 名乗り、同じホストに並んだ runner が全部同じ数を報告する。
     expect(resources.memory?.limitBytes).not.toBe(HOST.totalBytes);
 
     expect(resources.cpu?.source).toBe('cgroup');
-    // `3200000 / 100000` = 32 コア。ホストは 48 コアである。
     expect(resources.cpu?.cores).toBe(32);
     expect(resources.cpu?.cores).not.toBe(HOST.cores);
   });
@@ -74,8 +60,6 @@ describe('実行環境の資源', () => {
 
     const resources = await read();
 
-    // `memory.current`（1047240704）から `inactive_file`（182104064）を引いた分。
-    // 引かないと、`git clone` を1回した器が「使用中」に見えて宛先から外れる。
     expect(resources.memory?.usedBytes).toBe(1_047_240_704 - 182_104_064);
   });
 
@@ -85,7 +69,6 @@ describe('実行環境の資源', () => {
 
     const resources = await read();
 
-    // 上限が無いなら、ホストの値が本当にこの器の使える量である。**ただしそう言う。**
     expect(resources.memory?.source).toBe('os');
     expect(resources.memory?.limitBytes).toBe(HOST.totalBytes);
     expect(resources.memory?.usedBytes).toBe(HOST.totalBytes - HOST.freeBytes);
@@ -94,8 +77,6 @@ describe('実行環境の資源', () => {
   });
 
   it('「上限なし」を桁で表す器でも、それを上限として名乗らない', async () => {
-    // v1 の頃の書式。数として読めるので、素直に読むとホストより大きい上限を
-    // 「cgroup の上限」として報告してしまう。
     place(root, { ...CGROUP_FILES, 'memory.max': '9223372036854771712\n' });
     writeFileSync(join(root, 'proc-cgroup'), '0::/\n');
 
@@ -112,15 +93,11 @@ describe('実行環境の資源', () => {
       host: HOST,
     });
 
-    // **報告しないのではなく、読めたものを読めた出典で答える。** ここで何も
-    // 返さないと、cgroup を持たない器が配置の材料を1つも持てなくなる。
     expect(resources.memory?.source).toBe('os');
     expect(resources.cpu?.source).toBe('os');
   });
 
   it('cgroup 名前空間が分かれていない器では、自分の階層を読む', async () => {
-    // ホストの階層がそのまま見えている器。根っこ（v2 の root cgroup）には上限が
-    // 無いので、`/proc/self/cgroup` の位置を辿らないと資源を1つも読めない。
     place(join(root, 'docker', 'abc123'), CGROUP_FILES);
     writeFileSync(join(root, 'proc-cgroup'), '0::/docker/abc123\n');
 
@@ -132,14 +109,6 @@ describe('実行環境の資源', () => {
   });
 });
 
-/**
- * pids（#315「器の pids の合計がどこからも見えない」の案1）。
- *
- * **`pids` は cpu / memory と同じ作法で読むが、フォールバック先を持たない。**
- * cpu / memory は cgroup が無ければホスト（`os`）の値へ倒れられるが、
- * 「ホストの pids 上限」に相当する概念自体が無いので、pids は読めなければ
- * **無条件で欄ごと出さない**（0 にも `unknown` にもしない）。
- */
 describe('pids（プロセス数）', () => {
   it('cgroup の pids.current / pids.max を読む', async () => {
     place(root, { ...CGROUP_FILES, 'pids.current': '872\n', 'pids.max': '1000\n' });
@@ -150,11 +119,6 @@ describe('pids（プロセス数）', () => {
     expect(resources.pids).toEqual({ current: 872, max: 1000 });
   });
 
-  /**
-   * **これが cpu / memory との非対称そのものである。** 同じ器で cpu / memory は
-   * 上限なし（`max`）を読んで `os` の値へ倒れているのに、pids だけは欄ごと消える。
-   * 1本のテストで両方を確かめないと、「pids だけ倒れない」という差が実測されない。
-   */
   it('上限の無い器（pids.max が `max`）では、cpu/memory が os へ倒れても pids だけ欄ごと出ない', async () => {
     place(root, { ...CGROUP_FILES, 'pids.current': '872\n', 'pids.max': 'max\n' });
     writeFileSync(join(root, 'proc-cgroup'), '0::/\n');
@@ -163,7 +127,6 @@ describe('pids（プロセス数）', () => {
 
     expect(resources.memory?.source).toBe('cgroup');
     expect(resources.cpu?.source).toBe('cgroup');
-    // pids には `os` 相当の代替が無いので、`current` が読めていても出ない。
     expect(resources.pids).toBeUndefined();
   });
 
@@ -183,22 +146,12 @@ describe('pids（プロセス数）', () => {
       host: HOST,
     });
 
-    // **cpu / memory と pids の経路がここで分かれる**——これが「フォールバック先が
-    // 無い」の実測である。
     expect(resources.cpu?.source).toBe('os');
     expect(resources.memory?.source).toBe('os');
     expect(resources.pids).toBeUndefined();
   });
 });
 
-/**
- * cgroup イベント（`pids.events` の `max` / `memory.events` の `oom_kill`。
- * Issue #1517「最小の形」1）。
- *
- * **`pids` と同じく `os` 相当の代替を持たない。** 読めなければ欄ごと省略する
- * ——ここも `pids.current` / `pids.max` と同じ足場（`place` / `read` の
- * ヘルパー）に乗せてある。
- */
 describe('cgroup イベント（pids.events / memory.events。#1517）', () => {
   async function readEvents(procCgroup?: string) {
     return readCgroupEventCounters({
@@ -217,9 +170,6 @@ describe('cgroup イベント（pids.events / memory.events。#1517）', () => {
 
     const counters = await readEvents();
 
-    // `pids.events` は同じ鍵 `max` を複数行持ちうる書式ではないが（実機は1行）、
-    // ここは「1行目に当たる」ことを確かめるためにあえて2行にしてある——
-    // `find` は先頭から探すので最初の行が採られる。
     expect(counters).toEqual({ pidsMax: 3, oomKill: 2 });
   });
 
@@ -238,7 +188,6 @@ describe('cgroup イベント（pids.events / memory.events。#1517）', () => {
 
   it('片方のファイルが無くても、もう片方は独立して読める（コントローラを選んで有効化できるため）', async () => {
     place(root, { ...CGROUP_FILES, 'pids.events': 'max 5\n' });
-    // `memory.events` は置かない。
     writeFileSync(join(root, 'proc-cgroup'), '0::/\n');
 
     const counters = await readEvents();

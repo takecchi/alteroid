@@ -1,19 +1,5 @@
 import type { CodexChatgptAuthRecord, CodexChatgptAuthStore } from './codex-chatgpt-auth.js';
 
-/**
- * `CodexChatgptAuthStore`（#3939）の約束を、**実装1つに対して**測る。3実装（インメモリ
- * `testing.ts` / fs / pg）が同じ関数を呼ぶ（`credential-contract.ts` と同じ作法）。
- *
- * 測る性質:
- *
- * 1. 空なら `get()` は `null`。`compareAndSwap` は置かない（`false`）
- * 2. `replace` は無条件に置き、往復する（失敗の記録・null の欄も）
- * 3. **compare-and-swap**: 読んだ版と同じなら置き、違えば置かない。**古い版からの書き戻しが
- *    新しい値を潰さない**（2台が同じ版から書き戻すと、後の1台は負ける）
- * 4. `remove` は消し、消したかを返す。消した後は `compareAndSwap` が通らない
- *
- * 呼ぶ前のストアは空であること。終わったときは空に戻す。
- */
 export async function verifyCodexChatgptAuthContract(store: CodexChatgptAuthStore): Promise<void> {
   function fail(label: string, detail: unknown): never {
     throw new Error(
@@ -40,7 +26,6 @@ export async function verifyCodexChatgptAuthContract(store: CodexChatgptAuthStor
   const read = await store.get();
   if (JSON.stringify(read) !== JSON.stringify(first)) fail('replace が往復する', read);
 
-  // 2台の runner が同じ版（rev-0）から書き戻す。先の1台だけが通る。
   const fromA = record({ value: '{"tokens":{"refresh_token":"rt-A"}}', revision: 'rev-A' });
   const fromB = record({ value: '{"tokens":{"refresh_token":"rt-B"}}', revision: 'rev-B' });
   if (!(await store.compareAndSwap('rev-0', fromA))) fail('読んだ版と同じなら置く', null);
@@ -50,7 +35,6 @@ export async function verifyCodexChatgptAuthContract(store: CodexChatgptAuthStor
     fail('古い版からの書き戻しが新しい値を潰さない', afterRace?.revision);
   }
 
-  // 失敗の記録（版はそのまま）。
   const failed = record({
     value: fromA.value,
     revision: 'rev-A',

@@ -5,11 +5,6 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-/**
- * issue #1766 — PermissionDenied フックの入口で、拒否1回につき note を1行だけ
- * 日誌へ残す。マネージャー本人（agent_id 無し）と作業者（agent_id 有り）の両方で出る。
- */
-
 function fakeSdk(): { fn: typeof sdkQuery; options: Options[] } {
   const options: Options[] = [];
   const fn = ((input: { options: Options }) => {
@@ -58,7 +53,6 @@ async function run(extra: Record<string, unknown>, reason: string) {
   await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
   const hook = options[0]?.hooks?.PermissionDenied?.[0]?.hooks?.[0];
   if (hook === undefined) throw new Error('PermissionDenied フックが登録されていない');
-  // tool_input が無い入力は、一致鍵が作れず no-retry で終わる（ask を待たない）。
   await hook(
     {
       hook_event_name: 'PermissionDenied',

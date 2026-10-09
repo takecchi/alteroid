@@ -4,39 +4,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-/**
- * Issue #929 の最新コメントの項目6:「`#markProgressed()` の効果は、PR #1369
- * の歯では直接観測していない」。`runner-wakeup.test.ts` の #929 の歯
- * （`マネージャー自身の失敗した道具呼び出し（PostToolUseFailure）も
- * toolless に数えない`）は `#toolsSinceResult`（`worker_wait.toolless`）
- * だけを見ており、`#markProgressed()` のもう1つの効果——`#progressed` を
- * 立てて `#seed` を解放すること——には一度も触れていない。
- * `runner-post-tool-use-failure.test.ts` の doc はそちらへ「足した」と
- * 書いていたが、実際に足されたのは前者だけだった（この PR でその doc も
- * 直す）。
- *
- * ## 観測の形
- *
- * `#recoverFromFailedResume`（`runner.ts`）は `this.#progressed` が立って
- * いれば `'not-a-resume-failure'` を即座に返し、`renderSessionLog(this.#seed)`
- * を使った作り直しへは一度も進まない——`resume_failed` イベントを1件も
- * 出さないまま、通常の「セッションが閉じた」経路
- * （`await this.#finish('done', 'マネージャーのセッションが閉じた。')`）へ
- * 落ちる。**逆に `#progressed` が立っていなければ**、`resume_failed`
- * （`recovered: true`）を出して2本目のセッションを作り直す。この2本の
- * 差が、`#markProgressed()` が resume の外へ実際に及ぼす効果である。
- *
- * ## 足場
- *
- * `runner-resume-recreate-worker-count.test.ts` の偽 SDK（`host.resume()`
- * を直接叩き、`endStream()` で「resume したが一度も手が動く前に SDK が
- * 黙って落ちた」形を模す）に、`runner-post-tool-use-failure.test.ts` の
- * `options.hooks.PostToolUseFailure` を直接叩く形を合わせてある。
- * `createRunnerHost` を直接使う（`createManagerPool` を経由しない）のも
- * 同じ理由——resume を起こすには `host.resume()` を直接呼ぶのがいちばん
- * 素直である。
- */
-
 interface FakeSession {
   options: Options;
   finish(text: string, options?: { isError?: boolean }): Promise<void>;
@@ -101,7 +68,6 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
         uuid: 'uuid-init',
       } as unknown as SDKMessage;
 
-      // 入力を読み続ける裏方（読まないと送り手が詰まる）。中身は使わない。
       void (async () => {
         for await (const message of params.prompt as AsyncIterable<unknown>) void message;
       })();
@@ -182,18 +148,12 @@ describe('#929 項目6: PostToolUseFailure でも #progressed が立ち #seed �
       sessionId: 'sess-dead',
       cwd: '/work/project',
       request: '最初の依頼',
-      // renderSessionLog が null を返さないよう、素材を1件渡す
-      // （空配列/undefined だけ null を返す——渡していれば「作り直せる
-      // 材料はあった」ことになり、作り直さない理由が `#progressed` に
-      // あることがはっきりする）。
+      // 素材を1件渡す: renderSessionLog は空配列/undefined だけ null を返し、作り直さない理由が `#progressed` だと確かめられなくなる。
       entries: [{ type: 'user', message: { role: 'user', content: '前回の続き' } }],
     });
 
     const first = await nthSession(sessions, 0);
-    // マネージャー自身の道具（agent_id 無し）が失敗する
-    // ＝ `#onPostToolUseFailure` が `#markProgressed()` を呼ぶ。
     await first.usedToolFailure('Bash');
-    // resume したセッションが、その後もう一度何も返さずに黙って落ちる。
     first.endStream();
 
     const closed = await vi.waitFor(() => {
@@ -206,12 +166,7 @@ describe('#929 項目6: PostToolUseFailure でも #progressed が立ち #seed �
     expect(closed[0]?.managerId).toBe('mgr-1');
     expect(closed[0]?.status).toBe('done');
     expect(closed[0]?.reason).toBe('マネージャーのセッションが閉じた。');
-    // 作り直しの合図（resume_failed）は1件も出ない —— `#progressed` が
-    // 立っているので `#recoverFromFailedResume` は
-    // `'not-a-resume-failure'` で `renderSessionLog(#seed)` へ進む前に
-    // 即座に抜けている。
     expect(resumeFailedEvents(events)).toHaveLength(0);
-    // 2本目のセッションは立たない（作り直しが起きていない）。
     expect(sessions).toHaveLength(1);
   });
 
@@ -227,11 +182,8 @@ describe('#929 項目6: PostToolUseFailure でも #progressed が立ち #seed �
     });
 
     const first = await nthSession(sessions, 0);
-    // 道具は一度も使わない・失敗もしない（`usedToolFailure` を呼ばない）。
     first.endStream();
 
-    // `#progressed` が立っていないので `#recoverFromFailedResume` は
-    // `renderSessionLog(#seed)` まで進み、2本目のセッションを作り直す。
     await nthSession(sessions, 1);
 
     const resumeFailed = await vi.waitFor(() => {
@@ -243,7 +195,6 @@ describe('#929 項目6: PostToolUseFailure でも #progressed が立ち #seed �
     expect(resumeFailed[0]?.managerId).toBe('mgr-2');
     expect(resumeFailed[0]?.sessionId).toBe('sess-dead-2');
     expect(resumeFailed[0]?.recovered).toBe(true);
-    // 作り直したのだから「セッションが閉じた」の closed（'done'）は出ない。
     expect(closedEvents(events)).toHaveLength(0);
   });
 });

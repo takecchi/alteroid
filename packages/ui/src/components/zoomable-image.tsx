@@ -3,16 +3,8 @@ import { useState } from 'react';
 import { DialogContent, Dialog, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 
 /**
- * 押すと大きく見られる画像（#3811）。
- *
- * - 小さい画像は `<button>` で包む。キーボードで開け、閉じるとフォーカスは
- *   この button へ戻る（Radix の Dialog が返す）。代替テキストは `alt` のまま
- *   button の名前になる
- * - 開いた窓は画面に収まる大きさで出す。Esc・外側・右上の ✕ で閉じる
- * - 原寸は新しいタブで開くリンクにした（窓の中でスクロールさせる作りは足さない）。
- *   `blob:` URL は呼び出し側が持ち主で、**ここでは作らず・解放もしない**
- *   （発言の添付は画面から外れたときに呼び出し側が revoke する）
- * - 複数枚の左右送りは作らない（予算が約 10 KB しか無い。1 枚ずつ開き直せる）
+ * `blob:` URL を作らず・解放もしない: 持ち主は呼び出し側で、発言の添付は画面から外れたときに呼び出し側が revoke するため。
+ * 複数枚の左右送りを作らない: バンドル予算が約 10 KB しか無いため。
  */
 export function ZoomableImage({
   src,
@@ -25,13 +17,11 @@ export function ZoomableImage({
   title?: string;
   className?: string;
 }) {
-  // 失敗した src そのものを覚える。boolean にしないのは、src が変わったとき
-  // （発言の添付が再取得されて blob: が替わる）に effect で戻す手間を避けるため
+  // boolean にしない: src が変わったとき（添付の再取得で blob: が替わる）に effect で戻す手間を避けるため
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
   if (failedSrc === src) {
-    // 壊れた画像を拡大の窓へ渡さない。窓の中の画像も原寸リンクも同じ src で壊れるため。
-    // 文字は外部の画像を落とすリンク（`markdown-mdast.ts` の `imageLink`）と同じ「画像: 説明」にそろえる
+    // 壊れた画像を拡大の窓へ渡さない: 窓の中の画像も原寸リンクも同じ src で壊れるため
     const label = alt === '' ? '画像' : `画像: ${alt}`;
     return (
       <span className="text-sm text-muted-foreground">

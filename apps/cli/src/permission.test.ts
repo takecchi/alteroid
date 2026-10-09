@@ -7,22 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConfirmIo } from './confirm.js';
 import { captureStdout, pretendTty } from './test-support.js';
 
-/**
- * `alteroid permission` — 人間が承認した Bash 許可（Issue #863）を CLI から
- * 一覧・取り消しできること。`request_permission` / `answerApproval` 自体の
- * 意味論（何が記録されるか）は `packages/core/src/clone-core-loop.test.ts`（issue #863。
- * 旧 `clone.test.ts` は #1744 で分割済み）/
- * `packages/core/src/tools.test.ts` が持つ——ここで固定したいのは、CLI が
- * `GET /permission-grants` / `POST /permission-grants/:id/revoke`
- * （`apps/daemon/src/app.ts`）と交わす契約と、規則の広さの表示（判定は
- * `describePermissionRuleBreadth`。`packages/core/src/permission-rule.test.ts`
- * が意味論を固定しているので、ここでは「表示に出ること」だけを見る）。
- *
- * **`fetch` を差し替える。** `permission.ts` は `createClient`（hono/client）
- * 経由で `fetch` を叩くので、`inbox.test.ts` の `alteroid inbox show` と同じ
- * 形（globalThis.fetch のスタブ）で足りる——hono/client は素の `fetch` を
- * 内部で呼ぶだけである。
- */
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
@@ -140,13 +124,9 @@ describe('alteroid permission list', () => {
     expect(text).toContain('revoked-1');
     expect(text).toContain('[取り消し済み]');
     expect(text).toContain('取り消し: 2026-09-21T00:00:00.000Z');
-    // --all のときは「--all で見られます」の案内を重ねて出さない。
     expect(text).not.toContain('--all で取り消し済みも見られます');
   });
 
-  // Issue #1541: 0件の分岐が「取り消し済みが在るか」を見ずに、常に
-  // 「--all を付けると…」と案内していた。Web（`PermissionsBody` の
-  // `revokedCount > 0`）と条件・文言を揃える。
   it('記録が0件なら --all の案内を出さない（取り消し済みも無いので増える見込みが無い）', async () => {
     replies.push({ status: 200, body: { grants: [] } });
     const read = captureStdout();
@@ -186,7 +166,6 @@ describe('alteroid permission list', () => {
     );
     const webSource = readFileSync(webSourcePath, 'utf8');
 
-    // Web（`PermissionsBody`）の3分岐の逐語。
     expect(webSource).toContain('有効な許可はありません。');
     expect(webSource).toContain(
       '有効な許可はありません（「取り消し済みも見る」を押すと取り消し済みも含めて見られます）。',
@@ -230,12 +209,6 @@ describe('alteroid permission list', () => {
     expect(read()).toContain('最終使用: 2026-09-22T00:00:00.000Z');
   });
 
-  /**
-   * **規則の広さの段階表示**（#193 から畳んだ #863 の残項目）。判定そのもの
-   * （語数の境界）は `permission-rule.test.ts` が固定しているので、ここでは
-   * 「一覧に広さが出ること」と「狭い規則と広い規則が違う表示になること」
-   * だけを見る。
-   */
   it('規則の広さを段階で出す——狭い（3語）と広い（1語）は違う表示になる', async () => {
     replies.push({
       status: 200,
@@ -435,7 +408,6 @@ describe('alteroid permission revoke は、確認の前に在るかを確かめ�
 });
 
 describe('alteroid permission list — 長く使われていない許可（Issue #1804）', () => {
-  // 時計は引数で注入する（実時間の待ちも Date.now の差し替えも要らない）。
   const now = new Date('2026-09-30T00:00:00.000Z');
 
   it('古い許可にだけ印・日数・取り消しの案内が出て、末尾に要約が出る', async () => {
@@ -453,7 +425,7 @@ describe('alteroid permission list — 長く使われていない許可（Issue
     await permissionListCommand({ now });
 
     const text = read();
-    // 目印が無いと newPart が '' になり、下の not.toContain は空振りする。分ける前に在ることを確かめる（#2431）。
+    // 目印が無いと newPart が '' になり、下の not.toContain は空振りする。
     expect(text).toContain('id: new-1');
     const [oldPart = '', newPart = ''] = text.split('id: new-1');
     expect(oldPart).toContain('[長期未使用]');
@@ -569,7 +541,6 @@ describe('alteroid permission list — 読めない行（issue #2536）', () => 
     expect(text).toContain('alteroid permission remove-unreadable <id>');
     expect(text).toContain('id が取れない行が 1 件');
     expect(text).toContain('permission-grants.json');
-    // 読める許可はそのまま出る。
     expect(text).toContain('grant-1');
   });
 

@@ -16,13 +16,6 @@ beforeAll(async () => {
   await migratedTemplate();
 }, 60_000);
 
-/**
- * Issue #3859。読めない行（`plan.spec.type` が未知の値）の kind へ `POST /schedule` /
- * `schedule_create` すると、fs は「無い」扱いで黙って壊れた行を置き換え、pg は
- * `UnreadableScheduleError` が 500 まで落ちていた。fs・pg とも「読めない行なので編集できない」
- * と分かる 409 / 文言で断り、行は書き換えない。外してから作り直せば通る。
- */
-
 const BAD = 'bad-schedule';
 const BAD_REQUEST_TEXT = '壊れた行の本文（応答に出てはいけない）';
 const spec = { type: 'daily', at: '09:00' } as const;
@@ -124,7 +117,6 @@ describe.each([
         expect(body.error).toContain(`DELETE /schedule/${BAD}`);
         expect(JSON.stringify(body)).not.toContain(BAD_REQUEST_TEXT);
       }
-      // 行は壊れたまま（黙って置き換えていない）
       await expect(stores.schedules.get(BAD)).rejects.toMatchObject({
         name: 'UnreadableScheduleError',
       });
@@ -132,7 +124,6 @@ describe.each([
         true,
       );
 
-      // 外してから作り直せば通る
       const removed = await app.request(`/schedule/${BAD}`, {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },

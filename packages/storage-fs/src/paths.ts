@@ -1,88 +1,30 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-/**
- * ローカルの人格データディレクトリ（既定 `~/.alteroid/`）。
- * 記憶が素の Markdown ファイルであることが「人間がいつでも読んで直せる」の
- * 最短の実装である（docs/architecture.md「ストレージ」）。
- */
 export interface AlteroidPaths {
   root: string;
-  /** 記憶: Markdown */
   memory: string;
-  /** 日誌: JSONL（日付ごと） */
   journal: string;
-  /** ジョブ・承認待ち: JSON */
   jobs: string;
-  /** セッション生ログのアーカイブ: JSONL */
   archive: string;
-  /** 添付ファイル: `<id>/meta.json` と `<id>/data`（#3111 段1a）。memory とは独立 */
   attachments: string;
-  /** クローンのセッション id など、デーモンの状態 */
   state: string;
-  /**
-   * ログインしたアカウントとアクセス許可: JSON（0600）。
-   *
-   * **`memory/` には置かない。** 記憶は人間が手で書き換える前提の場所だが、
-   * ここは鍵の材料（トークンの sha256）と許可の2値が入る。
-   */
+  /** `memory/` には置かない: 記憶は人間が手で書き換える場所だが、ここは鍵の材料（トークンの sha256）が入る。 */
   auth: string;
-  /**
-   * 実行環境プロファイル: シェルスクリプト（0600）。
-   *
-   * **人間の `.zprofile` に当たるもの。** 素のスクリプトで置くのは、記憶が素の
-   * Markdown なのと同じ理由（いつでも開いて直せる）である。記憶ではないので
-   * `memory/` には置かない — こちらへ書いたものはクローンのシステムプロンプトに
-   * 載らない。
-   */
+  /** `memory/` には置かない: 記憶ではないので、こちらへ書いたものはクローンのシステムプロンプトに載らない。 */
   profile: string;
-  /**
-   * 実行環境プロファイルの行の置き場: `profile.d/<name>.sh`（0600）と、撒く先の
-   * `<name>.scope`（2026-10-03。`/etc/profile.d` と同じ形。`FsProfileStore` の doc）。
-   * 上の `profile`（1本の時代のファイル）は、あれば `default` 行へ移す旧形式の所在である。
-   */
   profileDir: string;
-  /**
-   * 利用状況の台帳: JSON（`usage.ts`）。
-   *
-   * `auth/` と同じ理由で `memory/` には置かない — 人間が手で書き換える前提の場所
-   * ではない（増分は `record` を経由してのみ動くべきで、直接編集すると差分の
-   * 基準がずれる）。
-   */
+  /** `memory/` には置かない: 増分は `record` を経由してのみ動くべきで、直接編集すると差分の基準がずれる。 */
   usage: string;
-  /**
-   * 認証トークンのプール: JSON（0600）。**回さない**（Issue #393「PR1」）。
-   *
-   * `auth` と同じ理由で `memory/` には置かない——値（トークン本体）を持つ場所で
-   * あって、人間が手で書き換える前提の場所ではない（`alteroid token` / `PUT
-   * /tokens` を経由する）。
-   */
+  /** `memory/` には置かない: 値（トークン本体）を持つ場所で、人間が手で書き換える前提ではない。 */
   tokens: string;
-  /**
-   * マネージャーへ降ろす環境変数の正本: JSON（0600）。
-   *
-   * `tokens` と同じ理由で `memory/` には置かない——値（鍵そのもの）を持つ場所で
-   * あって、人間が手で書き換える前提の場所ではない（`alteroid credential` /
-   * `PUT /credentials` を経由する）。
-   */
+  /** `memory/` には置かない: 値（鍵そのもの）を持つ場所で、人間が手で書き換える前提ではない。 */
   credentials: string;
-  /**
-   * 人間の MCP 連携の登録: JSON（0600。`.mcp.json` と同じ形。#325 段1）。
-   *
-   * `credentials` と同じ理由で `memory/` には置かない —— `env` / `headers` に
-   * 鍵が入りうる。
-   */
+  /** `memory/` には置かない: `env` / `headers` に鍵が入りうる。 */
   mcpServers: string;
-  /**
-   * 人間が入れた plugin: ディレクトリ（0700）に plugin ごと1つの JSON（`<name>.json`、0600）。
-   * 本体の files は JSON の中に base64 で持つ（展開しない）ので、path がファイルシステムの path になる
-   * ことはない。`mcpServers` と同じ理由で `memory/` には置かない。
-   */
+  /** 本体の files は JSON の中に base64 で持つ（展開しない）: path がファイルシステムの path になることを避けるため。 */
   plugins: string;
-  /**
-   * Codex の ChatGPT ログイン（`auth.json` の中身）の正本: JSON（0600。#3939）。
-   * `credentials` と同じ理由で `memory/` には置かない（値そのものを持つ）。
-   */
+  /** `memory/` には置かない: 値そのものを持つ。 */
   codexAuth: string;
 }
 

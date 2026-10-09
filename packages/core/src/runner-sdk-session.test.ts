@@ -5,21 +5,6 @@ import type { AgentManagerSession } from './agent-session.js';
 import { RunnerFenceError } from './runner-protocol.js';
 import { RunnerSdkSession } from './runner-sdk-session.js';
 
-/**
- * `runner-sdk-session.ts` の歯。**純粋なクラスなので I/O のモック無しで
- * 全分岐に通せる**（`runner-resume-state.test.ts` / `runner-worker-wait-window.test.ts`
- * と同じ作法。前例は PR #1565 / #1581 ほか）。
- *
- * ここが固定するのは、切り出した15フィールドの**状態の器としての性質**
- * ——`open` / `teardownForRecreate` の順序、`checkFence` の判定、token
- * rotation の小さな状態遷移、入力の待ち行列、`trackClosing` の「自分が
- * 控えた Promise だけ消す」性質である。`RunnerSession` が「いつ開く／畳むか・
- * どの順で畳むか・`#emit` するかどうか」を決める判断は、既存のブラック
- * ボックステスト（`runner-stop.test.ts` / `runner-stop-finish-order.test.ts` /
- * `runner-fence.test.ts` / `runner-closed-system-error.test.ts` 等）が引き続き
- * 持つ——ここでは扱わない。
- */
-
 function fakeQuery(): AgentManagerSession {
   return { close: vi.fn() } as unknown as AgentManagerSession;
 }
@@ -69,7 +54,6 @@ describe('RunnerSdkSession — open / closeQuery / teardownForRecreate（`#open`
 
   it('closeQuery は query.close() を呼ぶ（query が無ければ何もしない）', () => {
     const s = new RunnerSdkSession();
-    // query が無い状態で呼んでも例外は投げない。
     expect(() => s.closeQuery()).not.toThrow();
 
     const q = fakeQuery();
@@ -193,7 +177,6 @@ describe('RunnerSdkSession — checkFence（fencing token の検査と記録。r
     const s = new RunnerSdkSession();
     s.checkFence({ fence: 5, ttlMs: 60_000 }, 'mgr-1');
     expect(() => s.checkFence({ fence: 4, ttlMs: 1 }, 'mgr-1')).toThrow(RunnerFenceError);
-    // 書き換わっていない。
     expect(s.leaseTtlMs).toBe(60_000);
   });
 
@@ -305,7 +288,6 @@ describe('RunnerSdkSession — 入力の待ち行列（enqueueInput / dequeueInp
     s.wakeInput();
     await Promise.all([p1, p2]);
     expect(count).toBe(2);
-    // 2回目の wakeInput は誰も待っていないので何も起きない（例外も投げない）。
     expect(() => s.wakeInput()).not.toThrow();
   });
 });
@@ -318,7 +300,6 @@ describe('RunnerSdkSession — trackClosing（`stop()` / `#finish()` の畳み�
       release = resolve;
     });
     const tracked = s.trackClosing(() => running);
-    // まだ終わっていない間は、控えた Promise が読める。
     expect(s.closing).not.toBeNull();
     release();
     await tracked;
@@ -346,26 +327,18 @@ describe('RunnerSdkSession — trackClosing（`stop()` / `#finish()` の畳み�
       releaseSecond = resolve;
     });
 
-    // 1本目が走り始め、#closing を控える。
     const firstTracked = s.trackClosing(() => firstDone);
     const firstClosing = s.closing;
     expect(firstClosing).not.toBeNull();
 
-    // 1本目がまだ終わらないうちに2本目が走り始め、#closing を上書きする
-    // （`#finishBody` の同時多重起動と同じ形——`trackClosing` 自体は
-    // これを防がない。防いでいるのは呼び出し元の門である）。
     const secondTracked = s.trackClosing(() => secondDone);
     const secondClosing = s.closing;
     expect(secondClosing).not.toBe(firstClosing);
 
-    // 1本目を先に終わらせる。1本目の finally は「自分が控えた Promise
-    // （firstClosing）と、いまの #closing（secondClosing）が違う」ので、
-    // 2本目がまだ握っている #closing を消さない。
     releaseFirst();
     await firstTracked;
     expect(s.closing).toBe(secondClosing);
 
-    // 2本目を終わらせると、ようやく #closing が消える。
     releaseSecond();
     await secondTracked;
     expect(s.closing).toBeNull();

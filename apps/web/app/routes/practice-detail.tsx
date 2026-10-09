@@ -41,29 +41,9 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
   return { slug: params.slug };
 }
 
-/**
- * やり方の詳細（#1055 段3③）。`memory-detail.tsx` と同じ骨組み
- * （プレビュー / 編集タブ、書きかけを state 側に置いてタブ往復で失わない）。
- *
- * **`memory-detail.tsx` との違いは、書く欄が本文だけではないこと。**
- * `PracticeStore.write` は `slug` / `kind` / `title` / `content` の全文置換
- * なので（部分更新の口を持たない——`practiceSchema` の doc）、`kind` と
- * `title` も編集タブに置く。**`kind` は自由入力にする**——プルダウンの固定
- * リストにすると、`practiceKindSchema` を enum にしないと決めた理由
- * （仕事の型を実装専用に狭めない）が画面側で骨抜きになる。
- *
- * **「履歴」タブが3つ目に増えた（#1309）。** `PracticeStore.write` は全文置換
- * だが、書いた後の本文は追記専用の版として残る——このタブは版の一覧（メタだけ）
- * と、選んだ版の本文（読み取り専用）を出す。**ここに「この版へ戻す」ボタンは
- * 置かない**——版を戻す操作は結局 `write()`（全文置換）を1回呼ぶのと同じなので、
- * 人間は中身を見て「編集」タブへ手でコピーすればよく、専用の口を増やす理由が無い。
- */
-/**
- * 一覧の右のペインに出る（親の経路 `practices.tsx` の `ListDetail`）。**親は同じままで子の `:slug` だけが
- * 変わる**ので、素のままだと別のやり方へ移っても同じ部品が使い回され、下書き・保存時刻・開いていた版・
- * タブが次のやり方へ持ち越される。**`key={slug}` で作り直す。** 未保存の編集があるときは、作り直しの前に
- * `LeaveGuardScope` が移動そのものを止めて確認を出す（「破棄して離れる」を選んだときだけ移り、作り直される）。
- */
+// `kind` は自由入力にする: プルダウンの固定リストにすると、`practiceKindSchema` を enum にしないと決めた理由（仕事の型を実装専用に狭めない）が骨抜きになる。
+// 履歴タブに「この版へ戻す」は置かない: 戻す操作は `write()` の全文置換と同じで、中身を見て「編集」タブへ手でコピーすれば足りる。
+// `key={slug}` で作り直す: 親は同じで `:slug` だけ変わるので、素のままだと下書き・開いていた版・タブが次のやり方へ持ち越される。
 export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
   return (
     <LeaveGuardScope key={loaderData.slug}>
@@ -86,17 +66,10 @@ function PracticeDetailBody({ slug }: { slug: string }) {
     error: historyDetailError,
     isLoading: historyDetailLoading,
   } = usePracticeVersion(slug, historyVersion);
-  // **⚠️ すべてのタブが常にマウントされている（radix-ui の Tabs.Content は
-  // `hidden` 属性で隠すだけで、非活性でも DOM から外れない——Presence の
-  // 内部実装が children を関数として渡すことで自身の forceMount を立てる）。**
-  // ⟹ 履歴タブを開いていない試験でもこのコードは評価される。応答の形が想定と
-  // 違っても（例: 試験のスタブが `/versions` 宛の応答を素通りさせた場合）
-  // クラッシュしない形にする。
+  // 全タブが常にマウントされる（radix-ui の Tabs.Content は `hidden` で隠すだけ）ので、履歴タブを開いていなくても評価される。応答の形が想定と違ってもクラッシュしない形にする。
   const historyVersions = history?.versions ?? [];
 
-  // `undefined` は「まだ人間が触っていない」——`memory-detail.tsx` と同じ作法。
-  // 取得した値を state へ写さないので、SSE が無効化を回して再取得が走っても
-  // 書きかけが消えない。
+  // 取得した値を state へ写さない: SSE の無効化で再取得が走っても書きかけが消えないように。
   const [draftKind, setDraftKind] = useState<string | undefined>(undefined);
   const [draftTitle, setDraftTitle] = useState<string | undefined>(undefined);
   const [draftContent, setDraftContent] = useState<string | undefined>(undefined);
@@ -104,23 +77,13 @@ function PracticeDetailBody({ slug }: { slug: string }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [savedAt, setSavedAt] = useState<string | undefined>(undefined);
-  /**
-   * 下書きを書き始めた時点で読んでいた版（`ifMatch` に送る。#2853。`memory-detail.tsx` と同じ）。
-   * 取得した版へ追従させない——別の書き手が書いた後に再取得が走っても、人間が見て書き始めた版を
-   * 前提にし続けるから、衝突が検出できる。`null` は「読んだ時には無かった」。
-   */
+  // 取得した版へ追従させない: 別の書き手が書いた後に再取得が走っても、人間が見て書き始めた版を前提にし続けないと衝突を検出できない。
   const [baseVersion, setBaseVersion] = useState<string | null | undefined>(undefined);
-  /**
-   * 直前の保存の応答が返した版（`replaces` はそのとき前提にした版）。再取得が追いつく前に編集を
-   * 再開しても、古い `data.version` を前提にして偽の 409 を起こさないために持つ。
-   * 再取得が `replaces` 以外の版を返したら（別の書き手が書いた）、そちらを信じる。
-   */
+  // 再取得が追いつく前に編集を再開しても、古い `data.version` を前提にして偽の 409 を起こさないために持つ。
   const [lastSaved, setLastSaved] = useState<
     { replaces: string | null; version: string } | undefined
   >(undefined);
-  /** 保存が 409 で断られたときの、いまの版（下書きは捨てずに残す）。 */
   const [conflict, setConflict] = useState<PracticeConflictError | undefined>(undefined);
-  /** 削除が 409 で断られたときの、いまの版（消していない。自動では再送しない。#2959）。 */
   const [deleteConflict, setDeleteConflict] = useState<PracticeConflictError | undefined>(
     undefined,
   );
@@ -131,7 +94,6 @@ function PracticeDetailBody({ slug }: { slug: string }) {
 
   const hasDraft =
     draftKind !== undefined || draftTitle !== undefined || draftContent !== undefined;
-  /** 書き始めた瞬間に、いま読んでいる版を前提として控える。 */
   function touch() {
     if (hasDraft) return;
     const fetched = data === undefined ? null : data.version;
@@ -143,7 +105,6 @@ function PracticeDetailBody({ slug }: { slug: string }) {
   const kind = draftKind ?? loadedKind;
   const title = draftTitle ?? loadedTitle;
   const content = draftContent ?? loadedContent;
-  /** 応答が返った時点の「いまの入力」（送った時点と比べる。issue #3515）。 */
   const latestFields = useLatest({ kind, title, content });
 
   const dirty =
@@ -151,58 +112,41 @@ function PracticeDetailBody({ slug }: { slug: string }) {
     (draftTitle !== undefined && draftTitle !== loadedTitle) ||
     (draftContent !== undefined && draftContent !== loadedContent);
 
-  // やり方が無い slug は 404 になる。それは「これから書く」場合なので、
-  // 失敗ではなく空の編集画面として扱う（`memory-detail.tsx` と同じ理由）。
   const notFound = error !== undefined && (error as { status?: number }).status === 404;
   const missing = notFound && data === undefined;
-  // 読めた後の取り直しが 404（別の手段で消された。issue #3092）。`data` が残っているので
-  // `missing`（これから書く）には含めない。
   const goneAfterRead = notFound && data !== undefined;
 
-  // **取れなかったのを空のやり方と描かない**（issue #2319）。`memory-detail.tsx`
-  // と同じ理由: 読めていないまま404以外で失敗したとき、失敗は上の `ErrorNote`
-  // が言い、空の編集欄と保存ボタン（既存のやり方を空で上書きできてしまう）は出さない。
-  // 404と、再検証の失敗で `data` が残っているときは当たらない。
+  // 取れなかったのを空のやり方と描かない: 空の編集欄と保存ボタンを出すと、既存のやり方を空で上書きできてしまうため。
   const loadFailed = data === undefined && error !== undefined && !missing;
 
-  // `kind` は必須（`practiceKindSchema` が `min(1)`）。空のまま送ると 400 が
-  // 返るだけなので、ここで弾いて待たせない。
+  // `kind` が空だと 400 が返るだけなので、ここで弾いて待たせない。
   const canSave = dirty && kind.trim() !== '';
 
   const [tab, setTab] = useState<string | undefined>(undefined);
   const activeTab = tab ?? (missing || content.trim() === '' ? 'edit' : 'preview');
 
-  /**
-   * **未保存の変更があるまま離れない（#2764。`memory-detail.tsx` と同じ穴）。** アプリ内の移動
-   * （リンク・戻る）は確認を挟み、タブを閉じる・再読み込みはブラウザの警告に任せる。
-   * 削除が通った後の移動は止めない。
-   */
   const releaseLeaveGuard = useReleaseLeaveGuard();
   useReportDirty('draft', dirty);
 
-  /** `ifMatch` を渡して保存する。衝突したら下書きを残して、いまの版を見せる。 */
   function save(ifMatch: string | null | undefined = baseVersion) {
-    // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
+    // ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通るので、保存中の弾きはここに置く。
     if (busy) return;
     // 衝突のあとは、再取得で「変更なし」に見えても、人間が選んだ上書きは通す。
     if (!canSave && !(conflict !== undefined && hasDraft && kind.trim() !== '')) return;
     setBusy(true);
     setFailure(undefined);
-    // 送った値を控える。成功のあと、いまの入力がこれと同じときだけ畳む（issue #3515）。
     const sent = { kind, title, content };
     savePractice(slug, sent.kind, sent.title, sent.content, ifMatch)
       .then(({ practice, version }) => {
         setSavedAt(practice.updatedAt);
         setLastSaved({ replaces: data === undefined ? null : data.version, version });
-        // 削除の衝突が見せた版は、この保存で古くなった。残すと次の削除が古い版を送る。
+        // 残すと次の削除が古い版を送る。
         setDeleteConflict(undefined);
         const now = latestFields.current;
         if (now.kind === sent.kind && now.title === sent.title && now.content === sent.content) {
-          // 保存できたら下書きを畳んで、またサーバの値に追従させる。
           discardDraft();
         } else {
-          // 応答を待つ間に打ち足した分は残す。保存できた版を前提に進め、次の保存が
-          // 自分の保存と衝突しないようにする。
+          // 打ち足した分を残すので、保存できた版を前提にする。さもないと次の保存が自分の保存と衝突する。
           setBaseVersion(version);
           setConflict(undefined);
         }
@@ -214,7 +158,6 @@ function PracticeDetailBody({ slug }: { slug: string }) {
       .finally(() => setBusy(false));
   }
 
-  /** 最新を読み直す＝自分の下書きを捨てて、いまの版に追従する。 */
   function discardDraft() {
     setDraftKind(undefined);
     setDraftTitle(undefined);
@@ -235,15 +178,9 @@ function PracticeDetailBody({ slug }: { slug: string }) {
 
   return (
     <div className="flex min-h-full flex-col">
-      {/*
-        中身は一覧の右のペインに出る（親の経路 `practices.tsx` の `ListDetail`）ので、画面の枠
-        （`Page`）も戻るリンクも持たない。画面の h1 は親が持ち、ここの見出しは h2。狭い画面では
-        `ListDetail` の「やり方の一覧を開く」が一覧への戻り口になる。
-      */}
       <DocumentTitle>{`${slug} - やり方`}</DocumentTitle>
       <header className="mb-4 flex shrink-0 items-start justify-between gap-4">
         <div className="min-w-0">
-          {/* 名前は最大128文字・空白なし。`break-all` で幅に収める（#2763） */}
           <h2 className="font-mono text-base font-semibold break-all">{slug}</h2>
           {description !== undefined && (
             <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
@@ -260,7 +197,6 @@ function PracticeDetailBody({ slug }: { slug: string }) {
               >
                 削除
               </Button>
-              {/* 取り消せない操作（本文ごと消える）なので、押した瞬間には実行せず確認を挟む（#2781） */}
               <ConfirmDialog
                 open={confirmingDelete}
                 onOpenChange={setConfirmingDelete}
@@ -271,10 +207,9 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                 onConfirm={() => {
                   setBusy(true);
                   setConfirmingDelete(false);
-                  // 読んだ版を送る（#2959）。衝突のあとに開き直したときは、見せたいまの版を送る。
                   deletePractice(slug, deleteConflict?.current?.version ?? data.version)
                     .then(() => {
-                      // 応答待ちに別のやり方へ移っていたら、その画面を動かさない（#3802）。
+                      // 応答待ちに別のやり方へ移っていたら、その画面を動かさない。
                       if (!mounted.current) return;
                       releaseLeaveGuard();
                       navigate('/practices');
@@ -306,12 +241,6 @@ function PracticeDetailBody({ slug }: { slug: string }) {
       </header>
 
       {!missing && !goneAfterRead && <ErrorNote error={error} className="mb-3" />}
-      {/*
-        **読めた後の取り直しが 404 のとき（issue #3092）。** このやり方が別の手段で消された（または
-        見つからなくなった）。`missing`（まだ無い＝これから書く）とは別で、本文と書きかけは消さずに
-        残し、その旨を注記する。保存は読んだ版を `ifMatch` に送る既存の経路のままなので、消された
-        ものを黙って蘇らせず、「ほかで消された」の確認（自分の内容で上書きする）に当たる。
-      */}
       {goneAfterRead && (
         <p role="alert" className="mb-3 rounded-lg border border-warn/50 p-3 text-sm text-warn">
           このやり方は、読んだ後に別の手段で消された（または見つからない）。下の内容は前に読めたときのもので、書きかけもそのまま残してある。保存するときは、消されたものを書き戻すかどうかを確認する。
@@ -411,12 +340,6 @@ function PracticeDetailBody({ slug }: { slug: string }) {
             </Tabs.Trigger>
           </Tabs.List>
 
-          {/*
-            **`draftKind` / `draftTitle` / `draftContent` はこの `Tabs.Root` の外
-            （コンポーネント自身）に在る。** 非活性の `Tabs.Content` は既定で
-            unmount されるが、書きかけの実体は state 側に残るので、タブを行き来
-            しても消えない（`memory-detail.tsx` と同じ作法）。
-          */}
           <Tabs.Content value="preview" className="min-h-0 flex-1 overflow-y-auto">
             <p className="mb-2 text-xs text-muted-foreground">
               <span className="mr-1.5 text-[10px]">
@@ -467,8 +390,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                   touch();
                   setDraftContent(event.target.value);
                 }}
-                // 記憶の詳細（`MarkdownEditor`）と同じに、内容に合わせて伸び、60vh から先は内側をスクロールする。
-                // 以前は `flex-1` で親の高さを埋めていたが、伸びる欄には固定の flex 基準が邪魔なので外した（下限は 50vh のまま）。
+                // `flex-1` にしない: 伸びる欄には固定の flex 基準が邪魔になる。
                 maxHeight="60vh"
                 onSubmitShortcut={() => save()}
                 submitDisabled={!canSave || busy}
@@ -490,20 +412,11 @@ function PracticeDetailBody({ slug }: { slug: string }) {
               <p className="mb-2 text-xs text-muted-foreground">
                 保存のたびに版が1つ増える。削除しても版は消えない。
               </p>
-              {/*
-                **読めた `data` が在るなら、再検証の失敗で一覧を消さない（issue
-                #2266）。** SWR は失敗しても前回の `data` を残す。失敗は一覧の
-                上の注記で知らせる（黙って消さない）。
-              */}
               {historyError !== undefined && history !== undefined && (
                 <ErrorNote error={historyError} className="mb-2" />
               )}
               {historyError !== undefined && history === undefined ? (
-                // **「読めていない」を「読み込み中」と区別する（issue #2139）。**
-                // `error` を受けていなかったので、取れなかったときも
-                // `Spinner` が回り続けていた——`usePractice(slug)`（このカード
-                // の本体、`error`/`isLoading` の直上）と同じ判断をここでも
-                // 採る。
+                // 取れなかったのを読み込み中と区別する: `Spinner` のまま回り続けないように。
                 <ErrorNote error={historyError} />
               ) : history === undefined ? (
                 <Spinner />
@@ -543,15 +456,13 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                   左の一覧から版を選ぶと、本文をここに読み取り専用で出す。
                 </p>
               ) : historyDetailError !== undefined && historyDetail === undefined ? (
-                // 版1本のほうも同じ判断（issue #2139）。`historyVersion` を
-                // 選んだ後に取れなかった場合、`Spinner` のまま回り続けない。
+                // 取れなかったのを読み込み中と区別する: `Spinner` のまま回り続けないように。
                 <ErrorNote error={historyDetailError} />
               ) : historyDetailLoading || historyDetail === undefined ? (
                 <Spinner />
               ) : (
                 <>
                   {historyDetailError !== undefined && (
-                    // 読めた版の本文は残す（issue #2266）。失敗は注記で知らせる。
                     <ErrorNote error={historyDetailError} className="mb-2" />
                   )}
                   <p className="mb-2 text-xs text-muted-foreground">

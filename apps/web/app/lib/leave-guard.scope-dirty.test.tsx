@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 画面の外（認証の門）へ「どこかが書きかけか」を渡す口（#3912）。複数の `LeaveGuardScope` の合算。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';

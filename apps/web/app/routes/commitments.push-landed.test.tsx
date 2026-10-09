@@ -23,7 +23,6 @@ afterEach(() => {
 
 const BODY = '金曜までに週次レビューを出す';
 
-// `reply` が最初の POST の応答。`stores` が偽なら、サーバには届かなかったことにする。
 function stubServer(options: { stores: boolean; reply: () => Response }) {
   const stored: Commitment[] = [];
   const stub = { posts: 0, stored };
