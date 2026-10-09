@@ -469,6 +469,7 @@ const attachmentUploadQuery = z.object({
   type: z.string().regex(/^[\w!#$&^.+-]+\/[\w!#$&^.+-]+(\s*;.*)?$/, 'MIME の形ではない'),
 });
 
+// 宣言された MIME は人間が決めた文字列なので、ヘッダに入れて壊れない形でなければ `application/octet-stream` に倒す。
 const SAFE_MEDIA_TYPE = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
 
 function attachmentDisposition(name: string): string {
@@ -480,6 +481,7 @@ function attachmentDisposition(name: string): string {
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
+// トークンや資格そのものは入れない（識別子だけ）。
 function uploaderOf(principal: Principal): string {
   if (principal.kind === 'operator') return 'operator';
   if (principal.kind === 'integration') return `integration:${principal.keyId}`;
@@ -992,6 +994,7 @@ function describeActor(principal: Principal): string {
   return `許可されたアカウント（${principal.account.id}）による操作`;
 }
 
+// 鍵の値は含めない（識別子だけ）。
 function installerOf(principal: Principal): string {
   if (principal.kind === 'operator') return 'operator';
   if (principal.kind === 'integration') return `integration:${principal.keyId}`;
@@ -1327,6 +1330,7 @@ async function mutateProfile(
     };
   }
 
+  // 差し替え自体はもう効いているので、配布の成否は後から2行目として足す（落ちても 500 にしない。値は1文字も書かない）。
   const entries = result.entries ?? [];
   const composed = result.composed ?? composedFingerprints(entries);
   const allScript = composeProfileScript(entries, 'all');
@@ -2716,6 +2720,7 @@ export function createApp(deps: AppDeps) {
                 event: 'open',
                 data: JSON.stringify({ conversationId, inProgress: inProgress !== null, pending }),
               });
+              // いままでの分を先、続き（`pump` の列）を後に流す: `pump` の列には `attach` より後の出来事だけが入るので、順序も重複も崩れない。
               for (const event of inProgress ?? []) {
                 await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
               }
@@ -3585,6 +3590,7 @@ export function createApp(deps: AppDeps) {
           }
           throw error;
         }
+        // 書き換え自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
         const entry = await appendJournalOrDrop(
           stores,
           {
@@ -3687,6 +3693,7 @@ export function createApp(deps: AppDeps) {
           }
           throw error;
         }
+        // 削除自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
         await appendJournalOrDrop(
           stores,
           {
@@ -3850,6 +3857,7 @@ export function createApp(deps: AppDeps) {
           }
           throw error;
         }
+        // 書き換え自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
         await appendJournalOrDrop(
           stores,
           {
@@ -3961,6 +3969,7 @@ export function createApp(deps: AppDeps) {
           }
           throw error;
         }
+        // 削除自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
         if (existing !== null) {
           await appendJournalOrDrop(
             stores,
@@ -5066,6 +5075,7 @@ export function createApp(deps: AppDeps) {
       },
     )
 
+    // 値（`altk_...`）も sha256 の全体も返さない（見分けるための先頭12桁だけ）。連携の鍵そのものは資格に入れない（`humanOnly` は二重の門）。
     .get(
       '/integration-keys',
       describeRoute({
@@ -5701,6 +5711,7 @@ export function createApp(deps: AppDeps) {
           );
           throw error;
         }
+        // 仕込み・直しは効いているので、後で分かった区別は2行目として足す（落ちても 500 にしない。`appendJournalOrDrop`）。
         await appendJournalOrDrop(
           stores,
           {
@@ -5749,6 +5760,7 @@ export function createApp(deps: AppDeps) {
         // `get(kind)` を先に呼ばない: `get` は読めない行で throw するので、壊れた行を外す目的まで届かない。`removeIfPresent` は3値を1回の往復で返すので、読んでから書くまでの隙間も無い。
         const removed = await stores.schedules.removeIfPresent(kind);
         if (removed === null) return c.json({ error: 'not found' as const }, 404);
+        // 外すこと自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
         await appendJournalOrDrop(
           stores,
           {
@@ -6063,6 +6075,7 @@ export function createApp(deps: AppDeps) {
             409,
           );
         }
+        // 片付けること自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
         await appendJournalOrDrop(
           stores,
           {
@@ -6191,6 +6204,7 @@ export function createApp(deps: AppDeps) {
             409,
           );
         }
+        // 編集自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
         await appendJournalOrDrop(
           stores,
           {
@@ -7131,6 +7145,7 @@ export function createApp(deps: AppDeps) {
           }
           throw error;
         }
+        // 差し替え自体はもう効いているので、後で分かった配布結果は2行目として足す（落ちても 500 にしない。値は書かない）。
         const delivered = applied.runners
           .map(
             (r) =>
@@ -7452,6 +7467,7 @@ export function createApp(deps: AppDeps) {
             ? '取り元不明（行を読めなかった）'
             : `scope: ${found.scope}、取り元: ${describePluginSource(found.source)}`;
 
+        // 日誌を先に書き、書けなければ消さずに 500: 記録の無い変更を作らない。
         try {
           await deps.stores.journal.append({
             type: 'decision',
@@ -7975,6 +7991,7 @@ export function createApp(deps: AppDeps) {
           if (error instanceof TokenPoolInputError) {
             return c.json({ error: error.message }, 400);
           }
+          // 日誌は先に書いたが保存できなかったので、打ち消しの行を足す（`PUT /credentials` と同じ形）。
           if (state.written) {
             await appendJournalOrDrop(
               deps.stores,
@@ -7997,7 +8014,7 @@ export function createApp(deps: AppDeps) {
           );
           return c.json({ error: 'トークンのプールを保存できなかった' as const }, 500);
         }
-        // 狭める側だけの変更は保存した後に日誌を書く（広げる側を含む回は保存の前に書いてある）。
+        // 狭める側だけの変更は保存した後に日誌を書き、書けなければ跡だけ残して握る（広げる側を含む回は保存の前に書いてある）。
         if (!state.written && state.changes.length > 0) {
           await appendJournalOrDrop(
             deps.stores,
@@ -8107,6 +8124,7 @@ export function createApp(deps: AppDeps) {
         const written: { detail?: string } = {};
         try {
           const result = await deps.tokens.removeUnreadable(requested, {
+            // 日誌を先に書く: 書けなければここで投げ、状態を変えずに `base.onError` へ抜ける。トークンの値は書かない。
             beforeRemove: async (ids) => {
               await deps.stores.journal.append({
                 type: 'decision',
@@ -8441,6 +8459,7 @@ export function createApp(deps: AppDeps) {
             ? `（⚠️ override — 走行中のマネージャー ${guard.managerId} の退避だったが、` +
               `理由「${guard.reason}」により消した）`
             : '';
+        // 本文の削除は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
         await appendJournalOrDrop(
           stores,
           {
@@ -8756,6 +8775,7 @@ export function createApp(deps: AppDeps) {
           ...(sources === undefined ? {} : { sources }),
           ...(before === undefined ? {} : { before }),
         };
+        // 絞りはここで当てる: SQL 側に同じ判定を複製しない（`matchesInboxRemoveManyFilter`）。
         const allPending = (await stores.inbox.peekPending()).entries;
         const matched = allPending.filter((row) => matchesInboxRemoveManyFilter(row, filter));
 
@@ -9435,6 +9455,7 @@ export function createApp(deps: AppDeps) {
           );
         }
         if (account === null) return c.json({ error: 'not found' as const }, 404);
+        // 取り消しは効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`。狭める側の扱い）。
         await appendJournalOrDrop(
           stores,
           {
@@ -9661,6 +9682,7 @@ export function createApp(deps: AppDeps) {
         if (result.status === 'not_found') return c.json({ error: 'not found' as const }, 404);
         // `not_granted` は取り消しでは起こらない（取り消しは行が在れば常に通る）。
         if (result.status === 'not_granted') return c.json({ error: 'not found' as const }, 404);
+        // 取り消しは効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`。狭める側の扱い）。
         await appendJournalOrDrop(
           stores,
           {
