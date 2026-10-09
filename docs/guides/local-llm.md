@@ -20,7 +20,7 @@ alteroid は推論の基盤を自作していません。クローン（デー�
 
 - `ALTEROID_*_MODEL` の値を alteroid は検証しません（`packages/core/src/model-tier.ts` の `resolveModelTier`）。`qwen3-coder` のような別名でない名前もそのまま SDK へ渡ります。
 - 別名を使い続ける場合の行き先は、Claude Code の `ANTHROPIC_DEFAULT_OPUS_MODEL` / `ANTHROPIC_DEFAULT_SONNET_MODEL` / `ANTHROPIC_DEFAULT_HAIKU_MODEL` で変わります（[公式: Model configuration](https://code.claude.com/docs/en/model-config)）。`ANTHROPIC_DEFAULT_HAIKU_MODEL` は、セッション名づけのような背景処理のモデルにも効きます。
-- **層とモデル帯の対応を変えるのは人間の承認事項です**（[AGENTS.md](../../AGENTS.md)「踏みやすい地雷」）。`ALTEROID_*_MODEL` に置いた値は起動時の表示と `self_status` に出ます。`ANTHROPIC_DEFAULT_*_MODEL` で別名の行き先を変えた場合は、**いまはどこにも出ません**（[#4261](https://github.com/takecchi/alteroid/issues/4261)）。
+- **層とモデル帯の対応を変えるのは人間の承認事項です**（[AGENTS.md](../../AGENTS.md)「踏みやすい地雷」）。`ALTEROID_*_MODEL` に置いた値は起動時の表示と `self_status` に出ます。`ANTHROPIC_DEFAULT_*_MODEL` / `ANTHROPIC_MODEL` で行き先を変えた場合も、起動時の表示（`alteroidd:` / `alteroid-runner:` の行）と `self_status` の「SDK の接続先とモデルの別名」の節に、値と出所（器・袋・プロファイルなど）が出ます。ただし `ALTEROID_*_MODEL` と違って承認の置き場ではないので、**出るだけで、承認を通ったことにはなりません**（[#4261](https://github.com/takecchi/alteroid/issues/4261)）。
 
 ## 経路の一覧（公式に対応しているもの／互換 API で動くだけのもの）
 
@@ -108,7 +108,7 @@ Ollama は v0.14.0 から Anthropic Messages API 互換の口を持っていま�
      echo -n "qwen3-coder" | docker compose exec -T app alteroid credential set ANTHROPIC_DEFAULT_HAIKU_MODEL --scope all --no-secret --yes
      ```
 
-   - **(b) 別名の行き先を変える。** `ANTHROPIC_DEFAULT_OPUS_MODEL` / `ANTHROPIC_DEFAULT_SONNET_MODEL` / `ANTHROPIC_DEFAULT_HAIKU_MODEL` を袋に置きます。器を作り直さずに済みます。ただし、層が別名 `opus` のまま別のモデルで走っていることが、いまは `self_status` にも起動時の表示にも出ません（[#4261](https://github.com/takecchi/alteroid/issues/4261)）。
+   - **(b) 別名の行き先を変える。** `ANTHROPIC_DEFAULT_OPUS_MODEL` / `ANTHROPIC_DEFAULT_SONNET_MODEL` / `ANTHROPIC_DEFAULT_HAIKU_MODEL` を袋に置きます。器を作り直さずに済みます。層が別名 `opus` のまま別のモデルで走っていることは、起動時の表示と `self_status` に「別名 opus の行き先が変わっている」として出ます（[#4261](https://github.com/takecchi/alteroid/issues/4261)）。
 
 5. **確かめます。** 次の2つで確認します。
    - `alteroid credential list` で、名前と撒く先が思ったとおりかを見ます。値は SDK の子プロセスにだけ重なり、runner のプロセス自身の env には入りません。だから `docker compose exec runner env` では見えません。
@@ -159,7 +159,9 @@ Claude Code が資格を選ぶ順番は、クラウドの資格 → `ANTHROPIC_A
 | ↑ ＋ `ANTHROPIC_AUTH_TOKEN`                                    | `Authorization: Bearer <AUTH_TOKEN の値>` だけ。サブスクのトークンは届かない               |
 | ↑ のうち `ANTHROPIC_AUTH_TOKEN` の代わりに `ANTHROPIC_API_KEY` | `x-api-key: <API_KEY の値>` だけ。サブスクのトークンは届かない                             |
 
-- **⚠️ 接続先だけを置くと、サブスクのトークンが差し替え先（ローカルのサーバや第三者の gateway）へ平文で送られます。** 公式にも「資格の変数を置かずに base URL だけを変えても、サブスクリプションのログインが使われ続ける」とあります（[Subscriptions and gateways](https://code.claude.com/docs/en/llm-gateway#subscriptions-and-gateways)）。**同じ `scope` に `ANTHROPIC_AUTH_TOKEN`（か `ANTHROPIC_API_KEY`）を、接続先より先に置いてください。** 全層を差し替えるならプールを空にしておくのも確実です。プールが空なら、渡すトークンがありません。実装で塞ぐかどうかは [#4263](https://github.com/takecchi/alteroid/issues/4263) で判断待ちです。
+- **⚠️ 接続先だけを置くと、サブスクのトークンが差し替え先（ローカルのサーバや第三者の gateway）へ平文で送られます。** 公式にも「資格の変数を置かずに base URL だけを変えても、サブスクリプションのログインが使われ続ける」とあります（[Subscriptions and gateways](https://code.claude.com/docs/en/llm-gateway#subscriptions-and-gateways)）。**同じ `scope` に `ANTHROPIC_AUTH_TOKEN`（か `ANTHROPIC_API_KEY`）を、接続先より先に置いてください。** 全層を差し替えるならプールを空にしておくのも確実です。プールが空なら、渡すトークンがありません。
+  - **alteroid は送ることを止めません。** Claude の鍵を中継する gateway という正当な使い方があるためです（2026-10-09 のオーナー決定、[#4263](https://github.com/takecchi/alteroid/issues/4263)）。代わりに、接続先が変わっていて `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` が無いときは、起動時の表示と `self_status` に `⚠️ ANTHROPIC_BASE_URL が … を指しているが、接続先用の鍵 … が置かれていない` の警告が出ます。マネージャー・作業者の層の分は、runner が名乗った内容として `self_status` に出ます。
+  - 警告が見るのは環境変数だけです。settings の `apiKeyHelper` で鍵を渡している場合も警告は出ますが、その場合は送られません。
 - **資格を置けば、プールのトークンは使われません。** 層が走るときの資格は gateway の資格です。
   - **プールと回し手は意味を失います。** 枠に当たったら別のトークンへ回す、という仕組みの相手が無くなるからです。
   - **gateway の 429 で回し手が誤作動することはありません（実測）。** 擬似サーバが 429 を返しても、Claude Code は `rate_limit_event` を出しませんでした。Anthropic の枠のヘッダ（`anthropic-ratelimit-unified-*`）を付けても同じです。本文は `API Error: Request rejected (429) · …` で、回し手が見る SDK の枠の文言（`USAGE_LIMIT_ERROR_PREFIXES` など）のどれにも一致しません。だから鍵は回らず、冷却にも入りません。その失敗は、分類できなかった失敗として数えられるだけです（`packages/core/src/dropped-record.ts` の `noteUnclassifiedFailure`）。gateway の先の上限に当たったときに別の経路へ逃がす仕組みは、alteroid にはありません。
@@ -168,7 +170,7 @@ Claude Code が資格を選ぶ順番は、クラウドの資格 → `ANTHROPIC_A
 - **⚠️ トークンの試験が gateway を相手に判定しうる（コードからの推論。実機では確認していません）。** 袋の `scope: all / app` の行は、起動時にデーモン自身の `process.env` へ書き写されます（`packages/core/src/env-vars-boot.ts:133` の `applyAppScopedEnvVars`）。冷却中の鍵を30分ごとに試す処理（`packages/core/src/token-trial.ts:107` の `buildTrialEnv`）は、この env にプールの候補を重ねて1ターン走らせます。
   - `ANTHROPIC_AUTH_TOKEN` が在るとそちらが勝つので、試しは gateway へ飛び、候補のトークンを試していません。それでも「使える／使えない」と記録されます。
   - `ANTHROPIC_BASE_URL` だけが在る場合は、候補のトークンが差し替え先へ送られます。
-  - 試験の対象は、差し替える前から冷却中だった鍵だけです（gateway の間は、新しく冷却に入る鍵は出ません。上の 429 の項）。これも [#4263](https://github.com/takecchi/alteroid/issues/4263) で扱っています。
+  - 試験の対象は、差し替える前から冷却中だった鍵だけです（gateway の間は、新しく冷却に入る鍵は出ません。上の 429 の項）。[#4263](https://github.com/takecchi/alteroid/issues/4263) で挙げた件ですが、2026-10-09 の決定（警告を出す）の対象外で、試験の env は変えていません。
 - **費用の数字**は Claude Code が報告するものです。gateway の先の実際の請求とは一致しません。Claude 以外のモデルでどう出るかは**確認していません**。
 
 ### その他
@@ -177,4 +179,4 @@ Claude Code が資格を選ぶ順番は、クラウドの資格 → `ANTHROPIC_A
 - **文脈の大きさ。** alteroid のシステムプロンプトと道具の定義は大きいので、文脈の小さいモデルではすぐに溢れます。gateway が自分の言葉で文脈超過を返すと、Claude Code は自動で圧縮しません。`CLAUDE_CODE_AUTO_COMPACT_WINDOW` は 100,000 トークン未満に下げられません（[Troubleshoot gateway errors](https://code.claude.com/docs/en/llm-gateway-connect#troubleshoot-gateway-errors)）。
 - **リクエストの未知の欄で 400 が返るとき。** `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` を同じ置き場に足してください（同じ表）。
 - **プロファイルに鍵を書かないでください。** `GET /profile` は本文ごと返します。袋は指紋しか返しません（[.claude/skills/env-profile/SKILL.md](../../.claude/skills/env-profile/SKILL.md)）。
-- **クローンも自分で接続先を変えられます。** プロファイルはクローンも道具（`profile_write`）で書けるので、`ANTHROPIC_*` もクローンが書き換えられます。これがモデル帯の承認を迂回する件は [#4261](https://github.com/takecchi/alteroid/issues/4261) で扱っています。
+- **クローンも自分で接続先を変えられます。** プロファイルはクローンも道具（`profile_write`）で書けるので、`ANTHROPIC_*` もクローンが書き換えられます。これがモデル帯の承認を迂回する件は、置き場を狭めずに、起動時の表示と `self_status` に出すと決まりました（2026-10-09 のオーナー決定、[#4261](https://github.com/takecchi/alteroid/issues/4261)）。プロファイルで書き換えた値は、出所「プロファイル」として出ます。
