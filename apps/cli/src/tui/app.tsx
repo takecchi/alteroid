@@ -394,6 +394,10 @@ export const App: FC<AppProps> = ({
         action === 'attach' ||
         action === 'attachments' ||
         action === 'detach' ||
+        action === 'files' ||
+        action === 'keep' ||
+        action === 'unkeep' ||
+        action === 'remove' ||
         action === 'edit' ||
         action === 'editCancel')
     ) {
@@ -454,6 +458,16 @@ export const App: FC<AppProps> = ({
         break;
       case 'detach':
         controller.detach(args);
+        break;
+      case 'files':
+        void controller.listFiles(args);
+        break;
+      case 'keep':
+      case 'unkeep':
+        void controller.keepFile(args, action === 'keep');
+        break;
+      case 'remove':
+        void controller.removeFile(args);
         break;
       case 'edit':
         void controller.edit(args).then((original) => {

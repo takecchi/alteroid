@@ -2182,3 +2182,43 @@ describe('/edit（#3681）', () => {
     expect(h.api.chatCalls).toEqual([]);
   });
 });
+
+describe('/files /keep /unkeep /rm（#4138）', () => {
+  const stored = (api: FakeApi) => {
+    api.storedAttachments.push({
+      id: 'att-1',
+      name: 'a.log',
+      mediaType: 'text/plain',
+      size: 3,
+      uploadedBy: 'operator',
+      createdAt: '2026-10-01T00:00:00.000Z',
+      expiresAt: '2026-10-31T00:00:00.000Z',
+    });
+  };
+
+  it('入力欄から打ったコマンドが置き場の API を叩き、結果を会話の画面へ出す', async () => {
+    const h = start(stored);
+    await type(h.stdin, '/files');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('[1] att-1'));
+    await type(h.stdin, '/keep 1');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('保存中（期限なし）'));
+    await type(h.stdin, '/unkeep att-1');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.api.storedKeepCalls.length === 2);
+    await type(h.stdin, '/rm 1');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('取り消せません。消すなら /rm 1 yes'));
+    expect(h.api.storedRemoveCalls).toEqual([]);
+    await type(h.stdin, '/rm 1 yes');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('att-1 を消した'));
+    expect(h.api.storedKeepCalls).toEqual([
+      { id: 'att-1', kept: true },
+      { id: 'att-1', kept: false },
+    ]);
+    expect(h.api.storedRemoveCalls).toEqual(['att-1']);
+    expect(h.api.chatCalls).toEqual([]);
+  });
+});

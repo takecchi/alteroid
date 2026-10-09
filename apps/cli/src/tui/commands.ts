@@ -16,6 +16,10 @@ export type CommandAction =
   | 'attach'
   | 'attachments'
   | 'detach'
+  | 'files'
+  | 'keep'
+  | 'unkeep'
+  | 'remove'
   | 'edit'
   | 'editCancel';
 
@@ -68,8 +72,34 @@ export const COMMANDS: readonly CommandSpec[] = [
     describe:
       '次に送る発言へファイルを添える。<path>（複数回で複数個。送るときに上がる。空の入力の Enter で添付だけも送れる）',
   },
-  { name: 'attachments', action: 'attachments', describe: '添えかけのファイルの一覧' },
+  {
+    name: 'attachments',
+    action: 'attachments',
+    describe: '添えかけのファイルの一覧（置き場は /files）',
+  },
   { name: 'detach', action: 'detach', describe: '添えかけを外す。<番号|all>' },
+  {
+    name: 'files',
+    action: 'files',
+    describe:
+      'ファイルの置き場の一覧と使用量（添えかけは /attachments）。[kept|unkept] で絞り、more で続き。番号は /keep・/unkeep・/rm で使える',
+  },
+  {
+    name: 'keep',
+    action: 'keep',
+    describe: '置き場のファイルに保存の印を付ける（期限で消えなくなる）。<番号|id>',
+  },
+  {
+    name: 'unkeep',
+    action: 'unkeep',
+    describe: '保存の印を外す（保持期間で消えるものに戻る）。<番号|id>',
+  },
+  {
+    name: 'rm',
+    action: 'remove',
+    describe:
+      '置き場のファイルを消す（取り消せない。保存中も消える）。<番号|id>。確認のあと /rm <番号|id> yes で消す',
+  },
   {
     name: 'edit',
     action: 'edit',

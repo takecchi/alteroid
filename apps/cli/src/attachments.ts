@@ -402,7 +402,7 @@ const FROM_LABEL: Readonly<Record<AttachmentFromClass, string>> = {
   unknown: '不明',
 };
 
-interface ListedAttachment {
+export interface ListedAttachment {
   id: string;
   name: string;
   mediaType: string;
@@ -429,7 +429,7 @@ export function renderAttachmentRow(meta: ListedAttachment): string {
   );
 }
 
-interface UsageBucket {
+export interface UsageBucket {
   count: number;
   totalBytes: number;
 }
@@ -531,6 +531,16 @@ export async function attachmentsListCommand(options: AttachmentsListOptions): P
   }
 }
 
+// CLI と TUI で同じ文にする（attachment-wording-parity.test.ts が測る）
+export function attachmentNotFoundMessage(id: string): string {
+  return `そんな添付はありません（消えた・期限切れ・id の誤り）: ${id}`;
+}
+
+// 確認の見出しも CLI（rm）と TUI（/rm）で同じ文にする
+export function attachmentRemoveSummary(id: string): string {
+  return `添付を消します（保存中のものも消えます）: ${id}`;
+}
+
 async function attachmentFailure(
   response: Response,
   target: Target,
@@ -538,7 +548,7 @@ async function attachmentFailure(
   what: string,
 ): Promise<Error> {
   if (response.status === 404) {
-    return new Error(`そんな添付はありません（消えた・期限切れ・id の誤り）: ${id}`);
+    return new Error(attachmentNotFoundMessage(id));
   }
   const described = describeAuthFailure(response.status, target);
   return new Error(
@@ -566,7 +576,7 @@ export async function attachmentsRemoveCommand(
   options: { yes?: boolean },
 ): Promise<void> {
   const { client, target } = await connect();
-  await confirmIrreversible(`添付を消します（保存中のものも消えます）: ${id}`, options);
+  await confirmIrreversible(attachmentRemoveSummary(id), options);
   const response = await client.attachments[':id'].$delete({ param: { id } });
   if (!response.ok) throw await attachmentFailure(response, target, id, '添付を消せません');
   stdout.write(`${id} を消した\n`);

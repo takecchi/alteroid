@@ -10,7 +10,8 @@ import {
 } from '@alteroid/core';
 
 import type { ConversationApprovalsRead } from '../conversation-approvals.js';
-import { ApiError } from './api.js';
+import { attachmentNotFoundMessage } from '../attachments.js';
+import { ApiError, type StoredAttachment } from './api.js';
 import type { InterruptOutcome, InterruptTarget } from './interrupt-outcome.js';
 import type {
   ApprovalAnswerBody,
@@ -51,6 +52,13 @@ export interface FakeApi extends TuiApi {
   uploadSignals: (AbortSignal | undefined)[];
   limits: AttachmentLimits | null;
   limitsCalls: number;
+  // 置き場（#4126）。`storedAttachments` は新しい順の全件。`storedPageSize` で頁に切る
+  storedAttachments: StoredAttachment[];
+  storedPageSize: number;
+  storedListCalls: { kept?: boolean; cursor?: string }[];
+  storedKeepCalls: { id: string; kept: boolean }[];
+  storedRemoveCalls: string[];
+  storedFails: string | null;
   scripts: ScriptStep[][];
   streamScripts: ScriptStep[][];
   streamCalls: { conversationId: string; aborted: () => boolean }[];
@@ -197,9 +205,59 @@ export function fakeApi(): FakeApi {
     uploadSignals: [],
     limits: DEFAULT_ATTACHMENT_LIMITS,
     limitsCalls: 0,
+    storedAttachments: [],
+    storedPageSize: 100,
+    storedListCalls: [],
+    storedKeepCalls: [],
+    storedRemoveCalls: [],
+    storedFails: null,
     async attachmentLimits() {
       api.limitsCalls += 1;
       return api.limits;
+    },
+    async listStoredAttachments(query) {
+      api.storedListCalls.push(query);
+      if (api.storedFails !== null) throw new ApiError(api.storedFails);
+      const all = api.storedAttachments.filter(
+        (a) => query.kept === undefined || (a.keptAt !== undefined) === query.kept,
+      );
+      const start = query.cursor === undefined ? 0 : Number(query.cursor);
+      const items = all.slice(start, start + api.storedPageSize);
+      const bucket = (list: StoredAttachment[]) => ({
+        count: list.length,
+        totalBytes: list.reduce((sum, a) => sum + a.size, 0),
+      });
+      return {
+        items,
+        usage: {
+          ...bucket(api.storedAttachments),
+          byFrom: {
+            human: bucket(api.storedAttachments.filter((a) => a.uploadedBy === 'operator')),
+          },
+        },
+        ...(start + items.length < all.length ? { nextCursor: String(start + items.length) } : {}),
+      };
+    },
+    async keepAttachment(id, kept) {
+      api.storedKeepCalls.push({ id, kept });
+      if (api.storedFails !== null) throw new ApiError(api.storedFails);
+      const found = api.storedAttachments.find((a) => a.id === id);
+      if (found === undefined) throw new ApiError(attachmentNotFoundMessage(id));
+      if (kept) {
+        found.keptAt = '2026-10-09T00:00:00.000Z';
+        delete found.expiresAt;
+      } else {
+        delete found.keptAt;
+        found.expiresAt = '2026-11-08T00:00:00.000Z';
+      }
+      return { ...found };
+    },
+    async removeAttachment(id) {
+      api.storedRemoveCalls.push(id);
+      if (api.storedFails !== null) throw new ApiError(api.storedFails);
+      const index = api.storedAttachments.findIndex((a) => a.id === id);
+      if (index < 0) throw new ApiError(attachmentNotFoundMessage(id));
+      api.storedAttachments.splice(index, 1);
     },
     findClientMessage(clientMessageId) {
       api.clientMessageLookups.push(clientMessageId);
