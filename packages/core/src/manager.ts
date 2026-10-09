@@ -76,11 +76,7 @@ import {
   estimateAttachmentBodyBytes,
   ManagerAttachmentsRefusedError,
 } from './manager-attachments.js';
-import {
-  readAttachmentLimits,
-  type AttachmentLimits,
-  type AttachmentStore,
-} from './attachment.js';
+import { readAttachmentLimits, type AttachmentLimits, type AttachmentStore } from './attachment.js';
 import {
   fetchManagerOutbox,
   rejectedFileOf,
@@ -7818,7 +7814,9 @@ class Pool implements ManagerPool {
       for (const item of attachments) {
         if (item.staged !== true) continue;
         const label = `${item.id}（${item.name}, ${item.size} バイト）`;
-        if (!this.runnerHasCapability(runner.runnerId, RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE)) {
+        if (
+          !this.runnerHasCapability(runner.runnerId, RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE)
+        ) {
           return (
             `大きいファイル ${label} は、runner（runnerId=${runner.runnerId}）が大きいファイルの受け取り` +
             `（${RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE}）を名乗っていない（旧い版か、名乗りをまだ受けていない）ので下ろせない`

@@ -312,18 +312,18 @@ async function verifyStagedAttachment(
     new RunnerAttachmentRejectedError(`添付 ${attachment.id} は別口で置かれていない: ${why}`);
   const entry = ledger?.get(managerId, attachment.id);
   if (entry === undefined) throw refuse('置いた控えが無い');
-  if (
-    entry.size !== attachment.size ||
-    entry.sha256 !== attachment.sha256 ||
-    entry.path !== path
-  ) {
+  if (entry.size !== attachment.size || entry.sha256 !== attachment.sha256 || entry.path !== path) {
     throw refuse('命令の size / sha256 が、置いた控えと食い違う');
   }
   try {
     await assertOwnDirectory(dir);
     const info = await lstat(path);
     const uid = ownUid();
-    if (!info.isFile() || (uid !== undefined && info.uid !== uid) || info.size !== attachment.size) {
+    if (
+      !info.isFile() ||
+      (uid !== undefined && info.uid !== uid) ||
+      info.size !== attachment.size
+    ) {
       throw refuse('置き場のファイルが控えと合わない');
     }
   } catch (error) {
@@ -396,9 +396,7 @@ export async function placeRunnerAttachments(
         continue;
       }
       if (await ensureDirectory(dir, dirMode, childGid)) created.push(dir);
-      await writeAttachmentFile(dir, path, fileMode, childGid, (handle) =>
-        handle.writeFile(bytes),
-      );
+      await writeAttachmentFile(dir, path, fileMode, childGid, (handle) => handle.writeFile(bytes));
       placedFiles.push(path);
       // 同じ id の別口の控えは、いま上書きしたので古い。
       options.ledger?.delete(managerId, attachment.id);

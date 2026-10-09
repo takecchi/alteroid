@@ -140,7 +140,10 @@ async function harness(fake: Fake) {
   };
 }
 
-const CAPABLE = [RUNNER_CAPABILITY_MANAGER_ATTACHMENTS, RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE];
+const CAPABLE = [
+  RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE,
+];
 
 describe('能力と上限の名乗り（#4128 段3a）', () => {
   it('この版の runner は manager-attachments-stage を名乗る', () => {
@@ -156,9 +159,9 @@ describe('能力と上限の名乗り（#4128 段3a）', () => {
 
   it('readRunnerAttachmentStageLimit は ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES を読み、不正・未設定は既定の 2 GiB', () => {
     expect(readRunnerAttachmentStageLimit({})).toBe(2048 * 1024 * 1024);
-    expect(readRunnerAttachmentStageLimit({ ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES: '4096' })).toBe(
-      4096,
-    );
+    expect(
+      readRunnerAttachmentStageLimit({ ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES: '4096' }),
+    ).toBe(4096);
     for (const bad of ['abc', '-1', '0', '1.5', '']) {
       expect(
         readRunnerAttachmentStageLimit({ ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES: bad }),
@@ -252,9 +255,9 @@ describe('大きいファイルを下ろせない相手には、理由を言っ�
     // size ちょうどは通る
     const fit = fakeRunner({ capabilities: CAPABLE, stageLimit: 500 });
     const h2 = await harness(fit);
-    expect(await h2.call('manager_start', { request: '調べて', attachments: [h2.big.id] })).toContain(
-      'を起こした',
-    );
+    expect(
+      await h2.call('manager_start', { request: '調べて', attachments: [h2.big.id] }),
+    ).toContain('を起こした');
     await h2.stop();
     await stop();
   });

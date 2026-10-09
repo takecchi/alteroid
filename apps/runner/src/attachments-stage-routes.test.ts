@@ -265,7 +265,7 @@ describe('命令の staged の添付（#4128 段3a）', () => {
     expect((await put('att-1', bytes)).status).toBe(200);
     const both = { ...ref('att-1', bytes), data: bytes.toString('base64') };
     expect((await start([both])).status).toBe(400);
-    const { staged: _staged, ...neither } = ref('att-1', bytes);
+    const neither = { ...ref('att-1', bytes), staged: undefined };
     expect((await start([neither])).status).toBe(400);
   });
 });

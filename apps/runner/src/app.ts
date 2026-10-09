@@ -78,7 +78,7 @@ const attachmentStageQuery = z.object({
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
 });
 
-const AUTH_SCHEME =/^Bearer\s+(.+)$/i;
+const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
 
 /**
  * hello に載せる peer の欄（#3940・#4118）。開いている peer が無ければ `managerPeers` を送らない
@@ -916,7 +916,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       '/managers/:id/attachments/:attachmentId',
       zValidator('query', attachmentStageQuery, (result, c) => {
         if (!result.success) {
-          return c.json({ ok: false, error: '別口の添付の控え（クエリ）の形が不正（置いていない）' }, 400);
+          return c.json(
+            { ok: false, error: '別口の添付の控え（クエリ）の形が不正（置いていない）' },
+            400,
+          );
         }
         return undefined;
       }),

@@ -124,7 +124,10 @@ async function rig(kind: 'http' | 'local'): Promise<Rig> {
       attachmentsRoot: root,
     });
   }
-  const stores: Stores = { ...createMemoryStores(), attachments: new MemoryAttachmentStore({ limits: LIMITS }) };
+  const stores: Stores = {
+    ...createMemoryStores(),
+    attachments: new MemoryAttachmentStore({ limits: LIMITS }),
+  };
   const registry = createRunnerRegistry([runner]);
   const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
   const context: ToolContext = {
@@ -169,7 +172,10 @@ describe.each(['http', 'local'] as const)(
     it('manager_start: 別口へ押してから命令を送り、命令の本文に中身は載らず、担い手の添付の置き場に置かれる', async () => {
       const r = await rig(kind);
       const meta = await putBig(r.stores, 1);
-      const out = await r.call('manager_start', { request: 'ビルドを調べて', attachments: [meta.id] });
+      const out = await r.call('manager_start', {
+        request: 'ビルドを調べて',
+        attachments: [meta.id],
+      });
       expect(out).toContain('を起こした');
       const managerId = /マネージャー (\S+) を起こした/.exec(out)?.[1];
       expect(managerId).toBeDefined();
