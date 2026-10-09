@@ -1010,12 +1010,6 @@ describe('nextDescribedState — 書き手は書けない。store が新旧の d
     ).toEqual({ kind: 'fresh' });
   });
 
-  /**
-   * ⭐⭐ #821 残課題の本題（分岐3）: 要旨は変わっていないが、基準点がまだ
-   * 無い（この仕組みより前に書かれた記憶、等）。**このとき基準点を
-   * 「この書き込みの直前の状態」（`priorBytes` / `priorUpdatedAt`）で立てる
-   * ——`writtenBytes` / `writtenAt`（書いた後の値）を使わない。**
-   */
   it('基準点がまだ無ければ、本文だけの書き込みでも「書く前の状態」を基準点として立てる（分岐3）', () => {
     const result = nextDescribedState({
       priorContent: '---\ndescription: 同じ\n---\n# T\n旧本文',
@@ -1028,9 +1022,6 @@ describe('nextDescribedState — 書き手は書けない。store が新旧の d
       writtenAt: '2026-08-21T00:00:00Z',
       writtenBytes: 999,
     });
-    // ⛔ 書いた後の値（999 / '2026-08-21T00:00:00Z'）ではなく、書く前の値
-    // （456 / '2026-08-10T00:00:00Z'）が基準点になる。`describedAt`（要旨を
-    // 書き直した時刻）は据え置き——要旨そのものは変わっていない。
     expect(result).toEqual({
       describedAt: '2026-08-01T00:00:00Z',
       describedBytes: 456,
@@ -1057,13 +1048,7 @@ describe('nextDescribedState — 書き手は書けない。store が新旧の d
     });
   });
 
-  /**
-   * ⭐ 「弾いていないことを測る歯」— 一度立った基準点は、2回目の本文だけの
-   * 書き込みで動かない（分岐2）。動くと「直前の1回ぶん」しか測れない道具に
-   * 戻る（#821 残課題）。
-   */
   it('一度立った基準点は、次の本文だけの書き込みでも動かない（分岐2。基準点のリセットを検出する歯）', () => {
-    // 1回目の本文だけの書き込みで基準点が立つ（分岐3）。
     const first = nextDescribedState({
       priorContent: '---\ndescription: 同じ\n---\n# T\n旧本文',
       nextContent: '---\ndescription: 同じ\n---\n# T\n新本文（1回目の追記）',
@@ -1081,9 +1066,6 @@ describe('nextDescribedState — 書き手は書けない。store が新旧の d
       describedBytesAt: '2026-08-10T00:00:00Z',
     });
 
-    // 2回目の本文だけの書き込み。基準点は既に立っているので、
-    // 「書く前の状態」（このときの priorBytes/priorUpdatedAt）ではなく、
-    // 1回目が立てた基準点がそのまま引き継がれるはず。
     const second = nextDescribedState({
       priorContent: '---\ndescription: 同じ\n---\n# T\n新本文（1回目の追記）',
       nextContent: '---\ndescription: 同じ\n---\n# T\n新本文（2回目の追記）',
@@ -1095,8 +1077,6 @@ describe('nextDescribedState — 書き手は書けない。store が新旧の d
       writtenAt: '2026-08-25T00:00:00Z',
       writtenBytes: 900,
     });
-    // ⛔ 700 / '2026-08-21T00:00:00Z'（2回目の書く前の状態）ではなく、
-    // 1回目が立てた 456 / '2026-08-10T00:00:00Z' のまま。
     expect(second).toEqual({
       describedAt: '2026-08-01T00:00:00Z',
       describedBytes: 456,
@@ -1105,53 +1085,24 @@ describe('nextDescribedState — 書き手は書けない。store が新旧の d
   });
 });
 
-/**
- * `renderMemoryDocuments` — 区分ごとの載り方（B の表）と、5つの受け入れ基準
- * （二重に載せない・取りこぼさない・切ったら言う・古い要旨は消えない・
- * 4状態を畳まない）。**「該当0件」だけを根拠にするテストは書かない** ——
- * 切る/切らない、載せる/載せない、それぞれを別の `it()` で測る。
- */
 describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳細の受け入れ基準', () => {
-  /**
-   * **⚠️ かつてここは「frontmatter を1つも持たない文書の集合に対して、焼き込みが
-   * frontmatter 導入前と1バイトも変わらない」という受け入れ基準だった。**
-   * 人間が 2026-09-08 に載せ方そのものを反転させた（premise は全文からカードへ）
-   * ので、**その基準は意味を失った**——旧実装（`renderMemoryDocument` の全文）と
-   * 一致しないことが正しい。
-   *
-   * **消さずに反転させる。** 測る対象は変えていない（frontmatter を1つも持たない
-   * 文書がどう扱われるか）。**変わったのは「premise として扱われた結果どう載るか」
-   * だけであり、区分の既定（frontmatter 無し ＝ premise）は1ミリも動いていない**
-   * ——それをここで固定する。
-   */
   it('【区分の既定】frontmatter を1つも持たない文書は premise として扱われる（載り方はカード）', () => {
     const docs = [premise('b', 'に'), premise('a', 'い')];
     const rendered = renderMemoryDocuments(docs);
 
-    // premise の枝を通っている（fact の目次側には出ない）。
     expect(rendered).toContain('<!-- memory: b.md（premise');
     expect(rendered).toContain('<!-- memory: a.md（premise');
     expect(rendered).not.toContain('## 記憶の目次');
-    // そして旧実装（全文）とは一致しない——これが反転そのものである。
     expect(rendered).not.toBe(docs.map(renderMemoryDocument).join('\n\n'));
   });
 
-  /**
-   * **⚠️ かつてここは「premise（区分無し）は全文が載る」だった。** 反転の本体で
-   * ある（人間の決定 2026-09-08）。**保証は弱くなっていない**——「本文が載る」を
-   * 「本文が載らず、代わりに要旨と節の目次が載る」へ言い換えたうえで、
-   * **本文が載っていないことを明示的に測る**（消していない）。
-   */
   it('premise（区分無し）はカード（要旨＋節の目次）が載り、本文は1文字も載らない', () => {
     const rendered = renderMemoryDocuments([
       { slug: 'values', content: '# 価値観\n大事にしていること' },
     ]);
     expect(rendered).toContain('<!-- memory: values.md（premise');
-    // 見出しは載る（何が書いてあるかは分かる）。
     expect(rendered).toContain('# 価値観');
-    // 本文は載らない。
     expect(rendered).not.toContain('大事にしていること');
-    // 開く口を名指ししている（載せないことを能力の削除にしないための条件）。
     expect(rendered).toContain('memory_section_read');
   });
 
@@ -1175,12 +1126,9 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     ];
     const rendered = renderMemoryDocuments(docs);
 
-    // premise のカードは1回だけ載る（載り方が全文からカードへ変わっただけで、
-    // 「どの文書もどちらか一方に必ず1回だけ現れる」という不変条件は同じ）。
     const occurrences = rendered.split('<!-- memory: p1.md（premise').length - 1;
     expect(occurrences).toBe(1);
     expect(rendered).not.toContain('- p1:');
-    // fact の本文（見出し以降の詳細）はどこにも出ない。
     expect(rendered).not.toContain('本文の詳細（目次からは開けない）');
     expect(rendered).toContain('- f1: F1');
   });
@@ -1202,46 +1150,25 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     ];
     const rendered = renderMemoryDocuments(docs);
 
-    // premise はカードの見出しで、fact は目次の1行で数える（載り方が変わっても
-    // 「どちらか一方に必ず1回だけ現れる」は同じ不変条件である）。
     const cardCount = (rendered.match(/<!-- memory: [\w-]+\.md（premise/g) ?? []).length;
     const tocCount = docs.filter((doc) => rendered.includes(`- ${doc.slug}:`)).length;
     expect(cardCount + tocCount).toBe(docs.length);
   });
 
   it('切ったら言う: 目次を件数で切ったら、切った件数が出力に現れる', () => {
-    // **freshness は absent を使う（#821 以降の約束）。** ここで測りたいのは
-    // 件数の蓋であって鮮度ではない——absent なら印が空文字になり、
-    // 鮮度の印を足す前の（1行の長さが description だけで決まる）行を保てる。
-    // fresh 等を使うと印の文字数ぶん1行が伸び、この it() が固定している
-    // 件数（300／5）が崩れる。
+    // freshness は absent にする: fresh 等だと印の文字数ぶん1行が伸びて、固定している件数（300／5）が崩れる。
     const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, index) =>
       fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'absent' } }),
     );
     const rendered = renderMemoryDocuments(docs);
     expect(rendered).toContain('…ほか 5 件は目次から省略');
-    // 記憶の全体を渡す呼び手（`presentInMemory` 無し）は従来どおりの文言のまま
-    // ——「今回載せた分だけである」という限定は付かない。
     expect(rendered).toContain(
       `…ほか 5 件は目次から省略（目次の対象は全 ${MEMORY_TOC_ENTRY_LIMIT + 5} 件）。`,
     );
     expect(rendered).not.toContain('今回載せた分だけである');
   });
 
-  /**
-   * ⭐ 3（軽い）: 部分だけを描く呼び手（`clone.ts` の `#withFreshMemory` を模す）
-   * の下では、省略行の文言が変わる。
-   *
-   * **「部分か」の判定は `presentInMemory` の有無ではなく、この描画に出ている
-   * slug で記憶の全体を覆えているかで決める**（`tocEntriesCoverWholeMemory`
-   * の doc）——ここでは `presentInMemory` に、描画に出ていない文書
-   * （`outside-doc`）をもう1件足すことで「覆えていない」状態を作る。
-   *
-   * **値は `MEMORY_TOC_ENTRY_LIMIT` を書き写さず参照する**（依頼者の門）。
-   */
   it('⭐ 部分だけを描く呼び手の下では、省略行が「記憶の全体ではなく、今回載せた分だけ」と明言する', () => {
-    // freshness は absent（件数の蓋を測るための行の長さを、鮮度の印の分だけ
-    // 伸ばさないため。上の it() と同じ理由、#821）。
     const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, index) =>
       fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'absent' } }),
     );
@@ -1255,14 +1182,7 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(rendered).not.toContain(`目次の対象は全 ${MEMORY_TOC_ENTRY_LIMIT + 5} 件）。`);
   });
 
-  /**
-   * 対照。`presentInMemory` を渡していても、この描画（`entries`）だけで記憶の
-   * 全体を覆えているなら——たとえば `#withFreshMemory` の差分にたまたま記憶の
-   * 全件が含まれた回——**従来どおりの文言のまま**である。判定が
-   * `presentInMemory` の「有無」ではなく「覆えているか」であることの直接の歯。
-   */
   it('presentInMemory を渡していても、この描画が記憶の全体を覆っていれば従来どおりの文言のまま', () => {
-    // freshness は absent（同上の理由、#821）。
     const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, index) =>
       fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'absent' } }),
     );
@@ -1274,26 +1194,9 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(rendered).not.toContain('今回載せた分だけである');
   });
 
-  /**
-   * ⭐⭐⭐ 目次の蓋は件数（`MEMORY_TOC_ENTRY_LIMIT`）と文字数
-   * （`MEMORY_TOC_CHAR_BUDGET`）の2軸を持つ——依頼者の求めで、**どちらで
-   * 切ったかを断り書きが名乗る**。3状態（件数のみ／文字数のみ／両方）を
-   * それぞれ非自明な入力で作り分ける（`.claude/skills/mutation-testing/`
-   * 「歯は非自明な状況で当てる」と同じ理由——余裕のある入力では分岐に
-   * 入らない）。
-   *
-   * `tocEntriesCoverWholeMemory` の既存の区別（「目次の対象は全 N 件」／
-   * 「この目次に並べたのは全 N 件…」）は、この節ではどちらも記憶の全体を
-   * 渡しているので前者のまま——**切った理由の文言と独立に組み合わさる**
-   * ことは、この3つの it() が同じ scope 文言を共有しつつ cause 文言だけが
-   * 変わることで示される。
-   */
   describe('目次の蓋: 件数のみ／文字数のみ／両方を、非自明な入力で作り分ける', () => {
     it('件数のみで切れる（305件・短い要旨——文字数の予算にはまだ余裕がある）', () => {
-      // freshness は absent（鮮度の印の分だけ1行が伸びると、この it() が
-      // 前提にしている「300件ぶんの短い要旨は文字数の予算に収まる」が崩れる。
-      // #821 以降、fresh も印を持つため、この it() の関心（件数の蓋）とは
-      // 無関係な理由で分岐が変わってしまう）。
+      // freshness は absent にする: 印の分だけ1行が伸びると「300件ぶんの短い要旨は文字数の予算に収まる」前提が崩れる。
       const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, i) =>
         fact(`fact-${String(i).padStart(3, '0')}`, {
           description: 'x'.repeat(10),
@@ -1302,9 +1205,6 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       );
       const rendered = renderMemoryDocuments(docs);
 
-      // 前提: 本当に「件数のみ」で切れている（300件ぶんの短い要旨は
-      // 文字数の予算に収まる）。前提が壊れていたらこの it() は違う分岐を
-      // 測ってしまう。
       expect(rendered.match(/^- fact-/gm)?.length).toBe(MEMORY_TOC_ENTRY_LIMIT);
       expect(rendered).toContain(
         `…ほか 5 件は目次から省略（目次の対象は全 ${MEMORY_TOC_ENTRY_LIMIT + 5} 件）。`,
@@ -1313,13 +1213,9 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
         `${MEMORY_TOC_ENTRY_LIMIT} 件の上限に当たって件数で切った（文字数の予算 ` +
           `${MEMORY_TOC_CHAR_BUDGET.toLocaleString('en-US')} 文字にはまだ余裕がある）。`,
       );
-      // 3状態を混ぜない: 他の2状態の言い回しを含まない。
       expect(rendered).not.toContain('文字に当たって文字数で切った');
       expect(rendered).not.toContain('の両方に当たって切った');
-      // 件数のみで切れているときは、実行できない助言（fact を減らせ、に類する
-      // 越権の助言）を出さない。
       expect(rendered).not.toContain('memory_frontmatter_set で短くする');
-      // 存在そのものが見えなくなる、という非対称は3状態どれでも必ず出る。
       expect(rendered).toContain(
         'fact 文書が存在することを毎ターンの焼き込みの中で名乗る唯一の場所',
       );
@@ -1337,8 +1233,6 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       );
       const rendered = renderMemoryDocuments(docs);
 
-      // 前提: 本当に「文字数のみ」で切れている（件数は100件で300件の上限の
-      // 遥か下だが、要旨が長いので束ねた総量が予算を超える）。
       const shownCount = rendered.match(/^- fact-/gm)?.length ?? 0;
       expect(shownCount).toBeGreaterThan(0);
       expect(shownCount).toBeLessThan(100);
@@ -1350,7 +1244,6 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       );
       expect(rendered).not.toContain('件の上限に当たって件数で切った');
       expect(rendered).not.toContain('の両方に当たって切った');
-      // 文字数で切れているときは、実行できる直し方（要旨を短くする）を出す。
       expect(rendered).toContain(
         '要旨（description）が長い文書は memory_frontmatter_set で短くすると、同じ件数でもここに多く載る。',
       );
@@ -1368,9 +1261,6 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       );
       const rendered = renderMemoryDocuments(docs);
 
-      // 前提: 本当に「両方」に当たっている——件数の上限（300）を超えており、
-      // かつ件数で切った後の300件ぶんの要旨だけでも文字数の予算を超えるので、
-      // 実際に載る件数は300件よりさらに少ない。
       const shownCount = rendered.match(/^- fact-/gm)?.length ?? 0;
       expect(shownCount).toBeGreaterThan(0);
       expect(shownCount).toBeLessThan(MEMORY_TOC_ENTRY_LIMIT);
@@ -1388,23 +1278,7 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       );
     });
 
-    /**
-     * ⭐⭐⭐⭐ 2つの蓋は「件数で切ってから、その残りに文字数の蓋を掛ける」
-     * 順でなければならない——逆（束ねた全体に先に文字数の蓋を掛けてから
-     * 件数で切る）だと、**表示される件数は変わらないのに、切った理由の
-     * 名乗りだけが誤る**（依頼者の求め。2つの蓋が独立に効いているかを、
-     * 順序を意識しない入力では測れない——上の3つの it() はどれも「先頭
-     * 300件だけで文字数の判定が決まる」形なので、この非自明な境界を通らない）。
-     *
-     * 入力: 先頭300件は要旨なし（束ねて 8,849字相当、予算に対して大きな
-     * 余裕を残す）。末尾20件は要旨が1行の上限いっぱい（長い）。**320件を
-     * 束ねた総量は予算を超えるが、件数で切った後の先頭300件だけなら予算に
-     * 大きく収まる。** ⟹ 正しい実装は「件数のみ」を名乗る（末尾20件は
-     * 件数の上限だけで丸ごと落ちるので、文字数の判定にすら入らない）。
-     * もし文字数の蓋を束ねた全体（320件）に対して先に評価する実装だと、
-     * 末尾の長い行の一部が「予算を圧迫した」と誤って判定し、**表示件数は
-     * 300件のまま変わらないのに**「両方」を誤って名乗る。
-     */
+    // 文字数の蓋は、件数で切った後の残りに掛ける。束ねた全体に先に掛けると、表示件数は同じなのに「両方」と誤って名乗る。
     it('⭐ 順序が結果を変える境界（先頭300件は予算に大きな余裕、320件束ねると予算超過——正しくは「件数のみ」）', () => {
       const shortDocs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT }, (_, i) =>
         fact(`fact-${String(i).padStart(3, '0')}`, { freshness: { kind: 'absent' } }),
@@ -1417,9 +1291,6 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       );
       const rendered = renderMemoryDocuments([...shortDocs, ...longDocs]);
 
-      // 前提: 表示件数はちょうど300件（先頭の要旨なし文書だけ）で、末尾の
-      // 長い20件は1件も表示に混ざらない——文字数の判定が「先頭300件だけ」で
-      // 決まっていることの直接の確認。
       const shownCount = rendered.match(/^- (fact|zzz)-/gm)?.length ?? 0;
       expect(shownCount).toBe(MEMORY_TOC_ENTRY_LIMIT);
       expect(rendered).not.toMatch(/^- zzz-/m);
@@ -1433,158 +1304,54 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     });
   });
 
-  /**
-   * 目次の蓋（`MEMORY_TOC_CHAR_BUDGET`）を測るための1件。**要旨は1行の上限
-   * ちょうど**（`MEMORY_TOC_LINE_LIMIT`）——1行が運ぶ量を最大にした、蓋が
-   * 確実に噛む形である。
-   *
-   * **freshness は absent（#821 以降の約束）。** ここで測りたいのは文字数の
-   * 蓋の算術であって鮮度ではない——`fresh` を使うと鮮度の印の文字数ぶん
-   * 1行が伸び、この関数が使う下の2つの it()（測る側とその外挿）の数値が
-   * 鮮度の印の実装に引きずられて動いてしまう。
-   */
+  // freshness は absent にする: fresh だと印の文字数ぶん1行が伸びて、下の2つの it() の数値が印の実装に引きずられる。
   const tocCapFact = (index: number) =>
     fact(`fact-${String(index).padStart(3, '0')}`, {
       description: 'あ'.repeat(MEMORY_TOC_LINE_LIMIT),
       freshness: { kind: 'absent' },
     });
 
-  /**
-   * 候補行1本ぶんの限界費用を、**手で書式を真似ずに実測する。** 同じ長さの
-   * 要旨を持つ2件・1件のレンダリング結果の差分が「1行＋区切りの改行」ぶんで
-   * ある——`renderMemoryTocLine` の内部の書式（インデント・鮮度の印・区切り
-   * 文字）を書き写すと、書式が変わったときにここだけが古くなる（テストの
-   * 構造が実装の複製にならないようにする）。
-   */
+  // 1行ぶんの費用は、書式を手で真似ず2件と1件の描画の差で実測する。`renderMemoryTocLine` の書式を写すと、書式が変わったときにここだけ古くなる。
   const measureTocMarginalCost = () => {
     const one = renderMemoryDocuments([tocCapFact(0)]);
     const two = renderMemoryDocuments([tocCapFact(0), tocCapFact(1)]);
     return { one, two, marginal: two.length - one.length };
   };
 
-  /**
-   * 目次の断り書き（`renderMemoryTocOmission`）の1行目の頭。**逐語で持つ**
-   * ——定数を import して両側を一緒に動かす形にしない（#747 の作法。同じ
-   * ファイルの `⭐ memory.ts の中で 8,000 を持つ MEMORY_*_BUDGET 定数を、
-   * 断り書きが漏れなく名指しする` の doc）。
-   */
+  // 逐語で持つ: 定数を import して両側を一緒に動かす形にしない。
   const TOC_OMISSION_NOTE_HEAD = '…ほか ';
 
-  /**
-   * ⭐⭐⭐ 穴の実在。**緩くてよい歯である**——ここで測りたいのは「蓋が
-   * 無ければ束ねた総量が桁で溢れていた」という事実だけで、締めても意味が
-   * 増えない。
-   *
-   * **`60_000` を直書きしない。** `MEMORY_TOC_ENTRY_LIMIT * MEMORY_TOC_LINE_LIMIT`
-   * から出す（依頼者の求め。既存の歯の作法——値を書き写さず参照する）。
-   *
-   * **⚠️ この主張は、かつて次の it()（修理の実在）と1本の it() に同居して
-   * いた。** 同居させたせいで、緩くてよいこちら側に合わせた `+ 1_000` という
-   * 丸い遊びが、締まっていないと意味が無い側の上界に入り込んでいた——実測
-   * （base `139c7aa`）で1行の限界費用は 224 字なので、`1000 / 224 = 4.46`
-   * ⟹ **予算を3行ぶん（672字、予算の 5.6%）恒常的に超過しても、どの歯も
-   * 落ちなかった**（+1/+2/+3 が生存し、+4 で初めてこの歯が落ちた）。
-   * **だから2本に割ってある。** 割った理由そのものが、この doc の要点である
-   * ——1本の歯が「穴が在った」と「修理が効いている」を両方主張すると、遊びは
-   * 必ず緩い側に合わせられる。
-   */
+  // 「穴が在った」と「修理が効いている」を1本の it() に同居させない: 遊びが緩い側に合わせられて、予算の超過を見逃す。
   it('⭐⭐⭐ 穴の実在: 蓋が無ければ、束ねた候補行は 300件 × 1行200字 の下限を超えて伸びる', () => {
     const { one, two, marginal } = measureTocMarginalCost();
-    // 前提: この2件はどちらの蓋にも掛かっていない（2件だけなので省略が
-    // 出ない）——外挿の材料が「蓋が効く前」の値であることを確かめる。
     expect(one).not.toContain('省略');
     expect(two).not.toContain('省略');
 
     const extrapolatedCandidateTotal = one.length + (MEMORY_TOC_ENTRY_LIMIT - 1) * marginal;
 
-    // 蓋が無ければ、300件ぶんの候補行はこの下限を超えて伸びる（実際の外挿値は
-    // これよりさらに大きい——各行は要旨だけでなく slug・title・インデントも
-    // 運ぶため）。
     const preCapFloor = MEMORY_TOC_ENTRY_LIMIT * MEMORY_TOC_LINE_LIMIT;
     expect(extrapolatedCandidateTotal).toBeGreaterThan(preCapFloor);
   });
 
-  /**
-   * ⭐⭐⭐ 修理の実在。**こちらは締まっていないと意味が無い歯である。**
-   *
-   * ## 遊びの大きさを決めるのは断り書きであって、書き手ではない
-   *
-   * 出力が `MEMORY_TOC_CHAR_BUDGET` を超えてよい理由は1つしかない——
-   * `renderListing`（`excerpt.ts`）が予算で締めるのは**目次の項目行だけ**で、
-   * 切ったときの断り書き（`renderMemoryTocOmission`）はその上に載るからである。
-   * ⟹ **だから上界の第2項は、丸い数字ではなく「この出力に実際に載った断り
-   * 書きの長さ」である。** 断り書きの文言が伸び縮みすれば上界も同じだけ動く
-   * ので、遊びの大きさに書き手の裁量は1文字も残らない。
-   *
-   * ## 何を捕まえるか（実測。base `139c7aa`、合成入力のみ）
-   *
-   * `renderMemoryToc` の `candidateLines.slice(0, charBudgetInfo.shown)` を
-   * `… + N)` へ変異させる（＝予算より N 行多く出す）と、**N=1 で落ちる。**
-   * 1行の限界費用は 224 字、この上界の余裕は 58 字である。
-   *
-   * ## ⚠️ この歯が測っていないこと
-   *
-   * - **予算より少なく出す側（`… - 1`）は捕まえない。** これは上界であって、
-   *   「予算を使い切っている」ことは主張していない
-   * - **断り書きの*中身*は測っていない。** 長さしか見ないので、文言が別物へ
-   *   置き換わっても長さが同じならこの歯は緑のままである（中身は上の3状態の
-   *   it() が逐語で持つ）
-   * - **項目行のほかにも予算の上に載るものが在る**——見出し2行
-   *   （`<!-- memory: index -->` と `## 記憶の目次…`）と、行を繋ぐ改行である
-   *   （実測 123 字）。この上界がそれでも成り立つのは、`renderListing` が
-   *   予算を使い切らずに止まるため（実測 181 字を余らせる）であって、見出しが
-   *   予算の内側に在るからではない
-   */
+  // 上界の第2項は丸い数字にしない: 予算の上に載る断り書きの実長に連動させ、遊びの大きさに書き手の裁量を残さない。
   it('⭐⭐⭐ 修理の実在: 予算を超えてよいのは断り書きぶんだけ（遊びは断り書きの実測長が決める）', () => {
     const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT }, (_, i) => tocCapFact(i));
     const rendered = renderMemoryDocuments(docs);
     expect(rendered).toContain('省略');
 
-    // 上界の第2項は「この出力に実際に載った断り書き」から取る。
     const noteStart = rendered.indexOf(TOC_OMISSION_NOTE_HEAD);
     expect(noteStart).toBeGreaterThan(-1);
     const omissionNote = rendered.slice(noteStart);
-    // 切り出した先に目次の項目行が混ざっていない（＝これは断り書きそのもので
-    // あって、目印が項目行の中に当たったのではない）。
     expect(omissionNote).not.toMatch(/^- fact-/m);
 
     expect(rendered.length).toBeLessThan(MEMORY_TOC_CHAR_BUDGET + omissionNote.length);
 
-    // 対照: この上界が「そもそも蓋が噛んでいない」ことで成り立っていない
-    // ——蓋が無いときの外挿値とは桁が違う。
     const { one, marginal } = measureTocMarginalCost();
     const extrapolatedCandidateTotal = one.length + (MEMORY_TOC_ENTRY_LIMIT - 1) * marginal;
     expect(rendered.length).toBeLessThan(extrapolatedCandidateTotal / 2);
   });
 
-  /**
-   * ⭐ `MEMORY_TOC_CHAR_BUDGET` の値そのものは、どの歯にも固定されていない
-   * ——歯は定数を import して期待文言を組むので、**値を動かすと期待値も一緒に
-   * 動く**（自己整合）。実測（base `139c7aa`、全件）: `12_001` / `11_999` の
-   * どちらへ変異させても**生存**した。
-   *
-   * **だからといって `expect(MEMORY_TOC_CHAR_BUDGET).toBe(12_000)` は置かない。**
-   * それは実測に基づいて値を調整する正当な改善まで禁じる歯になる。**代わりに
-   * 「なぜ 12,000 なのか」＝ 値の帰属と関係のほうを固定する**（手本は #747 の
-   * 「8,000 を持つ別の予算が増えたら赤くなる」歯）。
-   *
-   * 固定するのは、`MEMORY_TOC_CHAR_BUDGET` の doc が逐語で主張している
-   * 「別の数を置くことで『別の予算である』を値そのものに語らせる」である。
-   * **この repo では値の共有そのものは禁じられていない**（実測: 8,000 は
-   * `MEMORY_LISTING_BUDGET` と `MEMORY_OUTLINE_BUDGET` が、3,000 は
-   * `MEMORY_PROMPT_DESCRIPTION_BUDGET` と `MEMORY_TIDY_TARGETS_BUDGET` が
-   * 分け合っている）ので、**この歯は「一般に値を共有するな」ではなく、
-   * この定数についての doc の主張だけを守っている。**
-   *
-   * 崩れたときにどこが赤くなるか: 誰かが 12,000 を別の `MEMORY_*_BUDGET` へ
-   * 写すか、この定数を既存の値（8,000 / 6,000 …）へ揃えると `sharing` に
-   * 名前が入り、`toEqual([])` が落ちる。doc の主張を書き換えるか、値を戻すまで
-   * 赤いままになる。
-   *
-   * **⚠️ この歯が測っていないこと: 値そのものは測らない。** 12,000 → 12,001 の
-   * ような、帰属も関係も壊さない変異はここでも生存する（それは意図であって
-   * 見落としではない）。
-   */
+  // 値そのもの（12_000）は固定しない: 実測に基づく調整まで禁じる歯になる。固定するのは値の帰属と関係だけ。
   it('⭐ 焼き込みの予算（MEMORY_TOC_CHAR_BUDGET）は、他のどの記憶の予算とも値を分け合わない', () => {
     const source = readFileSync(fileURLToPath(new URL('./memory.ts', import.meta.url)), 'utf8');
     const byName = new Map<string, number>();
@@ -1592,8 +1359,6 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       byName.set(match[1] as string, Number((match[2] as string).replace(/_/g, '')));
     }
 
-    // 対照: ソースから読んだ値と import した値が同じものを指している
-    // （正規表現が黙って外れていたら、下の `sharing` は常に空になる）。
     expect(byName.get('MEMORY_TOC_CHAR_BUDGET')).toBe(MEMORY_TOC_CHAR_BUDGET);
 
     const sharing = [...byName.entries()]
@@ -1604,13 +1369,8 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       .sort();
     expect(sharing).toEqual([]);
 
-    // 関係の側。**毎ターン全員が払う焼き込み**の予算なので、1回のツール応答の
-    // 予算（`MEMORY_LISTING_BUDGET`）よりも、premise 1文書ぶんの節目次の予算
-    // （`MEMORY_PROMPT_OUTLINE_BUDGET`）よりも大きい——束ねる対象が広い。
     expect(MEMORY_TOC_CHAR_BUDGET).toBeGreaterThan(MEMORY_LISTING_BUDGET);
     expect(MEMORY_TOC_CHAR_BUDGET).toBeGreaterThan(MEMORY_PROMPT_OUTLINE_BUDGET);
-    // そして蓋が無いときの下限（300件 × 1行200字）よりは小さい——蓋として
-    // 実際に噛む側に居ること。
     expect(MEMORY_TOC_CHAR_BUDGET).toBeLessThan(MEMORY_TOC_ENTRY_LIMIT * MEMORY_TOC_LINE_LIMIT);
   });
 
@@ -1633,42 +1393,13 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       }),
     ]);
     expect(rendered).toContain('stale-doc');
-    // #913: 期間フレーズは置き換えず、本文の変化量を並べて足す。
     expect(rendered).toContain(
       '要旨は本文より1時間古い（本文は+200バイト（+40%）変わった）: 古い要旨',
     );
   });
 
-  /**
-   * ⚠️⚠️ **4つの被験体には必ず同じ slug を渡す（`SAME_SLUG`）。読みやすさの
-   * ために `x-fresh` / `x-stale` のように分けないこと。**
-   *
-   * **理由**: slug は出力の行頭にそのまま出る（`- <slug>: <title> — …`）。
-   * ⟹ **4つに別々の slug を渡すと、測りたい当のもの（印を作る
-   * `memoryFreshnessMarker`）が何を返そうと4つの文字列は必ず互いに異なり、
-   * `distinct.size === 4` は無条件に成立する。** つまりこの歯は常に緑で、
-   * 変異を1つも検出しない。
-   *
-   * **実際にそうなっていた**（実測 2026-09-12）。ここはかつて `x-fresh` /
-   * `x-stale` / `x-unknown` / `x-absent` の4つの slug を使っており、
-   * `memoryFreshnessMarker` の **4分岐すべてを空文字に潰しても**——つまり
-   * #821 の直しを丸ごと削除しても——**緑のまま通った。** 4つを同じ slug に
-   * すると `expected 2 to be 4` で赤くなる。
-   *
-   * ⟹ 🔑 **これは #821 が名指しした欠陥と同じ形である**——「常に真になる
-   * 観測は、観測ではない」。**#821 を直した PR（#860）が、その Issue と同じ形
-   * の歯を置いていた。**
-   *
-   * ⟹ ⭐ **一般形: 「N 通りが互いに別の表示になる」型の歯は、被験体の識別子を
-   * 揃えないと無条件に通る。** 同じ形の歯を書くときは、まず「測りたいものを
-   * 潰したらこの歯は赤くなるか」を実際に撃って確かめること。
-   *
-   * ⛔ 下の `expect(slugs.size).toBe(1)` は、**分けた人がその場で気づくため**に
-   * 置いてある。`distinct.size` より**先に**落ちるので、失敗の理由が
-   * 「印が畳まれた」ではなく「被験体が分かれている」であることが出力で分かる。
-   */
+  // 4つの被験体には必ず同じ slug を渡す（分けない）: slug は出力の行頭に出るので、分けると印が何を返しても4つが別の文字列になり、distinct.size === 4 が無条件に通って歯が無力になる。
   it('4状態を畳まない: fresh / stale / unknown / absent がそれぞれ別の表示になる（被験体の slug は揃える）', () => {
-    // 4つの render の差が「印」だけになるように、被験体は1つの slug に固定する。
     const SAME_SLUG = 'x';
     const fresh = renderMemoryDocuments([
       fact(SAME_SLUG, { description: '説明', freshness: { kind: 'fresh' } }),
@@ -1682,14 +1413,10 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     const unknown = renderMemoryDocuments([
       fact(SAME_SLUG, { description: '説明', freshness: { kind: 'unknown' } }),
     ]);
-    // absent は description そのものを frontmatter に書かない（4状態のうち
-    // description が無いときの唯一の状態であることを、内容そのもので表す）。
     const absent = renderMemoryDocuments([fact(SAME_SLUG, { freshness: { kind: 'absent' } })]);
 
     const rendered = [fresh, stale, unknown, absent];
 
-    // ⛔ 被験体が分かれていないこと。ここが 1 でなければ、下の `distinct.size` は
-    // 印ではなく slug の差を測っている——この歯が無力になる唯一の壊れ方である。
     const slugs = new Set(rendered.map((s) => s.match(/^- (\S+?):/m)?.[1]));
     expect(slugs).toEqual(new Set([SAME_SLUG]));
 
@@ -1698,14 +1425,6 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(absent).toContain('（要旨なし）');
   });
 
-  /**
-   * ⭐ `drift`（3状態、#821 残課題）を畳んでいないことを、上と同じ「被験体の
-   * slug を揃える」手口で撃つ。`stale` という1つの `descriptionFreshness.kind`
-   * の中で、`drift.kind` だけを `measured` / `at-least` / `unrecorded` へ
-   * 変える——上のテストが `descriptionFreshness.kind` の4状態を畳んでいない
-   * ことを撃つのに対し、こちらは `drift` という別の軸を撃つ（被験体を足す形。
-   * 上のテストの被験体数・比較方法は変えない）。
-   */
   it('stale の drift 3状態を畳まない: measured / at-least / unrecorded がそれぞれ別の表示になる（被験体の slug は揃える）', () => {
     const SAME_SLUG = 'y';
     const measured = renderMemoryDocuments([
@@ -1748,34 +1467,19 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     const distinct = new Set(rendered.map((s) => s.trim()));
     expect(distinct.size).toBe(3);
 
-    // **`at-least` は `%` を出さない**（母数が「要旨を書いた時点の大きさ」
-    // ではないので）。`measured` は同じ deltaBytes/describedBytes の組でも
-    // `%` を出す——ここで両者が違う文字列になることを直接見る。
     expect(measured).toContain('本文は+200バイト（+20%）変わった');
     expect(atLeast).toContain('+200バイト以上変わった');
     expect(atLeast).not.toContain('%');
-    // **`baselineAt` は刷らない**（クローンのプロンプトへ毎ターン焼かれる
-    // ため）。
     expect(atLeast).not.toContain('2026-08-20T12:00:00Z');
   });
 
-  /**
-   * **かつてここは「本文が残る」まで固定していた。** premise の載り方が全文から
-   * カードへ変わったので（`renderPremiseCard`）、本文は誰の枝でも載らない。
-   *
-   * **この歯が測っているのは「文書が消えないこと」と「壊れている印が付くこと」**
-   * であり、そこは1ミリも弱まっていない——`malformed` が黙って `fact` へ倒れて
-   * 目次1行になれば、この歯は落ちる。
-   */
   it('malformed の文書は消えず、premise として扱われ、frontmatter が壊れている印が付く', () => {
     const rendered = renderMemoryDocuments([
       { slug: 'broken', content: '---\nauthor: 未知のキー\n---\n# Broken\n本文は残る' },
     ]);
     expect(rendered).toContain('frontmatter が壊れている');
-    // premise の枝を通っている（fact の目次側ではない）。
     expect(rendered).toContain('<!-- memory: broken.md（premise');
     expect(rendered).not.toContain('## 記憶の目次');
-    // 文書そのものは消えていない（見出しが載る）。
     expect(rendered).toContain('# Broken');
   });
 
@@ -1787,22 +1491,7 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(rendered).toContain('親 not-exist が見つからない');
   });
 
-  /**
-   * ⭐ fact の parent が premise を指すと「見つからない」と出る欠陥の修正。
-   *
-   * `renderMemoryDocuments` の目次（`renderMemoryToc`）は fact だけを対象に
-   * 組む——premise は目次の `bySlug` に居ない。だから親が premise として
-   * 実在していても、目次だけを見ると「見つからない」になっていた（同じ
-   * データが `memory_list` では正常に解決するのに、面によって答えが違う
-   * 欠陥）。
-   *
-   * **⚠️ 器は必ず premise 2件 + fact 1件を持つ**（AGENTS.md「測るのは
-   * 呼び出し回数ではなく状態である」）。premise が0件の器では、
-   * 「親が premise」と「親がそもそも無い」の2分岐が両方「見つからない」に
-   * 畳まれてしまい、この歯が変異を検出できなくなる。
-   *
-   * **2つの `it()` に分ける**（畳むと、どちらか一方の分岐を潰す変異が生存する）。
-   */
+  // 器は必ず premise 2件 + fact 1件にする: premise が0件だと「親が premise」と「親が無い」の2分岐が畳まれて変異を検出できない。it() も分ける。
   it('⭐ 親が premise を指すときは「見つからない」ではなく「在るが、目次には出ない」と言う', () => {
     const rendered = renderMemoryDocuments([
       premise('core-a', '前提A'),
@@ -1827,21 +1516,6 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(rendered).not.toContain('在るが、この目次は fact だけを列挙する');
   });
 
-  /**
-   * ⭐ `clone.ts` の `#withFreshMemory` が踏んだ欠陥（実測 2026-09-02）の修正。
-   *
-   * 記憶の更新を伝える塊は**変わった文書だけ**を `renderMemoryDocuments` へ
-   * 渡す。親（`parent`）が今回変わっていなければ、その `渡された集合の中でしか
-   * 解決できない`ので「親 X が見つからない」（＝そもそも文書が無い）と出て
-   * いた——実際には親は記憶に実在し、今回の描画に含まれていないだけである。
-   * `options.presentInMemory` に記憶の全体の文書を渡すと、この2つが
-   * 区別される（→ `parent-not-rendered`）。
-   *
-   * **`presentInMemory` の型は `readonly MemoryPart[]`（文書そのもの）である。**
-   * slug の集合ではなく文書を渡すのは、循環の検出（`cycle-outside-render` の歯）が
-   * 記憶の全体の `parent` まで引ける必要があるため——ここでは循環を測らないので
-   * `core-a` の `content` は空でよい。
-   */
   it('⭐ 親が今回の描画に含まれないだけのときは「見つからない」と言わない', () => {
     const rendered = renderMemoryDocuments(
       [fact('child', { description: '子', freshness: { kind: 'fresh' }, parent: 'core-a' })],
@@ -1860,23 +1534,12 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
           parent: 'really-not-exist',
         }),
       ],
-      // `presentInMemory` には子の文書しか無い——親の slug はどこにも無いので、
-      // 記憶の全体を渡していても状況は変わらない。
       { presentInMemory: [fact('child')] },
     );
     expect(rendered).toContain('親 really-not-exist が見つからない');
     expect(rendered).not.toContain('ここに載せた分には含まれない');
   });
 
-  /**
-   * 優先順位の歯。`resolveMemoryHierarchy` の `effectiveParent` は
-   * `renderedAsPremise` を `presentInMemory` より先に見る——同じ描画の中に
-   * premise として全文が載っているなら、そちらの言い方（「この目次のすぐ上」）
-   * のほうが具体的で、読み手に近い場所を指せる。
-   *
-   * **⚠️ 器は必ず premise 2件 + fact 1件を持つ**（上の「親が premise を指す」
-   * テストと同じ理由）。
-   */
   it('親が同じ描画の中に premise として載っているなら、`presentInMemory` を渡してもそちらの言い方が勝つ', () => {
     const rendered = renderMemoryDocuments(
       [
@@ -1890,19 +1553,11 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(rendered).not.toContain('ここに載せた分には含まれない');
   });
 
-  /**
-   * 互換の保証。`options.presentInMemory` を渡さなければ出力は1バイトも
-   * 変わらない——`renderMemoryDocuments` の doc がそう約束している。ここでは
-   * `toBe` で文字列全体の同一性を見る（部分一致では、既定値の変化が
-   * 「たまたま含まれていた文字列」に隠れうる）。
-   */
   it('`presentInMemory` を渡さなければ出力が1バイトも変わらない', () => {
     const docs = [
       fact('orphan', { description: '説明', freshness: { kind: 'fresh' }, parent: 'not-exist' }),
     ];
     const rendered = renderMemoryDocuments(docs);
-    // #821 以降、fresh も「要旨の後に本文は動いていない」という印を持つ
-    // （常に何か言う設計。旧来の「fresh は印なし」ではなくなった）。
     expect(rendered).toBe(
       '<!-- memory: index -->\n' +
         '## 記憶の目次（fact。本文は memory_read で開く。階層はインデントで表す）\n' +
@@ -1947,7 +1602,6 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     const childLine = lines.find((line) => line.includes('child-doc:'));
     expect(parentLine).toBeDefined();
     expect(childLine).toBeDefined();
-    // 子のほうがインデントが深い（先頭の空白の数で見る）。
     const leadingSpaces = (line: string) => line.length - line.trimStart().length;
     expect(leadingSpaces(childLine ?? '')).toBeGreaterThan(leadingSpaces(parentLine ?? ''));
   });
@@ -1956,21 +1610,7 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(renderMemoryDocuments([])).toBe('');
   });
 
-  /**
-   * ⭐ `cycle-outside-render`（循環の一部が描画の外を通る）。
-   *
-   * a → b → c → a の輪で、この描画に載っているのは a と b だけ（c は
-   * `presentInMemory` にしか無い）。`entries` の中だけで閉じた循環検出
-   * （直す前の実装）では、a から見ると「親 b はこの描画には無いが記憶には
-   * 実在する」（`parent-not-rendered`）としか言えない——輪の存在そのものが
-   * 見えない。`resolveMemoryHierarchy` の `detectCycle` が記憶の全体
-   * （`presentInMemory`）まで辿るようになったことで、a・b どちらから見ても
-   * 「循環している。ただし輪の一部はこの描画の外」と言えるようになる。
-   *
-   * **`toContain('循環')` だけでは `cycle` と区別できない**（両方に「循環」が
-   * 含まれる）ので、ここでは専用の逐語（「輪の一部はここに載せた分には含まれ
-   * ない」）で確かめる。
-   */
+  // `toContain('循環')` だけだと `cycle` と区別できない（両方に「循環」が含まれる）ので、専用の逐語で確かめる。
   it('⭐ 循環の一部がこの描画の外を通るとき、cycle ではなく cycle-outside-render として出る', () => {
     const ringA = fact('ring-a', {
       description: 'A',
@@ -1982,7 +1622,6 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       freshness: { kind: 'fresh' },
       parent: 'ring-c',
     });
-    // ring-c はこの描画には出ない——`presentInMemory` にだけ実在する。
     const ringC = fact('ring-c', {
       description: 'C',
       freshness: { kind: 'fresh' },
@@ -1995,8 +1634,6 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
 
     expect(rendered).toContain('ring-a');
     expect(rendered).toContain('ring-b');
-    // ring-c 自体はこの描画の対象（fact の目次）には出ない——`presentInMemory`
-    // にしか無いことがこの歯の前提である。
     expect(rendered).not.toContain('ring-c:');
     expect(rendered).toContain(
       '親 ring-b との間で循環（輪の一部はここに載せた分には含まれない——記憶の側にある）',
@@ -2383,8 +2020,6 @@ describe('premise のカードの束ねた蓋（MEMORY_PREMISE_CARD_BUDGET）—
 
     expect(rendered.length).toBeLessThan(MEMORY_PREMISE_CARD_BUDGET + note.length);
 
-    // 対照: この上界が「そもそも蓋が噛んでいない」ことで成り立っていない
-    // ——蓋が無いときの外挿値とは桁が違う。
     const extrapolated = one.length + (many - 1) * marginal;
     expect(rendered.length).toBeLessThan(extrapolated / 2);
   });
