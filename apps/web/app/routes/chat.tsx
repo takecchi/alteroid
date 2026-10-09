@@ -1114,7 +1114,6 @@ export function ChatPane({
       setAttachmentDrafts((previous) => {
         const next = new Map(previous);
         // 削除した会話の添えかけは持ち越さない: 持つと、消した会話のための「離れる確認」が出続ける
-        // 削除した会話の添えかけは持ち越さない: 持つと、消した会話のための「離れる確認」が出続ける
         if (!deletedConversationIds.current.has(shownId)) next.set(shownId, pending);
         next.delete(routeId);
         return next;
