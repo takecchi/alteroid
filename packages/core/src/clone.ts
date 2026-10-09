@@ -6746,59 +6746,9 @@ class Clone implements CloneHost {
   }
 
   /**
-   * `#allowedByGrantToolUses` に控えたまま、決着（`#onPostToolUse` /
-   * `#onPostToolUseFailure`）も拒否（`#noteDenial` → `#noteGrantFunneled`）も
-   * 来ないうちに、その控えを作った作業者（サブエージェント）が
-   * `SubagentStop` を迎えた分を日誌へ残す（Issue #1803）。
-   *
-   * ## なぜ要るか
-   *
-   * `#noteGrantFunneled` の検出は、拒否が実際に SDK から届くことに依存する。
-   * **作業者（サブエージェント）の呼び出しでは、この拒否そのものが届かない
-   * 経路がある**——静的な読みだけの観測（Issue #1803 本文、2026-09-26 の
-   * コメント。**生きたセッションでは確かめていない**）によると、背景で走る
-   * 作業者の文脈を組み立てる箇所に `onPermissionDenial=void 0` があり、その
-   * 文脈で deny 規則が hook の allow を上書きしても `permission_denials` にも
-   * 走行中の合図にも載らない。⟹ `#noteDenial` が一度も呼ばれないまま、
-   * `#allowedByGrantToolUses` の控えだけが残り続ける——`SubagentStop` は
-   * その作業者がもう戻ってこないことを知る、唯一の残った合図である。
-   *
-   * ## `agentId` で絞る（本体・別の作業者の控えには触れない）
-   *
-   * `record.agentId` が読めなければ何もしない——本体（クローン自身）のターン
-   * が閉じるのは `Stop` であって `SubagentStop` ではないので、ここへ来る
-   * 時点で作業者の呼び出しのはずだが、`agentId` が省かれた回（旧い provider
-   * の写し）は安全側（何もしない）に倒す。控えは `funneled.agentId ===
-   * record.agentId` で絞ってから消費するので、他の作業者や本体（`agentId`
-   * を持たない控え）には触れない。
-   *
-   * ## 原因は断定しない（`#noteGrantFunneled` と同じ流儀）
-   *
-   * ここで分かるのは「決着も拒否の記録も無いまま作業者が終わった」という
-   * **不在の事実**だけで、`#noteGrantFunneled` よりさらに1段弱い証拠しか
-   * 持たない（実際の拒否を受け取ったわけではない）。**だから「追い越され
-   * た」とは書かず、「決着しなかった」とだけ言う。** 人間が読む注意書きは
-   * `#grantFunneledWarnedOnce` を共有し、grant ごとに初回だけ足す
-   * （`#noteGrantFunneled` の doc「日誌には毎回書く。注意書きは grant ごとに
-   * 初回だけ」と同じ帳面・同じ理由——同じ grant について両方の検出経路が
-   * 交互に鳴っても、注意書きは1度で足りる）。
-   *
-   * ## コマンド本文は書かない
-   *
-   * `AllowedByGrantRecord` はもともとコマンド本文を持たない（`grantId` /
-   * `rule` / `agentId` だけ）ので、ここでも書きようがない——載せるのは
-   * `tool_use_id` / `grantId` / `rule` / `agentId` の4つだけである。
-   *
-   * ## 誤検出の筋（確かめていない）
-   *
-   * 背景処理が `SubagentStop` の**後**に決着する回があるかもしれない——その
-   * 回は実際には道具の実行が続いているのに「決着しなかった」と書くことに
-   * なる。**生きたセッションでは確かめていない**（Issue #1803 本文）。
-   * それでも、この関数が消費した**後**に同じ `tool_use_id` で
-   * `#onPostToolUse` / `#onPostToolUseFailure` / `#noteDenial` が来ても、
-   * 控えは既に消えているので何も起きない——`RecentMap.delete` は無い鍵を
-   * 渡されても例外を投げず、何も起きたことにしない（歯で固定してある）。
-   * ⟹ 誤検出はありうるが、二重に日誌へ残ることは無い。
+   * 決着も拒否も来ないまま作業者が `SubagentStop` を迎えた `#allowedByGrantToolUses` の控えを日誌へ残す。
+   * 「追い越された」とは書かず「決着しなかった」とだけ言う: 分かるのは不在の事実だけで、実際の拒否を受け取ってはいないため。
+   * `agentId` で絞る: 本体や別の作業者の控えを消費しないため。
    */
   async #onSubagentStop(record: AgentSubagentStopRecord): Promise<void> {
     if (typeof record.agentId !== 'string') return;
@@ -6831,58 +6781,21 @@ class Clone implements CloneHost {
 
   /**
    * クローンの SDK 子プロセスへ渡す env。
-   *
-   * **記憶ストアの鍵は落とさない。** ここはマネージャー（`runner.ts` の
-   * `#childEnv`）と扱いが逆である — 伏せるのは「上（記憶）へ到達する鍵を
-   * *下の層* へ配らない」ためであって、記憶の持ち主であるクローン自身から
-   * 取り上げるためではない。取り上げれば、それはただのデグレードになる。
-   *
-   * **⚠️ 例外が1つある——`#withheldEnvKeys`（Issue #1495 ①。`CloneOptions.
-   * withheldEnvKeys` の doc）。** ここへ挙げるのは記憶へ届く鍵ではなく、
-   * ログイン基盤そのものの鍵（Google OAuth のクライアント ID /
-   * シークレット）である。クローンの SDK 子プロセス（`Bash` / MCP / 作業者を
-   * 含む）が記憶を読み書きするのにこの鍵を使うことは無いので、「記憶の持ち主
-   * だから落とさない」という上の理由はここには当てはまらない。
+   * 記憶ストアの鍵は落とさない: 記憶の持ち主であるクローンから取り上げるとデグレードになるため（マネージャーとは逆）。
+   * 落とすのは `#withheldEnvKeys`（ログイン基盤の鍵）だけ。
    */
   #childEnv(): NodeJS.ProcessEnv {
-    // **鍵は呼ばれるたびに読み直す。** `this.#childEnvBase` は構築時のスナップショットなので、
-    // そのまま配ると人間（や回し手）が後から差し替えた鍵が永久に届かない
-    // （`credentials.ts` / `runner.ts` の `#childEnv()` と同じ理由）。
-    //
-    // **重ね順は runner.ts と揃えてある** ——`env` → 正本 → 鍵 → プロファイル。
-    // あちらの doc が「プロファイルは鍵より後。人間が明示的に書いたほうが勝つ」と
-    // 言っており、**層ごとに順序が違うと「マネージャーには回るのにクローンには
-    // 回らない」（あるいは逆）が生まれる。** 規則は1つにする。**正本の重ねを
-    // `env` の直後・鍵とプロファイルより前に置くのは、Anthropic のプールの扱い
-    // （`this.#credentials`）を1バイトも変えないためである** —— プールの名前
-    // （`POOL_OWNED_CREDENTIAL_NAMES`）は `assertEntries` が正本への書き込みを拒むので
-    // ここに挟んでも衝突しないが、念のためプールの重ねより手前に置いて、
-    // プールの行を後勝ちのまま動かさない。
-    //
-    // **⚠️ この順序の帰結として、プロファイルが鍵と同じ名前を宣言していると
-    // 鍵が黙って上書きされる。** 塞ぐのは順序ではなく検出のほうである
-    // （`credentialNamesShadowedByProfile`。理由はあちらの doc）。
-    // **セッションが起きるこの瞬間の身元を捕まえる**（`#sessionTokenIdentity` の doc）。
-    // ここ以外で読み直すと、世代の照合が素通しになる。
+    // 鍵は呼ばれるたびに読み直す: `#childEnvBase` は構築時のスナップショットで、後から差し替えた鍵が届かなくなるため。
+    // 重ね順は runner.ts と揃える（env → 正本 → 鍵 → プロファイル）: 層ごとに違うと片方にだけ回る鍵が生まれるため。
+    // 身元の捕捉はここ以外でしない: 世代の照合が素通しになる。
     this.#sdkSession.captureSessionTokenIdentity(this.#tokenIdentity?.());
     const env = this.#layeredChildEnv();
-    // **伏せるのは最後**（`runner.ts` の `#childEnv()` と同じ順序）。正本や
-    // プロファイルがログイン基盤の鍵と同じ名前を重ねてきても、最後にもう一度
-    // 落とすことで生き残らせない——`credentialNamesShadowedByProfile` が
-    // 「人間が明示的に書いたほうが勝つ」を検出するのと違い、ここは検出ではなく
-    // 実際に落とす（記憶ストアの鍵とは扱いが違う理由は直上の doc）。
-    // **`this.#env`（daemon の `process.env`）自体は動かさない** —— ここで
-    // 作った新しいオブジェクト（`env`）から削るだけである。daemon 本体は
-    // このメソッドの後もこの鍵を使って OAuth の交換を続ける。
+    // 伏せるのは最後（正本やプロファイルが同じ名前を重ねても生き残らせない）。`this.#env` 自体は動かさない: daemon は OAuth の交換にこの鍵を使い続ける。
     for (const key of this.#withheldEnvKeys) delete env[key];
     return env;
   }
 
-  /**
-   * `#childEnv()` の重ね（土台 → 正本 → 鍵 → プロファイル。伏せる前）。身元の捕捉を伴わない。
-   * 添付の画像の経路（Bedrock / Vertex）をターンの環境から読むために切り出した（#3743）。
-   * **セッションを起こさない読みでは `#childEnv()` を呼ばないこと**（世代の照合に使う身元を捕まえてしまう）。
-   */
+  /** セッションを起こさない読みでは `#childEnv()` を呼ばない: 世代の照合に使う身元を捕まえてしまうため。 */
   #layeredChildEnv(): NodeJS.ProcessEnv {
     let env: NodeJS.ProcessEnv = {};
     for (const layer of this.#childEnvLayers()) env = { ...env, ...layer.env };
@@ -6899,47 +6812,15 @@ class Clone implements CloneHost {
     ];
   }
 
-  /**
-   * SDK 子の接続先とモデルの別名の表示行（#4263・#4261）。env の値は返さない。
-   * `#childEnv()` ではなくこちらの重ねを読む: セッションを起こさない読みで身元を捕まえないため。
-   * 伏せる鍵（`#withheldEnvKeys`）は `ANTHROPIC_*` を含まないので、検査の前に落とさない。
-   */
+  /** `#childEnv()` ではなくこちらの重ねを読む: セッションを起こさない読みで身元を捕まえないため。 */
   anthropicRoute(): string[] {
     return describeAnthropicRoute(inspectAnthropicRoute(this.#childEnvLayers()));
   }
 
   /**
-   * 正本（`CredentialService`）を、マネージャー側（`effective()`）と**同じ
-   * 1本の解決**（`resolveCredentialRows`）へ通してから重ねる（人間の決定
-   * 2026-09-12、「梯子を1本に統一する」——Issue #865 の恒久策）。
-   *
-   * ## なぜ以前は正本を素通りしていたか
-   *
-   * `#childEnv()` は同期だが、正本（`stores.credentials`）の読み出しは
-   * 非同期である。⟹ ここで直接 `await` はできない。**同期の写し**
-   * （`CredentialService#vaultSnapshot()`）を経由することで、この制約の
-   * 中で正本を覗く。
-   *
-   * ## `credentialService` を渡さなかったら
-   *
-   * `[]` を正本として解決する——正本の上乗せが無いだけで、**変更前の `#childEnv()`**
-   * （`env` → 鍵 → プロファイルだけ）とちょうど同じ集合を返す。**既定の構成の挙動を
-   * 変えない**（`CloneOptions.credentials` の同じ doc と同じ約束）。
-   *
-   * ## 器の env を最後の土台にしない（2026-10-06）
-   *
-   * 正本に無い名前（`GH_TOKEN` を含む）は、この重ねからは何も出ない。以前は
-   * `resolveCredentialRows` が `this.#env` の `GH_TOKEN` 等を土台として埋めていたが、
-   * その値は起動時に正本から書き写されたものだった（`CloneOptions.childEnvBase` の doc）。
-   *
-   * ## 範囲が広がる副作用
-   *
-   * **正本にしか無い任意の名前（GitHub 以外。PR #825）も、初めてクローンへ
-   * 届くようになる。** 以前はマネージャーだけが正本を読んでいた
-   * （`effective()`）ので、クローンには一切届いていなかった。これは能力の
-   * 削除ではなく追加であり、north_star が求める「クローンは道具を全部持つ」
-   * （地雷表）にむしろ沿う——マネージャーが読める正本を、その代理である
-   * クローンが読めないほうが不自然である。
+   * 正本を、マネージャー側と同じ1本の解決（`resolveCredentialRows`）へ通してから重ねる。
+   * `#childEnv()` は同期なので、非同期の読み出しではなく同期の写し（`vaultSnapshot()`）を覗く。
+   * `this.#env` の `GH_TOKEN` 等は土台にしない: 起動時に正本から書き写された値だったため。
    */
   #vaultCredentialOverlay(): Record<string, string> {
     const rows = this.#credentialService?.vaultSnapshot() ?? [];
@@ -6947,13 +6828,7 @@ class Clone implements CloneHost {
     return Object.fromEntries(resolved.map((row) => [row.name, row.value]));
   }
 
-  /**
-   * 枠の観測を回し手へ渡す（Issue #393 PR3）。**判断はしない。**
-   *
-   * **投げてもターンを壊さない。** 回せなかったことは枠に当たったこととは別の
-   * 失敗であり、後者の報告を前者で置き換えない——ここで投げ直すと、人間には
-   * 「上限に当たった」ではなく「回し手が落ちた」だけが届く。
-   */
+  /** 投げ直さない: 回し手が落ちたことで「上限に当たった」の報告を置き換えないため。 */
   async #observeForTokenRotation(
     observation: Omit<TokenRotatorObservation, 'observedBy'>,
   ): Promise<void> {
@@ -6966,45 +6841,26 @@ class Clone implements CloneHost {
           : { observedBy: this.#sdkSession.sessionTokenIdentity }),
       });
     } catch (error) {
-      // **黙って握り潰さない。** 跡は残すが、ターンは続ける。
       noteDroppedRecord('認証トークンの切替', 'clone', error);
     }
   }
 
-  /**
-   * 要約に潰される直前に、全文をアーカイブへ落とし、そこから蒸留する。
-   *
-   * 蒸留は生存条件であり、後回しにしてよい機能ではない。ここで記憶へ移し損ねた
-   * ものは、compaction のたびに人格の一部として失われる。
-   */
+  /** 蒸留は生存条件であり、後回しにしない: ここで記憶へ移し損ねたものは compaction のたびに人格の一部として失われる。 */
   async #onPreCompact(record: AgentPreCompactRecord): Promise<void> {
     const { sessionId, transcriptPath, signal } = record;
 
-    // **いちばん先に印を立てる**（`#memoryIndexRefreshPending`）。compaction は
-    // このフックが何を返しても起きるので、生ログのパスが取れない回でも
-    // 「潰された」ことは真である。**退避や蒸留の try より前に置く** ——
-    // あちらが落ちても、索引の載せ直しは行われなければならない。
+    // 退避や蒸留の try より前に印を立てる: あちらが落ちても索引の載せ直しは行われなければならないため。
     this.#distillMemory.armMemoryIndexRefresh();
 
     if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) {
       return;
     }
 
-    // **(i) 退避と (ii) 蒸留を別の `try` に割る**（`#salvageTranscript` と同じ形）。
-    // 直す前は 1 つの `try` で、しかも全文を 1 本の文字列にしてから両方へ渡していた。
-    // ⟹ **生ログが伸びて `readFile` が `ERR_STRING_TOO_LONG` で落ちると、蒸留も
-    // 一緒に止まる。** それはこの経路の doc（「蒸留は生存条件であり、後回しにしてよい
-    // 機能ではない」）が守ると言っているものが、退避の都合で失われる形である。
+    // 退避と蒸留を別の `try` に割る: 生ログが伸びて `readFile` が落ちたとき、蒸留まで道連れに止めないため。
     try {
-      // 退避するのは全文（ロードマップの要件）。**全文を 1 本の文字列にするのは
-      // ここだけである**（`readTranscriptTail` の doc）。
-      // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため（#4127）
+      // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため
       const transcript = redactImagesInTranscript(await readFile(transcriptPath, 'utf8'));
       const write = await this.#stores.archive.archive(sessionId ?? 'clone', transcript);
-      // **diverged / unknown のときだけ日誌へ記録する**（#698。`continues` は
-      // ノイズにしかならない——理由は `describeArchiveContinuityForJournal`
-      // の doc）。`#journal` は自分で失敗を握り潰すので、退避の成功を道連れに
-      // しない。
       const continuityText = describeArchiveContinuityForJournal({
         caller: 'PreCompact の退避',
         sessionId: sessionId ?? 'clone',
@@ -7030,7 +6886,7 @@ class Clone implements CloneHost {
       });
     }
 
-    // **中断の合図は蒸留にだけ掛かる**（直す前と同じ。退避は中断で飛ばさない）。
+    // 中断の合図は蒸留にだけ掛ける: 退避は中断で飛ばさない。
     if (signal?.aborted === true) return;
 
     try {
@@ -7045,27 +6901,17 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * 走行中のセッションは compaction 中なので、蒸留は別の短命セッションで行う。
-   * 道具（記憶・日誌）は同じインプロセス MCP を渡すので、書き込み先は同じ。
-   */
+  /** 走行中のセッションは compaction 中なので、蒸留は別の短命セッションで行う。 */
   async #distillFromTranscript(transcriptTail: string): Promise<void> {
-    // **蒸留のサイドクエリは駆動役の任意の能力である**（`AgentCloneDriver.distill`）。持たない
-    // 駆動役では**投げる**——呼び出し側はどれも失敗として日誌へ残し、「蒸留できた」印を
-    // 下ろさない（黙って返すと、蒸留していないのに成功として扱われる）。
+    // 持たない駆動役では投げる: 黙って返すと、蒸留していないのに成功として扱われるため。
     const driver = this.#driver;
     const distill = driver.distill?.bind(driver);
     if (distill === undefined) {
       throw new Error(`この駆動役（${driver.providerId}）は蒸留のサイドクエリを持たない`);
     }
-    // ここは**別の短命セッション**なので、載せ直しの控え（`#memoryOnRecord`）は
-    // 触らない。触ると本セッションの差分が消える。
+    // 載せ直しの控え（`#memoryOnRecord`）は触らない: 別の短命セッションなので、触ると本セッションの差分が消える。
     const memory = renderMemoryDocuments(await this.#stores.persona.documents());
 
-    // **このターンへ何が入ったかを残す**（#243 の7本目）。本文は会話の生ログの
-    // 末尾で、他の5経路の `digest` のように器から組み直せる寄せ集めではないので、
-    // 長さに加えて指紋も書く（何を載せるかの判断は `turnInputEntry` に1本化して
-    // ある）。
     await this.#journal(turnInputEntry({ type: 'pre_compact_distill', transcriptTail }));
 
     const prompt = [
@@ -7076,24 +6922,14 @@ class Clone implements CloneHost {
       transcriptTail,
     ].join('\n');
 
-    // **蒸留のたびに読み直す**（`#externalMcpServers` の doc）。本セッションと同じ
-    // 人間の連携を渡す——片方だけに見えると、人格の書き手だけが別の手を持つ。
+    // 本セッションと同じ連携を渡す: 片方だけに見えると人格の書き手だけが別の手を持つ。
     const externalMcpServers = await this.#externalMcpServers();
     const plugins = await this.#plugins();
     const side = distill({
       prompt,
       model: this.#model,
       permissionMode: this.#permissionMode,
-      // **蒸留のターンでも同じ道具を渡す。** ここだけ欠けていると、
-      // 会話の最後に「鍵を実行環境へ移す」をやろうとして失敗する。
-      //
-      // **本セッションで観測した値をそのまま渡す。** ここだけ欠けていると、
-      // 蒸留のターンだけ自分のことが分からないクローンになる
-      // （`CloneRuntimeFacts.sessionId` のコメントの理由）。
-      // **`#cloneToolsFor` を本セッションと同じく通す**（Issue #486
-      // 48(a) PR2）。中身は変えず、経路（`sdk`/`stdio`）を決める1点だけを
-      // 本セッションと揃える——`#cloneToolsFor` の doc「片方だけ中継越し
-      // だと…非対称が transport の軸にも生まれる」を参照。
+      // 蒸留のターンにも本セッションと同じ道具と観測値を、`#cloneToolsFor` 経由で渡す: 欠けるとここだけ自分のことが分からないクローンになる。
       tools: await this.#cloneToolsFor({
         stores: this.#stores,
         emit: () => undefined,
@@ -7101,29 +6937,15 @@ class Clone implements CloneHost {
         ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
         ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
         runtime: () => this.#runtimeFacts(),
-        // このサイドクエリ自体が常に蒸留のターンなので、`#turn` を読む必要は
-        // 無い（`#toolContext()` の doc）。**ここを削ると `memoryCause` は
-        // 既定の `'clone'` に落ち、蒸留が書いた記憶なのに `cause: 'clone'`
-        // と名乗る**（`ToolContext.memoryCause` の doc の「渡し忘れ」）。
+        // 削らない: 既定の `'clone'` に落ち、蒸留が書いた記憶なのに `cause: 'clone'` と名乗る。
         memoryCause: () => 'distill',
-        // **蒸留のサイドクエリにも渡す**（issue #1049）。この層で
-        // `inbox_remove_many` を打つ場面は想定していないが、**渡さない側を
-        // 選ぶと「蒸留のターンだけ消せない」という層ごとの能力差になる**
-        // （north_star 禁止2）。渡す実体は本セッションと同一である。
+        // 蒸留にも渡す: 渡さないと「蒸留のターンだけ消せない」という層ごとの能力差になる。
         dropQueuedInboxEvents: (ids) => this.dropQueuedInboxEvents(ids),
-        // **同じ理由で渡す**（issue #1133）。`#toolContext()` と同じ
-        // `#queuedInMemoryCount()` を経由する。
         queuedInMemory: () => this.#queuedInMemoryCount(),
         ...this.#attachmentCopiesDirEntry(),
         ...this.#attachmentLimitsEntry(),
-        // **`conversationId` は明示する（#768・#781）。** かつては省略していたが、
-        // いまは `ToolContext.conversationId` が必須（省略すると
-        // `createCloneTools` が throw する）。値そのものの判断は変えていない
-        // —— `emit` を `() => undefined` にしているのと同じ判断で、
-        // サイドクエリは常に内部ターンで人間の会話には紐づいていないので、
-        // 関数は渡すが常に `undefined` を返す。
+        // 省略しない: `ToolContext.conversationId` が必須で、省くと `createCloneTools` が throw する。
         conversationId: () => undefined,
-        // **同じ実体を渡す**（issue #1802。上の `dropQueuedInboxEvents` と同じ理由）。
         recentDenials: () => this.#recentDenials.list(),
       }),
       externalMcpServers,
@@ -7135,67 +6957,31 @@ class Clone implements CloneHost {
       env: this.#childEnv(),
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
       onPostToolUse: (input) => this.#onDistillToolUse(input),
-      // **本セッションと同じ理由で足す**（`#buildSessionSpec` の
-      // `onPostToolUseFailure` の doc）。蒸留は `memory_write` を叩く経路
-      // なので、そこの失敗を記録しないと「記憶が書かれなかった」が
-      // 静かに落ちる。
+      // 足す: 蒸留は `memory_write` を叩く経路で、失敗を記録しないと「記憶が書かれなかった」が静かに落ちる。
       onPostToolUseFailure: (input) => this.#onDistillToolUseFailure(input),
     });
 
     for await (const ended of side) {
-      // **本セッションと同じ写しを通す**（駆動役が `foldClaudeMessage` 等で中立イベントへ
-      // 畳んで返す）。読むのはターンの終わりだけなので `#apply` は
-      // 通さない —— こちらは `site`（`distill`）も累積の数え方（`oneshot`）も
-      // 本セッションと違い、**同じ反応をさせてはいけない側**である。
+      // `#apply` は通さない: `site`（`distill`）も累積の数え方（`oneshot`）も本セッションと違い、同じ反応をさせてはいけない。
       if (ended.type !== 'turn_ended') continue;
-      // **このサイドクエリの `result` を読み捨てないこと。** ここが「要約のたびに
-      // 払っている蒸留の費用」の唯一の観測点である。別の `query()` 呼び出しなので
-      // 累積は1回で閉じており（SDK: 「during this query() call」）[sdk-verbatim SDKResultSuccess.modelUsage]、値はこの1回の
-      // 総量そのものである ＝ 基準を持たせない（`usage.ts` の `foldOneshotUsage`）。
-      //
-      // **これは「要約そのものの費用」ではない。** 要約を作る推論は本セッションの
-      // `modelUsage` に合算されて分離できない（`usage.ts` の `usageSiteSchema`）。
-      // 混ぜて名乗ると、取れていないものを取れたことにする。
+      // `result` を読み捨てない: 要約のたびに払う蒸留の費用の唯一の観測点。別の `query()` 呼び出しなので累積は1回で閉じており
+      // （SDK: 「during this query() call」）[sdk-verbatim SDKResultSuccess.modelUsage]、基準は持たせない。要約そのものの費用は本セッションの `modelUsage` に混ざって分離できない。
       await this.#recordUsage(ended.usage, 'distill', 'oneshot');
-      // **この経路の成功も日誌へ残す**（Issue #564 の (b)）。ここは受信箱を
-      // 通らない別経路なので、`#handle` の `'distill'` 分岐に印を置いただけでは
-      // 「要約の直前に蒸留して、そのまま器が入れ替わった」回が「1度も蒸留して
-      // いない」と読まれる。
-      //
-      // **判定は `succeeded` である**（`#recordUsage` が消費を積むのと同じ条件 ——
-      // 中立イベントの `succeeded` は `usage.ts` の `isSuccessResult` そのもので、
-      // `usage` が載るかどうかもこれで決まる）。ここは `#runTurn` を通らないサイド
-      // クエリなので `TurnOutcome` が無く、成否はターンの終わりからしか取れない。
+      // 成功の判定は `succeeded`: `#runTurn` を通らないので `TurnOutcome` が無く、成否はターンの終わりからしか取れない。
       if (ended.succeeded) await this.#journal(distillSucceededEntry('pre_compact'));
       break;
     }
   }
 
   /**
-   * ターンの境界の文脈占有を、SDK の control channel から1回だけ聞く
-   * （`schema.ts` の `turn_usage.contextUsage` の doc）。
-   *
-   * **`this.#query` が既に無ければ何も聞かない。** セッションが終わる窓
-   * （`#read` の `finally` が `#query = null` にした後）でここへ来ると
-   * `getContextUsage` を持たない値を呼ぶことになるので、`null` のときは
-   * 呼ばずに `undefined` を返す —— これは「試して失敗した」ではなく
-   * 「まだ観測していない」の側である（`turn_usage.contextUsage` の doc、
-   * 欄そのものが無い行の意味）。
-   *
-   * **失敗してもターンを止めない。** 呼び出しは `try`/`catch` で必ず値を
-   * 返す形にしてあり、呼び出し元（`#apply` の `case 'turn_ended'`）は
-   * ここで例外を待ち受けない。
-   *
-   * **秘密を漏らさない。** 例外・rejection の理由は `usage-probe.ts` の
-   * `describeProbeError`（`redactEnvSecrets` を内側で通す）でしか運ばない
-   * ——新しい伏せ字の仕組みは作っていない。
+   * ターンの境界の文脈占有を、SDK の control channel から1回だけ聞く。
+   * 投げない: 失敗は `error` 付きの値で返し、呼び出し元はここで例外を待ち受けない。
+   * 理由は `describeProbeError` 経由でしか運ばない: 秘密を漏らさないため。
    */
   async #observeContextUsage(): Promise<ContextUsageObservation | undefined> {
     const q = this.#sdkSession.query;
     if (q === null) return undefined;
-    // **文脈の使用状況を出せない駆動役（Codex）は、最初の1回だけ「取れない」と残し、以後は聞かない**
-    // （毎ターン同じ error 付きの `context_usage` 行を積まない）。2回目以降は「観測していない」
-    // （`undefined`）で、行は書かれない。`providesContextUsage` を持たない Claude は従来どおり。
+    // 文脈の使用状況を出せない駆動役は最初の1回だけ「取れない」と残し、以後は聞かない: 毎ターン同じ error 付きの行を積まないため。
     if (this.#driver.providesContextUsage === false) {
       if (this.#contextUsageUnavailableNoted) return undefined;
       this.#contextUsageUnavailableNoted = true;
@@ -7203,16 +6989,7 @@ class Clone implements CloneHost {
     const startedAt = Date.now();
     try {
       const usage = await q.contextUsage();
-      // **内訳は既に払ってあるものを写すだけである。** `getContextUsage()` を
-      // 引数なしで呼ぶと SDK の既定は `detail: 'full'`（＝カテゴリごとに
-      // token-count API を呼ぶ）なので、**内訳を取り出さなくても費用は同じ**
-      // （`schema.ts` の `contextUsage.categories` の doc に逐語）。
-      // **`kind` も写す（#804）。** SDK の doc が名指しでそう言っている
-      // （`schema.ts` の `contextUsage.categories[].kind` の doc、逐語）——
-      // 分類は `kind` の値だけで行い、この `map` は `name` の文字列を
-      // 1文字も見ない。分類そのもの（`used`/`free`/`buffer`/`deferred`/
-      // 分類できない軸）は `context-usage.ts` の `summarizeContextCategories`
-      // が1箇所で持つ——ここは SDK の値をそのまま写すだけである。
+      // 分類は `kind` の値だけで行い `name` の文字列は見ない（`summarizeContextCategories` が1箇所で持つ）。
       const categories = (usage.categories ?? []).map((category) => ({
         name: category.name,
         tokens: category.tokens,
@@ -7220,9 +6997,7 @@ class Clone implements CloneHost {
       }));
       const shownCategories = categories.slice(0, CONTEXT_USAGE_CATEGORY_LIMIT);
       const omittedCategories = categories.length - shownCategories.length;
-      // **配列は合計へ畳む。** 道具は `CLONE_TOOL_NAMES`（`tools.ts`）の本数だけ
-      // あるので、1本ずつ写すと日誌の1行がその数だけ伸びる
-      // （`turn-input.ts` の「再構成できるものを二重に持たない」）。
+      // 配列は合計へ畳む: 1本ずつ写すと日誌の1行が道具の本数だけ伸びる。
       const sumTokens = (items: readonly { tokens: number }[]): number =>
         items.reduce((total, item) => total + item.tokens, 0);
       const mcpTools = usage.mcpTools ?? [];
@@ -7237,10 +7012,7 @@ class Clone implements CloneHost {
           ? {}
           : { autoCompactThreshold: usage.autoCompactThreshold }),
         isAutoCompactEnabled: usage.isAutoCompactEnabled,
-        // **空の配列のときは欄そのものを作らない。** 0 を置くと「測ったが 0
-        // だった」と読めるが、実際には「SDK がその欄を返さなかった」ことが
-        // ありうる（`systemPromptSections` などは optional である）——
-        // AGENTS.md の地雷「取れない軸に 0 の行を作る」と同じ形。
+        // 空の配列のときは欄を作らない: 0 を置くと、SDK がその欄を返さなかった回が「測ったが 0」と読める。
         ...(shownCategories.length === 0 ? {} : { categories: shownCategories }),
         ...(omittedCategories > 0 ? { categoriesOmitted: omittedCategories } : {}),
         ...(mcpTools.length === 0
@@ -7265,36 +7037,10 @@ class Clone implements CloneHost {
   }
 
   /**
-   * **セッションを畳む直前に、累積を control channel から1回読んで台帳へ積む。**
-   *
-   * ## なぜ要るのか（マネージャー層と同じ穴である）
-   *
-   * `#recordUsage` は `turn_ended` の `usage` からしか積まない。そして
-   * `claude-provider.ts` の `foldClaudeMessage` は逐語「**成功した result の消費だけ
-   * を通す**」なので、**`result` を出さずに終わったターンは `usage` を持たない**
-   * ⟹ `#recordUsage` は逐語「**積める消費が無い回はここで終わる**」で戻る。
-   *
-   * **失われるのは「そのターンぶん」ではなくセッションの末尾ぶんである。** クローン
-   * の台帳は累積（`accumulation: 'cumulative'`）なので、セッションが生きていれば
-   * 次の成功ターンが取り戻す。**取り戻せないのはセッションごと死んだときである**
-   * —— 新しいセッションは累積 0 から始まるので `foldUsageSnapshot` の `detectReset`
-   * が真になり、増分は新しい累積そのものになる。⟹ 前のセッションの、最後に記録
-   * できた点から死ぬまでのぶんは二度と積まれない。
-   *
-   * **マネージャー層は `runner.ts` の `#flushUsage` で既にこれを塞いでいる**
-   * （終わり口2本 `stop()` と `#finish` の両方）。**クローン層だけが塞いでいな
-   * かった。** 読み取りの本体を層で書き分けず `usage.ts` の `readSessionUsage` に
-   * 置いてあるのは、片方だけ消されないためである（そちらの doc に理由の全文）。
-   *
-   * ## 契約
-   *
-   * - **`this.#query?.close()` / `this.#query = null` より先に呼ぶこと。** 閉じた後の
-   *   control channel からは何も取れない
-   * - **投げない。** `readSessionUsage` が口の不在・例外・時間切れを全部
-   *   `undefined` へ畳む。**畳む経路を観測に縛らない**
-   * - **`turnBoundary` は渡さない。** ここはターンの境界ではないので、文脈占有も
-   *   compaction も持たない（`#recordUsage` の `turnBoundary` の doc が蒸留の
-   *   サイドクエリについて言っているのと同じ理由である）
+   * セッションを畳む直前に、累積を control channel から1回読んで台帳へ積む。
+   * `result` を出さずに終わったターンは `usage` を持たず、セッションごと死ぬと末尾ぶんが二度と積まれないため。
+   * `#query` を閉じる前に呼ぶ: 閉じた後の control channel からは何も取れない。
+   * `turnBoundary` は渡さない: ここはターンの境界ではなく、文脈占有も compaction も持たない。
    */
   async #flushSessionUsage(): Promise<void> {
     const session = this.#sdkSession.query;
@@ -7305,45 +7051,21 @@ class Clone implements CloneHost {
 
   /**
    * `result` に載っている消費を台帳へ積む。
-   *
-   * **モデル id で層を代用しない。** `ALTEROID_CLONE_MODEL` を置けばクローンも
-   * マネージャーと同じ opus で走るので、台帳では同じ `model` に並ぶ。層は
-   * `layer` の列で言う（`usage.ts` の `usageLayerSchema`）。
-   *
-   * **台帳に積めないことでクローンのターンを止めない。ただし黙って消さない**
-   * （`manager.ts` の `case 'usage'` と同じ作法）。
+   * モデル id で層を代用しない: `ALTEROID_CLONE_MODEL` でクローンもマネージャーと同じ opus で走り、台帳で同じ `model` に並ぶため。
+   * 台帳に積めなくてもターンは止めないが、黙って消さない。
    */
   async #recordUsage(
     usage: AgentTurnUsage | undefined,
     site: UsageSite,
     accumulation: 'cumulative' | 'oneshot',
-    /**
-     * ターンの境界で聞いた文脈占有と、ターンの間に起きた compaction
-     * （`case 'turn_ended'` だけが渡す）。**蒸留のサイドクエリ（`site: 'distill'`）
-     * からの呼び出しは渡さない** —— あちらはこの層の外の短命セッションで、
-     * `this.#turn` も `this.#query`（本セッションの）も指していないので、
-     * 文脈占有もこのターンの compaction も原理的に持たない（`schema.ts` の
-     * `turn_usage.contextUsage` / `turn_usage.compactions` の doc）。
-     */
+    /** `case 'turn_ended'` だけが渡す。蒸留のサイドクエリは本セッションの外なので文脈占有も compaction も持たず、渡さない。 */
     turnBoundary?: {
       contextUsage?: ContextUsageObservation;
       compactions?: CompactionObservation[];
     },
   ): Promise<void> {
-    // **積める消費が無い回はここで終わる。** 「成功した result だけを通す」の
-    // 判定は provider の写しが済ませている（`claude-provider.ts` の
-    // `foldClaudeMessage` ＋ `usage.ts` の `isSuccessResult`）ので、
-    // `usage` が無いことがそのまま「積む値が無い」である。
-    //
-    // **⚠️ Issue #982 以降、`turnBoundary?.contextUsage` はここで一緒に
-    // 捨てても文脈占有そのものを失わない。** 呼び出し元（`case 'turn_ended'`）
-    // が `event.succeeded` を見る前に独立の `context_usage` journal 行として
-    // 既に書いてある——ここで早期 return するのは、あくまで `turn_usage`
-    // （消費の増分の行）とその欄に相乗りする `contextUsage` の写しだけである。
     if (usage === undefined) {
-      // **消費を報告しない provider だけが「取れなかった」を数える。** 条件は
-      // `capabilities.usage === false` であって `usage === undefined` ではない——Claude の
-      // 失敗した result も usage を持たないが、あれは無報告ではない（数えない）。
+      // 数えるのは `capabilities.usage === false` のときだけ: Claude の失敗した result も usage を持たないが、あれは無報告ではない。
       if (this.#provider.capabilities.usage === false) await this.#recordUnmeteredTurn(site);
       return;
     }
@@ -7360,28 +7082,13 @@ class Clone implements CloneHost {
         at: at.toISOString(),
         snapshot,
         accumulation,
-        // **セッションが起きた瞬間の身元を使う**（`#sessionTokenIdentity`）。
-        // ここで `#tokenIdentity?.()` を読み直すと、回した直後に届いた**前の
-        // セッションぶんの消費**が新しいトークンに付く（`store.ts` の
-        // `UsageStore.record` の `tokenId` の doc）。
-        //
-        // **無いときは渡さない。** プールが空の器では毎回 undefined になり、
-        // 台帳のトークン軸は空のまま ＝ 受け入れ基準7（既定の構成の挙動を
-        // 1文字も変えない）。
+        // `#tokenIdentity?.()` を読み直さない: 回した直後に届いた前のセッションぶんの消費が新しいトークンに付く。
         ...(this.#sdkSession.sessionTokenIdentity === undefined
           ? {}
           : { tokenId: this.#sdkSession.sessionTokenIdentity.tokenId }),
       });
 
-      // **ターン1回ぶんの増分を日誌へ残す。** 台帳は日 × actor × モデル ×
-      // 層 × 場所に畳むので、このターンがいくらだったかは台帳のどこにも
-      // 残らない（`schema.ts` の `turn_usage` の doc）。
-      //
-      // **増分が空の回は行を書かない**（`hasAnyUsage` と同じ判定を
-      // `fold.delta` に直接当てる — `foldUsageSnapshot` / `foldOneshotUsage`
-      // は増えていないモデルの行を作らないので、キーが1つも無ければ「この
-      // 回は増分ゼロだった」で確定する）。取れない軸に0の行を作らない
-      // （AGENTS.md 地雷表）。
+      // 増分が空の回は行を書かない: 取れない軸に0の行を作らない。
       if (Object.keys(fold.delta).length > 0) {
         await this.#journal({
           type: 'turn_usage',
@@ -7405,9 +7112,7 @@ class Clone implements CloneHost {
         });
       }
 
-      // **数え直しを黙って通さない。** resume や mid-session の `/clear` で累積が
-      // 0 に戻るのは正常だが、記録が無いと後から「なぜ集計が飛んでいるか」を誰も
-      // 辿れない（PRD「可観測性」）。クローンは resume する層なので必ず起きる。
+      // 数え直しは黙って通さない: 記録が無いと後から「なぜ集計が飛んでいるか」を誰も辿れない。
       if (fold.reset !== undefined) {
         await this.#journal({
           type: 'exchange',
@@ -7420,45 +7125,9 @@ class Clone implements CloneHost {
         });
       }
     } catch (error) {
-      // **跡がどこにも無いと「日誌に無い」が「起きなかった」と読める。**
-      // `noteDroppedRecord` の作者の理由（ストアへの書き込みが失敗している
-      // のに同じストアへ日誌を書こうとするのは循環である）は正しい。だから
-      // stderr をやめて日誌にするのではなく、**両方を残す**。
-      //
-      // stderr は今回も残す（消さない） — 台帳の失敗を確実に名指しする跡が
-      // 1本要る。下の `#journal` が失敗すればその跡は `#journal` 自身の
-      // catch（stderr フォールバック）に落ち、「台帳が落ちた」という名指しが
-      // 消えて「日誌を記録できませんでした」という別の文言に置き換わる。
-      // stderr にこの行を残しておけば、その置き換わりが起きても「台帳が
-      // 落ちた」という事実だけは残る。
+      // stderr と日誌の両方に残す: stderr は台帳の失敗を名指しする跡で、日誌に無いと「起きなかった」と読める。
       noteDroppedRecord('利用状況の台帳', `layer=clone site=${site}`, error);
 
-      // **ここで日誌にも1件残す。** マネージャー層の `case 'usage'` の
-      // `catch` は `exchange with=manager` を書いて日誌に跡を残すが、
-      // クローン層はここが `noteDroppedRecord` だけで終わっていたため、
-      // 台帳の記録が落ちたクローンのターンは日誌に `turn_usage` も
-      // `exchange` も1行も残らなかった（`schema.ts` の `turn_usage` の
-      // doc「行が無い理由は3つある」の2番）。
-      //
-      // **これは循環しない。** `#journal` は既に「best-effort で日誌へ
-      // append し、失敗したら `noteDroppedRecord('日誌', ...)` で stderr に
-      // 落とし、throw しない」という契約を持っている（`#journal` の実装を
-      // 見よ）。だから日誌への追記そのものが失敗しても、それはここへ
-      // 投げ返らず、`#journal` の中で吸収されて終わる。台帳への書き込みが
-      // 失敗した状態で「同じ場所（台帳）へもう一度書きに行く」わけではなく、
-      // 別のストア（日誌）へ1回だけ試すだけなので、堂々巡りにならない。
-      //
-      // `with: 'self'` を使うのは、これが人間に見せない内部ターンだから
-      // （`schema.ts` の `exchange.with` の doc）。マネージャー層が
-      // `with: 'manager'` を使うのと対応する。
-      //
-      // 文言はマネージャー層（`manager.ts` の `case 'usage'` の catch）と
-      // 揃える。層ごとに言い方を変えると、読む側が層ごとに文言を覚える
-      // ことになる。ただしマネージャー層は複数のマネージャーを区別する
-      // ために `managerId` をタグとして前置しており、クローン層には
-      // マネージャーのような複数性が無い代わりに `site`（`session` /
-      // `distill`）が呼び出し文脈を区別する軸なので、同じ位置に `site` を
-      // タグとして前置する。
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -7495,9 +7164,6 @@ class Clone implements CloneHost {
     let failure: { readonly error: unknown } | null = null;
 
     try {
-      // **provider の綴りを読むのはここまでである**（駆動役の `readEvents` が
-      // `foldClaudeMessage` 等で畳む）。ここから下へ流れるのは中立イベントだけで、
-      // 次の provider を足しても `#apply` は1本のままになる（#486）。
       await q.readEvents((event) => this.#apply(event));
     } catch (error) {
       failure = { error };
@@ -7509,19 +7175,9 @@ class Clone implements CloneHost {
         !this.#sdkSession.sawInit &&
         this.#sdkSession.resumedFrom !== null
       ) {
-        // **⭐ 捨てる前に墓標を立てる**（#564 E1b）。**順序が要点である** —— 捨てた後だと、
-        // 立てる前にプロセスが死んだ回で id がどこにも残らない。
-        //
-        // **この回は退避が無い**（道具を1つも使っていないので `#transcriptPath` は
-        // `null` で、`#salvageTranscript` は何もしない）。⟹ `TranscriptGrave` の側では
-        // 拾えない。材料は pg に預けた生ログだけである。
+        // 捨てる前に墓標を立てる: 捨てた後だと、立てる前にプロセスが死んだ回で id がどこにも残らない。
         await this.#noteLostSession(this.#sdkSession.resumedFrom);
-        // **捨て損ねたことを黙らせない**（issue #1157）。ここで投げると失敗の報告
-        // そのものが失敗するので投げないが、跡は残す —— **同じ操作を打つ
-        // `#noteContextWindowFold` が既にこの形で跡を残しており、こちらだけが
-        // 黙っていた。** 捨て損ねると、次の起動が腐った id をもう一度 resume
-        // しに行く（この分岐へ戻ってくるので自己回復はするが、その1周は無駄に
-        // なる）。
+        // 投げない: 失敗の報告そのものが失敗するため。跡は残す。
         await this.#stores.sessions.setCloneSessionId(null).catch((error: unknown) => {
           noteDroppedRecord('resume 素材の破棄', 'clone', error);
         });
@@ -7537,31 +7193,14 @@ class Clone implements CloneHost {
           );
         }
         this.#finishTurn();
-        // **`#query` を捨てる前に累積を1回読む**（`#flushSessionUsage` の doc）。
-        // ここは直上の逐語のとおり「result を伴わずに終わった」経路 —— 枠切れ
-        // （429）や文脈窓でセッションが落ちた回そのものである。捨ててから読んでも
-        // 何も取れない。`runner.ts` の `#finish` が `#flushUsage()` を `close()` の
-        // 手前に置いているのと対である。
+        // `#query` を捨てる前に累積を読む（`#flushSessionUsage`）: 捨ててから読んでも何も取れない。
         await this.#flushSessionUsage();
         this.#sdkSession.clearQuery();
-        // 次のセッションは `#buildSessionSpec` が控え直す。ここで空にしておかないと、
-        // 前のセッションで見せた分を「もう見せた」と数えたまま新しいシステム
-        // プロンプトを組むことになる（実際には焼き込み直すので嘘にはならないが、
-        // 控えの出所が2か所になる）。
+        // 空にしておかない: 前のセッションで見せた分を「もう見せた」と数えたまま新しいシステムプロンプトを組むことになる。
         this.#distillMemory.forgetMemory();
-        // **文脈窓で畳んだ回は、ここで生ログを器の外へ出す**（#553 / #564）。
-        //
-        // **`this.#query = null` より後に置いてある。** ここは `#read` の
-        // `finally` で、`#read` は `#ensureQuery` から待たれずに走っている
-        // （`this.#reader = this.#read(q)`）。⟹ 退避と蒸留を先に待つと、その間
-        // `#query` が古いまま残り、次のターンが畳んだはずのセッションへ入る。
-        //
-        // **印を先に下ろす。** 下ろさずに `await` すると、その間に届いた失敗が
-        // もう一度畳もうとする。
-        //
-        // **開き直し（人間の操作。`reopenSession`）の印も同じ場所で取る。** 文脈窓の印と
-        // 別に取り、「蒸留するか」だけを運ぶ。両方立っていれば文脈窓の挙動（蒸留する・
-        // 文言も文脈窓）を優先する。
+        // `clearQuery` より後に退避する: `#read` は `#ensureQuery` から待たれずに走っており、先に待つと次のターンが畳んだはずのセッションへ入る。
+        // 印を先に下ろす: 下ろさずに `await` すると、その間に届いた失敗がもう一度畳もうとする。
+        // 両方の印が立っていれば文脈窓の挙動（蒸留する・文言も文脈窓）を優先する。
         const foldedForContextWindow = this.#sdkSession.takeContextWindowRecycle();
         const reopenRequest = this.#sdkSession.takeReopen();
         if (foldedForContextWindow) {
@@ -7574,9 +7213,7 @@ class Clone implements CloneHost {
             distill: reopenRequest.distill,
           });
           this.#distillMemory.recordReopenArchive(archived);
-          // **退避の結果はここで必ず日誌へ残す。** init の行（`session_started`）にも載せるが、
-          // 退避は `#query` を捨てた後に走るので、その間に次のセッションが init すると
-          // init の行は「まだ終わっていない」としか書けず、archive id がどこにも残らない。
+          // ここでも日誌へ残す: 退避中に次のセッションが init すると、init の行は「まだ終わっていない」としか書けず archive id が残らない。
           await this.#journal({
             type: 'exchange',
             with: 'self',
@@ -7594,24 +7231,12 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * 中立イベント1件へ反応する（`agent-events.ts` の表の (ii)）。
-   *
-   * **provider の綴りはここには無い。** 何が起きたかを決めるのは
-   * `foldClaudeMessage` で、ここが決めるのは「起きたことへクローン層がどう
-   * 反応するか」だけである —— 画面へ何を流すか、日誌へ何を書くか、ターンを
-   * どこで畳むか。**その反応は層ごとに違う**（マネージャー層の同じ場所は
-   * `runner.ts` の `#apply` で、副作用は2層で15種あり重なるのは2種だけである）。
-   */
+  /** 中立イベント1件へ反応する。反応は層ごとに違うので、マネージャー層の `#apply` と共通化しない。 */
   async #apply(event: AgentEvent): Promise<void> {
     switch (event.type) {
       case 'session_started': {
         this.#sdkSession.markSawInit();
-        // **控え損ねたことを黙らせない**（issue #1157）。**投げない** —— 控えに
-        // 失敗したことでセッションそのものを殺さない。**だが跡は残す**:
-        // 控えられなければ次の起動で resume を諦めるが、その諦め方は
-        // 「素材が無かった」という正常な経路と1文字も違わない
-        // （`noteCloneSessionIdNotRecorded` の doc）。
+        // 投げない: 控えの失敗でセッションを殺さない。跡は残す: 諦め方が「素材が無かった」正常な経路と区別できなくなるため。
         await this.#stores.sessions.setCloneSessionId(event.sessionId).catch((error: unknown) => {
           noteCloneSessionIdNotRecorded(error);
         });
@@ -7645,26 +7270,13 @@ class Clone implements CloneHost {
       }
 
       case 'permission_denied': {
-        // 確認へ上げずにその場で止められた1件（分類器・deny 規則・モード）。
-        //
-        // **`permissionMode: 'auto'` で `canUseTool` を繋いでいない以上、拒否は
-        // 普通に起きる**（そのうえ `settingSources` で人間の deny 規則も読む）。
-        // ここを捨てると、クローンの手が止められたことが日誌のどこにも出ない ＝
-        // 「静かになった」と「起きていない」が区別できなくなる（`runner.ts` の
-        // 同じ箇所と同じ理由。あちらは受信箱にも出すが、こちらは**自分が**
-        // ツール結果でエラーを読むので、要るのは後から辿れる記録だけである）。
+        // 捨てない: 止められたことが日誌に出ないと「静かになった」と「起きていない」が区別できない。
         await this.#noteDenial(event.denial, 'live');
         return;
       }
 
       case 'usage_notice': {
-        // 上限の文言。**API エラーとしては来ない**（SDK のコメント）ので、
-        // 通知・情報メッセージの本文を見るしかない（`runner.ts` の同じ場面と
-        // 同じ理由 — マネージャー側だけがこれを見ていて、クローン側に無いのは
-        // 非対称だった）。
-        // **文言の分類そのものは provider の写しが済ませている**
-        // （`claude-provider.ts` の `foldClaudeMessage`）。ここへ届く時点で
-        // 「上限の合図である」は確定している。
+        // 上限の文言は API エラーとしては来ないので、通知・情報メッセージの本文を見る。
         await this.#noteUsageNotice(
           event.notice,
           this.#sdkSession.turn?.conversationId ?? null,
@@ -7673,26 +7285,10 @@ class Clone implements CloneHost {
         return;
       }
 
-      // 枠の事実（アカウント単位）。**ターンの頭ごとに来る**ので、ここが走行中の
-      // 唯一の最新情報になる（`runner.ts` の同じ場面と同じ理由）。
       case 'rate_limit': {
         const facts = event.facts;
-        // **回し手へは事実と遷移で渡す**（通知の形へ仕立て直したものではない）。
-        // `#noteUsageNotice` の `source` の doc に理由がある。
-        //
-        // **状態ではなく遷移を渡す。** `rate_limit_event` はターンの頭ごとに
-        // 来るので、状態をそのまま流すと同じ `rejected` で毎ターン回そうと
-        // する。覚えるのは**重ねた形**（`mergeRateLimitFacts`）——届いた1件で
-        // 丸ごと置き換えると、`status` を運んでいない観測が「もう知らせた」と
-        // いう記憶を消す（あちらの doc）。
-        //
-        // **覚える欄は「トークンの身元 × 枠の種類」で分ける**（`usage-limits.ts` の
-        // `rateLimitMemoryKey`）。`kind` だけで引いていた版には、別々のアカウントの
-        // 事実が同じ欄を踏み合う穴が在った（Issue #1222 / #668。両方向の帰結は
-        // あちらの doc）。⚠️ **身元はこのセッションを起こした瞬間のもの
-        // （`#sessionTokenIdentity`）を使い、`#tokenIdentity?.()` を読み直さない**
-        // —— 読み直さない理由は `UsageStore.record` の `tokenId` の doc と同じで、
-        // 回った直後に届いた**前の鍵の観測**が新しい鍵の欄へ入るからである。
+        // 覚えるのは重ねた形（`mergeRateLimitFacts`）: 届いた1件で置き換えると、`status` を運ばない観測が「もう知らせた」記憶を消す。
+        // 欄は「トークンの身元 × 枠の種類」で分け、身元は `#sessionTokenIdentity` を使う（`#tokenIdentity?.()` を読み直さない）: 回った直後に届いた前の鍵の観測が新しい鍵の欄へ入るため。
         const kind = facts.kind ?? '';
         const memoryKey = rateLimitMemoryKey(this.#sdkSession.sessionTokenIdentity?.tokenId, kind);
         const previous = this.#rateLimits.get(memoryKey);
@@ -7700,13 +7296,7 @@ class Clone implements CloneHost {
         const merged = mergeRateLimitFacts(previous, facts);
         this.#rateLimits.set(memoryKey, merged);
 
-        // **跨いで畳んだ回を数える（Issue #1425）。** `transition` が
-        // `undefined` の回は、直前に別の会話のターンが同じ壁を報告済み
-        // だった回で、ここまでは日誌にも痕跡を残さずに消えていた。
-        // 書き込む量・「跨いだ」の定義は `#rateLimitCrossFold` の doc に
-        // ある理由（#1311 と同じ形の肥大化を作り直さない／同じ会話の連打は
-        // 数えない）で、畳むたびには書かず、次に `transition` が定まった
-        // 回にまとめて `#journal` へ吐き出す。
+        // 畳むたびには書かず、次に `transition` が定まった回にまとめて日誌へ吐く（`#rateLimitCrossFold`）: 日誌を肥大させないため。
         const conversationId = this.#sdkSession.turn?.conversationId ?? null;
         if (transition === undefined) {
           const crossFold = this.#rateLimitCrossFold.get(memoryKey);
@@ -7726,37 +7316,14 @@ class Clone implements CloneHost {
                 '（前回この壁の遷移を記録してから、いまの遷移までのあいだ）。',
             });
           }
-          // **この回の `conversationId` を、次に跨ぐかどうかの基準へ更新する。**
-          // `folded` は必ず空から始める——上で書き出した分をここで捨てる。
           this.#rateLimitCrossFold.set(memoryKey, {
             lastConversationId: conversationId,
             folded: new Set(),
           });
         }
 
-        // **⚠️ 遷移が取れなかった回も渡す（#668）。**
-        //
-        // ⚠️ **ここに書いてあった理由は、いまは成り立たない（消さずに残す）。**
-        // かつては「遷移だけを渡していたので、同じ `kind` の `rejected` が**別の
-        // トークンで**再発しても回し手へ1度も届かなかった —— `#rateLimits` は
-        // **このインスタンスの寿命ぶん**残るので、`usageTransitionOf` は2度目以降
-        // `undefined` を返す。⟹ 記録は `ready` のまま、実際は 429」と書いてあった
-        // （実運用で観測済み。2026-09-07）。**その筋は記憶の鍵をトークンごとに
-        // 分けたことで閉じた**（`rateLimitMemoryKey`。Issue #1222）。
-        //
-        // **⭐ それでもこの形は要る。** 同じ鍵で `rejected` が続いているあいだは
-        // 遷移が立たず、その回し手の契機は門の後ろでは拾えない。⟹ 理由が1つ
-        // 減っただけで、渡す条件は動かさない。
-        //
-        // **`statusNow` は重ねる前の生の1件から取る**（`merged` からではない）。
-        // 重ねた形の `status` はアカウントを跨いで残るので、回す契機の材料にすると
-        // 回した直後の健全な鍵でもう一度回る（`token-rotation.ts` の
-        // `TokenRotationObservation.statusNow` の doc）。
-        //
-        // **これだけでは回らない。** 状態で回すには観測がいまの世代を名乗っている
-        // ことが要る（`decideTokenRotation` の `freshness`）。**知らせの側
-        // （`#noteUsageNotice`）は1文字も変えていない** —— あちらの畳みは
-        // 「同じ知らせを何度も配らない」ためのもので、回し手の契機とは別である。
+        // 遷移が取れなかった回も渡す: 同じ鍵で `rejected` が続くあいだは遷移が立たず、門の後ろでは回し手の契機を拾えない。
+        // `statusNow` は重ねる前の生の1件から取る（`merged` ではなく）: 重ねた `status` はアカウントを跨いで残り、回した直後の健全な鍵でもう一度回る。
         if (transition !== undefined || facts.status === 'rejected') {
           await this.#observeForTokenRotation({
             facts: merged,
