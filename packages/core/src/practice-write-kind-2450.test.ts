@@ -4,22 +4,6 @@ import { practiceKindSchema } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools, formatPracticeKindRangeJa } from './tools.js';
 
-/**
- * issue #2450。`practice_write` の `kind` は道具の側で検査されておらず、
- * 空文字や129字以上の `kind` を渡すと保存層の `parse` が投げた生の ZodError
- * がそのままクローンへ返っていた（`PUT /practices/:slug` は `practiceBody`
- * の検査で 400 を返す）。
- *
- * ここでは (1) 範囲外の `kind` では commitment 系と同じ形の読める文
- * （`kind は使えない（…のみ）。`）が返り、`write()` が呼ばれず日誌も増えない
- * こと (2) 境界値そのもの（1字・上限の字数）は今までどおり書けること、を測る。
- *
- * 入力スキーマ側の検査（SDK の `tool()` がハンドラより前に見る）は
- * `tool-non-numeric-args-handler-validation-1752.test.ts` の往復で見ている
- * 形と同じで、`kind` の入力スキーマはこの PR で変えていない（`z.string()`
- * のまま）。ここはハンドラを直接叩く。
- */
-
 function harness() {
   const stores = createMemoryStores();
   const tools = createCloneTools({

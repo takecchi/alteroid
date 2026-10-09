@@ -2,18 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { exactTokens, heuristicChars } from './quantity.js';
 
-/**
- * `heuristicChars` / `exactTokens`（`quantity.ts`。#804 案2）。
- *
- * **ここで測るのは「実行時の表現が素の `number` のまま変わっていないこと」
- * だけである。** `estimateKind` を取り違えたら `tsc` が落ちる、という
- * 型そのものの主張は vitest では測れない（vitest は型を落とす）——
- * その歯は別に用意する（`quantity.ts` モジュール冒頭の doc、および
- * この変更の報告に添える `tsc --noEmit` の生出力）。ここは
- * `quantity.ts` の「読む側は1行も直さなくてよい」という主張——比較・
- * 算術・`toLocaleString()` が素の `number` と同じ値を返すこと——を
- * **数値で**確かめる。
- */
 describe('heuristicChars / exactTokens — branded number は実行時にはただの number', () => {
   it('heuristicChars(value) は value そのものを返す(===で一致、包んでいない)', () => {
     expect(heuristicChars(12_345)).toBe(12_345);
@@ -40,7 +28,6 @@ describe('heuristicChars / exactTokens — branded number は実行時にはた�
     expect(heuristicChars(10) > heuristicChars(5)).toBe(true);
     expect(heuristicChars(5) < heuristicChars(10)).toBe(true);
     expect(heuristicChars(7) === heuristicChars(7)).toBe(true);
-    // 素の number とも直接比較できる(読む側は1行も直さなくてよい、という主張)。
     expect(heuristicChars(7) === 7).toBe(true);
   });
 

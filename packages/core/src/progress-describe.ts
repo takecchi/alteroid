@@ -1,14 +1,6 @@
 /**
- * 進捗の集計（`readProgress` の結果）を、読める文へ（Issue #2241 の 3）。
- *
- * **CLI（`alteroid progress`）とクローンの道具（`progress_read`）が同じ関数を使う。**
- * 口ごとに言い回しが違うと、読む側は別の状態だと読む。元は `apps/cli/src/progress.ts` の
- * `renderProgress`（出力は1文字も変えていない）。
- *
- * **数え直さない・作らない。** 数は `summarizeProgress` が出したものをそのまま並べる。
- * 率（%）は作らない（台帳に総量が無く分母が定まらない）。**取れないものは 0 と書かない**
- * （`null` は「—」、見込みが `unavailable` / `not_converging` なら状態と理由を言って時間は作らない）。
- * Node 専用のものは持ち込まない（web 向けバンドルに載りうる）。
+ * 率（%）は作らない: 台帳に総量が無く分母が定まらないから。取れないものは 0 と書かない。
+ * Node 専用のものは持ち込まない: web 向けバンドルに載りうるから。
  */
 import { formatElapsedAgo } from './format-elapsed.js';
 import { describeGithubCi } from './progress-github.js';
@@ -32,12 +24,7 @@ function at(iso: string | null, now: number): string {
   return `${iso}（${formatElapsedAgo(iso, now)}）`;
 }
 
-/**
- * `describeProgress` が受ける形。`ProgressView`（デーモンが返す型。変えない）と違い、
- * `completeness.unreadableJobs` だけが任意——後から足した欄（issue #2345）なので、
- * 古いデーモンの応答には無い（CLI は応答を型で検査せず、そのまま渡す。issue #2382）。
- * `ProgressView` はこの型にそのまま代入できる。
- */
+/** `completeness.unreadableJobs` だけ任意にする: 古いデーモンの応答には無く、CLI は応答を型で検査せず渡すから。 */
 export type ProgressViewInput = Omit<ProgressView, 'backlog'> & {
   backlog: Omit<ProgressView['backlog'], 'completeness'> & {
     completeness: Omit<ProgressView['backlog']['completeness'], 'unreadableJobs'> & {
@@ -46,9 +33,6 @@ export type ProgressViewInput = Omit<ProgressView, 'backlog'> & {
   };
 };
 
-/**
- * 進捗の集計を、人間が読める形へ。**率（%）は出さない。**
- */
 export function describeProgress(view: ProgressViewInput): string {
   const { window, backlog, inProgress, throughput, forecast, github, observedAt } = view;
   const now = new Date(observedAt).getTime();
@@ -130,9 +114,7 @@ export function describeProgress(view: ProgressViewInput): string {
       `※ 数が欠けうる（読めなかった行 ${String(unreadable)} 件 / 刈り取られた片付き行 ${String(trimmedClosed)} 件）`,
     );
   }
-  // 委譲の行の欠け（issue #2345）。0 件なら行を作らない（上の行と同じ作法）。
-  // 欄が無い（古いデーモンの応答。issue #2382）ときも何も言わない——「undefined 件」と書かず、
-  // 0 件とも言わない（Web の `progress.tsx` と同じ）。
+  // 欄が無い（古いデーモンの応答）ときは何も言わない: 「undefined 件」とも 0 件とも書かない。
   if (unreadableJobs !== undefined && unreadableJobs !== 0) {
     lines.push(
       '',
@@ -141,7 +123,6 @@ export function describeProgress(view: ProgressViewInput): string {
     );
   }
 
-  // 記録が1件も無い間は GitHub の段を出さない（#2970。GitHub に限らない作業に毎回出さない）。
   if (github.state !== 'not_observed') {
     lines.push(
       '',

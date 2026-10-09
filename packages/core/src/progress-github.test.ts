@@ -78,7 +78,6 @@ describe('summarizeGithubObservations（#2245 段1）', () => {
       reason: 'gh: HTTP 502',
       observedAt: '2026-10-02T00:00:00.000Z',
     });
-    // 失敗の回に数は無い（成功の数を写していない）
     expect(ab.latestFailed).not.toHaveProperty('openIssues');
   });
 
@@ -101,10 +100,8 @@ describe('summarizeGithubObservations（#2245 段1）', () => {
     if (hit.state !== 'observed' || exact.state !== 'observed' || miss.state !== 'observed')
       throw new Error('observed のはず');
     expect(hit.scan).toEqual({ limit: 2, reachedLimit: true });
-    // ちょうど limit 件で尽きているなら、先は無い
     expect(exact.scan).toEqual({ limit: 2, reachedLimit: false });
     expect(miss.scan).toEqual({ limit: 3, reachedLimit: false });
-    // limit+1 件目は畳みに使わない（先の存在を知るためだけの 1 件）
     expect(hit.repos.map((r) => r.repo)).toEqual(['a/b']);
   });
 });
@@ -115,8 +112,7 @@ describe('readProgress / describeProgress の github（#2245 段1）', () => {
   it('日誌の読みに types と limit（500）を渡す（無制限に読まない）', async () => {
     const stores = createMemoryStores();
     const queries: unknown[] = [];
-    // 見るのはストアの契約の口（`listPage`。Issue #2604 / #2605）。メモリのストアが内側で
-    // `list` を何件で呼ぶか（先読みの +1）は実装の都合なので、ここでは固定しない。
+    // `list` の件数は固定しない: メモリのストアの内側の先読み（+1）は実装の都合だから。
     const listPage = stores.journal.listPage.bind(stores.journal);
     stores.journal.listPage = (query) => {
       queries.push(query);
@@ -127,7 +123,6 @@ describe('readProgress / describeProgress の github（#2245 段1）', () => {
       (q) =>
         (q as { types?: string[] } | undefined)?.types?.includes('github_observation') === true,
     );
-    // 先が在るかを見るため limit+1 件を要求する（#2603。読めた行の数では判定しない）
     expect(githubQueries).toMatchObject([{ types: ['github_observation'], limit: 501 }]);
     expect(githubQueries).toHaveLength(1);
     expect(GITHUB_OBSERVATION_SCAN_LIMIT).toBe(500);
@@ -147,7 +142,6 @@ describe('readProgress / describeProgress の github（#2245 段1）', () => {
   it('pg のように LIMIT の後で読めない行を捨てる store でも、先が在れば reachedLimit が真（#2603）', async () => {
     const stores = createMemoryStores();
     const unreadable = new Set<string>();
-    // 古い順に 600 件。いちばん古い 1 件だけ別の repo
     for (let i = 0; i < 600; i += 1) {
       const entry = await stores.journal.append({
         type: 'github_observation',
@@ -156,19 +150,17 @@ describe('readProgress / describeProgress の github（#2245 段1）', () => {
         query: 'gh issue list --state open',
         result: { status: 'ok', openIssues: i, openPulls: 0, truncated: false },
       });
-      // 直近 500 行のうち 1 行を「読めない形」にする
       if (i === 590) unreadable.add(entry.id);
     }
     const list = stores.journal.list.bind(stores.journal);
     stores.journal.list = async (query) => {
-      // SQL の LIMIT を掛けてから、読めない行を捨てる（要求より少なく返りうる）
+      // pg と同じく、LIMIT の後で読めない行を捨てる。
       const rows = await list(query);
       return rows.filter((row) => !unreadable.has(row.id));
     };
     const view = await readProgress(stores, { now: NOW });
     if (view.github.state !== 'observed') throw new Error('observed のはず');
     expect(view.github.scan).toEqual({ limit: 500, reachedLimit: true });
-    // 古い側にしか無い repo は載っていない（断りが要る場面）
     expect(view.github.repos.map((r) => r.repo)).toEqual(['new/repo']);
   });
 
@@ -233,7 +225,6 @@ describe('readProgress / describeProgress の github（#2245 段1）', () => {
     expect(text).toContain('open Issue 0 件 / open PR 4 件（limit に達した');
     expect(text).toContain('観測者 clone');
     expect(text).toContain('母集合 gh issue list --state open --limit 100 / limit 100');
-    // 失敗だけの repo: 数は —（0 件ではない）で、理由を出す
     expect(text).toContain('数: — （成功した観測の記録が無い。0 件ではない）');
     expect(text).toContain('取れなかった回');
     expect(text).toContain('gh: HTTP 502');

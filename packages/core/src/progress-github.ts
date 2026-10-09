@@ -1,21 +1,3 @@
-/**
- * `GET /progress` の `github` ——誰かが観測して日誌へ置いた GitHub の数を、repo ごとに
- * 組んで返す（Issue #2245 段1）。
- *
- * **デーモンは GitHub を見に行かない**（`schema.ts` の `JobStatus` の doc「デーモンは PR も
- * ブランチも見に行かない」）。ここにあるのは「観測した側が名乗った申告」の置き直しで、
- * 値の正しさは確かめていない。だから `observedBy` を落とさず、読み手へそのまま渡す。
- *
- * - **repo ごとに最新の1件**を、成功（`latestOk`）と失敗（`latestFailed`）で別々に持つ。
- *   失敗のほうが新しいことは時刻の比べで読める。**失敗の回に数は無い**ので、直前の成功の
- *   数を失敗の回へ写さない（取れなかった回に数を作らない）。
- * - **古さは判定しない。** `observedAt`（デーモンが記録を受けた時刻）をそのまま返す。
- * - 記録が1件も無ければ `not_observed`（0 件ではない）。
- * - 日誌の読みは新しい順に `scanLimit` 件まで。**上限より先に記録が在れば `scan.reachedLimit` が真**で、
- *   それより古い記録にしか現れない repo や、その repo の古い側の記録は載っていない。
- *   **判定は「読めた行の数 >= 上限」ではなく「上限+1 件目が在る」こと**（#2603）。store は SQL の
- *   `LIMIT` の後で形の合わない行を捨てうる（pg）ので、500 件を要求しても 499 件で返りうる。
- */
 import type { JournalEntry } from './schema.js';
 
 /** 日誌から読む `github_observation` の件数の上限（新しい順）。 */
@@ -45,9 +27,7 @@ export interface GithubObservationOk {
   openPulls: number;
   /** 真なら `limit` に達しており、数は下限。 */
   truncated: boolean;
-  /**
-   * PR の CI の状態（#2549）。**無ければ CI を観測していない**（0 件の意味ではない）。`ciUnavailable` と排他。
-   */
+  /** 無ければ CI を観測していない（0 件の意味ではない）。`ciUnavailable` と排他。 */
   ci?: GithubObservationCi;
   /** CI を取れなかった理由（観測した側の申告）。`ci` と排他。 */
   ciUnavailable?: string;
@@ -88,12 +68,9 @@ export const PROGRESS_GITHUB_NOT_OBSERVED = {
 } as const;
 
 /**
- * 日誌の `github_observation` を repo ごとに畳む。**`entries` は新しい順**（`JournalStore.list`
- * の既定）で渡すこと——先に見つかった成功・失敗をその repo の最新として採る。
- * 他の種別が混ざっていても読み飛ばす。
- *
- * **呼ぶ側は `scanLimit + 1` 件まで読んで渡すこと**（`progress-read.ts`）。畳むのは先頭の
- * `scanLimit` 件だけで、`scanLimit + 1` 件目は「先が在る」ことを知るためだけに使う。
+ * `entries` は新しい順で渡すこと（先に見つかった成功・失敗を最新として採る）。
+ * `scanLimit + 1` 件まで渡すこと: 「先が在る」は読めた行数 >= 上限では決められない
+ * （pg は SQL の `LIMIT` の後で形の合わない行を捨てうる）ので、`scanLimit + 1` 件目の有無で見る。
  */
 export function summarizeGithubObservations(
   entries: readonly JournalEntry[],
@@ -105,7 +82,6 @@ export function summarizeGithubObservations(
   for (const entry of entries) {
     if (entry.type !== 'github_observation') continue;
     seen += 1;
-    // 上限の次の 1 件は、先が在ることの印にだけ使う（畳まない）。
     if (seen > scanLimit) {
       more = true;
       break;
@@ -144,10 +120,7 @@ export function summarizeGithubObservations(
   };
 }
 
-/**
- * 成功した観測の CI の軸を1行にする（`describeProgress` と CLI の `/journal` が共有。#2549）。
- * **`ci` が無いことは「観測していない」と書く**——`success 0 / failure 0` とは書かない（0 件と読ませない）。
- */
+/** `ci` が無いときは `success 0 / failure 0` と書かない: 0 件と読めてしまうから。 */
 export function describeGithubCi(ok: Pick<GithubObservationOk, 'ci' | 'ciUnavailable'>): string {
   if (ok.ci !== undefined) {
     const ci = ok.ci;
