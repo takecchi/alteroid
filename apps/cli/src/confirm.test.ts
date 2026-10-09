@@ -1,9 +1,13 @@
+import { Readable, Writable } from 'node:stream';
+
 import { describe, expect, it } from 'vitest';
 
 import {
   ConfirmDeclinedError,
   confirmInRepl,
   confirmIrreversible,
+  confirmProceed,
+  defaultIo,
   type ConfirmIo,
 } from './confirm.js';
 
@@ -74,6 +78,37 @@ describe('confirmIrreversible（#3141。形は alteroid reset の確認に揃え
       expect(written.join('')).not.toContain('取り消しました');
     },
   );
+
+  // #4353: 入力の終わり（Ctrl+D）で readline の question は AbortError で reject する。素の英語の例外で落とさない
+  // 端末の形（terminal: true）の readline にだけ Ctrl+D の文字（\x04）が届く。実物の reject を通すための偽の端末
+  function ctrlDIo(): { io: ConfirmIo; pressCtrlD: () => void } {
+    const input = Object.assign(new Readable({ read() {} }), { isTTY: true, setRawMode: () => input });
+    const output = Object.assign(new Writable({ write: (_c, _e, cb) => cb() }), { isTTY: true });
+    const real = defaultIo(input, output);
+    return {
+      io: { isTTY: true, write: () => {}, ask: real.ask },
+      pressCtrlD: () => input.push('\x04'),
+    };
+  }
+
+  it('答えの前に Ctrl+D が押されたとき（readline の実物が reject する）は、取り消しの文で終わる', async () => {
+    const { io, pressCtrlD } = ctrlDIo();
+    const pending = confirmIrreversible('消します。', {}, io).catch((e: unknown) => e);
+    pressCtrlD();
+
+    const error = await pending;
+
+    expect(error).toBeInstanceOf(ConfirmDeclinedError);
+    expect((error as Error).message).toBe('取り消しました。何も変更していません。');
+  });
+
+  it('confirmProceed も同じ（Ctrl+D なら取り消しの文で終わる）', async () => {
+    const { io, pressCtrlD } = ctrlDIo();
+    const pending = confirmProceed('入れます。', {}, io).catch((e: unknown) => e);
+    pressCtrlD();
+
+    expect(await pending).toBeInstanceOf(ConfirmDeclinedError);
+  });
 });
 
 describe('confirmInRepl（REPL の readline で聞く。#3141）', () => {

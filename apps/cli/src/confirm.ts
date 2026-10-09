@@ -8,16 +8,23 @@ export interface ConfirmIo {
   ask(question: string): Promise<string>;
 }
 
-export function defaultIo(): ConfirmIo {
+// input / output は readline の実物へ入力の終わりを流す試験のための口（既定は端末）
+export function defaultIo(
+  input: NodeJS.ReadableStream = stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): ConfirmIo {
   return {
     isTTY: stdin.isTTY === true && stdout.isTTY === true,
     write: (text) => {
       stdout.write(text);
     },
     ask: async (question) => {
-      const rl = createInterface({ input: stdin, output: process.stdout });
+      const rl = createInterface({ input, output });
       try {
         return await rl.question(question);
+      } catch {
+        // 入力の終わり（Ctrl+D）で readline は AbortError で reject する。取り消しとして扱う（confirmInRepl と同じ）
+        return '';
       } finally {
         rl.close();
       }
