@@ -7,21 +7,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 /**
- * **本物の Claude Code 本体**が、PreToolUse のフックの `permissionDecision: 'ask'` を
- * `canUseTool` へ流すかを、マネージャー本体の `Bash` と作業者（サブエージェント）の
- * `Bash` の両方について測る（issue #2884）。
- *
- * Bash の門（`bash-wait-guard.ts`）は、これまで deny を返して誰も開けられなかった。
- * 「確認に上げる」へ変える前提は、次の2つが本物の本体で成り立つことである。
- * - フックの ask が `canUseTool` に届き、その答え（allow / deny）が実行を決める
- * - **作業者の `Bash` でも `canUseTool` に届く**（`options.agentID` が付く）
- *
- * 型（`HookPermissionDecision = 'allow' | 'deny' | 'ask' | 'defer'`）は「持てる」までしか
- * 言わない。SDK の更新は毎日の自動 PR で入るので、本体の挙動が変われば、ここが赤になって知らせる。
- *
- * ## どう測るか（本物の資格を使わない）
- * `real-cli-pre-tool-use-rewrite.test.ts` と同じ。127.0.0.1 の偽の API が、主セッションには
- * `Agent` の `tool_use` を、作業者の最初の要求には `Bash` の `tool_use` を返す。
+ * 型は「持てる」までしか言わず、SDK の更新は毎日の自動 PR で入る。本体の挙動が変われば、
+ * ここが赤になって知らせる。本物の資格は使わず、偽の API を 127.0.0.1 に立てる。
  */
 
 const WORKER = 'askprobeworker';

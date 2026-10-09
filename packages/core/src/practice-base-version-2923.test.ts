@@ -4,11 +4,6 @@ import { practiceVersion, type Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * Issue #2923。`practice_write` / `practice_remove` が読んだ版（`base_version`）を
- * 前提にする。#2839（`memory_write`）・#2917（`memory_delete`）のやり方版。
- * 版の値は #2853 の `practiceVersion`（種類・題・本文のハッシュ）そのもの。
- */
 interface Harness {
   stores: Stores;
   call(name: string, args: Record<string, unknown>): Promise<string>;
@@ -52,8 +47,7 @@ describe('practice_write / practice_remove の base_version（#2923）', () => {
     const h = harness();
     await h.stores.practices.write(base);
     await h.call('practice_read', { slug: 'review' });
-    const v = practiceVersion(base); // クローンが読んだ時点の版
-    // 人間が直す。
+    const v = practiceVersion(base);
     await h.stores.practices.write({ ...base, content: '人間が直した\n' });
     const body = await h.call('practice_write', {
       ...base,

@@ -9,12 +9,10 @@ import {
 } from './progress.js';
 import { commitmentOriginSchema, jobStatusSchema, type Job } from './schema.js';
 
-// 時刻は固定の ISO 文字列（TZ に依存させない）。窓は 168 時間 = 7 日。
 const NOW = new Date('2026-09-30T12:00:00.000Z');
 const HOURS = 168;
 const FROM = '2026-09-23T12:00:00.000Z';
 const TO = '2026-09-30T12:00:00.000Z';
-/** 窓より十分前（台帳が窓を覆っていることを示す錨に使う）。 */
 const OLD = '2026-08-01T00:00:00.000Z';
 
 function row(id: string, at: string, overrides: Partial<ProgressCommitmentRow> = {}) {
@@ -66,7 +64,6 @@ function summarize(
   });
 }
 
-/** 窓の中で閉じた行を n 件作る（開いたのは窓の前）。 */
 function closedInWindow(n: number, prefix = 'k'): ProgressCommitmentRow[] {
   return Array.from({ length: n }, (_, i) =>
     row(`${prefix}${i}`, OLD, { closedAt: '2026-09-25T00:00:00.000Z' }),
@@ -133,24 +130,22 @@ describe('summarizeProgress — backlog', () => {
 
   it('齢の境界: 1h ちょうどは <24h、24h ちょうどは <7d、7d ちょうどは ≥7d、59分は <1h', () => {
     const b = summarize([
-      row('a', '2026-09-30T11:01:00.000Z'), // 59 分
-      row('b', '2026-09-30T11:00:00.000Z'), // 1h ちょうど
-      row('c', '2026-09-29T12:00:00.000Z'), // 24h ちょうど
-      row('d', '2026-09-23T12:00:00.000Z'), // 7d ちょうど
+      row('a', '2026-09-30T11:01:00.000Z'),
+      row('b', '2026-09-30T11:00:00.000Z'),
+      row('c', '2026-09-29T12:00:00.000Z'),
+      row('d', '2026-09-23T12:00:00.000Z'),
     ]).backlog;
     expect(b.age.buckets).toEqual({ under1h: 1, under24h: 1, under7d: 1, over7d: 1 });
     expect(b.age.oldestAt).toBe('2026-09-23T12:00:00.000Z');
   });
 
   it('中央値: 奇数件は真ん中、偶数件は中央2つの平均（時間）。入力順に依らない', () => {
-    // 齢 2h / 10h / 30h
     const odd = summarize([
       row('c', '2026-09-29T06:00:00.000Z'),
       row('a', '2026-09-30T10:00:00.000Z'),
       row('b', '2026-09-30T02:00:00.000Z'),
     ]).backlog;
     expect(odd.age.medianHours).toBe(10);
-    // 齢 2h / 10h / 30h / 50h → (10 + 30) / 2
     const even = summarize([
       row('d', '2026-09-28T10:00:00.000Z'),
       row('c', '2026-09-29T06:00:00.000Z'),
@@ -168,12 +163,12 @@ describe('summarizeProgress — backlog', () => {
 
   it('区分は Web の見せ方に揃う: human は 未着手/返答済み、human 以外は notApplicable、delegated は排他でない', () => {
     const b = summarize([
-      row('u', OLD), // 未着手
-      row('r', OLD, { respondedAt: '2026-08-02T00:00:00.000Z' }), // 返答済み
-      row('ud', OLD, { activeManagerIds: ['m1'] }), // 未着手かつ委譲あり
+      row('u', OLD),
+      row('r', OLD, { respondedAt: '2026-08-02T00:00:00.000Z' }),
+      row('ud', OLD, { activeManagerIds: ['m1'] }),
       row('rd', OLD, { respondedAt: '2026-08-02T00:00:00.000Z', activeManagerIds: ['m2', 'm3'] }),
-      row('e', OLD, { activeManagerIds: [] }), // 空配列は委譲ありに数えない（未着手）
-      row('mg', OLD, { origin: 'manager', activeManagerIds: ['m4'] }), // human 以外は対象外
+      row('e', OLD, { activeManagerIds: [] }),
+      row('mg', OLD, { origin: 'manager', activeManagerIds: ['m4'] }),
       row('cl', OLD, {
         respondedAt: '2026-08-02T00:00:00.000Z',
         closedAt: '2026-08-03T00:00:00.000Z',
@@ -185,7 +180,6 @@ describe('summarizeProgress — backlog', () => {
 
   it('completeness は unreadable と trimmedClosed をそのまま運ぶ（unreadable は total に入らない）', () => {
     const b = summarize([row('a', OLD)], [], { unreadable: 2, trimmedClosed: 5 }).backlog;
-    // 委譲の欠け（`unreadableJobs`）は、渡さなければ 0（この行では委譲の欠けを足していない）。
     expect(b.completeness).toEqual({ unreadable: 2, trimmedClosed: 5, unreadableJobs: 0 });
     expect(b.total).toBe(1);
   });
@@ -225,8 +219,7 @@ describe('summarizeProgress — inProgress', () => {
       [
         job('a', { status: 'running', lastReportAt: '2026-09-30T10:00:00.000Z' }),
         job('b', { status: 'running', lastReportAt: '2026-09-29T00:00:00.000Z' }),
-        job('c', { status: 'running' }), // 報告なし
-        // 走行中でない委譲の報告は、走行中の最古・最新に混ぜない
+        job('c', { status: 'running' }),
         job('d', { status: 'done', lastReportAt: '2026-01-01T00:00:00.000Z' }),
         job('e', { status: 'waiting_human', lastReportAt: '2026-09-30T11:59:00.000Z' }),
       ],
@@ -287,11 +280,9 @@ describe('summarizeProgress — throughput（窓は両端を含む）', () => {
 });
 
 describe('summarizeProgress — forecast', () => {
-  /** 窓を覆う錨（窓より前の未了）を足した台帳。 */
   const anchored = (rows: ProgressCommitmentRow[]) => [row('anchor', OLD), ...rows];
 
   it('estimated: open / (closedInWindow / windowHours)。basis と notice を伴う', () => {
-    // open = 錨 1 件 + 窓の外で開いた未了 3 件 = 4、closed = 4（窓の前に開いた行）、opened = 0
     const f = summarize(
       anchored([
         ...closedInWindow(4),
@@ -304,7 +295,6 @@ describe('summarizeProgress — forecast', () => {
     ).forecast;
     expect(f.state).toBe('estimated');
     if (f.state !== 'estimated') return;
-    // 4 / (4 / 168) = 168
     expect(f.hoursToDrain).toBeCloseTo(168, 9);
     expect(f.basis).toEqual({
       open: 4,
@@ -320,10 +310,9 @@ describe('summarizeProgress — forecast', () => {
   });
 
   it('式は windowHours を使う（24 時間窓と 168 時間窓で同じ件数でも hoursToDrain が変わる）', () => {
-    const rows = anchored([...closedInWindow(3), row('o1', '2026-09-01T00:00:00.000Z')]); // open 2, closed 3（closedAt 2026-09-25 は 24h 窓の外）
+    const rows = anchored([...closedInWindow(3), row('o1', '2026-09-01T00:00:00.000Z')]);
     const f168 = summarize(rows).forecast;
     expect(f168.state === 'estimated' && f168.hoursToDrain).toBeCloseTo((2 * 168) / 3, 9);
-    // 24h 窓では窓の中で閉じた行が 0 になり closed_too_few
     expect(summarize(rows, [], { windowHours: 24 }).forecast).toMatchObject({
       state: 'unavailable',
       reason: 'closed_too_few',
@@ -367,7 +356,6 @@ describe('summarizeProgress — forecast', () => {
       ]),
     ).forecast;
     expect(more.state).toBe('not_converging');
-    // 流入が消化より1件少なければ estimated
     const less = summarize(
       anchored([
         ...closedInWindow(3),
@@ -500,7 +488,6 @@ describe('summarizeProgress — forecast', () => {
     });
 
     it('未了が0件で見込みが estimated(0) でも、刈りがあれば真', () => {
-      // 未了の行を作らない（`anchored` は未了の錨を足すので使わない。at は窓の前なので台帳は窓を覆う）
       const s = summarize(closedInWindow(3), [], { trimmedClosed: 2 });
       expect(s.forecast).toMatchObject({ state: 'estimated', hoursToDrain: 0 });
       expect(s.throughput.mayBeUndercounted).toBe(true);
@@ -520,7 +507,6 @@ describe('summarizeProgress — forecast', () => {
     });
 
     it('history_incomplete は closed_too_few に先立つ', () => {
-      // 閉じた件数は 1（<3）でもあり、履歴も欠けている
       const f = summarize(anchored(closedInWindow(1)), [], { trimmedClosed: 3 }).forecast;
       expect(f).toMatchObject({ reason: 'history_incomplete' });
     });
@@ -528,7 +514,6 @@ describe('summarizeProgress — forecast', () => {
 
   describe('未了が0件', () => {
     it('閉じた件数が足りなくても、台帳が窓より若くても、履歴が欠けていても estimated で hoursToDrain は 0', () => {
-      // 閉じた 1 件だけ（<3）、しかも台帳が窓より若く、trimmedClosed も > 0
       const f = summarize(
         [row('only', '2026-09-25T00:00:00.000Z', { closedAt: '2026-09-26T00:00:00.000Z' })],
         [],

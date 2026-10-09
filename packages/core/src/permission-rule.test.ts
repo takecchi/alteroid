@@ -137,13 +137,10 @@ describe('describePermissionRuleBreadth', () => {
   });
 
   it('前方一致は、固定された先頭の語数が多いほど狭い（Issue #863 の例: gh pr merge / gh / *）', () => {
-    // `Bash(gh pr merge:*)` 相当（3語）——issue が「狭い」側の例として挙げた形。
     expect(describePermissionRuleBreadth('Bash(gh pr merge:*)')).toEqual({
       level: 'narrow',
       prefixWordCount: 3,
     });
-    // `Bash(gh *)` 相当（このリポジトリの書式では `Bash(gh:*)`。1語）——
-    // issue が「広い」側の例として挙げた形。
     expect(describePermissionRuleBreadth('Bash(gh:*)')).toEqual({
       level: 'broad',
       prefixWordCount: 1,
@@ -179,8 +176,6 @@ describe('describePermissionRuleBreadth', () => {
   });
 
   it('matchPermissionRule と同じ語境界の意味論を使う——連続する空白も1つの区切りとして数える', () => {
-    // parsePermissionRule はここで空白を畳まないが、split(/\s+/) 側で畳んで
-    // 数えるので、見た目上の語数と一致する。
     expect(describePermissionRuleBreadth('Bash(gh  release:*)')).toEqual({
       level: 'medium',
       prefixWordCount: 2,

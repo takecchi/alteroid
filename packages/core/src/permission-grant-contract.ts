@@ -3,59 +3,9 @@ import type { PermissionGrantStore } from './store.js';
 import { expectNulRejected } from './nul-contract-support.js';
 
 /**
- * `PermissionGrantStore`（Issue #863。doc は `store.ts`）の契約を、
- * **実装1つに対して**測る。
- *
- * 3実装（インメモリ `packages/core/src/testing.ts` / fs
- * `packages/storage-fs/src/permission-grants.ts` / pg
- * `packages/storage-pg/src/permission-grants.ts`）が同じ関数を呼ぶ形にして
- * あるのは `mcp-server-contract.ts` と同じ理由 —— 検査が器ごとに書き分け
- * られていると、乖離した器が緑のまま残る（#370）。
- *
- * **vitest に依存しない素の非同期関数にしてある**（`storage-fs` /
- * `storage-pg` へ vitest を持ち込まないため。`mcp-server-contract.ts` と同じ）。
- *
- * **測るのは `PermissionGrantStore` interface の doc（`store.ts`）に書いて
- * ある約束だけである。** doc に書いていない挙動は、実装が3つとも揃って
- * いても新しい契約として決めない——迷ったら入れない:
- *
- * - **`list()` の並び**（`grantedAt` 昇順）は3実装とも揃っているが、それは
- *   各実装のコード注釈（例: `FsPermissionGrantStore.list()` の「3実装で
- *   揃える」コメント）が申し合わせているだけで、`PermissionGrantStore`
- *   interface の doc には書かれていない。ここでは測らない（fs / pg 個別の
- *   `index.test.ts` が「list は grantedAt 昇順で返る」を別途持つ）。
- * - **`put()` が必須欄の欠けた grant を拒むこと**（issue #2052 / PR #2065）も
- *   同様——fs / pg は書く前に `permissionGrantSchema.parse` を通し、
- *   インメモリも #2065 で揃えたが、`PermissionGrantStore.put` の doc
- *   自体はこれを約束していない（`McpServerStore.write` の doc が
- *   「書く前に `parseMcpServers` を通すこと（3実装とも）」と明示している
- *   のとは対照的）。ここでは測らない
- *   （`apps/daemon/src/permission-grant-put-validation.test.ts` が別に測る）。
- * - **1回だけの許可（issue #1768 / #1809 の `<=` 境界）** は
- *   `PermissionGrantStore` の外——`runner.ts` の `#consumeOneShotAllow` /
- *   `ONE_SHOT_ALLOW_TTL_MS`（クローン内の `Map`）にある別の仕組みで、この
- *   ストアの契約ではない。ここでは測らない。
- *
- * 測る性質:
- *
- * 1. `get()` / `list()` の基本往復。put した行がそのまま読み戻る
- *    （`route.principalKind` を含む全欄が一致）。無い id の `get()` は
- *    `null`。put した行は `list()` にも出る
- * 2. `revoke()`: 無い id は `null`
- * 3. `revoke()`: 在る id は `revokedAt` を立てて「書いた後の全体」を返す。
- *    `revokedAt` 以外の欄は変わらない
- * 4. `revoke()`: 既に取り消し済みの行への再度の `revoke()` は、元の
- *    `revokedAt` を保つ（上書きしない）——doc「既に取り消し済みなら元の
- *    revokedAt を保つ（上書きしない）」の逐語
- * 5. `markUsed()`: 無い id は `false`（何もしない）
- * 6. `markUsed()`: 在る id（取り消されていない）は `lastUsedAt` を進めて
- *    `true`。`revokedAt` には触らない
- * 7. `markUsed()`: 取り消し済みの行は記録せず `false` を返す——doc
- *    「取り消されていれば記録せず false を返す（Issue #1687）」の逐語。
- *    `lastUsedAt` / `revokedAt` のどちらも変わらない
- * 8. `markUsed()`: 既存より古い時刻では戻さない（それでも `true` を返す）
- *    ——doc「既存より古い時刻では戻さないこと」「既存より古い時刻で進め
- *    なかった回も true」の逐語
+ * vitest に依存しない素の非同期関数にする: `storage-fs` / `storage-pg` へ vitest を持ち込まないため。
+ * `PermissionGrantStore` の doc に書いてある約束だけを測る。実装が揃っているだけの挙動
+ * （`list()` の並び・`put()` の必須欄検査）は契約にしない。1回だけの許可はストアの外にある。
  */
 export async function verifyPermissionGrantStoreContract(
   store: PermissionGrantStore,
@@ -105,7 +55,6 @@ export async function verifyPermissionGrantStoreContract(
 
   const missingId = 'permission-grant-contract-never-put-id';
 
-  // 1. get/list の基本往復。無い id の get() は null。
   if ((await store.get(missingId)) !== null) {
     fail('無いidのget()はnull', await store.get(missingId));
   }
@@ -121,12 +70,9 @@ export async function verifyPermissionGrantStoreContract(
     fail('putしたgrantがlist()に出る', listAfterA);
   }
 
-  // 2. revoke(): 無い id は null。
   const revokeMissing = await store.revoke(missingId, '2026-01-02T00:00:00.000Z');
   if (revokeMissing !== null) fail('revoke(無いid)はnull', revokeMissing);
 
-  // 3. revoke(): 在る id は revokedAt を立てて全体を返す。revokedAt 以外は
-  // 変わらない。
   const revokeAt = '2026-01-02T00:00:00.000Z';
   const revoked = await store.revoke(grantA.id, revokeAt);
   if (revoked === null) fail('revoke(在るid)はnullではない', revoked);
@@ -143,8 +89,6 @@ export async function verifyPermissionGrantStoreContract(
     fail('revoke()の結果はget()にも反映される', readAfterRevoke);
   }
 
-  // 4. revoke(): 既に取り消し済みの行への再度の revoke() は、元の
-  // revokedAt を保つ（上書きしない）。
   const secondRevokeAt = '2026-01-03T00:00:00.000Z';
   const revokedAgain = await store.revoke(grantA.id, secondRevokeAt);
   if (revokedAgain === null) fail('revoke(取り消し済み)はnullではない', revokedAgain);
@@ -160,14 +104,9 @@ export async function verifyPermissionGrantStoreContract(
     fail('二重revoke()後もget()のrevokedAtは最初のまま', readAfterSecondRevoke);
   }
 
-  // --- markUsed() ---
-
-  // 5. markUsed(): 無い id は false（何もしない）。
   const markUsedMissing = await store.markUsed(missingId, '2026-01-01T00:00:00.000Z');
   if (markUsedMissing !== false) fail('markUsed(無いid)はfalse', markUsedMissing);
 
-  // 6. markUsed(): 在る id（取り消されていない）は lastUsedAt を進めて
-  // true。revokedAt には触らない。
   const grantB = makeGrant('permission-grant-contract-b', '2026-01-01T00:00:00.000Z');
   await store.put(grantB);
   const usedAt1 = '2026-01-05T00:00:00.000Z';
@@ -181,8 +120,7 @@ export async function verifyPermissionGrantStoreContract(
     fail('markUsed()はrevokedAtに触らない', readBAfterUse1);
   }
 
-  // 8. markUsed(): 既存より古い時刻では戻さない（それでも true を返す）。
-  const olderAt = '2026-01-04T00:00:00.000Z'; // usedAt1 (01-05) より古い。
+  const olderAt = '2026-01-04T00:00:00.000Z';
   const markUsedOlder = await store.markUsed(grantB.id, olderAt);
   if (markUsedOlder !== true) {
     fail('markUsed(既存より古い時刻)でもtrueを返す（doc「進めなかった回もtrue」）', markUsedOlder);
@@ -195,8 +133,6 @@ export async function verifyPermissionGrantStoreContract(
     });
   }
 
-  // 7. markUsed(): 取り消し済みの行は記録せず false。lastUsedAt / revokedAt
-  // のどちらも変わらない。
   const grantC = makeGrant('permission-grant-contract-c', '2026-01-01T00:00:00.000Z');
   await store.put(grantC);
   const revokedC = await store.revoke(grantC.id, '2026-01-02T00:00:00.000Z');
@@ -217,9 +153,6 @@ export async function verifyPermissionGrantStoreContract(
     fail('markUsed(取り消し済み)はrevokedAtを変えない', readCAfter);
   }
 
-  // 8. NUL（issue #2927。teto の判断、2026-10-05）: 鍵・参照キー（id / approvalId /
-  // route.accountId）は NulNotAllowedError で断り、何も書かない。本文（rule / allows /
-  // denies / answer）は NUL を落として残す。
   const before = (await store.list()).length;
   for (const [label, grant, secret] of [
     [
@@ -271,9 +204,6 @@ export async function verifyPermissionGrantStoreContract(
     fail('本文のNULは落として残す', readBody);
   }
 
-  // 9. 読むだけの口（issue #3005）: 鍵に NUL を含む id で引かれたら、3実装とも「無い」と同じ結果を返す
-  // （get は null・revoke は null・markUsed は false・removeUnreadable は unknown）。投げない。
-  // 書き込みでは NUL の鍵を断るので、NUL を含む id の行はどの器にも存在しえない。何も書かない。
   const listBeforeRead = await store.list();
   const nulId = 'permission-grant-contract-n\u0000ul';
   const readOutcomes: Array<[string, () => Promise<unknown>, unknown]> = [
