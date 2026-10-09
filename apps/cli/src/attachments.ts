@@ -531,7 +531,7 @@ export async function attachmentsListCommand(options: AttachmentsListOptions): P
   }
 }
 
-// CLI と TUI で同じ文にする（attachment-wording-parity.test.ts が測る）
+// CLI と TUI（/keep・/unkeep・/rm）で同じ文にする
 export function attachmentNotFoundMessage(id: string): string {
   return `そんな添付はありません（消えた・期限切れ・id の誤り）: ${id}`;
 }
