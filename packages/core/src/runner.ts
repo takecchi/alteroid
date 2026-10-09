@@ -1147,6 +1147,7 @@ class Host implements RunnerHost {
       },
       outboxRoot: this.#outboxRoot,
       outboxStagedRoot: this.#outboxStagedRoot,
+      attachmentStageLimit: this.attachmentStageLimit,
       onDelegationProcessSpawned: (pid) => this.#noteDelegationProcessSpawned(pid, managerId),
       onDelegationProcessExited: (pid) => this.#noteDelegationProcessExited(pid),
       ...(this.#spawnAgentProcessFn === undefined
@@ -1574,6 +1575,8 @@ interface RunnerSessionOptions {
   onClosed: () => void;
   outboxRoot: string;
   outboxStagedRoot: string;
+  /** 出し箱の大きいファイルの1つの上限と1報告の合計（hello の `attachmentStageLimit` と同じ値）。 */
+  attachmentStageLimit?: number;
   onDelegationProcessSpawned?: (pid: number) => void;
   onDelegationProcessExited?: (pid: number) => void;
   spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
@@ -1619,7 +1622,8 @@ class RunnerSession {
   readonly #onClosed: () => void;
   readonly #outboxRoot: string;
   readonly #outboxStagedRoot: string;
-  // 用意できなかったら無し: 出し箱が無くてもマネージャーは動く（成果物を報告に添えられないだけ）
+  readonly #attachmentStageLimit: number | undefined;
+  //用意できなかったら無し: 出し箱が無くてもマネージャーは動く（成果物を報告に添えられないだけ）
   readonly #outboxDir: string | undefined;
   readonly #onDelegationProcessSpawned: (pid: number) => void;
   readonly #onDelegationProcessExited: (pid: number) => void;
@@ -1746,6 +1750,7 @@ class RunnerSession {
     this.#onClosed = options.onClosed;
     this.#outboxRoot = options.outboxRoot;
     this.#outboxStagedRoot = options.outboxStagedRoot;
+    this.#attachmentStageLimit = options.attachmentStageLimit;
     this.#outboxDir = this.#prepareOutbox();
     this.#onDelegationProcessSpawned = options.onDelegationProcessSpawned ?? (() => undefined);
     this.#onDelegationProcessExited = options.onDelegationProcessExited ?? (() => undefined);
@@ -2319,6 +2324,9 @@ class RunnerSession {
         // 子を降ろす構成なら子の uid、降ろさない構成なら runner 自身の uid
         expectedUid: this.#childUser?.uid ?? process.getuid?.(),
         limits: readAttachmentLimits().limits,
+        ...(this.#attachmentStageLimit === undefined
+          ? {}
+          : { maxLargeFileBytes: this.#attachmentStageLimit }),
       });
       return {
         ...(collected.files.length === 0 ? {} : { files: collected.files }),

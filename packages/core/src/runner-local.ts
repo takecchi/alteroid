@@ -33,6 +33,34 @@ import { readExecutionResources } from './runner-resources.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
 /**
+ * `signal` が中断されたら、本文の読みをやめて投げる（待っている読みも待たずに抜ける）。
+ * 別口の `fetch` が `signal` で止まるのと同じ振る舞いを、同一プロセスの経路にも持たせる。
+ */
+async function* abortableBody(
+  body: AsyncIterable<Uint8Array>,
+  signal: AbortSignal,
+): AsyncGenerator<Uint8Array> {
+  const iterator = body[Symbol.asyncIterator]();
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const fail = (): void => reject(signal.reason ?? new Error('aborted'));
+    if (signal.aborted) fail();
+    else signal.addEventListener('abort', fail, { once: true });
+  });
+  aborted.catch(() => undefined);
+  try {
+    for (;;) {
+      const pending = iterator.next();
+      pending.catch(() => undefined);
+      const step = await Promise.race([pending, aborted]);
+      if (step.done === true) return;
+      yield step.value;
+    }
+  } finally {
+    void Promise.resolve(iterator.return?.()).catch(() => undefined);
+  }
+}
+
+/**
  * 同一プロセスの manager-runner（ローカル実行用）。
  *
  * ローカルの既知の穴（マネージャーが同じ UID で走る）をツール削除で塞がない。
@@ -168,8 +196,14 @@ class LocalRunner implements RunnerClient {
     managerId: string,
     meta: RunnerStagedAttachmentMeta,
     body: AsyncIterable<Uint8Array>,
+    options?: { signal?: AbortSignal },
   ): Promise<void> {
-    await this.#host.stageAttachment(managerId, meta, body);
+    const signal = options?.signal;
+    await this.#host.stageAttachment(
+      managerId,
+      meta,
+      signal === undefined ? body : abortableBody(body, signal),
+    );
   }
 
   async openOutboxFile(

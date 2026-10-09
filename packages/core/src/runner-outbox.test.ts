@@ -42,6 +42,8 @@ async function setup() {
       managerId: MANAGER,
       expectedUid: process.getuid?.(),
       limits: LIMITS,
+      // 既存の試験は「大きいファイルを受けない」前提（env の既定 2 GiB に依らない）
+      maxLargeFileBytes: LIMITS.maxFileBytes,
       ...overrides,
     });
   return { root, stagedRoot, outside, dir, collect };

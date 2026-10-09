@@ -15,7 +15,11 @@ import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
 import type { Readable } from 'node:stream';
 
-import type { AttachmentLimits } from './attachment.js';
+import {
+  isAttachmentImageMediaType,
+  readRunnerAttachmentStageLimit,
+  type AttachmentLimits,
+} from './attachment.js';
 import { isSafeRunnerSegment, RUNNER_ATTACHMENT_STALE_MS } from './runner-attachments.js';
 import type { RunnerOutboxFile, RunnerOutboxRejectedFile } from './runner-protocol.js';
 
@@ -122,6 +126,11 @@ export interface CollectManagerOutboxOptions {
   /** ハードリンクで runner の持ち物を指させる経路を塞ぐ。`undefined` は uid を持たない環境で、所有者を見ない。 */
   readonly expectedUid: number | undefined;
   readonly limits: Pick<AttachmentLimits, 'maxFileBytes' | 'maxPerMessage' | 'maxTotalBytes'>;
+  /**
+   * 画像以外で `maxFileBytes` を超える「大きいファイル」の1つの上限と、1報告の大きいファイルの合計の上限（バイト。#4128 段3b）。
+   * 省略時は `readRunnerAttachmentStageLimit(process.env)`（hello の `attachmentStageLimit` と同じ値）。主にテスト用。
+   */
+  readonly maxLargeFileBytes?: number;
   readonly afterFirstChunk?: () => Promise<void>;
 }
 
@@ -171,14 +180,24 @@ export function guessOutboxMediaType(name: string): string {
   return MEDIA_TYPES_BY_EXTENSION[extname(name).toLowerCase()] ?? 'application/octet-stream';
 }
 
-async function stagedBytesOf(dir: string): Promise<number> {
+/**
+ * 退避先の大きさを、大きいファイル（`maxFileBytes` を超えるもの）とそれ以外に分けて数える。
+ * 分けられる: 画像は `maxFileBytes` までしか取り込まないので、それを超える退避済みのものは大きいファイルだけ。
+ */
+async function stagedBytesOf(
+  dir: string,
+  maxFileBytes: number,
+): Promise<{ small: number; large: number }> {
   const names = await readdir(dir).catch(() => [] as string[]);
-  let sum = 0;
+  let small = 0;
+  let large = 0;
   for (const name of names) {
     const info = await stat(join(dir, name)).catch(() => undefined);
-    if (info?.isFile()) sum += info.size;
+    if (!info?.isFile()) continue;
+    if (info.size > maxFileBytes) large += info.size;
+    else small += info.size;
   }
-  return sum;
+  return { small, large };
 }
 
 // 同じ inode のときだけ消す: 開いた後に担い手が差し替えた別のものを巻き込まない
@@ -193,8 +212,13 @@ interface CollectContext {
   readonly stagedDir: string;
   readonly expectedUid: number | undefined;
   readonly maxFileBytes: number;
+  /** 画像以外の1つの上限（大きいファイルを含む）。`maxFileBytes` 以上。 */
+  readonly maxLargeFileBytes: number;
   readonly totalLimit: number;
   totalBytes: number;
+  /** 大きいファイルだけの、この報告の合計の上限（退避先の予算の残りも織り込む）。 */
+  readonly largeTotalLimit: number;
+  largeTotalBytes: number;
   readonly afterFirstChunk?: () => Promise<void>;
 }
 
@@ -264,10 +288,22 @@ async function takeEntry(context: CollectContext, name: string): Promise<RunnerO
     }
     if (info.nlink > 1) throw new OutboxRefusal('ハードリンクは送れない', 'remove');
     if (info.size === 0) throw new OutboxRefusal('空のファイルは送れない', 'remove');
-    if (info.size > context.maxFileBytes) {
-      throw new OutboxRefusal(`1つの上限（${context.maxFileBytes} バイト）を超える`, 'remove');
+    // 画像かどうかは名前（拡張子）で決める: 中身は見ない（最終判定はデーモン）。画像は大きいファイルにしない
+    const image = isAttachmentImageMediaType(guessOutboxMediaType(name));
+    const large = !image && info.size > context.maxFileBytes;
+    const fileMax = image ? context.maxFileBytes : context.maxLargeFileBytes;
+    if (info.size > fileMax) {
+      throw new OutboxRefusal(`1つの上限（${fileMax} バイト）を超える`, 'remove');
     }
-    if (context.totalBytes + info.size > context.totalLimit) {
+    if (large) {
+      // 大きいファイルは `maxTotalBytes` の合計に数えず、別の予算で見る
+      if (context.largeTotalBytes + info.size > context.largeTotalLimit) {
+        throw new OutboxRefusal(
+          '1回の報告の大きいファイルの合計の上限を超える（次の報告で送る）',
+          'keep',
+        );
+      }
+    } else if (context.totalBytes + info.size > context.totalLimit) {
       throw new OutboxRefusal('1回の報告の合計の上限を超える（次の報告で送る）', 'keep');
     }
     const copied = await copyToStaged(
@@ -276,7 +312,8 @@ async function takeEntry(context: CollectContext, name: string): Promise<RunnerO
       context.stagedDir,
       context.afterFirstChunk,
     );
-    context.totalBytes += info.size;
+    if (large) context.largeTotalBytes += info.size;
+    else context.totalBytes += info.size;
     await unlinkIfSame(path, info);
     return {
       fileId: copied.fileId,
@@ -317,14 +354,22 @@ export async function collectManagerOutbox(
   ensureOwnDirectorySync(resolve(stagedRoot), 0o700, { recursive: true });
   const stagedDir = resolve(stagedRoot, managerId);
   ensureOwnDirectorySync(stagedDir, 0o700);
+  // 大きいファイルは別の予算（1報告の合計 = 1つの上限 `maxLargeFileBytes`、退避先 = それ × STAGED_BUDGET_FACTOR）
+  const largeReportLimit = options.maxLargeFileBytes ?? readRunnerAttachmentStageLimit();
+  const maxLargeFileBytes = Math.max(limits.maxFileBytes, largeReportLimit);
+  const staged = await stagedBytesOf(stagedDir, limits.maxFileBytes);
   const stagedBudget = limits.maxTotalBytes * STAGED_BUDGET_FACTOR;
+  const largeStagedBudget = largeReportLimit * STAGED_BUDGET_FACTOR;
   const context: CollectContext = {
     dir,
     stagedDir,
     expectedUid,
     maxFileBytes: limits.maxFileBytes,
-    totalLimit: Math.min(limits.maxTotalBytes, stagedBudget - (await stagedBytesOf(stagedDir))),
+    maxLargeFileBytes,
+    totalLimit: Math.min(limits.maxTotalBytes, stagedBudget - staged.small),
     totalBytes: 0,
+    largeTotalLimit: Math.min(largeReportLimit, largeStagedBudget - staged.large),
+    largeTotalBytes: 0,
     ...(options.afterFirstChunk === undefined ? {} : { afterFirstChunk: options.afterFirstChunk }),
   };
 

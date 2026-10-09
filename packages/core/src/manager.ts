@@ -79,6 +79,7 @@ import {
 import { readAttachmentLimits, type AttachmentLimits, type AttachmentStore } from './attachment.js';
 import {
   fetchManagerOutbox,
+  outboxFetchDeadlineMs,
   rejectedFileOf,
   type ManagerReportFiles,
 } from './manager-outbox-fetch.js';
@@ -3176,6 +3177,8 @@ export interface ManagerPoolOptions {
   outboxFetchFileTimeoutMs?: number;
   /** 1回の報告ぶんの取り出し全体にかける時間（ms。既定 `OUTBOX_FETCH_TOTAL_TIMEOUT_MS`）。主にテスト用。 */
   outboxFetchTotalTimeoutMs?: number;
+  /** 大きいファイルを runner の別口へ押す1つの期限（ms。引数は大きさ）。既定 `outboxFetchDeadlineMs`。主にテスト用。 */
+  stageDeadlineMs?: (size: number) => number;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -5902,6 +5905,7 @@ class Pool implements ManagerPool {
   readonly #attachmentLimits: AttachmentLimits | undefined;
   readonly #outboxFetchFileTimeoutMs: number | undefined;
   readonly #outboxFetchTotalTimeoutMs: number | undefined;
+  readonly #stageDeadlineMs: (size: number) => number;
 
   /** 累積の usage を `record` へ積む順番を、届いた順に揃える（Issue #3015）。 */
   readonly #usageOrder = new UsageRecordOrder();
@@ -5939,7 +5943,9 @@ class Pool implements ManagerPool {
     attachmentLimits,
     outboxFetchFileTimeoutMs,
     outboxFetchTotalTimeoutMs,
+    stageDeadlineMs,
   }: ManagerPoolOptions) {
+    this.#stageDeadlineMs = stageDeadlineMs ?? outboxFetchDeadlineMs;
     this.#attachmentLimits = attachmentLimits;
     this.#outboxFetchFileTimeoutMs = outboxFetchFileTimeoutMs;
     this.#outboxFetchTotalTimeoutMs = outboxFetchTotalTimeoutMs;
@@ -7867,13 +7873,17 @@ class Pool implements ManagerPool {
       const label = `${item.id}（${item.name}, ${item.size} バイト）`;
       const stage = runner.stageAttachment?.bind(runner);
       if (stage === undefined) return `大きいファイル ${label} を押す口が無い`;
+      // 期限は1つずつのファイルに掛ける。応答しない runner を最長1時間（runner 側の持ち時間）待たない
+      const deadlineMs = this.#stageDeadlineMs(item.size);
+      const signal = AbortSignal.timeout(deadlineMs);
+      const timedOut = `大きいファイル ${label} を runner へ下ろせなかった: 時間の上限（${Math.round(deadlineMs / 100) / 10} 秒）を超えた`;
       let opened: Awaited<ReturnType<AttachmentStore['open']>>;
       try {
         opened = await this.#stores.attachments.open(item.id);
         if (opened === undefined) {
           return `大きいファイル ${label} は読む間に置き場から消えた（保持期限）`;
         }
-        await stage(
+        const pushing = stage(
           managerId,
           {
             id: item.id,
@@ -7883,8 +7893,19 @@ class Pool implements ManagerPool {
             sha256: item.sha256,
           },
           opened.stream,
+          { signal },
         );
+        // `signal` を見ない実装でも期限で抜ける（遅れた拒否は握る）
+        pushing.catch(() => undefined);
+        const aborted = new Promise<'aborted'>((resolve) => {
+          signal.addEventListener('abort', () => resolve('aborted'), { once: true });
+        });
+        if ((await Promise.race([pushing.then(() => 'done' as const), aborted])) === 'aborted') {
+          return timedOut;
+        }
       } catch (error) {
+        // `signal` を見る実装（`fetch`）は期限で拒否する。理由は時間切れとして言う
+        if (signal.aborted) return timedOut;
         return `大きいファイル ${label} を runner へ下ろせなかった: ${reasonOf(error)}`;
       } finally {
         // 読み切らずに断られた回に、置き場の読みを残さない。

@@ -1834,6 +1834,8 @@ export {
 export { verifyAttachmentStoreContract } from './attachment-contract.js';
 export {
   fetchManagerOutbox,
+  outboxFetchDeadlineMs,
+  outboxFetchTotalDeadlineMs,
   OUTBOX_DELETE_TIMEOUT_MS,
   OUTBOX_FETCH_FILE_TIMEOUT_MS,
   OUTBOX_FETCH_TOTAL_TIMEOUT_MS,
