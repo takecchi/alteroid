@@ -9065,6 +9065,27 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     ]);
   });
 
+  it('改行を含む値（PEM のような複数行）は1文字も変わらず、runner へ降り、正本にも残る（#3352）', async () => {
+    const pem =
+      '-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkq\r\nhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\n';
+    const runner = fakeRunner('runner-1');
+    const withVault = withCredentials([runner]);
+
+    const response = await put(withVault, [
+      { name: 'TLS_KEY', value: pem },
+      { name: 'TLS_KEY_PLAIN', value: pem, secret: false },
+    ]);
+
+    expect(response.status).toBe(200);
+    expect(runner.held.get('TLS_KEY')).toBe(pem);
+    const stored = await stores.credentials.list();
+    expect(stored.find((row) => row.name === 'TLS_KEY')?.value).toBe(pem);
+    const read = (await (await withVault.request('/credentials')).json()) as {
+      credentials: { name: string; value?: string }[];
+    };
+    expect(read.credentials.find((entry) => entry.name === 'TLS_KEY_PLAIN')?.value).toBe(pem);
+  });
+
   it('応答に値が1文字も出ない（返るのは指紋だけ）', async () => {
     const runner = fakeRunner('runner-1');
     const withVault = withCredentials([runner]);

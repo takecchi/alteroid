@@ -2,7 +2,7 @@ import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { EllipsisVertical } from 'lucide-react';
-import { useState } from 'react';
+import { useId, useState, type ClipboardEvent } from 'react';
 import { unsentInput } from '~/lib/unsent-input';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 
@@ -15,9 +15,11 @@ import {
   ConfirmDialog,
   Empty,
   ErrorNote,
+  FieldHint,
   Input,
   Select,
   Spinner,
+  Textarea,
 } from '@alteroid/ui';
 import {
   Button as ShadcnButton,
@@ -219,6 +221,96 @@ function EnvVarRow({ entry, onRemove }: { entry: EnvVarView; onRemove: () => Pro
   );
 }
 
+const NEWLINE = /[\r\n]/;
+
+// 普段は伏せた1行、「表示する」で複数行の欄にする（PEM のような値のため）。
+// 値は状態として持ち続け、伏せた1行の欄に直接書かせない: `<input>` は値から改行を落とすので、伏せた欄の onChange の値で状態を上書くと複数行の値が黙って壊れるため。
+// 改行を含む値のあいだ伏せた欄は読み取り専用にし、貼り付けは `onPaste` で改行ごと取り込む。
+function SecretValueField({
+  label,
+  value,
+  onChange,
+  onSubmitShortcut,
+  submitDisabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onSubmitShortcut?: () => void;
+  submitDisabled?: boolean;
+}) {
+  const fieldId = useId();
+  const hintId = useId();
+  const [revealed, setRevealed] = useState(false);
+  const multiline = NEWLINE.test(value);
+
+  function paste(event: ClipboardEvent<HTMLInputElement>) {
+    if (multiline) return;
+    const text = event.clipboardData.getData('text');
+    if (!NEWLINE.test(text)) return;
+    event.preventDefault();
+    const { selectionStart, selectionEnd } = event.currentTarget;
+    const from = selectionStart ?? value.length;
+    const to = selectionEnd ?? value.length;
+    onChange(value.slice(0, from) + text + value.slice(to));
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between gap-2">
+        <label htmlFor={fieldId} className="text-xs text-muted-foreground">
+          {label}
+        </label>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-controls={fieldId}
+          aria-pressed={revealed}
+          onClick={() => setRevealed((shown) => !shown)}
+        >
+          {revealed ? '隠す' : '表示する'}
+        </Button>
+      </div>
+      {revealed ? (
+        <Textarea
+          id={fieldId}
+          rows={4}
+          maxHeight="60vh"
+          className="font-mono"
+          spellCheck={false}
+          autoComplete="off"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          {...(onSubmitShortcut === undefined ? {} : { onSubmitShortcut })}
+          {...(submitDisabled === undefined ? {} : { submitDisabled })}
+        />
+      ) : (
+        <>
+          <Input
+            id={fieldId}
+            type="password"
+            autoComplete="new-password"
+            className="font-mono"
+            aria-describedby={multiline ? hintId : undefined}
+            readOnly={multiline}
+            value={value.replace(/[\r\n]/g, '')}
+            // 改行入りの値は読み取り専用でも変更を受けない: 読み取り専用でも補完などが値を書き込みえて、改行を落とした値で上書くため
+            onChange={(event) => {
+              if (!multiline) onChange(event.target.value);
+            }}
+            onPaste={paste}
+          />
+          {multiline && (
+            <FieldHint id={hintId}>
+              複数行の値が入っている。伏せたまま送れる。直すときは「表示する」を押す
+            </FieldHint>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // secret は送らない: 作成後は変えられず、送ると別の意味になりうるため
 // 空の値では保存させない: 空は「外す」の意味になるため
 function EditEnvVarDialog({
@@ -283,16 +375,24 @@ function EditEnvVarDialog({
             <span className="text-xs text-muted-foreground">名前</span>
             <Input value={entry.name} readOnly className="font-mono" />
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">
-              {entry.secret ? '新しい値' : '値'}
-            </span>
-            <Input
+          {entry.secret ? (
+            <SecretValueField
+              label="新しい値"
               value={value}
-              onChange={(event) => setValue(event.target.value)}
-              className="font-mono"
+              onChange={setValue}
+              onSubmitShortcut={() => void save()}
+              submitDisabled={!canSave || busy}
             />
-          </label>
+          ) : (
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">値</span>
+              <Input
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+                className="font-mono"
+              />
+            </label>
+          )}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">渡す先</span>
             <Select value={scope} onChange={(event) => setScope(event.target.value as EnvVarScope)}>
@@ -399,10 +499,20 @@ function AddEnvVarForm() {
             placeholder="TZ"
           />
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">値</span>
-          <Input value={value} onChange={(event) => setValue(event.target.value)} />
-        </label>
+        {secret ? (
+          <SecretValueField
+            label="値"
+            value={value}
+            onChange={setValue}
+            onSubmitShortcut={submit}
+            submitDisabled={!canSubmit || busy}
+          />
+        ) : (
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">値</span>
+            <Input value={value} onChange={(event) => setValue(event.target.value)} />
+          </label>
+        )}
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">渡す先</span>
           <Select value={scope} onChange={(event) => setScope(event.target.value as EnvVarScope)}>
