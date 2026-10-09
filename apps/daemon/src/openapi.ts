@@ -276,6 +276,7 @@ export const integrationKeysListResponseSchema = z.object({
   rowsUnreadable: rowsUnreadableSchema.optional(),
 });
 
+// `scopes` のような選べる許可の一覧は無い: 鍵の種類そのものが「固定の1 source で外部イベントを送る」という1つの能力だけを表すため。
 export const integrationKeyCreateRequestSchema = z.object({
   name: z.string().trim().min(1).max(200),
   source: integrationSourceSchema,
@@ -286,6 +287,7 @@ export const integrationKeyCreateRequestSchema = z.object({
 
 export const integrationKeyCreateResponseSchema = z.object({
   key: integrationKeyViewSchema,
+  // 鍵の値はこの応答でだけ返す: 保存は sha256 だけで、後からは取り出せない。
   value: z.string(),
 });
 
@@ -320,8 +322,10 @@ export const conversationDeleteResponseSchema = z.object({
 export const conversationsResponseSchema = z.object({
   conversations: z.array(conversationSchema),
   scanned: z.number().int(),
+  // `GET /conversations/:id` と同じ意味・同じ名前で揃える（`@alteroid/core` の `reachedStart`）。
   reachedStart: z.boolean(),
   hiddenByLimit: z.number().int(),
+  // `/approvals` / `/commitments` の `nextCursor` と同じ名前・同じ形（無ければ鍵ごと無い）。
   nextCursor: z.string().optional(),
   readStateUnreadable: readStateUnreadableSchema,
 });
@@ -331,6 +335,7 @@ const conversationMessageSchema = z.object({
   at: z.string(),
   role: z.enum(['inbound', 'outbound']),
   text: z.string(),
+  // 走っている・順番待ちの状態は `GET /chat/:id/stream` の `open.pending` が持つので、ここには足さない: 二重の正本を作らない。
   delivery: z.enum(['withdrawn']).optional(),
   supersedes: z.string().optional(),
   supersededBy: z.string().optional(),
@@ -387,6 +392,7 @@ export const memoryDeleteResponseSchema = z.object({
 // `apply` / `enforce` に当たる口を作らない: PracticeStore が持つのは「こう書いてある」までで、「こう実行せよ」ではないため。
 export const practiceListResponseSchema = z.object({
   practices: z.array(practiceMetaSchema),
+  // 1件でも在るときだけ載せる: 空配列を作ると「読めない行は無い」と読めてしまうため。
   unreadable: z.array(unreadablePracticeSchema).optional(),
 });
 export const practiceReadResponseSchema = z.object({
@@ -412,6 +418,7 @@ export const journalNextSchema = z.object({ id: z.string(), at: isoDateTimeSchem
 export const journalListResponseSchema = z.object({
   entries: z.array(journalEntrySchema),
   next: journalNextSchema.optional(),
+  // `oldestAt` / `crossesHorizon` は `since` / `until` / `horizon=true` のいずれかを渡した呼びにだけ載る: どれも渡さない既存の呼びの応答を変えないため。
   oldestAt: isoDateTimeSchema.nullable().optional(),
   crossesHorizon: z.boolean().optional(),
 });
@@ -432,7 +439,9 @@ export const reportsResponseSchema = z.object({ reports: z.array(dailyReportEntr
 // `updatedAt` は core の `approvalUpdatedAt` で導く: 受け手に `answeredAt ?? createdAt` を書き直させないため。
 export const approvalsResponseSchema = z.object({
   approvals: z.array(pendingApprovalSchema.extend({ updatedAt: isoDateTimeSchema })),
+  // 1件でも在るときだけ載せる: 空配列を作ると「読めない行は無い」と読めてしまうため。
   unreadable: z.array(unreadableApprovalSchema).optional(),
+  // `total` / `nextCursor` は `order` / `limit` / `cursor` のいずれかを渡したときだけ載る（既定の呼びでは鍵ごと無い）: 既存の呼び手（画面・CLI）の応答を変えないため。
   total: z.number().int().optional(),
   nextCursor: z.string().optional(),
 });
@@ -467,6 +476,7 @@ export const okResponseSchema = z.object({ ok: z.literal(true) });
 
 export const clientMessageLookupResponseSchema = z.object({ conversationId: z.string() });
 
+// `conversationId` と `clientMessageId` は2つとも省くか、2つとも渡す（片方だけは 400）。
 export const cloneInterruptRequestSchema = z.object({
   conversationId: z.string().min(1).optional(),
   clientMessageId: clientMessageIdSchema.optional(),
@@ -516,6 +526,7 @@ export const scheduleStatusSchema = z.object({
   lastRunAt: z.string().optional(),
 });
 
+// 既定の定期ジョブの名前での 409（`{ error }` だけ）とは、`current` の鍵の有無で見分ける。
 export const scheduleConflictResponseSchema = z.object({
   error: z.string(),
   current: scheduledRequestSchema.nullable(),
@@ -523,9 +534,11 @@ export const scheduleConflictResponseSchema = z.object({
 
 export const scheduleListResponseSchema = z.object({
   entries: z.array(scheduleStatusSchema),
+  // 1件でも在るときだけ載せる: 空配列を作ると「読めない行は無い」と読めてしまうため。
   unreadable: z.array(unreadableScheduleSchema).optional(),
 });
 
+// 片付き済み・読めない行の 409（`{ error }` だけ）とは、`current` の鍵の有無で見分ける。
 export const commitmentConflictResponseSchema = z.object({
   error: z.string(),
   current: commitmentSchema.nullable(),
@@ -541,9 +554,12 @@ export const commitmentListResponseSchema = z.object({
       activeManagerIds: z.array(z.string()).optional(),
     }),
   ),
+  // 窓（`limit`/`cursor`）では切らず、常に全件を返す。
   unreadable: z.array(unreadableCommitmentSchema),
   trimmedClosed: z.number().int().nonnegative(),
+  // 読めない委譲がどの台帳の行に紐づくかは、行が壊れているので言えない: だから行へは紐づけない。1件でも在るときだけ載る。
   unreadableJobs: z.array(unreadableJobSchema).optional(),
+  // `total` / `nextCursor` は `limit` / `cursor` のいずれかを渡したときだけ載る（既定の呼びでは鍵ごと無い）: 既存の呼び手（画面・CLI・クローンの `commitment_list`）の応答を変えないため。
   total: z.number().int().optional(),
   nextCursor: z.string().optional(),
 });
@@ -554,6 +570,7 @@ export const commitmentOpenedResponseSchema = z.object({ ok: z.literal(true), id
 const managerWaitingSchema = z.object({
   requestId: z.string(),
   summary: z.string(),
+  // `kind` / `askedAt` は `.optional()`: 版のずれで旧 runner の応答に乗らない窓があり、ここで既定値を作ると経路によって値の意味が変わるため。
   kind: waitingKindSchema.optional(),
   askedAt: isoDateTimeSchema.optional(),
 });
@@ -596,6 +613,7 @@ export const managerSummarySchema = z.object({
   lastReportAt: z.string().optional(),
   // `jobSchema` の枝は書き直さず借りる（以下の `jobSchema.shape.*` も同じ）: 欄が片方だけ増えた日に spec が黙って古びるため。
   lastReportStatus: jobSchema.shape.lastReportStatus,
+  // 失敗した回だけ載る（`optional`）: 空の値を載せると「失敗していない」と「この器では見ていない」が同じ形になる。`status` は置き換えない（支出上限に当たった回もセッションは生きており `done` のまま）。
   lastFailure: jobSchema.shape.lastFailure,
   lastUnreported: jobSchema.shape.lastUnreported,
   lastFoldedTurn: jobSchema.shape.lastFoldedTurn,
@@ -608,6 +626,7 @@ export const managerSummarySchema = z.object({
   workspace: workspaceLocatorSchema.optional(),
   // 引き取ってよいかの判定は載せない: 答えは時刻で変わり、応答に焼くと読んだ瞬間から古びるため。
   lease: jobSchema.shape.lease,
+  // 握り潰しが在るときだけ載る（`optional`）: 常に載せると「待っていない」と「この器では観測していない」が同じ形になる。`status` は `done` のままで置き換えない。
   awaitingBackground: z
     .object({
       tasks: z.number(),
@@ -623,6 +642,7 @@ export const managerSummarySchema = z.object({
     .enum(['pool-not-wired', 'not-yet-observed', 'reattached-across-restart'])
     .optional(),
   liveBackgroundTasks: z.number().int().nonnegative().optional(),
+  // `jobSchema` の枝を借りない: 台帳（`Job`）には無い、プロセス内の `#resetTimeSkewMatches` を材料にした計算値のため。
   resetTimeSkewMatch: z.enum(['active', 'stale']).optional(),
   lastUnpushedWorkObservation: jobSchema.shape.lastUnpushedWorkObservation,
   lastRescue: jobSchema.shape.lastRescue,
@@ -636,6 +656,7 @@ export const managerSummarySchema = z.object({
 
 export const managersListResponseSchema = z.object({
   managers: z.array(managerSummarySchema),
+  // 1件でも在るときだけ載せる: 空配列を作ると「読めない行は無い」と読めてしまうため。行の状態が取れないので、`status` の絞り・`limit`・錨の窓では切らず常に全件を返す。
   unreadable: z.array(unreadableJobSchema).optional(),
 });
 
@@ -653,6 +674,7 @@ export const usageResponseSchema = usageAggregateSchema.extend({
   breakdown: usageBreakdownSchema,
   // 台帳と足さない: こちらは claude.ai 側が言っている値で、台帳は自分で数えた推定値のため。
   account: accountUsageStateSchema,
+  // `from` / `to` などの絞り込みに影響されない（全期間を突き合わせる）: 変わると、照会範囲の外の委譲が「記録が無い」に化けるため。
   unrecordedManagers: z.array(unrecordedManagerSchema),
   today: usageDateSchema,
 });
@@ -758,11 +780,14 @@ const runnerSummarySchema = z.object({
   // `lost` と `unreachable` は別物: 前者は開けていた宛先が黙った（走っていた仕事ごと黙った可能性がある）、後者はまだ開けていない宛先。
   state: runnerLivenessSchema,
   since: z.string(),
+  // 原因を見るための窓であって、値は載せない。
   error: z.string().optional(),
   runnerId: z.string().optional(),
   workspacePath: z.string().optional(),
+  // `onSwap` の知らせとは別の口: あちらは遷移で、ここは状態。知らせを見落とした後・デーモンの再起動後に、引き取りの判定が正しいかを検算する口が他に無い。名乗らない runner では返らず、無いことを「入れ替わっていない」と読まないこと。
   instanceId: z.string().optional(),
   instanceSince: z.string().optional(),
+  // 空であることだけを見ない: 叩けなかったときも空になるので、「鍵が配られていない」と読んでよいのは `credentialsProbe.status === 'asked'` のときだけ。
   credentials: z.array(runnerCredentialFingerprintSchema),
   credentialsProbe: runnerProbeSchema,
   profile: runnerProfileFingerprintSchema.optional(),
@@ -843,6 +868,7 @@ const topologyManagerSchema = z.object({
 });
 
 const topologyExternalSchema = z.object({
+  // 連携の鍵の id（鍵の値ではない）。
   keyId: z.string(),
   name: z.string(),
   source: z.string(),
@@ -851,6 +877,7 @@ const topologyExternalSchema = z.object({
 });
 
 const topologyLinkSchema = z.object({
+  // 知らない key は読み手が無視する（版ずれ）。
   key: z.string(),
   lastDownAt: isoDateTimeSchema.optional(),
   lastUpAt: isoDateTimeSchema.optional(),
@@ -873,6 +900,7 @@ export const topologyResponseSchema = z.object({
   managersOmitted: z.number().int().nonnegative().optional(),
   // `managers` が空でも「走っているマネージャーは居ない」とは限らない: 壊れた行は `managers` に数えられないため、第3の状態として別に言う。
   unreadable: z.array(unreadableJobSchema).optional(),
+  // 1件でも在るときだけ載せる: 欄が無いことは「呼ばれていない」ではなく「観測していない」でありうる（古いデーモンも載せない）。
   externals: z.array(topologyExternalSchema).optional(),
   externalsOmitted: z.number().int().positive().optional(),
   links: z.array(topologyLinkSchema),
@@ -893,6 +921,7 @@ export const runnersVacateCommandSchema = z.object({
   runnerId: z.string(),
 });
 
+// HTTP の状態は握手を飛ばした回も 200 のまま: 「空けると立てた」こと自体は成功しているため。飛ばしたのは載っている委譲への確かめた停止の握手だけで、貸し出しは返していない。
 export const runnersVacateResponseSchema = z.object({
   ok: z.literal(true),
   handshakeSkipped: z
@@ -992,6 +1021,7 @@ export const mcpServersUpdateRequestSchema = z.strictObject({
   ifMatch: z.string().optional(),
 });
 
+// `current` は `GET /mcp-servers` と同じ形（鍵の有無で他の 409 と見分ける）。
 export const mcpServersConflictResponseSchema = z.object({
   error: z.string(),
   current: mcpServersResponseSchema,
@@ -1232,6 +1262,7 @@ export const tokensPolicyUpdateRequestSchema = z.object({
   cooldownMs: z.number().int().positive().optional(),
 });
 
+// ここで zod の形にする: core の `dropped-record.ts` は stderr へ出す文字列とプレーンな TS の型しか持たず、zod スキーマが無いため。
 export const droppedTraceOriginSchema = z.literal('daemon');
 
 export const droppedResponseSchema = z.object({
@@ -1507,6 +1538,7 @@ export const inboxBacklogResponseSchema = z.object({
     oldestAt: z.string().optional(),
     undelivered: z.number().int(),
   }),
+  // 1件でも在るときだけ載せる: 空配列を作ると「読めない行は無い」と読めてしまうため。`total` には入らない（`total` は読めた行の数）。
   unreadable: z.array(unreadableInboxEventSchema).optional(),
 });
 
@@ -1527,6 +1559,7 @@ export const inboxRemoveManyResponseSchema = z.object({
   totalPending: z.number().int(),
   matched: z.number().int(),
   targeted: z.number().int(),
+  // `removedIds` は打ち切らない: JSON の応答は人間・スクリプトが読むもので、クローンの道具の文脈窓のような制約が無いため。
   removedIds: z.array(z.string()),
   droppedFromDelivery: z.number().int(),
   remaining: z.number().int(),
@@ -1538,6 +1571,7 @@ export const resetRequestSchema = z.object({
 });
 
 export const resetResponseSchema = z.object({
+  // 件数を返す: `{ ok: true }` だけでは、対象が既に空だったのか何百件と消したのかが呼び出し側から見えず、本当に消えたか確かめられないため。
   cleared: z.object({
     memory: z.number().int(),
     journal: z.number().int(),
@@ -1561,6 +1595,7 @@ export const resetResponseSchema = z.object({
   }),
 });
 
+// `describeRoute` を付けていない経路は元々 spec に載らないので二重の安全策だが、`/openapi.json` `/docs` 自身を外すことを明示しておく。
 export const openApiExcludePaths = ['/openapi.json', '/docs'];
 
 export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
