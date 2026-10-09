@@ -13,6 +13,9 @@ import type { JournalEntry } from './schema.js';
 // 1つのターンの中で本文が前のメッセージの後に再開したとき、日誌の本文の境目に区切り（空行）が入る（#4339）。
 // 画面へ流れる SSE の `text` には入らない。
 
+// 弾かれたメッセージを含むターンは失敗として終わり、日誌の本文に前置きが付く（既存の挙動）
+const FAILED_PREFIX = '（このターンは失敗して終わった。以下は失敗する前に出ていた本文である）\n';
+
 function setup(script: (ask: () => Promise<unknown>) => ScriptedStep[]) {
   const stores = createMemoryStores();
   let captured: ToolContext | undefined;
@@ -143,13 +146,12 @@ describe('返答の本文の境目に区切りを入れる（#4339）', () => {
     await waitForTerminal(s.events);
 
     const texts = await outboundTexts(s.stores);
-    expect(texts.join('')).toContain('前半です');
-    expect(texts.join('')).not.toContain('上限に達しました');
-    expect(texts.join('').endsWith('\n\n')).toBe(false);
+    // 区切りは弾かれたメッセージの先頭に入っていたが、切り詰めで区切りごと外れる（末尾に空行が残らない）
+    expect(texts).toEqual([`${FAILED_PREFIX}前半です`]);
     await s.clone.stop();
   });
 
-  it('弾かれたメッセージの後に本文が続くと、その前に区切りが入る', async () => {
+  it('道具を挟まない弾かれたメッセージは、前後の本文を区切りなしのまま残して本文から外れる', async () => {
     const s = setup(() => [
       { delta: '前半です' },
       { assistant: [{ type: 'text', text: '前半です' }] },
@@ -161,9 +163,22 @@ describe('返答の本文の境目に区切りを入れる（#4339）', () => {
     s.clone.post(humanMessage('読んで'));
     await waitForTerminal(s.events);
 
-    const texts = await outboundTexts(s.stores);
-    expect(texts.join('')).toContain('前半です\n\n後半です');
-    expect(texts.join('')).not.toContain('弾かれた');
+    // 道具（tool）が無いので Web も行を分けない。区切りを入れると Web の1行と食い違う
+    expect(await outboundTexts(s.stores)).toEqual([`${FAILED_PREFIX}前半です後半です`]);
+    await s.clone.stop();
+  });
+
+  it('道具を挟まずに text だけの assistant メッセージが2つ続いても、区切りは入らない（Web の1行と一致する）', async () => {
+    const s = setup(() => [
+      { delta: '一つ目' },
+      { assistant: [{ type: 'text', text: '一つ目' }] },
+      { delta: '二つ目' },
+      { assistant: [{ type: 'text', text: '二つ目' }] },
+    ]);
+    s.clone.post(humanMessage('話して'));
+    await waitForTerminal(s.events);
+
+    expect(await outboundTexts(s.stores)).toEqual(['一つ目二つ目']);
     await s.clone.stop();
   });
 

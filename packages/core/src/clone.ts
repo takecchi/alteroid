@@ -615,8 +615,8 @@ export interface Turn {
   /** 直前の assistant メッセージを処理し終えた時点の `reply.length`（そのメッセージの片の範囲を知る）。 */
   replyMessageStart: number;
   /**
-   * 直前の assistant メッセージが終わった後、次の本文を足すときに区切り（`REPLY_MESSAGE_SEPARATOR`）を先に入れる印（#4339）。
-   * 区切りは次のメッセージの先頭に置く（`replyMessageStart` より後ろ）: 弾かれたメッセージの分を外す切り詰めが区切りごと外れる。
+   * `tool` を emit した（assistant メッセージの `tool_use` を処理した）後、次の本文を足すときに区切り（`REPLY_MESSAGE_SEPARATOR`）を先に入れる印（#4339）。
+   * Web が返信の行を分ける点（`tool`）と同じ点でだけ立てる。区切りは次のメッセージの先頭に置く（`replyMessageStart` より後ろ）: 弾かれたメッセージの分を外す切り詰めが区切りごと外れる。
    */
   replySeparatorPending: boolean;
   streamed: boolean;
@@ -6198,7 +6198,6 @@ class Clone implements CloneHost {
             // このメッセージの分として流れた片は返答にしない（日誌へ書かない）。書き済みの分は戻せない。
             turn.reply = turn.reply.slice(0, Math.max(turn.replyMessageStart, turn.replyWritten));
             turn.replyMessageStart = turn.reply.length;
-            turn.replySeparatorPending = true;
           }
           return;
         }
@@ -6215,13 +6214,12 @@ class Clone implements CloneHost {
               appendReply(turn, block.text);
             }
           } else if (block.type === 'tool_use') {
+            // 区切りの印は Web が返信の行を分ける点（`tool`）にそろえる: 分けない所に入れると、行の連結が日誌の本文と合わず写しが居座る
+            if (turn) turn.replySeparatorPending = true;
             this.#emit(turn?.conversationId ?? null, { type: 'tool', tool: block.name });
           }
         }
-        if (turn) {
-          turn.replyMessageStart = turn.reply.length;
-          turn.replySeparatorPending = true;
-        }
+        if (turn) turn.replyMessageStart = turn.reply.length;
         return;
       }
 
