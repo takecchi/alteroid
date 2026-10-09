@@ -550,6 +550,20 @@ export function readRunnerAttachmentStageLimit(env: NodeJS.ProcessEnv = process.
     : ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT;
 }
 
+/**
+ * HTTP の1リクエストの持ち時間（デーモンの `POST /attachments` と runner の別口。#4128 段3a）。
+ * Node の既定（`requestTimeout` 300 秒）のままだと、2 GiB を 50 Mbps で上げる（約6分）だけで途中で切られる。
+ * 1時間にする（0 にして無制限にはしない: 本文を送らずに居座る接続を、いつかは畳むため）。
+ */
+export const ATTACHMENT_REQUEST_TIMEOUT_MS = 60 * 60_000;
+
+/** 待ち受けのサーバに {@link ATTACHMENT_REQUEST_TIMEOUT_MS} を掛ける（既定より短くはしない）。 */
+export function applyAttachmentRequestTimeout(server: { requestTimeout: number }): void {
+  if (server.requestTimeout !== 0 && server.requestTimeout < ATTACHMENT_REQUEST_TIMEOUT_MS) {
+    server.requestTimeout = ATTACHMENT_REQUEST_TIMEOUT_MS;
+  }
+}
+
 export type AttachmentRejection =
   | 'too_large'
   | 'image_dimension_too_large'

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
+import { ATTACHMENT_REQUEST_TIMEOUT_MS, applyAttachmentRequestTimeout } from './attachment.js';
 import {
   RunnerAttachmentStageError,
   StagedAttachmentLedger,
@@ -78,5 +79,26 @@ describe('stageRunnerAttachment: チャンクに分かれた中身', () => {
     expect((error as RunnerAttachmentStageError).status).toBe(413);
     expect(await readdir(join(root, 'mgr-1'))).toEqual([]);
     expect(ledger.get('mgr-1', ID)).toBeUndefined();
+  });
+});
+
+describe('applyAttachmentRequestTimeout（HTTP の1リクエストの持ち時間）', () => {
+  it('Node 既定の 300 秒を、2 GiB を遅い回線でも送れる長さ（1時間）へ上げる', async () => {
+    const { createServer } = await import('node:http');
+    const server = createServer();
+    expect(server.requestTimeout).toBe(300_000);
+    applyAttachmentRequestTimeout(server);
+    expect(server.requestTimeout).toBe(ATTACHMENT_REQUEST_TIMEOUT_MS);
+    // 2 GiB を 50 Mbps で送ると約 344 秒。それより十分長い
+    expect(ATTACHMENT_REQUEST_TIMEOUT_MS).toBeGreaterThan(((2 * 1024 ** 3 * 8) / 50e6) * 1000 * 5);
+  });
+
+  it('すでに長い・無制限（0）のものは縮めない', () => {
+    const longer = { requestTimeout: ATTACHMENT_REQUEST_TIMEOUT_MS * 2 };
+    applyAttachmentRequestTimeout(longer);
+    expect(longer.requestTimeout).toBe(ATTACHMENT_REQUEST_TIMEOUT_MS * 2);
+    const unlimited = { requestTimeout: 0 };
+    applyAttachmentRequestTimeout(unlimited);
+    expect(unlimited.requestTimeout).toBe(0);
   });
 });

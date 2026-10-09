@@ -1796,6 +1796,8 @@ export {
   AttachmentStreamMeter,
   readAttachmentLimits,
   readRunnerAttachmentStageLimit,
+  ATTACHMENT_REQUEST_TIMEOUT_MS,
+  applyAttachmentRequestTimeout,
   attachmentMaxBytes,
   attachmentBodyMaxBytes,
   attachmentBatchItemOf,

@@ -60,6 +60,7 @@ import {
   type TokenRotationEntry,
   type TokenRotationOutcome,
   readAttachmentLimits,
+  applyAttachmentRequestTimeout,
   attachmentCopiesDir,
 } from '@alteroid/core';
 import { codexLoginEnvOf } from './codex-login-env.js';
@@ -1103,6 +1104,8 @@ export async function main(): Promise<void> {
   }
 
   const server = serve({ fetch: app.fetch, port, hostname });
+  // 大きいファイルの上げ（`POST /attachments`。2 GiB）が Node 既定の 300 秒で切られないように（#4128 段3a）
+  applyAttachmentRequestTimeout(server as unknown as { requestTimeout: number });
 
   server.on('connection', (socket) => {
     socket.setKeepAlive(true, TCP_KEEPALIVE_DELAY_MS);
