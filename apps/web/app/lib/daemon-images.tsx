@@ -8,8 +8,9 @@ import type { DaemonImages } from '@alteroid/ui';
 /**
  * Markdown の画像の `src` が、いま接続しているデーモンの添付（`<base>/attachments/<id>`）なら id を返す。それ以外は `undefined`。
  * 資格（Bearer）を送ってよいかの線はここだけに置く:
- * - 絶対 URL だけを対象にする。相対パス（`/attachments/<id>`）は含めない: Web の origin とデーモンの origin が別の配置では、
- *   相対パスは Web の origin を指し、デーモンの添付ではない。含めると「別の場所を指す URL に、デーモンの資格で取りに行く」形になるため
+ * - 絶対 URL に加え、`/attachments/<id>` と `attachments/<id>` の相対パスも、デーモンの base の下のものとして扱う:
+ *   取りに行く先は `src` ではなく接続中の base URL と id から組むので、資格がよそへ行く経路にならない。
+ *   相対パスは base の path と連結して絶対 URL にしてから、下の確認を絶対 URL と同じに通す。`/home/x.png`・`./x.png` など他の相対パスは対象にしない
  * - origin が接続中の API の base URL の origin と完全に一致すること（scheme・host・port）。userinfo・query・fragment 付きは対象にしない
  * - path が base の path の下の `/attachments/<id>` ちょうどであること（id は英数字・`_`・`-` だけ）
  */
@@ -17,9 +18,13 @@ export function matchDaemonAttachmentUrl(src: string, baseUrl: string): string |
   let target: URL;
   let base: URL;
   try {
-    target = new URL(src);
     // 相対の base（既定の `/api`）は、いまの画面の origin で解く
     base = new URL(baseUrl, globalThis.location.href);
+    const relative = /^\/?attachments\/(.*)$/s.exec(src);
+    target =
+      relative === null
+        ? new URL(src)
+        : new URL(base.pathname.replace(/\/+$/, '') + '/attachments/' + relative[1], base);
   } catch {
     return undefined;
   }
@@ -30,7 +35,8 @@ export function matchDaemonAttachmentUrl(src: string, baseUrl: string): string |
   const prefix = base.pathname.replace(/\/+$/, '');
   if (!target.pathname.startsWith(prefix + '/attachments/')) return undefined;
   const id = target.pathname.slice(prefix.length + '/attachments/'.length);
-  return /^[A-Za-z0-9_-]+$/.test(id) ? id : undefined;
+  // `limits` は id ではなく上限を返す経路（`GET /attachments/limits`）: 資格を付けて取りに行く意味が無い
+  return /^[A-Za-z0-9_-]+$/.test(id) && id !== 'limits' ? id : undefined;
 }
 
 export function WebDaemonImagesProvider({ children }: { children: ReactNode }) {

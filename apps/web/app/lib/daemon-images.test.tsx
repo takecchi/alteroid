@@ -66,10 +66,34 @@ describe('matchDaemonAttachmentUrl（資格を送ってよい URL の線）', ()
     }
   });
 
-  it('相対パス・別の path・余計な部分のある URL は対象にしない', () => {
+  it('/attachments/<id> と attachments/<id> の相対パスは、base（path 無し・有り）の下のものとして id になる', () => {
+    for (const src of ['/attachments/a1', 'attachments/a1']) {
+      expect(matchDaemonAttachmentUrl(src, base), src).toBe('a1');
+      expect(matchDaemonAttachmentUrl(src, `${base}/api`), src).toBe('a1');
+      expect(matchDaemonAttachmentUrl(src, '/api'), src).toBe('a1');
+    }
+  });
+
+  it('それ以外の相対パスと、相対でも余計な部分があるものは対象にしない', () => {
     for (const src of [
-      '/attachments/a1',
-      'attachments/a1',
+      '/home/x/chart.png',
+      './x.png',
+      '../attachments/a1',
+      '/attachments/limits',
+      '/attachments/a1?x=1',
+      '/attachments/a1#x',
+      '/attachments/a1/extra',
+      '/attachments//evil.example/a1',
+      '/attachments/%2e%2e',
+      '/attachments/',
+    ]) {
+      expect(matchDaemonAttachmentUrl(src, base), src).toBeUndefined();
+      expect(matchDaemonAttachmentUrl(src, `${base}/api`), src).toBeUndefined();
+    }
+  });
+
+  it('絶対 URL の別の path・余計な部分のある URL は対象にしない', () => {
+    for (const src of [
       '//daemon.example/attachments/a1',
       `${base}/attachments/`,
       `${base}/attachments/a1/extra`,
@@ -101,13 +125,28 @@ describe('Markdown の画像（デーモンの添付）', () => {
     expect(stub.entries[0]?.authorization).toBe('Bearer test-token');
   });
 
-  it('別の origin の URL には fetch が飛ばない（資格を送らない）', () => {
+  it('相対パスの /attachments/<id> は、接続中のデーモンへ Bearer 付きで取りに行く', async () => {
+    const stub = stubFetch(() => new Response(new Uint8Array([1, 2, 3])));
+    render(
+      <Providers>
+        <Markdown remoteImages={false}>{'![図](/attachments/att-9)'}</Markdown>
+      </Providers>,
+    );
+
+    expect((await screen.findByRole('img', { name: '図' })).getAttribute('src')).toBe(
+      'blob:daemon-image',
+    );
+    expect(stub.entries.map((entry) => entry.url)).toEqual([`${TEST_BASE_URL}/attachments/att-9`]);
+    expect(stub.entries[0]?.authorization).toBe('Bearer test-token');
+  });
+
+  it('別の origin の URL・デーモンの添付でない相対パスには fetch が飛ばない（資格を送らない）', () => {
     const stub = stubFetch(() => new Response(new Uint8Array([1])));
     render(
       <Providers>
         <Markdown>{'![x](https://evil.example/attachments/att-1)'}</Markdown>
         <Markdown remoteImages={false}>{'![y](https://evil.example/attachments/att-2)'}</Markdown>
-        <Markdown>{'![z](/attachments/att-3)'}</Markdown>
+        <Markdown>{'![z](/home/x/chart.png)'}</Markdown>
       </Providers>,
     );
 
