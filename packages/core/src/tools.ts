@@ -429,6 +429,8 @@ export interface ToolContext {
   accountUsage?: () => AccountUsageState;
   runtime?: () => CloneRuntimeFacts;
   runnerModels?: () => Promise<readonly string[]>;
+  /** 接続中の runner が名乗った SDK の接続先とモデルの別名の行（#4263・#4261）。 */
+  runnerAnthropicRoutes?: () => Promise<readonly string[]>;
   // optional にも既定値にもしない: 省略時の既定は guardFullReplace を素通りさせるか、日誌の cause を偽るため
   // ターンごとに変わるので、ハンドラの中で呼ぶ
   memoryCause: () => 'distill' | 'clone';
@@ -6645,6 +6647,7 @@ export function createCloneTools(context: ToolContext) {
         }
 
         const runnerModels = await context.runnerModels?.();
+        const runnerAnthropicRoutes = await context.runnerAnthropicRoutes?.();
         const [documents, memoryDocuments, aggregate, codexAuth] = await Promise.all([
           stores.persona.list(),
           stores.persona.documents(),
@@ -6660,9 +6663,11 @@ export function createCloneTools(context: ToolContext) {
 
         return text(
           [
-            describeCloneRuntime(
-              runnerModels === undefined ? runtime : { ...runtime, runnerModels },
-            ),
+            describeCloneRuntime({
+              ...runtime,
+              ...(runnerModels === undefined ? {} : { runnerModels }),
+              ...(runnerAnthropicRoutes === undefined ? {} : { runnerAnthropicRoutes }),
+            }),
             ...(codexAuth === null ? [] : [codexAuth]),
             '',
             // クローンの文脈へ実際に載る形で数える: 本文だけを足すと、見出しのぶんだけ本当より少ない数を名乗るため

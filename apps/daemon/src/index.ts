@@ -817,6 +817,10 @@ export async function main(): Promise<void> {
         : true,
   });
 
+  // 袋・プロファイル・プールが乗った後（プロファイルは `restore()` が評価済み、プールは `restore()` が撒き済み）に出す。正本の写しは非同期で読むので、読み直してから見る: 空のまま見ると正本に置かれた接続先を見落とす（#4263・#4261）。
+  await credentialService.fingerprints().catch(() => undefined);
+  for (const line of clone.anthropicRoute?.() ?? []) process.stdout.write(`alteroidd: ${line}\n`);
+
   const managerPoller = startManagerPolling({
     managers: clone.managers,
   });

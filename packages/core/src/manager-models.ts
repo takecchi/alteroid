@@ -1,3 +1,5 @@
+import { ANTHROPIC_ROUTE_NONE_LINE } from './anthropic-route-env.js';
+
 /** {@link managerModelsOf} が読むプールの最小の形（`ManagerPool` の部分集合）。 */
 export interface ManagerModelSource {
   runnerReportedModels?(runnerId: string): { manager?: string; worker?: string } | undefined;
@@ -65,6 +67,46 @@ export async function collectRunnerModelLines(pool: RunnerModelSource): Promise<
           ? MODEL_UNKNOWN_LABEL
           : describeManagerModels(models);
       lines.push(`runner ${runner.label === '' ? runner.runnerId : runner.label}: ${named}`);
+    }
+    return lines;
+  } catch {
+    return [RUNNER_MODELS_UNVERIFIED];
+  }
+}
+
+/** {@link collectRunnerRouteLines} が読むプールの最小の形（`ManagerPool` の部分集合）。 */
+export interface RunnerRouteSource {
+  runnerReportedAnthropicRoute?(runnerId: string): readonly string[] | undefined;
+  runners(): Promise<{
+    runners: readonly { label: string; state: string; runnerId?: string }[];
+  }>;
+}
+
+/** 名乗りを受けていない runner の行。「何も置かれていない」（`[]`）とは別に言う。 */
+export const RUNNER_ROUTE_UNREPORTED_LABEL = '名乗っていない（古い runner）';
+
+/**
+ * 接続中の runner それぞれが名乗った、SDK 子の接続先とモデルの別名の行（#4263・#4261）。
+ * 1 runner につき見出しの行（`runner X:`）と、字下げした中身の行。名乗りの無い runner は既定値で埋めず、
+ * 「名乗っていない」と書く。名乗りを引く口を持たないプール（テストの偽物）は何も足さない。
+ */
+export async function collectRunnerRouteLines(pool: RunnerRouteSource): Promise<string[]> {
+  if (pool.runnerReportedAnthropicRoute === undefined) return [];
+  try {
+    const fleet = await pool.runners();
+    const lines: string[] = [];
+    for (const runner of fleet.runners) {
+      if (runner.runnerId === undefined) continue;
+      if (runner.state !== 'connected' && runner.state !== 'vacating') continue;
+      const head = `runner ${runner.label === '' ? runner.runnerId : runner.label}:`;
+      const reported = pool.runnerReportedAnthropicRoute(runner.runnerId);
+      if (reported === undefined) {
+        lines.push(`${head} ${RUNNER_ROUTE_UNREPORTED_LABEL}`);
+      } else if (reported.length === 0) {
+        lines.push(`${head} ${ANTHROPIC_ROUTE_NONE_LINE}`);
+      } else {
+        lines.push(head, ...reported.map((line) => `  ${line}`));
+      }
     }
     return lines;
   } catch {

@@ -61,7 +61,12 @@ import {
   type ManagerAwaitingBackgroundMap,
   type ManagerLiveness,
 } from './digest.js';
-import { collectRunnerModelLines } from './manager-models.js';
+import {
+  describeAnthropicRoute,
+  inspectAnthropicRoute,
+  type AnthropicRouteLayer,
+} from './anthropic-route-env.js';
+import { collectRunnerModelLines, collectRunnerRouteLines } from './manager-models.js';
 import {
   DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
   deriveDistillGapFromJournal,
@@ -5927,6 +5932,7 @@ class Clone implements CloneHost {
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
       runtime: () => this.#runtimeFacts(),
       runnerModels: () => collectRunnerModelLines(this.#managers),
+      runnerAnthropicRoutes: () => collectRunnerRouteLines(this.#managers),
       memoryCause: () => (this.#sdkSession.turn?.kind === 'distill' ? 'distill' : 'clone'),
       // **消した合図の配達を止める口**（issue #1049）。これを渡さないと
       // `inbox_remove_many` は1件も消さずに断る（`ToolContext` のその doc）。
@@ -6007,6 +6013,7 @@ class Clone implements CloneHost {
       injectedMemoryChars: heuristicChars(this.#distillMemory.promptMemoryChars),
       systemPromptChars: heuristicChars(this.#distillMemory.systemPromptChars),
       lastContextUsage: this.#lastContextUsage,
+      anthropicRoute: this.anthropicRoute(),
     };
   }
 
@@ -6844,12 +6851,28 @@ class Clone implements CloneHost {
    * **セッションを起こさない読みでは `#childEnv()` を呼ばないこと**（世代の照合に使う身元を捕まえてしまう）。
    */
   #layeredChildEnv(): NodeJS.ProcessEnv {
-    return {
-      ...this.#childEnvBase,
-      ...this.#vaultCredentialOverlay(),
-      ...(this.#credentials?.() ?? {}),
-      ...(this.#profile?.env() ?? {}),
-    };
+    let env: NodeJS.ProcessEnv = {};
+    for (const layer of this.#childEnvLayers()) env = { ...env, ...layer.env };
+    return env;
+  }
+
+  // 重ね順をここ1か所に置く: 接続先の検査（`anthropicRoute()`）と実際の env が別々に書かれると、表示が実際とずれるため
+  #childEnvLayers(): AnthropicRouteLayer[] {
+    return [
+      { source: '器', env: this.#childEnvBase },
+      { source: '正本', env: this.#vaultCredentialOverlay() },
+      { source: '鍵のプール', env: this.#credentials?.() ?? {} },
+      { source: 'プロファイル', env: this.#profile?.env() ?? {} },
+    ];
+  }
+
+  /**
+   * SDK 子の接続先とモデルの別名の表示行（#4263・#4261）。env の値は返さない。
+   * `#childEnv()` ではなくこちらの重ねを読む: セッションを起こさない読みで身元を捕まえないため。
+   * 伏せる鍵（`#withheldEnvKeys`）は `ANTHROPIC_*` を含まないので、検査の前に落とさない。
+   */
+  anthropicRoute(): string[] {
+    return describeAnthropicRoute(inspectAnthropicRoute(this.#childEnvLayers()));
   }
 
   /**

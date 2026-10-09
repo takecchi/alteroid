@@ -667,6 +667,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   ...(deps.managerModel === undefined ? {} : { managerModel: deps.managerModel }),
                   ...(deps.workerModel === undefined ? {} : { workerModel: deps.workerModel }),
                   attachmentBodyLimit: attachmentBodyMax,
+                  // 接続のたびにいまの実効の env から読む: 鍵・プロファイルが降りるたびに変わるため（その後の変化は `anthropic_route`。#4263・#4261）
+                  anthropicRoute: host.anthropicRoute(),
                   // 接続のたびにいまの開閉を読む: 資格が届く・外れるたびに変わるため（#4118。その後の変化は `manager_peers`）
                   ...helloManagerPeers(host.managerPeers()),
                 }),

@@ -88,6 +88,11 @@ import {
   noteUnreadableRecord,
   reasonOf,
 } from './dropped-record.js';
+import {
+  describeAnthropicRoute,
+  inspectAnthropicRoute,
+  type AnthropicRouteLayer,
+} from './anthropic-route-env.js';
 import { fingerprintOf, ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { compareCodeUnits } from './code-unit-order.js';
@@ -250,6 +255,30 @@ export const WITHHELD_ENV_KEYS = [
   'ALTEROID_RUNNER_SOCKET',
 ] as const;
 
+// 重ね順をここ1か所に置く: セッションの env（`RunnerSession#childEnv`）と接続先の検査（`Host#anthropicRoute`）が別々に書かれると、表示が実際の env とずれるため
+function childEnvLayers(input: {
+  env: NodeJS.ProcessEnv;
+  credentials: CredentialStore | undefined;
+  profileEnv: Record<string, string>;
+}): AnthropicRouteLayer[] {
+  const vessel = { ...input.env };
+  // 鍵の名前をまず自分の env から落とす: 器の env に残った現役でない鍵（週次上限で冷却中のトークン）で走り、クローンが撒いたものとの食い違いが見えなくなるため。重ねる前に消す（後だと降ろした鍵まで落ちる）
+  for (const name of ROTATABLE_CREDENTIAL_KEYS) delete vessel[name];
+  return [
+    { source: '器', env: vessel },
+    {
+      source: '袋',
+      env:
+        input.credentials === undefined
+          ? {}
+          : { ...input.credentials.values(), ...input.credentials.env() },
+    },
+    // **プロファイルは鍵より後。** 人間が明示的に書いたほうが勝つ（`credentials`
+    // は1つの鍵を回すための細い口で、こちらは実行環境そのものの宣言である）。
+    { source: 'プロファイル', env: input.profileEnv },
+  ];
+}
+
 // files のバイトは持たない: メモリに残すのは印だけにするため
 interface HeldPlugin {
   readonly name: string;
@@ -388,6 +417,8 @@ export interface RunnerHost {
   setCredentials(entries: readonly CredentialEntry[]): Promise<CredentialFingerprint[]>;
   profile(): RunnerProfileFingerprint | undefined;
   setProfile(script: string): Promise<RunnerProfileResult>;
+  // 鍵・プロファイルが降りた後の実効の env から読む（値は返さない）。hello と `anthropic_route` が名乗る（#4263・#4261）
+  anthropicRoute(): string[];
   mcpServers(): RunnerMcpServersFingerprint | undefined;
   // ファイルへ落とさない: 走行中のプロセスが読み直す経路が無く、効くのはセッションを組む瞬間だけのため
   setMcpServers(input: unknown): RunnerMcpServersFingerprint | undefined;
@@ -528,6 +559,8 @@ class Host implements RunnerHost {
   #peerChain: Promise<void> = Promise.resolve();
   // 起こすたびに評価し直さない: 評価はプロセスを1本起こす操作で、人間のスクリプト次第で委譲そのものが遅くなるため
   readonly #profile: ProfileApplier | undefined;
+  /** 最後に名乗った（起動時は構築時に読んだ）接続先の表示行。器だけの状態からの変化だけを名乗るための基準。 */
+  #announcedAnthropicRoute: string;
   readonly #sessions = new Map<string, RunnerSession>();
   readonly #generations = new WeakMap<RunnerSession, string>();
   readonly #attachmentsRoot: string;
@@ -695,6 +728,7 @@ class Host implements RunnerHost {
               ? {}
               : { spawnFn: (spawnOptions) => this.#spawnAsChildUser(spawnOptions) }),
           });
+    this.#announcedAnthropicRoute = JSON.stringify(this.anthropicRoute());
   }
 
   credentials(): CredentialFingerprint[] {
@@ -773,6 +807,7 @@ class Host implements RunnerHost {
     if (!sameFingerprints(before, after)) {
       for (const session of this.#sessions.values()) session.recycleForToken();
     }
+    this.#announceAnthropicRoute();
     // `CODEX_API_KEY` が届いた・外れたら peer の開閉が変わる（#4118）
     await this.#refreshPeers();
     return fingerprints;
@@ -871,7 +906,30 @@ class Host implements RunnerHost {
         'プロファイルの器が無い runner では差し替えられない（ALTEROID_PROFILE_FILE を用意すること）',
       );
     }
-    return this.#profile.apply(script);
+    const result = await this.#profile.apply(script);
+    this.#announceAnthropicRoute();
+    return result;
+  }
+
+  anthropicRoute(): string[] {
+    return describeAnthropicRoute(
+      inspectAnthropicRoute(
+        childEnvLayers({
+          env: this.#env,
+          credentials: this.#credentials,
+          profileEnv: this.#profile?.env() ?? {},
+        }),
+      ),
+    );
+  }
+
+  // 変わったときだけ名乗り直す: 同じ値が繋ぎ直しのたびに降りてくるため
+  #announceAnthropicRoute(): void {
+    const anthropicRoute = this.anthropicRoute();
+    const key = JSON.stringify(anthropicRoute);
+    if (key === this.#announcedAnthropicRoute) return;
+    this.#announcedAnthropicRoute = key;
+    this.#emit({ type: 'anthropic_route', runnerId: this.runnerId, anthropicRoute });
   }
 
   mcpServers(): RunnerMcpServersFingerprint | undefined {
@@ -2153,15 +2211,14 @@ class RunnerSession {
   // 記憶ストアの所在を子プロセスへ渡さない: 渡さなければ構造的に触れないため
   // 鍵を `this.#env` のスナップショットのまま配らない: 人間が後から差し替えた鍵が永久に届かないため
   #childEnv(): NodeJS.ProcessEnv {
-    const env = { ...this.#env };
-    // 鍵の名前をまず自分の env から落とす: 器の env に残った現役でない鍵（週次上限で冷却中のトークン）で走り、クローンが撒いたものとの食い違いが見えなくなるため。重ねる前に消す（後だと降ろした鍵まで落ちる）
-    for (const name of ROTATABLE_CREDENTIAL_KEYS) delete env[name];
-    if (this.#credentials !== undefined) {
-      Object.assign(env, this.#credentials.values(), this.#credentials.env());
+    const env: NodeJS.ProcessEnv = {};
+    for (const layer of childEnvLayers({
+      env: this.#env,
+      credentials: this.#credentials,
+      profileEnv: this.#profileEnv(),
+    })) {
+      Object.assign(env, layer.env);
     }
-    // **プロファイルは鍵より後。** 人間が明示的に書いたほうが勝つ（`credentials`
-    // は1つの鍵を回すための細い口で、こちらは実行環境そのものの宣言である）。
-    Object.assign(env, this.#profileEnv());
     // 伏せるのは最後: 先に消してから鍵を重ねると、鍵の名前に `ALTEROID_DATABASE_URL` を渡すだけで伏せたはずの値を注入し直せるため
     for (const key of this.#withheldEnvKeys) delete env[key];
     // 伏せる処理の後・最後に置く: プロファイルや `withheldEnvKeys` で出し箱の行き先を差し替えられると、取り込む場所と担い手が書く場所がずれる

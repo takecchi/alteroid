@@ -11,6 +11,7 @@ import {
   defaultRunnerPluginsRoot,
   pruneRunnerPluginsOnBoot,
   runnerPluginsDirOptions,
+  ANTHROPIC_ROUTE_NONE_LINE,
   DEFAULT_PROFILE_PATH,
   installUncaughtNet,
   agentProviderOf,
@@ -267,7 +268,16 @@ export async function main(): Promise<void> {
   const host = createRunnerHost({
     runnerId,
     workspacePath,
-    emit: (event) => outbox.push(event),
+    emit: (event) => {
+      // 降りた後に変わった分は、デーモンへ名乗るのと同じ行をこの器の標準出力にも出し直す（#4263・#4261）
+      if (event.type === 'anthropic_route') {
+        // 空になった（外れた）ときも1行出す: 出さないと、警告が消えたのか出し直しが無かったのか読めない
+        const lines =
+          event.anthropicRoute.length === 0 ? [ANTHROPIC_ROUTE_NONE_LINE] : event.anthropicRoute;
+        for (const line of lines) process.stdout.write(`alteroid-runner: ${line}\n`);
+      }
+      outbox.push(event);
+    },
     credentials,
     pluginsRoot,
     peer: {
@@ -365,6 +375,9 @@ export async function main(): Promise<void> {
         `既定へ戻すにはこの環境変数を外してください\n`,
     );
   }
+
+  // この時点の袋は0件・プロファイルも未着（後からデーモンが降ろす）。降りて変われば上の `emit` が出し直す。
+  for (const line of host.anthropicRoute()) process.stdout.write(`alteroid-runner: ${line}\n`);
 
   reportRetiredLayerProviderEnv(process.env);
 
