@@ -3,31 +3,17 @@ import type { McpServers } from './mcp-servers.js';
 import type { McpServerStore } from './store.js';
 import { expectNulRejected } from './nul-contract-support.js';
 
-/**
- * `McpServerStore` の契約を、**実装1つに対して**測る（#325 段1）。
- *
- * 3実装（インメモリ・fs・pg）が同じ関数を呼ぶ形にしてあるのは
- * `practice-contract.ts` と同じ理由である —— 検査や空の扱いが器ごとに書き分け
- * られていると、`packages/core` の単体テストが当たるのはインメモリだけになり、
- * 乖離した器が緑のまま残る（#370）。
- *
- * **vitest に依存しない素の非同期関数にしてある**（`storage-fs` / `storage-pg` へ
- * vitest を持ち込まないため。`store-isolation-contract.ts` と同じ）。
- *
- * ⚠️ **この関数は器の中身を書き換える**（全文置換の口しか無いので）。最後に
- * 登録を外した状態で終わる。
- */
+// vitest に依存しない素の非同期関数にする: `storage-fs` / `storage-pg` へ vitest を持ち込まないため。
+// この関数は器の中身を書き換える。最後に登録を外した状態で終わる。
 export async function verifyMcpServerStoreContract(store: McpServerStore): Promise<void> {
   function fail(message: string): never {
     throw new Error(`MCP サーバの登録の器の契約違反: ${message}`);
   }
 
-  // --- 1. 空の登録は「外す」。読み戻しは null ---
   const cleared = await store.write({});
   if (Object.keys(cleared.mcpServers).length !== 0) fail('空で書いた返り値が空でない');
   if ((await store.read()) !== null) fail('空で書いた後の read() は null であること');
 
-  // --- 2. 3種（stdio / http / sse）がそのまま往復する ---
   const servers: McpServers = {
     'contract-stdio': {
       command: 'npx',
@@ -53,10 +39,8 @@ export async function verifyMcpServerStoreContract(store: McpServerStore): Promi
     fail(`read() が書いたものと違う: ${JSON.stringify(reread.mcpServers)}`);
   }
 
-  // --- 2b. 返すサーバーの並び順は、3実装とも名前のコード単位順（issue #2927 項目6）---
-  // 上の比較は `sortKeys` を通すので並びそのものは見ない。pg の jsonb は短い順→バイト順に
-  // 並べ替えるため、器ごとに並びが変わっていた。**書いた順（入力の順）は `'contract-stdio'` が先頭で、
-  // 名前の順とは違う**ので、入力の順をそのまま返す器もここで落ちる。
+  // 上の比較は `sortKeys` を通すので並びそのものは見ない。入力の順は `'contract-stdio'` が先頭で名前の順と違うので、
+  // 入力の順をそのまま返す器もここで落ちる。
   const expectedOrder = Object.keys(servers).sort(compareCodeUnits);
   if (Object.keys(written.mcpServers).join(',') !== expectedOrder.join(',')) {
     fail(
@@ -66,8 +50,7 @@ export async function verifyMcpServerStoreContract(store: McpServerStore): Promi
   if (Object.keys(reread.mcpServers).join(',') !== expectedOrder.join(',')) {
     fail(`read() の並びが名前のコード単位順でない: ${Object.keys(reread.mcpServers).join(',')}`);
   }
-  // 大文字と小文字・長さの違う名前（コード単位順では 'B' < 'a' < 'ab'。pg の jsonb の並びは 'B' 'a' 'ab'
-  // と短い順なので、長い名前を混ぜて食い違いを作る）。
+  // コード単位順では 'B' < 'a' < 'ab' だが pg の jsonb は短い順に並べるので、長い名前を混ぜて食い違いを作る。
   const mixed: McpServers = {
     ab: { command: 'x' },
     a: { command: 'x' },
@@ -88,14 +71,12 @@ export async function verifyMcpServerStoreContract(store: McpServerStore): Promi
     );
   }
 
-  // --- 3. 全文置換（入力に無い名前は消える） ---
   await store.write({ 'contract-http': servers['contract-http'] as McpServers[string] });
   const replaced = await store.read();
   if (replaced === null || Object.keys(replaced.mcpServers).join(',') !== 'contract-http') {
     fail(`全文置換になっていない: ${JSON.stringify(Object.keys(replaced?.mcpServers ?? {}))}`);
   }
 
-  // --- 4. alteroid 自身の名前・不正な形は拒み、前のものが残る ---
   for (const [label, bad] of [
     ['自作の名前', { alteroid: { command: 'x' } }],
     ['大文字違いの自作の名前', { Alteroid: { command: 'x' } }],
@@ -116,7 +97,6 @@ export async function verifyMcpServerStoreContract(store: McpServerStore): Promi
     }
   }
 
-  // --- 4b. NUL（issue #2927。teto の判断、2026-10-05）: 名前と env は断り、本文は落として残す ---
   await expectNulRejected(
     fail,
     'サーバー名のNUL',
@@ -178,7 +158,6 @@ export async function verifyMcpServerStoreContract(store: McpServerStore): Promi
     }
   }
 
-  // --- 5. 外して終わる ---
   await store.write({});
   if ((await store.read()) !== null) fail('最後に外した後の read() が null でない');
 }

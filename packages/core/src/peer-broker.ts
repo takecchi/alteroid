@@ -20,51 +20,16 @@ import { excerptLine } from './excerpt.js';
 import type { PeerWorkdirScanner } from './peer-workdir-scan.js';
 import { foldUsageSnapshot, hasAnyUsage, type UsageBaseline, type UsageTotals } from './usage.js';
 
-/**
- * マネージャー層の MCP `peer`（`peer_run` / `peer_reply` / `peer_approve`）の中身（Issue #486 S7・#3940）。
- *
- * マネージャーが、もう一方の provider のエージェントを1本立てて**作業を頼む**（相談だけでなく、
- * ファイルの作成・編集・コマンドの実行を含む）。**呼ぶかどうかはマネージャー自身の判断**で、枠やコストを
- * 理由に alteroid が寄せることはない。見える provider は、人間が設定（資格）を済ませてこの器に届いたものだけ
- * である（Codex なら ChatGPT ログインか `CODEX_API_KEY`。届いていなければ、この道具ごと出さない。#4118）。
- *
- * ## 承認は、まずマネージャーへ返す。判断できないときだけクローンへ上げる（2026-10-07 のオーナー決定）
- *
- * peer のセッションの構えは呼び出し元のマネージャーと同じ（runner の `makeSpec`）。それでも確認が出たら、
- * `peer_run` / `peer_reply` は**保留したまま待たずに**、確認の中身と一意な id（`approval_id`）を添えて
- * マネージャーへ返す。マネージャーは `peer_approve` で `allow` / `deny`（その場で答える）か
- * `escalate`（既存の経路 `askApproval` でクローンの受信箱へ上げ、答えを待つ）を選ぶ。どの判断のあとも、
- * 相手の続き（次の確認待ち、またはターンの結果）を返す。
- *
- * **出所の印（`【peer: <provider>】`。要約の先頭と `ask.source`）は escalate の経路で必ず付く。**
- * 誰が答えたか（`manager` / `clone`）は結果と日誌の note に出る。
- *
- * **閉じる側に倒す**: 質問（`AskUserQuestion` 相当）は上げずに拒否する。escalate で `askApproval` が
- * 無い・投げた、知らない `approval_id`、セッションが閉じた・ターンが終わった・マネージャーが止まった——どれも
- * 拒否として閉じる。**ほかの peer セッションを起こしても閉じない**（#4124。以前は「答えないまま次の `peer_run`」で
- * 全セッションの確認を閉じていたが、並べて頼むと無関係な確認まで拒否された）。期限は付けない（2026-10-08 の決定）。
- *
- * ## 背景実行（#4123）
- *
- * `run_in_background` を付けた呼び出しは、相手を流し始めた時点で返り、次の止まりどころ（ターンの終わり・確認待ち・
- * セッションの終わり）で {@link PeerBrokerDeps.onBackgroundStop} を呼ぶ。runner はそれをマネージャーへの知らせとして
- * 入れて起こす（打ち切った作業者の背景処理の完了と同じ口。#1554）。流れている間は {@link PeerBroker.backgroundTasks}
- * に載り、作業者の背景処理と同じく報告の `awaitingBackground` に数えられる。
- *
- * ## 台帳
- *
- * 1ターンごとに、peer セッションの累積を peer セッション自身の基準で増分にして
- * {@link PeerUsageReport} として降ろす（デーモンが `site: 'peer'`・層 `manager` で積む）。
- * 消費を報告しない provider は 0 を積まず「取れなかった」として数える。
- */
-
-/** `peer_run` / `peer_reply` / `peer_approve` の道具名（MCP サーバ名 {@link PEER_MCP_SERVER_NAME} の下）。 */
+// 承認は保留したまま待たず、確認の中身と `approval_id` を添えてマネージャーへ返す（`peer_approve` で答える）。
+// 閉じる側に倒す: 質問（`AskUserQuestion` 相当）は上げずに拒否する。escalate で `askApproval` が無い・投げた、
+// 知らない `approval_id`、セッションが閉じた・ターンが終わった・マネージャーが止まった、はどれも拒否として閉じる。
+// ほかの peer セッションを起こしても閉じない: 並べて頼むと無関係な確認まで拒否される。期限は付けない。
+// 消費を報告しない provider は 0 を積まず「取れなかった」として数える。
 export const PEER_TOOL_NAMES = ['peer_run', 'peer_reply', 'peer_approve'] as const;
 
-/** MCP サーバ名。道具の名前は `mcp__alteroid-peer__peer_run` になる。 */
+/** 道具の名前は `mcp__alteroid-peer__peer_run` になる。 */
 export const PEER_MCP_SERVER_NAME = 'alteroid-peer';
 
-/** peer のセッションへ足すシステムプロンプト（誰に呼ばれたか・確認の行き先を本人へ伝える）。 */
 export const PEER_SYSTEM_PROMPT_APPEND =
   'あなたは alteroid のマネージャーから、作業を任された別の provider のエージェントである。' +
   '依頼してきたのはマネージャーであり、人間ではない。' +
@@ -73,10 +38,7 @@ export const PEER_SYSTEM_PROMPT_APPEND =
   '確認が要る操作は、答えが出るまで待たされ、拒否されることもある。拒否されたら別の方法を探すか、できなかったことを伝えること。' +
   '終わったら、何をしたか（変えたファイル・実行したコマンド）と、残っていることを簡潔に返すこと。';
 
-/**
- * {@link PEER_SYSTEM_PROMPT_APPEND} に作業場の案内を足したもの（#4143）。peer の cwd はマネージャーの作業場に揃える。
- * 共有の場所（マネージャーの cwd）に作られると、他の担当の作業ツリーに混ざり、作ったものも見つけにくい。
- */
+// peer の cwd はマネージャーの作業場に揃える: 共有の場所に作られると他の担当の作業ツリーに混ざり、作ったものも見つけにくい。
 export function peerSystemPromptAppend(workdir: string): string {
   return (
     PEER_SYSTEM_PROMPT_APPEND +
@@ -85,58 +47,38 @@ export function peerSystemPromptAppend(workdir: string): string {
   );
 }
 
-/** peer の確認に対するマネージャーの判断。 */
 export const PEER_APPROVAL_DECISIONS = ['allow', 'deny', 'escalate'] as const;
 export type PeerApprovalDecision = (typeof PEER_APPROVAL_DECISIONS)[number];
 
-/** 誰が答えたか。`auto` は閉じる側に倒した拒否（質問・口が無い・放置・セッション終了）。 */
+/** `auto` は閉じる側に倒した拒否。 */
 export type PeerApprovalAnswerer = 'manager' | 'clone' | 'auto';
 
-/** 確認1件の記録（結果に出す）。 */
 export interface PeerApprovalRecord {
   readonly toolName: string;
   readonly by: PeerApprovalAnswerer;
 }
 
-/** マネージャーへ返す、答えを待っている確認。 */
 export interface PeerPendingApproval {
   readonly approvalId: string;
   readonly toolName: string;
-  /** 何をしようとしているか（抜粋）。 */
   readonly summary: string;
 }
 
-/** 確認の中身の抜粋の上限（1件の確認であって一覧ではないが、出す側で締める）。 */
 export const PEER_APPROVAL_SUMMARY_LIMIT = 1200;
 
 export interface PeerUsageReport {
   readonly provider: AgentProviderId;
   readonly sessionId?: string;
-  /** このターンの増分（空なら積めるものが無かった）。 */
   readonly models: Record<string, UsageTotals>;
-  /** 消費を報告しない provider のターン。 */
   readonly unmetered: boolean;
 }
 
 export interface PeerBrokerDeps {
-  /** 呼んでよい provider（呼び出し側が自分の層の provider を除いた集合）。 */
   readonly allowed: readonly AgentProviderId[];
-  /**
-   * provider ごとに、人間が開けたモデル名の一覧（`ALTEROID_MANAGER_PEER_CODEX_MODELS` 等）。
-   * **空（または省略）なら `peer_run` に `model` 引数を出さない。** 一覧に無い値は断る（既定へ倒さない）。
-   */
+  /** 一覧に無い値は断る（既定へ倒さない）。空（または省略）なら `peer_run` に `model` 引数を出さない。 */
   readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
-  /**
-   * いま閉じている provider の理由（#4118）。道具を出した後に資格が外れた（ログアウト・鍵の削除）とき、
-   * `peer_run` は相手を起こさずにこの理由で断る。省略・`undefined` は開いている。
-   */
   readonly closedReason?: (provider: AgentProviderId) => string | undefined;
   readonly driverOf: (provider: AgentProviderId) => AgentManagerDriver;
-  /**
-   * peer セッション1本の材料。`input` と `onPermission` / `onNote`（と名指しされたモデル）だけを渡す。
-   * 残り（cwd・env・子プロセスの起こし方・権限の構え・フック）は呼び出し側（runner）が持つ。
-   * `model` が在れば、それを provider へ渡すこと（無ければ provider の既定）。
-   */
   readonly makeSpec: (
     provider: AgentProviderId,
     parts: {
@@ -146,66 +88,42 @@ export interface PeerBrokerDeps {
       model?: string;
     },
   ) => AgentManagerSessionSpec;
-  /** provider が消費を報告するか（`capabilities.usage`）。 */
   readonly reportsUsage: (provider: AgentProviderId) => boolean;
   readonly onNote: (text: string) => void;
   readonly onUsage: (report: PeerUsageReport) => void;
   readonly now?: () => Date;
-  /**
-   * `escalate` の行き先: peer のセッションの承認を、呼び出し元のマネージャーの承認として既存の経路で
-   * クローンへ上げる口（出所の印つき。`peerApprovalMark`）。**省略（または投げた）ときは拒否する**（閉じる側）。
-   */
+  /** 省略（または投げた）ときは拒否する（閉じる側）。 */
   readonly askApproval?: (
     source: PeerApprovalSource,
     request: AgentPermissionRequest,
   ) => Promise<AgentPermissionDecision>;
-  /**
-   * ターンの始まりと終わり（#4122。ホームの稼働状況に、作業者と同じ形で「実行中」を出すため）。
-   * `started` は同じ `turnId` で2度来ることがある（モデルが後から分かったとき）。確認待ちの間はターンの途中である。
-   */
+  /** `started` は同じ `turnId` で2度来ることがある（モデルが後から分かったとき）。 */
   readonly onTurn?: (event: PeerTurnEvent) => void;
-  /**
-   * 背景へ回した呼び出しが止まりどころ（ターンの終わり・確認待ち・セッションの終わり）に来た（#4123）。
-   * 省略すると背景実行は断る（知らせる先が無いまま流すと、結果がどこにも届かない）。
-   */
+  /** 省略すると背景実行は断る（知らせる先が無いまま流すと、結果がどこにも届かない）。 */
   readonly onBackgroundStop?: (result: PeerTurnResult) => void;
-  /**
-   * ターンの終わりに、peer の作業場（セッションの `cwd`）で変わったファイルを探す口（#4143）。
-   * 道具の記録にパスが残らない作り方（コードで書いた等）のファイルを拾うため。省略すると探さない。
-   */
   readonly scanWorkdir?: PeerWorkdirScanner;
 }
 
-/** {@link PeerBrokerDeps.onTurn} に渡る出来事。 */
 export type PeerTurnEvent =
   | {
       readonly kind: 'started';
       readonly provider: AgentProviderId;
-      /** peer のセッション内で一意（`<sessionId>:<連番>`）。 */
       readonly turnId: string;
-      /** `peer_run`（新しいセッション）か `peer_reply`（続き）。 */
       readonly tool: 'peer_run' | 'peer_reply';
       readonly startedAt: string;
-      /** 名指しされたモデル → 相手が名乗ったモデル。どちらも無ければ無い（既定）。 */
       readonly model?: string;
     }
   | { readonly kind: 'ended'; readonly provider: AgentProviderId; readonly turnId: string };
 
-/** 承認の出所（peer のセッション）。 */
 export interface PeerApprovalSource {
   readonly provider: AgentProviderId;
   readonly sessionId: string;
 }
 
-/**
- * 日誌・稼働状況で peer を指す `actor`（#4122）。作業者の `worker:<managerId>:<agentType>` と同じ形で、
- * **どのマネージャーが頼んだ peer か**を持つ（以前の `peer:<provider>` は持たず、稼働状況に載せられなかった）。
- */
 export function peerActorOf(managerId: string, provider: string): string {
   return `peer:${managerId}:${provider}`;
 }
 
-/** {@link peerActorOf} の逆。形が合わなければ `undefined`（以前の `peer:<provider>` も含む）。 */
 export function parsePeerActor(actor: string): { managerId: string; provider: string } | undefined {
   if (!actor.startsWith('peer:')) return undefined;
   const rest = actor.slice('peer:'.length);
@@ -214,52 +132,35 @@ export function parsePeerActor(actor: string): { managerId: string; provider: st
   return { managerId: rest.slice(0, sep), provider: rest.slice(sep + 1) };
 }
 
-/** 要約の先頭に必ず付ける出所の印。 */
 export function peerApprovalMark(provider: string): string {
   return `【peer: ${provider}】`;
 }
 
-/** 1回の `peer_run` / `peer_reply` / `peer_approve` の結果。 */
 export interface PeerTurnResult {
   readonly sessionId: string;
   readonly provider: AgentProviderId;
-  /** provider が名乗った実際のモデル名（名乗らなければ無い）。 */
   readonly model?: string;
   readonly ok: boolean;
-  /** 応答の本文（失敗なら失敗の説明。確認待ちなら空）。 */
   readonly text: string;
-  /** **在れば、ターンはこの確認の答えを待って止まっている**（`peer_approve` で答える）。 */
+  /** 在れば、ターンはこの確認の答えを待って止まっている。 */
   readonly pendingApproval?: PeerPendingApproval;
-  /** このターンで拒否した操作（到着順）。 */
   readonly denied: readonly PeerApprovalRecord[];
-  /** このターンで許可した操作（到着順）。 */
   readonly approved: readonly PeerApprovalRecord[];
-  /**
-   * このターンで相手が生成したファイルの保存先（相手の器の中のパス。重複なし・出た順）。無ければ欄ごと無い。
-   * 道具の記録から拾う: 画像生成の `savedPath` と、ファイルの変更（`fileChange`）の追加・更新（#4143）。
-   */
   readonly generatedFiles?: readonly string[];
-  /**
-   * ターンの間に peer の作業場で変わったファイル（{@link PeerBrokerDeps.scanWorkdir}。#4143）。
-   * `generatedFiles` に載ったものは除く。相手以外の変更も混ざりうる。探さなかったら欄ごと無い。
-   */
+  /** `generatedFiles` に載ったものは除く。相手以外の変更も混ざりうる。 */
   readonly workdirChanges?: PeerWorkdirChanges;
 }
 
 export interface PeerWorkdirChanges {
-  /** 探した作業場。 */
   readonly dir: string;
   readonly paths: readonly string[];
-  /** 打ち切った理由（打ち切っていなければ無い）。 */
   readonly truncated?: string;
-  /** 読めなかったディレクトリの数。 */
   readonly unreadable?: number;
 }
 
-/** 結果に並べるファイルの上限（`generatedFiles` と `workdirChanges` を合わせて）。 */
 export const PEER_FILES_LISTED_MAX = 50;
 
-/** `fileChange` の1件の変更の種類（`{ type: 'add' }` の形と、文字列の形のどちらも読む）。 */
+/** `{ type: 'add' }` の形と、文字列の形のどちらも読む。 */
 function changeKindOf(kind: unknown): string | undefined {
   if (typeof kind === 'string') return kind;
   if (typeof kind === 'object' && kind !== null) {
@@ -269,11 +170,6 @@ function changeKindOf(kind: unknown): string | undefined {
   return undefined;
 }
 
-/**
- * 成功した道具の記録から、作られた・変わったファイルのパスを取り出す。
- * - 画像の生成（`imageGeneration`）の保存先
- * - ファイルの変更（`fileChange`）のうち、追加・更新のもの（削除は除く）。相対パスは `cwd` から解く
- */
 function generatedFilesOf(record: AgentToolAuditRecord, cwd: string | undefined): string[] {
   const input = record.toolInput;
   if (typeof input !== 'object' || input === null) return [];
@@ -296,7 +192,6 @@ function generatedFilesOf(record: AgentToolAuditRecord, cwd: string | undefined)
   return [];
 }
 
-/** 入力を1通ずつ流し込める AsyncIterable（閉じると終わる）。 */
 class InputQueue implements AsyncIterable<AgentUserInput> {
   readonly #items: AgentUserInput[] = [];
   #waiter: (() => void) | undefined;
@@ -355,35 +250,27 @@ const ANSWERER_LABEL: Record<PeerApprovalAnswerer, string> = {
 class PeerSession {
   readonly id: string;
   readonly provider: AgentProviderId;
-  /** 背景へ回した呼び出しが、次の止まりどころを待っている（#4123。broker が立てて下ろす）。 */
   inBackground = false;
   readonly #input = new InputQueue();
   readonly #session: AgentManagerSession;
   readonly #deps: PeerBrokerDeps;
-  /** 流しているターン（`turn_ended` まで）。 */
   #turnActive = false;
   #turnText: string[] = [];
-  /** 終わったが、まだ誰にも返していないターンの結果。 */
   #finished: { ok: boolean; text: string } | undefined;
   readonly #pending: PendingEntry[] = [];
   readonly #stopWaiters = new Set<() => void>();
   #denied: PeerApprovalRecord[] = [];
   #approved: PeerApprovalRecord[] = [];
   #generated: string[] = [];
-  /** ターンの間に作業場で変わったもの（ターンの終わりに探す。#4143）。 */
   #workdirChanges: PeerWorkdirChanges | undefined;
-  /** 流しているターンの開始時刻（作業場を探すときの下限）。 */
   #turnStartedMs = 0;
-  /** peer のセッションの作業場（`makeSpec` の `cwd`）。 */
   readonly #cwd: string | undefined;
   #baseline: UsageBaseline | null = null;
   #providerSessionId: string | undefined;
   #model: string | undefined;
   #ended: string | undefined;
-  /** マネージャーが名指ししたモデル（稼働状況の札では、相手が名乗ったモデルより先に出す。#4122）。 */
   readonly #requestedModel: string | undefined;
   #turnSeq = 0;
-  /** 流しているターンの「実行中」の知らせ（`started` を送り直すときに同じ値を使う）。 */
   #running: { turnId: string; tool: 'peer_run' | 'peer_reply'; startedAt: string } | undefined;
 
   constructor(
@@ -404,7 +291,6 @@ class PeerSession {
       ...(model === undefined ? {} : { model }),
     });
     this.#cwd = spec.cwd;
-    // 成功した道具の記録を横で読む（失敗の記録は通らないので、失敗した生成は載らない）。
     this.#session = deps.driverOf(provider).open({
       ...spec,
       onPostToolUse: (record) => {
@@ -429,12 +315,10 @@ class PeerSession {
     return this.#ended;
   }
 
-  /** ターンを流している最中か（確認待ちを含む）。同時に2ターンは流さない。 */
   get busy(): boolean {
     return this.#turnActive;
   }
 
-  /** 答えを待っている確認の id（到着順）。 */
   get pendingIds(): readonly string[] {
     return this.#pending.map((entry) => entry.approvalId);
   }
@@ -473,7 +357,6 @@ class PeerSession {
     return this.#nextStop(signal);
   }
 
-  /** 稼働状況へ「実行中」を知らせる（モデルは 名指し → 相手が名乗ったもの の順）。 */
   #announceRunning(): void {
     const running = this.#running;
     if (running === undefined) return;
@@ -486,7 +369,6 @@ class PeerSession {
     });
   }
 
-  // 知らせの口の失敗で peer の作業を止めない（観測のための口）
   #notifyTurn(event: PeerTurnEvent): void {
     try {
       this.#deps.onTurn?.(event);
@@ -495,10 +377,6 @@ class PeerSession {
     }
   }
 
-  /**
-   * 確認1件に答え、相手の続き（次の確認待ち、またはターンの結果）を返す。
-   * `escalate` はクローンの答えが出るまで返らない。
-   */
   async answer(
     approvalId: string,
     decision: PeerApprovalDecision,
@@ -522,7 +400,6 @@ class PeerSession {
     return this.#nextStop(signal);
   }
 
-  /** 答えを待っている確認を全部拒否として閉じる（放置・セッション終了など）。 */
   denyPending(reason: string): void {
     for (const entry of this.#pending.splice(0)) {
       this.#deps.onNote(
@@ -577,7 +454,6 @@ class PeerSession {
   }
 
   #onPermission(request: AgentPermissionRequest): Promise<AgentPermissionDecision> {
-    // 質問（AskUserQuestion 相当）は返さない。続きは peer_reply で話す。
     if (request.kind === 'question') {
       this.#denied.push({ toolName: request.toolName, by: 'auto' });
       this.#deps.onNote(
@@ -636,7 +512,6 @@ class PeerSession {
     for (const waiter of waiters) waiter();
   }
 
-  /** 次の止まりどころ（確認待ち・ターンの終わり・セッションの終わり）まで待つ。 */
   async #nextStop(signal: AbortSignal | undefined): Promise<PeerTurnResult> {
     const onAbort = (): void => {
       this.close();
@@ -689,10 +564,6 @@ class PeerSession {
     };
   }
 
-  /**
-   * ターンの終わりに、作業場で開始以降に変わったファイルを探す（#4143）。道具の記録で拾ったものは除く。
-   * 探す口の失敗でターンの結果を落とさない（打ち切りの理由として書く）。
-   */
   async #scanWorkdir(): Promise<void> {
     const scan = this.#deps.scanWorkdir;
     const dir = this.#cwd;
@@ -744,7 +615,6 @@ class PeerSession {
         if (typeof event.runtime?.model === 'string' && event.runtime.model.length > 0) {
           const known = this.#model;
           this.#model = event.runtime.model;
-          // 名指しが無く、名乗りで初めてモデルが分かったら、流しているターンの「実行中」を送り直す
           if (this.#requestedModel === undefined && known !== this.#model) this.#announceRunning();
         }
         return;
@@ -783,7 +653,6 @@ class PeerSession {
         models = await this.#session.sessionModelUsage().catch(() => undefined);
       }
       if (models === undefined || !hasAnyUsage(models)) {
-        // 無報告の provider だけ「取れなかった」と数える（Claude の失敗 result は数えない）。
         if (!this.#deps.reportsUsage(this.provider)) {
           this.#deps.onUsage({
             provider: this.provider,
@@ -822,24 +691,18 @@ class PeerSession {
 }
 
 export interface PeerRunOptions {
-  /** 人間が開けた一覧（{@link PeerBrokerDeps.models}）の中のモデル名。省略は provider の既定。 */
   readonly model?: string;
   readonly signal?: AbortSignal;
-  /**
-   * 背景へ回す（#4123）。相手を流し始めた時点で {@link PeerBackgroundStarted} を返し、止まりどころ
-   * （ターンの終わり・確認待ち・セッションの終わり）で {@link PeerBrokerDeps.onBackgroundStop} を呼ぶ。
-   */
   readonly background?: boolean;
 }
 
-/** 背景へ回した呼び出しの戻り（#4123）。結果は {@link PeerBrokerDeps.onBackgroundStop} で届く。 */
 export interface PeerBackgroundStarted {
   readonly background: true;
   readonly sessionId: string;
   readonly provider: AgentProviderId;
 }
 
-/** `peer_run` / `peer_reply` / `peer_approve` の戻り。文字列は道具のエラー（相手を起こしていない）。 */
+/** 文字列は道具のエラー（相手を起こしていない）。 */
 export type PeerCallResult = PeerTurnResult | PeerBackgroundStarted | string;
 
 export interface PeerBroker {
@@ -854,14 +717,9 @@ export interface PeerBroker {
     decision: PeerApprovalDecision,
     options?: { message?: string; signal?: AbortSignal; background?: boolean },
   ): Promise<PeerCallResult>;
-  /**
-   * 背景で流れている peer のターン（#4123）。作業者の背景処理と同じ形（`id` / `taskType`）で、runner が
-   * 報告の `awaitingBackground` と状態の `liveBackgroundTasks` に足す。確認待ちで止まったものは入らない
-   * （止まりどころとしてマネージャーへ知らせ済みで、答えを待っているのは相手のほうである）。
-   */
+  /** 確認待ちで止まったものは入らない（止まりどころとしてマネージャーへ知らせ済みで、答えを待っているのは相手のほう）。 */
   backgroundTasks(): { id: string; taskType: string }[];
   closeAll(): void;
-  /** 道具を載せた MCP サーバ（`createSdkMcpServer` の戻り値）。 */
   mcpServer(): ReturnType<typeof createSdkMcpServer>;
 }
 
@@ -869,7 +727,6 @@ function uniqueList(by: readonly PeerApprovalRecord[]): string {
   return [...new Set(by.map((record) => `${record.toolName}(${record.by})`))].join(', ');
 }
 
-/** 1回の呼び出しの結果を、マネージャーが読む文にする（道具の応答と、背景の止まりどころの知らせで同じ形）。 */
 export function describePeerTurnResult(result: PeerTurnResult): string {
   const lines = [
     `session_id: ${result.sessionId}（続けるなら peer_reply に渡す）`,
@@ -903,17 +760,12 @@ export function describePeerTurnResult(result: PeerTurnResult): string {
     );
     return lines.join('\n');
   }
-  // 背景の止まりどころの知らせ（#4123）にも同じ行が載る（#4137 の保存先・#4143 の作業場の変化）
   lines.push(...describePeerFiles(result));
   lines.push('', result.text);
   return lines.join('\n');
 }
 
-/**
- * 作られた・変わったファイルの行（#4137・#4143）。道具の記録で拾ったもの → 作業場で見つけたものの順に、
- * 合わせて {@link PEER_FILES_LISTED_MAX} 件まで並べ、超えた分は件数だけ言う。
- * 作業場の探索を打ち切った・探せなかったときは、ファイルが無くても黙らずに書く。
- */
+// 作業場の探索を打ち切った・探せなかったときは、ファイルが無くても黙らずに書く。
 function describePeerFiles(result: PeerTurnResult): string[] {
   const generated = result.generatedFiles ?? [];
   const changes = result.workdirChanges;
@@ -1004,9 +856,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
           : `model「${model}」は選べない（開いているのは ${open.join(' / ')}。省けば ${provider} の既定で動く）`;
       }
     }
-    // ほかのセッションの答えていない確認には触らない（#4124）: 以前は「答えないまま次の peer_run を呼んだら閉じる」と
-    // していたが、並べて頼むと無関係なセッションの確認まで拒否された。確認は答える・そのセッションのターンが終わる・
-    // セッションが閉じる・マネージャーが止まる、のどれかでだけ閉じる（背景実行では確認待ちが知らせで届く。#4123）。
+    // ほかのセッションの答えていない確認には触らない: 並べて頼むと無関係なセッションの確認まで拒否される。
     if (options.background === true && deps.onBackgroundStop === undefined) {
       return '背景へ回す口が無い（run_in_background を外して呼ぶこと）';
     }
@@ -1029,10 +879,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     );
   };
 
-  /**
-   * 次の止まりどころまでを、前景なら待って返し、背景なら知らせに回して直ちに返す（#4123）。
-   * 背景の待ちには呼び出しの中断の合図を渡さない — 道具の呼び出しはもう返っているので、その合図で相手を畳まない。
-   */
+  // 背景の待ちには呼び出しの中断の合図を渡さない: 道具の呼び出しはもう返っているので、その合図で相手を畳まない。
   const follow = (
     session: PeerSession,
     background: boolean,
@@ -1132,7 +979,6 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
         prompt: z.string().min(1).describe('相手への依頼（前提を含めて自己完結に書く）'),
         ...backgroundShape,
       };
-      // 一覧が空なら引数ごと出さない（`model` の欄が在るのに選べる値が無い、という形を作らない）。
       const modelShape: z.ZodRawShape =
         allModels.length === 0
           ? {}
@@ -1161,7 +1007,6 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
               (allModels.length === 0
                 ? ''
                 : `model で開いているモデル（${allModels.join(' / ')}）を名指しできる。`),
-            // `model` は在るときだけの欄なので、型は runShape に寄せて、値はハンドラで読む。
             { ...runShape, ...modelShape } as typeof runShape,
             async (args, extra) => {
               const model = (args as { model?: string }).model;
@@ -1228,7 +1073,6 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
   };
 }
 
-/** MCP のハンドラの `extra` から、呼び出しの中断の合図を取り出す。 */
 function signalOf(extra: unknown): AbortSignal | undefined {
   const signal = (extra as { signal?: unknown } | undefined)?.signal;
   return signal instanceof AbortSignal ? signal : undefined;

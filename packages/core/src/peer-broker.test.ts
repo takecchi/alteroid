@@ -43,7 +43,6 @@ function turnEnded(body: string, models?: Record<string, UsageTotals>): AgentEve
   };
 }
 
-/** 入力を1通引くたびに、台本の次の応答を返す偽の駆動役。 */
 function scriptedDriver(
   script: (turn: number, spec: AgentManagerSessionSpec) => Promise<AgentEvent[]> | AgentEvent[],
   seen: { specs: AgentManagerSessionSpec[]; closed: number },
@@ -86,9 +85,7 @@ function makeBroker(
     askApproval?: PeerBrokerDeps['askApproval'];
     models?: PeerBrokerDeps['models'];
     closedReason?: PeerBrokerDeps['closedReason'];
-    /** 背景の止まりどころを受ける口を付けない（#4123。付けないと背景実行は断られる）。 */
     noBackground?: boolean;
-    /** peer のセッションの作業場（`makeSpec` が返す `cwd`。#4143）。 */
     cwd?: string;
     scanWorkdir?: PeerBrokerDeps['scanWorkdir'];
     now?: PeerBrokerDeps['now'];
@@ -99,9 +96,8 @@ function makeBroker(
   const notes: string[] = [];
   const usage: PeerUsageReport[] = [];
   const turns: PeerTurnEvent[] = [];
-  /** 背景の止まりどころの知らせと、知らせた時点の背景処理の一覧。 */
   const stops: { result: PeerTurnResult; liveAtStop: number }[] = [];
-  // 知らせの口から broker を読む（作る前に deps を組むので、後から入れる入れ物にする）
+  // 作る前に deps を組むので、知らせの口から読む broker は後から入れる入れ物にする
   const ref: { broker?: ReturnType<typeof createPeerBroker> } = {};
   const deps: PeerBrokerDeps = {
     allowed: ['codex'],
@@ -139,7 +135,6 @@ function makeBroker(
   return { broker, seen, parts, notes, usage, turns, stops };
 }
 
-/** 外から解ける約束（背景のターンを途中で止めておくため）。 */
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve = (): void => undefined;
   const promise = new Promise<void>((r) => {
@@ -155,14 +150,12 @@ async function until(condition: () => boolean): Promise<void> {
   if (!condition()) throw new Error('条件が満たされなかった');
 }
 
-/** 前景の呼び出しの結果（道具のエラー・背景へ回した戻りなら落とす）。 */
 function foreground(result: PeerCallResult): PeerTurnResult {
   if (typeof result === 'string') throw new Error(result);
   if ('background' in result) throw new Error('背景へ回っている');
   return result;
 }
 
-/** 確認待ちで止まった結果から approval_id を取り出す（止まっていなければ落とす）。 */
 function pendingOf(result: PeerCallResult): string {
   const turn = foreground(result);
   if (turn.pendingApproval === undefined) throw new Error(`確認待ちではない: ${turn.text}`);
@@ -445,16 +438,6 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     broker.closeAll();
   });
 
-  /*
-   * 承認の行き先（#3940。2026-10-07 のオーナー決定で反転した）。
-   *
-   * 以前の3本は「peer の確認は askApproval で直接クローンへ上がり、答えが出るまで peer_run は
-   * 返らない」を仕様として固定していた（元の名前: 「承認の口が無ければ、承認が要る操作は拒否し、
-   * 結果と日誌に出す（素通しにしない）」「askApproval があれば出所つきで上げ、許可はそのまま返して
-   * 結果に数える」「askApproval が投げたら拒否に倒す。質問は上げずに拒否する」）。
-   * いまは**まずマネージャーへ返り**、`escalate` を選んだときだけクローンへ上がる。消さずに期待値を
-   * 反転した: 閉じる側（口が無い・投げた・質問）は escalate の経路で同じ強さのまま測る。
-   */
   it('承認の口が無ければ、escalate した確認は拒否し、結果と日誌に出す（素通しにしない）', async () => {
     const { broker, notes } = makeBroker(async (_turn, spec) => {
       const decision = await spec.onPermission({
@@ -593,7 +576,6 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
   });
 
   it('並べて頼んでも、ほかのセッションの答えていない確認は閉じない（#4124）', async () => {
-    // 以前は「答えないまま次の peer_run を呼ぶと、古い確認は拒否として閉じる」だった（反転した仕様）
     const decisions: string[] = [];
     let turns = 0;
     const { broker, notes } = makeBroker(async (_t, spec) => {
@@ -611,7 +593,6 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     expect(notes.some((note) => note.includes(oldId) && note.includes('拒否として閉じた'))).toBe(
       false,
     );
-    // 1本目の確認はまだ答えられる
     const first = settled(await broker.approve(oldId, 'allow'));
     expect(first.text).toBe('1本目が済んだ');
     expect(decisions).toEqual(['allow']);
@@ -628,16 +609,13 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     expect(started).toMatchObject({ background: true, provider: 'codex' });
     const sessionId = (started as { sessionId: string }).sessionId;
     expect(broker.backgroundTasks()).toEqual([{ id: `peer:${sessionId}`, taskType: 'peer:codex' }]);
-    // 流れている間の peer_reply は断る
     expect(await broker.reply(sessionId, '続き')).toContain('前のターンの応答を待っている');
     expect(stops).toEqual([]);
     gate.resolve();
     await until(() => stops.length === 1);
     expect(stops[0]?.result).toMatchObject({ sessionId, ok: true, text: '背景で済んだ' });
-    // 知らせる前に背景処理から外れている（知らせで起きた報告が、終わった peer を数えない）
     expect(stops[0]?.liveAtStop).toBe(0);
     expect(broker.backgroundTasks()).toEqual([]);
-    // 知らせの後は続けて頼める
     expect(settled(await broker.reply(sessionId, '続き')).text).toBe('背景で済んだ');
     broker.closeAll();
   });
@@ -651,7 +629,6 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     await until(() => stops.length === 1);
     const approvalId = stops[0]?.result.pendingApproval?.approvalId;
     expect(approvalId).toBeDefined();
-    // 確認待ちは背景処理に数えない（相手は答えを待っている）
     expect(broker.backgroundTasks()).toEqual([]);
     expect(await broker.approve(approvalId!, 'allow', { background: true })).toMatchObject({
       background: true,
@@ -716,12 +693,6 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     broker.closeAll();
   });
 
-  /*
-   * 以前の名前は「peer のセッションは strictApprovals で起こす」で、broker が構えを締めることを
-   * 固定していた。#3940 で構えは呼び出し元のマネージャーと同じになった（構えは runner の makeSpec が
-   * 持つ。`runner-peer.test.ts` の「構えはマネージャーと同じ」が測る）。broker は makeSpec へ
-   * 構えを渡さないことを測る形へ反転した。
-   */
   it('broker は構えを決めない（makeSpec へ渡すのは入力・確認の口・note・名指しのモデルだけ）', async () => {
     const { broker, parts } = makeBroker(() => [turnEnded('ok')]);
     await broker.run('codex', 'x');
@@ -787,10 +758,6 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     expect(seen.closed).toBe(2);
   });
 
-  /*
-   * 以前の名前は「MCP サーバは peer_run と peer_reply の2本だけを見せ、呼べる provider だけを選べる」。
-   * #3940 で確認に答える peer_approve が増えたので、期待する道具の集合を3本へ反転した。
-   */
   it('MCP サーバは peer_run・peer_reply・peer_approve の3本を見せ、呼べる provider だけを選べる', async () => {
     const { broker } = makeBroker((turn) => [turnEnded(`答え${turn}`)]);
     const server = broker.mcpServer();

@@ -13,15 +13,6 @@ import {
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * MCP の登録を置いて runner へ配る1本道（`mcp-server-service.ts`）と、名乗りのたびの
- * 降ろし直し（`manager.ts` の `#pushMcpServers`）。#325 段3。
- *
- * HTTP 境界越しの形（404 の扱い・制御面の 400）は `apps/daemon/src/
- * runner-mcp-servers.test.ts` が撃つ。ここはプールの側の判断 —— 配布の結果の形、
- * 古い runner を挑み直しに数えないこと、一時障害は諦めずに挑み直すこと —— を固定する。
- */
-
 const REGISTRATION: McpServers = {
   github: { command: 'gh-mcp', env: { GITHUB_TOKEN: 'SECRET-IN-ENV' } },
 };
@@ -106,7 +97,6 @@ describe('MCP の登録を置いて配る（apply）', () => {
     expect(JSON.stringify(result)).not.toContain('SECRET');
     expect((await s.stores.mcpServers.read())?.mcpServers).toEqual(REGISTRATION);
 
-    // 配った登録が、これから開くマネージャーのセッションに載る。
     await s.pool.start({ request: '走る' });
     expect(s.started.at(-1)?.mcpServers).toEqual(REGISTRATION);
   });
@@ -150,10 +140,6 @@ describe('MCP の登録を置いて配る（apply）', () => {
   });
 });
 
-/**
- * 押し込みの挑み直し（`#settlePushRetry`）。**時計は手で進める**
- * （`manager.test.ts` の同名の describe と同じ理由）。
- */
 describe('MCP の登録の押し込みの挑み直し', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -202,7 +188,6 @@ describe('MCP の登録の押し込みの挑み直し', () => {
     await vi.advanceTimersByTimeAsync(180_000);
     expect(attempts).toBe(afterConnect);
 
-    // runner を上げた（口ができた）後の名乗り直しで降りる。
     s.runner.setMcpServers = async () => ({
       sha256: mcpServersFingerprintOf(REGISTRATION),
       names: ['github'],
@@ -211,8 +196,6 @@ describe('MCP の登録の押し込みの挑み直し', () => {
     await s.pool.reattachRunner('runner-test');
     expect(s.pool.pushHealthOf('runner-test')?.mcpServers?.status).toBe('ok');
 
-    // 日誌には生の行が1度だけ残り、値は書かない。同じ本文の2回目以降は畳まれ（#1311）、
-    // 直った後（名乗り直し）に出る要約の件数と合わせて試行の回数に一致する（1回も失っていない）。
     const lines = (await s.stores.journal.list({})).filter(
       (e) => e.type === 'exchange' && e.text.includes('MCP サーバの登録を降ろせなかった'),
     );
@@ -237,7 +220,6 @@ describe('MCP の登録の押し込みの挑み直し', () => {
 describe('syncRunner: runner の指紋を読めなかった回（#2487）', () => {
   it('登録が空（want が無い）で指紋が読めなくても、「何も載っていない」と読まず、空を降ろす', async () => {
     const s = await setup();
-    // 空の登録（外した）。runner は古い登録を持ったままで、指紋の読み取りだけが落ちる。
     await s.runner.setMcpServers?.(REGISTRATION);
     const readReal = s.runner.mcpServers?.bind(s.runner);
     const placed: McpServers[] = [];

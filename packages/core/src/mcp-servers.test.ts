@@ -24,11 +24,7 @@ describe('MCP サーバの登録（#325 段1）', () => {
     expect(mcpServerNames(servers)).toEqual(['local', 'remote', 'stream']);
   });
 
-  /**
-   * 自作のインプロセス MCP の名前は入口で拒む。**名前を import して比べる** ——
-   * ここで `'alteroid'` を書き写すと、`MCP_SERVER_NAME` が変わったときに歯が
-   * 古い名前を測り続ける。
-   */
+  // 名前は import して比べる: `'alteroid'` を書き写すと、`MCP_SERVER_NAME` が変わったときに古い名前を測り続ける。
   it('alteroid 自身の名前は大文字小文字を問わず拒む', () => {
     expect(isReservedMcpServerName(MCP_SERVER_NAME)).toBe(true);
     expect(isReservedMcpServerName(MCP_SERVER_NAME.toUpperCase())).toBe(true);
@@ -36,10 +32,6 @@ describe('MCP サーバの登録（#325 段1）', () => {
     expect(() => parseMcpServers({ [MCP_SERVER_NAME]: { command: 'x' } })).toThrow(MCP_SERVER_NAME);
   });
 
-  /**
-   * **未知の欄は捨てずに拒む。** 捨てると綴りを間違えた欄が「保存できたのに
-   * 効かない」になる。そして拒む文言に値を載せない（`env` に鍵が入りうる）。
-   */
   it('未知の欄・不正な形は拒み、文言に値を載せない', () => {
     const attempt = (input: unknown) => {
       try {

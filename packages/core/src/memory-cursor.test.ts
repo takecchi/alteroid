@@ -3,20 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { decodeMemoryCursor, encodeMemoryCursor, resolveMemoryCursor } from './memory-cursor.js';
 import type { MemoryDocumentMeta } from './schema.js';
 
-/**
- * `resolveMemoryCursor`（`memory_list` の継続点）の分岐対応表。
- *
- * `schedule-cursor.test.ts` と同じ形（分岐を数え上げて1本ずつ歯を通す）。
- *
- * | 分岐 | 内容 | 歯 |
- * | --- | --- | --- |
- * | B1 | `cursorRaw === undefined` → 絞らない（先頭から） | `B1: cursor 未指定は先頭から（絞らない）` |
- * | B2 | base64 として読めない | `B2: base64 として読めない cursor は malformed` |
- * | B3 | base64/JSON としては読めるが schema に合わない | `B3: schema に合わない cursor は malformed` |
- * | B4 | 有効な cursor（錨が実在する。位置の探索） | `B4: 錨が実在すれば位置の探索でそれより後ろだけを残す` |
- * | B5 | 錨が現在の一覧に実在しない（文書が消された等） | `B5: 錨が消えていても比較（第二の手段）で続きが決まる` |
- * | B6 | cursor が一覧の末尾を指す | `B6: cursor が最後の行を指していれば view は空（最後の頁）` |
- */
 function meta(slug: string): MemoryDocumentMeta {
   return {
     slug,
@@ -72,7 +58,6 @@ describe('resolveMemoryCursor（分岐）', () => {
   });
 
   it('B5: 錨が消えていても比較（第二の手段）で続きが決まる', () => {
-    // 'a' と 'b' の間に在った文書が消された、という状況。
     const result = resolveMemoryCursor(entries, encodeMemoryCursor({ from: 'a-gone' }));
     expect(result.kind).toBe('ok');
     expect(result.kind === 'ok' && result.view.map((e) => e.slug)).toEqual(['b', 'c']);
@@ -86,10 +71,8 @@ describe('resolveMemoryCursor（分岐）', () => {
   it('B7: anchor は view の先頭（#2510。描画側が必ず先頭に出す文書）', () => {
     const hit = resolveMemoryCursor(entries, encodeMemoryCursor({ from: 'b' }));
     expect(hit.kind === 'ok' && hit.anchor).toBe('b');
-    // 錨が消えていても、view の先頭が錨になる。
     const gone = resolveMemoryCursor(entries, encodeMemoryCursor({ from: 'a-gone' }));
     expect(gone.kind === 'ok' && gone.anchor).toBe('b');
-    // cursor 未指定（先頭から）と終端（view が空）には錨が無い。
     const first = resolveMemoryCursor(entries, undefined);
     expect(first.kind === 'ok' && first.anchor).toBeUndefined();
     const end = resolveMemoryCursor(entries, encodeMemoryCursor({ from: 'c-gone' }));

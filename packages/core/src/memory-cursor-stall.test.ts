@@ -4,13 +4,6 @@ import { decodeMemoryCursor, resolveMemoryCursor } from './memory-cursor.js';
 import { renderMemoryListing } from './memory.js';
 import type { MemoryDocumentMeta } from './schema.js';
 
-/**
- * 候補: 「slug の小さい子 `b`（親 `z` は slug が大きい）の前に予算を食う root が
- * 並ぶと、続きの cursor が `b` を指したまま頁が進まない」。
- *
- * `tools.ts` の memory_list ハンドラと同じ手順（resolveMemoryCursor → renderMemoryListing
- * に paging.total を渡す）を、ストアを使わず純関数だけで再現する。
- */
 function doc(slug: string, parent: string | undefined, description: string): MemoryDocumentMeta {
   return {
     slug,
@@ -49,7 +42,6 @@ function nextCursor(listing: string): string | undefined {
 describe('memory_list の cursor は、親の slug が子より大きくても頁が進む', () => {
   it('b（子）/ z（親）/ c001..c200（長い説明の root）: cursor を辿って全文書に届く', () => {
     const long = 'あ'.repeat(150);
-    // PersonaStore.list() の契約どおり slug 昇順に並べる。
     const documents = [
       doc('b', 'z', '子'),
       ...Array.from({ length: 200 }, (_, i) =>
@@ -74,7 +66,6 @@ describe('memory_list の cursor は、親の slug が子より大きくても�
       const decoded = decodeMemoryCursor(c);
       return decoded.ok ? decoded.cursor.from : '?';
     });
-    // 同じ cursor が2回続けて返る = 頁が進んでいない（ストア順で from が増えること）
     const stalled = froms.some(
       (from, i) =>
         i > 0 &&
@@ -96,7 +87,6 @@ describe('memory_list の cursor は、親の slug が子より大きくても�
 });
 
 describe('memory_list の頁送り: 親子が入り乱れても、必ず進み・欠落しない（#2510）', () => {
-  // 決まった種から作る擬似乱数（失敗を再現できるように）。
   function rng(seed: number): () => number {
     let s = seed;
     return () => {
@@ -111,7 +101,6 @@ describe('memory_list の頁送り: 親子が入り乱れても、必ず進み�
       const rand = rng(seed);
       const slugs = Array.from({ length: 160 }, (_, i) => `s${String(i).padStart(3, '0')}`);
       const documents = slugs.map((slug, i) => {
-        // 約半数に、自分より前・後ろどちらの slug にもなりうる親を付ける（自己参照は除く）。
         const parentIndex = Math.floor(rand() * slugs.length);
         const parent = rand() < 0.5 && parentIndex !== i ? slugs[parentIndex] : undefined;
         return doc(slug, parent, long);
