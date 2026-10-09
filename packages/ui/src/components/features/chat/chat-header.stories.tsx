@@ -36,6 +36,18 @@ export const MobileWithNotice: Story = {
   },
 };
 
+// 狭い画面で全部のボタンが並ぶ形。ヘッダーが縦に伸びないことを見る（#4340）
+export const MobileAllActions: Story = {
+  args: {
+    conversationId: 'conv_01J8ZK4Q3M7R2D9XW5T6YB0HNE',
+    subtitle: '10/09 18:17 に開始 · 発言 2 件',
+    onOpenList: () => undefined,
+    onInterrupt: () => undefined,
+    onEnd: () => undefined,
+    onDelete: () => undefined,
+  },
+};
+
 export const AfterDelete: Story = {
   args: {
     conversationId: undefined,
