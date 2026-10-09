@@ -22,7 +22,12 @@ ARG CODEX_VERSION=0.160.0
 # image ジョブのキャッシュが外れる時刻を上流に任せることになる。digest は Renovate の PR で
 # 上げる（`.github/renovate.json5`）。**build と runtime の2か所は同じ digest にそろえる**
 # （Renovate は2か所を同じ依存として一緒に更新する）。
-FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS build
+#
+# Docker Hub（`node:…`）ではなく ECR Public のミラーから取る。夜の release/prod で全
+# プロジェクトの app と runner が一斉にビルドし、Railway のビルダーが Docker Hub の匿名の
+# 取得制限（429 Too Many Requests）に当たってビルドが落ちた（2026-10-10 JST）。
+# ミラーは Docker 公式イメージと同じ digest を持つので、中身は digest のまま変わらない。
+FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -74,7 +79,7 @@ ENV ALTEROID_BUILD_REV=${ALTEROID_BUILD_REV:-$RAILWAY_GIT_COMMIT_SHA}
 RUN pnpm build
 
 
-FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS runtime
+FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS runtime
 
 # マネージャーが人間と同じ手つきで作業するための素の道具（runner で使う）。
 #
