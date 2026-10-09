@@ -18,6 +18,7 @@ import {
   Input,
   Select,
   Spinner,
+  Textarea,
 } from '@alteroid/ui';
 import {
   Button as ShadcnButton,
@@ -237,15 +238,26 @@ function EditEnvVarDialog({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [result, setResult] = useState<EnvVarUpdateResult | undefined>(undefined);
+  // 保存できた値を基準にする: 反映の警告を見せたまま開いている窓を、保存済みなのに書きかけと数えないため
+  const [saved, setSaved] = useState({ value: initialValue, scope: entry.scope });
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
 
   const canSave = value.length > 0;
+  const dirty = value !== saved.value || scope !== saved.scope;
+  useReportDirty(`edit-env-var-${entry.name}`, open && dirty);
 
   function handleOpenChange(next: boolean) {
     // 保存中は閉じさせない: 閉じると保存の失敗や一部の実行環境への反映失敗の警告を見ないまま終わるため
     if (!next && busy) return;
+    // 書きかけがあれば確かめてから閉じる: シークレットの値は入れ直しで、黙って捨てると打ち直しになるため
+    if (!next && dirty) {
+      setConfirmingDiscard(true);
+      return;
+    }
     if (next) {
       setValue(initialValue);
       setScope(entry.scope);
+      setSaved({ value: initialValue, scope: entry.scope });
       setFailure(undefined);
       setResult(undefined);
     }
@@ -259,6 +271,7 @@ function EditEnvVarDialog({
     setResult(undefined);
     try {
       const update = await setEnvVar({ name: entry.name, value, scope });
+      setSaved({ value, scope });
       // 一部の実行環境へ反映できていなければ閉じない: 閉じると警告ごと消えて、成功と見分けが付かないため
       if (failedRunnerPushes(update).length > 0) setResult(update);
       else onOpenChange(false);
@@ -283,16 +296,24 @@ function EditEnvVarDialog({
             <span className="text-xs text-muted-foreground">名前</span>
             <Input value={entry.name} readOnly className="font-mono" />
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">
-              {entry.secret ? '新しい値' : '値'}
-            </span>
-            <Input
+          {entry.secret ? (
+            <SecretValueInput
+              label="新しい値"
               value={value}
-              onChange={(event) => setValue(event.target.value)}
-              className="font-mono"
+              onChange={setValue}
+              onSubmitShortcut={() => void save()}
+              submitDisabled={!canSave || busy}
             />
-          </label>
+          ) : (
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">値</span>
+              <Input
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+                className="font-mono"
+              />
+            </label>
+          )}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">渡す先</span>
             <Select value={scope} onChange={(event) => setScope(event.target.value as EnvVarScope)}>
@@ -320,8 +341,94 @@ function EditEnvVarDialog({
             保存
           </Button>
         </DialogFooter>
+        <ConfirmDialog
+          open={confirmingDiscard}
+          onOpenChange={setConfirmingDiscard}
+          title="書きかけの編集があります"
+          description="このまま閉じると、いま書いている内容は失われます。"
+          confirmLabel="破棄して閉じる"
+          // 既定の「やめる」にしない: 下の窓の「やめる」（閉じる側）と同じ語になり、どちらへ倒れるのか読めないため
+          cancelLabel="編集に戻る"
+          destructive
+          onConfirm={() => {
+            setConfirmingDiscard(false);
+            onOpenChange(false);
+          }}
+        />
       </DialogContent>
     </Dialog>
+  );
+}
+
+// 伏せている間は1行の password 欄にする: 画面を覗かれても値が見えないため
+// 表示したら複数行の欄にする: PEM のような複数行の値を入れられるようにするため
+// label 要素で包まない: 中の「表示する」のボタンまで欄の名前に混ざるため
+function SecretValueInput({
+  label,
+  value,
+  onChange,
+  onSubmitShortcut,
+  submitDisabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onSubmitShortcut: () => void;
+  submitDisabled: boolean;
+}) {
+  const [shown, setShown] = useState(false);
+  const lineCount = value.split('\n').length;
+  const multiline = lineCount > 1;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <div className="flex items-start gap-2">
+        {shown ? (
+          <Textarea
+            aria-label={label}
+            rows={3}
+            maxHeight="16rem"
+            className="flex-1 font-mono text-xs"
+            spellCheck={false}
+            autoComplete="off"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            onSubmitShortcut={onSubmitShortcut}
+            submitDisabled={submitDisabled}
+          />
+        ) : (
+          <Input
+            type="password"
+            aria-label={label}
+            className="flex-1 font-mono"
+            autoComplete="off"
+            // 複数行の値は伏せたまま書き換えさせない: 1行の欄は改行を落とすので、打った途端に値が壊れるため
+            readOnly={multiline}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            onPaste={(event) => {
+              // 改行を含む貼り付けは自分で差し込む: 1行の欄は改行を黙って落とし、PEM が壊れたまま保存されるため
+              const pasted = event.clipboardData.getData('text');
+              if (!pasted.includes('\n')) return;
+              event.preventDefault();
+              const input = event.currentTarget;
+              const start = input.selectionStart ?? value.length;
+              const end = input.selectionEnd ?? value.length;
+              onChange(value.slice(0, start) + pasted + value.slice(end));
+            }}
+          />
+        )}
+        <Button size="sm" onClick={() => setShown((current) => !current)}>
+          {shown ? '隠す' : '表示する'}
+        </Button>
+      </div>
+      {!shown && multiline && (
+        <p className="text-xs text-muted-foreground">
+          {`${String(lineCount)} 行の値。書き換えるには「表示する」で開く。`}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -399,10 +506,20 @@ function AddEnvVarForm() {
             placeholder="TZ"
           />
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">値</span>
-          <Input value={value} onChange={(event) => setValue(event.target.value)} />
-        </label>
+        {secret ? (
+          <SecretValueInput
+            label="値"
+            value={value}
+            onChange={setValue}
+            onSubmitShortcut={submit}
+            submitDisabled={!canSubmit || busy}
+          />
+        ) : (
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">値</span>
+            <Input value={value} onChange={(event) => setValue(event.target.value)} />
+          </label>
+        )}
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">渡す先</span>
           <Select value={scope} onChange={(event) => setScope(event.target.value as EnvVarScope)}>
