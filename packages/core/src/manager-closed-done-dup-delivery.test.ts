@@ -13,23 +13,6 @@ import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * **Issue #3189 — report が無いまま `closed(done)` だけが届くと、クローンの受信箱に何も出ない。**
- *
- * 直し方（人間の決定 2026-10-06、案 A）: `closed(done)` で、**このセッションで report を
- * 受け取った記録が無い**ときだけ、受信箱へ1本の知らせを出す（`closed_failed` と同じ合成の
- * 知らせ＝合流窓）。報告の後の idle としての `closed(done)` は今までどおり無音。
- *
- * 判定は `record.job.lastReportAt`（デーモンが report を受け取った時刻）と
- * `record.runnerSessionSince`（器がこの委譲を持ったと確かめた時刻）の前後で行う。
- * 3つの状態を持つ: 受け取った（無音）／一度も無い（知らせる）／判定できない（知らせる。
- * 黙って無音へ倒さない）。
- *
- * 足場（`manualRunner` / `runningManualSetup`）は `manager-closed-dup-and-silent.test.ts`
- * （枝 `hunt/core2-q-closed-dup`）と同じものをこの歯専用に複製してある。実時間の待ちは使わない
- * （`scripts/wallclock-waits-ratchet.test.ts`、#2146）。
- */
-
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
@@ -50,15 +33,12 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -92,8 +72,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
   };
 
   const deliver = (raw: RunnerEvent): void => {
-    // **daemon の境界（runnerEventSchema.safeParse）を実際に通す**（スキーマに無い欄は
-    // ここで黙って落ちるので、emit した中身だけを見ていると境界で消えたことに気づけない）。
+    // 境界（runnerEventSchema.safeParse）を実際に通す: スキーマに無い欄はここで落ちるため。
     const parsed = runnerEventSchema.safeParse(JSON.parse(JSON.stringify(raw)) as unknown);
     if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
     emit?.(parsed.data);
@@ -151,16 +130,13 @@ async function runningManualSetup(
 
   const registry = createRunnerRegistry([fake.runner]);
   const inbox: InboxEvent[] = [];
-  // `runnerSessionSince` はこの時計で書かれる（`lastReportAt` は実時計）。時計を進めて
-  // 「report より後にセッションが置かれた」を作る。
   const clock = { now: Date.now() };
   const pool = createManagerPool({
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
     now: () => clock.now,
-    // 既定 3000ms より大きく取る（テストの実時間の中で窓が自然に閉じないように。
-    // 閉じるのは `pool.stop()` の flush だけ）。
+    // 既定 3000ms より大きく取る: 実時間で窓が閉じないようにし、閉じるのは `pool.stop()` の flush だけにする。
     synthesizedNoticeWindowMs: 60_000,
   });
 
@@ -187,20 +163,16 @@ describe('同じ closed(done) の二重配達（#3199 の知らせ。#3187 は f
   it('report 無しの closed(done) が2回配られても、「report を出さないまま終わった」知らせは1本だけ', async () => {
     const { pool, inbox, fake } = await runningManualSetup('mgr-done-dup');
     const before = inbox.length;
-    // runner の SSE が再接続の Last-Event-ID で同じ出来事を配り直す（closed に冪等キーは無い）。
     fake.closed('mgr-done-dup', 'done', SESSION_CLOSED);
     await settle();
     fake.closed('mgr-done-dup', 'done', SESSION_CLOSED);
     await settle();
-    await pool.stop(); // 合流窓を流し切る
+    await pool.stop();
     const joined = noticesAbout(inbox, before, 'mgr-done-dup').join('\n');
-    // 比較の足場: 知らせ自体は届いている（空同士の比較にしない）。
     expect(joined).toContain('report を出さないまま終わった');
-    // 二重配達は「×2」（1回しか終わっていないのに2回終わったと読める）にならない。
     expect(joined).not.toContain('×2');
   });
 
-  // 歯（#3233 の直し。印は `Job.silentDoneNotifiedFor`）。
   async function decisionLines(setup: ManualSetup): Promise<string[]> {
     const entries = await setup.stores.journal.list({ types: ['exchange'] });
     return entries
@@ -213,17 +185,15 @@ describe('同じ closed(done) の二重配達（#3199 の知らせ。#3187 は f
     const { pool, inbox, fake, clock } = setup;
     fake.closed('mgr-done-again', 'done', '1回目の終わり: first-end');
     await settle();
-    // 新しいセッションが置かれる（`runnerSessionSince` が進む）。
     clock.now += 60 * 60 * 1000;
     const sent = await pool.send('mgr-done-again', '続きを');
     expect(sent.outcome).toBe('delivered');
     clock.now += 60 * 1000;
     fake.closed('mgr-done-again', 'done', '2回目の終わり: second-end');
     await settle();
-    await pool.stop(); // 合流窓を流し切る
+    await pool.stop();
     const text = JSON.stringify(inbox.filter((e) => e.type === 'manager_message'));
     expect(text).toContain('second-end');
-    // 2回とも知らせの判断の行が残り、「知らせ済み」で見送った行は無い。
     expect(await decisionLines(setup)).toHaveLength(2);
     expect((await decisionLines(setup)).join('\n')).not.toContain('知らせ済み');
   });
@@ -234,7 +204,6 @@ describe('同じ closed(done) の二重配達（#3199 の知らせ。#3187 は f
     await settle();
     await first.pool.stop();
     const persisted = (await first.stores.jobs.listJobs()).find((j) => j.id === 'mgr-done-restart');
-    // 比較の足場: 印が台帳に書かれている。
     expect(persisted?.silentDoneNotifiedFor).toBe(persisted?.runnerSessionSince ?? '');
     expect(noticesAbout(first.inbox, 0, 'mgr-done-restart').join('')).toContain(
       'report を出さないまま終わった',

@@ -13,24 +13,6 @@ import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * **Issue #799 — `closed_failed` / `resume_fallback` の本文が、合流窓
- * （`#flushSynthesizedNoticeFor`）を flush する前にプロセスが落ちるとどこにも
- * 残らない欠陥を撃つ。**
- *
- * `#flushSynthesizedNoticeFor` 自身が書く日誌は「機構が合成した知らせを N 件、
- * 1件にまとめて配った（内訳: …）」の1行だけで、**個々の本文を含まない**
- * （同関数のコメント「個々の知らせは積んだ時点で呼び出し元（`case 'rate_limit'`
- * 等）が既にそれぞれの `#journal` を書いている」）。**`case 'closed'` の
- * `event.status === 'failed'` 分岐と `#notifyResumeFallback` は、この前提を
- * 満たさないまま `#queueSynthesizedNotice` だけを呼んでいた** ——flush が
- * 走っても走らなくても、本文はどこにも書かれない。
- *
- * `manager-closed-failed-system-error.test.ts` / `manager-synthesized-notices.test.ts`
- * と同じ足場（`manualRunner` / `runningManualSetup` / `createMemoryStores`）を
- * この歯専用に複製してある（duplicated on purpose——同ファイルの doc と同じ理由）。
- */
-
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
@@ -51,15 +33,12 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -98,10 +77,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     closed(managerId, status, reason) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
       if (at !== -1) alive.splice(at, 1);
-      // **daemon の境界（runnerEventSchema.safeParse）を実際に通す**
-      // （`manager-closed-failed-system-error.test.ts` と同じ作法——スキーマに
-      // 無い欄はここで黙って落ちるので、emit した中身だけを見ていると境界で
-      // 消えたことに気づけない）。
+      // 境界（runnerEventSchema.safeParse）を実際に通す: スキーマに無い欄はここで落ちるため。
       const raw: RunnerEvent = { type: 'closed', managerId, status, reason };
       const parsed = runnerEventSchema.safeParse(JSON.parse(JSON.stringify(raw)) as unknown);
       if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
@@ -163,9 +139,7 @@ async function runningManualSetup(
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
-    // **既定 3000ms より大きく取る。** テストの実時間の中で窓が自然に閉じて
-    // しまうと「flush させていない」状態を作れない——この歯が測りたいのは
-    // 「flush 前でも本文が残る」ことなので、窓を意図して開けたままにする。
+    // 既定 3000ms より大きく取る: 実時間で窓が閉じると「flush させていない」状態を作れない。
     synthesizedNoticeWindowMs: options.synthesizedNoticeWindowMs ?? 60_000,
   });
 
@@ -203,17 +177,11 @@ describe('#799: closed(failed) の本文が、合流窓を flush させなくて
     expect(line).toBeDefined();
     expect(JSON.stringify(line)).toContain('mgr-a');
 
-    // **合流窓はまだ閉じていない（=flush していない）。** 窓を60秒に取って
-    // あるので、この時点で受信箱には `closed_failed` ぶんの report がまだ
-    // 増えていない——本文が日誌に残ったのが flush の副作用ではないことを
-    // 裏から確かめる（setup 由来の reattach report 1件だけは既に在るので、
-    // 増分で比べる）。
     const reportsAfter = inbox.filter(
       (event) => event.type === 'manager_message' && event.kind === 'report',
     ).length;
     expect(reportsAfter).toBe(reportsBefore);
 
-    // 後片付け（アサーションには使わない）。
     await pool.stop();
   });
 
@@ -229,9 +197,6 @@ describe('#799: closed(failed) の本文が、合流窓を flush させなくて
       }
     });
 
-    // **ここで合流窓を flush する。** `#flushSynthesizedNoticeFor` が書く
-    // 「1件にまとめて配った」の日誌は内訳の1行だけで本文を含まない——歯Aで
-    // 確かめた行が、flush を経ても消えずに残っていることを確かめる。
     await pool.stop();
 
     expect(await journalContains(stores, reason)).toBe(true);
@@ -245,11 +210,6 @@ describe('#799: resume_fallback（#notifyResumeFallback）の拡張文言が、f
 
     fake.resumeFailed('mgr-c', 'sess-mgr-c', reason, true);
 
-    // **`#notifyResumeFallback` だけが持つ拡張文言。** `case 'resume_failed'`
-    // 冒頭の既存 journal は「前のセッション（…）を開き直せなかった: reason」
-    // までしか書かない——「新しいセッションを起こして続けさせた」は
-    // `#notifyResumeFallback` の中でしか組み立てられない文言なので、これが
-    // 日誌に在ることは `#notifyResumeFallback` 自身が journal したことの証拠になる。
     const marker = '新しいセッションを起こして続けさせた';
     await vi.waitFor(async () => {
       if (!(await journalContains(stores, marker))) {
@@ -262,9 +222,6 @@ describe('#799: resume_fallback（#notifyResumeFallback）の拡張文言が、f
     expect(line).toBeDefined();
     expect(JSON.stringify(line)).toContain('mgr-c');
 
-    // **合流窓はまだ閉じていない。** flush していない時点で受信箱にはまだ
-    // `resume_fallback` ぶんの report が立っていないはず
-    // （setup の reattach 通知の1件だけが在る）。
     const reportsAfter = inbox.filter(
       (event) => event.type === 'manager_message' && event.kind === 'report',
     );

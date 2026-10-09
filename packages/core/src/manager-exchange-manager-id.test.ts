@@ -1,9 +1,3 @@
-/**
- * **クローンがマネージャーへ渡した指示（委譲・追送）の `exchange` は、相手の
- * `managerId` を構造として持つ。** 稼働の地図（`GET /topology`）が「どの線に
- * 指示が流れたか」を数える鍵で、`text` の先頭の `[managerId]` を読ませない
- * （表示の文言は変わるが、構造は変わらない）。`text` は従来のまま。
- */
 import type { query as sdkQuery, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
@@ -12,7 +6,6 @@ import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 
-/** 受け答えだけする最小の偽 SDK（委譲の中身は見ない。`close()` で終わる）。 */
 function idleSdk(): typeof sdkQuery {
   return ((params: { prompt: unknown }) => {
     let finish: (() => void) | null = null;

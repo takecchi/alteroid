@@ -12,30 +12,6 @@ import type { InboxEvent, Job, JobStatus } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * **issue #1105 C。「止まった委譲が黙って放置されない。一定時間動きが無ければ、
- * もう一度知らせる」歯。**
- *
- * ## 段0 の結論（このファイルが埋める穴）
- *
- * 既存の「止まっているかどうか」の判定（`manager-activity.ts` の
- * `classifyManagerActivity`）は**一覧を開いたとき（pull）にしか効かない**
- * ——`manager_list` / `flushWithheldReports()` の文面に1行足すだけで、
- * クローンが一覧を見に行かなければ何も届かない。`flushWithheldReports()`
- * 自体も対象が違う（背景処理の完了待ちで畳んだ**報告**が届かない場合の
- * 逃げ道であって、分類器の**拒否**は見ていない）。分類器の拒否
- * （`case 'permission_denied'`）の既存の escalation（`shouldEscalateDenial`。
- * `1, 3, 9, 27…`件目）も**新しい拒否が来ない限り再送されない**——1回だけ
- * 拒否されてそのまま止まった委譲には、二度と知らせが立たない（Issue #830
- * と同じ形）。**時間だけを条件に、クローンへ何かを push する経路はどこにも
- * 無かった**——ここがその経路である。
- *
- * ## 足場（`manager-withheld-reports.test.ts` の `manualRunner` と同じ複製）
- *
- * `RunnerEvent` を直接組み立てて emit する。SDK 層を経由しないので、
- * `manager.ts` の帳面・`#emit`・`renotifyStalledDenials()` を単体で確かめる。
- */
-
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
@@ -64,11 +40,9 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
@@ -189,8 +163,6 @@ async function runningManualSetup(managerId = 'mgr-denial-renotify'): Promise<Ma
   });
 
   await pool.restore();
-  // **`restore()` の知らせ（`#notifyRestored`）を fire-and-forget で待つ**
-  // （`manager-withheld-reports.test.ts` と同じ理由）。
   await vi.waitFor(() => {
     if (inbox.length === 0) throw new Error('reattach の知らせがまだ届いていない');
   });
@@ -202,16 +174,7 @@ async function waitForDenialJournaled(stores: Stores, tool: string): Promise<voi
   await waitForDenialJournaledCount(stores, tool, 1);
 }
 
-/**
- * `denied(...)` を複数回呼ぶ歯（同じ道具×層への2回目以降の拒否）で使う。
- *
- * **`fake.denied()` は fire-and-forget（`#onEvent` は `void` で起こされる）
- * なので、次のコードへ進む前に「その回の拒否がちょうど `count` 件、日誌へ
- * 書き終わっている」ことを確かめる必要がある**——確かめずに時計を進めると、
- * `record.deniedLastAt` の更新（同期）と escalation の受信箱への配達
- * （`await this.#journal(...)` の後ろ、非同期）の間で競走が起き、
- * テストの側が受信箱の件数を数え間違える（実際にこの競走を1回踏んだ）。
- */
+// 日誌への書き終わりを待たずに時計を進めない: `fake.denied()` は fire-and-forget で、escalation の受信箱への配達と競走し件数を数え間違える。
 async function waitForDenialJournaledCount(
   stores: Stores,
   tool: string,
@@ -241,13 +204,11 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
 
     const before = inbox.length;
 
-    // まだ10分に満たない — 何も増えない。
     advance(TEN_MINUTES_MS - 1);
     await pool.renotifyStalledDenials();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(inbox.length).toBe(before);
 
-    // 10分ちょうど — 知らせ直しが立つ。
     advance(1);
     await pool.renotifyStalledDenials();
     const delivered = await vi.waitFor(() => {
@@ -259,7 +220,6 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
     expect(delivered.text).toContain('動きが無い');
     expect(delivered.text).toContain('知らせ直し 1/2 回目');
     expect(delivered.text).toContain('issue #1105 C');
-    // P0（#1598）と同じ答え方の注意（requestId の無い decision を送らない）。
     expect(delivered.text).toContain('requestId` が無く');
     expect(delivered.text).toContain('journal_read');
 
@@ -269,10 +229,6 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
   it('1回目の後さらに30分、まだ動きが無ければ2回目が届く', async () => {
     const { pool, stores, inbox, fake, advance } = await runningManualSetup();
     fake.denied('mgr-denial-renotify', 'Bash');
-    // **拒否の escalation が受信箱へ届き終わるのを待ってから進める**
-    // （このファイル冒頭の `waitForDenialJournaledCount` の doc。待たずに
-    // 進めると、後続の「増えていないはず」の assertion が escalation の
-    // 到着待ちと競走する）。
     await waitForDenialJournaled(stores, 'Bash');
 
     advance(TEN_MINUTES_MS + 1);
@@ -282,13 +238,11 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
     });
     const afterFirst = inbox.length;
 
-    // 30分にはまだ満たない（拒否からの合計経過を30分の1ms前まで進める）——増えない。
     advance(THIRTY_MINUTES_MS - 1 - (TEN_MINUTES_MS + 1));
     await pool.renotifyStalledDenials();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(inbox.length).toBe(afterFirst);
 
-    // 拒否から30分——2回目が立つ。
     advance(2);
     await pool.renotifyStalledDenials();
     const second = await vi.waitFor(() => {
@@ -322,7 +276,6 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
     });
 
     const before = inbox.length;
-    // うんと時間が経っても、ポーラーが何度回っても増えない。
     advance(4 * 60 * 60_000);
     await pool.renotifyStalledDenials();
     await pool.renotifyStalledDenials();
@@ -339,7 +292,6 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
     await waitForDenialJournaled(stores, 'Bash');
 
     advance(5 * 60_000);
-    // 拒否の後に、別の道具が決着した——手は止まっていない。
     fake.toolUse('mgr-denial-renotify', 'manager:mgr-denial-renotify', 'Read');
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -372,16 +324,9 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
 
   it('この拒否自身への P1 の確認が未決（waiting_human）のままなら、知らせ直さない（対照。issue #1772）', async () => {
     const { pool, stores, inbox, fake, advance } = await runningManualSetup();
-    // **`requestId` を拒否の `toolUseId` と同じ値にする** —— `runner.ts` の
-    // `#onPermissionDenied`（issue #1105 P1「1回だけの許可」）は、この拒否と
-    // 同じ `tool_use_id` を `requestId` にして `ask` を上げる。ここが一致して
-    // いなければ「この拒否自身への確認」を再現したことにならない（issue #1772
-    // の判定単位が拒否ごとになった後は、無関係な確認とこの拒否自身の確認を
-    // 取り違えない歯が要る——この対照テストがそれである）。
+    // `requestId` を拒否の `toolUseId` と同じ値にする: 一致しないと「この拒否自身への確認」にならず、無関係な確認との取り違えを測れない。
     fake.denied('mgr-denial-renotify', 'Bash', { toolUseId: 'req-same-denial' });
     await waitForDenialJournaled(stores, 'Bash');
-    // クローンへの確認がまだ1件、答えを待っている——この拒否自身への
-    // P1 の1回だけの許可の確認（`requestId` が拒否の `toolUseId` と一致）。
     fake.ask('mgr-denial-renotify', 'req-same-denial', '1回だけ許可しますか');
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -415,13 +360,6 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
   it('新しい拒否（同じ道具×層）が来ると、古いエピソードを捨てて1回目から数え直す', async () => {
     const { pool, stores, inbox, fake, advance } = await runningManualSetup();
     fake.denied('mgr-denial-renotify', 'Bash');
-    // **1回目の拒否が日誌へ書き終わる（＝ escalation もこの時点で必ず
-    // 済んでいる）のを待ってから時計を進める。** 待たずに進めると、
-    // `record.deniedLastAt` の更新（同期）と escalation の受信箱への配達
-    // （`await this.#journal(...)` の後ろ、非同期）の間で競走が起き、
-    // 受信箱の件数を数え間違える（実際にこの競走を1回踏んだ——`afterFirst`
-    // が escalation 到着前の値で確定してしまい、後続の assertion が
-    // 「増えていないはず」の場面で1件だけ多く見えた）。
     await waitForDenialJournaled(stores, 'Bash');
 
     advance(TEN_MINUTES_MS + 1);
@@ -434,22 +372,15 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
       return inbox.length;
     });
 
-    // 新しい拒否が来た（新しいエピソード）。**同じ理由で、2件目の拒否も
-    // 日誌へ書き終わるのを待つ**（この回は escalate しない——`toolTotal`
-    // が2件目になるだけで `shouldEscalateDenial(2)` は偽——が、
-    // `deniedLastAt` の更新そのものは待つ価値がある）。
     advance(60_000);
     fake.denied('mgr-denial-renotify', 'Bash');
     await waitForDenialJournaledCount(stores, 'Bash', 2);
 
-    // 新しい拒否からまだ10分経っていない（新しい拒否からの合計経過を
-    // 10分の1ms前まで進める）——増えない。
     advance(TEN_MINUTES_MS - 1);
     await pool.renotifyStalledDenials();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(inbox.length).toBe(afterFirst);
 
-    // 新しい拒否から10分——**「1/2」からもう一度**（「2/2」ではない）。
     advance(2);
     await pool.renotifyStalledDenials();
     const second = await vi.waitFor(() => {

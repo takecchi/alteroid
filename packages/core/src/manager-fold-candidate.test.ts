@@ -7,30 +7,16 @@ import {
   type ManagerFoldCandidateInput,
 } from './manager-fold-candidate.js';
 
-/**
- * Issue #1394 段⑤ の歯。**畳む操作は作っていない** ——ここで測るのは
- * 「畳む候補」の判定と表示だけである（`manager_stop` はどこからも呼ばない）。
- *
- * **条件3（`awaitingBackgroundSignalVersionConfirmed`）は、呼び出し元が器の
- * 機能申告を読んで渡す**（#1394 段(C) / PR #1461。名乗りが無ければ `false`。
- * `manager-fold-candidate.ts` の doc）。この純関数は渡された値に従うだけなので、
- * ここでは意図的に `true` を渡して条件1・2・
- * 4・5の判定を単体で測る——さもないと、どの入力を与えても常に `false` にしか
- * ならず、条件を1つずつ外す変異試験が「候補が出る」ケースを1つも作れない
- * （変異試験の生存の4分類3「テストの構造が観測不能」と同じ形になる）。
- * 呼び出し元が機能申告をどう読むかは、`manager.test.ts` 側の歯が確かめる。
- */
 
 const NOW = new Date('2026-09-24T12:00:00.000Z');
 
-/** 全条件を満たす基準入力（条件3も `true` にした、単体測定専用の形）。 */
+// 条件3は意図的に `true` を渡す: `false` のままだと常に候補が出ず、条件を1つずつ外す変異試験が「候補が出る」ケースを作れない。
 function baseInput(overrides: Partial<ManagerFoldCandidateInput> = {}): ManagerFoldCandidateInput {
   return {
     status: 'done',
     hasAwaitingBackgroundSignal: false,
     awaitingBackgroundSignalVersionConfirmed: true,
     activityKind: 'active',
-    // ちょうど7時間前——閾値（6時間）を上回る。
     lastTurnEndedAt: '2026-09-24T05:00:00.000Z',
     ...overrides,
   };
@@ -44,7 +30,6 @@ describe('isManagerFoldCandidate / describeManagerFoldCandidate', () => {
     expect(line).not.toBeNull();
     expect(line).toContain('畳む候補');
     expect(line).toContain('7時間');
-    // **候補であって畳んだのではないことを、文言そのものに書く。**
     expect(line).toContain('いまは表示だけで、畳む操作はしない');
   });
 
@@ -67,9 +52,6 @@ describe('isManagerFoldCandidate / describeManagerFoldCandidate', () => {
     expect(describeManagerFoldCandidate(input, NOW)).toBeNull();
   });
 
-  // ------------------------------------------------------------------
-  // 条件1: status が done であること
-  // ------------------------------------------------------------------
   it.each(['running', 'waiting_human', 'failed', 'lost', 'stopped'] as const)(
     'status が %s なら候補にしない（条件1）',
     (status) => {
@@ -79,27 +61,18 @@ describe('isManagerFoldCandidate / describeManagerFoldCandidate', () => {
     },
   );
 
-  // ------------------------------------------------------------------
-  // 条件2: 背景処理待ちの印が立っていないこと
-  // ------------------------------------------------------------------
   it('背景処理待ちの印が立っていれば候補にしない（条件2）', () => {
     const input = baseInput({ hasAwaitingBackgroundSignal: true });
     expect(isManagerFoldCandidate(input, NOW)).toBe(false);
     expect(describeManagerFoldCandidate(input, NOW)).toBeNull();
   });
 
-  // ------------------------------------------------------------------
-  // 条件3: 器がその印を送る版であると確かめられること（材料が無い）
-  // ------------------------------------------------------------------
   it('条件3が偽なら、他の条件をすべて満たしていても候補にしない', () => {
     const input = baseInput({ awaitingBackgroundSignalVersionConfirmed: false });
     expect(isManagerFoldCandidate(input, NOW)).toBe(false);
     expect(describeManagerFoldCandidate(input, NOW)).toBeNull();
   });
 
-  // ------------------------------------------------------------------
-  // 条件4: classifyManagerActivity が 'active' であること
-  // ------------------------------------------------------------------
   it.each(['unknown', 'stalled-turn-end', 'stalled-tool-use', 'tool-running'] as const)(
     '状態の判定が %s なら候補にしない（条件4。unknown を「手が空いている」へ倒さない）',
     (activityKind) => {
@@ -109,9 +82,6 @@ describe('isManagerFoldCandidate / describeManagerFoldCandidate', () => {
     },
   );
 
-  // ------------------------------------------------------------------
-  // 条件5: 最後のターン終了から6時間以上経っていること
-  // ------------------------------------------------------------------
   it('lastTurnEndedAt が無ければ候補にしない（「取れない」を「空いた」へ倒さない）', () => {
     const input = baseInput({ lastTurnEndedAt: undefined });
     expect(isManagerFoldCandidate(input, NOW)).toBe(false);
@@ -130,9 +100,6 @@ describe('isManagerFoldCandidate / describeManagerFoldCandidate', () => {
     expect(describeManagerFoldCandidate(input, NOW)).toBeNull();
   });
 
-  // ------------------------------------------------------------------
-  // 名乗りの無い器（旧い runner・名乗りを受けていない器）を模した回帰——条件3が false のとき
-  // ------------------------------------------------------------------
   it('器が名乗っていない形（条件3が false）では、他の条件が何であれ候補は1件も出ない', () => {
     const unconfirmedInput: ManagerFoldCandidateInput = {
       status: 'done',

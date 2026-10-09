@@ -13,23 +13,6 @@ import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * **Issue #3189 — report が無いまま `closed(done)` だけが届くと、クローンの受信箱に何も出ない。**
- *
- * 直し方（人間の決定 2026-10-06、案 A）: `closed(done)` で、**このセッションで report を
- * 受け取った記録が無い**ときだけ、受信箱へ1本の知らせを出す（`closed_failed` と同じ合成の
- * 知らせ＝合流窓）。報告の後の idle としての `closed(done)` は今までどおり無音。
- *
- * 判定は `record.job.lastReportAt`（デーモンが report を受け取った時刻）と
- * `record.runnerSessionSince`（器がこの委譲を持ったと確かめた時刻）の前後で行う。
- * 3つの状態を持つ: 受け取った（無音）／一度も無い（知らせる）／判定できない（知らせる。
- * 黙って無音へ倒さない）。
- *
- * 足場（`manualRunner` / `runningManualSetup`）は `manager-closed-dup-and-silent.test.ts`
- * （枝 `hunt/core2-q-closed-dup`）と同じものをこの歯専用に複製してある。実時間の待ちは使わない
- * （`scripts/wallclock-waits-ratchet.test.ts`、#2146）。
- */
-
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
@@ -50,15 +33,12 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -92,8 +72,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
   };
 
   const deliver = (raw: RunnerEvent): void => {
-    // **daemon の境界（runnerEventSchema.safeParse）を実際に通す**（スキーマに無い欄は
-    // ここで黙って落ちるので、emit した中身だけを見ていると境界で消えたことに気づけない）。
+    // 境界（runnerEventSchema.safeParse）を実際に通す: スキーマに無い欄はここで落ちるため。
     const parsed = runnerEventSchema.safeParse(JSON.parse(JSON.stringify(raw)) as unknown);
     if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
     emit?.(parsed.data);
@@ -151,16 +130,13 @@ async function runningManualSetup(
 
   const registry = createRunnerRegistry([fake.runner]);
   const inbox: InboxEvent[] = [];
-  // `runnerSessionSince` はこの時計で書かれる（`lastReportAt` は実時計）。時計を進めて
-  // 「report より後にセッションが置かれた」を作る。
   const clock = { now: Date.now() };
   const pool = createManagerPool({
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
     now: () => clock.now,
-    // 既定 3000ms より大きく取る（テストの実時間の中で窓が自然に閉じないように。
-    // 閉じるのは `pool.stop()` の flush だけ）。
+    // 既定 3000ms より大きく取る: 実時間で窓が閉じないようにし、閉じるのは `pool.stop()` の flush だけにする。
     synthesizedNoticeWindowMs: 60_000,
   });
 
@@ -200,7 +176,7 @@ describe('report 無しの closed(done)（#3189）', () => {
     const before = inbox.length;
     fake.closed('mgr-done', 'done', SESSION_CLOSED);
     await settle();
-    await pool.stop(); // 合流窓・積みを flush しても何も出ないことを確かめる
+    await pool.stop();
     expect(inbox.slice(before)).not.toHaveLength(0);
   });
 
@@ -219,17 +195,15 @@ describe('report 無しの closed(done)（#3189）', () => {
 
   it('(a) このセッションで report が届いた後の closed(done) は、今までどおり受信箱に何も足さない', async () => {
     const { pool, inbox, fake } = await runningManualSetup('mgr-after-report');
-    // 器がこの委譲を持ったと名乗る（`runnerSessionSince` が立つ）→ その後に report が届く。
     fake.raw({ type: 'session', managerId: 'mgr-after-report', sessionId: 'sess-1' });
     await settle();
     fake.raw(reportOf('mgr-after-report'));
     await settle();
     const beforeClosed = inbox.length;
-    // 比較の足場: report 自体は受信箱へ届いている（0件同士の比較にしない）。
     expect(noticesAbout(inbox, 0, 'mgr-after-report').join('')).toContain('調べ終わった。');
     fake.closed('mgr-after-report', 'done', SESSION_CLOSED);
     await settle();
-    await pool.stop(); // 窓を流し切っても何も出ない
+    await pool.stop();
     expect(inbox.slice(beforeClosed)).toHaveLength(0);
   });
 
@@ -239,7 +213,6 @@ describe('report 無しの closed(done)（#3189）', () => {
     await settle();
     fake.raw(reportOf('mgr-new-session'));
     await settle();
-    // 1時間後に resume 等で新しいセッションが置かれた（report より後）。
     clock.now += 60 * 60 * 1000;
     fake.raw({ type: 'session', managerId: 'mgr-new-session', sessionId: 'sess-2' });
     await settle();
@@ -254,14 +227,11 @@ describe('report 無しの closed(done)（#3189）', () => {
     const { pool, stores, inbox, fake, clock } = await runningManualSetup('mgr-turn2-silent');
     fake.raw({ type: 'session', managerId: 'mgr-turn2-silent', sessionId: 'sess-1' });
     await settle();
-    // 1ターン目: report が来る
     fake.raw(reportOf('mgr-turn2-silent'));
     await settle();
-    // 2ターン目の始まり（同じセッション。session の名乗りは無い）
     clock.now += 60 * 60 * 1000;
     const sent = await pool.send('mgr-turn2-silent', '続きをお願い');
     expect(sent.outcome).toBe('delivered');
-    // ターンの始まりは台帳に残る（器の入れ替え・再起動をまたいで判定が効く）
     const persisted = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-turn2-silent');
     expect(persisted?.turnStartedAt).toBe(new Date(clock.now).toISOString());
     const before = inbox.length;
@@ -282,12 +252,10 @@ describe('report 無しの closed(done)（#3189）', () => {
     clock.now += 60 * 60 * 1000;
     const sent = await pool.send('mgr-turn2-reported', '続きをお願い');
     expect(sent.outcome).toBe('delivered');
-    // 2ターン目の report（ターンの始まりより後）
     clock.now += 60 * 1000;
     fake.raw(reportOf('mgr-turn2-reported', { reportId: 'r-turn2' } as Partial<RunnerEvent>));
     await settle();
     const beforeClosed = inbox.length;
-    // 比較の足場: report 自体は受信箱へ届いている（0件同士の比較にしない）
     expect(noticesAbout(inbox, 0, 'mgr-turn2-reported').join('')).toContain('調べ終わった。');
     fake.closed('mgr-turn2-reported', 'done', SESSION_CLOSED);
     await settle();
@@ -299,14 +267,12 @@ describe('report 無しの closed(done)（#3189）', () => {
     const { pool, inbox, fake, clock } = await runningManualSetup('mgr-withheld');
     fake.raw({ type: 'session', managerId: 'mgr-withheld', sessionId: 'sess-1' });
     await settle();
-    // 背景処理の完了待ちで畳んだ報告 → 握り潰されて積みになる（受信箱には出ない）。
     fake.raw(
       reportOf('mgr-withheld', {
         awaitingBackground: { count: 1, breakdown: 'ビルド1本' },
       } as Partial<RunnerEvent>),
     );
     await settle();
-    // その後に新しいセッションが置かれ、そこでは report が無い（＝知らせの条件は満たす）。
     clock.now += 60 * 60 * 1000;
     fake.raw({ type: 'session', managerId: 'mgr-withheld', sessionId: 'sess-2' });
     await settle();
@@ -316,7 +282,6 @@ describe('report 無しの closed(done)（#3189）', () => {
     await pool.stop();
     const notices = noticesAbout(inbox, before, 'mgr-withheld');
     expect(notices).toHaveLength(1);
-    // 積みの知らせ（「背景処理の完了待ちで畳んでいた報告をまとめて配る」）のほうが出ている。
     expect(notices[0]).toContain('背景処理の完了待ちで畳んでいた報告をまとめて配る');
     expect(notices[0]).not.toContain('report を出さないまま');
   });
@@ -328,12 +293,10 @@ describe('report 無しの closed(done)（#3189）', () => {
     first.fake.raw(reportOf('mgr-restart'));
     await settle();
     await first.pool.stop();
-    // 台帳には、器が持ったと確かめた時刻と、report の時刻が残っている。
     const persisted = (await first.stores.jobs.listJobs()).find((j) => j.id === 'mgr-restart');
     expect(persisted?.runnerSessionSince).toBeDefined();
     expect(persisted?.lastReportAt).toBeDefined();
 
-    // デーモンの再起動: 同じ台帳から新しい pool を作る（プロセス内の像は空）。
     const second = await runningManualSetup('mgr-restart', {}, first.stores);
     const before = second.inbox.length;
     second.fake.closed('mgr-restart', 'done', SESSION_CLOSED);
@@ -343,8 +306,6 @@ describe('report 無しの closed(done)（#3189）', () => {
   });
 
   it('(c) 判定できないとき（器がセッションを置いた時刻が無く、report の記録だけが在る）は、無音へ倒さず知らせる', async () => {
-    // 再起動直後の像: `runnerSessionSince` が無い。台帳には昔の report の時刻だけが在る。
-    // その report が「このセッションの」ものかは言えないので、黙らずに知らせる。
     const { pool, inbox, fake } = await runningManualSetup('mgr-unknown', {
       lastReportAt: '2026-09-02T00:00:00.000Z',
     });
