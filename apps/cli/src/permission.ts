@@ -12,34 +12,8 @@ import { createClient } from './client.js';
 import { describeUnreadableRowsList, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 
-/**
- * `alteroid permission` — 人間が承認した Bash 許可（Issue #863「許可をコードでは
- * なくデータにする」）を、CLI から棚卸しする。
- *
- * **入口の等価性**（PRD「インターフェース」——CLI・HTTP API・Web UI の3つで同じ
- * ことができる）を埋める側の1本。`GET /permission-grants` /
- * `POST /permission-grants/:id/revoke`（`apps/daemon/src/app.ts`）は PR #1491
- * で足されたが、人間が読む面（CLI・Web UI）からの入口が無かった——#863 が
- * #193 から引き継いだ残項目の1つ（「CLI / Web UI（入口の等価性）」）。
- *
- * **`request_permission` / 許可を記録する側はここに無い。** あちらはクローンの
- * 道具（`packages/core/src/tools.ts`）と人間の承認（`answerApproval`）が持ち、
- * ここは記録された後の一覧・取り消しだけを持つ——Issue #863 C 節「クローンが
- * 許可の DB へ直接書けてはいけない」の境界の外側（人間が読む面）である。
- *
- * **規則の広さの段階表示**（#193 から畳んだ残項目のもう1つ）。`Bash(gh pr
- * merge:*)` と `Bash(gh:*)` は同じ「前方一致」という書式でも、実際に通す範囲は
- * 桁違いに違う——見分けられないと、棚卸しをしても「広すぎる許可」に気づけない。
- * 判定は `describePermissionRuleBreadth`（`@alteroid/core`。純関数、
- * `permission-rule.test.ts` で照合器と同じ意味論であることを固定してある）に
- * 寄せ、ここでは日本語の文言へ変換するだけ——`access.ts` の `describeGrantedBy`
- * と同じ役割分担（判定は共有、文言は入口ごと）。
- */
-
 export interface PermissionListOptions {
-  /** 取り消し済みも含めて全部見る。既定は有効な（`revokedAt` の無い）ものだけ。 */
   all?: boolean;
-  /** 「長く使われていない」の起点になる現在時刻。テストが時計を注入する。既定は今。 */
   now?: Date;
 }
 
@@ -53,7 +27,6 @@ export async function permissionListCommand(options: PermissionListOptions = {})
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['permission-grants'].$get();
   if (!response.ok) {
-    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3446）。
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     throw new Error(
@@ -62,11 +35,8 @@ export async function permissionListCommand(options: PermissionListOptions = {})
   }
   const { grants, rowsUnreadable } = (await response.json()) as {
     grants: PermissionGrant[];
-    /** 読めない行（1件でも在るときだけ載る。issue #2536）。id と不正な欄名だけで、本文は無い。 */
     rowsUnreadable?: { count: number; rows: { id: string; reason: string }[] };
   };
-  // **読めない行は一覧の前に言う**（0件なら何も出ない）。読めない行しか無いのに「許可は無い」と
-  // 言わないために、下の「無い」の文言もこれで言い分ける。
   stdout.write(
     describeUnreadableRowsList({
       noun: '許可',
@@ -80,13 +50,9 @@ export async function permissionListCommand(options: PermissionListOptions = {})
 
   if (shown.length === 0) {
     if (rowsUnreadable !== undefined && grants.length === 0) {
-      // 読めない行が在るので「許可は無い」とは言えない（issue #2536）。
       stdout.write('読めた許可は無い（許可が無い、とは言えない）。\n');
       return;
     }
-    // Web（`apps/web/app/routes/permissions.tsx` の `PermissionsBody`）と同じ
-    // 条件・文言。`--all` を付けても取り消し済みが1件も無ければ増える見込みが
-    // 無いので、案内は「取り消し済みが在るとき」だけに絞る（#1541）。
     if (options.all === true) {
       stdout.write('許可はまだ1件もありません。\n');
     } else if (grants.length > 0) {
@@ -101,7 +67,6 @@ export async function permissionListCommand(options: PermissionListOptions = {})
 
   const active = grants.filter((grant) => grant.revokedAt === undefined).length;
   const revoked = grants.length - active;
-  // 長く使われていない許可の要約（Issue #1804）。目立たせるだけで、取り消しは人が決める。
   const staleCount = shown.filter(
     (grant) => assessPermissionGrantStaleness(grant, now).stale,
   ).length;
@@ -117,27 +82,16 @@ export async function permissionListCommand(options: PermissionListOptions = {})
   stdout.write('\n');
 }
 
-/**
- * 許可を取り消す。**確認する**（Issue #3141。`confirm.ts`）。取り消しを元に戻す口は無い
- * （`PermissionGrantStore` に取り消しを外す操作が無く、許可は `request_permission` の
- * 承認でしか増えない）。同じ許可がほしければ、クローンに頼み直して承認し直す。
- */
 export async function permissionRevokeCommand(
   id: string,
   options: { yes?: boolean } = {},
   io?: ConfirmIo,
 ): Promise<void> {
   const target = await resolveTarget();
-  // 未ログインの note も例外にする（#2456、クローン teto の判断 2026-09-30）。
-  // 何もせず 0 で返すと「取り消した」と誤読される。読み取り系（一覧）は今のまま。
+  // 未ログインの note も例外にする: 何もせず 0 で返すと「取り消した」と誤読される。
   if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
-  // **確認の前に、在るかを一覧で読む**（Issue #3838。`memory remove` の #3820 と同じ形）。単体の GET は
-  // 無いので `GET /permission-grants` を使う。無いものに「取り消せません。yes と入力してください」を
-  // 出さず、確認も POST も出さずに、POST の 404 と同じ文言で失敗する。
-  // **読めない行（`rowsUnreadable`）に在る id は「無い」と言わない** — 確認へ進み、POST の 409
-  // （「読めない形で在る」の案内）に任せる（案内の持ち主はデーモン。ここで再実装しない）。
-  // 取り消し済みの id は、この PR では変えない（確認へ進み、POST は 200）。
+  // 読めない行（`rowsUnreadable`）に在る id は「無い」と言わない: 確認へ進み、POST の 409 の案内（持ち主はデーモン）に任せる。
   const listing = await client['permission-grants'].$get();
   if (!listing.ok) {
     const described = describeAuthFailure(listing.status, target);
@@ -160,9 +114,6 @@ export async function permissionRevokeCommand(
     io,
   );
   const response = await client['permission-grants'][':id'].revoke.$post({ param: { id } });
-  // **失敗を握り潰さない。** 取り消しは安全側への操作なので「取り消せたか」を
-  // 終了コードで確実に区別する（`access.ts` の revoke / `inbox.ts` の remove と
-  // 同じ判断——`grep -Fn -- '消えたのか消えなかったのか' apps/cli/src/inbox.ts`）。
   if (!response.ok) {
     if (response.status === 404) throw new Error(`該当する許可がありません: ${id}`);
     const described = describeAuthFailure(response.status, target);
@@ -172,27 +123,16 @@ export async function permissionRevokeCommand(
     );
   }
   stdout.write(`許可を取り消しました: ${id}\n`);
-  // **即座に効く。** `#onPreToolUse` は毎回ストアを引き直すので、キャッシュされた
-  // 古い許可が生き残ることはない（`clone.ts` の doc）。
   stdout.write('（次の Bash 呼び出しから効きます。取り消し済みなら重ねて叩いても失敗しません）\n');
 }
 
-/**
- * 読めない許可の行を、id を指して消す（`POST /permission-grants/unreadable/remove`。
- * issue #2440）。読めない行（版ずれ・手編集）は `permission revoke` が 409 で触らないので、
- * 片付ける口はこれだけ。**id は `permission list` が読めない行として出す**
- * （`GET /permission-grants` の `rowsUnreadable.rows[].id`。issue #2536）。**id が取れない行は
- * この口では消せない**（`permission-grants.json` を手で直す）。指した id が1つでも読めない行に
- * 無ければ、デーモンが何も消さずに断る。**行の中身は出さない**（id と件数だけ）。
- */
+/** 行の中身は出さない（id と件数だけ）。id が取れない行はこの口では消せない（`permission-grants.json` を手で直す）。 */
 export async function permissionRemoveUnreadableCommand(
   ids: readonly string[],
   options: { yes?: boolean } = {},
 ): Promise<void> {
   const target = await resolveTarget();
-  // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
-  // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
   await confirmIrreversible(
     `読めない許可の行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
     options,
@@ -221,7 +161,6 @@ export async function permissionRemoveUnreadableCommand(
   );
 }
 
-/** 規則の広さを日本語の文言へ（判定は `describePermissionRuleBreadth` に寄せる）。 */
 function describeBreadth(rule: string): string {
   const breadth = describePermissionRuleBreadth(rule);
   switch (breadth.level) {

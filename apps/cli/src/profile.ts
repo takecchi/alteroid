@@ -19,38 +19,18 @@ import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from
 import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
-/**
- * `alteroid profile` — 実行環境プロファイル（人間の `.zprofile` に当たるもの）。
- *
- * **これは「環境変数を器に増やす」の代わりである。** 道具の鍵を1つ足すたびに
- * `compose.yaml` を直して器を焼き直すのは、人間が自分の端末で `~/.zshenv` に
- * 1行足せば済ませていることを実装作業に変えてしまっている、ということである。
- * それはデグレードなので、口をここに開けてある。
- *
- * **プロファイルは名前付きの行の集まりである**（`/etc/profile.d` と同じ。名前を省くと
- * `default`）。行ごとに本文（何行でもよい）と撒く先を持ち、名前のコード単位順につなげて効く。
- * 置いたものは既定ではクローンにもマネージャーにも作業者にも効き（撒く先 `--scope`
- * で `app`＝クローンだけ / `runner`＝マネージャー・作業者だけに絞れる。環境変数
- * （`alteroid credential set --scope`）と同じ3値）、**器を作り直さずに
- * 差し替えられる**（これから起こす仕事には即座に。走行中の仕事は `gh` / `git` が
- * 次の呼び出しから拾う）。
- */
-
-/** 失敗の応答の `error` / `detail` を画面に出す長さの上限（伏せた後に切る）。 */
 const ERROR_LIMIT = 512;
 const DETAIL_LIMIT = 2000;
 
 /**
- * 行の名前の形。**`packages/core/src/store.ts` の `PROFILE_ENTRY_NAME` と揃える**
- * （CLI は core 本体を import せず、軽い subpath だけを使う。ずれてもデーモンが 400 で
- * 弾くので、ここは**通信の前に分かりやすく落とす**ためのもの）。
+ * `packages/core/src/store.ts` の `PROFILE_ENTRY_NAME` と揃える。CLI は core 本体を import しない
+ * （軽い subpath だけを使う）ので写してあり、ずれてもデーモンが 400 で弾く。
  */
 const PROFILE_ENTRY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const EMPTY_BODY_MESSAGE =
   '本文が空では行を置けない。外すなら alteroid profile rm <名前>（全部外すなら clear）。';
 
-/** 名前を省略したときの行（旧来の「1本のプロファイル」がここへ載る）。 */
 const DEFAULT_ENTRY = 'default';
 
 type ProfileScope = 'all' | 'app' | 'runner';
@@ -75,21 +55,18 @@ interface ApplyResult {
 
 interface UpdateView {
   updatedAt: string;
-  /** 古いデーモン（旧 `PUT /profile`）の応答には無い。 */
   entries?: ProfileEntryView[];
   composed?: { clone: ProfileView['clone']; runner: ProfileView['runner'] };
   clone: ApplyResult;
   runners: (ApplyResult & { runnerId: string })[];
 }
 
-/** `--scope` を検査する。省略は undefined（＝既存の行の撒く先を保つ）。 */
 function parseScope(raw: string | undefined): ProfileScope | undefined {
   if (raw === undefined) return undefined;
   if (raw === 'all' || raw === 'app' || raw === 'runner') return raw;
   throw new Error(`--scope は all / app / runner のいずれかである（渡されたのは ${raw}）`);
 }
 
-/** 名前を検査する。省略は `default`。**通信の前に落とす。** */
 function parseName(raw: string | undefined): string {
   const name = raw ?? DEFAULT_ENTRY;
   if (!PROFILE_ENTRY_NAME.test(name)) {
@@ -100,24 +77,16 @@ function parseName(raw: string | undefined): string {
   return name;
 }
 
-/**
- * `GET /profile` を読み、**古いデーモンの形（`entries` 無し）も `default` 1行として**
- * 読める形にする（`@alteroid/logic` の `normalizeProfile`）。新しい CLI から古い
- * デーモンを叩く窓（デーモンは1日1回夜に入る）で落ちないための実行時の倒れ先である。
- */
+/** 古いデーモンの形（`entries` 無し）も `default` 1行として読める形にする。新しい CLI から古いデーモンを叩く窓で落ちないため。 */
 async function fetchProfile(target: Target): Promise<ProfileView> {
   return normalizeProfile((await request(target, '/profile')) as ProfileState);
 }
 
-/** 旧形式のとき、行ごとの操作ができない旨を出す。 */
 function noteLegacy(profile: ProfileView): void {
   if (profile.legacy) stdout.write(`（${LEGACY_PROFILE_NOTICE}）\n`);
 }
 
-/**
- * 古いデーモンで行ごとの操作（名前が default でない・撒く先を指定する）をしようとしたとき、
- * 生の 404 / 400 にせず「サーバが古い」と分かる文言で落とす。
- */
+/** 生の 404 / 400 にせず「サーバが古い」と分かる文言で落とす。 */
 function assertLegacySupports(profile: ProfileView, name: string, scope?: ProfileScope): void {
   if (!profile.legacy) return;
   if (name !== 'default' || (scope !== undefined && scope !== 'all')) {
@@ -132,7 +101,6 @@ function describeEntry(entry: ProfileEntryView): string {
   );
 }
 
-/** 置かれている行の一覧（**本文は出さない**）。 */
 export async function profileListCommand(): Promise<void> {
   const target = await resolveTarget();
   if (target.note !== null) {
@@ -151,10 +119,7 @@ export async function profileListCommand(): Promise<void> {
   stdout.write('（名前のコード単位順につなげて効きます。本文は alteroid profile show <名前>）\n');
 }
 
-/**
- * 1行の本文を出す。**標準出力は本文だけ**（パイプで `set` へ戻せる。撒く先は
- * `list` / `status` で見る）。
- */
+/** 標準出力は本文だけ（パイプで `set` へ戻せる）。 */
 export async function profileShowCommand(name?: string): Promise<void> {
   const wanted = parseName(name);
   const target = await resolveTarget();
@@ -190,7 +155,6 @@ export async function profileStatusCommand(): Promise<void> {
     for (const entry of profile.entries) {
       stdout.write(`  ${describeEntry(entry)} (sha256 ${entry.sha256})\n`);
     }
-    // **つないだあとの指紋を、掛かる側ごとに出す。** 届いた先の指紋はこれと見比べる。
     if (!profile.legacy)
       stdout.write(
         `クローン用（合成後）: ${profile.clone.sha256 === undefined ? '掛かる行なし' : `${String(profile.clone.bytes ?? 0)} バイト (sha256 ${profile.clone.sha256})`}\n`,
@@ -203,9 +167,6 @@ export async function profileStatusCommand(): Promise<void> {
 
   noteLegacy(profile);
 
-  // **どの runner に何が届いているかを見せる。** 見えないと「置いた」「効いて
-  // いない」のすれ違いが起きて、鍵の権限の問題なのか配布の問題なのかを誰も
-  // 切り分けられない（鍵の指紋を出しているのと同じ理由）。
   const { runners } = (await request(target, '/runners')) as {
     runners: {
       label: string;
@@ -219,9 +180,7 @@ export async function profileStatusCommand(): Promise<void> {
   for (const runner of runners) {
     // 繋がるまで runner_id は分からない。宛先（label）なら登録した時点で言える。
     const name = runner.runnerId ?? runner.label;
-    // **runner に掛かる行が0なら、載っていないのが正しい。** 食い違いとして見せると、
-    // 直せない（直すと撒く先の意味が消える）ものを直させる。逆に載っているなら、
-    // 外しの降ろしが済んでいないので、それは言う。
+    // runner に掛かる行が0なら、載っていないのが正しい: 食い違いとして見せると、直せないものを直させる。
     if (runner.profile === undefined) {
       stdout.write(
         profile.entries.length > 0 && expected === undefined
@@ -242,20 +201,13 @@ export async function profileStatusCommand(): Promise<void> {
   }
 }
 
-/**
- * ファイルか標準入力から、1行を丸ごと置き換える。
- *
- * **既に在る行を置き換えるときだけ確認する**（Issue #3201。`confirm.ts`）。在るかは、この
- * コマンドが元から読んでいた `GET /profile`（`fetchProfile`）の行一覧で決める（新しい呼び出しは
- * 足していない）。置き換えると前の本文は残らない（控えるなら `profile show`）。確認は入力を
- * 読む前に出す（標準入力を読み切ると、端末の `yes` を聞けない）。
- */
+/** 確認は入力を読む前に出す: 標準入力を読み切ると、端末の `yes` を聞けない。 */
 export async function profileSetCommand(
   nameArg: string | undefined,
   options: { file?: string; scope?: string; yes?: boolean },
   io?: ConfirmIo,
 ): Promise<void> {
-  // 先に検査する（標準入力を読み終えてから「綴りが違う」で落とさない）。
+  // 先に検査する: 標準入力を読み終えてから「綴りが違う」で落とさない。
   const name = parseName(nameArg);
   const scope = parseScope(options.scope);
   const target = await resolveTarget();
@@ -274,12 +226,10 @@ export async function profileSetCommand(
     options.file === undefined || options.file === '-'
       ? await readAll()
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
-  // 空の本文は通信の前に断る（`put` も同じ検査を持つ）。
   if (script.trim().length === 0) throw new Error(EMPTY_BODY_MESSAGE);
   await put(name, script, target, scope, profile.legacy);
 }
 
-/** いま置いてある行を `$EDITOR` で開いて、閉じたら反映する。 */
 export async function profileEditCommand(
   nameArg?: string,
   options: { scope?: string } = {},
@@ -300,19 +250,16 @@ export async function profileEditCommand(
     dir,
     path,
     initial: current !== undefined ? current.script : TEMPLATE,
-    // 中身は人間が置いた鍵そのものになりうる。一時ファイルでも絞る。
+    // 中身は人間が置いた鍵そのものになりうるので、一時ファイルでも絞る。
     mode: 0o600,
     resume,
     alternative: 'alteroid profile set <name> --file <path>',
   });
-  // **成功したときと「変更なし」のときだけ、一時ディレクトリを消す。** 失敗（保存・空の本文の断り）は
-  // 人間が書いた内容を 0600 のまま残し、場所と続きのやり方を言う（#3453）。
   await keepDraftOnFailure(dir, path, resume, async () => {
     const edited = await readFile(path, 'utf8');
 
     // 撒く先だけを変えるのも更新である（本文が同じでも、外れる側が出る）。
     const scopeChanged = current !== undefined && scope !== undefined && scope !== current.scope;
-    // **新しく作る行は、雛形のまま閉じたら「何も書かなかった」である**（雛形は案内文）。
     if (current === undefined ? edited === TEMPLATE : edited === current.script && !scopeChanged) {
       stdout.write('変更はありません。\n');
       return;
@@ -321,10 +268,6 @@ export async function profileEditCommand(
   });
 }
 
-/**
- * 1行を外す。他の行は変えない。**戻せない操作なので確認する**（Issue #3141。`confirm.ts`）。
- * 行の本文（スクリプト）は外すと残らない。外す前に `profile show <名前>` で控えられる。
- */
 export async function profileRemoveCommand(
   nameArg: string,
   options: { yes?: boolean } = {},
@@ -335,9 +278,7 @@ export async function profileRemoveCommand(
   if (target.note !== null) throw new Error(target.note);
   const profile = await fetchProfile(target);
   assertLegacySupports(profile, name);
-  // **確認の前に、在るかを見る**（Issue #3838）。上で元から読んでいる行の一覧を使う（新しい呼び出しは
-  // 足していない）。無い名前には確認も DELETE も出さず、DELETE の 404 と同じ文言で失敗する。
-  // **古いデーモン（`legacy`）は見ない**——行の一覧が旧形式の合成で、空の PUT へ倒す既存の挙動のまま。
+  // 古いデーモン（`legacy`）は見ない: 行の一覧が旧形式の合成で、空の PUT へ倒す挙動のまま。
   if (!profile.legacy && !profile.entries.some((row) => row.name === name)) {
     throw new Error(`プロファイルに行 ${name} は無い`);
   }
@@ -346,7 +287,6 @@ export async function profileRemoveCommand(
     options,
     io,
   );
-  // 古いデーモンには DELETE /profile/:name が無い。default の行は全部外す口（空の PUT）へ倒す。
   const result = (await (profile.legacy
     ? request(target, '/profile', { method: 'PUT', body: JSON.stringify({ script: '' }) })
     : request(target, `/profile/${encodeURIComponent(name)}`, { method: 'DELETE' }))) as UpdateView;
@@ -361,15 +301,10 @@ export async function profileRemoveCommand(
   failOnPartialPush(result);
 }
 
-/**
- * 全行を外す（旧来の `clear` の意味）。**旧来の全文置換の口（`PUT /profile`、空）を
- * 1回で叩く** — 行ごとに `DELETE` を並べると、途中で落ちたとき半端に残る。
- */
+/** 空の `PUT /profile` を1回で叩く: 行ごとに `DELETE` を並べると、途中で落ちたとき半端に残る。 */
 export async function profileClearCommand(options: { yes?: boolean } = {}): Promise<void> {
   const target = await resolveTarget();
-  // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
-  // **戻せない操作なので確認する**（Issue #3141。`confirm.ts`）。全行の本文が残らない。
   await confirmIrreversible(
     'プロファイルの全行を外します。行の本文は残りません（控えるなら alteroid profile show）。',
     options,
@@ -388,10 +323,7 @@ export async function profileClearCommand(options: { yes?: boolean } = {}): Prom
   failOnPartialPush(result);
 }
 
-/**
- * 一部の runner へ反映できていなければ、見出しと台ごとの結果を出した**後で**例外にする
- * （`index.ts` が stderr へ出して終了コード 1。保存は済んでいる）。
- */
+/** 見出しと台ごとの結果を出した後で例外にする（保存は済んでいる）。 */
 function failOnPartialPush(result: UpdateView): void {
   if (!hasRunnerPushFailure(result)) return;
   throw new Error(
@@ -400,7 +332,6 @@ function failOnPartialPush(result: UpdateView): void {
 }
 
 function describeComposed(result: UpdateView): void {
-  // 古いデーモンの応答には無い。
   if (result.composed === undefined) return;
   const { clone, runner } = result.composed;
   stdout.write(
@@ -419,12 +350,10 @@ async function put(
     throw new Error(EMPTY_BODY_MESSAGE);
   }
   const target = known ?? (await resolveTarget());
-  // 古いデーモン（行ごとの口が無い）へは、従来の全文置換 PUT /profile {script} へ倒す。
   const result = (await (legacy
     ? request(target, '/profile', { method: 'PUT', body: JSON.stringify({ script }) })
     : request(target, `/profile/${encodeURIComponent(name)}`, {
         method: 'PUT',
-        // 省略は「既存の行の撒く先を保つ」（デーモン側の約束）。
         body: JSON.stringify({ script, ...(scope === undefined ? {} : { scope }) }),
       }))) as UpdateView;
 
@@ -442,11 +371,7 @@ async function put(
   report('クローン', result.clone);
   for (const runner of result.runners) report(runner.runnerId, runner);
 
-  // **どこまで届いたかを正直に言う。** 器を焼き直す手順を探させないために
-  // 「即座に効く」ことは言うが、走行中の仕事に全部届くとは言わない — `BASH_ENV`
-  // は非対話の bash なら `bash -c` でも読まれるものの、実測では届く相手と届かない
-  // 相手が混在する（`packages/core/src/profile.ts` のモジュール doc）。
-  // ここを大きく書くと、効いていない相手が居ることに誰も気づけなくなる。
+  // 走行中の仕事に全部届くとは言わない: 実測では届く相手と届かない相手が混在する（`packages/core/src/profile.ts` のモジュール doc）。
   stdout.write('（これから起こす仕事には即座に効きます。走行中の仕事は gh / git だけが\n');
   stdout.write('  次の呼び出しから拾います — それ以外は次の仕事から）\n');
   failOnPartialPush(result);
@@ -461,7 +386,6 @@ function report(label: string, result: ApplyResult): void {
         : `  ${label}: 反映しました（${names.join(' ')}）\n`,
     );
   } else {
-    // 失敗を小さく出さない。ここを見落とすと、以後ずっと古い環境で走り続ける。
     stdout.write(`  ${label}: 反映できませんでした — ${result.error ?? '理由不明'}\n`);
   }
   const output = result.output ?? '';
@@ -483,21 +407,12 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
   });
 
   if (!response.ok) {
-    // **403 の意味が `access` とは違うことがある。** ここは基本「実行環境の
-    // 持ち主か」を見ているが、**403 はそれ以外の理由でも返る**——ログイン済み
-    // だが未 grant のとき、デーモンの `authenticate` が別の本文で 403 を返す。
-    // 本文を見ずに固定の文言を出すと、未 grant の人にまで「持ち主だけです」と
-    // 案内してしまい、`access grant` で直る状況で直らない手順を勧めることに
-    // なる（許可が持っているのは「使ってよい」の2値だけで、実行環境そのものを
-    // 差し替える資格はそこに含まれない、という線引きは変えていない——本文で
-    // 出し分けるようにしただけである）。
+    // 403 は持ち主でない以外の理由でも返る（ログイン済みだが未 grant）。本文を見ずに固定の文言を出すと、
+    // 未 grant の人に直らない「持ち主だけです」を案内してしまうので、本文で出し分ける。
     if (response.status === 403) {
       const body = await response.json().catch(() => ({}));
       const kind = forbiddenKindOf(body);
-      // **2026-09-24（#1122）に `/profile` の門は `requireOwner` へ移った** ⟹ 宣言して
-      // いないアカウントの 403 はこの本文で返る。案内は `credential.ts` と同じ
-      // （`alteroid access owner <id>`）。下の `not_operator` の枝は、移す前の
-      // デーモンと繋いだときのために残してある。
+      // `not_operator` の枝は、門が `requireOwner` へ移る前のデーモンと繋いだときのために残してある。
       if (kind === 'not_declared_owner') {
         throw new Error(
           describeAuthFailure(403, target, kind) ??
@@ -518,10 +433,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
             'このアカウントには alteroid を使う許可がありません。',
         );
       }
-      // **⭐ `kind === 'unknown'`——本文からはどちらの理由かが判別できない。**
-      // 「器の中で実行しろ」と「access grant しろ」は意味も解決策も正反対で、
-      // どちらかを当てずっぽうで出せば半分の状況では必ず嘘になる。分からない
-      // ときは、解決策を書かずに止める。
+      // 理由が判別できないときは解決策を書かない: 「器の中で実行しろ」と「access grant しろ」は正反対で、当てずっぽうだと半分は嘘になる。
       throw new Error(
         '実行環境プロファイルへのアクセスが拒否されました（403）。理由を判別でき' +
           'なかったため、次にすべきことは案内しません。',
@@ -534,9 +446,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
       detail?: unknown;
     };
     if (typeof body.error === 'string') {
-      // **伏せてから切る**（issue #2418）。`detail` はデーモンが評価したシェルの
-      // stderr で、bash は構文エラーで入力の行そのもの（`export GH_TOKEN=…`）を
-      // 引用する。message は画面に出る。
+      // 伏せてから切る: `detail` はシェルの stderr で、bash は構文エラーで入力の行そのもの（`export GH_TOKEN=…`）を引用する。
       const error = redactedExcerpt(body.error, ERROR_LIMIT, process.env);
       throw new Error(
         typeof body.detail === 'string' && body.detail.length > 0
@@ -549,12 +459,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
   return response.json();
 }
 
-/**
- * 空から始めるときの案内。
- *
- * **「確認が要る行為の一覧」を書かせない。** ここは実行環境の宣言であって、
- * 何をしてよいかの表ではない（それはクローンが記憶で判断する）。
- */
+/** 「確認が要る行為の一覧」を書かせない: ここは実行環境の宣言で、何をしてよいかの表ではない（クローンが記憶で判断する）。 */
 const TEMPLATE = `# alteroid 実行環境プロファイル（人間の ~/.zprofile に当たるもの）
 #
 # ここに書いたものは、既定ではクローン・マネージャー・作業者のすべてに効きます

@@ -6,25 +6,8 @@ import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
 
 /**
- * `alteroid access` — 誰が alteroid を使えるかを決める。
- *
- * **持つのは許可されているか否かの2値だけである。** 「chat は可・記憶の編集は不可」
- * のような行為別のスコープを足したくなったら手を止める — それは PRD「権限境界」が
- * 禁じている「確認が要る行為の一覧」と同じ形であり、クローンが記憶で下すべき判断を
- * 設定で置き換えることになる。ここが決めるのは入口を通すか否かだけで、通った後に
- * 何を人間へ確認するかはクローンの判断のままである。
- *
- * 叩けるのは**実行環境の持ち主**（`~/.alteroid/state/daemon.json` を読める者）と、
- * **alteroid を使う許可を得たアカウント**（2026-09-06 に同格にした）。
- *
- * **ただし「最初の1人」を通すのは必ず実行環境の持ち主である** — 誰も許可されて
- * いない状態では、許可されたアカウントという資格がそもそも存在しないからである。
- *
- * **許可できるアカウントの数に上限は無い**（2026-09-09 のオーナー決定。それ以前は
- * 高々1つで、2人目の grant は 409 だった）。同じ人間が複数の Google アカウントから
- * 入れる。**それでもマルチユーザーではない** — 利用者ごとにデータを分けないことが
- * 非ゴールの中身であり（docs/PRD.md「スコープ外」）、許可を持つ全員が同じ1組の
- * 記憶・日誌・会話を見る。使わせたくなくなったら `revoke` する。
+ * 許可の有無の2値だけを持つ。「chat は可・記憶の編集は不可」のような行為別のスコープを足さない:
+ * PRD「権限境界」が禁じる「確認が要る行為の一覧」と同じ形になり、クローンが記憶で下す判断を設定で置き換えるため。
  */
 
 interface AccountView {
@@ -34,34 +17,15 @@ interface AccountView {
   createdAt: string;
   lastLoginAt: string | null;
   grantedAt: string | null;
-  /**
-   * 誰が許可したか（`'operator'` か、許可を与えたアカウントの id）。表示は
-   * `describeGrantedBy()` を通す。
-   */
   grantedBy: string | null;
   granted: boolean;
-  /**
-   * 実行環境の持ち主として宣言された日時（issue #1198）。`null` なら未宣言。
-   * **注記: 資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。**
-   * 下の「宣言済みなら…通る」は #2862 以前の記述（いまは許可済みなら宣言の有無によらず通る）。
-   * 立てる／解くのは `alteroid access owner <id>` / `--revoke`
-   * （`POST /access/:accountId/owner` / `.../owner/revoke`。`requireOperator`
-   * で非伝播——許可されたアカウントからは叩けない）。宣言済みなら
-   * `alteroid credential set` / `alteroid reset` が通る（`requireOwner`）。
-   */
   ownerDeclaredAt: string | null;
   identities: { provider: string; email: string | null; lastLoginAt: string }[];
 }
 
 /**
- * `grantedBy` を人間が読む形にする。
- *
- * **Web UI の `describeGrantedBy()`（`apps/web/app/routes/access.tsx`）と同じ3分岐・
- * 同じ文言である。** 入口ごとに言い方が変わらないよう、片方を変えるならもう片方も
- * 変える（置き場所を共有するパッケージがまだ無いので、共通化はしていない）。
- * `'operator'` は実行環境の持ち主を表す固定の値で、それ以外は許可を与えた
- * アカウントの id である。id は名前へ解決しない——そのアカウントが一覧から既に
- * 消えていることがありうるため。
+ * Web UI の `describeGrantedBy()`（`apps/web/app/routes/access.tsx`）と同じ3分岐・同じ文言。
+ * 片方を変えるならもう片方も変える。id は名前へ解決しない: そのアカウントが一覧から既に消えていることがありうるため。
  */
 function describeGrantedBy(grantedBy: string | null): string {
   if (grantedBy === null) return '不明';
@@ -73,10 +37,8 @@ export async function accessListCommand(now: number = Date.now()): Promise<void>
   const target = await resolveTarget();
   const { accounts, rowsUnreadable } = (await request(target, '/access')) as {
     accounts: AccountView[];
-    /** 読めない行（1件でも在るときだけ載る。issue #2536）。id と不正な欄名だけで、email などは無い。 */
     rowsUnreadable?: { count: number; rows: { id: string; reason: string }[] };
   };
-  // **読めない行は一覧の前に言う**（0件なら何も出ない）。
   stdout.write(
     describeUnreadableRowsList({
       noun: 'アカウント',
@@ -88,7 +50,6 @@ export async function accessListCommand(now: number = Date.now()): Promise<void>
 
   if (accounts.length === 0) {
     if (rowsUnreadable !== undefined) {
-      // 読めない行が在るので「誰もログインしていない」とは言えない。
       stdout.write('読めたアカウントは無い（誰もログインしていない、とは言えない）。\n');
       return;
     }
@@ -98,19 +59,10 @@ export async function accessListCommand(now: number = Date.now()): Promise<void>
 
   for (const account of accounts) {
     const name = account.email ?? account.displayName ?? '(名前なし)';
-    // **注記: `[owner]` は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。表示だけ残してある。**
-    // **宣言済みかどうかの印を足す**（issue #1198）。`[owner]` は
-    // `ownerDeclaredAt !== null` のときだけ——`granted` とは独立の印である
-    // （宣言は許可の上位互換ではなく別の資格なので、`[許可]` の隣に並べる）。
     stdout.write(
       `${account.granted ? '[許可]' : '[未許可]'}${account.ownerDeclaredAt !== null ? '[owner]' : ''} ${name}\n`,
     );
     stdout.write(`  id: ${account.id}\n`);
-    // **作成（`createdAt`）を足す。** `AccountView` は元から持っていて（型に
-    // 在る）、ここが出していなかっただけである（#214）。`createdAt` は必須
-    // なので null チェックは要らない。
-    // **経過（issue #2141 段1）を横に添える。** ISO はそのまま残す——曖昧さが
-    // 無く、コピーしてほかの道具へ渡せる。
     stdout.write(`  作成: ${account.createdAt}（${formatElapsedAgo(account.createdAt, now)}）\n`);
     const via = account.identities
       .map(
@@ -120,9 +72,6 @@ export async function accessListCommand(now: number = Date.now()): Promise<void>
       .join(', ');
     if (via.length > 0) stdout.write(`  ログイン手段: ${via}\n`);
     if (account.lastLoginAt !== null) stdout.write(`  最終ログイン: ${account.lastLoginAt}\n`);
-    // **誰が許可したかを日時の後ろに括弧で添える**（#1398 c7-3）。応答は元から
-    // `grantedBy` を持っていて、Web UI（`apps/web/app/routes/access.tsx`）は
-    // PR #1025 から同じ形で出している。ここが出していなかっただけである。
     if (account.grantedAt !== null) {
       stdout.write(
         `  許可した日時: ${account.grantedAt}（${describeGrantedBy(account.grantedBy)}）\n`,
@@ -138,10 +87,7 @@ export async function accessListCommand(now: number = Date.now()): Promise<void>
 
   const pending = accounts.filter((account) => !account.granted);
   if (pending.length > 0) {
-    // ⚠️ **既に許可済みのアカウントが在るかで分岐しない。** 2026-09-09 のオーナー
-    // 決定まで、ここは持ち主が居れば「許可できるアカウントは1つだけです。移すには
-    // 先に取り消します」と案内していた（叩いてから 409 で知るのは遅いため）。
-    // いまは何人でも通せるので、その案内は嘘になる。
+    // 既に許可済みのアカウントが在るかで分岐しない: 許可できる数に上限は無いので、「1つだけ」と案内すると嘘になる。
     stdout.write(`許可するには: alteroid access grant ${pending[0]?.id ?? '<id>'}\n`);
   }
 }
@@ -155,10 +101,7 @@ export async function accessGrantCommand(accountId: string): Promise<void> {
 }
 
 /**
- * 許可を取り消す。**確認する**（Issue #3141。`confirm.ts`）。`access grant` で許可し直せるが、
- * 許可に乗っていた「実行環境の持ち主」の宣言は一緒に落ち、**再 grant しても戻らない**
- * （`AuthService.revoke` の doc。宣言は `alteroid access owner` でしか立たない）。
- * 取り消した相手は、発行済みトークンごとその場で通らなくなる。
+ * 確認する: 許可に乗っていた「実行環境の持ち主」の宣言は一緒に落ち、再 grant しても戻らないため。
  */
 export async function accessRevokeCommand(
   accountId: string,
@@ -166,12 +109,8 @@ export async function accessRevokeCommand(
   io?: ConfirmIo,
 ): Promise<void> {
   const target = await resolveTarget();
-  // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
-  // **確認の前に、在るかを一覧で読む**（Issue #3838。`memory remove` の #3820 と同じ形）。単体の GET は
-  // 無いので `GET /access` を使う。無いアカウントに確認を出さず、確認も POST も出さずに、POST の 404 と
-  // 同じ文言で失敗する。**読めない行（`rowsUnreadable`）に在る id は「無い」と言わない** — 確認へ進み、
-  // POST の 409（「読めない形で在る」の案内）に任せる。未許可のアカウントは、この PR では変えない。
+  // 読めない行（`rowsUnreadable`）に在る id は「無い」と言わない: 確認へ進み、POST の 409 の案内に任せる。
   const { accounts, rowsUnreadable } = (await request(target, '/access')) as {
     accounts: AccountView[];
     rowsUnreadable?: { count: number; rows: { id: string; reason: string }[] };
@@ -190,27 +129,16 @@ export async function accessRevokeCommand(
     method: 'POST',
   })) as { account: AccountView };
   stdout.write(`許可を取り消しました: ${account.email ?? account.displayName ?? account.id}\n`);
-  // 発行済みトークンは消していないが、許可はリクエストごとに見ているので即座に
-  // 通らなくなる。消し忘れたトークンが生き残らないのが要点。
   stdout.write('（発行済みのトークンは、この時点から通らなくなります）\n');
 }
 
-/**
- * 読めないアカウントの行を、id を指して消す（`POST /access/unreadable/remove`。issue #2440）。
- * 読めない行（版ずれ・手編集）は `access revoke` が 409 で触らないので、片付ける口はこれだけ。
- * **id は `access list` が読めない行として出す**
- * （`GET /access` の `rowsUnreadable.rows[].id`。issue #2536）。**id が取れない行はこの口では消せない**
- * （`auth.json` を手で直す）。指した id が1つでも読めない行に無ければ、デーモンが何も消さずに
- * 断る。**行の中身は出さない**（id と件数だけ）。
- */
+/** 行の中身は出さない（id と件数だけ）。id が取れない行はこの口では消せない（`auth.json` を手で直す）。 */
 export async function accessRemoveUnreadableCommand(
   ids: readonly string[],
   options: { yes?: boolean } = {},
 ): Promise<void> {
   const target = await resolveTarget();
-  // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
-  // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
   await confirmIrreversible(
     `読めないアカウントの行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
     options,
@@ -226,19 +154,6 @@ export async function accessRemoveUnreadableCommand(
   );
 }
 
-/**
- * 実行環境の持ち主として宣言する／取り消す（issue #1198。本来の形）。
- *
- * **`POST /access/:accountId/owner`（宣言）/ `.../owner/revoke`（取り消し）
- * は `requireOperator`。** `grant` / `revoke` とは違い、許可されたアカウントの
- * トークンでは叩けない——旗を立てられる者を常にホストへ到達できる者へ限る
- * ことが「伝播しない」という性質そのものである（`apps/daemon/src/app.ts` の
- * `requireOwner` の doc）。だからここを実行するのは、デーモンが動いている
- * のと同じ環境（`docker compose exec app …`）だけである。
- *
- * 宣言できるのは対象のアカウントが**既に許可済み**のときだけ——未許可なら
- * サーバが 409 を返す（`AuthStore.setAccountOwner` の doc）。
- */
 export async function accessOwnerCommand(
   accountId: string,
   options: { revoke?: boolean } = {},
@@ -265,23 +180,16 @@ async function request(
   target: Target,
   path: string,
   init: RequestInit = {},
-  /** 404 の文言。既定は「該当するアカウントが無い」（id で引く口向き）。 */
   notFoundMessage = '該当するアカウントがありません',
 ): Promise<unknown> {
   const response = await fetch(`${target.baseUrl}${path}`, {
     ...init,
-    // 本文の無い POST もデーモンは application/json を要求する（ブラウザの
-    // 単純リクエストで他人が許可を書き換えられないようにするため）。
+    // 本文の無い POST もデーモンは application/json を要求する（ブラウザの単純リクエストで許可を書き換えられないようにするため）。
     headers: { ...target.headers, 'content-type': 'application/json' },
   });
 
   if (!response.ok) {
-    // **`target.remote` から推測しない。** 遠隔のデーモンでも、叩いているのが
-    // 実行環境の持ち主でないという理由で 403 が返ることはある（`access grant`
-    // 済みのアカウントを別の環境から使っている場合など）。`remote` で場合分け
-    // すると、その状況でも「access grant してください」という直らない案内を
-    // 出してしまう（`access grant` を打った本人に `access grant` を勧める形に
-    // なる）。本文で判別する。
+    // `target.remote` から推測しない: 遠隔でも持ち主でないという理由の 403 はあり、その場合に直らない「access grant してください」を案内してしまう。
     if (response.status === 403) {
       const body = await response.json().catch(() => ({}));
       const kind = forbiddenKindOf(body);
@@ -297,10 +205,7 @@ async function request(
             'このアカウントには alteroid を使う許可がありません。',
         );
       }
-      // **⭐ `kind === 'unknown'`——本文からはどちらの理由かが判別できない。**
-      // 「器の中で実行しろ」と「access grant しろ」は意味も解決策も正反対で、
-      // どちらかを当てずっぽうで出せば半分の状況では必ず嘘になる。分からない
-      // ときは、解決策を書かずに止める。
+      // 理由が判別できないときは解決策を書かない: 「器の中で実行しろ」と「access grant しろ」は正反対で、当てずっぽうだと半分は嘘になる。
       throw new Error(
         'アクセス許可の操作が拒否されました（403）。理由を判別できなかったため、' +
           '次にすべきことは案内しません。',
@@ -310,10 +215,7 @@ async function request(
     if (described !== null) throw new Error(described);
     if (response.status === 404) throw new Error(notFoundMessage);
     if (response.status === 409) {
-      // 409 の意味は経路ごとに違う（revoke は読めない行を触らない、owner / owner revoke は
-      // 未許可のアカウント。grant はいまのデーモンでは 409 を返さない）。どれも本文に `error` の
-      // 文字列を持つので、サーバが書いたものをそのまま見せる。文字列が無いときの代替は、
-      // どの経路でも嘘にならないよう、競合したことと理由が返らなかったことだけを言う。
+      // 409 の意味は経路ごとに違うので、サーバの `error` 文字列をそのまま見せる。代替文言は、どの経路でも嘘にならないよう競合したことだけを言う。
       const body = (await response.json().catch(() => ({}))) as { error?: unknown };
       throw new Error(
         typeof body.error === 'string'

@@ -3,21 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConfirmIo } from './confirm.js';
 import { captureStdout, pretendTty } from './test-support.js';
 
-/**
- * `alteroid access` — 誰が alteroid を使えるかを CLI から見えること。
- *
- * **`fetch` を差し替える。** `access.ts` は `hono/client` を使わず素の `fetch` を
- * 叩く（`request()`）ので、`conversations.test.ts` / `memory.test.ts` と同じ形で
- * `globalThis.fetch` を差し替える。
- */
-/**
- * **`./target.js` は `resolveTarget` だけ差し替える。** `forbiddenKindOf` と
- * `describeAuthFailure` は**本物を使う**（`token.test.ts` と同じ理由）。
- *
- * **`remote` は歯ごとに変える。** 遠隔のデーモンでも持ち主用の文言が出ること
- * を測るため（この経路には以前 `!target.remote` という場合分けが在り、遠隔
- * だけ案内が別物になっていた）。
- */
+/** `./target.js` は `resolveTarget` だけ差し替える。`forbiddenKindOf` と `describeAuthFailure` は本物を使う。 */
 const targetState = vi.hoisted(() => ({ remote: false }));
 
 vi.mock('./target.js', async (importOriginal) => ({
@@ -76,11 +62,6 @@ afterEach(() => {
 });
 
 describe('alteroid access list', () => {
-  /**
-   * #214: `AccountView.createdAt` は元から型に在り、応答にも元から入っている
-   * （`GET /access` の `accountWithIdentitiesSchema`）。ここが出していなかった
-   * だけである。
-   */
   it('作成（createdAt）を出す', async () => {
     const read = captureStdout();
     replies.push({
@@ -112,15 +93,10 @@ describe('alteroid access list', () => {
     const text = read();
     expect(text).toContain('acc-1');
     expect(text).toContain('作成: 2026-08-01T00:00:00.000Z');
-    // 既存の欄（最終ログイン・許可した日時）は消えていない。
     expect(text).toContain('最終ログイン: 2026-08-20T09:00:00.000Z');
     expect(text).toContain('許可した日時: 2026-08-01T00:05:00.000Z');
   });
 
-  /**
-   * issue #2141 段1: ISO の横に経過を添える。**ISO はそのまま残す**——
-   * 消えていないことも合わせて確かめる（1つの行で両方測る）。
-   */
   it('作成の横に経過（（N分前）の形）を添える。ISO は消えない', async () => {
     const read = captureStdout();
     replies.push({
@@ -149,10 +125,6 @@ describe('alteroid access list', () => {
     expect(text).toContain('作成: 2026-08-01T00:00:00.000Z（1日前）');
   });
 
-  /**
-   * 読めない時刻のとき、画面に `（不明前）` と出ていた（PR #2151 の欠陥）。
-   * 「前」は経過の単位側が持つので、読めないときは `（経過不明）` になる。
-   */
   it('作成が読めない時刻のとき「不明前」と出さない', async () => {
     const read = captureStdout();
     replies.push({
@@ -182,10 +154,6 @@ describe('alteroid access list', () => {
     expect(text).toContain('作成: not-a-real-timestamp（経過不明）');
   });
 
-  /**
-   * **誰が許可したか（#1398 c7-3）。** 3分岐（`'operator'`・アカウントの id・
-   * `null`）を1回で確かめる。文言は Web UI の `describeGrantedBy()` と同じ。
-   */
   it('誰が許可したかを、許可した日時の後ろに添える', async () => {
     const read = captureStdout();
     const account = (id: string, grantedBy: string | null) => ({
@@ -215,7 +183,6 @@ describe('alteroid access list', () => {
 
     const text = read();
     expect(text).toContain('許可した日時: 2026-09-03T00:00:00.000Z（実行環境の持ち主）');
-    // id は名前へ解決せず、そのまま出す。
     expect(text).toContain('許可した日時: 2026-09-03T00:00:00.000Z（acc-by-operator）');
     expect(text).toContain('許可した日時: 2026-09-03T00:00:00.000Z（不明）');
   });
@@ -229,11 +196,6 @@ describe('alteroid access list', () => {
     expect(read()).toContain('まだ誰もログインしていません');
   });
 
-  /**
-   * **宣言済みかどうかの印（issue #1198）。** `granted` とは独立の印なので、
-   * 未宣言と宣言済みの両方を1回で確かめる——片方だけだと「常に出る／常に
-   * 出ない」の両方の壊れ方を見逃す。
-   */
   it('宣言済みかどうかの印を出す（[owner] と実行環境の持ち主として宣言の日時）', async () => {
     const read = captureStdout();
     replies.push({
@@ -274,8 +236,6 @@ describe('alteroid access list', () => {
     expect(text).toContain('[許可][owner] owner@example.com');
     expect(text).toContain('実行環境の持ち主として宣言: 2026-09-18T00:00:00.000Z');
     expect(text).toContain('[許可] plain@example.com');
-    // 未宣言の行には `[owner]` が付かない（`plain@example.com` の直後に `[owner]`
-    // が来ないことで確かめる）。
     expect(text).not.toContain('[許可][owner] plain@example.com');
     expect(text).toContain('実行環境の持ち主として宣言: （未宣言）');
   });
@@ -367,10 +327,6 @@ describe('alteroid access owner', () => {
     expect(sent[0]?.url).toBe('http://127.0.0.1:4517/access/acc%2Fweird/owner');
   });
 
-  /**
-   * **未許可のアカウントを宣言しようとすると 409。** サーバの文言をそのまま
-   * 人間へ届ける（`accessGrantCommand` の 409 と同じ作り）。
-   */
   it('未許可のアカウントは 409 —— サーバの文言をそのまま出す', async () => {
     replies.push({
       status: 409,
@@ -382,10 +338,6 @@ describe('alteroid access owner', () => {
     );
   });
 
-  /**
-   * 本文が `error` の文字列を持たない 409 は、どの経路でも嘘にならない中立な文に落ちる（#3735）。
-   * 以前の「既に別のアカウントが許可されています」は、読めない行・未許可の経路では意味が逆になる。
-   */
   it('本文に理由の無い 409 は、競合したことと理由が返らなかったことだけを言う', async () => {
     replies.push({ status: 409, body: {} });
 
@@ -411,11 +363,6 @@ describe('alteroid access owner', () => {
     await expect(accessOwnerCommand('missing')).rejects.toThrow(/該当するアカウントがありません/);
   });
 
-  /**
-   * **`requireOperator`（非伝播）。** 許可されたアカウントのトークンで叩くと
-   * 403（`not_operator` の本文）になる——`grant` / `revoke` と同じ分岐を通る
-   * ことを確かめる（`accessOwnerCommand` は専用の request 実装を持たない）。
-   */
   it('403（実行環境の持ち主でない）なら、器の中で実行しろと案内する', async () => {
     replies.push({
       status: 403,
@@ -426,26 +373,14 @@ describe('alteroid access owner', () => {
   });
 });
 
-/**
- * 403 の案内を、**サーバが返した本文で分ける**。
- *
- * **ここには以前 `&& !target.remote` という場合分けが在った。** 遠隔のデーモンへ
- * 繋いでいるときは専用の文言に入らず、汎用の「`alteroid access grant <アカウント
- * id>` を実行してください」に落ちていた——**`alteroid access grant` を打った本人に
- * `alteroid access grant` を勧める**形である。下の「遠隔でも」の歯が、その場合分けが
- * 戻らないことを押さえている。
- */
 describe('403（本文で理由を分ける）', () => {
   /**
-   * **この2つの逐語は `apps/daemon/src/app.ts` が返す本文の複製である。**
-   * `target.ts` の定数も `apps/daemon` も import しない——対象と同じ値を
-   * 参照すると、文言がずれても歯まで一緒にずれて自己整合し、ずれを検出でき
-   * なくなる。**値はここへ書き写し、ずれたらこの歯が落ちる形にしてある。**
+   * `apps/daemon/src/app.ts` が返す本文の複製。`target.ts` の定数も import しない:
+   * 対象と同じ値を参照すると、文言がずれても歯まで一緒にずれて検出できなくなる。
    */
   const NOT_OPERATOR = { error: '実行環境の持ち主だけが操作できる' };
   const NOT_GRANTED = { error: 'このアカウントには alteroid を使う許可が無い' };
 
-  /** 投げられた文言そのものを取る（どちらの手順が出たかを両側から見るため）。 */
   async function messageOf(run: () => Promise<unknown>): Promise<string> {
     try {
       await run();
@@ -469,7 +404,6 @@ describe('403（本文で理由を分ける）', () => {
 
     const message = await messageOf(() => accessListCommand());
     expect(message).toContain('docker compose exec');
-    // **鳴ってはいけない側。** これが `!target.remote` の場合分けが返ってきた印である。
     expect(message).not.toContain('access grant');
   });
 
@@ -561,7 +495,6 @@ describe('alteroid access list — 読めない行（issue #2536）', () => {
     expect(text).toContain('alteroid access remove-unreadable <id>');
     expect(text).toContain('id が取れない行が 1 件');
     expect(text).toContain('auth.json');
-    // 読めない行しか無いのに「誰もログインしていない」とは言わない。
     expect(text).not.toContain('まだ誰もログインしていません。');
     expect(text).toContain('誰もログインしていない、とは言えない');
   });
