@@ -9,7 +9,6 @@ import { RUNNER_CAPABILITIES, RUNNER_CAPABILITY_MANAGER_OUTBOX } from './runner-
 import type { RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-/** 入力を受けるたびに1ターン返す偽の SDK。`onTurn` はターンの結果を返す直前に呼ばれる（担い手が出し箱へ写す時機）。 */
 function fakeSdk(onTurn: () => Promise<void>): { fn: typeof sdkQuery; options: Options[] } {
   const options: Options[] = [];
   const fn = ((params: { prompt: AsyncIterable<unknown>; options?: Options }) => {
@@ -101,9 +100,7 @@ describe('Host: 出し箱（Issue #4126 P2a）', () => {
     expect(await readFile(join(outboxStagedRoot, 'mgr-abc123', fileId), 'utf8')).toBe('成果物');
 
     await host.stop('mgr-abc123');
-    // 畳みは `stop` が返る前に `onClosed` まで進む（`closed` イベントを出す経路は `#finish` で別）
     await expect(stat(outboxDir)).rejects.toThrow();
-    // 退避先は残る: 最後の報告の直後に畳まれても、デーモンが取りに来られる
     const after = await host.openOutboxFile('mgr-abc123', fileId);
     const afterChunks: Buffer[] = [];
     for await (const chunk of after!.stream) afterChunks.push(chunk as Buffer);

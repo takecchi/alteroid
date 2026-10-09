@@ -12,24 +12,7 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { BASH_GUARD_ENV } from './bash-guard-mode.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-/**
- * issue #1980（#1960 / PR #1963 の歯の穴）。`runner.ts` の `#onPreToolUse` は、Bash の
- * ガードの deny が周りの例外で消えないように3か所を包んでいる。PR #1963 の歯
- * （`runner-pre-tool-use.test.ts` の「ガードの deny は、判定の周りの例外で消えない」）が
- * 見ているのは、弾いたときの note の送り出しが投げる分岐だけだった。ここでは残りの2つを見る。
- *
- * 1. `inspectBashCommand` そのものが投げたら、deny（閉じる側）を返す
- * 2. `#capturePreToolInputHead`（中で `buildDenialInputHead` を呼ぶ）が投げても、判定を
- *    止めない——弾く形の Bash は deny、弾かない形は今までどおり通す
- *
- * 投げる状況は、実際の入力では作れていない（issue #1980 の「確かめていないこと」）。
- * そこで `vi.mock` で2つの関数だけを差し替え、切り替えの印（`vi.hoisted`）が立って
- * いる it でだけ投げさせる。印が倒れている it では本物の実装に任せる。
- *
- * **このファイルを `runner-pre-tool-use.test.ts` に混ぜないこと。** `vi.mock` は
- * ファイル全体に効くので、混ぜると向こうの歯まで差し替えた実装の上で走る。
- */
-
+// `runner-pre-tool-use.test.ts` に混ぜない: `vi.mock` はファイル全体に効き、向こうの歯まで差し替えた実装の上で走る。
 const throwing = vi.hoisted(() => ({
   inspect: false,
   inputHead: false,
@@ -92,7 +75,6 @@ async function firePreToolUse(
 }
 
 const PRE_TOOL_USE_BASE = { hook_event_name: 'PreToolUse', tool_use_id: 'tu-1' };
-// 弾く形（無限待ち）と、弾かない形。
 const BLOCKED_COMMAND = 'tail -f /tmp/run.log';
 const ALLOWED_COMMAND = 'echo hi';
 
@@ -113,7 +95,7 @@ afterEach(async () => {
   await host?.shutdown().catch(() => undefined);
 });
 
-/** 既定（`ask`）では判定が例外で終わっても確認に倒れる（#2884）。以降の deny の歯は `deny` の設定で固定する。 */
+/** 既定（`ask`）では判定が例外で終わっても確認に倒れるので、deny の歯は `deny` の設定で固定する。 */
 async function startedOptions(
   env: NodeJS.ProcessEnv = { [BASH_GUARD_ENV]: 'deny' },
 ): Promise<Options> {

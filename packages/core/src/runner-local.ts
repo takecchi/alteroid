@@ -34,38 +34,22 @@ import { createRunnerHost, type RunnerHost } from './runner.js';
 /**
  * 同一プロセスの manager-runner（ローカル実行用）。
  *
- * `alteroid chat` を叩くだけでクローンが使えることは M1 からの体験であり、
- * そこに「先に runner を立てる」手順を足さない。**器を分けられないローカルでは
- * 既知の穴（マネージャーが同じ UID で走る）が残る** — architecture.md に書いてある
- * とおりで、その穴をツール削除で塞がないこと。塞ぐのはコンテナ構成の役目である。
- *
- * デーモンから見た顔は HTTP 実装と同じ（`RunnerClient`）。デーモンが特定の
- * 実装やローカルパスを前提にしないための入れ子である。
+ * ローカルの既知の穴（マネージャーが同じ UID で走る）をツール削除で塞がない。
+ * 塞ぐのはコンテナ構成の役目である（architecture.md）。
  */
 export interface LocalRunnerOptions {
   runnerId?: string;
   workspacePath: string;
-  /** 主にテスト用。既定は SDK の `query`。 */
   queryFn?: typeof query;
   env?: NodeJS.ProcessEnv;
   withheldEnvKeys?: readonly string[];
-  /**
-   * 鍵の器。ローカルでも渡せるようにしてあるのは、**コンテナ構成でだけ鍵が回る**
-   * という差を作らないためである（器が違うだけで、上の層が見るものは同じ）。
-   */
+  /** ローカルでも渡す: コンテナ構成でだけ鍵が回る、という差を作らないため。 */
   credentials?: CredentialStore;
-  /**
-   * プロファイルの器。**ローカルでも渡す。** コンテナ構成でだけ `.zprofile` が
-   * 効く形にすると、器が違うだけでできることが変わってしまう（M4 受け入れ基準1）。
-   */
+  /** ローカルでも渡す: コンテナ構成でだけ `.zprofile` が効く形にしない（M4 受け入れ基準1）。 */
   profile?: ProfileVessel;
-  /** 担い手へ渡す添付の置き場（`RunnerHostOptions.attachmentsRoot`）。主にテスト用。 */
   attachmentsRoot?: string;
-  /** 受けた plugin の展開先（`RunnerHostOptions.pluginsRoot`）。主にテスト用。 */
   pluginsRoot?: string;
-  /** 担い手の出し箱の根（`RunnerHostOptions.outboxRoot`）。主にテスト用。 */
   outboxRoot?: string;
-  /** 出し箱の退避先の根（`RunnerHostOptions.outboxStagedRoot`）。主にテスト用。 */
   outboxStagedRoot?: string;
 }
 
@@ -75,18 +59,7 @@ export function createLocalRunner(options: LocalRunnerOptions): RunnerClient {
 
 class LocalRunner implements RunnerClient {
   readonly runnerId: string;
-  /**
-   * **常に `true`。** `HttpRunner` と違って `/health` を聞きに行って初めて
-   * `runnerId` が定まる、という段階が無い——同一プロセスなので、コンストラクタの
-   * 時点で自分の `runnerId` を確定させている（既定でも `local-<uuid>` を生成する。
-   * 上のコンストラクタを参照）。「聞けていない」状態がそもそも存在しない（#330）。
-   */
   readonly runnerIdKnown = true;
-  /**
-   * **常に `true`。** `runnerIdKnown` と同じ理由——同一プロセスなので、
-   * コンストラクタの時点で自分の `workspacePath`（呼び出し元が渡した値）を
-   * 確定させている。「聞けていない」状態がそもそも存在しない（#389）。
-   */
   readonly workspacePathKnown = true;
   readonly workspacePath: string;
   readonly #host: RunnerHost;
@@ -118,12 +91,7 @@ class LocalRunner implements RunnerClient {
     });
   }
 
-  /**
-   * 受け口が開く前の出来事も落とさない。
-   *
-   * 起動直後や再接続の隙に降りてきた確認を捨てると、マネージャーは永久に返事を
-   * 待つ（誰も答えられない待ちが残る）。
-   */
+  // 受け口が開く前の確認を捨てない: 捨てると、マネージャーが永久に返事を待つ。
   #deliver(event: RunnerEvent): void {
     if (this.#onEvent === null) {
       this.#queue.push(event);
@@ -145,35 +113,18 @@ class LocalRunner implements RunnerClient {
     }
   }
 
-  /**
-   * 名乗り。**同一プロセスなので、ここが動いている時点で生きている。**
-   *
-   * 叩く先が無いからと省略しない — 省略すると「ローカルでは生死が分からない」
-   * という差が器の違いだけで生まれる（コンテナ構成でだけ効く仕組みを作らない）。
-   */
+  // 省略しない: 省略すると「ローカルでは生死が分からない」という差が器の違いだけで生まれる。
   async ping(): Promise<void> {}
 
-  /**
-   * 配置の材料。**同じ器の資源をそのまま読む。**
-   *
-   * ローカルは runner が1台しか無いので配置の余地は無いが、`ping` と同じ理由で
-   * 省略しない — 省略すると「ローカルでは資源が見えない」という差が器の違いだけで
-   * 生まれる（コンテナ構成でだけ効く仕組みを作らない）。
-   */
+  // 省略しない: 配置の余地が無くても、「ローカルでは資源が見えない」という差を作らない。
   async resources(): Promise<RunnerPlacementResources> {
     return { managers: this.#host.list().length, ...(await readExecutionResources()) };
   }
 
-  /**
-   * `#host.start` が返す実際の `cwd`（Issue #1814）をそのまま返す。**同一
-   * プロセスなので常に確認できる**——`HttpRunner` と違い、版ずれで欄が
-   * 落ちる余地が無い。
-   */
   async start(command: RunnerStartCommand): Promise<{ cwd: string; sessionGeneration: string }> {
     return this.#host.start(command);
   }
 
-  /** 同上（`start` の doc）。 */
   async resume(command: RunnerResumeCommand): Promise<{
     cwd: string;
     reusedLiveSession: boolean;
@@ -182,16 +133,7 @@ class LocalRunner implements RunnerClient {
     return this.#host.resume(command);
   }
 
-  /**
-   * **`#host.send` が返す `boolean` をそのまま返す（#899）。** 以前はここで
-   * `await` だけして戻り値を捨てていた——`ManagerHost.send`（`runner.ts`）は
-   * セッションが無ければ `false` を返す実装なのに、`RunnerClient.send` の
-   * 署名が `Promise<void>` だったため、この実装は例外を投げない以上「常に
-   * 成功した」ようにしか見えなかった。`HttpRunner`（`apps/daemon/src/
-   * runner-client.ts`）は同じ状況で 404 を例外として投げられたので、2つの
-   * 経路は同じ入力（セッションの無い `managerId`）に対して違う結果を返して
-   * いた。
-   */
+  // 戻り値の `boolean` を捨てない: 捨てると、セッションが無い `managerId` でも「成功した」ように見える。
   async send(
     managerId: string,
     text: string,
@@ -216,7 +158,6 @@ class LocalRunner implements RunnerClient {
     return this.#host.transcript(managerId);
   }
 
-  /** 出し箱の退避先（#4126 P2b）。同一プロセスなので `Host` へそのまま渡す（HTTP の runner と同じ `RunnerHost` を通る）。 */
   async openOutboxFile(
     managerId: string,
     fileId: string,
@@ -229,12 +170,6 @@ class LocalRunner implements RunnerClient {
     await this.#host.deleteOutboxFile(managerId, fileId);
   }
 
-  /**
-   * 未 push の実装と未コミットの変更（Issue #1039）。**同一プロセスなので、
-   * `Host#unpushedWork` をそのまま返す**——`HttpRunner` と違ってここに
-   * HTTP の失敗の種類（404・期限切れ）は存在しない。セッションが無ければ
-   * `Host` 自身が `undefined` を返す。
-   */
   async unpushedWork(
     managerId: string,
     options?: { signal?: AbortSignal },
@@ -242,7 +177,6 @@ class LocalRunner implements RunnerClient {
     return this.#host.unpushedWork(managerId, options);
   }
 
-  /** 退避 ref の後始末（Issue #1266）。同一プロセスなので `Host` へそのまま渡す。 */
   async deleteRescueRef(
     request: RunnerRescueRefDeleteRequest,
     options?: { signal?: AbortSignal },
@@ -268,11 +202,7 @@ class LocalRunner implements RunnerClient {
     return this.#host.setProfile(script);
   }
 
-  /**
-   * MCP の登録（#325 段3）。**同一プロセスでも同じ口を通す** —— ローカルだけ記憶
-   * ストアを直に読ませると、HTTP の runner と「いつ届くか・何が届くか」が別物になる
-   * （入口の等価性。north_star 禁止1）。降ろすのはデーモン（`#pushMcpServers`）である。
-   */
+  // 同じ口を通す: ローカルだけ記憶ストアを直に読ませると、HTTP の runner と「いつ・何が届くか」が別物になる（north_star 禁止1）。
   async mcpServers(): Promise<RunnerMcpServersFingerprint | undefined> {
     return this.#host.mcpServers();
   }
@@ -281,7 +211,6 @@ class LocalRunner implements RunnerClient {
     return this.#host.setMcpServers(servers);
   }
 
-  /** plugin も MCP の登録と同じ理由で同じ口を通す（入口の等価性）。 */
   async plugins(): Promise<RunnerPluginsFingerprint | undefined> {
     return this.#host.plugins();
   }
@@ -294,7 +223,6 @@ class LocalRunner implements RunnerClient {
     return this.#host.retainPlugins(names);
   }
 
-  /** Codex の ChatGPT ログイン（#3939）。**同一プロセスでも同じ口を通す**（MCP の登録と同じ理由）。 */
   async setCodexAuth(push: { value: string; revision: string } | null): Promise<void> {
     await this.#host.setCodexAuth(push);
   }
@@ -305,7 +233,6 @@ class LocalRunner implements RunnerClient {
     return this.#host.takeCodexAuthWriteBack(fingerprint);
   }
 
-  /** 同じプロセスが消えるので、セッションごと畳む（HTTP 実装とはここが違う）。 */
   async close(): Promise<void> {
     this.#onEvent = null;
     await this.#host.shutdown();

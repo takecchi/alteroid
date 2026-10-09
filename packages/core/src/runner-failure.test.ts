@@ -11,41 +11,13 @@ import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores } from './testing.js';
 
-/**
- * **マネージャーの側でも、SDK のエラーを「報告」として扱わない。**
- *
- * クローン側で塞いだのと同じ穴がここにもあった（`sdk-failure.ts` の doc）。
- * 直す前の runner は成否によらず `report` を上げていたので、支出上限の英語文言が
- * そのまま「マネージャーの報告」として台帳（`lastReport`）・日誌・クローンの
- * 受信箱へ流れていた。クローンから見て「報告が来た」と「エラーで死んだ」が
- * 区別できない ＝ 手が正反対（待つ / 挑み直す）になる場面で判断材料が無い。
- *
- * **`manager.test.ts` とは別ファイルにしてある。** あちらの `FakeSession` は
- * 成功する `result` しか出せない作りで、失敗の印（`assistant.error` /
- * `is_error`）を1本も通せない。あちらへ口を足すと既存の100本超が同じ偽物を
- * 共有することになるので、ここでは**この関心に必要な形だけを出せる偽物**を持つ。
- */
-
-/** 実機で観測された文言そのまま。 */
 const ORG_SPEND_LIMIT =
   "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message";
 
 interface FakeSession {
-  /** `parentToolUseId` を渡すと作業者（Task の中）の発言になる（#1373）。 */
   say(text: string, options?: { error?: string; parentToolUseId?: string }): Promise<void>;
-  /** 1ターンを畳む。既定は成功。 */
   finish(text: string, options?: { subtype?: string; isError?: boolean }): Promise<void>;
-  /**
-   * `system/task_started` を流す（#1373）。`runner-wakeup.test.ts` の同名の
-   * ヘルパーと同じ形（`task_id` を持つ `system` メッセージ）を踏襲する。
-   * `extra` は Issue #2113 で足した——`task_type` を混ぜ込むためだけに使う。
-   */
   taskStarted(taskId: string, extra?: Record<string, unknown>): Promise<void>;
-  /**
-   * `system/task_notification` を流す（#1373 続き）。`status` の既定は
-   * `'completed'`（陽性対照側の既定に寄せる——`'failed'` を試すテストは
-   * 明示で渡す）。
-   */
   taskNotification(taskId: string, options?: { status?: string; summary?: string }): Promise<void>;
 }
 
@@ -53,15 +25,10 @@ function fakeSdk() {
   const sessions: FakeSession[] = [];
 
   const fn = ((params: { prompt: unknown; options?: Options }) => {
-    // **`manager.test.ts` の偽 SDK と同じ待ち方にしてある。** 自前のポーリング
-    // ループにすると、`close()` で畳めず `pool.stop()` の後もジェネレータが生き
-    // 残る（テストが終わらない）。実績のある形を写す。
+    // ポーリングにしない: `close()` で畳めず `pool.stop()` の後もジェネレータが生き残る
     let emit: ((message: SDKMessage | null) => void) | null = null;
     const buffered: SDKMessage[] = [];
-    // **#206: `result` の `uuid` は実機では毎ターン別の値になる。** `runner.ts`
-    // はこれを `reportId` としてそのまま運び、`manager.ts` はそれで冪等化する
-    // ので、この fake が固定値を返すと2回目以降の `finish()` が冪等化で
-    // 握りつぶされる（`manager.test.ts` の同種の fake と同じ直し方）。
+    // `result` の `uuid` を固定しない: `manager.ts` が冪等化し、2回目以降の `finish()` が握りつぶされる
     let finishes = 0;
     const push = (message: SDKMessage) => {
       if (emit) emit(message);
@@ -126,7 +93,6 @@ function fakeSdk() {
         uuid: 'uuid-init',
       } as unknown as SDKMessage;
 
-      // 入力を読み続ける裏方（読まないと送り手が詰まる）。中身は使わない。
       void (async () => {
         for await (const message of params.prompt as AsyncIterable<unknown>) void message;
       })();
@@ -158,21 +124,7 @@ function fakeSdk() {
   return { fn, sessions };
 }
 
-/**
- * **合流窓の長さを、このファイルでは既定（3000ms）ではなく短く取る。**
- *
- * このファイルの26本が測っているのは「窓の後に受信箱へ届く**中身**」（本文・台帳・
- * 畳んだ記録）であって、窓が何ミリ秒かではない。既定のまま実時間で待つと1本あたり
- * 約3秒（ファイル全体で約76秒）を窓の満了待ちに使っていた。窓そのものの長さ（既定
- * 3000ms・窓の中の合流・窓の外の別扱い）は、`synthesized-notice-window-ms.test.ts`
- * （`resolveSynthesizedNoticeWindowMs` の既定）と `manager-synthesized-notices.test.ts`
- * （窓の長さが日誌に「窓の長さ 3000ms」と出ること・30ms 窓の境界）が持つ。
- *
- * **0 に近づけすぎない。** 「一枠落ち一合図」は `usage_notice` と `turn_failed` が
- * 同じ窓の中で1件にまとまることに頼っており、窓が両者の間隔より短いと2件に割れて
- * 「受信箱に立つのは1件」の検算が器の混み具合で揺れる。100ms は同じ1回の
- * `dispatch` の中の連続した2回の emit を跨ぐには十分に長く、3000ms よりは十分に短い。
- */
+// 0 に近づけない: `usage_notice` と `turn_failed` が同じ窓で1件にまとまることに頼っており、短すぎると2件に割れて揺れる
 const TEST_NOTICE_WINDOW_MS = 100;
 
 function setup(options: { withCredentialStore?: boolean } = {}): {
@@ -190,7 +142,6 @@ function setup(options: { withCredentialStore?: boolean } = {}): {
       workspacePath: '/work/project',
       queryFn: fn,
       env: { PATH: '/usr/bin' },
-      // 鍵の器を持つ構成（`apps/runner`・本番の runner と同じ形）。ディスクへは書かない（`flush` を呼ばない）
       ...(options.withCredentialStore === true
         ? {
             credentials: createCredentialStore({
@@ -210,24 +161,11 @@ function setup(options: { withCredentialStore?: boolean } = {}): {
   return { pool, stores, sessions, inbox };
 }
 
-/**
- * 台帳の1件（`JobStore` は id 引数の `get` を持たないので一覧から引く）。
- *
- * **台帳を直接読む。** `ManagerSummary` 経由にすると、要約に載せ忘れた項目が
- * 「台帳にも無い」ことになって、どちらの層の抜けなのか分からなくなる。
- */
 async function jobOf(stores: Stores, managerId: string) {
   return (await stores.jobs.listJobs()).find((job) => job.id === managerId);
 }
 
-/**
- * クローンの受信箱へ届いた `kind: 'report'` の本文を、届いた順に。
- *
- * **枠の知らせ（`usage_notice`）も同じ `kind: 'report'` で降りてくる**
- * （`manager.ts` の `case 'usage_notice'`）。しかも runner は同じ `dispatch` の中で
- * **知らせ → 報告**の順に emit するので、`find` で最初の1本を取ると枠の知らせを
- * 「ターンの報告」として読んでしまう。だから件数で待って、順序で選ぶ。
- */
+// `find` で最初の1本を取らない: 枠の知らせ（`usage_notice`）も同じ `kind: 'report'` で先に届く
 async function reportTexts(inbox: InboxEvent[], expected: number): Promise<string[]> {
   return await vi.waitFor(
     () => {
@@ -241,29 +179,11 @@ async function reportTexts(inbox: InboxEvent[], expected: number): Promise<strin
       }
       return found.map((entry) => (entry as { text: string }).text);
     },
-    // **失敗した回の報告は機構が合成した知らせ（`synthesized: 'turn_failed'`）
-    // として合流窓に積まれる**（「一枠落ち一合図」）。窓は `setup()` で
-    // `TEST_NOTICE_WINDOW_MS`（100ms）に絞ってあるので、既定（3000ms）を待つための
-    // 4000ms は要らない。ただし器が混んだときの余裕として伸ばしたままにしてある
-    // （成功すれば待たずに返る）。
     { timeout: 4000 },
   );
 }
 
-/**
- * **2件目以降の完全な重複が、日誌へ「畳んだ」と記録されるまで待つ。**
- *
- * PR #946（`fix/429-notice-amplification-cap`。窓をまたいだ `turn_failed` の
- * 完全な重複を畳む）が入ったので、`本文が完全に同一な turn_failed` を
- * 2回連続で起こしても**受信箱には1件しか立たない**（2件目は畳まれて
- * 日誌にだけ残る）。この関数が導入される前は `reportTexts(s.inbox, 2)` を
- * バリアに使っていたが、それは「2件目の `finish()` がここまで処理された」
- * ことを確かめるための代用でしかなく、この2本のテストが実際に検算している
- * のは受信箱の件数ではなく**stderr の集計行**（`captureStderr` で取った
- * `lines`）である。畳まれた事実は受信箱ではなく日誌に残るので、バリアも
- * そちらへ合わせる（`manager-synthesized-notices.test.ts` の「配らなかった
- * 束は、1束ごとに日誌へ1行残る」と同じ形）。
- */
+// 完全に同一な turn_failed の2件目は受信箱へ回らず日誌にだけ残るので、受信箱の件数ではなく日誌で待つ
 async function waitForSuppressedTurnFailed(stores: Stores, count: number): Promise<void> {
   await vi.waitFor(
     async () => {
@@ -281,17 +201,6 @@ async function waitForSuppressedTurnFailed(stores: Stores, count: number): Promi
   );
 }
 
-/**
- * **回し手が原理的に聞けない失敗を数える（Issue #393）。**
- *
- * 回し手の入口は `usage_notice` / `rate_limit` の2つだけなので、
- * `classifyUsageNotice` が分類できなかった失敗は**回し手に届かない**。資格
- * （`CLAUDE_CODE_OAUTH_TOKEN`）が1つも無い器で起こしたときがその形で、
- * マネージャーが落ち続けてもプールは何も検知しない。
- *
- * **ここが固定するのは「数えていること」と「出す判断を変えていないこと」の
- * 両方である。** 後者を落とすと、計器のつもりで挙動を変えたことに気づけない。
- */
 describe('分類できなかった失敗の跡（回し手には届かない側）', () => {
   it('枠の文言として分類できた回は跡を残さない（出す判断を変えていない）', async () => {
     const lines = await captureStderr(async () => {
@@ -302,10 +211,6 @@ describe('分類できなかった失敗の跡（回し手には届かない側�
         if (!found) throw new Error('セッションがまだ開いていない');
         return found;
       });
-      // 実機で観測された文言。**分類できる**ので `usage_notice` が出る。
-      // **`usage_notice` とターンの報告（`synthesized: 'turn_failed'`）は
-      // 同じ1つの出来事の別の顔として合流窓で1件にまとまる**（「一枠落ち
-      // 一合図」）ので、受信箱に立つのは1件である。
       await session.finish(ORG_SPEND_LIMIT, { isError: true });
       await reportTexts(s.inbox, 1);
       await s.pool.stop();
@@ -374,15 +279,6 @@ describe('分類できなかった失敗の跡（回し手には届かない側�
         if (!found) throw new Error('セッションがまだ開いていない');
         return found;
       });
-      // **本文が空**＝分類にかける材料が1文字も無い。資格ゼロの器で起こした
-      // ときと同じ形である（`is_error` は立つが、枠の文言はどこにも出ない）。
-      // **2回とも単独の断片**（伴走する `usage_notice` が無い）なので、
-      // それぞれ独立した合流窓として扱われる。**ただし本文はどちらも逐語で
-      // 同一なので、PR #946（窓をまたいだ `turn_failed` の完全な重複を畳む）
-      // により2件目は受信箱へは回らず、日誌にだけ「畳んだ」と残る**
-      // （`waitForSuppressedTurnFailed` の doc）。ここで検算したいのは受信箱の
-      // 件数ではなく下の stderr 集計（`first`）なので、バリアも畳んだ記録の
-      // 側で待つ。
       await session.finish('', { isError: true });
       await reportTexts(s.inbox, 1);
       await session.finish('', { isError: true });
@@ -390,21 +286,13 @@ describe('分類できなかった失敗の跡（回し手には届かない側�
       await s.pool.stop();
     });
     const first = lines.filter((line) => line.includes('（初出。**回し手には届かない**）'));
-    // **2回起きても初出は1行きり。** 全件出すと跡それ自体がログを埋める。
     expect(first).toHaveLength(1);
     expect(first[0]).toContain('via=result_is_error');
     expect(first[0]).toContain('code=success');
-    // **本文を載せていない**（テスト出力に秘密が混ざった前例がある。
-    // railway/setup.test.ts の差分アサーション、#52）。
     expect(first[0]).not.toContain(ORG_SPEND_LIMIT);
   }, 12_000);
 
   it('stop() で畳まれても件数が出る（この経路は #finish を通らない）', async () => {
-    // **ここが要点である。** `pool.stop()`（器の入れ替えと `manager_stop` が通る道）は
-    // `RunnerSession#finish()` を通らない —— `stop()` の中に逐語で
-    // 「この経路は `#finish` を通らないので、ここで閉じないと開いたままの区間が
-    // 黙って消える」と書いてある。**合計を `#finish` にだけ置くと、この経路の
-    // 量だけが黙って失われる**（初出の1行は出ているので、失われたことに気づけない）。
     const lines = await captureStderr(async () => {
       const s = setup();
       await s.pool.start({ request: '調べて' });
@@ -416,10 +304,6 @@ describe('分類できなかった失敗の跡（回し手には届かない側�
       await session.finish('', { isError: true });
       await reportTexts(s.inbox, 1);
       await session.finish('', { isError: true });
-      // **2件目は PR #946 の窓またぎ畳み込みで受信箱へは回らない**
-      // （`waitForSuppressedTurnFailed` の doc）。ここが検算したいのは
-      // stderr の合計行（`summary`）であって受信箱の件数ではないので、
-      // バリアも畳んだ記録の側で待つ。
       await waitForSuppressedTurnFailed(s.stores, 1);
       await s.pool.stop();
     });
@@ -439,40 +323,28 @@ describe('マネージャーの報告 — SDK のエラーを報告として扱�
       return found;
     });
 
-    // 実機の形: 上限の文言は assistant メッセージとして届き、`error` が付く。
-    // その後の `result` は成功で返る（＝印を見ないと成功と区別が付かない）。
     await session.say('途中まではここまでやった');
     await session.say(ORG_SPEND_LIMIT, { error: 'billing_error' });
     await session.finish('');
 
-    // **枠の知らせ（`usage_notice`）とターンの報告（`synthesized: 'turn_failed'`）
-    // は、同じ1つの出来事の別の顔として合流窓で1件にまとまる**（「一枠落ち
-    // 一合図」）ので、受信箱に立つのは1件——その1件の中に両方の本文が入る。
     const texts = await reportTexts(s.inbox, 1);
     const text = texts[0] ?? '';
     expect(text).toContain('利用上限に当たった');
 
-    // **本文の先頭で「応答ではない」と言い切っている。**
     expect(text).toContain('応答を返さずに終わった');
     expect(text).toContain('billing_error');
-    // SDK の文言は言い換えずそのまま残す（人間が検索できる形）。
     expect(text).toContain(ORG_SPEND_LIMIT);
-    // 途中まで出ていた本文は捨てない（次に何を頼み直すかの材料）。
     expect(text).toContain('途中まではここまでやった');
-    // ただし**印の付いた本文が「マネージャーが喋ったこと」の側に混ざっていない**。
-    // 混ざっていれば `（失敗する前に出ていた本文）` の後ろに現れる。
     const partial = text.split('（失敗する前に出ていた本文）')[1] ?? '';
     expect(partial).toContain('途中まではここまでやった');
     expect(partial).not.toContain(ORG_SPEND_LIMIT);
 
-    // 台帳にも「報告ではなく失敗」として残る（`status` では表せない事実）。
     const job = await vi.waitFor(async () => {
       const found = await jobOf(s.stores, started.managerId);
       if (!found?.lastFailure) throw new Error('台帳にまだ載っていない');
       return found;
     });
     expect(job.lastFailure).toMatchObject({ code: 'billing_error', via: 'assistant_error' });
-    // セッションは生きているので `status` は倒さない（話しかければ続く）。
     expect(job.status).toBe('done');
 
     await s.pool.stop();
@@ -487,11 +359,8 @@ describe('マネージャーの報告 — SDK のエラーを報告として扱�
       return found;
     });
 
-    // `isSuccessResult`（台帳の問い）はこの回を成功として通す。
     await session.finish(ORG_SPEND_LIMIT, { isError: true });
 
-    // **`usage_notice` と `turn_failed` は合流窓で1件にまとまる**（上のテストと
-    // 同じ理由）。
     const texts = await reportTexts(s.inbox, 1);
     const text = texts[0] ?? '';
     expect(text).toContain('応答を返さずに終わった');
@@ -516,7 +385,6 @@ describe('マネージャーの報告 — SDK のエラーを報告として扱�
       return found;
     });
 
-    // 1回目は失敗（印が立つ）。
     await session.finish(ORG_SPEND_LIMIT, { isError: true });
     await vi.waitFor(async () => {
       const job = await jobOf(s.stores, started.managerId);
@@ -524,8 +392,6 @@ describe('マネージャーの報告 — SDK のエラーを報告として扱�
       return job;
     });
 
-    // 2回目は成功。**印が残ったままだと、生きているマネージャーに過去の失敗が
-    // 貼り付いて見える。**
     await session.say('直した');
     await session.finish('直した');
 
@@ -541,17 +407,6 @@ describe('マネージャーの報告 — SDK のエラーを報告として扱�
   });
 });
 
-/**
- * **失敗で終わった回は「中身が無い」に畳まれない（`runner-contentless.test.ts`
- * が runner の生イベントで固定する保証を、デーモンを経由した見え方でも固定する）。**
- *
- * `said`（実際に喋った本文）も SDK の `result` も空という、単独なら
- * `contentless: true` になる条件が揃っていても、`failure` が付く回は
- * `failedReportText()` が必ず本文を作るので `contentless` は立たない
- * （`runner-protocol.ts` の doc）。ここが誤って畳まれると、支出上限や
- * エラーで死んだ回がクローンに一切知らされなくなる — 待つ／挑み直すの
- * 判断材料が消える。
- */
 describe('失敗で終わった回は畳まれない', () => {
   it('本文が丸ごと空（said も result も空）でも、失敗した回はクローンへ届く', async () => {
     const s = setup();
@@ -562,7 +417,6 @@ describe('失敗で終わった回は畳まれない', () => {
       return found;
     });
 
-    // `say()` を1度も呼ばない。`is_error` だけを立てて、result も空にする。
     await session.finish('', { isError: true });
 
     const texts = await reportTexts(s.inbox, 1);
@@ -573,28 +427,7 @@ describe('失敗で終わった回は畳まれない', () => {
   });
 });
 
-/**
- * **#1373: 委譲の下で動く作業者が枠（429）に当たったとき、デーモンはそれを
- * 委譲本体（マネージャー）のターンの失敗として名乗る。** 本体が枠に当たった
- * 場合と文言が同じなので、クローン側からはどちらの層が塞がっているかが
- * 区別できない。
- *
- * **ここで足すのは判定ではなく状況証拠である。** SDK の `result` は「誰の
- * 言葉が最後だったか」を運べる形をしていないので、`describeManagerFailure`
- * や文言からの読み取りは増やさない（Issue が明示的に禁じている）。代わりに
- * runner が「このターンの中で1度でも開いた作業者の数」を数え、`failedReportText`
- * が1以上のときだけ状況証拠の1行を足す。
- *
- * 4本の歯で固定する:
- * 1. 作業者を開いたターンが失敗で終わると、その1行が付く（N の値も検算する）
- * 2. 陽性対照A: 作業者を開いていないターンが失敗で終わっても、本文は
- *    従来と1文字も変わらない
- * 3. 陽性対照B: 作業者を開いたターンが成功で終わったら、その1行は付かない
- * 4. ターンをまたいで数が持ち越されない（前のターンで開いた作業者は、次の
- *    ターンの N に入らない）
- */
 describe('失敗で終わったターンの本文に、そのターンで開いた作業者の数を添える（#1373）', () => {
-  /** 作業者を開いていない・失敗したターンの本文（変更されない側の基準値）。 */
   const BASELINE_FAILURE_TEXT =
     '（このターンは応答を返さずに終わった: success / result_is_error）\n（報告なし）';
 
@@ -609,7 +442,6 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
 
     await session.taskStarted('task-1');
     await session.taskStarted('task-2');
-    // 同じ task_id をもう1度観測しても、2体目としては数えない。
     await session.taskStarted('task-1');
     await session.finish('', { isError: true });
 
@@ -633,8 +465,6 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
 
     await session.taskStarted('task-1');
     await session.taskStarted('task-2');
-    // 本体自身（`parentToolUseId` を渡さない）の発言に拒否の印。その後の
-    // `result` は成功で返る（`assistant.error` の印を見ないと区別が付かない）。
     await session.say('本体の枠の文言', { error: 'billing_error' });
     await session.finish('');
 
@@ -657,7 +487,6 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
       return found;
     });
 
-    // `taskStarted` を1度も呼ばない。
     await session.finish('', { isError: true });
 
     const texts = await reportTexts(s.inbox, 1);
@@ -679,7 +508,6 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
 
     await session.taskStarted('task-1');
     await session.taskStarted('task-2');
-    // `isError` を立てない ＝ 成功で終わる。
     await session.finish('作業者からの結果を踏まえて完了した');
 
     const texts = await reportTexts(s.inbox, 1);
@@ -700,12 +528,10 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
       return found;
     });
 
-    // 1ターン目: 作業者を1体開いて、成功で畳む。
     await session.taskStarted('task-1');
     await session.finish('1ターン目は成功した');
     await reportTexts(s.inbox, 1);
 
-    // 2ターン目: 作業者を1体も開かずに失敗する。
     await session.finish('', { isError: true });
 
     const texts = await reportTexts(s.inbox, 2);
@@ -736,7 +562,6 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
     expect(text).toBe(
       `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: rate_limit ×2 / billing_error ×1。作業者が当たったことは確かだが、本体も当たったかは SDK からは分からない）`,
     );
-    // 作業者の拒否の文言は、マネージャーの報告本文へは混ざらない。
     expect(text).not.toContain('作業者の枠の文言');
 
     await s.pool.stop();
@@ -753,11 +578,6 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
 
     await session.taskStarted('task-1');
     await session.say('作業者の枠の文言', { error: 'rate_limit', parentToolUseId: 'toolu-1' });
-    // 本体自身（`parentToolUseId` を渡さない）の発言にも拒否の印。**その後の
-    // `result` は成功で返る**（`session.finish('')` は `isError` を立てない）
-    // ——`assistant.error` の印を見ないと成功と区別が付かない実機の形
-    // （既存テスト「assistant.error が付いた本文は報告に混ぜず、失敗として
-    // 包んで上げる」と同じ作り）。
     await session.say('本体の枠の文言', { error: 'billing_error' });
     await session.finish('');
 
@@ -766,7 +586,6 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
     expect(text).toBe(
       '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n本体の枠の文言\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: rate_limit ×1。作業者が当たったことは確かで、本体の発言にも拒否の印が付いていたので、本体も当たっている）',
     );
-    // 差し替え前の文言（「本体も当たったかは SDK からは分からない」）は残っていない。
     expect(text).not.toContain('分からない');
 
     await s.pool.stop();
@@ -817,21 +636,6 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
   });
 });
 
-/**
- * **Issue #2113: `openedWorkers`（状況証拠の「N 体開いていた」）は作業者
- * （`local_agent`）のタスクだけを数える。** SDK は `task_started` を作業者
- * 以外のタスク（`local_bash` 等）でも出すので、直す前はここが水増しされて
- * いた（実測: 「作業者が35体開いていた」と報告した回に、実際にマネージャーが
- * 開いた作業者は1体だった）。
- *
- * 3本の歯で固定する:
- * 1. `task_type: 'local_bash'` の `task_started` は数えない（状況証拠の行が
- *    付かない）
- * 2. `task_type: 'local_agent'` の `task_started` は数える（従来どおり）
- * 3. `task_type` を名乗らない `task_started`（旧い SDK・provider が名乗らない
- *    場合）は、これまでどおり作業者として数える（取りこぼすより多く数える
- *    側へ倒す、という既存の向きを保つ）
- */
 describe('openedWorkers は作業者（local_agent）のタスクだけを数える（Issue #2113）', () => {
   const BASELINE_FAILURE_TEXT =
     '（このターンは応答を返さずに終わった: success / result_is_error）\n（報告なし）';
@@ -884,7 +688,7 @@ describe('openedWorkers は作業者（local_agent）のタスクだけを数え
       return found;
     });
 
-    await session.taskStarted('untyped-task-1'); // extra 無し ⟹ task_type 無し
+    await session.taskStarted('untyped-task-1');
     await session.finish('', { isError: true });
 
     const texts = await reportTexts(s.inbox, 1);
@@ -895,11 +699,6 @@ describe('openedWorkers は作業者（local_agent）のタスクだけを数え
     await s.pool.stop();
   });
 
-  /**
-   * **#2113 と同じ穴が `task_notification` 側にも在った。** `task_notification` に
-   * `task_type` は無いので、`task_started` で作業者ではないと見た `taskId` を
-   * 控えて、その通知を作業者の failed 通知として数えない。
-   */
   it('作業者を開いた区間で local_bash が failed で終わっても、作業者の failed 通知にも枠の件数にも数えない', async () => {
     const s = setup();
     await s.pool.start({ request: '調べて' });
@@ -918,7 +717,6 @@ describe('openedWorkers は作業者（local_agent）のタスクだけを数え
     await session.finish('', { isError: true });
 
     const texts = await reportTexts(s.inbox, 1);
-    // 作業者は1体開いていて、失敗した作業者は0体（Bash の失敗は数えない）。
     expect(texts[0]).toBe(
       `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者が 1 体開いていた。どちらが当たったかは SDK からは分からない）`,
     );
@@ -948,23 +746,6 @@ describe('openedWorkers は作業者（local_agent）のタスクだけを数え
   });
 });
 
-/**
- * **#1373 続き: `task_notification` の `status` / `summary` を状況証拠として
- * 数える。** `claude-provider.ts` が捨てていた `status`（`'completed' |
- * 'failed' | 'stopped'`）と `summary` を運ぶようにしたので、`#onTaskNotification`
- * がそれを使って「このターンで `status: 'failed'` として終わった作業者の数」と
- * 「そのうち要旨が枠(429)を名乗っていた数」を数える。
- *
- * 5本の歯で固定する:
- * 1. `status: 'failed'` の通知が1件でもあると、状況証拠の行が
- *    「作業者が開いていた」の行から「作業者が失敗で終わった」の行へ変わる
- * 2. 要旨が枠(429)を名乗っていれば、その件数も添える
- * 3. 陽性対照: `status: 'completed'` の通知だけなら、失敗ターンの本文は
- *    従来どおり「開いていた」の行のまま（`status` を見ていないと壊れる歯）
- * 4. 優先順位: 作業者自身の発言に拒否の印（#1466 の経路）が付いていれば、
- *    そちらの行が最優先で残る（`task_notification` の失敗の行は出ない）
- * 5. ターンをまたいで数が持ち越されない
- */
 describe("失敗で終わったターンの本文に、task_notification の status:'failed' を状況証拠として添える（#1373 続き）", () => {
   const BASELINE_FAILURE_TEXT =
     '（このターンは応答を返さずに終わった: success / result_is_error）\n（報告なし）';
@@ -1023,8 +804,6 @@ describe("失敗で終わったターンの本文に、task_notification の sta
 
     await session.taskStarted('task-1');
     await session.taskNotification('task-1', { status: 'failed', summary: '何か失敗した' });
-    // 本体自身（`parentToolUseId` を渡さない）の発言に拒否の印。その後の
-    // `result` は成功で返る（`assistant.error` の印を見ないと区別が付かない）。
     await session.say('本体の枠の文言', { error: 'billing_error' });
     await session.finish('');
 
@@ -1050,16 +829,7 @@ describe("失敗で終わったターンの本文に、task_notification の sta
     await session.taskStarted('task-1');
     await session.taskStarted('task-2');
     await session.taskStarted('task-3');
-    // task-1・task-2 は実機観測どおりの文言（USAGE_LIMIT_ERROR_PREFIXES の
-    // 「You've hit your」に当たる）。task-3 はそれと無関係な失敗理由。
-    // **2件を「名乗った」側、1件だけを「名乗らない」側にする**——枠を名乗る
-    // 判定を丸ごと反転する変異（`classifyUsageNotice(...) !== undefined` を
-    // `=== undefined` にする）を当てると、名乗った/名乗らないの内訳が
-    // 「2件中1件が名乗った」から「1件中1件（＝逆側）が名乗った」に変わり、
-    // 件数（2→1）で食い違いが出る。**旧版（1体だけを名乗る側にする作り）だと、
-    // 反転しても「1件中1件」のまま件数が変わらず、この歯がすり抜けた**
-    // （実測——変異試験で「宣言した歯ではなく別の歯が落ちる（身代わり）」と
-    // 判定された。以前はここが task-1 だけ枠を名乗る2体構成だった）。
+    // 名乗る側を2件・名乗らない側を1件にする: 1件だけだと判定を反転しても件数が変わらず、検算をすり抜ける
     await session.taskNotification('task-1', {
       status: 'failed',
       summary: `Agent terminated early due to an API error: ${ORG_SPEND_LIMIT} (error type rate_limit, HTTP 429, request id req_1, model sent to the API: claude-sonnet-5)`,
@@ -1136,13 +906,11 @@ describe("失敗で終わったターンの本文に、task_notification の sta
       return found;
     });
 
-    // 1ターン目: 作業者が失敗で終わるが、ターン自体は成功で畳む。
     await session.taskStarted('task-1');
     await session.taskNotification('task-1', { status: 'failed', summary: ORG_SPEND_LIMIT });
     await session.finish('1ターン目は成功した');
     await reportTexts(s.inbox, 1);
 
-    // 2ターン目: 作業者を1体も開かずに失敗する。
     await session.finish('', { isError: true });
 
     const texts = await reportTexts(s.inbox, 2);

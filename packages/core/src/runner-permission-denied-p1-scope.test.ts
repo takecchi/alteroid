@@ -11,39 +11,6 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-/**
- * issue #1768（横断レビュー14回目、PR #1750 のあとで見つかった穴）— 1回だけの
- * 許可（issue #1105 P1）の一致鍵が **入力全体ではなく `command` の文字列だけ**
- * だった、という「許しすぎる側」の穴を固定する。
- *
- * **疑いの根**: `denial-input-head.ts` の `rawLineOf` は、`tool_input` が
- * `command` という文字列欄を持つオブジェクトなら **その欄だけ** を取り出す
- * （`Bash` はこの形）。修正前の `runner.ts` の `#onPermissionDenied` /
- * `#consumeOneShotAllow` は、どちらもこの `rawLineOf` の結果をダイジェスト
- * して一致鍵にしていた——つまり **`command` 以外の欄（`run_in_background` /
- * `dangerouslyDisableSandbox` 等）は一致鍵に一切反映されていなかった。**
- *
- * PR #1750 の歯（「入力が1文字違えば返さない」など、`runner-permission-denied-p1.test.ts`
- * の「入力が1文字違えば通さない」）は、どれも `command` の文字列だけを変えて
- * いた。`command` 以外の欄を変える対照が無かったため、この穴には気づかれて
- * いなかった。
- *
- * **直したもの**: 一致鍵の材料を `rawLineOf`（表示用。`command` だけを返す）
- * から `matchInputOf`（入力全体を、キー順に依らない形で正規化したもの）へ
- * 差し替えた（`denial-input-head.ts`）。表示（`buildDenialInputHead` が作る
- * `inputHead`）は変えていない。
- *
- * この歯が測るのは3つである。
- *
- * 1. `run_in_background` だけが違う撃ち直しは、もう通らない（issue #1768 の
- *    「赤を取った例」そのもの）
- * 2. `dangerouslyDisableSandbox` だけが違う撃ち直しも、もう通らない（issue
- *    #1768 の「測っていないが、同じ形に当たるはずの例」——ここで赤を取る）
- * 3. **キー順だけが違う、内容が同一の入力は、引き続き同じ入力として扱われ
- *    通る**（対照。入力全体を鍵にする直し方が「キー順の違いだけで別物に
- *    なる」という別の壊れ方をしていないことを見る）
- */
-
 interface Started {
   options: Options;
   finish: () => void;
@@ -101,7 +68,6 @@ function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
   return { fn, started };
 }
 
-/** `options.hooks.PermissionDenied[0].hooks[0]` を直接叩く。 */
 async function firePermissionDenied(
   options: Options,
   input: Record<string, unknown>,
@@ -112,7 +78,6 @@ async function firePermissionDenied(
   return hook(input as never, undefined, { signal });
 }
 
-/** `options.hooks.PreToolUse[0].hooks[0]` を直接叩く。 */
 async function firePreToolUse(
   options: Options,
   input: Record<string, unknown>,
@@ -177,9 +142,6 @@ describe('一致鍵は入力全体を見る（issue #1768、横断レビュー14
     });
     await denialPromise;
 
-    // **同じ command・別の run_in_background** での撃ち直し。
-    // クローンが実際に見て許可したのは前景（run_in_background: false）の
-    // 呼び出しであって、背景（run_in_background: true）の呼び出しではない。
     const backgroundRetry = await firePreToolUse(started.options, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -187,11 +149,8 @@ describe('一致鍵は入力全体を見る（issue #1768、横断レビュー14
       tool_use_id: 'tu-scope-1-retry-background',
     });
 
-    // 一致鍵が入力全体（run_in_background を含む）を見ているので、これは
-    // 「別の入力」であり continue（一致せず、分類器の判定へ委ねる）になる。
     expect(backgroundRetry).toEqual({ continue: true });
 
-    // **対照: 同じ入力（run_in_background: false も込みで完全一致）なら通る。**
     const exactRetry = await firePreToolUse(started.options, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -223,8 +182,6 @@ describe('一致鍵は入力全体を見る（issue #1768、横断レビュー14
     });
     await denialPromise;
 
-    // クローンが見て許可したのはサンドボックスの中の実行であって、
-    // サンドボックスを外した実行ではない。
     const sandboxOffRetry = await firePreToolUse(started.options, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -233,7 +190,6 @@ describe('一致鍵は入力全体を見る（issue #1768、横断レビュー14
     });
     expect(sandboxOffRetry).toEqual({ continue: true });
 
-    // **対照: 同じ入力なら通る。**
     const exactRetry = await firePreToolUse(started.options, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -252,7 +208,6 @@ describe('一致鍵は入力全体を見る（issue #1768、横断レビュー14
     const denialPromise = firePermissionDenied(started.options, {
       hook_event_name: 'PermissionDenied',
       tool_name: 'Bash',
-      // ここでの欄の並びは command → run_in_background → timeout。
       tool_input: { command, run_in_background: false, timeout: 5000 },
       tool_use_id: 'tu-scope-3',
       reason: '分類器が拒否した（テスト）',
@@ -266,9 +221,6 @@ describe('一致鍵は入力全体を見る（issue #1768、横断レビュー14
     });
     await denialPromise;
 
-    // 撃ち直しは **同じ内容だが、オブジェクトの欄の並びが違う**
-    // （timeout → command → run_in_background）。一致鍵はキー順に依らない
-    // 正規化を使うので、これは「同じ入力」として通るべきである。
     const reorderedRetry = await firePreToolUse(started.options, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',

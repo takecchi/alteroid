@@ -13,45 +13,7 @@ import { BASH_GUARD_ENV } from './bash-guard-mode.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
 
-/**
- * この試験が固定するのは、Bash の門を `deny`（止める）にした設定の挙動である（`ALTEROID_BASH_GUARD=deny`）。
- * 既定（`ask`）の挙動は `runner-bash-guard-ask.test.ts` が固定する（issue #2884）。
- */
 const DENY_ENV = { [BASH_GUARD_ENV]: 'deny' };
-
-/**
- * issue #1105 P1 — 分類器（auto mode classifier）に拒否された道具の呼び出しへ、
- * クローンの判断で「1回だけの許可」を出す口を確かめる。
- *
- * **`runner-pre-tool-use.test.ts` と同じ足場・同じ作法である**（`fakeRunnerSdk` /
- * `setup` / `startSession`。あちらが `PreToolUse` の配線を固定していたのに
- * 対し、こちらは新しく足した `PermissionDenied` フックと、それが
- * `PreToolUse`（`#consumeOneShotAllow`）へ渡す1回だけの許可を固定する。
- *
- * **固定するのは6つである。**
- *
- * 1. 配線そのもの（`PermissionDenied` フックが1本だけ載っている）
- * 2. allow の一往復（ask → クローンの allow → retry → 撃ち直しの PreToolUse
- *    が通す）
- * 3. 1回で使い切る（同じ入力の2回目は通さない・入力が1文字違えば通さない・
- *    別の担い手なら通さない）
- * 4. deny では retry を返さず、クローンの一言を note として降ろす
- * 5. フックの時間切れでは retry を返さず、遅れて届いた allow は構造的に
- *    捨てられる（`#pending` から既に外れているので `answer()` が
- *    `delivered: false` を返す）
- * 6. `bash-wait-guard` の deny が1回だけの許可より先に効く（alteroid 自身の
- *    門を上書きしない）。#1603 と同じ形の検出（allow を返した呼び出しが
- *    それでも拒否された）も乗る
- *
- * ## ⚠️ この歯の弱さ（`runner-pre-tool-use.test.ts` と同じ断り）
- *
- * 下のフィクスチャは手書きのオブジェクトリテラルであり、実物の SDK フック
- * JSON を読み込んでいない。**生きたセッションで `PermissionDenied` フックが
- * 実際に発火するか・作業者（サブエージェント）の拒否でも来るか・機能フラグ
- * （`tengu_virtual_knuth`）の状態は、この歯では測れない**（issue #1105 の
- * 「やらないこと」）。ここで固定するのは「配線と、届いた入力に対する
- * runner.ts 側の判断」だけである。
- */
 
 interface Started {
   options: Options;
@@ -110,7 +72,6 @@ function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
   return { fn, started };
 }
 
-/** `options.hooks.PermissionDenied[0].hooks[0]` を直接叩く。 */
 async function firePermissionDenied(
   options: Options,
   input: Record<string, unknown>,
@@ -121,7 +82,6 @@ async function firePermissionDenied(
   return hook(input as never, undefined, { signal });
 }
 
-/** `options.hooks.PreToolUse[0].hooks[0]` を直接叩く。 */
 async function firePreToolUse(
   options: Options,
   input: Record<string, unknown>,
@@ -228,7 +188,6 @@ describe('allow の一往復（issue #1105 P1）', () => {
     });
     await tick();
 
-    // **ask がクローンへ上がっている。** requestId は tool_use_id をそのまま使う。
     const asks = askEvents(events);
     expect(asks).toHaveLength(1);
     expect(asks[0]?.requestId).toBe('tu-allow-1');
@@ -251,14 +210,12 @@ describe('allow の一往復（issue #1105 P1）', () => {
       hookSpecificOutput: { hookEventName: 'PermissionDenied', retry: true },
     });
 
-    // **allow の後の note は「撃ち直せば通る」と言い切らない**（文言の歯。動作の assert ではない）。
     const allowNote = noteEvents(events).find((n) => n.text.includes('1回だけ許可した'));
     expect(allowNote?.text).toContain('担い手のモデルが決める');
     expect(allowNote?.text).toContain('manager_send');
     expect(allowNote?.text).not.toContain('撃ち直せば通る');
     expect(asks[0]?.summary).toContain('撃ち直すかは担い手が決める');
 
-    // **撃ち直しの PreToolUse が通す。**
     const retryResult = await firePreToolUse(started.options, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -271,7 +228,6 @@ describe('allow の一往復（issue #1105 P1）', () => {
     };
     expect(asRecord.hookSpecificOutput?.permissionDecision).toBe('allow');
 
-    // **2回目は使い切っているので通さない。**
     const secondAttempt = await firePreToolUse(started.options, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -302,7 +258,6 @@ describe('allow の一往復（issue #1105 P1）', () => {
     const mismatched = await firePreToolUse(started.options, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
-      // 末尾に1文字だけ足した、別のコマンド。
       tool_input: { command: 'echo digest-exact-match!' },
       tool_use_id: 'tu-digest-1-retry',
     });
@@ -329,13 +284,11 @@ describe('allow の一往復（issue #1105 P1）', () => {
       tool_input: { command: 'echo actor-scoped-probe' },
       tool_use_id: 'tu-actor-1',
       reason: '分類器が拒否した（テスト）',
-      // マネージャー自身の呼び出し（agent_id 無し）。
     });
     await tick();
     await h.answer('mgr-1', { requestId: 'tu-actor-1', decision: 'allow', message: 'どうぞ' });
     await denialPromise;
 
-    // **同じ入力・別の担い手（作業者）からの撃ち直しは通さない。**
     const fromWorker = await firePreToolUse(started.options, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -346,7 +299,6 @@ describe('allow の一往復（issue #1105 P1）', () => {
     });
     expect(fromWorker).toEqual({ continue: true });
 
-    // **マネージャー自身からの撃ち直しは通す（対照）。**
     const fromManager = await firePreToolUse(started.options, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -359,11 +311,6 @@ describe('allow の一往復（issue #1105 P1）', () => {
 });
 
 describe('同じ型の別の作業者には許可を使わせない（issue #1105 P1）', () => {
-  /**
-   * 担い手の鍵は作業者の個体（`agent_id`）で作る。表示用の `actor` は型
-   * （`agent_type`）までしか区別しないので、それを鍵にすると、同じ型の作業者が
-   * 並行に2体いるとき、片方への許可をもう片方が使える。
-   */
   it('agent_type が同じでも agent_id が違えば通さず、許可を受けた作業者自身なら通す', async () => {
     const { started, host: h } = await startSession();
 
@@ -455,15 +402,12 @@ describe('フックの持ち時間切れは安全側（issue #1105 本文の設�
     );
     await tick();
 
-    // クローンが答える前に、フックの持ち時間が尽きる。
     controller.abort();
     const decision = await denialPromise;
     expect(decision).toEqual({ continue: true });
 
     expect(noteEvents(events).some((n) => n.text.includes('フックの持ち時間切れ'))).toBe(true);
 
-    // **遅れて届いた allow は構造的に捨てられる**——`#pending` から既に
-    // 外れているので `answer()` は「もう解けている」として扱う。
     const lateAnswer = await h.answer('mgr-1', {
       requestId: 'tu-timeout-1',
       decision: 'allow',
@@ -471,7 +415,6 @@ describe('フックの持ち時間切れは安全側（issue #1105 本文の設�
     });
     expect(lateAnswer.delivered).toBe(false);
 
-    // 撃ち直しても通らない。
     const retry = await firePreToolUse(started.options, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -494,10 +437,8 @@ describe('畳んで解いた確認は取り下げとして残し、クローン�
       reason: '分類器が拒否した（テスト）',
     });
     await tick();
-    // 確認がクローンへ上がっていること（上がっていなければ、畳みが解く確認がそもそも無い）。
     expect(askEvents(events).some((e) => e.requestId === 'tu-withdrawn-1')).toBe(true);
 
-    // クローンが答える前に、セッションを畳む（`#settleAll` が確認を解く）。
     await h.stop('mgr-1');
     const decision = await denialPromise;
     expect(decision).toEqual({ continue: true });
@@ -507,15 +448,11 @@ describe('畳んで解いた確認は取り下げとして残し、クローン�
         event.type === 'settled' && event.requestId === 'tu-withdrawn-1',
     );
     expect(settled).toHaveLength(1);
-    // **`#onPermission` と同じ形で `withdrawn` が載る**（#1586。manager.ts の
-    // `case 'settled'` が取り下げの行を日誌へ書くのは、これが在るときだけ）。
     expect(settled[0]?.withdrawn?.reason).toBe('デーモンから停止を指示された。');
-    // プロトコルの型を通っても `withdrawn` が落ちない（デーモン側で読める形である）。
     expect(runnerEventSchema.parse(settled[0])).toMatchObject({
       withdrawn: { reason: 'デーモンから停止を指示された。' },
     });
 
-    // **クローンは答えていない** ——「クローンが…出さなかった」をクローンの判断として残さない。
     const notes = noteEvents(events);
     expect(notes.some((n) => n.text.includes('への1回だけの許可を出さなかった'))).toBe(false);
     expect(notes.some((n) => n.text.includes('デーモンから停止を指示された。'))).toBe(false);
@@ -550,11 +487,9 @@ describe('bash-wait-guard の deny が1回だけの許可より先に効く（is
       tool_use_id: 'tu-guard-1-retry',
     });
     const asRecord = retry as { hookSpecificOutput?: Record<string, unknown> };
-    // **alteroid 自身の門（#894）が勝つ。** 1回だけの許可の allow ではない。
     expect(asRecord.hookSpecificOutput?.permissionDecision).toBe('deny');
     expect(String(asRecord.hookSpecificOutput?.permissionDecisionReason)).toContain('gh run watch');
 
-    // **1回だけの許可を消費した形跡（「上書きした」の note）が無い。**
     expect(noteEvents(events).some((n) => n.text.includes('上書きした'))).toBe(false);
   });
 });
@@ -584,7 +519,6 @@ describe('bash-wait-guard の確認（ask、既定）は、クローンの1回�
       }) as Promise<{ hookSpecificOutput?: Record<string, unknown> }>;
 
     expect((await fire()).hookSpecificOutput?.permissionDecision).toBe('allow');
-    // 使い切った後は、また確認に上がる（門が黙って開きっぱなしにならない）。
     expect((await fire()).hookSpecificOutput?.permissionDecision).toBe('ask');
   });
 });
@@ -606,7 +540,6 @@ describe('1回だけの許可には寿命が付く（issue #1105 本文の設計
       await h.answer('mgr-1', { requestId: 'tu-ttl-1', decision: 'allow', message: 'どうぞ' });
       await denialPromise;
 
-      // 寿命（10分）を過ぎた時刻へ進める。
       nowSpy.mockReturnValue(now + 10 * 60 * 1000 + 1);
 
       const retry = await firePreToolUse(started.options, {
@@ -638,7 +571,6 @@ describe('1回だけの許可には寿命が付く（issue #1105 本文の設計
       await h.answer('mgr-1', { requestId: 'tu-ttl-2', decision: 'allow', message: 'どうぞ' });
       await denialPromise;
 
-      // 寿命（10分）ぎりぎり手前。
       nowSpy.mockReturnValue(now + 10 * 60 * 1000 - 1);
 
       const retry = await firePreToolUse(started.options, {
@@ -654,14 +586,6 @@ describe('1回だけの許可には寿命が付く（issue #1105 本文の設計
     }
   });
 
-  /**
-   * issue #1768 —— 境界（ちょうど `ONE_SHOT_ALLOW_TTL_MS` 経過した時点）を固定する。
-   *
-   * **以前の実装（`grant.expiresAt < Date.now()`）は、ちょうど寿命が尽きた
-   * ミリ秒を「まだ有効」の側へ倒していた。** 上の2本（1ms 手前・1ms 過ぎ）は
-   * 境界そのものを踏んでいない —— この歯だけがちょうどの1点を固定する。
-   * 許しすぎる（開く）側の穴なので、この歯は `<=` へ直す前は赤くなる。
-   */
   it('寿命ちょうど（境界の1点）では allow を返さない', async () => {
     const { started, events, host: h } = await startSession();
     const now = Date.now();
@@ -678,7 +602,6 @@ describe('1回だけの許可には寿命が付く（issue #1105 本文の設計
       await h.answer('mgr-1', { requestId: 'tu-ttl-3', decision: 'allow', message: 'どうぞ' });
       await denialPromise;
 
-      // 寿命（10分）ちょうど。
       nowSpy.mockReturnValue(now + 10 * 60 * 1000);
 
       const retry = await firePreToolUse(started.options, {
@@ -714,8 +637,6 @@ describe('#1603 と同じ形の検出——allow を返した呼び出しがそ�
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
       tool_input: { command: 'echo funneled-probe' },
-      // **同じ tool_use_id で撃ち直す**——SDK が分類器へ回した・deny 規則が
-      // 上書きしたのどちらでも、この id で拒否が来ることを模す。
       tool_use_id: 'tu-funneled-1',
     });
     const asRecord = retry as { hookSpecificOutput?: Record<string, unknown> };
@@ -731,11 +652,6 @@ describe('#1603 と同じ形の検出——allow を返した呼び出しがそ�
   });
 });
 
-/**
- * #2352 の点3 —— 1回だけの許可が撃ち直されないまま期限切れになったことを、note に残す。
- * 遅延評価（次の道具呼び出し・次の拒否の時点）なので、時計は `Date.now` を進めて偽る
- * （上の寿命のテストと同じ作法）。
- */
 describe('撃ち直されないまま期限切れになった1回だけの許可は note に残る（#2352 の点3）', () => {
   const TTL = 10 * 60 * 1000;
   const UNUSED = '撃ち直されないまま';
@@ -796,7 +712,6 @@ describe('撃ち直されないまま期限切れになった1回だけの許可
     try {
       await grantOnce(started, h, 'echo unused-b', 'tu-unused-b');
 
-      // 寿命の手前では出ない。
       nowSpy.mockReturnValue(now + TTL - 1);
       await unrelatedPreToolUse(started, 'tu-other-b0');
       expect(noteEvents(events).some((n) => n.text.includes(UNUSED))).toBe(false);
@@ -811,7 +726,6 @@ describe('撃ち直されないまま期限切れになった1回だけの許可
       expect(unused[0]?.text).toContain('manager:mgr-1・Bash');
       expect(unused[0]?.text).toContain('担い手のモデルが決める');
       expect(unused[0]?.text).toContain('確かめていない');
-      // 生の入力は載せない。
       expect(unused[0]?.text).not.toContain('unused-b');
     } finally {
       nowSpy.mockRestore();

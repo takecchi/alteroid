@@ -2,21 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { decideAnswer, hasNegationMarker, inferDecision } from './runner.js';
 
-/**
- * `decision` を付け忘れた回答の読み取り（issue #1827）。
- *
- * `inferDecision` は「否定が読み取れたときだけ拒否」する設計で、語の一覧に
- * 無い否定は **allow に化ける**（許しすぎる側）。「拒否」「無理」のような
- * ごく普通の拒否の言い方が一覧から漏れていた。
- *
- * ⚠️ **2026-09-28（issue #1827/#1837）: `decideAnswer` の戻り値の形が変わった。**
- * 以前は `'allow' | 'deny'` の2値をそのまま返していたが、いまは
- * `{ decision: 'allow' | 'deny'; unreadable: boolean }` を返す（下の
- * 「3値化（issue #1827/#1837 の反転）」を見よ）。この describe 内のテストは
- * **挙動としては変わっていない**（否定の言い方が deny になる／明示の
- * decision が優先される、という主張そのものは1文字も反転していない）ので、
- * 反転ではなく型の追随として書き換えた。
- */
 describe('inferDecision / 普通の拒否の言い方を拒否として読む（issue #1827）', () => {
   it.each([
     '拒否します',
@@ -57,20 +42,6 @@ describe('inferDecision / 普通の拒否の言い方を拒否として読む（
   });
 });
 
-/**
- * `inferDecision` の3値化（issue #1827/#1837、オーナーの判断による反転）。
- *
- * #1827 は否定語の一覧を広げて直したが、#1837（17回目の横断レビュー）で
- * 同じ形の残りが見つかった——英語の -ing 形（`rejecting` 等。語境界で
- * `reject` に一致しない）や `won't` / `will not` / `cannot` が一覧に無く、
- * 「否定が読み取れなければ allow」という既定そのものが漏れの温床だった。
- *
- * オーナーはここで既定を反転した——`allow` / `deny` の2値ではなく
- * `allow` / `deny` / `unreadable` の3値にし、**否定を承認より先に見て**、
- * 承認として読むのは「承認の語があり、かつ否定の印が無い」ときだけにする。
- * どちらとも読めない回は新設の `unreadable` になる（SDK 側では `deny` として
- * 扱われる。`decideAnswer` の doc）。
- */
 describe('inferDecision / 3値化（issue #1827/#1837 の反転）', () => {
   describe("#1837 が赤で見つけた漏れ（-ing 形・won't・will not・cannot）は、いまは deny", () => {
     it.each([
@@ -99,16 +70,6 @@ describe('inferDecision / 3値化（issue #1827/#1837 の反転）', () => {
     },
   );
 
-  /**
-   * **PR #1866 のレビューで見つけた抜け。** `どうぞ` / `go ahead` /
-   * `approved` と同じ強さの、ごく普通の承認の言い方（単独の `はい` /
-   * `yes` / `sure` / 丁寧形の `承認します`）が初版の `APPROVAL_PHRASES` /
-   * `APPROVAL_WORDS` に無く、`unreadable` へ落ちていた（`runner.ts` の
-   * `APPROVAL_PHRASES` の doc を見よ）。**`進めて`（`よい` を伴わない単独形）
-   * はここに含めない**——直下の「承認とも拒否とも読めない」の describe が
-   * `よい、そのまま進めて` を `unreadable` の代表例として固定しており、
-   * 単独の `進めて` を承認語にするとその歯を反転させる。
-   */
   it.each(['はい', 'yes', 'sure', '承認します'])(
     'PR #1866 で足した、はっきりした承認「%s」も allow',
     (message) => {
@@ -124,13 +85,10 @@ describe('inferDecision / 3値化（issue #1827/#1837 の反転）', () => {
   );
 
   it("「won't approve」は DENIAL_WORDS の won't が先に効いて deny になる", () => {
-    // 承認の語（approve）を含んでいても、否定の印が先に確定させる。
     expect(inferDecision("won't approve")).toBe('deny');
   });
 
   it('「問題ない」は否定の印（ない）を含むので、承認の意図があっても unreadable', () => {
-    // 過剰に拒否と読む側（答え直しを求めるだけ）であって、許しすぎる側では
-    // ないので、これでよいという判断（依頼の設計要点そのもの）。
     expect(inferDecision('問題ない')).toBe('unreadable');
   });
 
@@ -171,24 +129,6 @@ describe('inferDecision / 3値化（issue #1827/#1837 の反転）', () => {
   });
 });
 
-/**
- * issue #1877: 否定の語を含む承認の言い方（英語）が `deny` と読まれる穴。
- *
- * `no problem` / `no objection(s)` / `don't hesitate` / `don't mind` は
- * 意味としては承認だが、`DENIAL_WORDS` の `no` / `don't` が語境界で一致
- * してしまい、`inferDecision` の1段目（`DENIAL_PHRASES`/`DENIAL_WORDS`）
- * で `deny` が確定していた——3値化（#1827/#1837）で新設された `unreadable`
- * （承認とも拒否とも読めない回。SDK へは deny のまま返るが、クローンには
- * 「decision を付けて答え直せ」と伝わる）にすら届かず、`問題ない` のような
- * 日本語の否定込み承認（`ない` が `NEGATION_MARKERS_JA` に在るので
- * `hasApprovalMarker && !hasNegationMarker` で自然に unreadable へ落ちる）
- * と扱いが揃っていなかった。
- *
- * 直し方は `allow` へ倒すことではない——`allow` へ寄せると #1827 が閉じた
- * 「迷ったら通さない」の既定を緩めることになる。ここでの直しは
- * `unreadable` への着地であり、SDK から見える結果（deny）は1文字も
- * 変わらない。
- */
 describe('inferDecision / 否定の語を含む承認の言い方は unreadable（issue #1877）', () => {
   it.each([
     'no problem',
@@ -227,18 +167,6 @@ describe('inferDecision / 否定の語を含む承認の言い方は unreadable�
   });
 });
 
-/**
- * issue #1890: `don't worry` / `no worries` が #1877 の一覧に無く、
- * 案内の無い `deny` に化ける穴。
- *
- * `don't hesitate` / `don't mind` と同格の「心配しないで＝進めてよい」と
- * いう言い回しなのに、`NEGATED_APPROVAL_PHRASES` に入っていなかったため
- * `DENIAL_WORDS` の `\bdon't\b` / `\bno\b` が先に `deny` を確定させ、
- * #1877 が作った救済（`unreadable`。答え直しの案内付き）にすら届いて
- * いなかった。直し方は #1877 と同じ形——`allow` へは倒さず、
- * `NEGATED_APPROVAL_PHRASES` に2つ足して `unreadable` へ着地させるだけ
- * である（SDK から見える結果は deny のまま）。
- */
 describe('inferDecision / "don\'t worry" と "no worries" は unreadable（issue #1890）', () => {
   it("「Yes, please proceed. Don't worry, I trust your judgement.」は unreadable", () => {
     expect(inferDecision("Yes, please proceed. Don't worry, I trust your judgement.")).toBe(
@@ -278,28 +206,6 @@ describe('inferDecision / "don\'t worry" と "no worries" は unreadable（issue
   );
 });
 
-/**
- * issue #1907: 曲がった引用符（U+2019 RIGHT SINGLE QUOTATION MARK '’'）で
- * 書かれた `don't` / `won't` が否定として読まれず、`Don’t go ahead.` が
- * allow に化ける穴。
- *
- * `DENIAL_WORDS`（`don't` / `won't`）・`NEGATION_MARKERS_EN`（`n't`）・
- * `NEGATED_APPROVAL_PHRASES`（`don't hesitate` 等6語）はいずれも素の
- * アポストロフィ（U+0027 `'`）だけを見ている。スマートフォンや macOS の
- * 入力・Slack 等の自動整形は曲がった引用符（U+2019 `’`、および見た目が
- * 近い U+2018 `‘` / U+02BC `ʼ`）を使うことが多く、その形で届いた否定は
- * どの一覧にも当たらない——`Don’t go ahead.` は `go ahead`
- * （`APPROVAL_WORDS`）に当たる一方、否定側のどの一覧にも当たらないので
- * `allow` になる（#1827/#1837 で「読めなければ allow にしない」へ反転した
- * 方針の抜け）。
- *
- * 直し方は `inferDecision` の入口でアポストロフィの変種を素の `'` へ
- * 揃えてから各一覧に当てること——`NEGATED_APPROVAL_PHRASES` の照合にも
- * 同じ正規化が及ぶようにする（`hasNegatedApprovalPhrase` /
- * `hasNegatedApprovalDenial` は `inferDecision` 内でしか呼ばれないので、
- * 入口1箇所の正規化で足りる。呼び出し元は他に無い——`packages/core/src/*.ts`
- * を `grep -Fn` した実測は PR 本文にある）。
- */
 describe('inferDecision / 曲がった引用符の apostrophe が否定として読まれない（issue #1907）', () => {
   it('「Don’t go ahead.」（U+2019）は deny（曲がった引用符の否定を見落として allow に化けない）', () => {
     expect(inferDecision('Don’t go ahead.')).toBe('deny');
@@ -365,19 +271,6 @@ describe('inferDecision / 曲がった引用符の apostrophe が否定として
   );
 });
 
-/**
- * issue #1923: 承認の語（はい・どうぞ・OK・Sure など）と、一覧に無い
- * 「進めるな」の言い方が同じ回答に入ると allow になっていた穴。`inferDecision`
- * は「承認の語が在り、否定の印が無いときだけ allow」なので、否定の印にも
- * `DENIAL_*` にも無い言い方（保留・見送り・不要・カタカナのダメ・wait・
- * hold off・pause・abort）や、全角の英字（`ＳＴＯＰ` / `ＮＯ`）は、承認の語に
- * 負けて許す側へ倒れる。
- *
- * はっきりした否定（ダメ・abort・全角の STOP / NO）は deny、保留・一時停止の
- * 言い方は unreadable（答え直しの案内）へ落ちることを見る。後者を deny に
- * しないのは、「確認は不要です、どうぞ」「Don't wait, go ahead」のように
- * 承認の文にも現れうるからである。
- */
 describe('inferDecision / 承認の語と一覧に無い否定が同居しても allow にしない（issue #1923）', () => {
   it.each([
     'はい、ダメです',
@@ -430,20 +323,6 @@ describe('inferDecision / 承認の語と一覧に無い否定が同居しても
   );
 });
 
-/**
- * issue #1926（クローン teto の判断、2026-09-28）: decision の無い回答を allow と
- * 推定するのは、**回答が承認の言い方だけでできているとき**に限る。承認の語に
- * 句読点・空白・敬語程度が付いた形までを「承認だけ」と数え、それ以外の文は
- * 承認の語を含んでいても unreadable（答え直しの案内）にする。
- *
- * 理由は #1827 / #1837 の線（判定できないときは閉じる側に倒す。読み違えて
- * 通すより、聞き直す方が安い）の延長である。#1837 / #1907 / #1923 は、承認の
- * 語と一覧に無い否定が同居する形を、語を足して塞いできた。語を足す形では
- * 漏れが残り続けるので、allow の側を形で絞る。
- *
- * **下の一覧が、承認の言い方だけで allow になる文の固定である。** 足す・外す
- * ときは、この一覧を先に動かすこと。
- */
 describe('inferDecision / allow は承認の言い方だけでできた回答に限る（issue #1926）', () => {
   it.each([
     'はい',
@@ -493,8 +372,6 @@ describe('inferDecision / allow は承認の言い方だけでできた回答に
   });
 
   it.each([
-    // 承認の語に、一覧に無い条件や注文が付いた形——#1923 のように否定が
-    // 隠れていても、語の一覧に無ければ見分けられないので、allow にしない。
     'OK、ただし main には push しないで',
     'はい、でも本番には触らないこと',
     'どうぞ、ただ先に相談して',
@@ -508,7 +385,6 @@ describe('inferDecision / allow は承認の言い方だけでできた回答に
     'はい、進めて',
     'yes and no',
     'ok ok but hmm',
-    // 承認の語が別の語の中にあるだけの形
     'yesterday',
     'okra',
     'approval pending',
@@ -535,15 +411,6 @@ describe('inferDecision / allow は承認の言い方だけでできた回答に
   });
 });
 
-/**
- * issue #1932: 否定の印 `NEGATION_MARKERS_EN` の `n't` は、`\b(…|n't|…)\b` の形では
- * 縮約の中で1回も当たらなかった。`isn't` の `s` と `n` はどちらも語の文字なので、
- * `n` の手前に `\b` が立たない（`n't` が単独で書かれたときだけ当たる）。
- *
- * #1926 の後は、`isn't` を含む文は `isApprovalOnly` の時点で「承認だけ」から
- * 外れるので、`inferDecision` の戻り値からは印が当たったかが見えない。だから
- * 印そのもの（`hasNegationMarker`）を直接測る。
- */
 describe("hasNegationMarker / n't の縮約でも否定の印が当たる（issue #1932）", () => {
   it.each([
     "isn't",
@@ -557,8 +424,6 @@ describe("hasNegationMarker / n't の縮約でも否定の印が当たる（issu
     "wasn't",
     'Isn’t it risky?',
   ])('「%s」は否定の印に当たる', (message) => {
-    // 曲がった引用符の形は、判定の入口（`normalizeForDecision`）で `'` に揃えた
-    // 後の文で当たればよい。ここでは入口と同じ揃え方を手で当てる。
     expect(hasNegationMarker(message.replace(/[‘’ʼ]/g, "'"))).toBe(true);
   });
 
@@ -577,13 +442,6 @@ describe("hasNegationMarker / n't の縮約でも否定の印が当たる（issu
   );
 });
 
-/**
- * issue #1907 の残り: 全角のアポストロフィ（U+FF07 `＇`）で書かれた `don＇t` /
- * `won＇t` も否定として読む。#1907 の `normalizeApostrophes` は U+2018 / U+2019 /
- * U+02BC だけを揃えるが、判定の入口（`normalizeForDecision`）は先に NFKC を
- * かける（#1923）ので、U+FF07 は NFKC で素の `'` になる。#1907 の PR 本文が
- * 「揃えていない」と書いていた変種を、ここで固定する。
- */
 describe('inferDecision / 全角のアポストロフィ（U+FF07）の否定も読む（issue #1907 の残り）', () => {
   it.each(['Don＇t go ahead.', 'I won＇t approve this.', 'Please don＇t proceed.'])(
     '「%s」は deny',

@@ -12,15 +12,7 @@ import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * runner の /tmp の片付けの配線（Issue #3039）。`scratch-sweep.test.ts` が判定の歯を持つ。
- * ここは Host の周期が `scratch_sweep` を（境界を通る形で）emit すること、`shutdown()` で
- * 周期が止まること、デーモン側が日誌へ残しクローンへ知らせることを固定する。
- */
-/**
- * 偽の時計の下では `vi.waitFor` を使わない（確かめるたびに偽の時計を自分で進め、runner の周期を
- * 余分に回して回数がずれる）。時計を進めずに、`setImmediate` で I/O を回して条件を待つ。
- */
+/** 偽の時計の下では `vi.waitFor` を使わない: 確かめるたびに時計を進め、周期が余分に回って回数がずれる。 */
 async function settle(condition: () => boolean, maxTurns = 5000): Promise<void> {
   for (let i = 0; i < maxTurns; i += 1) {
     if (condition()) return;
@@ -42,7 +34,6 @@ describe('runner の周期と shutdown（#3039）', () => {
   });
 
   it('猶予の過ぎた作業場を消して scratch_sweep を出し、shutdown 後は動かない', async () => {
-    // 周期（setInterval）だけを偽の時計にし、I/O は実物のまま。実時間では待たない。
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     await writeFile(path.join(tmp, 'mgr-aaaa1111-x.log'), '');
     let readdirCalls = 0;
@@ -75,8 +66,7 @@ describe('runner の周期と shutdown（#3039）', () => {
       runnerId: 'runner-x',
       removed: [{ name: 'mgr-aaaa1111-x.log' }],
     });
-    // 何も無い回は送らない。周期を1つ進めるごとに、その回の片付け（readdir の完了）が終わるのを
-    // 待ってから次を進める（重ねて撃たない仕様なので、終わる前に進めると回数がずれる）。
+    // 片付け（readdir）の完了を待ってから次の周期へ進める: 重ねて撃たない仕様なので、終わる前に進めると回数がずれる。
     await settle(() => readdirDone === readdirCalls);
     await new Promise((r) => setImmediate(r));
     const before = readdirCalls;
