@@ -9,26 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-/**
- * 復帰（`#recoverFromFailedResume`）で畳まれた古い世代の `result` は、runner の `usage` に
- * 混ざらない（Issue #3022 仮説2）。
- *
- * ## なぜこれを測るか
- *
- * `#read` は \`session.readEvents((event) => this.#apply(event))\` と、**世代を見ずに**
- * 古い世代のストリームの出来事を \`#apply\` へ通す。復帰は \`#apply\` の \`result\`（失敗）の
- * 中でも起きる（\`#read\` の外で世代が進む）ので、古いストリームがその後も何か出すと、
- * それは新しい世代の状態に当たる。\`usage\` に載る古い世代の累積が、新しい世代の累積
- * （resume で 0 から数え直し）の後ろに届くと、台帳では逆順の累積になり過大に数える。
- *
- * ## 最悪の仮定
- *
- * **実 SDK が \`close()\` の後にメッセージを出すかは確かめられない。** だからここでは出すと
- * 仮定する（\`zombie: true\` の偽 SDK は \`close()\` で止まらず、後から \`result\` を出す）。
- */
-
 interface FakeSession {
-  /** `result` を1つ流す。 */
   finish(
     text: string,
     options?: { subtype?: string; isError?: boolean; costUsd?: number },
@@ -111,7 +92,7 @@ function fakeSdk(zombie: boolean): { fn: typeof sdkQuery; sessions: FakeSession[
     return Object.assign(generate(), {
       close: () => {
         session.closed = true;
-        // 最悪の仮定: close() の後も、古い世代のストリームは出し続ける。
+        // 実 SDK が close() の後に出すかは確かめられないので、zombie では出し続けると仮定する。
         if (!zombie && emit) emit(null);
       },
       interrupt: async () => undefined,
@@ -177,20 +158,16 @@ describe('復帰で畳まれた古い世代の result は usage に混ざらな�
       await resumeDead(host, 'mgr-gen');
 
       const old = await nthSession(sessions, 0);
-      // resume が効かず、手が動く前に失敗の result で終わる → 復帰（新しい世代が開く）。
       await old.finish('', { subtype: 'error_during_execution', isError: true });
       const fresh = await nthSession(sessions, 1);
 
-      // 新しい世代の最初の成功（累積は 0 から数え直し）。
       await fresh.finish('続けた', { costUsd: 1 });
       await vi.waitFor(() => expect(usageCosts(events)).toEqual([1]));
 
-      // 最悪の仮定: 畳まれたはずの古い世代が、後から成功の result（大きい累積）を出す。
       if (zombie) {
         await old.finish('古い世代の遅れた結果', { costUsd: 10 });
         await settle();
       }
-      // 古い世代の累積（10）は、新しい世代の累積（1）の後ろに混ざらない。
       expect(usageCosts(events)).toEqual([1]);
     });
   }
@@ -200,19 +177,15 @@ describe('復帰で畳まれた古い世代の result は usage に混ざらな�
     await resumeDead(host, 'mgr-race');
 
     const old = await nthSession(sessions, 0);
-    // 成功の result の直後に、同じ世代が失敗の result を出す（`progressed` の判定が usage より
-    // 遅れる窓が無いかを測る。成功が先に `progressed` を立てるなら、失敗は復帰にならない）。
     void old.finish('進んだ', { costUsd: 3 });
     void old.finish('', { subtype: 'error_during_execution', isError: true });
     await settle();
 
     expect(usageCosts(events)).toEqual([3]);
-    // 復帰していない＝新しいセッションは開いていない。
     expect(sessions).toHaveLength(1);
   });
 });
 
-/** event loop を数回回して、流した出来事が処理されるのを待つ（実時間の待ちを使わない）。 */
 async function settle(): Promise<void> {
   for (let i = 0; i < 30; i += 1) await new Promise((resolve) => setImmediate(resolve));
 }

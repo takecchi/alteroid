@@ -6,17 +6,6 @@ import {
   SUBAGENT_BACKGROUND_WAIT_MS,
 } from './runner-subagent-stop-state.js';
 
-/**
- * `runner-subagent-stop-state.ts` の歯。**純粋なクラスなので I/O のモック無しで
- * 全分岐に通せる**（`clone-notices.test.ts` と同じ作法。前例は PR #1359）。
- *
- * ここが固定するのは、切り出した8フィールドの**状態の器としての性質**——
- * 上限・FIFO の枝刈り・1回きりのフラグ・積算カウンタ——である。`RunnerSession`
- * が「いつ呼ぶか・emit するかどうか」を決める判断は
- * `runner-subagent-stop.test.ts` / `runner-stop.test.ts`（ブラックボックス）が
- * 引き続き持つ——ここでは扱わない。
- */
-
 describe('RunnerSubagentStopState — 背景タスクの所有者表', () => {
   it('setBackgroundTaskOwner で控えた値を backgroundTaskOwner / hasBackgroundTaskOwner で引ける', () => {
     const state = new RunnerSubagentStopState();
@@ -40,24 +29,15 @@ describe('RunnerSubagentStopState — 背景タスクの所有者表', () => {
     for (let n = 0; n < BACKGROUND_TASK_OWNER_LIMIT; n += 1) {
       state.setBackgroundTaskOwner(`t${n}`, `agent-${n}`);
     }
-    // 上限ちょうどでは、まだ最初の1件が残っている（対照）。
     expect(state.hasBackgroundTaskOwner('t0')).toBe(true);
 
-    // 501件目を積むと、いちばん古い t0 が捨てられる。
     state.setBackgroundTaskOwner(`t${BACKGROUND_TASK_OWNER_LIMIT}`, 'agent-overflow');
     expect(state.hasBackgroundTaskOwner('t0')).toBe(false);
     expect(state.backgroundTaskOwner('t0')).toBeUndefined();
-    // 2番目に古い t1 はまだ残っている。
     expect(state.hasBackgroundTaskOwner('t1')).toBe(true);
-    // 新しく積んだものは引ける。
     expect(state.backgroundTaskOwner(`t${BACKGROUND_TASK_OWNER_LIMIT}`)).toBe('agent-overflow');
   });
 
-  /**
-   * Issue #1554: `command`（3番目の任意引数）は所有者と同じ呼び出しで一緒に
-   * 控える。読めなければ何も持たない——空文字と混ぜない（他の任意欄と同じ
-   * 作法。`backgroundTaskCommand` の doc）。
-   */
   it('command を渡すと backgroundTaskCommand で引ける。渡さなければ undefined', () => {
     const state = new RunnerSubagentStopState();
     expect(state.backgroundTaskCommand('t1')).toBeUndefined();
@@ -66,7 +46,6 @@ describe('RunnerSubagentStopState — 背景タスクの所有者表', () => {
     expect(state.backgroundTaskOwner('t1')).toBe('agent-a');
     expect(state.backgroundTaskCommand('t1')).toBe('pnpm test');
 
-    // command を渡さなかった呼び出しでは、command は控えられない。
     state.setBackgroundTaskOwner('t2', 'agent-b');
     expect(state.backgroundTaskOwner('t2')).toBe('agent-b');
     expect(state.backgroundTaskCommand('t2')).toBeUndefined();
@@ -84,10 +63,8 @@ describe('RunnerSubagentStopState — 背景タスクの所有者表', () => {
       'agent-overflow',
       'cmd-overflow',
     );
-    // t0 は所有者ごと捨てられているので、command も引けない。
     expect(state.hasBackgroundTaskOwner('t0')).toBe(false);
     expect(state.backgroundTaskCommand('t0')).toBeUndefined();
-    // 新しく積んだものは command も引ける。
     expect(state.backgroundTaskCommand(`t${BACKGROUND_TASK_OWNER_LIMIT}`)).toBe('cmd-overflow');
   });
 });
@@ -98,7 +75,6 @@ describe('RunnerSubagentStopState — 1セッションに1回だけの診断フ�
     expect(state.ownerLookupFailureNoted).toBe(false);
     state.markOwnerLookupFailureNoted();
     expect(state.ownerLookupFailureNoted).toBe(true);
-    // 2度目に立てても壊れない（呼び出し側の早期 return に依存しない）。
     state.markOwnerLookupFailureNoted();
     expect(state.ownerLookupFailureNoted).toBe(true);
   });

@@ -4,13 +4,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-/**
- * セッションの世代（Issue #3170）— runner 側。`Host#create` がセッションを作るたびに新しい値を振り、
- * `start` / `resume` の応答と、そのセッションが出す `closed` / `session` などに載せる。
- * **デーモンが古いセッションの出来事を見分ける材料**（`manager-same-runner-resume-stale-closed.test.ts`）。
- */
-
-/** 閉じられるまで開いたまま、init で `session` を名乗る偽 SDK（`runner-fence.test.ts` の `fakeSdk` と同じ形）。 */
 function fakeSdk(): typeof sdkQuery {
   let calls = 0;
   return ((params: { prompt: AsyncIterable<unknown> }) => {
@@ -56,7 +49,6 @@ function setup(options: { enforceLease?: boolean } = {}): {
     emit: (event) => events.push(event),
     queryFn: fakeSdk(),
     env: { PATH: '/usr/bin' },
-    // 実 I/O をさせない（`runner-fence.test.ts` の同じ差し替えの注記）。
     readCgroupEventCountersFn: async () => ({}),
     finishUnpushedWorkFn: async () => ({ cwd: '/work/project', worktrees: [] }),
     ...options,

@@ -5,44 +5,6 @@ import { runnerEventSchema } from './runner-protocol.js';
 import type { RunnerEvent, UnpushedWorkResult } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-/**
- * **日常の redeploy（SIGTERM → `Host#shutdown()` → `RunnerSession#stop()`。
- * `closed` を出さない設計）で runner が止まる直前に、未 push の作業の観測を
- * `shutdown_unpushed_work` イベントとして運ぶこと（Issue #1266 候補(C)）。**
- *
- * `runner-closed-unpushed-work.test.ts`（候補(2)。`#finish()` → `closed` の
- * 配線を測る）と対になる——あちらは枠落ち・失敗の経路、こちらは `stop()` の
- * 経路を測る。足場（`fakeSdk` / `hosts` の後始末）は `runner-fence.test.ts` の
- * ものを複製してある（同ファイルの doc と同じ理由——duplicated on purpose）。
- * あちらは「閉じられるまで開いたまま」の最小限のセッションを作るだけで、
- * `askPermission` / `taskStarted` のような重い足場を持たない——この歯が
- * 測りたいのは「取る場所」と「どの `stop()` から出るか」の2点だけなので、
- * これで足りる。
- *
- * **測るのは「取る場所」ではなく「配線」である。** `computeUnpushedWork` 自体
- * （`cwd` の下を実際にどう調べるか）は `unpushed-work.test.ts` が持つ。ここは
- * `finishUnpushedWorkFn`（テスト用の差し替え口。既定は本物の
- * `this.unpushedWork()`）を使って、runner との実 I/O を挟まずに固定する。
- *
- * ## 測る6つ
- *
- * 1. `Host#shutdown()` 経由（日常の redeploy）: `kind: 'ok'` + `result` が
- *    `shutdown_unpushed_work` に載る（境界を通っても壊れない）
- * 2. `Host#stop(managerId)` 経由（デーモンの明示停止。`manager_stop
- *    force: true` 等が通る経路）: `shutdown_unpushed_work` は**出ない**
- *    ——`runner-protocol.ts` の同イベントの doc「どの `stop()` から出るか」
- *    のとおり、この観測は `Host#shutdown()` の呼び出しにだけ付く
- * 3. 取れなかったとき: `finishUnpushedWorkFn` が失敗しても畳み自体は完了し、
- *    `kind: 'unavailable'` + `reason` が載る
- * 4. 既定（差し替えなし）: 本物の `this.unpushedWork()` を呼び、cwd（探索の
- *    起点）が読めなければ `kind: 'unavailable'` になる（Issue #1826 で
- *    反転——直す前は `kind: 'ok'`〈0本〉だった）
- * 5. 複数セッション: `Host#shutdown()` は `#sessions` の全セッションぶん、
- *    それぞれ1本ずつ運ぶ（`Promise.all` で並行に畳むことの副作用）
- * 6. スキーマ: `unpushedWork` 欄は必須（`closed.unpushedWork` と違い
- *    `.optional()` ではない）——欄を省いた形は境界で落ちる
- */
-
 function fakeSdk(): { fn: typeof sdkQuery } {
   const fn = ((params: { prompt: AsyncIterable<unknown> }) => {
     let finish: (() => void) | null = null;
@@ -55,13 +17,11 @@ function fakeSdk(): { fn: typeof sdkQuery } {
         uuid: 'uuid-init',
       } as unknown as SDKMessage;
 
-      // 読み手は要る——誰も読まないと runner 側の `#inputStream` が起きない
-      // （`runner-fence.test.ts` の `fakeSdk` と同じ注記）。
+      // 読み手は要る: 誰も読まないと runner 側の `#inputStream` が起きない。
       void (async () => {
         for await (const message of params.prompt) void message;
       })();
 
-      // 走行中のセッションを模す（閉じられるまで開いたまま）。
       await new Promise<void>((resolve) => {
         finish = resolve;
       });
@@ -94,8 +54,7 @@ function setup(
     emit: (event) => events.push(event),
     queryFn: fn,
     env: { PATH: '/usr/bin' },
-    // **cgroup の実ファイルを読ませない**（`runner-fence.test.ts` と同じ理由。
-    // この一式は cgroup を検証しないので、即座に解決する空の値で十分）。
+    // cgroup の実ファイルを読ませない: この一式は cgroup を検証しない。
     readCgroupEventCountersFn: async () => ({}),
     ...(finishUnpushedWorkFn === undefined ? {} : { finishUnpushedWorkFn }),
   });
@@ -112,7 +71,6 @@ function shutdownUnpushedWorkEvents(
   );
 }
 
-/** runner → daemon の境界を実際に通す（`runner-closed-unpushed-work.test.ts` と同じ形）。 */
 function throughDaemonBoundary(
   event: RunnerEvent,
 ): Extract<RunnerEvent, { type: 'shutdown_unpushed_work' }> {
@@ -151,8 +109,6 @@ describe('未 push の観測が shutdown_unpushed_work として運ばれる（I
     await host.stop('mgr-1');
 
     expect(shutdownUnpushedWorkEvents(events)).toHaveLength(0);
-    // **既存の設計そのまま**——`Host#stop()` は `closed` も出さない
-    // （`RunnerSession#stop()` の doc）。この歯が壊していないことも確かめる。
     expect(events.some((event) => event.type === 'closed')).toBe(false);
   });
 
@@ -173,12 +129,6 @@ describe('未 push の観測が shutdown_unpushed_work として運ばれる（I
   });
 
   it('4. 既定（差し替えなし）: 本物の this.unpushedWork() を呼び、cwd（探索の起点）が読めなければ kind:unavailable になる', async () => {
-    // ⚠️ **この期待値は Issue #1826 で反転した（元は「cwd が読めないだけでは
-    // 例外を投げない設計」を理由に `kind: 'ok' + worktrees: []`〈＝『0本
-    // 見つかった』〉を期待していた）。** `runner-closed-unpushed-work.test.ts`
-    // の同型の歯（3.）と同じ理由——詳細はあちらの doc を見よ。**保証は弱く
-    // なっていない**——この標本（cwd が存在しない）は最初から「実際に
-    // 確かめた」を満たしていなかった。
     const { host, events } = setup();
     await host.start({ managerId: 'mgr-1', request: '最初の依頼', cwd: '/work/project' });
 

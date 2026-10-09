@@ -3,19 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import type { SdkFailure } from './sdk-failure.js';
 
-/**
- * `runner-turn-tally.ts` の歯。**純粋なクラスなので I/O のモック無しで全分岐に
- * 通せる**（`runner-subagent-stop-state.test.ts` と同じ作法。前例は PR #1433）。
- *
- * ここが固定するのは、切り出した10フィールドの**状態の器としての性質**——
- * 積む・数える・「読み出して畳む」操作が畳む範囲の違い（`takeAtResult` /
- * `takeSaid` / `discardOpenedWorkersAndRejections`）——である。`RunnerSession`
- * が「いつ呼ぶか・emit するかどうか」を決める判断は `runner-failure.test.ts` /
- * `runner-wakeup.test.ts` / `runner-unreported.test.ts` /
- * `runner-resume-recreate-worker-count.test.ts`（ブラックボックス）が引き続き
- * 持つ——ここでは扱わない。
- */
-
 const failureOf = (code: string): SdkFailure => ({ code, via: 'result_is_error', text: '' });
 
 describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / takeSaid の畳む範囲の違い）', () => {
@@ -57,8 +44,6 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     expect(taken.failedWorkerNotificationsThisTurn).toBe(2);
     expect(taken.failedWorkerNotificationsNamingLimitThisTurn).toBe(1);
 
-    // **畳んだ後は初期状態に戻る。** 二度目の takeAtResult は全部ゼロ／空を返す
-    // ——`turn_ended` を跨いで前のターンの値が漏れないことを保証する形。
     const second = tally.takeAtResult();
     expect(second.said).toEqual([]);
     expect(second.rejected).toBeNull();
@@ -126,11 +111,8 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     const { said, reportId } = tally.takeSaid();
     expect(said).toEqual(['未報告の本文']);
     expect(reportId).toBe('uuid-said');
-    // **`said`/`saidUuid` は畳まれる。** 2度目は空。
     expect(tally.hasSaid).toBe(false);
 
-    // **残り10本（rejected を含む）は takeSaid では触れない。**
-    // takeAtResult で読み出して初めて畳まれていることを確認する。
     const taken = tally.takeAtResult();
     expect(taken.rejected).toEqual(failureOf('rate_limit'));
     expect(taken.inputsThisTurn).toBe(1);
@@ -166,16 +148,12 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
 
     tally.discardOpenedWorkersAndRejections();
 
-    // 捨てた3本は空に戻っている。
     const taken = tally.takeAtResult();
     expect(taken.openedWorkersThisTurn).toBe(0);
     expect(taken.workerRejectionsThisTurn).toEqual([]);
     expect(taken.failedWorkerNotificationsThisTurn).toBe(0);
     expect(taken.failedWorkerNotificationsNamingLimitThisTurn).toBe(0);
 
-    // **残り9本は影響を受けない。** said/saidUuid/rejected/inputs/notifications/
-    // tools/submits/sources は discardOpenedWorkersAndRejections を呼ぶ前の
-    // 値のまま、takeAtResult で読み出せる。
     expect(taken.said).toEqual(['本文']);
     expect(taken.rejected).toEqual(failureOf('rate_limit'));
     expect(taken.inputsThisTurn).toBe(1);
@@ -201,7 +179,6 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     const taken = tally.takeAtResult();
     expect(taken.sourcesThisTurn.get('cli')).toBe(2);
     expect(taken.sourcesThisTurn.get('web')).toBe(1);
-    // **取れない軸に0の行を作らない。** 呼んでいない source は鍵ごと無い。
     expect(taken.sourcesThisTurn.has('unknown')).toBe(false);
   });
 

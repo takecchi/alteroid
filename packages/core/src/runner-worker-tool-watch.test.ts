@@ -13,23 +13,11 @@ import { BASH_GUARD_ENV } from './bash-guard-mode.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
 
-/**
- * この試験が固定するのは、Bash の門を `deny`（止める）にした設定の挙動である（`ALTEROID_BASH_GUARD=deny`）。
- * 既定（`ask`）の挙動は `runner-bash-guard-ask.test.ts` が固定する（issue #2884）。
- */
 const DENY_ENV = { [BASH_GUARD_ENV]: 'deny' };
 import {
   WORKER_TOOL_RUNNING_AFTER_MS,
   type WorkerToolWatchClock,
 } from './runner-worker-tool-watch.js';
-
-/**
- * 作業者の長い道具の実行中の観測（Issue #2725）を確かめる。
- *
- * 道具の開始（`PreToolUse`）にタイマーを置き、20秒を超えて未決のときだけ
- * `tool_running`、決着で `tool_end` を送る。時刻・タイマーは `workerToolWatchClock`
- * から差し替える（実時間は待たない）。足場は `runner-pre-tool-use.test.ts` と同じ。
- */
 
 interface Started {
   options: Options;
@@ -95,7 +83,6 @@ async function fire(
   return hook(input as never, undefined, { signal: new AbortController().signal });
 }
 
-/** 手で進める時計。`advance` で期限の来たタイマーを発火する。 */
 function fakeClock(startMs: number): WorkerToolWatchClock & {
   advance: (ms: number) => void;
   pending: () => number;
@@ -308,7 +295,6 @@ describe('作業者の道具の実行中の観測（#2725）', () => {
     const output = (out as { hookSpecificOutput?: { permissionDecision?: string } })
       .hookSpecificOutput;
     expect(output?.permissionDecision).toBe('deny');
-    // 弾いた呼び出しには Post も拒否の合図も来ないので、タイマーを置かない。
     expect(clock.pending()).toBe(0);
   });
 });
