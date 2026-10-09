@@ -15,23 +15,6 @@ import {
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **台帳が `attached=false` のまま runner に旧プロセスが生きているとき、resume は
- * 旧プロセスへ短絡し、デーモンは世代を現役へ書き換える**（Issue #2877）。
- *
- * ## 到達する実際の経路
- *
- * デーモンの再起動。`restore()` が引き取るのは `running` / `waiting_human` の台帳だけで、
- * **done の委譲は `#records` に載らない**（デーモンの停止は runner のセッションを止めない
- * ので、done のセッションは runner で生きたまま）。その後の `manager_send` は `#load` が
- * `attached: false` の像を作り、既存の resume 経路（`#resumeOnce`）へ落ちる。
- * `runner.ts` の `Host#resume` は生きたセッションが居るとそこへ message を push して返す
- * （歯は `runner-token-rotation.test.ts` の「resume が生きた旧プロセスへ短絡する」）ので、
- * 新しい SDK は起きないが、`#resume` は成功を受けて `#rememberTokenIdentity` を呼ぶ。
- *
- * 応答（`{ cwd }`）には短絡したかどうかが無いので、デーモンは区別できない。
- */
-
 const JOB: Job = {
   id: 'mgr-alive',
   managerId: 'mgr-alive',
@@ -45,7 +28,6 @@ const JOB: Job = {
   runnerId: 'runner-primary',
 };
 
-/** `Host#resume` と同じく、生きたセッションが居れば新しい SDK を起こさず message を流して返す偽 runner。 */
 function shortcutRunner(
   report: 'true' | 'false' | 'absent' = 'true',
   live = true,
@@ -97,7 +79,6 @@ function shortcutRunner(
         };
       }
       spawned.push(command);
-      // 新しい SDK が起きた＝一覧に載る（鍵はいまのものなので、旧い指紋は持たない）。
       alive.push({
         managerId: command.managerId,
         status: 'running',
@@ -153,7 +134,6 @@ function shortcutRunner(
     get listCalls() {
       return listCalls;
     },
-    /** 旧セッションの runner 側の状態を、観測の後で変える（観測が古くなった状況を作る）。 */
     mutateSession(patch: Partial<RunnerManagerState>) {
       const state = alive.find((entry) => entry.managerId === 'mgr-alive');
       if (state !== undefined) Object.assign(state, patch);
@@ -161,25 +141,20 @@ function shortcutRunner(
   };
 }
 
-/** デーモン再起動後の done へ send する（台帳は `attached=false`、runner の旧プロセスは生きている／いない）。 */
 async function sendAfterRestart(
   report: 'true' | 'false' | 'absent',
   live: boolean,
   options: {
     session?: Parameters<typeof shortcutRunner>[2];
     activeFingerprint?: string;
-    /** 10秒ごとの生存確認の観測を send の前に済ませるか（既定 true）。 */
     observe?: boolean;
-    /** 観測の後、send の前に runner 側の状態を変える。 */
     afterObserve?: (fake: ReturnType<typeof shortcutRunner>) => void;
-    /** 引き取り（`restore()`）の後、send の前に runner 側の状態を変える。 */
     beforeSend?: (fake: ReturnType<typeof shortcutRunner>) => void;
   } = {},
 ) {
   const stores = createMemoryStores();
   await stores.jobs.putJob(JOB);
   const fake = shortcutRunner(report, live, options.session);
-  // 本物の名簿を使い、10秒ごとの生存確認の観測（sessions / tokenFingerprint）を立てる。
   const registry = createRunnerRegistry([]);
   await registry.register({ label: 'http://runner:4518', open: async () => fake.runner });
   if (options.observe !== false) await vi.advanceTimersByTimeAsync(10_000);
@@ -199,7 +174,6 @@ async function sendAfterRestart(
   });
   await pool.restore();
   const before = (await pool.list()).find((s) => s.managerId === 'mgr-alive');
-  // 再起動後は、旧プロセスがどの世代かをデーモンは知らない。
   expect(before?.tokenGeneration).toBeUndefined();
   options.beforeSend?.(fake);
   const listsBeforeSend = fake.listCalls;
@@ -222,10 +196,8 @@ describe('resume が生きた旧プロセスへ短絡したとき、世代を「
     const s = await sendAfterRestart('true', true);
 
     expect(s.result.outcome).toBe('delivered');
-    // 前提: この回は新しい SDK を起こさず、生きた旧プロセスへ流れた。
     expect(s.fake.spawned).toHaveLength(0);
     expect(s.fake.pushedToLiveProcess).toEqual(['続きを']);
-    // 旧プロセスの鍵が現役かどうかは確かめていない。それなのに「一致」と名乗らない。
     expect(s.after?.tokenGeneration).toBeUndefined();
     expect(s.result.detail).toContain('生きた旧プロセスへ流した');
     expect(s.result.detail).toContain('確かめていない');
@@ -252,11 +224,6 @@ describe('resume が生きた旧プロセスへ短絡したとき、世代を「
   });
 });
 
-/**
- * **指紋で見る（#2877 PR2）。** 台帳が「繋がっていない」done（デーモン再起動後）でも、runner の
- * 旧プロセスが起動時に掴んだ鍵の指紋（`RunnerManagerState.tokenFingerprint`。`token_list` と
- * 同じ形で、値は載せない）を現役の指紋と比べ、食い違えば #2851 と同じく畳んで起こし直す。
- */
 describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る（#2877 PR2）', () => {
   const OLD_FP = 'aaaaaaaaaaaa';
   const NEW_FP = 'bbbbbbbbbbbb';
@@ -268,7 +235,6 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
     });
 
     expect(s.result.outcome).toBe('delivered');
-    // 旧プロセスへは流さず、畳んで、同じ会話（sessionId）で新しい SDK を起こして message を渡す。
     expect(s.fake.pushedToLiveProcess).toHaveLength(0);
     expect(s.fake.stops).toEqual(['mgr-alive']);
     expect(s.fake.spawned).toHaveLength(1);
@@ -335,7 +301,6 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
     const s = await sendAfterRestart('true', true, {
       session: { tokenFingerprint: OLD_FP, liveBackgroundTasks: 0 },
       activeFingerprint: NEW_FP,
-      // 観測（10秒前）の後、旧セッションは畳み直されて新しい鍵になっていた。
       afterObserve: (fake) => fake.mutateSession({ tokenFingerprint: NEW_FP }),
     });
 
@@ -363,7 +328,6 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
   });
 
   it('普段の経路（食い違いが無い・確かめられない）では list の往復を足さない', async () => {
-    // 観測がまだ来ていない。
     const none = await sendAfterRestart('true', true, {
       session: { tokenFingerprint: OLD_FP, liveBackgroundTasks: 0 },
       activeFingerprint: NEW_FP,
@@ -374,7 +338,6 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
     expect(none.after?.tokenGeneration).toBeUndefined();
     await none.pool.stop();
 
-    // 観測が一致。
     const same = await sendAfterRestart('true', true, {
       session: { tokenFingerprint: NEW_FP, liveBackgroundTasks: 0 },
       activeFingerprint: NEW_FP,
@@ -382,7 +345,6 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
     expect(same.listsDuringSend).toBe(0);
     await same.pool.stop();
 
-    // 観測に指紋が無い（古い runner）。
     const old = await sendAfterRestart('true', true, { activeFingerprint: NEW_FP });
     expect(old.listsDuringSend).toBe(0);
     await old.pool.stop();

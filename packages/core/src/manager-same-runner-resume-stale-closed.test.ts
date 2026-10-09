@@ -73,15 +73,9 @@ describe('同じ runner への復帰の最中に届く closed', () => {
     };
   }
 
-  /**
-   * `manager-abort-moved.test.ts` の `fakeRunner` と同じ形だが、`connect()` が
-   * 受け取った `onEvent` を `emit` として外へ持ち出す（テストから runner 発の
-   * 出来事を流すため）。
-   */
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
-    // resume の応答が名乗るセッションの世代（Issue #3170）。省略は「名乗らない古い runner」。
     sessionGeneration?: string,
   ): {
     client: RunnerClient;
@@ -100,7 +94,6 @@ describe('同じ runner への復帰の最中に届く closed', () => {
         holder.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この試験群では使わない。 */
         return {};
       },
       async resume(command): Promise<{ cwd?: string; sessionGeneration?: string }> {
@@ -198,7 +191,6 @@ describe('同じ runner への復帰の最中に届く closed', () => {
 
     const reattach = pool.reattachRunner('runner-a');
     await enteredResume;
-    // 古いセッションの畳みが、resume の応答より先に届く（runner は畳み中の旧セッションの完了を待ってから作り直す）。
     runnerA.emit?.({
       type: 'closed',
       managerId: 'mgr-same',
@@ -248,7 +240,7 @@ describe('同じ runner への復帰の最中に届く closed', () => {
       status: 'lost',
       reason: 'runner-a が畳んだ（resume は結局受理されない）',
     });
-    // 実時間では待たない（#2146）。
+    // 実時間では待たない。
     for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
     release();
     await reattach;
@@ -258,10 +250,6 @@ describe('同じ runner への復帰の最中に届く closed', () => {
     await pool.stop();
   });
 
-  /**
-   * 同じ runner への復帰の resume が受理された後の台帳を作る（Issue #3170 の歯の足場）。
-   * `inWindow` を渡すと、resume の応答の**前**に（窓の間に）その出来事を流す。
-   */
   async function resumedOnSameRunner(options: {
     generation?: string;
     inWindow?: RunnerEvent[];
@@ -295,7 +283,7 @@ describe('同じ runner への復帰の最中に届く closed', () => {
     const reattach = pool.reattachRunner('runner-a');
     await enteredResume;
     for (const event of options.inWindow ?? []) runnerA.emit?.(event);
-    // 実時間では待たない（#2146）。
+    // 実時間では待たない。
     for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
     release();
     await reattach;
@@ -317,7 +305,6 @@ describe('同じ runner への復帰の最中に届く closed', () => {
   describe('セッションの世代（Issue #3170）で、窓の外に届く古い出来事を区別する', () => {
     it('resume の応答の後に届いた、古い世代のセッションの closed(lost) は、台帳を lost にしない（窓の外。#3159 の残り）', async () => {
       const { pool, stores, runnerA } = await resumedOnSameRunner({ generation: 'gen-new' });
-      // resume の応答は返り終わった（窓は閉じている）。その後に旧セッションの畳みが届く。
       runnerA.emit?.(lostClosed('gen-old'));
       await settle();
       const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same');

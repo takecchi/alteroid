@@ -73,11 +73,6 @@ describe('移送の最中に届く元の runner の report / ask / session（#31
     };
   }
 
-  /**
-   * `manager-abort-moved.test.ts` の `fakeRunner` と同じ形だが、`connect()` が
-   * 受け取った `onEvent` を `emit` として外へ持ち出す（テストから runner 発の
-   * 出来事を流すため）。
-   */
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
@@ -98,7 +93,6 @@ describe('移送の最中に届く元の runner の report / ask / session（#31
         holder.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この試験群では使わない。 */
         return {};
       },
       async resume(command): Promise<{ cwd?: string }> {
@@ -231,8 +225,7 @@ describe('移送の最中に届く元の runner の report / ask / session（#31
       status: after?.status,
       runnerId: after?.runnerId,
       lastReport: after?.lastReport,
-      // 移送が受理された旨の通知（「別の器で開き直した」）は正当にクローンへ届く。数えるのは
-      // 元の runner の古い報告の本文を運ぶものだけ。
+      // 移送受理の通知は正当にクローンへ届くので、古い報告の本文を運ぶものだけ数える。
       reportsToClone: inbox
         .slice(before)
         .filter(
@@ -250,10 +243,6 @@ describe('移送の最中に届く元の runner の report / ask / session（#31
     await pool.stop();
   });
 
-  /**
-   * runner-b への resume を gate で止め、その間に runner-a から `events` を（届いた順に）流してから
-   * resume を通す（`resume: 'accepted'`）か 503 で落とす（`'refused'`）。実時間では待たない（#2146）。
-   */
   async function runWindow(
     resume: 'accepted' | 'refused',
     events: RunnerEvent[],

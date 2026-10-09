@@ -73,11 +73,6 @@ describe('起動時の引き取り（restore）と、同じ runner への resume
     };
   }
 
-  /**
-   * `manager-abort-moved.test.ts` の `fakeRunner` と同じ形だが、`connect()` が
-   * 受け取った `onEvent` を `emit` として外へ持ち出す（テストから runner 発の
-   * 出来事を流すため）。
-   */
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
@@ -98,7 +93,6 @@ describe('起動時の引き取り（restore）と、同じ runner への resume
         holder.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この試験群では使わない。 */
         return {};
       },
       async resume(command): Promise<{ cwd?: string }> {
@@ -201,7 +195,7 @@ describe('起動時の引き取り（restore）と、同じ runner への resume
       status: 'lost',
       reason: '旧セッションが畳まれた',
     });
-    // 実時間では待たない（#2146）。
+    // 実時間では待たない。
     for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
     release();
     await restoring;
@@ -245,7 +239,7 @@ describe('起動時の引き取り（restore）と、同じ runner への resume
       status: 'lost',
       reason: 'runner-a が畳んだ（resume は結局受理されない）',
     });
-    // 実時間では待たない（#2146）。
+    // 実時間では待たない。
     for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
     release();
     await restoring;

@@ -14,13 +14,6 @@ import {
 import { createMemoryStores } from './testing.js';
 import { createCloneTools, renderPeerReach, type ToolContext } from './tools.js';
 
-/**
- * runner が `hello` で名乗った peer（#3940）が、デーモンの `runners()`・クローンの `runner_list` /
- * `self_status` に「Codex に作業を頼める」として出ること。閉じている peer は理由つきで出ること（#4118）。
- * hello の後の `manager_peers` で名乗り直せること（#4118）。名乗らない旧い runner は「不明」、
- * 開閉のどちらも名乗らない器は何も出ないこと。
- */
-
 type FakeRunner = RunnerClient & { helloed: () => boolean; send: (event: RunnerEvent) => void };
 
 function fakeRunner(hello: {
@@ -35,7 +28,6 @@ function fakeRunner(hello: {
   const runner = Object.create(base) as FakeRunner;
   Object.assign(runner, {
     helloed: () => helloed,
-    // hello の後の出来事（`manager_peers` の名乗り直し。#4118）を流す口
     send: (event: RunnerEvent) => push?.(event),
     runnerId,
     runnerIdKnown: true,
@@ -87,9 +79,7 @@ async function harness(runner: FakeRunner) {
     const out = await tool!.handler(args as never, {} as never);
     return out.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
   };
-  // hello を渡し終えるまで待つ（`connect` は名簿を開いたときに走る）。旧い runner の「不明」を、
-  // 「まだ名乗りを受けていない」の不明と取り違えないため。
-  // 実時間では待たない（#2146）: 名簿を開かせてから、マイクロタスクと setImmediate の段だけ回す。
+  // hello を渡し終えるまで待つ: 旧い runner の「不明」を「まだ名乗りを受けていない」の不明と取り違えないため。実時間では待たない。
   for (let i = 0; i < 2000 && !runner.helloed(); i += 1) {
     await pool.runners();
     await new Promise((resolve) => setImmediate(resolve));

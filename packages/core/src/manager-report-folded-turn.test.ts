@@ -13,28 +13,6 @@ import { createMemoryStores } from './testing.js';
 import type { RateLimitFacts, UsageLimitNotice } from './usage-limits.js';
 import type { Stores } from './store.js';
 
-/**
- * Issue #1848。`manager.ts` の `case 'report'` は、runner 側の構造化された印
- * （`event.failure` / `event.unreported`）を見て `manager_message.foldedTurn`
- * を立てる——`tools.ts` の `isFoldedTurnReport`（`lastFailure` /
- * `lastUnreported` の有無、#714 / #917）と同じ軸・同じ判定を、台帳ではなく
- * いま届く受信箱の1件の側で見る。
- *
- * この describe は、その `foldedTurn` が実際に受信箱（`manager_message`）へ
- * 届くことを、`case 'report'` の2つの配達経路の両方で固定する:
- *
- * 1. `event.failure` が付く回（`runner.ts` の `failedReportText()` 経由。
- *    必ず `synthesized: 'turn_failed'` を伴い、合流窓（`#queueSynthesizedNotice`
- *    / `#flushSynthesizedNoticeFor`）を経由してから配られる）
- * 2. `event.unreported` が付く回（`runner.ts` の `#flushUnreported` 経由。
- *    `synthesized` を伴わないので、合流窓を経由せず即配られる）
- *
- * どちらも `manager-synthesized-notices.test.ts` の「足場1: manualRunner」と
- * 同じ作法——`RunnerEvent` を直接組み立てて emit し、SDK 層を経由せずに
- * `manager.ts` の実装を単体で確かめる。**この歯専用に複製してある**（同ファイル
- * の doc と同じ理由——duplicated on purpose）。
- */
-
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
@@ -65,15 +43,12 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -102,7 +77,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       return { ok: true as const };
     },
     async close() {
-      /* この検証では使わない */
+      /* 使わない */
     },
   };
 
@@ -184,9 +159,6 @@ describe('manager.ts → 受信箱: event.failure / event.unreported が manager
     const { pool, inbox, fake } = await runningManualSetup();
     const before = reportsOf(inbox).length;
 
-    // **runner.ts が実際に作る形をそのまま再現する**（`failure` が付く回は
-    // 必ず `synthesized: 'turn_failed'` を伴う——`runner.ts` の
-    // `...(failure === undefined ? {} : { synthesized: 'turn_failed' })`）。
     fake.report(
       'mgr-folded',
       '（このターンは応答を返さずに終わった: success/429 / result_is_error）' +
@@ -212,9 +184,6 @@ describe('manager.ts → 受信箱: event.failure / event.unreported が manager
     const { pool, inbox, fake } = await runningManualSetup();
     const before = reportsOf(inbox).length;
 
-    // **runner.ts が実際に作る形をそのまま再現する**（`#flushUnreported` は
-    // `failure` を付けず、`synthesized` も伴わない——このすぐ上のテストとは
-    // 別の配達経路（即配る枝）を通る）。
     fake.report(
       'mgr-folded',
       '（このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）\n' +
@@ -236,12 +205,6 @@ describe('manager.ts → 受信箱: event.failure / event.unreported が manager
     await pool.stop();
   });
 
-  /**
-   * ⭐ **陽性対照。** `failure` も `unreported` も立たない、普通に完遂した
-   * report では `foldedTurn` はキーごと付かない——「常に立てる」実装でも
-   * 上の2本だけなら緑になってしまう。**取れない軸に値を作らない**ので、
-   * `undefined` ではなくキーの不在まで確かめる（`Object.hasOwn`）。
-   */
   it('failure も unreported も無い、普通に完了した report では foldedTurn はキーごと付かない', async () => {
     const { pool, inbox, fake } = await runningManualSetup();
     const before = reportsOf(inbox).length;
@@ -262,26 +225,8 @@ describe('manager.ts → 受信箱: event.failure / event.unreported が manager
   });
 });
 
-/**
- * Issue #1848 の「⚠️ 確かめていないこと」——`synthesized` が複数件合流した回
- * （`arrived > 1`）で `managerPrompt` の見出し自体（`foldedTurn`）が変わるか
- * どうかは、起票時に `arrived <= 1` の回しか確かめていなかった。
- *
- * `#flushSynthesizedNoticeFor` の実装（`entry.fragments.some((fragment) =>
- * fragment.label === 'turn_failed')`）は、束の中の**どれか1つ**が
- * `turn_failed` なら `foldedTurn` を立てる——1件目・2件目という位置ではなく
- * 族（`label`）を見る。ここではその実装を、完全な重複（`×N` に寄る回）と、
- * 族が混在する回の両方で固定する。
- *
- * **⚠️ 同じ族（`turn_failed`）で本文が違う回は、実は1本へ寄らない。**
- * `#queueSynthesizedNotice` は「同じ label が既に在れば新しい label 側を
- * 待たせず、いったん今の束を単独で flush してから新しい窓を開く」
- * （`manager-synthesized-notices.test.ts` の「本文が1文字でも違えば寄せない」
- * と同じ分岐）。だから「`arrived > 1` で1本に寄る」を実際に起こせるのは
- * (a) 完全な重複（`duplicate.count += 1`）か (b) 族が異なる断片どうし
- * （`existing.fragments.push`）のどちらかであり、「同じ族・違う本文」は
- * 対象にならない——最初にこの歯を書いたときは逆に読んでいた。
- */
+// 同じ族（`turn_failed`）で本文が違う回は1本へ寄らず別々に flush されるので、
+// 合流を起こすのは完全な重複か族の異なる断片だけ（同じ族・違う本文はここでは扱わない）。
 describe('合流窓で複数件が1本へ寄る回（arrived > 1）でも foldedTurn は正しく立つ（Issue #1848）', () => {
   it('turn_failed の完全な重複が3通、同じ窓に届く（×3 として1件へ寄る）と foldedTurn: true のまま', async () => {
     const { pool, inbox, fake } = await runningManualSetup();
@@ -301,8 +246,6 @@ describe('合流窓で複数件が1本へ寄る回（arrived > 1）でも folded
     });
 
     const delivered = reportsOf(inbox).slice(before);
-    // **3通が1件へ寄り、通数（×3）が本文に残る**
-    // （`manager-synthesized-notices.test.ts` の「完全な重複は1つへ寄せ」と同じ軸）。
     expect(delivered).toHaveLength(1);
     expect(delivered[0]?.text).toContain('×3');
     expect(delivered[0]?.foldedTurn).toBe(true);
@@ -334,11 +277,6 @@ describe('合流窓で複数件が1本へ寄る回（arrived > 1）でも folded
     await pool.stop();
   });
 
-  /**
-   * ⭐ 陽性対照。`turn_failed` が1件も無い束（`rate_limit` + `usage_notice`）が
-   * 合流しても、`foldedTurn` はキーごと付かない——「束が2件以上なら常に立てる」
-   * 実装でもこの1本だけなら見分けが付かない。
-   */
   it('rate_limit と usage_notice だけが合流し、turn_failed が無ければ foldedTurn はキーごと付かない', async () => {
     const { pool, inbox, fake } = await runningManualSetup();
     const before = reportsOf(inbox).length;

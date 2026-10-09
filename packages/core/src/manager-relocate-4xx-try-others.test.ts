@@ -17,18 +17,6 @@ import type {
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 移送先の runner が resume を 4xx で断ったときの扱い（Issue #3098）。
- *
- * 1台の断りは「その runner の都合」であって委譲の運命ではない。ほかに候補が居れば移すのを試し、
- * 全員に断られたら lost に確定する。委譲そのものが不正だと分かる断り（400 / 415 / 422）は、
- * ほかへ回さず従来どおり止める。移送ではない元の runner への復帰は変えない。
- *
- * `RunnerRegistry` は偽物（`entries()` の行を試験ごとに差し替える）。本物は `state` を
- * 接続・heartbeat から計算するので、`lost` を挟むには時間経過を模す必要がある。
- */
-
-/** 名簿の1行を組み立てる（`RunnerEntry` の必須欄はここで埋める）。 */
 function entryOf(label: string, state: RunnerLiveness, runnerId?: string): RunnerEntry {
   return {
     label,
@@ -39,24 +27,10 @@ function entryOf(label: string, state: RunnerLiveness, runnerId?: string): Runne
   };
 }
 
-/**
- * `RunnerRegistry` の9メンバを満たす偽物。**この試験群で使うのは `get` /
- * `entries` の2つだけ**（`#reattach` が実際に読むのはこの2つである）。残りは
- * 型を満たすだけで、呼ばれたら「使わない」と分かる形にしてある。
- *
- * **`vacate` だけは「使わない」にしていない。** 本物（`Registry#vacate`）と
- * 同じ効果（`entries` の該当行を `'vacating'` へ倒す）を持たせてある——
- * `ManagerPool.vacate()`（#485 PR-2）を試験するとき、`fake.entries.push` で
- * 手で先に `'vacating'` を置く形と、`pool.vacate()` を呼んで名簿側から
- * 倒させる形の両方を、同じ偽物で試せるようにするためである。
- */
 function createFakeRegistry(): {
   registry: RunnerRegistry;
-  /** 試験ごとに push / state 書き換えで差し替える。 */
   entries: RunnerEntry[];
-  /** `get(runnerId)` が返す `RunnerClient` を登録する。 */
   addClient: (client: RunnerClient) => void;
-  /** `get()` に渡された runnerId を呼ばれた順に記録する（#8 の検証用）。 */
   gotten: string[];
 } {
   const clients = new Map<string, RunnerClient>();
@@ -85,9 +59,7 @@ function createFakeRegistry(): {
       }
     },
     entries() {
-      // **試験が直接 push / 変異させた行を、呼ばれるたびに読み直す。** コピーを
-      // 返すのは、呼び出し側（`manager.ts`）が返り値を書き換えないことを
-      // 前提にしないためである。
+      // コピーを返す: 呼び出し側（`manager.ts`）が返り値を書き換えないことを前提にしない。
       return entries.map((entry) => ({ ...entry }));
     },
     noteManagerFailed() {
@@ -106,10 +78,6 @@ function createFakeRegistry(): {
   };
 }
 
-/**
- * 偽の `RunnerClient`。`swappableRunner`（`manager-workspace-nudge.test.ts`）・
- * `LeasedRunner`（`manager-lease.test.ts`）と同じ形。
- */
 function fakeRunner(
   runnerId: string,
   workspacePath = '/work/project',
@@ -122,11 +90,9 @@ function fakeRunner(
     workspacePathKnown: true,
     workspacePath,
     async connect() {
-      /* この試験群は hello イベントの配送経路を使わない（`reattachRunner` /
-       * `relocateFrom` が直に `#reattach` を起こす）。 */
+      /* hello の配送経路は使わない */
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この試験群では使わない。 */
       return {};
     },
     async resume(command): Promise<{ cwd?: string }> {
@@ -142,7 +108,6 @@ function fakeRunner(
       return {};
     },
     async send() {
-      /* この試験群では使わない。 */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -176,7 +141,6 @@ function fakeRunner(
   return { client, resumes };
 }
 
-/** 走行中の委譲を組み立てる。`runnerId` は台帳の記録した宛先。 */
 function jobWith(id: string, runnerId: string | undefined, overrides: Partial<Job> = {}): Job {
   return {
     id,
@@ -230,7 +194,6 @@ describe('移送先 1 台の 4xx は、その runner の都合として扱い、
       status: job?.status,
       runnerId: job?.runnerId,
     }).toEqual({ resumesOnC: 1, status: 'running', runnerId: 'runner-c' });
-    // b に貸した貸し出しを返したことが日誌に残る（`releaseLease` の doc。黙って返さない）
     const decisions = (await stores.journal.list({ limit: 200 })).flatMap((entry) =>
       entry.type === 'decision' ? [entry.decision] : [],
     );
@@ -257,7 +220,7 @@ describe('移送先 1 台の 4xx は、その runner の都合として扱い、
     const { pool } = setup(stores, fake.registry);
 
     await Promise.all([pool.reattachRunner('runner-b'), pool.reattachRunner('runner-c')]);
-    // c の関門が b の貸し出しに当たって断られた回は、挑み直しの梯子（1秒）で拾われる。
+    // c の関門が b の貸し出しに当たって断られた回は、挑み直しの梯子（1秒）で拾われるので待つ。
     await vi.waitFor(
       async () => expect((await jobOf(stores, 'mgr-4xx-par'))?.runnerId).toBe('runner-c'),
       {
@@ -298,7 +261,6 @@ describe('移送先 1 台の 4xx は、その runner の都合として扱い、
     const { pool } = setup(stores, fake.registry);
 
     await pool.reattachRunner('runner-b');
-    // b だけが断った時点では確定しない（c が残っている）。
     expect((await jobOf(stores, 'mgr-all-refused'))?.status).toBe('running');
     await pool.reattachRunner('runner-c');
     await pool.reattachRunner('runner-b');
@@ -363,7 +325,6 @@ describe('移送先 1 台の 4xx は、その runner の都合として扱い、
 
   it('移送ではない元の runner への復帰は変えない（4xx で断られたら、ほかの候補が居ても従来どおり lost）', async () => {
     const stores = createMemoryStores();
-    // 台帳の宛先は runner-b 自身（移送ではない）。runner-c は connected で居る。
     await stores.jobs.putJob(jobWith('mgr-same-runner', 'runner-b'));
     const fake = createFakeRegistry();
     fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));

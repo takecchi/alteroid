@@ -18,13 +18,6 @@ import type {
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * `case 'closed'` が、pids 飽和の印（EAGAIN の spawn 失敗・fork 拒否）を名簿へ
- * 知らせる配線（#2626 期待2）。**`lost` も数える**——#2626 の resume 失敗は
- * `lost` で閉じ、`noteManagerFailed`（`failed` 専用）には届かない。
- * 判定は構造化された値（`systemError.code` / `cgroupEvents.pidsMaxDelta`）だけで、
- * `reason` の文字列は読まない。
- */
 describe('#onEvent: closed が pids 飽和の印を名簿へ知らせる', () => {
   function entryOf(label: string, state: RunnerLiveness, runnerId?: string): RunnerEntry {
     return {
@@ -92,11 +85,6 @@ describe('#onEvent: closed が pids 飽和の印を名簿へ知らせる', () =>
     };
   }
 
-  /**
-   * `manager-abort-moved.test.ts` の `fakeRunner` と同じ形だが、`connect()` が
-   * 受け取った `onEvent` を `emit` として外へ持ち出す（テストから runner 発の
-   * 出来事を流すため）。
-   */
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
@@ -117,7 +105,6 @@ describe('#onEvent: closed が pids 飽和の印を名簿へ知らせる', () =>
         holder.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この試験群では使わない。 */
         return {};
       },
       async resume(command): Promise<{ cwd?: string }> {
@@ -189,7 +176,6 @@ describe('#onEvent: closed が pids 飽和の印を名簿へ知らせる', () =>
     };
   }
 
-  /** runner-a → runner-b への引き取りを組み立て、両方の runner の emit を返す。 */
   async function setupRelocated(): Promise<{
     stores: ReturnType<typeof createMemoryStores>;
     runnerA: ReturnType<typeof fakeRunner>;
@@ -223,13 +209,9 @@ describe('#onEvent: closed が pids 飽和の印を名簿へ知らせる', () =>
       runners: fake.registry,
     });
 
-    // **`#ensureConnected()` を先に踏ませる。** `abort()` / `send()` はどちらも
-    // 冒頭でこれを呼び、名簿に居る全 runner へ `connect()` する——これが
-    // 素の pool が実際に SSE を張る唯一の経路である。存在しない managerId を
-    // 使い、副作用（connect）だけを踏む。
+    // 存在しない managerId の abort で `#ensureConnected()` だけを踏ませる: 素の pool が SSE を張る唯一の経路のため。
     await pool.abort('mgr-does-not-exist');
 
-    // runner-b が同じ委譲を引き取る（reattach）。
     await pool.reattachRunner('runner-b');
     expect(runnerB.resumes.map((c) => c.managerId)).toEqual(['mgr-race']);
     const afterReattach = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-race');

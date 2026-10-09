@@ -73,11 +73,6 @@ describe('併存の見送り（#refuseRelocationsBeforeGate）と abort の交�
     };
   }
 
-  /**
-   * `manager-abort-moved.test.ts` の `fakeRunner` と同じ形だが、`connect()` が
-   * 受け取った `onEvent` を `emit` として外へ持ち出す（テストから runner 発の
-   * 出来事を流すため）。
-   */
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
@@ -98,7 +93,6 @@ describe('併存の見送り（#refuseRelocationsBeforeGate）と abort の交�
         holder.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この試験群では使わない。 */
         return {};
       },
       async resume(command): Promise<{ cwd?: string }> {
@@ -209,7 +203,6 @@ describe('併存の見送り（#refuseRelocationsBeforeGate）と abort の交�
     await stores.jobs.putJob(jobWith('mgr-a', 'runner-x'));
     await stores.jobs.putJob(jobWith('mgr-b', 'runner-x', { sessionId: 'sess-b' }));
     const fake = createFakeRegistry();
-    // 元の宛先 runner-x は lost。移送先候補 runner-a は同じ名前の器が 2 台併存している。
     fake.entries.push(entryOf('runner-x', 'lost', 'runner-x'));
     fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
     fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
@@ -218,7 +211,6 @@ describe('併存の見送り（#refuseRelocationsBeforeGate）と abort の交�
     fake.addClient(runnerX.client);
     fake.addClient(runnerA.client);
 
-    // mgr-a を lost に確定して書き込んだ直後（＝ループが mgr-b に着く前）に、mgr-b の abort を最後まで通す。
     const pool = createManagerPool({ stores, post: () => {}, runners: fake.registry });
     let abortDone: Promise<unknown> | undefined;
     const originalPut = stores.jobs.putJob.bind(stores.jobs);
@@ -242,7 +234,6 @@ describe('併存の見送り（#refuseRelocationsBeforeGate）と abort の交�
     const stores = createMemoryStores();
     await stores.jobs.putJob(jobWith('mgr-ns', 'runner-a', { sessionId: undefined }));
     const fake = createFakeRegistry();
-    // 元の宛先 runner-a は lost、移送先 runner-b が名乗った。no-session はその場で確定に進む。
     fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
     fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
     const runnerA = fakeRunner('runner-a');
@@ -250,7 +241,6 @@ describe('併存の見送り（#refuseRelocationsBeforeGate）と abort の交�
     fake.addClient(runnerA.client);
     fake.addClient(runnerB.client);
 
-    // 「確定する」と日誌に書いた直後（＝ `#confirmLost` へ入る前）に、abort を最後まで通す。
     const pool = createManagerPool({ stores, post: () => {}, runners: fake.registry });
     let abortDone: Promise<{ outcome: string }> | undefined;
     const originalAppend = stores.journal.append.bind(stores.journal);

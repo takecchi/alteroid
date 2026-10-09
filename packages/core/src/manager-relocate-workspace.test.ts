@@ -16,13 +16,6 @@ import type {
 import type { InboxEvent, Job, WorkspaceLocator } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 別の runner へ移送したあとの `job.workspace`（locator）の扱い（Issue #3099）。
- *
- * `RunnerRegistry` は偽物（`entries()` の行を試験ごとに差し替える）。
- */
-
-/** 名簿の1行を組み立てる（`RunnerEntry` の必須欄はここで埋める）。 */
 function entryOf(label: string, state: RunnerLiveness, runnerId?: string): RunnerEntry {
   return {
     label,
@@ -33,24 +26,10 @@ function entryOf(label: string, state: RunnerLiveness, runnerId?: string): Runne
   };
 }
 
-/**
- * `RunnerRegistry` の9メンバを満たす偽物。**この試験群で使うのは `get` /
- * `entries` の2つだけ**（`#reattach` が実際に読むのはこの2つである）。残りは
- * 型を満たすだけで、呼ばれたら「使わない」と分かる形にしてある。
- *
- * **`vacate` だけは「使わない」にしていない。** 本物（`Registry#vacate`）と
- * 同じ効果（`entries` の該当行を `'vacating'` へ倒す）を持たせてある——
- * `ManagerPool.vacate()`（#485 PR-2）を試験するとき、`fake.entries.push` で
- * 手で先に `'vacating'` を置く形と、`pool.vacate()` を呼んで名簿側から
- * 倒させる形の両方を、同じ偽物で試せるようにするためである。
- */
 function createFakeRegistry(): {
   registry: RunnerRegistry;
-  /** 試験ごとに push / state 書き換えで差し替える。 */
   entries: RunnerEntry[];
-  /** `get(runnerId)` が返す `RunnerClient` を登録する。 */
   addClient: (client: RunnerClient) => void;
-  /** `get()` に渡された runnerId を呼ばれた順に記録する（#8 の検証用）。 */
   gotten: string[];
 } {
   const clients = new Map<string, RunnerClient>();
@@ -79,9 +58,7 @@ function createFakeRegistry(): {
       }
     },
     entries() {
-      // **試験が直接 push / 変異させた行を、呼ばれるたびに読み直す。** コピーを
-      // 返すのは、呼び出し側（`manager.ts`）が返り値を書き換えないことを
-      // 前提にしないためである。
+      // コピーを返す: 呼び出し側（`manager.ts`）が返り値を書き換えないことを前提にしない。
       return entries.map((entry) => ({ ...entry }));
     },
     noteManagerFailed() {
@@ -100,10 +77,6 @@ function createFakeRegistry(): {
   };
 }
 
-/**
- * 偽の `RunnerClient`。`swappableRunner`（`manager-workspace-nudge.test.ts`）・
- * `LeasedRunner`（`manager-lease.test.ts`）と同じ形。
- */
 function fakeRunner(
   runnerId: string,
   workspacePath = '/work/project',
@@ -116,11 +89,9 @@ function fakeRunner(
     workspacePathKnown: true,
     workspacePath,
     async connect() {
-      /* この試験群は hello イベントの配送経路を使わない（`reattachRunner` /
-       * `relocateFrom` が直に `#reattach` を起こす）。 */
+      /* hello の配送経路は使わない */
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この試験群では使わない。 */
       return {};
     },
     async resume(command): Promise<{ cwd?: string }> {
@@ -136,7 +107,6 @@ function fakeRunner(
       return {};
     },
     async send() {
-      /* この試験群では使わない。 */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -170,7 +140,6 @@ function fakeRunner(
   return { client, resumes };
 }
 
-/** 走行中の委譲を組み立てる。`runnerId` は台帳の記録した宛先。 */
 function jobWith(id: string, runnerId: string | undefined, overrides: Partial<Job> = {}): Job {
   return {
     id,
@@ -220,7 +189,6 @@ describe('移送後の台帳の workspace locator', () => {
     await pool.stop();
   });
 
-  /** a → b へ移送し、台帳の workspace を返す。`swapCwdTo` を渡すと b が cwd を差し替えて開く。 */
   async function relocate(
     workspace: WorkspaceLocator,
     options: { policy?: WorkspacePolicy; swapCwdTo?: string } = {},

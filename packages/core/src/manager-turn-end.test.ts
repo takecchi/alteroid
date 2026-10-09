@@ -8,24 +8,6 @@ import {
 } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * Issue #567: マネージャーのセッションが `result` を受け取らないまま止まり、
- * `status` が `running` のまま固定される。生ログの末尾には報告の全文が
- * `stop_reason: end_turn` まで在るのに、報告がどこにも出ない。
- *
- * ここで固定するのは「デーモンが生ログの末尾を読んで、ターンが終わっている
- * らしいことを**計算し、知らせるだけ**」という向き（設計 c）である。
- * `probeTurnEnd`（純関数、末尾の解析）と `ManagerPool#probeTurnEnds`
- * （費用の門・書き込み）を分けて確かめる。
- *
- * **判定はしない。** `turnEndedAt` と `lastReportAt` を比べて「症状だ」と
- * 名乗る処理はどこにも実装していない——ここで測るのは事実の計算だけである。
- */
-
-/**
- * JSONL の1行（assistant、本文つき）。`tools.test.ts` の `assistantLine`
- * （#323）と同じ形——`stopReason` は既定で付けない。
- */
 function assistantTextLine(
   text: string,
   options: { timestamp?: string; isSidechain?: boolean; stopReason?: string } = {},
@@ -43,7 +25,6 @@ function assistantTextLine(
   });
 }
 
-/** JSONL の1行（assistant、思考だけ・本文なし）。 */
 function assistantThinkingLine(
   thinking: string,
   options: { timestamp?: string; isSidechain?: boolean; stopReason?: string } = {},
@@ -60,7 +41,6 @@ function assistantThinkingLine(
   });
 }
 
-/** JSONL の1行（assistant、道具呼び出しだけ・本文なし）。 */
 function assistantToolUseLine(
   options: { timestamp?: string; isSidechain?: boolean; stopReason?: string } = {},
 ): string {
@@ -77,25 +57,8 @@ function assistantToolUseLine(
 }
 
 describe('probeTurnEnd — 生ログの末尾からターン終了を計算する（Issue #567）', () => {
-  /**
-   * ⚠️⚠️ 偽陽性の回帰テスト（これが本命）。
-   *
-   * `tools.ts` の既存 `probeLastAssistantUtterance` は「本文が空の行を飛ばして、
-   * 生成された本文を探す」ための道具で、`if (body.length === 0) continue;` を
-   * 持つ。**それを流用すると、道具だけを回している最中のターンを飛ばして、
-   * 1つ前のターンの `end_turn`（本文つき）まで遡ってしまう。**
-   *
-   * この repo の生ログ8本を時点ごとに再生した実測（2026-08-28 観測）:
-   * ```
-   * 既存の規則が「end_turn」と言う時点                          68
-   *  うち 最後の assistant 行が実は tool_use（＝働いている最中）  37   ← 54% が偽陽性
-   * 乖離が続いた最長の窓                                        12.6分
-   * ```
-   * `probeTurnEnd` は本文の有無で行を飛ばさない——最初に見つかった assistant
-   * 行（ここでは思考だけ・道具だけの2行のうち末尾のもの）が答えで、その
-   * `stop_reason` が `tool_use` である以上、働いている最中と読んで
-   * `undefined` を返す。
-   */
+  // `probeLastAssistantUtterance` を流用しない: 本文が空の行を飛ばすので、道具だけを回している
+  // 最中のターンを越えて1つ前の `end_turn` まで遡り、偽陽性になる。
   it('古いターンの end_turn（本文つき）の後に、道具だけを回す新しいターンが続いていても、働いている最中と読む', () => {
     const transcript = [
       assistantTextLine('古いターンの報告本文（ここへ遡ってはいけない）', {
@@ -125,7 +88,7 @@ describe('probeTurnEnd — 生ログの末尾からターン終了を計算す�
     expect(probe).toEqual<TurnEndProbe>({
       timestamp: '2026-08-28T09:00:00.000Z',
       stopReason: 'end_turn',
-      tail: '', // 本文（type:'text'）が無いので抜粋は空文字。
+      tail: '',
     });
   });
 
@@ -215,11 +178,6 @@ describe('probeTurnEnd — 生ログの末尾からターン終了を計算す�
   });
 });
 
-// ---------------------------------------------------------------------------
-// ManagerPool#probeTurnEnds — 費用の門と、記録への書き込み
-// ---------------------------------------------------------------------------
-
-/** `manager-lease.test.ts` の `LeasedRunner` と同じ形の、最小の偽 runner。 */
 class TranscriptRunner implements RunnerClient {
   readonly runnerId = 'runner-primary';
   readonly runnerIdKnown = true;
@@ -228,7 +186,6 @@ class TranscriptRunner implements RunnerClient {
   readonly starts: string[] = [];
   #transcripts = new Map<string, string | null>();
 
-  /** テストから生ログの中身を差し替える。未設定なら `transcript()` は `null`。 */
   setTranscript(managerId: string, body: string | null): void {
     this.#transcripts.set(managerId, body);
   }
@@ -302,9 +259,7 @@ async function harnessOf(): Promise<{
   };
 }
 
-/** 費用の門を満たす（`status: running` かつ `updatedAt` から10分超）まで進める。 */
 const PAST_QUIET_GATE_MS = 11 * 60_000;
-/** 旗が立っている相手のバックオフ（5分）を超えて進める。 */
 const PAST_FLAGGED_BACKOFF_MS = 5 * 60_000 + 1_000;
 
 describe('ManagerPool#probeTurnEnds — 費用の門・書き込み・巻き戻し', () => {
@@ -313,7 +268,6 @@ describe('ManagerPool#probeTurnEnds — 費用の門・書き込み・巻き戻�
     const started = await h.pool.start({ request: '調べて', cwd: '/work/project' });
     const managerId = started.managerId;
 
-    // 1回目: 生ログが読める状態で探る。3欄が立つ。
     h.runner.setTranscript(
       managerId,
       assistantTextLine('作業完了の報告', {
@@ -329,8 +283,6 @@ describe('ManagerPool#probeTurnEnds — 費用の門・書き込み・巻き戻�
     expect(afterFirst?.turnEndReason).toBe('end_turn');
     expect(afterFirst?.turnEndTail).toBe('作業完了の報告');
 
-    // 2回目: 生ログが読めなくなった（`transcript` が null）。バックオフを
-    // 超えて進めてから、もう一度探る。
     h.runner.setTranscript(managerId, null);
     h.advance(PAST_FLAGGED_BACKOFF_MS);
     await h.pool.probeTurnEnds();
@@ -352,10 +304,6 @@ describe('ManagerPool#probeTurnEnds — 費用の門・書き込み・巻き戻�
       assistantTextLine('報告', { timestamp: '2026-08-28T15:00:00.000Z', stopReason: 'end_turn' }),
     );
 
-    // `done` を止めた直後の状態にする（`abort` は runner へ実際に届かせるので、
-    // ここでは `status` を直接動かせる `send()` 経由の副作用を避け、単に
-    // running のまま quiet gate を満たさずに probeTurnEnds を呼ぶ形で確かめる
-    // のではなく、`abort` で確実に running から外す）。
     await h.pool.abort(managerId, 'テストで停止');
     h.advance(PAST_QUIET_GATE_MS);
     await h.pool.probeTurnEnds();
@@ -375,7 +323,6 @@ describe('ManagerPool#probeTurnEnds — 費用の門・書き込み・巻き戻�
       assistantTextLine('報告', { timestamp: '2026-08-28T16:00:00.000Z', stopReason: 'end_turn' }),
     );
 
-    // 10分未満しか進めない。
     h.advance(60_000);
     await h.pool.probeTurnEnds();
 

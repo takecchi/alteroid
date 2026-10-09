@@ -73,11 +73,6 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
     };
   }
 
-  /**
-   * `manager-abort-moved.test.ts` の `fakeRunner` と同じ形だが、`connect()` が
-   * 受け取った `onEvent` を `emit` として外へ持ち出す（テストから runner 発の
-   * 出来事を流すため）。
-   */
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
@@ -98,7 +93,6 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
         holder.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この試験群では使わない。 */
         return {};
       },
       async resume(command): Promise<{ cwd?: string }> {
@@ -196,7 +190,6 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
       if (calls === 1) {
         entered();
         await gate;
-        // 一時的な失敗（再挑戦の対象）。
         throw new RunnerHttpError('unavailable', 503);
       }
       return originalResume(command);
@@ -206,11 +199,9 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
 
     const sending = pool.send('mgr-busy', '続きを').catch(() => undefined);
     await enteredResume;
-    // send の resume が飛んでいる最中に runner-a が名乗る（hello 相当）。resume は busy で返る。
     await pool.reattachRunner('runner-a');
     release();
     await sending;
-    // 取り直しの梯子の最大間隔（30 秒）より先まで進める。実時間では待たない（#2146）。
     for (let i = 0; i < 4; i += 1) await vi.advanceTimersByTimeAsync(31_000);
     for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
 
@@ -221,7 +212,6 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
     await pool.stop();
   });
 
-  /** send の resume を gate で止め、その間に reattach を busy で抜けさせる共通の組み立て。 */
   async function setupBusy(outcomeAfterGate: 'ok' | 'unavailable' | 'never') {
     const stores = createMemoryStores();
     await stores.jobs.putJob(jobWith('mgr-busy', 'runner-a'));
@@ -282,12 +272,10 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
   it('busy が続いても上限で止まり、取り直しの試行と予約が際限なく増えない（止まったことは日誌に残る）', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const { pool, stores, counts } = await setupBusy('never');
-    // 相手の resume は終わらない。上限（5 回 ≒ 31 秒）を十分に越えて進める。
     for (let i = 0; i < 10; i += 1) await vi.advanceTimersByTimeAsync(31_000);
     await flush();
     const listsAfterCap = counts.lists;
     const timersAfterCap = vi.getTimerCount();
-    // さらに長く進めても、試行（list の往復）も予約（タイマー）も増えない。
     for (let i = 0; i < 20; i += 1) await vi.advanceTimersByTimeAsync(31_000);
     await flush();
     expect({

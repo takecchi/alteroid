@@ -15,26 +15,6 @@ import type { InboxEvent, Job } from './schema.js';
 import type { AgentToken } from './token-pool.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **`ManagerSummary.resetTimeSkewMatch`**（Issue #914 オーナー提案(2)）。
- *
- * `manager-token-generation.test.ts`（提案1。世代番号の直接比較）とは別の
- * 材料源を固定する——こちらは daemon のプロセス内記憶（`tokenIdentity`）に
- * 一切頼らず、429の文言そのものと `stores.tokens`（DB正本）だけで判定する。
- * ⟹ `tokenIdentity` を配線していない・提案1が「分からない」を返す構成でも
- * 独立に効くことをここで固定する。
- *
- * ## ここが固定するもの
- *
- * 1. ⭐ 降りた鍵の`cooldownUntil`と一致する`reached`通知が届くと、`list()`が
- *    `resetTimeSkewMatch: 'stale'`を返す
- * 2. ⚠️ 現役の鍵自身の`cooldownUntil`と一致すれば`'active'`（世代ずれではない）
- * 3. マネージャーが自力でターンを終える（`failure`無しの`report`）と、
- *    印は`usageStoppedAt`と同じ寿命で下りる
- * 4. `tokenIdentity`を配線していない（＝提案1が終始`pool-not-wired`のまま
- *    何も言えない）構成でも、この判定は独立に効く
- */
-
 const JOB: Job = {
   id: 'mgr-reset',
   managerId: 'mgr-reset',
@@ -48,7 +28,6 @@ const JOB: Job = {
   runnerId: 'runner-primary',
 };
 
-/** `manager-usage-resume.test.ts` の `nudgeRunner()` の縮小版。 */
 function fakeRunner() {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
@@ -62,7 +41,6 @@ function fakeRunner() {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(command): Promise<{ cwd?: string }> {
@@ -118,11 +96,8 @@ function fakeRunner() {
   };
 }
 
-/** 実測（#914 の 2026-09-14T20:19Z のコメント）を模した文言。9:30am (Asia/Tokyo) = 00:30Z。 */
 const NOTICE_TEXT = "You've hit your session limit · resets 9:30am (Asia/Tokyo)";
-/** 次に来る 00:30Z は 2026-09-15T00:30:00.000Z。 */
 const RESET_TARGET = Date.parse('2026-09-15T00:30:00.000Z');
-/** 通知を受け取る時刻（`now` として固定する）。 */
 const NOW = Date.parse('2026-09-14T20:19:00.000Z');
 
 function reached(): RunnerEvent {
@@ -142,7 +117,6 @@ function okReport(): RunnerEvent {
   } as RunnerEvent;
 }
 
-/** イベントを流したあと、`#onEvent` の非同期の中身が落ち着くまで待つ。 */
 async function settle(): Promise<void> {
   for (let i = 0; i < 20; i += 1) await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -160,9 +134,7 @@ async function setup() {
     runners: registry,
     profile: createProfileService({ stores, runners: registry }),
     now: () => NOW,
-    // **提案1（`tokenIdentity`）は意図して配線しない。** この判定が
-    // daemon のプロセス内記憶に頼らないことを固定するためである
-    // （直上の doc「ここが固定するもの」4）。
+    // `tokenIdentity` は配線しない: この判定が daemon のプロセス内記憶に頼らないことを固定するため。
   });
   await pool.restore();
   return { pool, fake, stores };
@@ -199,7 +171,6 @@ describe('Issue #914 オーナー提案(2): resets時刻の突き合わせによ
 
     const summary = await summaryFor(pool, JOB.id);
     expect(summary.resetTimeSkewMatch).toBe('stale');
-    // **提案1は配線していないので、終始「分からない」のままである。**
     expect(summary.tokenGeneration).toBeUndefined();
     expect(summary.tokenGenerationUnknownReason).toBe('pool-not-wired');
 
