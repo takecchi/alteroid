@@ -13,7 +13,6 @@ import {
 } from './rescue-cleanup.js';
 import type { Job, LastRescue, RescueWorktree } from './schema.js';
 
-/** 後始末の判定（Issue #1266）。純関数なので時刻を直に渡す。 */
 const NOW = Date.parse('2026-10-20T00:00:00.000Z');
 const iso = (offsetMs: number): string => new Date(NOW + offsetMs).toISOString();
 const DAY = 24 * 60 * 60_000;
@@ -37,7 +36,6 @@ function tree(pushed: Partial<NonNullable<RescueWorktree['pushed']>> | null): Re
   };
 }
 
-/** `at`（runner から最後に届いた時刻）と、終端を初めて見た時刻（`terminalSeen`）。 */
 function rescue(
   atAgo: number,
   terminal?: { status: 'done' | 'failed' | 'stopped'; seenAgo: number },
@@ -78,7 +76,6 @@ describe('退避 ref の後始末の判定（#1266）', () => {
 
     it('lost のまま20日放置→stopped になった直後は、猶予ゼロでは消さない（起点は終端を見た時刻）', () => {
       const wt = tree({});
-      // lastRescue.at は20日前で止まっているが、stopped を見たのはいまさっき。
       const justStopped = rescue(20 * DAY, { status: 'stopped', seenAgo: 1000 }, [wt]);
       expect(rescueRemovalDue('stopped', justStopped, wt, NOW)).toBeUndefined();
     });
@@ -250,7 +247,6 @@ describe('退避 ref の後始末の判定（#1266）', () => {
   });
 });
 
-// 型の確認（Job['status'] を網羅していること）。
 const _statuses: Job['status'][] = [
   'running',
   'waiting_human',

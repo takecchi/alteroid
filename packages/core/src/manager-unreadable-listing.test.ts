@@ -16,21 +16,6 @@ import type {
 import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **状態を読めなかったが runner に居る委譲を、Pool は「居ない」と畳まない**（Issue #1661）。
- *
- * runner が先に新しい版になって、デーモンのまだ知らない `status` を送る版ずれでは、
- * その委譲は `HttpRunner#list()` のスキーマに落ちる。以前の Pool は落ちた委譲を
- * 「runner に居ない」と読み、まだ走っている委譲の貸し出しを返し
- * （`#confirmStoppedAndReleaseLease`）、起動時には resume して待っていた確認を捨てて
- * いた（`#restoreJobs`）。いまは `RunnerClient.listWithUnreadable` が返す
- * `unreadableIds` も「居る」側に数える。
- *
- * 偽の runner は、`skewed` に入れた委譲を `list()` から外し、`listWithUnreadable()` の
- * `unreadableIds` にだけ名乗る——`HttpRunner` が版ずれで見せる形そのものである。
- */
-
-/** 名簿の1行を組み立てる（`manager-relocate.test.ts` の同名ヘルパと同じ形）。 */
 function entryOf(label: string, state: RunnerLiveness, runnerId?: string): RunnerEntry {
   return {
     label,
@@ -41,11 +26,6 @@ function entryOf(label: string, state: RunnerLiveness, runnerId?: string): Runne
   };
 }
 
-/**
- * `RunnerRegistry` の偽物。`manager-relocate.test.ts` の `createFakeRegistry` と
- * 同じ骨格だが、`select()` も実装する（`pool.start()` を実際に通すため——
- * あちらの試験群は `start()` を使わないので `select` を「使わない」で塞いでいる）。
- */
 function createFakeRegistry(): {
   registry: RunnerRegistry;
   entries: RunnerEntry[];
@@ -77,7 +57,6 @@ function createFakeRegistry(): {
       /* この試験群では使わない。 */
     },
     vacate(runnerId) {
-      // 本物（`Registry#vacate`）と同じ効果 —— 一致する行を 'vacating' へ倒す。
       for (const entry of entries) {
         if (entry.runnerId === runnerId) entry.state = 'vacating';
       }
@@ -100,8 +79,6 @@ function createFakeRegistry(): {
   };
 }
 
-/** 偽の `RunnerClient`（`manager-relocate.test.ts` の同名ヘルパの縮小版）。 */
-/** 版ずれを模せる偽の `RunnerClient`。 */
 function skewableRunner(runnerId: string): {
   client: RunnerClient;
   skewed: Set<string>;
@@ -140,7 +117,6 @@ function skewableRunner(runnerId: string): {
       return { delivered: false };
     },
     async stop(managerId) {
-      // 止める RPC が失敗した回を模す（セッションは runner に残る）。
       if (failStop.value) throw new Error('stop の RPC が失敗した（試験の偽物）');
       sessions.delete(managerId);
     },
@@ -210,13 +186,11 @@ describe('状態を読めなかったが runner に居る委譲を「居ない�
     const { managerId } = await first.pool.start({ request: '調べて', runnerId: 'runner-a' });
     await first.pool.stop();
 
-    // 台帳にはセッション id が在る（本物の runner は init の合図で名乗る。
-    // `#restoreJobs` は id の無い委譲を resume しないので、ここで置く）。
+    // `#restoreJobs` は sessionId の無い委譲を resume しないので、ここで置く。
     const job = (await stores.jobs.listJobs()).find((j) => j.id === managerId);
     if (job === undefined) throw new Error('台帳に委譲が無い');
     await stores.jobs.putJob({ ...job, sessionId: 'sess-previous' });
 
-    // デーモンだけが作り直され、runner は先に新しい版になっていた。
     runnerA.skewed.add(managerId);
     const second = setup(stores, fake.registry);
     await second.pool.restore();

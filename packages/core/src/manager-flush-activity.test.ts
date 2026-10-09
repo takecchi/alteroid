@@ -12,32 +12,6 @@ import type { InboxEvent, Job, JobStatus } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * 台帳 `028ee442` の指摘への直し——`flushWithheldReports()` が配る文面に、
- * `manager_list`（`tools.ts`）と**同じ判定**（`classifyManagerActivity`。
- * `manager-activity.ts`）を添える結線の統合の歯。
- *
- * 純関数そのもの（4状態の網羅・境界）は `manager-activity.test.ts` が持つ。
- * ここで測るのは「`ManagerPool` を実際に回したとき、その判定材料
- * （`this.#records` に積んである `turnEndReason` 等）が正しく flush の文面へ
- * 届くか」——`manager-withheld-reports.test.ts` の `manualRunner` /
- * `runningManualSetup` と同じ足場に、`manager-turn-end.test.ts` /
- * `manager-tool-stall.test.ts` の `setTranscript` を1本のランナーへ合流させて
- * 使う。
- *
- * ## なぜ「止まっている」系の判定材料が、withheld な委譲でも手に入るか
- *
- * `record.turnEndReason` / `record.toolUseStallPending` を書き換えるのは
- * `ManagerPool#probeTurnEnds`（`record.job.status === 'running'` のときだけ）
- * だけである。背景処理待ちの report が届くと `job.status` は `'done'` へ
- * 移るので、それ以降は `probeTurnEnds` に触られない——**旗は running を
- * 離れた時点で凍る**（`tools.ts` の `describeToolUseStall` の doc と同じ
- * 注記）。だからこの歯は「running のうちに probe → その後で report を
- * 起こして done へ落とす → flush する」という順で組む。これは実際の運用
- * でも起こりうる順序である（背景タスクの完了を待っている間に、末尾の
- * assistant 行が長く tool_use のまま固定されることがある）。
- */
-
 interface FlushRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
@@ -53,10 +27,6 @@ interface FlushRunner {
   ): void;
 }
 
-/**
- * `manager-withheld-reports.test.ts` の `manualRunner` と
- * `manager-turn-end.test.ts` の `TranscriptRunner` を1本へ合流させた最小実装。
- */
 function flushRunner(runnerId = 'runner-primary'): FlushRunner {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
@@ -71,15 +41,12 @@ function flushRunner(runnerId = 'runner-primary'): FlushRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -177,14 +144,11 @@ async function setup(managerId = 'mgr-flush'): Promise<Setup> {
   return { pool, stores, inbox, fake, advance: (ms) => (clock += ms) };
 }
 
-/** `TURN_END_PROBE_QUIET_MS`（`manager.ts`）を超えて `probeTurnEnds` の費用の門を開く。 */
 const PAST_QUIET_GATE_MS = 11 * 60_000;
-/** `WITHHELD_REPORT_FLUSH_MS`（`manager.ts` と同じ値）。 */
 const WITHHELD_REPORT_FLUSH_MS = 30 * 60_000;
 
 const AWAITING = { count: 1, breakdown: 'shell×1' };
 
-/** JSONL の1行（assistant、本文つき）。 */
 function assistantTextLine(
   text: string,
   options: { timestamp?: string; stopReason?: string } = {},
@@ -202,7 +166,6 @@ function assistantTextLine(
   });
 }
 
-/** JSONL の1行（assistant、`tool_use` ブロックつき・応答なし）。 */
 function assistantToolUseLine(
   toolUses: { id: string; name?: string }[],
   options: { timestamp?: string } = {},
@@ -240,9 +203,7 @@ describe('flushWithheldReports が配る文面に、manager_list と同じ判定
   it('止まっている（ターン終わり型）: probe が stalled を残した状態で report → flush すると ⚠ が付く', async () => {
     const { pool, fake, advance, inbox } = await setup();
 
-    // running のうちに probe。turnEndedAt を遠い未来に固定し、後で
-    // job.lastReportAt（実時計）と比べても必ず「止まっている」側になる
-    // ようにする（実行時刻に依存しないテストにするため）。
+    // probe は running のうちに行う: `probeTurnEnds` は running の委譲だけを対象にし、report で done へ移ると旗が凍る。timestamp は実時計に依存しないよう遠い未来に固定する。
     fake.setTranscript(
       'mgr-flush',
       assistantTextLine('本文', { timestamp: '2099-01-01T00:00:00.000Z', stopReason: 'end_turn' }),
@@ -250,8 +211,6 @@ describe('flushWithheldReports が配る文面に、manager_list と同じ判定
     advance(PAST_QUIET_GATE_MS);
     await pool.probeTurnEnds();
 
-    // ここで background 待ちの report が届き、status は 'done' へ落ちる
-    // （旗は running を離れた時点の値のまま凍る）。
     fake.report('mgr-flush', '完了を待つ', 'done', { awaitingBackground: AWAITING });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -291,9 +250,7 @@ describe('flushWithheldReports が配る文面に、manager_list と同じ判定
   it('進んでいる／正常な待ち: probe が「正常に終わった」を残した状態で flush すると ⚠ は付かず、「進んでいる」の行が載る', async () => {
     const { pool, fake, advance, inbox } = await setup();
 
-    // 実時計より確実に過去の timestamp にする——`job.lastReportAt` は
-    // `new Date().toISOString()`（実時計）で書かれるので、遠い過去に
-    // 固定すれば必ず「turnEndedAt <= lastReportAt」＝進んでいる側になる。
+    // `job.lastReportAt` は実時計で書かれるので、timestamp は実行時刻に依存しないよう遠い過去に固定する。
     fake.setTranscript(
       'mgr-flush',
       assistantTextLine('本文', { timestamp: '2000-01-01T00:00:00.000Z', stopReason: 'end_turn' }),
@@ -310,8 +267,6 @@ describe('flushWithheldReports が配る文面に、manager_list と同じ判定
     const text = await lastDeliveredText(inbox, '配っていない');
     expect(text).not.toContain('⚠');
     expect(text).not.toContain('判定できない');
-    // **静かな失敗を作らない歯。** active でも判定の行そのものは載る
-    // （「行が無い」＝「結線が壊れた」と区別できるようにするため）。
     expect(text).toContain('進んでいる');
 
     await pool.stop();
@@ -319,7 +274,6 @@ describe('flushWithheldReports が配る文面に、manager_list と同じ判定
 
   it('判定できない: 一度も probe されていない（record はあるが観測が無い）と「判定できない」が付く', async () => {
     const { pool, fake, advance, inbox } = await setup();
-    // **`probeTurnEnds` を一度も呼ばない**——transcript も設定しない。
 
     fake.report('mgr-flush', '完了を待つ', 'done', { awaitingBackground: AWAITING });
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -334,19 +288,7 @@ describe('flushWithheldReports が配る文面に、manager_list と同じ判定
     await pool.stop();
   });
 
-  // **「台帳に record が無い」（`this.#records.get(managerId)` が
-  // `undefined`）を `ManagerPool` の公開 API だけから作る経路は無い。**
-  // `#retire()`（`manager.ts`）が `this.#records.delete(managerId)` と
-  // `this.#withheldReports.delete(managerId)` を**同じ呼び出しの中で**
-  // 一緒に行うので（doc:「握り潰しの帳面も一緒に畳む」）、`#withheldReports`
-  // にだけ積みが残り `#records` から消えている、という状態は作れない。
-  // `flushWithheldReports()` 内の `this.#activityInputOfRecord(undefined)`
-  // （`{ waitingCount: 0 }` を返し、`classifyManagerActivity` は必ず
-  // `'unknown'` に落とす）は防御的な分岐——その入力の判定結果は
-  // `manager-activity.test.ts` の「turnEndReason も toolUseStallPending も
-  // 無ければ unknown」が既に測っている。ここでは「一度も probe されて
-  // いない」（直上の歯）が、公開 API から到達できる「判定できない」の
-  // 実例を統合レベルで確認している。
+  // 「台帳に record が無い」ケースは書かない: `#retire()` が `#records` と `#withheldReports` を同じ呼び出しで消すので、公開 API だけからは作れない。
 });
 
 describe('flushWithheldReports の文面には240文字抜粋が無く、件数・firstAt/lastAt・journal_read の案内は残る', () => {

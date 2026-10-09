@@ -10,27 +10,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRunnerHost, type RunnerHost, SUBAGENT_BACKGROUND_WAIT_MS } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
-/**
- * Issue #1554: 打ち切った作業者の背景処理が終わったとき、マネージャーが
- * 止まっていれば alteroid が `push()` で起こす。
- *
- * 配達経路は2つ（走っているとき＝次の道具呼び出し〈PostToolUse〉、止まって
- * いるとき＝`push()`）で、取り出し＝消費なので二重には届かない。走っている
- * 最中に積まれた分は、道具呼び出しが無いまま `result` で畳まれたときに拾う。
- * 偽の SDK は `runner-wakeup.test.ts` の形（`inputs` = `#inputStream` が
- * 実際に `yield` した入力）に、フックを直接叩く口を足したもの。
- */
-
 interface FakeSession {
   options: Options;
   inputs: string[];
-  /** `close()` が来てもストリームを終わらせない（畳み中の窓を作る）。 */
   holdClose(): void;
-  /** 止めていた `close()` の分のストリーム終了を流す。 */
   releaseClose(): void;
-  /** 1ターンを畳む（`result`）。 */
   finish(text: string): Promise<void>;
-  /** `system/task_notification` を1件流す。 */
   notify(taskId: string, extra?: Record<string, unknown>): Promise<void>;
 }
 
@@ -179,11 +164,6 @@ const managerTool = {
   tool_response: { content: 'ok' },
 };
 
-/**
- * 作業者が背景処理を残したまま畳もうとし、完了を待つ上限（30分。偽の時計で進める）に達して
- * 打ち切られ、その作業者が背景の Bash を1本残した状態にする（Issue #3008。以前は起こし直しの
- * 回数を使い切らせていた）。
- */
 async function cutOffWithBackgroundBash(
   options: Options,
   agentId: string,
@@ -208,7 +188,6 @@ async function cutOffWithBackgroundBash(
       ],
     });
     await vi.advanceTimersByTimeAsync(SUBAGENT_BACKGROUND_WAIT_MS);
-    // 打ち切り（起こし直さない）なので、追加の文脈は無い。
     expect(await stopped).toEqual({ continue: true });
   } finally {
     vi.useRealTimers();
@@ -216,7 +195,6 @@ async function cutOffWithBackgroundBash(
   await fire(options, 'PostToolUse', bashByWorker(taskId, agentId));
 }
 
-/** 委譲を始め、最初の依頼文のターンを畳んで `done`（止まっている）にする。 */
 async function startIdle(s: ReturnType<typeof setup>): Promise<FakeSession> {
   await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: '/work/project' });
   const session = await vi.waitFor(() => {
@@ -267,7 +245,6 @@ describe('打ち切った作業者の背景処理が終わったとき、止ま�
 
   it('(iii) 走っている最中に来たら push せず、PostToolUse が配達する', async () => {
     const s = setup();
-    // 最初のターンは閉じない（`running` のまま）。
     await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: '/work/project' });
     const session = await vi.waitFor(() => {
       const found = s.sessions[0];
@@ -281,19 +258,15 @@ describe('打ち切った作業者の背景処理が終わったとき、止ま�
     expect(session.inputs).toHaveLength(1);
     expect(wakeNotes(s.events)).toHaveLength(0);
 
-    // 道具を呼べば、既存の経路で配達される（push は増えない）。
     const delivered = await fire(session.options, 'PostToolUse', managerTool);
     expect(contextOf(delivered)).toContain('id=bg-test-1');
     await session.finish('道具を呼んだ後に畳む');
     expect(session.inputs).toHaveLength(1);
     expect(wakeNotes(s.events)).toHaveLength(0);
 
-    // 別の1本は、道具呼び出しが無いまま result で畳まれたときに push される。
     await fire(session.options, 'PostToolUse', bashByWorker('bg-test-2', 'agent-1'));
     await session.notify('bg-test-2');
     await session.finish('道具を呼ばずに畳む');
-    // 上の finish は notify より前に来た result ではないので、ここでは既に done
-    // ＝ notify の時点で push されている。走っている間の分は下の別セッションで見る。
     await vi.waitFor(() => expect(session.inputs).toHaveLength(2));
   });
 
@@ -315,7 +288,6 @@ describe('打ち切った作業者の背景処理が終わったとき、止ま�
     await vi.waitFor(() => expect(session.inputs).toHaveLength(2));
     expect(session.inputs[1]).toContain('id=bg-test-1');
     expect(wakeNotes(s.events)).toHaveLength(1);
-    // 配達済みなので、後の道具呼び出しには載らない。
     expect(await fire(session.options, 'PostToolUse', managerTool)).toEqual({ continue: true });
   });
 
@@ -325,19 +297,15 @@ describe('打ち切った作業者の背景処理が終わったとき、止ま�
     await vi.waitFor(() => expect(session.inputs).toHaveLength(1));
     await cutOffWithBackgroundBash(session.options, 'agent-1', 'bg-cut-1');
 
-    // 打ち切られていない作業者（agent-2）の背景処理。
     await fire(session.options, 'PostToolUse', bashByWorker('bg-live', 'agent-2'));
     await session.notify('bg-live');
-    // 所有者不明（PostToolUse を見ていない id）。
     await session.notify('bg-unknown');
-    // マネージャー自身の背景処理（agent_id 無し）。
     await fire(session.options, 'PostToolUse', {
       ...bashByWorker('bg-mine', 'x'),
       agent_id: undefined,
       agent_type: undefined,
     });
     await session.notify('bg-mine');
-    // 作業者そのもの（local_agent。task_id === agentId）の完了。
     await session.notify('agent-1');
 
     expect(session.inputs).toHaveLength(1);
@@ -350,7 +318,6 @@ describe('打ち切った作業者の背景処理が終わったとき、止ま�
     await vi.waitFor(() => expect(session.inputs).toHaveLength(1));
     await cutOffWithBackgroundBash(session.options, 'agent-1', 'bg-test-1');
 
-    // 畳みが始まった（stopped が立つ）後、ストリームが閉じる前に通知が届く窓を作る。
     session.holdClose();
     const stopping = s.host.stop('mgr-1');
     await new Promise((resolve) => setTimeout(resolve, 0));

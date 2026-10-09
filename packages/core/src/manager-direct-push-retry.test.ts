@@ -15,20 +15,6 @@ import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **`apply()` の即時の配布が失敗しても、名乗りのときの配布と同じ帳面に積み、諦めずに
- * 挑み直す（Issue #1699 / #1717）。**
- *
- * `PUT /mcp-servers` / `PUT /profile` / `profile_write` / `PUT /credentials`（CLI の
- * `alteroid credential set` もこれを叩く）は、保存の直後に繋がっている runner へその場で直接配る
- * （`McpServerService.apply` / `ProfileService.apply` / `CredentialService.apply`）。
- * この経路は `ManagerPool` の押し込みの帳面（`pushHealthOf`）も挑み直しも通らなかった
- * ので、一時的な障害で配り損ねても `runner_list` の「直近の押し込み」は前の「ok」の
- * ままで、runner が名乗り直すまで古い版のまま走っていた。**#1699 は MCP の側だけを
- * 塞ぎ、#1704 がプロファイルへも広げたが、`CredentialService` だけ `onPushed` が
- * 無いまま残っていた（#1717、12回目の横断レビューで発見）。** 値はすべて偽物である。
- */
-
 const REGISTRATION: McpServers = {
   github: { command: 'gh-mcp', env: { GITHUB_TOKEN: 'dummy-not-a-real-secret' } },
 };
@@ -57,9 +43,7 @@ function fakeSdk(): typeof sdkQuery {
 
 function setup() {
   const stores = createMemoryStores();
-  // **鍵の器を持たせる。** 無いと `RunnerClient.setCredentials` が「差し替えられ
-  // ない」で常に投げ続け、挑み直しの成功（`broken = false` の後）が測れない
-  // （MCP・プロファイルは器を要らないので、この差は credentials 特有である）。
+  // 鍵の器を持たせる: 無いと `setCredentials` が常に投げ、挑み直しの成功が測れない。
   const credentialStore = createCredentialStore({
     dir: join(makeTempDirSync('alteroid-1717-'), 'creds'),
   });
@@ -116,7 +100,6 @@ describe('apply() の即時の配布の失敗も、同じ帳面に積んで挑�
     expect(result.runners).toEqual([
       expect.objectContaining({ runnerId: 'runner-test', ok: false }),
     ]);
-    // 配り損ねたことが、runner_list の「直近の押し込み」の元にすぐ出る。
     expect(s.pool.pushHealthOf('runner-test')?.mcpServers?.status).toBe('failed');
 
     broken = false;
@@ -159,7 +142,6 @@ describe('apply() の即時の配布の失敗も、同じ帳面に積んで挑�
   it('資格（credentials）: 一時的に配り損ねたら帳面が failed になり、挑み直されて ok に戻る（#1717）', async () => {
     const s = setup();
     await s.pool.start({ request: '走る' });
-    // 名乗り時点の配布（`#pushCredentials`）は成功しているので、帳面はまず ok。
     expect(s.pool.pushHealthOf('runner-test')?.credentials?.status).toBe('ok');
 
     let calls = 0;
@@ -172,25 +154,16 @@ describe('apply() の即時の配布の失敗も、同じ帳面に積んで挑�
     };
 
     const result = await s.credentials.apply([{ name: 'DUMMY_TOKEN', value: 'not-a-real-secret' }]);
-    // 配布そのものは失敗として返ってきている（`pushAll` はここまでは正しく動く）。
     expect(result.runners).toEqual([
       expect.objectContaining({ runnerId: 'runner-test', ok: false }),
     ]);
-    // 配り損ねたことが、runner_list の「直近の押し込み」の元にすぐ出る
-    // （直す前は前の `ok` のままだった。#1717 の本題）。
     expect(s.pool.pushHealthOf('runner-test')?.credentials?.status).toBe('failed');
 
     broken = false;
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
-    // 挑み直しが予約されていれば、この時点で `setCredentials` がもう一度呼ばれ、
-    // `calls` は2以上になっているはずである（直す前は無予約のまま1で止まっていた）。
     expect(calls).toBeGreaterThan(1);
-    // **`ok` に戻るのは待って確かめる。** 挑み直しの2回目は本物の `setCredentials`
-    // （鍵の器＝一時ディレクトリへの実ファイルの書き込み）を通るので、偽の時計を
-    // 進めても、その I/O が終わっているとは限らない（CI の混んだ器で `failed` の
-    // まま読んで落ちた。PR #1735 の run 36283716103）。`vi.waitFor` は偽の時計の
-    // 下でも本物の時計で待つ。待つ上限は既定の 1 秒で、`ok` に戻らなければ落ちる。
+    // `ok` に戻るのは待って確かめる: 挑み直しは実ファイルの書き込みを通り、偽の時計を進めても I/O が終わっているとは限らない。`vi.waitFor` は偽の時計の下でも本物の時計で待つ。
     await vi.waitFor(() => {
       expect(s.pool.pushHealthOf('runner-test')?.credentials?.status).toBe('ok');
     });

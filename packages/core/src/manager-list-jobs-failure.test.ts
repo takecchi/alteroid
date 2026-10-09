@@ -16,21 +16,6 @@ import type {
 import type { InboxEvent, Job, JournalEntry } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **`listJobs()` が投げた回を「委譲が無い」に倒さず、跡を残す**（#2359 の4。先例は
- * #2342 の `manager_stop` の3状態）。
- *
- * `manager.ts` の4か所が `listJobs().catch(() => [])`（または `retry` を立てるだけの
- * `.catch`）だった。読めなかったことが、読めて1本も無かったことと区別できず、日誌にも
- * 残らなかった。ここでは各箇所について、
- *
- * 1. 読めなかった回は「無い」とみなして進まない（握手・通知・取り直しをしない）
- * 2. 読めなかったことが日誌の `decision` に残る
- * 3. 読めた回は今までどおり（対照）
- *
- * を固定する。偽のストアは `listJobs()` だけを途中から壊せる。
- */
-
 function entryOf(label: string, state: RunnerLiveness, runnerId?: string): RunnerEntry {
   return {
     label,
@@ -45,7 +30,6 @@ function createFakeRegistry(): {
   registry: RunnerRegistry;
   entries: RunnerEntry[];
   addClient: (client: RunnerClient) => void;
-  /** 名簿の読み（`get`）を投げさせる（#2376）。`undefined` で直す。 */
   breakGet: (reason: string | undefined) => void;
 } {
   const clients = new Map<string, RunnerClient>();
@@ -140,7 +124,6 @@ function fakeRunner(runnerId: string): {
     },
     async close() {},
   };
-  // 台帳で走っている委譲を、この runner は実際に持っている（握手の相手が居る）。
   const hold = (managerId: string) =>
     sessions.set(managerId, {
       managerId,
@@ -169,7 +152,6 @@ function jobWith(id: string, runnerId: string): Job {
   };
 }
 
-/** `listJobs()` だけを途中から壊せる台帳。 */
 function harness() {
   const base = createMemoryStores();
   let failure: string | undefined;
@@ -235,7 +217,6 @@ describe('vacate の握手（manager.ts の vacate）', () => {
     const result = await h.pool.vacate('runner-a');
     expect(runner.stops).toEqual(['mgr-a']);
     expect(decisionsOf(await h.journal()).join('\n')).not.toContain('一覧を読めなかった');
-    // 対照（#2376）: 握手を飛ばしていないので、戻り値に欄が無い（キーそのものが無い）。
     expect(result).toStrictEqual({});
     await h.pool.stop();
   });
@@ -244,7 +225,6 @@ describe('vacate の握手（manager.ts の vacate）', () => {
     const h = harness();
     await h.base.jobs.putJob(jobWith('mgr-a', 'runner-a'));
     h.fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
-    // runner-a のクライアントは名簿に足さない（`get` は読めて `null`）。
 
     const result = await h.pool.vacate('runner-a');
 
@@ -259,7 +239,6 @@ describe('vacate の握手（manager.ts の vacate）', () => {
 
     const result = await h.pool.vacate('runner-a');
 
-    // 握手していない（居ないと確かめたのではない）。貸し出しにも触っていない。
     expect(runner.stops).toEqual([]);
     const text = decisionsOf(await h.journal()).join('\n');
     expect(text).toContain('runnerId=runner-a の vacate で、runner の名簿を読めなかった');
@@ -269,7 +248,6 @@ describe('vacate の握手（manager.ts の vacate）', () => {
     expect(result.handshakeSkipped?.retry).toBe(true);
     expect(result.handshakeSkipped?.message).toContain('名簿を読めなかった');
 
-    // 呼び直せば握手をやり直す（飛ばしたのは握手だけで、名簿の読みが直れば進む）。
     h.fake.breakGet(undefined);
     const again = await h.pool.vacate('runner-a');
     expect(runner.stops).toEqual(['mgr-a']);
@@ -283,12 +261,10 @@ describe('vacate の握手（manager.ts の vacate）', () => {
 
     const result = await h.pool.vacate('runner-a');
 
-    // 応答で言う（#2376）: 握手を飛ばした（一覧を読めなかった）。呼び直せばやり直す。
     expect(result.handshakeSkipped?.reason).toBe('jobs_unreadable');
     expect(result.handshakeSkipped?.retry).toBe(true);
     expect(result.handshakeSkipped?.message).toContain('一覧を読めなかった');
 
-    // 握手していない（委譲が無いと確かめたのではない）。貸し出しにも触っていない。
     expect(runner.stops).toEqual([]);
     const text = decisionsOf(await h.journal()).join('\n');
     expect(text).toContain('台帳の委譲の一覧を読めなかった');
@@ -331,7 +307,6 @@ describe('併存の通知（manager.ts の #reattach）', () => {
     expect(text).toContain('併存の通知を見送った');
     expect(text).toContain('ストアが応えない');
 
-    // 見送る設計は保つ: 通知済みにしていないので、次に読めた回には届く。
     h.healListJobs();
     await h.pool.reattachRunner('runner-a');
     expect(reportsOf(h.inbox)).toHaveLength(1);
@@ -344,7 +319,6 @@ describe('併存の通知（manager.ts の #reattach）', () => {
     await h.pool.reattachRunner('runner-a');
     expect(reportsOf(h.inbox)).toHaveLength(1);
 
-    // 併存が解ける（2台目が居なくなる）が、台帳は読めない。
     h.fake.entries.pop();
     h.breakListJobs('ストアが応えない');
     await h.pool.reattachRunner('runner-a');
@@ -352,12 +326,10 @@ describe('併存の通知（manager.ts の #reattach）', () => {
     expect(reportsOf(h.inbox)).toHaveLength(1);
     const text = decisionsOf(await h.journal()).join('\n');
     expect(text).toContain('併存が解けた通知を見送った');
-    // 取り直しの本体も、一覧が読めないので進んでいない（委譲が無いとは読んでいない）。
     expect(runner.resumes).toEqual([]);
 
     h.healListJobs();
     await h.pool.reattachRunner('runner-a');
-    // 取り直しが進んだ分の知らせも出るので、「解けた」だけを数える。
     expect(reportsOf(h.inbox).filter((r) => r.text.includes('併存は解けました'))).toHaveLength(1);
     await h.pool.stop();
   });

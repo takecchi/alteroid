@@ -8,18 +8,6 @@ import {
   RunnerCutOffWorkers,
 } from './runner-cut-off-workers.js';
 
-/**
- * `runner-cut-off-workers.ts` の歯。**純粋なクラスなので I/O のモック無しで
- * 全分岐に通せる**（`runner-subagent-stop-state.test.ts` / `clone-notices.test.ts`
- * と同じ作法。前例は PR #1359 / #1433）。
- *
- * ここが固定するのは、切り出した2フィールドの**状態の器としての性質**
- * ——記録・消費・FIFO の枝刈り・全件配達である。`RunnerSession` が「いつ
- * 呼ぶか・note を emit するかどうか・注記の文面」を決める判断は
- * `runner-subagent-stop.test.ts`（ブラックボックス）が引き続き持つ
- * ——ここでは扱わない。
- */
-
 describe('RunnerCutOffWorkers — 打ち切りの記録と消費（consumeCutOff）', () => {
   it('記録していない agentId は consumeCutOff で false を返し、何も変わらない', () => {
     const state = new RunnerCutOffWorkers();
@@ -30,7 +18,6 @@ describe('RunnerCutOffWorkers — 打ち切りの記録と消費（consumeCutOff
     const state = new RunnerCutOffWorkers();
     state.recordCutOff('agent-1');
     expect(state.consumeCutOff('agent-1')).toBe(true);
-    // 消費後は同じ agentId をもう一度 consume しても false（1回だけ）。
     expect(state.consumeCutOff('agent-1')).toBe(false);
   });
 
@@ -39,14 +26,11 @@ describe('RunnerCutOffWorkers — 打ち切りの記録と消費（consumeCutOff
     state.recordCutOff('agent-1');
     state.recordCutOff('agent-2');
     expect(state.consumeCutOff('agent-2')).toBe(true);
-    // agent-1 はまだ控えたまま。
     expect(state.consumeCutOff('agent-1')).toBe(true);
   });
 
   it(`上限（${CUT_OFF_WORKERS_LIMIT}件）を超えたら、いちばん古い記録から捨てる（FIFO）`, () => {
-    // 別の対照用インスタンスで「上限ちょうどでは最初の1件がまだ残っている」ことを
-    // 確かめる（`consumeCutOff` は消費（delete）を兼ねるので、本編と対照は
-    // インスタンスを分ける——同じ器で先に consume すると挿入順の検証が崩れる）。
+    // 本編と対照はインスタンスを分ける: `consumeCutOff` は delete を兼ねるので、同じ器で先に consume すると挿入順の検証が崩れる。
     const control = new RunnerCutOffWorkers();
     for (let n = 0; n < CUT_OFF_WORKERS_LIMIT; n += 1) {
       control.recordCutOff(`agent-${n}`);
@@ -57,12 +41,9 @@ describe('RunnerCutOffWorkers — 打ち切りの記録と消費（consumeCutOff
     for (let n = 0; n < CUT_OFF_WORKERS_LIMIT; n += 1) {
       state.recordCutOff(`agent-${n}`);
     }
-    // 501件目を積むと、いちばん古い agent-0 が捨てられる。
     state.recordCutOff(`agent-${CUT_OFF_WORKERS_LIMIT}`);
     expect(state.consumeCutOff('agent-0')).toBe(false);
-    // 2番目に古い agent-1 はまだ残っている。
     expect(state.consumeCutOff('agent-1')).toBe(true);
-    // 新しく積んだものは引ける。
     expect(state.consumeCutOff(`agent-${CUT_OFF_WORKERS_LIMIT}`)).toBe(true);
   });
 
@@ -72,10 +53,7 @@ describe('RunnerCutOffWorkers — 打ち切りの記録と消費（consumeCutOff
     for (let n = 1; n < CUT_OFF_WORKERS_LIMIT; n += 1) {
       state.recordCutOff(`agent-${n}`);
     }
-    // ここで agent-0 を再度 record する——挿入順が末尾へ動くはず。
     state.recordCutOff('agent-0');
-    // 上限ちょうどの状態でもう1件積むと、本来の「2番目に古い」agent-1 が
-    // 先に捨てられる（agent-0 は書き直したので先頭ではなくなっている）。
     state.recordCutOff(`agent-${CUT_OFF_WORKERS_LIMIT}`);
     expect(state.consumeCutOff('agent-1')).toBe(false);
     expect(state.consumeCutOff('agent-0')).toBe(true);
@@ -117,9 +95,7 @@ describe('RunnerCutOffWorkers — 未配達の打ち切り注記（recordPending
     state.recordPendingNotification(`agent-${PENDING_CUT_OFF_NOTIFICATIONS_LIMIT}`);
 
     const drained = state.drainPendingNotifications();
-    // いちばん古い agent-0 は捨てられている。
     expect(drained).not.toContain('agent-0');
-    // 2番目に古い agent-1 と、新しく積んだものは残っている。
     expect(drained).toContain('agent-1');
     expect(drained).toContain(`agent-${PENDING_CUT_OFF_NOTIFICATIONS_LIMIT}`);
     expect(drained).toHaveLength(PENDING_CUT_OFF_NOTIFICATIONS_LIMIT);
@@ -139,24 +115,14 @@ describe('RunnerCutOffWorkers — recordCutOff と recordPendingNotification は
   it('#onTaskNotification が行う「consumeCutOff → recordPendingNotification」の付け替えを組み合わせて再現できる', () => {
     const state = new RunnerCutOffWorkers();
     state.recordCutOff('agent-1');
-    // task_notification 経由で判明した打ち切り: 消費して付け替える。
     expect(state.consumeCutOff('agent-1')).toBe(true);
     state.recordPendingNotification('agent-1');
 
-    // 同期経路ではもう消費できない。
     expect(state.consumeCutOff('agent-1')).toBe(false);
-    // だが未配達の注記としては残っている。
     expect(state.drainPendingNotifications()).toEqual(['agent-1']);
   });
 });
 
-/**
- * Issue #1554 で足した3本（`isCutOff` / `cutOffTasks` / 背景処理の出力の
- * 配達待ち）。`#cutOffWorkers` / `#pendingCutOffNotifications` とは寿命が
- * 違う——`consumeCutOff` / `drainPendingNotifications` に**消費されても**、
- * `isCutOff` はそのまま `true` を返し続ける（クラス doc「Issue #1554 で
- * 足した3本」）。
- */
 describe('RunnerCutOffWorkers — isCutOff / cutOffTasks は消費されない（Issue #1554）', () => {
   it('recordCutOff した agentId は isCutOff で true。記録していなければ false', () => {
     const state = new RunnerCutOffWorkers();
@@ -169,7 +135,6 @@ describe('RunnerCutOffWorkers — isCutOff / cutOffTasks は消費されない�
     const state = new RunnerCutOffWorkers();
     state.recordCutOff('agent-1');
     expect(state.consumeCutOff('agent-1')).toBe(true);
-    // #901 側の記録は消費されたが、#1554 側の記録は残っている。
     expect(state.isCutOff('agent-1')).toBe(true);
   });
 
@@ -177,7 +142,6 @@ describe('RunnerCutOffWorkers — isCutOff / cutOffTasks は消費されない�
     const state = new RunnerCutOffWorkers();
     state.recordCutOff('agent-1');
     expect(state.cutOffTasks('agent-1')).toEqual([]);
-    // 記録していない agentId も同じく空配列（区別しない）。
     expect(state.cutOffTasks('agent-2')).toEqual([]);
   });
 
@@ -207,12 +171,9 @@ describe('RunnerCutOffWorkers — isCutOff / cutOffTasks は消費されない�
     state.recordCutOff(`agent-${CUT_OFF_AGENT_TASKS_LIMIT}`, [
       { id: `bg-${CUT_OFF_AGENT_TASKS_LIMIT}` },
     ]);
-    // いちばん古い agent-0 は捨てられている（isCutOff も cutOffTasks も）。
     expect(state.isCutOff('agent-0')).toBe(false);
     expect(state.cutOffTasks('agent-0')).toEqual([]);
-    // 2番目に古い agent-1 はまだ残っている。
     expect(state.isCutOff('agent-1')).toBe(true);
-    // 新しく積んだものは引ける。
     expect(state.isCutOff(`agent-${CUT_OFF_AGENT_TASKS_LIMIT}`)).toBe(true);
   });
 });
@@ -285,9 +246,7 @@ describe('RunnerCutOffWorkers — 打ち切った作業者が残した背景処�
 
     const drained = state.drainPendingBackgroundTaskOutputs();
     expect(drained).toHaveLength(PENDING_BACKGROUND_TASK_OUTPUT_LIMIT);
-    // いちばん古い bg-0 は捨てられている。
     expect(drained.some((item) => item.taskId === 'bg-0')).toBe(false);
-    // 2番目に古い bg-1 と、新しく積んだものは残っている。
     expect(drained.some((item) => item.taskId === 'bg-1')).toBe(true);
     expect(
       drained.some((item) => item.taskId === `bg-${PENDING_BACKGROUND_TASK_OUTPUT_LIMIT}`),

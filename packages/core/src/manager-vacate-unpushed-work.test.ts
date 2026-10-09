@@ -16,33 +16,6 @@ import type {
 import type { InboxEvent, Job, JobLease } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **`pool.vacate(runnerId)` の委譲ごとのループで、`runner.stop()` の直前に
- * 未 push の観測を1回取って記録すること（Issue #1266 候補(2)。`vacate()`
- * 自体は #485 PR-2 / #1453 / #1472）。**
- *
- * 足場（`entryOf` / `createFakeRegistry` / `fakeRunner` / `jobWith` /
- * `recentLease` / `setup`）は `manager-relocate.test.ts` の
- * `describe('ManagerPool.vacate（#485 PR-2）')` と同じ形を複製してある
- * （同ファイルの doc と同じ理由——duplicated on purpose）。`unpushedWork()` を
- * 実装して呼び出し順序を記録できる点だけが違う。
- *
- * ⚠️ **これが効くのは、runner を意図して空けるとき（drain。`vacate()` を実際に
- * 呼んだとき）だけである。** 日常の Railway redeploy はプロセスごと差し替わる
- * だけで `vacate()`（`POST /runners/vacate`）を誰も呼ばない
- * （`railway/README.md`「デプロイは走行中の仕事を畳む操作である」）——この
- * 歯はその区別までは固定していない（固定しているのは `vacate()` 自身が
- * 呼ばれたときの配線）。
- *
- * ## 測る2つ
- *
- * 1. `unpushedWork()` が `runner.stop()` より前に呼ばれ、観測が台帳
- *    （`job.lastUnpushedWorkObservation`）に残る
- * 2. 観測（runner 側の応答）が失敗しても、vacate 本体の判定
- *    （`#confirmStoppedAndReleaseLease` の確かめた停止・貸し出しの解放・
- *    移送）は変わらない
- */
-
 function entryOf(label: string, state: RunnerLiveness, runnerId?: string): RunnerEntry {
   return {
     label,
@@ -114,7 +87,6 @@ function fakeRunner(
       /* この試験群では使わない。 */
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この試験群では使わない。 */
       return {};
     },
     async resume(command): Promise<{ cwd?: string }> {
@@ -123,7 +95,6 @@ function fakeRunner(
       return {};
     },
     async send() {
-      /* この試験群では使わない。 */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -160,8 +131,6 @@ function fakeRunner(
       /* この試験群では使わない。 */
     },
   };
-  // **最初から `runningId` のセッションを1本持たせておく**（`vacate()` の
-  // ループが `runner.stop()` を呼ぶ対象がいる状態を作る）。
   sessions.set('__seed__', { managerId: '__seed__' });
   sessions.delete('__seed__');
   return { client, resumes };
@@ -207,10 +176,7 @@ describe('vacate が runner.stop() の直前に unpushedWork() を取る（Issue
     const fake = createFakeRegistry();
     fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
     const runnerA = fakeRunner('runner-a');
-    // `vacate()` のループは「走っているもの」だけに握手する——`resume` した
-    // セッションが `list()` に載っていないと `stop()` へ辿り着かない
-    // （`sessions.set` 経由。ここでは直接呼び出し順序を測りたいので、
-    // `resume` を経由せず `runner.stop()` を呼ぶ前提を素直に満たす）。
+    // `vacate()` は `list()` に載っている走行中のものだけに握手するので、先に `resume` しておく。
     await runnerA.client.resume({
       managerId: 'mgr-vacate-unpushed',
       request: '続きをやって',
@@ -237,8 +203,6 @@ describe('vacate が runner.stop() の直前に unpushedWork() を取る（Issue
 
     await pool.vacate('runner-a');
 
-    // **順序そのものが要点。** `unpushedWork` が `stop` より先に呼ばれている
-    // ——生きて答えられる最後の機会に取ることを固定する。
     expect(calls).toEqual(['unpushedWork:mgr-vacate-unpushed', 'stop:mgr-vacate-unpushed']);
 
     const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-vacate-unpushed');
@@ -268,8 +232,6 @@ describe('vacate が runner.stop() の直前に unpushedWork() を取る（Issue
       cwd: '/work/project',
       sessionId: 'sess-before-vacate',
     });
-    // **runner 側の応答が失敗する形**（session が答えない・往復が失敗する等の
-    // 代表として、例外を投げる）。
     runnerA.client.unpushedWork = async () => {
       throw new Error('runner が答えなかった');
     };
@@ -280,16 +242,11 @@ describe('vacate が runner.stop() の直前に unpushedWork() を取る（Issue
 
     await pool.vacate('runner-a');
 
-    // **移送は普通に起きる**——観測の失敗が `#confirmStoppedAndReleaseLease` /
-    // `relocateFrom` を巻き添えにしていない。
     await expect.poll(() => runnerB.resumes.length, { timeout: 2000 }).toBe(1);
 
     const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-vacate-unpushed-fail');
     expect(job?.runnerId).toBe('runner-b');
     expect(job?.status).toBe('running');
-    // **観測そのものは「取れなかった」として台帳に残る**——`unpushedWork()` は
-    // 例外を投げない設計なので、失敗しても `kind:'unavailable'` に畳まれて
-    // 記録される（欄が消えるのではない）。
     expect(job?.lastUnpushedWorkObservation).toMatchObject({ kind: 'unavailable' });
 
     await pool.stop();

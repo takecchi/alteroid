@@ -21,18 +21,13 @@ import type { InboxEvent, Job } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 担い手の報告に添えられたファイルを、デーモンが runner から取りに行って報告に載せる（Issue #4126 P2b）の、
- * プール側の振る舞い。**境界（`runnerEventSchema.safeParse`）を実際に通して**出来事を渡す（スキーマに無い欄は
- * そこで黙って落ちるので、渡した中身だけを見ていると境界で消えたことに気づけない）。
- */
+// 出来事は境界（`runnerEventSchema.safeParse`）を実際に通して渡す: スキーマに無い欄はそこで黙って落ちるため。
 
 const MANAGER_ID = 'mgr-files';
 
 interface Fake {
   runner: RunnerClient;
   alive: RunnerManagerState[];
-  /** fileId → 中身の返し方。無い id は 404。 */
   contents: Map<string, () => Promise<RunnerOutboxContent | undefined>>;
   opened: string[];
   deleted: string[];
@@ -224,7 +219,6 @@ describe('担い手の報告に添えられたファイル — プール（#4126
     expect(stored!.meta.uploadedBy).toBe(`manager:${MANAGER_ID}`);
     expect(stored!.meta.managerReportId).toBe('report-1');
     expect(fake.deleted).toEqual(['f'.repeat(32)]);
-    // 1時間の未結び付けの掃除に掛からない
     expect(await stores.attachments.prune(new Date(Date.now() + 2 * 3_600_000))).toBe(0);
     expect(await stores.attachments.getMeta(message.attachments![0]!.id)).toBeDefined();
     await pool.stop();
@@ -326,7 +320,6 @@ describe('担い手の報告に添えられたファイル — プール（#4126
     fake.raw({ type: 'closed', managerId: MANAGER_ID, status: 'failed', reason: '畳んだ' });
     for (let i = 0; i < 30; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
 
-    // 取り出しの最中は、closed の知らせも状態の書き込みも始まっていない
     expect(inbox.slice(baseline)).toEqual([]);
     const jobs = await stores.jobs.listJobs();
     expect(jobs.find((job) => job.id === MANAGER_ID)?.status).not.toBe('failed');
@@ -367,11 +360,6 @@ describe('担い手の報告に添えられたファイル — プール（#4126
   });
 });
 
-// ---------------------------------------------------------------------------
-// 同一プロセスの runner（LocalRunner）でも、HTTP の runner と同じ口を通って同じに動く
-// ---------------------------------------------------------------------------
-
-/** 入力を受けるたびに1ターン返す偽の SDK。ターンの結果を返す直前に、担い手の環境の出し箱へファイルを写す。 */
 function fakeSdk(write: (outbox: string) => Promise<void>): typeof sdkQuery {
   return ((params: { prompt: AsyncIterable<unknown>; options?: Options }) => {
     const outbox = (params.options?.env as Record<string, string | undefined> | undefined)
@@ -412,7 +400,7 @@ describe('担い手の報告に添えられたファイル — LocalRunner（#41
     const runner = createLocalRunner({
       workspacePath: workspace,
       env: { PATH: '/usr/bin' },
-      // 既定の根（os.tmpdir() 配下の共有の名前）に触らない: runner の器では root 所有で作れないため（#4199）
+      // 既定の根（os.tmpdir() 配下の共有の名前）に触らない: runner の器では root 所有で作れないため
       outboxRoot: join(workspace, 'outbox'),
       outboxStagedRoot: join(workspace, 'outbox-staged'),
       queryFn: fakeSdk((outbox) => writeFile(join(outbox, 'result.txt'), '成果物')),

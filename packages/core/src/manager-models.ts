@@ -1,6 +1,5 @@
 import { ANTHROPIC_ROUTE_NONE_LINE } from './anthropic-route-env.js';
 
-/** {@link managerModelsOf} が読むプールの最小の形（`ManagerPool` の部分集合）。 */
 export interface ManagerModelSource {
   runnerReportedModels?(runnerId: string): { manager?: string; worker?: string } | undefined;
 }
@@ -10,12 +9,7 @@ export interface ManagerModels {
   workerModel?: string;
 }
 
-/**
- * 委譲のマネージャー・作業者のモデル（#3921・#3947）。宛先の runner が `hello` で名乗った値だけを返し、
- * 置き先が無い・名乗りを受けていない・欄を送らない旧い runner・この口を持たないプールは、欄ごと載せない（＝不明）。
- * デーモンの環境変数や既定の帯では埋めない: 動いていないモデルを名乗ることになるため。
- * デーモンの一覧・詳細・地図とクローンの道具が同じ読み方をするよう、ここ1か所に置く。
- */
+/** runner が `hello` で名乗った値だけを返す。デーモンの環境変数や既定の帯では埋めない: 動いていないモデルを名乗ることになるため。 */
 export function managerModelsOf(
   pool: ManagerModelSource | undefined,
   summary: { runnerId?: string | undefined },
@@ -29,30 +23,22 @@ export function managerModelsOf(
   };
 }
 
-/** 名乗りが無いことを言う語。`claude` や既定の帯に化けさせない。 */
 export const MODEL_UNKNOWN_LABEL = '不明（名乗りを受けていない）';
 
-/** `manager_list` / `manager_report` の「モデル:」の右側。取れない側は「不明」と書く。 */
 export function describeManagerModels(models: ManagerModels): string {
   return `マネージャー ${models.managerModel ?? '不明'} / 作業者 ${models.workerModel ?? '不明'}`;
 }
 
-/** {@link collectRunnerModelLines} が読むプールの最小の形（`ManagerPool` の部分集合）。 */
 export interface RunnerModelSource extends ManagerModelSource {
   runners(): Promise<{
     runners: readonly { label: string; state: string; runnerId?: string }[];
   }>;
 }
 
-/** runner の一覧が読めずモデルを確かめられなかったときの1行。 */
 export const RUNNER_MODELS_UNVERIFIED =
   'runner のモデルを確かめられなかった（マネージャー層・作業者層のモデルは不明）';
 
-/**
- * 接続中の runner それぞれが `hello` で名乗ったマネージャー・作業者のモデルの行。
- * 名乗りを受けていない runner は「不明」と書く: 既定の帯で埋めると、動いていないモデルを名乗ることになるため。
- * 名乗りを引く口を持たないプール（テストの偽物）は何も足さない。
- */
+// 名乗りの無い runner は既定の帯で埋めず「不明」と書く: 動いていないモデルを名乗ることになるため。
 export async function collectRunnerModelLines(pool: RunnerModelSource): Promise<string[]> {
   if (pool.runnerReportedModels === undefined) return [];
   try {
@@ -74,7 +60,6 @@ export async function collectRunnerModelLines(pool: RunnerModelSource): Promise<
   }
 }
 
-/** {@link collectRunnerRouteLines} が読むプールの最小の形（`ManagerPool` の部分集合）。 */
 export interface RunnerRouteSource {
   runnerReportedAnthropicRoute?(runnerId: string): readonly string[] | undefined;
   runners(): Promise<{
@@ -82,14 +67,9 @@ export interface RunnerRouteSource {
   }>;
 }
 
-/** 名乗りを受けていない runner の行。「何も置かれていない」（`[]`）とは別に言う。 */
+// 「何も置かれていない」（`[]`）とは別に言う。
 export const RUNNER_ROUTE_UNREPORTED_LABEL = '名乗っていない（古い runner）';
 
-/**
- * 接続中の runner それぞれが名乗った、SDK 子の接続先とモデルの別名の行（#4263・#4261）。
- * 1 runner につき見出しの行（`runner X:`）と、字下げした中身の行。名乗りの無い runner は既定値で埋めず、
- * 「名乗っていない」と書く。名乗りを引く口を持たないプール（テストの偽物）は何も足さない。
- */
 export async function collectRunnerRouteLines(pool: RunnerRouteSource): Promise<string[]> {
   if (pool.runnerReportedAnthropicRoute === undefined) return [];
   try {

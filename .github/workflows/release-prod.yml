@@ -32,7 +32,25 @@ on:
     #     --limit 100 --json createdAt,event,conclusion
     - cron: '17 19 * * *'
   # 次の夜まで待てない場合の口（本番が壊れている / 直した欠陥をいま確かめたい）。
+  #
+  # **手で起こすときは、確認の入力が true でなければ反映しない**（#2750）。夜の反映は
+  # 退避の合図（クローンの定時 `pre-deploy-push-reminder`）の後に走るが、手で起こす
+  # 反映は合図を経ずに走行中の委譲を畳む。2026-09-27〜10-04 の実測で、反映の 6 割超が
+  # 手動だった。
+  #
+  # **走っている委譲の本数をここで数えないこと。** 数えるには Actions がデーモンを読む
+  # 資格が要り、オーナーは資格を置かないと決めた（2026-10-09、#2750 の案 C）。
+  # 本数は起こす側が `alteroid topology`（クローンなら道具の `manager_list`）で見る。
+  #
+  # gh から起こすときは `gh workflow run release-prod.yml -f confirm_running_delegations=true`。
   workflow_dispatch:
+    inputs:
+      confirm_running_delegations:
+        # 1行で書く: `>-` で折ると、日本語の行の継ぎ目に空白が入るため
+        description: '走っている委譲（マネージャー・作業者）が畳まれうることを確かめた。反映は runner を入れ替えうる。そのとき走行中の委譲は退避の合図なしに止まり、push していない成果（/workspace と /tmp）は消える。true でなければ反映しない。'
+        required: true
+        type: boolean
+        default: false
 
 # release/prod を動かすためだけなら contents: write で足りるが、この workflow は
 # 反映の後に「本番へ出た sha の CI」を記録する step も持つ（Issue #1207 の (3)。
@@ -59,6 +77,22 @@ jobs:
       # `--force-with-lease` の期待値が手元に無いオブジェクトでも通ることは実測で確認済み。
       #
       # dispatch を別の枝から起こされても押すのは main である（正典は main）。
+      #
+      # 手で起こしたときだけ見る。夜の反映（schedule）ではこの step は skipped になり、止めない。
+      # 入力は env で渡す: `${{ }}` を run に直接埋めると、値がシェルの字句として解釈されるため。
+      - name: 手動の反映の確認（走行中の委譲が畳まれうる）
+        id: confirm
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CONFIRMED: ${{ inputs.confirm_running_delegations }}
+        run: |
+          if [ "$CONFIRMED" != "true" ]; then
+            msg='反映しなかった。confirm_running_delegations が true ではない。走っている委譲が畳まれ、push していない成果が消えうることを確かめてから、true を付けて起こし直すこと（#2750）'
+            printf '=== 反映結果: %s ===\n' "$msg"
+            printf '%s\n' "$msg" >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo '確認の入力は true。反映へ進む'
       - uses: actions/checkout@v7
         with:
           ref: main
@@ -87,8 +121,11 @@ jobs:
       # 失敗しても記録は走り（何が起きたかを残すため）、記録側が失敗しても
       # この job 全体は成功のまま終わる（`record-release-prod-ci.mjs` 自身も
       # process.exitCode を立てない二重の保証だが、workflow 側にも置く）。
+      #
+      # 確認の入力で止めた回（`confirm` が failure）だけは記録しない。反映していないので記録する sha が無く、
+      # checkout も済んでいないため。
       - name: 反映した sha の main CI を記録する
-        if: always()
+        if: always() && steps.confirm.outcome != 'failure'
         continue-on-error: true
         run: node .github/scripts/record-release-prod-ci.mjs
         env:

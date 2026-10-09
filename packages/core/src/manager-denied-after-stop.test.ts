@@ -11,11 +11,6 @@ import {
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 止めた委譲（`abort()` 後）に遅れて届く `permission_denied` が、クローンの受信箱へ
- * 新しい報告を積まないこと。`case 'report'` / `case 'ask'` は `stopped` なら日誌にだけ
- * 残して受信箱へ回さない（R4）。`case 'permission_denied'` にはその門が無い。
- */
 function setup() {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
@@ -111,9 +106,7 @@ describe('止めた委譲に遅れて届く permission_denied', () => {
       input: {},
       via: 'live',
     });
-    // 実時間では待たない（#2146）。拒否の日誌は「受信箱へ回すか」の判定より先に書かれるので、
-    // それが現れるまで待ち、さらに `#emit` までの残りの非同期の段を流しきってから受信箱を見る。
-    // 日誌に残ること自体も測っている（受信箱へ回さないだけで、黙って捨てない。Issue #3094）。
+    // 実時間では待たない: 拒否の日誌は受信箱へ回す判定より先に書かれるので、それが現れてから残りの非同期の段を流しきって受信箱を見る。
     await vi.waitFor(async () => {
       const texts = (await stores.journal.list({ types: ['exchange'] })).map((entry) =>
         entry.type === 'exchange' ? entry.text : '',

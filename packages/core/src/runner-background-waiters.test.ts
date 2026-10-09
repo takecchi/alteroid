@@ -2,11 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RunnerBackgroundWaiters } from './runner-background-waiters.js';
 
-/**
- * `RunnerBackgroundWaiters`（Issue #3008）の歯。実時間は使わない（偽の時計）。
- * 「終わった」の決め方（`liveBackgroundTasks` の見え方・`task_notification`）の判断は
- * `RunnerSession` が `check` として渡すので、ここは待ちの器としての性質だけを確かめる。
- */
 describe('RunnerBackgroundWaiters', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -46,7 +41,6 @@ describe('RunnerBackgroundWaiters', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(result).toHaveBeenCalledWith('settled');
     expect(waiters.outputFileOf('bg-1')).toBe('/tmp/out.txt');
-    // output_file が取れなかった通知は null のまま（作り物のパスを主張しない）。
     waiters.noteFinished('bg-2', null);
     expect(waiters.isFinished('bg-2')).toBe(true);
     expect(waiters.outputFileOf('bg-2')).toBeNull();

@@ -1,9 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 import {
   ATTACHMENT_UNBOUND_TTL_MS,
+  AttachmentStreamMeter,
+  collectAttachmentStream,
+  planAttachmentStream,
+  prepareStreamedAttachment,
   addToAttachmentUsage,
   assertNoNul,
   attachmentBindTargetLabel,
@@ -27,6 +34,7 @@ import {
   type AttachmentMeta,
   type AttachmentUsage,
   type AttachmentPutInput,
+  type AttachmentPutStreamInput,
   type AttachmentStore,
   type AttachmentStoreOptions,
 } from '@alteroid/core';
@@ -124,6 +132,71 @@ export class FsAttachmentStore implements AttachmentStore {
       throw error;
     }
     return meta;
+  }
+
+  /**
+   * 流して預ける（#4128 段1）。tmp へ書きながら大きさと sha256 を数え、上限を超えたら読むのを止めて tmp ごと消す。
+   * 画像は先頭の見た目と寸法の検査に中身が要るので、上限つきで集めて `put` へ渡す（画像の上限は小さい）。
+   */
+  async putStream(input: AttachmentPutStreamInput): Promise<AttachmentMeta> {
+    const limits = this.#options.limits ?? readAttachmentLimits().limits;
+    const plan = planAttachmentStream(input, limits);
+    const { body, ...rest } = input;
+    if (plan.image) {
+      return this.put({ ...rest, bytes: await collectAttachmentStream(body, plan) });
+    }
+    const id = randomUUID();
+    const dir = join(this.#dir, id);
+    await mkdir(dir, { recursive: true });
+    try {
+      const meter = new AttachmentStreamMeter(plan);
+      const tmp = join(dir, `${DATA_FILE}.tmp.${process.pid}.${randomUUID().slice(0, 8)}`);
+      await pipeline(
+        body,
+        async function* (source: AsyncIterable<Uint8Array>) {
+          for await (const chunk of source) {
+            meter.write(chunk);
+            yield chunk;
+          }
+        },
+        createWriteStream(tmp, { mode: 0o600 }),
+      );
+      const done = meter.finish();
+      const meta: AttachmentMeta = {
+        ...prepareStreamedAttachment(
+          input,
+          plan,
+          done,
+          limits,
+          this.#options.now?.() ?? new Date(),
+        ),
+        id,
+      };
+      await rename(tmp, join(dir, DATA_FILE));
+      // meta.json を最後に置く: 途中で落ちた残骸を「預かった」と数えないため
+      await writeFileAtomic(join(dir, META_FILE), `${JSON.stringify(meta)}\n`, { mode: 0o600 });
+      return meta;
+    } catch (error) {
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /** `get` と同じ判定（排他は `get` と同じく取らない。消えていれば `undefined`）。 */
+  async open(id: string): Promise<{ meta: AttachmentMeta; stream: Readable } | undefined> {
+    const dir = this.#idDir(id);
+    if (dir === undefined) return undefined;
+    const meta = await this.#readLiveMeta(dir);
+    if (meta === undefined) return undefined;
+    const path = join(dir, DATA_FILE);
+    try {
+      // 開いて存在を確かめてから返す（get の ENOENT → undefined と揃える）
+      await stat(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    }
+    return { meta, stream: createReadStream(path) };
   }
 
   async get(id: string): Promise<{ meta: AttachmentMeta; bytes: Uint8Array } | undefined> {

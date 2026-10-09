@@ -13,20 +13,6 @@ import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * **Issue #3187 — 同じ `closed(failed)` が二重に届くと、日誌・知らせ・器の失敗数が二重になる。**
- *
- * `closed` には冪等キーが無い（runner の SSE は再接続で同じ出来事を配り直しうる）。
- * 直し方はデーモンの中だけ: 台帳が既に `failed` の委譲へ `closed(failed)` が届いたら、
- * 日誌にだけ残し、知らせ（`closed_failed`）も `noteManagerFailed` も出さず、状態も動かさない。
- * `failed` の後に resume されて `running` へ戻った委譲への `closed(failed)` は、新しい失敗として
- * 従来どおり知らせる（最後の歯）。
- *
- * 足場（`manualRunner` / `runningManualSetup`）は `manager-closed-failed-journal.test.ts`
- * 系と同じものをこの歯専用に複製してある。実時間の待ちは使わない
- * （`scripts/wallclock-waits-ratchet.test.ts`、#2146）。
- */
-
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
@@ -48,15 +34,12 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -95,10 +78,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     closed(managerId, status, reason) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
       if (at !== -1) alive.splice(at, 1);
-      // **daemon の境界（runnerEventSchema.safeParse）を実際に通す**
-      // （`manager-closed-failed-system-error.test.ts` と同じ作法——スキーマに
-      // 無い欄はここで黙って落ちるので、emit した中身だけを見ていると境界で
-      // 消えたことに気づけない）。
+      // 境界（runnerEventSchema.safeParse）を実際に通す: スキーマに無い欄はここで落ちるため。
       const raw: RunnerEvent = { type: 'closed', managerId, status, reason };
       const parsed = runnerEventSchema.safeParse(JSON.parse(JSON.stringify(raw)) as unknown);
       if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
@@ -165,9 +145,7 @@ async function runningManualSetup(
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
-    // **既定 3000ms より大きく取る。** テストの実時間の中で窓が自然に閉じて
-    // しまうと「flush させていない」状態を作れない——この歯が測りたいのは
-    // 「flush 前でも本文が残る」ことなので、窓を意図して開けたままにする。
+    // 既定 3000ms より大きく取る: 実時間で窓が閉じると「flush させていない」状態を作れない。
     synthesizedNoticeWindowMs: options.synthesizedNoticeWindowMs ?? 60_000,
   });
 
@@ -189,10 +167,9 @@ describe('closed(failed) の二重配達（SSE 再送。#3187）', () => {
     const reason = 'マネージャーのセッションが落ちた: Error: boom';
     fake.closed('mgr-dup', 'failed', reason);
     await settle();
-    // Last-Event-ID の再送を模す: 同じ closed がもう一度届く。
     fake.closed('mgr-dup', 'failed', reason);
     await settle();
-    await pool.stop(); // 合流窓を flush する
+    await pool.stop();
 
     const entries = await stores.journal.list({ types: ['exchange'] });
     const failureLines = entries.filter((e) => JSON.stringify(e).includes(`[mgr-dup] ${reason}`));
@@ -204,10 +181,9 @@ describe('closed(failed) の二重配達（SSE 再送。#3187）', () => {
     const reason = 'マネージャーのセッションが落ちた: Error: boom';
     fake.closed('mgr-dup', 'failed', reason);
     await settle();
-    // Last-Event-ID の再送を模す: 同じ closed がもう一度届く。
     fake.closed('mgr-dup', 'failed', reason);
     await settle();
-    await pool.stop(); // 合流窓を flush する
+    await pool.stop();
 
     const notices = inbox.filter(
       (e) => e.type === 'manager_message' && JSON.stringify(e).includes('boom'),
@@ -274,7 +250,7 @@ describe('closed(failed) の二重配達（SSE 再送。#3187）', () => {
     expect(job?.status).toBe('running');
     fake.closed('mgr-again', 'failed', '2回目の失敗: boom2');
     await settle();
-    await pool.stop(); // 合流窓を flush する
+    await pool.stop();
 
     const text = JSON.stringify(inbox.filter((e) => e.type === 'manager_message'));
     expect(text).toContain('boom2');
@@ -284,7 +260,6 @@ describe('closed(failed) の二重配達（SSE 再送。#3187）', () => {
     const { pool, inbox, fake } = await runningManualSetup('mgr-inflight');
     fake.closed('mgr-inflight', 'failed', '1回目の失敗: boom1');
     await settle();
-    // send の resume を止めておき、その間に新しいセッションがすぐ落ちた closed(failed) を流す。
     // `send()` は resume の**後**で台帳を `running` に書くので、この窓では台帳はまだ `failed` である。
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -306,14 +281,12 @@ describe('closed(failed) の二重配達（SSE 再送。#3187）', () => {
     release();
     await sending;
     await settle();
-    await pool.stop(); // 合流窓を flush する
+    await pool.stop();
 
     const text = JSON.stringify(inbox.filter((e) => e.type === 'manager_message'));
     expect(text).toContain('boom-inflight');
   });
 
-  // 対照（緑のはず）: lost は runner が先に resume_failed(recovered=false) を出すので知らせが出る。
-  // （report 無しの closed(done) が無音になる件 #3189 は方針待ちなので、ここには取り込んでいない。）
   it('対照: resume_failed(recovered=false) の後に closed(lost) が続く通常の lost は、受信箱に出る', async () => {
     const { pool, inbox, fake } = await runningManualSetup('mgr-lost');
     const before = inbox.length;

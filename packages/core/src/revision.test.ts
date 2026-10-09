@@ -12,21 +12,6 @@ import {
   resolveBuildTime,
 } from './revision.js';
 
-/**
- * 「自分がどのコミットで走っているか」を解決する唯一の場所（roadmap M5 相当、
- * デーモン/runner が別々にデプロイされる窓に気づくための計器）。
- *
- * **本体は「埋まらなかったときに『取れなかった』と出る」側である。** 埋まった
- * ときに正しい値が出るのは当然として、埋まらなかったときに既定値・プレース
- * ホルダを返さないことを、別の `it()` で明示的に測る。
- *
- * `resolveBuildRevision` の第2引数（`baked`）は `vi.mock` を使わずに「焼き込みが
- * 無かったら」を再現するための DI（このリポジトリは実引数の差し替えを好む —
- * `runner-registry.test.ts` 冒頭のコメント）。**本番コードはこの引数を渡さない**
- * ——渡さなければ実際に焼かれた `CANON_REVISION` が使われる（`revision.ts` の
- * `REAL_BAKED_REVISION`）。
- */
-
 const NONE = { revision: '', source: '' };
 const BAKED_BUILD = { revision: 'a'.repeat(40), source: 'build' };
 const BAKED_WORKSPACE = { revision: 'b'.repeat(40), source: 'workspace' };
@@ -36,9 +21,6 @@ describe('resolveBuildRevision', () => {
     const rev = resolveBuildRevision({}, NONE);
 
     expect(rev).toEqual({ commit: null, short: null, source: null });
-    // **これが本体。** 「取れなかった」を、それらしい文字列に化けさせていないこと
-    // を明示的に確かめる——実装が誤って `'unknown'` のような固定文字列を返す形へ
-    // 書き換わっても、この assert だけは `.toEqual` の形一致で落ちる。
     expect(rev.commit).not.toBe('unknown');
     expect(rev.short).not.toBe('unknown');
     expect(rev.commit).toBeNull();
@@ -106,8 +88,6 @@ describe('resolveBuildRevision', () => {
   });
 
   it('焼き込みの source が build/workspace のどちらでもない値なら null 扱いにする', () => {
-    // **書き込み側（write-canon.mjs）が壊れて未知の文字列を書いても、
-    // 読む側が「知らない出所」をそれらしい値として通さない。**
     const rev = resolveBuildRevision({}, { revision: 'g'.repeat(40), source: 'not-a-real-source' });
 
     expect(rev.source).toBeNull();
@@ -119,7 +99,6 @@ describe('describeBuildRevision', () => {
     const text = describeBuildRevision(resolveBuildRevision({}, NONE));
 
     expect(text).toContain('不明');
-    // プレースホルダの sha（全0・全f 等）や 'unknown' のような取り繕いを含まない。
     expect(text).not.toMatch(/[0-9a-f]{40}/);
     expect(text).not.toMatch(/unknown/i);
   });
@@ -132,14 +111,6 @@ describe('describeBuildRevision', () => {
   });
 });
 
-/**
- * `describeRevisionStatus` — 版を出す口（クローンの `runner_list` / Web UI /
- * CLI）が全部これを通る。
- *
- * **本体は「`unknown` と `unheard` が別の言葉で出る」側である。** 同じ言葉に
- * 畳んだ実装でも「版が出ている」ようには見えるので、畳まれたことは出力を
- * 眺めていても分からない——ここで区別を固定する。
- */
 describe('describeRevisionStatus', () => {
   it('known は短縮とフル sha の両方と、出所の説明を含む', () => {
     const text = describeRevisionStatus({
@@ -161,8 +132,6 @@ describe('describeRevisionStatus', () => {
     expect(unknown).not.toBe(unheard);
     expect(unknown).toContain('不明');
     expect(unheard).toContain('未確認');
-    // **「不明」が「未確認」の側へ滲んでいない。** 片方の文言をもう片方に流用した
-    // 実装（両方に「不明」を含める等）は、目には区別が付いて見えるのでここで測る。
     expect(unheard).not.toContain('不明');
   });
 
@@ -173,18 +142,6 @@ describe('describeRevisionStatus', () => {
   });
 });
 
-/**
- * `resolveBuildTime` — このイメージが**焼かれた時刻**を解決する（#1226）。
- *
- * **`resolveBuildRevision` と同じ役割分担。** 出所は焼き込み（`CANON_BUILT_AT`）
- * 1つだけで、`baked`（引数）はテストが「焼き込みが無かったら / 壊れていたら」を
- * 再現するための DI（本番コードは渡さない——doc 参照）。
- *
- * **本体は「埋まらなかった・壊れていたときに『取れなかった』と出る」側である。**
- * 古い焼き込み（`CANON_BUILT_AT` が無い＝空文字が渡る）・空白だけ・
- * `Date.parse` が `NaN` になる壊れた文字列、の3つがすべて同じ `null` へ倒れる
- * ことを別の `it()` で明示的に測る。
- */
 describe('resolveBuildTime', () => {
   it('焼き込みが無い（空文字。古い焼き込みが CANON_BUILT_AT を持たない場合と同じ形）→ builtAt は null', () => {
     const time = resolveBuildTime('');
@@ -211,10 +168,7 @@ describe('resolveBuildTime', () => {
   });
 
   it('引数を渡さなければ実際に焼かれた CANON_BUILT_AT が使われる（build 後は必ず値を持つ）', () => {
-    // **この pnpm test は build 後に走る前提**（`.claude/skills/dev-setup/SKILL.md` の
-    // 「build が先」の項——この項は #1753 で AGENTS.md「開発手順」から移った）。
-    // `generated/canon.ts` は `write-canon.mjs` が毎回焼くので、ビルド時刻は
-    // 必ず取れる（`builtAt()` の doc — 空になることは無い）。
+    // build 後に走る前提: `generated/canon.ts` は `write-canon.mjs` が毎回焼くので空にならない。
     const time = resolveBuildTime();
 
     expect(time.builtAt).not.toBeNull();
@@ -239,7 +193,6 @@ describe('describeBuildAge', () => {
   });
 
   it('値と経過（時間単位）の両方を含む', () => {
-    // NOW の20時間前。
     const text = describeBuildAge('2026-09-18T11:45:00.000Z', NOW);
 
     expect(text).toContain('2026-09-18T11:45:00.000Z');
@@ -253,8 +206,7 @@ describe('describeBuildAge', () => {
   });
 
   it('経過が48時間を超えたら日単位で言う', () => {
-    const text = describeBuildAge('2026-09-15T07:45:00.000Z', NOW); // ちょうど4日前
-
+    const text = describeBuildAge('2026-09-15T07:45:00.000Z', NOW);
     expect(text).toContain('約4日前');
   });
 
@@ -285,28 +237,9 @@ describe('reportRunnerRevision', () => {
   });
 });
 
-/**
- * `@alteroid/core` が `private: true` のままであることを固定する。
- *
- * **崩れる条件が1つある。** `private` を外して publish 対象にした日、
- * `resolveBuildRevision` の第2引数（`baked`。テスト専用で、本番の経路は
- * どこからも渡さない口）は本物の公開 API になる——package.json の
- * `exports` が `./dist/index.js` を指すので、`private` が付いている限りは
- * npm へ publish されず、この引数を見るのはワークスペース内のコードだけに
- * 留まる。`private` を外す人はふつう `revision.ts` を読まないので、この
- * 境界が壊れたことに誰も気づけない。**
- *
- * `@alteroid/core` を publish 対象にすると、`resolveBuildRevision` の第2引数
- * （テスト用の口）が公開 API になる。publish するなら、先にあの引数を
- * 包み直すこと。
- *
- * `package.json` はテストファイルからの相対パスで読む（cwd に依存させない
- * ——この器はシェルの cwd が `/workspace` へ戻ることがある。
- * `packages/core/scripts/write-canon.mjs` の `import.meta.url` 基準の解決と
- * 同じ作法）。
- */
 describe('@alteroid/core は private のままである', () => {
   it('package.json の private が true である（外れたら baked 引数を包み直すこと）', () => {
+    // cwd に依存させない: package.json はテストファイルからの相対パスで読む。
     const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url));
     const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { private?: unknown };
 

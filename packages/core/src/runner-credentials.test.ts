@@ -9,15 +9,6 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { createCredentialStore } from './credentials.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-/**
- * 鍵が**凍らない**こと。
- *
- * runner のプロセスが起動した瞬間の `process.env` をそのまま配ると、人間が後から
- * 差し替えた鍵は器を作り直すまで届かない。届かないまま走り続けたマネージャーは
- * 「権限が無い」としか報告できず、鍵を正しく置いた人間との間ですれ違いが起きる。
- * ここで固定するのは「差し替えが届くこと」そのものである。
- */
-
 interface Started {
   options: Options;
 }
@@ -75,7 +66,6 @@ describe('runner が配る鍵', () => {
       workspacePath: dir,
       emit: () => undefined,
       queryFn: fake.fn,
-      // **凍った env**。runner の起動時にはこれが入っていた。
       env: { PATH: process.env.PATH ?? '', GH_TOKEN: 'ghp_old' },
       credentials,
     });
@@ -83,34 +73,18 @@ describe('runner が配る鍵', () => {
     await host.start({ managerId: 'mgr-1', request: '古い鍵で走る', cwd: dir });
     expect(fake.started[0]?.options.env?.GH_TOKEN).toBe('ghp_old');
 
-    // 人間が鍵を差し替える（器は作り直さない）
     await host.setCredentials([{ name: 'GH_TOKEN', value: 'ghp_new' }]);
 
-    // 1. これから起こすマネージャーには即座に届く
     await host.start({ managerId: 'mgr-2', request: '新しい鍵で走る', cwd: dir });
     expect(fake.started[1]?.options.env?.GH_TOKEN).toBe('ghp_new');
 
-    // 2. **既に走っている mgr-1** にも、器越しに届く。`git` も `gh` も呼ばれる
-    //    たびにこのファイルを読むので、次の呼び出しから新しい鍵になる。
     const file = fake.started[0]?.options.env?.ALTEROID_GH_TOKEN_FILE;
     expect(file).toBe(join(dir, 'creds', 'GH_TOKEN'));
     expect(readFileSync(file as string, 'utf8')).toBe('ghp_new');
   });
 
   it('器の env に在るだけの鍵は、子へ1文字も渡らない（出所はクローンが降ろしたものだけ）', async () => {
-    /**
-     * **runner は単体では動かない器である**（人間の決定 2026-09-11）。
-     *
-     * ここが無かったあいだ、runner は自分の環境変数に在る鍵でマネージャーを走らせて
-     * いた。本番実測（2026-09-11）では、その値は**週次上限で冷却中のトークン**で、
-     * プールの現役とは別物だった ⟹ デーモンが降ろすまでの窓（と、降ろしに失敗した
-     * 回）はそれが効き、しかも**食い違いはマネージャーの側からは見えない。**
-     *
-     * ⟹ 鍵の名前は `#childEnv()` が**重ねる前に**落とす。器（＝クローンが降ろした
-     * もの）だけが出所になる。
-     */
     const fake = fakeSdk();
-    // **器は空**（クローンはまだ何も降ろしていない）。
     const credentials = createCredentialStore({ dir: join(dir, 'creds'), seed: {} });
 
     host = createRunnerHost({
@@ -118,7 +92,6 @@ describe('runner が配る鍵', () => {
       workspacePath: dir,
       emit: () => undefined,
       queryFn: fake.fn,
-      // **器の環境変数には鍵が在る**（人間が消し忘れた / 前の構成の置き土産）。
       env: {
         PATH: process.env.PATH ?? '',
         GH_TOKEN: 'ghp_from_the_runner_env',
@@ -132,17 +105,13 @@ describe('runner が配る鍵', () => {
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const env = fake.started[0]?.options.env ?? {};
 
-    // **1つも渡っていない。**
     expect(env.GH_TOKEN).toBeUndefined();
     expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
-    // **鍵でないものは落とさない**（環境を痩せさせるのが目的ではない）。
     expect(env.SOME_OTHER_VALUE).toBe('鍵ではないものは落とさない');
   });
 
   it('クローンが降ろせば、同じ名前が子へ渡る（能力は落ちていない）', async () => {
-    // 直上のテストと対にしてある。**落としているのは出所であって能力ではない** ——
-    // これが無いと、上のテストは「鍵が渡らなくなった」だけを固定してしまう。
     const fake = fakeSdk();
     const credentials = createCredentialStore({ dir: join(dir, 'creds'), seed: {} });
 
@@ -155,12 +124,10 @@ describe('runner が配る鍵', () => {
       credentials,
     });
 
-    // クローンが降ろす（制御面の `POST /credentials`）。
     await host.setCredentials([{ name: 'GH_TOKEN', value: 'ghp_from_the_clone' }]);
 
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
 
-    // **器の env の値ではなく、降ろされた値である。**
     expect(fake.started[0]?.options.env?.GH_TOKEN).toBe('ghp_from_the_clone');
   });
 
@@ -189,9 +156,7 @@ describe('runner が配る鍵', () => {
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const env = fake.started[0]?.options.env ?? {};
 
-    // 下（外の世界）へ手を伸ばす鍵は渡る
     expect(env.GH_TOKEN).toBe('ghp_x');
-    // 上（記憶）へ到達する鍵は落ちている
     expect(env.ALTEROID_DATABASE_URL).toBeUndefined();
     expect(env.ALTEROID_RUNNER_TOKEN).toBeUndefined();
   });
@@ -250,7 +215,6 @@ describe('鍵が伏せる仕組みを越えないこと', () => {
       credentials,
     });
 
-    // 名前検査をすり抜けたとしても、合成の順序で伏せが最後に効く
     await credentials.set([{ name: 'GH_TOKEN', value: 'ghp_y' }]);
     (credentials as unknown as { values(): Record<string, string> }).values = () => ({
       GH_TOKEN: 'ghp_y',
@@ -261,7 +225,6 @@ describe('鍵が伏せる仕組みを越えないこと', () => {
     const env = fake.started[0]?.options.env ?? {};
 
     expect(env.GH_TOKEN).toBe('ghp_y');
-    // **伏せるのが最後。** ここが通ると記憶ストアの所在が子へ渡る
     expect(env.ALTEROID_DATABASE_URL).toBeUndefined();
   });
 });

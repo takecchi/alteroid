@@ -5,32 +5,17 @@ import type { PermissionGrant } from './schema.js';
 import type { PermissionGrantStore, Stores } from './store.js';
 
 /**
- * クローンの道具 `permission_grant_list`（読むだけ）の本体。
- *
- * **ここは `tools.ts` ではなくこのファイルに置いている理由。** `tools.test.ts` の歯
- * （issue #863 C 節）は「`tools.ts` のどのハンドラも `permissionGrants` に触れない」を
- * 字面で固定している——クローンが自分に許可を書けないことの歯である。**読むだけの道具を
- * 足すために、その歯を緩めない。** 代わりに、この道具が持つストアの口を型で
- * `list` / `listUnreadable` の2つに絞り（{@link PermissionGrantReader}）、このファイルが
- * 書き手の口（`put` / `revoke` / `markUsed` / `removeUnreadable`）に触れないことを
- * 別の歯（`permission-grant-list.test.ts`）で固定する。
- *
- * **取り消し・読めない行を消す口は人間の手に限る**（#2522）。足さないこと。
+ * `tools.ts` に置かない: `tools.test.ts` が「どのハンドラも `permissionGrants` に触れない」を
+ * 字面で固定しており、その歯を緩めないため。口を `list` / `listUnreadable` に絞り、
+ * `permission-grant-list.test.ts` がこのファイルが書き手の口に触れないことを固定する。
+ * 取り消し・読めない行を消す口は足さない（人間の手に限る）。
  */
 export type PermissionGrantReader = Pick<PermissionGrantStore, 'list' | 'listUnreadable'>;
 
-/**
- * 許可の記録の一覧の予算（`TOKEN_LIST_BUDGET` を使い回さない。値が同じでも由来が
- * 違う）。**許可の本文（`rule` / `answer` / `allows` / `denies`）は人間の回答や Bash の
- * コマンド文字列そのもので、長さの上限が無い**。件数も人間が「許可します」と答えた
- * 回数で増える。
- */
+/** `TOKEN_LIST_BUDGET` を使い回さない（値が同じでも由来が違う。許可の本文は長さの上限が無い）。 */
 const PERMISSION_GRANT_LIST_BUDGET = 6_000;
-/** 一覧で、許可の本文（規則・回答・allows / denies）1つあたりを切る長さ。全文は `id` で取る。 */
 const PERMISSION_GRANT_EXCERPT = 160;
-/** 詳細（`id` 指定）の1頁の文字数。 */
 const PERMISSION_GRANT_PAGE = 6_000;
-/** `rowsUnreadable.rows` に出す id の上限（本文は載らないが、件数で溢れないように）。 */
 const PERMISSION_GRANT_UNREADABLE_ROWS_LIMIT = 20;
 
 export async function renderPermissionGrantList(
@@ -43,9 +28,7 @@ export async function renderPermissionGrantList(
   };
   const { id, from = 0, offset = 0 } = args;
   const grants = await reader.list();
-  // **読めない行は、1件でも在るときだけ `rowsUnreadable` に載せる**（HTTP の
-  // `GET /permission-grants` と同じ形。0件なら鍵ごと無い）。読めない行しか無いと
-  // `grants` は空で「許可が無い」に見える。本文は載らない（id と不正な欄名だけ）。
+  // 読めない行しか無いと `grants` は空で「許可が無い」に見えるので、1件でも在れば載せる。
   const unreadable = toRowsUnreadable(await reader.listUnreadable());
   const unreadableLines =
     unreadable === undefined
@@ -65,7 +48,6 @@ export async function renderPermissionGrantList(
         ];
   const stateOf = (grant: PermissionGrant): string =>
     grant.revokedAt === undefined ? '有効' : '取り消し済み';
-  // --- 全文モード（1件だけ） ---
   if (id !== undefined) {
     const grant = grants.find((row) => row.id === id);
     if (grant === undefined) {
@@ -91,7 +73,6 @@ export async function renderPermissionGrantList(
       : '';
     return `${describePage(part)}\n${part.body}${tail}`;
   }
-  // --- 一覧モード ---
   if (grants.length === 0) {
     return [
       ...(unreadable === undefined
@@ -100,13 +81,11 @@ export async function renderPermissionGrantList(
       ...unreadableLines,
     ].join('\n');
   }
-  // **並びは `grantedAt` 昇順**（`PermissionGrantStore.list()` の契約）。
   const view = grants.slice(from);
   if (from > 0 && view.length === 0) {
     return `（from=${String(from)} より後ろの許可の記録は無い。全 ${String(grants.length)} 件）`;
   }
   const items = view.map((grant) => {
-    // 更新 = 最後に変わった時刻（承認・取り消し・最後に使った時刻のうち最新）。
     const updatedAt = [grant.grantedAt, grant.revokedAt, grant.lastUsedAt]
       .filter((value) => value !== undefined)
       .reduce((latest, value) => (compareIsoInstant(value, latest) > 0 ? value : latest));

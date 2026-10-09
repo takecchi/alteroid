@@ -8,20 +8,7 @@ import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **押し込みの挑み直しが積む同じ失敗の行を、日誌へ1行にまとめる**（issue #1311）。
- *
- * 押し込みに失敗した runner へは、`#retryFailedPushes` が諦めずに挑み直す（間隔は
- * 60秒で頭打ち）。直らない障害では毎分1行の同じ「〜を降ろせなかった」が積まれ続ける。
- *
- * ## ⚠️ 測り分けたいこと（畳みすぎと畳み足りないの両方）
- *
- * 「減った」だけを測ると、**黙って失う**側の壊れ方が緑のまま通る。だから
- * **試行の回数（`setProfile` の呼び出し回数）を物差しにして、書いた行と要約の件数の
- * 合計が回数に一致する**ことを測る（畳みすぎ＝合計が足りない、畳み足りない＝生の行が多い）。
- * 要約は畳んだ本文を丸ごと載せるので、**要約の行は生の行として数えない**
- * （数え方を間違えると「本物2行」と「1行＋要約」が区別できない型になる）。
- */
+// 試行の回数（`setProfile` の呼び出し回数）を物差しにする: 「減った」だけを測ると、黙って失う壊れ方が緑のまま通る。
 
 const FOLD_FRAGMENT = '同じ合図が続いたので畳んだ';
 const FAILURE_FRAGMENT = '実行環境プロファイルを置けなかった';
@@ -81,7 +68,6 @@ async function textsOf(stores: Awaited<ReturnType<typeof setup>>['stores']) {
 
 /** 畳んだ要約の行か（要約は畳んだ本文を丸ごと載せるので、生の行の数え方から除く）。 */
 const isSummary = (text: string) => text.includes(FOLD_FRAGMENT);
-/** 要約の「2回目以降を N 回ぶん」の N。 */
 const suppressedOf = (text: string) => Number(/2回目以降を (\d+) 回ぶん/.exec(text)?.[1] ?? 0);
 
 describe('押し込みの失敗の行の畳み込み（#1311）', () => {
@@ -102,9 +88,7 @@ describe('押し込みの失敗の行の畳み込み（#1311）', () => {
     };
 
     await pool.start({ request: '走る' });
-    // 挑み直しは 2,4,8,16,32,60,60,… 秒。20分で十分に反復する。
     await vi.advanceTimersByTimeAsync(20 * 60_000);
-    // 反復が実際に起きていること（起きていなければ、この歯は何も測っていない）。
     expect(attempts).toBeGreaterThan(10);
     await pool.stop();
 
@@ -112,9 +96,7 @@ describe('押し込みの失敗の行の畳み込み（#1311）', () => {
     const raw = texts.filter((t) => !isSummary(t));
     const summaries = texts.filter(isSummary);
 
-    // 畳み足りない: 生の行は1本（初回）だけ。
     expect(raw).toHaveLength(1);
-    // 畳みすぎ: 生の行 + 要約が数えた件数 == 試行の回数（1回も失っていない）。
     expect(raw.length + summaries.reduce((sum, t) => sum + suppressedOf(t), 0)).toBe(attempts);
   });
 
@@ -151,7 +133,6 @@ describe('押し込みの失敗の行の畳み込み（#1311）', () => {
     const failedAttempts = attempts;
     expect(failedAttempts).toBeGreaterThan(4);
 
-    // 直る。次の挑み直しで成功し、連なりが閉じて要約が出る（止める前に出ている）。
     broken = false;
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(pool.pushHealthOf('runner-test')?.profile?.status).toBe('ok');
@@ -161,8 +142,6 @@ describe('押し込みの失敗の行の畳み込み（#1311）', () => {
       failedAttempts - 1,
     );
 
-    // また壊れたとき（同じ本文）は、前の連なりに吸われず1件目として書かれる。
-    // （即時の配布 `apply` が失敗すると、帳面が failed になり、挑み直しが予約される。）
     broken = true;
     await profile.apply('export DUMMY_SETTING=not-a-secret');
     await vi.advanceTimersByTimeAsync(5 * 60_000);

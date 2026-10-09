@@ -132,12 +132,6 @@ describe('evaluateAutoFoldUnpushedWork（#1394 段⑥ 安全弁）', () => {
     ).toBe('blocked');
   });
 
-  // ⭐ #1765 段2 — `findManagerScratchRoots` が `tmpRootDir` を読めなかった
-  // ときに空配列へ潰さず名乗るようになった「確かめられなかった」を、この
-  // 安全弁がちゃんと `truncatedAtCount` / `stoppedEarly` と同じ強さで
-  // 「blocked」へ倒すこと。ここを見落とすと、他マネージャー/作業者の
-  // スクラッチディレクトリに残っていたかもしれない未 push の実装を
-  // 検知しないまま自動で畳んでしまう。
   it('⭐ scratchRootsUnknown（/tmp を確かめられなかった）だけでも blocked——worktrees が全部 clean でも救われない', () => {
     expect(
       evaluateAutoFoldUnpushedWork({
@@ -162,11 +156,6 @@ describe('evaluateAutoFoldUnpushedWork（#1394 段⑥ 安全弁）', () => {
     ).toBe('blocked');
   });
 
-  /**
-   * ⭐ Issue #1865 — `unreadableDirCount`（起点より下の子ディレクトリの
-   * readdir 失敗）だけでも blocked——worktrees が全部 clean でも救われない。
-   * `scratchRootsUnknown` / `truncatedAtCount` / `stoppedEarly` と同じ強さ。
-   */
   it('⭐ unreadableDirCount（子ディレクトリの読み失敗）だけでも blocked——worktrees が全部 clean でも救われない', () => {
     expect(
       evaluateAutoFoldUnpushedWork({
@@ -248,12 +237,6 @@ describe('describeAutoFoldUnpushedWorkProbe（表示専用。判定のコピー�
     expect(text).toContain('1本');
   });
 
-  /**
-   * 「未 push（未コミット）がある」と「判定できない」を本文の中で分ける
-   * （コーディネーターの追加指示）。以前は1本の文言に混ぜていた——
-   * `evaluateAutoFoldUnpushedWorkProbe.test` 側の判定（'blocked'）は
-   * 変えていないので、ここは表示だけを見る。
-   */
   it('件数が0より大きい（未pushがある）作業ツリーだけなら、判定できない側の文言は出さない', () => {
     const text = describeAutoFoldUnpushedWorkProbe({
       kind: 'ok',
@@ -281,9 +264,7 @@ describe('describeAutoFoldUnpushedWorkProbe（表示専用。判定のコピー�
       kind: 'ok',
       result: {
         worktrees: [
-          // 件数が取れていて正（未pushがある）。
           { unpushedCommitCount: 2, uncommittedChangeCount: 0 },
-          // 件数が取れていない（判定できない）。
           { unpushedCommitCount: undefined, uncommittedChangeCount: 0 },
         ],
       },
@@ -296,9 +277,6 @@ describe('describeAutoFoldUnpushedWorkProbe（表示専用。判定のコピー�
     const text = describeAutoFoldUnpushedWorkProbe({
       kind: 'ok',
       result: {
-        // unpushedCommitCount は取れていない（判定できない側）が、
-        // uncommittedChangeCount は取れていて正（未pushがある側）。
-        // 1本の作業ツリーが両方の数えに1ずつ入ることを確かめる。
         worktrees: [{ unpushedCommitCount: undefined, uncommittedChangeCount: 5 }],
       },
     });
@@ -307,11 +285,6 @@ describe('describeAutoFoldUnpushedWorkProbe（表示専用。判定のコピー�
   });
 });
 
-/**
- * Issue #1394 の留保 — `manager.ts` の `#autoFoldOne` が「同じ委譲・同じ理由の
- * 見送りを日誌へ積み続けない」ための鍵。`describeAutoFoldUnpushedWorkProbe`
- * の表示文言とは独立に、`probe` の構造だけで決まることを確かめる。
- */
 describe('classifyAutoFoldUnpushedWorkProbe（Issue #1394 の留保 — 日誌の重複除去の鍵）', () => {
   it('同じ内容の probe は同じ鍵を返す（構造が同じなら安定）', () => {
     const a = classifyAutoFoldUnpushedWorkProbe(cleanProbe);
@@ -326,10 +299,6 @@ describe('classifyAutoFoldUnpushedWorkProbe（Issue #1394 の留保 — 日誌�
     const a = classifyAutoFoldUnpushedWorkProbe({ kind: 'unavailable' });
     const b = classifyAutoFoldUnpushedWorkProbe({
       kind: 'unavailable',
-      // `AutoFoldUnpushedWorkProbe` の型上 `result` は `kind` に関わらず
-      // optional で持てる——`kind: 'unavailable'` のときは中身を無視する
-      // 実装（`describeAutoFoldUnpushedWorkProbe` と同じ判定）になっている
-      // ことをここでも確かめる。
       result: { worktrees: [{ unpushedCommitCount: 9, uncommittedChangeCount: 9 }] },
     });
     expect(a).toBe(b);
@@ -422,11 +391,6 @@ describe('classifyAutoFoldUnpushedWorkProbe（Issue #1394 の留保 — 日誌�
   });
 });
 
-/**
- * `unreadableDirCount` には、2本目以降の `/tmp` スクラッチ起点そのものの
- * 読み失敗も入る（#1891、`findGitDirsAcrossRoots`）。畳まなかった理由の文が
- * 「子ディレクトリ」だけを名乗らないことを見る。
- */
 describe('describeAutoFoldUnpushedWorkProbe — 読み失敗の件数がスクラッチ起点も含むと名乗る（#1891 の続き）', () => {
   it('unreadableDirCount の理由は、スクラッチ起点そのものの読み失敗も含むと言う', () => {
     const text = describeAutoFoldUnpushedWorkProbe({

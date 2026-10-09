@@ -8,26 +8,11 @@ import type { InboxEvent, JournalEntryInput, PendingApproval } from './schema.js
 /**
  * 記録の書き込みに失敗したことを stderr へ1行だけ残す。
  *
- * **握り潰しをやめるのではない。跡だけを残す。** 記録できないことでセッションを
- * 殺すべきではない（文脈を失う方が高くつく）。だが跡がどこにも無いと、
- * **日誌が判別器として静かに嘘をつく** — 「日誌にマーカーが無い」が
- * 「その処理を通らなかった」と読めてしまい、実際には「通ったが書けなかった」
- * だった、という取り違えが起きる。しかも一番書けなくなりやすいのは片付けの
- * 途中（ストアを閉じた後）＝一番調べたい時間帯である。
+ * 握り潰しは続けるが跡は残す: 跡が無いと「日誌にマーカーが無い」が「その処理を通らなかった」と読め、
+ * 実際には「通ったが書けなかった」だった、という取り違えが起きる。
  *
- * **本文は出さない。** ここへ渡ってくる記録には、マネージャーの報告
- * （＝外の世界から拾ってきた任意の文字列）がそのまま入る。過去に `GH_TOKEN` が
- * テスト出力（`railway/setup.test.ts` の差分アサーション）へ全文で出た事故が
- * あり（#52）、書けなかった本文を丸ごとログへ吐くと
- * **日誌にすら入らなかった秘密がホスティング先のログには残る**という逆転が起きる。
- * 日誌はまだ持ち主しか読まないが、stderr は器の外へ出ていく。
- *
- * **足りないと思っても本文を足さないこと。** ここは「何が起きたか」を掘るための
- * 跡であって、落ちた記録の代わりではない。中身が要るなら、ストアが書ける状態に
- * 戻してから読む。
- *
- * @param what 何を記録し損ねたか（固定文言。呼び出し側が書く）
- * @param detail 本文を含まない見分け（`journalEntryShape` などで作る）
+ * 本文は出さない・足さない: 渡ってくる記録には外から拾った任意の文字列が入り、日誌にすら入らなかった
+ * 秘密がホスティング先のログには残る逆転になる（stderr は器の外へ出ていく）。
  */
 export function noteDroppedRecord(what: string, detail: string, error: unknown): void {
   const tail = detail === '' ? '' : `（${detail}）`;
@@ -35,41 +20,13 @@ export function noteDroppedRecord(what: string, detail: string, error: unknown):
 }
 
 /**
- * 未読の合図を、有界の拾い直し（`clone.ts` の `REMEMBER_RETRY_ATTEMPTS`）が
- * 尽きたあともストアへ書けなかったことを stderr へ1行残す（issue #1085。
- * ⚠️ **`canQueue: true` の経路専用** —— 使い分けは issue #1144 で分けた。
- * `canQueue: false`（`post()` の片付けの窓）は {@link noteInboxEventLost} を
- * 使うこと）。
+ * 未読の合図を、拾い直しが尽きたあともストアへ書けなかったことを stderr へ1行残す。
+ * `canQueue: true` の経路専用。`canQueue: false` は {@link noteInboxEventLost}。
  *
- * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」だけで
- * 終わり、合図がまだ生きていることを言わないからである。** `#remember`
- * （`clone.ts`）がここへ来るのは拾い直しが尽きた後だが、その合図は
- * **失われていない** —— `post()` はこの呼びの直後に `#inbox.push` するので、
- * **このプロセスが生きているあいだは配達される。** 失うのは、配達より先に
- * 器が入れ替わった（再起動・デプロイ）ときだけである（`#restoreUnread` は
- * ストアからしか拾い直せないため）。「記録できませんでした」だけで終わると、
- * この生死の分かれ目 —— このプロセスが生きている限りは配られるという事実と、
- * 器が入れ替われば失われるという本当の帰結 —— のどちらも伝わらない。
- *
- * **`noteManagerIdCollision` / `noteWithheldReportsDiscarded` と同じ理由で
- * 専用の文言を持つ。** どちらも「失敗でも読み出し漏れでもない、第三の状況」
- * だから別の関数にしてある（このファイルの該当 doc）。ここも同じ形 ——
- * 「書けなかった」と「合図を失った」は別の状態であり、後者だと名乗ると
- * 実際より悲観的に読める一方で、本当の帰結（器の入れ替えで失われる）が
- * 伝わらない。
- *
- * **⚠️ ここで名乗る「失ってはいない」は無条件ではない。** `post()` には
- * `#remember` を呼びながら `#inbox.push` を一度も通らない経路
- * （`this.#stopped || this.#inbox.closed` の片付けの窓）が在る。その経路で
- * この関数を使うと、通らないはずの `#inbox.push` を通ったことにして
- * 名乗ってしまう —— それが issue #1144 の指摘そのものである。**この関数は
- * 呼び出し元が `canQueue: true`（＝この呼びの直後に必ず `#inbox.push` する
- * ことが確定している）と分かっているときにしか使わないこと。**
- *
- * **本文は出さない。** 理由は `noteDroppedRecord` と同じ（#52）。
- *
- * @param detail 本文を含まない見分け（`inboxEventShape` で作る）
- * @param error 最後の拾い直しで実際に投げられたエラー
+ * `noteDroppedRecord` を流用しない: 合図は失われておらず、このプロセスが生きているあいだは配達される
+ * （失うのは配達前に器が入れ替わったときだけ）。その生死の分かれ目が「記録できませんでした」では伝わらない。
+ * 「失ってはいない」は `post()` が直後に必ず `#inbox.push` する経路でしか成り立たないので、
+ * 片付けの窓では使わない。
  */
 export function noteInboxEventKeptInMemoryOnly(detail: string, error: unknown): void {
   const tail = detail === '' ? '' : `（${detail}）`;
@@ -82,33 +39,11 @@ export function noteInboxEventKeptInMemoryOnly(detail: string, error: unknown): 
 }
 
 /**
- * 未読の合図を、有界の拾い直し（`clone.ts` の `REMEMBER_RETRY_ATTEMPTS`）が
- * 尽きたあともストアへ書けず、しかも受信箱の待ち行列にも一度も積まれな
- * かったことを stderr へ1行残す（issue #1144）。
+ * 未読の合図を、拾い直しが尽きたあともストアへ書けず、待ち行列にも一度も積まれなかったことを
+ * stderr へ1行残す（`canQueue: false`。`post()` の片付けの窓）。
  *
- * **`noteInboxEventKeptInMemoryOnly` を流用しないのは、あれが「メモリの
- * 待ち行列には残っており、このプロセスが生きているあいだは配達される」と
- * 無条件に名乗るからである。** その主張は `post()` がこの呼びの直後に
- * `#inbox.push` する経路（`canQueue: true`）でしか成り立たない。`post()` の
- * 片付けの窓（`this.#stopped || this.#inbox.closed`）は `#remember` を
- * 呼びながら `#inbox.push` を一度も通らない（`post()` 自身のコメントに
- * 逐語で在る：「この窓の合図は待ち行列へ入らず（`#inbox.push` はこの下に
- * 無い）、そのまま跡だけ残して落ちる」）。⟹ この経路（`canQueue: false`）で
- * 拾い直しが尽きると、その合図はストアにも無く、メモリの待ち行列にも一度も
- * 載っていない —— **本当に失われている。**
- *
- * **`noteInboxEventKeptInMemoryOnly` と同じ理由で専用の文言を持つ。**
- * 「書けなかった」と「合図を失った」は別の状態であり、あちらの文言を
- * この経路にも使うと**実際より楽観的に読める**。#1144 が指摘したのは
- * まさにこの逆転である —— #1085 は通常経路で悲観的すぎた
- * `noteDroppedRecord` を弱める直しだったが、この片付けの窓に限っては
- * 旧来の「落とした」のほうが真実で、`noteInboxEventKeptInMemoryOnly` の
- * 「失ってはいない」が嘘になっていた。
- *
- * **本文は出さない。** 理由は `noteDroppedRecord` と同じ（#52）。
- *
- * @param detail 本文を含まない見分け（`inboxEventShape` で作る）
- * @param error 最後の拾い直しで実際に投げられたエラー
+ * `noteInboxEventKeptInMemoryOnly` を流用しない: あちらの「失ってはいない」をこの経路に使うと
+ * 本当は失われているのに楽観的に読める。
  */
 export function noteInboxEventLost(detail: string, error: unknown): void {
   const tail = detail === '' ? '' : `（${detail}）`;
@@ -120,18 +55,10 @@ export function noteInboxEventLost(detail: string, error: unknown): void {
 }
 
 /**
- * 受信箱へ書けなかった合図を、**受理せずに呼び手へ失敗を返した**ことを stderr へ1行残す
- * （Issue #3679。`Clone#postPersisted`）。
+ * 受信箱へ書けなかった合図を、受理せずに呼び手へ失敗を返したことを stderr へ1行残す。
  *
- * **`noteInboxEventKeptInMemoryOnly` と逆の判断である。** あちらは「メモリの待ち行列に残して配達する」
- * 経路（`post`）の跡で、呼び手には成功が返っている。こちらは呼び手（HTTP の `POST /events*`）へ 503 を
- * 返す経路で、**メモリにも積んでいない** —— 積むと、失敗を受けた相手の送り直しと二重に届く。
- * 「失った」でもない（呼び手は失敗を知っており、送り直せる）ので、専用の文言を持つ。
- *
- * **本文は出さない。** 理由は `noteDroppedRecord` と同じ（#52）。
- *
- * @param detail 本文を含まない見分け（`inboxEventShape` で作る）
- * @param error 最後の拾い直しで実際に投げられたエラー
+ * メモリの待ち行列には積まない: 積むと、失敗を受けた相手の送り直しと二重に届く。
+ * 呼び手は失敗を知っていて送り直せるので「失った」でもなく、専用の文言を持つ。
  */
 export function noteInboxEventRefused(detail: string, error: unknown): void {
   const tail = detail === '' ? '' : `（${detail}）`;
@@ -142,23 +69,10 @@ export function noteInboxEventRefused(detail: string, error: unknown): void {
 }
 
 /**
- * 記録の**読み出し**に失敗したことを stderr へ1行だけ残す。
+ * 記録の読み出しに失敗したことを stderr へ1行だけ残す。
  *
- * **書けなかった側（`noteDroppedRecord`）と対になる。** あちらの理由がそのまま
- * こちらにも効く —「跡がどこにも無いと、**『無い』が『通らなかった』と読める**」。
- * 読み出しではその取り違えがもう一段悪くなる: 読めなかったことが跡に残らないと、
- * 呼び出し側は**預かっていない**と読み、下流はそれを**恒久の結論**（終端状態・
- * 自動再試行の打ち切り・存在の否定を含む文言）に変える。
- *
- * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」と
- * 書くからである。** 読み出しの失敗にその文を当てると、跡そのものが何が起きたかを
- * 取り違えさせる（この関数が防ごうとしているものと同じ形になる）。
- *
- * **本文は出さない。** 理由は `noteDroppedRecord` と同じで、ここへ渡ってくる
- * 記録には外の世界から拾ってきた任意の文字列が入る（#52）。
- *
- * @param what 何を読み出し損ねたか（固定文言。呼び出し側が書く）
- * @param detail 本文を含まない見分け
+ * `noteDroppedRecord` を流用しない: 「記録できませんでした」を読み出しの失敗に当てると跡自体が取り違えを生む。
+ * 読めなかったことが跡に残らないと、下流は「預かっていない」と読んで恒久の結論（終端状態・自動再試行の打ち切り）に変える。
  */
 export function noteUnreadableRecord(what: string, detail: string, error: unknown): void {
   const tail = detail === '' ? '' : `（${detail}）`;
@@ -166,24 +80,10 @@ export function noteUnreadableRecord(what: string, detail: string, error: unknow
 }
 
 /**
- * 読み出そうとした記録の**取得元そのものを一度も受け取っていない**ことを
- * stderr へ1行だけ残す。
+ * 読み出そうとした記録の取得元そのものを一度も受け取っていないことを stderr へ1行だけ残す。
  *
- * **`noteUnreadableRecord` を流用しないのは、あれが「読み出そうとしたが
- * 失敗した」ときの跡だからである。** ここはまだ読み出しを試みてすらいない
- * ——取得元（例: フックが渡すファイルパス）が一度も届いていない状態で、
- * 疑うべき先は `noteUnreadableRecord` の側（ディスク・権限）とは違う。
- * **計器の配線**（呼ぶはずの hook・通知が来ていない）を疑うべき状況で、
- * 同じ文言に潰すと読む側はディスクを疑いに行き、的を外す。逆にディスクの
- * 障害をこちらの文言で報告すると、今度は配線を疑いに行って的を外す
- * ——`noteManagerIdCollision` の doc が言う「取り違えさせる」と同じ形の害が
- * 双方向に起きる。
- *
- * **本文は出さない。** 理由は `noteDroppedRecord` / `noteUnreadableRecord` と
- * 同じ（#52）。
- *
- * @param what 何の取得元が届いていないか（固定文言。呼び出し側が書く）
- * @param detail 本文を含まない見分け
+ * `noteUnreadableRecord` を流用しない: ここは計器の配線（呼ぶはずの hook・通知が来ていない）を疑う状況で、
+ * 同じ文言に潰すと読む側はディスクを疑いに行って的を外す。逆も同じ。
  */
 export function noteMissingRecordSource(what: string, detail: string): void {
   const tail = detail === '' ? '' : `（${detail}）`;
@@ -191,23 +91,10 @@ export function noteMissingRecordSource(what: string, detail: string): void {
 }
 
 /**
- * runner の委譲一覧（`GET /managers`）のうち、こちらのスキーマに合わずに飛ばした
- * 要素を stderr へ1行残す（Issue #1661）。
+ * runner の委譲一覧（`GET /managers`）のうち、こちらのスキーマに合わずに飛ばした要素を stderr へ1行残す。
  *
- * **これは失敗の記録ではなく、判定を誤りうることの跡である。** `HttpRunner#list()`
- * （`apps/daemon/src/runner-client.ts`）が飛ばした委譲は、Pool（`manager.ts`）から
- * 見て「runner に居ない」側に落ち、待っていた確認が捨てられうる
- * （`runner-protocol.ts` の `runnerWaitingSchema` の doc）。典型は、runner が先に
- * 新しい版になって、デーモンのまだ知らない `status` を送る版ずれである。
- * 跡が無いと、委譲が消えた理由を誰も追えない。
- *
- * **値は載せない。** 載せるのは runner の名前、`managerId`（こちらが発行した id）、
- * 落ちた欄の名前（zod の issue の path）だけ——`safeParse` が返す値や
- * `error.message` は検証に失敗した値を引用しうるので渡さない
- * （`noteDroppedJournalRow` の doc と同じ理由）。
- *
- * @param runner runner の名札（`HttpRunner` の `#describeSelf()`。`runner (<接続先> / <runnerId>)`）。
- * @param dropped 飛ばした要素ごとの `managerId`（読めなければ `undefined`）と欄の名前。
+ * 失敗の記録ではなく判定を誤りうることの跡: 飛ばした委譲は Pool から見て「runner に居ない」側に落ち、
+ * 待っていた確認が捨てられうる。値は載せない: `safeParse` の値や `error.message` は検証に失敗した値を引用しうる。
  */
 export function noteDroppedRunnerManagers(
   runner: string,
@@ -227,17 +114,9 @@ export function noteDroppedRunnerManagers(
 }
 
 /**
- * 畳み始めた runner（`shutting_down` を名乗った）の最後の出来事を、待ち切れずに
- * 閉じへ倒したことを stderr へ1行だけ残す（Issue #2749。`ManagerPool#stop`）。
+ * 畳み始めた runner の最後の出来事を、待ち切れずに閉じへ倒したことを stderr へ1行だけ残す。
  *
- * 失われうるのは、その runner が畳みの最後に積む `archive`（生ログ）と
- * `shutdown_unpushed_work`（未 push の観測）である。**どの出来事が実際に落ちたかは
- * こちらからは分からない**（届いていないので）ため、「受け取れなかった可能性がある」
- * 出来事の種別と、その runner で走っていた委譲の id（`managerIds`。デーモンが知る範囲）
- * を名指しする。本文は出さない（id と列挙値だけ）。
- *
- * @param reason 待ちを諦めた理由。`stream-open`＝上限までに SSE が閉じなかった、
- *   `events-unsettled`＝閉じたが受けた出来事の台帳への書き込みが上限までに終わらなかった。
+ * どの出来事が実際に落ちたかはこちらから分からないので、落ちた可能性のある種別と委譲の id を名指しする。本文は出さない。
  */
 export function noteRunnerFarewellGaveUp(
   runnerId: string,
@@ -253,22 +132,10 @@ export function noteRunnerFarewellGaveUp(
 }
 
 /**
- * 発行した id が既に使われていて、引き直したことを stderr へ1行だけ残す（#238）。
+ * 発行した id が既に使われていて、引き直したことを stderr へ1行だけ残す。
  *
- * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」と
- * 書くからである。** id の衝突は「記録できなかった」でも「読み出せなかった」
- * でもない第三の状況 — 発行しようとした id に、いま走っている別の委譲の記録が
- * **既に在った**、というものである。そこにこの2つの文を当てると、跡そのものが
- * 何が起きたかを取り違えさせる（この2関数が防ごうとしているものと同じ形になる）。
- *
- * **本文は出さない。** 理由は `noteDroppedRecord` / `noteUnreadableRecord` と
- * 同じで、ここへ渡ってくる値には外の世界から拾ってきた任意の文字列は入らない
- * が（`managerId` はこちらが発行した id）、跡を残す口を1つに揃えるという
- * このファイルの作法（`note()`）に従う。
- *
- * @param managerId 衝突した（＝既に `#records` に在った）id。こちらが発行した
- *   id であって自由文ではないので、そのまま載せてよい。
- * @param attempt 何回目の発行でこの衝突が起きたか（1始まり）。
+ * `noteDroppedRecord` / `noteUnreadableRecord` を流用しない: 記録できなかったのでも読み出せなかったのでもなく、
+ * 文言を当てると跡自体が取り違えを生む。
  */
 export function noteManagerIdCollision(managerId: string, attempt: number): void {
   note(
@@ -277,33 +144,11 @@ export function noteManagerIdCollision(managerId: string, attempt: number): void
 }
 
 /**
- * `#retire()`（`manager.ts`）が、空でない「握り潰した報告」の在庫
- * （`WithheldReportMemory`）を積んだまま像を畳んだことを stderr へ1行だけ
- * 残す。
+ * `#retire()` が、空でない「握り潰した報告」の在庫を積んだまま像を畳んだことを stderr へ1行だけ残す。
  *
- * **`noteDroppedRecord` を流用しないのは、これが失敗ではないからである。**
- * `#retire()` がここへ来るのは「もうこの委譲は走らない」という正常な終端
- * 判定の結果で、書き込みや読み出しが失敗したわけではない——`noteManagerIdCollision`
- * と同じ「第三の状況」で、専用の文言を持つ。
- *
- * **`abort()`（R4 の `stopped`）経由の呼び出しは、同じ事実を
- * `ManagerAbortResult.detail` と日誌（`type: 'exchange'`）へも既に書いている
- * ので、ここは重ねての跡になる。** それでも `#retire()` 自身に置くのは、
- * `#retire()` の呼び出し元が `abort()` の他にも複数あり（`manager.ts` の
- * `#retire()` の JSDoc）、そちらは同じ事実を能動的には出していないからである
- * ——`#retire()` 自身に置けば、呼び出し元がどれであっても同じ1行が漏れなく
- * 残る（`abort()` の側にだけ置くと、他の呼び出し元でこの状態が起きたときに
- * 跡が1つも残らない）。
- *
- * **本文（`lastText`）は出さない。** 理由は `noteDroppedRecord` と同じで、
- * ここへ渡ってくる `count` / `firstAt` / `lastAt` はこちらが管理する数値と
- * 時刻だけであり、`managerId` はこちらが発行した id である——自由文は
- * 1つも混ざらない。
- *
- * @param managerId どの委譲か（こちらが発行した id）。
- * @param count 捨てた本数。
- * @param firstAt 最初に積んだ時刻（ISO 8601）。
- * @param lastAt 最後に積んだ時刻（ISO 8601）。
+ * `noteDroppedRecord` を流用しない: 失敗ではなく正常な終端判定の結果である。
+ * `abort()` 経由は同じ事実を日誌にも書いていて重なるが、`#retire()` の呼び出し元は他にも複数あるので
+ * 呼び元によらず1行残るよう `#retire()` 自身に置く。本文（`lastText`）は出さない。
  */
 export function noteWithheldReportsDiscarded(
   managerId: string,
@@ -318,29 +163,11 @@ export function noteWithheldReportsDiscarded(
 }
 
 /**
- * `abort()` が「止めた」と確かめた後に `send()` 側の resume が runner へ届いて
- * しまい（`manager.ts` の `#resume` チェックポイント2）、畳み直そうとした
- * `#confirmStoppedAndReleaseLease` が `'stopped'` 以外を返したことを stderr へ
- * 1行だけ残す（Issue #1703）。
+ * `abort()` が「止めた」と確かめた後に `send()` 側の resume が runner へ届いてしまい、畳み直しが
+ * `'stopped'` 以外を返したことを stderr へ1行だけ残す。
  *
- * **これは失敗ではなく、台帳と実際の食い違いが残っている可能性の跡である。**
- * `noteWithheldReportsDiscarded` と同じ「第三の状況」——書き込みや読み出しが
- * 失敗したわけではなく、**台帳には `status: 'stopped'` が書けているのに、
- * runner 側では畳み直しを確かめられなかった**、という状態である。
- *
- * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」と
- * 書くからである。** ここで書けなかったのは記録ではなく、runner 側の実際の
- * 停止確認——文言を混ぜると、跡そのものが何が起きたかを取り違えさせる。
- *
- * **本文は載せない。** `managerId` はこちらが発行した id、`outcome` は
- * `#confirmStoppedAndReleaseLease` の戻り値の型（`'stopped' | 'not_stopped' |
- * 'unknown'`。実際に渡ってくるのは `'not_stopped' | 'unknown'` 側だけ——
- * `'stopped'` ならこの関数は呼ばれない）の列挙値で、どちらも外から来た自由文
- * ではない。
- *
- * @param managerId どの委譲か（こちらが発行した id）。
- * @param outcome `#confirmStoppedAndReleaseLease` が返した `outcome`
- *   （`'stopped'` 以外——`'stopped'` ならこの関数は呼ばれない）。
+ * 失敗ではなく、台帳には `status: 'stopped'` が書けているのに runner 側で畳み直しを確かめられなかった、
+ * という食い違いの跡。`noteDroppedRecord` を流用すると、書けなかったのは記録ではなく停止確認なので取り違えを生む。
  */
 export function noteResumeAfterStopFoldFailed(managerId: string, outcome: string): void {
   note(
@@ -352,60 +179,27 @@ export function noteResumeAfterStopFoldFailed(managerId: string, outcome: string
 }
 
 /**
- * **背景で起こした処理**（`void f()` の形で切り離したもの）が例外で終わったことを
- * stderr へ1行だけ残す（#438 案D）。
+ * `void f()` で切り離した背景処理が例外で終わったことを stderr へ1行だけ残す。
  *
- * **落ち方は1ビットも変えない。** 呼び出し側はこの跡を出した後、受け取った例外を
- * **そのまま投げ直す** —— 投げ直した先は未処理の拒否になり、今日と同じように
- * Node 既定のスタックが出てプロセスが死ぬ（実測は `uncaught-net.ts` の表）。
- * **ここが足すのは「どこで」だけである。**
+ * ここで握り潰さない: 呼び出し側はこの跡の後に例外をそのまま投げ直す。この repo の復旧機構は
+ * プロセスの消滅を契機に組んである（`#restoreJobs` / `#restoreUnread`）ので、生き残ったまま握り潰すと
+ * その復旧経路が一度も起動しない。この跡が足すのは「どの背景処理か」だけ（プロセス全体の網は出所を言えない）。
  *
- * **なぜ「どこで」だけで足りるのか。** プロセス全体の網（`uncaught-net.ts`）は
- * 例外を1行に畳めるが、**どの背景処理から来たのかは言えない** —— `reasonOf` が
- * 出すのは例外の1行目だけで、`void` で切り離した時点で呼び出し元の文脈は
- * スタックにしか残らない。#438 が言う「落ちたことを追えない」は、**回数**の話と
- * **出所**の話の両方であり、網は前者、この跡は後者を埋める。
- *
- * **⚠️ ここで握り潰さないこと。** 「跡を残したのだから続けてよい」は成り立たない。
- * この repo の復旧機構は**プロセスの消滅を契機に組んである**（起動時の
- * `#restoreJobs` が `runner.list()` の実物から状態を作り直し、`#restoreUnread` が
- * 未読を配り直す）。生き残ったまま握り潰すと、**その復旧経路が一度も起動しない。**
- * 握り潰してよい先例（`runner-client.ts` の `#neverEscapes`）が覆っているのは
- * **跡を残す処理そのものの失敗**であって、本筋の処理ではない。
- *
- * @param what どの背景処理か（固定文言。呼び出し側が書く）
- * @param detail 本文を含まない見分け（**値を誰が決めるか**で選ぶ。このファイルの
- *   `journalEntryShape` と同じ基準 —— 列挙値とこちらが発行した id は載せてよく、
- *   外から来た自由文は載せない）。無ければ空文字。
+ * @param detail 本文を含まない見分け（値を誰が決めるかで選ぶ。`journalEntryShape` と同じ基準）。無ければ空文字。
  */
 export function noteBackgroundFailure(what: string, detail: string, error: unknown): void {
   const tail = detail === '' ? '' : `（${detail}）`;
   note(`${what}が例外で終わりました${tail}: ${reasonOf(error)}`);
 }
 
-/**
- * 日誌の読み出し（`storage-fs` / `storage-pg` の `list()` / `get()`）が
- * スキーマに合わない行を飛ばすときの理由。**`unparsable`** は構造すら持たない
- * （fs 版の `JSON.parse` が投げた）。**`unknown-shape`** は構造としては正しい
- * JSON（または pg が既に jsonb として解いた値）だが `journalEntrySchema` に
- * 合わない。`apps/daemon/src/runner-client.ts` の `RunnerDroppedEventReport`
- * と同じ2分（Issue #224）。
- */
+/** 日誌の読み出しが行を飛ばす理由。`unparsable` は構造すら持たず、`unknown-shape` は JSON としては正しいがスキーマに合わない。 */
 export type DroppedJournalRowReason = 'unparsable' | 'unknown-shape';
 
 /**
- * 読めなかった日誌の行から、本文を含まずに安全に取り出せる `type` らしき
- * 文字列。取れるのは、値がオブジェクトで `type` キーが空でない文字列である
- * ときだけ。
+ * 読めなかった日誌の行から、本文を含まずに安全に取り出せる `type` らしき文字列。
  *
- * **取れなければ `undefined` を返す（埋め草を置かない）。** `'（不明）'` の
- * ような固定文字列を代わりに置くと、それ自体が `type` の1種として
- * `noteDroppedJournalRow` に数えられてしまい、「型が分からない行が本当に
- * 何種類あるか」を覆い隠す。
- *
- * **本文はここへ来ない。** 見るのは `journalEntrySchema` の判別子である
- * `type` フィールドだけで、`decision` / `exchange` などの自由文フィールドには
- * 一切触れない。
+ * 取れなければ `undefined` を返す（埋め草を置かない）: `'（不明）'` のような固定文字列を置くと
+ * それ自体が `type` の1種として数えられ、型が分からない行の実数を覆い隠す。
  */
 export function journalRowType(raw: unknown): string | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
@@ -415,31 +209,12 @@ export function journalRowType(raw: unknown): string | undefined {
 }
 
 /**
- * 日誌の読み出しでスキーマに合わない行を1件、**飛ばすが跡には残す**
- * （Issue #224）。`runner-client.ts` の `#noteDropped` と同じ形——
- * **同じ種別（`reason` と `type` の組）は、この呼び出しで最初の1回だけその場で
- * 1行 stderr へ出す。** 量は `noteDroppedJournalRowsSummary` が呼び出しの
- * 終わりでまとめて出す。壊れた行が大量にあるとき行ごとに出すと、それ自体が
- * 二次被害になる（跡でログを埋める）。
+ * 日誌の読み出しでスキーマに合わない行を1件、飛ばすが跡には残す。
+ * 同じ種別（`reason` と `type` の組）は、この呼び出しで最初の1回だけその場で出す（跡でログを埋めない）。
  *
- * **`dropped` は呼び出し1回ぶんのローカルな `Map` である。** `JournalStore`
- * のインスタンスへ状態を持たせない——`list()` / `get()` はどちらも1回の
- * 呼び出しの中でループが完結するので、呼び出し側のローカル変数で足りる。
- * プロセス単位で畳むと、器が入れ替わって新しい書き手が同じ種別を吐き始めても
- * 「前に見たから」で黙る、という同じ穴を作る（`#noteDropped` の doc）。
- *
- * **本文は載せない。** 載せてよいのは `journalRowType` で安全に取れた
- * `type` とバイト数だけ——日誌の行にはマネージャーの報告が入りうる
- * （テスト出力に `GH_TOKEN` が全文で出た前例がある。`railway/setup.test.ts`
- * の差分アサーション、#52）。**`safeParse` が返す
- * `error.message` はここへ渡さないこと。** 検証に失敗した値そのものを引用
- * することがあり、確かめずに跡へ流すと同じ事故になる。
- *
- * @param dropped 呼び出し1回ぶんの `Map<種別, 件数>`。
- * @param reason {@link DroppedJournalRowReason}。
- * @param type `journalRowType` で取れた `type`（取れなければ `undefined`）。
- * @param bytes その行のバイト数。**取れない `type` の代わりに 0 を置かない
- *   のと同じ理由で、常に実測を渡すこと。**
+ * `dropped` は呼び出し1回ぶんのローカルな `Map`: プロセス単位で畳むと、器が入れ替わって新しい書き手が
+ * 同じ種別を吐き始めても「前に見たから」で黙る。
+ * `safeParse` の `error.message` は渡さない: 検証に失敗した値そのものを引用することがある。
  */
 export function noteDroppedJournalRow(
   dropped: Map<string, number>,
@@ -458,42 +233,16 @@ export function noteDroppedJournalRow(
 }
 
 /**
- * SDK が失敗として出した1回を、**枠の文言としては分類できなかった**ことを
- * stderr へ残す（Issue #393）。
+ * SDK が失敗として出した1回を、枠の文言としては分類できなかったことを stderr へ残す。
+ * 同じ組は、この帳面で最初の1回だけその場で出し、量は {@link noteUnclassifiedFailuresSummary} が出す。
  *
- * ## なぜ要るか — 回し手が原理的に聞けない失敗が在る
+ * 回し手は `classifyUsageNotice` が分類できなかった失敗を聞けず、プールは何も検知しない。
+ * 日誌ではなく stderr: 日誌へ出すには回し手の `signal` の enum に足すことになり、跡のためだけに外向きの面が広がる。
  *
- * 回し手（`TokenRotator`）の入口は `usage_notice` / `rate_limit` の2つだけで、
- * **`classifyUsageNotice` が分類できなかった失敗は、そのどちらにもならない。**
- * ⟹ マネージャーがそれで落ち続けても、**プールは何も検知しない。** 資格
- * （`CLAUDE_CODE_OAUTH_TOKEN`）が1つも無い器で起こしたときがこの形である。
+ * `text` は載せない: SDK の文言そのままでマネージャーの報告が混ざりうる。載せるのは値を決めるのが
+ * SDK かこちらの `via` と `code` だけ。
  *
- * **「無音」ではない** —— 落ちた理由は `closed` の `report` としてクローンの
- * 受信箱へ届く（`manager.ts` の逐語 `if (event.status === 'failed') this.#emit(`）。
- * 見えていないのは**回し手が何をしたか**の側だけである。ここが数えるのは
- * 「回し手が聞けなかった回数」であって、失敗そのものの記録ではない。
- *
- * **なぜ日誌ではなく stderr か。** 日誌へ出すには回し手の `signal`
- * （`schema.ts` の `z.enum` 7値）に「分類できなかった」を足すことになり、
- * **跡を残すためだけに外向きの面を広げることになる**（`noteDroppedInboxEvent`
- * の doc と同じ判断）。**まず数を取る。** 日誌へ上げる価値が在るかは、数が
- * 出てから決まる。
- *
- * ## 何を載せるか
- *
- * **`text` を載せない。** あれは SDK が出した文言そのままで、マネージャーの
- * 報告が混ざりうる（テスト出力に `GH_TOKEN` が全文で出た前例がある。
- * `railway/setup.test.ts` の差分アサーション、#52）。
- * 載せるのは `via` と `code` だけである —— どちらも**値を決めるのが SDK か
- * こちら**で、外から来た自由文ではない（判定基準は `noteDroppedInboxEvent` の
- * doc と同じ「値を誰が決めるか」）。
- *
- * **同じ組は、この帳面で最初の1回だけその場で出す。** 量は
- * {@link noteUnclassifiedFailuresSummary} が終わりでまとめて出す —— 失敗が
- * 続くときに毎回出すと、跡それ自体がログを埋める。
- *
- * @param seen セッション1本ぶんの `Map<種別, 件数>`。**プロセス単位で畳まない**
- *   （畳むと、器が入れ替わって新しい失敗が始まっても「前に見たから」で黙る）。
+ * @param seen セッション1本ぶんの `Map<種別, 件数>`。プロセス単位で畳まない（器が入れ替わった後の新しい失敗が「前に見た」で黙る）。
  */
 export function noteUnclassifiedFailure(
   seen: Map<string, number>,
@@ -512,18 +261,10 @@ export function noteUnclassifiedFailure(
 }
 
 /**
- * {@link noteUnclassifiedFailure} で溜めた件数を、セッションの終わりで1行に
- * まとめて出す。**1件も無ければ何も出さない。**
+ * {@link noteUnclassifiedFailure} で溜めた件数を、セッションの終わりで1行にまとめて出す。
  *
- * **セッションの終わり口は1本ではない。2本ある** —— `RunnerSession#finish()` と
- * `RunnerSession#stop()` で、**後者は `#finish` を通らない**（器の入れ替えと
- * `manager_stop` がそちらである）。**両方で呼ぶこと。** 1つ忘れると、その経路だけ
- * 量が跡に出ない（初出の1行は出ているので存在は残るが、量が失われる）。
- *
- * **同じ穴を `#closeWorkerWaitWindow` が先に踏んでいる** —— `stop()` の中に
- * 逐語で「この経路は `#finish` を通らないので、ここで閉じないと開いたままの
- * 区間が黙って消える」と書いてある。**同じクラスの落とし穴なので、同じ場所に
- * 並べてある。**
+ * セッションの終わり口は `RunnerSession#finish()` と `#stop()` の2本で、後者は `#finish` を通らない。
+ * 両方で呼ぶこと（忘れた経路は量が跡に出ない）。
  */
 export function noteUnclassifiedFailuresSummary(
   seen: Map<string, number>,
@@ -538,12 +279,10 @@ export function noteUnclassifiedFailuresSummary(
 }
 
 /**
- * `noteDroppedJournalRow` で溜めた件数を、呼び出しの終わりで1行にまとめて
- * 出す。**何も飛ばしていなければ何も出さない。**
+ * `noteDroppedJournalRow` で溜めた件数を、呼び出しの終わりで1行にまとめて出す。
  *
- * `list()` / `get()` の**すべての**返り口（`return` / `throw` の手前）で
- * これを呼ぶこと——早期 return を1つ忘れると、その経路だけ量が跡に出ない
- * （初出の1行は既に出ているので存在は残るが、量が失われる）。
+ * `list()` / `get()` のすべての返り口（`return` / `throw` の手前）で呼ぶこと。早期 return を忘れると
+ * その経路だけ量が跡に出ない。
  */
 export function noteDroppedJournalRowsSummary(dropped: Map<string, number>): void {
   if (dropped.size === 0) return;
@@ -552,35 +291,18 @@ export function noteDroppedJournalRowsSummary(dropped: Map<string, number>): voi
 }
 
 /**
- * 受信箱が閉じた後に届いた合図を、このプロセスでは処理しなかったことを
- * stderr へ1行だけ残す。
+ * 受信箱が閉じた後に届いた合図を、このプロセスでは処理しなかったことを stderr へ1行だけ残す。
  *
- * **「捨てた」とは書かない。** かつてはここで本当に捨てていて、その根拠は
- * 「処理しようとすると『未読の永続化』という別の設計になる」だった。その設計は
- * いま在るので、呼び出し側（`Clone#post`）は器へ残してから来る。
+ * 「捨てた」とも「残した」とも書かない: 呼び出し側は器へ残してから来るが、窓の後半ではストアが既に閉じていて
+ * 書き込みは落ちうる（落ちたことは `noteDroppedRecord` が別の行で言う）。断言すると書けなかった回だけ
+ * 跡が静かに嘘をつくので、観測できた「このプロセスでは処理しなかった」だけを主張する。
  *
- * **それでも「残した」とも書かない。** この窓の後半ではストアが既に閉じており、
- * 書き込みは落ちうる。落ちたことは `noteDroppedRecord` が別の行で言うので、
- * ここが断言すると**書けなかった回だけ跡が静かに嘘をつく**（1行目は「次の起動へ
- * 回した」、2行目は「書けなかった」で、後から読む者は前者を信じる）。この行が
- * 主張するのは**このプロセスでは処理しなかった**という、観測できたことだけである。
+ * 日誌ではなく stderr: `post` は同期で、捨てが起きる窓（`stop()` → `storage.close()` → `process.exit(0)`）は
+ * fire-and-forget の約束が果たされる前にプロセスが消える窓そのもの。日誌の型を足して解かない:
+ * `journalEntrySchema` を広げると `openapi.json` の外向きの面が動く。
  *
- * **なぜ日誌ではなく stderr か。** `post` は同期で、返り値を持たない。日誌へ
- * 書くなら fire-and-forget にならざるを得ないが、**捨てが起きる窓（`stop()` →
- * `storage.close()` → `process.exit(0)`）はその約束が果たされる前にプロセスが
- * 消える窓そのもの**である。しかもその窓の後半ではストアが既に閉じており、
- * 日誌への追記は失敗して結局 `noteDroppedRecord` の stderr へ落ちる。**跡を
- * 残すために、跡が残らないことのある経路を選ばない。** 同期で1行書けば、窓の
- * どこで捨てても同じ跡になる。
- *
- * **日誌の型を足して解かないこと。** 「捨てた」は既存のどの型でもなく、
- * `journalEntrySchema` を広げると `JOURNAL_ENTRY_TYPES` 経由で `openapi.json`
- * ＝外向きの API 面が動く。跡を残すためだけに外へ出す面を広げない。
- *
- * **見分けは呼び出し側に選ばせない。** ここへ来る合図には人間の発言・webhook の
- * 本文・マネージャーの報告が入る（テスト出力に `GH_TOKEN` が全文で出た前例が
- * ある。`railway/setup.test.ts` の差分アサーション、#52）。何を載せてよいかの
- * 判断は `inboxEventShape` の1か所に閉じる。
+ * 見分けは呼び出し側に選ばせない: 合図には人間の発言・webhook の本文・マネージャーの報告が入るので、
+ * 何を載せてよいかの判断は `inboxEventShape` の1か所に閉じる。
  */
 export function noteDroppedInboxEvent(event: InboxEvent): void {
   note(
@@ -590,16 +312,9 @@ export function noteDroppedInboxEvent(event: InboxEvent): void {
 }
 
 /**
- * 同じ `human_answer` 合図の id を、同じプロセスの中で2回目は処理しなかった
- * ことを stderr へ1行残す（issue #1977）。
+ * 同じ `human_answer` 合図の id を、同じプロセスの中で2回目は処理しなかったことを stderr へ1行残す。
  *
- * **`noteDroppedRecord` は使わない。** あちらの文言は固定で「〜を記録
- * できませんでした」——**記録の書き込みに失敗した**ことの跡である。ここは
- * 逆に**畳んだこと自体が正常な結果**（同じ回答を1回として扱えた）なので、
- * 「失敗した」と読める文言を被せない。
- *
- * **本文は出さない**（`inboxEventShape` の doc と同じ理由——`human_answer` の
- * `answer` は人間が書いた自由文で、跡に要るのは長さと `approvalId` だけ）。
+ * `noteDroppedRecord` は使わない: 畳んだこと自体が正常な結果なので、失敗と読める文言を被せない。
  */
 export function noteDuplicateHumanAnswer(event: InboxEvent): void {
   note(
@@ -608,23 +323,11 @@ export function noteDuplicateHumanAnswer(event: InboxEvent): void {
 }
 
 /**
- * runner から届いた合図から、本文を含まない見分けだけを取り出す（#438 案D）。
+ * runner から届いた合図から、本文を含まない見分けだけを取り出す。
  *
- * **ここだけ `journalEntryShape` / `inboxEventShape` と作りが違う。** あの2つは
- * 型ごとの網羅 `switch` で、**新しい型が増えたら書き手に判断を強制する**形になって
- * いる。ここは逆に、**載せてよい2つだけを名指しする許可制**にしてある。
- *
- * **理由は、この関数の使われ方である。** ここは記録の跡ではなく**落ちた場所の跡**で、
- * 要るのは「どの合図で落ちたか」だけである。`RunnerEvent` はいま17種あり、網羅
- * `switch` にすると型が増えるたびに17→18の分岐が生え、**そのたびに「この型なら
- * これくらい載せてよいだろう」という判断が1つずつ増える。** 許可制なら、型が
- * 増えても載るものは増えない —— **漏れうる面が構造として広がらない。**
- *
- * **載せる2つ**: `type`（`runnerEventSchema` の discriminator ＝ 列挙値）と、
- * 在れば `managerId`（こちらが発行した id）。**判定基準はこのファイルの他と同じで、
- * 「自由文かどうか」ではなく「値を誰が決めるか」である。** `report` の `text`・
- * `ask` の要旨・`closed` の `reason` は外から来るので載せない（長さも出さない ——
- * 跡に要るのは出所であって、中身の量ではない）。
+ * `journalEntryShape` / `inboxEventShape` と違い、網羅 `switch` ではなく載せてよい2つ（`type` と在れば `managerId`）だけを
+ * 名指しする許可制にしてある: 網羅にすると型が増えるたびに「どれだけ載せてよいか」の判断が増え、漏れうる面が広がる。
+ * `report` の `text` などは外から来るので載せない（長さも出さない）。
  */
 export function runnerEventShape(event: RunnerEvent): string {
   const owner = 'managerId' in event ? ` managerId=${tag(event.managerId)}` : '';
@@ -634,15 +337,10 @@ export function runnerEventShape(event: RunnerEvent): string {
 /**
  * 受信箱の合図から、本文を含まない見分けだけを取り出す。
  *
- * **判定の基準は `journalEntryShape` と同じ**（「自由文かどうか」ではなく
- * 「値を誰が決めるか」）。したがって `external` の `source` は
- * `POST /events/:source` の URL パスセグメント＝外の送り元が決める値なので、
- * 名前に見えても長さだけにする。逆に `managerId` / `approvalId` はこちらが
- * 発行した id、`kind` / `reason`（`distill`）は列挙値なので載せてよい。
- *
- * `human_message` の `conversationId` は呼び出し側が指定できる値であり、
- * `journalEntryShape` の `exchange` も載せていない。**同じ値の扱いを2か所で
- * 変えないこと。**
+ * 判定の基準は `journalEntryShape` と同じ（自由文かどうかではなく値を誰が決めるか）。`external` の `source` は
+ * `POST /events/:source` の URL パスセグメント＝外の送り元が決める値なので、名前に見えても長さだけにする。
+ * `human_message` の `conversationId` は呼び出し側が指定できる値であり、`journalEntryShape` の `exchange` も
+ * 載せていない。**同じ値の扱いを2か所で変えないこと。**
  */
 export function inboxEventShape(event: InboxEvent): string {
   switch (event.type) {
@@ -652,16 +350,13 @@ export function inboxEventShape(event: InboxEvent): string {
       return `human_answer approvalId=${tag(event.approvalId)} ${size(event.answer, 'answer')}`;
     case 'distill':
       return `distill reason=${tag(event.reason)}`;
-    // `kind` は `scheduleKindSchema`（英小文字・数字・. _ - の64字以内）で、
-    // 仕込んだのは持ち主かクローンである。`memory_update` の `slug` と同じ扱い。
     case 'timer':
       return (
         `timer kind=${tag(event.kind)}` +
         (event.cause === undefined ? '' : ` cause=${tag(event.cause)}`) +
         (event.target === undefined ? '' : ` target=${tag(event.target)}`)
       );
-    // `payload` は webhook の本文そのもの。**長さも出さない** — 長さを得るには
-    // 一度 JSON へ畳む必要があり、畳んだ文字列が跡へ載る事故が入りやすい。
+    // `payload` は webhook の本文そのもの。長さも出さない: 長さを得るには一度 JSON へ畳む必要があり、畳んだ文字列が跡へ載る事故が入りやすい。
     case 'external':
       return `external ${size(event.source, 'source')} payload=${event.payload === undefined ? 'none' : 'yes'}`;
     case 'self_initiative':
@@ -676,49 +371,22 @@ export function inboxEventShape(event: InboxEvent): string {
 }
 
 /**
- * stderr へ1行書く。
+ * stderr へ1行書く。跡を出す口をここ1本にして、本文を出さないという判断がこのファイルの外へ散らないようにする。
  *
- * **時刻は自分で付ける**（ホスティング先が付ける時刻に頼らない。付かない先が
- * ある）。跡を出す口をここ1本にしてあるのは、本文を出さないという判断が
- * このファイルの外へ散らないようにするためである。
- *
- * **`process.stderr.write` ではなく `writeStderrSync`（fd 2 への `fs.writeSync`）
- * を通す。** `process.stderr.write` は fd がパイプのとき POSIX 上は非同期で、
- * `stop()` → `storage.close()` → `process.exit(0)` のような「書いた直後に
- * プロセスが消える窓」では、書いたはずの行がバッファに残ったまま失われる
- * （Node 公式ドキュメント `doc/api/process.md`: "including I/O operations to
- * `process.stdout` and `process.stderr`" は `process.exit()` に巻き込まれる、
- * "Pipes (and sockets): … asynchronous on POSIX"）。**このファイルの docstring
- * が言う「同期で1行書けば、窓のどこで捨てても同じ跡になる」という約束は、
- * `process.stderr.write` では成り立たない。** `fs.writeSync` に替えるとこの
- * 約束が戻る（#248）。
+ * `process.stderr.write` ではなく `writeStderrSync`（fd 2 への `fs.writeSync`）を通す: fd がパイプのとき
+ * `process.stderr.write` は POSIX 上で非同期で、`stop()` → `storage.close()` → `process.exit(0)` のような
+ * 書いた直後にプロセスが消える窓では、行がバッファに残ったまま失われる。
  */
 function note(text: string): void {
   notePrefixed('alteroid', text);
 }
 
 /**
- * 直近の跡（`note()` が書いた行）を、器の中から読み戻すための帳面（#242）。
+ * 直近の跡（`note()` が書いた行）を、器の中から読み戻すための帳面。
  *
- * **上限つきの帳面である。無制限の列挙を新しく作らない**（#409 が指摘した
- * 欠陥をここで繰り返さない——`RecentMap`（`recent.ts`）と同じ「溢れたら古い側
- * から押し出す」形にしてある）。プロセスが生きているあいだだけの記憶で、
- * 再起動・デプロイの入れ替えをまたいで残す仕組みは持たない。**持たせるなら
- * 日誌と同じ「壊れても消えない」約束が要り、それは journal の役目である**
- * （このファイルの冒頭 doc「日誌はまだ持ち主しか読まないが、stderr は器の外へ
- * 出ていく」の逆を持ち込まない——ここは stderr の写しであって、日誌の代わりでは
- * ない）。
- *
- * **`alteroidd:` / `alteroid-runner:`（`noteUncaught` が使う接頭辞）はここへは
- * 乗らない。** 乗るのは `note()` が書く `alteroid:` の行だけである
- * （`notePrefixed` の `prefix === 'alteroid'` 判定）——#242 が塞ぐのは
- * **クローン自身が残した跡**であって、デーモン／runner のプロセス全体の網では
- * ない（あちらは Railway 経由で人間からは既に読めている。#242 のコメントの
- * 実測）。
- *
- * **本文は乗らない。** ここへ積むのは `note()` に渡された時点で既に
- * 本文を含まない1行（`noteDroppedRecord` 等の doc が言う「本文は出さない」）
- * なので、帳面の側で新たに漉す必要は無い。
+ * 無制限の列挙を作らない: 溢れたら古い側から押し出す（`RecentMap` と同じ形）。プロセスの生存中だけの記憶で、
+ * 再起動をまたいで残すなら日誌と同じ「壊れても消えない」約束が要り、それは journal の役目である。
+ * `alteroidd:` / `alteroid-runner:`（`noteUncaught` の接頭辞）は乗せない: 塞ぐのはクローン自身が残した跡だけ。
  */
 export const RECENT_TRACE_LIMIT = 200;
 const recentTraces: string[] = [];
@@ -728,25 +396,14 @@ function rememberTrace(line: string): void {
   if (recentTraces.length > RECENT_TRACE_LIMIT) recentTraces.shift();
 }
 
-/**
- * 直近の跡を古い順で返す（末尾がいちばん新しい）。`self_dropped`（`tools.ts`）
- * の材料。**控えを返す**——呼び手が触っても帳面そのものは動かない
- * （`RecentMap.entries()` と同じ形）。
- */
+/** 直近の跡を古い順で返す（末尾がいちばん新しい）。控えを返すので、呼び手が触っても帳面は動かない。 */
 export function recentDroppedTraces(): readonly string[] {
   return [...recentTraces];
 }
 
 /**
- * テスト専用: 帳面を空にする（`setStderrSinkForTesting` と対）。
- *
- * 帳面はプロセス（＝テストファイル）の生存中ずっと1つを共有するので、
- * 前のテストが積んだ行を次のテストが数え違えないよう、断言の前に呼ぶこと。
- *
- * **{@link droppedTraceLedgerSince} も同時に取り直す。** 帳面を空にしたのに
- * 「数え始めた時刻」だけ古いままだと、`describeDroppedTraceEmpty()` が言う
- * 「この帳面はプロセスの生存中だけの記憶」という説明と時刻が食い違って
- * 見える——空にする＝新しい生存区間が始まる、という意味を時刻にも持たせる。
+ * テスト専用: 帳面を空にする。{@link droppedTraceLedgerSince} も取り直す:
+ * 空にしたのに「数え始めた時刻」だけ古いままだと、`describeDroppedTraceEmpty()` の説明と食い違って見える。
  */
 export function clearRecentTracesForTesting(): void {
   recentTraces.length = 0;
@@ -756,52 +413,22 @@ export function clearRecentTracesForTesting(): void {
 /**
  * 帳面（{@link recentDroppedTraces}）がどのプロセスの跡を持っているかを表す。
  *
- * **いまは `'daemon'` の1値しか無い。** 供給元は1本——`recentDroppedTraces()`
- * が読むのはデーモンのプロセスの中だけである。**デーモンとクローンは同一
- * プロセスで動く**（`apps/daemon/src/index.ts` の `createClone(...)` と
- * `createApp({ clone, ... })`、`serve({ fetch: app.fetch, ... })` が同じ
- * 関数スコープにある）ので、クローンが `note()` 経由で残す跡も、デーモンの
- * HTTP ハンドラから見えるこの帳面も、同じ1本の台帳を指す。
- *
- * **runner はここに現れない。** runner は別プロセス（別 bin
- * `alteroid-runner`）で動いており、この帳面はプロセス内メモリなので、runner
- * が `note()` 相当の跡を残しても daemon 側のこの帳面からは原理的に読めない
- * （読めるようにするには runner からデーモンへ跡を運ぶ経路そのものを新設する
- * 必要があり、それは別の変更である）。**⟹ runner がこの型へ値を足さない
- * 限り、`'daemon'` は「デーモン (クローン込み) の跡だけ」と言い切れる。** 値を
- * 足すときは、runner 側の実装と同時にここへ増やすこと——増やさなければ、
- * この型がそのまま安全側の境界になる。
+ * runner は別プロセスでこの帳面からは読めないので、runner がこの型へ値を足さない限り `'daemon'` は
+ * 「デーモン（クローン込み）の跡だけ」と言い切れる。値を足すときは runner 側の実装と同時に増やすこと。
  */
 export type DroppedTraceOrigin = 'daemon';
 
 /**
- * 帳面が何の跡を持っているかを一言で言う（#242 の HTTP 面。
- * `apps/daemon/src/app.ts` の `GET /dropped` と `self_dropped`（`tools.ts`）
- * の両方が使う共有の生成元）。
+ * 帳面が何の跡を持っているかを一言で言う（`GET /dropped` と `self_dropped` の共有の生成元）。
  *
- * **字面は core とここ1箇所だけではない。** `apps/web` は `@alteroid/core`
- * の**値** import が禁じられている（`eslint.config.js` の
- * `no-restricted-imports`。理由は#294/#306の事故）ので、Web 側はこの文字列を
- * 自前に複製することになる。**揃っていることは規約ではなく歯（テストの
- * 文字列一致）で守る**——先例は `describeSessionMissingKind`（`digest.ts`）と
- * その複製 `describeSessionMissingKindNote`
- * （`apps/web/app/routes/managers.tsx`）で、`apps/web/app/routes/managers.test.tsx`
- * が2つの文字列としての等しさを直接測る（テストファイルは値 import の禁止
- * から明示的に外してある）。**このファイルの文言を直すときは、Web 側の
- * 複製が在れば必ず一緒に見ること。**
+ * `apps/web` は `@alteroid/core` の値 import が禁じられていて、この文字列を自前に複製する。揃っていることは
+ * テストの文字列一致で守る（先例: `describeSessionMissingKind` と `describeSessionMissingKindNote`）ので、
+ * 文言を直すときは Web 側の複製も見ること。
  *
- * **`undefined` は空文字にする（「不明」と書かない）。** 由来を持たない印は、
- * この欄が足される前の版のデーモンが立てたものだけである——そこへ新しい語を
- * 出すと、実際には1つしかない区別が2つに見える（`describeSessionMissingKind`
- * の doc と同じ理由）。
+ * `undefined` は空文字にする（「不明」と書かない）: 由来を持たない印は欄が足される前の版のデーモンが立てたものだけで、
+ * 新しい語を出すと実際には1つしかない区別が2つに見える。
  *
- * **型の網羅性で塞いだうえで、実行時の倒れ先も足す**（AGENTS.md「型で塞いだ
- * 分岐にも、実行時の倒れ先の歯を足す」）。デーモンと読み手（CLI・Web の
- * 複製）は別デプロイなので版がずれうる——デーモンが先に2値目の
- * `DroppedTraceOrigin` を返し、読み手側の型定義がまだ1値のまま、という順序が
- * 実在しうる。`default` 節は `never` 型の変数へ代入するだけで、**その値を
- * そのまま画面に出さない**（#285 で実際に踏まれた間違い——`never` 型の変数を
- * 本文として描いてしまい、画面に分岐キーの生の値が出た——と同じ形を作らない）。
+ * `default` 節の実行時の倒れ先は、デーモンと読み手が別デプロイで版がずれうるため。`never` 型の値は画面に出さない。
  */
 export function describeDroppedTraceOrigin(origin: DroppedTraceOrigin | undefined): string {
   switch (origin) {
@@ -823,16 +450,9 @@ export function describeDroppedTraceOrigin(origin: DroppedTraceOrigin | undefine
 /**
  * 跡が0件だったときの読み方を一言で言う。
  *
- * **「無事だった」とは読ませない。** この帳面はプロセスの生存中だけの記憶で、
- * 再起動・デプロイの入れ替えをまたいで残らない——0件は「握り潰しが1件も
- * 無かった」ことを意味しない（直前の再起動までに何件落としていても、この
- * 帳面には何も残らない）。
- *
- * **時刻は埋め込まない。** CLI・HTTP・MCP・Web の各面は時刻の整形方法が
- * 違う（人間可読へ直す関数がそれぞれ別）ので、ここへ埋め込むと
- * {@link describeDroppedTraceOrigin} と同じ「2箇所で揃える」字面一致の歯が、
- * 面ごとの時刻整形の違いだけで壊れる。**帳面が数え始めた時刻を出したい面は、
- * この文の隣に自分で {@link droppedTraceLedgerSince} を描くこと。**
+ * 「無事だった」とは読ませない: 帳面はプロセスの生存中だけの記憶で、再起動をまたいで残らない。
+ * 時刻は埋め込まない: 面ごとに時刻の整形が違い、{@link describeDroppedTraceOrigin} と同じ字面一致の歯が壊れる。
+ * 数え始めた時刻を出したい面は {@link droppedTraceLedgerSince} を自分で描くこと。
  */
 export function describeDroppedTraceEmpty(): string {
   return (
@@ -843,12 +463,9 @@ export function describeDroppedTraceEmpty(): string {
 }
 
 /**
- * 帳面の保持のしかた（上限で古い側から押し出される・それより古い分の在り処）
- * を一言で言う。
+ * 帳面の保持のしかた（上限で古い側から押し出される・それより古い分の在り処）を一言で言う。
  *
- * @param limit `RECENT_TRACE_LIMIT` をそのまま渡すこと。**値をここへ焼き
- *   込まない**——呼び出し側から渡させることで、上限が動いたときにここも
- *   一緒に動く（`self_dropped` の `limit` 引数の説明文と同じ形）。
+ * @param limit `RECENT_TRACE_LIMIT` をそのまま渡すこと。値をここへ焼き込まない（上限が動いたときに一緒に動く）。
  */
 export function describeDroppedTraceRetention(limit: number): string {
   return (
@@ -857,15 +474,7 @@ export function describeDroppedTraceRetention(limit: number): string {
   );
 }
 
-/**
- * この帳面が数え始めた時刻（ISO 8601、UTC）。モジュール読み込み時
- * （＝プロセス起動時）に1度だけ決める。
- *
- * **{@link clearRecentTracesForTesting} が呼ばれたら取り直す。** テストが
- * 帳面を空にしたのに「数え始めた時刻」だけ前のテストの起動時刻のままだと、
- * `describeDroppedTraceEmpty()` が言う「プロセスの生存中だけの記憶」という
- * 説明と矛盾して見える。
- */
+/** この帳面が数え始めた時刻（ISO 8601、UTC）。{@link clearRecentTracesForTesting} が呼ばれたら取り直す。 */
 let ledgerSince = new Date().toISOString();
 
 export function droppedTraceLedgerSince(): string {
@@ -873,18 +482,11 @@ export function droppedTraceLedgerSince(): string {
 }
 
 /**
- * 接頭辞を呼び出し側から受け取って1行書く。
+ * 接頭辞を呼び出し側から受け取って1行書く。`note()` と同じ口（`stderrSink` を通るのはここ1本）。
  *
- * **`note()` と同じ口である**（`stderrSink` を通るのはここ1本のまま）。分けて
- * あるのは、`note()` が `alteroid:` を焼き込んでいるからで、**プロセス全体の網
- * （`uncaught-net.ts`）は app ごとに別の接頭辞を出す**必要があるためである ——
- * daemon は `alteroidd:`、runner は `alteroid-runner:`（`.onError` の先例が
- * `apps/runner/src/app.ts` に在る）。**接頭辞が app ごとに違うのは、跡を読む者が
- * どちらのプロセスが落ちたのかを1行目で見分けられるようにするためである。**
- *
- * **`note()` が出す行は1文字も変えていない。** `prefix === 'alteroid'` の
- * ときだけ {@link rememberTrace} で帳面へも積む（#242）——`alteroidd:` /
- * `alteroid-runner:` は積まない（上の doc）。
+ * 分けてあるのは、`note()` が `alteroid:` を焼き込んでいる一方で、プロセス全体の網（`uncaught-net.ts`）は
+ * どちらのプロセスが落ちたかを1行目で見分けられるよう app ごとに別の接頭辞（`alteroidd:` / `alteroid-runner:`）を出すため。
+ * 帳面へ積むのは `prefix === 'alteroid'` のときだけ。
  */
 function notePrefixed(prefix: string, text: string): void {
   const line = `${prefix}: ${new Date().toISOString()} ${text}`;
@@ -893,54 +495,17 @@ function notePrefixed(prefix: string, text: string): void {
 }
 
 /**
- * 未捕捉の例外・未処理の Promise 拒否を**観測した**ことを stderr へ1行だけ残す
- * （#438）。
+ * 未捕捉の例外・未処理の Promise 拒否を観測したことを stderr へ1行だけ残す。
  *
- * **⚠️ この行は「プロセスが落ちる」と書かない。書かせないこと。** 呼び元
- * （`uncaught-net.ts`）が使う `uncaughtExceptionMonitor` は、**誰かが
- * `process.on('uncaughtException')` を登録していれば、落ちないまま発火する。**
- * いまこの repo にその登録は無いが、それは配線の事実であってこの関数の保証では
- * ない。断言すると、**登録された日にこの行だけが静かに嘘をつく。**
+ * 「プロセスが落ちる」と書かない: `uncaughtExceptionMonitor` は `process.on('uncaughtException')` が
+ * 登録されていれば落ちないまま発火する。いまその登録は無いが配線の事実であって保証ではなく、断言すると
+ * 登録された日にこの行だけが静かに嘘をつく。主張するのは観測できたことだけ。
  *
- * **これは `noteDroppedInboxEvent` と同じ判断である**（あちらの doc の逐語:
- * 「**それでも「残した」とも書かない。**…この行が主張するのは**このプロセスでは
- * 処理しなかった**という、観測できたことだけである」）。ここが主張するのも
- * **観測できたことだけ** —— 「未捕捉の例外が起きた」であって「だから死ぬ」では
- * ない。**死んだかどうかは、この行の後に Node 既定のスタックが続くかで読める。**
+ * 「本文は出しません」とも書かない: 例外の `message` そのものが理由なので `reasonOf` は message を出す。
+ * 実際に効いている守りは `reasonOf` の1行目だけ・200字切りの2つで、スタックは載せない。
+ * この行が漏らしうるものは、`uncaught-net.ts` が Node 既定の出力を止めないので既に stderr へ出ているものの部分集合である。
  *
- * **文言を `origin` で分けるのは、このファイルが `noteDroppedRecord` /
- * `noteUnreadableRecord` / `noteManagerIdCollision` を分けているのと同じ理由で
- * ある** —— 違う出来事に同じ文を当てると、**跡そのものが何が起きたかを取り違え
- * させる。**
- *
- * **⚠️ 「本文は出しません」とは書かない。** `.onError` の先例
- * （`apps/daemon/src/app.ts` / `apps/runner/src/app.ts`）はそう書いているが、
- * **あちらには出さずに済ませた本文が別に在る**（リクエスト本文）。**未捕捉の例外
- * には、それが無い** —— 例外の `message` そのものが理由なので、`reasonOf` は
- * **理由として message を出す**（あの関数の doc の逐語:「**理由だけは出す。**
- * 『書けなかった』しか残らない行を読んだ者にできることは、ストアを一から疑うこと
- * しかない」）。ここで「本文は出しません」と書くと、**在りもしない守りを名乗る**
- * ことになる —— このファイルが繰り返し避けている「跡そのものが嘘をつく」形である。
- *
- * **実際に効いている守りは2つで、どちらも `reasonOf` が持っている。**
- *
- * 1. **1行目だけ**を取る —— ドライバの例外は失敗したクエリのパラメータを**次の行**へ
- *    添えてくることがある（`reasonOf` の doc に `drizzle-orm@0.45.2` の実測が在る）。
- * 2. **200字で切る。**
- *
- * **そして、この行が漏らしうるものは、いま既に漏れているものの部分集合である。**
- * `uncaught-net.ts` は Node 既定の出力を止めないので、**同じ `message` は同じ
- * stderr へ、スタックごと必ず出る。** ⟹ この行は器のログの漏洩面を1バイトも
- * 広げない（**狭めもしない** —— 狭めるには既定の出力を止めるしかなく、それは
- * `uncaught-net.ts` が捨てた道である）。
- *
- * 素の `String(error)` は書かない。**スタックも載せない** —— 載せると `reasonOf` を
- * 通す意味が消える。
- *
- * @param prefix app ごとの接頭辞（`alteroidd` / `alteroid-runner`）。**末尾の
- *   コロンは付けない**（`notePrefixed` が付ける）。
- * @param origin Node が渡す出所（`uncaughtException` / `unhandledRejection`）。
- * @param error 観測した例外・拒否の理由。
+ * @param prefix app ごとの接頭辞（`alteroidd` / `alteroid-runner`）。末尾のコロンは付けない（`notePrefixed` が付ける）。
  */
 export function noteUncaught(prefix: string, origin: string, error: unknown): void {
   notePrefixed(prefix, `${describeUncaughtOrigin(origin)}を観測しました: ${reasonOf(error)}`);
@@ -949,12 +514,8 @@ export function noteUncaught(prefix: string, origin: string, error: unknown): vo
 /**
  * `uncaughtExceptionMonitor` の `origin` を、跡に書く言葉へ直す。
  *
- * **知らない値を既知の2つのどちらかへ倒さない。** Node の型はいま2値だが、
- * 倒すと「判別できない」が黙って片方に化ける（`AGENTS.md`「**『判定できない』と
- * いう3つ目の状態を持つ。** 2値にすると、判定できない場合がどちらかへ黙って
- * 倒れる」）。**`origin` は Node が決める値なので `tag()` に通してそのまま載せて
- * よい** —— このファイルの判定基準は「自由文かどうか」ではなく「**値を誰が
- * 決めるか**」である。
+ * 知らない値を既知の2つのどちらかへ倒さない: 「判別できない」が黙って片方に化ける。
+ * `origin` は Node が決める値なので `tag()` に通してそのまま載せてよい。
  */
 function describeUncaughtOrigin(origin: string): string {
   switch (origin) {
@@ -970,19 +531,8 @@ function describeUncaughtOrigin(origin: string): string {
 /**
  * fd 2（stderr）へ、1行を同期で・全部書き終わるまで書く。
  *
- * **3つの但し書きがある（#248 で確かめた）。**
- *
- * 1. **fd 2 は非ブロッキングで、部分書き込みが起きる。** `fs.writeSync` は
- *    例外を投げずに返り値（実際に書けたバイト数）が減るだけなので、**返り値を
- *    見て書き切るまでループする**必要がある。1行の大きさなら（読み手が居る
- *    限り）部分書き込みは起きなかったが、「起きなかった」は「起きない」では
- *    ない——パイプが埋まっているときは危険が起きる。
- * 2. **読み手が消えていると `EPIPE` を投げる。** 跡を書くためだけの関数が
- *    例外で本筋（呼び出し元のターン）を殺してはいけないので、**投げたら
- *    黙って諦める**（跡は残らないが、握り潰しはしない——という判断はこの
- *    関数の外の話であって、ここでは「投げない」だけを守る）。
- * 3. **本番のコンテナで同じ挙動かは確かめていない。** 手元の器（`node
- *    v22.23.2`）で stderr をパイプへ繋いだ実測に基づく。
+ * fd 2 は非ブロッキングで部分書き込みが起きる（`fs.writeSync` は例外ではなく返り値が減る）ので、
+ * 書き切るまでループする。読み手が消えていると `EPIPE` を投げるが、跡のために本筋を殺さないよう黙って諦める。
  */
 export function writeStderrSync(line: string): void {
   const buffer = Buffer.from(line, 'utf8');
@@ -997,21 +547,12 @@ export function writeStderrSync(line: string): void {
 }
 
 /**
- * `note()` が実際に書き込む先。**既定は `writeStderrSync`（本番と同じ経路）。**
- *
- * `fs.writeSync(2, …)` は `process.stderr.write` の差し替え（`testing.ts` の
- * `captureStderr`）を通らないので、テストだけがここを差し替えて観測する。
- * `captureStderr` 以外から呼ばないこと——本番の配線には出てこない。
+ * `note()` が実際に書き込む先。`fs.writeSync(2, …)` は `process.stderr.write` の差し替えを通らないので、
+ * テストだけがここを差し替えて観測する。`captureStderr` 以外から呼ばないこと。
  */
 let stderrSink: (line: string) => void = writeStderrSync;
 
-/**
- * テスト専用: `note()` の書き込み先を差し替える／戻す。
- *
- * **本番の書き込み方法（`writeStderrSync`）自体は1文字も変えていない。**
- * `captureStderr` が `finally` で必ず `null` を渡して戻すこと（戻し忘れると
- * 以降のテストの跡が消えたように見える）。
- */
+/** テスト専用: `note()` の書き込み先を差し替える／戻す。`captureStderr` が `finally` で必ず `null` を渡して戻すこと。 */
 export function setStderrSinkForTesting(sink: ((line: string) => void) | null): void {
   stderrSink = sink ?? writeStderrSync;
 }
@@ -1019,63 +560,31 @@ export function setStderrSinkForTesting(sink: ((line: string) => void) | null): 
 /**
  * 日誌エントリから、本文を含まない見分けだけを取り出す。
  *
- * 出すのは**書き手（＝この実装）が選んだ列挙値と id** だけである。自由文
- * （`text` / `decision` / `grounds` / `question` / `answer` / `summary` / `body` /
- * `input`）は入れない — 秘密が載りうるのはそこだからである。**長さはどの自由文に
- * ついても出す**（「空だった」と「書けなかった」の区別が付く。型によって出したり
- * 出さなかったりすると、跡の読み方が型ごとに変わる）。
+ * 出すのは書き手（＝この実装）が選んだ列挙値と id だけ。自由文は入れず、長さはどの自由文についても出す
+ * （型によって出したり出さなかったりすると、跡の読み方が型ごとに変わる）。
  *
- * **入れ子オブジェクト（`turn_usage.contextUsage` / `context_usage.contextUsage`
- * のような、それ自体が構造を持つ欄）の中へは踏み込まない。** この関数が扱うのは
- * 各エントリの第1階層までで、入れ子の中に新しい自由文が増えても、この関数の
- * 判定はその増分を知らない——だから増やすときは、その入れ子を持つ `case` の側で
- * 個別に「載せる／載せない」を決める（`case 'context_usage'` の `contextUsage` の
- * doc を見よ）。**「入れ子は全部同じ規則で再帰的に判定する」という一般化はして
- * いない**——schema の版が動く場所（SDK 由来の入れ子）ほど既定を「出ない」側に
- * 置きたく、alteroid 自身が決める入れ子（`inbox_flow` の `arrived`/`delivered`
- * 等）は総数・件数だけを出す、というように入れ子ごとに判断が違うためである。
+ * 入れ子オブジェクト（`contextUsage` のような構造を持つ欄）の中へは踏み込まない: 入れ子の中に新しい自由文が
+ * 増えてもこの関数の判定は知らない。増やすときは、その入れ子を持つ `case` の側で個別に決める。
+ * 「入れ子は全部同じ規則で再帰的に判定する」としないのは、SDK 由来の入れ子ほど既定を「出ない」側に置きたく、
+ * alteroid 自身が決める入れ子（`inbox_flow` 等）は件数だけを出すというように、入れ子ごとに判断が違うため。
  *
- * **⚠️ 唯一の例外は `tool_use` の `input` である。長さも出さない。** 理由は2つ
- * とも `size()` を使わない側に倒す:
+ * **唯一の例外は `tool_use` の `input` である。長さも出さない。**
+ * 1. `input` は `z.unknown().optional()` で `.length` を持たず、長さを出すには `JSON.stringify` が要る。
+ *    日誌への書き込みが既に失敗した後の経路で循環参照や巨大構造の直列化を走らせると、跡を残す仕組み自身を落としに行く。
+ * 2. `input` はツール引数そのもの（シェル行など）で、最も秘密が載りうる。
  *
- * 1. `input` は `z.unknown().optional()` で `.length` を持たない——長さを出す
- *    には `JSON.stringify` が要る。この関数が走るのは**日誌への書き込みが
- *    既に失敗した後**の例外経路であり、そこで循環参照や巨大構造の直列化を
- *    新たに走らせるのは、跡を残す仕組み自身を落としに行く形になる。
- * 2. `input` はツール引数そのもの（`{ command: <シェル行> }` 等）——この関数が
- *    扱う自由文の中でもいちばん秘密が載りうる場所である。
+ * 判定は「自由文かどうか」ではなく「値を誰が決めるか」で行う。`external_event` の `source` は
+ * `POST /events/:source` の URL パスセグメント＝外部が決める値なので、名前に見えても載せない。
  *
- * **判定は「自由文かどうか」ではなく「値を誰が決めるか」で行うこと。**
- * `tool_use` の `actor` / `tool` は SDK と runner が確定する値なので載せてよい。
- * 対して `external_event` の `source` は、**`POST /events/:source` の URL
- * パスセグメント**である＝外部の送り元が決める値なので、名前に見えても載せない。
- * ここを「本文（`summary`）ではないから」で通すと、#52 と同じ形が縮小して残る。
- *
- * **本文から id 相当を拾い出さないこと。** `[mgr-xxx]` のような目印は本文の先頭に
- * 入っているが、そこを切り出す規則を1つ認めると「本文は出さない」が
- * 「本文は原則出さない」に変わる。どのマネージャーだったかは時刻で突き合わせる。
+ * 本文から id 相当（`[mgr-xxx]` など）を拾い出さない: 切り出す規則を1つ認めると「本文は出さない」が「原則出さない」に変わる。
  */
 export function journalEntryShape(entry: JournalEntryInput): string {
   switch (entry.type) {
     case 'exchange':
-      // **`approvalId`（issue #782 の1）は `escalation.approvalId`（下）と同じ
-      // 判定基準——承認待ちキューの項目 id で、自由文ではないので `tag()` に
-      // 載せてよい。`conversationId`/`supersedes` を載せていないのとは事情が
-      // 違う（この関数の doc「同じ値の扱いを2か所で」— あちらは対になる
-      // `inboxEventShape` の欄と2か所同時にしか変えられないことが理由で、
-      // `approvalId` には対になる欄が無い）。**任意欄なので、`managerId`
-      // （直下の `escalation`）と同じく在るときだけ足す。**
       return (
         `exchange with=${tag(entry.with)} role=${tag(entry.role)} ${size(entry.text)}` +
         (entry.approvalId === undefined ? '' : ` approvalId=${tag(entry.approvalId)}`) +
-        // **`managerId`（稼働の地図の鍵）は `escalation.managerId`（下）と同じ判定基準**
-        // ——デーモンが発行した id で、自由文ではないので `tag()` に載せてよい。
-        // 任意欄なので在るときだけ足す。**本文（`text`）の `[mgr-xxx]` から拾い出す
-        // 形ではない**（上の「本文から id 相当を拾い出さないこと」はそのまま）。
         (entry.managerId === undefined ? '' : ` managerId=${tag(entry.managerId)}`) +
-        // **`answeredApprovalId`（issue #847 の案B）も `approvalId` と同じ判定基準**
-        // ——承認待ちキューの項目 id で、こちら側（`clone.ts`）が立てる値である。
-        // `decision` / `tool_use` / `memory_update` にも同じ形で足してある。
         (entry.answeredApprovalId === undefined
           ? ''
           : ` answeredApprovalId=${tag(entry.answeredApprovalId)}`)
@@ -1093,16 +602,11 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         (entry.managerId === undefined ? '' : ` managerId=${tag(entry.managerId)}`) +
         ` ${size(entry.question, 'question')}` +
         (entry.answer === undefined ? '' : ` ${size(entry.answer, 'answer')}`) +
-        // withdrawnReason も自由文（人間が読む取り下げの理由）なので、他の
-        // 自由文と同じく size() へ逃がす（#963）。
         (entry.withdrawnReason === undefined
           ? ''
           : ` ${size(entry.withdrawnReason, 'withdrawnReason')}`)
       );
-    // **`outcome` は列挙値（こちら側=SDKの排他分岐が決める値であって、外部が
-    // 決める自由文ではない）なので `tag()` に載せてよい**——`subagent_stall.outcome`
-    // と同じ判定基準。**`error` は SDK・道具・MCP サーバが書く自由文なので、
-    // 他の自由文と同じく `size()` へ逃がす**（値の中身は跡に残さない）。
+    // `error` は SDK・道具・MCP サーバが書く自由文なので `size()` へ逃がす。`outcome` は列挙値。
     case 'tool_use':
       return (
         `tool_use actor=${tag(entry.actor)} tool=${tag(entry.tool)}` +
@@ -1121,32 +625,17 @@ export function journalEntryShape(entry: JournalEntryInput): string {
           ? ''
           : ` answeredApprovalId=${tag(entry.answeredApprovalId)}`)
       );
-    // `unavailable` は自由文（「なぜ書けなかったか」）。この欄の**有無**そのもの
-    // に機構上の意味がある（`schema.ts` の `daily_report.unavailable` の doc —
-    // `isWrittenDailyReport` がこの欄の有無で「本物の日報か」を判定する。印が
-    // 無いと再試行が死ぬ）ので、有無が跡から読めないのは実害になる。だから
-    // 「空だった」と「書けなかった」の区別が付くよう、長さだけ載せる（この
-    // 関数の冒頭 doc「長さはどの自由文についても出す」）。既存の `body` の
-    // 出し方（無名）は変えない——`token_rotation` が主たる自由文 `text` を
-    // 無名のまま、副次の `label`/`noticeText` に名前を付けている先例と同じ形。
+    // `unavailable` は自由文だが、この欄の有無に機構上の意味がある（`isWrittenDailyReport` が本物の日報かを判定する）
+    // ので、有無が跡から読めるよう長さだけ載せる。
     case 'daily_report':
       return (
         `daily_report date=${tag(entry.date)} ${size(entry.body)}` +
         (entry.unavailable === undefined ? '' : ` ${size(entry.unavailable, 'unavailable')}`)
       );
-    // `source` は外から来る値なので、名前であっても長さだけにする（上の doc 参照）。
+    // `source` は外から来る値なので、名前であっても長さだけにする。
     case 'external_event':
       return `external_event ${size(entry.source, 'source')} ${size(entry.summary)}`;
-    // **全フィールドが runner 自身の数え上げ（整数・列挙値）で、自由文が1つも
-    // 無い。** 値を決めるのは runner であって外の世界ではないので、`size()` へ
-    // 逃がさず数値をそのまま載せてよい（`tool_use` の `actor`/`tool` と同じ判定
-    // 基準 — 「自由文かどうか」ではなく「値を誰が決めるか」）。
-    // ⚠️ **かつてはこの列挙のとおりに書けておらず、11欄中4欄（tasks/turns/
-    // toolless/settled）しか出していなかった。** `openedAt` はこちらが計算した
-    // 時刻（`token_rotation` の `earliestAt` と同じ扱い）なので `tag()`、
-    // `byCause` の3つ・`notifications`・`submits` は必須の整数なのでそのまま、
-    // `sources` は optional な `Record<string, number>` で、`turn_usage` の
-    // `models` と同じ理由（内訳ではなく件数だけ）でキー数のみ載せる。
+    // 全フィールドが runner 自身の数え上げ（整数・列挙値）で自由文が無いので、`size()` へ逃がさず数値をそのまま載せる。
     case 'worker_wait':
       return (
         `worker_wait openedAt=${tag(entry.openedAt)} tasks=${entry.tasks} turns=${entry.turns} ` +
@@ -1156,19 +645,8 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         (entry.sources === undefined ? '' : ` sources=${Object.keys(entry.sources).length}`) +
         ` settled=${entry.settled}`
       );
-    // `layer` / `site` は列挙値、`managerId` はこちらが発行した id、`sessionId`
-    // は SDK が決める値だが id である（`worker_wait` と同じ判定基準）。
-    // **`models` の内訳（トークン数・costUsd）は SDK が数え上げた数値であって
-    // 自由文ではないので、モデル id ごとの件数だけ載せる** — キーであるモデル
-    // id は列挙に近い固定の語彙（`claude-opus-5` 等）であり、値は数値なので
-    // 自由文を経由して秘密が混ざる経路が無い。それでも中身の数値までは
-    // 載せない（跡はここまでで十分 — どのモデルで何件かが分かれば、ストアが
-    // 書ける状態に戻してから読める）。
-    //
-    // `contextUsage`（`turn_usage.contextUsage`）には、下の `case
-    // 'context_usage'` と**同じ判断**が掛かる——同じ schema
-    // （`contextUsageObservationSchema`）なので、決めた理由もそちらに
-    // 書く（二重に書かない）。
+    // `models` はモデル id ごとの件数だけ載せ、中身の数値までは載せない。
+    // `contextUsage` には下の `case 'context_usage'` と同じ判断が掛かる（理由はそちらに1箇所だけ書く）。
     case 'turn_usage':
       return (
         `turn_usage layer=${tag(entry.layer)} site=${tag(entry.site)} ` +
@@ -1177,44 +655,19 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         ` models=${Object.keys(entry.models).length}` +
         (entry.reset === undefined ? '' : ' reset=yes')
       );
-    // **同じ判定基準（値を誰が決めるか）で3つに分かれる。**
-    //
-    // - 載せる: `event` / `signal` / `freshness` は列挙値、`generation` は整数、
-    //   `tokenId` / `fromTokenId` は**こちらが発行した id**（`managerId` と同じ）、
-    //   `earliestAt` はこちらが計算した時刻、`reason` は契機の列挙値（回し手
-    //   `TokenRotator.reconsider` が決める）、`cooldownSource` は冷却の期限の
-    //   出所の列挙値（`nextCooldownUntil` が決める）——どちらもこちら側が決める
-    //   値なので `tag()` に載せてよい
-    // - 長さだけ: **`label` は人間が付けた自由文である**（`add --label` でそのまま
-    //   入る）。id に見えるものと並んでいるが、決めるのは外側なので `external_event`
-    //   の `source` と同じ扱いにする
-    // - 長さだけ: `noticeText` と `text` も自由文（前者は provider の英文、後者は
-    //   その両方を含む整形済みの行）
-    //
-    // **⚠️ トークンの値はこのエントリに存在しない。** `schema.ts` の
-    // `token_rotation` の doc が「ここへ値を入れない」と決めている
-    // （逐語は `command grep -Fn -- 'ここへ値' packages/core/src/schema.ts`）。
-    // ここで落とす心配をする対象がそもそも無い。
+    // `label` は人間が付けた自由文（`add --label` でそのまま入る）で、id に見えても決めるのは外側なので長さだけにする。
+    // `noticeText` と `text` も自由文。トークンの値はこのエントリに存在しない。
     case 'token_rotation':
       return (
         `token_rotation event=${tag(entry.event)}` +
         (entry.signal === undefined ? '' : ` signal=${tag(entry.signal)}`) +
-        // `reason`（`TokenReconsiderReason`）は「なぜこの瞬間に見直したか」の
-        // 契機で、回し手（`TokenRotator.reconsider`）が決める列挙値なので
-        // `tag()` に載せてよい（`signal` と同じ判定基準）。
         (entry.reason === undefined ? '' : ` reason=${tag(entry.reason)}`) +
         (entry.freshness === undefined ? '' : ` freshness=${tag(entry.freshness)}`) +
         (entry.tokenId === undefined ? '' : ` tokenId=${tag(entry.tokenId)}`) +
         (entry.fromTokenId === undefined ? '' : ` fromTokenId=${tag(entry.fromTokenId)}`) +
         (entry.generation === undefined ? '' : ` generation=${entry.generation}`) +
         (entry.earliestAt === undefined ? '' : ` earliestAt=${tag(entry.earliestAt)}`) +
-        // `cooldownSource`（`CooldownSource`）は直上の `earliestAt` を
-        // どこから採ったかの列挙値で、こちら側（`nextCooldownUntil`）が決める
-        // ので `tag()` に載せてよい（`earliestAt` 自体と同じ判定基準）。
         (entry.cooldownSource === undefined ? '' : ` cooldownSource=${tag(entry.cooldownSource)}`) +
-        // **`recoveredSource` は列挙値である**（#681 (1)。誰が観測したかを
-        // 決めるのはこちら側の回し手であって外部入力ではないので、他の列挙値
-        // （`event` / `signal` / `freshness`）と同じ判定基準で `tag()` に載せる。
         (entry.recoveredSource === undefined
           ? ''
           : ` recoveredSource=${tag(entry.recoveredSource)}`) +
@@ -1222,15 +675,6 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         (entry.noticeText === undefined ? '' : ` ${size(entry.noticeText, 'noticeText')}`) +
         ` ${size(entry.text)}`
       );
-    // **全欄が runner 自身の数え上げ（`agentId` は SDK が決める id、
-    // `agentType` は `.claude/agents/*.md` で定義された小さい語彙、
-    // `ownedTaskCount`/`sessionTaskCount`/`wakeupCount` は整数、`outcome` は
-    // 列挙値）で、自由文は `text` の1つだけ。** `agentId` は `managerId` /
-    // `sessionId` と同じ判定基準（「値を誰が決めるか」）で id としてそのまま
-    // 載せてよい。`agentType` はサブエージェントの種類名で、値を決めるのは
-    // このリポジトリ（`.claude/agents/` にどんな作業者を定義するか）であって
-    // 外部の入力ではないので、`turn_usage` のモデル id と同じ扱いで
-    // `tag()` に載せる。
     case 'subagent_stall':
       return (
         `subagent_stall agentId=${tag(entry.agentId)}` +
@@ -1239,38 +683,15 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         ` wakeupCount=${entry.wakeupCount} outcome=${tag(entry.outcome)}` +
         ` ${size(entry.text)}`
       );
-    // `layer`/`site`/`managerId`/`sessionId` は `turn_usage` と同じ判定基準。
-    // `turnSucceeded` は runner 自身が決める真偽値なのでそのまま載せる。
+    // `contextUsage` は入れ子のどの階層も跡へ出さない。
     //
-    // **`contextUsage`（構造化された欄）は載せない。中身は、入れ子のどの
-    // 階層も跡へ出さない——これは保留ではなく #981 で決めた判断である。**
+    // 中の自由文（`error` / `categories[].name` / `categories[].kind`）は値を決めるのが SDK 側で、載せてよい側に来ない。
+    // `error` は「伏せ字済み」ではない: 通している `redactEnvSecrets` は `env` の値の完全一致置換だけで、
+    // 値が変形されて出てきた場合までは塞げない。
     //
-    // 中に在る自由文は3つだけ（`error` / `categories[].name` /
-    // `categories[].kind`）。**どれも値を決めるのは SDK 側であって
-    // alteroid ではない**——この関数の判定基準（「自由文かどうか」ではなく
-    // 「値を誰が決めるか」）で見ても、そのまま載せてよい側には来ない。
-    //
-    // **`error` は「伏せ字済み」ではない。** `usage-probe.ts` の
-    // `describeProbeError` が通す `redactEnvSecrets` は `env` の値の
-    // **完全一致の文字列置換だけ**で、その doc 自身が「単純な文字列置換
-    // なので、値が変形されて出てきた場合までは塞げない」と明記している。
-    // ⟹ 「伏せ字済みだから載せてよい」という理由では通らない。
-    //
-    // **⚠️ この判断は非対称である。** 跡の行き先は日誌ではなく stderr＝
-    // ホスティング先のログで、このファイル冒頭の doc が言うとおり
-    // 「日誌はまだ持ち主しか読まないが、stderr は器の外へ出ていく」。
-    // **出さない→出すは後から広げられるが、逆は戻せない。**
-    //
-    // `categories` の要素まで含めて、入れ子の欄が増えたら
-    // `dropped-record.test.ts` の名簿（`CONTEXT_USAGE_SHAPE_PLAN` /
-    // `CONTEXT_USAGE_CATEGORY_SHAPE_PLAN`。#981 で足した）の歯が赤くなる。
-    //
-    // **`size()` へ逃がして長さだけ出す案（この関数の他の全ケースの作法）
-    // は検討して採らなかった。** この関数が走るのは日誌への書き込みが
-    // **既に失敗した後**で、そこで観測の成否を知って変わる手が無い
-    // （疑うべきはストアの側）。得が小さく、かつ戻せない側の変更を広げる
-    // ことになるので採らなかった。**禁止ではない**——実際に掘れなかった
-    // 実例を1つ持ってきたら、そのときに広げてよい。
+    // 跡の行き先は stderr＝器の外なので非対称: 出さない→出すは後から広げられるが、逆は戻せない。
+    // `size()` で長さだけ出す案は、日誌への書き込みが既に失敗した後の経路で得が小さく採らなかった（禁止ではない。
+    // 実際に掘れなかった実例が出たら広げてよい）。
     case 'context_usage':
       return (
         `context_usage layer=${tag(entry.layer)} site=${tag(entry.site)} ` +
@@ -1278,9 +699,7 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         (entry.sessionId === undefined ? '' : ` sessionId=${tag(entry.sessionId)}`) +
         ` turnSucceeded=${entry.turnSucceeded}`
       );
-    // **自由文を持たない**（`schema.ts` の `inbox_flow` の doc）——`byType` の
-    // `type` は `InboxEvent['type']` の列挙、残りは全部数。秘密が載る経路が
-    // 無いので、他の型のように長さだけに削らず、総数と滞留までそのまま出す。
+    // 自由文を持たない（残りは全部数）ので、他の型のように長さだけに削らず、総数と滞留までそのまま出す。
     case 'inbox_flow':
       return (
         `inbox_flow windowStartedAt=${tag(entry.windowStartedAt)} ` +
@@ -1289,10 +708,6 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         (entry.pending.oldestAt === undefined
           ? ''
           : ` pendingOldestAt=${tag(entry.pending.oldestAt)}`) +
-        // `retained`（Issue #1264）も同じ理由で自由文を持たない——4つとも
-        // メモリ上の索引の残数（非負整数）なので、他の欄と同じくそのまま出す。
-        // `.optional()` なので無ければ何も足さない（既存の行を壊さない
-        // ための欄なので、無い状態も正当——`schema.ts` の doc）。
         (entry.retained === undefined
           ? ''
           : ` retainedUnread=${entry.retained.unread} ` +
@@ -1300,36 +715,23 @@ export function journalEntryShape(entry: JournalEntryInput): string {
             `retainedRedeliveredClosed=${entry.retained.redeliveredClosed} ` +
             `retainedPendingCollapse=${entry.retained.pendingCollapse}`)
       );
-    // **`observedBy` / `repo` / `query` / `reason` は出さない**——観測した側が名乗る自由文で、
-    // デーモンは値を確かめられない（`schema.ts` の `github_observation` の doc）。出すのは
-    // `status` の列挙と、数・真偽値だけ。
+    // `observedBy` / `repo` / `query` / `reason` は観測した側が名乗る自由文でデーモンは値を確かめられないので出さない。
     case 'github_observation':
       return entry.result.status === 'ok'
         ? `github_observation status=ok openIssues=${entry.result.openIssues} ` +
             `openPulls=${entry.result.openPulls} truncated=${entry.result.truncated}`
         : 'github_observation status=failed';
-    // **`deletedConversationId` / `deletedBy` は出さない**——`exchange.conversationId` を出さないのと同じ判断。出すのは消した時点の件数だけ。
+    // `deletedConversationId` / `deletedBy` は出さない（`exchange.conversationId` を出さないのと同じ判断）。
     case 'conversation_deleted':
       return `conversation_deleted hiddenCount=${entry.hiddenCount}`;
   }
 }
 
 /**
- * 承認待ち（`PendingApproval`。`ask_human` が積む行）の、本文を含まない
- * 見分け（Issue #1229）。
+ * 承認待ち（`PendingApproval`）の、本文を含まない見分け。
  *
- * **`journalEntryShape` の `escalation` ケースと対にしてある。** `ask_human`
- * は `stores.jobs.putApproval` → `stores.journal.append`（`type: 'escalation'`）
- * の順に呼ぶ——後段（journal 側）が落ちたときの見分けは既に
- * `journalEntryShape` が持っている。ここが要るのは前段（`putApproval` 自体）
- * が落ちたときで、その時点ではまだ journal エントリを組み立てていないので、
- * `PendingApproval` から直接見分けを作る。
- *
- * **本文は出さない。** `question` / `context` は自由文（人間が読む質問文・
- * 判断の背景）なので `size()` へ逃がす。`id` / `jobId` / `requestId` は
- * 呼び出し元が決める識別子（クローンの `randomUUID()` ／マネージャーの id）
- * なので `tag()` でそのまま出す——`journalEntryShape` と同じ「値を誰が
- * 決めるか」の基準。
+ * `journalEntryShape` の `escalation` と対: 後段（journal 側）が落ちたときの見分けはあちらが持ち、
+ * ここは前段（`putApproval`）が落ちて journal エントリがまだ無いときのためにある。
  */
 export function approvalShape(approval: PendingApproval): string {
   return (
@@ -1345,48 +747,19 @@ export function approvalShape(approval: PendingApproval): string {
 const TAG_LIMIT = 64;
 
 /**
- * 失敗の理由を1行に畳む。
+ * 失敗の理由を1行に畳む。記録の失敗をログへ出すところは、すべてここを通すこと
+ * （素の `String(error)` を1か所でも残すと、その1か所だけ無防備になる）。
  *
- * **理由だけは出す。** 「書けなかった」しか残らない行を読んだ者にできることは、
- * ストアを一から疑うことしかない。ただしドライバの例外は失敗したクエリの
- * パラメータを添えてくることがある（＝本文が裏口から戻ってくる）ので、
- * **1行目だけ・長さも切る**。
+ * 理由は出すが、1行目だけ・長さも切る: ドライバの例外は失敗したクエリのパラメータを添えてくることがある。
+ * `drizzle-orm@0.45.2` の `DrizzleQueryError` は `message` の次の行に `params: <束縛パラメータ>` を置き、
+ * PGlite の insert の失敗で列の値がそのまま並んだ（実測）。
  *
- * **⚠️ これは仮想の危険ではない。実測（2026-08-24 観測）:** `drizzle-orm@0.45.2`
- * の `PgPreparedQuery` は失敗したクエリを `DrizzleQueryError` で包み直し、その
- * `message` は `Failed query: <sql>` の**次の行**に `params: <束縛パラメータ>` を
- * 置く。PGlite に当てて確かめたところ、insert の失敗で列の値がそのまま並んだ。
+ * その「2行目」に値が落ちているのはドライバの都合であって設計上の保証ではない。
+ * ⟹ 応答へ返す本文の安全を、この関数に肩代わりさせないこと。返してよい例外かどうかは型で分ける
+ * （例: `token-pool.ts` の `TokenPoolInputError`）。
  *
- * **記録の失敗をログへ出すところは、すべてここを通すこと。** 素の
- * `String(error)` を1か所でも残すと、その1か所だけストア実装に無防備なまま
- * 置き去りになる（そして誰も気づかない）。
- *
- * **⭐ 実装は `error-cause.ts` の `collapseErrorCause` に委ねてある（Issue
- * #1229）。** 「1行目だけ・長さも切る」という上の契約そのものは1文字も
- * 変わっていない——`collapseErrorCause` の1段目の切り詰め幅を、ここが元々
- * 持っていた上限（200字）と同じにしてあるので、`.cause` を持たない error
- * （このリポジトリの大半の例外）に対する出力は前と同じである。**`.cause`
- * を持つ error（drizzle 経由の pg エラー等）に対してだけ**、SQLSTATE
- * （`.cause.code`）等の識別子が追加で1段目の後ろに続く——「書き込みが
- * 失敗した理由がどの層にも出ない」という Issue #1229 の本体はここで埋まる。
- *
- * **⚠️ そして、この「2行目」に値が落ちているのはドライバの都合であって、
- * 設計上の保証ではない。** ドライバが改行の位置を変えれば破れる——それは
- * こちらが制御していない。**⟹ 応答へ返す本文の安全を、この関数に肩代わりさせない
- * こと。** 返してよい例外かどうかは型で分ける（例: `token-pool.ts` の
- * `TokenPoolInputError`）。ここが受け持つのは stderr へ残す跡の側だけである
- * （ただし `collapseErrorCause` 自体は、`detail` 等の値を含みうる欄を
- * 最初から拾わない作りなので、クローンへ返す側でもそのまま使える——
- * `error-cause.ts` の doc と `tools.ts` の `formatJournalNotRecordedMessage`
- * を見よ）。
- *
- * **使い分け（#2565）。** 外へ出す例外の文は、必ず `reasonOf` か `redactErrorText`
- * （`denial-input-head.ts`）のどちらかを通す。1行の跡でよい（stderr・日誌・知らせ）なら
- * `reasonOf`。文を変えたくない・全文が要るなら `redactErrorText(String(error), process.env)`
- * （例: `runner.ts` の `#read`）。`reasonOf` は `redactErrorText` を内側に含む
- * （`collapseErrorCause` の `safeLine`）ので、`redactErrorText(reasonOf(error), env)` と重ねる
- * のは `process.env` 以外の env を伏せたいときだけである。
- * `scripts/stderr-error-through-reasonof.test.ts` が、この規則の破れを機械で見る。
+ * 外へ出す例外の文は `reasonOf` か `redactErrorText`（`denial-input-head.ts`）のどちらかを通す。
+ * 文を変えたくない・全文が要るなら後者。`scripts/stderr-error-through-reasonof.test.ts` がこの規則の破れを機械で見る。
  */
 export function reasonOf(error: unknown): string {
   return collapseErrorCause(error);
@@ -1397,12 +770,7 @@ function tag(value: string): string {
   return clip(value.replaceAll(/\s+/gu, ' '), TAG_LIMIT);
 }
 
-/**
- * 自由文の長さだけを出す。
- *
- * 名前を付けられるようにしてあるのは、1つの型に自由文が2つ以上あるときに
- * `chars=0 chars=0` が何と何なのか分からなくなるからである。
- */
+/** 自由文の長さだけを出す。名前を付けられるのは、自由文が2つ以上ある型で `chars=0 chars=0` が何と何か分からなくなるため。 */
 function size(text: string, name?: string): string {
   return `${name === undefined ? '' : `${name}.`}chars=${text.length}`;
 }
@@ -1412,48 +780,14 @@ function clip(text: string, limit: number): string {
 }
 
 /**
- * クローンの再開素材（`FsSessionRegistry` / `PgSessionRegistry` の4欄——
- * `cloneSessionId` / `TranscriptGrave` / `LostSessionGrave` / `projectKey`）を
- * 読み出そうとして、**ファイルが無い・行が無い以外の理由**で読めなかった
- * ことを stderr へ1行だけ残す（issue #1147）。
+ * クローンの再開素材（`FsSessionRegistry` / `PgSessionRegistry` の4欄）を、ファイルが無い・行が無い以外の理由で
+ * 読めなかったことを stderr へ1行だけ残す。
  *
- * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」
- * という書き込み失敗の文言で、ここは読み出しだからである**
- * （`noteInboxEventKeptInMemoryOnly` の doc と同じ判断——「第三の状況には
- * 専用の文言を持たせる」）。
- *
- * **既存の `noteUnreadableRecord`（読み出し失敗の汎用の跡）へも寄せなかった。**
- * あちらは「読めなかった」ことは言うが、この4欄に固有の2点までは言わない
- * ——ここではその2点を**必ず**言う必要がある。
- *
- * 1. **「無い」として扱ったので起動は止めていないこと。** 4つの読み手
- *    （`getCloneSessionId` 等）はどれも、読めなかったときに例外を投げず
- *    `null` を返す。クローンの起動を止めない、という判断そのものを行へ
- *    書いておかないと、跡だけを見た読み手は「読めなかったのに黙って
- *    先へ進んだのか、それとも起動そのものが止まったのか」を跡から
- *    判定できない。
- * 2. **⭐ この行だけが「無かった」と「読めなかった」を区別できること。**
- *    これがこの関数の存在理由そのものである（#1147 の本体）。呼び出し側は
- *    ファイルが無い（`ENOENT`）・pg に該当行が無い場合はここを呼ばない
- *    ——**ここへ来るのは「在ったのに読めなかった」場合だけ**なので、この
- *    行が出ているという事実そのものが「無かった」を否定する。逆にこの行が
- *    出ていなければ、`null` は「無かった」を意味する。これまでは両者が
- *    同じ `null` に潰れていて外からは見分けが付かず、クローンが resume を
- *    諦めて新しいセッションを始めても「正常な経路」として通っていた。
- *
- * **例外は投げない。** 呼び出し側（`FsSessionRegistry` / `PgSessionRegistry`
- * の4つの読み手）は、この関数を呼んだ後もそのまま `null` を返す——
- * 「握り潰しをやめたら起動しなくなった」が最悪の着地であることは
- * `storage-pg` 側の「壊れた1行で起動を止めない」という既存の判断
- * （`packages/storage-pg/src/sessions.ts`）と同じである。
- *
- * **本文（ファイルの中身・行の値そのもの）は出さない。** 理由は
- * `noteDroppedRecord` と同じ（#52）——`what` は呼び出し側が書く固定文言、
- * `reasonOf(error)` が返すのは例外の1行目だけである。
- *
- * @param what 何を読もうとしたか（固定文言。呼び出し側が書く）。
- * @param error 読み出し（`readFile` / `JSON.parse` / zod の検証 / pg の
- *   クエリ）が実際に投げた理由。
+ * `noteDroppedRecord`（書き込み失敗の文言）にも `noteUnreadableRecord` にも寄せない: この行だけが
+ * 「無かった」と「読めなかった」を区別できる。呼び出し側は ENOENT・該当行なしのときは呼ばないので、
+ * この行が出ていれば「在ったのに読めなかった」で、出ていなければ `null` は「無かった」を意味する。
+ * 「無い」として扱ったので起動は止めていないことも行に書く（読み手が起動停止と取り違えない）。
+ * 例外は投げない: 呼び出し側はこの後も `null` を返す。握り潰しをやめて起動しなくなるのが最悪の着地。
  */
 export function noteSessionMaterialUnreadable(what: string, error: unknown): void {
   note(
@@ -1464,40 +798,15 @@ export function noteSessionMaterialUnreadable(what: string, error: unknown): voi
 }
 
 /**
- * クローンのセッション id を器へ控えられなかったことを stderr へ1行残す
- * （issue #1157）。
+ * クローンのセッション id を器へ控えられなかったことを stderr へ1行残す。
  *
- * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」で
- * 終わり、本当の帰結を言わないからである**（`noteInboxEventKeptInMemoryOnly` /
- * `noteInboxEventLost` / `noteSessionMaterialUnreadable` と同じ判断——
- * 「第三の状況には専用の文言を持たせる」）。ここでの帰結は2段に分かれていて、
- * **どちらか一方だけを言うと必ず誤って読まれる。**
+ * `noteDroppedRecord` を流用しない: 帰結が2段に分かれ、どちらか一方だけを言うと必ず誤って読まれる。
+ * 1. いま走っているセッションは失っていない（控えを読むのは `#ensureQuery` が `#query === null` のときだけ）。
+ * 2. 器が入れ替われば resume されず新しいセッションが始まる。しかもその始まり方は
+ *    初回起動や意図して捨てた（`setCloneSessionId(null)`）場合と同じ `null` で、正常な経路として通る。
+ *    この行だけがその3つを区別する材料を持つ。
  *
- * 1. **いま走っているセッションは失っていない。** 控えを読むのは
- *    `#ensureQuery` が `this.#query === null` のときだけで（＝起動時と、
- *    畳んで作り直すとき）、走っているセッションはメモリ上の `#query` が
- *    持っている。⟹ このプロセスが生きているあいだ、この失敗は1文字も表に
- *    出ない。**「セッションが落ちた」と読ませないこと。**
- * 2. **器が入れ替われば（再起動・デプロイ）、このセッションは resume されない。**
- *    次の起動の `getCloneSessionId()` は控え損ねた id を返せないので、
- *    クローンは新しいセッションを始める。
- *
- * **⭐ そしてその始まり方は、正常な経路と1文字も違わない。** `null` は
- * 「まだ一度も控えていない」（初回起動）とも「意図して捨てた」
- * （`setCloneSessionId(null)`）とも同じ値であり、**resume を諦めたことは
- * 「素材が無かった」という正常な経路として通る。** ⟹ **この行だけが、その
- * 3つを区別する材料を持つ**——それがこの関数の存在理由である。
- *
- * **投げない。** ここは `#apply` の `session_started` の延長で、**控えに失敗した
- * ことでセッションそのものを殺してはいけない**（文脈を失うほうが高くつく。
- * `noteDroppedRecord` 冒頭の doc と同じ判断であり、同じファイルの
- * `#noteContextWindowFold` が `setCloneSessionId(null)` について
- * 「投げない」と決めているのと同じ向きである）。
- *
- * **本文は出さない。** セッション id そのものを載せない——理由は
- * `noteDroppedRecord` と同じ（#52。stderr は器の外へ出ていく）。
- *
- * @param error `SessionRegistry.setCloneSessionId` が実際に投げた理由。
+ * 投げない: 控えに失敗したことでセッションそのものを殺してはいけない。セッション id そのものは載せない。
  */
 export function noteCloneSessionIdNotRecorded(error: unknown): void {
   note(

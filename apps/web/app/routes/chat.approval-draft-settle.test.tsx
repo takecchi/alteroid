@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 会話の中の承認カードも、承認の画面と同じ規則で書きかけを畳む。送った分だけ消し、
- * 応答を待つ間に打ち足した分と、送らなかった本文は残す。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -77,13 +73,11 @@ function setup(options: { settled?: boolean; answeredAtStart?: boolean } = {}) {
       <RouterProvider router={router} />
     </Providers>,
   );
-  // 既定は取り直しを未回答のまま返す。カードが回答済みへ変わると欄ごと消えるので、残った中身を見られない。
   return { release, answers: () => answers };
 }
 
 const LEFTOVER = '送らなかった下書きが残っている承認';
 
-/** 送信中はボタンが止まる。 */
 function sending(): boolean {
   return (screen.getByRole('button', { name: '許可' }) as HTMLButtonElement).disabled;
 }

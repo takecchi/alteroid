@@ -14,12 +14,6 @@ import {
 import { createMemoryStores } from './testing.js';
 import { createCloneTools, type ToolContext } from './tools.js';
 
-/**
- * クローンが担い手へ添付を引き渡す道具（`manager_start` / `manager_send` の `attachments`。Issue #3111 段3）の、
- * デーモン側。runner への命令の本文に中身（base64）が載ること、見つからない添付・上限超えでは命令を送らないこと、
- * 日誌にはメタデータの参照だけが残ることを確かめる。
- */
-
 interface Fake {
   runner: RunnerClient;
   starts: RunnerStartCommand[];
@@ -147,7 +141,6 @@ describe('manager_start の attachments（Issue #3111 段3）', () => {
         },
       ],
     });
-    // 中身（base64 も元のバイト列も）はどの日誌行にも写らない。
     expect(JSON.stringify(journal)).not.toContain(Buffer.from(BYTES).toString('base64'));
     await stop();
   });
@@ -279,7 +272,6 @@ describe('manager_send の attachments（Issue #3111 段3）', () => {
     const { stores, call, stop } = await harness(fake);
     const started = await call('manager_start', { request: '最初' });
     const managerId = /マネージャー (\S+) を起こした/.exec(started)?.[1] ?? '';
-    // resume には sessionId が要る。
     fake.emit({ type: 'session', managerId, sessionId: 'sess-1' });
     const meta = await stores.attachments.put({
       name: 'a.txt',
@@ -300,7 +292,6 @@ describe('manager_send の attachments（Issue #3111 段3）', () => {
     const fake = fakeRunner({ capable: true });
     const { stores, pool, stop } = await harness(fake);
     const started = await pool.start({ request: '最初' });
-    // 確認待ちが立った（回答として扱われる状況）。
     fake.emit({
       type: 'ask',
       managerId: started.managerId,
@@ -350,7 +341,6 @@ describe('runner が名乗った本文の上限での検め（hello.attachmentBo
     expect(started).toContain('runner が名乗った値');
     expect(fake.starts).toEqual([]);
 
-    // 添付なしで起こしてから、送る側も検める。
     const ok = await call('manager_start', { request: '最初' });
     const managerId = /マネージャー (\S+) を起こした/.exec(ok)?.[1] ?? '';
     const sent = await call('manager_send', { managerId, message: 'これ', attachments: [big.id] });
@@ -375,7 +365,6 @@ describe('runner が名乗った本文の上限での検め（hello.attachmentBo
   });
 
   it('上限を名乗らない runner は、デーモン側の既定値（runnerAttachmentBodyLimit）で検める', async () => {
-    // デーモンの合計上限を小さくすると既定の本文上限も小さくなる（約 2.1MiB）。
     vi.stubEnv('ALTEROID_ATTACHMENT_MAX_TOTAL_BYTES', '1000');
     const fake = fakeRunner({ capable: true });
     const { stores, call, stop } = await harness(fake, {

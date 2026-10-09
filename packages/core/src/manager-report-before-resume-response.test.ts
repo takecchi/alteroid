@@ -73,15 +73,9 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
     };
   }
 
-  /**
-   * `manager-abort-moved.test.ts` の `fakeRunner` と同じ形だが、`connect()` が
-   * 受け取った `onEvent` を `emit` として外へ持ち出す（テストから runner 発の
-   * 出来事を流すため）。
-   */
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
-    // resume の応答が名乗るセッションの世代（Issue #3170）。省略は「名乗らない古い runner」。
     sessionGeneration?: string,
   ): {
     client: RunnerClient;
@@ -100,7 +94,6 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
         holder.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この試験群では使わない。 */
         return {};
       },
       async resume(command): Promise<{ cwd?: string; sessionGeneration?: string }> {
@@ -196,7 +189,6 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
       return result;
     };
     fake.addClient(runnerA.client);
-    // 応答の後の最初の台帳書き込み（窓はまだ開いている）の中で、新しいセッションの closed(done) が届く。
     let injected = false;
     const originalPut = stores.jobs.putJob.bind(stores.jobs);
     stores.jobs.putJob = async (job) => {
@@ -224,7 +216,6 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
     await pool.abort('mgr-does-not-exist');
     const reattach = pool.reattachRunner('runner-a');
     await enteredResume;
-    // 新しいセッションの report が、応答より先に届き、窓に預けられる。
     runnerA.emit?.({
       type: 'report',
       managerId: 'mgr-same',
@@ -271,8 +262,6 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
       return result;
     };
     fake.addClient(runnerA.client);
-    // 応答の後の最初の台帳書き込み（窓はまだ開いている）の中で、新しいセッションの closed(lost) が届く。
-    // 預けた report は無い（列は空）ので、その場で処理され、窓が閉じる前に台帳へ lost が書かれる。
     let injected = false;
     let statusWhileWindowOpen: string | undefined;
     const originalPut = stores.jobs.putJob.bind(stores.jobs);
@@ -344,7 +333,6 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
     await pool.abort('mgr-does-not-exist');
     const reattach = pool.reattachRunner('runner-a');
     await enteredResume;
-    // 新しいセッション（resume が作った gen-new）の report が、resume の HTTP 応答より先に届く。
     runnerA.emit?.({
       type: 'report',
       managerId: 'mgr-same',
@@ -354,7 +342,6 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
       sessionGeneration: 'gen-new',
     });
     for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
-    // 応答が遅れた（時計が進む）。
     clock.now += 5_000;
     release();
     await reattach;
@@ -369,15 +356,10 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
     for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
     await pool.stop();
     const after = inbox.slice(before).map((e) => JSON.stringify(e));
-    // 比較の足場: report 自体は受信箱へ届いている。
     expect(inbox.map((e) => JSON.stringify(e)).join('\n')).toContain('新しいセッションの報告');
     expect(after.join('\n')).not.toContain('report を出さないまま');
   });
 
-  /**
-   * 窓の間（resume の応答の前）に report を1本流し、応答を返して窓を閉じるまでを行う（#3234 の歯の足場）。
-   * `resumeFails` なら応答は 503 で失敗する（受理されない）。実時間では待たない（#2146）。
-   */
   async function reportInWindow(options: {
     resumeGeneration?: string;
     reportGeneration?: string;
@@ -438,7 +420,6 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
       resumeGeneration: 'gen-new',
       reportGeneration: 'gen-old',
     });
-    // 比較の足場: 台帳は resume が受理された状態（running）で、元の lastReport が残っている。
     expect(job?.status).toBe('running');
     expect(job?.lastReport).toBe('途中まで進めた');
     expect(job?.lastReportAt).toBeUndefined();

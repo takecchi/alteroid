@@ -104,11 +104,6 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
     };
   }
 
-  /**
-   * `manager-abort-moved.test.ts` の `fakeRunner` と同じ形だが、`connect()` が
-   * 受け取った `onEvent` を `emit` として外へ持ち出す（テストから runner 発の
-   * 出来事を流すため）。
-   */
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
@@ -129,7 +124,6 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
         holder.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この試験群では使わない。 */
         return {};
       },
       async resume(command): Promise<{ cwd?: string }> {
@@ -201,7 +195,6 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
     };
   }
 
-  /** runner-a → runner-b への引き取りを組み立て、両方の runner の emit を返す。 */
   async function setupRelocated(): Promise<{
     stores: ReturnType<typeof createMemoryStores>;
     runnerA: ReturnType<typeof fakeRunner>;
@@ -236,10 +229,7 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
       now: () => FIXED_NOW,
     });
 
-    // **`#ensureConnected()` を先に踏ませる。** `abort()` / `send()` はどちらも
-    // 冒頭でこれを呼び、名簿に居る全 runner へ `connect()` する——これが
-    // 素の pool が実際に SSE を張る唯一の経路である。存在しない managerId を
-    // 使い、副作用（connect）だけを踏む。
+    // 存在しない managerId で `abort()` を呼び、名簿の全 runner への `connect()` だけを踏ませる。
     await pool.abort('mgr-does-not-exist');
 
     return { stores, runnerA, runnerB, pool, inbox };
@@ -247,7 +237,6 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
 
   async function relocate(s: Awaited<ReturnType<typeof setupRelocated>>): Promise<void> {
     const { stores, runnerB, pool } = s;
-    // runner-b が同じ委譲を引き取る（reattach）。
     await pool.reattachRunner('runner-b');
     expect(runnerB.resumes.map((c) => c.managerId)).toEqual(['mgr-race']);
     const afterReattach = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-race');
@@ -259,21 +248,17 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
   it('runner-a の最後の累積が、runner-b へ移った後に遅れて届いても、記録済みの分を二重に積まない', async () => {
     const s = await setupRelocated();
     const { stores, runnerA, runnerB } = s;
-    // runner-a で累積 10 を記録（引き取り前）。
     runnerA.emit?.(usageEvent(10));
     await settle();
     expect(await costOf(stores)).toBe(10);
 
     await relocate(s);
-    // runner-b が resume して、累積が 0 から数え直される（本物の数え直し）。最初の読みは 1。
     runnerB.emit?.(usageEvent(1));
     await settle();
     expect(await costOf(stores)).toBe(11);
 
-    // runner-a の畳む直前の読み（累積 10 のまま）が遅れて届く。
     runnerA.emit?.(usageEvent(10));
     await settle();
-    // 直す前は、基準 1 に対する 10 の「差分 9」が積まれて 20 になる。
     expect(await costOf(stores)).toBe(11);
   });
 
@@ -286,7 +271,6 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
     runnerB.emit?.(usageEvent(1));
     await settle();
 
-    // 最後の読みの時点で、runner-a の累積は 10 から 12 に増えていた（記録されていない 2）。
     runnerA.emit?.(usageEvent(12));
     await settle();
     expect(await costOf(stores)).toBe(13);
@@ -306,14 +290,12 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
   it('古い runner の前回の累積を覚えていないとき（再起動後など）は積まず、日誌に跡を残す', async () => {
     const s = await setupRelocated();
     const { stores, runnerA, runnerB } = s;
-    // runner-a の累積を一度も受け取らないまま移る。
     await relocate(s);
     runnerB.emit?.(usageEvent(1));
     await settle();
 
     runnerA.emit?.(usageEvent(10));
     await settle();
-    // 記録済みの分が分からない。積めば過大になりうるので積まない（取りこぼしの恐れは日誌に残す）。
     expect(await costOf(stores)).toBe(1);
   });
 
@@ -335,7 +317,6 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
     const stores = createMemoryStores();
     await stores.jobs.putJob(jobWith('mgr-race', 'runner-a'));
 
-    /** Pool を起こす（再起動は、同じ store で作り直すこと）。 */
     async function boot() {
       const fake = createFakeRegistry();
       fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
@@ -354,21 +335,18 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
       return { pool, runnerA, runnerB };
     }
 
-    // 再起動の前: runner-a で累積 10。
     const before = await boot();
     before.runnerA.emit?.(usageEvent(10));
     await settle();
     expect(await costOf(stores)).toBe(10);
     await before.pool.stop();
 
-    // 再起動の後（メモリの控えは無い）: runner-b が引き取り、累積 1。
     const after = await boot();
     await after.pool.reattachRunner('runner-b');
     after.runnerB.emit?.(usageEvent(1));
     await settle();
     expect(await costOf(stores)).toBe(11);
 
-    // runner-a の遅れた累積 12（前回報告した 10 からの増えは 2）。
     after.runnerA.emit?.(usageEvent(12));
     await settle();
     expect(await costOf(stores)).toBe(13);

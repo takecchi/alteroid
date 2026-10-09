@@ -12,10 +12,6 @@ describe('PracticeStore — 仕事のやり方を器に持つ（#1055 段3）', 
 
   it('⭐ やり方が1件も無いのは正常な状態である（空が前提を崩さない）', async () => {
     const stores = createMemoryStores();
-    // 受け入れ基準「やり方が書かれていない仕事も普通に進む」。**空で落ちる器は
-    // これを満たせない。** 「未設定」という異常状態を作らない。
-    // 戻り型が `{ entries, unreadable }` になった（issue #2346）。対照: 本当に0件なら
-    // 読めない行も無い（「正常」と言えるのは、この2つがどちらも空のときだけ）。
     expect(await stores.practices.list()).toEqual({ entries: [], unreadable: [] });
     expect(await stores.practices.read('nothing-here')).toBeNull();
     expect(await stores.practices.clear()).toBe(0);
@@ -24,8 +20,7 @@ describe('PracticeStore — 仕事のやり方を器に持つ（#1055 段3）', 
 
   it('⭐ `kind` は自由文字列である（知らない種類を器が弾かない）', async () => {
     const stores = createMemoryStores();
-    // ⛔ 列挙にした瞬間に「仕事の種類の一覧」を実装側が決めることになる
-    // （`practiceKindSchema` の doc / north_star「実装専用に狭めるな」）。
+    // 列挙にしない: 仕事の種類の一覧を実装側が決めることになる（north_star「実装専用に狭めるな」）。
     for (const kind of [
       '実装',
       '調査',
@@ -46,10 +41,8 @@ describe('PracticeStore — 仕事のやり方を器に持つ（#1055 段3）', 
   });
 
   it('⭐ schema に「実行される」欄が無い（器が実行を強制しない）', () => {
-    // ⛔ **この歯は、将来この器へ `steps` / `required` / `enforce` /
-    // `commands` の類を足そうとしたときに赤くなるためだけに在る。**
-    // 足した時点でクローンは「制限された自動化ジョブ」に戻る（north_star）。
-    // 赤くなったら、直すのは歯ではなく足したほうである。
+    // `steps` / `required` / `enforce` / `commands` の類を足すと赤くなる。
+    // 足すとクローンが「制限された自動化ジョブ」に戻る（north_star）ので、直すのは歯ではなく足したほう。
     const keys = Object.keys(practiceSchema.shape).sort();
     expect(keys).toEqual(['chars', 'content', 'createdAt', 'kind', 'slug', 'title', 'updatedAt']);
   });

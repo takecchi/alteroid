@@ -16,28 +16,6 @@ import {
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **done の委譲へ `send` するとき、認証トークンの世代が食い違っていたら、旧セッションへ
- * 流し込まずに新しい鍵で起こし直してから続ける**（Issue #2851）。
- *
- * ## 症状
- *
- * 鍵が 59 → 60 に回った後、done だった委譲（セッションは runner に生きている。
- * 台帳の `attached` は true のまま）へ `manager_send` すると、`send()` は
- * `runner.send()` で旧プロセスへ追加指示を積むだけで、新しいセッションを起こさない。
- * 旧プロセスの env は凍っているので、また古い鍵で 429 になる。しかも
- * `#tokenIdentities` も更新されないので、`manager_list` の ⚠ も消えない。
- * failed（`attached` が false）は resume に落ちるので新しい鍵になる。
- *
- * ## ここが固定するもの
- *
- * - 食い違う done・背景処理 0 本: stop → resume（同じ sessionId・同じ message）。`runner.send` は呼ばない
- * - 背景処理が1本以上 / 確認待ちが在る / 本数が分からない（欄の無い古い runner）:
- *   **畳まず、旧セッションへも流さず**、`declined` で断る（detail に何が残っているかと取れる手）
- * - 世代が一致・running なら従来どおり push（割り込まない）
- * - 版が混ざる窓（欄あり・欄なし）で zod が落ちない
- */
-
 const JOB: Job = {
   id: 'mgr-stale',
   managerId: 'mgr-stale',
@@ -51,7 +29,6 @@ const JOB: Job = {
   runnerId: 'runner-primary',
 };
 
-/** 載っているセッションの runner 側の状態を操れる偽 runner。 */
 function staleRunner() {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
@@ -59,9 +36,7 @@ function staleRunner() {
   const resumes: RunnerResumeCommand[] = [];
   const stops: string[] = [];
   const behavior: {
-    /** `list()` が返す `liveBackgroundTasks`。`'absent'` は欄そのものを返さない（古い runner）。 */
     background: number | 'absent';
-    /** `stop()` を受けても一覧から消さない（畳めなかった回を作る）。 */
     stopIgnored: boolean;
     waiting: RunnerManagerState['waiting'];
   } = { background: 0, stopIgnored: false, waiting: [] };
@@ -156,7 +131,6 @@ async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/** 枠の失敗でターンが終わった回の報告（セッションは生きている）。 */
 function failedReport(): RunnerEvent {
   return {
     type: 'report',
@@ -167,10 +141,6 @@ function failedReport(): RunnerEvent {
   } as RunnerEvent;
 }
 
-/**
- * 世代 59 で起きた委譲が、枠に当たって done になり、その後に現役が 60 へ回った状態を作る。
- * `restore()` が resume を投げる瞬間に世代 59 を控える（`#rememberTokenIdentity`）。
- */
 async function setup(options: { job?: Job } = {}) {
   const stores = createMemoryStores();
   await stores.jobs.putJob(options.job ?? JOB);
@@ -214,14 +184,11 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
     const result = await s.pool.send('mgr-stale', '続きをお願い');
 
     expect(result.outcome).toBe('delivered');
-    // 旧プロセスへは流さない。
     expect(s.fake.sends).toHaveLength(0);
-    // 畳んでから、同じ会話（sessionId）で、同じ本文を添えて開き直す。
     expect(s.fake.stops).toEqual(['mgr-stale']);
     expect(s.fake.resumes).toHaveLength(1);
     expect(s.fake.resumes[0]?.sessionId).toBe('sess-1');
     expect(s.fake.resumes[0]?.message).toContain('続きをお願い');
-    // 抱えている世代が追いつき、⚠ は消える。
     const after = await summaryOf(s.pool);
     expect(after.tokenGeneration).toBe(60);
     expect(after.activeTokenGeneration).toBe(60);
@@ -294,7 +261,6 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
   });
 
   it('⚠️ sessionId が無く会話を引き継げない done は、畳まずに断る（黙って会話を切らない）', async () => {
-    // `start()` したばかりで、runner がまだ session を名乗っていない委譲を作る（sessionId が無い）。
     const stores = createMemoryStores();
     const fake = staleRunner();
     const registry = createRunnerRegistry([fake.runner]);
@@ -345,7 +311,6 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
     const s = await setup();
     s.rotate();
     const summary = await summaryOf(s.pool);
-    // 観測（10秒ごとの生存確認）はこの偽 runner では走らないので、欄は無い。
     expect(summary.liveBackgroundTasks).toBeUndefined();
     await s.pool.stop();
   });

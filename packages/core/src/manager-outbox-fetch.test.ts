@@ -38,7 +38,6 @@ interface FakeRunner {
   deleted: string[];
 }
 
-/** `contents` は fileId ごとの中身。無い id は 404（`undefined`）。値が関数なら呼んで返す（投げる・止まるを作る）。 */
 function fakeRunner(
   contents: Record<string, RunnerOutboxContent | (() => Promise<RunnerOutboxContent>)>,
   options: { deleteFails?: boolean } = {},

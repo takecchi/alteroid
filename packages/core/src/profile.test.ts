@@ -15,32 +15,12 @@ import {
   PROFILE_SOURCED_ENV_KEY,
 } from './profile.js';
 
-/**
- * 実行環境プロファイル（`.zprofile` 相当）。
- *
- * ここで固定しているのは4つ。
- *
- * 1. **人間が書いた1本のスクリプトで環境が増やせる**（実装を直さずに済む）
- * 2. **上（記憶）へ到達する鍵は、本文が何を書いても配らない**
- * 3. **壊れたものは置かない**（置くと以後すべてのコマンドが壊れた環境で走る）
- * 4. **入れ子の bash で無限再帰しない**（`BASH_ENV` は継承される）
- */
-
 let dir: string;
 
 beforeEach(() => {
   dir = makeTempDirSync('alteroid-profile-');
 });
 
-/**
- * 実物の bash に `BASH_ENV` として読ませて、1行を出させる。
- *
- * **スクリプトファイルとして起こす。** ここで見たいのは「読まれたときに後始末が
- * 効くか」なので、読まれる形で起こす。**`bash -c` でも読まれる**（読まないのは
- * 対話シェルだけ。下の `describe('BASH_ENV が読まれる条件')` が実物で測っている）
- * — かつてここには「`bash -c` は stdin が端末でないと読まない」と書いてあったが、
- * 実物は逆である。
- */
 function viaBashEnv(dir: string, script: string, profilePath: string): string {
   const runner = join(dir, `run-${randomUUID().slice(0, 8)}.sh`);
   writeFileSync(runner, `${script}\n`);
@@ -51,24 +31,8 @@ function viaBashEnv(dir: string, script: string, profilePath: string): string {
 }
 
 /**
- * 同じプロファイルを2回 source して、本文が走った回数（`COUNT`）を出させる。
- *
- * **器の番人を継承しないよう env を明示する。** `execFileSync` は `env` を渡さないと
- * 親の `process.env` をそのまま継承する。この器は `BASH_ENV` にプロファイルを指して
- * いるので、**入れ子の bash 越しに `pnpm test` を起こすと `ALTEROID_PROFILE_SOURCED`
- * が立った状態で vitest の fork ワーカーまで降りてくる**（機序と実測は `profile.ts` の
- * module doc）。継承したままだと、ここで測りたい本文が**一度も走らずに**空文字が返り、
- * 「無限再帰しない」の歯が**呼び出し経路のせいで**赤くなる（PR #749 / #759 が実際に
- * 踏み、どちらも原因を追わずに範囲外へ上げた）。
- *
- * **測っている内容は変えていない。** 見たいのは「同じファイルを2回 source しても本文が
- * 1回しか走らないこと」で、そのためには**番人が立っていない状態から始める**必要がある。
- * ⟹ `env` を空にするのは対象を特定する側の変更であって、保証を緩める側ではない
- * （同じ describe の他の assert も `env: {}` で揃えてある）。
- *
- * **共有にしてあるのは、密閉が片方だけ外れないようにするためである。** 下の2本（素の場合と、
- * 親に番人が立っている場合）が同じ呼び出しを通るので、**ここから `env` を外すと後者が
- * 赤くなる。**
+ * 器の番人を継承しないよう env を明示する: 継承すると（機序は `profile.ts` の module doc）
+ * 本文が一度も走らず空文字が返り、「無限再帰しない」の歯が呼び出し経路のせいで赤くなる。
  */
 function sourceTwiceAndCount(profilePath: string): string {
   return execFileSync('/bin/sh', ['-c', `. "$0"; . "$0"; printf %s "$COUNT"`, profilePath], {
@@ -83,7 +47,6 @@ describe('器に置く形', () => {
 
     expect(rendered).toContain('export FOO=1');
     expect(rendered).toContain(PROFILE_SOURCED_ENV_KEY);
-    // 本文 → 関数の呼び出し → `unset` の順に並んでいること。**この順序が要件である。**
     const body = rendered.indexOf('export FOO=1');
     const call = rendered.indexOf('__alteroid_profile_body "$@"');
     const cleanup = rendered.indexOf('unset ALTEROID_DATABASE_URL');
@@ -92,26 +55,12 @@ describe('器に置く形', () => {
     expect(cleanup).toBeGreaterThan(call);
   });
 
-  /**
-   * **本文の `return` で後始末を飛ばせないこと。**
-   *
-   * source されたファイルの中の `return` は、`if` から抜けるのではなく
-   * **そのファイルの読み込みそのもの**から戻る。本文を直に置いていた頃は、
-   * `[ -f ~/.foo ] || return 0` のような普通の早期リターン1つで末尾の `unset` に
-   * 到達しなくなり、伏せるはずの鍵が `BASH_ENV` 経由でそのまま残っていた。
-   *
-   * **実物のシェルに読ませて確かめる。** Node 側の評価だけを見ていたせいで、
-   * 「検査は通るのに実物は漏れている」を見逃した（そちらには Node のフィルタが
-   * あり、`BASH_ENV` の経路には無い）。
-   */
   it('本文の return で、伏せる鍵の unset を飛ばせない', async () => {
     const path = join(dir, 'profile.sh');
     const vessel = createProfileVessel({ path, withheldEnvKeys: ['ALTEROID_DATABASE_URL'] });
     await vessel.set('export ALTEROID_DATABASE_URL=postgres://injected\nreturn 0');
 
-    // ① `BASH_ENV` として読まれた場合
     expect(viaBashEnv(dir, 'echo "[${ALTEROID_DATABASE_URL:-}]"', path)).toBe('[]');
-    // ② `gh` のシムと評価が通る経路（sh の source）
     expect(
       execFileSync('/bin/sh', ['-c', `. "$0"; echo "[\${ALTEROID_DATABASE_URL:-}]"`, path], {
         encoding: 'utf8',
@@ -125,32 +74,19 @@ describe('器に置く形', () => {
     const vessel = createProfileVessel({ path });
     await vessel.set('export BEFORE=1\n[ -f /nonexistent ] || return 0\nexport AFTER=1');
 
-    // `return` より前は効き、後は走らない ＝ 人間が普通に期待する挙動
     expect(viaBashEnv(dir, 'echo "${BEFORE:-none} ${AFTER:-none}"', path)).toBe('1 none');
   });
 
   it('入れ子のシェルで本文を二度読まない（無限再帰しない）', () => {
     const path = join(dir, 'profile.sh');
     const vessel = createProfileVessel({ path });
-    // 本文がコマンドを走らせる形。番人が無いと、`BASH_ENV` を継承した内側の
-    // シェルが同じ本文をまた読み、そのまま無限に降りていく。
     return vessel.set('COUNT="${COUNT:-0}"; COUNT=$((COUNT + 1)); export COUNT').then(() => {
       expect(sourceTwiceAndCount(path)).toBe('1');
     });
   });
 
-  /**
-   * **密閉の固定点。** 直上の歯は、親の環境に器の番人（`ALTEROID_PROFILE_SOURCED`）が
-   * 立っていない限り、**密閉が外れても緑のままである** — だからあれだけでは、
-   * `sourceTwiceAndCount` から `env` が消えたことを捕まえられない。⟹ **捕まえるには、
-   * 親に番人が立っている状態で同じ呼び出しを通すしかない。**
-   *
-   * ⚠️ **このテストは自分で `process.env` を書く。それはまさにこのファイルが測っている
-   * 汚染の形である。** だから `finally` で**元の状態へ厳密に戻す**（元が `undefined` なら
-   * `delete`、値が在ればその値へ）。同じファイルのテストは直列に走るので、戻し切れば
-   * 他の歯には届かない。**`afterEach` へ置かないのは、書いた場所と戻す場所を離すと
-   * 「戻し忘れ」が別の編集で生まれるからである。**
-   */
+  // 直上の歯は親に番人が立っていないと密閉が外れても緑のままなので、親に番人を立てて捕まえる。
+  // `afterEach` へ置かない: 書いた場所と戻す場所を離すと戻し忘れが別の編集で生まれる。
   it('親の環境に器の番人が立っていても同じ結果になる（密閉が外れたら赤くなる）', async () => {
     const path = join(dir, 'profile.sh');
     const vessel = createProfileVessel({ path });
@@ -173,30 +109,8 @@ describe('器に置く形', () => {
   });
 });
 
-/**
- * **`BASH_ENV` が読まれる条件を、実物の bash で測る。**
- *
- * この repo は長らく「`bash -c`（stdin が端末でない）では `BASH_ENV` を読まない」と
- * 書いていた。**実物の挙動は逆である。読まないのは対話シェルだけ**で、`bash -c` も
- * `bash -lc` も読む。「stdin が端末でない」という条件は、bash の実際の挙動とは
- * **逆向き**である（端末でないほうが読む側である）。
- *
- * **この誤りは事故になった**（2026-09-05）。委譲先が対照実験のために
- * `env -u <鍵> …` で鍵を外して走らせたが、入れ子の `bash -c` が `BASH_ENV` から
- * プロファイルを読み直して鍵を再 `export` したため、**外れないまま本物の API を
- * 叩いた。** 外れなかったことは**エラーにならない** — 鍵が在るので動いてしまう。
- *
- * **コメントは実行されないが、歯は実行される。** 誤った記述は6箇所に分かれて
- * 3週間以上残り、そのどれも赤くならなかった。ここが赤くなったら、**記述のほうを
- * 実物に合わせ直すこと**（この歯を緩めるのではなく）。
- */
 describe('BASH_ENV が読まれる条件', () => {
-  /**
-   * 実物の bash を、**器の環境を1つも継がずに**起こす（`env -i` に当たる）。
-   *
-   * 継ぐと、測っているものが器の状態に依存するうえ、**器が配っている本物の鍵が
-   * 測定対象に混ざる。** この歯が触ってよいのはダミーだけである。
-   */
+  // 器の環境を継がない: 測定が器の状態に依存し、器が配っている本物の鍵が混ざる。
   const marker = (args: readonly string[], profilePath: string): string =>
     execFileSync('/bin/bash', [...args, 'printf %s "${ALTEROID_PROFILE_TEST_MARKER:-none}"'], {
       encoding: 'utf8',
@@ -223,22 +137,11 @@ describe('BASH_ENV が読まれる条件', () => {
     expect(marker(['-ic'], path)).toBe('none');
   });
 
-  /**
-   * **帰結。これが事故の形そのものである。**
-   *
-   * `env -u <名前>` が作るのは「その名前を持たない env」である。そこに `BASH_ENV`
-   * が残っていると、起きた bash がプロファイルを読み直して**同じ名前を入れ直す。**
-   * 外したい側は **`BASH_ENV` も一緒に外す**必要がある。
-   *
-   * 値はダミーである。**実物の鍵をこの歯に持ち込まないこと。**
-   */
   it('env から名前を外しても、BASH_ENV が残っていればプロファイルが入れ直す', async () => {
     const vessel = createProfileVessel({ path });
     await vessel.set('export ALTEROID_PROFILE_TEST_MARKER=read');
 
-    // `env -u ALTEROID_PROFILE_TEST_MARKER` に当たる env（その名前を持たない）
     expect(marker(['-c'], path)).toBe('read');
-    // `BASH_ENV` も一緒に外した場合だけ、外したものが外れたままになる
     expect(
       execFileSync('/bin/bash', ['-c', 'printf %s "${ALTEROID_PROFILE_TEST_MARKER:-none}"'], {
         encoding: 'utf8',
@@ -262,27 +165,12 @@ describe('評価', () => {
     expect(result.env.PATH).toBe('/opt/bin:/usr/bin');
   });
 
-  /**
-   * **器と OS が勝手に足した env を、プロファイルの仕業として報告しない。**
-   *
-   * macOS では CoreFoundation が `__CF_USER_TEXT_ENCODING` を**どの子へも**注ぐので、
-   * `export SOME_API_TOKEN=...` だけのプロファイルが
-   * `names: ['SOME_API_TOKEN', '__CF_USER_TEXT_ENCODING']` を返していた。
-   * Linux では注がれないため CI は緑で、**手元でだけ落ちる**形だった（＝「たまたま
-   * 踏まなかった」側であって、直っていたわけではない）。
-   *
-   * **ここで OS の注入をあてにしない。** `__CF_USER_TEXT_ENCODING` を直接見る形にすると
-   * Linux では何も起きない ＝ CI に歯が無いままになる。だから env を吐かせる node を
-   * 「先に1つ export してから本物へ渡すラッパ」に差し替えて、**注ぐ側と同じ条件**を
-   * どの OS でも作る。ベースライン計測を外すとこのテストは Linux でも落ちる。
-   */
   it('器と OS が足した env は差分に混ぜない（本文が置いた分だけを報告する）', async () => {
     const path = join(dir, 'profile.sh');
     const vessel = createProfileVessel({ path });
     await vessel.set('export FROM_PROFILE=1');
 
-    // 本物の node の手前で1つ export する ＝ CoreFoundation が注ぐのと同じ形。
-    // 本文を読む側にも読まない側にも等しく現れるので、打ち消えるのが正しい。
+    // OS の注入（macOS の CoreFoundation）をあてにすると Linux の CI に歯が無くなるので、ラッパで同じ条件を作る。
     const wrapper = join(dir, 'node-with-noise.sh');
     writeFileSync(
       wrapper,
@@ -293,18 +181,11 @@ describe('評価', () => {
     const result = await evaluateProfile({ path, baseEnv: {}, nodePath: wrapper });
 
     expect(result.error).toBeUndefined();
-    // 本文が置いた分は載る（打ち消しが行きすぎて全部消えたのではない）
     expect(result.env.FROM_PROFILE).toBe('1');
-    // 器が注いだ分は載らない
     expect(result.env.INJECTED_BY_VESSEL).toBeUndefined();
     expect(Object.keys(result.env)).toEqual(['FROM_PROFILE']);
   });
 
-  /**
-   * 上のテストの**実物での立会人**。macOS でだけ意味を持つ（Linux には注ぐ主体が
-   * 居ないので素通りする）。歯を持っているのは上のラッパ版で、こちらは
-   * 「報告された症状そのもの」を実物で1度押さえておくためにある。
-   */
   it('macOS が注ぐ __CF_USER_TEXT_ENCODING を差分に混ぜない', async () => {
     const path = join(dir, 'profile.sh');
     const vessel = createProfileVessel({ path });
@@ -316,12 +197,6 @@ describe('評価', () => {
     expect(Object.keys(result.env)).toEqual(['FROM_PROFILE']);
   });
 
-  /**
-   * issue #2429。シェルの stderr は、構文エラーで入力の行をそのまま引用し、
-   * `set -x` は値ごと吐く。`output`（と `error`）にそれが載ると `PUT /profile` の
-   * 応答・`profile_write` の戻り・CLI の表示のすべてに鍵の値が出る。
-   * 偽の値だけを使い、実物の /bin/sh と /bin/bash に吐かせる。
-   */
   describe.each(['/bin/sh', '/bin/bash'])('失敗の output に鍵の値を出さない（%s）', (shell) => {
     const FAKE = 'FAKE_SECRET_VALUE_2429';
 
@@ -365,8 +240,7 @@ describe('評価', () => {
 
     it('長い stderr は末尾4000字に切る。値は切り口をまたいでも残らない', async () => {
       const path = join(dir, 'profile.sh');
-      // 値の途中が、末尾4000字の切り口に来るよう置く（全体 4011字＋α のうち先頭11字を
-      // 切る位置に、値の中ほどが当たる）。先に切ると、割れた断片が伏せ字に合わず残る。
+      // 値の途中を切り口に当てる: 先に切ると、割れた断片が伏せ字に合わず残る。
       const body = `echo "${'x'.repeat(10)} ${FAKE} ${'y'.repeat(3_987)}" >&2\nreturn 1\n`;
       writeFileSync(path, body);
 
@@ -384,11 +258,9 @@ describe('評価', () => {
   });
 
   it('後始末が飛ばされていたら、それを検出して報告する', async () => {
-    // **抜け道を数え上げて弾く形にしない。** 数え忘れた1つがそのまま穴になる
-    // （実際に `return` を数え忘れた）。ここでは「器が `unset` を書かなかった」
-    // 状況をそのまま作り、**実測で気づけること**だけを固定する。
+    // 抜け道を数え上げて弾く形にしない: 数え忘れた1つがそのまま穴になる。
     const path = join(dir, 'profile.sh');
-    const vessel = createProfileVessel({ path }); // ← withheld を渡さない = unset が出ない
+    const vessel = createProfileVessel({ path });
     await vessel.set('export ALTEROID_DATABASE_URL=postgres://injected');
 
     const result = await evaluateProfile({
@@ -398,8 +270,6 @@ describe('評価', () => {
     });
 
     expect(result.leaked).toEqual(['ALTEROID_DATABASE_URL']);
-    // 配る env からは落ちている（黙って配らない）。それでも「落としたから良し」に
-    // しないのが要点で、実際に効く BASH_ENV の経路にこのフィルタは無い。
     expect(result.env.ALTEROID_DATABASE_URL).toBeUndefined();
   });
 
@@ -415,7 +285,6 @@ describe('評価', () => {
     });
 
     expect(result.env.OK).toBe('1');
-    // 器が書いた `unset` と、評価側の削除の二重。どちらか片方でも通る。
     expect(result.env.ALTEROID_DATABASE_URL).toBeUndefined();
   });
 
@@ -470,18 +339,14 @@ describe('置き換え', () => {
     expect(bad.ok).toBe(false);
     expect(bad.error).toBeDefined();
 
-    // **前のものがそのまま効いている。** 壊れたものを置くと、以後すべての
-    // コマンドが毎回エラーを吐く環境で走る。
     expect(applier.env().OK).toBe('1');
     expect(readFileSync(path, 'utf8')).toContain('export OK=1');
-    // 仮置きも残さない
     expect(existsSync(`${path}.tmp`)).toBe(false);
   });
 
   it('後始末が飛ばされたプロファイルは保存も配布もしない', async () => {
     const path = join(dir, 'profile.sh');
     const applier = createProfileApplier({
-      // 器が `unset` を書かない状況（＝後始末が飛ばされたのと同じ結果）を作る
       vessel: createProfileVessel({ path }),
       baseEnv: () => ({}),
       withheldEnvKeys: ['ALTEROID_DATABASE_URL'],
@@ -492,7 +357,6 @@ describe('置き換え', () => {
 
     expect(bad.ok).toBe(false);
     expect(bad.error).toContain('ALTEROID_DATABASE_URL');
-    // 前のものが残っている ＝ 置いていない
     expect(applier.env().OK).toBe('1');
     expect(readFileSync(path, 'utf8')).toContain('export OK=1');
   });
@@ -523,7 +387,6 @@ describe('置き換え', () => {
 
     expect(result.ok).toBe(true);
     expect(JSON.stringify(result)).not.toContain('super-secret');
-    // 何が増えたかは見える（届いているかの確認に要る）。値は見えない。
     expect(result.names).toContain('SOME_API_TOKEN');
   });
 });

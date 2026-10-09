@@ -1,5 +1,9 @@
+import { Readable } from 'node:stream';
+
 import {
   addToAttachmentUsage,
+  collectAttachmentStream,
+  planAttachmentStream,
   canBindAttachmentTo,
   emptyAttachmentUsage,
   isAttachmentBound,
@@ -18,6 +22,7 @@ import {
   type AttachmentMeta,
   type AttachmentUsage,
   type AttachmentPutInput,
+  type AttachmentPutStreamInput,
   type AttachmentStore,
   type AttachmentStoreOptions,
 } from './attachment.js';
@@ -36,6 +41,19 @@ export class MemoryAttachmentStore implements AttachmentStore {
     const meta = prepareAttachment(input, limits, this.#options.now?.() ?? new Date());
     this.#rows.set(meta.id, { meta, bytes: Uint8Array.from(input.bytes) });
     return meta;
+  }
+
+  /** この段（#4128 段1）では上限つきで集めてから `put` と同じ経路で入れる。 */
+  async putStream(input: AttachmentPutStreamInput): Promise<AttachmentMeta> {
+    const limits = this.#options.limits ?? readAttachmentLimits().limits;
+    const plan = planAttachmentStream(input, limits);
+    const { body, ...rest } = input;
+    return this.put({ ...rest, bytes: await collectAttachmentStream(body, plan) });
+  }
+
+  async open(id: string): Promise<{ meta: AttachmentMeta; stream: Readable } | undefined> {
+    const got = await this.get(id);
+    return got === undefined ? undefined : { meta: got.meta, stream: Readable.from([got.bytes]) };
   }
 
   async get(id: string): Promise<{ meta: AttachmentMeta; bytes: Uint8Array } | undefined> {

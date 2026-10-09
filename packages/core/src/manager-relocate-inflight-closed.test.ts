@@ -73,11 +73,6 @@ describe('移送の最中に届く元の runner の closed', () => {
     };
   }
 
-  /**
-   * `manager-abort-moved.test.ts` の `fakeRunner` と同じ形だが、`connect()` が
-   * 受け取った `onEvent` を `emit` として外へ持ち出す（テストから runner 発の
-   * 出来事を流すため）。
-   */
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
@@ -98,7 +93,6 @@ describe('移送の最中に届く元の runner の closed', () => {
         holder.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この試験群では使わない。 */
         return {};
       },
       async resume(command): Promise<{ cwd?: string }> {
@@ -213,16 +207,13 @@ describe('移送の最中に届く元の runner の closed', () => {
 
     const reattach = pool.reattachRunner('runner-b');
     await enteredResume;
-    // resume が runner-b へ飛んでいる最中（台帳の宛先はまだ runner-a）に、
-    // runner-a が自分の畳みを遅れて名乗る。
     runnerA.emit?.({
       type: 'closed',
       managerId: 'mgr-inflight',
       status: 'lost',
       reason: 'runner-a が自分で畳んだ（遅延して届いた）',
     });
-    // 実時間では待たない（#2146）。closed の処理（台帳の読み書きはメモリのストア）を、
-    // 非同期の段を流しきることで終わらせてから resume を通す。
+    // 実時間では待たず、非同期の段を流しきって closed の処理を終わらせてから resume を通す。
     for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
     release();
     await reattach;
@@ -234,7 +225,6 @@ describe('移送の最中に届く元の runner の closed', () => {
       runnerId: after?.runnerId,
       sessionsOnB: (await runnerB.client.list()).map((s) => s.managerId),
     }).toEqual({ status: 'running', runnerId: 'runner-b', sessionsOnB: ['mgr-inflight'] });
-    // runner-b は resume を受理して走っている。台帳が lost のままなら誰も走っていない仕事に見える。
     expect(after?.status).toBe('running');
     await pool.stop();
   });
@@ -281,16 +271,13 @@ describe('移送の最中に届く元の runner の closed', () => {
 
     const reattach = pool.reattachRunner('runner-b');
     await enteredResume;
-    // resume が runner-b へ飛んでいる最中（台帳の宛先はまだ runner-a）に、
-    // runner-a が自分の畳みを遅れて名乗る。
     runnerA.emit?.({
       type: 'closed',
       managerId: 'mgr-inflight',
       status: 'lost',
       reason: 'runner-a が自分で畳んだ（遅延して届いた）',
     });
-    // 実時間では待たない（#2146）。closed の処理（台帳の読み書きはメモリのストア）を、
-    // 非同期の段を流しきることで終わらせてから resume を通す。
+    // 実時間では待たず、非同期の段を流しきって closed の処理を終わらせてから resume を通す。
     for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
     release();
     await reattach;

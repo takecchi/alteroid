@@ -7,30 +7,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 /**
- * **本物の Claude Code 本体**（SDK が起こすバイナリ）が、PreToolUse のフックの
- * `updatedInput` をどう扱うかを測る（issue #2088）。
- *
- * `runner.ts` の `#onPreToolUse` は、`Bash` のツールの `timeout` 引数を
- * `permissionDecision` を付けない `updatedInput` で引き上げる
- * （`bash-tool-timeout.ts`）。これは本体の次の3つの挙動に依っている。
- * - フックの `tool_input` に `timeout` が載る
- * - `permissionDecision` を付けない `updatedInput` が適用される
- * - 書き換えた `timeout` が効く
- *
- * どれも SDK の型からは言えない（型は「持てる」までしか言わない）。そして SDK の更新は
- * 毎日の自動 PR で入り、AI の層がマージしてよい（AGENTS.md「開発手順」）。
- * **⟹ 本体の挙動が変わったら、ここが赤になって知らせる。**
- *
- * ## どう測るか（本物の資格を使わない）
- *
- * - 127.0.0.1 に偽の Anthropic API（`/v1/messages` を真似た HTTP サーバ）を立てる。
- *   要求に Bash のツールが載っていれば、1回目だけ Bash の `tool_use` を返す
- * - `query()` の `env` を明示して渡す（親の env を継がせない）。`ANTHROPIC_BASE_URL`
- *   を偽の API に向け、鍵はダミー、HOME は一時ディレクトリにする
- * - 2回目の要求に載る `tool_result` から、実際に走ったコマンドとその結果を読む
- *
- * 2026-09-29T02:2xZ に手元で同じ形を打って、SDK 0.3.283（本体 2.1.283）で
- * 3つとも成り立つことを確かめた（#2088 のコメント）。
+ * 型は「持てる」までしか言わず、SDK の更新は毎日の自動 PR で入る。本体の挙動が変われば、
+ * ここが赤になって知らせる。本物の資格は使わず、偽の API を 127.0.0.1 に立てる
+ * （`query()` の `env` を明示し、親の env を継がせない）。
  */
 
 interface Probe {

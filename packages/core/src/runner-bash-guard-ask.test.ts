@@ -13,17 +13,6 @@ import { BASH_GUARD_ENV } from './bash-guard-mode.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
-/**
- * Bash の門が、弾く形に当たったときの扱い（`ALTEROID_BASH_GUARD`、issue #2884）の配線を固定する。
- *
- * - 既定（`ask`）: `permissionDecision: 'ask'` を返す。**確認に上がる**ので、クローンが許可できる
- * - `deny`: 従来どおり実行を止める
- * - `off`: 判定器を呼ばず、何も決めない
- *
- * 本物の本体で ask が `canUseTool` に届く（作業者の Bash でも）ことは
- * `real-cli-pre-tool-use-ask.test.ts` が固定している。ここは runner の側の配線だけを見る。
- */
-
 function fakeRunnerSdk(): { fn: typeof sdkQuery; started: { options: Options }[] } {
   const started: { options: Options }[] = [];
   const fn = ((input: { options: Options }) => {

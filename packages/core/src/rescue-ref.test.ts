@@ -23,7 +23,6 @@ import type { ProcessSpawnFn } from './unpushed-work.js';
 /** 孤立サロゲート（高だけ・低だけ）。`isWellFormed()` は tsconfig の lib に無いので直接探す。 */
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-// 実 git とローカルの bare リポジトリで見る（実リポジトリへは一切送らない）。
 const GIT_ENV: Record<string, string> = {
   PATH: process.env.PATH ?? '',
   HOME: '/nonexistent',
@@ -82,7 +81,6 @@ describe('退避 ref（#1266）', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  // #3804: 上限（200）の位置に補助面の文字がまたがっても、孤立サロゲートを残さない。
   it('退避しなかった未追跡のパス名が上限で切られるとき、絵文字の途中で切らない', async () => {
     await writeFile(path.join(repo, `${'a'.repeat(199)}😀.txt`), 'x');
     await writeFile(path.join(repo, 'a.txt'), 'one\nedited\n');
@@ -116,15 +114,12 @@ describe('退避 ref（#1266）', () => {
     expect(report?.pushed?.ref).toBe(rescueRefName(managerId, repo, '.'));
     expect(report?.pushed?.ref.startsWith(RESCUE_REF_PREFIX)).toBe(true);
     expect(report?.notPushed).toBeUndefined();
-    // remote に在る。内容は追跡済みの変更を含み、未追跡は含まない。
     const ref = report?.pushed?.ref as string;
     expect(g(bare, 'rev-parse', ref).trim()).toBe(report?.pushed?.commit);
     expect(g(bare, 'show', `${ref}:a.txt`)).toBe('one\nedited\n');
     expect(g(bare, 'show', `${ref}:b.txt`)).toBe('unpushed commit\n');
     expect(g(bare, 'ls-tree', '-r', '--name-only', ref)).not.toContain('scratch.txt');
-    // 退避されなかったもの（名前だけ）。
     expect(report?.untracked).toEqual({ count: 1, paths: ['scratch.txt'], omitted: 0 });
-    // 作業ツリー・index・HEAD・reflog は動かない。refs/heads も増えない。
     expect(g(repo, 'rev-parse', 'HEAD')).toBe(before.head);
     expect(g(repo, 'status', '--porcelain')).toBe(before.status);
     expect(g(repo, 'reflog')).toBe(before.reflog);
@@ -145,7 +140,6 @@ describe('退避 ref（#1266）', () => {
     const third = await run({}, memory);
     expect(third).toHaveLength(1);
     expect(third[0]?.pushed?.commit).not.toBe(first[0]?.pushed?.commit);
-    // 同じ ref を force 更新している。
     expect(third[0]?.pushed?.ref).toBe(first[0]?.pushed?.ref);
     expect(g(bare, 'show', `${third[0]?.pushed?.ref as string}:a.txt`)).toBe('three\n');
   });
@@ -219,7 +213,6 @@ describe('退避 ref（#1266）', () => {
     const [report] = await run({}, memory);
     expect(report?.notPushed?.reason).toBe('push-failed');
     expect(report?.notPushed?.failureKind).toBeDefined();
-    // 直す。同じ HEAD・tree でも、失敗は確定させていないので再び送る。
     g(repo, 'remote', 'set-url', 'origin', bare);
     const [again] = await run({}, memory);
     expect(again?.pushed?.ref).toBeDefined();
@@ -257,7 +250,6 @@ describe('退避 ref（#1266）', () => {
     g(repo, 'worktree', 'add', '-q', '-b', 'topic', wt);
     await writeFile(path.join(wt, 'a.txt'), 'in worktree\n');
     const reports = await run();
-    // 本体（変更なし）は送るものが無く、worktree だけが送られる。
     expect(reports.map((r) => r.relativePath).sort()).toEqual(['.', 'wt']);
     const refs = reports.filter((r) => r.pushed !== undefined).map((r) => r.pushed?.ref);
     expect(refs).toHaveLength(1);
@@ -276,7 +268,6 @@ describe('退避 ref（#1266）', () => {
     expect(g(bare, 'show', `${ref}:a.txt`)).toBe('changed\n');
     expect(report?.untracked?.paths).toContain('ita.txt');
     expect(report?.untracked?.count).toBe(1);
-    // 実 index は動かない（i-t-a のまま）。
     expect(g(repo, 'status', '--porcelain')).toBe(before);
   });
 
@@ -317,7 +308,6 @@ describe('退避 ref（#1266）', () => {
     await writeFile(path.join(repo, 'a.txt'), `resolved ${fake}\n`);
     g(repo, 'add', 'a.txt');
     g(repo, 'commit', '-qm', 'merge');
-    // topic の枝も未 push だが、HEAD から辿れる未 push の差分に鍵は merge の解消にしか無い。
     const [report] = await run();
     expect(report?.notPushed?.reason).toBe('secret-like');
   });
@@ -345,13 +335,11 @@ describe('退避 ref（#1266）', () => {
 
   it('N2: mtime が古い生きた複製を、別の回の掃除が消さない（空 tree で上書きしない）', async () => {
     await writeFile(path.join(repo, 'a.txt'), 'changed\n');
-    // 実 index を古くする → `cp -p` で生きている複製の mtime も古くなる。
     const old = new Date(Date.now() - 3 * 3600_000);
     await utimes(path.join(repo, '.git', 'index'), old, old);
     const gitDir = path.join(repo, '.git');
     const [report] = await run({
       spawn: (o) => {
-        // 複製ができた直後（別の回の掃除が来る）。
         if (o.args[0] === 'diff-files') void removeStaleIndexFiles(gitDir);
         return realSpawn(o);
       },
@@ -478,7 +466,6 @@ describe('退避 ref（#1266）', () => {
     expect(resolveRescueIntervalMs({ [RESCUE_INTERVAL_MS_ENV_KEY]: '0' })).toBe(
       DEFAULT_RESCUE_INTERVAL_MS,
     );
-    // B5: タイマーの仕様の範囲（1ms〜2^31-1ms）に挟む。
     expect(resolveRescueIntervalMs({ [RESCUE_INTERVAL_MS_ENV_KEY]: '1' })).toBe(1000);
     expect(resolveRescueIntervalMs({ [RESCUE_INTERVAL_MS_ENV_KEY]: '99999999999' })).toBe(
       2147483647,

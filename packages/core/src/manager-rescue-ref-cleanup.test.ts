@@ -11,11 +11,6 @@ import type { Job, RescueWorktree } from './schema.js';
 import { describeRescue } from './tools.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 退避 ref の後始末（`Pool#sweepRescueRefs`。Issue #1266）。runner は偽物（呼ばれた引数を
- * 控え、返す結果を差し替える）。**実リポジトリへは何も送らない。** 判定の境界値は
- * `rescue-cleanup.test.ts`、実 git での削除は `rescue-ref-cleanup.test.ts` が持つ。
- */
 const DAY = 24 * 60 * 60_000;
 let nowMs = Date.parse('2026-10-20T00:00:00.000Z');
 const iso = (offset: number): string => new Date(nowMs + offset).toISOString();
@@ -200,17 +195,14 @@ describe('退避 ref の後始末の走査（#1266）', () => {
       failureKind: 'auth',
       attempts: 1,
     });
-    // 走査の間隔（10分）と再試行の間隔の手前では撃たない。
     nowMs += 5 * 60_000;
     await pool.sweepRescueRefs?.();
     expect(fake.calls).toHaveLength(1);
-    // 間隔が空いたら再試行。同じ分類なら日誌は増えない。
     nowMs += 20 * 60_000;
     await pool.sweepRescueRefs?.();
     expect(fake.calls).toHaveLength(2);
     expect((await jobOfId('mgr-x')).lastRescue?.worktrees[0]?.pushed?.removal?.attempts).toBe(2);
     expect((await journal()).split('消せなかった').length - 1).toBe(1);
-    // 次は消せた。
     fake.next.result = { outcome: 'removed', alreadyGone: true };
     nowMs += 3 * 60 * 60_000;
     await pool.sweepRescueRefs?.();
@@ -296,7 +288,7 @@ describe('退避 ref の後始末の走査（#1266）', () => {
   it('lost のまま20日放置→stopped になった直後は猶予ゼロで消さない。終端を見た時刻から14日で消す', async () => {
     const fake = fakeRunner();
     const stoppedNow = jobOf('mgr-x', 'stopped', 20, [wt(pushedOf())]);
-    delete stoppedNow.lastRescue?.terminal; // 走査はまだ stopped を見ていない
+    delete stoppedNow.lastRescue?.terminal;
     const { pool, jobOfId } = await setup([stoppedNow], [fake]);
     await pool.sweepRescueRefs?.();
     expect(fake.calls).toEqual([]);

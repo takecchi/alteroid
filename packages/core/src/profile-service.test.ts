@@ -22,30 +22,12 @@ import type { RunnerClient, RunnerProfileFingerprint } from './runner-protocol.j
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 実行環境プロファイルの**同時更新**。
- *
- * 更新は3段ある（クローンの器へ commit → 記憶ストアへ保存 → runner へ配布）。
- * 直列化しないと、2つの更新が重なったときに層ごとに違う本文が残る:
- *
- *     A が① → B が①②③ → A が②③   ⇒ クローン=B、ストア/runner=A
- *
- * どちらの呼び出しも成功を返すので、**指紋を見ても食い違いの理由が分からない**。
- * しかもデーモンを再起動するとストアの A へ突然戻る。鍵の更新なら「同じ時点から
- * 仕事ごとに違う資格情報を使う」状態になる。
- *
- * クローンに `profile_write` を渡した以上、これは現実に起きる — クローンは自律
- * ターン（時間起点・発意）からも動くので、人間が `alteroid profile edit` している
- * 最中に書きうる。
- */
-
 let dir: string;
 
 beforeEach(() => {
   dir = makeTempDirSync('alteroid-profile-service-');
 });
 
-/** 器に置かれた本文をそのまま覚える runner。 */
 function fakeRunner(runnerId = 'runner-test') {
   const received: string[] = [];
   let held: RunnerProfileFingerprint | undefined;
@@ -73,13 +55,8 @@ function fakeRunner(runnerId = 'runner-test') {
 }
 
 /**
- * **重なりそのものを踏み抜く仕掛け。**
- *
- * 最終状態だけを見るテストにしないこと。更新の3段が混ざるかどうかは処理順に依るので、
- * 直列化していない実装でもたまたま揃って通る（この検証を書いたとき実際に通った）。
- * だから「1更新の全段が終わる前に次が始まったか」を直接見る。
- *
- * 更新中とみなす区間は、評価に入った時点から runner へ配り終えるまで。
+ * 最終状態だけを見ない: 直列化していない実装でも処理順しだいでたまたま揃って通るので、
+ * 1更新の全段が終わる前に次が始まったかを直接見る。
  */
 function tripwire(stores: Stores, runner: RunnerClient & { received: string[] }) {
   const violations: string[] = [];
@@ -106,7 +83,6 @@ function tripwire(stores: Stores, runner: RunnerClient & { received: string[] })
 
   return {
     violations,
-    /** 評価に入ったことを知らせる（applier のふりをする側から呼ぶ）。 */
     enter() {
       if (busy) violations.push('前の更新が終わる前に次の更新が始まった');
       busy = true;
@@ -114,12 +90,6 @@ function tripwire(stores: Stores, runner: RunnerClient & { received: string[] })
   };
 }
 
-/**
- * 器のふりをする applier。**評価の成否だけを差し替える。**
- *
- * `prepare` を本体にしてあるのは、本物がそうだからである（評価と反映を分けないと、
- * 正本へ書けなかった更新がクローンにだけ残る）。
- */
 function fakeApplier(check: (script: string) => void = () => undefined): ProfileApplier {
   return {
     vessel: {} as never,
@@ -161,7 +131,6 @@ describe('同時に更新されたとき', () => {
     const runner = fakeRunner();
     const path = join(dir, 'profile.sh');
 
-    // 1本目の評価を止めて、2本目を確実に重ねる。
     let release: (() => void) | undefined;
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
@@ -188,34 +157,22 @@ describe('同時に更新されたとき', () => {
     });
 
     const first = service.apply('export WHICH=A');
-    // 1本目が評価に入るのを待ってから2本目を出す（**重ねるのが目的**）。
     await new Promise((resolve) => setTimeout(resolve, 10));
     const second = service.apply('export WHICH=B');
     release?.();
     await Promise.all([first, second]);
 
     const expected = 'export WHICH=B\n';
-    // ① 記憶ストア（デーモンを作り直したときに戻ってくる本文）
     expect((await stores.profile.list())[0]?.script).toBe(expected);
-    // ② クローンの器（これから起こすクローンの子が読む本文）
     expect(readFileSync(path, 'utf8')).toContain('export WHICH=B');
     expect(vessel.fingerprint()?.sha256).toBe(fingerprintOf(expected));
-    // ③ runner（マネージャーと作業者が読む本文）
     expect(runner.received.at(-1)).toBe(expected);
 
-    // **混ざっていないこと自体も見る。** 最終状態だけを見ると、たまたま順序が
-    // 揃っただけの実装が通ってしまう（ログインの経路で同じ失敗をしている）。
     expect(runner.received).toEqual(['export WHICH=A\n', 'export WHICH=B\n']);
     expect(wire.violations).toEqual([]);
   });
 
   it('再接続時の降ろし直しも同じ列に入る（更新の途中に割り込まない）', async () => {
-    // **runner へ書く2人目である。** 更新の最中に走ると、保存前の本文を読んで
-    // 新しい本文の上に置きうる。
-    //
-    // ここで見るのは最終状態ではなく**重なったかどうか**そのものにする。最終状態は
-    // 処理順に依るので、たまたま揃っただけの実装が通ってしまう（ログインの経路で
-    // 実際にそれをやって、上書きを見逃した）。
     const stores = createMemoryStores();
     const runner = fakeRunner();
     const path = join(dir, 'profile.sh');
@@ -245,7 +202,6 @@ describe('同時に更新されたとき', () => {
 
     const update = service.apply('export WHICH=NEW');
     await new Promise((resolve) => setTimeout(resolve, 10));
-    // 更新の最中に runner が名乗り直す。
     const sync = service.syncRunner(runner);
     release?.();
     await Promise.all([update, sync]);
@@ -256,9 +212,6 @@ describe('同時に更新されたとき', () => {
   });
 
   it('正本へ書けなかったら、クローンにも効かせない（旧版で揃ったまま）', async () => {
-    // **一番たちの悪い分裂である。** 保存できていない ＝ 誰も成功と言っていない
-    // 更新を、これから起こすクローンの子だけが使う。しかも再起動するとストアの
-    // 古い値へ戻るので、後から見ても理由が分からない。
     const stores = createMemoryStores();
     const runner = fakeRunner();
     const path = join(dir, 'profile.sh');
@@ -269,7 +222,6 @@ describe('同時に更新されたとき', () => {
     await service.apply('export WHICH=OLD');
     const before = await stores.profile.list();
 
-    // 正本（記憶ストア）だけが落ちる。評価は通る本文である。
     const write = stores.profile.set.bind(stores.profile);
     stores.profile.set = async () => {
       throw new Error('記憶ストアが一時的に落ちた');
@@ -279,27 +231,20 @@ describe('同時に更新されたとき', () => {
 
     stores.profile.set = write;
 
-    // ① 正本は旧版のまま（更新日時ごと動いていない）
     expect(await stores.profile.list()).toEqual(before);
-    // ② クローンの器も旧版のまま（本文・env・指紋の3つとも）
     expect(readFileSync(path, 'utf8')).toContain('export WHICH=OLD');
     expect(applier.env().WHICH).toBe('OLD');
     expect(vessel.fingerprint()?.sha256).toBe(fingerprintOf('export WHICH=OLD\n'));
-    // ③ runner にも新版を配っていない
     expect(runner.received).toEqual(['export WHICH=OLD\n']);
   });
 
   it('クローンへ反映できなかったら、正本も元へ戻す', async () => {
-    // **失敗を返したのに、どこか1層だけ新版、を残さない。** 残すと次に runner が
-    // 名乗った時点で `syncRunner` がそれを配り、今度は「クローンだけ旧版」という
-    // 別の分裂になる。器の不調が続いていれば、起こし直しても収束しない。
     const stores = createMemoryStores();
     const runner = fakeRunner();
     const path = join(dir, 'profile.sh');
     const vessel = createProfileVessel({ path });
     const real = createProfileApplier({ vessel, baseEnv: () => ({}) });
 
-    // 反映（器への rename）だけが落ちる。評価も保存も通る本文である。
     let breakCommit = false;
     const applier: ProfileApplier = {
       ...real,
@@ -320,39 +265,27 @@ describe('同時に更新されたとき', () => {
     const before = await stores.profile.list();
 
     breakCommit = true;
-    // **文言ではなく状態を先に見る。** 文言を先に確かめると、補償を外したときに
-    // 「別のエラーで落ちた」としか分からず、何が壊れているのかが出てこない。
+    // 文言ではなく状態を先に見る: 文言を先に確かめると、補償を外したとき何が壊れたのか出てこない。
     const failure = await service.apply('export WHICH=NEW').then(
       () => null,
       (error: unknown) => error,
     );
     expect(failure).not.toBeNull();
 
-    // ① 正本は**まるごと**旧版に戻っている。
-    //
-    // **本文だけを見ない。** 取り消した更新で `updatedAt` が進むと、成功して
-    // いない更新が「最後に本文を変えた時刻」として `profile status` に出る
-    // （デーモンを起こすたびに動いていたのと同じ意味の壊れ方である）。
+    // 本文だけを見ない: 取り消した更新で `updatedAt` が進むと、成功していない更新が最後の変更に見える。
     expect(await stores.profile.list()).toEqual(before);
-    // ② クローンの器も旧版のまま
     expect(readFileSync(path, 'utf8')).toContain('export WHICH=OLD');
     expect(real.env().WHICH).toBe('OLD');
-    // ③ runner にも新版を配っていない
     expect(runner.received).toEqual(['export WHICH=OLD\n']);
 
-    // ④ **確定していない版を、後から降ろし直しで配らない。**
     expect(await service.syncRunner(runner)).toBeNull();
     expect(runner.received).toEqual(['export WHICH=OLD\n']);
 
-    // ⑥ 何が起きたかが理由として出ている（人間が手で直せるように）
     expect(String(failure)).toContain('正本も元へ戻した');
 
-    // ⑦ **書き戻しが成功した場合は `ProfileRollbackFailedError` ではない**
-    // （issue #2163。この型は「書き戻しまで落ちた」ことだけを示す——書き戻し
-    // 自体が効いた今回のケースまで広げると、呼び出し側が状態を誤って読む）。
+    // `ProfileRollbackFailedError` は書き戻しまで落ちたことだけを示す。広げると呼び出し側が状態を誤って読む。
     expect(failure).not.toBeInstanceOf(ProfileRollbackFailedError);
 
-    // ⑤ 列は止まっていない
     breakCommit = false;
     const next = await service.apply('export WHICH=NEXT');
     expect(next.stored).toBe(true);
@@ -360,7 +293,6 @@ describe('同時に更新されたとき', () => {
   });
 
   it('正本を書き戻せなかったら、その事実を理由つきで投げる', async () => {
-    // ここまで来ると正本＝新版・クローン＝旧版が残る。**黙って握り潰さない。**
     const stores = createMemoryStores();
     const path = join(dir, 'profile.sh');
     const real = createProfileApplier({
@@ -384,11 +316,6 @@ describe('同時に更新されたとき', () => {
     };
     const service = createProfileService({ stores, applier });
 
-    // **issue #2163: 型の付いた例外で見分けられること。** 呼び出し側
-    // （`PUT /profile` の `app.ts`・`profile_write` の `tools.ts`）はこの型を
-    // `instanceof` で捕まえ、日誌の決定の行を状態どおりに書き換える。
-    // **`message` は1文字も変えていない**——文言そのものは反映と書き戻しの
-    // 両方が落ちたことを既に言っているので、変える理由が無い。
     const failure = await service.apply('export WHICH=NEW').then(
       () => null,
       (error: unknown) => error,
@@ -417,9 +344,6 @@ describe('同時に更新されたとき', () => {
 
 describe('デーモンの起動時', () => {
   it('効かせ直すだけで、保存し直さない（更新日時が動かない）', async () => {
-    // ここが動くと、`profile status` / `GET /profile` の「更新」が
-    // 「最後にデーモンを起こした時刻」になる。本文を一度も変えていないのに
-    // 監査情報が消えるので、後から「いつ誰が変えたのか」を追えなくなる。
     const stores = createMemoryStores();
     const path = join(dir, 'profile.sh');
     const applier = createProfileApplier({
@@ -431,7 +355,6 @@ describe('デーモンの起動時', () => {
     await service.apply('export WHICH=KEEP');
     const saved = await stores.profile.list();
 
-    // 器を作り直した想定で、同じ本文を効かせ直す。
     const restored = createProfileApplier({
       vessel: createProfileVessel({ path: join(dir, 'restored.sh') }),
       baseEnv: () => ({}),
@@ -440,9 +363,7 @@ describe('デーモンの起動時', () => {
     const result = await next.restore();
 
     expect(result?.ok).toBe(true);
-    // クローンには効いている
     expect(restored.env().WHICH).toBe('KEEP');
-    // **正本は1文字も動いていない**
     expect(await stores.profile.list()).toEqual(saved);
   });
 
@@ -474,7 +395,6 @@ describe('降ろし直し', () => {
     const runner = fakeRunner();
     const service = createProfileService({ stores, runners: registryOf([runner]) });
 
-    // runner には外したはずのプロファイルが載っている。正本は空。
     await runner.setProfile('export FAKE_SECRET_VALUE_2508=1');
     const held = runner.profile.bind(runner);
     runner.received.length = 0;
@@ -510,15 +430,6 @@ describe('降ろし直し', () => {
   });
 });
 
-/**
- * 名前付きの行と撒く先（2026-10-03。オーナーの決定: プロファイルを DB の行ごとに設定
- * できる・1行には何行でもシェルスクリプトを入れられ行ごとに撒く先〈all/app/runner、
- * 既定 all〉を持つ・つなげる順番は名前の辞書順〈/etc/profile.d と同じ方式〉）。
- *
- * **測るのは「届かない側へ本文が降りないこと」だけではない。** 撒く先を**狭めた**とき、
- * 本文が同じでも、外れた側から**確実に外れる**こと。「届かない側は触らない」実装だと、
- * 前の本文（鍵を含みうる）がクローンに残り続け、本文だけを見るテストは全部緑になる。
- */
 describe('合成（composeProfileScript）', () => {
   const row = (name: string, script: string, scope: 'all' | 'app' | 'runner') => ({
     name,
@@ -535,7 +446,6 @@ describe('合成（composeProfileScript）', () => {
     ];
 
     expect(composeProfileScript(rows, 'clone')).toBe('export UP=1\n\nexport A=1\n\nexport B=1\n');
-    // 入力の順に依らない（決定的）。
     expect(composeProfileScript([...rows].reverse(), 'clone')).toBe(
       composeProfileScript(rows, 'clone'),
     );
@@ -591,7 +501,6 @@ describe('行の更新（set / remove / clearAll / apply）', () => {
 
     expect(cloneReceived).toEqual(['']);
     expect(runner.received).toEqual(['export ONLY_RUNNER=1\n']);
-    // 正本は本文を持つ（クローンが profile_read で読める）。
     expect(await stores.profile.list()).toMatchObject([
       { name: 'rust', script: 'export ONLY_RUNNER=1\n', scope: 'runner' },
     ]);
@@ -674,7 +583,6 @@ describe('行の更新（set / remove / clearAll / apply）', () => {
 
     expect(first.removed).toBe(true);
     expect((await stores.profile.list()).map((row) => row.name)).toEqual(['b']);
-    // クローンに掛かる行は0になった → 空（外す）。runner は b だけ。
     expect(cloneReceived.at(-1)).toBe('');
     expect(runner.received.at(-1)).toBe('export B=1\n');
 
@@ -734,7 +642,6 @@ describe('行の更新（set / remove / clearAll / apply）', () => {
     const stores = createMemoryStores();
     await stores.profile.set('a', 'export A=1\n', 'runner');
     await stores.profile.set('b', 'export B=1\n', 'all');
-    // 更新日時を古い固定値にしておく（実時間で待たずに、巻き戻しが日時ごとであることを測る）。
     await stores.profile.replaceAll(
       (await stores.profile.list()).map((row) => ({
         ...row,
