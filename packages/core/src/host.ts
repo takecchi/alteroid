@@ -197,5 +197,9 @@ export interface CloneHost {
   // `stop()` と混ぜない: 混ぜると「トークンを回したらクローンが止まる」になるため
   recycleSessionForToken(): void;
 
+  // セッションを起こさない読み（身元を捕まえない）。値は返さない: 鍵は在るか無いかと出所だけ（#4263・#4261）。
+  // 省略可能なのは、この口を持たない偽のクローンのテストが多数あるため
+  anthropicRoute?(): string[];
+
   stop(options?: { farewellDeadlineAt?: number }): Promise<void>;
 }

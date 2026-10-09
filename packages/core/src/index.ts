@@ -1434,6 +1434,13 @@ export {
   normalizeEventSource,
 } from './daemon-self-notice.js';
 export { placedModelTier, resolveModelTier } from './model-tier.js';
+export {
+  ANTHROPIC_ROUTE_NONE_LINE,
+  describeAnthropicRoute,
+  inspectAnthropicRoute,
+  type AnthropicRouteInspection,
+  type AnthropicRouteLayer,
+} from './anthropic-route-env.js';
 export type { AgentProviderId } from './agent-ports.js';
 export {
   DEFAULT_AGENT_PROVIDER_ID,

@@ -2187,6 +2187,11 @@ export interface ManagerPool {
    */
   runnerReportedModels?(runnerId: string): { manager?: string; worker?: string } | undefined;
   /**
+   * **表示用。** その runner が名乗った、SDK 子の接続先とモデルの別名の表示行（`describeAnthropicRoute`。#4263・#4261）。
+   * 名乗りを受けていない・欄を送らない旧い runner は `undefined`（`[]` の「何も置かれていない」とは別）。
+   */
+  runnerReportedAnthropicRoute?(runnerId: string): readonly string[] | undefined;
+  /**
    * Issue #1394 の2つ目の契機 — `manager_start` の自動配置
    * （`RunnerRegistry#place`）が全台へ既に払った `resources()` の応答を使って、
    * その runner の pids が逼迫していれば手が空いた委譲を畳む。
@@ -5333,6 +5338,8 @@ class Pool implements ManagerPool {
   readonly #runnerCapabilities = new Map<string, ReadonlySet<string>>();
   /** runner ごとに、直近の `hello` のモデル名乗り。どちらも送らない旧い runner の hello では鍵を消す（持ち越さない）。 */
   readonly #runnerModels = new Map<string, { manager?: string; worker?: string }>();
+  /** runner ごとに、直近の接続先・モデルの別名の名乗り（`hello.anthropicRoute` と `anthropic_route`）。名乗らない旧い runner は持たない。 */
+  readonly #runnerAnthropicRoutes = new Map<string, readonly string[]>();
   /** runner が名乗った、添付を運ぶ口の本文の上限（`hello.attachmentBodyLimit`）。名乗らない器は持たない。 */
   readonly #runnerAttachmentBodyLimits = new Map<string, number>();
   /** runner が名乗った peer（`hello.managerPeers` と `manager_peers`。#3940・#4118）。名乗らない器は持たない。 */
@@ -7825,6 +7832,10 @@ class Pool implements ManagerPool {
 
   runnerReportedModels(runnerId: string): { manager?: string; worker?: string } | undefined {
     return this.#runnerModels.get(runnerId);
+  }
+
+  runnerReportedAnthropicRoute(runnerId: string): readonly string[] | undefined {
+    return this.#runnerAnthropicRoutes.get(runnerId);
   }
 
   /**
@@ -12368,6 +12379,12 @@ class Pool implements ManagerPool {
           ...(event.workerModel === undefined ? {} : { worker: event.workerModel }),
         });
       }
+      // 欄を送らない旧い runner の名乗りで前の器の行を持ち越さない（「名乗っていない」と読ませる）。
+      if (event.anthropicRoute === undefined) {
+        this.#runnerAnthropicRoutes.delete(event.runnerId);
+      } else {
+        this.#runnerAnthropicRoutes.set(event.runnerId, event.anthropicRoute);
+      }
       // 前の名乗りを持ち越さない（器が入れ替わって peer が閉じうる）。
       this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
       // **名乗りは全部 `#reattach` に通す。** 「初回だけ素通り」にすると、起動時に
@@ -12375,6 +12392,13 @@ class Pool implements ManagerPool {
       // まだ `/health` に答える猶予の間）に取り直しが起きない。`#reattach` は
       // runner に生死を聞くので、何も起きていなければ何もしない。
       void this.#reattach(event.runnerId);
+      return;
+    }
+
+    if (event.type === 'anthropic_route') {
+      // 鍵とプロファイルが降りた直後の名乗り直し（#4263・#4261）。runner 単位なので record を引く前に処理し、丸ごと置き換える。
+      if (this.#stopped) return;
+      this.#runnerAnthropicRoutes.set(event.runnerId, event.anthropicRoute);
       return;
     }
 

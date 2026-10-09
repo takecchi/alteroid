@@ -1248,6 +1248,23 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     managerPeers: z.array(runnerManagerPeerSchema).optional(),
     /** 閉じている peer と理由（#4118）。無ければ送らない。旧い runner は送らない（理由は「不明」ではなく出さない）。 */
     managerPeersClosed: z.array(runnerManagerPeerClosedSchema).optional(),
+    /**
+     * この runner の SDK 子の env にある接続先とモデルの別名の表示行（`describeAnthropicRoute`。#4263・#4261）。
+     * **鍵の値は載せない**（在るか無いかと出所だけ）。`[]` は「見たが何も置かれていない」。
+     * **無ければ「名乗っていない（古い runner）」と読む**（既定値で埋めない）。
+     * 鍵とプロファイルが降りた後に変われば `anthropic_route` で名乗り直す。
+     */
+    anthropicRoute: z.array(z.string()).optional(),
+  }),
+  /**
+   * 鍵・プロファイルが降りて、接続先とモデルの別名の表示行が変わった（#4263・#4261）。**その時点の全体**を
+   * 名乗り直す（デーモンは丸ごと置き換える）。旧 daemon は `manager_peers` と同じく未知の type として
+   * 落とすだけで、接続は切れない。
+   */
+  z.object({
+    type: z.literal('anthropic_route'),
+    runnerId: z.string(),
+    anthropicRoute: z.array(z.string()),
   }),
   /**
    * peer の開閉が hello の後に変わった（#4118）。資格（Codex のログイン・`CODEX_API_KEY`）が届いた・

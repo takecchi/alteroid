@@ -1,5 +1,6 @@
 // alteroid の要約を手書きしない: docs と二重管理になりずれた瞬間、クローンは自分について間違ったことを確信するため
 
+import { ANTHROPIC_ROUTE_NONE_LINE } from './anthropic-route-env.js';
 import { summarizeContextCategories } from './context-usage.js';
 import { excerptLine } from './excerpt.js';
 import { CANON_DOCUMENTS, CANON_REVISION, type CanonDocument } from './generated/canon.js';
@@ -73,9 +74,20 @@ export interface CloneRuntimeFacts {
    * 実行時に引く値なので、システムプロンプトには載せない。空・未指定なら何も足さない。
    */
   runnerModels?: readonly string[];
+  /**
+   * クローン自身の SDK 子の接続先とモデルの別名（`describeAnthropicRoute` の行。#4263・#4261）。
+   * `[]` は「見たが何も置かれていない」、未指定は「見ていない」（節ごと出さない）。
+   */
+  anthropicRoute?: readonly string[];
+  /** 接続中の runner が名乗った同じ内容の行（`collectRunnerRouteLines`）。空・未指定なら節を出さない。 */
+  runnerAnthropicRoutes?: readonly string[];
 }
 
 export const RUNNER_MODELS_HEADING = '## 接続中の runner が名乗ったモデル（マネージャー・作業者）';
+export const ANTHROPIC_ROUTE_HEADING =
+  '## SDK の接続先とモデルの別名（環境変数。クローン自身の層）';
+export const RUNNER_ANTHROPIC_ROUTES_HEADING =
+  '## 接続中の runner の SDK の接続先とモデルの別名（環境変数。マネージャー・作業者の層）';
 
 function unknownBecause(reason: string): string {
   return `まだ分からない（${reason}）`;
@@ -197,6 +209,26 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     ...(facts.runnerModels === undefined || facts.runnerModels.length === 0
       ? []
       : ['', RUNNER_MODELS_HEADING, '', ...facts.runnerModels.map((line) => `  ${line}`)]),
+    // 同じく項目ではない。`[]` は「置かれていない」と明示する: 節ごと消すと「無い」と「見ていない」が区別できないため
+    ...(facts.anthropicRoute === undefined
+      ? []
+      : [
+          '',
+          ANTHROPIC_ROUTE_HEADING,
+          '',
+          ...(facts.anthropicRoute.length === 0
+            ? [ANTHROPIC_ROUTE_NONE_LINE]
+            : facts.anthropicRoute
+          ).map((line) => `  ${line}`),
+        ]),
+    ...(facts.runnerAnthropicRoutes === undefined || facts.runnerAnthropicRoutes.length === 0
+      ? []
+      : [
+          '',
+          RUNNER_ANTHROPIC_ROUTES_HEADING,
+          '',
+          ...facts.runnerAnthropicRoutes.map((line) => `  ${line}`),
+        ]),
   ].join('\n');
 }
 
