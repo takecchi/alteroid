@@ -5492,12 +5492,7 @@ export function createApp(deps: AppDeps) {
         error: 'source/payload の形が不正' + (where === '' ? '' : `: ${where}`),
       })),
       async (c) => {
-        const {
-          source,
-          payload,
-          attachments: attachmentIds,
-          idempotencyKey,
-        } = c.req.valid('json');
+        const { source, payload, attachments: attachmentIds, idempotencyKey } = c.req.valid('json');
         const principal = c.get('principal');
         // 連携の鍵は本文の source が鍵の source と一致するときだけ通す（不一致は 403。日誌には書かない）。
         if (principal.kind === 'integration' && source !== principal.source) {

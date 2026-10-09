@@ -1,4 +1,8 @@
-import { EVENT_RECEIPT_RETENTION_MS, type EventReceipt, type EventReceiptStore } from './event-receipt.js';
+import {
+  EVENT_RECEIPT_RETENTION_MS,
+  type EventReceipt,
+  type EventReceiptStore,
+} from './event-receipt.js';
 import { expectNulRejected } from './nul-contract-support.js';
 
 // vitest に依存しない: 3実装（メモリ・fs・pg）の試験から同じものを呼ぶため。
@@ -64,7 +68,9 @@ export async function verifyEventReceiptStoreContract(store: EventReceiptStore):
     fail('保持期間を過ぎた行が、後の記録のあとも残っている');
   }
 
-  if ((await store.findEventReceipt('integration:k-a', 'virchamate', 'delivery-1\u0000', t0)) !== null) {
+  if (
+    (await store.findEventReceipt('integration:k-a', 'virchamate', 'delivery-1\u0000', t0)) !== null
+  ) {
     fail('NUL を含む鍵で引いたとき null を返さない');
   }
   for (const field of ['scope', 'source', 'idempotencyKey', 'eventId'] as const) {

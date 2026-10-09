@@ -42,9 +42,7 @@ export class FsEventReceiptStore implements EventReceiptStore {
     const parsed = fileSchema.safeParse(JSON.parse(raw));
     if (!parsed.success) {
       const fields = parsed.error.issues.map((issue) => issue.path.join('.') || '(根)');
-      throw new Error(
-        `${this.#path} が読めない（不正な欄: ${[...new Set(fields)].join(', ')}）`,
-      );
+      throw new Error(`${this.#path} が読めない（不正な欄: ${[...new Set(fields)].join(', ')}）`);
     }
     return parsed.data.receipts;
   }
