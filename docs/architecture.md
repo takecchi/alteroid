@@ -162,7 +162,7 @@
 - **これは受け入れた劣化であって、設計の意図ではない**（2026-08-14、人間の判断）。外から
   叩かせるには待ち受けを開けるほかなく、開くのは**認証が立つときだけ**である（**これは `railway/setup.sh` の分岐が守っている運用で、
   デーモン自身は強制せず、認証が無効のまま開いたときは起動時に警告を出すだけである。
-  強制するかは判断待ち — #2892**）。公開しない
+  強制しないと決めた。代わりに README と起動の案内で必ずログインを立てるよう求める — #2892、2026-10-09 のオーナー判断**）。公開しない
   構成では 127.0.0.1 のままで、この経路は開かない
 - **失った守りを書いておく。「経路が無い」は多層防御の1枚だった。** 経路が無ければ、認証に
   穴が空いても記憶へは届かない。公開構成ではその1枚が抜けて**認証だけが砦になっている** —
@@ -325,7 +325,7 @@ runner が報告する資源（pids の現在値と上限など）と直近の�
   - **ファイルに頼らない理由**: `settingSources` で `.mcp.json` を共有する形は、置き場（`/workspace`）が器と一緒に消える構成（Railway）では何も渡らない。プロファイルと同じく記憶ストアに置けば、器を作り直しても消えない。`.mcp.json` が在れば従来どおり `settingSources` でも読まれる
   - **runner は登録を読みに行かない**（記憶ストアの鍵を持たない境界はそのまま）。降ろすのはデーモンで、runner はメモリにだけ持ち、`/health` へは指紋だけを出す
   - 人間の口は `GET` / `PUT /mcp-servers`・`alteroid mcp`・Web UI の「MCP 連携」。資格は `/profile` と同じ `requireOwner`（stdio の登録は子プロセスが起こすコマンドであり、登録に鍵が入りうるため）
-- plugin（skill を含む）の正本は記憶ストアに置く。登録は `requireOwner` で、取得 → プレビュー → 確定の2段とし、日誌を先に書く。展開は許可リスト方式で、manifest はメタデータだけ、skill・agent・command の frontmatter は許可したキーだけで作り直す。hooks・modules・lspServers は展開せず、`.mcp.json` は plugin ごとに有効にしたときだけ展開する。クローンはセッションを組むたびに `ALTEROID_HOME/plugins/<name>@<sha>-<要約>/` へ冪等に展開して `Options.plugins` で読む。runner には制御面の `POST /plugins/:name` で1本ずつ降ろし、runner が root 所有の読み取り専用で展開してマネージャーの `Options.plugins` に渡す。作業者は親のセッションから受け取る（実機で未確認）。Codex は plugin を持たず、provider-gaps で欠けとして報告する
+- plugin（skill を含む）の正本は記憶ストアに置く。登録は `requireOwner` で、取得 → プレビュー → 確定の2段とし、日誌を先に書く。展開は許可リスト方式で、manifest はメタデータだけ、skill・agent・command の frontmatter は許可したキーだけで作り直す。hooks・modules・lspServers は展開せず、`.mcp.json` は plugin ごとに有効にしたときだけ展開する。クローンはセッションを組むたびに `ALTEROID_HOME/plugins/<name>@<sha>-<要約>/` へ冪等に展開して `Options.plugins` で読む。runner には制御面の `POST /plugins/:name` で1本ずつ降ろし、runner が root 所有の読み取り専用で展開してマネージャーの `Options.plugins` に渡す。作業者は親のセッションから受け取る（実機で確認済み。#3815）。Codex は plugin を持たない。層は常に Claude で動くので層には効かず、Codex に peer で頼む経路では plugin を渡していないことを申告する
 - cwd は実プロジェクトの作業ディレクトリ。人間が Claude Code を開く場所と同じ
 - **クローンは2通りで見る。** 普段はマネージャー越しに見る（人間が Claude Code に任せるのと同じ）。加えて**自分の道具でも直接見られる** — 人間が Claude Code に頼まず自分でブラウザや端末を開くのと同じ写像である（north_star「適用範囲」）
   - 人間が使っている MCP 連携はクローンからも使える（PRD「業務範囲」の要件）。クローンは同じ登録を自分のインプロセス MCP と合成して `Options.mcpServers` へ渡す（alteroid 自身のサーバが常に勝つ）。変更は次のクローンのセッションから効く（#325 段2）

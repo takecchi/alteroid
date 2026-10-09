@@ -2754,7 +2754,9 @@ export function ChatPane({
       first.at,
     );
     const open = data.reachedStart === false;
-    return `${formatDateTime(startedAt)}${open ? ' 以降' : ' に開始'} · 発言 ${visible.length} 件${open ? '以上' : ''}`;
+    // 取り下げた発言は数えない（#4357）: 吹き出しとして出していないため
+    const counted = visible.filter((message) => message.delivery !== 'withdrawn').length;
+    return `${formatDateTime(startedAt)}${open ? ' 以降' : ' に開始'} · 発言 ${counted} 件${open ? '以上' : ''}`;
   })();
 
   return (

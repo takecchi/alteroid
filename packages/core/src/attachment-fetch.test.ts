@@ -114,6 +114,77 @@ describe('attachment_fetch（#3111 段2）', () => {
     expect(stream.destroyed).toBe(true);
   });
 
+  describe('控えの大きさ・sha256 との照合（#4358）', () => {
+    const metaOf = (bytes: Uint8Array): AttachmentMeta => ({
+      id: 'verify1',
+      name: 'v.bin',
+      mediaType: 'application/octet-stream',
+      size: bytes.length,
+      sha256: sha256Hex(bytes),
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 1e9).toISOString(),
+    });
+    // 控えは BYTES を名乗るが、流れてくる中身は served
+    const storeServing = (served: Uint8Array) =>
+      ({
+        open: async () => ({ meta: metaOf(BYTES), stream: Readable.from([served]) }),
+      }) as unknown as AttachmentStore;
+
+    it('置き場が途中で切れて例外なしに終わると、写しを残さず mismatch を返す', async () => {
+      const dir = await makeTempDir('alteroid-fetch-');
+      const result = await fetchAttachmentCopy(
+        { attachments: storeServing(BYTES.subarray(0, 4)) },
+        dir,
+        'verify1',
+      );
+      expect(result).toEqual({ ok: false, reason: 'mismatch' });
+      expect(await readdir(join(dir, 'verify1'))).toEqual([]);
+    });
+
+    it('大きさが同じでも中身が化けていれば mismatch を返す', async () => {
+      const dir = await makeTempDir('alteroid-fetch-');
+      const garbled = Uint8Array.from(BYTES, (b) => b ^ 1);
+      const result = await fetchAttachmentCopy(
+        { attachments: storeServing(garbled) },
+        dir,
+        'verify1',
+      );
+      expect(result).toEqual({ ok: false, reason: 'mismatch' });
+      expect(await readdir(join(dir, 'verify1'))).toEqual([]);
+    });
+
+    it('大きさが同じで中身が違う写しは使い回さず、書き直す', async () => {
+      const root = await makeTempDir('alteroid-fetch-');
+      const dir = attachmentCopiesDir(root);
+      const stores = createMemoryStores();
+      const meta = await stores.attachments.put({
+        name: 'a.txt',
+        mediaType: 'text/plain',
+        bytes: BYTES,
+      });
+      await fetchAttachmentCopy(stores, dir, meta.id);
+      const path = join(dir, meta.id, 'a.txt');
+      await writeFile(
+        path,
+        Uint8Array.from(BYTES, (b) => b ^ 1),
+      );
+      const again = await fetchAttachmentCopy(stores, dir, meta.id);
+      expect(again.ok && again.copy.reused).toBe(false);
+      expect(new Uint8Array(await readFile(path))).toEqual(BYTES);
+    });
+
+    it('道具は、照合が合わなかったことを分かる文で返す', async () => {
+      const dir = await makeTempDir('alteroid-fetch-');
+      const stores = {
+        ...createMemoryStores(),
+        attachments: storeServing(BYTES.subarray(0, 4)),
+      } as unknown as ToolContext['stores'];
+      const out = await toolText(stores, dir, 'verify1');
+      expect(out).toContain('取り出せなかった');
+      expect(out).toContain('控えの大きさか sha256 と合わない');
+    });
+  });
+
   it('置き場が返した id・名前がディレクトリの外へ出る形でも、外へは書かない', async () => {
     const root = await makeTempDir('alteroid-fetch-');
     const dir = join(root, 'copies');
