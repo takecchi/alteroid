@@ -8,10 +8,6 @@ import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
 import { pluginFiles } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * plugin の置き場。**Railway ではここが唯一の置き場になる**（volume が無い）。
- * 契約は3実装で同じ関数を通す（`packages/core/src/plugin-store-contract.ts`）。
- */
 let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
@@ -59,7 +55,6 @@ describe('PgPluginStore', () => {
     expect(listed.map((p) => p.name)).toEqual(['old-one']);
     expect(listed[0]).not.toHaveProperty('description');
     expect(await stores.plugins.get('old-one')).not.toHaveProperty('description');
-    // 足した列は null 許容で、新しい行は説明を持てる。
     await stores.plugins.put({ ...input('new-one'), description: 'この plugin の説明' });
     const after = await stores.plugins.list();
     expect(after.find((p) => p.name === 'new-one')?.description).toBe('この plugin の説明');
@@ -69,7 +64,6 @@ describe('PgPluginStore', () => {
   it('list は plugin_files を読まない（説明は plugins の行から返す）', async () => {
     await stores.plugins.put({ ...input(), description: '説明' });
     await db.execute(sql`update plugin_files set content = '\\x53454352455431'::bytea`);
-    // 本体が書き換わっても、一覧は files を引かないので落ちない（get は contentSha256 で落ちる）。
     expect((await stores.plugins.list())[0]?.description).toBe('説明');
   });
 
@@ -82,8 +76,6 @@ describe('PgPluginStore', () => {
   it('置き換えは1つのトランザクション（files の途中で落ちても前の登録が残る）', async () => {
     await stores.plugins.put(input());
     const before = await stores.plugins.get('my-plugin');
-    // 形の検査は通る入力で「files の insert が途中で落ちる」形を作るため、SQL 側のトリガで
-    // path = 'boom' の行だけ落とす。
     await db.execute(sql`
       create function plugin_files_fail() returns trigger as $$
       begin

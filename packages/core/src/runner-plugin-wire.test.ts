@@ -57,7 +57,6 @@ describe('runner への plugin の本文', () => {
   it('bodyLimit は PLUGIN_LIMITS の合計を base64 にした大きさ以上で、導出元から離れすぎない', () => {
     const base64OfTotal = Math.ceil(PLUGIN_LIMITS.maxTotalBytes / 3) * 4;
     expect(RUNNER_PLUGIN_BODY_LIMIT_BYTES).toBeGreaterThan(base64OfTotal);
-    // 枠の余裕は、ファイル数ぶんの path と JSON の枠と固定の欄だけ（合計の 10% 未満）。
     expect(RUNNER_PLUGIN_BODY_LIMIT_BYTES - base64OfTotal).toBeLessThan(base64OfTotal / 10);
   });
 });

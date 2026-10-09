@@ -51,7 +51,6 @@ function basePlugin(overrides: Record<string, unknown> = {}): StoredPlugin {
   );
 }
 
-/** 0o555 のディレクトリを、テスト後の掃除が消せるように書込み可へ戻す。 */
 async function makeWritable(dir: string): Promise<void> {
   const info = await lstat(dir).catch(() => null);
   if (info === null || !info.isDirectory()) return;
@@ -80,7 +79,6 @@ async function listTree(dir: string, prefix = ''): Promise<string[]> {
   return out;
 }
 
-/** 展開先のファイル（展開側のマーカーを除く）。 */
 async function extractedFiles(result: ExtractedPlugin): Promise<string[]> {
   return (await listTree(result.path)).filter((p) => p !== '.alteroid-extract.json');
 }
@@ -842,7 +840,6 @@ describe('呼び手向けの関数', () => {
     expect(second).toEqual(first);
     expect(second.removed).toHaveLength(2);
 
-    // 内容が変われば期待される展開先が無いので、get して展開する。
     await stores.plugins.put({
       name: 'p-all',
       scope: 'all',

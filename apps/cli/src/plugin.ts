@@ -5,20 +5,8 @@ import { redactError } from './redact.js';
 import { stdout } from './terminal-out.js';
 
 /**
- * `alteroid plugin` — plugin を入れる・外す口（`GET` / `POST /plugins/preview` / `POST /plugins` /
- * `DELETE /plugins/:name`）。経路は足していない。デーモンに在る口を CLI から打てるようにしただけで、
- * `alteroid mcp`（`mcp.ts`）と同じ型で書いてある。
- *
- * ## add は「プレビュー → 確認 → 確定」の2段
- *
- * 取り元（任意の https の Git URL / 公式 marketplace の名前）から取った中身を**先に見せ**、確認の後に
- * 確定する。確定は**プレビューで預かった中身をそのまま保存する**（取り直さない）。確認は
- * `confirm.ts` の流儀（端末なら `yes` の全文、`--yes` で飛ばす、非対話で `--yes` が無ければ実行しない）。
- *
- * **プレビューの文字列は外から来る**（取り元の README・SKILL.md・path）。端末への書き出しは
- * `terminal-out.ts` の口を通し、制御文字を落とす。
- *
- * **資格はデーモンの `requireOwner`**。403 は本文で出し分ける（`mcp.ts` の `fail` と同じ）。
+ * 確定はプレビューで預かった中身をそのまま保存する（取り直さない）: 見せた中身と違うものを入れないため。
+ * プレビューの文字列は外から来るので、端末への書き出しは `terminal-out.ts` の口を通して制御文字を落とす。
  */
 
 const SCOPES = ['all', 'app', 'runner'] as const;
@@ -136,7 +124,6 @@ export function renderPluginList(plugins: PluginRow[]): string {
 
 const MAX_DESCRIPTION_CHARS = 100;
 
-/** 一覧の1行に収める。全文は web の画面で読む。制御文字は stdout の口が落とす。 */
 function shortDescription(text: string): string {
   const chars = Array.from(text);
   return chars.length <= MAX_DESCRIPTION_CHARS
@@ -179,7 +166,7 @@ export async function pluginAddCommand(
     existing === undefined
       ? ''
       : `既に入っている「${preview.summary.name}」を置き換えます（SHA ${existing.source.sha} → ${preview.summary.sha}）。`;
-  // 確認の文（`confirmProceed`）には混ぜない。--yes では確認の文が出ないので、出力へ別に残す。
+  // 確認の文には混ぜない: --yes では確認の文が出ず、置き換えの通知が消える。
   if (replacing !== '') stdout.write(`${replacing}\n`);
   await confirmProceed(
     `plugin「${preview.summary.name}」（SHA ${preview.summary.sha}）を、scope=${scope}・` +
@@ -286,7 +273,7 @@ export function renderPluginPreview(
     ...presenceLine('modules', summary.modules, '（展開されない）'),
     ...presenceLine('lspServers', summary.lspServers, '（展開されない）'),
   );
-  // 「その場で走る」と書かない: 実測では読み込みでは走らず、モデルへの実行の指示に変わり、マネージャー・作業者では確認なしで実行されたため（#3815 の実機確認）
+  // 「その場で走る」と書かない: 実測では読み込みでは走らず、モデルへの実行の指示に変わり、マネージャー・作業者では確認なしで実行されたため
   if (summary.shellExecution.present) {
     lines.push(
       '!! 警告: skills / commands の本文に、シェルを実行する記法（!` や ```!）があります' +
@@ -371,7 +358,6 @@ function throwOnPushProblem(runners: RunnerResult[]): void {
   }
 }
 
-/** 失敗を、人間が次にやることの分かる文言にして投げる（`mcp.ts` の `fail` と同じ形）。 */
 async function fail(
   response: { status: number; json(): Promise<unknown> },
   target: Target,

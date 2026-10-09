@@ -20,27 +20,17 @@ import {
 } from './plugin-fetch-guard.js';
 
 /**
- * 取り元から、commit SHA を固定した plugin の `files` を取ってくる。
- *
- * - **作業ツリーを作らない。** `git fetch --depth 1 <sha>` で commit だけを取り、`ls-tree` と
- *   `cat-file --batch` で blob を読む。checkout をしないので、`.gitattributes` のフィルタや
- *   symlink の実体化、リポジトリ側の設定が一切効かない。
- * - **子プロセスの環境変数を空から組む。** daemon の環境には鍵が入りうる。ユーザ・システムの git 設定も読まない。
- * - **許すプロトコルは既定で https だけ**（`GIT_ALLOW_PROTOCOL`）。`file://` や `ssh` を取り元にさせない。
- *   テストだけが `allowedProtocols: 'file'` を渡す。
- * - **器の内側へは取りに行かない。** git に任せるとリダイレクトや名前解決のやり直しで内部へ届くので、
- *   リダイレクトは自分で辿り（`plugin-fetch-guard.ts`）、判定したアドレスを git に固定して渡す。
- * - 時間と取得サイズに上限を掛ける。サイズは `.git` の大きさを見て打ち切る（サーバ側の上限に頼らない）。
- * - symlink と submodule は辿らず、含めない（`skipped` に残す）。拒むと、使わない場所に symlink を持つ
- *   plugin が丸ごと入れられなくなる。
+ * 作業ツリーを作らない: checkout すると `.gitattributes` のフィルタや symlink の実体化が効くから。
+ * 子プロセスの環境変数は空から組む: daemon の環境には鍵が入りうるから。
+ * 許すプロトコルは既定で https だけ: `file://` や `ssh` を取り元にさせないため。
+ * 器の内側へは取りに行かない: git に任せるとリダイレクトや名前解決のやり直しで内部へ届くから。
+ * サイズは `.git` の大きさで打ち切る: サーバ側の上限に頼れないから。
+ * symlink と submodule は拒まず含めない: 拒むと、使わない場所に symlink を持つ plugin が入れられなくなるから。
  */
 
 export type PluginFetchErrorKind = 'invalid' | 'unavailable' | 'unconfigured';
 
-/**
- * 取得の失敗。`invalid` は入力か取り元の中身が悪い（呼び手が直せる）、`unavailable` は取りに行けなかった
- * （取り元・ネットワーク・時間）、`unconfigured` は取り元の設定が無い。文言に環境変数や資格は載せない。
- */
+/** 文言に環境変数や資格は載せない: 呼び手へ漏れるから。 */
 export class PluginFetchError extends Error {
   readonly kind: PluginFetchErrorKind;
   constructor(kind: PluginFetchErrorKind, message: string) {
@@ -72,23 +62,15 @@ export interface PluginFetcher {
 }
 
 export interface PluginFetcherOptions {
-  /** 公式 marketplace のリポジトリの URL。無ければ marketplace の取り元は `unconfigured`。 */
   marketplaceUrl?: string;
-  /** 索引を取る ref（省略は HEAD）。 */
   marketplaceRef?: string;
-  /** 索引のリポジトリ内の path。 */
   marketplaceIndexPath?: string;
   gitPath?: string;
-  /** 1回の取得の全体の時間（ミリ秒）。 */
   timeoutMs?: number;
-  /** `.git` の大きさの上限（バイト）。 */
   maxFetchBytes?: number;
   limits?: Partial<typeof PLUGIN_LIMITS>;
-  /** `GIT_ALLOW_PROTOCOL`。既定は https だけ。 */
   allowedProtocols?: string;
-  /** 取り元のホスト名の解決。テストの差し替え用（既定は OS の解決）。 */
   resolver?: Resolver;
-  /** 事前の `info/refs` の GET。テストの差し替え用。 */
   probe?: Probe;
 }
 
@@ -112,7 +94,6 @@ interface Repo {
   ctx: Ctx;
 }
 
-/** 取り元を判定する道具。`allowedProtocols` を渡すのはテストだけで、そのときの file:// は判定を飛ばす。 */
 interface Guard {
   resolver?: Resolver;
   probe?: Probe;
@@ -150,10 +131,6 @@ async function dirSize(path: string): Promise<number> {
 
 const NO_AUTO_MAINTENANCE = ['-c', 'maintenance.auto=false', '-c', 'gc.auto=0'] as const;
 
-/**
- * git を1回走らせる。shell を通さない。全体の期限を超えたら殺す。`watchDir` があれば、その大きさが
- * 上限を超えた時点で殺す（走り終えた後にも1回見る）。
- */
 async function runGit(
   ctx: Ctx,
   args: string[],
@@ -162,8 +139,7 @@ async function runGit(
   const remaining = ctx.deadline - Date.now();
   if (remaining <= 0) throw unavailable('取得の時間の上限を超えた');
   const maxStdout = options.maxStdout ?? 1024 * 1024;
-  // 自動の保守を止める: fetch は終わり際に `git maintenance run --auto --detach` を切り離して起こし、それが
-  // 作業場の objects/ へ書く。グループの外へ出るので殺せず、後片づけの rm と競合して ENOTEMPTY になる（#4099）
+  // 自動の保守を止める: 切り離された maintenance が objects/ へ書き、殺せず後片づけの rm と競合するから。
   const fullArgs = [...NO_AUTO_MAINTENANCE, ...(options.net ?? []), ...args];
 
   return await new Promise<GitResult>((resolve, reject) => {
@@ -171,8 +147,7 @@ async function runGit(
       cwd: ctx.dir,
       env: ctx.env,
       stdio: ['pipe', 'pipe', 'pipe'],
-      // git は子（git-remote-https など）を起こす。child.kill だけでは子が残るので、
-      // 自分をグループの先頭にして、グループごと殺せるようにする。
+      // child.kill だけでは git の子（git-remote-https など）が残るので、グループごと殺す。
       detached: true,
     });
     const out: Buffer[] = [];
@@ -240,10 +215,7 @@ async function runGit(
   });
 }
 
-/**
- * 取りに行く先を判定し、git に渡す設定（`-c`）と URL を返す。git にはリダイレクトを辿らせず、
- * 判定を通ったアドレスを固定する（名前解決のやり直しで、別のアドレスへ届かせない）。
- */
+/** git にリダイレクトを辿らせず、判定を通ったアドレスを固定する: 名前解決のやり直しで別のアドレスへ届くから。 */
 async function guardSource(
   ctx: Ctx,
   guard: Guard,
@@ -257,7 +229,6 @@ async function guardSource(
       remainingMs: () => Math.max(1, ctx.deadline - Date.now()),
     });
     const net = ['-c', 'http.followRedirects=false'];
-    // IP リテラルは名前解決が起きないので、固定するものが無い。
     if (!source.literal) {
       net.push(
         '-c',

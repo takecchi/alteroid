@@ -7,12 +7,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { extractPlugin } from './plugin-extract.js';
 import { parsePluginInput, type PluginInput } from './plugins.js';
 
-/**
- * 展開器の `plugins/` のモードと所有者の確認（runner が子 uid に読ませるための引数）。
- * 既定（クローン層）が変わらないことも固定する。本物の uid の切り替えはここでは見られないので、
- * モードと所有者の断言にとどめる。
- */
-
 const SHA = 'a'.repeat(40);
 const encoder = new TextEncoder();
 

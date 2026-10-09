@@ -8,28 +8,18 @@ import { pluginDirName, validatePluginFilePath, type StoredPlugin } from './plug
 import type { PluginStore } from './store.js';
 
 /**
- * 記憶ストアの plugin を、SDK の `Options.plugins`（`type: 'local'`）が読めるディレクトリへ展開する。
+ * 記憶ストアの plugin を、SDK の `Options.plugins` が読めるディレクトリへ展開する。
  *
- * 展開先は `<root>/plugins/<name>@<sha>-<marker の要約 12 桁>/`。sha は取り元の commit SHA。版・内容・フラグの
- * どれかが変われば別のディレクトリになる（同じ `name@sha` を別の内容で置き換えても、走行中のセッションが
- * 読んでいる展開済みのものを退避・削除しないため）。
- *
- * - **ホワイトリスト方式。** 既知の形だけを書く。「hooks を消す」方式にしないのは、hooks を宣言できる
- *   場所が `hooks/` 以外にもあり（manifest・frontmatter）、消し漏れが監査を通らない実行になるため。
- * - **`enableHooks` が true でも hooks は展開しない。** 有効にする実装は、監査（`canUseTool`）を
- *   飛ばさないことを実機で確かめてから書く。
- * - frontmatter も許可したキーだけを書き出して作り直す。「hooks を消す」方式にしないのは、
- *   インデントの付け方などで消し漏れる書き方が後から見つかるため。YAML の解析器を依存に足さず、
- *   読み取れない形は失敗側に倒して展開しない。
+ * - 展開先の名前に marker の要約を入れる: 同じ `name@sha` を別の内容で置き換えても、走行中のセッションが読む展開済みのものを退避・削除しないため。
+ * - ホワイトリスト方式。「hooks を消す」方式にしない: hooks を宣言できる場所が `hooks/` 以外にもあり（manifest・frontmatter）、消し漏れが監査を通らない実行になるため。
+ * - `enableHooks` が true でも hooks は展開しない: 監査（`canUseTool`）を飛ばさないことを実機で確かめるまで有効にしない。
+ * - frontmatter も許可したキーだけで作り直し、読み取れない形は失敗側に倒して展開しない（YAML の解析器は依存に足さない）。
  */
 
 /** ホワイトリストの版。許す形を変えたら上げる（展開済みのものを作り直させる）。 */
 export const PLUGIN_ALLOWLIST_VERSION = 3;
 
-/**
- * frontmatter で残すキー。ツールの許可・権限・サブプロセスの起動を宣言できるキー
- * （`allowed-tools`・`tools`・`mcpServers`・`permissionMode`・`hooks`）と未知のキーは通さない。
- */
+/** frontmatter で残すキー。ツールの許可・権限・サブプロセスの起動を宣言できるキーと未知のキーは通さない。 */
 const FRONTMATTER_ALLOWED_KEYS: ReadonlySet<string> = new Set([
   'name',
   'description',
@@ -40,10 +30,7 @@ const FRONTMATTER_ALLOWED_KEYS: ReadonlySet<string> = new Set([
   'user-invocable',
 ]);
 
-/**
- * manifest で残す欄。パスを差し替える欄（skills / agents / commands など）や未知の欄を通さないのは、
- * ホワイトリスト外のファイルや別の場所を読み込ませる経路になるため。
- */
+/** manifest で残す欄。パスを差し替える欄や未知の欄は通さない: ホワイトリスト外のファイルを読み込ませる経路になるため。 */
 const MANIFEST_METADATA_FIELDS: ReadonlySet<string> = new Set([
   'name',
   'version',
@@ -60,39 +47,28 @@ const MANIFEST_PATH = '.claude-plugin/plugin.json';
 const MCP_PATH = '.mcp.json';
 const ALLOWED_PREFIXES = ['skills/', 'agents/', 'commands/'] as const;
 
-// 要約の桁が付かない旧形式も規則に合うものとして片づけの対象に入れる（残っても誰も読まない）。
 const DIR_NAME_RULE = /^[A-Za-z0-9_-]{1,64}@[0-9a-f]{40}(?:-[0-9a-f]{12})?$/;
 const TMP_NAME_RULE =
   /^\.tmp-[A-Za-z0-9_-]{1,64}@[0-9a-f]{40}(?:-[0-9a-f]{12})?-[0-9a-f]{16}(?:-old)?$/;
 
 export type PluginScope = StoredPlugin['scope'];
 
-/**
- * runner が受けた plugin を展開する置き場の既定（`os.tmpdir()` 配下）。`/workspace` に置かないのは、
- * そこが子（マネージャー・作業者）の持ち物で、展開した plugin（skills など）を子が書き換えられてしまうため。
- */
+/** `/workspace` に置かない: 子（マネージャー・作業者）の持ち物で、展開した plugin を子が書き換えられてしまうため。 */
 export function defaultRunnerPluginsRoot(): string {
   return join(tmpdir(), 'alteroid-plugins');
 }
 
-/** 展開に要るものだけ（runner は取り元の URL・入れた人・日時を受けないので、`StoredPlugin` では持てない）。 */
 export type ExtractablePlugin = Pick<
   StoredPlugin,
   'name' | 'files' | 'enableHooks' | 'enableMcp' | 'contentSha256'
 > & { source: { sha: string; [other: string]: unknown } };
 
-/**
- * 展開先のディレクトリの作り方。省略は今までどおり（root は既定のモード、`plugins/` は 0o700 で、
- * 所有者は確かめない）。
- */
 export interface ExtractPluginOptions {
-  /** root と `plugins/` のモード。子 uid に読ませる runner だけが 0o755 を渡す。 */
   readonly dirMode?: number;
   /** root と `plugins/` の所有者がこの uid であること。違えば展開せずに拒む。 */
   readonly expectedUid?: number;
 }
 
-/** クローン（daemon）へ撒く scope。`runner` はマネージャー側が持つので含めない。 */
 export const PLUGIN_SCOPES_FOR_CLONE: readonly PluginScope[] = ['all', 'app'];
 
 export type RemovedReason =
@@ -106,7 +82,7 @@ export type RemovedReason =
   | 'manifest-unreadable'
   | 'invalid-path';
 
-/** 展開しなかったもの。内容や値は持たない（path は plugin 内の相対 path か、`<path>#<欄>`）。 */
+/** 内容や値は持たない（path は plugin 内の相対 path か、`<path>#<欄>`）。 */
 export interface RemovedItem {
   readonly plugin: string;
   readonly path: string;
@@ -115,7 +91,6 @@ export interface RemovedItem {
 
 export interface ExtractedPlugin {
   readonly name: string;
-  /** 展開先の絶対パス。 */
   readonly path: string;
   readonly removed: readonly RemovedItem[];
 }
@@ -133,7 +108,6 @@ interface Marker {
   readonly enableMcp: boolean;
 }
 
-/** marker を決める入力。`list()` の要約と `get()` の本体のどちらからも作れる。 */
 export interface ExtractIdentity {
   readonly name: string;
   readonly source: { readonly sha: string };
@@ -151,10 +125,7 @@ function markerOf(plugin: ExtractIdentity): Marker {
   };
 }
 
-/**
- * 展開先のディレクトリ名（`<name>@<sha>-<marker の sha256 の先頭 12 桁>`）。
- * marker に入る値が変われば名前が変わるので、走行中のセッションが読む展開済みのものを上書きしない。
- */
+/** marker の値を名前に含める: 変わったとき、走行中のセッションが読む展開済みのものを上書きしないため。 */
 export function extractedPluginDirName(plugin: ExtractIdentity): string {
   const marker = markerOf(plugin);
   const digest = createHash('sha256')
@@ -183,7 +154,6 @@ const REMOVED_REASONS: ReadonlySet<string> = new Set<RemovedReason>([
   'invalid-path',
 ]);
 
-/** marker に書き添えた「展開しなかったもの」。形が合わなければ `null`（読み直す側へ倒す）。 */
 function removedFromMarker(found: unknown, pluginName: string): RemovedItem[] | null {
   if (typeof found !== 'object' || found === null) return null;
   const list = (found as Record<string, unknown>).removed;
@@ -219,7 +189,7 @@ function decodeUtf8(bytes: Uint8Array): string | null {
   }
 }
 
-/** `{` `[` の釣り合い（引用符は見ない。読み違えても、多く落とす側にしか倒れない）。 */
+/** 引用符は見ない: 読み違えても、多く落とす側にしか倒れない。 */
 function bracketDelta(text: string): number {
   let depth = 0;
   for (const ch of text) {
@@ -229,15 +199,12 @@ function bracketDelta(text: string): number {
   return depth;
 }
 
-/** インデント 0 の `key: value`。引用符つき・複雑なキーは受けない（読み違えを避ける）。 */
+/** 引用符つき・複雑なキーは受けない: 読み違えを避ける。 */
 const FRONTMATTER_KEY = /^([A-Za-z0-9_][A-Za-z0-9_.-]*)[ \t]*:(?:[ \t]+(.*))?$/;
 const BLOCK_SCALAR_HEADER = /^[|>](?:[+-][1-9]?|[1-9][+-]?)?$/;
 const QUOTED_ONE_LINE = /^(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*')$/;
 
-/**
- * 許可したキーの値が「1 行のスカラー」か。flow 形式・アンカー・タグ・閉じない引用符は、次の行へ
- * 続く可能性や別の意味を持つので受けない。
- */
+/** flow 形式・アンカー・タグ・閉じない引用符は、次の行へ続く可能性や別の意味を持つので受けない。 */
 function isSingleLineScalar(value: string): boolean {
   const v = value.trim();
   if (v === '') return true;
@@ -245,10 +212,6 @@ function isSingleLineScalar(value: string): boolean {
   return !/^[{[&*!%@`|>]/.test(v);
 }
 
-/**
- * markdown の frontmatter を、許可したキーだけで作り直す。frontmatter が無ければそのまま。
- * 読み取れなければ `null`。
- */
 function rebuildFrontmatter(text: string): { text: string; dropped: string[] } | null {
   const lines = text.split('\n');
   const head = lines[0] ?? '';
@@ -266,7 +229,6 @@ function rebuildFrontmatter(text: string): { text: string; dropped: string[] } |
   const kept: string[] = [];
   const dropped: string[] = [];
   const seen = new Set<string>();
-  // 'dropped' は次のキーまで読み飛ばす。'block' は許可したキーのブロックスカラーの続き。
   let mode: 'top' | 'dropped' | 'block' = 'top';
   let flowDepth = 0;
   for (let i = 1; i < close; i += 1) {
@@ -306,8 +268,7 @@ function rebuildFrontmatter(text: string): { text: string; dropped: string[] } |
       return null;
     }
     kept.push(raw);
-    // 値の無いキーの次に続く行（入れ子・複数行の plain scalar）は次の周回で `FRONTMATTER_KEY` に
-    // 合わず、展開しない側へ倒れる。
+    // 値の無いキーの次に続く行（入れ子・複数行の plain scalar）は次の周回で合わず、展開しない側へ倒れる。
   }
   if (flowDepth > 0) return null;
   const rebuilt = [lines[0] ?? '', ...kept, ...lines.slice(close)].join('\n');
@@ -322,7 +283,6 @@ function hooksReason(plugin: ExtractablePlugin): RemovedReason {
   return plugin.enableHooks ? 'hooks-not-extracted' : 'hooks-disabled';
 }
 
-/** 何を書くか（fs に触れない）。 */
 function planExtraction(plugin: ExtractablePlugin): {
   outputs: OutputFile[];
   removed: RemovedItem[];
@@ -409,10 +369,7 @@ function planExtraction(plugin: ExtractablePlugin): {
   return { outputs, removed };
 }
 
-/**
- * 展開しないもの（fs に触れない）。入れる前の確認で「何が落ちるか」を見せるのに使う
- * （展開の本体と同じ計画を通すので、見せたものと実際に落ちるものがずれない）。
- */
+/** 展開の本体と同じ計画を通す: 確認で見せたものと実際に落ちるものをずらさないため。 */
 export function planPluginExtractionRemovals(
   plugin: Pick<StoredPlugin, 'name' | 'files'>,
   flags: { enableHooks: boolean; enableMcp: boolean },
@@ -420,10 +377,7 @@ export function planPluginExtractionRemovals(
   return planPluginExtraction(plugin, flags).removed;
 }
 
-/**
- * 展開するもの（書かれるバイト）と展開しないもの。fs に触れない。プレビューが実行ファイルの分類や
- * 本文の検査をするときも、実際に書かれる内容（許可したキーだけで作り直した frontmatter）を見る。
- */
+/** プレビューの検査も、実際に書かれる内容（許可したキーだけで作り直した frontmatter）を見るために使う。 */
 export function planPluginExtraction(
   plugin: Pick<StoredPlugin, 'name' | 'files'>,
   flags: { enableHooks: boolean; enableMcp: boolean },
@@ -439,17 +393,15 @@ export function planPluginExtraction(
   });
 }
 
-/** 書込み可へ戻してから消す。0o555 のままでは中身を消せず、symlink は辿らない。 */
+/** 0o555 のままでは中身を消せないので、書込み可へ戻してから消す。 */
 async function removeTree(path: string): Promise<void> {
   await makeWritable(path);
   await rm(path, { recursive: true, force: true });
 }
 
 /**
- * ディレクトリを `O_NOFOLLOW | O_DIRECTORY` で開いた fd に `fchmod` し、中を再帰する。
- * lstat → chmod（パスで引く）の形にしないのは、その間に symlink へ差し替えられると、
- * 差し替え先（展開物の外）の権限を変えてしまうため。symlink・dir 以外・消えたものは何もしない。
- * 子は Linux では `/proc/self/fd/<fd>` 越しに開く（親のパスが途中で差し替わっても、開いた親の中を読む）。
+ * lstat → chmod（パスで引く）にしない: その間に symlink へ差し替えられると、展開物の外の権限を変えてしまうため。
+ * 子を `/proc/self/fd/<fd>` 越しに開くのも、親のパスが途中で差し替わっても開いた親の中を読むため。
  */
 async function makeWritable(path: string): Promise<void> {
   const flags = constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0);
@@ -476,10 +428,7 @@ function assertInside(base: string, target: string): void {
   }
 }
 
-/**
- * 置き場を、自分の持ち物として確かめてモードを揃える。`/tmp` 配下は誰でも書けるので、
- * 先に同名の symlink や他人のディレクトリを置かれても使わない（他人の持ち物は差し替えられる）。
- */
+/** `/tmp` 配下は誰でも書けるので、先に置かれた同名の symlink や他人のディレクトリは使わない（差し替えられるため）。 */
 async function ensureTrustedDirectory(
   dir: string,
   mode: number,
@@ -561,7 +510,7 @@ async function writeStage(
   const markerTarget = join(stage, MARKER_FILE);
   const markerHandle = await open(markerTarget, flags, 0o600);
   try {
-    // `removed` は一致の判定に使わない。get を省く側が、日誌に載せる一覧を読み戻すために置く。
+    // `removed` は一致の判定に使わない（get を省く側が日誌用の一覧を読み戻すために置く）。
     const body = {
       ...marker,
       removed: removed.map(({ path, reason }) => ({ path, reason })),
@@ -578,13 +527,7 @@ async function writeStage(
   await chmod(stage, 0o555);
 }
 
-/**
- * 1つの plugin を `<root>/plugins/<extractedPluginDirName>/` へ展開する。冪等（マーカーが一致すれば何もしない）。
- *
- * 名前に marker の要約が入るので、内容やフラグが変わっても前の展開先には触れない。それでも同じ名前に
- * 壊れた marker・symlink・dir 以外が先に置かれていれば、辿らずに作り直す（退避してから置く）。
- * 書くのは同じ親の `.tmp-*` で、置くのは rename。
- */
+/** 同じ名前に壊れた marker・symlink・dir 以外が先に置かれていれば、辿らずに退避して作り直す。 */
 export async function extractPlugin(
   root: string,
   plugin: ExtractablePlugin,
@@ -643,7 +586,6 @@ export async function extractPlugin(
   return result;
 }
 
-/** 期待される展開先が実在の dir で、marker が一致し、取り除いた一覧も読めるときだけ返す。 */
 async function findCurrentExtraction(
   root: string,
   identity: ExtractIdentity,
@@ -661,16 +603,11 @@ async function findCurrentExtraction(
   return removed === null ? null : { path, removed };
 }
 
-/** runner が置き場を確かめるときの作り方（子 uid は読めて書けず、差し替えられない root 所有の 0o755）。 */
 export function runnerPluginsDirOptions(): ExtractPluginOptions {
   return { dirMode: 0o755, expectedUid: process.getuid?.() };
 }
 
-/**
- * runner の起動時の片づけ。置き場（root と `plugins/`）を展開時と同じ検査（所有者・モード・symlink でない）
- * に通してから {@link pruneExtractedPluginDirs} を呼ぶ。通らなければ何も消さず、理由を `write` へ出す
- * （他人が差し替えられる置き場の中を、root 権限で chmod・削除しないため）。
- */
+/** 検査に通らなければ何も消さない: 他人が差し替えられる置き場の中を、root 権限で chmod・削除しないため。 */
 export async function pruneRunnerPluginsOnBoot(
   root: string,
   options: ExtractPluginOptions,
@@ -700,12 +637,8 @@ function messageOf(error: unknown): string {
 }
 
 /**
- * `keep`（`<name>@<sha>` の集合）に無い展開済みの版と、`.tmp-*` を消す。**読んでいるセッションが1つも無く、
- * 書いている途中の展開も無いときにだけ呼ぶこと**（daemon の起動時、runner の起動時と、runner では走行中の
- * セッションが無く展開が終わっているとき。走行中のセッションが読んでいる版や、書いている途中の `.tmp-*` を消さないため）。
- *
- * 名前が `<plugin 名の規則>@<40桁16進>`（`.tmp-` は `.tmp-<同>-<16桁16進>[-old]`）に合わないものは
- * 人間が置いたものかもしれないので触らない。
+ * 読んでいるセッションも書いている途中の展開も無いときにだけ呼ぶこと: 走行中のセッションが読む版や書き途中の `.tmp-*` を消さないため。
+ * 名前の規則に合わないものは人間が置いたものかもしれないので触らない。
  */
 export async function pruneExtractedPluginDirs(
   root: string,
@@ -728,10 +661,7 @@ export async function pruneExtractedPluginDirs(
   return result;
 }
 
-/**
- * ストアの `list()` から残す版を決めて {@link pruneExtractedPluginDirs} を呼ぶ。
- * `list()` が失敗したら何も消さずに投げる（読めなかったことを「何も無い」と読んで全部消さない）。
- */
+/** `list()` が失敗したら何も消さずに投げる: 読めなかったことを「何も無い」と読んで全部消さないため。 */
 export async function pruneExtractedPluginsAgainstStore(
   root: string,
   store: Pick<PluginStore, 'list'>,
@@ -753,7 +683,6 @@ export interface ExtractedPluginRef {
 }
 
 export interface PluginExtractFailure {
-  /** `list` の失敗は plugin を特定できないので `null`。 */
   readonly name: string | null;
   readonly stage: 'list' | 'get' | 'extract';
   readonly message: string;
@@ -765,10 +694,7 @@ export interface ExtractForScopesResult {
   readonly failures: PluginExtractFailure[];
 }
 
-/**
- * ストアから `scopes` に含まれる plugin を読んで展開し、`Options.plugins` に渡せる形で返す。
- * 1つの失敗で全体を止めない。日誌には書かない（結果を返すだけ。書くのは呼び手）。
- */
+/** 1つの失敗で全体を止めない。日誌には書かない（書くのは呼び手）。 */
 export async function extractPluginsForScopes(options: {
   root: string;
   store: Pick<PluginStore, 'list' | 'get'>;
@@ -785,8 +711,7 @@ export async function extractPluginsForScopes(options: {
   }
   for (const summary of summaries) {
     if (!scopes.includes(summary.scope)) continue;
-    // 要約の contentSha256 とフラグから期待される展開先が既にあれば、files を読まない（全 plugin の
-    // 本体を毎回ストアから引かないため）。読み違えたときは get して展開する側へ倒す。
+    // 展開済みなら files を読まない（全 plugin の本体を毎回ストアから引かないため）。読み違えたときは get して展開する側へ倒す。
     const current = await findCurrentExtraction(root, summary).catch(() => null);
     if (current !== null) {
       out.plugins.push({

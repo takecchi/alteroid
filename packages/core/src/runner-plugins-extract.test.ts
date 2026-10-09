@@ -14,14 +14,6 @@ import {
   type RunnerHost,
 } from './runner.js';
 
-/**
- * runner が受けた plugin を展開し、マネージャーの `Options.plugins` へつなぐ（Host の受け取り）。
- *
- * 固定すること: 展開されること・メモリには指紋と path と skipMcpDiscovery だけが残ること・
- * 展開の失敗で前の状態が残ること・外れたものはメモリから消えるが、ディスクの旧版は走行中の
- * セッションがあるあいだ消さないこと・作業者の定義に plugin が混ざらないこと。値はすべて偽物である。
- */
-
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
 const encoder = new TextEncoder();
@@ -217,7 +209,6 @@ describe('Host の plugin の受け取り（展開）', () => {
   it('展開が失敗したら RunnerPluginExtractError を投げ、前の状態が残る', async () => {
     const { host } = makeHost();
     const before = await host.setPlugin('p-one', wire('p-one'));
-    // 置き場を symlink に差し替えられた状況（展開器は辿らずに拒む）。
     const plugins = join(pluginsRoot, 'plugins');
     await rename(plugins, join(base, 'moved'));
     await symlink(join(base, 'moved'), plugins);
@@ -244,7 +235,6 @@ describe('Host の plugin の受け取り（展開）', () => {
     await host.setPlugin('p-two', wire('p-two'));
     host.retainPlugins([]);
     await host.shutdown();
-    // 待たずに返していれば、ここではまだ消える前か、消えている途中である。
     expect(await exists(dirOf('p-one'))).toBe(false);
     expect(await exists(dirOf('p-two'))).toBe(false);
   });
@@ -257,7 +247,6 @@ describe('Host の plugin の受け取り（展開）', () => {
 
     await host.setPlugin('p-one', wire('p-one', SHA_B));
     host.retainPlugins(['p-one']);
-    // 走行中なので、旧版も外したものも残っている（読んでいるかもしれない）。
     expect(await exists(dirOf('p-one', SHA_A))).toBe(true);
     expect(await exists(dirOf('p-gone', SHA_A))).toBe(true);
     expect(await exists(dirOf('p-one', SHA_B))).toBe(true);
@@ -265,7 +254,6 @@ describe('Host の plugin の受け取り（展開）', () => {
     await host.stop('mgr-1');
     await expect.poll(() => exists(dirOf('p-one', SHA_A)), { timeout: 3000 }).toBe(false);
     expect(await exists(dirOf('p-gone', SHA_A))).toBe(false);
-    // 残すものは消えない。
     expect(await exists(dirOf('p-one', SHA_B))).toBe(true);
   });
 

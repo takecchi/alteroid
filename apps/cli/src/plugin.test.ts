@@ -3,18 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConfirmIo } from './confirm.js';
 import { captureStdout, pretendTty } from './test-support.js';
 
-/**
- * `alteroid plugin` — plugin を入れる・外す口（list / add / remove）。
- *
- * 固定するのは次の各点:
- *
- * 1. `add` は **プレビュー → 確認 → 確定** の2段。確認を通るまで `POST /plugins` を打たない
- * 2. プレビューは中身と取り元を出し、**hooks を含むことを目立たせる**
- * 3. 非対話では `--yes` が要る。確認でやめたら確定しない
- * 4. `<url>` は https の URL、それ以外は marketplace の名前として送る
- *
- * `fetch` を差し替え、本物の hono client を通す（経路名や method を間違えれば応答表に当たらず赤くなる）。
- */
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>

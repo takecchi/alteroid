@@ -4,42 +4,25 @@ import type { FetchedPlugin, SkippedEntry } from './plugin-fetch.js';
 import { planPluginExtraction } from './plugin-extract.js';
 import type { PluginSource } from './plugins.js';
 
-/**
- * 入れる前の確認で見せる要約と、確定までの間だけ取得物を預かる置き場。
- *
- * 要約は展開器の計画（`planPluginExtractionRemovals`）を通して作るので、
- * 「落ちると言ったもの」と「実際に落ちるもの」がずれない。
- * 預かるのはメモリだけ。再起動で消えてよい（確認し直せばよい）。
- */
+// 要約は展開器の計画を通して作る: 「落ちると言ったもの」と「実際に落ちるもの」をずらさないため。
 
 export interface PluginPreviewSummary {
   name: string;
   description?: string;
   source: PluginSource;
-  /** 解決した commit SHA（`source.sha` と同じ）。 */
   sha: string;
   fileCount: number;
   totalBytes: number;
   files: { path: string; size: number; executable: boolean }[];
   counts: { skills: number; agents: number; commands: number };
-  /** hooks の在りか（`hooks/`・manifest・SKILL.md などの frontmatter）。**展開器は enableHooks でも出さない**。 */
+  /** 展開器は enableHooks でも hooks を出さない。 */
   hooks: { present: boolean; paths: string[] };
   modules: { present: boolean; paths: string[] };
   lspServers: { present: boolean; paths: string[] };
-  /** `.mcp.json` と manifest・frontmatter の `mcpServers`。`.mcp.json` と manifest 側は enableMcp のときだけ展開される。 */
   mcp: { present: boolean; paths: string[] };
-  /**
-   * 実行ファイル。`extracted` は展開される（skills/agents/commands 配下）、`notExtracted` は展開されない。
-   * 展開されるものは、plugin の中の他のファイルから呼ばれうる。
-   */
   executables: { extracted: string[]; notExtracted: string[] };
-  /**
-   * skills / commands の本文に、シェルを実行する記法（`` !` `` と `` ```! ``）があるファイル。
-   * 本文は落とさない（読み手へ見せるだけ）。
-   */
   shellExecution: { present: boolean; paths: string[] };
   skipped: SkippedEntry[];
-  /** enableHooks / enableMcp を true にしても展開器が落とすもの。 */
   extractorDrops: { path: string; reason: string }[];
   skillExcerpts: { path: string; excerpt: string; truncated: boolean }[];
 }
@@ -72,7 +55,6 @@ function excerptOf(bytes: Uint8Array): { excerpt: string; truncated: boolean } |
   };
 }
 
-/** `` !`cmd` ``（行内）と、`` ```! ``（ブロック）。見つけても本文は落とさない。 */
 const SHELL_EXECUTION = /!`[^`\n]|^```!/m;
 
 function bodyOf(bytes: Uint8Array): string {
@@ -181,7 +163,6 @@ export function summarizeFetchedPlugin(fetched: FetchedPlugin): PluginPreviewSum
 }
 
 export interface PluginPreviewStoreOptions {
-  /** 預かる期間（ミリ秒）。 */
   ttlMs?: number;
   maxEntries?: number;
   maxBytes?: number;
@@ -190,7 +171,6 @@ export interface PluginPreviewStoreOptions {
 
 export interface PluginPreviewStore {
   put(fetched: FetchedPlugin): { previewId: string; expiresAt: string };
-  /** 期限内ならそのまま返す。期限切れ・不明は `undefined`。 */
   get(previewId: string): FetchedPlugin | undefined;
   discard(previewId: string): void;
 }
@@ -221,7 +201,6 @@ export function createPluginPreviewStore(
     put(fetched) {
       sweep();
       const bytes = fetched.files.reduce((sum, f) => sum + f.content.byteLength, 0);
-      // Map は挿入順なので、先頭が最も古い。
       while (entries.size > 0 && (entries.size >= maxEntries || totalBytes() + bytes > maxBytes)) {
         const oldest = entries.keys().next().value;
         if (oldest === undefined) break;

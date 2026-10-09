@@ -4,10 +4,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
 
-/**
- * runner が `session` に plugin の読み込み結果（init の `plugins` / `plugin_errors`）を載せること
- * （Issue #3816）。init を出すだけの偽 SDK で、runner が外へ出す `session` を見る。
- */
 function fakeSdkWithInit(initExtras: Record<string, unknown>): typeof sdkQuery {
   return ((params: { prompt: unknown; options?: Options }) => {
     async function* generate(): AsyncGenerator<SDKMessage, void> {
@@ -36,7 +32,6 @@ afterEach(async () => {
 });
 
 async function sessionEventOf(initExtras: Record<string, unknown>): Promise<RunnerEvent> {
-  // 壁時計で待たず、session が出た瞬間に解く
   let onSession: (event: RunnerEvent) => void = () => undefined;
   const sessionSeen = new Promise<RunnerEvent>((resolve) => {
     onSession = resolve;

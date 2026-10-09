@@ -14,25 +14,16 @@ import type { Db } from './db.js';
 import { toIso, toNumber } from './db.js';
 import { pluginFiles, plugins } from './schema.js';
 
-/** 1回の insert に載せる files の行数（1行4パラメータ。ドライバの上限に当たらない大きさ）。 */
 const INSERT_CHUNK = 200;
 
-/** null（説明なし・列を足す前の行）は欄ごと省く（fs・インメモリと同じ形にそろえる）。 */
 function descriptionField(value: string | null): { description?: string } {
   return value === null ? {} : { description: value };
 }
 
 /**
- * 人間が入れた plugin の置き場（クラウド段）。
- *
- * fs 版（`~/.alteroid/plugins/<name>.json`）と同じものの器違いである。**Railway では
- * これが唯一の置き場になる**（volume が無いので、ファイルで置いても器と一緒に消える）。
- *
- * - 1 plugin = `plugins` の1行 + `plugin_files` の複数行（本体は `bytea`）。**置き換えは
- *   1つのトランザクション**（途中で落ちても前の登録が残る）。
- * - **読むときにも検査する**（`PgMcpServerStore` と同じ理由）。表は SQL から直接書き換えられる
- *   ので、`contentSha256` を files から計算し直して突き合わせる。合わなければ投げる
- *   （文言に値を載せない）。
+ * 置き換えは1つのトランザクションにする: 途中で落ちても前の登録が残る。
+ * 読むときにも検査する: 表は SQL から直接書き換えられるので `contentSha256` を計算し直して突き合わせ、
+ * 合わなければ文言に値を載せずに投げる。
  */
 export class PgPluginStore implements PluginStore {
   readonly #db: Db;
@@ -70,8 +61,7 @@ export class PgPluginStore implements PluginStore {
 
   async get(name: string): Promise<StoredPlugin | null> {
     if (!isValidPluginName(name)) return null;
-    // 2本の select の間に置き換え（delete → insert）が入ると、別々の版の行を混ぜて読む。
-    // read committed のままでは文ごとに見える範囲が変わるので、repeatable read で1枚の見え方に固定する。
+    // repeatable read にする: read committed だと2本の select の間の置き換えで別々の版の行を混ぜて読む。
     const loaded = await this.#db.transaction(
       async (tx) => {
         const rows = await tx.select().from(plugins).where(eq(plugins.name, name)).limit(1);
@@ -98,7 +88,6 @@ export class PgPluginStore implements PluginStore {
         files: files.map((file) => ({
           path: file.path,
           executable: file.executable,
-          // Buffer（Uint8Array の派生）を素の Uint8Array にして返す（器ごとに型を揃える）。
           content: new Uint8Array(file.content),
         })),
         installedAt: toIso(row.installedAt),
@@ -111,10 +100,9 @@ export class PgPluginStore implements PluginStore {
   }
 
   async put(input: PluginInput): Promise<PluginSummary> {
-    // **書く前に検査する**（`PluginStore.put` の doc）。不正ならここで投げ、表には触れない。
     const plugin = parsePluginInput(input);
     await this.#db.transaction(async (tx) => {
-      // 大文字小文字だけが違う名前の同時 put が、互いの衝突検査をすり抜けないよう直列にする。
+      // 直列にする: 大文字小文字だけが違う名前の同時 put が互いの衝突検査をすり抜ける。
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('alteroid.plugins'))`);
       const clash = await tx
         .select({ name: plugins.name })
@@ -127,7 +115,7 @@ export class PgPluginStore implements PluginStore {
 
       const summary = pluginSummaryOf(plugin);
       const values = {
-        // 説明の無い置き換えで古い説明を残さないよう、null を明示して上書きする。
+        // null を明示する: 省くと説明の無い置き換えで古い説明が残る。
         description: plugin.description ?? null,
         source: plugin.source,
         scope: plugin.scope,
@@ -160,7 +148,6 @@ export class PgPluginStore implements PluginStore {
 
   async remove(name: string): Promise<boolean> {
     if (!isValidPluginName(name)) return false;
-    // plugin_files は外部キーの cascade で一緒に消える。
     const removed = await this.#db
       .delete(plugins)
       .where(eq(plugins.name, name))

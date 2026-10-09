@@ -3,14 +3,10 @@ import { request as httpsRequest } from 'node:https';
 import { isIPv4 } from 'node:net';
 
 /**
- * plugin の取り元が「器の内側」を指していないかの判定と、リダイレクトの手動追跡。
- *
- * - **名前を判定してから、git に名前解決をやり直させない。** 判定した後で DNS が差し替わると、
- *   git が別のアドレス（内部）へ届く。判定を通ったアドレスを `http.curloptResolve` で固定して渡す。
- * - **git にリダイレクトを辿らせない。** 辿らせると、途中のホップが判定を通らない。
- *   事前の GET で自分が辿り、各ホップで同じ判定を掛ける。
- * - 判定できない形（読めない IP・変則表記）は通さない。通すと、解釈の差が穴になる。
- * - 拒否の文言に、解決したアドレスを載せない（内部の構成を呼び手へ漏らさない）。
+ * 判定後に git へ名前解決をやり直させない: DNS が差し替わると内部のアドレスへ届くので、通ったアドレスを固定する。
+ * git にリダイレクトを辿らせない: 途中のホップが判定を通らないので、自分で辿って各ホップを判定する。
+ * 判定できない形（読めない IP・変則表記）は通さない: 解釈の差が穴になるから。
+ * 拒否の文言に解決したアドレスを載せない: 内部の構成を呼び手へ漏らさないため。
  */
 
 export type SourceGuardErrorKind = 'blocked' | 'invalid' | 'unavailable';
@@ -37,7 +33,6 @@ function bad(message: string): SourceGuardError {
   return new SourceGuardError('invalid', message);
 }
 
-/** ホスト名で拒むもの。大文字小文字と末尾のドットは区別しない。 */
 export function isBlockedHostname(host: string): boolean {
   const name = host.toLowerCase().replace(/\.+$/, '');
   if (name === '') return true;
@@ -52,7 +47,7 @@ function parseIPv4(text: string): [number, number, number, number] | null {
   if (parts.length !== 4) return null;
   const octets: number[] = [];
   for (const part of parts) {
-    // 先頭 0 は 8 進と読む実装がある。解釈が割れる形は通さない。
+    // 先頭 0 は通さない: 8 進と読む実装があり、解釈が割れるから。
     if (!/^(0|[1-9][0-9]{0,2})$/.test(part)) return null;
     const value = Number(part);
     if (value > 255) return null;
@@ -114,26 +109,22 @@ function blockedIPv6(text: string): boolean {
     blockedIPv4([hi >> 8, hi & 0xff, lo >> 8, lo & 0xff]);
   const zeroTo = (n: number) => g.slice(0, n).every((x) => x === 0);
 
-  // :: と ::1 を含む、上位 96 bit が 0 のもの（IPv4 互換）。
   if (zeroTo(6)) return embedded(g6, g7) || (g6 === 0 && g7 <= 1);
-  // IPv4 射影 ::ffff:a.b.c.d と、SIIT の ::ffff:0:a.b.c.d。
   if (zeroTo(5) && g5 === 0xffff) return embedded(g6, g7);
   if (zeroTo(4) && g4 === 0xffff && g5 === 0) return embedded(g6, g7);
-  // NAT64。64:ff9b::/96 は中の IPv4 で見る。ローカル用の 64:ff9b:1::/48 は丸ごと拒む。
+  // 64:ff9b:1::/48 は丸ごと拒む: ローカル用で中の IPv4 では判定できないから。
   if (g0 === 0x64 && g1 === 0xff9b) {
     if (g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) return embedded(g6, g7);
     if (g2 === 1) return true;
   }
-  // 6to4。中の IPv4 で見る。
   if (g0 === 0x2002) return embedded(g1, g2);
-  if ((g0 & 0xfe00) === 0xfc00) return true; // fc00::/7
-  if ((g0 & 0xffc0) === 0xfe80) return true; // fe80::/10
-  if ((g0 & 0xffc0) === 0xfec0) return true; // fec0::/10（廃止された site-local）
-  if (g0 >> 8 === 0xff) return true; // ff00::/8
+  if ((g0 & 0xfe00) === 0xfc00) return true;
+  if ((g0 & 0xffc0) === 0xfe80) return true;
+  if ((g0 & 0xffc0) === 0xfec0) return true;
+  if (g0 >> 8 === 0xff) return true;
   return false;
 }
 
-/** 解決したアドレス（IPv4・IPv6 の文字列）が、器の内側・予約の帯に入るか。読めなければ拒む。 */
 export function isBlockedAddress(address: string): boolean {
   const text = address.replace(/^\[|\]$/g, '');
   if (text.includes(':')) return blockedIPv6(text);
@@ -141,7 +132,6 @@ export function isBlockedAddress(address: string): boolean {
   return v4 === null ? true : blockedIPv4(v4);
 }
 
-/** curl の `--resolve` と同じ形（`host:port:addr[,addr]`、IPv6 は角括弧）。 */
 export function curlResolveValue(host: string, port: number, addresses: string[]): string {
   const list = addresses.map((a) => (a.includes(':') ? `[${a}]` : a)).join(',');
   return `${host}:${port}:${list}`;
@@ -154,7 +144,6 @@ type LookupCallback = (
   family?: number,
 ) => void;
 
-/** 名前解決をせず、判定済みのアドレスだけを返す `lookup`（Node の `https.request` 用）。 */
 export function pinnedLookup(addresses: string[]) {
   const results: LookupResult[] = addresses.map((address) => ({
     address,
@@ -172,7 +161,6 @@ export type Resolver = (host: string) => Promise<string[]>;
 
 export interface ProbeTarget {
   url: URL;
-  /** 判定を通ったアドレス。ここへだけ接続する。 */
   addresses: string[];
   timeoutMs: number;
 }
@@ -191,10 +179,7 @@ export const defaultResolver: Resolver = async (host) => {
 
 const bareHost = (url: URL) => url.hostname.replace(/^\[|\]$/g, '');
 
-/**
- * 応答の本文は読まない。リダイレクトを自動で辿らせない。プロキシも使わない
- * （`agent: false` で、環境変数のプロキシを拾う共有エージェントを避ける）。
- */
+// agent: false にする: 環境変数のプロキシを拾う共有エージェントを避けるため。
 export const defaultProbe: Probe = ({ url, addresses, timeoutMs }) =>
   new Promise<ProbeReply>((resolve, reject) => {
     const host = bareHost(url);
@@ -238,7 +223,6 @@ export interface Vetted {
 export interface GuardDeps {
   resolver?: Resolver;
   probe?: Probe;
-  /** 残りの時間（ミリ秒）を返す。 */
   remainingMs?: () => number;
 }
 
@@ -275,14 +259,9 @@ function repoUrlFrom(url: URL): string {
 }
 
 export interface GuardedSource extends Vetted {
-  /** git に渡す、リダイレクトを辿り終えた後のリポジトリの URL。 */
   repoUrl: string;
 }
 
-/**
- * 取り元の URL を判定し、`info/refs` への GET でリダイレクトを手動で辿って、最後のホストの
- * アドレスを確定させる。どのホップも、ホスト名と解決したすべてのアドレスを判定する。
- */
 export async function resolveRepoSource(
   rawUrl: string,
   deps: GuardDeps = {},

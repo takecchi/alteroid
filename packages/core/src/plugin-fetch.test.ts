@@ -9,11 +9,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createPluginFetcher, PluginFetchError } from './plugin-fetch.js';
 
-/**
- * ネットワークを使わない。ローカルの bare リポジトリを `git init` で作り、`file://` で取る
- * （本番の許可は https だけなので、テストだけが `allowedProtocols: 'file'` を渡す）。
- */
-
 const GIT_ENV = {
   PATH: process.env.PATH ?? '/usr/bin:/bin',
   GIT_CONFIG_GLOBAL: '/dev/null',
@@ -35,7 +30,6 @@ interface Entry {
   symlinkTo?: string;
 }
 
-/** 作業ツリーに書いて commit し、bare へ push する。bare の file:// URL と commit SHA を返す。 */
 async function makeRepo(
   entries: Entry[],
 ): Promise<{ url: string; sha: string; work: string; bare: string }> {
@@ -283,7 +277,6 @@ describe('createPluginFetcher: 任意の URL', () => {
     const dir = await makeTempDir('alteroid-fetch-trace-');
     const wrapper = join(dir, 'git-trace');
     const trace = join(dir, 'trace.log');
-    // git の trace は子の git にも継がれるので、切り離された maintenance が起きればここに残る。
     await writeFile(wrapper, `#!/bin/sh\nGIT_TRACE='${trace}' exec git "$@"\n`);
     await chmod(wrapper, 0o755);
     const repo = await makeRepo(BASIC);
@@ -481,7 +474,6 @@ describe('createPluginFetcher: 器の内側へ取りに行かない', () => {
   const INFO = '/info/refs?service=git-upload-pack';
   const SHA = 'a'.repeat(40);
 
-  /** git の代わり。引数と環境を記録し、ネットワークを使う操作（fetch・ls-remote）だけ失敗させる。 */
   async function gitSpy(): Promise<{
     gitPath: string;
     argsOf: () => Promise<string[]>;

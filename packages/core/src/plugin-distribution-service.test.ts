@@ -18,15 +18,6 @@ import {
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * plugin を runner へ配る1本道（`plugin-distribution-service.ts`）と、名乗りのたびの降ろし直し
- * （`manager.ts` の `#pushPlugins`）。`mcp-server-service.test.ts` の写し。
- *
- * HTTP 境界越しの形（base64・404・制御面の 400/413）は `apps/daemon/src/runner-plugins.test.ts` と
- * `apps/runner/src/plugins-routes.test.ts` が撃つ。ここはサービスとプールの判断を固定する。
- * 値はすべて偽物である。
- */
-
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
 
@@ -71,7 +62,7 @@ function fakeSdk(): typeof sdkQuery {
   }) as unknown as typeof sdkQuery;
 }
 
-/** promise だけで進む連鎖を使い切る。実時間の待ちは混むと賭けになるので使わない。 */
+// 実時間の待ちは使わない: 混むと賭けになる。
 async function flushMicrotasks(): Promise<void> {
   for (let i = 0; i < 50; i += 1) await Promise.resolve();
 }
@@ -81,13 +72,11 @@ interface Setup {
   runner: RunnerClient;
   pool: ManagerPool;
   service: ReturnType<typeof createPluginDistributionService>;
-  /** 走っている展開の完了と、その後の promise の連鎖を待つ。 */
   settle: () => Promise<void>;
 }
 
 const pluginBases: string[] = [];
 
-/** 展開先は読み取り専用（0o555）なので、掃除が消せるように書込み可へ戻す。 */
 function makeWritableSync(dir: string): void {
   const info = lstatSync(dir, { throwIfNoEntry: false });
   if (info === undefined || !info.isDirectory()) return;
@@ -110,7 +99,7 @@ function setup(): Setup {
     queryFn: fakeSdk(),
     env: { PATH: '/usr/bin' },
   });
-  // 展開は実ファイル I/O で、偽の時計では進まない。完了の promise を握って、時間ではなく完了を待つ。
+  // 展開は実ファイル I/O で偽の時計では進まないので、時間ではなく完了の promise を待つ。
   const pending = new Set<Promise<unknown>>();
   const realSetPlugin = runner.setPlugin?.bind(runner);
   if (realSetPlugin !== undefined) {
@@ -269,7 +258,6 @@ describe('plugin を配る（apply / syncRunner）', () => {
     await s.stores.plugins.put(pluginInput('p-one'));
     await s.stores.plugins.put(pluginInput('p-two'));
     await s.service.apply();
-    // p-two の取り元の sha が変わる。
     await s.stores.plugins.put(
       pluginInput('p-two', {
         source: { kind: 'url', url: 'https://example.invalid/plugins.git', sha: SHA_B },
@@ -420,8 +408,6 @@ describe('plugin を配る（apply / syncRunner）', () => {
     };
     const a = s.service.syncRunner(s.runner);
     const b = s.service.apply();
-    // a が止まっている間、b は始まらない。順番待ちは promise だけで進むので、
-    // 時間ではなくマイクロタスクを使い切って確かめる。
     await flushMicrotasks();
     expect(order).toEqual(['set:start']);
     release?.();
@@ -504,7 +490,6 @@ describe('plugin の降ろし直しと挑み直し（名乗り）', () => {
     await vi.advanceTimersByTimeAsync(180_000);
     expect(attempts).toBe(afterConnect);
 
-    // runner を上げた後の名乗り直しで降りる。
     s.runner.setPlugin = async (plugin) => ({
       name: plugin.name,
       sha: plugin.sourceSha,

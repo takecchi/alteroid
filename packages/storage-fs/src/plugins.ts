@@ -16,21 +16,13 @@ import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 /**
- * 人間が入れた plugin の置き場（既定 `~/.alteroid/plugins/`）。
+ * files は JSON の中に base64 で持ち、ディレクトリへ展開しない: 置き換えが rename 1回で原子的になり、
+ * files の path がファイルシステムの path にならないので検査をすり抜けても置き場の外へ書けない。
  *
- * **1 plugin = 1つの JSON（`<name>.json`）。** 本体の files は JSON の中に base64 で持ち、
- * **ディレクトリへ展開しない**。理由は2つ: (1) 置き換えが「tmp へ書いて rename」の1回で原子的になる
- * （files のディレクトリを入れ替える形は、途中で落ちると半端な plugin が残る）。(2) files の path が
- * ファイルシステムの path にならないので、path の検査をすり抜けても置き場の外へ書けない。
- * 展開は後の段（`ALTEROID_HOME/plugins/<name>@<sha>/`）が、検査済みの値からやる。
+ * 0600 / ディレクトリ 0700 で持つ: plugin はコードとプロンプトを持ち込むので他のユーザーに読ませも書かせもしない。
  *
- * **0600 / ディレクトリ 0700 で持つ**（`FsMcpServerStore` と同じ考え方。plugin はコードと
- * プロンプトを持ち込むので、他のユーザーに読ませも書かせもしない）。**`memory/` には置かない**。
- *
- * **読むときにも検査する。** ファイルは手で書き換えられるので、形と `contentSha256`（files から
- * 計算し直す）を突き合わせる。**読めなければ投げる**（黙って飛ばすと「入れたのに無い」が原因の出ない
- * 形で起きる）。文言に値は載せない（JSON.parse の SyntaxError は本文の断片を含む）。
- * `remove` は中身を読まないので、壊れたものも外せる。
+ * 読めなければ投げる: 黙って飛ばすと「入れたのに無い」が原因の出ない形で起きる。
+ * 文言に値は載せない（JSON.parse の SyntaxError は本文の断片を含む）。
  */
 export class FsPluginStore implements PluginStore {
   readonly #dir: string;
@@ -63,7 +55,7 @@ export class FsPluginStore implements PluginStore {
         throw new Error('保存された plugin の形が不正');
       }
       const object = parsed as Record<string, unknown>;
-      // **ファイル名と中の name が食い違うものは読まない**（別の名前になりすませない）。
+      // ファイル名と中の name が食い違うものは読まない: 別の名前になりすませてしまう。
       if (object.name !== name) throw new Error('ファイル名と name が食い違う');
       const files = Array.isArray(object.files)
         ? object.files.map((file: unknown) => {
@@ -94,7 +86,6 @@ export class FsPluginStore implements PluginStore {
     for (const entry of entries) {
       if (!entry.endsWith('.json')) continue;
       const name = entry.slice(0, -'.json'.length);
-      // 書き込みは必ず形に合う名前で行うので、合わないファイルは人の置いたもの（読まない）。
       if (!isValidPluginName(name)) continue;
       const plugin = await this.#readFile(name);
       if (plugin !== null) summaries.push(pluginSummaryOf(plugin));
@@ -108,8 +99,6 @@ export class FsPluginStore implements PluginStore {
   }
 
   async put(input: PluginInput): Promise<PluginSummary> {
-    // **書く前に検査する**（`PluginStore.put` の doc）。不正ならここで投げ、
-    // ファイルには1バイトも触れない（前のものが残る）。
     const plugin = parsePluginInput(input);
     await withPathLock(this.#dir, async () => {
       await mkdir(this.#dir, { recursive: true, mode: 0o700 });
@@ -128,7 +117,6 @@ export class FsPluginStore implements PluginStore {
           content: Buffer.from(file.content).toString('base64'),
         })),
       };
-      // 一時ファイルの時点で 0600（`writeFileAtomic` の `mode`）。
       await writeFileAtomic(this.#pathOf(plugin.name), `${JSON.stringify(body)}\n`, {
         mode: 0o600,
       });
@@ -151,7 +139,6 @@ export class FsPluginStore implements PluginStore {
         await rm(path, { force: true });
         return true;
       },
-      // 無いものを相手に空のディレクトリを作らない。
       { createDir: false },
     ).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;

@@ -9,11 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * plugin の置き場。契約は3実装で同じ関数を通す
- * （`packages/core/src/plugin-store-contract.ts`）。ここで足すのは fs だけが持つ形
- * —— 0600 / 0700 と、手で書き換えられたファイルの読み方。
- */
 let root: string;
 let stores: ReturnType<typeof createFsStores>;
 
@@ -59,7 +54,6 @@ describe('FsPluginStore', () => {
     await stores.plugins.put(input());
     const raw = await readFile(join(root, 'plugins', 'my-plugin.json'), 'utf8');
     expect(JSON.parse(raw)).toMatchObject({ name: 'my-plugin' });
-    // 展開用のディレクトリは作らない（展開は後の PR）
     expect(await readdir(root)).not.toContain('my-plugin');
   });
 

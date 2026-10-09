@@ -74,7 +74,6 @@ describe('plugin の保存の形', () => {
       }
       expect(() => parsePluginInput(validInput({ scope: 'clone' }))).toThrow();
       expect(() => parsePluginInput(validInput({ scope: 'manager' }))).toThrow();
-      // 旧案の撒く先の形は受けない
       expect(() =>
         parsePluginInput(validInput({ targets: { clone: true, manager: true, worker: true } })),
       ).toThrow();
@@ -168,7 +167,6 @@ describe('plugin の保存の形', () => {
         '',
         'https://example.com/a\u0000',
         `https://example.com/${'a'.repeat(3000)}`,
-        // 資格がクエリやフラグメントに載っても、日誌・DB に残さない。
         'https://example.com/a?token=fake-value-for-test',
         'https://example.com/a?',
         'https://example.com/a#fragment',

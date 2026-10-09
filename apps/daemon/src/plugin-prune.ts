@@ -5,13 +5,7 @@ import {
   type Stores,
 } from '@alteroid/core';
 
-/**
- * 起動時に、ストアに無い版の展開済みディレクトリと `.tmp-*` を消す。
- *
- * **失敗しても投げない。** 片づけが出来ないことで daemon が起きなくなると、古い版が残るだけの
- * 問題がクローン全体の停止になる（`applyAppScopedEnvVars` と同じ扱い）。`list` が読めなかった
- * ときは何も消さない（`pruneExtractedPluginsAgainstStore` の約束）。
- */
+/** 失敗しても投げない: 片づけの失敗で daemon が起きなくなると、古い版が残るだけの問題がクローン全体の停止になる。 */
 export async function pruneExtractedPluginsOnBoot(options: {
   root: string;
   store: Stores['plugins'];
