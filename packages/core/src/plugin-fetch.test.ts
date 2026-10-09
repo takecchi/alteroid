@@ -278,6 +278,21 @@ describe('createPluginFetcher: 任意の URL', () => {
       fetcher({ maxFetchBytes: 1000 }).fetch({ kind: 'url', url: repo.url, sha: repo.sha }),
     ).rejects.toBeInstanceOf(PluginFetchError);
   });
+
+  it('fetch に自動の保守（maintenance --auto --detach）を起こさせない（作業場の後片づけと競合する。#4099）', async () => {
+    const dir = await makeTempDir('alteroid-fetch-trace-');
+    const wrapper = join(dir, 'git-trace');
+    const trace = join(dir, 'trace.log');
+    // git の trace は子の git にも継がれるので、切り離された maintenance が起きればここに残る。
+    await writeFile(wrapper, `#!/bin/sh\nGIT_TRACE='${trace}' exec git "$@"\n`);
+    await chmod(wrapper, 0o755);
+    const repo = await makeRepo(BASIC);
+    await fetcher({ gitPath: wrapper }).fetch({ kind: 'url', url: repo.url, sha: repo.sha });
+    const log = await readFile(trace, 'utf8');
+    expect(log).toContain('built-in: git');
+    expect(log).toMatch(/fetch -q --depth 1/);
+    expect(log).not.toContain('maintenance run');
+  });
 });
 
 describe('createPluginFetcher: marketplace', () => {

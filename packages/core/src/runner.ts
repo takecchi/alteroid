@@ -1396,6 +1396,8 @@ class Host implements RunnerHost {
       ),
     );
     this.#sessions.clear();
+    // 予約済みの plugin の片づけ（retainPlugins の投げっぱなし）を待つ: 待たずに返すと、畳んだ後にも展開先を消し続け、呼び手の後片づけと競合するため（#4286）
+    await this.#pluginsChain;
     // セッションを畳んだ後に閉じる: 先に閉じると、畳みの途中の peer の中継が切れるため
     this.#peerSocket?.close();
     this.#peerSocket = undefined;

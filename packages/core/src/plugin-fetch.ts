@@ -148,6 +148,8 @@ async function dirSize(path: string): Promise<number> {
   return total;
 }
 
+const NO_AUTO_MAINTENANCE = ['-c', 'maintenance.auto=false', '-c', 'gc.auto=0'] as const;
+
 /**
  * git を1回走らせる。shell を通さない。全体の期限を超えたら殺す。`watchDir` があれば、その大きさが
  * 上限を超えた時点で殺す（走り終えた後にも1回見る）。
@@ -160,7 +162,9 @@ async function runGit(
   const remaining = ctx.deadline - Date.now();
   if (remaining <= 0) throw unavailable('取得の時間の上限を超えた');
   const maxStdout = options.maxStdout ?? 1024 * 1024;
-  const fullArgs = [...(options.net ?? []), ...args];
+  // 自動の保守を止める: fetch は終わり際に `git maintenance run --auto --detach` を切り離して起こし、それが
+  // 作業場の objects/ へ書く。グループの外へ出るので殺せず、後片づけの rm と競合して ENOTEMPTY になる（#4099）
+  const fullArgs = [...NO_AUTO_MAINTENANCE, ...(options.net ?? []), ...args];
 
   return await new Promise<GitResult>((resolve, reject) => {
     const child = spawn(ctx.gitPath, fullArgs, {

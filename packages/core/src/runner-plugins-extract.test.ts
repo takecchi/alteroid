@@ -238,6 +238,17 @@ describe('Host の plugin の受け取り（展開）', () => {
     expect(host.plugins()).toBeUndefined();
   });
 
+  it('shutdown は retain が予約した片づけを待ってから返す（畳んだ後に展開先を消し続けない。#4286）', async () => {
+    const { host } = makeHost();
+    await host.setPlugin('p-one', wire('p-one'));
+    await host.setPlugin('p-two', wire('p-two'));
+    host.retainPlugins([]);
+    await host.shutdown();
+    // 待たずに返していれば、ここではまだ消える前か、消えている途中である。
+    expect(await exists(dirOf('p-one'))).toBe(false);
+    expect(await exists(dirOf('p-two'))).toBe(false);
+  });
+
   it('走行中のセッションがあるあいだは旧版（sha 違い・外したもの）のディスクを消さず、1つも無くなったら消す', async () => {
     const { host } = makeHost();
     await host.setPlugin('p-one', wire('p-one', SHA_A));
