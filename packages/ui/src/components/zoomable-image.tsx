@@ -2,6 +2,28 @@ import { useState } from 'react';
 
 import { DialogContent, Dialog, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 
+/** 読めなかった画像の代わりの「画像: 説明」の文字とリンク。 */
+export function ImageFallback({ src, alt }: { src: string; alt: string }) {
+  const label = alt === '' ? '画像' : `画像: ${alt}`;
+  return (
+    <span className="text-sm text-muted-foreground">
+      {src === '' ? (
+        <span>{label}</span>
+      ) : (
+        <a
+          href={src}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline underline-offset-2 hover:text-foreground"
+        >
+          {label}
+        </a>
+      )}
+      （画像を読み込めなかった）
+    </span>
+  );
+}
+
 /**
  * `blob:` URL を作らず・解放もしない: 持ち主は呼び出し側で、発言の添付は画面から外れたときに呼び出し側が revoke するため。
  * 複数枚の左右送りを作らない: バンドル予算が約 10 KB しか無いため。
@@ -20,27 +42,8 @@ export function ZoomableImage({
   // boolean にしない: src が変わったとき（添付の再取得で blob: が替わる）に effect で戻す手間を避けるため
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
-  if (failedSrc === src) {
-    // 壊れた画像を拡大の窓へ渡さない: 窓の中の画像も原寸リンクも同じ src で壊れるため
-    const label = alt === '' ? '画像' : `画像: ${alt}`;
-    return (
-      <span className="text-sm text-muted-foreground">
-        {src === '' ? (
-          <span>{label}</span>
-        ) : (
-          <a
-            href={src}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-foreground"
-          >
-            {label}
-          </a>
-        )}
-        （画像を読み込めなかった）
-      </span>
-    );
-  }
+  // 壊れた画像を拡大の窓へ渡さない: 窓の中の画像も原寸リンクも同じ src で壊れるため
+  if (failedSrc === src) return <ImageFallback src={src} alt={alt} />;
 
   return (
     <Dialog>

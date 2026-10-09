@@ -13,4 +13,5 @@ export * from './components/features';
 export * from './hooks/use-is-mobile';
 export * from './hooks/use-measured-height';
 export { cn } from './lib/utils';
+export * from './lib/daemon-images';
 export * from './lib/display-text';

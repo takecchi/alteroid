@@ -12,6 +12,7 @@ import { redactError } from '@alteroid/logic';
 import { ApiProvider } from '@alteroid/swr';
 import { DocumentTitle } from '@alteroid/ui';
 
+import { WebDaemonImagesProvider } from '~/lib/daemon-images';
 import { WebDisplayTextProvider } from '~/lib/display-text';
 import { usePreventWindowFileDrop } from '~/lib/use-prevent-file-drop';
 
@@ -63,7 +64,10 @@ export default function App() {
     <ApiProvider>
       {/* WebDisplayTextProvider を外さない: ui の部品の既定は恒等で、外すと伏せずに出るため */}
       <WebDisplayTextProvider>
-        <Outlet />
+        {/* WebDaemonImagesProvider を外さない: 外すと Markdown の画像にデーモンの添付の URL を書いても、認証が無く読めない */}
+        <WebDaemonImagesProvider>
+          <Outlet />
+        </WebDaemonImagesProvider>
       </WebDisplayTextProvider>
     </ApiProvider>
   );
