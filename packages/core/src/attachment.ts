@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import type { Readable } from 'node:stream';
 
 import {
   ATTACHMENT_MAX_IMAGE_DIMENSION,
@@ -91,6 +92,11 @@ export interface AttachmentPutInput {
   readonly uploadedBy?: string;
 }
 
+/** {@link AttachmentStore.putStream} の入力。{@link AttachmentPutInput} の `bytes` を `body` に替えたもの（#4128 段1）。 */
+export interface AttachmentPutStreamInput extends Omit<AttachmentPutInput, 'bytes'> {
+  readonly body: AsyncIterable<Uint8Array>;
+}
+
 export interface AttachmentBindResult {
   readonly bound: string[];
   /** この呼び出しで新しく結んだ id。断るときに `unbind` してよいのはこれだけ。 */
@@ -102,6 +108,14 @@ export interface AttachmentBindResult {
 export interface AttachmentStore {
   put(input: AttachmentPutInput): Promise<AttachmentMeta>;
   get(id: string): Promise<{ meta: AttachmentMeta; bytes: Uint8Array } | undefined>;
+  /**
+   * 中身をストリームで預ける（#4128 段1）。{@link put} と同じ検査・同じ断り（`AttachmentRejectedError`）で、
+   * 上限は**流しながら数えて**掛ける（超えた時点で読むのを止める。超えた分を溜めない）。
+   * 断った時・`body` が途中で投げた時は、控えも中身も残さない（`body` の例外はそのまま投げる）。
+   */
+  putStream(input: AttachmentPutStreamInput): Promise<AttachmentMeta>;
+  /** 中身をストリームで読む（#4128 段1）。期限切れ・無いものは {@link get} と同じ判定で `undefined`。 */
+  open(id: string): Promise<{ meta: AttachmentMeta; stream: Readable } | undefined>;
   getMeta(id: string): Promise<AttachmentMeta | undefined>;
   bind(ids: readonly string[], conversationId: string): Promise<AttachmentBindResult>;
   bindToExternalEvent(ids: readonly string[], eventId: string): Promise<AttachmentBindResult>;
@@ -803,13 +817,119 @@ export function prepareAttachment(
   now: Date,
 ): AttachmentMeta {
   const { name, mediaType } = validateAttachmentInput(input, limits);
+  return buildAttachmentMeta(
+    input,
+    { name, mediaType, size: input.bytes.length, sha256: sha256Hex(input.bytes) },
+    limits,
+    now,
+  );
+}
+
+/**
+ * 流して入れるときの、読み始める前の検査の結果（#4128 段1）。
+ * `max` は {@link validateAttachmentInput} が最終的に掛けるのと同じ上限（画像は `maxImageBytes`、それ以外は `maxFileBytes`）。
+ */
+export interface AttachmentStreamPlan {
+  readonly name: string;
+  readonly mediaType: string;
+  readonly image: boolean;
+  readonly max: number;
+}
+
+/** 読み始める前の検査: mediaType が空なら断り、名前・mediaType の正規化と上限を決める。 */
+export function planAttachmentStream(
+  input: Pick<AttachmentPutStreamInput, 'name' | 'mediaType'>,
+  limits: AttachmentLimits,
+): AttachmentStreamPlan {
+  const mediaType = normalizeAttachmentMediaType(input.mediaType);
+  if (mediaType === '') {
+    throw new AttachmentRejectedError('media_type_missing', 'mediaType が空');
+  }
+  const image = isAttachmentImageMediaType(mediaType);
+  return {
+    name: normalizeAttachmentName(input.name),
+    mediaType,
+    image,
+    max: image ? limits.maxImageBytes : limits.maxFileBytes,
+  };
+}
+
+/**
+ * 流しながら大きさと sha256 を数える部品（#4128 段1）。
+ * 上限を超えた時点で `AttachmentRejectedError('too_large')` を投げる（文言は {@link put} と同じ。大きさは「そこまでに数えた分」）。
+ */
+export class AttachmentStreamMeter {
+  readonly #plan: AttachmentStreamPlan;
+  readonly #hash = createHash('sha256');
+  #size = 0;
+
+  constructor(plan: AttachmentStreamPlan) {
+    this.#plan = plan;
+  }
+
+  write(chunk: Uint8Array): void {
+    this.#size += chunk.length;
+    if (this.#size > this.#plan.max) {
+      throw new AttachmentRejectedError(
+        'too_large',
+        attachmentTooLargeMessage(this.#plan.image ? 'image' : 'file', this.#size, this.#plan.max),
+      );
+    }
+    this.#hash.update(chunk);
+  }
+
+  /** 0 バイトなら `empty`。通れば大きさと sha256（hex）を返す。 */
+  finish(): { size: number; sha256: string } {
+    if (this.#size === 0) throw new AttachmentRejectedError('empty', ATTACHMENT_EMPTY_MESSAGE);
+    return { size: this.#size, sha256: this.#hash.digest('hex') };
+  }
+}
+
+/** 上限つきで全部集める（memory・pg と、fs の画像が使う）。超えた時点で読むのを止める。 */
+export async function collectAttachmentStream(
+  body: AsyncIterable<Uint8Array>,
+  plan: AttachmentStreamPlan,
+): Promise<Uint8Array> {
+  const meter = new AttachmentStreamMeter(plan);
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of body) {
+    meter.write(chunk);
+    chunks.push(chunk);
+  }
+  meter.finish();
+  return Buffer.concat(chunks);
+}
+
+/** 流し終えたあとの控え（fs が使う）。 */
+export function prepareStreamedAttachment(
+  input: AttachmentPutStreamInput,
+  plan: AttachmentStreamPlan,
+  done: { size: number; sha256: string },
+  limits: AttachmentLimits,
+  now: Date,
+): AttachmentMeta {
+  return buildAttachmentMeta(
+    input,
+    { name: plan.name, mediaType: plan.mediaType, ...done },
+    limits,
+    now,
+  );
+}
+
+function buildAttachmentMeta(
+  input: Pick<AttachmentPutInput, 'conversationId' | 'uploadedBy' | 'kept'>,
+  fixed: { name: string; mediaType: string; size: number; sha256: string },
+  limits: AttachmentLimits,
+  now: Date,
+): AttachmentMeta {
   if (input.conversationId !== undefined) assertNoNul('conversationId', input.conversationId);
+  const { name, mediaType, size, sha256 } = fixed;
   return {
     id: randomUUID(),
     name,
     mediaType,
-    size: input.bytes.length,
-    sha256: sha256Hex(input.bytes),
+    size,
+    sha256,
     ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
     ...(input.uploadedBy === undefined || input.uploadedBy === ''
       ? {}

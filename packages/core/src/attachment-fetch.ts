@@ -1,7 +1,9 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import { mkdir, readdir, readFile, rename, rm, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 import { sha256Hex } from './auth.js';
 import { reasonOf } from './dropped-record.js';
@@ -50,10 +52,13 @@ export async function fetchAttachmentCopy(
   copiesDir: string,
   id: string,
 ): Promise<AttachmentFetchResult> {
-  const found = await stores.attachments.get(id);
+  const found = await stores.attachments.open(id);
   if (found === undefined) return { ok: false, reason: 'not_found' };
-  const { meta, bytes } = found;
-  if (!SAFE_ID.test(meta.id)) return { ok: false, reason: 'unsafe' };
+  const { meta, stream } = found;
+  if (!SAFE_ID.test(meta.id)) {
+    stream.destroy();
+    return { ok: false, reason: 'unsafe' };
+  }
   // 保存時に正規化済みでも省かない: 置き場の実装を信じず、ここでも区切りを落とす
   const name = normalizeAttachmentName(meta.name);
   // 丸めるのはディスク上の名前だけ: NAME_MAX（255 バイト）に収めるため。返す `name`（表示）は丸めない
@@ -62,16 +67,16 @@ export async function fetchAttachmentCopy(
   const dir = resolve(base, meta.id);
   const path = resolve(dir, diskName);
   if (!dir.startsWith(base + sep) || !path.startsWith(dir + sep)) {
+    stream.destroy();
     return { ok: false, reason: 'unsafe' };
   }
-  const sha256 = sha256Hex(bytes);
-  const copy = (reused: boolean): AttachmentFetchResult => ({
+  const copy = (reused: boolean, size: number, sha256: string): AttachmentFetchResult => ({
     ok: true,
-    copy: { path, name, mediaType: meta.mediaType, size: bytes.length, sha256, reused },
+    copy: { path, name, mediaType: meta.mediaType, size, sha256, reused },
   });
 
   const existing = await readFile(path).catch(() => undefined);
-  if (existing !== undefined && sha256Hex(existing) === sha256) {
+  if (existing !== undefined && sha256Hex(existing) === meta.sha256) {
     // 印が付けられない・パスが無いなら返さず書き直す: 確かめてから印を付けるまでの間に掃除が消したため
     const now = new Date();
     const touched = await utimes(dir, now, now).then(
@@ -84,20 +89,37 @@ export async function fetchAttachmentCopy(
         () => true,
         () => false,
       ))
-    )
-      return copy(true);
+    ) {
+      // 写しが使えるなら中身は読まない
+      stream.destroy();
+      return copy(true, existing.length, meta.sha256);
+    }
   }
   await mkdir(dir, { recursive: true, mode: 0o700 });
   // 一時ファイル名に名前を足さない: NAME_MAX を超えるため
   const tmp = resolve(dir, `.${randomUUID()}.tmp`);
   try {
-    await writeFile(tmp, bytes, { mode: 0o600 });
+    // 書きながら大きさと sha256 を数える（写しの控えは書いたものから作る）
+    const hash = createHash('sha256');
+    let size = 0;
+    await pipeline(
+      stream,
+      async function* (source: AsyncIterable<Uint8Array>) {
+        for await (const chunk of source) {
+          hash.update(chunk);
+          size += chunk.length;
+          yield chunk;
+        }
+      },
+      createWriteStream(tmp, { mode: 0o600 }),
+    );
     await rename(tmp, path);
+    return copy(false, size, hash.digest('hex'));
   } catch (error) {
+    stream.destroy();
     await rm(tmp, { force: true }).catch(() => undefined);
     throw error;
   }
-  return copy(false);
 }
 
 /** 期限切れ・元が消えた写しを消し、消した件数を返す。 */

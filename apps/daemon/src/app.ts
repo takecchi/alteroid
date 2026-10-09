@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
+import { Readable } from 'node:stream';
+import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 
 import type {
   AccountUsageState,
@@ -3347,12 +3349,15 @@ export function createApp(deps: AppDeps) {
             403,
           );
         }
-        const bytes = new Uint8Array(await c.req.arrayBuffer());
+        // 本文は流したまま置き場へ渡す（上限は置き場が流しながら数える。#4128 段1）。本文が無ければ空として扱う（`empty`）
+        const raw = c.req.raw.body;
+        const body: AsyncIterable<Uint8Array> =
+          raw === null ? Readable.from([]) : Readable.fromWeb(raw as NodeWebReadableStream);
         try {
-          const meta = await stores.attachments.put({
+          const meta = await stores.attachments.putStream({
             name: name ?? '',
             mediaType: type,
-            bytes,
+            body,
             ...(keep === true ? { kept: true } : {}),
             // 誰が上げたか（識別子だけ）。門番（`authenticate`）が `c` に載せた principal から作る。
             uploadedBy: uploaderOf(c.get('principal')),
@@ -3489,14 +3494,14 @@ export function createApp(deps: AppDeps) {
         },
       }),
       async (c) => {
-        const found = await stores.attachments.get(c.req.param('id'));
+        const found = await stores.attachments.open(c.req.param('id'));
         if (found === undefined) return c.json({ error: 'not found' as const }, 404);
-        const { meta, bytes } = found;
-        return c.body(bytes as Uint8Array<ArrayBuffer>, 200, {
+        const { meta, stream } = found;
+        return c.body(Readable.toWeb(stream) as ReadableStream, 200, {
           'content-type': SAFE_MEDIA_TYPE.test(meta.mediaType)
             ? meta.mediaType
             : 'application/octet-stream',
-          'content-length': String(bytes.length),
+          'content-length': String(meta.size),
           'content-disposition': attachmentDisposition(meta.name),
           'x-content-type-options': 'nosniff',
         });

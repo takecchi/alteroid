@@ -1,5 +1,9 @@
+import { Readable } from 'node:stream';
+
 import {
   ATTACHMENT_UNBOUND_TTL_MS,
+  collectAttachmentStream,
+  planAttachmentStream,
   assertNoNul,
   attachmentBindKeyOf,
   attachmentBindTargetLabel,
@@ -18,6 +22,7 @@ import {
   type AttachmentListQuery,
   type AttachmentMeta,
   type AttachmentPutInput,
+  type AttachmentPutStreamInput,
   type AttachmentStore,
   type AttachmentStoreOptions,
   type AttachmentUsage,
@@ -179,6 +184,19 @@ export class PgAttachmentStore implements AttachmentStore {
       keptAt: meta.keptAt === undefined ? null : new Date(meta.keptAt),
     });
     return meta;
+  }
+
+  /** bytea はこの段（#4128 段1）では流せない: 上限つきで集めてから `put` と同じ経路で入れる（段2で外部ストレージへ寄せる）。 */
+  async putStream(input: AttachmentPutStreamInput): Promise<AttachmentMeta> {
+    const limits = this.#options.limits ?? readAttachmentLimits().limits;
+    const plan = planAttachmentStream(input, limits);
+    const { body, ...rest } = input;
+    return this.put({ ...rest, bytes: await collectAttachmentStream(body, plan) });
+  }
+
+  async open(id: string): Promise<{ meta: AttachmentMeta; stream: Readable } | undefined> {
+    const got = await this.get(id);
+    return got === undefined ? undefined : { meta: got.meta, stream: Readable.from([got.bytes]) };
   }
 
   async get(id: string): Promise<{ meta: AttachmentMeta; bytes: Uint8Array } | undefined> {

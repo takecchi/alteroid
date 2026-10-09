@@ -1,5 +1,6 @@
 import { readdir, readFile, stat, utimes, writeFile } from 'node:fs/promises';
 import { basename, join, resolve, sep } from 'node:path';
+import { Readable } from 'node:stream';
 
 import { describe, expect, it } from 'vitest';
 
@@ -107,6 +108,10 @@ describe('attachment_fetch（#3111 段2）', () => {
     const evil = (id: string, name: string) =>
       ({
         get: async () => ({ meta: evilMeta(id, name), bytes: Uint8Array.from([1]) }),
+        open: async () => ({
+          meta: evilMeta(id, name),
+          stream: Readable.from([Uint8Array.from([1])]),
+        }),
       }) as unknown as AttachmentStore;
 
     const byId = await fetchAttachmentCopy({ attachments: evil('../escape', 'x') }, dir, 'q');

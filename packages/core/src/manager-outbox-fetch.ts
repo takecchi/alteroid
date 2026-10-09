@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   AttachmentRejectedError,
   isAttachmentImageMediaType,
@@ -181,7 +183,9 @@ async function fetchOne(input: {
       reason: `1つの上限（${input.limits.maxFileBytes} バイト）を超える（申告 ${file.size} バイト）ので取りに行かなかった`,
     };
   }
-  let bytes: Uint8Array;
+  // 画像（宣言）は先頭の検めと入れ直しに中身が要るので、これまでどおり集めて入れる。それ以外は置き場へ流す（#4128 段1）
+  const image = isAttachmentImageMediaType(file.mediaType.split(';')[0]!.trim().toLowerCase());
+  let bytes: Uint8Array | undefined;
   try {
     const opening = input.open(input.managerId, file.fileId, { signal });
     const content = await raceAbort(opening, signal);
@@ -206,6 +210,7 @@ async function fetchOne(input: {
         reason: `runner の応答の大きさ（${content.size} バイト）が報告の申告（${file.size} バイト）と合わない`,
       };
     }
+    if (!image) return await streamToStore(input, content.body);
     const read = await readBounded(content.body, file.size, signal);
     if (read.kind === 'aborted') return { ok: false, reason: input.timedOutReason() };
     if (read.kind === 'too_large') {
@@ -238,6 +243,112 @@ async function fetchOne(input: {
   } catch (error) {
     return { ok: false, reason: `置き場へ入れられなかった: ${reasonOf(error)}` };
   }
+  return bindToReport(input, meta);
+}
+
+type FetchOneInput = Parameters<typeof fetchOne>[0];
+
+class OutboxStreamStop extends Error {}
+
+/**
+ * 画像でないファイルを、集めずに置き場へ流す（#4128 段1）。取りながら大きさと sha256 を数え、申告を超えたら打ち切る。
+ * 流し終えてから申告と照合し、合わなければ**入れたものを消す**（これまでの「照合してから入れる」と結果が同じ）。
+ */
+async function streamToStore(
+  input: FetchOneInput,
+  body: AsyncIterable<Uint8Array>,
+): Promise<FetchOneOutcome> {
+  const { file, signal } = input;
+  const iterator = body[Symbol.asyncIterator]();
+  const hash = createHash('sha256');
+  let total = 0;
+  let ended = false;
+  let stop: 'aborted' | 'too_large' | undefined;
+  let bodyError: { error: unknown } | undefined;
+  const source = (async function* (): AsyncGenerator<Uint8Array> {
+    try {
+      for (;;) {
+        const pending = iterator.next();
+        // 中断で待つのをやめた後に遅れて拒否されても、未処理の拒否にしない
+        pending.catch(() => undefined);
+        const step = await raceAbort(pending, signal);
+        if (step === 'aborted') {
+          stop = 'aborted';
+          throw new OutboxStreamStop();
+        }
+        if (step.done === true) {
+          ended = true;
+          return;
+        }
+        total += step.value.length;
+        if (total > file.size) {
+          stop = 'too_large';
+          throw new OutboxStreamStop();
+        }
+        hash.update(step.value);
+        yield step.value;
+      }
+    } catch (error) {
+      if (!(error instanceof OutboxStreamStop)) bodyError = { error };
+      throw error;
+    } finally {
+      // 読み切らずに抜けるときに、相手の繋ぎを畳む（待たない）
+      void Promise.resolve(iterator.return?.()).catch(() => undefined);
+    }
+  })();
+
+  let meta;
+  try {
+    meta = await input.store.putStream({
+      name: file.name,
+      mediaType: file.mediaType,
+      body: source,
+      uploadedBy: input.uploadedBy,
+    });
+  } catch (error) {
+    if (stop === 'aborted' || (signal.aborted && !ended)) {
+      return { ok: false, reason: input.timedOutReason() };
+    }
+    if (stop === 'too_large') {
+      return {
+        ok: false,
+        reason: `runner の申告（${file.size} バイト）を超えて送ってきたので、途中で打ち切った`,
+      };
+    }
+    if (bodyError !== undefined) {
+      return { ok: false, reason: `取り出しに失敗した: ${reasonOf(bodyError.error)}` };
+    }
+    if (ended) {
+      const mismatch = mismatchOf(file, total, hash);
+      if (mismatch !== undefined) return { ok: false, reason: mismatch };
+    }
+    return { ok: false, reason: `置き場へ入れられなかった: ${reasonOf(error)}` };
+  }
+  const mismatch = mismatchOf(file, total, hash);
+  if (mismatch !== undefined) {
+    // 照合に落ちたら、入れたものを消す
+    await input.store.remove(meta.id).catch(() => undefined);
+    return { ok: false, reason: mismatch };
+  }
+  return bindToReport(input, meta);
+}
+
+function mismatchOf(
+  file: RunnerOutboxFile,
+  total: number,
+  hash: ReturnType<typeof createHash>,
+): string | undefined {
+  if (total !== file.size) {
+    return `大きさが申告（${file.size} バイト）と合わない（${total} バイト受け取った）`;
+  }
+  if (hash.copy().digest('hex') !== file.sha256) return 'sha256 が申告と合わない';
+  return undefined;
+}
+
+async function bindToReport(
+  input: FetchOneInput,
+  meta: Awaited<ReturnType<AttachmentStore['put']>>,
+): Promise<FetchOneOutcome> {
   try {
     const bound = await input.store.bindToManagerReport([meta.id], input.reportId);
     if (!bound.bound.includes(meta.id)) {
