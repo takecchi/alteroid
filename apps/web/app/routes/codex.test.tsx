@@ -7,11 +7,6 @@ import { json, Providers, TestDataRouter, storeTestBaseUrl } from '~/test-suppor
 
 import Codex from './codex';
 
-/**
- * Codex の ChatGPT ログインの画面（#3939）。CLI・HTTP と同じ口（`/codex/*`）を叩き、
- * ログインの確認用 URL とコードを出し、承認されたら状態が変わる。値は画面に来ない。
- */
-
 let originalFetch: typeof fetch;
 
 beforeEach(() => {
@@ -68,7 +63,6 @@ const RUNNER: RunnerSummary = {
 const CLOSED_REASON =
   'Codex の資格がこの器に届いていない（ChatGPT ログインも CODEX_API_KEY も無い）';
 
-// openapi-fetch は fetch(new Request(...)) の形で呼ぶので、method は Request から読む。
 function stub(state: { status: unknown; login: unknown; runners?: RunnerSummary[] }) {
   const calls: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -208,7 +202,6 @@ describe('マネージャーから頼めるか（実行環境ごと。#4118）',
     renderPage();
     expect(await screen.findByText('頼める')).toBeTruthy();
     expect(screen.getByText('名指しできるモデル: gpt-5.5')).toBeTruthy();
-    // 名乗らない旧い runner は「閉じている」と描かない
     expect(screen.getByText('不明')).toBeTruthy();
     expect(screen.queryByText(/Codex を頼める実行環境がまだ無い/)).toBeNull();
   });

@@ -57,28 +57,11 @@ import type {
   UsageUnmeteredRow,
 } from '@alteroid/logic';
 
-/**
- * `/usage` — alteroid が使った分（トークンと費用）。
- *
- * 経路は `GET /usage` の1本だけ（`apps/daemon/src/app.ts`「経路は1本だけにする」）。
- * CLI（`alteroid usage` / chat の `/usage`）・クローンの道具（`usage_read`）と
- * 同じものを見る。
- *
- * **算術は core（`summarizeUsage` / `formatUsd`）に任せる。** ここで足し直したり
- * 丸め直したりしない — 口ごとに数字が食い違うと、この画面自体が信用を失う。
- */
+// 算術は core に任せる。ここで足し直す・丸め直すと、口ごとに数字が食い違う。
 
-/** 軸ごとの表示上限。**打ち切ったら必ずそう書く**（黙って切り捨てない）。 */
 const AXIS_LIMIT = 20;
 
-/**
- * 集計で読めずに外した行が在ることを、合計の上で断る（Issue #2427。ホームの
- * 「今日の利用」カードも使う）。**0件・欄なし（古いデーモン）なら描かない**——
- * 「読めない行は 0 行」を作らない。
- *
- * **文言を画面で書き直さない。** `describeUnreadableUsageRows`（core）が出した行を
- * そのまま並べる（CLI・`usage_read` と同じ言葉になる）。
- */
+/** 0件・欄なし（古いデーモン）なら描かない。文言は core が出した行をそのまま並べる。 */
 export function UnreadableUsageRowsNote({
   rows,
   className,
@@ -91,11 +74,7 @@ export function UnreadableUsageRowsNote({
   return <WarnNote className={className}>{lines.join(' ')}</WarnNote>;
 }
 
-/**
- * 消費を報告しない provider のターンが在ることを、合計の上で断る（Issue #486 M7）。
- * **0 ではなく取れなかった**と言う。0件・欄なし（Claude だけの器・古いデーモン）なら
- * 描かない。文言は `describeUnmeteredUsage`（core）をそのまま並べる。
- */
+/** 0 ではなく「取れなかった」と言う。0件・欄なしなら描かない。文言は core をそのまま並べる。 */
 export function UnmeteredUsageNote({
   rows,
   className,
@@ -108,21 +87,7 @@ export function UnmeteredUsageNote({
   return <WarnNote className={className}>{lines.join(' ')}</WarnNote>;
 }
 
-/**
- * 絞り込みを載せる URL のクエリパラメタ名（issue #2050）。
- *
- * **`UsageQuery` の欄名（`from` / `to` / `managerId` / `layer` / `site` /
- * `tokenId`）をそのまま使う。** `journal.tsx` の `types`（#2029）や
- * `managers.tsx` の `status`（#2030）のようにカンマ区切りへまとめる理由が
- * ここには無い——どれも「1つの値」で、複数値を1つのパラメタへ詰める必要が
- * 無いので、API のクエリ名と揃えたほうが読み手には素直である。
- *
- * **`from` / `to` / `managerId` は `packages/logic/src/usage-links.ts` の正本を使う（issue
- * #2077 / #2078）。** 委譲の詳細（`manager-detail.tsx`）とホーム
- * （`dashboard-tiles.tsx`）が `/usage` へのリンクを組み立てるとき、同じ欄名を
- * 書き写さずに済ませるため——書き写すと、片方だけ変わる経路が生まれる。
- * `layer` / `site` / `tokenId` はまだ書き写す先が無いので、ここに残す。
- */
+// `from` / `to` / `managerId` は logic の正本を使う。他画面のリンク組み立てと欄名を書き写すと、片方だけ変わる経路が生まれる。
 const FROM_PARAM = USAGE_FROM_PARAM;
 const TO_PARAM = USAGE_TO_PARAM;
 const MANAGER_ID_PARAM = USAGE_MANAGER_ID_PARAM;
@@ -145,16 +110,7 @@ function duplicateParamNotices(searchParams: URLSearchParams): string[] {
     .map(([, label]) => `${label}の指定が複数あるので、先頭の値を使っています`);
 }
 
-/**
- * `LAYER_PARAM` / `SITE_PARAM` の生の値から、既知のものだけを取り出す。
- *
- * **知らない値は `GET /usage` へ渡さず、絞り込み無しで数字を出す。ただし黙って
- * 読み替えない（#3872。進捗の #3741・この画面の `invalidFrom` と同じ線）。**
- * URL 経由の値は人間が手で書き換えうるので `UsageLayer` / `UsageSite` として
- * 型で縛れず、弾かないと不正な値がそのままクエリへ渡る。かといって捨てて終わりに
- * すると、「すべて」の数字が指定した絞り込みの数字に見える。捨てたことは
- * 呼び出し側が `raw` と戻り値を突き合わせて注記で言う。
- */
+// 知らない値は API へ渡さず絞り込み無しにするが、黙って読み替えない（「すべて」の数字が指定した絞り込みの数字に見えるため）。捨てたことは呼び出し側が raw と戻り値を突き合わせて注記で言う。
 function parseUsageLayer(raw: string | null): UsageLayer | '' {
   if (raw === null) return '';
   return (USAGE_LAYERS as readonly string[]).includes(raw) ? (raw as UsageLayer) : '';
@@ -165,7 +121,6 @@ function parseUsageSite(raw: string | null): UsageSite | '' {
   return (USAGE_SITES as readonly string[]).includes(raw) ? (raw as UsageSite) : '';
 }
 
-/** URL の値は使い手が書いたものなのでそのまま出すが、長すぎるときは切る（進捗の `clipRawValue` と同じ）。 */
 const RAW_VALUE_MAX = 40;
 function clipRawValue(raw: string): string {
   const chars = Array.from(raw);
@@ -173,44 +128,9 @@ function clipRawValue(raw: string): string {
 }
 
 /**
- * `FROM_PARAM` / `TO_PARAM` の生の値から、`YYYY-MM-DD` として読める値だけを
- * 取り出す（issue #2133）。**読めない値は捨てて「絞り込み無し」として扱う**
- * （`parseUsageLayer` / `parseUsageSite` と同じ判断——知らない値をそのまま
- * `GET /usage` へ渡さない）。**空文字（`?from=` で明示的に空にした場合）は
- * 「読めない」とは扱わない** ——「絞り込みが無い」と等価であって、人間が
- * 書き損じた値ではない。
- *
- * **形（`USAGE_DATE_PATTERN`）とカレンダー上の実在（`isRealUsageDate`）の
- * 両方を、`@alteroid/core/usage`（ブラウザ向けの軽い口）から読んで見る。**
- *
- * かつては、`usageDateSchema`（`packages/core/src/usage.ts`。サーバ専用の
- * 重い `usage.ts`）がこの2つを持っていなかったため、正規表現と実在検査を
- * ここへ書き写していた（issue #2133）。書き写しの一致は
- * `usage.date-schema-parity.test.ts` が測っていた。実在検査は当時デーモン側に
- * 無かったので、画面だけが `2026-02-30` のような実在しない日を「読めない」側へ
- * 倒しており、**デーモンとは意図的に揃えていなかった**（`type="date"` の
- * `<input>` が実在しない日を空文字へ落とす仕様と、素通しした場合の
- * 「入力欄は空なのに絞り込みが効いている」食い違いを避けるため）。
- *
- * **issue #2156 で `usageDateSchema` 自身が `isRealUsageDate` で実在検査を
- * 持つようになり（デーモンの `GET /usage` も実在しない日を 400 で弾く）、
- * その判定がブラウザ向けの軽い口（`@alteroid/core/usage` =
- * `usage-format.ts`）から `USAGE_DATE_PATTERN` / `isRealUsageDate` として
- * 直接読めるようになった。issue #2166 で、画面はこの2つを import する形に
- * 寄せ、書き写し（旧 `isRealCalendarDate`）を削った。** いまは画面とデーモンの
- * 判定が同じ関数から出ており、揃っている。
- *
- * 戻り値だけでは「捨てたかどうか」は見分けられない（空文字は「そもそも
- * 無い」と「捨てた」の両方で起こる）。捨てたことを画面に出す判定は、
- * 呼び出し側で `raw` と戻り値を突き合わせて行う。
- *
- * **export しているのはテストのためだけである（issue #2166。「テストを
- * 弱めずに直す」の「テスト可能にするための構造変更」）。** 出力・挙動は
- * 1文字も変えていない——`export` を足しただけで、呼び出し側
- * （`Usage` 内の `parseUsageDate(rawFrom)` / `parseUsageDate(rawTo)`）は
- * そのままである。`usage.date-schema-parity.test.ts` が、この関数が
- * `USAGE_DATE_PATTERN` / `isRealUsageDate`（core）へそのまま委譲している
- * ことを直接測る（画面が私家版の判定へ後戻りしていないかを見る歯）。
+ * 読めない値は捨てて「絞り込み無し」にする。空文字は「読めない」とは扱わない（絞り込み無しと等価）。
+ * 形と実在の判定は core のものを使い、私家版の判定へ戻さない（デーモンの 400 とずれるため）。
+ * export はテストのため。
  */
 export function parseUsageDate(raw: string | null): string {
   if (raw === null || raw === '') return '';
@@ -221,18 +141,15 @@ export function parseUsageDate(raw: string | null): string {
 const UNKNOWN_MANAGER = '（一覧に無い委譲）';
 const UNKNOWN_TOKEN = '（一覧に無い認証トークン）';
 
-/** 一覧を読めていないときの注記（名前を出せない理由）。 */
 const UNREADABLE_MANAGER_NAMES =
   '委譲の一覧を読めていないので、名前を出せない。委譲は id の先頭8文字で示している。';
 const UNREADABLE_TOKEN_NAMES =
   '認証トークンの一覧を読めていないので、名前を出せない。認証トークンは id の先頭8文字で示している。';
 
-/** 名前を引けないときに行を区別するための id の短い形（`topology-scene` の `managerLabel` と同じ8文字）。 */
 function shortId(id: string): string {
   return id.length > 8 ? id.slice(0, 8) : id;
 }
 
-/** 一覧が読めず名前を出せないことを断る。0件なら描かない。形は `UnreadableUsageRowsNote` に揃える。 */
 function UnreadableNamesNote({ lines }: { lines: readonly string[] }) {
   if (lines.length === 0) return null;
   return <WarnNote>{lines.join(' ')}</WarnNote>;
@@ -243,14 +160,12 @@ interface IdLabels {
   token: (id: string) => string;
 }
 
-/** 委譲の依頼文を、選択肢に収まる長さへ縮める（改行は空白へ）。 */
 function shortenRequest(request: string): string {
   const flat = request.replace(/\s+/g, ' ').trim();
   if (flat === '') return '（依頼文なし）';
   return flat.length > 28 ? `${flat.slice(0, 28)}…` : flat;
 }
 
-/** 絞り込みの1欄。`<label for>` で入力欄に結ぶ（ラベルを押すと欄へ移る・読み上げられる）。 */
 function FilterField({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
@@ -263,13 +178,8 @@ function FilterField({ id, label, children }: { id: string; label: string; child
 }
 
 /**
- * 候補から選ぶ欄。**現在の値が候補に無くても、その値を消さない**——URL で渡された
- * id がまだ一覧に載っていない（一覧が読めていない・外れた）ときに、選択が黙って
- * 「すべて」へ見えると、絞り込みが効いているのに欄は空という食い違いになる。
- *
- * 「一覧に無い」と言えるのは一覧を読めたときだけ（`listLoaded`）。読み込み中・失敗の
- * ときに言うと、読めていないだけのものを無いと言い切ることになるので、軸の表と同じく
- * id の先頭で示す。
+ * 現在の値が候補に無くても消さない（消すと、絞り込みが効いているのに欄は「すべて」に見える）。
+ * 「一覧に無い」と言えるのは一覧を読めたとき（`listLoaded`）だけ。
  */
 function CandidateSelect({
   id,
@@ -301,30 +211,12 @@ function CandidateSelect({
 }
 
 export default function Usage() {
-  /*
-   * **絞り込みの正本は URL である（issue #2050）。** `journal.tsx`（#2029）・
-   * `managers.tsx`（#2030）と同じ理由——画面の state に閉じ込めると、
-   * 絞り込んだ状態を人へ渡せない（開き直すと消える・戻るで戻れない・
-   * リンクで共有できない）。
-   *
-   * **debounce はしない。** 元の実装（`useState`）にも無かった——入力欄を
-   * 変えるたびに `query` が変わり、そのまま `useUsage` へ渡っていた。
-   * URL へ載せ替えても同じ頻度で書き換えるだけで、表示や問い合わせの
-   * タイミングは変えない。
-   *
-   * **`replace: true` にする。** 検索語・チップの絞り込みと同じ判断——
-   * 打鍵・選択のたびに履歴が積まれると「戻る」が使い物にならなくなる。
-   */
+  // 絞り込みの正本は URL。state に閉じ込めると、開き直すと消える・共有できない。
   const [searchParams, setSearchParams] = useSearchParams();
   const rawFrom = searchParams.get(FROM_PARAM);
   const rawTo = searchParams.get(TO_PARAM);
   const from = parseUsageDate(rawFrom);
   const to = parseUsageDate(rawTo);
-  /**
-   * **読めなかった生の値だけを持つ（捨てて終わりにしない。issue #2133）。**
-   * `rawFrom` / `rawTo` が非空なのに `from` / `to` が空文字に落ちたときだけ
-   * 「読めなかった」——空文字そのもの（絞り込み無し）とは区別する。
-   */
   const invalidFrom = rawFrom !== null && rawFrom !== '' && from === '' ? rawFrom : null;
   const invalidTo = rawTo !== null && rawTo !== '' && to === '' ? rawTo : null;
   const managerId = searchParams.get(MANAGER_ID_PARAM) ?? '';
@@ -332,15 +224,11 @@ export default function Usage() {
   const rawSite = searchParams.get(SITE_PARAM);
   const layer = parseUsageLayer(rawLayer);
   const site = parseUsageSite(rawSite);
-  // 空文字は「絞り込み無し」であって読めなかった値ではない（`invalidFrom` と同じ）。
   const invalidLayer = rawLayer !== null && rawLayer !== '' && layer === '' ? rawLayer : null;
   const invalidSite = rawSite !== null && rawSite !== '' && site === '' ? rawSite : null;
-  // **マネージャーと認証トークンは、一覧から選べるようにする（#2795）。** id を手で
-  // 入れさせない。ただし一覧が取れなくても URL の値は効く（下の `CandidateSelect`）。
   const tokenId = searchParams.get(TOKEN_ID_PARAM) ?? '';
   const idPrefix = useId();
-  // 候補は「あれば選べる」だけにする。**取れなくても絞り込みは使える**（URL の値は
-  // そのまま効く）ので、一覧の失敗は画面のエラーにしない。
+  // 一覧が取れなくても URL の値で絞り込めるので、一覧の失敗は画面のエラーにしない。
   const { data: managersData, error: managersError } = useManagers();
   const { data: tokensData, error: tokensError } = useTokens();
   const managerOptions = (managersData?.managers ?? []).map((manager) => ({
@@ -351,12 +239,7 @@ export default function Usage() {
     value: token.id,
     label: token.label,
   }));
-  // 軸の行・一覧の見出しに、id でなく名前を出すための引き表。
-  // **一覧が取れていて、そこに無い id** だけが「一覧に無い」。**取れていない**（読み込み中・
-  // 失敗）ときは「無い」と言えないので、id の先頭だけで区別する（`shortId`）。
-  // id は秘密ではない（秘密は認証トークンの `value` で、API は id しか出さない。
-  // `/managers/<id>` への Link の href にも既に出ている）。名前の方が読みやすいので
-  // 名前を優先しているだけで、id を隠す意図ではない。
+  // 一覧が取れていないとき（読み込み中・失敗）は「一覧に無い」と言えないので、id の先頭だけで区別する。
   const labels: IdLabels = {
     manager: (id) =>
       managersData === undefined
@@ -374,7 +257,6 @@ export default function Usage() {
     ...(tokensError !== undefined && tokensData === undefined ? [UNREADABLE_TOKEN_NAMES] : []),
   ];
 
-  /** 1つの絞り込みを変える。空文字なら URL からそのパラメタを消す。 */
   function setFilter(param: string, value: string) {
     setSearchParams(
       (previous) => {
@@ -396,7 +278,6 @@ export default function Usage() {
     ...(tokenId === '' ? {} : { tokenId }),
   };
   const { data, error, isLoading, isValidating, mutate } = useUsage(query);
-  // 表示中の data を最後に読めた条件。失敗したとき、いまの条件と違えば「前の条件の数字」と言う（#3419）。
   const queryKey = JSON.stringify(query);
   const [okQueryKey, setOkQueryKey] = useState<string>();
   if (data !== undefined && error === undefined && !isLoading && okQueryKey !== queryKey) {
@@ -404,12 +285,6 @@ export default function Usage() {
   }
   const showsOtherQuery = error !== undefined && data !== undefined && okQueryKey !== queryKey;
 
-  /**
-   * **黙って捨てない（issue #2133・#3872）。** `from` / `to` / `layer` / `site` は
-   * 人間が URL を手で書き換える・古いブックマークを開く・別画面の組み立てが誤った
-   * リンクを踏む、のどれでも起こりうるので、読めなかった生の値をそのまま
-   * 画面に出す（人間が書いた URL の値であって秘密ではない）。
-   */
   const filterNotices: string[] = duplicateParamNotices(searchParams);
   if (invalidFrom !== null) {
     filterNotices.push(
@@ -431,25 +306,7 @@ export default function Usage() {
       `「どこで」に指定された値（${clipRawValue(invalidSite)}）は選べないので、絞り込みに使っていません`,
     );
   }
-  /**
-   * **`to` が `from` より前だと、絞り込みは常に空を返す（issue #2155）。**
-   * デーモンの `usageQuery`（`apps/daemon/src/app.ts`）は `from` / `to` の
-   * 前後を検査せず、`date >= from AND date <= to` で絞るだけなので、
-   * `to < from` のときは例外にならず単に0件になる——「期間の指定が逆」と
-   * 「その期間に本当に記録が無い」が、画面の側で何も足さなければ同じ
-   * 「その範囲には記録が無い。」という文言で出て区別が付かない。
-   *
-   * **`UsageBody` 側の「その範囲には記録が無い。」はそのまま残す。** 0件で
-   * あること自体は事実として正しく、`beforeLedger` 等の既存の注記と同じ
-   * 並びに置けば読み違いは防げる——ここは削るのではなく、隣に理由を足す形
-   * を選ぶ。
-   *
-   * **文言と判定は core の {@link describeUsageDateOrder} が持つ（issue
-   * #2211）。** CLI（`alteroid usage` / chat の `/usage`）・クローンの
-   * `usage_read` と同じ関数——`from` / `to` がどちらも空文字（絞り込み無し・
-   * `invalidFrom` / `invalidTo` で読めなかった場合を含む）なら `undefined` を
-   * 渡す。判定そのもの（`YYYY-MM-DD` の辞書式比較）は core 側の doc を見ること。
-   */
+  // `to < from` はデーモンが検査せず0件になり、「本当に記録が無い」と区別が付かないので、隣に理由を足す。
   const dateOrderNotice = describeUsageDateOrder(
     from === '' ? undefined : from,
     to === '' ? undefined : to,
@@ -467,24 +324,8 @@ export default function Usage() {
     >
       <Card className="mb-4 p-4">
         {/*
-          `sm` 未満にはこの容器へ `grid-template-columns` の指定が1つも無い
-          （旧: `grid gap-3 sm:grid-cols-3`）。無い場合の暗黙の単一トラックは
-          `auto`＝max-content になるので、**中身の内在幅がそのままトラック幅**
-          になり `Card` の枠を超える。`sm` 以上で出ないのは `minmax(0,1fr)` の
-          `0` がトラックの下限を潰しているからで、狭い画面だけその傘が無い穴
-          だった（#265 と同じ形の欠落）。`grid-cols-1` を足して傘を掛けるのが
-          根の直し（#265 の `login.tsx` / `manager-detail.tsx` / `settings.tsx`
-          が `dl` でやっているのと同じ流儀。別解は持ち込まない）。
-
-          **`type="date"` の2つの `Input` にだけ `min-w-0` も足してある。**
-          `input[type=date]` は内在幅が大きく（特に iOS Safari）、アプリ内で
-          `type="date"` を使うのはここの2箇所だけ（`manager` は素のテキスト、
-          `layer`/`site` は `Select` で内在幅が小さい）。1で足りるはずだが
-          実機で確かめられないので二重に押さえてある。
-
-          **jsdom はレイアウトを持たないので、この修正が実機で効いていること
-          はテストでは確かめられない。** 下のテストが保証するのはクラスが
-          当たっていることまでである。
+          `grid-cols-1` を外さない: 基底が無いと暗黙トラックが auto（max-content）になり、中身の幅で `Card` の枠を超える。
+          `type="date"` の `Input` の `min-w-0` も外さない: 内在幅が大きく（特に iOS Safari）、実機で確かめられないので二重に押さえてある。
         */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <FilterField id={`${idPrefix}-from`} label="開始日">
@@ -515,11 +356,6 @@ export default function Usage() {
               onChange={(value) => setFilter(MANAGER_ID_PARAM, value)}
             />
           </FilterField>
-          {/*
-            **選択肢は core の一覧から作る**（`USAGE_LAYERS` / `USAGE_SITES`）。
-            画面に値を書き写すと、値が増えたときにここだけ古くなる。表示名は
-            `@alteroid/logic` の対応表が持つ（知らない値は値のまま出る）。
-          */}
           <FilterField id={`${idPrefix}-layer`} label="誰が">
             <Select
               id={`${idPrefix}-layer`}
@@ -581,27 +417,22 @@ export default function Usage() {
         </p>
       )}
 
-      {/* `keepPreviousData` のとき `isLoading` は別の条件の初回読み込みでも真になる。スピナーにしてよいのは、出せるデータが無いときだけ（#3419）。 */}
+      {/* `keepPreviousData` のとき `isLoading` は別の条件の初回読み込みでも真になる。スピナーにしてよいのは出せるデータが無いときだけ。 */}
       {isLoading && data === undefined ? (
         <Spinner />
       ) : data === undefined ? null : (
         <div className="flex flex-col gap-4" aria-busy={isLoading}>
-          {/* 前の条件の数字を見せている間は、数字のそばでそう言う。 */}
           {isLoading && (
             <p role="status" className="text-xs text-muted-foreground">
               前の条件の数字を表示しています。新しい条件で読み込み中です。
             </p>
           )}
-          {/*
-            **アカウント全体の残りは、台帳が空でも出す。** 台帳が空であることと、
-            アカウントの枠が分からないことは別の事実である（片方を理由にもう片方を
-            隠すと、枠の状態が画面から消える）。
-          */}
+          {/* 台帳が空でも出す。片方を理由にもう片方を隠すと、枠の状態が画面から消える。 */}
           <AccountCard account={data.account} />
           <UnreadableNamesNote lines={unreadableNames} />
           {data.since === null ? (
             <>
-              {/* **`$0.00` と出さない。** まだ1件も無いのを「使っていない」に見せない。 */}
+              {/* `$0.00` と出さない。まだ1件も無いのを「使っていない」に見せない。 */}
               <Card>
                 <Empty inset="card">
                   {describeUnreadableUsageRows(data.unreadableRows).length > 0
@@ -645,16 +476,8 @@ export default function Usage() {
 }
 
 /**
- * アカウント全体の残り（claude.ai 側の値）。
- *
- * **文言を画面で書き直さない。** 同じ値を読む口は4つある（クローンの `usage_read` /
- * CLI の `alteroid usage` と `/usage` / この画面）。面ごとに書くと「取れなかった」の
- * 言い方が分かれ、いつか片方だけが 0 と描く。だから core の
- * `describeAccountUsage` が出した行をそのまま並べる（Markdown は解釈しないので
- * 強調だけ落とす）。
- *
- * **台帳のカードと同じ見た目に混ぜないこと。** 一方は自分で数えた推定値、もう一方は
- * 向こうが言っている値で、一致する保証がない。題で区別が付くようにしてある。
+ * 文言を画面で書き直さない（面ごとに「取れなかった」の言い方が分かれ、片方だけが 0 と描く）。
+ * 台帳のカードと同じ見た目に混ぜない（自分で数えた推定値と向こうの値は一致する保証がない）。
  */
 function AccountCard({ account }: { account: AccountUsageState | undefined }) {
   const view = describeAccountUsageView(account);
@@ -705,7 +528,6 @@ function AccountCard({ account }: { account: AccountUsageState | undefined }) {
   );
 }
 
-/** 折りたたみの「記録の読み方」。注記が無ければ何も出さない。 */
 function ReadingGuide({ children }: { children: ReactNode }) {
   return (
     <details className="border-t px-4 py-3 text-xs text-muted-foreground">
@@ -715,16 +537,7 @@ function ReadingGuide({ children }: { children: ReactNode }) {
   );
 }
 
-/**
- * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
- *
- * **文言を画面で書き直さない。** `describeUnrecordedManagers`（core）が出した行を
- * そのまま並べる——CLI（`alteroid usage`）・クローンの `usage_read` と同じ言葉に
- * なる（片方だけ「0件」の言い方が違う、が起きないようにするため）。
- *
- * **0件でも必ず出す。** 空配列は「取りこぼしが無い」であって「調べていない」では
- * ないので、そう読める形で1行返る（`describeUnrecordedManagers` の doc）。
- */
+/** 0件でも必ず出す。空配列は「調べていない」ではなく「取りこぼしが無い」。 */
 function UnrecordedManagersCard({
   unrecordedManagers,
   labels,
@@ -732,7 +545,6 @@ function UnrecordedManagersCard({
   unrecordedManagers: readonly UnrecordedManager[];
   labels: IdLabels;
 }) {
-  // 0件は「取りこぼしが無い」と、そう読める形で言う（黙らない）。
   if (unrecordedManagers.length === 0) {
     return (
       <Card>
@@ -797,13 +609,10 @@ function UsageBody({
   notice: string;
   unrecordedManagers: readonly UnrecordedManager[];
 }) {
-  // **回数（`turnRows`）を渡すだけで、画面の表示そのものは変えない**（core への
-  // 算術の集約を保つためだけの追随。CLI と同じ判断）。
   const summary = summarizeUsage(rows, turnRows);
 
   return (
     <div className="flex flex-col gap-4">
-      {/* **合計の上に出す**（Issue #2427）。外した行の値は合計に足していない。 */}
       <UnreadableUsageRowsNote rows={unreadableRows} />
       <UnmeteredUsageNote rows={unmeteredRows} />
       <Card>
@@ -827,14 +636,12 @@ function UsageBody({
               </p>
             </>
           )}
-          {/* **0 と言わない。** 記録が始まる前の期間を「使っていない期間」と読ませない。
-              記録が1件も無いとき（rows が空）は、下の「記録の読み方」へ寄せる。 */}
+          {/* 0 と言わない。記録が始まる前の期間を「使っていない期間」と読ませない。 */}
           {beforeLedger && rows.length > 0 && (
             <p className="mt-3 text-xs text-warn">
               指定した範囲の一部は、記録が始まる前の期間です。その分は 0 ではなく「記録なし」です。
             </p>
           )}
-          {/* **取れなかった区切りが在れば、その旨を1行**（Issue #2086）。 */}
           {describeUnreadableUsage(summary.total).map((line) => (
             <p key={line} className="mt-3 text-xs text-warn">
               {line}
@@ -850,8 +657,7 @@ function UsageBody({
               </li>
             )}
             {beforeLayers && (
-              // **層の始点を記録の始点と混ぜない。** 層と場所の軸は後から入ったので、
-              // それより前の行の層と場所は、記録時に埋めた初期値であって観測ではない。
+              // 層の始点を記録の始点と混ぜない。それより前の層と場所は初期値であって観測ではない。
               <li>
                 指定した範囲は、「誰が・どこで」を記録し始める前（
                 {layersSince === null ? 'まだ記録なし' : formatDateTime(layersSince)}
@@ -859,8 +665,7 @@ function UsageBody({
               </li>
             )}
             {beforeTokens && (
-              // **null は記録が1件も無いときだけでなく、プールを使っていない構成でも
-              // 最後まで null**——それが正常でありうると書く。
+              // null はプールを使っていない構成でも最後まで null。それが正常でありうると書く。
               <li>
                 指定した範囲は、認証トークンを記録し始める前（
                 {tokensSince === null ? 'まだ記録なし' : formatDateTime(tokensSince)}
@@ -873,35 +678,12 @@ function UsageBody({
         ) : null}
       </Card>
 
-      {/* **合計値の隣に必ず出す（Issue #98）。** */}
       <UnrecordedManagersCard unrecordedManagers={unrecordedManagers} labels={labels} />
 
       {rows.length > 0 && (
-        // ⚠️ #295: この grid には基底の `grid-cols-*` が無いので、暗黙トラック
-        // の幅は各アイテムの min-content 寄与の最大値（＝ auto）で決まる。
-        //
-        // 膨らまない理由 — 直接の子（`<AxisCard>` が返す `<Card>`。
-        // className 未指定）自身は緩和クラスを持たない。膨らみを止めている
-        // のは `AxisCard`（このファイル内、下に定義）が並べる `BarList`
-        // （`packages/ui/src/components/features/charts/bar-list.tsx`）の
-        // 行の名前 `<span className="min-w-0 truncate" ...>` である。`truncate` は
-        // `overflow: hidden` と `white-space: nowrap` を含む（実測:
-        // `tailwindcss@4.3.3` のユーティリティ定義を grep で確認 —
-        // `truncate` → `overflow:hidden` / `text-overflow:ellipsis` /
-        // `white-space:nowrap`）。`overflow: hidden` と `min-width: 0` が
-        // 揃うと、その要素自身の自動最小サイズが 0 に落ち、祖先の
-        // min-content 計算への寄与も 0 になる。
-        //
-        // **usage.tsx はこの機構で一度実際に壊れている**（#282。人間の実機
-        // 報告「モバイルで見た時利用状況の from と to 両方とも枠から出てる」
-        // から発覚した）。
-        //
-        // ⚠️ 上の「寄与が0に落ちる」は CSS の記述からの読みであって実測で
-        // はない。jsdom はレイアウトを持たず（offsetWidth /
-        // getBoundingClientRect が常に 0、CSS も適用されない）、視覚回帰の
-        // 道具（Playwright / Storybook / Chromatic）も無く、Vercel の
-        // preview は release/prod へ push されるまで出ない。詳細と再オープ
-        // ン条件は #295。
+        // 子の幅の膨らみを止めているのは `BarList` の行名の `min-w-0 truncate`。
+        // `grid-cols-1` を外すと暗黙トラックが auto になり、モバイルで枠を超える。
+        // jsdom はレイアウトを持たないので、効いているかは試験では確かめられない。
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <AxisCard
             title="日別"
@@ -910,17 +692,7 @@ function UsageBody({
               .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
               .map((entry) => ({ label: entry.date, costUsd: entry.totals.costUsd }))}
           />
-          {/*
-            **マネージャーの行だけを委譲の詳細へつなぐ（issue #2046）。** この軸の
-            `managerId` は「誰の分か」の一般名で、クローンの分は `CLONE_ACTOR_ID`
-            になる（`packages/core/src/usage.ts` の `usageRowSchema` の doc）。
-            その行は委譲ではないので `/managers/<id>` へは飛ばさない。
-
-            **クローンの id（`CLONE_ACTOR_ID`）ではないものを委譲とする**
-            （`isDelegationActorId`。日誌のリンクと同じ1つの関数。`mgr-` の接頭辞では
-            見分けない — Issue #2269）。この軸には層が無く、クローンの分は
-            `CLONE_ACTOR_ID` に決まっている（`usage.ts` の `CLONE_ACTOR_ID` の doc）。
-          */}
+          {/* 委譲かどうかは `isDelegationActorId` で見分ける。`mgr-` の接頭辞では見分けない。 */}
           <AxisCard
             title="マネージャー別"
             entries={summary.byManager.map((entry) => ({
@@ -940,11 +712,7 @@ function UsageBody({
               costUsd: entry.totals.costUsd,
             }))}
           />
-          {/*
-            **モデル別と層別を1つにしない。** 既定でクローンとマネージャーは
-            どちらも opus で同じモデル帯に並ぶので、モデル名では
-            「誰が使ったか」に答えられない。
-          */}
+          {/* モデル別と層別を1つにしない。クローンとマネージャーは既定で同じモデルなので、モデル名では「誰が使ったか」に答えられない。 */}
           <AxisCard
             title="誰が使ったか"
             entries={summary.byLayer.map((entry) => ({
@@ -959,24 +727,7 @@ function UsageBody({
               costUsd: entry.totals.costUsd,
             }))}
           />
-          {/*
-            **`tokenId` が null の要素を落とさない。** 落とすとこの軸だけ合計に
-            足し合わなくなり、しかも他の軸は「出てこない値を 0 で補わない」約束
-            なので、読み手には足りないことに気づく手がかりが無い。
-
-            **帰属のある行だけ `/tokens` へ飛ばす（issue #2100 段1）。** `null`
-            の行（「（トークンの帰属が無い分）」）には飛び先の id が無いので
-            リンクにしない。
-
-            **飛び先はその id の行そのもの（issue #2109。#2100 の段2）。**
-            `tokens.tsx` の `TokenRow` に飛び先（DOM の id・スクロール・
-            控えめな強調）が入ったので、`/tokens` 止まりだった飛び先を行へ
-            向け直した。href の組み立てと URL の欄名は `packages/logic/src/tokens-links.ts`
-            に1本化してある（`usage-links.ts` / `managers-links.ts` と同じ
-            慣習——欄名を呼び出し側とここの両方で書き写さない）。プールから
-            外れた id（使用量には残っているが、いまの `GET /tokens` に居ない）
-            で飛んだときの倒れ先は `tokens.tsx` 側が持つ。
-          */}
+          {/* `tokenId` が null の要素を落とさない。落とすとこの軸だけ合計に足し合わなくなり、気づく手がかりが無い。 */}
           <AxisCard
             title="認証トークン別"
             entries={summary.byToken.map((entry) => ({
@@ -992,7 +743,6 @@ function UsageBody({
         </div>
       )}
 
-      {/* **省略・要約しない。数字を出すところには必ず添える。** */}
       <p className="text-xs text-muted-foreground">{notice}</p>
     </div>
   );
@@ -1004,37 +754,19 @@ function AxisCard({
   order = 'cost',
 }: {
   title: string;
-  /** `href` を持つ行だけ `label` を `<Link>` にする（issue #2046）。文言は変えない。 */
   entries: { id?: string | null; label: string; costUsd: number; href?: string }[];
-  /**
-   * `cost`（既定）は金額の多い順に並べ替える（呼ぶ側は並べ替えない）。`recent` は
-   * 渡された並び（新しい順）のまま使う。日別を金額で並べ直すと、切り詰めが
-   * 「最近の 20 日」ではなく「金額の上位 20 日」になる。
-   */
+  /** 日別を金額で並べ直すと、切り詰めが「最近の 20 日」ではなく「金額の上位 20 日」になるので、`recent` は渡された並びのまま使う。 */
   order?: 'cost' | 'recent';
 }) {
   if (order === 'cost') entries = [...entries].sort((a, b) => b.costUsd - a.costUsd);
-  // 表示名が重なる行（一覧に無い委譲が複数・同じラベルのトークンなど）は、見分けられるよう
-  // id の先頭（`shortId`）を添える。重ならない行は今のまま。
   const labelCounts = new Map<string, number>();
   for (const entry of entries)
     labelCounts.set(entry.label, (labelCounts.get(entry.label) ?? 0) + 1);
-  // **カードごとの状態。** 開閉は他のカードへ波及させない（Issue #3537）。
   const [showAll, setShowAll] = useState(false);
   const overflowing = entries.length > AXIS_LIMIT;
   return (
     <Card>
       <CardHeader title={title} action={<Badge>{entries.length}</Badge>} />
-      {/*
-        **打ち切ったら必ずそう書く。** 黙って切り捨てると「全部でこれだけ」と読める
-        出力が嘘になる。切り詰めと注記（`TruncationNote`）・空のときの `無し。` は
-        `BarList` が持つ（面ごとに書き分けると、片方だけ直したときに「同じ切り方
-        なのに片方だけ黙る」が生まれる）。
-
-        **帯の値は `costUsd` そのもの**（core の `usageTotalsSchema` が非負の数に
-        限っている）。値の無い項目はこの軸には来ないので、0 の帯で補う場面は無い。
-        金額の文字は今までどおり `formatUsd` が出す（帯は文字を持たない）。
-      */}
       <BarList
         {...(showAll ? {} : { limit: AXIS_LIMIT })}
         formatValue={formatUsd}
@@ -1059,11 +791,6 @@ function AxisCard({
           };
         })}
       />
-      {/*
-        **切った分へ辿れるようにする（Issue #3537）。** 注記（`…残り N 件は出していない`）
-        は `BarList` が出し、押す口はその直下に置く。全件を出している間は注記が消える
-        ので、戻す口だけが残る。`BarList` 側は変えない（他の画面の見た目を保つ）。
-      */}
       {overflowing && (
         <div className="border-t border-border px-4 py-2">
           <Button variant="ghost" size="sm" onClick={() => setShowAll((value) => !value)}>

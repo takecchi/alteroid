@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
-/**
- * 添付のダウンロード（`FileAttachment`）で、`URL.revokeObjectURL` を click の直後に
- * 同期で呼ばないこと（Issue #3331）。
- *
- * **⚠️ 実ブラウザで保存が始まる前に URL が失効しないことの試験ではない。** jsdom は
- * ダウンロードを持たないので、固定できるのは「click の時点では revoke されておらず、
- * 猶予のあとに revoke される」順序までである。
- */
+// 実ブラウザの保存開始前に URL が失効しないことは保証しない: jsdom はダウンロードを持たず、固定できるのは revoke の順序までのため
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -61,7 +54,6 @@ async function clickDownload() {
     </Providers>,
   );
   fireEvent.click(screen.getByRole('button', { name: 'report.pdf をダウンロード' }));
-  // fetch → createObjectURL → click まで進める（タイマーは進めない）。
   await act(async () => {
     await vi.waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));
   });

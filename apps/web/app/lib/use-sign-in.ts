@@ -10,10 +10,6 @@ import {
 } from '@alteroid/swr';
 import { readPendingLogin, storePendingLogin, type PendingLogin } from '@alteroid/logic';
 
-/**
- * ポップアップで認証し、引き取って鍵を保存するまでの流れ（ログイン画面と、書きかけを残したまま
- * ログインし直す帯が共有する）。画面遷移は持たない: 遷移の有無は呼び出し側が `onSignedIn` で決める。
- */
 export function useSignIn(onSignedIn: () => void) {
   const auth = useAuth();
   const { client, baseUrl, setCredential } = useApiContext();
@@ -73,7 +69,6 @@ export function useSignIn(onSignedIn: () => void) {
   const settle = useCallback(
     (pending: Omit<PendingLogin, 'baseUrl'>, controller: AbortController) =>
       claimUntilReady(client, pending, { signal: controller.signal })
-        // やめた後に届いた結果は反映しない
         .then((outcome) => (controller.signal.aborted ? undefined : applyOutcome(outcome)))
         .catch((error: unknown) => {
           if (!controller.signal.aborted) fail(error);

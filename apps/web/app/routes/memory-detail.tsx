@@ -32,13 +32,7 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
   return { slug: params.slug };
 }
 
-/**
- * 一覧の右のペインに出る（親の経路 `memory.tsx` の `ListDetail`）。**親は同じままで子の `:slug` だけが
- * 変わる**ので、素のままだと別の記憶へ移っても同じ部品が使い回され、下書き・保存時刻・版の控え・
- * 衝突の表示が次の記憶へ持ち越される。**`key={slug}` で作り直す。** 未保存の編集があるときは、
- * 作り直しの前に `useBlocker` が移動そのものを止めて確認を出す（確認で「破棄して離れる」を
- * 選んだときだけ移り、作り直される）。
- */
+// `key={slug}` で作り直す: 親は同じで `:slug` だけ変わるので、素のままだと下書き・版の控え・衝突の表示が次の記憶へ持ち越される。
 export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
   return (
     <LeaveGuardScope key={loaderData.slug}>
@@ -54,79 +48,38 @@ function MemoryDetailBody({ slug }: { slug: string }) {
   const navigate = useNavigate();
   const mounted = useIsMounted();
 
-  /**
-   * `undefined` は「まだ人間が触っていない」。
-   *
-   * 取得した内容を state へ**写さない**ので、SSE が無効化を回して再取得が
-   * 走っても書きかけが消えない。触っていない間はサーバの値をそのまま映し、
-   * 触った瞬間から下書きが勝つ。
-   */
+  // 取得した内容を state へ写さない: SSE の無効化で再取得が走っても書きかけが消えないように。
   const [draft, setDraft] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [savedAt, setSavedAt] = useState<string | undefined>(undefined);
-  /**
-   * 下書きを書き始めた時点で読んでいた版（`ifMatch` に送る。#2743）。`undefined` は下書き無し。
-   * **取得した版へ追従させない**——クローンが書いた後に再取得が走っても、人間が見て書き始めた版を
-   * 前提にし続けるから、衝突が検出できる。`null` は「読んだ時には無かった」。
-   */
+  // 取得した版へ追従させない: クローンが書いた後に再取得が走っても、人間が見て書き始めた版を前提にし続けないと衝突を検出できない。
   const [baseVersion, setBaseVersion] = useState<string | null | undefined>(undefined);
-  /**
-   * 直前の保存の応答が返した版（`replaces` はそのとき前提にした版）。再取得が追いつく前に編集を
-   * 再開しても、古い `data.version` を前提にして偽の 409 を起こさないために持つ。
-   * 再取得が `replaces` 以外の版を返したら（別の書き手が書いた）、そちらを信じる。
-   */
+  // 再取得が追いつく前に編集を再開しても、古い `data.version` を前提にして偽の 409 を起こさないために持つ。
   const [lastSaved, setLastSaved] = useState<
     { replaces: string | null; version: string } | undefined
   >(undefined);
-  /** 保存が 409 で断られたときの、いまの版（下書きは捨てずに残す。#2764）。 */
   const [conflict, setConflict] = useState<MemoryConflictError | undefined>(undefined);
-  /** 削除が 409 で断られたときの、いまの版（消していない。自動では再送しない。#2916）。 */
   const [deleteConflict, setDeleteConflict] = useState<MemoryConflictError | undefined>(undefined);
 
   const loaded = data?.document.content ?? '';
   const value = draft ?? loaded;
   const dirty = draft !== undefined && draft !== loaded;
-  /** 応答が返った時点の「いまの下書き」（送った時点と比べる。issue #3515）。 */
   const latestDraft = useLatest(draft);
 
-  // 記憶が無い slug は 404 になる。それは「これから書く」場合なので、
-  // 失敗ではなく空の編集画面として扱う。
   const notFound = error !== undefined && (error as { status?: number }).status === 404;
   const missing = notFound && data === undefined;
-  /**
-   * 読めた後の取り直しが 404（別の手段で消された。issue #3092）。`data` が残っているので
-   * `missing` には含めない（「これから書く」ではない）。
-   */
   const goneAfterRead = notFound && data !== undefined;
 
-  /**
-   * **取れなかったのを空の記憶と描かない**（issue #2319）。本文をまだ一度も
-   * 読めていないまま404以外で失敗したとき、失敗は上の `ErrorNote` が言う。
-   * ここで空の編集欄と保存ボタンを出すと、既存の記憶を空のまま上書き保存
-   * できてしまう。404（これから書く）と、再検証の失敗で `data` が残って
-   * いるときは当たらず、編集欄をそのまま出す（#2266 と同じ）。
-   */
+  // 取れなかったのを空の記憶と描かない: 空の編集欄と保存ボタンを出すと、既存の記憶を空で上書きできてしまうため。
   const loadFailed = data === undefined && error !== undefined && !missing;
 
-  /**
-   * `undefined` は「まだ人間がタブに触っていない」— `draft` と同じ作法。
-   *
-   * データが届く前に既定タブを確定させない。届いたら、**読むものが在れば
-   * プレビュー、無ければ編集**を既定にする。
-   *
-   * 「無い」は2つある。404（これから書く記憶）と、**在るが本文が空**である。
-   * 後者は実在しうる状態で、`PUT /memory/:slug` の body スキーマは
-   * `z.object({ content: z.string() })`（`apps/daemon/src/app.ts`）— 隣の
-   * `answerBody` と違って `.min(1)` が無いので、空の記憶は API として正当に
-   * 作れる。**この2つを分けると、プレビューが真っ白な画面が既定で開く。**
-   */
+  // 「無い」は404（これから書く）と、在るが本文が空の2つ。分けるとプレビューが真っ白な画面が既定で開く。
   const [tab, setTab] = useState<MarkdownEditorMode | undefined>(undefined);
   const defaultTab: MarkdownEditorMode = missing || loaded.trim() === '' ? 'edit' : 'preview';
 
   function edit(next: string) {
-    // 書き始めた瞬間に、いま読んでいる版を前提として控える。
     if (draft === undefined) {
       const fetched = data === undefined ? null : data.version;
       setBaseVersion(
@@ -136,12 +89,10 @@ function MemoryDetailBody({ slug }: { slug: string }) {
     setDraft(next);
   }
 
-  /** `ifMatch` を渡して保存する。衝突したら下書きを残して、いまの版を見せる。 */
   function save(ifMatch: string | null | undefined = baseVersion) {
-    // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
+    // ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通るので、保存中の弾きはここに置く。
     if (busy) return;
     if (draft === undefined) return;
-    // 送った値を控える。成功のあと、いまの下書きがこれと同じときだけ畳む（issue #3515）。
     const sent = draft;
     setBusy(true);
     setFailure(undefined);
@@ -150,16 +101,14 @@ function MemoryDetailBody({ slug }: { slug: string }) {
         setSavedAt(document.updatedAt);
         setLastSaved({ replaces: data === undefined ? null : data.version, version });
         if (latestDraft.current === sent) {
-          // 保存できたら下書きを畳んで、またサーバの値に追従させる。
           setDraft(undefined);
           setBaseVersion(undefined);
         } else {
-          // 応答を待つ間に打ち足した分は残す。保存できた版を前提に進め、次の保存が
-          // 自分の保存と衝突しないようにする（他者の書き込みへの衝突検出はそのまま効く）。
+          // 打ち足した分を残すので、保存できた版を前提にする。さもないと次の保存が自分の保存と衝突する。
           setBaseVersion(version);
         }
         setConflict(undefined);
-        // 削除の衝突が見せた版は、この保存で古くなった。残すと次の削除が古い版を送る。
+        // 残すと次の削除が古い版を送る。
         setDeleteConflict(undefined);
       })
       .catch((caught: unknown) => {
@@ -169,24 +118,18 @@ function MemoryDetailBody({ slug }: { slug: string }) {
       .finally(() => setBusy(false));
   }
 
-  /** 最新を読み直す＝自分の下書きを捨てて、いまの版に追従する。 */
   function discardDraft() {
     setDraft(undefined);
     setBaseVersion(undefined);
     setConflict(undefined);
   }
 
-  /**
-   * **未保存の変更があるまま離れない（#2764）。** アプリ内の移動（リンク・戻る）は確認を挟み、
-   * タブを閉じる・再読み込みはブラウザの警告に任せる。削除が通った後の移動は止めない。
-   */
   const releaseLeaveGuard = useReleaseLeaveGuard();
   useReportDirty('draft', dirty);
 
   const description =
     savedAt !== undefined
       ? `保存した（${formatDateTime(savedAt)}）` +
-        // 保存直後でも作成時刻は画面から消さない（`data` が届いていれば足す）。
         (data !== undefined ? ` · 作成 ${formatCreatedAt(data.document.createdAt)}` : '')
       : data !== undefined
         ? `作成 ${formatCreatedAt(data.document.createdAt)} · 更新 ${formatDateTime(data.document.updatedAt)}`
@@ -196,15 +139,9 @@ function MemoryDetailBody({ slug }: { slug: string }) {
 
   return (
     <div className="flex min-h-full flex-col">
-      {/*
-        詳細は一覧の右のペインに出る（親の経路 `memory.tsx` の `ListDetail`）ので、画面の枠
-        （`Page`）も戻るリンクも持たない。画面の h1 は親が持ち、ここの見出しは h2。狭い画面では
-        `ListDetail` の「記憶の一覧を開く」が一覧への戻り口になる。
-      */}
       <DocumentTitle>{`${slug} - 記憶`}</DocumentTitle>
       <header className="mb-4 flex shrink-0 items-start justify-between gap-4">
         <div className="min-w-0">
-          {/* 名前は最大128文字・空白なし。`break-all` で幅に収める（#2763） */}
           <h2 className="font-mono text-base font-semibold break-all">{slug}</h2>
           {description !== undefined && (
             <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
@@ -221,7 +158,6 @@ function MemoryDetailBody({ slug }: { slug: string }) {
               >
                 削除
               </Button>
-              {/* 取り消せない操作（本文ごと消える）なので、押した瞬間には実行せず確認を挟む（#2781） */}
               <ConfirmDialog
                 open={confirmingDelete}
                 onOpenChange={setConfirmingDelete}
@@ -232,10 +168,9 @@ function MemoryDetailBody({ slug }: { slug: string }) {
                 onConfirm={() => {
                   setBusy(true);
                   setConfirmingDelete(false);
-                  // 読んだ版を送る（#2916）。衝突のあとに開き直したときは、見せたいまの版を送る。
                   deleteMemory(slug, deleteConflict?.current?.version ?? data.version)
                     .then(() => {
-                      // 応答待ちに別の記憶へ移っていたら、その画面を動かさない（#3802）。
+                      // 応答待ちに別の記憶へ移っていたら、その画面を動かさない。
                       if (!mounted.current) return;
                       releaseLeaveGuard();
                       navigate('/memory');
@@ -264,12 +199,6 @@ function MemoryDetailBody({ slug }: { slug: string }) {
       </header>
 
       {!missing && !goneAfterRead && <ErrorNote error={error} className="mb-3" />}
-      {/*
-        **読めた後の取り直しが 404 のとき（issue #3092）。** この記憶が別の手段で消された（または
-        見つからなくなった）。`missing`（まだ無い＝これから書く）とは別で、本文と書きかけは消さずに
-        残し、その旨を注記する。保存は読んだ版を `ifMatch` に送る既存の経路のままなので、消された
-        ものを黙って蘇らせず、「ほかで消された」の確認（自分の内容で上書きする）に当たる。
-      */}
       {goneAfterRead && (
         <p role="alert" className="mb-3 rounded-lg border border-warn/50 p-3 text-sm text-warn">
           この記憶は、読んだ後に別の手段で消された（または見つからない）。下の内容は前に読めたときのもので、書きかけもそのまま残してある。保存するときは、消されたものを書き戻すかどうかを確認する。
@@ -344,13 +273,11 @@ function MemoryDetailBody({ slug }: { slug: string }) {
           onChange={edit}
           onSave={() => save()}
           saveDisabled={!dirty || busy}
-          // 出すタブとその並びは今の画面のまま（プレビュー → 編集）。並べては出さない。
           modes={['preview', 'edit']}
           mode={tab}
           defaultMode={defaultTab}
           onModeChange={setTab}
           hint="ここで書き換えたものは、人間が直した記録として日誌に残る。"
-          // 今の画面に無かったものは出さない（文言は変えない）。
           saveHint={null}
           emptyPreview={null}
           placeholder=""
