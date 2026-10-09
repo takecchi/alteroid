@@ -2608,7 +2608,8 @@ class Clone implements CloneHost {
 
     // 列は失敗で切らない: 1本書けなかったことで以後の発言の記録まで止めないため
     this.#delivery.chainRecord(event.id, async () => {
-      await shownReplyWritten;
+      // 割らない回は待たない: 1拍でも遅らせると、発言の追記が `#commit` の記録などに追い越される
+      if (shownReplyWritten !== undefined) await shownReplyWritten;
       await this.#journal({
         type: 'exchange',
         with: 'human',
