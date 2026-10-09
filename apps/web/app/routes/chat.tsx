@@ -1113,7 +1113,9 @@ export function ChatPane({
       setDraft(drafts.get(routeId) ?? loadChatDraft(routeId));
       setAttachmentDrafts((previous) => {
         const next = new Map(previous);
-        next.set(shownId, pending);
+        // 削除した会話の添えかけは持ち越さない: 持つと、消した会話のための「離れる確認」が出続ける
+        // 削除した会話の添えかけは持ち越さない: 持つと、消した会話のための「離れる確認」が出続ける
+        if (!deletedConversationIds.current.has(shownId)) next.set(shownId, pending);
         next.delete(routeId);
         return next;
       });
@@ -1412,6 +1414,8 @@ export function ChatPane({
           };
     for (const [key, other] of retries) {
       if (key === shownId || other.restored === true) continue;
+      // 削除した会話へは書き戻さない
+      if (deletedConversationIds.current.has(key)) continue;
       const mark = markOf(other);
       if (mark === undefined) continue;
       // 本文と印を先に残す。入力欄が空でないなら、使い手の書きかけを上書きしない。
@@ -2643,7 +2647,22 @@ export function ChatPane({
         if (pendingDraftSave.current?.id === pressedConversationId) {
           pendingDraftSave.current = null;
         }
+        // 添えかけ・送れなかった発言の控えも捨てる: 残すと、消した会話のための確認が出続け、控えが書き戻される
+        setAttachmentDrafts((previous) => {
+          if (!previous.has(pressedConversationId)) return previous;
+          const next = new Map(previous);
+          next.delete(pressedConversationId);
+          return next;
+        });
+        setRetries((previous) => {
+          if (!previous.has(pressedConversationId)) return previous;
+          const next = new Map(previous);
+          next.delete(pressedConversationId);
+          return next;
+        });
+        savePendingAttachmentsNote(pressedConversationId, undefined);
         if (shownIdRef.current === pressedConversationId) {
+          setPending([]);
           setDeleteResult({ fromId: pressedConversationId, result });
           navigate('/chat');
         }

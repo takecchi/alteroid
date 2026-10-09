@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
+// ファイルは Node の File（node:buffer）で作る: jsdom の File は Node の Request の本文として読めないため
+import { File as NodeFile } from 'node:buffer';
+
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { loadChatDraft, saveChatDraft } from '@alteroid/logic';
+import { loadChatDraft, loadPendingAttachmentsNote, saveChatDraft } from '@alteroid/logic';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
@@ -25,6 +28,7 @@ function renderChat(initial: string) {
     [
       { path: '/chat', Component: Harness },
       { path: '/chat/:conversationId', Component: Harness },
+      { path: '/approvals', Component: () => <p>承認の画面</p> },
     ],
     { initialEntries: [initial] },
   );
@@ -41,6 +45,9 @@ function renderChat(initial: string) {
 function conversationRoutes(url: string) {
   if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
     return json({ conversationId: CONVERSATION_ID, messages: [] });
+  }
+  if (url.includes('/conversations/conv-keep')) {
+    return json({ conversationId: 'conv-keep', messages: [] });
   }
   if (url.includes('/approvals')) return json({ approvals: [] });
   if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
@@ -142,6 +149,62 @@ describe('「会話を削除」ボタン', () => {
     expect(warning.closest('[role="status"]')?.textContent).toContain(
       '受信箱の未処理の発言を外せなかった',
     );
+  });
+
+  const nodeFile = (name: string) =>
+    new NodeFile([new Uint8Array([1, 2, 3])], name, { type: 'text/plain' }) as unknown as File;
+  function choose(files: File[]) {
+    const input = document.querySelector('input[type=file]') as HTMLInputElement;
+    Object.defineProperty(input, 'files', { value: files, configurable: true });
+    fireEvent.change(input);
+  }
+  function unloadPrevented(): boolean {
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+
+  it('添えかけのある会話を削除したら、離れる確認も控えも残さない（#4350）', async () => {
+    stubDaemon(() => json(DELETED));
+    const { router } = renderChat(`/chat/${CONVERSATION_ID}`);
+    await screen.findByPlaceholderText(/クローンに話しかける/);
+    act(() => choose([nodeFile('memo.txt')]));
+    await screen.findByText('memo.txt');
+    expect(unloadPrevented()).toBe(true);
+    expect(loadPendingAttachmentsNote(CONVERSATION_ID)).toBeDefined();
+
+    await openConfirm();
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat'));
+    await screen.findByText(/会話を削除しました/);
+
+    await waitFor(() => expect(unloadPrevented()).toBe(false));
+    expect(loadPendingAttachmentsNote(CONVERSATION_ID)).toBeUndefined();
+    act(() => {
+      void router.navigate('/approvals');
+    });
+    await screen.findByText('承認の画面');
+    expect(screen.queryByText('添えかけのファイルがあります')).toBeNull();
+  });
+
+  it('削除しなかった別の会話の添えかけは残る（#4350）', async () => {
+    stubDaemon(() => json(DELETED));
+    const { router } = renderChat('/chat/conv-keep');
+    await screen.findByPlaceholderText(/クローンに話しかける/);
+    act(() => choose([nodeFile('keep.txt')]));
+    await screen.findByText('keep.txt');
+    act(() => {
+      void router.navigate(`/chat/${CONVERSATION_ID}`);
+    });
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/chat/${CONVERSATION_ID}`));
+
+    await openConfirm();
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat'));
+    await screen.findByText(/会話を削除しました/);
+
+    expect(unloadPrevented()).toBe(true);
+    expect(loadPendingAttachmentsNote('conv-keep')).toBeDefined();
   });
 
   it('404 なら、その error を出し、/chat へは移らない', async () => {
