@@ -5,10 +5,6 @@ import type { RunnerClient, RunnerEntry, RunnerEvent, RunnerRegistry } from './r
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 作業者の道具の実行中の合図（`tool_running` / `tool_end`、Issue #2725）が、
- * **日誌に1行も書かれず**、コールバックへだけ渡ることを確かめる。
- */
 describe('ManagerPool#onEvent: tool_running / tool_end', () => {
   async function setup(withCallback: boolean) {
     const stores = createMemoryStores();
@@ -64,7 +60,7 @@ describe('ManagerPool#onEvent: tool_running / tool_end', () => {
         ? { onWorkerToolEvent: (event: WorkerToolEvent) => received.push(event) }
         : {}),
     });
-    await pool.abort('mgr-does-not-exist'); // 接続を開く
+    await pool.abort('mgr-does-not-exist');
     return { stores, emit: () => emit, received };
   }
 
@@ -83,9 +79,8 @@ describe('ManagerPool#onEvent: tool_running / tool_end', () => {
     const before = (await stores.journal.list()).length;
     emit()?.(running);
     emit()?.(end);
-    // 実時間では待たない（#2146）。届いたことを条件で待つ。
     await vi.waitFor(() => expect(received).toEqual([running, end]));
-    // 日誌へ書く経路が在れば、ここまでのイベントループの一巡で積まれている。
+    // 実時間では待たない: 日誌へ書く経路が在れば、イベントループの一巡で積まれている。
     await new Promise((resolve) => setImmediate(resolve));
     expect((await stores.journal.list()).length).toBe(before);
   });
@@ -95,7 +90,7 @@ describe('ManagerPool#onEvent: tool_running / tool_end', () => {
     expect(emit()).toBeDefined();
     const before = (await stores.journal.list()).length;
     emit()?.(running);
-    // 実時間では待たない（#2146）。日誌へ書く経路が在れば、イベントループの一巡で積まれている。
+    // 実時間では待たない: 日誌へ書く経路が在れば、イベントループの一巡で積まれている。
     await new Promise((resolve) => setImmediate(resolve));
     expect((await stores.journal.list()).length).toBe(before);
   });

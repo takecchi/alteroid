@@ -18,15 +18,6 @@ import { createMemoryStores } from './testing.js';
 /** 孤立サロゲート（高だけ・低だけ）。`isWellFormed()` は tsconfig の lib に無いので直接探す。 */
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-/**
- * `conversation.ts` — 日誌の並びを会話へ畳み直す規則の純粋関数。
- *
- * **`collectConversations` は `apps/daemon/src/app.ts` の `GET /conversations`
- * （`'/conversations'` ルート）と同じ結果を出すことを固定する。** そちらは状態を
- * 持たない同じ規則を持っており、ここが違う結果を返すと、クローンの道具（同じ規則を
- * 使う `conversation_read`）と人間の Web UI が別の会話一覧を見ることになる。
- */
-
 function exchange(overrides: Partial<Exchange> & Pick<Exchange, 'id' | 'at'>): Exchange {
   return {
     type: 'exchange',
@@ -80,7 +71,6 @@ describe('bySpeaker', () => {
 
 describe('collectConversations', () => {
   it('新しい順のまま畳む（先に出会うのが最新発言）', () => {
-    // 日誌は新しい順で来る。同じ会話 c1 の2発言、別会話 c2 の1発言。
     const entries: JournalEntry[] = [
       exchange({
         id: 'e3',
@@ -94,7 +84,6 @@ describe('collectConversations', () => {
 
     const result = collectConversations(entries);
 
-    // c2 が先に出会うので先頭（新しい順）。
     expect(result.map((c) => c.conversationId)).toEqual(['c2', 'c1']);
   });
 
@@ -132,8 +121,6 @@ describe('collectConversations', () => {
     expect(result.map((c) => c.conversationId)).toEqual(['c3']);
   });
 
-  // **この preview は `GET /conversations` がそのまま人間へ返している値である**
-  // （`app.ts` から移設した。移設で表示が変わらないよう、長さも切り方もそのまま）。
   it('preview は改行を潰し80文字で切る（人間の口へ出ている値と同じ形）', () => {
     const entries: JournalEntry[] = [
       exchange({
@@ -148,14 +135,10 @@ describe('collectConversations', () => {
 
     expect(result).toHaveLength(1);
     const preview = result.map((c) => c.preview).join('');
-    // **長さそのものを固定する。** `length < 200` と `startsWith(80文字)` の組では、
-    // 切る位置を 80 から 100 へ動かしても通ってしまう（人間の画面に出ている値が
-    // 移設で変わったことに気づけない）。ここは移設の等価性を担保する歯なので、
-    // 「80 で切る」を字義どおり書く。
+    // `length < 200` と `startsWith` の組では、切る位置を動かしても通ってしまう。
     expect(preview).toBe(`${'x'.repeat(80)}…`);
   });
 
-  // #3804: 上限（80）の位置に補助面の文字がまたがっても、孤立サロゲートを残さない。
   it('preview の切り口が絵文字をまたいでも、孤立サロゲートを残さない', () => {
     const entries: JournalEntry[] = [
       exchange({
@@ -251,20 +234,9 @@ describe('reachedStart', () => {
   });
 });
 
-/**
- * `readConversationWindow` — `GET /conversations` / `GET /conversations/:id` /
- * `conversation_read` が共有する、唯一の窓の組み立て（issue #418）。
- *
- * **これが #418 の症状そのものを再現・固定する歯である。** 「絞りが効いている」
- * だけでは弱い（`with` を返却後に絞る旧実装でも、`scan` が十分大きければ同じ
- * 結果になる）。ここで測るのは**窓に食われないこと** — `scan` を症状が出るほど
- * 小さくし、manager との往復を `scan` より多く積んでも、human の会話が消えない
- * ことを確かめる。
- */
 describe('readConversationWindow（issue #418）', () => {
   it('manager の往復を scan より多く積んでも、human の会話は窓に食われない', async () => {
     const stores = createMemoryStores();
-    // human を先に3件積む（古い側）。
     for (let i = 0; i < 3; i += 1) {
       await stores.journal.append({
         type: 'exchange',
@@ -274,7 +246,6 @@ describe('readConversationWindow（issue #418）', () => {
         conversationId: 'conv-1',
       });
     }
-    // manager / self を、human よりずっと多く（scan を超える数）積む（新しい側）。
     for (let i = 0; i < 50; i += 1) {
       await stores.journal.append({
         type: 'exchange',
@@ -284,9 +255,6 @@ describe('readConversationWindow（issue #418）', () => {
       });
     }
 
-    // scan=3 という、症状が出るほど小さい窓。
-    // 旧実装（`types: ['exchange']` だけで窓を切ってから `with` を絞る）だと、
-    // 新しい3件はすべて manager/self なので、ここは0件になっていた。
     const entries = await readConversationWindow(stores.journal, { scan: 3 });
 
     expect(entries).toHaveLength(3);
@@ -345,16 +313,6 @@ describe('readConversationWindow（issue #418）', () => {
   });
 });
 
-/**
- * `supersedes` による畳み込み（チャットの「メッセージを編集する」機能）。
- *
- * **`computeSupersededIds` を直接測る歯（防御的条件）と、
- * `conversationMessages` / `collectConversations` を通して測る歯（実際の
- * 使われ方）の両方を置く。** 前者は「隠す・隠さないの境界そのもの」を、
- * 後者は「その境界が2つの呼び出し口で同じ結果になること」を保証する
- * ——別々に測らないと、境界だけ正しくて配線を忘れる／配線だけ揃っていて
- * 境界が緩い、のどちらかを見落とす。
- */
 describe('computeSupersededIds（畳み込みの境界そのもの）', () => {
   it('T が見つからない（scan の窓の外）ときは何も隠さない', () => {
     const chronological: Exchange[] = [
@@ -425,7 +383,6 @@ describe('computeSupersededIds（畳み込みの境界そのもの）', () => {
 
 describe('conversationMessages（supersedes を畳む）', () => {
   it('単純な編集: 旧発言とその応答が畳まれ、編集後の発言が残る', () => {
-    // journal 順（新しい順）で渡す — 実際の呼び出しと同じ形。
     const entries: JournalEntry[] = [
       exchange({
         id: 'c2',
@@ -460,7 +417,6 @@ describe('conversationMessages（supersedes を畳む）', () => {
 
     expect(messages.map((m) => m.id)).toEqual(['h2', 'c2']);
     expect(messages.map((m) => m.text)).toEqual(['編集後の発言', '編集後への返答']);
-    // 編集後の発言は supersedes をそのまま持つ。
     expect(messages[0]).toMatchObject({ id: 'h2', supersedes: 'h1' });
   });
 
@@ -506,11 +462,9 @@ describe('conversationMessages（supersedes を畳む）', () => {
       }),
     ];
 
-    // 既定（畳んだ後）は最後の編集とその返答だけが残る。
     const visible = conversationMessages(entries, 'c1');
     expect(visible.map((m) => m.id)).toEqual(['h3', 'c3']);
 
-    // 畳まれた分も含めれば、和集合として全4件が隠れている理由を持つ。
     const all = conversationMessages(entries, 'c1', { includeSuperseded: true });
     expect(all.map((m) => m.id)).toEqual(['h1', 'c1r', 'h2', 'c2', 'h3', 'c3']);
     expect(all.map((m) => m.supersededBy)).toEqual(['h2', 'h2', 'h3', 'h3', undefined, undefined]);
@@ -554,12 +508,10 @@ describe('conversationMessages（supersedes を畳む）', () => {
 
     const messages = conversationMessages(entries, 'c1');
 
-    // h1 / c1r（旧発言とその応答）だけが畳まれ、h2 以降の往復はすべて残る。
     expect(messages.map((m) => m.id)).toEqual(['h2', 'c2', 'h3', 'c3']);
   });
 
   it('対象が窓の外にあるときに何も畳まれず落ちない', () => {
-    // h1（supersedes の対象）が scan の窓に入っておらず、この会話には h2 しか無い。
     const entries: JournalEntry[] = [
       exchange({
         id: 'c2',
@@ -604,8 +556,6 @@ describe('conversationMessages（supersedes を畳む）', () => {
       }),
       exchange({ id: 'h1', at: '2026-08-20T00:00:00.000Z', conversationId: 'c1', text: '旧発言' }),
     ];
-    // 個々のエントリを凍結する — この関数群が1バイトでも書き換えようとすれば
-    // strict mode で即座に例外になる（追記専用の記録に対する射影であることの歯）。
     for (const entry of entries) Object.freeze(entry);
     Object.freeze(entries);
     const before = JSON.stringify(entries);
@@ -653,8 +603,6 @@ describe('collectConversations（supersedes を畳んだ後で preview / message
     const result = collectConversations(entries);
 
     expect(result).toHaveLength(1);
-    // 畳む前なら messages は4件・startedAt は h1・preview は「旧発言…」になりうるが、
-    // 畳んだ後は h2/c2 の2件だけが残る。
     expect(result[0]).toMatchObject({
       conversationId: 'c1',
       startedAt: '2026-08-20T00:02:00.000Z',
@@ -738,7 +686,6 @@ describe('collectConversations（失敗の知らせは一覧の題にしない�
       turnFailure: 'failed',
       turnFailureKind: 'quota',
     });
-    // 文面は認証を名乗っていても、種別が書かれていない行は「不明」である。
     const legacy = exchange({
       id: 'l',
       at: '2026-08-20T00:01:00.000Z',

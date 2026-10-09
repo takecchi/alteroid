@@ -18,20 +18,6 @@ import {
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * `resolveWorkspacePolicy`（roadmap M5「workspace locator の運用選択」）と、
- * それを `manager.ts` の `start()` が台帳へどう書くかを固定する。
- *
- * **`ALTEROID_WORKSPACE_KIND` は方針であって能力の制限ではない。** だから
- * 読めない設定・不足した設定は `runner-volume`（肯定的な永続性の主張）へは
- * 絶対に倒さず、`unknown` へ倒す——理由を必ず持たせる。ここで固定したいのは
- * この「倒す先」の非対称性そのものであって、単なる分岐の網羅ではない。
- *
- * env は必ず引数で渡す。**`process.env` を書き換えない**——並列実行で他の
- * テストを汚さないためである（`resolveManagerModel` を試す既存の作法と同じ）。
- */
-
-/** `manager.ts` の `UNVERIFIED_WORKSPACE_REASON` が書いていた既定の理由（1バイトも変えていない）。 */
 const UNVERIFIED_WORKSPACE_REASON =
   '器の workspace がボリュームかどうかを runner が名乗らないので、' +
   '入れ替えを跨いで残るかを確かめられない（roadmap M5「workspace locator の運用選択」）。';
@@ -86,8 +72,7 @@ describe('resolveWorkspacePolicy', () => {
     const policy = resolveWorkspacePolicy({ [WORKSPACE_KIND_ENV_KEY]: 'git' });
 
     expect(policy.kind).toBe('unknown');
-    // **設定が足りないことから「volume に在るので残る」という肯定的な主張を
-    // 作らない。** 倒す先は必ず unknown である（このテストの本題）。
+    // 設定不足・読めない設定は runner-volume（肯定的な永続性の主張）へ倒さず unknown へ倒す。
     expect(policy.kind).not.toBe('runner-volume');
     expect((policy as { reason: string }).reason).toContain(WORKSPACE_REPOSITORY_ENV_KEY);
   });
@@ -96,7 +81,6 @@ describe('resolveWorkspacePolicy', () => {
     const policy = resolveWorkspacePolicy({ [WORKSPACE_KIND_ENV_KEY]: 'nfs' });
 
     expect(policy.kind).toBe('unknown');
-    // 上のテストと同じ理由——読めない設定を肯定的な永続性の主張へ倒さない。
     expect(policy.kind).not.toBe('runner-volume');
     expect((policy as { reason: string }).reason).toContain('nfs');
   });
@@ -149,7 +133,6 @@ describe('resolveWorkspacePolicy', () => {
   });
 });
 
-/** `manager-workspace-nudge.test.ts` の `swappableRunner` の縮小版（swap は不要）。 */
 function fakeRunner(runnerId: string, workspacePath: string) {
   const alive: RunnerManagerState[] = [];
   const started: RunnerStartCommand[] = [];
@@ -173,11 +156,9 @@ function fakeRunner(runnerId: string, workspacePath: string) {
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer() {
@@ -211,7 +192,6 @@ function fakeRunner(runnerId: string, workspacePath: string) {
   return { runner, started };
 }
 
-/** `manager-workspace-nudge.test.ts` の `setup` の縮小版。 */
 function setup(runner: RunnerClient, workspace?: WorkspacePolicy) {
   const stores = createMemoryStores();
   const inbox: InboxEvent[] = [];

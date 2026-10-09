@@ -5,17 +5,6 @@ import { createSyntheticJournalStore } from './journal-scan.test-support.js';
 import { JournalAnchorNotFoundError } from './store.js';
 import type { JournalStore } from './store.js';
 
-/**
- * `scanJournalPages` そのものの単体の歯。
- *
- * ⚠️ **この足場（`journal-scan.ts`）は、先に実装してから歯を書いた。** 依頼
- * された「先にテストだけを書いて赤を取る」の手順を、この1ファイルについては
- * 守れていない——`digest.ts` / `distill-gap.ts` 側の書き換えに先立って共通の
- * 足場から組み立てたところ、テストより先に実装が固まった。**赤→緑の証拠が
- * 要る本体（OOM を直したことの歯）は `digest.test.ts` / `distill-gap.test.ts`
- * 側にあり、そちらは本当に先にテストを書いて赤を取っている**（両ファイルの
- * 冒頭のコメントを参照）。ここは実装ができた後に足した、通常の単体の歯である。
- */
 describe('scanJournalPages', () => {
   function threeEntries() {
     return createSyntheticJournalStore({
@@ -43,11 +32,8 @@ describe('scanJournalPages', () => {
 
     expect(result).toEqual({ scanned: total, truncated: false });
     expect(seen).toHaveLength(total);
-    // 新しい順（index 昇順）で届く——`order` 未指定の既定は `desc`。
     expect(seen[0]).toBe('d-0');
     expect(seen.at(-1)).toBe(`d-${total - 1}`);
-    // 3ページ（500 + 500 + 3）。終端は store が言う（`next: null`）ので、空のページを
-    // 確かめに行く往復は無い。
     expect(fake.calls).toHaveLength(3);
   });
 
@@ -78,7 +64,6 @@ describe('scanJournalPages', () => {
 
     expect(result).toEqual({ scanned: 250, truncated: true });
     expect(fake.totalReturned).toBe(250);
-    // 100 + 100 + 50 の3回で 250 に達して止まる。
     expect(fake.calls).toHaveLength(3);
   });
 
@@ -103,7 +88,6 @@ describe('scanJournalPages', () => {
   });
 
   describe('短いページは終端ではない（Issue #2494）', () => {
-    /** SQL の LIMIT の後で壊れた行を捨てる store（pg の日誌の list と同じ形）の偽物。 */
     function droppingStore(total: number, broken: ReadonlySet<number>) {
       const inner = createSyntheticJournalStore({
         total,
@@ -133,12 +117,10 @@ describe('scanJournalPages', () => {
       const { store, inner } = droppingStore(4, new Set([1]));
       const result = await scanJournalPages(store, {}, () => {}, { pageSize: 4 });
       expect(result).toEqual({ scanned: 3, truncated: false });
-      // 空ページを確かめに行く往復は要らない（store が next: null を返す）。
       expect(inner.calls).toHaveLength(1);
     });
 
     it('(d) ページが丸ごと読めなくても、その先の古い行を見る（Issue #2605）', async () => {
-      // pageSize 4 の 2 ページ目（index 4..7）が全部読めない。
       const { store } = droppingStore(12, new Set([4, 5, 6, 7]));
       const seen: string[] = [];
       const result = await scanJournalPages(
@@ -150,7 +132,6 @@ describe('scanJournalPages', () => {
         },
         { pageSize: 4 },
       );
-      // 0..3 と 8..11。空ページで「探し切った」と言って 8..11 を取りこぼさない。
       expect(seen).toHaveLength(8);
       expect(seen).toContain('synthetic-000000000011');
       expect(result).toEqual({ scanned: 8, truncated: false });
@@ -192,8 +173,6 @@ describe('scanJournalPages', () => {
       total: 5,
       entryAt: (index) => ({ type: 'decision', decision: `d-${index}`, grounds: 'g' }),
     });
-    // index 3 を錨にする（`id`/`at` は偽物の `entryOf` から取る——本番の
-    // 呼び出し側も「直前に自分が受け取った行」を錨にするのと同じ形）。
     const anchor = fake.entryOf(3);
     const seen: string[] = [];
     await scanJournalPages(
@@ -203,7 +182,6 @@ describe('scanJournalPages', () => {
         for (const entry of page) if (entry.type === 'decision') seen.push(entry.decision);
       },
     );
-    // 錨（index 3）より新しい側 = index 2, 1, 0 を古い→新しい順に返す。
     expect(seen).toEqual(['d-2', 'd-1', 'd-0']);
   });
 
@@ -226,7 +204,6 @@ describe('scanJournalPages', () => {
   });
 });
 
-/** 偽ストアの `oldestAt`（地平。Issue #2640）。pg の `ORDER BY at ASC LIMIT 1` と同じ形。 */
 describe('createSyntheticJournalStore の oldestAt', () => {
   const entryAt = (index: number) => ({
     type: 'decision' as const,

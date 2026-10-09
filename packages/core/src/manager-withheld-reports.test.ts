@@ -19,35 +19,6 @@ import type { InboxEvent, Job, JobStatus } from './schema.js';
 import { captureStderr, createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * **マネージャーがバックグラウンド実行の完了を待つためだけに畳んだターンの
- * 報告は、クローンのターンを起こさない。**
- *
- * 確定済みの証拠（依頼者が生ログで実測）: `Bash` を `run_in_background: true`
- * で起動した直後の assistant メッセージが「完了を待つ」とだけ言って
- * `end_turn` で畳むと、その最後の発話がそのまま「報告」としてクローンへ
- * 配られ、クローンのターンが1本無駄に起きる。当日だけでこの形の配達が
- * 11本あった。
- *
- * `runner-contentless.test.ts`（`contentless`）と完全に同型の直しである
- * ——「中身の無い報告はクローンのターンを起こさない」を「背景処理の完了
- * 待ちで畳んだターンの報告は起こさない」へ広げた。
- *
- * ## この歯が使う2つの足場
- *
- * 1. **`manualRunner()`** —— `RunnerEvent` を直接組み立てて emit する
- *    （`manager.test.ts` の `swappableRunner` と同じ作法）。SDK 層を経由
- *    しないので、`manager.ts` の握り潰し・帳面・`#emit` の1行付与・
- *    `closed`/`flushWithheldReports` の逃げ道を単体で確かめられる。
- * 2. **`fakeSdk()` + `createLocalRunner`**（"通しの歯"）—— 偽の `queryFn`
- *    から `background_tasks_changed` → `assistant` → `result` を流し、
- *    `createRunnerHost`（`runner.ts`）→ `RunnerEvent` → `createManagerPool`
- *    の `post` まで実際に繋ぐ。**書く側と読む側をそれぞれ擬似物で差し替え
- *    ただけの歯ではない** —— `runner.ts` の実装（`#apply` の
- *    `case 'turn_ended'`）と `manager.ts` の実装（`case 'report'` /
- *    `#emit`）の両方を、実物のまま通す。
- */
-
 // ---------------------------------------------------------------------------
 // 足場1: manualRunner（manager.ts 単体の検証）
 // ---------------------------------------------------------------------------
@@ -55,7 +26,6 @@ import type { Stores } from './store.js';
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
-  /** マネージャーの1ターンが終わって報告が上がる。 */
   report(
     managerId: string,
     text: string,
@@ -67,18 +37,15 @@ interface ManualRunner {
       reportId?: string;
     },
   ): void;
-  /** マネージャーが確認を上げる。 */
   ask(
     managerId: string,
     requestId: string,
     summary: string,
     kind?: 'question' | 'permission',
   ): void;
-  /** runner 側でセッションが本当に閉じた。 */
   closed(managerId: string, status: 'done' | 'lost' | 'failed', reason: string): void;
 }
 
-/** `manager.test.ts` の `swappableRunner` と同じ最小実装（この歯専用に複製）。 */
 function manualRunner(runnerId = 'runner-primary'): ManualRunner {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
@@ -92,25 +59,18 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
       return { delivered: false };
     },
-    // **`abort()` の `#confirmStoppedAndReleaseLease` は `list()` に「もう
-    // 居ない」ことを確かめてから `stopped` を確定させる**（`manager.ts` の
-    // `#confirmStoppedAndReleaseLease` の doc）。ここで `alive` から外さない
-    // と `sessionGone` が常に `false` になり、`abort()` が `stopped` を
-    // 一度も確定できない。
+    // `alive` から外さない: `abort()` は `list()` に居ないことを確かめてから `stopped` を確定させるため。
     async stop(managerId) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
       if (at !== -1) alive.splice(at, 1);
@@ -170,12 +130,6 @@ interface ManualSetup {
   advance: (ms: number) => void;
 }
 
-/**
- * `job` を台帳へ先に置き、`restore()` で `manualRunner` を接続する
- * （`manager.test.ts` の「`report` の冪等化」describe が使うのと同じ手順）。
- * これで `fake.report(...)` / `fake.closed(...)` が `#onEvent` へ実際に届く
- * 状態を作る。
- */
 async function runningManualSetup(
   managerId = 'mgr-withhold',
   options: { withheldReportFlushMs?: number } = {},
@@ -216,9 +170,7 @@ async function runningManualSetup(
   });
 
   await pool.restore();
-  // **`restore()` の知らせ（`#notifyRestored`）を fire-and-forget で待つ**
-  // （`manager.test.ts` の「report の冪等化」と同じ理由——ここを待たずに
-  // `before = inbox.length` を取ると、この知らせが後から紛れ込む）。
+  // 待つ: `restore()` の知らせは fire-and-forget で、待たないと `before = inbox.length` の後に紛れ込む。
   await vi.waitFor(() => {
     if (inbox.length === 0) throw new Error('reattach の知らせがまだ届いていない');
   });
@@ -240,7 +192,6 @@ async function journalHasText(stores: Stores, needle: string): Promise<void> {
 }
 
 const AWAITING = { count: 1, breakdown: 'shell×1' };
-/** `flushWithheldReports` の期限（30分。`manager.ts` の同名の定数と同じ値）。 */
 const WITHHELD_REPORT_FLUSH_MS = 30 * 60_000;
 
 describe('manager が握り潰したとき（case "report" の awaitingBackground）', () => {
@@ -250,9 +201,6 @@ describe('manager が握り潰したとき（case "report" の awaitingBackgroun
 
     fake.report('mgr-withhold', '完了を待つ', 'done', { awaitingBackground: AWAITING });
 
-    // **台帳の更新を「処理が終わった」の合図にする。** `#onEvent` は
-    // fire-and-forget（`void`）で走るので、発火直後は書き込みがまだ
-    // 終わっていないことがある（`manager.test.ts` の `jobOf` と同じ理由）。
     await vi.waitFor(async () => {
       const job = await jobOf(stores, 'mgr-withhold');
       if (job?.lastReport !== '完了を待つ') throw new Error('台帳がまだ更新されていない');
@@ -308,10 +256,7 @@ describe('次に配るときに「N 本配っていない」の1行が付く', (
     const before = inbox.length;
     fake.report('mgr-withhold', '2回目（本物）', 'done');
 
-    // **`.find` ではなく `.at(-1)` で拾う。** `restore()` 由来の「知らせ」
-    // （`#notifyRestored`。`#post` を直接呼ぶので `#emit` を経由しない）が
-    // 既に kind: 'report' で1件入っているため、`.find` は先頭のそちらへ
-    // 当たってしまい、新着を待たない。
+    // `.find` にしない: `restore()` 由来の kind: 'report' の知らせが先頭に居り、新着を待たずに当たる。
     const delivered = await vi.waitFor(() => {
       const found = inbox
         .filter((event) => event.type === 'manager_message' && event.kind === 'report')
@@ -326,7 +271,6 @@ describe('次に配るときに「N 本配っていない」の1行が付く', (
     expect(delivered.text).toContain('背景処理の完了待ちで畳んだターンの報告を 1 本配っていない');
     expect(delivered.text).toContain('journal_read');
 
-    // **帳面が空になる。** 3回目（握り潰しの無い回）には付かない。
     const beforeThird = inbox.length;
     fake.report('mgr-withhold', '3回目（普通の報告）', 'done');
     const third = await vi.waitFor(() => {
@@ -376,10 +320,7 @@ describe('closed で積みが配られる／stopped では配られない', () =
     const before = inbox.length;
     fake.closed('mgr-withhold', 'done', 'この委譲は終わった');
 
-    // **`.at(-1)` だけでは足りない。** `restore()` 由来の「知らせ」が既に
-    // 1件在るので、新着が来るまでは `.at(-1)` も同じ古い1件を返し続け、
-    // 待たずに（誤って）「届いた」と判定してしまう——本文に「配っていない」
-    // が含まれるまで待つ。
+    // 本文に「配っていない」が含まれるまで待つ: `.at(-1)` だけだと `restore()` 由来の古い1件で誤って通る。
     const delivered = await vi.waitFor(() => {
       const found = inbox
         .filter((event) => event.type === 'manager_message' && event.kind === 'report')
@@ -404,12 +345,10 @@ describe('closed で積みが配られる／stopped では配られない', () =
     await pool.abort('mgr-withhold', '人間が止めた');
     const before = inbox.length;
 
-    // 止めた後に届く closed（R4 の想定経路）。
     fake.closed('mgr-withhold', 'done', 'runner 側は後から終わったと言ってきた');
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(inbox.length).toBe(before);
-    // 日誌には残っている（止めた事実そのものの exchange）。
     const entries = await stores.journal.list({ types: ['exchange'] });
     expect(entries.length).toBeGreaterThan(0);
 
@@ -417,31 +356,6 @@ describe('closed で積みが配られる／stopped では配られない', () =
   });
 });
 
-/**
- * **止めた委譲が握り潰した報告を抱えたまま終わったことを、依頼者（クローン）が
- * 知る手段が無い、という穴を塞ぐ。**
- *
- * 直上の describe が固定しているのは「積みの**本文**は abort() 後には配らない
- * （R4）」であって、「積みが在ったという**事実**も一切出さない」ではない——
- * この2つを混同すると、握り潰したまま終わったことに気づく引き金が無くなる。
- *
- * ここで固定するのは3つ:
- * 1. クローン発（`by: 'clone'`）は `ManagerAbortResult.detail`（`manager_stop`
- *    の戻り値の元）に件数・時刻・`journal_read` の案内が乗り、**本文
- *    （`lastText`）は乗らない**——**受信箱（inbox）は増えない**（R4 は破って
- *    いない。クローンへの配達は同期の戻り値のみ）。
- * 2. 人間発（`by` 省略＝`'human'`）は、既存の停止メッセージ1本の中に同じ
- *    案内が乗る——**受信箱はちょうど1件しか増えない**（新しいターンを
- *    起こしていない）。
- * 3. 陰性対照: 積みが無いときは detail にもメッセージにも何も足さない
- *    （回帰。何もしていないことを確かめる歯が無いと、足す条件が壊れて
- *    常に足すようになっても気づけない）。
- *
- * 加えて、`#retire()` が stderr へ残す跡（`noteWithheldReportsDiscarded`）も
- * ここで一緒に確かめる——abort() の中でも `#retire()` は必ず呼ばれるので、
- * 積みが在れば同じ呼び出しの中でこの跡も出る（`manager.ts` の `#retire()` の
- * doc「呼び出し元がどれであっても同じ1行が漏れなく残る」）。
- */
 describe('abort() で止めた委譲が握り潰した積みを抱えていた場合、事実が依頼者へ届く', () => {
   it('クローン発: detail に件数・時刻・journal_read の案内が乗り、本文は乗らない。受信箱は増えない', async () => {
     const { pool, inbox, fake } = await runningManualSetup();
@@ -457,14 +371,11 @@ describe('abort() で止めた委譲が握り潰した積みを抱えていた�
       expect(result.outcome).toBe('stopped');
       expect(result.detail).toContain('背景処理の完了待ちで畳んだ報告を 1 本抱えたまま止まった');
       expect(result.detail).toContain('journal_read');
-      // **本文（lastText）は乗らない（R4）。**
       expect(result.detail).not.toContain('握り潰される回・秘密の本文');
     });
 
-    // **`by: 'clone'` は #post しない（Issue #320）——ここでも増やしていない。**
     expect(inbox.length).toBe(before);
 
-    // `#retire()` の stderr の跡（本文は乗らない）。
     const joined = lines.join('');
     expect(joined).toContain('握り潰した報告を配らずに捨てました');
     expect(joined).toContain('managerId=mgr-withhold');
@@ -483,7 +394,6 @@ describe('abort() で止めた委譲が握り潰した積みを抱えていた�
     const result = await pool.abort('mgr-withhold', '人間が止めた');
     expect(result.outcome).toBe('stopped');
 
-    // **ちょうど1件しか増えない**（新しいターンを起こしていない）。
     expect(inbox.length).toBe(before + 1);
     const posted = inbox.at(-1) as { text: string };
     expect(posted.text).toContain('を人間が停止させました');
@@ -513,29 +423,7 @@ describe('abort() で止めた委譲が握り潰した積みを抱えていた�
   });
 });
 
-/**
- * **握り潰しが一覧から見えること**（#621 / #643 の続き）。
- *
- * 直す前、この在庫（`#withheldReports`）は日誌と private な帳面にしか残らず、
- * `ManagerSummary` にも `job.status` にも1文字も写らなかった。**`case 'report'`
- * は `record.job.status = event.status;` を握り潰しの分岐より前に実行するので、
- * `status` は必ず `'done'` へ潰れる**——読む側からは「手が空いた」と区別が
- * つかない。実測（2026-09-05）で `runner_list` の47本が全部 `[done]` に見えた
- * のがこの潰れ方である。
- */
-/**
- * **在庫（`#withheldReports`）が積まれるまで待つ。**
- *
- * ⚠️ **台帳（`lastReport`）の更新を合図にしないこと。** `case 'report'` は
- * `#persist` → 日誌 → `#withholdBackgroundReport` の順で走るので、台帳が
- * 更新された時点では在庫はまだ積まれていない。実際にそれで踏んだ——
- * 台帳を合図にして時計を進めたら、**時計を進めた後で1本目が積まれ**、
- * `since`（最初に積んだ時刻）が進んだ時刻に化けた。
- *
- * **在庫そのものを外から読める口（`list()`）で待つ。** 待ち切れは
- * `vi.waitFor` の時間切れとして出るが、**判定は `expect` に撃たせる**
- * （呼び出し側で改めて中身を見る。`.claude/skills/mutation-testing/`）。
- */
+// 台帳（`lastReport`）の更新を合図にしない: 在庫はその後で積まれ、先に時計を進めると `since` が進んだ時刻になる。
 async function waitForWithheld(pool: ManagerPool, managerId: string, withheldReports: number) {
   return vi.waitFor(async () => {
     const summary = (await pool.list()).find((entry) => entry.managerId === managerId);
@@ -546,7 +434,6 @@ async function waitForWithheld(pool: ManagerPool, managerId: string, withheldRep
   });
 }
 
-/** 在庫が空になるまで待つ（`waitForWithheld` の対。理由は同じ doc）。 */
 async function waitForNoWithheld(pool: ManagerPool, managerId: string) {
   return vi.waitFor(async () => {
     const summary = (await pool.list()).find((entry) => entry.managerId === managerId);
@@ -563,40 +450,27 @@ describe('握り潰しは一覧（ManagerSummary / RunnerManagerEntry）から�
       awaitingBackground: { count: 3, breakdown: 'local_agent×3' },
     });
     const summary = await waitForWithheld(pool, 'mgr-withhold', 1);
-    // **在り高（tasks）と握り潰した本数（withheldReports）は別の観測である。**
-    // ここでは背景タスクが3つ、握り潰した報告は1本——1つに畳んでいたら、
-    // どちらかの数がもう片方に化ける。
     expect(summary?.awaitingBackground).toEqual({
       tasks: 3,
       withheldReports: 1,
       breakdown: 'local_agent×3',
-      // 時計は `runningManualSetup` が固定している（`now: () => clock`）。
       since: '2026-09-01T00:00:00.000Z',
     });
 
-    // **`status` は動かさない**（`runnerLostSince` / `ManagerDenial` と同じ作法）。
-    // 動かすと、この欄が在ることと status の値が二重に同じことを言い始める。
     expect(summary?.status).toBe('done');
 
     await pool.stop();
   });
 
-  /**
-   * **`since` は `firstAt`（最初に積んだ時刻）であって `lastAt` ではない。**
-   * 読む側が知りたいのは「いつから待っているか」で、期限の判定
-   * （`flushWithheldReports()`）が見る `lastAt` とは別の問いである。
-   */
   it('2本目を積んでも since は最初の時刻のまま、握り潰した本数だけが増える', async () => {
     const { pool, fake, advance } = await runningManualSetup();
 
     fake.report('mgr-withhold', '1本目', 'done', { awaitingBackground: AWAITING });
-    // **1本目が積まれてから時計を進める**（真上の `waitForWithheld` の doc）。
     await waitForWithheld(pool, 'mgr-withhold', 1);
 
     advance(5 * 60_000);
     fake.report('mgr-withhold', '2本目', 'done', { awaitingBackground: AWAITING });
     const summary = await waitForWithheld(pool, 'mgr-withhold', 2);
-    // **握り潰した本数だけが増え、在り高（`AWAITING.count` = 1）は上書きである。**
     expect(summary?.awaitingBackground?.withheldReports).toBe(2);
     expect(summary?.awaitingBackground?.tasks).toBe(1);
     expect(summary?.awaitingBackground?.since).toBe('2026-09-01T00:00:00.000Z');
@@ -604,11 +478,6 @@ describe('握り潰しは一覧（ManagerSummary / RunnerManagerEntry）から�
     await pool.stop();
   });
 
-  /**
-   * **一覧を開いても在庫は動かない。** `list()` が配る側の副作用を持つと、
-   * `manager_list` を呼ぶたびに受信箱が動く（クローンの opt-in を踏み潰す形。
-   * north_star 禁止2）。
-   */
   it('list() を何度呼んでも在庫は配られない（受信箱も増えない）', async () => {
     const { pool, inbox, fake } = await runningManualSetup();
 
@@ -625,16 +494,11 @@ describe('握り潰しは一覧（ManagerSummary / RunnerManagerEntry）から�
     await pool.stop();
   });
 
-  /**
-   * **配ったら欄ごと消える。** 残ると、もう配り終えた委譲がいつまでも
-   * 「背景処理待ち」に見える——「手が空いている」を数える側がそのぶん減る。
-   */
   it('積みが配られた後は欄ごと消える', async () => {
     const { pool, fake } = await runningManualSetup();
 
     fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
-    // **先に、欄が立つことを確かめる。** これが無いと下の `toBeUndefined()` は
-    // 空振りで真になる（一度も立たない世界でも通ってしまう）。
+    // 先に欄が立つことを確かめる: 無いと下の `toBeUndefined()` は一度も立たない世界でも通る。
     expect((await waitForWithheld(pool, 'mgr-withhold', 1)).awaitingBackground).toBeDefined();
 
     fake.report('mgr-withhold', '本物の報告', 'done');
@@ -645,11 +509,6 @@ describe('握り潰しは一覧（ManagerSummary / RunnerManagerEntry）から�
     await pool.stop();
   });
 
-  /**
-   * **`runner_list` の器ごとの内訳にも運ぶ。** 運ばないと、`manager_list` が
-   * 区別している2つが `runner_list` の側でだけ潰れる（`RunnerManagerEntry` の
-   * doc が `live` について言っているのと同じ潰れ方）。
-   */
   it('runners() の器ごとの内訳にも載る', async () => {
     const { pool, fake } = await runningManualSetup();
 
@@ -665,7 +524,6 @@ describe('握り潰しは一覧（ManagerSummary / RunnerManagerEntry）から�
     expect(entry?.awaitingBackground?.tasks).toBe(2);
     expect(entry?.awaitingBackground?.withheldReports).toBe(1);
     expect(entry?.awaitingBackground?.breakdown).toBe('local_agent×2');
-    // 陰性対照: 握り潰しが無ければ欄は立たない。
     fake.report('mgr-withhold', '本物の報告', 'done');
     await waitForNoWithheld(pool, 'mgr-withhold');
     const after = (await pool.runners()).runners
@@ -680,19 +538,15 @@ describe('握り潰しは一覧（ManagerSummary / RunnerManagerEntry）から�
 describe('flushWithheldReports（時間で必ず配る逃げ道）', () => {
   it('期限を過ぎた積みを配る', async () => {
     const { pool, inbox, fake, advance } = await runningManualSetup();
-    // **`restore()` 由来の「知らせ」（`#notifyRestored`）が既に1件在る**ので、
-    // 「何も届かない」は絶対数ではなく `before` からの増減で判定する。
     const before = inbox.length;
 
     fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    // まだ期限前 — 何も増えない。
     await pool.flushWithheldReports();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(inbox.length).toBe(before);
 
-    // 30分経過。
     advance(30 * 60_000 + 1);
     await pool.flushWithheldReports();
 
@@ -713,7 +567,7 @@ describe('flushWithheldReports（時間で必ず配る逃げ道）', () => {
     fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    advance(10 * 60_000); // 30分に満たない
+    advance(10 * 60_000);
     await pool.flushWithheldReports();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -721,15 +575,6 @@ describe('flushWithheldReports（時間で必ず配る逃げ道）', () => {
     await pool.stop();
   });
 
-  /**
-   * **`lastAt` が読めない（壊れている）ときは、期限切れとして配る側へ倒す。**
-   *
-   * `Pool#withheldReports` は真の private field（`#`）で、`#withholdBackgroundReport`
-   * の1箇所（常に有効な ISO 文字列しか書かない）以外から書けないので、壊れた
-   * `lastAt` を `Pool` 経由で注入する自然な経路が無い——`withheldReportOverdue`
-   * （純関数として切り出してある）を直接呼んで確かめる（`manager.ts` の doc
-   * 「テストが書けない構造は、テストが無いのと同じ」）。
-   */
   describe('withheldReportOverdue（lastAt が壊れている場合の判定）', () => {
     it('壊れた lastAt は期限切れとして扱う（配る側へ倒す）', () => {
       expect(
@@ -740,11 +585,9 @@ describe('flushWithheldReports（時間で必ず配る逃げ道）', () => {
 
     it('読める lastAt は、これまでどおり経過時間で判定する（回帰）', () => {
       const now = Date.parse('2026-09-01T01:00:00.000Z');
-      // 期限ちょうど前 — まだ配らない。
       expect(withheldReportOverdue('2026-09-01T00:30:00.001Z', now, WITHHELD_REPORT_FLUSH_MS)).toBe(
         false,
       );
-      // 期限ちょうど・それ以降 — 配る。
       expect(withheldReportOverdue('2026-09-01T00:30:00.000Z', now, WITHHELD_REPORT_FLUSH_MS)).toBe(
         true,
       );
@@ -752,15 +595,6 @@ describe('flushWithheldReports（時間で必ず配る逃げ道）', () => {
   });
 });
 
-/**
- * `ManagerPoolOptions.withheldReportFlushMs`（`ALTEROID_WITHHELD_REPORT_FLUSH_MS`
- * を解いた値を渡す口）が、`flushWithheldReports()` の期限判定と、配られる
- * 文言の両方に実際に効くことを固定する。
- *
- * env 自体の解決（`resolveWithheldReportFlushMs`）は
- * `withheld-report-flush-ms.test.ts` が持つ。ここで確かめるのは「解いた値が
- * `Pool` の判定まで届くか」——口を開けただけで配線し忘れる形を捕まえる。
- */
 describe('ManagerPoolOptions.withheldReportFlushMs（口が実際に効くこと）', () => {
   it('既定（30分）より短い値を渡すと、既定なら配られない時点で配られる', async () => {
     const { pool, inbox, fake, advance } = await runningManualSetup('mgr-withhold', {
@@ -771,7 +605,6 @@ describe('ManagerPoolOptions.withheldReportFlushMs（口が実際に効くこと
     fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    // 10分——既定30分ならまだ配られないはずの時点。
     advance(10 * 60_000);
     await pool.flushWithheldReports();
 
@@ -829,17 +662,6 @@ describe('ManagerPoolOptions.withheldReportFlushMs（口が実際に効くこと
   });
 });
 
-/**
- * **Issue #1104。「同じエピソードの中で何度でも合図が立ち直る」を直す。**
- *
- * 直す前は `#deliver` が `'flush'` の配達でも在庫を無条件に `delete` して
- * いたため、`flushWithheldReports()` を再度呼ぶと（同じ委譲がまだ本物の
- * 報告を1本も返していなくても）`withheldReportOverdue` が再び真になり、
- * 同じ知らせが何度でも立て直された（実測: 4時間半で8回、中身は同一）。
- *
- * **合図を消すことが目的ではない**——初回は必ず配る。直したのは回数で、
- * 「30分待っても届かない」という事実そのものは初回どおり配られる。
- */
 describe('flushWithheldReports はエピソードにつき1本だけ配る（Issue #1104）', () => {
   it('1回目は立つが、2回目以降は同じ在庫に対して合図を立て直さない', async () => {
     const { pool, inbox, fake, advance } = await runningManualSetup();
@@ -848,7 +670,6 @@ describe('flushWithheldReports はエピソードにつき1本だけ配る（Iss
     fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
     await waitForWithheld(pool, 'mgr-withhold', 1);
 
-    // 30分経過 — 1回目は必ず立つ。
     advance(30 * 60_000 + 1);
     await pool.flushWithheldReports();
     const delivered = await vi.waitFor(() => {
@@ -859,21 +680,13 @@ describe('flushWithheldReports はエピソードにつき1本だけ配る（Iss
     expect(delivered.text).toContain('30分待っても届かなかった');
     const afterFirstFlush = inbox.length;
 
-    // **`count === 0` の早期 `continue` だけでは「合図を立て直さない」を
-    // 検証したことにならない**——フラッシュ直後は在庫の `count` が 0 に
-    // 戻るので、そこだけを理由に再送が止まっていないかを混同しないため、
-    // ここでもう1本畳んで `count` を 0 から 1 へ戻す（`flushedAt` の効果
-    // だけを見る）。
+    // もう1本畳んで `count` を 0 から 1 へ戻す: `count === 0` の早期 continue と区別し、`flushedAt` の効果だけを見る。
     advance(60_000);
     fake.report('mgr-withhold', 'フラッシュ後も握り潰される回', 'done', {
       awaitingBackground: AWAITING,
     });
     await waitForWithheld(pool, 'mgr-withhold', 1);
 
-    // **同じエピソード（`flushedAt` 済み）に対して、`count > 0` かつ
-    // 期限（30分）を過ぎても、時間が経ってもポーラーが何度回っても
-    // 増えない。** 実測の再現（4時間半・8回）に対応して、大きく時間を
-    // 進めたうえで複数回 `flushWithheldReports()` を呼ぶ。
     advance(4 * 60 * 60_000);
     await pool.flushWithheldReports();
     await pool.flushWithheldReports();
@@ -884,12 +697,6 @@ describe('flushWithheldReports はエピソードにつき1本だけ配る（Iss
     await pool.stop();
   });
 
-  /**
-   * **`since`（`ManagerAwaitingBackground.since`）はフラッシュを跨いでも
-   * 動かない。** `#deliver` の `'flush'` 分岐は `delete` ではなく
-   * `count: 0` + `flushedAt` で `set` し直すので、`firstAt`（`since` の
-   * 写し元）はエピソードを跨いで生き残る。
-   */
   it('フラッシュを跨いでも since は最初に積んだ時刻のまま動かない', async () => {
     const { pool, fake, advance } = await runningManualSetup();
 
@@ -899,7 +706,6 @@ describe('flushWithheldReports はエピソードにつき1本だけ配る（Iss
 
     advance(30 * 60_000 + 1);
     await pool.flushWithheldReports();
-    // フラッシュ後は count が 0 へ戻るが、在庫（と since）はまだ残っている。
     const after = await waitForWithheld(pool, 'mgr-withhold', 0);
     expect(after?.awaitingBackground?.since).toBe('2026-09-01T00:00:00.000Z');
     expect(after?.status).toBe('done');
@@ -907,12 +713,6 @@ describe('flushWithheldReports はエピソードにつき1本だけ配る（Iss
     await pool.stop();
   });
 
-  /**
-   * **本物の報告が配られたらエピソードが終わる。** 在庫が丸ごと消え、次に
-   * 積んだ回は新しいエピソード（新しい `since`）として扱われる——だから
-   * 合図もまた立てられる（`memory.flushedAt` は新しいエピソードでは
-   * `undefined` に戻る）。
-   */
   it('本物の報告が配られたらエピソードが終わる（在庫が消え、次に積むと since が新しくなり、合図がまた立つ）', async () => {
     const { pool, inbox, fake, advance } = await runningManualSetup();
 
@@ -927,11 +727,9 @@ describe('flushWithheldReports はエピソードにつき1本だけ配る（Iss
     await pool.flushWithheldReports();
     await waitForWithheld(pool, 'mgr-withhold', 0);
 
-    // 本物の報告が来て、エピソードが終わる——在庫が丸ごと消える。
     fake.report('mgr-withhold', '本物の報告', 'done');
     await waitForNoWithheld(pool, 'mgr-withhold');
 
-    // 次に積むと、新しいエピソード（since が更新される）。
     advance(60_000);
     fake.report('mgr-withhold', '2エピソード目（握り潰し）', 'done', {
       awaitingBackground: AWAITING,
@@ -940,8 +738,6 @@ describe('flushWithheldReports はエピソードにつき1本だけ配る（Iss
     expect(summary2?.awaitingBackground?.since).toBe('2026-09-01T00:31:00.001Z');
     expect(summary2?.awaitingBackground?.since).not.toBe(firstEpisodeSince);
 
-    // そして新しいエピソードでも、30分待てば合図がもう一度立てられる
-    // （`flushedAt` が新しいエピソードでは undefined に戻っているため）。
     const beforeSecondFlush = inbox.length;
     advance(30 * 60_000 + 1);
     await pool.flushWithheldReports();
@@ -957,11 +753,6 @@ describe('flushWithheldReports はエピソードにつき1本だけ配る（Iss
     await pool.stop();
   });
 
-  /**
-   * **畳まれた報告は失われない。** フラッシュ後（`count: 0`）に新しく積んだ
-   * 報告は、次の本物の報告が来たときに件数として乗る——「後で必ず配る」の
-   * 約束は、エピソード内の2回目以降の握り潰しにも及ぶ。
-   */
   it('フラッシュ後に積んだ報告が失われない（次の本物の報告に件数として乗る）', async () => {
     const { pool, inbox, fake, advance } = await runningManualSetup();
 
@@ -972,7 +763,6 @@ describe('flushWithheldReports はエピソードにつき1本だけ配る（Iss
     await pool.flushWithheldReports();
     await waitForWithheld(pool, 'mgr-withhold', 0);
 
-    // フラッシュ後、本物の報告はまだ来ず、もう1本畳まれる。
     fake.report('mgr-withhold', '2本目（握り潰し、フラッシュ後）', 'done', {
       awaitingBackground: AWAITING,
     });
@@ -987,20 +777,11 @@ describe('flushWithheldReports はエピソードにつき1本だけ配る（Iss
       if (!found) throw new Error('まだ届いていない');
       return found as { text: string };
     });
-    // **フラッシュを跨いだが、失われた報告は1本もない**——数えるのは
-    // このエピソードで積まれた「本物」でない report の本数（1本目は
-    // 配達済みの `#emit` 呼び出しの数ではなく在庫の `count`）。
     expect(delivered.text).toContain('背景処理の完了待ちで畳んだターンの報告を 1 本配っていない');
 
     await pool.stop();
   });
 
-  /**
-   * **陰性対照: `count === 0` のときに「0 本配っていない」という嘘の1行が
-   * 出ない。** フラッシュ直後（在庫は残るが `count: 0`）に本物の報告が来る
-   * 場合がこれに当たる——`#deliver` は `withheld.count > 0` のときだけ
-   * `countNote` を足す。
-   */
   it('陰性対照: フラッシュ直後（count === 0）に本物の報告が来ても「配っていない」は出ない', async () => {
     const { pool, inbox, fake, advance } = await runningManualSetup();
 
@@ -1023,19 +804,12 @@ describe('flushWithheldReports はエピソードにつき1本だけ配る（Iss
     expect(delivered.text).toBe('本物の報告');
     expect(delivered.text).not.toContain('配っていない');
 
-    // **`'full'` の delete は count に関わらず行う。** 在庫はここで丸ごと
-    // 消える（count が 0 だったからといって在庫が残り続けない）。
     await waitForNoWithheld(pool, 'mgr-withhold');
 
     await pool.stop();
   });
 });
 
-/**
- * **`describeBackgroundWaitElapsed`（Issue #1104）の純関数テスト。**
- * `withheldReportOverdue` と同じ理由で純関数として切り出してあるので、
- * `Pool` を介さずに直接呼んで境界条件を確かめる。
- */
 describe('describeBackgroundWaitElapsed（firstAt からの経過を文にする純関数）', () => {
   it('1時間以上は「N時間M分」で経過を言う', () => {
     const now = Date.parse('2026-09-01T02:15:30.000Z');
@@ -1051,20 +825,13 @@ describe('describeBackgroundWaitElapsed（firstAt からの経過を文にする
     );
   });
 
-  /**
-   * **`firstAt` が読めない（`Date.parse` が `NaN`）ときは、経過を捏造しない。**
-   * AGENTS.md「取れない軸に0の行を作る」と同じ向き——0分のような、それらしい
-   * 値を作らず、読めないことそのものを出力に書く。
-   */
   it('firstAt が読めないときは、経過を捏造せず読めないと書く', () => {
     const result = describeBackgroundWaitElapsed('これは日時ではない', Date.now());
     expect(result).toContain('経過時間は不明');
     expect(result).toContain('これは日時ではない');
-    // 捏造した経過（「N時間」「N分」）を出さない。
     expect(result).not.toMatch(/\d+時間|\d+分/);
   });
 
-  /** `firstAt` が未来を指す（経過が負）ときも同じ扱いにする。 */
   it('firstAt が未来（経過が負）のときも、経過を捏造せず読めないと書く', () => {
     const now = Date.parse('2026-09-01T00:00:00.000Z');
     const result = describeBackgroundWaitElapsed('2026-09-01T00:00:01.000Z', now);
@@ -1208,21 +975,14 @@ describe('通しの歯: 偽の queryFn → createRunnerHost → RunnerEvent → 
       return found;
     });
 
-    // 1ターン目: 背景タスクが在るまま、成功して done で終わる
-    // （`Bash` を `run_in_background: true` で起こした直後に相当）。
     await session.backgroundTasksChanged([{ id: 'bg-1', taskType: 'shell' }]);
     await session.say('変異Bの pnpm test の完了を待って作業者を再開させる。');
     await session.finish('変異Bの pnpm test の完了を待って作業者を再開させる。');
 
-    // **待ちのターンでは受信箱に何も入らない。**
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(s.inbox.filter((event) => event.type === 'manager_message')).toHaveLength(0);
 
-    // 2ターン目: 背景タスクが片付いたことを SDK が知らせてから、本物の報告が来る。
-    // **REPLACE 意味論なので、片付いたことを明示的に知らせないと在り高が
-    // 前のターンのまま残り続ける**（`agent-events.ts` の
-    // `AgentBackgroundTasksEvent` の doc）——これを送らずに `finish` すると、
-    // 2ターン目も「まだ背景処理を待っている」として握り潰され続ける。
+    // 空を明示的に知らせる: REPLACE 意味論で、送らないと在り高が前のターンのまま残り2ターン目も握り潰される。
     await session.backgroundTasksChanged([]);
     await session.say('本物の報告。');
     await session.finish('本物の報告。');
@@ -1234,7 +994,6 @@ describe('通しの歯: 偽の queryFn → createRunnerHost → RunnerEvent → 
       if (!found) throw new Error('まだ届いていない');
       return found as { text: string };
     });
-    // **末尾に「1 本配っていない」が付く。**
     expect(delivered.text).toContain('本物の報告。');
     expect(delivered.text).toContain('背景処理の完了待ちで畳んだターンの報告を 1 本配っていない');
     expect(s.inbox.filter((event) => event.type === 'manager_message')).toHaveLength(1);
