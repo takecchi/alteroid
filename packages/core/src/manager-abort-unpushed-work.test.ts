@@ -16,33 +16,6 @@ import type {
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **`pool.abort()` が `#confirmStoppedAndReleaseLease`（＝`runner.stop(managerId)`。
- * `Host#stop(managerId)` に対応）の直前に、未 push の観測を1回取って
- * `source: 'stop'` で記録すること（Issue #1266 残り2）。**
- *
- * 足場（`entryOf` / `createFakeRegistry` / `fakeRunner` / `jobWith` / `setup`）は
- * `manager-vacate-unpushed-work.test.ts` と同じ形を複製してある（同ファイルの
- * doc と同じ理由——duplicated on purpose。`vacate()` と `abort()` は
- * `#confirmStoppedAndReleaseLease` を共有する姉妹関数である）。
- *
- * ## この歯が固定する残り2の設計判断
- *
- * - **`abort()` の呼び出し元（`by`）で条件分けない。** `manager_stop`
- *   （`force: true` の running・非 force の `done`/`waiting_human`）・人間の
- *   Web UI 経由の停止・`#autoFoldOne`（`by: 'auto-fold'`）は全員この歯が
- *   固定する形を通る——`by: 'human'`（既定）と `by: 'auto-fold'` の両方で
- *   測る。
- * - **観測が失敗しても abort 本体の判定（確かめた停止・貸し出しの解放）は
- *   変わらない**——`vacate()` の歯2と同じ形をここでも固定する。
- * - **`Host#shutdown()` 経由（`source: 'shutdown'`）とは別の値
- *   （`source: 'stop'`）で残ること**——`shutdownObservationArrivedAfterSwap`
- *   の判定（`source === 'shutdown'` の厳密一致）に影響しないことは、この
- *   ファイルではなく `manager-shutdown-unpushed-work.test.ts` /
- *   `manager.test.ts` 側の既存の歯が引き続き固定する（このファイルは
- *   `source` の値そのものが `'stop'` であることだけを見る）。
- */
-
 function entryOf(label: string, state: RunnerLiveness, runnerId?: string): RunnerEntry {
   return {
     label,
@@ -112,7 +85,6 @@ function fakeRunner(
       /* この試験群では使わない。 */
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この試験群では使わない。 */
       return {};
     },
     async resume(command): Promise<{ cwd?: string }> {
@@ -121,7 +93,6 @@ function fakeRunner(
       return {};
     },
     async send() {
-      /* この試験群では使わない。 */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -214,14 +185,9 @@ describe('abort() が runner.stop(managerId) の直前に unpushedWork() を取�
     fake.addClient(runnerA.client);
     const { pool } = setup(stores, fake.registry);
 
-    // **`by: 'clone'` は `manager_stop`（tools.ts）が force:true で呼ぶ形と
-    // 同じ——`force` 自体は tools.ts の門なので、manager.ts の層では見えない
-    // （`abort()` は `by` しか受け取らない）。**
     const result2 = await pool.abort('mgr-abort-unpushed', '429 の再試行', 'clone');
     expect(result2.outcome).toBe('stopped');
 
-    // **順序そのものが要点。** `unpushedWork` が `stop` より先に呼ばれている
-    // ——生きて答えられる最後の機会に取ることを固定する（`vacate()` と同じ形）。
     expect(calls).toEqual(['unpushedWork:mgr-abort-unpushed', 'stop:mgr-abort-unpushed']);
 
     const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-abort-unpushed');
@@ -254,7 +220,6 @@ describe('abort() が runner.stop(managerId) の直前に unpushedWork() を取�
     fake.addClient(runnerA.client);
     const { pool } = setup(stores, fake.registry);
 
-    // `by` を省略——`ManagerPool.abort()` の既定は `'human'`。
     await pool.abort('mgr-abort-human');
 
     const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-abort-human');
@@ -310,15 +275,10 @@ describe('abort() が runner.stop(managerId) の直前に unpushedWork() を取�
 
     const result = await pool.abort('mgr-abort-unpushed-fail', '確認', 'clone');
 
-    // **観測の失敗が abort 本体の判定を巻き添えにしない**——`vacate()` の
-    // 歯2と同じ形。
     expect(result.outcome).toBe('stopped');
 
     const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-abort-unpushed-fail');
     expect(job?.status).toBe('stopped');
-    // **観測そのものは「取れなかった」として台帳に残る**——`unpushedWork()` は
-    // 例外を投げない設計なので、失敗しても `kind:'unavailable'` に畳まれて
-    // 記録される（欄が消えるのではない）。
     expect(job?.lastUnpushedWorkObservation).toMatchObject({ kind: 'unavailable', source: 'stop' });
 
     await pool.stop();
