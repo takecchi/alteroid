@@ -76,54 +76,24 @@ import type { UsageTotals } from './usage.js';
 
 type WorkerWaitEvent = Extract<RunnerEvent, { type: 'worker_wait' }>;
 
-/**
- * #252 の「知らせは全文を埋め込まない」試験だけが使う、末尾専用の目印。
- *
- * `.repeat()` で作った巨大な依頼文・報告は同じ語の繰り返しなので、末尾から
- * 適当に切り出しても、抜粋が残す先頭部分に**同じ文字列が偶然含まれる**
- * （このテストを書く過程で実際に起きた——`not.toContain` が意図せず先頭一致で
- * 落ちた）。切り詰めの外にしか存在しない一意な文字列を末尾へ足すことで、
- * 「本当に末尾（＝切り詰められた側）が含まれていないか」だけを見る。
- */
+// 末尾専用の一意な目印: `.repeat()` の繰り返しだと抜粋の先頭にも同じ文字列が含まれ、
+// `not.toContain` が先頭一致で落ちるため、切り詰めの外にしか無い文字列を末尾へ足す。
 const REQUEST_TAIL_MARKER = 'REQUEST-TAIL-MARKER-9f3c2a91';
 const REPORT_TAIL_MARKER = 'REPORT-TAIL-MARKER-7e1b44de';
 
-/**
- * SDK を実際に呼ばずに委譲の配線を検証する。
- *
- * ここで固定したいのは北極星に由来する不変条件（モデル帯・`tools` を渡さないこと・
- * 上限を置かないこと・認証情報を配らないこと）と、エスカレーションが一本の経路で
- * 通ること。SDK 実呼び出しの確認は手動で行う。
- */
 interface FakeSession {
   options: Options;
   inputs: string[];
-  /** マネージャー側から「確認したい」と言う。返るのは SDK へ返す許可結果。 */
   ask(
     toolName: string,
     input: Record<string, unknown>,
     signal?: AbortSignal,
     requestId?: string,
   ): Promise<PermissionResult>;
-  /** マネージャーが本文を1つ喋る（人間の画面に出るもの）。 */
   say(text: string, options?: { parentToolUseId?: string }): Promise<void>;
-  /** マネージャー側の1ターンが終わる。 */
   report(text: string): Promise<void>;
-  /** PostToolUse フックを鳴らす。 */
   usedTool(tool: string, extra?: Record<string, unknown>): Promise<void>;
-  /**
-   * SDK が上限の文言を通知として出す（Issue #393）。
-   *
-   * **この口が無かったせいで、`ManagerPool#onEvent` の `usage_notice` を測る歯が
-   * 1本も書けなかった**（`onEvent` は private で、runner のイベント経由でしか
-   * 届かない）。押し込む先は runner の `system/notification` の経路である。
-   */
   noticeLimit(text: string): Promise<void>;
-  /**
-   * SDK が枠の事実を出す（Issue #393）。**ターンの頭ごとに来るもの。**
-   *
-   * これも上と同じ理由で口が無かった。
-   */
   rateLimit(info: Record<string, unknown>): Promise<void>;
 }
 
@@ -134,11 +104,8 @@ function fakeSdk() {
     const options = params.options ?? {};
     let emit: ((message: SDKMessage) => void) | null = null;
     let asks = 0;
-    // **#206: `result` メッセージの `uuid` は実機では毎ターン別の値になる**
-    // （SDK が result ごとに払う）。`runner.ts` はこれを `reportId` として
-    // そのまま運ぶので、この fake が固定値を返すと2回目以降の `report()` が
-    // 冪等化で握りつぶされ、実機では起きない重複扱いになる。ターンごとに
-    // 別の値にして、この fake を実機の形へ寄せる。
+    // `result` の `uuid` はターンごとに別の値にする: 固定だと runner が `reportId` として
+    // 運ぶ冪等化で2回目以降の `report()` が握りつぶされ、実機では起きない重複扱いになるため。
     let reports = 0;
     const buffered: SDKMessage[] = [];
     const inputs: string[] = [];
@@ -153,8 +120,7 @@ function fakeSdk() {
       inputs,
       async ask(toolName, input, signal, requestId) {
         const canUseTool = options.canUseTool as CanUseTool;
-        // SDK は1回の応答で並列に呼ばれた道具を、それぞれ別の request_id で
-        // 同時に降ろしてくる。既定でも被らせない。
+        // 既定の request_id も被らせない: SDK は並列に呼ばれた道具を別々の id で同時に降ろすため。
         const id = requestId ?? `req-${(asks += 1)}`;
         const result = await canUseTool(toolName, input, {
           signal: signal ?? new AbortController().signal,
@@ -232,7 +198,6 @@ function fakeSdk() {
         uuid: 'uuid-init',
       } as unknown as SDKMessage;
 
-      // クローンからの入力を読み続ける裏方（ここでは記録するだけ）
       void (async () => {
         for await (const message of params.prompt as AsyncIterable<{
           message: { content: unknown };
@@ -279,47 +244,21 @@ interface Setup {
 interface SetupOptions {
   stores?: Stores;
   withheldEnvKeys?: readonly string[];
-  /** 差し替えると runner ごと入れ替えられる（HTTP 越しの検証に使う）。 */
   runner?: RunnerClient;
-  /** 衝突を再現する試験のための注入口（`ManagerPoolOptions.generateManagerId`）。 */
   generateManagerId?: () => string;
-  /** 枠の観測を回し手へ渡す口（Issue #393）。 */
   onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
-  /** いま撒かれているトークンの身元（Issue #393）。 */
   tokenIdentity?: () => { tokenId: string; generation: number } | undefined;
-  /** 名乗ってきた runner へ鍵を降ろす口（Issue #393）。 */
   syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
-  /**
-   * 合流窓の長さ（`ManagerPoolOptions.synthesizedNoticeWindowMs`）。**省略時は渡さない**
-   * ＝ 本番と同じ既定（`resolveSynthesizedNoticeWindowMs()`、3000ms）のまま。窓の後に
-   * 届く知らせの**中身**を測るテストだけが `TEST_NOTICE_WINDOW_MS` を渡す。
-   */
+  // 省略時は渡さない: 本番と同じ既定（3000ms）のまま走らせるため。
+  // 窓の後に届く知らせの中身を測る試験だけが `TEST_NOTICE_WINDOW_MS` を渡す。
   synthesizedNoticeWindowMs?: number;
 }
 
-/**
- * **合流窓の長さを、窓の満了を待つテストだけ既定（3000ms）ではなく短く取る**（`setup()` /
- * `setupRejecting()` に明示で渡したときだけ効く。渡さないテストは既定のまま）。
- *
- * 渡すテストが測っているのは「窓の後に受信箱へ届く**中身**」（戻せなかった知らせの本文・
- * 台帳の `lost`・一覧の `live`）であって、窓が何ミリ秒かではない。窓そのもの（既定
- * 3000ms・窓の中の合流・窓の外の別扱い）は `synthesized-notice-window-ms.test.ts` と
- * `manager-synthesized-notices.test.ts` が持つ。`runner-failure.test.ts` の
- * `TEST_NOTICE_WINDOW_MS` と同じ理由・同じ値（PR #2302）。
- *
- * **0 に近づけすぎない。** 渡すテストの知らせは、1回の `restore()` の中で連続して積まれる
- * （数ミリ秒差）ので 100ms で1つの束に収まる。仮に器の混雑で束が割れても、各テストは
- * 本文の一部（`戻せなかった` / `生ログ` / `落ちた`）で `find` してからその1通の中身を
- * 見るので、件数を数える検算には依らない。
- */
+// 窓の満了を待つ試験だけ既定より短く取る。0 に近づけすぎない: 1回の `restore()` で
+// 連続して積まれる知らせが1つの束に収まる幅（100ms）が要るため。
 const TEST_NOTICE_WINDOW_MS = 100;
 
-/**
- * デーモン側のプール＋同一プロセスの runner。
- *
- * SDK を握るのは runner なので、偽の `query` は runner に渡す。デーモンは
- * `RunnerRegistry` しか知らない（固定 URL も runner の内部も前提にしない）。
- */
+// 偽の `query` は runner に渡す: SDK を握るのは runner で、デーモンは `RunnerRegistry` しか知らないため。
 function setup(
   env: NodeJS.ProcessEnv = { PATH: '/usr/bin', ALTEROID_HOME: '/secret' },
   options: SetupOptions = {},
@@ -343,16 +282,13 @@ function setup(
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
-    // **本番と同じ1本道を通す。** 降ろし直しは更新と同じ列に入る必要があるので、
-    // ここを省くと「重なったら壊れる」経路をテストが見なくなる。
+    // 本番と同じ1本道を通す: 降ろし直しは更新と同じ列に入る必要があり、省くと
+    // 「重なったら壊れる」経路を試験が見なくなるため。鍵の袋も同じ。
     profile: createProfileService({ stores, runners: registry }),
-    // **鍵の袋も本番と同じ1本道を通す**（降ろし直しは更新と同じ列に入る）。
     credentials: createCredentialService({
       stores,
       runners: registry,
       withheldEnvKeys: [...WITHHELD_ENV_KEYS],
-      // （以前はここで「クローンの器の env」を明示で空にしていた。器の env を土台にする経路は
-      // 2026-10-06 に撤去したので、降りる鍵は機械の `process.env` に依らない。）
     }),
     ...(options.generateManagerId === undefined
       ? {}
@@ -376,7 +312,6 @@ describe('マネージャー', () => {
 
     const { options } = s.sessions[0] as FakeSession;
 
-    // マネージャー = Opus / 作業者 = Sonnet。変更には人間の承認が要る（地雷5）
     expect(options.model).toBe(MANAGER_MODEL);
     expect(MANAGER_MODEL).toBe('opus');
 
@@ -384,28 +319,22 @@ describe('マネージャー', () => {
     expect(worker.model).toBe(WORKER_MODEL);
     expect(WORKER_MODEL).toBe('sonnet');
 
-    // `tools` を明示リストで絞らない（地雷1）。作業者は tools 省略 = 全継承
     expect(options.tools).toBeUndefined();
     expect(options.allowedTools).toBeUndefined();
     expect(options.disallowedTools).toBeUndefined();
     expect(worker.tools).toBeUndefined();
     expect(worker.disallowedTools).toBeUndefined();
 
-    // ターン数・予算の上限で暴走を止めない（地雷2）
     expect(options.maxTurns).toBeUndefined();
     expect(options.maxBudgetUsd).toBeUndefined();
     expect(worker.maxTurns).toBeUndefined();
 
-    // 権限モードは人間が Claude Code を開いたときと同じ（Auto）。`canUseTool` の
-    // 配線はそのまま残す（要件。既定で確認を出すかどうかだけが変わる）
     expect(options.permissionMode).toBe('auto');
     expect(typeof options.canUseTool).toBe('function');
 
-    // 人間と同じ設定・同じ .mcp.json を渡す（下向きは同じものが見える）
     expect(options.settingSources).toEqual(['user', 'project', 'local']);
     expect(options.cwd).toBe('/work/project');
 
-    // Claude Code 既定のシステムプロンプトを置き換えない（置き換え = デグレード）
     expect(options.systemPrompt).toMatchObject({ type: 'preset', preset: 'claude_code' });
 
     await s.pool.stop();
@@ -419,12 +348,9 @@ describe('マネージャー', () => {
       expect(resolveWorkerModel(env)).toBe(WORKER_MODEL);
     }
 
-    // 空文字が既定へ落ちることは器の都合でもある。compose は `${VAR:-}` で
-    // 渡すので、未設定の変数は空文字として届く。ここを `!== undefined` で見ると
-    // 空文字がそのまま SDK へ流れて起動時に落ちる。
-
-    // 人間が置いた値だけが効く。既知の別名で関門を作らない（SDK が増やした
-    // モデルを人間が選べなくなる＝能力の削除。north_star 禁止1）
+    // 空文字は既定へ落とす: compose の `${VAR:-}` で未設定の変数が空文字として届き、
+    // `!== undefined` で見ると SDK へそのまま流れて起動時に落ちるため。
+    // 既知の別名で関門を作らない: SDK が増やしたモデルを人間が選べなくなるため。
     expect(resolveManagerModel({ [MANAGER_MODEL_ENV_KEY]: 'fable' })).toBe('fable');
     expect(resolveManagerModel({ [MANAGER_MODEL_ENV_KEY]: '  fable  ' })).toBe('fable');
     expect(resolveWorkerModel({ [WORKER_MODEL_ENV_KEY]: 'まだ無いモデル' })).toBe('まだ無いモデル');
@@ -434,8 +360,8 @@ describe('マネージャー', () => {
     expect(placedManagerModels({})).toEqual([]);
     expect(placedManagerModels({ [MANAGER_MODEL_ENV_KEY]: '  ' })).toEqual([]);
 
-    // **値の比較で言い換えられない。** ここが答えているのは「差し替えの承認が
-    // 置かれているか」であって「既定と違うか」ではない（起動ログに出す判断の材料）。
+    // 値の比較で言い換えない: 答えているのは「差し替えの承認が置かれているか」で、
+    // 「既定と違うか」ではないため。
     expect(placedManagerModels({ [MANAGER_MODEL_ENV_KEY]: MANAGER_MODEL })).toEqual([
       { key: MANAGER_MODEL_ENV_KEY, value: MANAGER_MODEL, fallback: MANAGER_MODEL },
     ]);
@@ -469,9 +395,7 @@ describe('マネージャー', () => {
   });
 
   it('マネージャーだけ差し替えても、作業者は巻き添えで動かない', async () => {
-    // **作業者の `model` を省略すると SDK の既定は親の継承になる。** 省いてあると
-    // マネージャーを差し替えた人が作業者まで一緒に動かすことになり、「切り出した
-    // 実作業だけ安く回す」という階層の意味が消える（north_star の前提）。
+    // 作業者の `model` を省略しない: SDK の既定は親の継承で、マネージャーの差し替えが作業者まで動かすため。
     const s = setup({ PATH: '/usr/bin', [MANAGER_MODEL_ENV_KEY]: 'fable' });
     await s.pool.start({ request: 'ログイン周りを直して' });
 
@@ -491,27 +415,12 @@ describe('マネージャー', () => {
 
     const env = (s.sessions[0] as FakeSession).options.env ?? {};
     for (const key of WITHHELD_ENV_KEYS) expect(env[key]).toBeUndefined();
-    // 一方で、人間が使っている環境そのものは削らない（PATH を落とすとただの故障）
     expect(env.PATH).toBe('/usr/bin');
 
     await s.pool.stop();
   });
 
-  /**
-   * **この歯が単独で守るもの**: 報告が降りてきた瞬間に、デーモンが**受け取った
-   * 時刻を刻む**こと（#358）。
-   *
-   * **描き方の歯とは別物である。** `tools.test.ts` の `manager_list` の歯は
-   * `ManagerSummary.lastReportAt` を**直接代入して**出力の形を測っており、
-   * 「刻む」側は1本も通っていない。**実測（変異試験、2026-08-24）**: この歯を
-   * 足す前に `record.job.lastReportAt = new Date().toISOString();` を消す変異を
-   * 当てたところ、**5本の変異のうちこれだけが生存した** —— 描き方の歯は全部
-   * 緑のまま通った。
-   *
-   * **時刻そのものは固定できない**（`new Date()` を直接使う設計で、`lastFailure.at`
-   * と同じ作法）。だから**区間で挟む** —— 報告の前後で取った時刻の間に在ることを
-   * 見る。これは「何か文字列が入った」より強く、「特定の値」より脆くない。
-   */
+  // 時刻は固定できない（`new Date()` を直接使う設計）ので、報告の前後で取った時刻で挟む。
   it('報告が降りてきたら、デーモンが受け取った時刻が委譲の要約に載る（#358）', async () => {
     const s = setup();
     await s.pool.start({ request: '調べて' });
@@ -523,7 +432,6 @@ describe('マネージャー', () => {
     const [summary] = await s.pool.list();
     expect(summary?.lastReport).toBe('終わった');
     const at = summary?.lastReportAt;
-    // **存在だけでは足りない。** 刻んだ値が「受け取った瞬間」であることまで見る。
     expect(at).toBeDefined();
     const stamped = Date.parse(at ?? '');
     expect(Number.isNaN(stamped)).toBe(false);
@@ -544,7 +452,6 @@ describe('マネージャー', () => {
       [a.managerId, b.managerId].sort(),
     );
 
-    // 交錯して届く報告を、どちらのものか分かる形で受信箱へ流す
     await (s.sessions[1] as FakeSession).report('B 終わった');
     await (s.sessions[0] as FakeSession).report('A 終わった');
 
@@ -558,21 +465,17 @@ describe('マネージャー', () => {
   });
 
   it('既定では当たり障りのない道具で確認を出さない（permissionMode: auto）', async () => {
-    // 人間が Claude Code を開けば `Read` や `grep` でいちいち止まらない。層を
-    // 下りた瞬間にそれが止まるならデグレード（north_star 禁止1）であって仕様ではない。
     const s = setup();
     await s.pool.start({ request: 'ログイン周りを直して' });
 
     const { options } = s.sessions[0] as FakeSession;
     expect(options.permissionMode).toBe('auto');
-    // 経路そのものは残す。既定で確認を出すかどうかだけを変えている。
     expect(typeof options.canUseTool).toBe('function');
 
     await s.pool.stop();
   });
 
   it('許可確認はクローンへ回り、返事が来るまでその仕事だけが止まる（受け入れ基準2）', async () => {
-    // 都度確認へ戻した状態＝設定を戻せば従来どおり動くことの証明でもある。
     const s = setup({
       PATH: '/usr/bin',
       ALTEROID_HOME: '/secret',
@@ -585,23 +488,19 @@ describe('マネージャー', () => {
     const asked = session.ask('Bash', { command: 'git push' });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // クローンの受信箱に許可確認として届く
     const event = s.inbox.find((entry) => entry.type === 'manager_message');
     expect(event).toMatchObject({ kind: 'permission', managerId });
     expect((event as { requestId?: string }).requestId).toBeTruthy();
 
-    // 止まっているのはこの仕事だけ（一覧からもそう見える）
     const waiting = (await s.pool.list()).find((m) => m.managerId === managerId);
     expect(waiting?.status).toBe('waiting_human');
     expect(waiting?.waiting[0]?.summary).toContain('Bash');
 
-    // クローンが答えると、そこだけが再開する
     const result = await s.pool.send(managerId, 'よい', { decision: 'allow' });
     expect(result.outcome).toBe('answered');
     expect(await asked).toEqual({ behavior: 'allow' });
     expect((await s.pool.list()).find((m) => m.managerId === managerId)?.status).toBe('running');
 
-    // 誰が何を聞かれ、何と答えたかが日誌だけで追える（受け入れ基準4）
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       managerId?: string;
       answer?: string;
@@ -614,21 +513,11 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **issue #287 の続き。** `case 'ask'` の `summary` は runner.ts の
-   * `#onPermission` が `` `${toolName} の実行許可: ${brief(input)}` `` の形
-   * で組み立てる（`brief()` は道具の呼び出し引数の JSON ダンプで、AI が
-   * 書いた文章ではない）。この `text` を `<Markdown>` で描く面
-   * （`apps/web` の `commitments.tsx`）でバッククォート等が `<code>` に
-   * 食われて消えるのを防ぐため、`kind === 'permission'` のときだけ
-   * `markup: 'none'` を立てる。
-   */
   it("実行許可の確認は manager_message に markup: 'none' が立つ（#287）", async () => {
     const s = setup();
     await s.pool.start({ request: 'デプロイして' });
     const session = s.sessions[0] as FakeSession;
 
-    // `command` にバッククォートを含めておく——立てなければ化ける入力の実例。
     session.ask('Bash', { command: 'echo `date`' });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -656,17 +545,6 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **選択肢の中身がクローンへ届くこと**（`describeQuestions` / `describeQuestion`）。
-   *
-   * かつて `describeQuestions` は `question` だけを `join(' / ')` で連ね、
-   * `options` を1文字も運んでいなかった。⟹ クローンは「選べ」と言われながら
-   * 選択肢を読めず、推測で答えるか聞き直すしかない（実測 2026-09-08: 2問・
-   * 各3択の確認が **117 文字の質問文だけ**になって届いた）。
-   *
-   * **測っているのは「受信箱へ入る本文」である。** 一覧（`manager_list`）側は
-   * 別に抜粋を掛けるので、そちらの長さはここでは見ない。
-   */
   it('AskUserQuestion の選択肢（label と description）がクローンへ届く', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '設計を相談したい' });
@@ -696,10 +574,7 @@ describe('マネージャー', () => {
       { text: string } | undefined;
     expect(delivered).toBeDefined();
     const text = delivered?.text ?? '';
-    // 質問文は今までどおり載る。
     expect(text).toContain('DB はどちらにする？');
-    // **選択肢の label と description が両方載る。** どちらか片方だと、
-    // 「何が選べるか」か「選ぶと何が起きるか」のどちらかが読めない。
     expect(text).toContain('PostgreSQL');
     expect(text).toContain('本番と同じ。移行は要らない');
     expect(text).toContain('SQLite');
@@ -715,9 +590,7 @@ describe('マネージャー', () => {
     const { managerId } = await s.pool.start({ request: '設計を相談したい' });
     const session = s.sessions[0] as FakeSession;
 
-    // #313 以降、回答として消費されるのは requestId か decision が在るものだけ。
-    // 質問に allow/deny は無いので、宛先（requestId）で特定する。測っている性質
-    // （クローンの言葉がそのまま answers に入る）は変わっていない。
+    // 質問に allow/deny は無いので、宛先は requestId で特定する。
     const asked = session.ask(
       'AskUserQuestion',
       {
@@ -741,10 +614,6 @@ describe('マネージャー', () => {
       updatedInput: { answers: { 'DB はどちらにする？': 'PostgreSQL で' } },
     });
 
-    // **#322: AskUserQuestion の常時 allow は、以前は journal から1文字も
-    // 読めなかった。** `decision` を付けずに答えた回でも `[allow]` が残ること
-    // をここで見る（`decision を書き忘れても…` テストが permission 側で見て
-    // いるのと対になる、question 側の回帰）。
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       answer?: string;
     }[];
@@ -753,14 +622,6 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **issue #287 の続き。** `question` 側の `summary`
-   * （`describeQuestions(input)`）はモデル自身が書いた質問文であり、
-   * 「AI が書いたものは Markdown として描く」という既存の軸に乗る。
-   * `markup: 'none'` は `kind === 'permission'` のときにしか立てないので、
-   * ここでは `markup` という**キーそのものが無い**ことを見る
-   * （`undefined` が値として入っているのではなく、`in` で見て無い）。
-   */
   it('AskUserQuestion の確認には manager_message に markup のキーが無い（#287）', async () => {
     const s = setup();
     await s.pool.start({ request: '設計を相談したい' });
@@ -785,13 +646,6 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **#322 の core: AskUserQuestion は decision を一切見ない。** ここでは
-   * わざと矛盾した `decision: 'deny'` を明示して答え、それでも allow へ
-   * 解決されること（既存の挙動。runner.ts の `#onPermission` が元々そう
-   * 実装している）と、その事実が journal からも読めること（この Issue の
-   * 直す対象）の両方を1本で確かめる。
-   */
   it('AskUserQuestion は decision を明示しても無視して常に allow になり、その事実が journal に残る（#322）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '設計を相談したい' });
@@ -809,8 +663,6 @@ describe('マネージャー', () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // **矛盾した decision を渡す。** 質問への回答に allow/deny という概念は
-    // 無いので、これは無視されて allow になるはずである。
     await s.pool.send(managerId, 'PostgreSQL で', {
       requestId: 'req-db-deny',
       decision: 'deny',
@@ -820,22 +672,11 @@ describe('マネージャー', () => {
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       answer?: string;
     }[];
-    // **`decision: 'deny'` を渡したのに `[deny]` にはならない。** ここが
-    // 変わっていたら、`decideAnswer` が `kind` を見ずに `decision` を素通し
-    // している（＝仕様が壊れている）ことを意味する。
     expect(escalations[0]?.answer).toBe('[allow] PostgreSQL で');
 
     await s.pool.stop();
   });
 
-  /**
-   * **複数の確認が同時に待っているときの断りにも上限が要る（#409）。**
-   * `send()` が requestId 無しで呼ばれ複数件が待っていると「複数の確認を
-   * 同時に待っている」と断って `record.waiting` を列挙するが、この列挙に
-   * 上限も合図も無かった——1件ごとの `summary` は自由文（質問文）なので、
-   * 大量に同時待ちがあれば直接の返り値がそのまま伸びる。ここでは抜粋の
-   * 合図（`excerptLine` の「省略」）が出て、伸び続けないことを見る。
-   */
   it('大量の確認が同時に待っていても、あいまいさの断りは抜粋の合図で締まる', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '設計を相談したい' });
@@ -861,27 +702,15 @@ describe('マネージャー', () => {
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // requestId を渡さない——複数件が同時に待っているので「あいまい」に落ちる。
-    // `decision` が無いと「追加指示」として流れるだけなので（`#choosePending`
-    // の doc）、あいまい分岐に届かせるためにここでは明示する。
+    // `decision` を明示する: 無いと「追加指示」として流れるだけで、あいまい分岐に届かないため。
     const result = await s.pool.send(managerId, 'どれのこと？', { decision: 'allow' });
     expect(result.outcome).toBe('unknown');
-    // 30件の生の列挙をそのまま出せば数千文字になる。ここでは合図が出て、
-    // 際限なく伸びていないことを見る。
     expect(result.detail?.length).toBeLessThan(1_000);
     expect(result.detail).toMatch(/省略/);
 
     await s.pool.stop();
   });
 
-  /**
-   * **一覧が種別を持つこと自体を測る（#334）。** 直前のテストは「質問への
-   * 回答がそのまま answers に入る」という別の性質を測っており、`kind` の
-   * 値そのものは `toMatchObject` で1回しか通していない。ここでは
-   * `s.pool.list()`（画面・クローンの `manager_list` が読む面そのもの）が
-   * 返す `waiting` を主語にして、質問と実行許可の両方を同時に持たせ、
-   * それぞれが正しい `kind` を名乗ることを見る。
-   */
   it('AskUserQuestion の待ちは kind: question として一覧に出る / 実行許可の待ちは kind: permission として出る（#334）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '設計を相談したい' });
@@ -907,24 +736,8 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **`RunnerSession#state()` は呼ばれるたびに `askedAt` を取り直さない
-   * （#334 / #323）ことを、`state()` を直接呼ぶ経路で測る。**
-   *
-   * ⚠️ 直前のテストや `manager.test.ts` の他の歯は `s.pool.list()`（＝
-   * manager.ts の `record.waiting`。`ask` イベント経由で1度だけ埋まる）を
-   * 見ている。**これだけでは `state()` 側の取り直しを検出できない** ——
-   * 実際に変異試験（`.claude/skills/mutation-testing/`）で確かめた。
-   * `state()` の `askedAt: request.askedAt` を `askedAt: new
-   * Date().toISOString()` に変える変異は、`s.pool.list()` ベースの歯・
-   * 「デーモン再起動でも kind と askedAt を保つ」歯（`swappableRunner` の
-   * fake を使うテスト。実 runner を経由しない）のどちらでも生存したまま
-   * だった。
-   *
-   * だからここでは `s.runner.list()`（`LocalRunner#list()` → `RunnerHost#list()`
-   * → 各セッションの `state()` を直接呼ぶ、本番と同じ経路）を2回、実時間を
-   * 空けて呼び、`askedAt` が両方の呼び出しで同じ値であることを直接見る。
-   */
+  // `s.pool.list()` では `state()` 側の取り直しを検出できない（`ask` イベント経由で1度だけ
+  // 埋まる `record.waiting` を見るため）ので、`s.runner.list()` を直接呼ぶ。
   it('runner.state() は呼ぶたびに askedAt を取り直さない（#334 / #323）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
@@ -937,7 +750,6 @@ describe('マネージャー', () => {
     const askedAtFirst = first?.waiting.find((item) => item.requestId === 'req-stable')?.askedAt;
     expect(askedAtFirst).toBeTruthy();
 
-    // 実時間で間隔を空ける。取り直す変異ならここで別の値（別のミリ秒）になる。
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const second = (await s.runner.list()).find((m) => m.managerId === managerId);
@@ -963,10 +775,6 @@ describe('マネージャー', () => {
   });
 
   it('保留が1件でも、宛先も意思も示さないメッセージは回答として消費されない（#313）', async () => {
-    // 直上の歯は「待ちが0件」の側。こちらは**待ちが1件ある**側で、かつては
-    // 件数が1であることだけを根拠に、本文を見ずに先頭へ入れていた。宛先
-    // （requestId）も意思（decision）も示していない普通の会話文が
-    // inferDecision に落ちて {behavior:'allow'} に化けていた。
     const s = setup();
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
     const session = s.sessions[0] as FakeSession;
@@ -977,15 +785,12 @@ describe('マネージャー', () => {
 
     const result = await s.pool.send(managerId, 'ところで、進捗はどうなっている？');
 
-    // 回答ではなく追加指示として届く
     expect(result.outcome).toBe('delivered');
     await expect
       .poll(() => session.inputs, { timeout: 2000 })
       .toEqual(['デプロイして', 'ところで、進捗はどうなっている？']);
-    // 確認は解けていない。誰も答えていないので待ち行列に残ったまま
     expect((await s.pool.list()).find((m) => m.managerId === managerId)?.waiting).toHaveLength(1);
 
-    // **能力は削っていない** — 意思を示せば、待ちが1件のときは今までどおり通る
     const answered = await s.pool.send(managerId, 'よい', { decision: 'allow' });
     expect(answered.outcome).toBe('answered');
     expect(await asked).toEqual({ behavior: 'allow' });
@@ -994,9 +799,6 @@ describe('マネージャー', () => {
   });
 
   it('保留が1件でも、「待って」を含む普通の会話文は deny として消費されない（#313）', async () => {
-    // 逆向きの誤射。DENIAL_PHRASES は部分一致なので、「少し待ってください」の
-    // ような普通の文が deny になり、本文全文が**その道具を呼んだ主体**（作業者を
-    // 含む）の tool 結果として返っていた。
     const s = setup();
     const { managerId } = await s.pool.start({ request: '公開して' });
     const session = s.sessions[0] as FakeSession;
@@ -1006,9 +808,8 @@ describe('マネージャー', () => {
 
     const result = await s.pool.send(managerId, 'その件は少し待ってください。先に状況を教えて');
 
-    // **この歯の本題を先に測る** — 呼び出し元へ deny が返っていないこと。
-    // outcome を先に見ると、消費されたときにそちらで落ちてしまい、
-    // 「誰の tool 結果に何が返ったか」を名指しするこの行まで到達しない。
+    // deny が返っていないことを先に測る: outcome を先に見ると、消費されたときにそちらで
+    // 落ちて、この行まで到達しない。
     const settled = await Promise.race([
       asked,
       new Promise((resolve) => setTimeout(() => resolve('unsettled'), 50)),
@@ -1017,8 +818,6 @@ describe('マネージャー', () => {
 
     expect(result.outcome).toBe('delivered');
 
-    // **inferDecision は残っている** — requestId を添えた回答は今までどおり
-    // 本文から拒否を読み取る
     await s.pool.send(managerId, 'やっぱり待って', { requestId: 'req-wait' });
     expect(await asked).toMatchObject({ behavior: 'deny', message: 'やっぱり待って' });
 
@@ -1051,19 +850,15 @@ describe('マネージャー', () => {
 
     const summary = (await s.pool.list()).find((m) => m.managerId === managerId);
 
-    // **欄ごと消さない。** 消すと外からは「何も書かれていない」のと同じに見え、
-    // 「取れなかった」という観測がそこで消える（AGENTS.md の地雷表と同じ形）。
+    // 欄ごと消さない: 消すと「何も書かれていない」と同じに見え、「取れなかった」という観測が消えるため。
     expect(summary?.workspace).toBeDefined();
     expect(summary?.workspace?.kind).toBe('unknown');
-    // 値自身が理由を名乗る（読む側が「なぜ分からないか」を追加で引かなくてよい）。
     expect((summary?.workspace as { reason?: string } | undefined)?.reason ?? '').not.toBe('');
 
     await s.pool.stop();
   });
 
   it('過去に書かれた runner-volume の行は、そのまま読める（遡って直さない）', () => {
-    // **既存の行は書き換えない**のがこのプロジェクトの方針なので、古い値は残る。
-    // 残る以上、読めなくなってはいけない（読めなくすると台帳が壊れる）。
     const legacy = workspaceLocatorSchema.safeParse({
       kind: 'runner-volume',
       runnerId: 'runner-old',
@@ -1086,11 +881,7 @@ describe('マネージャー', () => {
       id: managerId,
       request: '直して',
       cwd: '/work/project',
-      // 宛先（どの runner か）と workspace の所在まで残す。ここが欠けると、
-      // runner が増えた瞬間に manager_send の宛先が決まらない。
       runnerId: 'runner-test',
-      // **永続性は断定しない。** どこに在るか（`runnerId` / `path`）は言えるが、
-      // その器の workspace が入れ替えを跨いで残るかはデーモンからは分からない。
       workspace: {
         kind: 'unknown',
         runnerId: 'runner-test',
@@ -1099,30 +890,17 @@ describe('マネージャー', () => {
       },
     });
 
-    // **確かめていない永続性を名乗らない。** ここが `runner-volume` に戻ると、
-    // ボリュームを付けない構成（`railway/README.md`「workspace は毎デプロイで
-    // 消える」）で台帳が偽になり、しかも「復旧できる」と信じる方向へ嘘をつく。
+    // 確かめていない永続性を名乗らない: `runner-volume` に戻ると、ボリュームを付けない構成で
+    // 台帳が偽になり「復旧できる」と信じる方向へ嘘をつくため。
     expect(job?.workspace?.kind).not.toBe('runner-volume');
-    // 理由の無い「分からない」は値と同じなので、空を許さない。
     expect((job?.workspace as { reason?: string } | undefined)?.reason ?? '').not.toBe('');
 
-    // **runner のローカルパスは台帳に持たない。** 生ログへは runner の API か、
-    // 預かったアーカイブ／セッションから降りる（デーモンは runner の中を仮定しない）。
     await (s.sessions[0] as FakeSession).usedTool('Read');
     expect(job).not.toHaveProperty('transcriptPath');
 
     await s.pool.stop();
   });
 
-  /**
-   * `ManagerStartInput.conversationId` → `Job.conversationId`（issue #1003 段2・
-   * #781）。
-   *
-   * **クローンが手で維持する欄ではないことを、経路そのもので示す。** `tools.ts`
-   * の `manager_start` ツール定義に対応する引数は無い——ここで確かめるのは
-   * `Pool#start` が受け取った値をそのまま台帳へ写すことだけで、値の出どころ
-   * （`ToolContext.conversationId()`）は `tools.test.ts` 側が別に持つ。
-   */
   it('conversationId を渡せば JobStore へそのまま写る。省略すれば欄自体が付かない', async () => {
     const s = setup();
     const { managerId: withConv } = await s.pool.start({
@@ -1136,9 +914,8 @@ describe('マネージャー', () => {
     const jobWithoutConv = jobs.find((job) => job.id === withoutConv);
 
     expect(jobWithConv?.conversationId).toBe('conv-1');
-    // **既定値へ倒さない。** 省略した回は欄そのものが無い——`undefined` を
-    // 明示で書き込むと、以後「会話に紐づかない委譲」と「まだ判定していない
-    // 委譲」が区別できなくなる。
+    // 既定値へ倒さない: `undefined` を明示で書くと「会話に紐づかない委譲」と
+    // 「まだ判定していない委譲」が区別できなくなるため。
     expect(jobWithoutConv).not.toHaveProperty('conversationId');
 
     await s.pool.stop();
@@ -1155,9 +932,6 @@ describe('マネージャー', () => {
   });
 
   it('同時に複数を待っているとき、回答は requestId の宛先へ届く（取り違えない）', async () => {
-    // 1回の応答で並列に道具を呼ぶと、確認は同時に複数降りてくる。宛先を見ずに
-    // 先頭へ入れると、拒否のつもりの一言が別の質問の答えになり、拒否したかった
-    // 道具は次の一言で通ってしまう。
     const s = setup();
     const { managerId } = await s.pool.start({ request: '整理して' });
     const session = s.sessions[0] as FakeSession;
@@ -1173,12 +947,10 @@ describe('マネージャー', () => {
     const dangerId = waiting.find((item) => item.summary.includes('Bash'))?.requestId as string;
     const questionId = waiting.find((item) => item.summary.includes('DB'))?.requestId as string;
 
-    // 宛先を書かずに答えるのは拒む（推測して取り違えるより、聞き返す）
     const guessed = await s.pool.send(managerId, 'それは危険なのでやめて', { decision: 'deny' });
     expect(guessed.outcome).toBe('unknown');
     expect(guessed.detail).toContain('requestId');
 
-    // 宛先を指せば、その1件だけが解ける
     await s.pool.send(managerId, 'それは危険なのでやめて', {
       decision: 'deny',
       requestId: dangerId,
@@ -1213,15 +985,11 @@ describe('マネージャー', () => {
   });
 
   it('decision を書き忘れても、日本語の拒否を承認と読み違えない', async () => {
-    // 「それはやめて」の「やめ」の前に区切りは無い。語境界で探すと**見つからず**、
-    // 見つからないことが allow として表に出る（拒否が承認になる最悪の壊れ方）。
     const s = setup();
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
     const session = s.sessions[0] as FakeSession;
 
-    // #313 以降、宛先も意思も示さない一言は回答として消費されない。**decision は
-    // 足さない** — このテストが測っているのは「decision を書き忘れた回答」の
-    // 読み取りそのものなので、足すと測る対象が消える。宛先だけを特定する。
+    // decision は足さない: 測っているのは decision を書き忘れた回答の読み取りそのもので、足すと対象が消える。
     const asked = session.ask('Bash', { command: 'git push --force' }, undefined, 'req-force');
     await new Promise((resolve) => setTimeout(resolve, 0));
     await s.pool.send(managerId, 'それはやめて、代わりに差分だけ見せて', {
@@ -1230,10 +998,6 @@ describe('マネージャー', () => {
 
     expect(await asked).toMatchObject({ behavior: 'deny' });
 
-    // **#322: decision を書き忘れた回は、以前は journal に本文がそのまま
-    // 残るだけで `[allow]` か `[deny]` かが読めなかった。** SDK へ実際に
-    // 返った decision（上の `behavior: 'deny'`）と同じ値が journal にも
-    // 残ることを、ここで直接見る。
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       answer?: string;
     }[];
@@ -1242,45 +1006,22 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /*
-   * **反転（issue #1827/#1837、オーナーの判断。2026-09-28）:** このテストは
-   * 元は「肯定の返事は通す（迷ったら止める、にはしない）」という名で、
-   * `inferDecision` が「否定が読み取れたときだけ拒否する」設計だった頃の
-   * 挙動——承認の語が無くても、否定が読めなければ allow に倒れる——を
-   * そのまま仕様として固定していた（コメントの逐語も残す。上の2行）。
-   *
-   * オーナーは「読み取れなければ allow」という既定を「読み取れなければ
-   * 拒否して答え直しを求める」へ反転した——承認とも拒否とも読めない
-   * `よい、そのまま進めて`（承認の語 `どうぞ`/`進めてよい`/`許可する` 等を
-   * 含まない）は、いまは `unreadable`（SDK へは deny）になる。**能力は
-   * 削っていない**——`はい、どうぞ` / `OK、進めてよい` / `許可する` /
-   * `go ahead` / `approved` のようにはっきり承認と読める言い方は、今までと
-   * 変わらず allow のままである（`runner-infer-decision.test.ts` の
-   * 「3値化」describe が見る）。直後のテストで、拒否された後に同じ道具を
-   * 撃ち直せば新しい確認が上がり、`decision: 'allow'` を付けて答え直せば
-   * 通ることも確かめる（PR 本文の3点セット: 変更した事実／なぜ必要になった
-   * か／なぜ保証が弱くなっていないか、を参照）。
-   */
   it('承認とも拒否とも読めない言い方は、既定を閉じる側にして拒否する（旧: 肯定の返事は通す。issue #1827/#1837 で反転）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '調べて' });
     const session = s.sessions[0] as FakeSession;
 
-    // #313 以降の宛先の明示。**decision は足さない**（直上と同じ理由 — 測って
-    // いるのは decision 無しでの読み取りが allow へ倒れることである）。
+    // decision は足さない: 測っているのは decision 無しの読み取りだから。
     const asked = session.ask('Read', { file_path: '/work/a.ts' }, undefined, 'req-read');
     await new Promise((resolve) => setTimeout(resolve, 0));
     const result = await s.pool.send(managerId, 'よい、そのまま進めて', { requestId: 'req-read' });
 
     expect(await asked).toMatchObject({ behavior: 'deny' });
 
-    // **クローンへ返る detail に、答え直しを求める旨が載る。**
     expect(result.outcome).toBe('answered');
     expect(result.detail).toContain('読み取れず');
     expect(result.detail).toContain("decision: 'allow'");
 
-    // journal にも `[unreadable]` として残り、本当の deny（`[deny]`）とも
-    // 「報告されなかった」（`[unknown]`）とも区別できる。
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       answer?: string;
     }[];
@@ -1299,10 +1040,6 @@ describe('マネージャー', () => {
     await s.pool.send(managerId, 'よい、そのまま進めて', { requestId: 'req-retry-1' });
     expect(await firstAsk).toMatchObject({ behavior: 'deny' });
 
-    // **SDK が同じ道具を撃ち直す**（クローン視点では「答え直せ」を受けて
-    // 同じ Read をもう一度呼ぶ）。dedup の鍵は requestId なので、新しい
-    // requestId の ask は独立した新しい確認として上がる——`#resolved` の
-    // キャッシュに阻まれない。
     const secondAsk = session.ask('Read', { file_path: '/work/a.ts' }, undefined, 'req-retry-2');
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect((await s.pool.list()).find((m) => m.managerId === managerId)?.waiting).toHaveLength(1);
@@ -1317,23 +1054,8 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **#322 の3つ目の制約: `decision` を報告しない runner の応答を、allow/deny
-   * の既定値へ倒さない。** ローリング再デプロイの窓では、まだこの変更前の
-   * runner が `{ ok: true }` だけを返し、確定した decision を運べない
-   * （`RunnerAnswerOutcome` の doc）。この偽 runner はそれを模す —
-   * `answer()` が `{ delivered: true }` のみを返し、`decision` キー自体を
-   * 持たない。
-   *
-   * **ローカルの `decision: 'allow'` を渡していても** journal は `[allow]`
-   * へ倒さない——渡した値は「クローンが何を言ったか」でしかなく、「runner が
-   * 何を確定したか」の代わりにはならない。この区別自体がこの Issue の中身
-   * である。
-   */
   it('runner が decision を報告しない回（版skewの窓）は、allow/deny へ倒さず journal に残す（#322）', async () => {
-    // **`let` + 複数クロージャでの narrowing を避けるため、可変箱に包む。**
-    // （素の `let emit` を object literal の複数メソッドから触ると、
-    // 呼び出し側での参照が `never` に narrowing される場合がある）
+    // 可変箱に包む: 素の `let emit` を複数メソッドから触ると、呼び出し側の参照が `never` に narrowing されるため。
     const wired: { emit: ((event: RunnerEvent) => void) | null } = { emit: null };
     const legacyRunner: RunnerClient = {
       runnerId: 'runner-legacy',
@@ -1344,21 +1066,16 @@ describe('マネージャー', () => {
         wired.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この検証では使わない */
         return {};
       },
       async resume(): Promise<{ cwd?: string }> {
-        /* この検証では使わない */
         return {};
       },
       async send() {
-        /* この検証では使わない */
         return true;
       },
       async answer(_managerId, answer) {
-        // **この版の runner は decision を報告しない（#322 が模す版skew）。**
-        // `settled` も流す（`runner-sticky.test.ts` と同じ約束 — 流さないと
-        // `waiting` が残ったままになり「解けた」を主張できない）。
+        // `settled` も流す: 流さないと `waiting` が残ったままで「解けた」を主張できない。
         wired.emit?.({ type: 'settled', managerId: _managerId, requestId: answer.requestId });
         return { delivered: true };
       },
@@ -1409,15 +1126,12 @@ describe('マネージャー', () => {
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       answer?: string;
     }[];
-    // 最新（answer 側）が先頭。ask 側（2件目）は元々 `answer` 欄を持たない。
     expect(escalations[0]?.answer).toBe('[unknown] よい');
 
     await s.pool.stop();
   });
 
   it('中断で解けた確認は待ち行列に残らない（次の指示を食い潰さない）', async () => {
-    // マネージャー側の中断で宙吊りを解いたあと、その1件が行列に残っていると、
-    // 次にクローンが送った「追加指示」が誰も待っていない返事として消える。
     const s = setup();
     const { managerId } = await s.pool.start({ request: '調べて' });
     const session = s.sessions[0] as FakeSession;
@@ -1429,12 +1143,10 @@ describe('マネージャー', () => {
     aborter.abort();
     expect(await asked).toMatchObject({ behavior: 'deny' });
 
-    // 返事待ちは解けている
     const after = (await s.pool.list()).find((m) => m.managerId === managerId);
     expect(after?.status).toBe('running');
     expect(after?.waiting).toEqual([]);
 
-    // 次の一言はちゃんと追加指示として届く
     expect((await s.pool.send(managerId, 'こっちを見て')).outcome).toBe('delivered');
 
     await s.pool.stop();
@@ -1446,34 +1158,18 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **`RunnerClient.send` の契約そのものを測る（#899）。** 上のテストは
-   * `Pool#send` から見た結果（`outcome`）だけを見ているが、それだけでは
-   * `LocalRunner.send()` が実際に何を返しているかを取り違えても気づけない
-   * ——`Pool#send` が別の経路（台帳に無い＝`attached: false`）で `'unknown'`
-   * に落としているだけかもしれない。ここは `s.runner`（`setup()` が実際に
-   * 使っている本物の `LocalRunner`）へ直接呼び、**`HttpRunner` が 404 を
-   * 例外にするのと同じ立場**——セッションを持たない `managerId` へは
-   * `false` を返すこと、生きているセッションへは `true` を返すことを、
-   * 型どおりに（`Promise<void>` の `undefined` ではなく）確かめる。
-   */
   it('LocalRunner.send はセッションの有無を boolean で報告する（#899）', async () => {
     const s = setup();
 
-    // まだどのセッションも無い ⟹ false（以前は Promise<void> で `undefined`
-    // を返し、呼び出し元からは「投げなかった＝成功した」としか見えなかった）。
     await expect(s.runner.send('mgr-never-started', 'こんにちは')).resolves.toBe(false);
 
     const { managerId } = await s.pool.start({ request: '調べて' });
-    // 生きているセッションへは true（`HttpRunner` の非2xxにならない側と対）。
     await expect(s.runner.send(managerId, '続けて')).resolves.toBe(true);
 
     await s.pool.stop();
   });
 
   it('記憶ストアの接続情報を子プロセスへ渡さない（クラウド構成の本命の強制）', async () => {
-    // ローカルではパス、クラウドでは DB 認証情報。**渡さなければ到達経路が無い**。
-    // ツールを削って塞ぐのではなく、認証情報の配布範囲で守る（roadmap M4 受け入れ基準3）。
     const s = setup(
       {
         PATH: '/usr/bin',
@@ -1491,50 +1187,22 @@ describe('マネージャー', () => {
     expect(env.PGPASSWORD).toBeUndefined();
     for (const key of WITHHELD_ENV_KEYS) expect(env[key]).toBeUndefined();
 
-    // 記憶ストアと関係のない環境は削らない（`PATH` はそのまま）。
     expect(env.PATH).toBe('/usr/bin');
 
-    /**
-     * **⚠️ 2026-09-11 に期待値を反転した。** 元はここが
-     * `expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-for-the-sdk')` で、直前の
-     * コメントは「認証を落とせばマネージャーはただ動かなくなる ＝ デグレードで
-     * あって境界ではない」だった（上の1行に残してある）。
-     *
-     * **前提が変わった**（人間の決定 2026-09-11）。**runner は自分の env から鍵を
-     * 拾わない器であり、鍵はクローンからもらって初めて持つ。** 器の env に在る鍵が
-     * そのまま子へ渡る形は、次の2つを作っていた:
-     *
-     * 1. **現役でない鍵で走る** —— 本番実測（2026-09-11）で runner の env に在ったのは
-     *    **週次上限で冷却中のトークン**で、プールの現役とは別物だった
-     * 2. **その食い違いが見えない** —— 子は env から読むだけなので、「クローンが撒いた
-     *    もの」と「器に残っていたもの」を区別できない
-     *
-     * **デグレードではない。** 同じ値はクローンが撒く経路で届く（`token-spread.ts` の
-     * `agentTokenFromEnv` と `credential-service.ts` の `effective()`）。変えたのは
-     * **出所**であって能力ではない。**この検証では誰も撒いていない**ので、
-     * 「撒かれなければ持たない」が見える —— それが「単体では動かない」の実体である。
-     */
+    // 器の env の鍵は子へ渡さない: 現役でない鍵（週次上限で冷却中のもの）で走り、
+    // クローンが撒いたものと器に残っていたものを区別できなくなるため。
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
 
     await s.pool.stop();
   });
 });
 
-/**
- * managerId の発行 — **切り詰めない。仮定ではなく `#records` を引いて確かめる**
- * （#238）。
- *
- * `randomUUID` を差し替える前例がこの repo に無いので（`vi.mock('node:crypto')`
- * は使わない）、`ManagerPoolOptions.generateManagerId` で差し替える。`now` と
- * 同じ形の注入口である。
- */
+// `randomUUID` は差し替えず `generateManagerId` で注入する: `vi.mock('node:crypto')` の前例が無いため。
 describe('managerId の発行（#238）', () => {
   it('切り詰めない — 既定の発行器は `mgr-` に UUID 全体を続ける', async () => {
     const s = setup();
     const summary = await s.pool.start({ request: '調べて' });
 
-    // UUIDv4 全体（36文字）。旧実装は先頭8桁で切り詰めていた
-    // （`mgr-${randomUUID().slice(0, 8)}`）。
     expect(summary.managerId).toMatch(
       /^mgr-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
@@ -1546,8 +1214,8 @@ describe('managerId の発行（#238）', () => {
     const generateManagerId = vi
       .fn<() => string>()
       .mockReturnValueOnce('mgr-dup')
-      .mockReturnValueOnce('mgr-dup') // 2本目の1回目の発行。1本目と衝突する
-      .mockReturnValueOnce('mgr-fresh'); // 引き直し
+      .mockReturnValueOnce('mgr-dup')
+      .mockReturnValueOnce('mgr-fresh');
     const s = setup(undefined, { generateManagerId });
 
     const first = await s.pool.start({
@@ -1557,11 +1225,9 @@ describe('managerId の発行（#238）', () => {
 
     const lines = await captureStderr(async () => {
       const second = await s.pool.start({ request: '二本目' });
-      // **上書きされず、引き直した id が使われる。**
       expect(second.managerId).toBe('mgr-fresh');
     });
 
-    // **跡が残る。** id と試行回数だけで、本文（依頼文）は載らない。
     const text = lines.join('');
     expect(text).toContain('managerId の発行が衝突したので引き直しました');
     expect(text).toContain('managerId=mgr-dup');
@@ -1570,8 +1236,6 @@ describe('managerId の発行（#238）', () => {
     expect(text).not.toContain('一本目');
     expect(text).not.toContain('二本目');
 
-    // **1本目の記録は上書きされていない。** `#records.set` が黙って潰していれば
-    // ここが二本目の request で上書きされる。
     const listed = await s.pool.list();
     expect(listed.find((m) => m.managerId === 'mgr-dup')?.request).toContain('一本目');
     expect(listed.find((m) => m.managerId === 'mgr-fresh')?.request).toBe('二本目');
@@ -1580,7 +1244,6 @@ describe('managerId の発行（#238）', () => {
   });
 
   it('引き直しが上限に達したら、上書きせず例外で止める', async () => {
-    // 常に同じ id しか返さない壊れた発行器。上限回数ぶん必ず衝突し続ける。
     const generateManagerId = vi.fn<() => string>().mockReturnValue('mgr-stuck');
     const s = setup(undefined, { generateManagerId });
 
@@ -1593,13 +1256,9 @@ describe('managerId の発行（#238）', () => {
       );
     });
 
-    // 上限回数ぶん、引き直しの跡が残っている（黙って諦めていない）。
     const text = lines.join('');
     expect(text).toContain('managerId の発行が衝突したので引き直しました');
 
-    // **1本目の記録は無傷。二本目は影も形も残らない**（例外を投げる前に
-    // `#records.set` していれば、ここに `mgr-stuck` の request が「二本目」に
-    // 書き換わっている）。
     const listed = await s.pool.list();
     expect(listed).toHaveLength(1);
     expect(listed[0]?.managerId).toBe('mgr-stuck');
@@ -1624,9 +1283,7 @@ describe('デーモン再起動後（M4）', () => {
   };
 
   it('走行中だったマネージャーを実際に resume し、続きを進めさせる（受け入れ基準2）', async () => {
-    // **開き直すだけでは足りない。** 人間の不在で止まってよいのは承認待ちの仕事
-    // だけであり（PRD「自律」）、器が落ちたことを理由に止まったままにはしない。
-    // 「話しかけられるまで待つ」形にすると、自律運転中の再起動で仕事が永久に止まる。
+    // 開き直すだけにしない: 「話しかけられるまで待つ」形だと、自律運転中の再起動で仕事が永久に止まるため。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const s = setup(undefined, { stores });
@@ -1634,54 +1291,31 @@ describe('デーモン再起動後（M4）', () => {
     const restored = await s.pool.restore();
 
     expect(restored.map((m) => m.managerId)).toEqual(['mgr-old']);
-    // session_id から SDK セッションが起き、続きの指示まで届いている
     expect(s.sessions).toHaveLength(1);
     expect((s.sessions[0] as FakeSession).options.resume).toBe('sess-before-restart');
     await expect
       .poll(() => (s.sessions[0] as FakeSession).inputs, { timeout: 2000 })
       .toEqual([
-        // **runner に居なかったので resume した分岐は器の入れ替えとして扱う（#2748）。**
-        // 「デーモンが再起動した」だけでは、作業ディレクトリが消えたことを告げない。
-        // attach 分岐が 'daemon' のまま変わらないことは manager-workspace-nudge.test.ts が持つ。
+        // resume した分岐は器の入れ替えとして扱う: 「デーモンが再起動した」だけでは、
+        // 作業ディレクトリが消えたことを告げないため。
         '[system] runner の器が作り直された。作業ディレクトリが残っているとは限らないので、続きに入る前に手元の状態を確かめよ。中断していた作業の続きを進めよ。',
       ]);
 
-    // クローンが「続きがある」ことを知る経路は受信箱ただ1つ
     const notice = s.inbox.find((event) => event.type === 'manager_message');
     expect(notice).toMatchObject({ managerId: 'mgr-old', kind: 'report' });
-    // **#252（2026-08-23 反転）: 依頼文はもう埋め込まない。** クローン自身が書いた
-    // 依頼文を、状態が変わっただけの知らせに全文で送り返す理由が無い（読みたければ
-    // `manager_report ... part=request`）。かつてここは「依頼文が入っている」ことを
-    // 固定していたが、それ自体が #252 の欠陥だった。
     expect((notice as { text: string }).text).not.toContain('DB の移行をやって');
     expect((notice as { text: string }).text).toContain('manager_report managerId=mgr-old');
-    // 直近の報告は短いので抜粋してもそのまま全文が残る（切り詰めの確認は
-    // 「知らせは全文を埋め込まない（#252）」の巨大な報告のテストが別に持つ）。
     expect((notice as { text: string }).text).toContain('スキーマまで書いた');
 
-    // 一覧では走行中に戻っている（止まったまま live: true に見せない）
     const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-old');
-    // resume 後のセッション id は SDK が返す新しいもので上書きされる
-    // （次の再起動でもそこから戻れるように、台帳は常に最新の id を持つ）。
     expect(listed).toMatchObject({ live: true, status: 'running', runnerId: 'runner-test' });
 
     await s.pool.stop();
   });
 
-  /**
-   * #252: `#notifyRestored` は「デーモンが再起動した」という**事実の知らせ**でしか
-   * ない。依頼文（クローン自身が書いたもの）を送り返す理由は無く、直近の報告も
-   * 全文を持つ必要は無い——中身はいつでも `manager_report` で読める。
-   *
-   * **末尾の断片で判定する。** 抜粋は先頭を残す仕様（`excerpt.ts`）なので、先頭が
-   * 一致するだけの判定では「全文の先頭だけ切って残りは埋め込んだまま」でも
-   * 素通りしてしまう。
-   */
   it('#252: 依頼文・直近の報告が巨大でも、知らせは全文を埋め込まない', async () => {
-    // **末尾だけに現れる目印を混ぜる。** 本文が同じ語の繰り返しだと、抜粋が
-    // 残す先頭部分にも「末尾と同じ文字列」が偶然含まれてしまい、末尾の断片で
-    // 判定したつもりが先頭一致と区別できなくなる（このテストを書く過程で実際に
-    // 一度それで落ちた）。抜粋に絶対に現れない一意な目印を末尾へ置く。
+    // 末尾の断片で判定する: 抜粋は先頭を残す仕様なので、先頭一致だけの判定では
+    // 先頭だけ切って残りは埋め込んだままでも素通りするため。
     const hugeRequest = 'これは巨大な依頼文である。'.repeat(300) + REQUEST_TAIL_MARKER;
     const hugeReport = 'これは巨大な直近の報告である。'.repeat(300) + REPORT_TAIL_MARKER;
     const stores = createMemoryStores();
@@ -1697,30 +1331,24 @@ describe('デーモン再起動後（M4）', () => {
 
     const requestTail = REQUEST_TAIL_MARKER;
     const reportTail = REPORT_TAIL_MARKER;
-    // 全文はもちろん、末尾だけでも含まれない（先頭一致では見えない切り詰めを見る）。
     expect(notice.text).not.toContain(hugeRequest);
     expect(notice.text).not.toContain(hugeReport);
     expect(notice.text).not.toContain(requestTail);
     expect(notice.text).not.toContain(reportTail);
 
-    // 本文の長さに上限がある（依頼文・報告よりも十分小さい）。
     expect(notice.text.length).toBeLessThan(1000);
     expect(notice.text.length).toBeLessThan(hugeRequest.length);
     expect(notice.text.length).toBeLessThan(hugeReport.length);
 
-    // 続きの取り方が manager_report と id 付きで名指しされている。
     expect(notice.text).toContain(`manager_report managerId=${runningJob.id}`);
     expect(notice.text).toContain('part=request');
 
-    // 省いた分量の断り書きが出ている（excerpt.ts の流儀）。
     expect(notice.text).toContain('文字省略');
 
     await s.pool.stop();
   });
 
   it('返事待ちだったマネージャーには、確認が失われたことを伝えて再開させる', async () => {
-    // 待っていた確認は器と一緒に消えている。黙って再開させると、マネージャーは
-    // 返ってこない返事を待ち続ける。
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
     const s = setup(undefined, { stores });
@@ -1735,19 +1363,14 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner に生きているセッションは resume せず、繋ぎ直すだけ（二重に起こさない）', async () => {
-    // デーモンだけが再起動した場合、マネージャーは runner の中で手を動かし続けて
-    // いる。ここで resume すると、走っているセッションを二重に起こすことになる。
     const stores = createMemoryStores();
     const first = setup(undefined, { stores });
     const { managerId } = await first.pool.start({ request: '長い仕事' });
 
-    // 同じ runner に別のデーモンが繋ぎ直す（＝デーモンだけが入れ替わった。
-    // runner は別プロセスなので、デーモンが消えてもセッションは生きている）。
     const second = setup(undefined, { stores, runner: first.runner });
     const restored = await second.pool.restore();
 
     expect(restored.map((m) => m.managerId)).toEqual([managerId]);
-    // セッションは増えていない（resume していない）
     expect(first.sessions).toHaveLength(1);
     const notice = second.inbox.find((event) => event.type === 'manager_message');
     expect((notice as { text: string }).text).toContain('runner の中で走り続けている');
@@ -1756,8 +1379,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('待機中だった仕事は黙って引き取る（報告はしないが、話しかければ続く）', async () => {
-    // `done` は死ではなく待機である。ここで拾わないと、一度再起動を跨いだ仕事は
-    // 二度目の再起動で resume できなくなる（人間が開いたままの窓を勝手に閉じる形）。
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, id: 'mgr-done', status: 'done' });
     const s = setup(undefined, { stores });
@@ -1784,14 +1405,6 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **`stopped` は明示的に止められた終端であって、`done`（待機）ではない。**
-   *
-   * `restore()` / `#reattach()` は `running` / `waiting_human` のホワイトリストで
-   * 自動の再開先を決めている（`stopped` は名指しで除外しなくても、このホワイト
-   * リストに入っていない時点で自動では対象外になる）。ここでそれをロックする —
-   * デーモンの再起動で、止めたはずのマネージャーが甦って `resume` されないこと。
-   */
   it('stopped の仕事はデーモン再起動でも拾い直さない（明示的に止められた終端）', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, id: 'mgr-stopped-restart', status: 'stopped' });
@@ -1799,46 +1412,27 @@ describe('デーモン再起動後（M4）', () => {
 
     const resumed = await s.pool.restore();
 
-    // resumed に含まれない＝自動では再開の対象にしていない。
     expect(resumed).toEqual([]);
-    // 起こし直しの通知（`#notifyRestored`）も出ていない。
     expect(s.inbox).toEqual([]);
-    // runner へ resume が飛んでいない（飛んでいれば fake SDK にセッションが1本立つ）。
     expect(s.sessions).toHaveLength(0);
 
     await s.pool.stop();
   });
 
-  /**
-   * **`stopped` でも、明示的な `manager_send` は続きへ戻せる。**
-   *
-   * `schema.ts` の `jobStatusSchema` の doc は以前「話しかけても続かない」と
-   * 書いていたが、これは誤りだった（2026-08-22 訂正）。`abort()` は
-   * `job.sessionId` を消さない——デーモンが**自動では**起こし直さない（直前の
-   * テスト）のと、人間・クローンが明示的に送ったときに戻せるかは別の話である。
-   * `send()` は `record.attached` を見て `!record.attached` なら `#resumeOnce`
-   * （`lost` / `failed` と同じ経路）へ入るので、`stopped` もここを通って続く。
-   * ここを塞ぐと、人間が Claude Code のセッションを止めても `--resume` で戻せる
-   * 能力を、この階層だけ持たないことになる（`docs/north_star.md` 禁止2・
-   * 追加制限禁止）。
-   */
   it('stopped の仕事でも、明示的な manager_send なら resume 経路を通って続く', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, id: 'mgr-stopped-send', status: 'stopped' });
     const s = setup(undefined, { stores });
 
-    // 自動では拾い直さない（直前のテストと同じ確認。ここまでは同じ振る舞い）。
     expect(await s.pool.restore()).toEqual([]);
     expect(s.sessions).toHaveLength(0);
 
     const result = await s.pool.send('mgr-stopped-send', 'まだ続きがある');
 
-    // session_id から resume 経路を通り、実際に SDK セッションが起きている。
     expect(result.outcome).toBe('delivered');
     expect(s.sessions).toHaveLength(1);
     expect((s.sessions[0] as FakeSession).options.resume).toBe('sess-before-restart');
 
-    // 台帳も `running` へ戻る（`stopped` に固定されたままにはならない）。
     const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-stopped-send');
     expect(listed?.status).toBe('running');
 
@@ -1846,14 +1440,8 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が lost と名乗ったセッションを、繋がっているからと live: true にしない', async () => {
-    // 引き取り（`#restoreJobs`）は runner が名乗った状態をそのまま採る。runner の
-    // 側では resume の失敗が確定してから（`#status = 'lost'`）そのセッションが
-    // 一覧から消えるまでに実 I/O を挟むので、その隙間で引き取ると `lost` を名乗る
-    // セッションを掴む。その像の `attached` は上流で `false` に倒すようにしたが、
-    // **`live` の判定はそれに依存しない**（下の理由）。
-    //
-    // **「`lost` と `attached: true` が同時に立つ代入は無い」に寄りかからない。**
-    // 代入を全部数え上げて成り立つ不変条件は、次に代入を足した人が黙って壊す。
+    // `live` の判定は `attached` に依存させない: 代入を数え上げて成り立つ不変条件は、
+    // 次に代入を足した人が黙って壊すため。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -1868,7 +1456,6 @@ describe('デーモン再起動後（M4）', () => {
     const s = setup(undefined, { stores, runner: fake.runner });
 
     const restored = await s.pool.restore();
-    // 繋ぎ直してはいる（引き取りの経路を通ったことを固定する）。
     expect(restored.map((m) => m.managerId)).toEqual([runningJob.id]);
     expect(restored[0]?.live).toBe(false);
 
@@ -1878,20 +1465,6 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **デーモン再起動後の引き取り（`#restoreJobs`）は `runner.state()` を経由する。**
-   * `ask` イベント経由（`#onEvent` の `case 'ask'`）とは別の経路で、`kind` /
-   * `askedAt` を運ぶ入口がもう1つある——`RunnerSession#state()`（`runner.ts`）が
-   * `#pending` から `waiting` を組み立てる箇所である。ここが値を落としていても
-   * `ask` 経由の歯（直前・直後のテスト）は気づけない。#334 の実装ではここが
-   * 2箇所目の穴だった。
-   *
-   * **`askedAt` は特に重い。** 引き取り直すたびに「いま」へ取り直すと、4時間
-   * 待っている確認が再起動のたびに「たった今」へ化ける——足した理由（#323。
-   * 待ち時間の長さで人間の次の一手が変わる）がそのまま消える。ここでは
-   * 「いま」とは明らかに違う過去の時刻を fixture に置き、引き取り後もその
-   * 値のままであることを見る。
-   */
   it('待ちが在るままデーモンが再起動しても、引き取り直した waiting は kind と askedAt を保つ（#334）', async () => {
     const askedAtQuestion = '2026-08-23T02:00:00.000Z';
     const askedAtPermission = '2026-08-23T05:30:00.000Z';
@@ -1929,9 +1502,7 @@ describe('デーモン再起動後（M4）', () => {
     const permission = waiting.find((item) => item.requestId === 'req-restart-p');
     expect(question?.kind).toBe('question');
     expect(permission?.kind).toBe('permission');
-    // **取り直していないこと**を明示的に見る。「いま」の近似値ではなく
-    // fixture に置いた値そのものと一致する（`toBeCloseTo` のような近似では、
-    // 取り直す変異が生き残る）。
+    // fixture の値そのものと比べる: `toBeCloseTo` のような近似では、取り直す変異が生き残るため。
     expect(question?.askedAt).toBe(askedAtQuestion);
     expect(permission?.askedAt).toBe(askedAtPermission);
 
@@ -1939,12 +1510,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が lost と名乗ったセッションへ send すると resume 経路を通る（届かない runner.send() にしない）', async () => {
-    // `attached: true` を固定していた頃は、ここで `send()` の `!record.attached` が
-    // 偽になり `runner.send()` が直に呼ばれていた。しかし畳まれたセッションへの
-    // `push` は `RunnerSession#push` が `#stopped` を見て黙って捨てる
-    // （runner.ts）。つまり「届いた」という顔をして実は届いていなかった —
-    // これがこの不具合の実害である。ここでは `runner.resume()`（`#resumeOnce`
-    // の経路）が呼ばれたことを直接見て、そちらへ向いたことを固定する。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -1961,8 +1526,7 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.restore();
     const result = await s.pool.send(runningJob.id, '続けて');
 
-    // resume 経路を通った証拠は「resume が増えた」こと（fake の `send` は何も
-    // 記録しないので、その不在ではなく resume の発生そのものを見る）。
+    // resume の発生そのものを見る: fake の `send` は何も記録しないので、その不在は証拠にならない。
     expect(fake.state.resumes).toHaveLength(1);
     expect(fake.state.resumes[0]).toMatchObject({
       managerId: runningJob.id,
@@ -1974,10 +1538,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が lost と名乗ったセッションを引き取っても、「走り続けている」とは知らせない', async () => {
-    // `#notifyRestored(record, 'attached')` は「runner の中で走り続けている」と
-    // 断言する文面を受信箱へ流す。しかし `lost` は runner が「もう居ない」と
-    // 名乗った状態そのものなので、この文面は嘘になる。`attached: true` を固定
-    // していた頃はここが必ず届いていた（前のテストの実害と対になる、報告面の実害）。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -2002,14 +1562,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が failed と名乗ったセッションへ send すると resume 経路を通る（届かない runner.send() にしない）', async () => {
-    // `failed` は `lost` と同じ形で畳まれている。`RunnerSession#finish('failed', ...)`
-    // （runner.ts）も `#stopped = true` を先に立ててから一覧に残ったまま実 I/O
-    // （アーカイブ送出）を挟むので、その隙間で引き取ると畳まれたセッションへ
-    // `attached: true` を立てることになる。`lost` 版と同じ実害（届かない
-    // `runner.send()` を届いたことにして `running` へ巻き戻す）が起きるはずが
-    // 無いことを、`runner.resume()`（`#resumeOnce` の経路）が呼ばれたことで見る。
-    // `failed` は「話しかければ直るかもしれない失敗」（runner.ts のコメント）
-    // なので、resume を試みるのが正しい。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -2026,8 +1578,7 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.restore();
     const result = await s.pool.send(runningJob.id, '続けて');
 
-    // resume 経路を通った証拠は「resume が増えた」こと（fake の `send` は何も
-    // 記録しないので、その不在ではなく resume の発生そのものを見る）。
+    // resume の発生そのものを見る: fake の `send` は何も記録しないので、その不在は証拠にならない。
     expect(fake.state.resumes).toHaveLength(1);
     expect(fake.state.resumes[0]).toMatchObject({
       managerId: runningJob.id,
@@ -2039,9 +1590,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が failed と名乗ったセッションを引き取っても、「走り続けている」とは知らせない', async () => {
-    // `#notifyRestored(record, 'attached')` は「runner の中で走り続けている」と
-    // 断言する文面を受信箱へ流す。しかし `failed` も `lost` と同じく runner が
-    // 「もう居ない」と名乗った状態そのものなので、この文面は嘘になる。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -2066,20 +1614,12 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('生きたまま待機している done へ send しても、セッションを二重に起こさない', async () => {
-    // `done` は `lost` / `failed` と違って**2箇所から付く**。ここで確かめたいのは
-    // 畳まれた方（`#finish('done', ...)`）ではなく、セッションを `#sessions` に
-    // 生かしたまま `#status` だけを `'done'` にする方（1ターンが終わって次の
-    // 指示を待っている状態）。`swappableRunner` は使わない — あの fake の
-    // `resume` は無条件に alive を1本増やすので、`host.resume()` の短絡
-    // （生きたセッションを見つけたら `push` して return する）を確かめられない。
-    // 実 runner（`setup` の既定 = `createLocalRunner`）で、ホワイトリスト化した
-    // `attached` 判定が「安全側に倒しても届く」ことまで見る。
+    // `swappableRunner` は使わない: その fake の `resume` は無条件に alive を1本増やすので、
+    // `host.resume()` の短絡（生きたセッションを見つけたら `push` して return）を確かめられないため。
     const stores = createMemoryStores();
     const first = setup(undefined, { stores });
     const { managerId } = await first.pool.start({ request: '長い仕事' });
 
-    // 1ターン終える。runner 側は `#status` を `'done'` にするが、セッションは
-    // `#sessions` に生きたまま残る（runner.ts の該当分岐）。
     await (first.sessions[0] as FakeSession).report('ここまでやった');
     await expect
       .poll(
@@ -2091,18 +1631,13 @@ describe('デーモン再起動後（M4）', () => {
       )
       .toBe('done');
 
-    // デーモンだけが再起動した想定。runner は同じものを渡す（生きたまま）。
     const second = setup(undefined, { stores, runner: first.runner });
     await second.pool.restore();
 
     const result = await second.pool.send(managerId, 'まだ続きがある');
 
-    // セッションは増えていない（`host.resume()` が alive を見つけて `push` に
-    // 短絡した証拠。新しいセッションが起きていれば `resume()` が作り直している）。
     expect(first.sessions).toHaveLength(1);
     expect(result.outcome).toBe('delivered');
-    // 「resume 経路へ向いた」だけでなく、実際に文言が届いたことまで見る。
-    // ここが「安全側に倒しても実害が無い」の全部である。
     await expect
       .poll(() => (first.sessions[0] as FakeSession).inputs, { timeout: 2000 })
       .toContain('まだ続きがある');
@@ -2111,9 +1646,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('生きたまま待機している done を引き取っても、「走り続けている」とは知らせない', async () => {
-    // 観測された実害そのもの: 通知は「走り続けている」と言うのに、`manager_list`
-    // は `[done]`（待機）を返す。`done` を `attached: true` にしていた頃は、
-    // 畳まれた方の `done`（実は死んでいる）でもこの通知が出ていた。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -2138,9 +1670,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('done を安全側に倒しても、一覧の live: true は落ちない', async () => {
-    // `attached: false` にしたことで「話しかけられるのに切れて見える」という
-    // 逆向きの嘘が出ていないかを測る。`isLive()` は `record.job.sessionId` が
-    // あれば `attached` を見ずに `true` を返すので、ここは崩れないはずである。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -2164,9 +1693,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が waiting_human と名乗ったセッションは、繋がっているままにする', async () => {
-    // ホワイトリストの肯定側。`running` 側は既存テスト
-    // （'runner に生きているセッションは resume せず、繋ぎ直すだけ'）が持っている
-    // ので、ここでは `waiting_human` を固定する。
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
     const fake = swappableRunner('runner-test');
