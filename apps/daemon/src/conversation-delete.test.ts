@@ -275,5 +275,8 @@ describe('DELETE /conversations/:id（#4218）', () => {
     expect(joined).toContain('#4173');
     expect(joined).toContain('記憶');
     expect(joined).toContain('承認');
+    // #4355: 台帳のクローンの行と、台帳の本文を写した日誌の行が残ることも言う
+    expect(joined).toContain('クローンが自分で載せた行');
+    expect(joined).toContain('台帳の本文がそのまま写っている');
   });
 });
