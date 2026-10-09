@@ -180,6 +180,17 @@ Web UI の立ち上げ方と置き方は [apps/web/README.md](./apps/web/README.
 [railway/README.md](./railway/README.md)（Railway。runner は N 台に増やせます）。
 端末を閉じても走り続けること以外、ローカルと能力は変わりません。
 
+### 外から届かせるなら、必ずログインを立てる
+
+デーモンの API は、**叩けばクローンのターンが起き、記憶まで届く口**です。既定の待ち受けは
+`127.0.0.1` で、外からは届きません。`ALTEROID_BIND` で外へ開けるなら、**必ず先にログインを
+立ててください**（`ALTEROID_GOOGLE_CLIENT_ID` / `ALTEROID_GOOGLE_CLIENT_SECRET`。手順は
+[apps/web/README.md](./apps/web/README.md)「ログイン」）。Railway の `railway/setup.sh` は、ログインの鍵が
+揃ったときにだけ開けます。
+
+デーモンはログインの無い待ち受けを止めず、起動時に警告を出すだけです（手前にリバースプロキシや
+トンネルの認証を置いて開ける構成を壊さないため）。**警告が出たら、その口は誰でも叩けます。**
+
 <details>
 <summary><b>CLI の主なコマンド</b></summary>
 

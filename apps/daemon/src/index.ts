@@ -1084,14 +1084,18 @@ export async function main(): Promise<void> {
     attachmentLimits: storage.attachmentLimits,
   });
   // 黙って外へ出さない: ここは叩けばクローンのターンが起きる実行の口のため。
+  // 認証が無くても起動は止めない: 手前に境界を置いて開ける運用を壊さないため（#2892 のオーナー判断 2026-10-09）
   if (hostname !== DEFAULT_BIND && hostname !== 'localhost' && hostname !== '::1') {
     process.stderr.write(
       authPlan.enabled
         ? `alteroidd: ${hostname} で待ち受けます。認証は有効ですが、` +
             'TLS は手前の層（リバースプロキシ・トンネル）で終端してください' +
             '（トークンが平文で流れます）。\n'
-        : `alteroidd: ${hostname} で待ち受けます。この API に認証はありません。` +
-            '手前に境界（リバースプロキシ・トンネル・認証）を置いてください。\n',
+        : `alteroidd: ⚠ ${hostname} で待ち受けます。この API に認証はありません。` +
+            'このままでは、届く人は誰でもクローンのターンを起こし、記憶を読めます。' +
+            '外から届く形で使うなら、必ずログイン（ALTEROID_GOOGLE_CLIENT_ID / ALTEROID_GOOGLE_CLIENT_SECRET）を立ててください' +
+            '（ALTEROID_AUTH=off を置いているなら外す）。' +
+            '手前に別の境界（認証付きのリバースプロキシ・トンネル）を置いているときだけ、このままでよい。\n',
     );
   }
 
