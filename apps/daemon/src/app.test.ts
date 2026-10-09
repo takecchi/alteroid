@@ -9553,9 +9553,6 @@ describe('認証トークンのプール', () => {
   });
 
   it('止まった記録が付いた行は、回復の見込みまで GET から読める（Issue #393）', async () => {
-    // **HTTP の応答に載ることまで見る。** core 側で導けていても、外向きの顔の
-    // schema が `recovery` を落としていれば人間には届かない（`tokensResponseSchema`
-    // は `agentTokenViewSchema` をそのまま使うので、落ちるとしたらここで出る）。
     const service = createTokenPoolService({ stores, newId: () => 'tok-a' });
     const withTokens = createApp({
       clone: fake.clone,
@@ -9577,9 +9574,7 @@ describe('認証トークンのプール', () => {
     };
     expect(body.tokens[0]?.recovery).toBe('time');
     expect(body.tokens[0]?.createdAt).toBeDefined();
-    // 文言はそのまま出す（人間が claude.ai と突き合わせられる形）。
     expect(body.tokens[0]?.lastRejectedReason).toBe("You've hit your org's monthly spend limit");
-    // 値はどこにも出ない。
     expect(JSON.stringify(body)).not.toContain('tok-secret-value');
   });
 
@@ -9641,9 +9636,7 @@ describe('認証トークンのプール', () => {
         label: 'primary',
         order: 0,
         sha256: expect.any(String),
-        // **後から足した列**（Issue #393）。新規行なので両方立つ。**`toEqual` の
-        // ままにしてある**——ここは「これ以外の項目が付いていない」ことを見る歯で
-        // あり、`toMatchObject` へ替えると `value` が混ざっても通ってしまう。
+        // `toMatchObject` にしない: `value` が混ざっても通ってしまうから。
         createdAt: expect.any(String),
         updatedAt: expect.any(String),
       },
@@ -9673,19 +9666,7 @@ describe('認証トークンのプール', () => {
     expect(await stores.tokens.list()).toEqual([]);
   });
 
-  /**
-   * **スキーマ検証（`validator('json', …)`）で落ちた 400 にも値を出さない。**
-   *
-   * 実測（2026-08-24 観測、`@hono/standard-validator@0.4.0` の `dist/index.mjs`）:
-   * `hook` を渡さないと `c.json({ data: value, error, success: false }, 400)` を
-   * 返し、この `data` は**リクエスト本文そのもの**である。`sanitizeIssues` が
-   * 見る `RESTRICTED_DATA_FIELDS` は `header: ['cookie']` だけなので、`json` は
-   * 素通しになる。
-   *
-   * **⟹ `label` を1つ書き忘れただけで、その回に送った *全部* の値が応答へ載る。**
-   * 下で2本送っているのはそのためで、**壊れていないほうの値まで漏れる**ことを
-   * 固定する（1本だけだと「壊れた行だけ出さない」形の直しでも緑になる）。
-   */
+  // 2本送る: 1本だと「壊れた行だけ出さない」直しでも緑になるから。
   it('スキーマ検証で落ちた 400 にも、同じ回に送った値が1つも出ない', async () => {
     const withTokens = createApp({
       clone: fake.clone,
@@ -9700,7 +9681,6 @@ describe('認証トークンのプール', () => {
     const response = await withTokens.request('/tokens', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      // 2本目に label が無い＝トップレベルのスキーマ検証で落ちる。
       body: JSON.stringify({ tokens: [{ label: 'primary', value: GOOD }, { value: BAD }] }),
     });
 
@@ -9712,18 +9692,6 @@ describe('認証トークンのプール', () => {
     expect(await stores.tokens.list()).toEqual([]);
   });
 
-  /**
-   * **保存が「値を含むメッセージ」で落ちても、応答にも stderr にも値を出さない。**
-   *
-   * ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがある
-   * （`dropped-record.ts` の `reasonOf` の doc）。実測（2026-08-24 観測、
-   * `drizzle-orm@0.45.2`）: `PgPreparedQuery` の `queryWithCache` が
-   * `DrizzleQueryError(queryString, params, e)` で包み直し、その `message` は
-   * `Failed query: <sql>` の次の行に `params: <params>` を持つ。`agent_tokens`
-   * への insert なら、そこにトークンの値がそのまま並ぶ。
-   *
-   * 下の偽物のストアが投げる文言は、その実測した形を写したものである。
-   */
   it('保存が値を含むメッセージで落ちても、応答にも stderr にも値が出ない', async () => {
     const SECRET = 'tok-inside-driver-error';
     const failing: Stores = {
@@ -9755,21 +9723,13 @@ describe('認証トークンのプール', () => {
       });
     });
 
-    // **入力は正しいので 400 ではない。** 落ちたのは保存であり、入力のせいにしない。
     expect(response?.status).toBe(500);
     const text = await (response as Response).text();
     expect(text).not.toContain(SECRET);
-    // **跡は残す。ただし本文は出さない**（`dropped-record.ts` の作法）。
     expect(lines.join('\n')).not.toContain(SECRET);
     expect(lines.join('\n')).not.toBe('');
   });
 
-  /**
-   * issue #2415: `base.onError` の stderr は、例外の文を**伏せ字を通して**出す。
-   * 上のテストは値が2行目（`params:` の次の行）にあるので「1行目だけ」で落ちるが、
-   * ここは値が**1行目**にある形（URL の資格・Bearer・同じ行の `params:`）を測る。
-   * 診断（SQL 文・host）は残る。値はすべて偽である。
-   */
   it('base.onError: 例外の1行目に値があっても stderr に出ない（診断は残る）', async () => {
     const FAKE = 'FAKE_SECRET_VALUE_2415B';
     const failing: Stores = {
@@ -9824,23 +9784,9 @@ describe('認証トークンのプール', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { rotateOn: string; cooldownMs: number };
     expect(body.rotateOn).toBe('overage_exhausted');
-    // 省略した項目（cooldownMs）は既定のまま。
     expect(body.cooldownMs).toBe(5 * 60 * 60 * 1000);
   });
 
-  /**
-   * issue #2095。回す契機・冷却の設定（`TokenPoolStore.readSettings()`）が
-   * `UnreadableTokenSettingsError`（issue #2053, `store.ts`）で壊れていても、
-   * `GET /tokens` は 500 にならず、読めているプールの一覧はそのまま返る。
-   *
-   * **直す前は、ここが 500 になっていた。** `TokenPoolService` の
-   * `currentView()` が `Promise.all([tokens, settings])` で結んでいたので、
-   * 設定が読めないと一覧ごと reject していた（`token-pool-service.ts`）。
-   *
-   * **既定値へすり替わっていないことも見る。** `settings` を返さず
-   * `settingsUnreadable.reason` を返す——`free_exhausted` 等の既定で埋めると
-   * `off` にしてあった回転を実装が黙って戻すことになる。
-   */
   it('GET /tokens: 設定が読めなくても 500 にならず、一覧は返り settingsUnreadable が付く（issue #2095）', async () => {
     const service = createTokenPoolService({ stores, newId: () => 'tok-unreadable-a' });
     await service.replace([{ label: 'work', value: 'tok-secret-value' }]);
@@ -9876,10 +9822,6 @@ describe('認証トークンのプール', () => {
     expect(body.settingsUnreadable).toEqual({ reason: REASON });
   });
 
-  /**
-   * issue #2095。`PUT /tokens` も同じ形——置換そのものは `settings` に
-   * 触れないので、設定が読めないことを理由に保存まで止めない。
-   */
   it('PUT /tokens: 設定が読めなくても保存でき、応答は settingsUnreadable の形（issue #2095）', async () => {
     const REASON = 'cooldownMs が数値でない（テスト用）';
     const brokenStores: Stores = {
@@ -9917,30 +9859,6 @@ describe('認証トークンのプール', () => {
     expect(body.settingsUnreadable).toEqual({ reason: REASON });
   });
 
-  /**
-   * `requireOperator` に落ちること。`/profile` と同じ強さの口である
-   * （課金の主体を決める操作なので、`access grant` を通しただけのアカウントには
-   * 開けない）。認証境界そのものの網羅は `auth.test.ts` に寄せてあるので、ここでは
-   * 「この3経路が確かに `requireOperator` を通っている」ことだけを見る——
-   * **許可されたアカウントでも 403** になることまで確かめる（`OPERATOR` トークンだけ
-   * 通って「許可されてさえいれば通る」ように見えるのを防ぐため）。
-   *
-   * **⚠️ 2026-09-06、オーナー決定でここを反転した。** alteroid を使う許可
-   * （`access grant` 済み）を実行環境の持ち主と同格に扱う——`GET/PUT /tokens`
-   * `PUT /tokens/policy` `GET /access` `POST /access/:id/grant`
-   * `POST /access/:id/revoke` の6経路から `requireOperator` を外し、資格は
-   * `authenticate` だけにした。**上のコメントが書いていた「許可されたアカウントでも
-   * 403」は、いまこの6経路には当てはまらない**——`/profile` の GET/PUT だけは
-   * 変えていない（`auth.test.ts`「実行環境プロファイルは宣言済み owner まで」が固定してい
-   * て、ここでは触らない。2026-09-24 に門は `requireOwner` へ移った。#1122）。この describe がいま測るのは次の4つである:
-   * ①実行環境の持ち主は今日どおり6経路とも通る ②許可されたアカウントも同格に
-   * 通る（新しく足したもの） ③境界そのもの（未ログイン＝401、ログイン済みだが
-   * 未 grant＝403）は変わっていない ④同格になった側から grant を叩くと、2人目も通る。
-   *
-   * **⚠️ ④は 2026-09-09 に反転した。** それまでは「『持ち主は高々1つ』
-   * （`grantExclusive`）は同格になった側から叩いても崩れない」で、2人目は 409 だった。
-   * 上限が消えたので、**同格化と揃って、いま初めて許可が伝播する。**
-   */
   describe('alteroid を使う許可があれば実行環境の持ち主と同格（6経路）', () => {
     let nextSubject = 'sub-tokens-test';
     const FAKE_PROVIDER = {
@@ -9988,7 +9906,6 @@ describe('認証トークンのプール', () => {
       });
     }
 
-    /** ログインだけさせる（許可はしない）。`nextSubject` を先に変えて呼ぶこと。 */
     async function loginOnly(
       app: ReturnType<typeof createApp>,
     ): Promise<{ token: string; accountId: string }> {
@@ -10006,7 +9923,6 @@ describe('認証トークンのプール', () => {
       return { token: claimed.token, accountId: claimed.account.id };
     }
 
-    /** ログインさせて、実行環境の持ち主として許可（grant）まで通す。 */
     async function grantedAccountToken(
       app: ReturnType<typeof createApp>,
     ): Promise<{ token: string; accountId: string }> {
@@ -10087,7 +10003,6 @@ describe('認証トークンのプール', () => {
       const { token, accountId } = await grantedAccountToken(withAuth);
       const granted = { authorization: `Bearer ${token}` };
 
-      // 許可されている ＝ 他の経路（記憶）には触れる、という前提を先に確かめる。
       expect((await withAuth.request('/memory', { headers: granted })).status).toBe(200);
 
       expect((await withAuth.request('/tokens', { headers: granted })).status).toBe(200);
@@ -10110,8 +10025,6 @@ describe('認証トークンのプール', () => {
         ).status,
       ).toBe(200);
       expect((await withAuth.request('/access', { headers: granted })).status).toBe(200);
-      // 既に許可済みの自分自身への grant は冪等に 200
-      // （`grantAccess` は書き込まずに `granted` を返す）。
       expect(
         (
           await withAuth.request(`/access/${accountId}/grant`, {
@@ -10120,8 +10033,6 @@ describe('認証トークンのプール', () => {
           })
         ).status,
       ).toBe(200);
-      // revoke は最後に——自分自身の許可を手放す操作なので、これ以降の
-      // アサーションには使わない。
       expect(
         (
           await withAuth.request(`/access/${accountId}/revoke`, {
@@ -10175,20 +10086,6 @@ describe('認証トークンのプール', () => {
       ).toBe(200);
     });
 
-    /**
-     * ⚠️ **2026-09-09 に期待値を反転した（409 → 200）。** 反転前の名前は
-     * 「④持ち主は高々1つのまま——同格になった側が grant を叩いても2人目は409」で、
-     * 本文にはこう書いてあった —— *「ここが 409 のままであることが、『①を複数人に
-     * する話ではない』ことの証明になる」*。
-     *
-     * **その読みは 2026-09-06 の時点では正しかった。** 同格化が開いたのは
-     * 「誰が叩けるか」だけで、「何人まで通せるか」は別の錠が閉めていた。
-     * **2026-09-09 にオーナーがその錠を開けたので、2つが揃って許可が伝播する。**
-     *
-     * ⟹ **ここで測る先を変えた** —— 「通らないこと」ではなく、
-     * **「通って、誰が通したかが残ること」**である。伝播そのものは受け入れた以上、
-     * 弱くなってはいけないのは記録の側である。
-     */
     it('④同格になった側が grant を叩くと2人目も通る（誰が通したかは残る）', async () => {
       const withAuth = buildAuthedApp();
       const first = await grantedAccountToken(withAuth);
@@ -10197,8 +10094,6 @@ describe('認証トークンのプール', () => {
       nextSubject = 'sub-second-account';
       const second = await loginOnly(withAuth);
 
-      // ⚠️ 叩いているのは OPERATOR ではなく、同格になった側（許可された
-      // アカウント自身のトークン）である。
       const response = await withAuth.request(`/access/${second.accountId}/grant`, {
         ...post,
         headers: { ...post.headers, ...granted },
@@ -10206,27 +10101,13 @@ describe('認証トークンのプール', () => {
       expect(response.status).toBe(200);
 
       const body = (await response.json()) as { account: { grantedBy: string | null } };
-      // **`operator` に化けていないこと。** 化けると、人間が通したのか
-      // アカウントが伝播させたのかが記録から消える。
       expect(body.account.grantedBy).toBe(first.accountId);
     });
   });
 });
 
-/**
- * ⚠️ 狭めすぎていないことの証明——認証を設定していない既定構成（`ALTEROID_AUTH`
- * 未設定など）では、`/access/*` `/tokens*` も含めて今日どおり無条件に素通りする。
- * `requireOperator` を外した6経路が、副作用として「既定でも認証を要求する」側へ
- * 倒れていないことを確かめる（north_star 禁止「境界の導入をデグレードにしない」
- * と同じ形——ここでは逆に「境界を広げた変更が、無効な構成の挙動まで変えていない
- * こと」を見る）。
- */
 describe('認証が無効な既定構成では /access も /tokens も今日どおり素通りする', () => {
   it('狭めていない: 未ログイン・トークン無しでも6経路とも通る', async () => {
-    // **トークンのプールの器を配線した専用の app を使う。** 共有 `app`
-    // フィクスチャは `tokens` を渡していないので、`PUT /tokens` `PUT
-    // /tokens/policy` は `deps.tokens === undefined` の 400 に落ちる——それは
-    // 認証境界とは無関係な別の分岐であり、ここで見たいものではない。
     const passthrough = createApp({
       clone: fake.clone,
       stores,
@@ -10505,7 +10386,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       return { app: authedApp, stores: authStores, fake: authFake };
     }
 
-    /** ログインさせて、実行環境の持ち主として許可（grant）まで通す。 */
     async function grantedAccountToken(
       authedApp: ReturnType<typeof createApp>,
     ): Promise<{ token: string; accountId: string }> {
