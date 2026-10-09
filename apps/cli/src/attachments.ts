@@ -269,13 +269,11 @@ export interface UploadedAttachment {
   sha256: string;
 }
 
-// 流して送るファイルの指し方。`length` は stat の大きさ（`bytes.length` と同じ読み方ができる）
 export interface FileOnDisk {
   readonly path: string;
   readonly length: number;
 }
 
-// 上げるファイル。`bytes` は、中身（Uint8Array）か、流して送るファイル（FileOnDisk）のどちらか
 export interface AttachmentUploadFile {
   name: string;
   mediaType: string;
@@ -286,7 +284,6 @@ function sizeChangedMessage(expected: number, actual: number): string {
   return `ファイルが送る間に変わった（${expected} バイトのはずが ${actual} バイト読めた）`;
 }
 
-// stat の大きさだけを流す。足りなければ（縮んだ）、読み終えた時点で断る。伸びた分は `end` で読まない
 function streamFileBody(
   path: string,
   size: number,
@@ -340,7 +337,7 @@ export async function uploadAttachment(
     }
   } catch (error) {
     if (changed !== undefined) throw changed;
-    // 繋がらないときは、単発のコマンドと同じ直し方の案内にする（#3995）。それ以外の例外は今まで通り errno を言う
+    // 繋がらないときは、単発のコマンドと同じ直し方の案内にする
     throw new Error(
       isConnectionFailure(error)
         ? describeCliFailure(error)
@@ -401,9 +398,7 @@ export type UploadDraftResult =
     }
   | { ok: false; reason: string };
 
-// 画像は中身が要る（先頭と寸法の検査）ので読んで検める。画像以外は stat の大きさで先に検める。
-// `maxFileBytes` 以下はデーモンも本文を持つ段なので読んで送り、それを超える大きいファイル（外部ストレージ。
-// `readFile` が読めない 2 GiB 級まで）だけを流す
+// 画像は先頭と寸法の検査に中身が要るので読む。`maxFileBytes` を超える大きいファイルだけを流す: `readFile` は 2 GiB 級を読めないため
 async function prepareUpload(
   file: DraftFile,
   limits: AttachmentLimits,
@@ -509,7 +504,7 @@ export interface ListedAttachment {
   keptAt?: string | undefined;
 }
 
-// 保存中は期限を持たない（#4126 P4）。期限が無いまま「期限 undefined」と出さない
+// 保存中は期限を持たない: 期限が無いまま「期限 undefined」と出さない
 export function keptStateOf(meta: {
   keptAt?: string | undefined;
   expiresAt?: string | undefined;
@@ -704,7 +699,7 @@ export async function attachmentsMetaCommand(id: string): Promise<void> {
       ...(meta.managerReportId === undefined ? [] : [`managerReportId: ${meta.managerReportId}`]),
       ...(meta.uploadedBy === undefined ? [] : [`uploadedBy: ${meta.uploadedBy}`]),
       `createdAt: ${meta.createdAt}`,
-      // 保存中は期限を持たない（#4126 P4）。無いまま `undefined` と出さない
+      // 保存中は期限を持たない: 無いまま `undefined` と出さない
       ...(meta.keptAt === undefined ? [] : [`keptAt: ${meta.keptAt}（保存中。期限なし）`]),
       ...(meta.expiresAt === undefined ? [] : [`expiresAt: ${meta.expiresAt}`]),
     ].join('\n') + '\n',

@@ -1,13 +1,10 @@
 /**
- * 添付の大きさ・個数・合計の断りの文（#3933。`@alteroid/core/attachment-wording`）。
+ * 添付の大きさ・個数・合計の断りの文。サーバ（`validateAttachmentInput` / `validateAttachmentBatch`）・
+ * Web の送る前の検査（`@alteroid/logic` の `checkAttachments`）・CLI と TUI の送る前の検査
+ * （`AttachmentDraft.add`）の唯一の正本: 片方だけ直すと、同じ理由の断りが入口ごとに違う文で見える。
+ * ファイル名は文に含めない。名前を前に付けるかは呼ぶ側が決める。
  *
- * **サーバ（`validateAttachmentInput` / `validateAttachmentBatch`）・Web の送る前の検査
- * （`@alteroid/logic` の `checkAttachments`）・CLI と TUI の送る前の検査（`AttachmentDraft.add`）の
- * 唯一の正本である。** 同じ理由の断りは、どこから上げても同じ文で見える（入口の等価性）。
- * ファイル名は文に含めない。名前を前に付けるかは呼ぶ側が決める（`${name}: ${reason}`）。
- *
- * **import を1つも持たない。** Web のバンドルへ入るので、core 本体（Node の組み込みと SDK）を
- * 引き込まないためである（`mask-url.ts` と同じ形）。
+ * import を1つも持たない: Web のバンドルへ入るので、core 本体（Node の組み込みと SDK）を引き込まないため。
  */
 
 const KIB = 1024;
@@ -21,23 +18,17 @@ function humanOneDecimal(bytes: number): string {
   return `${(bytes / MIB).toFixed(1)} MiB`;
 }
 
-/** 上限の表記。MiB で割り切れれば `5 MiB`、そうでなければ実際の大きさと同じ丸め方（`1.5 MiB`・`1000 B`）。 */
 export function formatAttachmentLimit(bytes: number): string {
   return bytes % MIB === 0 ? `${bytes / MIB} MiB` : humanOneDecimal(bytes);
 }
 
-/**
- * 実際の大きさの言い方（`5.2 MiB ある`）。**丸めた表示が上限と同じになるときだけ**、
- * 見分けがつくようバイトを添える（`5,242,881 バイト`）。上限は {@link formatAttachmentLimit} と
- * 同じ丸め方で並べて比べる（`5 MiB` は `5.0 MiB` と比べる）。
- */
+/** 丸めた表示が上限と同じになるときだけ、見分けがつくようバイトを添える。 */
 export function describeAttachmentActual(bytes: number, limitBytes: number): string {
   const rounded = humanOneDecimal(bytes);
   if (rounded !== humanOneDecimal(limitBytes)) return `${rounded} ある`;
   return `${bytes.toLocaleString('en-US')} バイトある`;
 }
 
-/** 1つが上限を超えるときの断り。`kind` は画像かそれ以外か。 */
 export function attachmentTooLargeMessage(
   kind: 'image' | 'file',
   bytes: number,
@@ -46,11 +37,7 @@ export function attachmentTooLargeMessage(
   return `${kind === 'image' ? '画像' : 'ファイル'}は 1 つ ${formatAttachmentLimit(limitBytes)} まで（${describeAttachmentActual(bytes, limitBytes)}）`;
 }
 
-/**
- * 添付1つの上限（#4128 段2。サーバ・Web・CLI の検査が全部これに揃う）。画像は `maxImageBytes`、画像以外は
- * `maxLargeFileBytes > 0 ? max(maxFileBytes, maxLargeFileBytes) : maxFileBytes`。
- * `maxLargeFileBytes` を名乗らない（旧い）サーバの応答は 0（枠なし）として読む。
- */
+/** サーバ・Web・CLI の検査が全部これに揃う。`maxLargeFileBytes` を名乗らない旧いサーバの応答は 0（枠なし）として読む。 */
 export function attachmentMaxBytes(
   limits: {
     readonly maxImageBytes: number;
@@ -64,7 +51,7 @@ export function attachmentMaxBytes(
   return large > 0 ? Math.max(limits.maxFileBytes, large) : limits.maxFileBytes;
 }
 
-/** 大きいファイル（画像以外で `maxFileBytes` を超えるもの）か。1発言の合計には数えない。 */
+/** 大きいファイルは1発言の合計に数えない。 */
 export function isLargeAttachmentSize(
   limits: { readonly maxFileBytes: number },
   size: number,
@@ -73,12 +60,10 @@ export function isLargeAttachmentSize(
   return !image && size > limits.maxFileBytes;
 }
 
-/** 1発言の個数が上限を超えるときの断り。`count` は超えた後の個数。 */
 export function attachmentTooManyMessage(maxPerMessage: number, count: number): string {
   return `1 発言に添えられるのは ${maxPerMessage} 個まで（${count} 個）`;
 }
 
-/** 1発言の合計が上限を超えるときの断り。`totalBytes` は超えた後の合計。 */
 export function attachmentTotalTooLargeMessage(maxTotalBytes: number, totalBytes: number): string {
   return `1 発言の合計は ${formatAttachmentLimit(maxTotalBytes)} まで（${describeAttachmentActual(totalBytes, maxTotalBytes)}）`;
 }

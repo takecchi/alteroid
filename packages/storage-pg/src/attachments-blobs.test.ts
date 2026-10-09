@@ -36,7 +36,6 @@ async function drain(stream: AsyncIterable<unknown>): Promise<Buffer> {
   return Buffer.concat(out);
 }
 
-/** 試験用: 呼びを差し込める blob の置き場。 */
 class HookedBlobs extends MemoryAttachmentBlobStore implements AttachmentBlobStore {
   failPutAfterChunks: number | undefined;
   failRemove = false;
@@ -120,7 +119,6 @@ describe('PgAttachmentStore + blobs（外部ストレージ。#4128 段2）', ()
     }
     expect([...blobs.peek(`p/attachments/${viaStream.id}`)!]).toEqual([1, 2, 3]);
     expect(viaStream.size).toBe(3);
-    // 読み出し: get / open とも blob から
     expect([...(await store.get(viaStream.id))!.bytes]).toEqual([1, 2, 3]);
     expect([...(await drain((await store.open(viaStream.id))!.stream))]).toEqual([1, 2, 3]);
     expect(new TextDecoder().decode((await store.get(viaPut.id))!.bytes)).toBe('hi');
@@ -153,7 +151,6 @@ describe('PgAttachmentStore + blobs（外部ストレージ。#4128 段2）', ()
     expect(blobs.keys()).not.toContain(`attachments/${removed.id}`);
     expect(blobs.keys()).toHaveLength(2);
 
-    // 結び付けのない残骸は 1 時間たてば prune が消す
     expect(await store.prune(new Date(Date.now() + 2 * 3_600_000))).toBe(2);
     expect(blobs.keys()).toEqual([]);
     expect(await store.getMeta(pruned.id)).toBeUndefined();
@@ -179,7 +176,6 @@ describe('PgAttachmentStore + blobs（外部ストレージ。#4128 段2）', ()
     expect((await client.query(`select id from attachments`)).rows).toEqual([]);
     expect(blobs.keys()).toEqual([]);
 
-    // 同じく put（bytes 渡し）でも、行は残らない
     blobs.failPutAfterChunks = 0;
     await expect(
       store.put({ name: 'x.txt', mediaType: 'text/plain', bytes: Buffer.from('abc') }),
@@ -253,7 +249,6 @@ describe('PgAttachmentStore + blobs（外部ストレージ。#4128 段2）', ()
     expect(lines[0]).not.toContain(meta.id);
     expect(blobs.keys()).toHaveLength(1);
 
-    // prune・clear でも同じ倒れ方（行は戻らない）
     const again = await store.put({
       name: 'b.txt',
       mediaType: 'text/plain',
@@ -290,7 +285,6 @@ describe('PgAttachmentStore + blobs（外部ストレージ。#4128 段2）', ()
     expect((await store.putStream(file(10))).size).toBe(10);
     const over = await store.putStream(file(11)).catch((e: unknown) => e);
     expect((over as AttachmentRejectedError).code).toBe('too_large');
-    // put（bytes 渡し）も同じ枠
     expect(
       (
         await store.put({
@@ -307,7 +301,6 @@ describe('PgAttachmentStore + blobs（外部ストレージ。#4128 段2）', ()
         bytes: new Uint8Array(11),
       }),
     ).rejects.toMatchObject({ code: 'too_large' });
-    // 画像は別枠の恩恵を受けない（maxImageBytes のまま）
     const png = Uint8Array.from([...PNG, 0, 0]);
     await expect(
       store.putStream({ name: 'big.png', mediaType: 'image/png', body: chunks([...png]) }),
@@ -328,7 +321,6 @@ describe('PgAttachmentStore + blobs（外部ストレージ。#4128 段2）', ()
     });
     expect(lines).toHaveLength(2);
     expect(lines[0]).toContain('置き場が設定されていない');
-    // 控えは読める
     expect((await without.getMeta(meta.id))?.id).toBe(meta.id);
   });
 
@@ -368,7 +360,6 @@ describe('migrate（blob_key・bytes の null 許容・置き場の制約。#412
     const legacy = await rowOf('legacy');
     expect(legacy?.blob_key).toBeNull();
     expect(legacy?.bytes).not.toBeNull();
-    // 制約は1本だけ（2周目で重ねない）
     const constraints = await client.query(
       `select conname from pg_constraint where conname = 'attachments_content_place_chk'`,
     );

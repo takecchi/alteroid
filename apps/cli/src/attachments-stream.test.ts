@@ -38,7 +38,6 @@ const target: Target = {
 
 const MIB = 1024 * 1024;
 
-// 大きいファイルの枠が有る（外部ストレージ）。maxFileBytes を超えるものが流れる
 const LARGE_TIER: AttachmentLimits = {
   ...DEFAULT_ATTACHMENT_LIMITS,
   maxFileBytes: MIB,
@@ -152,9 +151,7 @@ describe('上げは画像以外を流す', () => {
   it('送る間にファイルが縮んだら、読み終えた時点で大きさが合わないと断る', async () => {
     const dir = await makeTempDir('alteroid-cli-attach-stream-');
     const path = join(dir, 'shrink.bin');
-    // 縮んだ状態（stat では 2 MiB だったものが、送る時点で 10 バイト）を、送る前に作っておく。fetch の中で書き換えると、
-    // 本文のストリームは fetch より前に読み始める（`Readable.toWeb` が先に引く）ので、`writeFile` の切り詰めと書き込みの
-    // あいだに読んで 0 バイトになる回がある（#4313 の CI で落ちた）
+    // 縮んだ状態は送る前に作る: fetch の中で書き換えると、本文のストリームが先に読み始め、`writeFile` の切り詰めと書き込みのあいだに読んで 0 バイトになる回があるため
     await writeFile(path, Buffer.alloc(10));
     vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
       await consume(init.body);

@@ -11,14 +11,11 @@ import {
 import { Upload } from '@aws-sdk/lib-storage';
 import type { AttachmentBlobConfig, AttachmentBlobStore } from '@alteroid/core';
 
-/** `DeleteObjects` は1回に 1000 件まで。 */
 const DELETE_BATCH = 1000;
 
 /**
- * 添付の中身の置き場の S3 互換の実装（#4128 段2）。S3 API で一般に書く（特定の事業者に寄せない）。
- * key は呼び手（`PgAttachmentStore`）が prefix 込みで渡す。ここでは足さない。
- *
- * 失敗の文に key・資格・endpoint の値を載せない（呼び手が stderr へ出す）。
+ * S3 API で一般に書く（特定の事業者に寄せない）。key は呼び手が prefix 込みで渡す。ここでは足さない。
+ * 失敗の文に key・資格・endpoint の値を載せない: 呼び手が stderr へ出すため。
  */
 export class S3AttachmentBlobStore implements AttachmentBlobStore {
   readonly #client: S3Client;
@@ -29,7 +26,6 @@ export class S3AttachmentBlobStore implements AttachmentBlobStore {
     this.#client = client ?? new S3Client(clientConfigOf(config));
   }
 
-  /** 長さの分からないストリームを multipart で置く。途中で body が投げたら `Upload` が畳み、何も残らない。 */
   async put(key: string, body: AsyncIterable<Uint8Array>): Promise<void> {
     const upload = new Upload({
       client: this.#client,
@@ -53,7 +49,7 @@ export class S3AttachmentBlobStore implements AttachmentBlobStore {
     return toReadable(response.Body);
   }
 
-  /** `prefix` の下を `ContinuationToken` で全部回る。`LastModified` が無い要素は外す（判定できないものは消さない側へ倒す）。 */
+  /** `LastModified` が無い要素は外す: 判定できないものは消さない側へ倒すため。 */
   async *list(prefix: string): AsyncGenerator<{ key: string; lastModified: Date }> {
     let token: string | undefined;
     do {

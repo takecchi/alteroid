@@ -28,7 +28,6 @@ async function* bytes(): AsyncGenerator<Uint8Array> {
   yield Uint8Array.from([1, 2, 3]);
 }
 
-/** 置いた時刻を `at` にして blob だけを置く（控えの行は作らない）。 */
 async function putOrphan(blobs: MemoryAttachmentBlobStore, key: string, at: Date): Promise<void> {
   await blobs.put(key, bytes());
   blobs.setModified(key, at);
@@ -68,7 +67,6 @@ describe('PgAttachmentStore.sweepOrphanBlobs（#4314）', () => {
         const result = await store.sweepOrphanBlobs(NOW);
         expect(result?.removed).toBe(1);
         expect(blobs.keys()).toEqual([justInside]);
-        // 1ms 進めれば、内だった方も消える
         await store.sweepOrphanBlobs(new Date(NOW.getTime() + 1));
         expect(blobs.keys()).toEqual([]);
       });
@@ -85,7 +83,6 @@ describe('PgAttachmentStore.sweepOrphanBlobs（#4314）', () => {
           now: () => OLD,
           ...(prefix === '' ? {} : { blobKeyPrefix: prefix }),
         }).put({ name: 'e.png', mediaType: 'image/png', bytes: PNG });
-        // 期限切れだが prune していない行が、確かに在る
         const rows = await client.query<{ n: number }>(
           `select count(*)::int as n from attachments where expires_at < '${NOW.toISOString()}'`,
         );
@@ -114,7 +111,6 @@ describe('PgAttachmentStore.sweepOrphanBlobs（#4314）', () => {
           `${prefix}${id}`,
           `x/${prefix}attachments/${id}`,
         ];
-        // prefix の外・attachments/ の外
         if (prefix !== '') keep.push(`attachments/${id}`, `p/attachments/${id}`);
         for (const key of keep) await putOrphan(blobs, key, OLD);
         const result = await store.sweepOrphanBlobs(NOW);

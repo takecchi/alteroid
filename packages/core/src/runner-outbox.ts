@@ -24,13 +24,9 @@ import { isSafeRunnerSegment, RUNNER_ATTACHMENT_STALE_MS } from './runner-attach
 import type { RunnerOutboxFile, RunnerOutboxRejectedFile } from './runner-protocol.js';
 
 /**
- * 担い手がクローンへ渡したいファイルを置く「出し箱」の runner 側。
- * 中身は SSE に載せない。runner からデーモンへ押し上げる経路は作らない。
- *
- * 出し箱は担い手が自由に書けるので、取り込み（{@link collectManagerOutbox}）で名前を信じて読まない。
+ * 出し箱は担い手が自由に書けるので、取り込み（{@link collectManagerOutbox}）で名前を信じて読まない:
  * runner（root のことがある）に、runner の持ち物を指す symlink / ハードリンクを読ませる経路になるため。
  * パス名で検めてから開く形（`lstat` → `open`）にしない: その隙間に担い手が差し替えられる。
- * 開いた fd を `fstat` して検め、その fd から退避先へ写す。
  */
 
 export function defaultRunnerOutboxRoot(): string {
@@ -45,16 +41,10 @@ export const RUNNER_OUTBOX_ENV = 'ALTEROID_OUTBOX';
 
 const MAX_REPORTED_REJECTIONS = 100;
 
-/**
- * 旧いデーモンは `files` を読み捨てて取りに来ない（`DELETE` もしない）ので、上限が無いと
- * ターンごとに退避先が増え、`closed` まで器のディスクを食う。
- */
+/** 上限を置く: 旧いデーモンは `files` を読み捨てて取りに来ない（`DELETE` もしない）ので、無いとターンごとに退避先が増え、`closed` まで器のディスクを食う。 */
 const STAGED_BUDGET_FACTOR = 8;
 
-/**
- * 大きいファイルの退避先の予算は、1報告の大きいファイルの合計（既定 2 GiB）の2倍まで（#4128 段3b）: 小さいファイルと
- * 同じ8倍だと 16 GiB になり、器の `/tmp` を食い尽くしうるため。取り込み中の1報告と、次の1報告ぶんを持てる。
- */
+/** 大きいファイルの退避先の予算を小さいファイルと同じ8倍にしない: 16 GiB になり、器の `/tmp` を食い尽くしうるため。 */
 const LARGE_STAGED_BUDGET_FACTOR = 2;
 
 const COPY_CHUNK_BYTES = 64 * 1024;
@@ -132,10 +122,7 @@ export interface CollectManagerOutboxOptions {
   /** ハードリンクで runner の持ち物を指させる経路を塞ぐ。`undefined` は uid を持たない環境で、所有者を見ない。 */
   readonly expectedUid: number | undefined;
   readonly limits: Pick<AttachmentLimits, 'maxFileBytes' | 'maxPerMessage' | 'maxTotalBytes'>;
-  /**
-   * 画像以外で `maxFileBytes` を超える「大きいファイル」の1つの上限と、1報告の大きいファイルの合計の上限（バイト。#4128 段3b）。
-   * 省略時は `readRunnerAttachmentStageLimit(process.env)`（hello の `attachmentStageLimit` と同じ値）。主にテスト用。
-   */
+  /** 省略時は `readRunnerAttachmentStageLimit(process.env)`（hello の `attachmentStageLimit` と同じ値）。 */
   readonly maxLargeFileBytes?: number;
   readonly afterFirstChunk?: () => Promise<void>;
 }
@@ -186,10 +173,7 @@ export function guessOutboxMediaType(name: string): string {
   return MEDIA_TYPES_BY_EXTENSION[extname(name).toLowerCase()] ?? 'application/octet-stream';
 }
 
-/**
- * 退避先の大きさを、大きいファイル（`maxFileBytes` を超えるもの）とそれ以外に分けて数える。
- * 分けられる: 画像は `maxFileBytes` までしか取り込まないので、それを超える退避済みのものは大きいファイルだけ。
- */
+/** 画像は `maxFileBytes` までしか取り込まないので、それを超える退避済みのものは大きいファイルだけと決められる。 */
 async function stagedBytesOf(
   dir: string,
   maxFileBytes: number,
@@ -218,11 +202,9 @@ interface CollectContext {
   readonly stagedDir: string;
   readonly expectedUid: number | undefined;
   readonly maxFileBytes: number;
-  /** 画像以外の1つの上限（大きいファイルを含む）。`maxFileBytes` 以上。 */
   readonly maxLargeFileBytes: number;
   readonly totalLimit: number;
   totalBytes: number;
-  /** 大きいファイルだけの、この報告の合計の上限（退避先の予算の残りも織り込む）。 */
   readonly largeTotalLimit: number;
   largeTotalBytes: number;
   readonly afterFirstChunk?: () => Promise<void>;
@@ -278,7 +260,6 @@ async function takeEntry(context: CollectContext, name: string): Promise<RunnerO
     );
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    // ELOOP は symlink（`O_NOFOLLOW`）。ENXIO は読み手の居ない socket 等
     if (code === 'ELOOP') throw new OutboxRefusal('symlink は送れない', 'remove');
     if (code === 'ENXIO') throw new OutboxRefusal('通常のファイルではない', 'remove');
     throw new OutboxRefusal(`開けなかった（${code ?? '不明'}）`, 'keep');
@@ -294,7 +275,7 @@ async function takeEntry(context: CollectContext, name: string): Promise<RunnerO
     }
     if (info.nlink > 1) throw new OutboxRefusal('ハードリンクは送れない', 'remove');
     if (info.size === 0) throw new OutboxRefusal('空のファイルは送れない', 'remove');
-    // 画像かどうかは名前（拡張子）で決める: 中身は見ない（最終判定はデーモン）。画像は大きいファイルにしない
+    // 画像かどうかは拡張子で決める: 中身は見ない（最終判定はデーモン）。画像は大きいファイルにしない
     const image = isAttachmentImageMediaType(guessOutboxMediaType(name));
     const large = !image && info.size > context.maxFileBytes;
     const fileMax = image ? context.maxFileBytes : context.maxLargeFileBytes;
@@ -360,7 +341,6 @@ export async function collectManagerOutbox(
   ensureOwnDirectorySync(resolve(stagedRoot), 0o700, { recursive: true });
   const stagedDir = resolve(stagedRoot, managerId);
   ensureOwnDirectorySync(stagedDir, 0o700);
-  // 大きいファイルは別の予算（1報告の合計 = 1つの上限 `maxLargeFileBytes`、退避先 = それ × LARGE_STAGED_BUDGET_FACTOR）
   const largeReportLimit = options.maxLargeFileBytes ?? readRunnerAttachmentStageLimit();
   const maxLargeFileBytes = Math.max(limits.maxFileBytes, largeReportLimit);
   const staged = await stagedBytesOf(stagedDir, limits.maxFileBytes);

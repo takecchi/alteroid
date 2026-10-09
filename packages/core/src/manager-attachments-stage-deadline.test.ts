@@ -16,8 +16,7 @@ import {
 import { createMemoryStores } from './testing.js';
 import { createCloneTools, type ToolContext } from './tools.js';
 
-// #4128 段3b: 別口へ押す処理に、1つずつの期限を掛ける。応答しない runner を最長1時間待たない。
-// 期限は注入（stageDeadlineMs）で短くする。実時間の待ちは作らない（`setTimeout` の定数待ちは使わない）。
+// 期限は注入（stageDeadlineMs）で短くする: 実時間の待ち（`setTimeout` の定数待ち）を作らない
 const LIMITS: AttachmentLimits = {
   ...DEFAULT_ATTACHMENT_LIMITS,
   maxImageBytes: 10,
@@ -129,7 +128,6 @@ describe('(f) 押す処理の期限（#4128 段3b）', () => {
     expect(out).toContain('マネージャーは起こしていない');
     expect(log).toEqual(['stage']);
     expect(requested).toEqual([500]);
-    // 期限つきの signal を渡している（HttpRunner はそれを fetch に渡して繋ぎを畳む）
     expect(seen[0]).toBeInstanceOf(AbortSignal);
     expect(seen[0]?.aborted).toBe(true);
     await stop();

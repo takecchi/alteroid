@@ -11,7 +11,6 @@ import type { RunnerAttachment, RunnerStagedAttachmentMeta } from './runner-prot
 import type { AttachmentRef } from './schema.js';
 
 // 断るときは例外ではなく `ok: false` と文を返す: 呼び手の道具がそのまま本文にする。中身は読むだけで、記憶・日誌には写さない。
-/** 大きいファイル（別口で置いてから参照するもの。#4128 段3a）。`attachments` の該当要素は `staged: true` で、中身は読んでいない。 */
 export interface StagedManagerAttachment {
   readonly meta: RunnerStagedAttachmentMeta;
 }
@@ -29,7 +28,6 @@ export async function loadManagerAttachments(
   ids: readonly string[],
   limits: AttachmentLimits,
 ): Promise<LoadedManagerAttachments> {
-  // 置き場の dir が id なので、同じ id を重ねても得るものが無い。
   const unique = [...new Set(ids)];
   if (unique.length === 0) return { ok: true, attachments: [], staged: [] };
 
@@ -63,8 +61,7 @@ export async function loadManagerAttachments(
     throw error;
   }
 
-  // 大きいファイル（外部ストレージの別枠。合計に数えない）は命令の本文に載せない。中身は読まず、
-  // 送る側（`ManagerPool`）が runner の別口へストリームで押してから、命令では `staged: true` で参照する（#4128 段3a）。
+  // 大きいファイルは命令の本文に載せず、中身も読まない: 送る側（`ManagerPool`）が runner の別口へストリームで押してから、命令では `staged: true` で参照する。
   const attachments: RunnerAttachment[] = [];
   const staged: StagedManagerAttachment[] = [];
   for (const meta of metas) {
@@ -109,7 +106,6 @@ export function estimateAttachmentBodyBytes(
   text: string,
 ): number {
   const items = attachments.reduce(
-    // `staged`（別口で置く）は中身を載せないので 0 と数える。
     (sum, item) => sum + (item.data?.length ?? 0) + Buffer.byteLength(item.name) * 2 + 256,
     0,
   );

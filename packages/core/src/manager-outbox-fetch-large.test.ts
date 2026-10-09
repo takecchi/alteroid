@@ -16,7 +16,6 @@ import {
 } from './manager-outbox-fetch.js';
 import type { RunnerClient, RunnerOutboxFile } from './runner-protocol.js';
 
-// #4128 段3b: 大きいファイルの取り込みと、大きさに応じて延びる期限
 const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
 
@@ -37,7 +36,6 @@ describe('outboxFetchDeadlineMs（(e) 期限の式）', () => {
 
   it('上限は 1 時間（ATTACHMENT_REQUEST_TIMEOUT_MS）で、それ以上は延びない', () => {
     expect(ATTACHMENT_REQUEST_TIMEOUT_MS).toBe(3_600_000);
-    // 境界: size/1MiB が 3600 秒になる大きさ（3600 MiB）
     expect(outboxFetchDeadlineMs(3600 * MIB - MIB)).toBe(3_599_000);
     expect(outboxFetchDeadlineMs(3600 * MIB)).toBe(3_600_000);
     expect(outboxFetchDeadlineMs(3601 * MIB)).toBe(3_600_000);
@@ -47,11 +45,8 @@ describe('outboxFetchDeadlineMs（(e) 期限の式）', () => {
   it('1報告の期限は、既定の 90 秒に、各ファイルが 30 秒を超えて延びた分を足す（上限は 1 時間）', () => {
     expect(OUTBOX_FETCH_TOTAL_TIMEOUT_MS).toBe(90_000);
     expect(outboxFetchTotalDeadlineMs([])).toBe(90_000);
-    // 小さいファイルだけなら、何個あっても 90 秒のまま（これまでと同じ）
     expect(outboxFetchTotalDeadlineMs(Array.from({ length: 10 }, () => 30_000))).toBe(90_000);
-    // 試験が注入する短い期限も、全体を縮めも延ばしもしない
     expect(outboxFetchTotalDeadlineMs([50, 50])).toBe(90_000);
-    // 大きいファイルの分だけ延びる
     expect(outboxFetchTotalDeadlineMs([30_000, 2048_000])).toBe(90_000 + 2018_000);
     expect(outboxFetchTotalDeadlineMs([2_000_000, 2_000_000])).toBe(3_600_000);
   });
@@ -115,7 +110,6 @@ describe('(d) デーモンの大きいファイルの取り込み', () => {
   it('外部ストレージが無効（maxLargeFileBytes が 0）なら、理由つきで取りに行かない', async () => {
     const { result, opened, deleted } = await run({ ...base, maxLargeFileBytes: 0 });
     expect(opened).toEqual([]);
-    // 二度と取りに行かないので、runner の退避先から消させる（24時間の掃除まで溜めない）
     expect(deleted).toEqual(['f1']);
     expect(result.attachments).toEqual([]);
     expect(result.rejected).toEqual([

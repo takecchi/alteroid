@@ -408,10 +408,7 @@ function assertTokenRotationEventHandled(event: never): never {
   throw new Error(`alteroidd: 認証トークンの日誌で未知の event: ${String(event)}`);
 }
 
-/**
- * もう読まない層の provider の変数（`ALTEROID_CLONE_PROVIDER` / `ALTEROID_MANAGER_PROVIDER` /
- * `ALTEROID_CLONE_PEERS`）が器に残っていても起動は止めず、名前だけを stderr へ出す。黙って無視すると、置いた人間は効いていると思ったままになる。
- */
+// 黙って無視しない: 置いた人間は効いていると思ったままになるため。起動は止めない。
 export function reportRetiredLayerProviderEnv(
   env: NodeJS.ProcessEnv,
   write: (line: string) => void = writeStderrSync,
@@ -1099,7 +1096,7 @@ export async function main(): Promise<void> {
   }
 
   const server = serve({ fetch: app.fetch, port, hostname });
-  // 大きいファイルの上げ（`POST /attachments`。2 GiB）が Node 既定の 300 秒で切られないように（#4128 段3a）
+  // 大きいファイルの上げ（`POST /attachments`。2 GiB）が Node 既定の 300 秒で切られないように
   applyAttachmentRequestTimeout(server as unknown as { requestTimeout: number });
 
   server.on('connection', (socket) => {

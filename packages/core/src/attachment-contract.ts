@@ -289,7 +289,6 @@ export async function verifyAttachmentStoreContract(
   if (multi.conflicts.length > 0)
     fail(`同じ宛先への重複 bind が conflicts になった: ${JSON.stringify(multi)}`);
 
-  // マネージャーの報告への結び付け（#4126 P2b）
   const toReport = await store.put({
     name: 'rp.txt',
     mediaType: 'text/plain',
@@ -374,7 +373,6 @@ export async function verifyAttachmentStoreContract(
   }
 }
 
-/** 中身の口のストリーム版（`putStream` / `open`。#4128 段1）。新しいストアで行う。 */
 async function verifyStreaming(
   createStore: NonNullable<AttachmentStoreContractOptions['createStore']>,
   fail: (message: string) => never,
@@ -399,7 +397,6 @@ async function verifyStreaming(
   };
   const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
-  // (1) 流して入れたものが get で同じバイト・size・sha256
   const src = bytesOf(150);
   const meta = await store.putStream({
     name: 's.bin',
@@ -413,7 +410,6 @@ async function verifyStreaming(
   if (got.meta.size !== src.length || got.meta.sha256 !== sha(src))
     fail('get の meta が putStream と違う');
 
-  // (5) open のストリームが put したバイトと一致する
   const putMeta = await store.put({
     name: 'p.bin',
     mediaType: 'application/octet-stream',
@@ -427,7 +423,6 @@ async function verifyStreaming(
   if (openedStreamed === undefined || !same(await read(openedStreamed.stream), src))
     fail('open のストリームが putStream したバイトと違う');
 
-  // (2) 上限ちょうどは通り、1 バイト超えは too_large。何も残らない
   const before = await store.usage();
   const atMax = await store.putStream({
     name: 'at.bin',
@@ -453,7 +448,6 @@ async function verifyStreaming(
   if (listed.items.some((item) => item.name === 'over.bin'))
     fail('too_large で断った putStream が list に残った');
 
-  // (3) 0 バイトは empty
   await rejected(
     () =>
       store.putStream({
@@ -468,7 +462,6 @@ async function verifyStreaming(
     'media_type_missing',
   );
 
-  // (4) body が途中で投げたら何も残らない（例外はそのまま上へ）
   const boom = new Error('body-boom');
   const failing = async function* () {
     yield bytesOf(50);
@@ -490,17 +483,13 @@ async function verifyStreaming(
   if ((await store.list({ limit: 100 })).items.some((item) => item.name === 'b.bin'))
     fail('途中で投げた putStream が list に残った');
 
-  // (6) 期限切れ・無い id は open が undefined
   if ((await store.open('no-such-id')) !== undefined) fail('無い id の open');
   if ((await store.open('x\u0000y')) !== undefined) fail('NUL を含む id の open');
   clock = new Date(T0.getTime() + (DEFAULT_ATTACHMENT_LIMITS.retentionDays + 1) * 86_400_000);
   if ((await store.open(meta.id)) !== undefined) fail('期限切れの open は undefined');
 }
 
-/**
- * 保存の印・削除・一覧・使用量・全消し（#4126 P4）。**どの検査も新しいストアで行う**（上の本線のストアの
- * 掃除の件数を、ここで預けるものが動かさないため）。時計は差し替えて、期限の境目をちょうどで測る。
- */
+/** どの検査も新しいストアで行う: 本線のストアの掃除の件数を、ここで預けるものが動かさないため。 */
 async function verifyKeptAndListing(
   createStore: NonNullable<AttachmentStoreContractOptions['createStore']>,
   fail: (message: string) => never,
@@ -521,13 +510,11 @@ async function verifyKeptAndListing(
   };
   const at = (offsetMs: number) => new Date(T0.getTime() + offsetMs);
   const ids = (page: { items: { id: string }[] }) => page.items.map((item) => item.id);
-  // 新しい順（作成日時の降順、同じなら id の降順）の期待値
   const newestFirst = <T extends { createdAt: string; id: string }>(metas: T[]): T[] =>
     [...metas].sort((a, b) =>
       a.createdAt === b.createdAt ? (a.id < b.id ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1,
     );
 
-  // 空の置き場
   const emptyUsage = await store.usage();
   if (
     emptyUsage.count !== 0 ||
@@ -540,7 +527,6 @@ async function verifyKeptAndListing(
   if ((await store.list({ limit: 10 })).items.length !== 0) fail('空の置き場の list');
   if ((await store.clear()) !== 0) fail('空の置き場の clear は 0');
 
-  // 出所の違うものを、1秒ずつずらして預ける（同じ時刻に2つ: id の降順で並ぶことを見る）
   const put = async (
     name: string,
     uploadedBy: string | undefined,
@@ -578,7 +564,6 @@ async function verifyKeptAndListing(
     fail('一覧の控えが getMeta と違う');
   if (full.nextCursor !== undefined) fail('最後のページに nextCursor が付いた');
 
-  // 絞り込み
   const filtered = async (query: Parameters<typeof store.list>[0]) =>
     ids(await store.list(query))
       .sort()
@@ -610,7 +595,6 @@ async function verifyKeptAndListing(
   if ((await filtered({ q: '.txt', from: 'human', limit: 100 })) !== sortedIds(f, g))
     fail('絞り込みの組み合わせ（AND）');
 
-  // ページ送り
   const pages: string[] = [];
   let cursor: string | undefined;
   for (let guard = 0; guard < 20; guard += 1) {
@@ -645,7 +629,6 @@ async function verifyKeptAndListing(
     if (!(error instanceof AttachmentCursorError)) throw error;
   }
 
-  // 使用量（期限内の全体と出所ごと）
   const usage = await store.usage();
   const expectedUsage = emptyAttachmentUsage();
   for (const meta of all) addToAttachmentUsage(expectedUsage, meta);
@@ -663,7 +646,6 @@ async function verifyKeptAndListing(
   )
     fail(`usage の出所ごと: ${JSON.stringify(usage.byFrom)}`);
 
-  // 保存の印を付ける
   clock = at(10_000);
   const keptA = await store.setKept(a.id, true, clock);
   if (keptA === undefined) fail('setKept(true) が控えを返さない');
@@ -685,13 +667,11 @@ async function verifyKeptAndListing(
     fail('NUL を含む id の setKept');
   if ((await store.setKept('no-such-id', false, clock)) !== undefined)
     fail('無い id の setKept(false)');
-  // 保存していないものを外しても、期限は動かない
   const bBefore = await store.getMeta(b.id);
   const unkeptB = await store.setKept(b.id, false, clock);
   if (JSON.stringify(unkeptB) !== JSON.stringify(bBefore))
     fail('保存していないものの setKept(false) が控えを変えた（期限を延ばした）');
 
-  // 保存中は期限でも未結び付け1時間でも消えない
   const farFuture = at(400 * DAY);
   clock = farFuture;
   const unkeptIds = [b, c, d, e, f, g, h].map((meta) => meta.id);
@@ -713,9 +693,7 @@ async function verifyKeptAndListing(
     fail('保存中のもの（未結び付け・期限超過）が掃除で消えた');
   if ((await store.prune(farFuture)) !== 0) fail('保存中のものが2度目の掃除で消えた');
 
-  // 保存を外すと、外した時刻から保持日数後に期限が入る
   clock = at(401 * DAY);
-  // `a` は未結び付けのまま、作成から1年以上たっている（上で保存中のまま掃除を越えた）。
   // 一度保存されたものは「上げただけの残骸」ではないので、外しても未結び付け1時間の規則では消えない
   const unkeptA = await store.setKept(a.id, false, clock);
   if (unkeptA === undefined) fail('setKept(false) が控えを返さない');
@@ -725,7 +703,6 @@ async function verifyKeptAndListing(
     fail(`外した時刻 + 保持日数が期限になっていない: ${unkeptA?.expiresAt}`);
   if ((await store.getMeta(a.id))?.expiresAt !== new Date(dueAt).toISOString())
     fail('getMeta が外したあとの期限を返さない');
-  // 作成からの期限（とうに過ぎている）で、外した瞬間に消えてはならない
   if ((await store.prune(clock)) !== 0) fail('保存を外した瞬間に掃除で消えた');
   if ((await store.prune(new Date(clock.getTime() + ATTACHMENT_UNBOUND_TTL_MS + 1000))) !== 0)
     fail('保存を外した未結び付けのものが、未結び付け1時間の規則で消えた');
@@ -735,7 +712,6 @@ async function verifyKeptAndListing(
   if ((await store.prune(new Date(dueAt))) !== 1) fail('外した期限ちょうどで消えない');
   if ((await store.getMeta(a.id)) !== undefined) fail('外した期限ちょうどで控えが残った');
 
-  // 付け直すと、外した印（releasedAt）は無くなり、また保存中として消えない。外し直せば数え直す
   clock = at(402 * DAY);
   const flip = await store.put({ name: 'flip.txt', mediaType: 'text/plain', bytes: PNG });
   await store.setKept(flip.id, true, clock);
@@ -753,7 +729,6 @@ async function verifyKeptAndListing(
   if ((await store.prune(new Date(reDue - 1))) !== 0) fail('外し直した期限の1ms前に消えた');
   if ((await store.prune(new Date(reDue))) !== 1) fail('外し直した期限ちょうどで消えない');
 
-  // 預けた時点で保存の印
   clock = at(500 * DAY);
   const keptPut = await store.put({
     name: 'kept.txt',
@@ -770,7 +745,6 @@ async function verifyKeptAndListing(
   if ((await store.prune(clock)) !== 0 || (await store.getMeta(keptPut.id)) === undefined)
     fail('kept: true で預けたものが掃除で消えた');
 
-  // 削除
   const toRemove = await store.put({ name: 'r.txt', mediaType: 'text/plain', bytes: PNG });
   if (!(await store.remove(toRemove.id))) fail('remove が消したのに true を返さない');
   if ((await store.getMeta(toRemove.id)) !== undefined) fail('remove したのに控えが残った');
@@ -784,7 +758,6 @@ async function verifyKeptAndListing(
   clock = at(900 * DAY + 31 * DAY);
   if (await store.remove(stale.id)) fail('期限切れのものの remove が true（「無い」のはず）');
 
-  // 全消し
   clock = at(1000 * DAY);
   const c1 = await store.put({ name: 'c1.txt', mediaType: 'text/plain', bytes: PNG, kept: true });
   const c2 = await store.put({ name: 'c2.txt', mediaType: 'text/plain', bytes: PNG });
@@ -833,8 +806,7 @@ async function verifyWithSmallLimits(
     () => limited.put({ name: 'over.png', mediaType: 'image/png', bytes: image(IMAGE_MAX + 1) }),
     'too_large',
   );
-  // 画像の寸法（#3697）。IHDR だけの小さな png で測る。`limited` を使うのは、本線のストアの
-  // 「未結び付けの掃除」の件数（上の 5）を、ここで預けるものが動かさないため
+  // `limited` を使うのは、本線のストアの「未結び付けの掃除」の件数を、ここで預けるものが動かさないため
   const be32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
   const pngOf = (width: number, height: number) =>
     Uint8Array.from([
@@ -920,7 +892,6 @@ async function verifyWithSmallLimits(
   if ((await clocked.prune(new Date(unboundAt))) !== 1) fail('未結び付けが1時間ちょうどで消えない');
   if ((await clocked.getMeta(unbound.id)) !== undefined) fail('未結び付けが1時間ちょうどで残った');
 
-  // 報告へ結び付けたものは、未結び付けの1時間の掃除に掛からない（#4126 P2b）
   const reported = await clocked.put({ name: 'rp.txt', mediaType: 'text/plain', bytes: PNG });
   const looseTwin = await clocked.put({ name: 'lt.txt', mediaType: 'text/plain', bytes: PNG });
   await clocked.bindToManagerReport([reported.id], 'rep-prune');

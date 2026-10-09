@@ -134,10 +134,7 @@ export class FsAttachmentStore implements AttachmentStore {
     return meta;
   }
 
-  /**
-   * 流して預ける（#4128 段1）。tmp へ書きながら大きさと sha256 を数え、上限を超えたら読むのを止めて tmp ごと消す。
-   * 画像は先頭の見た目と寸法の検査に中身が要るので、上限つきで集めて `put` へ渡す（画像の上限は小さい）。
-   */
+  /** 画像は先頭と寸法の検査に中身が要るので、流さず上限つきで集めて `put` へ渡す。 */
   async putStream(input: AttachmentPutStreamInput): Promise<AttachmentMeta> {
     const limits = this.#options.limits ?? readAttachmentLimits().limits;
     const plan = planAttachmentStream(input, limits);
@@ -182,7 +179,6 @@ export class FsAttachmentStore implements AttachmentStore {
     }
   }
 
-  /** `get` と同じ判定（排他は `get` と同じく取らない。消えていれば `undefined`）。 */
   async open(id: string): Promise<{ meta: AttachmentMeta; stream: Readable } | undefined> {
     const dir = this.#idDir(id);
     if (dir === undefined) return undefined;
@@ -190,7 +186,7 @@ export class FsAttachmentStore implements AttachmentStore {
     if (meta === undefined) return undefined;
     const path = join(dir, DATA_FILE);
     try {
-      // 開いて存在を確かめてから返す（get の ENOENT → undefined と揃える）
+      // 存在を確かめてから返す: get の ENOENT → undefined と揃えるため
       await stat(path);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
@@ -469,7 +465,6 @@ export class FsAttachmentStore implements AttachmentStore {
     }
   }
 
-  /** 期限内の控えを全部読む（meta.json だけ。中身の `data` は読まない）。 */
   async #readAllLive(): Promise<AttachmentMeta[]> {
     const metas: AttachmentMeta[] = [];
     for (const name of await this.#idDirNames()) {

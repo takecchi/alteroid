@@ -13,12 +13,6 @@ import {
 } from './runner-attachments.js';
 import { createLocalRunner } from './runner-local.js';
 
-/**
- * 別口（`stageRunnerAttachment`。#4128 段3a）が、**何チャンクにも分かれて届く中身**を、順に1つのファイルへ書くこと。
- * 実際の転送はチャンクに分かれる（HTTP の本文・S3 のストリーム）。1チャンクの試験だけでは、
- * 2つめ以降のチャンクが先頭へ上書きされる形を見逃す。
- */
-
 const ID = '11111111-2222-4333-8444-555555555555';
 
 function chunksOf(total: number, chunk: number): Uint8Array[] {
@@ -97,7 +91,6 @@ describe('in-process の runner の別口は、signal で読むのをやめる�
     const firstChunk = new Promise<void>((resolve) => {
       firstChunkRead = resolve;
     });
-    // 1チャンク渡した後は、二度と次を返さない本文（応答しない送り手）
     async function* stalled(): AsyncGenerator<Uint8Array> {
       yield new Uint8Array(10);
       firstChunkRead();
@@ -132,7 +125,6 @@ describe('applyAttachmentRequestTimeout（HTTP の1リクエストの持ち時�
     expect(server.requestTimeout).toBe(300_000);
     applyAttachmentRequestTimeout(server);
     expect(server.requestTimeout).toBe(ATTACHMENT_REQUEST_TIMEOUT_MS);
-    // 2 GiB を 50 Mbps で送ると約 344 秒。それより十分長い
     expect(ATTACHMENT_REQUEST_TIMEOUT_MS).toBeGreaterThan(((2 * 1024 ** 3 * 8) / 50e6) * 1000 * 5);
   });
 

@@ -74,7 +74,6 @@ export class RunnerAttachmentRejectedError extends Error {
   }
 }
 
-/** 別口（`stageRunnerAttachment`）で断るとき。`status` は 413（大きさの超過）か 422（照合が合わない）。 */
 export class RunnerAttachmentStageError extends RunnerAttachmentRejectedError {
   readonly status: 413 | 422;
   constructor(message: string, status: 413 | 422) {
@@ -91,10 +90,7 @@ export interface StagedAttachmentEntry {
   readonly path: string;
 }
 
-/**
- * 別口で置いて照合を済ませた添付の控え（managerId + id → size・sha256・path）。runner のメモリにだけ持つ。
- * 命令の `staged: true` の参照は、これと食い違えば断る（sha256 は別口で照合済みなので読み直さない）。
- */
+/** 命令の `staged: true` の参照は、これと食い違えば断る: sha256 は別口で照合済みなので読み直さない。 */
 export class StagedAttachmentLedger {
   readonly #entries = new Map<string, StagedAttachmentEntry>();
 
@@ -139,7 +135,6 @@ export interface PlaceAttachmentsOptions {
   readonly childGid?: number;
   readonly limits?: TurnAttachmentLimits;
   readonly routeEnv?: NodeJS.ProcessEnv;
-  /** 別口で置いた添付の控え。`staged: true` の添付を解くのに要る（無ければ `staged` は断る）。 */
   readonly ledger?: StagedAttachmentLedger;
 }
 
@@ -182,7 +177,6 @@ const attachmentModes = (childGid: number | undefined) => ({
   fileMode: childGid === undefined ? 0o400 : 0o440,
 });
 
-/** `<root>/<managerId>/<id>/<attachmentDiskName(name)>`。置き場の外へ出る形は断る。 */
 function resolveAttachmentTarget(base: string, managerId: string, id: string, rawName: string) {
   const name = normalizeAttachmentName(rawName);
   const managerDir = resolve(base, managerId);
@@ -200,7 +194,7 @@ async function ensureAttachmentRoot(base: string): Promise<void> {
   await assertOwnDirectory(base);
 }
 
-/** tmp へ書いてから rename する。`wx`（O_EXCL）は symlink を辿らない。失敗したら tmp を消す。 */
+// `wx`（O_EXCL）は symlink を辿らない
 async function writeAttachmentFile(
   dir: string,
   path: string,
@@ -231,20 +225,13 @@ export interface StageRunnerAttachmentOptions {
   readonly name: string;
   readonly size: number;
   readonly sha256: string;
-  /** 中身（流れてくるまま。溜めない）。 */
   readonly body: AsyncIterable<Uint8Array>;
-  /** 1つの大きいファイルとして受ける最大バイト（`attachmentStageLimit`）。 */
   readonly limit: number;
   readonly childGid?: number;
   readonly ledger: StagedAttachmentLedger;
 }
 
-/**
- * 大きいファイルの別口（#4128 段3a）。中身を流しながら大きさと sha256 を数え、命令の添付と同じ置き先
- * （`<root>/<managerId>/<id>/<名前>`）へ置く。申告の `size` を超えた時点で読むのをやめ、終わって `size` / `sha256` が
- * 合わなければ、tmp を消して断る。**同じ id がすでに置いてあれば置き直す**（`placeRunnerAttachments` が同じ id を
- * 後のものが先のものを上書きするのと同じ。同じ中身なら結果は同じで、冪等）。
- */
+/** 同じ id がすでに置いてあれば置き直す: `placeRunnerAttachments` が同じ id を上書きするのと同じで、同じ中身なら結果は同じ（冪等）。 */
 export async function stageRunnerAttachment(
   options: StageRunnerAttachmentOptions,
 ): Promise<StagedAttachmentEntry> {
@@ -255,7 +242,6 @@ export async function stageRunnerAttachment(
   if (!SAFE_SEGMENT.test(id)) {
     throw new RunnerAttachmentRejectedError(`添付の id が dir 名にできない形: ${id}`);
   }
-  // 読む前に断る。
   if (size > limit) {
     throw new RunnerAttachmentStageError(
       `添付 ${id} の大きさ ${size} バイトが、この runner の上限 ${limit} バイトを超える（置いていない）`,
@@ -274,7 +260,6 @@ export async function stageRunnerAttachment(
     await writeAttachmentFile(target.dir, target.path, fileMode, childGid, async (handle) => {
       for await (const chunk of body) {
         received += chunk.byteLength;
-        // 超えた時点で抜ける（`for await` の抜けで本文の読みも畳まれる）。
         if (received > size) {
           throw new RunnerAttachmentStageError(
             `添付 ${id} の中身が申告の size（${size} バイト）を超えた（置かない）`,
@@ -300,7 +285,6 @@ export async function stageRunnerAttachment(
   return entry;
 }
 
-/** 命令の `staged: true` の参照を、別口で置いたファイルと突き合わせる（中身は読み直さない）。 */
 async function verifyStagedAttachment(
   attachment: RunnerAttachment,
   managerId: string,
@@ -355,7 +339,6 @@ export async function placeRunnerAttachments(
       throw new RunnerAttachmentRejectedError(`添付の id が重複している: ${attachment.id}`);
     }
     seenIds.add(attachment.id);
-    // 別口で置いてあるものの参照（`staged`）は中身を持たない。置き場で突き合わせる。
     if (attachment.data === undefined) return { attachment, bytes: undefined };
     const bytes = Buffer.from(attachment.data, 'base64');
     if (bytes.length !== attachment.size || sha256Hex(bytes) !== attachment.sha256) {
@@ -398,7 +381,6 @@ export async function placeRunnerAttachments(
       if (await ensureDirectory(dir, dirMode, childGid)) created.push(dir);
       await writeAttachmentFile(dir, path, fileMode, childGid, (handle) => handle.writeFile(bytes));
       placedFiles.push(path);
-      // 同じ id の別口の控えは、いま上書きしたので古い。
       options.ledger?.delete(managerId, attachment.id);
       const imageType = sniffAttachmentImageType(bytes);
       // 大きさと寸法は上げる時点で断るが、ここも消さない: 旧データ・上限を後から下げたとき・宣言が画像以外のものがここへ来る。

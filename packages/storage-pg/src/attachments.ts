@@ -108,9 +108,7 @@ function toMeta(row: MetaRow): AttachmentMeta {
   };
 }
 
-/**
- * 出所の分類（core の `classifyAttachmentFrom` と同じ規則を SQL で書く）。`like` の接頭辞に `_` と `%` は含まれない。
- */
+/** core の `classifyAttachmentFrom` と同じ規則を SQL で書く（片方だけ直すと食い違う）。 */
 function fromCondition(from: AttachmentFromClass): SQL {
   const uploadedBy = attachments.uploadedBy;
   const human = or(eq(uploadedBy, 'operator'), like(uploadedBy, 'account:%'));
@@ -140,7 +138,7 @@ function fromCondition(from: AttachmentFromClass): SQL {
   }
 }
 
-/** 使用量を出所ごとに数える SQL の分類式（`fromCondition` と同じ規則。値を埋め込まないので group by に同じ式を渡せる）。 */
+/** `fromCondition` と同じ規則（片方だけ直すと食い違う）。値を埋め込まないので group by に同じ式を渡せる。 */
 const FROM_CLASS_EXPR = sql<AttachmentFromClass>`case
   when ${attachments.uploadedBy} = 'operator' or ${attachments.uploadedBy} like 'account:%' then 'human'
   when ${attachments.uploadedBy} = 'clone' then 'clone'
@@ -149,16 +147,10 @@ const FROM_CLASS_EXPR = sql<AttachmentFromClass>`case
   else 'unknown'
 end`;
 
-/** 控えの照合（`blob_key in (...)`）の束の大きさ。 */
 const SWEEP_LOOKUP_BATCH = 500;
 
 export interface PgAttachmentStoreOptions extends AttachmentStoreOptions {
-  /**
-   * 中身の置き場（S3 互換。#4128 段2）。あれば、新しく入るものは全部（画像も）中身をここへ置き、行の `bytes` は null・
-   * `blob_key` に key を入れる。無ければ今までどおり pg の bytea。
-   */
   readonly blobs?: AttachmentBlobStore;
-  /** key の前に付ける prefix（`/` 終わり。{@link attachmentBlobKey}）。行には prefix 込みの key が残る。 */
   readonly blobKeyPrefix?: string;
 }
 
@@ -178,10 +170,7 @@ export class PgAttachmentStore implements AttachmentStore {
     this.#options = options;
   }
 
-  /**
-   * 行を消した後に blob を消す。**落ちても行の削除は戻さない**（残った blob は stderr に1行出す。控えの無い blob は {@link sweepOrphanBlobs} が後で掃除する。#4314）。
-   * 外部ストレージを使っていない構成（`blobs` 無し）では何もしない。
-   */
+  /** 落ちても行の削除は戻さない: 控えの無い blob は {@link sweepOrphanBlobs} が後で掃除するため。 */
   async #removeBlobs(keys: readonly (string | null)[]): Promise<void> {
     const present = keys.filter((key): key is string => key !== null);
     if (present.length === 0) return;
@@ -265,10 +254,7 @@ export class PgAttachmentStore implements AttachmentStore {
     }
   }
 
-  /**
-   * 置き場が外部ストレージなら、画像以外は blob へ流しながら数える（#4128 段2）。画像は検査（先頭・寸法）に中身が要るので、
-   * 段1と同じく上限つきで集めて `put` と同じ経路で入れる。外部ストレージが無ければ bytea へ入れるので、集めてから `put`。
-   */
+  /** 画像は検査（先頭・寸法）に中身が要るので、流さず上限つきで集めて `put` へ渡す。 */
   async putStream(input: AttachmentPutStreamInput): Promise<AttachmentMeta> {
     const limits = this.#options.limits ?? readAttachmentLimits().limits;
     const plan = planAttachmentStream(input, limits);
@@ -344,7 +330,6 @@ export class PgAttachmentStore implements AttachmentStore {
     return { meta: toMeta(row), bytes: row.bytes, blobKey: row.blobKey };
   }
 
-  /** blob から読む。置き場が無い（設定を外した）・blob が無い（消えた）なら `undefined`。 */
   async #openBlob(blobKey: string): Promise<Readable | undefined> {
     const blobs = this.#options.blobs;
     if (blobs === undefined) {
@@ -487,7 +472,7 @@ export class PgAttachmentStore implements AttachmentStore {
       .delete(attachments)
       .where(
         and(
-          // 保存中は期限でも未結び付けでも消さない（#4126 P4）
+          // 保存中は期限でも未結び付けでも消さない
           isNull(attachments.keptAt),
           or(
             lte(attachments.expiresAt, now),
@@ -508,9 +493,8 @@ export class PgAttachmentStore implements AttachmentStore {
   }
 
   /**
-   * 控えの無い blob を消す（#4314）。`blobs` が無ければ列挙もせず `undefined`。列挙するのは `<prefix>attachments/` の下だけで、
-   * 消すのは「key が `attachmentBlobKey` の形に完全に合う」「`lastModified + 猶予 <= now`（ちょうどは消す側）」
-   * 「`attachments` に同じ `blob_key` の行が無い（期限切れでまだ prune されていない行も「有る」）」のすべてを満たすものだけ。
+   * 消すのは、key が `attachmentBlobKey` の形に完全に合い、猶予を過ぎ、同じ `blob_key` の行が無いものだけ
+   * （期限切れでまだ prune されていない行も「有る」: 読めない・控えのある blob を消さない）。
    * 削除に落ちても投げず `failed` に数える。列挙が落ちたら投げる。
    */
   async sweepOrphanBlobs(now: Date): Promise<AttachmentBlobSweepResult | undefined> {

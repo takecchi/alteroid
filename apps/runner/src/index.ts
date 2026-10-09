@@ -46,10 +46,7 @@ export {
   type RunnerAppType,
 } from './app.js';
 
-/**
- * もう読まない層の provider の変数（`ALTEROID_MANAGER_PROVIDER` など。2026-10-07 の決定）が器に残っていれば、
- * 名前だけを1行ずつ stderr へ出す（起動は止めない）。黙って無視すると、置いた人間は効いていると思ったままになる。
- */
+// 黙って無視しない: 置いた人間は効いていると思ったままになるため。起動は止めない。
 export function reportRetiredLayerProviderEnv(
   env: NodeJS.ProcessEnv,
   write: (line: string) => void = writeStderrSync,
@@ -263,14 +260,13 @@ export async function main(): Promise<void> {
     );
   }
 
-  // ソケットはここでは開かない: 開く条件は Codex の資格で、届くのはデーモンが繋いだ後のため（#4118）
+  // ソケットはここでは開かない: 開く条件は Codex の資格で、届くのはデーモンが繋いだ後のため
   const peerPlan = planPeerSocket(process.env, childUser);
   const outbox = new Outbox();
   const host = createRunnerHost({
     runnerId,
     workspacePath,
     emit: (event) => {
-      // 降りた後に変わった分は、デーモンへ名乗るのと同じ行をこの器の標準出力にも出し直す（#4263・#4261）
       if (event.type === 'anthropic_route') {
         // 空になった（外れた）ときも1行出す: 出さないと、警告が消えたのか出し直しが無かったのか読めない
         const lines =
@@ -314,13 +310,11 @@ export async function main(): Promise<void> {
     outbox,
     tokenSha256,
     taskBreakdownReader,
-    // セッションへ渡すのと同じ解決（`resolveManagerModel` / `resolveWorkerModel`）から名乗る
     managerModel: resolveManagerModel(process.env),
     workerModel: resolveWorkerModel(process.env),
-    // クローンに「この器のマネージャーは Codex に頼めるか」を見せる名乗りは、hello のたびに host から読む（#3940・#4118）
   });
   const server = createAdaptorServer({ fetch: app.fetch });
-  // 大きいファイルの別口（2 GiB）が Node 既定の 300 秒で切られないように（#4128 段3a）
+  // 大きいファイルの別口（2 GiB）が Node 既定の 300 秒で切られないように
   applyAttachmentRequestTimeout(server as unknown as { requestTimeout: number });
 
   server.on('error', (error: unknown) => {
@@ -357,7 +351,6 @@ export async function main(): Promise<void> {
     stopping = true;
     server.close();
     if (socketPath !== undefined) rmSync(socketPath, { force: true });
-    // peer 用ソケットは host が持ち、`host.shutdown()` の最後に閉じる（#4118）
     const forced = setTimeout(() => process.exit(0), FORCED_EXIT_MS);
     forced.unref();
     await host.shutdown().catch(() => undefined);

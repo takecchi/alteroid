@@ -71,7 +71,6 @@ function messageOf(run: () => unknown): string | undefined {
   return undefined;
 }
 
-/** IHDR だけの小さな png。寸法の検査には大きなバッファは要らない。 */
 const be32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
 const pngOf = (width: number, height: number) =>
   bytes(PNG, be32(13), [0x49, 0x48, 0x44, 0x52], be32(width), be32(height), [8, 6, 0, 0, 0]);
@@ -246,15 +245,11 @@ describe('添付: ファイル名', () => {
 
   it('文脈上正当な ZWJ・ZWNJ は残す（IDNA ContextJ と絵文字の連結。#3882）', () => {
     const kept = [
-      // 絵文字の ZWJ 連結（家族・肌色の修飾子つき・異体字セレクタつき）
       '\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}.png',
       '\u{1F469}\u{1F3FD}\u{200D}\u{1F4BB}.png',
       '\u{2764}\u{FE0F}\u{200D}\u{1F525}.png',
-      // ペルシア語: アラビア文字（D）と D のあいだの ZWNJ（RFC 5892 A.1 の結合型の規則）
       '\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}.pdf',
-      // 結合型 T（Mn）を挟んでも残す
       '\u{0628}\u{064E}\u{200C}\u{0628}.pdf',
-      // デーヴァナーガリー: Virama の後の ZWJ・ZWNJ（RFC 5892 A.1・A.2）
       '\u{0915}\u{094D}\u{200D}\u{0937}.txt',
       '\u{0915}\u{094D}\u{200C}\u{0937}.txt',
     ];
@@ -264,22 +259,17 @@ describe('添付: ファイル名', () => {
   });
 
   it('文脈の無い ZWJ・ZWNJ は今までどおり _ にする（見えない文字による偽装を防ぐ。#3882）', () => {
-    // 同じに見えて違う名前を作れる位置
     expect(normalizeAttachmentName('report\u{200D}.pdf')).toBe('report_.pdf');
     expect(normalizeAttachmentName('a\u{200C}b')).toBe('a_b');
     expect(normalizeAttachmentName('a\u{200D}b')).toBe('a_b');
-    // 先頭・末尾・連続
     expect(normalizeAttachmentName('\u{200D}\u{1F468}.png')).toBe('_\u{1F468}.png');
     expect(normalizeAttachmentName('\u{1F468}\u{200D}')).toBe('\u{1F468}_');
     expect(normalizeAttachmentName('\u{1F468}\u{200D}\u{200D}\u{1F469}')).toBe(
       '\u{1F468}__\u{1F469}',
     );
-    // 絵文字と文字のあいだの ZWJ、アラビア文字の R（右にだけつながる）の後の ZWNJ
     expect(normalizeAttachmentName('\u{1F468}\u{200D}a')).toBe('\u{1F468}_a');
     expect(normalizeAttachmentName('\u{062F}\u{200C}\u{0628}')).toBe('\u{062F}_\u{0628}');
-    // ZWNJ は Virama が無いとラテン文字のあいだでは残さない。ZWJ はアラビア文字のあいだでも残さない
     expect(normalizeAttachmentName('\u{0628}\u{200D}\u{0628}')).toBe('\u{0628}_\u{0628}');
-    // ほかの書式制御文字は、文脈があっても _ にする
     expect(normalizeAttachmentName('\u{0915}\u{094D}\u{200B}\u{0937}')).toBe(
       '\u{0915}\u{094D}_\u{0937}',
     );
@@ -297,7 +287,6 @@ describe('添付: ファイル名', () => {
       const once = normalizeAttachmentName(name);
       expect(normalizeAttachmentName(once)).toBe(once);
     }
-    // 切り口の直前に ZWJ が来る（後ろの絵文字が切り落とされる）ときは _ にする
     expect(normalizeAttachmentName(`${'a'.repeat(252)}\u{1F468}\u{200D}\u{1F469}`)).toBe(
       `${'a'.repeat(252)}\u{1F468}_`,
     );
@@ -337,9 +326,7 @@ describe('添付: ファイル名', () => {
 
   it('ディスク名: 切り口が ZWJ・ZWNJ の直後に来ても、孤立した ZWJ・ZWNJ は残さない（#3998）', () => {
     const lone = /[‌‍]/;
-    // 絵文字（4 バイト）+ ZWJ（3 バイト）で 189 + 4 + 3 = 196 バイト。次の絵文字は切り落とされる。
     const zwj = `${'a'.repeat(189)}\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}.png`;
-    // ペルシア語の ی（2 バイト）+ ZWNJ で 191 + 2 + 3 = 196 バイト。次の文字は切り落とされる。
     const zwnj = `${'a'.repeat(191)}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}.pdf`;
     for (const [input, ext, expected] of [
       [zwj, '.png', `${'a'.repeat(189)}\u{1F468}_.png`],
@@ -352,7 +339,6 @@ describe('添付: ファイル名', () => {
       expect(Buffer.byteLength(out, 'utf8')).toBeLessThanOrEqual(200);
       expect(attachmentDiskName(out)).toBe(out);
     }
-    // 切り口から離れた文脈のある ZWJ は残す。
     const kept = `\u{1F468}\u{200D}\u{1F469}${'a'.repeat(220)}.png`;
     const keptOut = attachmentDiskName(kept);
     expect(keptOut.startsWith('\u{1F468}\u{200D}\u{1F469}a')).toBe(true);

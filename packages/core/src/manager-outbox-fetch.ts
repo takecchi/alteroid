@@ -22,41 +22,24 @@ import type {
 import type { AttachmentRef } from './schema.js';
 
 /**
- * デーモンが runner の出し箱の退避先からファイルを取りに行き、置き場へ入れる段取り（Issue #4126 P2b）。
- *
- * 報告（`report`）に載った `files` を1つずつ、この順で処理する。**取れなかったものは捨てず、名前と理由の一覧にして返す**
- * （呼び手が報告に添える。黙って落とさない）。
- *
- * 1. 個数・合計を `validateAttachmentBatch`（人間の1発言と同じ上限）で検める。超えた分は理由つきで受け取らない
- * 2. `openOutboxFile` で開き、**取りながら大きさを数えて**、runner の申告か1つの上限を超えたら途中で打ち切る
- *    （runner を信じきらない）
- * 3. 大きさと sha256 を申告と照合する。合わなければ置かない
- * 4. `store.put`（`prepareAttachment` を通る）で置く。宣言が画像なのに画像の上限を超える・中身が合わないときは
- *    `application/octet-stream` に落として入れ直す（画像としては見えないが、受け付ける）
- * 5. すぐ報告へ結び付ける（1時間の未結び付けの掃除に掛からないように）。**置けたものだけ**退避先を消させる（失敗は握る）
+ * 取れなかったものは捨てず、名前と理由の一覧にして返す: 黙って落とさない。
+ * 取りながら大きさを数えて、runner の申告か1つの上限を超えたら打ち切る: runner を信じきらない。
+ * 取った後はすぐ報告へ結び付ける: 1時間の未結び付けの掃除に掛からないように。置けたものだけ退避先を消させ、失敗は握る。
  */
 
-/** 1つの取り出しにかける時間の既定。 */
 export const OUTBOX_FETCH_FILE_TIMEOUT_MS = 30_000;
-/** 1回の報告ぶんの取り出し全体にかける時間の既定。超えた分は「受け取れなかった（時間切れ）」にして報告を先へ進める。 */
 export const OUTBOX_FETCH_TOTAL_TIMEOUT_MS = 90_000;
-/** 大きさに応じて延ばす期限の、見込む転送速度（バイト/秒。1 MiB/s）。 */
 const OUTBOX_FETCH_ASSUMED_BYTES_PER_SECOND = 1024 * 1024;
 
 /**
- * 1つのファイルを取る（または別口へ押す）時間の期限（ms）。大きさに応じて延ばす（#4128 段3b）:
- * `max(既定 30 秒, size / (1 MiB/s))`。30 MiB までは既定の 30 秒のまま（小さいファイルの期限を変えない）。
- * 上限は {@link ATTACHMENT_REQUEST_TIMEOUT_MS}（1時間。runner 側の1リクエストの持ち時間）。2 GiB は 2048 秒（約34分）。
+ * 大きさに応じて期限を延ばす: 大きいファイルが既定の 30 秒で時間切れにならないように。
+ * 上限は {@link ATTACHMENT_REQUEST_TIMEOUT_MS}（runner 側の1リクエストの持ち時間）。
  */
 export function outboxFetchDeadlineMs(size: number): number {
   const scaled = Math.ceil((Math.max(0, size) / OUTBOX_FETCH_ASSUMED_BYTES_PER_SECOND) * 1000);
   return Math.min(ATTACHMENT_REQUEST_TIMEOUT_MS, Math.max(OUTBOX_FETCH_FILE_TIMEOUT_MS, scaled));
 }
 
-/**
- * 1回の報告ぶんの取り出し全体の期限（ms）。既定の 90 秒に、各ファイルの期限が既定の 30 秒を超えて延びた分を足す
- * （小さいファイルだけの報告は 90 秒のまま。大きいファイルの分だけ延びる）。上限は1時間。
- */
 export function outboxFetchTotalDeadlineMs(fileDeadlinesMs: readonly number[]): number {
   const extension = fileDeadlinesMs.reduce(
     (acc, ms) => acc + Math.max(0, ms - OUTBOX_FETCH_FILE_TIMEOUT_MS),
@@ -65,7 +48,6 @@ export function outboxFetchTotalDeadlineMs(fileDeadlinesMs: readonly number[]): 
   return Math.min(ATTACHMENT_REQUEST_TIMEOUT_MS, OUTBOX_FETCH_TOTAL_TIMEOUT_MS + extension);
 }
 
-/** 退避先を消させる呼び出し1回の時間。 */
 export const OUTBOX_DELETE_TIMEOUT_MS = 5_000;
 
 export interface ManagerReportFiles {
@@ -75,10 +57,8 @@ export interface ManagerReportFiles {
 
 export interface FetchManagerOutboxInput {
   readonly runner: RunnerClient;
-  /** runner が `manager-outbox` を名乗っているか。名乗っていなければ取りに行かず、rejected に落とす。 */
   readonly runnerNamesOutbox: boolean;
   readonly managerId: string;
-  /** 結び付け先の報告の id。 */
   readonly reportId: string;
   readonly files: readonly RunnerOutboxFile[];
   readonly rejectedFiles: readonly RunnerOutboxRejectedFile[];
@@ -90,7 +70,7 @@ export interface FetchManagerOutboxInput {
 
 type Rejected = { name: string; reason: string };
 
-/** 断ったファイルの名前を、クローンのターンへ出してよい形にする（制御文字・改行を持ち込ませない）。 */
+/** 制御文字・改行をクローンのターンへ持ち込ませない。 */
 export function rejectedFileOf(file: { name: string; reason: string }): Rejected {
   return {
     name: normalizeAttachmentName(file.name),
@@ -98,10 +78,8 @@ export function rejectedFileOf(file: { name: string; reason: string }): Rejected
   };
 }
 
-/** 画像として入れ直さず、画像でない種類に落とすときの種類。 */
 const FALLBACK_MEDIA_TYPE = 'application/octet-stream';
 
-/** 宣言が画像のときだけ、octet-stream に落として入れ直してよい断り方。 */
 const IMAGE_FALLBACK_CODES: ReadonlySet<string> = new Set([
   'magic_mismatch',
   'too_large',
@@ -127,7 +105,6 @@ export async function fetchManagerOutbox(
     return { attachments, rejected };
   }
 
-  // 注入（試験用）があればそれを優先する。無ければ大きさに応じて延ばす
   const fileTimeoutOf = (file: RunnerOutboxFile): number =>
     input.fileTimeoutMs ?? outboxFetchDeadlineMs(file.size);
   const totalTimeoutMs =
@@ -138,7 +115,7 @@ export async function fetchManagerOutbox(
 
   for (const file of input.files) {
     const name = normalizeAttachmentName(file.name);
-    // 個数・合計は申告の大きさで先に検める（取りに行く前に断れる）。取った後の実際の大きさは下で照合する。
+    // 個数・合計は申告の大きさで先に検める: 取りに行く前に断れる
     try {
       validateAttachmentBatch(
         [
@@ -188,12 +165,12 @@ export async function fetchManagerOutbox(
     } else {
       rejected.push({ name, reason: outcome.reason });
       // 大きさで断ったもの（二度と取りに行かない）も消させる: 外部ストレージの無いデーモンが断る大きいファイルを、
-      // runner の退避先に24時間の掃除まで溜めないため（#4128 段3b）
+      // runner の退避先に24時間の掃除まで溜めないため
       if (outcome.neverFetch === true) toRemove.push(file);
     }
   }
 
-  // 置けたもの（と、二度と取りに行かないもの）の退避先を消させる。失敗は握る（取りこぼしは runner の24時間の掃除が消す）。報告は止めない。
+  // 失敗は握る: 取りこぼしは runner の24時間の掃除が消す。報告は止めない
   const remove = runner.deleteOutboxFile?.bind(runner);
   if (remove !== undefined && toRemove.length > 0) {
     await Promise.allSettled(
@@ -231,14 +208,13 @@ async function fetchOne(input: {
       neverFetch: true,
     };
   }
-  // 画像（宣言）は先頭の検めと入れ直しに中身が要るので、これまでどおり集めて入れる。それ以外は置き場へ流す（#4128 段1）
+  // 画像（宣言）は先頭の検めと入れ直しに中身が要るので集める。それ以外は置き場へ流す
   const image = isAttachmentImageMediaType(file.mediaType.split(';')[0]!.trim().toLowerCase());
   let bytes: Uint8Array | undefined;
   try {
     const opening = input.open(input.managerId, file.fileId, { signal });
     const content = await raceAbort(opening, signal);
     if (content === 'aborted') {
-      // 待つのをやめた後に開けてしまった繋ぎは畳む
       void opening.then(
         (late) => (late === undefined ? undefined : closeBody(late.body)),
         () => undefined,
@@ -298,10 +274,6 @@ type FetchOneInput = Parameters<typeof fetchOne>[0];
 
 class OutboxStreamStop extends Error {}
 
-/**
- * 画像でないファイルを、集めずに置き場へ流す（#4128 段1）。取りながら大きさと sha256 を数え、申告を超えたら打ち切る。
- * 流し終えてから申告と照合し、合わなければ**入れたものを消す**（これまでの「照合してから入れる」と結果が同じ）。
- */
 async function streamToStore(
   input: FetchOneInput,
   body: AsyncIterable<Uint8Array>,
@@ -374,7 +346,6 @@ async function streamToStore(
   }
   const mismatch = mismatchOf(file, total, hash);
   if (mismatch !== undefined) {
-    // 照合に落ちたら、入れたものを消す
     await input.store.remove(meta.id).catch(() => undefined);
     return { ok: false, reason: mismatch };
   }
@@ -429,7 +400,7 @@ async function putWithImageFallback(
       IMAGE_FALLBACK_CODES.has(error.code) &&
       isAttachmentImageMediaType(input.mediaType.split(';')[0]!.trim().toLowerCase())
     ) {
-      // 画像の上限・中身の検めに落ちた画像は、受け付けはするが画像としては見えない種類で入れ直す（PRD「添付」）。
+      // 画像の上限・中身の検めに落ちた画像は、受け付けはするが画像としては見えない種類で入れ直す
       return store.put({ ...input, mediaType: FALLBACK_MEDIA_TYPE });
     }
     throw error;
@@ -438,7 +409,6 @@ async function putWithImageFallback(
 
 type ReadResult = { kind: 'ok'; bytes: Uint8Array } | { kind: 'too_large' } | { kind: 'aborted' };
 
-/** 取りながら数え、`maxBytes` を超えた時点で打ち切る。`signal` が中断されたら待たずに抜ける。 */
 async function readBounded(
   body: AsyncIterable<Uint8Array>,
   maxBytes: number,
@@ -472,7 +442,6 @@ function closeBody(body: AsyncIterable<Uint8Array>): Promise<void> {
   );
 }
 
-/** `promise` と中断を競わせる。中断が先なら `'aborted'`。 */
 function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | 'aborted'> {
   if (signal.aborted) return Promise.resolve('aborted');
   return new Promise<T | 'aborted'>((resolve, reject) => {

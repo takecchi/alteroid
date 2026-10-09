@@ -14,10 +14,8 @@ import { reasonOf } from './dropped-record.js';
 import type { AttachmentRef } from './schema.js';
 
 /**
- * クローンが手元のファイルを添付の置き場へ入れる（`file_put` の実体。Issue #4126）。
- *
  * 検証は必ず置き場の `put`（`prepareAttachment`。3実装で同じ検査）を通す。ここで先に見るのは、
- * 読む前でなければ意味が無いもの（通常ファイルか・上限・資格の置き場）だけである。
+ * 読む前でなければ意味が無いもの（通常ファイルか・上限・資格の置き場）だけにする。
  */
 
 const MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, string>> = {
@@ -54,16 +52,13 @@ const MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, string>> = {
 
 export const FILE_PUT_FALLBACK_MEDIA_TYPE = 'application/octet-stream';
 
-/** 拡張子からの小さな推定。無ければ `application/octet-stream`。中身は見ない（画像は置き場が magic で照合する）。 */
+/** 中身は見ない: 画像は置き場が magic で照合する。 */
 export function guessMediaTypeFromPath(path: string): string {
   return MEDIA_TYPES_BY_EXTENSION[extname(path).toLowerCase()] ?? FILE_PUT_FALLBACK_MEDIA_TYPE;
 }
 
-/** 資格が置かれている場所。どちらも `realpath` 済み。 */
 export interface CredentialSources {
-  /** `ALTEROID_CREDENTIAL_DIR` が指すディレクトリ。 */
   readonly dir?: string;
-  /** 名前が `_FILE` で終わる環境変数の名前 → それが指すファイル。 */
   readonly files: ReadonlyMap<string, string>;
 }
 
@@ -72,10 +67,6 @@ function isInside(dir: string, path: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
-/**
- * `realPath`（`realpath` 済み）が資格の置き場なら、断る理由を返す。そうでなければ `undefined`。
- * ディスクを見ない純関数（`CredentialSources` の組み立てが {@link resolveCredentialSources}）。
- */
 export function credentialSourceRefusal(
   realPath: string,
   sources: CredentialSources,
@@ -99,10 +90,7 @@ async function realpathOrResolve(path: string): Promise<string> {
   }
 }
 
-/**
- * 環境変数から資格の置き場を集める。**無いものは `resolve` へ倒す**（realpath が通らない場所を
- * 「無いから資格ではない」と読むと、指しているだけの変数を素通りさせてしまう）。
- */
+/** 無いものは `resolve` へ倒す: realpath が通らない場所を「無いから資格ではない」と読むと、指しているだけの変数を素通りさせてしまう。 */
 export async function resolveCredentialSources(env: NodeJS.ProcessEnv): Promise<CredentialSources> {
   const dirRaw = env.ALTEROID_CREDENTIAL_DIR?.trim();
   const files = new Map<string, string>();
@@ -137,7 +125,6 @@ export async function putLocalFile(
   input: {
     readonly path: string;
     readonly name?: string | undefined;
-    /** true なら保存の印つきで入れる（期限なし・未結び付け1時間の掃除にも掛からない。#4126 P5）。 */
     readonly keep?: boolean | undefined;
   },
   options: PutLocalFileOptions,
@@ -199,9 +186,8 @@ export async function putLocalFile(
   }
   const fileHandle = handle;
 
-  // 同じ handle から読む（stat と読みの間にパスが差し替わっても、開いたファイルを読む）。
+  // 同じ handle から読む: stat と読みの間にパスが差し替わっても、開いたファイルを読む。
   // stat した大きさ+1 バイトだけ読む: stat から open までに伸びたぶん（上限を超えうる）を読まないため。
-  // 入れ直し（下の寸法の落とし）のたびに先頭から読み直す。
   const bodyOf = async function* (): AsyncGenerator<Uint8Array> {
     let total = 0;
     try {
@@ -230,7 +216,7 @@ export async function putLocalFile(
     try {
       meta = await stores.attachments.putStream({ ...putInput, mediaType, body: bodyOf() });
     } catch (error) {
-      // 寸法の上限（#4131）も、サイズの上限と同じく「受け付けるが画像としては見えない」: 宣言を落として入れ直す
+      // 寸法の上限も、サイズの上限と同じく「受け付けるが画像としては見えない」: 宣言を落として入れ直す
       if (error instanceof AttachmentRejectedError && error.code === 'image_dimension_too_large') {
         note =
           `画像の寸法の上限を超えるので（${reasonOf(error)}）、画像ではなくファイル` +

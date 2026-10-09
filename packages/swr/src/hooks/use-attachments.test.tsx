@@ -107,7 +107,6 @@ describe('useAttachments', () => {
   });
 
   it('保存の付け外しは応答で行を差し替え、一覧は取り直さない', async () => {
-    // openapi-fetch は Request を渡すので route の init は空。個別の行（/attachments/:id）は1つの動詞しか呼ばれない筋書きにする
     const stub = stubFetch((url) => {
       const u = new URL(url);
       if (u.pathname === '/attachments/a') {
@@ -173,7 +172,6 @@ describe('useAttachments', () => {
     let items = [meta('a')];
     const stub = stubFetch((url) => {
       const u = new URL(url);
-      // 上げる要求だけが name を運ぶ
       if (u.pathname === '/attachments' && u.searchParams.has('name')) {
         items = [meta('n', { keptAt: '2026-10-02T00:00:00.000Z' }), ...items];
         return json(items[0]);

@@ -43,7 +43,6 @@ let root: string;
 function makeApp(options: { copies?: boolean; now?: () => Date } = {}) {
   return createApp({
     ...(options.now === undefined ? {} : { now: options.now }),
-    // 添付の口だけを叩くので、クローンは中身を使わない
     clone: {} as CloneHost,
     stores,
     token: 'test-token',
@@ -131,13 +130,11 @@ describe('GET /attachments（置き場の一覧と使用量）', () => {
     const metaResponse = await app.request(`/attachments/${meta.id}/meta`, { headers: OPERATOR });
     expect(((await metaResponse.json()) as Meta).id).toBe(meta.id);
 
-    // `limits` という名前の id として扱われる（上限を返さない・500 にもならない）
     expect((await patch('limits', { kept: true })).status).toBe(404);
     expect((await del('limits')).status).toBe(404);
   });
 
   it('新しい順に返し、usage は絞り込みに関わらず期限内の全体', async () => {
-    // 預けた時刻はストアの時計で決まる（実時間で待たない）
     let clock = new Date('2031-03-01T00:00:00.000Z');
     stores = {
       ...createMemoryStores(),
@@ -153,7 +150,6 @@ describe('GET /attachments（置き場の一覧と使用量）', () => {
     expect(listing.body.nextCursor).toBeUndefined();
     expect(listing.body.usage.count).toBe(2);
     expect(listing.body.usage.totalBytes).toBe(4);
-    // 上げた主体は operator なので human（5つの出所は常に全部在る）
     expect(listing.body.usage.byFrom.human).toEqual({ count: 2, totalBytes: 4 });
     expect(Object.keys(listing.body.usage.byFrom).sort()).toEqual([
       'clone',
@@ -248,7 +244,6 @@ describe('GET /attachments（置き場の一覧と使用量）', () => {
     expect(
       (await app.request(`/attachments/${expiring.id}/meta`, { headers: OPERATOR })).status,
     ).toBe(404);
-    // 期限切れには保存の印も付けられず、消す操作も「無い」
     expect((await patch(expiring.id, { kept: true })).status).toBe(404);
     expect((await del(expiring.id)).status).toBe(404);
   });
@@ -297,7 +292,6 @@ describe('PATCH /attachments/:id（保存の印を付ける・外す）', () => 
     expect(unkept.status).toBe(200);
     const unkeptBody = (await unkept.json()) as Meta;
     expect(unkeptBody.keptAt).toBeUndefined();
-    // 外した時刻から保持日数（既定 30 日）後
     const days = (Date.parse(unkeptBody.expiresAt!) - Date.now()) / 86_400_000;
     expect(days).toBeGreaterThan(29.9);
     expect(days).toBeLessThanOrEqual(30);
@@ -384,7 +378,6 @@ describe('連携の鍵（altk_）は POST /attachments だけ通り、keep は�
       expect(await refused.json()).toMatchObject({ error: expect.stringContaining('keep') });
     }
     expect((await list()).body.items).toHaveLength(1);
-    // 鍵が keep なしで預けたものは、期限つきのまま
     expect((await list()).body.items[0]!.keptAt).toBeUndefined();
   });
 

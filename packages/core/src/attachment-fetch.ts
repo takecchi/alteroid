@@ -90,7 +90,6 @@ export async function fetchAttachmentCopy(
         () => false,
       ))
     ) {
-      // 写しが使えるなら中身は読まない
       stream.destroy();
       return copy(true, existing.length, meta.sha256);
     }
@@ -99,7 +98,6 @@ export async function fetchAttachmentCopy(
   // 一時ファイル名に名前を足さない: NAME_MAX を超えるため
   const tmp = resolve(dir, `.${randomUUID()}.tmp`);
   try {
-    // 書きながら大きさと sha256 を数える（写しの控えは書いたものから作る）
     const hash = createHash('sha256');
     let size = 0;
     await pipeline(

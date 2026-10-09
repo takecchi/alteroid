@@ -95,8 +95,7 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
     }
   };
 
-  // 控えの無い blob の掃除（#4314）: バケットの列挙は事業者によって有料なので、1日に1回までにする。
-  // 最後に呼んだ時刻はメモリだけに持つ（起動直後の1回目は呼ぶ）。失敗しても時刻は戻さない（毎周列挙し直さない）。
+  // バケットの列挙は事業者によって有料なので、1日に1回までにする。失敗しても時刻は戻さない: 毎周列挙し直さないため。
   let lastBlobSweepAt: number | undefined;
   const sweepOrphanBlobs = async (): Promise<void> => {
     const sweep = options.stores.attachments.sweepOrphanBlobs;
