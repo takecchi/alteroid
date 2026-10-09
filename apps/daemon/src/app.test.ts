@@ -10537,21 +10537,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
     });
   });
 
-  /**
-   * **残り13経路（#424 の「終わる条件」の1点目）。** 題が名指しした2経路だけを
-   * 塞いでも穴は残る——`validator('json', …)` を素で書ける限り「hook を渡し
-   * 忘れた経路」が作れてしまい、実際 `PUT /tokens` は #422 のレビュー中に
-   * 見つかるまで塞がっていなかった。ここは `jsonBody` を通した**全経路**に
-   * ついて、検査に落ちた 400 の本文へ**送った値が1文字も出ない**ことを、
-   * `createApp` を実際に叩いて固定する。
-   *
-   * 各ケースは「**正しい形の項目に値を載せ、別の項目だけを壊す**」形にしてある
-   * ——既定のフックは `data` にリクエスト本文を丸写しするので、壊れていない
-   * ほうの項目に載せた値まで一緒に出る。これが Issue 本文の実測そのものである。
-   *
-   * **値はすべてダミーである**（`CRED-SECRET-VALUE`）。本物のトークンでは
-   * 試さない（AGENTS.md「秘密の扱い」）。
-   */
   const DUMMY = 'CRED-SECRET-VALUE';
   const hookedRoutes: { name: string; path: string; method: string; body: unknown }[] = [
     {
@@ -10565,7 +10550,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       name: 'POST /approvals/answer',
       path: '/approvals/answer',
       method: 'POST',
-      // 2件目に `id` が無い＝トップレベルで落ちる。1件目の値まで出ることを見る。
       body: { answers: [{ id: 'ap-1', answer: DUMMY }, { answer: DUMMY }] },
     },
     {
@@ -10578,7 +10562,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       name: 'POST /events',
       path: '/events',
       method: 'POST',
-      // `payload` は `z.unknown()`＝何でも載る。webhook の中身がそのまま来る口である。
       body: { source: '', payload: { token: DUMMY } },
     },
     {
@@ -10615,8 +10598,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       name: 'PUT /credentials',
       path: '/credentials',
       method: 'PUT',
-      // 名前の形（英大文字・数字・_）に落ちる。**値を載せた行ごと**落とすので、
-      // 既定のフックなら値がそのまま応答へ出る。
       body: { credentials: [{ name: 'npm_token', value: DUMMY }] },
     },
     {
@@ -10651,34 +10632,20 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       const text = await response.text();
       expect(text).not.toContain(DUMMY);
 
-      // **`data` キーが無く、`error` が文字列であること。** ここまで見ないと、
-      // `data` だけ消して `error`（issue の配列）を残す直しで緑になる——issue の
-      // `path` は残ってよいが、`input` を含む形の issue を素通しにすると値が戻る。
       const body = JSON.parse(text) as Record<string, unknown>;
       expect(body).not.toHaveProperty('data');
       expect(typeof body.error).toBe('string');
     });
   }
 
-  /**
-   * **⭐3案目（#424 の「終わる条件」の2点目）の歯。** 上の13本は「いま在る経路」
-   * しか見ない——**次に足される経路**が `validator('json', …)` を素で書けば、
-   * 何も鳴らないまま同じ穴が開く。ここは `app.ts` の原文を読んで、
-   * `jsonBody` の中の1箇所を除いて `validator('json'` の直書きが**0件**である
-   * ことを見る。**新しい経路を素の `validator` で足した瞬間に赤くなる。**
-   *
-   * 原文を読むのは、型でも実行時でもこの不変条件を表せないからである
-   * （`validator` は hono-openapi の公開 API なので、import を禁じる手が無い）。
-   */
+  // 原文を読む: 型でも実行時でもこの不変条件を表せない（`validator` は公開 API で import を禁じられない）から。
   it("app.ts に validator('json' の直書きが1件も無い（jsonBody の中の1箇所を除く）", () => {
     const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
     const bare = source
       .split('\n')
       .map((line, index) => ({ line: index + 1, text: line }))
       .filter((entry) => entry.text.includes("validator('json'"))
-      // 注釈（`*` / `//` で始まる行）は経路ではない。
       .filter((entry) => !/^\s*(\*|\/\/)/.test(entry.text))
-      // `jsonBody` の実体そのもの。ここだけが素の `validator` を呼んでよい。
       .filter((entry) => !entry.text.includes('return validator('));
 
     expect(bare).toEqual([]);
@@ -10693,13 +10660,7 @@ function fakeRunner(
   const receivedCredentials: { name: string; value: string }[][] = [];
   return {
     runnerId,
-    // **既定は `true`（既存テストの前提を変えない）。** `false` を渡すと
-    // 「`/health` から一度も `runnerId` を受け取れていない」状態を再現できる
-    // （#330 の歯のために足した）。
     runnerIdKnown: options.runnerIdKnown ?? true,
-    // **既定は `true`（既存テストの前提を変えない）。** `false` を渡すと
-    // 「`/health` から一度も `workspacePath` を受け取れていない」状態を
-    // 再現できる（#389 の歯のために足した）。
     workspacePathKnown: options.workspacePathKnown ?? true,
     workspacePath: options.workspacePath ?? '/work',
     received,
@@ -10710,12 +10671,6 @@ function fakeRunner(
     async profile() {
       return undefined;
     },
-    /**
-     * 降ってきた鍵。**器の側の振る舞いを最小限まねる**（空文字は外す）。
-     *
-     * 既存の `credentials()` は常に空を返していたが、それでは「差があるものだけ
-     * 降ろす」を確かめられない（何を持っているかを答えられない器になる）。
-     */
     held: new Map<string, string>(),
     async credentials() {
       return [...this.held].map(([name, value]) => ({
@@ -10754,11 +10709,7 @@ function registryOf(runners: ReturnType<typeof fakeRunner>[]) {
   } as never;
 }
 
-/**
- * **本番と同じ1本道を通す。** 器（評価）の成否だけを差し替える。
- *
- * ここを偽物のサービスにすると、直列化も検査もテストの外に出てしまう。
- */
+// サービスごと偽物にしない: 直列化も検査もテストの外に出てしまうから。
 function profileService(
   target: Stores,
   options: { rejects?: string; runners?: ReturnType<typeof fakeRunner>[] } = {},
@@ -10774,8 +10725,6 @@ function profileService(
         if (prepared.ok) await prepared.commit();
         return prepared;
       },
-      // **`prepare` が本体である。** 本物も評価と反映を分けている（正本へ書けなかった
-      // 更新がクローンにだけ残らないようにするため）。
       async prepare(script: string) {
         const base =
           options.rejects === undefined
@@ -10788,13 +10737,6 @@ function profileService(
   });
 }
 
-/**
- * 画面（apps/web）を別オリジンに置けるようにするための境界。
- *
- * ここで守っているのは「開けたつもりの範囲」と「実際に通る範囲」を一致させること
- * である。CORS を雑に開けると `deliberateClient` の前提（preflight が通らない）が
- * 消え、人間が開いた任意のページからクローンのターンを起こせる状態に戻る。
- */
 describe('ブラウザからの呼び出しを許すオリジン', () => {
   const stores = createMemoryStores();
 
@@ -10808,8 +10750,6 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
     });
   }
 
-  // `requestedMethod` は既定で `POST`（既存の呼び方を1件も変えないため）。
-  // PATCH の preflight を組むときだけ明示で渡す。
   const preflight = (origin: string, requestedMethod = 'POST') => ({
     method: 'OPTIONS',
     headers: {
@@ -10820,7 +10760,6 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
   });
 
   it('既定（列挙なし）では CORS ヘッダを返さない', async () => {
-    // ここが今までの姿勢。既定で1バイトも変わらないことを固定する。
     const app = appWith([]);
     const response = await app.request('/health', { headers: { origin: 'https://evil.example' } });
 
@@ -10834,7 +10773,6 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
     });
 
     expect(response.headers.get('access-control-allow-origin')).toBe('https://www.example.com');
-    // Cookie は運ばせない設計なので、資格情報の許可は返さない。
     expect(response.headers.get('access-control-allow-credentials')).toBeNull();
   });
 
@@ -10842,7 +10780,6 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
     const app = appWith(['https://www.example.com']);
     const response = await app.request('/chat', preflight('https://evil.example'));
 
-    // 許可ヘッダが返らない＝ブラウザが本リクエストを送らない。
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
   });
 
@@ -10856,7 +10793,6 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
   });
 
   it('CORS を開けても、単純リクエストは 415 のまま', async () => {
-    // 許可したオリジンからでも、本文検査の無い POST は content-type を要求する。
     const app = appWith(['https://www.example.com']);
     const response = await app.request('/shutdown', {
       method: 'POST',
@@ -10868,11 +10804,6 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
   });
 
   it('PATCH（台帳の本文を後から直す）の preflight が通る（Issue #580）', async () => {
-    // **人間の困りごとに直接対応する歯。** `PATCH /commitments/:id` は
-    // アプリ全体で唯一の PATCH 経路（台帳の編集）で、`allowMethods` に
-    // `PATCH` が無かった間はここだけが選択的に落ちていた——一覧・積む・
-    // 閉じる（いずれも GET/POST）は無傷のまま「編集だけできない」という
-    // 症状になる。
     const app = appWith(['https://www.example.com']);
     const response = await app.request(
       '/commitments/some-id',
@@ -10884,21 +10815,11 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
   });
 
   it('アプリが出しているメソッドは全部 CORS が許している（取りこぼしを名指しに頼らず拾う）', async () => {
-    // **`PATCH` を名指しで固定するだけでは同じ穴がまた開く。** 次に新しい
-    // メソッドの経路が増えても `allowMethods` の更新を忘れうるので、実際に
-    // 登録されている経路（`app.routes`）から使われているメソッドの集合を
-    // 導き、CORS が返す許可集合がそれを覆っているかをここで確かめる。
-    //
-    // `'ALL'` は `.use('*', ...)` のようなミドルウェア登録が持つ印で、
-    // ブラウザが `access-control-request-method` に積む実在のHTTPメソッドで
-    // はないので対象から外す。`OPTIONS` は preflight 自身が使うメソッドで
-    // hono の `cors()` が別枠で処理するため、経路としては登録されない。
+    // メソッドを名指しで固定しない: 次のメソッド追加で `allowMethods` の更新を忘れても拾うため。
     const app = appWith(['https://www.example.com']);
     const declaredMethods = [
       ...new Set(app.routes.map((route) => route.method).filter((method) => method !== 'ALL')),
     ];
-    // ここが0件だと「見ていない」を「無かった」と読み違える（歯自身の前提が
-    // 崩れていないことをまず確かめる）。
     expect(declaredMethods.length).toBeGreaterThan(0);
 
     const response = await app.request('/health', preflight('https://www.example.com'));
@@ -10944,15 +10865,8 @@ describe('parseAllowedOrigins', () => {
   });
 });
 
-/**
- * `GET /runners` は runner の一覧であって、**繋がっている runner の一覧ではない。**
- *
- * 上がってこない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
- * 「上がってこない」のかが区別できない（roadmap M5「runner の登録・生存判定」）。
- */
 describe('runner の生死', () => {
   it('繋がっていない runner も、宛先と状態付きで並ぶ', async () => {
-    // 挑み直しの間隔は長めに取る（この検証で見たいのは1回目の失敗の見え方）。
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
       label: 'http://runner:4518',
