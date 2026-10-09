@@ -589,6 +589,13 @@ export class PgAttachmentStore implements AttachmentStore {
 
   async list(query: AttachmentListQuery): Promise<AttachmentListPage> {
     const after = query.cursor === undefined ? undefined : decodeAttachmentCursor(query.cursor);
+    // NUL は text 列へ渡せず 22021 で投げる。memory・fs と同じく「当たるものが無い」と答える
+    if (
+      (query.conversationId !== undefined && hasNul(query.conversationId)) ||
+      (query.q !== undefined && hasNul(query.q))
+    ) {
+      return { items: [] };
+    }
     const limit = Math.max(1, Math.floor(query.limit));
     const afterAt = after === undefined ? undefined : new Date(after.createdAt);
     const conditions = [
