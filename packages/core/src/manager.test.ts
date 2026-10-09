@@ -990,6 +990,7 @@ describe('マネージャー', () => {
     const session = s.sessions[0] as FakeSession;
 
     // decision は足さない: 測っているのは decision を書き忘れた回答の読み取りそのもので、足すと対象が消える。
+    // 「やめ」の前に区切りは無い: 語境界で探すと見つからず、拒否が承認として表に出る。
     const asked = session.ask('Bash', { command: 'git push --force' }, undefined, 'req-force');
     await new Promise((resolve) => setTimeout(resolve, 0));
     await s.pool.send(managerId, 'それはやめて、代わりに差分だけ見せて', {
@@ -8049,6 +8050,7 @@ describe('生ログを読み出せなかったとき（「無い」と畳まな�
   });
 
   it('本当に預かっていないときは、いままでどおり resume を投げ、戻れなければ lost で終える', async () => {
+    // 逆向きに倒さない側: 本当に材料が無い委譲まで走行中のまま放置すると、`lost`（起こし直す対象の印）が付かず誰も起こし直さない。
     const s = await poolWithSessionStore(async () => null);
 
     const lines = await captureStderr(async () => {
