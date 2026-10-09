@@ -8,13 +8,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * 2026-10-07 のオーナー決定で、委譲ごとの provider（`Job.managerProvider`。#486 S7）を撤去した。
- * **データは移行しない**——指名していた時代の行は `managerProvider` を持ったまま残る（pg では
- * jsonb の中に残る。そちらも同じ `jobSchema` を通す）。未知のキーを捨てる `z.object` である限り、
- * それらの行は「読めない行」に落ちず普通に読めることを固定する。
- */
-
 let root: string;
 
 beforeEach(async () => {

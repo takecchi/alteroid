@@ -102,7 +102,6 @@ describe('FsPersonaStore', () => {
       await stores.persona.write('values', '# 価値観\n\nV1\n');
       const read = await stores.persona.read('values');
       const v1 = memoryVersion(read?.content ?? '');
-      // 読んだ後に別の書き手（クローン）が書く
       await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンの判断\n');
 
       const error = await stores.persona
@@ -212,42 +211,18 @@ describe('FsPersonaStore', () => {
     const BEFORE_CONTENT = '# 価値観\n\nもとの内容\n';
     await stores.persona.write('values', BEFORE_CONTENT);
 
-    // クローンを介さずエディタで直接書き換える、を模す
     await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n\n人間が書き換えた\n', 'utf8');
 
     expect((await stores.persona.read('values'))?.content).toContain('人間が書き換えた');
-    // クローンの文脈へ載る形（documents → renderMemoryDocuments）にも反映されること。
-    // かつては concat() がこの連結まで持っていたが、載せ方は core へ移った。
-    //
-    // **⚠️ かつてここは本文（`人間が書き換えた`）が焼き込みに出ることを測っていた。**
-    // premise の載り方が全文からカード（要旨＋節の目次）へ変わったので（人間の決定
-    // 2026-09-08。`memory.ts` の `renderPremiseCard`）、本文はもうどの経路にも載らない。
-    //
-    // **受け入れ基準3（外の書き換えが次の読み出しに反映される）は1ミリも弱まって
-    // いない。** 節id は `<見出しの8桁>-<sha256(見出し行＋中身)の先頭8桁>` なので
-    // （`memorySectionId`）、**本文を1文字直せばカードの行が変わる** —— 書き換え前後の
-    // カードを実際に突き合わせ、**変わったこと**と、変わったのが節id の側であることを
-    // 測る。**「載っているか」ではなく「反映されるか」を直接見る形になったので、
-    // むしろ強くなっている**（旧い歯は、キャッシュが効いていても本文がたまたま
-    // 一致すれば通りえた）。
     const cardBefore = renderMemoryDocuments([{ slug: 'values', content: BEFORE_CONTENT }]);
     const cardAfter = renderMemoryDocuments(await stores.persona.documents());
     expect(cardAfter).not.toBe(cardBefore);
     expect(cardAfter).toContain('# 価値観');
-    // 本文は載らない（カードにしたことの本体）。
     expect(cardAfter).not.toContain('人間が書き換えた');
     expect(cardAfter).not.toContain('もとの内容');
   });
 
-  /**
-   * `PersonaStore.write` の契約（`packages/core/src/store.ts`）を fs 側で測る。
-   *
-   * **同じ形の歯が3つ在る**（#370。1つで測って3つとも測ったことにしない）:
-   * fs（ここ）/ pg（`packages/storage-pg/src/index.persona.test.ts`）/ インメモリ
-   * （`packages/core/src/persona-contract.test.ts`）。
-   */
   it('write した本文は、末尾の改行が正規化されて読み戻る', async () => {
-    // 末尾に改行を持たない形で渡す（呼び手の側では正規化しない）。
     const written = await stores.persona.write('values', '# 価値観');
 
     expect(written.content).toBe('# 価値観\n');
@@ -261,24 +236,7 @@ describe('FsPersonaStore', () => {
     expect((await stores.persona.read('log'))?.content).toBe('# ログ\n\n- 追記された学び\n');
   });
 
-  /**
-   * `memory_append` の説明文（`packages/core/src/tools.ts`）は「消えた見出しは
-   * 常に 0 件のはずである」と言い切っている。**その「常に」は、追記が
-   * `before` を行の境界を保ったまま前置きすることにしか依っていない。**
-   *
-   * ここが測るのは fs 実装のその性質である——**末尾に改行が無く、最後の行が
-   * 見出しである文書**（いちばん薄いところ）へ追記して、その見出しが1行として
-   * 残ること。連結が1文字でも詰まると、見出しの行が追記の1行目と融合する。
-   *
-   * **fs はこれを二重に守っている**（`persona.ts`）: `append` が
-   * `ensureTrailingNewline(existing.content)` を通すことと、`#writeNow` が
-   * 書き込みのたびに `ensureTrailingNewline(content)` を通すこと。**片方だけ
-   * 外してもこの歯は落ちない**——落ちないことは「守られていない」ではなく、
-   * もう片方が効いているという意味である（#354 の変異試験で実測した。単独で
-   * 殺すには、既存の改行を落としたうえで連結する必要がある）。
-   */
   it('末尾の行が見出しの文書へ追記しても、その見出しの行が壊れない', async () => {
-    // 末尾に改行を持たない形で渡す（呼び手の側では正規化しない）。
     await stores.persona.write('log', '# ログ\n\n## 最後の節');
     const doc = await stores.persona.append('log', '追記した1行');
 
@@ -304,7 +262,6 @@ describe('FsPersonaStore', () => {
   it('書き込みは一時ファイル経由（人間に壊れた途中経過を読ませない）', async () => {
     await stores.persona.write('values', '# 価値観\n');
 
-    // .tmp が残っていない = rename で置き換わっている
     expect((await readdir(join(root, 'memory'))).filter((n) => n.endsWith('.tmp'))).toEqual([]);
     expect(await stores.persona.list()).toHaveLength(1);
   });
@@ -318,14 +275,12 @@ describe('FsPersonaStore', () => {
   });
 
   it('documents は全文書を本文つき・slug 昇順で返す（載せ方は core が決める）', async () => {
-    // 書いた順を slug の昇順とわざと逆にする。挿入順で通ってしまわないため。
+    // 書いた順を slug の昇順とわざと逆にする: 挿入順で通ってしまわないため
     await stores.persona.write('b', '# B\n\nい\n');
     await stores.persona.write('a', '# A\n\nあ\n');
 
     const docs = await stores.persona.documents();
 
-    // 順序と本文の有無は上の層が依存する点である（クローンは走行中に
-    // 「どの文書が変わったか」を見出しで指す）。
     expect(docs.map((d) => d.slug)).toEqual(['a', 'b']);
     expect(docs.map((d) => d.content)).toEqual(['# A\n\nあ\n', '# B\n\nい\n']);
 
@@ -335,12 +290,6 @@ describe('FsPersonaStore', () => {
     expect(all).toContain('memory: b.md');
   });
 
-  /**
-   * 保護状態（human guard）の派生値。実体は日誌にあり、ここは fs 側の置き場
-   * （`.index.json`）が正しく振る舞うかを確かめる。「断ることを測る」歯そのもの
-   * （distill が断られる／通る）は `tools.test.ts` が持つ——ここは `PersonaStore`
-   * が返す `protectionStatus` の正しさだけを見る。
-   */
   describe('protectionStatus（保護状態の派生値）', () => {
     it('索引ファイルが無ければ unknown（守る側の既定）', async () => {
       await stores.persona.write('values', '# 価値観\n');
@@ -361,8 +310,6 @@ describe('FsPersonaStore', () => {
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
     });
 
-    // 歯7: append の経路でもハッシュが更新される（write だけ直して append を
-    // 忘れる穴を塞ぐ）。
     it('append 経路でもハッシュが更新される（誤検出しない）', async () => {
       await stores.persona.write('log', '# ログ\n');
       await stores.persona.append('log', '- 追記');
@@ -370,24 +317,8 @@ describe('FsPersonaStore', () => {
       expect(await stores.persona.protectionStatus('log')).toEqual({ kind: 'clone-only' });
     });
 
-    /**
-     * 歯7の対照（変異試験で見つかった穴を塞ぐ）。
-     *
-     * **上の2つのテストだけでは、`#writeNow` のハッシュ更新を丸ごと削っても
-     * 落ちない。** `.index.json` が無い状態から読むと「索引の組み直し」が
-     * 現在の本文を直接読んで基準化するため、write()/append() 自身がハッシュを
-     * 更新していなくても、初回の組み直しに救われて正しい値が返ってしまう
-     * （実際に変異試験でこれを確認した——`#writeNow` のハッシュ更新をまるごと
-     * 消しても上の79件は1件も落ちなかった）。
-     *
-     * ここでは、いったん `protectionStatus` を呼んで索引ファイルを確定させて
-     * から2回目の書き込みを行う。索引が既に存在する状態での書き込みなら、
-     * write()/append() 自身が更新していない限り、古いハッシュが残って
-     * 次の本文と食い違い、unknown に落ちる——組み直しには救われない。
-     */
     it('索引が確定した後の write でも、ハッシュ更新は組み直しに頼らない', async () => {
       await stores.persona.write('values', '# 版1\n');
-      // ここで一度確定させる（.index.json を作る）。
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
 
       await stores.persona.write('values', '# 版2\n');
@@ -402,8 +333,6 @@ describe('FsPersonaStore', () => {
       expect(await stores.persona.protectionStatus('log2')).toEqual({ kind: 'clone-only' });
     });
 
-    // 歯6: 道具経由の書き込み直後は unknown にならない（誤検出しない）。
-    // 歯5（次のテスト）とは別の it() で測る——片方が通ってももう片方の保証にはならない。
     it('道具経由（write）の直後は unknown にならない', async () => {
       await stores.persona.write('values', '# 価値観\n\n本文\n');
 
@@ -413,27 +342,12 @@ describe('FsPersonaStore', () => {
       expect(status).toEqual({ kind: 'clone-only' });
     });
 
-    /**
-     * 歯5:「導出値と外部編集検出はセット」であること。
-     *
-     * `PersonaStore` は本文をキャッシュしない（受け入れ基準3。人間が直接書き換えた
-     * 本文は次に読んだとき必ず反映される）。**保護状態だけが古いまま返ると、
-     * 本文と保護状態の足並みが揃わない**——それが設計上の欠陥として指摘された点
-     * である。ここでは、本文が新しい値に反映されるのと同じ読み出しで、保護状態も
-     * 古いまま返らないこと（unknown に落ちること）を確かめる。
-     */
     it('外部から本文が変わったとき、保護状態が古いまま返らない（unknown になる）', async () => {
       await stores.persona.write('values', '# 価値観\n\nもとの内容\n');
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
 
-      // クローンを介さずエディタで直接書き換える、を模す（受け入れ基準3のテスト
-      // と同じ手口）。store を通さないので、この書き換えは write() / append() の
-      // ハッシュ更新を一切経由しない。
       await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n\n外から書き換えた\n', 'utf8');
 
-      // 本文はキャッシュされていないので新しい値が読める（既存テストで固定済み）
-      // ——ここではその同じ読み出しの上で、保護状態も古いまま（clone-only）
-      // 返らないことを確かめる。
       expect((await stores.persona.read('values'))?.content).toContain('外から書き換えた');
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'unknown' });
     });
@@ -474,14 +388,6 @@ describe('FsPersonaStore', () => {
     });
   });
 
-  /**
-   * 索引の組み直し（`.index.json` を走行中に失ったときの自己修復）。
-   *
-   * **`unknown` は守る側へ倒す約束のせいで、索引を失うと全文書が保護されたまま
-   * 動かせなくなる**（distill が何も畳めず、クローンには「守られている」としか
-   * 見えない——静かに凍る）。起動時の backfill だけでは、走行中に消えた場合に
-   * 次の再起動まで凍ったままになるので、読み出しのその場で日誌から組み直す。
-   */
   describe('索引の組み直し（保護状態の派生値を失ったとき）', () => {
     it('索引を消してから読むと、humanTouchedAt が日誌から復元される', async () => {
       await stores.persona.write('values', '# 価値観\n\n人間が書いた\n');
@@ -495,7 +401,6 @@ describe('FsPersonaStore', () => {
       await stores.persona.markHumanTouched('values', entry.at);
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
 
-      // 索引ファイルが走行中に消えた、を模す。
       await rm(join(root, 'memory', '.index.json'), { force: true });
 
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
@@ -507,19 +412,11 @@ describe('FsPersonaStore', () => {
 
       await rm(join(root, 'memory', '.index.json'), { force: true });
 
-      // 組み直し後も clone-only のまま——unknown に落ちて凍らない。
-      // これが無いと、この歯を入れた意味が無い。
       expect(await stores.persona.protectionStatus('notes')).toEqual({ kind: 'clone-only' });
     });
 
     it('組み直しが日誌に残る', async () => {
-      // **store を経由せず直接 `.md` を置く。** `stores.persona.write()` を使うと
-      // その呼び出し自体が（この試験用の器では索引がまだ一度も無い）最初の
-      // 索引の組み直しを引き起こしてしまい、これから確かめたい「消してからの
-      // 組み直し」と数が混ざる。ここでは「索引が一度も存在しない状態」を
-      // そのまま使う。
-      // 記憶ディレクトリは store が最初の書き込みで作る。ここは store を通さないので、
-      // 先に自分で作る（作らないと ENOENT で、確かめたい組み直しに届かない）。
+      // store を経由せず直接 `.md` を置く: write() 自体が最初の索引の組み直しを起こし、確かめたい組み直しと数が混ざるため
       await mkdir(join(root, 'memory'), { recursive: true });
       await writeFile(join(root, 'memory', 'notes.md'), '# ノート\n', 'utf8');
 
@@ -530,18 +427,13 @@ describe('FsPersonaStore', () => {
         (entry) => 'decision' in entry && entry.decision.includes('組み直した'),
       );
       expect(rebuilds).toHaveLength(1);
-      // memory_update ではないこと（記憶の本文は変わっていない）。
       expect(await stores.journal.list({ types: ['memory_update'] })).toHaveLength(0);
     });
 
     it('組み直しは1回だけで、次の読み出しでは走らない', async () => {
-      // 上のテストと同じ理由で、store を経由せず直接 `.md` を置く。
-      // 記憶ディレクトリは store が最初の書き込みで作る。ここは store を通さないので、
-      // 先に自分で作る（作らないと ENOENT で、確かめたい組み直しに届かない）。
       await mkdir(join(root, 'memory'), { recursive: true });
       await writeFile(join(root, 'memory', 'notes.md'), '# ノート\n', 'utf8');
 
-      // 複数回・複数の経路から読む。
       await stores.persona.protectionStatus('notes');
       await stores.persona.protectionStatus('notes');
       await stores.persona.read('notes');
@@ -555,32 +447,8 @@ describe('FsPersonaStore', () => {
     });
   });
 
-  /**
-   * `createdAt`（記憶の絶対条件）。
-   *
-   * **この配線（記憶の `createdAt` 対応）より前は、索引の値は `markCreatedAt`
-   * からしか動かなかった**——journal からの導出
-   * （`deriveMemoryCreatedAtFromJournal`）は `apps/daemon/src/storage.ts` の
-   * 起動時 backfill の仕事で、ここは `PersonaStore` 単体の振る舞いだけを
-   * 見ていた。**いまは違う。** `write()` / `append()` 自身が、その書き込みが
-   * 文書を作った瞬間（`before === null`）を観測して `createdAt` を直接
-   * 立てる（`#writeNow` の doc）。`markCreatedAt` はこの配線より前に作られた
-   * 行を埋める後始末に降格しており、**このファイルの下のほうのテスト
-   * （`markCreatedAt` 単体の振る舞い）は、write() が既に createdAt を
-   * 立ててしまわないよう、索引の無い生ファイル（backfill 前の昔の記憶を
-   * 模す）を直接置いて確かめる。**
-   */
   describe('createdAt（作成時刻の派生値）', () => {
     it('write() は新規作成のとき、backfill を通さずその場で createdAt を known にする（updatedAt と一致）', async () => {
-      // **この it() はこの PR で反転した。** 以前はここで「markCreatedAt を
-      // 呼んでいなければ unknown（mtime を使わない）」を確かめていた——write()
-      // は createdAt に一切触れず、backfill だけが埋める、という旧仕様の
-      // 裏返しである。**いまは write() 自身が作成そのものを観測する経路に
-      // なったので、新規作成した文書は markCreatedAt を待たずその場で known
-      // になる。** mtime を使わない、という主張自体は変わっていない——
-      // ここで使っているのは「この書き込みが刻んだ `updatedAt`」であって、
-      // ファイルシステムの `stat().mtime` を後から読み直したものではない
-      // （`memoryDocumentMetaSchema.createdAt` の doc）。
       const doc = await stores.persona.write('values', '# 価値観\n');
 
       const read = await stores.persona.read('values');
@@ -592,7 +460,6 @@ describe('FsPersonaStore', () => {
     it('既存の文書を更新しても createdAt は変わらない（updatedAt は進む）', async () => {
       const first = await stores.persona.write('values', '# 価値観\n');
       // ファイルシステムの mtime 分解能に負けないよう、確実に時刻を進める
-      // （このファイルの describedAt のテストと同じ手口）。
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       const second = await stores.persona.write('values', '# 価値観\n\n書き直した\n');
@@ -621,12 +488,7 @@ describe('FsPersonaStore', () => {
     });
 
     it('markCreatedAt を呼んだ文書は known になる（read() にも list() にも出る）', async () => {
-      // **write() ではなく、索引の無い生ファイルとして用意する。** write() 自身が
-      // 新規作成時に createdAt を立てるようになったため、persona.write() で
-      // 作ると markCreatedAt を待たずに既に known になってしまい、ここで
-      // 確かめたい「markCreatedAt 単体の効果」が隠れる。索引の無い生ファイル
-      // （backfill 前の昔の記憶を模す。「組み直しが日誌に残る」と同じ手口）を
-      // 直接置くことで、markCreatedAt が実際に反映を作る場面を再現する。
+      // write() ではなく索引の無い生ファイルを置く: write() が createdAt を立てて markCreatedAt 単体の効果が隠れるため
       await mkdir(join(root, 'memory'), { recursive: true });
       await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n', 'utf8');
 
@@ -641,7 +503,6 @@ describe('FsPersonaStore', () => {
     });
 
     it('markCreatedAt は一度きりの確定——2回目は無視される（冪等・絶対条件2）', async () => {
-      // 上のテストと同じ理由で、write() ではなく索引の無い生ファイルを直接置く。
       await mkdir(join(root, 'memory'), { recursive: true });
       await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n', 'utf8');
 
@@ -650,7 +511,6 @@ describe('FsPersonaStore', () => {
 
       expect(first).toBe(true);
       expect(second).toBe(false);
-      // 後から呼んだほうにも、より新しいほうにも動かない——最初の値のまま。
       expect((await stores.persona.read('values'))?.createdAt).toEqual({
         kind: 'known',
         at: '2026-01-02T03:04:05.000Z',
@@ -658,7 +518,6 @@ describe('FsPersonaStore', () => {
     });
 
     it('同じ引数で2回走らせても結果は変わらない（backfill の再実行を模す）', async () => {
-      // 上のテストと同じ理由で、write() ではなく索引の無い生ファイルを直接置く。
       await mkdir(join(root, 'memory'), { recursive: true });
       await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n', 'utf8');
 
@@ -680,13 +539,6 @@ describe('FsPersonaStore', () => {
     });
 
     it('削除して同じ slug を作り直すと、新しい createdAt になる', async () => {
-      // **この it() はこの PR で反転した。** 以前はここで「remove() で
-      // createdAt も一緒に消える」——削除後に同じ slug へ書き直しても
-      // markCreatedAt を呼ばない限り unknown のまま、を確かめていた。
-      // **いまは write() 自身が作成を観測するので、削除後の書き直しは
-      // それ自体が新しい作成であり、その場で新しい known な createdAt が付く**
-      // ——`remove()` が索引エントリ（＝古い createdAt）ごと消すことの帰結が、
-      // 「印が蘇らない」から「新しい印が生まれる」に変わった。
       const first = await stores.persona.write('values', '# 価値観\n');
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -698,15 +550,8 @@ describe('FsPersonaStore', () => {
       expect((await stores.persona.read('values'))?.createdAt).toEqual(second.createdAt);
     });
 
-    /**
-     * **絶対条件5「バックフィルは created_at を埋める以外のことを一切しない」**
-     * を `markCreatedAt` 単体で確かめる——本文・`updatedAt`・保護状態
-     * （`humanTouchedAt` 由来）・`description` を走行前後で突き合わせる。
-     */
     it('markCreatedAt は createdAt 以外を1つも書き換えない', async () => {
-      // 上と同じ理由で、write() ではなく索引の無い生ファイルを直接置く
-      // （markCreatedAt 単体の効果を確かめたいので、write() に createdAt を
-      // 先に立てさせない）。
+      // write() ではなく索引の無い生ファイルを置く: write() に createdAt を先に立てさせないため
       await mkdir(join(root, 'memory'), { recursive: true });
       await writeFile(
         join(root, 'memory', 'runbook.md'),
@@ -727,43 +572,16 @@ describe('FsPersonaStore', () => {
       expect(after?.kind).toBe(before?.kind);
       expect(after?.parent).toBe(before?.parent);
       expect(afterProtection).toEqual(beforeProtection);
-      // createdAt だけが動いたことも合わせて見る（before は unknown のまま）。
       expect(before?.createdAt).toEqual({ kind: 'unknown' });
       expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
     });
 
-    /**
-     * 上のテストは先に `markHumanTouched` を呼ぶ。そのせいで `protectionStatus`
-     * は `humanTouchedAt` の分岐で即 `{ kind: 'human' }` を返し、`contentSha256`
-     * を一度も見ない（`persona.ts` の `protectionStatus`）。`descriptionFreshness`
-     * も before/after を比べてはいるが、両方とも `human` という結果に吸収され、
-     * `contentSha256` / `describedAt` が消えても差が出ない構造になっている。
-     * 実際、`markCreatedAt` が `contentSha256` と `describedAt` を巻き添えで
-     * 消す変異を当てても、上のテストを含む全117ファイル2154本は1本も赤くならない
-     * （変異試験で確認済み）。
-     *
-     * ここでは `markHumanTouched` を呼ばずに、`contentSha256` と `describedAt`
-     * の両方を実際に観測できる形を作る。**この2つは `write()` を通さないと
-     * 立たない**（上のテストのように索引の無い生ファイルを直接置くだけでは
-     * 立たない）。ところが `write()` は同時に `createdAt` も立ててしまい、
-     * `markCreatedAt` は「既に値が在れば触らない」ので、そのままでは変異が
-     * 発火する前に `false` を返して終わる。
-     *
-     * そこで `write()` の直後に、索引ファイル（`.index.json`）から `createdAt`
-     * のキーだけを取り除く。**これは小細工ではなく現実の再現である** ——
-     * `contentSha256` / `describedAt` は #173 / #170 から `write()` が立てて
-     * きたのに対し、`createdAt` は #220 でこの配線が入るまで存在しなかった
-     * 列である。つまり配線より前に書かれた行はまさに「`contentSha256` /
-     * `describedAt` は在るが `createdAt` は無い」状態にある。
-     */
     it('markCreatedAt は（human 印を経由しない場合でも）contentSha256 と describedAt を書き換えない', async () => {
       await stores.persona.write(
         'runbook',
         ['---', 'description: 手順', '---', '# 手順書', '', '本文', ''].join('\n'),
       );
 
-      // #220 の配線より前に作られた行を模す: contentSha256 / describedAt は
-      // 在るが createdAt は無い。
       const indexPath = join(root, 'memory', '.index.json');
       const index = JSON.parse(await readFile(indexPath, 'utf8'));
       delete index.runbook.createdAt;
@@ -771,9 +589,6 @@ describe('FsPersonaStore', () => {
 
       const before = await stores.persona.read('runbook');
       const beforeProtection = await stores.persona.protectionStatus('runbook');
-      // 前提を確かめる: markHumanTouched を経由していないので、
-      // protectionStatus は contentSha256 を実際に比較して clone-only を返す
-      // （human の一言で吸収されない）。describedAt も生きているので fresh。
       expect(beforeProtection).toEqual({ kind: 'clone-only' });
       expect(before?.descriptionFreshness).toEqual({ kind: 'fresh' });
       expect(before?.createdAt).toEqual({ kind: 'unknown' });
@@ -786,19 +601,12 @@ describe('FsPersonaStore', () => {
       expect(after?.content).toBe(before?.content);
       expect(after?.updatedAt).toBe(before?.updatedAt);
       expect(after?.description).toBe(before?.description);
-      // contentSha256 / describedAt は直接読めない派生値なので、
-      // protectionStatus / descriptionFreshness を経由して確かめる。
       expect(afterProtection).toEqual(beforeProtection);
       expect(after?.descriptionFreshness).toEqual(before?.descriptionFreshness);
       expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
     });
   });
 
-  /**
-   * `describedAt`（#170「記憶の目次化」の派生値）。書き手は書けない——
-   * `write()` / `append()` が新旧の `description`（frontmatter）を比べて
-   * 進めるか据え置くかを決める（4-3）。
-   */
   describe('describedAt（要旨の鮮度の派生値）', () => {
     it('description を書いた直後は fresh になる（describedAt === updatedAt）', async () => {
       await stores.persona.write(
@@ -833,7 +641,6 @@ describe('FsPersonaStore', () => {
         'runbook',
         '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
       );
-      // ファイルシステムの mtime 分解能に負けないよう、確実に時刻を進める。
       await new Promise((resolve) => setTimeout(resolve, 10));
       await stores.persona.write(
         'runbook',
@@ -841,13 +648,7 @@ describe('FsPersonaStore', () => {
       );
 
       const doc = await stores.persona.read('runbook');
-      // description は変わっていないので describedAt は最初の書き込み時刻の
-      // まま据え置かれ、updatedAt はこの2回目の書き込みで進んだ——結果、
-      // describedAt < updatedAt になり stale になる。
-      // **`staleForMs` の厳密な値はここでは固定できない**（実時計・実ファイル
-      // システムの mtime 分解能に依存する、#821）。`kind` は固定値で確かめ、
-      // `staleForMs` は「正の値である」ことだけを確かめる——0 や負の値なら
-      // `resolveMemoryDescriptionFreshness` の引き算の向きが壊れている。
+      // `staleForMs` は実時計・mtime 分解能に依存するので厳密値で固定せず、正であることだけを見る
       expect(doc?.descriptionFreshness.kind).toBe('stale');
       if (doc?.descriptionFreshness.kind === 'stale') {
         expect(doc.descriptionFreshness.staleForMs).toBeGreaterThan(0);
@@ -890,12 +691,6 @@ describe('FsPersonaStore', () => {
     });
   });
 
-  /**
-   * #913: `describedBytes`（要旨を立てた時点の本文サイズ）の往復。
-   * `describedAt` と同じ通り道（`#writeNow`）を通るので、揃っていることを
-   * ここで直接確かめる——ここが1バイトでもずれると、全文書が「要旨を書いた
-   * 直後から少し変わっている」に化ける（`nextDescribedState` の doc）。
-   */
   describe('describedBytes（本文の変化量の派生値、#913）', () => {
     it('要旨を書いた直後は drift の deltaBytes が厳密に0（describedBytes と bytes の測り方が揃っている）', async () => {
       const written = await stores.persona.write(
@@ -905,9 +700,6 @@ describe('FsPersonaStore', () => {
 
       const doc = await stores.persona.read('runbook');
       expect(doc?.descriptionFreshness).toEqual({ kind: 'fresh' });
-      // fresh は drift を持たないので、bytes 自体の一致を別途確かめる
-      // （`.index.json` の describedBytes と `read()` の bytes が同じ
-      // 測り方であることの直接証拠）。
       expect(doc?.bytes).toBe(written.bytes);
     });
 
@@ -929,8 +721,7 @@ describe('FsPersonaStore', () => {
           currentBytes: doc.bytes,
           deltaBytes: doc.bytes - before.bytes,
         });
-        // 追記したぶんだけ増えている（`ensureTrailingNewline` が足す改行を
-        // 別に数えないよう、範囲での比較にする——1〜数バイトの余地を持たせる）。
+        // 範囲で比べる: `ensureTrailingNewline` が足す改行を別に数えないため
         expect(doc.descriptionFreshness.drift.kind === 'measured').toBe(true);
         if (doc.descriptionFreshness.drift.kind === 'measured') {
           expect(doc.descriptionFreshness.drift.deltaBytes).toBeGreaterThanOrEqual(
@@ -940,12 +731,6 @@ describe('FsPersonaStore', () => {
       }
     });
 
-    /**
-     * この仕組みより前に書かれた記憶（`describedAt` はあるが `describedBytes`
-     * が無い行）は `unrecorded` になる——`0`（変化なし）に化けさせない
-     * （#821 条件1と同じ形）。`.index.json` を直接書き換えて、その状態を
-     * 再現する。
-     */
     it('describedAt を持つが describedBytes を持たない既存の行は unrecorded になり、deltaBytes: 0 にならない', async () => {
       await stores.persona.write(
         'runbook',
@@ -957,8 +742,6 @@ describe('FsPersonaStore', () => {
         '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
       );
 
-      // ここまでで stale + measured のはず。次に `.index.json` を直接
-      // 書き換えて「describedBytes を持たない古い行」を再現する。
       const indexPath = join(stores.paths.memory, '.index.json');
       const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
         string,
@@ -975,13 +758,6 @@ describe('FsPersonaStore', () => {
       }
     });
 
-    /**
-     * ⭐⭐ #821 残課題のいちばん重要な歯。「本文だけの書き込み（`append`）で
-     * 基準点が立つ」——直上のテストが再現した「`describedBytes` が無い既存の
-     * 行」へ append を1回当て、`drift` が `unrecorded` から `at-least` へ
-     * 変わり、**`deltaBytes` がその append のバイト数と一致する**（0 では
-     * ない）ことを見る。
-     */
     it('describedBytes を持たない既存の行へ append すると、その場で基準点が立ち drift が at-least になる（deltaBytes は0にならない、#821 残課題）', async () => {
       await stores.persona.write(
         'runbook',
@@ -993,7 +769,6 @@ describe('FsPersonaStore', () => {
         '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
       );
 
-      // 直上のテストと同じ手口で「describedBytes を持たない古い行」を再現する。
       const indexPath = join(stores.paths.memory, '.index.json');
       const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
         string,
@@ -1018,9 +793,6 @@ describe('FsPersonaStore', () => {
       if (after?.descriptionFreshness.kind === 'stale') {
         expect(after.descriptionFreshness.drift.kind).toBe('at-least');
         if (after.descriptionFreshness.drift.kind === 'at-least') {
-          // ⛔ 0 ではない——この append 自身の増減が最初から数に乗っている
-          // （基準点を「書いた後の値」にする変異は、ここで deltaBytes: 0 を
-          // 返して落ちる）。
           expect(after.descriptionFreshness.drift.deltaBytes).not.toBe(0);
           expect(after.descriptionFreshness.drift.deltaBytes).toBeGreaterThanOrEqual(
             Buffer.byteLength(appended, 'utf8'),
@@ -1029,11 +801,6 @@ describe('FsPersonaStore', () => {
       }
     });
 
-    /**
-     * ⭐ 「弾いていないことを測る歯」。一度立った基準点は、2回目の append で
-     * 進んでいない——進んでいたら、常に「直前の1回ぶん」しか測れない道具に
-     * 戻る（#821 残課題）。
-     */
     it('一度立った基準点は、2回目の append で動かない（#821 残課題）', async () => {
       await stores.persona.write(
         'runbook',
@@ -1054,7 +821,6 @@ describe('FsPersonaStore', () => {
       delete index.runbook?.describedBytesAt;
       await writeFile(indexPath, JSON.stringify(index), 'utf8');
 
-      // 1回目の append で基準点が立つ。
       await new Promise((resolve) => setTimeout(resolve, 10));
       await stores.persona.append('runbook', '1回目の追記\n');
       const afterFirst = await stores.persona.read('runbook');
@@ -1065,8 +831,6 @@ describe('FsPersonaStore', () => {
       const firstBaselineBytes = afterFirst.descriptionFreshness.drift.baselineBytes;
       const firstBaselineAt = afterFirst.descriptionFreshness.drift.baselineAt;
 
-      // 2回目の append。基準点（baselineBytes / baselineAt）は動かないはず
-      // ——動けば「2回目の直前」の値に置き換わる。
       await new Promise((resolve) => setTimeout(resolve, 10));
       await stores.persona.append('runbook', '2回目の追記\n');
       const afterSecond = await stores.persona.read('runbook');
@@ -1077,8 +841,6 @@ describe('FsPersonaStore', () => {
         throw new Error('unreachable');
       expect(afterSecond.descriptionFreshness.drift.baselineBytes).toBe(firstBaselineBytes);
       expect(afterSecond.descriptionFreshness.drift.baselineAt).toBe(firstBaselineAt);
-      // かつ deltaBytes は「2回目の追記だけ」ではなく、基準点からの累計
-      // （1回目 + 2回目）——基準点が動いていないことの、もう1つの裏付け。
       expect(afterSecond.descriptionFreshness.drift.deltaBytes).toBeGreaterThan(
         afterFirst.descriptionFreshness.drift.deltaBytes,
       );
@@ -1130,7 +892,7 @@ describe('FsJournalStore', () => {
     await stores.journal.append({ type: 'decision', decision: '今日の分', grounds: 'g' });
 
     const journalDir = join(root, 'journal');
-    // 過去の日誌を手で置く。読まれてしまうなら壊れた行で気づける。
+    // 過去の日誌を手で置く: 読まれてしまうなら壊れた行で気づけるため
     await writeFile(join(journalDir, '2020-01-01.jsonl'), 'これは JSON ではない\n', 'utf8');
     const old = join(journalDir, '2020-01-02.jsonl');
     await writeFile(
@@ -1149,7 +911,6 @@ describe('FsJournalStore', () => {
     const entries = await stores.journal.list({ since });
     expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual(['今日の分']);
 
-    // since を外せば古い分まで見える（打ち切りは読み飛ばしであって欠落ではない）
     expect(await stores.journal.list()).toHaveLength(2);
   });
 
@@ -1166,8 +927,7 @@ describe('FsJournalStore', () => {
   it('until で窓の終端を閉じられる（新しい日のファイルを跨いで過去へ届く）', async () => {
     await stores.journal.append({ type: 'decision', decision: '今日の分', grounds: 'g' });
 
-    // 過去の1日を手で置く。**新しい日から走査が始まる**ので、`until` で
-    // 打ち切る実装だとここへ辿り着けない（読み飛ばしでなければならない）。
+    // `until` で走査を打ち切らない: 新しい日から走査するので、打ち切るとこの過去の日へ辿り着けない
     const journalDir = join(root, 'journal');
     await writeFile(
       join(journalDir, '2020-01-02.jsonl'),
@@ -1185,24 +945,10 @@ describe('FsJournalStore', () => {
     expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual(['昔の分']);
   });
 
-  /**
-   * **`order: 'asc'` では早期打ち切りの向きが反転する（issue #432 の2本目、
-   * 5-3）。** desc の既定は「新しい日から走査するので `sinceDay` を下回ったら
-   * `break`、`untilDay` を上回ったら `continue`」。asc は走査が古い日から
-   * 始まるので、この2つの役割が入れ替わる——`untilDay` を上回ったら
-   * `break`、`sinceDay` を下回ったら `continue`。
-   *
-   * **ここを反転し忘れる（desc の向きのまま asc へ流用する）と、この歯が
-   * 落ちる。** 最初に読む最古のファイル（`sinceDay` より古い）で `break`
-   * してしまい、窓の中に在るはずの「今日の分」へ一生辿り着けず、結果が
-   * 黙って空になる——読み飛ばし（`continue`）であるべきところが欠落
-   * （`break`）に化ける。
-   */
   it('asc: since より古い日のファイルは読み飛ばして続きを読む（早期打ち切りの向きが反転する。#432）', async () => {
     await stores.journal.append({ type: 'decision', decision: '今日の分', grounds: 'g' });
 
-    // 最古のファイルを手で置く。sinceDay より古いので、asc では continue
-    // （読み飛ばす）べきであって break（打ち切る）してはいけない。
+    // asc では sinceDay より古いファイルを break で打ち切らない: 窓の中の今日の分へ辿り着けず結果が黙って空になるため
     const journalDir = join(root, 'journal');
     await writeFile(
       join(journalDir, '2020-01-01.jsonl'),
@@ -1249,19 +995,6 @@ describe('FsJournalStore', () => {
     expect(await stores.journal.get('no-such-id')).toBeNull();
   });
 
-  /**
-   * **回帰: `input` を持たない `tool_use` エントリが、直列化を挟むと跡形もなく
-   * 消える（#223 と同じ形。日誌エントリ版。Issue #224）。**
-   *
-   * `append()` に渡すオブジェクトは `input` というキーを値 `undefined` として
-   * 持つ（キーは在る）ので、書き込み時の `journalEntrySchema.parse` は通る。
-   * しかし fs 版はこのエントリを `JSON.stringify` して `.jsonl` へ書く
-   * （`journal.ts` の `append`）——値が `undefined` のキーはここで丸ごと落ちる。
-   * 読み出し時は `JSON.parse` した後に `journalEntrySchema.safeParse` を通す
-   * （`parseLine`）ので、`input` が必須のままだと zod 4 の「キーの不在を許さ
-   * ない」規則に引っかかって落ち、**この行が `list()` の結果から丸ごと消える**
-   * （`createMemoryStores` は直列化しないので、この壊れ方を再現できない）。
-   */
   it('input の無い tool_use エントリが、直列化を挟んでも読み出せる（回帰）', async () => {
     const written = await stores.journal.append({
       type: 'tool_use',
@@ -1276,21 +1009,6 @@ describe('FsJournalStore', () => {
     expect((entries[0] as { input?: unknown }).input).toBeUndefined();
   });
 
-  /**
-   * **回帰（静かなほう）: `input` というキーが在って値が `undefined` の形。**
-   *
-   * これが実機で通る形である —— `manager.ts` の `case 'tool_use'` は
-   * `input: event.input` と**必ずキーを書く**ので、`event.input` が
-   * `undefined` でも「キーは在る」状態で `append()` へ来る。
-   *
-   * **上のテストとは壊れ方が違う。** キー自体を書かない形は、`input` が必須の
-   * ままだと `append()` の `journalEntrySchema.parse` がその場で投げる（大きな
-   * 音がする）。こちらは**書き込みが通ってしまう** —— zod は「キーが在って値が
-   * `undefined`」を通すからである。fs 版は JSON 行として `.jsonl` へ書くので、直列化でキーが落ち、
-   * **読み出しで初めて落ちて、その行が `list()` から黙って消える。**
-   * 跡は残らない（Issue #224）。**silent なのはこちらだけなので、この歯を
-   * 消さないこと。**
-   */
   it('input のキーが在って値が undefined でも、直列化を挟んで読み出せる（回帰・静かなほう）', async () => {
     const written = await stores.journal.append({
       type: 'tool_use',
@@ -1305,23 +1023,11 @@ describe('FsJournalStore', () => {
     expect(entries[0]).toMatchObject({ id: written.id, actor: 'manager:mgr-1', tool: 'Bash' });
   });
 
-  /**
-   * **スキーマに合わない行を「飛ばすが、跡は残す」（Issue #224）。**
-   *
-   * `runner-client.ts` の `#noteDropped` と同じ形——本文は跡に乗らず、
-   * 読めた行は今までどおり返る。`get` と `list` で扱いを変えない。
-   */
   describe('スキーマに合わない行の跡（Issue #224）', () => {
     const secret = 'ghp_000000000000000000000000000000000000';
 
     it('型は知っているが値だけ知らない行も、その行だけ飛ばす（版のずれ）', async () => {
-      // **これが「新しい値を足してよいか」を決めている性質である。**
-      // デーモンは複数の版が同時に走る（`main` / `release/prod` / 焼き込まれたイメージ）。
-      // ⟹ **新しい enum の値を持つ行を、その値を知らない古い版が読む窓が必ず在る。**
-      // ここで一覧そのものが読めなくなるなら、値は足せない。
-      //
-      // **既存の隣のテストは `type` ごと未知の行しか作っていない**（`future-type`）。
-      // 「型は既知で、フィールドの値だけ未知」は別の経路に見えるので、別に固定する。
+      // デーモンは複数の版が同時に走り、新しい enum の値の行を古い版が読む窓が必ず在る。一覧が読めなくなるなら値は足せない
       await stores.journal.append({ type: 'decision', decision: '健全な行', grounds: 'g' });
 
       const journalDir = join(root, 'journal');
@@ -1343,15 +1049,12 @@ describe('FsJournalStore', () => {
         entries = await stores.journal.list();
       });
 
-      // **一覧は読める。** 読めた行はそのまま返る。
       expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual([
         '健全な行',
       ]);
-      // **飛ばしたことは跡に残る。** しかも `type` は読めているので名乗れる。
       const trace = lines.join('\n');
       expect(trace).toContain('こちらのスキーマに合わなかった');
       expect(trace).toContain('type=token_rotation');
-      // **本文は跡に載らない**（載せてよいのは `type` とバイト数だけ）。
       expect(trace).not.toContain('新しい版が書いた行');
     });
 
@@ -1360,9 +1063,6 @@ describe('FsJournalStore', () => {
 
       const journalDir = join(root, 'journal');
       const today = new Date().toISOString().slice(0, 10);
-      // 追記のあとに、スキーマに合わない行と、JSON にすらならない行を手で足す。
-      // 本文（secret）は `journalEntrySchema` に無いフィールドへ入れておく——
-      // 跡へ本文が混ざれば、ここで拾える。
       await writeFile(
         join(journalDir, `${today}.jsonl`),
         `${JSON.stringify({
@@ -1379,20 +1079,16 @@ describe('FsJournalStore', () => {
         entries = await stores.journal.list();
       });
 
-      // 1. 読めた行（健全な1件）は今までどおり返る——回帰。
       expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual([
         '健全な行',
       ]);
 
-      // 2. 跡が stderr に出る。
       expect(lines.length).toBeGreaterThan(0);
       const joined = lines.join('');
       expect(joined).toContain('日誌の行を読み出せずに飛ばした');
-      // スキーマに合わない行（type は読める）と、JSON にならない行の両方が跡に出る。
       expect(joined).toContain('type=future-type');
       expect(joined).toContain('（type も読めない）');
 
-      // 3. **本文は跡に混ざらない。**
       expect(joined).not.toContain(secret);
     });
 
@@ -1451,10 +1147,6 @@ describe('FsJournalStore', () => {
       expect(lines.join('')).toContain('type=future-type');
     });
 
-    /**
-     * **跡でログを埋めない。** 壊れた行が大量にあるとき、同じ種別なら初出の
-     * 1行だけがその場で出て、量は呼び出しの終わりで1行にまとまる。
-     */
     it('同じ種別の行が大量にあっても、初出は1行だけ・量は呼び出しの終わりに1行でまとまる', async () => {
       const journalDir = join(root, 'journal');
       const today = new Date().toISOString().slice(0, 10);
@@ -1472,14 +1164,11 @@ describe('FsJournalStore', () => {
         await stores.journal.list();
       });
 
-      // 初出は1行だけ（`initial` の文言が複数回出ない）。
       const firstLines = lines.filter((line) => line.includes('初出'));
       expect(firstLines).toHaveLength(1);
-      // 量はまとめの1行に現れる（20件）。
       const summaryLines = lines.filter((line) => line.includes('合計'));
       expect(summaryLines).toHaveLength(1);
       expect(summaryLines[0]).toContain('unknown-shape:future-type×20');
-      // 合わせて21行（初出1 + まとめ1... ではなく、初出1本 + まとめ1本 = 2行）。
       expect(lines).toHaveLength(2);
     });
   });
@@ -1525,7 +1214,6 @@ describe('FsJournalStore', () => {
         text: 'あとで消す会話の発言',
         conversationId: 'c-later',
       });
-      // 先に1度読んで、集合を作らせる
       expect((await stores.journal.get(row.id))?.id).toBe(row.id);
       await stores.journal.append({
         type: 'conversation_deleted',
@@ -1537,25 +1225,11 @@ describe('FsJournalStore', () => {
     });
   });
 
-  /**
-   * `JournalStore` の `with` 絞りの契約（issue #418）を、**fs 実装**に対して
-   * 測る。同じ形の歯が3つ在る——インメモリ（`packages/core/src/journal-with-contract.test.ts`）
-   * / fs（このテスト）/ pg（`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。1つで
-   * 測って3つとも測ったことにしない（#370 と同じ作法）。
-   */
   describe('with 契約（issue #418）', () => {
     it('未指定=絞らない／指定=その with だけ／[]=0件／limit より前に効く', async () => {
       await verifyJournalStoreWithContract(stores.journal);
     });
 
-    /**
-     * **契約4（limit より前に効く）そのものを、fs の実ファイルに対して直接
-     * 再現する。** 上の共有契約と重なるが、こちらは #418 の症状——「マネージャー
-     * との往復が `scan` の予算を食い尽くし、人間の会話が窓の外へ落ちる」——を
-     * fs の `.jsonl` を実際に書いて確かめる形にしてある。**「絞りが効いている」
-     * ではなく「窓に食われない」を測る**（`scan` を症状が出るほど小さくし、
-     * manager の行を `scan` より多く積む）。
-     */
     it('manager の往復を scan より多く積んでも、human の発言は窓に食われない', async () => {
       await stores.journal.append({
         type: 'exchange',
@@ -1573,9 +1247,6 @@ describe('FsJournalStore', () => {
         });
       }
 
-      // scan=3 という小さい窓でも、絞りが limit より前で効いていれば human の
-      // 1件が返る。旧実装（with を返却後に絞る）だと、新しい3件はすべて
-      // manager/self なので0件になる。
       const entries = await stores.journal.list({
         limit: 3,
         types: ['exchange'],
@@ -1587,18 +1258,6 @@ describe('FsJournalStore', () => {
     });
   });
 
-  /**
-   * `JournalStore` の `order` / `after` 契約（issue #432 の2本目）を、**fs
-   * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
-   * （`packages/core/src/journal-order-with-contract.test.ts`）/ fs（この
-   * テスト）/ pg（`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。1つで測って
-   * 3つとも測ったことにしない（#418 / with 契約と同じ作法）。
-   *
-   * **fs だけが持つ危険（5-3）— 昇順の早期打ち切り（`sinceDay` / `untilDay`
-   * の break/continue）の向きが反転する。** この契約はその反転を直接は
-   * 踏まない（`since`/`until` を渡していない）ので、**反転漏れを狙った歯は
-   * 別途 `until で窓の終端を閉じられる` の隣に asc 版として置く**（下）。
-   */
   describe('order/after 契約（issue #432 の2本目）', () => {
     it('order 未指定=desc／asc は正確な逆順／after は絞り・limit より前に効く／同着を飛ばさない', async () => {
       await verifyJournalStoreOrderContract(stores.journal);
@@ -1628,7 +1287,7 @@ describe('FsJournalStore', () => {
       const path = join(stores.paths.jobs, 'commitments.json');
       await captureStderr(async () => {
         await verifyCommitmentEditUnreadableContract(stores.commitments, async (id) => {
-          // `open` は形を断るので、手編集を模して `commitments.json` へ直に足す。
+          // `open` は形を断るので、`commitments.json` へ直に足す
           const file = JSON.parse(await readFile(path, 'utf8')) as { commitments: unknown[] };
           file.commitments.push({
             id,
@@ -1650,10 +1309,6 @@ describe('FsJournalStore', () => {
     });
 
     it('旧い bytes 欄が残る JSON も読める（#1340。改名前の値は読み時に無視する）', async () => {
-      // `bytes` → `chars` への改名（#1340）より前に書かれた行を模す。
-      // `chars` 欄そのものが無く、旧い `bytes` 欄が残っている——これが
-      // 読めなくならないこと（parse が落ちないこと）と、`chars` が保存値
-      // ではなく本文から正しく導出されることの両方を確かめる。
       const dir = join(root, 'jobs');
       await mkdir(dir, { recursive: true });
       const now = new Date().toISOString();
@@ -1667,8 +1322,7 @@ describe('FsJournalStore', () => {
               kind: '調査',
               title: '改名前のやり方',
               content: legacyContent,
-              // 旧い欄。本物の bytes 相当の値を入れておく（明らかに chars とは
-              // 違う値にして、もし誤って読まれたら検出できるようにする）。
+              // chars とは明らかに違う値にする: 誤って読まれたら検出できるように
               bytes: 999999,
               createdAt: now,
               updatedAt: now,
@@ -1686,19 +1340,6 @@ describe('FsJournalStore', () => {
       expect(read?.chars).toBe([...legacyContent].length);
     });
 
-    /**
-     * **`after` によるファイル単位の枝刈り（`journal.ts` の「ファイル単位の
-     * 枝刈り」コメント）を、日付をまたいだ複数ファイルで直接確かめる。**
-     *
-     * 契約関数（`journal-order-with-contract.ts`）が積む行は同じテスト内で
-     * 短時間に積むため、全部が同じ UTC 日＝同じ1ファイルに収まる。それでは
-     * 「錨の日と違う日のファイルを丸ごと飛ばす／含める」という、この枝刈り
-     * だけが持つ性質を踏めない——1ファイルしか無ければファイル単位の判定は
-     * 常に「錨のファイルそのもの」にしか当たらない。ここでは日付が違う
-     * 3つのファイルを手で置き、錨を中間の日（2つの行を持つ）に置いて、
-     * 錨より新しい日のファイルが丸ごと落ちること（desc）／古い日のファイルが
-     * 丸ごと落ちること（asc）を確かめる。
-     */
     it('after はファイルをまたいでも正しく枝刈りする（錨より新しい日を desc で、古い日を asc で丸ごと落とす）', async () => {
       const journalDir = join(root, 'journal');
       await mkdir(journalDir, { recursive: true });
@@ -1733,8 +1374,6 @@ describe('FsJournalStore', () => {
       };
 
       await writeFile(join(journalDir, '2020-01-01.jsonl'), `${JSON.stringify(day1)}\n`, 'utf8');
-      // day2a が先の行（古い）、day2b が後の行（新しい）——fs は追記した順に
-      // 行が並ぶので、この順で書けば append の実際の形と一致する。
       await writeFile(
         join(journalDir, '2020-01-02.jsonl'),
         `${JSON.stringify(day2a)}\n${JSON.stringify(day2b)}\n`,
@@ -1742,9 +1381,6 @@ describe('FsJournalStore', () => {
       );
       await writeFile(join(journalDir, '2020-01-03.jsonl'), `${JSON.stringify(day3)}\n`, 'utf8');
 
-      // desc: day2b を錨にすると、錨より新しい日（day3 のファイル丸ごと）が
-      // 落ち、錨と同じ日のうち錨より前の行（day2a）と、錨より古い日
-      // （day1 のファイル丸ごと）が残る。
       const afterDay2bDesc = await stores.journal.list({
         order: 'desc',
         after: { id: day2b.id, at: day2b.at },
@@ -1752,9 +1388,6 @@ describe('FsJournalStore', () => {
       });
       expect(afterDay2bDesc.map((e) => e.id)).toEqual(['day2a', 'day1']);
 
-      // asc: day2a を錨にすると、錨より古い日（day1 のファイル丸ごと）が
-      // 落ち、錨と同じ日のうち錨より後の行（day2b）と、錨より新しい日
-      // （day3 のファイル丸ごと）が残る。
       const afterDay2aAsc = await stores.journal.list({
         order: 'asc',
         after: { id: day2a.id, at: day2a.at },
@@ -1764,18 +1397,6 @@ describe('FsJournalStore', () => {
     });
   });
 
-  /**
-   * `JournalQuery` の退化した値（`types: []` / `limit: 0`）の契約
-   * （issue #425）を、**fs 実装**に対して測る。同じ形の歯が3つ在る——
-   * インメモリ（`packages/core/src/journal-query-edge-contract.test.ts`）/
-   * fs（このテスト）/ pg（`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。1つで
-   * 測って3つとも測ったことにしない（`with` 契約 / `order` 契約と同じ作法）。
-   *
-   * **fs だけが持っていた壊れ方**: `list()` は `found.push(entry)` の直後に
-   * `found.length >= limit` を判定する（push-then-check）ので、`limit: 0`
-   * でも1件目を push した後で初めて 0 >= 0 に当たり、1件返っていた
-   * （`journal.ts` の `if (limit <= 0) return found;` がこの歯を直した箇所）。
-   */
   describe('listPage 契約（Issue #2604 / #2605）', () => {
     it('entries は list() と同じ／next は本当に先が在るときだけ／next で全件を過不足なく読める', async () => {
       await verifyJournalStorePageContract(stores.journal);
@@ -1788,11 +1409,6 @@ describe('FsJournalStore', () => {
     });
   });
 
-  /**
-   * `JournalStore.get` の「在るが読めない」の契約（issue #3288）を、**fs 実装**に対して測る。
-   * 読めない行を持てるのは fs・pg だけ（インメモリは `append` が形を断る）——pg は
-   * `packages/storage-pg/src/index.journal-jobs-schedule.test.ts`。
-   */
   describe('get の「在るが読めない」契約（issue #3288）', () => {
     it('読めない行の get は UnreadableJournalEntryError／無い id は null／読める行と list は巻き込まれない', async () => {
       const journalDir = join(root, 'journal');
@@ -1810,37 +1426,12 @@ describe('FsJournalStore', () => {
     });
   });
 
-  /**
-   * `JournalStore.oldestAt()`（日誌の地平。issue #1510）の契約を、**fs
-   * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
-   * （`packages/core/src/journal-horizon-contract.test.ts`）/ fs
-   * （このテスト）/ pg（`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。1つで
-   * 測って3つとも測ったことにしない（`with` 契約 / `order` 契約 /
-   * `query edge` 契約と同じ作法）。
-   *
-   * fs 実装は昇順に並べたファイル名の先頭（＝最古の日）だけを開くので、
-   * 他の日のファイルが何件・何行あっても読まない——全件走査していないことの
-   * 直接の検算にはならないが（それは別途、大量データでの実測が要る）、
-   * 少なくとも答えが正しいことはここで測る。
-   */
   describe('日誌の地平（issue #1510）', () => {
     it('空なら null／1件ならその at／複数件でも最古のまま', async () => {
       await verifyJournalStoreHorizonContract(stores.journal);
     });
   });
 
-  /**
-   * `JournalStore` の `q`（本文を語で探す）の契約（issue #250）を、**fs
-   * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
-   * （`packages/core/src/journal-search-contract.test.ts`）/ fs
-   * （`packages/storage-fs/src/index.test.ts`）/ pg
-   * （`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。1つで測って3つとも測ったことに
-   * しない（`with` 契約 / `order` 契約 / `query edge` 契約と同じ作法）。
-   *
-   * **fs 実装は素の `includes` なので、契約4（`%` / `_` はワイルドカード
-   * ではない）はここでは自明に通る。** 落ちうるのは `ILIKE` を使う pg だけ
-   * である——それでも3実装ぜんぶで測る理由は、インメモリ側の歯の doc に在る。
-   */
   describe('q 契約（issue #250）', () => {
     it('未指定=絞らない／部分一致／大文字小文字を区別しない／%_ はワイルドカードでない／""=絞らない／limit より前に効く', async () => {
       await verifyJournalStoreSearchContract(stores.journal);
@@ -1873,8 +1464,6 @@ describe('FsJobStore', () => {
     expect((await stores.jobs.getApproval('ap-1'))?.answer).toBe('よい');
   });
 
-  // #963: 取り下げも回答と同じく pendingOnly の絞り込みから外れるが、行は
-  // 消えず getApproval で理由ごと読み戻せる。
   it('取り下げた承認待ちは pendingOnly から消えるが、getApproval では理由ごと読める', async () => {
     await stores.jobs.putApproval({
       id: 'ap-withdraw',
@@ -1892,7 +1481,6 @@ describe('FsJobStore', () => {
     });
 
     expect((await stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(0);
-    // 消えたわけではない——全件（pendingOnly を外した）一覧には残る。
     expect((await stores.jobs.listApprovals()).entries).toHaveLength(1);
     const after = await stores.jobs.getApproval('ap-withdraw');
     expect(after?.withdrawnReason).toBe('自分で答えを見つけた');
@@ -1906,21 +1494,7 @@ describe('FsJobStore', () => {
     expect((await stores.jobs.listApprovals()).entries).toHaveLength(1);
   });
 
-  /**
-   * **`listApprovals` の並びに意味を持たせていないことの記録**（issue #432）。
-   *
-   * `putApproval` は「既存の id を filter で除いてから push する」形
-   * （`grep -Fn -A 5 -- 'async putApproval' packages/storage-fs/src/jobs.ts`）
-   * なので、**既存の id へ書くと配列の末尾へ移動する。** 承認への回答は
-   * まさに `putApproval` を呼ぶので、答えた行は末尾へ動く。
-   *
-   * これは直す対象ではない——`GET /approvals` のカーソル
-   * （`apps/daemon/src/app.ts` の `approvalsCursorSchema`）が位置ではなく
-   * `(createdAt, id)` の比較で辿るのは、この動きに対応するためである。
-   * **この歯は「fs の生の並びは createdAt の昇順という前提を置けない」ことを
-   * 固定するために置く** — インメモリ実装（`Map` は既存キーの位置を保つ）
-   * ではこの動きは絶対に再現しない。
-   */
+  // listApprovals の並びを createdAt 昇順とみなさない: putApproval は既存 id を除いてから push するので、答えた行は末尾へ動く
   it('既存の id へ書くと配列の末尾へ移動する（並びに意味は無いことの記録）', async () => {
     await stores.jobs.putApproval({
       id: 'ap-old',
@@ -1933,13 +1507,11 @@ describe('FsJobStore', () => {
       question: '後に作った方',
     });
 
-    // 作成順（＝ createdAt 昇順）そのままなら [ap-old, ap-new] のはず。
     expect((await stores.jobs.listApprovals()).entries.map((a) => a.id)).toEqual([
       'ap-old',
       'ap-new',
     ]);
 
-    // 先に作った方（ap-old）に答える —— putApproval が再度走る。
     await stores.jobs.putApproval({
       id: 'ap-old',
       createdAt: '2026-01-01T00:00:00.000Z',
@@ -1948,7 +1520,6 @@ describe('FsJobStore', () => {
       answer: 'よい',
     });
 
-    // ⟹ createdAt の昇順なら変わらないはずの並びが、答えた行の移動で崩れる。
     expect((await stores.jobs.listApprovals()).entries.map((a) => a.id)).toEqual([
       'ap-new',
       'ap-old',
@@ -2028,7 +1599,7 @@ describe('FsScheduleStore', () => {
     const path = join(root, 'jobs', 'schedules.json');
     await captureStderr(async () => {
       await verifyScheduleUnreadableContract(stores.schedules, async (kind) => {
-        // `put` は形を断るので、版ずれ・手編集を模して `schedules.json` へ直に足す。
+        // `put` は形を断るので、`schedules.json` へ直に足す
         const file = JSON.parse(await readFile(path, 'utf8')) as {
           schedules: { kind?: string }[];
         };
@@ -2074,8 +1645,7 @@ describe('FsScheduleStore', () => {
       lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
     });
 
-    // `schedule_list` はこの `list()` を直に読み、「既定の日報・発意 tick はここには
-    // 出ない」と約束している。混ざると `schedule_remove` で消せてしまう。
+    // 既定の日報・発意 tick を list() に混ぜない: 混ざると `schedule_remove` で消せてしまうため
     expect((await stores.schedules.list()).entries).toEqual([]);
     expect(await stores.schedules.get('self_initiative')).toBeNull();
   });
@@ -2145,7 +1715,6 @@ describe('FsScheduleStore', () => {
     expect(claimed?.request).toBe(plan.request);
     expect(claimed?.lastRunAt).toBeUndefined();
     expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
-    // updatedAt は「依頼が書き換えられた時刻」＝版の識別子なので発火では動かない
     expect((await stores.schedules.get('issue-round'))?.updatedAt).toBe(plan.updatedAt);
   });
 
@@ -2180,7 +1749,6 @@ describe('FsScheduleStore', () => {
       'schedule',
     );
 
-    // 前の発火（別の時刻）の完了が遅れて届いた
     await stores.schedules.completeRun('issue-round', '2026-08-12T00:00:00.000Z', 'schedule');
 
     const held = await stores.schedules.get('issue-round');
@@ -2206,7 +1774,6 @@ describe('FsScheduleStore', () => {
   });
 
   it('消された・書き換わった依頼は確定できない（古い本文で走らせない）', async () => {
-    // 知らない kind
     expect(
       await stores.schedules.claimRun(
         'しらない',
@@ -2216,7 +1783,6 @@ describe('FsScheduleStore', () => {
       ),
     ).toBeNull();
 
-    // 読んだ後に消された
     await stores.schedules.put(plan);
     await stores.schedules.remove('issue-round');
     expect(
@@ -2228,7 +1794,6 @@ describe('FsScheduleStore', () => {
       ),
     ).toBeNull();
 
-    // 読んだ後に書き換えられた（版が違う）
     await stores.schedules.put(plan);
     await stores.schedules.put({
       ...plan,
@@ -2243,14 +1808,12 @@ describe('FsScheduleStore', () => {
         'schedule',
       ),
     ).toBeNull();
-    // 記録もされていない（新しい版に古い発火の跡を付けない）
     expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBeUndefined();
   });
 
   it('読んでから確定するまでに remove / put が割り込んでも、古い版では確定しない', async () => {
     await stores.schedules.put(plan);
 
-    // 「読んだ直後に人間が消した」を、同じ排他区間へ同時に投げて作る
     const [claimedAfterRemove] = await Promise.all([
       stores.schedules.claimRun(
         'issue-round',
@@ -2260,12 +1823,10 @@ describe('FsScheduleStore', () => {
       ),
       stores.schedules.remove('issue-round'),
     ]);
-    // どちらの順で直列化されても、「消えた後に確定した」ことにはならない
     if (claimedAfterRemove !== null) {
       expect(await stores.schedules.get('issue-round')).toBeNull();
     }
 
-    // 「読んだ直後に人間が直した」も同様に、古い版では確定しない
     await stores.schedules.put(plan);
     const edited = { ...plan, request: '直した依頼', updatedAt: '2026-08-12T10:00:00.000Z' };
     await Promise.all([
@@ -2310,7 +1871,6 @@ describe('FsScheduleStore', () => {
   });
 
   it('読めない中身を「消された」に潰さない（pg 版と同じ振る舞い）', async () => {
-    // 人間が手で直した・古い形が残っている、を模す
     await initWorkspace(root);
     await writeFile(
       join(root, 'jobs', 'schedules.json'),
@@ -2318,28 +1878,13 @@ describe('FsScheduleStore', () => {
       'utf8',
     );
 
-    // null に潰すと、クローンから見て「消された依頼」と区別が付かず、
-    // 本文なしの曖昧なターンが走る（clone.ts が読取不能を分けている意味が消える）。
-    // **`get(kind)` はこの区別を今も保つ。**
+    // null に潰さない: クローンから見て「消された依頼」と区別が付かず、本文なしの曖昧なターンが走るため
     await expect(stores.schedules.get('broken')).rejects.toThrow();
 
-    // **issue #1944 で反転。** 直す前はここも `rejects.toThrow()` だった——
-    // `list()` が `fileSchema.parse` で `schedules` 配列全体を1回に検査して
-    // いたため、`broken` 1行の不正で `list()` 全体が例外を投げ、正しい依頼まで
-    // 読めなくなっていた。#1944 はこれを #1868 / #1928 の線（1行ずつ検査し、
-    // 合わない行は一覧から外して stderr に跡を出す。生の行は消さずに残す）に
-    // そろえた——`get('broken')` が読めない行を投げたまま区別を保っているので
-    // （直前の assertion）、`list()` が黙ってではなく跡付きで飛ばすことと
-    // 両立する。ここでは他に正しい依頼が無いので `list()` は空配列を返す。
     expect((await stores.schedules.list()).entries).toEqual([]);
   });
 });
 
-/**
- * 引き受けたまま終わっていない仕事の台帳（`store.ts` の `CommitmentStore`）。
- *
- * fs / pg で同じ振る舞いになることを両方で問う（`store.ts`「省略可能にしないこと」）。
- */
 describe('FsCommitmentStore', () => {
   const commitment = (id: string, at: string, body: string): Commitment => ({
     id,
@@ -2382,8 +1927,6 @@ describe('FsCommitmentStore', () => {
   });
 
   it('close は closedBy を記録し、既存の（closedBy の無い）行は undefined のままで既定へ倒れない', async () => {
-    // 既に閉じているが closedBy を持たない行 = この欄が導入される前の記録を模す。
-    // open() はどんな Commitment も受け付けるので、そのまま書き込める。
     await stores.commitments.open({
       id: 'c-legacy',
       at: '2026-08-01T00:00:00.000Z',
@@ -2393,7 +1936,6 @@ describe('FsCommitmentStore', () => {
       closedReason: '当時は書き手を記録していなかった',
     });
     const legacy = await stores.commitments.get('c-legacy');
-    // **既定（'clone' でも 'human' でもない）へ倒れず、そもそも無いままである。**
     expect(legacy?.closedBy).toBeUndefined();
 
     await stores.commitments.open(commitment('c-new', '2026-08-13T00:00:00.000Z', '新しい依頼'));
@@ -2401,19 +1943,10 @@ describe('FsCommitmentStore', () => {
     const fresh = await stores.commitments.get('c-new');
     expect(fresh?.closedBy).toBe('human');
 
-    // 導入前の行は close() を経由していないので、closedBy はやはり無いまま。
     const stillLegacy = await stores.commitments.get('c-legacy');
     expect(stillLegacy?.closedBy).toBeUndefined();
   });
 
-  /**
-   * `editBody`（本 PR）。**まだ片付いていない行だけ書き換えられ、
-   * `origin` / `at` / `source` など他の欄には触れないこと**を固定する。
-   * `origin` が `'human'` かどうかの判定はストアの責務ではない
-   * （`CommitmentStore.editBody` の doc）ので、ここでは問わない——
-   * その判定は `apps/daemon/src/app.ts` の `PATCH /commitments/:id` の
-   * テストで別に問う。
-   */
   describe('editBody（本文を後から直す）', () => {
     it('未了の行は書き換えられる（body/editedAt/editedBy が入り、他の欄は壊れない）', async () => {
       await stores.commitments.open({
@@ -2432,7 +1965,6 @@ describe('FsCommitmentStore', () => {
       expect(entry?.body).toBe('直した依頼');
       expect(entry?.editedAt).toBe('2026-08-13T00:00:00.000Z');
       expect(entry?.editedBy).toBe('human');
-      // 他の欄は無傷
       expect(entry?.at).toBe('2026-08-12T00:00:00.000Z');
       expect(entry?.origin).toBe('human');
       expect(entry?.source).toBe('conv-1');
@@ -2456,7 +1988,6 @@ describe('FsCommitmentStore', () => {
       expect(entry?.body).toBe('もとの依頼');
       expect(entry?.editedAt).toBeUndefined();
       expect(entry?.editedBy).toBeUndefined();
-      // close() の記録も無傷
       expect(entry?.closedAt).toBe('2026-08-13T00:00:00.000Z');
       expect(entry?.closedReason).toBe('片付けた');
     });
@@ -2479,37 +2010,8 @@ describe('FsCommitmentStore', () => {
     });
   });
 
-  /**
-   * fs 版は `#read()` がファイル全体を `fileSchema.parse`（＝
-   * `commitmentSchema` を要素に持つ配列）へ通す。`closedBy` が厳密な
-   * enum だったら、未知の値を持つ行が1つでも在ると `#read()` 自体が
-   * 例外を投げ、**その行だけでなく台帳全体が読めなくなる。** pg 版の
-   * `index.test.ts` に同じ名前のテストがあり、そちらが本体（`packages/core/
-   * src/schema.ts` の doc に理由がある）。fs / pg で能力差を作らないため、
-   * ここでも同じ性質を問う。
-   *
-   * **追記（issue #296）: 上の段落はもう現物と合っていない。** `#read()` は
-   * いまファイル全体を `commitmentSchema` の配列として一括 parse せず、
-   * `rawFileSchema`（要素は `z.unknown()`）で読んでから行ごとに
-   * `commitmentSchema.safeParse` する（`splitFileRows`）。だから未知の値を
-   * 持つ行は「台帳全体」ではなく「その行」だけが読めなくなり、`entries` /
-   * `unreadable` へ分かれる。この段落は直した経緯として残す
-   * （AGENTS.md「元のコメントを消さず経緯を追記する」）。
-   *
-   * **なぜ `open()` を使わないのか。** この器が書く値は 'clone' | 'human'
-   * の2つに限られる（`CommitmentStore.close` の `by` 引数の型で縛って
-   * ある）ので、`open()`（`commitmentSchema.parse` を通す）経由では
-   * `closedBy` が未知の値を持つ行をそもそも作れない。**測りたい場面は
-   * 「新しい版のデーモンが書いた行を、古い版が読む」であり、そのとき行は
-   * 既に保存層（ファイル）に在って `open()` は通っていない。** `open()`
-   * 経由で作ると、厳密な enum へ戻す変異を当てたとき `open()`（setup）が
-   * 先に落ち、`list()` が丸ごと読めなくなるという当の害が一度も再現され
-   * ないままテストが赤くなる（変異には反応するが症状を伝えない）。だから
-   * 行の作成は `commitments.json` へ直接 `writeFile` し、スキーマ検証
-   * （`#read()` の `fileSchema.parse`）を経由しない。
-   */
   it('未知の closedBy を持つ行があっても list() は落ちない（closedBy は台帳の完全性を担わない）', async () => {
-    // スキーマ検証を経由せず、台帳ファイルへ直接書く（上の doc を見よ）。
+    // open() を使わず台帳ファイルへ直接書く: open() 経由だと変異で setup が先に落ち、list() が読めなくなる害が再現されないため
     await mkdir(stores.paths.jobs, { recursive: true });
     await writeFile(
       join(stores.paths.jobs, 'commitments.json'),
@@ -2522,10 +2024,6 @@ describe('FsCommitmentStore', () => {
             body: '未知の closedBy を持つ行',
             closedAt: '2026-08-02T00:00:00.000Z',
             closedReason: '将来の書き手を模す',
-            // 実際にこの器が書く値は 'clone' | 'human' の2つに限られる。
-            // 'manager' は、将来書き手が増えた場合や外部から直接書かれた
-            // 場合を模すためのものであって、この器自身がこの値を書くわけ
-            // ではない。
             closedBy: 'manager',
           },
         ],
@@ -2533,15 +2031,8 @@ describe('FsCommitmentStore', () => {
       'utf8',
     );
 
-    // list() が例外を投げず、他の行も含めて読める。
-    // **`list()` は `{ entries, unreadable }` を返すようになった（issue #296）ので、
-    // 配列 matcher の `.resolves.toHaveLength` はもう使えない。** 直接 await して
-    // `.entries` を確かめる形でも、同じ意図（厳密な enum へ戻す変異を当てると
-    // `list()` 自身が例外を投げ、この await がそのまま失敗する）は保たれる。
     const listed = await stores.commitments.list({ includeClosed: true });
     expect(listed.entries).toHaveLength(1);
-    // この行は既知の欄（closedBy）の話であって、行そのものは読める。
-    // `unreadable` へは回らない。
     expect(listed.unreadable).toEqual([]);
 
     const all = listed.entries;
@@ -2551,19 +2042,11 @@ describe('FsCommitmentStore', () => {
     expect(single?.closedBy).toBe('manager');
   });
 
-  /**
-   * **これが issue #296 の本体である（pg 版 `index.test.ts` の同名テストの対）。**
-   * `closedBy` は由来の注記に過ぎず意図的に緩く持つ欄だが（直上のテスト）、
-   * `origin`（`commitmentOriginSchema`。`z.enum(['human', 'manager', 'external',
-   * 'self'])`）は厳密な enum のまま——直さなければ、未知の値を持つ1行が
-   * `#read()`（＝ファイル全体の parse）を丸ごと落としていた。
-   */
   it('未知の origin を1行混ぜても list() は落ちず、健全な行は全部返る（未知の1行は unreadable へ、id 付きで）', async () => {
     await stores.commitments.open(commitment('c-ok-1', '2026-08-10T00:00:00.000Z', '健全な行1'));
     await stores.commitments.open(commitment('c-ok-2', '2026-08-11T00:00:00.000Z', '健全な行2'));
 
-    // 健全な行と並べて、未知の origin を持つ壊れた行を直接書き込む
-    // （open() 経由では commitmentSchema.parse を通るので作れない。上の doc）。
+    // open() 経由では commitmentSchema.parse を通って作れないので直接書き込む
     const path = join(stores.paths.jobs, 'commitments.json');
     const before = JSON.parse(await readFile(path, 'utf8')) as { commitments: unknown[] };
     await writeFile(
@@ -2574,7 +2057,6 @@ describe('FsCommitmentStore', () => {
           {
             id: 'c-unknown-origin',
             at: '2026-08-12T00:00:00.000Z',
-            // **`commitmentOriginSchema` に無い値。**
             origin: 'future-origin',
             body: '未知の origin を持つ行',
           },
@@ -2583,39 +2065,20 @@ describe('FsCommitmentStore', () => {
       'utf8',
     );
 
-    // 0. **一覧そのものが落ちない。** ここを素の `await` だけで済ませると、
-    //    行ごとの `safeParse` をやめる変異が**例外**でテストを殺す —— 例外は
-    //    測っている性質を名指ししない。`.resolves` なら「reject した」という
-    //    assertion として落ちる（issue #296）。
+    // 素の `await` だけにしない: 変異が例外でテストを殺し、測っている性質を名指ししないため。`.resolves` なら assertion として落ちる
     await expect(stores.commitments.list()).resolves.toBeDefined();
 
-    // 1. **健全な行は全部返る。** id を名指しして検査する。
     const listed = await stores.commitments.list();
     expect(listed.entries.map((entry) => entry.id)).toEqual(['c-ok-1', 'c-ok-2']);
 
-    // 2. **未知の1行は `unreadable` に、id 付きで現れる（黙って消えていない）。**
     expect(listed.unreadable).toHaveLength(1);
     expect(listed.unreadable[0]?.id).toBe('c-unknown-origin');
     expect(listed.unreadable[0]?.at).toBe('2026-08-12T00:00:00.000Z');
-    // reason に本文（body）が混ざっていないこと（dropped-record.ts と同じ制約）。
     expect(listed.unreadable[0]?.reason).not.toContain('未知の origin を持つ行');
 
-    // 3. **`get()` はその id で throw する（「無い」と「読めない」の区別が消えていない）。**
     await expect(stores.commitments.get('c-unknown-origin')).rejects.toThrow(/読めない形/);
   });
 
-  /**
-   * **これが一番大事な歯である（issue #296、SPEC 4節）。** fs 版は
-   * read-modify-write のたびにファイル全体を書き直す器なので、読めない行の
-   * 生の値（`UnreadableRow.value`）を持ち回って書き戻さないと、`open()` /
-   * `close()` が1回走っただけで読めない行が**ディスクから永久に消える**
-   * ——これはこの issue が防ごうとしているもの（1行読めないだけで一覧が
-   * 丸ごと落ちる）より重い事故である。
-   *
-   * ファイルを読み直して生の値が同一であることまで検査する
-   * （`entries` / `unreadable` に分けて返す都合上、一覧の返り値だけを見ても
-   * 書き戻しで消えていないことは確認できない——ディスク上の実体を見る）。
-   */
   it('読めない行が在る状態で open() / close() を走らせても、読めない行がファイルから消えない（書き戻しで生の値が残る）', async () => {
     const path = join(stores.paths.jobs, 'commitments.json');
     const brokenRow = {
@@ -2627,36 +2090,23 @@ describe('FsCommitmentStore', () => {
     await mkdir(stores.paths.jobs, { recursive: true });
     await writeFile(path, JSON.stringify({ commitments: [brokenRow] }), 'utf8');
 
-    // 直後の list() で unreadable に現れることをまず確かめる（前提条件）。
     const before = await stores.commitments.list();
     expect(before.unreadable).toHaveLength(1);
     expect(before.unreadable[0]?.id).toBe('c-broken');
 
-    // open() を1回走らせる（読めない行とは別の id）。
     await stores.commitments.open(commitment('c-new', '2026-08-13T00:00:00.000Z', '新しい依頼'));
-    // close() も1回走らせる。
     await stores.commitments.close('c-new', '2026-08-14T00:00:00.000Z', '片付けた', 'clone');
 
-    // **ファイルを読み直して、壊れた行の生の値が一切変わっていないことを見る。**
+    // ファイルを読み直して実体を見る: list() の返り値だけでは書き戻しで消えていないことを確認できないため
     const onDisk = JSON.parse(await readFile(path, 'utf8')) as { commitments: unknown[] };
     expect(onDisk.commitments).toContainEqual(brokenRow);
 
-    // list() から見ても、読めない行は変わらず unreadable に残っている。
     const after = await stores.commitments.list({ includeClosed: true });
     expect(after.unreadable).toHaveLength(1);
     expect(after.unreadable[0]?.id).toBe('c-broken');
-    // 健全な行（新規 open→close）も普通に読める。
     expect(after.entries.map((entry) => entry.id)).toContain('c-new');
   });
 
-  /**
-   * **issue #416: `trimmedClosedCount` は累計であって、プロセスをまたいでも
-   * 0へ戻らない。** インメモリのカウンタなら再起動のたびに消えるので、
-   * `rawFileSchema` の同名欄としてディスクへ持たせてある
-   * （`packages/storage-fs/src/commitments.ts` の doc）。ここではファイルへ
-   * 直接値を書き、デーモンを作り直しても（＝新しい `FsCommitmentStore` を
-   * 作っても）読み戻せることを見る。
-   */
   it('trimmedClosedCount はディスクへ持ち回り、デーモンを作り直しても残る', async () => {
     const path = join(stores.paths.jobs, 'commitments.json');
     await mkdir(stores.paths.jobs, { recursive: true });
@@ -2664,21 +2114,13 @@ describe('FsCommitmentStore', () => {
 
     expect((await stores.commitments.list()).trimmedClosed).toBe(42);
 
-    // 作り直しても消えない（プロセスの再起動を模す）。
     const restarted = createFsStores(root);
     expect((await restarted.commitments.list()).trimmedClosed).toBe(42);
 
-    // open() のような無関係な書き込みでも減らない・変わらない。
     await restarted.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', '新しい依頼'));
     expect((await restarted.commitments.list()).trimmedClosed).toBe(42);
   });
 
-  /**
-   * **旧い版が書いたファイル（`trimmedClosedCount` を持たない）でも読める。**
-   * `rawFileSchema.trimmedClosedCount` の `default(0)` を問う——「無いなら
-   * 0件削除」であって、それより前の削除を遡って数え直せるという意味では
-   * ない（`rawFileSchema` の doc）。
-   */
   it('trimmedClosedCount の無い旧い形式のファイルは、0件として読める', async () => {
     const path = join(stores.paths.jobs, 'commitments.json');
     await mkdir(stores.paths.jobs, { recursive: true });
@@ -2694,7 +2136,6 @@ describe('FsCommitmentStore', () => {
 
     // 受信箱の合図は配り直されうるので、同じ id の自動 open は普通に二度来る
     expect(
-      // **`folded` は偽である**（#1041）—— 畳んだのではなく「同じ id が既に在る」。
       await stores.commitments.open(commitment('c-1', '2026-08-14T00:00:00.000Z', '別の本文')),
     ).toEqual({ opened: false, folded: false });
 
@@ -2708,7 +2149,6 @@ describe('FsCommitmentStore', () => {
     await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
     await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した', 'clone');
 
-    // 器が落ちて合図が配り直された、を模す
     expect(
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')),
     ).toEqual({ opened: false, folded: false });
@@ -2731,7 +2171,6 @@ describe('FsCommitmentStore', () => {
       await stores.commitments.close('c-1', '2026-08-14T00:00:00.000Z', 'また出した', 'clone'),
     ).toBe(false);
 
-    // 二度目は記録も動かさない（最初に片付けた事実を書き換えない）
     const entry = await stores.commitments.get('c-1');
     expect(entry?.closedAt).toBe('2026-08-13T00:00:00.000Z');
     expect(entry?.closedReason).toBe('出した');
@@ -2773,44 +2212,9 @@ describe('FsCommitmentStore', () => {
     ).toEqual(['c-open', 'c-b', 'c-a']);
   });
 
-  /**
-   * **この1件だけ待ち時間を明示する。既定の 5000ms は、器の混み具合で緑と赤が
-   * 入れ替わる位置に在る。**
-   *
-   * このテストは `2 * (CLOSED_HISTORY_LIMIT + overflow)` = 1010 回、台帳を丸ごと
-   * 書き直す（`FsCommitmentStore` は open / close のたびに JSON 全体を tmp へ書いて
-   * rename する器で、`commitments.ts` の上限そのものが**その費用を有限に保つため**に
-   * 在る）。所要は中身ではなく runner の I/O の混み方に比例するので、**同じ中身でも
-   * 実行ごとに動く。**
-   *
-   * 実測（GitHub Actions の ubuntu-latest / `pnpm test` 全走。所要は vitest の
-   * reporter が出した値。2026-08-21T21:17Z 観測）:
-   *
-   * - 通った実行 21 件のこの1件の所要 — 最小 1640ms / 中央 2287ms / **最大 4549ms**
-   *   （5000ms まで残り 451ms ＝ 9%）
-   * - 5000ms で落ちた実行は5件あり、**PR 側でも main 側でも起きている**（PR:
-   *   32301918091 / 32351219785 / 32502342406、main: 32506180682 / 32526916554）。
-   *   `pnpm test` へ到達した 24 件のうち3件が落ちた日もある（12.5%）
-   *
-   * **落ちた実行と通った実行で、このテストも `commitments.ts` も1文字も違わない。**
-   * だから「どの commit で落ちたか」からは何も読めない。実際に PR #150 は自分の PR
-   * 実行（32526353590。この1件は 2313ms）で通ったあと、**同じ内容の** main の実行
-   * （32526916554）で落ちている。
-   *
-   * **この `it()` の第3引数（下の `60_000`）を上げないこと。** `vitest.config.ts` に
-   * グローバルな `testTimeout` は無く、これはこのテスト自身にだけ効く個別の上書きである。
-   * 上げれば他のテストの「帰ってこない」を検出する力には影響しないが、この1件が
-   * 遅くなっている実態を隠す。60_000 は上の最大値の 13 倍で、
-   * `CLOSED_HISTORY_LIMIT` を増やさない限り混み方では届かない（増やすときは、
-   * ここも一緒に見直す）。
-   *
-   * **アサーションは1つも変えていない。** 変えたのは待つ長さだけで、保証している
-   * ことは前と同じである — 未了は1件も切らない / 閉じた行は上限で切られる /
-   * 落ちるのは古く片付いたものから。
-   */
+  // 第3引数の待ち時間（`60_000`）を上げない: 既定の 5000ms は器の混み具合で緑と赤が入れ替わる位置に在り、上げるとこの1件が遅くなっている実態を隠すため
   it('閉じた行は上限で切られるが、未了は件数によらず1件も落ちない', async () => {
     const overflow = 5;
-    // 未了を先に置く（切り詰めの対象にならないことを、閉じた行が上限を超えた後で見る）
     for (let index = 0; index < 3; index += 1) {
       await stores.commitments.open(
         commitment(`open-${index}`, `2026-08-01T00:00:0${index}.000Z`, `未了 ${index}`),
@@ -2822,7 +2226,6 @@ describe('FsCommitmentStore', () => {
       await stores.commitments.open(
         commitment(id, '2026-08-02T00:00:00.000Z', `片付ける ${index}`),
       );
-      // closedAt が切り詰めの並び順を決める（古く片付いたものから落ちる）
       await stores.commitments.close(
         id,
         new Date(Date.UTC(2026, 7, 3, 0, 0, 0) + index * 1000).toISOString(),
@@ -2835,31 +2238,16 @@ describe('FsCommitmentStore', () => {
     const open = all.filter((entry) => entry.closedAt === undefined);
     const closed = all.filter((entry) => entry.closedAt !== undefined);
 
-    // 未了は1件も切らない（切ったらこの器の目的そのものが消える）
     expect(open.map((entry) => entry.id)).toEqual(['open-0', 'open-1', 'open-2']);
     expect(closed).toHaveLength(CLOSED_HISTORY_LIMIT);
-    // 落ちるのは古く片付いたものから。新しい側は残る
     expect(closed.at(0)?.id).toBe(
       `closed-${String(CLOSED_HISTORY_LIMIT + overflow - 1).padStart(4, '0')}`,
     );
     expect(closed.at(-1)?.id).toBe(`closed-${String(overflow).padStart(4, '0')}`);
     expect(await stores.commitments.get('closed-0000')).toBeNull();
-    // **issue #416: 切り詰めた件数の合図。** 上限（`CLOSED_HISTORY_LIMIT`）を
-    // 超えた分＝ `overflow` 件が物理削除され、`list()` の `trimmedClosed` へ
-    // その累計が出る。これが無いと、上の「1件も落ちない」はずの assertion 群と
-    // 矛盾する「行は消さない」という doc（`CommitmentStore.close` の doc）が
-    // fs 版に限って偽になっていることを、呼び出し側は一切知りようがなかった。
     expect((await stores.commitments.list({ includeClosed: true })).trimmedClosed).toBe(overflow);
   }, 60_000);
 
-  /**
-   * `closeMany`（issue #844）。**`close()` を件数分ループしないための専用の口**
-   * （`store.ts` の `CommitmentStore.closeMany` の doc、`commitments.ts` の
-   * `closeMany` の doc）。ここで問うのは、fs 版の `#update` を1回だけ使う実装が
-   * `close()` と同じ保証（実際に閉じた id だけを返す・行は消さない・保持上限の
-   * 扱いを変えない）を守っていることであって、語（メソッド名やコメント）では
-   * なく `list()` で読み直した実状態で測る（PR #826 の教訓）。
-   */
   describe('closeMany（複数件を1回でまとめて閉じる）', () => {
     it('実際に閉じた id だけを返す（存在しない id・既に閉じた id を混ぜても、新たに閉じた分だけ）', async () => {
       await stores.commitments.open(commitment('c-1', '2026-08-10T00:00:00.000Z', '1'));
@@ -2874,7 +2262,6 @@ describe('FsCommitmentStore', () => {
         'clone',
       );
 
-      // c-2（既に閉じていた）・しらない（存在しない）は返らない
       expect([...closed].sort()).toEqual(['c-1', 'c-3']);
     });
 
@@ -2892,8 +2279,6 @@ describe('FsCommitmentStore', () => {
 
       expect(closed).toEqual([]);
       const after = await readFile(path, 'utf8');
-      // 1文字も変わっていない ＝ #update を経由していない（読み直し・書き直し
-      // そのものが起きていない）ことを、中身の比較で確かめる。
       expect(after).toBe(before);
     });
 
@@ -2932,16 +2317,6 @@ describe('FsCommitmentStore', () => {
       expect(entry?.closedReason).toBe('まとめて片付けた');
     });
 
-    /**
-     * `close()` のループでは無く `closeMany` を1回呼ぶことで、未了の行が1件も
-     * 消えないこと・保持上限（`CLOSED_HISTORY_LIMIT`）の切り詰めと
-     * `trimmedClosed` の申告が `close()` のときと同じ形で効くことを確かめる。
-     *
-     * **`close()` のループ（`CLOSED_HISTORY_LIMIT` 件のテスト、上）は
-     * `2 * (CLOSED_HISTORY_LIMIT + overflow)` ≈ 1010 回の全体書き直しを要した。**
-     * ここは open が `CLOSED_HISTORY_LIMIT + overflow + 3` 回、`closeMany` は
-     * たった1回——本 issue（#844）がまさにこの差を作るための道具である。
-     */
     it('未了の行は1件も消えず、保持上限の挙動も close() のときと同じ（trimmedClosed も揃う）', async () => {
       const overflow = 5;
       for (let index = 0; index < 3; index += 1) {
@@ -2964,29 +2339,19 @@ describe('FsCommitmentStore', () => {
         'まとめて片付けた',
         'clone',
       );
-      // まとめ閉じの時点では、まだ1件も上限を超えて消えていない対象なので、
-      // 渡した id 全部が「実際に閉じた id」として返る。
       expect(closedIds).toHaveLength(CLOSED_HISTORY_LIMIT + overflow);
 
       const all = (await stores.commitments.list({ includeClosed: true })).entries;
       const open = all.filter((entry) => entry.closedAt === undefined);
       const closed = all.filter((entry) => entry.closedAt !== undefined);
 
-      // 未了は1件も切らない（`close()` のときの歯と同じ保証）
       expect(open.map((entry) => entry.id)).toEqual(['open-0', 'open-1', 'open-2']);
-      // 片付いた行は上限までしか残らない
       expect(closed).toHaveLength(CLOSED_HISTORY_LIMIT);
-      // 切り詰めた累計件数の申告も close() と同じ形で出る
       expect((await stores.commitments.list({ includeClosed: true })).trimmedClosed).toBe(overflow);
     }, 20_000);
   });
 });
 
-/**
- * まだ処理し終えていない受信箱の合図（デーモンが死んでも消えないこと）。
- *
- * fs / pg で同じ振る舞いになることを両方で問う（`store.ts`「省略可能にしないこと」）。
- */
 describe('FsInboxStore', () => {
   const human = (id: string, at: string, text: string): InboxEvent => ({
     type: 'human_message',
@@ -3043,7 +2408,6 @@ describe('FsInboxStore', () => {
     );
     await stores.inbox.claimPending();
 
-    // 同じ id で置き直す（例えばデーモン再起動直後にもう一度届いた、を模す）
     await stores.inbox.put(
       human('evt-1', '2026-08-10T00:00:00.000Z', '直した本文'),
       '2026-08-10T00:00:00.000Z',
@@ -3073,15 +2437,6 @@ describe('FsInboxStore', () => {
       });
     });
 
-    /**
-     * **この歯が単独で守るもの**: `pending()` を何度呼んでも `claimPending()`
-     * が返す `deliveries` が変わらないこと。
-     *
-     * `claimPending` は「読むことと回数を進めることを1操作に閉じる」設計
-     * （`store.ts` の doc）で、`deliveries` は配り直しを見分ける唯一の材料。
-     * `pending()` がここへ紛れ込んで回数を進めると、一覧を覗いただけの
-     * クローンが「前に配ったが終わらなかった」という嘘の記録を作ってしまう。
-     */
     it('pending() を何度呼んでも claimPending() の deliveries は動かない', async () => {
       await stores.inbox.put(
         human('evt-1', '2026-08-10T00:00:00.000Z', '本文'),
@@ -3097,11 +2452,6 @@ describe('FsInboxStore', () => {
     });
   });
 
-  /**
-   * `peekPending`（#783 段0）。`pending()` と同じ倒れ先——**読むだけで
-   * `deliveries` を1つも進めない。** `pending()` の歯（直上）と同じ形で、
-   * こちらは本文まで返す（内訳を集計するため）。
-   */
   describe('peekPending（#783。本文まで返すが、配達回数は進めない）', () => {
     it('claimPending と同じ並び（古い順）で、本文まで返す', async () => {
       await stores.inbox.put(
@@ -3124,15 +2474,6 @@ describe('FsInboxStore', () => {
       expect(await stores.inbox.peekPending()).toEqual({ entries: [], unreadable: [] });
     });
 
-    /**
-     * **この歯が単独で守るもの**: `peekPending()` を何度呼んでも、その後の
-     * `claimPending()` が返す `deliveries` が 1（初回）のままであること。
-     *
-     * `peekPending` は `pending()` と同じ「読むだけの口」だが、返す形が
-     * `PendingInboxEvent[]`（本文まで持つ）なので `claimPending` の戻り値と
-     * 見た目が似ている——実装を書き間違えて `#update` を通してしまうと、
-     * この歯が無ければ気づけない（`deliveries` が静かに進んでしまう）。
-     */
     it('peekPending() を2回呼んでも、その後の claimPending() の deliveries は1のまま', async () => {
       await stores.inbox.put(
         human('evt-1', '2026-08-10T00:00:00.000Z', '本文'),
@@ -3260,22 +2601,6 @@ describe('FsTranscriptArchive', () => {
     expect(await stores.archive.remove('../../etc/passwd')).toEqual({ kind: 'missing' });
   });
 
-  /**
-   * **issue #1635。**
-   *
-   * `'/'` を含む id は上の2本が防いでいたが、`'.'` / `'..'` 単体は
-   * `sanitize()`（`[^A-Za-z0-9._-]` だけを `_` へ潰す——`.` と `-` は
-   * そのまま素通りする）による同一性チェックでは弾けなかった。
-   * `join(this.#dir, '..')` は archive ディレクトリの1つ上（本番では
-   * `ALTEROID_HOME`）を指し、`read()` は `ENOENT` だけを missing へ変換
-   * するのでディレクトリを開こうとした実際のエラー（`EISDIR`）はそのまま
-   * 投げられ、`GET /archive/:id` のハンドラ（try/catch を持たない）を
-   * 通って 500 になっていた。
-   *
-   * いまは `resolve()` した実パスが archive ディレクトリの直下に収まって
-   * いるかで判定する（`isWithinArchiveDir`）——`.`/`..` を含め、境界の外を
-   * 指す id はすべて `missing` になる。
-   */
   it('id === "." / ".." も missing になる（issue #1635）', async () => {
     await stores.archive.archive('session-unrelated', 'x\n');
 
@@ -3285,15 +2610,6 @@ describe('FsTranscriptArchive', () => {
     expect(await stores.archive.readTail('..', 10)).toEqual({ kind: 'missing' });
   });
 
-  /**
-   * **issue #1635（remove の副作用）。**
-   *
-   * 直す前は `remove('..')` が「missing」を返す前に副作用を残していた——
-   * `stat()` はディレクトリでも成功するので通り抜け、印ファイル
-   * （`archive/...removed`）を実際に書き込んでから、最後の
-   * `writeFile(filePath, '', 'utf8')`（filePath = archive の1つ上）で
-   * `EISDIR` を投げていた。missing で断るなら、何も書き込まずに断ること。
-   */
   it('remove("..") は missing を返し、archive/ 配下に何も書き込まない（副作用なし。issue #1635）', async () => {
     await stores.archive.archive('session-unrelated', 'x\n');
     const before = await readdir(join(root, 'archive'));
@@ -3304,12 +2620,8 @@ describe('FsTranscriptArchive', () => {
     expect(after).toEqual(before);
   });
 
-  /** 契約（#698）を3実装ぶんの1つとして測る。他は testing.ts / storage-pg。 */
   it('TranscriptArchive の契約を満たす', async () => {
     await verifyTranscriptArchiveContract(stores.archive, {
-      // 検査19のためだけの裏口（#698）。`.jsonl` と、指紋フィールド
-      // （`bodyChars` / `bodyMd5` / `continuity`）を持たない `.meta.json` を
-      // 直接書き、この機能より前に積まれた行を再現する。
       seedFingerprintlessRow: async (sessionId, body) => {
         const dir = join(root, 'archive');
         await mkdir(dir, { recursive: true });
@@ -3332,16 +2644,13 @@ describe('FsTranscriptArchive', () => {
     const removed = await stores.archive.remove(id);
     expect(removed).toEqual({ kind: 'removed', bytes: Buffer.byteLength('BODY\n', 'utf8') });
 
-    // 本体は空文字へ切り詰められている（消えていない）。
     expect(await readFile(join(root, 'archive', id), 'utf8')).toBe('');
-    // 脇の印ファイルが在る。
     const marker = JSON.parse(await readFile(join(root, 'archive', `${id}.removed`), 'utf8')) as {
       removedAt: string;
       bytes: number;
     };
     expect(marker.bytes).toBe(Buffer.byteLength('BODY\n', 'utf8'));
 
-    // list() は .jsonl で絞っているので、印ファイル自身は一覧へ混ざらない。
     const listedIds = (await stores.archive.list()).map((entry) => entry.id);
     expect(listedIds).toContain(id);
     expect(listedIds).not.toContain(`${id}.removed`);
@@ -3361,12 +2670,6 @@ describe('FsTranscriptArchive', () => {
     expect(await stores.archive.read(idB)).toEqual({ kind: 'body', body: 'B\n' });
   });
 
-  /**
-   * ⭐ 判定は印（マーカーファイル）の有無だけで行う。**本体が空文字である
-   * ことを判定に使っていないか**を直接測る（#698）——空の生ログを退避した
-   * だけの行（`remove()` を一度も呼んでいない）には印ファイルが無く、
-   * `read()` は `body`（空文字）を返す。
-   */
   it('空の生ログを退避しただけの行は removed にならない（本体が空文字であることを判定に使わない）', async () => {
     const id = (await stores.archive.archive('session-empty', '')).id;
 
@@ -3396,12 +2699,6 @@ describe('FsTranscriptArchive', () => {
     });
   });
 
-  /**
-   * `storedBytes`（#698）は `stat().size`——**fs 固有の意味**（実装ごとに
-   * 違うことは `ArchiveEntry.storedBytes` の doc が明言する）。ここでは
-   * fs だけが持つ性質、`list()` の `storedBytes` が実ファイルの `stat().size`
-   * と一致することを直接測る（契約テストは実装をまたいだ整合性しか見ない）。
-   */
   it('list()のstoredBytesは実ファイルのstat().sizeと一致する（fs固有）', async () => {
     const id = (await stores.archive.archive('session-stat', 'HELLO WORLD\n')).id;
 
@@ -3410,19 +2707,13 @@ describe('FsTranscriptArchive', () => {
     const fileSize = (await stat(join(root, 'archive', id))).size;
     expect(entry?.storedBytes).toBe(fileSize);
 
-    // remove() で本体を空へ切り詰めた後は 0 になる。
     await stores.archive.remove(id);
     const entryAfterRemove = (await stores.archive.list()).find((e) => e.id === id);
     expect(entryAfterRemove?.storedBytes).toBe(0);
   });
 
-  /**
-   * `.meta.json`（#698）が無い、この拡張より前に作られたアーカイブでも
-   * `list()` が例外を投げず、ファイル名から best-effort で復元すること。
-   */
   it('meta.jsonが無い(拡張前に作られた)アーカイブでもlist()は落ちない', async () => {
     const id = (await stores.archive.archive('session-legacy', 'LEGACY\n')).id;
-    // この実装が書いた meta サイドカーを消し、無かった状態を再現する。
     await rm(join(root, 'archive', `${id}.meta.json`));
 
     const entry = (await stores.archive.list()).find((e) => e.id === id);
@@ -3431,19 +2722,7 @@ describe('FsTranscriptArchive', () => {
     expect(Number.isNaN(Date.parse(entry?.at ?? ''))).toBe(false);
   });
 
-  /**
-   * `sessions().continuity`（#698 続き）——fs は `.meta.json` サイドカーの
-   * `continuity` から数える。`absent` は「サイドカーに `continuity` が無い」
-   * 行——ここではサイドカー自体を丸ごと消して再現する（「meta.jsonが無い」
-   * の歯と同じ手口）。`unknown` は、その直後の `archive()` が「直前の行は
-   * 指紋を持たない」と判定した結果——`absent` と `unknown` が別カウンタに
-   * 割れることを、fs 実装で直接測る。
-   *
-   * ⚠ 呼び出しの間に `tick()` を挟む——`#findPreviousArchiveForSession` は
-   * 同じミリ秒に積まれた行の順序を id の辞書順で決めるため、間隔を空けずに
-   * 呼ぶと「直前の行」が意図しないものになりうる（archive-contract.ts の
-   * 同じ注記と同じ理由）。
-   */
+  // 呼び出しの間に `tick()` を挟む: `#findPreviousArchiveForSession` は同じミリ秒の行を id の辞書順で決めるため、挟まないと「直前の行」が変わる
   it('sessions()のcontinuityはfirst/continues/diverged/unknown/absentを正しく数える', async () => {
     const tick = () => new Promise((resolve) => setTimeout(resolve, 2));
     const sessionId = 'session-continuity-tally';
@@ -3458,12 +2737,10 @@ describe('FsTranscriptArchive', () => {
     expect(writeDiverged.continuity).toBe('diverged');
     await tick();
 
-    // absent: サイドカーごと無い行（「meta.jsonが無い」の歯と同じ再現）。
     const absentWrite = await stores.archive.archive(sessionId, 'ABSENT\n');
     await rm(join(root, 'archive', `${absentWrite.id}.meta.json`));
     await tick();
 
-    // unknown: 直前の行（上のabsent行）が指紋を持たないので、その直後はunknown。
     const writeAfterAbsent = await stores.archive.archive(sessionId, 'ANYTHING\n');
     expect(writeAfterAbsent.continuity).toBe('unknown');
 
@@ -3479,14 +2756,7 @@ describe('FsTranscriptArchive', () => {
     });
   });
 
-  /**
-   * ⭐ #905: 同じミリ秒に2回積んでも、1本目のファイルが上書きされない。
-   *
-   * 契約テスト（検査20）は `read()` を通した本文しか見ない——ここでは
-   * **ディスクの側**（付いた名前の形と、実ファイルの中身）を fs 固有の歯として
-   * 直接測る。**時計は `toFake: ['Date']` に絞って固定する**（`setTimeout` まで
-   * 偽物にすると `writeFile` の待ちが止まる）。
-   */
+  // 時計は `toFake: ['Date']` に絞って固定する: `setTimeout` まで偽物にすると `writeFile` の待ちが止まるため
   it('同じミリ秒に2回積むと2本目が <base>-2.jsonl になり、1本目の中身は元のまま（#905）', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
@@ -3494,11 +2764,9 @@ describe('FsTranscriptArchive', () => {
       const first = (await stores.archive.archive('session-collision', 'FIRST\n')).id;
       const second = (await stores.archive.archive('session-collision', 'SECOND\n')).id;
 
-      // 1本目の名前は従来どおり（枝番が付くのは衝突した2本目だけ）。
       expect(first).toBe('session-collision-2026-09-12T03-04-05-678Z.jsonl');
       expect(second).toBe('session-collision-2026-09-12T03-04-05-678Z-2.jsonl');
 
-      // ⭐ ディスクを直接読む。1本目が SECOND で上書きされていたら赤くなる。
       expect(await readFile(join(root, 'archive', first), 'utf8')).toBe('FIRST\n');
       expect(await readFile(join(root, 'archive', second), 'utf8')).toBe('SECOND\n');
     } finally {
@@ -3506,16 +2774,6 @@ describe('FsTranscriptArchive', () => {
     }
   });
 
-  /**
-   * ⭐ #905 の要件2の歯: **id の形を変えたら、id からの復元も一緒に直っている
-   * こと。**
-   *
-   * `.meta.json` サイドカーを消して「ファイル名からの復元だけが頼りの行」を
-   * 作り、枝番付きの id でも `sessionId` と `at` が正しく戻ることを測る。
-   * **`STAMP_SUFFIX_RE` を枝番非対応の形へ戻すと、`sessionId` にファイル名
-   * 全体が入り `at` が epoch へ落ちるので、下の2つの `expect` が赤くなる。**
-   * 直前の「meta.jsonが無い…」の歯は型しか見ていないので、この退化を捕まえない。
-   */
   it('枝番付きのidでも、meta.jsonが無ければファイル名からsessionId/atを復元する（#905）', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     let second: string;
@@ -3528,7 +2786,6 @@ describe('FsTranscriptArchive', () => {
     }
     expect(second).toBe('session-fallback-2026-09-12T03-04-05-678Z-2.jsonl');
 
-    // サイドカーを消して、ファイル名からの復元だけが頼りの状態にする。
     await rm(join(root, 'archive', `${second}.meta.json`));
 
     const entry = (await stores.archive.list()).find((e) => e.id === second);
@@ -3538,16 +2795,6 @@ describe('FsTranscriptArchive', () => {
   });
 });
 
-/**
- * 実行環境プロファイル（2026-10-03: 名前付きの行の形）。
- *
- * **契約（並び順・撒く先・巻き戻し）は3実装で同じ関数を通す**（`profile-store-contract.ts`）。
- * **`replaceAll` は本文・撒く先・更新日時を組で戻す。** ここは人間が `profile status` で見る
- * 「最後に本文を変えた時刻」であり、取り消された更新でそこが動くと、成功していない更新が
- * 最後の変更として表示される（デーモンを起こすたびに動いていたのと同じ意味の壊れ方）。
- * fs だけが持つ形 —— 素の `.sh` ファイル・撒く先の隣のファイル・旧 `profile.sh` の移行 —— は
- * ここで足す。
- */
 describe('FsProfileStore', () => {
   const dirOf = () => join(root, 'profile.d');
   const legacyPath = () => join(root, 'profile.sh');
@@ -3560,11 +2807,9 @@ describe('FsProfileStore', () => {
     await stores.profile.set('rust', 'export A=1\n', 'runner');
     await stores.profile.set('base', 'export B=1\n', 'all');
 
-    // 素のスクリプトのまま（先頭に印や JSON を足していない。vi で直せる）。
     expect(await readFile(join(dirOf(), 'rust.sh'), 'utf8')).toBe('export A=1\n');
     expect(((await stat(join(dirOf(), 'rust.sh'))).mode & 0o777).toString(8)).toBe('600');
     expect((await readFile(join(dirOf(), 'rust.scope'), 'utf8')).trim()).toBe('runner');
-    // all は「無い」と同じ（ファイルを置かない）。
     await expect(stat(join(dirOf(), 'base.scope'))).rejects.toThrow();
   });
 
@@ -3620,9 +2865,7 @@ describe('FsProfileStore', () => {
     it('2回読んでも、移したあとに人間が直した default を旧ファイルで巻き戻さない', async () => {
       await writeFile(legacyPath(), 'export OLD=1\n');
       await stores.profile.list();
-      // 移行のあとに default を書き換える（2周目でだけ壊れる状態）。
       await stores.profile.set('default', 'export NEW=1\n', 'runner');
-      // 旧ファイルが（巻き戻した旧版などで）また現れても、新しい側が勝つ。
       await writeFile(legacyPath(), 'export OLD=again\n');
 
       expect(await stores.profile.list()).toMatchObject([
@@ -3649,11 +2892,6 @@ describe('FsProfileStore', () => {
   });
 });
 
-/**
- * 人間の MCP 連携の登録（#325 段1）。契約は3実装で同じ関数を通す
- * （`mcp-server-contract.ts`）。ここで足すのは fs だけが持つ形 —— 0600 と、
- * 手で書き換えられたファイルの読み方。
- */
 describe('FsMcpServerStore', () => {
   it('器の契約（#325 段1。3実装で同じことを測る）', async () => {
     await verifyMcpServerStoreContract(stores.mcpServers);
@@ -3672,12 +2910,7 @@ describe('FsMcpServerStore', () => {
     expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 
-  /**
-   * **手で書き換えたファイルも、読むときに検査する。** 入口（HTTP）だけで見て
-   * いると、手で書いた `alteroid` がクローンの自作の道具と並ぶ。そして投げる
-   * 文言に値を載せない（`env` に鍵が入りうる。JSON.parse の SyntaxError は本文の
-   * 断片を含む）。
-   */
+  // 手で書き換えたファイルも読むときに検査し、投げる文言に値を載せない: `env` に鍵が入りうるし、JSON.parse の SyntaxError は本文の断片を含むため
   it('手で壊したファイルは読むときに投げ、文言に値を載せない', async () => {
     const path = join(root, 'mcp-servers.json');
     await writeFile(path, '{"mcpServers": {"alteroid": {"command": "SECRET-VALUE-1"}}}');
@@ -3690,10 +2923,6 @@ describe('FsMcpServerStore', () => {
   });
 });
 
-/**
- * 認証トークンのプール（Issue #393「PR1」）。**回さない**——ここで固定するのは
- * 器の振る舞い（往復・0600・既定の設定）だけで、検知・切替は無い。
- */
 describe('FsTokenPoolStore', () => {
   it('入口の契約（issue #2927。3実装で同じことを測る）', async () => {
     await verifyTokenPoolContract(stores.tokens);
@@ -3783,9 +3012,7 @@ describe('FsTokenPoolStore', () => {
   });
 
   it('現役の指名は、まだ無ければ null（1本目で埋めない）', async () => {
-    // 器の環境変数だけで走っている既定の構成と、1本目を撒いた後は別の状態である
-    // （`TokenPoolStore.readActive` の doc）。埋めると、撒いていないものを
-    // 撒いたことになる。
+    // 器の側で埋めない: 埋めると、撒いていないものを撒いたことになるため
     await stores.tokens.replace([{ id: 'tok-a', label: 'a', value: 'tok-aaa', order: 0 }]);
     expect(await stores.tokens.readActive()).toBeNull();
   });
@@ -3813,23 +3040,14 @@ describe('FsTokenPoolStore', () => {
     expect(await stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-b', generation: 2 });
   });
   it('createdAt / updatedAt が無い行は無いまま往復する', async () => {
-    // **PR1 の版が書いた `tokens.json` がこの形である。** 器の側で埋めない。
     await stores.tokens.replace([{ id: 'tok-a', label: 'a', value: 'tok-aaa', order: 0 }]);
     const [row] = await stores.tokens.list();
     expect(row).not.toHaveProperty('createdAt');
     expect(row).not.toHaveProperty('updatedAt');
   });
 
-  /**
-   * **器の環境変数を指す行（`source: 'env'`）という概念は 2026-09-14 に廃止した**
-   * が、`ensureEnvToken`（廃止済み）が過去に書いた行が既存の `tokens.json` に
-   * 残っていることがある。**そういう行は値を持たないので、そのまま domain の
-   * 型（`AgentToken`）へ持ち上げると `credentialOf` が「値が無い」で投げる。**
-   * ⟹ `list()` はこの行を静かに読み捨てる（他の行はそのまま返る）。
-   */
   it('過去に書かれた source: "env" の行は list() で静かに読み捨てる（クラッシュしない）', async () => {
-    // `replace()` は正規化された `AgentToken`（いまは `source: 'stored'` しか
-    // 作れない）しか受けないので、レガシー行は直接ファイルへ書いて再現する。
+    // `replace()` は正規化された `AgentToken` しか受けないので、直接ファイルへ書く
     await writeFile(
       stores.paths.tokens,
       JSON.stringify({
@@ -3848,13 +3066,6 @@ describe('FsTokenPoolStore', () => {
   });
 });
 
-/**
- * マネージャーへ降ろす環境変数の正本（名前→値）。
- *
- * **器（fs / pg / インメモリ）で同じ振る舞いになること**を問う。ここが揃っていないと、
- * 「テストの器では通るのに本物では他の鍵が消える」というずれ方をする——`put` は
- * **部分更新**であり、全文置換ではない。
- */
 describe('FsCredentialVaultStore', () => {
   it('入口の契約（issue #2927。3実装で同じことを測る）', async () => {
     await verifyCredentialVaultContract(stores.credentials);
@@ -3901,16 +3112,7 @@ describe('FsCredentialVaultStore', () => {
   });
 
   it('手で書いた壊れた名前の行は読みで飛ばす（器の外を指す名前を降ろさない）', async () => {
-    // **ファイルは人間が開ける。** 入口の検査だけに頼ると、手で書いた
-    // `../../x` がそのまま runner へ降りて器の外を指す。
-    //
-    // **⚠️ 反転（issue #1740）。** 以前はここで `list()` が例外を投げることを
-    // 期待していた——「器の外を指す名前を降ろさない」という目的自体は同じだが、
-    // 当時の実装は不正な1行のために配列全体（`fileSchema.parse`）を検査して
-    // いたため、**この壊れた行と同居する他の正しい行まで読めなくなる**という
-    // 副作用を仕様として固定してしまっていた。いまは pg 実装と同じく行ごとに
-    // 検査し、不正な行だけを飛ばす——「器の外を指す名前を降ろさない」目的は
-    // 達成したまま、正しい行は読める（詳細は `credentials.ts` の `#read()`）。
+    // 入口の検査だけに頼らない: 手で書いた `../../x` がそのまま runner へ降りて器の外を指すため
     await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
     await writeFile(
       stores.paths.credentials,
@@ -3922,15 +3124,9 @@ describe('FsCredentialVaultStore', () => {
       'utf8',
     );
 
-    // 唯一の行が壊れているので、降ろす集合は空になる（投げない）。
     await expect(stores.credentials.list()).resolves.toEqual([]);
   });
 
-  /**
-   * 撒く先・シークレット可否（2026-09-14）。既定は `'all'` / `true`——この列が
-   * 無かった頃の全行が実際にそうだったことをそのまま表す（`rowSchema` の
-   * `.default(...)`）。
-   */
   it('scope・secret を指定して put すると、list にそのまま戻る', async () => {
     await stores.credentials.put([
       { name: 'TZ', value: 'Asia/Tokyo', scope: 'app', secret: false },
@@ -3952,8 +3148,6 @@ describe('FsCredentialVaultStore', () => {
   });
 
   it('scope・secret の列を持たない旧形式のファイルも既定で読める', async () => {
-    // **2026-09-14 より前に書かれたファイルを模す。** `rowSchema` の
-    // `.default(...)` がここで効くことを確かめる——書き直しを要求しない。
     await writeFile(
       stores.paths.credentials,
       JSON.stringify({
@@ -3983,13 +3177,6 @@ describe('FsSessionRegistry', () => {
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
   });
 
-  /**
-   * **⭐ 墓標はセッション id と別の欄に置く**（#564 E1b）。
-   *
-   * ここが同居していると、**resume を捨てた瞬間に墓標も消える** —— 拾い直すために
-   * 立てた印が、拾う理由ができた瞬間に消える形になる（`SessionRegistry` の doc）。
-   * ⟹ **`setCloneSessionId(null)` を挟んで、墓標が残ることを測る。**
-   */
   it('墓標を覚えて忘れられる。そして resume 素材を捨てても消えない', async () => {
     expect(await stores.sessions.getTranscriptGrave()).toBeNull();
 
@@ -3997,7 +3184,6 @@ describe('FsSessionRegistry', () => {
     await stores.sessions.setTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
     expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
 
-    // **これが本題である。** resume 素材を捨てる操作は墓標に触らない。
     await stores.sessions.setCloneSessionId(null);
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
     expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
@@ -4006,13 +3192,6 @@ describe('FsSessionRegistry', () => {
     expect(await stores.sessions.getTranscriptGrave()).toBeNull();
   });
 
-  /**
-   * **⭐ 墓標は2つの欄に分かれている**（#564 E1b）。
-   *
-   * 文脈窓で畳む回（退避が在る）と、次の起動が開けなかった回（退避が無い）は**別々に
-   * 起きる。** 1つの欄に相乗りさせると、後に立った方が前の方を消す。⟹ **両方を立てて、
-   * 両方残ることを測る。**
-   */
   it('2つの墓標は互いを消さない。そして resume 素材を捨てても両方残る', async () => {
     await stores.sessions.setCloneSessionId('sess-1');
     await stores.sessions.setTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
@@ -4035,10 +3214,6 @@ describe('FsSessionRegistry', () => {
     await stores.sessions.setTranscriptGrave(null);
   });
 
-  /**
-   * `projectKey` は**器を跨いで**要る（`SessionRegistry.getProjectKey` の doc）——
-   * 墓標を立てたい回は、まさにそのプロセスで `append` が1度も来ていない回である。
-   */
   it('生ログの scope を覚える。resume 素材を捨てても消えない', async () => {
     expect(await stores.sessions.getProjectKey()).toBeNull();
 
@@ -4051,10 +3226,6 @@ describe('FsSessionRegistry', () => {
   });
 });
 
-/**
- * ログインとアクセス許可。**fs と pg で同じ振る舞いになること**を両方で問う
- * （器が違うだけで上の層が見るものは同じ、が M4 の要件）。
- */
 describe('AuthStore', () => {
   const account = {
     id: 'account-1',
@@ -4067,55 +3238,26 @@ describe('AuthStore', () => {
     ownerDeclaredAt: null,
   };
 
-  /**
-   * **issue #1676。** `listAccounts` は `createdAt` の**実時刻**順でなければ
-   * ならない。直す前の fs / memory は `localeCompare`（文字列比較）で並べて
-   * いた。`isoDateTime`（`z.string().datetime({ offset: true })`）はオフセット
-   * 付きの任意の表記を許すので、同じ瞬間でも書き方は一意ではない。
-   *
-   * ここでは実時刻で先に作られた行（`+09:00` 表記なので文字列は `"23"` から
-   * 始まる）と、実時刻で後に作られた行（`+00:00` 表記なので文字列は `"15"` から
-   * 始まる）を作る。文字列比較では `"15" < "23"` なので順序が反転していた——pg は
-   * `timestamptz` 列で実時刻を比較するので反転しない（`packages/storage-pg/src/
-   * index.test.ts` の対の歯と同じ入力で同じ期待値になることで示す）。
-   *
-   * **変異**: `compareCreatedAt`（`auth.ts`）を `(a, b) =>
-   * a.createdAt.localeCompare(b.createdAt)` に戻すと、この歯は赤に戻る
-   * （直した際に確認済み）。
-   */
   it('listAccounts は createdAt の実時刻順（オフセット表記が違っても崩れない）', async () => {
     const early = {
       ...account,
       id: 'account-early-utc',
       email: 'early@example.test',
-      // 実時刻 2024-01-01T14:00:00Z（+09:00 表記なので文字列は "23" から始まる）
       createdAt: '2024-01-01T23:00:00+09:00',
     };
     const late = {
       ...account,
       id: 'account-late-utc',
       email: 'late@example.test',
-      // 実時刻 2024-01-01T15:00:00Z（+00:00 表記なので文字列は "15" から始まる）
       createdAt: '2024-01-01T15:00:00+00:00',
     };
     await stores.auth.putAccount(early);
     await stores.auth.putAccount(late);
 
     const ids = (await stores.auth.listAccounts()).map((it) => it.id);
-    // 実時刻順は early（14:00Z）→ late（15:00Z）のはず。
     expect(ids).toEqual(['account-early-utc', 'account-late-utc']);
   });
 
-  /**
-   * **issue #1676（同じ族）。** `listIdentities` は明示的な並びを持たず
-   * （`identities.filter(...)` のみ）、`putIdentity` は更新されたばかりの行を
-   * 配列の末尾へ動かす（`identities: [...file.identities.filter(...), parsed]`）。
-   * pg は `createdAt` の `asc()` で並べるので、**更新しても順が動かない**——
-   * fs はここが揃っていなかった。
-   *
-   * **変異**: `listIdentities` の `.sort(compareCreatedAt)` を外すと、この歯は
-   * 赤に戻る（直した際に確認済み）。
-   */
   it('listIdentities は createdAt の実時刻順（後から lastLoginAt を更新しても順が動かない）', async () => {
     await stores.auth.putAccount(account);
     const first = {
@@ -4138,22 +3280,12 @@ describe('AuthStore', () => {
     };
     await stores.auth.putIdentity(first);
     await stores.auth.putIdentity(second);
-    // first だけ後から更新する。fs は「消して末尾へ足す」形なので、直す前は
-    // ここで first が second より後ろへ動いていた。
     await stores.auth.putIdentity({ ...first, lastLoginAt: '2026-01-03T00:00:00.000Z' });
 
     const subjects = (await stores.auth.listIdentities('account-1')).map((it) => it.subject);
     expect(subjects).toEqual(['sub-first', 'sub-second']);
   });
 
-  /**
-   * **issue #1676（同じ族）。** `listAccessTokens` も同じ形——
-   * `putAccessToken`（`touch()` 経由の `lastUsedAt` 書き戻しを含む）が
-   * 更新した行を末尾へ動かす。pg は `createdAt` の `asc()` なので動かない。
-   *
-   * **変異**: `listAccessTokens` の `.sort(compareCreatedAt)` を外すと、
-   * この歯は赤に戻る（直した際に確認済み）。
-   */
   it('listAccessTokens は createdAt の実時刻順（後から lastUsedAt を更新しても順が動かない）', async () => {
     await stores.auth.putAccount(account);
     const first = {
@@ -4178,25 +3310,12 @@ describe('AuthStore', () => {
     };
     await stores.auth.putAccessToken(first);
     await stores.auth.putAccessToken(second);
-    // first だけ後から「使った」印を付ける（`touch()` と同じ形の更新）。
     await stores.auth.putAccessToken({ ...first, lastUsedAt: '2026-01-03T00:00:00.000Z' });
 
     const ids = (await stores.auth.listAccessTokens('account-1')).map((it) => it.id);
     expect(ids).toEqual(['token-first', 'token-second']);
   });
 
-  /**
-   * **issue #1688（#1676 / PR #1681 の残り）。** `createdAt` が完全に同じ
-   * （同着）行どうしの並びは、直上の歯だけでは揃わない。fs は `putIdentity` /
-   * `putAccessToken` / `putAccount` が「既存行を消して末尾へ足す」形なので、
-   * 安定ソート（`Array.prototype.sort`）だけでは**最後に書き換えた行が後ろへ
-   * 回る**——「作成順」ではなく「最後に触られた順」になる。
-   *
-   * 2次キー（`listAccounts`/`listAccessTokens` は `id`、`listIdentities` は
-   * `provider` → `subject`）を明示的に比較へ足し、**挿入順を約束にしない**
-   * 形にした（pg は2次キーの無い `ORDER BY` では同着の順を保証しないため、
-   * 「挿入順」を約束にすると pg 側では守れない）。
-   */
   describe('同着（createdAt が同一）の並び（issue #1688）', () => {
     const TIE = '2026-01-05T00:00:00.000Z';
 
@@ -4205,7 +3324,6 @@ describe('AuthStore', () => {
       const second = { ...account, id: 'account-b', email: 'b@example.test', createdAt: TIE };
       await stores.auth.putAccount(first);
       await stores.auth.putAccount(second);
-      // first だけ後から更新する（createdAt は変えない）。
       await stores.auth.putAccount({ ...first, displayName: 'Owner (renamed)' });
 
       const ids = (await stores.auth.listAccounts()).map((it) => it.id);
@@ -4215,7 +3333,6 @@ describe('AuthStore', () => {
     it('listAccounts: 同着2行を2次キー（id）と逆順に挿入しても、id 昇順で返る', async () => {
       const first = { ...account, id: 'account-z', email: 'z@example.test', createdAt: TIE };
       const second = { ...account, id: 'account-a', email: 'a@example.test', createdAt: TIE };
-      // 挿入順は z → a（id の昇順とは逆）。更新はしない。
       await stores.auth.putAccount(first);
       await stores.auth.putAccount(second);
 
@@ -4245,7 +3362,6 @@ describe('AuthStore', () => {
       };
       await stores.auth.putIdentity(first);
       await stores.auth.putIdentity(second);
-      // first だけ後から更新する（createdAt は変えない）。
       await stores.auth.putIdentity({ ...first, lastLoginAt: '2026-01-06T00:00:00.000Z' });
 
       const subjects = (await stores.auth.listIdentities('account-1')).map((it) => it.subject);
@@ -4272,7 +3388,6 @@ describe('AuthStore', () => {
         createdAt: TIE,
         lastLoginAt: TIE,
       };
-      // 挿入順は z → a（subject の昇順とは逆）。更新はしない。
       await stores.auth.putIdentity(first);
       await stores.auth.putIdentity(second);
 
@@ -4304,7 +3419,6 @@ describe('AuthStore', () => {
       };
       await stores.auth.putAccessToken(first);
       await stores.auth.putAccessToken(second);
-      // first だけ後から「使った」印を付ける（`touch()` と同じ形の更新）。
       await stores.auth.putAccessToken({ ...first, lastUsedAt: '2026-01-06T00:00:00.000Z' });
 
       const ids = (await stores.auth.listAccessTokens('account-1')).map((it) => it.id);
@@ -4333,7 +3447,6 @@ describe('AuthStore', () => {
         lastUsedAt: null,
         revokedAt: null,
       };
-      // 挿入順は z → a（id の昇順とは逆）。更新はしない。
       await stores.auth.putAccessToken(first);
       await stores.auth.putAccessToken(second);
 
@@ -4361,7 +3474,6 @@ describe('AuthStore', () => {
     const stored = await stores.auth.getAccount('account-1');
     expect(stored?.grantedAt).toBe('2026-01-02T00:00:00.000Z');
     expect(stored?.grantedBy).toBe('operator');
-    // 上書きであって増殖ではない
     expect(await stores.auth.listAccounts()).toHaveLength(1);
   });
 
@@ -4412,11 +3524,6 @@ describe('AuthStore', () => {
     expect(await stores.auth.listAccessTokens('account-1')).toEqual([token]);
   });
 
-  /**
-   * `revokeAccessToken`（issue #1757、ログアウトの実体）。
-   *
-   * **1本だけを失効させる。冪等——先に立った時刻を後から動かさない。**
-   */
   describe('revokeAccessToken', () => {
     const token = {
       id: 'token-1',
@@ -4443,7 +3550,6 @@ describe('AuthStore', () => {
       expect((await stores.auth.findAccessTokenBySha256('a'.repeat(64)))?.revokedAt).toBe(
         '2026-01-02T00:00:00.000Z',
       );
-      // 同じアカウントの別のトークンは巻き込まれない。
       expect((await stores.auth.findAccessTokenBySha256('b'.repeat(64)))?.revokedAt).toBeNull();
     });
 
@@ -4529,9 +3635,8 @@ describe('AuthStore', () => {
 
     expect(results.filter((result) => result !== null)).toHaveLength(1);
     expect((await stores.auth.getLoginRequest('login-2'))?.status).toBe('consumed');
-    // 保存されたトークンも1本だけ（応答が1件でも器に2本あれば通ってしまう）。
+    // 保存されたトークンも1本だけ見る: 応答が1件でも器に2本あれば通ってしまうため
     expect(await stores.auth.listAccessTokens('account-1')).toHaveLength(1);
-    // 一度 consumed になったら、あとから何度呼んでも取れない。
     expect(await stores.auth.claimLoginRequest('login-2', () => neverIssued())).toBeNull();
   });
 
@@ -4555,16 +3660,6 @@ describe('AuthStore', () => {
     expect((await stores.auth.getLoginRequest('login-3'))?.status).toBe('pending');
     expect(await stores.auth.claimLoginRequest('居ない', () => neverIssued())).toBeNull();
   });
-  /**
-   * ⚠️ **2026-09-09 に期待値を反転した。** 反転前は「別々のアカウントへ同時に grant
-   * しても、持ち主は1人しかできない」で、*「器に2人残っていたら、応答が1件でも
-   * 両方が通ってしまう」*ことを測っていた。**2人残ってよくなった**（オーナー決定）。
-   *
-   * **測る先を「同じアカウントへの同時 grant」へ移した。** 排他区間が要る理由は
-   * 他の行との不変条件ではなく、`grantedBy` が後から来た側で上書きされないこと
-   * だからである（`AuthStore.grantAccess` の doc）。上書きされると、日誌に残した
-   * 「誰が通したか」と器の中身が食い違う。
-   */
   it('別々のアカウントへ同時に grant すると、両方通る（上限が無い）', async () => {
     const other = { ...account, id: 'account-2', email: 'other@example.test' };
     await stores.auth.putAccount(account);
@@ -4599,13 +3694,6 @@ describe('AuthStore', () => {
     ).toEqual([stored?.grantedBy, stored?.grantedBy]);
   });
 
-  /**
-   * **issue #1714。** 同じ `(provider, subject)` の identity を2つの呼び出しが
-   * 同時に作ろうとしても、account / identity とも1つしか作られないこと。
-   *
-   * **変異**: `createAccountWithIdentity` の「在れば作らない」判定（`existing`
-   * の確認）を外すと、この歯は赤に戻る。
-   */
   it('createAccountWithIdentity を同じ identity で並行に呼んでも、1つだけ作られる', async () => {
     const makeInput = (accountId: string) => ({
       account: {
@@ -4643,25 +3731,14 @@ describe('AuthStore', () => {
 
     const identities = await stores.auth.listIdentities('account-race-a');
     const identitiesB = await stores.auth.listIdentities('account-race-b');
-    // 勝った accountId 側にだけ identity が1本、負けた側には無い。
     expect(identities.length + identitiesB.length).toBe(1);
 
-    // 負けた側の account は作られない（孤児が残らない）。
     const accounts = (await stores.auth.listAccounts()).filter((it) =>
       it.id.startsWith('account-race-'),
     );
     expect(accounts).toHaveLength(1);
   });
 
-  /**
-   * **issue #1751 / #1741。** 同じ identity ではなく**別々の** identity が
-   * 同じ候補メールで `createAccountWithIdentity` を並行に呼んでも、投げずに
-   * どちらも作られ、メールが載るのは1つだけであること。core（memory）・pg
-   * 側の同名の歯と同じ入力・同じ期待値。
-   *
-   * **変異**: `createAccountWithIdentity` の `emailCollides` 判定を外すと、
-   * この歯は赤に戻る（両方の account に `email` が乗る）。
-   */
   it('createAccountWithIdentity を別々の identity・同じ候補メールで並行に呼んでも、投げずにメールが載るのは1つだけ', async () => {
     const makeInput = (accountId: string, subject: string) => ({
       account: {
@@ -4726,7 +3803,6 @@ describe('AuthStore', () => {
     ).rejects.toThrow();
     expect((await stores.auth.getLoginRequest('login-4'))?.status).toBe('authenticated');
 
-    // 直れば、同じ要求をそのまま引き取れる。
     const claimed = await stores.auth.claimLoginRequest('login-4', (request) => ({
       id: 'token-4',
       accountId: request.accountId ?? '',
@@ -4764,17 +3840,10 @@ describe('AuthStore', () => {
 
     expect(results.filter((result) => result !== null)).toHaveLength(1);
     expect((await stores.auth.getLoginRequest('login-5'))?.status).toBe('processing');
-    // 一度 processing になったら、あとから何度呼んでも取れない。
     expect(await stores.auth.beginLoginExchange('login-5')).toBeNull();
     expect(await stores.auth.beginLoginExchange('居ない')).toBeNull();
   });
 
-  /**
-   * **`setAccountOwner` の不変条件（issue #1198）: 宣言（`declaredAt !== null`）は
-   * 「許可済みの行にしか立たない」。** fs / pg / in-memory の3実装すべてで測る
-   * （このファイルは fs、`packages/storage-pg/src/index.auth.test.ts` が pg、
-   * `packages/core/src/auth-service.test.ts` は in-memory を経由する）。
-   */
   describe('setAccountOwner（実行環境の持ち主としての宣言）', () => {
     it('許可済みの行には宣言を立てられる', async () => {
       await stores.auth.putAccount({
@@ -4803,7 +3872,6 @@ describe('AuthStore', () => {
 
       const result = await stores.auth.setAccountOwner('account-1', '2026-01-03T00:00:00.000Z');
       expect(result).toEqual({ status: 'not_granted' });
-      // 書かれていないこと。
       expect((await stores.auth.getAccount('account-1'))?.ownerDeclaredAt).toBeNull();
     });
 
@@ -4825,18 +3893,6 @@ describe('AuthStore', () => {
     });
   });
 
-  /**
-   * **大小文字だけが違う検証済みメールも衝突として検出する（fs。issue #1702）。**
-   *
-   * `packages/core/src/auth-service.test.ts` の同名の歯（memory）と同じ入力・
-   * 同じ期待値を、`createAuthService`（`auth-service.ts` の実コード。器だけ fs へ
-   * 差し替える）に対して確かめる。`AuthStore.createAccountWithIdentity` の doc
-   * （`grep -Fn -- '検証済みメールの一意性を壊さない' packages/core/src/auth.ts`）
-   * は「検証済みメールの一意性を壊さない」ことを明示的な意図として書いている。
-   * issue #1688 でこの歯は `findAccountByEmail` が大小文字を区別していたために
-   * red だった（オーナー判断は #1702：メールの大小文字は区別しない）。比較を
-   * 大小文字を無視する形へ直したいまは green であることが保証。
-   */
   describe('大小文字だけが違う検証済みメール（#1702）', () => {
     function fakeProvider(profiles: Record<string, OAuthProfile>): OAuthProvider {
       return {
@@ -4900,25 +3956,9 @@ describe('AuthStore', () => {
       if (claimedImpostorCase.status !== 'ready') throw new Error('ログインできていない');
 
       expect(claimedImpostorCase.account.id).not.toBe(claimedAlice.account.id);
-      // 大小文字を区別せずに衝突を検出しているので null（#1702）。
       expect(claimedImpostorCase.account.email).toBeNull();
     });
 
-    /**
-     * **issue #1751（同じ穴が #1741 にも起票されている。fs）。**
-     *
-     * `createAccountWithIdentity`（#1714）が当初1操作にしたのは同じ
-     * `(provider, subject)` の競合だけだった。メールの衝突検査
-     * （`findAccountByEmail`）は `completeLogin` の読んでから書く側に残って
-     * いたので、**別々の identity** が大小文字だけ違う検証済みメールで同時に
-     * ログインしてくると、fs でも両方が「衝突なし」を見て、検証済みメールを
-     * 持つアカウントが2つできていた（fs にはメールの一意制約が無い）。いまは
-     * 衝突検査自体を `createAccountWithIdentity` の1操作（`#mutate` の中）へ
-     * 移した。
-     *
-     * **変異**: `packages/storage-fs/src/auth.ts` の `createAccountWithIdentity`
-     * にある `emailCollides` の判定を外すと、この歯は赤に戻る。
-     */
     it('r2: 別々の identity が大小文字だけ違う検証済みメールで同時にログインしても、検証済みメールを持つアカウントは1つだけ', async () => {
       const service = createAuthService({
         store: stores.auth,
@@ -4981,7 +4021,6 @@ describe('AuthStore', () => {
       expect(withVerifiedEmail).toHaveLength(1);
     });
 
-    /** **issue #1741（大小文字が同じ版。#1751 と同じ穴）。** */
     it('#1741: 別々の identity が大小文字まで同じ検証済みメールで同時にログインしても、検証済みメールを持つアカウントは1つだけ', async () => {
       const service = createAuthService({
         store: stores.auth,
@@ -5046,16 +4085,10 @@ describe('AuthStore', () => {
   });
 });
 
-/** 引き取れないはずの経路で呼ばれたら、テストとして落とす。 */
 function neverIssued(): never {
   throw new Error('引き取れないはずの要求でトークンを作ろうとした');
 }
 
-/**
- * 会話の既読の位置と基準時刻。契約は3実装で同じ関数を通す
- * （`conversation-read.ts` の `verifyConversationReadStoreContract`）。ここで足すのは
- * fs だけが持つ形 —— 器を作り直しても残ることと、壊れたファイルの読み方。
- */
 describe('FsConversationReadStore', () => {
   it('器の契約（3実装で同じことを測る）', async () => {
     await verifyConversationReadStoreContract(stores.conversationReads);

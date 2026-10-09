@@ -41,29 +41,7 @@ import {
 } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * pg ドライバの受け入れ確認。
- *
- * **偽物の DB では確かめたことにならない。** PGlite はインプロセスで動く実
- * PostgreSQL なので、SQL・索引・冪等性まで本番と同じ経路で通る（CI に外部 DB を
- * 要求せずに済む）。fs ドライバのテストと同じ振る舞いを、同じ IF に対して問う。
- *
- * **このファイルは `index.test.ts` から移した（分割元は git blame で辿れる）。**
- * 元の1本（5588行・262テスト）は単独で走らせると 564.75s かかり、作業者の
- * Bash の既定タイムアウト（300s）に収まらなかった（2026-09-29 実測、
- * `.claude/skills/test-in-chunks/SKILL.md`）。`vitest --shard` はファイル数で
- * 等分するので、1本のままでは分割にならない——だから最上位の `describe`
- * 単位でファイルを分けた。ここは `migrate` / `seedPgWorkspace` /
- * `PgJournalStore` / `PgJobStore` / `PgPermissionGrantStore` /
- * `PgScheduleStore`、および journal の entry 列の重複防止（#1311）を持つ
- * （この最後の1本は元ファイルでは末尾（`AuthStore` の後）に置かれていたが、
- * 内容は journal store の話なのでここへまとめた）。**`describe` / `it` の
- * 本文・順序は1文字も変えていない**——元ファイルの対応する範囲とこのファイルを
- * 突き合わせれば同一であることが確認できる。冒頭の足場（`beforeEach` で
- * PGlite を都度立てて `migrate` する形、`afterEach` で閉じる形）も元ファイルと
- * 同じものを複製している（分岐は生まない——共有モジュールへ切り出すほどの
- * 複雑さが無かったため、各ファイルへ同じ短い足場を複製する側を選んだ）。
- */
+// 偽物の DB を使わない: PGlite は実 PostgreSQL で、SQL・索引・冪等性まで本番と同じ経路を通るから。
 let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
@@ -99,9 +77,7 @@ describe('migrate', () => {
 
   it('created_at 列の追加は加算のみ・冪等（記憶の絶対条件6）——値を消さず二度通しても壊れない', async () => {
     await stores.persona.write('values', '# 価値観\n');
-    // write() 自身が新規作成時に created_at を入れるようになったため
-    // （記憶の createdAt 対応）、markCreatedAt が実際に値を立てる場面を
-    // 見るには、一度 null に戻してから呼ぶ必要がある。
+    // write() が created_at を入れるので、markCreatedAt が値を立てる場面を作るには一度 null に戻す。
     await db.execute(sql`update memory set created_at = null where slug = 'values'`);
     await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
 
@@ -114,28 +90,16 @@ describe('migrate', () => {
     });
   });
 
-  /**
-   * archive の tombstone 列（`removed_at` / `removed_bytes`。#698）の追加は
-   * 2回通しても壊れない。
-   *
-   * **⚠️ 同じ入り口を2回呼ぶだけでは測ったことにならない**（AGENTS.md
-   * 「2回通しても壊れないを測るテストは…『2周目でだけ壊れる状態』を挟む
-   * こと」）——1周目（`beforeEach` の `migrate(db)`）の後に**実際に行を積み、
-   * `remove()` を呼んでから**2周目を当てる。tombstone された行・していない
-   * 行の両方が、2周目のあとも壊れていないことを見る。
-   */
+  // 同じ入り口を2回呼ぶだけにしない: 1周目の後に行を積み `remove()` してから2周目を当てないと、2周目でだけ壊れる状態を測れないから。
   it('archive の tombstone 列の追加は2回通しても壊れない（1周目の後に remove() してから2周目を当てる）', async () => {
     const removedId = (await stores.archive.archive('session-migrate-twice-removed', 'BODY\n')).id;
     const removed = await stores.archive.remove(removedId);
     expect(removed.kind).toBe('removed');
 
-    // 2周目——tombstone された行が実在する状態で当てる。
     await migrate(db);
 
-    // 消した行の状態が壊れていない。
     expect(await stores.archive.read(removedId)).toMatchObject({ kind: 'removed' });
 
-    // 消していない行も、2周目のあとに積んでも壊れていない。
     const untouchedId = (await stores.archive.archive('session-migrate-twice-untouched', 'OTHER\n'))
       .id;
     expect(await stores.archive.read(untouchedId)).toEqual({ kind: 'body', body: 'OTHER\n' });
@@ -212,7 +176,6 @@ describe('PgJournalStore', () => {
   });
 
   it('同じミリ秒に並んでも追記順が保たれる（日報が順番を失わない）', async () => {
-    // 直列に積む。`at` で並べ替える実装に退行すると、同一ミリ秒の分が入れ替わる。
     for (let i = 0; i < 20; i += 1) {
       await stores.journal.append({
         type: 'exchange',
@@ -230,8 +193,6 @@ describe('PgJournalStore', () => {
   });
 
   it('NUL を含む記録も残す（PostgreSQL は NUL を受け付けない）', async () => {
-    // マネージャー・作業者の全ツール実行を落とす以上、バイナリ由来の NUL は来る。
-    // ここで挿入ごと落ちると、fs なら残る記録が pg では静かに消える。
     await stores.journal.append({
       type: 'tool_use',
       actor: 'manager:mgr-1',
@@ -246,19 +207,6 @@ describe('PgJournalStore', () => {
     expect(JSON.stringify(entry)).toContain('ab');
   });
 
-  /**
-   * **回帰: `input` を持たない `tool_use` エントリが、jsonb への直列化を挟むと
-   * 跡形もなく消える（#223 と同じ形。日誌エントリ版。Issue #224）。**
-   *
-   * `append()` に渡すオブジェクトは `input` というキーを値 `undefined` として
-   * 持つ（キーは在る）ので、書き込み時の `journalEntrySchema.parse` は通る。
-   * しかし pg 版は `stripNulls(entry)` を経て `jsonb` 列へ入れる（`db.insert`）
-   * ——値が `undefined` のキーはここで丸ごと落ちる。読み出し時は `journal.entry`
-   * 列を `journalEntrySchema.safeParse` に通す（`list`）ので、`input` が必須の
-   * ままだと zod 4 の「キーの不在を許さない」規則に引っかかって落ち、**この行が
-   * `list()` の結果から丸ごと消える**（`createMemoryStores` は直列化しないので、
-   * この壊れ方を再現できない）。
-   */
   it('input の無い tool_use エントリが、jsonb への直列化を挟んでも読み出せる（回帰）', async () => {
     const written = await stores.journal.append({
       type: 'tool_use',
@@ -273,21 +221,7 @@ describe('PgJournalStore', () => {
     expect((entries[0] as { input?: unknown }).input).toBeUndefined();
   });
 
-  /**
-   * **回帰（静かなほう）: `input` というキーが在って値が `undefined` の形。**
-   *
-   * これが実機で通る形である —— `manager.ts` の `case 'tool_use'` は
-   * `input: event.input` と**必ずキーを書く**ので、`event.input` が
-   * `undefined` でも「キーは在る」状態で `append()` へ来る。
-   *
-   * **上のテストとは壊れ方が違う。** キー自体を書かない形は、`input` が必須の
-   * ままだと `append()` の `journalEntrySchema.parse` がその場で投げる（大きな
-   * 音がする）。こちらは**書き込みが通ってしまう** —— zod は「キーが在って値が
-   * `undefined`」を通すからである。pg 版は `jsonb` 列へ入れるので、直列化でキーが落ち、
-   * **読み出しで初めて落ちて、その行が `list()` から黙って消える。**
-   * 跡は残らない（Issue #224）。**silent なのはこちらだけなので、この歯を
-   * 消さないこと。**
-   */
+  // 消さない: 書き込みは通り、読み出しで初めて落ちて行が `list()` から黙って消えるのはこの形だけだから。
   it('input のキーが在って値が undefined でも、直列化を挟んで読み出せる（回帰・静かなほう）', async () => {
     const written = await stores.journal.append({
       type: 'tool_use',
@@ -302,17 +236,7 @@ describe('PgJournalStore', () => {
     expect(entries[0]).toMatchObject({ id: written.id, actor: 'manager:mgr-1', tool: 'Bash' });
   });
 
-  /**
-   * **スキーマに合わない行を「飛ばすが、跡は残す」（Issue #224）。**
-   *
-   * fs 版と同じ道具（`journalRowType` / `noteDroppedJournalRow` /
-   * `noteDroppedJournalRowsSummary`。`packages/core/src/dropped-record.ts`）を
-   * `list()` / `get()` の両方が呼ぶ——**扱いを変えない。**
-   *
-   * 生 SQL でスキーマ検証を経由せず insert する（`PgCommitmentStore` の
-   * 「未知の origin」テストと同じ手口——`append()` 経由では
-   * `journalEntrySchema.parse` を通ってしまい、壊れた行をそもそも作れない）。
-   */
+  // 生 SQL で insert する: `append()` 経由では `journalEntrySchema.parse` を通ってしまい、壊れた行を作れないから。
   describe('スキーマに合わない行の跡（Issue #224）', () => {
     const secret = 'ghp_000000000000000000000000000000000000';
 
@@ -339,17 +263,14 @@ describe('PgJournalStore', () => {
         entries = await stores.journal.list();
       });
 
-      // 1. 読めた行（健全な1件）は今までどおり返る——回帰。
       expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual([
         '健全な行',
       ]);
 
-      // 2. 跡が stderr に出る。type は安全に取れるので載る。
       const joined = lines.join('');
       expect(joined).toContain('日誌の行を読み出せずに飛ばした');
       expect(joined).toContain('type=future-type');
 
-      // 3. **本文は跡に混ざらない。**
       expect(joined).not.toContain(secret);
     });
 
@@ -378,12 +299,7 @@ describe('PgJournalStore', () => {
         }
       });
 
-      // `id` は在るが読めない——今までどおり null（`JournalStore.get` の
-      // 契約は変えない。存在の有無は id 列で判定できるが、それは別の話）。
-      // **issue #3288 で反転した。** 上の「null」は欠陥の固定だった: 在る行を null と返すと、呼び出し元
-      // （`journal_read id=`）が「まだ書かれていない」と言ってしまう。契約を変え、「無い」は null・
-      // 「在るが読めない」は `UnreadableJournalEntryError`（`UnreadableApprovalError` と同じ線）にした。
-      // 跡を残すこと・本文が跡に混ざらないことは変えていない（下の2つの expect はそのまま）。
+      // null を返さない: 在る行を null と返すと、呼び出し元が「まだ書かれていない」と言ってしまうから。
       expect(thrown).toBeInstanceOf(UnreadableJournalEntryError);
       expect((thrown as UnreadableJournalEntryError).id).toBe('broken-1');
       expect((thrown as Error).message).not.toContain(secret);
@@ -408,10 +324,6 @@ describe('PgJournalStore', () => {
       expect(lines).toHaveLength(0);
     });
 
-    /**
-     * **跡でログを埋めない。** 壊れた行が大量にあるとき、同じ種別なら初出の
-     * 1行だけがその場で出て、量は呼び出しの終わりで1行にまとまる。
-     */
     it('同じ種別の行が大量にあっても、初出は1行だけ・量は呼び出しの終わりに1行でまとまる', async () => {
       for (let i = 0; i < 20; i += 1) {
         await db.execute(
@@ -454,25 +366,11 @@ describe('PgJournalStore', () => {
     });
   });
 
-  /**
-   * `JournalStore` の `with` 絞りの契約（issue #418）を、**pg 実装
-   * （PGlite = インプロセスの実 PostgreSQL）**に対して測る。同じ形の歯が
-   * 3つ在る——インメモリ（`packages/core/src/journal-with-contract.test.ts`）
-   * / fs（`packages/storage-fs/src/index.test.ts`）/ pg（このテスト）。1つで
-   * 測って3つとも測ったことにしない（#370 と同じ作法）。
-   */
   describe('with 契約（issue #418）', () => {
     it('未指定=絞らない／指定=その with だけ／[]=0件／limit より前に効く', async () => {
       await verifyJournalStoreWithContract(stores.journal);
     });
 
-    /**
-     * **契約4（limit より前に効く）を、pg の実クエリに対して直接再現する。**
-     * `entry ->> 'with'` の式索引（`schema.ts` の `journal_exchange_with_seq_idx`）
-     * を使った `where` が `.limit()` より前に効いているかを、実際に PGlite へ
-     * 投げて確かめる。**「絞りが効いている」ではなく「窓に食われない」を測る**
-     * （`scan` を症状が出るほど小さくし、manager の行を `scan` より多く積む）。
-     */
     it('manager の往復を scan より多く積んでも、human の発言は窓に食われない', async () => {
       await stores.journal.append({
         type: 'exchange',
@@ -501,14 +399,6 @@ describe('PgJournalStore', () => {
     });
   });
 
-  /**
-   * `JournalStore` の `order` / `after` 契約（issue #432 の2本目）を、
-   * **pg 実装（PGlite = インプロセスの実 PostgreSQL）**に対して測る。同じ形の
-   * 歯が3つ在る——インメモリ
-   * （`packages/core/src/journal-order-with-contract.test.ts`）/ fs
-   * （`packages/storage-fs/src/index.test.ts`）/ pg（このテスト）。1つで
-   * 測って3つとも測ったことにしない（#418 / with 契約と同じ作法）。
-   */
   describe('order/after 契約（issue #432 の2本目）', () => {
     it('order 未指定=desc／asc は正確な逆順／after は絞り・limit より前に効く／同着を飛ばさない', async () => {
       await verifyJournalStoreOrderContract(stores.journal);
@@ -537,7 +427,7 @@ describe('PgJournalStore', () => {
     it('読めない行への editBody の契約（#4064。fs と pg で同じことを測る。インメモリは読めない行を持てない）', async () => {
       await captureStderr(async () => {
         await verifyCommitmentEditUnreadableContract(stores.commitments, async (id) => {
-          // `open` は形を断るので、手編集を模して表へ直に書く。
+          // `open` は形を断るので、表へ直に書く。
           const at = new Date('2026-01-01T00:00:00.000Z');
           await db.insert(commitmentsTable).values({
             id,
@@ -557,25 +447,7 @@ describe('PgJournalStore', () => {
     });
   });
 
-  /**
-   * `JournalQuery` の退化した値（`types: []` / `limit: 0`）の契約
-   * （issue #425）を、**pg 実装（PGlite = インプロセスの実 PostgreSQL）**に
-   * 対して測る。同じ形の歯が3つ在る——インメモリ
-   * （`packages/core/src/journal-query-edge-contract.test.ts`）/ fs
-   * （`packages/storage-fs/src/index.test.ts`）/ pg（このテスト）。1つで
-   * 測って3つとも測ったことにしない（`with` 契約 / `order` 契約と同じ作法）。
-   *
-   * **pg だけが持っていた壊れ方**: `types` の絞りだけが
-   * `query.types.length === 0` を特別扱いして「絞らない」に倒していた
-   * （`journal.ts` の `with` の行はこの特別扱いを持たない）。
-   */
-  /**
-   * **読めない行が `LIMIT` の後で捨てられる実 SQL（PGlite）での、続きの言い方**
-   * （Issue #2604 / #2605）。`list()` は 500 件を求めて 499 件、または 0 件で返る
-   * ことがあり、そのどちらも「先に行が無い」ではない。
-   */
   describe('listPage: 読めない行と頁の境界（Issue #2604 / #2605）', () => {
-    /** seq は挿入順。`broken` は schema に合わない種別（未知の版の行）。 */
     async function insertRows(rows: readonly { id: string; broken?: true }[]): Promise<void> {
       for (const [index, row] of rows.entries()) {
         const at = new Date(Date.UTC(2026, 7, 1, 0, 0, index));
@@ -596,7 +468,6 @@ describe('PgJournalStore', () => {
     it('頁の途中に読めない行があると、entries は短いが next は先の行を指す', async () => {
       await insertRows([{ id: 'g0' }, { id: 'g1' }, { id: 'b2', broken: true }, { id: 'g3' }]);
 
-      // desc の生の頁は [g3, b2]。b2 が捨てられて entries は 1 件だが、g1・g0 が先に在る。
       const page = await stores.journal.listPage({ limit: 2 });
 
       expect(ids(page.entries)).toEqual(['g3']);
@@ -615,12 +486,10 @@ describe('PgJournalStore', () => {
       expect(ids(first.entries)).toEqual(['g3']);
       expect(first.next?.id).toBe('g3');
 
-      // 生の頁は [b2, b1] で全部読めない。空だが終端ではない。
       const second = await stores.journal.listPage({ limit: 2, after: first.next! });
       expect(second.entries).toEqual([]);
       expect(second.next).toEqual({ id: 'b1', at: '2026-08-01T00:00:01.000Z' });
 
-      // 継続点（捨てた行）は after の錨として引ける。その先に g0 が在る。
       const third = await stores.journal.listPage({ limit: 2, after: second.next! });
       expect(ids(third.entries)).toEqual(['g0']);
       expect(third.next).toBeNull();
@@ -661,7 +530,6 @@ describe('PgJournalStore', () => {
         { pageSize: 2 },
       );
 
-      // 頁は [g4, b3] / [b2, g1] / [g0]。b2 と b3 が別の頁の端でも先を取りこぼさない。
       expect(seen).toEqual(['g4', 'g1', 'g0']);
       expect(result).toEqual({ scanned: 3, truncated: false });
     });
@@ -685,7 +553,7 @@ describe('PgJournalStore', () => {
         { pageSize: 2 },
       );
 
-      // desc の頁は [g4, g3] / [b2, b1]（丸ごと読めない）/ [g0]。空の頁で打ち切ると g0 を逃す。
+      // 空の頁で打ち切らない: g0 を逃すから。
       expect(seen).toEqual(['g4', 'g3', 'g0']);
       expect(result).toEqual({ scanned: 3, truncated: false });
     });
@@ -703,10 +571,6 @@ describe('PgJournalStore', () => {
     });
   });
 
-  /**
-   * `JournalStore.get` の「在るが読めない」の契約（issue #3288）を、**pg 実装**（PGlite）に対して測る。
-   * fs は `packages/storage-fs/src/index.test.ts`。インメモリは読めない行を持てず対象外。
-   */
   describe('get の「在るが読めない」契約（issue #3288）', () => {
     it('読めない行の get は UnreadableJournalEntryError／無い id は null／読める行と list は巻き込まれない', async () => {
       await verifyJournalStoreUnreadableGetContract(stores.journal, async () => {
@@ -724,36 +588,12 @@ describe('PgJournalStore', () => {
     });
   });
 
-  /**
-   * `JournalStore.oldestAt()`（日誌の地平。issue #1510）の契約を、**pg
-   * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
-   * （`packages/core/src/journal-horizon-contract.test.ts`）/ fs
-   * （`packages/storage-fs/src/index.test.ts`）/ pg（このテスト）。1つで
-   * 測って3つとも測ったことにしない（`with` 契約 / `order` 契約 /
-   * `query edge` 契約と同じ作法）。
-   *
-   * pg 実装は `journal_at_idx` に乗る `ORDER BY at ASC LIMIT 1` なので、
-   * テーブルの行数に依存しない——ここでは答えが正しいことを測る
-   * （索引が実際に使われているかは実行計画の確認が要り、ここでは見ていない）。
-   */
   describe('日誌の地平（issue #1510）', () => {
     it('空なら null／1件ならその at／複数件でも最古のまま', async () => {
       await verifyJournalStoreHorizonContract(stores.journal);
     });
   });
 
-  /**
-   * `JournalStore` の `q`（本文を語で探す）の契約（issue #250）を、**pg
-   * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
-   * （`packages/core/src/journal-search-contract.test.ts`）/ fs
-   * （`packages/storage-fs/src/index.test.ts`）/ pg
-   * （このファイル、`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。
-   * 1つで測って3つとも測ったことにしない（`with` 契約 / `order` 契約 / `query edge` 契約と同じ作法）。
-   *
-   * **pg だけが持ちうる壊れ方**: `ILIKE` のパターンで `%` / `_` を
-   * エスケープし忘れると、`q: '50%'` が全件を返す（契約4）。fs /
-   * インメモリでは素の部分一致なので、この穴はこの実装にしか開かない。
-   */
   describe('q 契約（issue #250）', () => {
     it('未指定=絞らない／部分一致／大文字小文字を区別しない／%_ はワイルドカードでない／""=絞らない／limit より前に効く', async () => {
       await verifyJournalStoreSearchContract(stores.journal);
@@ -824,9 +664,6 @@ describe('PgJobStore', () => {
     expect((await stores.jobs.getApproval('ap-1'))?.answer).toBe('よい');
   });
 
-  // #963: withdrawn_at 列（answered_at と対の派生列）が pendingOnly の絞り込みに
-  // 効くこと。fs / インメモリと同じ契約（`packages/storage-fs/src/index.test.ts`
-  // の同名テスト）。
   it('取り下げた承認待ちは pendingOnly から消えるが、getApproval では理由ごと読める', async () => {
     await stores.jobs.putApproval({
       id: 'ap-withdraw',
@@ -849,14 +686,6 @@ describe('PgJobStore', () => {
     expect(after?.withdrawnReason).toBe('自分で答えを見つけた');
   });
 
-  /**
-   * **`listJobs` もスキーマに合わない行を「飛ばすが、跡は残す」（Issue #224）。**
-   *
-   * `PgJournalStore#list` の「スキーマに合わない行の跡」テストと同じ道具・
-   * 同じ手口（生 SQL で `jobSchema.parse` を経由せず挿入する）で揃える。
-   * `Job` は判別子の `type` を持たないので、`journalRowType` は
-   * `undefined` を返し跡の見分けは `unknown-shape`（type 無し）1本になる。
-   */
   describe('スキーマに合わない行の跡（Issue #224）', () => {
     const secret = 'ghp_000000000000000000000000000000000000';
 
@@ -892,20 +721,14 @@ describe('PgJobStore', () => {
         found = await stores.jobs.listJobs();
       });
 
-      // 1. 読めた行（健全な1件）は今までどおり返る——回帰。
       expect(found.map((job) => job.summary)).toEqual(['健全な行']);
 
-      // 2. 跡が stderr に出る。
       const joined = lines.join('');
       expect(joined).toContain('日誌の行を読み出せずに飛ばした');
 
-      // 3. **本文は跡に混ざらない。**
       expect(joined).not.toContain(secret);
     });
 
-    // **意味は変わっていない**: 上の `listJobs()` の歯は、戻り型を変えていないので
-    // そのまま成り立つ。変わったのは、飛ばした行が出力から消えなくなったこと
-    // ——`listUnreadableJobs()` が別の口で返す（issue #2345）。
     it('listUnreadableJobs(): 飛ばした行を id（列）と不正な欄名だけで返す。本文は載せない（issue #2345）', async () => {
       const now = new Date().toISOString();
       await stores.jobs.putJob({
@@ -935,15 +758,12 @@ describe('PgJobStore', () => {
       let unreadable: Awaited<ReturnType<typeof stores.jobs.listUnreadableJobs>> = [];
       const lines = await captureStderr(async () => {
         unreadable = await stores.jobs.listUnreadableJobs();
-        // 覚え（`#cache`）が温まった後の2回目も同じ答えを返す。
         expect(await stores.jobs.listUnreadableJobs()).toEqual(unreadable);
       });
 
-      // この行は `status` が未知で `summary` も無い（不正な欄名だけを並べる）。
       expect(unreadable).toEqual([{ id: 'broken-u', reason: '不正な欄: status,summary' }]);
       expect(JSON.stringify(unreadable)).not.toContain(secret);
-      // `listUnreadableJobs()` は「読み飛ばした」の跡を出さない（同じ行を `listJobs()` と
-      // 2回数えない）。
+      // 跡を出さない: 同じ行を `listJobs()` と2回数えないため。
       expect(lines.join('')).not.toContain('日誌の行を読み出せずに飛ばした');
     });
 
@@ -977,25 +797,12 @@ describe('PgJobStore', () => {
     });
   });
 
-  /**
-   * `listJobs()` の行の版メモ（Issue #900）。
-   *
-   * **狙いは「速くなったこと」ではなく「答えが変わっていないこと」を測ること。**
-   * 冷たい覚え（1回目）と温かい覚え（2回目以降）で `listJobs()` の戻りが
-   * 並びを含めて一致すること、太った（新しい job が増えた）ときに正しい位置に
-   * 出ること、書き換えが温かい覚えにも届くこと、壊れた行の跡が2回目でも
-   * 同じ文言で出ること、そして2回目が jsonb を1行も引かないことを撃つ。
-   */
   describe('listJobs() の行の版メモ（Issue #900）', () => {
-    // **要素を対称にしない。** id・createdAt・status・本文をすべて違う値にし、
-    // どれか2つを入れ替えたら少なくとも1つのアサーションが落ちる形にする。
+    // 要素を対称にしない: どれか2つを入れ替えたら少なくとも1つのアサーションが落ちる形にするため。
     const t = (offsetMs: number) =>
       new Date(Date.parse('2026-01-01T00:00:00.000Z') + offsetMs).toISOString();
 
-    /**
-     * SQL を数えるアサーションの失敗メッセージ（#3025）。落ちたとき、実際に出た本数と文だけで
-     * 切り分けられるようにする。**文だけでパラメータは載せない。**
-     */
+    // パラメータは載せない: 秘密が失敗メッセージへ出るから。
     const dump = (label: string, qs: readonly string[]): string =>
       `${label}: ${qs.length} 本\n${qs.map((q, i) => `  [${i}] ${q}`).join('\n')}`;
 
@@ -1046,9 +853,8 @@ describe('PgJobStore', () => {
 
     it('太る＝緑: 新しい job が正しい位置に出る（覚えが隠さない）', async () => {
       await seedFour();
-      await stores.jobs.listJobs(); // 覚えを温める
+      await stores.jobs.listJobs();
 
-      // mid（t=2000）より前・alpha（t=1000）より後 ⟹ 正しい位置は alpha と mid の間。
       await stores.jobs.putJob({
         id: 'gamma',
         createdAt: t(1_500),
@@ -1063,12 +869,12 @@ describe('PgJobStore', () => {
 
     it('痩せない側／書き換えが届く＝緑: putJob 後の listJobs() は新しい値を返す（覚えの一番危ない失敗——古い値を返す——を直接撃つ）', async () => {
       await seedFour();
-      await stores.jobs.listJobs(); // 覚えを温める（この時点で mid は status=failed）
+      await stores.jobs.listJobs();
 
       await stores.jobs.putJob({
         id: 'mid',
         createdAt: t(2_000),
-        updatedAt: t(2_500), // xmin も updated_at も進む
+        updatedAt: t(2_500),
         status: 'done',
         summary: 'mid の要旨',
         lastReport: 'mid の書き換え後の報告',
@@ -1080,11 +886,6 @@ describe('PgJobStore', () => {
       expect(mid?.lastReport).toBe('mid の書き換え後の報告');
     });
 
-    /**
-     * **時刻に依らないことの直接の歯（#3025）。** 版は `xmin` と `updated_at` の連結なので、
-     * 同じ `updatedAt`（同じミリ秒）で2回書いても、`xmin` が進むので覚えは古い値を返さない。
-     * 時刻を固定して同じミリ秒を決定的に作る。
-     */
     it('同じ updatedAt（同じミリ秒）で書き換えても、覚えは古い値を返さない（xmin が版を分ける）', async () => {
       const base = {
         id: 'same-ms',
@@ -1094,7 +895,7 @@ describe('PgJobStore', () => {
         summary: '同じ要旨',
       };
       await stores.jobs.putJob({ ...base, lastReport: '最初の報告' });
-      expect((await stores.jobs.listJobs())[0]?.lastReport).toBe('最初の報告'); // 覚えを温める
+      expect((await stores.jobs.listJobs())[0]?.lastReport).toBe('最初の報告');
 
       await stores.jobs.putJob({ ...base, lastReport: '書き換え後の報告' });
 
@@ -1139,14 +940,7 @@ describe('PgJobStore', () => {
       expect(second.join('')).not.toContain(bodyMarker);
     });
 
-    /**
-     * 費用の歯: 2回目の呼び出しは jsonb を1行も引かない。
-     *
-     * **時間では測らない**（器の混雑で偽陽性・偽陰性になる。AGENTS.md
-     * 「速くなったを時間で測る歯にしないこと」）。`client.withLogger({ logQuery })`
-     * で実際に発行された SQL 文字列を捕まえ、`job` 列（jsonb）を選ぶ
-     * クエリが2回目には1本も出ていないことを見る。
-     */
+    // 時間では測らない: 器の混雑で偽陽性・偽陰性になるから。発行された SQL 文字列で見る。
     it('費用の歯: 2回目の呼び出しは jsonb を1行も引かない（発行された SQL で見る）', async () => {
       const queries: string[] = [];
       const localDb = client.withLogger({ logQuery: (query: string) => queries.push(query) });
@@ -1175,12 +969,10 @@ describe('PgJobStore', () => {
       await localStores.jobs.listJobs();
       const secondCallQueries = [...queries];
 
-      // 1回目は段2（jsonb を引く SELECT）が出る。
       expect(
         firstCallQueries.some((q) => /select .*"job".* from "jobs"/i.test(q)),
         dump('1回目', firstCallQueries),
       ).toBe(true);
-      // 2回目は段1（id/xmin/updated_at だけ）しか出ない——jsonb 列を選ぶ形が無い。
       expect(
         secondCallQueries.some((q) => /select .*"job".* from "jobs"/i.test(q)),
         dump('2回目', secondCallQueries),
@@ -1188,14 +980,6 @@ describe('PgJobStore', () => {
       expect(secondCallQueries.length, dump('2回目', secondCallQueries)).toBe(1);
     });
 
-    /**
-     * 段2の2つの枝——「全行が stale（冷たい起動。バインド変数の上限
-     * 65,535を避けるため `WHERE` を経由しない素の `SELECT`）」と
-     * 「一部だけ stale（`WHERE id IN (...)` を経由する）」——の**両方**が
-     * 実際に選ばれることを、発行された SQL 文字列で見る。マネージャーの
-     * レビュー指摘（2026-09-12）: 元の歯は「全部 stale」か「0件」しか
-     * 通しておらず、`WHERE` 付きの枝を1本も撃っていなかった。
-     */
     it('段2の分岐: 全行stale(冷たい起動)はWHERE無し・一部staleはWHERE付きのSQLが出る', async () => {
       const queries: string[] = [];
       const localDb = client.withLogger({ logQuery: (query: string) => queries.push(query) });
@@ -1216,7 +1000,6 @@ describe('PgJobStore', () => {
         summary: 'b',
       });
 
-      // 1回目(冷たい起動): 2件とも stale ⟹ 段2は WHERE を経由しない。
       queries.length = 0;
       await localStores.jobs.listJobs();
       const coldCallQueries = [...queries];
@@ -1224,7 +1007,6 @@ describe('PgJobStore', () => {
       expect(coldStage2, dump('冷たい1回目', coldCallQueries)).toHaveLength(1);
       expect(coldStage2[0], dump('冷たい1回目', coldCallQueries)).not.toMatch(/where/i);
 
-      // b だけ書き換える ⟹ 2回目は a が温かい・b だけ stale(一部)。
       await localStores.jobs.putJob({
         id: 'b',
         createdAt: t(1_000),
@@ -1246,16 +1028,6 @@ describe('PgJobStore', () => {
       );
     });
 
-    /**
-     * `ManagerPool.list()` 側。**`packages/core/src/manager.ts` は1文字も
-     * 変えていない**——`list()` の戻りが同じであることは「`listJobs()` の
-     * 戻りが同じ」から従う、という論証をここで実際に確かめる。
-     *
-     * `#records` に何も載っていない（`ManagerPool` を起こしただけで委譲を
-     * 1本も動かしていない）状態なので、すべてのジョブが「台帳にしか無い分」
-     * の枝（`manager.ts` の `#load` に相当する fallback 経路）を通る——
-     * これは実際の508行の内訳（事前情報）と同じ枝である。
-     */
     it('ManagerPool.list(): 2回呼んでも並びを含めて戻りが一致する', async () => {
       await seedFour();
 
@@ -1268,23 +1040,14 @@ describe('PgJobStore', () => {
       const first: ManagerSummary[] = await pool.list();
       const second: ManagerSummary[] = await pool.list();
 
-      // list() は startedAt（=job.createdAt）の降順——listJobs() の昇順とは逆順。
       expect(first.map((s) => s.managerId)).toEqual(['beta', 'mid', 'alpha', 'zeta']);
       expect(second).toEqual(first);
     });
 
-    /**
-     * マネージャーからの追補（2026-09-12）: 「行が消えない」を覚えの前提に
-     * しないことを直接撃つ。
-     *
-     * **`JobStore` にはいま行を消す口が無い**（`#cache` の doc）ので、ここは
-     * `db.delete(jobsTable)` を drizzle で直接呼ぶ——`JobStore` の口を経由
-     * しない。**将来 `JobStore` に消す口が生えたときの先取りとしてこの形に
-     * してある。**
-     */
+    // `JobStore` に行を消す口が無いので、`db.delete(jobsTable)` で直接消す。
     it('行が直接 DELETE された後の listJobs() は、消えた id を返さない（並びも崩れない）', async () => {
       await seedFour();
-      await stores.jobs.listJobs(); // 覚えを温める（zeta/alpha/mid/beta の4件とも覚えに乗る）
+      await stores.jobs.listJobs();
 
       await db.delete(jobsTable).where(eq(jobsTable.id, 'mid'));
 
@@ -1365,7 +1128,7 @@ describe('PgScheduleStore', () => {
   it('読めない行の契約（Issue #3859。fs と pg で同じことを測る。インメモリは読めない行を持てない）', async () => {
     await captureStderr(async () => {
       await verifyScheduleUnreadableContract(stores.schedules, async (kind) => {
-        // `put` は形を断るので、版ずれ・手編集を模して表へ直に書く。
+        // `put` は形を断るので、表へ直に書く。
         const at = new Date('2026-01-01T00:00:00.000Z');
         const plan = {
           kind,
@@ -1477,10 +1240,8 @@ describe('PgScheduleStore', () => {
       'schedule',
     );
 
-    // 返るのは更新前の姿（前回いつ動いたかを呼び出し側が要る）
     expect(claimed?.request).toBe(plan.request);
     expect(claimed?.lastRunAt).toBeUndefined();
-    // 列だけ直しても読み出しは jsonb からなので、両方が揃っていること
     expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
     expect((await stores.schedules.get('issue-round'))?.updatedAt).toBe(plan.updatedAt);
     expect((await stores.schedules.list()).entries).toHaveLength(1);
@@ -1496,7 +1257,7 @@ describe('PgScheduleStore', () => {
       'schedule',
     );
 
-    // claim だけでは定期の基準を進めない（ここで進めると、直後に落ちた回が消える）
+    // claim で定期の基準を進めない: 直後に落ちた回が消えるから。
     const claimed = await stores.schedules.get('issue-round');
     expect(claimed?.pendingRun).toEqual({ at: '2026-08-13T00:00:00.000Z', cause: 'schedule' });
     expect(claimed?.lastScheduledRunAt).toBeUndefined();
@@ -1517,7 +1278,6 @@ describe('PgScheduleStore', () => {
       'schedule',
     );
 
-    // 前の発火（別の時刻）の完了が遅れて届いた
     await stores.schedules.completeRun('issue-round', '2026-08-12T00:00:00.000Z', 'schedule');
 
     const held = await stores.schedules.get('issue-round');
@@ -1538,12 +1298,11 @@ describe('PgScheduleStore', () => {
 
     const after = await stores.schedules.get('issue-round');
     expect(after?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
-    // これを動かすと、再起動した瞬間に定期の予定が手動実行の時刻へずれる
+    // 動かさない: 再起動した瞬間に定期の予定が手動実行の時刻へずれるから。
     expect(after?.lastScheduledRunAt).toBeUndefined();
   });
 
   it('消された・書き換わった依頼は確定できない（条件つき UPDATE）', async () => {
-    // 知らない kind
     expect(
       await stores.schedules.claimRun(
         'しらない',
@@ -1553,7 +1312,6 @@ describe('PgScheduleStore', () => {
       ),
     ).toBeNull();
 
-    // 読んだ後に消された
     await stores.schedules.put(plan);
     await stores.schedules.remove('issue-round');
     expect(
@@ -1565,7 +1323,6 @@ describe('PgScheduleStore', () => {
       ),
     ).toBeNull();
 
-    // 読んだ後に書き換えられた（版が違う）
     await stores.schedules.put(plan);
     await stores.schedules.put({
       ...plan,
@@ -1580,7 +1337,6 @@ describe('PgScheduleStore', () => {
         'schedule',
       ),
     ).toBeNull();
-    // 新しい版に古い発火の跡を付けない
     expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBeUndefined();
     expect((await stores.schedules.get('issue-round'))?.request).toBe('人間が直した依頼');
   });
@@ -1593,40 +1349,20 @@ describe('PgScheduleStore', () => {
   });
 
   it('読めない行を「消された」に潰さない（fs 版と同じく失敗を表へ出す）', async () => {
-    // 人間が手で直した・古い形が残っている、を模して不正な plan を直接置く
     await db.execute(
       sql`insert into schedules (kind, created_at, updated_at, plan)
           values ('broken', now(), now(), '{"kind":"broken"}'::jsonb)`,
     );
 
-    // null を返すと、クローンから見て「消された依頼」と区別が付かなくなり、
-    // 本文なしの曖昧なターンが走る（clone.ts が読取不能を分けている意味が消える）。
-    // **`get(kind)` はこの区別を今も保つ。**
+    // null を返さない: クローンから「消された依頼」と区別が付かず、本文なしの曖昧なターンが走るから。
     await expect(stores.schedules.get('broken')).rejects.toThrow(/読めない形/);
 
-    // **issue #1944 で反転。** 直す前はここも `rejects.toThrow(/読めない形/)`
-    // だった——`list()` が行ごとに `parsePlan()` を呼び、1行でも失敗すると
-    // そのまま投げていたため、`broken` 1行の不正で一覧全体が例外を投げ、
-    // 正しい依頼まで読めなくなっていた（「一覧から黙って落とすと digest /
-    // schedule_list / refresh から消えて人間にも原因が見えなくなる」という
-    // 直す前の懸念自体は正しかったが、それを「1件の不正で一覧全体を止める」
-    // ことで防いでいた）。#1944 は fs 側の #1868 / #1928 の線（1行ずつ検査し、
-    // 合わない行は一覧から外して stderr に跡を出す。DB の行そのものは消さない）
-    // に pg 側もそろえた——`get('broken')` が読めない行を投げたまま区別を
-    // 保っているので（直前の assertion）、`list()` が黙ってではなく跡付きで
-    // 飛ばすことと両立する。ここでは他に正しい依頼が無いので `list()` は
-    // 空配列を返す。
     expect((await stores.schedules.list()).entries).toEqual([]);
 
-    // 「無い」ことだけが null である
     expect(await stores.schedules.get('しらない')).toBeNull();
   });
 });
 
-/**
- * **`entry` に列と重複する `id` / `at` / `type` を書かない（issue #1311 §1-d）。**
- * 読むときは列から組み立て直すので、返る形は1文字も変わらない。
- */
 describe('journal の entry は列と重複する欄を持たない（#1311）', () => {
   it('新しい行の entry は id / at / type を持たず、get / list は append が返したものと同じ形を返す', async () => {
     const appended = await stores.journal.append({
