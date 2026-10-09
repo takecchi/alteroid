@@ -1058,8 +1058,7 @@ function classifyDroppedOutlineLines(
     const section = matches[0]!;
     const currentLine = currentLineBySectionId.get(section.id);
     if (currentLine !== undefined && nextLineSet.has(currentLine)) {
-      // その節のいまの行は、新しいカードに現に載っている——押し出しでは
-      // なく、ただの更新（新しい行は `added` 側に既に出ている）。
+      // 見出しが一致するだけでは押し出されたと言わない: いまの行が新しいカードに現に載っているなら、ただの更新のため
       other.push(line);
       continue;
     }
@@ -1069,15 +1068,6 @@ function classifyDroppedOutlineLines(
   return { pushedOut, removedOrRewritten, ambiguous, other };
 }
 
-/**
- * 押し出された節を、目次と同じ1行の形（**いまの**節id・文字数つき）で
- * 名乗る。文字数の予算（`MEMORY_DELTA_PUSHED_OUT_BUDGET`）で切る——件数が
- * 多いときに差分そのものが肥大化しないため（`.claude/skills/listing-and-detail/SKILL.md`
- * 「予算は件数ではなく文字数で持つ」）。
- *
- * 同じ節が複数の消えた行から重複して拾われることは無い——`section.id` で
- * 重複を除いてから並べる。
- */
 function renderPushedOutSections(
   pushedOut: readonly { heading: string; section: MemorySection }[],
 ): string {
@@ -1092,65 +1082,6 @@ function renderPushedOutSections(
   });
 }
 
-/**
- * premise のカードの「変わった範囲だけ」を描く。差分にする価値が無ければ
- * `null` を返す（呼び手はカード全体へ倒す）。
- *
- * ## なぜ要るのか — 小さな書き換えがカード1枚ぶんの文脈を積んでいた
- *
- * `clone.ts` の `#withFreshMemory` は、変わった文書を会話へ載せ直す。その塊は
- * 会話の履歴として残り続けるので、**1回の書き換えの費用は「変えた量」ではなく
- * 「載せ直す塊の大きさ」で決まる。**
- *
- * 本番の実測（2026-09-07、Railway の PostgreSQL を直接引いた値）: 記憶の
- * 書き換えは1日 244 回あり、`alteroid-work` だけで 120 回だった。**カードに
- * したあとでも、1枚が予算いっぱい（要旨 ＋ 目次）なら1日で数十万トークンが
- * 会話へ積まれる。**
- *
- * ## 行の集合で差を取る（前後の一致で切らない）
- *
- * **カードは「見出し行 ＋ 要旨 ＋ 節の行」という索引であり、行が識別子である。**
- * ⟹ 前の版に無い行だけを、文書に現れる順のまま並べればよい。
- *
- * **前後の一致（共通の接頭辞・接尾辞）で切る形にしないこと。** カードの1行目は
- * 「全 N 文字 / M 節」を含むので**必ず変わる**——接頭辞が常に0行になり、
- * 末尾の節を1つ足しただけでも「全部変わった」に落ちる（実際にそう実装して
- * 落ちた）。
- *
- * **行の境界は必ず文字の境界である。** 記憶の見出しには絵文字（⚠️ / 🎯）が
- * 実際に含まれており、UTF-16 の code unit で切るとサロゲートペアが割れて
- * 壊れた文字を文脈へ載せうる。行で扱う限りそれが起こりえない。
- *
- * ## 「載せていない」を「無くなった」と読ませない
- *
- * 変わっていない行数と、**前の版に在って今は無い行数**を必ず名乗る
- * （`excerpt.ts` の「切ったら、切ったことを必ず言う」と同じ約束）。黙って
- * 省くと、クローンはそれを記憶の破損として読む。
- *
- * **⚠️ 行が移動しただけのときは「変わっていない」に数える。** カードは索引なので、
- * 同じ行が別の位置に在っても持っている情報は同じである——ここで位置まで見ると、
- * 節を1つ並べ替えただけで全体が差分に出る。
- *
- * ## ⚠️ 「いまは無い行」は一枚岩ではない（本番の実測で判明。2026-09-11）
- *
- * `memory_append` で9節・2,319文字を追記しただけの書き換えで、消えた行が
- * 7行出た。**その7行の中身は一様ではなかった**——3行は「カードの1行目・
- * 省略の断り書き・算術の説明」のような**節ではない行**で、数字（全体の
- * 文字数・節数・押し出された文字数）が追記のたびに変わるので、旧い版が
- * 消えた行の集合に入るのは当然であり、**何も失われていない**（新しい版が
- * `added` 側に載っている）。残る4行のうち3行は**本物の節の行**で、末尾の
- * 名指し（`MEMORY_PROMPT_OMITTED_TAIL_BUDGET` の枠）に載っていた節が、
- * 新しく追記された節に押し出されて**カードの索引から落ちていた**——節
- * そのものは文書に在る。
- *
- * **旧い実装はこの2種類を「消えたか書き換わったかのどちらか」という1つの
- * 文言に畳んでいた。** これでは押し出された節（＝文書に在り、節id さえ
- * 分かれば `memory_section_read` で開ける）と、本当に消えた・書き換わった
- * 節を、呼び手が区別できない。⟹ **消えた行のうち「節の行」だけを、いまの
- * 文書の節の一覧と突き合わせて3つに分ける**（`classifyDroppedOutlineLines`）。
- * 節ではない行（カードの見出し・断り書き・案内文）は、この分類に入れず
- * 黙って除く——それらは「消えた」のではなく「更新された」だけである。
- */
 function renderPremiseDelta(
   slug: string,
   seenCard: string,
@@ -1161,13 +1092,13 @@ function renderPremiseDelta(
   const seenLines = seenCard.trimEnd().split('\n');
   if (nextCard.trimEnd() === seenCard.trimEnd()) return null;
 
+  // 前後の一致（共通の接頭辞・接尾辞）で切らない: カードの1行目は全 N 文字 / M 節を含み必ず変わるので、末尾に節を1つ足しただけで全部変わった扱いになるため
   const seenSet = new Set(seenLines);
   const nextSet = new Set(nextLines);
   const added = nextLines.filter((line) => !seenSet.has(line));
   const droppedLines = seenLines.filter((line) => !nextSet.has(line));
   const unchangedCount = nextLines.length - added.length;
 
-  // `join('\n')` の長さで測る——実際に載る形そのもので判定する。
   if (added.join('\n').length > nextCard.length * MEMORY_DELTA_MAX_RATIO) return null;
 
   const { pushedOut, removedOrRewritten, ambiguous } = classifyDroppedOutlineLines(
@@ -1176,10 +1107,7 @@ function renderPremiseDelta(
     nextSet,
   );
 
-  // **「消えた」と名乗るのは、実際に節が消えた／押し出された／判定できない
-  // ときだけである。** 3つとも0件なら（＝消えたのは節ではない行だけなら）
-  // この節の文言は1文字も出さない——起きていないことを起きたかのように
-  // 書かない（`AGENTS.md` 地雷表「取れない軸に0の行を作る」の裏返し）。
+  // 消えたのが節ではない行だけなら文言を出さない: 起きていないことを起きたかのように書かないため
   const droppedNotes: string[] = [];
   if (pushedOut.length > 0) {
     droppedNotes.push(
@@ -1211,13 +1139,6 @@ function renderPremiseDelta(
   ].join('\n');
 }
 
-/**
- * premise 1文書ぶんの描画。`seen`（クローンが既に見ている版）が渡され、かつ
- * 差分にする価値があるときだけ、**変わった範囲だけ**を描く。
- *
- * **`seen` を渡さない呼び手（システムプロンプトへの焼き込み・床の測定）は
- * カードの全体を得る。**
- */
 function renderPremisePart(part: MemoryPart, seen?: string): string {
   const frontmatter = parseMemoryFrontmatter(part.content);
   const card = renderPremiseCard(part);
@@ -1234,20 +1155,7 @@ function renderPremisePart(part: MemoryPart, seen?: string): string {
   return frontmatter.kind === 'malformed' ? `${MALFORMED_FRONTMATTER_NOTE}\n${rendered}` : rendered;
 }
 
-/**
- * カードを落とした premise の1行。
- *
- * **「カードが切られても見出しは必ず残る」を守るための形である。**
- * `renderMemoryTocOmission` が逐語でそう名乗っている（「premise はカードが切られても
- * 見出しは必ず残るが、fact はここでしか名乗らない」）——{@link MEMORY_PREMISE_CARD_BUDGET}
- * でカードを落とすとき、その約束を破らない唯一の形がこれである。**文書は消えない。
- * 落ちるのは節の目次と要旨の全文だけで、識別子・大きさ・節数・要旨の抜粋は残る。**
- *
- * 識別子を必ず載せるのは `.claude/skills/listing-and-detail/SKILL.md` の性質1
- * （「詳細を取りに行く鍵がなければ、抜粋にした瞬間に到達できないものが生まれる」）
- * ——`slug` が在れば `memory_outline` / `memory_section_read` / `memory_read` の
- * どれへも行ける。
- */
+// 識別子を必ず載せる: 詳細を取りに行く鍵が無いと、抜粋にした瞬間に到達できないものが生まれるため
 function renderPremiseStub(part: MemoryPart, cardChars: number, kind: MemoryDocKind): string {
   const frontmatter = parseMemoryFrontmatter(part.content);
   const description =
@@ -1264,62 +1172,17 @@ function renderPremiseStub(part: MemoryPart, cardChars: number, kind: MemoryDocK
   );
 }
 
-/**
- * premise のカードのうち、**どれをカードのまま載せ、どれを1行へ落とすか。**
- *
- * ## 蓋を掛けるのは「記憶の全体を描く呼び手」だけである
- *
- * `seenContent` が渡されている呼び（`clone.ts` の `#withFreshMemory` の差分）は
- * **渡された集合そのものが「今回変わった範囲」**であって床ではない。そこへ蓋を
- * 掛けると、システムプロンプト側ではカードが在る文書が差分の側だけ1行に落ちる
- * ——**同じ文脈の中で、同じ文書について2つの載り方が並ぶ。** ⟹ 掛けない。
- *
- * ## 落とす順序は「大きいほうから」である（位置で落とさない）
- *
- * **位置（渡された順＝slug 昇順）で落とすと、落ちる先を動かす手が
- * リネームしか無い。** `excerpt.ts` の `ListingBudget.omitted` が名指ししている
- * 「追記で育つ一覧の末尾が恒久的に落ちる」と同じ形で、クローンに取れる手が無い。
- *
- * 大きいほうから落とせば、落ちた文書に対して**取れる手が在る**——
- * `memory_section_move` で割る・付録を `fact` にする・要旨を短くする。しかも
- * その手は {@link describeMemoryTidyTargets} が既に名指ししている的と一致する。
- *
- * **⚠️ 代償を書いておく。いちばん大きい premise は、いちばん使っている前提でも
- * ありうる**（#772 の本番実測ではそれが `alteroid-work` だった）。だから断り書きの
- * 側で「要旨を削る方向へ倒すな」と言う（{@link renderPremiseBudgetNotice}）——
- * 落ちたのは索引であって、判断の前提そのものではない。
- *
- * ## 1枚も残らない形は作らない
- *
- * いちばん小さいカード1枚で予算を超えるときは、**その1枚は残す。**
- * `renderListing` の「1件だけで予算を超えるときはその1件を切って出す」と同じ
- * 倒し方である——0枚にすると「上限がある」と言えなくなる（`excerpt.ts`）。
- * 1文書あたりの予算（要旨 3,000 ＋ 節目次 6,000）が在るので実運用では起きない。
- */
+// 測る側と描く側で別の関数を使わない: 蓋が実際に載る量とは違う量を測るため。uncappedChars は呼び手に計算させない: 区切りの数え方が2本に割れて断り書きだけが静かにずれるため
 function selectPremiseCards(
   parts: readonly MemoryPart[],
   seenContent: ReadonlyMap<string, string> | undefined,
-  /**
-   * カードの大きさを測るための描き手。**既定は `renderPremisePart`**（渡さない
-   * 呼び手の出力は1文字も変わらない）。`indexed` を同じ蓋に入れるために、
-   * 測る式をここへ外へ出してある——**測る側と描く側で別の関数を使うと、
-   * 蓋が実際に載る量とは違う量を測る。**
-   */
   render: (part: MemoryPart) => string = renderPremisePart,
 ): {
   kept: MemoryPart[];
   demoted: { part: MemoryPart; chars: number }[];
-  /**
-   * **蓋が無ければ premise の節が何文字だったか。** 断り書きが名乗るのはこの値で
-   * ある（切ったあとの長さを名乗ると、超えたこと自体が出力から消える——
-   * `excerpt.ts` の「切ったら、切ったことを必ず言う」）。
-   *
-   * **呼び手に計算させない。** ここで数えた値をそのまま返す——呼び手が同じ式を
-   * 書き直すと、区切りの数え方が2本に割れて断り書きだけが静かにずれる
-   * （`measureMemoryFloor` の doc と同じ理由）。
-   */
   uncappedChars: number;
 } {
+  // 蓋を掛けるのは記憶の全体を描く呼び手だけ: seenContent が渡される呼びは差分の側で、蓋を掛けると同じ文脈で同じ文書の載り方が2つ並ぶため
   if (seenContent !== undefined) return { kept: [...parts], demoted: [], uncappedChars: 0 };
 
   const rendered = parts.map((part) => ({ part, chars: render(part).length }));
@@ -1332,9 +1195,7 @@ function selectPremiseCards(
   if (totalChars <= MEMORY_PREMISE_CARD_BUDGET)
     return { kept: [...parts], demoted: [], uncappedChars: totalChars };
 
-  // 小さいカードから詰める（⟹ 落ちるのは大きいほう）。同じ大きさなら slug で
-  // 決める——**順序を入力の順に依らせないこと**（同じ記憶が呼びごとに違う
-  // カードを落とすと、クローンは記憶が壊れたと読む）。
+  // 位置ではなく大きいほうから落とす: 位置で落とすと落ちる先を動かす手がリネームしか無くなるため。同じ大きさなら slug で決める: 入力の順に依らせないと、同じ記憶が呼びごとに違うカードを落としてクローンが記憶が壊れたと読むため
   const ascending = [...rendered].sort(
     (a, b) => a.chars - b.chars || a.part.slug.localeCompare(b.part.slug),
   );
@@ -1342,6 +1203,7 @@ function selectPremiseCards(
   let used = 0;
   for (const entry of ascending) {
     const next = joinedChars(keep.size + 1, used + entry.chars);
+    // 1枚も残らない形にしない: 0枚にすると「上限がある」と言えなくなるため
     if (keep.size > 0 && next > MEMORY_PREMISE_CARD_BUDGET) break;
     used += entry.chars;
     keep.add(entry.part.slug);
@@ -1354,15 +1216,6 @@ function selectPremiseCards(
   };
 }
 
-/**
- * カードを落としたことの断り書き。**落とした事実・落とした分の名指し・開く口・
- * 直し方**の4つを出す。
- *
- * `excerpt.ts` の「切ったら、切ったことを必ず言う」をそのまま踏む。**そして
- * 続きの取り方を書けるのは呼び手の側にその口が実在するときだけ**という同じ doc の
- * 条件も満たしている——`memory_outline` / `memory_section_read` / `memory_read` は
- * どれも実在する道具である。
- */
 function renderPremiseBudgetNotice(
   demoted: readonly { part: MemoryPart; chars: number }[],
   keptCount: number,
@@ -1393,10 +1246,7 @@ function renderPremiseBudgetNotice(
     '**開く口**: memory_outline slug=<slug>（節の目次。side=tail で末尾も見える）→ ' +
       'memory_section_read（節の本文）。要旨の全文は memory_list / memory_read に在る。',
     '**直し方（どれか1つを実際にやること。読み流さない）**: ' +
-      // **`indexed` にする手は、落ちたのが premise のときだけ出す。** 既に
-      // `indexed` の文書へ「indexed にせよ」と言うと、クローンはそれを実行して
-      // 床が1文字も下がらない（＝実行できない助言。`renderMemoryTocOmission` が
-      // 「実行できない助言を出さない」として同じ線を引いている）。
+      // `indexed` にする手は落ちたのが premise のときだけ出す: 既に indexed の文書へ言うと床が1文字も下がらず、実行できない助言になるため
       (demotedPremise > 0
         ? `(1) 上の premise ${formatMemoryCharCount(demotedPremise)} 件を memory_frontmatter_set で ` +
           'type: indexed にする——要旨だけが焼かれ、節の目次は焼かれなくなるので、' +
@@ -1413,12 +1263,6 @@ function renderPremiseBudgetNotice(
   ].join('\n');
 }
 
-/**
- * `indexed` 1文書ぶんの描画。**`renderPremisePart` と同じ形**（`seen` が渡され、
- * 差分にする価値があるときだけ変わった範囲を描く）——`renderPremiseDelta` は
- * カードの行差分を取るだけの汎用関数なので、`indexed` のカードにもそのまま
- * 使える（名前が premise を名乗るが、中身は premise 固有ではない）。
- */
 function renderIndexedPart(part: MemoryPart, seen?: string): string {
   const frontmatter = parseMemoryFrontmatter(part.content);
   const card = renderIndexedCard(part);
@@ -1435,21 +1279,7 @@ function renderIndexedPart(part: MemoryPart, seen?: string): string {
   return frontmatter.kind === 'malformed' ? `${MALFORMED_FRONTMATTER_NOTE}\n${rendered}` : rendered;
 }
 
-/**
- * `renderMemoryDocuments` と `measureMemoryFloor` の共有の下ごしらえ。
- *
- * **数え方を2本に割らないためだけに存在する。** 焼き込みの本体
- * （`renderMemoryDocuments`）と、その大きさだけを答える関数
- * （`measureMemoryFloor`）が別々に「premise を集めて全文にし、fact を
- * 集めて目次にする」処理を書くと、どちらか一方だけを直した瞬間に
- * メーターが実物と食い違う——ここへ1本にまとめ、両方がこれを呼ぶ。
- *
- * **`indexed` は3つ目の枝である**（2026-09-11）。premise・indexed のどちらも
- * カードとして描かれ（目次行にはならない）、`indexed` はそのカードから節の
- * 目次だけを省く。**`indexed` が1件も無い入力では、`indexedParts` は空配列、
- * `indexedSection` は空文字になり、下流（`joinMemorySections`）はそれを
- * 素通りするので出力は1文字も変わらない**（不変条件3）。
- */
+// 焼き込みの本体と大きさだけを答える関数で別々に書かない: どちらか一方だけを直した瞬間にメーターが実物と食い違うため
 function buildMemoryDocumentSections(
   documents: readonly MemoryPart[],
   presentInMemory?: readonly MemoryPart[],
@@ -1457,11 +1287,6 @@ function buildMemoryDocumentSections(
 ): {
   premiseParts: MemoryPart[];
   premiseSection: string;
-  /**
-   * カードを落とした premise（{@link MEMORY_PREMISE_CARD_BUDGET}）。
-   * **`premiseParts` の部分集合であって、そこから引かれてはいない**——落ちても
-   * premise であることは変わらないので、区分の件数（`premiseDocs`）は動かさない。
-   */
   demotedPremise: MemoryPart[];
   indexedParts: MemoryPart[];
   indexedSection: string;
@@ -1492,13 +1317,7 @@ function buildMemoryDocumentSections(
     });
   }
 
-  // **束ねた全体に蓋を掛ける**（{@link MEMORY_PREMISE_CARD_BUDGET}）。1文書あたりの
-  // 予算だけでは文書数に対して線形に伸びる——`selectPremiseCards` の doc。
-  // **蓋は premise と indexed の両方に掛ける。** indexed のカードを蓋の外に置くと、
-  // 上限が「60,000 ＋ indexed の総量」に化けて、文書数に比例して伸びる穴が
-  // `indexed` の側に開き直る（この蓋がまさに塞いだ形である）。**indexed のカードは
-  // premise のカードより必ず小さい**（`MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET`）
-  // ので、同じ蓋に入れても premise 側が不利になることは無い。
+  // 蓋は premise と indexed の両方に掛ける: indexed を蓋の外に置くと上限が「60,000 ＋ indexed の総量」に化けて、文書数に比例して伸びる穴が indexed 側に開き直るため
   const cardParts = [...premiseParts, ...indexedParts];
   const indexedSlugs = new Set(indexedParts.map((part) => part.slug));
   const renderCard = (part: MemoryPart, seen?: string): string =>
@@ -1522,17 +1341,8 @@ function buildMemoryDocumentSections(
             ),
           ].join(MEMORY_SECTION_JOIN);
   const indexedSection = keptIndexedCards.join(MEMORY_SECTION_JOIN);
-  // 目次の外にも実在する slug を、**在り処ごとに分けて**渡す——`documents` は
-  // 「記憶の全部」とは限らないので、ここで畳むと実在するものが「見つからない」
-  // として出る（`renderMemoryTocIssue` の 'parent-not-listed' と
-  // 'parent-not-rendered'）。**`indexed` も premise と同じくカードとして
-  // 描かれる側なので、同じ集合へ合流させる**（`MemoryHierarchyElsewhere.renderedAsPremise`
-  // の doc）——`indexed` が1件も無ければこの合流は premiseSlugs を1つも
-  // 変えない（不変条件3）。
+  // 在り処ごとに分けて渡す・indexed も premise と同じ集合へ合流させる: 畳むと実在する親が「見つからない」と出るため。indexed も premise と同じくカードとして描かれる側のため
   const cardSlugs = new Set([...premiseParts, ...indexedParts].map((part) => part.slug));
-  // `MemoryPresence` はここで1回だけ組み立てる（`buildMemoryPresence` の doc
-  // どおり、`parentOf` の中身の解析はさらに遅延する——`presentInMemory` が
-  // 渡されていても、循環検出が実際にこの描画の外へ出ない限り1文字も解析しない）。
   const presence = presentInMemory === undefined ? undefined : buildMemoryPresence(presentInMemory);
   const tocSection =
     tocEntries.length === 0
@@ -1550,26 +1360,8 @@ function buildMemoryDocumentSections(
   };
 }
 
-/**
- * `renderMemoryDocuments` の任意引数。**記憶の一部だけを描く呼び手のためだけに
- * ある**（全体を渡す呼び手は何も渡さなくてよい）。
- */
 export interface RenderMemoryDocumentsOptions {
-  /**
-   * **記憶（ストア）に実在する文書の全体。** `documents` に含まれる文書を
-   * 含んでいてよい（選り分けは不要。`MemoryHierarchyElsewhere.presentInMemory`）。
-   *
-   * **型は「slug の集合」ではなく「文書そのもの」（`readonly MemoryPart[]`）。**
-   * 循環の検出（`resolveMemoryHierarchy` の `detectCycle`）が記憶の全体を
-   * 辿れるようにするには、在否（slug）だけでなく `parent`（frontmatter）まで
-   * 引ける必要がある——渡し手は選り分けも変換もせず、手元の文書の配列を
-   * そのまま渡せばよい（`MemoryPresence` への変換はこの関数の内側、
-   * `buildMemoryPresence` が1回だけ行う。frontmatter の解析はそこでも遅延する）。
-   *
-   * 渡すと、`parent` が `documents` の外を指しているときに「見つからない」
-   * （＝文書がそもそも無い）ではなく「在るが、ここに載せた分には含まれない」と
-   * 出る。**渡さなければ出力は1バイトも変わらない。**
-   */
+  // 型は slug の集合ではなく文書そのもの: 循環の検出が在否だけでなく parent まで引ける必要があるため
   presentInMemory?: readonly MemoryPart[];
 
   /**
