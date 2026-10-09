@@ -1,11 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, stat, utimes } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, readdir, rename, rm, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
-import { sha256Hex } from './auth.js';
 import { reasonOf } from './dropped-record.js';
 import { attachmentDiskName, normalizeAttachmentName, type AttachmentStore } from './attachment.js';
 
@@ -36,7 +35,13 @@ export interface AttachmentCopy {
 
 export type AttachmentFetchResult =
   | { readonly ok: true; readonly copy: AttachmentCopy }
-  | { readonly ok: false; readonly reason: 'not_found' | 'unsafe' };
+  | { readonly ok: false; readonly reason: 'not_found' | 'unsafe' | 'mismatch' };
+
+async function fileSha256(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Uint8Array);
+  return hash.digest('hex');
+}
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
@@ -88,8 +93,13 @@ async function copyOpenedAttachment(
     copy: { path, name, mediaType: meta.mediaType, size, sha256, reused },
   });
 
-  const existing = await readFile(path).catch(() => undefined);
-  if (existing !== undefined && sha256Hex(existing) === meta.sha256) {
+  // 大きさが控えと違えば hash を取らない。合うときも全体をメモリに載せず、ストリームで hash を取る
+  const existingMatches = await stat(path).then(
+    async (info) =>
+      info.isFile() && info.size === meta.size && (await fileSha256(path)) === meta.sha256,
+    () => false,
+  );
+  if (existingMatches) {
     // 印が付けられない・パスが無いなら返さず書き直す: 確かめてから印を付けるまでの間に掃除が消したため
     const now = new Date();
     const touched = await utimes(dir, now, now).then(
@@ -104,7 +114,7 @@ async function copyOpenedAttachment(
       ))
     ) {
       stream.destroy();
-      return copy(true, existing.length, meta.sha256);
+      return copy(true, meta.size, meta.sha256);
     }
   }
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -124,8 +134,16 @@ async function copyOpenedAttachment(
       },
       createWriteStream(tmp, { mode: 0o600 }),
     );
+    const digest = hash.digest('hex');
+    // 置き場が途中で切れて例外なしに終わっても、欠けた写しを「取れた」と言わない（#4358）。担い手が壊れたファイルで作業を進めるため
+    if (size !== meta.size || digest !== meta.sha256) {
+      await rm(tmp, { force: true }).catch(() => undefined);
+      await rm(path, { force: true }).catch(() => undefined);
+      stream.destroy();
+      return { ok: false, reason: 'mismatch' };
+    }
     await rename(tmp, path);
-    return copy(false, size, hash.digest('hex'));
+    return copy(false, size, digest);
   } catch (error) {
     stream.destroy();
     await rm(tmp, { force: true }).catch(() => undefined);
