@@ -1066,7 +1066,7 @@ export function ChatPane({
   // useRef にしない: 刈り込みの不変条件チェックが render 中にこの値を読み、react-hooks/refs が render 中の ref 読み取りを検出する
   const [activeReplyKeys, setActiveReplyKeys] = useState<ReadonlySet<string>>(NO_REPLY_KEYS);
 
-  // shownId を進める下のブロックでだけ更新する: open では触らない（触る箇所を増やすほど #437 の再発面が広がる）
+  // shownId を進める下のブロックでだけ更新する: open では触らない（触る箇所を増やすほど再発面が広がる）
   const [previousShownId, setPreviousShownId] = useState<string | undefined>(undefined);
   // 見るのは「URL が変わったか」であって「shownId と一致するか」ではない: open で id を決めてから URL が追いつくまでの隙間を「別の会話へ移った」と読み、送ったばかりの発言ごと消してしまう
   const [lastRouteId, setLastRouteId] = useState(routeId);
@@ -2440,10 +2440,7 @@ export function ChatPane({
   );
 
   // open を見る前に Stream を登録しない: 進行中でなかったとき、その間に送った発言が followUp に乗り、応答の流れる先が無くなる
-  useEffect(
-    () => () => replayControllerRef.current?.abort(),
-    [shownId],
-  );
+  useEffect(() => () => replayControllerRef.current?.abort(), [shownId]);
   useEffect(() => {
     if (shownId === undefined) return;
     const existing = streamRef.current;
@@ -2624,7 +2621,6 @@ export function ChatPane({
         if (pendingDraftSave.current?.id === pressedConversationId) {
           pendingDraftSave.current = null;
         }
-        // 応答を待つ間に別の会話へ移っていたら、そこにとどまる（`handleEndConversation` と同じ）。
         if (shownIdRef.current === pressedConversationId) {
           setDeleteResult({ fromId: pressedConversationId, result });
           navigate('/chat');
@@ -2638,26 +2634,13 @@ export function ChatPane({
     [deleteConversation, navigate],
   );
 
-  /**
-   * `interruptNotice`/`interruptFailure` を**いま出してよいか**の判断（#1570）。
-   *
-   * ここだけが判断する場所である——`handleInterrupt` 側はもう判断しない
-   * （上の doc）。`shownId` はこの render の同期処理でしか進まない state
-   * なので、この比較は常に「この render の時点で正しい」答えを返す。
-   */
   const visibleUploading = (uploading.get(shownId) ?? 0) > 0;
   const visibleInterrupting = interrupting !== undefined && interrupting.conversationId === shownId;
   const visibleDeleting =
     deletingConversation !== undefined && deletingConversation.conversationId === shownId;
   const visibleEnding =
     endingConversation !== undefined && endingConversation.conversationId === shownId;
-  /*
-   * **フォーカスを戻す（#3595）。** 編集欄・承認カードの押した要素・「会話を終える」の確認は、
-   * 閉じる・答える・終えると unmount されるか disabled になり、フォーカスが `document.body` に
-   * 落ちる。毎 commit で、戻す先が決まっていて（`focusIntentRef`）フォーカスが失われているときだけ、
-   * 戻す。**使い手が自分でフォーカスを動かしたら（pointerdown / keydown。capture で先に見る）、
-   * 戻す約束は取り下げる。**
-   */
+  // 使い手が自分でフォーカスを動かしたら戻す約束は取り下げる（pointerdown / keydown を capture で先に見る）
   useEffect(() => {
     const clear = () => {
       focusIntentRef.current = undefined;
@@ -2688,25 +2671,11 @@ export function ChatPane({
     interruptFailure !== undefined && interruptFailure.conversationId === shownId
       ? interruptFailure.error
       : undefined;
-  /**
-   * `endFailure` を**いま出してよいか**の判断。`visibleInterruptFailure` と
-   * 同じ形——判断するのはここだけで、`handleEndConversation` 側はもう判断しない。
-   */
   const visibleEndFailure =
     endFailure !== undefined && endFailure.conversationId === shownId
       ? endFailure.error
       : undefined;
-  /**
-   * `failures`（送信経路: `send`/`followUp`）から**いま見せている会話ぶんだけ**
-   * 引く（#1576 / #1585）。上の2つと同じ形——判断するのはここだけで、
-   * `failures` に積む側（`if (message.event === 'error')` の分岐・outer
-   * `catch`・`followUp` の `catch`）はもう判断しない。
-   *
-   * **`failures.has(shownId)` で存在を確かめてから読む。** `caught` は
-   * `throw undefined` のような普通ではない例外だと値そのものが `undefined`
-   * になりうるので、`failures.get(shownId)` が `undefined` を返しただけでは
-   * 「無い」と「積まれている値が `undefined`」を区別できない。
-   */
+  // has で存在を確かめてから読む: throw undefined のような例外だと、get が undefined を返しただけでは「無い」と「積まれている値が undefined」を区別できない
   const visibleFailure = failures.has(shownId) ? failures.get(shownId) : undefined;
 
   const visibleDeleteFailure =
@@ -2718,11 +2687,6 @@ export function ChatPane({
     visibleFailure ?? visibleInterruptFailure ?? visibleEndFailure ?? visibleDeleteFailure;
   const hasShownFailure = shownFailure !== undefined && shownFailure !== null;
 
-  /**
-   * 「会話を終える」の結果の文を出してよいか（#2759）。終えた直後の新しい会話
-   * （`shownId` が無い）だけで出す。**終えた会話とは別の会話へ移ったら捨てる**
-   * ——render 時に state を直すのは、この画面の他の箇所（`routeId !== shownId`）と同じ形。
-   */
   if (endNotice !== undefined && shownId !== undefined && shownId !== endNotice.fromId) {
     setEndNotice(undefined);
   }
@@ -2738,12 +2702,7 @@ export function ChatPane({
       ? '会話を終えました。ここまでの学びを記憶にまとめます。終えた会話は左の一覧に残っていて、開けば続きを話せます。'
       : undefined;
 
-  /**
-   * 見出しの下の1行（#2760）。会話 id ではなく、見分けに役立つ開始日時と発言数（人間とクローンの発言の合計。畳まれた旧発言は除く）を出す。
-   * **遡った窓の中でしか数えていない**（`history.data.reachedStart`）ので、先頭に
-   * 届いていないときは「以降」「以上」と言い、実際の開始を言い切らない。
-   * 履歴がまだ読めていない間は何も出さない（嘘の数を出さない）。
-   */
+  // 先頭に届いていないときは「以降」「以上」と言う: 遡った窓の中でしか数えていないので、実際の開始を言い切らない
   const headerSubtitle = (() => {
     const data = history.data;
     if (shownId === undefined || data === undefined) return undefined;
@@ -2770,17 +2729,9 @@ export function ChatPane({
         ending={visibleEnding}
         onDelete={shownId === undefined ? undefined : () => void handleDeleteConversation(shownId)}
         deleting={visibleDeleting}
-        /*
-         * 「ターンを止める」の結果（3値のどれか）。呼べなかった失敗
-         * （ネットワーク断・403 等）は下の `ErrorNote`（`visibleInterruptFailure`）に
-         * 出るので、ここに乗るのは正しく応答が返った場合だけである。**いま出している
-         * 会話（`shownId`）が押した時点の会話と一致するときだけ出す**
-         * （`visibleInterruptNotice` の doc）。
-         */
         notice={visibleInterruptNotice ?? visibleEndNotice ?? visibleDeleteNotice}
       />
 
-      {/* 読み上げ専用（#3568）。「受信を始めた／返信が終わった」だけで、本文の流れは読まない。 */}
       <div role="status" className="sr-only">
         {liveNote !== undefined && liveNote.id === shownId ? liveNote.text : ''}
       </div>
@@ -2791,36 +2742,12 @@ export function ChatPane({
         className="min-h-0 flex-1 overflow-y-auto py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]"
       >
         <LeftoverDrafts leftovers={leftovers} onDiscard={discardLeftover} />
-        {/*
-          **遡り切れていないことを言う。** サーバは人間との往復の新しい方から
-          `scan` 件しか見ない（マネージャーとの往復・内部ターンは数えない。
-          issue #418）ので、古い会話は「続きがあるのに出ていない」状態になり
-          うる。ここが無いと、出ている分が全部だと読める（下の `Empty` は
-          「まだ何も話していない」と読めるので、空のときこそ効く）。
-
-          `reachedStart` が真のときは出さない。**窓が先頭に届いているなら、出ている
-          分が全部である**ことが言えていて、そこに但し書きを出すと「常に出ている
-          もの」になって情報でなくなる。
-        */}
         {history.data?.reachedStart === false && (
           <p className="mb-3 text-[11px] text-muted-foreground">
             {`人間との往復を ${history.data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`}
           </p>
         )}
-        {/*
-          **`history.error` を最優先する（issue #2210）。** `GET
-          /conversations/:id` が失敗すると `history.data` は無いままなので、
-          直さないと下の判定（Spinner→Empty）が「行が0件」の枝へ落ち、新しい
-          会話の案内文（「目的や価値観を伝えると…」）と紛れる——失敗と「本当に
-          空」が見分けられない。`dashboard.tsx`/`practice-detail.tsx`
-          （issue #2138/#2139、PR #2143）と同じ判断をここでも採る。
-
-          **ただし本文を差し替えるのは、読めた `data` が無いときだけ（issue
-          #2266）。** SWR は再検証が失敗しても前回の `data` を残したまま
-          `error` を立てるので、`error` だけで分けると、一過性の失敗1回で読めて
-          いた履歴と手元の行まで消える。`data` があるときは本文を出したまま、
-          失敗は本文の上の注記で知らせる（黙って消さない）。
-        */}
+        {/* 本文を差し替えるのは読めた data が無いときだけ: SWR は再検証が失敗しても前回の data を残したまま error を立てるので、error だけで分けると、一過性の失敗1回で読めていた履歴まで消える */}
         {conversationMissing ? (
           <Card className="m-3">
             <div className="p-4" data-conversation-missing>
@@ -2838,16 +2765,8 @@ export function ChatPane({
           <>
             {history.error !== undefined && <ErrorNote error={history.error} className="mb-3" />}
             {conversationApprovals.error !== undefined && (
-              // **この会話の承認待ち（`ask_human`）が読めていない（issue
-              // #2210）。** `conversationApprovals.data` が無いままだと
-              // `historyLines` の `approvalItems` が空になるので、会話の
-              // 本文は読めていても確認の質問・回答・取り下げだけが黙って
-              // 0件に見える——専用の `ErrorNote` で区別する。本文は読めて
-              // いるので、下の Spinner/Empty/ul とは排他にしない。
               <ErrorNote error={conversationApprovals.error} className="mb-3" />
             )}
-            {/* 読めない行は `approvals` に入らないので、断らないと確認が無いように見える（#4018）。
-                形の違う応答は無いものとして扱い、読めた本文まで巻き込んで落とさない。 */}
             <UnreadableApprovalNote
               unreadable={
                 Array.isArray(conversationApprovals.data?.unreadable)
@@ -2857,12 +2776,7 @@ export function ChatPane({
               className="mb-3"
               hint="クローンはこの会話の確認の答えを待っているかもしれない。承認の画面で確かめられる。"
             />
-            {/*
-              **読み込み中の表示は、見せるものが何も無いときだけ。** この画面で始めた
-              会話でも履歴を読むようになったので（上の `useConversation` のコメント）、
-              `open` の直後に履歴の取得が始まる。手元に流れてきた分があるのに
-              スピナーへ差し替えると、受信中の本文が一度消えてから戻ることになる。
-            */}
+            {/* 読み込み中の表示は見せるものが何も無いときだけ: 手元に流れてきた分があるのにスピナーへ差し替えると、受信中の本文が一度消えてから戻る */}
             {history.isLoading && shownId !== undefined && ownedBy(lines, shownId).length === 0 ? (
               <Spinner label="履歴を読み込み中" />
             ) : all.length === 0 ? (
@@ -2874,12 +2788,6 @@ export function ChatPane({
             ) : (
               <ChatMessageList>
                 {all.map((line, index) => {
-                  /*
-                   * **失敗の知らせは返信と別の部品で描く**（サーバが付けた `turnFailure` の印で
-                   * 判定する。文面は見ない）。「もう一度送る」は、**いちばん後ろの**失敗で、
-                   * **すぐ前が自分の発言**のときだけ出す——承認への回答から起きた失敗（間に確認の
-                   * 行が挟まる）では、前の発言が失敗の原因とは限らないので出さない。送信中も出さない。
-                   */
                   if (line.approval !== undefined) {
                     const approvalId = line.approval.id;
                     const { question, questions } = line.approval;
@@ -2920,9 +2828,7 @@ export function ChatPane({
                             }))
                           }
                           onAnswered={(sent) => {
-                            // 押した要素は答えの表示に変わって消える。次の未回答のカードへ戻す（#3595）。
                             focusIntentRef.current = { kind: 'approval', approvalId };
-                            // 送った分だけ畳む。送信中に打ち足した分・送らなかった本文は残す（承認の画面と同じ規則）。
                             setApprovalDrafts((previous) =>
                               settleApprovalDraft(previous, approvalId, sent),
                             );
@@ -2937,7 +2843,6 @@ export function ChatPane({
                           }}
                           hideFailureWhenSettled
                           onFailed={(caught) => {
-                            // 409 は回答済み・取り下げ済み。実際の状態へカードを変える（#3827）。
                             if (caught instanceof ApiError && caught.status === 409) {
                               void conversationApprovals.mutate();
                             }
@@ -2954,7 +2859,6 @@ export function ChatPane({
                       </li>
                     );
                   }
-                  // 取り下げた発言は、普通の吹き出し（編集の入口つき）にせず、畳んだ行で出す（#3990）
                   if (line.withdrawn === true) {
                     return <ChatWithdrawnMessage key={line.key} text={line.text} />;
                   }
@@ -2979,8 +2883,7 @@ export function ChatPane({
                         onRetry={
                           retryLine === undefined
                             ? undefined
-                            : // 入力欄の文を送るのではないので、書きかけには触らない（#3391）。
-                              // 元の発言の添付も付ける（付けないと、返信は添付を読まずに返る、#3566）。
+                            : // 元の発言の添付も付ける: 付けないと、返信は添付を読まずに返る
                               () =>
                                 void send(retryLine.text, {
                                   draft: 'keep',
@@ -2990,21 +2893,8 @@ export function ChatPane({
                       />
                     );
                   }
-                  /*
-                   * **編集の入口（鉛筆）は、本物の日誌エントリ id を持つ人間の
-                   * 発言だけに出す（チャットのメッセージ編集、#1010。制約C）。**
-                   * `journalId` は `historyLines` にしか付かない（`Line` の doc）
-                   * ので、送信直後の楽観行（`pendingOwnLines` が刈る前）には
-                   * 出ない——本物の id が無いものを編集の対象にできない、という
-                   * 制約をここで自然に満たす。クローンの発言（`role: 'clone'`）は
-                   * `role === 'human'` の条件で最初から外れる（サーバ側の 400 と
-                   * 同じ制約を、画面側は「そもそも入口を出さない」形で守る）。
-                   */
                   const isEditable = line.role === 'human' && line.journalId !== undefined;
                   const isEditing = editingKey === line.key;
-                  // `journalId` をこの後何度も参照するので、一度だけ絞り込んでおく
-                  // （`versions` / `versionIndex` の「無ければ触らない」の根拠は
-                  // すべてこの1つの束縛に依る）。
                   const journalId = line.journalId;
                   const versions =
                     journalId === undefined ? undefined : editVersions.get(journalId);
@@ -3016,10 +2906,6 @@ export function ChatPane({
                     versions !== undefined && versionIndex !== undefined
                       ? versions[versionIndex]
                       : undefined;
-                  // 版を切り替えていれば、その版の本文を出す。切り替えていない
-                  // （＝最新を見ている）ときは `viewing.text` も `line.text` と
-                  // 同じ値になる（`buildEditVersions` の doc）——常にこちらを
-                  // 使っても、版を持たない発言の見え方は1文字も変わらない。
                   const displayedText = viewing?.text ?? line.text;
 
                   return (
@@ -3034,7 +2920,6 @@ export function ChatPane({
                           ? () => {
                               setEditingKey(line.key);
                               editOriginals.current.set(line.key, line);
-                              // 書きかけがあればそこから再開する。無ければ元の本文で始める（#3565）。
                               setEditDrafts((previous) =>
                                 previous.has(line.key)
                                   ? previous
@@ -3119,8 +3004,6 @@ export function ChatPane({
                           }
                           onConfirm={() => void confirmEdit(line)}
                           onCancel={() => {
-                            // 閉じるだけで、書きかけは残す（#3565）。元のままなら残す理由が無い。
-                            // 外れたファイルの案内（`lost`）は、見せたので閉じたら消す。
                             const current = editDrafts.get(line.key);
                             const settled =
                               current === undefined ? undefined : { ...current, lost: [] };
@@ -3145,21 +3028,11 @@ export function ChatPane({
         <div ref={bottomRef} />
       </div>
 
-      {/*
-        `visibleFailure`（送信経路: `send`/`followUp`、会話が一致するときだけ、
-        #1576）・`visibleInterruptFailure`（interrupt 由来、同じく会話が
-        一致するときだけ、#1570）・`visibleEndFailure`（「会話を終える」由来、
-        同じく会話が一致するときだけ、#2171）を同じ枠へ合流させる。3つとも
-        同時に立つことは無い想定だが、立っても先勝ちの優先順位そのものに
-        強い意味は無い——どれが出ても「何かの失敗が出ている」という事実
-        自体は変わらない。
-      */}
       <ChatComposer
         value={draft}
         onChange={setDraft}
         onSend={() => {
           if (visibleUploading) return;
-          // 編集の送信が失敗して戻った文は、編集の続きとして送る（`supersedes` を保つ。#3393）。
           if (editContinuation !== undefined) resend(editContinuation);
           else void send(draft, { attachments: pending });
         }}
@@ -3188,7 +3061,6 @@ export function ChatPane({
         onStopReceiving={() => {
           const stopping = streamRef.current;
           if (stopping === undefined) return;
-          // 止めたあともターンはサーバで続く。途中の返信行は、履歴が新しいクローンの発言を出したら畳む（#3761）。
           if (stopping.id !== undefined && unfinishedReplyRef.current.has(stopping.id)) {
             stoppedReplyRef.current.set(
               stopping.id,
@@ -3198,11 +3070,7 @@ export function ChatPane({
           stopping.controller.abort();
         }}
         error={
-          /*
-           * **3つを排他にしない（#3594）。** 添付を断った理由・送信の失敗・未確認の送信の操作
-           * （再送／破棄）は別の事実で、どれかが出ているあいだ他が隠れると、選んだファイルが
-           * 理由なく落ちたり、再送／破棄の操作が見えなくなったりする。**並べて出す。**
-           */
+          // 排他にしない: どれかが出ているあいだ他が隠れると、選んだファイルが理由なく落ちたり、再送／破棄の操作が見えなくなったりする
           attachNotice === undefined &&
           shownLostPending === undefined &&
           lostAttachmentsNote === undefined &&
@@ -3289,14 +3157,13 @@ export function ChatPane({
                   <ErrorNote error={shownFailure} />
                   {isAttachmentMissing(shownFailure) && (
                     <p role="alert" className="mt-2 text-xs text-warn">
-                      {/* 手元のファイルの分は控えを外してある（#3778）ので、次の送信で上げ直す。引き継いだ添付は上げ直せない。 */}
                       {(() => {
                         const items = retries.get(shownId)?.attachments ?? [];
                         const names = expiredCarriedNames(
                           items,
                           (shownFailure as ApiError).message,
                         );
-                        // 名前が多いときは先頭3件と「ほか N 件」にする（長い案内で本題を押し流さないため）
+                        // 先頭3件と「ほか N 件」にする: 長い案内で本題を押し流さないため
                         const named =
                           names.length === 0
                             ? ''
@@ -3312,7 +3179,6 @@ export function ChatPane({
                       })()}
                     </p>
                   )}
-                  {/* 未確認の送信の「再送」が上に出ているときは、同じ再送をもう1つ出さない。 */}
                   {visibleFailure !== undefined &&
                     retries.has(shownId) &&
                     unconfirmedText === undefined && (
