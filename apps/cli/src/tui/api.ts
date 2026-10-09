@@ -14,6 +14,7 @@ import {
   attachmentNotFoundMessage,
   fetchAttachmentLimits,
   uploadAttachment,
+  type AttachmentUploadFile,
   type ListedAttachment,
   type UploadedAttachment,
   type UsageBucket,
@@ -215,14 +216,7 @@ export interface TuiApi {
   listStoredAttachments(query: StoredAttachmentsQuery): Promise<StoredAttachmentsPage>;
   keepAttachment(id: string, kept: boolean): Promise<StoredAttachment>;
   removeAttachment(id: string): Promise<void>;
-  uploadAttachment(
-    file: {
-      name: string;
-      mediaType: string;
-      bytes: Uint8Array;
-    },
-    signal?: AbortSignal,
-  ): Promise<UploadedAttachment>;
+  uploadAttachment(file: AttachmentUploadFile, signal?: AbortSignal): Promise<UploadedAttachment>;
   listConversations(cursor?: string): Promise<ConversationList>;
   readConversation(
     id: string,
