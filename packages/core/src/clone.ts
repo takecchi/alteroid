@@ -2598,14 +2598,13 @@ class Clone implements CloneHost {
 
     // `supersedes` はそのまま日誌へ通すだけにする: 畳み込みの解釈は `computeSupersededIds` の射影が持ち、記録の時点で何かを取り消さないため
     // 同じ会話のターンが走っていたら、ここまでに流れた返答を先に書く（#4391）: 返答はターンの終わりに書かれるので、ターン中に届いた発言のほうが日誌で先になり、会話で返答より上に出るため。
-    // 切り取りは下の `queued` と同じ同期区間で行う: Web はその `queued` で返信の行を分けるので、割り目が画面の行の境目とそろう
+    // 鎖を待たずに書き始める: `#journalReply` は最初の await までに本文を切り取って追記を始めるので、切り取りが下の `queued` と同じ同期区間に入り（Web はその `queued` で返信の行を分ける）、
+    // 鎖が詰まっているあいだにターンが終わっても残りの本文がこの割り目より先に載らない
     const turn = this.#sdkSession.turn;
-    const shownReply =
+    const shownReplyWritten =
       turn !== null && turn.conversationId === event.conversationId
-        ? this.#takeReply(turn, false)
-        : null;
-    // 鎖を待たずに書き始める: 鎖が詰まっているあいだにターンが終わると、残りの本文がこの割り目より先に載るため
-    const shownReplyWritten = shownReply === null ? undefined : this.#journal(shownReply);
+        ? this.#journalReply(turn, false)
+        : undefined;
 
     // 列は失敗で切らない: 1本書けなかったことで以後の発言の記録まで止めないため
     this.#delivery.chainRecord(event.id, async () => {
@@ -6415,19 +6414,13 @@ class Clone implements CloneHost {
    * 割れた各行に同じ欄を付ける（`approval-trace` が `answeredApprovalId` で対にする）。失敗の前置きは `failed` の行にだけ付く。
    */
   async #journalReply(turn: Turn, failed: boolean): Promise<void> {
-    const entry = this.#takeReply(turn, failed);
-    if (entry !== null) await this.#journal(entry);
-  }
-
-  /** 返答のうち未記録の分を切り取り、書く行を返す（書くのは呼び手）。`#record` が人間の発言より先に書くために、切り取りと書き込みを分けてある。 */
-  #takeReply(turn: Turn, failed: boolean): JournalEntryInput | null {
     const pending = turn.reply.slice(turn.replyWritten);
     const pendingAttachments = turn.replyAttachments.slice(turn.replyAttachmentsWritten);
-    if (pending.trim().length === 0 && pendingAttachments.length === 0) return null;
-    // 書く前に印を進める: 割る口が並行して呼ばれても同じ本文を2度書かないため。
+    if (pending.trim().length === 0 && pendingAttachments.length === 0) return;
+    // await の前に印を進める: 割る口が並行して呼ばれても同じ本文を2度書かないため。
     turn.replyWritten = turn.reply.length;
     turn.replyAttachmentsWritten = turn.replyAttachments.length;
-    return {
+    await this.#journal({
       type: 'exchange',
       with: turn.conversationId === null ? 'self' : 'human',
       role: 'outbound',
@@ -6447,7 +6440,7 @@ class Clone implements CloneHost {
         ? {}
         : { approvalId: turn.approvalId }),
       ...(turn.approvalId === null ? {} : { answeredApprovalId: turn.approvalId }),
-    };
+    });
   }
 
   /**
