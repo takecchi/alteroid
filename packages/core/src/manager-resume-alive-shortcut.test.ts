@@ -198,6 +198,7 @@ describe('resume が生きた旧プロセスへ短絡したとき、世代を「
     expect(s.result.outcome).toBe('delivered');
     expect(s.fake.spawned).toHaveLength(0);
     expect(s.fake.pushedToLiveProcess).toEqual(['続きを']);
+    // 旧プロセスの鍵が現役かどうかは確かめていないので、「一致」と名乗らない。
     expect(s.after?.tokenGeneration).toBeUndefined();
     expect(s.result.detail).toContain('生きた旧プロセスへ流した');
     expect(s.result.detail).toContain('確かめていない');

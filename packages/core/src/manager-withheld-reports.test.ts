@@ -457,6 +457,7 @@ describe('握り潰しは一覧（ManagerSummary / RunnerManagerEntry）から�
       since: '2026-09-01T00:00:00.000Z',
     });
 
+    // status は動かさない: 動かすと、この欄が在ることと status の値が二重に同じことを言い始める。
     expect(summary?.status).toBe('done');
 
     await pool.stop();

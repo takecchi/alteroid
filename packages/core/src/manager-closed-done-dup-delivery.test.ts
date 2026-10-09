@@ -169,6 +169,7 @@ describe('同じ closed(done) の二重配達（#3199 の知らせ。#3187 は f
     await settle();
     await pool.stop();
     const joined = noticesAbout(inbox, before, 'mgr-done-dup').join('\n');
+    // 比較の足場: 知らせ自体は届いている（空同士の比較にしない）。
     expect(joined).toContain('report を出さないまま終わった');
     expect(joined).not.toContain('×2');
   });

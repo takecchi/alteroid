@@ -528,6 +528,8 @@ describe('ManagerPool.vacate（#485 PR-2）', () => {
 
     const stateAtStop: (RunnerLiveness | undefined)[] = [];
     const originalStop = runnerA.client.stop;
+    // 先に vacating を立てないと、停止して貸し出しを返した直後の窓に新しい委譲が置かれる。
+    // stop() が呼ばれた瞬間の名簿の状態を横取りして記録する。
     runnerA.client.stop = async (managerId: string) => {
       stateAtStop.push(fake.entries.find((entry) => entry.runnerId === 'runner-a')?.state);
       return originalStop(managerId);

@@ -200,6 +200,7 @@ describe('report 無しの closed(done)（#3189）', () => {
     fake.raw(reportOf('mgr-after-report'));
     await settle();
     const beforeClosed = inbox.length;
+    // 比較の足場: report 自体は受信箱へ届いている（0件同士の比較にしない）。
     expect(noticesAbout(inbox, 0, 'mgr-after-report').join('')).toContain('調べ終わった。');
     fake.closed('mgr-after-report', 'done', SESSION_CLOSED);
     await settle();
@@ -256,6 +257,7 @@ describe('report 無しの closed(done)（#3189）', () => {
     fake.raw(reportOf('mgr-turn2-reported', { reportId: 'r-turn2' } as Partial<RunnerEvent>));
     await settle();
     const beforeClosed = inbox.length;
+    // 比較の足場: report 自体は受信箱へ届いている（0件同士の比較にしない）。
     expect(noticesAbout(inbox, 0, 'mgr-turn2-reported').join('')).toContain('調べ終わった。');
     fake.closed('mgr-turn2-reported', 'done', SESSION_CLOSED);
     await settle();

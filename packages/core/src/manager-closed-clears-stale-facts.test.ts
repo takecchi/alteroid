@@ -180,6 +180,8 @@ describe('closed を受けた時点で、前の回の lastCgroupEvents / lastSys
     expect(first.lastCgroupEvents).toMatchObject({ pidsMaxDelta: 3 });
     expect(first.lastSystemError).toMatchObject({ code: 'EAGAIN' });
 
+    // 台帳も本当に resume する: 台帳が `failed` のまま同じ `closed(failed)` が届くのは二重配達として日誌だけに残す扱いなので、
+    // resume で `running` へ戻してから2回目を流す。
     await pool.send('mgr-twice', '続きを');
     fake.revive('mgr-twice');
     fake.closed('mgr-twice', 'failed');
@@ -203,6 +205,7 @@ describe('closed を受けた時点で、前の回の lastCgroupEvents / lastSys
     });
     await listedWhen(pool, 'mgr-replace', (m) => m.lastCgroupEvents?.pidsMaxDelta === 3);
 
+    // 台帳も本当に resume する: `failed` のまま同じ `closed(failed)` が届くのは二重配達として日誌だけに残す扱いなので、`running` へ戻してから2回目を流す。
     await pool.send('mgr-replace', '続きを');
     fake.revive('mgr-replace');
     fake.closed('mgr-replace', 'failed', {

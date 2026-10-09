@@ -236,6 +236,7 @@ describe('#1592 の副作用の疑い: settled → report(waiting_human) の順�
 
     const final = await summaryOf(pool, managerId);
     expect(final?.waiting).toEqual([]);
+    // `case 'settled'` が waiting を空にしたとき running へ戻すのと揃える。
     expect(final?.status).toBe('running');
   });
 

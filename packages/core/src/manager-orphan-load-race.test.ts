@@ -388,6 +388,8 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
     expect(finalJob?.status).toBe('running');
   });
 
+  // `send()` 経由ではチェックポイント3（台帳へ書く直前）が肩代わりするので、チェックポイント2の要否は独立に測れない。
+  // `#reattach()` は 'resumed' の後に `lost` かどうかしか見ず、チェックポイント3に当たるものが無いので、ここではその経路を直接確かめる。
   it('#reattach() が resume の途中で abort() が確定しても running を書き戻さない（チェックポイント2）', async () => {
     const managerId = 'mgr-reattach-race';
     const stores = createMemoryStores();

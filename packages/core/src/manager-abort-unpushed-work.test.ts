@@ -188,6 +188,7 @@ describe('abort() が runner.stop(managerId) の直前に unpushedWork() を取�
     const result2 = await pool.abort('mgr-abort-unpushed', '429 の再試行', 'clone');
     expect(result2.outcome).toBe('stopped');
 
+    // 順序そのものが要点: unpushedWork を、生きて答えられる最後の機会（stop より前）に取る。
     expect(calls).toEqual(['unpushedWork:mgr-abort-unpushed', 'stop:mgr-abort-unpushed']);
 
     const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-abort-unpushed');

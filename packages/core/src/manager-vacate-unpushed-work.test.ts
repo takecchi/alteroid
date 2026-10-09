@@ -203,6 +203,7 @@ describe('vacate が runner.stop() の直前に unpushedWork() を取る（Issue
 
     await pool.vacate('runner-a');
 
+    // 順序そのものが要点: unpushedWork を、生きて答えられる最後の機会（stop より前）に取る。
     expect(calls).toEqual(['unpushedWork:mgr-vacate-unpushed', 'stop:mgr-vacate-unpushed']);
 
     const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-vacate-unpushed');

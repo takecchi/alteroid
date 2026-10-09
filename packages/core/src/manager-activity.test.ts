@@ -243,6 +243,7 @@ describe('describeManagerActivityForFlush — flush が配る短い1行', () => 
 
   it('4状態すべてで空文字を返さない（Record<NonNullable<...>, true> を回す）', () => {
     const kinds = Object.keys(ALL_MANAGER_ACTIVITY_KINDS) as ManagerActivityKind[];
+    // 先に対象が空でないことを確かめる: 空配列を回すループは何も検査せずに緑を返す。
     expect(kinds.length).toBeGreaterThan(0);
     for (const kind of kinds) {
       expect(describeManagerActivityForFlush(kind)).not.toBe('');

@@ -1221,6 +1221,7 @@ describe('帳面の字面（origin・0件の読み方・保持）', () => {
     // Record で持つ: 値が増えたとき型で落ちる（配列だと素通りする）。
     const ALL_ORIGINS: Record<DroppedTraceOrigin, true> = { daemon: true };
     const origins = Object.keys(ALL_ORIGINS) as DroppedTraceOrigin[];
+    // 先に空でないことを確かめる: 空だと下のループが1回も回らず、何も測らずに緑になる。
     expect(origins.length).toBeGreaterThan(0);
     for (const origin of origins) {
       expect(describeDroppedTraceOrigin(origin)).not.toBe('');
@@ -1249,6 +1250,7 @@ describe('帳面の字面（origin・0件の読み方・保持）', () => {
   });
 
   it('describeDroppedTraceEmpty() は時刻を埋め込まない', () => {
+    // 時刻は面ごとに整形が違うので、埋め込むと字面一致の歯が面ごとの整形差で壊れる。
     expect(describeDroppedTraceEmpty()).not.toMatch(/\d{4}-\d{2}-\d{2}T/u);
   });
 
@@ -1835,6 +1837,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
   it('名簿のキー集合は journalEntrySchema の実装側の欄と両方向に一致する（zod から機械的に引く）', () => {
     const scannedTypes = journalEntrySchema.options.map((option) => option.shape.type.value);
     expect(new Set(scannedTypes)).toEqual(new Set(JOURNAL_ENTRY_TYPES));
+    // 走査が空振りして0件のまま緑になる形を作らない。
     expect(scannedTypes.length).toBeGreaterThan(0);
 
     for (const option of journalEntrySchema.options) {

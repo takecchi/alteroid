@@ -22,6 +22,8 @@ const UNVERIFIED_WORKSPACE_REASON =
   '器の workspace がボリュームかどうかを runner が名乗らないので、' +
   '入れ替えを跨いで残るかを確かめられない（roadmap M5「workspace locator の運用選択」）。';
 
+// env は引数で渡し、`process.env` は書き換えない: 並列実行で他のテストを汚さないため。
+// 読めない設定・不足した設定は `runner-volume`（肯定的な永続性の主張）へは倒さず `unknown` へ倒す。
 describe('resolveWorkspacePolicy', () => {
   it('未設定なら unknown で、reason は今日の既定の文字列と完全一致する', () => {
     const policy = resolveWorkspacePolicy({});

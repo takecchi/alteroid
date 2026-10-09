@@ -20,6 +20,9 @@ import type { InboxEvent, Job, JobLease, JournalEntry } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
+// ハートビートを待って `instanceId` を変える形にはしない: 台帳の貸し出しが古いプロセスを指していて、
+// いま応えているのが別のプロセスという状態そのものが判定の入力なので、そこを直に作る
+// （`identity()` が最初から `boot-2` を名乗り、台帳の貸し出しは `boot-1` を持つ）。
 class LeasedRunner implements RunnerClient {
   readonly runnerId: string;
   readonly runnerIdKnown = true;
@@ -317,6 +320,8 @@ describe('引き取りの関門（貸し出し期限）', () => {
     await h.close();
   });
 
+  // 奪う操作だけは台帳へ書けたことを条件にする: 貸し出しが台帳に載らないまま走らせると、次の引き取りが
+  // 「誰も握っていない」と読んで同じ委譲を無条件に奪える。台帳が書けなくても委譲を続ける既存の判断（`#persist`）は、奪う操作には広げない。
   it('貸し出しを台帳へ書けないときは引き取らない', async () => {
     const h = await harnessOf();
     await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
@@ -414,6 +419,8 @@ describe('引き取りの関門（貸し出し期限）', () => {
     await h.close();
   });
 
+  // 世代で拒まれた（409）を「戻せなかった」と同じ扱いにしない: 409 は自分より新しい世代の誰かが握っている（セッションは生きている）ときで、
+  // lost にして像から外すと、「戻せなかった」と読んだクローンが起こし直し、fencing の失敗経路から二重実行へ到達する。
   it('世代で拒まれたら、台帳を lost にせず「起こし直すな」と知らせる', async () => {
     const h = await harnessOf();
     await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-2', 3)));
@@ -437,6 +444,8 @@ describe('引き取りの関門（貸し出し期限）', () => {
     await h.close();
   });
 
+  // 自己失効は「終わった」ではない: `event.status`（`lost`）をそのまま台帳へ書くと `#restoreJobs` も `#reattach` も見送り、
+  // 二重実行を止めた代わりに誰も拾わない仕事ができる。
   it('自己失効の closed では状態を動かさず、貸し出しだけ返して引き取り直せる', async () => {
     const h = await harnessOf();
     await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-2', 3)));
@@ -600,6 +609,8 @@ describe('引き取りの関門（貸し出し期限）', () => {
       expect(firstText).toContain('時間では解けない');
       expect(firstText).toContain('直し方: 器ごとに違う ALTEROID_RUNNER_ID');
 
+      // 併存の合図は `hello` のたびに繰り返し出す: 初回だけ言う（edge-triggered）にすると、
+      // 人間がその1回を見逃した後・デーモンを再起動した後は永久に見えなくなる（併存は時間では解けない）。
       h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
       await new Promise((resolve) => setTimeout(resolve, 10));
       const second = (await h.journal()).filter((entry) => entry.type === 'decision');
@@ -613,6 +624,7 @@ describe('引き取りの関門（貸し出し期限）', () => {
     it('併存では受信箱へ知らせ、answering 側の runnerId を使う（lease.runnerId ではない）', async () => {
       const h = await harnessOf();
       await withDuplicate(h);
+      // 台帳の貸し出しはわざと別の runnerId を指させる（食い違いを作る）: `lease.runnerId` を出すと、重複していない方の名前を報告してしまう。
       await h.stores.jobs.putJob(
         runningJob(leaseHeldBy('boot-1', 4, { runnerId: 'stale-runner-name' })),
       );
@@ -726,6 +738,8 @@ describe('引き取りの関門（貸し出し期限）', () => {
 });
 
 function doneJob(lease: JobLease | undefined, overrides: Partial<Job> = {}): Job {
+  // `sessionInstanceId` は既定で貸し出しの持ち主と同じ値にする: 実機では `start()` と `#resume()` の成功が、その回に claim した相手を両方の欄へ同じ値で書く。
+  // 食い違わせたい試験は `overrides` で明示すること。
   const sessionInstanceId = lease?.instanceId;
   return {
     ...runningJob(lease),
@@ -967,6 +981,7 @@ describe('器が入れ替わった後の manager_send（#669）', () => {
 
     expect(swapped.runner.resumes[0]?.message).toContain('[system]');
     expect(same.runner.resumes[0]?.message).toBe('続きをやって');
+    // 告げた側と告げなかった側を並べて比べる: 片側だけを見ると、両方が同じだけ壊れた変異を見逃す。
     expect(await view(swapped)).toEqual(await view(same));
 
     await swapped.close();
