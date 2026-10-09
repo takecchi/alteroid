@@ -19,8 +19,10 @@ export const RESCUE_REF_PREFIX = 'refs/alteroid-rescue/';
 
 export const RESCUE_INTERVAL_MS_ENV_KEY = 'ALTEROID_RESCUE_INTERVAL_MS';
 
+// 能力の上限ではなく、混雑を作らないための間隔（回数は制限していない）。
 export const DEFAULT_RESCUE_INTERVAL_MS = 5 * 60_000;
 
+// 混雑を作らないための下限であって、回数の制限ではない。
 export const MIN_RESCUE_INTERVAL_MS = 1000;
 /** `setInterval` は 2^31-1 ms を超える値を 1ms 周期へ倒すので、上限はそこで切る。 */
 export const MAX_RESCUE_INTERVAL_MS = 2_147_483_647;

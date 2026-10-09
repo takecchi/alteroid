@@ -25,6 +25,7 @@ export function createRecentMap<T>(options: RecentMapOptions): RecentMap<T> {
     has: (id) => entries.has(id),
     get: (id) => entries.get(id),
     set(id, value) {
+      // 入れ直しは新しい側へ寄せる（触れたものから先に忘れない）。
       entries.delete(id);
       entries.set(id, value);
       if (entries.size <= limit) return;

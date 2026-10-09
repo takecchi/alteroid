@@ -1,3 +1,4 @@
+// これは計器である: 取れなかったときに既定値・プレースホルダ・腐る値（前回のリリースの sha 等）を返さず、すべて `null` に倒す。
 import { z } from 'zod';
 
 import * as generatedCanon from './generated/canon.js';
@@ -32,6 +33,7 @@ export function resolveBuildTime(baked: string = bakedBuiltAt): BuildTime {
   return { builtAt: value };
 }
 
+// 信用しない側から使う: runner の応答はネットワーク越しの入力なので、形が壊れていても落ちずに扱う。
 export const buildRevisionSchema = z.object({
   commit: z.string().min(1).nullable(),
   short: z.string().min(1).nullable(),

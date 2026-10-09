@@ -49,6 +49,7 @@ export class RunnerCutOffWorkers {
     }
   }
 
+  // 消費しない: 注記の配達が `#cutOffWorkers` を消費し切った後でも、ずっと後に届く背景処理の完了を正しく結べるようにするため。
   isCutOff(agentId: string): boolean {
     return this.#cutOffAgentIds.has(agentId);
   }
