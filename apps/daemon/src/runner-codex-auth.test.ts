@@ -22,12 +22,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createHttpRunner } from './runner-client.js';
 
-/**
- * Codex の ChatGPT ログイン（#3939）を、デーモンの正本 → 制御面（HTTP）→ runner の CODEX_HOME へ
- * 降ろし、Codex が書き換えた auth.json を出来事（SSE）→ 制御面で取りに行って正本へ書き戻すまでを、
- * 本物の runner の app と HTTP の client で通す。
- */
-
 const TOKEN = 'test-runner-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 const LOGIN_VALUE = '{"tokens":{"refresh_token":"rt-e2e-login-fake"}}';
@@ -137,7 +131,7 @@ async function loggedInStores(): Promise<Stores> {
   return stores;
 }
 
-// 実時間で待つ（本物の SSE と runner の見回りの周期を通すため）。待ちは vi.waitFor の見回りに任せる。
+// 実時間で待つ: 本物の SSE と runner の見回りの周期を通すため。
 async function until(condition: () => Promise<boolean>, what: string): Promise<void> {
   await vi.waitFor(
     async () => {
@@ -190,7 +184,6 @@ describe('Codex の ChatGPT ログインを runner へ降ろし、書き戻す�
     expect(r.host.codexAuth().placed).toBe(false);
     await r.host.setCodexAuth({ value: LOGIN_VALUE, revision: 'r' });
     await writeFile(join(r.codexHome, 'auth.json'), REFRESHED);
-    // runner の見回りが書き換えを見つけた（知らせを出した）ところまで待つ。旧いデーモンは取りに来ない。
     await until(
       async () => r.host.takeCodexAuthWriteBack(fingerprintOf(REFRESHED)) !== null,
       'runner が書き換えを見つける',

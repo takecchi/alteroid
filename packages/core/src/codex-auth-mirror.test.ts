@@ -68,7 +68,6 @@ describe('runner の CODEX_HOME への写し（#3939）', () => {
       baseRevision: 'r1',
       fingerprint: codexAuthFingerprintOf(REFRESHED),
     });
-    // 同じ書き換えは2度知らせない。
     await m.check();
     expect(notices).toHaveLength(1);
   });
@@ -78,7 +77,6 @@ describe('runner の CODEX_HOME への写し（#3939）', () => {
     await m.set({ value: V1, revision: 'r1' });
     await writeFile(join(dir, 'codex-home', 'auth.json'), REFRESHED);
     await m.set({ value: V2, revision: 'r2' });
-    // 上書きの前に、まだ知らせていなかった書き換えを拾って知らせている（失わない）。
     expect(notices.map((n) => n.kind)).toEqual(['changed']);
     expect(await readFile(join(dir, 'codex-home', 'auth.json'), 'utf8')).toBe(V2);
     expect(m.status().revision).toBe('r2');
@@ -91,7 +89,6 @@ describe('runner の CODEX_HOME への写し（#3939）', () => {
     await m.check();
     await m.set({ value: V1, revision: 'r1' });
     expect(await readFile(join(dir, 'codex-home', 'auth.json'), 'utf8')).toBe(REFRESHED);
-    // 書き戻しが通って同じ中身の新しい版が降りてきたら、書き直さずに版だけ進む。
     await m.set({ value: REFRESHED, revision: 'r2' });
     expect(m.status().revision).toBe('r2');
     await m.check();

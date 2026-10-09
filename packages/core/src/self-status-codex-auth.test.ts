@@ -6,10 +6,7 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * `self_status` に Codex の ChatGPT ログインの状態が出る（#3939）。切れた・失効したら再ログインを
- * 促す行が出る。**ログインしていなければ1行も足さない**（今までの出力のまま）。値は出ない。
- */
+
 const RUNTIME: CloneRuntimeFacts = {
   revision: { commit: null, short: null, source: null },
   buildTime: { builtAt: null },
@@ -79,7 +76,6 @@ describe('self_status の Codex の ChatGPT ログイン（#3939）', () => {
     const reply = await selfStatus(stores);
     expect(reply).toContain('Codex を頼む口は runner のマネージャーの peer だけ');
     expect(reply).toContain('runner_list の peer の行');
-    // #4113 の「使えるのは…」は、開いている器が0台でも使えるように読めた
     expect(reply).not.toContain('使えるのは');
     expect(reply).toContain('クローンはマネージャーへの依頼として頼む');
     expect(reply).toContain('未ログインと出るのは設計どおり');

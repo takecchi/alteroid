@@ -11,7 +11,6 @@ const LOGIN_VALUE = '{"tokens":{"refresh_token":"rt-login-fake"}}';
 const REFRESHED_A = '{"tokens":{"refresh_token":"rt-A-fake"}}';
 const REFRESHED_B = '{"tokens":{"refresh_token":"rt-B-fake"}}';
 
-/** runner の偽物。降りてきたものと、書き戻しとして渡すものを持つ。 */
 class FakeRunner {
   readonly pushes: ({ value: string; revision: string } | null)[] = [];
   writeBack: { value: string; baseRevision: string; fingerprint: string } | null = null;
@@ -100,7 +99,6 @@ describe('Codex の ChatGPT ログインの正本（#3939）', () => {
       verificationUrl: 'https://auth.example/d',
       userCode: 'ABCD-EFGH',
     });
-    // 進行中は同じものを返す（同時に1本）。
     expect((await h.service.startLogin()).id).toBe(view.id);
     expect(h.device.started).toBe(1);
 
@@ -174,7 +172,6 @@ describe('Codex の ChatGPT ログインの正本（#3939）', () => {
     const stored = await h.stores.codexAuth.get();
     expect(stored?.value).toBe(REFRESHED_A);
     expect(stored?.revision).toBe('rev-2');
-    // 全台に新しい版が降り、負けた r2 にも正本（A）が降り直している。
     for (const runner of h.runners) {
       expect(runner.last()).toEqual({ value: REFRESHED_A, revision: 'rev-2' });
     }

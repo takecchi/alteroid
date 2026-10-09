@@ -17,10 +17,6 @@ import {
   type CodexChatgptAuthHandle,
 } from './codex-manager-driver.js';
 
-/**
- * peer の Codex を、runner に降りた ChatGPT ログイン（#3939）で起こす。
- * 外から見えるもの（子の env・引数・app-server へ送ったもの・ハンドルへの知らせ）で固定する。
- */
 
 type Json = Record<string, unknown>;
 
@@ -217,7 +213,7 @@ describe('peer の Codex を ChatGPT ログインで起こす（#3939）', () =>
     expect(env['CODEX_HOME']).toBe('/home/worker/.codex');
     expect(JSON.stringify(env)).not.toContain('rt-fake-not-real');
     expect(Object.values(env)).not.toContain(AUTH_VALUE);
-    // ChatGPT ログインのときは ephemeral にしない（付けると auth.json を読まない）。
+    // ephemeral にしない: 付けると auth.json を読まないため。
     expect(h.spawned[0]?.args).not.toContain(CODEX_EPHEMERAL_AUTH_OVERRIDE);
     expect(h.server.methods()).toContain('account/read');
     expect(h.server.methods()).not.toContain('account/login/start');
@@ -226,7 +222,6 @@ describe('peer の Codex を ChatGPT ログインで起こす（#3939）', () =>
     h.close();
     h.release();
     await running;
-    // セッションの終わりに書き戻しの見回りをする。
     expect(handle.checks).toBeGreaterThan(0);
   });
 
