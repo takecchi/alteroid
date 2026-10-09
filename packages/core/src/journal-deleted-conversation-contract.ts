@@ -12,7 +12,7 @@ import type { JournalStore } from './store.js';
  * 同じ理由（`storage-fs` / `storage-pg` が `@alteroid/core` を実行時の依存として読むため）。
  * 食い違ったら `throw` する。
  *
- * **測る5性質。3実装（インメモリ / `storage-fs` / `storage-pg`）すべてがこれを呼ぶこと。
+ * **測る6性質。3実装（インメモリ / `storage-fs` / `storage-pg`）すべてがこれを呼ぶこと。
  * 呼んでいない実装が増えたら `scripts/journal-store-with-contract-registry.test.ts` が落ちる。**
  *
  * 1. 墓標の前は見える。墓標の後は `list`・`listPage`・`get`・`q` 検索・`with: ['human']` の
@@ -22,12 +22,14 @@ import type { JournalStore } from './store.js';
  *    会話の行が1件返る。`listPage` の `next` も、外した行を数えて誤らない）
  * 4. 墓標の後に同じ会話へ積んだ行も外れる
  * 5. 墓標が `hiddenEntryIds` で名指しした行（会話 id を持たない本文の写し。#4355）も、どの読み口からも外れる。名指ししていない行は外れない
+ * 6. `oldestAt` は、読み口に見えている行のうち最古の `at` を返す（外した行の時刻を返さない。#4377）。
+ *    外した行と見えている行が同じミリ秒なら差は出ないが、そのときは時刻からも漏れない
  *
  * `append` した行は呼び出し側のストアへ実際に残る（後始末はしない）。使い捨てのストアを渡すこと。
  */
 export type JournalStoreDeletedConversationContractSubject = Pick<
   JournalStore,
-  'append' | 'list' | 'listPage' | 'get'
+  'append' | 'list' | 'listPage' | 'get' | 'oldestAt'
 >;
 
 const MARKER = 'journal-deleted-conversation-contract';
@@ -230,5 +232,15 @@ export async function verifyJournalStoreDeletedConversationContract(
   }
   if ((await journal.get(unrelated.id))?.id !== unrelated.id) {
     fail('5: 名指しした行も外れる', `get(${unrelated.id}) が、名指ししていない行を返さなかった。`);
+  }
+
+  // --- 契約6（#4377）: oldestAt は見えている行のうち最古の at ---
+  const visibleOldest = (await journal.list({ order: 'asc', limit: 1 }))[0]?.at ?? null;
+  const oldestAt = await journal.oldestAt();
+  if (oldestAt !== visibleOldest) {
+    fail(
+      '6: oldestAt は外した行の時刻を返さない',
+      `oldestAt() が ${String(oldestAt)} を返したが、見えている行の最古は ${String(visibleOldest)} である。`,
+    );
   }
 }
