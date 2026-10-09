@@ -13,7 +13,6 @@ import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];

@@ -12,7 +12,6 @@ import type { InboxEvent, Job, JobStatus } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-
 interface FlushRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];

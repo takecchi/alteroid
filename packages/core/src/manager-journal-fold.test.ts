@@ -7,7 +7,6 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-
 const REJECTED = { rateLimitType: 'five_hour', status: 'rejected' };
 const ALLOWED = { rateLimitType: 'five_hour', status: 'allowed' };
 const REJECTED_FRAGMENT = '枠から追い返された';

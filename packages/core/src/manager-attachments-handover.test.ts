@@ -14,7 +14,6 @@ import {
 import { createMemoryStores } from './testing.js';
 import { createCloneTools, type ToolContext } from './tools.js';
 
-
 interface Fake {
   runner: RunnerClient;
   starts: RunnerStartCommand[];

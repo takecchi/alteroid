@@ -7,7 +7,6 @@ import {
   type ManagerFoldCandidateInput,
 } from './manager-fold-candidate.js';
 
-
 const NOW = new Date('2026-09-24T12:00:00.000Z');
 
 // 条件3は意図的に `true` を渡す: `false` のままだと常に候補が出ず、条件を1つずつ外す変異試験が「候補が出る」ケースを作れない。
