@@ -40,27 +40,29 @@ import type { AttachmentRef } from './schema.js';
 export const OUTBOX_FETCH_FILE_TIMEOUT_MS = 30_000;
 /** 1回の報告ぶんの取り出し全体にかける時間の既定。超えた分は「受け取れなかった（時間切れ）」にして報告を先へ進める。 */
 export const OUTBOX_FETCH_TOTAL_TIMEOUT_MS = 90_000;
-/** 大きさに応じて延ばす期限の、固定の上乗せ（ms）。 */
-const OUTBOX_FETCH_DEADLINE_BASE_MS = 60_000;
 /** 大きさに応じて延ばす期限の、見込む転送速度（バイト/秒。1 MiB/s）。 */
 const OUTBOX_FETCH_ASSUMED_BYTES_PER_SECOND = 1024 * 1024;
 
 /**
  * 1つのファイルを取る（または別口へ押す）時間の期限（ms）。大きさに応じて延ばす（#4128 段3b）:
- * `max(既定 30 秒, 60 秒 + size / (1 MiB/s))`。上限は {@link ATTACHMENT_REQUEST_TIMEOUT_MS}（1時間。runner 側の1リクエストの持ち時間）。
- * 2 GiB は 60 秒 + 2048 秒 = 約35分で、上限に収まる。
+ * `max(既定 30 秒, size / (1 MiB/s))`。30 MiB までは既定の 30 秒のまま（小さいファイルの期限を変えない）。
+ * 上限は {@link ATTACHMENT_REQUEST_TIMEOUT_MS}（1時間。runner 側の1リクエストの持ち時間）。2 GiB は 2048 秒（約34分）。
  */
 export function outboxFetchDeadlineMs(size: number): number {
-  const scaled =
-    OUTBOX_FETCH_DEADLINE_BASE_MS +
-    Math.ceil((Math.max(0, size) / OUTBOX_FETCH_ASSUMED_BYTES_PER_SECOND) * 1000);
+  const scaled = Math.ceil((Math.max(0, size) / OUTBOX_FETCH_ASSUMED_BYTES_PER_SECOND) * 1000);
   return Math.min(ATTACHMENT_REQUEST_TIMEOUT_MS, Math.max(OUTBOX_FETCH_FILE_TIMEOUT_MS, scaled));
 }
 
-/** 1回の報告ぶんの取り出し全体の期限（ms）。`max(既定 90 秒, 各ファイルの期限の和)`。上限は1時間。 */
+/**
+ * 1回の報告ぶんの取り出し全体の期限（ms）。既定の 90 秒に、各ファイルの期限が既定の 30 秒を超えて延びた分を足す
+ * （小さいファイルだけの報告は 90 秒のまま。大きいファイルの分だけ延びる）。上限は1時間。
+ */
 export function outboxFetchTotalDeadlineMs(fileDeadlinesMs: readonly number[]): number {
-  const sum = fileDeadlinesMs.reduce((acc, ms) => acc + ms, 0);
-  return Math.min(ATTACHMENT_REQUEST_TIMEOUT_MS, Math.max(OUTBOX_FETCH_TOTAL_TIMEOUT_MS, sum));
+  const extension = fileDeadlinesMs.reduce(
+    (acc, ms) => acc + Math.max(0, ms - OUTBOX_FETCH_FILE_TIMEOUT_MS),
+    0,
+  );
+  return Math.min(ATTACHMENT_REQUEST_TIMEOUT_MS, OUTBOX_FETCH_TOTAL_TIMEOUT_MS + extension);
 }
 
 /** 退避先を消させる呼び出し1回の時間。 */

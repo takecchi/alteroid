@@ -11,6 +11,7 @@ import {
   StagedAttachmentLedger,
   stageRunnerAttachment,
 } from './runner-attachments.js';
+import { createLocalRunner } from './runner-local.js';
 
 /**
  * 別口（`stageRunnerAttachment`。#4128 段3a）が、**何チャンクにも分かれて届く中身**を、順に1つのファイルへ書くこと。
@@ -79,6 +80,48 @@ describe('stageRunnerAttachment: チャンクに分かれた中身', () => {
     expect((error as RunnerAttachmentStageError).status).toBe(413);
     expect(await readdir(join(root, 'mgr-1'))).toEqual([]);
     expect(ledger.get('mgr-1', ID)).toBeUndefined();
+  });
+});
+
+describe('in-process の runner の別口は、signal で読むのをやめる（#4128 段3b）', () => {
+  it('本文が止まったまま中断されたら、投げて何も残さない', async () => {
+    const root = await makeTempDir('alteroid-runner-stage-local-');
+    const runner = createLocalRunner({
+      runnerId: 'runner-local',
+      workspacePath: root,
+      env: {},
+      attachmentsRoot: root,
+    });
+    const controller = new AbortController();
+    let firstChunkRead!: () => void;
+    const firstChunk = new Promise<void>((resolve) => {
+      firstChunkRead = resolve;
+    });
+    // 1チャンク渡した後は、二度と次を返さない本文（応答しない送り手）
+    async function* stalled(): AsyncGenerator<Uint8Array> {
+      yield new Uint8Array(10);
+      firstChunkRead();
+      await new Promise<never>(() => undefined);
+    }
+
+    expect(runner.stageAttachment).toBeTypeOf('function');
+    const staging = runner.stageAttachment!(
+      'mgr-1',
+      {
+        id: ID,
+        name: 'big.bin',
+        mediaType: 'application/octet-stream',
+        size: 100,
+        sha256: 'a'.repeat(64),
+      },
+      stalled(),
+      { signal: controller.signal },
+    );
+    await firstChunk;
+    controller.abort(new Error('時間の上限を超えた'));
+
+    await expect(staging).rejects.toThrow('時間の上限を超えた');
+    expect(await readdir(join(root, 'mgr-1'))).toEqual([]);
   });
 });
 

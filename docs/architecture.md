@@ -143,7 +143,7 @@
   - **大きいファイル**（画像以外で `maxFileBytes` を超えるもの。画像かどうかは名前の拡張子で見る）も返せる（#4128 段3b）。1つの上限は runner の `attachmentStageLimit`（`ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES`。既定 2 GiB）で、超えるものだけを断って名前を消す。**合計は `maxTotalBytes` に数えず、大きいファイルだけの別の予算（1報告で `attachmentStageLimit` まで）で見る**。超える分は名前を残して次の報告へ回す。個数（`maxPerMessage`）には数える。退避先の予算も別で、小さいものは `maxTotalBytes × 8`、大きいものは `attachmentStageLimit × 8`（退避先のファイルを `maxFileBytes` を超えるかどうかで分けて数える）
 - **`report` には控えだけを載せる**（`files`: fileId・名前・種類・大きさ・sha256。`rejectedFiles`: 名前・理由）
 - **デーモンが取る。** デーモンは `GET /managers/:id/outbox/:fileId` で中身をストリームで取り、sha256 と大きさを照合する。照合が合えば `prepareAttachment` を通して置き場へ入れ、`DELETE /managers/:id/outbox/:fileId` で退避先を消させる。取れなかったもの（runner が消えた・照合が合わない・上限を超えた）は、報告に理由つきの通知行で残す（黙って落とさない）
-  - **取り込みの期限は大きさに応じて延びる**（#4128 段3b）。1つは `max(30 秒, 60 秒 + 大きさ ÷ 毎秒 1 MiB)`、1報告は `max(90 秒, 各ファイルの期限の和)`で、どちらも上限は 1 時間（`ATTACHMENT_REQUEST_TIMEOUT_MS`）。式は core の `outboxFetchDeadlineMs`。デーモンが大きいファイルを runner の別口へ押す側にも、同じ式の期限をファイルごとに掛け、応答しない runner を待ち続けない（期限切れは命令を送らずに断る）
+  - **取り込みの期限は大きさに応じて延びる**（#4128 段3b）。1つは `max(30 秒, 大きさ ÷ 毎秒 1 MiB)`（30 MiB までは既定の 30 秒のまま）、1報告は「90 秒 + 各ファイルが 30 秒を超えて延びた分」（小さいファイルだけなら 90 秒のまま）で、どちらも上限は 1 時間（`ATTACHMENT_REQUEST_TIMEOUT_MS`）。式は core の `outboxFetchDeadlineMs`。デーモンが大きいファイルを runner の別口へ押す側にも、同じ式の期限をファイルごとに掛け、応答しない runner を待ち続けない（期限切れは命令を送らずに断る）
   - **外部ストレージが無効なデーモンは、大きいファイルを取りに行かない。** 1つの上限が `maxFileBytes` のままなので、超えるものは「1つの上限を超えるので取りに行かなかった」と理由つきで報告に残る
 - **能力の名乗りで判定する。** runner は `hello.capabilities` に `manager-outbox` を名乗る。名乗らない runner には出し箱が無い。旧いデーモンは `files` を zod が捨てるだけで、退避先は下の掃除で消える
 - **委譲が閉じたら、出し箱と退避先をその委譲ごと消す。** 取りこぼしの掃除は、下りの置き場と同じ周期・同じ基準（24時間）で行う
