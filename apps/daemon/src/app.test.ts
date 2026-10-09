@@ -10167,18 +10167,6 @@ describe('認証が無効な既定構成では /access も /tokens も今日ど�
   });
 });
 
-/**
- * `GET /schedule` の応答が宣言（`scheduleListResponseSchema` → `scheduleStatusSchema`）
- * どおりであること。
- *
- * `deps.scheduler?.list()` は core の `Scheduler` 実装が返す `ScheduleStatus[]` を
- * そのまま渡している。ここに宣言に無いフィールドが増えても `describeRoute` の
- * `resolver()` は検査しない（spec を作るだけ）。`.parse()` を外すと、
- * スケジューラが返したものがそのまま応答へ出る。
- *
- * **本物のハンドラを本物の経路で叩く。** `fakeScheduler()` を丸ごと差し替えず、
- * `list()` だけを宣言に無いフィールド混じりの値にすり替えた `Scheduler` を渡す。
- */
 describe('宣言と実物の一致（/schedule）', () => {
   it('応答のキー集合が宣言のキー集合と一致する（余分なフィールドは外へ出ない）', async () => {
     const leakyEntry = {
@@ -10187,16 +10175,9 @@ describe('宣言と実物の一致（/schedule）', () => {
       nextAt: '2026-08-12T13:00:00.000Z',
       request: '例の件を毎朝報告して',
       lastRunAt: '2026-08-11T13:00:00.000Z',
-      // **宣言に在る欄は全部埋める。** この試験は応答のキー集合と宣言のキー集合の
-      // **一致**を見る（`toEqual`）ので、足場が宣言済みの欄を欠くと、漏れでも
-      // 落ちるが**欠けでも落ちる。** `createdAt` / `updatedAt` は #235 で、
-      // `spec` は編集画面の prefill 用に `optional` として宣言に加わったもので、
-      // **アサーションは1文字も変えていない**（緩めると「余分なフィールドは
-      // 外へ出ない」の保証が消える）。
       spec: { type: 'daily', at: '09:00' },
       createdAt: '2026-08-01T00:00:00.000Z',
       updatedAt: '2026-08-05T00:00:00.000Z',
-      // 宣言（scheduleStatusSchema）に無いフィールド。
       secretDebugField: 'should-not-escape',
     } as unknown as ScheduleStatus;
 
@@ -10213,8 +10194,6 @@ describe('宣言と実物の一致（/schedule）', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { entries: Record<string, unknown>[] };
 
-    // **「宣言どおりのものが出る」だけを見ない。** それだけでは `.parse()` を
-    // 外しても、たまたま拾った実物のキーが宣言と一致していれば通ってしまう。
     expect(JSON.stringify(body)).not.toContain('secretDebugField');
 
     const entry = body.entries[0];
@@ -10224,12 +10203,6 @@ describe('宣言と実物の一致（/schedule）', () => {
     expect(actualKeys).toEqual(declaredKeys);
   });
 
-  /**
-   * 編集画面が周期を prefill するための `spec`（#496）が、経路の途中で
-   * 落とされずに届くこと。仕込まれた依頼には出て、既定の日報・発意 tick には
-   * 出ないこと（`ScheduleStatus.spec` の doc「あれはコードに書かれた既定で、
-   * `spec` という値そのものが存在しない」）。
-   */
   it('仕込まれた依頼には spec が出て、既定の日報・発意には出ない', async () => {
     const seeded = {
       kind: 'issue-round',
@@ -10265,19 +10238,7 @@ describe('宣言と実物の一致（/schedule）', () => {
   });
 });
 
-/**
- * Issue #424。`validator('json', …)` に `hook` を渡していない経路は、hono の
- * 既定の 400（`@hono/standard-validator` の `sanitizeIssues`）が
- * `c.json({ data: <リクエスト本文そのもの>, error, success: false }, 400)` を
- * 返す——`data` は本文の丸写しで、`RESTRICTED_DATA_FIELDS` は
- * `header: ['cookie']` だけなので `json` は素通しになる（#422 が `PUT /tokens`
- * に足した歯・実装と同じ実測）。ここは資格そのものを運ぶ2経路
- * （`POST /runners/credentials` と `PUT /profile`）で同じ穴を塞ぐ。
- *
- * **2本の値を送るのは「壊れた行だけ伏せる」直しでも緑になるのを防ぐため**
- * （#422 の「スキーマ検証で落ちた 400 にも、同じ回に送った値が1つも出ない」の
- * doc と同じ理由）——1本だけだと、壊れた行の値だけを消す直しでも通ってしまう。
- */
+// 値を2本送る: 1本だと「壊れた行だけ伏せる」直しでも緑になるから。
 describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値が漏れない（#424）', () => {
   it('POST /runners/credentials: 2本目の name が不正でも、同じ回に送った値が1つも出ない', async () => {
     const FIRST = 'CRED-FIRST-DUMMY';
@@ -10288,7 +10249,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       json({
         credentials: [
           { name: 'GH_TOKEN', value: FIRST },
-          // `name` が `/^[A-Z][A-Z0-9_]*$/`（`runnerCredentialSchema`）に落ちる。
           { name: 'not-upper-case', value: SECOND },
         ],
       }),
@@ -10299,10 +10259,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
     expect(text).not.toContain(FIRST);
     expect(text).not.toContain(SECOND);
 
-    // **既定の `{ data, error, success }` の形が返っていないこと。** `data` が
-    // 無く、`error` が配列ではなく文字列であることまで見る——`data` キーだけを
-    // 消して `error`（issue の配列）をそのまま残す直しでも、配列の中に
-    // 送った値が残っていることがある。
     const body = JSON.parse(text) as Record<string, unknown>;
     expect(body).not.toHaveProperty('data');
     expect(typeof body.error).toBe('string');
@@ -10311,17 +10267,9 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
   it('PUT /profile: script を打ち間違えた本文でも、送った値が1つも出ない', async () => {
     const SECRET = 'CRED-PROFILE-DUMMY';
 
-    // **`requireOperator` を先に通す必要がある。** 上の `beforeEach` が作る
-    // `app` は `auth` を渡していないので `authPlan.enabled` が false になり
-    // （`app.ts` の `authenticate` の doc）、全リクエストが `operator` として
-    // 通る——`実行環境プロファイル` describe の既存テスト（`PUT /profile` を
-    // 素のヘッダだけで叩いて 200 を得ている）と同じ前提であることを、ここでも
-    // その既存テストの結果（200 が返ること）を根拠に流用する。
     const response = await app.request('/profile', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      // `script` を書き忘れた本文。`profileUpdateRequestSchema` は
-      // `{ script: string }` を要求するので、必須項目の欠落で落ちる。
       body: JSON.stringify({ notScript: `export SECRET_IN_PROFILE=${SECRET}` }),
     });
 
@@ -10334,15 +10282,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
     expect(typeof body.error).toBe('string');
   });
 
-  /**
-   * `GET /permission-grants` / `POST /permission-grants/:id/revoke`（Issue #863）。
-   *
-   * **`via` の伝播そのもの**（account 経路で `clone.answerApproval` へ
-   * `{ kind: 'account', accountId }` が渡ること）は、上の「既定（認証を要求
-   * しない構成）では operator として通る」の2件が operator 側を、この
-   * describe が account 側を測る——両方揃って初めて「経路で分岐している」
-   * ことが言える。
-   */
   describe('/permission-grants（Issue #863）', () => {
     const FAKE_PROVIDER = {
       kind: 'oauth2' as const,
@@ -10462,7 +10401,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
         ),
       ).toBe(true);
 
-      // 既に取り消し済みでも 200 で、revokedAt を上書きしない。
       const second = await app.request('/permission-grants/grant-1/revoke', post);
       expect(second.status).toBe(200);
       const stillRevoked = await stores.permissionGrants.get('grant-1');
@@ -10535,9 +10473,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
           route: { principalKind: 'account', accountId: 'acc-x' },
         });
 
-        // `revoke`（HTTP 経由）と `markUsed`（クローンの `#onPreToolUse` が
-        // 呼ぶもの）を同時に叩く。**修正後はどちらも「読んでから書く」を
-        // アプリ層に持たない**ので、順序に関わらず両方の効果が残るはず。
         const [response, used] = await Promise.all([
           app.request('/permission-grants/grant-1/revoke', post),
           stores.permissionGrants.markUsed('grant-1', '2026-01-02T00:00:00.000Z'),
@@ -10546,8 +10481,6 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
 
         const after = await stores.permissionGrants.get('grant-1');
         expect(after?.revokedAt).toBeDefined();
-        // どちらが先かは決まらない。markUsed が先なら記録して true、取り消しが先なら
-        // 記録せず false（Issue #1687）——戻り値と記録が必ず一致する。
         expect(after?.lastUsedAt).toBe(used ? '2026-01-02T00:00:00.000Z' : undefined);
       },
     );
