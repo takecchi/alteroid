@@ -4184,21 +4184,7 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
       expect(reply).not.toContain('節を移した分だけ床が下がる');
     });
 
-    /**
-     * ⭐⭐ **C が「この先どう動くか」を言ってはいけない理由を、そのまま歯にする。**
-     *
-     * C は「飽和していた premise が `after.outlineSaturatedPremise` から消えた」
-     * で発火するが、消え方は4通りある（予算に収まった／`indexed` になった／
-     * `fact` になった／文書ごと消えた）。**`MemoryFloor` は slug ごとの区分を
-     * 持たないので、この関数は4つを区別できない。**
-     *
-     * ⟹ かつて C は「ここから先は、節を移した分だけ床が下がる」と書いていたが、
-     * **`indexed` へ移った回にはそれが偽である**——`indexed` は節の目次を1行も
-     * 焼かないので、節を移しても床は1文字も動かない。**そして `premise` から
-     * `indexed` への付け替えは実運用で最も多く起きた操作である**（本番の記憶は
-     * 2026-09-12 時点で6文書中5文書が `indexed`）。この歯はその遷移を直接作って、
-     * 偽の予測が戻ってこないことを固定する。
-     */
+    // C は「この先どう動くか」を言わない: 消え方が4通り（収まった／indexed／fact／消えた）あり MemoryFloor は区分を持たず区別できない。indexed へ移った回に「節を移せば床が下がる」は偽になる。
     it('⭐⭐ premise → indexed で飽和が消えた回でも、C は「節を移した分だけ床が下がる」と言わない', () => {
       const saturated = manySectionPremise('doc', 400);
       const asIndexed: MemoryPart = {
@@ -4207,8 +4193,6 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
       };
       const before = measureMemoryFloor([saturated]);
       const after = measureMemoryFloor([asIndexed]);
-      // 前提: 節数は1つも減っていないのに、飽和リストからは消えている
-      // （＝「節を移したから収まった」ではない、という遷移そのもの）。
       expect(before.outlineSaturatedPremise.map((entry) => entry.slug)).toContain('doc');
       expect(after.outlineSaturatedPremise).toHaveLength(0);
       expect(after.indexedDocs).toBe(1);
@@ -4222,23 +4206,12 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
       });
 
       expect(reply).toContain('切られなくなった');
-      // 🔴 これが本題——`indexed` では節を移しても床は動かないので、偽になる。
       expect(reply).not.toContain('節を移した分だけ床が下がる');
-      // そして「区別していない」ことを行そのものが名乗る。
       expect(reply).toContain('区別していない');
     });
 
-    /**
-     * ⭐⭐ **いちばん重要な歯（訂正3）。** `memory_section_move` は移し先
-     * （`toSlug`）の視点で `slug` を渡す（`tools.ts` の「床は『移した先』の
-     * 視点で言う」）。⟹ 「予算に張り付いた premise（A）から、別の文書（B）へ
-     * 節を移す」呼び出しでは、`slug` に入っているのは B だが、名乗るべきは
-     * **張り付いている当の文書 A** である。`input.slug` に引きずられて B を
-     * 主語にしていないか、A を主語にできているかを両方確かめる。
-     */
+    // memory_section_move は移し先の視点で slug を渡す: 名乗るべきは張り付いている当の文書 A であって、input.slug（B）ではない。
     it('⭐⭐ memory_section_move: slug（移し先 B）ではなく、張り付いている移動元 A を名乗る', () => {
-      // A: 400節で飽和 → 300節を B へ移した後も、100節でなお飽和している
-      // （揺れ＝A。数値は変わるので「何も変わっていない」側には落ちない）。
       const before = measureMemoryFloor([
         manySectionPremise('a-doc', 400),
         premise('b-doc', '移す前のB'),
@@ -4247,7 +4220,6 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
         manySectionPremise('a-doc', 100),
         premise('b-doc', '移した後のB（節が増えた）'),
       ]);
-      // `memory_section_move` は移し先（B）の視点で slug を渡す。
       const reply = describeMemoryFloor({
         before,
         after,
@@ -4256,27 +4228,18 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
         created: false,
       });
 
-      // 前提: a-doc は before/after とも本当に飽和していて、かつ数値が
-      // 変わっている（そうでなければ「何も変わっていない」側に落ちて、
-      // このテストは何も測らない）。
       const beforeAFit = before.outlineSaturatedPremise.find((entry) => entry.slug === 'a-doc');
       const afterAFit = after.outlineSaturatedPremise.find((entry) => entry.slug === 'a-doc');
       expect(beforeAFit).toBeDefined();
       expect(afterAFit).toBeDefined();
       expect(beforeAFit!.rest).not.toBe(afterAFit!.rest);
 
-      // 名乗るべきは A ——slug（B）ではない。
       expect(reply).toContain('a-doc の節の目次は1文書あたりの予算');
       expect(reply).toContain('張り付いている');
-      // ⛔ B（`input.slug`）を主語にした一文は出ない。
       expect(reply).not.toContain('b-doc の節の目次');
     });
 
-    /**
-     * ⭐ 「飽和しているが何も変わっていない premise」は名乗らない——無関係な
-     * 文書へ書いたターンで、張り付いた別の文書の名前が毎回出るのを防ぐ側
-     * （`demotedNote` と同じ「噛んでいない回は1文字も出さない」の倒し方）。
-     */
+    // 飽和しているが何も変わっていない premise は名乗らない: 無関係な文書へ書いたターンに、張り付いた別の文書の名前が毎回出る。
     it('⭐ 飽和したまま何も変わっていない premise は、無関係な書き込みでは名乗らない', () => {
       const saturatedElsewhere = manySectionPremise('saturated-elsewhere', 400);
       const before = measureMemoryFloor([saturatedElsewhere, premise('unrelated', '元の本文')]);
@@ -4285,8 +4248,6 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
         premise('unrelated', '書き換えた本文'),
       ]);
 
-      // 前提: saturated-elsewhere は前後で1文字も変わっていない
-      // （数値が同一であることを直接確かめる）。
       const beforeFit = before.outlineSaturatedPremise.find(
         (entry) => entry.slug === 'saturated-elsewhere',
       );
@@ -4309,17 +4270,6 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
   });
 });
 
-/**
- * `describeMemoryReinjectionEstimate` — 「この書き込みによって、次のターンの
- * 会話へ載る見込みの文字数」の一言（P2、#318 の続き）。
- *
- * **`describeMemoryFloor`（直上）とは別の量を測る歯である。** あちらは
- * 「毎ターン焼き込まれ続ける総量」（記憶全体の before/after）、こちらは
- * 「この書き込みの結果、`#withFreshMemory` が次の1ターンだけ差分として
- * 載せ直す量」（`renderMemoryDocuments(changed)`、changed はこの書き込みで
- * 変わった文書だけ）。**中心は区分で結果が変わること**——premise は全文、
- * fact は目次1行ぶんしか返らない。
- */
 describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ載る見込み」の一言', () => {
   it('⭐ premise の文書へ書くと、renderMemoryDocuments([文書]) と一致する文字数が出る（載るのはカード）', () => {
     const doc = premise('about-me-core', 'あ'.repeat(500));
@@ -4327,12 +4277,8 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     const expectedChars = renderMemoryDocuments([doc]).length;
 
     expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
-    // **かつてここは `premise・全文` を測り、本文が実際に載ることまで見ていた。**
-    // 載り方がカードへ変わったので（人間の決定 2026-09-08）、**本文が載らない
-    // ことのほうを測る**——アサーションは消していない。向きが反転しただけである。
     expect(reply).toContain('premise・カード（要旨＋節の目次）');
     expect(renderMemoryDocuments([doc])).not.toContain('あ'.repeat(500));
-    // 代わりに見出しは載る（何が書いてあるかは分かる）。
     expect(renderMemoryDocuments([doc])).toContain('# about-me-core');
   });
 
@@ -4341,14 +4287,12 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
       description: '費用の推移',
       freshness: { kind: 'fresh' },
     });
-    // 本文が長くても、目次1行にしか影響しない（本文自体は载らない）。
     const longFactDoc: MemoryPart = { ...factDoc, content: factDoc.content + 'あ'.repeat(5000) };
     const reply = describeMemoryReinjectionEstimate([longFactDoc], [longFactDoc], new Map());
     const expectedChars = renderMemoryDocuments([longFactDoc]).length;
 
     expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
     expect(reply).toContain('fact・目次1行');
-    // 5,000文字の本文は目次側には出ない（載る量は本文量に比例しない）。
     expect(expectedChars).toBeLessThan(200);
   });
 
@@ -4395,8 +4339,6 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
       renderMemoryDocuments([toDoc]).length + renderMemoryDocuments([fromDoc]).length;
 
     expect(reply).toContain(`${combinedChars.toLocaleString('en-US')} 文字`);
-    // まとめて render した値は、別々に render して足した値とは一致しない
-    // （premise 同士を繋ぐ区切り文字のぶん）——「合計」を選んだ理由そのもの。
     expect(combinedChars).not.toBe(separateSum);
     expect(reply).toContain('about-me-appendix と about-me の合計');
   });
@@ -4425,42 +4367,20 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     );
 
     expect(reply).toContain('appendix（fact・目次1行）');
-    // ラベルは実際に載る形を言い当てる（`premise・全文` から言い換えた）。
     expect(reply).toContain('about-me（premise・カード（要旨＋節の目次））');
   });
 
   it('parts が空なら呼び手の実装誤りとして例外を投げる（型を迂回した呼び手への最後の砦）', () => {
-    // **引数は非空タプル（`readonly [MemoryPart, ...MemoryPart[]]`）にしてある**
-    // ので、`tsc` は素の `[]` を拒む。ここで確かめたいのは「型を迂回して空を
-    // 渡した呼び手」への `throw` が残っていることそのものなので、意図して
-    // `as unknown as` で型を迂回する（`describeMemoryReinjectionEstimate` の doc
-    // 「引数を非空タプルにしてある理由」）。
+    // 型を迂回して空を渡す: 引数は非空タプルで `tsc` は `[]` を拒むが、迂回した呼び手への throw が残っていることを確かめる。
     const empty = [] as unknown as [MemoryPart, ...MemoryPart[]];
     expect(() => describeMemoryReinjectionEstimate(empty, [], new Map())).toThrow();
   });
 
-  /**
-   * 第2引数（`memoryAfter`）も必須である——**空配列を渡しても `throw` しない**
-   * （`describeMemoryReinjectionEstimate` の doc「空配列を渡されても throw
-   * しない」）。空は「`presentInMemory` を渡さなかった」のと同じ挙動になる
-   * だけで、`parts` の非空タプルとは扱いが違う（あちらは呼び手の実装誤りの
-   * 最後の砦、こちらはストアの状態そのもの）。
-   */
   it('memoryAfter に空配列を渡しても throw しない（presentInMemory 無しと同じ挙動になるだけ）', () => {
     const doc = fact('orphan', { description: '説明', freshness: { kind: 'fresh' } });
     expect(() => describeMemoryReinjectionEstimate([doc], [], new Map())).not.toThrow();
   });
 
-  /**
-   * ⭐ 本題（親が今回の書き込みに含まれない fact を書いたとき）。
-   *
-   * これが直る前は、`describeMemoryReinjectionEstimate` は `parts`（今回書いた
-   * 文書）しか見ておらず、`presentInMemory` を渡していなかった。書いた文書の
-   * `parent` が今回の書き込みに含まれない premise を指しているとき、実際に
-   * `#withFreshMemory` が載せる印（「在るが、ここに載せた分には含まれない」）
-   * より短い印（「見つからない」）で数えてしまい、**実測32文字少なく出ていた**
-   * （`memory.ts` の「⭐ 直っていたもの」の doc）。
-   */
   it('⭐ 親が今回の書き込みに含まれない premise を指す fact を書いたとき、見込みは「見つからない」ではなく「ここに載せた分には含まれない」の印ぶんで数える', () => {
     const core = premise('core', '前提の本文');
     const child = fact('child', {
@@ -4472,8 +4392,6 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
 
     const reply = describeMemoryReinjectionEstimate([child], memoryAfter, new Map());
     const expectedChars = renderMemoryDocuments([child], { presentInMemory: memoryAfter }).length;
-    // 直す前の数え方（presentInMemory を渡さない）と比べて、実際に文字数が
-    // 増えていること（短い印のままではないこと）を対照として見る。
     const beforeFixChars = renderMemoryDocuments([child]).length;
 
     expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
@@ -4484,16 +4402,6 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
   });
 });
 
-/**
- * `describeMemorySessionDelta` — 「セッション構築時点からの増分」の一言
- * （P3、#318 の続き。閾値なし）。
- *
- * **`describeMemoryFloor` / `describeMemoryReinjectionEstimate`（上の2つ）とは
- * 別の量を測る歯である。** あの2つは「毎ターン焼き込まれ続ける総量」と
- * 「次のターンだけ差分として載る量」で、こちらは「次にセッションが**組み立て
- * 直されたら**焼かれる量」——比較の相手は前回の書き込みではなく
- * `CloneRuntimeFacts.injectedMemoryChars`（このセッションの構築時点の値）。
- */
 describe('describeMemorySessionDelta — 「セッション構築時点からの増分」の一言（P3）', () => {
   it('⭐ セッション構築時点から増えていれば、方向（増える）と割合が出る', () => {
     const reply = describeMemorySessionDelta({ afterChars: 150, injectedMemoryChars: 100 });
@@ -4515,11 +4423,6 @@ describe('describeMemorySessionDelta — 「セッション構築時点からの
     expect(reply).not.toContain('増える');
   });
 
-  /**
-   * ⭐ 必須の歯（依頼者が名指し）。片側だけだと「常に増えたと言う実装」が
-   * 緑で通ってしまう——`afterChars === injectedMemoryChars` のとき、
-   * 「増える」「減る」のどちらにも読める語を出さないことを確かめる。
-   */
   it('⭐⭐ 増分が0のとき（何も変わっていないとき）に、増えたかのような文言を出さない（必須の歯）', () => {
     const reply = describeMemorySessionDelta({ afterChars: 100, injectedMemoryChars: 100 });
 
@@ -4536,10 +4439,6 @@ describe('describeMemorySessionDelta — 「セッション構築時点からの
     expect(reply).not.toMatch(/%/);
   });
 
-  /**
-   * ⚠️ `injectedMemoryChars` が引けない呼び手のための代替経路（依頼者が
-   * 事後に承認）。**黙って差し替えない**——現在値であることを文言に明記する。
-   */
   it('⚠️ injectedMemoryChars が null（引けない）なら、現在値であることを明記して現在値を出す', () => {
     const reply = describeMemorySessionDelta({ afterChars: 12_345, injectedMemoryChars: null });
 
@@ -4561,15 +4460,6 @@ describe('describeMemorySessionDelta — 「セッション構築時点からの
   });
 });
 
-/**
- * `describeMemoryPremiseRanking` — 「premise の大きさの順位」の一言
- * （P3、#318 の続き）。
- *
- * **`describeMemoryFloor` の `largestPremise`（premise を新規作成した枝でしか
- * 出ない、最大の1件だけの名指し）とは別物。** こちらは呼ぶたびに、いま在る
- * 全 premise を大きい順に並べる——「どれが大きいか」ではなく「どういう順に
- * 大きいか」まで見せる。
- */
 describe('describeMemoryPremiseRanking — 「premise の大きさの順位」の一言（P3）', () => {
   it('premise が無ければ、順位ではなくその旨を言う', () => {
     const reply = describeMemoryPremiseRanking([]);
@@ -4609,7 +4499,7 @@ describe('describeMemoryPremiseRanking — 「premise の大きさの順位」�
     const reply2 = describeMemoryPremiseRanking([a, z]);
 
     expect(reply1).toBe(reply2);
-    // 先に `aaa` の行が在ることを確かめる（#2008。無いと `-1 < n` で素通りする）
+    // 先に `aaa` の行が在ることを確かめる: 無いと `-1 < n` で素通りする。
     expect(reply1).toContain('aaa:');
     expect(reply1.indexOf('aaa:')).toBeLessThan(reply1.indexOf('zzz:'));
   });
@@ -4625,11 +4515,6 @@ describe('describeMemoryPremiseRanking — 「premise の大きさの順位」�
     expect(reply).toContain('全 1 件');
   });
 
-  /**
-   * サイズの数え方は `measureMemoryFloor` と揃える——malformed な frontmatter
-   * には説明の1行が前に付くので、`content.length` だけを足すと実物より
-   * 少ない数を名乗ることになる（`measureMemoryFloor` の doc と同じ理由）。
-   */
   it('malformed な frontmatter を持つ premise は、content.length ではなく実際に載る形で数える', () => {
     const malformed: MemoryPart = {
       slug: 'broken',
@@ -4644,10 +4529,6 @@ describe('describeMemoryPremiseRanking — 「premise の大きさの順位」�
     expect(reportedChars).toBeGreaterThan(malformed.content.length);
   });
 
-  /**
-   * ⭐ 一覧の上限は文字数で持つ（AGENTS.md の地雷表「一覧の上限を件数だけで
-   * 決める」）。切ったら省いた件数を必ず言う（`.claude/skills/listing-and-detail/`）。
-   */
   it('⭐ 予算を超えたら、件数ではなく文字数で切り、省いた件数を必ず言う', () => {
     const many = Array.from({ length: 200 }, (_, i) =>
       premise(`p${i.toString().padStart(4, '0')}`, '本文'),
@@ -4674,7 +4555,7 @@ describe('describeMemoryPremiseRanking — 「premise の大きさの順位」�
     const few = [premise('a', '本文'), premise('b', '本文')];
     const reply = describeMemoryPremiseRanking(few);
     expect(reply).not.toContain('省略');
-    expect(String(MEMORY_PREMISE_RANKING_BUDGET)).not.toBe('0'); // 定数が生きていることの最小確認
+    expect(String(MEMORY_PREMISE_RANKING_BUDGET)).not.toBe('0');
   });
 
   it('閾値・警告に相当する語を使わない（判断はクローンが下す）', () => {
@@ -4687,32 +4568,7 @@ describe('describeMemoryPremiseRanking — 「premise の大きさの順位」�
   });
 });
 
-/**
-
-/**
- * ⭐ premise の焼き込み（`renderPremiseCard`）と、載せ直しの絞り込み
- * （`RenderMemoryDocumentsOptions.seenContent`）。
- *
- * ## この2つが在る理由（本番の実測、2026-09-08T00:15Z〜00:40Z）
- *
- * Railway の PostgreSQL を直接引いた値:
- *
- * | | 値 |
- * | --- | --- |
- * | premise 5本の合計 | 527,277 文字（≒ 411,000 トークン）を**毎ターン**焼いていた |
- * | 要旨＋見出しだけなら | 73,285 文字（13.9%。≒ 57,000 トークン） |
- * | `alteroid-work` | 303,013 文字・**917 節**（1節あたり約 330 文字＝ログである） |
- * | 記憶の書き換え（2026-09-07） | 244 回。載せ直された総量 80 MB に対し、実際に変わったのは約 567 kB |
- *
- * 人間の決定（2026-09-08）: **「読みたいときに読める仕組みは必要だが、毎回
- * 全行読ませるのは無駄だと感じる。」**
- *
- * **測るのは3つ**——(a) 本文が載らないこと (b) それでも「何が書いてあるか」と
- * 「どう開くか」は載ること (c) 載せ直しが変わった範囲だけになること。
- * **(b) が無いとこの変更は能力の削除である。**
- */
 describe('premise の焼き込み（カード）と、載せ直しの絞り込み（seenContent）', () => {
-  /** 節が多い premise。**差分が意味を持つのは、カードが十分に大きいときだけである。** */
   function manySections(count: number, extra = ''): string {
     const body = Array.from({ length: count }, (_, i) => `## 節${i}\n節${i}の本文である。`).join(
       '\n',
@@ -4729,16 +4585,11 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       },
     ]);
 
-    // (a) 本文は1文字も載らない。
     expect(rendered).not.toContain('ここが本文である');
-    // (b) 何が書いてあるかは分かる（要旨と見出し）。
     expect(rendered).toContain('要旨: 私の要旨');
     expect(rendered).toContain('## 判断の基準');
-    // (b) どう開くかも書いてある（これが無いと能力の削除になる）。
     expect(rendered).toContain('memory_section_read');
-    // (b) 節id が実際に載っている（目次を取り直さずに開ける）。
     expect(rendered).toMatch(/\[[0-9a-f]{8}-[0-9a-f]{8}\] ## 判断の基準 — /);
-    // 大きさが桁で違う（この変更の目的そのもの）。
     expect(rendered.length).toBeLessThan(400);
   });
 
@@ -4755,12 +4606,6 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(rendered).toContain('memory_read');
   });
 
-  /**
-   * ⭐ 目安（線）。**門ではない**——書き込みは1つも止めない。
-   * 予算に当たったこと自体が「この文書を割れ」という合図であり、その手順を
-   * 断り書きに書く（`excerpt.ts` の「続きの取り方を書けるのは、呼び手の側に
-   * その口が実在するときだけである」）。
-   */
   it('⭐ 目次が予算に収まらない文書は、省いた件数と「割る手順」を名乗る', () => {
     const huge = Array.from(
       { length: 400 },
@@ -4773,21 +4618,10 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(rendered).toContain('節は目次から省略');
     expect(rendered).toContain('目次すら毎ターンの焼き込みに収まっていない');
     expect(rendered).toContain('memory_section_move');
-    // 予算そのものは超えない（超えたら「予算」の意味が無い）。
     expect(rendered.length).toBeLessThan(MEMORY_PROMPT_OUTLINE_BUDGET * 2);
   });
 
-  /**
-   * ⭐⭐ **「切った」だけでは行動に繋がらない。落ちた側を名指しする。**
-   *
-   * 予算で落ちるのは常に末尾側なので、**追記で育つ文書では「いま足した節」が
-   * 落ちる**（`MEMORY_PROMPT_OMITTED_TAIL_BUDGET` の doc の観測）。⟹ 断り書きが
-   * 件数しか名乗らないと、読み手は「N 節省略」を「だから今日足したものが
-   * 見えない」へ繋げられない。**落ちているのは本文であって見出しではない**ので、
-   * 見出しは断り書きに入る。
-   */
   it('⭐⭐ 目次が予算で切れた文書は、落ちた末尾の直近の節を節id つきで名指しする', () => {
-    // 末尾の節だけ見分けられる見出しにする（先頭側に紛れないこと）。
     const filler = Array.from(
       { length: 200 },
       (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
@@ -4797,23 +4631,16 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       '## 58. 今日足したばかりの規則\n本文';
     const rendered = renderMemoryDocuments([{ slug: 'big', content }]);
 
-    // 前提: 末尾は本当に落ちている（落ちていなければこのテストは何も測らない）。
     expect(rendered).toContain('節は目次から省略');
     const omissionAt = rendered.indexOf('節は目次から省略');
     const namedAt = rendered.indexOf('## 58. 今日足したばかりの規則');
     expect(namedAt).toBeGreaterThan(omissionAt);
 
-    // 名指しは「節id つきの行そのまま」である ⟹ memory_section_read へ渡せる。
     expect(rendered).toMatch(/\[[0-9a-f]{8}-[0-9a-f]{8}\] ## 58\. 今日足したばかりの規則 — /);
     expect(rendered).toContain('節id はそのまま memory_section_read に渡せる');
   });
 
-  /**
-   * ⚠️ **名指しの量は件数ではなく文字数で持つ。** 見出しの長さは節ごとに
-   * ばらばらなので、「直近3節」のように件数で決めると断り書きの長さが見出し
-   * 次第で暴れる（`excerpt.ts` の `ListingBudget`「件数から出力量を決めると、
-   * 何件で壊れるかが運任せになる」。`manager_list` で一覧が丸ごと落ちた形）。
-   */
+  // 名指しの量は件数ではなく文字数で持つ: 件数だと見出しの長さ次第で断り書きの長さが暴れる。
   it('⚠ 落ちた末尾の名指しは件数ではなく文字数で切る（長い見出し1本で暴れない）', () => {
     const filler = Array.from(
       { length: 200 },
@@ -4827,19 +4654,13 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       },
     ]);
 
-    // 4,000 文字の見出しが丸ごと断り書きへ出ることは無い。
     expect(rendered).not.toContain('長'.repeat(4_000));
-    // 名指しのぶんは予算 ＋ 切った跡の合図ぶんに収まる。
-    // 見出しが消えると slice(-1) が末尾1文字になり、下の長さの上限は緑のまま残る。切り出す前に在ることを確かめる（#2431）。
+    // 見出しが消えると slice(-1) が末尾1文字になり、下の長さの上限は緑のまま残る。切り出す前に在ることを確かめる。
     expect(rendered).toContain('落ちた末尾のうち直近の節');
     const namedBlock = rendered.slice(rendered.indexOf('落ちた末尾のうち直近の節'));
     expect(namedBlock.length).toBeLessThan(MEMORY_PROMPT_OMITTED_TAIL_BUDGET * 4);
   });
 
-  /**
-   * ⭐ **「何をすれば直るか」まで出す。** 「N 節省略」は状態の報告であって、
-   * 次の一手にならない。1行の平均・そのうちの固定費・縮める目標を数字で出す。
-   */
   it('⭐ 縮めれば載る文書には、見出しを平均いくつまで縮めればよいかを数字で出す', () => {
     const huge = Array.from(
       { length: 120 },
@@ -4853,18 +4674,8 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(rendered).toMatch(/見出しを平均 \d+ 文字（いま \d+ 文字）まで縮める必要がある。/);
   });
 
-  /**
-   * 🔴 **達成不能な助言を出さない。** 1行の固定費（節id 17 文字 ＋ `— N 文字`）は
-   * **節数に比例する** ⟹ 節が増えると、見出しを最短（`# x`）まで縮めても予算に
-   * 入らない点を越える。**そこで「縮めれば載る」と出すのは嘘である**（縮める先が
-   * 無い）。⟹ そのときは「割るしかない」と名乗る。
-   *
-   * これは `excerpt.ts` の「続きの取り方を書けるのは、呼び手の側にその口が実在
-   * するときだけである」を助言の側へ当てた形である。
-   */
+  // 達成不能な助言を出さない: 固定費は節数に比例し、節が増えると最短（`# x`）まで縮めても予算に入らない点を越える。そこで「縮めれば載る」は嘘になるので「割るしかない」と名乗る。
   it('🔴 見出しを最短まで縮めても載らない文書には「縮めれば載る」と言わず、割れと言う', () => {
-    // 見出しは最短に近いのに、節数で固定費が予算を食い切る形（実運用の
-    // alteroid-work は 917 節ある）。
     const many = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
     const rendered = renderMemoryDocuments([
       { slug: 'log', content: `---\ntype: premise\ndescription: 追記だけの文書\n---\n${many}` },
@@ -4873,23 +4684,11 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(rendered).toContain('節は目次から省略');
     expect(rendered).toContain('見出しを最短');
     expect(rendered).toContain('割るしかない');
-    // 🔴 嘘を出さない: 縮める目標は1つも出さない。
     expect(rendered).not.toMatch(/まで縮める必要がある/);
   });
 
-  /**
-   * ⭐⭐⭐ **名乗った助言が実行可能であることを、助言のとおりにやって確かめる。**
-   *
-   * 断り書きは「見出しを平均 N 文字まで縮めれば全節が載る」と言う。⟹ **その N
-   * まで実際に縮めて描き直し、本当に省略が消えることを見る。** 数を書き写して
-   * 突き合わせるのではなく、**言ったことをやって結果を見る**形にしてある——
-   * こうすると N の丸め方（floor / ceil）を1つ間違えただけでここが落ちる。
-   *
-   * これは `excerpt.ts` の「続きの取り方を書けるのは、呼び手の側にその口が実在
-   * するときだけである」の、助言版の歯である。
-   */
+  // 名乗った助言は、助言のとおり縮めて描き直して確かめる: 数の書き写しだと N の丸め方（floor / ceil）の誤りを見逃す。
   it('⭐⭐⭐ 名乗った目標まで見出しを縮めると、本当に全節が載る（助言が実行できる）', () => {
-    // 番号を先頭に置く（縮めたあとも見出しが重複しない ⟹ 節id が衝突しない）。
     const heading = (i: number) => `## ${i}. ${'あ'.repeat(60)}`;
     const build = (make: (i: number) => string) =>
       `---\ntype: premise\ndescription: 規則\n---\n` +
@@ -4900,22 +4699,14 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(target).not.toBeNull();
     const limit = Number((target as RegExpExecArray)[1]);
 
-    // 助言のとおり、全部の見出しをその長さまで縮める。
     const after = renderMemoryDocuments([
       { slug: 'rules', content: build((i) => heading(i).slice(0, limit)) },
     ]);
     expect(after).not.toContain('節は目次から省略');
-    // 縮める前は本当に切れていた（切れていなければこのテストは何も測らない）。
     expect(before).toContain('節は目次から省略');
   });
 
-  /**
-   * ⚠️ **「縮めろ」と言うときの目標は、縮められる下限（`# x` の3文字）を
-   * 下回ってはならない。** 下回った数を出すのは、達成不能な助言を「達成可能」の
-   * 顔で出すことである——`renderPremiseOutlineOmission` が反転を判定している線
-   * そのものを、**節数を振って総当たりで**見る（1点の実例では、線が1文字ずれても
-   * 気づかない）。
-   */
+  // 縮める目標は下限（`# x` の3文字）を下回らない: 反転を判定している線を節数を振って総当たりで見る（1点の実例では線が1文字ずれても気づかない）。
   it('⚠ 縮めろと言うときの目標は、見出しの最短（3文字）を下回らない', () => {
     const claims: number[] = [];
     for (let n = 150; n <= 260; n += 1) {
@@ -4926,24 +4717,13 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       const hit = /見出しを平均 (\d+) 文字（いま \d+ 文字）まで縮める必要がある。/.exec(rendered);
       if (hit !== null) claims.push(Number(hit[1]));
     }
-    // この範囲には「縮めれば載る」と言う文書が実在する（0件ならこのテストは
-    // 何も測っていない）。
     expect(claims.length).toBeGreaterThan(0);
     expect(Math.min(...claims)).toBeGreaterThanOrEqual(3);
   });
 
-  /**
-   * ⭐ **左右を揃える。** 反転側（`⚠ 節id と文字数の固定費だけで…`）は以前から
-   * 予算値を出していたが、非反転側（`1行の平均は…`）は出していなかった——
-   * 同じ断り書きの中で片方だけ予算を名乗らない状態だった。両側とも
-   * `MEMORY_PROMPT_OUTLINE_BUDGET` の値を出すことを固定する。
-   */
   it('⭐ 目次が予算で切れた断り書きは、反転側・非反転側のどちらでも予算値を名乗る', () => {
     const budgetPhrase = `予算 ${MEMORY_PROMPT_OUTLINE_BUDGET.toLocaleString('en-US')} 文字`;
 
-    // 非反転側（「見出しを縮めれば載る」）——固定費が節数に比例して予算を
-    // 食い切る手前の点（既存の歯「名乗った目標まで見出しを縮めると…」と
-    // 同じ形の入力）。
     const shrinkable = Array.from(
       { length: 120 },
       (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
@@ -4954,13 +4734,9 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
         content: `---\ntype: premise\ndescription: 大きい\n---\n${shrinkable}`,
       },
     ]);
-    // 前提: 本当に非反転側（「縮めれば載る」）に入っている。
     expect(nonInverted).toMatch(/見出しを平均 \d+ 文字（いま \d+ 文字）まで縮める必要がある。/);
     expect(nonInverted).toContain(budgetPhrase);
 
-    // 反転側（「縮めても載らない」）——見出しを最短近くまで削っても固定費
-    // だけで予算を超える節数（既存の歯「見出しを最短まで縮めても載らない
-    // 文書には…」と同じ形の入力）。
     const unshrinkable = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
     const inverted = renderMemoryDocuments([
       {
@@ -4968,31 +4744,12 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
         content: `---\ntype: premise\ndescription: 追記だけの文書\n---\n${unshrinkable}`,
       },
     ]);
-    // 前提: 本当に反転側（「縮めても載らない」）に入っている。
     expect(inverted).toContain('見出しを最短');
     expect(inverted).not.toMatch(/まで縮める必要がある。/);
     expect(inverted).toContain(budgetPhrase);
   });
 
-  /**
-   * ⭐⭐ **断り書きは節数だけでなく目次の総量（文字数）を出す。**
-   *
-   * 節数だけでは「この文書を割るべきか」の判断に文字数の推測が要る——
-   * 節を移しても目次に乗っている文字数（＝床）が減るとは限らないため
-   * （落ちるのは常に末尾なので、末尾を移しても先頭側の目次は動かない）。
-   * ⟹ 全体・載った分・省いた分の3つを出し、**足し算で整合すること**を
-   * 変異に強い形で測る（別の量を出す変異・内訳を壊す変異は、この足し算で
-   * 捕まる）。**そして「全 N 文字」の N が何の文字数かを名指しする**——
-   * 節の本文の総量ではなく、目次として毎ターンの焼き込みに載る量である。
-   *
-   * 反転側・非反転側の両方で測る（`renderPremiseOutlineOmission` の
-   * 冒頭1行は両分岐で共有されているので、非対称に足すとどちらかで
-   * 抜け落ちる）。
-   */
   it('⭐⭐ 断り書きは目次の総量を「載った分＋省いた分」の内訳とともに出し、何の文字数かを名指しする', () => {
-    // 「全体」を指す節（`節の目次は全 T 節ぶんで X 文字（節の本文の総量ではない）`）は
-    // 「載る」/「載った」を1文字も使わない——「載った分」は shownChars 側にしか
-    // 付かない、という語の衝突回避そのものを固定する。
     const totalNamingPhrase = '節の目次は全 ';
     const notBodyPhrase = '（節の本文の総量ではない）';
     const breakdown =
