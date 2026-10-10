@@ -434,7 +434,6 @@ export type ScriptedStep =
   | { delta: string }
   | {
       assistant: Array<{ type: 'text'; text: string } | { type: 'tool_use'; name: string }>;
-      /** SDK が付ける assistant メッセージの `error`（弾かれたメッセージの再現用）。 */
       error?: string;
     }
   | { toolResult: true }

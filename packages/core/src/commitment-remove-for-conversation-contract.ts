@@ -6,12 +6,10 @@ import type { CommitmentStore } from './store.js';
  *
  * 測る性質:
  * 1. `origin: 'human'` または `'self'` で `source === conversationId` の行を、**未了も片付いた行も**物理的に消す
- *    （`get` が `null`、`list({ includeClosed: true })` に出ない）。返り値は消した件数
+ *    （`get` が `null`、`list({ includeClosed: true })` に出ない）。返り値は消した件数。
+ *    `self` も消す: クローンが会話から載せた行の本文は人間の発言の言い換えを含みうるので、残すと会話を消しても読めてしまうため
  * 2. 別の会話の行・`origin: 'manager'` / `'external'` の行（`source` が同じ文字列でも）・`source` の無い行は残る
- *
- * 経緯（#4355）: 当初は `origin: 'self'` の行を残すことを測っていた。クローンが会話から載せた行の本文は
- * 人間の発言の言い換えを含みうるので、会話を消しても読めてしまう。オーナーの判断（2026-10-09「B: その会話から
- * 生まれた台帳の行も消す」）で、`self` も消す側へ反転した。`manager` / `external` の `source` は会話 id ではない。
+ *    （`manager` / `external` の `source` は会話 id ではない）
  * 3. 冪等（2度目は0件）。NUL を含む会話 id は「無い」と同じ（0件・何も消えない）
  *
  * **会話の id はこの関数が決めた固有の値なので、空のストアでなくても測れる。**

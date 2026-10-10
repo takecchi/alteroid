@@ -357,10 +357,7 @@ export interface RunnerPeerOptions {
   readonly workdirRoot?: string;
 }
 
-/**
- * マネージャー自身の道具の MCP `alteroid-manager`（#2987。`manager-tools.ts`）。peer と違い資格を待たず、
- * 呼び手が起動時に開いたソケットを渡す。渡されたソケットは Host の停止で閉じる。渡さなければ道具を出さない。
- */
+/** 渡されたソケットは Host の停止で閉じる。 */
 export interface RunnerManagerToolsOptions {
   readonly host: ManagerToolsSocketHost;
   readonly childEntry?: string;

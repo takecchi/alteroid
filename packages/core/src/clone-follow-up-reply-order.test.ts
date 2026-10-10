@@ -9,10 +9,6 @@ import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { JournalEntry } from './schema.js';
 
-// #4391: 返答はターンの終わりに日誌へ書かれ、人間の発言は届いた時点で書かれる。返答の本文が流れたあと、ターンが終わる前に
-// 人間が続けて発言すると、日誌（＝会話の履歴）で発言のほうが返答より先になり、Web で発言が返答の上に出ていた。
-// 発言を記録するときは、同じ会話のターンがそこまでに流した返答を先に書く。
-
 type Exchange = Extract<JournalEntry, { type: 'exchange' }>;
 
 async function conversation(stores: ReturnType<typeof createMemoryStores>): Promise<string[]> {

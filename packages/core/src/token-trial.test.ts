@@ -349,7 +349,6 @@ describe('runTokenTrial — 層に撒かない・道具を持たない', () => {
     expect('SOME_OTHER_KEY' in (env ?? {})).toBe(false);
   });
 
-  // #4284 の実測: 接続先用の鍵が在ると SDK は候補の鍵を送らず、中継の 200 で死んだ鍵が「使える」になった
   it('デーモンの env にある接続先用の鍵は外し、接続先（ANTHROPIC_BASE_URL）は残す', async () => {
     vi.stubEnv('ANTHROPIC_BASE_URL', 'http://gateway.example.test');
     vi.stubEnv('ANTHROPIC_AUTH_TOKEN', 'gateway-token');

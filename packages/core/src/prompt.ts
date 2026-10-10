@@ -459,7 +459,7 @@ export interface ManagerSystemPromptInput {
   workerName: string;
   /** 省けばプロンプトは1文字も増えない。`models` は人間が開けた、名指しできるモデル。 */
   peer?: { models?: readonly string[] };
-  /** `alteroid-manager`（`output_record`）を出したセッションだけ立てる。省けばプロンプトは1文字も増えない（#2987）。 */
+  /** `alteroid-manager`（`output_record`）を出したセッションだけ立てる。省けばプロンプトは1文字も増えない。 */
   managerTools?: boolean;
 }
 
@@ -490,7 +490,7 @@ function peerSection(peer: { models?: readonly string[] }): string {
 }
 
 /**
- * 外へ出した成果を記録する道具の案内（#2987）。peer と同じく、MCP の道具が ToolSearch の後ろに隠れても気づけるための告知だけを持つ。
+ * peer と同じく、MCP の道具が ToolSearch の後ろに隠れても気づけるための告知だけを持つ。
  * 名前は `manager-tools.ts` の定数と同じ（ここから import しない: SDK を読み込むモジュールのため。一致は試験が見る）。
  */
 const MANAGER_TOOLS_SECTION = `

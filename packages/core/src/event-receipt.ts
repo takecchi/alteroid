@@ -1,35 +1,28 @@
 import { assertNoNul } from './nul-guard.js';
 
 /**
- * 送る側が付けた重複キーを覚えておく長さ。
- *
  * 無期限にしない: 外部イベントは送られ続けるので、覚えた行が際限なく増えるため。
  * 送り直しは時間切れの直後（分の単位）に来るので、7日あれば足りる。
  */
 export const EVENT_RECEIPT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** 重複キーの長さの上限。送る側の識別子（UUID や配達 id）が収まれば足りる。 */
 export const EVENT_IDEMPOTENCY_KEY_MAX_LENGTH = 200;
 
-/** `POST /events` で受けた重複キーと、そのとき返した出来事の id。 */
 export interface EventReceipt {
-  /** 送り手の区切り。連携の鍵なら鍵ごとに分かれる（`eventReceiptScopeOf`）。 */
   scope: string;
   source: string;
   idempotencyKey: string;
   eventId: string;
-  /** 受けた時刻（ISO 8601）。保持期間はここから数える。 */
   at: string;
 }
 
 /**
- * 外部イベントの重複キーの記録（#3531）。受信箱の行は処理し終えると消えるので、そこには持たせられない。
+ * 受信箱の行に持たせない: 受信箱の行は処理し終えると消えるため。
  *
  * NUL（3実装とも）: 書く口は `scope`・`source`・`idempotencyKey`・`eventId` の NUL を `NulNotAllowedError` で断る。
  * 引く口は NUL を含む鍵で引かれても断らず `null` を返す。
  */
 export interface EventReceiptStore {
-  /** `now` から数えて保持期間内に記録された、同じ (scope, source, idempotencyKey) の行。無ければ `null`。 */
   findEventReceipt(
     scope: string,
     source: string,

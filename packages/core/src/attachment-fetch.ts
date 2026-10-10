@@ -93,7 +93,6 @@ async function copyOpenedAttachment(
     copy: { path, name, mediaType: meta.mediaType, size, sha256, reused },
   });
 
-  // 大きさが控えと違えば hash を取らない。合うときも全体をメモリに載せず、ストリームで hash を取る
   const existingMatches = await stat(path).then(
     async (info) =>
       info.isFile() && info.size === meta.size && (await fileSha256(path)) === meta.sha256,
@@ -135,7 +134,7 @@ async function copyOpenedAttachment(
       createWriteStream(tmp, { mode: 0o600 }),
     );
     const digest = hash.digest('hex');
-    // 置き場が途中で切れて例外なしに終わっても、欠けた写しを「取れた」と言わない（#4358）。担い手が壊れたファイルで作業を進めるため
+    // 置き場が途中で切れて例外なしに終わっても、欠けた写しを「取れた」と言わない: 担い手が壊れたファイルで作業を進めるため
     if (size !== meta.size || digest !== meta.sha256) {
       await rm(tmp, { force: true }).catch(() => undefined);
       await rm(path, { force: true }).catch(() => undefined);

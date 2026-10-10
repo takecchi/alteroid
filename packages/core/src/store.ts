@@ -2049,11 +2049,7 @@ export interface Stores {
   auth: AuthStore;
   /** 連携の鍵（外のサービスへ渡す、固定の1 source で外部イベントを送るだけの鍵。`integration-key.ts`）。素の値は持たず sha256 だけを持つ。 */
   integrationKeys: IntegrationKeyStore;
-  /**
-   * `POST /events` の送り手が付けた重複キーの記録（`event-receipt.ts`）。
-   *
-   * **省略可能にしないこと**（`inbox` と同じ理由）。ここが任意だと、片方の器でだけ送り直しが二重に積まれるという能力差が生まれる。
-   */
+  /** **省略可能にしないこと**（`inbox` と同じ理由）。ここが任意だと、片方の器でだけ送り直しが二重に積まれるという能力差が生まれる。 */
   eventReceipts: EventReceiptStore;
   /**
    * 人間が承認した Bash 許可の記録。

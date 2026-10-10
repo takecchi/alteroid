@@ -5,15 +5,9 @@ import { z } from 'zod';
 import { createCloneToolRelayHost, type CloneToolRelayHost } from './clone-tool-relay-host.js';
 import { externalOutputLimits, type ExternalOutput } from './schema.js';
 
-/**
- * マネージャー層の MCP `alteroid-manager`（#2987）。マネージャー自身が持つ道具を、peer とは別に置く。
- *
- * peer と分ける: peer は Codex の資格が届いた器でしか出ないが、こちらはどの器のマネージャーにも出すため。
- * 繋ぎ方は peer と同じ（stdio の中継の子 → runner のソケット → 使い捨ての token）。
- */
+// peer と分ける: peer は Codex の資格が届いた器でしか出ないが、こちらはどの器のマネージャーにも出すため
 export const MANAGER_TOOLS_MCP_SERVER_NAME = 'alteroid-manager';
 
-/** 道具の名前は `mcp__alteroid-manager__output_record` になる。 */
 export const OUTPUT_RECORD_TOOL_NAME = 'output_record';
 
 export const DEFAULT_MANAGER_TOOLS_SOCKET_DIR = '/run/alteroid/manager';
@@ -24,7 +18,6 @@ export const MANAGER_TOOLS_TOKEN_TIMEOUT_MS = 30_000;
 export type ManagerToolsSocketHost = CloneToolRelayHost;
 
 /**
- * runner の起動時に1回だけ開く（資格を待たない）。持ち主は子の UID の 0600、置き場所は 0711（peer と同じ）。
  * 守りの本体は使い捨ての token であって、ファイルの権限ではない（同じ子の UID の作業者からもソケット自体には届く）。
  * 向こうに居るのは `register()` の `McpServer` だけで、runner の制御面には繋げない。
  */

@@ -480,7 +480,6 @@ export function createMemoryStores(): Stores {
         entry.type === 'conversation_deleted' ? [entry.deletedConversationId] : [],
       ),
     );
-  // 墓標が名指しした日誌の行（会話 id を持たない本文の写し。#4355）
   const hiddenEntryIds = (): Set<string> =>
     new Set(
       entries.flatMap((entry) =>
@@ -569,7 +568,7 @@ export function createMemoryStores(): Stores {
       return found;
     },
     async oldestAt() {
-      // 外した行（消した会話の exchange・墓標が名指しした行）の時刻を返さない（#4377）: list / get と同じ絞りを通す
+      // 外した行（消した会話の exchange・墓標が名指しした行）の時刻を返さない: list / get と同じ絞りを通す
       const tombstoned = deletedConversationIds();
       const hiddenIds = hiddenEntryIds();
       const oldest = entries.find(

@@ -1064,7 +1064,6 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     worktrees: z.array(rescueWorktreeSchema),
   }),
   /**
-   * マネージャーが `output_record` で記録した、コード以外で外へ出した成果の1件（#2987）。デーモンは委譲の記録に直近の分を積む。
    * 古いセッションの出来事でも落とさない: 外へ出した事実はセッションの世代と関係なく残るため。
    * 旧 daemon は未知の type を `safeParse` で落とし、接続は切れない。
    */

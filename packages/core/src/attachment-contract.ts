@@ -590,7 +590,6 @@ async function verifyKeptAndListing(
   if ((await filtered({ q: 'REPORT.pdf', limit: 100 })) !== sortedIds(a))
     fail('q は大文字小文字を問わない（大文字の q で）');
   if ((await filtered({ q: 'zzz-no-match', limit: 100 })) !== '') fail('q が当たらないのに返った');
-  // 投げずに空で答える（NUL を含む id の get などと同じ方針）
   if ((await filtered({ conversationId: 'a\u0000b', limit: 100 })) !== '')
     fail('NUL を含む conversationId の一覧が空でない');
   if ((await filtered({ q: 'a\u0000b', limit: 100 })) !== '') fail('NUL を含む q の一覧が空でない');
