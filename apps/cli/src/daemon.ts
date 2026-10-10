@@ -101,7 +101,7 @@ export async function storageOf(info: DaemonRuntimeInfo | null): Promise<string 
 }
 
 /**
- * クローンのセッションが安全分類器に弾かれ続けている状況を `/status` から取る（#4173）。
+ * クローンのセッションが安全分類器に弾かれ続けている状況を `/status` から取る。
  * 無い・聞けない・形が読めないときは `null`（作り物の「弾かれている」を出さない）。
  */
 export async function sessionRefusalOf(

@@ -10,7 +10,7 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { captureStderr, captureStdout } from './test-support.js';
 
 /**
- * `chat`（REPL）の応答中の Ctrl+C は、いま送った発言だけを対象にして `POST /clone/interrupt` を呼ぶ（#3956）。
+ * `chat`（REPL）の応答中の Ctrl+C は、いま送った発言だけを対象にして `POST /clone/interrupt` を呼ぶ。
  * 順番待ちの間に先客のターンを止めない。偽の readline・偽の fetch を使うので実時間の待ちは無い。
  */
 class FakeRl extends EventEmitter {

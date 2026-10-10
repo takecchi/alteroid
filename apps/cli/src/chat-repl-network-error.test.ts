@@ -114,7 +114,7 @@ describe('chat: done も error も無いまま閉じたら言う（#3410）', ()
 const refused = (): TypeError =>
   new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) });
 
-// 単発のコマンド（`alteroid conversations list` など）と同じ案内（#3995）
+// 単発のコマンド（`alteroid conversations list` など）と同じ案内
 function expectDaemonGuidance(text: string): void {
   expect(text).toContain('手元のデーモンに繋がりませんでした（接続を断られました）');
   expect(text).toContain('alteroid daemon status');

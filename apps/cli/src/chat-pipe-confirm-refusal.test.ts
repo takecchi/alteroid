@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureStdout } from './test-support.js';
 
 /**
- * #3993: パイプで確認できずに実行しなかった戻せない操作は、失敗として止める。
+ * パイプで確認できずに実行しなかった戻せない操作は、失敗として止める。
  * 偽の readline と偽の標準入力を使うので、実時間の待ちは無い。
  */
 class FakeRl extends EventEmitter {

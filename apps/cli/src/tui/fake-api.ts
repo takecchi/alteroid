@@ -52,7 +52,7 @@ export interface FakeApi extends TuiApi {
   uploadSignals: (AbortSignal | undefined)[];
   limits: AttachmentLimits | null;
   limitsCalls: number;
-  // 置き場（#4126）。`storedAttachments` は新しい順の全件。`storedPageSize` で頁に切る
+  // 置き場。`storedAttachments` は新しい順の全件。`storedPageSize` で頁に切る
   storedAttachments: StoredAttachment[];
   storedPageSize: number;
   storedListCalls: { kept?: boolean; cursor?: string }[];

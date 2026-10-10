@@ -1211,7 +1211,7 @@ export class ChatController {
           ];
         }
         const m = item.message;
-        // 取り下げた発言は、利用者の発言の行（❯）にせず、畳んだ system の行で出す（配られていない。#3990）
+        // 取り下げた発言は、利用者の発言の行（❯）にせず、畳んだ system の行で出す（配られていない）
         if (m.delivery === 'withdrawn') {
           return [
             { seq: this.seq, kind: 'system', text: withdrawnMessageText(redactBody(m.text)) },

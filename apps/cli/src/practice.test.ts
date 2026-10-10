@@ -236,7 +236,7 @@ describe('alteroid practice edit', () => {
       expect(sent.map((s) => s.method)).toEqual(['GET']);
       const mine = /残してあります: (\S+)/.exec(err())?.[1];
       expect(mine).toBeDefined();
-      // edit に無い `alteroid practice edit --allow-empty` を案内せず、打てる set の形で下書きを指す（#4036）
+      // edit に無い `alteroid practice edit --allow-empty` を案内せず、打てる set の形で下書きを指す
       expect((error as Error).message).toContain(
         `alteroid practice set review --file '${mine ?? ''}' --allow-empty`,
       );

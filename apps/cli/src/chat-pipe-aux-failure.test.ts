@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureStdout } from './test-support.js';
 
 /**
- * #3994: パイプで、付随の取得（未読の総数・会話の承認）が非 2xx なだけなら止めない。
+ * パイプで、付随の取得（未読の総数・会話の承認）が非 2xx なだけなら止めない。
  * 本体の取得が失敗したときは、今まで通り止める。偽の readline と偽の標準入力を使うので、実時間の待ちは無い。
  */
 class FakeRl extends EventEmitter {

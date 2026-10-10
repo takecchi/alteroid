@@ -202,7 +202,7 @@ describe('chat: 応答を待つ間に複数行が届いたとき', () => {
       const done = chatCommand();
       input.write('/stop mgr-1\nyes\n');
       input.end();
-      // 実行しなかったことは失敗として止まる（#3993）。止まらず次の行（`yes`）へ進めば、確認の答えとして読まれうる。
+      // 実行しなかったことは失敗として止まる。止まらず次の行（`yes`）へ進めば、確認の答えとして読まれうる。
       await expect(done).rejects.toThrow('/stop が失敗した');
       const text = out();
       expect(requests.filter((r) => r === 'DELETE /managers/mgr-1')).toHaveLength(stops);

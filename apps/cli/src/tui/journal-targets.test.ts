@@ -9,7 +9,7 @@ const toolUse = (actor: string) =>
 const exchange = (with_: string, role = 'outbound') =>
   ({ id: 'x', type: 'exchange', at, with: with_, role, text: 'x' }) as never;
 
-// 種別ごとの「関係あり」の表（#3987）。日誌の種別が増えたら、ここへ足して判断を残させる
+// 種別ごとの「関係あり」の表。日誌の種別が増えたら、ここへ足して判断を残させる
 const TABLE: Record<
   (typeof JOURNAL_ENTRY_TYPES)[number],
   { approvals: boolean; managers: boolean }

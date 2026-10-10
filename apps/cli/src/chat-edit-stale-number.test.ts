@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { captureStdout, pretendStdinTty } from './test-support.js';
 
 /**
- * #4088: 編集が受け付けられたら、/conversation の番号は置き換えた前の発言を指さない。
+ * 編集が受け付けられたら、/conversation の番号は置き換えた前の発言を指さない。
  */
 let lines: string[] = [];
 

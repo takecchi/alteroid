@@ -202,7 +202,7 @@ function renderPushHealth(pushHealth: RunnerPushHealth): string | undefined {
   return parts.length === 0 ? undefined : parts.join(' / ');
 }
 
-// 指紋は `credential list` が案内する突き合わせ先（#3986）。値は出さず、runner が報告する先頭12桁だけを出す
+// 指紋は `credential list` が案内する突き合わせ先。値は出さず、runner が報告する先頭12桁だけを出す
 function renderCredentialsFingerprint(runner: RunnersView['runners'][number]): string {
   if (runner.credentialsProbe.status === 'unheard') {
     return '鍵: 確かめていない（繋がっていないので聞いていない）';

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureStdout } from './test-support.js';
 
 /**
- * #4023: 本文を消した生ログ（410）を、失敗でなく「いつ消したか・何バイトだったか」として言い、パイプでも止めない。
+ * 本文を消した生ログ（410）を、失敗でなく「いつ消したか・何バイトだったか」として言い、パイプでも止めない。
  * 偽の readline と偽の標準入力を使うので、実時間の待ちは無い。
  */
 class FakeRl extends EventEmitter {

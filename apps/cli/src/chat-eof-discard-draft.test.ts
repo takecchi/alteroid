@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureStderr, captureStdout } from './test-support.js';
 
 /**
- * #4087: 端末で Ctrl-D（入力の終わり）にしたとき、まだ送っていない書きかけは送らず捨てる。
+ * 端末で Ctrl-D（入力の終わり）にしたとき、まだ送っていない書きかけは送らず捨てる。
  * 偽の readline と偽の標準入力を使うので、実時間の待ちは無い。
  */
 class FakeRl extends EventEmitter {

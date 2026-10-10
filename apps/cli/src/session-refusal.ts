@@ -1,5 +1,5 @@
 /**
- * `GET /status` の `cloneSessionRefusal`（クローンのセッションが安全分類器に弾かれ続けている状況。#4173）を
+ * `GET /status` の `cloneSessionRefusal`（クローンのセッションが安全分類器に弾かれ続けている状況）を
  * 読む・1行に言う部品。
  */
 
