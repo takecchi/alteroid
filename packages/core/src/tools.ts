@@ -7607,7 +7607,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // 失敗した回は「報告」と呼ばない:見出しが「直近の報告」のままだと、⚠ を見た直後に包みの内側だけを読んで報告として扱うため
+        // 失敗した回は「報告」と呼ばない: 見出しが「直近の報告」のままだと、⚠ を見た直後に包みの内側だけを読んで報告として扱うため
         // `foldedTurn` が在る回は注記を出さない: `lastFailure` は畳まれる前の無関係な古いターンを指し、注記が予告する本文の種類と実際の本文が食い違うため
         const managerFailure =
           part === 'request' || foldedTurn !== undefined

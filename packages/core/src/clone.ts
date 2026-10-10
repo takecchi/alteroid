@@ -787,9 +787,8 @@ class Clone implements CloneHost {
   #sessionOrdinal = 0;
 
   /**
-   * **このセッションで、もう1度 `held` に入ったか**（
-   * `#noteContextWindowFold` の doc「`held` は1回きり」）。セッションごとに
-   * 戻す（`#sessionAnswered` と同じ場所）。
+   * **このセッションで、もう1度 `held` に入ったか**（`#noteContextWindowFold` の doc「`held` は1回きり」）。
+   * セッションごとに戻す（`#sessionAnswered` と同じ場所）。
    */
   #heldInSession = false;
 
