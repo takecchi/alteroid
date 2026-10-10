@@ -257,4 +257,46 @@ describe('知らせの合流窓: 連鎖で握りつぶす束と、デーモン�
     expect(externals(fresh()), 'stop() が返った時点で一覧は配られているはず').toHaveLength(1);
     release?.();
   });
+
+  it('stop() が窓の台帳を読んでいる間に届いた知らせも、stop() が返るまでに配る', async () => {
+    let release: (() => void) | undefined;
+    let armed = false;
+    let called = false;
+    const { pool, fake, fresh } = await setup(['mgr-a', 'mgr-b', 'mgr-c'], {
+      wrapStores: (st) => {
+        const orig = st.jobs.listJobs.bind(st.jobs);
+        st.jobs.listJobs = async () => {
+          if (armed) {
+            called = true;
+            await new Promise<void>((r) => (release = r));
+          }
+          return orig();
+        };
+      },
+    });
+    quotaTurnFailed(fake, 'mgr-a', SESSION_LIMIT, 'running');
+    await waitForOwn(fresh, ['mgr-a']);
+    // B は畳まれて像から消えるので、窓を閉じるときに台帳を読みに行く。
+    quotaClosedFailed(fake, 'mgr-b', SESSION_LIMIT);
+    await sleep(100);
+    armed = true;
+    const stopping = pool.stop();
+    await vi.waitFor(() => expect(called).toBe(true), WAIT);
+    // 台帳を読んでいる間に、別の担当の知らせが届く（担当ごとの窓へ積まれる）。
+    fake.emit({
+      type: 'report',
+      managerId: 'mgr-c',
+      text: '（このターンは応答を返さずに終わった: error_during_execution）',
+      status: 'running',
+      failure: { code: 'error_during_execution', via: 'result_subtype' },
+      synthesized: 'turn_failed',
+    });
+    armed = false;
+    release?.();
+    await stopping;
+    expect(
+      managerMessages(fresh()).filter((m) => m.managerId === 'mgr-c'),
+      'stop() が返った時点で、停止中に届いた知らせも配られているはず',
+    ).toHaveLength(1);
+  });
 });

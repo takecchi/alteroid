@@ -5814,12 +5814,7 @@ class Pool implements ManagerPool {
     // 締切の既定は待つ相手が居るときだけ時計を読んで決める: 待たない stop に時計を読む新しい口を増やさない。
     this.#stopped = true;
     for (const unsubscribe of this.#unsubscribeDirectPushes.splice(0)) unsubscribe();
-    // 窓の中でデーモンが落ちると積んだ知らせが失われるので、ここで flush する（`setTimeout` は二度と発火しない）。
-    this.#flushSynthesizedNotices();
-    // 担当ごとの窓を閉じた後に呼ぶ: 閉じた束がプール全体の窓へ入るので、順序が逆だとその分が残る。
-    await this.#flushQuotaStopWindows();
-    await this.#flushRestoredWindows();
-    await Promise.allSettled([...this.#windowFlushesInFlight]);
+    await this.#drainNoticeWindows();
     // 日誌の畳み込みも吐き出す: こちらは日誌のどこにも書かれていない記録そのものを失い、`#retire()` を通らずに止まると畳んだ2件目以降が丸ごと消える。
     this.#flushRateLimitJournalFolds();
     this.#flushPushFailureFolds();
@@ -5834,11 +5829,23 @@ class Pool implements ManagerPool {
     this.#unresumable.clear();
     // 閉じる前に受け取る: `runner.close()` が SSE を自分で切るので、待つならこの手前でなければ効かない。
     await this.#awaitRunnerFarewells(options?.farewellDeadlineAt);
+    // 別れの合図を待つ間と、上で窓の台帳を読む間にも、runner の出来事は届いて担当ごとの窓へ積まれる。runner を閉じる前にもう一度吐き出す:
+    // 吐き出さないと、その窓のタイマーはデーモンと一緒に消え、器の入れ替えで届いた知らせ（`turn_failed` 等）が配られない。
+    await this.#drainNoticeWindows();
     // runner のマネージャーは止めない: デーモンの都合で人の仕事を殺さない。
     for (const runner of await this.#runners.list().catch(() => [])) {
       await runner.close().catch(() => undefined);
     }
     this.#records.clear();
+  }
+
+  // 窓の中でデーモンが落ちると積んだ知らせが失われるので、ここで flush する（`setTimeout` は二度と発火しない）。
+  // 担当ごとの窓を先に閉じる: 閉じた束がプール全体の窓へ入るので、順序が逆だとその分が残る。
+  async #drainNoticeWindows(): Promise<void> {
+    this.#flushSynthesizedNotices();
+    await this.#flushQuotaStopWindows();
+    await this.#flushRestoredWindows();
+    await Promise.allSettled([...this.#windowFlushesInFlight]);
   }
 
   /** 締切に達したら待つのをやめる（閉じる側に倒す）。runner は互いに独立に待つ: 1台の遅れが他を待たせない。 */
