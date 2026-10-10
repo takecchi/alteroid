@@ -102,9 +102,9 @@ export type PermissionGrant = PermissionGrantsState['grants'][number];
 export type PermissionGrantsRowsUnreadable = NonNullable<PermissionGrantsState['rowsUnreadable']>;
 
 export type CredentialsState = Ok<paths['/credentials']['get']>;
-/** Codex の ChatGPT ログインの状態（#3939）。値は持たない。 */
+/** Codex の ChatGPT ログインの状態。値は持たない。 */
 export type CodexAuthStatusView = Ok<paths['/codex/auth']['get']>;
-/** デバイスコードのログイン1本の状態（#3939）。 */
+/** デバイスコードのログイン1本の状態。 */
 export type CodexLoginView = Ok<paths['/codex/login']['post']>;
 export type EnvVarView = CredentialsState['credentials'][number];
 export type EnvVarScope = EnvVarView['scope'];

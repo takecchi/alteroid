@@ -1,4 +1,4 @@
-// 「ファイル」画面（#4126 P7）の純ロジック: 出所のラベル・寿命の言い方。
+// 「ファイル」画面の純ロジック: 出所のラベル・寿命の言い方。
 // 出所の分類は core の `classifyAttachmentFrom` の写し（core の値の import は禁止なので複製する。ずれは attachment-files.test.ts が core と突き合わせて落とす）。
 import { formatDateTime } from './format.js';
 import type { AttachmentFrom, AttachmentItem } from './types.js';
