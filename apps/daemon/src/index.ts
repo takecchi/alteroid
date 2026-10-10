@@ -502,8 +502,12 @@ export async function main(): Promise<void> {
     process.stderr.write(`alteroidd: ${text}\n`);
     postToClone?.(text);
   };
-  // 送る時点の `postToClone` を読む（後から差し替わるため）。
-  const runnerLostNotice = createRunnerLostNotice({ send: (text) => postToClone?.(text) });
+  // 送る時点の `postToClone` と名簿を読む（どちらも後から決まるため。`runners` は下で作るが、読むのは窓が閉じた後）。
+  const runnerLostNotice = createRunnerLostNotice({
+    send: (text) => postToClone?.(text),
+    isBackNow: (lost) =>
+      runners.entries().some((entry) => entry.label === lost.label && entry.state === 'connected'),
+  });
   let takeOverOnSwap: (runnerId?: string) => void = () => {};
   let relocateOnLost: (runnerId?: string) => void = () => {};
   let autoFoldOnPlacementResources: (
