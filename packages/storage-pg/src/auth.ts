@@ -74,7 +74,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   async findAccountByEmail(email: string): Promise<AuthAccount | null> {
-    // NUL を含むメールは DB に投げる前に「無い」と答える（#3011）。
+    // NUL を含むメールは DB に投げる前に「無い」と答える。
     if (hasNul(email)) return null;
     // `eq` で比べない: 一意索引（`auth_accounts_email_lower_idx`）に乗らず、memory / fs と判定が食い違うため。
     const rows = await this.#db

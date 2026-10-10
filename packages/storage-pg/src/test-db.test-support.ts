@@ -173,7 +173,7 @@ export const TEMPLATE_PREPAY_TIMEOUT_MS = 60_000;
 
 // 毎テストの `beforeEach`（CREATE DATABASE ... TEMPLATE）と `afterEach`（DROP DATABASE ... WITH (FORCE)）の枠を、この補助を import した
 // ファイル全部で広げる: 本物の PostgreSQL では、これが全ファイルで1本の管理用の鍵（ADMIN_LOCK）を待ち合い、混んだ runner では
-// 既定の 10_000ms を越えて、期待が外れていないのに `Hook timed out` で落ちていた（#3800・#3964。persona の歯は巻き込まれただけ）。
+// 既定の 10_000ms を越えて、期待が外れていないのに `Hook timed out` で落ちるため。
 vi.setConfig({ hookTimeout: TEMPLATE_PREPAY_TIMEOUT_MS });
 
 beforeAll(async () => {

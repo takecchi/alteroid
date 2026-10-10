@@ -23,7 +23,7 @@ const ev = (id: string): InboxEvent => ({
 });
 const name = (n: number): string => `evt-${String(n).padStart(3, '0')}`;
 
-// #4059: remove で空いた行の位置へ再 put の行が入っても、同着の並びは末尾のまま。
+// remove で空いた行の位置へ再 put の行が入っても、同着の並びは末尾のまま。
 async function reproduce(store: PgStores['inbox']): Promise<void> {
   for (let i = 0; i < 40; i += 1) await store.put(ev(name(i)), at);
   await store.claimPending();
