@@ -169,7 +169,6 @@ describe('退避 ref（#1266）', () => {
   });
 
   describe('#4394: バイナリ（PNG）を形だけの規則で止めない', () => {
-    // 形だけの規則（schemeless-userinfo・secret-assignment）に当たるバイト列を、NUL と一緒に PNG へ埋める。
     const shapeOnly = 'zz:pw0rd@host1 MY_KEY=abc';
     const png = (body: string): Buffer =>
       Buffer.concat([

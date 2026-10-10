@@ -21,8 +21,8 @@ import type { JournalStore } from './store.js';
  * 3. 外すのは `limit` より前（消した会話の行を新しい側に多数積んでも、`limit: 1` で消していない
  *    会話の行が1件返る。`listPage` の `next` も、外した行を数えて誤らない）
  * 4. 墓標の後に同じ会話へ積んだ行も外れる
- * 5. 墓標が `hiddenEntryIds` で名指しした行（会話 id を持たない本文の写し。#4355）も、どの読み口からも外れる。名指ししていない行は外れない
- * 6. `oldestAt` は、読み口に見えている行のうち最古の `at` を返す（外した行の時刻を返さない。#4377）。
+ * 5. 墓標が `hiddenEntryIds` で名指しした行（会話 id を持たない本文の写し）も、どの読み口からも外れる。名指ししていない行は外れない
+ * 6. `oldestAt` は、読み口に見えている行のうち最古の `at` を返す（外した行の時刻を返さない）。
  *    外した行と見えている行が同じミリ秒なら差は出ないが、そのときは時刻からも漏れない
  *
  * `append` した行は呼び出し側のストアへ実際に残る（後始末はしない）。使い捨てのストアを渡すこと。
@@ -195,7 +195,7 @@ export async function verifyJournalStoreDeletedConversationContract(
     );
   }
 
-  // --- 契約5（#4355）: 墓標が `hiddenEntryIds` で名指しした行は、会話 id を持たなくても外れる ---
+  // --- 契約5:墓標が `hiddenEntryIds` で名指しした行は、会話 id を持たなくても外れる ---
   const decision = (text: string) =>
     journal.append({ type: 'decision', decision: `${MARKER}: ${text}`, grounds: MARKER });
   const copy = await decision('copy-of-deleted-body');
@@ -234,7 +234,7 @@ export async function verifyJournalStoreDeletedConversationContract(
     fail('5: 名指しした行も外れる', `get(${unrelated.id}) が、名指ししていない行を返さなかった。`);
   }
 
-  // --- 契約6（#4377）: oldestAt は見えている行のうち最古の at ---
+  // --- 契約6:oldestAt は見えている行のうち最古の at ---
   const visibleOldest = (await journal.list({ order: 'asc', limit: 1 }))[0]?.at ?? null;
   const oldestAt = await journal.oldestAt();
   if (oldestAt !== visibleOldest) {

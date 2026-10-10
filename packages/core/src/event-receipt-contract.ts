@@ -63,7 +63,6 @@ export async function verifyEventReceiptStoreContract(store: EventReceiptStore):
   if ((await find(afterExpiry, afterExpiry.at))?.eventId !== 'ev-3') {
     fail('保持期間を過ぎてから記録し直した行を引けない');
   }
-  // 保持期間を過ぎた行は、次の記録で消えている（際限なく増やさない）
   if ((await find(make({ source: 'other' }), t0)) !== null) {
     fail('保持期間を過ぎた行が、後の記録のあとも残っている');
   }

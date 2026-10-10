@@ -210,7 +210,7 @@ export interface SecretLikeHit {
 
 /**
  * 削除行は見ない: push 済みの内容を消す差分で止めない。文字列そのものは返さない。
- * NUL を含むファイルはバイナリとして、固有の接頭辞を持つ形と環境変数の鍵の値だけを見る（#4394）。
+ * NUL を含むファイルはバイナリとして、固有の接頭辞を持つ形と環境変数の鍵の値だけを見る。
  * 判定を git の属性に任せない: `-diff` を付けたテキストのファイルまで形の検査から外れるため。
  */
 export function secretLikeAdditionsInDiff(
@@ -600,7 +600,7 @@ async function rescueOne(
           files: hitFiles
             .slice(0, SECRET_FILES_LIMIT)
             .map((f) => clipPath(redactSecretsInBody(f, env))),
-          // 規則の名前だけを残す: 誤判定かどうかを、文字列を見ずに後から辿れるようにするため（#4394）
+          // 規則の名前だけを残す: 誤判定かどうかを、文字列を見ずに後から辿れるようにするため
           patterns: [...new Set(hits.flatMap((hit) => hit.patterns))],
         },
         true,

@@ -167,7 +167,7 @@ const WITHDRAWN_PAGE = 500;
  */
 export async function readWithdrawnClientMessageIds(
   journal: Pick<JournalStore, 'list'>,
-  // `undefined` は会話を問わない（会話の一覧が、窓の中の全会話の取り下げを一度で読む。#4357）
+  // `undefined` は会話を問わない（会話の一覧が、窓の中の全会話の取り下げを一度で読む）
   conversationId: string | undefined,
   since: string,
   pageSize: number = WITHDRAWN_PAGE,
@@ -237,7 +237,7 @@ export function collectConversations(
     const readThrough = effectiveReadThrough(readView, id);
     const first = visible[0]!;
     const last = visible[visible.length - 1]!;
-    // 取り下げた発言は題にも件数にも入れない（#4357）: 無かったことにした発言が一覧の見出しに残るため
+    // 取り下げた発言は題にも件数にも入れない:無かったことにした発言が一覧の見出しに残るため
     const counted = visible.filter(
       (entry) =>
         !(
@@ -467,7 +467,7 @@ export async function readConversationPage(
     }
   }
 
-  // 取り下げの印は人間との往復の窓に入らないので、窓の中で印を持ちうる最古の発言から別に読む（#4357）
+  // 取り下げの印は人間との往復の窓に入らないので、窓の中で印を持ちうる最古の発言から別に読む
   const withdrawable = humanExchanges(fresh).filter(
     (entry) => entry.role === 'inbound' && entry.clientMessageId !== undefined,
   );

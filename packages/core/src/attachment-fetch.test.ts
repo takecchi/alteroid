@@ -124,7 +124,6 @@ describe('attachment_fetch（#3111 段2）', () => {
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 1e9).toISOString(),
     });
-    // 控えは BYTES を名乗るが、流れてくる中身は served
     const storeServing = (served: Uint8Array) =>
       ({
         open: async () => ({ meta: metaOf(BYTES), stream: Readable.from([served]) }),

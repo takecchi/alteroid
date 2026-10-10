@@ -10,10 +10,6 @@ import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { JournalEntry } from './schema.js';
 
-// 1つのターンの中で本文が前のメッセージの後に再開したとき、日誌の本文の境目に区切り（空行）が入る（#4339）。
-// 画面へ流れる SSE の `text` には入らない。
-
-// 弾かれたメッセージを含むターンは失敗として終わり、日誌の本文に前置きが付く（既存の挙動）
 const FAILED_PREFIX = '（このターンは失敗して終わった。以下は失敗する前に出ていた本文である）\n';
 
 function setup(script: (ask: () => Promise<unknown>) => ScriptedStep[]) {
@@ -76,7 +72,6 @@ describe('返答の本文の境目に区切りを入れる（#4339）', () => {
     await waitForTerminal(s.events);
 
     expect(await outboundTexts(s.stores)).toEqual(['前半です\n\n後半です']);
-    // 画面へ流れる text には区切りを入れない
     const sent = s.events.flatMap((e) =>
       (e as { type?: string }).type === 'text' ? [(e as { text: string }).text] : [],
     );

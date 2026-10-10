@@ -168,9 +168,8 @@ const CREDENTIAL_RULES: readonly CredentialRule[] = [
 ];
 
 /**
- * `redactSecretsInBody` が伏せる規則のうち、`text` に当たるものの名前（文字列そのものは返さない）。
  * 規則を1つずつ元の `text` に当てる: 伏せる順に当てたときと「どれかが当たる」の真偽は変わらない。
- * `binary`: 環境変数の鍵の値と固有の接頭辞を持つ形だけを見る（#4394: PNG のバイト列が `a:b@c` の形に当たって退避が止まった）。
+ * `binary` では環境変数の鍵の値と固有の接頭辞を持つ形だけを見る: PNG のようなバイト列が、形だけの規則（`a:b@c`）に当たるため。
  */
 export function secretPatternsInBody(
   text: string,

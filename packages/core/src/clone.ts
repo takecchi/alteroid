@@ -281,16 +281,10 @@ export {
 // row-folded は待ち行列から抜かない: 抜くと `#mergedExternalBatch` の束ね読み（件数と全件の届いた時刻）が消えるため
 type PendingCollapseVerdict = 'pass' | 'folded' | 'row-folded';
 
-/**
- * 1つのターンの中で、本文が前のメッセージの後に再開するとき、日誌の本文（`turn.reply`）の境目に入れる区切り（#4339）。
- * 画面へ流れる SSE の `text` には入れない（日誌の本文にだけ入る）。Web の `pendingOwnLines` はこの区切りありとなしの両方で照合する。
- */
+/** SSE の `text` には入れない: Web の `pendingOwnLines` がこの区切りありとなしの両方で照合するため。 */
 export const REPLY_MESSAGE_SEPARATOR = '\n\n';
 
-/**
- * `turn.reply` へ本文を足す。前のメッセージが終わっていて、未書き込みの本文に中身があるときだけ、区切りを先に入れる。
- * 未書き込みの分だけを見る: ターンの先頭や承認カードで割った直後（`replyWritten`）には区切りを置かず、行頭に空行が付かない。
- */
+/** 未書き込みの分だけを見る: ターンの先頭や承認カードで割った直後（`replyWritten`）に区切りを置くと、行頭に空行が付くため。 */
 function appendReply(turn: Turn, text: string): void {
   if (turn.replySeparatorPending && text.length > 0) {
     turn.replySeparatorPending = false;
@@ -614,10 +608,7 @@ export interface Turn {
   replyAttachmentsWritten: number;
   /** 直前の assistant メッセージを処理し終えた時点の `reply.length`（そのメッセージの片の範囲を知る）。 */
   replyMessageStart: number;
-  /**
-   * `tool` を emit した（assistant メッセージの `tool_use` を処理した）後、次の本文を足すときに区切り（`REPLY_MESSAGE_SEPARATOR`）を先に入れる印（#4339）。
-   * Web が返信の行を分ける点（`tool`）と同じ点でだけ立てる。区切りは次のメッセージの先頭に置く（`replyMessageStart` より後ろ）: 弾かれたメッセージの分を外す切り詰めが区切りごと外れる。
-   */
+  // 区切りは前のメッセージの末尾ではなく次のメッセージの先頭（`replyMessageStart` より後ろ）に置く: 弾かれたメッセージの分を外す切り詰めで、区切りごと外れるようにするため
   replySeparatorPending: boolean;
   streamed: boolean;
   // 本文は `text` へ入れずここへ置く: 支出上限の文言がそのまま「クローンの応答」になり、日報の本文にまでなるため
@@ -2597,7 +2588,7 @@ class Clone implements CloneHost {
     if (event.type !== 'human_message') return;
 
     // `supersedes` はそのまま日誌へ通すだけにする: 畳み込みの解釈は `computeSupersededIds` の射影が持ち、記録の時点で何かを取り消さないため
-    // 同じ会話のターンが走っていたら、ここまでに流れた返答を先に書く（#4391）: 返答はターンの終わりに書かれるので、ターン中に届いた発言のほうが日誌で先になり、会話で返答より上に出るため。
+    // 同じ会話のターンが走っていたら、ここまでに流れた返答を先に書く:返答はターンの終わりに書かれるので、ターン中に届いた発言のほうが日誌で先になり、会話で返答より上に出るため。
     // 鎖を待たずに書き始める: `#journalReply` は最初の await までに本文を切り取って追記を始めるので、切り取りが下の `queued` と同じ同期区間に入り（Web はその `queued` で返信の行を分ける）、
     // 鎖が詰まっているあいだにターンが終わっても残りの本文がこの割り目より先に載らない
     const turn = this.#sdkSession.turn;
