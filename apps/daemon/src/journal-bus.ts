@@ -6,11 +6,7 @@ import type {
   JournalStore,
 } from '@alteroid/core';
 
-/**
- * 購読ごとに溜めた、まだ流していない行から、墓標（`conversation_deleted`）が外す行を捨てる（Issue #4379）。
- * 捨てるのは、その会話の `exchange` と、墓標が名指しした行（`hiddenEntryIds`。#4355）。
- * 追記の時点の見直し（下の `visible`）は、溜めている間に積まれた墓標を知らないため、受け口がこれを呼ぶ。
- */
+/** 受け口がこれを呼ぶ: 追記の時点の見直し（下の `visible`）は、溜めている間に積まれた墓標を知らないため。 */
 export function pruneQueuedForDeletion(
   queue: JournalEntry[],
   tombstone: Extract<JournalEntry, { type: 'conversation_deleted' }>,
