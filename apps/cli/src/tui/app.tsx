@@ -398,7 +398,7 @@ export const App: FC<AppProps> = ({
     if (tokens.length === 0) return undefined;
     const parsed = parseJournalSearchTokens(tokens);
     if (!parsed.ok) return parsed.message;
-    // 件数の検査は `parseJournalSearchTokens` が CLI の chat と同じ規則で済ませている（#4356）
+    // 件数の検査は `parseJournalSearchTokens` が CLI の chat と同じ規則で済ませている
     const pageSize = parsed.limit === undefined ? undefined : Number(parsed.limit);
     const types = (parsed.type ?? '')
       .split(',')
@@ -409,7 +409,7 @@ export const App: FC<AppProps> = ({
   };
 
   const runCommand = (action: CommandAction, args = '', from?: 'chat' | 'managers'): void => {
-    // 余分な語は黙って捨てず、使い方の誤りとして断る（CLI の chat と同じ規則。#4356）
+    // 余分な語は黙って捨てず、使い方の誤りとして断る（CLI の chat と同じ規則）
     const refusal = surplusRefusal(action, args);
     if (refusal !== undefined) {
       goTab('chat');

@@ -487,7 +487,6 @@ export async function chatCommand(): Promise<void> {
       let body: string;
       try {
         const raw = await ask('> ');
-        // コマンドの語は大文字小文字を区別しない（TUI と同じ。#4356）。引数はそのまま
         line = normalizeCommandWord(raw.trim());
         typed = raw.trimEnd();
         body = typed;
@@ -2654,7 +2653,7 @@ export async function runSlashCommand(
       // `CLOSED_HISTORY_LIMIT` を超えた古い片付き行は物理削除され、その累計が `trimmedClosed` として応答に載る。
       // `renderCommitments` へ渡して人間にも見える形にする。
       const includeClosed = isKeyword(rest[0], 'all');
-      // `/commitments foo` を開いた行だけの一覧で返すと、`all` のつもりの綴り違いが「片付いた行は無い」と読める（#4356）
+      // `/commitments foo` を開いた行だけの一覧で返すと、`all` のつもりの綴り違いが「片付いた行は無い」と読める
       const surplus = rest.slice(includeClosed ? 1 : 0).find((token) => token.length > 0);
       if (surplus !== undefined) {
         return usageError(`${surplusWordMessage(surplus, '/commitments、/commitments all')}\n`);
@@ -3352,7 +3351,7 @@ function takeWhen(when: string): { spec: ScheduleSpecInput; request: string } | 
   }
   const minutes = /^(\d+)m?$/.exec(head);
   if (minutes === null) return null;
-  // 分の数も件数と同じ規則で読み、上限はデーモンの検査と同じ値にする（#4356）: 上限の無い数をそのまま送らない
+  // 分の数も件数と同じ規則で読み、上限はデーモンの検査と同じ値にする:上限の無い数をそのまま送らない
   const parsed = parseCountArg(minutes[1] ?? '', SCHEDULE_EVERY_MINUTES_MAX);
   return parsed.ok ? { spec: { type: 'every', minutes: parsed.value }, request } : null;
 }
@@ -3419,7 +3418,7 @@ export function parseJournalSearchTokens(tokens: string[]): ParsedJournalSearchT
         message: `知らないキーです: ${token.slice(0, token.indexOf('=') + 1)}${usable}`,
       };
     } else if (limit === undefined) {
-      // 件数は CLI の chat と TUI で同じ規則で読む（#4356）: `1e1`・`0x10` を数として通さない
+      // 件数は CLI の chat と TUI で同じ規則で読む:`1e1`・`0x10` を数として通さない
       const count = parseCountArg(token, JOURNAL_MAX_LIMIT);
       if (!count.ok) return { ok: false, message: count.message };
       limit = token;
