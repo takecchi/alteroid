@@ -571,7 +571,7 @@ export const STATEMENTS = [
    )`,
   // 埋め戻さない: plugin_files は最大 64MiB で、起動のたびに読む重さに見合わない。
   `alter table plugins add column if not exists description text`,
-  // 受信箱（inbox_events）に列を足さない: 受信箱の行は処理し終えると消え、その後の送り直しを見分けられないため（#3531）。
+  // 受信箱（inbox_events）に列を足さない: 受信箱の行は処理し終えると消え、その後の送り直しを見分けられないため。
   `create table if not exists event_receipts (
      scope text not null,
      source text not null,
