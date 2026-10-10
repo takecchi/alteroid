@@ -34,7 +34,7 @@ export function ChatHeader({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const gutter =
     'pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]';
-  // 狭い画面ではボタンを文字にしない: 見出しの列が押し潰され、説明が数文字ごとに折り返されてヘッダーが縦に伸びるため（#4340）
+  // 狭い画面ではボタンを文字にしない: 見出しの列が押し潰され、説明が数文字ごとに折り返されてヘッダーが縦に伸びるため
   const iconOnNarrow = 'max-md:w-11 max-md:px-0';
   return (
     <>

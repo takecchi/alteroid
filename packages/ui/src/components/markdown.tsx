@@ -117,7 +117,7 @@ function DaemonImage({
   src: string;
   alt: string;
 }) {
-  // どの接続先・どの id で取った結果かを持つ（#4381）: 接続先が替わった直後の描き直しで、片付けで revoke される前の接続先の blob: を描かないため
+  // どの接続先・どの id で取った結果かを持つ:接続先が替わった直後の描き直しで、片付けで revoke される前の接続先の blob: を描かないため
   const [fetched, setFetched] = useState<
     { images: DaemonImages; id: string; result: { url: string } | 'failed' } | undefined
   >();
