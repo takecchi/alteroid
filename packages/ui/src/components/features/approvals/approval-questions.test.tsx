@@ -95,3 +95,57 @@ describe('ApprovalQuestionsForm: 「選択を外す」のフォーカス', () =>
     expect(document.activeElement).toBe(screen.getByRole('textbox', { name: '設問 1 のその他' }));
   });
 });
+
+// 選んでから Enter を押すと、そのまま回答が送られる事故があった（form の暗黙の送信）。送るのは ⌘/Ctrl + Enter と「回答」ボタンだけ
+describe('ApprovalQuestionsForm: 選択肢を選んだ後の Enter では送らない', () => {
+  const multi: ApprovalQuestionView[] = [
+    { id: 'q1', prompt: 'どれ？', options: [{ id: 'a', label: 'A' }], multiple: true },
+  ];
+
+  it('ラジオを選んで Enter・Shift + Enter を押しても送らない', () => {
+    const onSubmit = vi.fn();
+    render(<ApprovalQuestionsForm questions={questions} onSubmit={onSubmit} />);
+    const radio = screen.getByRole('radio', { name: 'A' });
+    fireEvent.click(radio);
+    expect(fireEvent.keyDown(radio, { key: 'Enter' })).toBe(false);
+    expect(fireEvent.keyDown(radio, { key: 'Enter', shiftKey: true })).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('チェックボックスを選んで Enter を押しても送らない', () => {
+    const onSubmit = vi.fn();
+    render(<ApprovalQuestionsForm questions={multi} onSubmit={onSubmit} />);
+    const box = screen.getByRole('checkbox', { name: 'A' });
+    fireEvent.click(box);
+    expect(fireEvent.keyDown(box, { key: 'Enter' })).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('「その他」に書いて Enter・Shift + Enter を押しても送らず、⌘/Ctrl + Enter で送る', () => {
+    const onSubmit = vi.fn();
+    render(<ApprovalQuestionsForm questions={questions} onSubmit={onSubmit} />);
+    const other = screen.getByRole('textbox', { name: '設問 1 のその他' });
+    fireEvent.change(other, { target: { value: '別の案' } });
+    expect(fireEvent.keyDown(other, { key: 'Enter' })).toBe(false);
+    expect(fireEvent.keyDown(other, { key: 'Enter', shiftKey: true })).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(other, { key: 'Enter', metaKey: true });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenCalledWith({
+      selections: [{ questionId: 'q1', optionIds: [], other: '別の案' }],
+    });
+    fireEvent.keyDown(other, { key: 'Enter', ctrlKey: true });
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+  });
+
+  it('何も選んでいないときは ⌘ + Enter でも送らない', () => {
+    const onSubmit = vi.fn();
+    render(<ApprovalQuestionsForm questions={questions} onSubmit={onSubmit} />);
+    fireEvent.keyDown(screen.getByRole('textbox', { name: '設問 1 のその他' }), {
+      key: 'Enter',
+      metaKey: true,
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});

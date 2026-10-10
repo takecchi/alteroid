@@ -10,7 +10,6 @@ import {
   Empty,
   FieldHint,
   Input,
-  isImeConfirmEnter,
   ListDetail,
   ListDetailItems,
   Spinner,
@@ -71,10 +70,8 @@ export default function Memory() {
                 value={slug}
                 placeholder="例: work-style"
                 onChange={(event) => setSlug(event.target.value)}
-                onKeyDown={(event) => {
-                  if (isImeConfirmEnter(event)) return;
-                  if (event.key === 'Enter' && valid) void navigate(`/memory/${slug}`);
-                }}
+                submitDisabled={!valid}
+                onSubmitShortcut={() => void navigate(`/memory/${slug}`)}
               />
               <Button
                 variant="primary"

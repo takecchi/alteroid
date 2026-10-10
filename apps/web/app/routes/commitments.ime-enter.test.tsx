@@ -65,7 +65,9 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-describe('片付ける（OpenRow）の理由欄 — IME 変換中の Enter', () => {
+// 送るのは ⌘/Ctrl + Enter だけ（チャットと同じ）。以前は Enter 単体で送っていたので、IME の確定の Enter を拾わない門が要った。
+// いまは IME の門を ⌘/Ctrl + Enter の側で測る
+describe('片付ける（OpenRow）の理由欄 — IME 変換中の ⌘/Ctrl + Enter', () => {
   it('isComposing: true では送らない', async () => {
     stubCommitments([commitment({ id: 'cmt-42' })]);
     const requests = recordRequests();
@@ -75,7 +77,7 @@ describe('片付ける（OpenRow）の理由欄 — IME 変換中の Enter', () 
     const input = screen.getByLabelText(/を片付けた理由$/);
     fireEvent.change(input, { target: { value: 'PR #99 をマージした' } });
 
-    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true, isComposing: true });
     await settle();
     expect(requests.some((request) => request.url.includes('/close'))).toBe(false);
   });
@@ -89,12 +91,12 @@ describe('片付ける（OpenRow）の理由欄 — IME 変換中の Enter', () 
     const input = screen.getByLabelText(/を片付けた理由$/);
     fireEvent.change(input, { target: { value: 'PR #99 をマージした' } });
 
-    fireEvent.keyDown(input, { key: 'Enter', isComposing: false, keyCode: 229 });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true, isComposing: false, keyCode: 229 });
     await settle();
     expect(requests.some((request) => request.url.includes('/close'))).toBe(false);
   });
 
-  it('isComposing: false（229 でもない）では、既存どおり送る', async () => {
+  it('Enter 単体・Shift + Enter では送らない', async () => {
     stubCommitments([commitment({ id: 'cmt-42' })]);
     const requests = recordRequests();
     renderPage();
@@ -104,6 +106,21 @@ describe('片付ける（OpenRow）の理由欄 — IME 変換中の Enter', () 
     fireEvent.change(input, { target: { value: 'PR #99 をマージした' } });
 
     fireEvent.keyDown(input, { key: 'Enter', isComposing: false });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true, isComposing: false });
+    await settle();
+    expect(requests.some((request) => request.url.includes('/close'))).toBe(false);
+  });
+
+  it('isComposing: false（229 でもない）の ⌘/Ctrl + Enter では送る', async () => {
+    stubCommitments([commitment({ id: 'cmt-42' })]);
+    const requests = recordRequests();
+    renderPage();
+
+    await screen.findByText('ドキュメントの誤りを直す');
+    const input = screen.getByLabelText(/を片付けた理由$/);
+    fireEvent.change(input, { target: { value: 'PR #99 をマージした' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true, isComposing: false });
 
     const closed = await waitFor(() => {
       const found = requests.find((request) => request.url.includes('/commitments/cmt-42/close'));

@@ -22,7 +22,7 @@ import { useDisplayText } from '@/lib/display-text';
 import { isMacPlatform, submitShortcutLabel, useKeyboardHintsVisible } from '@/lib/platform';
 import { cn } from '@/lib/utils';
 
-import { isSubmitShortcut } from './features/chat/ime';
+import { isImeComposing, isSubmitShortcut } from './features/chat/ime';
 
 export const TAB_TRIGGER_CLASS =
   'border-b-2 border-transparent px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground pointer-coarse:py-3';
@@ -247,8 +247,32 @@ export function SubmitHint({
 
 export { useKeyboardHintsVisible };
 
-export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <ShadcnInput className={className} {...props} />;
+// 修飾キーの無い Enter（Shift + Enter も）では送らない: form の中だとブラウザの暗黙の送信が走り、選択肢を選んだ直後の Enter が押した覚えのない送信になったため。
+// 送るのはチャットと同じ Cmd/Ctrl + Enter だけにそろえる
+export function Input({
+  className,
+  onKeyDown,
+  onSubmitShortcut,
+  submitDisabled = false,
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & {
+  onSubmitShortcut?: () => void;
+  submitDisabled?: boolean;
+}) {
+  return (
+    <ShadcnInput
+      className={className}
+      onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
+        onKeyDown?.(event);
+        if (event.defaultPrevented || event.key !== 'Enter' || isImeComposing(event)) return;
+        event.preventDefault();
+        if (!isSubmitShortcut(event) || submitDisabled) return;
+        if (onSubmitShortcut !== undefined) onSubmitShortcut();
+        else event.currentTarget.form?.requestSubmit();
+      }}
+      {...props}
+    />
+  );
 }
 
 // プレースホルダへ書かず常時出す: プレースホルダは入力を始めると消え、欄の幅で切れるため

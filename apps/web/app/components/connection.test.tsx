@@ -446,8 +446,10 @@ describe('接続先を足す・直す・消す', () => {
   });
 });
 
-describe('接続先の入力欄は、IME の確定の Enter では送らない', () => {
-  it('追加: 名前の欄の変換中の Enter では足さず、確定後の Enter で足す', async () => {
+// 送るのは ⌘/Ctrl + Enter だけ（チャットと同じ）。以前は Enter 単体で送っていたので、IME の確定の Enter を拾わない門が要った。
+// いまは IME の門を ⌘/Ctrl + Enter の側で測り、Enter 単体では送らないことも測る
+describe('接続先の入力欄は、IME の確定の ⌘/Ctrl + Enter と Enter 単体では送らない', () => {
+  it('追加: 名前の欄の変換中の ⌘ + Enter と Enter 単体では足さず、確定後の ⌘ + Enter で足す', async () => {
     renderWithEndpoints();
 
     fireEvent.change(screen.getByLabelText('追加する接続先の URL'), {
@@ -456,12 +458,15 @@ describe('接続先の入力欄は、IME の確定の Enter では送らない',
     const label = await screen.findByLabelText('追加する接続先の名前（任意）');
     fireEvent.change(label, { target: { value: 'けんしょう' } });
 
-    fireEvent.keyDown(label, { key: 'Enter', isComposing: true });
-    fireEvent.keyDown(label, { key: 'Enter', keyCode: 229 });
+    fireEvent.keyDown(label, { key: 'Enter', metaKey: true, isComposing: true });
+    fireEvent.keyDown(label, { key: 'Enter', metaKey: true, keyCode: 229 });
     expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe(TEST_BASE_URL);
 
     fireEvent.change(label, { target: { value: '検証' } });
     fireEvent.keyDown(label, { key: 'Enter' });
+    fireEvent.keyDown(label, { key: 'Enter', shiftKey: true });
+    expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe(TEST_BASE_URL);
+    fireEvent.keyDown(label, { key: 'Enter', metaKey: true });
     await waitFor(() => {
       expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe('https://stg.example.com');
     });
@@ -471,27 +476,29 @@ describe('接続先の入力欄は、IME の確定の Enter では送らない',
     });
   });
 
-  it('追加: URL の欄の変換中の Enter でも足さない', async () => {
+  it('追加: URL の欄の変換中の ⌘ + Enter と Enter 単体でも足さない', async () => {
     renderWithEndpoints();
 
     const url = await screen.findByLabelText('追加する接続先の URL');
     fireEvent.change(url, { target: { value: 'https://stg.example.com' } });
-    fireEvent.keyDown(url, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(url, { key: 'Enter', metaKey: true, isComposing: true });
+    fireEvent.keyDown(url, { key: 'Enter' });
     expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe(TEST_BASE_URL);
 
-    fireEvent.keyDown(url, { key: 'Enter' });
+    fireEvent.keyDown(url, { key: 'Enter', ctrlKey: true });
     await waitFor(() => {
       expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe('https://stg.example.com');
     });
   });
 
-  it('名前の変更: 変換中の Enter では保存せず、確定後の Enter で保存する', async () => {
+  it('名前の変更: 変換中の ⌘ + Enter と Enter 単体では保存せず、確定後の ⌘ + Enter で保存する', async () => {
     renderWithEndpoints();
 
     fireEvent.click(await screen.findByRole('button', { name: '名前を変更' }));
     const input = screen.getByLabelText('選択中の接続先の名前');
     fireEvent.change(input, { target: { value: 'てもと' } });
-    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true, isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter' });
 
     expect(screen.getByLabelText('選択中の接続先の名前')).toBeTruthy();
     expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toEqual([
@@ -499,7 +506,7 @@ describe('接続先の入力欄は、IME の確定の Enter では送らない',
     ]);
 
     fireEvent.change(input, { target: { value: '手元' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
     await waitFor(() => {
       expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toContainEqual({
         url: TEST_BASE_URL,
