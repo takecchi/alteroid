@@ -3377,7 +3377,7 @@ export function createApp(deps: AppDeps) {
           let closed = false;
 
           const unsubscribe = bus.subscribe((entry) => {
-            // 種別の絞りより先に見る: `type=` で墓標を流さない購読でも、溜めた行は捨てる必要があるため（#4379）
+            // 種別の絞りより先に見る: `type=` で墓標を流さない購読でも、溜めた行は捨てる必要があるため
             if (entry.type === 'conversation_deleted') pruneQueuedForDeletion(queue, entry);
             if (types !== undefined && !types.includes(entry.type)) return;
             queue.push(entry);

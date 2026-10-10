@@ -1084,7 +1084,7 @@ export async function main(): Promise<void> {
     attachmentLimits: storage.attachmentLimits,
   });
   // 黙って外へ出さない: ここは叩けばクローンのターンが起きる実行の口のため。
-  // 認証が無くても起動は止めない: 手前に境界を置いて開ける運用を壊さないため（#2892 のオーナー判断 2026-10-09）
+  // 認証が無くても起動は止めない: 手前に境界を置いて開ける運用を壊さないため
   if (hostname !== DEFAULT_BIND && hostname !== 'localhost' && hostname !== '::1') {
     process.stderr.write(
       authPlan.enabled

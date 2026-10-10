@@ -275,7 +275,6 @@ describe('DELETE /conversations/:id（#4218）', () => {
     expect(joined).toContain('#4173');
     expect(joined).toContain('記憶');
     expect(joined).toContain('承認');
-    // #4355: 台帳の行と、その本文の日誌の写しは消す・外す。それでも残りうるもの（一括で片付けた行・言い換え）を言う
     expect(joined).toContain('台帳のこの会話の行（人間の手で積んだ行とクローンが載せた行）は消し');
     expect(joined).toContain('台帳をまとめて片付けた日誌の行');
   });
@@ -285,13 +284,12 @@ describe('DELETE /conversations/:id（#4218）', () => {
     await seedConversation(stores, 'conv-x', `鍵は ${SECRET}`);
     await seedConversation(stores, 'conv-keep', '残る会話');
 
-    // 人間の手で積む: デーモンが本文を写した decision を書く
     const posted = await request(app, 'POST', '/commitments', {
       body: `鍵 ${SECRET} を確認`,
       source: 'conv-x',
     });
     expect(posted.status).toBeLessThan(300);
-    // クローンが載せて直した形（道具が書くのと同じ文の形の decision）
+    // decision の文は道具が書くのと同じ形にする: 外す側は台帳の行の id をこの形から拾うため
     await stores.commitments.open({
       id: 'self-1',
       at: new Date().toISOString(),
@@ -309,7 +307,6 @@ describe('DELETE /conversations/:id（#4218）', () => {
       decision: `引き受けた仕事の本文を直した（self-1）: 編集前「鍵 ${SECRET}」→ 編集後「鍵を確認」`,
       grounds: '自分で載せた行の本文を自分で直した',
     });
-    // 別の会話の台帳の行とその写しは残る
     await request(app, 'POST', '/commitments', { body: '残る仕事', source: 'conv-keep' });
 
     expect((await request(app, 'DELETE', '/conversations/conv-x')).status).toBe(200);
