@@ -69,7 +69,6 @@ describe('authenticate は、壊れた expiresAt のトークンを拒む（issu
     lastLoginAt: '2026-01-01T00:00:00.000Z',
     grantedAt: '2026-01-01T00:00:00.000Z',
     grantedBy: 'operator',
-    ownerDeclaredAt: null,
   };
   const bearer = `${ACCESS_TOKEN_PREFIX}FAKEFAKEFAKEFAKE`;
 

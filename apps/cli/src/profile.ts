@@ -413,13 +413,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     if (response.status === 403) {
       const body = await response.json().catch(() => ({}));
       const kind = forbiddenKindOf(body);
-      // `not_operator` の枝は、門が `requireOwner` へ移る前のデーモンと繋いだときのために残してある。
-      if (kind === 'not_declared_owner') {
-        throw new Error(
-          describeAuthFailure(403, target, kind) ??
-            '実行環境の持ち主として宣言されたアカウントだけが操作できます。',
-        );
-      }
+      // `not_operator` の枝は、`GET /profile` `PUT /profile` が `requireOperator` のままなので残す。
       if (kind === 'not_operator') {
         throw new Error(
           '実行環境プロファイルを触れるのは、その実行環境の持ち主だけです。\n' +

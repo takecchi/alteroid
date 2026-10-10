@@ -129,10 +129,8 @@ describe('AuthService.completeLogin はログイン以外の状態を書き戻�
     const accountId = completedFirst.accountId;
 
     expect((await service.grant(accountId, 'operator')).status).toBe('granted');
-    expect((await service.setOwner(accountId, true)).status).toBe('ok');
     const beforeRace = await store.getAccount(accountId);
     expect(beforeRace?.grantedAt).not.toBeNull();
-    expect(beforeRace?.ownerDeclaredAt).not.toBeNull();
 
     const second = await service.startLogin({
       provider: 'fake',
@@ -159,7 +157,6 @@ describe('AuthService.completeLogin はログイン以外の状態を書き戻�
     await read.promise;
     const revoked = await service.revoke(accountId);
     expect(revoked?.grantedAt).toBeNull();
-    expect(revoked?.ownerDeclaredAt).toBeNull();
     expect((await store.getAccount(accountId))?.grantedAt).toBeNull();
 
     write.release();
@@ -168,7 +165,6 @@ describe('AuthService.completeLogin はログイン以外の状態を書き戻�
 
     const afterRelogin = await store.getAccount(accountId);
     expect(afterRelogin?.grantedAt).toBeNull();
-    expect(afterRelogin?.ownerDeclaredAt).toBeNull();
   });
 
   it('同じ identity への同時ログインで負けた側の書き戻しも、その直前に付与された access grant を消してはいけない（#1714 の負け側分岐）', async () => {

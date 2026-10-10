@@ -261,7 +261,7 @@ export const authAccounts = pgTable(
     lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }),
     grantedAt: timestamp('granted_at', { withTimezone: true, mode: 'date' }),
     grantedBy: text('granted_by'),
-    // 資格の判断には使わない（ログインできる人＝持ち主）。列は当面残す。
+    // コードは読み書きしない（#2948 で宣言の仕組みを畳んだ）。既存の DB に値が残るので、列定義だけを DDL と揃えて残す。
     ownerDeclaredAt: timestamp('owner_declared_at', { withTimezone: true, mode: 'date' }),
   },
   (table) => [

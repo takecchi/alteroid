@@ -9,7 +9,6 @@ import { Command } from 'commander';
 import {
   accessGrantCommand,
   accessListCommand,
-  accessOwnerCommand,
   accessRemoveUnreadableCommand,
   accessRevokeCommand,
 } from './access.js';
@@ -507,16 +506,6 @@ accessCommand
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (ids: string[], options: { yes?: boolean }) => {
     await accessRemoveUnreadableCommand(ids, options);
-  });
-
-accessCommand
-  .command('owner <accountId>')
-  .description(
-    '実行環境の持ち主として宣言する／取り消す（資格の判断には使っていない。ログインできる人＝持ち主。#2862）',
-  )
-  .option('--revoke', '宣言を取り消す')
-  .action(async (accountId: string, options: { revoke?: boolean }) => {
-    await accessOwnerCommand(accountId, options);
   });
 
 const permissionCommand = program

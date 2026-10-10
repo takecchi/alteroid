@@ -108,15 +108,9 @@ async function post(target: Target): Promise<unknown> {
     if (response.status === 403) {
       const body = await response.json().catch(() => ({}));
       const kind = forbiddenKindOf(body);
-      if (kind === 'not_declared_owner') {
-        throw new Error(
-          describeAuthFailure(403, target, kind) ??
-            '実行環境の持ち主として宣言されたアカウントだけが操作できます。',
-        );
-      }
       if (kind === 'not_granted') {
         throw new Error(
-          describeAuthFailure(403, target, kind) ??
+          describeAuthFailure(403, target) ??
             'このアカウントには alteroid を使う許可がありません。',
         );
       }

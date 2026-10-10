@@ -22,8 +22,6 @@ export const authAccountSchema = z.object({
   grantedAt: isoDateTime.nullable(),
   // 固定値を書かない: 常に同じ値ならこの欄は情報を運ばないため
   grantedBy: z.string().nullable(),
-  // `.default(null)` は必須: 既存の fs の JSON にこの鍵が無く、無いと `parse` が失敗して起動できなくなるため
-  ownerDeclaredAt: isoDateTime.nullable().default(null),
 });
 
 export const authIdentitySchema = z.object({
@@ -82,9 +80,9 @@ export interface AuthStore {
   // `completeLogin` はこれを呼ばない: 衝突検査は `createAccountWithIdentity` の1操作の中にある。新しい呼び手を足すときは「読んでから書く」の穴を作っていないか確かめること
   findAccountByEmail(email: string): Promise<AuthAccount | null>;
   putAccount(account: AuthAccount): Promise<void>;
-  // `lastLoginAt` 以外を書き戻さない: 読んでから書くまでに完了した grant / revoke / owner 宣言を古い写しで上書きするため
+  // `lastLoginAt` 以外を書き戻さない: 読んでから書くまでに完了した grant / revoke を古い写しで上書きするため
   markAccountLoggedIn(accountId: string, at: string): Promise<void>;
-  // 3欄（`grantedAt` / `grantedBy` / `ownerDeclaredAt`）だけを null にする: `lastLoginAt` を古い写しで上書きしないため
+  // 2欄（`grantedAt` / `grantedBy`）だけを null にする: `lastLoginAt` を古い写しで上書きしないため
   // 行が在るのに読めないときは `UnreadableAccountError` を投げて行は変えない: 「無い」と同じ扱いにすると、後で行が読めるようになったときに許可が生き返るため
   revokeAccountAccess(accountId: string): Promise<void>;
   removeUnreadableAccounts(
@@ -130,10 +128,6 @@ export interface AuthStore {
 
   // 同じ account への同時 grant を「読む→検査→書く」に割らない: `grantedAt` / `grantedBy` が後から来た側で上書きされ、日誌の「誰がいつ通したか」と食い違うため
   grantAccess(accountId: string, at: string, by: string): Promise<GrantOutcome>;
-
-  // 「読む→検査→書く」に割らない: 検査と書き込みの間に許可が取り消された行へ宣言が乗る窓ができるため
-  // 取り消し（`declaredAt === null`）は行が在れば常に通す: `AuthService.revoke` が許可と宣言を両方落とすため
-  setAccountOwner(accountId: string, declaredAt: string | null): Promise<OwnerOutcome>;
 }
 
 export type GrantOutcome = { status: 'granted'; account: AuthAccount } | { status: 'not_found' };
@@ -142,9 +136,6 @@ export type RevokeAccessTokenOutcome =
   | { status: 'not_found' }
   | { status: 'already_revoked'; token: AccessTokenRecord }
   | { status: 'revoked'; token: AccessTokenRecord };
-
-export type OwnerOutcome =
-  { status: 'ok'; account: AuthAccount } | { status: 'not_found' } | { status: 'not_granted' };
 
 // `created: true` の `account` は渡した候補とは限らない: メールが衝突していればメールを空にして保存した版が載るため。呼び手は必ずこの `account` を見る
 export type CreateAccountWithIdentityOutcome =
@@ -189,11 +180,6 @@ export function decodeState(state: string): { requestId: string; nonce: string }
 
 export function isAccountGranted(account: AuthAccount): boolean {
   return account.grantedAt !== null;
-}
-
-// 許可が外れていないことも見る: 「宣言はあるが未許可」の行は通常生まれないが、その不変条件が崩れた日に資格の側が緩まないようにするため
-export function isDeclaredOwner(account: AuthAccount): boolean {
-  return isAccountGranted(account) && account.ownerDeclaredAt !== null;
 }
 
 // 判定できない期限は使えない側に倒す: `expiresAt` が解釈できないと `Date.parse` が `NaN` を返し、`NaN <= now` は `false` で素通りするため。比べる向きも「期限より前なら開く」にする

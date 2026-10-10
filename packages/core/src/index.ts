@@ -123,7 +123,6 @@ export {
   encodeState,
   isAccessTokenUsable,
   isAccountGranted,
-  isDeclaredOwner,
   isLoginRequestOpen,
   issueAccessTokenValue,
   loginRequestSchema,
@@ -138,7 +137,6 @@ export {
   type GrantOutcome,
   type LoginRequest,
   type LoginRequestStatus,
-  type OwnerOutcome,
   type RevokeAccessTokenOutcome,
 } from './auth.js';
 export {

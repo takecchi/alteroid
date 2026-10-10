@@ -70,7 +70,6 @@ const GOOD_ACCOUNT: AuthAccount = {
   lastLoginAt: null,
   grantedAt: '2026-01-01T00:00:00.000Z',
   grantedBy: 'operator',
-  ownerDeclaredAt: null,
 };
 const brokenAccount = (id: string) => ({
   id,
@@ -79,7 +78,6 @@ const brokenAccount = (id: string) => ({
   lastLoginAt: null,
   grantedAt: '2026-01-02T00:00:00.000Z',
   grantedBy: 'operator',
-  ownerDeclaredAt: null,
 });
 const IDLESS_ACCOUNT_RAW = { email: `${FAKE}@example.test` };
 

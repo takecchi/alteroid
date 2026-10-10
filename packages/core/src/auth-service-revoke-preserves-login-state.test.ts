@@ -118,7 +118,6 @@ describe('AuthService.revoke は直前に完了した再ログインの lastLogi
     const revoked = await revokePromise;
     expect(revoked?.grantedAt).toBeNull();
     expect(revoked?.grantedBy).toBeNull();
-    expect(revoked?.ownerDeclaredAt).toBeNull();
 
     expect(revoked?.lastLoginAt).toBe(lastLoginAfterRelogin);
     const afterRevoke = await store.getAccount(accountId);

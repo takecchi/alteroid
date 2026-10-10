@@ -8,14 +8,11 @@ import { describe, expect, it } from 'vitest';
 // 正規表現ではなく TypeScript の AST を読む: 生テキストだと `requireOperator` を含む散文を配線と読み違える誤爆の工場になり、歯を弱める方向へ誘導されるため。
 // `*-core.mjs` に切り出さず `.test.ts` に直書きする: vitest 専用の突き合わせで、他から叩く理由が無いため。
 // `requireOperator` の参照数を別ルートで数えて経路数と検算する: 抽出が新しい配線の書き方を拾い損ねても、黙って緑のままになるため。
-// `EXPECTED_OPERATOR_ROUTES` と `EXPECTED_OWNER_ROUTES` の両方を同時に見る: 強い門から弱い門へ経路が移っても合計本数では分からないため。
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const APP_TS_PATH = path.join(ROOT, 'apps/daemon/src/app.ts');
 
 const OPERATOR_MIDDLEWARE_NAME = 'requireOperator';
-
-const OWNER_MIDDLEWARE_NAME = 'requireOwner';
 
 const HTTP_METHOD_NAMES = new Set(['get', 'post', 'put', 'delete', 'patch']);
 
@@ -65,12 +62,6 @@ export function findOperatorWiredRoutes(sourceText: string, fileName = 'app.ts')
     .map((entry) => entry.route);
 }
 
-export function findOwnerWiredRoutes(sourceText: string, fileName = 'app.ts'): string[] {
-  return findRouteDeclarations(sourceText, fileName, OWNER_MIDDLEWARE_NAME)
-    .filter((entry) => entry.wired)
-    .map((entry) => entry.route);
-}
-
 export function countRequireOperatorReferences(
   sourceText: string,
   fileName = 'app.ts',
@@ -91,34 +82,8 @@ export function countRequireOperatorReferences(
 }
 
 // 一覧を変えたら `docs/architecture.md` の表も直す必要があるが、`docs/` は正典で AI が単独で書き換えないため、人間へ上げる。この歯は doc を検査しない。
-const EXPECTED_OPERATOR_ROUTES = [
-  'POST /access/:accountId/owner',
-  'POST /access/:accountId/owner/revoke',
-];
-
-// ここへ経路を足すのは `requireOperator` から外すのと同じ重さの判断: 足す前に `docs/architecture.md` と食い違わないかを人間へ上げる。
-// /codex の書く3口は 2026-10-07 オーナー確認済み。資格を書く口なので PUT /credentials と揃える。
-// DELETE /conversations/:id は 2026-10-08 のオーナーの依頼で `/reset` と同じ門にする。
-const EXPECTED_OWNER_ROUTES = [
-  'DELETE /conversations/:id',
-  'DELETE /plugins/:name',
-  'DELETE /codex/auth',
-  'DELETE /codex/login/:id',
-  'DELETE /profile/:name',
-  'POST /codex/login',
-  // クローンの文脈の連続性を切る口なので、POST /reset と揃える。
-  'POST /clone/session/reopen',
-  'GET /mcp-servers',
-  'GET /plugins',
-  'GET /profile',
-  'POST /plugins',
-  'POST /plugins/preview',
-  'POST /reset',
-  'PUT /credentials',
-  'PUT /mcp-servers',
-  'PUT /profile',
-  'PUT /profile/:name',
-];
+// 2026-10 の #2948 で持ち主の宣言の口 2 本（`POST /access/:accountId/owner` と `/owner/revoke`）を畳んだので、いまは 0 本。門そのもの（`requireOperator`）は残してある: 実行環境そのものを差し替える口を再び作るときに、付け忘れが静かに「許可済みなら誰でも」へ落ちないようにするため。
+const EXPECTED_OPERATOR_ROUTES: readonly string[] = [];
 
 function sorted(values: readonly string[]): string[] {
   return [...values].sort();
@@ -259,7 +224,7 @@ export const app = base
   );
 `;
 
-describe('2つの門（requireOperator / requireOwner）の配線が、決め打ちの一覧と一致する', () => {
+describe('門（requireOperator）の配線が、決め打ちの一覧と一致する', () => {
   const appTsSource = readFileSync(APP_TS_PATH, 'utf8');
 
   it('前提: apps/daemon/src/app.ts が読める', () => {
@@ -329,46 +294,7 @@ describe('2つの門（requireOperator / requireOwner）の配線が、決め打
     expect(countRequireOperatorReferences(FIXTURE_COMMENT_ONLY)).toBe(0);
   });
 
-  it('本物: requireOwner の配線がリテラル一覧と一致する', () => {
-    const extracted = sorted(findOwnerWiredRoutes(appTsSource));
-    const expected = sorted(EXPECTED_OWNER_ROUTES);
-
-    const missing = expected.filter((route) => !extracted.includes(route));
-    const extra = extracted.filter((route) => !expected.includes(route));
-
-    expect(
-      { extracted, missing, extra },
-      missing.length === 0 && extra.length === 0
-        ? ''
-        : [
-            missing.length > 0
-              ? `リテラル一覧に在るが配線から消えた経路: ${missing.join(', ')}`
-              : '',
-            extra.length > 0
-              ? `配線に新しく現れたがリテラル一覧に無い経路: ${extra.join(', ')}`
-              : '',
-            'この門を1本増やすことは、requireOperator から1本外すのと同じ重さの判断である。' +
-              'EXPECTED_OWNER_ROUTES を直す前に、docs/architecture.md の「実行環境の持ち主だけ」の' +
-              '段落と食い違わないかを人間へ確認すること（この歯は doc を検査していない）。',
-          ]
-            .filter((line) => line.length > 0)
-            .join('\n'),
-    ).toEqual({ extracted: expected, missing: [], extra: [] });
-  });
-
-  it('本物: requireOwner の参照数（宣言を除く）が、経路へ紐付けられた数と一致する（抽出漏れの検算）', () => {
-    const wiredCount = findOwnerWiredRoutes(appTsSource).length;
-    const referenceCount = countRequireOperatorReferences(appTsSource, 'app.ts', 'requireOwner');
-
-    expect(
-      referenceCount,
-      `requireOwner の参照数（${referenceCount}）と、経路として拾えた数` +
-        `（${wiredCount}）が一致しない。配線が在るのに経路として拾えていない可能性が高い。`,
-    ).toBe(wiredCount);
-  });
-
   it('合成 fixture: 接頭辞が衝突する名前でも、完全一致の抽出は取り違えない', () => {
-    // `findOwnerWiredRoutes` は使わない: 現物の名前 `requireOwner` に固定した関数で、fixture の衝突名 `requireOperatorOrDirectGrant` を扱えないため。
     expect(findOperatorWiredRoutes(FIXTURE_BOTH_GATES)).toEqual(['GET /profile']);
     const collidingWired = findRouteDeclarations(
       FIXTURE_BOTH_GATES,

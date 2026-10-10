@@ -417,7 +417,6 @@ describe('migrate（auth_accounts のメール大小文字索引。#1702）', ()
         lastLoginAt: null,
         grantedAt: null,
         grantedBy: null,
-        ownerDeclaredAt: null,
       }),
     ).rejects.toThrow();
   }, 30_000);

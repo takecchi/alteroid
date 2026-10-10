@@ -22,7 +22,6 @@ import type {
   CreateAccountWithIdentityOutcome,
   GrantOutcome,
   LoginRequest,
-  OwnerOutcome,
   RemoveUnreadableRowsOptions,
   RemoveUnreadableRowsResult,
   RevokeAccessTokenOutcome,
@@ -262,7 +261,6 @@ export class FsAuthStore implements AuthStore {
         ...account,
         grantedAt: null,
         grantedBy: null,
-        ownerDeclaredAt: null,
       });
       return {
         next: {
@@ -543,25 +541,6 @@ export class FsAuthStore implements AuthStore {
           accounts: file.accounts.map((it) => (it.id === accountId ? granted : it)),
         },
         result: { status: 'granted' as const, account: granted },
-      };
-    });
-  }
-
-  async setAccountOwner(accountId: string, declaredAt: string | null): Promise<OwnerOutcome> {
-    // 「宣言 ⟹ 許可済み」の検査を書き込みと同じ排他区間の内側で行う: 検査と書き込みの間に許可が取り消される窓を作らないため
-    return this.#mutate<OwnerOutcome>((file): { next: AuthFile | null; result: OwnerOutcome } => {
-      const account = file.accounts.find((it) => it.id === accountId);
-      if (account === undefined) return { next: null, result: { status: 'not_found' as const } };
-      if (declaredAt !== null && account.grantedAt === null) {
-        return { next: null, result: { status: 'not_granted' as const } };
-      }
-      const updated = authAccountSchema.parse({ ...account, ownerDeclaredAt: declaredAt });
-      return {
-        next: {
-          ...file,
-          accounts: file.accounts.map((it) => (it.id === accountId ? updated : it)),
-        },
-        result: { status: 'ok' as const, account: updated },
       };
     });
   }

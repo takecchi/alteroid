@@ -10,7 +10,7 @@ describe('account-list.ts は読むだけで、個人の情報を持ち出さな
 
   it('書き手の口（付与・取り消し・owner の宣言・消す口・put 系）に触れない', () => {
     expect(code).not.toMatch(
-      /\.(grantAccess|revokeAccess|setAccountOwner|removeUnreadable\w*|put\w*|create\w*|delete\w*|remove\w*|revoke\w*|grant\w*)\s*\(/,
+      /\.(grantAccess|revokeAccess|removeUnreadable\w*|put\w*|create\w*|delete\w*|remove\w*|revoke\w*|grant\w*)\s*\(/,
     );
   });
 

@@ -20,9 +20,6 @@ const credentials = await import('./credentials.js');
 // 文言を定数として import せず直接書く: `forbiddenKindOf` と同じ変数を参照すると、デーモンの文言が変わったときに歯まで一緒に変わり、ずれを検出できなくなるため
 const NOT_OPERATOR_BODY = { error: '実行環境の持ち主だけが操作できる' };
 const NOT_GRANTED_BODY = { error: 'このアカウントには alteroid を使う許可が無い' };
-const NOT_DECLARED_OWNER_BODY = {
-  error: '実行環境の持ち主として宣言されたアカウントだけが操作できる',
-};
 
 describe('forbiddenKindOf', () => {
   it('持ち主用の本文を not_operator と判別する', () => {
@@ -33,12 +30,15 @@ describe('forbiddenKindOf', () => {
     expect(forbiddenKindOf(NOT_GRANTED_BODY)).toBe('not_granted');
   });
 
-  it('未宣言 owner 用の本文を not_declared_owner と判別する（issue #1198。requireOwner）', () => {
-    expect(forbiddenKindOf(NOT_DECLARED_OWNER_BODY)).toBe('not_declared_owner');
-  });
-
   it('どちらとも判別できない本文を unknown とする（空オブジェクト）', () => {
     expect(forbiddenKindOf({})).toBe('unknown');
+  });
+
+  // 旧デーモンの `requireOwner` の本文は、もう専用の種別を持たない（#2948）: 案内の分岐を作らず unknown のまま。
+  it('旧デーモンの未宣言 owner の本文は unknown（専用の案内を持たない。#2948）', () => {
+    expect(
+      forbiddenKindOf({ error: '実行環境の持ち主として宣言されたアカウントだけが操作できる' }),
+    ).toBe('unknown');
   });
 
   it('どちらとも判別できない本文を unknown とする（別の理由の error）', () => {
@@ -52,25 +52,14 @@ describe('forbiddenKindOf', () => {
   });
 });
 
-describe('describeAuthFailure（403・kind による案内の分岐）', () => {
+describe('describeAuthFailure（403 の案内）', () => {
   const target = { baseUrl: 'http://127.0.0.1:4517', headers: {}, remote: false, note: null };
 
-  it('kind を省略すると（既定 unknown）、従来どおり access grant を案内する', () => {
+  it('403 は access grant を案内する（access owner は案内しない。#2948）', () => {
     const message = describeAuthFailure(403, target);
+    expect(message).toContain('alteroid access list');
     expect(message).toContain('alteroid access grant <アカウント id>');
     expect(message).not.toContain('access owner');
-  });
-
-  it('not_granted も access grant を案内する（省略時と同じ文言）', () => {
-    const message = describeAuthFailure(403, target, 'not_granted');
-    expect(message).toContain('alteroid access grant <アカウント id>');
-  });
-
-  it('not_declared_owner は access owner を案内する（issue #1198。access grant は勧めない）', () => {
-    const message = describeAuthFailure(403, target, 'not_declared_owner');
-    expect(message).toContain('alteroid access list');
-    expect(message).toContain('alteroid access owner <アカウント id>');
-    expect(message).not.toContain('access grant <アカウント id>');
   });
 });
 

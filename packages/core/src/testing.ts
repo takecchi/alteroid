@@ -1166,7 +1166,6 @@ export function createMemoryStores(): Stores {
           ...account,
           grantedAt: null,
           grantedBy: null,
-          ownerDeclaredAt: null,
         }),
       );
     },
@@ -1267,16 +1266,6 @@ export function createMemoryStores(): Stores {
       const granted = authAccountSchema.parse({ ...account, grantedAt: at, grantedBy: by });
       accounts.set(accountId, granted);
       return { status: 'granted', account: granted };
-    },
-    async setAccountOwner(accountId, declaredAt) {
-      if (hasNul(accountId)) return { status: 'not_found' };
-      // 検査から書き込みまでの間に await を挟まない: 挟むと宣言と許可の不変条件が崩れる窓ができる。
-      const account = accounts.get(accountId);
-      if (account === undefined) return { status: 'not_found' };
-      if (declaredAt !== null && account.grantedAt === null) return { status: 'not_granted' };
-      const updated = authAccountSchema.parse({ ...account, ownerDeclaredAt: declaredAt });
-      accounts.set(accountId, updated);
-      return { status: 'ok', account: updated };
     },
   };
 

@@ -23,7 +23,6 @@ export async function verifyAuthNulContract(store: AuthStore): Promise<void> {
     lastLoginAt: base,
     grantedAt: null,
     grantedBy: null,
-    ownerDeclaredAt: null,
   };
   const identity: AuthIdentity = {
     provider: 'google',
@@ -81,8 +80,6 @@ export async function verifyAuthNulContract(store: AuthStore): Promise<void> {
       ['listIdentities', () => store.listIdentities(key), []],
       ['listAccessTokens', () => store.listAccessTokens(key), []],
       ['grantAccess', () => store.grantAccess(key, at, 'operator'), { status: 'not_found' }],
-      ['setAccountOwner', () => store.setAccountOwner(key, at), { status: 'not_found' }],
-      ['setAccountOwner(解除)', () => store.setAccountOwner(key, null), { status: 'not_found' }],
       ['markAccountLoggedIn', () => store.markAccountLoggedIn(key, at), undefined],
       ['revokeAccountAccess', () => store.revokeAccountAccess(key), undefined],
       [

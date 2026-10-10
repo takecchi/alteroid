@@ -19,7 +19,6 @@ interface AccountView {
   grantedAt: string | null;
   grantedBy: string | null;
   granted: boolean;
-  ownerDeclaredAt: string | null;
   identities: { provider: string; email: string | null; lastLoginAt: string }[];
 }
 
@@ -59,9 +58,7 @@ export async function accessListCommand(now: number = Date.now()): Promise<void>
 
   for (const account of accounts) {
     const name = account.email ?? account.displayName ?? '(名前なし)';
-    stdout.write(
-      `${account.granted ? '[許可]' : '[未許可]'}${account.ownerDeclaredAt !== null ? '[owner]' : ''} ${name}\n`,
-    );
+    stdout.write(`${account.granted ? '[許可]' : '[未許可]'} ${name}\n`);
     stdout.write(`  id: ${account.id}\n`);
     stdout.write(`  作成: ${account.createdAt}（${formatElapsedAgo(account.createdAt, now)}）\n`);
     const via = account.identities
@@ -77,11 +74,6 @@ export async function accessListCommand(now: number = Date.now()): Promise<void>
         `  許可した日時: ${account.grantedAt}（${describeGrantedBy(account.grantedBy)}）\n`,
       );
     }
-    stdout.write(
-      `  実行環境の持ち主として宣言: ${
-        account.ownerDeclaredAt === null ? '（未宣言）' : account.ownerDeclaredAt
-      }\n`,
-    );
     stdout.write('\n');
   }
 
@@ -100,9 +92,7 @@ export async function accessGrantCommand(accountId: string): Promise<void> {
   stdout.write(`許可しました: ${account.email ?? account.displayName ?? account.id}\n`);
 }
 
-/**
- * 確認する: 許可に乗っていた「実行環境の持ち主」の宣言は一緒に落ち、再 grant しても戻らないため。
- */
+/** 確認する: 取り消すと、発行済みのトークンはその場から通らなくなるため。 */
 export async function accessRevokeCommand(
   accountId: string,
   options: { yes?: boolean } = {},
@@ -120,8 +110,7 @@ export async function accessRevokeCommand(
     (rowsUnreadable?.rows.some((row) => row.id === accountId) ?? false);
   if (!exists) throw new Error('該当するアカウントがありません');
   await confirmIrreversible(
-    `アカウント ${accountId} の許可を取り消します。発行済みのトークンはその場から通らなくなり、` +
-      '許可に乗っていた「実行環境の持ち主」の宣言も落ちます（許可し直しても宣言は戻りません）。',
+    `アカウント ${accountId} の許可を取り消します。発行済みのトークンはその場から通らなくなります。`,
     options,
     io,
   );
@@ -152,28 +141,6 @@ export async function accessRemoveUnreadableCommand(
   stdout.write(
     `読めないアカウントの行を ${String(result.removedIds.length)} 行消しました（id: ${result.removedIds.join(', ')}）\n`,
   );
-}
-
-export async function accessOwnerCommand(
-  accountId: string,
-  options: { revoke?: boolean } = {},
-): Promise<void> {
-  const target = await resolveTarget();
-  const path =
-    options.revoke === true
-      ? `/access/${encodeURIComponent(accountId)}/owner/revoke`
-      : `/access/${encodeURIComponent(accountId)}/owner`;
-  const { account } = (await request(target, path, { method: 'POST' })) as {
-    account: AccountView;
-  };
-  const name = account.email ?? account.displayName ?? account.id;
-  if (options.revoke === true) {
-    stdout.write(`実行環境の持ち主としての宣言を取り消しました: ${name}\n`);
-    stdout.write('（宣言の記録を取り消しただけです。資格の判断には使っていません）\n');
-    return;
-  }
-  stdout.write(`実行環境の持ち主として宣言しました: ${name}\n`);
-  stdout.write('（宣言を記録しただけです。資格の判断には使っていません）\n');
 }
 
 async function request(

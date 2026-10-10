@@ -208,7 +208,6 @@ describe('AuthStore.removeUnreadableAccounts()（fs。pg・インメモリは読
     lastLoginAt: null,
     grantedAt: '2026-01-01T00:00:00.000Z',
     grantedBy: 'operator',
-    ownerDeclaredAt: null,
   };
   const brokenAccount = (id: string) => ({
     id,
@@ -217,7 +216,6 @@ describe('AuthStore.removeUnreadableAccounts()（fs。pg・インメモリは読
     lastLoginAt: null,
     grantedAt: '2026-01-02T00:00:00.000Z',
     grantedBy: 'operator',
-    ownerDeclaredAt: null,
   });
 
   async function setup() {
@@ -312,7 +310,6 @@ describe('読めないアカウントを消した後の identity / トークン�
       lastLoginAt: null,
       grantedAt: '2026-01-01T00:00:00.000Z',
       grantedBy: 'operator',
-      ownerDeclaredAt: null,
     });
     await stores.auth.putIdentity({
       provider: 'fake',

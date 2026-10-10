@@ -13296,7 +13296,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         lastLoginAt: '2026-02-01T00:00:00.000Z',
         grantedAt: '2026-01-02T00:00:00.000Z',
         grantedBy: 'operator',
-        ownerDeclaredAt: null,
       });
     }
     for (const summary of h.running) {
@@ -18564,7 +18563,6 @@ describe('account_list（読むだけ。id・許可の状態・時刻だけで�
       lastLoginAt: at('02-01', index),
       grantedAt: at('01-02', index),
       grantedBy: 'operator',
-      ownerDeclaredAt: null,
       ...over,
     };
   };

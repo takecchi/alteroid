@@ -523,36 +523,6 @@ export function useShutdownDaemon() {
   }, [api]);
 }
 
-export function useDeclareOwner() {
-  const api = useApi();
-  const { mutate } = useSWRConfig();
-  return useCallback(
-    async (accountId: string) => {
-      const result = await api.api
-        .POST('/access/{accountId}/owner', { params: { path: { accountId } }, body: {} })
-        .then(unwrap);
-      await mutate(KEY.access);
-      return result;
-    },
-    [api, mutate],
-  );
-}
-
-export function useRevokeOwnerDeclaration() {
-  const api = useApi();
-  const { mutate } = useSWRConfig();
-  return useCallback(
-    async (accountId: string) => {
-      const result = await api.api
-        .POST('/access/{accountId}/owner/revoke', { params: { path: { accountId } }, body: {} })
-        .then(unwrap);
-      await mutate(KEY.access);
-      return result;
-    },
-    [api, mutate],
-  );
-}
-
 /** Codex の ChatGPT ログインを始める。確認用 URL とコードが返る。 */
 export function useStartCodexLogin() {
   const api = useApi();

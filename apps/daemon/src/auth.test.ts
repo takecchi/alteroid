@@ -407,7 +407,7 @@ describe('認証が有効なとき', () => {
     ).toBe(200);
   });
 
-  it('実行環境プロファイルは許可済みなら宣言の有無にかかわらず通る（2026-10-05、#2862。許可の無い利用者は 403 のまま）', async () => {
+  it('実行環境プロファイルは許可済みなら通る（2026-10-05、#2862。許可の無い利用者は 403 のまま）', async () => {
     const claimed = await loginThrough(app);
     const auth = { authorization: `Bearer ${claimed.token}` };
 
@@ -612,33 +612,6 @@ describe('認証が有効なとき', () => {
       expect(await decisions()).toHaveLength(0);
     });
 
-    it('owner: 日誌への先書きが落ちると 500 で、宣言はされない（ownerDeclaredAt が null のまま）', async () => {
-      const claimed = await loginThrough(app);
-      await app.request(`/access/${claimed.account.id}/grant`, {
-        ...post,
-        headers: { ...post.headers, ...OPERATOR },
-      });
-
-      const withFailingJournal = buildAppOverridingStores({
-        journal: {
-          ...stores.journal,
-          append: () => {
-            throw new Error('journal store unavailable (test)');
-          },
-        },
-      });
-
-      const response = await withFailingJournal.request(`/access/${claimed.account.id}/owner`, {
-        ...post,
-        headers: { ...post.headers, ...OPERATOR },
-      });
-      expect(response.status).toBe(500);
-
-      const after = await stores.auth.getAccount(claimed.account.id);
-      expect(after?.ownerDeclaredAt).toBeNull();
-      expect(await decisions()).toHaveLength(1);
-    });
-
     it('revoke: 日誌への追記が落ちても取り消しは効いていて 200、stderr に跡が出る', async () => {
       const claimed = await loginThrough(app);
       await app.request(`/access/${claimed.account.id}/grant`, {
@@ -666,40 +639,6 @@ describe('認証が有効なとき', () => {
       expect(response?.status).toBe(200);
       const after = await stores.auth.getAccount(claimed.account.id);
       expect(after?.grantedAt).toBeNull();
-      expect(lines.some((line) => line.includes('を記録できませんでした'))).toBe(true);
-    });
-
-    it('owner/revoke: 日誌への追記が落ちても取り消しは効いていて 200、stderr に跡が出る', async () => {
-      const claimed = await loginThrough(app);
-      await app.request(`/access/${claimed.account.id}/grant`, {
-        ...post,
-        headers: { ...post.headers, ...OPERATOR },
-      });
-      await app.request(`/access/${claimed.account.id}/owner`, {
-        ...post,
-        headers: { ...post.headers, ...OPERATOR },
-      });
-
-      const withFailingJournal = buildAppOverridingStores({
-        journal: {
-          ...stores.journal,
-          append: () => {
-            throw new Error('journal store unavailable (test)');
-          },
-        },
-      });
-
-      let response: Response | undefined;
-      const lines = await captureStderr(async () => {
-        response = await withFailingJournal.request(`/access/${claimed.account.id}/owner/revoke`, {
-          ...post,
-          headers: { ...post.headers, ...OPERATOR },
-        });
-      });
-
-      expect(response?.status).toBe(200);
-      const after = await stores.auth.getAccount(claimed.account.id);
-      expect(after?.ownerDeclaredAt).toBeNull();
       expect(lines.some((line) => line.includes('を記録できませんでした'))).toBe(true);
     });
 
@@ -732,43 +671,7 @@ describe('認証が有効なとき', () => {
       },
     );
 
-    it(
-      'owner: 状態変更（setAccountOwner）が投げたときは、宣言の行と打ち消しの行の両方が' +
-        '日誌に残り、500 になる',
-      async () => {
-        const claimed = await loginThrough(app);
-        await app.request(`/access/${claimed.account.id}/grant`, {
-          ...post,
-          headers: { ...post.headers, ...OPERATOR },
-        });
-
-        const withThrowingOwner = buildAppOverridingStores({
-          auth: {
-            ...stores.auth,
-            setAccountOwner: () => {
-              throw new Error('setAccountOwner unavailable (test)');
-            },
-          },
-        });
-
-        const response = await withThrowingOwner.request(`/access/${claimed.account.id}/owner`, {
-          ...post,
-          headers: { ...post.headers, ...OPERATOR },
-        });
-        expect(response.status).toBe(500);
-
-        const after = await stores.auth.getAccount(claimed.account.id);
-        expect(after?.ownerDeclaredAt).toBeNull();
-
-        const lines = await decisions();
-        expect(lines.some((line) => line.startsWith('実行環境の持ち主として宣言:'))).toBe(true);
-        expect(
-          lines.some((line) => line.startsWith('実行環境の持ち主として宣言できなかった:')),
-        ).toBe(true);
-      },
-    );
-
-    it('正常系はどの4口も日誌に1行だけ増え、文言はいまと変わらない', async () => {
+    it('正常系はどの2口（grant / revoke）も日誌に1行だけ増え、文言はいまと変わらない', async () => {
       const claimed = await loginThrough(app);
 
       await app.request(`/access/${claimed.account.id}/grant`, {
@@ -777,33 +680,12 @@ describe('認証が有効なとき', () => {
       });
       expect(await decisions()).toEqual([expect.stringContaining('アクセス許可を付与:')]);
 
-      await app.request(`/access/${claimed.account.id}/owner`, {
-        ...post,
-        headers: { ...post.headers, ...OPERATOR },
-      });
-      expect(await decisions()).toEqual([
-        expect.stringContaining('アクセス許可を付与:'),
-        expect.stringContaining('実行環境の持ち主として宣言:'),
-      ]);
-
-      await app.request(`/access/${claimed.account.id}/owner/revoke`, {
-        ...post,
-        headers: { ...post.headers, ...OPERATOR },
-      });
-      expect(await decisions()).toEqual([
-        expect.stringContaining('アクセス許可を付与:'),
-        expect.stringContaining('実行環境の持ち主として宣言:'),
-        expect.stringContaining('実行環境の持ち主としての宣言を取り消し:'),
-      ]);
-
       await app.request(`/access/${claimed.account.id}/revoke`, {
         ...post,
         headers: { ...post.headers, ...OPERATOR },
       });
       expect(await decisions()).toEqual([
         expect.stringContaining('アクセス許可を付与:'),
-        expect.stringContaining('実行環境の持ち主として宣言:'),
-        expect.stringContaining('実行環境の持ち主としての宣言を取り消し:'),
         expect.stringContaining('アクセス許可を取り消し:'),
       ]);
     });
@@ -983,10 +865,7 @@ describe('宣言と実物の一致（/auth・/access）', () => {
   });
 });
 
-// 文言は `app.ts` から import せずここへ複製する: import すると、文言がずれても歯まで一緒にずれて自己整合し、ずれを検出できなくなるため。
-describe('許可済みのアカウントは宣言の有無にかかわらず /credentials /reset /mcp-servers を通る（#2862）。宣言の口は operator のまま', () => {
-  const NOT_OPERATOR_ERROR = '実行環境の持ち主だけが操作できる';
-
+describe('許可済みのアカウントは /credentials /reset /mcp-servers /profile を通る（#2862、#2948）。無資格は 401・未許可は 403', () => {
   function buildAppWithVault() {
     stores = createMemoryStores();
     nextSubject = 'sub-1';
@@ -1033,18 +912,6 @@ describe('許可済みのアカウントは宣言の有無にかかわらず /cr
       body: JSON.stringify({ confirm: true }),
     });
 
-  const postOwner = (accountId: string, headers: Record<string, string>) =>
-    vaultApp.request(`/access/${accountId}/owner`, {
-      ...post,
-      headers: { ...post.headers, ...headers },
-    });
-
-  const postOwnerRevoke = (accountId: string, headers: Record<string, string>) =>
-    vaultApp.request(`/access/${accountId}/owner/revoke`, {
-      ...post,
-      headers: { ...post.headers, ...headers },
-    });
-
   async function grantedAccount(): Promise<{ token: string; accountId: string }> {
     const claimed = await loginThrough(vaultApp);
     const granted = await vaultApp.request(`/access/${claimed.account.id}/grant`, {
@@ -1054,29 +921,6 @@ describe('許可済みのアカウントは宣言の有無にかかわらず /cr
     expect(granted.status).toBe(200);
     return { token: claimed.token, accountId: claimed.account.id };
   }
-
-  async function ownerToken(): Promise<{ token: string; accountId: string }> {
-    const account = await grantedAccount();
-    const declared = await postOwner(account.accountId, OPERATOR);
-    expect(declared.status).toBe(200);
-    const body = (await declared.json()) as { account: { ownerDeclaredAt: string | null } };
-    expect(body.account.ownerDeclaredAt).not.toBeNull();
-    return account;
-  }
-
-  it('① 宣言済み owner は PUT /credentials を通る（200）', async () => {
-    const owner = await ownerToken();
-    const response = await putCredential({ authorization: `Bearer ${owner.token}` });
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { credentials: { name: string }[] };
-    expect(body.credentials.map((entry) => entry.name)).toEqual(['GIT_AUTHOR_NAME']);
-  });
-
-  it('① 宣言済み owner は POST /reset を通る（200）', async () => {
-    const owner = await ownerToken();
-    const response = await postReset({ authorization: `Bearer ${owner.token}` });
-    expect(response.status).toBe(200);
-  });
 
   it('① 実行環境の持ち主そのものは今日どおり通る（能力を消したのではない）', async () => {
     expect((await putCredential({ ...OPERATOR })).status).toBe(200);
@@ -1112,7 +956,7 @@ describe('許可済みのアカウントは宣言の有無にかかわらず /cr
     expect(await response.json()).toEqual({ outcome: 'unsupported' });
   });
 
-  it('② 宣言していない許可済みアカウントも通る（#2862: ログインできる許可済みは全員持ち主）', async () => {
+  it('① 許可済みのアカウントは /memory・PUT /credentials・POST /reset を通る（#2862: ログインできる許可済みは全員持ち主）', async () => {
     const account = await grantedAccount();
     const auth = { authorization: `Bearer ${account.token}` };
 
@@ -1122,7 +966,7 @@ describe('許可済みのアカウントは宣言の有無にかかわらず /cr
   });
 
   it('③ 許可が伝播したアカウント（別のアカウントが通した）も通る（#2862）', async () => {
-    const owner = await ownerToken();
+    const owner = await grantedAccount();
 
     nextSubject = 'sub-2';
     const second = await loginThrough(vaultApp);
@@ -1137,29 +981,24 @@ describe('許可済みのアカウントは宣言の有無にかかわらず /cr
     expect((await postReset(auth)).status).toBe(200);
   });
 
-  it('⑥ 許可を取り消すと宣言も落ち（取り消し中は 403）、再 grant しても宣言は戻らない', async () => {
-    const owner = await ownerToken();
-    const revoked = await vaultApp.request(`/access/${owner.accountId}/revoke`, {
+  it('⑥ 許可を取り消すと取り消し中は 403 になり、再 grant すると通る', async () => {
+    const account = await grantedAccount();
+    const auth = { authorization: `Bearer ${account.token}` };
+    expect((await putCredential(auth)).status).toBe(200);
+
+    const revoked = await vaultApp.request(`/access/${account.accountId}/revoke`, {
       ...post,
       headers: { ...post.headers, ...OPERATOR },
     });
     expect(revoked.status).toBe(200);
-    const revokedBody = (await revoked.json()) as { account: { ownerDeclaredAt: string | null } };
-    expect(revokedBody.account.ownerDeclaredAt).toBeNull();
-
-    const auth = { authorization: `Bearer ${owner.token}` };
     expect((await putCredential(auth)).status).toBe(403);
     expect((await postReset(auth)).status).toBe(403);
 
-    const regranted = await vaultApp.request(`/access/${owner.accountId}/grant`, {
+    const regranted = await vaultApp.request(`/access/${account.accountId}/grant`, {
       ...post,
       headers: { ...post.headers, ...OPERATOR },
     });
     expect(regranted.status).toBe(200);
-    const regrantedBody = (await regranted.json()) as {
-      account: { ownerDeclaredAt: string | null };
-    };
-    expect(regrantedBody.account.ownerDeclaredAt).toBeNull();
     expect((await putCredential(auth)).status).toBe(200);
   });
 
@@ -1170,17 +1009,7 @@ describe('許可済みのアカウントは宣言の有無にかかわらず /cr
       body: JSON.stringify({ mcpServers: { github: { command: 'gh-mcp' } } }),
     });
 
-  it('① 宣言済み owner は GET / PUT /mcp-servers を通る（200）', async () => {
-    const owner = await ownerToken();
-    const auth = { authorization: `Bearer ${owner.token}` };
-    expect((await putMcpServers(auth)).status).toBe(200);
-    const read = await vaultApp.request('/mcp-servers', { headers: auth });
-    expect(read.status).toBe(200);
-    const body = (await read.json()) as { mcpServers: Record<string, unknown> };
-    expect(Object.keys(body.mcpServers)).toEqual(['github']);
-  });
-
-  it('② 宣言していない許可済みアカウントも GET / PUT /mcp-servers を通る（#2862）', async () => {
+  it('① 許可済みのアカウントは GET / PUT /mcp-servers を通る（#2862）', async () => {
     const account = await grantedAccount();
     const auth = { authorization: `Bearer ${account.token}` };
     expect((await putMcpServers(auth)).status).toBe(200);
@@ -1202,8 +1031,8 @@ describe('許可済みのアカウントは宣言の有無にかかわらず /cr
     expect((await putMcpServers({})).status).toBe(401);
   });
 
-  it('④ /profile は宣言済み owner なら通る（2026-09-24 に requireOwner へ移した）', async () => {
-    const owner = await ownerToken();
+  it('④ /profile は許可済みのアカウントなら通る（#2862）', async () => {
+    const owner = await grantedAccount();
     const auth = { authorization: `Bearer ${owner.token}` };
 
     const read = await vaultApp.request('/profile', { headers: auth });
@@ -1220,50 +1049,6 @@ describe('許可済みのアカウントは宣言の有無にかかわらず /cr
     ).not.toBe(403);
 
     expect((await vaultApp.request('/profile', { headers: OPERATOR })).status).toBe(200);
-  });
-
-  describe('⑦ owner 宣言の口そのものは account トークンで叩けない（非伝播）', () => {
-    it('宣言していないアカウントの token では POST /access/:id/owner が 403', async () => {
-      const account = await grantedAccount();
-      const auth = { authorization: `Bearer ${account.token}` };
-      const response = await postOwner(account.accountId, auth);
-      expect(response.status).toBe(403);
-      expect(await response.json()).toEqual({ error: NOT_OPERATOR_ERROR });
-    });
-
-    it('宣言済み owner 自身の token でも POST /access/:id/owner が 403（自己昇格も含めて非伝播）', async () => {
-      const owner = await ownerToken();
-      nextSubject = 'sub-2';
-      const second = await loginThrough(vaultApp);
-      await vaultApp.request(`/access/${second.account.id}/grant`, {
-        ...post,
-        headers: { ...post.headers, ...OPERATOR },
-      });
-
-      const auth = { authorization: `Bearer ${owner.token}` };
-      const response = await postOwner(second.account.id, auth);
-      expect(response.status).toBe(403);
-      expect(await response.json()).toEqual({ error: NOT_OPERATOR_ERROR });
-    });
-
-    it('account token では POST /access/:id/owner/revoke も 403', async () => {
-      const owner = await ownerToken();
-      const auth = { authorization: `Bearer ${owner.token}` };
-      const response = await postOwnerRevoke(owner.accountId, auth);
-      expect(response.status).toBe(403);
-      expect(await response.json()).toEqual({ error: NOT_OPERATOR_ERROR });
-    });
-
-    it('未ログインでは POST /access/:id/owner が 401', async () => {
-      const account = await grantedAccount();
-      expect((await postOwner(account.accountId, {})).status).toBe(401);
-    });
-  });
-
-  it('operator が未許可のアカウントへ宣言しようとすると 409（宣言は許可済みの行にしか立たない）', async () => {
-    const claimed = await loginThrough(vaultApp);
-    const response = await postOwner(claimed.account.id, OPERATOR);
-    expect(response.status).toBe(409);
   });
 });
 

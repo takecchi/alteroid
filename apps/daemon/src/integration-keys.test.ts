@@ -185,7 +185,6 @@ describe('連携の鍵の発行・一覧・失効', () => {
       lastLoginAt: null,
       grantedAt: '2026-01-01T00:00:00.000Z',
       grantedBy: 'operator',
-      ownerDeclaredAt: null,
     });
     await stores.auth.putAccessToken({
       id: 'tok-1',

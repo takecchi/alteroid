@@ -30,7 +30,6 @@ function account(overrides: Record<string, unknown> = {}) {
     grantedAt: '2026-08-02T00:00:00.000Z',
     grantedBy: 'operator',
     granted: true,
-    ownerDeclaredAt: null,
     identities: [
       {
         provider: 'google',
@@ -176,33 +175,18 @@ describe('/access 画面 — 一覧', () => {
   });
 });
 
-describe('/access 画面 — 持ち主の宣言は画面に出さない', () => {
-  it('宣言済み・未宣言のどちらのアカウントにも、宣言のバッジ・行が出ない', async () => {
+describe('/access 画面 — 説明文と古い応答', () => {
+  // 古いデーモンは `ownerDeclaredAt` を返し続けうる（#2948 で画面からも消した）。
+  it('古い応答に ownerDeclaredAt が残っていても、宣言のバッジ・行・ボタンは出ない', async () => {
     stubAccess({
-      body: {
-        accounts: [
-          account({ id: 'acct-a', ownerDeclaredAt: null }),
-          account({ id: 'acct-b', ownerDeclaredAt: '2026-09-18T00:00:00.000Z' }),
-        ],
-      },
+      body: { accounts: [account({ id: 'acct-b', ownerDeclaredAt: '2026-09-18T00:00:00.000Z' })] },
     });
 
     await renderAccess();
 
-    expect(screen.getByText('acct-a')).toBeTruthy();
+    expect(screen.getByText('acct-b')).toBeTruthy();
     expect(screen.queryByText(/宣言/)).toBeNull();
-    expect(document.body.textContent).not.toContain('持ち主として');
-  });
-
-  it('宣言する・取り消すボタンが出ず、宣言の口（/owner）を叩かない', async () => {
-    const stub = stubFetch((url) =>
-      url.includes('/access') ? json({ accounts: [account()] }) : undefined,
-    );
-
-    await renderAccess();
-
     expect(screen.queryByRole('button', { name: /宣言/ })).toBeNull();
-    expect(stub.calls.some((url) => url.includes('/owner'))).toBe(false);
   });
 
   it('説明文は、ここで許可したアカウントがすべての設定を変えられると言う', async () => {
@@ -232,10 +216,8 @@ describe('/access 画面 — grant / revoke', () => {
 
     await renderAccess();
 
-    // owner 系を除く: `/access/:id/owner/revoke` は `/revoke` を部分文字列に含むため
-    const nonOwnerUrls = stub.calls.filter((url) => !url.includes('/owner'));
-    expect(nonOwnerUrls.some((url) => /\/access\/[^/]+\/grant$/.test(url))).toBe(false);
-    expect(nonOwnerUrls.some((url) => /\/access\/[^/]+\/revoke$/.test(url))).toBe(false);
+    expect(stub.calls.some((url) => /\/access\/[^/]+\/grant$/.test(url))).toBe(false);
+    expect(stub.calls.some((url) => /\/access\/[^/]+\/revoke$/.test(url))).toBe(false);
   });
 
   it('未許可のアカウントは「許可する」を押すと POST /access/:id/grant を叩く', async () => {

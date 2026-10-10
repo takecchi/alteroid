@@ -19,7 +19,6 @@ const account = (id: string): AuthAccount => ({
   lastLoginAt: null,
   grantedAt: null,
   grantedBy: null,
-  ownerDeclaredAt: null,
 });
 
 const identity = (provider: string, subject: string): AuthIdentity => ({

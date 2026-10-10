@@ -68,7 +68,6 @@ const GOOD_ACCOUNT: AuthAccount = {
   lastLoginAt: null,
   grantedAt: '2026-01-01T00:00:00.000Z',
   grantedBy: 'operator',
-  ownerDeclaredAt: null,
 };
 const BAD_ACCOUNT_RAW = {
   id: 'acct-bad',
@@ -77,7 +76,6 @@ const BAD_ACCOUNT_RAW = {
   lastLoginAt: null,
   grantedAt: '2026-01-02T00:00:00.000Z',
   grantedBy: 'operator',
-  ownerDeclaredAt: null,
 };
 const BAD_ACCOUNT_RAW_2 = { ...BAD_ACCOUNT_RAW, id: 'acct-bad-2' };
 const IDLESS_ACCOUNT_RAW = { email: `${FAKE}@example.test` };

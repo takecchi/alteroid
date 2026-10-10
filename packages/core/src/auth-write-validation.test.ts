@@ -12,7 +12,6 @@ describe('AuthStore の書き込み — 形式不正な入力の扱い（イン�
     lastLoginAt: '2026-01-01T00:00:00.000Z',
     grantedAt: null,
     grantedBy: null,
-    ownerDeclaredAt: null,
   };
 
   it('putAccount() は fs / pg と同じく、空文字の id を拒む（throw する）', async () => {
@@ -111,13 +110,6 @@ describe('AuthStore の書き込み — 形式不正な入力の扱い（イン�
     const stores = createMemoryStores();
     await stores.auth.putAccount(account);
     await expect(stores.auth.grantAccess(account.id, '不正な日時', 'operator')).rejects.toThrow();
-  });
-
-  it('setAccountOwner() は fs / pg と同じく、isoDateTime でない declaredAt を拒む（throw する）', async () => {
-    const stores = createMemoryStores();
-    await stores.auth.putAccount(account);
-    await stores.auth.grantAccess(account.id, '2026-01-02T00:00:00.000Z', 'operator');
-    await expect(stores.auth.setAccountOwner(account.id, '不正な日時')).rejects.toThrow();
   });
 
   it('claimLoginRequest() は fs / pg と同じく、issue() が返した長さ64でない sha256 を拒む（throw する）', async () => {

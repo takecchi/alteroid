@@ -2017,7 +2017,7 @@ export interface Stores {
    * NUL（3実装とも）: 読むだけの口は、NUL を含む鍵で引かれても断らず「無い」と同じ結果を返す
    * （`getAccount`・`findIdentity`・`findAccessTokenBySha256`・`getLoginRequest`・`findAccountByEmail` は `null`、`listIdentities`・`listAccessTokens` は空配列、
    * `markAccountLoggedIn`・`revokeAccountAccess`・`markAccessTokenUsed` は何もしない、`removeUnreadableAccounts` は `unknown`、
-   * `revokeAccessToken`・`grantAccess`・`setAccountOwner` は `not_found`、`beginLoginExchange`・`claimLoginRequest` は `null`〈`claimLoginRequest` は `issue` を呼ばない〉）。
+   * `revokeAccessToken`・`grantAccess` は `not_found`、`beginLoginExchange`・`claimLoginRequest` は `null`〈`claimLoginRequest` は `issue` を呼ばない〉）。
    * 書き込みで NUL の鍵を断るので、NUL を含む鍵の行はどの器にも存在しえない。既存の鍵に NUL を足した値でも一致させない。pg は DB に投げる前に短絡する。
    *
    * 書く口は、鍵・参照キー・突き合わせに使う値の NUL を `NulNotAllowedError` で断り、本文の NUL は落として残す。

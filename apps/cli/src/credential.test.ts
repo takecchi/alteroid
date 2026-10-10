@@ -333,7 +333,7 @@ describe('alteroid credential set', () => {
     );
   });
 
-  it('403（未宣言 owner）なら、access owner を打てと言う', async () => {
+  it('403（旧デーモンの未宣言 owner の本文）は、案内を出さずに止まる（access owner は存在しない。#2948）', async () => {
     const path = join(dir, 'value.txt');
     await writeFile(path, DUMMY, 'utf8');
     setReply('PUT', '/credentials', {
@@ -345,8 +345,8 @@ describe('alteroid credential set', () => {
       (error: unknown) => (error instanceof Error ? error.message : String(error)),
     );
 
-    expect(message).toContain('alteroid access list');
-    expect(message).toContain('alteroid access owner <アカウント id>');
+    expect(message).toContain('理由を判別できなかった');
+    expect(message).not.toContain('access owner');
     expect(message).not.toContain('access grant <アカウント id>');
   });
 

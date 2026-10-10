@@ -21,8 +21,8 @@ vi.mock('./target.js', async (importOriginal) => ({
 }));
 
 const {
+  accessGrantCommand,
   accessListCommand,
-  accessOwnerCommand,
   accessRemoveUnreadableCommand,
   accessRevokeCommand,
 } = await import('./access.js');
@@ -80,7 +80,6 @@ describe('alteroid access list', () => {
             grantedAt: '2026-08-01T00:05:00.000Z',
             grantedBy: 'operator',
             granted: true,
-            ownerDeclaredAt: null,
             identities: [
               { provider: 'github', email: null, lastLoginAt: '2026-08-20T09:00:00.000Z' },
             ],
@@ -115,7 +114,6 @@ describe('alteroid access list', () => {
             grantedAt: null,
             grantedBy: null,
             granted: true,
-            ownerDeclaredAt: null,
             identities: [],
           },
         ],
@@ -143,7 +141,6 @@ describe('alteroid access list', () => {
             grantedAt: null,
             grantedBy: null,
             granted: true,
-            ownerDeclaredAt: null,
             identities: [],
           },
         ],
@@ -168,7 +165,6 @@ describe('alteroid access list', () => {
       grantedAt: '2026-09-03T00:00:00.000Z',
       grantedBy,
       granted: true,
-      ownerDeclaredAt: null,
       identities: [],
     });
     replies.push({
@@ -199,35 +195,23 @@ describe('alteroid access list', () => {
     expect(read()).toContain('まだ誰もログインしていません');
   });
 
-  // 未宣言と宣言済みの両方を1回で確かめる: 片方だけだと「常に出る／常に出ない」の両方の壊れ方を見逃す。
-  it('宣言済みかどうかの印を出す（[owner] と実行環境の持ち主として宣言の日時）', async () => {
+  // 古いデーモンは `ownerDeclaredAt` を返し続けうる: 値があっても印も行も出さない（#2948）。
+  it('ownerDeclaredAt を返す古いデーモンでも、[owner] の印も宣言の行も出さない', async () => {
     const read = captureStdout();
     replies.push({
       status: 200,
       body: {
         accounts: [
           {
-            id: 'acc-owner',
+            id: 'acc-legacy',
             displayName: null,
-            email: 'owner@example.com',
+            email: 'legacy@example.com',
             createdAt: '2026-09-01T00:00:00.000Z',
             lastLoginAt: null,
             grantedAt: '2026-09-01T00:00:00.000Z',
             grantedBy: 'operator',
             granted: true,
             ownerDeclaredAt: '2026-09-18T00:00:00.000Z',
-            identities: [],
-          },
-          {
-            id: 'acc-not-owner',
-            displayName: null,
-            email: 'plain@example.com',
-            createdAt: '2026-09-02T00:00:00.000Z',
-            lastLoginAt: null,
-            grantedAt: '2026-09-02T00:00:00.000Z',
-            grantedBy: 'operator',
-            granted: true,
-            ownerDeclaredAt: null,
             identities: [],
           },
         ],
@@ -237,107 +221,20 @@ describe('alteroid access list', () => {
     await accessListCommand();
 
     const text = read();
-    expect(text).toContain('[許可][owner] owner@example.com');
-    expect(text).toContain('実行環境の持ち主として宣言: 2026-09-18T00:00:00.000Z');
-    expect(text).toContain('[許可] plain@example.com');
-    expect(text).not.toContain('[許可][owner] plain@example.com');
-    expect(text).toContain('実行環境の持ち主として宣言: （未宣言）');
+    expect(text).toContain('[許可] legacy@example.com');
+    expect(text).not.toContain('[owner]');
+    expect(text).not.toContain('宣言');
   });
 });
 
-describe('alteroid access owner', () => {
-  it('宣言する: POST /access/:id/owner を叩く', async () => {
-    const read = captureStdout();
-    replies.push({
-      status: 200,
-      body: {
-        account: {
-          id: 'acc-1',
-          displayName: null,
-          email: 'owner@example.com',
-          createdAt: '2026-09-01T00:00:00.000Z',
-          lastLoginAt: null,
-          grantedAt: '2026-09-01T00:00:00.000Z',
-          grantedBy: 'operator',
-          granted: true,
-          ownerDeclaredAt: '2026-09-18T00:00:00.000Z',
-          identities: [],
-        },
-      },
-    });
-
-    await accessOwnerCommand('acc-1');
-
-    expect(sent).toEqual([{ url: 'http://127.0.0.1:4517/access/acc-1/owner', method: 'POST' }]);
-    const text = read();
-    expect(text).toContain('実行環境の持ち主として宣言しました: owner@example.com');
-    expect(text).toContain('宣言を記録しただけです。資格の判断には使っていません');
-    expect(text).not.toContain('通ります');
-  });
-
-  it('--revoke: POST /access/:id/owner/revoke を叩く', async () => {
-    const read = captureStdout();
-    replies.push({
-      status: 200,
-      body: {
-        account: {
-          id: 'acc-1',
-          displayName: null,
-          email: 'owner@example.com',
-          createdAt: '2026-09-01T00:00:00.000Z',
-          lastLoginAt: null,
-          grantedAt: '2026-09-01T00:00:00.000Z',
-          grantedBy: 'operator',
-          granted: true,
-          ownerDeclaredAt: null,
-          identities: [],
-        },
-      },
-    });
-
-    await accessOwnerCommand('acc-1', { revoke: true });
-
-    expect(sent).toEqual([
-      { url: 'http://127.0.0.1:4517/access/acc-1/owner/revoke', method: 'POST' },
-    ]);
-    const text = read();
-    expect(text).toContain('実行環境の持ち主としての宣言を取り消しました: owner@example.com');
-    expect(text).toContain('宣言の記録を取り消しただけです。資格の判断には使っていません');
-    expect(text).not.toContain('通らなくなります');
-  });
-
-  it('accountId は URL エンコードする', async () => {
-    captureStdout();
-    replies.push({
-      status: 200,
-      body: {
-        account: {
-          id: 'acc/weird',
-          displayName: null,
-          email: null,
-          createdAt: '2026-09-01T00:00:00.000Z',
-          lastLoginAt: null,
-          grantedAt: '2026-09-01T00:00:00.000Z',
-          grantedBy: 'operator',
-          granted: true,
-          ownerDeclaredAt: '2026-09-18T00:00:00.000Z',
-          identities: [],
-        },
-      },
-    });
-
-    await accessOwnerCommand('acc/weird');
-
-    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/access/acc%2Fweird/owner');
-  });
-
+describe('alteroid access grant — 失敗の出し分け', () => {
   it('未許可のアカウントは 409 —— サーバの文言をそのまま出す', async () => {
     replies.push({
       status: 409,
       body: { error: 'このアカウントはまだ許可されていない（先に access grant が要る）' },
     });
 
-    await expect(accessOwnerCommand('acc-1')).rejects.toThrow(
+    await expect(accessGrantCommand('acc-1')).rejects.toThrow(
       /このアカウントはまだ許可されていない/,
     );
   });
@@ -345,8 +242,8 @@ describe('alteroid access owner', () => {
   it('本文に理由の無い 409 は、競合したことと理由が返らなかったことだけを言う', async () => {
     replies.push({ status: 409, body: {} });
 
-    await expect(accessOwnerCommand('acc-1')).rejects.toThrow(
-      '/access/acc-1/owner が競合しました (409)。デーモンから理由が返りませんでした',
+    await expect(accessGrantCommand('acc-1')).rejects.toThrow(
+      '/access/acc-1/grant が競合しました (409)。デーモンから理由が返りませんでした',
     );
   });
 
@@ -356,7 +253,7 @@ describe('alteroid access owner', () => {
       body: { error: 'アカウント台帳の書き込みが失敗した（テスト用）' },
     });
 
-    await expect(accessOwnerCommand('acc-1')).rejects.toThrow(
+    await expect(accessGrantCommand('acc-1')).rejects.toThrow(
       /が失敗しました \(500\): アカウント台帳の書き込みが失敗した（テスト用）/,
     );
   });
@@ -364,7 +261,7 @@ describe('alteroid access owner', () => {
   it('該当するアカウントが無ければ 404', async () => {
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    await expect(accessOwnerCommand('missing')).rejects.toThrow(/該当するアカウントがありません/);
+    await expect(accessGrantCommand('missing')).rejects.toThrow(/該当するアカウントがありません/);
   });
 
   it('403（実行環境の持ち主でない）なら、器の中で実行しろと案内する', async () => {
@@ -373,7 +270,7 @@ describe('alteroid access owner', () => {
       body: { error: '実行環境の持ち主だけが操作できる' },
     });
 
-    await expect(accessOwnerCommand('acc-1')).rejects.toThrow(/docker compose exec/);
+    await expect(accessGrantCommand('acc-1')).rejects.toThrow(/docker compose exec/);
   });
 });
 

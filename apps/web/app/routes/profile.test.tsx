@@ -189,31 +189,13 @@ describe('/profile 画面 — 読む', () => {
     expect(await screen.findByText('未知の渡す先（future-scope）')).toBeTruthy();
   });
 
-  it('かつての requireOwner の本文の 403 でも、持ち主の宣言は案内しない（#2862）', async () => {
-    stubProfile({
-      get: {
-        status: 403,
-        body: { error: '実行環境の持ち主として宣言されたアカウントだけが操作できる' },
-      },
-    });
-    renderScreen();
-
-    expect(
-      await screen.findByText('実行環境の持ち主として宣言されたアカウントだけが操作できる'),
-    ).toBeTruthy();
-    expect(screen.queryByText('alteroid access owner <アカウント id>')).toBeNull();
-    expect(screen.queryByText(/持ち主として宣言してください/)).toBeNull();
-    expect(screen.queryByRole('button', { name: '行を追加する' })).toBeNull();
-  });
-
-  it('許可の無い 403 にも、持ち主の宣言は案内しない', async () => {
+  it('許可の無い 403 は、本文をそのまま出し、編集の口を出さない', async () => {
     stubProfile({
       get: { status: 403, body: { error: 'このアカウントには alteroid を使う許可が無い' } },
     });
     renderScreen();
 
     expect(await screen.findByText('このアカウントには alteroid を使う許可が無い')).toBeTruthy();
-    expect(screen.queryByText('alteroid access owner <アカウント id>')).toBeNull();
   });
 });
 
@@ -429,30 +411,6 @@ describe('/profile 画面 — 行を置く', () => {
       'export (\n',
     );
     expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
-  });
-
-  it('PUT がかつての requireOwner の本文の 403 でも、持ち主の宣言は案内しない', async () => {
-    stubProfile({
-      put: {
-        status: 403,
-        body: { error: '実行環境の持ち主として宣言されたアカウントだけが操作できる' },
-      },
-    });
-    renderScreen();
-
-    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
-    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
-      target: { value: 'export A=1\n' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
-    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
-
-    expect(
-      (await screen.findAllByText('実行環境の持ち主として宣言されたアカウントだけが操作できる'))
-        .length,
-    ).toBeGreaterThan(0);
-    expect(screen.queryByText('alteroid access owner <アカウント id>')).toBeNull();
-    expect(screen.queryByText(/持ち主として宣言してください/)).toBeNull();
   });
 });
 

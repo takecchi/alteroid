@@ -28,7 +28,6 @@ import type {
   JournalEntryType,
   ManagerPool,
   ManagerSummary,
-  OwnerOutcome,
   Practice,
   ProfileService,
   RunnerClient,
@@ -1989,16 +1988,13 @@ export function createApp(deps: AppDeps) {
     })(c, next);
   }
 
-  // 経路の本数をここで数え直さない: 数え上げの持ち主は `scripts/require-operator-routes.test.ts` の `EXPECTED_OPERATOR_ROUTES`。ここに残るのは `/profile` の読み書き2本と owner 宣言の口2本で、応答本文に鍵が丸ごと載るか実行環境そのものを差し替える口だから。
+  // 経路の本数をここで数え直さない: 数え上げの持ち主は `scripts/require-operator-routes.test.ts` の `EXPECTED_OPERATOR_ROUTES`。いまこの門を付けた経路は無い（#2948 で持ち主の宣言の口を畳んだ）。門そのものは、応答本文に鍵が丸ごと載るか実行環境そのものを差し替える口を作るときのために残してある。
+  // 配線した経路がいまは無いので未使用になる（#2948）。門そのものは残す。外すと、実行環境そのものを差し替える口を作り直すときに門から書き直すことになる。
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const requireOperator = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
     if (c.get('principal').kind !== 'operator') {
       return c.json({ error: '実行環境の持ち主だけが操作できる' as const }, 403);
     }
-    await next();
-  });
-
-  // 何も弾かない（許可済みのアカウントは持ち主として通す。弾く仕事は `authenticate`）。配線から外さず中身だけ素通しにする: 戻すのが1箇所で済み、配線を外すと戻すときに経路ごとに付け直す羽目になって付け忘れが静かに「許可済みなら誰でも」へ落ちる（`EXPECTED_OWNER_ROUTES` の歯も配線を保てば変えずに済む）。正典は `docs/architecture.md`「デーモンの API に入る資格」。
-  const requireOwner = createMiddleware<{ Variables: AuthVariables }>(async (_c, next) => {
     await next();
   });
 
@@ -2937,7 +2933,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       jsonBody(cloneSessionReopenRequestSchema, (where) => ({
         error:
           '`confirm: true` を伴っていないか、形が不正（セッションの開き直しは確認を必須にしてある。' +
@@ -3297,7 +3292,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       async (c) => {
         const id = c.req.param('id');
         const result = await deleteConversation(
@@ -6918,7 +6912,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       async (c) => {
         const entries = await deps.stores.profile.list();
         return c.json(profileResponseSchema.parse(describeProfileEntries(entries)));
@@ -6954,7 +6947,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       // 既定の 400 を使わない: `script` の綴りを1つ間違えただけで、鍵の値まで含みうるスクリプト全文が応答へ載る。宣言済みの `profileErrorResponseSchema`（`{ error, detail }`）の形で返し、`detail` に載せてよいのは `path` だけ（CLI がこの `detail` をそのまま人へ表示する）。
       jsonBody(profileUpdateRequestSchema, (where) => ({
         error: 'プロファイルの入力の形が不正（保存していない）',
@@ -6998,7 +6990,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       jsonBody(profileEntryUpdateRequestSchema, (where) => ({
         error: 'プロファイルの入力の形が不正（保存していない）',
         detail: where === '' ? '本文の形が不正である' : `形が不正な項目: ${where}`,
@@ -7052,7 +7043,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       async (c) => {
         const name = c.req.param('name');
         if (!PROFILE_ENTRY_NAME.test(name)) {
@@ -7104,7 +7094,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       async (c) => {
         const stored = await deps.stores.mcpServers.read();
         return c.json(mcpServersResponseSchema.parse(mcpServersReadBody(stored)));
@@ -7150,7 +7139,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       // 既定の 400 を使わない（`PUT /profile` と同じ理由）: 本文をそのまま `data` に載せて返すので、欄の綴りを1つ間違えただけで `env` / `headers` の鍵が応答へ載る。
       jsonBody(mcpServersUpdateRequestSchema, (where) => ({
         error: 'MCP サーバの登録の形が不正（保存していない）' + (where === '' ? '' : `: ${where}`),
@@ -7272,7 +7260,7 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 門は `requireOwner`（MCP 連携の登録と同じ範囲）: plugin は skills・agents・commands をクローンとマネージャーの実行に持ち込む。クローンの道具からは入れられない（道具を足さない）。
+    // 門は `authenticate` だけ（許可済みのアカウントが通る。MCP 連携の登録と同じ範囲）: plugin は skills・agents・commands をクローンとマネージャーの実行に持ち込む。クローンの道具からは入れられない（道具を足さない）。
     .get(
       '/plugins',
       describeRoute({
@@ -7289,7 +7277,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       async (c) =>
         c.json(pluginsListResponseSchema.parse({ plugins: await deps.stores.plugins.list() })),
     )
@@ -7323,7 +7310,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       jsonBody(pluginPreviewRequestSchema, (where) => ({
         error: 'plugin の取り元の指定が不正' + (where === '' ? '' : `: ${where}`),
       })),
@@ -7397,7 +7383,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       jsonBody(pluginInstallRequestSchema, (where) => ({
         error: 'plugin の確定の指定が不正' + (where === '' ? '' : `: ${where}`),
       })),
@@ -7536,7 +7521,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       async (c) => {
         const name = c.req.param('name');
         if (!isValidPluginName(name))
@@ -7677,7 +7661,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       // 既定の 400 を使わない（`POST /runners/credentials` と同じ理由）: 形式ミス1つでその回に送った全部の鍵の値が応答へ載る。返すのは `path` だけ。
       jsonBody(credentialsUpdateRequestSchema, (where) => ({
         error: '鍵の入力の形が不正（置いていない）' + (where === '' ? '' : `: ${where}`),
@@ -7817,7 +7800,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       async (c) => {
         if (deps.codexAuth === undefined) {
           return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
@@ -7826,7 +7808,7 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 能力を広げる口（peer の Codex が使う資格を置く）なので、`PUT /credentials` と同じく `requireOwner` を通し、日誌を先に書く（書けなければ始めずに 500）。
+    // 能力を広げる口（peer の Codex が使う資格を置く）なので、`PUT /credentials` と同じく許可済みのアカウントだけを通し、日誌を先に書く（書けなければ始めずに 500）。
     .post(
       '/codex/login',
       describeRoute({
@@ -7854,7 +7836,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       async (c) => {
         if (deps.codexAuth === undefined) {
           return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
@@ -7926,7 +7907,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       async (c) => {
         if (deps.codexAuth === undefined) {
           return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
@@ -9636,157 +9616,6 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // `requireOperator`: 許可されたアカウントからは叩けない。旗を立てられる者を常にホストへ到達できる者へ限ることが「伝播しない」という性質そのもので、`authenticate` だけを許す設計は取らない。宣言は資格の判断には使っていない（ログインできる人＝持ち主）が仕組みは当面残してある。
-    .post(
-      '/access/:accountId/owner',
-      describeRoute({
-        tags: ['access'],
-        summary: '実行環境の持ち主として宣言する',
-        description:
-          '（宣言は資格の判断には使っていない。ログインできる人＝持ち主。#2862）' +
-          '宣言できるのは実行環境の持ち主（operator トークン）だけ。対象は許可済み' +
-          '（`access grant` 済み）のアカウントに限る——未許可なら 409。運ぶ情報は無い' +
-          '（`{}` を送る）。許可済みのアカウントは宣言の有無にかかわらず ' +
-          '`PUT /credentials` `POST /reset` を通る（2026-10-05、#2862 のオーナー決定）。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
-            '`content-type: application/json` が要る。',
-        ),
-        responses: {
-          200: {
-            description: '宣言した。',
-            content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
-          },
-          403: {
-            description: '実行環境の持ち主ではない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '該当するアカウントが無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description: '対象のアカウントがまだ許可されていない（先に access grant が要る）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          ...noBodyPostResponses(),
-        },
-      }),
-      requireOperator,
-      deliberateClient,
-      async (c) => {
-        const accountId = c.req.param('accountId');
-        // 対象を先に引く（門前払い）のは早期の検査でしかない: 判定と `authService.setOwner` の間で許可が落ちる窓は下の `not_granted` 分岐が拾う。
-        const before = await stores.auth.getAccount(accountId);
-        if (before === null) return c.json({ error: 'not found' as const }, 404);
-        if (!isAccountGranted(before)) {
-          return c.json(
-            { error: 'このアカウントはまだ許可されていない（先に access grant が要る）' as const },
-            409,
-          );
-        }
-
-        // 日誌を先に書く（`/access/grant` と同じ理由）: 記録の無い宣言を作らない。書けなければ状態を変えずに 500。
-        await stores.journal.append({
-          type: 'decision',
-          decision: `実行環境の持ち主として宣言: ${describeAccount(before)}`,
-          grounds: `${describeActor(c.get('principal'))}（alteroid access owner）`,
-        });
-
-        let result: OwnerOutcome;
-        try {
-          result = await authService.setOwner(accountId, true);
-        } catch (error) {
-          await appendJournalOrDrop(
-            stores,
-            {
-              type: 'decision',
-              decision: `実行環境の持ち主として宣言できなかった: ${describeAccount(before)}`,
-              grounds: `${describeActor(c.get('principal'))}（alteroid access owner、状態の変更が失敗）`,
-            },
-            '持ち主宣言の打ち消しの日誌',
-            `accountId=${accountId}`,
-          );
-          throw error;
-        }
-        if (result.status === 'not_found' || result.status === 'not_granted') {
-          const detail =
-            result.status === 'not_found' ? '対象が消えていた' : '許可が取り消されていた';
-          await appendJournalOrDrop(
-            stores,
-            {
-              type: 'decision',
-              decision: `実行環境の持ち主として宣言できなかった: ${describeAccount(before)}`,
-              grounds: `${describeActor(c.get('principal'))}（alteroid access owner、${detail}）`,
-            },
-            '持ち主宣言の打ち消しの日誌',
-            `accountId=${accountId}`,
-          );
-          if (result.status === 'not_found') return c.json({ error: 'not found' as const }, 404);
-          return c.json(
-            { error: 'このアカウントはまだ許可されていない（先に access grant が要る）' as const },
-            409,
-          );
-        }
-        return c.json(
-          accessAccountResponseSchema.parse({ account: await accountView(stores, result.account) }),
-        );
-      },
-    )
-
-    .post(
-      '/access/:accountId/owner/revoke',
-      describeRoute({
-        tags: ['access'],
-        summary: '実行環境の持ち主としての宣言を取り消す',
-        description:
-          '（宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862））' +
-          '宣言していなくても 200（既に取り消し済みと同じ扱い）。運ぶ情報は無い' +
-          '（`{}` を送る）。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
-            '`content-type: application/json` が要る。',
-        ),
-        responses: {
-          200: {
-            description: '取り消した（既に未宣言でも 200）。',
-            content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
-          },
-          403: {
-            description: '実行環境の持ち主ではない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '該当するアカウントが無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          ...noBodyPostResponses(),
-        },
-      }),
-      requireOperator,
-      deliberateClient,
-      async (c) => {
-        const result = await authService.setOwner(c.req.param('accountId'), false);
-        if (result.status === 'not_found') return c.json({ error: 'not found' as const }, 404);
-        // `not_granted` は取り消しでは起こらない（取り消しは行が在れば常に通る）。
-        if (result.status === 'not_granted') return c.json({ error: 'not found' as const }, 404);
-        // 取り消しは効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`。狭める側の扱い）。
-        await appendJournalOrDrop(
-          stores,
-          {
-            type: 'decision',
-            decision: `実行環境の持ち主としての宣言を取り消し: ${describeAccount(result.account)}`,
-            grounds: `${describeActor(c.get('principal'))}（alteroid access owner --revoke）`,
-          },
-          '持ち主宣言取り消しの日誌',
-          `accountId=${result.account.id}`,
-        );
-        return c.json(
-          accessAccountResponseSchema.parse({ account: await accountView(stores, result.account) }),
-        );
-      },
-    )
-
     // 資格は `authenticate` だけで `requireOperator` は付けない: 基準は「壊すかどうか」ではなく、鍵そのものを扱う口だけが一段上の強さを持つ。ここは鍵を扱わず記憶も台帳も消さず、止めた後に起動し直せば元に戻る（`POST /reset` とは取り返しのつき方が違う）。`deliberateClient` は資格の門ではない（ブラウザの単純リクエストを止めるもの）ので、資格の門が見当たらないのを「付け忘れ」と読まないこと。
     .post(
       '/shutdown',
@@ -9840,7 +9669,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       jsonBody(resetRequestSchema, () => ({
         error: '`confirm: true` を伴っていない（取り消せない操作なので確認を必須にしてある）',
       })),
