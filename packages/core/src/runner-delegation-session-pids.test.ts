@@ -1,7 +1,7 @@
 import { PassThrough } from 'node:stream';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
@@ -436,6 +436,82 @@ describe('孤児回収が「委譲の終端」で判定すること（#1334 段1
 
     expect(host.delegationSessionPids()).toEqual({
       live: new Set([777]),
+      knownTerminated: new Set(),
+    });
+
+    await host.shutdown();
+  });
+});
+
+describe('自己失効（lost）した委譲の pid（#2352: 後任が同じ runner で走っていても、残骸を撃てる側へ回す）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function selfFencedHost(pid: number) {
+    vi.useFakeTimers();
+    const sessions: CapturedSession[] = [];
+    const lostProcess = fakeDelegationProcess(pid);
+    const successorProcess = fakeDelegationProcess(pid + 1);
+    let call = 0;
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: fakeSdk(sessions),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      enforceLease: true,
+      // 実 I/O をさせない: fake timer では実 I/O が進まず、`#finish()` が assertion より遅れて解決する（runner-fence.test.ts と同じ）
+      readCgroupEventCountersFn: async () => ({}),
+      finishUnpushedWorkFn: async () => ({ cwd: '/work/project', worktrees: [] }),
+      spawnAgentProcessFn: () => {
+        call += 1;
+        return call === 1 ? lostProcess.handle : successorProcess.handle;
+      },
+    });
+    const spawnOptions = {
+      command: 'claude',
+      args: [],
+      env: {},
+      signal: new AbortController().signal,
+    };
+
+    await host.start({
+      managerId: 'mgr-lost',
+      request: 'やって',
+      cwd: '/work/project',
+      lease: { fence: 1, ttlMs: 30_000 },
+    });
+    (sessions[0] as CapturedSession).options.spawnClaudeCodeProcess?.(spawnOptions);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(host.list().map((m) => m.managerId)).not.toContain('mgr-lost');
+
+    await host.start({ managerId: 'mgr-successor', request: 'つづき', cwd: '/work/project' });
+    (sessions[1] as CapturedSession).options.spawnClaudeCodeProcess?.(spawnOptions);
+
+    return { host, lostProcess };
+  }
+
+  it('CLI が exit したら、その pid は knownTerminated へ回る（後任の委譲が走っていても）', async () => {
+    const { host, lostProcess } = await selfFencedHost(4600);
+
+    lostProcess.emitExit();
+
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set([4601]),
+      knownTerminated: new Set([4600]),
+    });
+
+    await host.shutdown();
+  });
+
+  it('（対照）CLI が exit するまでは live に残り、knownTerminated へは回らない（回収は CLI の終了に依る）', async () => {
+    const { host } = await selfFencedHost(4700);
+
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set([4700, 4701]),
       knownTerminated: new Set(),
     });
 
