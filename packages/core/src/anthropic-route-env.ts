@@ -94,6 +94,65 @@ export function inspectAnthropicRoute(
   };
 }
 
+export const ENABLE_TOOL_SEARCH_ENV = 'ENABLE_TOOL_SEARCH';
+const TOOL_SEARCH_OFF_ENV_NAMES = [
+  'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+] as const;
+const FIRST_PARTY_ORIGIN = 'https://api.anthropic.com';
+
+/**
+ * Claude Code が ToolSearch を止める条件のうち、env から見えるもの。**値は持たない**（名前と出所だけ）。
+ * 値の意味（`0` を偽と読むか等）は推し量らず、空でない値が置かれていれば「置かれている」とする:
+ * 判定は CLI の版で変わりうるので、ここで真偽を決めると、外れたときに観測ごと誤るため。
+ */
+export interface ToolSearchInspection {
+  enableToolSearch?: { source: string };
+  offSwitches: { name: string; source: string }[];
+  /** `ANTHROPIC_BASE_URL` が first-party の origin 以外を指している。 */
+  nonFirstPartyBaseUrl?: { source: string };
+}
+
+export function inspectToolSearch(layers: readonly AnthropicRouteLayer[]): ToolSearchInspection {
+  const enable = effectiveValue(layers, ENABLE_TOOL_SEARCH_ENV);
+  const offSwitches: ToolSearchInspection['offSwitches'] = [];
+  for (const name of TOOL_SEARCH_OFF_ENV_NAMES) {
+    const placed = effectiveValue(layers, name);
+    if (placed !== undefined) offSwitches.push({ name, source: placed.source });
+  }
+  const base = effectiveValue(layers, ANTHROPIC_BASE_URL_ENV);
+  const nonFirstParty = base !== undefined && originOf(base.value) !== FIRST_PARTY_ORIGIN;
+  return {
+    ...(enable === undefined ? {} : { enableToolSearch: { source: enable.source } }),
+    offSwitches,
+    ...(nonFirstParty ? { nonFirstPartyBaseUrl: { source: base.source } } : {}),
+  };
+}
+
+/**
+ * 起動時に日誌と標準出力へ残す1行。ToolSearch が止まると、MCP の道具の定義が最初の要求に全部載る（#4269）。
+ * hipaa の組織かどうかは env から見えないので、「止める条件が無い」とは言い切らない。
+ */
+export function describeToolSearch(inspection: ToolSearchInspection): string {
+  const reasons: string[] = inspection.offSwitches.map(
+    ({ name, source }) => `${name} が置かれている（出所: ${source}）`,
+  );
+  if (inspection.nonFirstPartyBaseUrl !== undefined && inspection.enableToolSearch === undefined) {
+    reasons.push(
+      `ANTHROPIC_BASE_URL が first-party の host 以外を指し、${ENABLE_TOOL_SEARCH_ENV} が置かれていない（出所: ${inspection.nonFirstPartyBaseUrl.source}）`,
+    );
+  }
+  const enableNote =
+    inspection.enableToolSearch === undefined
+      ? ''
+      : `。${ENABLE_TOOL_SEARCH_ENV} が置かれている（出所: ${inspection.enableToolSearch.source}）`;
+  if (reasons.length > 0) {
+    return `ToolSearch: クローンの子の env では止まる見込み — ${reasons.join('・')}${enableNote}。止まると MCP の道具の定義が最初の要求に全部載る（#4269）`;
+  }
+  return `ToolSearch: クローンの子の env には止める条件が置かれていない（hipaa の組織かどうかは env から見えない）${enableNote}`;
+}
+
 /** 何も置かれていないときに self_status が出す1行（「無い」と「見ていない」を分けるため）。 */
 export const ANTHROPIC_ROUTE_NONE_LINE =
   'ANTHROPIC_BASE_URL / ANTHROPIC_DEFAULT_*_MODEL / ANTHROPIC_MODEL はどれも置かれていない';

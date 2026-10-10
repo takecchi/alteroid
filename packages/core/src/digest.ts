@@ -726,7 +726,7 @@ export async function buildActivityDigest(
     sections.push(
       'この件数は届いた合図の実数ではない —— 受信箱を通った合図は配達のたびに1行' +
         '書かれ（配り直し・畳んでターンを起こさない回も含む）、デーモンが受信箱を' +
-        '通さず直接書く行（source `runner` / `boot-storage-footprint`）も混ざる。',
+        '通さず直接書く行（source `runner` / `boot-storage-footprint` / `boot-tool-search`）も混ざる。',
     );
     const shownExternals = externals.slice(0, MAX_ITEMS);
     for (const entry of shownExternals) {
