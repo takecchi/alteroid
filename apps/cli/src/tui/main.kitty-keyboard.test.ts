@@ -31,8 +31,10 @@ class FakeStdout extends EventEmitter {
   readonly isTTY = true;
   readonly rows = 24;
   readonly columns = 80;
-  write = (text: string): boolean => {
+  // 書き終わりの callback を呼ぶ: Ink は終了時に空の write の callback を待ってから waitUntilExit を解くため
+  write = (text: string, callback?: () => void): boolean => {
     this.writes.push(text);
+    callback?.();
     return true;
   };
   count(sequence: string): number {

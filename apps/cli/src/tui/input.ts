@@ -115,6 +115,38 @@ export function decodeKeySequence(input: string): DecodedKey | undefined {
   return undefined;
 }
 
+const MODIFY_OTHER_KEYS_IN_CHUNK = new RegExp(
+  `${String.fromCharCode(27)}\\[27;(\\d+);(\\d+)~`,
+  'g',
+);
+
+// 同じ意味の CSI u へ書き換える: Ink 8 は CSI u は解釈するが、どのキーにも当たらない制御列（modifyOtherKeys の符号）は useInput へ渡さず捨てるため
+export function rewriteModifyOtherKeys(chunk: string): string {
+  return chunk.replace(
+    MODIFY_OTHER_KEYS_IN_CHUNK,
+    (_match, modifier: string, code: string) => `${String.fromCharCode(27)}[${code};${modifier}u`,
+  );
+}
+
+// Ink が読む `read()` だけを差し替える: Ink は stdin を `readable` と `read()` で読み、`data` を聞くと流れる形に変わって Ink の読みと食い合うため
+// 1回の `read()` に届いた分だけを書き換える: 端末は1つのキーの符号を1度に書く。境目で割れたものは書き換えず、Ink が捨てる（Ink 8 の素の挙動と同じ）
+export function withModifyOtherKeysAsCsiU<T extends NodeJS.ReadStream>(stdin: T): T {
+  return new Proxy(stdin, {
+    get(target, prop) {
+      if (prop === 'read') {
+        return (size?: number): unknown => {
+          const chunk: unknown = target.read(size);
+          return typeof chunk === 'string' ? rewriteModifyOtherKeys(chunk) : chunk;
+        };
+      }
+      const value: unknown = Reflect.get(target, prop, target);
+      return typeof value === 'function'
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    },
+  });
+}
+
 export function normalizeChord(input: string, key: Key): { input: string; key: Key } {
   const chord = decodeKeySequence(input);
   if (!chord) return { input, key };

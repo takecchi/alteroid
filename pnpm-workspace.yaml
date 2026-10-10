@@ -36,7 +36,7 @@ catalog:
   # CLI の TUI（apps/cli/src/tui。Issue #2528）。takecchi/codiva（MIT）と同じ組み合わせ。
   # ink は react >=19.2 を peer に要求する（上の react と同じ catalog の版で満たす）。
   # 3つとも `dependencies` に置く（Dockerfile は `pnpm install --prod` で、実行時に要る）。
-  ink: ^7.1.1
+  ink: ^8.0.0
   # Markdown を意味ロール付きの span に落とす lexer だけを使う（HTML は作らない）
   marked: ^18.0.14
   # 全角・絵文字の表示幅（折り返しとカーソル位置）
