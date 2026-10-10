@@ -175,7 +175,7 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     case 'github_observation':
       break;
     case 'conversation_deleted':
-      // 墓標が積まれた瞬間から、その会話の発言は読み口から外れる（#4218）: 一覧・未読数・開いている本文・台帳を読み直す
+      // 墓標が積まれた瞬間から、その会話の発言は読み口から外れる:一覧・未読数・開いている本文・台帳を読み直す
       void mutate((key) => isKeyOfType(key, 'conversations'));
       void mutate((key) => isKeyOfType(key, 'conversationUnreadCount'));
       void mutate((key) => isKeyOfType(key, 'conversation'));

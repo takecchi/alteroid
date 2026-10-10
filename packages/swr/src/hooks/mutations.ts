@@ -553,13 +553,12 @@ export function useRevokeOwnerDeclaration() {
   );
 }
 
-/** Codex の ChatGPT ログインを始める（#3939）。確認用 URL とコードが返る。 */
+/** Codex の ChatGPT ログインを始める。確認用 URL とコードが返る。 */
 export function useStartCodexLogin() {
   const api = useApi();
   return useCallback(async () => api.api.POST('/codex/login').then(unwrap), [api]);
 }
 
-/** 進行中のログインを取り消す（#3939）。 */
 export function useCancelCodexLogin() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -575,7 +574,7 @@ export function useCancelCodexLogin() {
   );
 }
 
-/** ログアウト（正本から消し、全 runner から外す。#3939）。 */
+/** ログアウト（正本から消し、全 runner から外す）。 */
 export function useCodexLogout() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -827,7 +826,7 @@ export function useEndConversation() {
   );
 }
 
-// 論理削除（Issue #4218）。結果（件数・`incomplete`・`remainsIn`）は呼び出し側が人間へ見せるので、そのまま返す。
+// 論理削除。結果（件数・`incomplete`・`remainsIn`）は呼び出し側が人間へ見せるので、そのまま返す。
 // 下書きもここで消す: 消した会話の id で残る本文は、どこからも開けないのに端末に平文で残るだけになるため
 export function useDeleteConversation() {
   const api = useApi();
