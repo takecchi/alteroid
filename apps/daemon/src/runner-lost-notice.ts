@@ -14,9 +14,12 @@ export interface RunnerLostEntry {
   readonly reason: string;
 }
 
+// 移す時機は `lease.ts` の `judgeLease`（`holderSeenAt`。#4454）に合わせて言う: 貸し出しのある委譲は、器が最後に名乗ってから期限が切れるまで移さず、
+// 名乗り直せば移送の挑み直しがその器の委譲を飛ばす（`ManagerPool#shouldRelocateFrom`）。「移送を試みる」とだけ言うと、名乗り直した後も移ったかのように読める。
 const NOTICE_TAIL =
-  '新しい委譲の宛先からは外し、そこで走っていた委譲の移送を試みます' +
-  '（貸し出し期限が切れていない委譲は、切れてから自動で移します）';
+  '新しい委譲の宛先からは外します。そこで走っていた委譲は、貸し出しの期限' +
+  '（既定では、この器が最後に名乗ってから10分30秒）が切れてから別の器へ移し、' +
+  'それまでに名乗り直せば移しません（貸し出しを持たない委譲は、すぐに移します）';
 
 const nameOf = (entry: RunnerLostEntry): string =>
   entry.runnerId === undefined ? entry.label : entry.runnerId;
@@ -51,9 +54,11 @@ export function composeRunnerLostNotice(entries: readonly RunnerLostEntry[]): st
   return `${head}\n${entries.map((entry) => `- ${fullNameOf(entry)}: ${entry.reason}`).join('\n')}`;
 }
 
-// 名乗り直した器の知らせを捨てない: 名乗らなくなった時点で移送は試みており、名乗り直しで取り消されないので、捨てるとその事実が落ちるため。
+// 名乗り直した器の知らせを捨てない: 貸し出しを持たない委譲は名乗らなくなった時点で移しうるうえ、移し終えた委譲は元の器へ戻らないので、捨てるとその事実が落ちるため。
+// 貸し出しのある委譲を「移していない」と言い切れるのは、送るのが名乗らなくなってから窓（30秒）のうちで、期限（既定 10分30秒）より十分短いため。
 const RELOCATION_STILL_TRIED =
-  '移送は名乗らなくなった時点で試みており、名乗り直しで取り消されはしない（移し終えた委譲は元の器へ戻らない）。';
+  '貸し出しのある委譲は、期限が切れる前に名乗り直したので移していない' +
+  '（移したとすれば貸し出しを持たない委譲だけで、移し終えた委譲は元の器へ戻らない）。';
 
 /** 送る時点で名乗り直している台を、本文の末尾で言う。1台も戻っていなければ何も足さない。 */
 export function describeRunnersBack(
