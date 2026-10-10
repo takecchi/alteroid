@@ -28,7 +28,7 @@ const TABLE: Record<
   context_usage: { approvals: false, managers: false },
   inbox_flow: { approvals: false, managers: false },
   github_observation: { approvals: false, managers: false },
-  conversation_deleted: { approvals: false, managers: false }, // 会話の削除（#4218）。承認・委譲の件数は動かない
+  conversation_deleted: { approvals: false, managers: false }, // 会話の削除。承認・委譲の件数は動かない
 };
 
 describe('journal-targets（どの出来事で取り直すか。#3987）', () => {
