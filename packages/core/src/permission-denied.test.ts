@@ -710,7 +710,16 @@ describe('inputHead — escalation にだけ乗り、journal には乗らない�
     const message = s.inbox.filter((event) => event.type === 'manager_message')[0];
     const text = message?.type === 'manager_message' ? message.text : '';
 
-    expect(text).toContain('答え方: この拒否には `requestId` が無く、許可として答える口は無い。');
+    // 2026-10-10（#4447）: 以前は「答え方: この拒否には `requestId` が無く、許可として答える口は無い。」と言い切っていた。
+    // 1回だけの許可（#1105 P1）で、分類器の拒否には `toolu_…` の確認が別に上がるようになったので、その確認へ答える道を先に言い、
+    // 「答える口は無い」は確認が届かなかったときに限って言う形へ直した。
+    expect(text).toContain(
+      '答え方: この拒否について「この1回だけ許可しますか」の確認（`requestId` は `toolu_…` の形）が別に届いていれば、',
+    );
+    expect(text).toContain('（allow しても自動では撃ち直されない）');
+    expect(text).toContain(
+      'その確認が届いていなければ、この拒否には `requestId` が無く、許可として答える口は無い。',
+    );
     expect(text).toContain('`manager_send` に `decision` を付けて送らないこと');
     expect(text).toContain('別に待っている確認へ回答として当たりうる');
     expect(text).toContain('その作業者へ伝えるようマネージャーに頼む');

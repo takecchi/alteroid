@@ -6,7 +6,7 @@ import type {
   Query,
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
@@ -86,7 +86,11 @@ describe('runner.ts の #onPermission が組み立てる summary（issue #287）
 
     const event = inbox.find((entry) => entry.type === 'manager_message');
     expect(event).toMatchObject({ kind: 'permission' });
-    expect((event as { text: string }).text).toBe('Bash の実行許可: {"a":1}');
+    // 2026-10-10（#4447）: 配る本文の末尾に「答えたあと」の1行が付くようになった（manager.ts が足す。記法は含まない）。
+    // 以前の期待値は 'Bash の実行許可: {"a":1}' だった。runner の summary の字面は変わっていない。
+    expect((event as { text: string }).text).toBe(
+      'Bash の実行許可: {"a":1}\n答えたあと: allow すれば、この呼び出しがそのまま通る（撃ち直しは要らない）。deny なら担い手へ拒否として返る。',
+    );
 
     await pool.stop();
   });
@@ -111,9 +115,53 @@ describe('runner.ts の #onPermission が組み立てる summary（issue #287）
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const event = inbox.find((entry) => entry.type === 'manager_message');
+    // 2026-10-10（#4447）: 末尾に「答えたあと」の1行が付くようになった。以前の期待値は 'Bash の実行許可: {"a":1}\n理由: 無限待ちの形（代替あり）'。
     expect((event as { text: string }).text).toBe(
-      'Bash の実行許可: {"a":1}\n理由: 無限待ちの形（代替あり）',
+      'Bash の実行許可: {"a":1}\n理由: 無限待ちの形（代替あり）\n答えたあと: allow すれば、この呼び出しがそのまま通る（撃ち直しは要らない）。deny なら担い手へ拒否として返る。',
     );
+
+    await pool.stop();
+  });
+
+  it('分類器の拒否の確認（toolu_…）には「allow すればそのまま通る」を足さず、runner の「自動では撃ち直されない」だけが届く（#4447）', async () => {
+    const stores = createMemoryStores();
+    const manager = fakeManagerSdk();
+    const inbox: InboxEvent[] = [];
+    const pool = createManagerPool({
+      stores,
+      post: (event) => inbox.push(event),
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: manager.fn, env: {} }),
+      ]),
+    });
+
+    await pool.start({ request: '確認してくる仕事' });
+    const session = manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    const hook = session.options.hooks?.PermissionDenied?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PermissionDenied フックが無い');
+    void hook(
+      {
+        hook_event_name: 'PermissionDenied',
+        tool_name: 'Bash',
+        tool_input: { command: 'git rm notes/old.txt' },
+        tool_use_id: 'toolu_wording',
+        reason: '分類器が拒否した（テスト）',
+      } as never,
+      'toolu_wording',
+      { signal: new AbortController().signal },
+    );
+
+    await vi.waitFor(() => {
+      expect(inbox.some((entry) => entry.type === 'manager_message')).toBe(true);
+    });
+    const event = inbox.find(
+      (entry) => entry.type === 'manager_message' && entry.kind === 'permission',
+    );
+    const text = (event as { text: string } | undefined)?.text ?? '';
+    expect(text).toContain('答えたあと: allow しても、この呼び出しは自動では撃ち直されない。');
+    expect(text).not.toContain('allow すれば、この呼び出しがそのまま通る');
 
     await pool.stop();
   });
