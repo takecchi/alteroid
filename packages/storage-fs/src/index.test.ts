@@ -3241,7 +3241,6 @@ describe('AuthStore', () => {
     lastLoginAt: '2026-01-01T00:00:00.000Z',
     grantedAt: null,
     grantedBy: null,
-    ownerDeclaredAt: null,
   };
 
   it('listAccounts は createdAt の実時刻順（オフセット表記が違っても崩れない）', async () => {
@@ -3710,7 +3709,6 @@ describe('AuthStore', () => {
         lastLoginAt: '2026-01-01T00:00:00.000Z',
         grantedAt: null,
         grantedBy: null,
-        ownerDeclaredAt: null,
       },
       identity: {
         provider: 'google',
@@ -3755,7 +3753,6 @@ describe('AuthStore', () => {
         lastLoginAt: '2026-01-01T00:00:00.000Z',
         grantedAt: null,
         grantedBy: null,
-        ownerDeclaredAt: null,
       },
       identity: {
         provider: 'google',
@@ -3848,55 +3845,6 @@ describe('AuthStore', () => {
     expect((await stores.auth.getLoginRequest('login-5'))?.status).toBe('processing');
     expect(await stores.auth.beginLoginExchange('login-5')).toBeNull();
     expect(await stores.auth.beginLoginExchange('居ない')).toBeNull();
-  });
-
-  describe('setAccountOwner（実行環境の持ち主としての宣言）', () => {
-    it('許可済みの行には宣言を立てられる', async () => {
-      await stores.auth.putAccount({
-        ...account,
-        grantedAt: '2026-01-02T00:00:00.000Z',
-        grantedBy: 'operator',
-      });
-
-      const result = await stores.auth.setAccountOwner('account-1', '2026-01-03T00:00:00.000Z');
-      expect(result).toEqual({
-        status: 'ok',
-        account: {
-          ...account,
-          grantedAt: '2026-01-02T00:00:00.000Z',
-          grantedBy: 'operator',
-          ownerDeclaredAt: '2026-01-03T00:00:00.000Z',
-        },
-      });
-      expect((await stores.auth.getAccount('account-1'))?.ownerDeclaredAt).toBe(
-        '2026-01-03T00:00:00.000Z',
-      );
-    });
-
-    it('未許可の行へ宣言しようとすると not_granted（不変条件「宣言 ⟹ 許可済み」）', async () => {
-      await stores.auth.putAccount(account);
-
-      const result = await stores.auth.setAccountOwner('account-1', '2026-01-03T00:00:00.000Z');
-      expect(result).toEqual({ status: 'not_granted' });
-      expect((await stores.auth.getAccount('account-1'))?.ownerDeclaredAt).toBeNull();
-    });
-
-    it('存在しないアカウントへの宣言は not_found', async () => {
-      expect(await stores.auth.setAccountOwner('居ない', '2026-01-03T00:00:00.000Z')).toEqual({
-        status: 'not_found',
-      });
-    });
-
-    it('取り消し（null）は許可の有無を問わず常に通る', async () => {
-      await stores.auth.putAccount(account);
-
-      const result = await stores.auth.setAccountOwner('account-1', null);
-      expect(result).toEqual({ status: 'ok', account });
-    });
-
-    it('存在しないアカウントの取り消しは not_found', async () => {
-      expect(await stores.auth.setAccountOwner('居ない', null)).toEqual({ status: 'not_found' });
-    });
   });
 
   describe('大小文字だけが違う検証済みメール（#1702）', () => {

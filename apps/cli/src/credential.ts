@@ -223,18 +223,12 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
 
   if (!response.ok) {
     if (response.status === 403) {
-      // 403 の本文を見ずに固定の文言を出さない: 「未宣言」以外の理由でも返り、誤った案内になるため
+      // 403 の本文を見ずに固定の文言を出さない: 理由が複数あり、誤った案内になるため
       const body = await response.json().catch(() => ({}));
       const kind = forbiddenKindOf(body);
-      if (kind === 'not_declared_owner') {
-        throw new Error(
-          describeAuthFailure(403, target, kind) ??
-            '実行環境の持ち主として宣言されたアカウントだけが操作できます。',
-        );
-      }
       if (kind === 'not_granted') {
         throw new Error(
-          describeAuthFailure(403, target, kind) ??
+          describeAuthFailure(403, target) ??
             'このアカウントには alteroid を使う許可がありません。',
         );
       }

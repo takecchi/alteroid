@@ -18,12 +18,11 @@ import type {
   CreateAccountWithIdentityOutcome,
   GrantOutcome,
   LoginRequest,
-  OwnerOutcome,
   RemoveUnreadableRowsResult,
   RevokeAccessTokenOutcome,
   UnreadableAccount,
 } from '@alteroid/core';
-import { and, asc, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, lt, sql } from 'drizzle-orm';
 import type { SQL, SQLWrapper } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -94,7 +93,6 @@ export class PgAuthStore implements AuthStore {
       lastLoginAt: optionalDate(value.lastLoginAt),
       grantedAt: optionalDate(value.grantedAt),
       grantedBy: value.grantedBy,
-      ownerDeclaredAt: optionalDate(value.ownerDeclaredAt),
     };
     await this.#db
       .insert(authAccounts)
@@ -102,7 +100,7 @@ export class PgAuthStore implements AuthStore {
       .onConflictDoUpdate({ target: authAccounts.id, set });
   }
 
-  // `putAccount` を使わない: upsert が `granted_at` 等を無条件に `set` に含み、そのあいだに完了した grant / revoke / owner 宣言を踏みつぶすため。
+  // `putAccount` を使わない: upsert が `granted_at` 等を無条件に `set` に含み、そのあいだに完了した grant / revoke を踏みつぶすため。
   async markAccountLoggedIn(accountId: string, at: string): Promise<void> {
     if (hasNul(accountId)) return;
     await this.#db
@@ -120,7 +118,7 @@ export class PgAuthStore implements AuthStore {
     if (hasNul(accountId)) return;
     await this.#db
       .update(authAccounts)
-      .set({ grantedAt: null, grantedBy: null, ownerDeclaredAt: null })
+      .set({ grantedAt: null, grantedBy: null })
       .where(eq(authAccounts.id, accountId));
   }
 
@@ -224,7 +222,6 @@ export class PgAuthStore implements AuthStore {
         lastLoginAt: optionalDate(account.lastLoginAt),
         grantedAt: optionalDate(account.grantedAt),
         grantedBy: account.grantedBy,
-        ownerDeclaredAt: optionalDate(account.ownerDeclaredAt),
       });
 
       let emailForInsert = account.email;
@@ -452,34 +449,6 @@ export class PgAuthStore implements AuthStore {
     return { status: 'granted', account: this.#toAccount(row) };
   }
 
-  // 「読む→検査→書く」に割らない: 検査と書き込みの間に許可が取り消される窓ができるため。
-  // 取り消し（`declaredAt === null`）に `granted_at is not null` を付けない: 許可が取り消された後に宣言だけを取り消す経路があるため。
-  async setAccountOwner(accountId: string, declaredAt: string | null): Promise<OwnerOutcome> {
-    if (hasNul(accountId)) return { status: 'not_found' };
-    if (declaredAt === null) {
-      const rows = await this.#db
-        .update(authAccounts)
-        .set({ ownerDeclaredAt: null })
-        .where(eq(authAccounts.id, accountId))
-        .returning();
-      const row = rows[0];
-      return row === undefined
-        ? { status: 'not_found' }
-        : { status: 'ok', account: this.#toAccount(row) };
-    }
-
-    const rows = await this.#db
-      .update(authAccounts)
-      .set({ ownerDeclaredAt: new Date(declaredAt) })
-      .where(and(eq(authAccounts.id, accountId), isNotNull(authAccounts.grantedAt)))
-      .returning();
-    const row = rows[0];
-    if (row !== undefined) return { status: 'ok', account: this.#toAccount(row) };
-
-    const account = await this.getAccount(accountId);
-    return account === null ? { status: 'not_found' } : { status: 'not_granted' };
-  }
-
   #toAccount(row: typeof authAccounts.$inferSelect): AuthAccount {
     return {
       id: row.id,
@@ -489,7 +458,6 @@ export class PgAuthStore implements AuthStore {
       lastLoginAt: optionalIso(row.lastLoginAt),
       grantedAt: optionalIso(row.grantedAt),
       grantedBy: row.grantedBy,
-      ownerDeclaredAt: optionalIso(row.ownerDeclaredAt),
     };
   }
 

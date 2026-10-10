@@ -14,7 +14,6 @@ import {
   type AuthStore,
   type GrantOutcome,
   type LoginRequest,
-  type OwnerOutcome,
 } from './auth.js';
 import type { AuthProviderRegistry } from './auth-providers.js';
 import { reasonOf } from './dropped-record.js';
@@ -74,7 +73,6 @@ export interface AuthService {
     ids: readonly string[],
     options?: RemoveUnreadableRowsOptions,
   ): Promise<RemoveUnreadableRowsResult>;
-  setOwner(accountId: string, declared: boolean): Promise<OwnerOutcome>;
   listAccounts(): Promise<AuthAccount[]>;
   grantedAccounts(): Promise<AuthAccount[]>;
 }
@@ -218,7 +216,6 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
             lastLoginAt: at,
             grantedAt: null,
             grantedBy: null,
-            ownerDeclaredAt: null,
           };
 
           // 「読む→検査→書く」に割らない: 同じ `(provider, subject)` の同時ログインで別々の account ができるため。渡した `candidateAccount` ではなくこの結果だけを信じる
@@ -354,7 +351,6 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         await store.revokeAccountAccess(accountId);
         return null;
       }
-      // 許可の取り消しは宣言済みの owner も落とす: 再 grant しても owner には戻らない（宣言は明示的な行為でしか立たない）
       if (account.grantedAt === null) return account;
       // 行を丸ごと書き戻さない: 読んでから書くまでに完了した再ログインの `lastLoginAt` を古い写しで上書きするため。戻り値は書き込み後に読み直す
       await store.revokeAccountAccess(accountId);
@@ -363,15 +359,11 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
           ...account,
           grantedAt: null,
           grantedBy: null,
-          ownerDeclaredAt: null,
         }
       );
     },
 
     removeUnreadableAccounts: (ids, options) => store.removeUnreadableAccounts(ids, options),
-
-    setOwner: (accountId, declared) =>
-      store.setAccountOwner(accountId, declared ? now().toISOString() : null),
 
     listAccounts: () => store.listAccounts(),
     grantedAccounts: () => findGrantedAccounts(store),
@@ -383,7 +375,7 @@ async function findGrantedAccounts(store: AuthStore): Promise<AuthAccount[]> {
   return accounts.filter((account) => account.grantedAt !== null);
 }
 
-// 行を丸ごと書き戻さない: 読んでから書くまでに完了した access grant / revoke / owner 宣言を古い写しで上書きするため。戻り値の `account` は書き込み後に読み直す
+// 行を丸ごと書き戻さない: 読んでから書くまでに完了した access grant / revoke を古い写しで上書きするため。戻り値の `account` は書き込み後に読み直す
 async function touchAccountLogin(
   store: AuthStore,
   found: AuthAccount,

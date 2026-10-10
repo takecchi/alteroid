@@ -21,7 +21,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
     lastLoginAt: null,
     grantedAt: '2026-01-01T00:00:00.000Z',
     grantedBy: 'operator',
-    ownerDeclaredAt: null,
   };
 
   const BAD_ACCOUNT_RAW = {
@@ -31,7 +30,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
     lastLoginAt: null,
     grantedAt: null,
     grantedBy: null,
-    ownerDeclaredAt: null,
   };
 
   const GOOD_IDENTITY: AuthIdentity = {
@@ -278,7 +276,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
         lastLoginAt: '2025-01-01T00:00:00.000Z',
         grantedAt: '2025-01-01T00:00:00.000Z',
         grantedBy: 'operator',
-        ownerDeclaredAt: null,
       };
       const stores = createFsStores(root);
       await stores.auth.putAccount(existingAccount);
@@ -307,7 +304,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
             lastLoginAt: null,
             grantedAt: null,
             grantedBy: null,
-            ownerDeclaredAt: null,
           },
           identity: {
             provider: 'google',

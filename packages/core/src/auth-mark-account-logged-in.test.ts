@@ -4,7 +4,7 @@ import type { AuthAccount } from './auth.js';
 import { createMemoryStores } from './testing.js';
 
 describe('AuthStore.markAccountLoggedIn（メモリ実装、issue #1870）', () => {
-  it('lastLoginAt だけを書き、grantedAt / grantedBy / ownerDeclaredAt には触れない。無い id では何もしない', async () => {
+  it('lastLoginAt だけを書き、grantedAt / grantedBy には触れない。無い id では何もしない', async () => {
     const store = createMemoryStores().auth;
     const account: AuthAccount = {
       id: 'account-mark',
@@ -14,7 +14,6 @@ describe('AuthStore.markAccountLoggedIn（メモリ実装、issue #1870）', () 
       lastLoginAt: '2026-09-01T00:00:00.000Z',
       grantedAt: '2026-09-02T00:00:00.000Z',
       grantedBy: 'operator',
-      ownerDeclaredAt: '2026-09-03T00:00:00.000Z',
     };
     await store.putAccount(account);
 
@@ -23,7 +22,6 @@ describe('AuthStore.markAccountLoggedIn（メモリ実装、issue #1870）', () 
     expect(updated?.lastLoginAt).toBe('2026-09-04T00:00:00.000Z');
     expect(updated?.grantedAt).toBe('2026-09-02T00:00:00.000Z');
     expect(updated?.grantedBy).toBe('operator');
-    expect(updated?.ownerDeclaredAt).toBe('2026-09-03T00:00:00.000Z');
     expect(updated?.email).toBe('alice@example.test');
     expect(updated?.displayName).toBe('Alice');
 

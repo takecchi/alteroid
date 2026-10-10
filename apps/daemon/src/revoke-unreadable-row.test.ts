@@ -64,7 +64,6 @@ describe('取り消しの口は、読めない行を「見つからない」と�
     lastLoginAt: null,
     grantedAt: '2026-01-01T00:00:00.000Z',
     grantedBy: 'operator',
-    ownerDeclaredAt: null,
   };
   const BAD_ACCOUNT_RAW = {
     id: 'acct-bad',
@@ -73,7 +72,6 @@ describe('取り消しの口は、読めない行を「見つからない」と�
     lastLoginAt: null,
     grantedAt: '2026-01-02T00:00:00.000Z',
     grantedBy: 'operator',
-    ownerDeclaredAt: null,
   };
 
   let root: string;

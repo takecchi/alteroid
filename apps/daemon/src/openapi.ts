@@ -198,7 +198,6 @@ const accountViewSchema = z.object({
   lastLoginAt: isoDateTimeSchema.nullable(),
   grantedAt: isoDateTimeSchema.nullable(),
   grantedBy: z.string().nullable(),
-  ownerDeclaredAt: isoDateTimeSchema.nullable(),
 });
 
 export const authProvidersResponseSchema = z.object({

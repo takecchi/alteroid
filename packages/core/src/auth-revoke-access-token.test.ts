@@ -12,7 +12,6 @@ describe('revokeAccessToken（メモリ実装）', () => {
     lastLoginAt: '2026-01-01T00:00:00.000Z',
     grantedAt: null,
     grantedBy: null,
-    ownerDeclaredAt: null,
   };
 
   const token: AccessTokenRecord = {

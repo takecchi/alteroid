@@ -452,13 +452,18 @@ describe('alteroid mcp edit', () => {
 });
 
 describe('403 の出し分け', () => {
-  it('requireOwner（未宣言）の 403 なら access owner を案内する', async () => {
+  it('旧デーモンの未宣言 owner の本文の 403 は、案内を出さずに止まる（access owner は存在しない。#2948）', async () => {
     setReply('GET', '/mcp-servers', {
       status: 403,
       body: { error: '実行環境の持ち主として宣言されたアカウントだけが操作できる' },
     });
 
-    await expect(mcpListCommand()).rejects.toThrow('alteroid access owner <アカウント id>');
+    const message = await mcpListCommand().then(
+      () => '',
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    expect(message).toContain('理由を判別できなかった');
+    expect(message).not.toContain('access owner');
   });
 
   it('未許可の 403 なら access grant を案内する', async () => {

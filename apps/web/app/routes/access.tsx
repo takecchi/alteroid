@@ -25,7 +25,6 @@ import type { AccessAccount } from '@alteroid/logic';
 
 import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
 
-// 持ち主の宣言のバッジ・ボタンを置かない: 許可済みのアカウントは全員が持ち主として扱われ、宣言の有無は通す・通さないに効かないため
 export default function Access() {
   const { data, error, isLoading, isValidating, mutate } = useAccess();
   const removeUnreadable = useRemoveUnreadableAccounts();

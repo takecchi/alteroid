@@ -10160,7 +10160,6 @@ describe('認証が無効な既定構成では /access も /tokens も今日ど�
       lastLoginAt: null,
       grantedAt: null,
       grantedBy: null,
-      ownerDeclaredAt: null,
     });
 
     expect((await passthrough.request('/tokens')).status).toBe(200);
@@ -11669,7 +11668,7 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
   });
 });
 
-// 値（鍵が入りうる）を、応答の 400・`PUT` の応答・日誌のどこにも載せない。門（`requireOwner`）は `auth.test.ts` が撃つ。
+// 値（鍵が入りうる）を、応答の 400・`PUT` の応答・日誌のどこにも載せない。門（許可済みのアカウントだけが通る）は `auth.test.ts` が撃つ。
 describe('MCP サーバの登録（/mcp-servers）', () => {
   const put = (body: unknown) =>
     app.request('/mcp-servers', {

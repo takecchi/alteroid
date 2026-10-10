@@ -701,12 +701,12 @@ describe('403（本文で理由を分ける）', () => {
     expect(message).not.toContain('access grant');
   });
 
-  it('宣言していないアカウントのときは access owner を促す', async () => {
+  it('旧デーモンの未宣言 owner の本文は、案内を出さずに止まる（access owner は存在しない。#2948）', async () => {
     setReply('GET', '/profile', { status: 403, body: NOT_DECLARED_OWNER });
 
     const message = await messageOf(() => profileShowCommand());
-    expect(message).toContain('access owner');
-    expect(message).not.toContain('理由を判別でき');
+    expect(message).toContain('理由を判別でき');
+    expect(message).not.toContain('access owner');
     expect(message).not.toContain('docker compose exec');
   });
 

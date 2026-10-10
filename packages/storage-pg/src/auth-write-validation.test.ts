@@ -22,7 +22,6 @@ describe('AuthStore の書き込み — 形式不正な入力の扱い（pg 実�
     lastLoginAt: '2026-01-01T00:00:00.000Z',
     grantedAt: null,
     grantedBy: null,
-    ownerDeclaredAt: null,
   };
 
   it('putAccount() は空文字の id を拒む（throw する）', async () => {
@@ -114,12 +113,6 @@ describe('AuthStore の書き込み — 形式不正な入力の扱い（pg 実�
   it('grantAccess() は isoDateTime でない at を拒む（throw する）', async () => {
     await stores.auth.putAccount(account);
     await expect(stores.auth.grantAccess(account.id, '不正な日時', 'operator')).rejects.toThrow();
-  });
-
-  it('setAccountOwner() は isoDateTime でない declaredAt を拒む（throw する）', async () => {
-    await stores.auth.putAccount(account);
-    await stores.auth.grantAccess(account.id, '2026-01-02T00:00:00.000Z', 'operator');
-    await expect(stores.auth.setAccountOwner(account.id, '不正な日時')).rejects.toThrow();
   });
 
   it('claimLoginRequest() は issue() が返した長さ64でない sha256 を拒む（throw する）', async () => {

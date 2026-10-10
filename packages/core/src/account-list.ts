@@ -19,7 +19,6 @@ function viewOf(account: AuthAccount) {
     granted: account.grantedAt !== null,
     grantedAt: account.grantedAt,
     grantedBy: account.grantedBy,
-    ownerDeclaredAt: account.ownerDeclaredAt,
     createdAt: account.createdAt,
     lastLoginAt: account.lastLoginAt,
   };
@@ -55,7 +54,6 @@ export async function renderAccountList(
   const detailLines = (account: ReturnType<typeof viewOf>): string[] => [
     `  作成: ${account.createdAt} / 最後のログイン: ${account.lastLoginAt ?? '（なし）'}`,
     `  許可: ${account.grantedAt ?? '（未許可）'} / 許可した者: ${account.grantedBy ?? '（なし）'}`,
-    `  持ち主の宣言: ${account.ownerDeclaredAt ?? '（なし）'}`,
   ];
   if (id !== undefined) {
     const account = accounts.find((row) => row.id === id);
@@ -85,12 +83,7 @@ export async function renderAccountList(
     return `（from=${String(from)} より後ろのアカウントは無い。全 ${String(accounts.length)} 件）`;
   }
   const items = view.map((account) => {
-    const updatedAt = [
-      account.createdAt,
-      account.grantedAt,
-      account.ownerDeclaredAt,
-      account.lastLoginAt,
-    ]
+    const updatedAt = [account.createdAt, account.grantedAt, account.lastLoginAt]
       .filter((value) => value !== null)
       .reduce((latest, value) => (compareIsoInstant(value, latest) > 0 ? value : latest));
     return renderListingEntry({
@@ -101,7 +94,6 @@ export async function renderAccountList(
       updatedAt,
       extra: [
         `  許可: ${account.grantedAt ?? '（未許可）'} / 許可した者: ${account.grantedBy ?? '（なし）'}`,
-        `  持ち主の宣言: ${account.ownerDeclaredAt ?? '（なし）'}`,
       ],
     });
   });
@@ -113,6 +105,6 @@ export async function renderAccountList(
         `…ほか ${String(rest)} 件は省略（アカウントは ${String(accounts.length)} 件あり、createdAt の昇順に ${String(shown)} 件だけ出した）。` +
         `続きは account_list from=${String(from + shown)} で取れる。`,
     }),
-    '（作成 = アカウントができた時刻 / 更新 = 作成・許可・持ち主の宣言・最後のログインのうち最新。email・表示名などの個人の情報は出さない。1件は account_list id=<id> で取れる）',
+    '（作成 = アカウントができた時刻 / 更新 = 作成・許可・最後のログインのうち最新。email・表示名などの個人の情報は出さない。1件は account_list id=<id> で取れる）',
   ].join('\n');
 }

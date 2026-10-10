@@ -1,12 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  decodeState,
-  isAccountGranted,
-  isDeclaredOwner,
-  type AuthAccount,
-  type AuthStore,
-} from './auth.js';
+import { decodeState, isAccountGranted, type AuthStore } from './auth.js';
 import {
   createAuthProviderRegistry,
   type OAuthProfile,
@@ -401,7 +395,6 @@ describe('createAuthService', () => {
         lastLoginAt: '2026-01-01T00:00:00.000Z',
         grantedAt: null,
         grantedBy: null,
-        ownerDeclaredAt: null,
       },
       identity: {
         provider: 'google',
@@ -738,7 +731,6 @@ describe('listAccounts / listIdentities / listAccessTokens の並び（in-memory
       lastLoginAt: null,
       grantedAt: null,
       grantedBy: null,
-      ownerDeclaredAt: null,
     };
     const early = {
       ...base,
@@ -767,7 +759,6 @@ describe('listAccounts / listIdentities / listAccessTokens の並び（in-memory
       lastLoginAt: null,
       grantedAt: null,
       grantedBy: null,
-      ownerDeclaredAt: null,
     });
     const first = {
       provider: 'google',
@@ -804,7 +795,6 @@ describe('listAccounts / listIdentities / listAccessTokens の並び（in-memory
       lastLoginAt: null,
       grantedAt: null,
       grantedBy: null,
-      ownerDeclaredAt: null,
     });
     const first = {
       id: 'token-first',
@@ -844,7 +834,6 @@ describe('同着（createdAt が同一）の並び（in-memory、issue #1688）'
     lastLoginAt: null,
     grantedAt: null,
     grantedBy: null,
-    ownerDeclaredAt: null,
   };
 
   it('listAccounts: 同着の2行のうち先に作ったほうだけ後から更新すると、id 昇順のまま動かない', async () => {
@@ -986,44 +975,5 @@ describe('同着（createdAt が同一）の並び（in-memory、issue #1688）'
 
     const ids = (await memoryAuth.listAccessTokens('account-1')).map((it) => it.id);
     expect(ids).toEqual(['token-a', 'token-z']);
-  });
-});
-
-describe('isDeclaredOwner（宣言済み owner の判定）', () => {
-  const base: AuthAccount = {
-    id: 'acc-1',
-    displayName: null,
-    email: null,
-    createdAt: '2026-09-17T00:00:00.000Z',
-    lastLoginAt: null,
-    grantedAt: null,
-    grantedBy: null,
-    ownerDeclaredAt: null,
-  };
-
-  it('① 宣言済み（かつ許可済み）なら真', () => {
-    const account = {
-      ...base,
-      grantedAt: '2026-09-17T01:00:00.000Z',
-      grantedBy: 'operator',
-      ownerDeclaredAt: '2026-09-18T00:00:00.000Z',
-    };
-    expect(isDeclaredOwner(account)).toBe(true);
-    expect(isAccountGranted(account)).toBe(true);
-  });
-
-  it('② 許可済みでも宣言していなければ偽（広げすぎていないことの対照）', () => {
-    const account = { ...base, grantedAt: '2026-09-17T01:00:00.000Z', grantedBy: 'operator' };
-    expect(isAccountGranted(account)).toBe(true);
-    expect(isDeclaredOwner(account)).toBe(false);
-  });
-
-  it('② ログインしただけ（未許可・未宣言）は偽', () => {
-    expect(isDeclaredOwner(base)).toBe(false);
-  });
-
-  it('③ 許可が落ちていれば、ownerDeclaredAt が入ったままでも偽（不変条件へ寄りかからない）', () => {
-    const account = { ...base, grantedAt: null, ownerDeclaredAt: '2026-09-18T00:00:00.000Z' };
-    expect(isDeclaredOwner(account)).toBe(false);
   });
 });

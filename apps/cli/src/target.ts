@@ -94,40 +94,25 @@ async function remoteTarget(baseUrl: string): Promise<Target> {
 // `apps/daemon` から import しない: デーモンの文言が変わったときに気づかず追随し、変わったことを検出できなくなるため
 const NOT_OPERATOR_ERROR = '実行環境の持ち主だけが操作できる';
 const NOT_GRANTED_ERROR = 'このアカウントには alteroid を使う許可が無い';
-const NOT_DECLARED_OWNER_ERROR = '実行環境の持ち主として宣言されたアカウントだけが操作できる';
 
 // `unknown` で解決策を書かない: 当てずっぽうで片方を出すと、状況によっては必ず嘘の案内になるため
-export type ForbiddenKind = 'not_operator' | 'not_granted' | 'not_declared_owner' | 'unknown';
+export type ForbiddenKind = 'not_operator' | 'not_granted' | 'unknown';
 
 export function forbiddenKindOf(body: unknown): ForbiddenKind {
   if (typeof body !== 'object' || body === null) return 'unknown';
   const error = (body as { error?: unknown }).error;
   if (error === NOT_OPERATOR_ERROR) return 'not_operator';
   if (error === NOT_GRANTED_ERROR) return 'not_granted';
-  if (error === NOT_DECLARED_OWNER_ERROR) return 'not_declared_owner';
   return 'unknown';
 }
 
-export function describeAuthFailure(
-  status: number,
-  target: Target,
-  kind: ForbiddenKind = 'unknown',
-): string | null {
+export function describeAuthFailure(status: number, target: Target): string | null {
   if (status === 401) {
     return target.remote
       ? `認証されませんでした。alteroid login でログインし直してください（${target.baseUrl}）`
       : '認証されませんでした。デーモンを起動し直してください（alteroid daemon stop && alteroid chat）';
   }
   if (status === 403) {
-    if (kind === 'not_declared_owner') {
-      return (
-        '実行環境の持ち主として宣言されたアカウントだけが操作できます' +
-        '（alteroid access grant だけでは足りません）。\n' +
-        'デーモンが動いている環境で次を実行してください:\n' +
-        '  alteroid access list\n' +
-        '  alteroid access owner <アカウント id>'
-      );
-    }
     return (
       'このアカウントには alteroid を使う許可がありません。\n' +
       'デーモンが動いている環境で次を実行してください:\n' +

@@ -399,7 +399,7 @@ export const STATEMENTS = [
   // 専用の列にする: jsonb の `->>'withdrawnAt'` より `answered_at` と揃った形で `isNull` で絞れる（`jobs.ts` の `where` 節）。
   `alter table approvals add column if not exists withdrawn_at timestamptz`,
 
-  // 宣言は資格の判断に使わない（ログインできる人＝持ち主）。列は当面残す。
+  // 持ち主の宣言は #2948 で畳んだ。コードは読み書きしないが、既存の DB に列と値が残るので DDL は消さない（列を落とすマイグレーションは書かない）。
   `alter table auth_accounts add column if not exists owner_declared_at timestamptz`,
 
   // 既にあるどの表にも列を足さない: やり方は独立した器で、記憶（`memory`）にも委譲（`jobs`）にも生やさない。

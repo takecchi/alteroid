@@ -96,7 +96,7 @@ describe('alteroid reset --yes', () => {
     expect(text).toContain('認証トークンのプール・マネージャーへ降ろす環境変数・Web UI のログイン');
   });
 
-  it('403（未宣言 owner）なら、access owner を打てと言う', async () => {
+  it('403（旧デーモンの未宣言 owner の本文）は、案内を出さずに止まる（access owner は存在しない。#2948）', async () => {
     reply = {
       status: 403,
       body: { error: '実行環境の持ち主として宣言されたアカウントだけが操作できる' },
@@ -106,8 +106,8 @@ describe('alteroid reset --yes', () => {
       error instanceof Error ? error.message : String(error),
     );
 
-    expect(message).toContain('alteroid access list');
-    expect(message).toContain('alteroid access owner <アカウント id>');
+    expect(message).toContain('理由を判別できなかった');
+    expect(message).not.toContain('access owner');
     expect(message).not.toContain('access grant <アカウント id>');
   });
 

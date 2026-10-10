@@ -365,10 +365,9 @@ async function fail(
   if (response.status === 403) {
     const body = await response.json().catch(() => ({}));
     const kind = forbiddenKindOf(body);
-    if (kind === 'not_declared_owner' || kind === 'not_granted') {
+    if (kind === 'not_granted') {
       throw new Error(
-        describeAuthFailure(403, target, kind) ??
-          'plugin の口へのアクセスが拒否されました（403）。',
+        describeAuthFailure(403, target) ?? 'plugin の口へのアクセスが拒否されました（403）。',
       );
     }
     throw new Error(
