@@ -78,7 +78,7 @@ describe('useConversations の頁送り', () => {
     });
     expect(text('next')).toBe('(無し)');
     expect(text('complete')).toBe('false');
-    // `scanned` / `reachedStart` は最後の頁の窓の値なので、何頁ぶんを読んだかを別に返す（#4021）。
+    // `scanned` / `reachedStart` は最後の頁の窓の値なので、何頁ぶんを読んだかを別に返す。
     expect(text('pages-read')).toBe('2');
     expect(stub.calls.filter((url) => url.includes('/conversations'))).toHaveLength(2);
   });

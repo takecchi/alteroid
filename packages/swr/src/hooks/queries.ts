@@ -128,7 +128,7 @@ export function useStatus() {
 }
 
 /**
- * クローンのセッションが安全分類器に弾かれ続けている状況（`/status` の `cloneSessionRefusal`。#4173）を、
+ * クローンのセッションが安全分類器に弾かれ続けている状況（`/status` の `cloneSessionRefusal`）を、
  * ホームの帯が使うために一定間隔で取り直す。`useStatus` と同じキー（同じ応答を共有する）で、間隔だけが違う。
  */
 export function useCloneSessionRefusal() {
@@ -574,14 +574,14 @@ export function usePermissionGrants() {
   return useSWR(KEY.permissionGrants, () => api.api.GET('/permission-grants').then(unwrap));
 }
 
-/** Codex の ChatGPT ログインの状態（#3939）。値は返らない。 */
+/** Codex の ChatGPT ログインの状態。値は返らない。 */
 export function useCodexAuth() {
   const api = useApi();
   return useSWR(KEY.codexAuth, () => api.api.GET('/codex/auth').then(unwrap));
 }
 
 /**
- * デバイスコードのログイン1本の進み具合（#3939）。**決着するまで2秒ごとに見に行く**（人間が
+ * デバイスコードのログイン1本の進み具合。**決着するまで2秒ごとに見に行く**（人間が
  * ブラウザで承認したことを、画面を触らずに知るため）。`id` が無ければ何もしない。
  */
 export function useCodexLogin(id: string | undefined) {
