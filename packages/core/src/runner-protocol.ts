@@ -722,6 +722,8 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
       .object({
         code: z.string(),
         via: z.string(),
+        /** `result.api_error_status`（HTTP の状態番号）。読めたときだけ。枠（429）の判定を `code` の文字列を割らずに行うため。旧 runner は送らない。 */
+        status: z.number().int().optional(),
       })
       .optional(),
     /**

@@ -76,6 +76,20 @@ export function turnFailureKindOf(failure: SdkFailure | undefined): TurnFailureK
   return 'other';
 }
 
+/**
+ * 利用上限（枠）で止まった失敗かを、構造化された値（`via` / `code` / `status`）だけで答える。本文は見ない。
+ * `status` が無い（旧 runner の report）ときは `result_*` 系を枠と言わない: 言い切れないものは枠の束に入れず、担当ごとに配る側へ倒す。
+ */
+export function isQuotaFailure(failure: { via: string; code: string; status?: number }): boolean {
+  return turnFailureKindOf({ ...failure, via: failure.via as SdkFailureVia, text: '' }) === 'quota';
+}
+
+/**
+ * `failedReportText`（runner.ts）が、失敗する前に出ていた本文の前に置く見出し。
+ * 枠の束を1通にまとめる側（`quota-stop-notice.ts`）が同じ語で本文を切り出すので、両者が同じ定数を読む。
+ */
+export const FAILED_REPORT_PARTIAL_MARKER = '（失敗する前に出ていた本文）';
+
 export function resultErrorLines(message: SDKMessage): string[] {
   const errors = (message as { errors?: unknown }).errors;
   return Array.isArray(errors)
