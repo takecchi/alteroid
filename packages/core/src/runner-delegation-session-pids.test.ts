@@ -518,3 +518,229 @@ describe('自己失効（lost）した委譲の pid（#2352: 後任が同じ run
     await host.shutdown();
   });
 });
+
+// 閉じ方を外から選べる偽の SDK: `crash()` は読み取りを例外で落とし（failed）、`end()` はストリームを正常に閉じる（done）
+function controllableSdk(sessions: CapturedSession[], controls: SessionControl[]): typeof sdkQuery {
+  return ((params: { prompt: unknown; options?: Options }) => {
+    sessions.push({ options: params.options ?? {} });
+    let close = (): void => undefined;
+    let crash: (error: Error) => void = () => undefined;
+    const closed = new Promise<void>((resolve, reject) => {
+      close = resolve;
+      crash = reject;
+    });
+    controls.push({ end: () => close(), crash: (error) => crash(error) });
+
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-fake',
+        uuid: 'uuid-init',
+      } as unknown as SDKMessage;
+      void (async () => {
+        for await (const message of params.prompt as AsyncIterable<unknown>) {
+          void message;
+        }
+      })();
+      await closed;
+    }
+
+    return Object.assign(generate(), {
+      close: () => close(),
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof sdkQuery;
+}
+
+type SessionControl = { end: () => void; crash: (error: Error) => void };
+
+describe('failed / lost で閉じた CLI の pid は、同じ managerId を resume しても撃つ側に残る（#2352・#1334）', () => {
+  const spawnOptions = {
+    command: 'claude',
+    args: [],
+    env: {},
+    signal: new AbortController().signal,
+  };
+
+  function crashHost(pids: number[]) {
+    const sessions: CapturedSession[] = [];
+    const controls: SessionControl[] = [];
+    const processes = pids.map((pid) => fakeDelegationProcess(pid));
+    let call = 0;
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: controllableSdk(sessions, controls),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      // 実 I/O をさせない: `#finish()` が実 git・cgroup を読みに行かないように（runner-fence.test.ts と同じ）
+      readCgroupEventCountersFn: async () => ({}),
+      finishUnpushedWorkFn: async () => ({ cwd: '/work/project', worktrees: [] }),
+      spawnAgentProcessFn: () => {
+        const process = processes[call];
+        call += 1;
+        return (process as (typeof processes)[number]).handle;
+      },
+    });
+    const spawnIn = (index: number) =>
+      (sessions[index] as CapturedSession).options.spawnClaudeCodeProcess?.(spawnOptions);
+    const closedOf = async () => {
+      await vi.waitFor(() => {
+        expect(host.list().map((m) => m.managerId)).not.toContain('mgr-1');
+      });
+    };
+    const reopen = async () => {
+      await host.resume({
+        managerId: 'mgr-1',
+        sessionId: 'sess-1',
+        cwd: '/work/project',
+        request: 'つづき',
+      });
+    };
+    return { host, sessions, controls, processes, spawnIn, closedOf, reopen };
+  }
+
+  it('failed（SDK の読み取りが例外で落ちた）: 古い CLI が exit した後に resume しても、古い pid は knownTerminated、新しい pid は live', async () => {
+    const t = crashHost([555, 777]);
+    await t.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    t.spawnIn(0);
+
+    (t.controls[0] as SessionControl).crash(new Error('SIGABRT（テストの偽物）'));
+    await t.closedOf();
+    (t.processes[0] as { emitExit: () => void }).emitExit();
+
+    await t.reopen();
+    t.spawnIn(1);
+
+    expect(t.host.delegationSessionPids()).toEqual({
+      live: new Set([777]),
+      knownTerminated: new Set([555]),
+    });
+
+    await t.host.shutdown();
+  });
+
+  it('lost（自己失効）: resume しても古い pid は knownTerminated、新しい pid は live', async () => {
+    vi.useFakeTimers();
+    try {
+      const sessions: CapturedSession[] = [];
+      const oldProcess = fakeDelegationProcess(4800);
+      const newProcess = fakeDelegationProcess(4801);
+      let call = 0;
+      const host: RunnerHost = createRunnerHost({
+        runnerId: 'runner-test',
+        workspacePath: '/work',
+        emit: () => undefined,
+        queryFn: fakeSdk(sessions),
+        env: {},
+        childUser: { uid: 1000, gid: 1000 },
+        enforceLease: true,
+        readCgroupEventCountersFn: async () => ({}),
+        finishUnpushedWorkFn: async () => ({ cwd: '/work/project', worktrees: [] }),
+        spawnAgentProcessFn: () => {
+          call += 1;
+          return call === 1 ? oldProcess.handle : newProcess.handle;
+        },
+      });
+      await host.start({
+        managerId: 'mgr-1',
+        request: 'やって',
+        cwd: '/work/project',
+        lease: { fence: 1, ttlMs: 30_000 },
+      });
+      (sessions[0] as CapturedSession).options.spawnClaudeCodeProcess?.(spawnOptions);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(host.list().map((m) => m.managerId)).not.toContain('mgr-1');
+      oldProcess.emitExit();
+
+      await host.resume({
+        managerId: 'mgr-1',
+        sessionId: 'sess-1',
+        cwd: '/work/project',
+        request: 'つづき',
+      });
+      (sessions[1] as CapturedSession).options.spawnClaudeCodeProcess?.(spawnOptions);
+
+      expect(host.delegationSessionPids()).toEqual({
+        live: new Set([4801]),
+        knownTerminated: new Set([4800]),
+      });
+
+      await host.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('（対照）done で閉じた: resume すると古い pid は knownTerminated から外れる（守られる）', async () => {
+    const t = crashHost([555, 777]);
+    await t.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    t.spawnIn(0);
+
+    (t.controls[0] as SessionControl).end();
+    await t.closedOf();
+    (t.processes[0] as { emitExit: () => void }).emitExit();
+
+    // done で閉じて名簿から消えた時点では、所有者がいないので撃つ側にある
+    expect(t.host.delegationSessionPids().knownTerminated).toEqual(new Set([555]));
+
+    await t.reopen();
+    t.spawnIn(1);
+
+    expect(t.host.delegationSessionPids()).toEqual({
+      live: new Set([777]),
+      knownTerminated: new Set(),
+    });
+
+    await t.host.shutdown();
+  });
+
+  it('failed で閉じても、古い CLI がまだ exit していない間は knownTerminated に入らない（live のまま）', async () => {
+    const t = crashHost([555, 777]);
+    await t.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    t.spawnIn(0);
+
+    (t.controls[0] as SessionControl).crash(new Error('SIGABRT（テストの偽物）'));
+    await t.closedOf();
+    await t.reopen();
+    t.spawnIn(1);
+
+    expect(t.host.delegationSessionPids()).toEqual({
+      live: new Set([555, 777]),
+      knownTerminated: new Set(),
+    });
+
+    await t.host.shutdown();
+  });
+
+  it('pid の使い回し: failed で閉じた pid と同じ番号で新しい CLI が起きたら、それは live であって knownTerminated ではない', async () => {
+    const t = crashHost([555, 555]);
+    await t.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    t.spawnIn(0);
+
+    (t.controls[0] as SessionControl).crash(new Error('SIGABRT（テストの偽物）'));
+    await t.closedOf();
+    (t.processes[0] as { emitExit: () => void }).emitExit();
+    expect(t.host.delegationSessionPids().knownTerminated).toEqual(new Set([555]));
+
+    await t.reopen();
+    t.spawnIn(1);
+
+    expect(t.host.delegationSessionPids()).toEqual({
+      live: new Set([555]),
+      knownTerminated: new Set(),
+    });
+
+    // 新しい CLI が exit しても、委譲が生きていれば守る側のまま（古い持ち主の印が残っていると、ここで撃つ側へ回る）
+    (t.processes[1] as { emitExit: () => void }).emitExit();
+    expect(t.host.delegationSessionPids()).toEqual({
+      live: new Set(),
+      knownTerminated: new Set(),
+    });
+
+    await t.host.shutdown();
+  });
+});
