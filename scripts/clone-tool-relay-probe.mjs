@@ -1,4 +1,4 @@
-// クローンの道具の中継（#486 48(a)）を、**本物の Claude Code CLI**（SDK 同梱の実行体）に
+// クローンの道具の中継を、**本物の Claude Code CLI**（SDK 同梱の実行体）に
 // 繋がせて確かめる検査。モデルは呼ばない（`claude mcp list` の health check だけを使う）。
 //
 // 使い方: node clone-tool-relay-probe.mjs <@alteroid/core の dist/index.js> <claude 実行体> <ソケットの置き場>
