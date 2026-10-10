@@ -2658,6 +2658,11 @@ class Pool implements ManagerPool {
    * 窓の長さは枠の窓（`#quotaStopWindowMs`）と同じ値を共有する。
    */
   readonly #restoredWindows = new Map<RestartCause, RestoredWindow>();
+  /**
+   * 窓を Map から外した後、配り終えるまでの flush。`stop()` はこれも待つ: 窓は読む前に外すので、タイマーが閉じて台帳を読んでいる最中に
+   * `stop()` が来ると Map は空で、待つものが無いまま止まり、一覧が配られない。
+   */
+  readonly #windowFlushesInFlight = new Set<Promise<void>>();
   /** **器の乱数を直に読まない**（テストが衝突を再現できるようにする。`#now` と同じ理由）。 */
   readonly #generateManagerId: () => string;
   /** **`start` のたびに `process.env` を読み直さない**: 起動時に1度だけ解決して保持する。 */
@@ -5814,6 +5819,7 @@ class Pool implements ManagerPool {
     // 担当ごとの窓を閉じた後に呼ぶ: 閉じた束がプール全体の窓へ入るので、順序が逆だとその分が残る。
     await this.#flushQuotaStopWindows();
     await this.#flushRestoredWindows();
+    await Promise.allSettled([...this.#windowFlushesInFlight]);
     // 日誌の畳み込みも吐き出す: こちらは日誌のどこにも書かれていない記録そのものを失い、`#retire()` を通らずに止まると畳んだ2件目以降が丸ごと消える。
     this.#flushRateLimitJournalFolds();
     this.#flushPushFailureFolds();
@@ -9127,11 +9133,15 @@ class Pool implements ManagerPool {
   // 窓が閉じたとき、貯めた担当（窓を開けた担当以外）が居なければ何も配らない: 委譲1本だけの回は今までと完全に同じ。
   // 状態は枠の1通と同じ読み方（`#flushQuotaStopWindow`）: 像に無いものだけジョブ台帳から読み、読めなければ「不明」と言う。
   // 窓は読む前に外す。`stop()` はこれを待つ。
-  async #flushRestoredWindow(cause: RestartCause): Promise<void> {
+  #flushRestoredWindow(cause: RestartCause): Promise<void> {
     const window = this.#restoredWindows.get(cause);
-    if (window === undefined) return;
+    if (window === undefined) return Promise.resolve();
     this.#restoredWindows.delete(cause);
     clearTimeout(window.timer);
+    return this.#trackWindowFlush(this.#deliverRestoredWindow(cause, window));
+  }
+
+  async #deliverRestoredWindow(cause: RestartCause, window: RestoredWindow): Promise<void> {
     if ([...window.entries.keys()].every((id) => id === window.openerId)) return;
     const missing = [...window.entries.keys()].filter((id) => !this.#records.has(id));
     const ledger =
@@ -9377,7 +9387,6 @@ class Pool implements ManagerPool {
         this.#joinQuotaStopWindow(windowKey, managerId, entry, breakdown, arrived);
         return;
       }
-      this.#noteQuotaStopOpener(windowKey, managerId, entry, arrived);
     }
 
     // 「同文なら常に捨てる」にしない: 1件目まで消えて黙らせる側になる（連鎖は配ったあとの `set` で初めて立つ）。
@@ -9385,7 +9394,16 @@ class Pool implements ManagerPool {
     const signature = synthesizedNoticeSignature(entry.fragments);
     const eligible = isCrossWindowStreakEligible(entry.fragments);
     const streak = this.#synthesizedNoticeStreaks.get(managerId);
-    if (eligible && streak !== undefined && streak.signature === signature) {
+    const suppressed = eligible && streak !== undefined && streak.signature === signature;
+    // 窓を開けるのは配る束だけ: 連鎖で握りつぶす束で窓を開けると、一覧がその担当を「最初の1本。担当への報告としては先に届けてある」と言うのに、
+    // この回の知らせは担当へ届いていない。開いている窓の2本目（窓を開けた担当自身）は、握りつぶしても一覧の通数には数える。
+    if (entry.fragments.every((fragment) => fragment.quota !== undefined)) {
+      const windowKey = quotaStopWindowKeyOf(entry.fragments);
+      if (!suppressed || this.#quotaStopWindows.has(windowKey)) {
+        this.#noteQuotaStopOpener(windowKey, managerId, entry, arrived);
+      }
+    }
+    if (suppressed && streak !== undefined) {
       const at = new Date(this.#now()).toISOString();
       streak.suppressed += 1;
       streak.suppressedArrived += arrived;
@@ -9513,11 +9531,22 @@ class Pool implements ManagerPool {
     }
   }
 
-  async #flushQuotaStopWindow(windowKey: string): Promise<void> {
+  #flushQuotaStopWindow(windowKey: string): Promise<void> {
     const window = this.#quotaStopWindows.get(windowKey);
-    if (window === undefined) return;
+    if (window === undefined) return Promise.resolve();
     this.#quotaStopWindows.delete(windowKey);
     clearTimeout(window.timer);
+    return this.#trackWindowFlush(this.#deliverQuotaStopWindow(windowKey, window));
+  }
+
+  // Map から外した窓を `#windowFlushesInFlight` に載せる。`stop()` が待つのはこの集合である。
+  #trackWindowFlush(flush: Promise<void>): Promise<void> {
+    this.#windowFlushesInFlight.add(flush);
+    void flush.finally(() => this.#windowFlushesInFlight.delete(flush)).catch(() => undefined);
+    return flush;
+  }
+
+  async #deliverQuotaStopWindow(windowKey: string, window: QuotaStopWindow): Promise<void> {
     // 貯めた担当（窓を開けた担当以外）が居なければ何も配らない: 担当1本だけの回は今までと完全に同じ。
     if ([...window.entries.keys()].every((id) => id === window.openerId)) return;
     const missing = [...window.entries.keys()].filter((id) => !this.#records.has(id));
