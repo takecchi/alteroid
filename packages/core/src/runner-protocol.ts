@@ -1,3 +1,5 @@
+import { performance } from 'node:perf_hooks';
+
 import { redactErrorText } from './denial-input-head.js';
 import { z } from 'zod';
 
@@ -2262,6 +2264,7 @@ class Registry implements RunnerRegistry {
         }
       | undefined;
     // 失敗の文言にデーモン側の観測を添えるための起点: 全台が同時に倒れたとき、遅れたのが器かデーモン自身かを文言だけで分けるため（#4454）。
+    // `performance` は大域ではなく `node:perf_hooks` から読む: `vi.useFakeTimers()` は大域の `performance` を差し替え、`eventLoopUtilization` が無くなって probe ごと投げるため。
     const startedAt = performance.now();
     const loopBefore = performance.eventLoopUtilization();
     try {
