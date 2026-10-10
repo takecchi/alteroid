@@ -170,7 +170,7 @@ export class FsJournalStore implements JournalStore {
   async oldestAt(): Promise<string | null> {
     // 全件走査しない: ファイル名が追記時の UTC 日付なので、昇順の先頭から開いて最初に読めた行で止める
     const dropped = new Map<string, number>();
-    // 外した行（消した会話の exchange・墓標が名指しした行）の時刻を返さない（#4377）: list / get と同じ絞りを通す
+    // 外した行（消した会話の exchange・墓標が名指しした行）の時刻を返さない: list / get と同じ絞りを通す
     const tombstoned = await this.#tombstoneSet();
     for (const file of await this.#files('asc')) {
       const raw = await readFile(join(this.#dir, file), 'utf8');
@@ -281,7 +281,6 @@ export class FsJournalStore implements JournalStore {
   }
 }
 
-// 墓標の会話 id と、墓標が名指しした日誌の行の id（会話 id を持たない本文の写し。#4355）
 interface Tombstones {
   conversations: Set<string>;
   entries: Set<string>;
