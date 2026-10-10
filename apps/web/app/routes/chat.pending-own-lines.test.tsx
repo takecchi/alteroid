@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 「履歴が引き取ったか」で刈る形は見送った: 再取得が空を返す窓で届いたばかりの行を消すため
-// （`grep -Fn -- 'の筋書き2）。**その刈り込みはこの関数の役目ではなく' apps/web/app/routes/chat.tsx`）
+// （`grep -Fn -- '手元の写しは刈らない。**その刈り込みはこの関数の役目ではなく' apps/web/app/routes/chat.tsx`）
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
