@@ -281,7 +281,7 @@ function repoDocs(): Array<[string, string]> {
 
 const ALL = [...CORPUS, ...repoDocs()];
 
-// 旧実装との意図した差: `href` が空になるリンクは、押せる見た目の `<a href="">` を残さず文字だけで描く（#4040）
+// 旧実装との意図した差: `href` が空になるリンクは、押せる見た目の `<a href="">` を残さず文字だけで描く
 const UNSAFE_LINKS = new Set([
   'javascript: リンク',
   'JavaScript: 大文字',
