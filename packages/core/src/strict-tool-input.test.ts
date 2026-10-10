@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { describeUnknownToolArgs, strictToolInput } from './strict-tool-input.js';
+import { approvalQuestionSchema } from './schema.js';
+import {
+  describeUnknownNestedKeys,
+  describeUnknownToolArgs,
+  strictToolInput,
+} from './strict-tool-input.js';
 
 describe('strictToolInput（知らない引数を黙って捨てない）', () => {
   const shape = {
@@ -41,6 +46,41 @@ describe('describeUnknownToolArgs の「近い名前」', () => {
   it('大文字小文字だけの違いは近い名前として挙げる', () => {
     expect(describeUnknownToolArgs(['managerID'], ['managerId', 'text'])).toContain(
       'managerID（近い名前: managerId）',
+    );
+  });
+});
+
+describe('strictToolInput の入れ子（#4426）', () => {
+  it('道具の入力の写しだけを strict にし、共通のスキーマ（approvalQuestionSchema）は知らない鍵を今までどおり捨てる', () => {
+    const schema = strictToolInput({
+      questions: z.array(approvalQuestionSchema).optional(),
+    }) as unknown as z.ZodType;
+    const input = {
+      questions: [{ id: 'q', prompt: 'p', options: [{ id: 'a', label: 'A' }], choices: [] }],
+    };
+
+    expect(schema.safeParse(input).success).toBe(false);
+    const shared = approvalQuestionSchema.safeParse(input.questions[0]);
+    expect(shared.success).toBe(true);
+    expect(shared.data).not.toHaveProperty('choices');
+  });
+
+  it('catchall を持つ object は、知らない鍵を受けるまま変えない', () => {
+    const schema = strictToolInput({
+      extra: z.object({ id: z.string() }).catchall(z.string()),
+    }) as unknown as z.ZodType;
+    expect(schema.safeParse({ extra: { id: 'a', other: 'b' } }).success).toBe(true);
+  });
+
+  it('場所は questions[0].options[1] の形で言い、道具の直下と同じ形に揃える', () => {
+    expect(
+      describeUnknownNestedKeys(
+        ['questions', 0, 'options', 1],
+        ['recommend'],
+        ['id', 'recommended'],
+      ),
+    ).toBe(
+      'questions[0].options[1] に無い欄: recommend（近い名前: recommended）。黙って捨てずに断った（呼び出しは何もしていない）。受け付ける欄: id, recommended',
     );
   });
 });

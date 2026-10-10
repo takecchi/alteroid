@@ -317,3 +317,107 @@ describe('道具に無い引数は黙って捨てずに断る', () => {
     expect(await stores.journal.list({ limit: 10 })).toEqual([]);
   });
 });
+
+describe('引数の値の中の入れ子の object も、知らない鍵を黙って捨てずに断る（#4426）', () => {
+  const option = { id: 'railway', label: 'Railway' };
+
+  it('ask_human の questions の要素に choices を足すと断られ、場所と受け付ける欄が出て、承認待ちは積まれない', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+    const result = await callTool(rpc, 'ask_human', {
+      question: 'デプロイ先を決めたい',
+      questions: [{ id: 'target', prompt: 'デプロイ先は？', options: [option], choices: ['fly'] }],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
+    expect(result.text).toContain('questions[0] に無い欄: choices');
+    expect(result.text).toContain('受け付ける欄: id, prompt, options, multiple, allowOther');
+    expect((await stores.jobs.listApprovals()).entries).toEqual([]);
+  });
+
+  it('選択肢の要素の打ち間違い（recommend）は、近い正しい名前（recommended）と一緒に断る', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+    const result = await callTool(rpc, 'ask_human', {
+      question: 'デプロイ先を決めたい',
+      questions: [
+        {
+          id: 'target',
+          prompt: 'デプロイ先は？',
+          options: [option, { id: 'fly', label: 'Fly.io', recommend: true }],
+        },
+      ],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain(
+      'questions[0].options[1] に無い欄: recommend（近い名前: recommended）',
+    );
+    expect((await stores.jobs.listApprovals()).entries).toEqual([]);
+  });
+
+  it('知っている欄だけなら、入れ子も含めてそのまま通る', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+    const questions = [
+      {
+        id: 'target',
+        prompt: 'デプロイ先は？',
+        options: [
+          { ...option, description: '既定', recommended: true },
+          { id: 'fly', label: 'Fly.io' },
+        ],
+        multiple: false,
+        allowOther: true,
+      },
+    ];
+    const result = await callTool(rpc, 'ask_human', {
+      question: 'デプロイ先を決めたい',
+      questions,
+    });
+
+    expect(result.isError, result.text).toBe(false);
+    expect((await stores.jobs.listApprovals()).entries[0]?.questions).toEqual(questions);
+  });
+
+  it('union の枝と、その中の object（github_observation_record の result / result.ci）でも断る。refine は残る', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+    const base = { repo: 'a/b', query: 'gh pr list --state open --limit 100' };
+    const ci = { pulls: 2, success: 1, failure: 0, pending: 1, checks: '必須だけ' };
+
+    const failedWithCounts = await callTool(rpc, 'github_observation_record', {
+      ...base,
+      result: { status: 'failed', reason: 'HTTP 502', openIssues: 99 },
+    });
+    expect(failedWithCounts.isError).toBe(true);
+    expect(failedWithCounts.text).toContain('result に無い欄: openIssues');
+
+    const okBase = { status: 'ok', openIssues: 1, openPulls: 2, truncated: false };
+    const ciWithUnknown = await callTool(rpc, 'github_observation_record', {
+      ...base,
+      result: { ...okBase, ci: { ...ci, skipped: 0 } },
+    });
+    expect(ciWithUnknown.isError).toBe(true);
+    expect(ciWithUnknown.text).toContain('result.ci に無い欄: skipped');
+
+    const ciOverPulls = await callTool(rpc, 'github_observation_record', {
+      ...base,
+      result: { ...okBase, ci: { ...ci, success: 5 } },
+    });
+    expect(ciOverPulls.isError).toBe(true);
+    expect(ciOverPulls.text).toContain(
+      'success + failure + pending は pulls 以下でなければならない',
+    );
+
+    expect(await stores.journal.list({ types: ['github_observation'] })).toEqual([]);
+
+    const ok = await callTool(rpc, 'github_observation_record', {
+      ...base,
+      result: { ...okBase, ci },
+    });
+    expect(ok.isError, ok.text).toBe(false);
+    expect(await stores.journal.list({ types: ['github_observation'] })).toHaveLength(1);
+  });
+});
