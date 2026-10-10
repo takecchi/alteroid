@@ -51,6 +51,7 @@ import {
   releaseLease,
   touchLease,
   type LeaseSighting,
+  type LeaseVerdict,
 } from './lease.js';
 import { classifyManagerActivity, describeManagerActivityForFlush } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
@@ -6171,7 +6172,10 @@ class Pool implements ManagerPool {
         const known = this.#records.get(job.id);
         if ((known?.job.runnerId ?? fresh.runnerId) !== job.runnerId) continue;
 
-        if (known) known.attached = false;
+        // 移送のときは、像を「器にセッションが無い」側へ倒すのを貸し出しの関門を通った後まで待つ（下の `markMissing`）。
+        // 関門で断られるのは持ち主がまだ握っているときで、名簿が器を一時的に `lost` と誤判定しただけのこともある。先に倒すと、断られた後も
+        // 待っていた確認（`waiting`）が消えたまま戻らず、回答が届かなくなる。`attached = false` も残り、次の `manager_send` が生きたセッションへ resume を撃ち直す（#4454）。
+        if (known && !relocating) known.attached = false;
 
         // 印は resume を挑む直前に置き、戻れたときに消す: `#resumeOnce` が投げる回も「戻れなかった」側へ落ち、この節を抜けて印が立っている ⟺ resume が成功しなかった、が成り立つ。
         const missingAt = new Date(this.#now()).toISOString();
@@ -6184,9 +6188,15 @@ class Pool implements ManagerPool {
 
         const record = current ?? { job: { ...fresh }, waiting: [], attached: false };
         this.#records.set(job.id, record);
-        record.attached = false;
-        // 待っていた確認を持ち越さない: 新しい器はその request_id を知らず、残すと以後の `manager_send` が死んだ確認への回答として横取りされ、誰からも届かないマネージャーになる。
-        record.waiting = [];
+        const markMissing = (): void => {
+          record.attached = false;
+          // 待っていた確認を持ち越さない: 新しい器はその request_id を知らず、残すと以後の `manager_send` が死んだ確認への回答として横取りされ、誰からも届かないマネージャーになる。
+          record.waiting = [];
+          record.sessionMissingSince ??= missingAt;
+          // 由来を上書きする（格上げ）: ここを抜けて印が残っている ⟺ resume でも入り直せなかった。
+          record.sessionMissingKind = 'resume-failed';
+        };
+        if (!relocating) markMissing();
 
         // 1本が戻せなくても残りを道連れにしない。移送の窓はどの抜け方でも必ず1回閉じる（`#endRelocationWindow`）。
         let windowOpen = false;
@@ -6201,9 +6211,6 @@ class Pool implements ManagerPool {
             record.job.lastRescue,
           );
           const refusedBefore = record.leaseRefusal !== undefined;
-          record.sessionMissingSince ??= missingAt;
-          // 由来を上書きする（格上げ）: ここを抜けて印が残っている ⟺ resume でも入り直せなかった。
-          record.sessionMissingKind = 'resume-failed';
           // 別の契機が resume 中なら窓は持たない: そちらの窓を壊さない。同じ runner への復帰は `closed` だけを預ける別の窓を持つ。
           const ownsWindow = !this.#resuming.has(job.id);
           if (ownsWindow) {
@@ -6213,7 +6220,13 @@ class Pool implements ManagerPool {
           }
           let outcome: ResumeOutcome;
           try {
-            outcome = await this.#resumeOnce(record, runner, message);
+            outcome = await this.#resumeOnce(
+              record,
+              runner,
+              message,
+              undefined,
+              relocating ? markMissing : undefined,
+            );
           } catch (resumeError) {
             if (windowOpen) {
               windowOpen = false;
@@ -6706,13 +6719,14 @@ class Pool implements ManagerPool {
     runner: RunnerClient,
     message: string | undefined,
     attachments?: RunnerAttachment[],
+    onClaimed?: () => void,
   ): Promise<ResumeOutcome> {
     const id = record.job.id;
     // 理由は真偽値ではなく返り値（`ResumeOutcome`）で運ぶ: 呼び手が残っていた断りから推測して「待てば通る」と誤って言うため。
     if (this.#resuming.has(id)) return 'busy';
     this.#resuming.add(id);
     try {
-      return await this.#resume(record, runner, message, attachments);
+      return await this.#resume(record, runner, message, attachments, onClaimed);
     } finally {
       this.#resuming.delete(id);
     }
@@ -6818,16 +6832,36 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 引き取りの判定の材料を組むのはここだけ: `#claimForResume` の関門と `#reattach` の移送の前の覗き見が別々に組むと、片方だけ材料が欠ける。
+   * 持ち主の名乗りを最後に聞けた時刻（`holderSeenAt`）を添える理由は `judgeLease` の doc（#4454）。
+   */
+  #judgeClaim(lease: Job['lease'], runnerId: string, now: number): LeaseVerdict {
+    const holderSeenAt = lease === undefined ? undefined : this.#lastSeenAtOf(lease.runnerId);
+    return judgeLease({
+      lease,
+      now,
+      answering: this.#sighting(runnerId),
+      ...(holderSeenAt === undefined ? {} : { holderSeenAt }),
+    });
+  }
+
+  /** 同じ名前の行が2つ以上あれば遅い方を採る: 早い方を採ると、まだ名乗っている側の委譲を引き取れることにしてしまう。 */
+  #lastSeenAtOf(runnerId: string): number | undefined {
+    const seen = this.#runners
+      .entries()
+      .filter((entry) => entry.runnerId === runnerId && entry.lastSeenAt !== undefined)
+      .map((entry) => Date.parse(entry.lastSeenAt as string))
+      .filter((at) => !Number.isNaN(at));
+    return seen.length === 0 ? undefined : Math.max(...seen);
+  }
+
+  /**
    * 関門を契機（`restore` / `hello` / `manager_send`）ごとに置かない: 足し忘れた契機だけが素通しになり、二重実行が起きるまで見えない。`#resume` は3つとも通る。
    * 断っても回数で諦めない: 持ち主が握っている間だけの話で待てば通る。諦めると、台帳では走っているのに誰も走っていない仕事が残る。
    */
   async #claimForResume(record: ManagerRecord, runner: RunnerClient): Promise<boolean> {
     const now = this.#now();
-    const verdict = judgeLease({
-      lease: record.job.lease,
-      now,
-      answering: this.#sighting(runner.runnerId),
-    });
+    const verdict = this.#judgeClaim(record.job.lease, runner.runnerId, now);
 
     if (!mayClaim(verdict)) {
       // 未知の判定が増えて落ちてきても `ambiguous`（時間では解けない側）に倒す: `mayClaim` の「名指ししなかった判定は断る」と同じ安全側。
@@ -6894,11 +6928,13 @@ class Pool implements ManagerPool {
     return true;
   }
 
+  /** `onClaimed` は貸し出しの関門を通った直後に1回だけ呼ぶ（断られた回・関門より前に断った回は呼ばない）。 */
   async #resume(
     record: ManagerRecord,
     runner: RunnerClient,
     message: string | undefined,
     attachments?: RunnerAttachment[],
+    onClaimed?: () => void,
   ): Promise<ResumeOutcome> {
     const { sessionId, cwd, request, projectKey } = record.job;
     if (sessionId === undefined) return 'no-session';
@@ -6907,6 +6943,7 @@ class Pool implements ManagerPool {
     if (cwd === undefined && !runner.workspacePathKnown) return 'workspace-path-unknown';
 
     if (!(await this.#claimForResume(record, runner))) return 'held-by-lease';
+    onClaimed?.();
 
     // runner のディスクに生ログが残っている前提を置かない: 器は作り直される。
     const material = await this.#loadSession(projectKey, sessionId);

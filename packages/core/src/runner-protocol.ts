@@ -1527,6 +1527,12 @@ export interface RunnerEntry {
    * 自分が初めて見た時刻から数える（過去に見積もると、まだ畳まれていない器の仕事を奪いに行く。`lease.ts` の `LEASE_DRAIN_MS`）。
    */
   instanceSince?: string;
+  /**
+   * 生存判定の起点（最後に名乗りが返った周の時刻。開いた直後は開けた時刻）。`lost` のあいだも動かない。
+   * 引き取りの判定（`lease.ts` の `holderSeenAt`）の材料: 台帳の `seenAt` は書き込みのついでにしか進まず、黙って確認を待っている委譲の持ち主が
+   * いまも名乗っているかを台帳だけでは言えないため（#4454）。
+   */
+  lastSeenAt?: string;
   /** 常に3値のどれかで省略されない。`state` が `'lost'` でも古い値が残ることがある（`RunnerRevisionStatus`）。 */
   revision: RunnerRevisionStatus;
   /**
@@ -1861,6 +1867,7 @@ class Registry implements RunnerRegistry {
       label: entry.source.label,
       state: entry.state,
       since: entry.since,
+      lastSeenAt: new Date(entry.lastSeen).toISOString(),
       revision: entry.revision,
       ...heardWorkspacePathOf(entry.client),
       ...heardRunnerIdOf(entry.client),

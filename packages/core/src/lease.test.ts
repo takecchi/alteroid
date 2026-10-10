@@ -218,6 +218,51 @@ describe('judgeLease', () => {
   });
 });
 
+describe('judgeLease > 持ち主の名乗りを最後に聞けた時刻（holderSeenAt。#4454）', () => {
+  const expiredAt = T0 + LEASE_TTL_MS + LEASE_MARGIN_MS;
+
+  it('台帳の seenAt の期限を過ぎていても、持ち主の名乗りを後で聞けていれば、そこから数え直すまで別の器は引き取れない', () => {
+    const lease = leaseAt();
+    const heard = T0 + 9 * 60_000;
+    const verdict = judgeLease({
+      lease,
+      now: expiredAt + 1_000,
+      answering: { runnerId: 'runner-other', instanceId: 'boot-x' },
+      holderSeenAt: heard,
+    });
+    expect(verdict).toEqual({
+      kind: 'held',
+      claimableAt: heard + LEASE_TTL_MS + LEASE_MARGIN_MS,
+      lease,
+    });
+    expect(mayClaim(verdict)).toBe(false);
+  });
+
+  it('持ち主の名乗りも期限より前で止まっていれば、これまでどおり引き取れる', () => {
+    const lease = leaseAt();
+    const verdict = judgeLease({
+      lease,
+      now: expiredAt,
+      answering: { runnerId: 'runner-other', instanceId: 'boot-x' },
+      holderSeenAt: T0 - 60_000,
+    });
+    expect(verdict).toEqual({ kind: 'expired', because: 'ttl', lease });
+  });
+
+  it('同じ器への引き取り（持ち主自身の入れ替え）には効かせない', () => {
+    const lease = leaseAt();
+    const appeared = T0 + 1_000;
+    const now = appeared + LEASE_DRAIN_MS + LEASE_MARGIN_MS;
+    const verdict = judgeLease({
+      lease,
+      now,
+      answering: { runnerId: 'runner-primary', instanceId: 'boot-2', instanceSince: appeared },
+      holderSeenAt: now,
+    });
+    expect(verdict).toEqual({ kind: 'expired', because: 'drained', lease });
+  });
+});
+
 describe('judgeLease > 併存（同じ runnerId を名乗る器が2台以上）', () => {
   it('併存では ambiguous を返し、mayClaim は false', () => {
     const lease = leaseAt();
