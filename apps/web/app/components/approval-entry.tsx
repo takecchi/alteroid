@@ -24,7 +24,7 @@ import {
  * - `time`: 時刻は `formatDateTime` と `formatRelative`（`@alteroid/logic`）の2つの
  *   span のまま。時間帯は閲覧者の端末に任せる（部品の `Timestamp` は JST 固定）
  * - 回答欄の送るキーは部品が持つ（`Textarea` の `onSubmitShortcut`）。IME の確定の
- *   ⌘/Ctrl + Enter は送信に数えない（issue #2259。会話と約束の入力欄と同じ）
+ *   ⌘/Ctrl + Enter は送信に数えない（会話と約束の入力欄と同じ）
  * - `trailing`: 会話のパネルは、エラーの後ろ（カードのいちばん下）に置く
  */
 export function ApprovalEntry({
@@ -55,12 +55,12 @@ export function ApprovalEntry({
   onFailed?: (error: unknown) => void;
   /** 直前のまとめ送信でこの id が駄目だった理由（無ければ何も出さない）。 */
   bulkError?: string;
-  /** まとめ送信の最中（カードの送信を止める。#3626）。 */
+  /** まとめ送信の最中（カードの送信を止める）。 */
   bulkBusy?: boolean;
-  /** このカードの送信中が変わった（#3626）。 */
+  /** このカードの送信中が変わった。 */
   onSendingChange?: (sending: boolean) => void;
 }) {
-  // 状態の導出・回答の送信・エラー表示は会話の画面と共有のカードが持つ（#3259）。
+  // 状態の導出・回答の送信・エラー表示は会話の画面と共有のカードが持つ。
   // ここが足すのは、この画面だけのもの（答えの後の経緯・確認が上がった会話）。
   return (
     <ApprovalAnswerCard
@@ -75,7 +75,7 @@ export function ApprovalEntry({
       bulkBusy={bulkBusy}
       onSendingChange={onSendingChange}
       /*
-        **答えの後にクローンが何をしたか（issue #847 の案B）。** 答え済みの件だけに
+        **答えの後にクローンが何をしたか。** 答え済みの件だけに
         出し、開いたときだけ読む（`useApprovalTrace` の doc）。
       */
       footer={
@@ -84,7 +84,7 @@ export function ApprovalEntry({
         ) : undefined
       }
       /*
-        **この確認が上がった会話（issue #782 の3）。** 4状態を別々に出す
+        **この確認が上がった会話。** 4状態を別々に出す
         （`ConversationPanel` の doc）。
       */
       trailing={
@@ -107,13 +107,13 @@ const TRACE_TYPES_WITH_BODY = new Set(['decision', 'memory_update', 'tool_use', 
 
 /**
  * 行動1件の本文。本文を持たない種別は使わず、頭に出す日本語の種別名（`journalTypeLabel`）に
- * 任せる（issue #3061）。core の `describeTraceAction` は CLI と共有なので変えず、ここで包む。
+ * 任せる。core の `describeTraceAction` は CLI と共有なので変えず、ここで包む。
  */
 function traceActionBody(entry: Parameters<typeof describeTraceAction>[0]): string | null {
   if (!TRACE_TYPES_WITH_BODY.has(entry.type)) return null;
   if (entry.type === 'tool_use' && entry.outcome !== undefined) {
     // core は `道具 <名前>（failed）: <入力>` と英語の値を括弧に入れる（CLI と共有で固定）。
-    // Web では括弧の中だけ日本語にする。未知の値は素の値のまま出して情報を消さない（issue #3077）。
+    // Web では括弧の中だけ日本語にする。未知の値は素の値のまま出して情報を消さない。
     const head = `道具 ${entry.tool}`;
     const rest = describeTraceAction({ ...entry, outcome: undefined }).slice(head.length);
     return `${head}（${TOOL_OUTCOME_LABELS[entry.outcome] ?? entry.outcome}）${rest}`;
@@ -128,7 +128,7 @@ const TOOL_OUTCOME_LABELS: Record<string, string> = {
 };
 
 /**
- * 承認の答えと、答えを受けたターンでクローンが取った行動を対で出す（issue #847 の案B）。
+ * 承認の答えと、答えを受けたターンでクローンが取った行動を対で出す。
  *
  * **「対が無い」を1つの顔にしない。** 理由の文言はデーモンが返す `state` ごとに
  * 出し分ける（core の `approval-trace.ts` の doc と同じ分け方。`TRACE_MISSING`）。
@@ -149,7 +149,7 @@ function TracePanel({ approvalId }: { approvalId: string }) {
   }
   if (trace.isLoading) return <Spinner label="答えの後の行動を読み込み中" />;
   const data = trace.data;
-  // 読めた後の取り直しの失敗は、前に読めた中身を残したまま注記する（issue #3514。#3346 と同じ形）。
+  // 読めた後の取り直しの失敗は、前に読めた中身を残したまま注記する。
   if (trace.error !== undefined && data === undefined) {
     return (
       <LoadError
@@ -232,7 +232,7 @@ const TRACE_MISSING: Record<string, string> = {
 };
 
 /**
- * 承認カードに、その確認が上がった会話を出す（issue #782 の3）。
+ * 承認カードに、その確認が上がった会話を出す。
  *
  * **4状態を別々に出す（不変条件A）。** 「機構が無い」（呼び出し元。
  * `approval.conversationId` が無い場合）「読み出せなかった」「まだ返答が
@@ -242,7 +242,7 @@ const TRACE_MISSING: Record<string, string> = {
  *
  * ⚠️ **見出しは「この確認が上がった会話」であって「この確認への返答」では
  * ない**（不変条件D。ここは変えていない）。outbound の `exchange` には
- * `approvalId` が積まれるようになった（issue #782 の1。PR #1319）が、
+ * `approvalId` が積まれているが、
  * `packages/core/src/conversation.ts` の `toMessage()` はそれを
  * `ConversationMessage` へ写していない——だから `GET /conversations/:id`
  * の応答にも無く、この画面までは届いていない。ここは会話全体を古い順に
@@ -257,7 +257,7 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
     return <Spinner label="この確認が上がった会話を読み込み中" />;
   }
   // ② 読み出せなかった（失敗）。理由をそのまま出す。
-  // 読めた後の取り直しの失敗は、前に読めた会話を残したまま注記する（issue #3514。#3346 と同じ形）。
+  // 読めた後の取り直しの失敗は、前に読めた会話を残したまま注記する。
   if (conversation.error !== undefined && conversation.data === undefined) {
     return (
       <LoadError
@@ -284,7 +284,7 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
     return (
       <div>
         {staleNote}
-        {/* 窓が先頭に届いていないときの0件は「無い」ではない。言い切ると、同じ状況を「確かめられなかった」と言う台帳・チャットと食い違う（#3871）。 */}
+        {/* 窓が先頭に届いていないときの0件は「無い」ではない。言い切ると、同じ状況を「確かめられなかった」と言う台帳・チャットと食い違う。 */}
         <p className="text-[11px] text-muted-foreground italic">
           {conversation.data?.reachedStart === false
             ? '取れた窓にはクローンの発言が無かった（窓が会話の先頭に届いていないので、確かめられなかった）'
@@ -352,7 +352,7 @@ function attachmentLabel(attachment: { name?: unknown }): string {
 }
 
 /**
- * **この会話をチャットの画面で開く（issue #2069）。** パネルに出すのは会話を
+ * **この会話をチャットの画面で開く。** パネルに出すのは会話を
  * 読むためだけの写しで、続きを書くにはチャットへ移る必要がある。その会話は
  * `/chat/:conversationId`（`routes.ts`）で開けるので、会話を読めた2状態
  * （③ ④）にだけ出す。②（読み込み中・失敗）には出さない——読めなかった会話を

@@ -37,7 +37,7 @@ beforeEach(() => {
   URL.revokeObjectURL = () => undefined;
 });
 // 投函（`POST /chat`）の読み取りが閉じるまで。`send` は `open` を見て読み取りを閉じたあとで `recordOwnMessage`
-// （SWR の `mutate`）を呼ぶので、その前に画面を外すと SWR の状態が先に消えており、未処理の例外になる（#4109）。
+// （SWR の `mutate`）を呼ぶので、その前に画面を外すと SWR の状態が先に消えており、未処理の例外になる。
 let postClosed: Promise<void> = Promise.resolve();
 beforeEach(() => {
   postClosed = Promise.resolve();

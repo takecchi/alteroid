@@ -53,7 +53,7 @@ export default function Approvals() {
   const { data, error, isLoading, isValidating, mutate } = useApprovals(true);
   /**
    * **形の違う応答（`approvals` が配列でない）は「0件」ではなく「読めていない」へ倒す**
-   * （issue #2308。外枠 `shell.tsx` の PR #2307 と同じ判断）。デーモンと画面は別デプロイで
+   * （外枠 `shell.tsx` と同じ判断）。デーモンと画面は別デプロイで
    * 版がずれうる。`data.approvals.length` のままだと `TypeError` で画面ごと落ち、
    * `?? []` で黙らせると読めていないのに「答えを待っているものはない」と言う。
    * 型は配列と言っているので、ここが守るのは実行時の倒れ先だけである。
@@ -63,13 +63,13 @@ export default function Approvals() {
     : undefined;
   const approvalsMalformed = data !== undefined && approvalsList === undefined;
   /**
-   * **取れなかったのを0件と描かない**（issue #2313）。一覧をまだ一度も読めていないまま
+   * **取れなかったのを0件と描かない**。一覧をまだ一度も読めていないまま
    * 失敗したとき、失敗は上の `LoadError` が言う。ここで「答えを待っているものはない」を
    * 並べると、読めていないのに承認待ちが無いように読め、承認を見落とす。再検証の失敗で
-   * `data` が残っているときは当たらず、一覧をそのまま出す（#2266 と同じ）。
+   * `data` が残っているときは当たらず、一覧をそのまま出す。
    */
   const listUnavailable = data === undefined && error !== undefined;
-  // `unreadable` は、読めない行が1件以上あるときだけ載る欄（#2298）。形が違えば無いものとして扱う
+  // `unreadable` は、読めない行が1件以上あるときだけ載る欄。形が違えば無いものとして扱う
   // （読めた一覧まで巻き込んで落とさない）。
   const unreadable: UnreadableApproval[] = Array.isArray(data?.unreadable) ? data.unreadable : [];
   const answerApprovals = useAnswerApprovals();
@@ -80,12 +80,12 @@ export default function Approvals() {
    * 動くので、1件ずつ内容を見て別々に答える自由はそのまま残る — まとめて送るのは
    * 「書かれた分をまとめて1回で送る」だけの追加であって、答え方を変えない。
    *
-   * **`sessionStorage` にも写す**（issue #3295）。「回答済み」タブへ移るとこのページは unmount
+   * **`sessionStorage` にも写す**。「回答済み」タブへ移るとこのページは unmount
    * されるので、state だけでは書きかけが黙って消える。初期値は保存したものから読む。
    */
   const [drafts, setDraftsState] = useState<ApprovalDrafts>(loadApprovalDrafts);
   /**
-   * 書きかけを最後に決めた時点の `chatDraftEpoch()`（#3706）。ログアウトで消したあとに、メモリに残った
+   * 書きかけを最後に決めた時点の `chatDraftEpoch()`。ログアウトで消したあとに、メモリに残った
    * 書きかけが書き戻らないよう、保存はこの値が今と同じときだけ行う。
    */
   const draftsEpoch = useRef(chatDraftEpoch());
@@ -93,7 +93,7 @@ export default function Approvals() {
     draftsEpoch.current = chatDraftEpoch();
     setDraftsState(update);
   }, []);
-  /** 答えが通った承認の、本文と設問の控え（残った下書きを見せるため。issue #3515）。 */
+  /** 答えが通った承認の、本文と設問の控え（残った下書きを見せるため）。 */
   const [leftoverSources, setLeftoverSources] = useState<ApprovalLeftoverSources>(
     loadApprovalLeftoverSources,
   );
@@ -104,8 +104,8 @@ export default function Approvals() {
   /** 同じ描画の中の2回目の押下を止める（state は次の描画まで古い）。 */
   const bulkBusyRef = useRef(false);
   /**
-   * 送信中の id（カードの個別送信とまとめ送信の両方。#3626）。まとめ送信の対象から外し、
-   * 保存先の下書きも送信中は落とさない（#3666。一覧から消える描画と、答えが通ったあとに
+   * 送信中の id（カードの個別送信とまとめ送信の両方）。まとめ送信の対象から外し、
+   * 保存先の下書きも送信中は落とさない（一覧から消える描画と、答えが通ったあとに
    * 下書きを畳む・残すまでの間の一瞬）。ref は押下の直後に読むため、state は描画のため。
    */
   const sendingIdsRef = useRef<Set<string>>(new Set());
@@ -139,7 +139,7 @@ export default function Approvals() {
 
   /**
    * 答えが通った。**送った時点の下書き（`sent`）と同じ項目だけ**畳み、応答を待つ間に打ち足した
-   * 分は残す（issue #3515）。残したものは、承認が未回答の一覧から消えたあとも
+   * 分は残す。残したものは、承認が未回答の一覧から消えたあとも
    * 「送らなかった下書きが残っている」として見せる（`leftovers`）。
    */
   function settleDraft(approval: PendingApproval, sent: SentApprovalDraft): void {
@@ -248,14 +248,14 @@ export default function Approvals() {
   );
 
   async function submitBulk(): Promise<void> {
-    // 送信中は何もしない（二重に送らない。#3626）。
+    // 送信中は何もしない（二重に送らない）。
     if (bulkBusyRef.current) return;
     // 描画を待たず、いまカードが送信中の id も外す。
     const targets = pendingDrafts.filter(([id]) => !sendingIdsRef.current.has(id));
     if (targets.length === 0) return;
     bulkBusyRef.current = true;
     // 送る id を送信中として持つ。答えが通って一覧から消える描画のあいだも、保存先の下書きを
-    // 落とさない（#3666。下の `settleDraft` で畳む・残すが決まるまで）。
+    // 落とさない（下の `settleDraft` で畳む・残すが決まるまで）。
     const targetIds = targets.map(([id]) => id);
     setSending(targetIds, true);
     // 送るときに下書きを控える。応答を待つ間に打ち足した分を、成功のあとに消さないため。
@@ -338,7 +338,7 @@ export default function Approvals() {
       {isLoading ? (
         <Spinner />
       ) : listUnavailable ? null : approvalsMalformed ? (
-        // **0件と描かない**（issue #2308）。応答は届いたが、一覧の形をしていない。
+        // **0件と描かない**。応答は届いたが、一覧の形をしていない。
         <ErrorNote
           error={
             new Error(

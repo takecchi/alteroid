@@ -183,7 +183,7 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
     try {
       const result = await issueKey(checked.input);
       onIssued(result);
-      // 応答を待つ間に打ち足した分は消さない（#3891）。打ち足しの形があるのは文字列の name・source
+      // 応答を待つ間に打ち足した分は消さない。打ち足しの形があるのは文字列の name・source
       // だけ。期限・数値は、足した結果が別の値になるので、変えていなければ空に、変えていればそのまま残す。
       setName((current) => unsentInput(current, sent.name));
       setSource((current) => unsentInput(current, sent.source));

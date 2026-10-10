@@ -325,7 +325,7 @@ export function ownedBy(lines: Line[], shownId: string | undefined): Line[] {
 
 // 直前の会話も残す: 貼り直しで shownId が一瞬古い値へ戻る回に「いま」だけで刈ると、本物の行まで落ちる。
 // of === undefined も残す: 新しい会話では open が届いて of を付け直すまで、送った発言のほうが会話 id より先に画面へ乗る。
-// 同じ会話の往復で増える手元の写しは刈らない（issue #446 の筋書き2）。**その刈り込みはこの関数の役目ではなく、pendingOwnLines が持つ。**
+// 同じ会話の往復で増える手元の写しは刈らない。**その刈り込みはこの関数の役目ではなく、pendingOwnLines が持つ。**
 export function retainedBy(
   lines: Line[],
   shownId: string | undefined,

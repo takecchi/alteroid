@@ -14,7 +14,7 @@ import { json, Providers, storeTestBaseUrl } from '~/test-support';
 import Approvals from './approvals';
 
 /**
- * 一覧から消えた承認の書きかけを黙って失わない（issue #3869・#3927）。409 で断られた回答、送って
+ * 一覧から消えた承認の書きかけを黙って失わない。409 で断られた回答、送って
  * いない書きかけが裏の取り下げで一覧から外れたもの、再読み込み後の一覧に無い id の下書き。
  */
 

@@ -14,7 +14,7 @@ import {
 
 import Chat, { describeCloneInterruptOutcome } from './chat';
 
-// #3956: 止めるボタンは、いま送った発言（会話 id と clientMessageId）だけを対象に渡す。
+// 止めるボタンは、いま送った発言（会話 id と clientMessageId）だけを対象に渡す。
 const A = 'conv-3956-a';
 const TEXT = '順番待ちのはずの発言';
 
