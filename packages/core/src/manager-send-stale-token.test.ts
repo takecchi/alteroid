@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createManagerPool } from './manager.js';
+import { createManagerPool, type ManagerPoolOptions } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import {
   createRunnerRegistry,
@@ -141,7 +141,9 @@ function failedReport(): RunnerEvent {
   } as RunnerEvent;
 }
 
-async function setup(options: { job?: Job } = {}) {
+async function setup(
+  options: { job?: Job; tokenAvailability?: ManagerPoolOptions['tokenAvailability'] } = {},
+) {
   const stores = createMemoryStores();
   await stores.jobs.putJob(options.job ?? JOB);
   const fake = staleRunner();
@@ -154,6 +156,9 @@ async function setup(options: { job?: Job } = {}) {
     runners: registry,
     profile: createProfileService({ stores, runners: registry }),
     tokenIdentity: () => ({ ...active }),
+    ...(options.tokenAvailability === undefined
+      ? {}
+      : { tokenAvailability: options.tokenAvailability }),
   });
   await pool.restore();
   fake.resumes.length = 0;
@@ -313,6 +318,140 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
     const summary = await summaryOf(s.pool);
     expect(summary.liveBackgroundTasks).toBeUndefined();
     await s.pool.stop();
+  });
+});
+
+describe('畳めない理由が残っていても、古い鍵が ready なら旧セッションへ届ける（#4441）', () => {
+  const waitingOne: RunnerManagerState['waiting'] = [
+    {
+      requestId: 'req-1',
+      summary: 'Bash を許可するか',
+      kind: 'permission',
+      askedAt: '2026-10-05T01:00:00.000Z',
+    },
+  ];
+
+  it('⭐ 世代が食い違い・背景処理 1 本・古い鍵が ready: 旧セッションへ届け、畳まず、detail と日誌に残す', async () => {
+    const asked: string[] = [];
+    const s = await setup({
+      tokenAvailability: async (tokenId) => {
+        asked.push(tokenId);
+        return 'ready';
+      },
+    });
+    s.rotate();
+    s.fake.behavior.background = 1;
+
+    const result = await s.pool.send('mgr-stale', '続きを');
+
+    expect(result.outcome).toBe('delivered');
+    expect(asked).toEqual(['tok-a']);
+    expect(s.fake.sends).toEqual([{ managerId: 'mgr-stale', text: '続きを' }]);
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.fake.resumes).toHaveLength(0);
+    expect(result.detail).toContain('古い鍵（世代 59）のまま旧セッションへ届けた');
+    expect(result.detail).toContain('背景処理が 1 本');
+    expect(result.detail).toContain('新しい鍵で起こし直していない');
+    expect(result.detail).toContain('ready');
+    const decisions = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('旧セッションへ届ける'),
+    );
+    expect(decisions).toHaveLength(1);
+    expect(JSON.stringify(decisions[0])).toContain('mgr-stale');
+    await s.pool.stop();
+  });
+
+  it('確認待ちが理由のときも、古い鍵が ready なら旧セッションへ届ける', async () => {
+    const s = await setup({ tokenAvailability: async () => 'ready' });
+    s.rotate();
+    s.fake.behavior.waiting = waitingOne;
+
+    const result = await s.pool.send('mgr-stale', '続きを');
+
+    expect(result.outcome).toBe('delivered');
+    expect(result.detail).toContain('確認待ちが 1 件');
+    expect(s.fake.sends).toHaveLength(1);
+    expect(s.fake.stops).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it.each(['cooling', 'disabled', 'invalidated', undefined] as const)(
+    '⚠️ 古い鍵が %s なら従来どおり declined（送らず・畳まない）',
+    async (state) => {
+      const s = await setup({ tokenAvailability: async () => state });
+      s.rotate();
+      s.fake.behavior.background = 1;
+
+      const result = await s.pool.send('mgr-stale', '続きを');
+
+      expect(result.outcome).toBe('declined');
+      expect(s.fake.sends).toHaveLength(0);
+      expect(s.fake.stops).toHaveLength(0);
+      await s.pool.stop();
+    },
+  );
+
+  it('⚠️ 注入口を渡さなければ従来どおり declined', async () => {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+
+    const result = await s.pool.send('mgr-stale', '続きを');
+
+    expect(result.outcome).toBe('declined');
+    expect(s.fake.sends).toHaveLength(0);
+    expect(s.fake.stops).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it('⚠️ 注入口が投げたら declined（送らず・畳まない）', async () => {
+    const s = await setup({
+      tokenAvailability: async () => {
+        throw new Error('プールを読めない');
+      },
+    });
+    s.rotate();
+    s.fake.behavior.background = 1;
+
+    const result = await s.pool.send('mgr-stale', '続きを');
+
+    expect(result.outcome).toBe('declined');
+    expect(s.fake.sends).toHaveLength(0);
+    expect(s.fake.stops).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it('⚠️ 畳めない理由が背景処理でなく sessionId 無しでも混じれば、ready でも declined（絞った範囲）', async () => {
+    const stores = createMemoryStores();
+    const fake = staleRunner();
+    const registry = createRunnerRegistry([fake.runner]);
+    const active = { tokenId: 'tok-a', generation: 59 };
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+      tokenIdentity: () => ({ ...active }),
+      tokenAvailability: async () => 'ready',
+    });
+    const started = await pool.start({ request: '調べて', cwd: '/work/project' });
+    fake.push({
+      type: 'report',
+      managerId: started.managerId,
+      text: '終わった',
+      status: 'done',
+    } as RunnerEvent);
+    await settle();
+    active.tokenId = 'tok-b';
+    active.generation = 60;
+    fake.behavior.background = 1;
+
+    const result = await pool.send(started.managerId, '続きを');
+
+    expect(result.outcome).toBe('declined');
+    expect(fake.sends).toHaveLength(0);
+    expect(fake.stops).toHaveLength(0);
+    await pool.stop();
   });
 });
 

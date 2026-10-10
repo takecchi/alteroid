@@ -36,6 +36,7 @@ import {
   createTokenRotator,
   noteDroppedRecord,
   DAILY_REPORT_RETRY_DELAYS_MS,
+  tokenAvailabilityAt,
   tokenRestoreEntry,
   tokenRotationEntry,
   probeTokenCandidate,
@@ -778,6 +779,10 @@ export async function main(): Promise<void> {
     self,
     credentials: () => agentTokenHolder.values(),
     tokenIdentity: () => agentTokenHolder.identity(),
+    tokenAvailability: async (tokenId) => {
+      const token = (await tokenPoolService.list()).tokens.find((entry) => entry.id === tokenId);
+      return token === undefined ? undefined : tokenAvailabilityAt(token, Date.now());
+    },
     syncRunnerToken: createRunnerTokenSync(agentTokenHolder),
     // 取り出してから呼ぶ: 呼んだ後に消すと、合図の中で例外が出た回だけ残り、次に畳まれたときにもう一度入るため。
     onTokenSessionRecycled: () => {

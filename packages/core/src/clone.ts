@@ -137,6 +137,7 @@ import {
   createManagerPool,
   type CodexAuthRunnerSync,
   type ManagerPool,
+  type ManagerPoolOptions,
   type ManagerSummary,
   type WorkerToolEvent,
 } from './manager.js';
@@ -538,6 +539,8 @@ export interface CloneOptions {
   childEnvBase?: NodeJS.ProcessEnv;
   credentials?: () => Record<string, string>;
   tokenIdentity?: () => { tokenId: string; generation: number; fingerprint?: string } | undefined;
+  /** マネージャープールへそのまま渡す（`ManagerPoolOptions['tokenAvailability']`）。クローン自身は読まない。 */
+  tokenAvailability?: ManagerPoolOptions['tokenAvailability'];
   // クローンは回すかどうかを判断しない: 枠に当たるとこのループはターンを回さないので、判断をここへ置くと一番要るときに動かないため
   onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
   onWorkerToolEvent?: (event: WorkerToolEvent) => void;
@@ -923,6 +926,7 @@ class Clone implements CloneHost {
       childEnvBase,
       credentials,
       tokenIdentity,
+      tokenAvailability,
       onUsageObservation,
       onWorkerToolEvent,
       onTokenSessionRecycled,
@@ -1001,6 +1005,7 @@ class Clone implements CloneHost {
         runners: runners ?? createRunnerRegistry([]),
         // クローンの側とプールの側で別々の回し手へ渡さない: 同じ1本へ集めるから、世代の照合が「同じ当たりで1回だけ」を保証できるため
         ...(tokenIdentity === undefined ? {} : { tokenIdentity }),
+        ...(tokenAvailability === undefined ? {} : { tokenAvailability }),
         ...(onUsageObservation === undefined ? {} : { onUsageObservation }),
         ...(onWorkerToolEvent === undefined ? {} : { onWorkerToolEvent }),
         ...(syncRunnerToken === undefined ? {} : { syncRunnerToken }),
