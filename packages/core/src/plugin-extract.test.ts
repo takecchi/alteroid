@@ -646,7 +646,9 @@ describe('片づけ', () => {
     await chmod(join(plugins, tmpName), 0o555);
     await mkdir(join(plugins, 'human-made'));
     await writeFile(join(plugins, 'notes.txt'), 'dummy-content');
-    await mkdir(join(plugins, `demo@${'A'.repeat(40)}`));
+    // A ではなく C: 大文字小文字を区別しない fs（macOS の APFS）では `legacy`（demo@aaa…）と同じ名前になり、mkdir が EEXIST になるため。
+    const upperSha = `demo@${'C'.repeat(40)}`;
+    await mkdir(join(plugins, upperSha));
     await mkdir(join(plugins, `demo@${'a'.repeat(39)}`));
     await mkdir(join(plugins, '.tmp-human'));
 
@@ -658,7 +660,7 @@ describe('片づけ', () => {
     expect((await readdir(plugins)).sort()).toEqual(
       [
         `.tmp-human`,
-        `demo@${'A'.repeat(40)}`,
+        upperSha,
         `demo@${'a'.repeat(39)}`,
         basename(keep.path),
         'human-made',
