@@ -26,7 +26,7 @@ export interface WorkerActivity {
   lastTool?: string;
   lastToolAt?: string;
   runningTool?: { tool: string; startedAt: string };
-  /** peer（Codex）の札（#4122）。作業者の札には無い。 */
+  /** peer（Codex）の札。作業者の札には無い。 */
   peer?: { provider: string };
   /** peer の札のモデル（名指し → 相手が名乗ったもの）。分からなければ無い（既定）。 */
   model?: string;
@@ -81,7 +81,7 @@ const STORAGE_WRITE_TOOLS: ReadonlySet<string> = new Set(
 // `Agent` と `Task` の両方を受ける: SDK の版で `Task` から `Agent` へ変わっているため。
 const SUBAGENT_DISPATCH_TOOLS: ReadonlySet<string> = new Set(['Agent', 'Task']);
 
-// マネージャーが peer（Codex）へ頼む道具（#4122）。作業者の `Agent` と同じく、頼んだ線と札を立てる。
+// マネージャーが peer（Codex）へ頼む道具。作業者の `Agent` と同じく、頼んだ線と札を立てる。
 // 道具は Codex のターンが終わってから日誌に載る（同期の呼び出し）ので、線の向きは「返り」である。
 const PEER_DISPATCH_TOOLS: ReadonlySet<string> = new Set(
   ['peer_run', 'peer_reply', 'peer_approve'].map((name) => `mcp__${PEER_MCP_SERVER_NAME}__${name}`),
@@ -89,7 +89,7 @@ const PEER_DISPATCH_TOOLS: ReadonlySet<string> = new Set(
 
 /**
  * peer の札の種類（`agentType`）。作業者の種類と同じ欄に置き、`peer:` で始めて作業者の種類と混ざらないようにする
- * （作業者の札と同じ並び・同じ線の key `manager:<id>~worker:<agentType>` に乗る。#4122）。
+ * （作業者の札と同じ並び・同じ線の key `manager:<id>~worker:<agentType>` に乗る）。
  */
 export function peerAgentType(provider: string): string {
   return `peer:${provider}`;
@@ -106,7 +106,7 @@ export interface WorkerTouch {
   agentType: string;
   at: string;
   tool?: string;
-  /** peer の札（#4122）。作業者の札には無い。 */
+  /** peer の札。作業者の札には無い。 */
   peer?: { provider: string };
   /** peer の札のモデル（名指しされたもの）。 */
   model?: string;
@@ -519,7 +519,7 @@ export function createTopologyActivityTracker(
       }
       if (tombstones.delete(event.toolUseId)) return;
       if (Number.isNaN(Date.parse(event.startedAt))) return;
-      // peer（Codex）のターンも同じ口で来る（#4122）。札は作業者と同じ並びに、`peer:<provider>` の種類で立てる
+      // peer（Codex）のターンも同じ口で来る。札は作業者と同じ並びに、`peer:<provider>` の種類で立てる
       const peer = parsePeerActor(event.actor);
       if (peer !== undefined) {
         const agentType = peerAgentType(peer.provider);

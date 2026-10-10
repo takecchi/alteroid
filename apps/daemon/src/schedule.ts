@@ -86,7 +86,7 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
         );
       } else {
         initiativeEveryMinutes = parsed;
-        // 整数でない値は起動側（`selfInitiativeEntry`）が切り捨てる: 黙って別の周期で動かさず、実際に使う値を言う（#4014）。
+        // 整数でない値は起動側（`selfInitiativeEntry`）が切り捨てる: 黙って別の周期で動かさず、実際に使う値を言う。
         if (!Number.isInteger(parsed)) {
           notes.push(
             `ALTEROID_INITIATIVE_EVERY="${rawEvery}" は整数でないので ${Math.floor(parsed)} 分として扱う`,

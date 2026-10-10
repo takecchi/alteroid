@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 
 /**
- * `DELETE /conversations/:id`（Issue #4218）。消した会話の発言は、日誌を読むどの口からも出ず、
+ * `DELETE /conversations/:id`。消した会話の発言は、日誌を読むどの口からも出ず、
  * 添付と台帳の行は物理的に消え、監査の墓標だけが残る（本文は写さない）。
  */
 
