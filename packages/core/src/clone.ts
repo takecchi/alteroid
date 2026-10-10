@@ -2597,9 +2597,20 @@ class Clone implements CloneHost {
     if (event.type !== 'human_message') return;
 
     // `supersedes` はそのまま日誌へ通すだけにする: 畳み込みの解釈は `computeSupersededIds` の射影が持ち、記録の時点で何かを取り消さないため
+    // 同じ会話のターンが走っていたら、ここまでに流れた返答を先に書く（#4391）: 返答はターンの終わりに書かれるので、ターン中に届いた発言のほうが日誌で先になり、会話で返答より上に出るため。
+    // 鎖を待たずに書き始める: `#journalReply` は最初の await までに本文を切り取って追記を始めるので、切り取りが下の `queued` と同じ同期区間に入り（Web はその `queued` で返信の行を分ける）、
+    // 鎖が詰まっているあいだにターンが終わっても残りの本文がこの割り目より先に載らない
+    const turn = this.#sdkSession.turn;
+    const shownReplyWritten =
+      turn !== null && turn.conversationId === event.conversationId
+        ? this.#journalReply(turn, false)
+        : undefined;
+
     // 列は失敗で切らない: 1本書けなかったことで以後の発言の記録まで止めないため
-    this.#delivery.chainRecord(event.id, () =>
-      this.#journal({
+    this.#delivery.chainRecord(event.id, async () => {
+      // 割らない回は待たない: 1拍でも遅らせると、発言の追記が `#commit` の記録などに追い越される
+      if (shownReplyWritten !== undefined) await shownReplyWritten;
+      await this.#journal({
         type: 'exchange',
         with: 'human',
         role: 'inbound',
@@ -2618,8 +2629,8 @@ class Clone implements CloneHost {
                 sha256: ref.sha256,
               })),
             }),
-      }),
-    );
+      });
+    });
 
     this.#emit(event.conversationId, { type: 'queued' });
   }

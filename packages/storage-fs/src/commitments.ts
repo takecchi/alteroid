@@ -334,8 +334,9 @@ export class FsCommitmentStore implements CommitmentStore {
 
   async removeForConversation(conversationId: string): Promise<number> {
     if (hasNul(conversationId)) return 0;
+    // クローンが載せた行（`self`）も消す（#4355）: その会話から生まれた仕事で、本文は人間の発言の言い換えを含みうるため
     const matches = (entry: { origin?: unknown; source?: unknown }): boolean =>
-      entry.origin === 'human' && entry.source === conversationId;
+      (entry.origin === 'human' || entry.origin === 'self') && entry.source === conversationId;
     // 読んで・選んで・書くを同じ排他区間で行う: 分けると、間に開かれた行を巻き込むか取りこぼすため
     return this.#update((file) => {
       const entries = file.entries.filter((entry) => !matches(entry));

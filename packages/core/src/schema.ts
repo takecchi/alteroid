@@ -664,6 +664,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     // `operator` / `account:<id>`（添付の `uploadedBy` と同じ書き方）
     deletedBy: z.string(),
     hiddenCount: z.number().int().nonnegative(),
+    // 会話 id を持たないが、この会話から生まれた本文を写している日誌の行（台帳へ積んだ・直した・片付けた `decision`。#4355）。読む口はこの id の行も外す。行そのものは書き換えない
+    hiddenEntryIds: z.array(z.string()).optional(),
   }),
 ]);
 
@@ -1084,6 +1086,8 @@ export const rescueWorktreeSchema = z.object({
       reason: rescueNotPushedReasonSchema,
       failureKind: z.enum(['auth', 'network', 'rejected', 'timeout', 'other']).optional(),
       files: z.array(z.string()).optional(),
+      // `secret-like` のとき当たった規則の名前（`SecretPatternName`）。文字列そのものは載せない（#4394）
+      patterns: z.array(z.string()).optional(),
     })
     .optional(),
   untracked: z
@@ -1106,6 +1110,26 @@ export const lastRescueSchema = z.object({
     .optional(),
 });
 export type LastRescue = z.infer<typeof lastRescueSchema>;
+
+/** マネージャーが `output_record` で記録した、コード以外で外へ出した成果の1件（#2987）。 */
+export const externalOutputLimits = {
+  kindMaxLength: 40,
+  whereMaxLength: 500,
+  summaryMaxLength: 500,
+  /** 委譲の記録に残す件数。超えたら古いほうから落とす（全件は日誌の `tool_use` に残る）。 */
+  keptPerJob: 20,
+} as const;
+
+// 長さの上限は道具の入口が持つ: ここで締めると、上限を変えた後に古い行を持つ委譲の記録ごと読めなくなるため
+export const externalOutputSchema = z.object({
+  at: isoDateTime,
+  /** 種別（`mail` / `calendar` / `post` / `external_save` など。決まった一覧にはしない）。 */
+  kind: z.string().min(1),
+  /** 外の場所（URL・宛先・外部の ID など）。 */
+  where: z.string().min(1),
+  summary: z.string().min(1).optional(),
+});
+export type ExternalOutput = z.infer<typeof externalOutputSchema>;
 
 // 双方向の完全一致にしない: `UnpushedWorkObservationIncompletenessLike` は読む4欄だけの最小の型で、`at` / `cwd` / `worktrees` / `source` を持たないため、双方向だと必ず落ちる
 export type _AssertUnpushedWorkObservationIncompletenessMatchesLikeType = AssertTrue<
@@ -1199,6 +1223,8 @@ export const jobSchema = z.object({
   lastUnpushedWorkObservation: lastUnpushedWorkObservationSchema.optional(),
   // `lastUnpushedWorkObservation` と別の欄にする: あちらは新しいほうが勝つ上書き、こちらは作業ツリーごとに積み増すため
   lastRescue: lastRescueSchema.optional(),
+  // コード以外の成果は作業ツリーの観測に映らないので、マネージャー自身が記録したものを持つ（#2987）。古い順・直近 `keptPerJob` 件
+  externalOutputs: z.array(externalOutputSchema).optional(),
 });
 
 export type Job = z.infer<typeof jobSchema>;

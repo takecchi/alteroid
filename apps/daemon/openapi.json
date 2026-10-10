@@ -2159,7 +2159,7 @@
         "operationId": "deleteConversationsById",
         "tags": ["conversations"],
         "summary": "会話を削除する（論理削除。どの読む口からも出なくなる）",
-        "description": "日誌に監査の墓標（`conversation_deleted`。誰が・いつ・どの会話を・何件）を1行積み、その会話の発言を`GET /conversations`・`/conversations/:id`・未読数・`GET /journal`・`/journal/stream`・クローンの `conversation_read` / `journal_read` を含む、日誌を読むすべての口から外す。**本文はどこにも写さない。** 日誌の行は書き換えない（DB には残る。論理削除）。その会話の発言に付いた添付と、台帳（`/commitments`）のうち人間の手で積んだその会話の行は物理的に消す（クローンが載せた行と、台帳の本文を写した日誌の行は残り、`remainsIn` で言う）。受信箱の未処理の発言を外し、開いている `GET /chat/:id/stream` を閉じる（以後は 404）。消した会話へは書けない（`POST /chat` は 404）。**消せないもの**（クローンの SDK セッションの生ログ・archive・いまの文脈・蒸留済みの記憶・日報）は `remainsIn` に文で返す。墓標の後の手当てが落ちたら、会話は外れたまま `incomplete` にそれを返す（200）。",
+        "description": "日誌に監査の墓標（`conversation_deleted`。誰が・いつ・どの会話を・何件）を1行積み、その会話の発言を`GET /conversations`・`/conversations/:id`・未読数・`GET /journal`・`/journal/stream`・クローンの `conversation_read` / `journal_read` を含む、日誌を読むすべての口から外す。**本文はどこにも写さない。** 日誌の行は書き換えない（DB には残る。論理削除）。その会話の発言に付いた添付と、台帳（`/commitments`）のその会話の行（人間の手で積んだ行とクローンが載せた行）は物理的に消す。台帳の本文を写した日誌の行（積んだ・直した・片付けた `decision`）は、墓標の `hiddenEntryIds` で読む口から外す（行は書き換えない）。受信箱の未処理の発言を外し、開いている `GET /chat/:id/stream` を閉じる（以後は 404）。消した会話へは書けない（`POST /chat` は 404）。**消せないもの**（クローンの SDK セッションの生ログ・archive・いまの文脈・蒸留済みの記憶・日報）は `remainsIn` に文で返す。墓標の後の手当てが落ちたら、会話は外れたまま `incomplete` にそれを返す（200）。",
         "responses": {
           "200": {
             "description": "削除した。",
@@ -3785,6 +3785,12 @@
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 9007199254740991
+                        },
+                        "hiddenEntryIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       },
                       "required": [
@@ -8630,6 +8636,12 @@
                                 "type": "integer",
                                 "minimum": 0,
                                 "maximum": 9007199254740991
+                              },
+                              "hiddenEntryIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
                               }
                             },
                             "required": [
@@ -10164,6 +10176,12 @@
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 9007199254740991
+                        },
+                        "hiddenEntryIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       },
                       "required": [
@@ -13940,6 +13958,12 @@
                                   "type": "integer",
                                   "minimum": 0,
                                   "maximum": 9007199254740991
+                                },
+                                "hiddenEntryIds": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
                                 }
                               },
                               "required": [
@@ -15366,6 +15390,12 @@
                                   "type": "integer",
                                   "minimum": 0,
                                   "maximum": 9007199254740991
+                                },
+                                "hiddenEntryIds": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
                                 }
                               },
                               "required": [
@@ -16784,6 +16814,12 @@
                                 "type": "integer",
                                 "minimum": 0,
                                 "maximum": 9007199254740991
+                              },
+                              "hiddenEntryIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
                               }
                             },
                             "required": [
@@ -18198,6 +18234,12 @@
                                 "type": "integer",
                                 "minimum": 0,
                                 "maximum": 9007199254740991
+                              },
+                              "hiddenEntryIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
                               }
                             },
                             "required": [
@@ -19484,10 +19526,10 @@
         "operationId": "postEvents",
         "tags": ["events"],
         "summary": "外部イベントをクローンへ届ける",
-        "description": "自作ツール・ショートカット・CI からクローンへ出来事を届ける。何をするかはここで決めない（対応表を持った瞬間に自動化ジョブに戻る）。**`attachments`（任意）— `POST /attachments` が返した id を渡すと、その添付がクローンのターンへ届く（画像はモデルへの入力として、すべての添付は通知行として）。** 検証と結び付けは投函の前に行い、断るときはイベントを投函しない。**連携の鍵（`altk_`）で送るときは、その鍵自身が`POST /attachments` で上げた添付だけ**付けられる（別の鍵・アカウント・operator が上げたものは 400）。人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。",
+        "description": "自作ツール・ショートカット・CI からクローンへ出来事を届ける。何をするかはここで決めない（対応表を持った瞬間に自動化ジョブに戻る）。**`attachments`（任意）— `POST /attachments` が返した id を渡すと、その添付がクローンのターンへ届く（画像はモデルへの入力として、すべての添付は通知行として）。** 検証と結び付けは投函の前に行い、断るときはイベントを投函しない。**連携の鍵（`altk_`）で送るときは、その鍵自身が`POST /attachments` で上げた添付だけ**付けられる（別の鍵・アカウント・operator が上げたものは 400）。人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。**`idempotencyKey`（任意。1〜200字）— 送り直しを見分ける目印。** 同じ送り手（連携の鍵ごと・アカウントごと・operator）・同じ source・同じ目印の2件目は、積まずに1件目と同じ `id` を `duplicate: true` 付きの 200 で返す。覚えておくのは受けてから7日。2件目の本文と添付は見ない（目印が同じなら同じ出来事として扱う）。",
         "responses": {
           "200": {
-            "description": "受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（二重に届く）。",
+            "description": "受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（`idempotencyKey` を付けていなければ二重に届く）。`duplicate: true` は、同じ目印の出来事を既に受けていて、今回は積まなかったことを表す。",
             "content": {
               "application/json": {
                 "schema": {
@@ -19499,6 +19541,10 @@
                     },
                     "id": {
                       "type": "string"
+                    },
+                    "duplicate": {
+                      "type": "boolean",
+                      "const": true
                     }
                   },
                   "required": ["ok", "id"]
@@ -19655,6 +19701,10 @@
                       "type": "string",
                       "minLength": 1
                     }
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "maxLength": 200
                   }
                 },
                 "required": ["source"]
@@ -21544,6 +21594,12 @@
                                           "items": {
                                             "type": "string"
                                           }
+                                        },
+                                        "patterns": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
                                         }
                                       },
                                       "required": ["reason"]
@@ -21596,6 +21652,32 @@
                               }
                             },
                             "required": ["at", "worktrees"]
+                          },
+                          "externalOutputs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "where": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "summary": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": ["at", "kind", "where"]
+                            }
                           },
                           "waiting": {
                             "type": "array",
@@ -22325,6 +22407,12 @@
                                         "items": {
                                           "type": "string"
                                         }
+                                      },
+                                      "patterns": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
                                       }
                                     },
                                     "required": ["reason"]
@@ -22377,6 +22465,32 @@
                             }
                           },
                           "required": ["at", "worktrees"]
+                        },
+                        "externalOutputs": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "where": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "summary": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": ["at", "kind", "where"]
+                          }
                         },
                         "waiting": {
                           "type": "array",

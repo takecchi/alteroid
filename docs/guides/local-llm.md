@@ -167,10 +167,10 @@ Claude Code が資格を選ぶ順番は、クラウドの資格 → `ANTHROPIC_A
   - **gateway の 429 で回し手が誤作動することはありません（実測）。** 擬似サーバが 429 を返しても、Claude Code は `rate_limit_event` を出しませんでした。Anthropic の枠のヘッダ（`anthropic-ratelimit-unified-*`）を付けても同じです。本文は `API Error: Request rejected (429) · …` で、回し手が見る SDK の枠の文言（`USAGE_LIMIT_ERROR_PREFIXES` など）のどれにも一致しません。だから鍵は回らず、冷却にも入りません。その失敗は、分類できなかった失敗として数えられるだけです（`packages/core/src/dropped-record.ts` の `noteUnclassifiedFailure`）。gateway の先の上限に当たったときに別の経路へ逃がす仕組みは、alteroid にはありません。
 - **残り枠の表示（`usage_read`・`alteroid usage`・Web）は「取れなかった」になります。** 枠の問い合わせ（`packages/core/src/usage-probe.ts`）は、gateway の資格があると `tokenSource: ANTHROPIC_AUTH_TOKEN`・`rate_limits_available: false` で返りました（実測）。差し替え先へサブスクのトークンは送られませんでした。alteroid は窓が0件を 0% とは読まず、「取れなかった」と出します（`packages/core/src/token-candidate.ts` の `judgeTokenCandidate`）。意味は失いますが、嘘の値は出ません。
   - クローンだけを Anthropic に残す構成（`--scope runner`）では、デーモンの env に gateway の変数が入りません。だから枠の表示は、これまでどおりサブスクの枠を指します。
-- **⚠️ トークンの試験が gateway を相手に判定しうる（コードからの推論。実機では確認していません）。** 袋の `scope: all / app` の行は、起動時にデーモン自身の `process.env` へ書き写されます（`packages/core/src/env-vars-boot.ts:133` の `applyAppScopedEnvVars`）。冷却中の鍵を30分ごとに試す処理（`packages/core/src/token-trial.ts:107` の `buildTrialEnv`）は、この env にプールの候補を重ねて1ターン走らせます。
-  - `ANTHROPIC_AUTH_TOKEN` が在るとそちらが勝つので、試しは gateway へ飛び、候補のトークンを試していません。それでも「使える／使えない」と記録されます。
-  - `ANTHROPIC_BASE_URL` だけが在る場合は、候補のトークンが差し替え先へ送られます。
-  - 試験の対象は、差し替える前から冷却中だった鍵だけです（gateway の間は、新しく冷却に入る鍵は出ません。上の 429 の項）。[#4263](https://github.com/takecchi/alteroid/issues/4263) で挙げた件ですが、2026-10-09 の決定（警告を出す）の対象外で、試験の env は変えていません。
+- **冷却中の鍵の試験は、gateway の鍵を外して、候補のトークンそのものを送ります（[#4284](https://github.com/takecchi/alteroid/issues/4284)）。** 袋の `scope: all / app` の行は、起動時にデーモン自身の `process.env` へ書き写されます（`packages/core/src/env-vars-boot.ts` の `applyAppScopedEnvVars`）。冷却中の鍵を30分ごとに試す処理（`packages/core/src/token-trial.ts` の `buildTrialEnv`）は、この env にプールの候補を重ねて1ターン走らせます。
+  - 以前は `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` が在るとそちらが勝ち、候補のトークンは送られていませんでした。それでも gateway が 200 を返すと「使える」と記録され、死んだ鍵が冷却から戻りえました（2026-10-10、ダミーの鍵と偽の gateway で実測）。いまは試しの env からこの2つを外します。デーモン自身の env は変えません。
+  - `ANTHROPIC_BASE_URL` は残すので、gateway を置いている間は、候補のトークンが gateway へ送られます（[#4263](https://github.com/takecchi/alteroid/issues/4263) の決定どおり、Claude の鍵を中継する使い方を残すため）。gateway がそのトークンで答えれば「使える」、401・429・5xx なら「判定できない」になり、冷却はそのまま残ります（実測。429 は SDK の再試行が締め切りの30秒を超えます）。
+  - 試験の対象は、差し替える前から冷却中だった鍵だけです（gateway の間は、新しく冷却に入る鍵は出ません。上の 429 の項）。
 - **費用の数字**は Claude Code が報告するものです。gateway の先の実際の請求とは一致しません。Claude 以外のモデルでどう出るかは**確認していません**。
 
 ### その他

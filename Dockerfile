@@ -15,14 +15,19 @@
 # 器に入る版と、alteroid が型を生成した版がずれた瞬間に黙って壊れる。
 # 上げるときは npm の `latest` dist-tag の安定版（alpha でないもの）を採る:
 #   npm view @openai/codex dist-tags.latest
-# 0.160.0 は 2026-10-02 に `latest` だったもの。
-ARG CODEX_VERSION=0.160.0
+# 0.160.1 は 0.160.0 の patch（2026-10-05 公開）。Renovate の catalog の更新に合わせた。
+ARG CODEX_VERSION=0.160.1
 
 # base は digest で固定する（Issue #3321）。タグだけだと Docker Hub 側の入れ替わりで
 # image ジョブのキャッシュが外れる時刻を上流に任せることになる。digest は Renovate の PR で
 # 上げる（`.github/renovate.json5`）。**build と runtime の2か所は同じ digest にそろえる**
 # （Renovate は2か所を同じ依存として一緒に更新する）。
-FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS build
+#
+# Docker Hub（`node:…`）ではなく ECR Public のミラーから取る。夜の release/prod で全
+# プロジェクトの app と runner が一斉にビルドし、Railway のビルダーが Docker Hub の匿名の
+# 取得制限（429 Too Many Requests）に当たってビルドが落ちた（2026-10-10 JST）。
+# ミラーは Docker 公式イメージと同じ digest を持つので、中身は digest のまま変わらない。
+FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -74,7 +79,7 @@ ENV ALTEROID_BUILD_REV=${ALTEROID_BUILD_REV:-$RAILWAY_GIT_COMMIT_SHA}
 RUN pnpm build
 
 
-FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS runtime
+FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS runtime
 
 # マネージャーが人間と同じ手つきで作業するための素の道具（runner で使う）。
 #
@@ -234,6 +239,11 @@ RUN install -d -m 0700 -o node -g node /run/alteroid/clone-tool-relay
 # runner も開くときに同じ mode で作り直す（`createPeerSocketHost`）。以前はこの行が build
 # ステージに在り、runtime のイメージには入っていなかった（#4118）。
 RUN install -d -m 0711 /run/alteroid/peer
+
+# マネージャー自身の道具（MCP `alteroid-manager`。#2987）のソケットの置き場。peer と違い、runner が
+# 起動時に資格を待たずに作る。mode と持ち主の考え方は peer と同じ（0711 の置き場に、子の UID 持ちの 0600）。
+# runner も開くときに同じ mode で作り直す（`createManagerToolsSocketHost`）。
+RUN install -d -m 0711 /run/alteroid/manager
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH

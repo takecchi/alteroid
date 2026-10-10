@@ -183,7 +183,8 @@ export class AttachmentDraft {
 
   remove(spec: string): { ok: true; removed: DraftFile[] } | { ok: false; reason: string } {
     const trimmed = spec.trim();
-    if (trimmed === 'all') {
+    // `ALL` も `all` と読む（キーワードは大文字小文字を区別しない。#4356）
+    if (trimmed.toLowerCase() === 'all') {
       return { ok: true, removed: this.files.splice(0, this.files.length) };
     }
     const index = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;

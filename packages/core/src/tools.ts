@@ -204,6 +204,7 @@ import {
   approvalUpdatedAt,
   commitmentOriginSchema,
   commitmentUpdatedAt,
+  externalOutputLimits,
   githubObservationInputSchema,
   jobStatusSchema,
   memorySlugSchema,
@@ -218,6 +219,7 @@ import type {
   ChatStreamEvent,
   Commitment,
   CommitmentOrigin,
+  ExternalOutput,
   Job,
   JobStatus,
   JournalEntry,
@@ -325,7 +327,7 @@ import {
   isEmptyCompleteUnpushedWorkObservation,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from './unpushed-work-observation-format.js';
-import { RESCUE_NOT_PUSHED_TEXT } from './workspace-swap-hints.js';
+import { RESCUE_NOT_PUSHED_TEXT, rescueNotPushedDetail } from './workspace-swap-hints.js';
 
 const MISSING_ARG_HINT =
   '引数が届いていない（received undefined ＝ 呼び出しの JSON にその鍵が最初から無かった。道具が受け取ってから落としたのではない）。書いたつもりなら、まず呼び出しの生の形を疑うこと —— タグの接頭辞の脱落など、呼び出しの組み立てが壊れていると引数は静かに落ちる。決定的な対照: 引数の並びも長さも1文字も変えず、タグだけ正しく書いて1回送り直す。それで通れば、原因は呼び出しの形であって、この道具でも引数の中身でもない';
@@ -1920,11 +1922,39 @@ function unpushedWorkObservationIncompleteSuffix(
   return note === null ? '' : `\n  ${note}`;
 }
 
-function describeUnpushedWorkObservation(manager: ManagerSummary): string | null {
-  const observation = describeUnpushedWorkObservationOnly(manager);
-  const rescue = describeRescue(manager);
-  if (rescue === null) return observation;
-  return observation === null ? rescue : `${observation}\n${rescue}`;
+// 一覧では件数と最後の1件だけにする: 一覧は予算で打ち切られ、1件の委譲が最大20行を取ると出る委譲の数が減るため。全件は `manager_report` が出す
+function describeUnpushedWorkObservation(
+  manager: ManagerSummary,
+  outputs: 'brief' | 'full' = 'brief',
+): string | null {
+  const lines = [
+    describeUnpushedWorkObservationOnly(manager),
+    describeRescue(manager),
+    describeExternalOutputs(manager, outputs),
+  ].filter((line): line is string => line !== null);
+  return lines.length === 0 ? null : lines.join('\n');
+}
+
+function formatExternalOutput(output: ExternalOutput): string {
+  return (
+    `${output.kind}: ${output.where}` +
+    (output.summary === undefined ? '' : `（${output.summary}）`) +
+    `、${output.at}`
+  );
+}
+
+export function describeExternalOutputs(
+  manager: ManagerSummary,
+  mode: 'brief' | 'full',
+): string | null {
+  const outputs = manager.externalOutputs;
+  if (outputs === undefined || outputs.length === 0) return null;
+  const head = `  外へ出した成果（マネージャーの記録。直近 ${String(externalOutputLimits.keptPerJob)} 件まで）`;
+  if (mode === 'brief') {
+    const last = outputs[outputs.length - 1];
+    return `${head}: ${String(outputs.length)} 件。最後: ${last === undefined ? '' : formatExternalOutput(last)}`;
+  }
+  return [`${head}:`, ...outputs.map((output) => `    ${formatExternalOutput(output)}`)].join('\n');
 }
 
 const RESCUE_REMOVAL_REASON_TEXT: Record<RescueRemovalReason, string> = {
@@ -1958,13 +1988,9 @@ export function describeRescue(manager: ManagerSummary): string | null {
       parts.push('退避された ref は無い');
     }
     if (tree.notPushed !== undefined) {
-      const extra =
-        tree.notPushed.reason === 'push-failed' && tree.notPushed.failureKind !== undefined
-          ? `（${tree.notPushed.failureKind}）`
-          : tree.notPushed.reason === 'secret-like' && (tree.notPushed.files?.length ?? 0) > 0
-            ? `（${(tree.notPushed.files ?? []).join(', ')}）`
-            : '';
-      parts.push(`直近の回: ${RESCUE_NOT_PUSHED_TEXT[tree.notPushed.reason]}${extra}`);
+      parts.push(
+        `直近の回: ${RESCUE_NOT_PUSHED_TEXT[tree.notPushed.reason]}${rescueNotPushedDetail(tree.notPushed)}`,
+      );
     }
     lines.push(`    ${tree.relativePath}: ${parts.join('。')}`);
     const unsaved: string[] = [];
@@ -2030,7 +2056,7 @@ function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | 
 }
 
 function unpushedWorkReportNote(manager: ManagerSummary): string | null {
-  const note = describeUnpushedWorkObservation(manager);
+  const note = describeUnpushedWorkObservation(manager, 'full');
   return note === null ? null : note.trimStart();
 }
 
@@ -8004,7 +8030,9 @@ export function createCloneTools(context: ToolContext) {
             return text(
               result.reason === 'not_found'
                 ? `添付 ${id} は見つからない（保持期限が過ぎて消えた、または id の誤り）。人間に再送を頼む。`
-                : `添付 ${id} は取り出せない（置き場が返した id か名前が、置き場所の外へ出る形だった）。`,
+                : result.reason === 'mismatch'
+                  ? `添付 ${id} は取り出せなかった（置き場から読んだ中身が、控えの大きさか sha256 と合わない。途中で切れたか壊れている。写しは残していない。もう一度試すと直る場合がある）。`
+                  : `添付 ${id} は取り出せない（置き場が返した id か名前が、置き場所の外へ出る形だった）。`,
             );
           }
           const { copy } = result;

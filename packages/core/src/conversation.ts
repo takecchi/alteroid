@@ -167,7 +167,8 @@ const WITHDRAWN_PAGE = 500;
  */
 export async function readWithdrawnClientMessageIds(
   journal: Pick<JournalStore, 'list'>,
-  conversationId: string,
+  // `undefined` は会話を問わない（会話の一覧が、窓の中の全会話の取り下げを一度で読む。#4357）
+  conversationId: string | undefined,
   since: string,
   pageSize: number = WITHDRAWN_PAGE,
 ): Promise<Set<string>> {
@@ -185,7 +186,7 @@ export async function readWithdrawnClientMessageIds(
     for (const entry of page) {
       if (
         entry.type === 'exchange' &&
-        entry.conversationId === conversationId &&
+        (conversationId === undefined || entry.conversationId === conversationId) &&
         entry.withdrawnClientMessageId !== undefined
       ) {
         withdrawn.add(entry.withdrawnClientMessageId);
@@ -209,6 +210,7 @@ const EMPTY_VIEW: ConversationReadView = { baseline: null, positions: {} };
 export function collectConversations(
   entries: JournalEntry[],
   readView: ConversationReadView = EMPTY_VIEW,
+  withdrawnClientMessageIds: ReadonlySet<string> = new Set(),
 ): ConversationSummary[] {
   const byConversation = new Map<string, Exchange[]>();
   const order: string[] = [];
@@ -235,19 +237,31 @@ export function collectConversations(
     const readThrough = effectiveReadThrough(readView, id);
     const first = visible[0]!;
     const last = visible[visible.length - 1]!;
+    // 取り下げた発言は題にも件数にも入れない（#4357）: 無かったことにした発言が一覧の見出しに残るため
+    const counted = visible.filter(
+      (entry) =>
+        !(
+          entry.role === 'inbound' &&
+          entry.clientMessageId !== undefined &&
+          withdrawnClientMessageIds.has(entry.clientMessageId)
+        ),
+    );
     // 題は失敗の知らせではない最後の発言から取る: 失敗した会話が全部同じ固定文の題で並ぶのを避ける。
-    const titled = [...visible].reverse().find((entry) => entry.turnFailure === undefined) ?? last;
+    const titled =
+      [...counted].reverse().find((entry) => entry.turnFailure === undefined) ?? counted.at(-1);
     summaries.push({
       conversationId: id,
       startedAt: first.at,
       updatedAt: last.at,
-      messages: visible.length,
+      messages: counted.length,
       preview:
-        titled.text.trim() === '' &&
-        titled.attachments !== undefined &&
-        titled.attachments.length > 0
-          ? `[添付 ${titled.attachments.length} 件]`
-          : preview(titled.text),
+        titled === undefined
+          ? ''
+          : titled.text.trim() === '' &&
+              titled.attachments !== undefined &&
+              titled.attachments.length > 0
+            ? `[添付 ${titled.attachments.length} 件]`
+            : preview(titled.text),
       unread: countUnread(visible, readThrough),
       readThrough,
     });
@@ -453,7 +467,22 @@ export async function readConversationPage(
     }
   }
 
-  const all = collectConversations(fresh, readView);
+  // 取り下げの印は人間との往復の窓に入らないので、窓の中で印を持ちうる最古の発言から別に読む（#4357）
+  const withdrawable = humanExchanges(fresh).filter(
+    (entry) => entry.role === 'inbound' && entry.clientMessageId !== undefined,
+  );
+  const withdrawn =
+    withdrawable.length === 0
+      ? new Set<string>()
+      : await readWithdrawnClientMessageIds(
+          journal,
+          undefined,
+          withdrawable.reduce(
+            (oldest, entry) => (entry.at < oldest ? entry.at : oldest),
+            withdrawable[0]!.at,
+          ),
+        );
+  const all = collectConversations(fresh, readView, withdrawn);
   const conversations = all.slice(0, limit);
   const hiddenByLimit = all.length - conversations.length;
   const reached = reachedStart(entries.length, scan);

@@ -676,6 +676,27 @@ describe('runner-swap の一言は作業ツリーごとの未 push・退避 ref 
     expect(message).not.toContain('clone し直せ。');
   });
 
+  it('#4394: 鍵らしい文字列で送らなかったとき、当たった規則の名前も出す', async () => {
+    const job = jobWith(
+      'mgr-secret-pattern',
+      unknownLocator,
+      observed({ unpushedCommitCount: 0, uncommittedChangeCount: 1 }),
+      rescue({
+        ...pushedAt('2026-09-24T05:00:00.000Z'),
+        notPushed: {
+          reason: 'secret-like',
+          files: ['art/bob.txt'],
+          patterns: ['schemeless-userinfo'],
+        },
+      }),
+    );
+    const { message } = await runnerSwapNudge(job);
+
+    expect(message).toContain(
+      '直近の退避: 鍵らしい文字列のため送らなかった（art/bob.txt。当たった形: schemeless-userinfo）',
+    );
+  });
+
   it('枝名が取れない作業ツリー（unresolved）に未 push が在る: 確かめよ＋失われた可能性', async () => {
     const job = jobWith('mgr-unresolved', unknownLocator, {
       kind: 'observed',

@@ -3,7 +3,13 @@
 import { codePointBoundary } from './excerpt.js';
 import { redactErrorText } from './denial-input-head.js';
 
-export { redactErrorText, redactSecretsInBody, redactSecretsInText } from './denial-input-head.js';
+export {
+  redactErrorText,
+  redactSecretsInBody,
+  redactSecretsInText,
+  secretPatternsInBody,
+  type SecretPatternName,
+} from './denial-input-head.js';
 
 export const REDACTED_EXCERPT_READ_LIMIT = 8192;
 

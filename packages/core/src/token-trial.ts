@@ -1,5 +1,6 @@
 import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
+import { ANTHROPIC_ENDPOINT_KEY_ENV_NAMES } from './anthropic-route-env.js';
 import { assistantFailureOf, isAnsweredResult, resultFailureOf } from './sdk-failure.js';
 import { cooldownDeadlineFrom } from './token-rotation.js';
 import {
@@ -103,8 +104,12 @@ export interface RunTokenTrialOptions {
   withheldEnvKeys?: readonly string[];
 }
 
+// 接続先用の鍵（`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY`）を外す: 在ると SDK はそちらを候補の鍵より優先して送り、
+// 中継の 200 を「候補が通った」と読んで、死んだ鍵を冷却から戻すため（#4284 の実測）。接続先（`ANTHROPIC_BASE_URL`）は残す:
+// 中継へ Claude の鍵を送る使い方は正当で（#4263 の決定）、外すと中継経由でしか外へ出られない器で試しが届かなくなるため
 function buildTrialEnv(options: RunTokenTrialOptions): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: options.token };
+  for (const key of ANTHROPIC_ENDPOINT_KEY_ENV_NAMES) delete env[key];
   for (const key of options.withheldEnvKeys ?? []) delete env[key];
   return env;
 }

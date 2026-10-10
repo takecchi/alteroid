@@ -71,36 +71,119 @@ const USERNAME_ONLY_SCHEMES: ReadonlySet<string> = new Set([
 ]);
 
 function redactCredentialPatterns(text: string): string {
-  let result = text;
+  return CREDENTIAL_RULES.reduce((result, rule) => rule.apply(result), text);
+}
 
-  // 先に当てる: ほかの規則が userinfo の一部だけを先に伏せると、形が崩れてこの規則に合わなくなるため
-  result = result.replace(URL_USERINFO_WITH_PASSWORD, (_m, head: string) => `${head}${REDACTED}@`);
-  result = result.replace(URL_USERINFO_TOKEN_ONLY, (match, scheme: string) =>
-    USERNAME_ONLY_SCHEMES.has(scheme.toLowerCase()) ? match : `${scheme}://${REDACTED}@`,
-  );
-  result = result.replace(URL_SCHEMELESS_USERINFO_WITH_PASSWORD, (match, head: string) => {
-    const user = head.slice(0, -1);
-    if (/^[0-9]+$/.test(user) || SCHEMELESS_NON_CREDENTIAL_USERS.has(user.toLowerCase())) {
-      return match;
-    }
-    return `${head}${REDACTED}@`;
-  });
+export type SecretPatternName =
+  | 'env-secret-value'
+  | 'url-userinfo-password'
+  | 'url-userinfo-token'
+  | 'schemeless-userinfo'
+  | 'github-token'
+  | 'github-pat'
+  | 'anthropic-key'
+  | 'aws-access-key'
+  | 'bearer'
+  | 'secret-assignment'
+  | 'secret-json-field';
 
-  result = result.replace(/\bgh[oprsu]_[A-Za-z0-9]{20,255}\b/g, REDACTED);
-  result = result.replace(/\bgithub_pat_[A-Za-z0-9_]{20,300}\b/g, REDACTED);
-  result = result.replace(/\bsk-ant-[A-Za-z0-9_-]{10,300}\b/g, REDACTED);
-  result = result.replace(/\bAKIA[0-9A-Z]{16}\b/g, REDACTED);
-  result = result.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, `Bearer ${REDACTED}`);
-  result = result.replace(
-    new RegExp(`\\b(${SECRET_ASSIGNMENT_NAME})=(\\S+)`, 'gi'),
-    (_match, name: string) => `${name}=${REDACTED}`,
-  );
-  result = result.replace(
-    new RegExp(`"(${SECRET_ASSIGNMENT_NAME})"\\s*:\\s*"([^"]*)"`, 'gi'),
-    (_match, name: string) => `"${name}":"${REDACTED}"`,
-  );
+interface CredentialRule {
+  readonly name: SecretPatternName;
+  // 固有の接頭辞を持つ形か: 形だけの規則（`a:b@c` や `…KEY=…`）はバイナリのでたらめなバイト列にも当たるため
+  readonly prefixed: boolean;
+  readonly apply: (text: string) => string;
+}
 
-  return result;
+// userinfo の3つを先に当てる: ほかの規則が userinfo の一部だけを先に伏せると、形が崩れてこの規則に合わなくなるため
+const CREDENTIAL_RULES: readonly CredentialRule[] = [
+  {
+    name: 'url-userinfo-password',
+    prefixed: false,
+    apply: (text) =>
+      text.replace(URL_USERINFO_WITH_PASSWORD, (_m, head: string) => `${head}${REDACTED}@`),
+  },
+  {
+    name: 'url-userinfo-token',
+    prefixed: false,
+    apply: (text) =>
+      text.replace(URL_USERINFO_TOKEN_ONLY, (match, scheme: string) =>
+        USERNAME_ONLY_SCHEMES.has(scheme.toLowerCase()) ? match : `${scheme}://${REDACTED}@`,
+      ),
+  },
+  {
+    name: 'schemeless-userinfo',
+    prefixed: false,
+    apply: (text) =>
+      text.replace(URL_SCHEMELESS_USERINFO_WITH_PASSWORD, (match, head: string) => {
+        const user = head.slice(0, -1);
+        if (/^[0-9]+$/.test(user) || SCHEMELESS_NON_CREDENTIAL_USERS.has(user.toLowerCase())) {
+          return match;
+        }
+        return `${head}${REDACTED}@`;
+      }),
+  },
+  {
+    name: 'github-token',
+    prefixed: true,
+    apply: (text) => text.replace(/\bgh[oprsu]_[A-Za-z0-9]{20,255}\b/g, REDACTED),
+  },
+  {
+    name: 'github-pat',
+    prefixed: true,
+    apply: (text) => text.replace(/\bgithub_pat_[A-Za-z0-9_]{20,300}\b/g, REDACTED),
+  },
+  {
+    name: 'anthropic-key',
+    prefixed: true,
+    apply: (text) => text.replace(/\bsk-ant-[A-Za-z0-9_-]{10,300}\b/g, REDACTED),
+  },
+  {
+    name: 'aws-access-key',
+    prefixed: true,
+    apply: (text) => text.replace(/\bAKIA[0-9A-Z]{16}\b/g, REDACTED),
+  },
+  {
+    name: 'bearer',
+    prefixed: true,
+    apply: (text) => text.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, `Bearer ${REDACTED}`),
+  },
+  {
+    name: 'secret-assignment',
+    prefixed: false,
+    apply: (text) =>
+      text.replace(
+        new RegExp(`\\b(${SECRET_ASSIGNMENT_NAME})=(\\S+)`, 'gi'),
+        (_match, name: string) => `${name}=${REDACTED}`,
+      ),
+  },
+  {
+    name: 'secret-json-field',
+    prefixed: false,
+    apply: (text) =>
+      text.replace(
+        new RegExp(`"(${SECRET_ASSIGNMENT_NAME})"\\s*:\\s*"([^"]*)"`, 'gi'),
+        (_match, name: string) => `"${name}":"${REDACTED}"`,
+      ),
+  },
+];
+
+/**
+ * `redactSecretsInBody` が伏せる規則のうち、`text` に当たるものの名前（文字列そのものは返さない）。
+ * 規則を1つずつ元の `text` に当てる: 伏せる順に当てたときと「どれかが当たる」の真偽は変わらない。
+ * `binary`: 環境変数の鍵の値と固有の接頭辞を持つ形だけを見る（#4394: PNG のバイト列が `a:b@c` の形に当たって退避が止まった）。
+ */
+export function secretPatternsInBody(
+  text: string,
+  env: NodeJS.ProcessEnv | undefined,
+  options: { readonly binary?: boolean } = {},
+): SecretPatternName[] {
+  const hits: SecretPatternName[] = [];
+  if (redactSecretEnvValues(text, env) !== text) hits.push('env-secret-value');
+  for (const rule of CREDENTIAL_RULES) {
+    if (options.binary === true && !rule.prefixed) continue;
+    if (rule.apply(text) !== text) hits.push(rule.name);
+  }
+  return hits;
 }
 
 function redactKnownSecretPatterns(text: string): string {

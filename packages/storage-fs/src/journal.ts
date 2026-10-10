@@ -27,7 +27,7 @@ export class FsJournalStore implements JournalStore {
   #chain: Promise<unknown> = Promise.resolve();
   // 墓標（`conversation_deleted`）の集合（#4218）。初回の読み出しで全ファイルから集め、追記したらその場で足す。
   // Promise で持つ: 集めている最中の追記も、集め終わった集合へ足せるため。
-  #tombstones: Promise<Set<string>> | null = null;
+  #tombstones: Promise<Tombstones> | null = null;
 
   constructor(dir: string) {
     this.#dir = dir;
@@ -51,7 +51,7 @@ export class FsJournalStore implements JournalStore {
     // 書いたあとに足す: 集めている最中だったとき、読み落とした可能性があるため
     if (entry.type === 'conversation_deleted' && this.#tombstones !== null) {
       try {
-        (await this.#tombstones).add(entry.deletedConversationId);
+        addTombstone(await this.#tombstones, entry);
       } catch {
         // 集めるのが失敗していたら、次の読み出しがファイルから集め直す（書いた行は残っている）
       }
@@ -170,12 +170,14 @@ export class FsJournalStore implements JournalStore {
   async oldestAt(): Promise<string | null> {
     // 全件走査しない: ファイル名が追記時の UTC 日付なので、昇順の先頭から開いて最初に読めた行で止める
     const dropped = new Map<string, number>();
+    // 外した行（消した会話の exchange・墓標が名指しした行）の時刻を返さない（#4377）: list / get と同じ絞りを通す
+    const tombstoned = await this.#tombstoneSet();
     for (const file of await this.#files('asc')) {
       const raw = await readFile(join(this.#dir, file), 'utf8');
       const lines = raw.split('\n').filter((line) => line.length > 0);
       for (const line of lines) {
         const entry = parseLine(line, dropped);
-        if (entry) {
+        if (entry && !isHiddenExchange(entry, tombstoned)) {
           noteDroppedJournalRowsSummary(dropped);
           return entry.at;
         }
@@ -204,7 +206,7 @@ export class FsJournalStore implements JournalStore {
     return removed;
   }
 
-  #tombstoneSet(): Promise<Set<string>> {
+  #tombstoneSet(): Promise<Tombstones> {
     if (this.#tombstones === null) {
       const collecting = this.#collectTombstones();
       this.#tombstones = collecting;
@@ -216,8 +218,8 @@ export class FsJournalStore implements JournalStore {
     return this.#tombstones;
   }
 
-  async #collectTombstones(): Promise<Set<string>> {
-    const found = new Set<string>();
+  async #collectTombstones(): Promise<Tombstones> {
+    const found: Tombstones = { conversations: new Set(), entries: new Set() };
     for (const file of await this.#files('asc')) {
       const raw = await readFile(join(this.#dir, file), 'utf8');
       for (const line of raw.split('\n')) {
@@ -230,7 +232,7 @@ export class FsJournalStore implements JournalStore {
           continue;
         }
         if (parsed.success && parsed.data.type === 'conversation_deleted') {
-          found.add(parsed.data.deletedConversationId);
+          addTombstone(found, parsed.data);
         }
       }
     }
@@ -279,11 +281,26 @@ export class FsJournalStore implements JournalStore {
   }
 }
 
-function isHiddenExchange(entry: JournalEntry, tombstoned: ReadonlySet<string>): boolean {
+// 墓標の会話 id と、墓標が名指しした日誌の行の id（会話 id を持たない本文の写し。#4355）
+interface Tombstones {
+  conversations: Set<string>;
+  entries: Set<string>;
+}
+
+function addTombstone(
+  tombstones: Tombstones,
+  entry: Extract<JournalEntry, { type: 'conversation_deleted' }>,
+): void {
+  tombstones.conversations.add(entry.deletedConversationId);
+  for (const id of entry.hiddenEntryIds ?? []) tombstones.entries.add(id);
+}
+
+function isHiddenExchange(entry: JournalEntry, tombstoned: Tombstones): boolean {
+  if (tombstoned.entries.has(entry.id)) return true;
   return (
     entry.type === 'exchange' &&
     entry.conversationId !== undefined &&
-    tombstoned.has(entry.conversationId)
+    tombstoned.conversations.has(entry.conversationId)
   );
 }
 

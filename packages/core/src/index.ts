@@ -638,6 +638,7 @@ export {
   type RunnerHostOptions,
   type RunnerHostPeerOptions,
   type RunnerManagerPeersAnnouncement,
+  type RunnerManagerToolsOptions,
   type RunnerPeerOptions,
 } from './runner.js';
 export { managerModelsOf, type ManagerModels } from './manager-models.js';
@@ -1271,6 +1272,16 @@ export {
   type PeerSocketHost,
 } from './peer-socket-host.js';
 export {
+  createManagerToolsMcpServer,
+  createManagerToolsSocketHost,
+  DEFAULT_MANAGER_TOOLS_SOCKET_DIR,
+  MANAGER_TOOLS_MCP_SERVER_NAME,
+  MANAGER_TOOLS_SOCKET_FILENAME,
+  OUTPUT_RECORD_TOOL_NAME,
+  type ManagerToolsSocketHost,
+  type OutputRecordInput,
+} from './manager-tools.js';
+export {
   createPeerBroker,
   describePeerTurnResult,
   parsePeerActor,
@@ -1373,6 +1384,15 @@ export {
   type UnreadableIntegrationKey,
 } from './integration-key.js';
 export { verifyIntegrationKeyStoreContract } from './integration-key-contract.js';
+export {
+  EVENT_IDEMPOTENCY_KEY_MAX_LENGTH,
+  EVENT_RECEIPT_RETENTION_MS,
+  assertEventReceiptWritable,
+  eventReceiptCutoff,
+  type EventReceipt,
+  type EventReceiptStore,
+} from './event-receipt.js';
+export { verifyEventReceiptStoreContract } from './event-receipt-contract.js';
 export {
   attachmentTooLargeMessage,
   attachmentTooManyMessage,

@@ -514,6 +514,12 @@ export const unreadableRowsRemoveResponseSchema = z.object({
 
 export const eventAcceptedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
 
+// `POST /events` だけが目印を受ける: 受けない口（`POST /events/:source` など）の応答に `duplicate` を載せない
+export const eventPostAcceptedResponseSchema = eventAcceptedResponseSchema.extend({
+  // 同じ目印（`idempotencyKey`）の出来事を既に受けていて、今回は積まなかったときだけ付く
+  duplicate: z.literal(true).optional(),
+});
+
 export const scheduleStatusSchema = z.object({
   kind: z.string(),
   description: z.string(),
@@ -646,6 +652,7 @@ export const managerSummarySchema = z.object({
   resetTimeSkewMatch: z.enum(['active', 'stale']).optional(),
   lastUnpushedWorkObservation: jobSchema.shape.lastUnpushedWorkObservation,
   lastRescue: jobSchema.shape.lastRescue,
+  externalOutputs: jobSchema.shape.externalOutputs,
   waiting: z.array(managerWaitingSchema),
   // 拒否を観測したときだけ載せる: 常に `[]` を載せると「数えていない」と「0件だった」が同じ形になる。
   denials: z.array(managerDenialSchema).optional(),

@@ -120,7 +120,9 @@ import type {
   TextMarkup,
   UnpushedWorkObservationSource,
   WorkspaceLocator,
+  ExternalOutput,
 } from './schema.js';
+import { externalOutputLimits } from './schema.js';
 import { describeUnreadableManagerRow, type Stores } from './store.js';
 import { pruneRescueLedger, rescueRemovalDue, syncTerminalMark } from './rescue-cleanup.js';
 import { MAX_RESCUE_INTERVAL_MS } from './rescue-ref.js';
@@ -447,6 +449,8 @@ export interface ManagerSummary {
   /** 台帳（`Job.lastUnpushedWorkObservation`）を写すだけ（`lastUnpushedWorkObservationSchema` の doc）。 */
   lastUnpushedWorkObservation?: LastUnpushedWorkObservation;
   lastRescue?: LastRescue;
+  /** 台帳（`Job.externalOutputs`）を写すだけ。マネージャーが `output_record` で記録した、コード以外の成果（#2987）。 */
+  externalOutputs?: ExternalOutput[];
 }
 
 /**
@@ -8139,6 +8143,15 @@ class Pool implements ManagerPool {
         return;
       }
 
+      case 'external_output': {
+        // 日誌には書かない: 道具の呼び出しそのものが `tool_use` の行として入力ごと日誌に残っているため（二重に書かない）
+        record.job.externalOutputs = [...(record.job.externalOutputs ?? []), event.output].slice(
+          -externalOutputLimits.keptPerJob,
+        );
+        await this.#persist(record);
+        return;
+      }
+
       case 'rescue_ref': {
         // `pushed` は新しい回が持たなければ前のものを残す: 後の回が「送らなかった」でも remote の ref はまだ在る。`status` / `lease` には触れない。`secret-like` はファイル名だけ日誌へ残し、文字列そのものは持たない。
         const at = new Date(this.#now()).toISOString();
@@ -8163,6 +8176,7 @@ class Pool implements ManagerPool {
               '見つけたので送らなかった。',
             grounds:
               `当たったファイル: ${(tree.notPushed.files ?? []).join(', ') || '(不明)'}。` +
+              `当たった形: ${(tree.notPushed.patterns ?? []).join(', ') || '(不明)'}。` +
               '文字列そのものは記録しない。取り除くか伏せれば次の周期で送られる。',
           });
         }
@@ -9650,6 +9664,7 @@ function summaryOf(
       ? {}
       : { lastUnpushedWorkObservation: job.lastUnpushedWorkObservation }),
     ...(job.lastRescue === undefined ? {} : { lastRescue: job.lastRescue }),
+    ...(job.externalOutputs === undefined ? {} : { externalOutputs: job.externalOutputs }),
     // `live` と同じく引数で運ぶ（省略可能にしない）: 既定を置くと、足す人が考えなかったことが「背景処理は待っていない」という主張になって外へ出る。
     ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
     // `tokenGeneration` が無ければ `activeTokenGeneration` も出さない: 比べる相手が無い判定を作らない。

@@ -68,7 +68,7 @@
       groupName: 'github actions',
     },
 
-    // `Dockerfile` の `FROM node:22-trixie-slim@sha256:…`（build と runtime の2か所）の
+    // `Dockerfile` の `FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:…`（build と runtime の2か所）の
     // digest を追う（Issue #3321）。固定済みの digest の更新は既定でも来るが、
     // `config:recommended` は `pinDigests` を入れないので、digest を外した行が
     // 紛れ込んだときに固定へ戻す PR が来るよう明示する。上の `non-major dependencies` の
@@ -79,10 +79,13 @@
       pinDigests: true,
     },
 
-    // Node は `mise.toml` / `Dockerfile` の `FROM node:` / `package.json` の
+    // Node は `mise.toml` / `Dockerfile` の `FROM …/node:` / `package.json` の
     // `engines.node` に散っているので、1本の PR へ束ねる。
+    // Dockerfile の側は ECR Public のミラー（Docker Hub の取得制限を避ける）なので、
+    // depName が `public.ecr.aws/docker/library/node` になる。並べないと束にも
+    // 下の major 止めにも当たらない。
     {
-      matchDepNames: ['node'],
+      matchDepNames: ['node', 'public.ecr.aws/docker/library/node'],
       groupName: 'node',
     },
 
@@ -97,12 +100,12 @@
 
     // Node の major は手で上げる。`mise.toml` 冒頭の注記のとおり、major を
     // 動かすときは `package.json` の `engines.node` / `packageManager`、
-    // `Dockerfile` の `FROM node:`（2箇所）、catalog の `@types/node` を
+    // `Dockerfile` の `FROM …/node:`（2箇所）、catalog の `@types/node` を
     // 一緒に見る必要があり、Renovate はこれを1つの PR で保証しない。
     // さらに apps/web の本番（Vercel）の Node の版は管理画面側に在って
     // repo から動かせない（Issue #791）。
     {
-      matchDepNames: ['node'],
+      matchDepNames: ['node', 'public.ecr.aws/docker/library/node'],
       matchUpdateTypes: ['major'],
       enabled: false,
     },

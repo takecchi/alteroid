@@ -90,6 +90,12 @@ import {
   type IntegrationKeyRecord,
   type IntegrationKeyStore,
 } from './integration-key.js';
+import {
+  assertEventReceiptWritable,
+  eventReceiptCutoff,
+  type EventReceipt,
+  type EventReceiptStore,
+} from './event-receipt.js';
 import type {
   CredentialVaultStore,
   EnvProfileEntry,
@@ -474,6 +480,13 @@ export function createMemoryStores(): Stores {
         entry.type === 'conversation_deleted' ? [entry.deletedConversationId] : [],
       ),
     );
+  // 墓標が名指しした日誌の行（会話 id を持たない本文の写し。#4355）
+  const hiddenEntryIds = (): Set<string> =>
+    new Set(
+      entries.flatMap((entry) =>
+        entry.type === 'conversation_deleted' ? (entry.hiddenEntryIds ?? []) : [],
+      ),
+    );
 
   const journal: JournalStore = {
     async append(input: JournalEntryInput) {
@@ -492,6 +505,7 @@ export function createMemoryStores(): Stores {
       const order = query.order ?? 'desc';
       let found = (order === 'desc' ? [...entries].reverse() : [...entries]).map(isolate);
       const tombstoned = deletedConversationIds();
+      const hiddenIds = hiddenEntryIds();
 
       // `after` は絞り込みより前に効かせる: 錨の位置は絞り込み前の全順序で決める。見つからなければ黙って先頭から返さず投げる。
       if (query.after !== undefined) {
@@ -515,7 +529,7 @@ export function createMemoryStores(): Stores {
             entry.type === 'exchange' &&
             entry.conversationId !== undefined &&
             tombstoned.has(entry.conversationId)
-          ),
+          ) && !hiddenIds.has(entry.id),
       );
       // `with` は `limit` より前で効かせる。
       if (query.with !== undefined) {
@@ -551,10 +565,22 @@ export function createMemoryStores(): Stores {
       ) {
         return null;
       }
+      if (found !== null && hiddenEntryIds().has(found.id)) return null;
       return found;
     },
     async oldestAt() {
-      return entries[0]?.at ?? null;
+      // 外した行（消した会話の exchange・墓標が名指しした行）の時刻を返さない（#4377）: list / get と同じ絞りを通す
+      const tombstoned = deletedConversationIds();
+      const hiddenIds = hiddenEntryIds();
+      const oldest = entries.find(
+        (entry) =>
+          !(
+            entry.type === 'exchange' &&
+            entry.conversationId !== undefined &&
+            tombstoned.has(entry.conversationId)
+          ) && !hiddenIds.has(entry.id),
+      );
+      return oldest?.at ?? null;
     },
     async clear() {
       const removed = entries.length;
@@ -795,7 +821,10 @@ export function createMemoryStores(): Stores {
       if (hasNul(conversationId)) return 0;
       let removed = 0;
       for (const [id, entry] of [...commitments]) {
-        if (entry.origin === 'human' && entry.source === conversationId) {
+        if (
+          (entry.origin === 'human' || entry.origin === 'self') &&
+          entry.source === conversationId
+        ) {
           commitments.delete(id);
           removed += 1;
         }
@@ -1025,6 +1054,31 @@ export function createMemoryStores(): Stores {
 
   const compareAccessTokenOrder = (a: AccessTokenRecord, b: AccessTokenRecord): number =>
     compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
+
+  // 鍵は JSON の配列にする: 区切り文字を挟む形だと、区切り文字を含む値どうしが同じ鍵になりうるため
+  const eventReceiptRows = new Map<string, EventReceipt>();
+  const eventReceiptKey = (scope: string, source: string, idempotencyKey: string): string =>
+    JSON.stringify([scope, source, idempotencyKey]);
+  const eventReceipts: EventReceiptStore = {
+    async findEventReceipt(scope, source, idempotencyKey, now) {
+      if (hasNul(scope) || hasNul(source) || hasNul(idempotencyKey)) return null;
+      const row = eventReceiptRows.get(eventReceiptKey(scope, source, idempotencyKey));
+      if (row === undefined || compareIsoInstant(row.at, eventReceiptCutoff(now)) < 0) return null;
+      return { ...row };
+    },
+    async recordEventReceipt(receipt) {
+      assertEventReceiptWritable(receipt);
+      const cutoff = eventReceiptCutoff(receipt.at);
+      for (const [key, row] of eventReceiptRows) {
+        if (compareIsoInstant(row.at, cutoff) < 0) eventReceiptRows.delete(key);
+      }
+      const key = eventReceiptKey(receipt.scope, receipt.source, receipt.idempotencyKey);
+      const existing = eventReceiptRows.get(key);
+      if (existing !== undefined) return { ...existing };
+      eventReceiptRows.set(key, { ...receipt });
+      return { ...receipt };
+    },
+  };
 
   const integrationKeyRows = new Map<string, IntegrationKeyRecord>();
   const integrationKeys: IntegrationKeyStore = {
@@ -1831,6 +1885,7 @@ export function createMemoryStores(): Stores {
     sessions,
     auth,
     integrationKeys,
+    eventReceipts,
     permissionGrants,
     profile,
     credentials,
