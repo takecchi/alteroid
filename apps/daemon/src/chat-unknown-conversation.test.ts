@@ -11,11 +11,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * `POST /chat` は、渡された `conversationId` の会話が無ければ 404 で断り、その文字列で会話を作らない。
- * 新しい会話を始めるのは `conversationId` を省いたときだけである。
- */
-
 function echoSdk(): typeof import('@anthropic-ai/claude-agent-sdk').query {
   let turns = 0;
   return ((params: { prompt: unknown; options?: Options }) => {

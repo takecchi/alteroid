@@ -9,13 +9,6 @@ import {
 } from './topology-activity.js';
 import { buildTopologySnapshot, type TopologyInputs } from './topology.js';
 
-/**
- * peer（マネージャーが MCP `peer` で頼んだ Codex）が、作業者と同じ経路でホームの稼働状況に載ること。
- * - 日誌の `tool_use`（actor `peer:<managerId>:<provider>`）→ 札の「最後の道具」と光
- * - マネージャーの `mcp__alteroid-peer__peer_run` → 頼んだ線と札（名指しのモデル）
- * - runner の `tool_running` / `tool_end`（ターンの開始と終わり）→ 札の「実行中」とモデル
- */
-
 const NOW = Date.parse('2026-10-08T03:00:00.000Z');
 const iso = (offsetMs: number) => new Date(NOW + offsetMs).toISOString();
 
