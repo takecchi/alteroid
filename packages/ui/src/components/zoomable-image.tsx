@@ -2,7 +2,6 @@ import { useState } from 'react';
 
 import { DialogContent, Dialog, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 
-/** 読めなかった画像の代わりの「画像: 説明」の文字とリンク。 */
 export function ImageFallback({ src, alt }: { src: string; alt: string }) {
   const label = alt === '' ? '画像' : `画像: ${alt}`;
   return (
