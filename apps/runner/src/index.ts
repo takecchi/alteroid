@@ -263,7 +263,7 @@ export async function main(): Promise<void> {
 
   // ソケットはここでは開かない: 開く条件は Codex の資格で、届くのはデーモンが繋いだ後のため
   const peerPlan = planPeerSocket(process.env, childUser);
-  // こちらは資格を待たずに開く: どの器のマネージャーにも出す道具のため（#2987）
+  // こちらは資格を待たずに開く: どの器のマネージャーにも出す道具のため
   const managerToolsHost = await openManagerToolsSocket(childUser);
   const outbox = new Outbox();
   const host = createRunnerHost({
