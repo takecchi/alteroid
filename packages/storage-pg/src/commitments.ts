@@ -234,7 +234,7 @@ export class PgCommitmentStore implements CommitmentStore {
     const editedBody = stripNulls(body);
     const edited = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{body}', ${JSON.stringify(editedBody)}::jsonb, true), '{editedAt}', ${JSON.stringify(at)}::jsonb, true), '{editedBy}', ${JSON.stringify(by)}::jsonb, true)`;
 
-    // `ifMatch` 省略も行ロックの後に読めるかを確かめる: 1文の update だと読めない行の JSON へ黙って書き、「編集できた」と答えるため（#4064）。
+    // `ifMatch` 省略も行ロックの後に読めるかを確かめる: 1文の update だと読めない行の JSON へ黙って書き、「編集できた」と答えるため。
     return this.#db.transaction(async (tx) => {
       const rows = await tx
         .select({ closedAt: commitments.closedAt, commitment: commitments.commitment })
