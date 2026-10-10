@@ -8,8 +8,6 @@ import type { Target } from './target.js';
 import { captureStdout } from './test-support.js';
 import { surplusRefusal } from './tui/app.js';
 
-// CLI の chat と TUI が、スラッシュコマンドの引数を同じ規則で読むこと（#4356）
-
 const target: Target = {
   baseUrl: 'http://127.0.0.1:4517',
   headers: { authorization: 'Bearer t' },

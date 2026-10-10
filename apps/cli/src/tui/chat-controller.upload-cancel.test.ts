@@ -8,7 +8,7 @@ import { makeTempDir } from '../../../../vitest.tmpdir.js';
 import { ChatController } from './chat-controller.js';
 import { fakeApi } from './fake-api.js';
 
-// 周回の数で待たない: 添えたファイルを読むのは実 I/O なので、混んだ runner では10周では上げ始めに届かない（#4342 の CI で揺れた。#3943 と同じ形）
+// 周回の数で待たない: 添えたファイルを読むのは実 I/O なので、混んだ runner では10周では上げ始めに届かない
 const untilUploading = (signals: (AbortSignal | undefined)[]) =>
   vi.waitFor(() => {
     expect(signals.length).toBeGreaterThan(0);

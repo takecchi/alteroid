@@ -169,7 +169,6 @@ describe('/rm', () => {
     await controller.listFiles('');
     await controller.removeFile('2');
     expect(last()).toContain('消すなら /rm att-2 yes');
-    // 番号の指す先が変わる: kept の一覧では [2] が att-3 になる
     await controller.listFiles('kept');
     expect(last()).toContain('[2] att-3');
 
