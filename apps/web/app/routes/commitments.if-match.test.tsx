@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * #3786。本文の編集は、開いた時点の版（`editedAt ?? at`）を `ifMatch` で送る。
+ * 本文の編集は、開いた時点の版（`editedAt ?? at`）を `ifMatch` で送る。
  * 開いたあとに裏で本文が変わっていたら 409 で断られ、下書きを残したまま選ばせる。
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';

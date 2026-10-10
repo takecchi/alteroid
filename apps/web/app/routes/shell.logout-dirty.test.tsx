@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * 書きかけがあるときのログアウトは、確認してから進み、帯を出さずに /login へ移る（#3919）。
+ * 書きかけがあるときのログアウトは、確認してから進み、帯を出さずに /login へ移る。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';

@@ -273,7 +273,7 @@ function PluginLoad({
 
 // 開閉のどちらも名乗らない器は何も描かない: 理由を送らない旧い版の runner の見え方を変えないため
 // unknown を「頼めない」と描かない: 名乗らない旧い runner は頼めるかどうか判定できないため
-// 閉じている peer は理由を描く: ログイン済みなのに開いていない器の理由を見せるため（#4118）
+// 閉じている peer は理由を描く: ログイン済みなのに開いていない器の理由を見せるため
 function ManagerPeers({ runner }: { runner: RunnerSummary }) {
   const view = runner.managerPeers;
   if (view === undefined) return null;

@@ -118,8 +118,8 @@ async function box() {
 }
 
 async function sendWithAttachmentAndAbort() {
-  // 中断の直後の先回りの確認（#3303。chat.interrupted-send-probe.test.tsx）は失敗させる。
-  // ここで見るのは、次の送信の冒頭の確認（#3258）。
+  // 中断の直後の先回りの確認（chat.interrupted-send-probe.test.tsx）は失敗させる。
+  // ここで見るのは、次の送信の冒頭の確認。
   const real = lookup;
   lookup = () => {
     lookup = real;

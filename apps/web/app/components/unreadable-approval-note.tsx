@@ -2,13 +2,13 @@ import { WarnNote } from '@alteroid/ui';
 import { type UnreadableApproval } from '@alteroid/logic';
 
 /**
- * 読めない承認待ちが在ることを、一覧の上で断る（issue #2298。commitments 画面の
+ * 読めない承認待ちが在ることを、一覧の上で断る（commitments 画面の
  * `UnreadableNote` と同じ形）。**0件なら描かない**（0 の行を作らない）。
  *
  * id が取れない行は件数だけに数える。id の列挙には上限を置き、切ったら言う。
  * **「回答済みでも取り下げ済みでもない」を落とさない**——落とすと、行が消えたのと区別が付かない。
  *
- * 承認の画面と会話の画面（#4018）が共有する。`hint` は、その画面だけが足す1文（会話の画面では、
+ * 承認の画面と会話の画面が共有する。`hint` は、その画面だけが足す1文（会話の画面では、
  * 全件を確かめられる場所を言う）。
  */
 const UNREADABLE_APPROVAL_IDS_SHOWN = 20;
