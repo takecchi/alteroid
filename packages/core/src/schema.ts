@@ -978,6 +978,8 @@ export const observedWorktreeBranchSchema = z.object({
   unpushedCommitCountUnknown: z.string().optional(),
   uncommittedChangeCount: z.number().int().nonnegative().optional(),
   uncommittedChangeCountUnknown: z.string().optional(),
+  // 在るときは `branch`（と、この観測で取れなかった `remoteOrigin`）がこの時刻の観測から引き継いだもの: 観測の `at` の枝名として読ませないため（#1266）
+  branchCarriedFromAt: isoDateTime.optional(),
 });
 
 export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema>;

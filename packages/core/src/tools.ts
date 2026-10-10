@@ -321,6 +321,7 @@ import { JOURNAL_SEARCH_UNCOVERED_LIST } from './journal-search.js';
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
 import { describeManagerModels, managerModelsOf } from './manager-models.js';
 import {
+  describeObservedWorktreeBranch,
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
@@ -1903,15 +1904,16 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
 }
 
 function formatUnpushedWorkObservationWorktrees(
-  worktrees: readonly { relativePath: string; branch: string | null }[],
+  worktrees: readonly {
+    relativePath: string;
+    branch: string | null;
+    branchCarriedFromAt?: string;
+  }[],
 ): string {
   return worktrees.length === 0
     ? '見つかった作業ツリー0本'
     : worktrees
-        .map(
-          (wt) =>
-            `${wt.relativePath}: branch=${wt.branch === null ? 'null（取れなかった）' : wt.branch}`,
-        )
+        .map((wt) => `${wt.relativePath}: branch=${describeObservedWorktreeBranch(wt)}`)
         .join(' / ');
 }
 

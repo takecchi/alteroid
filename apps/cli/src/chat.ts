@@ -53,6 +53,7 @@ import {
   formatSystemErrorUnknownNote,
 } from '@alteroid/core/system-error-format';
 import {
+  describeObservedWorktreeBranch,
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
@@ -3087,15 +3088,16 @@ function resetTimeSkewLine(
 
 // core の `formatUnpushedWorkObservationWorktrees`（`tools.ts`、export されていない）と同じ判断の複製。
 function formatUnpushedWorkObservationWorktrees(
-  worktrees: readonly { relativePath: string; branch: string | null }[],
+  worktrees: readonly {
+    relativePath: string;
+    branch: string | null;
+    branchCarriedFromAt?: string;
+  }[],
 ): string {
   return worktrees.length === 0
     ? '見つかった作業ツリー0本'
     : worktrees
-        .map(
-          (wt) =>
-            `${wt.relativePath}: branch=${wt.branch === null ? 'null（取れなかった）' : wt.branch}`,
-        )
+        .map((wt) => `${wt.relativePath}: branch=${describeObservedWorktreeBranch(wt)}`)
         .join(' / ');
 }
 

@@ -1,9 +1,26 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  describeObservedWorktreeBranch,
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
 } from './unpushed-work-observation-format.js';
+
+describe('describeObservedWorktreeBranch（Issue #1266）', () => {
+  it('引き継いだ枝名には、どの時刻の観測から引き継いだかを添える', () => {
+    expect(
+      describeObservedWorktreeBranch({
+        branch: 'fix/1266',
+        branchCarriedFromAt: '2026-10-10T00:05:00.000Z',
+      }),
+    ).toBe('fix/1266（この観測では取れず、2026-10-10T00:05:00.000Z 時点の観測から引き継いだ）');
+  });
+
+  it('この観測で取れた枝名はそのまま、取れなかったら null と名乗る', () => {
+    expect(describeObservedWorktreeBranch({ branch: 'fix/1266' })).toBe('fix/1266');
+    expect(describeObservedWorktreeBranch({ branch: null })).toBe('null（取れなかった）');
+  });
+});
 
 describe('describeUnpushedWorkObservationIncompleteness（Issue #1885）', () => {
   it('4欄とも無ければ null（古い台帳の行・確かめきれた観測の両方がここに当たる）', () => {

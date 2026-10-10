@@ -582,6 +582,39 @@ function isUnpushedWorkObservationAtLeastAsNewAs(
 }
 
 /**
+ * 新しい観測の `branch: null` で、前に取れていた枝名を消さない: pids が尽きて git を起こせない回（fork の EAGAIN）は、
+ * 作業ツリーは readdir で見つかるのに枝名だけが取れず、それが「より新しい観測」として台帳の枝名を上書きするため（#1266）。
+ * null の理由（detached HEAD か失敗か）では分けない: どちらでも引き継いだ枝名は `branchCarriedFromAt` の時刻には正しく、
+ * 時刻を名乗るので嘘にならない。`unavailable` へは引き継がない: 欄の形が違い、「確かめられなかった」を観測で埋めないため。
+ */
+function carryKnownBranches(
+  candidate: LastUnpushedWorkObservation,
+  existing: LastUnpushedWorkObservation | undefined,
+): LastUnpushedWorkObservation {
+  if (candidate.kind !== 'observed' || existing?.kind !== 'observed') return candidate;
+  const known = new Map(
+    existing.worktrees
+      .filter((worktree) => worktree.branch !== null)
+      .map((worktree) => [worktree.relativePath, worktree]),
+  );
+  let carried = false;
+  const worktrees = candidate.worktrees.map((worktree) => {
+    const before = known.get(worktree.relativePath);
+    if (worktree.branch !== null || before === undefined) return worktree;
+    carried = true;
+    return {
+      ...worktree,
+      branch: before.branch,
+      ...(worktree.remoteOrigin === undefined && before.remoteOrigin !== undefined
+        ? { remoteOrigin: before.remoteOrigin }
+        : {}),
+      branchCarriedFromAt: before.branchCarriedFromAt ?? existing.at,
+    };
+  });
+  return carried ? { ...candidate, worktrees } : candidate;
+}
+
+/**
  * `status` では表さない: 分類器か deny 規則がその場で拒否した仕事は `running` のまま手が止まり、
  * デーモンから見えるのは「拒否があった」事実だけで、それで止まったのかは観測していない。
  * だから状態の値は増やさず、状態に添える（`manager_list`）。
@@ -4407,7 +4440,10 @@ class Pool implements ManagerPool {
     ) {
       return;
     }
-    record.job.lastUnpushedWorkObservation = observation;
+    record.job.lastUnpushedWorkObservation = carryKnownBranches(
+      observation,
+      record.job.lastUnpushedWorkObservation,
+    );
     await this.#persist(record);
   }
 
@@ -8033,7 +8069,10 @@ class Pool implements ManagerPool {
               record.job.lastUnpushedWorkObservation,
             )
           ) {
-            record.job.lastUnpushedWorkObservation = observation;
+            record.job.lastUnpushedWorkObservation = carryKnownBranches(
+              observation,
+              record.job.lastUnpushedWorkObservation,
+            );
           }
         }
         await this.#persist(record);

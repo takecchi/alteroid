@@ -354,3 +354,154 @@ describe('台帳の lastUnpushedWorkObservation が、closed（Issue #1266 候�
     await pool.stop();
   });
 });
+
+describe('fork が断られた回（pids 枯渇）の観測が、前に取れていた枝名を消さない（Issue #1266）', () => {
+  const origin = { host: 'github.com', path: 'takecchi/alteroid.git' };
+  const forkRefused = '確かめられなかった（git を起こせなかった: EAGAIN）';
+
+  const forkRefusedResult = {
+    cwd: '/work/project',
+    worktrees: [
+      {
+        relativePath: '/tmp/mgr-pids/alteroid',
+        branch: null,
+        unpushedCommitCountUnknown: forkRefused,
+        uncommittedChangeCountUnknown: forkRefused,
+      },
+    ],
+  };
+
+  async function observedWithBranch(managerId: string) {
+    let clock = new Date('2026-10-10T00:00:00.000Z').getTime();
+    const setup = await runningManualSetup(managerId, () => clock);
+
+    clock = new Date('2026-10-10T00:05:00.000Z').getTime();
+    setup.fake.setUnpushedWorkResult({
+      cwd: '/work/project',
+      worktrees: [
+        {
+          relativePath: '/tmp/mgr-pids/alteroid',
+          branch: 'fix/1266-before-fork-refused',
+          remoteOrigin: origin,
+          unpushedCommitCount: 2,
+          uncommittedChangeCount: 0,
+        },
+      ],
+    });
+    await setup.pool.unpushedWork(managerId);
+    return { ...setup, setClock: (at: string) => (clock = new Date(at).getTime()) };
+  }
+
+  it('枝名と origin は前の観測から引き継ぎ、引き継いだ時刻を名乗る。件数はこの観測の「確かめられなかった」のまま', async () => {
+    const { pool, fake, setClock } = await observedWithBranch('mgr-pids');
+
+    setClock('2026-10-10T00:10:00.000Z');
+    fake.closed('mgr-pids', 'failed', 'SIGABRT', { kind: 'ok', result: forkRefusedResult });
+    await vi.waitFor(async () => {
+      const listed = await listedOf(pool, 'mgr-pids');
+      if (listed.lastUnpushedWorkObservation?.source !== 'closed') {
+        throw new Error('closed の観測がまだ台帳に届いていない');
+      }
+    });
+
+    const listed = await listedOf(pool, 'mgr-pids');
+    expect(listed.lastUnpushedWorkObservation).toEqual({
+      kind: 'observed',
+      at: '2026-10-10T00:10:00.000Z',
+      source: 'closed',
+      cwd: '/work/project',
+      worktrees: [
+        {
+          relativePath: '/tmp/mgr-pids/alteroid',
+          branch: 'fix/1266-before-fork-refused',
+          remoteOrigin: origin,
+          branchCarriedFromAt: '2026-10-10T00:05:00.000Z',
+          unpushedCommitCountUnknown: forkRefused,
+          uncommittedChangeCountUnknown: forkRefused,
+        },
+      ],
+    });
+
+    await pool.stop();
+  });
+
+  it('続けて取れなかった回でも、引き継いだ時刻は最初に枝名を見た観測のまま動かない', async () => {
+    const { pool, fake, setClock } = await observedWithBranch('mgr-pids-again');
+
+    fake.setUnpushedWorkResult(forkRefusedResult);
+    setClock('2026-10-10T00:10:00.000Z');
+    await pool.unpushedWork('mgr-pids-again');
+    setClock('2026-10-10T00:15:00.000Z');
+    await pool.unpushedWork('mgr-pids-again');
+
+    const listed = await listedOf(pool, 'mgr-pids-again');
+    expect(listed.lastUnpushedWorkObservation).toMatchObject({
+      at: '2026-10-10T00:15:00.000Z',
+      worktrees: [
+        {
+          branch: 'fix/1266-before-fork-refused',
+          branchCarriedFromAt: '2026-10-10T00:05:00.000Z',
+        },
+      ],
+    });
+
+    await pool.stop();
+  });
+
+  it('（対照）新しい観測で枝名が取れたら、それを採って引き継ぎの印を残さない', async () => {
+    const { pool, fake, setClock } = await observedWithBranch('mgr-pids-recovered');
+
+    fake.setUnpushedWorkResult(forkRefusedResult);
+    setClock('2026-10-10T00:10:00.000Z');
+    await pool.unpushedWork('mgr-pids-recovered');
+    setClock('2026-10-10T00:15:00.000Z');
+    fake.setUnpushedWorkResult({
+      cwd: '/work/project',
+      worktrees: [
+        { relativePath: '/tmp/mgr-pids/alteroid', branch: 'fix/1266-after', remoteOrigin: origin },
+      ],
+    });
+    await pool.unpushedWork('mgr-pids-recovered');
+
+    const listed = await listedOf(pool, 'mgr-pids-recovered');
+    const worktree =
+      listed.lastUnpushedWorkObservation?.kind === 'observed'
+        ? listed.lastUnpushedWorkObservation.worktrees[0]
+        : undefined;
+    expect(worktree?.branch).toBe('fix/1266-after');
+    expect(worktree).not.toHaveProperty('branchCarriedFromAt');
+
+    await pool.stop();
+  });
+
+  it('（対照）別の作業ツリーの枝名は引き継がない', async () => {
+    let clock = new Date('2026-10-10T00:00:00.000Z').getTime();
+    const { pool, fake } = await runningManualSetup('mgr-pids-other', () => clock);
+
+    clock = new Date('2026-10-10T00:05:00.000Z').getTime();
+    fake.setUnpushedWorkResult({
+      cwd: '/work/project',
+      worktrees: [{ relativePath: '/tmp/mgr-pids/alteroid', branch: 'fix/1266-other-tree' }],
+    });
+    await pool.unpushedWork('mgr-pids-other');
+
+    clock = new Date('2026-10-10T00:10:00.000Z').getTime();
+    fake.setUnpushedWorkResult({
+      cwd: '/work/project',
+      worktrees: [{ relativePath: '/tmp/mgr-pids-2/alteroid', branch: null }],
+    });
+    await pool.unpushedWork('mgr-pids-other');
+
+    const listed = await listedOf(pool, 'mgr-pids-other');
+    expect(listed.lastUnpushedWorkObservation).toMatchObject({
+      worktrees: [{ relativePath: '/tmp/mgr-pids-2/alteroid', branch: null }],
+    });
+    const worktree =
+      listed.lastUnpushedWorkObservation?.kind === 'observed'
+        ? listed.lastUnpushedWorkObservation.worktrees[0]
+        : undefined;
+    expect(worktree).not.toHaveProperty('branchCarriedFromAt');
+
+    await pool.stop();
+  });
+});

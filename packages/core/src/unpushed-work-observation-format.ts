@@ -30,6 +30,16 @@ export function describeUnpushedWorkObservationIncompleteness(
   return `この観測は探しきっていない（${reasons.join('・')}）——ここに無い作業ツリーが在りうる。`;
 }
 
+// 引き継いだ枝名に時刻を添える: 添えないと、観測の時刻にその枝に居たと読まれるため（#1266 の `branchCarriedFromAt`）
+export function describeObservedWorktreeBranch(worktree: {
+  readonly branch: string | null;
+  readonly branchCarriedFromAt?: string;
+}): string {
+  if (worktree.branch === null) return 'null（取れなかった）';
+  if (worktree.branchCarriedFromAt === undefined) return worktree.branch;
+  return `${worktree.branch}（この観測では取れず、${worktree.branchCarriedFromAt} 時点の観測から引き継いだ）`;
+}
+
 export type UnpushedWorkObservationSourceLike =
   'stop-refusal' | 'report' | 'tool_use' | 'auto-fold' | 'vacate' | 'stop' | 'closed' | 'shutdown';
 
