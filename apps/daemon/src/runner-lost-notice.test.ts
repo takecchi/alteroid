@@ -167,3 +167,96 @@ describe('createRunnerLostNotice', () => {
     expect(sent).toHaveLength(2);
   });
 });
+
+describe('送る時点で、名乗り直した器を言う（#4449）', () => {
+  function setupWithBack(back: ReadonlySet<string>, throws = false) {
+    const clock = fakeClock();
+    const sent: string[] = [];
+    const asked: string[] = [];
+    const notice = createRunnerLostNotice({
+      send: (text) => sent.push(text),
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+      isBackNow: (entry) => {
+        asked.push(entry.label);
+        if (throws) throw new Error('名簿を読めなかった（テスト）');
+        return back.has(entry.label);
+      },
+    });
+    return { clock, sent, asked, notice };
+  }
+
+  const STILL_TRIED =
+    '移送は名乗らなくなった時点で試みており、名乗り直しで取り消されはしない（移し終えた委譲は元の器へ戻らない）。';
+
+  it('1台が窓のうちに名乗り直した → 今の文面の後に「名乗り直している」と移送の事実を足す（捨てない）', () => {
+    const { clock, sent, notice } = setupWithBack(new Set(['http://r1:7000']));
+    const entry = { label: 'http://r1:7000', runnerId: 'runner-1', reason: 'heartbeat が途絶えた' };
+    notice.add(entry);
+    clock.advance(RUNNER_LOST_COALESCE_MS);
+    expect(sent).toEqual([
+      `${describeRunnerLost(entry)}\n送る時点では、この器は名乗り直している（connected）。${STILL_TRIED}`,
+    ]);
+  });
+
+  it('8台とも名乗り直した → 「8 台とも名乗り直している」', () => {
+    const labels = NAMES.map((name) => `http://${name}:4518`);
+    const { clock, sent, notice } = setupWithBack(new Set(labels));
+    NAMES.forEach((name, i) => {
+      notice.add({
+        label: labels[i] as string,
+        runnerId: name,
+        reason: '5000ms 以内に名乗りが返らなかった',
+      });
+    });
+    clock.advance(RUNNER_LOST_COALESCE_MS);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('runner 8 台が名乗らなくなりました');
+    expect(sent[0]).toContain(
+      `\n送る時点では、8 台とも名乗り直している（connected）。${STILL_TRIED}`,
+    );
+  });
+
+  it('一部だけ名乗り直した → 戻った台を名指しする', () => {
+    const { clock, sent, notice } = setupWithBack(new Set(['b']));
+    notice.add({ label: 'a', runnerId: 'runner-a', reason: 'r' });
+    notice.add({ label: 'b', runnerId: 'runner-b', reason: 'r' });
+    notice.add({ label: 'c', runnerId: 'runner-c', reason: 'r' });
+    clock.advance(RUNNER_LOST_COALESCE_MS);
+    expect(sent[0]).toContain(
+      `\n送る時点では、うち 1 台（runner-b）が名乗り直している（connected）。${STILL_TRIED}`,
+    );
+  });
+
+  it('1台も戻っていなければ、今の文面と1文字も変わらない', () => {
+    const { clock, sent, notice } = setupWithBack(new Set());
+    const entry = { label: 'http://r1:7000', runnerId: 'runner-1', reason: 'heartbeat が途絶えた' };
+    notice.add(entry);
+    clock.advance(RUNNER_LOST_COALESCE_MS);
+    expect(sent).toEqual([describeRunnerLost(entry)]);
+  });
+
+  it('名簿は窓が閉じて送る時点で読む（台を受けた時点では読まない）', () => {
+    const { clock, asked, notice } = setupWithBack(new Set());
+    notice.add({ label: 'a', reason: 'r' });
+    notice.add({ label: 'b', reason: 'r' });
+    expect(asked).toEqual([]);
+    clock.advance(RUNNER_LOST_COALESCE_MS);
+    expect(asked).toEqual(['a', 'b']);
+  });
+
+  it('名簿の読み取りが投げたら、戻っていない側に倒して今の文面で送る', () => {
+    const { clock, sent, notice } = setupWithBack(new Set(['a']), true);
+    const entry = { label: 'a', reason: 'r' };
+    notice.add(entry);
+    clock.advance(RUNNER_LOST_COALESCE_MS);
+    expect(sent).toEqual([describeRunnerLost(entry)]);
+  });
+
+  it('flush（デーモンの停止）でも送る時点で照らす', () => {
+    const { sent, notice } = setupWithBack(new Set(['a']));
+    notice.add({ label: 'a', reason: 'r' });
+    notice.flush();
+    expect(sent[0]).toContain('送る時点では、この器は名乗り直している');
+  });
+});

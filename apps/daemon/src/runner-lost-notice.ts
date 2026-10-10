@@ -51,8 +51,30 @@ export function composeRunnerLostNotice(entries: readonly RunnerLostEntry[]): st
   return `${head}\n${entries.map((entry) => `- ${fullNameOf(entry)}: ${entry.reason}`).join('\n')}`;
 }
 
+// 名乗り直した器の知らせを捨てない: 名乗らなくなった時点で移送は試みており、名乗り直しで取り消されないので、捨てるとその事実が落ちるため。
+const RELOCATION_STILL_TRIED =
+  '移送は名乗らなくなった時点で試みており、名乗り直しで取り消されはしない（移し終えた委譲は元の器へ戻らない）。';
+
+/** 送る時点で名乗り直している台を、本文の末尾で言う。1台も戻っていなければ何も足さない。 */
+export function describeRunnersBack(
+  entries: readonly RunnerLostEntry[],
+  back: readonly RunnerLostEntry[],
+): string {
+  if (back.length === 0) return '';
+  if (entries.length === 1) {
+    return `\n送る時点では、この器は名乗り直している（connected）。${RELOCATION_STILL_TRIED}`;
+  }
+  const scope =
+    back.length === entries.length
+      ? `${String(entries.length)} 台とも`
+      : `うち ${String(back.length)} 台（${back.map(nameOf).join('・')}）が`;
+  return `\n送る時点では、${scope}名乗り直している（connected）。${RELOCATION_STILL_TRIED}`;
+}
+
 export interface RunnerLostNoticeDeps {
   readonly send: (text: string) => void;
+  /** 送る時点で、その器がまた名乗っているか。省略時は確かめない（何も足さない）。 */
+  readonly isBackNow?: (entry: RunnerLostEntry) => boolean;
   readonly setTimer?: (fn: () => void, ms: number) => unknown;
   readonly clearTimer?: (handle: unknown) => void;
   readonly windowMs?: number;
@@ -86,7 +108,15 @@ export function createRunnerLostNotice(deps: RunnerLostNoticeDeps): RunnerLostNo
     const entries = pending;
     pending = [];
     if (entries.length === 0) return;
-    deps.send(composeRunnerLostNotice(entries));
+    // 送る時点で照らす: 窓の30秒のうちに名乗り直した器を「いま名乗っていない」と読ませないため。読み取りが投げたら「戻っていない」側に倒す。
+    const back = entries.filter((entry) => {
+      try {
+        return deps.isBackNow?.(entry) === true;
+      } catch {
+        return false;
+      }
+    });
+    deps.send(`${composeRunnerLostNotice(entries)}${describeRunnersBack(entries, back)}`);
   };
 
   return {
