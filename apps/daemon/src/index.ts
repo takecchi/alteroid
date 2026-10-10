@@ -64,6 +64,7 @@ import {
   attachmentCopiesDir,
 } from '@alteroid/core';
 import { codexLoginEnvOf } from './codex-login-env.js';
+import { reportBootToolSearch } from './boot-tool-search.js';
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { startTokenRotationWatch, type TokenRotationWatch } from './token-watch.js';
@@ -815,6 +816,8 @@ export async function main(): Promise<void> {
   // 写しを読み直してから見る: 非同期で読むため、空のまま見ると正本に置かれた接続先を見落とす。
   await credentialService.fingerprints().catch(() => undefined);
   for (const line of clone.anthropicRoute?.() ?? []) process.stdout.write(`alteroidd: ${line}\n`);
+  const toolSearchLine = clone.toolSearchRoute?.();
+  if (toolSearchLine !== undefined) await reportBootToolSearch(stores, toolSearchLine);
 
   const managerPoller = startManagerPolling({
     managers: clone.managers,

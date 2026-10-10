@@ -414,6 +414,7 @@ export {
 /** 「蒸留を始めた」ではなく「蒸留が成功で終わった」記録で数える: 開始で数えると、始めたが完了しなかった回（検出したい形）が落ちる。 */
 export {
   BOOT_FOOTPRINT_EVENT_SOURCE,
+  BOOT_TOOL_SEARCH_EVENT_SOURCE,
   DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
   DISTILL_GAP_NOTICE_HEAD,
   DISTILL_SUCCEEDED_DECISION_PREFIX,
@@ -1132,9 +1133,12 @@ export { placedModelTier, resolveModelTier } from './model-tier.js';
 export {
   ANTHROPIC_ROUTE_NONE_LINE,
   describeAnthropicRoute,
+  describeToolSearch,
   inspectAnthropicRoute,
+  inspectToolSearch,
   type AnthropicRouteInspection,
   type AnthropicRouteLayer,
+  type ToolSearchInspection,
 } from './anthropic-route-env.js';
 export type { AgentProviderId } from './agent-ports.js';
 export {

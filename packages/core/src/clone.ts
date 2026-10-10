@@ -63,7 +63,9 @@ import {
 } from './digest.js';
 import {
   describeAnthropicRoute,
+  describeToolSearch,
   inspectAnthropicRoute,
+  inspectToolSearch,
   type AnthropicRouteLayer,
 } from './anthropic-route-env.js';
 import { collectRunnerModelLines, collectRunnerRouteLines } from './manager-models.js';
@@ -5648,6 +5650,10 @@ class Clone implements CloneHost {
   /** `#childEnv()` ではなくこちらの重ねを読む: セッションを起こさない読みで身元を捕まえないため。 */
   anthropicRoute(): string[] {
     return describeAnthropicRoute(inspectAnthropicRoute(this.#childEnvLayers()));
+  }
+
+  toolSearchRoute(): string {
+    return describeToolSearch(inspectToolSearch(this.#childEnvLayers()));
   }
 
   /**

@@ -26,9 +26,16 @@ export function isDistillSucceededEntry(entry: JournalEntry): boolean {
 /** デーモンが起動のたびに、クローンを作る前に書く器の実寸の記録（`apps/daemon` の `reportBootFootprint`）の source。 */
 export const BOOT_FOOTPRINT_EVENT_SOURCE = 'boot-storage-footprint';
 
+/** デーモンが起動のたびに書く、クローンの子の env で ToolSearch が止まる見込みかの記録（`apps/daemon` の `reportBootToolSearch`）の source。 */
+export const BOOT_TOOL_SEARCH_EVENT_SOURCE = 'boot-tool-search';
+const BOOT_EVENT_SOURCES: ReadonlySet<string> = new Set([
+  BOOT_FOOTPRINT_EVENT_SOURCE,
+  BOOT_TOOL_SEARCH_EVENT_SOURCE,
+]);
+
 // 型と構造化フィールドだけで決め、本文は見ない: 文言を直した瞬間に黙って数え方が変わるため
 // 「最後の蒸留 < 最終追記」で判定しない: 蒸留自身が日誌へ書くので毎回真になるため
-// 起動時の実寸の記録は数えない: クローンを作る前（`bootAt` より前）に必ず1行積まれるので、数えると記憶が空の初回起動でも、蒸留が成功して終わった後の再起動でも、毎回「移りきっていない」と偽って断ることになるため（#4269）
+// 起動時の器の記録（実寸・ToolSearch）は数えない: 起動のたびに必ず1行ずつ積まれるので、数えると記憶が空の初回起動でも、蒸留が成功して終わった後の再起動でも、毎回「移りきっていない」と偽って断ることになるため
 export function countsAsUndistilledActivity(entry: JournalEntry): boolean {
   switch (entry.type) {
     case 'exchange':
@@ -36,7 +43,7 @@ export function countsAsUndistilledActivity(entry: JournalEntry): boolean {
     case 'turn_usage':
       return entry.site === 'session';
     case 'external_event':
-      return entry.source !== BOOT_FOOTPRINT_EVENT_SOURCE;
+      return !BOOT_EVENT_SOURCES.has(entry.source);
     case 'subagent_stall':
       return false;
     case 'context_usage':
