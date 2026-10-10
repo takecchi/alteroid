@@ -467,7 +467,9 @@ describe('computeUnpushedWork — git を起こせない（pids が尽きて for
     expect(result.worktrees).toHaveLength(1);
     const tree = result.worktrees[0];
     expect(tree?.branch).toBeNull();
-    expect(tree?.unpushedCommitCountUnknown).toBe('確かめられなかった（git を起こせなかった: EAGAIN）');
+    expect(tree?.unpushedCommitCountUnknown).toBe(
+      '確かめられなかった（git を起こせなかった: EAGAIN）',
+    );
     expect(tree?.uncommittedChangeCountUnknown).toBe(
       '確かめられなかった（git を起こせなかった: EAGAIN）',
     );

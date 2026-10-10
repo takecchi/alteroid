@@ -3088,7 +3088,11 @@ function resetTimeSkewLine(
 
 // core の `formatUnpushedWorkObservationWorktrees`（`tools.ts`、export されていない）と同じ判断の複製。
 function formatUnpushedWorkObservationWorktrees(
-  worktrees: readonly { relativePath: string; branch: string | null; branchCarriedFromAt?: string }[],
+  worktrees: readonly {
+    relativePath: string;
+    branch: string | null;
+    branchCarriedFromAt?: string;
+  }[],
 ): string {
   return worktrees.length === 0
     ? '見つかった作業ツリー0本'

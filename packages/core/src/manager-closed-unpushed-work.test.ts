@@ -359,7 +359,19 @@ describe('fork が断られた回（pids 枯渇）の観測が、前に取れて
   const origin = { host: 'github.com', path: 'takecchi/alteroid.git' };
   const forkRefused = '確かめられなかった（git を起こせなかった: EAGAIN）';
 
-  async function observedThenClosedWithoutBranch(managerId: string) {
+  const forkRefusedResult = {
+    cwd: '/work/project',
+    worktrees: [
+      {
+        relativePath: '/tmp/mgr-pids/alteroid',
+        branch: null,
+        unpushedCommitCountUnknown: forkRefused,
+        uncommittedChangeCountUnknown: forkRefused,
+      },
+    ],
+  };
+
+  async function observedWithBranch(managerId: string) {
     let clock = new Date('2026-10-10T00:00:00.000Z').getTime();
     const setup = await runningManualSetup(managerId, () => clock);
 
@@ -377,33 +389,20 @@ describe('fork が断られた回（pids 枯渇）の観測が、前に取れて
       ],
     });
     await setup.pool.unpushedWork(managerId);
-
-    clock = new Date('2026-10-10T00:10:00.000Z').getTime();
-    setup.fake.closed(managerId, 'failed', 'SIGABRT', {
-      kind: 'ok',
-      result: {
-        cwd: '/work/project',
-        worktrees: [
-          {
-            relativePath: '/tmp/mgr-pids/alteroid',
-            branch: null,
-            unpushedCommitCountUnknown: forkRefused,
-            uncommittedChangeCountUnknown: forkRefused,
-          },
-        ],
-      },
-    });
-    await vi.waitFor(async () => {
-      const listed = await listedOf(setup.pool, managerId);
-      if (listed.lastUnpushedWorkObservation?.source !== 'closed') {
-        throw new Error('closed の観測がまだ台帳に届いていない');
-      }
-    });
     return { ...setup, setClock: (at: string) => (clock = new Date(at).getTime()) };
   }
 
   it('枝名と origin は前の観測から引き継ぎ、引き継いだ時刻を名乗る。件数はこの観測の「確かめられなかった」のまま', async () => {
-    const { pool } = await observedThenClosedWithoutBranch('mgr-pids');
+    const { pool, fake, setClock } = await observedWithBranch('mgr-pids');
+
+    setClock('2026-10-10T00:10:00.000Z');
+    fake.closed('mgr-pids', 'failed', 'SIGABRT', { kind: 'ok', result: forkRefusedResult });
+    await vi.waitFor(async () => {
+      const listed = await listedOf(pool, 'mgr-pids');
+      if (listed.lastUnpushedWorkObservation?.source !== 'closed') {
+        throw new Error('closed の観測がまだ台帳に届いていない');
+      }
+    });
 
     const listed = await listedOf(pool, 'mgr-pids');
     expect(listed.lastUnpushedWorkObservation).toEqual({
@@ -427,20 +426,12 @@ describe('fork が断られた回（pids 枯渇）の観測が、前に取れて
   });
 
   it('続けて取れなかった回でも、引き継いだ時刻は最初に枝名を見た観測のまま動かない', async () => {
-    const { pool, fake, setClock } = await observedThenClosedWithoutBranch('mgr-pids-again');
+    const { pool, fake, setClock } = await observedWithBranch('mgr-pids-again');
 
+    fake.setUnpushedWorkResult(forkRefusedResult);
+    setClock('2026-10-10T00:10:00.000Z');
+    await pool.unpushedWork('mgr-pids-again');
     setClock('2026-10-10T00:15:00.000Z');
-    fake.setUnpushedWorkResult({
-      cwd: '/work/project',
-      worktrees: [
-        {
-          relativePath: '/tmp/mgr-pids/alteroid',
-          branch: null,
-          unpushedCommitCountUnknown: forkRefused,
-          uncommittedChangeCountUnknown: forkRefused,
-        },
-      ],
-    });
     await pool.unpushedWork('mgr-pids-again');
 
     const listed = await listedOf(pool, 'mgr-pids-again');
@@ -458,8 +449,11 @@ describe('fork が断られた回（pids 枯渇）の観測が、前に取れて
   });
 
   it('（対照）新しい観測で枝名が取れたら、それを採って引き継ぎの印を残さない', async () => {
-    const { pool, fake, setClock } = await observedThenClosedWithoutBranch('mgr-pids-recovered');
+    const { pool, fake, setClock } = await observedWithBranch('mgr-pids-recovered');
 
+    fake.setUnpushedWorkResult(forkRefusedResult);
+    setClock('2026-10-10T00:10:00.000Z');
+    await pool.unpushedWork('mgr-pids-recovered');
     setClock('2026-10-10T00:15:00.000Z');
     fake.setUnpushedWorkResult({
       cwd: '/work/project',
