@@ -2351,7 +2351,15 @@ interface QuotaStopWindow {
   /** 窓を開けた担当。この担当の束は配り済み。 */
   openerId: string;
   /** 担当ごと。同じ担当の束が窓の中で複数来たら断片を足す（到着順のまま）。 */
-  entries: Map<string, { fragments: SynthesizedNoticeFragment[]; arrived: number }>;
+  entries: Map<
+    string,
+    {
+      fragments: SynthesizedNoticeFragment[];
+      arrived: number;
+      /** 貯めた担当が抱えていた、畳んでいた報告（一覧の行に添える。窓を開けた担当には付かない）。 */
+      withheld?: { count: number; lastExcerpt: string };
+    }
+  >;
 }
 
 /**
@@ -8359,10 +8367,19 @@ class Pool implements ManagerPool {
             '背景処理の完了待ちで畳んでいた報告をまとめて配る。';
           if (this.#synthesizedNotices.has(event.managerId)) {
             // 担当の合流窓が開いている（同じ落ち方の `turn_failed` / `closed_failed` が居る）ときは、`#emit()` せず窓へ積んで1通にする: `#emit()` は全窓を閉じて先に断片だけを配るので、この1通が別に届く。窓は開けない・延ばさない（開いていなければ下の `#emit()` で今までどおりすぐ配る）。
-            // 在庫は `#retire()` が消すので、窓の flush（`#deliver`）が運べるよう先に移す。移した分は `#retire()` の「握り潰したまま終わった」の stderr にも出ない（配るので捨てていない）。印（`quota`）は付けない: 印の無い断片が混ざった束は担当ごとに配られ、畳んでいた報告が枠の一覧の1行に埋もれない。
+            // 在庫は `#retire()` が消すので、窓の flush（`#deliver`）が運べるよう先に移す。移した分は `#retire()` の「握り潰したまま終わった」の stderr にも出ない（配るので捨てていない）。枠の印（`quota`）は下で `closed_failed` から受け継ぐ（枠で落ちた回だけ）。印の無い回は付けず、印の無い断片が混ざった束は担当ごとに配られる。
             this.#withheldCarriedToWindow.set(event.managerId, withheldAtClose);
             this.#withheldReports.delete(event.managerId);
-            this.#queueSynthesizedNotice(event.managerId, 'closed_withheld_flush', closedNote);
+            // 枠で落ちた回（同じ `closed` で積んだ `closed_failed` に枠の印がある）だけ、その印（トークンの鍵ごと）を受け継ぐ: 束が「枠だけ」のままになり、プール窓の一覧に入る。印の無い回は付けない。
+            const inheritedQuota = this.#synthesizedNotices
+              .get(event.managerId)
+              ?.fragments.find((fragment) => fragment.label === 'closed_failed')?.quota;
+            this.#queueSynthesizedNotice(
+              event.managerId,
+              'closed_withheld_flush',
+              closedNote,
+              inheritedQuota,
+            );
           } else {
             this.#emit(event.managerId, 'report', closedNote);
           }
@@ -9380,6 +9397,17 @@ class Pool implements ManagerPool {
         'プール全体の1通（「枠に当たって N 本の担当が止まった」）へ回した。',
     });
     this.#addToQuotaStopWindow(windowKey, managerId, entry, arrived);
+    // 窓へ移した在庫は、ここで一覧の行へ運んだものとして外す（担当ごとの `#deliver` は通らないので、残すと失われる）。
+    const carried = this.#withheldCarriedToWindow.get(managerId);
+    if (carried === undefined) return;
+    this.#withheldCarriedToWindow.delete(managerId);
+    const joined = this.#quotaStopWindows.get(windowKey)?.entries.get(managerId);
+    if (joined !== undefined && carried.count > 0) {
+      joined.withheld = {
+        count: carried.count,
+        lastExcerpt: excerptLine(carried.lastText, WITHHELD_REPORT_EXCERPT),
+      };
+    }
   }
 
   // この鍵の窓が無ければ、この担当を「窓を開けた担当」として開く。窓を開けた担当の束は担当ごとに配るので、ここは一覧の材料を覚えるだけ。
@@ -9448,6 +9476,7 @@ class Pool implements ManagerPool {
     const entries: QuotaStopEntry[] = [...window.entries].map(([managerId, joined]) => ({
       managerId,
       ...(managerId === window.openerId ? { first: true as const } : {}),
+      ...(joined.withheld === undefined ? {} : { withheld: joined.withheld }),
       status:
         this.#records.get(managerId)?.job.status ??
         ledger.find((job) => job.id === managerId)?.status,

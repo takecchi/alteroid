@@ -86,6 +86,11 @@ export interface QuotaStopEntry {
   status: JobStatus | undefined;
   /** 到着順。 */
   fragments: readonly { label: string; quota: QuotaMark }[];
+  /**
+   * 背景処理の完了待ちで畳んでいた報告（この担当がプール窓へ貯められたときだけ。窓を開けた担当は担当ごとの1通が運ぶので付けない）。
+   * 件数と最後の1本の冒頭だけ。全文は日誌に在る。
+   */
+  withheld?: { count: number; lastExcerpt: string };
 }
 
 const SAID_EXCERPT = 160;
@@ -121,6 +126,8 @@ function whatHappened(fragment: { label: string; quota: QuotaMark }): string {
       return fragment.quota.enteredOverage === true ? '課金枠へ入った' : '枠から追い返された';
     case 'usage_notice':
       return '利用上限の通知が来た';
+    case 'closed_withheld_flush':
+      return '背景処理の完了待ちで畳んだ報告を抱えたまま終わった';
     default:
       return fragment.label;
   }
@@ -200,6 +207,12 @@ function entryLines(entry: QuotaStopEntry): string[] {
   const said = firstOf(entry, (q) => q.said);
   if (said !== undefined) {
     lines.push(`  失敗する前に出ていた本文: ${excerptLine(said, SAID_EXCERPT)}`);
+  }
+  if (entry.withheld !== undefined) {
+    lines.push(
+      `  畳んでいた報告 ${String(entry.withheld.count)} 本（最後の1本の冒頭: ${entry.withheld.lastExcerpt}）。` +
+        '全文は manager_report・日誌で読める',
+    );
   }
   return lines;
 }

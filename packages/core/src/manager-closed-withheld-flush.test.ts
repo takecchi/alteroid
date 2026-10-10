@@ -292,25 +292,229 @@ describe('背景待ちの報告を抱えた担当は、枠の束のプール窓�
       `マネージャーのセッションが落ちた: Error: Claude Code returned an error result: ${QUOTA_LIMIT}`,
     );
 
+    // 【#4452】届く先が一覧（external）に変わったので、待つ対象も external にした（元は2本目の manager_message を待っていた）。
     await vi.waitFor(
-      () => expect(messagesOf(fresh(), second.managerId).length).toBeGreaterThan(0),
+      () => expect(fresh().filter((event) => event.type === 'external')).toHaveLength(1),
       WAIT,
     );
     // プール窓（2秒）が閉じた後まで待ち、一覧が出ないことと、2本目が1通のままであることを確かめる。
+    // 【#4452 で反転】上の期待（2本目は担当ごとの1通・一覧は0件）は #4451 の時点の決めだった。クローンの決定（2026-10-11）で、
+    // 枠で落ちた担当の `closed_withheld_flush` は `closed_failed` の枠の印を受け継ぎ、畳んでいた報告の本数と冒頭は一覧の行へ添える。
+    // 保証は弱めていない: 畳んでいた報告は一覧に必ず載り（本数と冒頭）、1回しか配られないことを引き続き確かめる。
     await sleep(2_500);
 
-    const secondMessages = messagesOf(fresh(), second.managerId);
-    expect(secondMessages).toHaveLength(1);
-    const text = secondMessages[0]?.text ?? '';
-    expect(text).toContain(CLOSED_NOTE);
-    expect(text).toContain(HELD_MARK);
-    expect(text).toContain(HELD_BODY);
-    expect(text).toContain('セッションが落ちた');
-
+    expect(messagesOf(fresh(), second.managerId)).toHaveLength(0);
     const externals = fresh().filter((event) => event.type === 'external');
-    expect(externals).toHaveLength(0);
+    expect(externals).toHaveLength(1);
+    const listText = (externals[0]?.payload as { text: string }).text;
+    expect(listText).toContain('枠に当たって 2 本の担当が止まった');
+    const secondLine = listText.split('\n').filter((line) => line.includes(second.managerId));
+    expect(secondLine.length).toBeGreaterThan(0);
+    expect(listText).toContain('畳んでいた報告 1 本');
+    expect(listText).toContain(HELD_BODY);
+    expect(listText).toContain('manager_report');
     expect(messagesOf(fresh(), first.managerId)).toHaveLength(1);
 
     await pool.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #4452: 枠で落ちた担当の `closed_withheld_flush` は枠の印を受け継ぎ、プール窓の一覧に入る。
+// ---------------------------------------------------------------------------
+
+const QUOTA_CLOSED_REASON = `マネージャーのセッションが落ちた: Error: Claude Code returned an error result: ${QUOTA_LIMIT}`;
+
+interface PoolSetup {
+  pool: ManagerPool;
+  stores: Stores;
+  inbox: InboxEvent[];
+  fake: FakeRunner;
+  ids: string[];
+  fresh(): InboxEvent[];
+}
+
+async function poolSetup(count: number, noticeWindowMs: number): Promise<PoolSetup> {
+  const stores = createMemoryStores();
+  const fake = fakeRunner();
+  const inbox: InboxEvent[] = [];
+  const pool = createManagerPool({
+    stores,
+    post: (event) => inbox.push(event),
+    runners: createRunnerRegistry([fake.runner]),
+    tokenIdentity: () => ({ tokenId: 'tok-same', generation: 1 }),
+    synthesizedNoticeWindowMs: noticeWindowMs,
+    quotaStopWindowMs: 2_000,
+  });
+  const ids: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    ids.push((await pool.start({ request: `${String(i + 1)}本目` })).managerId);
+  }
+  const baseline = inbox.length;
+  return { pool, stores, inbox, fake, ids, fresh: () => inbox.slice(baseline) };
+}
+
+function quotaTurn(fake: FakeRunner, managerId: string): void {
+  fake.emit({
+    type: 'report',
+    managerId,
+    text: `（このターンは応答を返さずに終わった: success/429 / result_is_error）\n${QUOTA_LIMIT}`,
+    status: 'done',
+    failure: { code: 'success/429', via: 'result_is_error', status: 429 },
+    synthesized: 'turn_failed',
+  });
+}
+
+function externalsOf(events: readonly InboxEvent[]) {
+  return events.filter((event) => event.type === 'external') as Extract<
+    InboxEvent,
+    { type: 'external' }
+  >[];
+}
+
+function everyText(events: readonly InboxEvent[]): string {
+  return events
+    .map((event) => {
+      if (event.type === 'manager_message') return event.text;
+      if (event.type === 'external') return (event.payload as { text: string }).text;
+      return '';
+    })
+    .join('\n----\n');
+}
+
+// 2本目以降が窓へ積まれたことを日誌の失敗行で観測する（積む直前に書かれる）。そのあとの同期の積みを1回の譲りで待つ。
+async function waitClosedJournal(stores: Stores, managerId: string): Promise<void> {
+  await vi.waitFor(async () => {
+    const entries = await stores.journal.list({ types: ['exchange'] });
+    if (
+      !entries.some(
+        (entry) =>
+          JSON.stringify(entry).includes(`[${managerId}]`) &&
+          JSON.stringify(entry).includes('セッションが落ちた'),
+      )
+    ) {
+      throw new Error('closed の日誌がまだ書かれていない');
+    }
+  }, WAIT);
+  await sleep(0);
+}
+
+describe('枠で落ちた担当の畳んでいた報告は、プール窓の一覧の行へ運ばれる（#4452）', () => {
+  it('同じトークンで3本が枠で落ち、2本目が報告を抱える: 1本目はすぐ1通、残りは一覧1通に3本とも載り、2本目の行に畳んでいた報告が付く', async () => {
+    const { pool, stores, inbox, fake, ids, fresh } = await poolSetup(3, 400);
+    const [a, b, c] = ids as [string, string, string];
+
+    quotaTurn(fake, a);
+    await vi.waitFor(() => expect(messagesOf(fresh(), a).length).toBeGreaterThan(0), WAIT);
+
+    withhold(fake, b, HELD_BODY);
+    await waitWithheld(stores, HELD_BODY);
+    quotaTurn(fake, b);
+    closedFailed(fake, b, QUOTA_CLOSED_REASON);
+    quotaTurn(fake, c);
+    closedFailed(fake, c, QUOTA_CLOSED_REASON);
+
+    await vi.waitFor(() => expect(externalsOf(fresh())).toHaveLength(1), WAIT);
+    await sleep(500);
+
+    expect(messagesOf(fresh(), a)).toHaveLength(1);
+    expect(messagesOf(fresh(), b)).toHaveLength(0);
+    expect(messagesOf(fresh(), c)).toHaveLength(0);
+    const list = (externalsOf(fresh())[0]?.payload as { text: string }).text;
+    expect(list).toContain('枠に当たって 3 本の担当が止まった');
+    const lines = list.split('\n');
+    const at = lines.findIndex((line) => line.startsWith(`- ${b}:`));
+    expect(at).toBeGreaterThanOrEqual(0);
+    // 2本目の行の下に、畳んでいた報告の本数と冒頭が1行で付く。
+    const note = lines.slice(at + 1, at + 3).find((line) => line.includes('畳んでいた報告')) ?? '';
+    expect(note).toContain('畳んでいた報告 1 本');
+    expect(note).toContain(HELD_BODY);
+    expect(note).toContain('manager_report');
+    // 3本目と1本目の行には付かない。
+    expect(list.split('畳んでいた報告 ').length - 1).toBe(1);
+
+    await pool.stop();
+    // 畳んでいた報告の中身は、全部の manager_message と external を通して1回だけ。
+    const all = everyText(inbox);
+    expect(countOf(all, HELD_BODY)).toBe(1);
+    expect(countOf(all, HELD_MARK)).toBe(0);
+  });
+
+  it('枠ではない理由で落ちた担当（closed_failed に印が無い）が報告を抱える: 印を付けず、今までどおり担当ごとの1通', async () => {
+    const { pool, stores, inbox, fake, ids, fresh } = await poolSetup(2, 400);
+    const [a, b] = ids as [string, string];
+
+    quotaTurn(fake, a);
+    await vi.waitFor(() => expect(messagesOf(fresh(), a).length).toBeGreaterThan(0), WAIT);
+
+    withhold(fake, b, HELD_BODY);
+    await waitWithheld(stores, HELD_BODY);
+    crashedTurn(fake, b);
+    closedFailed(fake, b, 'マネージャーのセッションが落ちた: Error: boom');
+
+    await vi.waitFor(() => expect(messagesOf(fresh(), b).length).toBeGreaterThan(0), WAIT);
+    await sleep(2_500);
+
+    const own = messagesOf(fresh(), b);
+    expect(own).toHaveLength(1);
+    expect(own[0]?.text).toContain(CLOSED_NOTE);
+    expect(own[0]?.text).toContain(HELD_MARK);
+    expect(externalsOf(fresh())).toHaveLength(0);
+
+    await pool.stop();
+    expect(countOf(everyText(inbox), HELD_BODY)).toBe(1);
+  });
+
+  it('窓を開けた1本目が報告を抱える: 担当ごとにすぐ1通で在庫はそこで運ばれ、一覧には最初の1本として載るが注記は重ならない', async () => {
+    const { pool, stores, inbox, fake, ids, fresh } = await poolSetup(2, 400);
+    const [a, b] = ids as [string, string];
+
+    withhold(fake, a, HELD_BODY);
+    await waitWithheld(stores, HELD_BODY);
+    quotaTurn(fake, a);
+    closedFailed(fake, a, QUOTA_CLOSED_REASON);
+    await vi.waitFor(() => expect(messagesOf(fresh(), a).length).toBeGreaterThan(0), WAIT);
+
+    quotaTurn(fake, b);
+    closedFailed(fake, b, QUOTA_CLOSED_REASON);
+    await vi.waitFor(() => expect(externalsOf(fresh())).toHaveLength(1), WAIT);
+    await sleep(500);
+
+    const own = messagesOf(fresh(), a);
+    expect(own).toHaveLength(1);
+    expect(own[0]?.text).toContain(HELD_MARK);
+    expect(own[0]?.text).toContain(HELD_BODY);
+    const list = (externalsOf(fresh())[0]?.payload as { text: string }).text;
+    expect(list).toContain('最初の1本');
+    expect(list).not.toContain('畳んでいた報告');
+    expect(list).not.toContain(HELD_BODY);
+
+    await pool.stop();
+    expect(countOf(everyText(inbox), HELD_BODY)).toBe(1);
+  });
+
+  it('stop() で窓の途中を閉じても、貯めた担当の畳んでいた報告は一覧の行で1回だけ運ばれる', async () => {
+    // 担当ごとの窓を長めにして、2本目の積みが窓の中のまま stop() に入りやすくする（満了で配られても結果は同じ）。
+    const { pool, stores, inbox, fake, ids, fresh } = await poolSetup(2, 1_500);
+    const [a, b] = ids as [string, string];
+
+    quotaTurn(fake, a);
+    await vi.waitFor(() => expect(messagesOf(fresh(), a).length).toBeGreaterThan(0), WAIT);
+
+    withhold(fake, b, HELD_BODY);
+    await waitWithheld(stores, HELD_BODY);
+    quotaTurn(fake, b);
+    closedFailed(fake, b, QUOTA_CLOSED_REASON);
+    await waitClosedJournal(stores, b);
+
+    await pool.stop();
+
+    expect(messagesOf(fresh(), b)).toHaveLength(0);
+    const sent = externalsOf(fresh());
+    expect(sent).toHaveLength(1);
+    const list = (sent[0]?.payload as { text: string }).text;
+    expect(list).toContain(`- ${b}:`);
+    expect(list).toContain('畳んでいた報告 1 本');
+    expect(countOf(everyText(inbox), HELD_BODY)).toBe(1);
   });
 });
