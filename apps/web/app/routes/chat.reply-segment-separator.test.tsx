@@ -8,10 +8,6 @@ import { json, Providers, sse, storeTestBaseUrl, stubFetch } from '~/test-suppor
 
 import Chat from './chat';
 
-// デーモンは、1つのターンの中で本文が道具を挟んで再開したとき、日誌の本文の境目に空行を入れる（#4339）。
-// 画面へ流れる SSE の text には空行が入らないので、pendingOwnLines は分かれた返信の行を
-// 区切りあり（空行）と区切りなし（古いデーモン）の両方で日誌の1発言と照合する。どちらでも確定後に写しが末尾に残らない。
-
 const ID = 'conv-tail';
 const BEFORE_HEAD = '待ち時間を 35 秒ほどにすれば、必ず Gotenberg が先に切れて';
 const BEFORE_TAIL = '、その理由を受け取れます。';
@@ -188,7 +184,6 @@ describe.each([
     afterTool.open();
     await screen.findByText(AFTER);
 
-    // 道具の前の行は、末尾まで書かれている
     expect(items().some((text) => text.includes(BEFORE_HEAD + BEFORE_TAIL))).toBe(true);
 
     replied = true;
@@ -199,7 +194,6 @@ describe.each([
       const shown = items();
       expect(shown.filter((text) => text.includes(AFTER))).toHaveLength(1);
       expect(shown.filter((text) => text.includes(BEFORE_HEAD))).toHaveLength(1);
-      // 確定した1発言が最後に在り、手元の写しが後ろに居座らない
       expect(shown.at(-1)).toContain(BEFORE_HEAD + BEFORE_TAIL);
       expect(shown.at(-1)).toContain(AFTER);
     });

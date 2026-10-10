@@ -152,7 +152,6 @@ describe('Markdown の画像（デーモンの添付）', () => {
 
     expect(stub.calls).toEqual([]);
     expect(createObjectURL).not.toHaveBeenCalled();
-    // remoteImages={false} は今までどおり文字とリンク
     expect(screen.getByRole('link', { name: '画像: y' })).toBeTruthy();
   });
 

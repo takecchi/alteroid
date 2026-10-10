@@ -6,7 +6,6 @@ import { DaemonImagesProvider } from '@alteroid/ui';
 import type { DaemonImages } from '@alteroid/ui';
 
 /**
- * Markdown の画像の `src` が、いま接続しているデーモンの添付（`<base>/attachments/<id>`）なら id を返す。それ以外は `undefined`。
  * 資格（Bearer）を送ってよいかの線はここだけに置く:
  * - 絶対 URL に加え、`/attachments/<id>` と `attachments/<id>` の相対パスも、デーモンの base の下のものとして扱う:
  *   取りに行く先は `src` ではなく接続中の base URL と id から組むので、資格がよそへ行く経路にならない。

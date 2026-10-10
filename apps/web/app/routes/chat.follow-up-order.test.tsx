@@ -8,15 +8,11 @@ import { json, Providers, sse, storeTestBaseUrl, stubFetch } from '~/test-suppor
 
 import Chat from './chat';
 
-// #4391: 返信の本文が流れ終わってもターンが続いているあいだに人間が続けて発言すると、その発言が返信より上に出ていた。
-// デーモンは発言を記録するとき、それまでの返信を先に日誌へ書き、同じ同期区間で `queued` を流す。画面はその `queued` で返信の行を分ける。
-
 const ID = 'conv-follow-up-order';
 const QUESTION = '二つ目の質問';
 const REPLY = 'AIの回答2の本文';
 const FOLLOW = '回答2への返事';
 const TAIL = '返事を受けた続き';
-// 道具を挟んで再開した本文: 日誌では区切りの空行（#4339）を挟んで TAIL と1発言になる
 const AFTER_TOOL = '道具の後の本文';
 
 const ChatRoute = Chat as unknown as (props: {
@@ -80,7 +76,6 @@ describe.each([
   {
     label: '割るデーモン（#4391 以降）',
     split: true,
-    // 発言の記録の前に、そこまでの返信が書かれる
     whenQueued: [
       question,
       { id: 'm2', at: '2026-10-10T01:00:19.000Z', role: 'outbound', text: REPLY },
@@ -105,7 +100,6 @@ describe.each([
     whenDone: [
       question,
       follow,
-      // 追送の割り目には区切りが入らず、道具の境目にだけ入る
       {
         id: 'm4',
         at: '2026-10-10T01:00:40.000Z',
@@ -193,7 +187,6 @@ describe.each([
       expect(chatCalls).toBe(2);
     });
 
-    // デーモンが追送を記録した: 返信の行が分かれ、履歴に追送が入る
     messages = whenQueued;
     queued.open();
     recorded.open();
@@ -211,7 +204,6 @@ describe.each([
       const shown = items();
       expect(countOf(shown, TAIL)).toBe(1);
       expect(countOf(shown, AFTER_TOOL)).toBe(1);
-      // 追送の後に流れた続きは、追送より下に出る
       expect(indexOf(shown, FOLLOW)).toBeLessThan(indexOf(shown, TAIL));
     });
 
