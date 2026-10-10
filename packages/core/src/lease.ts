@@ -49,8 +49,15 @@ export function judgeLease(input: {
   lease: JobLease | undefined;
   now: number;
   answering: LeaseSighting;
+  /**
+   * 持ち主（`lease.runnerId`）の名乗りをデーモンが最後に聞けた時刻（名簿の `lastSeenAt`）。別の器が引き取るときだけ見る。
+   * 期限を `seenAt` だけから数えない: `seenAt` は台帳へ書くついでにしか進まず、黙って確認を待っている委譲では10分を超えて古くなる。
+   * 一方で器の自己失効（`runner.ts` の `#lastDaemonContact`）はデーモンから叩かれるたびに先送りされるので、名乗っている器の委譲は畳まれていない。
+   * `seenAt` だけで数えると、名簿が器を一時的に `lost` と誤判定した瞬間に、まだ生きている委譲を別の器で起こす（二重実行。#4454）。
+   */
+  holderSeenAt?: number;
 }): LeaseVerdict {
-  const { lease, now, answering } = input;
+  const { lease, now, answering, holderSeenAt } = input;
   if (lease === undefined) return { kind: 'unheld' };
   if (lease.releasedAt !== undefined) return { kind: 'released', lease };
 
@@ -77,9 +84,14 @@ export function judgeLease(input: {
   const ttlDeadline = seenAt + lease.ttlMs + LEASE_MARGIN_MS;
 
   if (lease.runnerId !== answering.runnerId) {
-    return now >= ttlDeadline
+    // 遅い方に合わせる（早い方にしない）: 持ち主が名乗っていた最後の時刻から数えないと、黙って待っている委譲の期限だけが先に来る。
+    const holderDeadline =
+      holderSeenAt === undefined || Number.isNaN(holderSeenAt)
+        ? ttlDeadline
+        : Math.max(ttlDeadline, holderSeenAt + lease.ttlMs + LEASE_MARGIN_MS);
+    return now >= holderDeadline
       ? { kind: 'expired', because: 'ttl', lease }
-      : { kind: 'held', claimableAt: ttlDeadline, lease };
+      : { kind: 'held', claimableAt: holderDeadline, lease };
   }
 
   /*
