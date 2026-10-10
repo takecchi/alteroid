@@ -79,7 +79,7 @@ describe('読めない行を閉じる入口', () => {
     fireEvent.change(field, { target: { value: '   ' } });
     expect(button.disabled).toBe(true);
     vi.useFakeTimers();
-    fireEvent.keyDown(field, { key: 'Enter' });
+    fireEvent.keyDown(field, { key: 'Enter', metaKey: true });
     await vi.advanceTimersByTimeAsync(20);
     expect(closes).toHaveLength(0);
   });

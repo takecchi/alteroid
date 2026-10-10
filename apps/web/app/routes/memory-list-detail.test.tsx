@@ -125,12 +125,12 @@ describe('記憶の一覧＋詳細', () => {
     ).toHaveLength(0);
   });
 
-  it('名前を入れて Enter で、その記憶の画面へ移る', async () => {
+  it('名前を入れて ⌘/Ctrl + Enter で、その記憶の画面へ移る', async () => {
     const router = renderAt('/memory');
 
     const input = await screen.findByLabelText(/^名前/);
     fireEvent.change(input, { target: { value: 'new-one' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/memory/new-one'));
   });

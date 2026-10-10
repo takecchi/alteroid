@@ -44,7 +44,9 @@ const CASES = [
   },
 ] as const;
 
-describe.each(CASES)('$name の名前欄 — IME 変換中の Enter', (c) => {
+// 送るのは ⌘/Ctrl + Enter だけ（チャットと同じ）。以前は Enter 単体で遷移していたので、IME の確定の Enter を拾わない門が要った。
+// いまは IME の門を ⌘/Ctrl + Enter の側で測る
+describe.each(CASES)('$name の名前欄 — IME 変換中の ⌘/Ctrl + Enter', (c) => {
   function renderPage() {
     stubFetch((url) => (url.includes(c.listPath) ? json({ [c.listKey]: [] }) : undefined));
     const router = createMemoryRouter(
@@ -72,7 +74,7 @@ describe.each(CASES)('$name の名前欄 — IME 変換中の Enter', (c) => {
     const router = renderPage();
     const input = await typeSlug();
 
-    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true, isComposing: true });
     await flush();
     expect(router.state.location.pathname).toBe('/');
   });
@@ -81,16 +83,26 @@ describe.each(CASES)('$name の名前欄 — IME 変換中の Enter', (c) => {
     const router = renderPage();
     const input = await typeSlug();
 
-    fireEvent.keyDown(input, { key: 'Enter', isComposing: false, keyCode: 229 });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true, isComposing: false, keyCode: 229 });
     await flush();
     expect(router.state.location.pathname).toBe('/');
   });
 
-  it('isComposing: false（229 でもない）では、既存どおり遷移する', async () => {
+  it('Enter 単体・Shift + Enter では遷移しない', async () => {
     const router = renderPage();
     const input = await typeSlug();
 
     fireEvent.keyDown(input, { key: 'Enter', isComposing: false });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true, isComposing: false });
+    await flush();
+    expect(router.state.location.pathname).toBe('/');
+  });
+
+  it('isComposing: false（229 でもない）の ⌘/Ctrl + Enter では遷移する', async () => {
+    const router = renderPage();
+    const input = await typeSlug();
+
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true, isComposing: false });
     await waitFor(() => expect(router.state.location.pathname).toBe(`${c.listPath}/work-style`));
   });
 });

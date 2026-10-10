@@ -125,12 +125,12 @@ describe('やり方の一覧＋詳細', () => {
     ).toHaveLength(0);
   });
 
-  it('名前を入れて Enter で、そのやり方の画面へ移る', async () => {
+  it('名前を入れて ⌘/Ctrl + Enter で、そのやり方の画面へ移る', async () => {
     const router = renderAt('/practices');
 
     const input = await screen.findByLabelText(/^名前/);
     fireEvent.change(input, { target: { value: 'new-one' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/practices/new-one'));
   });

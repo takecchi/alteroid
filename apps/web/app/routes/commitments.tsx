@@ -1120,19 +1120,7 @@ function CloseReasonForm({
           aria-label={`「${label}」を片付けた理由`}
           placeholder="例: 修正を入れて確認した"
           onChange={(event) => setReason(event.target.value)}
-          onKeyDown={(event) => {
-            // IME 変換中の Enter を拾わない: ここは Enter 単体で送るので、変換確定の Enter がそのまま誤送信になる。
-            if (
-              event.key === 'Enter' &&
-              (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
-            ) {
-              return;
-            }
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              void submit();
-            }
-          }}
+          onSubmitShortcut={() => void submit()}
         />
         <Button
           variant="primary"

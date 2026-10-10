@@ -18,7 +18,6 @@ import {
   CardHeader,
   ErrorNote,
   Input,
-  isImeConfirmEnter,
   KeyValueList,
   Select,
 } from '@alteroid/ui';
@@ -250,10 +249,7 @@ function SelectedActions({
           aria-label="選択中の接続先の名前"
           placeholder={endpoint.url}
           onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (isImeConfirmEnter(event)) return;
-            if (event.key === 'Enter') commit();
-          }}
+          onSubmitShortcut={commit}
         />
       </div>
       <Button variant="primary" onClick={commit}>
@@ -300,11 +296,7 @@ function AddEndpoint({ onAdd }: { onAdd(entry: { url: string; label?: string }):
           spellCheck={false}
           className="sm:w-32 sm:shrink-0"
           onChange={(event) => setLabel(event.target.value)}
-          onKeyDown={(event) => {
-            // 変換の確定の Enter で足さない: 名前は日本語で打つ欄のため
-            if (isImeConfirmEnter(event)) return;
-            if (event.key === 'Enter') submit();
-          }}
+          onSubmitShortcut={submit}
         />
         <div className="min-w-0 sm:flex-1">
           <Input
@@ -313,10 +305,7 @@ function AddEndpoint({ onAdd }: { onAdd(entry: { url: string; label?: string }):
             placeholder="https://api.example.com"
             spellCheck={false}
             onChange={(event) => setUrl(event.target.value)}
-            onKeyDown={(event) => {
-              if (isImeConfirmEnter(event)) return;
-              if (event.key === 'Enter') submit();
-            }}
+            onSubmitShortcut={submit}
           />
         </div>
         <Button variant="primary" className="sm:shrink-0" onClick={submit}>

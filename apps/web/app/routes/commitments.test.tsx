@@ -340,7 +340,7 @@ describe('/commitments 画面', () => {
     expect(JSON.parse(await closed.text())).toEqual({ reason: 'PR #99 をマージした' });
   });
 
-  it('送信中に Enter をもう一度押しても、閉じる要求は1回だけ', async () => {
+  it('送信中に ⌘ + Enter をもう一度押しても、閉じる要求は1回だけ', async () => {
     stubCommitments([commitment({ id: 'cmt-42' })]);
     const inner = globalThis.fetch;
     let release: () => void = () => {};
@@ -360,9 +360,9 @@ describe('/commitments 画面', () => {
     await screen.findByText('ドキュメントの誤りを直す');
     const field = screen.getByLabelText(/を片付けた理由$/);
     fireEvent.change(field, { target: { value: 'PR #99 をマージした' } });
-    fireEvent.keyDown(field, { key: 'Enter' });
+    fireEvent.keyDown(field, { key: 'Enter', metaKey: true });
     await waitFor(() => expect(closeCalls).toBe(1));
-    fireEvent.keyDown(field, { key: 'Enter' });
+    fireEvent.keyDown(field, { key: 'Enter', metaKey: true });
     release();
     await waitFor(() => expect(screen.queryByText('ドキュメントの誤りを直す')).not.toBeNull());
     expect(closeCalls).toBe(1);
