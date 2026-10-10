@@ -44,8 +44,6 @@ const CASES = [
   },
 ] as const;
 
-// 送るのは ⌘/Ctrl + Enter だけ（チャットと同じ）。以前は Enter 単体で遷移していたので、IME の確定の Enter を拾わない門が要った。
-// いまは IME の門を ⌘/Ctrl + Enter の側で測る
 describe.each(CASES)('$name の名前欄 — IME 変換中の ⌘/Ctrl + Enter', (c) => {
   function renderPage() {
     stubFetch((url) => (url.includes(c.listPath) ? json({ [c.listKey]: [] }) : undefined));

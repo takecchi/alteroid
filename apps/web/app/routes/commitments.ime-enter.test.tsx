@@ -65,8 +65,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-// 送るのは ⌘/Ctrl + Enter だけ（チャットと同じ）。以前は Enter 単体で送っていたので、IME の確定の Enter を拾わない門が要った。
-// いまは IME の門を ⌘/Ctrl + Enter の側で測る
 describe('片付ける（OpenRow）の理由欄 — IME 変換中の ⌘/Ctrl + Enter', () => {
   it('isComposing: true では送らない', async () => {
     stubCommitments([commitment({ id: 'cmt-42' })]);

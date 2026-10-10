@@ -446,8 +446,6 @@ describe('接続先を足す・直す・消す', () => {
   });
 });
 
-// 送るのは ⌘/Ctrl + Enter だけ（チャットと同じ）。以前は Enter 単体で送っていたので、IME の確定の Enter を拾わない門が要った。
-// いまは IME の門を ⌘/Ctrl + Enter の側で測り、Enter 単体では送らないことも測る
 describe('接続先の入力欄は、IME の確定の ⌘/Ctrl + Enter と Enter 単体では送らない', () => {
   it('追加: 名前の欄の変換中の ⌘ + Enter と Enter 単体では足さず、確定後の ⌘ + Enter で足す', async () => {
     renderWithEndpoints();
