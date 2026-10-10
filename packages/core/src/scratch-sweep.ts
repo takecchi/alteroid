@@ -502,7 +502,7 @@ export class ScratchSweeper {
       let changed = true;
       while (changed && !signal.aborted) {
         changed = false;
-        // 実パスも並べる: `git worktree list` は symlink を解いた実パスを返すので、基点が symlink を挟む器（macOS の /var → /private/var）では自分の作業ツリーを「外」と読み、消せる作業場を残すため（#4399）。取れなければ元のパスだけで比べ、残す側へ倒れる
+        // 実パスも並べる: `git worktree list` は symlink を解いた実パスを返すので、基点が symlink を挟む器（macOS の /var → /private/var）では自分の作業ツリーを「外」と読み、消せる作業場を残すため。取れなければ元のパスだけで比べ、残す側へ倒れる
         const plannedDirs: string[] = [];
         for (const p of planned.values()) {
           if (!p.entry.isDirectory() || p.entry.isSymbolicLink()) continue;

@@ -4,7 +4,7 @@ import { verifyJournalStoreDeletedConversationContract } from './journal-deleted
 import { createMemoryStores } from './testing.js';
 
 /**
- * `JournalStore` の「消した会話を外す」契約（issue #4218）を、**インメモリ実装**
+ * `JournalStore` の「消した会話を外す」契約を、**インメモリ実装**
  * （`testing.ts`）に対して測る。fs は `packages/storage-fs/src/index.test.ts`、pg は
  * `packages/storage-pg/src/index.journal-jobs-schedule.test.ts` に同じ形の歯が在る。
  */

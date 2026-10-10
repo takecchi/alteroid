@@ -560,7 +560,7 @@ export interface CloneOptions {
    */
   pluginDistributionService?: PluginDistributionService;
   /**
-   * Codex の ChatGPT ログインの正本の持ち主（#3939）。**デーモンが作った同じインスタンスを渡すこと**
+   * Codex の ChatGPT ログインの正本の持ち主。**デーモンが作った同じインスタンスを渡すこと**
    * （`mcpServerService` と同じ理由。runner が名乗るたびの降ろし直しと、runner からの書き戻しが
    * マネージャーのプールを通る）。
    */
@@ -589,7 +589,7 @@ export type Listener = (event: ChatStreamEvent) => void;
 export interface Turn {
   conversationId: string | null;
   /**
-   * 内部ターンの仕事が属する会話（委譲の起点。issue #4210）。マネージャーからの一件のターンだけが、その委譲の
+   * 内部ターンの仕事が属する会話（委譲の起点）。マネージャーからの一件のターンだけが、その委譲の
    * `Job.conversationId` を載せる。会話のあるターンでは null（属する会話は `conversationId` そのもの）。
    */
   // `conversationId` に入れない: 入れると返答がその会話へ書かれ、`conversation_post` がその会話を「いまの会話」として断るため
@@ -602,7 +602,7 @@ export interface Turn {
   // 日誌へ書く本文の元は `text` にしない: 道具の実行は直前の assistant メッセージの処理完了前に始まりうり、受信中に見えていた前半が欠けるため
   reply: string;
   replyWritten: number;
-  /** `reply_attach` で返信に添えた控え（Issue #4126）。 */
+  /** `reply_attach` で返信に添えた控え。 */
   replyAttachments: AttachmentRef[];
   /** `replyAttachments` のうち、ここまでを日誌へ書いた（件数）。 */
   replyAttachmentsWritten: number;
@@ -617,7 +617,7 @@ export interface Turn {
   // 配列にする: 「1ターンに複数回」の compaction を否定できないため
   compactions: CompactionObservation[];
   /**
-   * このターンの中で拒否の合図（`refusal` イベント）が届いたときの印（#4173 PR-3）。
+   * このターンの中で拒否の合図（`refusal` イベント）が届いたときの印。
    * `case 'refusal'` が付け、`#reportFailure` が失敗の分類（`#noteRefusal`）に使う。
    * 答えが返ったターンでは読まない（降格して再試行し、通ったターンは数えない）。
    */
@@ -710,7 +710,7 @@ class Clone implements CloneHost {
   readonly #sessionStore: SessionStore | undefined;
   // `cwd` から計算し直さない: SDK の sanitize（200 文字超は切って djb2 のハッシュを足す）の再実装は静かにずれるため
   #projectKey: string | null = null;
-  /** 直前に人間の発言のターンを回した会話（issue #4210）。会話が切り替わったことを次のターンの入力で名乗るため。 */
+  /** 直前に人間の発言のターンを回した会話。会話が切り替わったことを次のターンの入力で名乗るため。 */
   // 永続化しない: 再起動の後はセッションの文脈も作り直されるので、そこで「切り替わった」と言える相手が無いため
   #lastHumanConversationId: string | null = null;
   readonly #managers: ManagerPool;
@@ -740,7 +740,7 @@ class Clone implements CloneHost {
   #observedPermissionMode: string | null = null;
   // `null`（init 未観測）と `[]`（SDK が0本と報告）を畳まない: `self.ts` 側で区別する手段が無くなるため
   #mcpServersInfo: Array<{ name: string; status: string }> | null = null;
-  // `null` は「観測していない」（init に `plugins` が無いときも前の観測を残さず `null` へ戻す）。`at` は init を受けた時刻（#3816）
+  // `null` は「観測していない」（init に `plugins` が無いときも前の観測を残さず `null` へ戻す）。`at` は init を受けた時刻
   #pluginLoadInfo: ClonePluginLoadObservation | null = null;
   // ここで `getContextUsage()` を呼ばない: `detail: 'full'` は token-count API を呼ぶので、`turn_ended` が既に呼んだ戻り値を代入するだけにするため
   #lastContextUsage: ContextUsageObservation | null = null;
@@ -787,7 +787,7 @@ class Clone implements CloneHost {
   #sessionOrdinal = 0;
 
   /**
-   * **このセッションで、もう1度 `held` に入ったか**（issue #955 の (A)。
+   * **このセッションで、もう1度 `held` に入ったか**（
    * `#noteContextWindowFold` の doc「`held` は1回きり」）。セッションごとに
    * 戻す（`#sessionAnswered` と同じ場所）。
    */
@@ -797,8 +797,8 @@ class Clone implements CloneHost {
   #heldEscalationStreak = 0;
 
   /**
-   * **答えを返せないまま、安全分類器（safeguards）に拒否で終わったターンの連続数**（#4173 PR-3。
-   * `#noteRefusal`）。種類（人間の発言・内部のターン）は問わない。答えが返ったターンで 0 へ戻し、
+   * **答えを返せないまま、安全分類器（safeguards）に拒否で終わったターンの連続数**（`#noteRefusal`）。
+   * 種類（人間の発言・内部のターン）は問わない。答えが返ったターンで 0 へ戻し、
    * 開き直したら（手動・自動とも）0 へ戻す。**セッションを跨いで持つ**（`#heldEscalationStreak` と同じ）。
    */
   #refusalStreak = 0;
@@ -1025,7 +1025,7 @@ class Clone implements CloneHost {
   }
 
   /**
-   * **人間の操作で、クローンのセッションを resume せずに新しく開き直す**（#4173）。
+   * **人間の操作で、クローンのセッションを resume せずに新しく開き直す**。
    *
    * クローンは長寿命の SDK セッション1本で動く。そこへ安全分類器（safeguards）に弾かれる
    * 内容が入ると、以後のターンが全部弾かれ、デーモンを再起動しても resume で同じ生ログが
@@ -1168,7 +1168,7 @@ class Clone implements CloneHost {
     // `#inbox.closed` も見る: `stop()` は受信箱を閉じてから `#stopped` を立てるので、`#stopped` だけで判定するとその間に届いたものが閉じた受信箱へ `push` して投げるため
     if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
       // ここでも畳む: 畳まなければ片付け中に届いた同文の連投が行の増殖としてディスクに残るため
-      // `canQueue: false` で呼ぶ: この窓の合図は待ち行列へ入らず、`external` でも「行だけ畳んでターンは #841 へ任せる」が成り立たないため
+      // `canQueue: false` で呼ぶ: この窓の合図は待ち行列へ入らず、`external` でも「行だけ畳んでターンは束ね読みへ任せる」が成り立たないため
       if (this.#foldIntoPendingCollapse(event, { canQueue: false }) !== 'pass') return;
       if (durable) return this.#persistThenSettleClosed(event);
       // 同じ `canQueue: false` を `#remember` へも流す: この窓は `#inbox.push` を通らないので、拾い直しが尽きたときの跡に「メモリの待ち行列に残る」を使うと嘘になるため
@@ -1508,7 +1508,7 @@ class Clone implements CloneHost {
   }
 
   /**
-   * 削除した会話を、このプロセスのメモリから落とす（Issue #4218。`CloneHost.forgetConversation`）。
+   * 削除した会話を、このプロセスのメモリから落とす（`CloneHost.forgetConversation`）。
    * 開いている購読には `error` を1通流して閉じさせ、途中経過と畳み込みの記憶を捨てる。
    * **走っているターンは止めない**——その返答は日誌に積まれても、墓標があるので読む口からは外れる。
    */
@@ -2047,13 +2047,13 @@ class Clone implements CloneHost {
     return priorTexts;
   }
 
-  // `#handle` の `manager_message`/`report` 分岐がしていることを件数ぶん繰り返す: 落とすと、まとめた側だけ日誌への追記や台帳の判定（#391）が抜けて能力の削除になるため
+  // `#handle` の `manager_message`/`report` 分岐がしていることを件数ぶん繰り返す: 落とすと、まとめた側だけ日誌への追記や台帳の判定が抜けて能力の削除になるため
   async #runManagerReportBatch(events: ManagerReportMessage[]): Promise<void> {
     const settlements: ReportSettlement[] = [];
     for (const event of events) {
       // 日誌への追記は件数ぶん個別に書く: 1回にまとめると、合図は件数ぶん器に残るという前提が日誌の側で破れるため
       await this.#journalIncomingBody(event);
-      // 台帳の判定（#391）も件数ぶん引く: 「どの報告が片付け済みか」は1件ごとに違いうるので、1つの判定へ潰さない
+      // 台帳の判定も件数ぶん引く: 「どの報告が片付け済みか」は1件ごとに違いうるので、1つの判定へ潰さない
       const settlement = await reportSettlement(this.#stores.commitments, event.id);
       settlements.push(settlement);
       if (closedReportNotice(settlement) !== null) {
@@ -2062,7 +2062,7 @@ class Clone implements CloneHost {
     }
 
     // **`now` はここで1度だけ取る**（`#handle` の単発経路が `managerPrompt` へ
-    // 渡すのと同じ形。#562 PR-1）。`managerReportBatchPrompt` を純関数のまま保つ。
+    // 渡すのと同じ形）。`managerReportBatchPrompt` を純関数のまま保つ。
     const attached = events.some(hasReportFiles)
       ? await this.#resolveManagerReportAttachments(events)
       : undefined;
@@ -2221,7 +2221,7 @@ class Clone implements CloneHost {
     });
   }
 
-  // `inbox.removeMany` を直に呼ばず `removeInboxEventsAndStopDelivery` を通す: 将来この経路の手前へ配達される変更が入っても、消した合図がメモリ側に残る穴（#1049）が空かないようにするため
+  // `inbox.removeMany` を直に呼ばず `removeInboxEventsAndStopDelivery` を通す: 将来この経路の手前へ配達される変更が入っても、消した合図がメモリ側に残る穴が空かないようにするため
   // 失敗した塊は丸ごと次の起動へ回す: 「消えるより配り直す」を崩さないため
   // `#forget` の `await written` をここに置かない: この経路の record は `Promise.resolve()` を積んだものだけ（`this.#delivery.setUnread(record.event.id, Promise.resolve())`）で、待つべき書き込みが無いため。本物の Promise を積むよう変えるなら `await` が要る
   // メモリ上の後始末は1件ずつ行い、`settled` も1件ずつ数える: まとめるのはストアへの書き込みだけで、数える場所を増やさないため
@@ -2296,7 +2296,7 @@ class Clone implements CloneHost {
         role: 'inbound',
         managerId: event.managerId,
         text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}/${event.kind}] ${event.text}`,
-        // 担い手が報告に添えたファイルは、控えだけを写す（中身は `stores.attachments`。日誌へは書かない。#4126 P2b）。
+        // 担い手が報告に添えたファイルは、控えだけを写す（中身は `stores.attachments`。日誌へは書かない）。
         ...(event.attachments === undefined || event.attachments.length === 0
           ? {}
           : { attachments: event.attachments.map((ref) => ({ ...ref })) }),
@@ -2348,7 +2348,7 @@ class Clone implements CloneHost {
   }
 
   /**
-   * マネージャーの報告に添えられたファイルを、ターンへ渡す形にする（#4126 P2b）。**束ねた報告すべての添付を集める**。
+   * マネージャーの報告に添えられたファイルを、ターンへ渡す形にする。**束ねた報告すべての添付を集める**。
    * 通知行は人間の添付と同じ（`resolveTurnAttachmentGroups`）で、画像はターンの画像の予算の範囲で画像としても渡る。
    * 受け取れなかったものは `[添付を受け取れなかった] name=… 理由=…` の行で出す。見つからない添付でもターンは続ける。
    * 返す行は報告（event.id）ごとで、本文の前に置く。
@@ -2388,7 +2388,7 @@ class Clone implements CloneHost {
     return null;
   }
 
-  /** マネージャーの委譲がどの会話で頼まれたか（台帳の `Job.conversationId`。issue #4210）。 */
+  /** マネージャーの委譲がどの会話で頼まれたか（台帳の `Job.conversationId`）。 */
   async #managerOrigin(managerId: string | undefined): Promise<ManagerOrigin> {
     if (managerId === undefined) return { kind: 'missing' };
     try {
@@ -2432,7 +2432,7 @@ class Clone implements CloneHost {
 
     existing.collapsed += 1;
 
-    // 待ち行列へ入れる `external` では `#journalIncomingBody` を呼ばない: #841 の束ね読みが本文を書くので、呼ぶと同じ本文が日誌に二重に載るため（跡は「行を畳んだ」の1行だけ）
+    // 待ち行列へ入れる `external` では `#journalIncomingBody` を呼ばない: 束ね読みが本文を書くので、呼ぶと同じ本文が日誌に二重に載るため（跡は「行を畳んだ」の1行だけ）
     if (options.canQueue && event.type === 'external') {
       void this.#journal({
         type: 'exchange',
@@ -3554,7 +3554,7 @@ class Clone implements CloneHost {
       conversationId === null
         ? `内部ターンが失敗した: ${message}`
         : `人間との対話ターンが失敗した: ${message}`;
-    // **安全分類器（safeguards）による拒否か**（#4173 PR-3）。(a) このターンに構造の合図（`refusal` イベント）が
+    // **安全分類器（safeguards）による拒否か**。(a) このターンに構造の合図（`refusal` イベント）が
     // 届いていた、または (b) 失敗文に `safeguards flagged` が含まれる（弱い補助の判定。`looksLikeSafeguardsRefusal`）。
     // **失敗で終わったターンの失敗文だけを見る**——答えが返ったターンの本文は見ない。
     const refused: { category: string | null } | undefined =
@@ -3813,7 +3813,7 @@ class Clone implements CloneHost {
     try {
       let target = conversationId;
       if (target === null) {
-        // 会話の窓は `readConversationWindow` でだけ組む（issue #418。`scripts/conversation-window-single-source.test.ts`）
+        // 会話の窓は `readConversationWindow` でだけ組む（`scripts/conversation-window-single-source.test.ts`）
         const recent = await readConversationWindow(this.#stores.journal, { scan: 1 });
         target = (recent[0] as { conversationId?: string } | undefined)?.conversationId ?? null;
       }
@@ -3887,7 +3887,7 @@ class Clone implements CloneHost {
 
     let archiveId: string | null = null;
     try {
-      // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため（#4127）
+      // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため
       const transcript = redactImagesInTranscript(await readFile(path, 'utf8'));
       const write = await this.#stores.archive.archive(
         this.#sdkSession.sdkSessionId ?? 'clone',
@@ -7176,7 +7176,7 @@ function renderPayload(
   ].join('\n');
 }
 
-/** 日誌へ書く中身（issue #1535。{@link EXTERNAL_JOURNAL_LIMIT} の doc）。 */
+/** 日誌へ書く中身（{@link EXTERNAL_JOURNAL_LIMIT} の doc）。 */
 function journalPayload(payload: unknown, attachments?: readonly { name: string }[]): string {
   return excerpt(payloadText(payload, attachments), EXTERNAL_JOURNAL_LIMIT);
 }
@@ -7290,7 +7290,7 @@ function withProjectKeyProbe(
   return {
     append: async (key: SessionKey, entries) => {
       note(key.projectKey);
-      // 画像の中身は pg へ書かない: 保持期限後も消えない生ログになるため（#4127）
+      // 画像の中身は pg へ書かない: 保持期限後も消えない生ログになるため
       await store.append(key, redactImagesInEntries(entries) as typeof entries);
     },
     load: store.load.bind(store),

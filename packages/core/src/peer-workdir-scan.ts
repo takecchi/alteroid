@@ -2,7 +2,7 @@ import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
- * peer のターンの間に、peer の作業場で変わったファイルを拾う（#4143）。
+ * peer のターンの間に、peer の作業場で変わったファイルを拾う。
  *
  * Codex がコードでファイルを書いた（`commandExecution`）とき、道具の記録にはパスが残らない。
  * そこで、ターンの開始時刻以降に更新された通常ファイルを、ターンの終わりに作業場から探す。

@@ -353,7 +353,7 @@ export interface RunnerPeerOptions {
   readonly reportsUsage: (provider: AgentProviderId) => boolean;
   readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
   readonly childEntry?: string;
-  /** peer の作業場を置く根（既定 `/tmp`。#4143）。テストで本物の `/tmp` を触らないための口。 */
+  /** peer の作業場を置く根（既定 `/tmp`）。テストで本物の `/tmp` を触らないための口。 */
   readonly workdirRoot?: string;
 }
 
@@ -364,7 +364,7 @@ export interface RunnerManagerToolsOptions {
 }
 
 /**
- * runner の peer（#4118）。**開く条件はこの器に届いた Codex の資格**（ChatGPT ログインか `CODEX_API_KEY`）で、
+ * runner の peer。**開く条件はこの器に届いた Codex の資格**（ChatGPT ログインか `CODEX_API_KEY`）で、
  * 資格が届く・外れるたびに判定し直す（`resolvePeerOpening`）。ソケットは初めて開くときに1回だけ作る
  * （資格が1度も届かない器にはソケットを作らない）。
  */
@@ -373,11 +373,11 @@ export interface RunnerHostPeerOptions {
   readonly reportsUsage: (provider: AgentProviderId) => boolean;
   readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
   readonly childEntry?: string;
-  /** peer の作業場を置く根（既定 `/tmp`。#4143）。テストで本物の `/tmp` を触らないための口。 */
+  /** peer の作業場を置く根（既定 `/tmp`）。テストで本物の `/tmp` を触らないための口。 */
   readonly workdirRoot?: string;
 }
 
-/** hello と `manager_peers` に載せる、peer の開閉（#4118）。 */
+/** hello と `manager_peers` に載せる、peer の開閉。 */
 export interface RunnerManagerPeersAnnouncement {
   readonly managerPeers: RunnerManagerPeer[];
   readonly managerPeersClosed?: RunnerManagerPeerClosed[];
@@ -434,7 +434,7 @@ export interface RunnerHost {
   setCredentials(entries: readonly CredentialEntry[]): Promise<CredentialFingerprint[]>;
   profile(): RunnerProfileFingerprint | undefined;
   setProfile(script: string): Promise<RunnerProfileResult>;
-  // 鍵・プロファイルが降りた後の実効の env から読む（値は返さない）。hello と `anthropic_route` が名乗る（#4263・#4261）
+  // 鍵・プロファイルが降りた後の実効の env から読む（値は返さない）。hello と `anthropic_route` が名乗る
   anthropicRoute(): string[];
   mcpServers(): RunnerMcpServersFingerprint | undefined;
   // ファイルへ落とさない: 走行中のプロセスが読み直す経路が無く、効くのはセッションを組む瞬間だけのため
@@ -446,7 +446,7 @@ export interface RunnerHost {
   retainPlugins(names: readonly string[]): RunnerPluginsFingerprint | undefined;
   codexAuth(): CodexAuthMirrorStatus;
   setCodexAuth(push: CodexAuthPush): Promise<CodexAuthMirrorStatus>;
-  /** いまの peer の開閉（hello に載せる。#4118）。peer を持たない器（ローカル実行など）は `undefined`。 */
+  /** いまの peer の開閉（hello に載せる）。peer を持たない器（ローカル実行など）は `undefined`。 */
   managerPeers(): RunnerManagerPeersAnnouncement | undefined;
   takeCodexAuthWriteBack(fingerprint: string): CodexAuthWriteBack | null;
   start(command: RunnerStartCommand): Promise<{ cwd: string; sessionGeneration: string }>;
@@ -500,7 +500,7 @@ const AGENT_TOKEN_CREDENTIAL_NAME: (typeof ROTATABLE_CREDENTIAL_KEYS)[number] =
   'CLAUDE_CODE_OAUTH_TOKEN';
 
 /**
- * **鍵の器（`CredentialStore`）が無い器で、マネージャーが `Not logged in` で落ちたときの案内（#4112）。**
+ * **鍵の器（`CredentialStore`）が無い器で、マネージャーが `Not logged in` で落ちたときの案内。**
  * 器が無いのは、デーモンの同一プロセスの runner（`createLocalRunner` に `credentials` を渡さない構成）。
  * そこではトークンプールの鍵を降ろす先が無く（`setCredentials` が断る）、マネージャーの子には器の鍵が届かない。
  * 別プロセスの runner（`apps/runner`）は必ず器を作るので、この案内は出ない（本番の runner の挙動は変えない）。
@@ -579,7 +579,7 @@ class Host implements RunnerHost {
   readonly #managerTools: RunnerManagerToolsOptions | undefined;
   /** peer 用ソケット（初めて開くときに作る。資格が外れても閉じない — 道具を出さなければ token が発行されない）。 */
   #peerSocket: PeerSocketHost | undefined;
-  /** いまの開閉（#4118）。名乗り直しとセッションの組み直しの要否は、これとの比較で決める。 */
+  /** いまの開閉。名乗り直しとセッションの組み直しの要否は、これとの比較で決める。 */
   #peerOpening: PeerOpening = { open: [], closed: [] };
   /** 判定を1本ずつ流す鎖（鍵と ChatGPT ログインが同時に降りても、ソケットを2回開かず名乗りが前後しない）。 */
   #peerChain: Promise<void> = Promise.resolve();
@@ -840,7 +840,7 @@ class Host implements RunnerHost {
       for (const session of this.#sessions.values()) session.recycleForToken();
     }
     this.#announceAnthropicRoute();
-    // `CODEX_API_KEY` が届いた・外れたら peer の開閉が変わる（#4118）
+    // `CODEX_API_KEY` が届いた・外れたら peer の開閉が変わる
     await this.#refreshPeers();
     return fingerprints;
   }
@@ -871,7 +871,7 @@ class Host implements RunnerHost {
   }
 
   /**
-   * 届いている資格から peer の開閉を決め直す（#4118）。初めて開くときにソケットを作る。
+   * 届いている資格から peer の開閉を決め直す。初めて開くときにソケットを作る。
    * **変わったときだけ** `manager_peers` で名乗り直し、開いている provider が変わったら走行中のセッションを
    * 次の区切りで組み直す（MCP の道具はセッションを組む瞬間に決まるので、組み直さないと道具が出ない・消えない）。
    */
@@ -1091,7 +1091,7 @@ class Host implements RunnerHost {
 
   async setCodexAuth(push: CodexAuthPush): Promise<CodexAuthMirrorStatus> {
     await this.#codexAuth.set(push);
-    // ログインが届いた・外れた（ログアウト）なら peer の開閉が変わる（#4118）。トークンの更新では変わらない
+    // ログインが届いた・外れた（ログアウト）なら peer の開閉が変わる。トークンの更新では変わらない
     await this.#refreshPeers();
     return this.#codexAuth.status();
   }
@@ -1141,7 +1141,7 @@ class Host implements RunnerHost {
       ...(this.#credentials === undefined ? {} : { credentials: this.#credentials }),
       permissionMode: this.#permissionMode,
       bashGuard: this.#bashGuard,
-      // 組むたびに読み直す口を渡す: 開閉は資格が届く・外れるたびに変わるため（#4118）
+      // 組むたびに読み直す口を渡す: 開閉は資格が届く・外れるたびに変わるため
       ...(this.#peer === undefined ? {} : { peer: () => this.#sessionPeer() }),
       ...(this.#managerTools === undefined ? {} : { managerTools: this.#managerTools }),
       codexAuth: this.#codexAuth,
@@ -1379,7 +1379,7 @@ class Host implements RunnerHost {
       attachments,
       ledger: this.#stagedAttachments,
       ...(this.#childUser === undefined ? {} : { childGid: this.#childUser.gid }),
-      // 担い手の子プロセスの env と同じ出所（器の env・鍵・プロファイル）で経路を決める（#3743）。
+      // 担い手の子プロセスの env と同じ出所（器の env・鍵・プロファイル）で経路を決める。
       routeEnv: { ...this.#baseChildEnv(), ...(this.#profile?.env() ?? {}) },
     });
     return composeAttachmentInput(text, placed);
@@ -1462,7 +1462,7 @@ class Host implements RunnerHost {
       ),
     );
     this.#sessions.clear();
-    // 予約済みの plugin の片づけ（retainPlugins の投げっぱなし）を待つ: 待たずに返すと、畳んだ後にも展開先を消し続け、呼び手の後片づけと競合するため（#4286）
+    // 予約済みの plugin の片づけ（retainPlugins の投げっぱなし）を待つ: 待たずに返すと、畳んだ後にも展開先を消し続け、呼び手の後片づけと競合するため
     await this.#pluginsChain;
     // セッションを畳んだ後に閉じる: 先に閉じると、畳みの途中の peer の中継が切れるため
     this.#peerSocket?.close();
@@ -1586,7 +1586,7 @@ interface RunnerSessionOptions {
   mcpServers: () => McpServers | undefined;
   // 値で渡さない（関数で受ける）: `mcpServers` と同じ理由
   plugins: () => readonly AgentClonePlugin[];
-  // 値で渡さない（関数で受ける）: 資格が届く・外れるたびに開閉が変わるため（#4118）
+  // 値で渡さない（関数で受ける）: 資格が届く・外れるたびに開閉が変わるため
   peer?: () => RunnerPeerOptions | undefined;
   managerTools?: RunnerManagerToolsOptions;
   onClosed: () => void;
@@ -1632,7 +1632,7 @@ class RunnerSession {
   readonly #codexAuth: CodexChatgptAuthHandle | undefined;
   readonly #queryFn: ClaudeQueryFn | undefined;
   #peerBroker: PeerBroker | undefined;
-  /** 背景の peer の止まりどころの知らせのうち、まだ届けていないもの（確認待ちの間は溜める。#4123）。 */
+  /** 背景の peer の止まりどころの知らせのうち、まだ届けていないもの（確認待ちの間は溜める）。 */
   readonly #peerNotices: string[] = [];
   readonly #profileEnv: () => Record<string, string>;
   readonly #mcpServers: () => McpServers | undefined;
@@ -1942,7 +1942,7 @@ class RunnerSession {
     const path = this.#sdkSession.transcriptPath;
     if (path === undefined) return { status: 'no-path' };
     try {
-      // 返す前に画像の中身を控えへ置き換える: archive と transcript API の両方がここを通り、base64 が生ログに残ると保持期限（30日）後も消えないため（#4127）
+      // 返す前に画像の中身を控えへ置き換える: archive と transcript API の両方がここを通り、base64 が生ログに残ると保持期限（30日）後も消えないため
       return { status: 'ok', body: redactImagesInTranscript(await readFile(path, 'utf8')) };
     } catch (error) {
       return { status: 'unreadable', error };
@@ -1989,7 +1989,7 @@ class RunnerSession {
     // 例外を投げない（`.catch()` を添える）: 観測1回の失敗で畳みそのものを巻き添えにしないため
     // 期限を切る（`STOP_UNPUSHED_WORK_TIMEOUT_MS`）: SIGTERM から `exit(0)` するまでの猶予 `FORCED_EXIT_MS` を大きく食わないため
     if (options.captureUnpushedWork === true) {
-      // 観測の emit は退避を待たない: 待たせると #2749 の競走の窓が広がるため
+      // 観測の emit は退避を待たない: 待たせると競走の窓が広がるため
       const rescued = this.rescueRef({
         signal: AbortSignal.timeout(STOP_RESCUE_TIMEOUT_MS),
         waitForRunning: true,
@@ -2033,7 +2033,7 @@ class RunnerSession {
   }
 
   #peerMcpEntry(): McpServers[string] | undefined {
-    // 組むたびに読み直す: 資格が届いた・外れたあとの組み直しで道具が出る・消える（#4118）
+    // 組むたびに読み直す: 資格が届いた・外れたあとの組み直しで道具が出る・消える
     const peer = this.#peer?.();
     if (peer === undefined) return undefined;
     const allowed = peer.peers.filter((provider) => provider !== DEFAULT_AGENT_PROVIDER_ID);
@@ -2116,9 +2116,9 @@ class RunnerSession {
           : new ClaudeManagerDriver(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
       reportsUsage: (provider) => peer.reportsUsage(provider),
       onNote: (text) => this.#emit({ type: 'note', managerId: this.#id, text }),
-      // 背景へ回した peer の止まりどころは、マネージャーへの知らせとして入れて起こす（#4123。#1554 と同じ口）
+      // 背景へ回した peer の止まりどころは、マネージャーへの知らせとして入れて起こす
       onBackgroundStop: (result) => this.#onPeerBackgroundStop(result),
-      // 作業者の長い道具と同じ口に載せる: ホームの稼働状況に、作業者と同じ形で「実行中」を出すため（#4122）
+      // 作業者の長い道具と同じ口に載せる: ホームの稼働状況に、作業者と同じ形で「実行中」を出すため
       onTurn: (event) => {
         const toolUseId = `peer:${event.turnId}`;
         if (event.kind === 'ended') {
@@ -2144,7 +2144,7 @@ class RunnerSession {
           models: report.models,
           ...(report.unmetered ? { unmetered: true } : {}),
         }),
-      // 作られたファイルを、道具の記録に残らない作り方（コードで書いた等）でも拾う（#4143）
+      // 作られたファイルを、道具の記録に残らない作り方（コードで書いた等）でも拾う
       scanWorkdir: (dir, sinceMs) => scanPeerWorkdir(dir, sinceMs),
       makeSpec: (provider, parts) => ({
         ...this.#buildSpec(undefined, true),
@@ -2182,7 +2182,7 @@ class RunnerSession {
   }
 
   /**
-   * peer の作業場（#4143）。マネージャーの cwd（共有の `/workspace` など）ではなく、マネージャーの作業場
+   * peer の作業場。マネージャーの cwd（共有の `/workspace` など）ではなく、マネージャーの作業場
    * `/tmp/mgr-<先頭8桁>` に揃える（無ければ作る）。作れなければ、マネージャーの cwd のままにして note を残す。
    * 作ったときは子の uid へ渡す: runner の持ち物のままだと、マネージャー本人も peer もそこへ書けないため。
    */
@@ -2221,7 +2221,7 @@ class RunnerSession {
     // プロファイルが上書きした後の値から指紋を控える: 子が実際に掴む鍵を見るため（peer のセッションは別物なので控えない）
     const childEnv = this.#childEnv();
     if (!forPeer) this.#tokenFingerprint = tokenFingerprintOf(childEnv);
-    // 1回だけ呼ぶ: 呼ぶたびに使い捨ての token を発行するため。道具とプロンプトの案内は同じ判定から出す（#4125）
+    // 1回だけ呼ぶ: 呼ぶたびに使い捨ての token を発行するため。道具とプロンプトの案内は同じ判定から出す
     const peerEntry = forPeer ? undefined : this.#peerMcpEntry();
     const peerModels = peerEntry === undefined ? undefined : this.#peer?.()?.models?.codex;
     // peer のセッションには出さない: 記録するのはマネージャー自身で、peer の成果はマネージャーが受け取ってから記録する
@@ -2298,7 +2298,7 @@ class RunnerSession {
             sessionId: key.sessionId,
             ...(key.subpath === undefined ? {} : { subpath: key.subpath }),
           },
-          // 画像の中身は mirror（pg）へ流さない: 保持期限後も消えない生ログになるため（#4127）
+          // 画像の中身は mirror（pg）へ流さない: 保持期限後も消えない生ログになるため
           entries: redactImagesInEntries(entries),
         });
         this.#emit({ type: 'project_key', managerId: this.#id, projectKey: key.projectKey });
@@ -2654,7 +2654,7 @@ class RunnerSession {
       case 'compaction':
         return;
 
-      // 拒否の合図は委譲層では見ない（#4173）: 数えて開き直すのはクローン層の仕事で、作業者のセッションは使い捨てのため
+      // 拒否の合図は委譲層では見ない:数えて開き直すのはクローン層の仕事で、作業者のセッションは使い捨てのため
       case 'refusal':
         return;
 
@@ -2728,7 +2728,7 @@ class RunnerSession {
         // なぜ終わったのかを落とさない: 上限で止まったのか失敗したのかが区別できないと、待つ／人間に頼むと挑み直すで手が正反対になるため
         // 成否の分岐の外に出す: `assistant.error` で止まった回は `result` が成功で返ることがあるため
         // マネージャーの本文 `said` を分類に通さない: `classifyUsageNotice` は部分一致で、報告に「上限に当たった」と書いただけで誤判定するため
-        // 鍵の器が無い器で `Not logged in` が来たときの案内（#4112）。分類できなかった失敗の中でも、原因の見当が付く1つだけに足す
+        // 鍵の器が無い器で `Not logged in` が来たときの案内。分類できなかった失敗の中でも、原因の見当が付く1つだけに足す
         let noCredentialDirHint = false;
         if (failure !== undefined) {
           let classified = false;
@@ -2802,7 +2802,7 @@ class RunnerSession {
               };
         // 取り込みは `setStatus` より前に済ませる: 後ろへ置くと `await` が `report.status` / `awaitingBackground` の算出との間に挟まり、その間に変わった状態で嘘の報告になる
         // 背景処理の完了待ちで畳んだだけの報告（デーモンが握り潰しうる）では取り込まない: 載せた `files` が配られないまま退避先にだけ残るため。出し箱に残して次の報告で送る
-        // 1回だけ読む: 背景の peer（#4123）はこの間にも止まりうるので、2つの判定で別の一覧を見ないため
+        // 1回だけ読む: 背景の peer はこの間にも止まりうるので、2つの判定で別の一覧を見ないため
         const liveBackground = this.#liveBackgroundTasks();
         const awaitsBackgroundOnly =
           failure === undefined && this.#pending.length === 0 && liveBackground.length > 0;
@@ -2833,7 +2833,7 @@ class RunnerSession {
         });
         // `report` を出した後に呼ぶ: `push()` が状態を `running` へ戻すので、先に呼ぶと `report.status` / `awaitingBackground` が嘘になるため
         this.#wakeForFinishedBackgroundTaskOutputs();
-        // 確認待ちの間に溜めた peer の知らせも、同じ理由でここで届ける（#4123）
+        // 確認待ちの間に溜めた peer の知らせも、同じ理由でここで届ける
         this.#deliverPeerNotices();
         return;
       }
@@ -2898,7 +2898,7 @@ class RunnerSession {
     }
   }
 
-  /** SDK の背景処理と、背景で流れている peer のターン（#4123）を合わせた一覧（作業者の背景処理と同じ形）。 */
+  /** SDK の背景処理と、背景で流れている peer のターンを合わせた一覧（作業者の背景処理と同じ形）。 */
   #liveBackgroundTasks(): readonly { id: string; taskType: string }[] {
     const peers = this.#peerBroker?.backgroundTasks() ?? [];
     return peers.length === 0
@@ -2906,7 +2906,7 @@ class RunnerSession {
       : [...this.#sdkSession.liveBackgroundTasks, ...peers];
   }
 
-  /** 背景の peer が止まりどころに来た（#4123）。知らせを溜め、届けられるなら届ける。 */
+  /** 背景の peer が止まりどころに来た。知らせを溜め、届けられるなら届ける。 */
   #onPeerBackgroundStop(result: PeerTurnResult): void {
     if (this.#sdkSession.stopped) return;
     const where =
@@ -3266,7 +3266,7 @@ class RunnerSession {
           ...(value.withdrawn === true ? { withdrawn: { reason: value.message } } : {}),
         });
         settle(value);
-        // 確認待ちの間に溜めた peer の知らせを届ける（#4123）: 手すきのマネージャーへ背景の peer が上げた確認だと、
+        // 確認待ちの間に溜めた peer の知らせを届ける: 手すきのマネージャーへ背景の peer が上げた確認だと、
         // この後に報告の区切りが来ず、溜めたまま残るため
         this.#deliverPeerNotices();
       },
@@ -3427,7 +3427,7 @@ class RunnerSession {
           ...(value.withdrawn === true ? { withdrawn: { reason: value.message } } : {}),
         });
         settle(value);
-        // 確認待ちの間に溜めた peer の知らせを届ける（#4123）: 手すきのマネージャーへ背景の peer が上げた確認だと、
+        // 確認待ちの間に溜めた peer の知らせを届ける: 手すきのマネージャーへ背景の peer が上げた確認だと、
         // この後に報告の区切りが来ず、溜めたまま残るため
         this.#deliverPeerNotices();
       },
@@ -3507,7 +3507,7 @@ class RunnerSession {
     return { kind: 'retry' };
   }
 
-  // 「もっと強く書く」側へ倒さず機械の門へ倒す: システムプロンプトへ逐語で書いても守られないことを #894 が実測したため
+  // 「もっと強く書く」側へ倒さず機械の門へ倒す: システムプロンプトへ逐語で書いても守られないため
   // 既定を deny にしない（`ask` を既定にする）: 誰も開けられず、方針は設定で開けられなければならないため（north_star 禁止2）
   // `Bash` 以外を弾かない: 他のツールまで巻き込むと「何でも弾きうる門」になり、確認が要る行為の一覧を作ることに近づくため
   // `decision: 'block'`（セッション全体を止める口）を使わない: この呼び出し1件だけを拒否する

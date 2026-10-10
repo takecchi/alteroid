@@ -75,7 +75,7 @@ export interface CloneRuntimeFacts {
    */
   runnerModels?: readonly string[];
   /**
-   * クローン自身の SDK 子の接続先とモデルの別名（`describeAnthropicRoute` の行。#4263・#4261）。
+   * クローン自身の SDK 子の接続先とモデルの別名（`describeAnthropicRoute` の行）。
    * `[]` は「見たが何も置かれていない」、未指定は「見ていない」（節ごと出さない）。
    */
   anthropicRoute?: readonly string[];

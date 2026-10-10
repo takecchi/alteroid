@@ -2,7 +2,7 @@ import { UnreadableCommitmentError } from './store.js';
 import type { CommitmentStore } from './store.js';
 
 /**
- * 読めない形で入っている台帳の行への `CommitmentStore.editBody` の契約（Issue #4064）を、実装1つに対して測る。
+ * 読めない形で入っている台帳の行への `CommitmentStore.editBody` の契約を、実装1つに対して測る。
  * 読めない行は `ifMatch` の有無を問わず `UnreadableCommitmentError` で断り、書き換えない。
  * 読めない行を持てるのは fs・pg だけ（インメモリは `open` が形を断る）。
  * `plantUnreadableRow` は、その id の読めない（片付いていない）行を器へ直に置く。**空のストアに対して呼ぶこと。**

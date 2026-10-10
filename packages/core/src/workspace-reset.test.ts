@@ -67,7 +67,7 @@ describe('resetWorkspaceState', () => {
       accumulation: 'oneshot',
     });
 
-    // 添付は、保存したものも消える（#4006。保存した添付は期限が無いので、リセットが唯一の掃除になる）
+    // 添付は、保存したものも消える（保存した添付は期限が無いので、リセットが唯一の掃除になる）
     const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
     const keptAttachment = await stores.attachments.put({
       name: 'kept.png',

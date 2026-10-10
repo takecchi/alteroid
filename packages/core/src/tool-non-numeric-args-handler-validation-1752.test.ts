@@ -89,7 +89,7 @@ interface Case {
   invalid: unknown;
   valid: unknown;
   hint: string;
-  /** 範囲内の値が指す相手を、呼ぶ前にストアへ在らせる（無い相手を断る道具のため。#4149）。 */
+  /** 範囲内の値が指す相手を、呼ぶ前にストアへ在らせる（無い相手を断る道具のため）。 */
   seed?: (stores: ReturnType<typeof createMemoryStores>) => Promise<void>;
 }
 

@@ -9,7 +9,7 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeSdk, waitFor, wireEvents } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 
-// 安全分類器（safeguards）にセッションごと弾かれ続けていることの検知・知らせ・自動の開き直し（#4173 PR-3）の、外から見える結果。
+// 安全分類器（safeguards）にセッションごと弾かれ続けていることの検知・知らせ・自動の開き直しの、外から見える結果。
 describe('クローン — 安全分類器に弾かれ続けたセッション', () => {
   const REFUSAL_TEXT =
     "Claude Opus 5.5's safeguards flagged this session as potentially violating our usage policy. Details: [cyber]";

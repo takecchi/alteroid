@@ -558,7 +558,7 @@ describe('reply_attach', () => {
 });
 
 describe('conversation_post の attachments', () => {
-  /** 書く先の会話を日誌に在らせる（#4149 から、在る会話へしか書けない）。 */
+  /** 書く先の会話を日誌に在らせる（在る会話へしか書けない）。 */
   async function seedConversation(stores: ReturnType<typeof createMemoryStores>, id: string) {
     await stores.journal.append({
       type: 'exchange',

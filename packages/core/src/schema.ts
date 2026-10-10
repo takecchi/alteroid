@@ -183,7 +183,7 @@ export const attachmentRefSchema = z.object({
 
 export type AttachmentRef = z.infer<typeof attachmentRefSchema>;
 
-// 担い手の報告に添えて受け取れなかったファイルの、名前と理由（#4126 P2b）。黙って落とさず、報告と日誌に残すため
+// 担い手の報告に添えて受け取れなかったファイルの、名前と理由。黙って落とさず、報告と日誌に残すため
 export const rejectedAttachmentSchema = z.object({ name: z.string(), reason: z.string() });
 
 export type RejectedAttachment = z.infer<typeof rejectedAttachmentSchema>;
@@ -257,12 +257,12 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     markup: z.string().optional(),
     // `status` という名前にしない: 合図が作られた時点ではなく配る瞬間の値で、同じ名前だと読む側が「合図が名乗った値」として照合に誤用するため
     // `z.lazy` で包む: `jobStatusSchema` は下で定義されており、直接参照すると TDZ の `ReferenceError` になるため
-    // 配り直しでも新しい値に差し替えない: `#restoreUnread` は積まれた当時の値のまま残り、issue #879 の述語がその差を使っているため
+    // 配り直しでも新しい値に差し替えない: `#restoreUnread` は積まれた当時の値のまま残り、述語がその差を使っているため
     statusAtDelivery: z.lazy(() => jobStatusSchema).optional(),
     synthesized: z.literal(true).optional(),
     // 本文の文言で判定しない: 判定は構造化された印で行い、文言は表示にだけ使うため（立っていない回はキーごと書かない）
     foldedTurn: z.literal(true).optional(),
-    // 中身（bytes）は持たない: 担い手が報告に添えたファイルの控え（#4126 P2b）。中身は `stores.attachments` に在る
+    // 中身（bytes）は持たない: 担い手が報告に添えたファイルの控え。中身は `stores.attachments` に在る
     attachments: z.array(attachmentRefSchema).optional(),
     // 受け取れなかったものを黙って落とさない: 名前と理由をクローンのターンへ出すため
     rejectedAttachments: z.array(rejectedAttachmentSchema).optional(),
@@ -352,7 +352,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     supersedes: z.string().optional(),
     // 中身（bytes）は日誌に書かない: メタデータだけを持つため
     attachments: z.array(attachmentRefSchema).optional(),
-    // 担い手の報告で受け取れなかったファイルの名前と理由（#4126 P2b）。`attachments` と対で、黙って落とさないため
+    // 担い手の報告で受け取れなかったファイルの名前と理由。`attachments` と対で、黙って落とさないため
     rejectedAttachments: z.array(rejectedAttachmentSchema).optional(),
     clientMessageId: z.string().optional(),
     // 順番待ちの発言を取り下げた印の行（`with: 'self'`）が、取り下げた発言の `clientMessageId` を持つ。文面（`[判断]` の1行）から id を読み取らない: 文面を直した瞬間に黙って外れるため、印を付ける
@@ -373,7 +373,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     grounds: z.string(),
     answeredApprovalId: z.string().optional(),
     /**
-     * この判断が書き込んだやり方（Issue #4065）。`practice_write` / `practice_remove` と
+     * この判断が書き込んだやり方。`practice_write` / `practice_remove` と
      * `PUT` / `DELETE /practices/:slug` の行にだけ付く。やり方には `memory_update` に当たる専用の
      * 種別が無いので、文面から推測する代わりに構造で持つ。
      *
@@ -654,7 +654,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       z.object({ status: z.literal('failed'), reason: z.string().min(1).max(1000) }),
     ]),
   }),
-  // 会話の論理削除の墓標（#4218）。`conversationId` という名前の欄を持たない: 持つと、墓標そのものが外す対象（その会話の `exchange`）に巻き込まれるため
+  // 会話の論理削除の墓標。`conversationId` という名前の欄を持たない: 持つと、墓標そのものが外す対象（その会話の `exchange`）に巻き込まれるため
   // 本文を写さない: 消した会話の中身を日誌へ写し直さないため
   z.object({
     type: z.literal('conversation_deleted'),
@@ -1174,7 +1174,7 @@ export const jobSchema = z.object({
   // 台帳に置く: runner は SSE の再接続で同じ出来事を配り直すことがあり、プロセス内の集合では再起動の後の二重を止められないため
   lateDoneNotifiedAt: isoDateTime.optional(),
   runnerSessionSince: isoDateTime.optional(),
-  // 同じセッションの2ターン目以降の「report 無しの closed(done)」を拾うため、ターンの始まりを台帳に置く（#3198）: `runnerSessionSince` はセッションの始まりで、`send()` では進まないため。器の入れ替えをまたいで判定が効くよう永続する
+  // 同じセッションの2ターン目以降の「report 無しの closed(done)」を拾うため、ターンの始まりを台帳に置く:`runnerSessionSince` はセッションの始まりで、`send()` では進まないため。器の入れ替えをまたいで判定が効くよう永続する
   turnStartedAt: isoDateTime.optional(),
   // 「1セッションにつき1回」にする: `closed` には冪等キーが無く、SSE の再配達で同じ `closed(done)` が2度届くと知らせが「×2」になるため
   silentDoneNotifiedFor: z.union([isoDateTime, z.literal('')]).optional(),

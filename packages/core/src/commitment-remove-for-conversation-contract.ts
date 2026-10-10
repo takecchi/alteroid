@@ -1,7 +1,7 @@
 import type { CommitmentStore } from './store.js';
 
 /**
- * `CommitmentStore.removeForConversation`（会話の削除。issue #4218）の契約を、実装1つに対して測る。
+ * `CommitmentStore.removeForConversation`（会話の削除）の契約を、実装1つに対して測る。
  * fs / pg / インメモリの3つが同じ関数を呼ぶ（`commitment-edit-if-match-contract.ts` と同じ形）。
  *
  * 測る性質:

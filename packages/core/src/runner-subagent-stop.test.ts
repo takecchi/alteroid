@@ -225,7 +225,7 @@ function setup(): { host: RunnerHost; events: RunnerEvent[]; started: Started[] 
     emit: (event) => events.push(event),
     queryFn: fn,
     env: {},
-    // 既定の根（os.tmpdir() 配下の共有の名前）に触らない: runner の器では root 所有で作れず、余計な note が出るため（#4199）
+    // 既定の根（os.tmpdir() 配下の共有の名前）に触らない: runner の器では root 所有で作れず、余計な note が出るため
     outboxRoot: join(dir, 'outbox'),
     outboxStagedRoot: join(dir, 'outbox-staged'),
   });

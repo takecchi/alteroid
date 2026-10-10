@@ -130,7 +130,7 @@ describe('クローン — interruptTurn の対象指定（#3956）', () => {
     ).toHaveLength(1);
     // 発言そのものの行は消さない
     expect(texts.some((x) => x.includes('自分の発言'))).toBe(true);
-    // 履歴の読み直しが「取り下げた」と言う根拠: 文面ではなく、発言の clientMessageId を持つ印（#3990）
+    // 履歴の読み直しが「取り下げた」と言う根拠: 文面ではなく、発言の clientMessageId を持つ印
     const marks = (await t.stores.journal.list({ types: ['exchange'], with: ['self'] })).filter(
       (row) => row.type === 'exchange' && row.withdrawnClientMessageId !== undefined,
     );

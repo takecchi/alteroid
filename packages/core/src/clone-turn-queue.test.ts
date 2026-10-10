@@ -307,7 +307,7 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
   const managerMarker = (managerId: string, text: string): string =>
     `マネージャー ${managerId} から届いた。（報告）\n\n${text}`;
   const timerMarker = (kind: string): string => `定期ジョブ ${kind} の時刻になった`;
-  // 区切り（`---`）の直後では探さない: 本文の前に会話の名乗り（#4210）が入り、その文面は直前の会話によって変わるため
+  // 区切り（`---`）の直後では探さない: 本文の前に会話の名乗りが入り、その文面は直前の会話によって変わるため
   const humanMarker = (text: string): string => `\n\n${text}`;
 
   const DISTILL_MARKER = '記憶へ移すべきものがあるか確認せよ';

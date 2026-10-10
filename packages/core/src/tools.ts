@@ -397,7 +397,7 @@ function stringifyToolResponseForValidationCheck(toolResponse: unknown): string 
 
 export const MCP_SERVER_NAME = 'alteroid';
 
-/** いまのターンの返信に添える添付の口（`reply_attach`。Issue #4126）。 */
+/** いまのターンの返信に添える添付の口（`reply_attach`）。 */
 export interface ReplyAttachments {
   /** このターンの返信にすでに添えた控え（個数・合計は新しい分と合わせて数える）。 */
   current(): readonly AttachmentRef[];
@@ -412,7 +412,7 @@ export interface ToolContext {
   // optional にしない: 渡し忘れが型検査を通り、承認が黙って会話に紐づかなくなるため
   conversationId: () => string | undefined;
   /**
-   * いまのターンの仕事が属する会話（issue #4210）。会話のあるターンでは `conversationId` と同じで、内部ターンでは
+   * いまのターンの仕事が属する会話。会話のあるターンでは `conversationId` と同じで、内部ターンでは
    * 委譲の起点（マネージャーからの一件なら、その委譲の `Job.conversationId`）。`manager_start` の起点と、
    * `ask_human` / `request_permission` が積む承認の会話に写す。返信の宛先（`conversationId`）とは別である。
    */
@@ -432,7 +432,7 @@ export interface ToolContext {
   accountUsage?: () => AccountUsageState;
   runtime?: () => CloneRuntimeFacts;
   runnerModels?: () => Promise<readonly string[]>;
-  /** 接続中の runner が名乗った SDK の接続先とモデルの別名の行（#4263・#4261）。 */
+  /** 接続中の runner が名乗った SDK の接続先とモデルの別名の行。 */
   runnerAnthropicRoutes?: () => Promise<readonly string[]>;
   // optional にも既定値にもしない: 省略時の既定は guardFullReplace を素通りさせるか、日誌の cause を偽るため
   // ターンごとに変わるので、ハンドラの中で呼ぶ
@@ -1102,7 +1102,7 @@ export async function renderPeerReach(managers: ManagerPool | undefined): Promis
   if (rows.length === 0) return [];
   return [
     '',
-    // 開いている器と、閉じている器（理由つき）を並べる: ログイン済みなのに開いていない器を見せるため（#4118）
+    // 開いている器と、閉じている器（理由つき）を並べる: ログイン済みなのに開いていない器を見せるため
     'マネージャーが peer（Codex など）に作業を頼めるか（器ごと。頼める器は manager_start の runnerId で名指しできる。詳細は runner_list）:',
     renderListing(
       rows.map((row) => `- ${row.label}: ${excerptLine(row.line, RUNNER_MANAGER_PEERS_EXCERPT)}`),
@@ -2433,7 +2433,7 @@ export function describePermissionEvidence(
   return `直前の拒否（器が返した原文。クローンの要約ではない。長い欄は ${PERMISSION_EVIDENCE_EXCERPT} 字で切る）: ${parts.join(' / ')}`;
 }
 
-/** 委譲の起点の会話（`Job.conversationId`。issue #4210）。読めない・見つからないときも `undefined`。 */
+/** 委譲の起点の会話（`Job.conversationId`）。読めない・見つからないときも `undefined`。 */
 // 読めないときに断らない: 起点は承認を会話へ結ぶための手がかりで、無くても従来どおり会話の無い承認として積めるため
 async function jobConversationOf(
   stores: Stores,
@@ -2447,7 +2447,7 @@ async function jobConversationOf(
   }
 }
 
-/** `manager_list` の行に出す、委譲の起点の会話（issue #4210）。 */
+/** `manager_list` の行に出す、委譲の起点の会話。 */
 type JobOrigins = { kind: 'read'; byId: ReadonlyMap<string, Job> } | { kind: 'unreadable' };
 
 async function readJobOrigins(stores: Stores): Promise<JobOrigins> {
@@ -6834,7 +6834,7 @@ export function createCloneTools(context: ToolContext) {
         };
         if (!context.managers) return NO_POOL;
         // conversationId はクローンに渡させず呼び出し文脈から自動で読む: 手で維持する欄を新しく作らないため
-        // 返信の宛先ではなく仕事の会話を読む: 報告を受けた内部ターンで続きを委譲したとき、起点が途切れないため（#4210）
+        // 返信の宛先ではなく仕事の会話を読む: 報告を受けた内部ターンで続きを委譲したとき、起点が途切れないため
         const conversationId = getWorkConversationId();
 
         // 添付は日誌にも命令にも触れる前に読む: 見つからなければ何も送らず日誌も書かないため
@@ -7607,7 +7607,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // 失敗した回は「報告」と呼ばない（Issue #714）: 見出しが「直近の報告」のままだと、⚠ を見た直後に包みの内側だけを読んで報告として扱うため
+        // 失敗した回は「報告」と呼ばない:見出しが「直近の報告」のままだと、⚠ を見た直後に包みの内側だけを読んで報告として扱うため
         // `foldedTurn` が在る回は注記を出さない: `lastFailure` は畳まれる前の無関係な古いターンを指し、注記が予告する本文の種類と実際の本文が食い違うため
         const managerFailure =
           part === 'request' || foldedTurn !== undefined

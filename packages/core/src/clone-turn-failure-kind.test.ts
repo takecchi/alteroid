@@ -7,7 +7,7 @@ import { createMemoryStores, humanMessage } from './testing.js';
 
 /**
  * ターン失敗の種別（`error` イベントの `kind` と、履歴の `turnFailureKind`）が、
- * 本文ではなく構造から決まり、2つの口で同じ値になること（Issue #3953）。
+ * 本文ではなく構造から決まり、2つの口で同じ値になること。
  *
  * **本文に `401` / `quota` を入れた対照を置いている**: 本文の語で決める実装は、構造が無い失敗を
  * `auth` / `quota` に倒すので、ここが赤くなる。

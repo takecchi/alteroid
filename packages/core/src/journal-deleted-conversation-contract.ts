@@ -2,7 +2,7 @@ import type { JournalEntry } from './schema.js';
 import type { JournalStore } from './store.js';
 
 /**
- * `JournalStore` の「消した会話を外す」契約を、実装1つに対して測る（issue #4218）。
+ * `JournalStore` の「消した会話を外す」契約を、実装1つに対して測る。
  *
  * 会話の論理削除は、日誌へ追記する墓標の行（`type: 'conversation_deleted'`）だけを印にする。
  * 墓標のある会話の `exchange` は、**ストアの中で** `list` / `listPage` / `get` から外れる

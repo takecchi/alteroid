@@ -17252,7 +17252,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       tool: 'conversation_post',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
-        // 書く先の会話は在らせておく（#4149 から、無い会話は日誌へ書く前に断るので append の失敗まで届かない）
+        // 書く先の会話は在らせておく（無い会話は日誌へ書く前に断るので append の失敗まで届かない）
         const inner = createMemoryStores();
         await inner.journal.append({
           type: 'exchange',
@@ -18121,7 +18121,7 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 });
 
 describe('conversation_post', () => {
-  /** 書く先の会話を日誌に在らせる（#4149 から、在る会話へしか書けない。断る側の歯は `conversation-post-unknown-id.test.ts`）。 */
+  /** 書く先の会話を日誌に在らせる（在る会話へしか書けない。断る側の歯は `conversation-post-unknown-id.test.ts`）。 */
   async function seedConversation(stores: Stores, conversationId: string): Promise<void> {
     await stores.journal.append({
       type: 'exchange',

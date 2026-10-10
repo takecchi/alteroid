@@ -228,7 +228,7 @@ describe('作業者の道具の実行中の観測（#2725）', () => {
       session_id: 'sess-1',
       uuid: 'uuid-denied',
     } as unknown as SDKMessage);
-    // 実時間では待たない（#2146）。拒否の合図で畳まれたことを条件で待つ。
+    // 実時間では待たない。拒否の合図で畳まれたことを条件で待つ。
     await vi.waitFor(() =>
       expect(watchEvents(events).map((e) => e.type)).toEqual(['tool_running', 'tool_end']),
     );

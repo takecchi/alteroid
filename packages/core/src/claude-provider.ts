@@ -831,7 +831,7 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
     ];
   }
 
-  // 拒否（safeguards 等）の構造の合図を中立の `refusal` へ畳む（#4173）: 以前は末尾の `said` の分岐で黙って捨てており、降格して再試行した拒否が日誌に跡を残さなかったため
+  // 拒否（safeguards 等）の構造の合図を中立の `refusal` へ畳む: 末尾の `said` の分岐で黙って捨てると、降格して再試行した拒否が日誌に跡を残さないため
   // 付帯の欄（category・explanation・original_model）が読めない形でも `refusal` 自体は返す: 合図は在り、読めないのは欄だけで、欄は省く（作り物を載せない）
   if (subtype === 'model_refusal_no_fallback' || subtype === 'model_refusal_fallback') {
     const raw = message as {

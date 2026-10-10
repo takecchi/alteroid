@@ -11,7 +11,7 @@ import { humanMessage } from './testing.js';
 /**
  * クローンが SDK の生ログを読んで archive ストアへ渡す2か所
  * （reopen／文脈窓で畳む前の `#salvageTranscript` と、PreCompact の `#onPreCompact`）で、
- * 画像の中身が archive へ届かないことを固定する歯（#4127。#4280 で歯が無かった2か所）。
+ * 画像の中身が archive へ届かないことを固定する歯。
  */
 
 const B64 = Buffer.from('PNG-BYTES-FOR-4127-ARCHIVE-WIRING-'.repeat(4)).toString('base64');

@@ -14,7 +14,7 @@ export const ROTATABLE_CREDENTIAL_KEYS = [
   'GH_TOKEN',
   'GITHUB_TOKEN',
   'CLAUDE_CODE_OAUTH_TOKEN',
-  // プールの名前にしない: Codex 側にはプールも枠の回し手も無いため。ChatGPT ログインの auth.json（#3939）は compare-and-swap が要るので、版を持たないこの袋に入れない
+  // プールの名前にしない: Codex 側にはプールも枠の回し手も無いため。ChatGPT ログインの auth.json は compare-and-swap が要るので、版を持たないこの袋に入れない
   'CODEX_API_KEY',
 ] as const;
 

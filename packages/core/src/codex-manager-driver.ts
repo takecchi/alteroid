@@ -1,5 +1,5 @@
 /**
- * マネージャーのセッションの駆動役の Codex 実装（#486 M7 段 S6 PR-B）。
+ * マネージャーのセッションの駆動役の Codex 実装。
  *
  * `agent-session.ts` の中立の口（{@link AgentManagerDriver}）の裏で、`codex app-server`
  * （stdio・行区切り JSON-RPC）を子プロセスとして起こし、`initialize` → 認証 →
@@ -23,7 +23,7 @@
  *   ephemeral の保存先は読み込み側もプロセス内のメモリだけで `auth.json` を読まない
  *   （openai/codex rust-v0.160.0 `login/src/auth/storage.rs` の `EphemeralAuthStorage::load`）
  *   ので、付けると既存の ChatGPT ログインが見えなくなる。
- * - **ChatGPT ログイン（#3939）**: 鍵が無く、runner に正本のログインが降りていれば
+ * - **ChatGPT ログイン**: 鍵が無く、runner に正本のログインが降りていれば
  *   （{@link CodexChatgptAuthHandle}）、起動の直前に `CODEX_HOME/auth.json` を書き出し、
  *   その `CODEX_HOME` だけを子の env に置く（値は env に置かない）。Codex が更新して書き換えた
  *   `auth.json` は、`account/updated` とセッションの終わりで見回って書き戻しへ回す。
@@ -141,7 +141,7 @@ export interface CodexManagerDriverOptions {
   clientVersion?: string;
   onClientError?: (error: { kind: string }) => void;
   closeGraceMs?: number;
-  /** runner に降りた ChatGPT ログイン（#3939）。無ければ今までどおり（`CODEX_HOME` に触らない）。 */
+  /** runner に降りた ChatGPT ログイン。無ければ今までどおり（`CODEX_HOME` に触らない）。 */
   chatgptAuth?: CodexChatgptAuthHandle;
 }
 
@@ -792,7 +792,7 @@ class CodexManagerSession implements CodexSession {
   }
 
   /**
-   * ファイルのパスの伏せ字（#4143）。秘密（鍵の値・環境変数の値・既知の鍵の形）は伏せるが、
+   * ファイルのパスの伏せ字。秘密（鍵の値・環境変数の値・既知の鍵の形）は伏せるが、
    * 「英数字混在の長い塊」の網は掛けない: uuid 入りのパスが `[REDACTED]` に化け、マネージャーが写せなかったため。
    */
   #sanitizePath(text: string): string {

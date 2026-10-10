@@ -225,7 +225,7 @@ describe('番人: ThreadItem の全 type は「道具」か「道具ではない
 });
 
 describe('番人: codex の語彙は codex-*.ts の中に閉じる', () => {
-  // 広いパターンで緩めない: import してよい組をファイル単位で名指しするため。ChatGPT ログインの正本（#3939）を読む側も、プロトコルの綴り（codex-protocol / codex-app-server-client）は読まない
+  // 広いパターンで緩めない: import してよい組をファイル単位で名指しするため。ChatGPT ログインの正本を読む側も、プロトコルの綴り（codex-protocol / codex-app-server-client）は読まない
   const ALLOWED: Readonly<Record<string, readonly string[]>> = {
     'runner.ts': ['./codex-manager-driver.js', './codex-auth-mirror.js'],
     'store.ts': ['./codex-chatgpt-auth.js'],

@@ -3978,7 +3978,7 @@ class Pool implements ManagerPool {
    *    いたら、安全側に倒して何もしない（`'raced'`）。
    * 2. **未 push の安全弁**（`evaluateAutoFoldUnpushedWork`）。`'blocked'` なら
    *    畳まず、日誌に見送った理由を残す。**ただし同じ委譲・同じ理由の見送りを
-   *    繰り返し書かない**（Issue #1394 の留保。`candidateLastReportAt` の doc）。
+   *    繰り返し書かない**（`candidateLastReportAt` の doc）。
    *
    * @param candidateLastReportAt 呼び出し元（段⑤の候補判定）が読んだ時点の
    *   `ManagerSummary.lastReportAt`。**`fresh.updatedAt`（`Job.updatedAt`）

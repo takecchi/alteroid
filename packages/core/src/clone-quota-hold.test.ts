@@ -710,7 +710,7 @@ describe('クローン — 枠で保持している間、中身を持たない�
     // 単なる部分一致で見ない: #recentDigest が台帳に載った全件を列挙し、まだ番が来ていない合図の本文も先に含むため。commitmentNoticeFor が本文の直前に挟む \n\n---\n の直後で狙う
     const inputs = (s.calls[0] as FakeCall).inputs;
     const firstIndexOf = (marker: string) => inputs.findIndex((text) => text.includes(marker));
-    // 区切りと本文のあいだに会話の名乗りが入る（#4210）。この歯の発言はどれも conv-1 なので、名乗りは id の1行だけである
+    // 区切りと本文のあいだに会話の名乗りが入る。この歯の発言はどれも conv-1 なので、名乗りは id の1行だけである
     const order = {
       二件目: firstIndexOf('\n\n---\n[system] 会話 conv-1\n\n二件目'),
       manager: firstIndexOf('（報告）\n\nマネージャーからの一件（目印テキスト）'),

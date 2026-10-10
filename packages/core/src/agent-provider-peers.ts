@@ -1,7 +1,7 @@
 import type { AgentProviderId } from './agent-ports.js';
 
 /**
- * マネージャー層の MCP `peer` を開く条件（#4118。2026-10-08 のオーナー決定）。
+ * マネージャー層の MCP `peer` を開く条件（2026-10-08 のオーナー決定）。
  *
  * **人間がその provider の設定（資格）を済ませたら開く。** 逐語は「ユーザーがcodexでログインして
  * 使えるようにしたってことはcodexを使えるようにしたってことでしょ？」。Codex なら、runner に
@@ -56,7 +56,7 @@ export function samePeerOpening(a: PeerOpening, b: PeerOpening): boolean {
 }
 
 /**
- * peer の provider ごとに、人間が開けたモデル名の一覧を置く環境変数の名前（#3934）。
+ * peer の provider ごとに、人間が開けたモデル名の一覧を置く環境変数の名前。
  * Codex なら `ALTEROID_MANAGER_PEER_CODEX_MODELS`（カンマ区切り）。
  * **provider ごとに分ける**: モデル名は provider の語彙なので、1本の一覧に混ぜると
  * どの provider のモデルか判別できなくなる。

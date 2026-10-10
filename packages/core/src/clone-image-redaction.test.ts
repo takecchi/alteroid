@@ -9,7 +9,7 @@ import { createMemoryStores, humanMessage } from './testing.js';
 
 /**
  * クローンの pg sessionStore の唯一の入口（`withProjectKeyProbe` の append）で、
- * 画像の中身が store へ届かないことを固定する歯（#4127）。
+ * 画像の中身が store へ届かないことを固定する歯。
  */
 
 const B64 = Buffer.from('PNG-BYTES-FOR-4127-CLONE-WIRING-'.repeat(4)).toString('base64');
