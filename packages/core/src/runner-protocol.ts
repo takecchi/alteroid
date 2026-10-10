@@ -2261,6 +2261,9 @@ class Registry implements RunnerRegistry {
           managers?: number;
         }
       | undefined;
+    // 失敗の文言にデーモン側の観測を添えるための起点: 全台が同時に倒れたとき、遅れたのが器かデーモン自身かを文言だけで分けるため（#4454）。
+    const startedAt = performance.now();
+    const loopBefore = performance.eventLoopUtilization();
     try {
       // `identity()` と `ping()` の両方は叩かない: 10秒ごとに全台へ2往復を投げることになる。
       identity = await withDeadline(
@@ -2271,7 +2274,13 @@ class Registry implements RunnerRegistry {
         HEARTBEAT_PROBE_MS,
       );
     } catch (error) {
-      failure = redactErrorText(String(error), process.env);
+      failure = redactErrorText(
+        describeProbeFailure(error, {
+          elapsedMs: performance.now() - startedAt,
+          loopUtilization: performance.eventLoopUtilization(loopBefore).utilization,
+        }),
+        process.env,
+      );
     }
 
     // 聞いている間に外された / 開き直された / 名簿が止まった: 古い答えで上書きしない。
@@ -2474,6 +2483,35 @@ class Registry implements RunnerRegistry {
     for (const waiter of [...this.#waiting]) waiter.reject(new Error(message));
     this.#waiting.clear();
   }
+}
+
+/**
+ * 名乗りの確認が失敗した理由に、デーモン側で測れる2つの値を添える（#4454）。
+ * - 投げてから失敗まで: 期限切れなのにこれが期限（5000ms）を大きく超えていれば、期限のタイマー自体が遅れて発火した＝デーモンのループが塞がっていた
+ * - その間のイベントループ使用率: 1 に近ければ、応答が届いていても読む暇が無かった
+ * `cause` も添える: `String(error)` は `cause` を落とし、`TypeError: fetch failed` だけでは名前解決・接続・切断のどこで落ちたかが分からないため。
+ * 判定には使わない（lost の条件は変えない）。文言だけを増やす。
+ */
+export function describeProbeFailure(
+  error: unknown,
+  observed: { elapsedMs: number; loopUtilization: number },
+): string {
+  return (
+    String(error) +
+    causeSuffixOf(error) +
+    `（デーモン側の観測: 投げてから失敗まで ${String(Math.round(observed.elapsedMs))}ms・` +
+    `その間のイベントループ使用率 ${String(Math.round(observed.loopUtilization * 100))}%）`
+  );
+}
+
+function causeSuffixOf(error: unknown): string {
+  if (!(error instanceof Error) || error.cause === undefined) return '';
+  const cause = error.cause;
+  const code =
+    typeof cause === 'object' && cause !== null && 'code' in cause && typeof cause.code === 'string'
+      ? ` code=${cause.code}`
+      : '';
+  return ` cause=${String(cause)}${code}`;
 }
 
 /**
