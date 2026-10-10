@@ -13,9 +13,13 @@ import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
 // 枠で一斉に止まった担当の知らせを、担当ごとではなくプール全体の1通にまとめる（Issue #4443 (a)）。
-// 窓は試験用に短くする（担当ごと 20ms・プール全体 150ms）。固定の待ちで「来ない」を確かめるので、待ちは窓より十分長く取る。
+// 「届く」ことは固定の待ちではなく `vi.waitFor` で、条件が満ちるまで待つ（CI の負荷で実時間が伸びても結果が変わらない）。
+// 「届かない」ことを確かめるのは、届くはずのものを待ち終えた直後（窓の中）か、窓が閉じた後の固定の待ち。
+// プール窓は、負荷で数百 ms 遅れても「窓の中」のまま確かめられるよう、担当ごとの窓（20ms）の100倍にしてある。
 const NOTICE_WINDOW_MS = 20;
-const POOL_WINDOW_MS = 150;
+const POOL_WINDOW_MS = 2_000;
+const WAIT = { timeout: 15_000 };
+vi.setConfig({ testTimeout: 30_000 });
 
 const SESSION_LIMIT =
   "You've hit your session limit · resets 12:20am (Asia/Tokyo) · /extra-usage to continue";
@@ -188,26 +192,54 @@ async function journalTexts(stores: Stores): Promise<string[]> {
   return entries.map((entry) => JSON.stringify(entry));
 }
 
+type Fresh = () => InboxEvent[];
+
+async function waitForOwn(fresh: Fresh, ids: readonly string[]): Promise<void> {
+  await vi.waitFor(
+    () =>
+      expect(
+        managerMessages(fresh())
+          .map((m) => m.managerId)
+          .sort(),
+      ).toEqual([...ids].sort()),
+    WAIT,
+  );
+}
+
+async function waitForExternals(fresh: Fresh, count: number): Promise<void> {
+  await vi.waitFor(() => expect(externals(fresh())).toHaveLength(count), WAIT);
+}
+
+// 窓へ貯めたことは、日誌の「受信箱へ行かず」の行で観測する（積んだ時点で書かれる）。
+async function waitForStored(stores: Stores, managerId: string): Promise<void> {
+  await vi.waitFor(async () => {
+    const lines = await journalTexts(stores);
+    if (!lines.some((l) => l.includes(`[${managerId}]`) && l.includes('受信箱へ行かず'))) {
+      throw new Error(`${managerId} がまだ窓へ貯まっていない`);
+    }
+  }, WAIT);
+}
+
 describe('枠だけが理由の束は、担当ごとに配らずプール全体で1通にまとまる', () => {
   it('3本の担当が枠で止まると、受信箱に1通だけ届く。各行に状態（failed と running）・抜粋・リセット時刻が載る', async () => {
     const { pool, inbox, fake, fresh, stores } = await setup(['mgr-a', 'mgr-b', 'mgr-c']);
 
     // 1本目: すぐ担当ごとの manager_message で届き、プール全体の窓が開く。
     quotaTurnFailed(fake, 'mgr-a', SESSION_LIMIT, 'running', '調査の途中経過: 3件目まで読んだ');
-    await sleep(NOTICE_WINDOW_MS + 30);
-    expect(managerMessages(fresh()).map((m) => m.managerId)).toEqual(['mgr-a']);
+    await waitForOwn(fresh, ['mgr-a']);
     expect(externals(fresh())).toHaveLength(0);
 
-    // 窓の中で止まった残りの2本は、担当ごとには届かない。
+    // 窓の中で止まった残りの2本は、担当ごとには届かない（貯まったことを見てから確かめる）。
     quotaClosedFailed(fake, 'mgr-b', SESSION_LIMIT);
     quotaTurnFailed(fake, 'mgr-c', SESSION_LIMIT, 'done');
     quotaClosedFailed(fake, 'mgr-c', SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
+    await waitForStored(stores, 'mgr-b');
+    await waitForStored(stores, 'mgr-c');
     expect(managerMessages(fresh()).map((m) => m.managerId)).toEqual(['mgr-a']);
     expect(externals(fresh())).toHaveLength(0);
 
     // 窓が閉じたとき、窓を開けた担当も含めた3本の一覧が1通。
-    await sleep(POOL_WINDOW_MS + 100);
+    await waitForExternals(fresh, 1);
     expect(managerMessages(fresh()).map((m) => m.managerId)).toEqual(['mgr-a']);
     const sent = externals(fresh());
     expect(sent).toHaveLength(1);
@@ -259,10 +291,10 @@ describe('枠だけが理由の束は、担当ごとに配らずプール全体�
     const { pool, fake, fresh, stores } = await setup(['mgr-a']);
 
     quotaTurnFailed(fake, 'mgr-a', SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
-    expect(managerMessages(fresh())).toHaveLength(1);
+    await waitForOwn(fresh, ['mgr-a']);
 
-    await sleep(POOL_WINDOW_MS + 150);
+    // 窓が閉じた後まで待つ（遅れて来るなら、ここで見つかる）。
+    await sleep(POOL_WINDOW_MS + 500);
     expect(managerMessages(fresh())).toHaveLength(1);
     expect(externals(fresh())).toHaveLength(0);
     const journal = await journalTexts(stores);
@@ -276,25 +308,24 @@ describe('枠だけが理由の束は、担当ごとに配らずプール全体�
     const { pool, fake, fresh } = await setup(['mgr-a']);
 
     quotaTurnFailed(fake, 'mgr-a', SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
+    await waitForOwn(fresh, ['mgr-a']);
     quotaClosedFailed(fake, 'mgr-a', SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
+    await waitForOwn(fresh, ['mgr-a', 'mgr-a']);
 
     const own = managerMessages(fresh());
-    expect(own.map((m) => m.managerId)).toEqual(['mgr-a', 'mgr-a']);
     expect(own[1]?.text).toContain('セッションが落ちた');
 
-    await sleep(POOL_WINDOW_MS + 100);
+    await sleep(POOL_WINDOW_MS + 500);
     expect(externals(fresh())).toHaveLength(0);
 
     await pool.stop();
   });
 
   it('枠以外の断片が混ざる担当は、今どおり担当ごとに配られ、枠の1通には載らない', async () => {
-    const { pool, fake, fresh } = await setup(['mgr-a', 'mgr-b', 'mgr-mixed']);
+    const { pool, fake, fresh, stores } = await setup(['mgr-a', 'mgr-b', 'mgr-mixed']);
 
     quotaTurnFailed(fake, 'mgr-a', SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
+    await waitForOwn(fresh, ['mgr-a']);
     quotaClosedFailed(fake, 'mgr-b', SESSION_LIMIT);
     // 枠の印が付く断片と、枠と無関係の落ち方（印が付かない）が同じ束に入る担当。
     quotaTurnFailed(fake, 'mgr-mixed', SESSION_LIMIT);
@@ -305,7 +336,9 @@ describe('枠だけが理由の束は、担当ごとに配らずプール全体�
       reason: 'マネージャーのセッションが落ちた: Error: spawn EAGAIN',
     });
 
-    await sleep(NOTICE_WINDOW_MS + POOL_WINDOW_MS + 150);
+    await waitForStored(stores, 'mgr-b');
+    await waitForOwn(fresh, ['mgr-a', 'mgr-mixed']);
+    await waitForExternals(fresh, 1);
 
     const pooled = externals(fresh());
     expect(pooled).toHaveLength(1);
@@ -325,11 +358,11 @@ describe('枠だけが理由の束は、担当ごとに配らずプール全体�
     const { pool, fake, fresh } = await setup(['mgr-a', 'mgr-b', 'mgr-c']);
 
     quotaTurnFailed(fake, 'mgr-a', SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
+    await waitForOwn(fresh, ['mgr-a']);
     quotaTurnFailed(fake, 'mgr-b', OTHER_RESET_LIMIT);
     quotaTurnFailed(fake, 'mgr-c', SESSION_LIMIT);
 
-    await sleep(NOTICE_WINDOW_MS + POOL_WINDOW_MS + 150);
+    await waitForExternals(fresh, 1);
 
     const sent = externals(fresh());
     expect(sent).toHaveLength(1);
@@ -352,9 +385,9 @@ describe('枠だけが理由の束は、担当ごとに配らずプール全体�
     const { pool, fake, fresh } = await setup(['mgr-a', 'mgr-b']);
 
     quotaTurnFailed(fake, 'mgr-a', "You've hit your session limit");
-    await sleep(NOTICE_WINDOW_MS + 30);
+    await waitForOwn(fresh, ['mgr-a']);
     quotaTurnFailed(fake, 'mgr-b', "You've hit your session limit");
-    await sleep(NOTICE_WINDOW_MS + POOL_WINDOW_MS + 150);
+    await waitForExternals(fresh, 1);
 
     const text = textOf(externals(fresh())[0]!);
     expect(text).toContain('枠に当たって 2 本の担当が止まった（リセット時刻は分からない）');
@@ -366,16 +399,14 @@ describe('枠だけが理由の束は、担当ごとに配らずプール全体�
     const { pool, fake, fresh } = await setup(['mgr-a', 'mgr-b', 'mgr-c']);
 
     quotaTurnFailed(fake, 'mgr-a', SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
+    await waitForOwn(fresh, ['mgr-a']);
     quotaTurnFailed(fake, 'mgr-b', SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + POOL_WINDOW_MS + 150);
-    expect(externals(fresh())).toHaveLength(1);
+    await waitForExternals(fresh, 1);
 
     quotaTurnFailed(fake, 'mgr-c', SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
     // 新しい窓の1本目: 一覧を待たずに担当ごとに届く。
-    expect(managerMessages(fresh()).map((m) => m.managerId)).toEqual(['mgr-a', 'mgr-c']);
-    await sleep(POOL_WINDOW_MS + 150);
+    await waitForOwn(fresh, ['mgr-a', 'mgr-c']);
+    await sleep(POOL_WINDOW_MS + 500);
     // 貯めた担当が居ないので、窓が閉じても一覧は出ない。
     expect(externals(fresh())).toHaveLength(1);
     expect(textOf(externals(fresh())[0]!)).toContain('枠に当たって 2 本の担当が止まった');
@@ -384,13 +415,13 @@ describe('枠だけが理由の束は、担当ごとに配らずプール全体�
   });
 
   it('窓の途中で stop() すると、窓に貯めた分が1通として配られる', async () => {
-    const { pool, fake, fresh } = await setup(['mgr-a', 'mgr-b']);
+    const { pool, fake, fresh, stores } = await setup(['mgr-a', 'mgr-b']);
 
     quotaTurnFailed(fake, 'mgr-a', SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
+    await waitForOwn(fresh, ['mgr-a']);
     quotaClosedFailed(fake, 'mgr-b', SESSION_LIMIT);
     // 担当ごとの窓は閉じ、プール全体の窓の中にいる時点で止める。
-    await sleep(NOTICE_WINDOW_MS + 30);
+    await waitForStored(stores, 'mgr-b');
     expect(externals(fresh())).toHaveLength(0);
 
     await pool.stop();
@@ -401,13 +432,20 @@ describe('枠だけが理由の束は、担当ごとに配らずプール全体�
   });
 
   it('担当ごとの窓の中で stop() しても、枠の分は落ちずに1通として配られる', async () => {
-    const { pool, fake, fresh } = await setup(['mgr-a', 'mgr-b']);
+    const { pool, fake, fresh, stores } = await setup(['mgr-a', 'mgr-b']);
 
     quotaTurnFailed(fake, 'mgr-a', SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
+    await waitForOwn(fresh, ['mgr-a']);
     quotaTurnFailed(fake, 'mgr-b', SESSION_LIMIT);
-    // 報告の処理は台帳と日誌を待ってから積むので、積み終わるのを待つ（担当ごとの窓 20ms よりずっと短く）。
-    await sleep(5);
+    // 報告が日誌に書かれるのを待ってから止める。担当ごとの窓の中で止まっても、窓を閉じた後でも、結果は同じ（積んだ分は落ちない）。
+    await vi.waitFor(async () => {
+      const lines = await journalTexts(stores);
+      if (!lines.some((l) => l.includes('mgr-b') && l.includes('[応答]'))) {
+        throw new Error('mgr-b の報告がまだ日誌に書かれていない');
+      }
+    }, WAIT);
+    // 日誌の後に積むまでの数 tick を待つ（積んだ後なら窓へ貯まっているだけで、結果は変わらない）。
+    await sleep(100);
     await pool.stop();
 
     const sent = externals(fresh());
@@ -440,24 +478,19 @@ describe('プール全体の窓は、トークンごとに別の出来事とし�
     const since = (): InboxEvent[] => inbox.slice(baseline);
 
     quotaTurnFailed(fake, old1.managerId, SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
+    await waitForOwn(since, [old1.managerId]);
     quotaTurnFailed(fake, fresh1.managerId, SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
 
     // 別のトークンの枠は別の出来事: どちらも1本目としてすぐ届き、まだ一覧は無い。
-    expect(
-      managerMessages(since())
-        .map((m) => m.managerId)
-        .sort(),
-    ).toEqual([old1.managerId, fresh1.managerId].sort());
+    await waitForOwn(since, [old1.managerId, fresh1.managerId]);
     expect(externals(since())).toHaveLength(0);
 
     // 古い鍵の2本目は、古い鍵の窓に貯まる（担当ごとには届かない）。
     quotaTurnFailed(fake, old2.managerId, SESSION_LIMIT);
-    await sleep(NOTICE_WINDOW_MS + 30);
+    await waitForStored(stores, old2.managerId);
     expect(managerMessages(since())).toHaveLength(2);
 
-    await sleep(POOL_WINDOW_MS + 150);
+    await waitForExternals(since, 1);
     const sent = externals(since());
     // 一覧が出るのは古い鍵の窓だけ（2本）。新しい鍵は1本だけなので出ない。
     expect(sent).toHaveLength(1);
@@ -486,18 +519,21 @@ describe('枠の印が無い束は、今どおり担当ごとに配る', () => {
       });
 
     unmarked();
-    await sleep(NOTICE_WINDOW_MS + 60);
+    await waitForOwn(fresh, ['mgr-a']);
     unmarked();
-    await sleep(NOTICE_WINDOW_MS + 60);
+    // 2通目は今までどおり、窓をまたぐ同文として数だけ残して畳まれる（日誌の行で観測する）。
+    await vi.waitFor(async () => {
+      const lines = await journalTexts(stores);
+      if (!lines.some((line) => line.includes('受信箱へは回さず数だけ残した'))) {
+        throw new Error('2通目がまだ畳まれていない');
+      }
+    }, WAIT);
 
     expect(externals(fresh())).toHaveLength(0);
     const own = managerMessages(fresh());
     expect(own).toHaveLength(1);
     expect(own[0]).toMatchObject({ managerId: 'mgr-a', synthesized: true });
     expect(own[0]?.text).toContain('内部エラー');
-    // 2通目は今までどおり、窓をまたぐ同文として数だけ残して畳まれる。
-    const journal = await journalTexts(stores);
-    expect(journal.some((line) => line.includes('受信箱へは回さず数だけ残した'))).toBe(true);
 
     await pool.stop();
   });
@@ -515,14 +551,10 @@ describe('枠の印が無い束は、今どおり担当ごとに配る', () => {
         synthesized: 'turn_failed',
       });
     }
-    await sleep(NOTICE_WINDOW_MS + POOL_WINDOW_MS + 150);
-
+    await waitForOwn(fresh, ['mgr-a', 'mgr-b']);
+    // 窓が閉じた後まで待っても、一覧は出ない（枠と言い切れないので窓が開かない）。
+    await sleep(POOL_WINDOW_MS + 500);
     expect(externals(fresh())).toHaveLength(0);
-    expect(
-      managerMessages(fresh())
-        .map((m) => m.managerId)
-        .sort(),
-    ).toEqual(['mgr-a', 'mgr-b']);
 
     await pool.stop();
   });
@@ -538,10 +570,9 @@ describe('枠の印が無い束は、今どおり担当ごとに配る', () => {
       failure: { code: 'success/500', via: 'result_is_error', status: 500 },
       synthesized: 'turn_failed',
     });
-    await sleep(NOTICE_WINDOW_MS + 60);
+    await waitForOwn(fresh, ['mgr-a']);
 
     expect(externals(fresh())).toHaveLength(0);
-    expect(managerMessages(fresh())).toHaveLength(1);
 
     await pool.stop();
   });
