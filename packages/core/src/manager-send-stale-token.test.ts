@@ -391,6 +391,42 @@ describe('畳めない理由が残っていても、古い鍵が ready なら旧
     },
   );
 
+  it('断るときは、抱えている古い鍵がいまどうかを本文で言い、届けずに断ったことを日誌に残す（#4441 の段2の判断材料）', async () => {
+    const s = await setup({ tokenAvailability: async () => 'cooling' });
+    s.rotate();
+    s.fake.behavior.background = 1;
+
+    const result = await s.pool.send('mgr-stale', '続きを');
+
+    expect(result.outcome).toBe('declined');
+    expect(result.detail).toContain('抱えている古い鍵（tok-a）はいま冷却中');
+    expect(result.detail).toContain('畳んでいないし、送ってもいない');
+    const decisions = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('届けずに断った'),
+    );
+    expect(decisions).toHaveLength(1);
+    expect(JSON.stringify(decisions[0])).toContain('鍵の状態=いま冷却中');
+    expect(JSON.stringify(decisions[0])).toContain('背景処理が 1 本');
+    await s.pool.stop();
+  });
+
+  it('鍵の状態を聞けない構成で断るときは、鍵については何も言わず、日誌には聞いていないと残す', async () => {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+
+    const result = await s.pool.send('mgr-stale', '続きを');
+
+    expect(result.outcome).toBe('declined');
+    expect(result.detail).not.toContain('抱えている古い鍵');
+    const decisions = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('届けずに断った'),
+    );
+    expect(decisions).toHaveLength(1);
+    expect(JSON.stringify(decisions[0])).toContain('鍵の状態=（聞いていない）');
+    await s.pool.stop();
+  });
+
   it('⚠️ 注入口を渡さなければ従来どおり declined', async () => {
     const s = await setup();
     s.rotate();

@@ -3539,6 +3539,9 @@ class Pool implements ManagerPool {
       // 抱えている鍵がいま ready なら断らず旧セッションへ流す: その鍵ならまた枠に当たらず、畳めば確認待ち・背景処理を失うため。
       // 指紋で判定した回（attached=false）は鍵が分からないので流さない。sessionId が無い回も流さない（保守側に倒す）。
       const heldTokenId = this.#tokenIdentities.get(managerId)?.tokenId;
+      // 断る回にも鍵の状態を言うために外へ出す: 言わないと、クローンはいつ送り直せばよいかを決められず、
+      // 段1（ready なら届ける）で足りているのかを日誌から数えられない（#4441 の段2の判断材料）。
+      let heldTokenState: string | undefined;
       if (
         record.attached &&
         record.job.sessionId !== undefined &&
@@ -3547,6 +3550,7 @@ class Pool implements ManagerPool {
         this.#tokenAvailability !== undefined
       ) {
         const availability = await this.#tokenAvailability(heldTokenId).catch(() => undefined);
+        heldTokenState = describeHeldTokenState(availability);
         if (availability === 'ready') {
           await this.#journal({
             type: 'decision',
@@ -3558,13 +3562,24 @@ class Pool implements ManagerPool {
           return { staleDelivery: { generation: held, blockers } };
         }
       }
+      const tokenClause =
+        heldTokenState === undefined
+          ? ''
+          : `抱えている古い鍵（${heldTokenId ?? '?'}）は${heldTokenState}ので、そのまま旧セッションへ届けることもしない。`;
+      await this.#journal({
+        type: 'decision',
+        decision: `[${managerId}] done の委譲へ送られた本文を、届けずに断った（${staleness}）`,
+        grounds:
+          `managerId=${managerId} tokenId=${heldTokenId ?? '（分からない）'} ` +
+          `鍵の状態=${heldTokenState ?? '（聞いていない）'} 畳めない理由=${blockers.join('。')}（#4441）`,
+      });
       return {
         declined: {
           outcome: 'declined',
           detail:
             `${managerId} は${staleness}。古い鍵のセッションへ流すとまた枠に当たるので、` +
             '畳んで新しい鍵で起こし直したいが、畳めない理由が残っている: ' +
-            `${blockers.join('。')}。畳んでいないし、送ってもいない。` +
+            `${blockers.join('。')}。${tokenClause}畳んでいないし、送ってもいない。` +
             '取れる手: (1) 背景処理・確認待ちが終わるのを待ってから送り直す。' +
             '(2) 残っているものを捨ててよいなら manager_stop → manager_start で後継を起こす' +
             '（manager_stop は残っている仕事ごと畳む）。',
@@ -10253,4 +10268,22 @@ export function tokenGenerationMismatched(
   if (manager.tokenGeneration === undefined) return false;
   if (manager.activeTokenGeneration === undefined) return false;
   return manager.tokenGeneration !== manager.activeTokenGeneration;
+}
+
+/** 断る文面に載せる「抱えている古い鍵がいまどうか」。`ready` は届ける側へ回るので、ここへ来るのはそれ以外だけである。 */
+function describeHeldTokenState(
+  availability: 'ready' | 'cooling' | 'disabled' | 'invalidated' | undefined,
+): string {
+  switch (availability) {
+    case 'ready':
+      return 'いま使える';
+    case 'cooling':
+      return 'いま冷却中（枠に当たって休ませている）な';
+    case 'disabled':
+      return '止めてある';
+    case 'invalidated':
+      return '無効になっている';
+    case undefined:
+      return 'いま使えるか読めなかった';
+  }
 }
