@@ -91,6 +91,7 @@ import {
   type RunnerDroppedEventReport,
   type RunnerUnknownReport,
 } from './runner-client.js';
+import { createRunnerLostNotice, describeRunnerLost } from './runner-lost-notice.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { noteRunnerSwap } from './runner-swap-notice.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
@@ -501,6 +502,8 @@ export async function main(): Promise<void> {
     process.stderr.write(`alteroidd: ${text}\n`);
     postToClone?.(text);
   };
+  // 送る時点の `postToClone` を読む（後から差し替わるため）。
+  const runnerLostNotice = createRunnerLostNotice({ send: (text) => postToClone?.(text) });
   let takeOverOnSwap: (runnerId?: string) => void = () => {};
   let relocateOnLost: (runnerId?: string) => void = () => {};
   let autoFoldOnPlacementResources: (
@@ -516,12 +519,10 @@ export async function main(): Promise<void> {
       );
     },
     onLost: ({ label, runnerId, error }) => {
-      announce(
-        `runner (${label}${runnerId === undefined ? '' : ` / ${runnerId}`}) が` +
-          `名乗らなくなりました。新しい委譲の宛先からは外し、` +
-          `そこで走っていた委譲の移送を試みます` +
-          `（貸し出し期限が切れていない委譲は、切れてから自動で移します）: ${redactErrorText(error, process.env)}`,
-      );
+      // stderr・報告・移送は1台ずつその場で行う。合流するのはクローンへの知らせだけ（受信箱が1台1通になるため）。
+      const entry = { label, runnerId, reason: redactErrorText(error, process.env) };
+      process.stderr.write(`alteroidd: ${describeRunnerLost(entry)}\n`);
+      runnerLostNotice.add(entry);
       reportRunnerLost({ label, runnerId, error });
       relocateOnLost(runnerId);
     },
@@ -1146,6 +1147,8 @@ export async function main(): Promise<void> {
     attachmentPruner.stop();
     tokenWatch?.stop();
     tokenTrialWatch?.stop();
+    // 窓に残っている器喪失の知らせは、クローンが止まる前に送る。
+    runnerLostNotice.flush();
     const foldedAtShutdown = tokenRotationJournalFold.flush();
     if (foldedAtShutdown !== undefined) {
       await stores.journal.append(foldedAtShutdown).catch((error: unknown) => {
