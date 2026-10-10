@@ -840,7 +840,7 @@ describe('デーモンが止まるとき、token_rotation の畳み残しを吐�
 });
 
 describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', () => {
-  // `hitUsageLimit()` で `observeUnusable()` も呼ぶ: 省くと模型だけが `told` を持ち越しやすい形になり、#1223 の歯が #1051 の不変条件を壊しているように見えるため。
+  // `hitUsageLimit()` で `observeUnusable()` も呼ぶ: 省くと模型だけが `told` を持ち越しやすい形になり、「同じ身元は最初の1回だけ配る」の歯がこの describe の不変条件を壊しているように見えるため。
   function fakeClone(gate: CloneWakeGate) {
     let blocked = false;
     let pending = false;
