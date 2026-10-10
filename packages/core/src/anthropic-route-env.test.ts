@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   ANTHROPIC_ROUTE_NONE_LINE,
   describeAnthropicRoute,
+  describeToolSearch,
   inspectAnthropicRoute,
+  inspectToolSearch,
 } from './anthropic-route-env.js';
 
 const FAKE_AUTH = 'sk-fake-auth-token-0001';
@@ -186,5 +188,74 @@ describe('秘密の値は出力にも検査結果にも無い', () => {
     ].join('\n');
     for (const secret of [FAKE_AUTH, FAKE_API, FAKE_OAUTH]) expect(all).not.toContain(secret);
     expect(warning(describeAnthropicRoute(noKey))).toContain('いま置かれている');
+  });
+});
+
+describe('#4269 ToolSearch が止まる見込み', () => {
+  const toolSearch = (...layers: { source: string; env: NodeJS.ProcessEnv }[]): string =>
+    describeToolSearch(inspectToolSearch(layers));
+
+  it('何も置かれていなければ「止める条件が置かれていない」と言い、hipaa は見えないと断る', () => {
+    const line = toolSearch({ source: '器', env: {} });
+    expect(line).toContain('止める条件が置かれていない');
+    expect(line).toContain('hipaa');
+    expect(line).not.toContain('止まる見込み');
+  });
+
+  it('first-party の BASE_URL だけなら止める条件にならない', () => {
+    expect(
+      toolSearch({ source: '器', env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } }),
+    ).toContain('止める条件が置かれていない');
+  });
+
+  it('first-party 以外の BASE_URL で ENABLE_TOOL_SEARCH が無ければ、止まる見込みと出所を言う', () => {
+    const line = toolSearch({
+      source: 'プロファイル',
+      env: { ANTHROPIC_BASE_URL: 'https://gateway.example.test/v1' },
+    });
+    expect(line).toContain('止まる見込み');
+    expect(line).toContain('ANTHROPIC_BASE_URL が first-party の host 以外');
+    expect(line).toContain('出所: プロファイル');
+  });
+
+  it('first-party 以外の BASE_URL でも ENABLE_TOOL_SEARCH が置かれていれば、BASE_URL を理由にしない', () => {
+    const line = toolSearch(
+      { source: '器', env: { ANTHROPIC_BASE_URL: 'https://gateway.example.test' } },
+      { source: '袋', env: { ENABLE_TOOL_SEARCH: 'true' } },
+    );
+    expect(line).toContain('止める条件が置かれていない');
+    expect(line).toContain('ENABLE_TOOL_SEARCH が置かれている（出所: 袋）');
+  });
+
+  it('DISABLE_EXPERIMENTAL_BETAS・BEDROCK・VERTEX は、それぞれ名前と出所で理由に並ぶ', () => {
+    const line = toolSearch(
+      { source: '器', env: { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1' } },
+      { source: '袋', env: { CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_USE_VERTEX: '1' } },
+    );
+    expect(line).toContain('止まる見込み');
+    expect(line).toContain('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS が置かれている（出所: 器）');
+    expect(line).toContain('CLAUDE_CODE_USE_BEDROCK が置かれている（出所: 袋）');
+    expect(line).toContain('CLAUDE_CODE_USE_VERTEX が置かれている（出所: 袋）');
+  });
+
+  it('後ろの層が空文字で消した切り替えは、置かれていない扱いになる', () => {
+    const line = toolSearch(
+      { source: '器', env: { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1' } },
+      { source: 'プロファイル', env: { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '' } },
+    );
+    expect(line).toContain('止める条件が置かれていない');
+  });
+
+  it('値は出さない（BASE_URL の host もパスも、切り替えの値も）', () => {
+    const line = toolSearch({
+      source: '器',
+      env: {
+        ANTHROPIC_BASE_URL: 'https://user:secret-pass@gateway.example.test/path?q=1',
+        CLAUDE_CODE_USE_BEDROCK: 'yes-unique-value',
+      },
+    });
+    for (const fragment of ['secret-pass', 'gateway.example.test', '/path', 'yes-unique-value']) {
+      expect(line).not.toContain(fragment);
+    }
   });
 });

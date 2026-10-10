@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BOOT_FOOTPRINT_EVENT_SOURCE,
+  BOOT_TOOL_SEARCH_EVENT_SOURCE,
   countsAsUndistilledActivity,
   deriveDistillGapFromJournal,
   distillSucceededEntry,
@@ -64,6 +65,18 @@ describe('countsAsUndistilledActivity（allowlist の外は false）', () => {
       at: '2026-09-06T00:00:00.000Z',
       source: BOOT_FOOTPRINT_EVENT_SOURCE,
       summary: '起動時の器の実寸とヒープ',
+    };
+
+    expect(countsAsUndistilledActivity(entry)).toBe(false);
+  });
+
+  it('デーモンが起動時に書く ToolSearch の見込みの記録（external_event）は数えない', () => {
+    const entry: JournalEntry = {
+      type: 'external_event',
+      id: 'j-6',
+      at: '2026-09-06T00:00:00.000Z',
+      source: BOOT_TOOL_SEARCH_EVENT_SOURCE,
+      summary: 'ToolSearch: クローンの子の env には止める条件が置かれていない',
     };
 
     expect(countsAsUndistilledActivity(entry)).toBe(false);
