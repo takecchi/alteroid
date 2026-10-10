@@ -24,6 +24,15 @@ on:
     # 07:00 JST。**GitHub の cron は指定時刻ちょうどには発火しない**（遅れる）ので、
     # 時刻そのものに意味を持たせないこと。SDK はほぼ毎日出るため周期は日次で採る。
     - cron: '0 22 * * *'
+  # main の lockfile が動いたら積み直す: 開いている SDK の PR は main と衝突し、衝突した PR には
+  # `pull_request` のワークフローが起きない。日次だけだと、次の定時まで最大1日チェックが1本も付かずに止まる
+  # （実例: #4396 は 2026-10-10 の日中に main の lockfile が動いて衝突し、手で workflow_dispatch するまで止まっていた）。
+  # 開いている PR が無く版も上がっていなければ、`changed=false` で検証も PR も飛ばして終わる。
+  push:
+    branches: [main]
+    paths:
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
   workflow_dispatch:
 
 # 走行が重なると同じブランチを両側から書く。順番に回す（前を殺さない）。
