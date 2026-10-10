@@ -17873,9 +17873,12 @@ describe('引数が欠けたときの断り文（#1141）', () => {
       conversationId: () => undefined,
     });
 
+  // `.shape` を読む: 道具の入力は知らない引数を断る strict な object に包んで渡しているため（#4424）
   const shapeOf = (name: string) =>
-    toolsForShape().find((entry) => entry.name === name)?.inputSchema as
-      Record<string, z.ZodTypeAny> | undefined;
+    (
+      toolsForShape().find((entry) => entry.name === name)?.inputSchema as unknown as
+        z.ZodObject<Record<string, z.ZodTypeAny>> | undefined
+    )?.shape;
 
   it('必須の引数が欠けたら、呼び出しの生の形を疑えと言う（zod の既定文のままにしない）', () => {
     const shape = shapeOf('journal_write');
