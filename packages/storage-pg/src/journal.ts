@@ -188,7 +188,7 @@ export class PgJournalStore implements JournalStore {
   }
 
   async oldestAt(): Promise<string | null> {
-    // 外した行（消した会話の exchange・墓標が名指しした行）の時刻を返さない（#4377）: list / get と同じ絞りを通す
+    // 外した行（消した会話の exchange・墓標が名指しした行）の時刻を返さない: list / get と同じ絞りを通す
     const rows = await this.#db
       .select({ at: journal.at })
       .from(journal)
@@ -206,7 +206,7 @@ export class PgJournalStore implements JournalStore {
 
 // 墓標（`conversation_deleted`）のある会話の `exchange` を外す条件（#4218）。部分式索引 `journal_conversation_deleted_idx` で引く。
 // 外側の表の列は `sql.raw` で修飾して書く: drizzle は単表の select の列を修飾しない場合があり、内側（別名 `t`）の列と取り違えるため。
-// 墓標が名指しした日誌の行（`hiddenEntryIds`。会話 id を持たない本文の写し。#4355）も外す。墓標は会話の数に比べて少ないので、墓標の種別で絞った行だけを見る
+// 墓標が名指しした行（`hiddenEntryIds`）は、墓標の種別で絞った行だけから引く: 墓標は会話の数に比べて少ないため
 function hiddenConversationExchangeExcluded(): SQL {
   return sql`NOT (${sql.raw('"journal"."type"')} = 'exchange' AND EXISTS (SELECT 1 FROM journal t WHERE t.type = 'conversation_deleted' AND t.entry->>'deletedConversationId' = ${sql.raw('"journal"."entry"')}->>'conversationId')) AND NOT EXISTS (SELECT 1 FROM journal h WHERE h.type = 'conversation_deleted' AND h.entry->'hiddenEntryIds' ? ${sql.raw('"journal"."id"')})`;
 }
