@@ -38,8 +38,13 @@ function build() {
   return { stores, started, tool };
 }
 
+// `.shape` を読む: 道具の入力は知らない引数を断る strict な object に包んで渡しているため（#4424）。指紋は従来どおり z.object から取る
+function shapeOf(tool: { inputSchema: unknown }): z.ZodRawShape {
+  return (tool.inputSchema as z.ZodObject<z.ZodRawShape>).shape;
+}
+
 function fingerprint(tool: { description: string; inputSchema: unknown }): string {
-  const schema = z.toJSONSchema(z.object(tool.inputSchema as z.ZodRawShape));
+  const schema = z.toJSONSchema(z.object(shapeOf(tool)));
   return createHash('sha256')
     .update(JSON.stringify({ description: tool.description, schema }))
     .digest('hex');
@@ -50,12 +55,7 @@ const BASELINE = '7f3d5a46f07f621c44d9af1fb9f640a270af2cb2f19a308f6e064e240c7c0b
 describe('manager_start の provider 引数（撤去済み）', () => {
   it('provider 引数を持たず、スキーマと説明文は PEERS が閉じていたときと同一', () => {
     const { tool } = build();
-    expect(Object.keys(tool.inputSchema as object)).toEqual([
-      'request',
-      'cwd',
-      'attachments',
-      'runnerId',
-    ]);
+    expect(Object.keys(shapeOf(tool))).toEqual(['request', 'cwd', 'attachments', 'runnerId']);
     expect(fingerprint(tool as never)).toBe(BASELINE);
   });
 

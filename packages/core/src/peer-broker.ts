@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { resolve as resolvePath } from 'node:path';
 
-import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
+import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
 import type { AgentEvent } from './agent-events.js';
@@ -18,6 +18,7 @@ import type { AgentProviderId } from './agent-ports.js';
 import type { AgentToolAuditRecord } from './agent-hooks.js';
 import { excerptLine } from './excerpt.js';
 import type { PeerWorkdirScanner } from './peer-workdir-scan.js';
+import { strictTool as tool } from './strict-tool-input.js';
 import { foldUsageSnapshot, hasAnyUsage, type UsageBaseline, type UsageTotals } from './usage.js';
 
 // 承認は保留したまま待たず、確認の中身と `approval_id` を添えてマネージャーへ返す（`peer_approve` で答える）。

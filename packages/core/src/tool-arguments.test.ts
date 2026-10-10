@@ -263,3 +263,57 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
     expect(bad.text).toContain('side');
   });
 });
+
+describe('道具に無い引数は黙って捨てずに断る', () => {
+  it('ask_human に options を渡すと断られ、選択肢の無い承認待ちは積まれない', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+    const result = await callTool(rpc, 'ask_human', {
+      question: 'デプロイ先を決めたい',
+      options: [{ id: 'target', label: 'デプロイ先', choices: ['railway', 'fly'] }],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
+    expect(result.text).toContain('この道具に無い引数: options（近い名前: questions）');
+    expect((await stores.jobs.listApprovals()).entries).toEqual([]);
+  });
+
+  it('ask_human の questions は通り、選択肢ごと承認待ちに積まれる', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+    const questions = [
+      {
+        id: 'target',
+        prompt: 'デプロイ先は？',
+        options: [
+          { id: 'railway', label: 'Railway' },
+          { id: 'fly', label: 'Fly.io' },
+        ],
+      },
+    ];
+    const result = await callTool(rpc, 'ask_human', {
+      question: 'デプロイ先を決めたい',
+      questions,
+    });
+
+    expect(result.isError, result.text).toBe(false);
+    const { entries } = await stores.jobs.listApprovals();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.questions).toEqual(questions);
+  });
+
+  it('ask_human に限らず、どの道具でも知らない引数は断る（journal_write）', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+    const result = await callTool(rpc, 'journal_write', {
+      decision: '決めた',
+      grounds: '根拠',
+      reason: '道具に無い引数',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('この道具に無い引数: reason');
+    expect(await stores.journal.list({ limit: 10 })).toEqual([]);
+  });
+});

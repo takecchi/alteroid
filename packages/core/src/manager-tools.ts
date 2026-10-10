@@ -1,9 +1,10 @@
-import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
+import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import { createCloneToolRelayHost, type CloneToolRelayHost } from './clone-tool-relay-host.js';
 import { externalOutputLimits, type ExternalOutput } from './schema.js';
+import { strictTool as tool } from './strict-tool-input.js';
 
 // peer と分ける: peer は Codex の資格が届いた器でしか出ないが、こちらはどの器のマネージャーにも出すため
 export const MANAGER_TOOLS_MCP_SERVER_NAME = 'alteroid-manager';
