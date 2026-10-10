@@ -1086,6 +1086,8 @@ export const rescueWorktreeSchema = z.object({
       reason: rescueNotPushedReasonSchema,
       failureKind: z.enum(['auth', 'network', 'rejected', 'timeout', 'other']).optional(),
       files: z.array(z.string()).optional(),
+      // `secret-like` のとき当たった規則の名前（`SecretPatternName`）。文字列そのものは載せない（#4394）
+      patterns: z.array(z.string()).optional(),
     })
     .optional(),
   untracked: z

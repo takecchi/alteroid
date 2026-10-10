@@ -327,7 +327,7 @@ import {
   isEmptyCompleteUnpushedWorkObservation,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from './unpushed-work-observation-format.js';
-import { RESCUE_NOT_PUSHED_TEXT } from './workspace-swap-hints.js';
+import { RESCUE_NOT_PUSHED_TEXT, rescueNotPushedDetail } from './workspace-swap-hints.js';
 
 const MISSING_ARG_HINT =
   '引数が届いていない（received undefined ＝ 呼び出しの JSON にその鍵が最初から無かった。道具が受け取ってから落としたのではない）。書いたつもりなら、まず呼び出しの生の形を疑うこと —— タグの接頭辞の脱落など、呼び出しの組み立てが壊れていると引数は静かに落ちる。決定的な対照: 引数の並びも長さも1文字も変えず、タグだけ正しく書いて1回送り直す。それで通れば、原因は呼び出しの形であって、この道具でも引数の中身でもない';
@@ -1988,13 +1988,9 @@ export function describeRescue(manager: ManagerSummary): string | null {
       parts.push('退避された ref は無い');
     }
     if (tree.notPushed !== undefined) {
-      const extra =
-        tree.notPushed.reason === 'push-failed' && tree.notPushed.failureKind !== undefined
-          ? `（${tree.notPushed.failureKind}）`
-          : tree.notPushed.reason === 'secret-like' && (tree.notPushed.files?.length ?? 0) > 0
-            ? `（${(tree.notPushed.files ?? []).join(', ')}）`
-            : '';
-      parts.push(`直近の回: ${RESCUE_NOT_PUSHED_TEXT[tree.notPushed.reason]}${extra}`);
+      parts.push(
+        `直近の回: ${RESCUE_NOT_PUSHED_TEXT[tree.notPushed.reason]}${rescueNotPushedDetail(tree.notPushed)}`,
+      );
     }
     lines.push(`    ${tree.relativePath}: ${parts.join('。')}`);
     const unsaved: string[] = [];

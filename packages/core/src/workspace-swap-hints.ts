@@ -206,16 +206,24 @@ function unsavedText(tree: RescueWorktree): string | null {
     : `退避されなかったもの（失われた可能性がある）: ${unsaved.join('、')}。`;
 }
 
+/** 送らなかった理由に添える括弧書き。`secret-like` は当たったファイルと規則の名前（#4394）。 */
+export function rescueNotPushedDetail(notPushed: NonNullable<RescueWorktree['notPushed']>): string {
+  if (notPushed.reason === 'push-failed' && notPushed.failureKind !== undefined) {
+    return `（${notPushed.failureKind}）`;
+  }
+  if (notPushed.reason !== 'secret-like') return '';
+  const parts: string[] = [];
+  if ((notPushed.files?.length ?? 0) > 0) parts.push((notPushed.files ?? []).join(', '));
+  if ((notPushed.patterns?.length ?? 0) > 0) {
+    parts.push(`当たった形: ${(notPushed.patterns ?? []).join(', ')}`);
+  }
+  return parts.length === 0 ? '' : `（${parts.join('。')}）`;
+}
+
 function notPushedText(tree: RescueWorktree): string | null {
   const notPushed = tree.notPushed;
   if (notPushed === undefined || notPushed.reason === 'nothing-tracked') return null;
-  const extra =
-    notPushed.reason === 'push-failed' && notPushed.failureKind !== undefined
-      ? `（${notPushed.failureKind}）`
-      : notPushed.reason === 'secret-like' && (notPushed.files?.length ?? 0) > 0
-        ? `（${(notPushed.files ?? []).join(', ')}）`
-        : '';
-  return `直近の退避: ${RESCUE_NOT_PUSHED_TEXT[notPushed.reason]}${extra}。`;
+  return `直近の退避: ${RESCUE_NOT_PUSHED_TEXT[notPushed.reason]}${rescueNotPushedDetail(notPushed)}。`;
 }
 
 const FULL_LINE_BUDGET = 4000;

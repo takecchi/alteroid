@@ -8176,6 +8176,7 @@ class Pool implements ManagerPool {
               '見つけたので送らなかった。',
             grounds:
               `当たったファイル: ${(tree.notPushed.files ?? []).join(', ') || '(不明)'}。` +
+              `当たった形: ${(tree.notPushed.patterns ?? []).join(', ') || '(不明)'}。` +
               '文字列そのものは記録しない。取り除くか伏せれば次の周期で送られる。',
           });
         }
