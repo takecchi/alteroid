@@ -27,6 +27,11 @@ import {
   type QuotaMark,
   type QuotaStopEntry,
 } from './quota-stop-notice.js';
+import {
+  renderRestoredNotice,
+  type RestoredEntry,
+  type RestoredListItem,
+} from './restored-notice.js';
 import { isQuotaFailure } from './sdk-failure.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
@@ -2339,6 +2344,20 @@ interface QuotaStopWindow {
   entries: Map<string, { fragments: SynthesizedNoticeFragment[]; arrived: number }>;
 }
 
+/**
+ * 「取り戻した」知らせの窓。{@link QuotaStopWindow} と同じ形（1本目はすぐ担当ごとに配り、窓が開いている間の別の担当は貯めて、
+ * 閉じたとき1本以上貯まっていれば窓を開けた担当も含めた一覧を1通にする。固定窓で延長しない）。
+ */
+interface RestoredWindow {
+  timer: ReturnType<typeof setTimeout>;
+  openedAt: number;
+  openerId: string;
+  /** 見出し（`#notifyRestored` の `head`）。cause ごとに決まる。 */
+  head: string;
+  /** 担当ごとの最新の1行ぶん。 */
+  entries: Map<string, RestoredEntry>;
+}
+
 interface SynthesizedNoticeWindow {
   /** **到着順のまま持つ（並べ替えない）。** */
   fragments: SynthesizedNoticeFragment[];
@@ -2615,6 +2634,11 @@ class Pool implements ManagerPool {
    * 別のトークンの枠は別の出来事なので同じ窓へまとめない。開いていない鍵は無い。
    */
   readonly #quotaStopWindows = new Map<string, QuotaStopWindow>();
+  /**
+   * 「取り戻した」知らせ（`#notifyRestored`）の窓。**cause ごとに1本**（器が何台続けて作り直されても同じ出来事）。
+   * 窓の長さは枠の窓（`#quotaStopWindowMs`）と同じ値を共有する。
+   */
+  readonly #restoredWindows = new Map<RestartCause, RestoredWindow>();
   /** **器の乱数を直に読まない**（テストが衝突を再現できるようにする。`#now` と同じ理由）。 */
   readonly #generateManagerId: () => string;
   /** **`start` のたびに `process.env` を読み直さない**: 起動時に1度だけ解決して保持する。 */
@@ -5750,6 +5774,7 @@ class Pool implements ManagerPool {
     this.#flushSynthesizedNotices();
     // 担当ごとの窓を閉じた後に呼ぶ: 閉じた束がプール全体の窓へ入るので、順序が逆だとその分が残る。
     await this.#flushQuotaStopWindows();
+    await this.#flushRestoredWindows();
     // 日誌の畳み込みも吐き出す: こちらは日誌のどこにも書かれていない記録そのものを失い、`#retire()` を通らずに止まると畳んだ2件目以降が丸ごと消える。
     this.#flushRateLimitJournalFolds();
     this.#flushPushFailureFolds();
@@ -8923,6 +8948,54 @@ class Pool implements ManagerPool {
           : `[${job.id}] （再開を知らせた）${head}。前のセッションから再開させた。`
       }`,
     });
+    // 「1本目はすぐ・同じ出来事の残りは1通」（枠の窓 `QuotaStopWindow` と同じ考え方）。鍵は cause: 器が何台続けて作り直されても同じ出来事。
+    // 窓が開いていて別の担当なら、担当ごとには配らず窓へ貯める（日誌の上の行は担当ごとに書いた）。窓が無ければ今までどおり配って窓を開ける。
+    const entry: RestoredEntry = {
+      managerId: job.id,
+      runnerId: job.runnerId,
+      how,
+      cwd: job.cwd,
+      excerpt:
+        job.lastReport === undefined
+          ? undefined
+          : excerptLine(job.lastReport, NOTIFY_REPORT_EXCERPT),
+      workspaceLine:
+        cause !== 'daemon'
+          ? cloneWorkspaceAfterSwapLine(
+              workspaceAfterSwap(job.workspace, job.lastUnpushedWorkObservation, job.lastRescue),
+            )
+          : '',
+    };
+    const open = cause === 'daemon' ? undefined : this.#restoredWindows.get(cause);
+    if (open !== undefined && open.openerId !== job.id) {
+      open.entries.set(job.id, entry);
+      void this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_THINNING_PREFIX}[${job.id}] ${head}の知らせは、この担当だけの知らせとしては受信箱へ行かず、` +
+          '同じ出来事の1通（「N 本の委譲に当たった」）へ回した。',
+      });
+      return;
+    }
+    if (cause === 'daemon') {
+      // デーモンの再起動（`restore()` の引き取り）はまとめない: 束ねると決めたのは器の作り直しの後の知らせだけで、引き取りの知らせは担当ごとに1通ずつ届く前提の作りが残っているため。
+    } else if (open === undefined) {
+      const timer = setTimeout(() => {
+        void this.#flushRestoredWindow(cause);
+      }, this.#quotaStopWindowMs);
+      timer.unref?.();
+      this.#restoredWindows.set(cause, {
+        timer,
+        openedAt: this.#now(),
+        openerId: job.id,
+        head,
+        entries: new Map([[job.id, entry]]),
+      });
+    } else {
+      open.entries.set(job.id, entry);
+    }
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
@@ -8952,6 +9025,63 @@ class Pool implements ManagerPool {
         .join('\n'),
       ...this.#statusAtDelivery(job.id),
     });
+  }
+
+  // 窓が閉じたとき、貯めた担当（窓を開けた担当以外）が居なければ何も配らない: 委譲1本だけの回は今までと完全に同じ。
+  // 状態は枠の1通と同じ読み方（`#flushQuotaStopWindow`）: 像に無いものだけジョブ台帳から読み、読めなければ「不明」と言う。
+  // 窓は読む前に外す。`stop()` はこれを待つ。
+  async #flushRestoredWindow(cause: RestartCause): Promise<void> {
+    const window = this.#restoredWindows.get(cause);
+    if (window === undefined) return;
+    this.#restoredWindows.delete(cause);
+    clearTimeout(window.timer);
+    if ([...window.entries.keys()].every((id) => id === window.openerId)) return;
+    const missing = [...window.entries.keys()].filter((id) => !this.#records.has(id));
+    const ledger =
+      missing.length === 0
+        ? []
+        : ((await this.#listJobsOrNote(
+            '取り戻した委譲の1通に載せる担当の状態を「不明」として配る',
+          )) ?? []);
+    const items: RestoredListItem[] = [...window.entries.values()].map((entry) => ({
+      ...entry,
+      first: entry.managerId === window.openerId,
+      status:
+        this.#records.get(entry.managerId)?.job.status ??
+        ledger.find((job) => job.id === entry.managerId)?.status,
+    }));
+    const openedAt = new Date(window.openedAt).toISOString();
+    try {
+      this.#post({
+        type: 'external',
+        id: randomUUID(),
+        at: new Date(this.#now()).toISOString(),
+        // `runner-registry` を流用する: 枠の1通と同じ理由（専用の source は予約語の一覧・入口の拒否・OpenAPI の説明を一緒に直す別の変更が要る）。
+        source: DAEMON_RUNNER_REGISTRY_SOURCE,
+        identity: `restored:${cause}:${openedAt}`,
+        payload: { text: renderRestoredNotice(window.head, items) },
+      });
+    } catch (error) {
+      noteDroppedRecord(
+        '受信箱',
+        `restored cause=${cause} managers=${String(items.length)}`,
+        error,
+      );
+    }
+    void this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_THINNING_PREFIX}[プール全体] ${window.head}: ${String(items.length)} 本の委譲の知らせを、` +
+        `1通にまとめて配った（内訳: ${items.map((i) => i.managerId).join('、')}。窓の開始 ${openedAt}）。`,
+    });
+  }
+
+  async #flushRestoredWindows(): Promise<void> {
+    for (const cause of [...this.#restoredWindows.keys()]) {
+      await this.#flushRestoredWindow(cause);
+    }
   }
 
   // `#records` に無ければ `{}` を返し、既定値を作らない: キー自体が付かないので「取れなかった」と「そういう状態だった」が同じ顔にならない。
