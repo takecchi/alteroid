@@ -6,6 +6,7 @@ import { createTuiApi, type TuiApi } from './api.js';
 import { App } from './app.js';
 import { ChatController } from './chat-controller.js';
 import { HeaderFeed } from './header-feed.js';
+import { withModifyOtherKeysAsCsiU } from './input.js';
 import { ApprovalsController } from './approvals-controller.js';
 import { JournalController } from './journal-controller.js';
 import { isFullscreenViewport } from './layout.js';
@@ -82,7 +83,7 @@ export async function runApp(
         fullscreen={fullscreen}
       />,
       {
-        stdin: io.stdin,
+        stdin: withModifyOtherKeysAsCsiU(io.stdin),
         stdout: io.stdout,
         stderr: io.stderr,
         // Ctrl+C を終了に使わない: 中断に使うため

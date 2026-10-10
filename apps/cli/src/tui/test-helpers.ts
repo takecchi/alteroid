@@ -5,6 +5,8 @@ import { EventEmitter } from 'node:events';
 import { render } from 'ink';
 import type { ReactElement } from 'react';
 
+import { withModifyOtherKeysAsCsiU } from './input.js';
+
 class FakeStdout extends EventEmitter {
   readonly frames: string[] = [];
   constructor(
@@ -13,8 +15,10 @@ class FakeStdout extends EventEmitter {
   ) {
     super();
   }
-  write = (frame: string): boolean => {
+  // 書き終わりの callback を呼ぶ: Ink は終了時に空の write の callback を待ってから waitUntilExit を解くため
+  write = (frame: string, callback?: () => void): boolean => {
     this.frames.push(frame);
+    callback?.();
     return true;
   };
 }
@@ -45,7 +49,8 @@ export function renderFullscreen(element: ReactElement, rows = 24, columns = 80)
   const stdin = new FakeStdin();
   const app = render(element, {
     stdout: stdout as unknown as NodeJS.WriteStream,
-    stdin: stdin as unknown as NodeJS.ReadStream,
+    // runApp と同じく包む: 端末の符号が Ink へ届く形を本物と揃えるため
+    stdin: withModifyOtherKeysAsCsiU(stdin as unknown as NodeJS.ReadStream),
     exitOnCtrlC: false,
     patchConsole: false,
     // debug を付ける: 非 TTY では debug なしだと途中のフレームが書き出されないため

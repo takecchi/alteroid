@@ -7,8 +7,11 @@ import {
   isSpaceKey,
   normalizeChord,
   resolveEnter,
+  rewriteModifyOtherKeys,
   sanitizeInsertText,
+  withModifyOtherKeysAsCsiU,
 } from './input.js';
+import { FakeStdin } from './test-helpers.js';
 import { bufferOf, emptyBuffer } from './text-buffer.js';
 
 const key = (patch: Partial<Key> = {}): Key => ({
@@ -158,6 +161,29 @@ describe('modifyOtherKeys / CSI-u の復号', () => {
     expect(input).toBe('');
     expect(k).toMatchObject({ return: true, shift: true });
     expect(resolveEnter(bufferOf('a'), k).kind).toBe('newline');
+  });
+});
+
+describe('modifyOtherKeys の符号を CSI u へ書き換えて Ink へ渡す（Ink 8 は前者を捨てる）', () => {
+  it('修飾付きのキーを同じ意味の CSI u へ直し、ほかの文字はそのまま残す', () => {
+    expect(rewriteModifyOtherKeys('\x1b[27;2;13~')).toBe('\x1b[13;2u');
+    expect(rewriteModifyOtherKeys('a\x1b[27;5;100~b\x1b[27;2;13~')).toBe('a\x1b[100;5ub\x1b[13;2u');
+    expect(rewriteModifyOtherKeys('\x1b[1;2A[27;2;13~')).toBe('\x1b[1;2A[27;2;13~');
+  });
+
+  it('包んだ stdin は read() の文字列だけを書き換え、ほかの口は元へ渡す', () => {
+    const stdin = new FakeStdin();
+    const wrapped = withModifyOtherKeysAsCsiU(stdin as unknown as NodeJS.ReadStream);
+    let readable = 0;
+    wrapped.addListener('readable', () => {
+      readable += 1;
+    });
+    stdin.write('\x1b[27;2;13~');
+    expect(readable).toBe(1);
+    expect(wrapped.read()).toBe('\x1b[13;2u');
+    expect(wrapped.read()).toBeNull();
+    expect(wrapped.isTTY).toBe(true);
+    expect(typeof wrapped.setRawMode).toBe('function');
   });
 });
 
