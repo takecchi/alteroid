@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, unlinkSync } from 'node:fs';
-import { mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
@@ -441,6 +441,20 @@ describe('退避 ref（#1266）', () => {
     const [report] = await run({
       spawn: (o) => {
         if (o.args[0] === 'diff-files') void removeStaleIndexFiles(gitDir);
+        return realSpawn(o);
+      },
+    });
+    expect(report?.pushed?.ref).toBeDefined();
+    expect(g(bare, 'show', `${report?.pushed?.ref as string}:a.txt`)).toBe('changed\n');
+  });
+
+  it('N2: 掃除に渡す .git のパスが symlink を挟んでいても（macOS の /var → /private/var）、生きた複製を消さない（#4399）', async () => {
+    await writeFile(path.join(repo, 'a.txt'), 'changed\n');
+    const linkedGitDir = path.join(root, 'git-link');
+    await symlink(path.join(repo, '.git'), linkedGitDir);
+    const [report] = await run({
+      spawn: (o) => {
+        if (o.args[0] === 'diff-files') void removeStaleIndexFiles(linkedGitDir);
         return realSpawn(o);
       },
     });
