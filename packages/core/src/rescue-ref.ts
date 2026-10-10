@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { reasonOf } from './dropped-record.js';
 import { codePointBoundary } from './excerpt.js';
-import { redactSecretsInBody } from './redact.js';
+import { redactSecretsInBody, secretPatternsInBody, type SecretPatternName } from './redact.js';
 import type { RescueWorktree } from './schema.js';
 import { listWorktreeRoots, type ProcessSpawnFn } from './unpushed-work.js';
 
@@ -203,23 +203,37 @@ export function rescueRefName(managerId: string, repoRoot: string, relativePath:
   return `${RESCUE_REF_PREFIX}${id}/${base === '' ? 'tree' : base}-${hash}`;
 }
 
-/** 削除行は見ない: push 済みの内容を消す差分で止めない。文字列そのものは返さない。 */
-export function filesWithSecretLikeAdditions(
+export interface SecretLikeHit {
+  readonly file: string;
+  readonly patterns: readonly SecretPatternName[];
+}
+
+/**
+ * 削除行は見ない: push 済みの内容を消す差分で止めない。文字列そのものは返さない。
+ * NUL を含むファイルはバイナリとして、固有の接頭辞を持つ形と環境変数の鍵の値だけを見る（#4394）。
+ * 判定を git の属性に任せない: `-diff` を付けたテキストのファイルまで形の検査から外れるため。
+ */
+export function secretLikeAdditionsInDiff(
   diffText: string,
   env: NodeJS.ProcessEnv | undefined,
-): string[] {
-  const hits: string[] = [];
+): SecretLikeHit[] {
+  const hits = new Map<string, Set<SecretPatternName>>();
   let currentFile = '(不明)';
   // `@@` 以降の `+` で始まる行は、内容が `++ …` で `+++` に見えるものも含め全部が追加行。
   let inHeader = false;
   let added: string[] = [];
+  let binary = false;
   const flush = (): void => {
-    if (added.length === 0) return;
-    const body = added.join('\n');
-    if (redactSecretsInBody(body, env) !== body && !hits.includes(currentFile)) {
-      hits.push(currentFile);
+    if (added.length > 0) {
+      const patterns = secretPatternsInBody(added.join('\n'), env, { binary });
+      if (patterns.length > 0) {
+        const known = hits.get(currentFile) ?? new Set<SecretPatternName>();
+        for (const name of patterns) known.add(name);
+        hits.set(currentFile, known);
+      }
     }
     added = [];
+    binary = false;
   };
   for (const line of diffText.split('\n')) {
     if (line.startsWith('diff --git ')) {
@@ -233,10 +247,12 @@ export function filesWithSecretLikeAdditions(
       if (line.startsWith('@@')) inHeader = false;
       continue;
     }
+    // 文脈行・削除行の NUL も見る: 書き換えたバイナリの追加行だけには NUL が来ないことがあるため
+    if (line.includes('\0')) binary = true;
     if (line.startsWith('+')) added.push(line.slice(1));
   }
   flush();
-  return hits;
+  return [...hits].map(([file, patterns]) => ({ file, patterns: [...patterns] }));
 }
 
 export const RESCUE_RESEND_AFTER_MS = 30 * 60_000;
@@ -572,19 +588,20 @@ async function rescueOne(
     if (!ok(treeDiff) || (logDiff !== undefined && !ok(logDiff))) {
       return settle(failure(), false);
     }
-    const hitFiles = [
-      ...new Set([
-        ...filesWithSecretLikeAdditions(treeDiff.stdout, env),
-        ...(logDiff === undefined ? [] : filesWithSecretLikeAdditions(logDiff.stdout, env)),
-      ]),
+    const hits = [
+      ...secretLikeAdditionsInDiff(treeDiff.stdout, env),
+      ...(logDiff === undefined ? [] : secretLikeAdditionsInDiff(logDiff.stdout, env)),
     ];
-    if (hitFiles.length > 0) {
+    if (hits.length > 0) {
+      const hitFiles = [...new Set(hits.map((hit) => hit.file))];
       return settle(
         {
           reason: 'secret-like',
           files: hitFiles
             .slice(0, SECRET_FILES_LIMIT)
             .map((f) => clipPath(redactSecretsInBody(f, env))),
+          // 規則の名前だけを残す: 誤判定かどうかを、文字列を見ずに後から辿れるようにするため（#4394）
+          patterns: [...new Set(hits.flatMap((hit) => hit.patterns))],
         },
         true,
       );

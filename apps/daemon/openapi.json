@@ -21594,6 +21594,12 @@
                                           "items": {
                                             "type": "string"
                                           }
+                                        },
+                                        "patterns": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
                                         }
                                       },
                                       "required": ["reason"]
@@ -22397,6 +22403,12 @@
                                         "enum": ["auth", "network", "rejected", "timeout", "other"]
                                       },
                                       "files": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "patterns": {
                                         "type": "array",
                                         "items": {
                                           "type": "string"

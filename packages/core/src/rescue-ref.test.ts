@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   classifyPushFailure,
   DEFAULT_RESCUE_INTERVAL_MS,
-  filesWithSecretLikeAdditions,
   RESCUE_INTERVAL_MS_ENV_KEY,
   RESCUE_REF_PREFIX,
   RescueMemory,
@@ -17,7 +16,9 @@ import {
   rescueRefName,
   resolveRescueIntervalMs,
   runRescue,
+  secretLikeAdditionsInDiff,
 } from './rescue-ref.js';
+import { secretPatternsInBody } from './redact.js';
 import type { ProcessSpawnFn } from './unpushed-work.js';
 
 /** 孤立サロゲート（高だけ・低だけ）。`isWellFormed()` は tsconfig の lib に無いので直接探す。 */
@@ -157,10 +158,106 @@ describe('退避 ref（#1266）', () => {
     const fake = `gh${'p'}_${'A1b2'.repeat(9)}`;
     await writeFile(path.join(repo, 'a.txt'), `one\ntoken ${fake}\n`);
     const [report] = await run();
-    expect(report?.notPushed).toEqual({ reason: 'secret-like', files: ['a.txt'] });
+    expect(report?.notPushed).toEqual({
+      reason: 'secret-like',
+      files: ['a.txt'],
+      patterns: ['github-token'],
+    });
     expect(report?.pushed).toBeUndefined();
     expect(JSON.stringify(report)).not.toContain(fake);
     expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
+  });
+
+  describe('#4394: バイナリ（PNG）を形だけの規則で止めない', () => {
+    // 形だけの規則（schemeless-userinfo・secret-assignment）に当たるバイト列を、NUL と一緒に PNG へ埋める。
+    const shapeOnly = 'zz:pw0rd@host1 MY_KEY=abc';
+    const png = (body: string): Buffer =>
+      Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d]),
+        Buffer.from(`IHDR\0\n${body}\n\0IDAT\0\n`, 'latin1'),
+      ]);
+
+    it('前提: 埋めたバイト列はテキストとしてなら形だけの規則に当たる', () => {
+      expect(secretPatternsInBody(shapeOnly, undefined)).toEqual([
+        'schemeless-userinfo',
+        'secret-assignment',
+      ]);
+      expect(secretPatternsInBody(shapeOnly, undefined, { binary: true })).toEqual([]);
+    });
+
+    it('陽性: 未 push のコミットの PNG と、書き換えた追跡済みの PNG を送る', async () => {
+      await mkdir(path.join(repo, 'art'));
+      await writeFile(path.join(repo, 'art', 'old.png'), png('old'));
+      g(repo, 'add', 'art/old.png');
+      g(repo, 'commit', '-qm', 'old png');
+      g(repo, 'push', '-q', 'origin', 'main');
+      g(repo, 'fetch', '-q', 'origin');
+      await writeFile(path.join(repo, 'art', 'bob.png'), png(shapeOnly));
+      g(repo, 'add', 'art/bob.png');
+      g(repo, 'commit', '-qm', 'bob png');
+      await writeFile(path.join(repo, 'art', 'old.png'), png(`old\n${shapeOnly}`));
+
+      const [report] = await run();
+
+      expect(report?.notPushed).toBeUndefined();
+      const ref = report?.pushed?.ref as string;
+      expect(ref.startsWith(RESCUE_REF_PREFIX)).toBe(true);
+      expect(
+        execFileSync('git', ['show', `${ref}:art/bob.png`], { cwd: bare, env: GIT_ENV }),
+      ).toEqual(png(shapeOnly));
+      expect(
+        execFileSync('git', ['show', `${ref}:art/old.png`], { cwd: bare, env: GIT_ENV }),
+      ).toEqual(png(`old\n${shapeOnly}`));
+    });
+
+    it('陰性対照: 同じ形がテキストのファイルに在れば、拡張子が .png でも止めて規則の名前を残す', async () => {
+      await writeFile(path.join(repo, 'note.png'), `${shapeOnly}\n`);
+      g(repo, 'add', 'note.png');
+      g(repo, 'commit', '-qm', 'text named png');
+
+      const [report] = await run();
+
+      expect(report?.notPushed).toEqual({
+        reason: 'secret-like',
+        files: ['note.png'],
+        patterns: ['schemeless-userinfo', 'secret-assignment'],
+      });
+      expect(JSON.stringify(report)).not.toContain('pw0rd');
+      expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
+    });
+
+    it('陰性対照: 本物の鍵の形（接頭辞つきのトークン）を含むテキストのファイルは止める', async () => {
+      const fake = `gh${'p'}_${'R4t6'.repeat(9)}`;
+      await writeFile(path.join(repo, 'config.txt'), `url=https://user:${fake}@github.com/x\n`);
+      g(repo, 'add', 'config.txt');
+
+      const [report] = await run();
+
+      expect(report?.notPushed?.reason).toBe('secret-like');
+      expect(report?.notPushed?.files).toEqual(['config.txt']);
+      expect(report?.notPushed?.patterns).toContain('url-userinfo-password');
+      expect(JSON.stringify(report)).not.toContain(fake);
+      expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
+    });
+
+    it('陰性対照: PNG の中でも、接頭辞つきのトークンと環境変数の鍵の値は止める', async () => {
+      const fake = `gh${'p'}_${'P2s9'.repeat(9)}`;
+      const value = 'plain-looking-value-0123456789';
+      await writeFile(path.join(repo, 'token.png'), png(fake));
+      await writeFile(path.join(repo, 'env.png'), png(value));
+      g(repo, 'add', 'token.png', 'env.png');
+      g(repo, 'commit', '-qm', 'pngs with secrets');
+
+      const [report] = await run({ env: { ...GIT_ENV, GH_TOKEN: value } });
+
+      expect(report?.notPushed?.reason).toBe('secret-like');
+      expect([...(report?.notPushed?.files ?? [])].sort()).toEqual(['env.png', 'token.png']);
+      expect([...(report?.notPushed?.patterns ?? [])].sort()).toEqual([
+        'env-secret-value',
+        'github-token',
+      ]);
+      expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
+    });
   });
 
   it('未 push のコミットの中に在る鍵らしい文字列も止める', async () => {
@@ -275,7 +372,11 @@ describe('退避 ref（#1266）', () => {
     const fake = `gh${'p'}_${'K5m2'.repeat(9)}`;
     await writeFile(path.join(repo, 'a.txt'), `one\n++ ${fake}\n`);
     const [report] = await run();
-    expect(report?.notPushed).toEqual({ reason: 'secret-like', files: ['a.txt'] });
+    expect(report?.notPushed).toEqual({
+      reason: 'secret-like',
+      files: ['a.txt'],
+      patterns: ['github-token'],
+    });
   });
 
   it('B1: バイナリ扱いの追跡済みファイル（NUL・-diff 属性）の中も判定する', async () => {
@@ -440,7 +541,9 @@ describe('退避 ref（#1266）', () => {
       '@@ -0,0 +1 @@',
       `+${fake}`,
     ].join('\n');
-    expect(filesWithSecretLikeAdditions(diff, undefined)).toEqual(['y.txt']);
+    expect(secretLikeAdditionsInDiff(diff, undefined)).toEqual([
+      { file: 'y.txt', patterns: ['github-token'] },
+    ]);
   });
 
   it('push の失敗を分類する', () => {
