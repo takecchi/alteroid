@@ -2087,15 +2087,24 @@ const DENIED_TOOL_LIMIT = 64;
 const DENIED_ESCALATE_AT = 1;
 
 /**
- * **この合図には答える先が無い。** 分類器・deny 規則の拒否は `canUseTool` を経由しないので `requestId` が生まれず
- * `record.waiting` にも載らないが、`manager_send` は `requestId` 無しの `decision` を、待ちがちょうど1件なら
- * 黙ってその1件へ当てる（`#choosePending`）。答え方を書かないと、同じマネージャーが別に待っている無関係の確認を許可してしまう。
- * 分類器の判定には触らず、既に在る口（追加指示）を指すだけにする。
+ * **この合図そのものには答える先が無い。** 答えられるのは、runner が分類器の拒否から別に上げる「この1回だけ許可しますか」の確認
+ * （`requestId` は `tool_use_id` の `toolu_…`）だけで、それが届かない拒否（道具名や入力が取れない回・deny 規則）もある。
+ * `manager_send` は `requestId` 無しの `decision` を、待ちがちょうど1件なら黙ってその1件へ当てる（`#choosePending`）。
+ * 答え方を書かないと、同じマネージャーが別に待っている無関係の確認を許可してしまう。
+ * 分類器の判定には触らず、既に在る口（確認への回答・追加指示）を指すだけにする。
  * Markdown の記号を散文に混ぜない（識別子だけをバッククォートで包む）。
  */
+/** runner の `#onPermissionDenied` が上げる確認の書き出し。ここで見分けて、通常の許可確認にだけ答えたあとを足す。 */
+const CLASSIFIER_DENIAL_ASK_HEAD = '分類器が ';
+
+const PERMISSION_ASK_AFTER_ANSWER =
+  '\n答えたあと: allow すれば、この呼び出しがそのまま通る（撃ち直しは要らない）。deny なら担い手へ拒否として返る。';
+
 const DENIAL_REPLY_ROUTE =
-  '\n答え方: この拒否には `requestId` が無く、許可として答える口は無い。' +
-  '`manager_send` に `decision` を付けて送らないこと' +
+  '\n答え方: この拒否について「この1回だけ許可しますか」の確認（`requestId` は `toolu_…` の形）が別に届いていれば、' +
+  'その `requestId` と `decision` を付けて `manager_send` で答える（allow しても自動では撃ち直されない）。' +
+  'その確認が届いていなければ、この拒否には `requestId` が無く、許可として答える口は無い。' +
+  'そのときは `manager_send` に `decision` を付けて送らないこと' +
   '（`requestId` 無しの `decision` は、このマネージャーが別に待っている確認へ回答として当たりうる）。' +
   '別の形でやり直させるなら、`decision` 無しの追加指示として送る。' +
   '作業者の拒否なら、その作業者へ伝えるようマネージャーに頼む（`manager_send` の届け先はマネージャーである）。';
@@ -7404,7 +7413,13 @@ class Pool implements ManagerPool {
         // `runner.ts` 側で包まない: `<Markdown>` で描くのは1面だけで、残り5面は素テキストなので記号が増える。`runner` が文面を Markdown に変えたら黙って外れるので `runner-permission-summary-markup.test.ts` が固定している。
         // `question` でも立てない（モデルが書いた文章）。ただし `describeQuestions()` が `brief(input)` へ落ちた回は `kind` が同じ `'question'` のままで、この層には区別する材料が無く化けが残る。塞ぐなら `ask` イベントへ欄を足す（`runner-protocol.ts` の版ずれの窓が開く別作業）。
         const markup: TextMarkup | undefined = event.kind === 'permission' ? 'none' : undefined;
-        this.#emit(event.managerId, event.kind, event.summary, event.requestId, markup);
+        // 配る本文にだけ答えたあとを足す（待ちと日誌の `summary` は runner の文のまま）: 分類器の拒否の確認（`toolu_…`）とは答えたあとが違うのに、本文から見分けられないため。
+        // 分類器の拒否の確認は runner が自分の本文で言っているので足さない。
+        const delivered =
+          event.kind === 'permission' && !event.summary.startsWith(CLASSIFIER_DENIAL_ASK_HEAD)
+            ? `${event.summary}${PERMISSION_ASK_AFTER_ANSWER}`
+            : event.summary;
+        this.#emit(event.managerId, event.kind, delivered, event.requestId, markup);
         return;
       }
 

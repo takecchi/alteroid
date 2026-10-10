@@ -3894,8 +3894,8 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             'マネージャーからの確認を人間に回す場合、受信箱に届いた requestId。' +
               '人間の回答をこの確認へ返すために必要なので、managerId と必ず対で渡すこと。' +
-              '⚠️ 生ログの id とは別物である——生ログに出る toolu_…（tool_use_id）も ' +
-              'req_…（API の request id）も、ここでは通らない。' +
+              '⚠️ 通るのは受信箱に確認として届いた requestId だけである。分類器の拒否の確認では toolu_… の形のことがあるが、' +
+              '生ログから拾った toolu_…（tool_use_id）や req_…（API の request id）は、確認として届いていなければ通らない。' +
               '受信箱に届いていない確認に、生ログから答える手段は無い（#572）',
           ),
       },
@@ -6921,7 +6921,14 @@ export function createCloneTools(context: ToolContext) {
         'どちらも無い本文は、相手が返事待ちでも回答にはならず追加指示として届く。',
         '許可確認への回答では decision を必ず付けること。',
         // 答える先の無い合図に decision を付けさせない: requestId 無しの decision は待ちが1件ならその1件へ当たり、無関係の確認を許可してしまうため
-        '「確認へ上がらずに止められた」合図（分類器・deny 規則の拒否）には requestId が無く、' +
+        '許可確認は2種類で、答えたあとが違う。' +
+          '(1) 「分類器が … を拒否した。この1回だけ許可しますか」（requestId は toolu_… の形）: ' +
+          'allow は同じ入力の撃ち直しを10分以内に1回だけ通す許可で、自動では撃ち直されない。' +
+          '撃ち直させたいなら、allow の後に decision を付けない追加指示で伝えること。' +
+          '(2) それ以外の許可確認（requestId は UUID の形。分類器の拒否が続いて通常の確認へ落ちた回を含む）: ' +
+          'allow すれば、その呼び出しがそのまま通る（撃ち直しは要らない）。',
+        // 答える先の無い合図に decision を付けさせない: requestId 無しの decision は待ちが1件ならその1件へ当たり、無関係の確認を許可してしまうため
+        '確認として届かない拒否の合図（拒否の報告だけが届き、上の (1) が来ていない回）には requestId が無く、' +
           '許可として答える口は無い。decision を付けずに、別の形を追加指示として送ること' +
           '（requestId 無しの decision は、そのマネージャーが別に待っている確認へ回答として当たりうる）。',
         'manager_list が [running] と出していても、runner の側でセッションが畳まれていることがある' +
@@ -6956,8 +6963,8 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             'どの確認への回答かを示す id（受信箱に届いた requestId）。' +
               '1本のマネージャーが複数を同時に待つことがあるので、回答では必ず添えること。' +
-              '⚠️ 生ログの id とは別物である——生ログに出る toolu_…（tool_use_id）も ' +
-              'req_…（API の request id）も、ここでは通らない。' +
+              '⚠️ 通るのは受信箱に確認として届いた requestId だけである。分類器の拒否の確認では toolu_… の形のことがあるが、' +
+              '生ログから拾った toolu_…（tool_use_id）や req_…（API の request id）は、確認として届いていなければ通らない。' +
               '受信箱に届いていない確認に、生ログから答える手段は無い（#572）',
           ),
       },
