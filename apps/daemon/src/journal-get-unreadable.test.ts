@@ -52,7 +52,7 @@ describe('POST /conversations/:id/read — through が読めない行（issue #3
 
 describe('POST /chat — supersedes が読めない行（issue #3288）', () => {
   it('在るが読めない supersedes は 409。無い supersedes は 400。どちらも何も積まない', async () => {
-    // #4149 から在る会話へしか送れない。種は `before` を取る前に置く（「何も積まない」は種より後の差で測る）。
+    // 在る会話へしか送れない。種は `before` を取る前に置く（「何も積まない」は種より後の差で測る）。
     await stores.journal.append({
       type: 'exchange',
       with: 'human',

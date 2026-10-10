@@ -32,7 +32,7 @@ export function createJournalBus(inner: JournalStore): JournalBus {
   let notified: Promise<void> = Promise.resolve();
 
   /**
-   * 削除した会話の発言（Issue #4218）は、追記されても流さない。どの会話を消したかはストアだけが知っている
+   * 削除した会話の発言は、追記されても流さない。どの会話を消したかはストアだけが知っている
    * （墓標の行）ので、ここに表を写さず、会話 id を持つ行だけストアへ引き直し、外れていれば流さない。
    */
   async function visible(appended: JournalEntry): Promise<boolean> {

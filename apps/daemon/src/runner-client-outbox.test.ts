@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { createHttpRunner } from './runner-client.js';
 
 /**
- * 出し箱の退避先を取りに行く口（Issue #4126 P2b）。`GET` / `DELETE /managers/:id/outbox/:fileId`。
+ * 出し箱の退避先を取りに行く口。`GET` / `DELETE /managers/:id/outbox/:fileId`。
  */
 
 const FILE_ID = 'a'.repeat(32);
