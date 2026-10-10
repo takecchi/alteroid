@@ -431,3 +431,102 @@ describe('退避 ref の後始末の走査（#1266）', () => {
     expect(text).toContain('消せなかった（network');
   });
 });
+
+describe('fork が断られた回（pids 枯渇）の退避の記録が、前の回の枝名を消さない（Issue #1266）', () => {
+  const pushed = {
+    ref: REF,
+    commit: COMMIT,
+    at: '2026-10-10T00:05:00.000Z',
+    remote: REMOTE,
+  };
+  const before = {
+    at: '2026-10-10T00:05:00.000Z',
+    worktrees: [
+      {
+        relativePath: '/tmp/mgr-pids/alteroid',
+        branch: 'fix/1266-before-fork-refused',
+        at: '2026-10-10T00:05:00.000Z',
+        pushed,
+      },
+    ],
+  };
+  const forkRefused = (at: string): RescueWorktree => ({
+    relativePath: '/tmp/mgr-pids/alteroid',
+    branch: null,
+    at,
+    notPushed: { reason: 'error' },
+  });
+
+  it('枝名は前の回から引き継ぎ、引き継いだ時刻を名乗る。退避 ref と、この回の「送れなかった」はそのまま', () => {
+    const merged = mergeRescue(
+      before,
+      [forkRefused('2026-10-10T00:10:00.000Z')],
+      '2026-10-10T00:10:00.000Z',
+    );
+
+    expect(merged.worktrees).toEqual([
+      {
+        relativePath: '/tmp/mgr-pids/alteroid',
+        branch: 'fix/1266-before-fork-refused',
+        branchCarriedFromAt: '2026-10-10T00:05:00.000Z',
+        at: '2026-10-10T00:10:00.000Z',
+        notPushed: { reason: 'error' },
+        pushed,
+      },
+    ]);
+  });
+
+  it('続けて取れなかった回でも、引き継いだ時刻は最初に枝名を見た回のまま動かない', () => {
+    const once = mergeRescue(
+      before,
+      [forkRefused('2026-10-10T00:10:00.000Z')],
+      '2026-10-10T00:10:00.000Z',
+    );
+    const twice = mergeRescue(
+      once,
+      [forkRefused('2026-10-10T00:15:00.000Z')],
+      '2026-10-10T00:15:00.000Z',
+    );
+
+    expect(twice.worktrees[0]).toMatchObject({
+      branch: 'fix/1266-before-fork-refused',
+      branchCarriedFromAt: '2026-10-10T00:05:00.000Z',
+      at: '2026-10-10T00:15:00.000Z',
+    });
+  });
+
+  it('（対照）新しい回で枝名が取れたら、それを採って引き継ぎの印を残さない', () => {
+    const once = mergeRescue(
+      before,
+      [forkRefused('2026-10-10T00:10:00.000Z')],
+      '2026-10-10T00:10:00.000Z',
+    );
+    const recovered = mergeRescue(
+      once,
+      [
+        {
+          relativePath: '/tmp/mgr-pids/alteroid',
+          branch: 'fix/1266-after',
+          at: '2026-10-10T00:15:00.000Z',
+          pushed,
+        },
+      ],
+      '2026-10-10T00:15:00.000Z',
+    );
+
+    expect(recovered.worktrees[0]?.branch).toBe('fix/1266-after');
+    expect(recovered.worktrees[0]).not.toHaveProperty('branchCarriedFromAt');
+  });
+
+  it('（対照）別の作業ツリーの枝名は引き継がない', () => {
+    const merged = mergeRescue(
+      before,
+      [{ ...forkRefused('2026-10-10T00:10:00.000Z'), relativePath: '/tmp/mgr-pids-2/alteroid' }],
+      '2026-10-10T00:10:00.000Z',
+    );
+
+    const other = merged.worktrees.find((tree) => tree.relativePath === '/tmp/mgr-pids-2/alteroid');
+    expect(other?.branch).toBeNull();
+    expect(other).not.toHaveProperty('branchCarriedFromAt');
+  });
+});

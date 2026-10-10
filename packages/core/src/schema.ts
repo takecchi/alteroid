@@ -1069,6 +1069,8 @@ export type RescueRemoval = z.infer<typeof rescueRemovalSchema>;
 export const rescueWorktreeSchema = z.object({
   relativePath: z.string(),
   branch: z.string().nullable(),
+  // 在るときは `branch` がこの時刻の回から引き継いだもの: この回の `at` の枝名として読ませないため（#1266。`observedWorktreeBranchSchema` と同じ形）
+  branchCarriedFromAt: isoDateTime.optional(),
   at: isoDateTime,
   pushed: z
     .object({

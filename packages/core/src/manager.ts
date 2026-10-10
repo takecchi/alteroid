@@ -557,8 +557,14 @@ export function mergeRescue(
       before.pushed.removal !== undefined
         ? { removal: before.pushed.removal }
         : {};
+    // 枝名を null で上書きしない: pids が尽きて git を起こせない回は枝名だけが取れず、前の回の枝名を消すため（`carryKnownBranches` と同じ考え方）
+    const carriedBranch =
+      tree.branch === null && before !== undefined && before.branch !== null
+        ? { branch: before.branch, branchCarriedFromAt: before.branchCarriedFromAt ?? before.at }
+        : {};
     byPath.set(tree.relativePath, {
       ...tree,
+      ...carriedBranch,
       ...(tree.pushed === undefined && before?.pushed !== undefined
         ? { pushed: before.pushed }
         : tree.pushed === undefined
