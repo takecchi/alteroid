@@ -88,6 +88,21 @@ export function isAttachmentBlobKey(key: string, prefix = ''): boolean {
   return key.startsWith(head) && ATTACHMENT_ID_PATTERN.test(key.slice(head.length));
 }
 
+/** S3 の仕様: 1回の multipart upload の part の数の上限。 */
+export const S3_MAX_UPLOAD_PARTS = 10_000;
+/** S3 の仕様: 最後を除く part の最小。`@aws-sdk/lib-storage` の既定の part の大きさもこれ。 */
+export const S3_MIN_PART_BYTES = 5 * 1024 * 1024;
+/** S3 の仕様: 1オブジェクトの最大（5 TiB）。 */
+export const S3_MAX_OBJECT_BYTES = 5 * 1024 ** 4;
+
+/**
+ * 置き場が受けうる最大の大きさから part の大きさを決める: 既定の 5 MiB のままだと 10,000 part で約 48.8 GiB が頭打ちになり、
+ * それより大きい上限を置いた器では、その大きさのファイルを最後まで送ってから断られるため（#4128）。
+ */
+export function attachmentBlobPartBytesFor(maxObjectBytes: number): number {
+  return Math.max(S3_MIN_PART_BYTES, Math.ceil(maxObjectBytes / S3_MAX_UPLOAD_PARTS));
+}
+
 /** key と値は載せない。 */
 export interface AttachmentBlobSweepResult {
   readonly listed: number;

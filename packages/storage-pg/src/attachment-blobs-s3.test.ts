@@ -72,6 +72,29 @@ describe('S3AttachmentBlobStore', () => {
     expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
   });
 
+  it('put: part の大きさは置き場が受けうる最大から決める（10,000 part で届く大きさ。省けば 5 MiB。#4128）', async () => {
+    s3.on(CreateMultipartUploadCommand).resolves({ UploadId: 'u1' });
+    s3.on(UploadPartCommand).resolves({ ETag: '"e"' });
+    s3.on(CompleteMultipartUploadCommand).resolves({});
+    const partSizesOf = async (store: S3AttachmentBlobStore): Promise<number[]> => {
+      s3.resetHistory();
+      await store.put('k', parts([25 * MIB]));
+      return s3
+        .commandCalls(UploadPartCommand)
+        .map((call) => (call.args[0].input.Body as Uint8Array).byteLength);
+    };
+
+    const maxObjectBytes = 100 * 1024 * MIB;
+    const wide = await partSizesOf(new S3AttachmentBlobStore(CONFIG, { maxObjectBytes }));
+    const partBytes = Math.ceil(maxObjectBytes / 10_000);
+    expect(partBytes).toBeGreaterThan(5 * MIB);
+    expect(wide.slice(0, -1).every((size) => size === partBytes)).toBe(true);
+    expect(wide.reduce((a, b) => a + b, 0)).toBe(25 * MIB);
+
+    const narrow = await partSizesOf(new S3AttachmentBlobStore(CONFIG));
+    expect(narrow.slice(0, -1).every((size) => size === 5 * MIB)).toBe(true);
+  });
+
   it('put: 本文が途中で投げたら、投げ直し、multipart は Abort して Complete しない', async () => {
     s3.on(CreateMultipartUploadCommand).resolves({ UploadId: 'u1' });
     s3.on(UploadPartCommand).resolves({ ETag: '"e"' });

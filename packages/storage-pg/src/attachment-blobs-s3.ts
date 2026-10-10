@@ -9,7 +9,11 @@ import {
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
-import type { AttachmentBlobConfig, AttachmentBlobStore } from '@alteroid/core';
+import {
+  attachmentBlobPartBytesFor,
+  type AttachmentBlobConfig,
+  type AttachmentBlobStore,
+} from '@alteroid/core';
 
 const DELETE_BATCH = 1000;
 
@@ -20,15 +24,22 @@ const DELETE_BATCH = 1000;
 export class S3AttachmentBlobStore implements AttachmentBlobStore {
   readonly #client: S3Client;
   readonly #bucket: string;
+  readonly #partSize: number;
 
-  constructor(config: AttachmentBlobConfig, client?: S3Client) {
+  /** `maxObjectBytes` は置き場が受けうる最大の大きさ。省けば part は S3 の最小（5 MiB）。 */
+  constructor(
+    config: AttachmentBlobConfig,
+    options: { readonly maxObjectBytes?: number; readonly client?: S3Client } = {},
+  ) {
     this.#bucket = config.bucket;
-    this.#client = client ?? new S3Client(clientConfigOf(config));
+    this.#client = options.client ?? new S3Client(clientConfigOf(config));
+    this.#partSize = attachmentBlobPartBytesFor(options.maxObjectBytes ?? 0);
   }
 
   async put(key: string, body: AsyncIterable<Uint8Array>): Promise<void> {
     const upload = new Upload({
       client: this.#client,
+      partSize: this.#partSize,
       params: {
         Bucket: this.#bucket,
         Key: key,
