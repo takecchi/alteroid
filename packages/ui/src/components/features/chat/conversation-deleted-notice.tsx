@@ -1,4 +1,4 @@
-// 会話を削除した結果の案内（Issue #4218）。`ChatHeader` の `notice`（`<p role="status">`）へ入れるので、`p` の中に置ける要素（span）だけで組む。
+// `ChatHeader` の `notice`（`<p role="status">`）へ入れるので、`p` の中に置ける要素（span）だけで組む。
 // 消えてしまうトーストにしない: 「消せなかったもの」（`remainsIn`）と「後始末の失敗」（`incomplete`）は、読んで判断する材料のため
 export interface ConversationDeletedSummary {
   hiddenCount: number;
