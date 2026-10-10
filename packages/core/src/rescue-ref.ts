@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { readdir, stat, unlink } from 'node:fs/promises';
+import { readdir, realpath, stat, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -53,11 +53,13 @@ function pidIsAlive(pid: number): boolean {
 
 export async function removeStaleIndexFiles(gitDir: string): Promise<void> {
   try {
+    // 実パスでも引く: `liveIndexFiles` は `git rev-parse --absolute-git-dir`（symlink を解いた実パス）で作るので、symlink を挟んだパス（macOS の /var → /private/var）で呼ぶと生きた複製を残骸と読んで消すため（#4399）
+    const realGitDir = await realpath(gitDir).catch(() => gitDir);
     for (const name of await readdir(gitDir)) {
       const match = /^alteroid-rescue\.index\.(?:(\d+)\.)?[0-9a-f]+$/.exec(name);
       if (match === null) continue;
       const file = path.join(gitDir, name);
-      if (liveIndexFiles.has(file)) continue;
+      if (liveIndexFiles.has(file) || liveIndexFiles.has(path.join(realGitDir, name))) continue;
       const pid = match[1] === undefined ? undefined : Number(match[1]);
       if (pid !== undefined) {
         if (pid !== process.pid && pidIsAlive(pid)) continue;
