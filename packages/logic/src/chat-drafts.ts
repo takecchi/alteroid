@@ -54,7 +54,7 @@ export interface ChatDraftMark {
   attachmentCount?: number;
   attachmentNames?: string[];
   /**
-   * 編集の続き（`supersedes`）で、すでにサーバにある添付（元の発言から引き継いだ分・上げ終えた分）の控え（#4069）。
+   * 編集の続き（`supersedes`）で、すでにサーバにある添付（元の発言から引き継いだ分・上げ終えた分）の控え。
    * `File` が無くても id で戻せる（`StoredEditDraft` と同じ形）。件数と名前の欄は戻せなかった側。
    */
   attachments?: MessageAttachment[];
@@ -122,7 +122,7 @@ export function saveChatDraftMark(
 }
 
 /**
- * 入力欄に添えかけたファイルの件数と名前（#4019）。ファイルの実体は `sessionStorage` に置けないので、
+ * 入力欄に添えかけたファイルの件数と名前。ファイルの実体は `sessionStorage` に置けないので、
  * 再読み込みで失ったときに「何件失ったか」を言うためだけに控える。**送信の印（`ChatDraftMark`）とは別の鍵にする**:
  * 印は本文の書きかけが在るときだけ戻す決まりで、添えかけは本文が空でも在る。
  */

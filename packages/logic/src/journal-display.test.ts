@@ -25,7 +25,7 @@ const OLD_TONE_IN_ORDER = [
   ['subagent_stall', 'warn'],
   ['inbox_flow', 'neutral'],
   ['github_observation', 'neutral'],
-  // #4218 で足した種別（墓標）。移す前の行ではなく、足したあとの並びの末尾
+  // 墓標は移す前の行に無い: 移した後に足した種別なので、並びの末尾に置く
   ['conversation_deleted', 'neutral'],
 ] as const;
 
