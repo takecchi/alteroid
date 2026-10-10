@@ -98,7 +98,7 @@ const writes: [string, () => Promise<void>][] = [
     'inbox remove',
     () => inboxRemoveCommand({ types: 'manager_message', reason: 'test', execute: true }),
   ],
-  // token・integration・profile・codex（#4009）。標準入力を読む口・確認を出す口も、読む前・出す前に断る
+  // token・integration・profile・codex。標準入力を読む口・確認を出す口も、読む前・出す前に断る
   ['token add', () => tokenAddCommand({ label: 'x', file: '-' })],
   ['token remove', () => tokenRemoveCommand('t1')],
   ['token disable', () => tokenDisableCommand('t1')],
@@ -117,7 +117,7 @@ const writes: [string, () => Promise<void>][] = [
   ['profile show', () => profileShowCommand('foo')],
   ['codex login', () => codexLoginCommand()],
   ['codex logout', () => codexLogoutCommand()],
-  // credential・mcp（#4037）。確認・標準入力・エディタより前に断る
+  // credential・mcp。確認・標準入力・エディタより前に断る
   ['credential set', () => credentialSetCommand('GH_TOKEN', { file: '-' })],
   ['credential remove', () => credentialRemoveCommand('GH_TOKEN')],
   ['mcp set', () => mcpSetCommand('-')],

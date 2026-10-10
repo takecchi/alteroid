@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { AttachmentDraft } from './attachments.js';
 
-// 同じ理由の断りは、サーバ・Web の送る前の検査・CLI と TUI の送る前の検査で同じ文になる（#3933）。
+// 同じ理由の断りは、サーバ・Web の送る前の検査・CLI と TUI の送る前の検査で同じ文になる。
 const MIB = 1024 * 1024;
 const LIMITS = {
   maxImageBytes: 5 * MIB,

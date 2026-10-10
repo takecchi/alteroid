@@ -12,7 +12,7 @@ const NEVER_MOVES_MANAGERS = new Set([
   'token_rotation',
   'subagent_stall',
   'worker_wait',
-  // 会話の削除（#4218）。会話の一覧は動くが、委譲の状態と承認の件数は動かない
+  // 会話の削除。会話の一覧は動くが、委譲の状態と承認の件数は動かない
   'conversation_deleted',
 ]);
 

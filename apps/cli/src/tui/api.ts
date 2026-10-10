@@ -212,7 +212,7 @@ export interface TuiApi {
   // 404 以外の失敗を `null` にしない: 「受け取っていない」と「確かめられなかった」を取り違えるため
   findClientMessage(clientMessageId: string): Promise<string | null>;
   attachmentLimits(): Promise<AttachmentLimits | null>;
-  // 置き場（#4126）。API は P4 のもの（`GET /attachments`・`PATCH` / `DELETE /attachments/:id`）をそのまま使う
+  // 置き場。API（`GET /attachments`・`PATCH` / `DELETE /attachments/:id`）をそのまま使う
   listStoredAttachments(query: StoredAttachmentsQuery): Promise<StoredAttachmentsPage>;
   keepAttachment(id: string, kept: boolean): Promise<StoredAttachment>;
   removeAttachment(id: string): Promise<void>;

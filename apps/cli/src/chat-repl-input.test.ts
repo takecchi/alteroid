@@ -82,7 +82,7 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
       if (path === '/chat') {
         chats += 1;
         if (chats > 1) return sse(OK_REPLY);
-        // 会話が分かっている（open を受けた）あとの応答待ち。対象の発言を指して止める（#3956）。
+        // 会話が分かっている（open を受けた）あとの応答待ち。対象の発言を指して止める。
         const [opened, rest] = OK_REPLY.split('event: done');
         return sse(
           new ReadableStream<Uint8Array>({

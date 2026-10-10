@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureStdout } from './test-support.js';
 
 /**
- * #4022: デーモンが HTTP 200 で返す「届かなかった・止まらなかった・一部失敗」を成功として扱わない。
+ * デーモンが HTTP 200 で返す「届かなかった・止まらなかった・一部失敗」を成功として扱わない。
  * 偽の readline・偽の標準入力・偽の fetch だけを使うので、実時間の待ちは無い。
  */
 class FakeRl extends EventEmitter {

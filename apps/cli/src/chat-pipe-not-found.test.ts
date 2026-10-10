@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureStdout } from './test-support.js';
 
 /**
- * #4002: パイプで、「無い」を正常な結果として文にしている 404 は止めない。
+ * パイプで、「無い」を正常な結果として文にしている 404 は止めない。
  * 指した対象が見つからない 404（使い手の指定の誤り）は、今まで通り止める。偽の readline と偽の標準入力を使うので、実時間の待ちは無い。
  */
 class FakeRl extends EventEmitter {

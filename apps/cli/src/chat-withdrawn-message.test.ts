@@ -5,7 +5,7 @@ import { captureStdout, pretendStdinTty } from './test-support.js';
 import { WITHDRAWN_MESSAGE_LABEL, withdrawnMessageText } from './withdrawn-message.js';
 
 /**
- * #3990: 取り下げた発言（`delivery: 'withdrawn'`）は、`/conversation`・`conversations show` で
+ * 取り下げた発言（`delivery: 'withdrawn'`）は、`/conversation`・`conversations show` で
  * 普通の発言として出さない。欄の無い応答（古いデーモン）は今までどおり。
  */
 let lines: string[] = [];

@@ -523,7 +523,7 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect(description).not.toContain('順に足していく');
   });
 
-  // list が「読めない行」に出す id を指す: デーモンの stderr の跡は、コンテナでは `docker logs` を掘ることになるため（#4052）
+  // list が「読めない行」に出す id を指す: デーモンの stderr の跡は、コンテナでは `docker logs` を掘ることになるため
   it.each([
     ['access', 'アカウント'],
     ['permission', '許可'],

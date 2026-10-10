@@ -14,7 +14,7 @@ vi.mock('./target.js', async (importOriginal) => ({
 }));
 
 let editWith: ((path: string) => Promise<void>) | undefined;
-/** エディタの終わり方（既定は正常終了）。保存した後に落ちる形を作る（#4050）。 */
+/** エディタの終わり方（既定は正常終了）。保存した後に落ちる形を作る。 */
 let editExit: { code: number | null; signal?: string } = { code: 0 };
 vi.mock('node:child_process', () => ({
   spawn: vi.fn((_editor: string, args: string[]) => ({

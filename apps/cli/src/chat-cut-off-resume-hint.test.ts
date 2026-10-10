@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { captureStdout, pretendStdinTty } from './test-support.js';
 
 /**
- * #4089: 応答の途中で接続が切れたら、ターンがデーモンで続いていること・/resume で戻れること・
+ * 応答の途中で接続が切れたら、ターンがデーモンで続いていること・/resume で戻れること・
  * 完成した返信は /conversation で読めることを言う。
  */
 let lines: string[] = [];
