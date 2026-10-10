@@ -364,6 +364,9 @@ const INSTANCE_ID = randomUUID();
 // `deps.sseHeartbeatMs` から導かない: テストで heartbeat を縮めても、書き込みの締め切りまで縮める理由は無いため。
 const DEFAULT_SSE_WRITE_DEADLINE_MS = DEFAULT_SSE_HEARTBEAT_MS * 3;
 
+// デーモンの名乗りの確認の期限（`runner-protocol.ts` の `HEARTBEAT_PROBE_MS` = 5000ms）の写しではない: 期限に届く前の兆しを残したいので、その半分から出す。
+const SLOW_HEALTH_MS = 2_500;
+
 async function withDeadline<T>(
   run: () => Promise<T>,
   deadlineMs: number,
@@ -435,11 +438,20 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/rescue-refs/*', control)
 
     .get('/health', async (c) => {
+      const startedAt = performance.now();
       const tasks = await taskBreakdownReader.read();
       const resources = {
         ...(await readExecutionResources()),
         ...(tasks === undefined ? {} : { tasks }),
       };
+      // 遅かった回だけ残す: デーモンの名乗りの確認（期限 5000ms）が全台同時に倒れたとき、器の側で遅れたのかを器のログだけで言えるようにするため（#4454）。
+      const elapsedMs = performance.now() - startedAt;
+      if (elapsedMs >= SLOW_HEALTH_MS) {
+        process.stderr.write(
+          `alteroid-runner: /health の材料集め（/proc の走査と cgroup の読み）に ${String(Math.round(elapsedMs))}ms かかりました` +
+            `（デーモンの名乗りの確認の期限は 5000ms）\n`,
+        );
+      }
       return c.json({
         ok: true,
         runnerId: host.runnerId,
