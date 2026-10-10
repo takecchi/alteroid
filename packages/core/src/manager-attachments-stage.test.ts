@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_ATTACHMENT_LIMITS, readRunnerAttachmentStageLimit } from './attachment.js';
+import { S3_MAX_OBJECT_BYTES } from './attachment-blob.js';
+import {
+  DEFAULT_ATTACHMENT_LIMITS,
+  readAttachmentLimits,
+  readRunnerAttachmentStageLimit,
+} from './attachment.js';
 import type { AttachmentLimits } from './attachment.js';
 import { MemoryAttachmentStore } from './attachment-memory.js';
 import { createManagerPool } from './manager.js';
@@ -167,6 +172,21 @@ describe('能力と上限の名乗り（#4128 段3a）', () => {
         readRunnerAttachmentStageLimit({ ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES: bad }),
       ).toBe(2048 * 1024 * 1024);
     }
+  });
+
+  it('readRunnerAttachmentStageLimit はデーモンと同じ天井（5 TiB）を持ち、超えれば既定へ倒す（デーモンとずれない）', () => {
+    const env = (value: number) => ({
+      ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES: String(value),
+      ALTEROID_ATTACHMENT_S3_BUCKET: 'bkt',
+      ALTEROID_ATTACHMENT_S3_ACCESS_KEY_ID: 'AKIA-dummy',
+      ALTEROID_ATTACHMENT_S3_SECRET_ACCESS_KEY: 'dummy-secret',
+    });
+    for (const value of [S3_MAX_OBJECT_BYTES, S3_MAX_OBJECT_BYTES + 1]) {
+      expect(readRunnerAttachmentStageLimit(env(value))).toBe(
+        readAttachmentLimits(env(value)).limits.maxLargeFileBytes,
+      );
+    }
+    expect(readRunnerAttachmentStageLimit(env(S3_MAX_OBJECT_BYTES + 1))).toBe(2048 * 1024 * 1024);
   });
 
   it('runnerAttachmentSchema は data と staged のちょうど一方を要求する', () => {

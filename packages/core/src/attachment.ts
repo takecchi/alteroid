@@ -457,11 +457,12 @@ export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): Atta
 
 // runner は外部ストレージを持たない（`readAttachmentLimits().limits.maxLargeFileBytes` は 0）ので、それは使わず
 // `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES` を直接読む。新しい環境変数は作らない
+// デーモン（`readAttachmentLimits`）と同じ天井（S3 の1オブジェクトの最大）で既定へ倒す: 揃えないと、超える値を置いた器で runner だけがその値を受け、デーモンは既定へ戻ってずれるため
 export function readRunnerAttachmentStageLimit(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[ATTACHMENT_MAX_LARGE_FILE_BYTES_ENV]?.trim();
   if (raw === undefined || raw.length === 0) return ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT;
   const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) && parsed > 0
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= S3_MAX_OBJECT_BYTES
     ? parsed
     : ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT;
 }
