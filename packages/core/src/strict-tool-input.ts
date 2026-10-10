@@ -5,8 +5,7 @@ import { z } from 'zod';
  * 道具の入力の shape を、知らない引数を断る object に包む。
  *
  * 包まずに raw shape のまま SDK の `tool()` へ渡すと、SDK はそれを `z.object(shape)`（知らない鍵を strip）にするので、
- * 道具に無い名前で渡した引数は道具に届かないまま呼び出しが成功し、呼び手は捨てられたことに気づけない
- * （クローンが `ask_human` に `questions` ではなく `options` を渡し、選択肢の無い承認待ちが積まれた実例）。
+ * 道具に無い名前で渡した引数は道具に届かないまま呼び出しが成功し、呼び手は捨てられたことに気づけない。
  * 型は shape のまま返す: SDK の `tool()` の型は raw shape しか受けないが、実行時は zod のスキーマもそのまま使うため。
  */
 export function strictToolInput<Shape extends object>(shape: Shape): Shape {
@@ -26,9 +25,9 @@ interface ZodDefLike {
 }
 
 /**
- * 引数の値の中の入れ子の object も、知らない鍵を断る写しに組み直す（#4426）。元のスキーマは変えない: `schema.ts` の共通のスキーマは
+ * 引数の値の中の入れ子の object も、知らない鍵を断る写しに組み直す。元のスキーマは変えない: `schema.ts` の共通のスキーマは
  * HTTP API・保存・日誌の検証でも使い、そちらの挙動まで変えないため。
- * 辿るのは object・array・optional・nullable・default・union だけ: 道具の入力に現れる入れ子はこれで尽きており（#4426 の走査）、
+ * 辿るのは object・array・optional・nullable・default・union だけ: 道具の入力に現れる入れ子はこれで尽きており、
  * それ以外（pipe・lazy など）は写さず元のまま返す（断らない側へ倒れる）。`catchall` を持つ object は変えない: 知らない鍵を受けると決めてあるため。
  * 写しには説明などのメタデータを貼り直す: `clone()` で落ち、モデルが読む道具の意味が削れるため（`withMissingArgHint` と同じ理由）。
  */

@@ -2559,7 +2559,7 @@ class RunnerSession {
       // 委譲の区間を持ち越さない: 二度と来ない `task_notification` を待ち続けて区間が永久に閉じないため（`closeWorkerWaitWindow` の後に呼ぶ）
       this.#workerWaitWindow.clear();
       this.#nonWorkerTaskIds.clear();
-      // **このターンで開いた作業者の数（#1373）も、同じ理由で持ち越さない。**
+      // **このターンで開いた作業者の数も、同じ理由で持ち越さない。**
       // この経路は `turn_ended` を通らないので、捨てないと前のセッションの作業者が次のセッションの最初のターンの数に入る。
       this.#turnTally.discardOpenedWorkersAndRejections();
     },

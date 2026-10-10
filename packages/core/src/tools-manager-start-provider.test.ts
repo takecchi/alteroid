@@ -38,7 +38,7 @@ function build() {
   return { stores, started, tool };
 }
 
-// `.shape` を読む: 道具の入力は知らない引数を断る strict な object に包んで渡しているため（#4424）。指紋は従来どおり z.object から取る
+// `.shape` を読む: 道具の入力は知らない引数を断る strict な object に包んで渡しているため。指紋は従来どおり z.object から取る
 function shapeOf(tool: { inputSchema: unknown }): z.ZodRawShape {
   return (tool.inputSchema as z.ZodObject<z.ZodRawShape>).shape;
 }

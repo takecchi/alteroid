@@ -219,7 +219,7 @@ export interface GitRunResult {
   readonly stdout: string;
   readonly exitCode: number | null;
   readonly timedOut: boolean;
-  // errno の code だけを持つ: message にはパスが混ざりうるため。pids が尽きた器では fork が `EAGAIN` で断られ、exit コードの無い失敗を「HEAD が無効」と読ませないために分ける（#1266）
+  // errno の code だけを持つ: message にはパスが混ざりうるため。pids が尽きた器では fork が `EAGAIN` で断られ、exit コードの無い失敗を「HEAD が無効」と読ませないために分ける
   readonly spawnFailedCode?: string;
 }
 
