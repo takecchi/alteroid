@@ -6,7 +6,7 @@ import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
 /**
- * `conversation_post` は、渡された会話 id の会話が無ければ断る（Issue #4149）。
+ * `conversation_post` は、渡された会話 id の会話が無ければ断る。
  *
  * 本番で、略記の `bf63fd3d` を渡された道具が `bf63fd3d-93d2-…` の続きではなく `bf63fd3d` という
  * 新しい会話を作り、同じ話が人間の画面で2つの会話に分かれた。新しい会話を始めてよいのは

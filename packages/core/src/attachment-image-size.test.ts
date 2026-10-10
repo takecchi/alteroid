@@ -162,7 +162,7 @@ describe('readAttachmentImageSize（#3697）', () => {
 });
 
 describe('resolveTurnAttachments: 寸法が上限を超える画像は画像として渡さない（#3697）', () => {
-  // 画像の宣言では上げる時点で断られる（#3697）ので、ターンの受け皿が受け止める3つのうち「宣言が画像以外」の形で預ける。
+  // 画像の宣言では上げる時点で断られるので、ターンの受け皿が受け止める3つのうち「宣言が画像以外」の形で預ける。
   async function put(
     stores: ReturnType<typeof createMemoryStores>,
     name: string,

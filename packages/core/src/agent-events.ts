@@ -117,7 +117,7 @@ export interface AgentCompactionEvent {
   postTokens?: number;
 }
 
-// 安全分類器などによる拒否の合図（#4173）。`category` は provider が付けた分類（'cyber' 等）で、付かなければ null。
+// 安全分類器などによる拒否の合図。`category` は provider が付けた分類（'cyber' 等）で、付かなければ null。
 // `fellBack` は降格して再試行した回（true）か、再試行せずに終わった回（false）か
 export interface AgentRefusalEvent {
   type: 'refusal';

@@ -2,7 +2,7 @@ import { sha256Hex } from './auth.js';
 
 /**
  * 生ログ（pg の sessionStore・アーカイブ・transcript）へ書く前に、添付した画像の
- * 中身（base64）を「型・大きさ・sha256 の控え」へ置き換える（#4127）。
+ * 中身（base64）を「型・大きさ・sha256 の控え」へ置き換える。
  *
  * - **対象は user 行の content 配列の最上位の画像だけ。** tool_result の中の画像
  *   （Read の結果など）は決定の対象外なので触らない。

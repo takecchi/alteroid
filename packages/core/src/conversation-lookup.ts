@@ -2,12 +2,12 @@ import { scanJournalPages } from './journal-scan.js';
 import type { JournalStore } from './store.js';
 
 /**
- * 渡された会話 id が、既存の会話として在るかを日誌から確かめる（Issue #4149）。
+ * 渡された会話 id が、既存の会話として在るかを日誌から確かめる。
  *
  * **会話は日誌の `exchange`（`with: 'human'`）の `conversationId` の集まりとして暗黙に在る。**
  * だから書く側が id を確かめずに書けば、書いた時点で「その文字列の会話」が生まれる。
  * 略記の `bf63fd3d` を渡された `conversation_post` が、`bf63fd3d-93d2-…` の続きではなく
- * `bf63fd3d` という新しい会話を作り、同じ話が人間の画面で2つの会話に分かれた（#4149）。
+ * `bf63fd3d` という新しい会話を作り、同じ話が人間の画面で2つの会話に分かれた。
  * **新しい会話を始めてよいのは id を省いたときだけで、渡された id は既存の会話を指すこと。**
  * それを書く口（`conversation_post`・`POST /chat`）がここを通して確かめる。
  *

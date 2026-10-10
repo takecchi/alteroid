@@ -19,7 +19,7 @@ export interface WorkspaceResetSummary {
   usageLedger: number;
   usageTurns: number;
   /**
-   * 消した添付の件数（保存したファイルを含む。#4006）。**`attachment_fetch` の写し（`state/attachment-copies`）は
+   * 消した添付の件数（保存したファイルを含む）。**`attachment_fetch` の写し（`state/attachment-copies`）は
    * ここに数えない**（置き場の外のファイルで、`POST /reset` のハンドラが消す）。
    */
   attachments: number;

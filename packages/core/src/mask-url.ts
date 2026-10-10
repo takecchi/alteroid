@@ -10,7 +10,7 @@ export const URL_MASK = '***';
  * 判別できない。
  *
  * **`password` を必ず見ること。** `username` だけを見ると、password だけの
- * userinfo（`https://:<秘密>@host`）が素通りする（#1622 の穴そのもの）。
+ * userinfo（`https://:<秘密>@host`）が素通りする。
  */
 export function maskUrl(url: string): string {
   let parsed: URL;

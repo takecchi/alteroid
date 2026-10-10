@@ -13,7 +13,7 @@ import { removeAttachmentCopy } from './attachment-fetch.js';
 import { excerptLine, renderListing, renderListingEntry } from './excerpt.js';
 
 /**
- * クローンの道具 `file_list` / `file_keep` / `file_delete` の実体（Issue #4126 P5）。
+ * クローンの道具 `file_list` / `file_keep` / `file_delete` の実体。
  * 置き場の**控えだけ**を見る（`list` / `getMeta` / `usage` は中身を読まない。`get` は呼ばない）。
  */
 

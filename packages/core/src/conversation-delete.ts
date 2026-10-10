@@ -4,7 +4,7 @@ import { scanJournalPages } from './journal-scan.js';
 import type { Stores } from './store.js';
 
 /**
- * 人間との会話を論理削除する（Issue #4218）。
+ * 人間との会話を論理削除する。
  *
  * **印は日誌の墓標の行（`conversation_deleted`）そのものである。** 墓標を積んだ時点で、日誌の3実装は
  * その会話の `exchange` を `list` / `listPage` / `get` から外す（`journal-deleted-conversation-contract.ts`）。
@@ -51,8 +51,8 @@ export type DeleteConversationResult =
     };
 
 /**
- * 消した会話の中身が残りうる場所（#4218 の設計案 3）。**どれもこの削除では消していない。**
- * 生ログは会話 id で引けず、途中を抜くと resume が壊れうるので、外科的には消さない（#4173）。
+ * 消した会話の中身が残りうる場所。**どれもこの削除では消していない。**
+ * 生ログは会話 id で引けず、途中を抜くと resume が壊れうるので、外科的には消さない。
  */
 export const CONVERSATION_DELETE_REMAINS: readonly string[] = [
   'クローンの SDK セッションの生ログ（session_entries）と archive、いま走っているセッションの文脈には、この会話の発言が残っている（会話の単位では消せない）。秘密を書いたのなら、#4173 のセッションの開き直しと、その鍵の作り直しをすること',
@@ -180,7 +180,7 @@ export async function deleteConversation(
     await attempt('進行中の購読と途中経過を落とす', async () => forget(conversationId), undefined);
   }
 
-  // 1件ずつ消す: `remove` は生きていた（期限内の）ものを消したときだけ true を返し、期限切れの残骸も消す（#4126 P4）
+  // 1件ずつ消す: `remove` は生きていた（期限内の）ものを消したときだけ true を返し、期限切れの残骸も消す
   const attachmentsRemoved = await attempt(
     '添付を消す',
     async () => {

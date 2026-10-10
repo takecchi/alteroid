@@ -18,7 +18,7 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-// パスの欄だけ `redactPath` へ回す: `redact` の「英数字混在の長い塊」の網が uuid 入りのパスを伏せ、マネージャーがそのパスから写せなくなるため（#4143）
+// パスの欄だけ `redactPath` へ回す: `redact` の「英数字混在の長い塊」の網が uuid 入りのパスを伏せ、マネージャーがそのパスから写せなくなるため
 class PathText {
   constructor(readonly value: string) {}
 }

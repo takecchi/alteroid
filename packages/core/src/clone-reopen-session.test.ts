@@ -12,7 +12,7 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeGatedSdk, fakeSdk, waitFor, wireEvents } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 
-// 人間の操作でクローンのセッションを resume せずに開き直す口（#4173）の、外から見える結果。
+// 人間の操作でクローンのセッションを resume せずに開き直す口の、外から見える結果。
 describe('クローン — セッションの開き直し（reopenSession）', () => {
   const actor = 'アカウント alice';
   const reason = 'safeguards に弾かれ続けている';

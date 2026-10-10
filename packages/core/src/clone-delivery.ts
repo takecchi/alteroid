@@ -33,7 +33,7 @@ export class CloneDelivery {
     if (set && set.size === 0) this.#listeners.delete(conversationId);
   }
 
-  /** 会話の購読を、空でなくても全部外し、外した購読を返す（会話の削除。#4218）。 */
+  /** 会話の購読を、空でなくても全部外し、外した購読を返す（会話の削除）。 */
   takeListeners(conversationId: string): Listener[] {
     const set = this.#listeners.get(conversationId);
     this.#listeners.delete(conversationId);
@@ -130,7 +130,7 @@ export class CloneDelivery {
   readonly #pendingCollapse = new Map<string, PendingCollapseEntry>();
 
   // `Map` が持つ実体をそのまま返す: 呼び出し側が `existing.collapsed += 1` と直接書くため
-  // `post()` の中だけで閉じる: 同期関数から呼ぶので照会と書き込みが不可分に起き、#1041 が台帳側（`list()` と `open()` の間）で指摘する TOCTOU はこの経路に構造的に存在しない
+  // `post()` の中だけで閉じる: 同期関数から呼ぶので照会と書き込みが不可分に起き、台帳側（`list()` と `open()` の間）の TOCTOU はこの経路に構造的に存在しない
   getCollapseEntry(key: string): PendingCollapseEntry | undefined {
     return this.#pendingCollapse.get(key);
   }
