@@ -489,6 +489,7 @@ export interface RunnerHost {
   // 無認証の `/livez` から呼ばない: 誰でも貸し出し期限を延ばせてしまうため
   noteDaemonContact(): void;
   // プロセスの exit で knownTerminated にしない: 作業者の1回の呼び出しは委譲が生きていてもプロセスを終え、その孫（nohup のサーバ等）が撃たれるため
+  // failed / lost で閉じたセッションの pid は、同じ managerId を resume しても knownTerminated に残す: 落ちた CLI の木（verify・dev サーバー等）が守られ続けて溜まるため（done・stop() からの resume は守る）
   delegationSessionPids(): { live: ReadonlySet<number>; knownTerminated: ReadonlySet<number> };
 }
 
@@ -620,6 +621,8 @@ class Host implements RunnerHost {
   // `knownTerminated` を固定の集合として持たない: resume で同じ `managerId` が戻っても古い pid が「終端済み」のままになるため
   readonly #liveDelegationPids = new Set<number>();
   readonly #pidOwnerManagerId = new Map<number, string>();
+  // failed / lost で閉じたセッションが起こした pid: 同じ `managerId` を resume しても撃つ側に残す（落ちた CLI の木が pid を占め続けるため。#2352・#1334）
+  readonly #abandonedDelegationPids = new Set<number>();
   readonly #spawnAgentProcessFn:
     ((options: SpawnAgentProcessOptions) => DelegationProcessHandle) | undefined;
   readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
@@ -776,7 +779,8 @@ class Host implements RunnerHost {
     const knownTerminated = new Set<number>();
     for (const [pid, managerId] of this.#pidOwnerManagerId) {
       if (this.#liveDelegationPids.has(pid)) continue;
-      if (this.#sessions.has(managerId)) continue;
+      // failed / lost で閉じた CLI の pid は、同じ managerId が戻っていても外さない: 落ちた CLI の木を守ると resume のたびに pid が溜まるため
+      if (this.#sessions.has(managerId) && !this.#abandonedDelegationPids.has(pid)) continue;
       knownTerminated.add(pid);
     }
     return {
@@ -790,10 +794,14 @@ class Host implements RunnerHost {
     // `set` の前に `delete` する: 挿入順を今に更新するため（pid が再利用された場合の所有者の付け替えも兼ねる）
     this.#pidOwnerManagerId.delete(pid);
     this.#pidOwnerManagerId.set(pid, managerId);
+    // 使い回された pid は新しい CLI のもの: 残すと生きている新しい CLI の木を撃つ側へ回すため
+    this.#abandonedDelegationPids.delete(pid);
     while (this.#pidOwnerManagerId.size > PID_OWNER_MANAGER_ID_CAP) {
       const oldestPid = this.#pidOwnerManagerId.keys().next().value;
       if (oldestPid === undefined) break;
       this.#pidOwnerManagerId.delete(oldestPid);
+      // 所有者を忘れた pid は覚えない: 集合が際限なく育つため
+      this.#abandonedDelegationPids.delete(oldestPid);
     }
   }
 
@@ -1129,6 +1137,8 @@ class Host implements RunnerHost {
 
   #create(managerId: string, request: string, cwd: string): RunnerSession {
     const sessionGeneration = randomUUID();
+    // セッションごとに持つ（host の集合に直接足さない）: 終わり方が分かるのは閉じた後で、それまでは守る側のままにするため
+    const spawnedPids = new Set<number>();
     const session = new RunnerSession({
       managerId,
       request,
@@ -1148,7 +1158,15 @@ class Host implements RunnerHost {
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
       plugins: () => this.#pluginRefs(),
-      onClosed: () => {
+      onClosed: (outcome) => {
+        // `stop()` は outcome を渡さない（done・停止からの resume は守る）: 落ちた・失効した CLI だけを撃つ側に残すため
+        if (outcome?.status === 'failed' || outcome?.status === 'lost') {
+          for (const pid of spawnedPids) {
+            // 所有者が今も自分の pid だけ入れる: CAP で忘れた・使い回された pid を足すと集合が育つ・別の CLI を撃つため
+            if (this.#pidOwnerManagerId.get(pid) === managerId)
+              this.#abandonedDelegationPids.add(pid);
+          }
+        }
         this.#sessions.delete(managerId);
         this.#schedulePluginPrune();
         this.#removeAttachments(managerId);
@@ -1163,7 +1181,10 @@ class Host implements RunnerHost {
       outboxRoot: this.#outboxRoot,
       outboxStagedRoot: this.#outboxStagedRoot,
       attachmentStageLimit: this.attachmentStageLimit,
-      onDelegationProcessSpawned: (pid) => this.#noteDelegationProcessSpawned(pid, managerId),
+      onDelegationProcessSpawned: (pid) => {
+        spawnedPids.add(pid);
+        this.#noteDelegationProcessSpawned(pid, managerId);
+      },
       onDelegationProcessExited: (pid) => this.#noteDelegationProcessExited(pid),
       ...(this.#spawnAgentProcessFn === undefined
         ? {}
@@ -1589,7 +1610,8 @@ interface RunnerSessionOptions {
   // 値で渡さない（関数で受ける）: 資格が届く・外れるたびに開閉が変わるため
   peer?: () => RunnerPeerOptions | undefined;
   managerTools?: RunnerManagerToolsOptions;
-  onClosed: () => void;
+  // 終わり方は `#finish()` を通ったときだけ渡る（`stop()` は渡さない）: 落ちた・失効した CLI の木と、人間・畳みの停止の木を host が見分けるため
+  onClosed: (outcome?: { status: JobStatus }) => void;
   outboxRoot: string;
   outboxStagedRoot: string;
   /** 出し箱の大きいファイルの1つの上限と1報告の合計（hello の `attachmentStageLimit` と同じ値）。 */
@@ -1637,7 +1659,7 @@ class RunnerSession {
   readonly #profileEnv: () => Record<string, string>;
   readonly #mcpServers: () => McpServers | undefined;
   readonly #pluginRefs: () => readonly AgentClonePlugin[];
-  readonly #onClosed: () => void;
+  readonly #onClosed: (outcome?: { status: JobStatus }) => void;
   readonly #outboxRoot: string;
   readonly #outboxStagedRoot: string;
   readonly #attachmentStageLimit: number | undefined;
@@ -3178,7 +3200,7 @@ class RunnerSession {
       ...(cgroupEvents === undefined ? {} : { cgroupEvents }),
       unpushedWork,
     });
-    this.#onClosed();
+    this.#onClosed({ status });
   }
 
   // 待ち時間に上限を置かない: 止まるのはこの1件だけで他は走り続けるため
