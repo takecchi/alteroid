@@ -30,7 +30,7 @@ export function describeUnpushedWorkObservationIncompleteness(
   return `この観測は探しきっていない（${reasons.join('・')}）——ここに無い作業ツリーが在りうる。`;
 }
 
-// 引き継いだ枝名に時刻を添える: 添えないと、観測の時刻にその枝に居たと読まれるため（#1266 の `branchCarriedFromAt`）
+// 引き継いだ枝名に時刻を添える: 添えないと、観測の時刻にその枝に居たと読まれるため（`branchCarriedFromAt`）
 export function describeObservedWorktreeBranch(worktree: {
   readonly branch: string | null;
   readonly branchCarriedFromAt?: string;

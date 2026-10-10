@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-// `grep -Fn -- 'このターンで開いた作業者の数（#1373）も、同じ理由で持ち越さない' packages/core/src/runner.ts`
+// `grep -Fn -- 'このターンで開いた作業者の数も、同じ理由で持ち越さない' packages/core/src/runner.ts`
 // `createManagerPool` を経由しない: resume は `host.resume()` を直接呼ぶのが素直で、経由すると `#restoreJobs()` の組み立てが要る。
 
 interface FakeSession {
