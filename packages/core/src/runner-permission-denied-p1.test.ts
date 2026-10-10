@@ -244,7 +244,7 @@ describe('allow の一往復（issue #1105 P1）', () => {
     void firePermissionDenied(started.options, {
       hook_event_name: 'PermissionDenied',
       tool_name: 'Bash',
-      tool_input: { command: 'git rm docs/old.md' },
+      tool_input: { command: 'git rm notes/old.txt' },
       tool_use_id: 'tu-wording-1',
       reason: '分類器が拒否した（テスト）',
     });

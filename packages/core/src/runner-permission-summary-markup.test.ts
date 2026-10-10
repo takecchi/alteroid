@@ -145,7 +145,7 @@ describe('runner.ts の #onPermission が組み立てる summary（issue #287）
       {
         hook_event_name: 'PermissionDenied',
         tool_name: 'Bash',
-        tool_input: { command: 'git rm docs/old.md' },
+        tool_input: { command: 'git rm notes/old.txt' },
         tool_use_id: 'toolu_wording',
         reason: '分類器が拒否した（テスト）',
       } as never,
