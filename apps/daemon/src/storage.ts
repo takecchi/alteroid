@@ -7,6 +7,7 @@ import {
   ATTACHMENT_S3_ACCESS_KEY_ID_ENV,
   ATTACHMENT_S3_BUCKET_ENV,
   ATTACHMENT_S3_SECRET_ACCESS_KEY_ENV,
+  attachmentBodyMaxBytes,
   deriveHumanTouchedAtFromJournal,
   deriveMemoryCreatedAtFromJournal,
   readAttachmentBlobConfig,
@@ -206,7 +207,9 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
       ...(blobPlan.config === undefined
         ? {}
         : {
-            blobs: new S3AttachmentBlobStore(blobPlan.config),
+            blobs: new S3AttachmentBlobStore(blobPlan.config, {
+              maxObjectBytes: attachmentBodyMaxBytes(blobPlan.limits),
+            }),
             blobKeyPrefix: blobPlan.config.prefix,
           }),
     },

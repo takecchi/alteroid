@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   ATTACHMENT_S3_BUCKET_ENV,
   MemoryAttachmentBlobStore,
+  S3_MAX_OBJECT_BYTES,
+  S3_MAX_UPLOAD_PARTS,
+  S3_MIN_PART_BYTES,
   attachmentBlobKey,
+  attachmentBlobPartBytesFor,
   readAttachmentBlobConfig,
 } from './attachment-blob.js';
 import {
@@ -166,6 +170,49 @@ describe('readAttachmentLimits の maxLargeFileBytes', () => {
     });
     expect(bad.limits.maxLargeFileBytes).toBe(2147483648);
     expect(bad.notes.join('\n')).toContain('ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES');
+  });
+
+  it('S3 の1オブジェクトの最大（5 TiB）ちょうどは受け、超えれば警告して既定へ倒す（#4128）', () => {
+    const atMax = readAttachmentLimits({
+      ...S3_ENV,
+      ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES: String(S3_MAX_OBJECT_BYTES),
+    });
+    expect(atMax.limits.maxLargeFileBytes).toBe(5 * 1024 ** 4);
+    expect(atMax.notes).toEqual([]);
+    const over = readAttachmentLimits({
+      ...S3_ENV,
+      ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES: String(S3_MAX_OBJECT_BYTES + 1),
+    });
+    expect(over.limits.maxLargeFileBytes).toBe(ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT);
+    expect(over.notes.join('\n')).toContain(
+      `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES="${String(S3_MAX_OBJECT_BYTES + 1)}" は上限 ${String(S3_MAX_OBJECT_BYTES)} を超えている`,
+    );
+  });
+});
+
+describe('attachmentBlobPartBytesFor（part の大きさを上限から決める。#4128）', () => {
+  it('どの上限でも、10,000 part で上限まで届き、S3 の part の最小（5 MiB）を下回らない', () => {
+    for (const max of [
+      0,
+      1,
+      25 * MIB,
+      2048 * MIB,
+      48 * 1024 * MIB,
+      100 * 1024 * MIB,
+      S3_MAX_OBJECT_BYTES,
+    ]) {
+      const part = attachmentBlobPartBytesFor(max);
+      expect(part).toBeGreaterThanOrEqual(S3_MIN_PART_BYTES);
+      expect(part * S3_MAX_UPLOAD_PARTS).toBeGreaterThanOrEqual(max);
+    }
+  });
+
+  it('既定の 2 GiB では 5 MiB のまま（今までと同じ）。100 GiB なら 5 MiB では足りないので大きくする', () => {
+    expect(attachmentBlobPartBytesFor(2048 * MIB)).toBe(5 * MIB);
+    expect(5 * MIB * S3_MAX_UPLOAD_PARTS).toBeLessThan(100 * 1024 * MIB);
+    expect(attachmentBlobPartBytesFor(100 * 1024 * MIB)).toBe(
+      Math.ceil((100 * 1024 * MIB) / 10_000),
+    );
   });
 });
 

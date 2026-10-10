@@ -1,7 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 
-import { readAttachmentBlobConfig, type AttachmentBlobSweepResult } from './attachment-blob.js';
+import {
+  S3_MAX_OBJECT_BYTES,
+  readAttachmentBlobConfig,
+  type AttachmentBlobSweepResult,
+} from './attachment-blob.js';
 import {
   ATTACHMENT_MAX_IMAGE_DIMENSION,
   readAttachmentImageSize,
@@ -425,9 +429,14 @@ export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): Atta
     limits: {
       maxImageBytes: read(ATTACHMENT_MAX_IMAGE_BYTES_ENV, ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT),
       maxFileBytes: read(ATTACHMENT_MAX_FILE_BYTES_ENV, ATTACHMENT_MAX_FILE_BYTES_DEFAULT),
+      // S3 の1オブジェクトの最大を天井にする: それを超える値は、どの大きさで上げても置き場に断られるため（#4128）
       maxLargeFileBytes:
         readAttachmentBlobConfig(env).kind === 'on'
-          ? read(ATTACHMENT_MAX_LARGE_FILE_BYTES_ENV, ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT)
+          ? read(
+              ATTACHMENT_MAX_LARGE_FILE_BYTES_ENV,
+              ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT,
+              S3_MAX_OBJECT_BYTES,
+            )
           : 0,
       maxPerMessage: read(ATTACHMENT_MAX_PER_MESSAGE_ENV, ATTACHMENT_MAX_PER_MESSAGE_DEFAULT),
       maxTotalBytes: read(ATTACHMENT_MAX_TOTAL_BYTES_ENV, ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT),
