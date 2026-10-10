@@ -21,7 +21,7 @@ export type ChatMessage =
     }
   | { event: ChatStreamEvent['type']; data: ChatStreamEvent };
 
-/** 再生の `open` が運ぶ、その会話でいま答えを待っている発言（#4058）。 */
+/** 再生の `open` が運ぶ、その会話でいま答えを待っている発言。 */
 export interface ChatStreamPending {
   clientMessageId: string;
   state: 'running' | 'starting' | 'held' | 'queued';
