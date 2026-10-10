@@ -81,7 +81,7 @@ const attachmentStageQuery = z.object({
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
 
 /**
- * hello に載せる peer の欄（#3940・#4118）。開いている peer が無ければ `managerPeers` を送らない
+ * hello に載せる peer の欄。開いている peer が無ければ `managerPeers` を送らない
  * （`manager-peers` の能力で「無い」と読める）。閉じている理由は在るときだけ送る。
  */
 function helloManagerPeers(
@@ -184,7 +184,7 @@ export class Outbox {
   ): () => void {
     if (this.#drain !== null) {
       const stale = this.#drain();
-      // 控えに在る連番は渡さない: 新しい接続は `sentSince` で同じ控えを既に積んでおり、同じ出来事が2回流れるため（#4028）。
+      // 控えに在る連番は渡さない: 新しい接続は `sentSince` で同じ控えを既に積んでおり、同じ出来事が2回流れるため。
       for (const item of stale) {
         if (!this.isRecorded(item.seq)) listener(item.event, item.seq, item.queuedAt);
       }
@@ -578,7 +578,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         return c.json({ ok: true, ...(placed === undefined ? {} : { plugins: placed }) });
       },
     )
-    // Codex の ChatGPT ログイン（#3939）。値は受け取るだけで、状態（GET）には指紋しか載せない。
+    // Codex の ChatGPT ログイン。値は受け取るだけで、状態（GET）には指紋しか載せない。
     .get('/codex-auth', (c) => c.json({ ok: true, codexAuth: host.codexAuth() }))
     .post(
       '/codex-auth',
@@ -600,7 +600,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         }
       },
     )
-    // Codex が書き換えた auth.json を、知らせた指紋と一致するときだけ渡す（#3939）。値を返すのは
+    // Codex が書き換えた auth.json を、知らせた指紋と一致するときだけ渡す。値を返すのは
     // この制御面の口だけ（デーモンだけが叩ける。合鍵のハッシュで守る）。
     .post(
       '/codex-auth/write-back',
@@ -682,9 +682,9 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   ...(deps.workerModel === undefined ? {} : { workerModel: deps.workerModel }),
                   attachmentBodyLimit: attachmentBodyMax,
                   attachmentStageLimit: host.attachmentStageLimit,
-                  // 接続のたびにいまの実効の env から読む: 鍵・プロファイルが降りるたびに変わるため（その後の変化は `anthropic_route`。#4263・#4261）
+                  // 接続のたびにいまの実効の env から読む: 鍵・プロファイルが降りるたびに変わるため（その後の変化は `anthropic_route`）
                   anthropicRoute: host.anthropicRoute(),
-                  // 接続のたびにいまの開閉を読む: 資格が届く・外れるたびに変わるため（#4118。その後の変化は `manager_peers`）
+                  // 接続のたびにいまの開閉を読む: 資格が届く・外れるたびに変わるため（その後の変化は `manager_peers`）
                   ...helloManagerPeers(host.managerPeers()),
                 }),
               }),
@@ -749,7 +749,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           detach();
           // 書きかけの1件も戻す: 書けたか分からず、落とすより二重に届くほうを選ぶため。
           // `push` ではなく `requeue` で戻す: `queuedAt` が打ち直され、`oldestPendingAt` が戻すたびに新しくなるため。
-          // 控えに在る連番（読み返しの分）は戻さない: 連番を振り直すと控えの元の連番と別物になり、次の接続で2回届くため（#4028）。
+          // 控えに在る連番（読み返しの分）は戻さない: 連番を振り直すと控えの元の連番と別物になり、次の接続で2回届くため。
           if (writing !== null && !outbox.isRecorded(writing.seq)) {
             outbox.requeue(writing.event, writing.queuedAt);
           }
@@ -965,7 +965,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
-    // 出し箱の退避先（Issue #4126 P2a）。デーモンが取りに来る向きだけで、runner からは押し上げない。中身は SSE に載せない。
+    // 出し箱の退避先。デーモンが取りに来る向きだけで、runner からは押し上げない。中身は SSE に載せない。
     // `fileId` の形を先に検める: パス区切りや `..` を退避先のパスへ通さないため。
     .get('/managers/:id/outbox/:fileId', async (c) => {
       const fileId = c.req.param('fileId');

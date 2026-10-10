@@ -101,7 +101,7 @@ async function attack(env: NodeJS.ProcessEnv, socketPath: string, managerId: str
           '/credentials',
           JSON.stringify({ credentials: [{ name: 'GH_TOKEN', value: 'attacker' }] }),
         ),
-        // 自分に効く MCP の登録（stdio＝自分の子として起こすコマンド）を自分で差し替えられないこと（#325 段3）
+        // 自分に効く MCP の登録（stdio＝自分の子として起こすコマンド）を自分で差し替えられないこと
         setMcpServers: await call(
           'POST',
           '/mcp-servers',

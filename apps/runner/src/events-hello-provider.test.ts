@@ -22,7 +22,7 @@ async function helloFrame(
     managerModel?: string;
     workerModel?: string;
     /**
-     * peer の口を持つ器にする（#4118）。`closed` は資格が届いていない器、`open` は `CODEX_API_KEY` が
+     * peer の口を持つ器にする。`closed` は資格が届いていない器、`open` は `CODEX_API_KEY` が
      * 届いた器（hello は接続のたびに host から読む）。省略は peer の口を持たない器。
      */
     peer?: 'closed' | 'open';
