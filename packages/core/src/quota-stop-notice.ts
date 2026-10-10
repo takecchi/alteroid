@@ -92,7 +92,7 @@ const SAID_EXCERPT = 160;
 const SDK_TEXT_EXCERPT = 600;
 const SDK_TEXT_LABEL_PRIORITY = ['usage_notice', 'closed_failed', 'turn_failed', 'rate_limit'];
 
-function statusPhrase(status: JobStatus | undefined): string {
+export function statusPhrase(status: JobStatus | undefined): string {
   switch (status) {
     case 'running':
       return 'running（セッションは生きている）';
