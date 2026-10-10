@@ -1784,8 +1784,23 @@ export function isCensusAvailable(census) {
  * 形）を取るので、ここでも同じ形の名前を作ることで、テキスト由来の名前と
  * 突き合わせられる（`requireCensusAgreesWithTextFailures` が使う）。
  */
+// 実パスの ROOT からも測る: テストの子は cwd を symlink を解いた実パスで持つので、ROOT が symlink を挟む器（macOS の /var → /private/var）では
+// `../../private/var/…` の名前になり、テキストの FAIL 行と食い違って判定を出せなくなるため（#4399）。ROOT の外を指すなら元の相対のまま返す
+function relativeToRoot(file) {
+  const rel = path.relative(ROOT, file);
+  if (!rel.startsWith('..') && !path.isAbsolute(rel)) return rel;
+  let realRoot;
+  try {
+    realRoot = fs.realpathSync(ROOT);
+  } catch {
+    return rel;
+  }
+  const realRel = path.relative(realRoot, file);
+  return realRel.startsWith('..') || path.isAbsolute(realRel) ? rel : realRel;
+}
+
 function censusEntriesForFile(fileResult) {
-  const rel = path.relative(ROOT, fileResult.name);
+  const rel = relativeToRoot(fileResult.name);
   const assertions = Array.isArray(fileResult.assertionResults) ? fileResult.assertionResults : [];
   if (assertions.length === 0) {
     return [{ name: `${rel} [ ${rel} ]`, status: fileResult.status ?? 'unknown' }];

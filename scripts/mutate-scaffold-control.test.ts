@@ -748,6 +748,26 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
     expect(fs.existsSync(path.join(root, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
   });
 
+  it('⭐ --root が symlink を挟んでいても（macOS の /var → /private/var）、census の名前がテキストと揃い「検出」と判定する（#4399）', () => {
+    const realRoot = makeTmpGitRepo();
+    const root = path.join(makeTempDirSync('mutate-scaffold-link-'), 'root');
+    fs.symlinkSync(realRoot, root);
+    const { status, out } = runPlan(root, [
+      {
+        id: 'm-hello-upcase',
+        file: 'target.txt',
+        from: 'hello',
+        to: 'HELLO',
+        expect: 1,
+        target: null,
+        mustFail: [REAL_TOOTH],
+      },
+    ]);
+    expect(status).toBe(0);
+    expect(out).toContain('変異 m-hello-upcase: 検出');
+    expect(out).toContain(`[残った] ${REAL_TOOTH}`);
+  });
+
   it('⭐ CLI 統合: 宣言した歯とは別の歯だけが落ちれば「身代わり」（#993 の本体）', () => {
     const root = makeTmpGitRepo();
     const { status, out } = runPlan(root, [
