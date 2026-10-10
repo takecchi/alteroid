@@ -29,6 +29,7 @@ export interface WorkspaceCloneHint {
   readonly host?: string;
   readonly path?: string;
   readonly branch?: string;
+  readonly branchCarriedFromAt?: string;
   readonly reason?: string;
   readonly unpushed: HintCount;
   readonly uncommitted: HintCount;
@@ -88,6 +89,9 @@ export function workspaceCloneHintsFrom(
         host: worktree.remoteOrigin.host,
         path: worktree.remoteOrigin.path,
         branch: worktree.branch,
+        ...(worktree.branchCarriedFromAt === undefined
+          ? {}
+          : { branchCarriedFromAt: worktree.branchCarriedFromAt }),
       };
     }
     const reason =
@@ -253,13 +257,21 @@ function rescueOnlyText(hint: WorkspaceCloneHint, short = false): string {
   return parts.join('');
 }
 
+// 引き継いだ枝名には時刻を添える: 観測の時刻にその枝に居たとは限らないため（`branchCarriedFromAt`）
+function cloneTargetText(hint: WorkspaceCloneHint): string {
+  const target = `${hint.host}/${hint.path} の ${hint.branch}`;
+  return hint.branchCarriedFromAt === undefined
+    ? target
+    : `${target}（枝名は ${hint.branchCarriedFromAt} 時点の観測から引き継いだもの）`;
+}
+
 function fullLine(hint: WorkspaceCloneHint, observedAt: string | undefined): string {
   const head = `- ${hint.relativePath}: `;
   if (hint.kind === 'rescue-only') return head + rescueOnlyText(hint);
   const counts = countText(hint);
   const risk = hasLossRisk(hint);
   const live = liveRescueRef(hint.rescue);
-  const clone = hint.kind === 'clone' ? `${hint.host}/${hint.path} の ${hint.branch}` : undefined;
+  const clone = hint.kind === 'clone' ? cloneTargetText(hint) : undefined;
   const sentences: string[] = [];
   if (counts !== '') sentences.push(`${counts}。`);
   if (live !== undefined) {
@@ -313,7 +325,7 @@ function shortLine(hint: WorkspaceCloneHint, observedAt: string | undefined): st
   const uncommittedKnown = hint.uncommitted?.kind === 'known' && hint.uncommitted.n > 0;
   if (!risk && live === undefined && unsaved === null && !uncommittedKnown) {
     return hint.kind === 'clone'
-      ? `- ${hint.relativePath}: ${hint.host}/${hint.path} の ${hint.branch} を clone し直せ。`
+      ? `- ${hint.relativePath}: ${cloneTargetText(hint)} を clone し直せ。`
       : `- ${hint.relativePath}: 確かめよ（${hint.reason}）。`;
   }
   const sentences: string[] = [];
@@ -331,7 +343,7 @@ function shortLine(hint: WorkspaceCloneHint, observedAt: string | undefined): st
   } else if (risk) {
     sentences.push('退避 ref は無い（origin に無ければ失われた）。');
   } else if (hint.kind === 'clone') {
-    sentences.push(`${hint.host}/${hint.path} の ${hint.branch} を clone し直せ。`);
+    sentences.push(`${cloneTargetText(hint)} を clone し直せ。`);
   }
   if (unsaved !== null) sentences.push(unsaved);
   return `- ${hint.relativePath}: ${sentences.join('')}`;

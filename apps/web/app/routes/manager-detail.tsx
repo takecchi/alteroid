@@ -50,6 +50,7 @@ import {
   formatSystemErrorUnknownNote,
 } from '@alteroid/core/system-error-format';
 import {
+  describeObservedWorktreeBranch,
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
@@ -742,7 +743,7 @@ function observedUnpushedWorkNode(
           // key に index を混ぜる: 相対パスだけでは同名の worktree が2箇所に無いとは限らず、一意にならない。
           <li key={`${wt.relativePath}::${index}`} className="break-all">
             {wt.relativePath}: branch=
-            {wt.branch === null ? 'null（取れなかった）' : wt.branch}
+            {describeObservedWorktreeBranch(wt)}
             {wt.remoteOrigin !== undefined &&
               ` / origin=${maskUrl(`https://${wt.remoteOrigin.host}${wt.remoteOrigin.path}`)}`}
           </li>

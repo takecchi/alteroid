@@ -219,6 +219,13 @@ export interface GitRunResult {
   readonly stdout: string;
   readonly exitCode: number | null;
   readonly timedOut: boolean;
+  // errno の code だけを持つ: message にはパスが混ざりうるため。pids が尽きた器では fork が `EAGAIN` で断られ、exit コードの無い失敗を「HEAD が無効」と読ませないために分ける（#1266）
+  readonly spawnFailedCode?: string;
+}
+
+function spawnFailedCodeOf(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^[A-Z0-9_]{1,32}$/.test(code) ? code : '不明';
 }
 
 export async function runGit(
@@ -253,11 +260,17 @@ export async function runGit(
       child.on('close', (code) => resolve(code));
     });
     return { stdout, exitCode, timedOut: false };
-  } catch {
-    return { stdout: '', exitCode: null, timedOut: controller.signal.aborted };
+  } catch (error) {
+    return controller.signal.aborted
+      ? { stdout: '', exitCode: null, timedOut: true }
+      : { stdout: '', exitCode: null, timedOut: false, spawnFailedCode: spawnFailedCodeOf(error) };
   } finally {
     clearTimeout(timer);
   }
+}
+
+function gitSpawnFailedText(code: string): string {
+  return `確かめられなかった（git を起こせなかった: ${code}）`;
 }
 
 async function probeBranch(
@@ -294,6 +307,9 @@ async function probeUnpushedCommitCount(
   );
   if (result.timedOut) {
     return { unpushedCommitCountUnknown: `確かめられなかった（タイムアウト ${timeoutMs}ms）` };
+  }
+  if (result.spawnFailedCode !== undefined) {
+    return { unpushedCommitCountUnknown: gitSpawnFailedText(result.spawnFailedCode) };
   }
   if (result.exitCode !== 0) {
     return {
@@ -363,6 +379,9 @@ async function probeUncommittedChangeCount(
   const result = await runGit(spawnFn, ['status', '--porcelain'], repoRoot, env, timeoutMs);
   if (result.timedOut) {
     return { uncommittedChangeCountUnknown: `確かめられなかった（タイムアウト ${timeoutMs}ms）` };
+  }
+  if (result.spawnFailedCode !== undefined) {
+    return { uncommittedChangeCountUnknown: gitSpawnFailedText(result.spawnFailedCode) };
   }
   if (result.exitCode !== 0) {
     return {

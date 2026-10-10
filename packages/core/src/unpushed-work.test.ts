@@ -1,4 +1,5 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { chmodSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -445,6 +446,31 @@ describe('computeUnpushedWork — Issue #1067（他人の作業ツリーで git 
       expect(env.GIT_OPTIONAL_LOCKS).toBe('0');
       expect(env.GIT_TERMINAL_PROMPT).toBe('0');
     }
+  });
+});
+
+describe('computeUnpushedWork — git を起こせない（pids が尽きて fork が EAGAIN で断られる。Issue #1266）', () => {
+  it('作業ツリーは見つけたまま、件数は「git を起こせなかった: EAGAIN」と名乗り、「HEAD が無効」とは言わない', async () => {
+    initRepo(root);
+    commitFile(root, 'a.txt', 'first\n', 'first');
+
+    const forkRefusedSpawn: ProcessSpawnFn = () => {
+      const child = new EventEmitter() as unknown as ChildProcess;
+      queueMicrotask(() =>
+        child.emit('error', Object.assign(new Error('spawn git EAGAIN'), { code: 'EAGAIN' })),
+      );
+      return child;
+    };
+
+    const result = await computeUnpushedWork(root, { spawn: forkRefusedSpawn, env: gitChildEnv() });
+
+    expect(result.worktrees).toHaveLength(1);
+    const tree = result.worktrees[0];
+    expect(tree?.branch).toBeNull();
+    expect(tree?.unpushedCommitCountUnknown).toBe('確かめられなかった（git を起こせなかった: EAGAIN）');
+    expect(tree?.uncommittedChangeCountUnknown).toBe(
+      '確かめられなかった（git を起こせなかった: EAGAIN）',
+    );
   });
 });
 
