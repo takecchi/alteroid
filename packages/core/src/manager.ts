@@ -449,7 +449,6 @@ export interface ManagerSummary {
   /** 台帳（`Job.lastUnpushedWorkObservation`）を写すだけ（`lastUnpushedWorkObservationSchema` の doc）。 */
   lastUnpushedWorkObservation?: LastUnpushedWorkObservation;
   lastRescue?: LastRescue;
-  /** 台帳（`Job.externalOutputs`）を写すだけ。マネージャーが `output_record` で記録した、コード以外の成果（#2987）。 */
   externalOutputs?: ExternalOutput[];
 }
 
@@ -589,7 +588,7 @@ function isUnpushedWorkObservationAtLeastAsNewAs(
 
 /**
  * 新しい観測の `branch: null` で、前に取れていた枝名を消さない: pids が尽きて git を起こせない回（fork の EAGAIN）は、
- * 作業ツリーは readdir で見つかるのに枝名だけが取れず、それが「より新しい観測」として台帳の枝名を上書きするため（#1266）。
+ * 作業ツリーは readdir で見つかるのに枝名だけが取れず、それが「より新しい観測」として台帳の枝名を上書きするため。
  * null の理由（detached HEAD か失敗か）では分けない: どちらでも引き継いだ枝名は `branchCarriedFromAt` の時刻には正しく、
  * 時刻を名乗るので嘘にならない。`unavailable` へは引き継がない: 欄の形が違い、「確かめられなかった」を観測で埋めないため。
  */

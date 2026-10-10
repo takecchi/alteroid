@@ -124,7 +124,7 @@ export interface PersonaStore {
    * 全文置換。存在しなければ作る。
    *
    * **書いた本文は、末尾の改行が正規化されて読み戻る**（`write(slug, '# X')` → `read` は `'# X\n'`）。
-   * `bytes` も `content_sha256` も正規化後の本文で数える。実装は自分で正規化せず `ensureTrailingNewline` を通す。
+   * `bytes` も `content_sha256` も正規化後の本文で数える。実装は自分で正規化せず `ensureTrailingNewline` を通す: 複製すると、実装ごとに読み戻しがずれるため。
    * 実装を足すときは、fs / pg / インメモリ（`persona-contract.test.ts`）と同じ歯を足す。
    *
    * `options.ifMatch` の比較は書き込みと同じ排他の中で行う（fs: `#serialize` の内側、pg: 条件付きの1文）。
@@ -1277,7 +1277,7 @@ export interface TranscriptArchive {
   read(id: string): Promise<ArchiveRead>;
   /**
    * 末尾だけを読む。`read()` を使わない: 本文の全体を返し、`archive` の1行は最大 78.3 MB に育つ。
-   * 起動のたびに自動で走る拾い直し（`clone.ts` の `#pickUpTranscriptGrave`）が全文をヒープへ載せてから末尾だけを使うことになる。
+   * 起動のたびに自動で走る拾い直し（`clone.ts` の `#pickUpTranscriptGrave`）が `read()` で全文をヒープへ載せると、OOM になる。
    *
    * 契約:
    * - 戻りの形は `read()` と同じ3状態（`body` / `removed` / `missing`）。`#pickUpTranscriptGrave` が日誌の文面を分けているので区別を潰さない。

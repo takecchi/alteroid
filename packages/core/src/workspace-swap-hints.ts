@@ -210,7 +210,6 @@ function unsavedText(tree: RescueWorktree): string | null {
     : `退避されなかったもの（失われた可能性がある）: ${unsaved.join('、')}。`;
 }
 
-/** 送らなかった理由に添える括弧書き。`secret-like` は当たったファイルと規則の名前（#4394）。 */
 export function rescueNotPushedDetail(notPushed: NonNullable<RescueWorktree['notPushed']>): string {
   if (notPushed.reason === 'push-failed' && notPushed.failureKind !== undefined) {
     return `（${notPushed.failureKind}）`;

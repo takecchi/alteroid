@@ -664,7 +664,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     // `operator` / `account:<id>`（添付の `uploadedBy` と同じ書き方）
     deletedBy: z.string(),
     hiddenCount: z.number().int().nonnegative(),
-    // 会話 id を持たないが、この会話から生まれた本文を写している日誌の行（台帳へ積んだ・直した・片付けた `decision`。#4355）。読む口はこの id の行も外す。行そのものは書き換えない
+    // 会話 id を持たないが、この会話から生まれた本文を写している日誌の行（台帳へ積んだ・直した・片付けた `decision`）。読む口はこの id の行も外す。行そのものは書き換えない
     hiddenEntryIds: z.array(z.string()).optional(),
   }),
 ]);
@@ -978,7 +978,7 @@ export const observedWorktreeBranchSchema = z.object({
   unpushedCommitCountUnknown: z.string().optional(),
   uncommittedChangeCount: z.number().int().nonnegative().optional(),
   uncommittedChangeCountUnknown: z.string().optional(),
-  // 在るときは `branch`（と、この観測で取れなかった `remoteOrigin`）がこの時刻の観測から引き継いだもの: 観測の `at` の枝名として読ませないため（#1266）
+  // 在るときは `branch`（と、この観測で取れなかった `remoteOrigin`）がこの時刻の観測から引き継いだもの: 観測の `at` の枝名として読ませないため
   branchCarriedFromAt: isoDateTime.optional(),
 });
 
@@ -1069,7 +1069,7 @@ export type RescueRemoval = z.infer<typeof rescueRemovalSchema>;
 export const rescueWorktreeSchema = z.object({
   relativePath: z.string(),
   branch: z.string().nullable(),
-  // 在るときは `branch` がこの時刻の回から引き継いだもの: この回の `at` の枝名として読ませないため（#1266。`observedWorktreeBranchSchema` と同じ形）
+  // 在るときは `branch` がこの時刻の回から引き継いだもの: この回の `at` の枝名として読ませないため（`observedWorktreeBranchSchema` と同じ形）
   branchCarriedFromAt: isoDateTime.optional(),
   at: isoDateTime,
   pushed: z
@@ -1090,7 +1090,7 @@ export const rescueWorktreeSchema = z.object({
       reason: rescueNotPushedReasonSchema,
       failureKind: z.enum(['auth', 'network', 'rejected', 'timeout', 'other']).optional(),
       files: z.array(z.string()).optional(),
-      // `secret-like` のとき当たった規則の名前（`SecretPatternName`）。文字列そのものは載せない（#4394）
+      // `secret-like` のとき当たった規則の名前（`SecretPatternName`）。文字列そのものは載せない
       patterns: z.array(z.string()).optional(),
     })
     .optional(),
@@ -1115,12 +1115,11 @@ export const lastRescueSchema = z.object({
 });
 export type LastRescue = z.infer<typeof lastRescueSchema>;
 
-/** マネージャーが `output_record` で記録した、コード以外で外へ出した成果の1件（#2987）。 */
 export const externalOutputLimits = {
   kindMaxLength: 40,
   whereMaxLength: 500,
   summaryMaxLength: 500,
-  /** 委譲の記録に残す件数。超えたら古いほうから落とす（全件は日誌の `tool_use` に残る）。 */
+  /** 超えたら古いほうから落としてよい: 全件は日誌の `tool_use` に残るため。 */
   keptPerJob: 20,
 } as const;
 
@@ -1129,7 +1128,6 @@ export const externalOutputSchema = z.object({
   at: isoDateTime,
   /** 種別（`mail` / `calendar` / `post` / `external_save` など。決まった一覧にはしない）。 */
   kind: z.string().min(1),
-  /** 外の場所（URL・宛先・外部の ID など）。 */
   where: z.string().min(1),
   summary: z.string().min(1).optional(),
 });
@@ -1227,7 +1225,7 @@ export const jobSchema = z.object({
   lastUnpushedWorkObservation: lastUnpushedWorkObservationSchema.optional(),
   // `lastUnpushedWorkObservation` と別の欄にする: あちらは新しいほうが勝つ上書き、こちらは作業ツリーごとに積み増すため
   lastRescue: lastRescueSchema.optional(),
-  // コード以外の成果は作業ツリーの観測に映らないので、マネージャー自身が記録したものを持つ（#2987）。古い順・直近 `keptPerJob` 件
+  // コード以外の成果は作業ツリーの観測に映らないので、マネージャー自身が記録したものを持つ。古い順・直近 `keptPerJob` 件
   externalOutputs: z.array(externalOutputSchema).optional(),
 });
 
