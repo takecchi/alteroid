@@ -1549,6 +1549,14 @@ export interface CodexAuthRunnerSync {
 export interface ManagerPoolOptions {
   /** **マネージャーのセッションを起こす瞬間に1度だけ読む。** */
   tokenIdentity?: () => { tokenId: string; generation: number; fingerprint?: string } | undefined;
+  /**
+   * トークン1本の「いま使えるか」を聞く。世代が食い違った done の委譲へ送るとき、畳めない理由（確認待ち・背景処理）が残っていても、
+   * 委譲が抱えている古い鍵が `'ready'` なら断らず旧セッションへ届けるために使う。
+   * 省略・`undefined`・例外は「分からない」で、従来どおり断る（安全側）。
+   */
+  tokenAvailability?: (
+    tokenId: string,
+  ) => Promise<'ready' | 'cooling' | 'disabled' | 'invalidated' | undefined>;
   /** **このプールは回すかどうかを判断しない。** */
   onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
   /**
@@ -2579,6 +2587,7 @@ class Pool implements ManagerPool {
    */
   readonly #tokenIdentity:
     (() => { tokenId: string; generation: number; fingerprint?: string } | undefined) | undefined;
+  readonly #tokenAvailability: ManagerPoolOptions['tokenAvailability'];
   readonly #syncRunnerToken: ((runner: RunnerClient) => Promise<void>) | undefined;
   readonly #onWorkerToolEvent: ((event: WorkerToolEvent) => void) | undefined;
   readonly #onUsageObservation:
@@ -2824,6 +2833,7 @@ class Pool implements ManagerPool {
     synthesizedNoticeWindowMs,
     generateManagerId,
     tokenIdentity,
+    tokenAvailability,
     onUsageObservation,
     syncRunnerToken,
     onWorkerToolEvent,
@@ -2862,6 +2872,7 @@ class Pool implements ManagerPool {
     this.#generateManagerId = generateManagerId ?? (() => `mgr-${randomUUID()}`);
     this.#workspace = workspace ?? resolveWorkspacePolicy();
     this.#tokenIdentity = tokenIdentity;
+    this.#tokenAvailability = tokenAvailability;
     this.#onUsageObservation = onUsageObservation;
     this.#syncRunnerToken = syncRunnerToken;
     // 起動時にしか受け口を開かないと、後から名簿に載った runner は永久に無言のままになる。
@@ -3172,12 +3183,14 @@ class Pool implements ManagerPool {
     // 認証トークンの世代が食い違った done の委譲は旧セッションへ流さない: 旧プロセスの env は起動時に凍っていて、
     // 鍵が回った後も古い鍵で走り、また枠に当たる。
     let fingerprintMatched = false;
+    let staleDelivery: { generation: number; blockers: string[] } | undefined;
     // 届ける前に取る: 届いた直後に来た report を「ターンの前」と読まないため
     const turnStartedAt = new Date(this.#now()).toISOString();
     if (record.job.status === 'done') {
       const folded = await this.#foldStaleTokenSession(record, runner, managerId);
       if (folded.declined !== undefined) return folded.declined;
       fingerprintMatched = folded.fingerprintMatched === true;
+      staleDelivery = folded.staleDelivery;
     }
 
     // `attached` を信じ切らない: イベント駆動でしか更新されず、`closed` / resume 失敗の合図が届かなかった窓では
@@ -3308,13 +3321,18 @@ class Pool implements ManagerPool {
       outcome: 'delivered',
       // 台帳を直したことは黙らず呼び手へ言う: 届き方が違うと、続けて送る側は器が入れ替わった後の文脈で走っていると知る必要がある。
       detail:
-        // 短絡した回は、新しい SDK を起こしておらず旧プロセス（起動時の鍵が凍っている）へ届いたと言う。
-        !attached && this.#resumedIntoLiveProcess.has(managerId)
-          ? '追加指示として届けた（生きた旧プロセスへ流した。新しい SDK は起こしていない。' +
-            'その鍵が現役かどうかは確かめていないので、この委譲の認証トークンの世代は「分からない」のままにしてある）。'
-          : reentered
-            ? '追加指示として届けた（runner にこの委譲のセッションが無かったので、resume から入り直した）。'
-            : '追加指示として届けた。',
+        // 畳めない理由が残るので古い鍵のまま届けた回は、それを黙らない（鍵がいま使えると確かめたうえでの判断）。
+        staleDelivery !== undefined && !reentered
+          ? `追加指示として届けた（古い鍵（世代 ${String(staleDelivery.generation)}）のまま旧セッションへ届けた。` +
+            `畳めない理由（${staleDelivery.blockers.join('。')}）が残っているため、新しい鍵で起こし直していない。` +
+            'その鍵はいま使える状態（ready）だった）。'
+          : // 短絡した回は、新しい SDK を起こしておらず旧プロセス（起動時の鍵が凍っている）へ届いたと言う。
+            !attached && this.#resumedIntoLiveProcess.has(managerId)
+            ? '追加指示として届けた（生きた旧プロセスへ流した。新しい SDK は起こしていない。' +
+              'その鍵が現役かどうかは確かめていないので、この委譲の認証トークンの世代は「分からない」のままにしてある）。'
+            : reentered
+              ? '追加指示として届けた（runner にこの委譲のセッションが無かったので、resume から入り直した）。'
+              : '追加指示として届けた。',
     };
   }
 
@@ -3334,7 +3352,11 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
     runner: RunnerClient,
     managerId: string,
-  ): Promise<{ declined?: ManagerSendResult; fingerprintMatched?: true }> {
+  ): Promise<{
+    declined?: ManagerSendResult;
+    fingerprintMatched?: true;
+    staleDelivery?: { generation: number; blockers: string[] };
+  }> {
     const held = this.#tokenIdentities.get(managerId)?.generation;
     const identity = this.#tokenIdentity?.();
     const active = identity?.generation;
@@ -3423,6 +3445,28 @@ class Pool implements ManagerPool {
       blockers.push('runner のセッションはいまターンが走っている（畳むと走っている仕事を失う）');
     }
     if (blockers.length > 0) {
+      // 抱えている鍵がいま ready なら断らず旧セッションへ流す: その鍵ならまた枠に当たらず、畳めば確認待ち・背景処理を失うため。
+      // 指紋で判定した回（attached=false）は鍵が分からないので流さない。sessionId が無い回も流さない（保守側に倒す）。
+      const heldTokenId = this.#tokenIdentities.get(managerId)?.tokenId;
+      if (
+        record.attached &&
+        record.job.sessionId !== undefined &&
+        heldTokenId !== undefined &&
+        held !== undefined &&
+        this.#tokenAvailability !== undefined
+      ) {
+        const availability = await this.#tokenAvailability(heldTokenId).catch(() => undefined);
+        if (availability === 'ready') {
+          await this.#journal({
+            type: 'decision',
+            decision: `[${managerId}] done の委譲を、古い鍵（世代 ${String(held)}）のまま旧セッションへ届ける（${staleness}）`,
+            grounds:
+              `managerId=${managerId} tokenId=${heldTokenId} 鍵の状態=ready ` +
+              `畳めない理由=${blockers.join('。')}（#4441。畳むと残っているものを失い、その鍵はいま使える）`,
+          });
+          return { staleDelivery: { generation: held, blockers } };
+        }
+      }
       return {
         declined: {
           outcome: 'declined',

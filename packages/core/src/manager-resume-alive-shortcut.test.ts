@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createManagerPool } from './manager.js';
+import { createManagerPool, type ManagerPoolOptions } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import {
   createRunnerRegistry,
@@ -147,6 +147,7 @@ async function sendAfterRestart(
   options: {
     session?: Parameters<typeof shortcutRunner>[2];
     activeFingerprint?: string;
+    tokenAvailability?: ManagerPoolOptions['tokenAvailability'];
     observe?: boolean;
     afterObserve?: (fake: ReturnType<typeof shortcutRunner>) => void;
     beforeSend?: (fake: ReturnType<typeof shortcutRunner>) => void;
@@ -171,6 +172,9 @@ async function sendAfterRestart(
         ? {}
         : { fingerprint: options.activeFingerprint }),
     }),
+    ...(options.tokenAvailability === undefined
+      ? {}
+      : { tokenAvailability: options.tokenAvailability }),
   });
   await pool.restore();
   const before = (await pool.list()).find((s) => s.managerId === 'mgr-alive');
@@ -258,6 +262,24 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
     expect(s.result.detail).toContain('manager_stop');
     expect(s.fake.stops).toHaveLength(0);
     expect(s.fake.spawned).toHaveLength(0);
+    expect(s.fake.pushedToLiveProcess).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it('⚠️ 指紋で判定する回（attached=false）は、注入口が ready を返しても背景処理が残っていれば断る（#4441）', async () => {
+    const asked: string[] = [];
+    const s = await sendAfterRestart('true', true, {
+      session: { tokenFingerprint: OLD_FP, liveBackgroundTasks: 2 },
+      activeFingerprint: NEW_FP,
+      tokenAvailability: async (tokenId) => {
+        asked.push(tokenId);
+        return 'ready';
+      },
+    });
+
+    expect(s.result.outcome).toBe('declined');
+    expect(asked).toHaveLength(0);
+    expect(s.fake.stops).toHaveLength(0);
     expect(s.fake.pushedToLiveProcess).toHaveLength(0);
     await s.pool.stop();
   });
