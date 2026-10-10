@@ -117,6 +117,10 @@ export class TaskBreakdownReader {
   readonly #ownerUidOf: (procRoot: string, pid: string) => Promise<number | undefined>;
   readonly #killFn: (pid: number, signal: NodeJS.Signals) => void;
   #cache: { at: number; value: TaskBreakdown | undefined } | undefined;
+  // 走っている走査に相乗りさせる: `/health`（名乗りの確認・配置の資源の問い）と回収の掃除は別々に来るので、走査が遅い器ほど
+  // 走査中に次の要求が届き、O(pids) の走査が並んで器をさらに重くする。並んだ走査は回収の帳面（`#reaper` / `#lineage`）も並行に書き換え、
+  // 古い写しで始めた走査が後から終わると、新しい走査が書いた系譜を古い系譜で上書きする（#4454 の仮説3の調べで見つけた）。
+  #inflight: Promise<TaskBreakdown | undefined> | undefined;
   readonly #reaper = new Map<number, ReaperEntry>();
   readonly #lineage = new Map<number, LineageEntry>();
 
@@ -148,7 +152,18 @@ export class TaskBreakdownReader {
     await this.#scan(now);
   }
 
-  async #scan(now: number): Promise<TaskBreakdown | undefined> {
+  // 走っている走査があれば、新しく始めずにその結果を返す。返す値はその走査を始めた時点の写しで、`ttlMs` より古いことがある
+  // （走査そのものが `ttlMs` より長くかかる器でだけ起きる。そういう器で走査を重ねるほうが、写しの古さより害が大きい）。
+  #scan(now: number): Promise<TaskBreakdown | undefined> {
+    if (this.#inflight !== undefined) return this.#inflight;
+    const inflight = this.#scanOnce(now).finally(() => {
+      if (this.#inflight === inflight) this.#inflight = undefined;
+    });
+    this.#inflight = inflight;
+    return inflight;
+  }
+
+  async #scanOnce(now: number): Promise<TaskBreakdown | undefined> {
     const value = await scanTasks(this.#root, this.#clockTicksPerSecond, now, this.#reclaim, {
       cgroupRoot: this.#cgroupRoot,
       procCgroupPath: this.#procCgroupPath,

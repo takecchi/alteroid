@@ -221,6 +221,103 @@ describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計
   });
 });
 
+describe('走査は1本だけ走る（走査中の要求は相乗りする）', () => {
+  const OWN_UID = process.getuid?.() ?? 0;
+
+  // 走査を途中で止めておくための口: 所有 UID の読みを、外から開けるまで返さない。
+  function gatedOwnerUid() {
+    const calls: string[] = [];
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const ownerUidOf = async (_procRoot: string, pid: string): Promise<number | undefined> => {
+      calls.push(pid);
+      await gate;
+      return OWN_UID;
+    };
+    return { calls, ownerUidOf, open: () => open() };
+  }
+
+  it('走査中に届いた read() は、新しく走査せず、走っている走査の結果を受け取る', async () => {
+    placeProcess(root, 700, 'node', 'S', 2, 0);
+    placeUptime(root, 1000);
+    const gated = gatedOwnerUid();
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: { childUid: OWN_UID },
+      ownerUidOf: gated.ownerUidOf,
+    });
+
+    const first = reader.read();
+    const second = reader.read();
+    await vi.waitFor(() => expect(gated.calls.length).toBeGreaterThan(0));
+    gated.open();
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(gated.calls).toEqual(['700']);
+    expect(b).toBe(a);
+    expect(a?.processes).toBe(1);
+  });
+
+  it('回収の掃除（sweepIfStale）も、走っている走査に相乗りする', async () => {
+    placeProcess(root, 710, 'node', 'S', 1, 0);
+    placeUptime(root, 1000);
+    const gated = gatedOwnerUid();
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: { childUid: OWN_UID },
+      ownerUidOf: gated.ownerUidOf,
+    });
+
+    const read = reader.read();
+    const sweep = reader.sweepIfStale(0);
+    await vi.waitFor(() => expect(gated.calls.length).toBeGreaterThan(0));
+    gated.open();
+    await Promise.all([read, sweep]);
+
+    expect(gated.calls).toEqual(['710']);
+  });
+
+  it('走査が終わった後の、TTL を過ぎた read() は走査し直す（相乗りは走っている間だけ）', async () => {
+    let now = 0;
+    placeProcess(root, 720, 'node', 'S', 1, 0);
+    placeUptime(root, 1000);
+    const reader = new TaskBreakdownReader({ procRoot: root, ttlMs: 1000, now: () => now });
+
+    expect((await reader.read())?.processes).toBe(1);
+    placeProcess(root, 721, 'node', 'S', 1, 0);
+    now = 1500;
+    expect((await reader.read())?.processes).toBe(2);
+  });
+
+  it('走査が失敗しても次の read() は詰まらない（走っている走査の印を残さない）', async () => {
+    placeProcess(root, 730, 'node', 'S', 1, 0);
+    placeUptime(root, 1000);
+    let fail = true;
+    // 所有 UID の読みの失敗は走査の中で「読めなかった」に数えられて走査は通るので、走査そのものを落とすには委譲の pid の集合の読みを投げさせる。
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      ttlMs: 0,
+      ownerUidOf: () => Promise.resolve(OWN_UID),
+      reclaim: {
+        childUid: OWN_UID,
+        sessions: {
+          liveSessionPidsOf: () => {
+            if (fail) throw new Error('帳面が読めない');
+            return new Set();
+          },
+          knownTerminatedSessionPidsOf: () => new Set(),
+        },
+      },
+    });
+
+    await expect(reader.read()).rejects.toThrow('帳面が読めない');
+    fail = false;
+    expect((await reader.read())?.processes).toBe(1);
+  });
+});
+
 describe('孤児プロセス木の観測（#315 段0。数えるだけで撃たない）', () => {
   const OWN_UID = process.getuid?.() ?? 0;
 
