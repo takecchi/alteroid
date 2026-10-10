@@ -96,7 +96,7 @@ describe('ApprovalQuestionsForm: 「選択を外す」のフォーカス', () =>
   });
 });
 
-// 選んでから Enter を押すと、そのまま回答が送られる事故があった（form の暗黙の送信）。送るのは ⌘/Ctrl + Enter と「回答」ボタンだけ
+// 送るのは ⌘/Ctrl + Enter と「回答」ボタンだけ: Enter で送れると、選んだ直後の Enter が form の暗黙の送信になり、押した覚えのない回答が送られるため
 describe('ApprovalQuestionsForm: 選択肢を選んだ後の Enter では送らない', () => {
   const multi: ApprovalQuestionView[] = [
     { id: 'q1', prompt: 'どれ？', options: [{ id: 'a', label: 'A' }], multiple: true },
