@@ -502,9 +502,18 @@ export class ScratchSweeper {
       let changed = true;
       while (changed && !signal.aborted) {
         changed = false;
-        const plannedDirs = [...planned.values()]
-          .filter((p) => p.entry.isDirectory() && !p.entry.isSymbolicLink())
-          .map((p) => dirPath(p.entry));
+        // 実パスも並べる: `git worktree list` は symlink を解いた実パスを返すので、基点が symlink を挟む器（macOS の /var → /private/var）では自分の作業ツリーを「外」と読み、消せる作業場を残すため（#4399）。取れなければ元のパスだけで比べ、残す側へ倒れる
+        const plannedDirs: string[] = [];
+        for (const p of planned.values()) {
+          if (!p.entry.isDirectory() || p.entry.isSymbolicLink()) continue;
+          const dir = dirPath(p.entry);
+          plannedDirs.push(dir);
+          try {
+            plannedDirs.push(await (this.#o.realpathFn ?? realpath)(dir));
+          } catch {
+            // 元のパスだけで比べる
+          }
+        }
         for (const [name, p] of [...planned.entries()]) {
           const insp = dirInspections.get(name);
           if (insp === undefined) continue;

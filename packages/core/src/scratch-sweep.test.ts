@@ -126,6 +126,25 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     expect(await s.sweep(ctl.signal, 'r1')).toBeNull();
   });
 
+  it('基点が symlink を挟んでいても（macOS の /var → /private/var）、自分の作業ツリーへの依存と読まずに消す（#4399）', async () => {
+    const realRoot = root;
+    const linkParent = await makeTempDir('scratch-sweep-link-');
+    root = path.join(linkParent, 'tmp');
+    await symlink(realRoot, root);
+    try {
+      await makeClone('mgr-aaaa1111');
+      const s = sweeper();
+      await expire(s);
+      const event = await s.sweep(ctl.signal, 'r1');
+      expect(event?.kept).toEqual([]);
+      expect(event?.removed.map((i) => i.name)).toEqual(['mgr-aaaa1111']);
+      expect(existsSync(path.join(realRoot, 'mgr-aaaa1111'))).toBe(false);
+    } finally {
+      await rm(linkParent, { recursive: true, force: true });
+      await rm(realRoot, { recursive: true, force: true });
+    }
+  });
+
   it('走行中のセッションに当たる作業場は、猶予を過ぎても消さない。閉じた後は閉じてから数える', async () => {
     await makeClone('mgr-aaaa1111-wt2');
     live = [ID_A];
