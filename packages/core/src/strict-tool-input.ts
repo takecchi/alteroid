@@ -42,7 +42,9 @@ function nearestName(name: string, known: readonly string[]): string | undefined
     const score =
       editDistance(name.toLowerCase(), candidate.toLowerCase()) /
       Math.max(name.length, candidate.length);
-    if (score <= 0.5 && (best === undefined || score < best.score)) best = { name: candidate, score };
+    if (score <= 0.5 && (best === undefined || score < best.score)) {
+      best = { name: candidate, score };
+    }
   }
   return best?.name;
 }
