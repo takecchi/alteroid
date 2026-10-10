@@ -470,7 +470,6 @@ describe('/env-vars 画面 — 置く・編集・削除', () => {
     fireEvent.change(within(dialog).getByLabelText('値'), { target: { value: 'half-typed' } });
     fireEvent.change(within(dialog).getByLabelText('渡す先'), { target: { value: 'app' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
-    // 書きかけがあるので確認を挟む（#3418）。ここでは破棄を選んで閉じる
     fireEvent.click(await screen.findByRole('button', { name: '破棄して閉じる' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 

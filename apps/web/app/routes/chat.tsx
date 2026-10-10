@@ -293,7 +293,7 @@ interface Line {
   turnFailure?: 'failed' | 'held';
   turnFailureKind?: TurnFailureKind;
   replyGroup?: string;
-  // 返信の途中に人間の発言が届いて（`queued`）分けた行の印: デーモンはそこで返信を割って日誌へ書くので（#4391）、割らない古いデーモンの本文と照合するときはこの境目に区切りを入れない
+  // 返信の途中に人間の発言が届いて（`queued`）分けた行の印: デーモンはそこで返信を割って日誌へ書くので、割らない古いデーモンの本文と照合するときはこの境目に区切りを入れない
   splitByHuman?: true;
   journalId?: string;
   attachments?: readonly MessageAttachment[];
@@ -449,7 +449,7 @@ export function pendingOwnLines(
     if (line.approval !== undefined) historyApprovals.set(line.approval.id, line.approval);
   }
   // 分かれた返信は連結した本文で照合する: 日誌はターンの本文を1つの発言として載せるので、行ごとだと二重に出る。
-  // 連続した行の並びごとに照合する（長い並びを先に当てる）: デーモンは承認カードやターン中に届いた人間の発言（#4391）でターンの本文を割って書くので、1ターンが日誌の複数の発言になる
+  // 連続した行の並びごとに照合する（長い並びを先に当てる）: デーモンは承認カードやターン中に届いた人間の発言でターンの本文を割って書くので、1ターンが日誌の複数の発言になる
   const groups = new Map<string, Line[]>();
   for (const line of owned) {
     if (line.replyGroup === undefined || line.role !== 'clone') continue;
@@ -462,7 +462,7 @@ export function pendingOwnLines(
       let next = start + 1;
       for (let end = members.length; end > start + 1; end -= 1) {
         const run = members.slice(start, end);
-        // 区切りあり（#4339 以降のデーモン: メッセージの境目に空行）と区切りなし（古いデーモン）の両方を受ける: Web とデーモンは版がずれる。
+        // 区切りあり（メッセージの境目に空行）と区切りなし（古いデーモン）の両方を受ける: Web とデーモンは版がずれる。
         // 区切りありを先に当てる。どちらも履歴に在るなら、区切りありのほうが新しい形
         const key = REPLY_SEGMENT_JOINERS.map(
           (joiner) =>
@@ -1822,7 +1822,7 @@ export function ChatPane({
     };
     const apply = (event: ChatStreamEvent) => {
       switch (event.type) {
-        // 返信の行をここで分ける（#4391）: デーモンは人間の発言を記録するとき、それまでの返信を先に日誌へ書く。続きを同じ行へ足すと、その発言より上に出るうえ、日誌の本文とも合わない
+        // 返信の行をここで分ける:デーモンは人間の発言を記録するとき、それまでの返信を先に日誌へ書く。続きを同じ行へ足すと、その発言より上に出るうえ、日誌の本文とも合わない
         case 'queued': {
           // 続けて届いた2通目でも印を落とさない: 1通目で行は既に閉じている
           const split = replyKey !== undefined || splitByHuman;
@@ -2785,7 +2785,7 @@ export function ChatPane({
       first.at,
     );
     const open = data.reachedStart === false;
-    // 取り下げた発言は数えない（#4357）: 吹き出しとして出していないため
+    // 取り下げた発言は数えない:吹き出しとして出していないため
     const counted = visible.filter((message) => message.delivery !== 'withdrawn').length;
     return `${formatDateTime(startedAt)}${open ? ' 以降' : ' に開始'} · 発言 ${counted} 件${open ? '以上' : ''}`;
   })();

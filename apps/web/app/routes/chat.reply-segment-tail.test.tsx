@@ -8,10 +8,6 @@ import { json, Providers, sse, storeTestBaseUrl, stubFetch } from '~/test-suppor
 
 import Chat from './chat';
 
-// 道具の直前の本文の末尾と `tool` が同じ網の塊で届くと、末尾が画面の行に書かれないまま落ちていた。
-// 行の本文が日誌の本文（ターンの本文を区切りなしで連結した1発言）と食い違い、pendingOwnLines の照合に永久に当たらず、
-// 前半（途中で切れた版）と後半が会話の末尾に居座った（会話 82d90cd7 の返答 36291767、2026-10-09）。
-
 const ID = 'conv-tail';
 const BEFORE_HEAD = '待ち時間を 35 秒ほどにすれば、必ず Gotenberg が先に切れて';
 const BEFORE_TAIL = '、その理由を受け取れます。';
@@ -149,7 +145,6 @@ describe('道具の直前の本文の末尾と tool が同じ塊で届く（会�
                   id: 'm2',
                   at: '2026-10-09T08:27:32.000Z',
                   role: 'outbound',
-                  // 日誌はターンの本文を区切りなしで連結した1発言として載せる
                   text: BEFORE_HEAD + BEFORE_TAIL + AFTER,
                 },
               ]
@@ -185,7 +180,6 @@ describe('道具の直前の本文の末尾と tool が同じ塊で届く（会�
     afterTool.open();
     await screen.findByText(AFTER);
 
-    // 道具の前の行は、末尾まで書かれている
     expect(items().some((text) => text.includes(BEFORE_HEAD + BEFORE_TAIL))).toBe(true);
 
     replied = true;
@@ -196,7 +190,6 @@ describe('道具の直前の本文の末尾と tool が同じ塊で届く（会�
       const shown = items();
       expect(shown.filter((text) => text.includes(AFTER))).toHaveLength(1);
       expect(shown.filter((text) => text.includes(BEFORE_HEAD))).toHaveLength(1);
-      // 確定した1発言が最後に在り、手元の写しが後ろに居座らない
       expect(shown.at(-1)).toContain(BEFORE_HEAD + BEFORE_TAIL + AFTER);
     });
   });
