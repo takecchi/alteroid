@@ -81,13 +81,11 @@ export function memoryVersion(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-/** `PersonaStore.write` の任意の引数。 */
 export interface WriteMemoryOptions {
   /** 前提の版（`memoryVersion`）。書く瞬間の版と違えば書かず `MemoryConflictError`。`null` は「無いときだけ書ける」、省略は後勝ち。 */
   ifMatch?: string | null;
 }
 
-/** `PersonaStore.remove` の任意の引数。 */
 export interface RemoveMemoryOptions {
   /** 前提の版（`memoryVersion`）。合わなければ消さず `MemoryConflictError`。省略は無条件。 */
   ifMatch?: string;
@@ -113,10 +111,9 @@ export function memoryVersionMatches(
   return current !== null && memoryVersion(current.content) === ifMatch;
 }
 
-/** 記憶 = 人間がいつでも読んで直せる Markdown 文書群（提供価値1）。 */
 export interface PersonaStore {
   /**
-   * **slug の昇順。**（#662 の継続点が依拠する契約）
+   * **slug の昇順。**
    *
    * `memory_list` の継続点（`memory-cursor.ts`）が並びに全面的に依拠するので、偶然揃っている状態にしない。
    * 照合順序の厳密な一致までは保証しない: 継続点は位置の探索を第一にし、比較は錨が消えたときの保険に留める。
@@ -127,8 +124,7 @@ export interface PersonaStore {
    * 全文置換。存在しなければ作る。
    *
    * **書いた本文は、末尾の改行が正規化されて読み戻る**（`write(slug, '# X')` → `read` は `'# X\n'`）。
-   * `bytes` も `content_sha256` も正規化後の本文で数える。実装は自分で正規化せず `ensureTrailingNewline` を通す:
-   * 複製したせいでインメモリだけ読み戻しが違い、単体テストが乖離した側だけを測っていた。
+   * `bytes` も `content_sha256` も正規化後の本文で数える。実装は自分で正規化せず `ensureTrailingNewline` を通す: 複製すると、実装ごとに読み戻しがずれるため。
    * 実装を足すときは、fs / pg / インメモリ（`persona-contract.test.ts`）と同じ歯を足す。
    *
    * `options.ifMatch` の比較は書き込みと同じ排他の中で行う（fs: `#serialize` の内側、pg: 条件付きの1文）。
@@ -245,7 +241,6 @@ export interface JournalQuery {
 }
 
 /**
- * `JournalQuery.after` の錨（`{ id, at }`）が見つからないときに投げる。
  * 黙って「先頭から」に倒さない: `after` は頁の継続点そのものなので、見つからないことは「判定できない」である。
  */
 export class JournalAnchorNotFoundError extends Error {
@@ -261,7 +256,6 @@ export class JournalAnchorNotFoundError extends Error {
  */
 export type JournalCursor = { id: string; at: string };
 
-/** `JournalStore.listPage` の返り値。 */
 export interface JournalPage {
   /** `list()` と同じ中身（読めた行だけ）。 */
   entries: JournalEntry[];
@@ -434,7 +428,7 @@ export function describeUnreadableApprovals(
   );
 }
 
-/** 読めない委譲の行が在るときの1文（0件なら `null`。0件のときは何も出さない）。本文は載せない（`unreadableJobSchema` の doc）。 */
+/** 読めない委譲の行が在るときの1文（0件なら `null`）。本文は載せない（`unreadableJobSchema` の doc）。 */
 export function describeUnreadableJobs(
   unreadable: readonly UnreadableJob[],
   options: { idLimit?: number } = {},
@@ -663,7 +657,7 @@ export interface ScheduleList {
   unreadable: UnreadableSchedule[];
 }
 
-/** 読めない継続中の依頼が在るときの1文（0件なら `null`。0件のときは何も出さない）。本文は載せない（`unreadableScheduleSchema` の doc）。 */
+/** 読めない継続中の依頼が在るときの1文（0件なら `null`）。本文は載せない（`unreadableScheduleSchema` の doc）。 */
 export function describeUnreadableSchedules(
   unreadable: readonly UnreadableSchedule[],
   options: { kindLimit?: number } = {},
@@ -867,7 +861,6 @@ export interface CommitmentList {
  * 文字列の union にもしない: `'existed'` も `'folded'` も truthy なので、`if (await store.open(entry))` と書いた呼び出しが型検査を通ったまま意味を反転させる。
  */
 export interface CommitmentOpenResult {
-  /** 新しい行を開いたか。 */
   readonly opened: boolean;
   /** 同一マネージャー×同一本文の未了へ任せたか（畳んだか）。`opened` が `true` なら必ず `false`。両方 `false` なら「同じ id が既に在った」。 */
   readonly folded: boolean;
@@ -914,7 +907,6 @@ export function commitmentBodyVersion(entry: Pick<Commitment, 'at' | 'editedAt'>
   return entry.editedAt ?? entry.at;
 }
 
-/** `CommitmentStore.editBody` の任意の引数。 */
 export interface EditCommitmentBodyOptions {
   /** 前提の版（`commitmentBodyVersion`）。書く瞬間の版と違えば書かず `CommitmentConflictError`。省略は後勝ち。無い行は `current: null` の衝突。片付いている行は版を見ず `false`。 */
   ifMatch?: string;
@@ -1075,8 +1067,7 @@ export interface InboxStore {
    *
    * 進めるのは、呼び出した時点で残っている未読の全行（pg は `WHERE` 句の無い `UPDATE`、fs は全件の map）。
    * 回数が数えているのは「器が入れ替わった回数」であって「この合図の処理が落ちた回数」ではない。
-   * 待ち行列に居ただけで一度も処理されていない合図も同じだけ増える。この口を使う側はここしか読まないので、無いと因果を誤読する
-   * （未読 104 件の器で「4 回目の配達」と名乗る合図が届き、クローンは「なぜ落ちたか」を調べてターンを1本使った。答えは「一度も処理されていなかった」）。
+   * 待ち行列に居ただけで一度も処理されていない合図も同じだけ増える。この口を使う側はここしか読まないので、無いと因果を誤読する。
    *
    * 読むことと回数を進めることを1操作に閉じる（`ScheduleStore.claimRun` と同じ作法）: 分けると、配り直しの途中で落ちたときに回数が進まず「何回目の配達か」が嘘になる。
    * 回数はクローンが毒（配り直すたびに器ごと落ちる合図）を見分ける材料だが、言えるのは同時に拾い直したのが1件だけのときに限る
@@ -1126,7 +1117,7 @@ export interface InboxPeek {
   unreadable: UnreadableInboxEvent[];
 }
 
-/** 読めない合図が在るときの1文（0件なら `null`。0件のときは何も出さない）。本文は載せない。 */
+/** 読めない合図が在るときの1文（0件なら `null`）。本文は載せない。 */
 export function describeUnreadableInboxEvents(
   unreadable: readonly UnreadableInboxEvent[],
   options: { idLimit?: number } = {},
@@ -1150,7 +1141,6 @@ export function describeUnreadableInboxEvents(
   );
 }
 
-/** 未読として残っていた合図1件。 */
 export interface PendingInboxEvent {
   event: InboxEvent;
   /** `post` が受理した時刻（ISO 8601）。 */
@@ -1202,7 +1192,7 @@ export type ArchiveRemoval =
  * `TranscriptArchive.list()` の1行。
  *
  * `storedBytes` はその置き場がこの行に実際に使っている量（pg は圧縮後のバイト数、fs は `stat().size`、インメモリは文字列長）。
- * 生ログの文字数ではなく、置き場をまたいで比較してはならない（展開後の文字数と圧縮後のバイト数を取り違えた比較が実際に起きた）。
+ * 生ログの文字数ではなく、置き場をまたいで比較してはならない。
  * `removedAt` / `removedBytes` は `remove()`（tombstone）が起きた行にだけ載る（`removedBytes` の単位は `ArchiveRemoval` と同じ）。
  * `continuity` は `archive()` が積んだ瞬間に判定した直前の退避との連続性。この機能より前に積まれた行には無いので optional。
  */
@@ -1248,7 +1238,7 @@ export interface ArchiveContinuityTally {
 /**
  * `TranscriptArchive.sessions()` の1行 — `sessionId` ごとの集計。
  *
- * `rows` は `archive()` が呼ばれた回数（tombstone 済みの行も含む）。同じセッションの生ログが何度も積まれているという重複の事実が、個々の `storedBytes` の大小より先に問題の所在を特定した。
+ * `rows` は `archive()` が呼ばれた回数（tombstone 済みの行も含む）。
  * `storedBytes` / `maxStoredBytes` の単位・比較不可の制約は `ArchiveEntry.storedBytes` を継承する。
  * `continuity` は無い行を `absent` として数えるので、集計自体は常に存在する（optional にしない）。
  */
@@ -1287,7 +1277,7 @@ export interface TranscriptArchive {
   read(id: string): Promise<ArchiveRead>;
   /**
    * 末尾だけを読む。`read()` を使わない: 本文の全体を返し、`archive` の1行は最大 78.3 MB に育つ。
-   * 起動のたびに自動で走る拾い直し（`clone.ts` の `#pickUpTranscriptGrave`）が全文をヒープへ載せてから末尾だけを使っていたのが OOM の原因だった。
+   * 起動のたびに自動で走る拾い直し（`clone.ts` の `#pickUpTranscriptGrave`）が `read()` で全文をヒープへ載せると、OOM になる。
    *
    * 契約:
    * - 戻りの形は `read()` と同じ3状態（`body` / `removed` / `missing`）。`#pickUpTranscriptGrave` が日誌の文面を分けているので区別を潰さない。
@@ -1323,8 +1313,7 @@ export interface TranscriptArchive {
  * 持つのはデーモンだけ: runner は自分で読みに行かず、降ってきたものを器に置くだけにする
  * （読みに行けるなら runner から記憶ストアへの経路があることになり、M4 の受け入れ基準3 が無いと言っているもの）。
  *
- * 名前付きの行を複数持つ。かつての「高々1本のスクリプト・層による効かせ分けを持たない」形は、人間の明示的な決定で作り替えた
- * （オーナーの逐語:「env-profileを環境変数と同じように指定できるようにして欲しい」「デフォルトは両方です」）。
+ * 名前付きの行を複数持つ。
  * `StoredCredential.scope` と同じ理由・同じ形: AGENTS.md 地雷3が禁じるのは「行為の確認要否を配線で固定する」ことで、
  * `scope` は確認・許可の話ではなく「どのプロセスにとってこの環境が意味を持つか」というプロセストポロジーの表現である。
  * クローンは `scope` が `runner` の行も `profile_read` で読める（読む口は `scope` で変わらない）。
@@ -1447,7 +1436,6 @@ export interface StoredCredential {
   /**
    * 撒く先。既定は `'all'`（クローン・マネージャー双方）。per-row の使い分けは「どうしても要るとき」だけの例外。
    *
-   * 行ごとの列を持つのは、人間の明示的な指示で `env_profile` / この表が避けていた形を上書きしたため。
    * AGENTS.md 地雷3が禁じるのは「行為の確認要否を配線で固定する」ことで、`scope` は確認・許可の話ではなく
    * 「どのプロセスにとってこの環境変数が意味を持つか」というプロセストポロジーの表現である（`GOOGLE_CLIENT_SECRET` はマネージャーの Bash 環境には意味を持たない）。
    */
@@ -1595,7 +1583,6 @@ export interface UsageStore {
   record(input: {
     /** 誰が使ったか。モデル id で代用しない（`usage.ts` の `usageLayerSchema`）。 */
     layer: UsageLayer;
-    /** どこで使ったか。 */
     site: UsageSite;
     /** 誰の分か（マネージャーの id か `CLONE_ACTOR_ID`）。 */
     managerId: string;
@@ -1636,7 +1623,6 @@ export interface UsageStore {
     managerId: string;
     date: string;
     at: string;
-    /** 報告しなかった provider の id。 */
     provider: string;
     tokenId?: string;
   }): Promise<void>;
@@ -1684,7 +1670,6 @@ export interface UsageStore {
  * セッション id を控える形にすると「捨てるのと印を立てるのを同じ操作にする」順序の約束が要り、守り損ねると静かに拾えなくなる。
  */
 export interface TranscriptGrave {
-  /** `TranscriptArchive.archive()` が返した id。 */
   archiveId: string;
 }
 
@@ -1819,7 +1804,7 @@ export interface PracticeList {
   unreadable: UnreadablePractice[];
 }
 
-/** 読めないやり方が在るときの1文（0件なら `null`。0件のときは何も出さない）。本文・題は載せない（`unreadablePracticeSchema`）。 */
+/** 読めないやり方が在るときの1文（0件なら `null`）。本文・題は載せない（`unreadablePracticeSchema`）。 */
 export function describeUnreadablePractices(
   unreadable: readonly UnreadablePractice[],
   options: { slugLimit?: number } = {},
@@ -1843,7 +1828,7 @@ export function describeUnreadablePractices(
   );
 }
 
-/** 読めない認証トークンの行が在るときの1文（0件なら `null`。0件のときは何も出さない）。トークンの値は載せない（`unreadableTokenSchema`）。識別は id とラベルだけ。 */
+/** 読めない認証トークンの行が在るときの1文（0件なら `null`）。トークンの値は載せない（`unreadableTokenSchema`）。識別は id とラベルだけ。 */
 export function describeUnreadableTokens(
   unreadable: readonly UnreadableToken[],
   options: { rowLimit?: number } = {},
@@ -1895,7 +1880,6 @@ export function practiceVersion(practice: Pick<Practice, 'kind' | 'title' | 'con
     .digest('hex');
 }
 
-/** `PracticeStore.write` の任意の引数。 */
 export interface WritePracticeOptions {
   /** 前提の版（`practiceVersion`）。書く瞬間の版と違えば書かず `PracticeConflictError`。`null` は「無いときだけ書ける」、省略は後勝ち。 */
   ifMatch?: string | null;
@@ -1911,7 +1895,6 @@ export class PracticeConflictError extends Error {
   }
 }
 
-/** `PracticeStore.remove` の任意の引数。 */
 export interface RemovePracticeOptions {
   /** 前提の版（`practiceVersion`）。合わなければ消さず `PracticeConflictError`。省略は無条件。 */
   ifMatch?: string;
@@ -1956,7 +1939,7 @@ export interface PracticeStore {
    * 全文置換。存在しなければ作る。
    *
    * 書いた本文は、末尾の改行が正規化されて読み戻る（`write({ ..., content: '# X' })` → `read()` は `'# X\n'`）。`chars`（コードポイント数）も正規化後の本文で数える。
-   * 実装は自分で正規化せず `ensureTrailingNewline` を通す（出所が1つに無かったせいで3実装のうち1つだけ振る舞いが違った前科がある。`PersonaStore.write`）。
+   * 実装は自分で正規化せず `ensureTrailingNewline` を通す（`PersonaStore.write` と同じ）。
    * `createdAt` は最初に作られたときのものを引き継ぐ（上書きで作成時刻を捏造しない）。`updatedAt` は毎回進む。
    *
    * 書いた後の本文を、1つの版として追記専用の履歴へ足す。版番号は slug ごとに 1 始まりの連番で、`remove()` しても版は消えず、作り直したら続きから振られる。
@@ -1996,7 +1979,6 @@ export interface PracticeStore {
   readVersion(slug: string, version: number): Promise<PracticeVersion | null>;
 }
 
-/** デーモンが必要とするストア一式。 */
 export interface Stores {
   persona: PersonaStore;
   journal: JournalStore;
