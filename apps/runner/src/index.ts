@@ -31,6 +31,7 @@ import { createRunnerApp, formatOutboxShutdownReport, Outbox } from './app.js';
 import { openManagerToolsSocket } from './manager-tools-socket.js';
 import { planPeerSocket } from './peer-socket.js';
 import {
+  startReclaimSweep,
   TaskBreakdownReader,
   type ReclaimReapOptions,
   type ReclaimScanOptions,
@@ -309,6 +310,10 @@ export async function main(): Promise<void> {
     ...(reclaimScan === undefined ? {} : { reclaim: reclaimScan }),
   });
 
+  // 回収が無効なら起こさない: 走査しても何も撃たず、`/proc` を読むだけになるため。
+  const stopReclaimSweep =
+    reclaimScan === undefined ? undefined : startReclaimSweep(taskBreakdownReader);
+
   const app = createRunnerApp({
     host,
     outbox,
@@ -360,6 +365,9 @@ export async function main(): Promise<void> {
     await host.shutdown().catch(() => undefined);
 
     await drainAndReportOutbox(outbox);
+
+    // `host.shutdown()` より先に止めない: 畳んだ委譲の木が、終わるまで SIGKILL を受けられるように。
+    stopReclaimSweep?.();
 
     process.exit(0);
   };

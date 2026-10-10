@@ -10,7 +10,12 @@ import { runnerExecutionResourcesSchema } from '@alteroid/core';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { RECLAIM_ENV_KEY, reclaimScanOf, withTerminatedReclaimSessions } from './index.js';
-import { TaskBreakdownReader, type ReclaimReapOptions, type ReclaimSessionView } from './tasks.js';
+import {
+  startReclaimSweep,
+  TaskBreakdownReader,
+  type ReclaimReapOptions,
+  type ReclaimSessionView,
+} from './tasks.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -1615,5 +1620,143 @@ describe('既定の構え（未設定 ⟹ reclaim）でも、走っている委�
 
     expect(result?.reclaim).toBeUndefined();
     expect(calls).toEqual([]);
+  });
+});
+
+describe('デーモンが居ない間も回収する（#2352。/health を叩かなくても走査が起きる）', () => {
+  const OWN_UID = process.getuid?.() ?? 0;
+  const SWEEP_MS = 10_000;
+
+  // `/health`（read）は1度も呼ばない: 呼ぶと、タイマー無しでも緑になる穴が開くため。
+  function setup(): {
+    calls: Array<{ pid: number; signal: NodeJS.Signals }>;
+    reader: TaskBreakdownReader;
+    clock: { now: number };
+    tick: () => Promise<void>;
+    stop: () => void;
+    cleared: () => number;
+  } {
+    placeProcess(root, 240, 'a', 'S', 1, 0, 1, 777);
+    placeUptime(root, 1000);
+    const calls: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const clock = { now: 1_000_000 };
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      now: () => clock.now,
+      killFn: (pid, signal) => calls.push({ pid, signal }),
+      reclaim: {
+        childUid: OWN_UID,
+        sessions: {
+          liveSessionPidsOf: () => new Set([555]),
+          knownTerminatedSessionPidsOf: () => new Set([777]),
+          anyTrackedDelegationsOf: () => true,
+        },
+      },
+    });
+    let timerCallback: (() => void) | undefined;
+    let pending: Promise<void> = Promise.resolve();
+    let cleared = 0;
+    const stop = startReclaimSweep(
+      {
+        sweepIfStale: (maxAgeMs) => {
+          pending = reader.sweepIfStale(maxAgeMs);
+          return pending;
+        },
+      },
+      {
+        setIntervalFn: (callback, ms) => {
+          expect(ms).toBe(SWEEP_MS);
+          timerCallback = callback;
+          return { unref: () => undefined };
+        },
+        clearIntervalFn: () => {
+          cleared += 1;
+          timerCallback = undefined;
+        },
+      },
+    );
+    return {
+      calls,
+      reader,
+      clock,
+      stop,
+      cleared: () => cleared,
+      tick: async () => {
+        timerCallback?.();
+        await pending;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      },
+    };
+  }
+
+  it('終端した委譲の孤児木へ、タイマーだけで SIGTERM が届き、猶予を過ぎた次の回で SIGKILL が届く', async () => {
+    const { calls, clock, tick } = setup();
+
+    await tick();
+    expect(calls).toEqual([{ pid: 240, signal: 'SIGTERM' }]);
+
+    clock.now += SWEEP_MS;
+    await tick();
+    expect(calls).toEqual([
+      { pid: 240, signal: 'SIGTERM' },
+      { pid: 240, signal: 'SIGKILL' },
+    ]);
+  });
+
+  it('直前に read() が走っていれば（cache が新しければ）走査しない。/proc も読み直さない', async () => {
+    const { calls, reader, clock } = setup();
+    await reader.read();
+    expect(calls).toEqual([{ pid: 240, signal: 'SIGTERM' }]);
+
+    placeProcess(root, 300, 'b', 'S', 1, 0, 1, 777);
+    clock.now += SWEEP_MS - 1;
+    await reader.sweepIfStale(SWEEP_MS);
+    expect(calls).toEqual([{ pid: 240, signal: 'SIGTERM' }]);
+
+    clock.now += 1;
+    await reader.sweepIfStale(SWEEP_MS);
+    expect(calls.map((call) => `${call.pid}:${call.signal}`).sort()).toEqual([
+      '240:SIGKILL',
+      '240:SIGTERM',
+      '300:SIGTERM',
+    ]);
+  });
+
+  it('停止関数を呼んだ後は走査されない', async () => {
+    const { calls, clock, tick, stop, cleared } = setup();
+    await tick();
+    expect(calls).toHaveLength(1);
+
+    stop();
+    expect(cleared()).toBe(1);
+    clock.now += SWEEP_MS;
+    await tick();
+    expect(calls).toHaveLength(1);
+  });
+
+  it('走査が失敗しても握り（unhandled rejection にしない）、前の回が終わるまでは重ねて走らせない', async () => {
+    let timerCallback: (() => void) | undefined;
+    let release: (() => void) | undefined;
+    let started = 0;
+    startReclaimSweep(
+      {
+        sweepIfStale: () => {
+          started += 1;
+          return new Promise<void>((_resolve, reject) => {
+            release = () => reject(new Error('scan failed'));
+          });
+        },
+      },
+      { setIntervalFn: (callback) => ((timerCallback = callback), { unref: () => undefined }) },
+    );
+
+    timerCallback?.();
+    timerCallback?.();
+    expect(started).toBe(1);
+
+    release?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    timerCallback?.();
+    expect(started).toBe(2);
   });
 });

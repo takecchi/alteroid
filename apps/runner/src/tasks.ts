@@ -138,6 +138,17 @@ export class TaskBreakdownReader {
     if (this.#cache !== undefined && now - this.#cache.at < this.#ttlMs) {
       return this.#cache.value;
     }
+    return this.#scan(now);
+  }
+
+  // `read()` に任せない: ttl が `maxAgeMs` より長いと、古いのに走査されず回収が止まるため。
+  async sweepIfStale(maxAgeMs: number): Promise<void> {
+    const now = this.#now();
+    if (this.#cache !== undefined && now - this.#cache.at < maxAgeMs) return;
+    await this.#scan(now);
+  }
+
+  async #scan(now: number): Promise<TaskBreakdown | undefined> {
     const value = await scanTasks(this.#root, this.#clockTicksPerSecond, now, this.#reclaim, {
       cgroupRoot: this.#cgroupRoot,
       procCgroupPath: this.#procCgroupPath,
@@ -149,6 +160,43 @@ export class TaskBreakdownReader {
     this.#cache = { at: now, value };
     return value;
   }
+}
+
+// デーモンの heartbeat（`HEARTBEAT_INTERVAL_MS`）と同じ間隔にする: 揃えておけば、デーモンが居ない間の掃除の遅れを heartbeat と同じ尺で読めるため。
+const RECLAIM_SWEEP_INTERVAL_MS = 10_000;
+
+export interface ReclaimSweepOptions {
+  intervalMs?: number;
+  setIntervalFn?: (callback: () => void, ms: number) => { unref?: () => unknown };
+  clearIntervalFn?: (handle: { unref?: () => unknown }) => void;
+}
+
+// `/health` だけに走査を任せない: デーモンが居ない間は誰も叩かず、畳んだ木が撃たれないまま残るため。
+export function startReclaimSweep(
+  reader: Pick<TaskBreakdownReader, 'sweepIfStale'>,
+  options: ReclaimSweepOptions = {},
+): () => void {
+  const intervalMs = options.intervalMs ?? RECLAIM_SWEEP_INTERVAL_MS;
+  const setIntervalFn: NonNullable<ReclaimSweepOptions['setIntervalFn']> =
+    options.setIntervalFn ?? ((callback, ms) => setInterval(callback, ms));
+  const clearIntervalFn: NonNullable<ReclaimSweepOptions['clearIntervalFn']> =
+    options.clearIntervalFn ??
+    ((handle) => clearInterval(handle as ReturnType<typeof setInterval>));
+  let running = false;
+  const handle = setIntervalFn(() => {
+    // 重ねて走らせない: 走査は O(pids) で、遅い器では前の回が終わる前に次が来るため。
+    if (running) return;
+    running = true;
+    // 失敗は握る: 次の回で取り戻せるが、unhandled rejection はランナーごと落とすため。
+    void reader
+      .sweepIfStale(intervalMs)
+      .catch(() => undefined)
+      .finally(() => {
+        running = false;
+      });
+  }, intervalMs);
+  handle.unref?.();
+  return () => clearIntervalFn(handle);
 }
 
 interface ScannedProcess {
