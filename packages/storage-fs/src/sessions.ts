@@ -87,7 +87,7 @@ export class FsSessionRegistry implements SessionRegistry {
     );
   }
 
-  /** `clearTranscriptGraveIf` と同じロックの中で書く（そちらの doc。issue #3860）。 */
+  /** `clearTranscriptGraveIf` と同じロックの中で書く（理由はそちらの doc）。 */
   async setTranscriptGrave(grave: TranscriptGrave | null): Promise<void> {
     await withPathLock(this.#gravePath, async () => {
       if (grave === null) {
@@ -121,7 +121,7 @@ export class FsSessionRegistry implements SessionRegistry {
     );
   }
 
-  /** `clearLostSessionGraveIf` と同じロックの中で書く（issue #3860）。 */
+  /** `clearLostSessionGraveIf` と同じロックの中で書く。 */
   async setLostSessionGrave(grave: LostSessionGrave | null): Promise<void> {
     await withPathLock(this.#lostSessionPath, async () => {
       if (grave === null) {

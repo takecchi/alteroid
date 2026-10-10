@@ -25,7 +25,7 @@ import type {
 export class FsJournalStore implements JournalStore {
   readonly #dir: string;
   #chain: Promise<unknown> = Promise.resolve();
-  // 墓標（`conversation_deleted`）の集合（#4218）。初回の読み出しで全ファイルから集め、追記したらその場で足す。
+  // 墓標（`conversation_deleted`）の集合。初回の読み出しで全ファイルから集め、追記したらその場で足す。
   // Promise で持つ: 集めている最中の追記も、集め終わった集合へ足せるため。
   #tombstones: Promise<Tombstones> | null = null;
 
@@ -123,7 +123,7 @@ export class FsJournalStore implements JournalStore {
         const entry = parseLine(lines[i], dropped);
         if (!entry) continue;
         if (query.types && !query.types.includes(entry.type)) continue;
-        // `limit` を数える前に外す（#4218）: 後で外すと窓が短くなり、`reachedStart` が誤るため
+        // `limit` を数える前に外す:後で外すと窓が短くなり、`reachedStart` が誤るため
         if (isHiddenExchange(entry, tombstoned)) continue;
         if (query.with && (entry.type !== 'exchange' || !query.with.includes(entry.with))) continue;
         // 欄の選び方をここへ書き写さない: 照合は `journal-search.ts` が持ち、3実装が同じ答えを出すため

@@ -300,7 +300,7 @@ export class FsCommitmentStore implements CommitmentStore {
     return this.#update((file) => {
       const found = file.entries.find((entry) => entry.id === id);
       if (found === undefined) {
-        // 読めない行は「無い」に数えず投げる（pg と同じ。#4064）。片付いた行は読める行と同じく false
+        // 読めない行は「無い」に数えず投げる（pg と同じ）。片付いた行は読める行と同じく false
         const broken = file.unreadable.find((row) => row.id === id);
         if (broken !== undefined && broken.closed === undefined) {
           throw new UnreadableCommitmentError(
