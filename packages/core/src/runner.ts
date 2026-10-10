@@ -206,7 +206,11 @@ import {
 import { computeUnpushedWork } from './unpushed-work.js';
 import type { ContextUsageObservation, JobStatus } from './schema.js';
 // クローンと同じ判定を呼ぶ: 層ごとに書くと片方だけが印を見落として非対称になるため
-import { assistantFailureOf, type SdkFailure } from './sdk-failure.js';
+import {
+  FAILED_REPORT_PARTIAL_MARKER,
+  assistantFailureOf,
+  type SdkFailure,
+} from './sdk-failure.js';
 import { systemErrorFactsOf, type SystemErrorFacts } from './system-error.js';
 import { classifyUsageNotice } from './usage-limits.js';
 import { describeProbeError } from './usage-probe.js';
@@ -2847,7 +2851,15 @@ class RunnerSession {
           reportId: event.id,
           text: outcome.text,
           status: this.#sdkSession.status,
-          ...(failure === undefined ? {} : { failure: { code: failure.code, via: failure.via } }),
+          ...(failure === undefined
+            ? {}
+            : {
+                failure: {
+                  code: failure.code,
+                  via: failure.via,
+                  ...(failure.status === undefined ? {} : { status: failure.status }),
+                },
+              }),
           ...(outcome.contentless ? { contentless: true } : {}),
           ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
           ...(failure === undefined ? {} : { synthesized: 'turn_failed' }),
@@ -4636,7 +4648,7 @@ function failedReportText(
           : '';
   const head = `（このターンは応答を返さずに終わった: ${failure.code} / ${failure.via}）\n${body}${workerNote}`;
   const partial = said.join('\n\n').trim();
-  return partial.length === 0 ? head : `${head}\n\n（失敗する前に出ていた本文）\n${partial}`;
+  return partial.length === 0 ? head : `${head}\n\n${FAILED_REPORT_PARTIAL_MARKER}\n${partial}`;
 }
 
 function describeRejectionCodes(codes: readonly string[]): string {

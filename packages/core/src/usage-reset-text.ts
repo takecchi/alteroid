@@ -33,6 +33,14 @@ function to24Hour(hour12: number, meridiem: 'am' | 'pm'): number {
   return hour12 === 12 ? 12 : hour12 + 12;
 }
 
+/**
+ * 文言に書かれたリセット時刻の言い回し（`resets 12:20am (Asia/Tokyo)`）をそのまま返す。時刻へは直さない。
+ * 読む形は {@link parseNoticeResetAt} と同じ正規表現1本を共有する（2つ目を作ると片方だけ直る）。
+ */
+export function noticeResetText(text: string): string | undefined {
+  return RESETS_AT_PATTERN.exec(text)?.[0];
+}
+
 export interface ParseNoticeResetOptions {
   at: number;
   withinMs: number;
