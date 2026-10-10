@@ -192,7 +192,15 @@ describe('readAttachmentLimits の maxLargeFileBytes', () => {
 
 describe('attachmentBlobPartBytesFor（part の大きさを上限から決める。#4128）', () => {
   it('どの上限でも、10,000 part で上限まで届き、S3 の part の最小（5 MiB）を下回らない', () => {
-    for (const max of [0, 1, 25 * MIB, 2048 * MIB, 48 * 1024 * MIB, 100 * 1024 * MIB, S3_MAX_OBJECT_BYTES]) {
+    for (const max of [
+      0,
+      1,
+      25 * MIB,
+      2048 * MIB,
+      48 * 1024 * MIB,
+      100 * 1024 * MIB,
+      S3_MAX_OBJECT_BYTES,
+    ]) {
       const part = attachmentBlobPartBytesFor(max);
       expect(part).toBeGreaterThanOrEqual(S3_MIN_PART_BYTES);
       expect(part * S3_MAX_UPLOAD_PARTS).toBeGreaterThanOrEqual(max);
@@ -202,7 +210,9 @@ describe('attachmentBlobPartBytesFor（part の大きさを上限から決める
   it('既定の 2 GiB では 5 MiB のまま（今までと同じ）。100 GiB なら 5 MiB では足りないので大きくする', () => {
     expect(attachmentBlobPartBytesFor(2048 * MIB)).toBe(5 * MIB);
     expect(5 * MIB * S3_MAX_UPLOAD_PARTS).toBeLessThan(100 * 1024 * MIB);
-    expect(attachmentBlobPartBytesFor(100 * 1024 * MIB)).toBe(Math.ceil((100 * 1024 * MIB) / 10_000));
+    expect(attachmentBlobPartBytesFor(100 * 1024 * MIB)).toBe(
+      Math.ceil((100 * 1024 * MIB) / 10_000),
+    );
   });
 });
 

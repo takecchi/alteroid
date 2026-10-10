@@ -637,6 +637,8 @@ alteroid chat
 | `ALTEROID_ATTACHMENT_S3_FORCE_PATH_STYLE`  | （任意）`1` / `true`                                         | endpoint が仮想ホスト形式（`<bucket>.<host>`）に対応していないとき                                                                                                                        |
 | `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES` | （任意）画像以外1つの別枠（バイト。既定 2147483648 = 2 GiB） | **外部ストレージが有効なときだけ効く**                                                                                                                                                    |
 
+`ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES` の天井は S3 の1オブジェクトの最大（5 TiB = 5497558138880）で、超える値は stderr に1行出して既定（2 GiB）に戻す。multipart の part の大きさは、この上限を 10,000 で割って切り上げた値（5 MiB 未満にはしない）に揃えるので、上限まで送れる。**上限を上げると part も大きくなり、1つの上げにつき part 4つ分（`@aws-sdk/lib-storage` の既定の並行数）がメモリに載る**（2 GiB なら 5 MiB × 4、100 GiB なら約 10.3 MiB × 4）。
+
 **Railway の bucket が出す変数を、Service 変数から参照する書き方（`${{…}}`）は、確かめていない。** Railway の画面で bucket の接続情報（endpoint・バケット名・キー）の変数名を見て、上の変数へ写すこと。参照の形で置けるなら、値を手で写すより参照のほうがよい（キーを回したときに追従する）が、変数名と参照の可否は Railway の側の仕様で、この文書は未確認である。
 
 ### 3. 確かめ方
