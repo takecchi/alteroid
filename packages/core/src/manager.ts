@@ -2308,6 +2308,7 @@ const KNOWN_SYNTHESIZED_NOTICE_LABELS: Record<string, string> = {
   closed_failed: 'セッションが落ちた',
   closed_done_silent: 'report を出さないまま閉じた（done）',
   turn_failed: '応答を返さずに終わったターンの報告',
+  closed_withheld_flush: '委譲の終了と、背景処理の完了待ちで畳んでいた報告の配り',
   resume_fallback: '器の入れ替えで前のセッションへ戻れず、生ログから作り直して続けた',
   resume_failed: '器の入れ替えで前のセッションへ戻れず、再開そのものに失敗した',
 };
@@ -2758,6 +2759,11 @@ class Pool implements ManagerPool {
    * 畳めない出来事が先に受信箱へ入って到着順が崩れるのを防ぐ。
    */
   readonly #synthesizedNotices = new Map<string, SynthesizedNoticeWindow>();
+  /**
+   * `closed` が合流窓へ積んだとき、`#retire()` に消される前に移した `#withheldReports` の在庫。
+   * 窓の flush の `#deliver` が末尾へ運んで消す（運ぶ先が窓なので、在庫のままでは `#retire()` で失われる）。委譲1本につき高々1件。
+   */
+  readonly #withheldCarriedToWindow = new Map<string, WithheldReportMemory>();
   /**
    * 窓をまたいで同文を畳むための、もう配った束の署名（{@link SynthesizedNoticeStreak}）。
    * 窓が閉じても消えず、別の `manager_message` を配った時点で消える（`#deliver`）。
@@ -8346,13 +8352,20 @@ class Pool implements ManagerPool {
           }
         }
         // 積みが在れば `#retire()` の前に配る: 握り潰した報告は「後で必ず配る」約束で、この委譲はもう走らないので次の本物の報告が上書きする経路は来ない。`#emit()` が積みを見つけて末尾へ足すので、ここは「畳まれた」事実だけを書く。
-        if (this.#withheldReports.has(event.managerId)) {
-          this.#emit(
-            event.managerId,
-            'report',
+        const withheldAtClose = this.#withheldReports.get(event.managerId);
+        if (withheldAtClose !== undefined) {
+          const closedNote =
             `[${event.managerId}] この委譲は終わった（status=${event.status}）。` +
-              '背景処理の完了待ちで畳んでいた報告をまとめて配る。',
-          );
+            '背景処理の完了待ちで畳んでいた報告をまとめて配る。';
+          if (this.#synthesizedNotices.has(event.managerId)) {
+            // 担当の合流窓が開いている（同じ落ち方の `turn_failed` / `closed_failed` が居る）ときは、`#emit()` せず窓へ積んで1通にする: `#emit()` は全窓を閉じて先に断片だけを配るので、この1通が別に届く。窓は開けない・延ばさない（開いていなければ下の `#emit()` で今までどおりすぐ配る）。
+            // 在庫は `#retire()` が消すので、窓の flush（`#deliver`）が運べるよう先に移す。移した分は `#retire()` の「握り潰したまま終わった」の stderr にも出ない（配るので捨てていない）。印（`quota`）は付けない: 印の無い断片が混ざった束は担当ごとに配られ、畳んでいた報告が枠の一覧の1行に埋もれない。
+            this.#withheldCarriedToWindow.set(event.managerId, withheldAtClose);
+            this.#withheldReports.delete(event.managerId);
+            this.#queueSynthesizedNotice(event.managerId, 'closed_withheld_flush', closedNote);
+          } else {
+            this.#emit(event.managerId, 'report', closedNote);
+          }
         }
         this.#retire(event.managerId);
         // 枠でセッションごと落ちた回は `report` が出ず、ここしか通らない。`#retire` の後で呼ぶ: 起こし直しは `send()` に相乗りし、像が無ければ台帳から読み直すので resume できる。逆順だと `#retire` が `send()` の載せ直した像を消す。
@@ -9143,6 +9156,12 @@ class Pool implements ManagerPool {
     reportFiles?: ManagerReportFiles,
   ): void {
     // 握り潰した報告の件数を日誌だけに残さず、配る `text` の末尾にも足す: 日誌だと引きに行かないと、報告まで消していないかに気づけない。
+    // 窓へ移した在庫（`closed` が積んだ分）は、この配りで運んで消す。普通の在庫が在れば（窓の後に積み直されることは無いが）そちらを先にする。
+    const carried = this.#withheldCarriedToWindow.get(managerId);
+    if (carried !== undefined && this.#withheldReports.get(managerId) === undefined) {
+      this.#withheldReports.set(managerId, carried);
+    }
+    this.#withheldCarriedToWindow.delete(managerId);
     const withheld = this.#withheldReports.get(managerId);
     let outgoing = text;
     if (withheld !== undefined) {
