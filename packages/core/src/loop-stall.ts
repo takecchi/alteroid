@@ -25,10 +25,13 @@ interface GcMark {
 
 const phases: PhaseMark[] = [];
 const gcs: GcMark[] = [];
+// 印と見張りは同じ時計で測る（試験で見張りに時計を渡すと、印もその時計に揃う）
+const defaultClock = (): number => performance.now();
+let clock: () => number = defaultClock;
 
 /** 処理の要所に印を残す。文字列を1つ積むだけで、計測そのものは止まった後にしか走らない。 */
 export function notePhase(label: string): void {
-  phases.push({ at: performance.now(), label });
+  phases.push({ at: clock(), label });
   if (phases.length > PHASE_RING) phases.splice(0, phases.length - PHASE_RING);
 }
 
@@ -57,6 +60,8 @@ export interface LoopStallWatchOptions {
   readonly intervalMs?: number;
   /** この長さ以上遅れたら知らせる。 */
   readonly thresholdMs?: number;
+  /** 単調な時計（ms）。試験で差し替える。既定は `performance.now()`。 */
+  readonly now?: () => number;
 }
 
 const DEFAULT_INTERVAL_MS = 500;
@@ -71,6 +76,10 @@ const toMb = (bytes: number): number => Math.round(bytes / (1024 * 1024));
 export function startLoopStallWatch(options: LoopStallWatchOptions): () => void {
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
   const thresholdMs = options.thresholdMs ?? DEFAULT_THRESHOLD_MS;
+  clock = options.now ?? defaultClock;
+  // 始める前の印は捨てる: 別の時計で打った印が窓に紛れ込まないため
+  phases.length = 0;
+  gcs.length = 0;
 
   const observer = new PerformanceObserver((list) => {
     for (const entry of list.getEntries()) {
@@ -80,9 +89,9 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
   });
   observer.observe({ entryTypes: ['gc'] });
 
-  let last = performance.now();
+  let last = clock();
   const timer = setInterval(() => {
-    const now = performance.now();
+    const now = clock();
     const from = last;
     last = now;
     const stalledMs = now - from - intervalMs;
@@ -97,6 +106,7 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
   return () => {
     clearInterval(timer);
     observer.disconnect();
+    clock = defaultClock;
   };
 }
 
@@ -113,7 +123,7 @@ function summarize(from: number, to: number, stalledMs: number): LoopStall {
   const memory = process.memoryUsage();
   return {
     stalledMs: Math.round(stalledMs),
-    since: new Date(performance.timeOrigin + from).toISOString(),
+    since: new Date(Date.now() - Math.round(clock() - from)).toISOString(),
     ...(phaseBefore === undefined ? {} : { phaseBefore }),
     phasesDuring: shown,
     phasesOmitted: during.length - shown.length,

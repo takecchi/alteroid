@@ -1,59 +1,75 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { describeLoopStall, notePhase, startLoopStallWatch, type LoopStall } from './loop-stall.js';
 
+// 偽の時計で「止まった」を作る: 実時間でループを塞ぐと、器が混んだときに揺れ、実時間の待ちを試験に足すことにもなるため
+let now = 0;
 let stop: (() => void) | undefined;
+let stalls: LoopStall[] = [];
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  now = 0;
+  stalls = [];
+  stop = startLoopStallWatch({
+    intervalMs: 500,
+    thresholdMs: 1_000,
+    now: () => now,
+    onStall: (stall) => stalls.push(stall),
+  });
+});
 
 afterEach(() => {
   stop?.();
   stop = undefined;
+  vi.useRealTimers();
 });
 
-function busy(ms: number): void {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    // ループを同期で塞ぐ
-  }
+/** 見張りの1周ぶん時計を進める（遅れが無い周）。 */
+async function tick(): Promise<void> {
+  now += 500;
+  await vi.advanceTimersByTimeAsync(500);
 }
 
-async function watchOnce(block: () => void): Promise<LoopStall> {
-  const stalls: LoopStall[] = [];
-  stop = startLoopStallWatch({ intervalMs: 20, thresholdMs: 200, onStall: (s) => stalls.push(s) });
-  // 見張りが1周回ってから塞ぐ: 塞ぎ始めより前の印を「直前の印」として拾えるように
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  block();
-  await expect.poll(() => stalls.length, { timeout: 2000 }).toBeGreaterThan(0);
-  return stalls[0] as LoopStall;
+/** ループが `ms` だけ塞がった後の1周: 時計だけが余分に進み、見張りは1回遅れて回る。 */
+async function stalledTick(ms: number, during: () => void = () => undefined): Promise<void> {
+  during();
+  now += 500 + ms;
+  await vi.advanceTimersByTimeAsync(500);
+  // GC の観測を待つ分
+  await vi.advanceTimersByTimeAsync(50);
 }
 
 describe('loop-stall（#4485）', () => {
-  it('同期で塞いだ長さと、塞いでいる最中に通った印を返す', async () => {
+  it('止まった長さ・直前の印・窓の中の印（経過 ms 付き）・ヒープを返す', async () => {
+    await tick();
     notePhase('test:before');
-    const stall = await watchOnce(() => {
-      busy(150);
+    await stalledTick(4_000, () => {
+      now += 1_500;
       notePhase('test:inside-a');
-      busy(250);
+      now += 2_000;
       notePhase('test:inside-b');
+      now -= 3_500;
     });
 
-    expect(stall.stalledMs).toBeGreaterThanOrEqual(300);
+    expect(stalls).toHaveLength(1);
+    const stall = stalls[0] as LoopStall;
+    expect(stall.stalledMs).toBe(4_000);
     expect(stall.phaseBefore).toBe('test:before');
-    expect(stall.phasesDuring.map((mark) => mark.label)).toEqual([
-      'test:inside-a',
-      'test:inside-b',
+    expect(stall.phasesDuring).toEqual([
+      { label: 'test:inside-a', offsetMs: 1_500 },
+      { label: 'test:inside-b', offsetMs: 3_500 },
     ]);
-    const [a, b] = stall.phasesDuring;
-    expect(a?.offsetMs).toBeGreaterThanOrEqual(100);
-    expect(b?.offsetMs).toBeGreaterThan(a?.offsetMs ?? 0);
     expect(stall.heapUsedMb).toBeGreaterThan(0);
   });
 
-  it('文言に、止まった長さ・直前の印・窓の中の印・GC・ヒープが載る', async () => {
+  it('文言に、止まった長さ・直前の印・窓の中の印が無いこと・GC・ヒープが載る', async () => {
     notePhase('test:culprit');
-    const stall = await watchOnce(() => busy(300));
-    const text = describeLoopStall(stall);
+    await tick();
+    await stalledTick(2_000);
 
-    expect(text).toContain(`${String(stall.stalledMs)}ms 止まった`);
+    const text = describeLoopStall(stalls[0] as LoopStall);
+    expect(text).toContain('2000ms 止まった');
     expect(text).toContain('直前の印: test:culprit');
     expect(text).toContain('窓の中で通った印は無い');
     expect(text).toMatch(/窓の中の GC: \d+ 回・合計 \d+ms・最大 \d+ms/);
@@ -61,15 +77,9 @@ describe('loop-stall（#4485）', () => {
   });
 
   it('閾値に満たない遅れでは知らせない', async () => {
-    const stalls: LoopStall[] = [];
-    stop = startLoopStallWatch({
-      intervalMs: 20,
-      thresholdMs: 500,
-      onStall: (s) => stalls.push(s),
-    });
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    busy(100);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await tick();
+    await stalledTick(900);
+    await tick();
     expect(stalls).toEqual([]);
   });
 });
