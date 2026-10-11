@@ -448,7 +448,9 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
 
     expect(
       r.inbox.some(
-        (event) => event.type === 'manager_message' && event.text.includes('再開させた'),
+        (event) =>
+          event.type === 'manager_message' &&
+          event.text.includes('前のセッションからの再開を指示した'),
       ),
     ).toBe(true);
   });

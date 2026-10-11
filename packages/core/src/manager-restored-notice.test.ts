@@ -192,7 +192,9 @@ describe('取り戻した知らせは、1本目はすぐ・同じ cause の残�
     // 受理の時点で「再開させた」「報告を待てばよい」と言い切らない: 前の会話が無ければ、この後に lost になる（#4501）。
     expect(text).not.toContain('再開させた');
     expect(text).not.toContain('報告を待てばよい');
-    expect(text).toContain('戻れなければ、この後に「戻せなかった」が届き、状態は lost になる。');
+    expect(text).toContain('戻れなければ、この後に別の知らせが届き、状態は lost になる。');
+    // 失敗の知らせを見分ける語（「戻せなかった」）を、受理の知らせに混ぜない。
+    expect(text).not.toContain('戻せなかった');
 
     await sleep(POOL_WINDOW_MS + 500);
     expect(restoredMessages(inbox)).toHaveLength(1);

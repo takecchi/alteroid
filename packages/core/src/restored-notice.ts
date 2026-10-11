@@ -30,7 +30,7 @@ const ATTACHED_GUIDANCE =
 // 「再開させた」と言い切らない: 受理は「戻れた」ではなく、前の会話が無ければ後から lost になる（#4501）。
 const RESUMED_GUIDANCE =
   '再開を指示した委譲: runner が resume を受け付けただけで、前の会話が戻ったかはまだ確かめていない。' +
-  '戻れなければ、この後に担当ごとの「戻せなかった」が届き、状態は lost になる。' +
+  '戻れなければ、この後に担当ごとの知らせが別に届き、状態は lost になる。' +
   '返事待ちだった確認は器と一緒に失われているので、必要ならマネージャーが聞き直してくる。';
 
 function howPhrase(how: RestoredEntry['how']): string {

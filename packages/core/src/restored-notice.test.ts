@@ -32,8 +32,10 @@ describe('取り戻した知らせの一覧は、resume の受理を「戻れた
     expect(text).not.toContain('セッションは生きている');
     expect(text).not.toContain('再開させた');
     expect(text).toContain(
-      '戻れなければ、この後に担当ごとの「戻せなかった」が届き、状態は lost になる。',
+      '戻れなければ、この後に担当ごとの知らせが別に届き、状態は lost になる。',
     );
+    // 失敗の知らせを見分ける語を、受理の知らせに混ぜない。
+    expect(text).not.toContain('戻せなかった');
   });
 
   it('resumed でも配る時点で lost なら、lost と言う', () => {
