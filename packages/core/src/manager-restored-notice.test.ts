@@ -185,9 +185,14 @@ describe('取り戻した知らせは、1本目はすぐ・同じ cause の残�
     const { pool, inbox } = await setup([], ['mgr-a']);
 
     await waitForMessages(inbox, 1);
-    expect(restoredMessages(inbox)[0]?.text).toContain(
-      'runner の器が作り直された。中断されていたこの委譲を、前のセッションから再開させた。',
+    const text = restoredMessages(inbox)[0]?.text ?? '';
+    expect(text).toContain(
+      'runner の器が作り直された。中断されていたこの委譲に、前のセッションからの再開を指示した（runner は受け付けた。前の会話が戻ったかはまだ確かめていない）。',
     );
+    // 受理の時点で「再開させた」「報告を待てばよい」と言い切らない: 前の会話が無ければ、この後に lost になる（#4501）。
+    expect(text).not.toContain('再開させた');
+    expect(text).not.toContain('報告を待てばよい');
+    expect(text).toContain('戻れなければ、この後に「戻せなかった」が届き、状態は lost になる。');
 
     await sleep(POOL_WINDOW_MS + 500);
     expect(restoredMessages(inbox)).toHaveLength(1);
@@ -219,15 +224,20 @@ describe('取り戻した知らせは、1本目はすぐ・同じ cause の残�
     for (const id of ['mgr-a', 'mgr-b', 'mgr-c']) {
       const line = text.split('\n').find((l) => l.startsWith(`- ${id}:`)) ?? '';
       expect(line, id).toContain('器 runner-primary');
-      expect(line, id).toContain('前のセッションから再開させた（resumed）');
-      expect(line, id).toContain('状態 running（セッションは生きている）');
+      // 受理の後の running を「セッションは生きている」と言わない（#4501）。
+      expect(line, id).toContain(
+        '前のセッションからの再開を指示した（resume は受理された。会話が戻ったかは未確認）',
+      );
+      expect(line, id).toContain('状態 running（resume を受理しただけ。会話が戻ったかは未確認）');
+      expect(line, id).not.toContain('セッションは生きている');
       expect(text).toContain(`作業ディレクトリ: /work/${id}`);
       expect(text).toContain(`直近の報告（抜粋）: ${id} の途中経過: 3件目まで読んだ`);
       // 窓を開けた担当の行にだけ「最初の1本」の印が付く。
       expect(line.includes('最初の1本。担当への報告としては先に届けてある'), id).toBe(id === first);
     }
     // 案内は含まれる種類の分だけ1回ずつ（resumed だけなので attached の案内は無い）。
-    expect(text.split('再開の指示は送信済み').length - 1).toBe(1);
+    expect(text.split('再開を指示した委譲:').length - 1).toBe(1);
+    expect(text).not.toContain('再開させた');
     expect(text).not.toContain('返事待ちがあれば改めて届く');
 
     await pool.stop();

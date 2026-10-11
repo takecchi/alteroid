@@ -27,13 +27,23 @@ export interface RestoredListItem extends RestoredEntry {
 
 const ATTACHED_GUIDANCE =
   '走り続けている委譲: 返事待ちがあれば改めて届く。`manager_send` で追加の指示も送れる。';
+// 「再開させた」と言い切らない: 受理は「戻れた」ではなく、前の会話が無ければ後から lost になる（#4501）。
 const RESUMED_GUIDANCE =
-  '再開させた委譲: 再開の指示は送信済み。返事待ちだった確認は器と一緒に失われているので、必要ならマネージャーが聞き直してくる。';
+  '再開を指示した委譲: runner が resume を受け付けただけで、前の会話が戻ったかはまだ確かめていない。' +
+  '戻れなければ、この後に担当ごとの「戻せなかった」が届き、状態は lost になる。' +
+  '返事待ちだった確認は器と一緒に失われているので、必要ならマネージャーが聞き直してくる。';
 
 function howPhrase(how: RestoredEntry['how']): string {
   return how === 'attached'
     ? '走り続けている（attached）'
-    : '前のセッションから再開させた（resumed）';
+    : '前のセッションからの再開を指示した（resume は受理された。会話が戻ったかは未確認）';
+}
+
+/** resume の受理の後の `running` は「生きている」と言わない: CLI が会話を見つけられずに終わるまで、台帳は `running` のままである（#4501）。 */
+function itemStatusPhrase(item: RestoredListItem): string {
+  return item.how === 'resumed' && item.status === 'running'
+    ? 'running（resume を受理しただけ。会話が戻ったかは未確認）'
+    : statusPhrase(item.status);
 }
 
 /** 同じ出来事（同じ cause）で取り戻した委譲の一覧。全文は載せない（担当ごとの詳細は `manager_report` で読める）。 */
@@ -42,7 +52,7 @@ export function renderRestoredNotice(head: string, items: readonly RestoredListI
   for (const item of items) {
     const firstNote = item.first ? '（最初の1本。担当への報告としては先に届けてある）' : '';
     lines.push(
-      `- ${item.managerId}: 器 ${item.runnerId ?? '(不明)'} / ${howPhrase(item.how)} / 状態 ${statusPhrase(item.status)}${firstNote}`,
+      `- ${item.managerId}: 器 ${item.runnerId ?? '(不明)'} / ${howPhrase(item.how)} / 状態 ${itemStatusPhrase(item)}${firstNote}`,
       `  作業ディレクトリ: ${item.cwd ?? '(不明)'}`,
     );
     if (item.workspaceLine !== '') {
