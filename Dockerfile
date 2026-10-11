@@ -97,9 +97,9 @@ FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:154ba2f4d6fec323d2
 # （新しい subcommand が「マネージャーだと使えない」として現れる）。版を揃える必要が
 # 出たら、固定するのは `gh` 単体ではなくベースイメージごとである。
 #
-# **`tini` は runner の pid 1 になる init である（#315）。** `docker/alteroid-runner`
-# が起動の最後で `exec tini -- node …` する（理由と `-g` を付けない理由はそのシムの
-# 側に書いてある）。ここではベースイメージの Debian main のパッケージとして入れる
+# **`tini` は runner とデーモンの pid 1 になる init である（runner は #315、デーモンは #4478）。**
+# `docker/alteroid-runner` と `docker/alteroidd` が起動の最後で `exec … tini -- node …` する
+# （理由と `-g` を付けない理由はそれぞれのシムの側に書いてある）。ここではベースイメージの Debian main のパッケージとして入れる
 # だけで、`apt-get install` の行に足す形は `gh` と同じにする — パッケージが消えたり
 # 名前が変わったら、この `image` ステージのビルドで気づける（下の `tini --version`
 # が存在確認を兼ねる）。**`tini` は Debian main にしか無いので、これは成立する** —

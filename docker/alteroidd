@@ -68,6 +68,14 @@ case "${NODE_OPTIONS-}" in
     ;;
 esac
 
+# **pid 1 を tini にする（#4478。runner の #315 と同じ）。** pid 1 になった `node` は
+# init の仕事をしない — クローンの Bash 道具が背景へ移した・時間切れにしたコマンドの
+# 孫（`git`・`gh`・`bash`）は pid 1 へ付け替えられ、終わってもゾンビのまま回収されない。
+# 実測(2026-10-11、クローンの器): 970 本のうち 965 本が ppid=1 のゾンビで、`gh`・`git` が
+# fork できずに落ちた。`tini` は SIGCHLD を受けて代わりに wait するだけの init である。
+# `-g` は付けない: SIGTERM は直接の子（node）へ転送され、node の停止の手順はこれまでどおり
+# （プロセスグループ全体へ撃つと、node が畳み終える前に子を道連れにする。runner の shim と同じ理由）。
+# root の枝では tini も node ユーザーで走らせる: 孤児の回収に root は要らない。
 if [ "$(id -u)" = '0' ]; then
   # **`HOME` も一緒に差し替える。** `setpriv` が変えるのは UID/GID だけで、環境は
   # root のまま残る。`HOME=/root` を持ったまま降りると、クローンの SDK セッションが
@@ -83,7 +91,7 @@ if [ "$(id -u)" = '0' ]; then
   LOGNAME=node
   export HOME USER LOGNAME
 
-  exec setpriv --reuid=node --regid=node --init-groups node "$entry" "$@"
+  exec setpriv --reuid=node --regid=node --init-groups tini -- node "$entry" "$@"
 fi
 
-exec node "$entry" "$@"
+exec tini -- node "$entry" "$@"

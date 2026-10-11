@@ -29,8 +29,25 @@ function setupFakeNode(root: string): void {
       'console.log(JSON.stringify({',
       '  args: process.argv.slice(1),',
       '  NODE_OPTIONS: process.env.NODE_OPTIONS ?? null,',
+      '  viaTini: process.env.ALTEROIDD_TEST_VIA_TINI ?? null,',
       '}));',
       '\' -- "$@"',
+      '',
+    ].join('\n'),
+  );
+  chmodSync(bin, 0o755);
+}
+
+// 偽の `tini`: `--` の後ろをそのまま exec し、通ったことだけを環境に残す（本物の tini はテスト実行環境に無いことがあるため）
+function setupFakeTini(root: string): void {
+  const bin = join(root, 'tini');
+  writeFileSync(
+    bin,
+    [
+      '#!/bin/sh',
+      'if [ "$1" != "--" ]; then echo "tini: -- が先頭に無い: $1" >&2; exit 64; fi',
+      'shift',
+      'ALTEROIDD_TEST_VIA_TINI=1 exec "$@"',
       '',
     ].join('\n'),
   );
@@ -60,6 +77,7 @@ function run(
   const root = mktemp();
   if (node === 'echo') setupFakeNode(root);
   else setupHeapProbeNode(root);
+  setupFakeTini(root);
 
   const fullEnv: Record<string, string> = {
     PATH: `${root}:/usr/bin:/bin`,
@@ -129,5 +147,26 @@ describe('docker/alteroidd — V8 ヒープ上限の既定（応急処置。#128
     expect(caseIndex).toBeGreaterThan(-1);
     expect(idCheckIndex).toBeGreaterThan(-1);
     expect(caseIndex).toBeLessThan(idCheckIndex);
+  });
+});
+
+describe('docker/alteroidd — pid 1 を tini にしてゾンビを回収させる（#4478）', () => {
+  it('⭐ node は tini の子として起こる（非 root の枝を実際に走らせる）', () => {
+    const result = run(['--foo']);
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(result.stdout);
+    expect(out.viaTini).toBe('1');
+    expect(out.args).toEqual(['/app/apps/daemon/dist/index.js', '--foo']);
+  });
+
+  it('root の枝も tini を通して node へ降りる（setpriv の枝は実行できないので静的に固定する）', () => {
+    expect(SCRIPT_SOURCE).toContain(
+      'exec setpriv --reuid=node --regid=node --init-groups tini -- node "$entry" "$@"',
+    );
+    expect(SCRIPT_SOURCE).toContain('exec tini -- node "$entry" "$@"');
+  });
+
+  it('tini に -g を付けない（SIGTERM はプロセスグループ全体ではなく node だけへ）', () => {
+    expect(SCRIPT_SOURCE).not.toMatch(/tini\s+-g/);
   });
 });
