@@ -10,6 +10,9 @@ import { createRunnerHost } from './runner.js';
 
 type ExitArgs = [number | null, NodeJS.Signals | null];
 
+// 親の env を丸ごと継がない（#1971）: `sh` を引ける PATH だけを渡す。
+const SH_OPTIONS = { stdio: 'pipe', env: { PATH: process.env.PATH } } as const;
+
 function exitOf(child: AgentChildProcess, via: 'on' | 'once'): Promise<ExitArgs> {
   return new Promise((resolve) => {
     child[via]('exit', (code, signal) => resolve([code, signal]));
@@ -46,7 +49,7 @@ describe('委譲の CLI の引き取り手（#4494）', () => {
   });
 
   it('subreapedProcess: tini が 134 で終わったら、SIGABRT で死んだ子として見せる（実プロセス）', async () => {
-    const child = subreapedProcess(spawn('sh', ['-c', 'exit 134'], { stdio: 'pipe' }));
+    const child = subreapedProcess(spawn('sh', ['-c', 'exit 134'], SH_OPTIONS));
     const viaOn = exitOf(child, 'on');
     const viaOnce = exitOf(child, 'once');
     expect(await viaOn).toEqual([null, 'SIGABRT']);
@@ -56,14 +59,14 @@ describe('委譲の CLI の引き取り手（#4494）', () => {
   });
 
   it('subreapedProcess: ふつうの終了コードはそのまま通す（実プロセス）', async () => {
-    const child = subreapedProcess(spawn('sh', ['-c', 'exit 3'], { stdio: 'pipe' }));
+    const child = subreapedProcess(spawn('sh', ['-c', 'exit 3'], SH_OPTIONS));
     expect(await exitOf(child, 'once')).toEqual([3, null]);
     expect(child.exitCode).toBe(3);
     expect(child.signalCode).toBeNull();
   });
 
   it('subreapedProcess: tini 自身がシグナルで死んだ回はそのまま通す（実プロセス）', async () => {
-    const raw = spawn('sh', ['-c', 'sleep 30'], { stdio: 'pipe' });
+    const raw = spawn('sh', ['-c', 'sleep 30'], SH_OPTIONS);
     const child = subreapedProcess(raw);
     const exited = exitOf(child, 'once');
     expect(child.kill('SIGKILL')).toBe(true);
@@ -72,7 +75,7 @@ describe('委譲の CLI の引き取り手（#4494）', () => {
   });
 
   it('subreapedProcess: off で外した exit の listener は呼ばれない。pid・stdio・stderr は写す', async () => {
-    const raw = spawn('sh', ['-c', 'echo out; echo err >&2; exit 0'], { stdio: 'pipe' });
+    const raw = spawn('sh', ['-c', 'echo out; echo err >&2; exit 0'], SH_OPTIONS);
     const child = subreapedProcess(raw);
     expect(child.pid).toBe(raw.pid);
     expect(child.stdin).toBe(raw.stdin);
