@@ -534,7 +534,8 @@ describe('固まりの打ち切り（node:vm の timeout、#2579）', () => {
     expect(error, '固まった実装を助けが通した').toBeInstanceOf(Error);
     const message = (error as Error).message;
     expect(message).toMatch(/固まり・指数的な後戻りの疑い —— hardCapMs を超えた/);
-    expect(message).toMatch(/大きいほうの入力 n=48 の1回が hardCapMs=500ms で打ち切られた/);
+    // 大きいほうの点（factor=8 なので n=24・48・96）のどれで打ち切られるかは器の速さで変わる: 遅い器では n=24 で先に上限に当たる
+    expect(message).toMatch(/大きいほうの入力 n=(24|48|96) の1回が hardCapMs=500ms で打ち切られた/);
     expect(message).not.toMatch(/伸びの比が大きすぎる/);
     expect(elapsedMs).toBeLessThan(15_000);
   }, 20_000);
