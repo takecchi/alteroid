@@ -72,7 +72,8 @@ export const initialManagersState: ManagersState = {
 
 const messageOf = redactedErrorMessage;
 
-const DELIVERED_OUTCOMES: ReadonlySet<string> = new Set(['delivered', 'answered']);
+// `held` は受け付けた側: デーモンが預かって後で届けるので、書いた文を残すと送り直しで二重に届く
+const DELIVERED_OUTCOMES: ReadonlySet<string> = new Set(['delivered', 'answered', 'held']);
 
 // `not_stopped`・`unknown` を止まったとみなさない: 止まったと確かめられていないため
 const STOPPED_OUTCOMES: ReadonlySet<string> = new Set(['stopped']);

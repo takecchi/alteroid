@@ -1133,6 +1133,18 @@ export const externalOutputSchema = z.object({
 });
 export type ExternalOutput = z.infer<typeof externalOutputSchema>;
 
+/**
+ * `manager_send` が届けられずに預かった伝言（1通）。
+ * 数と長さの上限は預かる側（`ManagerPool`）が持つ: ここで締めると、上限を変えた後に古い行を持つ委譲の記録ごと読めなくなるため。
+ */
+export const heldMessageSchema = z.object({
+  text: z.string(),
+  heldAt: isoDateTime,
+  /** 預かった時点で届けられなかった理由（`declined` の detail）。 */
+  reason: z.string(),
+});
+export type HeldMessage = z.infer<typeof heldMessageSchema>;
+
 // 双方向の完全一致にしない: `UnpushedWorkObservationIncompletenessLike` は読む4欄だけの最小の型で、`at` / `cwd` / `worktrees` / `source` を持たないため、双方向だと必ず落ちる
 export type _AssertUnpushedWorkObservationIncompletenessMatchesLikeType = AssertTrue<
   Extract<
@@ -1227,6 +1239,8 @@ export const jobSchema = z.object({
   lastRescue: lastRescueSchema.optional(),
   // コード以外の成果は作業ツリーの観測に映らないので、マネージャー自身が記録したものを持つ。古い順・直近 `keptPerJob` 件
   externalOutputs: z.array(externalOutputSchema).optional(),
+  // 台帳に持つ: プロセス内に置くとデーモンの再起動（夜の反映）で預かった伝言が黙って消えるため。古い順
+  heldMessages: z.array(heldMessageSchema).optional(),
 });
 
 export type Job = z.infer<typeof jobSchema>;

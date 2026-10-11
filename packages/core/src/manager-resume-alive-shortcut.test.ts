@@ -249,13 +249,13 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
     await s.pool.stop();
   });
 
-  it('⚠️ 指紋が食い違い、背景処理が残っていれば、畳まず・流さず断る（detail に指紋以外の鍵の情報は出ない）', async () => {
+  it('⚠️ 指紋が食い違い、背景処理が残っていれば、畳まず・流さず伝言を預かる（detail に指紋以外の鍵の情報は出ない）', async () => {
     const s = await sendAfterRestart('true', true, {
       session: { tokenFingerprint: OLD_FP, liveBackgroundTasks: 2 },
       activeFingerprint: NEW_FP,
     });
 
-    expect(s.result.outcome).toBe('declined');
+    expect(s.result.outcome).toBe('held');
     expect(s.result.detail).toContain('2 本');
     expect(s.result.detail).toContain(OLD_FP);
     expect(s.result.detail).toContain(NEW_FP);
@@ -266,7 +266,7 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
     await s.pool.stop();
   });
 
-  it('⚠️ 指紋で判定する回（attached=false）は、注入口が ready を返しても背景処理が残っていれば断る（#4441）', async () => {
+  it('⚠️ 指紋で判定する回（attached=false）は、注入口が ready を返しても背景処理が残っていれば届けず預かる（#4441）', async () => {
     const asked: string[] = [];
     const s = await sendAfterRestart('true', true, {
       session: { tokenFingerprint: OLD_FP, liveBackgroundTasks: 2 },
@@ -277,27 +277,27 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
       },
     });
 
-    expect(s.result.outcome).toBe('declined');
+    expect(s.result.outcome).toBe('held');
     expect(asked).toHaveLength(0);
     expect(s.fake.stops).toHaveLength(0);
     expect(s.fake.pushedToLiveProcess).toHaveLength(0);
     await s.pool.stop();
   });
 
-  it('⚠️ 指紋が食い違い、背景処理の本数が分からない（欄の無い runner）なら、「分からない」と言って断る', async () => {
+  it('⚠️ 指紋が食い違い、背景処理の本数が分からない（欄の無い runner）なら、「分からない」と言って預かる', async () => {
     const s = await sendAfterRestart('true', true, {
       session: { tokenFingerprint: OLD_FP },
       activeFingerprint: NEW_FP,
     });
 
-    expect(s.result.outcome).toBe('declined');
+    expect(s.result.outcome).toBe('held');
     expect(s.result.detail).toContain('分からない');
     expect(s.fake.stops).toHaveLength(0);
     expect(s.fake.pushedToLiveProcess).toHaveLength(0);
     await s.pool.stop();
   });
 
-  it('⚠️ 指紋が食い違い、確認待ちが残っていれば断る', async () => {
+  it('⚠️ 指紋が食い違い、確認待ちが残っていれば預かる', async () => {
     const s = await sendAfterRestart('true', true, {
       session: {
         tokenFingerprint: OLD_FP,
@@ -314,7 +314,7 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
       activeFingerprint: NEW_FP,
     });
 
-    expect(s.result.outcome).toBe('declined');
+    expect(s.result.outcome).toBe('held');
     expect(s.result.detail).toContain('確認待ち');
     expect(s.fake.stops).toHaveLength(0);
     await s.pool.stop();
@@ -335,7 +335,7 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
     await s.pool.stop();
   });
 
-  it('⚠️ 取り直したらターンが走っていた: 畳まず・流さず断る', async () => {
+  it('⚠️ 取り直したらターンが走っていた: 畳まず・流さず預かる', async () => {
     const s = await sendAfterRestart('true', true, {
       session: { tokenFingerprint: OLD_FP, liveBackgroundTasks: 0 },
       activeFingerprint: NEW_FP,
@@ -343,7 +343,7 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
     });
 
     expect(s.listsDuringSend).toBe(1);
-    expect(s.result.outcome).toBe('declined');
+    expect(s.result.outcome).toBe('held');
     expect(s.result.detail).toContain('ターンが走っている');
     expect(s.fake.stops).toHaveLength(0);
     expect(s.fake.pushedToLiveProcess).toHaveLength(0);

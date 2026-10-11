@@ -41,6 +41,7 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
       .then(() => options.managers.flushWithheldReports().catch(() => undefined))
       .then(() => options.managers.settleStalledUsageWakes().catch(() => undefined))
       .then(() => options.managers.renotifyStalledDenials().catch(() => undefined))
+      .then(() => Promise.resolve(options.managers.deliverHeldMessages?.()).catch(() => undefined))
       .then(() => undefined)
       .finally(() => {
         inFlight = null;

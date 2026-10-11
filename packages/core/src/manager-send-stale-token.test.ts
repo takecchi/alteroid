@@ -212,14 +212,14 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
     await s.pool.stop();
   });
 
-  it('⚠️ 背景処理が1本以上残っている done は、畳まず・流さず、declined で断る', async () => {
+  it('⚠️ 背景処理が1本以上残っている done は、畳まず・流さず、伝言を預かる（held）', async () => {
     const s = await setup();
     s.rotate();
     s.fake.behavior.background = 2;
 
     const result = await s.pool.send('mgr-stale', '続きを');
 
-    expect(result.outcome).toBe('declined');
+    expect(result.outcome).toBe('held');
     expect(result.detail).toContain('背景処理');
     expect(result.detail).toContain('2 本');
     expect(result.detail).toContain('manager_stop');
@@ -236,7 +236,7 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
 
     const result = await s.pool.send('mgr-stale', '続きを');
 
-    expect(result.outcome).toBe('declined');
+    expect(result.outcome).toBe('held');
     expect(result.detail).toContain('分からない');
     expect(s.fake.sends).toHaveLength(0);
     expect(s.fake.stops).toHaveLength(0);
@@ -258,7 +258,7 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
 
     const result = await s.pool.send('mgr-stale', '続きを');
 
-    expect(result.outcome).toBe('declined');
+    expect(result.outcome).toBe('held');
     expect(result.detail).toContain('確認待ち');
     expect(s.fake.stops).toHaveLength(0);
     expect(s.fake.sends).toHaveLength(0);
@@ -290,7 +290,7 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
 
     const result = await pool.send(started.managerId, '続きを');
 
-    expect(result.outcome).toBe('declined');
+    expect(result.outcome).toBe('held');
     expect(result.detail).toContain('sessionId');
     expect(fake.stops).toHaveLength(0);
     expect(fake.sends).toHaveLength(0);
@@ -307,7 +307,7 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
     expect(s.fake.stops).toEqual(['mgr-stale']);
     expect(s.fake.resumes).toHaveLength(0);
     expect(s.fake.sends).toHaveLength(0);
-    expect(result.outcome).toBe('declined');
+    expect(result.outcome).toBe('held');
     expect(result.detail).toContain('畳めた');
     await s.pool.stop();
   });
@@ -376,7 +376,7 @@ describe('畳めない理由が残っていても、古い鍵が ready なら旧
   });
 
   it.each(['cooling', 'disabled', 'invalidated', undefined] as const)(
-    '⚠️ 古い鍵が %s なら従来どおり declined（送らず・畳まない）',
+    '⚠️ 古い鍵が %s なら送らず・畳まず、伝言を預かる（held）',
     async (state) => {
       const s = await setup({ tokenAvailability: async () => state });
       s.rotate();
@@ -384,7 +384,7 @@ describe('畳めない理由が残っていても、古い鍵が ready なら旧
 
       const result = await s.pool.send('mgr-stale', '続きを');
 
-      expect(result.outcome).toBe('declined');
+      expect(result.outcome).toBe('held');
       expect(s.fake.sends).toHaveLength(0);
       expect(s.fake.stops).toHaveLength(0);
       await s.pool.stop();
@@ -398,7 +398,7 @@ describe('畳めない理由が残っていても、古い鍵が ready なら旧
 
     const result = await s.pool.send('mgr-stale', '続きを');
 
-    expect(result.outcome).toBe('declined');
+    expect(result.outcome).toBe('held');
     expect(result.detail).toContain('抱えている古い鍵（tok-a）はいま冷却中');
     expect(result.detail).toContain('畳んでいないし、送ってもいない');
     const decisions = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
@@ -417,7 +417,7 @@ describe('畳めない理由が残っていても、古い鍵が ready なら旧
 
     const result = await s.pool.send('mgr-stale', '続きを');
 
-    expect(result.outcome).toBe('declined');
+    expect(result.outcome).toBe('held');
     expect(result.detail).not.toContain('抱えている古い鍵');
     const decisions = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
       JSON.stringify(e).includes('届けずに断った'),
@@ -427,20 +427,20 @@ describe('畳めない理由が残っていても、古い鍵が ready なら旧
     await s.pool.stop();
   });
 
-  it('⚠️ 注入口を渡さなければ従来どおり declined', async () => {
+  it('⚠️ 注入口を渡さなければ送らず・畳まず、伝言を預かる（held）', async () => {
     const s = await setup();
     s.rotate();
     s.fake.behavior.background = 1;
 
     const result = await s.pool.send('mgr-stale', '続きを');
 
-    expect(result.outcome).toBe('declined');
+    expect(result.outcome).toBe('held');
     expect(s.fake.sends).toHaveLength(0);
     expect(s.fake.stops).toHaveLength(0);
     await s.pool.stop();
   });
 
-  it('⚠️ 注入口が投げたら declined（送らず・畳まない）', async () => {
+  it('⚠️ 注入口が投げたら送らず・畳まず、伝言を預かる（held）', async () => {
     const s = await setup({
       tokenAvailability: async () => {
         throw new Error('プールを読めない');
@@ -451,13 +451,13 @@ describe('畳めない理由が残っていても、古い鍵が ready なら旧
 
     const result = await s.pool.send('mgr-stale', '続きを');
 
-    expect(result.outcome).toBe('declined');
+    expect(result.outcome).toBe('held');
     expect(s.fake.sends).toHaveLength(0);
     expect(s.fake.stops).toHaveLength(0);
     await s.pool.stop();
   });
 
-  it('⚠️ 畳めない理由が背景処理でなく sessionId 無しでも混じれば、ready でも declined（絞った範囲）', async () => {
+  it('⚠️ 畳めない理由が背景処理でなく sessionId 無しでも混じれば、ready でも届けず預かる（絞った範囲）', async () => {
     const stores = createMemoryStores();
     const fake = staleRunner();
     const registry = createRunnerRegistry([fake.runner]);
@@ -484,7 +484,7 @@ describe('畳めない理由が残っていても、古い鍵が ready なら旧
 
     const result = await pool.send(started.managerId, '続きを');
 
-    expect(result.outcome).toBe('declined');
+    expect(result.outcome).toBe('held');
     expect(fake.sends).toHaveLength(0);
     expect(fake.stops).toHaveLength(0);
     await pool.stop();

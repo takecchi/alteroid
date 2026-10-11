@@ -138,6 +138,7 @@ import type {
   UnpushedWorkObservationSource,
   WorkspaceLocator,
   ExternalOutput,
+  HeldMessage,
 } from './schema.js';
 import { externalOutputLimits } from './schema.js';
 import { describeUnreadableManagerRow, type Stores } from './store.js';
@@ -1023,7 +1024,8 @@ export type ManagerDecision = 'allow' | 'deny';
  * | `'session_missing'` | runner がこの委譲のセッションを持っておらず、resume でも入り直せなかった。そのものは居る | 200 |
  * | `'unknown'` | 届けられたか確かめられなかった（宛先の runner が名簿に開いていない・待ちの宛先が決められない・引き取り中 など） | `'unknown'` のみ 404 |
  * | `'unreadable'` | 台帳に行は在るが読めない形で入っている。送っていない。`'unknown'`（居ない）と分ける | 409 |
- * | `'declined'` | 世代が食い違う done の委譲を畳んで新しい鍵で起こし直したいが、畳めない（背景処理・確認待ちが残っている・それらが分からない・畳めたと確かめられない）ので、畳まず、旧セッションへも送らなかった。そのものは居る | 200 |
+ * | `'declined'` | 世代が食い違う done の委譲を畳んで新しい鍵で起こし直したいが、畳めない（背景処理・確認待ちが残っている・それらが分からない・畳めたと確かめられない）ので、畳まず、旧セッションへも送らなかった。預からなかった（添付付き・預かりの上限を超えた）。そのものは居る | 200 |
+ * | `'held'` | `'declined'` と同じ理由でいまは届けられないので、台帳（`Job.heldMessages`）に預かった。届けられるようになったら自動で届け、日誌とクローンへ知らせる（`deliverHeldMessages`）。送り直すと二重に届く | 200 |
  *
  * `'session_missing'` を `'unknown'` へ畳まない: `app.ts` が 404 を返し、`ManagerAbortResult` の doc が
  * 否定した形（待てば直る状態を 404 という機械可読な終端で返す）に戻る。`sessionId` が残っていれば
@@ -1032,7 +1034,8 @@ export type ManagerDecision = 'allow' | 'deny';
  * 無くても常に `'delivered'` になるのを防ぐため（`#sendDetectingMissingSession` が戻り値も読む）。
  */
 export interface ManagerSendResult {
-  outcome: 'answered' | 'delivered' | 'session_missing' | 'unknown' | 'unreadable' | 'declined';
+  outcome:
+    'answered' | 'delivered' | 'session_missing' | 'unknown' | 'unreadable' | 'declined' | 'held';
   detail: string;
 }
 
@@ -1331,6 +1334,13 @@ export interface ManagerPool {
    * 1件の失敗で残りを止めない。
    */
   sweepRescueRefs?(): Promise<void>;
+  /**
+   * `manager_send` が預かった伝言（`Job.heldMessages`）を、委譲ごとに古い順に1通へまとめ、`send()` と同じ経路でもう一度届ける。
+   * 届けられる条件は `send()` の判定そのまま（背景処理・確認待ちが片付けば畳んで新しい鍵で起こし直す・抱えている鍵が ready なら旧セッションへ・器が替わっていれば resume）で、ここに別の判定を書かない。
+   * 届けたら日誌とクローンへ知らせる。期限切れ・委譲の終端では捨て、その本文ごと日誌とクローンへ返す（黙って消さない）。
+   * 1件の失敗で残りを止めない。省略できる（周期の呼び手はデーモンのポーラー）。
+   */
+  deliverHeldMessages?(): Promise<void>;
   /**
    * 合流窓（`#synthesizedNotices`）に残った積みは必ず flush する: 窓の中で止まると `setTimeout` が
    * 二度と発火せず失われる（`#queueSynthesizedNotice` / `#flushSynthesizedNotices` の doc）。
@@ -1653,6 +1663,34 @@ export const PUSH_FAILURE_FOLD_MAX_SPAN_MS = 30 * 60_000;
  * `#unpushedWorkObservationInFlight` の印が残り、その委譲について以降1本も投げられなくなるため。
  */
 const UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS = 5_000;
+
+/**
+ * `manager_send` が預かる伝言の上限（1委譲あたり）。超えた分は預からず、これまでどおり断る（`declined`）。
+ * 数で締めるのは、届かない委譲へ周期の送り手が送り続けて台帳の1行が育ち続けないため。字数は1行の jsonb の大きさの歯止め。
+ */
+export const HELD_MESSAGES_MAX_COUNT = 20;
+export const HELD_MESSAGES_MAX_CHARS = 200_000;
+/**
+ * 預かりの期限。過ぎたら捨て、本文ごと日誌とクローンへ返す。背景処理が1日を超えて残る委譲は、待つより起こし直すほうがよい（`manager_stop` → `manager_start`）とクローンが判断する材料にする。
+ */
+export const HELD_MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** 届け直す本文。遅れて届いたことと、いつ送られたかを頭に付ける: マネージャーが、その間に変わった状況と突き合わせて読めるように。 */
+export function composeHeldDelivery(batch: readonly HeldMessage[]): string {
+  if (batch.length === 1) {
+    const only = batch[0]!;
+    return (
+      `（alteroid が預かっていた伝言。${only.heldAt} に送られたが、そのときは届けられなかったので、いま届ける）\n\n` +
+      only.text
+    );
+  }
+  return [
+    `（alteroid が預かっていた伝言 ${String(batch.length)} 通。そのときは届けられなかったので、送られた順にまとめていま届ける）`,
+    ...batch.map(
+      (item, index) => `--- ${String(index + 1)}通目（${item.heldAt} に送られた）---\n${item.text}`,
+    ),
+  ].join('\n\n');
+}
 
 /** 実測の根拠は無い（「大きく、無限ではない」だけ）。 */
 const AUTO_FOLD_SKIP_JOURNAL_TRACKING_LIMIT = 500;
@@ -2872,6 +2910,13 @@ class Pool implements ManagerPool {
    */
   readonly #unresumable = new Set<string>();
   /**
+   * 預かった伝言（`Job.heldMessages`）を持つ委譲。台帳が正で、これは周期の見回りで全件の台帳を読まないための索引。
+   * 起動時の `#restoreJobs` が台帳から組み直す。
+   */
+  readonly #heldMessageJobs = new Set<string>();
+  /** 届け直しの最中の委譲: 同じ伝言を2本並べて届けない。 */
+  readonly #heldDelivering = new Set<string>();
+  /**
    * `record.leaseRefusal`（ジョブ単位）ではなく `runnerId` 単位で持つ: 併存の検出は `#claimForResume` と、
    * `record` に触れずに抜ける `#reattach` の早期検出の2箇所にあり、後者が見つけた併存は `#claimForResume` に届かず
    * 「解けた」を言う機会が無いまま残る。1つの状態にすれば、どちらの経路でも「入った」「解けた」が1回ずつ出る。
@@ -3153,10 +3198,22 @@ class Pool implements ManagerPool {
    * そこで先頭に入れてしまうと、拒否のつもりの一言が別の質問の答えになる。
    * 待ちが1件のときも同じである（`#choosePending` の doc）。
    */
-  async send(
+  send(
     managerId: string,
     message: string,
     options: ManagerSendOptions = {},
+  ): Promise<ManagerSendResult> {
+    return this.#send(managerId, message, options, 'caller');
+  }
+
+  /**
+   * `mode === 'held-delivery'` は預かった伝言の届け直し（`#deliverHeld`）だけが使う: 断られても預け直さず、預かりの列にも並ばない（並ぶと自分自身を待つ）。
+   */
+  async #send(
+    managerId: string,
+    message: string,
+    options: ManagerSendOptions,
+    mode: 'caller' | 'held-delivery',
   ): Promise<ManagerSendResult> {
     await this.#ensureConnected();
 
@@ -3276,6 +3333,16 @@ class Pool implements ManagerPool {
       };
     }
 
+    // 預かりがある間に来た伝言は列の後ろへ積み、まとめて届けを試す: 先に届けると、預かった伝言を追い越すため。
+    // 添付付きは預からない（中身を台帳に載せない）ので、ここでは並ばずに下の経路で扱う。
+    const holdable = mode === 'caller' && sendAttachments.length === 0;
+    if (holdable && (record.job.heldMessages?.length ?? 0) > 0) {
+      const queued = await this.#holdMessage(record, message, '先に預かった伝言がまだ届いていない');
+      if (queued.outcome !== 'held') return queued;
+      const attempt = await this.#deliverHeld(managerId, 'caller');
+      return attempt ?? queued;
+    }
+
     // 認証トークンの世代が食い違った done の委譲は旧セッションへ流さない: 旧プロセスの env は起動時に凍っていて、
     // 鍵が回った後も古い鍵で走り、また枠に当たる。
     let fingerprintMatched = false;
@@ -3284,7 +3351,17 @@ class Pool implements ManagerPool {
     const turnStartedAt = new Date(this.#now()).toISOString();
     if (record.job.status === 'done') {
       const folded = await this.#foldStaleTokenSession(record, runner, managerId);
-      if (folded.declined !== undefined) return folded.declined;
+      if (folded.declined !== undefined) {
+        // 断った本文を捨てない: 呼び手が台帳で追って送り直すしかなく、追い損ねた伝言は誰にも届かないまま消えるため。
+        if (holdable) {
+          return await this.#holdMessage(
+            record,
+            message,
+            folded.declinedReason ?? folded.declined.detail,
+          );
+        }
+        return folded.declined;
+      }
       fingerprintMatched = folded.fingerprintMatched === true;
       staleDelivery = folded.staleDelivery;
     }
@@ -3450,6 +3527,8 @@ class Pool implements ManagerPool {
     managerId: string,
   ): Promise<{
     declined?: ManagerSendResult;
+    /** 断った理由だけ（取れる手を含まない）。預かる回の応答に使う: 断る回の detail は「送り直すこと」と言い、預かった回とは逆の手になるため。 */
+    declinedReason?: string;
     fingerprintMatched?: true;
     staleDelivery?: { generation: number; blockers: string[] };
   }> {
@@ -3481,15 +3560,13 @@ class Pool implements ManagerPool {
       listing = await listRunnerManagers(runner);
     } catch (error) {
       if (!record.attached) return {};
+      const reason =
+        `${managerId} は認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、` +
+        `現役は世代 ${String(active)}）が、runner の状態を読めなかった（${reasonOf(error)}）ため、` +
+        '背景処理や確認待ちが残っているか分からない。畳んでいないし、古い鍵のセッションへも送っていない。';
       return {
-        declined: {
-          outcome: 'declined',
-          detail:
-            `${managerId} は認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、` +
-            `現役は世代 ${String(active)}）が、runner の状態を読めなかった（${reasonOf(error)}）ため、` +
-            '背景処理や確認待ちが残っているか分からない。畳んでいないし、古い鍵のセッションへも送っていない。' +
-            '少し置いてから送り直すこと。',
-        },
+        declined: { outcome: 'declined', detail: `${reason}少し置いてから送り直すこと。` },
+        declinedReason: reason,
       };
     }
     const state = listing.states.find((entry) => entry.managerId === managerId);
@@ -3497,14 +3574,10 @@ class Pool implements ManagerPool {
       if (!listing.unreadableIds.includes(managerId)) return {};
       // 読めない形で在るなら「居る」側に数える: 数えずに通すと旧セッションへ送りうる。
       if (!record.attached) return {};
-      return {
-        declined: {
-          outcome: 'declined',
-          detail:
-            `${managerId} は認証トークンの世代が食い違っているが、runner が返した状態が読めず、` +
-            '背景処理や確認待ちが残っているか分からない。送っていない。',
-        },
-      };
+      const reason =
+        `${managerId} は認証トークンの世代が食い違っているが、runner が返した状態が読めず、` +
+        '背景処理や確認待ちが残っているか分からない。送っていない。';
+      return { declined: { outcome: 'declined', detail: reason }, declinedReason: reason };
     }
 
     // 台帳が「繋がっていない」のに旧プロセスが生きている回は、世代が再起動で失われているので鍵の指紋で比べる。
@@ -3578,17 +3651,20 @@ class Pool implements ManagerPool {
           `managerId=${managerId} tokenId=${heldTokenId ?? '（分からない）'} ` +
           `鍵の状態=${heldTokenState ?? '（聞いていない）'} 畳めない理由=${blockers.join('。')}（#4441）`,
       });
+      const reason =
+        `${managerId} は${staleness}。古い鍵のセッションへ流すとまた枠に当たるので、` +
+        '畳んで新しい鍵で起こし直したいが、畳めない理由が残っている: ' +
+        `${blockers.join('。')}。${tokenClause}畳んでいないし、送ってもいない。`;
       return {
         declined: {
           outcome: 'declined',
           detail:
-            `${managerId} は${staleness}。古い鍵のセッションへ流すとまた枠に当たるので、` +
-            '畳んで新しい鍵で起こし直したいが、畳めない理由が残っている: ' +
-            `${blockers.join('。')}。${tokenClause}畳んでいないし、送ってもいない。` +
+            reason +
             '取れる手: (1) 背景処理・確認待ちが終わるのを待ってから送り直す。' +
             '(2) 残っているものを捨ててよいなら manager_stop → manager_start で後継を起こす' +
             '（manager_stop は残っている仕事ごと畳む）。',
         },
+        declinedReason: reason,
       };
     }
 
@@ -3613,15 +3689,14 @@ class Pool implements ManagerPool {
       )
       .catch(() => undefined);
     if (gone !== true) {
+      const reason =
+        `${managerId} の旧セッションを畳めたと確かめられなかった` +
+        `（${gone === false ? 'runner の一覧にまだ残っている' : '一覧を読めなかった'}` +
+        `${stopError === undefined ? '' : `。runner.stop() が例外を投げた: ${reasonOf(stopError)}`}）。` +
+        '二重に起こさないので resume していないし、送ってもいない。';
       return {
-        declined: {
-          outcome: 'declined',
-          detail:
-            `${managerId} の旧セッションを畳めたと確かめられなかった` +
-            `（${gone === false ? 'runner の一覧にまだ残っている' : '一覧を読めなかった'}` +
-            `${stopError === undefined ? '' : `。runner.stop() が例外を投げた: ${reasonOf(stopError)}`}）。` +
-            '二重に起こさないので resume していないし、送ってもいない。少し置いてから送り直すこと。',
-        },
+        declined: { outcome: 'declined', detail: `${reason}少し置いてから送り直すこと。` },
+        declinedReason: reason,
       };
     }
 
@@ -3634,6 +3709,183 @@ class Pool implements ManagerPool {
         '（#2851 / #2877。旧セッションへ流すと古い鍵のまま走る）',
     });
     return {};
+  }
+
+  /**
+   * 届けられない伝言を台帳に預かる。上限（`HELD_MESSAGES_MAX_COUNT` / `HELD_MESSAGES_MAX_CHARS`）を超えるなら預からず断る。
+   * 書けなかったら預かったと言わない（台帳が正で、言った後に消えると呼び手は送り直す機会を失う）。
+   */
+  async #holdMessage(
+    record: ManagerRecord,
+    message: string,
+    reason: string,
+  ): Promise<ManagerSendResult> {
+    const managerId = record.job.id;
+    const held = record.job.heldMessages ?? [];
+    const chars = held.reduce((sum, item) => sum + item.text.length, 0) + message.length;
+    if (held.length >= HELD_MESSAGES_MAX_COUNT || chars > HELD_MESSAGES_MAX_CHARS) {
+      return {
+        outcome: 'declined',
+        detail:
+          `${reason} 預かりの上限（1委譲あたり ${String(HELD_MESSAGES_MAX_COUNT)} 通・合計 ` +
+          `${String(HELD_MESSAGES_MAX_CHARS)} 字。いま ${String(held.length)} 通を預かっている）を超えるので、` +
+          'この伝言は預からなかった。送ってもいない。',
+      };
+    }
+    const heldAt = new Date(this.#now()).toISOString();
+    const previous = record.job.heldMessages;
+    record.job.heldMessages = [...held, { text: message, heldAt, reason }];
+    try {
+      await this.#persist(record);
+    } catch (error) {
+      record.job.heldMessages = previous;
+      return {
+        outcome: 'declined',
+        detail: `${reason} 預かろうとしたが台帳に書けなかった（${reasonOf(error)}）。預かっていないし、送ってもいない。`,
+      };
+    }
+    this.#heldMessageJobs.add(managerId);
+    const count = held.length + 1;
+    await this.#journal({
+      type: 'decision',
+      decision: `[${managerId}] manager_send の伝言を届けずに預かった（預かり ${String(count)} 通目）`,
+      grounds: `managerId=${managerId} 理由=${excerptLine(reason, NOTIFY_REPORT_EXCERPT)}`,
+    });
+    const expiresAt = new Date(Date.parse(heldAt) + HELD_MESSAGE_TTL_MS).toISOString();
+    return {
+      outcome: 'held',
+      detail:
+        `${reason}\n\nこの伝言は捨てずに預かった（${managerId} の預かり ${String(count)} 通目。期限 ${expiresAt}）。` +
+        '届けられるようになったら（背景処理・確認待ちが片付いて新しい鍵で起こし直せたとき・抱えている鍵が使えるようになったとき・' +
+        '器が替わって resume から入るとき）、預かった順に自動で届け、届けたら知らせる。' +
+        '送り直さないこと（二重に届く）。続けて送った伝言は、預かりの後ろに並べてまとめて届ける。' +
+        '残っている背景処理を捨ててよいなら manager_stop → manager_start で後継を起こす（預かりは本文ごと返す）。',
+    };
+  }
+
+  /**
+   * 預かった伝言を古い順に1通へまとめ、`#send` の同じ経路で届け直す。届けられなかったら預かったまま（`undefined` ではなく `held` を返す）。
+   * `trigger === 'poll'` で届いた回だけクローンへ知らせる: `'caller'` は `manager_send` の応答がそのまま知らせになる。
+   * 届いた分だけを列の頭から外す: 届け直しの `await` の間に後ろへ積まれた伝言を一緒に消さないため。
+   */
+  async #deliverHeld(
+    managerId: string,
+    trigger: 'caller' | 'poll',
+  ): Promise<ManagerSendResult | undefined> {
+    if (this.#heldDelivering.has(managerId)) return undefined;
+    this.#heldDelivering.add(managerId);
+    try {
+      const record = this.#records.get(managerId) ?? (await this.#load(managerId));
+      if (!record) {
+        this.#heldMessageJobs.delete(managerId);
+        return undefined;
+      }
+      const held = record.job.heldMessages ?? [];
+      if (held.length === 0) {
+        this.#heldMessageJobs.delete(managerId);
+        return undefined;
+      }
+
+      const status = record.job.status;
+      if (status === 'lost' || status === 'failed' || status === 'stopped') {
+        await this.#releaseHeld(record, held.length, `委譲が終端した（status=${status}）`);
+        return {
+          outcome: 'declined',
+          detail: `${managerId} は終端している（status=${status}）ので届けられない。預かっていた伝言は本文ごと返した。`,
+        };
+      }
+      const now = this.#now();
+      // 預かりは時刻順に積むので、期限切れは列の頭にだけ居る。
+      const expiredCount = held.findIndex(
+        (item) => now - Date.parse(item.heldAt) <= HELD_MESSAGE_TTL_MS,
+      );
+      const expired = expiredCount === -1 ? held.length : expiredCount;
+      if (expired > 0) {
+        await this.#releaseHeld(
+          record,
+          expired,
+          `預かりの期限（${String(HELD_MESSAGE_TTL_MS / 3_600_000)} 時間）を過ぎた`,
+        );
+      }
+      const batch = record.job.heldMessages ?? [];
+      if (batch.length === 0) return undefined;
+
+      const result = await this.#send(managerId, composeHeldDelivery(batch), {}, 'held-delivery');
+      if (result.outcome !== 'delivered' && result.outcome !== 'answered') {
+        return {
+          outcome: 'held',
+          detail:
+            `${managerId} へはまだ届けられない（${result.detail}）。` +
+            `預かっている ${String(batch.length)} 通は捨てずに持っている（最初の預かり ${batch[0]?.heldAt ?? '?'}）。` +
+            '届けられるようになったら自動で届け、届けたら知らせる。送り直さないこと（二重に届く）。',
+        };
+      }
+
+      const remaining = (record.job.heldMessages ?? []).slice(batch.length);
+      record.job.heldMessages = remaining.length === 0 ? undefined : remaining;
+      await this.#persist(record);
+      if (remaining.length === 0) this.#heldMessageJobs.delete(managerId);
+      const summary =
+        `預かっていた伝言 ${String(batch.length)} 通を ${managerId} へ届けた` +
+        `（最初の預かり ${batch[0]?.heldAt ?? '?'}）。${result.detail}`;
+      await this.#journal({
+        type: 'decision',
+        decision: `[${managerId}] 預かっていた伝言 ${String(batch.length)} 通を届けた`,
+        grounds: `managerId=${managerId} 契機=${trigger === 'poll' ? '周期の見回り' : 'manager_send'} ${result.detail}`,
+      });
+      if (trigger === 'poll') {
+        this.#queueSynthesizedNotice(
+          managerId,
+          'held_delivered',
+          [
+            summary,
+            ...batch.map(
+              (item, index) =>
+                `- ${String(index + 1)}通目（${item.heldAt}）: ${excerptLine(item.text, NOTIFY_REPORT_EXCERPT)}`,
+            ),
+          ].join('\n'),
+        );
+      }
+      return { outcome: 'delivered', detail: summary };
+    } finally {
+      this.#heldDelivering.delete(managerId);
+    }
+  }
+
+  /** 列の頭から `count` 通を捨て、本文ごと日誌とクローンへ返す: 預かった以上、黙って消すと誰にも届かない伝言が生まれるため。 */
+  async #releaseHeld(record: ManagerRecord, count: number, why: string): Promise<void> {
+    const managerId = record.job.id;
+    const held = record.job.heldMessages ?? [];
+    const released = held.slice(0, count);
+    const remaining = held.slice(count);
+    record.job.heldMessages = remaining.length === 0 ? undefined : remaining;
+    await this.#persist(record);
+    if (remaining.length === 0) this.#heldMessageJobs.delete(managerId);
+    const body = [
+      `${managerId} へ預かっていた伝言 ${String(released.length)} 通を、届けずに捨てた（${why}）。本文を返す。` +
+        '要るなら届け先を決め直して送ること。',
+      ...released.map(
+        (item, index) => `--- ${String(index + 1)}通目（預かり ${item.heldAt}）---\n${item.text}`,
+      ),
+    ].join('\n');
+    await this.#journal({
+      type: 'decision',
+      decision: `[${managerId}] 預かっていた伝言 ${String(released.length)} 通を届けずに捨てた（${why}）`,
+      grounds: body,
+    });
+    this.#queueSynthesizedNotice(managerId, 'held_released', body);
+  }
+
+  async deliverHeldMessages(): Promise<void> {
+    if (this.#stopped) return;
+    for (const managerId of [...this.#heldMessageJobs]) {
+      if (this.#stopped) return;
+      try {
+        await this.#deliverHeld(managerId, 'poll');
+      } catch (error) {
+        noteBackgroundFailure('預かった伝言の届け直し', `managerId=${managerId}`, error);
+      }
+    }
   }
 
   /**
@@ -5389,6 +5641,8 @@ class Pool implements ManagerPool {
     const registeredRunnerIds = this.#registeredRunnerIds();
     const resumed: ManagerSummary[] = [];
     for (const job of await this.#stores.jobs.listJobs()) {
+      // 像の有無より前に置く: 預かりの見回りは像を持たない終端の委譲（捨てて返す側）も見るため。
+      if ((job.heldMessages?.length ?? 0) > 0) this.#heldMessageJobs.add(job.id);
       if (this.#records.has(job.id)) continue;
 
       // 下で `continue` される `lost` より前に置く: 印を組み直さないと `resumeStoppedByUsage()` が `lost` の委譲を回転の対象にすら入れない。

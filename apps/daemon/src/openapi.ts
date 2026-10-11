@@ -694,6 +694,7 @@ export const managerActionResponseSchema = z.object({
     'not_stopped',
     'session_missing',
     'declined',
+    'held',
     'unknown',
   ]),
   detail: z.string(),

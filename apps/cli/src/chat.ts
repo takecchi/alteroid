@@ -3550,7 +3550,8 @@ async function describeRemovedBody(
 }
 
 // `session_missing`・`declined` は HTTP 200 でも届いていない。
-const DELIVERED_OUTCOMES: ReadonlySet<string> = new Set(['delivered', 'answered']);
+// `held` は受け付けた側: デーモンが預かって後で届けるので、失敗と言うと送り直しで二重に届く。
+const DELIVERED_OUTCOMES: ReadonlySet<string> = new Set(['delivered', 'answered', 'held']);
 
 // `not_stopped`・`unknown` を止まったとみなさない: 止まったと確かめられていないため。
 const STOPPED_OUTCOMES: ReadonlySet<string> = new Set(['stopped']);
