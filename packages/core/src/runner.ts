@@ -2375,6 +2375,11 @@ class RunnerSession {
     for (const key of this.#withheldEnvKeys) delete env[key];
     // 伏せる処理の後・最後に置く: プロファイルや `withheldEnvKeys` で出し箱の行き先を差し替えられると、取り込む場所と担い手が書く場所がずれる
     if (this.#outboxDir !== undefined) env[RUNNER_OUTBOX_ENV] = this.#outboxDir;
+    // 子の設定ディレクトリを SDK にも見せる: SDK は生ログの写しの鍵を `env.CLAUDE_CONFIG_DIR ?? <runner の homedir>/.claude` から作り、別の HOME で起こした子が書いたパスをその外として捨てる（デーモンへ1行も預からず、器が替わると resume できない）ため。既に置かれていれば子も SDK も同じ値を見るので触らない
+    const childHome = this.#childUser?.home;
+    if (childHome !== undefined && env.CLAUDE_CONFIG_DIR === undefined) {
+      env.CLAUDE_CONFIG_DIR = joinPath(childHome, '.claude');
+    }
     return env;
   }
 

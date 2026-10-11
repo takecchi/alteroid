@@ -92,6 +92,10 @@
 - **runner に DB を持たせない。** 生ログ（SessionStore）も日誌も、runner は「預ける」だけで、
   永続化するのはデーモンである。runner に DB 認証情報を置いた瞬間、その中の子プロセスが
   同じ鍵に届く
+  - **子を別の HOME で起こすときは、セッションの env に `CLAUDE_CONFIG_DIR=<子の home>/.claude` を明示する**（#4465）。
+    SDK は子が書いた生ログを `env.CLAUDE_CONFIG_DIR ?? <runner の homedir>/.claude` の `projects` の下にあるときだけ預け、
+    外れたものは警告だけ出して捨てる。明示しないと、runner（root）と子（`/home/worker`）で基点がずれて1行も預からず、
+    器が替わった後の resume が材料無しで必ず失敗する。既に置かれていれば触らない（子も SDK も同じ値を見る）
 
 ### runner API — 命令は下り、出来事は上る
 
