@@ -51,7 +51,8 @@ afterEach(async () => {
 
 async function spawnFakeChild(
   childEnv: Record<string, string> = {},
-): Promise<{ child: FakeChild; events: RunnerEvent[] }> {
+  stop: AbortController = new AbortController(),
+): Promise<{ child: FakeChild; events: RunnerEvent[]; host: RunnerHost }> {
   const sessions: Options[] = [];
   const events: RunnerEvent[] = [];
   const child = new FakeChild();
@@ -70,9 +71,9 @@ async function spawnFakeChild(
     command: 'claude',
     args: [],
     env: childEnv,
-    signal: new AbortController().signal,
+    signal: stop.signal,
   });
-  return { child, events };
+  return { child, events, host };
 }
 
 async function drained(): Promise<void> {
@@ -180,5 +181,59 @@ describe('自前で起こした委譲の CLI の stderr を読み、0 以外で�
     const [note] = cliNotes(events);
     expect(note).toContain('接続に失敗');
     expect(note).not.toContain('zq-plain-secret-77');
+  });
+});
+
+describe('止めると決めた後に止め方どおりに終わった子は、異常終了の note を出さない（#4488）', () => {
+  it.each([
+    [null, 'SIGTERM'],
+    [null, 'SIGKILL'],
+    [143, null],
+    [137, null],
+  ] as const)(
+    'SDK の close() が signal を abort した後の exit(%s, %s) は黙る',
+    async (code, signal) => {
+      const stop = new AbortController();
+      const { child, events } = await spawnFakeChild({}, stop);
+      stop.abort();
+      child.emit('exit', code, signal);
+      child.stderr.end();
+      await drained();
+
+      expect(cliNotes(events)).toEqual([]);
+    },
+  );
+
+  it('runner が委譲を止めた（stop）後の SIGTERM も黙る', async () => {
+    const { child, events, host } = await spawnFakeChild();
+    const stopping = host.stop('mgr-1');
+    child.emit('exit', null, 'SIGTERM');
+    child.stderr.end();
+    await stopping.catch(() => undefined);
+    await drained();
+
+    expect(cliNotes(events)).toEqual([]);
+  });
+
+  it('止めた後でも exit code 1 は言う（止める途中で本当に落ちたのかもしれない）', async () => {
+    const stop = new AbortController();
+    const { child, events } = await spawnFakeChild({}, stop);
+    child.stderr.write('closing の途中で落ちた\n');
+    await drained();
+    stop.abort();
+    child.emit('exit', 1, null);
+    child.stderr.end();
+    await drained();
+
+    expect(cliNotes(events)).toEqual([expect.stringContaining('exit code 1')]);
+  });
+
+  it('止めていないのに SIGTERM で終わった回は、これまでどおり言う', async () => {
+    const { child, events } = await spawnFakeChild();
+    child.emit('exit', null, 'SIGTERM');
+    child.stderr.end();
+    await drained();
+
+    expect(cliNotes(events)).toEqual([expect.stringContaining('signal SIGTERM')]);
   });
 });
