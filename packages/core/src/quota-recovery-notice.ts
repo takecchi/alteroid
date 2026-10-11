@@ -159,7 +159,8 @@ export function foldableQuotaStopTargetsOf(event: InboxEvent): QuotaStopTargets 
 function backOnCurrentToken(found: QuotaRecoverySummary | undefined, noticeAt: string): boolean {
   if (found === undefined) return false;
   if (!found.live || found.usageStoppedAt !== undefined) return false;
-  if (found.tokenGeneration === undefined || found.activeTokenGeneration === undefined) return false;
+  if (found.tokenGeneration === undefined || found.activeTokenGeneration === undefined)
+    return false;
   if (found.tokenGeneration !== found.activeTokenGeneration) return false;
   if (found.status === 'running') return true;
   if (found.status !== 'done') return false;
