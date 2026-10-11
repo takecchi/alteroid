@@ -469,6 +469,11 @@ export interface ManagerSummary {
   lastUnpushedWorkObservation?: LastUnpushedWorkObservation;
   lastRescue?: LastRescue;
   externalOutputs?: ExternalOutput[];
+  /**
+   * `manager_send` が届けられずに預かっている伝言（`Job.heldMessages`）の件数と、いちばん古い預かりの時刻。
+   * 本文は載せない（送り手自身の文で、一覧の予算を食う）。預かりが無ければ欄ごと無い。
+   */
+  heldMessages?: { count: number; oldestHeldAt: string };
 }
 
 /**
@@ -10534,6 +10539,14 @@ function summaryOf(
       : { lastUnpushedWorkObservation: job.lastUnpushedWorkObservation }),
     ...(job.lastRescue === undefined ? {} : { lastRescue: job.lastRescue }),
     ...(job.externalOutputs === undefined ? {} : { externalOutputs: job.externalOutputs }),
+    ...(job.heldMessages === undefined || job.heldMessages[0] === undefined
+      ? {}
+      : {
+          heldMessages: {
+            count: job.heldMessages.length,
+            oldestHeldAt: job.heldMessages[0].heldAt,
+          },
+        }),
     // `live` と同じく引数で運ぶ（省略可能にしない）: 既定を置くと、足す人が考えなかったことが「背景処理は待っていない」という主張になって外へ出る。
     ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
     // `tokenGeneration` が無ければ `activeTokenGeneration` も出さない: 比べる相手が無い判定を作らない。

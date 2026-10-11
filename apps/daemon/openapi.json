@@ -21689,6 +21689,20 @@
                               "required": ["at", "kind", "where"]
                             }
                           },
+                          "heldMessages": {
+                            "type": "object",
+                            "properties": {
+                              "count": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "oldestHeldAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["count", "oldestHeldAt"]
+                          },
                           "waiting": {
                             "type": "array",
                             "items": {
@@ -22511,6 +22525,20 @@
                             },
                             "required": ["at", "kind", "where"]
                           }
+                        },
+                        "heldMessages": {
+                          "type": "object",
+                          "properties": {
+                            "count": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "oldestHeldAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["count", "oldestHeldAt"]
                         },
                         "waiting": {
                           "type": "array",

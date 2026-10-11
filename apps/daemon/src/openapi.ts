@@ -652,6 +652,10 @@ export const managerSummarySchema = z.object({
   lastUnpushedWorkObservation: jobSchema.shape.lastUnpushedWorkObservation,
   lastRescue: jobSchema.shape.lastRescue,
   externalOutputs: jobSchema.shape.externalOutputs,
+  // 本文は載せない（`ManagerSummary.heldMessages` の doc）: 台帳の `heldMessages` の枝は借りない。
+  heldMessages: z
+    .object({ count: z.number().int().positive(), oldestHeldAt: z.string() })
+    .optional(),
   waiting: z.array(managerWaitingSchema),
   // 拒否を観測したときだけ載せる: 常に `[]` を載せると「数えていない」と「0件だった」が同じ形になる。
   denials: z.array(managerDenialSchema).optional(),

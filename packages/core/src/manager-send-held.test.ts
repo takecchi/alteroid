@@ -5,6 +5,7 @@ import {
   createManagerPool,
   HELD_MESSAGE_TTL_MS,
   HELD_MESSAGES_MAX_COUNT,
+  type ManagerSummary,
 } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import {
@@ -19,6 +20,7 @@ import {
 } from './runner-protocol.js';
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
+import { describeHeldMessages } from './tools.js';
 
 const JOB: Job = {
   id: 'mgr-held',
@@ -211,10 +213,15 @@ describe('manager_send が届けられない伝言を台帳に預かり、届け
     await deliverHeld(s.pool);
     expect(s.fake.resumes).toHaveLength(0);
     expect(await heldOf(s.stores)).toHaveLength(2);
+    const listed = (await s.pool.list()).find((entry) => entry.managerId === 'mgr-held');
+    const firstHeldAt = (await heldOf(s.stores))[0]?.heldAt;
+    expect(listed?.heldMessages).toEqual({ count: 2, oldestHeldAt: firstHeldAt });
 
     s.fake.behavior.background = 0;
     await deliverHeld(s.pool);
 
+    const after = (await s.pool.list()).find((entry) => entry.managerId === 'mgr-held');
+    expect(after?.heldMessages).toBeUndefined();
     expect(s.fake.stops).toEqual(['mgr-held']);
     expect(s.fake.resumes).toHaveLength(1);
     const delivered = s.fake.resumes[0]?.message ?? '';
@@ -372,5 +379,22 @@ describe('composeHeldDelivery', () => {
     expect(text.indexOf('1通目（2026-10-11T00:00:00.000Z')).toBeLessThan(
       text.indexOf('2通目（2026-10-11T00:05:00.000Z'),
     );
+  });
+});
+
+describe('describeHeldMessages（manager_list と manager_report の行）', () => {
+  it('預かりがあれば件数・最初の預かり・その期限を言い、送り直さないよう添える', () => {
+    const line = describeHeldMessages({
+      heldMessages: { count: 3, oldestHeldAt: '2026-10-11T00:00:00.000Z' },
+    } as ManagerSummary);
+    expect(line).toContain('預かっている伝言');
+    expect(line).toContain('3 通');
+    expect(line).toContain('最初の預かり 2026-10-11T00:00:00.000Z');
+    expect(line).toContain('その期限 2026-10-12T00:00:00.000Z');
+    expect(line).toContain('送り直さないこと');
+  });
+
+  it('預かりが無ければ行を作らない', () => {
+    expect(describeHeldMessages({} as ManagerSummary)).toBeNull();
   });
 });

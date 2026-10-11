@@ -436,6 +436,7 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
       lastUnpushedWorkObservation: true,
       lastRescue: true,
       externalOutputs: true,
+      heldMessages: true,
     };
 
     const schemaKeys = new Set(Object.keys(managerSummarySchema.shape));

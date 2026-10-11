@@ -135,6 +135,7 @@ import type { ArchiveRemoveManyFilter } from './archive-prune.js';
 import {
   describeDenialFollowUp,
   guardArchiveRemoval,
+  HELD_MESSAGE_TTL_MS,
   tokenGenerationMismatched,
 } from './manager.js';
 import { describeTokenDiff } from './token-diff.js';
@@ -1934,8 +1935,21 @@ function describeUnpushedWorkObservation(
     describeUnpushedWorkObservationOnly(manager),
     describeRescue(manager),
     describeExternalOutputs(manager, outputs),
+    describeHeldMessages(manager),
   ].filter((line): line is string => line !== null);
   return lines.length === 0 ? null : lines.join('\n');
+}
+
+// 一覧で見えないと、クローンは届いたかを台帳で手書きで追い、送り直して二重に届ける（預かりそのものの理由と同じ）
+export function describeHeldMessages(manager: ManagerSummary): string | null {
+  const held = manager.heldMessages;
+  if (held === undefined) return null;
+  const expiresAt = new Date(Date.parse(held.oldestHeldAt) + HELD_MESSAGE_TTL_MS).toISOString();
+  return (
+    `  預かっている伝言（manager_send が届けられなかった分）: ${String(held.count)} 通` +
+    `（最初の預かり ${held.oldestHeldAt}・その期限 ${expiresAt}）。` +
+    '届けられるようになったら自動で届けて知らせる。送り直さないこと（二重に届く）'
+  );
 }
 
 function formatExternalOutput(output: ExternalOutput): string {
