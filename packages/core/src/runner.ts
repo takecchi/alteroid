@@ -163,6 +163,7 @@ import {
   type ResumeRecoveryHost,
   type ResumeRecoveryOutcome,
 } from './runner-resume-recovery.js';
+import { chownTreeSync, sdkResumeConfigDirOf } from './runner-resume-config-dir.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
@@ -424,6 +425,7 @@ export interface RunnerHostOptions {
   // 既定で有効にしない: 同一プロセスの `runner-local` ではデーモンだけが消えることが無く、接触の無い構成のセッションを理由なく畳むため
   enforceLease?: boolean;
   spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
+  handOverResumeConfigDirFn?: HandOverResumeConfigDir;
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
   finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
   cwdExistsFn?: (cwd: string) => boolean;
@@ -629,6 +631,7 @@ class Host implements RunnerHost {
   readonly #abandonedDelegationPids = new Set<number>();
   readonly #spawnAgentProcessFn:
     ((options: SpawnAgentProcessOptions) => DelegationProcessHandle) | undefined;
+  readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir | undefined;
   readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
   readonly #finishUnpushedWorkFn:
     ((options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>) | undefined;
@@ -658,6 +661,7 @@ class Host implements RunnerHost {
     this.#bashGuard = resolveBashGuardMode(this.#env);
     this.#enforceLease = options.enforceLease ?? false;
     this.#spawnAgentProcessFn = options.spawnAgentProcessFn;
+    this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn;
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
     this.#finishUnpushedWorkFn = options.finishUnpushedWorkFn;
     this.#cwdExistsFn = options.cwdExistsFn ?? directoryExists;
@@ -1193,6 +1197,9 @@ class Host implements RunnerHost {
       ...(this.#spawnAgentProcessFn === undefined
         ? {}
         : { spawnAgentProcessFn: this.#spawnAgentProcessFn }),
+      ...(this.#handOverResumeConfigDirFn === undefined
+        ? {}
+        : { handOverResumeConfigDirFn: this.#handOverResumeConfigDirFn }),
       ...(this.#readCgroupEventCountersFn === undefined
         ? {}
         : { readCgroupEventCountersFn: this.#readCgroupEventCountersFn }),
@@ -1588,6 +1595,8 @@ interface PendingRequest {
 
 type SpawnAgentProcessOptions = AgentSpawnOptions;
 
+export type HandOverResumeConfigDir = (dir: string, uid: number, gid: number) => void;
+
 type DelegationProcessHandle = AgentChildProcess;
 
 interface RunnerSessionOptions {
@@ -1623,6 +1632,7 @@ interface RunnerSessionOptions {
   onDelegationProcessSpawned?: (pid: number) => void;
   onDelegationProcessExited?: (pid: number) => void;
   spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
+  handOverResumeConfigDirFn?: HandOverResumeConfigDir;
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
   finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
 }
@@ -1672,6 +1682,7 @@ class RunnerSession {
   readonly #onDelegationProcessSpawned: (pid: number) => void;
   readonly #onDelegationProcessExited: (pid: number) => void;
   readonly #spawnAgentProcessFn: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
+  readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
   readonly #rescueMemory = new RescueMemory();
   #rescueRunning: Promise<void> | null = null;
@@ -1803,6 +1814,7 @@ class RunnerSession {
       options.spawnAgentProcessFn ??
       ((spawnOptions) =>
         spawnAsUser(this.#childUser as RunnerChildUser, { ...spawnOptions, detached: true }));
+    this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn ?? chownTreeSync;
     this.#readCgroupEventCountersFn =
       options.readCgroupEventCountersFn ?? (() => readCgroupEventCounters());
     this.#finishUnpushedWorkFn =
@@ -2348,6 +2360,7 @@ class RunnerSession {
 
   // `#spawnAsChildUser` と共有しない: `detached: true` と pid 追跡を委譲そのものの起動経路にだけ効かせるため
   #spawnDelegationProcess(options: SpawnAgentProcessOptions): DelegationProcessHandle {
+    this.#handOverResumeConfigDir(options.env);
     const child = this.#spawnAgentProcessFn(options);
     const pid = child.pid;
     if (pid !== undefined) {
@@ -2358,6 +2371,23 @@ class RunnerSession {
       child.once('error', noteExited);
     }
     return child;
+  }
+
+  // 起こす直前に持ち主を移す: SDK は resume の材料を root の 0700 の一時ディレクトリに書き、子の `CLAUDE_CONFIG_DIR` をそこへ向ける。別の UID の子は入れず、会話を見つけられずに終わる（生ログからの引き継ぎへ落ちる）ため。移せなくても起こすのは止めない: 引き継ぎで続けられる
+  #handOverResumeConfigDir(env: Readonly<Record<string, string | undefined>>): void {
+    const childUser = this.#childUser;
+    if (childUser === undefined) return;
+    const dir = sdkResumeConfigDirOf(env);
+    if (dir === undefined) return;
+    try {
+      this.#handOverResumeConfigDirFn(dir, childUser.uid, childUser.gid);
+    } catch (error) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `resume の材料の置き場（${dir}）を子へ渡せなかった。生ログからの引き継ぎで続ける: ${reasonOf(error)}`,
+      });
+    }
   }
 
   // 記憶ストアの所在を子プロセスへ渡さない: 渡さなければ構造的に触れないため
