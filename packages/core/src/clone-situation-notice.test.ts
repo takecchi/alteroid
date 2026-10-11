@@ -2,7 +2,13 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { waitFor } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone, SITUATION_FULL_EVERY_TURNS } from './clone.js';
+import {
+  ALWAYS_REDELIVER,
+  compactionLikelyThisTurn,
+  createClone,
+  SITUATION_COMPACTION_GROWTH_FLOOR_TOKENS,
+  SITUATION_FULL_EVERY_TURNS,
+} from './clone.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
@@ -748,6 +754,88 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
     await clone.stop();
   });
 
+  // ターンの終わりに測る文脈の量（トークン）を順に返す偽の SDK。閾値は 200,000
+  function cloneWithContextTotals(totals: readonly number[]): {
+    inputs: string[];
+    clone: CloneHost;
+    fn: typeof sdkQuery;
+  } {
+    const inputs: string[] = [];
+    let calls = 0;
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-fake',
+          uuid: 'uuid-init',
+        } as unknown as SDKMessage;
+        for await (const message of params.prompt as AsyncIterable<{
+          message: { content: unknown };
+        }>) {
+          inputs.push(String(message.message.content));
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'ok',
+            session_id: 'sess-fake',
+            uuid: `uuid-result-${String(inputs.length)}`,
+          } as unknown as SDKMessage;
+        }
+      }
+      return Object.assign(generate(), {
+        close: () => undefined,
+        interrupt: async () => undefined,
+        getContextUsage: async () => {
+          const totalTokens = totals[Math.min(calls, totals.length - 1)] ?? 0;
+          calls += 1;
+          return {
+            categories: [],
+            totalTokens,
+            maxTokens: 1_000_000,
+            rawMaxTokens: 1_000_000,
+            percentage: totalTokens / 10_000,
+            autoCompactThreshold: 200_000,
+            isAutoCompactEnabled: true,
+          };
+        },
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      managers: busyPool(),
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+    return { inputs, clone, fn };
+  }
+
+  it('⭐ 自動の要約が走りうるターン（前のターンの量に伸びを足すと閾値に届く）は畳まずに全文を出す（#4489）', async () => {
+    // 1ターン目の終わりに 150,000、2ターン目の終わりに 180,000（伸び 30,000）→ 3ターン目は 210,000 の見込みで閾値 200,000 に届く
+    const s = cloneWithContextTotals([150_000, 180_000, 185_000]);
+
+    await humanTurn(s, 1);
+    const second = await humanTurn(s, 2);
+    const third = await humanTurn(s, 3);
+
+    expect(second).not.toContain(READINGS_HEAD);
+    expect(third).toContain(READINGS_HEAD);
+    await s.clone.stop();
+  });
+
+  it('閾値まで遠いターンは、これまでどおり畳む（#4489）', async () => {
+    const s = cloneWithContextTotals([50_000, 60_000, 70_000]);
+
+    await humanTurn(s, 1);
+    const second = await humanTurn(s, 2);
+    const third = await humanTurn(s, 3);
+
+    expect(second).not.toContain(READINGS_HEAD);
+    expect(third).not.toContain(READINGS_HEAD);
+    await s.clone.stop();
+  });
+
   it('⭐ 入力を SDK へ入れなかった回（重複した human_answer）では、全文を出した扱いにしない', async () => {
     const inputs: string[] = [];
     const fn = ((params: { prompt: unknown; options?: Options }) => {
@@ -814,5 +902,24 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
     // 要約で全文が会話から消えた後、実際に入る最初の入力は全文でなければならない
     expect(afterDuplicate).toContain(READINGS_HEAD);
     await clone.stop();
+  });
+});
+
+describe('自動の要約が走りうるターンの見込み（#4489）', () => {
+  const near = { totalTokens: 195_000, autoCompactThreshold: 200_000, isAutoCompactEnabled: true };
+
+  it('伸びの下限を足して閾値に届けば走りうる', () => {
+    expect(SITUATION_COMPACTION_GROWTH_FLOOR_TOKENS).toBe(10_000);
+    expect(compactionLikelyThisTurn(near, 0)).toBe(true);
+    expect(compactionLikelyThisTurn({ ...near, totalTokens: 189_999 }, 0)).toBe(false);
+    expect(compactionLikelyThisTurn({ ...near, totalTokens: 150_000 }, 50_000)).toBe(true);
+  });
+
+  it('観測が無い・自動の要約が切ってある・閾値が分からない回は見込まない', () => {
+    expect(compactionLikelyThisTurn(null, 0)).toBe(false);
+    expect(compactionLikelyThisTurn({ ...near, isAutoCompactEnabled: false }, 0)).toBe(false);
+    expect(compactionLikelyThisTurn({ totalTokens: 195_000, isAutoCompactEnabled: true }, 0)).toBe(
+      false,
+    );
   });
 });

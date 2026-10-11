@@ -343,6 +343,30 @@ export function placedClonePermissionMode(env: NodeJS.ProcessEnv = process.env):
 /** 「いまの全体」の説明文を、変わっていなくても全文へ戻す間隔（ターン数。2026-10-11 のオーナー回答「20ターンごとは全文」）。 */
 export const SITUATION_FULL_EVERY_TURNS = 20;
 
+/**
+ * 自動の要約が走りうるターンを見込むときの、1ターンの伸びの下限（トークン）。
+ * 直前のターンの伸びが小さすぎる回（短い返事だけのターン）に、次の長いターンで閾値を越えるのを見落とさないため。
+ */
+export const SITUATION_COMPACTION_GROWTH_FLOOR_TOKENS = 10_000;
+
+/**
+ * このターンで自動の要約が走りうるか（#4489）。前のターンの終わりの文脈の量に、直前のターンの伸び（下限あり）を足して閾値に届けば走りうる。
+ * 要約は入力を受けた後・推論の前に走るので、組み立てる時点では確かめられない。見込みで判定する。
+ */
+export function compactionLikelyThisTurn(
+  usage: {
+    totalTokens?: number;
+    autoCompactThreshold?: number;
+    isAutoCompactEnabled?: boolean;
+  } | null,
+  lastGrowthTokens: number,
+): boolean {
+  if (usage === null || usage.isAutoCompactEnabled !== true) return false;
+  if (usage.totalTokens === undefined || usage.autoCompactThreshold === undefined) return false;
+  const growth = Math.max(lastGrowthTokens, SITUATION_COMPACTION_GROWTH_FLOOR_TOKENS);
+  return usage.totalTokens + growth >= usage.autoCompactThreshold;
+}
+
 // 単位は文字（UTF-16 の code unit）でバイトではない: 切っているのが `String.prototype.slice` のため
 const DISTILL_TRANSCRIPT_TAIL_CHARS = 60_000;
 
@@ -771,6 +795,8 @@ class Clone implements CloneHost {
   #pluginLoadInfo: ClonePluginLoadObservation | null = null;
   // ここで `getContextUsage()` を呼ばない: `detail: 'full'` は token-count API を呼ぶので、`turn_ended` が既に呼んだ戻り値を代入するだけにするため
   #lastContextUsage: ContextUsageObservation | null = null;
+  /** 直前のターンで文脈が伸びた量（トークン）。自動の要約が走りうるターンの見込みに使う（#4489）。 */
+  #lastContextGrowthTokens = 0;
   // 無制限には覚えない: 長く走る1本のセッションでメモリが伸び続けるため。忘れたら `onForget` で日誌へ残す（忘れた id が `permission_denials` に再び載ると同じ拒否が二重に載る）
   readonly #deniedToolUses = createRecentMap<DeniedRecord>({
     limit: DENIED_TOOL_USE_MEMORY_LIMIT,
@@ -2894,9 +2920,12 @@ class Clone implements CloneHost {
     // 一定ターンごとに全文へ戻す: 要約の合図を取りこぼしても、全文が会話から消えたまま要点だけが続く長さに上限を置くため
     this.#situationTurnsSinceFull += 1;
     // セッションが閉じていればこのターンで開き直す（resume が効かなければ別の会話になる）: 全文が会話に残っているとは言えないので全文へ戻す
+    // 自動の要約が走りうるターンも全文にする（#4489。2026-10-11 のクローン teto の決定）: 要約で文脈が潰れた直後は同じ会話とみなせず、
+    // 「同じ会話の中なら畳んでよい」というオーナーの承認の外になるため。要約は入力を受けた後に走るので、要約の合図を受けてからでは間に合わない
     if (
       this.#sdkSession.query === null ||
-      this.#situationTurnsSinceFull >= SITUATION_FULL_EVERY_TURNS
+      this.#situationTurnsSinceFull >= SITUATION_FULL_EVERY_TURNS ||
+      compactionLikelyThisTurn(this.#lastContextUsage, this.#lastContextGrowthTokens)
     ) {
       this.#situationExplained.clear();
       this.#situationTurnsSinceFull = 0;
@@ -5327,6 +5356,7 @@ class Clone implements CloneHost {
     this.#pluginLoadInfo = null;
     this.#sdkSession.setSdkSessionId(null);
     this.#lastContextUsage = null;
+    this.#lastContextGrowthTokens = 0;
   }
 
   // `typeof` で検査し、読めない形は `null` のままにする: 読み違えて投げると本セッションの起動そのものが壊れる。読めた配列だけが「0本」を名乗れる。
@@ -6341,6 +6371,12 @@ class Clone implements CloneHost {
       case 'turn_ended': {
         const contextUsage = await this.#observeContextUsage();
         // `undefined`（未観測）は `null` へ寄せる: `CloneRuntimeFacts.lastContextUsage` の3値を保つため。
+        // 伸びは前の観測があって両方測れた回だけ取る: 開き直しの直後や測れなかった回の差は伸びではないため
+        const previousTotal = this.#lastContextUsage?.totalTokens;
+        this.#lastContextGrowthTokens =
+          previousTotal !== undefined && contextUsage?.totalTokens !== undefined
+            ? Math.max(0, contextUsage.totalTokens - previousTotal)
+            : 0;
         this.#lastContextUsage = contextUsage ?? null;
 
         // `turn_usage` に相乗りさせない: `#recordUsage` は失敗したターン（`usage === undefined`）で早期 return し、文脈占有が残らなくなるため。
