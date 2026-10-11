@@ -262,6 +262,12 @@ const TOOL_USE_FAILURE_ERROR_EXCERPT = 500;
 // 日誌の1行を埋め尽くさない長さで、落ちた理由（最後の数行）が収まる長さ
 const DELEGATION_STDERR_TAIL_CHARS = 2000;
 
+// 止めた側の合図どおりの終わり方: SIGTERM・SIGKILL と、シェルや tini（`-s`）を挟んだときに exit code へ写った 128+15・128+9
+function isStopTermination(code: number | null, signal: NodeJS.Signals | null): boolean {
+  if (code === null) return signal === 'SIGTERM' || signal === 'SIGKILL';
+  return code === 143 || code === 137;
+}
+
 // `exit` から stderr の `end` までの待ちの上限: 孫プロセスが stderr のパイプを握ったままだと `end` が永久に来ないため。通常は `exit` の直後（数 ms）に `end` が来るので、1 秒あれば最後の chunk は読み切れ、握られても note が1秒遅れるだけで済む
 export const DELEGATION_STDERR_END_GRACE_MS = 1000;
 
@@ -2393,7 +2399,7 @@ class RunnerSession {
       child.once('exit', noteExited);
       child.once('error', noteExited);
     }
-    this.#watchDelegationStderr(child, options.env);
+    this.#watchDelegationStderr(child, options.env, options.signal);
     return child;
   }
 
@@ -2405,6 +2411,7 @@ class RunnerSession {
   #watchDelegationStderr(
     child: DelegationProcessHandle,
     childEnv: Readonly<Record<string, string | undefined>>,
+    stopSignal: AbortSignal,
   ): void {
     const stderr = (child as { stderr?: NodeJS.ReadableStream | null }).stderr;
     if (stderr === undefined || stderr === null) return;
@@ -2417,6 +2424,11 @@ class RunnerSession {
     // `exit` は stdio を読み終える前に来うる: 落ちる直前の最後の行を取りこぼさないよう、stderr の `end` を待ってから確定する
     child.once('exit', (code, signal) => {
       if (code === 0 || (code === null && signal === null)) return;
+      // 止めると決めた後に、止め方どおりに終わった子は異常終了と言わない（#4488）: SDK の close() は渡した signal を abort してから
+      // SIGTERM・SIGKILL を送り、runner の stop はセッションを stopped にする。言うと本物の失敗の note が埋もれるため。
+      // 止めた後でも code 1 のような終わり方は言う（止める途中で本当に落ちたのかもしれない）。
+      const stopRequested = stopSignal.aborted || this.#sdkSession.stopped;
+      if (stopRequested && isStopTermination(code, signal)) return;
       let done = false;
       // 猶予のタイマーは unref する: runner の終了を引き止めないため
       const timer = setTimeout(() => report(), DELEGATION_STDERR_END_GRACE_MS);
