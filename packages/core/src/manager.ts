@@ -1679,6 +1679,11 @@ export const HELD_MESSAGES_MAX_CHARS = 200_000;
  * 預かりの期限。過ぎたら捨て、本文ごと日誌とクローンへ返す。背景処理が1日を超えて残る委譲は、待つより起こし直すほうがよい（`manager_stop` → `manager_start`）とクローンが判断する材料にする。
  */
 export const HELD_MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * 預かった伝言が背景処理だけを理由にこれだけ届かなければ、背景処理ごと古い鍵のセッションを畳んで新しい鍵で届ける。
+ * 背景処理そのものには上限を置かない（人が走らせる長いジョブを器が奪わない）。上限は「話しかけたい相手が居るのに古い鍵で居座る」長さにだけ掛ける。
+ */
+export const HELD_FORCE_FOLD_AFTER_MS = 15 * 60 * 1000;
 
 /** 届け直す本文。遅れて届いたことと、いつ送られたかを頭に付ける: マネージャーが、その間に変わった状況と突き合わせて読めるように。 */
 export function composeHeldDelivery(batch: readonly HeldMessage[]): string {
@@ -3354,8 +3359,15 @@ class Pool implements ManagerPool {
     let staleDelivery: { generation: number; blockers: string[] } | undefined;
     // 届ける前に取る: 届いた直後に来た report を「ターンの前」と読まないため
     const turnStartedAt = new Date(this.#now()).toISOString();
+    let outgoing = message;
     if (record.job.status === 'done') {
-      const folded = await this.#foldStaleTokenSession(record, runner, managerId);
+      const oldestHeldAt = record.job.heldMessages?.[0]?.heldAt;
+      const folded = await this.#foldStaleTokenSession(record, runner, managerId, {
+        foldBackgroundAfterWait:
+          mode === 'held-delivery' &&
+          oldestHeldAt !== undefined &&
+          this.#now() - Date.parse(oldestHeldAt) >= HELD_FORCE_FOLD_AFTER_MS,
+      });
       if (folded.declined !== undefined) {
         // 断った本文を捨てない: 呼び手が台帳で追って送り直すしかなく、追い損ねた伝言は誰にも届かないまま消えるため。
         if (holdable) {
@@ -3369,6 +3381,12 @@ class Pool implements ManagerPool {
       }
       fingerprintMatched = folded.fingerprintMatched === true;
       staleDelivery = folded.staleDelivery;
+      if (folded.foldedBackground !== undefined) {
+        outgoing =
+          `（alteroid より: 鍵の入れ替えのため、起こしっぱなしだった背景処理 ${String(folded.foldedBackground)} 本を` +
+          'セッションごと畳んで、新しい鍵で起こし直した。背景処理の結果は届いていない。要るなら確かめて起こし直すこと）\n\n' +
+          message;
+      }
     }
 
     // `attached` を信じ切らない: イベント駆動でしか更新されず、`closed` / resume 失敗の合図が届かなかった窓では
@@ -3379,7 +3397,7 @@ class Pool implements ManagerPool {
       const missing = await this.#sendDetectingMissingSession(
         runner,
         managerId,
-        message,
+        outgoing,
         sendAttachments,
       );
       if (missing) {
@@ -3419,8 +3437,8 @@ class Pool implements ManagerPool {
               record.job.workspace,
               record.job.lastUnpushedWorkObservation,
               record.job.lastRescue,
-            )}\n\n${message}`
-          : message,
+            )}\n\n${outgoing}`
+          : outgoing,
         sendAttachments,
       );
       if (resumed !== 'resumed') {
@@ -3491,7 +3509,7 @@ class Pool implements ManagerPool {
       with: 'manager',
       role: 'outbound',
       managerId,
-      text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${message}`,
+      text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${outgoing}`,
       // 中身は日誌へ書かない（参照のメタデータだけ）。
       ...(sendAttachments.length === 0 ? {} : { attachments: attachmentRefsOf(sendAttachments) }),
     });
@@ -3530,7 +3548,10 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
     runner: RunnerClient,
     managerId: string,
+    options: { foldBackgroundAfterWait?: boolean } = {},
   ): Promise<{
+    /** 待ちの上限（`HELD_FORCE_FOLD_AFTER_MS`）を過ぎて、背景処理ごと畳んだ本数。 */
+    foldedBackground?: number;
     declined?: ManagerSendResult;
     /** 断った理由だけ（取れる手を含まない）。預かる回の応答に使う: 断る回の detail は「送り直すこと」と言い、預かった回とは逆の手になるため。 */
     declinedReason?: string;
@@ -3618,13 +3639,23 @@ class Pool implements ManagerPool {
     if (!record.attached && state.status === 'running') {
       blockers.push('runner のセッションはいまターンが走っている（畳むと走っている仕事を失う）');
     }
+    // 背景処理だけが理由で、話しかけたい伝言が待ちの上限を過ぎたときは背景処理ごと畳む: 背景処理が終わらない（dev サーバ・見張り）か、
+    // 終わったのに静かなセッションへ変化が届かず本数が古いまま残ると、時間では解けず、古い鍵のまま居座るため。
+    // 確認待ち・走っているターン・本数が分からない回は畳まない（答えを待っているのはクローンで、分からないものは捨てない）。
+    const foldBackground =
+      options.foldBackgroundAfterWait === true &&
+      blockers.length === 1 &&
+      state.liveBackgroundTasks !== undefined &&
+      state.liveBackgroundTasks > 0
+        ? state.liveBackgroundTasks
+        : undefined;
+    const heldTokenId = this.#tokenIdentities.get(managerId)?.tokenId;
+    // 断る回にも鍵の状態を言うために外へ出す: 言わないと、クローンはいつ送り直せばよいかを決められず、
+    // 段1（ready なら届ける）で足りているのかを日誌から数えられない（#4441 の段2の判断材料）。
+    let heldTokenState: string | undefined;
     if (blockers.length > 0) {
       // 抱えている鍵がいま ready なら断らず旧セッションへ流す: その鍵ならまた枠に当たらず、畳めば確認待ち・背景処理を失うため。
       // 指紋で判定した回（attached=false）は鍵が分からないので流さない。sessionId が無い回も流さない（保守側に倒す）。
-      const heldTokenId = this.#tokenIdentities.get(managerId)?.tokenId;
-      // 断る回にも鍵の状態を言うために外へ出す: 言わないと、クローンはいつ送り直せばよいかを決められず、
-      // 段1（ready なら届ける）で足りているのかを日誌から数えられない（#4441 の段2の判断材料）。
-      let heldTokenState: string | undefined;
       if (
         record.attached &&
         record.job.sessionId !== undefined &&
@@ -3645,6 +3676,8 @@ class Pool implements ManagerPool {
           return { staleDelivery: { generation: held, blockers } };
         }
       }
+    }
+    if (blockers.length > 0 && foldBackground === undefined) {
       const tokenClause =
         heldTokenState === undefined
           ? ''
@@ -3706,6 +3739,18 @@ class Pool implements ManagerPool {
     }
 
     record.attached = false;
+    if (foldBackground !== undefined) {
+      await this.#journal({
+        type: 'decision',
+        decision:
+          `[${managerId}] done の委譲を、残っていた背景処理 ${String(foldBackground)} 本ごと畳んで新しい鍵で起こし直す` +
+          `（${staleness}。預かった伝言が ${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分届かなかった）`,
+        grounds:
+          `managerId=${managerId} liveBackgroundTasks=${String(foldBackground)} 確認待ち=0 ` +
+          `鍵の状態=${heldTokenState ?? '（聞いていない）'}（#4472。背景処理が終わらない・終わったのに本数が下りないと、古い鍵のまま居座るため）`,
+      });
+      return { foldedBackground: foldBackground };
+    }
     await this.#journal({
       type: 'decision',
       decision: `[${managerId}] done の委譲を、畳んで新しい鍵で起こし直す（${staleness}）`,

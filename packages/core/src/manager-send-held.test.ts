@@ -4,6 +4,7 @@ import {
   composeHeldDelivery,
   createManagerPool,
   HELD_MESSAGE_TTL_MS,
+  HELD_FORCE_FOLD_AFTER_MS,
   HELD_MESSAGES_MAX_COUNT,
   type ManagerSummary,
 } from './manager.js';
@@ -42,7 +43,10 @@ function fakeRunner() {
   const sends: { managerId: string; text: string }[] = [];
   const resumes: RunnerResumeCommand[] = [];
   const stops: string[] = [];
-  const behavior = { background: 0 };
+  const behavior: { background: number; waiting: RunnerManagerState['waiting'] } = {
+    background: 0,
+    waiting: [],
+  };
 
   const runner: RunnerClient = {
     runnerId: 'runner-primary',
@@ -87,7 +91,11 @@ function fakeRunner() {
       if (at >= 0) alive.splice(at, 1);
     },
     async list() {
-      return alive.map((state) => ({ ...state, liveBackgroundTasks: behavior.background }));
+      return alive.map((state) => ({
+        ...state,
+        waiting: behavior.waiting,
+        liveBackgroundTasks: behavior.background,
+      }));
     },
     async transcript() {
       return null;
@@ -396,5 +404,70 @@ describe('describeHeldMessages（manager_list と manager_report の行）', () 
 
   it('預かりが無ければ行を作らない', () => {
     expect(describeHeldMessages({} as ManagerSummary)).toBeNull();
+  });
+});
+
+describe('背景処理だけが理由で預かりが待ちの上限を過ぎたら、背景処理ごと畳んで新しい鍵で届ける（#4472）', () => {
+  it('⭐ 背景処理が下りないまま 15 分経ったら、旧セッションを畳んで resume し、畳んだことを本文の頭と日誌で言う', async () => {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+    expect((await s.pool.send('mgr-held', '居座りの先の伝言')).outcome).toBe('held');
+
+    s.clock.now += HELD_FORCE_FOLD_AFTER_MS - 1;
+    await deliverHeld(s.pool);
+    expect(s.fake.stops).toHaveLength(0);
+    expect(await heldOf(s.stores)).toHaveLength(1);
+
+    s.clock.now += 1;
+    await deliverHeld(s.pool);
+
+    expect(s.fake.stops).toEqual(['mgr-held']);
+    expect(s.fake.resumes).toHaveLength(1);
+    const delivered = s.fake.resumes[0]?.message ?? '';
+    expect(delivered).toContain('背景処理 1 本');
+    expect(delivered).toContain('居座りの先の伝言');
+    expect(await heldOf(s.stores)).toEqual([]);
+    const decisions = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('背景処理 1 本ごと畳んで'),
+    );
+    expect(decisions).toHaveLength(1);
+    await s.pool.stop();
+  });
+
+  it('⚠️ 確認待ちも残っていれば、15 分を過ぎても畳まず預かったまま', async () => {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+    s.fake.behavior.waiting = [
+      {
+        requestId: 'req-1',
+        summary: 'Bash を許可するか',
+        kind: 'permission',
+        askedAt: '2026-10-11T01:00:00.000Z',
+      },
+    ];
+    expect((await s.pool.send('mgr-held', '確認待ちの先の伝言')).outcome).toBe('held');
+
+    s.clock.now += HELD_FORCE_FOLD_AFTER_MS + 1;
+    await deliverHeld(s.pool);
+
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.fake.resumes).toHaveLength(0);
+    expect(await heldOf(s.stores)).toHaveLength(1);
+    await s.pool.stop();
+  });
+
+  it('⚠️ 預かりの無い送信（呼び手が直接送った回）は、背景処理があれば今どおり畳まず預かる', async () => {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+    s.clock.now += HELD_FORCE_FOLD_AFTER_MS * 2;
+
+    const result = await s.pool.send('mgr-held', 'はじめての伝言');
+
+    expect(result.outcome).toBe('held');
+    expect(s.fake.stops).toHaveLength(0);
+    await s.pool.stop();
   });
 });
