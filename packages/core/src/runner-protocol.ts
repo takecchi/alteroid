@@ -1666,6 +1666,25 @@ export interface RunnerRegistryOptions {
    * 測りたい窓（`PLACEMENT_FAILURE_MEMORY_MS`）以外の時計が巻き込まれる。本番の起動経路は渡さない。
    */
   now?: () => number;
+  /**
+   * 名乗りの確認を投げた時点から、失敗した時点までのデーモン側の観測を測る口（試験で差し替える）。
+   * 既定は `node:perf_hooks` の実時間とイベントループ使用率。
+   */
+  measureProbeLoop?: () => () => ProbeLoopObservation;
+}
+
+export interface ProbeLoopObservation {
+  readonly elapsedMs: number;
+  readonly loopUtilization: number;
+}
+
+function measureProbeLoopDefault(): () => ProbeLoopObservation {
+  const startedAt = performance.now();
+  const loopBefore = performance.eventLoopUtilization();
+  return () => ({
+    elapsedMs: performance.now() - startedAt,
+    loopUtilization: performance.eventLoopUtilization(loopBefore).utilization,
+  });
 }
 
 /** 上限は能力の上限ではなく、器が長く戻らないときに秒間何度も叩かないための頭打ち（north_star 禁止2 が禁じるのは実行回数の制限）。 */
@@ -1711,6 +1730,20 @@ function heardWorkspacePathOf(client: RunnerClient | null): { workspacePath?: st
 
 /** 期限が無いと、黙って死んだ器（拒否せず何も返さない）に probe が張り付き、誰の生死も更新されない。 */
 const HEARTBEAT_PROBE_MS = 5_000;
+
+/**
+ * 期限切れの回を「器が黙った」と数えない、デーモン側のループの塞がりの目安（#4485）。
+ * 期限のタイマーが目安以上遅れて発火した回・期限までの間ループがほぼ埋まっていた回は、応答が届いていても読む暇が無かった。
+ * 器の沈黙ではなくデーモン自身の詰まりなので、数えると生きている全台を一斉に失い、移送まで走る。
+ */
+const PROBE_LOOP_LAG_MS = 1_000;
+const PROBE_LOOP_BUSY_UTILIZATION = 0.9;
+
+/**
+ * ループが塞がっていた回だけが続いても、この長さを過ぎたら倒す: デーモンがずっと詰まったまま、本当に黙った器を宛先に残し続けないため。
+ * 観測した詰まり（数秒〜数十秒）より十分長く、黙った器を残す長さとして許せる短さ。
+ */
+const HEARTBEAT_LOST_LOOP_STALLED_MS = 300_000;
 
 /** 環境変数の設定項目にしない（`SELECT_WAIT_MS` と同じ理由）。期限を過ぎた1台は宛先から外れず、「報告しない器」になる。 */
 const PLACEMENT_PROBE_MS = 2_000;
@@ -1808,6 +1841,7 @@ class Registry implements RunnerRegistry {
   readonly #saturationSigns = new Map<string, { at: number; sign: PidsSaturationSign }[]>();
   readonly #livePidsAtLimit = new Map<string, { at: number; current: number; max: number }>();
   readonly #now: () => number;
+  readonly #measureProbeLoop: () => () => ProbeLoopObservation;
   /** `stop()` で必ず畳む（残すとテストがハングする）。 */
   #heartbeat: ReturnType<typeof setInterval> | null = null;
   #stopped = false;
@@ -1821,6 +1855,7 @@ class Registry implements RunnerRegistry {
     this.#retryMaxMs = options.retryMaxMs ?? REGISTRY_RETRY_MAX_MS;
     this.#selectWaitMs = options.selectWaitMs ?? SELECT_WAIT_MS;
     this.#now = options.now ?? Date.now;
+    this.#measureProbeLoop = options.measureProbeLoop ?? measureProbeLoopDefault;
 
     const heartbeat = setInterval(() => this.#beat(), HEARTBEAT_INTERVAL_MS);
     heartbeat.unref?.();
@@ -2260,6 +2295,7 @@ class Registry implements RunnerRegistry {
     if (client === null) return;
 
     let failure: string | null = null;
+    let loopStalled = false;
     let identity:
       | {
           runnerId?: string;
@@ -2272,8 +2308,7 @@ class Registry implements RunnerRegistry {
       | undefined;
     // 失敗の文言にデーモン側の観測を添えるための起点: 全台が同時に倒れたとき、遅れたのが器かデーモン自身かを文言だけで分けるため（#4454）。
     // `performance` は大域ではなく `node:perf_hooks` から読む: `vi.useFakeTimers()` は大域の `performance` を差し替え、`eventLoopUtilization` が無くなって probe ごと投げるため。
-    const startedAt = performance.now();
-    const loopBefore = performance.eventLoopUtilization();
+    const measure = this.#measureProbeLoop();
     try {
       // `identity()` と `ping()` の両方は叩かない: 10秒ごとに全台へ2往復を投げることになる。
       identity = await withDeadline(
@@ -2284,11 +2319,11 @@ class Registry implements RunnerRegistry {
         HEARTBEAT_PROBE_MS,
       );
     } catch (error) {
+      const observed = measure();
+      loopStalled = isProbeLoopStalled(error, observed);
       failure = redactErrorText(
-        describeProbeFailure(error, {
-          elapsedMs: performance.now() - startedAt,
-          loopUtilization: performance.eventLoopUtilization(loopBefore).utilization,
-        }),
+        describeProbeFailure(error, observed) +
+          (loopStalled ? '（デーモンのループが塞がっていた回なので、器が黙ったとは数えない）' : ''),
         process.env,
       );
     }
@@ -2312,7 +2347,7 @@ class Registry implements RunnerRegistry {
       void this.#probeSessions(entry, at, client);
       return;
     }
-    this.#markSilent(entry, at, failure);
+    this.#markSilent(entry, at, failure, loopStalled);
   }
 
   /**
@@ -2437,7 +2472,7 @@ class Registry implements RunnerRegistry {
   }
 
   /** 直近の失敗は必ず残す（`GET /runners` の窓）。落ちたと決めるのは遷移のときだけで、落ちている間ずっと知らせ続けない。 */
-  #markSilent(entry: RegistryEntry, at: number, error: string): void {
+  #markSilent(entry: RegistryEntry, at: number, error: string, loopStalled = false): void {
     entry.error = error;
     if (!entry.alive) return;
     // 意図して空けた宛先は、黙っても `lost` へ倒さない: `vacate()` は `alive` を触らないので、倒すと30秒の断で `vacating` が `lost` に上書きされ、
@@ -2446,6 +2481,8 @@ class Registry implements RunnerRegistry {
     if (entry.state === 'vacating') return;
     // 1回の取りこぼしでは動かさない: 再デプロイ中の一瞬や詰まった1回の応答で宛先を失うと、生きている runner から仕事を取り上げる。
     if (at - entry.lastSeen < HEARTBEAT_LOST_MS) return;
+    // デーモン自身が詰まっていた回は、長く続かない限り倒さない（#4485）
+    if (loopStalled && at - entry.lastSeen < HEARTBEAT_LOST_LOOP_STALLED_MS) return;
 
     entry.alive = false;
     entry.state = 'lost';
@@ -2524,6 +2561,25 @@ function causeSuffixOf(error: unknown): string {
   return ` cause=${String(cause)}${code}`;
 }
 
+class ProbeDeadlineError extends Error {}
+
+/**
+ * 期限切れで終わり、かつ期限までの間デーモンのループが塞がっていた（タイマーが遅れた・ほぼ埋まっていた）回か（#4485）。
+ * 期限切れ以外（接続の拒否など）は、ループが忙しくても器の側の答えなので数える。
+ */
+function isProbeLoopStalled(
+  error: unknown,
+  observed: { elapsedMs: number; loopUtilization: number },
+): boolean {
+  if (!(error instanceof ProbeDeadlineError)) return false;
+  // 使用率は実時間でも期限まで経った窓でだけ見る: 数 ms の窓の使用率は意味を持たない（偽の時計で期限だけが進んだ回など）
+  return (
+    observed.elapsedMs - HEARTBEAT_PROBE_MS >= PROBE_LOOP_LAG_MS ||
+    (observed.elapsedMs >= HEARTBEAT_PROBE_MS &&
+      observed.loopUtilization >= PROBE_LOOP_BUSY_UTILIZATION)
+  );
+}
+
 /**
  * `Promise.race` だけにしない: 名簿は先へ進めても叩かれた側の繋ぎが開いたまま残り、黙って死んだ器を10秒ごとに叩くと返らない繋ぎが積み上がる。
  * `signal` を渡し、かつ期限で自分も抜ける（中断を無視する実装があっても名簿は止まらない）。
@@ -2537,7 +2593,7 @@ function withDeadline<T>(
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       controller.abort();
-      reject(new Error(`${ms}ms 以内に${what}が返らなかった`));
+      reject(new ProbeDeadlineError(`${ms}ms 以内に${what}が返らなかった`));
     }, ms);
     timer.unref?.();
     const settle = (finish: () => void) => {

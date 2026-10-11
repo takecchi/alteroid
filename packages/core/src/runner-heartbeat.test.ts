@@ -126,6 +126,43 @@ describe('runner の生存判定', () => {
     await registry.stop();
   });
 
+  it('デーモンのループが塞がっていた期限切れは、30秒続いても onLost を出さず、5分続けば出す（#4485）', async () => {
+    const lost: { label: string; error: string }[] = [];
+    const runner = new FakeRunner('runner-a');
+    // 本番で観測した形: 期限のタイマーが 7 秒で発火し、その間ループは埋まっていた
+    const registry = createRunnerRegistry([], {
+      onLost: (event) => lost.push(event),
+      measureProbeLoop: () => () => ({ elapsedMs: 7167, loopUtilization: 1 }),
+    });
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    runner.reply = 'hang';
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(lost).toEqual([]);
+    expect(registry.entries()).toMatchObject([{ state: 'connected' }]);
+    expect(registry.entries()[0]?.error).toContain('器が黙ったとは数えない');
+
+    await vi.advanceTimersByTimeAsync(250_000);
+    expect(lost).toHaveLength(1);
+    expect(registry.entries()).toMatchObject([{ state: 'lost' }]);
+
+    await registry.stop();
+  });
+
+  it('ループが塞がっていない期限切れは、これまでどおり30秒で onLost を出す（#4485）', async () => {
+    const lost: { label: string }[] = [];
+    const runner = new FakeRunner('runner-a');
+    const registry = createRunnerRegistry([], { onLost: (event) => lost.push(event) });
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    runner.reply = 'hang';
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(lost).toHaveLength(1);
+    expect(registry.entries()[0]?.error).not.toContain('器が黙ったとは数えない');
+
+    await registry.stop();
+  });
+
   it('runnerId を聞けていない runner が黙っても、runnerId を出さない（#330）', async () => {
     const lost: { label: string; runnerId?: string }[] = [];
     const runner = new FakeRunner('runner-primary');
