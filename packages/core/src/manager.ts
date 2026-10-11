@@ -18,6 +18,7 @@ import {
 } from './dropped-record.js';
 import { excerptLine, renderListing } from './excerpt.js';
 import {
+  QUOTA_STOP_MANAGER_IDS_KEY,
   QUOTA_STOP_WINDOW_MS,
   failedReportBodyOf,
   partialBeforeFailureOf,
@@ -9560,6 +9561,7 @@ class Pool implements ManagerPool {
     synthesized = false,
     foldedTurn = false,
     reportFiles?: ManagerReportFiles,
+    quotaStop = false,
   ): void {
     // 握り潰した報告の件数を日誌だけに残さず、配る `text` の末尾にも足す: 日誌だと引きに行かないと、報告まで消していないかに気づけない。
     // 窓へ移した在庫（`closed` が積んだ分）は、この配りで運んで消す。普通の在庫が在れば（窓の後に積み直されることは無いが）そちらを先にする。
@@ -9618,6 +9620,7 @@ class Pool implements ManagerPool {
       ...this.#statusAtDelivery(managerId),
       ...(synthesized ? { synthesized: true as const } : {}),
       ...(foldedTurn ? { foldedTurn: true as const } : {}),
+      ...(quotaStop ? { quotaStop: true as const } : {}),
       ...(reportFiles === undefined || reportFiles.attachments.length === 0
         ? {}
         : { attachments: reportFiles.attachments }),
@@ -9750,7 +9753,19 @@ class Pool implements ManagerPool {
     // 本文の文言ではなく `label` で判定する。
     const foldedTurn = entry.fragments.some((fragment) => fragment.label === 'turn_failed');
     // `#deliver` より先に `set` しない: `#deliver` は直前の連鎖の件数を末尾に運んでから帳面を消すので、先に上書きすると「配らなかった件数」が届かず消える。
-    this.#deliver(managerId, 'report', text, undefined, undefined, 'full', true, foldedTurn);
+    const quotaStop = entry.fragments.every((fragment) => fragment.quota !== undefined);
+    this.#deliver(
+      managerId,
+      'report',
+      text,
+      undefined,
+      undefined,
+      'full',
+      true,
+      foldedTurn,
+      undefined,
+      quotaStop,
+    );
     // 対象外の束では新しい連鎖を立てない: 次に同じ族が来ても握りつぶす先が無く、記憶を持つだけ無駄。
     if (eligible) {
       this.#synthesizedNoticeStreaks.set(managerId, {
@@ -9903,7 +9918,8 @@ class Pool implements ManagerPool {
         // `runner-registry` を流用する: 専用の source は予約語の一覧・入口の拒否・OpenAPI の説明を一緒に直す別の変更が要るため（`scratch_sweep` と同じ形で積む）。
         source: DAEMON_RUNNER_REGISTRY_SOURCE,
         identity: `quota-stop:${windowKey}:${openedAt}`,
-        payload: { text },
+        // 担当の id を本文とは別に載せる: クローンが配る直前に回復を添えるとき、表示用の本文から読み直さないため（#4497）
+        payload: { text, [QUOTA_STOP_MANAGER_IDS_KEY]: entries.map((e) => e.managerId) },
       });
     } catch (error) {
       noteDroppedRecord('受信箱', `quota_stop managers=${String(entries.length)}`, error);
