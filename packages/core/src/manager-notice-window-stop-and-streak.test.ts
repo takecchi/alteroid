@@ -299,4 +299,26 @@ describe('知らせの合流窓: 連鎖で握りつぶす束と、デーモン�
       'stop() が返った時点で、停止中に届いた知らせも配られているはず',
     ).toHaveLength(1);
   });
+
+  it('runner を閉じている最中に届いた知らせも、stop() が返るまでに配る（#4490）', async () => {
+    const { pool, fake, fresh } = await setup(['mgr-a', 'mgr-c']);
+    const close = fake.runner.close.bind(fake.runner);
+    // 閉じる最中に、担当の知らせが届く（担当ごとの窓へ積まれる）
+    fake.runner.close = async () => {
+      fake.emit({
+        type: 'report',
+        managerId: 'mgr-c',
+        text: '（このターンは応答を返さずに終わった: error_during_execution）',
+        status: 'running',
+        failure: { code: 'error_during_execution', via: 'result_subtype' },
+        synthesized: 'turn_failed',
+      });
+      await close();
+    };
+    await pool.stop();
+    expect(
+      managerMessages(fresh()).filter((m) => m.managerId === 'mgr-c'),
+      'stop() が返った時点で、閉じる最中に届いた知らせも配られているはず',
+    ).toHaveLength(1);
+  });
 });

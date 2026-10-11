@@ -6152,6 +6152,10 @@ class Pool implements ManagerPool {
     for (const runner of await this.#runners.list().catch(() => [])) {
       await runner.close().catch(() => undefined);
     }
+    // 閉じた後にもう一度吐き出す: 2回目の吐き出しの台帳読みの間と、runner を閉じ終えるまでに届いた出来事も担当ごとの窓へ積まれ、
+    // 閉じる者が居ないままデーモンと一緒に消えるため（#4490）。閉じた後は新しい出来事が届かないので、処理中の分を待てば窓は空になる。
+    await this.#settleEventsInFlight();
+    await this.#drainNoticeWindows();
     this.#records.clear();
   }
 
