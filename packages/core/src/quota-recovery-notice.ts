@@ -1,6 +1,6 @@
 import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
 import type { ManagerSummary } from './manager.js';
-import { QUOTA_STOP_MANAGER_IDS_KEY } from './quota-stop-notice.js';
+import { QUOTA_SESSION_WINDOW_KEY, QUOTA_STOP_MANAGER_IDS_KEY } from './quota-stop-notice.js';
 import type { InboxEvent } from './schema.js';
 
 interface QuotaStopTargets {
@@ -38,7 +38,15 @@ export function quotaStopTargetsOf(events: readonly InboxEvent[]): QuotaStopTarg
 
 export type QuotaRecoverySummary = Pick<
   ManagerSummary,
-  'managerId' | 'status' | 'live' | 'usageStoppedAt' | 'tokenGeneration' | 'activeTokenGeneration'
+  | 'managerId'
+  | 'status'
+  | 'live'
+  | 'usageStoppedAt'
+  | 'tokenGeneration'
+  | 'activeTokenGeneration'
+  | 'lastFailure'
+  | 'lastUnreported'
+  | 'lastReportAt'
 >;
 
 type Verdict = { recovered: true; line: string } | { recovered: false; line: string };
@@ -128,4 +136,58 @@ export function describeQuotaRecovery(
     `まだ回復したと言えない ${String(pending.length)} 本: ${pending.map((verdict) => verdict.line).join('、')}。`,
     `${queued}本文の「止まった」は積まれた時点の話である。`,
   ]);
+}
+
+/**
+ * 畳んでよい枠の知らせが名指す担当（1件ずつ見る）。5時間枠の印が無ければ `undefined`（＝届ける）。
+ * 週の上限のように時間ですぐ戻らない枠は、オーナーへ知らせる判断に要るので印が付かず、ここで落ちる（#4499）。
+ */
+export function foldableQuotaStopTargetsOf(event: InboxEvent): QuotaStopTargets | undefined {
+  const sessionWindow =
+    event.type === 'manager_message'
+      ? event.quotaSessionWindow === true
+      : event.type === 'external' &&
+        typeof event.payload === 'object' &&
+        event.payload !== null &&
+        (event.payload as Record<string, unknown>)[QUOTA_SESSION_WINDOW_KEY] === true;
+  if (!sessionWindow) return undefined;
+  return quotaStopTargetsOf([event]);
+}
+
+// `describeQuotaRecovery` の「回復」より狭く取る: こちらはクローンに読ませずに消す側なので、`done` は知らせより後に成功したターンが在るときだけ戻ったと読む。
+// `lastFailure` / `lastUnreported` は成功したターンの報告で消える欄（manager.ts の `case 'report'`）なので、残っていれば直近のターンは成功していない。
+function backOnCurrentToken(found: QuotaRecoverySummary | undefined, noticeAt: string): boolean {
+  if (found === undefined) return false;
+  if (!found.live || found.usageStoppedAt !== undefined) return false;
+  if (found.tokenGeneration === undefined || found.activeTokenGeneration === undefined) return false;
+  if (found.tokenGeneration !== found.activeTokenGeneration) return false;
+  if (found.status === 'running') return true;
+  if (found.status !== 'done') return false;
+  if (found.lastFailure !== undefined || found.lastUnreported !== undefined) return false;
+  if (found.lastReportAt === undefined) return false;
+  return Date.parse(found.lastReportAt) > Date.parse(noticeAt);
+}
+
+/**
+ * 名指す担当が全員いまの世代の鍵で戻っていれば、ターンを起こさず日誌へ書く1節を返す。1本でも戻っていなければ `null`（＝届ける）。
+ * 一覧を引けなかったときも `null`: 確かめられないまま消すより、届けてクローンに見てもらう側へ倒す。
+ */
+export function quotaFoldNoticeOf(
+  targets: QuotaStopTargets,
+  managers: readonly QuotaRecoverySummary[] | { readonly detail: string },
+  nowMs: number,
+): string | null {
+  if ('detail' in managers) return null;
+  const all = targets.managerIds.every((id) =>
+    backOnCurrentToken(
+      managers.find((manager) => manager.managerId === id),
+      targets.earliestAt,
+    ),
+  );
+  if (!all) return null;
+  return (
+    '5時間枠で止まった知らせだが、配る時点で名指す担当は全員いまの世代の鍵で戻っていた' +
+    '（`running`、または `done` で知らせより後のターンが成功している）。\n\n' +
+    describeQuotaRecovery(targets, managers, nowMs)
+  );
 }

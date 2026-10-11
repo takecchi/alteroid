@@ -746,6 +746,12 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
           '枠だけが理由の知らせの印（クローンが配る直前に担当の回復を添える判定材料。Issue #4497）で、' +
           'この関数は参照しない。`synthesized` と同じ「bool のタグで自由文を運ばない」欄。',
       },
+      quotaSessionWindow: {
+        emit: 'never',
+        why:
+          '5時間枠の印（担当が戻っていればクローンが畳んでよいかの判定材料。Issue #4499）で、' +
+          'この関数は参照しない。`quotaStop` と同じ「bool のタグで自由文を運ばない」欄。',
+      },
       attachments: {
         emit: 'never',
         why:
@@ -836,6 +842,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       synthesized: true,
       foldedTurn: true,
       quotaStop: true,
+      quotaSessionWindow: true,
       attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
       rejectedAttachments: [{ name: SECRET, reason: SECRET }],
     },

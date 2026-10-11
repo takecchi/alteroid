@@ -174,6 +174,8 @@ import { countSupersedingReports, describeSuperseded } from './superseded.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
 import {
   describeQuotaRecovery,
+  foldableQuotaStopTargetsOf,
+  quotaFoldNoticeOf,
   quotaStopTargetsOf,
   type QuotaRecoverySummary,
 } from './quota-recovery-notice.js';
@@ -1883,6 +1885,16 @@ class Clone implements CloneHost {
         continue;
       }
 
+      // まとめ読みより前に1件ずつ見る: 束にしてから見ると、戻っていない担当の知らせ1件のために、戻った担当の知らせまで一緒に届くため（#4499）
+      // 枠の短絡より後ろに置く: クローン自身が枠で止まっている間は保持し、解除されて配る時点の状態で判定するため
+      const quotaFold = await this.#quotaFoldNoticeFor(event);
+      if (quotaFold !== null) {
+        await this.#foldRecoveredQuotaNotice(event, quotaFold);
+        await this.#settleInboxEvent(event, false);
+        this.#inFlight = null;
+        continue;
+      }
+
       // まとめ読みの判定を呼ぶ前に必ずリセットする: `#drainMergeableWithinLimit` は対象外の起点では呼ばれず、戻さないと前の反復で切ったときの断り書きが持ち越されるため。判定の呼び出しより下に置かない: 立った印を拭き取り、`external` の束でだけ断り書きが黙って消えるため
       this.#notices.set('mergedBatchTruncation', '');
       const mergedHuman = this.#mergedHumanBatch(event);
@@ -2221,6 +2233,19 @@ class Clone implements CloneHost {
   }
 
   // 消えてよいのはクローンを起こすことだけで、記録は消さない: 型ごとの本文追記と「畳んだ」の1行を書く（配り直した行と対で残り、「畳んだ」と「そもそも配られなかった」を区別できる）。断り書きは全文で写す: どこにも保存されず、写さないと畳んだ根拠が永久に取れないため
+  // 本文は畳む前に日誌へ書く: 知らせとしての記録は残し、消すのはクローンのターンだけにするため
+  async #foldRecoveredQuotaNotice(event: InboxEvent, notice: string): Promise<void> {
+    await this.#journalIncomingBody(event);
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_THINNING_PREFIX}名指す担当がもう戻っていた枠の知らせなので、ターンを起こさずに畳んだ（モデルへは1文字も渡して` +
+        `いない）: ${inboxEventShape(event)}\n\n${notice}`,
+    });
+  }
+
   async #foldClosedRedelivery(event: InboxEvent, notice: string): Promise<void> {
     await this.#journalIncomingBody(event);
     await this.#journal({
@@ -3044,6 +3069,19 @@ class Clone implements CloneHost {
       managers = { detail: reasonOf(error) };
     }
     return describeQuotaRecovery(targets, managers, Date.now());
+  }
+
+  // 一覧を引けなければ畳まない（`null`）: 確かめられないまま消すより、届けて `#quotaRecoveryNoticeFor` の「確かめられなかった」を読ませる側へ倒すため
+  async #quotaFoldNoticeFor(event: InboxEvent): Promise<string | null> {
+    const targets = foldableQuotaStopTargetsOf(event);
+    if (targets === undefined) return null;
+    let managers: readonly QuotaRecoverySummary[];
+    try {
+      managers = await this.#managers.list();
+    } catch {
+      return null;
+    }
+    return quotaFoldNoticeOf(targets, managers, Date.now());
   }
 
   async #supersededNoticeFor(events: InboxEvent[]): Promise<string> {

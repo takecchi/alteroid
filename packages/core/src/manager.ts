@@ -18,8 +18,10 @@ import {
 } from './dropped-record.js';
 import { excerptLine, renderListing } from './excerpt.js';
 import {
+  QUOTA_SESSION_WINDOW_KEY,
   QUOTA_STOP_MANAGER_IDS_KEY,
   QUOTA_STOP_WINDOW_MS,
+  allSessionWindow,
   failedReportBodyOf,
   partialBeforeFailureOf,
   quotaMarkOf,
@@ -8357,7 +8359,10 @@ class Pool implements ManagerPool {
           'rate_limit',
           build(codeSpan),
           quotaMarkOf(
-            event.facts.resetsAt === undefined ? {} : { resetsAt: event.facts.resetsAt },
+            {
+              ...(event.facts.resetsAt === undefined ? {} : { resetsAt: event.facts.resetsAt }),
+              ...(event.facts.kind === undefined ? {} : { kind: event.facts.kind }),
+            },
             this.#now(),
             transition === 'entered_overage' ? { enteredOverage: true } : {},
           ),
@@ -9561,7 +9566,7 @@ class Pool implements ManagerPool {
     synthesized = false,
     foldedTurn = false,
     reportFiles?: ManagerReportFiles,
-    quotaStop = false,
+    quotaStop?: { readonly sessionWindow: boolean },
   ): void {
     // 握り潰した報告の件数を日誌だけに残さず、配る `text` の末尾にも足す: 日誌だと引きに行かないと、報告まで消していないかに気づけない。
     // 窓へ移した在庫（`closed` が積んだ分）は、この配りで運んで消す。普通の在庫が在れば（窓の後に積み直されることは無いが）そちらを先にする。
@@ -9620,7 +9625,8 @@ class Pool implements ManagerPool {
       ...this.#statusAtDelivery(managerId),
       ...(synthesized ? { synthesized: true as const } : {}),
       ...(foldedTurn ? { foldedTurn: true as const } : {}),
-      ...(quotaStop ? { quotaStop: true as const } : {}),
+      ...(quotaStop === undefined ? {} : { quotaStop: true as const }),
+      ...(quotaStop?.sessionWindow === true ? { quotaSessionWindow: true as const } : {}),
       ...(reportFiles === undefined || reportFiles.attachments.length === 0
         ? {}
         : { attachments: reportFiles.attachments }),
@@ -9753,7 +9759,9 @@ class Pool implements ManagerPool {
     // 本文の文言ではなく `label` で判定する。
     const foldedTurn = entry.fragments.some((fragment) => fragment.label === 'turn_failed');
     // `#deliver` より先に `set` しない: `#deliver` は直前の連鎖の件数を末尾に運んでから帳面を消すので、先に上書きすると「配らなかった件数」が届かず消える。
-    const quotaStop = entry.fragments.every((fragment) => fragment.quota !== undefined);
+    const quotaStop = entry.fragments.every((fragment) => fragment.quota !== undefined)
+      ? { sessionWindow: allSessionWindow(entry.fragments) }
+      : undefined;
     this.#deliver(
       managerId,
       'report',
@@ -9919,7 +9927,14 @@ class Pool implements ManagerPool {
         source: DAEMON_RUNNER_REGISTRY_SOURCE,
         identity: `quota-stop:${windowKey}:${openedAt}`,
         // 担当の id を本文とは別に載せる: クローンが配る直前に回復を添えるとき、表示用の本文から読み直さないため（#4497）
-        payload: { text, [QUOTA_STOP_MANAGER_IDS_KEY]: entries.map((e) => e.managerId) },
+        payload: {
+          text,
+          [QUOTA_STOP_MANAGER_IDS_KEY]: entries.map((e) => e.managerId),
+          // 全員が5時間枠の印を持つときだけ載せる: 1本でも週の上限などが混ざれば、クローンは畳まずに届ける（#4499）
+          ...(entries.every((e) => allSessionWindow(e.fragments))
+            ? { [QUOTA_SESSION_WINDOW_KEY]: true }
+            : {}),
+        },
       });
     } catch (error) {
       noteDroppedRecord('受信箱', `quota_stop managers=${String(entries.length)}`, error);

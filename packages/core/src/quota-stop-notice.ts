@@ -24,6 +24,23 @@ export interface QuotaMark {
    * 別のトークンの枠は別の出来事なので、1通にまとめない。取れなかったときは付けない（不明の窓にまとまる）。
    */
   tokenKey?: string;
+  /**
+   * 5時間枠（session）だと言える証拠があったとき（#4499）。クローンが「担当はもう戻った」と畳んでよいのはこの枠だけで、
+   * 週の上限のように時間ですぐ戻らない枠はオーナーへ知らせる判断に要るので届ける。証拠が無ければ付けない（届ける側へ倒す）。
+   */
+  sessionWindow?: true;
+}
+
+// 文言は肯定の証拠だけで立て、否定の語を先に見る: `org's monthly spend limit` も `resets` を持ち時間で戻るが、5時間では戻らないため
+const LONG_WINDOW_WORDS = /\bweekly\b|\bmonthly\b|\bspend limit\b|\bseven[- ]day\b|\b7-day\b/i;
+const SESSION_WINDOW_WORDS = /\bsession limit\b|\b5-hour limit\b|\bfive[- ]hour limit\b/i;
+
+/** 5時間枠だと言えるか。`kind` は rate_limit の facts の `rateLimitType`（在ればそれだけで決め、文言は見ない）。 */
+export function isSessionWindowLimit(source: { text?: string; kind?: string }): boolean {
+  if (source.kind !== undefined) return source.kind === 'five_hour';
+  if (source.text === undefined) return false;
+  if (LONG_WINDOW_WORDS.test(source.text)) return false;
+  return SESSION_WINDOW_WORDS.test(source.text);
 }
 
 const UNKNOWN_TOKEN_WINDOW_KEY = '(トークン不明)';
@@ -49,9 +66,9 @@ export const QUOTA_STOP_WINDOW_MS = 30_000;
 const RESET_LOOKAHEAD_MS = 2 * 24 * 60 * 60 * 1000;
 
 export function quotaMarkOf(
-  source: { text?: string; resetsAt?: number },
+  source: { text?: string; resetsAt?: number; kind?: string },
   now: number,
-  extra: Omit<QuotaMark, 'resetText' | 'resetsAt'> = {},
+  extra: Omit<QuotaMark, 'resetText' | 'resetsAt' | 'sessionWindow'> = {},
 ): QuotaMark {
   const resetText = source.text === undefined ? undefined : noticeResetText(source.text);
   const resetsAt =
@@ -62,9 +79,20 @@ export function quotaMarkOf(
   return {
     ...(resetText === undefined ? {} : { resetText }),
     ...(resetsAt === undefined ? {} : { resetsAt }),
+    ...(isSessionWindowLimit(source) ? { sessionWindow: true as const } : {}),
     ...extra,
   };
 }
+
+/** 束の全断片が5時間枠の印を持つか（1つでも欠ければ偽: 届ける側へ倒す）。 */
+export function allSessionWindow(fragments: readonly { quota?: QuotaMark }[]): boolean {
+  return (
+    fragments.length > 0 && fragments.every((fragment) => fragment.quota?.sessionWindow === true)
+  );
+}
+
+/** プール全体の1通の `payload` に載せる、全員が5時間枠で止まったかの欄（#4499）。 */
+export const QUOTA_SESSION_WINDOW_KEY = 'quotaSessionWindow';
 
 /** `failedReportText` が見出しの後ろに付けた「失敗する前に出ていた本文」。無ければ `undefined`。 */
 export function partialBeforeFailureOf(failedReport: string): string | undefined {
