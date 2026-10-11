@@ -3382,11 +3382,21 @@ class Pool implements ManagerPool {
       fingerprintMatched = folded.fingerprintMatched === true;
       staleDelivery = folded.staleDelivery;
       if (folded.foldedBackground !== undefined) {
-        outgoing =
-          `（alteroid より: 鍵の入れ替えのため、起こしっぱなしだった背景処理 ${String(folded.foldedBackground)} 本を` +
-          'セッションごと畳んで、新しい鍵で起こし直した。背景処理の結果は届いていない。要るなら確かめて起こし直すこと）\n\n' +
-          message;
+        // 畳んだ事実は届くまで台帳に残す: この後の resume が失敗して預かりのまま再試行になると、旧セッションはもう無く、畳んだと知る手が無くなるため。
+        record.job.pendingFoldNotice = {
+          backgroundTasks:
+            folded.foldedBackground + (record.job.pendingFoldNotice?.backgroundTasks ?? 0),
+          at: new Date(this.#now()).toISOString(),
+        };
+        // 書けなくても進む: 背景処理は殺してあり、この回に届けば断り書きは付く（失うのは再起動を跨ぐ分だけ）。
+        await this.#persist(record).catch(() => undefined);
       }
+    }
+    if (record.job.pendingFoldNotice !== undefined) {
+      outgoing =
+        `（alteroid より: 鍵の入れ替えのため、起こしっぱなしだった背景処理 ${String(record.job.pendingFoldNotice.backgroundTasks)} 本を` +
+        'セッションごと畳んで、新しい鍵で起こし直した。背景処理の結果は届いていない。要るなら確かめて起こし直すこと）\n\n' +
+        message;
     }
 
     // `attached` を信じ切らない: イベント駆動でしか更新されず、`closed` / resume 失敗の合図が届かなかった窓では
@@ -3503,6 +3513,8 @@ class Pool implements ManagerPool {
 
     record.job.status = 'running';
     record.job.turnStartedAt = laterIso(record.job.turnStartedAt, turnStartedAt);
+    // 断り書きは実際に届いた回で下ろす（1回だけ付く）
+    record.job.pendingFoldNotice = undefined;
     await this.#persist(record);
     await this.#journal({
       type: 'exchange',

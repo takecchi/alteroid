@@ -43,9 +43,14 @@ function fakeRunner() {
   const sends: { managerId: string; text: string }[] = [];
   const resumes: RunnerResumeCommand[] = [];
   const stops: string[] = [];
-  const behavior: { background: number; waiting: RunnerManagerState['waiting'] } = {
+  const behavior: {
+    background: number;
+    waiting: RunnerManagerState['waiting'];
+    failResume: boolean;
+  } = {
     background: 0,
     waiting: [],
+    failResume: false,
   };
 
   const runner: RunnerClient = {
@@ -67,6 +72,7 @@ function fakeRunner() {
       return {};
     },
     async resume(command): Promise<{ cwd?: string }> {
+      if (behavior.failResume) throw new Error('resume が落ちた');
       resumes.push(command);
       alive.push({
         managerId: command.managerId,
@@ -468,6 +474,75 @@ describe('背景処理だけが理由で預かりが待ちの上限を過ぎた�
 
     expect(result.outcome).toBe('held');
     expect(s.fake.stops).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  async function foldThenFailResume() {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+    expect((await s.pool.send('mgr-held', '伝言X')).outcome).toBe('held');
+    s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
+    s.fake.behavior.failResume = true;
+    await deliverHeld(s.pool);
+    expect(s.fake.stops).toEqual(['mgr-held']);
+    expect(await heldOf(s.stores)).toHaveLength(1);
+    s.fake.behavior.failResume = false;
+    s.fake.behavior.background = 0;
+    s.clock.now += 61_000;
+    return s;
+  }
+
+  it('⭐ 畳んだ後の resume が失敗しても、再試行で届く回の本文に背景処理を畳んだ断り書きが付く（#4472）', async () => {
+    const s = await foldThenFailResume();
+    expect(s.fake.resumes).toHaveLength(0);
+
+    await deliverHeld(s.pool);
+
+    const delivered = s.fake.resumes[0]?.message ?? '';
+    expect(delivered).toContain('背景処理 1 本をセッションごと畳んで');
+    expect(delivered).toContain('伝言X');
+    expect(delivered.split('背景処理 1 本を')).toHaveLength(2);
+    expect(await heldOf(s.stores)).toEqual([]);
+    await s.pool.stop();
+  });
+
+  it('⭐ 断り書きは器の再起動を跨いでも残る（台帳に持つ）', async () => {
+    const s = await foldThenFailResume();
+    await s.pool.stop();
+
+    const restarted = await setup({ stores: s.stores, clock: s.clock });
+    await deliverHeld(restarted.pool);
+
+    expect(restarted.fake.resumes[0]?.message ?? '').toContain(
+      '背景処理 1 本をセッションごと畳んで',
+    );
+    await restarted.pool.stop();
+  });
+
+  it('断り書きは届いた回で下ろし、その後の次の伝言には付かない', async () => {
+    const s = await foldThenFailResume();
+    await deliverHeld(s.pool);
+    expect(s.fake.resumes).toHaveLength(1);
+    const job = (await s.stores.jobs.listJobs()).find((entry) => entry.id === 'mgr-held');
+    expect(job?.pendingFoldNotice).toBeUndefined();
+
+    s.fake.push({
+      type: 'report',
+      managerId: 'mgr-held',
+      text: '終わった',
+      status: 'done',
+    } as RunnerEvent);
+    await settle();
+    const result = await s.pool.send('mgr-held', '次の伝言');
+
+    expect(result.outcome).toBe('delivered');
+    const texts = [
+      ...s.fake.resumes.map((r) => r.message ?? ''),
+      ...s.fake.sends.map((x) => x.text),
+    ];
+    const next = texts.find((text) => text.includes('次の伝言')) ?? '';
+    expect(next).not.toContain('背景処理');
     await s.pool.stop();
   });
 });

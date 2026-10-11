@@ -1241,6 +1241,14 @@ export const jobSchema = z.object({
   externalOutputs: z.array(externalOutputSchema).optional(),
   // 台帳に持つ: プロセス内に置くとデーモンの再起動（夜の反映）で預かった伝言が黙って消えるため。古い順
   heldMessages: z.array(heldMessageSchema).optional(),
+  // 台帳に持つ: 背景処理は畳んだ時点で殺してあり、その後の resume が失敗して再試行になると、畳んだと知る手が他に無いため（#4472）
+  // 本文（`heldMessages`）へは織り込まない: 預かりの字数上限・日誌・本文ごと返す経路に断り書きが混ざるため。実際に届いた回に下ろす
+  pendingFoldNotice: z
+    .object({
+      backgroundTasks: z.number().int().nonnegative(),
+      at: isoDateTime,
+    })
+    .optional(),
 });
 
 export type Job = z.infer<typeof jobSchema>;
