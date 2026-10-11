@@ -123,11 +123,11 @@ describe('器の起動スクリプト', () => {
     expect(out.split('\n')[0]).toBe('/app/apps/daemon/dist/index.js');
   });
 
-  it('alteroidd: root なら node へ降ろす', async () => {
+  it('alteroidd: root なら node へ降ろし、降りた先の pid 1 は tini（#4478。ゾンビを回収させる）', async () => {
     pretendRoot();
     const out = await launch('alteroidd', { HOME: '/root' });
     expect(out.split('\n')[0]).toBe(
-      'setpriv --reuid=node --regid=node --init-groups node /app/apps/daemon/dist/index.js',
+      'setpriv --reuid=node --regid=node --init-groups tini -- node /app/apps/daemon/dist/index.js',
     );
   });
 
