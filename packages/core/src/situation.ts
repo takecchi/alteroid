@@ -21,6 +21,30 @@ import { RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN } from './usage-limits.js';
 // 後から grep で全部拾えるように固定する
 const SITUATION_HEAD = '[system] いまの全体';
 
+/**
+ * 同じ会話で全文を一度出した説明文の控え（鍵 → 出した本文）。
+ * 本文が1バイトでも違えば全文を出し直す。同じなら要点の1文だけを残して畳む: 毎ターン同じ説明が約5千字ずつ会話に積もり、文脈を食うため（2026-10-11、#4476）。
+ * 数の行は畳まない。控えを空にするのは呼び手（会話の始まり・文脈の要約・一定ターンごと）: 会話の中に全文が1つも残っていない状態で参照だけを出さないため。
+ */
+export type SituationExplained = Map<SituationExplanationKey, string>;
+
+export type SituationExplanationKey =
+  'lost' | 'lastFailure' | 'usageStopped' | 'runnerVanished' | 'readings' | 'tokenInvariant';
+
+// 要点は畳んでも残す: 注意書きの趣旨（読み替えを防ぐ）は、参照だけでは毎ターンの判断に効かないため
+const EXPLANATION_GIST: Record<SituationExplanationKey, string> = {
+  lost: '**lost は「終わった」ではない**（成果を確かめるまで終われない）。',
+  lastFailure: '**失敗で終わった委譲も「手が空いている」に座る。**',
+  usageStopped: '**枠で止まった委譲も「手が空いている」に座る。**',
+  runnerVanished:
+    '**宛先の runner が消えた委譲は lost の絞りでは見えず、「走行中」の内側に座る。**',
+  readings:
+    '**「手が空いている」は空き枠でも「終わった」でも「枠が空いた」でもない。' +
+    '「走行中」は「進んでいる」ではない。**',
+  tokenInvariant:
+    '**⚠️ 枠を理由に仕事を見送らないこと**（書けているなら枠は全面的には閉じていない）。',
+};
+
 // 数えた時刻を名乗る: 節は会話履歴に溜まり、数が変わらなければ古い節と新しい節が1バイトも違わず、どれが最新か判定できないため。
 // 秒までしか出さず日付を出さない: 毎ターンの文字数を増やさないことを優先したため。
 // export して使い回す: 同じ判定関数を2つ持つと、片方だけ直して忘れる形が再発するため
@@ -226,13 +250,16 @@ export function describeTokenSituation(input: {
   readonly tokens: readonly TokenSituationRow[] | undefined;
   readonly active: { readonly tokenId: string } | null | undefined;
   readonly at: number;
+  /** `false` は呼び手が不変条件を要点に畳んだ回だけ（`describeSituation` の `explained`）。 */
+  readonly withInvariant?: boolean;
 }): string {
+  const invariant = input.withInvariant === false ? '' : TOKEN_INVARIANT;
   // 読めなかったことを 0 や「無し」で埋めない。それでも不変条件の行は落とさない: プールの状態に依存しないので、読めなくても真のため。
   // tokens と active を1つの「プールを読めなかった」に潰さない: tokens が読めていた回にも「読めなかった」という嘘が出るため
   if (input.tokens === undefined) {
     return (
       '認証トークン: **プールを読めなかった**（塞がっているかどうかは、ここからは言えない）。' +
-      TOKEN_INVARIANT
+      invariant
     );
   }
 
@@ -288,7 +315,7 @@ export function describeTokenSituation(input: {
     ' ' +
     String(invalidated.length) +
     '。' +
-    TOKEN_INVARIANT
+    invariant
   );
 }
 
@@ -404,7 +431,19 @@ export function describeSituation(input: {
     | 'unreadable'
     | undefined;
   readonly queuedInMemory?: number | undefined;
+  /** 渡せば、控えと同じ本文の説明文を要点に畳み、全文を出した分を控えへ書き足す。渡さなければ毎回全文（`SituationExplained` の doc）。 */
+  readonly explained?: SituationExplained;
 }): string {
+  const folded: SituationExplanationKey[] = [];
+  // 控えと同じなら畳み、違えば全文を出して控えを書き換える
+  const explain = (key: SituationExplanationKey, text: string): string[] => {
+    if (input.explained?.get(key) === text) {
+      folded.push(key);
+      return [];
+    }
+    input.explained?.set(key, text);
+    return [text];
+  };
   const counts = countManagerSituation(input.managers);
   const byState = countRunnerStates(input.runners);
   const runnerBreakdown = [...byState.entries()]
@@ -420,7 +459,10 @@ export function describeSituation(input: {
     latestStart === undefined
       ? ''
       : `（最後に起こしたのは ${formatElapsedSinceLastStart(at - latestStart)}）`;
-  return block([
+  // 鍵の行の不変条件も同じ控えで畳む: 鍵の行そのもの（数）は毎回出す
+  const showTokens = !(input.tokens === undefined && input.active === undefined);
+  const tokenInvariantShown = showTokens && explain('tokenInvariant', TOKEN_INVARIANT).length > 0;
+  const lines = [
     `${SITUATION_HEAD}（${readAtLabel(at)} に数えた材料だけ。ここから何をするかは決めない）。`,
     // lost は「その他」の直前に置く: lost はそこから切り出したもので、隣に並べば「その他が減って lost が増えた」と読めるため
     `委譲 全 ${counts.total} 本: 走行中 ${counts.running} / 返事待ち ${counts.waitingHuman} / ` +
@@ -446,45 +488,60 @@ export function describeSituation(input: {
       // 0 本でも出す: 0 が合図で、閾値も ⚠ も持たないため
       `直近${RECENT_MANAGER_START_WINDOW_HOURS}時間に新しく起こした委譲: ${recentStarts} 本${lastStartClause}。`,
     // 断りは本数の直後に並べる: 数と、そこから何を確かめるかを離すと数だけが読まれるため。0 のときは1文字も出さない
-    ...(counts.lost === 0 ? [] : [LOST_NOTICE]),
-    ...(counts.lastTurnFailed === 0 ? [] : [LAST_FAILURE_NOTICE]),
-    ...(counts.usageStopped === 0 ? [] : [USAGE_STOPPED_NOTICE]),
-    ...(counts.runnerVanished === 0 ? [] : [RUNNER_VANISHED_NOTICE]),
+    ...(counts.lost === 0 ? [] : explain('lost', LOST_NOTICE)),
+    ...(counts.lastTurnFailed === 0 ? [] : explain('lastFailure', LAST_FAILURE_NOTICE)),
+    ...(counts.usageStopped === 0 ? [] : explain('usageStopped', USAGE_STOPPED_NOTICE)),
+    ...(counts.runnerVanished === 0 ? [] : explain('runnerVanished', RUNNER_VANISHED_NOTICE)),
     `器 ${input.runners.length} 台${runnerBreakdown === '' ? '' : `: ${runnerBreakdown}`}。`,
-    '**「手が空いている」は「空き枠」ではない** — この器に定員は無いので、' +
-      '置けるかどうかはここでは答えていない。' +
-      // この一文は本数が 0 でも出す: 出ていないことが「数えていない」と読める余地が残り、横断する軸には算術で 0 と確定する手が無いため
-      '**「手が空いている」は「終わった」でもない** — 直近のターンが報告ではなく' +
-      '失敗で終わった委譲も `done` のまま座る（セッションが生きているためで、仕様である）。' +
-      'その本数は1本以上あるときだけ上の行に出る。' +
-      '**「手が空いている」は「枠が空いた」でもない** — 直近のターンが利用上限' +
-      'そのもので止まった委譲も `done` のまま座る（鍵の回転を待っているだけで、' +
-      'セッションは生きている。仕様である）。その本数も1本以上あるときだけ上の行に出る。' +
-      '**「背景処理待ち」は器が名乗った分だけである** — この印を送らない古い器では、' +
-      '待っていても「手が空いている」側に数える。' +
-      '**「走行中」は「進んでいる」ではないし、「背景処理待ち」を含まない** — ' +
-      '`status` が `running` でも、背景処理待ちの印が立っていればそちらへ数える。' +
-      '**「走行中」は「宛先の runner が名簿に居る」でもない** — 名簿から entry ごと' +
-      '消えた宛先を持つ委譲も `running` のまま座る（`isLive()` は動かさない。仕様である）。' +
-      'その本数も1本以上あるときだけ上の行に出る。' +
-      // 「その他」に lost を含めない: 成果の有無を観測していないのは lost だけで、failed / stopped と同じ袋に入れると「終わったもの」として読み飛ばされるため
-      '「その他」は終端したもの（failed / stopped）と、done だが話しかけられないものである。' +
-      '個別の状態は `manager_list` / `runner_list` で見る。',
+    ...explain('readings', READINGS_NOTICE),
+  ];
+  // 畳んだ説明文は要点だけを1行にまとめ、元の場所（器の行の直後）に置く: 参照だけでは毎ターンの判断に効かないため
+  if (folded.length > 0) {
+    lines.push(
+      `（読み方の注意書きは、この会話で前に出した全文から変わっていないので要点だけにした: ` +
+        `${folded.map((key) => EXPLANATION_GIST[key]).join(' ')}）`,
+    );
+  }
+  return block([
+    ...lines,
     ...(inboxBacklogLine === null ? [] : [inboxBacklogLine]),
     // メモリの配達待ち行列は器の行数の直後に置く: 離すと器の行数の1行だけが「受信箱の全部」に見えるため
     ...(inboxQueuedLine === null ? [] : [inboxQueuedLine]),
     // 鍵の行は最後に置く: 数えた材料の後に、判断を縛る不変条件が来る順にするため
-    ...(input.tokens === undefined && input.active === undefined
-      ? []
-      : [
+    ...(showTokens
+      ? [
           describeTokenSituation({
             tokens: input.tokens,
             active: input.active,
             at,
+            withInvariant: tokenInvariantShown,
           }),
-        ]),
+        ]
+      : []),
   ]);
 }
+
+// 「手が空いている」「走行中」などの区分の読み方。委譲の本数が 0 でも出す（#4269 のオーナー判断 B3）。同じ会話で繰り返すときだけ畳む（#4476）
+const READINGS_NOTICE =
+  '**「手が空いている」は「空き枠」ではない** — この器に定員は無いので、' +
+  '置けるかどうかはここでは答えていない。' +
+  // この一文は本数が 0 でも出す: 出ていないことが「数えていない」と読める余地が残り、横断する軸には算術で 0 と確定する手が無いため
+  '**「手が空いている」は「終わった」でもない** — 直近のターンが報告ではなく' +
+  '失敗で終わった委譲も `done` のまま座る（セッションが生きているためで、仕様である）。' +
+  'その本数は1本以上あるときだけ上の行に出る。' +
+  '**「手が空いている」は「枠が空いた」でもない** — 直近のターンが利用上限' +
+  'そのもので止まった委譲も `done` のまま座る（鍵の回転を待っているだけで、' +
+  'セッションは生きている。仕様である）。その本数も1本以上あるときだけ上の行に出る。' +
+  '**「背景処理待ち」は器が名乗った分だけである** — この印を送らない古い器では、' +
+  '待っていても「手が空いている」側に数える。' +
+  '**「走行中」は「進んでいる」ではないし、「背景処理待ち」を含まない** — ' +
+  '`status` が `running` でも、背景処理待ちの印が立っていればそちらへ数える。' +
+  '**「走行中」は「宛先の runner が名簿に居る」でもない** — 名簿から entry ごと' +
+  '消えた宛先を持つ委譲も `running` のまま座る（`isLive()` は動かさない。仕様である）。' +
+  'その本数も1本以上あるときだけ上の行に出る。' +
+  // 「その他」に lost を含めない: 成果の有無を観測していないのは lost だけで、failed / stopped と同じ袋に入れると「終わったもの」として読み飛ばされるため
+  '「その他」は終端したもの（failed / stopped）と、done だが話しかけられないものである。' +
+  '個別の状態は `manager_list` / `runner_list` で見る。';
 
 // 行を消さず、0 でも埋めない: 0 で埋めると「全部片付いている」と読め、いちばん見落としたい向きへ倒れるため
 export function describeSituationUnavailable(error: unknown, at: number = Date.now()): string {

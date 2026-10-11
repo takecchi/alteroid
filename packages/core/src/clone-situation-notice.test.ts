@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { waitFor } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { ALWAYS_REDELIVER, createClone, SITUATION_FULL_EVERY_TURNS } from './clone.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
@@ -647,6 +647,104 @@ describe('状況の節と manager_list は、メモリの配達待ち行列を�
 
     expect(queuedInMemorySamples[0]).toBe(2);
 
+    await clone.stop();
+  });
+});
+
+describe('同じ会話の2ターン目からは、説明文を要点に畳み、数の行は毎回出す（#4476）', () => {
+  const READINGS_HEAD = '**「手が空いている」は「空き枠」ではない**';
+
+  async function humanTurn(s: Fake & { clone: CloneHost }, n: number): Promise<string> {
+    s.clone.post({
+      type: 'human_message',
+      id: `evt-human-${String(n)}`,
+      at: AT,
+      text: `発言 ${String(n)}`,
+      conversationId: 'conv-1',
+    });
+    await waitFor(() => s.inputs.length >= n, `${String(n)} ターン目`);
+    return s.inputs[n - 1] ?? '';
+  }
+
+  it('⭐ 1ターン目は全文、2ターン目は要点に畳み、数の行は残る', async () => {
+    const s = bootClone(createMemoryStores(), busyPool());
+
+    const first = await humanTurn(s, 1);
+    const second = await humanTurn(s, 2);
+
+    expect(first).toContain(READINGS_HEAD);
+    expect(second).not.toContain(READINGS_HEAD);
+    expect(second).toContain('要点だけにした');
+    expect(second).toContain('委譲 全 3 本');
+    expect(second).toContain('器 2 台: connected 1 / vacating 1。');
+    await s.clone.stop();
+  });
+
+  it(`全文を出してから ${String(SITUATION_FULL_EVERY_TURNS)} ターン目に全文へ戻す`, async () => {
+    const s = bootClone(createMemoryStores(), busyPool());
+
+    for (let n = 1; n <= SITUATION_FULL_EVERY_TURNS + 2; n += 1) await humanTurn(s, n);
+
+    // 1ターン目が全文、21ターン目が次の全文、その間と後は畳む
+    expect(s.inputs[0]).toContain(READINGS_HEAD);
+    expect(s.inputs[SITUATION_FULL_EVERY_TURNS - 1]).not.toContain(READINGS_HEAD);
+    expect(s.inputs[SITUATION_FULL_EVERY_TURNS]).toContain(READINGS_HEAD);
+    expect(s.inputs[SITUATION_FULL_EVERY_TURNS + 1]).not.toContain(READINGS_HEAD);
+    await s.clone.stop();
+  });
+
+  it('文脈が要約された（compact_boundary）次のターンは全文へ戻す', async () => {
+    const inputs: string[] = [];
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-fake',
+          uuid: 'uuid-init',
+        } as unknown as SDKMessage;
+        for await (const message of params.prompt as AsyncIterable<{
+          message: { content: unknown };
+        }>) {
+          inputs.push(String(message.message.content));
+          if (inputs.length === 2) {
+            yield {
+              type: 'system',
+              subtype: 'compact_boundary',
+              compact_metadata: { trigger: 'auto', pre_tokens: 100_000 },
+              session_id: 'sess-fake',
+              uuid: 'uuid-compact',
+            } as unknown as SDKMessage;
+          }
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'ok',
+            session_id: 'sess-fake',
+            uuid: `uuid-result-${String(inputs.length)}`,
+          } as unknown as SDKMessage;
+        }
+      }
+      return Object.assign(generate(), {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      managers: busyPool(),
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+    const s = { fn, inputs, clone };
+
+    await humanTurn(s, 1);
+    const folded = await humanTurn(s, 2);
+    const afterCompaction = await humanTurn(s, 3);
+
+    expect(folded).not.toContain(READINGS_HEAD);
+    expect(afterCompaction).toContain(READINGS_HEAD);
     await clone.stop();
   });
 });

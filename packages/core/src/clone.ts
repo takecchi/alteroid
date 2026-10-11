@@ -164,7 +164,12 @@ import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { summarizeRemovedForJournal } from './plugin-removed-summary.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
-import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
+import {
+  describeSituation,
+  describeSituationUnavailable,
+  readAtLabel,
+  type SituationExplained,
+} from './situation.js';
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
 import type { AttachmentRef, JobStatus, TurnFailureKind } from './schema.js';
@@ -333,6 +338,9 @@ export function resolveClonePermissionMode(
 export function placedClonePermissionMode(env: NodeJS.ProcessEnv = process.env): string | null {
   return placedPermissionMode(env, CLONE_PERMISSION_MODE_ENV_KEY);
 }
+
+/** 「いまの全体」の説明文を、変わっていなくても全文へ戻す間隔（ターン数。2026-10-11 のオーナー回答「20ターンごとは全文」）。 */
+export const SITUATION_FULL_EVERY_TURNS = 20;
 
 // 単位は文字（UTF-16 の code unit）でバイトではない: 切っているのが `String.prototype.slice` のため
 const DISTILL_TRANSCRIPT_TAIL_CHARS = 60_000;
@@ -712,6 +720,14 @@ class Clone implements CloneHost {
   #lastPluginsDigest = '';
   /** 前回日誌へ書いた、init の plugin の読み込み結果の指紋（`#apply` の `session_started`）。 */
   #lastPluginLoadDigest: string | null = null;
+  /**
+   * 「いまの全体」の説明文のうち、この会話で全文を出したもの（`SituationExplained`）。
+   * 空にするのは、会話が変わったとき（init の session_id が変わった）・文脈が要約されたとき・`SITUATION_FULL_EVERY_TURNS` ターンごと:
+   * 会話の中に全文が1つも残っていない状態で要点だけを出さないため。
+   */
+  readonly #situationExplained: SituationExplained = new Map();
+  #situationExplainedSessionId: string | undefined;
+  #situationTurnsSinceFull = 0;
   readonly #sessionStore: SessionStore | undefined;
   // `cwd` から計算し直さない: SDK の sanitize（200 文字超は切って djb2 のハッシュを足す）の再実装は静かにずれるため
   #projectKey: string | null = null;
@@ -2857,6 +2873,16 @@ class Clone implements CloneHost {
     const event = events[0];
     if (event === undefined) return '';
     if (event.type === 'distill') return '';
+    // 一定ターンごとに全文へ戻す: 要約の合図を取りこぼしても、全文が会話から消えたまま要点だけが続く長さに上限を置くため
+    this.#situationTurnsSinceFull += 1;
+    // セッションが閉じていればこのターンで開き直す（resume が効かなければ別の会話になる）: 全文が会話に残っているとは言えないので全文へ戻す
+    if (
+      this.#sdkSession.query === null ||
+      this.#situationTurnsSinceFull >= SITUATION_FULL_EVERY_TURNS
+    ) {
+      this.#situationExplained.clear();
+      this.#situationTurnsSinceFull = 0;
+    }
     try {
       const managers = await this.#managers.list();
       const fleet = await this.#managers.runners();
@@ -2914,6 +2940,7 @@ class Clone implements CloneHost {
         // このターン自身は引かない: `#pump` が取り出してからここへ来るので、`#inbox.size` は既にこのターンの分を含まないため
         // `#queuedInMemoryCount()` を経由する: `manager_list` 側と件数の出どころを1箇所にするため
         queuedInMemory: this.#queuedInMemoryCount(),
+        explained: this.#situationExplained,
       });
     } catch (error) {
       return describeSituationUnavailable(error);
@@ -6083,6 +6110,15 @@ class Clone implements CloneHost {
     switch (event.type) {
       case 'session_started': {
         this.#sdkSession.markSawInit();
+        // 会話が変わったら「いまの全体」の説明文の控えを捨てる: 前の会話で出した全文は、この会話には無いため
+        // 初めての init（控えが無い → 有る）では捨てない: このターンの全文は、いま開いたこの会話に載せたもののため
+        if (
+          this.#situationExplainedSessionId !== undefined &&
+          this.#situationExplainedSessionId !== event.sessionId
+        ) {
+          this.#situationExplained.clear();
+        }
+        this.#situationExplainedSessionId = event.sessionId;
         // 投げない: 控えの失敗でセッションを殺さない。跡は残す: 諦め方が「素材が無かった」正常な経路と区別できなくなるため。
         await this.#stores.sessions.setCloneSessionId(event.sessionId).catch((error: unknown) => {
           noteCloneSessionIdNotRecorded(error);
@@ -6242,6 +6278,8 @@ class Clone implements CloneHost {
       }
 
       case 'compaction': {
+        // 要約で前の全文は会話から消えうるので、次のターンの「いまの全体」は説明文を全文で出す
+        this.#situationExplained.clear();
         // ターンの外で届いた分は捨てる: 対応する `turn_usage` の行が無く、持ち帰る先が無いため。
         this.#sdkSession.turn?.compactions.push({
           trigger: event.trigger,
