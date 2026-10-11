@@ -747,4 +747,72 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
     expect(afterCompaction).toContain(READINGS_HEAD);
     await clone.stop();
   });
+
+  it('⭐ 入力を SDK へ入れなかった回（重複した human_answer）では、全文を出した扱いにしない', async () => {
+    const inputs: string[] = [];
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-fake',
+          uuid: 'uuid-init',
+        } as unknown as SDKMessage;
+        for await (const message of params.prompt as AsyncIterable<{
+          message: { content: unknown };
+        }>) {
+          inputs.push(String(message.message.content));
+          // 2ターン目（最初の human_answer）の途中で要約が起きて、控えが空になる
+          if (inputs.length === 2) {
+            yield {
+              type: 'system',
+              subtype: 'compact_boundary',
+              compact_metadata: { trigger: 'auto', pre_tokens: 100_000 },
+              session_id: 'sess-fake',
+              uuid: 'uuid-compact',
+            } as unknown as SDKMessage;
+          }
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'ok',
+            session_id: 'sess-fake',
+            uuid: `uuid-result-${String(inputs.length)}`,
+          } as unknown as SDKMessage;
+        }
+      }
+      return Object.assign(generate(), {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      managers: busyPool(),
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+    const s = { fn, inputs, clone };
+    const answer = {
+      type: 'human_answer' as const,
+      id: 'evt-answer-1',
+      at: AT,
+      approvalId: 'ap-1',
+      answer: '許可します',
+    };
+
+    await humanTurn(s, 1);
+    clone.post(answer);
+    await waitFor(() => inputs.length >= 2, '回答のターン');
+    // 同じ id の合図をもう一度配る: 二重配達として畳まれ、ターンは回らない
+    clone.post({ ...answer });
+    // 畳まれたことを、後ろに積んだ発言のターンが走った（= 前の回が終わった）ことで確かめる
+    const afterDuplicate = await humanTurn(s, 3);
+
+    expect(inputs).toHaveLength(3);
+    // 要約で全文が会話から消えた後、実際に入る最初の入力は全文でなければならない
+    expect(afterDuplicate).toContain(READINGS_HEAD);
+    await clone.stop();
+  });
 });

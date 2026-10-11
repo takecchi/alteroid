@@ -726,6 +726,11 @@ class Clone implements CloneHost {
    * 会話の中に全文が1つも残っていない状態で要点だけを出さないため。
    */
   readonly #situationExplained: SituationExplained = new Map();
+  /**
+   * 今回の「いまの全体」で全文を出した分（控えに書き足す予定のもの）。`#situationNoticeFor` が組み、`#runTurn` が入力を SDK へ押し込めた後に控えへ移す。
+   * 組んだ時点では控えへ書かない: 入力が SDK へ入らない回（二重配達の `human_answer`・計画の無い定期の起点・`#ensureQuery` の失敗）の全文は捨てられ、控えだけが「出した」と言い張って、会話に一度も載っていない全文を畳んでしまうため。
+   */
+  #situationExplainedStaged: SituationExplained | null = null;
   #situationExplainedSessionId: string | undefined;
   #situationTurnsSinceFull = 0;
   readonly #sessionStore: SessionStore | undefined;
@@ -1896,6 +1901,8 @@ class Clone implements CloneHost {
         this.#finishTurn();
       } finally {
         this.#notices.clearTurn();
+        // 入力が入らなかった回の全文は控えへ移さず捨てる
+        this.#situationExplainedStaged = null;
         // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
         const defer = this.#usageBlocked !== null;
         for (const held of batch) {
@@ -2861,6 +2868,14 @@ class Clone implements CloneHost {
     return lines.join('\n');
   }
 
+  // 入力を SDK へ押し込めた直後にだけ呼ぶ: 全文が会話に載ったと言えるのはそのときだけのため
+  #commitSituationExplained(): void {
+    const staged = this.#situationExplainedStaged;
+    if (staged === null) return;
+    this.#situationExplainedStaged = null;
+    for (const [key, text] of staged) this.#situationExplained.set(key, text);
+  }
+
   // 1本のメソッドにする: 式 `this.#delivery.inbox.size + this.#delivery.deferredCount` を毎ターンの状況の節と `manager_list` の2箇所に書き写すと、どちらかだけ直して2つの数字が食い違いうるため
   #queuedInMemoryCount(): number {
     return this.#delivery.inbox.size + this.#delivery.deferredCount;
@@ -2870,6 +2885,8 @@ class Clone implements CloneHost {
   // 蒸留には載せない: 記憶へ移すためだけの内部ターンで、`stop()` 経由はこの直後にプロセスが消えるため
   // 読めなくても行を消さない: 0 で埋めるのも消すのも「全部片付いている」と読める側へ倒れるため。受信箱の滞留は読めなかったとき `undefined` でなく `'unreadable'` を渡す: `undefined` は「省略」に取ってあり、「0件だった」と見分けが付かなくなるため
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
+    // 前の回の持ち越しを捨てる: 入力が入らなかった回の全文を、次の回の入力へ引き継がないため
+    this.#situationExplainedStaged = null;
     const event = events[0];
     if (event === undefined) return '';
     if (event.type === 'distill') return '';
@@ -2930,7 +2947,9 @@ class Clone implements CloneHost {
           (): 'unreadable' => 'unreadable',
         ),
       ]);
-      return describeSituation({
+      // 控えの写しへ書かせる: 本物の控えへ移すのは入力を SDK へ入れた後（`#commitSituationExplained`）
+      const staged: SituationExplained = new Map(this.#situationExplained);
+      const notice = describeSituation({
         managers,
         runners: fleet.runners,
         tokens: pool[0],
@@ -2940,8 +2959,13 @@ class Clone implements CloneHost {
         // このターン自身は引かない: `#pump` が取り出してからここへ来るので、`#inbox.size` は既にこのターンの分を含まないため
         // `#queuedInMemoryCount()` を経由する: `manager_list` 側と件数の出どころを1箇所にするため
         queuedInMemory: this.#queuedInMemoryCount(),
-        explained: this.#situationExplained,
+        explained: staged,
       });
+      // 今回書き足した分だけを持つ: 写しの元からある分まで後で控えへ戻すと、その間に控えが空になっていた（要約・会話の切り替え）とき、要点に畳んで全文を出していない分まで「出した」に戻すため
+      this.#situationExplainedStaged = new Map(
+        [...staged].filter(([key, text]) => this.#situationExplained.get(key) !== text),
+      );
+      return notice;
     } catch (error) {
       return describeSituationUnavailable(error);
     }
@@ -4493,6 +4517,7 @@ class Clone implements CloneHost {
         ),
         images,
       );
+      this.#commitSituationExplained();
       // `#ensureQuery` より後で送る: セッションの起動そのものはまだ考え始めておらず、先に送ると手が動いていないのに考えていると言うことになるため
       this.#emit(conversationId, { type: 'thinking' });
     } catch (error) {
