@@ -172,6 +172,11 @@ import {
 } from './situation.js';
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
+import {
+  describeQuotaRecovery,
+  quotaStopTargetsOf,
+  type QuotaRecoverySummary,
+} from './quota-recovery-notice.js';
 import type { AttachmentRef, JobStatus, TurnFailureKind } from './schema.js';
 import { DEFAULT_TOKEN_COOLDOWN_MS, toAgentTokenView } from './token-pool.js';
 import { parseNoticeResetAt } from './usage-reset-text.js';
@@ -1905,7 +1910,9 @@ class Clone implements CloneHost {
       );
       // 倒れ先は空文字ではなく `describeSuperseded` の `uncountable` の文: 「数えられなかった」を 0 件と混同しないため
       const validityNotice = await this.#validityNoticeFor(batch);
-      this.#notices.set('validity', validityNotice);
+      // 欄を増やさず `validity` に並べる: どちらも「積まれた時点の前提がいまも当てはまるか」の断りで、読む位置も同じでよいため。
+      // 述語 B の計器は `validityNotice` だけで判定する: 回復の1節で鳴らすと、状態の食い違いを数える計器が別の事実で嵩増しされるため
+      this.#notices.set('validity', (await this.#quotaRecoveryNoticeFor(batch)) + validityNotice);
       if (validityNotice !== '' && event.type === 'manager_message') {
         await this.#noteRedeliveryPredicateHitB(event.managerId);
       }
@@ -3023,6 +3030,20 @@ class Clone implements CloneHost {
     }
 
     return describeValidity(inboxEventValidity(event, now), event.managerId);
+  }
+
+  // 積む側（デーモン）で畳まず、配る直前にここで見る: クローン自身が枠で止まっていた間は保持されて遅れて配られるので、積んだ時点の状態はもう古いため（#4497）
+  async #quotaRecoveryNoticeFor(events: InboxEvent[]): Promise<string> {
+    const targets = quotaStopTargetsOf(events);
+    if (targets === undefined) return '';
+    // `try` で囲う: `list()` は同期的に投げうり、`.catch()` だけでは拾えないため
+    let managers: readonly QuotaRecoverySummary[] | { readonly detail: string };
+    try {
+      managers = await this.#managers.list();
+    } catch (error) {
+      managers = { detail: reasonOf(error) };
+    }
+    return describeQuotaRecovery(targets, managers, Date.now());
   }
 
   async #supersededNoticeFor(events: InboxEvent[]): Promise<string> {

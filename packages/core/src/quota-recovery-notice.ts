@@ -1,0 +1,131 @@
+import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
+import type { ManagerSummary } from './manager.js';
+import { QUOTA_STOP_MANAGER_IDS_KEY } from './quota-stop-notice.js';
+import type { InboxEvent } from './schema.js';
+
+interface QuotaStopTargets {
+  /** 到着順・重複なし。 */
+  managerIds: string[];
+  /** いちばん早く積まれた知らせの時刻。 */
+  earliestAt: string;
+}
+
+function payloadManagerIdsOf(payload: unknown): string[] | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  const ids = (payload as Record<string, unknown>)[QUOTA_STOP_MANAGER_IDS_KEY];
+  if (!Array.isArray(ids)) return undefined;
+  return ids.filter((id): id is string => typeof id === 'string');
+}
+
+/** 束の中の「枠に当たって止まった」の知らせが名指す担当。1件も無ければ `undefined`。 */
+export function quotaStopTargetsOf(events: readonly InboxEvent[]): QuotaStopTargets | undefined {
+  const managerIds: string[] = [];
+  let earliestAt: string | undefined;
+  for (const event of events) {
+    let ids: readonly string[] | undefined;
+    if (event.type === 'manager_message' && event.quotaStop === true) ids = [event.managerId];
+    else if (event.type === 'external' && event.source === DAEMON_RUNNER_REGISTRY_SOURCE) {
+      ids = payloadManagerIdsOf(event.payload);
+    }
+    if (ids === undefined || ids.length === 0) continue;
+    for (const id of ids) if (!managerIds.includes(id)) managerIds.push(id);
+    if (earliestAt === undefined || Date.parse(event.at) < Date.parse(earliestAt)) {
+      earliestAt = event.at;
+    }
+  }
+  return earliestAt === undefined ? undefined : { managerIds, earliestAt };
+}
+
+export type QuotaRecoverySummary = Pick<
+  ManagerSummary,
+  'managerId' | 'status' | 'live' | 'usageStoppedAt' | 'tokenGeneration' | 'activeTokenGeneration'
+>;
+
+type Verdict = { recovered: true; line: string } | { recovered: false; line: string };
+
+// 3つ全部を要る: `live` だけだと枠で止まったまま生きているセッションを、印だけだと古い鍵のまま走っている担当を、回復と言ってしまうため。
+// 世代が取れないときは回復と言わない: 比べる相手が居ないのに一致を捏造しない（`tokenGenerationMismatched` と逆向きに倒す。こちらは「確かめ直さなくてよい」と言う側のため）。
+function verdictOf(managerId: string, found: QuotaRecoverySummary | undefined): Verdict {
+  if (found === undefined) return { recovered: false, line: `${managerId}（一覧に居ない）` };
+  if (!found.live) {
+    return { recovered: false, line: `${managerId}（live でない。状態 \`${found.status}\`）` };
+  }
+  if (found.usageStoppedAt !== undefined) {
+    return {
+      recovered: false,
+      line: `${managerId}（枠で止まった印が残っている。${found.usageStoppedAt} から）`,
+    };
+  }
+  if (found.tokenGeneration === undefined || found.activeTokenGeneration === undefined) {
+    return { recovered: false, line: `${managerId}（鍵の世代を確かめられない）` };
+  }
+  if (found.tokenGeneration !== found.activeTokenGeneration) {
+    return {
+      recovered: false,
+      line:
+        `${managerId}（鍵の世代 ${String(found.tokenGeneration)} が現役の ` +
+        `${String(found.activeTokenGeneration)} と違う）`,
+    };
+  }
+  return {
+    recovered: true,
+    line: `${managerId}（\`${found.status}\`・鍵の世代 ${String(found.tokenGeneration)}）`,
+  };
+}
+
+function elapsedPhrase(fromIso: string, toMs: number): string {
+  const from = Date.parse(fromIso);
+  if (Number.isNaN(from)) return '';
+  const minutes = Math.floor(Math.max(0, toMs - from) / 60_000);
+  return `（${String(minutes)} 分前）`;
+}
+
+// 末尾の区切り（---）まで含めて返す: `describeSuperseded` と同じく、呼び出し側の連結に手を足さないため
+function block(lines: readonly string[]): string {
+  return [...lines, '', '---', ''].join('\n');
+}
+
+/**
+ * 「枠に当たって止まった」の知らせを配る直前に、名指された担当がもう回復しているかを1節で添える。
+ * 1本も回復していなければ空文字: 本文の「止まった」がそのまま今の状態なので、足す事実が無い。
+ * 一覧を引けなければ「確かめられなかった」と名乗る（空文字にすると、回復していないと読めるため）。
+ */
+export function describeQuotaRecovery(
+  targets: QuotaStopTargets,
+  managers: readonly QuotaRecoverySummary[] | { readonly detail: string },
+  nowMs: number,
+): string {
+  const now = new Date(nowMs).toISOString();
+  const queued = `知らせが積まれたのは ${targets.earliestAt}${elapsedPhrase(targets.earliestAt, nowMs)}。`;
+  if ('detail' in managers) {
+    return block([
+      `⚠ この「枠に当たって止まった」の知らせが名指す担当が、配る時点（${now}）で回復しているかを確かめられなかった（${managers.detail}）。` +
+        queued,
+    ]);
+  }
+  const verdicts = targets.managerIds.map((id) =>
+    verdictOf(
+      id,
+      managers.find((manager) => manager.managerId === id),
+    ),
+  );
+  const recovered = verdicts.filter((verdict) => verdict.recovered);
+  if (recovered.length === 0) return '';
+  const pending = verdicts.filter((verdict) => !verdict.recovered);
+  const grounds =
+    '回復と読んだ根拠は、live であること・枠で止まった印が降りていること・鍵の世代が現役と一致すること。';
+  if (pending.length === 0) {
+    return block([
+      `✅ **配る時点（${now}）の担当一覧では、この知らせが名指す担当 ${String(recovered.length)} 本はすべて回復している**: ` +
+        `${recovered.map((verdict) => verdict.line).join('、')}。${grounds}`,
+      `${queued}**本文の「止まった」は積まれた時点の話で、いま止まっているとは読まないこと。** ` +
+        '回復を確かめ直すために `manager_list` / `token_list` を引く必要は無い。',
+    ]);
+  }
+  return block([
+    `配る時点（${now}）の担当一覧では、この知らせが名指す担当 ${String(verdicts.length)} 本のうち ` +
+      `**${String(recovered.length)} 本は回復している**: ${recovered.map((verdict) => verdict.line).join('、')}。${grounds}`,
+    `まだ回復したと言えない ${String(pending.length)} 本: ${pending.map((verdict) => verdict.line).join('、')}。`,
+    `${queued}本文の「止まった」は積まれた時点の話である。`,
+  ]);
+}

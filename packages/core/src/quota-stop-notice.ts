@@ -36,6 +36,12 @@ export function quotaStopWindowKeyOf(fragments: readonly { quota?: QuotaMark }[]
   return UNKNOWN_TOKEN_WINDOW_KEY;
 }
 
+/**
+ * プール全体の1通の `payload` に載せる、名指した担当の id の欄（#4497）。
+ * 本文の担当一覧は表示用なので、クローンはここを読み、文言から読み直さない。
+ */
+export const QUOTA_STOP_MANAGER_IDS_KEY = 'quotaStopManagerIds';
+
 /** 枠だけの束を、プール全体で1通にまとめる固定窓（延長しない）。 */
 export const QUOTA_STOP_WINDOW_MS = 30_000;
 

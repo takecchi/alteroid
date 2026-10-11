@@ -740,6 +740,12 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
           '切り替える判定材料。Issue #1848）で、この関数は参照しない。`synthesized` と同じ' +
           '「bool のタグで自由文を運ばない」欄。',
       },
+      quotaStop: {
+        emit: 'never',
+        why:
+          '枠だけが理由の知らせの印（クローンが配る直前に担当の回復を添える判定材料。Issue #4497）で、' +
+          'この関数は参照しない。`synthesized` と同じ「bool のタグで自由文を運ばない」欄。',
+      },
       attachments: {
         emit: 'never',
         why:
@@ -829,6 +835,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       statusAtDelivery: 'running',
       synthesized: true,
       foldedTurn: true,
+      quotaStop: true,
       attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
       rejectedAttachments: [{ name: SECRET, reason: SECRET }],
     },

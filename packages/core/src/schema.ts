@@ -262,6 +262,8 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     synthesized: z.literal(true).optional(),
     // 本文の文言で判定しない: 判定は構造化された印で行い、文言は表示にだけ使うため（立っていない回はキーごと書かない）
     foldedTurn: z.literal(true).optional(),
+    // 枠だけが理由の知らせ（全断片に枠の印が付いた束）。クローンが配る直前に、担当がもう回復しているかを添えるため（#4497）
+    quotaStop: z.literal(true).optional(),
     // 中身（bytes）は持たない: 担い手が報告に添えたファイルの控え。中身は `stores.attachments` に在る
     attachments: z.array(attachmentRefSchema).optional(),
     // 受け取れなかったものを黙って落とさない: 名前と理由をクローンのターンへ出すため
