@@ -261,6 +261,9 @@ const TOOL_USE_FAILURE_ERROR_EXCERPT = 500;
 // 日誌の1行を埋め尽くさない長さで、落ちた理由（最後の数行）が収まる長さ
 const DELEGATION_STDERR_TAIL_CHARS = 2000;
 
+// `exit` から stderr の `end` までの待ちの上限: 孫プロセスが stderr のパイプを握ったままだと `end` が永久に来ないため。通常は `exit` の直後（数 ms）に `end` が来るので、1 秒あれば最後の chunk は読み切れ、握られても note が1秒遅れるだけで済む
+export const DELEGATION_STDERR_END_GRACE_MS = 1000;
+
 // runner の制御面の鍵も落とす: マネージャーが runner の API を叩くと、自分宛の許可確認に自分で allow を返せるため
 export const WITHHELD_ENV_KEYS = [
   'ALTEROID_HOME',
@@ -2373,7 +2376,7 @@ class RunnerSession {
       child.once('exit', noteExited);
       child.once('error', noteExited);
     }
-    this.#watchDelegationStderr(child);
+    this.#watchDelegationStderr(child, options.env);
     return child;
   }
 
@@ -2382,7 +2385,10 @@ class RunnerSession {
    * 「exited with code 1」だけになり、64KB を超えて書かれるとパイプが詰まって CLI が書き込みで止まる。読み続けて末尾だけを持ち、
    * 0 以外で終わった回に note で残す（伏せ字を通す）。
    */
-  #watchDelegationStderr(child: DelegationProcessHandle): void {
+  #watchDelegationStderr(
+    child: DelegationProcessHandle,
+    childEnv: Readonly<Record<string, string | undefined>>,
+  ): void {
     const stderr = (child as { stderr?: NodeJS.ReadableStream | null }).stderr;
     if (stderr === undefined || stderr === null) return;
     let tail = '';
@@ -2391,17 +2397,34 @@ class RunnerSession {
       tail = (tail + chunk).slice(-DELEGATION_STDERR_TAIL_CHARS);
     });
     stderr.on('error', () => undefined);
+    // `exit` は stdio を読み終える前に来うる: 落ちる直前の最後の行を取りこぼさないよう、stderr の `end` を待ってから確定する
     child.once('exit', (code, signal) => {
       if (code === 0 || (code === null && signal === null)) return;
-      const how = code === null ? `signal ${String(signal)}` : `exit code ${String(code)}`;
-      const shown = redactErrorText(tail.trim(), process.env);
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `委譲の CLI（pid ${String(child.pid ?? '?')}）が ${how} で終わった。` +
-          (shown.length === 0 ? 'stderr には何も出ていなかった。' : `stderr の末尾: ${shown}`),
-      });
+      let done = false;
+      // 猶予のタイマーは unref する: runner の終了を引き止めないため
+      const timer = setTimeout(() => report(), DELEGATION_STDERR_END_GRACE_MS);
+      timer.unref();
+      const report = (): void => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        const how = code === null ? `signal ${String(signal)}` : `exit code ${String(code)}`;
+        // 子に渡した env も値の伏せ字に入れる: プロファイルや鍵の袋にだけある値は runner の process.env に無いため
+        const shown = redactErrorText(tail.trim(), { ...process.env, ...childEnv });
+        this.#emit({
+          type: 'note',
+          managerId: this.#id,
+          text:
+            `委譲の CLI（pid ${String(child.pid ?? '?')}）が ${how} で終わった。` +
+            (shown.length === 0 ? 'stderr には何も出ていなかった。' : `stderr の末尾: ${shown}`),
+        });
+      };
+      if ((stderr as { readableEnded?: boolean }).readableEnded === true) {
+        report();
+        return;
+      }
+      stderr.once('end', report);
+      stderr.once('close', report);
     });
   }
 

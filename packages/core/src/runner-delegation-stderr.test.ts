@@ -2,10 +2,10 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunnerEvent } from './runner-protocol.js';
-import { createRunnerHost, type RunnerHost } from './runner.js';
+import { createRunnerHost, DELEGATION_STDERR_END_GRACE_MS, type RunnerHost } from './runner.js';
 
 function fakeSdk(sessions: Options[]): typeof sdkQuery {
   return ((params: { prompt: unknown; options?: Options }) => {
@@ -46,9 +46,12 @@ let hosts: RunnerHost[] = [];
 afterEach(async () => {
   await Promise.all(hosts.map((host) => host.shutdown().catch(() => undefined)));
   hosts = [];
+  vi.useRealTimers();
 });
 
-async function spawnFakeChild(): Promise<{ child: FakeChild; events: RunnerEvent[] }> {
+async function spawnFakeChild(
+  childEnv: Record<string, string> = {},
+): Promise<{ child: FakeChild; events: RunnerEvent[] }> {
   const sessions: Options[] = [];
   const events: RunnerEvent[] = [];
   const child = new FakeChild();
@@ -66,7 +69,7 @@ async function spawnFakeChild(): Promise<{ child: FakeChild; events: RunnerEvent
   sessions[0]?.spawnClaudeCodeProcess?.({
     command: 'claude',
     args: [],
-    env: {},
+    env: childEnv,
     signal: new AbortController().signal,
   });
   return { child, events };
@@ -89,6 +92,8 @@ describe('自前で起こした委譲の CLI の stderr を読み、0 以外で�
     child.stderr.write('起動の途中で失敗した: Error: something broke\n');
     await drained();
     child.emit('exit', 1, null);
+    child.stderr.end();
+    await drained();
 
     const notes = cliNotes(events);
     expect(notes).toHaveLength(1);
@@ -99,6 +104,8 @@ describe('自前で起こした委譲の CLI の stderr を読み、0 以外で�
   it('stderr が空なら、空だったと言う', async () => {
     const { child, events } = await spawnFakeChild();
     child.emit('exit', 1, null);
+    child.stderr.end();
+    await drained();
 
     expect(cliNotes(events)).toEqual([expect.stringContaining('stderr には何も出ていなかった')]);
   });
@@ -106,6 +113,8 @@ describe('自前で起こした委譲の CLI の stderr を読み、0 以外で�
   it('signal で終わった回も言う', async () => {
     const { child, events } = await spawnFakeChild();
     child.emit('exit', null, 'SIGABRT');
+    child.stderr.end();
+    await drained();
 
     expect(cliNotes(events)).toEqual([expect.stringContaining('signal SIGABRT')]);
   });
@@ -124,9 +133,52 @@ describe('自前で起こした委譲の CLI の stderr を読み、0 以外で�
     child.stderr.write(`${'x'.repeat(200_000)}\n最後の行`);
     await drained();
     child.emit('exit', 2, null);
+    child.stderr.end();
+    await drained();
 
     const [note] = cliNotes(events);
     expect(note).toContain('最後の行');
     expect((note ?? '').length).toBeLessThan(3000);
+  });
+
+  it('⭐ exit が stderr の最後の chunk より先に来ても、その chunk を note に入れる', async () => {
+    const { child, events } = await spawnFakeChild();
+    child.emit('exit', 1, null);
+    expect(cliNotes(events)).toEqual([]);
+    child.stderr.write('致命的エラー: 最後の一行\n');
+    child.stderr.end();
+    await drained();
+
+    const notes = cliNotes(events);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain('致命的エラー: 最後の一行');
+  });
+
+  it('⭐ end が来ないまま猶予が切れても、その時点までの末尾で note を1回だけ出す', async () => {
+    vi.useFakeTimers();
+    const { child, events } = await spawnFakeChild();
+    child.stderr.write('孫が握っていても読めた行\n');
+    await vi.advanceTimersByTimeAsync(0);
+    child.emit('exit', 1, null);
+    await vi.advanceTimersByTimeAsync(DELEGATION_STDERR_END_GRACE_MS - 1);
+    expect(cliNotes(events)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(cliNotes(events)).toEqual([expect.stringContaining('孫が握っていても読めた行')]);
+    child.stderr.end();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(cliNotes(events)).toHaveLength(1);
+  });
+
+  it('⭐ 子に渡した env にだけある値は、パターンに当たらない形でも note に生で載らない', async () => {
+    const { child, events } = await spawnFakeChild({ PROFILE_API_SECRET: 'zq-plain-secret-77' });
+    child.stderr.write('接続に失敗: zq-plain-secret-77 は拒否された\n');
+    child.emit('exit', 1, null);
+    child.stderr.end();
+    await drained();
+
+    const [note] = cliNotes(events);
+    expect(note).toContain('接続に失敗');
+    expect(note).not.toContain('zq-plain-secret-77');
   });
 });
