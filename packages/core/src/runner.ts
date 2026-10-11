@@ -101,6 +101,7 @@ import {
 import { fingerprintOf, ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { compareCodeUnits } from './code-unit-order.js';
+import { subreapedProcess, underSubreaper } from './delegation-subreaper.js';
 import { codePointBoundary, excerptLine } from './excerpt.js';
 import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
 import type { McpServers } from './mcp-servers.js';
@@ -431,6 +432,8 @@ export interface RunnerHostOptions {
   // 既定で有効にしない: 同一プロセスの `runner-local` ではデーモンだけが消えることが無く、接触の無い構成のセッションを理由なく畳むため
   enforceLease?: boolean;
   spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
+  // 委譲の CLI を `<この実行ファイル> -s --` の子として起こす（tini の絶対パス。#4494）。無ければ CLI を直に起こす: tini の無い手元の構成でも動かすため
+  delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
   finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
@@ -637,6 +640,7 @@ class Host implements RunnerHost {
   readonly #abandonedDelegationPids = new Set<number>();
   readonly #spawnAgentProcessFn:
     ((options: SpawnAgentProcessOptions) => DelegationProcessHandle) | undefined;
+  readonly #delegationSubreaper: string | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir | undefined;
   readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
   readonly #finishUnpushedWorkFn:
@@ -667,6 +671,7 @@ class Host implements RunnerHost {
     this.#bashGuard = resolveBashGuardMode(this.#env);
     this.#enforceLease = options.enforceLease ?? false;
     this.#spawnAgentProcessFn = options.spawnAgentProcessFn;
+    this.#delegationSubreaper = options.delegationSubreaper;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn;
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
     this.#finishUnpushedWorkFn = options.finishUnpushedWorkFn;
@@ -1203,6 +1208,9 @@ class Host implements RunnerHost {
       ...(this.#spawnAgentProcessFn === undefined
         ? {}
         : { spawnAgentProcessFn: this.#spawnAgentProcessFn }),
+      ...(this.#delegationSubreaper === undefined
+        ? {}
+        : { delegationSubreaper: this.#delegationSubreaper }),
       ...(this.#handOverResumeConfigDirFn === undefined
         ? {}
         : { handOverResumeConfigDirFn: this.#handOverResumeConfigDirFn }),
@@ -1638,6 +1646,7 @@ interface RunnerSessionOptions {
   onDelegationProcessSpawned?: (pid: number) => void;
   onDelegationProcessExited?: (pid: number) => void;
   spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
+  delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
   finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
@@ -1688,6 +1697,7 @@ class RunnerSession {
   readonly #onDelegationProcessSpawned: (pid: number) => void;
   readonly #onDelegationProcessExited: (pid: number) => void;
   readonly #spawnAgentProcessFn: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
+  readonly #delegationSubreaper: string | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
   readonly #rescueMemory = new RescueMemory();
@@ -1820,6 +1830,7 @@ class RunnerSession {
       options.spawnAgentProcessFn ??
       ((spawnOptions) =>
         spawnAsUser(this.#childUser as RunnerChildUser, { ...spawnOptions, detached: true }));
+    this.#delegationSubreaper = options.delegationSubreaper;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn ?? chownTreeSync;
     this.#readCgroupEventCountersFn =
       options.readCgroupEventCountersFn ?? (() => readCgroupEventCounters());
@@ -2367,7 +2378,13 @@ class RunnerSession {
   // `#spawnAsChildUser` と共有しない: `detached: true` と pid 追跡を委譲そのものの起動経路にだけ効かせるため
   #spawnDelegationProcess(options: SpawnAgentProcessOptions): DelegationProcessHandle {
     this.#handOverResumeConfigDir(options.env);
-    const child = this.#spawnAgentProcessFn(options);
+    // 追う pid は tini のもの: tini が sid の主になり、CLI と子孫はその sid の下に居るため（孤児の回収が撃つ単位は変わらない）
+    const child =
+      this.#delegationSubreaper === undefined
+        ? this.#spawnAgentProcessFn(options)
+        : subreapedProcess(
+            this.#spawnAgentProcessFn(underSubreaper(options, this.#delegationSubreaper)),
+          );
     const pid = child.pid;
     if (pid !== undefined) {
       this.#onDelegationProcessSpawned(pid);

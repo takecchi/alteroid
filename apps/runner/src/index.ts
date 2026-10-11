@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { chmodSync, chownSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
-import { dirname } from 'node:path';
+import {
+  accessSync,
+  chmodSync,
+  chownSync,
+  constants,
+  mkdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -180,6 +189,31 @@ export function reclaimScanOf(
   return { childUid: childUser.uid, ...(raw === 'reclaim' && reap !== undefined ? { reap } : {}) };
 }
 
+// 委譲の CLI の引き取り手（`tini -s`）を PATH から探す（#4494）。子の UID へ降ろさない構成では使わない: 委譲を自前で起こす経路（`spawnProcess`）がそもそも無いため。
+// 見つからなければ `undefined`（CLI を直に起こす）。起動ログに出すので黙っては倒れない。
+export function delegationSubreaperOf(
+  env: NodeJS.ProcessEnv = process.env,
+  childUser: RunnerChildUser | undefined = childUserOf(env),
+  isExecutable: (path: string) => boolean = executableFile,
+): string | undefined {
+  if (childUser === undefined) return undefined;
+  for (const dir of (envValue(env, 'PATH') ?? '').split(delimiter)) {
+    if (!isAbsolute(dir)) continue;
+    const candidate = join(dir, 'tini');
+    if (isExecutable(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+function executableFile(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
 // `off`（`undefined`）はそのまま返す: 観測ごと止める切れる口のため。
 export function withTerminatedReclaimSessions(
   scan: ReclaimScanOptions | undefined,
@@ -266,6 +300,7 @@ export async function main(): Promise<void> {
   const peerPlan = planPeerSocket(process.env, childUser);
   // こちらは資格を待たずに開く: どの器のマネージャーにも出す道具のため
   const managerToolsHost = await openManagerToolsSocket(childUser);
+  const delegationSubreaper = delegationSubreaperOf(process.env, childUser);
   const outbox = new Outbox();
   const host = createRunnerHost({
     runnerId,
@@ -291,6 +326,7 @@ export async function main(): Promise<void> {
     ...(childUser === undefined ? {} : { childUser }),
     // 自己失効はこの器だけが有効にする: 同一プロセスの `runner-local` では「デーモンだけが消える」ことが起こり得ないため。
     enforceLease: true,
+    ...(delegationSubreaper === undefined ? {} : { delegationSubreaper }),
   });
 
   const reap: ReclaimReapOptions = {
@@ -400,6 +436,15 @@ export async function main(): Promise<void> {
           : reclaimScan.reap === undefined
             ? 'observe（終端した委譲の木だけ畳む。素性の分からない孤児は撃たない）'
             : '回収（撃つ。既定）'
+      }` +
+      `${
+        childUser === undefined
+          ? ''
+          : ` / 委譲の引き取り手: ${
+              delegationSubreaper === undefined
+                ? '無し（tini が PATH に無い。setsid で抜けた子孫は誰のものか分からず撃たれない）'
+                : `${delegationSubreaper} -s`
+            }`
       }` +
       ` / 帯: ${resolveManagerModel(process.env)} → ${resolveWorkerModel(process.env)}）\n`,
   );
