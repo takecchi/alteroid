@@ -52,6 +52,8 @@ import {
   staleObservedRecoveryNoticeEvent,
   WITHHELD_ENV_KEYS,
   writeStderrSync,
+  describeLoopStall,
+  startLoopStallWatch,
   type InboxEvent,
   type RunnerClient,
   type RunnerPlacementResources,
@@ -485,6 +487,21 @@ export async function main(): Promise<void> {
         );
       });
   };
+
+  // デーモンのイベントループが止まったら、何が走っていたかと GC・ヒープを添えて日誌に残す（#4485）。
+  // 名乗りの確認の失敗は「止まっていた」までしか言えず、元を絞れないため
+  startLoopStallWatch({
+    onStall: (stall) => {
+      const summary = describeLoopStall(stall);
+      void stores.journal
+        .append({ type: 'external_event', source: 'loop-stall', summary })
+        .catch((error: unknown) => {
+          process.stderr.write(
+            `alteroidd: ループの停止を日誌へ残せませんでした: ${reasonOf(error)}\n  ${summary}\n`,
+          );
+        });
+    },
+  });
 
   const seeds = runnerSeeds({
     workspace,

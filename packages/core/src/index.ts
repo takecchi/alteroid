@@ -1565,3 +1565,10 @@ export {
   peerProviderLabel,
   type ManagerPeersView,
 } from './manager-peers-format.js';
+export {
+  describeLoopStall,
+  notePhase,
+  startLoopStallWatch,
+  type LoopStall,
+  type LoopStallWatchOptions,
+} from './loop-stall.js';

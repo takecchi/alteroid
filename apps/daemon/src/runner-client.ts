@@ -67,6 +67,7 @@ import {
   runnerSessionOpenResultSchema,
   type RunnerResumeResult,
   unpushedWorkResultSchema,
+  notePhase,
 } from '@alteroid/core';
 
 // 失敗の種別を口の定義（`@alteroid/core`）に持たせる: この経路だけの都合にすると、同じ判断をインプロセスの runner 側で作り直すことになるため
@@ -713,9 +714,13 @@ class HttpRunner implements RunnerClient {
 
         if (data.length > 0) {
           try {
+            notePhase(`runner-event:${String(data.length)}B`);
             const raw: unknown = JSON.parse(data);
             const parsed = runnerEventSchema.safeParse(raw);
-            if (parsed.success) onEvent(parsed.data);
+            if (parsed.success) {
+              notePhase(`runner-event:${parsed.data.type}`);
+              onEvent(parsed.data);
+            }
             // 黙って落とさない: runner が新しい種類の出来事を出し始めても、跡が残らないと気づく主体が誰も居ないため
             else this.#noteDropped(dropped, 'unknown-shape', typeOf(raw), data.length);
           } catch {
