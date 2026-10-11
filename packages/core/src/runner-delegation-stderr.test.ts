@@ -1,0 +1,132 @@
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+
+import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import type { RunnerEvent } from './runner-protocol.js';
+import { createRunnerHost, type RunnerHost } from './runner.js';
+
+function fakeSdk(sessions: Options[]): typeof sdkQuery {
+  return ((params: { prompt: unknown; options?: Options }) => {
+    sessions.push(params.options ?? {});
+    let close = (): void => undefined;
+    const closed = new Promise<void>((resolve) => {
+      close = resolve;
+    });
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-fake',
+        uuid: 'uuid-init',
+      } as unknown as SDKMessage;
+      await closed;
+    }
+    return Object.assign(generate(), {
+      close: () => close(),
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof sdkQuery;
+}
+
+class FakeChild extends EventEmitter {
+  readonly pid = 4242;
+  readonly stdin = new PassThrough();
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+  readonly killed = false;
+  readonly exitCode: number | null = null;
+  kill(): boolean {
+    return true;
+  }
+}
+
+let hosts: RunnerHost[] = [];
+afterEach(async () => {
+  await Promise.all(hosts.map((host) => host.shutdown().catch(() => undefined)));
+  hosts = [];
+});
+
+async function spawnFakeChild(): Promise<{ child: FakeChild; events: RunnerEvent[] }> {
+  const sessions: Options[] = [];
+  const events: RunnerEvent[] = [];
+  const child = new FakeChild();
+  const host = createRunnerHost({
+    runnerId: 'runner-stderr',
+    workspacePath: '/work',
+    emit: (event) => events.push(event),
+    queryFn: fakeSdk(sessions),
+    env: {},
+    childUser: { uid: 1001, gid: 1001 },
+    spawnAgentProcessFn: () => child as never,
+  });
+  hosts.push(host);
+  await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+  sessions[0]?.spawnClaudeCodeProcess?.({
+    command: 'claude',
+    args: [],
+    env: {},
+    signal: new AbortController().signal,
+  });
+  return { child, events };
+}
+
+async function drained(): Promise<void> {
+  for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function cliNotes(events: RunnerEvent[]): string[] {
+  return events
+    .map((event) => (event.type === 'note' ? event.text : ''))
+    .filter((text) => text.includes('委譲の CLI'));
+}
+
+describe('自前で起こした委譲の CLI の stderr を読み、0 以外で終わったら末尾を note に残す', () => {
+  it('⭐ exit code 1 で終わったら、stderr の末尾を添えて note を出す', async () => {
+    const { child, events } = await spawnFakeChild();
+    child.stderr.write('起動の途中で失敗した: Error: something broke\n');
+    await drained();
+    child.emit('exit', 1, null);
+
+    const notes = cliNotes(events);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain('exit code 1');
+    expect(notes[0]).toContain('something broke');
+  });
+
+  it('stderr が空なら、空だったと言う', async () => {
+    const { child, events } = await spawnFakeChild();
+    child.emit('exit', 1, null);
+
+    expect(cliNotes(events)).toEqual([expect.stringContaining('stderr には何も出ていなかった')]);
+  });
+
+  it('signal で終わった回も言う', async () => {
+    const { child, events } = await spawnFakeChild();
+    child.emit('exit', null, 'SIGABRT');
+
+    expect(cliNotes(events)).toEqual([expect.stringContaining('signal SIGABRT')]);
+  });
+
+  it('exit code 0 では何も言わない', async () => {
+    const { child, events } = await spawnFakeChild();
+    child.stderr.write('ふつうの出力\n');
+    await drained();
+    child.emit('exit', 0, null);
+
+    expect(cliNotes(events)).toEqual([]);
+  });
+
+  it('末尾だけを持つ（大量に書かれても読み続け、最後の部分を残す）', async () => {
+    const { child, events } = await spawnFakeChild();
+    child.stderr.write(`${'x'.repeat(200_000)}\n最後の行`);
+    await drained();
+    child.emit('exit', 2, null);
+
+    const [note] = cliNotes(events);
+    expect(note).toContain('最後の行');
+    expect((note ?? '').length).toBeLessThan(3000);
+  });
+});

@@ -258,6 +258,9 @@ export const TOOL_USE_FAILURE_NOTE_PREFIX = 'tool_use_failure:';
 // 切らずに残さない: `error` は上限の無い自由文で、巨大な失敗メッセージが日誌の1行を埋め尽くしうるため
 const TOOL_USE_FAILURE_ERROR_EXCERPT = 500;
 
+// 日誌の1行を埋め尽くさない長さで、落ちた理由（最後の数行）が収まる長さ
+const DELEGATION_STDERR_TAIL_CHARS = 2000;
+
 // runner の制御面の鍵も落とす: マネージャーが runner の API を叩くと、自分宛の許可確認に自分で allow を返せるため
 export const WITHHELD_ENV_KEYS = [
   'ALTEROID_HOME',
@@ -2370,7 +2373,36 @@ class RunnerSession {
       child.once('exit', noteExited);
       child.once('error', noteExited);
     }
+    this.#watchDelegationStderr(child);
     return child;
+  }
+
+  /**
+   * 自前で起こした子の stderr は SDK が読まない（SDK が読むのは自分で起こした子だけ）: 読まなければ落ちたときの理由が
+   * 「exited with code 1」だけになり、64KB を超えて書かれるとパイプが詰まって CLI が書き込みで止まる。読み続けて末尾だけを持ち、
+   * 0 以外で終わった回に note で残す（伏せ字を通す）。
+   */
+  #watchDelegationStderr(child: DelegationProcessHandle): void {
+    const stderr = (child as { stderr?: NodeJS.ReadableStream | null }).stderr;
+    if (stderr === undefined || stderr === null) return;
+    let tail = '';
+    stderr.setEncoding('utf8');
+    stderr.on('data', (chunk: string) => {
+      tail = (tail + chunk).slice(-DELEGATION_STDERR_TAIL_CHARS);
+    });
+    stderr.on('error', () => undefined);
+    child.once('exit', (code, signal) => {
+      if (code === 0 || (code === null && signal === null)) return;
+      const how = code === null ? `signal ${String(signal)}` : `exit code ${String(code)}`;
+      const shown = redactErrorText(tail.trim(), process.env);
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `委譲の CLI（pid ${String(child.pid ?? '?')}）が ${how} で終わった。` +
+          (shown.length === 0 ? 'stderr には何も出ていなかった。' : `stderr の末尾: ${shown}`),
+      });
+    });
   }
 
   // 起こす直前に持ち主を移す: SDK は resume の材料を root の 0700 の一時ディレクトリに書き、子の `CLAUDE_CONFIG_DIR` をそこへ向ける。別の UID の子は入れず、会話を見つけられずに終わる（生ログからの引き継ぎへ落ちる）ため。移せなくても起こすのは止めない: 引き継ぎで続けられる
