@@ -136,7 +136,7 @@ describe('クローン本セッションへ渡す Options', () => {
     expect(options.maxTurns).toBeUndefined();
     expect(options.canUseTool).toBeUndefined();
     expect(options.resume).toBeUndefined();
-    expect(options.settings).toBeUndefined();
+    expect(options.settings).toEqual({ attribution: { commit: '', pr: '' } });
 
     await clone.stop();
   });
@@ -355,10 +355,13 @@ describe('マネージャー（runner）へ渡す Options', () => {
     expect(options.tools).toBeUndefined();
     expect(options.maxTurns).toBeUndefined();
 
-    expect(options.settings).toEqual({ autoMemoryEnabled: false });
+    expect(options.settings).toEqual({
+      attribution: { commit: '', pr: '' },
+      autoMemoryEnabled: false,
+    });
   });
 
-  it('ALTEROID_MANAGER_AUTO_MEMORY=true を置くと settings を渡さない（SDK の既定へ委ねる。#1189）', async () => {
+  it('ALTEROID_MANAGER_AUTO_MEMORY=true を置くと autoMemoryEnabled を渡さない（SDK の既定へ委ねる。#1189）', async () => {
     const { fn, started } = fakeRunnerSdk();
     host = createRunnerHost({
       runnerId: 'runner-primary',
@@ -371,7 +374,7 @@ describe('マネージャー（runner）へ渡す Options', () => {
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const { options } = started[0] as Started;
 
-    expect(options.settings).toBeUndefined();
+    expect(options.settings).toEqual({ attribution: { commit: '', pr: '' } });
   });
 
   it('ALTEROID_MANAGER_AUTO_MEMORY に true/false 以外を置くと落ちる（不正な値を黙って既定へ倒さない）', async () => {
@@ -481,7 +484,7 @@ describe('クローンの蒸留サイドクエリへ渡す Options', () => {
     expect(options.hooks?.PostToolUseFailure).toHaveLength(1);
     expect(options.hooks?.PreCompact).toBeUndefined();
     expect(options.settingSources).toEqual(['user', 'project', 'local']);
-    expect(options.settings).toBeUndefined();
+    expect(options.settings).toEqual({ attribution: { commit: '', pr: '' } });
 
     await clone.stop();
   });

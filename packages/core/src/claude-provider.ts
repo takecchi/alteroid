@@ -416,6 +416,20 @@ export function withNoSessionTitleEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
   return { ...env, [NO_SESSION_TITLE_ENV_KEY]: '1' };
 }
 
+/**
+ * クローン（本セッション・蒸留）とマネージャーの層で、CLI がコミットと PR 本文の末尾に付けさせる帰属の行を消す（#4480）。
+ *
+ * 既定のままだと、CLI は最初の発言に「コミットの末尾に `Co-Authored-By: Claude …`、PR 本文の末尾に
+ * `🤖 Generated with [Claude Code](…)` を付けよ」という知らせを差し込み、`agents` の作業者の要求にも同じものが載る
+ * （同梱の CLI を偽の API に向けて確かめた。`real-cli-attribution.test.ts`）。依頼文で止めても、この知らせと食い違って付いてしまう。
+ * オーナーの決定は「付けない」（AGENTS.md のトレーラ・フッタの節）。
+ *
+ * `Options.settings` は利用者の設定の中で最も優先されるので、人間の settings.json の帰属の文面より空が勝つ。
+ */
+// [sdk-verbatim Settings.attribution]
+// Older Claude Code versions reject true or false here, so use the object form in settings files shared across versions.
+export const NO_ATTRIBUTION_SETTINGS = { attribution: { commit: '', pr: '' } } as const;
+
 export interface CloneSessionOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
@@ -469,6 +483,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     systemPrompt,
     // `settingSources` を `[]` にしない: 人間が Claude Code で使っている MCP 連携がクローンから1つも見えなくなる（能力の削除）ため
     settingSources: ['user', 'project', 'local'],
+    settings: { ...NO_ATTRIBUTION_SETTINGS },
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     skills: 'all',
     env: withNoSessionTitleEnv(withNoModelFallbackEnv(env)),
@@ -546,6 +561,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     ...clonePluginOptions(plugins),
     systemPrompt,
     settingSources: ['user', 'project', 'local'],
+    settings: { ...NO_ATTRIBUTION_SETTINGS },
     skills: 'all',
     env: withNoSessionTitleEnv(withNoModelFallbackEnv(env)),
     persistSession: false,
@@ -665,7 +681,10 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     // [sdk-verbatim Settings.autoMemoryEnabled]
     // Enable auto-memory for this project. When false, Claude will not read from or write to the auto-memory directory.
     // `autoMemoryEnabled` の doc に「Ignored if set in projectSettings」が付いていないことは、SDK を上げるときに目で確かめる: 不在の主張で `check:sdk-quotes` の印では確かめられないため
-    ...(managerAutoMemoryEnabled ? {} : { settings: { autoMemoryEnabled: false } }),
+    settings: {
+      ...NO_ATTRIBUTION_SETTINGS,
+      ...(managerAutoMemoryEnabled ? {} : { autoMemoryEnabled: false }),
+    },
     ...(resume === undefined ? {} : { resume }),
     ...(spawnClaudeCodeProcess === undefined ? {} : { spawnClaudeCodeProcess }),
     canUseTool,
