@@ -4,7 +4,7 @@ import { describeProgress } from '@alteroid/core/cli-light';
 
 import { createClient } from './client.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
-import { redactError } from './redact.js';
+import { redactBody, redactError } from './redact.js';
 
 export interface ProgressOptions {
   windowHours?: string;
@@ -42,5 +42,6 @@ export async function progressCommand(options: ProgressOptions = {}): Promise<vo
     throw new Error(described ?? `進捗を読めませんでした（HTTP ${String(response.status)}）`);
   }
   const body = await response.json();
-  stdout.write(`${describeProgress(body)}\n`);
+  // 全体を伏せる: GitHub 観測の query・ciUnavailable・checks・reason は観測した側の自由文で、gh の失敗文がそのまま入りうるため
+  stdout.write(`${redactBody(describeProgress(body))}\n`);
 }

@@ -4077,7 +4077,8 @@ function summarizeGithubObservation(entry: Record<string, unknown>): string {
     return (
       `${head} open Issue ${String(result.openIssues)} 件 / open PR ${String(result.openPulls)} 件` +
       (result.truncated === true ? '（limit に達した。下限）' : '') +
-      ` / ${describeGithubCi(result)}`
+      // 伏せる: ciUnavailable と checks は観測した側の自由文で、失敗の reason と同じく gh の失敗文が入りうるため
+      ` / ${redactBody(describeGithubCi(result))}`
     );
   }
   if (result?.status === 'failed')

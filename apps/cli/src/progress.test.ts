@@ -141,6 +141,46 @@ describe('progressCommand', () => {
     expect(text).not.toContain('数が欠けうる');
   });
 
+  it('GitHub 観測の自由文（query・ciUnavailable・reason）に混じったトークンを端末へ出さない（#4515）', async () => {
+    const token = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
+    replies.push({
+      status: 200,
+      body: body({
+        github: {
+          state: 'observed',
+          repos: [
+            {
+              repo: 'x/y',
+              latestOk: {
+                observedAt: '2026-09-30T11:00:00.000Z',
+                observedBy: 'clone',
+                query: `GH_TOKEN=${token} gh pr list`,
+                openIssues: 1,
+                openPulls: 0,
+                truncated: false,
+                ciUnavailable: `gh failed: Authorization: token ${token}`,
+              },
+              latestFailed: {
+                observedAt: '2026-09-30T11:30:00.000Z',
+                observedBy: 'clone',
+                reason: `gh: bad credentials ${token}`,
+              },
+            },
+          ],
+          scan: { limit: 500, reachedLimit: false },
+        },
+      }),
+    });
+    const read = captureStdout();
+    await progressCommand();
+    const text = read();
+    // 地の文は残す
+    expect(text).toContain('gh pr list');
+    expect(text).toContain('gh failed: Authorization');
+    expect(text).toContain('gh: bad credentials');
+    expect(text).not.toContain(token);
+  });
+
   it('completeness が 0 でなければ「数が欠けうる」を出す', async () => {
     const base = body() as { backlog: Record<string, unknown> };
     replies.push({

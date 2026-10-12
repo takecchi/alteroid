@@ -3791,6 +3791,47 @@ describe('chat の /journal', () => {
       expect(line('a/old')).not.toMatch(/success|failure|pending/);
     });
 
+    it('github_observation の CI の自由文（ciUnavailable・checks）も、失敗の reason と同じく伏せて出す（#4515）', async () => {
+      const token = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
+      const read = captureStdout();
+      const base = { type: 'github_observation', observedBy: 'clone', query: 'q' };
+      const okR = { status: 'ok', openIssues: 1, openPulls: 2, truncated: false };
+      const { client } = stubClient({
+        journalEntries: [
+          {
+            ...base,
+            id: 'j-ci-r1',
+            at: '2026-09-01T00:00:00.000Z',
+            repo: 'a/unavail',
+            result: { ...okR, ciUnavailable: `gh failed: Authorization: token ${token}` },
+          },
+          {
+            ...base,
+            id: 'j-ci-r2',
+            at: '2026-09-01T00:01:00.000Z',
+            repo: 'a/checks',
+            result: {
+              ...okR,
+              ci: {
+                pulls: 2,
+                success: 2,
+                failure: 0,
+                pending: 0,
+                checks: `token ${token} で数えた`,
+              },
+            },
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('CI: 取れなかった — gh failed: Authorization');
+      expect(text).toContain('で数えた');
+      expect(text).not.toContain(token);
+    });
+
     it('（陰性）escalation の要約は従来どおり素の質問文のまま変わらない', async () => {
       const read = captureStdout();
       const { client } = stubClient({

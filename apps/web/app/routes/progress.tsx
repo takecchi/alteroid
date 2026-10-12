@@ -243,13 +243,16 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
                             (row.latestOk.truncated ? '（上限に達したため、実際はこれ以上）' : ''),
                         },
                       ]),
-                  { label: 'CI', value: ciText(row.latestOk) },
+                  // 伏せる: ciUnavailable と checks は観測した側の自由文で、gh の失敗文がそのまま入りうるため（日誌の要約と揃える）
+                  { label: 'CI', value: redactBody(ciText(row.latestOk)) },
                 ]}
                 labelWidth="8rem"
               />
               <details className="text-xs text-muted-foreground">
                 <summary className="cursor-pointer">数えた条件の詳細（開発者向け）</summary>
-                <code className="mt-1 block font-mono break-words">{row.latestOk.query}</code>
+                <code className="mt-1 block font-mono break-words">
+                  {redactBody(row.latestOk.query)}
+                </code>
               </details>
             </>
           )}
