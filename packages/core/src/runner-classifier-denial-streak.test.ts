@@ -179,7 +179,7 @@ async function postToolUse(options: Options, agentId?: string): Promise<string |
 
 function askClone(options: Options, agentId?: string): void {
   if (options.canUseTool === undefined) throw new Error('canUseTool が無い');
-  void options.canUseTool('Bash', { command: 'prettier --check docs/design.md' }, {
+  void options.canUseTool('Bash', { command: 'prettier --check src/index.ts' }, {
     signal: new AbortController().signal,
     toolUseID: `tu-ask-${agentId ?? 'manager'}`,
     requestId: `req-${agentId ?? 'manager'}`,
