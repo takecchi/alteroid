@@ -97,6 +97,7 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
             ...(typeof extra.decisionReason === 'string' && extra.decisionReason.length > 0
               ? { reason: extra.decisionReason }
               : {}),
+            ...(typeof extra.agentID === 'string' ? { agentId: extra.agentID } : {}),
             signal: extra.signal,
           }),
         ),

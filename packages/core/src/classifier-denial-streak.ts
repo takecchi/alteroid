@@ -1,0 +1,136 @@
+/**
+ * 分類器（auto mode）の拒否が続いた担当を見分け、クローンへの確認と担当への知らせに事情を添える（2026-10-12 の WORLDBUILD-2・LAND-7）。
+ *
+ * CLI（SDK 0.3.296 に同梱）は、分類器の拒否をセッションごとに数え、**連続3回・累計20回**に達すると「Classifier denial limit exceeded,
+ * falling back to prompting」として、以後の分類器の拒否を確認（`canUseTool`）へ倒す。連続の数えは分類器が許可すると0に戻る。
+ * 作業者（Task）は自分の数えを新しく持つ。runner からは CLI の内部の数えを読めないので、ここで同じ形を数え直す（**一致は保証しない**）。
+ *
+ * **分類器の判定には触れない。** 確認を通りやすくすることも、分類器へ同意を伝えることもしない。事情を知らせるだけである。
+ */
+
+/** CLI の上限（SDK 0.3.296 の `{maxConsecutive:3,maxTotal:20}`）。SDK を上げたら確かめ直す。 */
+export const CLI_CLASSIFIER_DENIAL_LIMITS = { consecutive: 3, total: 20 } as const;
+
+/** 同じ相手へ担当向けの知らせを出し直すまでの間隔。拒否が続く間、道具を使うたびに同じ段落が積まれないため。 */
+export const DENIAL_STREAK_NOTICE_INTERVAL_MS = 30 * 60_000;
+
+const REASON_HEAD = 120;
+
+interface StreakState {
+  consecutive: number;
+  total: number;
+  /** いまの連続が始まった拒否の理由（先頭だけ）。 */
+  firstReason: string | undefined;
+  /** 担当へ知らせる段落を、次の道具の結果に添える。上限に達した時点の数を写して持つ（後で連続が0に戻っても、知らせの数は変わらない）。 */
+  owedNotice: DenialStreakView | undefined;
+  lastNoticeAt: number | undefined;
+}
+
+export interface DenialStreakView {
+  readonly consecutive: number;
+  readonly total: number;
+  readonly firstReason: string | undefined;
+}
+
+function reasonHead(reason: string | undefined): string | undefined {
+  if (reason === undefined) return undefined;
+  const chars = Array.from(reason.replace(/\s+/g, ' ').trim());
+  if (chars.length === 0) return undefined;
+  return chars.length > REASON_HEAD ? `${chars.slice(0, REASON_HEAD).join('')}…` : chars.join('');
+}
+
+export function overDenialLimit(view: DenialStreakView): boolean {
+  return (
+    view.consecutive >= CLI_CLASSIFIER_DENIAL_LIMITS.consecutive ||
+    view.total >= CLI_CLASSIFIER_DENIAL_LIMITS.total
+  );
+}
+
+/** 相手は担当本人なら `'manager'`、作業者なら agent id。 */
+export class ClassifierDenialStreaks {
+  readonly #byActor = new Map<string, StreakState>();
+
+  /** 分類器の拒否を1回数える。連続が上限にちょうど達した回は `true`（日誌へ1行残す契機）。 */
+  noteDenial(actor: string, reason: string | undefined): boolean {
+    const state = this.#byActor.get(actor) ?? {
+      consecutive: 0,
+      total: 0,
+      firstReason: undefined,
+      owedNotice: undefined,
+      lastNoticeAt: undefined,
+    };
+    if (state.consecutive === 0) state.firstReason = reasonHead(reason);
+    state.consecutive += 1;
+    state.total += 1;
+    this.#byActor.set(actor, state);
+    const crossed = state.consecutive === CLI_CLASSIFIER_DENIAL_LIMITS.consecutive;
+    if (crossed) {
+      state.owedNotice = {
+        consecutive: state.consecutive,
+        total: state.total,
+        firstReason: state.firstReason,
+      };
+    }
+    return crossed;
+  }
+
+  /** 道具が通った。連続を0に戻す（累計は残す）。 */
+  noteProgress(actor: string): void {
+    const state = this.#byActor.get(actor);
+    if (state === undefined) return;
+    state.consecutive = 0;
+  }
+
+  view(actor: string): DenialStreakView | undefined {
+    const state = this.#byActor.get(actor);
+    if (state === undefined) return undefined;
+    return { consecutive: state.consecutive, total: state.total, firstReason: state.firstReason };
+  }
+
+  /**
+   * 担当へ添える段落を取り出す（取り出したら借りは消える）。間隔の内側なら出さずに借りも消す: 拒否が続く間に同じ段落を何度も積まないため。
+   */
+  takeNotice(actor: string, nowMs: number): string | null {
+    const state = this.#byActor.get(actor);
+    const owed = state?.owedNotice;
+    if (state === undefined || owed === undefined) return null;
+    state.owedNotice = undefined;
+    if (
+      state.lastNoticeAt !== undefined &&
+      nowMs - state.lastNoticeAt < DENIAL_STREAK_NOTICE_INTERVAL_MS
+    ) {
+      return null;
+    }
+    state.lastNoticeAt = nowMs;
+    return describeDenialStreakForManager(owed);
+  }
+}
+
+/** クローンへの確認の頭に付ける1段落。上限を越えていなければ `null`。 */
+export function describeDenialStreakForClone(
+  actor: string,
+  view: DenialStreakView | undefined,
+): string | null {
+  if (view === undefined || !overDenialLimit(view)) return null;
+  const who = actor === 'manager' ? '担当本人' : `作業者 ${actor} `;
+  return (
+    `⚠ この${who}は、分類器（auto mode）の拒否が連続 ${String(view.consecutive)} 回・累計 ${String(view.total)} 回続いている（runner の数え。CLI の内部の数えとは一致しないことがある）。` +
+    `CLI は連続${String(CLI_CLASSIFIER_DENIAL_LIMITS.consecutive)}回・累計${String(CLI_CLASSIFIER_DENIAL_LIMITS.total)}回で、分類器が止めた操作を確認へ回す。` +
+    '分類器は会話の文脈全体を見て判断するので、この後の確認には、ふだんは通る操作（読む・整形・push）も混ざりうる。' +
+    `いまの連続の最初に引っかかった理由: ${view.firstReason ?? '(取れなかった)'}`
+  );
+}
+
+export function describeDenialStreakForManager(view: DenialStreakView): string {
+  return [
+    `⚠ alteroid からの知らせ: このセッションで、auto mode の分類器があなたの操作を続けて ${String(view.consecutive)} 回止めた（累計 ${String(view.total)} 回）。` +
+      `いまの連続の最初に引っかかった理由: ${view.firstReason ?? '(取れなかった)'}`,
+    '分類器は、この会話の文脈全体を見て判断している。引っかかった型が会話に残っている間は、ふだんは通る操作（読む・整形・push）まで止められやすい。' +
+      `CLI は連続${String(CLI_CLASSIFIER_DENIAL_LIMITS.consecutive)}回・累計${String(CLI_CLASSIFIER_DENIAL_LIMITS.total)}回で、止めた操作をクローンへの確認に回すので、確認が1件ずつ積み上がる。`,
+    '次のどれかを考えること（どれを選ぶかはあなたが決める）:',
+    '1. 引っかかった操作そのものは、何をなぜするのか・止められた理由が当たらないと考える根拠を報告に書き、クローンに確かめてもらう。',
+    '2. 残りのふつうの作業（読む・整形・テスト・push）は、新しい作業者に、何をなぜするかを書いて渡す。引っかかった操作そのものは作業者へ回さない。',
+    '3. 区切りが付いたら報告して止まり、クローンに後継の担当を起こしてもらう（未 push の作業を残さない。後継へ渡すことを報告に書く）。',
+    '言い換え・別の道具・別の手段で、止められた操作を回り込んで通そうとしないこと。',
+  ].join('\n');
+}

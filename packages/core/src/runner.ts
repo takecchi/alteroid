@@ -170,6 +170,10 @@ import {
   PidsPressureNotices,
   type PidsPressureReading,
 } from './runner-pids-pressure.js';
+import {
+  ClassifierDenialStreaks,
+  describeDenialStreakForClone,
+} from './classifier-denial-streak.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
@@ -1733,6 +1737,7 @@ class RunnerSession {
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
   readonly #pidsPressureFn: (() => Promise<PidsPressureReading | undefined>) | undefined;
   readonly #pidsPressureNotices = new PidsPressureNotices();
+  readonly #denialStreaks = new ClassifierDenialStreaks();
   readonly #rescueMemory = new RescueMemory();
   #rescueRunning: Promise<void> | null = null;
   readonly #finishUnpushedWorkFn: (options?: {
@@ -3382,10 +3387,21 @@ class RunnerSession {
     if (resolved !== undefined) return resolved;
 
     // `kind` の判定のコピーを作らない: `classifyManagerActivity` も同じ分け方を使うため
+    const permissionSummary = `${toolName} の実行許可: ${brief(input)}${reason === undefined ? '' : `\n理由: ${reason}`}`;
+    // 分類器の拒否が続いた担当の確認には事情を添える: CLI が分類器の拒否を確認へ倒した後は、ふだん通る操作の確認も混ざるため（peer の確認は別の数えなので添えない）
+    const streakNote =
+      kind === 'permission' && source === undefined
+        ? describeDenialStreakForClone(
+            permission.agentId ?? 'manager',
+            this.#denialStreaks.view(permission.agentId ?? 'manager'),
+          )
+        : null;
     const baseSummary =
       kind === 'question'
         ? describeQuestions(input)
-        : `${toolName} の実行許可: ${brief(input)}${reason === undefined ? '' : `\n理由: ${reason}`}`;
+        : streakNote === null
+          ? permissionSummary
+          : `${streakNote}\n${permissionSummary}`;
     // 出所の印を要約の先頭に必ず付ける: 旧いデーモンが `source` 欄を落としても印が本文に残るため
     const summary =
       source === undefined ? baseSummary : `${peerApprovalMark(source.provider)}${baseSummary}`;
@@ -3495,6 +3511,21 @@ class RunnerSession {
         : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
     const toolName = record.toolName;
 
+    // 道具名や入力の鍵が取れない回も数える: 分類器が止めた事実は変わらず、CLI の数えも進むため
+    const streakActor = record.agentId ?? 'manager';
+    if (this.#denialStreaks.noteDenial(streakActor, record.reason)) {
+      const view = this.#denialStreaks.view(streakActor);
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `分類器の拒否が ${actor} で続けて ${String(view?.consecutive ?? 0)} 回になった（累計 ${String(view?.total ?? 0)} 回。runner の数え）。` +
+          'CLI はこの後、分類器が止めた操作を確認へ回すので、ふだんは通る操作の確認も上がりうる。' +
+          `${streakActor === 'manager' ? '担当' : 'この作業者'}には、次に道具が通ったとき、その事情と取れる道（クローンに確かめてもらう・新しい作業者へ渡す・区切りで報告して後継を起こしてもらう）を添える。` +
+          `最初に引っかかった理由: ${view?.firstReason ?? '(取れなかった)'}`,
+      });
+    }
+
     // `tool_input` を載せない（理由は先頭だけ）
     const reasonHead = Array.from((record.reason ?? '').replace(/\s+/g, ' ').trim());
     this.#emit({
@@ -3549,7 +3580,12 @@ class RunnerSession {
     }
 
     const kind = 'permission';
+    const streakNote = describeDenialStreakForClone(
+      streakActor,
+      this.#denialStreaks.view(streakActor),
+    );
     const summary =
+      (streakNote === null ? '' : `${streakNote}\n`) +
       `分類器が ${actor} の ${toolName} 呼び出しを拒否した。この1回だけ許可しますか。\n` +
       `答えたあと: allow しても、この呼び出しは自動では撃ち直されない。` +
       `allow は「同じ入力での撃ち直しを、10分以内に1回だけ通す」許可で、撃ち直すかは担い手が決める` +
@@ -3937,7 +3973,13 @@ class RunnerSession {
       record.agentId === undefined ? this.#annotateCutOffWorkers(record.toolResponse) : null;
     // 担当本人にも作業者にも添える: dev サーバーや E2E を起こすのは作業者のことが多い
     const pressure = await this.#pidsPressureNotice(record.agentId);
-    const parts = [additionalContext, pressure].filter((part): part is string => part !== null);
+    // 分類器の拒否が続いた後に初めて通った道具に、事情と取れる道を添える
+    const streakActor = record.agentId ?? 'manager';
+    const denialStreak = this.#denialStreaks.takeNotice(streakActor, Date.now());
+    this.#denialStreaks.noteProgress(streakActor);
+    const parts = [additionalContext, pressure, denialStreak].filter(
+      (part): part is string => part !== null,
+    );
     if (parts.length === 0) return { kind: 'continue' };
     return { kind: 'addContext', text: parts.join('\n\n') };
   }
@@ -4088,6 +4130,8 @@ class RunnerSession {
     if (typeof record.transcriptPath === 'string')
       this.#sdkSession.setTranscriptPath(record.transcriptPath);
     this.#markProgressed();
+    // 失敗で終わっても、道具は分類器を通って走った: 連続の数えを0に戻す（このフックは文脈を返せないので、知らせは次に通った道具へ持ち越す）
+    this.#denialStreaks.noteProgress(record.agentId ?? 'manager');
 
     if (record.agentId === undefined) this.#turnTally.incrementToolsSinceResult();
 

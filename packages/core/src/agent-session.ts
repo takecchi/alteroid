@@ -38,6 +38,8 @@ export interface AgentPermissionRequest {
   readonly toolName: string;
   readonly input: Record<string, unknown>;
   readonly reason?: string;
+  /** 作業者（Task）の中の確認なら、その agent id。担当本人の確認・取れない provider では無い。 */
+  readonly agentId?: string;
   readonly signal: AbortSignal;
 }
 
