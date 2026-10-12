@@ -23,7 +23,7 @@ import {
   useRevokePermissionGrant,
   usePermissionGrants,
 } from '@alteroid/swr';
-import { formatDateTime } from '@alteroid/logic';
+import { formatDateTime, redactBody } from '@alteroid/logic';
 import type { PermissionGrant } from '@alteroid/logic';
 
 import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
@@ -130,11 +130,13 @@ function PermissionRow({ grant, now }: { grant: PermissionGrant; now: Date }) {
   const revokedAt = grant.revokedAt;
   const revoked = revokedAt !== undefined;
   const breadth = describeBreadth(grant.rule);
+  // 描く所だけ伏せる: rule と answer は人間かクローンが書いた文で、鍵を貼ってしまうことがあり、CLI の permission list も伏せて出すため
+  const shownRule = redactBody(grant.rule);
 
   return (
     <li className="border-b border-border px-4 py-3 last:border-b-0">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-sm break-all">{grant.rule}</span>
+        <span className="font-mono text-sm break-all">{shownRule}</span>
         <Badge tone={revoked ? 'neutral' : 'ok'}>{revoked ? '取り消し済み' : '有効'}</Badge>
         <Badge tone={breadth.tone}>{breadth.label}</Badge>
         {staleness.stale && (
@@ -153,7 +155,7 @@ function PermissionRow({ grant, now }: { grant: PermissionGrant; now: Date }) {
           { label: 'id', value: grant.id, mono: true },
           {
             label: '承認',
-            value: `${formatDateTime(grant.grantedAt)}（${grant.route.accountId}・"${grant.answer}"）`,
+            value: `${formatDateTime(grant.grantedAt)}（${grant.route.accountId}・"${redactBody(grant.answer)}"）`,
           },
           {
             label: '最終使用',
@@ -179,6 +181,8 @@ function RevokeControl({ grant }: { grant: PermissionGrant }) {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  // ボタンの名前も伏せる: 読み上げにも rule がそのまま乗るため（PermissionRow と同じ）
+  const shownRule = redactBody(grant.rule);
 
   async function run() {
     setBusy(true);
@@ -200,7 +204,7 @@ function RevokeControl({ grant }: { grant: PermissionGrant }) {
           <Button
             variant="danger"
             size="sm"
-            aria-label={`${grant.rule} を取り消す`}
+            aria-label={`${shownRule} を取り消す`}
             onClick={() => setConfirming(true)}
           >
             取り消す
@@ -215,7 +219,7 @@ function RevokeControl({ grant }: { grant: PermissionGrant }) {
               variant="danger"
               size="sm"
               loading={busy}
-              aria-label={`${grant.rule} を本当に取り消す`}
+              aria-label={`${shownRule} を本当に取り消す`}
               onClick={() => void run()}
             >
               本当に取り消す

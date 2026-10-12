@@ -2,7 +2,7 @@ import { JournalTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { Page, Badge, Card, CardHeader, Empty, Spinner } from '@alteroid/ui';
 import { useDropped } from '@alteroid/swr';
-import { formatDateTime } from '@alteroid/logic';
+import { formatDateTime, redactBody } from '@alteroid/logic';
 import type { DroppedState } from '@alteroid/logic';
 
 // 「無い」の3種類（取りに行けなかった・0件・runner の跡は出ない）を混ぜない: 次の一手が変わるため
@@ -49,7 +49,8 @@ function DroppedBody({ state }: { state: DroppedState }) {
         <ul className="flex flex-col gap-1">
           {state.traces.map((trace, index) => (
             <li key={index} className="font-mono text-[11px] break-words whitespace-pre-wrap">
-              {trace}
+              {/* 伏せる: 跡の行は理由の文を含み、CLI の dropped も伏せて出すため */}
+              {redactBody(trace)}
             </li>
           ))}
         </ul>

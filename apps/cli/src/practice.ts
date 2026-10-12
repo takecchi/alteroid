@@ -7,6 +7,7 @@ import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import { createClient, type DaemonClient } from './client.js';
 import { withErrorReason } from './format.js';
+import { redactBody } from './redact.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
@@ -49,9 +50,10 @@ export async function practiceListCommand(): Promise<void> {
   if (practices.length === 0) {
     stdout.write('読めたやり方は無い（無いとも、正常だとも言えない。読めない行が在る——下）。\n');
   }
+  // 一覧は伏せる・show は伏せない: 一覧は表示の口で、show は本文をそのまま取り出すデータの口（パイプやリダイレクト）のため
   for (const p of practices) {
     stdout.write(
-      `  [${p.kind}] ${p.slug}  — ${p.title}` +
+      `  [${p.kind}] ${p.slug}  — ${redactBody(p.title)}` +
         ` (作成: ${p.createdAt} / 更新: ${p.updatedAt} / ${String(p.chars)} 文字)\n`,
     );
   }
@@ -144,7 +146,7 @@ export async function practiceHistoryCommand(slug: string): Promise<void> {
   }
   for (const v of versions) {
     stdout.write(
-      `  版${String(v.version)} [${v.kind}] ${v.title} (${v.at} / ${String(v.chars)} 文字)\n`,
+      `  版${String(v.version)} [${v.kind}] ${redactBody(v.title)} (${v.at} / ${String(v.chars)} 文字)\n`,
     );
   }
   stdout.write(`本文は: alteroid practice show ${slug} --version <版番号>\n`);

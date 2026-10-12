@@ -17,7 +17,7 @@ import {
   cn,
 } from '@alteroid/ui';
 import { usePractices } from '@alteroid/swr';
-import { formatRelative } from '@alteroid/logic';
+import { formatRelative, redactBody } from '@alteroid/logic';
 import type { UnreadablePractice } from '@alteroid/logic';
 
 function UnreadablePracticesNote({ unreadable }: { unreadable: readonly UnreadablePractice[] }) {
@@ -166,7 +166,10 @@ export default function Practices() {
                           <span className="mr-1.5 shrink-0 text-[10px] text-muted-foreground">
                             {practiceKindLabel(practice.kind)}
                           </span>
-                          <span className="min-w-0 flex-1 truncate">{practice.title}</span>
+                          {/* 伏せる: 題は人間かクローンが書いた文で、本文（<Markdown>）と揃えるため */}
+                          <span className="min-w-0 flex-1 truncate">
+                            {redactBody(practice.title)}
+                          </span>
                         </span>
                         <span className="block truncate font-mono text-[11px] text-muted-foreground">
                           {practice.slug}
