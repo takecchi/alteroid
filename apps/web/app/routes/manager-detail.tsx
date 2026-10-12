@@ -9,6 +9,7 @@ import {
   Button,
   Card,
   CardHeader,
+  CodeBlock,
   AgentModelTag,
   Empty,
   ConfirmDialog,
@@ -94,6 +95,34 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
   const [stopNotice, setStopNotice] = useState<string | undefined>(undefined);
 
   const manager = data?.manager;
+  // 質問への答えの書きかけは行ではなくここで持つ: 行は `waiting` から外れると unmount するので、
+  // 答えている間にほかで決着すると書いたものが黙って消える。外れた分は下の `LeftoverAnswers` で見せる
+  const [answerDrafts, setAnswerDrafts] = useState<
+    Record<string, { summary: string; text: string }>
+  >({});
+  const waitingIds = new Set(manager?.waiting.map((request) => request.requestId) ?? []);
+  const leftoverAnswers =
+    manager === undefined
+      ? []
+      : Object.entries(answerDrafts).flatMap(([requestId, draft]) =>
+          !waitingIds.has(requestId) && draft.text.trim() !== '' ? [{ requestId, ...draft }] : [],
+        );
+  useReportDirty('question-answer-leftovers', leftoverAnswers.length > 0);
+  function updateAnswerDraft(
+    requestId: string,
+    summary: string,
+    update: (current: string) => string,
+  ): void {
+    setAnswerDrafts((current) => ({
+      ...current,
+      [requestId]: { summary, text: update(current[requestId]?.text ?? '') },
+    }));
+  }
+  function discardAnswerDraft(requestId: string): void {
+    setAnswerDrafts((current) =>
+      Object.fromEntries(Object.entries(current).filter(([key]) => key !== requestId)),
+    );
+  }
   // 「見つからない」は 404 のときだけ言う: 500・409（壊れているだけ）で言うと、読めていないのに委譲が存在しないように読める。
   const notFound = data === undefined && error instanceof ApiError && error.status === 404;
   const detailUnavailable = data === undefined && error !== undefined && !notFound;
@@ -277,6 +306,8 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
 
           <DenialsCard denials={manager.denials} lastReportAt={manager.lastReportAt} />
 
+          <LeftoverAnswers leftovers={leftoverAnswers} onDiscard={discardAnswerDraft} />
+
           {manager.waiting.length > 0 && (
             <Card>
               <CardHeader
@@ -292,6 +323,10 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                       summary={request.summary}
                       kind={request.kind}
                       askedAt={request.askedAt}
+                      answerText={answerDrafts[request.requestId]?.text ?? ''}
+                      onAnswerChange={(update) =>
+                        updateAnswerDraft(request.requestId, request.summary, update)
+                      }
                     />
                   </li>
                 ))}
@@ -943,14 +978,17 @@ function QuestionWaitingRow({
   requestId,
   summary,
   askedAtNote,
+  text,
+  onTextChange: setText,
 }: {
   id: string;
   requestId: string;
   summary: string;
   askedAtNote: ReactNode;
+  text: string;
+  onTextChange: (update: (current: string) => string) => void;
 }) {
   const send = useSendManagerMessage();
-  const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [note, setNote] = useState<{ text: string; reached: boolean } | undefined>(undefined);
@@ -986,7 +1024,10 @@ function QuestionWaitingRow({
           placeholder="この質問への答えを、自分の言葉で書く"
           aria-label={`${waitingLabel(summary)}への答え`}
           disabled={busy}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            const value = event.target.value;
+            setText(() => value);
+          }}
           maxHeight="12rem"
           onSubmitShortcut={submit}
           submitDisabled={busy || text.trim() === ''}
@@ -1019,12 +1060,16 @@ function WaitingRow({
   summary,
   kind,
   askedAt,
+  answerText,
+  onAnswerChange,
 }: {
   id: string;
   requestId: string;
   summary: string;
   kind: ManagerSummary['waiting'][number]['kind'] | undefined;
   askedAt: string | undefined;
+  answerText: string;
+  onAnswerChange: (update: (current: string) => string) => void;
 }) {
   const askedAtNote = <AskedAtNote askedAt={askedAt} />;
 
@@ -1035,6 +1080,8 @@ function WaitingRow({
         requestId={requestId}
         summary={summary}
         askedAtNote={askedAtNote}
+        text={answerText}
+        onTextChange={onAnswerChange}
       />
     );
   }
@@ -1046,6 +1093,47 @@ function WaitingRow({
       summary={summary}
       askedAtNote={askedAtNote}
     />
+  );
+}
+
+/**
+ * 質問が待ちから外れた（ほかで答えられた・取り下げられた・マネージャーが終わった）のに、書いた答えが残っているもの。
+ * **黙って消さない。** 残った文をここへ出す。写してから閉じられる（承認の画面の `LeftoverDrafts` と同じ扱い）。
+ */
+function LeftoverAnswers({
+  leftovers,
+  onDiscard,
+}: {
+  leftovers: { requestId: string; summary: string; text: string }[];
+  onDiscard: (requestId: string) => void;
+}) {
+  if (leftovers.length === 0) return null;
+  return (
+    <ul className="flex flex-col gap-3" aria-label="送らなかった答えが残っている質問">
+      {leftovers.map(({ requestId, summary, text }) => (
+        <li
+          key={requestId}
+          className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm"
+        >
+          <p className="mb-2 break-words">
+            <strong>この質問は待ちから外れた（ほかで決着した）。書きかけは残してある。</strong>
+            もう待っていないので、ここから答えとして送ることはできない。必要なら写してから閉じる。
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {/* 伏せる: 待ちの行は同じ本文を伏せて出すので、ここだけ秘密が素のまま出るため */}
+              対象: {redactBody(summary)}
+            </span>
+          </p>
+          <CodeBlock label="残った文" maxHeight="12rem">
+            {text}
+          </CodeBlock>
+          <div className="mt-2">
+            <Button size="sm" onClick={() => onDiscard(requestId)}>
+              閉じる（捨てる）
+            </Button>
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 
