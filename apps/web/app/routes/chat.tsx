@@ -852,6 +852,20 @@ export function ChatPane({
     approvalDraftsEpoch.current = chatDraftEpoch();
     setApprovalDraftsState(update);
   }, []);
+  /**
+   * 回答を送っている途中の承認 id。カードの送信中の印（busy・sendingRef）はカードの中にしか無く、
+   * 会話を移るとカードごと作り直されて消える。戻ったときに同じ承認へ2本目を送らないよう、画面の側でも持つ（承認の画面の sendingIds と同じ役目）。
+   */
+  const [sendingApprovalIds, setSendingApprovalIds] = useState<ReadonlySet<string>>(new Set());
+  const setApprovalSending = useCallback((approvalId: string, sending: boolean) => {
+    setSendingApprovalIds((previous) => {
+      if (previous.has(approvalId) === sending) return previous;
+      const next = new Set(previous);
+      if (sending) next.add(approvalId);
+      else next.delete(approvalId);
+      return next;
+    });
+  }, []);
   const [leftoverSources, setLeftoverSources] = useState<ApprovalLeftoverSources>(
     loadApprovalLeftoverSources,
   );
@@ -2885,6 +2899,9 @@ export function ChatPane({
                       >
                         <ApprovalAnswerCard
                           approval={line.approval}
+                          /* 作り直されたカードにも送信中を伝える: bulkBusy は送信を止め、ボタンを押せなくする口（まとめ送信と同じ扱い） */
+                          bulkBusy={sendingApprovalIds.has(approvalId)}
+                          onSendingChange={(sending) => setApprovalSending(approvalId, sending)}
                           showSettledAt
                           draft={approvalDrafts.texts[approvalId] ?? ''}
                           onDraftChange={(text) =>
