@@ -93,6 +93,14 @@ function EnvVarList() {
 
   const credentials = data?.credentials ?? [];
   const listUnavailable = data === undefined && error !== undefined;
+  // 編集中の行を開いた時点の写しで持つ: 行は一覧から外れると unmount し、編集の窓ごと書きかけが黙って消えるため。
+  // 編集の間にほかで消されたら、写しの行で窓を残す（予定の画面と同じ）
+  const [editingEntry, setEditingEntry] = useState<EnvVarView | undefined>(undefined);
+  const editingGone =
+    editingEntry !== undefined &&
+    data !== undefined &&
+    !credentials.some((entry) => entry.name === editingEntry.name);
+  const shownEntries = editingGone ? [...credentials, editingEntry] : credentials;
 
   return (
     <Card>
@@ -114,14 +122,20 @@ function EnvVarList() {
       )}
       {isLoading ? (
         <Spinner />
-      ) : listUnavailable ? null : credentials.length === 0 ? (
+      ) : listUnavailable ? null : shownEntries.length === 0 ? (
         <Empty>置かれた環境変数がまだ1件も無い。</Empty>
       ) : (
         <div role="list" className={`grid ${LIST_COLUMNS}`}>
-          {[...credentials]
+          {[...shownEntries]
             .sort((a, b) => a.name.localeCompare(b.name))
             .map((entry) => (
-              <EnvVarRow key={entry.name} entry={entry} onRemove={() => remove(entry.name)} />
+              <EnvVarRow
+                key={entry.name}
+                entry={entry}
+                gone={editingGone && entry.name === editingEntry?.name}
+                onEditingChange={(open) => setEditingEntry(open ? entry : undefined)}
+                onRemove={() => remove(entry.name)}
+              />
             ))}
         </div>
       )}
@@ -162,9 +176,23 @@ function RunnerPushWarning({
   );
 }
 
-function EnvVarRow({ entry, onRemove }: { entry: EnvVarView; onRemove: () => Promise<void> }) {
+function EnvVarRow({
+  entry,
+  gone,
+  onEditingChange,
+  onRemove,
+}: {
+  entry: EnvVarView;
+  gone: boolean;
+  onEditingChange: (open: boolean) => void;
+  onRemove: () => Promise<void>;
+}) {
   const scope = describeScope(entry.scope);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditingState] = useState(false);
+  function setEditing(open: boolean): void {
+    setEditingState(open);
+    onEditingChange(open);
+  }
   // 開くたびにダイアログを作り直す: 開く操作はメニューから来て onOpenChange(true) が呼ばれず、前回の入力途中の値が残るため
   const [editSession, setEditSession] = useState(0);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
@@ -207,7 +235,13 @@ function EnvVarRow({ entry, onRemove }: { entry: EnvVarView; onRemove: () => Pro
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <EditEnvVarDialog key={editSession} entry={entry} open={editing} onOpenChange={setEditing} />
+      <EditEnvVarDialog
+        key={editSession}
+        entry={entry}
+        gone={gone}
+        open={editing}
+        onOpenChange={setEditing}
+      />
       <ConfirmDialog
         open={confirmingRemove}
         onOpenChange={setConfirmingRemove}
@@ -225,10 +259,12 @@ function EnvVarRow({ entry, onRemove }: { entry: EnvVarView; onRemove: () => Pro
 // 空の値では保存させない: 空は「外す」の意味になるため
 function EditEnvVarDialog({
   entry,
+  gone,
   open,
   onOpenChange,
 }: {
   entry: EnvVarView;
+  gone: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -293,6 +329,14 @@ function EditEnvVarDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3 text-sm">
+          {gone && (
+            <p
+              role="alert"
+              className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn"
+            >
+              開いた後に、この環境変数はほかで消された。書きかけはそのまま残してある。保存すると、この名前で置き直す。
+            </p>
+          )}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">名前</span>
             <Input value={entry.name} readOnly className="font-mono" />
