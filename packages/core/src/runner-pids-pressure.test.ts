@@ -24,7 +24,7 @@ describe('PidsPressureNotices', () => {
   it('上限の 80% 以上で、器の値と担当の本数と「止める指示ではない」を添える', () => {
     const text = new PidsPressureNotices().next('manager', pressured, 0);
     expect(text).toContain('この器（runner）の pids が 870/1000（87%）で、上限に近い');
-    expect(text).toContain('この器で走っている担当 2 本（あなたを含む）');
+    expect(text).toContain('この器で手を動かしている担当 2 本');
     expect(text).toContain('止める指示ではない');
   });
 
@@ -75,13 +75,32 @@ describe('cachedPidsReader', () => {
 
 interface FakeSession {
   options: Options;
+  /** ターンを成功で終える（担当は done になる）。 */
+  finish(): Promise<void>;
 }
 
 function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
   const sessions: FakeSession[] = [];
   const fn = ((params: { prompt: unknown; options?: Options }) => {
-    sessions.push({ options: params.options ?? {} });
-    let release: (() => void) | null = null;
+    const queue: (SDKMessage | null)[] = [];
+    let wake: (() => void) | null = null;
+    const push = (message: SDKMessage | null) => {
+      queue.push(message);
+      wake?.();
+    };
+    sessions.push({
+      options: params.options ?? {},
+      async finish() {
+        push({
+          type: 'result',
+          subtype: 'success',
+          result: '済んだ',
+          session_id: 'sess-mgr',
+          uuid: `uuid-result-${String(sessions.length)}`,
+        } as unknown as SDKMessage);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+    });
     async function* generate(): AsyncGenerator<SDKMessage, void> {
       yield {
         type: 'system',
@@ -96,12 +115,21 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
           // 読み捨てる
         }
       })();
-      await new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      for (;;) {
+        const next = queue.shift();
+        if (next === null) return;
+        if (next !== undefined) {
+          yield next;
+          continue;
+        }
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+        wake = null;
+      }
     }
     return Object.assign(generate(), {
-      close: () => release?.(),
+      close: () => push(null),
       interrupt: async () => undefined,
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
@@ -117,7 +145,8 @@ afterEach(async () => {
 
 async function startWith(
   readPidsFn: (() => Promise<{ current: number; max: number } | undefined>) | undefined,
-): Promise<{ options: Options; events: RunnerEvent[] }> {
+  managerIds: readonly string[] = ['mgr-1'],
+): Promise<{ options: Options; events: RunnerEvent[]; host: RunnerHost; sessions: FakeSession[] }> {
   const events: RunnerEvent[] = [];
   const { fn, sessions } = fakeSdk();
   const host = createRunnerHost({
@@ -129,13 +158,13 @@ async function startWith(
     ...(readPidsFn === undefined ? {} : { readPidsFn }),
   });
   hosts.push(host);
-  await host.start({ managerId: 'mgr-1', request: '走る', cwd: '/work/project' });
-  const session = await vi.waitFor(() => {
-    const found = sessions[0];
-    if (!found) throw new Error('セッションがまだ開いていない');
-    return found;
+  for (const managerId of managerIds) {
+    await host.start({ managerId, request: '走る', cwd: '/work/project' });
+  }
+  await vi.waitFor(() => {
+    if (sessions.length < managerIds.length) throw new Error('セッションがまだ開いていない');
   });
-  return { options: session.options, events };
+  return { options: sessions[0]!.options, events, host, sessions };
 }
 
 function postToolUse(options: Options, input: Record<string, unknown>) {
@@ -161,7 +190,9 @@ describe('pids が上限に近い器の担当に、道具の結果へ知らせ�
 
     const own = contextOf(await postToolUse(options, managerBash));
     expect(own).toContain('この器（runner）の pids が 950/1000（95%）で、上限に近い');
-    expect(own).toContain('この器で走っている担当 1 本（あなたを含む）');
+    expect(own).toContain(
+      'この器で手を動かしている担当 1 本（ターン中・返事待ち・背景処理が残っているもの）',
+    );
 
     const byWorker = contextOf(
       await postToolUse(options, { ...managerBash, agent_id: 'agent-1', agent_type: 'worker' }),
@@ -175,6 +206,22 @@ describe('pids が上限に近い器の担当に、道具の結果へ知らせ�
       (event) => event.type === 'note' && event.text.includes('器の pids が 950/1000'),
     );
     expect(pidsNotes).toHaveLength(1);
+  });
+
+  it('担当の本数は、手を動かしている担当だけを数え、手が空いた done の担当は数えない', async () => {
+    const { host, sessions } = await startWith(
+      async () => ({ current: 950, max: 1000 }),
+      ['mgr-1', 'mgr-2', 'mgr-3'],
+    );
+    // mgr-3 のターンを終えて done にする（背景処理は無い）
+    await sessions[2]!.finish();
+    await vi.waitFor(async () => {
+      const states = await host.list();
+      expect(states.find((state) => state.managerId === 'mgr-3')?.status).toBe('done');
+    });
+
+    const own = contextOf(await postToolUse(sessions[0]!.options, managerBash));
+    expect(own).toContain('この器で手を動かしている担当 2 本');
   });
 
   it('上限から遠い器・読む口を渡さない構成では何も添えない', async () => {

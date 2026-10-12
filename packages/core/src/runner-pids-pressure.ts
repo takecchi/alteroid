@@ -14,7 +14,7 @@ import { isPidsUnderPressure } from './manager-auto-fold.js';
 export interface PidsPressureReading {
   readonly current: number;
   readonly max: number;
-  /** この器で走っている担当（委譲）の本数。自分を含む。 */
+  /** この器で手を動かしている担当（ターン中・返事待ち・背景処理が残っている委譲）の本数。手が空いた done の担当は数えない。 */
   readonly delegations: number;
 }
 
@@ -25,7 +25,7 @@ export function describePidsPressure(reading: PidsPressureReading): string {
   const percent = Math.round((reading.current / reading.max) * 100);
   return (
     `⚠ alteroid からの知らせ: この器（runner）の pids が ${String(reading.current)}/${String(reading.max)}（${String(percent)}%）で、上限に近い。` +
-    `pids の上限は器全体で1つで、この器で走っている担当 ${String(reading.delegations)} 本（あなたを含む）と、` +
+    `pids の上限は器全体で1つで、この器で手を動かしている担当 ${String(reading.delegations)} 本（ターン中・返事待ち・背景処理が残っているもの）と、` +
     'それぞれの作業者・dev サーバー・テスト・ブラウザが分け合っている。上限に当たると fork が断られ、Claude Code 本体ごと落ちることがある。' +
     '新しく重い処理（作業者の並列起動・dev サーバー・E2E・テストの並列実行・ブラウザ）を始める前に、' +
     '要らなくなった背景処理や dev サーバーを止め、同時に走らせる数を減らすことを考えること。' +

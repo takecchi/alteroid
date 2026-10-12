@@ -816,11 +816,23 @@ class Host implements RunnerHost {
     this.#lastDaemonContact = Date.now();
   }
 
-  // 本数は読んだ時点の `#sessions` から数える: 器の上の担当の数は、知らせを読む担当が「自分だけの問題ではない」と判断する材料のため
+  // 本数は「手を動かしている担当」だけを数える（ターン中・返事待ち・背景処理が残っている）: 手が空いた done の担当まで数えると、
+  // 知らせを読む担当が「pids を分け合っている相手」を多く見積もり、自分の分を軽く見るため
   async #pidsPressureReading(): Promise<PidsPressureReading | undefined> {
     const pids = await this.#readPids?.();
     if (pids === undefined) return undefined;
-    return { current: pids.current, max: pids.max, delegations: this.#sessions.size };
+    let active = 0;
+    for (const session of this.#sessions.values()) {
+      const state = session.state();
+      if (
+        state.status === 'running' ||
+        state.status === 'waiting_human' ||
+        (state.liveBackgroundTasks ?? 0) > 0
+      ) {
+        active += 1;
+      }
+    }
+    return { current: pids.current, max: pids.max, delegations: active };
   }
 
   delegationSessionPids(): { live: ReadonlySet<number>; knownTerminated: ReadonlySet<number> } {
@@ -4004,7 +4016,7 @@ class RunnerSession {
         type: 'note',
         managerId: this.#id,
         text:
-          `器の pids が ${String(reading.current)}/${String(reading.max)}（この器の担当 ${String(reading.delegations)} 本）で上限に近いので、` +
+          `器の pids が ${String(reading.current)}/${String(reading.max)}（この器で手を動かしている担当 ${String(reading.delegations)} 本）で上限に近いので、` +
           'この担当の道具の結果に「重い処理を重ねる前に、要らない背景処理を止めることを考えよ」という知らせを添えた（止める指示ではない）。',
       });
     }
