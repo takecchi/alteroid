@@ -16,6 +16,8 @@ const { withToolPhases } = await import('./tools.js');
 
 const mcpServer = { type: 'sdk', name: 'test', instance: {} } as unknown as McpServerConfig;
 
+type ToolHandler = (args: never, extra: unknown) => Promise<unknown>;
+
 async function invokeHook(hook: HookCallback | undefined, input: unknown): Promise<unknown> {
   if (hook === undefined) throw new Error('hook が登録されていない');
   return hook(input as never, 'tool-use-id', { signal: new AbortController().signal });
@@ -82,7 +84,8 @@ describe('ループの停止の見張りの印（#4485）', () => {
   });
 
   it('自作ツールは入口と出口の印を打ち、結果はそのまま返す。投げても出口の印を打つ', async () => {
-    const [ok, ng] = withToolPhases([
+    // 型は SDK の道具の形（args・extra を受ける）に揃える
+    const [ok, ng] = withToolPhases<{ name: string; handler: ToolHandler }>([
       {
         name: 'manager_list',
         handler: async () => {
