@@ -90,6 +90,8 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
   const [busy, setBusy] = useState(false);
   const [confirmingStop, setConfirmingStop] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  /** 停止を頼んだが、止まったと確かめられなかったときの断り（`not_stopped`・`unknown`）。 */
+  const [stopNotice, setStopNotice] = useState<string | undefined>(undefined);
 
   const manager = data?.manager;
   // 「見つからない」は 404 のときだけ言う: 500・409（壊れているだけ）で言うと、読めていないのに委譲が存在しないように読める。
@@ -128,16 +130,27 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
             open={confirmingStop}
             onOpenChange={setConfirmingStop}
             title="このマネージャーを停止しますか"
-            description="セッションを止めます（待機中のセッションも畳まれます）。進行中の作業は失われ、答えを待っている確認は畳まれます。停止すると一覧へ戻ります。"
+            description="セッションを止めます（待機中のセッションも畳まれます）。進行中の作業は失われ、答えを待っている確認は畳まれます。止まったと確かめられたら一覧へ戻ります。"
             confirmLabel="停止する"
             destructive
             onConfirm={() => {
               setBusy(true);
               setFailure(undefined);
+              setStopNotice(undefined);
               abortManager(id, '人間が画面から停止した')
-                .then(() => {
+                .then((result) => {
                   // 応答待ちに別のマネージャーへ移っていたら、その画面を動かさない。
-                  if (mounted.current) navigate({ pathname: '/managers', search });
+                  if (!mounted.current) return;
+                  // 止まったと言えるのは `stopped` のときだけ: `not_stopped`・`unknown` で一覧へ戻ると、止まっていない委譲を止めたと読ませる（CLI も同じく分ける）
+                  if (result.outcome === 'stopped') {
+                    navigate({ pathname: '/managers', search });
+                    return;
+                  }
+                  setStopNotice(
+                    redactBody(
+                      `${result.outcome === 'not_stopped' ? '止まっていない' : '止まったか確かめられなかった'}（${result.outcome}）: ${result.detail}`,
+                    ),
+                  );
                 })
                 .catch(setFailure)
                 .finally(() => setBusy(false));
@@ -148,6 +161,11 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
 
       {/* 404 は下のカードが日本語で言う。応答の素の文（英語の `not found`）を重ねて出さない。 */}
       <ErrorNote error={notFound ? failure : (error ?? failure)} className="mb-4" />
+      {stopNotice !== undefined && (
+        <p role="alert" className="mb-4 rounded-lg border border-warn/50 p-3 text-sm text-warn">
+          停止を頼んだが、止まったと確かめられていない。{stopNotice}
+        </p>
+      )}
 
       {isLoading ? (
         <Spinner />
