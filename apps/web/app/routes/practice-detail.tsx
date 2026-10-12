@@ -24,7 +24,7 @@ import {
   usePracticeVersion,
   usePracticeVersions,
 } from '@alteroid/swr';
-import { formatDateTime } from '@alteroid/logic';
+import { formatDateTime, redactBody } from '@alteroid/logic';
 import { practiceKindLabel } from './practices';
 
 import {
@@ -261,10 +261,11 @@ function PracticeDetailBody({ slug }: { slug: string }) {
               </p>
               <p className="mt-1 text-xs break-words">
                 種類: {practiceKindLabel(deleteConflict.current.practice.kind)} / 題:{' '}
-                {deleteConflict.current.practice.title}
+                {/* 伏せる: 本体の表示（<Markdown>）と揃える。下書きは編集欄に生のまま残っている */}
+                {redactBody(deleteConflict.current.practice.title)}
               </p>
               <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
-                {deleteConflict.current.practice.content}
+                {redactBody(deleteConflict.current.practice.content)}
               </pre>
               <p className="mt-2 text-xs text-muted-foreground">
                 この内容でも消すなら、もう一度「削除」を押して確認してください。
@@ -292,10 +293,10 @@ function PracticeDetailBody({ slug }: { slug: string }) {
               </p>
               <p className="mt-1 text-xs break-words">
                 種類: {practiceKindLabel(conflict.current.practice.kind)} / 題:{' '}
-                {conflict.current.practice.title}
+                {redactBody(conflict.current.practice.title)}
               </p>
               <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
-                {conflict.current.practice.content}
+                {redactBody(conflict.current.practice.content)}
               </pre>
             </>
           )}
@@ -345,7 +346,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
               <span className="mr-1.5 text-[10px]">
                 {kind === '' ? '（種類未設定）' : practiceKindLabel(kind)}
               </span>
-              {title}
+              {redactBody(title)}
             </p>
             {/* 外部の画像は読み込まない: やり方はクローンも書き、開いた瞬間に閲覧の時刻・IP が画像の置き場へ漏れるため */}
             <Markdown remoteImages={false}>{content}</Markdown>
@@ -440,7 +441,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                         <span className="mr-1.5 text-[10px] text-muted-foreground">
                           {practiceKindLabel(v.kind)}
                         </span>
-                        <span>{v.title}</span>
+                        <span>{redactBody(v.title)}</span>
                         <span className="block text-[10px] text-muted-foreground">
                           {formatDateTime(v.at)} · {v.chars} 文字
                         </span>
@@ -467,7 +468,8 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                   )}
                   <p className="mb-2 text-xs text-muted-foreground">
                     版{historyDetail.version.version}（
-                    {practiceKindLabel(historyDetail.version.kind)}）{historyDetail.version.title} ·{' '}
+                    {practiceKindLabel(historyDetail.version.kind)}）
+                    {redactBody(historyDetail.version.title)} ·{' '}
                     {formatDateTime(historyDetail.version.at)}
                   </p>
                   <Markdown remoteImages={false}>{historyDetail.version.content}</Markdown>

@@ -7,6 +7,7 @@ import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
+import { redactBody } from './redact.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
@@ -71,11 +72,12 @@ export async function memoryListCommand(now: number = Date.now()): Promise<void>
     stdout.write('置くには: alteroid memory edit <slug>\n');
     return;
   }
+  // 一覧は伏せる・show は伏せない: 一覧は表示の口で、show は本文をそのまま取り出すデータの口（パイプやリダイレクト）のため
   for (const doc of documents) {
     const marker = freshnessMarker(doc.descriptionFreshness);
-    const desc = doc.description === undefined ? '' : ` — ${marker}${doc.description}`;
+    const desc = doc.description === undefined ? '' : ` — ${marker}${redactBody(doc.description)}`;
     stdout.write(
-      `  [${doc.kind}] ${doc.slug}  — ${doc.title}` +
+      `  [${doc.kind}] ${doc.slug}  — ${redactBody(doc.title)}` +
         ` (作成: ${formatCreatedAtWithElapsed(doc.createdAt, now)} / 更新: ${doc.updatedAt})${desc}\n`,
     );
   }

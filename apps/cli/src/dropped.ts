@@ -9,6 +9,7 @@ import type { DroppedTraceOrigin } from '@alteroid/core';
 
 import { createClient } from './client.js';
 import { withErrorReason } from './format.js';
+import { redactBody } from './redact.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 
 export async function droppedCommand(): Promise<void> {
@@ -59,6 +60,7 @@ export function renderDropped(view: DroppedView): string {
     lines.push(describeDroppedTraceEmpty());
     return lines.join('\n');
   }
-  lines.push(...view.traces);
+  // 伏せる: 跡の行は理由の文を含むため（Web の握り潰しの跡と揃える）
+  lines.push(...view.traces.map((trace) => redactBody(trace)));
   return lines.join('\n');
 }

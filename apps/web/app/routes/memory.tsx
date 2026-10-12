@@ -22,6 +22,7 @@ import {
   formatCreatedAtRelative,
   formatMemoryStaleness,
   formatRelative,
+  redactBody,
 } from '@alteroid/logic';
 import type { MemorySummary } from '@alteroid/logic';
 
@@ -130,7 +131,10 @@ export default function Memory() {
                           >
                             {kindLabel(document.kind)}
                           </span>
-                          <span className="min-w-0 flex-1 truncate">{document.title}</span>
+                          {/* 伏せる: 題と説明は人間かクローンが書いた文で、本文（<Markdown>）と揃えるため */}
+                          <span className="min-w-0 flex-1 truncate">
+                            {redactBody(document.title)}
+                          </span>
                         </span>
                         <span className="block truncate font-mono text-[11px] text-muted-foreground">
                           {document.slug}
@@ -138,7 +142,7 @@ export default function Memory() {
                         {document.description !== undefined && (
                           <span className="line-clamp-2 break-words text-[11px] text-muted-foreground">
                             {freshnessMark(document.descriptionFreshness)}
-                            {document.description}
+                            {redactBody(document.description)}
                           </span>
                         )}
                         <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">

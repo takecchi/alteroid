@@ -10,6 +10,7 @@ import type { PermissionGrant } from '@alteroid/core';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { createClient } from './client.js';
 import { describeUnreadableRowsList, withErrorReason } from './format.js';
+import { redactBody } from './redact.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 
 export interface PermissionListOptions {
@@ -182,12 +183,15 @@ function describeBreadth(rule: string): string {
 function renderGrant(grant: PermissionGrant, now: Date): string {
   const staleness = assessPermissionGrantStaleness(grant, now);
   const lines: string[] = [];
+  // 描く所だけ伏せる: rule と answer は人間かクローンが書いた文で、鍵を貼ってしまうことがあるため（Web の許可の一覧と揃える）
   lines.push(
-    `${grant.revokedAt === undefined ? '[有効]' : '[取り消し済み]'}${staleness.stale ? ' ⚠️ [長期未使用]' : ''} ${grant.rule}`,
+    `${grant.revokedAt === undefined ? '[有効]' : '[取り消し済み]'}${staleness.stale ? ' ⚠️ [長期未使用]' : ''} ${redactBody(grant.rule)}`,
   );
   lines.push(`  id: ${grant.id}`);
   lines.push(`  広さ: ${describeBreadth(grant.rule)}`);
-  lines.push(`  承認: ${grant.grantedAt}（${grant.route.accountId}・"${grant.answer}"）`);
+  lines.push(
+    `  承認: ${grant.grantedAt}（${grant.route.accountId}・"${redactBody(grant.answer)}"）`,
+  );
   lines.push(
     `  最終使用: ${grant.lastUsedAt === undefined ? '（まだ使われていません）' : grant.lastUsedAt}`,
   );

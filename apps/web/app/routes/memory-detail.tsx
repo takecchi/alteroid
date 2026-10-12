@@ -16,7 +16,7 @@ import {
   useSaveMemory,
   useMemoryDocument,
 } from '@alteroid/swr';
-import { formatCreatedAt, formatDateTime } from '@alteroid/logic';
+import { formatCreatedAt, formatDateTime, redactBody } from '@alteroid/logic';
 
 import {
   LeaveGuardScope,
@@ -218,7 +218,8 @@ function MemoryDetailBody({ slug }: { slug: string }) {
                 いまの内容（{formatDateTime(deleteConflict.current.document.updatedAt)} に更新）
               </p>
               <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
-                {deleteConflict.current.document.content}
+                {/* 伏せる: 本体の表示（<Markdown>）と揃える。下書きは編集欄に生のまま残っている */}
+                {redactBody(deleteConflict.current.document.content)}
               </pre>
               <p className="mt-2 text-xs text-muted-foreground">
                 この内容でも消すなら、もう一度「削除」を押して確認してください。
@@ -245,7 +246,7 @@ function MemoryDetailBody({ slug }: { slug: string }) {
                 いまの内容（{formatDateTime(conflict.current.document.updatedAt)} に更新）
               </p>
               <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
-                {conflict.current.document.content}
+                {redactBody(conflict.current.document.content)}
               </pre>
             </>
           )}
