@@ -180,6 +180,7 @@ import {
 } from './usage-limits.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 import { UsageRecordOrder, type UsageRecordTicket, usageDate } from './usage.js';
+import { notePhase } from './loop-stall.js';
 
 /**
  * SDK をここで動かさない: 同じ器で走らせるとマネージャーが `/proc/1/environ` から
@@ -9314,6 +9315,9 @@ class Pool implements ManagerPool {
   ): Promise<void> {
     if (this.#onUsageObservation === undefined) return;
     const observedBy = this.#tokenIdentities.get(managerId);
+    // 回し手へ渡す前後に印を打つ（#4485）: 利用上限で担当が一斉に落ちた回（2026-10-13T16:52Z〜）に、`rate_limit` の後で
+    // 印の無い停止が続いた。回し手（鍵の回転の判断・配布・セッションの作り直し）が止めていたなら、窓に `-done` が無いまま残る
+    notePhase(`manager:token-rotation:${managerId}`);
     try {
       await this.#onUsageObservation({
         ...observation,
@@ -9322,6 +9326,7 @@ class Pool implements ManagerPool {
     } catch (error) {
       noteDroppedRecord('認証トークンの切替', `manager ${managerId}`, error);
     }
+    notePhase(`manager:token-rotation-done:${managerId}`);
   }
 
   // 名簿が判定不能なら移ったとは言わない（`case 'closed'` / `'resume_failed'` と同じ）。

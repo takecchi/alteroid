@@ -114,6 +114,10 @@ const CONNECTION_HEALTHY_THRESHOLD_MS = DEFAULT_SSE_HEARTBEAT_MS * 2;
 // 300000ms（undici の既定値）に揃えない: 数の理由がこのシステムの中から導けなくなるため
 const RUNNER_STREAM_SILENCE_TIMEOUT_MS = DEFAULT_SSE_HEARTBEAT_MS * 3;
 
+// `/events` を読む間、この量を読むたびにループへ順番を返す（#4485）。1MB の解読・区切り探しは数 ms で、返す回数が多すぎず、
+// 数百 MB の流れでも1回の占有が見張りの閾値（1秒）を大きく下回る
+const SSE_READ_YIELD_BYTES = 1024 * 1024;
+
 // `unref` する: 見張りは接続が在るあいだ回るもので、止めたはずのデーモンの終了を引き延ばさないため
 function defaultSetTimer(ms: number, onFire: () => void): () => void {
   const timer = setTimeout(onFire, ms);
@@ -690,10 +694,15 @@ class HttpRunner implements RunnerClient {
     // 1本の文字列へ足して先頭から探さない: 数十 MB のフレームで写しと走査が2乗になり、ループを秒単位で塞ぐため（#4485。`sse-frames.ts`）
     const splitter = new SseFrameSplitter();
     let firstIdSeen = false;
+    // 溜まった流れの `read()` はマイクロタスクで次々に解決するので、自分から順番を返さないと、数百 MB を読み終えるまで
+    // タイマー（見張り・期限）も他の入出力も一度も回らない（2026-10-13T16:52Z〜、印の無い 6〜7 秒の停止。#4485）。
+    // 時間ではなく読んだ量で返す: `#nowFn()` の呼び出しを増やさない（`onBytes` の注記）
+    let bytesSinceYield = 0;
     for (;;) {
       const { value, done } = await reader.read();
       if (done) return;
       onBytes();
+      bytesSinceYield += value.byteLength;
 
       for (const frame of splitter.push(decoder.decode(value, { stream: true }))) {
         const lines = frame.split('\n');
@@ -733,6 +742,10 @@ class HttpRunner implements RunnerClient {
             this.#noteDropped(dropped, 'unparsable', undefined, data.length);
           }
         }
+      }
+      if (bytesSinceYield >= SSE_READ_YIELD_BYTES) {
+        bytesSinceYield = 0;
+        await new Promise<void>((resolve) => setImmediate(resolve));
       }
     }
   }
