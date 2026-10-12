@@ -15,6 +15,7 @@ import {
 
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeScope } from './credential.js';
+import { redactError } from './redact.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
@@ -387,9 +388,13 @@ function report(label: string, result: ApplyResult): void {
         : `  ${label}: 反映しました（${names.join(' ')}）\n`,
     );
   } else {
-    stdout.write(`  ${label}: 反映できませんでした — ${result.error ?? '理由不明'}\n`);
+    // 伏せる: シェルの stderr は入力の行（`export GH_TOKEN=…`）を引用し、古いデーモンは runner の結果を伏せずに返すため
+    stdout.write(
+      `  ${label}: 反映できませんでした — ${result.error === undefined ? '理由不明' : redactError(result.error)}\n`,
+    );
   }
-  const output = result.output ?? '';
+  // デーモンの `redactProfileFailure` と同じ網（error 用）で伏せる: `set -x` は `export 名前=値` の形で値ごと吐くため
+  const output = redactError(result.output ?? '');
   if (output.trim().length > 0) {
     for (const line of output.trimEnd().split('\n')) stdout.write(`    | ${line}\n`);
   }

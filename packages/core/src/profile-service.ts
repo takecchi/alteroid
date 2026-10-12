@@ -6,6 +6,7 @@ import {
   type PreparedProfile,
   type ProfileApplier,
   type ProfileApplyResult,
+  redactProfileFailure,
 } from './profile.js';
 import type {
   RunnerClient,
@@ -354,7 +355,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
           script.length === 0 ? current === undefined : current?.sha256 === fingerprintOf(script);
         if (!unreadable && same) return null;
 
-        return runner.setProfile(script);
+        return redactRunnerResult(await runner.setProfile(script));
       }),
   };
 
@@ -363,11 +364,33 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
     return Promise.all(
       (await runners.list()).map(async (runner) => {
         try {
-          return { runnerId: runner.runnerId, ...(await runner.setProfile(script)) };
+          return {
+            runnerId: runner.runnerId,
+            ...redactRunnerResult(await runner.setProfile(script)),
+          };
         } catch (error) {
-          return { runnerId: runner.runnerId, ok: false, error: reasonOf(error) };
+          return redactRunnerResult({
+            runnerId: runner.runnerId,
+            ok: false,
+            error: reasonOf(error),
+          });
         }
       }),
     );
   }
+}
+
+/**
+ * runner の結果も、クローンの結果と同じく出口で伏せる: runner は別の器で、入口の伏せ字に頼ると
+ * 差し替えた器の出力が素通りするため（`redactProfileFailure` の注記と同じ理由）。無い欄は足さない。
+ */
+function redactRunnerResult<T extends { error?: string | undefined; output?: string | undefined }>(
+  result: T,
+): T {
+  const redacted = redactProfileFailure(result, process.env);
+  return {
+    ...result,
+    ...(result.error === undefined ? {} : { error: redacted.error }),
+    ...(result.output === undefined ? {} : { output: redacted.output }),
+  };
 }
