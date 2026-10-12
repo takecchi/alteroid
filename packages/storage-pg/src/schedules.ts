@@ -162,10 +162,32 @@ export class PgScheduleStore implements ScheduleStore {
     await this.#db.delete(schedules).where(eq(schedules.kind, kind));
   }
 
-  /** `get()` を先に呼ばず `DELETE … RETURNING` の1文で済ませる: 読んでから書くまでの隙間を作らない。 */
-  async removeIfPresent(kind: string): Promise<ScheduledRequest | 'unreadable' | null> {
+  /** `get()` を先に呼ばず `DELETE … RETURNING` の1文で済ませる: 読んでから書くまでの隙間を作らない。版つきは `for update` で押さえてから比べて消す。 */
+  async removeIfPresent(
+    kind: string,
+    options?: { ifMatch?: string },
+  ): Promise<ScheduledRequest | 'unreadable' | null> {
     // NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(kind)) return null;
+    const ifMatch = options?.ifMatch;
+    if (ifMatch !== undefined) {
+      return this.#db.transaction(async (tx) => {
+        const locked = await tx
+          .select({ plan: schedules.plan })
+          .from(schedules)
+          .where(eq(schedules.kind, kind))
+          .limit(1)
+          .for('update');
+        const current = locked[0];
+        if (current === undefined) return null;
+        const parsed = scheduledRequestSchema.safeParse(current.plan);
+        // 読めない行は、見た版とは合いようがない
+        if (!parsed.success) throw new ScheduleConflictError(kind, null);
+        if (parsed.data.updatedAt !== ifMatch) throw new ScheduleConflictError(kind, parsed.data);
+        await tx.delete(schedules).where(eq(schedules.kind, kind));
+        return parsed.data;
+      });
+    }
     const rows = await this.#db
       .delete(schedules)
       .where(eq(schedules.kind, kind))

@@ -83,6 +83,7 @@ function SchedulePage() {
   const [ran, setRan] = useState<string | undefined>(undefined);
   const [removing, setRemoving] = useState<string | undefined>(undefined);
   const [confirmingRemove, setConfirmingRemove] = useState<string | undefined>(undefined);
+  const [removeBase, setRemoveBase] = useState<string | undefined>(undefined);
   const [confirmingUnreadable, setConfirmingUnreadable] = useState<string | undefined>(undefined);
   const [editing, setEditing] = useState<string | undefined>(undefined);
   /**
@@ -316,7 +317,11 @@ function SchedulePage() {
                         variant="danger"
                         aria-label={`${entry.kind} を外す`}
                         loading={removing === entry.kind}
-                        onClick={() => setConfirmingRemove(entry.kind)}
+                        onClick={() => {
+                          // 確かめに入った時点に見ていた版を控える: 確かめている間に書き換えられた依頼を、見ないまま外さないため（#4599）
+                          setRemoveBase(entry.updatedAt);
+                          setConfirmingRemove(entry.kind);
+                        }}
                       >
                         外す
                       </Button>
@@ -333,7 +338,7 @@ function SchedulePage() {
                         onConfirm={() => {
                           setRemoving(entry.kind);
                           setFailure(undefined);
-                          removeSchedule(entry.kind)
+                          removeSchedule(entry.kind, removeBase)
                             .catch(setFailure)
                             .finally(() => setRemoving(undefined));
                         }}

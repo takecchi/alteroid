@@ -687,10 +687,13 @@ export function createMemoryStores(): Stores {
     async remove(kind) {
       schedules.delete(kind);
     },
-    async removeIfPresent(kind) {
+    async removeIfPresent(kind, options) {
       // `'unreadable'` を返さない: `Map` には `parse` を通った値しか入らない。
       const found = schedules.get(kind);
       if (found === undefined) return null;
+      if (options?.ifMatch !== undefined && found.updatedAt !== options.ifMatch) {
+        throw new ScheduleConflictError(kind, isolate(found));
+      }
       schedules.delete(kind);
       return isolate(found);
     },

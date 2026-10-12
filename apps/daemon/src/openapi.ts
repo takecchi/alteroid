@@ -537,6 +537,11 @@ export const scheduleConflictResponseSchema = z.object({
   current: scheduledRequestSchema.nullable(),
 });
 
+// `DELETE /schedule/{kind}` の本文。`ifMatch` は一覧で見た `updatedAt`。省けば比べない（`{}` を送る今までの呼び手もそのまま通る）
+export const scheduleRemoveRequestSchema = z.object({
+  ifMatch: z.string().min(1).optional(),
+});
+
 export const scheduleListResponseSchema = z.object({
   entries: z.array(scheduleStatusSchema),
   // 1件でも在るときだけ載せる: 空配列を作ると「読めない行は無い」と読めてしまうため。

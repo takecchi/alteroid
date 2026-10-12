@@ -329,6 +329,7 @@ import {
   runnersVacateCommandSchema,
   runnersVacateResponseSchema,
   scheduleConflictResponseSchema,
+  scheduleRemoveRequestSchema,
   scheduleListResponseSchema,
   tokensPolicyUpdateRequestSchema,
   tokensConflictResponseSchema,
@@ -5859,21 +5860,36 @@ export function createApp(deps: AppDeps) {
         summary: '継続中の依頼を外す',
         description:
           '済んだ依頼・もう要らない依頼をここで外す。既定の定期ジョブは仕込みではないので' +
-          'ここでは外せない（間隔と締め時刻はデーモンの設定である）。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** `DELETE` だが本文が必須なのは、' +
+          'ここでは外せない（間隔と締め時刻はデーモンの設定である）。' +
+          '本文の `ifMatch`（一覧で見た `updatedAt`）を渡すと、見た後にその依頼が書き換えられていたとき外さずに 409。' +
+          '省けば今までどおり比べない（読めない行を外すときは省く）。',
+        requestBody: {
+          required: true,
+          description:
+            '`{}` か `{ "ifMatch": "<見た updatedAt>" }`。`DELETE` だが本文が必須なのは、' +
             '門番（`deliberateClient`）が `content-type: application/json` を要求することを' +
             'spec の機械可読部で表す手段がこれしか無いからである（`DELETE /managers/{id}` も' +
             '本文を要求する）。',
-        ),
+          content: { 'application/json': { schema: resolver(scheduleRemoveRequestSchema) } },
+        },
         responses: {
           200: {
             description: '外した。',
             content: { 'application/json': { schema: resolver(okResponseSchema) } },
           },
+          400: {
+            description: '本文の形が不正（`ifMatch` が空文字など）。外していない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
           404: {
             description: 'その kind の継続中の依頼が無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '`ifMatch` がいまの依頼の版と違う（見た後に書き換えられた・読めない形になった）。外していない。' +
+              '`current` はいまの依頼（読めないときは `null`）。',
+            content: { 'application/json': { schema: resolver(scheduleConflictResponseSchema) } },
           },
           ...noBodyPostResponses(),
         },
@@ -5881,8 +5897,46 @@ export function createApp(deps: AppDeps) {
       deliberateClient,
       async (c) => {
         const kind = c.req.param('kind');
+        // `jsonBody` で検査しない: 本文は空でも `{}` でも通す約束（`noBodyPostRequestBody` の注記）で、本文を付けない呼び手（CLI の /unschedule）が居る。
+        // 本文が在って `ifMatch` が在るときだけ読み、形が違えば外さずに 400
+        const raw = await c.req.text();
+        let ifMatch: string | undefined;
+        if (raw.trim() !== '') {
+          let parsedBody: unknown;
+          try {
+            parsedBody = JSON.parse(raw);
+          } catch {
+            return c.json({ error: '外す依頼の入力の形が不正（外していない）' as const }, 400);
+          }
+          const checked = scheduleRemoveRequestSchema.safeParse(parsedBody);
+          if (!checked.success) {
+            return c.json(
+              { error: '外す依頼の入力の形が不正（外していない）: ifMatch' as const },
+              400,
+            );
+          }
+          ifMatch = checked.data.ifMatch;
+        }
         // `get(kind)` を先に呼ばない: `get` は読めない行で throw するので、壊れた行を外す目的まで届かない。`removeIfPresent` は3値を1回の往復で返すので、読んでから書くまでの隙間も無い。
-        const removed = await stores.schedules.removeIfPresent(kind);
+        // 版の比較もストアの排他の中で行う（`editRequest` と同じ）
+        let removed: Awaited<ReturnType<typeof stores.schedules.removeIfPresent>>;
+        try {
+          removed = await stores.schedules.removeIfPresent(
+            kind,
+            ifMatch === undefined ? undefined : { ifMatch },
+          );
+        } catch (error) {
+          if (error instanceof ScheduleConflictError) {
+            return c.json(
+              {
+                error: '継続中の依頼が見た後に変わっています（外していません）' as const,
+                current: error.current,
+              },
+              409,
+            );
+          }
+          throw error;
+        }
         if (removed === null) return c.json({ error: 'not found' as const }, 404);
         // 外すこと自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
         await appendJournalOrDrop(

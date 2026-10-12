@@ -750,8 +750,15 @@ export interface ScheduleStore {
    *
    * `get` → `remove` の2操作にしない: 読んでから書くまでの隙間が残るうえ、`get` が読めない行で投げて壊れた依頼を片付ける手が無くなる
    * （`editRequest` / `PermissionGrantStore.revoke` と同じ理由）。
+   *
+   * `options.ifMatch`（人間が見た `updatedAt`）を渡すと、比較を消すのと同じ排他の中で行い、読めた行の版が違えば何も消さず
+   * `ScheduleConflictError`（`current` はいまの依頼）。在るが読めない行も、見た版とは合いようがないので衝突（`current: null`）。
+   * 無い kind は版を問わず `null`（消すものが無い）。省略は今までどおり比べない（読めない行を片付ける口を塞がないため）。
    */
-  removeIfPresent(kind: string): Promise<ScheduledRequest | 'unreadable' | null>;
+  removeIfPresent(
+    kind: string,
+    options?: { ifMatch?: string },
+  ): Promise<ScheduledRequest | 'unreadable' | null>;
 
   /**
    * 依頼の「人間・クローンが直す欄」（`request` / `spec`）だけを差し替える。

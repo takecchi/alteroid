@@ -182,10 +182,21 @@ export class FsScheduleStore implements ScheduleStore {
   }
 
   /** `get()` を先に呼ばない: 読めない行では `remove()` まで届く前に例外が上がる。読みと書きを1回の `#update` に閉じる。 */
-  async removeIfPresent(kind: string): Promise<ScheduledRequest | 'unreadable' | null> {
+  async removeIfPresent(
+    kind: string,
+    options?: { ifMatch?: string },
+  ): Promise<ScheduledRequest | 'unreadable' | null> {
     // `T` を明示する: 推論だけだと `'unreadable'` が `string` へ広がって型が合わなくなる。
     return this.#update<ScheduledRequest | 'unreadable' | null>((file) => {
       const found = file.schedules.find((entry) => entry.kind === kind);
+      // 版の比較も同じ `#update` の中: 外で比べると、比べてから消すまでに別の書き手が入れる
+      if (
+        found !== undefined &&
+        options?.ifMatch !== undefined &&
+        found.updatedAt !== options.ifMatch
+      ) {
+        throw new ScheduleConflictError(kind, found);
+      }
       if (found !== undefined) {
         return {
           next: {
@@ -200,6 +211,8 @@ export class FsScheduleStore implements ScheduleStore {
       }
       const invalidRaw = file.invalidSchedulesRaw.find((raw) => extractKind(raw) === kind);
       if (invalidRaw === undefined) return { next: file, result: null };
+      // 見た版とは合いようがない: 人間が見た後に読めない形へ変わった
+      if (options?.ifMatch !== undefined) throw new ScheduleConflictError(kind, null);
       return {
         next: {
           ...file,

@@ -20294,13 +20294,21 @@
         "operationId": "deleteScheduleByKind",
         "tags": ["schedule"],
         "summary": "継続中の依頼を外す",
-        "description": "済んだ依頼・もう要らない依頼をここで外す。既定の定期ジョブは仕込みではないのでここでは外せない（間隔と締め時刻はデーモンの設定である）。",
+        "description": "済んだ依頼・もう要らない依頼をここで外す。既定の定期ジョブは仕込みではないのでここでは外せない（間隔と締め時刻はデーモンの設定である）。本文の `ifMatch`（一覧で見た `updatedAt`）を渡すと、見た後にその依頼が書き換えられていたとき外さずに 409。省けば今までどおり比べない（読めない行を外すときは省く）。",
         "requestBody": {
           "required": true,
-          "description": "**中身は読まないので `{}` を送ればよい。** `DELETE` だが本文が必須なのは、門番（`deliberateClient`）が `content-type: application/json` を要求することをspec の機械可読部で表す手段がこれしか無いからである（`DELETE /managers/{id}` も本文を要求する）。",
+          "description": "`{}` か `{ \"ifMatch\": \"<見た updatedAt>\" }`。`DELETE` だが本文が必須なのは、門番（`deliberateClient`）が `content-type: application/json` を要求することをspec の機械可読部で表す手段がこれしか無いからである（`DELETE /managers/{id}` も本文を要求する）。",
           "content": {
             "application/json": {
-              "schema": {}
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ifMatch": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
             }
           }
         },
@@ -20322,6 +20330,22 @@
               }
             }
           },
+          "400": {
+            "description": "本文の形が不正（`ifMatch` が空文字など）。外していない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
           "404": {
             "description": "その kind の継続中の依頼が無い。",
             "content": {
@@ -20334,6 +20358,127 @@
                     }
                   },
                   "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`ifMatch` がいまの依頼の版と違う（見た後に書き換えられた・読めない形になった）。外していない。`current` はいまの依頼（読めないときは `null`）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "current": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64,
+                              "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                            },
+                            "spec": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "const": "daily"
+                                    },
+                                    "at": {
+                                      "type": "string",
+                                      "pattern": "^(?:[01]?\\d|2[0-3]):[0-5]\\d$"
+                                    }
+                                  },
+                                  "required": ["type", "at"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "const": "every"
+                                    },
+                                    "minutes": {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 525600
+                                    }
+                                  },
+                                  "required": ["type", "minutes"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "const": "cron"
+                                    },
+                                    "expression": {
+                                      "type": "string",
+                                      "maxLength": 120
+                                    }
+                                  },
+                                  "required": ["type", "expression"]
+                                }
+                              ]
+                            },
+                            "request": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "createdAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            "updatedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            "lastRunAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            "lastScheduledRunAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            "pendingRun": {
+                              "type": "object",
+                              "properties": {
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "cause": {
+                                  "type": "string",
+                                  "enum": ["schedule", "manual"]
+                                }
+                              },
+                              "required": ["at", "cause"]
+                            }
+                          },
+                          "required": ["kind", "spec", "request", "createdAt", "updatedAt"]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["error", "current"]
                 }
               }
             }

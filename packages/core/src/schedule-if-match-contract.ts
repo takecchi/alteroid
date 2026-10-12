@@ -123,5 +123,25 @@ export async function verifyScheduleIfMatchContract(store: ScheduleStore): Promi
   if (edited !== 1)
     fail(`同じ版を前提にした同時の editRequest が ${edited} 件通った（1件だけのはず）`);
 
+  // 外す（removeIfPresent）も、見た版を前提にできる（#4599）
+  const seen = (await store.get(kind))?.updatedAt;
+  if (seen === undefined) fail('外す前に行が無い');
+  await store.editRequest(kind, { request: '見た後の書き換え', spec }, t(9), {});
+  const staleRemove = await conflictOf(() => store.removeIfPresent(kind, { ifMatch: seen }));
+  if (staleRemove === null) fail('古い版を前提にした removeIfPresent が断られない');
+  if (staleRemove.current?.request !== '見た後の書き換え')
+    fail('外すときの衝突の current が最新でない');
+  if ((await store.get(kind))?.request !== '見た後の書き換え') fail('衝突したのに行が消えた');
+  const removed = await store.removeIfPresent(kind, { ifMatch: t(9) });
+  if (removed === null || removed === 'unreadable' || removed.request !== '見た後の書き換え') {
+    fail('いまの版を前提にした removeIfPresent が外せない');
+  }
+  if ((await store.get(kind)) !== null) fail('いまの版で外したのに行が残った');
+  if ((await store.removeIfPresent(kind, { ifMatch: t(9) })) !== null) {
+    fail('無い kind への版つき removeIfPresent が null を返さない');
+  }
+  await store.put({ kind, spec, request: '後勝ちで外す', createdAt: t(0), updatedAt: t(1) });
+  if ((await store.removeIfPresent(kind)) === null) fail('版を省いた removeIfPresent が外せない');
+
   await store.remove(kind);
 }

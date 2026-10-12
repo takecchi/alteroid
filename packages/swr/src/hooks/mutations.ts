@@ -457,16 +457,34 @@ export function useCreateSchedule() {
   );
 }
 
+/** `DELETE /schedule/{kind}` が 409 を返した（見た後に、その依頼がほかで書き換えられた。外していない）。投げる前に一覧を取り直してある。 */
+export class ScheduleRemoveConflictError extends ApiError {
+  constructor() {
+    super(
+      409,
+      '見た後に、この予定はほかで書き換えられたので、外していない（一覧を読み直した）。いまの内容を確かめてから、もう一度外す',
+    );
+    this.name = 'ScheduleRemoveConflictError';
+  }
+}
+
 // 既定の定期ジョブの名前をここへ書き写さない: 数え上げを持つのは `RESERVED_SCHEDULE_KINDS` だけにするため
+// `ifMatch` は一覧で見た `updatedAt`（#4599）。読めない行を外すときは版が無いので省く
 export function useRemoveSchedule() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (kind: string) => {
-      // `body: {}` を送る: 門番（`deliberateClient`）が `content-type: application/json` を要求し、本文が無いと付かないため
-      await api.api
-        .DELETE('/schedule/{kind}', { params: { path: { kind } }, body: {} })
-        .then(unwrap);
+    async (kind: string, ifMatch?: string) => {
+      // `body` を必ず送る: 門番（`deliberateClient`）が `content-type: application/json` を要求し、本文が無いと付かないため
+      const result = await api.api.DELETE('/schedule/{kind}', {
+        params: { path: { kind } },
+        body: ifMatch === undefined ? {} : { ifMatch },
+      });
+      if (result.response.status === 409) {
+        await mutate(KEY.schedule);
+        throw new ScheduleRemoveConflictError();
+      }
+      unwrap(result);
       await mutate(KEY.schedule);
     },
     [api, mutate],
