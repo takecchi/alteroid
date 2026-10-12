@@ -84,21 +84,40 @@ function SchedulePage() {
   const [removing, setRemoving] = useState<string | undefined>(undefined);
   const [confirmingRemove, setConfirmingRemove] = useState<string | undefined>(undefined);
   const [editing, setEditing] = useState<string | undefined>(undefined);
+  /**
+   * 編集を開いた時点の依頼の写し。編集中にほかで消されると、取り直した一覧からその行が消え、編集の枠ごと
+   * アンマウントされて下書きも「ほかで消された」の案内も黙って消える。写しで同じ鍵の行を残し、枠を保つ。
+   */
+  const [editingEntry, setEditingEntry] = useState<ScheduleEntry | undefined>(undefined);
   const [editDirty, setEditDirty] = useState(false);
   const [switchingTo, setSwitchingTo] = useState<{ next: string | undefined } | undefined>(
     undefined,
   );
+  function openEditing(next: string | undefined) {
+    setEditing(next);
+    setEditingEntry(
+      next === undefined ? undefined : data?.entries.find((entry) => entry.kind === next),
+    );
+  }
   function requestEditing(next: string | undefined) {
     if (next === editing) return;
     if (editing !== undefined && editDirty) {
       setSwitchingTo({ next });
       return;
     }
-    setEditing(next);
+    openEditing(next);
   }
   const [failure, setFailure] = useState<unknown>(undefined);
   // 取れなかったのを0件と描かない: 「登録された定期ジョブが無い」は状態の断定になるため
   const listUnavailable = data === undefined && error !== undefined;
+  // 編集中の依頼が一覧から消えたら（ほかで消された）、開いた時点の写しで行を残す
+  const editingGone =
+    editing !== undefined &&
+    editingEntry !== undefined &&
+    data !== undefined &&
+    !data.entries.some((entry) => entry.kind === editing);
+  const shownEntries =
+    data === undefined ? [] : editingGone ? [...data.entries, editingEntry] : data.entries;
   // 一覧が読めていないときは空にする: 確かめようが無いので送る側を止めないため
   const existingKinds: ReadonlySet<string> = new Set([
     ...(data?.entries ?? []).filter((entry) => entry.request !== undefined).map((e) => e.kind),
@@ -125,7 +144,7 @@ function SchedulePage() {
         confirmLabel={switchingTo?.next === undefined ? '破棄して閉じる' : '破棄して切り替える'}
         destructive
         onConfirm={() => {
-          if (switchingTo !== undefined) setEditing(switchingTo.next);
+          if (switchingTo !== undefined) openEditing(switchingTo.next);
           setSwitchingTo(undefined);
         }}
       />
@@ -144,7 +163,7 @@ function SchedulePage() {
         <CardHeader title="定期ジョブ" subtitle="既定で回っている。ここは待たずに試すための口" />
         {isLoading ? (
           <Spinner />
-        ) : listUnavailable ? null : data === undefined || data.entries.length === 0 ? (
+        ) : listUnavailable ? null : data === undefined || shownEntries.length === 0 ? (
           <Empty>
             {(data?.unreadable ?? []).length > 0
               ? '読めた範囲では、登録された定期ジョブが無い。'
@@ -152,123 +171,134 @@ function SchedulePage() {
           </Empty>
         ) : (
           <ul>
-            {data.entries.map((entry) => (
-              <li
-                key={entry.kind}
-                /* flex-wrap と break-words を付ける: 右側の時刻+バッジとボタンが合計で入りきらないことがあり、kind は空白を持たない最大64字で break-words が無いとはみ出しうるため */
-                className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
-              >
-                {/* 説明文の列に最小幅を持たせる: min-w-0 flex-1 のままだと折り返しの判定で幅 0 の項目として数えられ、説明文だけが 46px ほどに潰れたため */}
-                <div className="min-w-[min(14rem,100%)] flex-1">
-                  {/* 描く所だけ伏せる: 依頼の本文は人間かクローンが書いた自由文で、約束の一覧も同じ種類の本文を伏せるため（編集欄は再送する本文なので伏せない） */}
-                  <p className="text-sm">{redactBody(entry.description)}</p>
-                  {/* 既定の仕込みの kind は出さない: 内部の識別子を利用者に見せないため */}
-                  {entry.request !== undefined && (
-                    <p className="mt-0.5 text-[11px] break-words text-muted-foreground">
-                      名前: <span className="font-mono break-words">{entry.kind}</span>
-                    </p>
+            {shownEntries.map((entry) => {
+              // 編集中にほかで消された依頼の行（写し）。操作は消えた依頼に向かうので出さない
+              const gone = editingGone && entry.kind === editing;
+              return (
+                <li
+                  key={entry.kind}
+                  /* flex-wrap と break-words を付ける: 右側の時刻+バッジとボタンが合計で入りきらないことがあり、kind は空白を持たない最大64字で break-words が無いとはみ出しうるため */
+                  className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
+                >
+                  {/* 説明文の列に最小幅を持たせる: min-w-0 flex-1 のままだと折り返しの判定で幅 0 の項目として数えられ、説明文だけが 46px ほどに潰れたため */}
+                  <div className="min-w-[min(14rem,100%)] flex-1">
+                    {/* 描く所だけ伏せる: 依頼の本文は人間かクローンが書いた自由文で、約束の一覧も同じ種類の本文を伏せるため（編集欄は再送する本文なので伏せない） */}
+                    <p className="text-sm">{redactBody(entry.description)}</p>
+                    {/* 既定の仕込みの kind は出さない: 内部の識別子を利用者に見せないため */}
+                    {entry.request !== undefined && (
+                      <p className="mt-0.5 text-[11px] break-words text-muted-foreground">
+                        名前: <span className="font-mono break-words">{entry.kind}</span>
+                      </p>
+                    )}
+                    {/* 既定の仕込みの名前を書き写さない: 数え上げを持つのは RESERVED_SCHEDULE_KINDS だけのため */}
+                    {/* 本文は <Markdown> を使わず line-clamp-3 で畳む: 畳まないと一覧の1行が画面外まで伸びるため */}
+                    {entry.request !== undefined && (
+                      <>
+                        <p className="mt-1 line-clamp-3 text-xs break-words text-muted-foreground">
+                          {redactBody(entry.request)}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-muted-foreground">
+                          前回:{' '}
+                          {entry.lastRunAt === undefined
+                            ? 'まだ一度も動いていない'
+                            : formatDateTime(entry.lastRunAt)}
+                          {' · 全文・周期は「編集」で見られる'}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                  <div className="shrink-0 text-right text-[11px] text-muted-foreground">
+                    <p>{formatDateTime(entry.nextAt)}</p>
+                    <Badge tone="accent">{formatRelative(entry.nextAt)}</Badge>
+                  </div>
+                  {/* 消された行は操作の代わりに断る（同じ位置の1枠で差し替える: 枠の数を変えると下の編集欄が作り直される） */}
+                  {gone ? (
+                    <span role="status" className="shrink-0 text-[11px] text-warn">
+                      この依頼は、ほかで消された（一覧には残っていない）。編集欄の「自分の内容で上書きする」で作り直せる。
+                    </span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      aria-label={`${entry.kind} を今すぐ回す`}
+                      loading={running.has(entry.kind)}
+                      onClick={() => {
+                        if (runningRef.current.has(entry.kind)) return;
+                        runningRef.current.add(entry.kind);
+                        setRunning(new Set(runningRef.current));
+                        setRan(undefined);
+                        setFailure(undefined);
+                        runSchedule(entry.kind)
+                          // 「終わった」とは書かない: デーモンは scheduler.run が真なら { ok: true } を返すだけで、ターンの結果は待たないため
+                          .then(() => setRan(entry.kind))
+                          .catch(setFailure)
+                          .finally(() => {
+                            runningRef.current.delete(entry.kind);
+                            setRunning(new Set(runningRef.current));
+                          });
+                      }}
+                    >
+                      今すぐ回す
+                    </Button>
                   )}
-                  {/* 既定の仕込みの名前を書き写さない: 数え上げを持つのは RESERVED_SCHEDULE_KINDS だけのため */}
-                  {/* 本文は <Markdown> を使わず line-clamp-3 で畳む: 畳まないと一覧の1行が画面外まで伸びるため */}
-                  {entry.request !== undefined && (
+                  {ran === entry.kind && (
+                    <span role="status" className="shrink-0 text-[11px] text-muted-foreground">
+                      起こした（結果は待っていない）
+                    </span>
+                  )}
+                  {/* 既定の仕込みは外すボタンを消さず「既定（外せない）」と書く: ボタンだけ消すと押せない理由が画面から消えるため */}
+                  {entry.request === undefined ? (
+                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                      既定（外せない）
+                    </span>
+                  ) : gone ? null : (
                     <>
-                      <p className="mt-1 line-clamp-3 text-xs break-words text-muted-foreground">
-                        {redactBody(entry.request)}
-                      </p>
-                      <p className="mt-0.5 text-[11px] text-muted-foreground">
-                        前回:{' '}
-                        {entry.lastRunAt === undefined
-                          ? 'まだ一度も動いていない'
-                          : formatDateTime(entry.lastRunAt)}
-                        {' · 全文・周期は「編集」で見られる'}
-                      </p>
+                      <Button
+                        size="sm"
+                        aria-label={`${entry.kind} を編集`}
+                        onClick={() => requestEditing(entry.kind)}
+                      >
+                        編集
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        aria-label={`${entry.kind} を外す`}
+                        loading={removing === entry.kind}
+                        onClick={() => setConfirmingRemove(entry.kind)}
+                      >
+                        外す
+                      </Button>
+                      {/* 押した瞬間には実行せず確認を挟む: 外すと依頼の本文も周期も消えて取り消せないため */}
+                      <ConfirmDialog
+                        open={confirmingRemove === entry.kind}
+                        onOpenChange={(open) => {
+                          if (!open) setConfirmingRemove(undefined);
+                        }}
+                        title={`予定「${entry.kind}」を外しますか`}
+                        description="依頼の本文と周期が消え、元に戻せません。"
+                        confirmLabel="外す"
+                        destructive
+                        onConfirm={() => {
+                          setRemoving(entry.kind);
+                          setFailure(undefined);
+                          removeSchedule(entry.kind)
+                            .catch(setFailure)
+                            .finally(() => setRemoving(undefined));
+                        }}
+                      />
                     </>
                   )}
-                </div>
-                <div className="shrink-0 text-right text-[11px] text-muted-foreground">
-                  <p>{formatDateTime(entry.nextAt)}</p>
-                  <Badge tone="accent">{formatRelative(entry.nextAt)}</Badge>
-                </div>
-                <Button
-                  size="sm"
-                  aria-label={`${entry.kind} を今すぐ回す`}
-                  loading={running.has(entry.kind)}
-                  onClick={() => {
-                    if (runningRef.current.has(entry.kind)) return;
-                    runningRef.current.add(entry.kind);
-                    setRunning(new Set(runningRef.current));
-                    setRan(undefined);
-                    setFailure(undefined);
-                    runSchedule(entry.kind)
-                      // 「終わった」とは書かない: デーモンは scheduler.run が真なら { ok: true } を返すだけで、ターンの結果は待たないため
-                      .then(() => setRan(entry.kind))
-                      .catch(setFailure)
-                      .finally(() => {
-                        runningRef.current.delete(entry.kind);
-                        setRunning(new Set(runningRef.current));
-                      });
-                  }}
-                >
-                  今すぐ回す
-                </Button>
-                {ran === entry.kind && (
-                  <span role="status" className="shrink-0 text-[11px] text-muted-foreground">
-                    起こした（結果は待っていない）
-                  </span>
-                )}
-                {/* 既定の仕込みは外すボタンを消さず「既定（外せない）」と書く: ボタンだけ消すと押せない理由が画面から消えるため */}
-                {entry.request === undefined ? (
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                    既定（外せない）
-                  </span>
-                ) : (
-                  <>
-                    <Button
-                      size="sm"
-                      aria-label={`${entry.kind} を編集`}
-                      onClick={() => requestEditing(entry.kind)}
-                    >
-                      編集
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      aria-label={`${entry.kind} を外す`}
-                      loading={removing === entry.kind}
-                      onClick={() => setConfirmingRemove(entry.kind)}
-                    >
-                      外す
-                    </Button>
-                    {/* 押した瞬間には実行せず確認を挟む: 外すと依頼の本文も周期も消えて取り消せないため */}
-                    <ConfirmDialog
-                      open={confirmingRemove === entry.kind}
-                      onOpenChange={(open) => {
-                        if (!open) setConfirmingRemove(undefined);
-                      }}
-                      title={`予定「${entry.kind}」を外しますか`}
-                      description="依頼の本文と周期が消え、元に戻せません。"
-                      confirmLabel="外す"
-                      destructive
-                      onConfirm={() => {
-                        setRemoving(entry.kind);
-                        setFailure(undefined);
-                        removeSchedule(entry.kind)
-                          .catch(setFailure)
-                          .finally(() => setRemoving(undefined));
-                      }}
+                  {editing === entry.kind && (
+                    <ScheduleEditForm
+                      entry={entry}
+                      onCancel={() => requestEditing(undefined)}
+                      onSaved={() => openEditing(undefined)}
+                      onDirtyChange={setEditDirty}
                     />
-                  </>
-                )}
-                {editing === entry.kind && (
-                  <ScheduleEditForm
-                    entry={entry}
-                    onCancel={() => requestEditing(undefined)}
-                    onSaved={() => setEditing(undefined)}
-                    onDirtyChange={setEditDirty}
-                  />
-                )}
-              </li>
-            ))}
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </Card>
