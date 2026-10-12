@@ -56,7 +56,7 @@ export interface JournalWindow {
 
 export function useJournalWindow(selected: readonly JournalEntryType[], q = ''): JournalWindow {
   const api = useApi();
-  const { recent } = useJournalFeed();
+  const { recent, status } = useJournalFeed();
   const joined = selected.join(',');
 
   const [isLoadingInitial, setLoadingInitial] = useState(true);
@@ -224,7 +224,29 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoadingOlder, isLoadingInitial, olderStatus]);
 
+  // SSE が切れていた間の行を埋める（#4575）: 切れていた間の行は SSE では届かない。張り直した後の新着を先頭へ積むと
+  // 窓の先頭が進み、`since`（窓の先頭）で取り直しても間の行は二度と取れない。そこで、切れた時点の先頭を控えておき、
+  // 張り直したらそこから取り直す。取り直しが済むまでは SSE の新着を積まない（積むと間の行が新着の手前に挟まって並びが崩れる）
+  const gapSinceRef = useRef<string | undefined>(undefined);
+  const [resync, setResync] = useState(0);
   useEffect(() => {
+    if (isLoadingInitial || entriesRef.current.length === 0) return;
+    if (status !== 'live') {
+      gapSinceRef.current ??= newerPageQuery(entriesRef.current)?.since;
+      return;
+    }
+    const since = gapSinceRef.current;
+    if (since === undefined) return;
+    refreshNewerAt(JOURNAL_PAGE, since, () => {
+      gapSinceRef.current = undefined;
+      setResync((n) => n + 1);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, isLoadingInitial]);
+
+  useEffect(() => {
+    // 張り直しの取り直しが済むまでは積まない（上の注記）。済んだら `resync` が変わって、たまった新着を取り込み直す
+    if (gapSinceRef.current !== undefined) return;
     // SSE で届く新着にも画面の絞りを掛ける: 掛けないと、検索中の画面へ当たらない行が割り込む
     // 窓の先頭より古い行は取り込まない: `recent` は画面を開く前の行も持ち、窓に入らなかった行が最新の行の上に積まれるため
     const filtered = notOlderThanWindow(entriesRef.current, filterRecent(recent, selected, q));
@@ -234,11 +256,15 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     setEntries(applied.entries);
     entriesRef.current = applied.entries;
     setNewerBlocked(false);
-  }, [recent, selected, q]);
+  }, [recent, selected, q, resync]);
 
-  function refreshNewerAt(limit: number): void {
-    const query = newerPageQuery(entriesRef.current);
-    if (query === undefined) return;
+  // `since` を渡すと、その時点から取り直す（張り直しの取り直し）。渡さなければ窓の先頭から。`onSettled` は通っても落ちても呼ぶ
+  function refreshNewerAt(limit: number, since?: string, onSettled?: () => void): void {
+    const query = since === undefined ? newerPageQuery(entriesRef.current) : { since };
+    if (query === undefined) {
+      onSettled?.();
+      return;
+    }
     setLoadingNewer(true);
     api.api
       .GET('/journal', { params: { query: buildQuery(limit, query) } })
@@ -247,17 +273,19 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
         setNewerError(undefined);
         const applied = applyNewerPage(entriesRef.current, data.entries, limit, JOURNAL_MAX_LIMIT);
         if (applied.outcome === 'retryLarger') {
-          refreshNewerAt(JOURNAL_MAX_LIMIT);
+          refreshNewerAt(JOURNAL_MAX_LIMIT, since, onSettled);
           return;
         }
         setEntries(applied.entries);
         entriesRef.current = applied.entries;
         setNewerBlocked(applied.outcome === 'blocked');
         setLoadingNewer(false);
+        onSettled?.();
       })
       .catch((caught: unknown) => {
         setNewerError(caught);
         setLoadingNewer(false);
+        onSettled?.();
       });
   }
 
