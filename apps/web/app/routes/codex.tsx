@@ -22,7 +22,7 @@ import {
   useRunners,
   useStartCodexLogin,
 } from '@alteroid/swr';
-import { formatDateTime } from '@alteroid/logic';
+import { formatDateTime, redactError } from '@alteroid/logic';
 import type { CodexAuthStatusView, CodexLoginView, RunnerSummary } from '@alteroid/logic';
 
 export default function Codex() {
@@ -243,7 +243,8 @@ function StatusDetail({ status }: { status: CodexAuthStatusView }) {
       {status.failure !== null && (
         <p role="alert" className="text-sm text-destructive">
           切れている・失効した・更新に失敗した（{formatDateTime(status.failure.at)}）:{' '}
-          {status.failure.reason}。再ログインしてください。
+          {/* 伏せる: 理由は runner と codex app-server のエラー文で、CLI の alteroid codex も伏せて出すため */}
+          {redactError(status.failure.reason)}。再ログインしてください。
         </p>
       )}
     </div>
@@ -261,7 +262,7 @@ function describeLoginState(view: CodexLoginView): string {
     case 'expired':
       return 'コードの期限が切れた（正本は変わっていない）。もう一度ログインする';
     case 'failed':
-      return `失敗した（正本は変わっていない）: ${view.error ?? '理由不明'}`;
+      return `失敗した（正本は変わっていない）: ${redactError(view.error ?? '理由不明')}`;
     default:
       // 投げずにそのまま出す: web とデーモンは別に配られ、サーバのほうが新しい窓が在るため
       return `未知の状態（${String(view.state)}）`;
