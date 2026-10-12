@@ -522,6 +522,8 @@ function hasHumanWithClientMessageId(lines: Line[], clientMessageId: string): bo
 export interface EditedVersion {
   text: string;
   hiddenFollowUps: { role: 'human' | 'clone' | 'approval'; text: string }[];
+  /** その版の発言に付いていた添付。無ければ欄ごと無い（版によって添付を外したり足したりするので、最新の版の添付で代えない）。 */
+  attachments?: readonly MessageAttachment[];
 }
 
 function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
@@ -612,7 +614,14 @@ export function buildEditVersions(
     const hiddenFollowUps = folded
       .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
       .map(({ role, text }) => ({ role, text }));
-    return { text: message?.text ?? '', hiddenFollowUps };
+    return {
+      text: message?.text ?? '',
+      hiddenFollowUps,
+      // 履歴の行と同じく、空の添付は欄ごと持たない
+      ...(message?.attachments === undefined || message.attachments.length === 0
+        ? {}
+        : { attachments: message.attachments }),
+    };
   });
 }
 
@@ -3013,6 +3022,9 @@ export function ChatPane({
                       ? versions[versionIndex]
                       : undefined;
                   const displayedText = viewing?.text ?? line.text;
+                  // 版を見ているときは添付も版のものを出す（`??` で最新の版の添付へ落とさない: 添付の無い版は「無い」が正しい）
+                  const displayedAttachments =
+                    viewing === undefined ? line.attachments : viewing.attachments;
 
                   return (
                     <ChatMessage
@@ -3041,9 +3053,9 @@ export function ChatPane({
                       }
                       hasDraft={hasEditDraft(editDrafts.get(line.key), line)}
                       attachments={
-                        line.attachments === undefined ? undefined : (
+                        displayedAttachments === undefined ? undefined : (
                           <Suspense fallback={null}>
-                            <MessageAttachments attachments={line.attachments} />
+                            <MessageAttachments attachments={displayedAttachments} />
                           </Suspense>
                         )
                       }
