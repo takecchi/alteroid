@@ -203,6 +203,7 @@ import type {
 } from './runner-protocol.js';
 import { readAttachmentLimits, readRunnerAttachmentStageLimit } from './attachment.js';
 import { redactImagesInEntries, redactImagesInTranscript } from './transcript-image-redaction.js';
+import { chunkMirrorEntries, MIRROR_EVENT_MAX_CHARS } from './mirror-chunks.js';
 import {
   deleteRescueRef,
   RescueMemory,
@@ -2443,17 +2444,19 @@ class RunnerSession {
   #sessionLog(): AgentSessionLog {
     return {
       append: async (key: AgentSessionLogKey, entries: unknown[]) => {
-        this.#emit({
-          type: 'mirror',
-          managerId: this.#id,
-          key: {
-            projectKey: key.projectKey,
-            sessionId: key.sessionId,
-            ...(key.subpath === undefined ? {} : { subpath: key.subpath }),
-          },
-          // 画像の中身は mirror（pg）へ流さない: 保持期限後も消えない生ログになるため
-          entries: redactImagesInEntries(entries),
-        });
+        const mirrorKey = {
+          projectKey: key.projectKey,
+          sessionId: key.sessionId,
+          ...(key.subpath === undefined ? {} : { subpath: key.subpath }),
+        };
+        // 画像の中身は mirror（pg）へ流さない: 保持期限後も消えない生ログになるため
+        // 書き出し1回分を丸ごと1件にしない: 数十 MB の1行をデーモンが受けて処理する間、ループが秒単位で塞がるため（#4485）
+        for (const chunk of chunkMirrorEntries(
+          redactImagesInEntries(entries),
+          MIRROR_EVENT_MAX_CHARS,
+        )) {
+          this.#emit({ type: 'mirror', managerId: this.#id, key: mirrorKey, entries: chunk });
+        }
         this.#emit({ type: 'project_key', managerId: this.#id, projectKey: key.projectKey });
       },
       load: async (key: AgentSessionLogKey) => {

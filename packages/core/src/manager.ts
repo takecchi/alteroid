@@ -3007,6 +3007,36 @@ class Pool implements ManagerPool {
 
   readonly #usageOrder = new UsageRecordOrder();
 
+  /**
+   * 同じ生ログ（`projectKey`・`sessionId`・`subpath`）への `mirror` の預けを、届いた順に1つずつ行う（#4485）。
+   * `#onEvent` は並行に走るので、並べないと先の預け（大きい書き出し）が pg へ届く前に後の預けが追い越し、
+   * 生ログの行が挿入の順（`seq`）で読み戻されるときに入れ替わる。札は最初の `await` より前に取る（`#usageOrder` と同じ）。
+   */
+  readonly #mirrorTails = new Map<string, Promise<void>>();
+  readonly #mirrorTurns = new WeakMap<RunnerEvent, Promise<void>>();
+
+  #takeMirrorTurn(event: Extract<RunnerEvent, { type: 'mirror' }>): () => void {
+    // 欄の欠けで落とさない: 落とすと預けそのものが失われる（並べる鍵が粗くなるだけで済ませる）
+    const key = [event.managerId, event.key?.projectKey, event.key?.sessionId, event.key?.subpath]
+      .map((part) => String(part ?? '').replaceAll('\u0000', ''))
+      .join('\u0000');
+    const previous = this.#mirrorTails.get(key) ?? Promise.resolve();
+    let release = (): void => undefined;
+    const done = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => done);
+    this.#mirrorTails.set(key, tail);
+    this.#mirrorTurns.set(event, previous);
+    return () => {
+      release();
+      // 最後の札なら消す: 生ログの鍵ごとに積もらせない
+      void tail.then(() => {
+        if (this.#mirrorTails.get(key) === tail) this.#mirrorTails.delete(key);
+      });
+    };
+  }
+
   /** 名乗っていない runner（旧 runner）は `stop()` が一切待たない。新しい器の `hello` が来たら消す（古い名乗りで新しい器を待たない）。 */
   readonly #farewellRunners = new Set<string>();
   #rescueSweeping = false;
@@ -7493,6 +7523,8 @@ class Pool implements ManagerPool {
     // 札は最初の `await` より前に取る（理由は `UsageRecordOrder`、`usage.ts`）。
     const usageTicket =
       event.type === 'usage' ? this.#usageOrder.ticket(`manager:${event.managerId}`) : undefined;
+    // 返すのは処理の終わり（`finally`）: 途中で return・throw しても後の預けを止めないため
+    const releaseMirrorTurn = event.type === 'mirror' ? this.#takeMirrorTurn(event) : undefined;
     const fetchGate = this.#enterReportFetchGate(event);
     try {
       // 待つ相手が無いときは `await` を挟まない（余計な yield が並行した出来事の順序を変えるため）
@@ -7500,6 +7532,7 @@ class Pool implements ManagerPool {
       await this.#handleEvent(event, fromRunnerId, usageTicket);
     } finally {
       usageTicket?.release();
+      releaseMirrorTurn?.();
       fetchGate.release();
     }
   }
@@ -8459,6 +8492,8 @@ class Pool implements ManagerPool {
       case 'mirror': {
         const store = this.#stores.sessionStore;
         if (store === undefined) return;
+        // 同じ生ログへの先の預けが終わるのを待つ（`#mirrorTails`）
+        await this.#mirrorTurns.get(event);
         try {
           await store.append(event.key, event.entries as never);
         } catch (error) {
