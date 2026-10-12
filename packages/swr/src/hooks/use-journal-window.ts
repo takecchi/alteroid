@@ -269,9 +269,32 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     api.api
       .GET('/journal', { params: { query: buildQuery(limit, query) } })
       .then(unwrap)
-      .then((data) => {
+      // 1頁で止めない（#4577）: 既定は新しい順で `limit` で切られるので、`since` より後が1頁を超えると最新の分だけが返り、
+      // 窓の先頭との間が黙って欠ける。`next` が `null` になるまで、`since` を保ったまま継続点で読み進めてからまとめて積む
+      .then(async (first) => {
+        const rows = [...first.entries];
+        let next = first.next;
+        while (next !== undefined && next !== null) {
+          const page = await api.api
+            .GET('/journal', {
+              params: {
+                query: buildQuery(limit, { ...query, afterId: next.id, afterAt: next.at }),
+              },
+            })
+            .then(unwrap);
+          rows.push(...page.entries);
+          next = page.next;
+        }
+        return { rows, followedCursor: first.next !== undefined };
+      })
+      .then(({ rows, followedCursor }) => {
         setNewerError(undefined);
-        const applied = applyNewerPage(entriesRef.current, data.entries, limit, JOURNAL_MAX_LIMIT);
+        const page = applyNewerPage(entriesRef.current, rows, limit, JOURNAL_MAX_LIMIT);
+        // 継続点を終端まで辿ったなら、新着が無いのは「本当に無い」: 件数で推すのは継続点を返さない古いデーモンのときだけ
+        const applied =
+          followedCursor && page.outcome !== 'progress'
+            ? { ...page, outcome: 'end' as const }
+            : page;
         if (applied.outcome === 'retryLarger') {
           refreshNewerAt(JOURNAL_MAX_LIMIT, since, onSettled);
           return;
