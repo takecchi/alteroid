@@ -10,6 +10,7 @@ import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
 import { LoadError } from '~/components/load-error';
 import { ApprovalsTabs } from '~/components/group-tabs';
 import { UnreadableApprovalNote } from '~/components/unreadable-approval-note';
+import { isApprovalSending, markApprovalSending } from '~/lib/approval-sending';
 import {
   Page,
   Button,
@@ -30,6 +31,7 @@ import {
   saveApprovalDrafts,
   saveApprovalLeftoverSources,
   settleApprovalDraft,
+  settleStoredApprovalDraft,
   type ApprovalDrafts,
   type ApprovalLeftoverSource,
   type ApprovalLeftoverSources,
@@ -250,14 +252,18 @@ export default function Approvals() {
   async function submitBulk(): Promise<void> {
     // 送信中は何もしない（二重に送らない）。
     if (bulkBusyRef.current) return;
-    // 描画を待たず、いまカードが送信中の id も外す。
-    const targets = pendingDrafts.filter(([id]) => !sendingIdsRef.current.has(id));
+    // 描画を待たず、いまカードが送信中の id も外す（画面を離れる前に送り始めた分も、共有の置き場で見る）。
+    const targets = pendingDrafts.filter(
+      ([id]) => !sendingIdsRef.current.has(id) && !isApprovalSending(id),
+    );
     if (targets.length === 0) return;
     bulkBusyRef.current = true;
     // 送る id を送信中として持つ。答えが通って一覧から消える描画のあいだも、保存先の下書きを
     // 落とさない（下の `settleDraft` で畳む・残すが決まるまで）。
     const targetIds = targets.map(([id]) => id);
     setSending(targetIds, true);
+    for (const id of targetIds) markApprovalSending(id, true);
+    const epoch = chatDraftEpoch();
     // 送るときに下書きを控える。応答を待つ間に打ち足した分を、成功のあとに消さないため。
     const sentTexts = drafts.texts;
     const sentQuestions = drafts.questions;
@@ -268,13 +274,11 @@ export default function Approvals() {
       const nextErrors: Record<string, string> = {};
       for (const result of results) {
         if (result.ok) {
+          const sent = { text: sentTexts[result.id] ?? '', questions: sentQuestions[result.id] };
+          // 保存側も畳む: 応答を待つ間に画面を離れていたら、下の settleDraft は届かないため
+          settleStoredApprovalDraft(result.id, sent, epoch);
           const approval = approvalsList?.find((a) => a.id === result.id);
-          if (approval !== undefined) {
-            settleDraft(approval, {
-              text: sentTexts[result.id] ?? '',
-              questions: sentQuestions[result.id],
-            });
-          }
+          if (approval !== undefined) settleDraft(approval, sent);
         } else {
           nextErrors[result.id] = result.error ?? '不明な失敗';
         }
@@ -289,6 +293,7 @@ export default function Approvals() {
     } finally {
       bulkBusyRef.current = false;
       setSending(targetIds, false);
+      for (const id of targetIds) markApprovalSending(id, false);
       setBulkBusy(false);
     }
   }

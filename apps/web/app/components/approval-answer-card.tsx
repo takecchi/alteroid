@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
+import { isApprovalSending, markApprovalSending, useApprovalSending } from '~/lib/approval-sending';
 
 import {
   ApprovalCard,
@@ -12,7 +13,12 @@ import {
   type ApprovalQuestionsDraft,
 } from '@alteroid/ui';
 import { useAnswerApproval } from '@alteroid/swr';
-import { formatDateTime, summarizeQuestions } from '@alteroid/logic';
+import {
+  chatDraftEpoch,
+  formatDateTime,
+  settleStoredApprovalDraft,
+  summarizeQuestions,
+} from '@alteroid/logic';
 import type { PendingApproval } from '@alteroid/logic';
 
 export function isApprovalAnswered(approval: PendingApproval): boolean {
@@ -71,6 +77,8 @@ export function ApprovalAnswerCard({
   const [busy, setBusy] = useState(false);
   // state は次の描画まで古いので、同じ描画の中の2回目の押下は ref で止める。
   const sendingRef = useRef(false);
+  // 画面を離れて戻ってきたカード（作り直された）にも、送っている途中であることを伝える
+  const sendingElsewhere = useApprovalSending(approval.id);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [ownDraft, setOwnDraft] = useState('');
   const currentDraft = draft ?? ownDraft;
@@ -81,20 +89,27 @@ export function ApprovalAnswerCard({
   const state = withdrawn ? 'withdrawn' : answered ? 'answered' : 'unanswered';
 
   async function send(request: () => Promise<void>, sent: SentApprovalDraft) {
-    // 送信中（このカード・まとめ送信）は何もしない: 同じ承認を二重に送らない。
-    if (sendingRef.current || bulkBusy) return;
+    // 送信中（このカード・まとめ送信・アンマウント前の別のカード）は何もしない: 同じ承認を二重に送らない。
+    if (sendingRef.current || bulkBusy || isApprovalSending(approval.id)) return;
     sendingRef.current = true;
+    markApprovalSending(approval.id, true);
+    // 送り始めた時点の epoch: 応答までにログアウトを挟んだら、保存側の下書きを書き戻さない
+    const epoch = chatDraftEpoch();
     onSendingChange?.(true);
     setBusy(true);
     setFailure(undefined);
     try {
       await request();
+      // 保存側の下書きもここで畳む: 応答を待つ間に画面を離れていると、画面の onAnswered は届かず（アンマウント済み）、
+      // 戻ったときに送る前の下書きが読み直されて「送らなかった下書き」として出るため
+      settleStoredApprovalDraft(approval.id, sent, epoch);
       onAnswered?.(sent);
     } catch (caught) {
       setFailure(caught);
       onFailed?.(caught);
     } finally {
       sendingRef.current = false;
+      markApprovalSending(approval.id, false);
       setBusy(false);
       onSendingChange?.(false);
     }
@@ -175,7 +190,7 @@ export function ApprovalAnswerCard({
       {...(questionsDraft === undefined || onQuestionsDraftChange === undefined
         ? {}
         : { questionsDraft, onQuestionsDraftChange })}
-      busy={busy || bulkBusy}
+      busy={busy || bulkBusy || sendingElsewhere}
       footer={footer}
       error={errors}
       trailing={trailing}

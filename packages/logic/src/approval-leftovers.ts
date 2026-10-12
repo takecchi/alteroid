@@ -1,5 +1,9 @@
 import type { ApprovalDrafts, StoredQuestionsDraft } from './approval-drafts.js';
-import { isEmptyQuestionsDraft } from './approval-drafts.js';
+import {
+  isEmptyQuestionsDraft,
+  loadApprovalDrafts,
+  saveApprovalDrafts,
+} from './approval-drafts.js';
 
 export interface LeftoverQuestion {
   id: string;
@@ -49,6 +53,18 @@ export function settleApprovalDraft(
   if (dropText) delete texts[id];
   if (dropQuestions) delete questions[id];
   return { texts, questions };
+}
+
+/**
+ * 保存してある下書き（sessionStorage）を、答えが通ったものとして畳む。
+ * 画面の state を畳むだけでは、応答を待つ間に画面を離れていたとき（画面がアンマウント済み）保存側が送る前の
+ * 下書きのまま残り、戻ったときに「送らなかった下書き」として出てしまう。`epoch` は送り始めた時点の
+ * `chatDraftEpoch()`（ログアウトを挟んだら書き戻さない）。
+ */
+export function settleStoredApprovalDraft(id: string, sent: SentDraft, epoch?: number): void {
+  const current = loadApprovalDrafts();
+  const next = settleApprovalDraft(current, id, sent);
+  if (next !== current) saveApprovalDrafts(next, epoch);
 }
 
 export function describeApprovalLeftover(
