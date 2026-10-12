@@ -32,6 +32,7 @@ import {
   useTokens,
   ApiError,
   TokenNotFoundError,
+  TokenPoolChangedError,
 } from '@alteroid/swr';
 import { formatDateTime, formatRelative, TOKEN_ID_PARAM } from '@alteroid/logic';
 import type {
@@ -64,8 +65,37 @@ export default function Tokens() {
 }
 
 // フォームの入力は失敗時に消さない: 保存していないので、貼り直しを強いないため
-function TokenWriteError({ error, className }: { error: unknown; className?: string }) {
+function TokenWriteError({
+  error,
+  className,
+  onRetry,
+}: {
+  error: unknown;
+  className?: string;
+  onRetry?: () => void;
+}) {
   if (error === undefined || error === null) return null;
+  // 取り直してから送るまでの間に、ほかでプールが変わった: 何も変えておらず、一覧は読み直してある（#4591）
+  if (error instanceof TokenPoolChangedError) {
+    return (
+      <div
+        role="alert"
+        className={cn('rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs', className)}
+      >
+        <p className="font-medium text-warn">
+          読んだ後に、トークンの一覧がほかで変わった。何も変えていない。
+        </p>
+        <p className="mt-1 text-muted-foreground">
+          一覧は読み直した。いまの一覧を確かめてから、このまま置き直すか、やめる。
+        </p>
+        {onRetry !== undefined && (
+          <Button size="sm" className="mt-2" onClick={onRetry}>
+            このまま置き直す
+          </Button>
+        )}
+      </div>
+    );
+  }
   return (
     <div className={className}>
       <ErrorNote error={error} />
@@ -127,7 +157,7 @@ function AddTokenForm() {
             autoComplete="off"
           />
         </label>
-        <TokenWriteError error={failure} />
+        <TokenWriteError error={failure} onRetry={() => void submit()} />
         <div>
           <Button
             variant="primary"
@@ -439,6 +469,8 @@ function TokenRow({
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [busy, setBusy] = useState<'disable' | 'enable' | 'remove' | null>(null);
   const [failure, setFailure] = useState<unknown>(undefined);
+  // 409（ほかで変わった）のときだけ、同じ操作を「このまま置き直す」で撃ち直せるよう持つ
+  const [retry, setRetry] = useState<(() => void) | undefined>(undefined);
   const rowRef = useRef<HTMLLIElement>(null);
 
   // スクロールは mount 時の1回で足りる: PoolCard は useTokens のデータが届いてから TokenRow を描画するので、effect が走る時点で行は既に DOM に在るため
@@ -448,15 +480,21 @@ function TokenRow({
     }
   }, [highlighted]);
 
+  function fail(caught: unknown, again: () => void): void {
+    if (caught instanceof TokenNotFoundError) onGone(caught);
+    else setFailure(caught);
+    setRetry(caught instanceof TokenPoolChangedError ? () => again : undefined);
+  }
+
   async function toggleDisabled(next: boolean) {
     setBusy(next ? 'disable' : 'enable');
     setFailure(undefined);
+    setRetry(undefined);
     onGone(undefined);
     try {
       await setDisabled(token.id, next);
     } catch (caught) {
-      if (caught instanceof TokenNotFoundError) onGone(caught);
-      else setFailure(caught);
+      fail(caught, () => void toggleDisabled(next));
     } finally {
       setBusy(null);
     }
@@ -465,12 +503,12 @@ function TokenRow({
   async function remove() {
     setBusy('remove');
     setFailure(undefined);
+    setRetry(undefined);
     onGone(undefined);
     try {
       await removeToken(token.id);
     } catch (caught) {
-      if (caught instanceof TokenNotFoundError) onGone(caught);
-      else setFailure(caught);
+      fail(caught, () => void remove());
     } finally {
       setBusy(null);
     }
@@ -567,7 +605,7 @@ function TokenRow({
         ]}
       />
 
-      <TokenWriteError error={failure} className="mt-2" />
+      <TokenWriteError error={failure} className="mt-2" onRetry={retry} />
       <div className="mt-2 flex flex-wrap gap-1.5">
         {token.disabledAt === undefined ? (
           <Button
