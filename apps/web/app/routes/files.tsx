@@ -76,9 +76,20 @@ export default function Files() {
   const conversationId = searchParams.get(CONVERSATION_PARAM) ?? undefined;
 
   const [draft, setDraft] = useState(committed);
+  // 自分が URL へ書いた語を持つ: 外からの変更（ナビのリンク・戻る）と区別しないと、打鍵中の入力を自分の書き込みの反映で巻き戻すため
+  const [written, setWritten] = useState<string | null>(null);
+  const [seen, setSeen] = useState(committed);
+  // 外からの変更を描画中に draft へ取り込む（日誌の #3985 と同じ）: 取り込まないと、debounce の後に古い draft で URL を書き戻し、
+  // リンクで検索を外せない・別の語へ移っても元の語に戻る
+  if (committed !== seen) {
+    setSeen(committed);
+    setWritten(null);
+    if (committed !== written) setDraft(committed);
+  }
   useEffect(() => {
     if (draft === committed) return;
     const timer = setTimeout(() => {
+      setWritten(draft);
       setSearchParams(
         (previous) => {
           const next = new URLSearchParams(previous);
