@@ -23,6 +23,7 @@ import {
 import {
   ApiError,
   ProfileRejectedError,
+  ProfileChangedError,
   useProfile,
   useRemoveProfileEntry,
   useSetProfileEntry,
@@ -102,6 +103,7 @@ function ProfileBody() {
       script: entry.script,
       scope: entry.scope,
       original: entry,
+      baseVersion: entry.version,
     });
   }
 
@@ -289,7 +291,8 @@ function EntryRow({
     setBusy(true);
     setFailure(undefined);
     try {
-      const update = await removeEntry(entry.name);
+      // 一覧で見た版を前提に外す: 見た後にほかで書き換えられた行を、確かめないまま外さないため（#4592）
+      const update = await removeEntry(entry.name, entry.version);
       onRemoved(entry.name, update);
     } catch (caught) {
       // 404 は失敗の注記にせず親へ渡す: 取り直しで行が消え、注記を出す先も無くなるため
@@ -385,6 +388,11 @@ interface EditorState {
   script: string;
   scope: ProfileScope;
   original?: Pick<ProfileEntryView, 'script' | 'scope'>;
+  /**
+   * 編集を開いた時点（または直前に自分が保存した時点）の行の版。保存の `ifMatch` に送る（#4592）。
+   * 新しい行の入力では持たない（送るときに一覧から決める）。古いデーモンは版を返さないので `undefined`。
+   */
+  baseVersion?: string;
 }
 
 function ProfileEditor({
@@ -426,13 +434,26 @@ function ProfileEditor({
       ? entries.find((entry) => entry.name === editor.name)
       : undefined;
 
-  async function submit(state: EditorState) {
+  // 送る版: 既存の行の編集は開いた時点の版、新しい行の入力は一覧で見た同名の行の版（無ければ「無いときだけ作る」の null）。
+  // `override` は「このまま置き直す」で、409 で返ったいまの版を前提にするときだけ渡す
+  function ifMatchFor(state: EditorState): string | null | undefined {
+    if (state.existing) return state.baseVersion;
+    const seen = entries.find((entry) => entry.name === state.name);
+    return seen === undefined ? null : seen.version;
+  }
+
+  async function submit(state: EditorState, override?: { ifMatch: string | null | undefined }) {
     setBusy(true);
     setFailure(undefined);
     try {
       const update = legacy
         ? await setLegacy(state.script)
-        : await setEntry(state.name, state.script, state.scope);
+        : await setEntry(
+            state.name,
+            state.script,
+            state.scope,
+            override === undefined ? ifMatchFor(state) : override.ifMatch,
+          );
       // 結果は閉じるかどうかと関係なく出す: 書き込みは起きており、行の名前つきの文言なので別の行を開いていても取り違えないため
       onSaved(`行 ${state.name} を更新した`, update);
       if (isCurrent()) {
@@ -447,6 +468,8 @@ function ProfileEditor({
               ...now,
               existing: true,
               original: { script: state.script, scope: state.scope },
+              // 打ち足しを続けて保存するときは、自分が保存した版を前提にする
+              baseVersion: update.entries.find((entry) => entry.name === state.name)?.version,
             });
           }
         } else {
@@ -460,6 +483,25 @@ function ProfileEditor({
     } finally {
       setBusy(false);
     }
+  }
+
+  // 409 の「読み直す」: 書きかけを捨てて、いまの行で開き直す（行が消えていれば閉じる）
+  function reread(name: string) {
+    const latest = entries.find((entry) => entry.name === name);
+    setFailure(undefined);
+    setConfirming(false);
+    setEditor(
+      latest === undefined
+        ? null
+        : {
+            name: latest.name,
+            existing: true,
+            script: latest.script,
+            scope: latest.scope,
+            original: latest,
+            baseVersion: latest.version,
+          },
+    );
   }
 
   function open(next: EditorState) {
@@ -614,7 +656,42 @@ function ProfileEditor({
           </>
         )}
 
-        <ErrorNote error={failure} />
+        {failure instanceof ProfileChangedError && editor !== null ? (
+          <div
+            role="alert"
+            className="flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs"
+          >
+            <p className="font-medium text-warn">
+              {failure.current === null
+                ? `読んだ後に、行 ${editor.name} はほかで消された。何も変えていない。`
+                : `読んだ後に、行 ${editor.name} はほかで変わった（または作られた）。何も変えていない。`}
+            </p>
+            <p className="text-muted-foreground">
+              書きかけはそのまま残してある。一覧は読み直した。いまの本文を確かめてから、読み直すか、このまま置き直す。
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" disabled={busy} onClick={() => reread(editor.name)}>
+                読み直す（書きかけを捨てる）
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                loading={busy}
+                onClick={() =>
+                  void submit(editor, {
+                    // 返ったいまの版を前提に置き直す。消されていれば「無いときだけ作る」
+                    ifMatch:
+                      failure.current === null ? null : (failure.current?.version ?? undefined),
+                  })
+                }
+              >
+                このまま置き直す
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <ErrorNote error={failure} />
+        )}
         {failure instanceof ProfileRejectedError && failure.detail.length > 0 && (
           <pre
             aria-label="評価の失敗の詳細"

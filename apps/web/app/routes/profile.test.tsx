@@ -237,7 +237,10 @@ describe('/profile 画面 — 行を置く', () => {
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
 
     expect(await screen.findByText(/プロファイルの行 rust を更新した。/)).toBeTruthy();
-    expect(puts).toEqual([{ name: 'rust', body: { script: next, scope: 'runner' } }]);
+    // 一覧に無い名前なので「無いときだけ作る」（ifMatch: null）を添える（#4592）
+    expect(puts).toEqual([
+      { name: 'rust', body: { script: next, scope: 'runner', ifMatch: null } },
+    ]);
     expect(screen.getByText(/クローン用 e{12} \/ マネージャー用 f{12}/)).toBeTruthy();
     expect(screen.getAllByText(/反映した（PATH）/)).toHaveLength(2);
     expect(screen.queryByRole('alert')).toBeNull();
