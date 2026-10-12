@@ -32,10 +32,19 @@ import {
 } from './quota-stop-notice.js';
 import {
   renderRestoredNotice,
+  resumeConfirmationGuidance,
   RESUMED_WITHOUT_LOG_CLAUSE,
   type RestoredEntry,
   type RestoredListItem,
 } from './restored-notice.js';
+import {
+  endsResumeConfirmation,
+  RESUME_CONFIRM_TIMEOUT_MS,
+  RESUME_EVIDENCE_DESCRIPTION,
+  resumeConfirmMinutes,
+  resumeEvidenceOf,
+  type ResumeConfirmationState,
+} from './resume-confirmation.js';
 import { isQuotaFailure } from './sdk-failure.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
@@ -1631,6 +1640,8 @@ export interface ManagerPoolOptions {
   synthesizedNoticeWindowMs?: number;
   /** 枠だけの束をプール全体で1通にまとめる固定窓（既定 {@link QUOTA_STOP_WINDOW_MS}）。試験が短くするための口。 */
   quotaStopWindowMs?: number;
+  /** resume が戻れたかの確定を待つ時間（既定 {@link RESUME_CONFIRM_TIMEOUT_MS}）。試験が短くするための口。 */
+  resumeConfirmTimeoutMs?: number;
   attachmentLimits?: AttachmentLimits;
   outboxFetchFileTimeoutMs?: number;
   outboxFetchTotalTimeoutMs?: number;
@@ -1640,6 +1651,16 @@ export interface ManagerPoolOptions {
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
   return new Pool(options);
+}
+
+interface ResumeConfirmation {
+  state: ResumeConfirmationState;
+  /** resume を出した先。印はこの器から届いたものだけ数える（移送の前の器から遅れて届いた出来事で確定しないため）。 */
+  runnerId: string;
+  requestedAt: number;
+  /** `#notifyRestored` が知らせた回。期限を数え、確定を日誌に残すのはこの回だけ。 */
+  restored: boolean;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 /** **能力の上限ではなく、混雑を作らないための間隔である。** 頭打ちは、器が長く戻らないときに秒間何度も叩かないため。 */
@@ -2370,6 +2391,7 @@ const KNOWN_SYNTHESIZED_NOTICE_LABELS: Record<string, string> = {
   closed_withheld_flush: '委譲の終了と、背景処理の完了待ちで畳んでいた報告の配り',
   resume_fallback: '器の入れ替えで前のセッションへ戻れず、生ログから作り直して続けた',
   resume_failed: '器の入れ替えで前のセッションへ戻れず、再開そのものに失敗した',
+  resume_unconfirmed: '器の入れ替えの後の再開が、期限までに戻れたと確かめられなかった',
 };
 
 /**
@@ -2716,6 +2738,13 @@ class Pool implements ManagerPool {
    * 窓の長さは枠の窓（`#quotaStopWindowMs`）と同じ値を共有する。
    */
   readonly #restoredWindows = new Map<RestartCause, RestoredWindow>();
+  readonly #resumeConfirmTimeoutMs: number;
+  /**
+   * resume が前の会話へ戻れたかの確定（#4501）。`#resume` が runner へ出す直前に `pending` で立て、新しいセッションから最初の印
+   * （`resumeEvidenceOf`）が届いたら `confirmed`、`resume_failed` / `closed` が届いたら外す。期限を数えるのは、器の作り直し・移送・
+   * デーモンの再起動の後の再開（`#notifyRestored`）の回だけである（`restored`）。**プロセス内にしか置かない**。
+   */
+  readonly #resumeConfirmations = new Map<string, ResumeConfirmation>();
   /**
    * 窓を Map から外した後、配り終えるまでの flush。`stop()` はこれも待つ: 窓は読む前に外すので、タイマーが閉じて台帳を読んでいる最中に
    * `stop()` が来ると Map は空で、待つものが無いまま止まり、一覧が配られない。
@@ -2991,6 +3020,7 @@ class Pool implements ManagerPool {
     withheldReportFlushMs,
     synthesizedNoticeWindowMs,
     quotaStopWindowMs,
+    resumeConfirmTimeoutMs,
     generateManagerId,
     tokenIdentity,
     tokenAvailability,
@@ -3030,6 +3060,7 @@ class Pool implements ManagerPool {
     this.#synthesizedNoticeWindowMs =
       synthesizedNoticeWindowMs ?? resolveSynthesizedNoticeWindowMs();
     this.#quotaStopWindowMs = quotaStopWindowMs ?? QUOTA_STOP_WINDOW_MS;
+    this.#resumeConfirmTimeoutMs = resumeConfirmTimeoutMs ?? RESUME_CONFIRM_TIMEOUT_MS;
     this.#generateManagerId = generateManagerId ?? (() => `mgr-${randomUUID()}`);
     this.#workspace = workspace ?? resolveWorkspacePolicy();
     this.#tokenIdentity = tokenIdentity;
@@ -6147,6 +6178,10 @@ class Pool implements ManagerPool {
     this.#unsubscribe();
     for (const timer of this.#reattachTimers.values()) clearTimeout(timer);
     this.#reattachTimers.clear();
+    for (const entry of this.#resumeConfirmations.values()) {
+      if (entry.timer !== undefined) clearTimeout(entry.timer);
+    }
+    this.#resumeConfirmations.clear();
     this.#reattachDelays.clear();
     this.#reattachBusyRetries.clear();
     for (const timer of this.#pushRetryTimers.values()) clearTimeout(timer);
@@ -7316,20 +7351,28 @@ class Pool implements ManagerPool {
     const requestedCwd = cwd ?? runner.workspacePath;
     // 出す直前に追っている世代を下ろす: 応答が返るまで（失敗して返らなければその後も）世代の判定はしない。
     delete record.sessionGeneration;
-    const resumed = await runner.resume({
-      managerId: record.job.id,
-      sessionId,
-      cwd: requestedCwd,
-      request: request ?? record.job.summary,
-      ...(message === undefined ? {} : { message }),
-      ...(message === undefined || attachments === undefined || attachments.length === 0
-        ? {}
-        : { attachments }),
-      ...(material.kind === 'loaded' ? { entries: material.entries } : {}),
-      ...(record.job.lease === undefined
-        ? {}
-        : { lease: { fence: record.job.lease.fence, ttlMs: record.job.lease.ttlMs } }),
-    });
+    // 応答より前に立てる: 新しいセッションの出来事は resume の応答より先に届きうる（`manager-report-before-resume-response.test.ts`）。
+    this.#beginResumeConfirmation(record.job.id, runner.runnerId);
+    let resumed: Awaited<ReturnType<RunnerClient['resume']>>;
+    try {
+      resumed = await runner.resume({
+        managerId: record.job.id,
+        sessionId,
+        cwd: requestedCwd,
+        request: request ?? record.job.summary,
+        ...(message === undefined ? {} : { message }),
+        ...(message === undefined || attachments === undefined || attachments.length === 0
+          ? {}
+          : { attachments }),
+        ...(material.kind === 'loaded' ? { entries: material.entries } : {}),
+        ...(record.job.lease === undefined
+          ? {}
+          : { lease: { fence: record.job.lease.fence, ttlMs: record.job.lease.ttlMs } }),
+      });
+    } catch (error) {
+      this.#endResumeConfirmation(record.job.id);
+      throw error;
+    }
     // `resumed.cwd` が返らなければ何もしない: 「未確認」を `requestedCwd` で埋めると、倒れていた回まで「頼んだとおり開けた」と嘘をつく。
     // 倒れたかは応答後にしか分からず、resume 前に組む「移送の一言」へ混ぜられないので `cwdSwapNotice` で伝える。前回の通知は持ち越さない。
     record.cwdSwapNotice = undefined;
@@ -7342,6 +7385,7 @@ class Pool implements ManagerPool {
     // チェックポイント2: ここで `record.attached` などを書くと、止めたつもりの委譲が「走っているはず」を名乗ったまま誰にも追われなくなる。
     // `record.job.status` は書かない（`abort()` が `'stopped'` を書いて `#persist()` 済み）。畳み直せなかったときは、台帳は「止めた」なのに runner にセッションが生き残る最も危ない不一致なので黙らない。
     if (record.stopConfirmedAt !== undefined) {
+      this.#endResumeConfirmation(record.job.id);
       const { outcome: foldOutcome } = await this.#confirmStoppedAndReleaseLease(
         record,
         runner,
@@ -7594,6 +7638,9 @@ class Pool implements ManagerPool {
       });
       return;
     }
+
+    // 古い世代の出来事を捨てた後に見る: 前のセッションの遅れた出来事で「戻れた」と確定しないため。
+    this.#observeResumeConfirmation(record, event, fromRunnerId);
 
     // 窓の間は `job.runnerId` がまだ元の runner で `#ignoreIfMovedAway` が素通りし、移送の前に古い報告が台帳と受信箱へ流れるので、結論が出るまで預かる。
     if (
@@ -9389,6 +9436,8 @@ class Pool implements ManagerPool {
           : 'デーモンが再起動した';
     // デーモンの再起動は除く: 器はそのままなので、器の中に残った会話から戻れうる。
     const withoutLog = how === 'resumed' && cause !== 'daemon' && record.resumedWithoutLog === true;
+    // 知らせる前に期限を数え始める。知らせる時点で既に印が届いていれば、確定として書く。
+    const confirmed = how === 'resumed' && this.#armResumeConfirmation(job.id) === 'confirmed';
     // 日誌は呼び出し元に委ねない: `attached` の呼び出し元は書かず、`resumed` 側が書くのは別の事実（再開の指示）で、この知らせ自体の跡ではない。
     void this.#journal({
       type: 'exchange',
@@ -9397,8 +9446,10 @@ class Pool implements ManagerPool {
       text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${
         how === 'attached'
           ? `[${job.id}] （走行中を確認）${head}。runner の中で走り続けている。`
-          : `[${job.id}] （再開の指示を知らせた）${head}。前のセッションからの再開を指示した（受理まで。会話が戻ったかは未確認）。` +
-            (withoutLog ? ` ${RESUMED_WITHOUT_LOG_CLAUSE}` : '')
+          : confirmed
+            ? `[${job.id}] （再開を知らせた）${head}。前のセッションから再開した（新しいセッションから最初の印が届き、戻れたことを確かめた）。`
+            : `[${job.id}] （再開の指示を知らせた）${head}。前のセッションからの再開を指示した（受理まで。会話が戻ったかは確定待ち）。` +
+              (withoutLog ? ` ${RESUMED_WITHOUT_LOG_CLAUSE}` : '')
       }`,
     });
     // 「1本目はすぐ・同じ出来事の残りは1通」（枠の窓 `QuotaStopWindow` と同じ考え方）。鍵は cause: 器が何台続けて作り直されても同じ出来事。
@@ -9459,16 +9510,18 @@ class Pool implements ManagerPool {
       text: [
         how === 'attached'
           ? `${head}。この委譲は runner の中で走り続けている。`
-          : // 「再開させた」と言い切らない: runner の受理は「戻れた」ではなく、前の会話が無ければ後から lost になる（#4501）。
-            `${head}。中断されていたこの委譲に、前のセッションからの再開を指示した（runner は受け付けた。前の会話が戻ったかはまだ確かめていない）。`,
-        withoutLog ? `⚠ ${RESUMED_WITHOUT_LOG_CLAUSE}` : '',
+          : confirmed
+            ? `${head}。中断されていたこの委譲を、前のセッションから再開した（新しいセッションから最初の印が届き、戻れたことを確かめた）。`
+            : // 「再開させた」と言い切らない: runner の受理は「戻れた」ではなく、前の会話が無ければ後から lost になる（#4501）。
+              `${head}。中断されていたこの委譲に、前のセッションからの再開を指示した（runner は受け付けた。前の会話が戻ったかは確定待ち）。`,
+        withoutLog && !confirmed ? `⚠ ${RESUMED_WITHOUT_LOG_CLAUSE}` : '',
         `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
         ...this.#notifyExcerptLines(job),
         '',
         how === 'attached'
           ? '返事待ちがあれば改めて届く。`manager_send` で追加の指示も送れる。'
           : // 「戻せなかった」の語を使わない: 失敗の知らせを見分ける語なので、受理の知らせに混ぜると読み手と試験の両方が取り違える。
-            '戻れていれば、報告が届く。戻れなければ、この後に別の知らせが届き、状態は lost になる。' +
+            (confirmed ? '' : resumeConfirmationGuidance(this.#resumeConfirmTimeoutMs)) +
             '返事待ちだった確認は器と一緒に失われているので、必要ならマネージャーが聞き直してくる。',
         // 判定は `workspaceAfterSwap` に委ねる（`restartNudge` と同じ判定を二重に書かない）。
         // path は出さない: 直前の行で作業ディレクトリを出しており、重ねると読む側が2つの値を突き合わせることになる。
@@ -9482,6 +9535,125 @@ class Pool implements ManagerPool {
         .join('\n'),
       ...this.#statusAtDelivery(job.id),
     });
+  }
+
+  #beginResumeConfirmation(managerId: string, runnerId: string): void {
+    this.#endResumeConfirmation(managerId);
+    this.#resumeConfirmations.set(managerId, {
+      state: 'pending',
+      runnerId,
+      requestedAt: this.#now(),
+      restored: false,
+    });
+  }
+
+  #endResumeConfirmation(managerId: string): void {
+    const entry = this.#resumeConfirmations.get(managerId);
+    if (entry?.timer !== undefined) clearTimeout(entry.timer);
+    this.#resumeConfirmations.delete(managerId);
+  }
+
+  /**
+   * `#notifyRestored` の回だけ期限を数える: ふつうの `manager_send` の resume は、確定待ちを知らせていないので、期限の知らせも要らない。
+   * 追っていなければ（`#resume` を通らない経路）、いまから追う。宛先は台帳の `runnerId`。
+   */
+  #armResumeConfirmation(managerId: string): ResumeConfirmationState {
+    let entry = this.#resumeConfirmations.get(managerId);
+    if (entry === undefined) {
+      const runnerId = this.#records.get(managerId)?.job.runnerId;
+      if (runnerId === undefined) return 'pending';
+      entry = { state: 'pending', runnerId, requestedAt: this.#now(), restored: false };
+      this.#resumeConfirmations.set(managerId, entry);
+    }
+    entry.restored = true;
+    if (entry.state === 'pending' && entry.timer === undefined) {
+      const armed = entry;
+      const timer = setTimeout(() => {
+        void this.#onResumeConfirmTimeout(managerId, armed);
+      }, this.#resumeConfirmTimeoutMs);
+      timer.unref?.();
+      entry.timer = timer;
+    }
+    return entry.state;
+  }
+
+  #observeResumeConfirmation(
+    record: ManagerRecord,
+    event: RunnerEvent,
+    fromRunnerId: string,
+  ): void {
+    const managerId = record.job.id;
+    const entry = this.#resumeConfirmations.get(managerId);
+    if (entry === undefined) return;
+    // 打ち切る出来事は、宛先を問わず畳む: この後はそれぞれの経路（lost・引き継ぎ・終了）が自分で知らせる。
+    if (endsResumeConfirmation(event)) {
+      if (fromRunnerId === entry.runnerId) this.#endResumeConfirmation(managerId);
+      return;
+    }
+    if (entry.state === 'confirmed' || fromRunnerId !== entry.runnerId) return;
+    const via = resumeEvidenceOf(event);
+    if (via === undefined) return;
+    const wasUnconfirmed = entry.state === 'unconfirmed';
+    if (entry.timer !== undefined) clearTimeout(entry.timer);
+    entry.timer = undefined;
+    entry.state = 'confirmed';
+    if (!entry.restored) return;
+    const seconds = Math.max(0, Math.round((this.#now() - entry.requestedAt) / 1000));
+    void this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text:
+        `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] （戻れたことを確かめた）前のセッションからの再開が効いた: ` +
+        `新しいセッションから最初の印（${via}）が、resume を出してから ${String(seconds)} 秒で届いた。` +
+        (wasUnconfirmed ? '期限の後に届いた（期限の知らせは先に出してある）。' : ''),
+    });
+  }
+
+  /**
+   * 期限までに印が1つも届かなかった。**止めない・lost とも決めない**（長く考えているだけのこともある）。日誌に残し、担当ごとに1通知らせる。
+   * 知らせは合流窓（`#queueSynthesizedNotice`）を通す: 同じ出来事の `resume_failed` などと「一枠落ち一合図」に揃えるため。
+   */
+  async #onResumeConfirmTimeout(managerId: string, armed: ResumeConfirmation): Promise<void> {
+    if (this.#stopped) return;
+    if (this.#resumeConfirmations.get(managerId) !== armed || armed.state !== 'pending') return;
+    armed.timer = undefined;
+    armed.state = 'unconfirmed';
+    const job = this.#records.get(managerId)?.job;
+    // 既に終端していれば、その経路が知らせている。
+    if (
+      job === undefined ||
+      job.status === 'lost' ||
+      job.status === 'failed' ||
+      job.status === 'stopped'
+    ) {
+      return;
+    }
+    const minutes = resumeConfirmMinutes(this.#resumeConfirmTimeoutMs);
+    await this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] （戻れたか確かめられないまま）前のセッションからの再開を指示してから ${minutes} 分、` +
+        `新しいセッションから戻れた印（${RESUME_EVIDENCE_DESCRIPTION}）が1つも届いていない。止めず、lost とも決めていない（状態 ${job.status}）。`,
+    });
+    // 「戻せなかった」の語を使わない: 失敗の知らせを見分ける語で、ここでは失敗を観測していない。
+    this.#queueSynthesizedNotice(
+      managerId,
+      'resume_unconfirmed',
+      [
+        `前のセッションからの再開を指示してから ${minutes} 分たったが、新しいセッションから戻れた印（${RESUME_EVIDENCE_DESCRIPTION}）が1つも届いていない。`,
+        `止めてはおらず、lost とも決めていない（いまの状態: ${job.status}）。長く考えているだけのこともある。`,
+        `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
+        ...this.#notifyExcerptLines(job),
+        '',
+        `様子を確かめるなら manager_list / manager_report managerId=${managerId}、本人に聞くなら manager_send。` +
+          '印が後から届けば、日誌に「（戻れたことを確かめた）」が残る。',
+      ]
+        .filter((line) => line !== '')
+        .join('\n'),
+    );
   }
 
   // 窓が閉じたとき、貯めた担当（窓を開けた担当以外）が居なければ何も配らない: 委譲1本だけの回は今までと完全に同じ。
@@ -9510,6 +9682,9 @@ class Pool implements ManagerPool {
       status:
         this.#records.get(entry.managerId)?.job.status ??
         ledger.find((job) => job.id === entry.managerId)?.status,
+      ...(entry.how === 'resumed'
+        ? { resume: this.#resumeConfirmations.get(entry.managerId)?.state ?? 'pending' }
+        : {}),
     }));
     const openedAt = new Date(window.openedAt).toISOString();
     try {
@@ -9520,7 +9695,9 @@ class Pool implements ManagerPool {
         // `runner-registry` を流用する: 枠の1通と同じ理由（専用の source は予約語の一覧・入口の拒否・OpenAPI の説明を一緒に直す別の変更が要る）。
         source: DAEMON_RUNNER_REGISTRY_SOURCE,
         identity: `restored:${cause}:${openedAt}`,
-        payload: { text: renderRestoredNotice(window.head, items) },
+        payload: {
+          text: renderRestoredNotice(window.head, items, this.#resumeConfirmTimeoutMs),
+        },
       });
     } catch (error) {
       noteDroppedRecord(
@@ -10032,6 +10209,7 @@ class Pool implements ManagerPool {
     this.#autoFoldSkipJournalWritten.delete(managerId);
     // busy の取り直しの数えはここで消す: `#reattach` のループは数えを消さずに `continue` で抜けるので、残すと後の busy で上限（`REATTACH_BUSY_MAX_RETRIES`）を前の分で縮める。
     this.#reattachBusyRetries.delete(managerId);
+    this.#endResumeConfirmation(managerId);
   }
 
   // 上限を持たない: 外す契機が `#retire()` に在る。

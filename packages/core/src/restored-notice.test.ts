@@ -26,13 +26,15 @@ function lineOf(text: string, id: string): string {
 // 2026-10-11 の反映の後、resume を受理しただけの委譲を「再開させた・running（セッションは生きている）」と知らせ、
 // その後 12 本のほぼ全部が「SDK に会話が残っていない」で lost になった（#4501）。
 describe('取り戻した知らせの一覧は、resume の受理を「戻れた」と言わない（#4501）', () => {
-  it('resumed で running の行は「再開を指示した・未確認」と言い、「セッションは生きている」と言わない', () => {
+  it('resumed で running の行は、確定するまで「再開を指示した・確定待ち」と言い、「セッションは生きている」と言わない', () => {
     const text = renderRestoredNotice('runner の器が作り直された', [item({})]);
     const line = lineOf(text, 'mgr-a');
     expect(line).toContain(
-      '前のセッションからの再開を指示した（resume は受理された。会話が戻ったかは未確認）',
+      '前のセッションからの再開を指示した（resume は受理された。会話が戻ったかは確定待ち）',
     );
-    expect(line).toContain('状態 running（resume を受理しただけ。会話が戻ったかは未確認）');
+    expect(line).toContain(
+      '状態 running（確定待ち: resume を受理しただけ。会話が戻ったかは未確認）',
+    );
     expect(text).not.toContain('セッションは生きている');
     expect(text).not.toContain('再開させた');
     expect(text).toContain(
@@ -40,6 +42,30 @@ describe('取り戻した知らせの一覧は、resume の受理を「戻れた
     );
     // 失敗の知らせを見分ける語を、受理の知らせに混ぜない。
     expect(text).not.toContain('戻せなかった');
+  });
+
+  it('確定した行は「戻れたことを確かめた」と言い、生ログの見込みは添えない', () => {
+    const text = renderRestoredNotice('runner の器が作り直された', [
+      item({ resume: 'confirmed', withoutLog: true }),
+    ]);
+    const line = lineOf(text, 'mgr-a');
+    expect(line).toContain(
+      '前のセッションから再開した（新しいセッションから最初の印が届き、戻れたことを確かめた）',
+    );
+    expect(line).toContain('状態 running（戻れたことを確かめた）');
+    expect(text).not.toContain(RESUMED_WITHOUT_LOG_CLAUSE);
+  });
+
+  it('期限を過ぎた行は、期限の分数と「lost とは決めていない」を言う。案内も渡した期限で書く', () => {
+    const text = renderRestoredNotice(
+      'runner の器が作り直された',
+      [item({ resume: 'unconfirmed' })],
+      3 * 60_000,
+    );
+    expect(lineOf(text, 'mgr-a')).toContain(
+      '状態 running（3 分たっても戻れた印が届いていない。lost とは決めていない）',
+    );
+    expect(text).toContain('3 分たっても印が届かなければ、その旨を担当ごとに別に知らせる');
   });
 
   it('resumed でも配る時点で lost なら、lost と言う', () => {

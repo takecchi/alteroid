@@ -6,6 +6,7 @@ import {
   RunnerHttpError,
   type RunnerAnswerOutcome,
   type RunnerClient,
+  type RunnerEvent,
   type RunnerManagerState,
 } from './runner-protocol.js';
 import type { InboxEvent, Job } from './schema.js';
@@ -29,19 +30,22 @@ interface FakeRunner {
   alive: RunnerManagerState[];
   resumes: string[];
   failResume: { value: boolean };
+  /** デーモンへ出来事を流す（`connect` が受け取った口）。 */
+  emit: (event: RunnerEvent) => void;
 }
 
 function fakeRunner(): FakeRunner {
   const alive: RunnerManagerState[] = [];
   const resumes: string[] = [];
   const failResume = { value: false };
+  let onEvent: ((event: RunnerEvent) => void) | undefined;
   const runner: RunnerClient = {
     runnerId: 'runner-primary',
     runnerIdKnown: true,
     workspacePath: '/work/project',
     workspacePathKnown: true,
-    async connect() {
-      /* 出来事はこの検証では流さない */
+    async connect(listener) {
+      onEvent = listener;
     },
     async start(): Promise<{ cwd?: string }> {
       return {};
@@ -83,7 +87,16 @@ function fakeRunner(): FakeRunner {
       /* 使わない */
     },
   };
-  return { runner, alive, resumes, failResume };
+  return {
+    runner,
+    alive,
+    resumes,
+    failResume,
+    emit: (event) => {
+      if (onEvent === undefined) throw new Error('connect() がまだ呼ばれていない');
+      onEvent(event);
+    },
+  };
 }
 
 function jobOf(id: string): Job {
@@ -113,7 +126,11 @@ interface Setup {
 async function setup(
   aliveIds: readonly string[],
   deadIds: readonly string[] = [],
-  options: { failResume?: boolean; sessionLog?: 'absent' | 'loaded' } = {},
+  options: {
+    failResume?: boolean;
+    sessionLog?: 'absent' | 'loaded';
+    resumeConfirmTimeoutMs?: number;
+  } = {},
 ): Promise<Setup> {
   // `sessionLog` を渡したときだけ、生ログの預け先（pg 構成の `sessionStore`）を持たせ、委譲に鍵（projectKey）を付ける。
   const stores: Stores =
@@ -153,6 +170,9 @@ async function setup(
     runners: createRunnerRegistry([fake.runner]),
     synthesizedNoticeWindowMs: 20,
     quotaStopWindowMs: POOL_WINDOW_MS,
+    ...(options.resumeConfirmTimeoutMs === undefined
+      ? {}
+      : { resumeConfirmTimeoutMs: options.resumeConfirmTimeoutMs }),
   });
   await pool.restore();
   return { pool, stores, inbox, fake };
@@ -204,12 +224,21 @@ describe('取り戻した知らせは、1本目はすぐ・同じ cause の残�
     await waitForMessages(inbox, 1);
     const text = restoredMessages(inbox)[0]?.text ?? '';
     expect(text).toContain(
-      'runner の器が作り直された。中断されていたこの委譲に、前のセッションからの再開を指示した（runner は受け付けた。前の会話が戻ったかはまだ確かめていない）。',
+      'runner の器が作り直された。中断されていたこの委譲に、前のセッションからの再開を指示した（runner は受け付けた。前の会話が戻ったかは確定待ち）。',
     );
     // 受理の時点で「再開させた」「報告を待てばよい」と言い切らない: 前の会話が無ければ、この後に lost になる（#4501）。
     expect(text).not.toContain('再開させた');
     expect(text).not.toContain('報告を待てばよい');
-    expect(text).toContain('戻れなければ、この後に別の知らせが届き、状態は lost になる。');
+    expect(text).toContain(
+      '戻れなければ、この後に担当ごとの知らせが別に届き、状態は lost になる。',
+    );
+    // 何で確定し、何分で何が起きるかを書く。
+    expect(text).toContain(
+      '新しいセッションから最初の印（道具の使用・確認の要求・失敗の無いターンの報告）',
+    );
+    expect(text).toContain(
+      '10 分たっても印が届かなければ、その旨を担当ごとに別に知らせる（lost とは決めない）',
+    );
     // 失敗の知らせを見分ける語（「戻せなかった」）を、受理の知らせに混ぜない。
     expect(text).not.toContain('戻せなかった');
 
@@ -245,9 +274,11 @@ describe('取り戻した知らせは、1本目はすぐ・同じ cause の残�
       expect(line, id).toContain('器 runner-primary');
       // 受理の後の running を「セッションは生きている」と言わない（#4501）。
       expect(line, id).toContain(
-        '前のセッションからの再開を指示した（resume は受理された。会話が戻ったかは未確認）',
+        '前のセッションからの再開を指示した（resume は受理された。会話が戻ったかは確定待ち）',
       );
-      expect(line, id).toContain('状態 running（resume を受理しただけ。会話が戻ったかは未確認）');
+      expect(line, id).toContain(
+        '状態 running（確定待ち: resume を受理しただけ。会話が戻ったかは未確認）',
+      );
       expect(line, id).not.toContain('セッションは生きている');
       expect(text).toContain(`作業ディレクトリ: /work/${id}`);
       expect(text).toContain(`直近の報告（抜粋）: ${id} の途中経過: 3件目まで読んだ`);
@@ -406,6 +437,112 @@ describe('生ログ無しで出した resume の受理の知らせは、戻れ�
 
     await waitForMessages(inbox, 1);
     expect(restoredMessages(inbox)[0]?.text).not.toContain(HINT);
+
+    await pool.stop();
+  });
+});
+
+// 受理は「戻れた」ではない。新しいセッションから最初の印が届いて初めて「戻れた」と言い、期限までに届かなければその旨を知らせる（#4501）。
+describe('resume が戻れたかは、新しいセッションから最初の印が届いた時点で確定する（#4501）', () => {
+  const toolUse = (managerId: string): RunnerEvent => ({
+    type: 'tool_use',
+    managerId,
+    actor: `manager:${managerId}`,
+    tool: 'Bash',
+    input: { command: 'git status' },
+  });
+  const UNCONFIRMED =
+    '新しいセッションから戻れた印（道具の使用・確認の要求・失敗の無いターンの報告）が1つも届いていない';
+
+  function unconfirmedNotices(inbox: readonly InboxEvent[]) {
+    return restoredMessages(inbox).filter((m) => m.text.includes(UNCONFIRMED));
+  }
+
+  it('印が届いた担当だけ、まとめの1通で「戻れたことを確かめた」になり、日誌にも残る', async () => {
+    const { pool, stores, inbox, fake } = await setup([], ['mgr-a', 'mgr-b']);
+
+    await waitForMessages(inbox, 1);
+    await waitForStored(stores, 1);
+    fake.emit(toolUse('mgr-a'));
+
+    await waitForLists(inbox, 1);
+    const text = textOf(restoredLists(inbox)[0]!);
+    const lineA = text.split('\n').find((l) => l.startsWith('- mgr-a:')) ?? '';
+    const lineB = text.split('\n').find((l) => l.startsWith('- mgr-b:')) ?? '';
+    expect(lineA).toContain('状態 running（戻れたことを確かめた）');
+    expect(lineB).toContain(
+      '状態 running（確定待ち: resume を受理しただけ。会話が戻ったかは未確認）',
+    );
+    const journal = await journalTexts(stores);
+    expect(
+      journal.filter(
+        (l) => l.includes('[mgr-a] （戻れたことを確かめた）') && l.includes('tool_use'),
+      ),
+    ).toHaveLength(1);
+    expect(journal.some((l) => l.includes('[mgr-b] （戻れたことを確かめた）'))).toBe(false);
+
+    await pool.stop();
+  });
+
+  it('期限までに印が届かなければ、止めず lost とも決めずに、担当ごとに1通知らせて日誌に残す', async () => {
+    const { pool, stores, inbox } = await setup([], ['mgr-a'], { resumeConfirmTimeoutMs: 300 });
+
+    await vi.waitFor(() => expect(unconfirmedNotices(inbox)).toHaveLength(1), WAIT);
+    const notice = unconfirmedNotices(inbox)[0]!;
+    expect(notice.managerId).toBe('mgr-a');
+    expect(notice.text).toContain('止めてはおらず、lost とも決めていない（いまの状態: running）');
+    expect(notice.text).not.toContain('戻せなかった');
+    const journal = await journalTexts(stores);
+    expect(
+      journal.filter((l) => l.includes('[mgr-a] （戻れたか確かめられないまま）')),
+    ).toHaveLength(1);
+    expect((await stores.jobs.listJobs()).find((job) => job.id === 'mgr-a')?.status).toBe(
+      'running',
+    );
+
+    await pool.stop();
+  });
+
+  it('期限より前に印が届けば、期限の知らせは出ない', async () => {
+    const { pool, inbox, fake } = await setup([], ['mgr-a'], { resumeConfirmTimeoutMs: 1_500 });
+
+    await waitForMessages(inbox, 1);
+    fake.emit(toolUse('mgr-a'));
+    await sleep(2_000);
+    expect(unconfirmedNotices(inbox)).toHaveLength(0);
+
+    await pool.stop();
+  });
+
+  it('失敗したターンの報告は印にしない（戻れなかった resume も出しうる）', async () => {
+    const { pool, inbox, fake } = await setup([], ['mgr-a'], { resumeConfirmTimeoutMs: 1_500 });
+
+    await waitForMessages(inbox, 1);
+    fake.emit({
+      type: 'report',
+      managerId: 'mgr-a',
+      text: '結果なしで終了: error_during_execution',
+      status: 'running',
+      failure: { code: 'error_during_execution', via: 'result' },
+    });
+    await vi.waitFor(() => expect(unconfirmedNotices(inbox)).toHaveLength(1), WAIT);
+
+    await pool.stop();
+  });
+
+  it('resume_failed が届けば確定を打ち切り、期限の知らせは出ない（その経路が自分で知らせる）', async () => {
+    const { pool, inbox, fake } = await setup([], ['mgr-a'], { resumeConfirmTimeoutMs: 1_500 });
+
+    await waitForMessages(inbox, 1);
+    fake.emit({
+      type: 'resume_failed',
+      managerId: 'mgr-a',
+      sessionId: 'sess-mgr-a',
+      reason: '結果なしで終了: error_during_execution',
+      recovered: false,
+    });
+    await sleep(2_000);
+    expect(unconfirmedNotices(inbox)).toHaveLength(0);
 
     await pool.stop();
   });
