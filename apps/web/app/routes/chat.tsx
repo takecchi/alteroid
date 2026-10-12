@@ -2924,6 +2924,15 @@ export function ChatPane({
                           hideFailureWhenSettled
                           onFailed={(caught) => {
                             if (caught instanceof ApiError && caught.status === 409) {
+                              // 書いた答えを残りの下書きへ移す: 取り直しで決着済みと分かると、控えに無い下書きは掃除で落ち、答えが黙って消えるため（承認の画面と同じ）
+                              setLeftoverSources((previous) => ({
+                                ...previous,
+                                [approvalId]: {
+                                  origin: 'conflict',
+                                  question,
+                                  questions: questions ?? undefined,
+                                },
+                              }));
                               void conversationApprovals.mutate();
                             }
                           }}
