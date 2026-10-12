@@ -2557,9 +2557,21 @@ export function ChatPane({
                 return meta === undefined ? item : { ...item, meta };
               }),
             };
-            setEditDrafts((previous) => new Map(previous).set(line.key, restored));
+            // 上げている間に同じ発言の下書きを書き直していたら、本文はそちらを残し、上げそこねた添付だけを足し込む: 確定時の写しで上書きすると、書き直した本文が黙って消えるため
+            setEditDrafts((previous) => {
+              const current = previous.get(line.key);
+              if (current === undefined) return new Map(previous).set(line.key, restored);
+              const known = new Set(current.added.map((item) => item.key));
+              const missing = restored.added.filter((item) => !known.has(item.key));
+              if (missing.length === 0) return previous;
+              return new Map(previous).set(line.key, {
+                ...current,
+                added: [...current.added, ...missing],
+              });
+            });
           }
-          setEditingKey(line.key);
+          // 別の編集欄が開いていたら奪わない: 失敗した発言の下書きは残してあり、鉛筆を押し直せば戻るため
+          setEditingKey((current) => current ?? line.key);
         },
       });
     },
