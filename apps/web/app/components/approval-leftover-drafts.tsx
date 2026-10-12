@@ -1,4 +1,4 @@
-import type { ApprovalLeftoverSource } from '@alteroid/logic';
+import { redactBody, type ApprovalLeftoverSource } from '@alteroid/logic';
 import { Button, CodeBlock } from '@alteroid/ui';
 
 /**
@@ -30,7 +30,9 @@ export function LeftoverDrafts({
             </strong>
             承認はもう決着しているので、ここから送り直すことはできない。必要なら写してから閉じる。
             <span className="mt-1 block text-xs text-muted-foreground">
-              対象: {source === undefined ? `本文の写しが無い（id: ${id}）` : source.question}
+              {/* 伏せる: 承認カードは同じ本文を伏せて出すので、ここだけ秘密が素のまま出るため */}
+              対象:{' '}
+              {source === undefined ? `本文の写しが無い（id: ${id}）` : redactBody(source.question)}
             </span>
           </p>
           <CodeBlock label="残った文" maxHeight="12rem">
