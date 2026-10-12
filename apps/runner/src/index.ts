@@ -26,6 +26,7 @@ import {
   agentProviderOf,
   placedManagerModels,
   reasonOf,
+  readExecutionResources,
   applyAttachmentRequestTimeout,
   resolveManagerModel,
   resolveWorkerModel,
@@ -327,6 +328,8 @@ export async function main(): Promise<void> {
     // 自己失効はこの器だけが有効にする: 同一プロセスの `runner-local` では「デーモンだけが消える」ことが起こり得ないため。
     enforceLease: true,
     ...(delegationSubreaper === undefined ? {} : { delegationSubreaper }),
+    // 器の pids が上限に近いとき、走っている担当に知らせる（runner-pids-pressure.ts）。cgroup が読めない器では `undefined` で、何も添えない
+    readPidsFn: async () => (await readExecutionResources()).pids,
   });
 
   const reap: ReclaimReapOptions = {

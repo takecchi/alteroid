@@ -165,6 +165,11 @@ import {
   type ResumeRecoveryOutcome,
 } from './runner-resume-recovery.js';
 import { chownTreeSync, sdkResumeConfigDirOf } from './runner-resume-config-dir.js';
+import {
+  cachedPidsReader,
+  PidsPressureNotices,
+  type PidsPressureReading,
+} from './runner-pids-pressure.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
@@ -442,6 +447,11 @@ export interface RunnerHostOptions {
   delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
+  /**
+   * 器の pids（cgroup の `pids.current` / `pids.max`）を読む口。渡したときだけ、上限に近い器の担当に道具の結果へ知らせを添える
+   * （`runner-pids-pressure.ts`）。既定で読まない: 手元の構成や試験で、ホストの値に応じて文脈が変わらないため。
+   */
+  readPidsFn?: () => Promise<{ current: number; max: number } | undefined>;
   finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
   cwdExistsFn?: (cwd: string) => boolean;
   workerToolWatchClock?: WorkerToolWatchClock;
@@ -649,6 +659,7 @@ class Host implements RunnerHost {
   readonly #delegationSubreaper: string | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir | undefined;
   readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
+  readonly #readPids: (() => Promise<{ current: number; max: number } | undefined>) | undefined;
   readonly #finishUnpushedWorkFn:
     ((options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>) | undefined;
   readonly #cwdExistsFn: (cwd: string) => boolean;
@@ -680,6 +691,8 @@ class Host implements RunnerHost {
     this.#delegationSubreaper = options.delegationSubreaper;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn;
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
+    this.#readPids =
+      options.readPidsFn === undefined ? undefined : cachedPidsReader(options.readPidsFn);
     this.#finishUnpushedWorkFn = options.finishUnpushedWorkFn;
     this.#cwdExistsFn = options.cwdExistsFn ?? directoryExists;
     this.#codexAuth = new CodexAuthMirror({
@@ -797,6 +810,13 @@ class Host implements RunnerHost {
 
   noteDaemonContact(): void {
     this.#lastDaemonContact = Date.now();
+  }
+
+  // 本数は読んだ時点の `#sessions` から数える: 器の上の担当の数は、知らせを読む担当が「自分だけの問題ではない」と判断する材料のため
+  async #pidsPressureReading(): Promise<PidsPressureReading | undefined> {
+    const pids = await this.#readPids?.();
+    if (pids === undefined) return undefined;
+    return { current: pids.current, max: pids.max, delegations: this.#sessions.size };
   }
 
   delegationSessionPids(): { live: ReadonlySet<number>; knownTerminated: ReadonlySet<number> } {
@@ -1223,6 +1243,9 @@ class Host implements RunnerHost {
       ...(this.#readCgroupEventCountersFn === undefined
         ? {}
         : { readCgroupEventCountersFn: this.#readCgroupEventCountersFn }),
+      ...(this.#readPids === undefined
+        ? {}
+        : { pidsPressureFn: () => this.#pidsPressureReading() }),
       ...(this.#finishUnpushedWorkFn === undefined
         ? {}
         : { finishUnpushedWorkFn: this.#finishUnpushedWorkFn }),
@@ -1655,6 +1678,8 @@ interface RunnerSessionOptions {
   delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
+  /** 器の pids と、器の上の担当の本数。渡されたときだけ、上限に近ければ道具の結果へ知らせを添える。 */
+  pidsPressureFn?: () => Promise<PidsPressureReading | undefined>;
   finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
 }
 
@@ -1706,6 +1731,8 @@ class RunnerSession {
   readonly #delegationSubreaper: string | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
+  readonly #pidsPressureFn: (() => Promise<PidsPressureReading | undefined>) | undefined;
+  readonly #pidsPressureNotices = new PidsPressureNotices();
   readonly #rescueMemory = new RescueMemory();
   #rescueRunning: Promise<void> | null = null;
   readonly #finishUnpushedWorkFn: (options?: {
@@ -1840,6 +1867,7 @@ class RunnerSession {
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn ?? chownTreeSync;
     this.#readCgroupEventCountersFn =
       options.readCgroupEventCountersFn ?? (() => readCgroupEventCounters());
+    this.#pidsPressureFn = options.pidsPressureFn;
     this.#finishUnpushedWorkFn =
       options.finishUnpushedWorkFn ??
       ((unpushedWorkOptions) => this.unpushedWork(unpushedWorkOptions));
@@ -3907,8 +3935,37 @@ class RunnerSession {
     // 道具の種類を問わない: `#pendingCutOffNotifications` はどの道具の呼び出しにも相乗りし、先に届いた別の完了通知を配達するだけのため
     const additionalContext =
       record.agentId === undefined ? this.#annotateCutOffWorkers(record.toolResponse) : null;
-    if (additionalContext === null) return { kind: 'continue' };
-    return { kind: 'addContext', text: additionalContext };
+    // 担当本人にも作業者にも添える: dev サーバーや E2E を起こすのは作業者のことが多い
+    const pressure = await this.#pidsPressureNotice(record.agentId);
+    const parts = [additionalContext, pressure].filter((part): part is string => part !== null);
+    if (parts.length === 0) return { kind: 'continue' };
+    return { kind: 'addContext', text: parts.join('\n\n') };
+  }
+
+  /**
+   * 器の pids が上限に近ければ、知らせの段落を返す（`runner-pids-pressure.ts`）。相手（担当本人・作業者ごと）に5分に1回まで。
+   * 担当本人に添えた回は、日誌にも1行残す: 添えたかどうかがクローンから見えないと、本番で効いたかを確かめられないため。
+   * 読めない・投げたときは何も添えない: 知らせのために道具の結果を壊さないため。
+   */
+  async #pidsPressureNotice(agentId: string | undefined): Promise<string | null> {
+    if (this.#pidsPressureFn === undefined) return null;
+    let reading: PidsPressureReading | undefined;
+    try {
+      reading = await this.#pidsPressureFn();
+    } catch {
+      return null;
+    }
+    const text = this.#pidsPressureNotices.next(agentId ?? 'manager', reading, Date.now());
+    if (text !== null && agentId === undefined && reading !== undefined) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `器の pids が ${String(reading.current)}/${String(reading.max)}（この器の担当 ${String(reading.delegations)} 本）で上限に近いので、` +
+          'この担当の道具の結果に「重い処理を重ねる前に、要らない背景処理を止めることを考えよ」という知らせを添えた（止める指示ではない）。',
+      });
+    }
+    return text;
   }
 
   #annotateCutOffWorkers(toolResponse: unknown): string | null {
