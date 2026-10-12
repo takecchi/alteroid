@@ -23,7 +23,9 @@ export function LiveMapCard({
   action?: ReactNode;
   layout?: SystemTopologyProps['layout'];
 }) {
-  const stale = connection === 'offline' || unavailable !== undefined;
+  // `connecting` も古いと断る: 地図がある状態で `connecting` になるのは張り直しの最中だけで（最初の接続は地図が無く読み込み中の側へ行く）、
+  // 張り直しを始めると status だけが戻って前の地図が残るので、断らないと古い札が「いまの状態」に読めてしまう
+  const stale = connection !== 'live' || unavailable !== undefined;
 
   return (
     <Card className="min-w-0">
