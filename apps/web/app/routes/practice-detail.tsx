@@ -217,11 +217,19 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                   setBusy(true);
                   setConfirmingDelete(false);
                   // 読めない形の行は版なしで消せる（版を持たない）。
+                  // 書きかけがあるときは、書き始めた時点に読んだ版を前提に消す（保存と同じく、取り直した版へ追従させない）:
+                  // 書きかけの間に取り直した版は画面に出ていないので、それを前提にすると、クローンが書いた見ていない内容を 409 なしで消す
+                  const readVersion =
+                    data === undefined
+                      ? undefined
+                      : hasDraft && typeof baseVersion === 'string'
+                        ? baseVersion
+                        : data.version;
                   deletePractice(
                     slug,
                     data === undefined
                       ? undefined
-                      : (deleteConflict?.current?.version ?? data.version),
+                      : (deleteConflict?.current?.version ?? readVersion),
                   )
                     .then(() => {
                       // 応答待ちに別のやり方へ移っていたら、その画面を動かさない。
