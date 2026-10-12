@@ -24,12 +24,12 @@ export function LatestReport() {
   const list = Array.isArray(reports.data?.reports) ? reports.data.reports : undefined;
   const malformed = reports.data !== undefined && list === undefined;
   const latest = list?.[0];
-  const readable = latest !== undefined && !isUnavailable(latest);
   return (
     <HomeReportCard
       icon={BookText}
       title="最新の日報"
-      meta={readable ? latest.date : undefined}
+      // 作れなかった日も日付を出す: 中の文言は「この日の日報は作れなかった」で、どの日かは見出しでしか読めないため
+      meta={latest?.date}
       action={
         <Link to="/reports" className={HOME_LINK_CLASS}>
           日報一覧

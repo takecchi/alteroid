@@ -399,6 +399,17 @@ describe('「最新の日報」', () => {
     expect(screen.queryByRole('heading', { name: reason })).toBeNull();
   });
 
+  it('日報が作れなかった日も、どの日のことかをカードの見出しに日付で出す（#4553）', async () => {
+    const reason = '枠が閉じている';
+    renderHome({
+      reports: [report({ date: '2026-08-20', body: `## ${reason}`, unavailable: reason })],
+    });
+
+    // 「この日の日報は作れなかった」の「この日」がどの日かを、見出しの日付で読めるようにする
+    await screen.findByText('この日の日報は作れなかった');
+    expect(screen.getByText('2026-08-20')).toBeTruthy();
+  });
+
   it('日報が無いとき、読み込み中は空の文言を出さず、取れたら出す', async () => {
     renderHome({ reports: [] });
 
