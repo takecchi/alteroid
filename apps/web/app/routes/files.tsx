@@ -313,7 +313,10 @@ function UploadCard() {
   async function run(files: File[]) {
     if (files.length === 0) return;
     // 上げる前の検査はチャットと同じ（`checkAttachments`。0 バイト・上限超えはここで断る。最終判定はサーバ）
-    const { accepted, rejected } = checkAttachments([], files, limits);
+    // 1件ずつ検査する: 個数と合計の上限は「1発言に添える」単位で、置き場への POST /attachments は1件ずつ独立して上げるため（CLI の `attachments put` も1件ずつで、個数の上限は掛からない）
+    const checked = files.map((file) => checkAttachments([], [file], limits));
+    const accepted = checked.flatMap((result) => result.accepted);
+    const rejected = checked.flatMap((result) => result.rejected);
     const problems = rejected.map((item) => `${item.name}: ${item.reason}`);
     let done = 0;
     setBusy(true);
