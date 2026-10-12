@@ -123,6 +123,17 @@ class LocalRunner implements RunnerClient {
         ? {}
         : { outboxStagedRoot: options.outboxStagedRoot }),
     });
+    // 同じプロセスのデーモンは、預けた退避を下の `fetchArchive` で取りに来られる（#4485。退避の本文は名乗りを問わず預ける）
+    this.#host.setDaemonAcceptsArchiveRef(true);
+  }
+
+  // 預けた退避の本文を渡す・消す（#4485）: 退避は名乗りを問わず参照で送るので、口が無いと同じプロセスの構成で退避が取れない
+  async fetchArchive(managerId: string, archiveId: string): Promise<string | undefined> {
+    return this.#host.readArchive(managerId, archiveId);
+  }
+
+  async deleteArchive(managerId: string, archiveId: string): Promise<void> {
+    this.#host.deleteArchive(managerId, archiveId);
   }
 
   // 受け口が開く前の確認を捨てない: 捨てると、マネージャーが永久に返事を待つ。

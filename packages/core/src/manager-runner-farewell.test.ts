@@ -160,6 +160,13 @@ function hostBackedRunner(options: {
     async unpushedWork() {
       return undefined;
     },
+    // 退避の本文は名乗りを問わず預けて参照で送る（#4485）ので、本物の口と同じく取りに行く口を持たせる
+    async fetchArchive(managerId: string, archiveId: string) {
+      return host.readArchive(managerId, archiveId);
+    },
+    async deleteArchive(managerId: string, archiveId: string) {
+      host.deleteArchive(managerId, archiveId);
+    },
     ...(options.withAwaitStreamEnd === false
       ? {}
       : {
