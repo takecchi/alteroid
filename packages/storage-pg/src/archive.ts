@@ -2,9 +2,9 @@ import {
   archiveIdBranch,
   assertArchivableSessionId,
   hasNul,
-  classifyArchiveContinuity,
+  classifyArchiveContinuityYielding,
   compareArchiveEntriesNewestFirst,
-  fingerprintArchiveBody,
+  fingerprintArchiveBodyYielding,
   type ArchiveContinuity,
   type ArchiveEntry,
   type ArchiveRead,
@@ -44,7 +44,8 @@ export class PgTranscriptArchive implements TranscriptArchive {
   async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
     assertArchivableSessionId(sessionId);
     const body = stripNulls(transcript);
-    const fingerprint = fingerprintArchiveBody(transcript);
+    // 割って計算する（#4485）: 数十 MB の生ログの md5 を一度に取ると、デーモンのループを 150ms 前後ずつ塞ぐため。値は同期版と同じ
+    const fingerprint = await fingerprintArchiveBodyYielding(transcript);
     return this.#db.transaction(async (tx) => {
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${ARCHIVE_SESSION_LOCK_NAMESPACE}), hashtext(${sessionId}))`,
@@ -71,7 +72,10 @@ export class PgTranscriptArchive implements TranscriptArchive {
         if (best === null) return row;
         return archiveIdBranch(row.id) > archiveIdBranch(best.id) ? row : best;
       }, null);
-      const { continuity, comparedTo } = classifyArchiveContinuity(previous, transcript);
+      const { continuity, comparedTo } = await classifyArchiveContinuityYielding(
+        previous,
+        transcript,
+      );
       for (let attempt = 1; attempt <= MAX_ARCHIVE_ID_ATTEMPTS; attempt += 1) {
         const id = archiveIdCandidate(base, attempt);
         const inserted = await tx

@@ -452,8 +452,10 @@ export { compareCodeUnits } from './code-unit-order.js';
 export { verifyStoreIsolationContract } from './store-isolation-contract.js';
 export {
   classifyArchiveContinuity,
+  classifyArchiveContinuityYielding,
   describeArchiveContinuityForJournal,
   fingerprintArchiveBody,
+  fingerprintArchiveBodyYielding,
   tallyArchiveContinuity,
   type ArchiveBodyFingerprint,
   type ArchiveContinuity,
