@@ -263,6 +263,7 @@ import {
   UnreadableJournalEntryError,
   UnreadablePracticeError,
   UnreadableScheduleError,
+  ScheduleConflictError,
   UnreadableTokenSettingsError,
   describeUnreadableApprovals,
   describeUnreadableInboxEvents,
@@ -4655,13 +4656,30 @@ export function createCloneTools(context: ToolContext) {
             updatedAt: now,
           };
           try {
-            await stores.schedules.put(plan);
+            // 「無いときだけ作る」（`ifMatch: null`）で書く: `editRequest` が「無い」と答えてから書くまでに同じ名前が作られていたら、
+            // 無条件の `put` はその依頼を丸ごと置き換え、引き受け中の発火の印（`pendingRun`）まで消すため。
+            // 作られていたら、道具の説明どおり同じ kind として置き換える（`editRequest` は発火の印を引き継ぐ）
+            try {
+              await stores.schedules.put(plan, { ifMatch: null });
+            } catch (error) {
+              if (!(error instanceof ScheduleConflictError)) throw error;
+              const replaced = await stores.schedules.editRequest(
+                parsedKind.data,
+                { request, spec: parsedSpec.data },
+                now,
+              );
+              // 作られた依頼がもう消えていた（同時に外された）: そのまま作る
+              if (replaced === null) await stores.schedules.put(plan, { ifMatch: null });
+              else plan = replaced;
+            }
           } catch (error) {
             await appendJournalOrDrop('schedule_create', stores.journal, {
               type: 'decision',
               decision: `定期の依頼を設定できなかった: ${parsedKind.data}: ${request}`,
               grounds: '継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した',
             });
+            if (error instanceof UnreadableScheduleError)
+              return text(describeUnreadableScheduleEdit(error));
             throw error;
           }
         }
