@@ -426,6 +426,12 @@ export function pendingOwnLines(
   shownId: string | undefined,
   historyLines: Line[],
   failedTurns?: ReadonlyMap<string, FailedTurn>,
+  /**
+   * 編集で畳まれた返答（履歴で `supersededBy` が付いた outbound）。手元の返答がこれに当たったら引き取る（表に残さない）。
+   * 渡さないと、返答の途中で過去の発言を編集したとき、畳まれた側の返答は照合先が履歴から消え、手元の行として居座る。
+   * 畳むかどうかはサーバの `supersededBy` を読むだけで、規則はここで持たない。
+   */
+  foldedLines: readonly Line[] = [],
 ): Line[] {
   const claimedGroups = claimedFailedGroups(failedTurns, shownId, historyLines);
   const owned = ownedBy(lines, shownId).filter(
@@ -436,6 +442,27 @@ export function pendingOwnLines(
     const key = lineMatchKey(line);
     remaining.set(key, (remaining.get(key) ?? 0) + 1);
   }
+  // 返答だけを数える: 人間の発言は id で引き取るので、畳まれた本文で当てると別の発言を消しうる
+  const folded = new Map<string, number>();
+  for (const line of foldedLines) {
+    if (line.role !== 'clone') continue;
+    const key = lineMatchKey(line);
+    folded.set(key, (folded.get(key) ?? 0) + 1);
+  }
+  // 見えている履歴を先に使い、無ければ畳まれた返答を使う。どちらかを1つ減らせたら true
+  const take = (key: string, allowFolded: boolean): boolean => {
+    const visible = remaining.get(key) ?? 0;
+    if (visible > 0) {
+      remaining.set(key, visible - 1);
+      return true;
+    }
+    const hidden = allowFolded ? (folded.get(key) ?? 0) : 0;
+    if (hidden > 0) {
+      folded.set(key, hidden - 1);
+      return true;
+    }
+    return false;
+  };
   // id を持つ手元の人間の行は同じ id の履歴だけが引き取る: 本文だけで見ると、過去の同じ本文（「はい」）がいま送った行を消す
   const historyIds = new Set<string>();
   const historyUnlabeled = new Map<string, number>();
@@ -464,12 +491,16 @@ export function pendingOwnLines(
         const run = members.slice(start, end);
         // 区切りあり（メッセージの境目に空行）と区切りなし（古いデーモン）の両方を受ける: Web とデーモンは版がずれる。
         // 区切りありを先に当てる。どちらも履歴に在るなら、区切りありのほうが新しい形
-        const key = REPLY_SEGMENT_JOINERS.map(
+        const candidates = REPLY_SEGMENT_JOINERS.map(
           (joiner) =>
             `clone\u0000${run.map((member, index) => (index === 0 || member.splitByHuman === true ? '' : joiner) + member.text).join('')}`,
-        ).find((candidate) => (remaining.get(candidate) ?? 0) > 0);
+        );
+        // 見えている履歴を先に当て、無ければ畳まれた返答に当てる
+        const key =
+          candidates.find((candidate) => (remaining.get(candidate) ?? 0) > 0) ??
+          candidates.find((candidate) => (folded.get(candidate) ?? 0) > 0);
         if (key === undefined) continue;
-        remaining.set(key, (remaining.get(key) ?? 0) - 1);
+        take(key, true);
         for (const member of run) absorbedKeys.add(member.key);
         next = end;
         break;
@@ -491,9 +522,7 @@ export function pendingOwnLines(
       taken = unlabeled > 0;
       if (taken) historyUnlabeled.set(line.text, unlabeled - 1);
     } else {
-      const count = remaining.get(key) ?? 0;
-      taken = count > 0;
-      if (taken) remaining.set(key, count - 1);
+      taken = take(key, line.role === 'clone');
     }
     if (taken) {
       // 承認のカードは手元の位置に残す: 履歴の側へ渡すと発言や本文の上に出てしまう。時刻では並べない（手元の行の時刻は端末の時計で、サーバとずれうる）
@@ -1261,6 +1290,20 @@ export function ChatPane({
     markRead(shownId, history.data);
   }, [pageVisible, shownId, history.data, markRead]);
 
+  // 編集で畳まれた返答: 表には出さないが、返答の途中で編集したとき手元に残った返答の行を引き取る照合先にする（pendingOwnLines）
+  const foldedLines = useMemo<Line[]>(
+    () =>
+      (history.data?.messages ?? [])
+        .filter((message) => message.supersededBy !== undefined && message.role === 'outbound')
+        .map((message) => ({
+          key: message.id,
+          role: 'clone' as const,
+          text: message.text,
+          of: shownId,
+        })),
+    [history.data, shownId],
+  );
+
   // at の文字列比較で並べる: 生成経路はどれも new Date().toISOString()（UTC・ミリ秒3桁・Z 終端）なので、文字列比較がそのまま時刻比較になる。
   // 回答・取り下げも出す: 質問だけ復元すると、回答済みの確認が開き直した瞬間に「まだ返答が無い」に見える
   const historyLines = useMemo<Line[]>(() => {
@@ -1334,7 +1377,7 @@ export function ChatPane({
   // useEffect ではなく render 中で行う: コミット後まで遅れると、2チャンク目が届く前に刈り込みが間に合うとは限らず、activeReplyKeys を外しても歯が落ちない。
   // settled の判定にも activeReplyKeys を含める: 外側の判定と内側の filter が同じ集合を見ないと、中で何も落とさない render で setState が無限に呼び直される（Too many re-renders）
   const pendingCurrentKeys = new Set(
-    pendingOwnLines(lines, shownId, historyLines, failedTurns).map((line) => line.key),
+    pendingOwnLines(lines, shownId, historyLines, failedTurns, foldedLines).map((line) => line.key),
   );
   const settled = ownedBy(lines, shownId).some(
     (line) => !pendingCurrentKeys.has(line.key) && !activeReplyKeys.has(line.key),
@@ -1342,7 +1385,9 @@ export function ChatPane({
   if (settled) {
     setLines((previous) => {
       const stillPendingKeys = new Set(
-        pendingOwnLines(previous, shownId, historyLines, failedTurns).map((line) => line.key),
+        pendingOwnLines(previous, shownId, historyLines, failedTurns, foldedLines).map(
+          (line) => line.key,
+        ),
       );
       const next = previous.filter(
         (line) =>
@@ -1378,14 +1423,14 @@ export function ChatPane({
     });
   }, [historyLines, shownId, discardUnfinishedReply]);
   const all = useMemo(() => {
-    const pending = pendingOwnLines(lines, shownId, historyLines, failedTurns);
+    const pending = pendingOwnLines(lines, shownId, historyLines, failedTurns, foldedLines);
     // 手元の位置に残したカードは、履歴の側では出さない（二重にしない）。
     const held = heldApprovalIds(pending);
     return [
       ...historyLines.filter((line) => line.approval === undefined || !held.has(line.approval.id)),
       ...pending,
     ];
-  }, [historyLines, lines, shownId, failedTurns]);
+  }, [historyLines, lines, shownId, failedTurns, foldedLines]);
 
   const allRef = useRef<Line[]>([]);
   useEffect(() => {
