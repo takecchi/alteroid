@@ -138,8 +138,17 @@ export async function foldArchiveOnce(
     const chunkIds = new Set(chunk);
     const chunkTargets = foldableTargets.filter((row) => chunkIds.has(row.id));
     const foldedThisChunk: string[] = [];
+    // 消す途中で投げられても、そこまでに消した行の日誌を先に書いてから投げ直す: 本文はもう消えていて（不可逆）、
+    // そのまま外へ抜けると「何を消したか」がどこにも残らないため。残りの行・塊はこの回では消さない（次の回に回る）
+    let removeFailure: { error: unknown } | undefined;
     for (const target of chunkTargets) {
-      const result = await options.stores.archive.remove(target.id);
+      let result: Awaited<ReturnType<typeof options.stores.archive.remove>>;
+      try {
+        result = await options.stores.archive.remove(target.id);
+      } catch (error) {
+        removeFailure = { error };
+        break;
+      }
       if (result.kind === 'missing' || result.kind === 'already') {
         // `already` も raced に数える: 選んだ後に他経路が消した回で、この呼びが消したことにしない（触っていない id を応答・日誌に載せない）。
         raced += 1;
@@ -149,14 +158,21 @@ export async function foldArchiveOnce(
       foldedBytes += result.bytes;
     }
     foldedIds.push(...foldedThisChunk);
-    if (foldedThisChunk.length === 0) continue;
+    if (foldedThisChunk.length === 0) {
+      if (removeFailure !== undefined) throw removeFailure.error;
+      continue;
+    }
     // 日誌が落ちても残りの塊へ進む: この塊の本文はもう消えていて（不可逆）、やり直せないため。
     try {
       await options.stores.journal.append({
         type: 'decision',
         decision:
           'デーモンが退避済み生ログの古い写しを自動で畳んだ（issue #698。' +
-          `${index + 1}/${chunks.length} 塊目、この塊は ${foldedThisChunk.length} 件）\n` +
+          `${index + 1}/${chunks.length} 塊目、この塊は ${foldedThisChunk.length} 件` +
+          (removeFailure === undefined
+            ? ''
+            : '。この塊の途中で消せない行に当たって途中で止めた（残りは次の回）') +
+          '）\n' +
           `絞り込み: before=${before}\n` +
           `畳んだ id: ${foldedThisChunk.join(' ')}`,
         grounds:
@@ -172,6 +188,7 @@ export async function foldArchiveOnce(
         error,
       );
     }
+    if (removeFailure !== undefined) throw removeFailure.error;
   }
 
   return {
