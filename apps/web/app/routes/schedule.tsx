@@ -35,7 +35,7 @@ import {
   useRunSchedule,
   useSchedule,
 } from '@alteroid/swr';
-import { formatDateTime, formatRelative } from '@alteroid/logic';
+import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
 import type { ScheduleEntry, ScheduleSpec, UnreadableSchedule } from '@alteroid/logic';
 
 // 「消された依頼ではない」を落とさない: 落とすと行が消えたのと区別が付かないため
@@ -160,7 +160,8 @@ function SchedulePage() {
               >
                 {/* 説明文の列に最小幅を持たせる: min-w-0 flex-1 のままだと折り返しの判定で幅 0 の項目として数えられ、説明文だけが 46px ほどに潰れたため */}
                 <div className="min-w-[min(14rem,100%)] flex-1">
-                  <p className="text-sm">{entry.description}</p>
+                  {/* 描く所だけ伏せる: 依頼の本文は人間かクローンが書いた自由文で、約束の一覧も同じ種類の本文を伏せるため（編集欄は再送する本文なので伏せない） */}
+                  <p className="text-sm">{redactBody(entry.description)}</p>
                   {/* 既定の仕込みの kind は出さない: 内部の識別子を利用者に見せないため */}
                   {entry.request !== undefined && (
                     <p className="mt-0.5 text-[11px] break-words text-muted-foreground">
@@ -172,7 +173,7 @@ function SchedulePage() {
                   {entry.request !== undefined && (
                     <>
                       <p className="mt-1 line-clamp-3 text-xs break-words text-muted-foreground">
-                        {entry.request}
+                        {redactBody(entry.request)}
                       </p>
                       <p className="mt-0.5 text-[11px] text-muted-foreground">
                         前回:{' '}
@@ -593,7 +594,7 @@ function ScheduleEditForm({
           />
           {conflict.current !== null && (
             <pre className="mt-1 max-h-48 overflow-auto text-xs break-words whitespace-pre-wrap">
-              {conflict.current.request}
+              {redactBody(conflict.current.request ?? '')}
             </pre>
           )}
           <Button

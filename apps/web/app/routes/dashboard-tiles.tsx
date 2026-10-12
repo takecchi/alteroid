@@ -17,7 +17,7 @@ import {
   Stat,
 } from '@alteroid/ui';
 import { useProgress, useSchedule, useUsage } from '@alteroid/swr';
-import { formatRelative, usageHref, type Progress } from '@alteroid/logic';
+import { formatRelative, redactBody, usageHref, type Progress } from '@alteroid/logic';
 
 import { useMinuteNow } from '~/lib/use-now';
 
@@ -149,7 +149,9 @@ function NextRunTile() {
             </p>
           ) : (
             <Stat
-              label={<span title={shown.description}>{shown.description}</span>}
+              label={
+                <span title={redactBody(shown.description)}>{redactBody(shown.description)}</span>
+              }
               value={formatRelative(shown.nextAt)}
               hint={
                 schedule.data.entries.length > 1
