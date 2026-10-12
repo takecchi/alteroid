@@ -8085,7 +8085,7 @@ export function createApp(deps: AppDeps) {
             }
             return c.json(
               tokensConflictResponseSchema.parse({
-                error: error.message,
+                error: '認証トークンのプールが読んだ後に変わっている（変えていない）',
                 ...(current === undefined ? {} : { current }),
               }),
               409,
