@@ -1432,9 +1432,16 @@ class Host implements RunnerHost {
     this.#archiveStash.delete(managerId, archiveId);
   }
 
-  // 名乗っていないデーモンには預けない（`undefined` を返し、セッションは本文を載せる）: 古いデーモンは本文の無い出来事を落とすため
+  // 名乗りの有無に関わらず預けて参照を送る（#4485）: 2026-10-13T16:54Z、名乗りを覚えていない回に 155MB の本文が SSE の1行で届き、
+  // デーモンのループが 3.8 秒塞がった（ヒープ 1722/1759MB）。本文を載せる道を残すと、名乗りが落ちた回にいつでも同じことが起きる。
+  // 古い（名乗らない）デーモンは参照だけの出来事を読めず落とすが、それは跡が残る失敗で、ループを塞いで全体を止めるよりよい。
+  // 名乗りを覚えていない回は stderr に残す: 名乗りがいつ落ちるのかを後から確かめられるように（本文・委譲の中身は書かない）
   #stashArchive(managerId: string, body: string): { id: string; chars: number } | undefined {
-    if (!this.#daemonAcceptsArchiveRef) return undefined;
+    if (!this.#daemonAcceptsArchiveRef) {
+      process.stderr.write(
+        `alteroid-runner: いま繋がっているデーモンが退避の参照を受けると名乗っていないが、本文は SSE に載せずに預けて参照を送る（managerId=${managerId} chars=${String(body.length)}）\n`,
+      );
+    }
     return this.#archiveStash.put(managerId, body);
   }
 

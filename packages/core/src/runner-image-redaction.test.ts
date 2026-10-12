@@ -120,9 +120,14 @@ describe('runner は画像の中身を生ログの入口へ流さない（#4127�
     const archive = events.find(
       (event): event is Extract<RunnerEvent, { type: 'archive' }> => event.type === 'archive',
     );
-    if (archive?.body === undefined) throw new Error('archive が本文つきで emit されていない');
-    expect(archive.body).not.toContain(B64);
-    expect(archive.body).toContain('[画像の控え] type=image/png');
-    expect(archive.body.split('\n')[0]).toBe(plain);
+    // 本文は SSE に載せず預ける（#4485）。預けた本文を見る
+    const body =
+      archive?.ref === undefined
+        ? undefined
+        : host.readArchive('mgr-image-archive', archive.ref.id);
+    if (body === undefined) throw new Error('archive の本文が預けられていない');
+    expect(body).not.toContain(B64);
+    expect(body).toContain('[画像の控え] type=image/png');
+    expect(body.split('\n')[0]).toBe(plain);
   });
 });

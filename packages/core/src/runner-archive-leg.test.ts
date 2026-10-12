@@ -163,7 +163,9 @@ describe('#shipArchive() は report / ask と同じ1本の脚（emit）を通る
       (event): event is Extract<RunnerEvent, { type: 'archive' }> => event.type === 'archive',
     );
     expect(archiveEvent?.managerId).toBe('mgr-archive-leg');
-    expect(archiveEvent?.body).toBe(archivedBody);
+    // 本文は SSE に載せず預ける（#4485）。預かりから同じ本文が読める
+    expect(archiveEvent?.body).toBeUndefined();
+    expect(host.readArchive('mgr-archive-leg', archiveEvent?.ref?.id ?? '')).toBe(archivedBody);
 
     const reportEvent = events.find(
       (event): event is Extract<RunnerEvent, { type: 'report' }> => event.type === 'report',
@@ -315,11 +317,21 @@ describe('参照で受け取れるデーモンには、退避の本文を SSE �
     expect(host.readArchive('mgr-archive-ref', id)).toBeUndefined();
   });
 
-  it('名乗っていない（古い）デーモンには、これまでどおり本文を載せる', async () => {
+  // 2026-10-13T16:54Z、名乗りを覚えていない回に 155MB の本文が SSE の1行で届き、デーモンのループが 3.8 秒塞がった
+  // （ヒープ 1722/1759MB）。名乗りの有無に関わらず、本文は SSE に載せない（#4485）
+  it('名乗りを覚えていない回も、本文は SSE に載せずに預けて参照を送り、そのことを stderr に残す', async () => {
     for (const accepts of [undefined, false]) {
-      const { archive } = await shipWith(accepts);
-      expect(archive?.ref).toBeUndefined();
-      expect(archive?.body).toBe(BODY);
+      let shipped: Awaited<ReturnType<typeof shipWith>> | undefined;
+      const lines = await captureStderr(async () => {
+        shipped = await shipWith(accepts);
+      });
+      const archive = shipped?.archive;
+      expect(archive?.body).toBeUndefined();
+      expect(archive?.ref?.chars).toBe(BODY.length);
+      expect(shipped?.host.readArchive('mgr-archive-ref', archive?.ref?.id ?? '')).toBe(BODY);
+      expect(lines.some((line) => line.includes('参照を受けると名乗っていない'))).toBe(true);
+      // 本文は stderr にも出さない
+      expect(lines.some((line) => line.includes(BODY))).toBe(false);
     }
   });
 });
