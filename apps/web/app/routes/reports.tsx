@@ -34,6 +34,7 @@ export function isUnavailable(
 
 // Markdown で描かない: 中身は SDK が出したエラー文であって、クローンが書いた文章ではなく、記法が混ざると体裁まで日報と同じ顔になるため
 // 理由は言い換えずにそのまま出す: SDK の文言で人間が検索できることが要件のため
+// ただし秘密だけは伏せる: エラー文は環境変数を引用しうり、CLI（`renderReport`）も伏せて出すため。伏せ字は鍵の部分だけを置き換え、文言は残す
 export function UnavailableNote({ reason }: { reason: string }) {
   return (
     <div className="min-w-0">
@@ -42,7 +43,7 @@ export function UnavailableNote({ reason }: { reason: string }) {
         。以下はクローンが書いたまとめではなく、書けなかった理由である。
       </p>
       <pre className="mt-2 overflow-x-auto rounded border border-border bg-background p-2 text-[11px] break-words whitespace-pre-wrap text-muted-foreground">
-        {reason}
+        {redactBody(reason)}
       </pre>
       <p className="mt-2 text-xs text-muted-foreground">
         この日の記録は
