@@ -8474,17 +8474,57 @@ class Pool implements ManagerPool {
       }
 
       case 'archive': {
+        // 本文は参照で届くことがある（#4485）: SSE の1行で数十 MB を運ぶと、受け取りの間ループが塞がるため。取りに行くのは出来事を出した器
+        const chars = event.body?.length ?? event.ref?.chars ?? 0;
+        let body: string;
+        let fetchedFrom: { runner: RunnerClient; archiveId: string } | undefined;
         try {
-          const write = await this.#stores.archive.archive(event.managerId, event.body);
+          if (event.body !== undefined) {
+            body = event.body;
+          } else if (event.ref !== undefined) {
+            const runner = await this.#runners.get(fromRunnerId);
+            if (runner === null) {
+              throw new Error(`退避を預けた器（${fromRunnerId}）が名簿に居ない`);
+            }
+            if (runner.fetchArchive === undefined) {
+              throw new Error('この器のクライアントは、預けた退避を取りに行く口を持たない');
+            }
+            const fetched = await runner.fetchArchive(event.managerId, event.ref.id);
+            if (fetched === undefined) {
+              throw new Error(
+                `runner に預けた退避（${event.ref.id}）が無かった（期限切れで捨てられたか、既に消された）`,
+              );
+            }
+            body = fetched;
+            fetchedFrom = { runner, archiveId: event.ref.id };
+          } else {
+            throw new Error('本文も参照も無い退避の出来事が届いた');
+          }
+        } catch (error) {
+          noteDroppedRecord(
+            'トランスクリプトの退避',
+            `managerId=${event.managerId} chars=${String(chars)}${event.ref === undefined ? '' : ` ref=${event.ref.id}`}`,
+            error,
+          );
+          return;
+        }
+        try {
+          const write = await this.#stores.archive.archive(event.managerId, body);
           record.job.archiveIds = [...(record.job.archiveIds ?? []), write.id];
           await this.#persist(record);
+          // 置き場へ入れてから消させる: 先に消すと、置き場への書き込みが失敗した回に本文がどこにも残らないため。消せなくても runner の期限が消す
+          if (fetchedFrom !== undefined) {
+            await fetchedFrom.runner
+              .deleteArchive?.(event.managerId, fetchedFrom.archiveId)
+              .catch(() => undefined);
+          }
           // `#journal` は自分で失敗を握るので、退避と台帳への記録の成功を日誌の失敗に道連れにしない。
           const continuityText = describeArchiveContinuityForJournal({
             caller: 'マネージャーの生ログの退避',
             sessionId: event.managerId,
             continuity: write.continuity,
             comparedTo: write.comparedTo,
-            bodyChars: event.body.length,
+            bodyChars: body.length,
           });
           if (continuityText !== null) {
             await this.#journal({
@@ -8498,7 +8538,7 @@ class Pool implements ManagerPool {
           // 止めないが黙って消さない: 跡が無いと「そもそも退避しなかった」と区別が付かない。
           noteDroppedRecord(
             'トランスクリプトの退避',
-            `managerId=${event.managerId} chars=${event.body.length}`,
+            `managerId=${event.managerId} chars=${String(body.length)}`,
             error,
           );
         }

@@ -35,8 +35,11 @@ import {
   RunnerUnknownError,
   settleWithinDeadline,
 } from './deadline.js';
+import { SseFrameSplitter } from './sse-frames.js';
 
 import {
+  ARCHIVE_REF_ACCEPT_HEADER,
+  ARCHIVE_REF_ACCEPT_TOKEN,
   DEFAULT_SSE_HEARTBEAT_MS,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
@@ -624,6 +627,8 @@ class HttpRunner implements RunnerClient {
           accept: 'text/event-stream',
           authorization: `Bearer ${this.#token}`,
           ...(this.#lastEventId === null ? {} : { 'last-event-id': String(this.#lastEventId) }),
+          // 生ログの退避を参照で受け取れると名乗る（#4485）: runner は本文を SSE の1行に載せず、`fetchArchive` で取りに来るのを待つ
+          [ARCHIVE_REF_ACCEPT_HEADER]: ARCHIVE_REF_ACCEPT_TOKEN,
         },
         signal: controller.signal,
       });
@@ -682,18 +687,15 @@ class HttpRunner implements RunnerClient {
     onBytes: () => void,
   ): Promise<void> {
     const decoder = new TextDecoder();
-    let buffer = '';
+    // 1本の文字列へ足して先頭から探さない: 数十 MB のフレームで写しと走査が2乗になり、ループを秒単位で塞ぐため（#4485。`sse-frames.ts`）
+    const splitter = new SseFrameSplitter();
     let firstIdSeen = false;
     for (;;) {
       const { value, done } = await reader.read();
       if (done) return;
       onBytes();
-      buffer += decoder.decode(value, { stream: true });
 
-      let boundary = buffer.indexOf('\n\n');
-      while (boundary !== -1) {
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
+      for (const frame of splitter.push(decoder.decode(value, { stream: true }))) {
         const lines = frame.split('\n');
         const data = lines
           .filter((line) => line.startsWith('data:'))
@@ -728,7 +730,6 @@ class HttpRunner implements RunnerClient {
             this.#noteDropped(dropped, 'unparsable', undefined, data.length);
           }
         }
-        boundary = buffer.indexOf('\n\n');
       }
     }
   }
@@ -1113,6 +1114,41 @@ class HttpRunner implements RunnerClient {
     await this.#call(
       'DELETE',
       `/managers/${encodeURIComponent(managerId)}/outbox/${encodeURIComponent(fileId)}`,
+      undefined,
+      options?.signal,
+    );
+  }
+
+  // 404 だけを `undefined`（無い）にする: 取れなかった（接続断・期限切れ・非2xx）と「無い」を混ぜないため（`openOutboxFile` と同じ）
+  // 本文は `response.text()` で受ける: JSON の1行として受けると、解析とエスケープ戻しの間ループが塞がるため（#4485）
+  async fetchArchive(
+    managerId: string,
+    archiveId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<string | undefined> {
+    let response: Response;
+    try {
+      response = await this.#call(
+        'GET',
+        `/managers/${encodeURIComponent(managerId)}/archive/${encodeURIComponent(archiveId)}`,
+        undefined,
+        options?.signal,
+      );
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) return undefined;
+      throw error;
+    }
+    return response.text();
+  }
+
+  async deleteArchive(
+    managerId: string,
+    archiveId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void> {
+    await this.#call(
+      'DELETE',
+      `/managers/${encodeURIComponent(managerId)}/archive/${encodeURIComponent(archiveId)}`,
       undefined,
       options?.signal,
     );

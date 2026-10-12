@@ -120,7 +120,7 @@ describe('runner は画像の中身を生ログの入口へ流さない（#4127�
     const archive = events.find(
       (event): event is Extract<RunnerEvent, { type: 'archive' }> => event.type === 'archive',
     );
-    if (archive === undefined) throw new Error('archive が emit されていない');
+    if (archive?.body === undefined) throw new Error('archive が本文つきで emit されていない');
     expect(archive.body).not.toContain(B64);
     expect(archive.body).toContain('[画像の控え] type=image/png');
     expect(archive.body.split('\n')[0]).toBe(plain);

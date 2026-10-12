@@ -249,7 +249,7 @@ function labelOf(event: RunnerEvent): string {
     case 'worker_wait':
       return `emit:worker_wait(settled=${String(event.settled)})`;
     case 'archive':
-      return `emit:archive(len=${String(event.body.length)})`;
+      return `emit:archive(len=${String(event.body?.length ?? event.ref?.chars ?? 0)})`;
     case 'usage':
       return 'emit:usage';
     case 'ask':
