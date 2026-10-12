@@ -44,6 +44,12 @@ export interface Scheduler {
   run(kind: string): boolean;
   tick(now?: Date): string[];
   retrySoon(kind: string, delayMs?: number): void;
+  /**
+   * このプロセスで回 `at` を引き受けた（`claimRun` が通った）と知らせる。引き受けた回は、長引いても落ちた回として配り直さない。
+   * 配り直さないと決めるのはメモリの印だけ: ターンが失敗すれば `retrySoon` が印を外して配り直し、器が落ちれば印ごと消えて
+   * 再起動後の配り直しが働く。
+   */
+  noteClaimed(kind: string, at: string): void;
   // スケジューラへ直接 add する口を作らない: ストアと仕込みの二重管理になり、デーモンの再起動で依頼が消えるため
   refresh(): Promise<void>;
   settled(): Promise<void>;
@@ -349,6 +355,12 @@ class TimerScheduler implements Scheduler {
 
   #entries(): ScheduleEntry[] {
     return [...this.#base, ...[...this.#requests.values()].map((held) => held.entry)];
+  }
+
+  // 「配り直した」と同じ印を立てる: 引き受け済みの回の `pendingRun` は、ターンが長引いている間も残る。印が無いと次の刻みで
+  // 落ちた回と見て配り直し、先の回の後にもう一度走らせ、その刻みの本来の回を飛ばす
+  noteClaimed(kind: string, at: string): void {
+    this.#redelivered.set(kind, at);
   }
 
   retrySoon(kind: string, delayMs: number = SCHEDULE_RETRY_MS): void {

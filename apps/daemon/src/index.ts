@@ -788,6 +788,7 @@ export async function main(): Promise<void> {
     accountUsage: () => usagePoller.state(),
     scheduler: () => scheduler.list(),
     onScheduledRunNotStarted: (kind, delayMs) => scheduler.retrySoon(kind, delayMs),
+    onScheduledRunClaimed: (kind, at) => scheduler.noteClaimed(kind, at),
     cwd: paths.root,
     runners,
     profile,

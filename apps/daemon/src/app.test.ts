@@ -340,6 +340,7 @@ function fakeScheduler() {
       return kind === 'daily_report';
     },
     retrySoon() {},
+    noteClaimed() {},
     tick() {
       return [];
     },

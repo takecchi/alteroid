@@ -617,6 +617,8 @@ export interface CloneOptions {
   // ここで `Scheduler` を作り直さない: デーモン側が組み立てるため
   scheduler?: () => ScheduleStatus[];
   onScheduledRunNotStarted?: (kind: string, delayMs?: number) => void;
+  /** 定期の依頼の回 `at` を引き受けた（`claimRun` が通った）。スケジューラが、長引いている回を配り直さないように知らせる。 */
+  onScheduledRunClaimed?: (kind: string, at: string) => void;
   // ここで環境変数を読み直さない: 事実はデーモン側が組み立て、読み直すと出所が2つになるため
   self?: SelfFacts;
   /**
@@ -963,6 +965,7 @@ class Clone implements CloneHost {
   readonly #accountUsage: (() => AccountUsageState) | undefined;
   readonly #scheduler: (() => ScheduleStatus[]) | undefined;
   readonly #onScheduledRunNotStarted: ((kind: string, delayMs?: number) => void) | undefined;
+  readonly #onScheduledRunClaimed: ((kind: string, at: string) => void) | undefined;
   readonly #timerTurnRetries = new Map<string, { at: string; attempts: number }>();
   readonly #redeliveryGate: RedeliveryGate;
 
@@ -1000,6 +1003,7 @@ class Clone implements CloneHost {
       accountUsage,
       scheduler,
       onScheduledRunNotStarted,
+      onScheduledRunClaimed,
       self,
       mcpServerFactory,
       cloneToolRelaySocketDir,
@@ -1037,6 +1041,7 @@ class Clone implements CloneHost {
     this.#accountUsage = accountUsage;
     this.#scheduler = scheduler;
     this.#onScheduledRunNotStarted = onScheduledRunNotStarted;
+    this.#onScheduledRunClaimed = onScheduledRunClaimed;
     this.#self = self;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
     // 駆動役が経路を決めるなら env より優先する: Codex は別プロセスで、インプロセスの MCP を持てないため
@@ -4428,6 +4433,7 @@ class Clone implements CloneHost {
           event.kind,
           event.at,
           event.cause === 'manual' ? 'manual' : 'schedule',
+          event,
         );
 
         // 動かさない方を選ぶ: 1周期遅らせるだけで済むが、走らせてしまうと取り返せないため
@@ -4438,8 +4444,12 @@ class Clone implements CloneHost {
             role: 'outbound',
             text: `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
           });
-          // 人間が消した（`withdrawn`）ものは再試行しない
-          if (event.cause !== 'manual' && claimed.status !== 'withdrawn') {
+          // 人間が消した（`withdrawn`）ものと、完了まで済んだ回（`completed`）は再試行しない
+          if (
+            event.cause !== 'manual' &&
+            claimed.status !== 'withdrawn' &&
+            claimed.status !== 'completed'
+          ) {
             this.#onScheduledRunNotStarted?.(event.kind);
           }
           return;
@@ -4718,10 +4728,14 @@ class Clone implements CloneHost {
     kind: string,
     at: string,
     cause: 'schedule' | 'manual',
+    event: InboxEvent,
   ): Promise<
     | { status: 'ok'; plan: ScheduledRequest }
     | { status: 'missing' }
-    | { status: 'unreadable' | 'unrecordable' | 'withdrawn' | 'churning'; reason: string }
+    | {
+        status: 'unreadable' | 'unrecordable' | 'withdrawn' | 'churning' | 'completed';
+        reason: string;
+      }
   > {
     // 最初から無いのと後から消えたのは分ける: 片方は判断させ、片方は動かさないため
     let sawPlan = false;
@@ -4745,6 +4759,25 @@ class Clone implements CloneHost {
       }
       sawPlan = true;
 
+      // 完了まで済んだ回はもう一度引き受けない: 再起動の後の配り直し（`#dropStaleRedelivery`）と同じ判定を、
+      // 同じプロセスの中で届いた timer にも掛ける。完了を記録するのはこのクローンで、受信箱は直列なので、読んでから引き受けるまでに完了は割り込まない
+      // 同じプロセスの中で枠の保持から戻った合図は、印を受信箱の行にだけ書き、メモリでは `#heldForUsage`（id）で覚えている:
+      // 保持した回は完了を記録してあるので、印を見落とすと「完了した回」と取り違えて走らせないまま消す
+      const held = event.type === 'timer' && this.#heldForUsage.has(event.id);
+      if (
+        completedTimerRoundVerdict(
+          held ? { ...event, heldForUsage: true } : event,
+          found.plan.lastScheduledRunAt,
+        ) === 'stale'
+      ) {
+        return {
+          status: 'completed',
+          reason:
+            `その回は既に完了していた（定期の依頼の \`lastScheduledRunAt\` 以前）ので、` +
+            'もう一度は走らせない（完了した回を二度走らせないため）',
+        };
+      }
+
       const claimed = await this.#claimRun(kind, found.plan.updatedAt, at, cause);
       if (claimed.status === 'failed') {
         return {
@@ -4754,7 +4787,15 @@ class Clone implements CloneHost {
             `もう一度起こす）: ${claimed.error}`,
         };
       }
-      if (claimed.plan !== null) return { status: 'ok', plan: claimed.plan };
+      if (claimed.plan !== null) {
+        // 引き受けたと知らせる: 長引いても、次の刻みで落ちた回と見て配り直させないため（`Scheduler.noteClaimed`）
+        try {
+          this.#onScheduledRunClaimed?.(kind, at);
+        } catch {
+          // 知らせられなくても仕事は止めない（配り直しが1回余分に来うるだけで、完了した回は上の判定で畳まれる）
+        }
+        return { status: 'ok', plan: claimed.plan };
+      }
     }
     return {
       status: 'churning',
