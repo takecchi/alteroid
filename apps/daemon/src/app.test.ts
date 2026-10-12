@@ -432,6 +432,7 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
       activeTokenGeneration: true,
       tokenGenerationUnknownReason: true,
       liveBackgroundTasks: true,
+      classifierDenials: true,
       resetTimeSkewMatch: true,
       lastUnpushedWorkObservation: true,
       lastRescue: true,

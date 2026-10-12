@@ -45,6 +45,7 @@ import {
   resumeEvidenceOf,
   type ResumeConfirmationState,
 } from './resume-confirmation.js';
+import type { ClassifierDenialOverLimit } from './classifier-denial-streak.js';
 import { isQuotaFailure } from './sdk-failure.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
@@ -471,6 +472,11 @@ export interface ManagerSummary {
    * 読むだけなので、少し古いことがある。
    */
   liveBackgroundTasks?: number;
+  /**
+   * 分類器（auto mode）の拒否が上限を越えている相手（担当本人・作業者）。名簿の観測を読むだけなので少し古いことがある。
+   * `undefined` は「分からない」（未聴取・古い runner）。空配列は「越えている相手は居ない」。
+   */
+  classifierDenials?: readonly ClassifierDenialOverLimit[];
   /**
    * `tokenGeneration` とは独立の材料: あちらは daemon のプロセス内記憶が前提で、こちらは
    * 429の文言と `TokenPoolStore` だけを見るので bookkeeping が無い場面でも判定できる。
@@ -4140,6 +4146,20 @@ class Pool implements ManagerPool {
     return undefined;
   }
 
+  // `#observedBackgroundTasks` と同じ読み方: 名簿の最後の観測を読むだけで往復しない。キーが無いのは「分からない」
+  #observedClassifierDenials(
+    runnerId: string | undefined,
+    managerId: string,
+  ): readonly ClassifierDenialOverLimit[] | undefined {
+    if (runnerId === undefined) return undefined;
+    for (const entry of this.#runners.entries()) {
+      if (entry.runnerId !== runnerId) continue;
+      const denials = entry.sessionClassifierDenials;
+      if (denials !== undefined && Object.hasOwn(denials, managerId)) return denials[managerId];
+    }
+    return undefined;
+  }
+
   async list(): Promise<ManagerSummary[]> {
     await this.#ensureConnected();
 
@@ -4213,6 +4233,11 @@ class Pool implements ManagerPool {
       const summary = known.get(record.job.id);
       if (tasks !== undefined && summary !== undefined) {
         known.set(record.job.id, { ...summary, liveBackgroundTasks: tasks });
+      }
+      const denials = this.#observedClassifierDenials(record.job.runnerId, record.job.id);
+      const current = known.get(record.job.id);
+      if (denials !== undefined && current !== undefined) {
+        known.set(record.job.id, { ...current, classifierDenials: denials });
       }
     }
     const summaries = [...known.values()];

@@ -22,6 +22,7 @@ class FakeRunner implements RunnerClient {
   sessionsToReturn: string[] = [];
   backgroundToReturn: Record<string, number> = {};
   fingerprintToReturn: Record<string, string> = {};
+  denialsToReturn: Record<string, NonNullable<RunnerManagerState['classifierDenials']>> = {};
   listCalls = 0;
   lastListSignal: AbortSignal | undefined;
 
@@ -68,6 +69,9 @@ class FakeRunner implements RunnerClient {
         : {}),
       ...(Object.hasOwn(this.fingerprintToReturn, managerId)
         ? { tokenFingerprint: this.fingerprintToReturn[managerId] }
+        : {}),
+      ...(Object.hasOwn(this.denialsToReturn, managerId)
+        ? { classifierDenials: this.denialsToReturn[managerId] }
         : {}),
     }));
   }
@@ -322,6 +326,33 @@ describe('runner が抱えているセッションの観測（#579）', () => {
     const [entry] = registry.entries();
     expect(entry?.sessionTokenFingerprints).toEqual({ 'mgr-new': 'aaaaaaaaaaaa' });
     expect(entry?.sessionTokenFingerprints).not.toHaveProperty('mgr-old');
+
+    await registry.stop();
+  });
+
+  it('list() が返した分類器の拒否の上限越えを、欄を名乗った委譲だけ sessionClassifierDenials に載せる（空配列は「居ない」、キーが無いのは「分からない」）', async () => {
+    vi.setSystemTime(new Date('2026-10-12T00:00:00.000Z'));
+    const runner = new FakeRunner('runner-a');
+    runner.sessionsToReturn = ['mgr-over', 'mgr-calm', 'mgr-old'];
+    runner.denialsToReturn = {
+      'mgr-over': [
+        { actor: 'manager', consecutive: 3, total: 4, firstReason: '[Git Destructive]' },
+      ],
+      'mgr-calm': [],
+    };
+    const registry = createRunnerRegistry([]);
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const [entry] = registry.entries();
+    expect(entry?.sessionClassifierDenials).toEqual({
+      'mgr-over': [
+        { actor: 'manager', consecutive: 3, total: 4, firstReason: '[Git Destructive]' },
+      ],
+      'mgr-calm': [],
+    });
+    expect(entry?.sessionClassifierDenials).not.toHaveProperty('mgr-old');
 
     await registry.stop();
   });

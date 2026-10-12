@@ -647,6 +647,17 @@ export const managerSummarySchema = z.object({
     .enum(['pool-not-wired', 'not-yet-observed', 'reattached-across-restart'])
     .optional(),
   liveBackgroundTasks: z.number().int().nonnegative().optional(),
+  // 名乗らない古い runner の委譲には載らない（`undefined` は「分からない」）。空配列は「越えている相手は居ない」。
+  classifierDenials: z
+    .array(
+      z.object({
+        actor: z.string(),
+        consecutive: z.number().int().nonnegative(),
+        total: z.number().int().nonnegative(),
+        firstReason: z.string().optional(),
+      }),
+    )
+    .optional(),
   // `jobSchema` の枝を借りない: 台帳（`Job`）には無い、プロセス内の `#resetTimeSkewMatches` を材料にした計算値のため。
   resetTimeSkewMatch: z.enum(['active', 'stale']).optional(),
   lastUnpushedWorkObservation: jobSchema.shape.lastUnpushedWorkObservation,

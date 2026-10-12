@@ -56,6 +56,7 @@ import {
   normalizeJournalTimeBoundary,
 } from './journal-time.js';
 import { notePhase } from './loop-stall.js';
+import { describeDenialStreakForList } from './classifier-denial-streak.js';
 import {
   compareManagerPosition,
   encodeManagerCursor,
@@ -7453,6 +7454,8 @@ export function createCloneTools(context: ToolContext) {
               unobservedOutcomeLine(manager),
               // 拒否は `status` に映らないので、状態の値は増やさず状態に添える
               denialLine(context.managers?.denials(manager.managerId) ?? [], manager.lastReportAt),
+              // 拒否の行の直後に置く: 上限を越えた担当は、この後の返事待ちが分類器の倒した確認で埋まりうるため、返事待ちより先に読ませる
+              describeDenialStreakForList(manager.classifierDenials),
               // 待ちの要約も抜粋を通す: `AskUserQuestion` の経路は質問文を連ねて runner 側のキャップを通らないため
               // 欠けていても「実行許可」「undefined から」と嘘をつかず、`種別不明` にして時刻の断片を落とす
               // 件数にも上限を置く: `manager.waiting` は増える一方で、伸びると1本のマネージャーが予算を占有し他が押し出されるため

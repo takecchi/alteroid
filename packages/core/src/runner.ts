@@ -1928,6 +1928,7 @@ class RunnerSession {
         : { sessionId: this.#resumeState.sessionId }),
       liveBackgroundTasks: this.#liveBackgroundTasks().length,
       ...(this.#tokenFingerprint === undefined ? {} : { tokenFingerprint: this.#tokenFingerprint }),
+      classifierDenials: this.#denialStreaks.overLimit(),
     };
   }
 

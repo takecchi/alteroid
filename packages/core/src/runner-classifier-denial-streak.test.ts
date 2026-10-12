@@ -236,6 +236,16 @@ describe('分類器の拒否が続いた担当の事情を、クローンへの�
     expect(await postToolUse(options, 'agent-1')).toContain('続けて 3 回止めた');
   });
 
+  it('runner の /managers（host.list()）は、上限を越えた相手だけを classifierDenials で名乗る（越えていなければ空配列）', async () => {
+    const { options } = await start();
+    expect((await host!.list())[0]?.classifierDenials).toEqual([]);
+    for (const reason of ['A', 'B', 'C']) await deny(options, reason);
+    await deny(options, 'X', 'agent-1');
+    expect((await host!.list())[0]?.classifierDenials).toEqual([
+      { actor: 'manager', consecutive: 3, total: 3, firstReason: 'A' },
+    ]);
+  });
+
   it('拒否が2回までなら、何も添えない', async () => {
     const { options, events } = await start();
     await deny(options, 'A');

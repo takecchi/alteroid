@@ -21349,6 +21349,31 @@
                             "minimum": 0,
                             "maximum": 9007199254740991
                           },
+                          "classifierDenials": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "actor": {
+                                  "type": "string"
+                                },
+                                "consecutive": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "total": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "firstReason": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["actor", "consecutive", "total"]
+                            }
+                          },
                           "resetTimeSkewMatch": {
                             "type": "string",
                             "enum": ["active", "stale"]
@@ -22191,6 +22216,31 @@
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 9007199254740991
+                        },
+                        "classifierDenials": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "actor": {
+                                "type": "string"
+                              },
+                              "consecutive": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "total": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "firstReason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["actor", "consecutive", "total"]
+                          }
                         },
                         "resetTimeSkewMatch": {
                           "type": "string",

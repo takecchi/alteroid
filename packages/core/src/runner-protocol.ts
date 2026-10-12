@@ -4,6 +4,7 @@ import { redactErrorText } from './denial-input-head.js';
 import { z } from 'zod';
 
 import { cgroupEventsDeltaSchema } from './cgroup-events.js';
+import type { ClassifierDenialOverLimit } from './classifier-denial-streak.js';
 import { CREDENTIAL_NAME_MAX_LENGTH } from './credentials.js';
 import { excerptLine } from './excerpt.js';
 import type { McpServers } from './mcp-servers.js';
@@ -64,6 +65,20 @@ export const runnerManagerStateSchema = z.object({
   liveBackgroundTasks: z.number().int().nonnegative().optional(),
   /** `undefined` は「分からない」。デーモンは断らず、流して世代は書かない（再起動後の done へ送れなくなるため）。 */
   tokenFingerprint: z.string().optional(),
+  /**
+   * 分類器（auto mode）の拒否が上限（連続3・累計20。`classifier-denial-streak.ts`）を越えている相手（担当本人 `'manager'` か作業者の agent id）。
+   * 空配列は「数えたが越えている相手は居ない」、`undefined` は「数えていない」（古い runner）。runner の数えで、CLI の内部の数えとは一致しないことがある。
+   */
+  classifierDenials: z
+    .array(
+      z.object({
+        actor: z.string(),
+        consecutive: z.number().int().nonnegative(),
+        total: z.number().int().nonnegative(),
+        firstReason: z.string().optional(),
+      }),
+    )
+    .optional(),
 });
 
 export interface RunnerManagerListing {
@@ -1562,6 +1577,8 @@ export interface RunnerEntry {
   sessionsObservedAt?: string;
   /** 欄を名乗った委譲だけが載る: 古い runner の委譲はキーが無い（0 ではなく「分からない」）。 */
   sessionBackgroundTasks?: Readonly<Record<string, number>>;
+  /** 欄を名乗った委譲だけが載る（`runnerManagerStateSchema.classifierDenials`）。キーが無いのは「分からない」。 */
+  sessionClassifierDenials?: Readonly<Record<string, readonly ClassifierDenialOverLimit[]>>;
   /** 鍵の指紋で、値は持たない。キーが無いのは「分からない」。 */
   sessionTokenFingerprints?: Readonly<Record<string, string>>;
   /** `entries()` のたびに `entry.client.legState` を読み直す。観測の時刻の対は持たない。無いことは `'never-connected'` とは別の事実。 */
@@ -1798,6 +1815,7 @@ interface RegistryEntry {
   sessions?: ReadonlySet<string>;
   sessionsObservedAt?: string;
   sessionBackgroundTasks?: ReadonlyMap<string, number>;
+  sessionClassifierDenials?: ReadonlyMap<string, readonly ClassifierDenialOverLimit[]>;
   sessionTokenFingerprints?: ReadonlyMap<string, string>;
   /** 周期より遅い応答を積み上げないための錠: `true` の間はこの entry へ次の探りを投げない。 */
   sessionsProbing?: boolean;
@@ -1937,6 +1955,9 @@ class Registry implements RunnerRegistry {
       ...(entry.sessionBackgroundTasks === undefined || entry.sessionsObservedAt === undefined
         ? {}
         : { sessionBackgroundTasks: Object.fromEntries(entry.sessionBackgroundTasks) }),
+      ...(entry.sessionClassifierDenials === undefined || entry.sessionsObservedAt === undefined
+        ? {}
+        : { sessionClassifierDenials: Object.fromEntries(entry.sessionClassifierDenials) }),
       ...(entry.sessionTokenFingerprints === undefined || entry.sessionsObservedAt === undefined
         ? {}
         : { sessionTokenFingerprints: Object.fromEntries(entry.sessionTokenFingerprints) }),
@@ -2345,6 +2366,7 @@ class Registry implements RunnerRegistry {
       if (identity?.managers === 0) {
         entry.sessions = new Set();
         entry.sessionBackgroundTasks = new Map();
+        entry.sessionClassifierDenials = new Map();
         entry.sessionTokenFingerprints = new Map();
         entry.sessionsObservedAt = new Date(at).toISOString();
         return;
@@ -2383,6 +2405,11 @@ class Registry implements RunnerRegistry {
       entry.sessionTokenFingerprints = new Map(
         states.flatMap((state): [string, string][] =>
           state.tokenFingerprint === undefined ? [] : [[state.managerId, state.tokenFingerprint]],
+        ),
+      );
+      entry.sessionClassifierDenials = new Map(
+        states.flatMap((state): [string, readonly ClassifierDenialOverLimit[]][] =>
+          state.classifierDenials === undefined ? [] : [[state.managerId, state.classifierDenials]],
         ),
       );
       entry.sessionsObservedAt = new Date(at).toISOString();

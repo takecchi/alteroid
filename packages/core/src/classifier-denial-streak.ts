@@ -32,6 +32,36 @@ export interface DenialStreakView {
   readonly firstReason: string | undefined;
 }
 
+/** runner が `/managers` で名乗る1件（`runnerManagerStateSchema.classifierDenials`）。`actor` は `'manager'` か作業者の agent id。 */
+export interface ClassifierDenialOverLimit {
+  readonly actor: string;
+  readonly consecutive: number;
+  readonly total: number;
+  readonly firstReason?: string;
+}
+
+/**
+ * `manager_list` の1行。越えている相手が居ない・欄を名乗らない古い runner のときは `null`（行を出さない）。
+ * 行が無いことを「越えていない」と言い切らない: 古い runner では数えていない。
+ */
+export function describeDenialStreakForList(
+  entries: readonly ClassifierDenialOverLimit[] | undefined,
+): string | null {
+  if (entries === undefined || entries.length === 0) return null;
+  const parts = entries.map((entry) => {
+    const who = entry.actor === 'manager' ? '担当本人' : `作業者 ${entry.actor}`;
+    return (
+      `${who} 連続 ${String(entry.consecutive)}・累計 ${String(entry.total)}` +
+      (entry.firstReason === undefined ? '' : `（最初の理由: ${entry.firstReason}）`)
+    );
+  });
+  return (
+    `  ⚠ 分類器（auto mode）の拒否が上限（連続${String(CLI_CLASSIFIER_DENIAL_LIMITS.consecutive)}・累計${String(CLI_CLASSIFIER_DENIAL_LIMITS.total)}）を越えている: ${parts.join(' / ')}。` +
+    'この後は、ふだん通る操作の確認も1件ずつ上がりうる。担当には、作業者へ渡す・区切りで報告して止まる道を知らせてある。' +
+    '確認が積み上がる前に、後継の担当へ切り替えるかを考えること（runner の数え。CLI の内部の数えとは一致しないことがある）'
+  );
+}
+
 function reasonHead(reason: string | undefined): string | undefined {
   if (reason === undefined) return undefined;
   const chars = Array.from(reason.replace(/\s+/g, ' ').trim());
@@ -85,6 +115,26 @@ export class ClassifierDenialStreaks {
     const state = this.#byActor.get(actor);
     if (state === undefined) return undefined;
     return { consecutive: state.consecutive, total: state.total, firstReason: state.firstReason };
+  }
+
+  /** 上限を越えている相手だけを返す（担当本人を先に）。空配列は「数えたが、越えている相手は居ない」。 */
+  overLimit(): ClassifierDenialOverLimit[] {
+    const entries: ClassifierDenialOverLimit[] = [];
+    for (const [actor, state] of this.#byActor) {
+      const view = {
+        consecutive: state.consecutive,
+        total: state.total,
+        firstReason: state.firstReason,
+      };
+      if (!overDenialLimit(view)) continue;
+      entries.push({
+        actor,
+        consecutive: view.consecutive,
+        total: view.total,
+        ...(view.firstReason === undefined ? {} : { firstReason: view.firstReason }),
+      });
+    }
+    return entries.sort((a, b) => Number(b.actor === 'manager') - Number(a.actor === 'manager'));
   }
 
   /**

@@ -7151,6 +7151,31 @@ describe('クローンの道具', () => {
       expect(unknown).not.toContain('背景処理は 0 本');
     });
 
+    // 2026-10-12 の WORLDBUILD-2・LAND-7: 分類器の拒否が上限を越えた担当は、確認が1件ずつ届いて初めて分かっていた
+    it('分類器の拒否が上限を越えた相手が居れば ⚠ の行を出し、居ない・分からないときは出さない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+
+      target.classifierDenials = [
+        { actor: 'manager', consecutive: 3, total: 5, firstReason: '[Instruction Poisoning]' },
+        { actor: 'agent-1', consecutive: 0, total: 20 },
+      ];
+      const over = await h.call('manager_list', {});
+      expect(over).toContain(
+        '⚠ 分類器（auto mode）の拒否が上限（連続3・累計20）を越えている: ' +
+          '担当本人 連続 3・累計 5（最初の理由: [Instruction Poisoning]） / 作業者 agent-1 連続 0・累計 20',
+      );
+      expect(over).toContain('後継の担当へ切り替えるかを考えること');
+
+      target.classifierDenials = [];
+      expect(await h.call('manager_list', {})).not.toContain('分類器（auto mode）の拒否が上限');
+
+      delete target.classifierDenials;
+      expect(await h.call('manager_list', {})).not.toContain('分類器（auto mode）の拒否が上限');
+    });
+
     it('現役が取れなければ「比べられない」と言い、一致とも不一致とも言わない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
