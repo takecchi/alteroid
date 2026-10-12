@@ -186,8 +186,10 @@ import { redactProfileFailure } from './profile.js';
 import { renderAccountList } from './account-list.js';
 import { renderPermissionGrantList } from './permission-grant-list.js';
 import {
+  profileEntryVersionOf,
   ProfileInputError,
   ProfileRollbackFailedError,
+  ProfileVersionMismatchError,
   type ApplyProfileResult,
   type ProfileService,
 } from './profile-service.js';
@@ -2544,6 +2546,13 @@ export function createCloneTools(context: ToolContext) {
     // 道具のエラーにせず理由をそのまま返す: 置けない入力は利用者の誤りで、何も変えていないため
     if (error instanceof ProfileInputError) {
       return text(`プロファイルの行を置けなかった（何も変えていない）: ${reasonOf(error)}`);
+    }
+    // 道具のエラーにしない: 何も変えておらず、読み直せば続けられるため。本文は返さない（鍵が入りうる）
+    if (error instanceof ProfileVersionMismatchError) {
+      return text(
+        `プロファイルの行 ${name} は読んだ後に${error.current === null ? '消されている' : '変わっている・作られている'}（何も変えていない）。` +
+          `profile_read name=${name} で読み直し、いまの base_version で判断し直すこと。`,
+      );
     }
     throw error;
   }
@@ -5903,7 +5912,8 @@ export function createCloneTools(context: ToolContext) {
             '最後まで取ること** — ここまでの分だけを渡すと残りが消える）'
           : '';
         return text(
-          `（行 ${row.name} / 撒く先 ${row.scope} / 最終更新 ${row.updatedAt} / ${describePage(part)}）\n${part.body}${tail}`,
+          `（行 ${row.name} / 撒く先 ${row.scope} / 最終更新 ${row.updatedAt} / ${describePage(part)}）\n${part.body}${tail}` +
+            `\n（版 base_version=${profileEntryVersionOf(row)} ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）`,
         );
       },
     ),
@@ -6162,8 +6172,15 @@ export function createCloneTools(context: ToolContext) {
         summary: z
           .string()
           .describe('何を変えたかの一行要約（日誌に残る。**値そのものは書かない**）'),
+        base_version: z
+          .string()
+          .optional()
+          .describe(
+            '読んだ時点の行の版（profile_read name=<名前> の応答に出る base_version）。' +
+              '渡すと、読んだ後に人間や別のターンがこの行を変えていたら何も変えずに断る。省略すると比べずに置き換える',
+          ),
       },
-      async ({ name = 'default', script, summary, scope }) => {
+      async ({ name = 'default', script, summary, scope, base_version: baseVersion }) => {
         if (context.profile === undefined) {
           return text(
             'いまは実行環境プロファイルを差し替えられない場面である（記憶へ移すための内部ターン）。' +
@@ -6195,7 +6212,12 @@ export function createCloneTools(context: ToolContext) {
         // 人間の口と同じ1本道を通る: 評価・保存・配布が1つの区間として直列に行われ、人間の更新と重なっても層ごとに違う本文が残らないため
         let result: Awaited<ReturnType<ProfileService['set']>>;
         try {
-          result = await context.profile.set(name, script, scope);
+          result = await context.profile.set(
+            name,
+            script,
+            scope,
+            baseVersion === undefined ? undefined : { ifMatch: baseVersion },
+          );
         } catch (error) {
           return await profileToolFailed('profile_write', name, summary, error);
         }
@@ -6218,8 +6240,15 @@ export function createCloneTools(context: ToolContext) {
         summary: z
           .string()
           .describe('何を外したかの一行要約（日誌に残る。**値そのものは書かない**）'),
+        base_version: z
+          .string()
+          .optional()
+          .describe(
+            '読んだ時点の行の版（profile_read name=<名前> の応答に出る base_version）。' +
+              '渡すと、読んだ後に人間や別のターンがこの行を変えていたら外さずに断る。省略すると比べずに外す',
+          ),
       },
-      async ({ name, summary }) => {
+      async ({ name, summary, base_version: baseVersion }) => {
         if (context.profile === undefined) {
           return text(
             'いまは実行環境プロファイルを差し替えられない場面である（記憶へ移すための内部ターン）。' +
@@ -6241,7 +6270,10 @@ export function createCloneTools(context: ToolContext) {
         );
         let result: Awaited<ReturnType<ProfileService['remove']>>;
         try {
-          result = await context.profile.remove(name);
+          result = await context.profile.remove(
+            name,
+            baseVersion === undefined ? undefined : { ifMatch: baseVersion },
+          );
         } catch (error) {
           return await profileToolFailed('profile_remove', name, summary, error);
         }

@@ -43,6 +43,8 @@ interface ProfileEntryView {
   updatedAt: string;
   sha256: string;
   bytes: number;
+  // 行の版。書き込みの `ifMatch` に返す（古いデーモンは返さない）
+  version?: string;
 }
 
 type ProfileView = NormalizedProfile;
@@ -93,6 +95,16 @@ function assertLegacySupports(profile: ProfileView, name: string, scope?: Profil
   if (name !== 'default' || (scope !== undefined && scope !== 'all')) {
     throw new Error(LEGACY_PROFILE_NOTICE);
   }
+}
+
+/**
+ * 書き込みの前提にする版（#4592）。読んだ行の版、読んだときに行が無ければ `null`（無いときだけ作る）。
+ * 古いデーモン（`legacy`・版を返さない）には渡さない: 比べられないので、今までどおり後勝ちになる。
+ */
+function readVersionOf(profile: ProfileView, name: string): string | null | undefined {
+  if (profile.legacy) return undefined;
+  const row = profile.entries.find((entry) => entry.name === name);
+  return row === undefined ? null : row.version;
 }
 
 function describeEntry(entry: ProfileEntryView): string {
@@ -229,7 +241,7 @@ export async function profileSetCommand(
       ? await readAll()
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   if (script.trim().length === 0) throw new Error(EMPTY_BODY_MESSAGE);
-  await put(name, script, target, scope, profile.legacy);
+  await put(name, script, target, scope, profile.legacy, readVersionOf(profile, name));
 }
 
 export async function profileEditCommand(
@@ -266,7 +278,7 @@ export async function profileEditCommand(
       stdout.write('変更はありません。\n');
       return;
     }
-    await put(name, edited, target, scope, profile.legacy);
+    await put(name, edited, target, scope, profile.legacy, readVersionOf(profile, name));
   });
 }
 
@@ -289,9 +301,14 @@ export async function profileRemoveCommand(
     options,
     io,
   );
+  const ifMatch = readVersionOf(profile, name);
   const result = (await (profile.legacy
     ? request(target, '/profile', { method: 'PUT', body: JSON.stringify({ script: '' }) })
-    : request(target, `/profile/${encodeURIComponent(name)}`, { method: 'DELETE' }))) as UpdateView;
+    : request(
+        target,
+        `/profile/${encodeURIComponent(name)}${typeof ifMatch === 'string' ? `?ifMatch=${encodeURIComponent(ifMatch)}` : ''}`,
+        { method: 'DELETE' },
+      ))) as UpdateView;
   stdout.write(
     hasRunnerPushFailure(result)
       ? `警告: プロファイルの行 ${name} は外しましたが、一部の runner へ反映できていません。\n`
@@ -347,6 +364,7 @@ async function put(
   known?: Target,
   scope?: ProfileScope,
   legacy = false,
+  ifMatch?: string | null,
 ): Promise<void> {
   if (script.trim().length === 0) {
     throw new Error(EMPTY_BODY_MESSAGE);
@@ -356,7 +374,11 @@ async function put(
     ? request(target, '/profile', { method: 'PUT', body: JSON.stringify({ script }) })
     : request(target, `/profile/${encodeURIComponent(name)}`, {
         method: 'PUT',
-        body: JSON.stringify({ script, ...(scope === undefined ? {} : { scope }) }),
+        body: JSON.stringify({
+          script,
+          ...(scope === undefined ? {} : { scope }),
+          ...(ifMatch === undefined ? {} : { ifMatch }),
+        }),
       }))) as UpdateView;
 
   const row = result.entries?.find((entry) => entry.name === name);
@@ -441,6 +463,13 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
+    // 版の食い違い: 何も変えていない。デーモンの文には行の名前しか載らないが、こちらの固定の文で案内する
+    if (response.status === 409) {
+      throw new Error(
+        '読んだ後に、プロファイルの行がほかで変わっていた（作られた・消された）ので、変えていません。\n' +
+          'alteroid profile show でいまの中身を確かめてから、もう一度実行してください。',
+      );
+    }
     const body = (await response.json().catch(() => ({}))) as {
       error?: unknown;
       detail?: unknown;

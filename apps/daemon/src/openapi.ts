@@ -971,6 +971,9 @@ export const profileEntrySchema = z.object({
   updatedAt: z.string(),
   sha256: z.string(),
   bytes: z.number(),
+  // 行の版（本文と撒く先から作る）。`PUT` / `DELETE /profile/{name}` の `ifMatch` へそのまま渡す。
+  // このデーモンは必ず返すが任意にしておく: 読み手（CLI・Web）は版を返さない古いデーモンの応答も同じ型で扱うため
+  version: z.string().optional(),
 });
 
 // 本文は載せない: 値は送った本人が持っており、応答に載せる理由が無い口で鍵を往復させないため。
@@ -997,6 +1000,15 @@ export const profileErrorResponseSchema = z.object({
 export const profileEntryUpdateRequestSchema = z.object({
   script: z.string().refine((value) => value.trim().length > 0),
   scope: profileScopeSchema.optional(),
+  // 読んだときの行の版（`GET /profile` の各行の `version`）。`null` は「行が無いときだけ作る」。省けば今までどおり比べない
+  ifMatch: z.string().min(1).nullable().optional(),
+});
+
+// 版が食い違ったときの 409 の本文。`current` はいまの行（本文は載せない。無ければ `null`）
+export const profileConflictResponseSchema = z.object({
+  error: z.string(),
+  detail: z.string(),
+  current: profileEntrySummarySchema.nullable(),
 });
 
 export const profileUpdateRequestSchema = z.object({

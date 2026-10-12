@@ -823,13 +823,16 @@ export {
   composedFingerprints,
   createProfileService,
   profileScopeAppliesTo,
+  profileEntryVersionOf,
   ProfileInputError,
   ProfileRollbackFailedError,
+  ProfileVersionMismatchError,
   type ApplyProfileResult,
   type ComposedFingerprint,
   type ProfileComposeTarget,
   type ProfileService,
   type ProfileServiceOptions,
+  type ProfileWriteOptions,
 } from './profile-service.js';
 export { nonBlankString } from './non-blank-string.js';
 /** ここでは回さない: 検知も切替も持たず、器・設定・入出力の口だけを持つ。 */

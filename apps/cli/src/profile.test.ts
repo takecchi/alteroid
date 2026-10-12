@@ -431,11 +431,13 @@ describe('alteroid profile set', () => {
       '/profile/rust',
       '/profile/rust',
     ]);
+    // 読んだときに行が無かったので、「無いときだけ作る」（ifMatch: null）を添える（#4592）
     expect(JSON.parse(String(puts[0]?.body))).toEqual({
       script: 'export RUST=1\n',
       scope: 'runner',
+      ifMatch: null,
     });
-    expect(JSON.parse(String(puts[1]?.body))).toEqual({ script: 'export RUST=1\n' });
+    expect(JSON.parse(String(puts[1]?.body))).toEqual({ script: 'export RUST=1\n', ifMatch: null });
     expect(read()).toContain('撒く先: runner（manager だけ）');
   });
 

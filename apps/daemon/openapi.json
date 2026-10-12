@@ -23795,6 +23795,9 @@
                           },
                           "bytes": {
                             "type": "number"
+                          },
+                          "version": {
+                            "type": "string"
                           }
                         },
                         "required": ["name", "script", "scope", "updatedAt", "sha256", "bytes"]
@@ -23895,6 +23898,9 @@
                           },
                           "bytes": {
                             "type": "number"
+                          },
+                          "version": {
+                            "type": "string"
                           }
                         },
                         "required": ["name", "scope", "updatedAt", "sha256", "bytes"]
@@ -24062,7 +24068,7 @@
         "operationId": "putProfileByName",
         "tags": ["profile"],
         "summary": "実行環境プロファイルの1行を置く",
-        "description": "名前付きの行を置く（無ければ作る）。行は名前のコード単位順につなげて効かせる。置く前に評価する（撒く先が runner だけの行は、デーモンでは評価できないので runner が評価する）。読めなければ保存も配布もせず、理由を返す（前のものが残る）。",
+        "description": "名前付きの行を置く（無ければ作る）。行は名前のコード単位順につなげて効かせる。置く前に評価する（撒く先が runner だけの行は、デーモンでは評価できないので runner が評価する）。読めなければ保存も配布もせず、理由を返す（前のものが残る）。`ifMatch`（`GET /profile` の各行の `version`）を渡すと、読んだ後にその行が変わっていたとき何も変えずに 409。`ifMatch: null` は「行が無いときだけ作る」。省けば今までどおり比べない。",
         "responses": {
           "200": {
             "description": "行を置いた後の全行と、クローンと各 runner への反映結果。",
@@ -24094,6 +24100,9 @@
                           },
                           "bytes": {
                             "type": "number"
+                          },
+                          "version": {
+                            "type": "string"
                           }
                         },
                         "required": ["name", "scope", "updatedAt", "sha256", "bytes"]
@@ -24236,6 +24245,57 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "`ifMatch` がいまの行と食い違う（読んだ後に変わった・作られた・消された。何も変えていない）。`current` にいまの行（本文は載せない。無ければ `null`）を添える。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "current": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "scope": {
+                              "type": "string",
+                              "enum": ["all", "app", "runner"]
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            },
+                            "sha256": {
+                              "type": "string"
+                            },
+                            "bytes": {
+                              "type": "number"
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["name", "scope", "updatedAt", "sha256", "bytes"]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["error", "detail", "current"]
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -24251,6 +24311,17 @@
                   "scope": {
                     "type": "string",
                     "enum": ["all", "app", "runner"]
+                  },
+                  "ifMatch": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": ["script"]
@@ -24273,7 +24344,7 @@
         "operationId": "deleteProfileByName",
         "tags": ["profile"],
         "summary": "実行環境プロファイルの1行を外す",
-        "description": "名前付きの行を外す。他の行は変えない。無い名前は 404（何も変えない）。外した行が、クローンか runner のどちらかに掛かる最後の1行だったなら、その側から環境が外れる。",
+        "description": "名前付きの行を外す。他の行は変えない。無い名前は 404（何も変えない）。外した行が、クローンか runner のどちらかに掛かる最後の1行だったなら、その側から環境が外れる。クエリの `ifMatch`（`GET /profile` の各行の `version`）を渡すと、読んだ後にその行が変わっていたとき外さずに 409。省けば今までどおり比べない。",
         "responses": {
           "200": {
             "description": "行を外した後の全行と、クローンと各 runner への反映結果。",
@@ -24305,6 +24376,9 @@
                           },
                           "bytes": {
                             "type": "number"
+                          },
+                          "version": {
+                            "type": "string"
                           }
                         },
                         "required": ["name", "scope", "updatedAt", "sha256", "bytes"]
@@ -24460,6 +24534,57 @@
                     }
                   },
                   "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`ifMatch` がいまの行と食い違う（読んだ後に変わった。外していない）。`current` にいまの行（本文は載せない）を添える。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "current": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "scope": {
+                              "type": "string",
+                              "enum": ["all", "app", "runner"]
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            },
+                            "sha256": {
+                              "type": "string"
+                            },
+                            "bytes": {
+                              "type": "number"
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["name", "scope", "updatedAt", "sha256", "bytes"]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["error", "detail", "current"]
                 }
               }
             }

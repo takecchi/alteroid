@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { redactErrorText } from './denial-input-head.js';
 import { reasonOf } from './dropped-record.js';
 import {
@@ -79,8 +81,16 @@ export function composedFingerprints(entries: readonly EnvProfileEntry[]): {
 export interface ProfileService {
   read(): Promise<EnvProfileEntry[]>;
   /** `scope` を省略すると既存行の撒く先を保つ（本文だけ直して撒く先が `all` へ戻るのを避ける）。 */
-  set(name: string, script: string, scope?: EnvProfileScope): Promise<ApplyProfileResult>;
-  remove(name: string): Promise<ApplyProfileResult & { removed: boolean }>;
+  set(
+    name: string,
+    script: string,
+    scope?: EnvProfileScope,
+    options?: ProfileWriteOptions,
+  ): Promise<ApplyProfileResult>;
+  remove(
+    name: string,
+    options?: ProfileWriteOptions,
+  ): Promise<ApplyProfileResult & { removed: boolean }>;
   clearAll(): Promise<ApplyProfileResult>;
   apply(script: string): Promise<ApplyProfileResult>;
   /** 記憶ストアへは書かない: 書くと `updatedAt` が最後にデーモンを起こした時刻になる。 */
@@ -106,6 +116,55 @@ export class ProfileRollbackFailedError extends Error {
     super(message, options);
     this.name = 'ProfileRollbackFailedError';
   }
+}
+
+/**
+ * プロファイルの1行の版（`GET /profile` の各行の `version`。書き込みの `ifMatch` で前提にする）。
+ * 本文と撒く先から作る: 撒く先だけを変えるのも更新である（外れる側が出る）。`updatedAt` は含めない（巻き戻しで戻せる監査情報のため）。
+ */
+export function profileEntryVersionOf(entry: Pick<EnvProfileEntry, 'script' | 'scope'>): string {
+  return createHash('sha256')
+    .update(JSON.stringify([entry.script, entry.scope]), 'utf8')
+    .digest('hex');
+}
+
+/**
+ * 書き込みの `ifMatch` がいまの行と食い違った（読んだ後に変わった・作られた・消された）。何も変えていない。
+ * `current` はいまの行（無ければ `null`）。message には本文を載せない（鍵が入りうる）。
+ */
+export class ProfileVersionMismatchError extends Error {
+  readonly current: EnvProfileEntry | null;
+  constructor(name: string, current: EnvProfileEntry | null) {
+    super(
+      current === null
+        ? `プロファイルの行 ${name} は読んだ後に消されている（変えていない）`
+        : `プロファイルの行 ${name} は読んだ後に変わっている・作られている（変えていない）`,
+    );
+    this.name = 'ProfileVersionMismatchError';
+    this.current = current;
+  }
+}
+
+/**
+ * 書き込みの前提にする版。`string` はその版の行が在ること、`null` は行が無いこと（無いときだけ作る）。
+ * 省けば今までどおり比べない。比べるのは更新の列（`serial`）の中: 列の外で比べると、比べてから書くまでに別の書き手が入れる。
+ */
+export interface ProfileWriteOptions {
+  ifMatch?: string | null;
+}
+
+function assertProfileVersion(
+  name: string,
+  previous: readonly EnvProfileEntry[],
+  ifMatch: string | null | undefined,
+): void {
+  if (ifMatch === undefined) return;
+  const current = previous.find((entry) => entry.name === name) ?? null;
+  const matches =
+    ifMatch === null
+      ? current === null
+      : current !== null && profileEntryVersionOf(current) === ifMatch;
+  if (!matches) throw new ProfileVersionMismatchError(name, current);
 }
 
 export interface ProfileServiceOptions {
@@ -255,7 +314,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
   return {
     read: () => stores.profile.list(),
 
-    set: (name, script, scope) =>
+    set: (name, script, scope, writeOptions) =>
       serial(() => {
         entryName(name);
         // 保存・配布・指紋が同じ文字列を見ないと、置いた指紋と読んだ指紋が食い違う。
@@ -264,6 +323,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
           throw new ProfileInputError('空の本文は行として置けない（外すなら remove / clearAll）');
         }
         return transact((previous) => {
+          assertProfileVersion(name, previous, writeOptions?.ifMatch);
           const existing = previous.find((entry) => entry.name === name);
           // 大文字小文字を区別しないファイルシステム（macOS）で fs 版の `<name>.sh` が同じファイルになり、片方が黙ってもう片方を上書きする。
           const clash = previous.find(
@@ -288,11 +348,12 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         });
       }),
 
-    remove: (name) =>
+    remove: (name, writeOptions) =>
       serial(async () => {
         entryName(name);
         let removed = false;
         const result = await transact((previous) => {
+          assertProfileVersion(name, previous, writeOptions?.ifMatch);
           removed = previous.some((entry) => entry.name === name);
           return {
             rows: previous.filter((entry) => entry.name !== name),
