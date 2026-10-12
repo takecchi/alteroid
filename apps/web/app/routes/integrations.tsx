@@ -6,7 +6,7 @@ import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useNowMs } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link } from 'react-router';
 
 import {
@@ -159,6 +159,9 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
   const [maxBodyBytes, setMaxBodyBytes] = useState('');
   const [ratePerMinute, setRatePerMinute] = useState('');
   const [busy, setBusy] = useState(false);
+  // 発行中の2回目を止める印: ボタンの disabled は Ctrl/Cmd+Enter（`requestSubmit`）を止めず、state は次の描画まで古いため。
+  // 止めないと、値の違う生きた鍵が2本発行され、片方を控え損ねやすい
+  const issuingRef = useRef(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [problems, setProblems] = useState<string[]>([]);
   useReportDirty(
@@ -169,7 +172,7 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
   const nameTooLong = name.trim().length > NAME_MAX_LENGTH;
 
   async function submit() {
-    if (nameTooLong) return;
+    if (issuingRef.current || nameTooLong) return;
     const checked = buildInput({ name, source, expires, maxBodyBytes, ratePerMinute });
     if (!checked.ok) {
       setProblems(checked.problems);
@@ -178,6 +181,7 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
     }
     setProblems([]);
     setFailure(undefined);
+    issuingRef.current = true;
     setBusy(true);
     const sent = { name, source, expires, maxBodyBytes, ratePerMinute };
     try {
@@ -193,6 +197,7 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
     } catch (caught) {
       setFailure(caught);
     } finally {
+      issuingRef.current = false;
       setBusy(false);
     }
   }
