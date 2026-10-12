@@ -374,6 +374,12 @@ export const runnerExecutionResourcesSchema = z.object({
       reclaim: z
         .object({
           mode: z.enum(['observe', 'reclaim']),
+          /**
+           * 委譲の CLI の引き取り手（`tini -s`。#4494）。`command` が `null` なら、探したが見つからず CLI を直に起こしている
+           * （setsid で抜けて親が先に終わった子孫は、誰のものか分からず撃たれない）。
+           * `.optional()`: この欄より前の runner が持たない窓のため。欄が無いことを「引き取り手が無い」と読まない。
+           */
+          subreaper: z.object({ command: z.string().nullable() }).optional(),
           candidates: z.number().int().nonnegative(),
           candidateThreads: z.number().int().nonnegative(),
           /** `.optional()`: この機能より前の runner が欄自体を持たない窓がある（`reclaim` 自身と同じ先例）。 */

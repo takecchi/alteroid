@@ -9116,6 +9116,55 @@ describe('runner_list（器の一覧）', () => {
     );
     expect(reply).not.toContain('孤児の木');
     expect(reply).not.toContain('孤児の齢');
+    // 引き取り手の欄が無い（古い runner）ときは、「無い」と言わず行ごと出さない（#4494）
+    expect(reply).not.toContain('委譲の引き取り手');
+  });
+
+  it('resources.tasks.reclaim.subreaper が在れば、委譲の引き取り手が在るか無いかを候補の行の下に出す（#4494）', async () => {
+    const h = harness();
+    const runnerWith = (label: string, command: string | null) => ({
+      label,
+      revision: { status: 'unheard' as const },
+      state: 'connected' as const,
+      since: '2026-01-01T00:00:00.000Z',
+      runnerId: label,
+      managers: [],
+      resources: {
+        pids: { current: 10, max: 1000 },
+        tasks: {
+          threads: 10,
+          processes: 5,
+          zombies: 0,
+          reclaim: {
+            mode: 'reclaim' as const,
+            subreaper: { command },
+            candidates: 0,
+            candidateThreads: 0,
+            signalled: 0,
+            killed: 0,
+            freedThreads: 0,
+            lastRunAt: 1_767_225_600_000,
+          },
+        },
+      },
+    });
+    h.setRunnersOverview({
+      runners: [runnerWith('runner-a', '/usr/bin/tini'), runnerWith('runner-b', null)],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    expect(reply).toContain(
+      '委譲の引き取り手: /usr/bin/tini -s（setsid で抜けた子孫も委譲の木に留まる）',
+    );
+    expect(reply).toContain(
+      '委譲の引き取り手: 無し（tini が PATH に無い。setsid で抜けて親が先に終わった子孫は、誰のものか分からず撃たれない）',
+    );
+    const candidateLineIndex = reply.indexOf('孤児（回収（既定）');
+    expect(candidateLineIndex).toBeGreaterThanOrEqual(0);
+    expect(reply.indexOf('委譲の引き取り手')).toBeGreaterThan(candidateLineIndex);
   });
 
   it('resources.tasks.reclaim.roots 等が在れば、孤児の木の形と齢の分布が候補の行の下に出る', async () => {

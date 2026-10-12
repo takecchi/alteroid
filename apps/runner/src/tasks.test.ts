@@ -599,6 +599,25 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     expect(serialized).not.toContain('orphan-secret-cmd');
   });
 
+  // 起動ログにしか出ないと、クローンから引き取り手が効いているかを確かめられない（#4494）
+  it('委譲の引き取り手を観測に載せる: 在れば命令、探して無ければ null、渡されなければ欄ごと出さない', async () => {
+    placeUptime(root, 1000);
+    const read = (delegationSubreaper?: string | null) =>
+      new TaskBreakdownReader({
+        procRoot: root,
+        reclaim: {
+          childUid: OWN_UID,
+          ...(delegationSubreaper === undefined ? {} : { delegationSubreaper }),
+        },
+      }).read();
+
+    expect((await read('/usr/bin/tini'))?.reclaim?.subreaper).toEqual({
+      command: '/usr/bin/tini',
+    });
+    expect((await read(null))?.reclaim?.subreaper).toEqual({ command: null });
+    expect((await read())?.reclaim).not.toHaveProperty('subreaper');
+  });
+
   it('段0 は撃たない: 候補が実在する器を走査しても process.kill を1度も呼ばない', async () => {
     placeProcess(root, 90, 'pnpm', 'S', 3, 0, 1);
     placeProcess(root, 91, 'node', 'S', 5, 0, 90);

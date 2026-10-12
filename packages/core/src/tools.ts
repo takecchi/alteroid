@@ -9287,6 +9287,14 @@ export function createCloneTools(context: ToolContext) {
                       `、送出 ${reclaim.signalled} / 畳み ${reclaim.killed} / ` +
                       `返却 ${reclaim.freedThreads} threads`,
                   );
+                  // 欄が無い（古い runner）ときは行を出さない: 「引き取り手が無い」と読ませないため
+                  if (reclaim.subreaper !== undefined) {
+                    lines.push(
+                      reclaim.subreaper.command === null
+                        ? '    委譲の引き取り手: 無し（tini が PATH に無い。setsid で抜けて親が先に終わった子孫は、誰のものか分からず撃たれない）'
+                        : `    委譲の引き取り手: ${reclaim.subreaper.command} -s（setsid で抜けた子孫も委譲の木に留まる）`,
+                    );
+                  }
                   if (
                     reclaim.roots !== undefined &&
                     reclaim.largestTreeCandidates !== undefined &&

@@ -19,6 +19,8 @@ export type ReclaimMode = 'observe' | 'reclaim';
 // 名前・コマンド・パスで候補を選ばない: 素性を読まない約束と、パターンでプロセスを選ばない規約の両方に反するため。
 export interface ReclaimObservation {
   mode: ReclaimMode;
+  // 委譲の CLI の引き取り手（#4494）。`null` は探したが無かった。起動ログにしか出ないと、クローンから効いているかを確かめられないため。
+  subreaper?: { command: string | null };
   candidates: number;
   candidateThreads: number;
   roots: number;
@@ -42,6 +44,8 @@ export interface ReclaimScanOptions {
   childUid: number;
   reap?: ReclaimReapOptions;
   sessions?: ReclaimSessionView;
+  // 起動時に決まった委譲の引き取り手（`delegationSubreaperOf`）。`null` は探したが無かった。省略は「観測に載せない」。
+  delegationSubreaper?: string | null;
 }
 
 export type ReclaimSessionView = Pick<
@@ -483,6 +487,9 @@ async function observeReclaim(
 
   const observation: ReclaimObservation = {
     mode: reclaim.reap === undefined ? 'observe' : 'reclaim',
+    ...(reclaim.delegationSubreaper === undefined
+      ? {}
+      : { subreaper: { command: reclaim.delegationSubreaper } }),
     candidates,
     candidateThreads,
     roots: roots.length,
