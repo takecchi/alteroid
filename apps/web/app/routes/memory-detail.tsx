@@ -168,7 +168,13 @@ function MemoryDetailBody({ slug }: { slug: string }) {
                 onConfirm={() => {
                   setBusy(true);
                   setConfirmingDelete(false);
-                  deleteMemory(slug, deleteConflict?.current?.version ?? data.version)
+                  // 書きかけがあるときは、書き始めた時点に読んだ版を前提に消す（保存と同じく、取り直した版へ追従させない）:
+                  // 書きかけの間に取り直した版は画面に出ていないので、それを前提にすると、クローンが書いた見ていない内容を 409 なしで消す
+                  const readVersion =
+                    draft !== undefined && typeof baseVersion === 'string'
+                      ? baseVersion
+                      : data.version;
+                  deleteMemory(slug, deleteConflict?.current?.version ?? readVersion)
                     .then(() => {
                       // 応答待ちに別の記憶へ移っていたら、その画面を動かさない。
                       if (!mounted.current) return;
