@@ -55,6 +55,7 @@ import {
   isReadableJournalTimeBoundary,
   normalizeJournalTimeBoundary,
 } from './journal-time.js';
+import { notePhase } from './loop-stall.js';
 import {
   compareManagerPosition,
   encodeManagerCursor,
@@ -10442,7 +10443,27 @@ export function createCloneMcpServer(context: ToolContext) {
       '日誌（追記専用）、人間への確認、継続中の依頼（時間起点の仕込み）、' +
       '実行環境プロファイル（`.zprofile` 相当）、自分自身（alteroid）の正典と実行時の状態、' +
       'マネージャーへの委譲。',
-    tools: createCloneTools(context),
+    tools: withToolPhases(createCloneTools(context)),
+  });
+}
+
+/**
+ * ループの停止の見張り（#4485）に、どの自作ツールを処理していたかを残す。自作ツールはデーモンと同じプロセスで走るので、
+ * 中の同期処理はループを塞ぐ。入口と出口の2つを打ち、止まった窓の印でどちらの間かを読めるようにする。
+ */
+export function withToolPhases<
+  T extends { name: string; handler: (args: never, extra: unknown) => Promise<unknown> },
+>(tools: readonly T[]): T[] {
+  return tools.map((definition) => {
+    const handler = (async (args: never, extra: unknown) => {
+      notePhase(`clone-tool:${definition.name}`);
+      try {
+        return await definition.handler(args, extra);
+      } finally {
+        notePhase(`clone-tool-done:${definition.name}`);
+      }
+    }) as T['handler'];
+    return { ...definition, handler };
   });
 }
 

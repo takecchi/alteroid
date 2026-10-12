@@ -42,6 +42,7 @@ import type {
 } from './agent-hooks.js';
 import { noteBackgroundFailure } from './dropped-record.js';
 import { excerpt } from './excerpt.js';
+import { notePhase } from './loop-stall.js';
 import type { PermissionModeName } from './permission-mode.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
 import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
@@ -104,9 +105,37 @@ function toAgentToolAuditFailureRecord(input: unknown): AgentToolAuditFailureRec
   };
 }
 
+/**
+ * ループの停止の見張り（#4485）に、どのフックを処理していたかを残す。入口と出口の2つを打つ: 入口の印が遅れて現れれば、止めていたのはフックに届く前
+ * （SDK が子の stdout の1行を読んで解析する所など）で、入口と出口の間が開いていれば、フックの中の処理である。
+ * 道具の出力の大きさ（文字数）を添える: SDK はフックの入力を子の stdout の1行として受け取るので、その行の大きさの目安になる。
+ * 大きさは最上位の文字列の欄だけを数える（`JSON.stringify` しない: 印のために重い処理を足さないため）。
+ */
+function noteHookPhase(event: string, input: unknown): void {
+  const raw = input as { tool_name?: unknown; tool_response?: unknown } | null | undefined;
+  const tool = typeof raw?.tool_name === 'string' ? `:${raw.tool_name}` : '';
+  const chars = toolResponseChars(raw?.tool_response);
+  notePhase(`sdk-hook:${event}${tool}${chars === undefined ? '' : `:${String(chars)}ch`}`);
+}
+
+function toolResponseChars(response: unknown): number | undefined {
+  if (typeof response === 'string') return response.length;
+  if (response === null || typeof response !== 'object') return undefined;
+  let total: number | undefined;
+  for (const value of Object.values(response)) {
+    if (typeof value === 'string') total = (total ?? 0) + value.length;
+  }
+  return total;
+}
+
 function wrapToolAuditHook(hook: AgentObservationHook<AgentToolAuditRecord>): HookCallback {
   return async (input) => {
-    await hook(toAgentToolAuditRecord(input));
+    noteHookPhase('PostToolUse', input);
+    try {
+      await hook(toAgentToolAuditRecord(input));
+    } finally {
+      notePhase('sdk-hook-done:PostToolUse');
+    }
     return { continue: true };
   };
 }
@@ -115,7 +144,12 @@ function wrapToolAuditFailureHook(
   hook: AgentObservationHook<AgentToolAuditFailureRecord>,
 ): HookCallback {
   return async (input) => {
-    await hook(toAgentToolAuditFailureRecord(input));
+    noteHookPhase('PostToolUseFailure', input);
+    try {
+      await hook(toAgentToolAuditFailureRecord(input));
+    } finally {
+      notePhase('sdk-hook-done:PostToolUseFailure');
+    }
     return { continue: true };
   };
 }
@@ -193,7 +227,13 @@ function toAgentPreToolRecord(input: unknown): AgentPreToolRecord {
 // `default` 節で投げない: このフックは SDK のツール実行の経路に載っており、例外を投げるとそのターン全体が壊れるため。安全側（`{ continue: true }`）へ倒し、`noteBackgroundFailure` で跡だけ残す
 function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
   return async (input) => {
-    const decision = await hook(toAgentPreToolRecord(input));
+    noteHookPhase('PreToolUse', input);
+    let decision: Awaited<ReturnType<AgentPreToolHook>>;
+    try {
+      decision = await hook(toAgentPreToolRecord(input));
+    } finally {
+      notePhase('sdk-hook-done:PreToolUse');
+    }
     switch (decision.kind) {
       case 'continue':
         // 書き換えは `permissionDecision` を付けずに返す: 確認の流れをそのままにして入力だけを変えるため
@@ -329,7 +369,13 @@ function wrapContextHook<T>(
   toRecord: (input: unknown) => T,
 ): HookCallback {
   return async (input) => {
-    const outcome = await hook(toRecord(input));
+    noteHookPhase(hookEventName, input);
+    let outcome: Awaited<ReturnType<AgentContextHook<T>>>;
+    try {
+      outcome = await hook(toRecord(input));
+    } finally {
+      notePhase(`sdk-hook-done:${hookEventName}`);
+    }
     switch (outcome.kind) {
       case 'continue':
         return { continue: true };
