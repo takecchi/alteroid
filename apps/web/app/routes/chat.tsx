@@ -1699,6 +1699,7 @@ export function ChatPane({
         // id が決まるまで待ってから投函する: id 無しで送ると、続きのつもりの発言が別の会話として立つ
         const conversationId = await running.opened;
         const controller = new AbortController();
+        let opened = false;
         try {
           for await (const message of postChat(
             api,
@@ -1713,11 +1714,16 @@ export function ChatPane({
               signal: controller.signal,
             },
           )) {
-            if (message.event === 'open') break;
+            if (message.event === 'open') {
+              opened = true;
+              break;
+            }
           }
         } finally {
           controller.abort();
         }
+        // 開かずに閉じたのを「送れた」と読まない: 受け取られていなければ返答は来ず、発言が黙って消えるため（切り替え先への投函と同じ判定）
+        if (!opened) throw new StreamClosedEarlyError();
         recordOwnMessage(conversationId, text);
         const waiting = followUpIdsRef.current.get(conversationId) ?? new Set<string>();
         followUpIdsRef.current.set(conversationId, waiting.add(clientMessageId));
