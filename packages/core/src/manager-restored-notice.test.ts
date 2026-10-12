@@ -113,12 +113,29 @@ interface Setup {
 async function setup(
   aliveIds: readonly string[],
   deadIds: readonly string[] = [],
-  options: { failResume?: boolean } = {},
+  options: { failResume?: boolean; sessionLog?: 'absent' | 'loaded' } = {},
 ): Promise<Setup> {
-  const stores = createMemoryStores();
+  // `sessionLog` を渡したときだけ、生ログの預け先（pg 構成の `sessionStore`）を持たせ、委譲に鍵（projectKey）を付ける。
+  const stores: Stores =
+    options.sessionLog === undefined
+      ? createMemoryStores()
+      : {
+          ...createMemoryStores(),
+          sessionStore: {
+            append: async () => undefined,
+            load: async () =>
+              options.sessionLog === 'loaded'
+                ? [{ type: 'user', uuid: 'u-1', message: { role: 'user', content: '調べて' } }]
+                : null,
+          },
+        };
   const fake = fakeRunner();
   fake.failResume.value = options.failResume === true;
-  for (const id of [...aliveIds, ...deadIds]) await stores.jobs.putJob(jobOf(id));
+  for (const id of [...aliveIds, ...deadIds]) {
+    await stores.jobs.putJob(
+      options.sessionLog === undefined ? jobOf(id) : { ...jobOf(id), projectKey: 'proj-key' },
+    );
+  }
   for (const id of aliveIds) {
     fake.alive.push({
       managerId: id,
@@ -343,6 +360,52 @@ describe('取り戻した知らせは、1本目はすぐ・同じ cause の残�
     }, WAIT);
     await sleep(POOL_WINDOW_MS + 500);
     expect(restoredLists(inbox)).toHaveLength(0);
+
+    await pool.stop();
+  });
+});
+
+// 2026-10-11 の反映の後、生ログを預かっていない委譲 12 本を「再開を受け付けた」とだけ知らせ、ほぼ全部が後から lost になった。
+// 預け先が在って引いた結果が空なら、受理の時点で「戻れない見込みが高い」と添える（#4501）。
+describe('生ログ無しで出した resume の受理の知らせは、戻れない見込みが高いと添える（#4501）', () => {
+  const HINT =
+    '前の会話の生ログを預かっていない（器の中の会話も入れ替えで消えている）ので、戻れない見込みが高い。';
+
+  it('預け先に生ログが無い → 担当への知らせ・まとめの1通・日誌のすべてに添える', async () => {
+    const { pool, stores, inbox } = await setup([], ['mgr-a', 'mgr-b'], { sessionLog: 'absent' });
+
+    await waitForMessages(inbox, 1);
+    expect(restoredMessages(inbox)[0]?.text).toContain(`⚠ ${HINT}`);
+    await waitForLists(inbox, 1);
+    const text = textOf(restoredLists(inbox)[0]!);
+    expect(text.split(HINT).length - 1).toBe(2);
+    // 失敗の知らせを見分ける語を、受理の知らせに混ぜない。
+    expect(text).not.toContain('戻せなかった');
+    const journal = await journalTexts(stores);
+    expect(
+      journal.filter((line) => line.includes('（再開の指示を知らせた）') && line.includes(HINT)),
+    ).toHaveLength(2);
+
+    await pool.stop();
+  });
+
+  it('預け先に生ログが在る → 添えない', async () => {
+    const { pool, stores, inbox } = await setup([], ['mgr-a', 'mgr-b'], { sessionLog: 'loaded' });
+
+    await waitForMessages(inbox, 1);
+    await waitForLists(inbox, 1);
+    expect(restoredMessages(inbox)[0]?.text).not.toContain(HINT);
+    expect(textOf(restoredLists(inbox)[0]!)).not.toContain(HINT);
+    expect((await journalTexts(stores)).some((line) => line.includes(HINT))).toBe(false);
+
+    await pool.stop();
+  });
+
+  it('預け先の無い構成（fs）では、無いと確かめたことにならないので添えない', async () => {
+    const { pool, inbox } = await setup([], ['mgr-a']);
+
+    await waitForMessages(inbox, 1);
+    expect(restoredMessages(inbox)[0]?.text).not.toContain(HINT);
 
     await pool.stop();
   });

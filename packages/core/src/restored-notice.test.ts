@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { renderRestoredNotice, type RestoredListItem } from './restored-notice.js';
+import {
+  renderRestoredNotice,
+  RESUMED_WITHOUT_LOG_CLAUSE,
+  type RestoredListItem,
+} from './restored-notice.js';
 
 function item(overrides: Partial<RestoredListItem>): RestoredListItem {
   return {
@@ -51,5 +55,17 @@ describe('取り戻した知らせの一覧は、resume の受理を「戻れた
     expect(line).toContain('走り続けている（attached）');
     expect(line).toContain('状態 running（セッションは生きている）');
     expect(text).not.toContain('再開を指示した委譲:');
+  });
+
+  it('生ログ無しで出した resume は、その行に「戻れない見込みが高い」を添える。配る時点で lost なら添えない', () => {
+    const text = renderRestoredNotice('runner の器が作り直された', [
+      item({ managerId: 'mgr-a', withoutLog: true }),
+      item({ managerId: 'mgr-b', withoutLog: true, status: 'lost' }),
+      item({ managerId: 'mgr-c' }),
+    ]);
+    expect(text.split(`  ⚠ ${RESUMED_WITHOUT_LOG_CLAUSE}`).length - 1).toBe(1);
+    const block = text.slice(text.indexOf('- mgr-a:'), text.indexOf('- mgr-b:'));
+    expect(block).toContain(RESUMED_WITHOUT_LOG_CLAUSE);
+    expect(RESUMED_WITHOUT_LOG_CLAUSE).not.toContain('戻せなかった');
   });
 });

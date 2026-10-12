@@ -32,6 +32,7 @@ import {
 } from './quota-stop-notice.js';
 import {
   renderRestoredNotice,
+  RESUMED_WITHOUT_LOG_CLAUSE,
   type RestoredEntry,
   type RestoredListItem,
 } from './restored-notice.js';
@@ -1784,6 +1785,12 @@ interface ManagerRecord {
    * 古い値を残して新しいセッションの出来事を捨てる側へ倒さない。
    */
   sessionGeneration?: string;
+  /**
+   * 直近の resume を、預かった生ログ無しで（`#loadSession` が `absent`）新しいプロセスへ出したか（#4501）。
+   * 器が作り直された・別の器へ移った後なら、新しい CLI に会話は無いので、戻れない見込みが高い。その旨を受理の知らせに添えるためだけに使う。
+   * **プロセス内の像にしか置かない**。`#resume` が resume を出すたびに書き直す。
+   */
+  resumedWithoutLog?: boolean;
   /**
    * **プロセス内の像にしか置かない**（`Job` へは書かない）。デーモンを作り直したら観測し直しから始まり、
    * 失っても嘘は残らない（「まだ観測していない」へ戻るだけで、「セッションが在る」と名乗らない）。
@@ -7371,6 +7378,13 @@ class Pool implements ManagerPool {
       this.#resumedIntoLiveProcess.delete(record.job.id);
       this.#rememberTokenIdentity(record.job.id);
     }
+    // 生きていた旧プロセスへ流しただけの回は立てない: 会話はそのプロセスが持っている。
+    // 預け先が在って引けた結果が空だった回だけ立てる: 預け先の無い構成（fs）や鍵（projectKey）の無い古い行では、`absent` は「無いと確かめた」ではない。
+    record.resumedWithoutLog =
+      this.#stores.sessionStore !== undefined &&
+      projectKey !== undefined &&
+      material.kind === 'absent' &&
+      resumed.reusedLiveSession !== true;
     this.#unresumable.delete(record.job.id);
     return 'resumed';
   }
@@ -9373,6 +9387,8 @@ class Pool implements ManagerPool {
         : cause === 'relocated'
           ? '走らせていた runner が黙ったので、別の器で開き直した'
           : 'デーモンが再起動した';
+    // デーモンの再起動は除く: 器はそのままなので、器の中に残った会話から戻れうる。
+    const withoutLog = how === 'resumed' && cause !== 'daemon' && record.resumedWithoutLog === true;
     // 日誌は呼び出し元に委ねない: `attached` の呼び出し元は書かず、`resumed` 側が書くのは別の事実（再開の指示）で、この知らせ自体の跡ではない。
     void this.#journal({
       type: 'exchange',
@@ -9381,7 +9397,8 @@ class Pool implements ManagerPool {
       text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${
         how === 'attached'
           ? `[${job.id}] （走行中を確認）${head}。runner の中で走り続けている。`
-          : `[${job.id}] （再開の指示を知らせた）${head}。前のセッションからの再開を指示した（受理まで。会話が戻ったかは未確認）。`
+          : `[${job.id}] （再開の指示を知らせた）${head}。前のセッションからの再開を指示した（受理まで。会話が戻ったかは未確認）。` +
+            (withoutLog ? ` ${RESUMED_WITHOUT_LOG_CLAUSE}` : '')
       }`,
     });
     // 「1本目はすぐ・同じ出来事の残りは1通」（枠の窓 `QuotaStopWindow` と同じ考え方）。鍵は cause: 器が何台続けて作り直されても同じ出来事。
@@ -9390,6 +9407,7 @@ class Pool implements ManagerPool {
       managerId: job.id,
       runnerId: job.runnerId,
       how,
+      withoutLog,
       cwd: job.cwd,
       excerpt:
         job.lastReport === undefined
@@ -9443,6 +9461,7 @@ class Pool implements ManagerPool {
           ? `${head}。この委譲は runner の中で走り続けている。`
           : // 「再開させた」と言い切らない: runner の受理は「戻れた」ではなく、前の会話が無ければ後から lost になる（#4501）。
             `${head}。中断されていたこの委譲に、前のセッションからの再開を指示した（runner は受け付けた。前の会話が戻ったかはまだ確かめていない）。`,
+        withoutLog ? `⚠ ${RESUMED_WITHOUT_LOG_CLAUSE}` : '',
         `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
         ...this.#notifyExcerptLines(job),
         '',

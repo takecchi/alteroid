@@ -11,6 +11,11 @@ export interface RestoredEntry {
   /** `job.runnerId`。無ければ `undefined`。 */
   runnerId: string | undefined;
   how: 'attached' | 'resumed';
+  /**
+   * 器の作り直し・移送の後の resume を、預かった生ログ無しで出した（#4501）。新しい器の CLI に会話が無いので、戻れない見込みが高い。
+   * 立っていないときは `undefined` でも `false` でもよい。
+   */
+  withoutLog?: boolean;
   cwd: string | undefined;
   /** 直近の報告の抜粋（1行）。無ければ `undefined`。 */
   excerpt: string | undefined;
@@ -27,6 +32,13 @@ export interface RestoredListItem extends RestoredEntry {
 
 const ATTACHED_GUIDANCE =
   '走り続けている委譲: 返事待ちがあれば改めて届く。`manager_send` で追加の指示も送れる。';
+/**
+ * 生ログ無しで resume を出した委譲に添える1文（#4501）。担当への知らせ・まとめの1通・日誌で同じ文を使う。
+ * 「戻せなかった」の語を使わない: 失敗の知らせを見分ける語なので、受理の知らせに混ぜると読み手と試験の両方が取り違える。
+ */
+export const RESUMED_WITHOUT_LOG_CLAUSE =
+  '前の会話の生ログを預かっていない（器の中の会話も入れ替えで消えている）ので、戻れない見込みが高い。' +
+  '戻れなければ lost になる。起こし直す前に、成果がもう外へ出ていないか（PR・ブランチなど）を確かめること。';
 // 「再開させた」と言い切らない: 受理は「戻れた」ではなく、前の会話が無ければ後から lost になる（#4501）。
 const RESUMED_GUIDANCE =
   '再開を指示した委譲: runner が resume を受け付けただけで、前の会話が戻ったかはまだ確かめていない。' +
@@ -59,6 +71,10 @@ export function renderRestoredNotice(head: string, items: readonly RestoredListI
       lines.push(...item.workspaceLine.split('\n').map((line) => `  ${line}`));
     }
     if (item.excerpt !== undefined) lines.push(`  直近の報告（抜粋）: ${item.excerpt}`);
+    // 配る時点で既に lost なら添えない: 見込みではなく結果が出ている。
+    if (item.withoutLog === true && item.status !== 'lost') {
+      lines.push(`  ⚠ ${RESUMED_WITHOUT_LOG_CLAUSE}`);
+    }
   }
   lines.push('');
   if (items.some((item) => item.how === 'attached')) lines.push(ATTACHED_GUIDANCE);
