@@ -720,8 +720,11 @@ class HttpRunner implements RunnerClient {
             const raw: unknown = JSON.parse(data);
             const parsed = runnerEventSchema.safeParse(raw);
             if (parsed.success) {
-              notePhase(`runner-event:${parsed.data.type}`);
+              // 種類の印に大きさを添える: 「直前の印」は1つしか残らないので、種類だけだとどの大きさの出来事の後で止まったか分からないため（#4485）
+              notePhase(`runner-event:${parsed.data.type}:${String(data.length)}B`);
               onEvent(parsed.data);
+              // 受けた後の処理の同期の部分（日誌への書き込みの直列化など）を抜けた印: 無いまま止まっていれば、止めていたのはその処理（#4485）
+              notePhase(`runner-event-handled:${parsed.data.type}`);
             }
             // 黙って落とさない: runner が新しい種類の出来事を出し始めても、跡が残らないと気づく主体が誰も居ないため
             else this.#noteDropped(dropped, 'unknown-shape', typeOf(raw), data.length);
