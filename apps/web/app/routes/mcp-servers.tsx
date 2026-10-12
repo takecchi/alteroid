@@ -21,7 +21,7 @@ import {
   Textarea,
 } from '@alteroid/ui';
 import { useSetMcpServers, useMcpServers, ApiError } from '@alteroid/swr';
-import { formatDateTime, hasMcpPushProblem } from '@alteroid/logic';
+import { formatDateTime, hasMcpPushProblem, redactError } from '@alteroid/logic';
 import type {
   McpServerEntry,
   McpServers,
@@ -438,7 +438,8 @@ function UpdateReport({ before, update }: { before: string[]; update: McpServers
                 {runner.unsupported === true
                   ? '受け取る機能が無い（古い実行環境）'
                   : '届かなかった'}{' '}
-                — {runner.error ?? '理由不明'}
+                {/* 伏せる: runner の失敗文は自由文で、CLI の mcp-servers も redactError を通して出すため */}
+                — {redactError(runner.error ?? '理由不明')}
               </span>
             ) : runner.mcpServers === undefined ? (
               <span className="text-ok">

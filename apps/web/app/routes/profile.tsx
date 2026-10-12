@@ -28,7 +28,12 @@ import {
   useSetProfileEntry,
   useSetProfileLegacy,
 } from '@alteroid/swr';
-import { formatDateTime, hasRunnerPushFailure, LEGACY_PROFILE_NOTICE } from '@alteroid/logic';
+import {
+  formatDateTime,
+  hasRunnerPushFailure,
+  LEGACY_PROFILE_NOTICE,
+  redactError,
+} from '@alteroid/logic';
 import type {
   NormalizedProfile,
   ProfileEntryView,
@@ -615,7 +620,8 @@ function ProfileEditor({
             aria-label="評価の失敗の詳細"
             className="max-h-64 overflow-auto rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap text-destructive"
           >
-            {failure.detail}
+            {/* 伏せる: 評価の失敗の詳細は自由文で、CLI の profile も redactError を通して出すため */}
+            {redactError(failure.detail)}
           </pre>
         )}
         {failure instanceof ProfileRejectedError && (
@@ -668,12 +674,12 @@ function UpdateReport({ label, update }: { label: string; update: ProfileUpdateR
               </span>
             ) : (
               <span className="text-destructive">
-                反映できなかった — {outcome.error ?? '理由不明'}
+                反映できなかった — {redactError(outcome.error ?? '理由不明')}
               </span>
             )}
             {(outcome.output ?? '').trim().length > 0 && (
               <pre className="mt-1 overflow-auto font-mono text-[11px] break-all whitespace-pre-wrap text-muted-foreground">
-                {outcome.output}
+                {redactError(outcome.output ?? '')}
               </pre>
             )}
           </li>

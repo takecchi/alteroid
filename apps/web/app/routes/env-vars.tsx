@@ -34,7 +34,7 @@ import {
   DropdownMenuTrigger,
 } from '@alteroid/ui/shadcn';
 import { useCredentials, useRemoveEnvVar, useSetEnvVar } from '@alteroid/swr';
-import { failedRunnerPushes, formatDateTime } from '@alteroid/logic';
+import { failedRunnerPushes, formatDateTime, redactError } from '@alteroid/logic';
 import type { EnvVarScope, EnvVarUpdateResult, EnvVarView } from '@alteroid/logic';
 
 export default function EnvVars() {
@@ -152,7 +152,8 @@ function RunnerPushWarning({
         {failed.map((runner) => (
           <li key={runner.runnerId} className="break-words">
             <span className="font-mono break-all">{runner.runnerId}</span>:{' '}
-            {runner.error ?? '理由不明'}
+            {/* 伏せる: runner の失敗文は自由文で、CLI の env-vars も redactError を通して出すため */}
+            {redactError(runner.error ?? '理由不明')}
           </li>
         ))}
       </ul>

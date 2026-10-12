@@ -30,7 +30,7 @@ import {
   type ReopenCloneSessionResult,
   type WorkspaceResetSummary,
 } from '@alteroid/swr';
-import { formatDateTime } from '@alteroid/logic';
+import { formatDateTime, redactError } from '@alteroid/logic';
 import type {
   ClonePluginLoadObservation,
   RunnerPluginLoadObservation,
@@ -154,7 +154,8 @@ function Credentials({ runner }: { runner: RunnerSummary }) {
   if (runner.credentialsProbe.status === 'failed') {
     return (
       <span className="text-[11px] break-words text-destructive">
-        渡している鍵を確かめられなかった: {runner.credentialsProbe.error}
+        {/* 伏せる: runner の失敗文は自由文で、CLI の runners も redactError を通して出すため */}
+        渡している鍵を確かめられなかった: {redactError(runner.credentialsProbe.error)}
       </span>
     );
   }
@@ -200,7 +201,9 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
             {formatDateTime(outcome.at)}）
           </Badge>
           {outcome.status === 'failed' && outcome.error !== undefined ? (
-            <span className="text-[11px] break-words text-destructive">{outcome.error}</span>
+            <span className="text-[11px] break-words text-destructive">
+              {redactError(outcome.error)}
+            </span>
           ) : null}
         </div>
       ))}
@@ -260,7 +263,9 @@ function PluginLoad({
             <Badge tone="danger" className="break-all">
               {error.plugin}: {error.type}
             </Badge>
-            <span className="text-[11px] break-words text-destructive">{error.message}</span>
+            <span className="text-[11px] break-words text-destructive">
+              {redactError(error.message)}
+            </span>
           </div>
         ))
       )}
@@ -323,7 +328,7 @@ function Profile({ runner }: { runner: RunnerSummary }) {
   if (runner.profileProbe.status === 'failed') {
     return (
       <span className="text-[11px] break-words text-destructive">
-        プロファイルを確かめられなかった: {runner.profileProbe.error}
+        プロファイルを確かめられなかった: {redactError(runner.profileProbe.error)}
       </span>
     );
   }
@@ -407,7 +412,9 @@ function Runners() {
               </p>
               <ManagerPeers runner={runner} />
               {runner.error === undefined ? null : (
-                <p className="mt-1 text-[11px] break-words text-destructive">{runner.error}</p>
+                <p className="mt-1 text-[11px] break-words text-destructive">
+                  {redactError(runner.error)}
+                </p>
               )}
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <Credentials runner={runner} />
