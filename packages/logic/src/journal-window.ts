@@ -78,6 +78,26 @@ export function newerPageQuery(entries: JournalEntry[]): { since: string } | und
   return since === undefined ? undefined : { since };
 }
 
+/**
+ * SSE の受信の履歴（`recent`）から、窓の先頭より古くない行だけを残す。`recent` は画面を開く前の行も持つので、
+ * 窓に入らなかった古い行まで `mergeFront` へ渡すと最新の行より上に積まれる。窓より古い行は「もっと遡る」の頁で取る。
+ * 先頭と同じ時刻は残す（同じミリ秒の別の行を落とさない。窓に既に在る行は `mergeFront` の id の重複除けで落ちる）。
+ * 窓が空なら全部残す（初期読み込みの応答で置き換わる）。時刻が読めない行は残す（黙って消さない）。
+ */
+export function notOlderThanWindow(
+  existing: JournalEntry[],
+  incoming: JournalEntry[],
+): JournalEntry[] {
+  const head = newestAt(existing);
+  if (head === undefined) return incoming;
+  const headMs = Date.parse(head);
+  if (Number.isNaN(headMs)) return incoming;
+  return incoming.filter((entry) => {
+    const ms = Date.parse(entry.at);
+    return Number.isNaN(ms) || ms >= headMs;
+  });
+}
+
 export function olderPageQuery(
   entries: JournalEntry[],
   cursor?: PageCursor | null,

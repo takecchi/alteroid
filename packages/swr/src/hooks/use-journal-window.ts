@@ -13,6 +13,7 @@ import {
   JOURNAL_PAGE,
   journalHorizonNoteForHuman,
   newerPageQuery,
+  notOlderThanWindow,
   olderPageQuery,
   readThroughUnreadable,
   type PageCursor,
@@ -225,7 +226,8 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
 
   useEffect(() => {
     // SSE で届く新着にも画面の絞りを掛ける: 掛けないと、検索中の画面へ当たらない行が割り込む
-    const filtered = filterRecent(recent, selected, q);
+    // 窓の先頭より古い行は取り込まない: `recent` は画面を開く前の行も持ち、窓に入らなかった行が最新の行の上に積まれるため
+    const filtered = notOlderThanWindow(entriesRef.current, filterRecent(recent, selected, q));
     if (filtered.length === 0) return;
     const applied = applyNewerPage(entriesRef.current, filtered, filtered.length);
     if (applied.freshCount === 0) return;
