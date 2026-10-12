@@ -85,7 +85,8 @@ function ReportMarkdown({ children }: { children: string }) {
   const prefix = 'md' + useId().replace(/[^A-Za-z0-9_-]/g, '') + '-';
   return (
     <div className="min-w-0 text-sm break-words">
-      {toReact(children, reportMarkdownComponents, prefix)}
+      {/* 外部の画像は読み込まずリンクに落とす: 日報はマネージャー・クローンが書き、外の本文を要約もするので、開いた瞬間に閲覧の時刻・IP が画像の置き場へ漏れるため（ホームの最新の日報と同じ扱い） */}
+      {toReact(children, reportMarkdownComponents, prefix, { remoteImages: false })}
     </div>
   );
 }
