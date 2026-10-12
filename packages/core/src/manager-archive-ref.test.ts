@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { setStderrSinkForTesting } from './dropped-record.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import {
   createRunnerRegistry,
@@ -8,7 +9,7 @@ import {
   type RunnerEvent,
 } from './runner-protocol.js';
 import type { Job } from './schema.js';
-import { captureStderr, createMemoryStores } from './testing.js';
+import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
 // 退避の本文は参照で届き、デーモンが runner へ取りに行く（#4485）。
@@ -140,17 +141,25 @@ describe('参照で届いた退避は、runner へ取りに行って置き場へ
   });
 
   it('runner に本文が無ければ置き場へ入れず、消させもせず、跡を残す', async () => {
-    const lines = await captureStderr(async () => {
+    // 跡が出るまで待つ（実時間の待ちを置かない: #2146）
+    const lines: string[] = [];
+    setStderrSinkForTesting((line) => lines.push(line));
+    try {
       const { stores, fake } = await setup(new Map());
       fake.emit({ type: 'archive', managerId: job.id, ref: { id: ARCHIVE_ID, chars: 6 } });
-      await vi.waitFor(() => expect(fake.fetches).toHaveLength(1));
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await vi.waitFor(() =>
+        expect(
+          lines.some(
+            (line) => line.includes('トランスクリプトの退避') && line.includes(ARCHIVE_ID),
+          ),
+        ).toBe(true),
+      );
+      expect(fake.fetches).toHaveLength(1);
       expect(await archiveIdsOf(stores)).toEqual([]);
       expect(fake.deletes).toEqual([]);
-    });
-    expect(
-      lines.some((line) => line.includes('トランスクリプトの退避') && line.includes(ARCHIVE_ID)),
-    ).toBe(true);
+    } finally {
+      setStderrSinkForTesting(null);
+    }
   });
 
   it('本文つきで届いた退避（古い runner）は、これまでどおり置き場へ入れ、取りに行かない', async () => {
