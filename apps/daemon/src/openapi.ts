@@ -1011,6 +1011,11 @@ export const profileConflictResponseSchema = z.object({
   current: profileEntrySummarySchema.nullable(),
 });
 
+// `DELETE /profile/{name}` のクエリ。`ifMatch` は読んだときの行の版（`GET /profile` の各行の `version`）。省けば比べない
+export const profileEntryDeleteQuery = z.object({
+  ifMatch: z.string().min(1).optional(),
+});
+
 export const profileUpdateRequestSchema = z.object({
   script: z.string(),
 });

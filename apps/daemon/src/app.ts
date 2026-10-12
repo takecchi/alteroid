@@ -316,6 +316,7 @@ import {
   pluginRemoveResponseSchema,
   pluginsListResponseSchema,
   profileEntryUpdateRequestSchema,
+  profileEntryDeleteQuery,
   profileConflictResponseSchema,
   profileErrorResponseSchema,
   profileResponseSchema,
@@ -7107,6 +7108,10 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
+      queryParams(profileEntryDeleteQuery, (where) => ({
+        error: 'プロファイルの入力の形が不正（何も変えていない）',
+        detail: where === '' ? 'クエリの形が不正である' : `形が不正な項目: ${where}`,
+      })),
       async (c) => {
         const name = c.req.param('name');
         if (!PROFILE_ENTRY_NAME.test(name)) {
@@ -7125,13 +7130,12 @@ export function createApp(deps: AppDeps) {
         if (!(await deps.profile.read()).some((entry) => entry.name === name)) {
           return c.json({ error: `プロファイルに行 ${name} は無い` }, 404);
         }
-        const ifMatch = c.req.query('ifMatch');
+        const { ifMatch } = c.req.valid('query');
         const outcome = await mutateProfile(deps, {
           actor: describeActor(c.get('principal')),
           route: 'DELETE /profile/:name',
           subject: `行 ${name}（外す）`,
-          run: (profile) =>
-            profile.remove(name, ifMatch === undefined || ifMatch === '' ? undefined : { ifMatch }),
+          run: (profile) => profile.remove(name, ifMatch === undefined ? undefined : { ifMatch }),
         });
         if (outcome.ok) return c.json(outcome.body, 200);
         return outcome.status === 409 ? c.json(outcome.body, 409) : c.json(outcome.body, 400);

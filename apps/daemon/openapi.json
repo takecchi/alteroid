@@ -24592,6 +24592,14 @@
         },
         "parameters": [
           {
+            "in": "query",
+            "name": "ifMatch",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
             "schema": {
               "type": "string"
             },

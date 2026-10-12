@@ -581,16 +581,57 @@ export class ProfileRejectedError extends ApiError {
   }
 }
 
+/**
+ * `PUT` / `DELETE /profile/{name}` が 409 を返した（読んだ後に、その行がほかで変わった・作られた・消された。何も変えていない）。
+ * 投げる前に一覧を取り直してある。`current` はいまの行（本文は載らない。無ければ `null`、古い応答で欄が無ければ `undefined`）。
+ */
+export class ProfileChangedError extends ApiError {
+  readonly current: { name: string; version?: string } | null | undefined;
+
+  constructor(current: { name: string; version?: string } | null | undefined) {
+    super(
+      409,
+      '読んだ後に、プロファイルの行がほかで変わったので、変えていない（一覧を読み直した）',
+    );
+    this.name = 'ProfileChangedError';
+    this.current = current;
+  }
+}
+
+async function throwIfProfileChanged(
+  result: { response: Response; error?: unknown },
+  refresh: () => Promise<unknown>,
+): Promise<void> {
+  if (result.response.status !== 409) return;
+  await refresh();
+  const body = result.error as { current?: { name: string; version?: string } | null } | undefined;
+  throw new ProfileChangedError(body?.current);
+}
+
+/**
+ * `ifMatch` は読んだときの行の版（#4592）。`string` はその版の行が在ること、`null` は行が無いこと（無いときだけ作る）。
+ * 省けば比べない（古いデーモン・版を持っていない呼び手）。
+ */
 export function useSetProfileEntry() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (name: string, script: string, scope?: ProfileScope): Promise<ProfileUpdateResult> => {
+    async (
+      name: string,
+      script: string,
+      scope?: ProfileScope,
+      ifMatch?: string | null,
+    ): Promise<ProfileUpdateResult> => {
       const result = await api.api.PUT('/profile/{name}', {
         params: { path: { name } },
-        body: { script, ...(scope === undefined ? {} : { scope }) },
+        body: {
+          script,
+          ...(scope === undefined ? {} : { scope }),
+          ...(ifMatch === undefined ? {} : { ifMatch }),
+        },
       });
       throwIfProfileRejected(result);
+      await throwIfProfileChanged(result, () => mutate(KEY.profile));
       const updated = unwrap(result);
       await mutate(KEY.profile);
       return updated;
@@ -618,9 +659,12 @@ export function useRemoveProfileEntry() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (name: string): Promise<ProfileUpdateResult> => {
-      const result = await api.api.DELETE('/profile/{name}', { params: { path: { name } } });
+    async (name: string, ifMatch?: string): Promise<ProfileUpdateResult> => {
+      const result = await api.api.DELETE('/profile/{name}', {
+        params: { path: { name }, ...(ifMatch === undefined ? {} : { query: { ifMatch } }) },
+      });
       throwIfProfileRejected(result);
+      await throwIfProfileChanged(result, () => mutate(KEY.profile));
       // 404（行が無い）でも取り直してから投げる: 既に外されていると、行が一覧に残り続け、開いている編集欄から蘇るため
       if (result.response.status === 404) await mutate(KEY.profile);
       const updated = unwrap(result);
