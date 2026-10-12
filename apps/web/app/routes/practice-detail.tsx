@@ -17,6 +17,7 @@ import {
   cn,
 } from '@alteroid/ui';
 import {
+  ApiError,
   useDeletePractice,
   PracticeConflictError,
   useSavePractice,
@@ -117,7 +118,10 @@ function PracticeDetailBody({ slug }: { slug: string }) {
   const goneAfterRead = notFound && data !== undefined;
 
   // 取れなかったのを空のやり方と描かない: 空の編集欄と保存ボタンを出すと、既存のやり方を空で上書きできてしまうため。
-  const loadFailed = data === undefined && error !== undefined && !missing;
+  // 409 だけは別: 行が読めない形で入っている（daemon の `UnreadablePracticeError`）ので、書き直しと削除という回復の口を画面にも残す（CLI と同じ入口の等価性）。
+  const unreadable =
+    data === undefined && error instanceof ApiError && error.status === 409 && !missing;
+  const loadFailed = data === undefined && error !== undefined && !missing && !unreadable;
 
   // `kind` が空だと 400 が返るだけなので、ここで弾いて待たせない。
   const canSave = dirty && kind.trim() !== '';
@@ -128,7 +132,8 @@ function PracticeDetailBody({ slug }: { slug: string }) {
   const releaseLeaveGuard = useReleaseLeaveGuard();
   useReportDirty('draft', dirty);
 
-  function save(ifMatch: string | null | undefined = baseVersion) {
+  // 読めない形の行へは版を付けない（null も送らない）: pg の実装は行の存在を衝突として 409 にするため。
+  function save(ifMatch: string | null | undefined = unreadable ? undefined : baseVersion) {
     // ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通るので、保存中の弾きはここに置く。
     if (busy) return;
     // 衝突のあとは、再取得で「変更なし」に見えても、人間が選んだ上書きは通す。
@@ -187,7 +192,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {!missing && !goneAfterRead && data !== undefined && (
+          {!missing && !goneAfterRead && (data !== undefined || unreadable) && (
             <>
               <Button
                 variant="danger"
@@ -201,13 +206,23 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                 open={confirmingDelete}
                 onOpenChange={setConfirmingDelete}
                 title={`「${slug}」を削除しますか`}
-                description="このやり方は本文ごと消え、元に戻せません。"
+                description={
+                  data === undefined
+                    ? 'このやり方は読めない形で入っているので、中身は読めないまま消え、元に戻せません。'
+                    : 'このやり方は本文ごと消え、元に戻せません。'
+                }
                 confirmLabel="削除する"
                 destructive
                 onConfirm={() => {
                   setBusy(true);
                   setConfirmingDelete(false);
-                  deletePractice(slug, deleteConflict?.current?.version ?? data.version)
+                  // 読めない形の行は版なしで消せる（版を持たない）。
+                  deletePractice(
+                    slug,
+                    data === undefined
+                      ? undefined
+                      : (deleteConflict?.current?.version ?? data.version),
+                  )
                     .then(() => {
                       // 応答待ちに別のやり方へ移っていたら、その画面を動かさない。
                       if (!mounted.current) return;
@@ -240,7 +255,12 @@ function PracticeDetailBody({ slug }: { slug: string }) {
         </div>
       </header>
 
-      {!missing && !goneAfterRead && <ErrorNote error={error} className="mb-3" />}
+      {!missing && !goneAfterRead && !unreadable && <ErrorNote error={error} className="mb-3" />}
+      {unreadable && (
+        <p role="alert" className="mb-3 rounded-lg border border-warn/50 p-3 text-sm text-warn">
+          このやり方は読めない形で入っている（中身を読めない）。書き直すか、外すことができる。書き直すと前の内容は残らない。
+        </p>
+      )}
       {goneAfterRead && (
         <p role="alert" className="mb-3 rounded-lg border border-warn/50 p-3 text-sm text-warn">
           このやり方は、読んだ後に別の手段で消された（または見つからない）。下の内容は前に読めたときのもので、書きかけもそのまま残してある。保存するときは、消されたものを書き戻すかどうかを確認する。
