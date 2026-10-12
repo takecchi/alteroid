@@ -83,6 +83,7 @@ function SchedulePage() {
   const [ran, setRan] = useState<string | undefined>(undefined);
   const [removing, setRemoving] = useState<string | undefined>(undefined);
   const [confirmingRemove, setConfirmingRemove] = useState<string | undefined>(undefined);
+  const [confirmingUnreadable, setConfirmingUnreadable] = useState<string | undefined>(undefined);
   const [editing, setEditing] = useState<string | undefined>(undefined);
   /**
    * 編集を開いた時点の依頼の写し。編集中にほかで消されると、取り直した一覧からその行が消え、編集の枠ごと
@@ -118,6 +119,10 @@ function SchedulePage() {
     !data.entries.some((entry) => entry.kind === editing);
   const shownEntries =
     data === undefined ? [] : editingGone ? [...data.entries, editingEntry] : data.entries;
+  // kind が取れない行にはボタンを出さない: 外す先（DELETE /schedule/:kind）を指せないため
+  const unreadableKinds = (data?.unreadable ?? []).flatMap((entry) =>
+    entry.kind != null ? [entry.kind] : [],
+  );
   // 一覧が読めていないときは空にする: 確かめようが無いので送る側を止めないため
   const existingKinds: ReadonlySet<string> = new Set([
     ...(data?.entries ?? []).filter((entry) => entry.request !== undefined).map((e) => e.kind),
@@ -157,7 +162,48 @@ function SchedulePage() {
       />
       <ErrorNote error={failure} className="mb-4" />
 
-      <UnreadableScheduleNote unreadable={data?.unreadable ?? []} className="mb-4" />
+      <UnreadableScheduleNote
+        unreadable={data?.unreadable ?? []}
+        className={unreadableKinds.length > 0 ? 'mb-2' : 'mb-4'}
+      />
+      {/* 外すボタンは注記の中ではなくここに置く: 注記はホームのタイルでも使い、ホームには操作を出さないため */}
+      {/* 既定の仕込みの kind でも出す: デーモンの DELETE は予約名を弾かず（弾くのは仕込みの POST だけ）、手編集で入った読めない行はここからしか外せないため */}
+      {unreadableKinds.length > 0 && (
+        <ul className="mb-4 flex flex-wrap gap-2">
+          {unreadableKinds.map((kind) => (
+            <li key={kind} className="flex items-center gap-2">
+              <span className="font-mono text-xs break-words text-muted-foreground">{kind}</span>
+              <Button
+                size="sm"
+                variant="danger"
+                aria-label={`読めない依頼 ${kind} を外す`}
+                loading={removing === kind}
+                onClick={() => setConfirmingUnreadable(kind)}
+              >
+                外す
+              </Button>
+              {/* 版（If-Match）は送らない: 読めない行は版が取れず、デーモンの DELETE も版を要らないため */}
+              <ConfirmDialog
+                open={confirmingUnreadable === kind}
+                onOpenChange={(open) => {
+                  if (!open) setConfirmingUnreadable(undefined);
+                }}
+                title={`読めない依頼「${kind}」を外しますか`}
+                description={`読めない形で入っている依頼「${kind}」を外しますか。中身は読めないまま消え、元に戻せません。`}
+                confirmLabel="外す"
+                destructive
+                onConfirm={() => {
+                  setRemoving(kind);
+                  setFailure(undefined);
+                  removeSchedule(kind)
+                    .catch(setFailure)
+                    .finally(() => setRemoving(undefined));
+                }}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
 
       <Card className="mb-4">
         <CardHeader title="定期ジョブ" subtitle="既定で回っている。ここは待たずに試すための口" />
