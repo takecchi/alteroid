@@ -9585,6 +9585,8 @@ describe('認証トークンのプール', () => {
     expect(await response.json()).toEqual({
       tokens: [],
       settings: { rotateOn: 'free_exhausted', cooldownMs: 5 * 60 * 60 * 1000 },
+      // 空のプールにも版が付く（PUT /tokens の ifMatch へ渡す。#4591）
+      version: expect.any(String),
     });
   });
 

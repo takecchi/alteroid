@@ -849,6 +849,8 @@ export {
   markTokenUsable,
   normalizeTokenPool,
   toAgentTokenView,
+  tokenPoolVersionOf,
+  TokenPoolVersionMismatchError,
   tokenAvailabilityAt,
   tokenRecoveryOf,
   tokenRotationPolicySchema,

@@ -75,6 +75,7 @@ import {
   ProfileRollbackFailedError,
   redactProfileFailure,
   TokenPoolInputError,
+  TokenPoolVersionMismatchError,
   UnreadableAccountError,
   UnreadableCommitmentError,
   UnreadableJournalEntryError,
@@ -327,6 +328,7 @@ import {
   scheduleConflictResponseSchema,
   scheduleListResponseSchema,
   tokensPolicyUpdateRequestSchema,
+  tokensConflictResponseSchema,
   tokensReplaceResponseSchema,
   tokensResponseSchema,
   tokensUnreadableRemoveRequestSchema,
@@ -7970,7 +7972,10 @@ export function createApp(deps: AppDeps) {
         description:
           '入力に無い（読めた）行は消える。**読めない行は消さずに持ち越す**（issue #2354。' +
           '消すには `POST /tokens/unreadable/remove`）。壊れた入力（新規行に value が無い・消えた id を' +
-          '指す・id 重複）は 400 で理由を返し、保存しない。',
+          '指す・id 重複）は 400 で理由を返し、保存しない。' +
+          '`ifMatch`（`GET /tokens` の `version`）を渡すと、読んだ後にプールが変わっていたとき' +
+          '（ほかで足した・消した・改名した・無効化した・順を変えた）何も変えずに 409 を返す。' +
+          '省けば今までどおり比べない（回し手の冷却の書き戻しでは版は変わらない）。',
         responses: {
           200: {
             description:
@@ -7986,6 +7991,12 @@ export function createApp(deps: AppDeps) {
           400: {
             description: '入力が壊れている（保存していない）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '`ifMatch` がいまのプールの版と食い違う（読んだ後に変わった。何も変えていない）。' +
+              '`current` にいまのプール（値は出さない）を添える。読み直して、やり直す。',
+            content: { 'application/json': { schema: resolver(tokensConflictResponseSchema) } },
           },
           500: {
             description:
@@ -8028,7 +8039,9 @@ export function createApp(deps: AppDeps) {
         const requestedCount = c.req.valid('json').tokens.length;
         let saved: Awaited<ReturnType<TokenPoolService['replace']>>;
         try {
+          const { ifMatch } = c.req.valid('json');
           saved = await deps.tokens.replace(c.req.valid('json').tokens, {
+            ...(ifMatch === undefined ? {} : { ifMatch }),
             beforeSave: async ({ before, after }) => {
               state.changes = classifyTokenPoolChange(before, after);
               if (!state.changes.some((change) => change.widens)) return;
@@ -8061,6 +8074,22 @@ export function createApp(deps: AppDeps) {
           // 返してよい例外だけを型で分けて返す: `TokenPoolInputError` は `message` をそのまま返してよいという約束が型に付いている。それ以外（保存の失敗）は本文を1文字も返さない: ドライバの例外は失敗したクエリの束縛パラメータを添えるので（`drizzle-orm@0.45.2` の `PgPreparedQuery` は `Failed query: …` の次の行に `params: …` を置く）、素の `String(error)` を返すとトークンの値が載る。`reasonOf` を通すだけにしない: 1行目だけを採って値が落ちるのは、ドライバの改行位置に依存した偶然。投げ直さない: 既定のハンドラへ回るだけで、本文を出さない保証が消える。
           if (error instanceof TokenPoolInputError) {
             return c.json({ error: error.message }, 400);
+          }
+          // 版の食い違いは書く前に断っている（日誌も書いていない）。いまの姿を添える: 読めなければ省く（409 は変えない）
+          if (error instanceof TokenPoolVersionMismatchError) {
+            let current: z.infer<typeof tokensResponseSchema> | undefined;
+            try {
+              current = tokensResponseSchema.parse(await deps.tokens.list());
+            } catch {
+              current = undefined;
+            }
+            return c.json(
+              tokensConflictResponseSchema.parse({
+                error: error.message,
+                ...(current === undefined ? {} : { current }),
+              }),
+              409,
+            );
           }
           // 日誌は先に書いたが保存できなかったので、打ち消しの行を足す（`PUT /credentials` と同じ形）。
           if (state.written) {

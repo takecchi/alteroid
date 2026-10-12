@@ -1256,6 +1256,8 @@ export const tokensResponseSchema = z.object({
       carriedOver: z.literal(true).optional(),
     })
     .optional(),
+  // プールの版。`PUT /tokens` の `ifMatch` へそのまま渡す（人が変える欄だけから作る。回し手の冷却では変わらない）
+  version: z.string().optional(),
 });
 
 // 表示の読み直しに失敗したときは `tokens` を載せない: 空の `tokens` は「プールが空」と読めてしまうため。
@@ -1277,6 +1279,14 @@ export const tokensUnreadableRemoveResponseSchema = tokensResponseSchema.extend(
 
 export const tokensUpdateRequestSchema = z.object({
   tokens: z.array(agentTokenInputSchema),
+  // 読んだときの版（`GET /tokens` の `version`）。渡せば、いまの版と食い違うとき何も変えずに 409。省けば今までどおり比べない
+  ifMatch: z.string().min(1).optional(),
+});
+
+// 版が食い違ったときの 409 の本文。`current` はいまのプール（値は出さない）。読み直せなかったときは省く
+export const tokensConflictResponseSchema = z.object({
+  error: z.string(),
+  current: tokensResponseSchema.optional(),
 });
 
 export const tokensPolicyUpdateRequestSchema = z.object({

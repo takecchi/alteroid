@@ -26757,6 +26757,9 @@
                         }
                       },
                       "required": ["count", "rows"]
+                    },
+                    "version": {
+                      "type": "string"
                     }
                   },
                   "required": ["tokens"]
@@ -26786,7 +26789,7 @@
         "operationId": "putTokens",
         "tags": ["tokens"],
         "summary": "認証トークンのプールを全文置換する",
-        "description": "入力に無い（読めた）行は消える。**読めない行は消さずに持ち越す**（issue #2354。消すには `POST /tokens/unreadable/remove`）。壊れた入力（新規行に value が無い・消えた id を指す・id 重複）は 400 で理由を返し、保存しない。",
+        "description": "入力に無い（読めた）行は消える。**読めない行は消さずに持ち越す**（issue #2354。消すには `POST /tokens/unreadable/remove`）。壊れた入力（新規行に value が無い・消えた id を指す・id 重複）は 400 で理由を返し、保存しない。`ifMatch`（`GET /tokens` の `version`）を渡すと、読んだ後にプールが変わっていたとき（ほかで足した・消した・改名した・無効化した・順を変えた）何も変えずに 409 を返す。省けば今までどおり比べない（回し手の冷却の書き戻しでは版は変わらない）。",
         "responses": {
           "200": {
             "description": "置き換え後のプール（値は出さない）と設定。設定が読めないときは `settings` の代わりに `settingsUnreadable: { reason }` を返す（プールの置換は道連れにしない。issue #2095）。読めない行が在れば `rowsUnreadable`（`carriedOver: true`）が載る——**読めない行は捨てずに持ち越した**（issue #2354）。消すには `POST /tokens/unreadable/remove`。**保存した後の表示の読み直しに失敗したときも 200**（保存したので「保存できなかった」とは言わない）: `viewUnavailable` だけを返し、プールの欄（`tokens` など）は載せない。",
@@ -26914,6 +26917,9 @@
                       },
                       "required": ["count", "rows"]
                     },
+                    "version": {
+                      "type": "string"
+                    },
                     "viewUnavailable": {
                       "type": "object",
                       "properties": {
@@ -26953,6 +26959,150 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`ifMatch` がいまのプールの版と食い違う（読んだ後に変わった。何も変えていない）。`current` にいまのプール（値は出さない）を添える。読み直して、やり直す。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "current": {
+                      "type": "object",
+                      "properties": {
+                        "tokens": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "order": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "sha256": {
+                                "type": "string"
+                              },
+                              "source": {
+                                "type": "string",
+                                "enum": ["stored"]
+                              },
+                              "disabledAt": {
+                                "type": "string"
+                              },
+                              "cooldownUntil": {
+                                "type": "number"
+                              },
+                              "cooldownSource": {
+                                "type": "string",
+                                "enum": ["quota_reset", "overage_reset", "notice_text", "default"]
+                              },
+                              "lastRejectedAt": {
+                                "type": "string"
+                              },
+                              "lastRejectedReason": {
+                                "type": "string"
+                              },
+                              "invalidatedAt": {
+                                "type": "string"
+                              },
+                              "invalidatedReason": {
+                                "type": "string"
+                              },
+                              "createdAt": {
+                                "type": "string"
+                              },
+                              "updatedAt": {
+                                "type": "string"
+                              },
+                              "recovery": {
+                                "type": "string",
+                                "enum": ["time", "action", "unknown"]
+                              }
+                            },
+                            "required": ["id", "label", "order"]
+                          }
+                        },
+                        "settings": {
+                          "type": "object",
+                          "properties": {
+                            "rotateOn": {
+                              "type": "string",
+                              "enum": ["free_exhausted", "overage_exhausted", "off"]
+                            },
+                            "cooldownMs": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["rotateOn", "cooldownMs"]
+                        },
+                        "settingsUnreadable": {
+                          "type": "object",
+                          "properties": {
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["reason"]
+                        },
+                        "rowsUnreadable": {
+                          "type": "object",
+                          "properties": {
+                            "count": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "rows": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["reason"]
+                              }
+                            },
+                            "carriedOver": {
+                              "type": "boolean",
+                              "const": true
+                            }
+                          },
+                          "required": ["count", "rows"]
+                        },
+                        "version": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["tokens"]
                     }
                   },
                   "required": ["error"]
@@ -27029,6 +27179,10 @@
                       },
                       "required": ["label"]
                     }
+                  },
+                  "ifMatch": {
+                    "type": "string",
+                    "minLength": 1
                   }
                 },
                 "required": ["tokens"]
@@ -27170,6 +27324,9 @@
                         }
                       },
                       "required": ["count", "rows"]
+                    },
+                    "version": {
+                      "type": "string"
                     },
                     "removedIds": {
                       "type": "array",

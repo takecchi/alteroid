@@ -5,6 +5,8 @@ import {
   markTokenUsable,
   normalizeTokenPool,
   toAgentTokenView,
+  tokenPoolVersionOf,
+  TokenPoolVersionMismatchError,
   type AgentToken,
   type AgentTokenInput,
   type AgentTokenView,
@@ -26,7 +28,7 @@ export type TokenPoolView = (
       settings?: undefined;
       settingsUnreadable: { reason: string };
     }
-) & { rowsUnreadable?: TokenRowsUnreadable };
+) & { rowsUnreadable?: TokenRowsUnreadable; version?: string };
 
 export interface TokenRowsUnreadable {
   count: number;
@@ -40,6 +42,11 @@ export interface ReplaceOptions {
     before: readonly AgentToken[];
     after: readonly AgentToken[];
   }) => Promise<void>;
+  /**
+   * 呼び手が読んだときのプールの版（`TokenPoolView.version`）。渡したときだけ、書き込みの鍵の中でいまの版と比べ、
+   * 食い違えば何も変えずに `TokenPoolVersionMismatchError` を投げる。渡さなければ今までどおり比べない。
+   */
+  ifMatch?: string;
 }
 
 export interface SetSettingsOptions {
@@ -144,14 +151,16 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
   }
 
   function viewOf(
-    tokens: AgentTokenView[],
+    tokens: readonly AgentToken[],
     settingsResult: Awaited<ReturnType<typeof readSettingsOrUnreadable>>,
     unreadableRows: readonly UnreadableToken[],
     options: { carriedOver?: boolean } = {},
   ): TokenPoolView {
+    const views = tokens.map(toAgentTokenView);
+    const version = tokenPoolVersionOf(tokens);
     const base = settingsResult.ok
-      ? { tokens, settings: settingsResult.settings }
-      : { tokens, settingsUnreadable: { reason: settingsResult.reason } };
+      ? { tokens: views, settings: settingsResult.settings, version }
+      : { tokens: views, settingsUnreadable: { reason: settingsResult.reason }, version };
     return unreadableRows.length === 0
       ? base
       : {
@@ -170,7 +179,7 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
       readSettingsOrUnreadable(),
       stores.tokens.listUnreadable(),
     ]);
-    return viewOf(tokens.map(toAgentTokenView), settingsResult, unreadableRows);
+    return viewOf(tokens, settingsResult, unreadableRows);
   }
 
   // 器に「1行だけ更新する」口を足さずこの形にする: read-modify-write の原子性を fs と pg にもう1つ実装することになり、replace と二重になるため。
@@ -205,6 +214,13 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
         // 読み直しから書き戻しまでを writeLock の中に収める: 通さないと、読んでから書く間に回し手の冷却が割り込んで黙って消えるため
         const stored = await writeLock.run(async () => {
           const existing = await stores.tokens.list();
+          // 版の比較も鍵の中で行う: 鍵の外で比べると、比べてから書くまでの間に別の書き手が入れる
+          if (
+            replaceOptions.ifMatch !== undefined &&
+            tokenPoolVersionOf(existing) !== replaceOptions.ifMatch
+          ) {
+            throw new TokenPoolVersionMismatchError();
+          }
           const normalized = normalizeTokenPool(inputs, existing, { now, newId });
           await replaceOptions.beforeSave?.({ before: existing, after: normalized });
           return stores.tokens.replace(normalized);
@@ -214,7 +230,7 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
         try {
           const settingsResult = await readSettingsOrUnreadable();
           const unreadableRows = await stores.tokens.listUnreadable();
-          view = viewOf(stored.map(toAgentTokenView), settingsResult, unreadableRows, {
+          view = viewOf(stored, settingsResult, unreadableRows, {
             carriedOver: true,
           });
         } catch (cause) {
@@ -252,7 +268,7 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
             readSettingsOrUnreadable(),
             stores.tokens.listUnreadable(),
           ]);
-          view = viewOf(tokens.map(toAgentTokenView), settingsResult, unreadableRows);
+          view = viewOf(tokens, settingsResult, unreadableRows);
         } catch (cause) {
           announceChange('pool');
           return { kind: 'removedViewFailed', ids: removed, cause };
