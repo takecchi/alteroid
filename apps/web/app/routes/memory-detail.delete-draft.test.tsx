@@ -106,5 +106,59 @@ describe('書きかけの最中に、クローンが記憶を書き換えた後�
     expect(screen.getByText('クローンが書いた新しい本文')).toBeTruthy();
     // 書きかけは残る
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('人間の書きかけ');
+
+    // いまの内容を見たうえで、もう一度消すと決めたら、見せた版（v2）を前提に消して一覧へ戻る
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+    await waitFor(() => expect(deletes).toHaveLength(2));
+    expect(deletes[1]).toBe('v2');
+    expect(await screen.findByText('一覧')).toBeTruthy();
+  });
+
+  it('対照: 書きかけが無ければ、取り直した最新の版（v2）を前提に消す', async () => {
+    let version = 'v1';
+    let v2Served = 0;
+    const deletes: (string | null)[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (!request.url.includes('/memory/notes'))
+        throw new TypeError(`Failed to fetch: ${request.url}`);
+      if (request.method === 'DELETE') {
+        const ifMatch = new URL(request.url).searchParams.get('ifMatch');
+        deletes.push(ifMatch);
+        if (ifMatch !== version) {
+          return json({ error: '変わっています', current: { document: DOC, version } }, 409);
+        }
+        return json({ ok: true, slug: 'notes' });
+      }
+      if (version === 'v2') v2Served += 1;
+      return json({ document: DOC, version });
+    }) as typeof fetch;
+
+    const router = createMemoryRouter(
+      [
+        { path: '/memory/:slug', Component: Harness },
+        { path: '/memory', Component: () => <p>一覧</p> },
+      ],
+      { initialEntries: ['/memory/notes'] },
+    );
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+
+    await screen.findByRole('button', { name: '削除' });
+    version = 'v2';
+    fireEvent.focus(window);
+    await waitFor(() => expect(v2Served).toBeGreaterThan(0));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+    await waitFor(() => expect(deletes).toEqual(['v2']));
+    expect(await screen.findByText('一覧')).toBeTruthy();
   });
 });

@@ -110,5 +110,62 @@ describe('書きかけの最中に、クローンがやり方を書き換えた�
     expect(deletes[0]).toBe('v1');
     expect(await screen.findByText(/このやり方がほかで書き換えられた。消していない/)).toBeTruthy();
     expect((screen.getByLabelText('本文') as HTMLTextAreaElement).value).toBe('人間の書きかけ');
+
+    // 知らせを見たうえで、もう一度消すと決めたら、知らせた版（v2）を前提に消して一覧へ戻る
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+    await waitFor(() => expect(deletes).toHaveLength(2));
+    expect(deletes[1]).toBe('v2');
+    expect(await screen.findByText('一覧')).toBeTruthy();
+  });
+
+  it('対照: 書きかけが無ければ、取り直した最新の版（v2）を前提に消す', async () => {
+    let version = 'v1';
+    let v2Served = 0;
+    const deletes: (string | null)[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const url = new URL(request.url);
+      if (url.pathname === '/practices/notes/versions') return json({ versions: [] });
+      if (url.pathname !== '/practices/notes') throw new TypeError(`Failed to fetch: ${url.href}`);
+      if (request.method === 'DELETE') {
+        const ifMatch = url.searchParams.get('ifMatch');
+        deletes.push(ifMatch);
+        if (ifMatch !== version) {
+          return json({ error: '変わっています', current: { practice: V1, version } }, 409);
+        }
+        return json({ ok: true, slug: 'notes' });
+      }
+      if (version === 'v2') v2Served += 1;
+      return json({ practice: V1, version });
+    }) as typeof fetch;
+
+    const router = createMemoryRouter(
+      [
+        { path: '/practices/:slug', Component: Harness },
+        { path: '/practices', Component: () => <p>一覧</p> },
+      ],
+      { initialEntries: ['/practices/notes'] },
+    );
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+
+    await screen.findByRole('button', { name: '削除' });
+    version = 'v2';
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(v2Served).toBeGreaterThan(0));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+    await waitFor(() => expect(deletes).toEqual(['v2']));
+    expect(await screen.findByText('一覧')).toBeTruthy();
   });
 });
