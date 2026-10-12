@@ -124,9 +124,15 @@ function SchedulePage() {
     entry.kind != null ? [entry.kind] : [],
   );
   // 一覧が読めていないときは空にする: 確かめようが無いので送る側を止めないため
-  const existingKinds: ReadonlySet<string> = new Set([
-    ...(data?.entries ?? []).filter((entry) => entry.request !== undefined).map((e) => e.kind),
-    ...(data?.unreadable ?? []).flatMap((entry) => (entry.kind != null ? [entry.kind] : [])),
+  // 名前ごとに一覧で見た版を持つ: 置き換えるときにその版を送り、見た後に書き換えられた予定を黙って上書きしないため。
+  // 読めない行は版が判らないので `undefined`（後勝ち）のまま
+  const existingKinds: ReadonlyMap<string, string | undefined> = new Map([
+    ...(data?.unreadable ?? []).flatMap((entry) =>
+      entry.kind != null ? [[entry.kind, undefined] as const] : [],
+    ),
+    ...(data?.entries ?? [])
+      .filter((entry) => entry.request !== undefined)
+      .map((entry) => [entry.kind, entry.updatedAt] as const),
   ]);
 
   return (
@@ -691,7 +697,11 @@ function ScheduleEditForm({
 const RESERVED_KIND_MESSAGE = '既定の名前（予約名）なので使えない。別の名前にする';
 
 // 周期の3つを画面から落とさない: 曜日や月の指定は cron でしか書けず、「毎日起きて曜日を見て何もしない」で代用すると7回に6回はターンを空焼きするため
-function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> }) {
+function ScheduleForm({
+  existingKinds,
+}: {
+  existingKinds: ReadonlyMap<string, string | undefined>;
+}) {
   const createSchedule = useCreateSchedule();
   const kindId = useId();
   const [kind, setKind] = useState('');
@@ -712,7 +722,7 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
   function submit() {
     if (!ready || inFlight.current) return;
     if (replacing) {
-      setConfirming({ ifMatch: undefined });
+      setConfirming({ ifMatch: existingKinds.get(kind.trim()) });
       return;
     }
     // 版は null で送る: 一覧が古い・読めていないとき、同名の予定を確認なしに置き換えないため
