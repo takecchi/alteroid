@@ -1700,11 +1700,21 @@ describe('詳細のモデルの札（#3921）', () => {
 
 describe('「話しかける」と待ちの行は、send の戻り値を使い手向けの言葉で出す（#3066）', () => {
   const askedAt = '2026-08-23T01:00:00.000Z';
-  const RAW = ['answered', 'delivered', 'session_missing', 'unknown', 'unreadable', 'declined'];
+  const RAW = [
+    'answered',
+    'delivered',
+    'held',
+    'session_missing',
+    'unknown',
+    'unreadable',
+    'declined',
+  ];
 
   it.each([
     ['answered', '確認に答えた', false],
     ['delivered', '追加指示を届けた', false],
+    // 預かった（#4565）: デーモンが台帳に預けて後で届ける。受け付けた側なので未達の色にしない
+    ['held', '預かった', false],
     ['session_missing', '届いていない', true],
     ['declined', '届けていない（世代が食い違う', true],
     ['unknown', '届いたか確かめられなかった', true],
@@ -1740,6 +1750,19 @@ describe('「話しかける」と待ちの行は、send の戻り値を使い�
     reply.body = { outcome: 'delivered', detail: '届いた。' };
     fireEvent.click(screen.getByRole('button', { name: '送る' }));
     expect(await screen.findByText(/追加指示を届けた: 届いた。/)).toBeTruthy();
+    expect(input.value).toBe('');
+  });
+
+  it('預かった（held）ときは入力欄を空にする: 書いた文を残すと、送り直しで二重に届くため（#4565）', async () => {
+    renderDetailWithMessages(
+      { ...BASE, status: 'running', live: true },
+      { outcome: 'held', detail: '台帳に預かった。' },
+    );
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    const input = screen.getByPlaceholderText('追加の指示') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '書いた指示' } });
+    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    expect(await screen.findByText(/台帳に預かった。/)).toBeTruthy();
     expect(input.value).toBe('');
   });
 

@@ -803,10 +803,16 @@ function AskedAtNote({ askedAt }: { askedAt: string | undefined }) {
   );
 }
 
-// 届いたと言ってよいのは `answered` / `delivered` だけ（許可リスト）。知らない値は未達の側へ倒し、識別子を出さず `detail` だけを出す。
+// 受け付けた側（入力を空にしてよい）は `answered` / `delivered` / `held` だけ（許可リスト）。知らない値は未達の側へ倒し、識別子を出さず `detail` だけを出す。
+// `held` を受け付けた側に入れる: デーモンが伝言を台帳に預かり、届けられるようになったら自動で届けるので、書いた文を残すと送り直しで二重に届く（CLI も同じく受け付けた側に数える）
 const SEND_OUTCOME_LABELS: Record<string, { label: string; reached: boolean }> = {
   answered: { label: '確認に答えた', reached: true },
   delivered: { label: '追加指示を届けた', reached: true },
+  held: {
+    label:
+      '預かった（いまは届けられないので台帳に預け、届けられるようになったら届ける。送り直すと二重に届く）',
+    reached: true,
+  },
   session_missing: {
     label: '届いていない（担当がこの仕事の会話を持っておらず、入り直せなかった）',
     reached: false,
