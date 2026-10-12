@@ -39,6 +39,8 @@ interface TokensView {
     rows: { id?: string; label?: string; reason: string }[];
     carriedOver?: true;
   };
+  // プールの版。読んだ一覧で全文置換するときに `ifMatch` として返す（古いデーモンは返さない）
+  version?: string;
 }
 
 interface AgentTokenInput {
@@ -263,7 +265,7 @@ export async function tokenAddCommand(options: { label: string; file?: string })
     ...current.tokens.map(toInput),
     { label: options.label, value },
   ];
-  const view = await putTokens(target, inputs);
+  const view = await putTokens(target, inputs, current.version);
   stdout.write(`トークン「${options.label}」を追加しました。\n`);
   stdout.write(describeCarriedOver(view));
 }
@@ -286,7 +288,7 @@ export async function tokenRemoveCommand(
     options,
   );
   const inputs = current.tokens.filter((token) => token.id !== id).map(toInput);
-  const view = await putTokens(target, inputs);
+  const view = await putTokens(target, inputs, current.version);
   stdout.write(`トークン（id ${id}）を削除しました。\n`);
   stdout.write(describeCarriedOver(view));
 }
@@ -311,7 +313,7 @@ async function setDisabled(id: string, disabled: boolean): Promise<void> {
   const inputs = current.tokens.map((token) =>
     token.id === id ? { ...toInput(token), disabled } : toInput(token),
   );
-  const view = await putTokens(target, inputs);
+  const view = await putTokens(target, inputs, current.version);
   stdout.write(`トークン（id ${id}）を${disabled ? '外しました' : '戻しました'}。\n`);
   stdout.write(describeCarriedOver(view));
 }
@@ -382,10 +384,15 @@ function toInput(token: AgentTokenView): AgentTokenInput {
 
 type PutTokensView = Partial<TokensView> & { viewUnavailable?: { reason: string } };
 
-async function putTokens(target: Target, tokens: AgentTokenInput[]): Promise<PutTokensView> {
+// 読んだときの版を渡す: 読んでから（確認を待つ間に）ほかで足された行を、全文置換で黙って消さないため。古いデーモンは版を返さないので、そのときだけ省く
+async function putTokens(
+  target: Target,
+  tokens: AgentTokenInput[],
+  ifMatch: string | undefined,
+): Promise<PutTokensView> {
   return (await request(target, '/tokens', {
     method: 'PUT',
-    body: JSON.stringify({ tokens }),
+    body: JSON.stringify({ tokens, ...(ifMatch === undefined ? {} : { ifMatch }) }),
   })) as PutTokensView;
 }
 
@@ -429,6 +436,12 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     const body = (await response.json().catch(() => ({}))) as { error?: unknown; code?: unknown };
+    if (response.status === 409 && path === '/tokens') {
+      throw new Error(
+        '読んだ後に、認証トークンのプールがほかで変わっていたので、変えていません。\n' +
+          'alteroid token list でいまの姿を確かめてから、もう一度実行してください。',
+      );
+    }
     if (response.status === 500 && body.code === 'journal_write_failed') {
       throw new Error(
         '記録（日誌）が書けなかったので、変更していません。\n' +

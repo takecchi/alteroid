@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { z } from 'zod';
 
 import { fingerprintOf } from './credentials.js';
@@ -153,6 +155,32 @@ export class TokenPoolInputError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'TokenPoolInputError';
+  }
+}
+
+/**
+ * プールの版（`GET /tokens` が返し、`PUT /tokens` の `ifMatch` で前提にする）。
+ * 人が変える欄（id・ラベル・順・無効化の有無・値の指紋）だけから作る: 回し手が書く冷却・拒否の記録まで含めると、
+ * 人の操作が回し手の書き戻しのたびに食い違いになるため。値そのものは含めず指紋だけを使う（版は応答に載る）。
+ */
+export function tokenPoolVersionOf(tokens: readonly AgentToken[]): string {
+  const rows = [...tokens]
+    .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((token) => [
+      token.id,
+      token.label,
+      token.order,
+      token.disabledAt !== undefined,
+      token.value === undefined ? null : fingerprintOf(token.value),
+    ]);
+  return createHash('sha256').update(JSON.stringify(rows), 'utf8').digest('hex');
+}
+
+// message をそのまま HTTP 応答へ返してよい（版と固定の文だけ。値・資格は含めない）
+export class TokenPoolVersionMismatchError extends Error {
+  constructor() {
+    super('認証トークンのプールが読んだ後に変わっている（変えていない）');
+    this.name = 'TokenPoolVersionMismatchError';
   }
 }
 
