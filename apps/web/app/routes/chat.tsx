@@ -2777,6 +2777,29 @@ export function ChatPane({
           return next;
         });
         savePendingAttachmentsNote(pressedConversationId, undefined);
+        // その会話の発言を編集していた書きかけも捨てる: 鍵は発言 id で会話 id を持たないので、その会話の行（表示中の行と、編集を開いた時点の写し）から集める。
+        // 残すと、消した会話の本文がどこからも開けないまま端末に平文で残る（送信前の下書きを消す理由と同じ）
+        const editKeys = new Set<string>();
+        for (const line of allRef.current)
+          if (line.of === pressedConversationId) editKeys.add(line.key);
+        for (const [key, line] of editOriginals.current) {
+          if (line.of === pressedConversationId) editKeys.add(key);
+        }
+        if (editKeys.size > 0) {
+          const waiting = pendingEditSave.current;
+          if (waiting !== null && [...editKeys].some((key) => waiting.drafts.has(key))) {
+            const kept = new Map(waiting.drafts);
+            for (const key of editKeys) kept.delete(key);
+            pendingEditSave.current = { ...waiting, drafts: kept };
+          }
+          for (const key of editKeys) {
+            dropEditDraft(key);
+            editOriginals.current.delete(key);
+          }
+          setEditingKey((current) =>
+            current !== undefined && editKeys.has(current) ? undefined : current,
+          );
+        }
         if (shownIdRef.current === pressedConversationId) {
           setPending([]);
           setDeleteResult({ fromId: pressedConversationId, result });
@@ -2788,7 +2811,7 @@ export function ChatPane({
         setDeletingConversation(undefined);
       }
     },
-    [deleteConversation, navigate],
+    [deleteConversation, navigate, dropEditDraft],
   );
 
   const visibleUploading = (uploading.get(shownId) ?? 0) > 0;
