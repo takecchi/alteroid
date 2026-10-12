@@ -87,12 +87,14 @@ import { denialInputShape, type DeniedRecord } from './denial-shape.js';
 import { buildDenialInputHead, matchInputOf, redactErrorText } from './denial-input-head.js';
 import {
   noteBackgroundFailure,
+  noteDroppedRecord,
   noteMissingRecordSource,
   noteUnclassifiedFailure,
   noteUnclassifiedFailuresSummary,
   noteUnreadableRecord,
   reasonOf,
 } from './dropped-record.js';
+import { ArchiveStash } from './archive-ref.js';
 import {
   describeAnthropicRoute,
   inspectAnthropicRoute,
@@ -503,6 +505,15 @@ export interface RunnerHost {
   openOutboxFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined>;
   // 無くても成功（冪等）。形が不正なら `false`
   deleteOutboxFile(managerId: string, fileId: string): Promise<boolean>;
+  /**
+   * いま繋がっているデーモンが、生ログの退避を参照で受け取れるか（SSE の接続で `archive-ref` を名乗ったか。#4485）。
+   * 接続のたびに書き直す: 新しい接続のデーモンが古い版なら、本文を載せる形に戻すため。
+   */
+  setDaemonAcceptsArchiveRef(accepts: boolean): void;
+  /** 預けた退避の本文。無い・期限切れ・別の委譲の id なら `undefined`。 */
+  readArchive(managerId: string, archiveId: string): string | undefined;
+  /** 冪等。 */
+  deleteArchive(managerId: string, archiveId: string): void;
   /** 別口で受ける1つの大きいファイルの最大バイト（hello の `attachmentStageLimit`。#4128 段3a）。 */
   readonly attachmentStageLimit: number;
   // 大きいファイルの別口（#4128 段3a）。置けなければ `RunnerAttachmentRejectedError`（`RunnerAttachmentStageError` は 413 / 422）
@@ -664,6 +675,16 @@ class Host implements RunnerHost {
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir | undefined;
   readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
   readonly #readPids: (() => Promise<{ current: number; max: number } | undefined>) | undefined;
+  // 生ログの退避の本文を、デーモンが取りに来るまで預かる（#4485。`archive-ref.ts`）。捨てた分は stderr に残す（デーモンへの経路が無い時にも起きるため）
+  readonly #archiveStash = new ArchiveStash({
+    onDrop: (drop) =>
+      noteDroppedRecord(
+        '預けた生ログの退避',
+        `managerId=${drop.managerId} archiveId=${drop.archiveId} chars=${String(drop.chars)} reason=${drop.reason}`,
+        new Error('デーモンが取りに来ないまま捨てた'),
+      ),
+  });
+  #daemonAcceptsArchiveRef = false;
   readonly #finishUnpushedWorkFn:
     ((options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>) | undefined;
   readonly #cwdExistsFn: (cwd: string) => boolean;
@@ -1262,6 +1283,7 @@ class Host implements RunnerHost {
       ...(this.#readPids === undefined
         ? {}
         : { pidsPressureFn: () => this.#pidsPressureReading() }),
+      stashArchive: (body: string) => this.#stashArchive(managerId, body),
       ...(this.#finishUnpushedWorkFn === undefined
         ? {}
         : { finishUnpushedWorkFn: this.#finishUnpushedWorkFn }),
@@ -1395,6 +1417,24 @@ class Host implements RunnerHost {
 
   deleteOutboxFile(managerId: string, fileId: string): Promise<boolean> {
     return removeStagedOutboxFile(this.#outboxStagedRoot, managerId, fileId);
+  }
+
+  setDaemonAcceptsArchiveRef(accepts: boolean): void {
+    this.#daemonAcceptsArchiveRef = accepts;
+  }
+
+  readArchive(managerId: string, archiveId: string): string | undefined {
+    return this.#archiveStash.get(managerId, archiveId);
+  }
+
+  deleteArchive(managerId: string, archiveId: string): void {
+    this.#archiveStash.delete(managerId, archiveId);
+  }
+
+  // 名乗っていないデーモンには預けない（`undefined` を返し、セッションは本文を載せる）: 古いデーモンは本文の無い出来事を落とすため
+  #stashArchive(managerId: string, body: string): { id: string; chars: number } | undefined {
+    if (!this.#daemonAcceptsArchiveRef) return undefined;
+    return this.#archiveStash.put(managerId, body);
   }
 
   #attachmentInput(
@@ -1696,6 +1736,10 @@ interface RunnerSessionOptions {
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
   /** 器の pids と、器の上の担当の本数。渡されたときだけ、上限に近ければ道具の結果へ知らせを添える。 */
   pidsPressureFn?: () => Promise<PidsPressureReading | undefined>;
+  /**
+   * 生ログの退避の本文を runner に預け、参照を返す（#4485）。`undefined` は「預けない」（デーモンが参照を受け取れない・口が無い）で、本文を出来事に載せる。
+   */
+  stashArchive?: (body: string) => { id: string; chars: number } | undefined;
   finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
 }
 
@@ -1748,6 +1792,7 @@ class RunnerSession {
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
   readonly #pidsPressureFn: (() => Promise<PidsPressureReading | undefined>) | undefined;
+  readonly #stashArchive: ((body: string) => { id: string; chars: number } | undefined) | undefined;
   readonly #pidsPressureNotices = new PidsPressureNotices();
   readonly #denialStreaks = new ClassifierDenialStreaks();
   readonly #rescueMemory = new RescueMemory();
@@ -1885,6 +1930,7 @@ class RunnerSession {
     this.#readCgroupEventCountersFn =
       options.readCgroupEventCountersFn ?? (() => readCgroupEventCounters());
     this.#pidsPressureFn = options.pidsPressureFn;
+    this.#stashArchive = options.stashArchive;
     this.#finishUnpushedWorkFn =
       options.finishUnpushedWorkFn ??
       ((unpushedWorkOptions) => this.unpushedWork(unpushedWorkOptions));
@@ -4722,7 +4768,13 @@ class RunnerSession {
       return;
     }
     if (result.body.length === 0) return;
-    this.#emit({ type: 'archive', managerId: this.#id, body: result.body });
+    // 本文を SSE の1行で運ばない（#4485）: 数十 MB の行を受け取って解析する間、デーモンのループが塞がるため。預けられなければ（古いデーモン）本文を載せる
+    const ref = this.#stashArchive?.(result.body);
+    this.#emit(
+      ref === undefined
+        ? { type: 'archive', managerId: this.#id, body: result.body }
+        : { type: 'archive', managerId: this.#id, ref },
+    );
   }
 
   // `withdrawn: true` を渡すのはここだけ: 直後の `query.close()` で答えが CLI に一度も届かないため（`answer()` は `close()` を伴わず届く）

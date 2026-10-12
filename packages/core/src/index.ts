@@ -429,6 +429,12 @@ export {
   type JournalStoreSearchContractSubject,
 } from './journal-search-contract.js';
 export { verifyTranscriptArchiveContract } from './archive-contract.js';
+export {
+  ARCHIVE_REF_ACCEPT_HEADER,
+  ARCHIVE_REF_ACCEPT_TOKEN,
+  acceptsArchiveRef,
+  isArchiveRefId,
+} from './archive-ref.js';
 export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archive-session-id.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';

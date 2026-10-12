@@ -10,7 +10,10 @@ import type {
   RunnerManagerPeersAnnouncement,
 } from '@alteroid/core';
 import {
+  ARCHIVE_REF_ACCEPT_HEADER,
+  acceptsArchiveRef,
   DEFAULT_SSE_HEARTBEAT_MS,
+  isArchiveRefId,
   isOutboxFileId,
   readAttachmentLimits,
   readExecutionResources,
@@ -628,8 +631,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     )
 
     // heartbeat を流す: 無音が続くと読む側（undici）の `bodyTimeout`（300000ms）で必ず切れるため。
-    .get('/events', (c) =>
-      streamSSE(c, async (stream) => {
+    .get('/events', (c) => {
+      // 接続のたびに書き直す（#4485）: 退避の本文を参照で送るのは、いま繋がっているデーモンが受け取れると名乗ったときだけ
+      host.setDaemonAcceptsArchiveRef(acceptsArchiveRef(c.req.header(ARCHIVE_REF_ACCEPT_HEADER)));
+      return streamSSE(c, async (stream) => {
         const queue: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
         let wake: (() => void) | null = null;
         let closed = false;
@@ -769,8 +774,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
             if (!outbox.isRecorded(item.seq)) outbox.requeue(item.event, item.queuedAt);
           }
         }
-      }),
-    )
+      });
+    })
 
     .get('/managers', (c) => c.json({ managers: host.list() }))
 
@@ -997,6 +1002,23 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       if (!(await host.deleteOutboxFile(c.req.param('id'), fileId))) {
         return c.json({ error: 'invalid managerId' as const }, 400);
       }
+      return c.body(null, 204);
+    })
+
+    // 預けた生ログの退避の本文（#4485）。デーモンが取りに来る向きだけで、SSE には載せない。`archiveId` の形を先に検める
+    .get('/managers/:id/archive/:archiveId', (c) => {
+      const archiveId = c.req.param('archiveId');
+      if (!isArchiveRefId(archiveId)) return c.json({ error: 'invalid archiveId' as const }, 400);
+      const body = host.readArchive(c.req.param('id'), archiveId);
+      if (body === undefined) return c.json({ error: 'not found' as const }, 404);
+      return c.body(body, 200, { 'content-type': 'text/plain; charset=utf-8' });
+    })
+
+    // 無くても 204（冪等）
+    .delete('/managers/:id/archive/:archiveId', (c) => {
+      const archiveId = c.req.param('archiveId');
+      if (!isArchiveRefId(archiveId)) return c.json({ error: 'invalid archiveId' as const }, 400);
+      host.deleteArchive(c.req.param('id'), archiveId);
       return c.body(null, 204);
     });
 

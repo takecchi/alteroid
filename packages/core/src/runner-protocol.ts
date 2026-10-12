@@ -1016,7 +1016,19 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     }),
     entries: z.array(z.unknown()),
   }),
-  z.object({ type: z.literal('archive'), managerId: z.string(), body: z.string() }),
+  /**
+   * 生ログの退避。`body`（本文をそのまま載せる。古い形）か `ref`（本文は runner に預け、デーモンが
+   * `GET /managers/:id/archive/:archiveId` で取りに行く）のどちらか一方を持つ（#4485）。
+   * 本文を SSE の1行で運ぶと、数十 MB の行をデーモンが受け取り・解析する間ループが塞がり、ヒープも膨らむ。
+   * `ref` を送るのは、SSE の接続で `archive-ref` を名乗ったデーモンにだけ（`archive-ref.ts`。古いデーモンは `body` 無しの出来事を落とすため）。
+   * 両方とも無い出来事は、デーモンが「取れなかった」として跡を残す。
+   */
+  z.object({
+    type: z.literal('archive'),
+    managerId: z.string(),
+    body: z.string().optional(),
+    ref: z.object({ id: z.string().min(1), chars: z.number().int().nonnegative() }).optional(),
+  }),
   z.object({
     type: z.literal('closed'),
     managerId: z.string(),
@@ -1413,6 +1425,21 @@ export interface RunnerClient {
   deleteOutboxFile?(
     managerId: string,
     fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void>;
+  /**
+   * runner に預けた生ログの退避の本文（`archive` の出来事の `ref`。#4485）。無ければ `undefined`（404・期限切れで捨てられた）。
+   * 取れなかった（接続断・期限切れ・非2xx）ときは投げる。口を持たない実装は、`ref` の出来事を受け取れない。
+   */
+  fetchArchive?(
+    managerId: string,
+    archiveId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<string | undefined>;
+  /** 冪等。受け取って置き場へ入れた後に呼ぶ。失敗は呼び出し側が握る（取りこぼしは runner の期限が消す）。 */
+  deleteArchive?(
+    managerId: string,
+    archiveId: string,
     options?: { signal?: AbortSignal },
   ): Promise<void>;
   /**

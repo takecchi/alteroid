@@ -270,3 +270,56 @@ describe('#shipArchive() は report / ask と同じ1本の脚（emit）を通る
     expect(lines.some((line) => line.includes('生ログ'))).toBe(false);
   });
 });
+
+// 2026-10-12T03:20Z、6〜35MB の archive の出来事が SSE の1行で届き、デーモンのループが 1.2〜1.4 秒ずつ塞がった（#4485）
+describe('参照で受け取れるデーモンには、退避の本文を SSE に載せず預ける（#4485）', () => {
+  const BODY = '大きな生ログ（参照で運ぶ）';
+
+  async function shipWith(accepts: boolean | undefined) {
+    const events: RunnerEvent[] = [];
+    const { fn, sessions } = fakeSdk();
+    const host = createRunnerHost({
+      runnerId: 'runner-archive-ref-test',
+      workspacePath: '/work/project',
+      emit: (event) => events.push(event),
+      queryFn: fn,
+    });
+    hosts.push(host);
+    if (accepts !== undefined) host.setDaemonAcceptsArchiveRef(accepts);
+    await host.start({ managerId: 'mgr-archive-ref', request: '調べて', cwd: '/work/project' });
+    const session = sessions[0];
+    if (session === undefined) throw new Error('セッションが開いていない');
+    const transcriptPath = join(dir, 'ref-transcript.jsonl');
+    writeFileSync(transcriptPath, BODY, 'utf8');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: transcriptPath,
+    });
+    await host.stop('mgr-archive-ref');
+    const archive = events.find(
+      (event): event is Extract<RunnerEvent, { type: 'archive' }> => event.type === 'archive',
+    );
+    return { host, archive };
+  }
+
+  it('名乗ったデーモンには参照（id と文字数）だけを送り、本文は預かりから読め、消せば読めない', async () => {
+    const { host, archive } = await shipWith(true);
+    expect(archive?.body).toBeUndefined();
+    expect(archive?.ref?.chars).toBe(BODY.length);
+    const id = archive?.ref?.id ?? '';
+    expect(host.readArchive('mgr-archive-ref', id)).toBe(BODY);
+    // 別の委譲の id としては読めない
+    expect(host.readArchive('mgr-other', id)).toBeUndefined();
+    host.deleteArchive('mgr-archive-ref', id);
+    expect(host.readArchive('mgr-archive-ref', id)).toBeUndefined();
+  });
+
+  it('名乗っていない（古い）デーモンには、これまでどおり本文を載せる', async () => {
+    for (const accepts of [undefined, false]) {
+      const { archive } = await shipWith(accepts);
+      expect(archive?.ref).toBeUndefined();
+      expect(archive?.body).toBe(BODY);
+    }
+  });
+});
