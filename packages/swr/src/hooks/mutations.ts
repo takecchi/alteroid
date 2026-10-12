@@ -658,6 +658,38 @@ export function useRemoveEnvVar() {
 // 列は大域に1本ではなく API クライアントごとに持つ: 接続先やテストどうしで無関係な書き込みが互いを待つため
 const tokenWriteTails = new WeakMap<object, Promise<unknown>>();
 
+/**
+ * `PUT /tokens` が 409 を返した（取り直してから送るまでの間に、ほかでプールが変わった。何も変えていない）。
+ * 投げる前に一覧を取り直してある。呼び出し側は書きかけを消さずに、確かめてからもう一度押すよう知らせる。
+ */
+export class TokenPoolChangedError extends ApiError {
+  constructor() {
+    super(
+      409,
+      '読んだ後に、トークンのプールがほかで変わったので、変えていない（一覧を読み直した）',
+    );
+    this.name = 'TokenPoolChangedError';
+  }
+}
+
+// 送る版は、押した時点で取り直した版（画面に出ている版ではない）: 書き込みは毎回取り直した一覧を土台に組むので、
+// 画面を開いた後にほかで足された行は消えない。守るのは取り直しから PUT までの間で、画面の版を送ると無関係な変更でも断ることになる（#4591）
+async function putTokensIfUnchanged(
+  api: ReturnType<typeof useApi>,
+  version: string | undefined,
+  tokens: { id?: string; label: string; value?: string; order?: number; disabled?: boolean }[],
+  refresh: () => Promise<unknown>,
+) {
+  const result = await api.api.PUT('/tokens', {
+    body: { tokens, ...(version === undefined ? {} : { ifMatch: version }) },
+  });
+  if (result.response.status === 409) {
+    await refresh();
+    throw new TokenPoolChangedError();
+  }
+  return unwrap(result);
+}
+
 function serializeTokenWrite<T>(client: object, run: () => Promise<T>): Promise<T> {
   const tail = tokenWriteTails.get(client) ?? Promise.resolve();
   const next = tail.then(run, run);
@@ -680,9 +712,12 @@ export function useAddToken() {
       serializeTokenWrite(api, async () => {
         const current = await api.api.GET('/tokens').then(unwrap);
         const inputs = current.tokens.map(toTokenInput);
-        const result = await api.api
-          .PUT('/tokens', { body: { tokens: [...inputs, { label, value }] } })
-          .then(unwrap);
+        const result = await putTokensIfUnchanged(
+          api,
+          current.version,
+          [...inputs, { label, value }],
+          () => mutate(KEY.tokens),
+        );
         await mutate(KEY.tokens);
         return result;
       }),
@@ -737,7 +772,9 @@ export function useRemoveToken() {
         const current = await api.api.GET('/tokens').then(unwrap);
         await assertTokenPresent(current.tokens, id, () => mutate(KEY.tokens));
         const inputs = current.tokens.filter((token) => token.id !== id).map(toTokenInput);
-        const result = await api.api.PUT('/tokens', { body: { tokens: inputs } }).then(unwrap);
+        const result = await putTokensIfUnchanged(api, current.version, inputs, () =>
+          mutate(KEY.tokens),
+        );
         await mutate(KEY.tokens);
         return result;
       }),
@@ -756,7 +793,9 @@ export function useSetTokenDisabled() {
         const inputs = current.tokens.map((token) =>
           token.id === id ? { ...toTokenInput(token), disabled } : toTokenInput(token),
         );
-        const result = await api.api.PUT('/tokens', { body: { tokens: inputs } }).then(unwrap);
+        const result = await putTokensIfUnchanged(api, current.version, inputs, () =>
+          mutate(KEY.tokens),
+        );
         await mutate(KEY.tokens);
         return result;
       }),
