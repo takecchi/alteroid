@@ -115,7 +115,8 @@ export function ConversationList({
                               unreadOf(item) > 0 && 'font-semibold',
                             )}
                           >
-                            {item.preview}
+                            {/* 伏せる: 見出しは発言の抜粋で、本文と同じく秘密が入りうるため */}
+                            {display.body(item.preview)}
                           </p>
                           {unreadOf(item) > 0 && <UnreadMark count={unreadOf(item)} />}
                         </div>
