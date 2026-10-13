@@ -302,6 +302,8 @@ export interface RunRescueOptions {
   readonly hasCredential?: (env: Record<string, string | undefined>) => boolean;
   readonly tmpRootDir?: string;
   readonly diffMaxBytes?: number;
+  /** 担い手が git を打った場所。決まり（`/tmp/mgr-<委譲 id の頭>`）の外の作業ツリーも退避するため。 */
+  readonly hintDirs?: readonly string[];
 }
 
 function defaultHasCredential(env: Record<string, string | undefined>): boolean {
@@ -322,6 +324,7 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
   const listed = await listWorktreeRoots(cwd, {
     managerId: options.managerId,
     ...(options.tmpRootDir === undefined ? {} : { tmpRootDir: options.tmpRootDir }),
+    ...(options.hintDirs === undefined ? {} : { hintDirs: options.hintDirs }),
   });
   const reports: RescueWorktree[] = [];
   const resend = options.memory.takeResend();

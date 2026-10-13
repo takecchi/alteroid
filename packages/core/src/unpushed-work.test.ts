@@ -16,8 +16,10 @@ import {
   DEFAULT_MAX_DEPTH,
   findGitDirs,
   findManagerScratchRoots,
+  listWorktreeRoots,
   matchesManagerScratchDirName,
   parseRemoteOriginUrl,
+  worktreeRootsOfDirs,
   type ProcessSpawnFn,
   type ReaddirFn,
 } from './unpushed-work.js';
@@ -942,5 +944,64 @@ describe('未push観測の reason は伏せ字を通す（#2607）', () => {
     });
     expect(found.unknownReason).toContain('確かめられなかった');
     expect(found.unknownReason).not.toContain('sk-FAKE0123456789abcdefSECRET');
+  });
+});
+
+describe('担い手が git を打った場所（hintDirs）を探す先に足す: 決まりの外の作業場も見る', () => {
+  let tmpRoot: string;
+  let cwd: string;
+  let roleDir: string;
+  const managerId = 'mgr-abcd1234-abcdefgh';
+
+  beforeEach(() => {
+    tmpRoot = makeTempDirSync('alteroid-unpushed-work-hint-tmp-');
+    cwd = makeTempDirSync('alteroid-unpushed-work-hint-cwd-');
+    // 役割名の作業場（/tmp/mgr-<役割名>）。16進で始まらないので決まりの探索には当たらない
+    roleDir = makeTempDirSync('alteroid-unpushed-work-hint-role-');
+  });
+
+  it('worktreeRootsOfDirs: 下の階層から作業ツリーの根まで遡る。作業ツリーの外は捨て、重複しない', async () => {
+    const repo = join(roleDir, 'repo');
+    initRepo(repo);
+    mkdirSync(join(repo, 'apps', 'web'), { recursive: true });
+
+    expect(
+      await worktreeRootsOfDirs([join(repo, 'apps', 'web'), repo, join(roleDir, 'missing')]),
+    ).toEqual([repo]);
+  });
+
+  it('対照: hintDirs が無ければ、決まりの外の作業ツリーは観測に載らない（この直しの前の挙動）', async () => {
+    initRepo(join(roleDir, 'repo'));
+    commitFile(join(roleDir, 'repo'), 'a.txt', 'x\n', 'x');
+
+    const result = await computeUnpushedWork(cwd, {
+      spawn: realSpawn,
+      env: gitChildEnv(),
+      managerId,
+      tmpRootDir: tmpRoot,
+    });
+
+    expect(result.worktrees).toHaveLength(0);
+  });
+
+  it('陽性: git を打った場所（下の階層）を渡すと、その作業ツリーが絶対パスで観測と退避の一覧に載る', async () => {
+    const repo = join(roleDir, 'repo');
+    initRepo(repo);
+    commitFile(repo, 'a.txt', 'x\n', 'x');
+    mkdirSync(join(repo, 'sub'), { recursive: true });
+    const hintDirs = [join(repo, 'sub')];
+
+    const observed = await computeUnpushedWork(cwd, {
+      spawn: realSpawn,
+      env: gitChildEnv(),
+      managerId,
+      tmpRootDir: tmpRoot,
+      hintDirs,
+    });
+    const listed = await listWorktreeRoots(cwd, { managerId, tmpRootDir: tmpRoot, hintDirs });
+
+    expect(observed.worktrees.map((wt) => wt.relativePath)).toEqual([repo]);
+    expect(observed.worktrees[0]?.unpushedCommitCount).toBe(1);
+    expect(listed.worktrees).toEqual([{ repoRoot: repo, relativePath: repo }]);
   });
 });

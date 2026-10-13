@@ -166,6 +166,12 @@ import {
   type ResumeRecoveryHost,
   type ResumeRecoveryOutcome,
 } from './runner-resume-recovery.js';
+import {
+  GIT_DIR_HINTS_MAX,
+  gitDirsFromBashCommand,
+  isSameOrInside,
+  isUnderManagerScratchDir,
+} from './git-worktree-hints.js';
 import { outwardCommandsIn } from './outward-commands.js';
 import {
   chownTreeSync,
@@ -223,7 +229,7 @@ import {
   resolveScratchSweepIntervalMs,
   type ScratchSweeperOptions,
 } from './scratch-sweep.js';
-import { computeUnpushedWork } from './unpushed-work.js';
+import { computeUnpushedWork, worktreeRootsOfDirs } from './unpushed-work.js';
 import type { ContextUsageObservation, JobStatus } from './schema.js';
 // クローンと同じ判定を呼ぶ: 層ごとに書くと片方だけが印を見落として非対称になるため
 import {
@@ -1813,6 +1819,11 @@ class RunnerSession {
   #rescueRunning: Promise<void> | null = null;
   /** 前の報告から後に走った「外へ出す」コマンドの名前（`outward-commands.ts`）。報告を出すときに空にする。 */
   readonly #outwardActions: string[] = [];
+  /**
+   * 担い手（作業者を含む）が git を打った場所（`git-worktree-hints.ts`）。未 push の観測と退避 ref の探す先に足す。
+   * 覚えるのはこのプロセスの中だけ: 器が替われば作業ツリーも一緒に消えるため。数に上限を置く: 作業場は数か所で、増え続けるのは拾い方の誤りのため。
+   */
+  readonly #gitDirHints: string[] = [];
   /** 鍵の回転で入力を閉じる前に、resume の一時ディレクトリから読んだ生ログ。`#reopenForTokenRotation` が受け取って消す。 */
   #rotationSeed: unknown[] | undefined;
   readonly #finishUnpushedWorkFn: (options?: {
@@ -2049,6 +2060,7 @@ class RunnerSession {
       spawn: spawnFn,
       env: this.#childEnv(),
       managerId: this.#id,
+      hintDirs: this.#gitDirHints,
       ...(options?.signal === undefined ? {} : { signal: options.signal }),
     });
   }
@@ -2089,6 +2101,7 @@ class RunnerSession {
           spawn: this.#gitSpawnFn(),
           env: this.#childEnv(),
           memory: this.#rescueMemory,
+          hintDirs: this.#gitDirHints,
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         });
         if (worktrees.length > 0) {
@@ -2200,7 +2213,29 @@ class RunnerSession {
       this.#emit({ type: 'shutdown_unpushed_work', managerId: this.#id, unpushedWork });
       await rescued;
     }
+    await this.#noteWorktreesOutsideScratchConvention();
     this.#onClosed();
+  }
+
+  /**
+   * 決まり（担当の作業場か `/tmp/mgr-<委譲 id の頭>`）の外で git を打った作業ツリーが残っていれば、パスを note に出す。
+   * 片付け（`scratch-sweep.ts`）はこれを消さない: 名前が担当と結びつかず、複数の担当が共有していることがあり、取り違えると生きている担当の作業を消すため（2026-10-13 のクローン teto の判断）。
+   */
+  async #noteWorktreesOutsideScratchConvention(): Promise<void> {
+    if (this.#gitDirHints.length === 0) return;
+    const roots = await worktreeRootsOfDirs(this.#gitDirHints).catch(() => [] as string[]);
+    const outside = roots.filter(
+      (root) => !isSameOrInside(root, this.#cwd) && !isUnderManagerScratchDir(root),
+    );
+    if (outside.length === 0) return;
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        `決まり（担当の作業場か /tmp/mgr-<委譲 id の頭>）の外で git を打った作業ツリーが残っている。` +
+        `未 push の観測と退避 ref はこれも見たが、runner の片付けは消さない（共有の作業場を取り違えて消さないため）。` +
+        `要らなければ人間か担当が消すこと: ${outside.join(', ')}`,
+    });
   }
 
   // `stop()` ではなく `#finish()` を通す: 自己失効はランナー自身の判断で、デーモンが知る手段が `closed` イベントしかないため
@@ -3463,6 +3498,7 @@ class RunnerSession {
       await this.#openedCgroupEvents,
       await this.#readCgroupEventCountersFn(),
     );
+    await this.#noteWorktreesOutsideScratchConvention();
     this.#emit({
       type: 'closed',
       managerId: this.#id,
@@ -4070,6 +4106,10 @@ class RunnerSession {
     if (record.toolName === 'Bash' && typeof command === 'string') {
       for (const label of outwardCommandsIn(command)) {
         if (!this.#outwardActions.includes(label)) this.#outwardActions.push(label);
+      }
+      for (const dir of gitDirsFromBashCommand(command, record.cwd)) {
+        if (this.#gitDirHints.length >= GIT_DIR_HINTS_MAX) break;
+        if (!this.#gitDirHints.includes(dir)) this.#gitDirHints.push(dir);
       }
     }
 

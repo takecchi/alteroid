@@ -83,6 +83,7 @@ function toAgentToolAuditRecord(input: unknown): AgentToolAuditRecord {
     toolInput: raw?.tool_input,
     toolResponse: raw?.tool_response,
     ...(typeof raw?.transcript_path === 'string' ? { transcriptPath: raw.transcript_path } : {}),
+    ...(typeof raw?.cwd === 'string' ? { cwd: raw.cwd } : {}),
     ...(typeof raw?.effort?.level === 'string' ? { effortLevel: raw.effort.level } : {}),
     ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
     ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),

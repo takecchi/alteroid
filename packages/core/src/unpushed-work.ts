@@ -117,6 +117,36 @@ export async function findGitDirs(
 
 const MANAGER_SCRATCH_DIR_NAME_PATTERN = /^mgr-([0-9a-f]{4,})/;
 
+/**
+ * 担い手が git を打った場所から遡り、`.git` を持つディレクトリ（作業ツリーの根）を返す。
+ * 見つからない・読めない場所は捨てる: 候補はコマンドから拾った推測で、確かめられない場所を足すより足さないほうが安全なため。
+ */
+export async function worktreeRootsOfDirs(
+  dirs: readonly string[],
+  readdirFn: ReaddirFn = defaultReaddirFn,
+): Promise<string[]> {
+  const roots: string[] = [];
+  for (const start of dirs) {
+    let dir = path.resolve(start);
+    for (;;) {
+      let entries: readonly DirEntryLike[] | undefined;
+      try {
+        entries = await readdirFn(dir);
+      } catch {
+        entries = undefined;
+      }
+      if (entries?.some((entry) => entry.name === '.git') === true) {
+        if (!roots.includes(dir)) roots.push(dir);
+        break;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return roots;
+}
+
 // `os.tmpdir()` を使わない: 担い手は文字どおりの `/tmp/mgr-<id の先頭>` に作業場を作り、runner の `TMPDIR` が別の場所を指していても探す先は `/tmp` でなければ当たらないため
 const MANAGER_SCRATCH_TMP_ROOT = '/tmp';
 
@@ -403,6 +433,8 @@ export interface ComputeUnpushedWorkOptions {
   managerId?: string;
   tmpRootDir?: string;
   readdirFn?: ReaddirFn;
+  /** 担い手が git を打った場所（`git-worktree-hints.ts`）。作業ツリーの根へ遡って探す先に足す: 決まりの外の作業場も見るため。 */
+  hintDirs?: readonly string[];
 }
 
 // cwd の外は絶対パスを出す: `..` で始まる相対パスは読みにくいため
@@ -424,7 +456,8 @@ export async function computeUnpushedWork(
           options.tmpRootDir ?? MANAGER_SCRATCH_TMP_ROOT,
           options.managerId,
         );
-  const found = await findGitDirsAcrossRoots([cwd, ...scratchRoots.paths], {
+  const hintRoots = await worktreeRootsOfDirs(options.hintDirs ?? [], options.readdirFn);
+  const found = await findGitDirsAcrossRoots([cwd, ...scratchRoots.paths, ...hintRoots], {
     maxDepth: options.maxDepth,
     maxCount: options.maxWorktrees,
     readdirFn: options.readdirFn,
@@ -492,6 +525,7 @@ export async function listWorktreeRoots(
     tmpRootDir?: string;
     maxWorktrees?: number;
     readdirFn?: ReaddirFn;
+    hintDirs?: readonly string[];
   },
 ): Promise<{
   worktrees: { repoRoot: string; relativePath: string }[];
@@ -502,7 +536,8 @@ export async function listWorktreeRoots(
     options.tmpRootDir ?? MANAGER_SCRATCH_TMP_ROOT,
     options.managerId,
   );
-  const found = await findGitDirsAcrossRoots([cwd, ...scratchRoots.paths], {
+  const hintRoots = await worktreeRootsOfDirs(options.hintDirs ?? [], options.readdirFn);
+  const found = await findGitDirsAcrossRoots([cwd, ...scratchRoots.paths, ...hintRoots], {
     maxCount: options.maxWorktrees,
     readdirFn: options.readdirFn,
   });

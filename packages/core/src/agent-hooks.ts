@@ -3,6 +3,8 @@ export interface AgentToolAuditRecord {
   toolInput?: unknown;
   toolResponse?: unknown;
   transcriptPath?: string;
+  /** フックが渡した、その道具の呼び出しの時点の作業場所。git を打った作業ツリーを拾うのに使う。 */
+  cwd?: string;
   effortLevel?: string;
   agentId?: string;
   agentType?: string;
