@@ -223,6 +223,7 @@ function InboxRemoveCard() {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [result, setResult] = useState<InboxRemoveManyResult | null>(null);
+  const [previewedAt, setPreviewedAt] = useState<string | null>(null);
   const executed = result !== null && !result.dryRun;
   useReportDirty(
     'inbox-remove',
@@ -271,6 +272,8 @@ function InboxRemoveCard() {
     setBusy(true);
     setFailure(undefined);
     const version = filterVersion.current;
+    // 送る前に取る: 応答の後に取ると、デーモンが試算で選んだ後〜応答が届くまでに来た、人間が見ていない合図まで実行の対象に入る
+    const startedAt = new Date().toISOString();
     try {
       const response = await removeMany({
         types,
@@ -280,7 +283,10 @@ function InboxRemoveCard() {
         limit,
         dryRun: true,
       });
-      if (version === filterVersion.current) setResult(response);
+      if (version === filterVersion.current) {
+        setResult(response);
+        setPreviewedAt(startedAt);
+      }
     } catch (caught) {
       if (version === filterVersion.current) {
         setResult(null);
@@ -292,14 +298,15 @@ function InboxRemoveCard() {
   }
 
   async function runExecute() {
-    if (result === null || !result.dryRun || !canRun) return;
+    if (result === null || !result.dryRun || previewedAt === null || !canRun) return;
     setBusy(true);
     setFailure(undefined);
     try {
       const response = await removeMany({
         types,
         sources: sources.length === 0 ? undefined : sources,
-        before,
+        // 試算と同じ before を送り直さない: デーモンは条件で選び直すので、試算の後に届いた合図まで消える（元に戻せない）
+        before: earlierInstant(before, previewedAt),
         reason: reason.trim(),
         limit,
         dryRun: false,
@@ -414,6 +421,12 @@ function InboxRemoveCard() {
   );
 }
 
+function earlierInstant(explicit: string | undefined, previewedAt: string): string {
+  return explicit !== undefined && Date.parse(explicit) < Date.parse(previewedAt)
+    ? explicit
+    : previewedAt;
+}
+
 function AllSelectedWarning({ show }: { show: boolean }) {
   if (!show) return null;
   return (
@@ -438,6 +451,7 @@ function ResultView({ result }: { result: InboxRemoveManyResult }) {
       {result.dryRun ? (
         <p className="mt-2 text-muted-foreground">
           1件も消していません（試算）。この内容でよければ「実行する」を押してください。
+          試算より後に届いた合図は、絞り込みに当たっても消しません。
         </p>
       ) : (
         <p className="mt-2 text-muted-foreground">
