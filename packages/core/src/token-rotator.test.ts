@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { fingerprintOf } from './credentials.js';
 import { createMemoryStores } from './testing.js';
 import {
   createTokenRotator,
@@ -810,6 +811,31 @@ describe('世代の照合（受け入れ基準: 同時に届いても回るの�
     expect(second.kind).toBe('ignored');
     expect(second.freshness).toBe('stale');
     expect(h.spreadCalls).toHaveLength(1);
+  });
+
+  // 再起動で引き取っただけのセッションは id も世代も持たず、鍵の指紋だけを添えて届く（#4643）
+  it('指紋だけの観測は、回す前の鍵の指紋なら捨て、現役の指紋なら現役の通知として扱う', async () => {
+    const h = harness();
+    await seedTwo(h);
+    const first = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+    expect(first.kind).toBe('rotated');
+
+    const fromOldKey = await h.rotator.observe({
+      notice: reached,
+      observedBy: { fingerprint: fingerprintOf('value-a') },
+    });
+    expect(fromOldKey.kind).toBe('ignored');
+    expect(fromOldKey.freshness).toBe('stale');
+    expect(h.spreadCalls).toHaveLength(1);
+
+    const fromActiveKey = await h.rotator.observe({
+      notice: reached,
+      observedBy: { fingerprint: fingerprintOf('value-b') },
+    });
+    expect(fromActiveKey.freshness).toBe('current');
   });
 
   it('身元の無い観測は効かせる側へ倒し、その事実を結果に残す', async () => {

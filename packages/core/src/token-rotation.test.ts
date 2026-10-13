@@ -378,6 +378,26 @@ describe('observationFreshness', () => {
     expect(observationFreshness(active, { tokenId: 'tok-b' })).toBe('stale');
     expect(observationFreshness(active, { generation: 9 })).toBe('stale');
   });
+
+  // 再起動で引き取っただけのセッションは id も世代も持たないが、runner が鍵の指紋を名乗る（#4643）
+  it('id も世代も無いときは、鍵の指紋を現役の指紋と比べる（違えば stale、同じなら current）', () => {
+    expect(observationFreshness(active, { fingerprint: 'fp-old' }, 'fp-active')).toBe('stale');
+    expect(observationFreshness(active, { fingerprint: 'fp-active' }, 'fp-active')).toBe('current');
+  });
+
+  it('指紋のどちらかが分からなければ unknown のまま（倒さない）', () => {
+    expect(observationFreshness(active, { fingerprint: 'fp-old' })).toBe('unknown');
+    expect(observationFreshness(active, {}, 'fp-active')).toBe('unknown');
+  });
+
+  it('id か世代があれば指紋より先にそれで照合する', () => {
+    expect(
+      observationFreshness(active, { tokenId: 'tok-a', fingerprint: 'fp-old' }, 'fp-active'),
+    ).toBe('current');
+    expect(
+      observationFreshness(active, { generation: 2, fingerprint: 'fp-active' }, 'fp-active'),
+    ).toBe('stale');
+  });
 });
 
 describe('selectNextToken', () => {
