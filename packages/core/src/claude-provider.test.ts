@@ -953,6 +953,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
       toolInput: { command: 'echo hi' },
       toolResponse: { output: 'hi' },
       transcriptPath: '/tmp/t.jsonl',
+      cwd: '/work',
       effortLevel: 'high',
       agentId: 'agent-1',
       agentType: 'general-purpose',
@@ -991,6 +992,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
     expect(captured).toEqual({
       toolName: 'Bash',
       transcriptPath: '/tmp/t.jsonl',
+      cwd: '/work',
       toolUseId: 'tu-1',
     });
     expect(captured).not.toHaveProperty('agentId');
@@ -1083,6 +1085,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
     expect(capturedUse).toEqual({
       toolName: 'memory_write',
       toolInput: { text: 'メモ' },
+      cwd: '/work',
       toolUseId: 'tu-3',
     });
     expect(capturedFailure).toEqual({
@@ -1839,6 +1842,7 @@ describe('文脈を返すフックの中立の包み直し（#486 中立の口�
       toolInput: { prompt: 'p' },
       toolResponse: { status: 'completed', agentId: 'agent-1' },
       transcriptPath: '/t.jsonl',
+      cwd: '/work',
       agentId: 'agent-2',
       agentType: 'general-purpose',
       toolUseId: 'tu-1',
