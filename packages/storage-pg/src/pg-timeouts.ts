@@ -127,10 +127,16 @@ export function createTimedPool(options: TimedPoolOptions): Pool {
       const timer = setTimeout(() => {
         timedOut = true;
         report({ kind: 'query', timeoutMs, ...(sql === undefined ? {} : { sql }) });
-        // 切ると、載っている問い合わせも後ろに並んだものも「接続が切れた」で失敗し、プールはこの接続を捨てる
-        (
-          this as unknown as { connection?: { stream?: { destroy(): void } } }
-        ).connection?.stream?.destroy();
+        // 切ると、載っている問い合わせも後ろに並んだものも「接続が切れた」で失敗し、プールはこの接続を捨てる。
+        // 先に「こちらから閉じている」印（pg の `_ending`）を立てる: 立てないと pg は切断を `error` として出し、
+        // `pool.query` はそれを問い合わせの失敗より先に拾って、期限切れではなく「予期せず切れた」として返すため。
+        // `end()` を使わない: あちらは相手の応答を待つ閉じ方で、半開きの経路ではいつまでも閉じ終わらないため
+        const self = this as unknown as {
+          _ending?: boolean;
+          connection?: { stream?: { destroy(): void } };
+        };
+        self._ending = true;
+        self.connection?.stream?.destroy();
       }, timeoutMs);
       timer.unref?.();
       const settle = (error: unknown): unknown => {
