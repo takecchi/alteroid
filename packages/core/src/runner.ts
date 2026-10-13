@@ -166,6 +166,7 @@ import {
   type ResumeRecoveryHost,
   type ResumeRecoveryOutcome,
 } from './runner-resume-recovery.js';
+import { outwardCommandsIn } from './outward-commands.js';
 import {
   chownTreeSync,
   parseTranscriptEntries,
@@ -1810,6 +1811,8 @@ class RunnerSession {
   readonly #denialStreaks = new ClassifierDenialStreaks();
   readonly #rescueMemory = new RescueMemory();
   #rescueRunning: Promise<void> | null = null;
+  /** 前の報告から後に走った「外へ出す」コマンドの名前（`outward-commands.ts`）。報告を出すときに空にする。 */
+  readonly #outwardActions: string[] = [];
   /** 鍵の回転で入力を閉じる前に、resume の一時ディレクトリから読んだ生ログ。`#reopenForTokenRotation` が受け取って消す。 */
   #rotationSeed: unknown[] | undefined;
   readonly #finishUnpushedWorkFn: (options?: {
@@ -3101,6 +3104,7 @@ class RunnerSession {
                 breakdown: summarizeBackgroundTasks(liveBackground),
               }
             : undefined;
+        const outwardActions = this.#outwardActions.splice(0);
         this.#emit({
           type: 'report',
           managerId: this.#id,
@@ -3118,6 +3122,7 @@ class RunnerSession {
               }),
           ...(outcome.contentless ? { contentless: true } : {}),
           ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
+          ...(outwardActions.length === 0 ? {} : { outwardActions }),
           ...(failure === undefined ? {} : { synthesized: 'turn_failed' }),
           ...outbox,
         });
@@ -4058,6 +4063,15 @@ class RunnerSession {
     this.#markProgressed();
 
     if (record.agentId === undefined) this.#turnTally.incrementToolsSinceResult();
+
+    // 作業者の分も数える: マージや push を打つのは作業者のことが多い
+    // PreToolUse ではなくここで拾う: 拒否されて走らなかったコマンドを「外へ出した」と言わないため
+    const command = (record.toolInput as { command?: unknown } | undefined)?.command;
+    if (record.toolName === 'Bash' && typeof command === 'string') {
+      for (const label of outwardCommandsIn(command)) {
+        if (!this.#outwardActions.includes(label)) this.#outwardActions.push(label);
+      }
+    }
 
     this.#emit({
       type: 'tool_use',

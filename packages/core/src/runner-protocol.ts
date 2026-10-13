@@ -765,6 +765,12 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
       .object({ count: z.number().int().positive(), breakdown: z.string() })
       .optional(),
     /**
+     * 前の報告からこの報告までに実際に走った（PostToolUse まで来た）「外へ出す」コマンドの名前（例 `'gh pr merge'`）。
+     * 一覧は `outward-commands.ts` の1か所。在れば `awaitingBackground` が立っていても `manager.ts` は畳まずに配る。
+     * `.optional()` は、旧 runner が送らない窓ではこれまでどおり畳む側（30分のまとめ配りが拾う）へ倒れるため。
+     */
+    outwardActions: z.array(z.string().min(1)).min(1).optional(),
+    /**
      * 値は「族の名前」（例: `'turn_failed'`）で、真偽値にしない: まとめた本文・日誌の内訳に族名を出し、将来族で畳む経路の土台にするため。
      * 立てるのは `failedReportText()` の経路だけ: `reportText()` はマネージャー本人の発話の断片を含みうるので機構が合成したとは言えない。
      * `.optional()` で、無ければ畳まない（版がずれた窓では必ず「起こす側」へ倒れる）。

@@ -7869,7 +7869,22 @@ class Pool implements ManagerPool {
         if (event.contentless === true && !carriesFiles) return;
         // 背景処理の完了待ちで畳んだターンの報告は記録だけ残し受信箱へ回さない（`event.text` の中身では判定しない）。捨てるのではなく後で必ず配る: 次の本物の報告が `#emit()` を通るときに上書きされ、来なければ `case 'closed'` と `flushWithheldReports()` が配る。
         // 配らなかった判断は日誌の `decision` に残る（本文は上の `exchange` に全文あるので抜粋でよい）。
-        if (event.awaitingBackground !== undefined && !carriesFiles) {
+        // 外へ出した成果（マージ・PR の作成・push など）を含む報告は畳まない: 30分のまとめ配りまで待たせると、他の担当への連絡がその分遅れるため。判定は本文ではなく、runner が見た実際のコマンド（`outwardActions`）だけで行う
+        if (event.awaitingBackground !== undefined && event.outwardActions !== undefined) {
+          await this.#journal({
+            type: 'decision',
+            decision: `[${event.managerId}] 背景処理の完了待ちのターンだが、外へ出した成果を含むので受信箱へ回す`,
+            grounds:
+              `managerId=${event.managerId} ` +
+              `outwardActions=${event.outwardActions.join(', ')} ` +
+              `awaitingBackground.count=${String(event.awaitingBackground.count)}`,
+          });
+        }
+        if (
+          event.awaitingBackground !== undefined &&
+          event.outwardActions === undefined &&
+          !carriesFiles
+        ) {
           const awaitingBackground = event.awaitingBackground;
           await this.#journal({
             type: 'decision',

@@ -34,6 +34,7 @@ interface ManualRunner {
       failure?: { code: string; via: string };
       contentless?: true;
       awaitingBackground?: { count: number; breakdown: string };
+      outwardActions?: string[];
       reportId?: string;
     },
   ): void;
@@ -1097,6 +1098,43 @@ describe('畳んだ報告の冒頭は、配る知らせから消えない（最�
     expect(text).toMatch(/古い \d+ 本の冒頭は字数の予算で省いた。全文は日誌に在る/);
     expect(text).toContain('報告12 ');
     expect(text).not.toContain('報告01 ');
+
+    await pool.stop();
+  });
+});
+
+describe('外へ出した成果を含む報告は、背景処理の完了待ちでも畳まずに配る', () => {
+  it('outwardActions が在れば受信箱へ回し、それまで畳んでいた報告の冒頭も添える。日誌に判断が残る', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup();
+    const before = inbox.length;
+
+    fake.report('mgr-withhold', 'CI を待っている', 'done', { awaitingBackground: AWAITING });
+    await journalHasText(stores, '受信箱へは回さない');
+    expect(inbox).toHaveLength(before);
+
+    fake.report('mgr-withhold', '#1006 をマージした（6db19adf）', 'done', {
+      awaitingBackground: AWAITING,
+      outwardActions: ['gh pr merge'],
+    });
+    await vi.waitFor(() => {
+      if (inbox.length === before) throw new Error('まだ配られていない');
+    });
+    const text = (inbox.at(-1) as { text: string }).text;
+    expect(text).toContain('#1006 をマージした（6db19adf）');
+    expect(text).toContain('CI を待っている');
+    await journalHasText(stores, '外へ出した成果を含むので受信箱へ回す');
+    await journalHasText(stores, 'outwardActions=gh pr merge');
+
+    await pool.stop();
+  });
+
+  it('outwardActions が無ければ、これまでどおり畳む', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup();
+    const before = inbox.length;
+
+    fake.report('mgr-withhold', 'CI を待っている', 'done', { awaitingBackground: AWAITING });
+    await journalHasText(stores, '受信箱へは回さない');
+    expect(inbox).toHaveLength(before);
 
     await pool.stop();
   });
