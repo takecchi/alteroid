@@ -136,7 +136,7 @@ function writeTranscript(configDir: string, sessionId: string): string {
 
 async function startAndRotate(behaviors: readonly Behavior[], configDir: string) {
   const events: RunnerEvent[] = [];
-  let path: string | undefined;
+  const path = writeTranscript(configDir, 'sess-1');
   const { fn, started } = fakeSdk(behaviors, () => path);
   const host = createRunnerHost({
     runnerId: 'runner-test',
@@ -154,7 +154,6 @@ async function startAndRotate(behaviors: readonly Behavior[], configDir: string)
   });
   hosts.push(host);
 
-  path = writeTranscript(configDir, 'sess-1');
   await host.start({ managerId: 'mgr-1', request: 'PR を作って', cwd: '/work/project' });
   await vi.waitFor(() => {
     if (!events.some((event) => event.type === 'report')) throw new Error('1ターン目の報告待ち');
