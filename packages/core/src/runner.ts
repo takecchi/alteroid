@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chownSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { chmodSync, chownSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join as joinPath } from 'node:path';
@@ -443,6 +443,8 @@ export interface RunnerHostOptions {
   // 出し箱（担い手 → クローンへのファイルの受け渡し。`runner-outbox.ts`）。置き場は下りの添付と同じ作法で、テストで差し替える
   outboxRoot?: string;
   outboxStagedRoot?: string;
+  /** 担当の作業場（`/tmp/mgr-<先頭8桁>`）の根。テストで差し替える。既定は `/tmp`。 */
+  managerScratchRoot?: string;
   // テスト用: 子の権限で出し箱の中身を消す関数の差し替え口
   outboxRemoveContentsAsChild?: OutboxContentsRemover;
   // `/workspace` に置かない: 子の持ち物のため（ここは runner の所有にし、子 uid は読めるが書けない）
@@ -657,6 +659,7 @@ class Host implements RunnerHost {
   readonly #outboxRoot: string;
   readonly #outboxStagedRoot: string;
   readonly #outboxRemoveContentsAsChild: OutboxContentsRemover | undefined;
+  readonly #managerScratchRoot: string;
   #mcpServers: { servers: McpServers; fingerprint: RunnerMcpServersFingerprint } | undefined;
   /**
    * daemon から降りてきた plugin（名前 → 展開済みの印）。**files のバイトは持たない**
@@ -716,6 +719,7 @@ class Host implements RunnerHost {
     this.attachmentStageLimit =
       options.attachmentStageLimit ?? readRunnerAttachmentStageLimit(this.#env);
     this.#outboxRoot = options.outboxRoot ?? defaultRunnerOutboxRoot();
+    this.#managerScratchRoot = options.managerScratchRoot ?? '/tmp';
     this.#outboxStagedRoot = options.outboxStagedRoot ?? defaultRunnerOutboxStagedRoot();
     this.#outboxRemoveContentsAsChild = options.outboxRemoveContentsAsChild;
     this.#pluginsRoot = options.pluginsRoot ?? defaultRunnerPluginsRoot();
@@ -1275,6 +1279,7 @@ class Host implements RunnerHost {
       },
       outboxRoot: this.#outboxRoot,
       outboxStagedRoot: this.#outboxStagedRoot,
+      managerScratchRoot: this.#managerScratchRoot,
       attachmentStageLimit: this.attachmentStageLimit,
       onDelegationProcessSpawned: (pid) => {
         spawnedPids.add(pid);
@@ -1746,6 +1751,7 @@ interface RunnerSessionOptions {
   onClosed: (outcome?: { status: JobStatus }) => void;
   outboxRoot: string;
   outboxStagedRoot: string;
+  managerScratchRoot: string;
   /** 出し箱の大きいファイルの1つの上限と1報告の合計（hello の `attachmentStageLimit` と同じ値）。 */
   attachmentStageLimit?: number;
   onDelegationProcessSpawned?: (pid: number) => void;
@@ -1765,6 +1771,9 @@ interface RunnerSessionOptions {
 
 // `manager.ts` の定数と共有しない: `runner.ts` → `manager.ts` の逆向き import を増やさないため
 const FINISH_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
+
+/** 担当の作業場の下に置く、委譲の CLI の一時フォルダの名前（`#prepareClaudeTmpDir`）。 */
+export const DELEGATION_CLAUDE_TMP_DIR_NAME = 'claude-tmp';
 
 // `FORCED_EXIT_MS`（SIGTERM から55秒）の内側に収める: 全セッションを並行に畳むので、この観測1本ぶんだけが畳みの合計時間に上乗せされる
 const STOP_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
@@ -1802,6 +1811,9 @@ class RunnerSession {
   readonly #onClosed: (outcome?: { status: JobStatus }) => void;
   readonly #outboxRoot: string;
   readonly #outboxStagedRoot: string;
+  readonly #managerScratchRoot: string;
+  /** 委譲の CLI に渡す `CLAUDE_CODE_TMPDIR`。用意できた後だけ立つ（`#prepareClaudeTmpDir`）。 */
+  #claudeTmpDir: string | undefined;
   readonly #attachmentStageLimit: number | undefined;
   //用意できなかったら無し: 出し箱が無くてもマネージャーは動く（成果物を報告に添えられないだけ）
   readonly #outboxDir: string | undefined;
@@ -1945,6 +1957,7 @@ class RunnerSession {
     this.#pluginRefs = options.plugins;
     this.#onClosed = options.onClosed;
     this.#outboxRoot = options.outboxRoot;
+    this.#managerScratchRoot = options.managerScratchRoot;
     this.#outboxStagedRoot = options.outboxStagedRoot;
     this.#attachmentStageLimit = options.attachmentStageLimit;
     this.#outboxDir = this.#prepareOutbox();
@@ -2448,6 +2461,8 @@ class RunnerSession {
   }
 
   #buildSpec(resume?: string, forPeer = false): AgentManagerSessionSpec {
+    // `#childEnv()` より先に用意する: 用意できた後だけ `CLAUDE_CODE_TMPDIR` を渡すため
+    this.#prepareClaudeTmpDir();
     // プロファイルが上書きした後の値から指紋を控える: 子が実際に掴む鍵を見るため（peer のセッションは別物なので控えない）
     const childEnv = this.#childEnv();
     if (!forPeer) this.#tokenFingerprint = tokenFingerprintOf(childEnv);
@@ -2665,7 +2680,41 @@ class RunnerSession {
     if (childHome !== undefined && env.CLAUDE_CONFIG_DIR === undefined) {
       env.CLAUDE_CONFIG_DIR = joinPath(childHome, '.claude');
     }
+    // 人間がプロファイルや鍵で置いた値は上書きしない
+    if (this.#claudeTmpDir !== undefined && env.CLAUDE_CODE_TMPDIR === undefined) {
+      env.CLAUDE_CODE_TMPDIR = this.#claudeTmpDir;
+    }
     return env;
+  }
+
+  /**
+   * 委譲の CLI の一時フォルダ（`CLAUDE_CODE_TMPDIR`）を、担当の作業場 `/tmp/mgr-<先頭8桁>/claude-tmp` に用意する。
+   * 既定の `/tmp/claude-<uid>` のままにしない: 背景に回った処理の出力がそこに書かれ、`/tmp/claude-*` を読まない決まりのもとで担当が結果を読めず、同じ検査を回し直していたため（2026-10-13）。
+   * CLI は基点の持ち主が自分でないと使わないので、子の uid の持ち物（0700）にする。
+   * 子を別の uid で起こす構成（本番の runner）でだけ行う: 同じ uid で動く構成は人間の手元で、作業場を勝手に作らないため。
+   * 用意できなければ既定のまま起こし、note を残す。
+   */
+  #prepareClaudeTmpDir(): void {
+    const childUser = this.#childUser;
+    if (this.#claudeTmpDir !== undefined || childUser === undefined) return;
+    const scratch = managerScratchDirOf(this.#id, this.#managerScratchRoot);
+    const dir = joinPath(scratch, DELEGATION_CLAUDE_TMP_DIR_NAME);
+    try {
+      // 作業場をここで作ったときは子へ渡す: runner の持ち物のままだと、担当がその下に書けないため
+      if (mkdirSync(scratch, { recursive: true }) !== undefined) {
+        chownSync(scratch, childUser.uid, childUser.gid);
+      }
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      chownSync(dir, childUser.uid, childUser.gid);
+      chmodSync(dir, 0o700);
+      this.#claudeTmpDir = dir;
+    } catch (error) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `委譲の CLI の一時フォルダ ${dir} を用意できなかったので、既定（/tmp/claude-<uid>）のまま起こす: ${reasonOf(error)}`,
+      });
+    }
   }
 
   #prepareOutbox(): string | undefined {
