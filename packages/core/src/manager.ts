@@ -1659,6 +1659,8 @@ export interface ManagerPoolOptions {
   outboxFetchTotalTimeoutMs?: number;
   /** 預けた退避を取りに行くやり直しの待ち（既定 {@link ARCHIVE_FETCH_RETRY_DELAYS_MS}）。試験が短くするための口。 */
   archiveFetchRetryDelaysMs?: readonly number[];
+  /** 生ログの写しを預けるやり直しの待ち（既定 {@link MIRROR_APPEND_RETRY_DELAYS_MS}）。試験が短くするための口。 */
+  mirrorAppendRetryDelaysMs?: readonly number[];
   /** 大きいファイルを runner の別口へ押す1つの期限（ms。引数は大きさ）。既定 `outboxFetchDeadlineMs`。主にテスト用。 */
   stageDeadlineMs?: (size: number) => number;
 }
@@ -1692,6 +1694,13 @@ const REATTACH_BUSY_MAX_RETRIES = 5;
  * 取りに行くのは出来事を受けた1回だけなので、やり直さないと本文は預かりの期限（`ARCHIVE_STASH_TTL_MS`、1時間）で消える。合計はその期限より十分短い。
  */
 const ARCHIVE_FETCH_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000, 120_000];
+
+/**
+ * 生ログの写し（`mirror`）を PG へ預けるのが落ちたとき、やり直すまでの待ち（回数はこの長さ。#4657）。
+ * runner は預けたかを待たず送り直しもしないので、やり直さないとその塊は抜け、後の resume が欠けた会話から再開する。
+ * 待つ間、同じ会話の後ろの塊は順番待ちで溜まるので、合計は短めにする。
+ */
+const MIRROR_APPEND_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000];
 
 /** **能力の上限ではなく、混雑を作らないための間隔である。** 繋がったままの runner へ繋ぎ直しを待たずに挑み直す梯子。 */
 const PUSH_RETRY_BASE_MS = 2_000;
@@ -3086,6 +3095,7 @@ class Pool implements ManagerPool {
   readonly #outboxFetchFileTimeoutMs: number | undefined;
   readonly #outboxFetchTotalTimeoutMs: number | undefined;
   readonly #archiveFetchRetryDelaysMs: readonly number[];
+  readonly #mirrorAppendRetryDelaysMs: readonly number[];
   readonly #stageDeadlineMs: (size: number) => number;
 
   readonly #usageOrder = new UsageRecordOrder();
@@ -3151,9 +3161,11 @@ class Pool implements ManagerPool {
     outboxFetchFileTimeoutMs,
     outboxFetchTotalTimeoutMs,
     archiveFetchRetryDelaysMs,
+    mirrorAppendRetryDelaysMs,
     stageDeadlineMs,
   }: ManagerPoolOptions) {
     this.#archiveFetchRetryDelaysMs = archiveFetchRetryDelaysMs ?? ARCHIVE_FETCH_RETRY_DELAYS_MS;
+    this.#mirrorAppendRetryDelaysMs = mirrorAppendRetryDelaysMs ?? MIRROR_APPEND_RETRY_DELAYS_MS;
     this.#stageDeadlineMs = stageDeadlineMs ?? outboxFetchDeadlineMs;
     this.#attachmentLimits = attachmentLimits;
     this.#outboxFetchFileTimeoutMs = outboxFetchFileTimeoutMs;
@@ -7801,6 +7813,53 @@ class Pool implements ManagerPool {
     }
   }
 
+  /**
+   * 生ログの写しを PG へ預ける。落ちたら `#mirrorAppendRetryDelaysMs` の間を置いてやり直す（#4657）。
+   * 順番は崩れない: 同じ会話の後ろの塊は、この預けが終わるのを `#mirrorTurns` で待っている。
+   * やり直しで二重に積まれうるのは uuid の無い行だけ（`append` は1つのトランザクションで、uuid の有る行は衝突を無視する）。抜けるより害が小さい。
+   * やり直し切れなかったら日誌にも残す: 標準エラーだけだと、resume した会話のどこが抜けたかを後から辿れないため。
+   */
+  async #appendMirrorRetrying(
+    store: NonNullable<Stores['sessionStore']>,
+    event: Extract<RunnerEvent, { type: 'mirror' }>,
+  ): Promise<void> {
+    const delays = this.#mirrorAppendRetryDelaysMs;
+    const detail =
+      `managerId=${event.managerId} projectKey=${event.key.projectKey} ` +
+      `sessionId=${event.key.sessionId} entries=${event.entries.length}`;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await store.append(event.key, event.entries as never);
+        return;
+      } catch (error) {
+        const delayMs = delays[attempt];
+        if (delayMs === undefined || this.#stopped) {
+          // 止めないが黙って消さない: 預かり損ねたことすら残らないと、後から「無い」のか「預かれなかった」のかが分からない。
+          noteDroppedRecord('生ログのミラー', `${detail} attempts=${String(attempt + 1)}`, error);
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'outbound',
+            text:
+              `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 生ログの写し ${String(event.entries.length)} 件を PG へ預けられなかった` +
+              `（${String(attempt + 1)} 回試した。sessionId=${event.key.sessionId}）。` +
+              `この会話を resume すると、この区間が欠けたまま戻る: ${reasonOf(error)}`,
+          });
+          return;
+        }
+        noteDroppedRecord(
+          '生ログのミラー（やり直す）',
+          `${detail} attempt=${String(attempt + 1)}`,
+          error,
+        );
+        // `unref` する: 待ちが止めたはずのデーモンの終了を引き延ばさないため
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, delayMs).unref?.();
+        });
+      }
+    }
+  }
+
   async #onEvent(event: RunnerEvent, fromRunnerId: string): Promise<void> {
     // 札は最初の `await` より前に取る（理由は `UsageRecordOrder`、`usage.ts`）。
     const usageTicket =
@@ -8782,17 +8841,7 @@ class Pool implements ManagerPool {
         if (store === undefined) return;
         // 同じ生ログへの先の預けが終わるのを待つ（`#mirrorTails`）
         await this.#mirrorTurns.get(event);
-        try {
-          await store.append(event.key, event.entries as never);
-        } catch (error) {
-          // 止めないが黙って消さない: 預かり損ねたことすら残らないと、後から「無い」のか「預かれなかった」のかが分からない。
-          noteDroppedRecord(
-            '生ログのミラー',
-            `managerId=${event.managerId} projectKey=${event.key.projectKey} ` +
-              `sessionId=${event.key.sessionId} entries=${event.entries.length}`,
-            error,
-          );
-        }
+        await this.#appendMirrorRetrying(store, event);
         return;
       }
 
