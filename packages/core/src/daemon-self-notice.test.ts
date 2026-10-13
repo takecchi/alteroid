@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DAEMON_ATTACHMENT_USAGE_SOURCE,
   DAEMON_RESERVED_EVENT_SOURCES,
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
@@ -202,6 +203,7 @@ describe('予約語の source', () => {
     expect([...DAEMON_RESERVED_EVENT_SOURCES]).toEqual([
       DAEMON_TOKEN_POOL_REOPENED_SOURCE,
       DAEMON_RUNNER_REGISTRY_SOURCE,
+      DAEMON_ATTACHMENT_USAGE_SOURCE,
     ]);
   });
 
