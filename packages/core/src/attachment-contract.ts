@@ -648,6 +648,11 @@ async function verifyKeptAndListing(
     usage.byFrom.integration.totalBytes !== 50
   )
     fail(`usage の出所ごと: ${JSON.stringify(usage.byFrom)}`);
+  // 連携の鍵ごとの内訳: 鍵の id で束ね、連携の鍵でない出所は載らない（#4005）
+  if (
+    JSON.stringify(usage.byIntegrationKey) !== JSON.stringify({ k1: { count: 1, totalBytes: 50 } })
+  )
+    fail(`usage の鍵ごと: ${JSON.stringify(usage.byIntegrationKey)}`);
 
   clock = at(10_000);
   const keptA = await store.setKept(a.id, true, clock);

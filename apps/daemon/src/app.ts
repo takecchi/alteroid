@@ -1096,7 +1096,7 @@ function describeTokenPolicyChanges(changes: readonly TokenPolicyChange[]): stri
 // 能力を広げる口は、状態変更の後にこの関数を当てない: 日誌が落ちると記録の無い変更が生まれるので、日誌を先に書き、書けなければ状態を変えずに 500 にする。状態変更が投げたら打ち消しの行をこの関数で足す（記録が多すぎる側に倒す）。状態変更の後でないと分からない情報は2行目として best-effort で足す。
 // 戻り値は書けた行（書けなければ `undefined`）: `PUT /memory/:slug` だけが `markHumanTouched` へ渡すために見る（日誌に行が無いのに派生値だけ立てると対応が崩れる）。
 async function appendJournalOrDrop(
-  stores: Stores,
+  stores: Pick<Stores, 'journal'>,
   entry: JournalEntryInput,
   what: string,
   detail: string,
@@ -1118,11 +1118,12 @@ export const INTEGRATION_ATTACHMENT_NOTICE_BYTES = 1024 * 1024 * 1024;
  * 状態を持たず「この1件で越えたか」だけを見る（上げる前は閾値未満・上げた後は閾値以上）: 越えるのは一度きりで、デーモンの再起動をまたいでも二度鳴らないため。
  * 掃除で下がってからもう一度越えれば、もう一度鳴る。
  */
-async function noteIntegrationAttachmentUsage(
-  stores: Stores,
+export async function noteIntegrationAttachmentUsage(
+  stores: Pick<Stores, 'attachments' | 'journal'>,
   post: (event: InboxEvent) => void,
   keyId: string,
   addedBytes: number,
+  threshold: number = INTEGRATION_ATTACHMENT_NOTICE_BYTES,
 ): Promise<void> {
   let total: number;
   try {
@@ -1132,19 +1133,17 @@ async function noteIntegrationAttachmentUsage(
     return;
   }
   const before = total - addedBytes;
-  if (!(before < INTEGRATION_ATTACHMENT_NOTICE_BYTES && total >= INTEGRATION_ATTACHMENT_NOTICE_BYTES)) {
-    return;
-  }
+  if (!(before < threshold && total >= threshold)) return;
   const text =
     `連携の鍵 ${keyId} が上げた添付の預かり（期限内）が ${String(total)} バイトになり、` +
-    `閾値 ${String(INTEGRATION_ATTACHMENT_NOTICE_BYTES)} バイトを越えた。上げることは断っていない。` +
+    `閾値 ${String(threshold)} バイトを越えた。上げることは断っていない。` +
     '鍵ごとの内訳は GET /attachments の usage.byIntegrationKey で見られる。止めるなら、その鍵を失効させる。';
   await appendJournalOrDrop(
     stores,
     {
       type: 'decision',
       decision: text,
-      grounds: `keyId=${keyId} totalBytes=${String(total)} threshold=${String(INTEGRATION_ATTACHMENT_NOTICE_BYTES)}（#4005）`,
+      grounds: `keyId=${keyId} totalBytes=${String(total)} threshold=${String(threshold)}（#4005）`,
     },
     '連携の鍵の添付の閾値の知らせ',
     `keyId=${keyId}`,
