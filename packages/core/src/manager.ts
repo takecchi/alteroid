@@ -1922,6 +1922,12 @@ interface ManagerRecord {
    */
   tokenFingerprintAtReattach?: string;
   /**
+   * 再起動の引き取りの後、見回りの1回目で「配られていない報告」を確かめる印（#4644）。**プロセス内の像にしか置かない**。
+   * 前のデーモンが受け取ったまま処理し終えずに落ちた `report` は、作り直したデーモンへ二度と届かない（SSE の控えを引く連番を持たないため）。
+   * 1回確かめたら下ろす: 引き取った後の普通のターンの終わりまで「拾い直し」として配らないため。
+   */
+  reportCheckAfterRestore?: true;
+  /**
    * `abort()` が止めたと確かめた回だけ立てる（`not_stopped` / `unknown` では立てない: 確かめていない停止を確定させない）。
    * `abort()` の後に `send()` の resume が成功する順序は、台帳の読み直しでは間に合わない（resume は実 I/O）。
    * 印が立った後に resume 側が `record.attached` / `job.status` を書き換えることはない。**プロセス内の像にしか置かない**。
@@ -5158,6 +5164,7 @@ class Pool implements ManagerPool {
 
         this.#turnEndProbedAt.set(managerId, now);
         await this.#probeTurnEndOf(record);
+        this.#settleReportCheckAfterRestore(record);
       } catch {
         // 1件の失敗で残りを止めない。古い助言が残るのは「揮発してよい」側の代償。
       }
@@ -5258,6 +5265,44 @@ class Pool implements ManagerPool {
       record.toolUseStallAt = stall.timestamp;
     }
     record.toolUseStallPending = stall.pending;
+  }
+
+  /**
+   * 再起動の引き取りの後の1回目の見回りで、ターンの終わりが最後に届いた報告より新しければ、末尾の発言を添えてクローンへ1通配る（#4644）。
+   *
+   * 前のデーモンが `report` を受け取ったまま処理し終えずに落ちると（OOM・SIGKILL・停止の締切超え）、作り直したデーモンには
+   * 二度と届かず、担当は報告を出して待っているのにクローンは知らないまま止まる。普通の停止は `stop()` が処理中を待ち切るので、ここへは来ない。
+   * 引き取りの直後には比べない: runner がまだ送っていなかった `report` は、つなぎ直した後に普通に届くため。待つのは見回りの静けさの門
+   * （`TURN_END_PROBE_QUIET_MS`）に任せる。引き取りは台帳を書き直す（`updatedAt` が進む）ので、1回目の見回りはその10分後になり、
+   * 届く分は届き終えている。前の報告の添付の取り寄せ（報告の門）でそれより長く待たされた回だけは、同じ報告を拾い直しとしても配りうる（二重で済み、落とすよりよい）。
+   * 戻るのは報告の末尾だけで、添付は結ばれない（runner の一覧も生ログも、取り寄せる添付の目録を持たないため）。
+   */
+  #settleReportCheckAfterRestore(record: ManagerRecord): void {
+    if (record.reportCheckAfterRestore !== true) return;
+    delete record.reportCheckAfterRestore;
+    const managerId = record.job.id;
+    // 背景処理の完了待ちで畳んだ報告は、まとめ配り（`flushWithheldReports`）が配る
+    if ((this.#withheldReports.get(managerId)?.count ?? 0) > 0) return;
+    if (record.turnEndedAt === undefined || record.turnEndTail === undefined) return;
+    const turnEndedAt = Date.parse(record.turnEndedAt);
+    if (Number.isNaN(turnEndedAt)) return;
+    const lastReportAt = record.job.lastReportAt;
+    if (lastReportAt !== undefined) {
+      const reportedAt = Date.parse(lastReportAt);
+      if (Number.isNaN(reportedAt) || turnEndedAt <= reportedAt) return;
+    }
+    this.#emit(
+      managerId,
+      'report',
+      [
+        `[${managerId}] デーモンが落ちたあと（再起動の後）に、生ログから拾い直した報告。` +
+          '前のデーモンがこの報告を受け取ったまま配り終えずに落ちた可能性がある。',
+        `ターンの終わり: ${record.turnEndedAt} / 最後に届いた報告: ${lastReportAt ?? '（無い）'}`,
+        '添付があっても結ばれていない。全文は manager_report / manager_transcript で読める。',
+        '',
+        `末尾の発言:\n${record.turnEndTail}`,
+      ].join('\n'),
+    );
   }
 
   /**
@@ -6003,6 +6048,8 @@ class Pool implements ManagerPool {
           ...(living.state.tokenFingerprint === undefined
             ? {}
             : { tokenFingerprintAtReattach: living.state.tokenFingerprint }),
+          // `running` だけ: `waiting_human` は確認を待っていてターンを終えておらず、配り直しは `#redeliverWaitingAfterRestore` が持つ
+          ...(living.state.status === 'running' ? { reportCheckAfterRestore: true as const } : {}),
         };
         this.#records.set(job.id, record);
         // 現役と違う鍵で走り続けている委譲は、起こし直しの借りに載せる（#4643）: 借り（`#usageWakeOwed`）はメモリにしか無く再起動で消えるが、
