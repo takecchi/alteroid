@@ -148,11 +148,23 @@ describe('起動時の未読の読み直しが落ちても、拾えるまでや�
       '1回目の配達',
     );
     await waitFor(() => attempts() >= 2, '2回目の読み直し');
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await waitFor(
+      async () =>
+        (await stores.journal.list({ types: ['exchange'] })).some(
+          (entry) => entry.type === 'exchange' && entry.text.includes('未読の拾い直しが終わった'),
+        ),
+      '拾い直しの終わり',
+    );
     release();
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(
-      booted.inputs.filter((input) => input.includes('やり直しの間に届いた発言')),
-    ).toHaveLength(1);
+
+    // 実時間では待たない（#2146）: 拾い直しが積んだ分は、後から送った目印より前に並ぶので、目印が届いた時点で数えれば足りる
+    booted.clone.post(humanMessage('evt-sentinel', '目印の発言（#4647）'));
+    await waitFor(() => booted.inputs.some((input) => input.includes('目印の発言')), '目印の配達');
+    // 束ねて1つのターンに入ることがあるので、入力の数ではなく出てきた回数で数える
+    const occurrences = booted.inputs.reduce(
+      (total, input) => total + input.split('やり直しの間に届いた発言').length - 1,
+      0,
+    );
+    expect(occurrences).toBe(1);
   });
 });
