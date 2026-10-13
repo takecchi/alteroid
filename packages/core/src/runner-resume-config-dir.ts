@@ -1,6 +1,49 @@
 import { lchownSync, lstatSync, readdirSync } from 'node:fs';
+import { chown, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+
+// パスの1段に使える名前か: SDK が渡す projectKey・sessionId でも、`/` や `..` を含めば書かない
+function isPlainSegment(name: string): boolean {
+  return name.length > 0 && name !== '.' && name !== '..' && !/[/\\\0]/.test(name);
+}
+
+/**
+ * resume の材料（生ログ）を、子のふだんの設定ディレクトリ `<configDir>/projects/<projectKey>/<sessionId>.jsonl` に置く。
+ * SDK の一時ディレクトリ（`/tmp/claude-resume-*`）へ書かせない: CLI が終わると SDK が消し、鍵の回転で開き直すと会話が見つからず、
+ * 長すぎた出力の保存もそこへ書かれて `/tmp/claude-*` を読まない担当から見えないため（2026-10-13）。
+ * 形は SDK と同じ（1件ずつ JSON にして改行で区切る、0600）。
+ * 既に在れば上書きしない（`'present'`）: そちらは CLI が書き続けた最新で、材料のほうが古いため。
+ */
+export async function placeSeedInConfigDir(
+  configDir: string,
+  key: { readonly projectKey: string; readonly sessionId: string },
+  entries: readonly unknown[],
+  owner?: { readonly uid: number; readonly gid: number },
+): Promise<'placed' | 'present'> {
+  if (!isPlainSegment(key.projectKey) || !isPlainSegment(key.sessionId)) {
+    throw new Error('projectKey か sessionId がパスの1段として使えない形');
+  }
+  const projectsDir = join(configDir, 'projects');
+  const projectDir = join(projectsDir, key.projectKey);
+  const created = await mkdir(projectDir, { recursive: true, mode: 0o700 });
+  if (owner !== undefined && created !== undefined) {
+    // 作った段だけ子へ渡す: 既に在る段（子の HOME など）の持ち主は変えないため
+    for (const dir of [configDir, projectsDir, projectDir]) {
+      if (dir === created || dir.startsWith(`${created}/`)) await chown(dir, owner.uid, owner.gid);
+    }
+  }
+  const file = join(projectDir, `${key.sessionId}.jsonl`);
+  const body = entries.map((entry) => `${JSON.stringify(entry)}\n`).join('');
+  try {
+    await writeFile(file, body, { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 'EEXIST') return 'present';
+    throw error;
+  }
+  if (owner !== undefined) await chown(file, owner.uid, owner.gid);
+  return 'placed';
+}
 
 /**
  * SDK が resume の材料（生ログ・資格・設定）を書き出す一時ディレクトリの名前の頭。

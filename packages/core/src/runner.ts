@@ -176,6 +176,7 @@ import { outwardCommandsIn } from './outward-commands.js';
 import {
   chownTreeSync,
   parseTranscriptEntries,
+  placeSeedInConfigDir,
   sdkResumeConfigDirOf,
   sessionIdInSdkResumeConfigDir,
 } from './runner-resume-config-dir.js';
@@ -2552,7 +2553,24 @@ class RunnerSession {
       },
       load: async (key: AgentSessionLogKey) => {
         if (key.subpath !== undefined) return null;
-        return this.#resumeState.seed ?? null;
+        const seed = this.#resumeState.seed;
+        if (seed === undefined) return null;
+        // 子のふだんの設定ディレクトリへ自分で置き、SDK には材料を返さない: 返すと SDK が /tmp/claude-resume-* に書き出し、CLI が終わると消えるため（`placeSeedInConfigDir`）
+        const childUser = this.#childUser;
+        const configDir = childUser === undefined ? undefined : this.#childEnv().CLAUDE_CONFIG_DIR;
+        if (childUser !== undefined && configDir !== undefined) {
+          try {
+            await placeSeedInConfigDir(configDir, key, seed, childUser);
+            return null;
+          } catch (error) {
+            this.#emit({
+              type: 'note',
+              managerId: this.#id,
+              text: `resume の材料を子の設定ディレクトリ（${configDir}）へ置けなかったので、SDK の一時ディレクトリから resume する: ${reasonOf(error)}`,
+            });
+          }
+        }
+        return seed;
       },
     };
   }
