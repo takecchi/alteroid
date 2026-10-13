@@ -1139,3 +1139,83 @@ describe('外へ出した成果を含む報告は、背景処理の完了待ち�
     await pool.stop();
   });
 });
+
+describe('畳んだ報告の在庫は台帳にも写り、デーモンの再起動を越えて配られる（#4626）', () => {
+  // 同じ台帳と同じ runner の上で、デーモンを作り直す（夜の反映の再起動に当たる）
+  async function restartOn(
+    setup: ManualSetup,
+  ): Promise<{ pool: ManagerPool; inbox: InboxEvent[] }> {
+    await setup.pool.stop();
+    const inbox: InboxEvent[] = [];
+    const pool = createManagerPool({
+      stores: setup.stores,
+      post: (event) => inbox.push(event),
+      runners: createRunnerRegistry([setup.fake.runner]),
+      now: () => Date.parse('2026-09-01T00:00:00.000Z'),
+    });
+    await pool.restore();
+    return { pool, inbox };
+  }
+
+  async function reportTextIn(inbox: InboxEvent[], needle: string): Promise<string> {
+    return vi.waitFor(() => {
+      const found = inbox
+        .filter((event) => event.type === 'manager_message' && event.kind === 'report')
+        .map((event) => (event as { text: string }).text)
+        .find((text) => text.includes(needle));
+      if (found === undefined) throw new Error('まだ届いていない');
+      return found;
+    });
+  }
+
+  it('再起動の前に畳んだ報告の冒頭が、再起動の後の最初の報告に載る。配った後は台帳の写しが下りる', async () => {
+    const setup = await runningManualSetup();
+    setup.fake.report('mgr-withhold', '#1006 をマージした（6db19adf）', 'done', {
+      awaitingBackground: AWAITING,
+    });
+    await vi.waitFor(async () => {
+      const copy = (await jobOf(setup.stores, 'mgr-withhold'))?.withheldReports;
+      if (copy?.count !== 1) throw new Error('台帳にまだ写っていない');
+    });
+
+    const restarted = await restartOn(setup);
+    setup.fake.report('mgr-withhold', '再起動の後の報告', 'done');
+    const text = await reportTextIn(restarted.inbox, '再起動の後の報告');
+    expect(text).toContain('1 本配っていない');
+    expect(text).toContain('#1006 をマージした（6db19adf）');
+    await vi.waitFor(async () => {
+      const copy = (await jobOf(setup.stores, 'mgr-withhold'))?.withheldReports;
+      if (copy !== undefined) throw new Error('台帳の写しがまだ下りていない');
+    });
+
+    await restarted.pool.stop();
+  });
+
+  it('台帳の写しは予算の内に詰め、詰めて落とした本数も「古い N 本」として出す', async () => {
+    const setup = await runningManualSetup();
+    for (let n = 1; n <= 12; n += 1) {
+      setup.fake.report(
+        'mgr-withhold',
+        `報告${String(n).padStart(2, '0')} ${'あ'.repeat(300)}`,
+        'done',
+        { awaitingBackground: AWAITING },
+      );
+    }
+    const kept = await vi.waitFor(async () => {
+      const copy = (await jobOf(setup.stores, 'mgr-withhold'))?.withheldReports;
+      if (copy?.count !== 12) throw new Error('12本目がまだ写っていない');
+      return copy.excerpts.length;
+    });
+    expect(kept).toBeLessThan(12);
+
+    const restarted = await restartOn(setup);
+    setup.fake.report('mgr-withhold', '再起動の後の報告', 'done');
+    const text = await reportTextIn(restarted.inbox, '再起動の後の報告');
+    expect(text).toContain('12 本配っていない');
+    expect(text).toContain(`古い ${String(12 - kept)} 本の冒頭は字数の予算で省いた`);
+    expect(text).toContain('報告12 ');
+    expect(text).not.toContain('報告01 ');
+
+    await restarted.pool.stop();
+  });
+});
