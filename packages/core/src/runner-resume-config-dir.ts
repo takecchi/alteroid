@@ -25,6 +25,35 @@ export function sdkResumeConfigDirOf(
 }
 
 /**
+ * 生ログのパス（`<設定ディレクトリ>/projects/<projectKey>/<sessionId>.jsonl`）が SDK の resume の一時ディレクトリの中なら、その会話の id を返す。
+ * 一時ディレクトリはプロセスが終わると SDK が消すので、同じ id で開き直しても会話が見つからない。
+ */
+export function sessionIdInSdkResumeConfigDir(
+  transcriptPath: string,
+  tmp: string = tmpdir(),
+): string | undefined {
+  const configDir = dirname(dirname(dirname(transcriptPath)));
+  if (basename(dirname(dirname(transcriptPath))) !== 'projects') return undefined;
+  if (sdkResumeConfigDirOf({ CLAUDE_CONFIG_DIR: configDir }, tmp) === undefined) return undefined;
+  const name = basename(transcriptPath);
+  return name.endsWith('.jsonl') ? name.slice(0, -'.jsonl'.length) : undefined;
+}
+
+/** 1行でも読めなければ `undefined`: 欠けた会話から resume すると、欠けたことに気づかないまま続くため。 */
+export function parseTranscriptEntries(text: string): unknown[] | undefined {
+  const entries: unknown[] = [];
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue;
+    try {
+      entries.push(JSON.parse(line));
+    } catch {
+      return undefined;
+    }
+  }
+  return entries.length === 0 ? undefined : entries;
+}
+
+/**
  * 木の持ち主を子へ移す。根は最後に移す: 根が root の 0700 のうちは他の子（同じ UID の別の委譲）が中へ入れず、移し終える前の中身に触れられないため。
  * symlink は辿らず、リンクそのものの持ち主だけを移す。
  */

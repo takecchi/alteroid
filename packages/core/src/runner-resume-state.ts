@@ -35,6 +35,13 @@ export class RunnerResumeState {
    */
   #progressed = false;
 
+  /**
+   * 鍵の回転で開き直した resume が、まだ効いたと確かめられていない間だけ立つ。
+   * 立っている間は `progressed` を偽として見せる: 開き直しはターンの境目でしか起きないので、
+   * 生ログからの作り直しで済んだ作業を二度走らせることが無いため。
+   */
+  #rotationResumePending = false;
+
   get sessionId(): string | undefined {
     return this.#sessionId;
   }
@@ -44,7 +51,7 @@ export class RunnerResumeState {
   }
 
   get progressed(): boolean {
-    return this.#progressed;
+    return this.#progressed && !this.#rotationResumePending;
   }
 
   beginResume(sessionId: string, entries: unknown[] | undefined): void {
@@ -58,6 +65,14 @@ export class RunnerResumeState {
     this.#resumeAttempt = { sessionId };
   }
 
+  // 生ログが無いときは `armResumeAttempt` と同じにする: 引き継ぐ記録が無いのに作り直しへ倒すと、記録の無い後継が空の会話から始まるため
+  beginRotationResume(sessionId: string, entries: unknown[] | undefined): void {
+    this.#resumeAttempt = { sessionId };
+    if (entries === undefined) return;
+    this.#seed = entries;
+    this.#rotationResumePending = true;
+  }
+
   takeAttempt(): { sessionId: string } | null {
     const attempt = this.#resumeAttempt;
     this.#resumeAttempt = null;
@@ -66,8 +81,9 @@ export class RunnerResumeState {
 
   // `#progressed` を立てる唯一の口にする: 別の経路を作ると `#seed` の解放を足し忘れる経路が生まれる。
   markProgressed(): void {
-    if (this.#progressed) return;
+    if (this.#progressed && !this.#rotationResumePending) return;
     this.#progressed = true;
+    this.#rotationResumePending = false;
     this.#seed = undefined;
   }
 
@@ -81,5 +97,6 @@ export class RunnerResumeState {
   discardForRecreate(): void {
     this.#sessionId = undefined;
     this.#seed = undefined;
+    this.#rotationResumePending = false;
   }
 }

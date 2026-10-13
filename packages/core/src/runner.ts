@@ -166,7 +166,12 @@ import {
   type ResumeRecoveryHost,
   type ResumeRecoveryOutcome,
 } from './runner-resume-recovery.js';
-import { chownTreeSync, sdkResumeConfigDirOf } from './runner-resume-config-dir.js';
+import {
+  chownTreeSync,
+  parseTranscriptEntries,
+  sdkResumeConfigDirOf,
+  sessionIdInSdkResumeConfigDir,
+} from './runner-resume-config-dir.js';
 import {
   cachedPidsReader,
   PidsPressureNotices,
@@ -1805,6 +1810,8 @@ class RunnerSession {
   readonly #denialStreaks = new ClassifierDenialStreaks();
   readonly #rescueMemory = new RescueMemory();
   #rescueRunning: Promise<void> | null = null;
+  /** 鍵の回転で入力を閉じる前に、resume の一時ディレクトリから読んだ生ログ。`#reopenForTokenRotation` が受け取って消す。 */
+  #rotationSeed: unknown[] | undefined;
   readonly #finishUnpushedWorkFn: (options?: {
     signal?: AbortSignal;
   }) => Promise<UnpushedWorkResult>;
@@ -2092,6 +2099,30 @@ class RunnerSession {
     })();
     this.#rescueRunning = run;
     await run;
+  }
+
+  // resume の一時ディレクトリの外の生ログは読まない: 子の設定ディレクトリに在る会話は開き直しても見つかり、材料を渡すと resume の経路そのものが変わるため
+  async #readTranscriptInResumeConfigDir(): Promise<unknown[] | undefined> {
+    const path = this.#sdkSession.transcriptPath;
+    const sessionId = this.#resumeState.sessionId;
+    if (path === undefined || sessionId === undefined) return undefined;
+    if (sessionIdInSdkResumeConfigDir(path) !== sessionId) return undefined;
+    try {
+      const entries = parseTranscriptEntries(await readFile(path, 'utf8'));
+      if (entries !== undefined) return entries;
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `鍵の回転で開き直す前に、resume の一時ディレクトリの生ログ（${path}）を読み切れなかった（空か、読めない行が在る）。材料なしで開き直す。`,
+      });
+    } catch (error) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `鍵の回転で開き直す前に、resume の一時ディレクトリの生ログ（${path}）を読めなかった。材料なしで開き直す: ${reasonOf(error)}`,
+      });
+    }
+    return undefined;
   }
 
   // 「無い」の種類を潰さない（`no-path` はフックの配線、`unreadable` はディスク・権限を疑う別の次の一手）
@@ -2675,6 +2706,8 @@ class RunnerSession {
       // `#read` は `#endedInputForTokenRotation` だけを見る: 意図（`#recycleForToken`）と混ぜると、SDK 自身の閉じを畳み直しと誤認して嘘の `note` を出すため
       if (this.#sdkSession.wantsTokenRecycle && this.#atTokenRecycleBoundary()) {
         this.#sdkSession.consumeTokenRecycleAtBoundary();
+        // 入力を閉じる前に読む: 閉じた後は CLI が終わり、SDK が resume の一時ディレクトリごと生ログを消すため
+        this.#rotationSeed = await this.#readTranscriptInResumeConfigDir();
         return;
       }
       await this.#sdkSession.waitForInput();
@@ -2751,8 +2784,10 @@ class RunnerSession {
   // 会話を切らない: 畳むのは SDK の子プロセスで、会話でも記憶でもないため
   // プロトコルへ新しい `type` を足さず `note` に載せる: 旧いデーモンも `note` は解釈できるため
   #reopenForTokenRotation(sessionId: string): void {
+    const seed = this.#rotationSeed;
+    this.#rotationSeed = undefined;
     this.#sdkSession.teardownForRecreate();
-    this.#resumeState.armResumeAttempt(sessionId);
+    this.#resumeState.beginRotationResume(sessionId, seed);
     this.#emit({
       type: 'note',
       managerId: this.#id,

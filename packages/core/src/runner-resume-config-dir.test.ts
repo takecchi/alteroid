@@ -7,7 +7,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import type { RunnerEvent } from './runner-protocol.js';
-import { chownTreeSync, sdkResumeConfigDirOf } from './runner-resume-config-dir.js';
+import {
+  chownTreeSync,
+  parseTranscriptEntries,
+  sdkResumeConfigDirOf,
+  sessionIdInSdkResumeConfigDir,
+} from './runner-resume-config-dir.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
 describe('sdkResumeConfigDirOf: SDK の resume の一時ディレクトリだけを拾う', () => {
@@ -32,6 +37,46 @@ describe('sdkResumeConfigDirOf: SDK の resume の一時ディレクトリだけ
     );
     expect(sdkResumeConfigDirOf({ CLAUDE_CONFIG_DIR: '' }, '/tmp')).toBe(undefined);
     expect(sdkResumeConfigDirOf({}, '/tmp')).toBe(undefined);
+  });
+});
+
+describe('sessionIdInSdkResumeConfigDir: 生ログが resume の一時ディレクトリの中なら会話の id を返す', () => {
+  it('<tmpdir>/claude-resume-*/projects/<projectKey>/<id>.jsonl の id を返す', () => {
+    expect(
+      sessionIdInSdkResumeConfigDir(
+        '/tmp/claude-resume-abc/projects/-work-project/s-1.jsonl',
+        '/tmp',
+      ),
+    ).toBe('s-1');
+  });
+
+  it('子の設定ディレクトリ・projects の外・jsonl でないものは返さない', () => {
+    expect(
+      sessionIdInSdkResumeConfigDir(
+        '/home/worker/.claude/projects/-work-project/s-1.jsonl',
+        '/tmp',
+      ),
+    ).toBe(undefined);
+    expect(
+      sessionIdInSdkResumeConfigDir('/tmp/claude-resume-abc/other/-work-project/s-1.jsonl', '/tmp'),
+    ).toBe(undefined);
+    expect(
+      sessionIdInSdkResumeConfigDir(
+        '/tmp/claude-resume-abc/projects/-work-project/s-1.txt',
+        '/tmp',
+      ),
+    ).toBe(undefined);
+  });
+});
+
+describe('parseTranscriptEntries: 生ログの行を全部読めたときだけ返す', () => {
+  it('空行を飛ばして各行を読む', () => {
+    expect(parseTranscriptEntries('{"a":1}\n\n{"b":2}\n')).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  it('1行でも読めなければ、空なら、undefined', () => {
+    expect(parseTranscriptEntries('{"a":1}\n{"b":')).toBe(undefined);
+    expect(parseTranscriptEntries('\n')).toBe(undefined);
   });
 });
 

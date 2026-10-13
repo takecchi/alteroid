@@ -59,6 +59,38 @@ describe('RunnerResumeState — armResumeAttempt（#reopenForTokenRotation が�
   });
 });
 
+describe('RunnerResumeState — beginRotationResume（鍵の回転で開き直す resume）', () => {
+  const entries = [{ a: 1 }] as unknown as Parameters<RunnerResumeState['beginResume']>[1];
+
+  it('生ログを預かったら、手が動いた後でも「まだ進んでいない」と見せ、生ログを seed に置く', () => {
+    const state = new RunnerResumeState();
+    state.observeSessionStarted('session-1');
+    state.markProgressed();
+    state.beginRotationResume('session-1', entries);
+    expect(state.progressed).toBe(false);
+    expect(state.seed).toBe(entries);
+    expect(state.takeAttempt()).toEqual({ sessionId: 'session-1' });
+  });
+
+  it('開き直した先で手が動いたら、進んだことに戻し、seed を解放する', () => {
+    const state = new RunnerResumeState();
+    state.markProgressed();
+    state.beginRotationResume('session-1', entries);
+    state.markProgressed();
+    expect(state.progressed).toBe(true);
+    expect(state.seed).toBeUndefined();
+  });
+
+  it('生ログが無ければ、進んだことはそのまま（引き継ぐ記録が無いので作り直しへ倒さない）', () => {
+    const state = new RunnerResumeState();
+    state.markProgressed();
+    state.beginRotationResume('session-1', undefined);
+    expect(state.progressed).toBe(true);
+    expect(state.seed).toBeUndefined();
+    expect(state.takeAttempt()).toEqual({ sessionId: 'session-1' });
+  });
+});
+
 describe('RunnerResumeState — markProgressed（立てると同時に seed を解放する）', () => {
   it('progressed を true にし、seed を undefined へ解放する', () => {
     const state = new RunnerResumeState();
