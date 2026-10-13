@@ -49,6 +49,11 @@ import { isRunningJobStatus } from './job-status-running.js';
 import { journalWindowCrossesHorizon } from './journal-horizon.js';
 import { filterTranscriptLines } from './transcript-filter.js';
 import {
+  TranscriptPageCache,
+  transcriptPageCacheKey,
+  type TranscriptPageSnapshot,
+} from './transcript-page-cache.js';
+import {
   describeOffsetRequiredTimeBoundary,
   describeUnreadableJournalTimeBoundary,
   isOffsetQualifiedTimeBoundary,
@@ -2516,6 +2521,8 @@ export function createCloneTools(context: ToolContext) {
     );
   }
   const memoryCause = context.memoryCause;
+  // 道具の組み立て1回（＝セッション1本）の中だけで覚える: セッションをまたいで古い生ログを持ち越さないため（#4638）
+  const transcriptPages = new TranscriptPageCache();
   // `conversationId` も倒れ先を作らない: 関数が無いことと `undefined` を返すことは別で、落とすのは前者だけ
   if (typeof context.conversationId !== 'function') {
     throw new Error(
@@ -8596,73 +8603,92 @@ export function createCloneTools(context: ToolContext) {
           return text(describeUnreadableJournalTimeBoundary('until', until) + '生ログは絞れない。');
         }
         if (!context.managers) return NO_POOL;
-        const result = await context.managers.transcript(managerId);
-        if (result.kind === 'unreadable') {
-          // 読めない行を「生ログは無い」と言わない
-          return text(`${result.detail}生ログには降りていない。`);
-        }
-        if (result.kind === 'missing') {
-          // `missing` が2つの意味を畳んでいることを隠さずそう書く: `ManagerPool.transcript()` が区別する値を返さないため
-          return text(
-            `マネージャー ${managerId} の生ログは無い。走行中の runner のディスク・` +
-              '退避済みアーカイブ・預かったセッションの生ログ、3段のどこにも見当たらなかった。' +
-              `（${managerId} という id 自体が台帳に無い場合と、id はあるが生ログが` +
-              '一度も残らなかった場合のどちらも、この応答だけでは区別できない。' +
-              'manager_list に出ているかで id の実在は別途確かめられる。）\n\n' +
-              (await describeTranscriptMissingLeg(context.managers, managerId)),
-          );
-        }
-        if (result.kind === 'removed') {
-          // `missing` と同じ文面へ畳まない: 退避そのものは在ったが本文が落とされており、「どこにも無かった」ではなく「消された」ため
-          return text(
-            `マネージャー ${managerId} の生ログは退避されていたが、本文は消されている` +
-              `（${result.removedAt} に ${result.bytes.toLocaleString('ja-JP')} バイトを落とした${describeArchiveRemovedBytesUnit()}。` +
-              `archive id: ${result.archiveId}）。` +
-              '走行中の runner のディスク・預かったセッションの生ログにも見当たらなかった。',
-          );
-        }
-
-        const { body: rawBody, archiveId } = result;
-
+        // 続きの頁は1枚目に取り寄せて絞った本文を使い回す: 頁ごとに全文（退避なら数十〜百 MB 級）を取り寄せて絞り直すと、そのたびにデーモンのループが止まるため（#4638）
+        const cacheKey = transcriptPageCacheKey({ managerId, since, until, type, contains });
         const hasFilter =
           since !== undefined ||
           until !== undefined ||
           type !== undefined ||
           contains !== undefined;
-        let body = rawBody;
-        let filterNote = '';
-        if (hasFilter) {
-          const types =
-            type === undefined
-              ? undefined
-              : type
-                  .split(',')
-                  .map((t) => t.trim())
-                  .filter((t) => t.length > 0);
-          const filtered = filterTranscriptLines(rawBody, { since, until, types, contains });
-          body = filtered.body;
-          const { totalLines, matchedLines, noTimestampLines, unparsableLines } = filtered.counts;
-          // 「全X行のうちY行が当たった」は0件でも出す: 黙って空の本文を返すと「絞りが効いていない」のか「本当に0件だった」のか区別できないため
-          const noteLines = [`絞り込み: 全 ${totalLines} 行のうち ${matchedLines} 行が当たった。`];
-          if (since !== undefined || until !== undefined) {
-            // 窓を渡したときは除いた行数を0件でも出す: 黙って捨てると「窓の判定ができない行があった」という事実そのものが出力から消えるため
-            noteLines.push(
-              `（時刻の無い行 ${noTimestampLines} 行・読めない行 ${unparsableLines} 行は` +
-                '窓の判定ができないので除いた）',
-            );
-          } else if (unparsableLines > 0) {
-            noteLines.push(
-              `（JSON として読めない行 ${unparsableLines} 行は type の判定ができないので除いた）`,
+        const reused = offset > 0 ? transcriptPages.get(cacheKey) : undefined;
+        let snapshot: TranscriptPageSnapshot;
+        if (reused !== undefined) {
+          snapshot = reused;
+        } else {
+          const result = await context.managers.transcript(managerId);
+          if (result.kind === 'unreadable') {
+            // 読めない行を「生ログは無い」と言わない
+            return text(`${result.detail}生ログには降りていない。`);
+          }
+          if (result.kind === 'missing') {
+            // `missing` が2つの意味を畳んでいることを隠さずそう書く: `ManagerPool.transcript()` が区別する値を返さないため
+            return text(
+              `マネージャー ${managerId} の生ログは無い。走行中の runner のディスク・` +
+                '退避済みアーカイブ・預かったセッションの生ログ、3段のどこにも見当たらなかった。' +
+                `（${managerId} という id 自体が台帳に無い場合と、id はあるが生ログが` +
+                '一度も残らなかった場合のどちらも、この応答だけでは区別できない。' +
+                'manager_list に出ているかで id の実在は別途確かめられる。）\n\n' +
+                (await describeTranscriptMissingLeg(context.managers, managerId)),
             );
           }
-          filterNote = noteLines.join('\n') + '\n\n';
+          if (result.kind === 'removed') {
+            // `missing` と同じ文面へ畳まない: 退避そのものは在ったが本文が落とされており、「どこにも無かった」ではなく「消された」ため
+            return text(
+              `マネージャー ${managerId} の生ログは退避されていたが、本文は消されている` +
+                `（${result.removedAt} に ${result.bytes.toLocaleString('ja-JP')} バイトを落とした${describeArchiveRemovedBytesUnit()}。` +
+                `archive id: ${result.archiveId}）。` +
+                '走行中の runner のディスク・預かったセッションの生ログにも見当たらなかった。',
+            );
+          }
+
+          const { body: rawBody, archiveId } = result;
+
+          let body = rawBody;
+          let filterNote = '';
+          if (hasFilter) {
+            const types =
+              type === undefined
+                ? undefined
+                : type
+                    .split(',')
+                    .map((t) => t.trim())
+                    .filter((t) => t.length > 0);
+            const filtered = filterTranscriptLines(rawBody, { since, until, types, contains });
+            body = filtered.body;
+            const { totalLines, matchedLines, noTimestampLines, unparsableLines } = filtered.counts;
+            // 「全X行のうちY行が当たった」は0件でも出す: 黙って空の本文を返すと「絞りが効いていない」のか「本当に0件だった」のか区別できないため
+            const noteLines = [
+              `絞り込み: 全 ${totalLines} 行のうち ${matchedLines} 行が当たった。`,
+            ];
+            if (since !== undefined || until !== undefined) {
+              // 窓を渡したときは除いた行数を0件でも出す: 黙って捨てると「窓の判定ができない行があった」という事実そのものが出力から消えるため
+              noteLines.push(
+                `（時刻の無い行 ${noTimestampLines} 行・読めない行 ${unparsableLines} 行は` +
+                  '窓の判定ができないので除いた）',
+              );
+            } else if (unparsableLines > 0) {
+              noteLines.push(
+                `（JSON として読めない行 ${unparsableLines} 行は type の判定ができないので除いた）`,
+              );
+            }
+            filterNote = noteLines.join('\n') + '\n\n';
+          }
+          snapshot = {
+            body,
+            filterNote,
+            ...(archiveId === undefined ? {} : { archiveId }),
+            fetchedAt: new Date().toISOString(),
+          };
         }
 
-        const part1 = page(body, offset, TRANSCRIPT_PAGE);
+        const part1 = page(snapshot.body, offset, TRANSCRIPT_PAGE);
+        // 続きが残る間だけ覚え、最後の頁を出したら捨てる: 読み終えた本文をヒープに残さないため
+        if (part1.more) transcriptPages.set(cacheKey, snapshot);
+        else transcriptPages.clear();
         const archiveNote =
-          archiveId === undefined
+          snapshot.archiveId === undefined
             ? ''
-            : `（archive id: ${archiveId}。archive_remove archiveId=${archiveId} で消せる）`;
+            : `（archive id: ${snapshot.archiveId}。archive_remove archiveId=${snapshot.archiveId} で消せる）`;
         const head = `マネージャー ${managerId} の生ログ（${describePage(part1)}）${archiveNote}`;
         // 続きの取り方に今回渡した絞りの引数をそのまま付ける: 付けないと、続きを読んだ瞬間に絞りが外れて窓の外の行まで読めてしまうため
         const resumeFilterArgs = hasFilter
@@ -8676,7 +8702,12 @@ export function createCloneTools(context: ToolContext) {
         const tail = part1.more
           ? `\n\n…（ここで切れている。続きは manager_transcript managerId=${managerId} offset=${part1.to}${resumeFilterArgs}）`
           : '';
-        return text(`${filterNote}${head}\n\n${part1.body}${tail}`);
+        // 使い回した頁にはいつの生ログかを添える: 1枚目より後に書かれた行は載らないため
+        const reuseNote =
+          reused === undefined
+            ? ''
+            : `\n（この頁は1枚目を読んだ時点（${snapshot.fetchedAt}）の生ログを使い回している。それより後の行は offset を付けずに読み直すと載る）`;
+        return text(`${snapshot.filterNote}${head}${reuseNote}\n\n${part1.body}${tail}`);
       },
     ),
 
