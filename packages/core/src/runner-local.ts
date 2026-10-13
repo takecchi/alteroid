@@ -82,6 +82,7 @@ export interface LocalRunnerOptions {
   pluginsRoot?: string;
   outboxRoot?: string;
   outboxStagedRoot?: string;
+  contextUsageTimeoutMs?: number;
 }
 
 export function createLocalRunner(options: LocalRunnerOptions): RunnerClient {
@@ -122,6 +123,9 @@ class LocalRunner implements RunnerClient {
       ...(options.outboxStagedRoot === undefined
         ? {}
         : { outboxStagedRoot: options.outboxStagedRoot }),
+      ...(options.contextUsageTimeoutMs === undefined
+        ? {}
+        : { contextUsageTimeoutMs: options.contextUsageTimeoutMs }),
     });
     // 同じプロセスのデーモンは、預けた退避を下の `fetchArchive` で取りに来られる（#4485。退避の本文は名乗りを問わず預ける）
     this.#host.setDaemonAcceptsArchiveRef(true);
