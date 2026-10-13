@@ -595,7 +595,15 @@ jobs:
       # 古い層を使い、もう片方が同じ RUN を走らせ直すことがあり、非決定的な出力（apt の
       # ログ・codex の一時ディレクトリ・chunk のハッシュ名）が突き合わせに出る（PR #3174 の
       # run 37419381099）。1 回の solve なら共通の層は 1 度だけ作られる。
-      - uses: docker/bake-action@v7
+      # **ベースイメージの取得が取得制限（429 Too Many Requests）で落ちたら、待って1回だけ焼き直す。**
+      # ECR Public のミラーでも、GitHub の runner は IP を共有しているので 429 を返されることがある
+      # （main の警報 #4545・#4587・#4622、2026-10-12〜13 の2日で3回。どれも image だけが落ち、同じ差分の
+      # PR では緑だった）。buildx の docker-container のビルダーは毎回空なので、事前の `docker pull` では温まらない。
+      # 1回目だけ `continue-on-error` にし、2回目が落ちれば job は赤のまま（本物の失敗を隠さない）。
+      # 429 以外で落ちた回も1回焼き直すので、そのときは数分余計にかかる。
+      - id: bake
+        continue-on-error: true
+        uses: docker/bake-action@v7
         with:
           source: .
           # 既定では compose.yaml も読み、`ALTEROID_DATABASE_URL` の必須補間で落ちる
@@ -637,6 +645,25 @@ jobs:
           # - ⚠️ **言えないこと(2): これは警報であって門ではない。** ここが赤くても夜の
           #   反映は止まらない（逐語は
           #   `grep -Fn -- 'SHA が違えば push する。それだけである。' .github/scripts/reflect-release-prod.sh`）
+          no-cache: ${{ env.DRIFT == 'true' }}
+
+      - name: 1回目の bake が落ちたので、取得制限が明けるのを待つ
+        if: steps.bake.outcome == 'failure'
+        run: sleep 60
+
+      # 指定は上の1回目と同じにする（変えるときは両方を直す）。
+      - name: bake の2回目（1回目が落ちたときだけ）
+        if: steps.bake.outcome == 'failure'
+        uses: docker/bake-action@v7
+        with:
+          source: .
+          files: ./docker-bake.hcl
+          targets: default
+          load: true
+          set: |
+            *.args.ALTEROID_BUILD_REV=${{ github.sha }}
+            *.cache-from=type=gha
+            ${{ env.DRIFT != 'true' && 'final.cache-to=type=gha' || '' }}
           no-cache: ${{ env.DRIFT == 'true' }}
 
       # **Issue #2534 段1。ビルド時の追加層（`final` ステージ）の歯。** 上の 1 回のビルドが
