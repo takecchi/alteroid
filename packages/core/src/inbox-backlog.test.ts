@@ -309,6 +309,39 @@ describe('inboxCollapseKey（Issue #954 続き。`Clone#post()` が受信箱で�
     expect(inboxCollapseKey(a)).not.toBe(inboxCollapseKey(b));
   });
 
+  it('manager_message: 返事を待つ確認（requestId 付き）は、本文が同じでも畳まない（#4631）', () => {
+    const permission: InboxEvent = {
+      ...SAMPLE_EVENTS.manager_message,
+      kind: 'permission',
+      text: '{"command":"gh pr merge 12"}',
+      requestId: 'req-1',
+    };
+    expect(inboxCollapseKey(permission)).toBeUndefined();
+    expect(inboxCollapseKey({ ...permission, kind: 'question' })).toBeUndefined();
+    // 計器の鍵は変えない: 同じ内容が何件あるかは、これまでどおり1つの鍵で数える
+    expect(inboxBacklogDedupeKey(permission)).toBe(
+      inboxBacklogDedupeKey({ ...permission, requestId: 'req-2' }),
+    );
+  });
+
+  it('manager_message: 添付を運ぶ報告は、本文が同じでも畳まない（#4631）', () => {
+    const withFile: InboxEvent = {
+      ...SAMPLE_EVENTS.manager_message,
+      attachments: [
+        { id: 'att-1', name: 'a.txt', mimeType: 'text/plain', size: 1 },
+      ] as unknown as NonNullable<Extract<InboxEvent, { type: 'manager_message' }>['attachments']>,
+    };
+    const withRejected: InboxEvent = {
+      ...SAMPLE_EVENTS.manager_message,
+      rejectedAttachments: [{ name: 'b.bin', reason: 'too large' }] as unknown as NonNullable<
+        Extract<InboxEvent, { type: 'manager_message' }>['rejectedAttachments']
+      >,
+    };
+    expect(inboxCollapseKey(withFile)).toBeUndefined();
+    expect(inboxCollapseKey(withRejected)).toBeUndefined();
+    expect(inboxCollapseKey(SAMPLE_EVENTS.manager_message)).toBeDefined();
+  });
+
   it('external + source: token-pool（DAEMON_TOKEN_POOL_REOPENED_SOURCE）: 同一 payload なら同じ鍵', () => {
     const a: InboxEvent = {
       type: 'external',

@@ -119,7 +119,15 @@ export function inboxBacklogDedupeKey(event: InboxEvent): string {
 // 外から来た `external` や人間の発言は畳まない: 同文の2件が「1つの出来事が2回届いた」のか「2回起きた」のか、受け手に区別する手段が無いため
 // 鍵を `inboxBacklogDedupeKey` へ委譲し、2本目の `switch` を書かない: 判定が2箇所に分かれると、増える側と減る側が食い違うため
 export function inboxCollapseKey(event: InboxEvent): string | undefined {
-  if (event.type === 'manager_message') return inboxBacklogDedupeKey(event);
+  if (event.type === 'manager_message') {
+    // 返事を待つ確認（`requestId` 付き）と、添付を運ぶ報告は畳まない: 鍵が `requestId` も添付も持たないので、畳むと2つ目の確認がクローンに届かず担当が待ち続け、2つ目の添付が渡らないため（#4631）
+    // 鍵そのもの（`inboxBacklogDedupeKey`）は変えない: あちらは「同じ内容が何件あるか」を数える計器で、`requestId` を含めないのが意図のため
+    if (event.requestId !== undefined) return undefined;
+    if ((event.attachments?.length ?? 0) > 0 || (event.rejectedAttachments?.length ?? 0) > 0) {
+      return undefined;
+    }
+    return inboxBacklogDedupeKey(event);
+  }
 
   if (event.type === 'external' && isDaemonSelfNotice(event)) {
     if (event.identity !== undefined) {
