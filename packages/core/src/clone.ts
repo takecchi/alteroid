@@ -3254,20 +3254,18 @@ class Clone implements CloneHost {
   // 古い行（`answerDelivery` を持たない）は対象にしない: 遡って配り直すと、とっくに人間の目から消えた古い回答が今さら届くため
   // `claimedIds` に載っている行には印を付けるだけにする: 直前の `#restoreUnreadPass` が配達の管轄に入れており、`inbox.put` も `post()` も重ねない（二重配達を避ける）。載っていない行だけ `post()` を呼ぶ
   async #reconcileUndeliveredAnswers(claimedIds: ReadonlySet<string>): Promise<void> {
-    let approvals: PendingApproval[];
-    try {
-      const list = await this.#stores.jobs.listApprovals({ pendingOnly: false });
-      approvals = list.entries;
-      if (list.unreadable.length > 0) {
-        noteDroppedRecord(
-          `読めない承認待ち ${list.unreadable.length} 件の回答済み未配達の拾い直し`,
-          '',
-          new Error('行が読めない形で入っている。行は書き換えていない'),
-        );
-      }
-    } catch (error) {
-      noteDroppedRecord('回答済み未配達の承認の読み直し', '', error);
-      return;
+    // 読めるまでやり直す（#4647 の `claimPending` と同じ理由）: 1回の失敗で諦めると、人間の回答は次の再起動まで配られず、担当は確認待ちのまま止まるため
+    const list = await this.#untilStopped('回答済み未配達の承認の読み直し', () =>
+      this.#stores.jobs.listApprovals({ pendingOnly: false }),
+    );
+    if (list === undefined) return;
+    const approvals = list.entries;
+    if (list.unreadable.length > 0) {
+      noteDroppedRecord(
+        `読めない承認待ち ${list.unreadable.length} 件の回答済み未配達の拾い直し`,
+        '',
+        new Error('行が読めない形で入っている。行は書き換えていない'),
+      );
     }
 
     const undelivered = approvals.filter(
@@ -3363,13 +3361,18 @@ class Clone implements CloneHost {
   // `#restoreUnread()` の印（`#restoringUnread` / `#postedBeforeRestored`）を立てたまま待つ: 待っている間に `post()` された合図を「前の器の未読」として二度配らないため（#1984）
   // 止めたら `undefined`: 片付け中に拾うと、配れない合図の配達回数だけが進むため
   async #claimPendingUntilStopped(): Promise<PendingInboxEvent[] | undefined> {
+    return this.#untilStopped('未読の読み直し', () => this.#stores.inbox.claimPending());
+  }
+
+  // 起動時の読み直しを、読めるか止められるまでやり直す。止めたら `undefined`
+  async #untilStopped<T>(label: string, read: () => Promise<T>): Promise<T | undefined> {
     const delays = this.#restoreUnreadRetryDelays;
     for (let attempt = 0; ; attempt += 1) {
       if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return undefined;
       try {
-        return await this.#stores.inbox.claimPending();
+        return await read();
       } catch (error) {
-        noteDroppedRecord('未読の読み直し', `attempt=${String(attempt + 1)}`, error);
+        noteDroppedRecord(label, `attempt=${String(attempt + 1)}`, error);
       }
       const delayMs = delays[Math.min(attempt, delays.length - 1)] ?? 0;
       await new Promise((resolve) => setTimeout(resolve, delayMs));

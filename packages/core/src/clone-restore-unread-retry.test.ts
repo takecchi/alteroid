@@ -168,3 +168,40 @@ describe('起動時の未読の読み直しが落ちても、拾えるまでや�
     expect(occurrences).toBe(1);
   });
 });
+
+describe('起動時の回答済み未配達の承認の読み直しが落ちても、読めるまでやり直す', () => {
+  it('⭐ listApprovals() が2回落ちても、前の器で答えた回答はこの起動のうちに1回だけ配られ、行が delivered になる', async () => {
+    const base = createMemoryStores();
+    await base.jobs.putApproval({
+      id: 'ap-1',
+      createdAt: '2026-09-01T00:00:00.000Z',
+      question: '本番のマイグレーションを走らせてよいか',
+      answeredAt: '2026-09-01T00:05:00.000Z',
+      answer: '許可します（前の器で答えた）',
+      answerDelivery: 'pending',
+    });
+    let attempts = 0;
+    const stores: Stores = {
+      ...base,
+      jobs: Object.assign(Object.create(base.jobs) as Stores['jobs'], {
+        listApprovals: async (...args: Parameters<Stores['jobs']['listApprovals']>) => {
+          attempts += 1;
+          if (attempts <= 2) {
+            throw new Error(`Connection terminated unexpectedly（${String(attempts)} 回目）`);
+          }
+          return base.jobs.listApprovals(...args);
+        },
+      }),
+    };
+
+    const { inputs } = bootClone(stores);
+
+    await waitFor(
+      () => inputs.some((input) => input.includes('前の器で答えた')),
+      '前の器の回答の配り直し',
+    );
+    expect(attempts).toBeGreaterThanOrEqual(3);
+    expect(inputs.filter((input) => input.includes('前の器で答えた'))).toHaveLength(1);
+    expect((await base.jobs.getApproval('ap-1'))?.answerDelivery).toBe('delivered');
+  });
+});
