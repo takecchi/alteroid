@@ -196,7 +196,7 @@ function textFieldReferencesAnyPrefix(objectText: string): boolean {
 
 const EXPECTED_SITE_COUNT: Record<string, number> = {
   'clone.ts': 72,
-  'manager.ts': 64,
+  'manager.ts': 65,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
