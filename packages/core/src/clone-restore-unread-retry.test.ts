@@ -10,7 +10,8 @@ import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-function fakeSdk(): { fn: typeof sdkQuery; inputs: string[] } {
+// `gate` を渡すと、ターンの応答をそれが解けるまで止める（合図を処理し終えず、受信箱に残したままにする）
+function fakeSdk(gate?: Promise<void>): { fn: typeof sdkQuery; inputs: string[] } {
   const inputs: string[] = [];
   const fn = ((params: { prompt: unknown; options?: Options }) => {
     async function* generate(): AsyncGenerator<SDKMessage, void> {
@@ -24,6 +25,7 @@ function fakeSdk(): { fn: typeof sdkQuery; inputs: string[] } {
         message: { content: unknown };
       }>) {
         inputs.push(String(message.message.content));
+        await gate;
         yield {
           type: 'assistant',
           message: { content: [{ type: 'text', text: 'ok' }] },
@@ -78,8 +80,8 @@ function storesWithFailingClaim(
   return { stores, attempts: () => attempts };
 }
 
-function bootClone(stores: Stores): { clone: CloneHost; inputs: string[] } {
-  const fake = fakeSdk();
+function bootClone(stores: Stores, gate?: Promise<void>): { clone: CloneHost; inputs: string[] } {
+  const fake = fakeSdk(gate);
   const clone = createClone({
     stores,
     queryFn: fake.fn,
@@ -122,7 +124,11 @@ describe('起動時の未読の読み直しが落ちても、拾えるまでや�
   it('やり直しを待つ間に post された合図は、拾い直しで二度配られない（#1984 の守りを崩さない）', async () => {
     let clone: CloneHost | undefined;
     const live = humanMessage('evt-live', 'やり直しの間に届いた発言（#4647）');
-    const { stores } = storesWithFailingClaim(1, async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { stores, attempts } = storesWithFailingClaim(1, async () => {
       // 1回目の失敗の直後に届いたことにする。受信箱へ書かれるまで待ってから落とす
       // 1回目の読み直しは `createClone()` の中で始まるので、作り終わるのを待ってから post する
       await waitFor(() => clone !== undefined, 'クローンの作成');
@@ -133,13 +139,17 @@ describe('起動時の未読の読み直しが落ちても、拾えるまでや�
       );
     });
 
-    const booted = bootClone(stores);
+    const booted = bootClone(stores, gate);
     clone = booted.clone;
 
+    // 1回目のターンを止めている間に2回目の読み直しを済ませる: 合図はまだ受信箱に残っているので、守りが無ければ拾い直しがもう一度配る
     await waitFor(
       () => booted.inputs.some((input) => input.includes('やり直しの間に届いた発言')),
       '1回目の配達',
     );
+    await waitFor(() => attempts() >= 2, '2回目の読み直し');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    release();
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(booted.inputs.filter((input) => input.includes('やり直しの間に届いた発言'))).toHaveLength(
       1,
