@@ -141,3 +141,97 @@ describe('同じ生ログへの mirror の預けは、届いた順に1つずつ�
     expect(started).toEqual(['first', 'second']);
   });
 });
+
+async function bootWith(stores: Stores, mirrorAppendRetryDelaysMs: readonly number[]) {
+  await stores.jobs.putJob({
+    id: 'mgr-a',
+    createdAt: '2026-09-01T00:00:00.000Z',
+    updatedAt: '2026-09-01T00:00:00.000Z',
+    status: 'running',
+    summary: '調べ物',
+    request: '調べて',
+    cwd: '/work/mgr-a',
+    sessionId: 'sess-a',
+    runnerId: 'runner-primary',
+    projectKey: 'proj-key',
+  });
+  const fake = fakeRunner();
+  const pool = createManagerPool({
+    stores,
+    post: () => undefined,
+    runners: createRunnerRegistry([fake.runner]),
+    mirrorAppendRetryDelaysMs,
+  });
+  await pool.restore();
+  return { fake, pool };
+}
+
+describe('生ログの写しの預けが落ちても、やり直して抜けを作らない（#4657）', () => {
+  it('⭐ 預けが2回落ちても3回目で預け、後の塊はその後に順番どおり預ける', async () => {
+    const appended: string[] = [];
+    let failures = 0;
+    const stores: Stores = {
+      ...createMemoryStores(),
+      sessionStore: {
+        append: async (_key, entries) => {
+          const uuid = String((entries[0] as { uuid?: string }).uuid);
+          if (uuid === 'first' && failures < 2) {
+            failures += 1;
+            throw new Error(`Connection terminated unexpectedly（${String(failures)} 回目）`);
+          }
+          appended.push(uuid);
+        },
+        load: async () => null,
+      },
+    };
+    const { fake, pool } = await bootWith(stores, [10, 10]);
+    try {
+      fake.emit(mirror('first'));
+      fake.emit(mirror('second'));
+      await vi.waitFor(() => expect(appended).toEqual(['first', 'second']), WAIT);
+      expect(failures).toBe(2);
+    } finally {
+      await pool.stop();
+    }
+  });
+
+  it('やり直し切れなかったら、日誌に「欠けたまま戻る」を残し、後の塊は預ける', async () => {
+    const appended: string[] = [];
+    let attempts = 0;
+    const base = createMemoryStores();
+    const stores: Stores = {
+      ...base,
+      sessionStore: {
+        append: async (_key, entries) => {
+          const uuid = String((entries[0] as { uuid?: string }).uuid);
+          if (uuid === 'first') {
+            attempts += 1;
+            throw new Error('Connection terminated unexpectedly');
+          }
+          appended.push(uuid);
+        },
+        load: async () => null,
+      },
+    };
+    const { fake, pool } = await bootWith(stores, [10]);
+    try {
+      fake.emit(mirror('first'));
+      fake.emit(mirror('second'));
+      await vi.waitFor(() => expect(appended).toEqual(['second']), WAIT);
+      expect(attempts).toBe(2);
+      await vi.waitFor(async () => {
+        const rows = await base.journal.list({ types: ['exchange'] });
+        expect(
+          rows.some(
+            (row) =>
+              row.type === 'exchange' &&
+              row.text.includes('PG へ預けられなかった') &&
+              row.text.includes('欠けたまま戻る'),
+          ),
+        ).toBe(true);
+      }, WAIT);
+    } finally {
+      await pool.stop();
+    }
+  });
+});
