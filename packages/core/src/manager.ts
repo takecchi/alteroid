@@ -3754,9 +3754,12 @@ class Pool implements ManagerPool {
       listing = await listRunnerManagers(runner);
     } catch (error) {
       if (!record.attached) return {};
+      // 指紋で比べた回（再起動で引き取っただけ）は世代を覚えていないので、世代を言わない（#4643）
+      const mismatch = byGeneration
+        ? `認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、現役は世代 ${String(active)}）`
+        : '認証トークンの鍵の指紋が現役と食い違っている';
       const reason =
-        `${managerId} は認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、` +
-        `現役は世代 ${String(active)}）が、runner の状態を読めなかった（${reasonOf(error)}）ため、` +
+        `${managerId} は${mismatch}が、runner の状態を読めなかった（${reasonOf(error)}）ため、` +
         '背景処理や確認待ちが残っているか分からない。畳んでいないし、古い鍵のセッションへも送っていない。';
       return {
         declined: { outcome: 'declined', detail: `${reason}少し置いてから送り直すこと。` },
