@@ -143,6 +143,47 @@ export async function readTextYielding(response: Response, yieldBytes: number): 
   return parts.join('');
 }
 
+// resume の本文を送る間、この字数を直列化するたびにループへ順番を返す（#4630）。値の理由は `SSE_READ_YIELD_BYTES` と同じ
+const RESUME_BODY_YIELD_CHARS = 1024 * 1024;
+
+/**
+ * resume の命令を JSON の本文として、`yieldChars` 字ずつ UTF-8 の塊にして流し、塊を渡すたびにループへ順番を返す（#4630）。
+ * 受け手が `JSON.parse` すると `command` と同じ値になる（欄の順だけ `entries` が先になる）。
+ * 生ログ `entries` を1つの文字列にまとめない: まとめると直列化・UTF-8 化のどちらも会話の全字数ぶんループを塞ぐため。
+ * 1件の生ログより細かくは割らない（1件の `JSON.stringify` は割れない）。
+ */
+export function resumeBodyYielding(
+  command: RunnerResumeCommand,
+  yieldChars: number,
+): ReadableStream<Uint8Array> {
+  const { entries, ...rest } = command;
+  async function* chunks(): AsyncGenerator<Uint8Array> {
+    const encoder = new TextEncoder();
+    const restJson = JSON.stringify(rest);
+    if (entries === undefined) {
+      yield encoder.encode(restJson);
+      return;
+    }
+    let parts: string[] = ['{"entries":['];
+    let pendingChars = 0;
+    for (let index = 0; index < entries.length; index += 1) {
+      // 配列の中の `undefined` は `JSON.stringify` の配列と同じく `null` にする
+      const text = JSON.stringify(entries[index]) ?? 'null';
+      parts.push(index === 0 ? text : `,${text}`);
+      pendingChars += text.length;
+      if (pendingChars >= yieldChars) {
+        yield encoder.encode(parts.join(''));
+        parts = [];
+        pendingChars = 0;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
+    parts.push(']', restJson === '{}' ? '}' : `,${restJson.slice(1)}`);
+    yield encoder.encode(parts.join(''));
+  }
+  return Readable.toWeb(Readable.from(chunks())) as unknown as ReadableStream<Uint8Array>;
+}
+
 // `unref` する: 見張りは接続が在るあいだ回るもので、止めたはずのデーモンの終了を引き延ばさないため
 function defaultSetTimer(ms: number, onFire: () => void): () => void {
   const timer = setTimeout(onFire, ms);
@@ -815,7 +856,7 @@ class HttpRunner implements RunnerClient {
     const response = await this.#call(
       'POST',
       `/managers/${encodeURIComponent(command.managerId)}/resume`,
-      command,
+      resumeBodyYielding(command, RESUME_BODY_YIELD_CHARS),
     );
     const body = (await response.json()) as {
       cwd?: unknown;
@@ -1292,9 +1333,14 @@ class HttpRunner implements RunnerClient {
         authorization: `Bearer ${this.#token}`,
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      // 流れの本文（`resumeBodyYielding`）はそのまま流す。`duplex` は流れの本文を fetch に渡すときに要る
+      ...(body === undefined
+        ? {}
+        : body instanceof ReadableStream
+          ? { body, duplex: 'half' }
+          : { body: JSON.stringify(body) }),
       ...(signal === undefined ? {} : { signal }),
-    });
+    } as RequestInit);
     if (!response.ok) {
       const detail = runnerErrorBodyOf(await response.text().catch(() => ''));
       throw new RunnerHttpError(
