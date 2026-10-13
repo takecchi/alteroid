@@ -913,6 +913,8 @@ class Clone implements CloneHost {
   #restorePassFinished = false;
   // 待ち行列は id で重複排除しないのでここで畳む: ライブ配達と拾い直し配達が同じ `human_answer` を2回運びうるため
   readonly #handledHumanAnswerIds = new Set<string>();
+  /** `#pump` が1ターンを回す間に `#reportFailure` が呼ばれたか。ターンの前に下ろし、`finally` で読む（#4633）。 */
+  #pumpTurnFailed = false;
 
   // これより後に回答された行は拾い直さない: `answerApproval` の配達の途中の行を拾うと、同じ合図を2回 `post` し、2回目の回答を古い回答で上書きしうるため
   readonly #bootedAt = new Date().toISOString();
@@ -1942,6 +1944,7 @@ class Clone implements CloneHost {
             : '';
         }),
       );
+      this.#pumpTurnFailed = false;
       try {
         if (mergedHuman !== null) await this.#runHumanTurn(mergedHuman);
         else if (mergedReports !== null) await this.#runManagerReportBatch(mergedReports);
@@ -1956,9 +1959,15 @@ class Clone implements CloneHost {
         this.#situationExplainedStaged = null;
         // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
         const defer = this.#usageBlocked !== null;
+        const failedOutsideUsage = !defer && this.#pumpTurnFailed;
         for (const held of batch) {
           // 保持した `human_answer` は「処理済み」の印を外す: 枠で失敗した回答はまだ処理されておらず、残すと解除後の再配達が「二重配達」と畳まれて回答が黙って失われるため
           if (defer && held.type === 'human_answer') this.#handledHumanAnswerIds.delete(held.id);
+          // 枠以外の失敗で終わった回答は、配達の印を `pending` へ戻して起動時の拾い直しに載せる（#4633）
+          if (failedOutsideUsage && held.type === 'human_answer') {
+            this.#handledHumanAnswerIds.delete(held.id);
+            await this.#reopenAnswerDeliveryAfterFailure(held);
+          }
           await this.#settleInboxEvent(held, defer);
         }
         this.#inFlight = null;
@@ -3191,6 +3200,39 @@ class Clone implements CloneHost {
     }
   }
 
+  // 枠以外の理由で失敗したターンに渡した回答は、配達の印を `'pending'` へ戻して起動時の拾い直し（`#reconcileUndeliveredAnswers`）に載せる（#4633）。
+  // 回答だけを戻す: 人間の発言や報告は消えても台帳（commitments）に残るが、回答は消えると、確認を出して止まった担当を再開させる経路そのものが切れるため。
+  // 回数の上限は置かない: 決定的に失敗する回答は器の入れ替えのたびにターンを1本焼くが、戻すたびに日誌へ1行残し、人間が気づけるようにする（オーナーの判断、2026-10-14）。
+  // 戻すのは、いまの行がこの合図を `'delivered'` にした回答のままのときだけ: その間に取り下げ・2回目の回答が入っていれば、古い合図で巻き戻さないため
+  async #reopenAnswerDeliveryAfterFailure(
+    event: Extract<InboxEvent, { type: 'human_answer' }>,
+  ): Promise<void> {
+    let reopened = false;
+    try {
+      await this.#stores.jobs.updateApproval(event.approvalId, (current) => {
+        if (current.answerDelivery !== 'delivered' || current.answeredAt === undefined) {
+          return null;
+        }
+        if (humanAnswerEventId(current.id, current.answeredAt) !== event.id) return null;
+        reopened = true;
+        return { ...current, answerDelivery: 'pending' };
+      });
+    } catch (error) {
+      noteDroppedRecord('失敗したターンの回答の配達印の差し戻し', inboxEventShape(event), error);
+      return;
+    }
+    if (!reopened) return;
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_DECISION_PREFIX}人間の回答（承認 ${event.approvalId}）を渡したターンが枠以外の理由で失敗したので、` +
+        '配達の印を未配達（pending）へ戻した。次の起動（器の入れ替え）の拾い直しでもう一度配る。' +
+        '同じ承認でこの行が何度も出るなら、その回答の処理は決定的に失敗している。',
+    });
+  }
+
   // `#restoreUnreadPass` の前に置かない: 前で `await` すると `claimPending()` の時機が1往復遅れ、直後に `post()` された合図を「前の器の未読」として拾って同じ合図を2回配達へ乗せるため
   // 古い行（`answerDelivery` を持たない）は対象にしない: 遡って配り直すと、とっくに人間の目から消えた古い回答が今さら届くため
   // `claimedIds` に載っている行には印を付けるだけにする: 直前の `#restoreUnreadPass` が配達の管轄に入れており、`inbox.put` も `post()` も重ねない（二重配達を避ける）。載っていない行だけ `post()` を呼ぶ
@@ -3674,6 +3716,8 @@ class Clone implements CloneHost {
     // 分類は生の文字列で先に行い、外へ出す文だけを `reasonOf` にする: `prompt is too long` 等が2行目以降に在る形もあり入口で1行目へ畳むと判定が壊れる一方、`emit`・日誌・`failure` に載る文は drizzle の `params:` のように値を運びうるため
     const rawMessage = typeof cause === 'string' ? cause : String(cause.error);
     const message = typeof cause === 'string' ? cause : reasonOf(cause.error);
+    // `#pump` が1ターンの後に読む: ターンの印（`running.failure`）は `#finishTurn()` で消え、`#pump` の `finally` からは見えないため（#4633）
+    this.#pumpTurnFailed = true;
     // 失敗の印はここで立てる: 呼び出し側ごとに立てると、経路が増えたとき印の無い失敗が混ざり「成功して空文字を返した」と区別できないため。`#finishTurn()` より必ず先に呼ぶ: 逆だと `this.#turn` が既に `null` で印が残らないため
     const running = this.#sdkSession.turn;
     if (running !== null) running.failure = message;
