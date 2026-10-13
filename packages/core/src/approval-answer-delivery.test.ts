@@ -582,3 +582,41 @@ describe('枠で保持した human_answer の再配達（issue #2744）', () => 
     await s.clone.stop();
   });
 });
+
+describe('枠以外の失敗で終わった human_answer は、配達の印を戻して次の起動で配り直す（#4633）', () => {
+  it('回答のターンが API のエラーで失敗すると、印が pending に戻り、日誌に1行残り、次に起動したクローンが同じ回答をもう一度配る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval(seedApproval());
+    const s = setup(undefined, stores, {
+      resultFor: (turnIndex) =>
+        turnIndex < 1
+          ? { subtype: 'error_during_execution', text: 'API Error: 500 Internal server error' }
+          : undefined,
+    });
+
+    await s.clone.answerApproval('ap-1', '許可します');
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 1, '回答の初回のターンが起きる');
+    await waitFor(
+      async () => (await stores.jobs.getApproval('ap-1'))?.answerDelivery === 'pending',
+      '失敗したターンの回答の印が pending に戻る',
+    );
+    const journal = await stores.journal.list({ types: ['exchange'] });
+    expect(
+      journal.some((entry) =>
+        JSON.stringify(entry).includes('配達の印を未配達（pending）へ戻した'),
+      ),
+    ).toBe(true);
+    await s.clone.stop();
+
+    const next = bootClone(stores);
+    await waitFor(
+      () => next.inputs.some((text) => text.includes('回答: 許可します')),
+      '次に起動したクローンが同じ回答を配り直す',
+    );
+    await waitFor(
+      async () => (await stores.jobs.getApproval('ap-1'))?.answerDelivery === 'delivered',
+      '配り直した回答は delivered に戻る',
+    );
+    await next.clone.stop();
+  });
+});
