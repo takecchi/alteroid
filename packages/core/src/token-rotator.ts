@@ -32,6 +32,17 @@ import {
   type TokenPoolStore,
 } from './store.js';
 import { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-write-lock.js';
+import { fingerprintOf } from './credentials.js';
+
+// runner がセッションの鍵を名乗るのと同じ指紋（`runner.ts` の `tokenFingerprintOf`）で現役を測る。値の無い行・現役の無い回は測らない
+function activeFingerprintOf(
+  active: ActiveAgentToken | null,
+  tokens: readonly AgentToken[],
+): string | undefined {
+  if (active === null) return undefined;
+  const value = tokens.find((token) => token.id === active.tokenId)?.value;
+  return value === undefined || value === '' ? undefined : fingerprintOf(value);
+}
 
 export interface TokenSpreadResult {
   target: string;
@@ -134,7 +145,8 @@ export interface TokenRotatorObservation {
   facts?: RateLimitFacts;
   transition?: 'entered_overage' | 'rejected';
   statusNow?: RateLimitFacts['status'];
-  observedBy?: { tokenId?: string; generation?: number };
+  /** `fingerprint` はセッションの env に入っている鍵の指紋（runner が名乗る値）。id も世代も無いときだけ照合に使う（#4643）。 */
+  observedBy?: { tokenId?: string; generation?: number; fingerprint?: string };
   succeeded?: true;
 }
 
@@ -720,7 +732,11 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         const active = activeRead.readable ? activeRead.active : null;
         const activeUnreadableReason = activeRead.readable ? undefined : activeRead.reason;
 
-        const freshness = observationFreshness(active, observation.observedBy ?? {});
+        const freshness = observationFreshness(
+          active,
+          observation.observedBy ?? {},
+          activeFingerprintOf(active, tokens),
+        );
 
         // 既定値へすり替えない: rotateOn: 'off' の回転を黙って戻すことになるため。signal は none を借りない: 日誌に出ず設定が壊れている事実が消えるため
         if (!settingsRead.readable) {

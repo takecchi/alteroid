@@ -1917,6 +1917,11 @@ interface ManagerRecord {
    */
   reattachedAcrossRestart?: true;
   /**
+   * 再起動で引き取ったとき、runner の一覧がこのセッションの鍵として名乗った指紋（#4643）。**プロセス内の像にしか置かない**。
+   * 生存確認の観測が無い間だけ、枠の通知に添える指紋の代わりに使う（`#sessionTokenFingerprintOf`）。
+   */
+  tokenFingerprintAtReattach?: string;
+  /**
    * `abort()` が止めたと確かめた回だけ立てる（`not_stopped` / `unknown` では立てない: 確かめていない停止を確定させない）。
    * `abort()` の後に `send()` の resume が成功する順序は、台帳の読み直しでは間に合わない（resume は実 I/O）。
    * 印が立った後に resume 側が `record.attached` / `job.status` を書き換えることはない。**プロセス内の像にしか置かない**。
@@ -3715,11 +3720,14 @@ class Pool implements ManagerPool {
     const active = identity?.generation;
     const activeFingerprint = identity?.fingerprint;
 
-    // 一覧の ⚠ と同じ判定（`tokenGenerationMismatched`）を使う。ここで別の式を書かない。
-    if (record.attached) {
+    // 繋がっていて世代を覚えている回だけ世代で比べ、それ以外は鍵の指紋で比べる。
+    // 再起動で引き取っただけのセッション（繋がっているが世代を覚えていない）も指紋で比べる（#4643）: 世代で比べると「分からない」で素通りし、
+    // 古い鍵のセッションへ送ってまた枠に当たる。再起動の前なら同じ委譲は世代の食い違いで畳まれて新しい鍵で起こし直されていた。
+    const byGeneration = record.attached && held !== undefined;
+    if (byGeneration) {
+      // 一覧の ⚠ と同じ判定（`tokenGenerationMismatched`）を使う。ここで別の式を書かない。
       if (
         !tokenGenerationMismatched({ tokenGeneration: held, activeTokenGeneration: active }) ||
-        held === undefined ||
         active === undefined
       ) {
         return {};
@@ -3728,7 +3736,9 @@ class Pool implements ManagerPool {
       // 台帳が「繋がっていない」done は、まず10秒ごとの生存確認の観測で見る: 普段の経路で `runner.list()` を増やさない
       // （`manager-lease.test.ts` が固定）。観測は最大10秒古いので、食い違いのときだけ下で取り直して確かめる。
       // 指紋が分からないときは断らず流し、世代は書かない。
-      const observed = this.#observedTokenFingerprint(record.job.runnerId, managerId);
+      const observed = record.attached
+        ? this.#sessionTokenFingerprintOf(managerId)
+        : this.#observedTokenFingerprint(record.job.runnerId, managerId);
       if (observed === undefined || activeFingerprint === undefined) return {};
       if (observed === activeFingerprint) return { fingerprintMatched: true };
     }
@@ -3761,7 +3771,7 @@ class Pool implements ManagerPool {
     // 台帳が「繋がっていない」のに旧プロセスが生きている回は、世代が再起動で失われているので鍵の指紋で比べる。
     // 読めないときは断らず流す（再起動後の done へ送れなくなるのは能力の削除になる）。
     let staleness: string;
-    if (record.attached) {
+    if (byGeneration) {
       staleness =
         `認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、` +
         `現役は世代 ${String(active)}）`;
@@ -4226,6 +4236,19 @@ class Pool implements ManagerPool {
       }
     }
     return undefined;
+  }
+
+  /**
+   * セッションの env に入っている鍵の指紋。生存確認の観測（10秒ごとの `/managers`）を先に見て、無ければ引き取りの時に runner の一覧が名乗った値を使う。
+   * 引き取りの直後は生存確認の観測がまだ無いことがあり、そこで枠の通知が来ると指紋を添えられないため。
+   */
+  #sessionTokenFingerprintOf(managerId: string): string | undefined {
+    const record = this.#records.get(managerId);
+    if (record === undefined) return undefined;
+    return (
+      this.#observedTokenFingerprint(record.job.runnerId, managerId) ??
+      record.tokenFingerprintAtReattach
+    );
   }
 
   /** 聞けていない・欄を返さない runner のときは `undefined`（0 ではない）。 */
@@ -5977,8 +6000,23 @@ class Pool implements ManagerPool {
           waiting: living.state.waiting,
           attached,
           reattachedAcrossRestart: true,
+          ...(living.state.tokenFingerprint === undefined
+            ? {}
+            : { tokenFingerprintAtReattach: living.state.tokenFingerprint }),
         };
         this.#records.set(job.id, record);
+        // 現役と違う鍵で走り続けている委譲は、起こし直しの借りに載せる（#4643）: 借り（`#usageWakeOwed`）はメモリにしか無く再起動で消えるが、
+        // 「回した時点で古い鍵のまま走っていた」はセッションの鍵の指紋と現役の指紋から引き取りの場で組み直せる。載せないと、古い鍵で枠に落ちた
+        // 通知は回し手に「もう回した後」として捨てられ（正しい）、鍵の側からの契機が二度と来ず、その委譲はクローンが手で起こすまで止まる。
+        const activeFingerprint = this.#tokenIdentity?.()?.fingerprint;
+        if (
+          attached &&
+          living.state.tokenFingerprint !== undefined &&
+          activeFingerprint !== undefined &&
+          living.state.tokenFingerprint !== activeFingerprint
+        ) {
+          this.#usageWakeOwed.add(job.id);
+        }
         // `#rememberTokenIdentity(job.id)` を呼ばない: 引き取っただけでセッションの env は古い世代の鍵のままなので、観測しただけの現役の世代を書くと本物の食い違いが「一致」に化ける。
         // 記録が無いままにする: 嘘の「一致」より、取れない軸に0の行を作らず正直に「材料が無い」を選ぶ。理由は `reattachedAcrossRestart` で名乗る。
         await this.#persist(record);
@@ -9454,7 +9492,14 @@ class Pool implements ManagerPool {
     observation: Omit<TokenRotatorObservation, 'observedBy'>,
   ): Promise<void> {
     if (this.#onUsageObservation === undefined) return;
-    const observedBy = this.#tokenIdentities.get(managerId);
+    const identity = this.#tokenIdentities.get(managerId);
+    // 身元が無い（再起動で引き取っただけの）セッションは、runner が名乗る鍵の指紋を添える（#4643）: 添えないと回し手は「分からない」を
+    // 現役の通知として扱い、回したばかりの鍵をもう一度回す。成功の観測には添えない: そちらは id と世代のある観測しか照合しない生産者へ渡る
+    const fingerprint =
+      identity === undefined && observation.succeeded !== true
+        ? this.#sessionTokenFingerprintOf(managerId)
+        : undefined;
+    const observedBy = identity ?? (fingerprint === undefined ? undefined : { fingerprint });
     // 回し手へ渡す前後に印を打つ（#4485）: 利用上限で担当が一斉に落ちた回（2026-10-13T16:52Z〜）に、`rate_limit` の後で
     // 印の無い停止が続いた。回し手（鍵の回転の判断・配布・セッションの作り直し）が止めていたなら、窓に `-done` が無いまま残る
     notePhase(`manager:token-rotation:${managerId}`);
