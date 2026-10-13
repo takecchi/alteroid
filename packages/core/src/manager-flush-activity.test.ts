@@ -291,8 +291,10 @@ describe('flushWithheldReports が配る文面に、manager_list と同じ判定
   // 「台帳に record が無い」ケースは書かない: `#retire()` が `#records` と `#withheldReports` を同じ呼び出しで消すので、公開 API だけからは作れない。
 });
 
-describe('flushWithheldReports の文面には240文字抜粋が無く、件数・firstAt/lastAt・journal_read の案内は残る', () => {
-  it('抜粋（「最後の1本の冒頭」）は付かない', async () => {
+// 経緯: 以前は flush に本文を載せない設計（「最後の1本の冒頭」を付けない）だったが、マージ報告が受信箱から見えないまま日誌にだけ残る穴になったため、
+// 冒頭の一覧（「畳んだ報告の冒頭」）を載せる形へ変えた。全文（500文字）が載らないことの保証は残している。
+describe('flushWithheldReports の文面には全文は載らず、冒頭の一覧・件数・firstAt/lastAt・journal_read の案内が載る', () => {
+  it('240文字の冒頭だけが載り、全文は載らない', async () => {
     const { pool, fake, advance, inbox } = await setup();
 
     const longText = 'あ'.repeat(500);
@@ -303,7 +305,8 @@ describe('flushWithheldReports の文面には240文字抜粋が無く、件数�
     await pool.flushWithheldReports();
 
     const text = await lastDeliveredText(inbox, '配っていない');
-    expect(text).not.toContain('最後の1本の冒頭');
+    expect(text).toContain('畳んだ報告の冒頭');
+    expect(text).toContain('あ'.repeat(240));
     expect(text).not.toContain(longText);
 
     await pool.stop();

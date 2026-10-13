@@ -1000,3 +1000,91 @@ describe('通しの歯: 偽の queryFn → createRunnerHost → RunnerEvent → 
     expect(s.inbox.filter((event) => event.type === 'manager_message')).toHaveLength(1);
   });
 });
+
+describe('畳んだ報告の冒頭は、配る知らせから消えない（最後の1本だけにしない）', () => {
+  async function lastReportText(inbox: InboxEvent[], needle: string): Promise<string> {
+    return vi.waitFor(() => {
+      const found = inbox
+        .filter((event) => event.type === 'manager_message' && event.kind === 'report')
+        .map((event) => (event as { text: string }).text)
+        .at(-1);
+      if (found === undefined || !found.includes(needle)) throw new Error('まだ届いていない');
+      return found;
+    });
+  }
+
+  it('同じエピソードで2本畳んだ後の本物の報告に、1本目の冒頭も載る', async () => {
+    const { pool, inbox, fake } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '#1006 をマージした（6db19adf）', 'done', {
+      awaitingBackground: AWAITING,
+    });
+    fake.report('mgr-withhold', '背景の CI を待っている', 'done', { awaitingBackground: AWAITING });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    fake.report('mgr-withhold', '本物の報告', 'done');
+    const text = await lastReportText(inbox, '本物の報告');
+    expect(text).toContain('#1006 をマージした（6db19adf）');
+    expect(text).toContain('背景の CI を待っている');
+    expect(text).toContain('2 本配っていない');
+
+    await pool.stop();
+  });
+
+  it('flush の知らせに、畳んだ報告の冒頭が載る。flush 後に積んだ分は次の本物の報告に載る', async () => {
+    const { pool, inbox, fake, advance } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '#1006 をマージした（6db19adf）', 'done', {
+      awaitingBackground: AWAITING,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    advance(WITHHELD_REPORT_FLUSH_MS + 1);
+    await pool.flushWithheldReports();
+    const flushed = await lastReportText(inbox, '待っても届かなかった');
+    expect(flushed).toContain('#1006 をマージした（6db19adf）');
+
+    fake.report('mgr-withhold', 'flush 後に畳んだ報告', 'done', { awaitingBackground: AWAITING });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fake.report('mgr-withhold', '次の本物', 'done');
+    const next = await lastReportText(inbox, '次の本物');
+    expect(next).toContain('flush 後に畳んだ報告');
+    expect(next).not.toContain('#1006 をマージした');
+
+    await pool.stop();
+  });
+
+  it('closed のまとめ配りにも、畳んだ報告の冒頭が載る', async () => {
+    const { pool, inbox, fake } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '#1006 をマージした（6db19adf）', 'done', {
+      awaitingBackground: AWAITING,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fake.closed('mgr-withhold', 'done', '終わった');
+    const text = await lastReportText(inbox, 'この委譲は終わった');
+    expect(text).toContain('#1006 をマージした（6db19adf）');
+
+    await pool.stop();
+  });
+
+  it('字数の予算を超えたら、古い側が溢れ、溢れた本数と journal_read の案内が書かれる', async () => {
+    const { pool, inbox, fake } = await runningManualSetup();
+
+    for (let n = 1; n <= 12; n += 1) {
+      fake.report('mgr-withhold', `報告${String(n).padStart(2, '0')} ${'あ'.repeat(300)}`, 'done', {
+        awaitingBackground: AWAITING,
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    fake.report('mgr-withhold', '本物の報告', 'done');
+    const text = await lastReportText(inbox, '本物の報告');
+    expect(text).toContain('12 本配っていない');
+    expect(text).toMatch(/古い \d+ 本の冒頭は字数の予算で省いた。全文は日誌に在る/);
+    expect(text).toContain('報告12 ');
+    expect(text).not.toContain('報告01 ');
+
+    await pool.stop();
+  });
+});

@@ -16,7 +16,7 @@ import {
   reasonOf,
   runnerEventShape,
 } from './dropped-record.js';
-import { excerptLine, renderListing } from './excerpt.js';
+import { excerptLine, renderListing, renderListingFromEnd } from './excerpt.js';
 import {
   QUOTA_SESSION_WINDOW_KEY,
   QUOTA_STOP_MANAGER_IDS_KEY,
@@ -2238,7 +2238,12 @@ interface WithheldReportMemory {
   firstAt: string;
   /** `flushWithheldReports()` の期限判定はここを見る。 */
   lastAt: string;
-  lastText: string;
+  /**
+   * エピソード中に畳んだ全部の報告の冒頭（古い順）。**最後の1本だけを持たない**: 上書きすると、マージの報告のような
+   * 重要な本文が後続の畳んだ報告で消え、配る知らせに載らない。`'flush'` で `count` を0へ戻しても消さない
+   * （flush 後に積んだ分と並べて、次に配るときに一覧へ入れる）。配るときの字数は `renderWithheldExcerpts` が予算で締める。
+   */
+  excerpts: { at: string; line: string }[];
   breakdown: string;
   /** **`count`（積んだ報告の本数）とは別物で、1つに畳まない。** 前者は配り直しの話、後者は待ち時間の話で、読み手の次の一手が違う。 */
   taskCount: number;
@@ -2319,6 +2324,24 @@ export function resolveWithheldReportFlushMs(env: NodeJS.ProcessEnv = process.en
 }
 
 const WITHHELD_REPORT_EXCERPT = 240;
+
+/** 畳んだ報告の冒頭の一覧に使う字数の予算。件数では締めない（件数だけだと何件で溢れるかが運任せになる）。 */
+const WITHHELD_REPORT_LISTING_BUDGET = 1500;
+
+/**
+ * 畳んだ報告の冒頭を、時刻つきで1行ずつ並べる。予算を超えたら**新しい側を残し**、古い側が何本落ちたかを必ず書く
+ * （直近の報告ほど「次に何をするか」を持つので、`renderListingFromEnd` を選ぶ）。落ちた分の全文は日誌に在る。
+ */
+export function renderWithheldExcerpts(excerpts: readonly { at: string; line: string }[]): string {
+  return renderListingFromEnd(
+    excerpts.map((entry) => `- ${entry.at} ${entry.line}`),
+    {
+      budget: WITHHELD_REPORT_LISTING_BUDGET,
+      omitted: ({ rest }) =>
+        `（古い ${String(rest)} 本の冒頭は字数の予算で省いた。全文は日誌に在る（\`journal_read\`））`,
+    },
+  );
+}
 
 /**
  * `Pool` の帳面は真の private field で外から壊れた値を注入できないので、判定だけを外へ出してある。
@@ -9447,7 +9470,10 @@ class Pool implements ManagerPool {
       count: (existing?.count ?? 0) + 1,
       firstAt: existing?.firstAt ?? now,
       lastAt: now,
-      lastText: text,
+      excerpts: [
+        ...(existing?.excerpts ?? []),
+        { at: now, line: excerptLine(text, WITHHELD_REPORT_EXCERPT) },
+      ],
       breakdown: awaitingBackground.breakdown,
       // 在り高は足さず上書きする: `awaitingBackground.count` は runner がその回に見た在り高で増分ではなく、足すと二重に数える。
       taskCount: awaitingBackground.count,
@@ -9886,6 +9912,8 @@ class Pool implements ManagerPool {
         this.#withheldReports.set(managerId, {
           ...withheld,
           count: 0,
+          // 配った分の冒頭は空へ: 次に配るときに同じ行を重ねない（flush 後に積んだ分だけが次の一覧に入る）。
+          excerpts: [],
           flushedAt: new Date(this.#now()).toISOString(),
         });
       } else {
@@ -9893,15 +9921,12 @@ class Pool implements ManagerPool {
       }
       // `count === 0` のときは足さない: フラッシュ直後は在庫が `count: 0` で残っており、足すと「0 本配っていない」という嘘の1行が出る。
       if (withheld.count > 0) {
-        // `'flush'` は抜粋を付けない: 配られる中身は既に日誌に在るので再送する意味が無い。
-        const countNote =
+        // `'flush'` でも抜粋を付ける: 件数だけだと、マージの報告のような本文がクローンから見えないまま日誌にだけ残る。
+        outgoing =
           `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
           `${String(withheld.count)} 本配っていない（最初 ${withheld.firstAt} / ` +
-          `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read\`）。`;
-        outgoing =
-          withheldSuffixDetail === 'flush'
-            ? `${countNote}）`
-            : `${countNote}最後の1本の冒頭: ${excerptLine(withheld.lastText, WITHHELD_REPORT_EXCERPT)}）`;
+          `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read\`）。\n` +
+          `畳んだ報告の冒頭（古い順）:\n${renderWithheldExcerpts(withheld.excerpts)}\n）`;
       }
     }
     // 何を配ったかに関わらず帳面を消す: 次に同じ本文の知らせが来たら、また1件目として配る（`#flushSynthesizedNoticeFor` だけは直後に新しい署名で `set` し直す）。
@@ -10128,7 +10153,7 @@ class Pool implements ManagerPool {
     if (joined !== undefined && carried.count > 0) {
       joined.withheld = {
         count: carried.count,
-        lastExcerpt: excerptLine(carried.lastText, WITHHELD_REPORT_EXCERPT),
+        lastExcerpt: carried.excerpts.at(-1)?.line ?? '',
       };
     }
   }
