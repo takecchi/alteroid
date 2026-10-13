@@ -2192,6 +2192,27 @@ const CLASSIFIER_DENIAL_ASK_HEAD = '分類器が ';
 const PERMISSION_ASK_AFTER_ANSWER =
   '\n答えたあと: allow すれば、この呼び出しがそのまま通る（撃ち直しは要らない）。deny なら担い手へ拒否として返る。';
 
+/**
+ * 確認（`ask`）をクローンへ配る本文と描き方。届いたときと、再起動の引き取りで配り直すときの両方がここを通る。
+ *
+ * - `markup: 'none'` は `permission` のときだけ立てる: `summary` は道具の呼び出し引数の JSON ダンプで、バッククォートや `*` が入っていても Markdown ではなく、`commitments.tsx` が `<Markdown>` で描くと `<code>` に食われて字面から消える。
+ *   `runner.ts` 側で包まない: `<Markdown>` で描くのは1面だけで、残り5面は素テキストなので記号が増える。`runner` が文面を Markdown に変えたら黙って外れるので `runner-permission-summary-markup.test.ts` が固定している。
+ *   `question` でも立てない（モデルが書いた文章）。ただし `describeQuestions()` が `brief(input)` へ落ちた回は `kind` が同じ `'question'` のままで、この層には区別する材料が無く化けが残る。塞ぐなら `ask` イベントへ欄を足す（`runner-protocol.ts` の版ずれの窓が開く別作業）。
+ * - 配る本文にだけ答えたあとを足す（待ちと日誌の `summary` は runner の文のまま）: 分類器の拒否の確認（`toolu_…`）とは答えたあとが違うのに、本文から見分けられないため。
+ *   分類器の拒否の確認は runner が自分の本文で言っているので足さない。
+ */
+function askDeliveryOf(
+  kind: 'question' | 'permission',
+  summary: string,
+): { text: string; markup: TextMarkup | undefined } {
+  const markup: TextMarkup | undefined = kind === 'permission' ? 'none' : undefined;
+  const text =
+    kind === 'permission' && !summary.startsWith(CLASSIFIER_DENIAL_ASK_HEAD)
+      ? `${summary}${PERMISSION_ASK_AFTER_ANSWER}`
+      : summary;
+  return { text, markup };
+}
+
 const DENIAL_REPLY_ROUTE =
   '\n答え方: この拒否について「この1回だけ許可しますか」の確認（`requestId` は `toolu_…` の形）が別に届いていれば、' +
   'その `requestId` と `decision` を付けて `manager_send` で答える（allow しても自動では撃ち直されない）。' +
@@ -5961,7 +5982,10 @@ class Pool implements ManagerPool {
         // `#rememberTokenIdentity(job.id)` を呼ばない: 引き取っただけでセッションの env は古い世代の鍵のままなので、観測しただけの現役の世代を書くと本物の食い違いが「一致」に化ける。
         // 記録が無いままにする: 嘘の「一致」より、取れない軸に0の行を作らず正直に「材料が無い」を選ぶ。理由は `reattachedAcrossRestart` で名乗る。
         await this.#persist(record);
-        if (attached) this.#notifyRestored(record, 'attached');
+        if (attached) {
+          this.#notifyRestored(record, 'attached');
+          this.#redeliverWaitingAfterRestore(record);
+        }
         resumed.push(
           summaryOf(
             record,
@@ -8056,17 +8080,8 @@ class Pool implements ManagerPool {
           approvalId: event.requestId,
           managerId: event.managerId,
         });
-        // `markup: 'none'` は `permission` のときだけ立てる: `summary` は道具の呼び出し引数の JSON ダンプで、バッククォートや `*` が入っていても Markdown ではなく、`commitments.tsx` が `<Markdown>` で描くと `<code>` に食われて字面から消える。
-        // `runner.ts` 側で包まない: `<Markdown>` で描くのは1面だけで、残り5面は素テキストなので記号が増える。`runner` が文面を Markdown に変えたら黙って外れるので `runner-permission-summary-markup.test.ts` が固定している。
-        // `question` でも立てない（モデルが書いた文章）。ただし `describeQuestions()` が `brief(input)` へ落ちた回は `kind` が同じ `'question'` のままで、この層には区別する材料が無く化けが残る。塞ぐなら `ask` イベントへ欄を足す（`runner-protocol.ts` の版ずれの窓が開く別作業）。
-        const markup: TextMarkup | undefined = event.kind === 'permission' ? 'none' : undefined;
-        // 配る本文にだけ答えたあとを足す（待ちと日誌の `summary` は runner の文のまま）: 分類器の拒否の確認（`toolu_…`）とは答えたあとが違うのに、本文から見分けられないため。
-        // 分類器の拒否の確認は runner が自分の本文で言っているので足さない。
-        const delivered =
-          event.kind === 'permission' && !event.summary.startsWith(CLASSIFIER_DENIAL_ASK_HEAD)
-            ? `${event.summary}${PERMISSION_ASK_AFTER_ANSWER}`
-            : event.summary;
-        this.#emit(event.managerId, event.kind, delivered, event.requestId, markup);
+        const delivered = askDeliveryOf(event.kind, event.summary);
+        this.#emit(event.managerId, event.kind, delivered.text, event.requestId, delivered.markup);
         return;
       }
 
@@ -9669,6 +9684,28 @@ class Pool implements ManagerPool {
     const record: ManagerRecord = { job: { ...job }, waiting: [], attached: false };
     this.#records.set(managerId, record);
     return record;
+  }
+
+  /**
+   * 生きている runner へ引き取り直した委譲の返事待ちを、クローンへ配り直す。
+   *
+   * 前のデーモンは `ask` を受けて台帳へ書いてから受信箱へ投函するが、投函は書き込みを待たない。その間に落ちると、
+   * 確認はクローンへ届かないまま runner の中で待ち続ける。runner は `ask` を送り直さないので、引き取りの知らせが言う
+   * 「返事待ちがあれば改めて届く」を誰も果たさず、委譲が返事待ちのまま詰まる。
+   * runner の一覧に残っている確認は、まだ答えが runner へ届いていない確認なので、配り直して二重になっても
+   * クローンが同じ確認を2回見るだけで済む。届かないまま詰まるより安い。
+   * 配った id は覚える: 引き取りの後に runner が同じ id を送ってきても、もう一度は配らない。
+   */
+  #redeliverWaitingAfterRestore(record: ManagerRecord): void {
+    const asked = this.#askedOf(record);
+    for (const waiting of record.waiting) {
+      if (asked.has(waiting.requestId)) continue;
+      asked.set(waiting.requestId, true);
+      // 欠けた `kind`（旧 runner）は `question` として配る: `permission` に倒すと、答えたあとの断りを確かめられないまま足すことになるため
+      const kind = waiting.kind ?? 'question';
+      const delivered = askDeliveryOf(kind, waiting.summary);
+      this.#emit(record.job.id, kind, delivered.text, waiting.requestId, delivered.markup);
+    }
   }
 
   #notifyRestored(
