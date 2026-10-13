@@ -16,7 +16,7 @@ import {
   reasonOf,
   runnerEventShape,
 } from './dropped-record.js';
-import { excerptLine, renderListing, renderListingFromEnd } from './excerpt.js';
+import { excerptLine, fillListingBudget, renderListing } from './excerpt.js';
 import {
   QUOTA_SESSION_WINDOW_KEY,
   QUOTA_STOP_MANAGER_IDS_KEY,
@@ -2229,30 +2229,19 @@ interface UsageNoticeMemory {
 }
 
 /**
- * **在庫（in-memory）であって記録ではない。** デーモンが再起動すると消えるが、`case 'report'` が積む前に必ず
- * `type: 'decision'` の日誌を1件書くので日誌の側は残る。
+ * 正はこのプロセス内の在庫で、書き換えるたびに台帳（`Job.withheldReports`）へ写す（`#setWithheld`）。
+ * 写さないとデーモンの再起動（夜の反映）で件数も冒頭も消え、配る前だった報告がクローンに一度も届かない（#4626）。
+ * `restore()` が台帳の写しから組み直す。全文は `case 'report'` が積む前に書く日誌の `exchange` に在る。
  */
-interface WithheldReportMemory {
-  /** 次の本物の報告・`flushWithheldReports()`・`closed` で配って0へ戻る。 */
-  count: number;
-  firstAt: string;
-  /** `flushWithheldReports()` の期限判定はここを見る。 */
-  lastAt: string;
-  /**
-   * エピソード中に畳んだ全部の報告の冒頭（古い順）。**最後の1本だけを持たない**: 上書きすると、マージの報告のような
-   * 重要な本文が後続の畳んだ報告で消え、配る知らせに載らない。`'flush'` で配った分は `count` と一緒に空へ戻す
-   * （次に配るときに同じ行を重ねず、flush 後に積んだ分だけを一覧へ入れる）。配るときの字数は `renderWithheldExcerpts` が予算で締める。
-   */
-  excerpts: { at: string; line: string }[];
-  breakdown: string;
-  /** **`count`（積んだ報告の本数）とは別物で、1つに畳まない。** 前者は配り直しの話、後者は待ち時間の話で、読み手の次の一手が違う。 */
-  taskCount: number;
-  /**
-   * 経過時間の出所にしない（いつから待っているかは `firstAt` だけが持つ）。
-   * `#withholdBackgroundReport` はこの欄を持ち越す: 持ち越さないと印が消えて「エピソードにつき1本だけ」が壊れる。
-   */
-  flushedAt?: string;
-}
+type WithheldReportMemory = NonNullable<Job['withheldReports']>;
+
+// 欄の意味は型の正（`schema.ts` の `jobSchema.withheldReports`）とここで二重に持たない。各欄の約束:
+// - `count`: 次の本物の報告・`flushWithheldReports()`・`closed` で配って0へ戻る。
+// - `lastAt`: `flushWithheldReports()` の期限判定はここを見る。
+// - `excerpts`: エピソード中に畳んだ報告の冒頭（古い順）。**最後の1本だけを持たない**: 上書きすると、マージの報告のような重要な本文が後続の畳んだ報告で消える。
+//   `'flush'` で配った分は `count` と一緒に空へ戻す。積むときに配るときと同じ予算の内へ詰める（`trimWithheldExcerpts`）。
+// - `taskCount`: **`count`（積んだ報告の本数）とは別物で、1つに畳まない。** 前者は配り直しの話、後者は待ち時間の話で、読み手の次の一手が違う。
+// - `flushedAt`: 経過時間の出所にしない（いつから待っているかは `firstAt` だけが持つ）。`#withholdBackgroundReport` はこの欄を持ち越す: 持ち越さないと印が消えて「エピソードにつき1本だけ」が壊れる。
 
 /**
  * **なぜ30分か。** 背景処理は `pnpm test` で4分・作業者の委譲で10分規模が普通にある。
@@ -2328,19 +2317,43 @@ const WITHHELD_REPORT_EXCERPT = 240;
 /** 畳んだ報告の冒頭の一覧に使う字数の予算。件数では締めない（件数だけだと何件で溢れるかが運任せになる）。 */
 const WITHHELD_REPORT_LISTING_BUDGET = 1500;
 
+function withheldExcerptItem(entry: { at: string; line: string }): string {
+  return `- ${entry.at} ${entry.line}`;
+}
+
 /**
  * 畳んだ報告の冒頭を、時刻つきで1行ずつ並べる。予算を超えたら**新しい側を残し**、古い側が何本落ちたかを必ず書く
- * （直近の報告ほど「次に何をするか」を持つので、`renderListingFromEnd` を選ぶ）。落ちた分の全文は日誌に在る。
+ * （直近の報告ほど「次に何をするか」を持つので、末尾から詰める）。落ちた分の全文は日誌に在る。
+ * `total` は畳んだ本数（`count`）: 在庫は台帳に写すために予算の内へ詰めてあり、詰めて落とした分は `excerpts` に無いので、本数は件数から数える。
  */
-export function renderWithheldExcerpts(excerpts: readonly { at: string; line: string }[]): string {
-  return renderListingFromEnd(
-    excerpts.map((entry) => `- ${entry.at} ${entry.line}`),
-    {
-      budget: WITHHELD_REPORT_LISTING_BUDGET,
-      omitted: ({ rest }) =>
-        `（古い ${String(rest)} 本の冒頭は字数の予算で省いた。全文は日誌に在る（\`journal_read\`））`,
-    },
+export function renderWithheldExcerpts(
+  excerpts: readonly { at: string; line: string }[],
+  total: number = excerpts.length,
+): string {
+  const { lines, shown } = fillListingBudget(
+    excerpts.map(withheldExcerptItem),
+    WITHHELD_REPORT_LISTING_BUDGET,
+    true,
   );
+  const omitted = Math.max(0, total - shown);
+  if (omitted > 0) {
+    lines.unshift(
+      `（古い ${String(omitted)} 本の冒頭は字数の予算で省いた。全文は日誌に在る（\`journal_read\`））`,
+    );
+  }
+  return lines.join('\n');
+}
+
+// 配るときに予算から溢れる古い冒頭は、積む時点で落とす: 台帳の写し（`Job.withheldReports`）がエピソードの長さに比例して育たないため
+function trimWithheldExcerpts(
+  excerpts: readonly { at: string; line: string }[],
+): { at: string; line: string }[] {
+  const { shown } = fillListingBudget(
+    excerpts.map(withheldExcerptItem),
+    WITHHELD_REPORT_LISTING_BUDGET,
+    true,
+  );
+  return excerpts.slice(excerpts.length - shown);
 }
 
 /**
@@ -5786,10 +5799,21 @@ class Pool implements ManagerPool {
       finished = resolve;
     });
     try {
-      return await this.#restoreJobs();
+      const restored = await this.#restoreJobs();
+      this.#rebuildWithheldFromLedger();
+      return restored;
     } finally {
       this.#restoring = null;
       finished();
+    }
+  }
+
+  // 引き取った委譲の台帳の写しから、畳んだ報告の在庫を組み直す（#4626）。プロセス内に既に在る在庫は上書きしない: そちらが新しい
+  #rebuildWithheldFromLedger(): void {
+    for (const [managerId, record] of this.#records) {
+      const copy = record.job.withheldReports;
+      if (copy === undefined || this.#withheldReports.has(managerId)) continue;
+      this.#withheldReports.set(managerId, copy);
     }
   }
 
@@ -8960,7 +8984,7 @@ class Pool implements ManagerPool {
             // 担当の合流窓が開いている（同じ落ち方の `turn_failed` / `closed_failed` が居る）ときは、`#emit()` せず窓へ積んで1通にする: `#emit()` は全窓を閉じて先に断片だけを配るので、この1通が別に届く。窓は開けない・延ばさない（開いていなければ下の `#emit()` で今までどおりすぐ配る）。
             // 在庫は `#retire()` が消すので、窓の flush（`#deliver`）が運べるよう先に移す。移した分は `#retire()` の「握り潰したまま終わった」の stderr にも出ない（配るので捨てていない）。枠の印（`quota`）は下で `closed_failed` から受け継ぐ（枠で落ちた回だけ）。印の無い回は付けず、印の無い断片が混ざった束は担当ごとに配られる。
             this.#withheldCarriedToWindow.set(event.managerId, withheldAtClose);
-            this.#withheldReports.delete(event.managerId);
+            this.#setWithheld(event.managerId, undefined);
             // 枠で落ちた回（同じ `closed` で積んだ `closed_failed` に枠の印がある）だけ、その印（トークンの鍵ごと）を受け継ぐ: 束が「枠だけ」のままになり、プール窓の一覧に入る。印の無い回は付けない。
             const inheritedQuota = this.#synthesizedNotices
               .get(event.managerId)
@@ -9481,20 +9505,36 @@ class Pool implements ManagerPool {
   ): void {
     const now = new Date(this.#now()).toISOString();
     const existing = this.#withheldReports.get(managerId);
-    this.#withheldReports.set(managerId, {
+    this.#setWithheld(managerId, {
       count: (existing?.count ?? 0) + 1,
       firstAt: existing?.firstAt ?? now,
       lastAt: now,
-      excerpts: [
+      excerpts: trimWithheldExcerpts([
         ...(existing?.excerpts ?? []),
         { at: now, line: excerptLine(text, WITHHELD_REPORT_EXCERPT) },
-      ],
+      ]),
       breakdown: awaitingBackground.breakdown,
       // 在り高は足さず上書きする: `awaitingBackground.count` は runner がその回に見た在り高で増分ではなく、足すと二重に数える。
       taskCount: awaitingBackground.count,
       // `flushedAt` は持ち越す: オブジェクトを作り直すので、落とすと `flushWithheldReports()` の「エピソードにつき1本だけ」が壊れる。
       ...(existing?.flushedAt === undefined ? {} : { flushedAt: existing.flushedAt }),
     });
+  }
+
+  // 在庫を書き換えるのはここだけにする: 台帳の写し（`Job.withheldReports`）を書き忘れる経路を作らないため（#4626）
+  // 書き込みを待たない: 呼び手（`#deliver` など）は同期で、台帳が書けなくても配る・畳むは止めない（`#persist` が失敗の跡を残す）
+  #setWithheld(managerId: string, memory: WithheldReportMemory | undefined): void {
+    if (memory === undefined) this.#withheldReports.delete(managerId);
+    else this.#withheldReports.set(managerId, memory);
+    const record = this.#records.get(managerId);
+    if (record === undefined) return;
+    if (memory === undefined) {
+      if (record.job.withheldReports === undefined) return;
+      delete record.job.withheldReports;
+    } else {
+      record.job.withheldReports = memory;
+    }
+    void this.#persist(record);
   }
 
   // `WithheldReportMemory` をそのまま外へ出さない: `lastText` は報告の本文そのもので、一覧に全文を載せない（`listing-and-detail`）。
@@ -9916,7 +9956,7 @@ class Pool implements ManagerPool {
     // 窓へ移した在庫（`closed` が積んだ分）は、この配りで運んで消す。普通の在庫が在れば（窓の後に積み直されることは無いが）そちらを先にする。
     const carried = this.#withheldCarriedToWindow.get(managerId);
     if (carried !== undefined && this.#withheldReports.get(managerId) === undefined) {
-      this.#withheldReports.set(managerId, carried);
+      this.#setWithheld(managerId, carried);
     }
     this.#withheldCarriedToWindow.delete(managerId);
     const withheld = this.#withheldReports.get(managerId);
@@ -9924,7 +9964,7 @@ class Pool implements ManagerPool {
     if (withheld !== undefined) {
       // `'flush'` は在庫を `delete` しない: `firstAt` が失われ、次に積んだ回が新しいエピソードとして数え直され、`flushWithheldReports()` が何度でも合図を立て直せてしまう。
       if (withheldSuffixDetail === 'flush') {
-        this.#withheldReports.set(managerId, {
+        this.#setWithheld(managerId, {
           ...withheld,
           count: 0,
           // 配った分の冒頭は空へ: 次に配るときに同じ行を重ねない（flush 後に積んだ分だけが次の一覧に入る）。
@@ -9932,7 +9972,7 @@ class Pool implements ManagerPool {
           flushedAt: new Date(this.#now()).toISOString(),
         });
       } else {
-        this.#withheldReports.delete(managerId);
+        this.#setWithheld(managerId, undefined);
       }
       // `count === 0` のときは足さない: フラッシュ直後は在庫が `count: 0` で残っており、足すと「0 本配っていない」という嘘の1行が出る。
       if (withheld.count > 0) {
@@ -9941,7 +9981,7 @@ class Pool implements ManagerPool {
           `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
           `${String(withheld.count)} 本配っていない（最初 ${withheld.firstAt} / ` +
           `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read\`）。\n` +
-          `畳んだ報告の冒頭（古い順）:\n${renderWithheldExcerpts(withheld.excerpts)}\n）`;
+          `畳んだ報告の冒頭（古い順）:\n${renderWithheldExcerpts(withheld.excerpts, withheld.count)}\n）`;
       }
     }
     // 何を配ったかに関わらず帳面を消す: 次に同じ本文の知らせが来たら、また1件目として配る（`#flushSynthesizedNoticeFor` だけは直後に新しい署名で `set` し直す）。
@@ -10325,6 +10365,12 @@ class Pool implements ManagerPool {
   // 「上限で古いものを捨てる」にしない。上限を持たせると、走行中のマネージャーが増えただけで無関係な1本が押し出される形になりうる（north_star 禁止2）。
   // 契機は終端という状態遷移だけにする。
   #retire(managerId: string): void {
+    // 像を外す前に台帳の写しを下ろす: 外した後は `#setWithheld` が像を引けず、終えた委譲の台帳に古い在庫が残って次の `restore()` が組み直すため
+    const retiringRecord = this.#records.get(managerId);
+    if (retiringRecord?.job.withheldReports !== undefined) {
+      delete retiringRecord.job.withheldReports;
+      void this.#persist(retiringRecord);
+    }
     this.#records.delete(managerId);
     // 握り潰した報告を静かに畳んでよい理由は、全文が日誌の `type: 'exchange'` に残っているから（`decision` 側は冒頭抜粋だけ）。
     // 受信箱へ流して起こすのは `abort()` の「止めた後は回さない」を覆すので流さず、握り潰したまま終わった事実だけを stderr へ残す。

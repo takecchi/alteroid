@@ -1253,6 +1253,19 @@ export const jobSchema = z.object({
       at: isoDateTime,
     })
     .optional(),
+  // 台帳に持つ: 背景処理の完了待ちで畳んだ報告の在庫をプロセス内にだけ置くと、配る前にデーモンが再起動（夜の反映）したとき件数も冒頭も消え、クローンに一度も届かないため（#4626）
+  // 正はプロセス内の在庫（`manager.ts` の `WithheldReportMemory`）で、これはその写し。`restore()` が読み戻す。`excerpts` は配るときと同じ字数の予算の内に詰めてある
+  withheldReports: z
+    .object({
+      count: z.number().int().nonnegative(),
+      firstAt: isoDateTime,
+      lastAt: isoDateTime,
+      excerpts: z.array(z.object({ at: isoDateTime, line: z.string() })),
+      breakdown: z.string(),
+      taskCount: z.number().int().nonnegative(),
+      flushedAt: isoDateTime.optional(),
+    })
+    .optional(),
 });
 
 export type Job = z.infer<typeof jobSchema>;
