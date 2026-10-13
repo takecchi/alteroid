@@ -5169,8 +5169,7 @@ class Pool implements ManagerPool {
     // `removed` / `missing` は「探る本文が無い」として扱う: tombstone の事実を助言に反映する意味は無い。
     let transcript: string | null;
     try {
-      const result = await this.transcript(record.job.id);
-      transcript = result.kind === 'body' ? result.body : null;
+      transcript = await this.#probeTranscriptOf(record);
     } catch {
       transcript = null;
     }
@@ -5210,6 +5209,32 @@ class Pool implements ManagerPool {
       record.toolUseStallAt = stall.timestamp;
     }
     record.toolUseStallPending = stall.pending;
+  }
+
+  /**
+   * 見回りの判定に渡す生ログ。判定（`probeTurnEnd` / `probeToolUseStall`）は末尾の `TURN_END_PROBE_CHARS` 文字しか読まないので、末尾だけを取る（#4628）。
+   * `transcript()` を使わない: あちらは人間・クローンが全文を読む口で、runner の全文・退避の全文・預かりの全件の直列化をデーモンのループの上で行い、60秒ごとに静かな委譲の本数ぶん回すとループを塞ぐ（#4485）。
+   * 上限に同じ数を渡す: `readTail` は本文が長ければ上限を厳密に上回る量を返す契約で、判定はその先頭の欠けた1行を捨てる。
+   * 末尾の口が無い構成（fs）だけ、いままでどおり runner の全文に落とす。
+   */
+  async #probeTranscriptOf(record: ManagerRecord): Promise<string | null> {
+    const job = record.job;
+    const sessionTail = this.#stores.sessionTranscriptTail;
+    if (sessionTail !== undefined && job.projectKey !== undefined && job.sessionId !== undefined) {
+      const tail = await sessionTail.readTail(
+        { projectKey: job.projectKey, sessionId: job.sessionId },
+        TURN_END_PROBE_CHARS,
+      );
+      if (tail !== null && tail.length > 0) return tail;
+    }
+    const runner = await this.#runnerOf(record);
+    const live = await runner?.transcript(job.id).catch(() => null);
+    if (live !== null && live !== undefined && live.length > 0) return live;
+    for (const id of [...(job.archiveIds ?? [])].reverse()) {
+      const result = await this.#stores.archive.readTail(id, TURN_END_PROBE_CHARS);
+      if (result.kind === 'body') return result.body;
+    }
+    return null;
   }
 
   /** runner ごと作り直されていたら実際に resume する: 「話しかけられるまで止めておく」は人間の不在で仕事が止まらないという要件に反する。 */
