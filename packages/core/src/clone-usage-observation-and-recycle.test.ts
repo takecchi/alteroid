@@ -803,6 +803,8 @@ describe('作り直しで入力を閉じた古いセッションが終わりき�
 
     speak(clone, 'evt-reopen-1', '1つ目の発言', 'conv-first');
     await waitFor(() => sessions.length > 0, '1本目が開くこと');
+    // 省略可能な口を `?.` で呼ばない: 口が無い回に黙って開き直しを飛ばし、測っていないのに緑になるため
+    if (clone.reopenSession === undefined) throw new Error('reopenSession の口が無い');
     await clone.reopenSession({ reason: '試験', distill: false, actor: 'テスト' });
     speak(clone, 'evt-reopen-2', '開き直しの後の発言', 'conv-second');
 
