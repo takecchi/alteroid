@@ -73,7 +73,8 @@ async function startFakePg(options: { silent?: boolean } = {}): Promise<FakePg> 
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
-  if (address === null || typeof address === 'string') throw new Error('偽のサーバーの番地が取れない');
+  if (address === null || typeof address === 'string')
+    throw new Error('偽のサーバーの番地が取れない');
   return {
     url: `postgres://u:p@127.0.0.1:${String(address.port)}/db`,
     connections: () => connections,
@@ -131,9 +132,7 @@ describe('PostgreSQL の問い合わせと接続に期限を付ける（#4655）
 
   it('withPgQueryTimeout の中では期限が延びる', async () => {
     const { pool, events } = await setup();
-    await expect(
-      withPgQueryTimeout(1_000, () => pool.query('select slow')),
-    ).resolves.toBeDefined();
+    await expect(withPgQueryTimeout(1_000, () => pool.query('select slow'))).resolves.toBeDefined();
     expect(events).toEqual([]);
     // 外では既定の期限のまま
     await expect(pool.query('select slow')).rejects.toBeInstanceOf(PgTimeoutError);
@@ -144,9 +143,7 @@ describe('PostgreSQL の問い合わせと接続に期限を付ける（#4655）
     const held = await pool.connect();
     // 延ばした文脈の外で返す: 空きを待っていた問い合わせは、返した側の文脈で打たれる
     setTimeout(() => held.release(), 20);
-    await expect(
-      withPgQueryTimeout(1_000, () => pool.query('select slow')),
-    ).resolves.toBeDefined();
+    await expect(withPgQueryTimeout(1_000, () => pool.query('select slow'))).resolves.toBeDefined();
     expect(events).toEqual([]);
   });
 
