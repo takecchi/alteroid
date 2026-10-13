@@ -596,9 +596,31 @@
                             }
                           },
                           "required": ["human", "clone", "manager", "integration", "unknown"]
+                        },
+                        "byIntegrationKey": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "count": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "totalBytes": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": ["count", "totalBytes"]
+                          }
                         }
                       },
-                      "required": ["count", "totalBytes", "byFrom"]
+                      "required": ["count", "totalBytes", "byFrom", "byIntegrationKey"]
                     }
                   },
                   "required": ["items", "usage"]

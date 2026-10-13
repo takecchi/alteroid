@@ -22,6 +22,7 @@ import type {
   StoredMcpServers,
   Exchange,
   GrantResult,
+  InboxEvent,
   JobStatus,
   JournalEntry,
   JournalEntryInput,
