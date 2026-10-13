@@ -1919,9 +1919,9 @@ interface ManagerRecord {
   /**
    * 再起動の引き取りの後、見回りの1回目で「配られていない報告」を確かめる印（#4644）。**プロセス内の像にしか置かない**。
    * 前のデーモンが受け取ったまま処理し終えずに落ちた `report` は、作り直したデーモンへ二度と届かない（SSE の控えを引く連番を持たないため）。
-   * 1回確かめたら下ろす: 引き取った後の普通のターンの終わりまで「拾い直し」として配らないため。`since` は引き取った時刻（ミリ秒）。
+   * 1回確かめたら下ろす: 引き取った後の普通のターンの終わりまで「拾い直し」として配らないため。
    */
-  reportCheckAfterRestore?: { readonly since: number };
+  reportCheckAfterRestore?: true;
   /**
    * `abort()` が止めたと確かめた回だけ立てる（`not_stopped` / `unknown` では立てない: 確かめていない停止を確定させない）。
    * `abort()` の後に `send()` の resume が成功する順序は、台帳の読み直しでは間に合わない（resume は実 I/O）。
@@ -1948,13 +1948,6 @@ const TURN_END_TAIL_EXCERPT = 400;
  * 通っても「症状である」とは言わない（`probeTurnEnd` が改めて計算する）。
  */
 const TURN_END_PROBE_QUIET_MS = 10 * 60_000;
-
-/**
- * 再起動の引き取りから、配られていない報告を比べ始めるまでの間（#4644）。runner がまだ送っていなかった出来事は
- * つなぎ直してすぐ流れ、`report` の台帳の書き込み（`lastReportAt`）は自分の添付の取り寄せより前に済むので、数分あれば届く分はたいてい届き終える。
- * 前の報告の添付の取り寄せ（報告の門）でこれより長く待たされた回は、同じ報告を拾い直しとしても配りうる（二重で済み、落とすよりよい）。
- */
-const REPORT_CHECK_AFTER_RESTORE_DELAY_MS = 5 * 60_000;
 
 const TURN_END_PROBE_BACKOFF_MS = 60_000;
 
@@ -5256,14 +5249,13 @@ class Pool implements ManagerPool {
    *
    * 前のデーモンが `report` を受け取ったまま処理し終えずに落ちると（OOM・SIGKILL・停止の締切超え）、作り直したデーモンには
    * 二度と届かず、担当は報告を出して待っているのにクローンは知らないまま止まる。普通の停止は `stop()` が処理中を待ち切るので、ここへは来ない。
-   * 引き取りの直後には確かめない（`REPORT_CHECK_AFTER_RESTORE_DELAY_MS` まで印を持ち越す）: runner がまだ送っていなかった `report` は
-   * つなぎ直した後に普通に届き、見回りは起動の直後にも1回走るので、その前に比べると届く途中の報告を二重に配るため。
+   * 引き取りの直後には比べない: runner がまだ送っていなかった `report` は、つなぎ直した後に普通に届くため。待つのは見回りの静けさの門
+   * （`TURN_END_PROBE_QUIET_MS`）に任せる。引き取りは台帳を書き直す（`updatedAt` が進む）ので、1回目の見回りはその10分後になり、
+   * 届く分は届き終えている。前の報告の添付の取り寄せ（報告の門）でそれより長く待たされた回だけは、同じ報告を拾い直しとしても配りうる（二重で済み、落とすよりよい）。
    * 戻るのは報告の末尾だけで、添付は結ばれない（runner の一覧も生ログも、取り寄せる添付の目録を持たないため）。
    */
   #settleReportCheckAfterRestore(record: ManagerRecord): void {
-    const pending = record.reportCheckAfterRestore;
-    if (pending === undefined) return;
-    if (this.#now() - pending.since < REPORT_CHECK_AFTER_RESTORE_DELAY_MS) return;
+    if (record.reportCheckAfterRestore !== true) return;
     delete record.reportCheckAfterRestore;
     const managerId = record.job.id;
     // 背景処理の完了待ちで畳んだ報告は、まとめ配り（`flushWithheldReports`）が配る
@@ -6031,9 +6023,7 @@ class Pool implements ManagerPool {
           attached,
           reattachedAcrossRestart: true,
           // `running` だけ: `waiting_human` は確認を待っていてターンを終えておらず、配り直しは `#redeliverWaitingAfterRestore` が持つ
-          ...(living.state.status === 'running'
-            ? { reportCheckAfterRestore: { since: this.#now() } }
-            : {}),
+          ...(living.state.status === 'running' ? { reportCheckAfterRestore: true as const } : {}),
         };
         this.#records.set(job.id, record);
         // `#rememberTokenIdentity(job.id)` を呼ばない: 引き取っただけでセッションの env は古い世代の鍵のままなので、観測しただけの現役の世代を書くと本物の食い違いが「一致」に化ける。
