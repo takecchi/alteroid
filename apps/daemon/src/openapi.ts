@@ -98,6 +98,8 @@ export const attachmentUsageSchema = attachmentUsageBucketSchema.extend({
     integration: attachmentUsageBucketSchema,
     unknown: attachmentUsageBucketSchema,
   }),
+  // 鍵の id → 期限内の件数と合計。上げたことの無い鍵は載らない（#4005）
+  byIntegrationKey: z.record(z.string(), attachmentUsageBucketSchema),
 });
 
 export const attachmentListQuery = z.object({

@@ -20,6 +20,7 @@ import {
   emptyAttachmentUsage,
   encodeAttachmentCursor,
   hasNul,
+  integrationKeyIdOfUploader,
   prepareAttachment,
   readAttachmentLimits,
   reasonOf,
@@ -652,6 +653,24 @@ export class PgAttachmentStore implements AttachmentStore {
       bucket.totalBytes = toNumber(row.totalBytes);
       usage.count += bucket.count;
       usage.totalBytes += bucket.totalBytes;
+    }
+    // 鍵ごとの内訳は連携の鍵の行だけを束ねる: 出所の区分（上の集計）と同じ期限内の行を、鍵の id の分け方は core の integrationKeyIdOfUploader に揃える（#4005）
+    const byUploader = await this.#db
+      .select({
+        uploadedBy: attachments.uploadedBy,
+        count: sql<number | string>`count(*)`,
+        totalBytes: sql<number | string>`coalesce(sum(${attachments.size}), 0)`,
+      })
+      .from(attachments)
+      .where(and(this.#notExpired(), like(attachments.uploadedBy, 'integration:%')))
+      .groupBy(attachments.uploadedBy);
+    for (const row of byUploader) {
+      const keyId = integrationKeyIdOfUploader(row.uploadedBy ?? undefined);
+      if (keyId === undefined) continue;
+      usage.byIntegrationKey[keyId] = {
+        count: toNumber(row.count),
+        totalBytes: toNumber(row.totalBytes),
+      };
     }
     return usage;
   }

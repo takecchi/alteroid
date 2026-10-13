@@ -152,12 +152,29 @@ export interface AttachmentUsageBucket {
 
 export interface AttachmentUsage extends AttachmentUsageBucket {
   readonly byFrom: Readonly<Record<AttachmentFromClass, AttachmentUsageBucket>>;
+  /**
+   * 連携の鍵ごとの内訳（鍵の id → 期限内の件数と合計）。上げたことの無い鍵は載らない。
+   * 出所の区分（`byFrom.integration`）だけだと、どの鍵が増やしているかが見えず、枠を置くかを決め直せないため（#4005）。
+   */
+  readonly byIntegrationKey: Readonly<Record<string, AttachmentUsageBucket>>;
+}
+
+const INTEGRATION_UPLOADER_PREFIX = 'integration:';
+
+/** `uploadedBy` が連携の鍵なら、その鍵の id を返す（`integration:<keyId>`）。 */
+export function integrationKeyIdOfUploader(uploadedBy: string | undefined): string | undefined {
+  if (uploadedBy === undefined || !uploadedBy.startsWith(INTEGRATION_UPLOADER_PREFIX)) {
+    return undefined;
+  }
+  const keyId = uploadedBy.slice(INTEGRATION_UPLOADER_PREFIX.length);
+  return keyId.length === 0 ? undefined : keyId;
 }
 
 export function emptyAttachmentUsage(): {
   count: number;
   totalBytes: number;
   byFrom: Record<AttachmentFromClass, { count: number; totalBytes: number }>;
+  byIntegrationKey: Record<string, { count: number; totalBytes: number }>;
 } {
   return {
     count: 0,
@@ -165,6 +182,7 @@ export function emptyAttachmentUsage(): {
     byFrom: Object.fromEntries(
       ATTACHMENT_FROM_CLASSES.map((from) => [from, { count: 0, totalBytes: 0 }]),
     ) as Record<AttachmentFromClass, { count: number; totalBytes: number }>,
+    byIntegrationKey: {},
   };
 }
 
@@ -246,6 +264,12 @@ export function addToAttachmentUsage(
   bucket.totalBytes += meta.size;
   usage.count += 1;
   usage.totalBytes += meta.size;
+  const keyId = integrationKeyIdOfUploader(meta.uploadedBy);
+  if (keyId !== undefined) {
+    const byKey = (usage.byIntegrationKey[keyId] ??= { count: 0, totalBytes: 0 });
+    byKey.count += 1;
+    byKey.totalBytes += meta.size;
+  }
 }
 
 const MIB = 1024 * 1024;

@@ -62,6 +62,7 @@ import {
   mcpServersVersionOf,
   RESERVED_SCHEDULE_KINDS,
   isReservedEventSource,
+  DAEMON_ATTACHMENT_USAGE_SOURCE,
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
   ARCHIVE_REMOVE_MANY_LIMIT_MAX,
@@ -1105,6 +1106,55 @@ async function appendJournalOrDrop(
     noteDroppedRecord(what, detail, error);
     return undefined;
   }
+}
+
+/** 連携の鍵1本あたりの、期限内の添付の預かりがこれを越えたら知らせる（#4005。オーナーの判断で 1GiB から始める）。 */
+export const INTEGRATION_ATTACHMENT_NOTICE_BYTES = 1024 * 1024 * 1024;
+
+/**
+ * 連携の鍵が上げた添付で、その鍵の預かり（期限内）が閾値を越えたら、日誌とクローンへ1回知らせる（#4005）。
+ * 断らない: 枠を置かないのがオーナーの決定で、これは決め直すための材料と契機である。
+ * 状態を持たず「この1件で越えたか」だけを見る（上げる前は閾値未満・上げた後は閾値以上）: 越えるのは一度きりで、デーモンの再起動をまたいでも二度鳴らないため。
+ * 掃除で下がってからもう一度越えれば、もう一度鳴る。
+ */
+async function noteIntegrationAttachmentUsage(
+  stores: Stores,
+  post: (event: InboxEvent) => void,
+  keyId: string,
+  addedBytes: number,
+): Promise<void> {
+  let total: number;
+  try {
+    total = (await stores.attachments.usage()).byIntegrationKey[keyId]?.totalBytes ?? 0;
+  } catch (error) {
+    noteDroppedRecord('連携の鍵の添付の使用量', `keyId=${keyId}`, error);
+    return;
+  }
+  const before = total - addedBytes;
+  if (!(before < INTEGRATION_ATTACHMENT_NOTICE_BYTES && total >= INTEGRATION_ATTACHMENT_NOTICE_BYTES)) {
+    return;
+  }
+  const text =
+    `連携の鍵 ${keyId} が上げた添付の預かり（期限内）が ${String(total)} バイトになり、` +
+    `閾値 ${String(INTEGRATION_ATTACHMENT_NOTICE_BYTES)} バイトを越えた。上げることは断っていない。` +
+    '鍵ごとの内訳は GET /attachments の usage.byIntegrationKey で見られる。止めるなら、その鍵を失効させる。';
+  await appendJournalOrDrop(
+    stores,
+    {
+      type: 'decision',
+      decision: text,
+      grounds: `keyId=${keyId} totalBytes=${String(total)} threshold=${String(INTEGRATION_ATTACHMENT_NOTICE_BYTES)}（#4005）`,
+    },
+    '連携の鍵の添付の閾値の知らせ',
+    `keyId=${keyId}`,
+  );
+  post({
+    type: 'external',
+    id: randomUUID(),
+    at: new Date().toISOString(),
+    source: DAEMON_ATTACHMENT_USAGE_SOURCE,
+    payload: { text, keyId, totalBytes: total },
+  });
 }
 
 function journalWriteFailedBody(): { error: string; code: typeof JOURNAL_WRITE_FAILED_CODE } {
@@ -2244,6 +2294,15 @@ export function createApp(deps: AppDeps) {
             ...(keep === true ? { kept: true } : {}),
             uploadedBy: uploaderOf(c.get('principal')),
           });
+          if (principal.kind === 'integration') {
+            // 応答を待たせない: 知らせは上げた結果を変えず、使用量の集計の時間を鍵の呼び手へ負わせないため
+            void noteIntegrationAttachmentUsage(
+              stores,
+              (event) => clone.post(event),
+              principal.keyId,
+              meta.size,
+            );
+          }
           return c.json(meta, 200);
         } catch (error) {
           if (error instanceof AttachmentRejectedError) {

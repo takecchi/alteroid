@@ -5,9 +5,13 @@ export const DAEMON_TOKEN_POOL_REOPENED_SOURCE = 'token-pool';
 
 export const DAEMON_RUNNER_REGISTRY_SOURCE = 'runner-registry';
 
+/** 連携の鍵の添付の預かりが閾値を越えた知らせ（#4005）。外の鍵がこの名を騙れないよう予約する。 */
+export const DAEMON_ATTACHMENT_USAGE_SOURCE = 'attachment-usage';
+
 export const DAEMON_RESERVED_EVENT_SOURCES = [
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   DAEMON_RUNNER_REGISTRY_SOURCE,
+  DAEMON_ATTACHMENT_USAGE_SOURCE,
 ] as const;
 
 // 生の完全一致で比べない: `Token-Pool` や全角の綴りがすり抜けるため
