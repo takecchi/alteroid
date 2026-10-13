@@ -643,8 +643,14 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
 
 describe('作り直しで入力を閉じた古いセッションが終わりきる前に、次の合図のターンが来ても落とさない', () => {
   // 入力が閉じてから CLI が終わるまでに時間がかかる SDK: 本物では子プロセスの終了を待つ間に当たる
-  function slowCloseSdk(turnDelayMs: number, closeDelayMs: number) {
+  // `tooLongTurns` に入れた通し番号のターン（全セッション通しで1から）は「Prompt is too long」で返す: 文脈窓で畳む経路を通すため
+  function slowCloseSdk(
+    turnDelayMs: number,
+    closeDelayMs: number,
+    tooLongTurns: ReadonlySet<number> = new Set(),
+  ) {
     const sessions: { inputs: string[] }[] = [];
+    let turnCount = 0;
     const fn = ((params: { prompt: unknown; options?: Options }) => {
       const session = { inputs: [] as string[] };
       sessions.push(session);
@@ -672,10 +678,13 @@ describe('作り直しで入力を閉じた古いセッションが終わりき�
           }
           session.inputs.push(String(current.value.message.content));
           await new Promise((resolve) => setTimeout(resolve, turnDelayMs));
+          turnCount += 1;
+          const tooLong = tooLongTurns.has(turnCount);
           yield {
             type: 'result',
             subtype: 'success',
-            result: 'わかった',
+            result: tooLong ? 'Prompt is too long' : 'わかった',
+            ...(tooLong ? { is_error: true } : {}),
             session_id: label,
             uuid: `uuid-result-${label}-${String(n)}`,
           } as unknown as SDKMessage;
@@ -731,5 +740,81 @@ describe('作り直しで入力を閉じた古いセッションが終わりき�
     expect(second).toContain('done');
     expect(sessions).toHaveLength(2);
     expect(sessions[1]?.inputs.some((text) => text.includes('2つ目の発言'))).toBe(true);
+  });
+
+  function slowCloseClone(fn: typeof sdkQuery) {
+    return createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+  }
+
+  function speak(clone: ReturnType<typeof createClone>, id: string, text: string, conv: string) {
+    clone.post({
+      type: 'human_message',
+      id,
+      at: new Date().toISOString(),
+      text,
+      conversationId: conv,
+    });
+  }
+
+  it('文脈窓の畳み: 長さで落ちたターンの後に待っていた次の会話のターンは失敗せず、新しいセッションで走る', async () => {
+    // 2つ目のターン（答えを返したことのあるセッションで長さに落ちる）で文脈窓の畳みの印が立つ
+    const { fn, sessions } = slowCloseSdk(30, 150, new Set([2]));
+    const clone = slowCloseClone(fn);
+    const first: string[] = [];
+    const second: string[] = [];
+    clone.subscribe('conv-first', (event) => first.push(event.type));
+    clone.subscribe('conv-second', (event) => second.push(event.type));
+
+    speak(clone, 'evt-cw-1', '1つ目の発言', 'conv-first');
+    await waitFor(() => first.includes('done'), '1つ目のターンが答えを返すこと');
+    speak(clone, 'evt-cw-2', '長さで落ちる発言', 'conv-first');
+    // 長さで落ちるターンが走っている間に積む: 畳みで古いセッションが閉じ始めたとき、次の合図が既に待っている形にする
+    speak(clone, 'evt-cw-3', '畳みの後の発言', 'conv-second');
+
+    await waitFor(
+      () => second.includes('done') || second.includes('error'),
+      '次の会話のターンが終わること',
+    );
+    await clone.stop();
+
+    expect(second).not.toContain('error');
+    expect(second).toContain('done');
+    expect(sessions.length).toBeGreaterThanOrEqual(2);
+    expect(
+      sessions
+        .slice(1)
+        .some((session) => session.inputs.some((text) => text.includes('畳みの後の発言'))),
+    ).toBe(true);
+  });
+
+  it('開き直し（reopenSession）: 開き直しを頼んだ後に待っていた次の会話のターンは失敗せず、新しいセッションで走る', async () => {
+    const { fn, sessions } = slowCloseSdk(30, 150);
+    const clone = slowCloseClone(fn);
+    const second: string[] = [];
+    clone.subscribe('conv-second', (event) => second.push(event.type));
+
+    speak(clone, 'evt-reopen-1', '1つ目の発言', 'conv-first');
+    await waitFor(() => sessions.length > 0, '1本目が開くこと');
+    await clone.reopenSession({ reason: '試験', distill: false, actor: 'テスト' });
+    speak(clone, 'evt-reopen-2', '開き直しの後の発言', 'conv-second');
+
+    await waitFor(
+      () => second.includes('done') || second.includes('error'),
+      '次の会話のターンが終わること',
+    );
+    await clone.stop();
+
+    expect(second).not.toContain('error');
+    expect(second).toContain('done');
+    expect(sessions).toHaveLength(2);
+    expect(sessions[1]?.inputs.some((text) => text.includes('開き直しの後の発言'))).toBe(true);
   });
 });
