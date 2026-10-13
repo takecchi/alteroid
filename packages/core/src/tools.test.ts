@@ -10449,6 +10449,63 @@ describe('manager_transcript（生ログへ降りる）', () => {
     expect(second).toContain('TAIL-MARK');
   });
 
+  // 続きの頁ごとに全文を取り寄せ直さない: 退避の全文は数十〜百 MB 級で、頁ごとにループが止まるため（#4638）
+  it('続きの頁は1枚目の本文を使い回し、全文を取り寄せ直さない。使い回した頁には取り寄せた時刻が添えられる', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscript('mgr-1', `${'a'.repeat(8_000)}${'b'.repeat(8_000)}FIRST-TAIL`);
+
+    const first = await h.call('manager_transcript', { managerId: 'mgr-1' });
+    expect(first).not.toContain('使い回している');
+    h.setTranscript('mgr-1', `${'a'.repeat(8_000)}${'b'.repeat(8_000)}NEWER-TAIL`);
+    const callsAfterFirst = h.transcriptCalls.length;
+
+    const second = await h.call('manager_transcript', { managerId: 'mgr-1', offset: 8_000 });
+    const third = await h.call('manager_transcript', { managerId: 'mgr-1', offset: 16_000 });
+
+    expect(h.transcriptCalls.length).toBe(callsAfterFirst);
+    expect(second).toMatch(/1枚目を読んだ時点（\d{4}-\d{2}-\d{2}T[^）]+）の生ログを使い回している/);
+    expect(third).toContain('FIRST-TAIL');
+    expect(third).not.toContain('NEWER-TAIL');
+  });
+
+  it('最後の頁を出したら捨てる: そのあと offset を付けて読んでも、取り寄せ直して新しい本文が載る', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscript('mgr-1', `${'a'.repeat(8_000)}FIRST-TAIL`);
+    await h.call('manager_transcript', { managerId: 'mgr-1' });
+    await h.call('manager_transcript', { managerId: 'mgr-1', offset: 8_000 });
+    h.setTranscript('mgr-1', `${'a'.repeat(8_000)}NEWER-TAIL`);
+    const callsBefore = h.transcriptCalls.length;
+
+    const reread = await h.call('manager_transcript', { managerId: 'mgr-1', offset: 8_000 });
+
+    expect(h.transcriptCalls.length).toBe(callsBefore + 1);
+    expect(reread).toContain('NEWER-TAIL');
+    expect(reread).not.toContain('使い回している');
+  });
+
+  it('offset の無い読みと、絞りの違う続きは、覚えた本文を使わず取り寄せ直す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscript('mgr-1', `${'a'.repeat(8_000)}${'b'.repeat(8_000)}FIRST-TAIL`);
+    await h.call('manager_transcript', { managerId: 'mgr-1' });
+    h.setTranscript('mgr-1', `${'a'.repeat(8_000)}${'b'.repeat(8_000)}NEWER-TAIL`);
+    const callsBefore = h.transcriptCalls.length;
+
+    const restart = await h.call('manager_transcript', { managerId: 'mgr-1' });
+    expect(h.transcriptCalls.length).toBe(callsBefore + 1);
+    expect(restart).not.toContain('使い回している');
+
+    const filtered = await h.call('manager_transcript', {
+      managerId: 'mgr-1',
+      offset: 8_000,
+      contains: 'a',
+    });
+    expect(h.transcriptCalls.length).toBe(callsBefore + 2);
+    expect(filtered).not.toContain('使い回している');
+  });
+
   it('3段のどこにも無いとき「無い」と言う（黙って空を返さない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
