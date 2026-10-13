@@ -7,17 +7,76 @@ import type {
 } from '@alteroid/core';
 
 /** 受け口がこれを呼ぶ: 追記の時点の見直し（下の `visible`）は、溜めている間に積まれた墓標を知らないため。 */
-export function pruneQueuedForDeletion(
-  queue: JournalEntry[],
+export function pruneQueuedForDeletion<T = JournalEntry>(
+  queue: T[],
   tombstone: Extract<JournalEntry, { type: 'conversation_deleted' }>,
+  entryOf: (item: T) => JournalEntry = (item) => item as unknown as JournalEntry,
 ): void {
   const hidden = new Set(tombstone.hiddenEntryIds ?? []);
-  const kept = queue.filter(
-    (entry) =>
+  const kept = queue.filter((item) => {
+    const entry = entryOf(item);
+    return (
       !hidden.has(entry.id) &&
-      !(entry.type === 'exchange' && entry.conversationId === tombstone.deletedConversationId),
-  );
+      !(entry.type === 'exchange' && entry.conversationId === tombstone.deletedConversationId)
+    );
+  });
   queue.splice(0, queue.length, ...kept);
+}
+
+/** `/journal/stream` の購読者1本あたりの待ち行列の上限。件数と、書き出す JSON の字数の両方で締める。 */
+export const JOURNAL_STREAM_QUEUE_MAX_ENTRIES = 5_000;
+export const JOURNAL_STREAM_QUEUE_MAX_CHARS = 16_000_000;
+
+export interface QueuedJournalEntry {
+  readonly entry: JournalEntry;
+  /** 書き出す `data`。積むときに1回だけ直列化し、字数の勘定と書き出しで使い回す。 */
+  readonly data: string;
+}
+
+/**
+ * `/journal/stream` の購読者1本ぶんの待ち行列（#4617）。
+ * 上限を超えたら溜めた分を捨てて「溢れた」に落ち、以後は何も積まない: 読まない受け手のために日誌の全行をメモリに溜め続けないため。
+ * 溢れた購読は閉じる側（`app.ts`）が切る。受け手は張り直した `open` で表示中のデータを取り直すので、抜けた分はそこで戻る。
+ */
+export class JournalStreamQueue {
+  readonly #maxEntries: number;
+  readonly #maxChars: number;
+  #items: QueuedJournalEntry[] = [];
+  #chars = 0;
+  #overflow: { entries: number; chars: number } | undefined;
+
+  constructor(limits: { maxEntries?: number; maxChars?: number } = {}) {
+    this.#maxEntries = limits.maxEntries ?? JOURNAL_STREAM_QUEUE_MAX_ENTRIES;
+    this.#maxChars = limits.maxChars ?? JOURNAL_STREAM_QUEUE_MAX_CHARS;
+  }
+
+  /** 溢れたときの件数と字数（溢れた1件を含む）。溢れていなければ `undefined`。 */
+  get overflow(): { entries: number; chars: number } | undefined {
+    return this.#overflow;
+  }
+
+  push(entry: JournalEntry): void {
+    if (this.#overflow !== undefined) return;
+    const data = JSON.stringify(entry);
+    this.#items.push({ entry, data });
+    this.#chars += data.length;
+    if (this.#items.length > this.#maxEntries || this.#chars > this.#maxChars) {
+      this.#overflow = { entries: this.#items.length, chars: this.#chars };
+      this.#items = [];
+      this.#chars = 0;
+    }
+  }
+
+  shift(): QueuedJournalEntry | undefined {
+    const item = this.#items.shift();
+    if (item !== undefined) this.#chars -= item.data.length;
+    return item;
+  }
+
+  pruneForDeletion(tombstone: Extract<JournalEntry, { type: 'conversation_deleted' }>): void {
+    pruneQueuedForDeletion(this.#items, tombstone, (item) => item.entry);
+    this.#chars = this.#items.reduce((sum, item) => sum + item.data.length, 0);
+  }
 }
 
 // 何を流すかを選り分ける表を持たせない: 見えない層を作らないための層で、そこで選別を始めると意味が消えるため。

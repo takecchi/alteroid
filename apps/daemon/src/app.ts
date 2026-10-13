@@ -214,7 +214,12 @@ import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal
 import { clientMessageFingerprint } from './client-message-fingerprint.js';
 import { checkAndBindAttachments, type AttachmentBatchResult } from './attachment-batch.js';
 import { createFixedWindowRateLimiter, judgeIntegrationRoute } from './integration-gate.js';
-import { pruneQueuedForDeletion, type JournalBus } from './journal-bus.js';
+import {
+  JOURNAL_STREAM_QUEUE_MAX_CHARS,
+  JOURNAL_STREAM_QUEUE_MAX_ENTRIES,
+  JournalStreamQueue,
+  type JournalBus,
+} from './journal-bus.js';
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono, type Context, type Next } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -400,6 +405,8 @@ export interface AppDeps {
   tokens?: TokenPoolService;
   // 環境変数は増やさない: テストで短くする以外に差し替える理由が無い。
   sseHeartbeatMs?: number;
+  // 環境変数は増やさない（`sseHeartbeatMs` と同じ）: テストで溢れさせる以外に差し替える理由が無い（#4617）。
+  journalStreamQueueLimits?: { maxEntries?: number; maxChars?: number };
   // 無ければ `storage.state` は `unknown`: 確かめる手段が無いことを `ok` に化けさせない。毎リクエストでは叩かない。
   storageProbe?: () => Promise<void>;
   // 環境変数は増やさない（`sseHeartbeatMs` と同じ）。
@@ -3410,13 +3417,13 @@ export function createApp(deps: AppDeps) {
           .filter((value) => value.length > 0);
 
         return streamSSE(c, async (stream) => {
-          const queue: JournalEntry[] = [];
+          const queue = new JournalStreamQueue(deps.journalStreamQueueLimits);
           let wake: (() => void) | null = null;
           let closed = false;
 
           const unsubscribe = bus.subscribe((entry) => {
             // 種別の絞りより先に見る: `type=` で墓標を流さない購読でも、溜めた行は捨てる必要があるため
-            if (entry.type === 'conversation_deleted') pruneQueuedForDeletion(queue, entry);
+            if (entry.type === 'conversation_deleted') queue.pruneForDeletion(entry);
             if (types !== undefined && !types.includes(entry.type)) return;
             queue.push(entry);
             wake?.();
@@ -3446,15 +3453,34 @@ export function createApp(deps: AppDeps) {
 
               for (;;) {
                 if (closed || credential.lost() || stream.aborted || stream.closed) break;
-                const entry = queue.shift();
-                if (entry === undefined) {
+                const overflow = queue.overflow;
+                if (overflow !== undefined) {
+                  // 新しい種類の出来事にしない: 受け手は流れの出来事を日誌の1件として読むため。コメント行で理由を残して閉じ、受け手の張り直しと取り直しに任せる（#4617）
+                  const summary =
+                    `日誌の流れ（/journal/stream）の購読者が読むのに追いつかず、待ち行列が上限を超えた` +
+                    `（${String(overflow.entries)} 件・${String(overflow.chars)} 字。上限 ` +
+                    `${String(deps.journalStreamQueueLimits?.maxEntries ?? JOURNAL_STREAM_QUEUE_MAX_ENTRIES)} 件・` +
+                    `${String(deps.journalStreamQueueLimits?.maxChars ?? JOURNAL_STREAM_QUEUE_MAX_CHARS)} 字）。` +
+                    '溜めた分を捨ててこの購読を切った。受け手は張り直して表示中のデータを取り直す。';
+                  await stream.write(`: ${summary}\n\n`).catch(() => undefined);
+                  void stores.journal
+                    .append({ type: 'external_event', source: 'journal-stream', summary })
+                    .catch((error: unknown) => {
+                      process.stderr.write(
+                        `alteroidd: 日誌の流れの購読を切ったことを日誌へ残せませんでした: ${reasonOf(error)}\n  ${summary}\n`,
+                      );
+                    });
+                  break;
+                }
+                const item = queue.shift();
+                if (item === undefined) {
                   await new Promise<void>((resolve) => {
                     wake = resolve;
                   });
                   wake = null;
                   continue;
                 }
-                await stream.writeSSE({ event: entry.type, data: JSON.stringify(entry) });
+                await stream.writeSSE({ event: item.entry.type, data: item.data });
               }
             } finally {
               stopHeartbeat();

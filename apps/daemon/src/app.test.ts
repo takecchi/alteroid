@@ -8129,6 +8129,52 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     await reader.cancel();
   });
 
+  it('購読者が読むのに追いつかず待ち行列が上限を超えたら、溜めた分を捨て、コメント行で理由を残して閉じ、日誌に1行残す（#4617）', async () => {
+    const capped = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      scheduler: schedule.scheduler,
+      journalEvents: journalBus,
+      journalStreamQueueLimits: { maxEntries: 2 },
+    });
+
+    const response = await capped.request('/journal/stream?type=decision');
+    expect(response.status).toBe(200);
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    // open を読んで購読が始まったことを確かめる。以後は読まない（遅い受け手）
+    expect(decoder.decode((await reader.read()).value)).toContain('event: open');
+
+    for (let i = 0; i < 6; i += 1) {
+      await stores.journal.append({
+        type: 'decision',
+        decision: `溜まる判断${String(i)}`,
+        grounds: 'g',
+      });
+    }
+
+    let seen = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += decoder.decode(value, { stream: true });
+    }
+
+    expect(seen).toContain(': 日誌の流れ（/journal/stream）の購読者が読むのに追いつかず');
+    expect(seen).toContain('この購読を切った');
+    // 溢れた後に積まれた分（最後の1件）は流さない
+    expect(seen).not.toContain('溜まる判断5');
+    await vi.waitFor(async () => {
+      const entries = await stores.journal.list({ types: ['external_event'] });
+      const cut = entries.find(
+        (entry) => entry.type === 'external_event' && entry.source === 'journal-stream',
+      );
+      if (cut === undefined) throw new Error('日誌にまだ残っていない');
+    });
+  });
+
   it('配線されていなければ、黙って空を返さず 503 で知らせる', async () => {
     const bare = createApp({
       clone: fake.clone,
