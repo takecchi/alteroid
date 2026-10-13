@@ -2240,8 +2240,8 @@ interface WithheldReportMemory {
   lastAt: string;
   /**
    * エピソード中に畳んだ全部の報告の冒頭（古い順）。**最後の1本だけを持たない**: 上書きすると、マージの報告のような
-   * 重要な本文が後続の畳んだ報告で消え、配る知らせに載らない。`'flush'` で `count` を0へ戻しても消さない
-   * （flush 後に積んだ分と並べて、次に配るときに一覧へ入れる）。配るときの字数は `renderWithheldExcerpts` が予算で締める。
+   * 重要な本文が後続の畳んだ報告で消え、配る知らせに載らない。`'flush'` で配った分は `count` と一緒に空へ戻す
+   * （次に配るときに同じ行を重ねず、flush 後に積んだ分だけを一覧へ入れる）。配るときの字数は `renderWithheldExcerpts` が予算で締める。
    */
   excerpts: { at: string; line: string }[];
   breakdown: string;
