@@ -10223,6 +10223,10 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
 
       await vi.waitFor(async () => {
         expect((await s.stores.archive.list()).length).toBe(3);
+        // 日誌は置き場へ入れた後に書かれるので、行も揃うまで待つ
+        expect(
+          (await continuityRows(s.stores)).some((row) => row.text.includes('continuity=diverged')),
+        ).toBe(true);
       });
 
       const rows = await continuityRows(s.stores);
@@ -10249,12 +10253,12 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
 
       await firePreCompact(session, dir, 'LEGACY\nNEW\n');
 
+      // 日誌は置き場へ入れた後に書かれるので、行も揃うまで待つ
       await vi.waitFor(async () => {
         expect((await stores.archive.list()).length).toBe(2);
+        const rows = await continuityRows(stores);
+        expect(rows.some((row) => row.text.includes('continuity=unknown'))).toBe(true);
       });
-
-      const rows = await continuityRows(stores);
-      expect(rows.some((row) => row.text.includes('continuity=unknown'))).toBe(true);
     } finally {
       await s.pool.stop();
     }

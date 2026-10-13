@@ -1657,6 +1657,8 @@ export interface ManagerPoolOptions {
   attachmentLimits?: AttachmentLimits;
   outboxFetchFileTimeoutMs?: number;
   outboxFetchTotalTimeoutMs?: number;
+  /** 預けた退避を取りに行くやり直しの待ち（既定 {@link ARCHIVE_FETCH_RETRY_DELAYS_MS}）。試験が短くするための口。 */
+  archiveFetchRetryDelaysMs?: readonly number[];
   /** 大きいファイルを runner の別口へ押す1つの期限（ms。引数は大きさ）。既定 `outboxFetchDeadlineMs`。主にテスト用。 */
   stageDeadlineMs?: (size: number) => number;
 }
@@ -1684,6 +1686,12 @@ const REATTACH_RETRY_MAX_MS = 30_000;
  * 数えは **runner 単位の梯子を借りるがジョブ単位** なので、同じ runner の別の委譲の `busy` が梯子を延命しない。
  */
 const REATTACH_BUSY_MAX_RETRIES = 5;
+
+/**
+ * runner に預けた退避を取りに行って失敗したとき、やり直すまでの待ち（回数はこの長さ）。
+ * 取りに行くのは出来事を受けた1回だけなので、やり直さないと本文は預かりの期限（`ARCHIVE_STASH_TTL_MS`、1時間）で消える。合計はその期限より十分短い。
+ */
+const ARCHIVE_FETCH_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000, 120_000];
 
 /** **能力の上限ではなく、混雑を作らないための間隔である。** 繋がったままの runner へ繋ぎ直しを待たずに挑み直す梯子。 */
 const PUSH_RETRY_BASE_MS = 2_000;
@@ -3077,6 +3085,7 @@ class Pool implements ManagerPool {
   readonly #attachmentLimits: AttachmentLimits | undefined;
   readonly #outboxFetchFileTimeoutMs: number | undefined;
   readonly #outboxFetchTotalTimeoutMs: number | undefined;
+  readonly #archiveFetchRetryDelaysMs: readonly number[];
   readonly #stageDeadlineMs: (size: number) => number;
 
   readonly #usageOrder = new UsageRecordOrder();
@@ -3141,8 +3150,10 @@ class Pool implements ManagerPool {
     attachmentLimits,
     outboxFetchFileTimeoutMs,
     outboxFetchTotalTimeoutMs,
+    archiveFetchRetryDelaysMs,
     stageDeadlineMs,
   }: ManagerPoolOptions) {
+    this.#archiveFetchRetryDelaysMs = archiveFetchRetryDelaysMs ?? ARCHIVE_FETCH_RETRY_DELAYS_MS;
     this.#stageDeadlineMs = stageDeadlineMs ?? outboxFetchDeadlineMs;
     this.#attachmentLimits = attachmentLimits;
     this.#outboxFetchFileTimeoutMs = outboxFetchFileTimeoutMs;
@@ -7742,6 +7753,54 @@ class Pool implements ManagerPool {
   /**
    * `fromRunnerId` を見るのは `case 'closed'` / `case 'resume_failed'` だけ: 古い runner から遅れて届いた出来事が、別の runner へ移った後の委譲の台帳・貸し出しを巻き戻すのを防ぐ。`RunnerEvent` 自身は `runnerId` を運ばない。
    */
+  /**
+   * runner に預けた退避の本文を取りに行く。器が名簿に居ない・取りに行く呼び出しが落ちた回は、`#archiveFetchRetryDelaysMs` の間を置いてやり直す。
+   * やり直すのは、そのうち取れる見込みのある失敗だけ: 本文が無い（期限切れ・既に消された）・口を持たない器は、何度聞いても同じ答えなので、すぐ投げる。
+   */
+  async #fetchArchiveRetrying(
+    managerId: string,
+    archiveId: string,
+    fromRunnerId: string,
+  ): Promise<{ body: string; runner: RunnerClient }> {
+    const delays = this.#archiveFetchRetryDelaysMs;
+    for (let attempt = 0; ; attempt += 1) {
+      let failure: unknown;
+      const runner = await this.#runners.get(fromRunnerId);
+      if (runner === null) {
+        failure = new Error(`退避を預けた器（${fromRunnerId}）が名簿に居ない`);
+      } else {
+        if (runner.fetchArchive === undefined) {
+          throw new Error('この器のクライアントは、預けた退避を取りに行く口を持たない');
+        }
+        let fetched: string | undefined;
+        try {
+          fetched = await runner.fetchArchive(managerId, archiveId);
+        } catch (error) {
+          failure = error;
+        }
+        if (failure === undefined) {
+          if (fetched === undefined) {
+            throw new Error(
+              `runner に預けた退避（${archiveId}）が無かった（期限切れで捨てられたか、既に消された）`,
+            );
+          }
+          return { body: fetched, runner };
+        }
+      }
+      const delayMs = delays[attempt];
+      if (delayMs === undefined || this.#stopped) throw failure;
+      noteDroppedRecord(
+        'トランスクリプトの退避の取り寄せ（やり直す）',
+        `managerId=${managerId} ref=${archiveId} attempt=${String(attempt + 1)}`,
+        failure,
+      );
+      // `unref` する: 待ちが止めたはずのデーモンの終了を引き延ばさないため
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, delayMs).unref?.();
+      });
+    }
+  }
+
   async #onEvent(event: RunnerEvent, fromRunnerId: string): Promise<void> {
     // 札は最初の `await` より前に取る（理由は `UsageRecordOrder`、`usage.ts`）。
     const usageTicket =
@@ -8746,21 +8805,13 @@ class Pool implements ManagerPool {
           if (event.body !== undefined) {
             body = event.body;
           } else if (event.ref !== undefined) {
-            const runner = await this.#runners.get(fromRunnerId);
-            if (runner === null) {
-              throw new Error(`退避を預けた器（${fromRunnerId}）が名簿に居ない`);
-            }
-            if (runner.fetchArchive === undefined) {
-              throw new Error('この器のクライアントは、預けた退避を取りに行く口を持たない');
-            }
-            const fetched = await runner.fetchArchive(event.managerId, event.ref.id);
-            if (fetched === undefined) {
-              throw new Error(
-                `runner に預けた退避（${event.ref.id}）が無かった（期限切れで捨てられたか、既に消された）`,
-              );
-            }
-            body = fetched;
-            fetchedFrom = { runner, archiveId: event.ref.id };
+            const fetched = await this.#fetchArchiveRetrying(
+              event.managerId,
+              event.ref.id,
+              fromRunnerId,
+            );
+            body = fetched.body;
+            fetchedFrom = { runner: fetched.runner, archiveId: event.ref.id };
           } else {
             throw new Error('本文も参照も無い退避の出来事が届いた');
           }
