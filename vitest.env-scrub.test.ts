@@ -63,6 +63,15 @@ describe('isSecretEnvName / scrubSecretEnv（単体）', () => {
     }
   });
 
+  it('_ 以外（- や .）で区切った名前の秘密の語も外し、部分に含むだけの語は巻き込まない（#1834 案A）', () => {
+    for (const name of ['FAKE-API-KEY', 'FAKE.API.KEY', 'my-service.token', 'DB-PASSWORD']) {
+      expect(isSecretEnvName(name), name).toBe(true);
+    }
+    for (const name of ['GIT-AUTHOR-NAME', 'KEYBOARD.LAYOUT', 'node-version']) {
+      expect(isSecretEnvName(name), name).toBe(false);
+    }
+  });
+
   // 動的 import は歯の本体ではなく hook の寿命で払わせる: 器の混雑で伸び、混んだ時に既定の 5000ms を超えるため。
   const SOURCES: readonly { file: string; exportName: string }[] = [
     { file: 'packages/core/src/runner.ts', exportName: 'WITHHELD_ENV_KEYS' },

@@ -38,7 +38,8 @@ export function isSecretEnvName(name: string): boolean {
   if (SECRET_ENV_NAME_PATTERNS.some((pattern) => pattern.test(name))) return true;
   const words = name
     .toUpperCase()
-    .split(/_+/)
+    // `_` だけで割らない: `FAKE-API-KEY`・`FAKE.API.KEY` のように `-` や `.` で区切った名前の鍵が漏れるため（#1834 案A）
+    .split(/[^A-Z0-9]+/)
     .filter((word) => word !== '');
   return words.some(
     (word) =>
