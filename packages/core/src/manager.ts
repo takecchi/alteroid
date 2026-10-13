@@ -1225,6 +1225,11 @@ export interface ManagerPool {
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<ManagerTranscript>;
   /**
+   * 生ログの末尾だけ（本文が `maxChars` より長ければ、それを厳密に上回る量。短ければ全文）。全文が要らない読み手用（#4638）。
+   * 省略可能: 持たない実装（テストの偽物）では、呼び手が `transcript()` に落ちる。
+   */
+  transcriptTail?(managerId: string, maxChars: number): Promise<ManagerTranscript>;
+  /**
    * このメソッド自体は例外を投げない: runner が答えなかった・この口を持たない・像を持っていない、
    * どの理由でも `{ kind: 'unavailable', reason }` を返す（呼び出し元が止まってはいけない）。
    * 呼び出し元は「確かめられなかった」として扱い、0 とは混ぜない。`manager_list` からは呼ばない
@@ -5218,23 +5223,56 @@ class Pool implements ManagerPool {
    * 末尾の口が無い構成（fs）だけ、いままでどおり runner の全文に落とす。
    */
   async #probeTranscriptOf(record: ManagerRecord): Promise<string | null> {
-    const job = record.job;
+    const result = await this.#transcriptTailOf(record.job, record, TURN_END_PROBE_CHARS);
+    return result.kind === 'body' ? result.body : null;
+  }
+
+  async transcriptTail(managerId: string, maxChars: number): Promise<ManagerTranscript> {
+    const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+    if (!job) {
+      const unreadable = await this.#unreadableRowDetail(managerId);
+      return unreadable === undefined
+        ? { kind: 'missing' }
+        : { kind: 'unreadable', detail: unreadable };
+    }
+    return this.#transcriptTailOf(job, this.#records.get(managerId), maxChars);
+  }
+
+  /**
+   * 生ログの末尾だけを取る。`transcript()`（全文）と同じ3段を、末尾を読む口で回す（#4628 / #4638）:
+   * pg の生ログの預かりの末尾 → runner の全文（末尾へ切って返す）→ 退避の末尾（`archive.readTail`）。
+   * 返す量は `readTail` と同じ契約（本文が `maxChars` より長ければ、それを厳密に上回る量）。読み手は先頭の欠けた1行を捨てる。
+   * 預かりを全件読む `#fromSessionStore` には落ちない: 1段目が同じ預かりの末尾を読むため。
+   */
+  async #transcriptTailOf(
+    job: Job,
+    record: ManagerRecord | undefined,
+    maxChars: number,
+  ): Promise<ManagerTranscript> {
     const sessionTail = this.#stores.sessionTranscriptTail;
     if (sessionTail !== undefined && job.projectKey !== undefined && job.sessionId !== undefined) {
       const tail = await sessionTail.readTail(
         { projectKey: job.projectKey, sessionId: job.sessionId },
-        TURN_END_PROBE_CHARS,
+        maxChars,
       );
-      if (tail !== null && tail.length > 0) return tail;
+      if (tail !== null && tail.length > 0) return { kind: 'body', body: tail };
     }
-    const runner = await this.#runnerOf(record);
-    const live = await runner?.transcript(job.id).catch(() => null);
-    if (live !== null && live !== undefined && live.length > 0) return live;
+    if (record !== undefined) {
+      const runner = await this.#runnerOf(record);
+      const live = await runner?.transcript(job.id).catch(() => null);
+      if (live !== null && live !== undefined && live.length > 0) {
+        return { kind: 'body', body: live.length > maxChars ? live.slice(-(maxChars + 1)) : live };
+      }
+    }
+    let removed: { archiveId: string; removedAt: string; bytes: number } | undefined;
     for (const id of [...(job.archiveIds ?? [])].reverse()) {
-      const result = await this.#stores.archive.readTail(id, TURN_END_PROBE_CHARS);
-      if (result.kind === 'body') return result.body;
+      const result = await this.#stores.archive.readTail(id, maxChars);
+      if (result.kind === 'body') return { kind: 'body', body: result.body, archiveId: id };
+      if (result.kind === 'removed' && removed === undefined) {
+        removed = { archiveId: id, removedAt: result.removedAt, bytes: result.bytes };
+      }
     }
-    return null;
+    return removed !== undefined ? { kind: 'removed', ...removed } : { kind: 'missing' };
   }
 
   /** runner ごと作り直されていたら実際に resume する: 「話しかけられるまで止めておく」は人間の不在で仕事が止まらないという要件に反する。 */

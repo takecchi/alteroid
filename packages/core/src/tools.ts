@@ -905,8 +905,13 @@ async function describeMissingReport(
 ): Promise<string> {
   const base = `マネージャー ${managerId} からの報告はまだ無い（状態: ${status}）。`;
   let result: ManagerTranscript;
+  // 末尾を読む口があれば使う: 判定は末尾の REPORT_GENERATED_PROBE_CHARS 文字しか見ず、全文（退避なら数十〜百 MB 級）をデーモンのループの上で文字へ戻すと1回で約1秒止まりうるため（#4638）
+  const tailRead = managers.transcriptTail !== undefined;
   try {
-    result = await managers.transcript(managerId);
+    result =
+      managers.transcriptTail !== undefined
+        ? await managers.transcriptTail(managerId, REPORT_GENERATED_PROBE_CHARS)
+        : await managers.transcript(managerId);
   } catch (error) {
     return (
       `${base} 生ログは読めなかった（` +
@@ -948,11 +953,16 @@ async function describeMissingReport(
 
   const { timestamp, length, stopReason } = outcome.utterance;
   const when = timestamp ?? '時刻不明（生ログの行に timestamp が無かった）';
-  const resumeOffset = Math.max(0, transcript.length - TRANSCRIPT_PAGE);
   const state = `（状態: ${status}）`;
   const found = `生ログには ${when} に本文が在る（約 ${length.toLocaleString('ja-JP')} 文字）`;
+  // 末尾だけを読んだ回は全体の長さが分からないので、読み始めを offset ではなく発言の時刻（since）で案内する
+  const where = tailRead
+    ? timestamp === undefined
+      ? 'で読める（末尾だけを見たので、読み始めの位置は示せない）'
+      : ` since=${timestamp} で、その発言から読める`
+    : ` offset=${Math.max(0, transcript.length - TRANSCRIPT_PAGE)} で読める`;
   const howToDigIn =
-    `manager_transcript managerId=${managerId} offset=${resumeOffset} で読める` +
+    `manager_transcript managerId=${managerId}${where}` +
     '（作業者の発言は除いて探したが、混ざる余地が完全に無いとまでは確認していない）。';
 
   // 3つに割る: 「終わっていないと分かった」と「分からなかった」を1つに畳まない
