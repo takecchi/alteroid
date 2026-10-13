@@ -4239,6 +4239,71 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
+  // 前のデーモンが `ask` を台帳へ書いた後、受信箱へ投函し終える前に落ちると、確認はクローンへ届かないまま runner の中で待ち続ける。
+  // runner は `ask` を送り直さないので、引き取りの側で配り直さないと委譲が返事待ちのまま詰まる。
+  it('再起動の引き取りで、runner に残っている返事待ちをクローンへ配り直す（kind の欠けた旧 runner の分は question として）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...job, status: 'waiting_human' });
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'waiting_human',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [
+        { requestId: 'req-perm', summary: 'Bash: git push', kind: 'permission' },
+        { requestId: 'req-old', summary: '本番に触ってよいか' },
+      ],
+      sessionId: job.sessionId,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+
+    const asks = s.inbox.flatMap((event) =>
+      event.type === 'manager_message' && event.requestId !== undefined ? [event] : [],
+    );
+    expect(asks.map((event) => [event.requestId, event.kind])).toEqual([
+      ['req-perm', 'permission'],
+      ['req-old', 'question'],
+    ]);
+    expect(asks[0]?.text).toContain('答えたあと');
+    expect(asks[1]?.text).toBe('本番に触ってよいか');
+
+    await s.pool.stop();
+  });
+
+  it('配り直した確認を、引き取りの後に runner が同じ id で送ってきても、もう一度は配らない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...job, status: 'waiting_human' });
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'waiting_human',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [{ requestId: 'req-1', summary: '本番に触ってよいか', kind: 'question' }],
+      sessionId: job.sessionId,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.ask(job.id, 'req-1', '本番に触ってよいか', 'question');
+    fake.ask(job.id, 'req-2', '別の確認', 'question');
+
+    await vi.waitFor(() =>
+      expect(
+        s.inbox.flatMap((event) =>
+          event.type === 'manager_message' && event.requestId !== undefined
+            ? [event.requestId]
+            : [],
+        ),
+      ).toEqual(['req-1', 'req-2']),
+    );
+
+    await s.pool.stop();
+  });
+
   it('クローンが止めても、outcome が unknown なら配らない', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(job);
