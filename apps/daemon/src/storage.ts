@@ -18,6 +18,7 @@ import {
 } from '@alteroid/core';
 import { AUTH_WITHHELD_ENV_KEYS } from './auth.js';
 import { reportBootFootprint } from './boot-footprint.js';
+import { createPgTimeoutJournal } from './pg-timeout-journal.js';
 import {
   createFsStores,
   initWorkspace,
@@ -200,8 +201,12 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
   const { createPgStores, seedPgWorkspace, measureStorageFootprint, S3AttachmentBlobStore } =
     await import('@alteroid/storage-pg');
   const blobPlan = planAttachmentBlobs(env, 'pg');
+  const pgTimeouts = createPgTimeoutJournal();
   const pg = await createPgStores({
     url: plan.databaseUrl,
+    onTimeout: (event) => {
+      pgTimeouts.note(event);
+    },
     attachments: {
       limits: blobPlan.limits,
       ...(blobPlan.config === undefined
@@ -214,6 +219,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
           }),
     },
   });
+  pgTimeouts.attach(pg.journal);
   await seedPgWorkspace(pg);
   // backfill（journal を走査する）より前に置く: 重い読みの全部より前が要件のため。
   const footprint = await measureStorageFootprint(pg.db);
