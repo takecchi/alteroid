@@ -122,7 +122,7 @@ describe('起動時の未読の読み直しが落ちても、拾えるまでや�
   });
 
   it('やり直しを待つ間に post された合図は、拾い直しで二度配られない（#1984 の守りを崩さない）', async () => {
-    let clone: CloneHost | undefined;
+    const booting: { clone?: CloneHost } = {};
     const live = humanMessage('evt-live', 'やり直しの間に届いた発言（#4647）');
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
@@ -131,8 +131,8 @@ describe('起動時の未読の読み直しが落ちても、拾えるまでや�
     const { stores, attempts } = storesWithFailingClaim(1, async () => {
       // 1回目の失敗の直後に届いたことにする。受信箱へ書かれるまで待ってから落とす
       // 1回目の読み直しは `createClone()` の中で始まるので、作り終わるのを待ってから post する
-      await waitFor(() => clone !== undefined, 'クローンの作成');
-      clone?.post(live);
+      await waitFor(() => booting.clone !== undefined, 'クローンの作成');
+      booting.clone?.post(live);
       await waitFor(
         async () => (await stores.inbox.peekPending()).entries.some((p) => p.event.id === live.id),
         '受信箱への書き込み',
@@ -140,7 +140,7 @@ describe('起動時の未読の読み直しが落ちても、拾えるまでや�
     });
 
     const booted = bootClone(stores, gate);
-    clone = booted.clone;
+    booting.clone = booted.clone;
 
     // 1回目のターンを止めている間に2回目の読み直しを済ませる: 合図はまだ受信箱に残っているので、守りが無ければ拾い直しがもう一度配る
     await waitFor(
@@ -151,8 +151,8 @@ describe('起動時の未読の読み直しが落ちても、拾えるまでや�
     await new Promise((resolve) => setTimeout(resolve, 150));
     release();
     await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(booted.inputs.filter((input) => input.includes('やり直しの間に届いた発言'))).toHaveLength(
-      1,
-    );
+    expect(
+      booted.inputs.filter((input) => input.includes('やり直しの間に届いた発言')),
+    ).toHaveLength(1);
   });
 });
