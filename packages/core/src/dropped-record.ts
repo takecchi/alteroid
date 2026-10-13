@@ -2,6 +2,7 @@ import { writeSync } from 'node:fs';
 
 import { collapseErrorCause } from './error-cause.js';
 import { codePointBoundary } from './excerpt.js';
+import { notePhase } from './loop-stall.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import type { InboxEvent, JournalEntryInput, PendingApproval } from './schema.js';
 
@@ -537,12 +538,16 @@ function describeUncaughtOrigin(origin: string): string {
 export function writeStderrSync(line: string): void {
   const buffer = Buffer.from(line, 'utf8');
   let offset = 0;
+  // 印を打つ（#4485）: 同期の書き込みなので、ログの取り込みが詰まるとここでループが止まりうる
+  notePhase(`stderr-sync:${String(buffer.length)}`);
   try {
     while (offset < buffer.length) {
       offset += writeSync(2, buffer, offset, buffer.length - offset);
     }
   } catch {
     // 読み手が消えている（EPIPE）等。跡のために本筋を殺さない。
+  } finally {
+    notePhase('stderr-sync-done');
   }
 }
 

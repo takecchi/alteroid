@@ -118,6 +118,31 @@ const RUNNER_STREAM_SILENCE_TIMEOUT_MS = DEFAULT_SSE_HEARTBEAT_MS * 3;
 // 数百 MB の流れでも1回の占有が見張りの閾値（1秒）を大きく下回る
 const SSE_READ_YIELD_BYTES = 1024 * 1024;
 
+/**
+ * 応答の本文を、届いた塊ごとに文字へ戻しながら読み、`yieldBytes` 読むたびにループへ順番を返す。
+ * `response.text()` と結果は同じ（UTF-8 の文字が塊の境目で割れても `stream: true` が繋ぐ）。
+ */
+export async function readTextYielding(response: Response, yieldBytes: number): Promise<string> {
+  const body = response.body;
+  if (body === null) return '';
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  const reader = body.getReader();
+  let bytesSinceYield = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(decoder.decode(value, { stream: true }));
+    bytesSinceYield += value.byteLength;
+    if (bytesSinceYield >= yieldBytes) {
+      bytesSinceYield = 0;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+  parts.push(decoder.decode());
+  return parts.join('');
+}
+
 // `unref` する: 見張りは接続が在るあいだ回るもので、止めたはずのデーモンの終了を引き延ばさないため
 function defaultSetTimer(ms: number, onFire: () => void): () => void {
   const timer = setTimeout(onFire, ms);
@@ -1136,7 +1161,8 @@ class HttpRunner implements RunnerClient {
   }
 
   // 404 だけを `undefined`（無い）にする: 取れなかった（接続断・期限切れ・非2xx）と「無い」を混ぜないため（`openOutboxFile` と同じ）
-  // 本文は `response.text()` で受ける: JSON の1行として受けると、解析とエスケープ戻しの間ループが塞がるため（#4485）
+  // 本文は JSON の1行として受けない: 解析とエスケープ戻しの間ループが塞がるため（#4485）
+  // `response.text()` も使わない: 全部を受けてから一度に文字へ戻すので、100MB 級の退避で 1 秒近くループを塞ぐため（#4485）
   async fetchArchive(
     managerId: string,
     archiveId: string,
@@ -1154,7 +1180,7 @@ class HttpRunner implements RunnerClient {
       if (error instanceof RunnerHttpError && error.status === 404) return undefined;
       throw error;
     }
-    return response.text();
+    return readTextYielding(response, SSE_READ_YIELD_BYTES);
   }
 
   async deleteArchive(

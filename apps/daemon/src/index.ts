@@ -53,6 +53,7 @@ import {
   WITHHELD_ENV_KEYS,
   writeStderrSync,
   describeLoopStall,
+  markStreamWrites,
   startLoopStallWatch,
   type InboxEvent,
   type RunnerClient,
@@ -502,6 +503,8 @@ export async function main(): Promise<void> {
         });
     },
   });
+  // 標準エラーへの書き込みの前後に印を打つ（#4485）: GC も CPU もほぼ使わずに 1〜2 秒止まる回があり、同期で書かれるパイプの詰まりかを次の停止で見分けるため
+  markStreamWrites(process.stderr, 'stderr-write');
 
   const seeds = runnerSeeds({
     workspace,

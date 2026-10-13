@@ -1580,6 +1580,7 @@ export {
 } from './manager-peers-format.js';
 export {
   describeLoopStall,
+  markStreamWrites,
   notePhase,
   startLoopStallWatch,
   type LoopStall,

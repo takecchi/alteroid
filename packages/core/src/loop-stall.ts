@@ -40,6 +40,30 @@ export function notePhase(label: string): void {
   if (phases.length > PHASE_RING) phases.splice(0, phases.length - PHASE_RING);
 }
 
+/**
+ * `stream.write` を包み、書き込みの前後に印を打つ（#4485）。返り値で元へ戻す。
+ * 標準エラーに掛ける: Linux ではパイプの標準エラーは同期で書かれ、ログの取り込みが詰まると CPU を使わずにループを止めうるため。
+ * 止まった窓が `stderr-write:<長さ>` の後に始まり、`stderr-write-done` が窓の中の終わり近くに出れば、止めていたのは書き込みである。
+ * 長さは文字数（Buffer ならバイト数）で、バイト数を数え直さない: 大きい文字列の数え直しそのものがループを塞ぐため。
+ */
+export function markStreamWrites(stream: NodeJS.WritableStream, label: string): () => void {
+  const original = stream.write;
+  const marked = (chunk: unknown, ...rest: unknown[]): boolean => {
+    const length =
+      typeof chunk === 'string' ? chunk.length : chunk instanceof Uint8Array ? chunk.byteLength : 0;
+    notePhase(`${label}:${String(length)}`);
+    try {
+      return (original as (...args: unknown[]) => boolean).call(stream, chunk, ...rest);
+    } finally {
+      notePhase(`${label}-done`);
+    }
+  };
+  stream.write = marked as typeof stream.write;
+  return () => {
+    stream.write = original;
+  };
+}
+
 export interface LoopStall {
   /** 予定の時刻から遅れた長さ（ms）。 */
   readonly stalledMs: number;

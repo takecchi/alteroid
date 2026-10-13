@@ -7,6 +7,7 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import {
   describeLoopStall,
+  markStreamWrites,
   notePhase,
   readCgroupCpuThrottle,
   startLoopStallWatch,
@@ -137,6 +138,34 @@ describe('loop-stall（#4485）', () => {
     await stalledTick(900);
     await tick();
     expect(stalls).toEqual([]);
+  });
+
+  it('書き込みを包むと、書き込みの中で止まった回は「書き込みの印の後に止まり、終わりの印が窓の終わりに出る」形で残る。元へ戻せる', async () => {
+    const written: unknown[] = [];
+    const stream = {
+      write: (chunk: unknown) => {
+        written.push(chunk);
+        // 同期の書き込みがパイプの詰まりで 2 秒待った形
+        now += 2_000;
+        return true;
+      },
+    } as unknown as NodeJS.WritableStream;
+    const original = stream.write;
+    const restore = markStreamWrites(stream, 'stderr-write');
+
+    await tick();
+    await stalledTick(2_000, () => {
+      stream.write('hello');
+      now -= 2_000;
+    });
+
+    expect(written).toEqual(['hello']);
+    const stall = stalls[0] as LoopStall;
+    expect(stall.phaseBefore).toBe('stderr-write:5');
+    expect(stall.phasesDuring).toEqual([{ label: 'stderr-write-done', offsetMs: 2_000 }]);
+
+    restore();
+    expect(stream.write).toBe(original);
   });
 });
 

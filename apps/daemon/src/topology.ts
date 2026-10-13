@@ -1,5 +1,6 @@
 import {
   codePointBoundary,
+  notePhase,
   type CloneHost,
   type ManagerModels,
   type ManagerSummary,
@@ -374,10 +375,13 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
   const now = deps.now ?? Date.now;
   let cached: { at: number; value: TopologySnapshot } | null = null;
 
+  // 印を打つ（#4485）: 日誌の追記のたびに購読者がここを呼び、台帳の全件から作り直すので、止まった窓に `-done` を欠いた印が残れば、止めていたのはこの区間
   async function build(): Promise<TopologySnapshot> {
     const nowMs = now();
+    notePhase('topology:list');
     const managers = await deps.clone.managers.list();
     const unreadable = deps.unreadableJobs === undefined ? [] : await deps.unreadableJobs();
+    notePhase(`topology:build:${String(managers.length)}`);
     const value = buildTopologySnapshot({
       nowMs,
       // 実装していない器は `undefined`（分からない）: `null`（走っていない）と区別するため。
@@ -391,6 +395,7 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
       ...(deps.modelsOf === undefined ? {} : { modelsOf: deps.modelsOf }),
       ...(deps.cloneModel === undefined ? {} : { cloneModel: deps.cloneModel }),
     });
+    notePhase('topology:build-done');
     cached = { at: nowMs, value };
     return value;
   }
