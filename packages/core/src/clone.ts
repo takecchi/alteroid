@@ -409,6 +409,9 @@ export const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
   12 * 3_600_000,
 ];
 
+// 使い切っても諦めず、最後の間隔で拾えるまで続ける: 起動時の読み直しは1回きりで、諦めると前の器の未読（人間の発言・報告）が次の再起動まで誰にも配られないため
+export const RESTORE_UNREAD_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 15_000, 60_000];
+
 const EXTERNAL_PAYLOAD_LIMIT = 8_000;
 
 // 上限は外さない: 入口が本文の大きさを締めておらず、病的に大きい webhook が1件で日誌を膨らませうるため
@@ -593,6 +596,7 @@ export interface CloneOptions {
   humanPriority?: boolean;
   mergedBatchLimit?: number;
   dailyReportRetryDelaysMs?: readonly number[];
+  restoreUnreadRetryDelaysMs?: readonly number[];
   profile?: ProfileApplier;
   // デーモンが作った同じインスタンスを渡す: 別のインスタンスを持つと直列化の意味が消え、層ごとに違う本文が残るため
   profileService?: ProfileService;
@@ -786,6 +790,7 @@ class Clone implements CloneHost {
   readonly #humanPriority: boolean;
   readonly #mergedBatchLimit: number;
   readonly #dailyReportRetryDelays: readonly number[];
+  readonly #restoreUnreadRetryDelays: readonly number[];
   readonly #dailyReportRetries = new Map<string, number>();
   readonly #dailyReportRetryTimers = new Set<ReturnType<typeof setTimeout>>();
   readonly #mcpServerFactory: typeof createCloneMcpServer;
@@ -997,6 +1002,7 @@ class Clone implements CloneHost {
       humanPriority,
       mergedBatchLimit,
       dailyReportRetryDelaysMs,
+      restoreUnreadRetryDelaysMs,
       profile,
       profileService,
       credentialService,
@@ -1032,6 +1038,7 @@ class Clone implements CloneHost {
     this.#humanPriority = humanPriority ?? resolveCloneHumanPriority(envSource);
     this.#mergedBatchLimit = mergedBatchLimit ?? resolveMergedBatchSizeLimit(envSource);
     this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
+    this.#restoreUnreadRetryDelays = restoreUnreadRetryDelaysMs ?? RESTORE_UNREAD_RETRY_DELAYS_MS;
     this.#env = envSource;
     this.#childEnvBase = childEnvBase ?? envSource;
     this.#credentials = credentials;
@@ -3344,14 +3351,26 @@ class Clone implements CloneHost {
     return byKind;
   }
 
-  async #restoreUnreadPass(): Promise<ReadonlySet<string>> {
-    let pending: PendingInboxEvent[];
-    try {
-      pending = await this.#stores.inbox.claimPending();
-    } catch (error) {
-      noteDroppedRecord('未読の読み直し', '', error);
-      return new Set();
+  // 拾えるまでやり直す: 起動の直後は DB の繋ぎ直しと重なりやすく、1回の失敗で諦めると、前の器の未読は DB に残ったまま次の再起動まで配られないため
+  // `#restoreUnread()` の印（`#restoringUnread` / `#postedBeforeRestored`）を立てたまま待つ: 待っている間に `post()` された合図を「前の器の未読」として二度配らないため（#1984）
+  // 止めたら `undefined`: 片付け中に拾うと、配れない合図の配達回数だけが進むため
+  async #claimPendingUntilStopped(): Promise<PendingInboxEvent[] | undefined> {
+    const delays = this.#restoreUnreadRetryDelays;
+    for (let attempt = 0; ; attempt += 1) {
+      if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return undefined;
+      try {
+        return await this.#stores.inbox.claimPending();
+      } catch (error) {
+        noteDroppedRecord('未読の読み直し', `attempt=${String(attempt + 1)}`, error);
+      }
+      const delayMs = delays[Math.min(attempt, delays.length - 1)] ?? 0;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
+  }
+
+  async #restoreUnreadPass(): Promise<ReadonlySet<string>> {
+    const pending = await this.#claimPendingUntilStopped();
+    if (pending === undefined) return new Set();
 
     const claimedIds: ReadonlySet<string> = new Set(pending.map((record) => record.event.id));
 
