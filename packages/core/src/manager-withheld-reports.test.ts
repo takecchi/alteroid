@@ -1013,14 +1013,27 @@ describe('畳んだ報告の冒頭は、配る知らせから消えない（最�
     });
   }
 
+  // 実時間で待たない（#2146）: 畳んだ回ごとに日誌へ1本書かれる decision の本数で、畳み終えたことを見る
+  async function withheldDecisions(stores: Stores, expected: number): Promise<void> {
+    await vi.waitFor(async () => {
+      const entries = await stores.journal.list({ types: ['decision'] });
+      const count = entries.filter((entry) =>
+        JSON.stringify(entry).includes(
+          '背景処理の完了待ちで畳んだターンの報告なので受信箱へは回さない',
+        ),
+      ).length;
+      if (count < expected) throw new Error(`畳んだ報告がまだ ${String(count)} 本`);
+    });
+  }
+
   it('同じエピソードで2本畳んだ後の本物の報告に、1本目の冒頭も載る', async () => {
-    const { pool, inbox, fake } = await runningManualSetup();
+    const { pool, stores, inbox, fake } = await runningManualSetup();
 
     fake.report('mgr-withhold', '#1006 をマージした（6db19adf）', 'done', {
       awaitingBackground: AWAITING,
     });
     fake.report('mgr-withhold', '背景の CI を待っている', 'done', { awaitingBackground: AWAITING });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await withheldDecisions(stores, 2);
 
     fake.report('mgr-withhold', '本物の報告', 'done');
     const text = await lastReportText(inbox, '本物の報告');
@@ -1032,12 +1045,12 @@ describe('畳んだ報告の冒頭は、配る知らせから消えない（最�
   });
 
   it('flush の知らせに、畳んだ報告の冒頭が載る。flush 後に積んだ分は次の本物の報告に載る', async () => {
-    const { pool, inbox, fake, advance } = await runningManualSetup();
+    const { pool, stores, inbox, fake, advance } = await runningManualSetup();
 
     fake.report('mgr-withhold', '#1006 をマージした（6db19adf）', 'done', {
       awaitingBackground: AWAITING,
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await withheldDecisions(stores, 1);
 
     advance(WITHHELD_REPORT_FLUSH_MS + 1);
     await pool.flushWithheldReports();
@@ -1045,7 +1058,7 @@ describe('畳んだ報告の冒頭は、配る知らせから消えない（最�
     expect(flushed).toContain('#1006 をマージした（6db19adf）');
 
     fake.report('mgr-withhold', 'flush 後に畳んだ報告', 'done', { awaitingBackground: AWAITING });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await withheldDecisions(stores, 2);
     fake.report('mgr-withhold', '次の本物', 'done');
     const next = await lastReportText(inbox, '次の本物');
     expect(next).toContain('flush 後に畳んだ報告');
@@ -1055,12 +1068,12 @@ describe('畳んだ報告の冒頭は、配る知らせから消えない（最�
   });
 
   it('closed のまとめ配りにも、畳んだ報告の冒頭が載る', async () => {
-    const { pool, inbox, fake } = await runningManualSetup();
+    const { pool, stores, inbox, fake } = await runningManualSetup();
 
     fake.report('mgr-withhold', '#1006 をマージした（6db19adf）', 'done', {
       awaitingBackground: AWAITING,
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await withheldDecisions(stores, 1);
     fake.closed('mgr-withhold', 'done', '終わった');
     const text = await lastReportText(inbox, 'この委譲は終わった');
     expect(text).toContain('#1006 をマージした（6db19adf）');
@@ -1069,14 +1082,14 @@ describe('畳んだ報告の冒頭は、配る知らせから消えない（最�
   });
 
   it('字数の予算を超えたら、古い側が溢れ、溢れた本数と journal_read の案内が書かれる', async () => {
-    const { pool, inbox, fake } = await runningManualSetup();
+    const { pool, stores, inbox, fake } = await runningManualSetup();
 
     for (let n = 1; n <= 12; n += 1) {
       fake.report('mgr-withhold', `報告${String(n).padStart(2, '0')} ${'あ'.repeat(300)}`, 'done', {
         awaitingBackground: AWAITING,
       });
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await withheldDecisions(stores, 12);
 
     fake.report('mgr-withhold', '本物の報告', 'done');
     const text = await lastReportText(inbox, '本物の報告');
