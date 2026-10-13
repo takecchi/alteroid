@@ -23,10 +23,37 @@ export class CloneSdkSession<Q extends { close(): void } = Query, I = SDKUserMes
   open(query: Q, reader: Promise<void>): void {
     this.#query = query;
     this.#reader = reader;
+    this.#inputEndedForRecycle = false;
   }
 
   clearQuery(): void {
     this.#query = null;
+    const waiters = this.#clearedWaiters.splice(0);
+    for (const resolve of waiters) resolve();
+  }
+
+  /**
+   * 作り直しのために入力を閉じた（`#inputStream` が境界で `return` した）セッション。`open()` で下ろす。
+   * 立っている間に来たターンは、閉じたセッションのものではなく次のセッションのものである（境界は `turn === null` のときにしか閉じないため）。
+   */
+  #inputEndedForRecycle = false;
+
+  get inputEndedForRecycle(): boolean {
+    return this.#inputEndedForRecycle;
+  }
+
+  markInputEndedForRecycle(): void {
+    this.#inputEndedForRecycle = true;
+  }
+
+  readonly #clearedWaiters: (() => void)[] = [];
+
+  // `reader` を待たない: `#read` の `finally` は `clearQuery()` の後に退避（蒸留）を待つので、それまで次のターンを止めることになるため
+  whenQueryCleared(): Promise<void> {
+    if (this.#query === null) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.#clearedWaiters.push(resolve);
+    });
   }
 
   closeQuery(): void {

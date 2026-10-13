@@ -5166,6 +5166,8 @@ class Clone implements CloneHost {
       ) {
         // 文脈窓のほう（`#recycleForContextWindow`）では知らせない: 鍵と無関係で、鳴らすと「トークンが戻った」という嘘の合図が入るため。知らせの失敗は握る: セッションの作り直しを巻き添えにしないため。
         const recycledForToken = this.#sdkSession.takeTokenRecycle();
+        // 閉じたことを残す: 鍵の印はここで下ろすので、残さないと古いセッションが終わりきるまでの間、次のターンが閉じたセッションへ積まれる
+        this.#sdkSession.markInputEndedForRecycle();
         if (recycledForToken && this.#onTokenSessionRecycled !== undefined) {
           try {
             this.#onTokenSessionRecycled();
@@ -5225,7 +5227,12 @@ class Clone implements CloneHost {
   }
 
   async #ensureQuery(): Promise<void> {
-    if (this.#sdkSession.query) return;
+    if (this.#sdkSession.query) {
+      if (!this.#sdkSession.inputEndedForRecycle) return;
+      // 入力を閉じた古いセッションへは積まない: 誰も読まず、そのセッションが終わったときに、このターンが「セッションが終了した」で落ちるため
+      await this.#sdkSession.whenQueryCleared();
+      if (this.#sdkSession.query) return;
+    }
 
     const storedResume = await this.#stores.sessions.getCloneSessionId();
     // `load()` を呼ぶ前に大きさを測る: 超えた resume を読むと OOM になるため（`#resumeCandidateWithinBudget`）
@@ -6260,15 +6267,17 @@ class Clone implements CloneHost {
       }
     } finally {
       if (!this.#sdkSession.stopped) {
+        // 作り直しのために入力を閉じたセッションなら、立っているターンは次のセッションを待っている次のターンなので、失敗にも解決にもしない（`#ensureQuery` が `clearQuery()` を待っている）
+        const endedForRecycle = this.#sdkSession.inputEndedForRecycle;
         // result を伴わずに終わってもターンを取り残さない（取り残すと受信箱ごと止まる）
         const turn = this.#sdkSession.turn;
-        if (turn) {
+        if (turn && !endedForRecycle) {
           await this.#reportFailure(
             turn.conversationId,
             failure ?? 'クローンのセッションが終了した',
           );
         }
-        this.#finishTurn();
+        if (!endedForRecycle) this.#finishTurn();
         // `#query` を捨てる前に累積を読む（`#flushSessionUsage`）: 捨ててから読んでも何も取れない。
         await this.#flushSessionUsage();
         this.#sdkSession.clearQuery();

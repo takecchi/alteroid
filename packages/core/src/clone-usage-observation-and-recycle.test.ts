@@ -640,3 +640,96 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
     expect(sessions.length).toBeGreaterThan(1);
   });
 });
+
+describe('作り直しで入力を閉じた古いセッションが終わりきる前に、次の合図のターンが来ても落とさない', () => {
+  // 入力が閉じてから CLI が終わるまでに時間がかかる SDK: 本物では子プロセスの終了を待つ間に当たる
+  function slowCloseSdk(turnDelayMs: number, closeDelayMs: number) {
+    const sessions: { inputs: string[] }[] = [];
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      const session = { inputs: [] as string[] };
+      sessions.push(session);
+      const label = `sess-slow-close-${String(sessions.length)}`;
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: label,
+          uuid: `uuid-init-${label}`,
+          model: 'claude-fake',
+          claude_code_version: '9.9.9-fake',
+          apiKeySource: 'user',
+          permissionMode: 'default',
+          mcp_servers: [{ name: 'alteroid', status: 'connected' }],
+        } as unknown as SDKMessage;
+        const iterator = (params.prompt as AsyncIterable<{ message: { content: unknown } }>)[
+          Symbol.asyncIterator
+        ]();
+        for (let n = 1; ; n += 1) {
+          const current = await iterator.next();
+          if (current.done === true) {
+            await new Promise((resolve) => setTimeout(resolve, closeDelayMs));
+            return;
+          }
+          session.inputs.push(String(current.value.message.content));
+          await new Promise((resolve) => setTimeout(resolve, turnDelayMs));
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'わかった',
+            session_id: label,
+            uuid: `uuid-result-${label}-${String(n)}`,
+          } as unknown as SDKMessage;
+        }
+      }
+      return Object.assign(generate(), {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+    return { fn, sessions };
+  }
+
+  it('鍵の回転: 次の会話のターンは失敗せず、新しいセッションで走る', async () => {
+    const { fn, sessions } = slowCloseSdk(30, 150);
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const second: string[] = [];
+    clone.subscribe('conv-second', (event) => second.push(event.type));
+
+    clone.post({
+      type: 'human_message',
+      id: 'evt-slow-close-1',
+      at: new Date().toISOString(),
+      text: '1つ目の発言',
+      conversationId: 'conv-first',
+    });
+    await waitFor(() => sessions.length > 0, '1本目が開くこと');
+    clone.recycleSessionForToken();
+    // 1つ目のターンが走っている間に積む: ターンの境界で古いセッションが閉じ始めたとき、次の合図が既に待っている形にする
+    clone.post({
+      type: 'human_message',
+      id: 'evt-slow-close-2',
+      at: new Date().toISOString(),
+      text: '2つ目の発言',
+      conversationId: 'conv-second',
+    });
+
+    await waitFor(
+      () => second.includes('done') || second.includes('error'),
+      '2つ目の会話のターンが終わること',
+    );
+    await clone.stop();
+
+    expect(second).not.toContain('error');
+    expect(second).toContain('done');
+    expect(sessions).toHaveLength(2);
+    expect(sessions[1]?.inputs.some((text) => text.includes('2つ目の発言'))).toBe(true);
+  });
+});
