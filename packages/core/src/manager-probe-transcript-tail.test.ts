@@ -179,3 +179,56 @@ describe('ターンの終わりの見回りは、生ログの末尾だけを読�
     await unnamed.close();
   });
 });
+
+describe('ManagerPool#transcriptTail: 退避は末尾だけを読み、全文（archive.read）を取り寄せない（#4638）', () => {
+  async function poolWithArchivedJob(body: string) {
+    const stores = createMemoryStores();
+    const written = await stores.archive.archive('sess-archived', body);
+    await stores.jobs.putJob({
+      id: 'mgr-archived',
+      createdAt: '2026-10-13T00:00:00.000Z',
+      updatedAt: '2026-10-13T00:00:00.000Z',
+      status: 'done',
+      summary: '退避だけが残る委譲',
+      archiveIds: [written.id],
+    });
+    const fullRead = vi.spyOn(stores.archive, 'read');
+    const registry = createRunnerRegistry();
+    const pool = createManagerPool({ stores, post: () => {}, runners: registry });
+    // 省略可能な口を `?.` で呼ばない: 口が無い回に黙って測らずに緑になるため
+    const transcriptTail = pool.transcriptTail?.bind(pool);
+    if (transcriptTail === undefined) throw new Error('Pool に transcriptTail の口が無い');
+    return { stores, pool, transcriptTail, registry, fullRead, archiveId: written.id };
+  }
+
+  it('本文が上限より長ければ、上限を厳密に上回る末尾だけを返し、全文の読みを呼ばない', async () => {
+    const body = `${'あ'.repeat(5000)}\n${endTurnLine('末尾の報告')}`;
+    const h = await poolWithArchivedJob(body);
+
+    const result = await h.transcriptTail('mgr-archived', 1000);
+
+    expect(h.fullRead).not.toHaveBeenCalled();
+    expect(result.kind).toBe('body');
+    if (result.kind !== 'body') throw new Error('本文が返っていない');
+    expect(result.archiveId).toBe(h.archiveId);
+    expect(result.body.length).toBeGreaterThan(1000);
+    expect(result.body.length).toBeLessThan(body.length);
+    expect(body.endsWith(result.body)).toBe(true);
+
+    await h.pool.stop();
+    await h.registry.stop();
+  });
+
+  it('退避の本文が消されていれば removed を返す（missing に畳まない）', async () => {
+    const h = await poolWithArchivedJob(endTurnLine('消される報告'));
+    await h.stores.archive.remove(h.archiveId);
+
+    const result = await h.transcriptTail('mgr-archived', 1000);
+
+    expect(result.kind).toBe('removed');
+    expect(h.fullRead).not.toHaveBeenCalled();
+
+    await h.pool.stop();
+    await h.registry.stop();
+  });
+});

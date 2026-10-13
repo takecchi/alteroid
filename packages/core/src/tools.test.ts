@@ -10261,6 +10261,37 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
     expect(reply).not.toContain(reportBody);
   });
 
+  it('末尾を読む口（transcriptTail）があれば、全文を取り寄せずに判定し、読み始めを発言の時刻（since）で案内する（#4638）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    const reportBody = '末尾だけで見つかる報告（テスト用）';
+    const tail = [
+      JSON.stringify({
+        type: 'user',
+        isSidechain: false,
+        timestamp: '2026-08-26T20:30:00.000Z',
+        message: { role: 'user', content: 'ping' },
+      }),
+      assistantLine(reportBody, { timestamp: '2026-08-26T20:31:59.107Z', stopReason: 'end_turn' }),
+    ].join('\n');
+    const tailCalls: { managerId: string; maxChars: number }[] = [];
+    h.managers.transcriptTail = async (managerId, maxChars) => {
+      tailCalls.push({ managerId, maxChars });
+      return { kind: 'body', body: tail };
+    };
+    h.managers.transcript = async () => {
+      throw new Error('全文の口は呼ばれないはず');
+    };
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(tailCalls).toHaveLength(1);
+    expect(tailCalls[0]?.managerId).toBe('mgr-1');
+    expect(reply).toContain('配られていない');
+    expect(reply).toContain('manager_transcript managerId=mgr-1 since=2026-08-26T20:31:59.107Z');
+    expect(reply).not.toContain('offset=');
+  });
+
   it('生ログの最後の発言が end_turn ではない（ターン途中）とき、断定しない——⚠ も #323 も付けない', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
