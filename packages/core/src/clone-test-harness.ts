@@ -246,9 +246,11 @@ export function setup(
   sdkOptions: Parameters<typeof fakeSdk>[1] = {},
   // 既定は空にする: 手元の ALTEROID_CLONE_MODEL の有無でテストの結果を変えないため
   env: NodeJS.ProcessEnv = {},
+  cloneOptions: { contextUsageTimeoutMs?: number } = {},
 ): Setup {
   const { fn, calls } = fakeSdk(reply, sdkOptions);
   const clone = createClone({
+    ...cloneOptions,
     redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,

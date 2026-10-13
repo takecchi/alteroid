@@ -427,6 +427,36 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       await s.clone.stop();
     });
 
+    // CLI が生きたまま答えないと、ターンが終わらず、受信箱の次の合図へ永久に進まなかった（#4649）
+    it('⭐ `getContextUsage()` が返らなくても、期限で打ち切ってターンを終え、次の合図も処理する', async () => {
+      const s = setup(
+        undefined,
+        createMemoryStores(),
+        {
+          modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+          getContextUsage: () => new Promise(() => undefined),
+        },
+        {},
+        { contextUsageTimeoutMs: 50 },
+      );
+
+      s.clone.post(humanMessage('1つ目'));
+      await waitForDone(s.events);
+      s.clone.post(humanMessage('2つ目'));
+      await waitFor(
+        () => s.events.filter((event) => event.type === 'done').length >= 2,
+        '2つ目のターンの終わり',
+      );
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      expect(entry.contextUsage?.error).toContain('返らなかった');
+      expect(entry.contextUsage?.totalTokens).toBeUndefined();
+
+      await s.clone.stop();
+    });
+
     it('ターンの途中に届いた compact_boundary は `compactions` としてまとめて載る', async () => {
       const s = setup(undefined, createMemoryStores(), {
         modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),

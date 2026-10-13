@@ -95,7 +95,12 @@ function fakeSdk(options: { getContextUsage?: (callIndex: number) => unknown } =
   return { fn, sessions };
 }
 
-function setup(options: { getContextUsage?: (callIndex: number) => unknown } = {}): {
+function setup(
+  options: {
+    getContextUsage?: (callIndex: number) => unknown;
+    contextUsageTimeoutMs?: number;
+  } = {},
+): {
   pool: ReturnType<typeof createManagerPool>;
   stores: Stores;
   sessions: FakeSession[];
@@ -110,6 +115,9 @@ function setup(options: { getContextUsage?: (callIndex: number) => unknown } = {
       workspacePath: '/work/project',
       queryFn: fn,
       env: { PATH: '/usr/bin' },
+      ...(options.contextUsageTimeoutMs === undefined
+        ? {}
+        : { contextUsageTimeoutMs: options.contextUsageTimeoutMs }),
     }),
   ]);
   const pool = createManagerPool({
@@ -239,6 +247,35 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
     });
     expect(rows[0]?.contextUsage?.error).toBeDefined();
     expect(typeof rows[0]?.contextUsage?.durationMs).toBe('number');
+
+    await s.pool.stop();
+  });
+
+  // CLI が生きたまま答えないと、ターンの終わりの処理が先へ進まず、報告も closed も出ないまま running で残っていた（#4649）
+  it('⭐ `getContextUsage()` が返らなくても、期限で打ち切って報告を出し、打ち切りを error として残す', async () => {
+    const s = setup({
+      getContextUsage: () => new Promise(() => undefined),
+      contextUsageTimeoutMs: 50,
+    });
+    await s.pool.start({ request: '調べて' });
+    const session = await firstSession(s.sessions);
+    await session.finish('できました');
+
+    await vi.waitFor(
+      () => {
+        if (!s.inbox.some((event) => event.type === 'manager_message' && event.kind === 'report')) {
+          throw new Error('報告がまだ届いていない');
+        }
+      },
+      { timeout: 3000 },
+    );
+    const rows = await vi.waitFor(async () => {
+      const found = await turnUsageRows(s.stores);
+      if (found.length === 0) throw new Error('turn_usage がまだ日誌に無い');
+      return found;
+    });
+    expect(rows[0]?.contextUsage?.error).toContain('返らなかった');
+    expect(rows[0]?.contextUsage?.totalTokens).toBeUndefined();
 
     await s.pool.stop();
   });

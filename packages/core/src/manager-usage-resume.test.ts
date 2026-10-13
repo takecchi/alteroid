@@ -15,6 +15,7 @@ import {
 import type { InboxEvent, Job } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
+import type { TokenRotatorObservation } from './token-rotator.js';
 
 const JOB: Job = {
   id: 'mgr-usage',
@@ -587,6 +588,83 @@ describe('枠で止まった印を台帳へ持たせ、デーモンの入れ替�
     const after = await s.stores.jobs.listJobs();
     expect(after[0]?.status).toBe('running');
     expect(after[0]?.usageStoppedAt).toBeDefined();
+  });
+});
+
+// 鍵を回した後にデーモンが再起動すると、古い鍵のまま走り続けている委譲は身元（id・世代）を持たないまま引き取られる。
+// その委譲が古い鍵で枠に当たっても、回したばかりの鍵をもう一度回さず、新しい鍵で起こし直す（#4643）。
+describe('再起動で引き取った、古い鍵のままの委譲（#4643）', () => {
+  async function reattachOn(sessionFingerprint: string) {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(JOB);
+    const fake = nudgeRunner();
+    // 生きているセッションとして引き取らせる（resume させない）
+    await fake.runner.resume({
+      managerId: JOB.id,
+      cwd: '/work/project',
+      request: JOB.request ?? '',
+      sessionId: 'sess-1',
+    } as RunnerResumeCommand);
+    const alive = await fake.runner.list();
+    const state = alive[0];
+    if (state === undefined) throw new Error('生きているセッションを用意できなかった');
+    // 一覧は同じ物を返すので、ここで書いた欄は引き取り・畳みの確かめでも見える
+    state.tokenFingerprint = sessionFingerprint;
+    state.liveBackgroundTasks = 0;
+    fake.resumes.length = 0;
+
+    const registry = createRunnerRegistry([fake.runner]);
+    const inbox: InboxEvent[] = [];
+    const observations: TokenRotatorObservation[] = [];
+    const pool = createManagerPool({
+      stores,
+      post: (event) => inbox.push(event),
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+      tokenIdentity: () => ({ tokenId: 'tok-new', generation: 2, fingerprint: 'fp-new' }),
+      onUsageObservation: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await pool.restore();
+    fake.sends.length = 0;
+    return { pool, fake, observations };
+  }
+
+  it('古い鍵の指紋を枠の通知に添えて回し手へ渡す（回し手が「もう回した後」と判定できる）', async () => {
+    const s = await reattachOn('fp-old');
+    expect(s.fake.resumes).toEqual([]);
+
+    s.fake.push(reached());
+    await settle();
+
+    expect(s.observations.map((observation) => observation.observedBy)).toEqual([
+      { fingerprint: 'fp-old' },
+    ]);
+  });
+
+  it('⭐ 古い鍵のまま枠で落ちたら、鍵の側からの契機を待たずに、旧セッションを畳んで新しい鍵で起こし直す', async () => {
+    const s = await reattachOn('fp-old');
+
+    s.fake.push(reached());
+    s.fake.push(failedReport());
+    await settle();
+
+    // 古い鍵のセッションへ「続けて」を流すと、また枠に当たる
+    expect(s.fake.sends).toEqual([]);
+    expect(s.fake.resumes.map((command) => command.managerId)).toEqual([JOB.id]);
+  });
+
+  it('⚠️ 陰性対照: 現役と同じ鍵で走っている委譲は、枠で落ちても勝手に起こさない（鍵が戻ったと誰も言っていない）', async () => {
+    const s = await reattachOn('fp-new');
+
+    s.fake.push(reached());
+    s.fake.push(failedReport());
+    await settle();
+
+    expect(s.observations[0]?.observedBy).toEqual({ fingerprint: 'fp-new' });
+    expect(s.fake.sends).toEqual([]);
+    expect(s.fake.resumes).toEqual([]);
   });
 });
 

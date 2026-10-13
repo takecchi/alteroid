@@ -82,7 +82,11 @@ import type {
   AgentInputImage,
   AgentUserInput,
 } from './agent-session.js';
-import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
+import {
+  CONTEXT_USAGE_CATEGORY_LIMIT,
+  CONTEXT_USAGE_READ_TIMEOUT_MS,
+  contextUsageWithin,
+} from './context-usage.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
 import { buildDenialInputHead, matchInputOf, redactErrorText } from './denial-input-head.js';
 import {
@@ -468,6 +472,7 @@ export interface RunnerHostOptions {
   // 委譲の CLI を `<この実行ファイル> -s --` の子として起こす（tini の絶対パス。#4494）。無ければ CLI を直に起こす: tini の無い手元の構成でも動かすため
   delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
+  contextUsageTimeoutMs?: number;
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
   /**
    * 器の pids（cgroup の `pids.current` / `pids.max`）を読む口。渡したときだけ、上限に近い器の担当に道具の結果へ知らせを添える
@@ -690,6 +695,7 @@ class Host implements RunnerHost {
     ((options: SpawnAgentProcessOptions) => DelegationProcessHandle) | undefined;
   readonly #delegationSubreaper: string | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir | undefined;
+  readonly #contextUsageTimeoutMs: number | undefined;
   readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
   readonly #readPids: (() => Promise<{ current: number; max: number } | undefined>) | undefined;
   // 生ログの退避の本文を、デーモンが取りに来るまで預かる（#4485。`archive-ref.ts`）。捨てた分は stderr に残す（デーモンへの経路が無い時にも起きるため）
@@ -733,6 +739,7 @@ class Host implements RunnerHost {
     this.#spawnAgentProcessFn = options.spawnAgentProcessFn;
     this.#delegationSubreaper = options.delegationSubreaper;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn;
+    this.#contextUsageTimeoutMs = options.contextUsageTimeoutMs;
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
     this.#readPids =
       options.readPidsFn === undefined ? undefined : cachedPidsReader(options.readPidsFn);
@@ -1296,6 +1303,9 @@ class Host implements RunnerHost {
       ...(this.#handOverResumeConfigDirFn === undefined
         ? {}
         : { handOverResumeConfigDirFn: this.#handOverResumeConfigDirFn }),
+      ...(this.#contextUsageTimeoutMs === undefined
+        ? {}
+        : { contextUsageTimeoutMs: this.#contextUsageTimeoutMs }),
       ...(this.#readCgroupEventCountersFn === undefined
         ? {}
         : { readCgroupEventCountersFn: this.#readCgroupEventCountersFn }),
@@ -1760,6 +1770,7 @@ interface RunnerSessionOptions {
   spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
   delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
+  contextUsageTimeoutMs?: number;
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
   /** 器の pids と、器の上の担当の本数。渡されたときだけ、上限に近ければ道具の結果へ知らせを添える。 */
   pidsPressureFn?: () => Promise<PidsPressureReading | undefined>;
@@ -1823,6 +1834,7 @@ class RunnerSession {
   readonly #spawnAgentProcessFn: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
   readonly #delegationSubreaper: string | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir;
+  readonly #contextUsageTimeoutMs: number;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
   readonly #pidsPressureFn: (() => Promise<PidsPressureReading | undefined>) | undefined;
   readonly #stashArchive: ((body: string) => { id: string; chars: number } | undefined) | undefined;
@@ -1970,6 +1982,7 @@ class RunnerSession {
         spawnAsUser(this.#childUser as RunnerChildUser, { ...spawnOptions, detached: true }));
     this.#delegationSubreaper = options.delegationSubreaper;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn ?? chownTreeSync;
+    this.#contextUsageTimeoutMs = options.contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
     this.#readCgroupEventCountersFn =
       options.readCgroupEventCountersFn ?? (() => readCgroupEventCounters());
     this.#pidsPressureFn = options.pidsPressureFn;
@@ -3443,7 +3456,7 @@ class RunnerSession {
     if (session === null) return undefined;
     const startedAt = Date.now();
     try {
-      const usage = await session.contextUsage();
+      const usage = await contextUsageWithin(session.contextUsage(), this.#contextUsageTimeoutMs);
       const categories = (usage.categories ?? []).map((category) => ({
         name: category.name,
         tokens: category.tokens,

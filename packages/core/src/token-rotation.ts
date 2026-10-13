@@ -184,15 +184,22 @@ export type ObservationFreshness = 'current' | 'stale' | 'unknown';
 
 // tokenId だけで照合しない: 同じトークンが冷却明けにもう一度選ばれた後に届いた遅れた通知を現役の通知として受け取るため。
 // 現役が無いとき current と答えない: 照合していないのに「照合した」という嘘になるため
+// 指紋は id と世代が無いときだけ使う（#4643）: 再起動で引き取っただけのセッションは、デーモンが撒いた身元を持たないが、
+// runner はセッションの env に入っている鍵の指紋を名乗る。現役の指紋と違えば、その通知は今の現役についてのものではない。
+// 指紋が同じなら current: 世代は分からないが、枠に当たったのは現役と同じ値の鍵そのものである。
 export function observationFreshness(
   active: ActiveAgentToken | null,
-  observed: { tokenId?: string; generation?: number },
+  observed: { tokenId?: string; generation?: number; fingerprint?: string },
+  activeFingerprint?: string,
 ): ObservationFreshness {
   if (active === null) return 'unknown';
   if (observed.generation !== undefined && observed.generation !== active.generation)
     return 'stale';
   if (observed.tokenId !== undefined && observed.tokenId !== active.tokenId) return 'stale';
-  if (observed.generation === undefined && observed.tokenId === undefined) return 'unknown';
+  if (observed.generation === undefined && observed.tokenId === undefined) {
+    if (observed.fingerprint === undefined || activeFingerprint === undefined) return 'unknown';
+    return observed.fingerprint === activeFingerprint ? 'current' : 'stale';
+  }
   return 'current';
 }
 

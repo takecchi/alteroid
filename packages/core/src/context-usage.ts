@@ -3,6 +3,27 @@ import { exactTokens, type ExactTokens } from './quantity.js';
 // 軸の件数の上限を二重に定義しない: クローン層とランナー層の両方が使うため。版が上がって軸が増えたときに日誌の1行が黙って伸びるのを塞ぐ
 export const CONTEXT_USAGE_CATEGORY_LIMIT = 24;
 
+// ターンの終わりで聞く文脈占有の締め切り。層が2つとも同じこれを使う（#4649）
+// 期限を置く: 聞いている間はそのターンの終わりの処理（報告・受信箱の次の合図）が先へ進まず、CLI が生きたまま答えないと永久に止まるため。観測であって仕事ではない
+export const CONTEXT_USAGE_READ_TIMEOUT_MS = 10_000;
+
+// 期限を過ぎたら投げる（`undefined` に畳まない）: 呼び出し元の catch が「測れなかった」を `error` として日誌へ残し、黙った回が数えられるようにするため
+// 打ち切った後に返ってきた答えと失敗は捨てる（未処理の拒否にしない）
+export async function contextUsageWithin<T>(answer: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`getContextUsage が ${String(ms)}ms 以内に返らなかった`));
+    }, ms);
+  });
+  answer.catch(() => undefined);
+  try {
+    return await Promise.race([answer, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // 分類は kind だけで行い、name の英語の文字列を見ない:
 // > [sdk-verbatim SDKControlGetContextUsageResponse.categories.kind]
 // > Classify on this, never on the English name.

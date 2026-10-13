@@ -44,7 +44,11 @@ import {
   resolveCloneToolsTransportFor,
   type CloneToolsTransport,
 } from './clone-tools-transport.js';
-import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
+import {
+  CONTEXT_USAGE_CATEGORY_LIMIT,
+  CONTEXT_USAGE_READ_TIMEOUT_MS,
+  contextUsageWithin,
+} from './context-usage.js';
 import {
   completedTimerRoundVerdict,
   restoredInboxEventVerdict,
@@ -597,6 +601,7 @@ export interface CloneOptions {
   mergedBatchLimit?: number;
   dailyReportRetryDelaysMs?: readonly number[];
   restoreUnreadRetryDelaysMs?: readonly number[];
+  contextUsageTimeoutMs?: number;
   profile?: ProfileApplier;
   // デーモンが作った同じインスタンスを渡す: 別のインスタンスを持つと直列化の意味が消え、層ごとに違う本文が残るため
   profileService?: ProfileService;
@@ -791,6 +796,7 @@ class Clone implements CloneHost {
   readonly #mergedBatchLimit: number;
   readonly #dailyReportRetryDelays: readonly number[];
   readonly #restoreUnreadRetryDelays: readonly number[];
+  readonly #contextUsageTimeoutMs: number;
   readonly #dailyReportRetries = new Map<string, number>();
   readonly #dailyReportRetryTimers = new Set<ReturnType<typeof setTimeout>>();
   readonly #mcpServerFactory: typeof createCloneMcpServer;
@@ -1003,6 +1009,7 @@ class Clone implements CloneHost {
       mergedBatchLimit,
       dailyReportRetryDelaysMs,
       restoreUnreadRetryDelaysMs,
+      contextUsageTimeoutMs,
       profile,
       profileService,
       credentialService,
@@ -1039,6 +1046,7 @@ class Clone implements CloneHost {
     this.#mergedBatchLimit = mergedBatchLimit ?? resolveMergedBatchSizeLimit(envSource);
     this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
     this.#restoreUnreadRetryDelays = restoreUnreadRetryDelaysMs ?? RESTORE_UNREAD_RETRY_DELAYS_MS;
+    this.#contextUsageTimeoutMs = contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
     this.#env = envSource;
     this.#childEnvBase = childEnvBase ?? envSource;
     this.#credentials = credentials;
@@ -6091,7 +6099,7 @@ class Clone implements CloneHost {
     }
     const startedAt = Date.now();
     try {
-      const usage = await q.contextUsage();
+      const usage = await contextUsageWithin(q.contextUsage(), this.#contextUsageTimeoutMs);
       // 分類は `kind` の値だけで行い `name` の文字列は見ない（`summarizeContextCategories` が1箇所で持つ）。
       const categories = (usage.categories ?? []).map((category) => ({
         name: category.name,
