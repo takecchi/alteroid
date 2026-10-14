@@ -49,6 +49,7 @@ function stubClone(): CloneHost {
   return {
     managers,
     post: () => 'conversation-1',
+    postPersisted: () => Promise.resolve('persisted' as const),
     subscribe: () => () => undefined,
     attach: () => ({
       inProgress: [{ type: 'thinking' }],

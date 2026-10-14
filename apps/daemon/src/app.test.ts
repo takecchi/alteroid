@@ -113,6 +113,7 @@ function fakeClone() {
   let vacateResult: VacateResult = {};
   let abortOutcome: 'stopped' | 'not_stopped' | 'unknown' = 'stopped';
   let sendOutcome: 'answered' | 'delivered' | 'session_missing' = 'delivered';
+  let persistOutcome: 'persisted' | 'unavailable' = 'persisted';
   const pushHealthByRunnerId = new Map<string, RunnerPushHealth>();
   const pluginLoadByRunnerId = new Map<string, RunnerPluginLoadObservation>();
   let clonePluginLoad: ClonePluginLoadObservation | undefined;
@@ -212,8 +213,10 @@ function fakeClone() {
   };
 
   const clone: CloneHost = {
+    // `post` と同じく返事を流す: `/chat` の人間の発言はこちらを通る（#4679）
     async postPersisted(event) {
-      posted.push(event);
+      if (persistOutcome === 'unavailable') return 'unavailable';
+      clone.post(event);
       return 'persisted';
     },
     managers,
@@ -294,6 +297,9 @@ function fakeClone() {
     },
     setAbortOutcome(outcome: 'stopped' | 'not_stopped' | 'unknown') {
       abortOutcome = outcome;
+    },
+    setPersistOutcome(outcome: 'persisted' | 'unavailable') {
+      persistOutcome = outcome;
     },
     setSendOutcome(outcome: 'answered' | 'delivered' | 'session_missing') {
       sendOutcome = outcome;
@@ -565,6 +571,39 @@ describe('HTTP API', () => {
     expect(fake.posted).toHaveLength(1);
     expect(fake.posted[0]).toMatchObject({ type: 'human_message', text: 'やあ' });
 
+    await reader.cancel();
+  });
+
+  it('⭐ 発言を受信箱へ書けなければ open を出さずに閉じ、受け取りの印を取り下げる。同じ clientMessageId の送り直しは受け取られる（#4679）', async () => {
+    fake.setPersistOutcome('unavailable');
+    const failed = await app.request(
+      '/chat',
+      json({ text: '書けなかった発言', clientMessageId: 'cm-4679' }),
+    );
+    expect(failed.status).toBe(200);
+    const failedBody = await failed.text();
+    expect(failedBody).not.toContain('event: open');
+    expect(failedBody).toContain('発言を受信箱へ書けなかったので受け取っていない');
+    expect(fake.posted).toEqual([]);
+
+    fake.setPersistOutcome('persisted');
+    const retried = await app.request(
+      '/chat',
+      json({ text: '書けなかった発言', clientMessageId: 'cm-4679' }),
+    );
+    const reader = (retried.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let seen = '';
+    while (!seen.includes('event: open')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += decoder.decode(value, { stream: true });
+    }
+    expect(seen).toContain('event: open');
+    // 重複（duplicate: true）として畳まれていない
+    expect(seen).not.toContain('"duplicate":true');
+    expect(fake.posted).toHaveLength(1);
+    expect(fake.posted[0]).toMatchObject({ type: 'human_message', text: '書けなかった発言' });
     await reader.cancel();
   });
 
