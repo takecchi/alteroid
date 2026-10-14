@@ -12,6 +12,7 @@
 
 import { isRunningJobStatus } from './job-status-running.js';
 import {
+  commitmentIsResponseJudgeable,
   commitmentOriginSchema,
   type Commitment,
   type CommitmentOrigin,
@@ -98,7 +99,8 @@ export interface ProgressBacklog {
     buckets: ProgressAgeBuckets;
   };
   /**
-   * `untouched` / `responded` / `notApplicable` は排他で、足すと `total` になる。
+   * `untouched` / `responded` / `unjudgeable` / `notApplicable` は排他で、足すと `total` になる。
+   * `unjudgeable` は会話（`source`）の無い human の行: 返事を結べないので「未着手」に数えない。
    * `delegated` は他と排他ではない（未着手のまま委譲が走っている行が在りうる）。
    */
   byState: {
@@ -106,6 +108,7 @@ export interface ProgressBacklog {
     responded: number;
     delegated: number;
     notApplicable: number;
+    unjudgeable: number;
   };
   /**
    * `trimmedClosed` は backlog の数には効かない: 刈られるのは片付き行だけで、未了の数・内訳・齢は
@@ -225,7 +228,7 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
   };
 
   const byOrigin = emptyByOrigin();
-  const byState = { untouched: 0, responded: 0, delegated: 0, notApplicable: 0 };
+  const byState = { untouched: 0, responded: 0, delegated: 0, notApplicable: 0, unjudgeable: 0 };
   const buckets: ProgressAgeBuckets = { under1h: 0, under24h: 0, under7d: 0, over7d: 0 };
   const openAgesHours: number[] = [];
   let oldestOpenAt: { iso: string; ms: number } | null = null;
@@ -254,7 +257,9 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
     if (entry.origin !== 'human') {
       byState.notApplicable += 1;
     } else {
-      if (entry.respondedAt !== undefined) byState.responded += 1;
+      // 「未着手」に丸めない: 会話に結べない行の「返事なし」は「見えない」であって「未着手」ではなく、丸めると嘘になるため
+      if (!commitmentIsResponseJudgeable(entry)) byState.unjudgeable += 1;
+      else if (entry.respondedAt !== undefined) byState.responded += 1;
       else byState.untouched += 1;
       if (entry.activeManagerIds !== undefined && entry.activeManagerIds.length > 0) {
         byState.delegated += 1;

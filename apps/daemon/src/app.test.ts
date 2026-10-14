@@ -7017,7 +7017,13 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       total: number;
       byOrigin: Record<string, number>;
       age: { oldestAt: string | null; medianHours: number | null };
-      byState: { untouched: number; responded: number; delegated: number; notApplicable: number };
+      byState: {
+        untouched: number;
+        responded: number;
+        delegated: number;
+        notApplicable: number;
+        unjudgeable: number;
+      };
       completeness: { unreadable: number; trimmedClosed: number; unreadableJobs: number };
     };
     inProgress: {
@@ -7162,10 +7168,11 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(body.backlog.total).toBe(4);
     expect(body.backlog.byOrigin).toEqual({ human: 3, manager: 0, external: 1, self: 0 });
     expect(body.backlog.byState).toEqual({
-      untouched: 2,
+      untouched: 1,
       responded: 1,
       delegated: 1,
       notApplicable: 1,
+      unjudgeable: 1,
     });
     expect(body.inProgress.running).toBe(2);
     expect(body.inProgress.awaitingHuman).toBe(1);

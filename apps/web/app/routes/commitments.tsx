@@ -588,6 +588,12 @@ function EditedBadge({ commitment }: { commitment: Commitment }) {
 // InProgressBadge とは別のバッジのまま: 排他ではなく、1つの2値バッジへ畳むと両方が真の行を表せない。
 function AnsweredStateBadge({ commitment }: { commitment: Commitment }) {
   if (commitment.origin !== 'human') return null;
+  // 「未着手」を出さない: 会話（source）に結べない行の「返事なし」は「見えない」であり、丸めて「未着手」と言うと嘘になるため（#4817、teto（クローン）が案A に決定）
+  if (commitment.source === undefined) {
+    return (
+      <span className="text-xs text-muted-foreground">返事の判定なし（会話に結んでいない）</span>
+    );
+  }
   if (commitment.respondedAt !== undefined) {
     return (
       <Badge tone="accent">

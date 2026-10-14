@@ -872,13 +872,20 @@ export function commitmentUpdatedAt(entry: Pick<Commitment, 'at' | 'closedAt'>):
   return entry.closedAt ?? entry.at;
 }
 
+// 会話（`source`）の無い human の行を「判定できない」と分ける: 返事も委譲も会話に結んで探すので、結べない行の「返事なし」は「未着手」ではなく「見えない」であり、丸めて「未着手」と言うと嘘になるため（#4817、teto（クローン）が案A に決定）
+export function commitmentIsResponseJudgeable<C extends Pick<Commitment, 'origin' | 'source'>>(
+  commitment: C,
+): commitment is C & { origin: 'human'; source: string } {
+  return commitment.origin === 'human' && commitment.source !== undefined;
+}
+
 // 新しい状態を「書く」場所を作らず、既存の日誌の `exchange` を読むだけにする: クローンが手で維持する欄を足すと、クローンはそれを忘れるため
 // 「人間の回答待ち」は出さない: `PendingApproval` と `Commitment` を結ぶ id が無く、結べないものを出すと判定を丸めた嘘になるため
 export function commitmentRespondedAt(
   commitment: Pick<Commitment, 'origin' | 'source' | 'at'>,
   humanOutboundRepliesByConversation: ReadonlyMap<string, readonly string[]>,
 ): string | undefined {
-  if (commitment.origin !== 'human' || commitment.source === undefined) return undefined;
+  if (!commitmentIsResponseJudgeable(commitment)) return undefined;
   const replies = humanOutboundRepliesByConversation.get(commitment.source);
   if (replies === undefined) return undefined;
   // 並べ直さない: ソートは組み立て側で1回だけ行うため
@@ -893,7 +900,7 @@ export function commitmentActiveDelegationIds(
     readonly { managerId: string; createdAt: string }[]
   >,
 ): string[] | undefined {
-  if (commitment.origin !== 'human' || commitment.source === undefined) return undefined;
+  if (!commitmentIsResponseJudgeable(commitment)) return undefined;
   const managers = activeManagersByConversation.get(commitment.source);
   if (managers === undefined) return undefined;
   const ids = managers.filter((m) => m.createdAt > commitment.at).map((m) => m.managerId);

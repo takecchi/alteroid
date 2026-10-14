@@ -279,6 +279,8 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
 function BacklogCard({ progress }: { progress: Progress }) {
   const { backlog, github, observedAt } = progress;
   const { byOrigin, age, byState, completeness } = backlog;
+  // 古いデーモンの応答には無い欄: 無ければ出さない（0 と推測で書かない）
+  const unjudgeable: number | undefined = byState.unjudgeable;
   // trimmedClosed を判定に入れない: 刈られた完了済みの記録は未完了の数に影響しないため
   const partial = completeness.unreadable !== 0;
   // 読めない行があるのに「無いため」と言うと、読めなかった未了の存在を打ち消してしまう。
@@ -305,7 +307,7 @@ function BacklogCard({ progress }: { progress: Progress }) {
     },
     {
       label: '進み具合',
-      value: `未着手 ${count(byState.untouched)} / 返答済み（まだ閉じていない） ${count(byState.responded)} / マネージャーに任せた ${count(byState.delegated)}（他の項目と重なることがあります） / 人間からの依頼ではない ${count(byState.notApplicable)}`,
+      value: `未着手 ${count(byState.untouched)} / 返答済み（まだ閉じていない） ${count(byState.responded)} / マネージャーに任せた ${count(byState.delegated)}（他の項目と重なることがあります） / 人間からの依頼ではない ${count(byState.notApplicable)}${unjudgeable === undefined ? '' : ` / 判定できない（会話に結んでいない） ${count(unjudgeable)}`}`,
     },
   ];
 

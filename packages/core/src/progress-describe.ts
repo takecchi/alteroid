@@ -24,9 +24,11 @@ function at(iso: string | null, now: number): string {
   return `${iso}（${formatElapsedAgo(iso, now)}）`;
 }
 
-/** `completeness.unreadableJobs` だけ任意にする: 古いデーモンの応答には無く、CLI は応答を型で検査せず渡すから。 */
+/** `completeness.unreadableJobs` を任意にする: 古いデーモンの応答には無く、CLI は応答を型で検査せず渡すから。 */
 export type ProgressViewInput = Omit<ProgressView, 'backlog'> & {
-  backlog: Omit<ProgressView['backlog'], 'completeness'> & {
+  backlog: Omit<ProgressView['backlog'], 'completeness' | 'byState'> & {
+    /** `unjudgeable` も任意: 古いデーモンの応答には無く、無いものは 0 と書かず出さない。 */
+    byState: Omit<ProgressView['backlog']['byState'], 'unjudgeable'> & { unjudgeable?: number };
     completeness: Omit<ProgressView['backlog']['completeness'], 'unreadableJobs'> & {
       unreadableJobs?: number;
     };
@@ -57,7 +59,10 @@ export function describeProgress(view: ProgressViewInput): string {
   const state = backlog.byState;
   lines.push(
     `  状態別: 未着手 ${String(state.untouched)} / 返答済み・未クローズ ${String(state.responded)} / ` +
-      `委譲あり ${String(state.delegated)}（他と重なりうる） / 人間起点でない ${String(state.notApplicable)}`,
+      `委譲あり ${String(state.delegated)}（他と重なりうる） / 人間起点でない ${String(state.notApplicable)}` +
+      (state.unjudgeable === undefined
+        ? ''
+        : ` / 判定できない（会話に結んでいない） ${String(state.unjudgeable)}`),
   );
 
   lines.push('', '実施中（委譲）');
