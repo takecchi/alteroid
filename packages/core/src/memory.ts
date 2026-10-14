@@ -130,9 +130,13 @@ export async function deriveHumanTouchedAtFromJournal(
   await walkMemoryUpdateJournalAscending(journal, pageSize, (page) => {
     for (const entry of page) {
       if (entry.type !== 'memory_update') continue;
+      // 消した行で、それまでの印を捨てる（#4773）: 器の `remove` は誰が消しても派生値を一緒に消すので、残すと作り直した記憶が再起動の後だけ古い印を名乗るため。
+      // 削除そのものは印にしない: 人間による削除は将来この slug に書かれる新しい内容を保護する理由にならないため
+      if (entry.action === 'remove') {
+        result.delete(entry.slug);
+        continue;
+      }
       if (entry.cause !== 'human') continue;
-      // action:'remove' は含めない: 人間による削除は将来この slug に書かれる新しい内容を保護する理由にならないため
-      if (entry.action === 'remove') continue;
       result.set(entry.slug, entry.at);
     }
   });
@@ -149,6 +153,11 @@ export async function deriveMemoryCreatedAtFromJournal(
   await walkMemoryUpdateJournalAscending(journal, pageSize, (page) => {
     for (const entry of page) {
       if (entry.type !== 'memory_update') continue;
+      // 消した行で、それまでの作った時刻を捨てる（#4773。理由は `deriveHumanTouchedAtFromJournal` と同じ）
+      if (entry.action === 'remove') {
+        result.delete(entry.slug);
+        continue;
+      }
       // action:'append' と action 無しは対象にしない: 広げて誤って早い時刻を拾うより、根拠が無ければ unknown に倒すため
       if (entry.action !== 'write') continue;
       if (!result.has(entry.slug)) result.set(entry.slug, entry.at);
