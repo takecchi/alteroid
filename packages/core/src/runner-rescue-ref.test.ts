@@ -214,3 +214,27 @@ describe('担当が終わったときにも退避 ref を撃つ（#4677）', () 
     );
   });
 });
+
+describe('退避から漏れた作業ツリーを note で知らせる（#4681）', () => {
+  it('⭐ 作業ツリーが上限を超えたら、退避が漏れたことを note で1度だけ知らせる（周期が何度回っても繰り返さない）', async () => {
+    const work = path.join(root, 'many');
+    for (let i = 0; i < 21; i += 1) {
+      const dir = path.join(work, `r${String(i).padStart(2, '0')}`);
+      await mkdir(dir, { recursive: true });
+      g(dir, 'init', '-q', '-b', 'main');
+    }
+    const { host, events } = setup(40);
+    await host.start({ managerId: 'mgr-4681note', request: '依頼', cwd: work });
+    const notes = () =>
+      events.filter(
+        (event) =>
+          event.type === 'note' &&
+          event.text.includes('退避 ref') &&
+          event.text.includes('打ち切った'),
+      );
+    await vi.waitFor(() => expect(notes()).toHaveLength(1), { timeout: 5000 });
+    // 偽の時計にしない: 周期は本物の git の子プロセスを起こすので回らない（上の試験と同じ）
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(notes()).toHaveLength(1);
+  });
+});
