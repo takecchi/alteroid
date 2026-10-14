@@ -516,9 +516,16 @@ export async function chatCommand(): Promise<void> {
           continue;
         }
 
-        const editCommand = runEditDraftCommand(line, listed, draft, editing);
+        slashFailure = null;
+        const editCommand = runEditDraftCommand(line, listed, draft, editing, (reason) => {
+          slashFailure ??= reason;
+        });
         if (editCommand.handled) {
           editing = editCommand.editing;
+          if (slashFailure !== null && !interactive) {
+            abortReason = `コマンド ${line.split(/\s+/)[0] ?? ''} が失敗した（${redactError(slashFailure)}）`;
+            break;
+          }
           continue;
         }
 
@@ -1908,10 +1915,12 @@ export async function runSlashCommand(
       }
       const id = resolveListedId(reference, listed.messages);
       if (id === null) {
+        const missing = `[${reference}] は直前の /conversation の一覧にありません`;
         stdout.write(
-          `[${reference}] は直前の /conversation の一覧にありません` +
-            '（番号は、その会話でまだ畳まれていない自分の発言だけに振られています）\n',
+          `${missing}（番号は、その会話でまだ畳まれていない自分の発言だけに振られています）\n`,
         );
+        // 書き込み系なので失敗として渡す（#4795）
+        onFailed?.(missing);
         return 'ok';
       }
       const owningConversationId = listed.messagesConversationId;
@@ -2010,7 +2019,10 @@ export async function runSlashCommand(
       }
       const id = resolveListedId(reference, listed.managers);
       if (id === null) {
-        stdout.write(`[${reference}] は /managers の一覧にありません\n`);
+        const missing = `[${reference}] は /managers の一覧にありません`;
+        stdout.write(`${missing}\n`);
+        // 書き込み系なので失敗として渡す（#4795。`/answer` と同じ）: 渡さないと、非対話で止まらず終了コードも 0 になるため
+        onFailed?.(missing);
         return 'ok';
       }
       if (
@@ -2080,7 +2092,10 @@ export async function runSlashCommand(
       }
       const id = resolveListedId(reference, listed.managers);
       if (id === null) {
-        stdout.write(`[${reference}] は /managers の一覧にありません\n`);
+        const missing = `[${reference}] は /managers の一覧にありません`;
+        stdout.write(`${missing}\n`);
+        // 書き込み系なので失敗として渡す（#4795。`/answer` と同じ）: 渡さないと、非対話で止まらず終了コードも 0 になるため
+        onFailed?.(missing);
         return 'ok';
       }
       const response = await client.managers[':id'].messages.$post({
@@ -2111,6 +2126,8 @@ export async function runSlashCommand(
       const target = await resolveWaitingTarget(reference, listed.waiting, client);
       if (!target.ok) {
         stdout.write(`${target.message}\n`);
+        // 送っていないので失敗として渡す（#4795）
+        onFailed?.(target.message);
         return 'ok';
       }
       const response = await client.managers[':id'].messages.$post({
@@ -2143,6 +2160,8 @@ export async function runSlashCommand(
         const target = await resolveDecisionOnlyManager(client);
         if (!target.ok) {
           stdout.write(`${target.message}\n`);
+          // 送っていないので失敗として渡す（#4795）
+          onFailed?.(target.message);
           return 'ok';
         }
         const response = await client.managers[':id'].messages.$post({
@@ -2168,6 +2187,8 @@ export async function runSlashCommand(
       const target = await resolveWaitingTarget(reference ?? '', listed.waiting, client);
       if (!target.ok) {
         stdout.write(`${target.message}\n`);
+        // 送っていないので失敗として渡す（#4795）
+        onFailed?.(target.message);
         return 'ok';
       }
       const response = await client.managers[':id'].messages.$post({
@@ -2768,7 +2789,10 @@ export async function runSlashCommand(
       }
       const id = resolveListedId(reference, listed.commitments);
       if (id === null) {
-        stdout.write(`[${reference}] は /commitments の一覧にありません\n`);
+        const missing = `[${reference}] は /commitments の一覧にありません`;
+        stdout.write(`${missing}\n`);
+        // 書き込み系なので失敗として渡す（#4795）
+        onFailed?.(missing);
         return 'ok';
       }
       const response = await client.commitments[':id'].close.$post({
@@ -2804,7 +2828,10 @@ export async function runSlashCommand(
       }
       const id = resolveListedId(reference, listed.commitments);
       if (id === null) {
-        stdout.write(`[${reference}] は /commitments の一覧にありません\n`);
+        const missing = `[${reference}] は /commitments の一覧にありません`;
+        stdout.write(`${missing}\n`);
+        // 書き込み系なので失敗として渡す（#4795）
+        onFailed?.(missing);
         return 'ok';
       }
       const response = await client.commitments[':id'].$patch({
@@ -4146,6 +4173,8 @@ export function runEditDraftCommand(
   listed: Listed,
   draft: AttachmentDraft,
   editing: EditInProgress | null,
+  // 編集を始められなかった断りを渡す（#4795）: 非対話で止めないと、編集のつもりの次の行が新しい発言として送られるため
+  onFailed?: (reason: string) => void,
 ): { handled: false } | { handled: true; editing: EditInProgress | null } {
   if (/^\/edit-cancel(\s|$)/.test(line)) {
     if (editing === null) {
@@ -4164,6 +4193,7 @@ export function runEditDraftCommand(
     stdout.write(
       '編集の途中です。本文を打って確定するか、/edit-cancel でやめてから、もう一度 /edit してください\n',
     );
+    onFailed?.('編集の途中で /edit した');
     return { handled: true, editing };
   }
   if (/\s/.test(args)) return { handled: false }; // 1行の形
@@ -4173,17 +4203,20 @@ export function runEditDraftCommand(
       `[${args}] は直前の /conversation の一覧にありません` +
         '（番号は、その会話でまだ畳まれていない自分の発言だけに振られています）\n',
     );
+    onFailed?.(`[${args}] は直前の /conversation の一覧にありません`);
     return { handled: true, editing };
   }
   const owning = listed.messagesConversationId;
   if (owning === null) {
     stdout.write('先に /conversation <番号|id> でその発言が含まれる会話を開いてください\n');
+    onFailed?.('編集する発言の会話を開いていない');
     return { handled: true, editing };
   }
   if (draft.count > 0) {
     stdout.write(
       '添えかけのファイルが残っています。先に送るか、/detach all で外してから /edit してください\n',
     );
+    onFailed?.('添えかけのファイルが残っている');
     return { handled: true, editing };
   }
   const original = listed.messageAttachments[id] ?? [];
