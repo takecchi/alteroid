@@ -189,6 +189,29 @@ describe('MemoryCreatedAt の網羅性', () => {
 });
 
 describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠を導出する', () => {
+  it('⭐ 消して作り直した slug は、作り直した書き込みの at を採る（器の remove と同じ。#4773）', async () => {
+    const journal = fakeJournal([
+      memoryUpdateEntry('notes', '2026-01-03T00:00:00.000Z', 'write', { cause: 'clone' }),
+      memoryUpdateEntry('notes', '2026-01-02T00:00:00.000Z', 'remove', { cause: 'clone' }),
+      memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write', { cause: 'human' }),
+    ]);
+
+    const result = await deriveMemoryCreatedAtFromJournal(journal);
+
+    expect(result.get('notes')).toBe('2026-01-03T00:00:00.000Z');
+  });
+
+  it('消したまま作り直していない slug は、作った時刻を持たない（#4773）', async () => {
+    const journal = fakeJournal([
+      memoryUpdateEntry('notes', '2026-01-02T00:00:00.000Z', 'remove', { cause: 'clone' }),
+      memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write', { cause: 'clone' }),
+    ]);
+
+    const result = await deriveMemoryCreatedAtFromJournal(journal);
+
+    expect(result.has('notes')).toBe(false);
+  });
+
   it('その slug の最初の write の at が採られる（新しいほうが採られないこと）', async () => {
     const journal = fakeJournal([
       memoryUpdateEntry('notes', '2026-03-01T00:00:00.000Z', 'write'),
@@ -237,6 +260,32 @@ describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠�
 });
 
 describe('deriveHumanTouchedAtFromJournal — 日誌から human guard の根拠を導出する', () => {
+  for (const remover of ['human', 'clone'] as const) {
+    it(`⭐ 人が書いた後に ${remover} が消し、クローンが作り直した slug には印を残さない（器の remove と同じ。#4773）`, async () => {
+      const journal = fakeJournal([
+        memoryUpdateEntry('notes', '2026-01-03T00:00:00.000Z', 'write', { cause: 'clone' }),
+        memoryUpdateEntry('notes', '2026-01-02T00:00:00.000Z', 'remove', { cause: remover }),
+        memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write', { cause: 'human' }),
+      ]);
+
+      const result = await deriveHumanTouchedAtFromJournal(journal);
+
+      expect(result.has('notes')).toBe(false);
+    });
+  }
+
+  it('消した後に人がまた書いたら、その書き込みの at が印になる（#4773）', async () => {
+    const journal = fakeJournal([
+      memoryUpdateEntry('notes', '2026-01-03T00:00:00.000Z', 'write', { cause: 'human' }),
+      memoryUpdateEntry('notes', '2026-01-02T00:00:00.000Z', 'remove', { cause: 'human' }),
+      memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write', { cause: 'human' }),
+    ]);
+
+    const result = await deriveHumanTouchedAtFromJournal(journal);
+
+    expect(result.get('notes')).toBe('2026-01-03T00:00:00.000Z');
+  });
+
   it('その slug の最後（最新）の human 書き込みの at が採られる', async () => {
     const journal = fakeJournal([
       memoryUpdateEntry('notes', '2026-03-01T00:00:00.000Z', 'write', { cause: 'human' }),
