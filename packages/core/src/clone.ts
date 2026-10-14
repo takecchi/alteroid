@@ -4319,7 +4319,20 @@ class Clone implements CloneHost {
       text: `${EXCHANGE_KIND_RECOVERY_PREFIX}前の器が記憶へ移せなかった区間を拾い直す: ${grave.archiveId}`,
     });
 
-    await this.#distillFromTranscript(tailOf(transcript));
+    try {
+      await this.#distillFromTranscript(tailOf(transcript));
+    } catch (error) {
+      // 印は残す（#4705）: 蒸留が落ちる主な理由は枠で、次の起動で拾い直せるため
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_FAILURE_PREFIX}前の器が記憶へ移せなかった区間の蒸留に失敗した: ${reasonOf(error)}` +
+          `（印は残す。次の起動で拾い直す: ${grave.archiveId}）`,
+      });
+      return;
+    }
 
     // 印を下ろすのは蒸留が成功したときだけ、引き直してから下ろす: 拾っている間に新しい印が立つ窓があり、素で `null` を書くとその新しい方を消すため
     await this.#stores.sessions.clearTranscriptGraveIf(grave.archiveId);
@@ -4379,7 +4392,20 @@ class Clone implements CloneHost {
       text: `${EXCHANGE_KIND_RECOVERY_PREFIX}捨てたセッションの区間を、預けた生ログから拾い直す: ${grave.sessionId}`,
     });
 
-    await this.#distillFromTranscript(tailOf(transcript));
+    try {
+      await this.#distillFromTranscript(tailOf(transcript));
+    } catch (error) {
+      // 印は残す（#4705）: 拾い直しの墓標（`#pickUpTranscriptGrave`）と同じ理由
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_FAILURE_PREFIX}捨てたセッションの区間の蒸留に失敗した: ${reasonOf(error)}` +
+          `（印は残す。次の起動で拾い直す: ${grave.sessionId}）`,
+      });
+      return;
+    }
 
     await this.#stores.sessions.clearLostSessionGraveIf(grave.sessionId);
   }
@@ -6178,9 +6204,13 @@ class Clone implements CloneHost {
       // （SDK: 「during this query() call」）[sdk-verbatim SDKResultSuccess.modelUsage]、基準は持たせない。要約そのものの費用は本セッションの `modelUsage` に混ざって分離できない。
       await this.#recordUsage(ended.usage, 'distill', 'oneshot');
       // 成功の判定は `succeeded`: `#runTurn` を通らないので `TurnOutcome` が無く、成否はターンの終わりからしか取れない。
-      if (ended.succeeded) await this.#journal(distillSucceededEntry('pre_compact'));
-      break;
+      // 失敗は投げる（#4705）: 枠切れ・実行中の失敗は例外ではなく `succeeded: false` で届く。呼び手は「投げなければ成功」と読み、墓標を立てない・下ろすため
+      if (!ended.succeeded)
+        throw new Error('蒸留のターンが成功で終わらなかった（枠切れ・実行中の失敗など）');
+      await this.#journal(distillSucceededEntry('pre_compact'));
+      return;
     }
+    throw new Error('蒸留のターンが終わりを告げないまま閉じた');
   }
 
   /**

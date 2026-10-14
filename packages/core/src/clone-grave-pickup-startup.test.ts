@@ -356,3 +356,26 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
     await s.clone.stop();
   });
 });
+
+describe('クローン — 拾い直しの蒸留が失敗で終わったら、印を下ろさない（#4705）', () => {
+  it('⭐ 蒸留のターンが成功で終わらなければ（枠切れなど）、失敗を日誌に残して印を残す', async () => {
+    const stores = createMemoryStores();
+    const archiveId = (
+      await stores.archive.archive('sess-old', 'GRAVE-FAILED-DISTILL-7a1e 前の器の生ログ')
+    ).id;
+    await stores.sessions.setTranscriptGrave({ archiveId });
+
+    const s = setup(undefined, stores, { resultSubtype: 'error_during_execution' });
+    await waitFor(async () => {
+      const rows = await stores.journal.list({ types: ['exchange'] });
+      return rows.some(
+        (entry) =>
+          entry.type === 'exchange' &&
+          entry.text.includes('前の器が記憶へ移せなかった区間の蒸留に失敗した'),
+      );
+    }, '蒸留の失敗が日誌に残ること');
+    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId });
+
+    await s.clone.stop();
+  });
+});
