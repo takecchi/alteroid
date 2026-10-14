@@ -104,7 +104,6 @@ import {
   conversationMessages,
   createAuthProviderRegistry,
   createAuthService,
-  reachedStart,
   droppedTraceLedgerSince,
   findUnrecordedManagers,
   isOffsetQualifiedTimeBoundary,
@@ -132,6 +131,7 @@ import {
   managerModelsOf,
   readConversationPage,
   readConversationWindow,
+  readConversationWindowPage,
   readWithdrawnClientMessageIds,
   lookupConversation,
   describeMissingConversation,
@@ -3301,7 +3301,8 @@ export function createApp(deps: AppDeps) {
         const id = c.req.param('id');
         const { scan, includeSuperseded: includeSupersededRaw } = c.req.valid('query');
         const includeSuperseded = includeSupersededRaw === 'true';
-        const entries = await readConversationWindow(stores.journal, { scan });
+        const window = await readConversationWindowPage(stores.journal, { scan });
+        const entries = window.entries;
         // 常に `includeSuperseded: true` で1回だけ呼ぶ: 既定の応答でも `supersededCount` を数える必要があるので、まず畳まれた分も含めて取り、既定ビューに戻すかはここでふるう。応答に載せる項目は明示して写す（共有の型の項目が増えても応答が増えない）。
         const allMessages = conversationMessages(entries, id, { includeSuperseded: true });
         const supersededCount = allMessages.filter(
@@ -3347,8 +3348,8 @@ export function createApp(deps: AppDeps) {
             : { clientMessageId: message.clientMessageId }),
         }));
 
-        // ちょうど同数のときはまだあるかもしれないので届いていない側へ倒す（安全側）。
-        const reached = reachedStart(entries.length, scan);
+        // 終端は件数から推さない: 読めない行を捨てて短くなった窓を「先頭に届いた」と誤り、窓の外の会話を 404 にしてしまうため
+        const reached = window.reachedStart;
 
         // 一律 404 にしない: 消えた会話とまだ見ていない会話が区別できなくなる。遡り切れているときだけ「無い」と言い、切れていなければ空の結果に `reachedStart: false` を添えて判定を呼ぶ側へ渡す。
         if (messages.length === 0 && reached) {

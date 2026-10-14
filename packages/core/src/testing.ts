@@ -2078,3 +2078,26 @@ export function failingJobWrite(stores: Stores, reason: string): Stores {
     },
   };
 }
+
+/**
+ * pg が `LIMIT` の後で読めない行を捨てる挙動の再現: `listPage` の返す頁の最後の1件を落とし、
+ * 落とした行を `next` に据える（ストアは読んだが返せなかった行）。頁が短くなっても `next` は非 `null`。
+ * `list` は通す。件数から終端を推す読み手だけが、ここで先頭に届いたと誤る。
+ */
+export function dropLastRowPerPage(stores: Stores): Stores {
+  return {
+    ...stores,
+    journal: {
+      ...stores.journal,
+      listPage: async (query) => {
+        const page = await stores.journal.listPage(query);
+        const dropped = page.entries[page.entries.length - 1];
+        if (dropped === undefined) return page;
+        return {
+          entries: page.entries.slice(0, -1),
+          next: { id: dropped.id, at: dropped.at },
+        };
+      },
+    },
+  };
+}

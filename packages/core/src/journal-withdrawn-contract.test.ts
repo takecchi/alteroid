@@ -19,6 +19,7 @@ describe('JournalStore の取り下げの印の契約（インメモリ実装）
         return stores.journal.append(stripped as typeof input);
       },
       list: stores.journal.list.bind(stores.journal),
+      listPage: stores.journal.listPage.bind(stores.journal),
     };
 
     await expect(verifyJournalStoreWithdrawnContract(dropping)).rejects.toThrow(
@@ -32,6 +33,9 @@ describe('JournalStore の取り下げの印の契約（インメモリ実装）
       append: stores.journal.append.bind(stores.journal),
       list: (query: Parameters<typeof stores.journal.list>[0]) => {
         return stores.journal.list({ ...query, after: undefined });
+      },
+      listPage: (query: Parameters<typeof stores.journal.listPage>[0]) => {
+        return stores.journal.listPage({ ...query, after: undefined });
       },
     };
 

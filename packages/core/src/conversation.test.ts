@@ -6,7 +6,6 @@ import {
   computeSupersededIds,
   conversationMessages,
   humanExchanges,
-  reachedStart,
   readConversationWindow,
   searchExchanges,
   toMessage,
@@ -217,20 +216,6 @@ describe('toMessage', () => {
       text: '本文そのもの',
       conversationId: 'c1',
     });
-  });
-});
-
-describe('reachedStart', () => {
-  it('返った件数が scan を下回れば先頭に届いている', () => {
-    expect(reachedStart(1999, 2000)).toBe(true);
-  });
-
-  it('ちょうど scan 件のときは、まだあるかもしれない側（届いていない）へ倒す', () => {
-    expect(reachedStart(2000, 2000)).toBe(false);
-  });
-
-  it('0件でも scan を下回っていれば届いている', () => {
-    expect(reachedStart(0, 2000)).toBe(true);
   });
 });
 

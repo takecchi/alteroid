@@ -9,7 +9,12 @@ import type { ConversationReadView } from './conversation-read.js';
 import { codePointBoundary } from './excerpt.js';
 import { compareIsoInstant } from './iso-instant.js';
 import type { AttachmentRef, JournalEntry, TurnFailureKind } from './schema.js';
-import { UnreadableJournalEntryError, type JournalCursor, type JournalStore } from './store.js';
+import {
+  UnreadableJournalEntryError,
+  type JournalCursor,
+  type JournalQuery,
+  type JournalStore,
+} from './store.js';
 
 /** 日誌の `exchange` 1件。 */
 export type Exchange = Extract<JournalEntry, { type: 'exchange' }>;
@@ -134,15 +139,21 @@ export function humanExchanges(entries: JournalEntry[]): Exchange[] {
  */
 export async function readConversationWindow(
   journal: Pick<JournalStore, 'list'>,
-  options: {
-    scan: number;
-    since?: string;
-    until?: string;
-    order?: 'asc' | 'desc';
-    after?: { id: string; at: string };
-  },
+  options: ConversationWindowOptions,
 ): Promise<JournalEntry[]> {
-  return journal.list({
+  return journal.list(conversationWindowQuery(options));
+}
+
+type ConversationWindowOptions = {
+  scan: number;
+  since?: string;
+  until?: string;
+  order?: 'asc' | 'desc';
+  after?: { id: string; at: string };
+};
+
+function conversationWindowQuery(options: ConversationWindowOptions): JournalQuery {
+  return {
     limit: options.scan,
     ...(options.order === undefined ? {} : { order: options.order }),
     ...(options.after === undefined ? {} : { after: options.after }),
@@ -150,7 +161,20 @@ export async function readConversationWindow(
     with: ['human'],
     ...(options.since === undefined ? {} : { since: options.since }),
     ...(options.until === undefined ? {} : { until: options.until }),
-  });
+  };
+}
+
+/**
+ * `readConversationWindow` の、先頭に届いたかも返す版。終端は `listPage` の `next === null` だけで決める:
+ * pg の `list` は `LIMIT` の後で読めない行を捨てるので、返った件数が `scan` より少なくても先頭に届いたとは限らない。
+ * `next` は届いていないときの続きの位置（ストアが実際に読んだ最後の行。返った行が空でも進める）。
+ */
+export async function readConversationWindowPage(
+  journal: Pick<JournalStore, 'listPage'>,
+  options: ConversationWindowOptions,
+): Promise<{ entries: JournalEntry[]; reachedStart: boolean; next: JournalCursor | null }> {
+  const page = await journal.listPage(conversationWindowQuery(options));
+  return { entries: page.entries, reachedStart: page.next === null, next: page.next };
 }
 
 export function bySpeaker(exchanges: Exchange[], speaker: 'human' | 'clone' | 'both'): Exchange[] {
@@ -166,7 +190,7 @@ const WITHDRAWN_PAGE = 500;
  * `with: ['self']` を別に読む。`since` 以降を古い順に頁で読み切る（途中で黙って打ち切らない）。
  */
 export async function readWithdrawnClientMessageIds(
-  journal: Pick<JournalStore, 'list'>,
+  journal: Pick<JournalStore, 'listPage'>,
   // `undefined` は会話を問わない（会話の一覧が、窓の中の全会話の取り下げを一度で読む）
   conversationId: string | undefined,
   since: string,
@@ -175,7 +199,7 @@ export async function readWithdrawnClientMessageIds(
   const withdrawn = new Set<string>();
   let after: JournalCursor | undefined;
   for (;;) {
-    const page: JournalEntry[] = await journal.list({
+    const page = await journal.listPage({
       limit: pageSize,
       order: 'asc',
       types: ['exchange'],
@@ -183,7 +207,7 @@ export async function readWithdrawnClientMessageIds(
       since,
       ...(after === undefined ? {} : { after }),
     });
-    for (const entry of page) {
+    for (const entry of page.entries) {
       if (
         entry.type === 'exchange' &&
         (conversationId === undefined || entry.conversationId === conversationId) &&
@@ -192,12 +216,12 @@ export async function readWithdrawnClientMessageIds(
         withdrawn.add(entry.withdrawnClientMessageId);
       }
     }
-    const last = page[page.length - 1];
-    if (page.length < pageSize || last === undefined) return withdrawn;
-    if (after?.id === last.id) {
+    // 終端は `next === null` だけで決める: 短い頁・空の頁は読めない行を捨てた結果でありうるため
+    if (page.next === null) return withdrawn;
+    if (after?.id === page.next.id) {
       throw new Error('取り下げの印を読む頁の継続点が進まない（ストアが `after` を守っていない）');
     }
-    after = { id: last.id, at: last.at };
+    after = page.next;
   }
 }
 
@@ -317,11 +341,6 @@ export function toMessage(entry: Exchange): ConversationMessage {
   };
 }
 
-/** ちょうど同数のときはまだあるかもしれないので、届いていない側へ倒す。 */
-export function reachedStart(returned: number, scan: number): boolean {
-  return returned < scan;
-}
-
 export type ConversationCursor = JournalCursor;
 
 /**
@@ -407,7 +426,7 @@ async function conversationIdsNewerThan(
  * 継続点が指す発言が日誌に実在しない・人間との往復でないときは `InvalidConversationCursorError`。
  */
 export async function readConversationPage(
-  journal: Pick<JournalStore, 'list' | 'listPage' | 'get'>,
+  journal: Pick<JournalStore, 'listPage' | 'get'>,
   options: {
     limit: number;
     scan: number;
@@ -442,12 +461,13 @@ export async function readConversationPage(
     exclude = newer;
   }
 
-  const entries = await readConversationWindow(journal, {
+  const window = await readConversationWindowPage(journal, {
     scan,
     ...(since === undefined ? {} : { since }),
     ...(until === undefined ? {} : { until }),
     ...(cursor === undefined ? {} : { after: cursor }),
   });
+  const entries = window.entries;
   const fresh =
     exclude.size === 0
       ? entries
@@ -485,15 +505,16 @@ export async function readConversationPage(
   const all = collectConversations(fresh, readView, withdrawn);
   const conversations = all.slice(0, limit);
   const hiddenByLimit = all.length - conversations.length;
-  const reached = reachedStart(entries.length, scan);
+  // 終端は件数から推さない: 読めない行を捨てて短くなった窓を「先頭に届いた」と誤るため
+  const reached = window.reachedStart;
 
   let next: ConversationCursor | null = null;
   const lastShown = conversations[conversations.length - 1];
   if (hiddenByLimit > 0 && lastShown !== undefined) {
     next = headOf.get(lastShown.conversationId) ?? null;
   } else if (!reached) {
-    const lastRead = entries[entries.length - 1];
-    if (lastRead !== undefined) next = { id: lastRead.id, at: lastRead.at };
+    // 返った行の最後ではなくストアが読んだ最後の行から続ける: 返った行が空でも進めるため
+    next = window.next;
   }
   return {
     conversations,

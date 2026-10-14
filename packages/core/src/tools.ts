@@ -31,9 +31,9 @@ import {
   encodeConversationCursor,
   humanExchanges,
   InvalidConversationCursorError,
-  reachedStart,
   readConversationPage,
   readConversationWindow,
+  readConversationWindowPage,
   searchExchanges,
   type ConversationCursor,
   type ConversationPage,
@@ -8309,6 +8309,7 @@ export function createCloneTools(context: ToolContext) {
         }
         let listPage: ConversationPage | undefined;
         let entries: Awaited<ReturnType<typeof readConversationWindow>> = [];
+        let windowReachedStart = false;
         // 窓の組み立ては `readConversationWindow` 1か所に閉じる: 手組みし直すたびに `with` を絞り忘れる余地が生まれるため
         if (listMode) {
           try {
@@ -8330,15 +8331,18 @@ export function createCloneTools(context: ToolContext) {
             throw error;
           }
         } else {
-          entries = await readConversationWindow(stores.journal, {
+          const window = await readConversationWindowPage(stores.journal, {
             scan: scanLimit,
             ...(since === undefined ? {} : { since }),
             ...(until === undefined ? {} : { until }),
           });
+          entries = window.entries;
+          windowReachedStart = window.reachedStart;
         }
         const scannedCount = listPage === undefined ? entries.length : listPage.scanned;
         // `since` を渡されたら「先頭に届いた」と言わない: `reachedStart` は行を出し切ったかだけで、`since` は LIMIT より先に効くため、混ぜると `since` より古い側に在りうるものを「無い」と言い切る
-        const exhausted = reachedStart(scannedCount, scanLimit);
+        // 終端は件数から推さない: 読めない行を捨てて短くなった窓を「先頭に届いた」と誤るため（一覧は `listPage.reachedStart`、それ以外は窓の `reachedStart`）
+        const exhausted = listPage === undefined ? windowReachedStart : listPage.reachedStart;
         const reached = exhausted && since === undefined;
         const scanNote =
           `（人間との往復を ${scannedCount} 件遡った。` +
