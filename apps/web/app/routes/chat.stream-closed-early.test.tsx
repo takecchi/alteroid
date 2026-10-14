@@ -122,6 +122,25 @@ describe('終端が無いまま閉じた送信（#3564）', () => {
     expect(screen.queryByText(/送れたか確かめられなかった/)).toBeNull();
   });
 
+  it('⭐ 受け取り済みの送り直しでも、進行中のターンを流している途中で閉じたら「途中で切れた」と言い、続きを読みに張り直す（#4749）', async () => {
+    const stub = setUp({
+      chat: [
+        { event: 'open', data: { conversationId: ID, duplicate: true } },
+        { event: 'text', data: { type: 'text', text: '途中までの返' } },
+      ],
+    });
+    renderChat(`/chat/${ID}`);
+    await sendText('もう受け取られていた発言');
+
+    expect(await screen.findByText(CLOSED_EARLY)).toBeTruthy();
+    expect(screen.getByText(/途中までの返/)).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        stub.entries.filter((e) => /\/chat\/[^/]+\/stream$/.test(e.url)).length,
+      ).toBeGreaterThan(0),
+    );
+  });
+
   it('done が来て閉じたなら黙る（陰性対照）', async () => {
     setUp({
       chat: [
