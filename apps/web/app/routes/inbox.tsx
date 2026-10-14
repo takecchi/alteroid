@@ -458,8 +458,16 @@ function ResultView({ result }: { result: InboxRemoveManyResult }) {
           実行しました。消した id は日誌にも残っています。
         </p>
       )}
+      {/* 実行で対象より少なく消えた分を言う: 黙ると、全部先に消されたときに「対象 N 件」と「対象になる合図は無い」が並ぶ（CLI と同じ注記） */}
+      {!result.dryRun && result.targeted > result.removedIds.length && (
+        <p className="mt-2 text-warn">
+          {`⚠ 対象 ${result.targeted} 件のうち ${result.targeted - result.removedIds.length} 件は消せなかった（この呼びの最中に他の経路が先に消した）。`}
+        </p>
+      )}
       {result.removedIds.length === 0 ? (
-        <p className="mt-2 text-muted-foreground">対象になる合図は無い。</p>
+        result.targeted === 0 && (
+          <p className="mt-2 text-muted-foreground">対象になる合図は無い。</p>
+        )
       ) : (
         <>
           <p className="mt-2">
