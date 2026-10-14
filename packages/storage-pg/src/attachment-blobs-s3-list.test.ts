@@ -1,4 +1,9 @@
-import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
+import {
+  AbortMultipartUploadCommand,
+  ListMultipartUploadsCommand,
+  ListObjectsV2Command,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { mockClient } from 'aws-sdk-client-mock';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -92,5 +97,89 @@ describe('S3AttachmentBlobStore.list（#4314）', () => {
     await expect(collect(new S3AttachmentBlobStore(CONFIG).list('attachments/'))).rejects.toThrow(
       'boom',
     );
+  });
+});
+
+describe('S3AttachmentBlobStore.abortStaleUploads（#4763）', () => {
+  const cutoff = new Date('2026-03-09T00:00:00Z');
+  const old = new Date('2026-03-01T00:00:00Z');
+  const fresh = new Date('2026-03-09T12:00:00Z');
+  const upload = (key: string, id: string, at?: Date) => ({
+    Key: key,
+    UploadId: id,
+    ...(at === undefined ? {} : { Initiated: at }),
+  });
+  const abortedIds = () =>
+    s3.commandCalls(AbortMultipartUploadCommand).map((call) => call.args[0].input.UploadId);
+
+  it('2ページを回り、cutoff より前に始まったものだけ取り消す。Initiated の無いものは触らない', async () => {
+    s3.on(ListMultipartUploadsCommand)
+      .resolvesOnce({
+        IsTruncated: true,
+        NextKeyMarker: 'p/attachments/a',
+        NextUploadIdMarker: 'u1',
+        Uploads: [upload('p/attachments/a', 'u1', old), upload('p/attachments/b', 'u2', fresh)],
+      })
+      .resolvesOnce({
+        IsTruncated: false,
+        Uploads: [
+          upload('p/attachments/c', 'u3', old),
+          upload('p/attachments/d', 'u4'),
+          { Initiated: old },
+          { Key: 'p/attachments/e', Initiated: old },
+        ],
+      });
+    s3.on(AbortMultipartUploadCommand).resolves({});
+    const result = await new S3AttachmentBlobStore(CONFIG).abortStaleUploads(
+      'p/attachments/',
+      cutoff,
+    );
+    expect(result).toEqual({ aborted: 2, failed: 0 });
+    expect(abortedIds()).toEqual(['u1', 'u3']);
+    const lists = s3.commandCalls(ListMultipartUploadsCommand);
+    expect(lists.map((c) => [c.args[0].input.KeyMarker, c.args[0].input.UploadIdMarker])).toEqual([
+      [undefined, undefined],
+      ['p/attachments/a', 'u1'],
+    ]);
+    for (const call of lists) {
+      expect(call.args[0].input.Bucket).toBe('test-bucket');
+      expect(call.args[0].input.Prefix).toBe('p/attachments/');
+    }
+  });
+
+  it('ちょうど cutoff に始まったものは触らない（境界）', async () => {
+    s3.on(ListMultipartUploadsCommand).resolves({ Uploads: [upload('k', 'u1', cutoff)] });
+    const result = await new S3AttachmentBlobStore(CONFIG).abortStaleUploads('', cutoff);
+    expect(result).toEqual({ aborted: 0, failed: 0 });
+    expect(abortedIds()).toEqual([]);
+  });
+
+  it('取り消しが落ちたら failed に数えて続ける。理由に key を載せない', async () => {
+    s3.on(ListMultipartUploadsCommand).resolves({
+      Uploads: [upload('secret-key-1', 'u1', old), upload('secret-key-2', 'u2', old)],
+    });
+    s3.on(AbortMultipartUploadCommand, { UploadId: 'u1' }).rejects(new Error('denied'));
+    s3.on(AbortMultipartUploadCommand, { UploadId: 'u2' }).resolves({});
+    const result = await new S3AttachmentBlobStore(CONFIG).abortStaleUploads('', cutoff);
+    expect(result).toMatchObject({ aborted: 1, failed: 1 });
+    expect(result.reason).toContain('denied');
+    expect(result.reason).not.toContain('secret-key');
+    expect(abortedIds()).toEqual(['u1', 'u2']);
+  });
+
+  it('NoSuchUpload は取り消し済みとして aborted に数える', async () => {
+    s3.on(ListMultipartUploadsCommand).resolves({ Uploads: [upload('k', 'u1', old)] });
+    s3.on(AbortMultipartUploadCommand).rejects(
+      Object.assign(new Error('gone'), { name: 'NoSuchUpload' }),
+    );
+    const result = await new S3AttachmentBlobStore(CONFIG).abortStaleUploads('', cutoff);
+    expect(result).toEqual({ aborted: 1, failed: 0 });
+  });
+
+  it('一覧が落ちても投げず、reason を返す', async () => {
+    s3.on(ListMultipartUploadsCommand).rejects(new Error('not supported'));
+    const result = await new S3AttachmentBlobStore(CONFIG).abortStaleUploads('', cutoff);
+    expect(result).toMatchObject({ aborted: 0, failed: 0 });
+    expect(result.reason).toContain('not supported');
   });
 });

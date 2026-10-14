@@ -180,4 +180,55 @@ describe('PgAttachmentStore.sweepOrphanBlobs（#4314）', () => {
     const store = new PgAttachmentStore(quiet());
     expect(await store.sweepOrphanBlobs(NOW)).toBeUndefined();
   });
+
+  describe('未完了の分割アップロードの取り消し（#4763）', () => {
+    it('口を持つ置き場なら、24時間前の cutoff で呼び、件数と最初の理由が結果に載る', async () => {
+      const blobs = new MemoryAttachmentBlobStore();
+      const calls: { prefix: string; startedBefore: Date }[] = [];
+      Object.assign(blobs, {
+        abortStaleUploads: async (prefix: string, startedBefore: Date) => {
+          calls.push({ prefix, startedBefore });
+          return { aborted: 3, failed: 1, reason: '取り消せなかった' };
+        },
+      });
+      const store = new PgAttachmentStore(quiet(), { blobs, blobKeyPrefix: 'p/' });
+      const result = await store.sweepOrphanBlobs(NOW);
+      expect(result).toEqual({
+        listed: 0,
+        candidates: 0,
+        removed: 0,
+        failed: 0,
+        abortedUploads: 3,
+        abortFailedUploads: 1,
+        reason: '取り消せなかった',
+      });
+      expect(calls).toEqual([
+        {
+          prefix: 'p/attachments/',
+          startedBefore: new Date(NOW.getTime() - ATTACHMENT_ORPHAN_BLOB_GRACE_MS),
+        },
+      ]);
+    });
+
+    it('口が投げても掃除は投げず、完成した側の結果を残す', async () => {
+      const blobs = new MemoryAttachmentBlobStore();
+      const key = attachmentBlobKey(randomUUID());
+      await putOrphan(blobs, key, OLD);
+      Object.assign(blobs, {
+        abortStaleUploads: async () => {
+          throw new Error('一覧を持たない');
+        },
+      });
+      const result = await new PgAttachmentStore(quiet(), { blobs }).sweepOrphanBlobs(NOW);
+      expect(result).toMatchObject({ removed: 1, abortedUploads: 0, abortFailedUploads: 1 });
+      expect(result?.reason).toContain('一覧を持たない');
+    });
+
+    it('口を持たない置き場では、結果に取り消しの欄が無い（従来のまま）', async () => {
+      const blobs = new MemoryAttachmentBlobStore();
+      expect(blobs).not.toHaveProperty('abortStaleUploads');
+      const result = await new PgAttachmentStore(quiet(), { blobs }).sweepOrphanBlobs(NOW);
+      expect(result).toEqual({ listed: 0, candidates: 0, removed: 0, failed: 0 });
+    });
+  });
 });

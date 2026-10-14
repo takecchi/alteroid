@@ -136,4 +136,36 @@ describe('控えの無い blob の掃除の周期（#4314）', () => {
       p2.stop();
     }
   });
+
+  it('取り消した分割アップロードがあるときだけ、その件数を同じ行に足す（#4763）', async () => {
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const none = fixture({ listed: 1, candidates: 0, removed: 0, failed: 0, abortedUploads: 0 });
+    const p1 = startAttachmentPruning({ stores: none.stores, everyMinutes: 60, now: none.now });
+    await p1.refresh();
+    p1.stop();
+    expect(write).not.toHaveBeenCalled();
+
+    const done = fixture({ listed: 1, candidates: 0, removed: 0, failed: 0, abortedUploads: 2 });
+    const p2 = startAttachmentPruning({ stores: done.stores, everyMinutes: 60, now: done.now });
+    await p2.refresh();
+    p2.stop();
+    expect(String(write.mock.calls[0]?.[0])).toContain('分割アップロードを 2 件取り消した');
+
+    write.mockClear();
+    const bad = fixture({
+      listed: 1,
+      candidates: 0,
+      removed: 0,
+      failed: 0,
+      abortedUploads: 0,
+      abortFailedUploads: 1,
+      reason: '断られた',
+    });
+    const p3 = startAttachmentPruning({ stores: bad.stores, everyMinutes: 60, now: bad.now });
+    await p3.refresh();
+    p3.stop();
+    const line = String(write.mock.calls[0]?.[0]);
+    expect(line).toContain('1 件は取り消せなかった');
+    expect(line).toContain('断られた');
+  });
 });
