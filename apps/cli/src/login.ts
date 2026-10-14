@@ -37,6 +37,27 @@ type ClaimResponse =
 
 const POLL_INTERVAL_MS = 1500;
 
+/**
+ * デーモンへの1回の要求の期限（#4695）。ログインの口はどれも手元の状態を読み書きするだけで、普段は1秒もかからない。
+ * 期限が無いと、繋がるが応答しないデーモンに当たったとき、ログインの期限（`expiresAt`）の判定まで戻らずに止まったままになる。
+ */
+export const LOGIN_REQUEST_TIMEOUT_MS = 10_000;
+
+function requestSignal(): AbortSignal {
+  return AbortSignal.timeout(LOGIN_REQUEST_TIMEOUT_MS);
+}
+
+function isTimeout(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TimeoutError';
+}
+
+function noResponseError(path: string, cause: unknown): Error {
+  return new Error(
+    `${path} が ${String(LOGIN_REQUEST_TIMEOUT_MS / 1000)} 秒以内に応答しませんでした（デーモンが応答していません）`,
+    { cause },
+  );
+}
+
 export async function loginCommand(options: { provider?: string }): Promise<void> {
   const target = await resolveTarget();
 
@@ -89,9 +110,14 @@ export async function loginCommand(options: { provider?: string }): Promise<void
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ claimSecret: started.claimSecret }),
+        // 期限切れも「繋がらない」と同じく待ちを続ける: ログインの期限の判定まで必ず戻るため。
+        // 期限切れの claim がデーモンで引き取り済みになっていれば、次の claim が 400 になり、下の「直前に通信失敗があった」の案内に落ちる
+        signal: requestSignal(),
       });
     } catch (error) {
-      lastTransient = `${target.baseUrl} に届きませんでした（${redactedErrorMessage(error)}）`;
+      lastTransient = isTimeout(error)
+        ? noResponseError(`/auth/login/${started.requestId}/claim`, error).message
+        : `${target.baseUrl} に届きませんでした（${redactedErrorMessage(error)}）`;
       stdout.write(`デーモンに繋がらない。待ちを続けています…（${lastTransient}）\n`);
       continue;
     }
@@ -159,11 +185,14 @@ async function requestServerLogout(baseUrl: string, token: string): Promise<Serv
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: '{}',
+      signal: requestSignal(),
     });
   } catch (error) {
     return {
       kind: 'failed',
-      detail: `${baseUrl} に届きませんでした（${redactedErrorMessage(error)}）`,
+      detail: isTimeout(error)
+        ? noResponseError('/auth/logout', error).message
+        : `${baseUrl} に届きませんでした（${redactedErrorMessage(error)}）`,
     };
   }
   if (response.ok) return { kind: 'revoked' };
@@ -316,19 +345,27 @@ async function readBody(response: Response): Promise<unknown> {
 }
 
 async function getJson(target: Target, path: string): Promise<unknown> {
-  const response = await fetch(`${target.baseUrl}${path}`, { headers: target.headers });
-  if (!response.ok) throw new Error(`${path} が失敗しました: ${await errorText(response)}`);
-  return response.json();
+  return requestJson(target, path, { headers: target.headers });
 }
 
 async function postJson(target: Target, path: string, body: unknown): Promise<unknown> {
-  const response = await fetch(`${target.baseUrl}${path}`, {
+  return requestJson(target, path, {
     method: 'POST',
     headers: { ...target.headers, 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw new Error(`${path} が失敗しました: ${await errorText(response)}`);
-  return response.json();
+}
+
+// 本文の読み取りまで同じ signal で見切る: 見出しの後に本文が止まっても返るため
+async function requestJson(target: Target, path: string, init: RequestInit): Promise<unknown> {
+  try {
+    const response = await fetch(`${target.baseUrl}${path}`, { ...init, signal: requestSignal() });
+    if (!response.ok) throw new Error(`${path} が失敗しました: ${await errorText(response)}`);
+    return await response.json();
+  } catch (error) {
+    if (isTimeout(error)) throw noResponseError(path, error);
+    throw error;
+  }
 }
 
 async function errorText(response: Response): Promise<string> {

@@ -29,7 +29,8 @@ vi.mock('node:child_process', () => ({
   spawn: vi.fn(() => ({ on: vi.fn(), unref: vi.fn() })),
 }));
 
-const { loginCommand, logoutCommand, whoamiCommand } = await import('./login.js');
+const { loginCommand, logoutCommand, whoamiCommand, LOGIN_REQUEST_TIMEOUT_MS } =
+  await import('./login.js');
 const target = await import('./target.js');
 const credentials = await import('./credentials.js');
 
@@ -497,5 +498,86 @@ describe('alteroid whoami', () => {
     await whoamiCommand();
 
     expect(read()).not.toContain('runner の器の中');
+  });
+});
+
+describe('alteroid login / logout: 応答しないデーモンに期限で見切る（#4695）', () => {
+  const HEALTH = {
+    auth: { enabled: true, providers: [{ id: 'google', label: 'Google', kind: 'oidc' }] },
+  };
+  const START = {
+    requestId: 'req-1',
+    authorizationUrl: 'https://accounts.example.com/auth',
+    claimSecret: 'secret',
+    expiresAt: '2999-01-01T00:00:00.000Z',
+  };
+  const READY = {
+    status: 'ready',
+    token: 'token-t',
+    account: { id: 'acc-1', email: 'person@example.com', displayName: null },
+    granted: true,
+  };
+
+  // 繋がるが何も返さない相手の代わり: signal が切れるまで決着しない
+  function hanging(init?: RequestInit): Promise<Response> {
+    return new Promise((_resolve, reject) => {
+      const signal = init?.signal;
+      if (signal === undefined || signal === null) return;
+      signal.addEventListener('abort', () => reject(signal.reason as Error), { once: true });
+    });
+  }
+
+  // 期限を縮める: 掛けた長さは記録して、既定の値であることを確かめる
+  const asked: number[] = [];
+  beforeEach(() => {
+    asked.length = 0;
+    const original = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      asked.push(ms);
+      return original(5);
+    });
+  });
+
+  it('⭐ claim の1回が返らなくても、期限で見切って待ちを続け、次の ready でログインできる', async () => {
+    const steps: ((init?: RequestInit) => Promise<Response>)[] = [
+      () => Promise.resolve(Response.json(HEALTH)),
+      () => Promise.resolve(Response.json(START)),
+      (init) => hanging(init),
+      () => Promise.resolve(Response.json(READY)),
+    ];
+    globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+      const step = steps.shift();
+      if (step === undefined) throw new Error('想定外の fetch');
+      return step(init);
+    }) as typeof fetch;
+    const read = captureStdout();
+
+    await loginCommand({});
+
+    expect(credentials.writeCredential).toHaveBeenCalledTimes(1);
+    expect(read()).toContain('待ちを続けています');
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.every((ms) => ms === LOGIN_REQUEST_TIMEOUT_MS)).toBe(true);
+  });
+
+  it('⭐ /health が返らなければ、期限で見切って応答が無かったと言って失敗する', async () => {
+    globalThis.fetch = ((_input: unknown, init?: RequestInit) => hanging(init)) as typeof fetch;
+    captureStdout();
+
+    await expect(loginCommand({})).rejects.toThrow(/\/health が .*秒以内に応答しませんでした/);
+  });
+
+  it('⭐ logout の失効が返らなければ、手元の資格を消さずに失敗で終わる', async () => {
+    vi.mocked(credentials.readCredential).mockResolvedValue({
+      token: 'tok-1',
+      accountId: 'acc-1',
+      label: 'person@example.com',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    });
+    globalThis.fetch = ((_input: unknown, init?: RequestInit) => hanging(init)) as typeof fetch;
+    captureStdout();
+
+    await expect(logoutCommand()).rejects.toThrow('サーバ側のトークンをまだ失効できていません');
+    expect(credentials.clearCredential).not.toHaveBeenCalled();
   });
 });
