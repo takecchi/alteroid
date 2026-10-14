@@ -2198,6 +2198,7 @@ function swappableRunner(runnerId = 'runner-primary') {
       text: string,
       escalate?: true,
       stall?: Extract<RunnerEvent, { type: 'note' }>['stall'],
+      notifyClone?: true,
     ) {
       emit?.({
         type: 'note',
@@ -2205,6 +2206,7 @@ function swappableRunner(runnerId = 'runner-primary') {
         text,
         ...(escalate === undefined ? {} : { escalate }),
         ...(stall === undefined ? {} : { stall }),
+        ...(notifyClone === undefined ? {} : { notifyClone }),
       });
     },
     resumeFailed(managerId: string, sessionId: string, reason: string, recovered: boolean) {
@@ -6472,6 +6474,80 @@ describe('note.escalate（#570 の起こし直しが上限に達した回）', (
     expect(escalated?.text).toContain('自動では再開しない');
     expect(escalated?.text).toContain('journal_read');
 
+    await s.pool.stop();
+  });
+});
+
+describe('notifyClone の立った note（#4685）', () => {
+  function job(id: string): Job {
+    return {
+      id,
+      managerId: id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'running',
+      summary: '調べ物',
+      request: '調べて',
+      cwd: '/work/project',
+      sessionId: `sess-${id}`,
+      runnerId: 'runner-test',
+    } as Job;
+  }
+  function alive(id: string): RunnerManagerState {
+    return {
+      managerId: id,
+      status: 'running',
+      cwd: '/work/project',
+      request: '調べて',
+      waiting: [],
+      sessionId: `sess-${id}`,
+    };
+  }
+
+  it.each([
+    ['立てた note は、日誌に加えてクローンの受信箱にも担当の知らせとして1本上がる', true as const],
+    ['立てない note は、日誌にだけ残る（陰性対照）', undefined],
+  ])('⭐ %s', async (_name, notifyClone) => {
+    const id = `mgr-note-notify-${String(notifyClone)}`;
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+    const messagesOf = () =>
+      s.inbox.filter((event) => event.type === 'manager_message' && event.managerId === id) as {
+        kind: string;
+        text: string;
+      }[];
+    const before = messagesOf().length;
+
+    fake.note(
+      id,
+      '退避 ref の作業ツリーの探索が途中で止まった（試験）',
+      undefined,
+      undefined,
+      notifyClone,
+    );
+
+    await expect
+      .poll(
+        async () => {
+          const entries = await stores.journal.list({ types: ['exchange'] });
+          return entries.some(
+            (entry) => 'text' in entry && entry.text.includes('探索が途中で止まった'),
+          );
+        },
+        { timeout: 2000 },
+      )
+      .toBe(true);
+    if (notifyClone === true) {
+      await expect.poll(() => messagesOf().length, { timeout: 2000 }).toBe(before + 1);
+      expect(messagesOf().at(-1)?.kind).toBe('report');
+      expect(messagesOf().at(-1)?.text).toContain('探索が途中で止まった');
+    } else {
+      expect(messagesOf().length).toBe(before);
+    }
     await s.pool.stop();
   });
 });

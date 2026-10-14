@@ -233,5 +233,8 @@ describe('退避から漏れた作業ツリーを note で知らせる（#4681�
           event.text.includes('打ち切った'),
       );
     await vi.waitFor(() => expect(notes()).toHaveLength(1), { timeout: 5000 });
+    // クローンの受信箱へも回す印を立て、境界（スキーマ）を通っても落ちない（#4685）
+    const parsed = runnerEventSchema.parse(JSON.parse(JSON.stringify(notes()[0])));
+    expect(parsed).toMatchObject({ type: 'note', notifyClone: true });
   });
 });
