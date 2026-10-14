@@ -319,3 +319,46 @@ describe('AgentTokenHolder#identity() は現役の鍵の指紋を添える（#28
     expect(createAgentTokenHolder().identity()).toBeUndefined();
   });
 });
+
+describe('runner へ撒いた結果を担い手のプールへ渡す（#4725）', () => {
+  it('⭐ 落ちた runner も含めて台ごとの結果を知らせる。知らせるのはクローンの箱へ置いた後', async () => {
+    const a = fakeClient('runner-primary');
+    const b = fakeClient('runner-2', 'throw');
+    const clone = createAgentTokenHolder();
+    const spread = createTokenSpread({
+      runners: registry([a, b]),
+      clone,
+      profileEnvNames: async () => [],
+    });
+    const seen: { results: unknown; cloneHad: string | undefined }[] = [];
+    spread.onPushed((results) => {
+      seen.push({ results, cloneHad: clone.values().CLAUDE_CODE_OAUTH_TOKEN });
+    });
+
+    await spread.spread({ id: 'tok-a', generation: 2, kind: 'stored', value: SECRET });
+
+    expect(seen).toEqual([
+      {
+        results: [
+          { runnerId: 'runner-primary', ok: true },
+          { runnerId: 'runner-2', ok: false, error: 'runner が応答しない' },
+        ],
+        cloneHad: SECRET,
+      },
+    ]);
+  });
+
+  it('撒く先が1台も無い回は知らせない（繋がってきた runner には繋ぎの時に降ろす）', async () => {
+    const spread = createTokenSpread({
+      runners: registry([]),
+      clone: createAgentTokenHolder(),
+      profileEnvNames: async () => [],
+    });
+    let called = 0;
+    spread.onPushed(() => {
+      called += 1;
+    });
+    await spread.spread({ id: 'tok-a', generation: 2, kind: 'stored', value: SECRET });
+    expect(called).toBe(0);
+  });
+});

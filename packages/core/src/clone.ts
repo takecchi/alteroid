@@ -611,6 +611,8 @@ export interface CloneOptions {
   // ここで状態を動かさない: `#usageBlocked` を降ろす・保持分を取り出すのは `#pump` の先頭だけで、崩すと隙間に居た合図が1件取り残されるため
   onTokenSessionRecycled?: () => void;
   syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
+  /** 鍵の回転で runner へ撒いた結果（#4725）。担い手のプールへそのまま渡す（`ManagerPoolOptions.agentTokenPushes`）。 */
+  agentTokenPushes?: ManagerPoolOptions['agentTokenPushes'];
   permissionMode?: PermissionModeName;
   humanPriority?: boolean;
   mergedBatchLimit?: number;
@@ -1034,6 +1036,7 @@ class Clone implements CloneHost {
       onWorkerToolEvent,
       onTokenSessionRecycled,
       syncRunnerToken,
+      agentTokenPushes,
       permissionMode,
       humanPriority,
       mergedBatchLimit,
@@ -1120,6 +1123,7 @@ class Clone implements CloneHost {
         ...(onUsageObservation === undefined ? {} : { onUsageObservation }),
         ...(onWorkerToolEvent === undefined ? {} : { onWorkerToolEvent }),
         ...(syncRunnerToken === undefined ? {} : { syncRunnerToken }),
+        ...(agentTokenPushes === undefined ? {} : { agentTokenPushes }),
         ...(attachmentLimits === undefined ? {} : { attachmentLimits }),
       });
     // 握り潰さない: 生き残ると HTTP は答え続け、受信箱は積まれ続けたまま誰も気づかない（落ちて再起動すれば `#restoreUnread` が配り直す）

@@ -734,6 +734,18 @@ export async function main(): Promise<void> {
     withheldEnvKeys: storage.withheldEnvKeys,
   });
 
+  // 回転で撒いた結果は担い手のプールへも渡す（#4725）: 落ちた runner へ撒き直させるため（`agentTokenPushes`）
+  const tokenSpread = createTokenSpread({
+    runners,
+    clone: agentTokenHolder,
+    profileEnvNames: () => Promise.resolve(Object.keys(profile.env())),
+    onShadowed: (names) => {
+      process.stderr.write(
+        `alteroidd: 実行環境プロファイルが認証の鍵と同じ名前を宣言しています。` +
+          `回した鍵はこれで上書きされます: ${names.join(', ')}\n`,
+      );
+    },
+  });
   // 器の環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）へフォールバックしない: トークンプールは DB 駆動のみで、通る行が無い状態を環境変数で埋め合わせる経路を残さないため。
   const tokenRotator = createTokenRotator({
     stores,
@@ -746,17 +758,7 @@ export async function main(): Promise<void> {
           withheldEnvKeys: storage.withheldEnvKeys,
         }),
     },
-    spread: createTokenSpread({
-      runners,
-      clone: agentTokenHolder,
-      profileEnvNames: () => Promise.resolve(Object.keys(profile.env())),
-      onShadowed: (names) => {
-        process.stderr.write(
-          `alteroidd: 実行環境プロファイルが認証の鍵と同じ名前を宣言しています。` +
-            `回した鍵はこれで上書きされます: ${names.join(', ')}\n`,
-        );
-      },
-    }),
+    spread: tokenSpread,
   });
 
   // クローンを作る前に撒き直す: `createClone` は構築の中でループを回し始めるので、後にすると最初のターンが撒く前の状態で走る窓ができるため。
@@ -810,6 +812,7 @@ export async function main(): Promise<void> {
       return token === undefined ? undefined : tokenAvailabilityAt(token, Date.now());
     },
     syncRunnerToken: createRunnerTokenSync(agentTokenHolder),
+    agentTokenPushes: tokenSpread,
     // 取り出してから呼ぶ: 呼んだ後に消すと、合図の中で例外が出た回だけ残り、次に畳まれたときにもう一度入るため。
     onTokenSessionRecycled: () => {
       const wake = pendingTokenWake;

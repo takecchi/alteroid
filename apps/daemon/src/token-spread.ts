@@ -47,10 +47,31 @@ export interface TokenSpreadOptions {
 
 // 撒くのは runner が先、クローンが後: 逆順だと runner が落ちたときにクローンだけが新しいトークンを持つ層のずれが残るため。
 // 畳んで1つの成否にしない: runner が2台で1台だけ落ちる場合があり、台ごとに返して呼ぶ側が日誌へ全部載せる。
-export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort {
+export interface RunnerTokenPushResult {
+  runnerId: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface TokenSpread extends TokenSpreadPort {
+  /**
+   * runner へ撒いた結果を受け取る（#4725）。デーモンはこれを `ManagerPool` の帳面へ渡し、落ちた runner へ撒き直させる。
+   * 撒く先が1台も無かった回（`selfHealing`）は渡さない: 繋がってきた runner には繋ぎの時に降ろすため。
+   */
+  onPushed(listener: (results: readonly RunnerTokenPushResult[]) => void): () => void;
+}
+
+export function createTokenSpread(options: TokenSpreadOptions): TokenSpread {
   const { runners, clone, profileEnvNames, onShadowed } = options;
+  const listeners = new Set<(results: readonly RunnerTokenPushResult[]) => void>();
 
   return {
+    onPushed(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     async spread(
       token: { id: string; generation: number } & TokenCredential,
     ): Promise<TokenSpreadResult[]> {
@@ -63,17 +84,17 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
       if (shadowed.length > 0) onShadowed?.(shadowed);
 
       const clients = await runners.list().catch(() => []);
+      const pushed: RunnerTokenPushResult[] = [];
       for (const client of clients) {
         try {
           await client.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: token.value }]);
           results.push({ target: client.runnerId, ok: true });
+          pushed.push({ runnerId: client.runnerId, ok: true });
         } catch (error) {
           // 理由は1行目だけ採る: ドライバやネットワークの例外の本文に値が混ざる形が実在するため。
-          results.push({
-            target: client.runnerId,
-            ok: false,
-            error: firstLine(error),
-          });
+          const reason = firstLine(error);
+          results.push({ target: client.runnerId, ok: false, error: reason });
+          pushed.push({ runnerId: client.runnerId, ok: false, error: reason });
         }
       }
 
@@ -91,6 +112,16 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
       // 身元も一緒に置く: 置かないと、クローンの観測が身元を名乗れず世代の照合が素通しになるため。
       const identity = { tokenId: token.id, generation: token.generation };
       clone.set(token.value, identity);
+      // クローンへ置いた後に知らせる: 撒き直しはクローンの箱の値（`createRunnerTokenSync`）を降ろすので、置く前だと古い鍵を撒き直すため
+      if (pushed.length > 0) {
+        for (const listener of listeners) {
+          try {
+            listener(pushed);
+          } catch {
+            // 受け手の不調で撒く処理を止めない
+          }
+        }
+      }
       results.push({ target: 'clone', ok: true });
 
       if (shadowed.length > 0) {

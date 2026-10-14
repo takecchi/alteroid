@@ -1624,6 +1624,15 @@ export interface ManagerPoolOptions {
    * その食い違いはマネージャーの側からは見えない。
    */
   syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
+  /**
+   * 鍵の回転で runner へ撒いた結果を受け取る口（#4725）。落ちた runner は `agentToken` の失敗として帳面に載せ、挑み直す（`syncRunnerToken`）。
+   * これが無いと、回転で1度だけ撒き損ねた runner は、繋ぎ直すかデーモンを起こし直すまで、冷却中の古い鍵のまま担当を起こし続ける。
+   */
+  agentTokenPushes?: {
+    onPushed?(
+      listener: (results: readonly { runnerId: string; ok: boolean; error?: string }[]) => void,
+    ): () => void;
+  };
   /** **日誌には書かない**。例外は握りつぶす（観測のための口で、イベント処理を止めない）。 */
   onWorkerToolEvent?: (event: WorkerToolEvent) => void;
   stores: Stores;
@@ -3156,6 +3165,7 @@ class Pool implements ManagerPool {
     tokenAvailability,
     onUsageObservation,
     syncRunnerToken,
+    agentTokenPushes,
     onWorkerToolEvent,
     workspace,
     attachmentLimits,
@@ -3185,6 +3195,9 @@ class Pool implements ManagerPool {
       mcpServers?.onPushed?.((results) => this.#recordDirectPushResults('mcpServers', results)),
       credentials?.onPushed?.((results) => this.#recordDirectPushResults('credentials', results)),
       plugins?.onPushed?.((results) => this.#recordDirectPushResults('plugins', results)),
+      agentTokenPushes?.onPushed?.((results) =>
+        this.#recordDirectPushResults('agentToken', results),
+      ),
     ]) {
       if (unsubscribe !== undefined) this.#unsubscribeDirectPushes.push(unsubscribe);
     }
@@ -9586,7 +9599,7 @@ class Pool implements ManagerPool {
 
   // 日誌の行はここでは書かない: 即時の配布の失敗を日誌へ残すのは呼び出し元（`app.ts` / `tools.ts`）で、ここでも書くと二重になる。
   #recordDirectPushResults(
-    kind: 'profile' | 'mcpServers' | 'credentials' | 'plugins',
+    kind: 'profile' | 'mcpServers' | 'credentials' | 'plugins' | 'agentToken',
     results: readonly { runnerId: string; ok: boolean; error?: string; unsupported?: true }[],
   ): void {
     if (this.#stopped) return;
