@@ -23,6 +23,8 @@ class FakeLoginServer extends EventEmitter {
   #buffer = '';
   account: Json | null = { type: 'chatgpt', email: 'me@example.com', planType: 'plus' };
   startError: string | undefined;
+  /** 立てると開始の要求に答えない（起きたまま黙る app-server。#4765） */
+  silentOn: string | undefined;
 
   constructor() {
     super();
@@ -59,6 +61,7 @@ class FakeLoginServer extends EventEmitter {
     const id = message['id'];
     const method = message['method'];
     if (id === undefined || typeof method !== 'string') return;
+    if (method === this.silentOn) return;
     const reply = (result: unknown): void => {
       this.stdout.write(`${JSON.stringify({ id, result })}\n`);
     };
@@ -195,6 +198,23 @@ describe('Codex のデバイスコードのログイン（#3939）', () => {
     expect(h.server.methods()).toContain('account/login/cancel');
     expect(h.fs.removed).toEqual(h.fs.made);
   });
+
+  for (const method of ['initialize', 'account/login/start']) {
+    it(`⭐ ${method} に答えない app-server では、開始の期限で失敗として返し、子を止めて一時ディレクトリを消す（#4765）`, async () => {
+      const h = harness();
+      h.server.silentOn = method;
+      await expect(
+        startCodexDeviceLogin({
+          env: {},
+          spawnProcess: h.spawnProcess,
+          fs: h.fs,
+          startTimeoutMs: 20,
+        }),
+      ).rejects.toThrow(/以内に答えなかった/);
+      expect(h.server.killed).toBe(true);
+      expect(h.fs.removed).toEqual(h.fs.made);
+    });
+  }
 
   it('期限が来たら取り消して expired を返す', async () => {
     const h = harness();
