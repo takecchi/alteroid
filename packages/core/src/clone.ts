@@ -1430,6 +1430,9 @@ class Clone implements CloneHost {
       this.#delivery.deleteUnread(event.id);
       this.#delivery.redeliveryState.drop(event.id);
       this.#dropPendingCollapse(event);
+      // token-pool の代表と枠の保持の印も落とす（#4782）: 残すと、消えた代表を指したまま同じ鍵の次の通知が「畳まれた」として捨てられ、保持の印も残るため（`#forget` と同じ後始末）
+      this.#delivery.clearPendingTokenPoolNoticeIfMatches(event.id);
+      this.#heldForUsage.delete(event.id);
       // 走っているターンがその会話のものなら触らない: そのターンの終端が捨てるため
       if (
         event.type === 'human_message' &&
