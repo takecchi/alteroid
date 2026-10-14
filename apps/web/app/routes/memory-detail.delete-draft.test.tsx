@@ -161,4 +161,64 @@ describe('書きかけの最中に、クローンが記憶を書き換えた後�
     await waitFor(() => expect(deletes).toEqual(['v2']));
     expect(await screen.findByText('一覧')).toBeTruthy();
   });
+
+  it('⭐ 無い記憶に書きかけを打つ間にクローンが作ったら、削除は送らず、いまの内容を見せる（#4802）', async () => {
+    let doc: MemoryDocument | null = null;
+    let served = 0;
+    const deletes: (string | null)[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (!request.url.includes('/memory/notes'))
+        throw new TypeError(`Failed to fetch: ${request.url}`);
+      if (request.method === 'DELETE') {
+        const ifMatch = new URL(request.url).searchParams.get('ifMatch');
+        deletes.push(ifMatch);
+        if (ifMatch !== 'v1') {
+          return json({ error: '変わっています', current: { document: doc, version: 'v1' } }, 409);
+        }
+        return json({ ok: true, slug: 'notes' });
+      }
+      if (doc === null) return json({ error: 'not found' }, 404);
+      served += 1;
+      return json({ document: doc, version: 'v1' });
+    }) as typeof fetch;
+
+    const router = createMemoryRouter(
+      [
+        { path: '/memory/:slug', Component: Harness },
+        { path: '/memory', Component: () => <p>一覧</p> },
+      ],
+      { initialEntries: ['/memory/notes'] },
+    );
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+
+    // 無い記憶を開いて書き始める（書き始めた時点の版は「無い」）
+    const textarea = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: '人間の書きかけ' } });
+
+    // クローンがその記憶を作り、取り直しが走る
+    doc = { ...DOC, content: 'クローンが作った本文' };
+    fireEvent.focus(window);
+    await waitFor(() => expect(served).toBeGreaterThan(0));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+
+    // 送らずに、いまの内容を見せる
+    expect(await screen.findByText('クローンが作った本文')).toBeTruthy();
+    expect(deletes).toEqual([]);
+
+    // 見たうえでもう一度消すと決めたら、見せた版で消す
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+    await waitFor(() => expect(deletes).toEqual(['v1']));
+    expect(await screen.findByText('一覧')).toBeTruthy();
+  });
 });
