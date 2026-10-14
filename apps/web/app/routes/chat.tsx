@@ -2470,6 +2470,11 @@ export function ChatPane({
           if (opened && duplicateOpen && !sawAfterOpen) {
             // open だけで閉じた受け取り済みの送り直しは「途中で切れた」ではない（#4745）: 進行中のターンが無く、返事は既に履歴に在るか、これから始まるターンで出る。終わりの合図が来たときと同じく追う
             sawTerminal = true;
+            // 追う相手として自分の発言を入れる（#4790）: `startFollow` は追送が登録されていなければ何もしないので、入れないと誰も追わず、まだ始まっていないターンの返事がその場で流れないため（追送の `followUp` と同じ入れ方）
+            if (stream.id !== undefined) {
+              const waiting = followUpIdsRef.current.get(stream.id) ?? new Set<string>();
+              followUpIdsRef.current.set(stream.id, waiting.add(clientMessageId));
+            }
           } else if (opened) {
             setFailures((prev) => new Map(prev).set(stream.id, new StreamClosedEarlyError()));
             markCutOff(stream.id);
