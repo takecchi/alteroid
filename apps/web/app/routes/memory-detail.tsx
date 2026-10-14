@@ -166,8 +166,21 @@ function MemoryDetailBody({ slug }: { slug: string }) {
                 confirmLabel="削除する"
                 destructive
                 onConfirm={() => {
-                  setBusy(true);
                   setConfirmingDelete(false);
+                  // 書き始めた時点に無かった記憶が、いまはある（#4802）: いまの内容は人が見ていないので、送らずに 409 と同じ形で見せる（削除の口の版は文字列だけで「無いはず」を表せないため）。見たうえでもう一度押せば、見せた版で消す
+                  if (draft !== undefined && baseVersion === null && deleteConflict === undefined) {
+                    setDeleteConflict(
+                      new MemoryConflictError(
+                        '書き始めた後にこの記憶が作られた（見ていない内容は消していない）',
+                        {
+                          document: data.document,
+                          version: data.version,
+                        },
+                      ),
+                    );
+                    return;
+                  }
+                  setBusy(true);
                   // 書きかけがあるときは、書き始めた時点に読んだ版を前提に消す（保存と同じく、取り直した版へ追従させない）:
                   // 書きかけの間に取り直した版は画面に出ていないので、それを前提にすると、クローンが書いた見ていない内容を 409 なしで消す
                   const readVersion =
