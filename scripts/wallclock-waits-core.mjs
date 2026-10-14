@@ -1,8 +1,9 @@
 // 字面で数える: コメントや文字列の中の同じ形も1件になるが、数えすぎはラチェットを下げられないだけで、新しい待ちを見逃す向きには倒れないため。
+// 数字の区切り（`3_000`）も数える（#4743）: 数えないと、区切りを入れただけの長い待ちが見逃されるため
 // `setTimeout(resolve, 0)` は数えない: マイクロタスクより後へ1回譲るだけで、時間には賭けないため。
 
 export const WALLCLOCK_WAIT_RE =
-  /setTimeout\(\s*[A-Za-z_$][\w$]*\s*,\s*(?:[1-9]\d*|\d*\.\d*[1-9]\d*)\s*\)/g;
+  /setTimeout\(\s*[A-Za-z_$][\w$]*\s*,\s*(?:[1-9][\d_]*|\d*\.\d*[1-9]\d*)\s*\)/g;
 
 export function countWallclockWaits(source) {
   return (source.match(WALLCLOCK_WAIT_RE) ?? []).length;

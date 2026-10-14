@@ -34,6 +34,11 @@ describe('countWallclockWaits', () => {
     ].join('\n');
     expect(countWallclockWaits(source)).toBe(3);
   });
+
+  it('⭐ 数字の区切りを入れた待ち（3_000）も数える（#4743）', () => {
+    const source = 'await new Promise((resolve) => setTimeout(resolve, 3_000));';
+    expect(countWallclockWaits(source)).toBe(1);
+  });
 });
 
 describe('compareWithBaseline / describeRatchetFailure', () => {

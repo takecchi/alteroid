@@ -36,17 +36,19 @@ describe('回転で runner へ撒き損ねた鍵の撒き直し（#4725）', () 
       },
     });
     await pool.restore();
-    // 繋ぎの時の降ろしが済んで落ち着くのを待ってから数える: 遅れて走る降ろしを撒き直しと取り違えないため
-    await expect.poll(() => synced.length, { timeout: 5_000 }).toBeGreaterThan(0);
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
-    const atConnect = synced.length;
+    await expect.poll(() => pool.pushHealthOf('runner-test')?.agentToken?.status).toBe('ok');
 
     listener?.([{ runnerId: 'runner-test', ok: false, error: 'runner が応答しない' }]);
 
+    // 知らせた時点で帳面に失敗として載る（実時間で待たずに見分ける。#2146）: 載らなければ挑み直しの対象にならない
+    expect(pool.pushHealthOf('runner-test')?.agentToken?.status).toBe('failed');
+    const atFailure = synced.length;
+    // 挑み直しで降ろし直され、帳面が ok に戻る
     await expect
-      .poll(() => synced.length, { timeout: 5_000, interval: 100 })
-      .toBeGreaterThan(atConnect);
+      .poll(() => pool.pushHealthOf('runner-test')?.agentToken?.status, { timeout: 5_000 })
+      .toBe('ok');
+    expect(synced.length).toBeGreaterThan(atFailure);
     expect(synced.at(-1)).toBe('runner-test');
     await pool.stop();
-  }, 15_000);
+  }, 10_000);
 });
