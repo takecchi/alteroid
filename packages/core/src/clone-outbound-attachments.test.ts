@@ -3,6 +3,8 @@ import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { AttachmentContentRemoveError } from './attachment.js';
+
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { fakeScriptedSdk, fakeSdk, waitForTerminal, wireEvents } from './clone-test-harness.js';
 import type { ScriptedStep } from './clone-test-harness.js';
@@ -661,5 +663,31 @@ describe('reply_attach をクローンのターンの中で呼ぶ', () => {
     expect(outbound).toHaveLength(1);
     expect(outbound[0]?.type === 'exchange' ? outbound[0].attachments?.[0]?.id : '').toBe(meta.id);
     await clone.stop();
+  });
+});
+
+describe('file_delete: 中身を置き場から消せなかったとき（#4814）', () => {
+  it('「消していない」と理由を返し、控えも写しも残し、日誌に断った行を足す', async () => {
+    const copies = await makeTempDir('alteroid-file-delete-refused-');
+    const h = toolsFor({ attachmentCopiesDir: copies });
+    const meta = await putBytes(h.stores, 'a.txt', 5);
+    await mkdir(join(copies, meta.id));
+    await writeFile(join(copies, meta.id, 'x.txt'), 'x');
+    vi.spyOn(h.stores.attachments, 'remove').mockRejectedValue(
+      new AttachmentContentRemoveError(meta.id, '置き場への削除を断られた'),
+    );
+
+    const out = await h.call('file_delete', { id: meta.id });
+
+    expect(out).toContain('消していない');
+    expect(out).toContain('置き場への削除を断られた');
+    expect(out).not.toContain('中身を消した');
+    expect(await h.stores.attachments.getMeta(meta.id)).toBeDefined();
+    await expect(access(join(copies, meta.id, 'x.txt'))).resolves.toBeUndefined();
+    const entries = await h.stores.journal.list({ limit: 10 });
+    expect(entries).toHaveLength(2);
+    const last = JSON.stringify(entries[entries.length - 1]) + JSON.stringify(entries[0]);
+    expect(last).toContain('消せなかった');
+    expect(last).toContain('置き場への削除を断られた');
   });
 });

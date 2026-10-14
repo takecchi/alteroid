@@ -4,11 +4,12 @@ import { join } from 'node:path';
 import {
   createAuthProviderRegistry,
   createAuthService,
+  AttachmentContentRemoveError,
   createMemoryStores,
   MemoryAttachmentStore,
   type CloneHost,
 } from '@alteroid/core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
@@ -442,5 +443,64 @@ describe('POST /reset は添付（保存したものを含む）と写しを消�
     expect(
       ((await response.json()) as { cleared: Record<string, number> }).cleared.attachments,
     ).toBe(1);
+  });
+});
+
+describe('DELETE /attachments/:id: 中身を置き場から消せなかったとき（#4814）', () => {
+  it('503 で断り、本文に理由を載せ、日誌に1行残し、控えも写しも残す。直れば消せる', async () => {
+    const meta = await uploadOk('a.txt');
+    await mkdir(join(copiesDir, meta.id), { recursive: true });
+    await writeFile(join(copiesDir, meta.id, 'copy.txt'), 'copy');
+    const refuse = vi
+      .spyOn(stores.attachments, 'remove')
+      .mockRejectedValue(new AttachmentContentRemoveError(meta.id, '置き場への削除を断られた'));
+
+    const response = await del(meta.id);
+
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('消していない');
+    expect(body.error).toContain('置き場への削除を断られた');
+    expect(body.error).toContain('もう一度');
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    expect(decisions).toHaveLength(1);
+    const line = JSON.stringify(decisions[0]);
+    expect(line).toContain('a.txt');
+    expect(line).toContain(meta.id);
+    expect(line).toContain('置き場への削除を断られた');
+    expect(line).toContain('実行環境の持ち主による操作');
+    expect((await app.request(`/attachments/${meta.id}/meta`, { headers: OPERATOR })).status).toBe(
+      200,
+    );
+    expect(await readdir(copiesDir)).toEqual([meta.id]);
+
+    refuse.mockRestore();
+    expect((await del(meta.id)).status).toBe(204);
+    expect(await readdir(copiesDir)).toEqual([]);
+  });
+});
+
+describe('POST /reset: 添付の中身を置き場から消せなかったとき（#4814）', () => {
+  it('500 に隠さず 503 で理由を返し、添付と写しは残し、日誌に断りの行を残す', async () => {
+    const meta = await uploadOk('a.txt');
+    await mkdir(join(copiesDir, meta.id), { recursive: true });
+    await writeFile(join(copiesDir, meta.id, 'copy.txt'), 'copy');
+    vi.spyOn(stores.attachments, 'clear').mockRejectedValue(
+      new AttachmentContentRemoveError(meta.id, '置き場への削除を断られた'),
+    );
+
+    const response = await app.request('/reset', {
+      method: 'POST',
+      headers: { ...OPERATOR, 'content-type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    });
+
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('置き場への削除を断られた');
+    expect(body.error).toContain('もう一度リセット');
+    expect(await readdir(copiesDir)).toEqual([meta.id]);
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    expect(JSON.stringify(decisions)).toContain('置き場への削除を断られた');
   });
 });

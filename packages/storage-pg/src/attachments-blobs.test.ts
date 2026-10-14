@@ -1,4 +1,5 @@
 import {
+  AttachmentContentRemoveError,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
   MemoryAttachmentBlobStore,
@@ -229,7 +230,7 @@ describe('PgAttachmentStore + blobs（外部ストレージ。#4128 段2）', ()
     expect((await client.query(`select id from attachments`)).rows).toEqual([]);
   });
 
-  it('(e) blob の remove が落ちても行は消え、stderr に1行（件数と理由。key は載せない）', async () => {
+  it('(e) blob の remove が落ちたら remove は投げ、行は残り、get / list で見える。直れば消せる（#4814）', async () => {
     const blobs = new HookedBlobs();
     const store = new PgAttachmentStore(quiet(), { blobs });
     const meta = await store.put({
@@ -238,33 +239,111 @@ describe('PgAttachmentStore + blobs（外部ストレージ。#4128 段2）', ()
       bytes: Buffer.from('hi'),
     });
     blobs.failRemove = true;
-    let removed: boolean | undefined;
-    const lines = await captureStderr(async () => {
-      removed = await store.remove(meta.id);
-    });
-    expect(removed).toBe(true);
-    expect(await store.getMeta(meta.id)).toBeUndefined();
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain('1 件');
-    expect(lines[0]).toContain('削除に失敗');
-    expect(lines[0]).not.toContain(meta.id);
+    const error = await store.remove(meta.id).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AttachmentContentRemoveError);
+    expect((error as AttachmentContentRemoveError).id).toBe(meta.id);
+    expect((error as AttachmentContentRemoveError).reason).toContain('blob の削除が落ちた');
+    expect(await store.getMeta(meta.id)).toBeDefined();
+    expect((await store.get(meta.id))?.bytes).toEqual(new Uint8Array(Buffer.from('hi')));
+    expect((await store.list({ limit: 10 })).items.map((item) => item.id)).toEqual([meta.id]);
     expect(blobs.keys()).toHaveLength(1);
 
-    const again = await store.put({
+    blobs.failRemove = false;
+    expect(await store.remove(meta.id)).toBe(true);
+    expect(await store.getMeta(meta.id)).toBeUndefined();
+    expect(blobs.keys()).toEqual([]);
+  });
+
+  it('置き場の設定が無い構成で、blob_key のある行の remove は投げ、行を残す（#4814）', async () => {
+    const withBlobs = new PgAttachmentStore(quiet(), { blobs: new MemoryAttachmentBlobStore() });
+    const meta = await withBlobs.put({
+      name: 'a.txt',
+      mediaType: 'text/plain',
+      bytes: Buffer.from('hi'),
+    });
+    const without = new PgAttachmentStore(quiet());
+    const error = await without.remove(meta.id).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AttachmentContentRemoveError);
+    expect((error as AttachmentContentRemoveError).reason).toContain('置き場が設定されていない');
+    expect(await without.getMeta(meta.id)).toBeDefined();
+  });
+
+  it('中身を消した後に行の削除が落ちても、もう一度 remove すれば消し切れる（#4814）', async () => {
+    const blobs = new HookedBlobs();
+    const store = new PgAttachmentStore(quiet(), { blobs });
+    const meta = await store.put({
+      name: 'a.txt',
+      mediaType: 'text/plain',
+      bytes: Buffer.from('hi'),
+    });
+    await blobs.remove([`attachments/${meta.id}`]); // 前回、中身だけ消えて行の削除が落ちた状態
+    expect(await store.remove(meta.id)).toBe(true);
+    expect(await store.getMeta(meta.id)).toBeUndefined();
+  });
+
+  it('prune は中身を消せた行だけを消し、落ちた行は残して stderr に1行（件数と理由）。次の回に消す（#4814）', async () => {
+    const blobs = new HookedBlobs();
+    const store = new PgAttachmentStore(quiet(), { blobs });
+    const later = new Date(Date.now() + 2 * 3_600_000);
+    const keyed = await store.put({
+      name: 'a.txt',
+      mediaType: 'text/plain',
+      bytes: Buffer.from('a'),
+    });
+    blobs.failRemove = true;
+    const lines = await captureStderr(async () => {
+      expect(await store.prune(later)).toBe(0);
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('1 件');
+    expect(lines[0]).toContain('blob の削除が落ちた');
+    expect(lines[0]).not.toContain(keyed.id);
+    expect(await store.getMeta(keyed.id)).toBeDefined();
+    expect(blobs.keys()).toHaveLength(1);
+
+    blobs.failRemove = false;
+    expect(await store.prune(later)).toBe(1);
+    expect(await store.getMeta(keyed.id)).toBeUndefined();
+    expect(blobs.keys()).toEqual([]);
+  });
+
+  it('prune: 置き場の設定が無いときは blob_key のある行を残し、中身を持たない行は消す（#4814）', async () => {
+    const withBlobs = new PgAttachmentStore(quiet(), { blobs: new MemoryAttachmentBlobStore() });
+    const keyed = await withBlobs.put({
+      name: 'a.txt',
+      mediaType: 'text/plain',
+      bytes: Buffer.from('a'),
+    });
+    const without = new PgAttachmentStore(quiet());
+    const inline = await without.put({
       name: 'b.txt',
       mediaType: 'text/plain',
       bytes: Buffer.from('b'),
     });
-    const pruneLines = await captureStderr(async () => {
-      expect(await store.prune(new Date(Date.now() + 2 * 3_600_000))).toBe(1);
+    const lines = await captureStderr(async () => {
+      expect(await without.prune(new Date(Date.now() + 2 * 3_600_000))).toBe(1);
     });
-    expect(pruneLines).toHaveLength(1);
-    expect(await store.getMeta(again.id)).toBeUndefined();
-    await store.put({ name: 'c.txt', mediaType: 'text/plain', bytes: Buffer.from('c') });
-    const clearLines = await captureStderr(async () => {
-      expect(await store.clear()).toBe(1);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('置き場が設定されていない');
+    expect(await without.getMeta(keyed.id)).toBeDefined();
+    expect(await without.getMeta(inline.id)).toBeUndefined();
+  });
+
+  it('clear は中身を消せなければ投げ、行を1件も消さない。直れば消える（#4814）', async () => {
+    const blobs = new HookedBlobs();
+    const store = new PgAttachmentStore(quiet(), { blobs });
+    const meta = await store.put({
+      name: 'a.txt',
+      mediaType: 'text/plain',
+      bytes: Buffer.from('a'),
     });
-    expect(clearLines).toHaveLength(1);
+    blobs.failRemove = true;
+    await expect(store.clear()).rejects.toBeInstanceOf(AttachmentContentRemoveError);
+    expect(await store.getMeta(meta.id)).toBeDefined();
+
+    blobs.failRemove = false;
+    expect(await store.clear()).toBe(1);
+    expect(await store.getMeta(meta.id)).toBeUndefined();
   });
 
   it('(f) 大きいファイルの枠: maxFileBytes を超え maxLargeFileBytes 以下が通り、超えると too_large', async () => {
