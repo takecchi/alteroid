@@ -7678,8 +7678,30 @@ class Pool implements ManagerPool {
           : { lease: { fence: record.job.lease.fence, ttlMs: record.job.lease.ttlMs } }),
       });
     } catch (error) {
-      this.#endResumeConfirmation(record.job.id);
-      throw error;
+      // 応答の無い失敗（期限切れ・接続の断）は「効かなかった」と決めず、runner の一覧で確かめる（#4715）: runner は受け取って
+      // セッションを起こしたのに応答だけが返らないことがあり、効かなかった側へ倒すと、生きているセッションを引き取らないまま
+      // その出来事を「移った後の古い runner」として捨て続けるため。runner が答えた失敗（`RunnerHttpError`）は確かめずにそのまま投げる
+      const alive =
+        error instanceof RunnerHttpError
+          ? false
+          : await listRunnerManagers(runner)
+              .then(
+                (listing) =>
+                  listing.states.some((state) => state.managerId === record.job.id) ||
+                  listing.unreadableIds.includes(record.job.id),
+              )
+              .catch(() => false);
+      if (!alive) {
+        this.#endResumeConfirmation(record.job.id);
+        throw error;
+      }
+      // 世代は分からないので持たない（応答が運ぶもの）: 世代の判定は「不明」として出来事を受ける
+      resumed = {};
+      await this.#journal({
+        type: 'decision',
+        decision: `[${record.job.id}] resume の応答が返らなかったが、${runner.runnerId} にセッションが居るので、resume は効いたとして引き取った`,
+        grounds: `resume の失敗: ${reasonOf(error)}。${runner.runnerId} の一覧にこの委譲が居た`,
+      });
     }
     // `resumed.cwd` が返らなければ何もしない: 「未確認」を `requestedCwd` で埋めると、倒れていた回まで「頼んだとおり開けた」と嘘をつく。
     // 倒れたかは応答後にしか分からず、resume 前に組む「移送の一言」へ混ぜられないので `cwdSwapNotice` で伝える。前回の通知は持ち越さない。
