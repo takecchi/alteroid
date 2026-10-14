@@ -601,6 +601,33 @@ jobs:
       # PR では緑だった）。buildx の docker-container のビルダーは毎回空なので、事前の `docker pull` では温まらない。
       # 1回目だけ `continue-on-error` にし、2回目が落ちれば job は赤のまま（本物の失敗を隠さない）。
       # 429 以外で落ちた回も1回焼き直すので、そのときは数分余計にかかる。
+      #
+      # **1回目は GHCR の写し（`mirror-base-images.yml`）から取る。2回目は今までどおり ECR Public から取る。**
+      # 「待って1回だけ焼き直す」でも 429 が続いた回がある（#4660）。写しはこのリポジトリの `GITHUB_TOKEN` で読める
+      # （既定の権限が read）ので、新しい鍵は要らない。`Dockerfile` は書き換えない（Railway の夜の反映と Renovate の
+      # digest の追跡に触れないため）。`FROM` だけを写しの参照へ置き換えた写しを /tmp に作り、それで焼く。
+      # 参照は digest ごと置き換えるので、写しから取っても中身は digest で同じことが保証される。
+      # 写しが無い（まだ写していない・Renovate が digest を上げた直後）・読めない（フォークの PR）ときは、
+      # 1回目が落ちて2回目の ECR Public へ戻る。
+      - name: GHCR の写しから焼く Dockerfile を作る
+        id: ghcr
+        continue-on-error: true
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          MIRROR: ghcr.io/${{ github.repository_owner }}/alteroid-mirror
+        run: |
+          set -eu
+          mkdir -p /tmp/alteroid-ghcr
+          for f in Dockerfile docker/db.Dockerfile; do
+            out="/tmp/alteroid-ghcr/$(basename "$f")"
+            sed -E "s#^FROM public\.ecr\.aws/docker/library/#FROM $MIRROR/#" "$f" > "$out"
+            # 置き換え漏れ（ECR Public が残る）・置き換え0件を、黙って ECR から焼く形にしない
+            if grep -q '^FROM public\.ecr\.aws/' "$out"; then echo "置き換え漏れ: $out" >&2; exit 1; fi
+            grep -q "^FROM $MIRROR/" "$out"
+          done
+          printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
       - id: bake
         continue-on-error: true
         uses: docker/bake-action@v7
@@ -618,6 +645,7 @@ jobs:
             *.args.ALTEROID_BUILD_REV=${{ github.sha }}
             *.cache-from=type=gha
             ${{ env.DRIFT != 'true' && 'final.cache-to=type=gha' || '' }}
+            ${{ steps.ghcr.outcome == 'success' && '*.dockerfile=/tmp/alteroid-ghcr/Dockerfile' || '' }}
           # **定時の回はキャッシュを書き戻さない**（上の `cache-to` の行は条件つき）。
           # 書き戻すと翌日の PR の `image` がその層で焼かれることになり、上流が動いた日に
           # **無関係な PR が赤くなる**＝ 上の `schedule` で避けたはずの「門を人質に取る」が
@@ -647,7 +675,7 @@ jobs:
           #   `grep -Fn -- 'SHA が違えば push する。それだけである。' .github/scripts/reflect-release-prod.sh`）
           no-cache: ${{ env.DRIFT == 'true' }}
 
-      - name: 1回目の bake が落ちたので、取得制限が明けるのを待つ
+      - name: 1回目の bake が落ちたので、取得制限が明けるのを待つ（2回目は ECR Public から取る）
         if: steps.bake.outcome == 'failure'
         run: sleep 60
 
@@ -1061,7 +1089,21 @@ jobs:
       # `docker/alteroid-db`（URL パース）の誤りに、実際に `docker compose up` する
       # まで気づけない——上の `alteroid:ci` の像とは別の Dockerfile なので、上の
       # ステップはこちらを一切検証していない。
-      - uses: docker/build-push-action@v7
+      # 取り元は上の bake と同じ順: まず GHCR の写し、落ちたら ECR Public（指定は2本で同じにする）
+      - id: db-ghcr
+        if: steps.ghcr.outcome == 'success'
+        continue-on-error: true
+        uses: docker/build-push-action@v7
+        with:
+          context: ./docker
+          file: /tmp/alteroid-ghcr/db.Dockerfile
+          load: true
+          tags: alteroid-db:ci
+          cache-from: type=gha,scope=db
+          cache-to: ${{ env.DRIFT != 'true' && 'type=gha,scope=db' || '' }}
+          no-cache: ${{ env.DRIFT == 'true' }}
+      - if: steps.db-ghcr.outcome != 'success'
+        uses: docker/build-push-action@v7
         with:
           context: ./docker
           file: ./docker/db.Dockerfile

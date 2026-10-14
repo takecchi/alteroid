@@ -53,24 +53,6 @@ jobs:
       matrix:
         # 本番の照合順は en_US.UTF-8 でありうる（PGlite は C 相当）。両方で見る。
         collate: ['en_US.UTF-8', 'C']
-    services:
-      postgres:
-        # 本番に近い版。リポジトリの `Dockerfile` の postgres（17）に揃える。
-        # 資格情報はこのジョブの中だけで使い捨てる値で、秘密ではない。
-        # Docker Hub ではなく ECR Public のミラーから取る。Docker Hub の匿名の取得制限に
-        # 当たり、試験を走らせる前の Initialize containers で落ちていた（#4383）。
-        # 中身は同じ公式像（`Dockerfile` の node と同じ形。#4390）。
-        image: public.ecr.aws/docker/library/postgres:17
-        env:
-          POSTGRES_USER: alteroid
-          POSTGRES_PASSWORD: alteroid-ci-throwaway
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U alteroid"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
       PGHOST: 127.0.0.1
       PGPORT: '5432'
@@ -78,6 +60,47 @@ jobs:
       PGPASSWORD: alteroid-ci-throwaway
     steps:
       - uses: actions/checkout@v7
+
+      # **postgres は、まず GHCR の写し（`mirror-base-images.yml`）から取り、取れなければ ECR Public から取る。**
+      # 本番に近い版。リポジトリの `Dockerfile` の postgres（17）に揃える。中身は同じ公式像（#4390）。
+      # Docker Hub は匿名の取得制限に当たっていた（#4383）。ECR Public も 429 を返す回がある（#4654）。
+      # サービスコンテナ（`services:`）にしない: 取り元を切り替えられず、取れないと Initialize containers で job ごと落ちるため。
+      # 資格情報はこのジョブの中だけで使い捨てる値で、秘密ではない。
+      - name: postgres を起こす（GHCR の写し → 取れなければ ECR Public）
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          MIRROR: ghcr.io/${{ github.repository_owner }}/alteroid-mirror
+        run: |
+          set -eu
+          # ログインに失敗しても止めない: 写しが読めないだけで、ECR Public へ戻れば済むため
+          printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin || true
+          image=''
+          for candidate in "$MIRROR/postgres:17" public.ecr.aws/docker/library/postgres:17; do
+            for attempt in 1 2; do
+              if docker pull "$candidate"; then
+                image=$candidate
+                break 2
+              fi
+              echo "取れなかった（$attempt 回目）: $candidate" >&2
+              sleep 30
+            done
+          done
+          test -n "$image" || { echo "postgres の像をどこからも取れなかった" >&2; exit 1; }
+          echo "取り元: $image"
+          docker run -d --name postgres -p 5432:5432 \
+            -e POSTGRES_USER=alteroid -e POSTGRES_PASSWORD=alteroid-ci-throwaway "$image"
+          # TCP で確かめる: 初期化の途中の一時サーバーは Unix ソケットだけで待ち受けるので、TCP で答えたら本番のサーバーである
+          for i in $(seq 1 60); do
+            if docker exec postgres pg_isready -U alteroid -h 127.0.0.1 >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs postgres
+          echo "postgres が2分で起き上がらなかった" >&2
+          exit 1
+
       - uses: ./.github/actions/setup
 
       # 照合順を指定した DB を作る（`template0` から。`template1` は照合順を変えられない）。
