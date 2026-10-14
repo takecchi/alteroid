@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { randomToken, sha256Hex } from './auth.js';
+import { reasonOf } from './dropped-record.js';
 import { assertNoNul, stripNul } from './nul-guard.js';
 import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
 
@@ -122,7 +123,14 @@ export async function resolveIntegrationKey(options: {
   if (found === null || !isIntegrationKeyUsable(found, now)) return null;
   const previous = found.lastUsedAt === null ? 0 : Date.parse(found.lastUsedAt);
   if (!(now.getTime() - previous < INTEGRATION_KEY_LAST_USED_THROTTLE_MS)) {
-    await store.markIntegrationKeyUsed(found.id, now.toISOString());
+    // 書けなくても照合の結果は変えない（#4755）: 書くのは表示用の時刻で、投げると有効な鍵で届いた出来事が 500 で落ちるため
+    try {
+      await store.markIntegrationKeyUsed(found.id, now.toISOString());
+    } catch (error) {
+      process.stderr.write(
+        `alteroidd: 連携の鍵 ${found.id} の最後に使った時刻を書けなかった（出来事は受ける）: ${reasonOf(error)}\n`,
+      );
+    }
   }
   return found;
 }
