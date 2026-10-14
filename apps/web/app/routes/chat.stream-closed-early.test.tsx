@@ -141,6 +141,23 @@ describe('終端が無いまま閉じた送信（#3564）', () => {
     );
   });
 
+  it('⭐ 受け取り済みの送り直しが続きを流さずに閉じたら、その発言を追って会話の流れを読みに行く（#4790）', async () => {
+    const stub = setUp({
+      chat: [{ event: 'open', data: { conversationId: ID, duplicate: true } }],
+    });
+    const streamReads = () =>
+      stub.entries.filter((e) => /\/chat\/[^/]+\/stream$/.test(e.url)).length;
+    renderChat(`/chat/${ID}`);
+    // 開いた時の読み直しが済むのを待ってから数える: 開いた時にも同じ口を叩くため
+    await screen.findByPlaceholderText(/クローンに話しかける/);
+    await waitFor(() => expect(streamReads()).toBeGreaterThan(0));
+    const before = streamReads();
+    await sendText('もう受け取られていた発言');
+
+    await waitFor(() => expect(streamReads()).toBeGreaterThan(before));
+    expect(screen.queryByText(CLOSED_EARLY)).toBeNull();
+  });
+
   it('done が来て閉じたなら黙る（陰性対照）', async () => {
     setUp({
       chat: [
