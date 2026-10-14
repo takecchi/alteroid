@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_INITIATIVE_EVERY_MINUTES,
+  DEFAULT_REPORT_LOOKBACK_DAYS,
   MIN_INITIATIVE_EVERY_MINUTES,
   buildSchedule,
   readScheduleConfig,
@@ -176,5 +177,31 @@ describe('予約 kind → 環境変数の対応が、実在する口を指して
     });
     expect(initiative.initiativeEveryMinutes).toBe(7);
     expect(initiative.dailyReportAt).toEqual({ hour: 22, minute: 0 });
+  });
+});
+
+describe('readScheduleConfig — 上限を超える値は既定へ倒す（#4723）', () => {
+  it('⭐ ALTEROID_INITIATIVE_EVERY が1年（525600 分）を超えたら、既定へ倒して note に残す（Invalid Date で tick が連射されないように）', () => {
+    const config = readScheduleConfig({ ALTEROID_INITIATIVE_EVERY: '1e12' });
+    expect(config.initiativeEveryMinutes).toBe(DEFAULT_INITIATIVE_EVERY_MINUTES);
+    expect(config.notes.join('\n')).toContain('ALTEROID_INITIATIVE_EVERY="1e12"');
+  });
+
+  it('ALTEROID_INITIATIVE_EVERY のちょうど1年は受け、1分でも超えたら既定へ倒す', () => {
+    expect(readScheduleConfig({ ALTEROID_INITIATIVE_EVERY: '525600' }).initiativeEveryMinutes).toBe(
+      525_600,
+    );
+    expect(readScheduleConfig({ ALTEROID_INITIATIVE_EVERY: '525601' }).initiativeEveryMinutes).toBe(
+      DEFAULT_INITIATIVE_EVERY_MINUTES,
+    );
+  });
+
+  it('⭐ ALTEROID_REPORT_LOOKBACK_DAYS が上限を超えたら、既定へ倒して note に残す（日付が Invalid Date にならないように）', () => {
+    const config = readScheduleConfig({ ALTEROID_REPORT_LOOKBACK_DAYS: '1e9' });
+    expect(config.reportLookbackDays).toBe(DEFAULT_REPORT_LOOKBACK_DAYS);
+    expect(config.notes.join('\n')).toContain('ALTEROID_REPORT_LOOKBACK_DAYS="1e9"');
+    expect(readScheduleConfig({ ALTEROID_REPORT_LOOKBACK_DAYS: '365' }).reportLookbackDays).toBe(
+      365,
+    );
   });
 });

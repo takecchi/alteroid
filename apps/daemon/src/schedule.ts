@@ -2,6 +2,7 @@ import {
   dailyReportEntry,
   memoryTidyEntry,
   parseTimeOfDay,
+  SCHEDULE_EVERY_MINUTES_MAX,
   selfInitiativeEntry,
   type ScheduleEntry,
   type TimeOfDay,
@@ -29,6 +30,8 @@ export const DEFAULT_INITIATIVE_EVERY_MINUTES = 55;
 // 下限は 1 分: 起動側（`selfInitiativeEntry`）が 1 分へ切り上げるので、読み取りで通すと入れた値と違う周期で黙って動くため。切り上げて採るのではなく既定へ倒す。
 export const MIN_INITIATIVE_EVERY_MINUTES = 1;
 export const DEFAULT_REPORT_LOOKBACK_DAYS = 3;
+// 後追いで遡る日数の上限（#4723）: 上限が無いと、遡る起点の日付が Invalid Date になり後追いが壊れるため。1年より前の日報を後から書かせる理由は無い
+export const MAX_REPORT_LOOKBACK_DAYS = 365;
 
 const OFF = new Set(['off', 'none', 'false', '0']);
 
@@ -84,6 +87,11 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
         notes.push(
           `ALTEROID_INITIATIVE_EVERY="${rawEvery}" は下限 ${MIN_INITIATIVE_EVERY_MINUTES} 分を下回っているので既定 ${DEFAULT_INITIATIVE_EVERY_MINUTES} を使う`,
         );
+      } else if (parsed > SCHEDULE_EVERY_MINUTES_MAX) {
+        // 上限はクローンの道具の `every` と揃える（#4723）: 上限が無いと次の発火時刻が Invalid Date になり、tick が約1ms周期で連射されるため
+        notes.push(
+          `ALTEROID_INITIATIVE_EVERY="${rawEvery}" は上限 ${SCHEDULE_EVERY_MINUTES_MAX} 分（1年）を超えているので既定 ${DEFAULT_INITIATIVE_EVERY_MINUTES} を使う`,
+        );
       } else {
         initiativeEveryMinutes = parsed;
         // 整数でない値は起動側（`selfInitiativeEntry`）が切り捨てる: 黙って別の周期で動かさず、実際に使う値を言う。
@@ -103,6 +111,10 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
     if (!Number.isFinite(parsed) || parsed < 0) {
       notes.push(
         `ALTEROID_REPORT_LOOKBACK_DAYS="${rawLookback}" は日数として読めないので既定 ${DEFAULT_REPORT_LOOKBACK_DAYS} を使う`,
+      );
+    } else if (parsed > MAX_REPORT_LOOKBACK_DAYS) {
+      notes.push(
+        `ALTEROID_REPORT_LOOKBACK_DAYS="${rawLookback}" は上限 ${MAX_REPORT_LOOKBACK_DAYS} 日を超えているので既定 ${DEFAULT_REPORT_LOOKBACK_DAYS} を使う`,
       );
     } else {
       reportLookbackDays = Math.floor(parsed);
