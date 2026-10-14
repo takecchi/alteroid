@@ -15,7 +15,7 @@ import { PgConversationReadStore } from './conversation-reads.js';
 import { PgJobStore } from './jobs.js';
 import { PgJournalStore } from './journal.js';
 import { PgMcpServerStore } from './mcp-servers.js';
-import { migrate } from './migrate.js';
+import { migrateOnBoot } from './migrate.js';
 import {
   createTimedPool,
   PG_LONG_QUERY_TIMEOUT_MS,
@@ -66,7 +66,7 @@ export { PgSessionStore } from './session-store.js';
 export { PgTokenPoolStore } from './token-pool.js';
 export { PgUsageStore } from './usage.js';
 export * from './footprint.js';
-export { migrate } from './migrate.js';
+export { migrate, migrateOnBoot } from './migrate.js';
 export type { Db } from './db.js';
 export * as tables from './schema.js';
 
@@ -186,8 +186,9 @@ export async function createPgStores(options: CreatePgStoresOptions | string): P
   pool.on('error', onError);
 
   const db = drizzle(pool);
-  // 長い期限で包む: 大きい表への索引の作成・全行の backfill が起動のたびに通り、既定の期限で切ると器が起き上がらないため
-  await withPgQueryTimeout(PG_LONG_QUERY_TIMEOUT_MS, () => migrate(db));
+  // 長い期限で包む: 大きい表への索引の作成・全行の backfill が版の変わり目に通り、既定の期限で切ると器が起き上がらないため
+  // 流し済みの文は流し直さない（#4731。`migrateOnBoot`）: 何もしない ALTER でもテーブルを止めるため
+  await withPgQueryTimeout(PG_LONG_QUERY_TIMEOUT_MS, () => migrateOnBoot(db));
   return createPgStoresFromDb(
     db,
     async () => {

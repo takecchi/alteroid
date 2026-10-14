@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -730,4 +732,54 @@ export async function migrate(
   }
   await ensureOpenManagerBodyIndex(db, warn);
   await ensureAuthAccountsEmailLowerIndex(db, warn);
+}
+
+/** 流し済みの `STATEMENTS` の指紋を置く `daemon_state` の鍵（#4731）。 */
+export const SCHEMA_STATEMENTS_KEY = 'schema_statements_sha256';
+
+/** `STATEMENTS` の指紋。文を1文字でも変えれば変わる（区切りに NUL を挟み、文の境目をずらした別の並びと取り違えない）。 */
+export function statementsFingerprint(statements: readonly string[] = STATEMENTS): string {
+  return createHash('sha256').update(statements.join('\u0000')).digest('hex');
+}
+
+/**
+ * 起動の経路で使う（#4731）。同じ文の一覧を流し済みなら、`STATEMENTS` を流さない。
+ * 流さない: 何もしない `ALTER TABLE ... IF NOT EXISTS` でもテーブルの ACCESS EXCLUSIVE を取りに行き、
+ * 先行の長い読みがあるとその間そのテーブルへの書き込みを全部止めるため（デプロイの入れ替えで旧デーモンが動いている間に起きる）。
+ * 文の一覧が変わった版では、今までどおり頭から1回流し、全部通った後に指紋を書く: 途中で落ちれば書かないので、次の起動でやり直す。
+ * 索引を確かめてから作る2つ（`ensure*`）は毎回呼ぶ: 先に有無を見ているので、ロックを取りに行かない。
+ * 試験は `migrate()`（毎回すべて流す）を使い続ける: 文の一覧が変わる版では既存の DB へ頭から流すので、「2周目でも壊れない」は要り続けるため。
+ */
+export async function migrateOnBoot(
+  db: Db,
+  warn: (line: string) => void = (line) => process.stderr.write(line),
+): Promise<void> {
+  const fingerprint = statementsFingerprint();
+  if ((await appliedStatementsFingerprint(db)) === fingerprint) {
+    await ensureOpenManagerBodyIndex(db, warn);
+    await ensureAuthAccountsEmailLowerIndex(db, warn);
+    return;
+  }
+  await migrate(db, warn);
+  await db.execute(
+    sql`insert into daemon_state (key, value) values (${SCHEMA_STATEMENTS_KEY}, ${fingerprint})
+        on conflict (key) do update set value = excluded.value`,
+  );
+}
+
+// 表がまだ無い（空の DB）・読めないなら「流していない」: 確かめられないものを流し済みと読むと、足りない列のまま起き上がるため
+async function appliedStatementsFingerprint(db: Db): Promise<string | undefined> {
+  try {
+    const exists = (await db.execute(
+      sql`select to_regclass('daemon_state') is not null as present`,
+    )) as { rows: unknown[] };
+    if ((exists.rows[0] as { present?: boolean } | undefined)?.present !== true) return undefined;
+    const found = (await db.execute(
+      sql`select value from daemon_state where key = ${SCHEMA_STATEMENTS_KEY}`,
+    )) as { rows: unknown[] };
+    const value = (found.rows[0] as { value?: unknown } | undefined)?.value;
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }

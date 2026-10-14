@@ -10,7 +10,7 @@ import { createEmptyTestDb } from './test-db.test-support.js';
 // `STATEMENTS` の文が実際に発行された回数を数える（`ensure*` の索引の確かめは数えない）
 function counting(db: Db): { db: Db; statements: () => number } {
   let count = 0;
-  const wanted = new Set(STATEMENTS);
+  const wanted = new Set<string>(STATEMENTS);
   const proxied = new Proxy(db, {
     get(target, property, receiver) {
       if (property === 'execute') {
@@ -57,10 +57,10 @@ describe('migrateOnBoot（#4731）', () => {
 
   it('途中の文で落ちたら指紋を書かず、次の起動でもう一度流す', async () => {
     const { db } = await createEmptyTestDb();
+    let calls = 0;
     const failing = new Proxy(db, {
       get(target, property, receiver) {
         if (property === 'execute') {
-          let calls = 0;
           return (query: Parameters<Db['execute']>[0]) => {
             calls += 1;
             if (calls === 5) return Promise.reject(new Error('仕込んだ失敗（#4731）'));
