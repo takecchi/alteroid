@@ -2536,7 +2536,9 @@ export async function runSlashCommand(
       }
       const id = resolveListedId(reference, listed.approvals);
       if (id === null) {
-        stdout.write(`[${reference}] は /approvals の一覧にありません\n`);
+        const missing = `[${reference}] は /approvals の一覧にありません`;
+        stdout.write(`${missing}\n`);
+        onFailed?.(missing);
         return 'ok';
       }
       // 取れなかったときに黙って自由文へ倒さない: 設問つきの承認待ちへ、構造化のつもりの字面をそのまま自由文として送ってしまう。
@@ -2548,9 +2550,12 @@ export async function runSlashCommand(
             query: { order: 'asc', pending: 'false' },
           });
           if (!lookup.ok) {
-            stdout.write(
-              `${await withDetail('承認待ちを読めなかったので、回答を送っていません', lookup)}\n`,
+            const failure = await withDetail(
+              '承認待ちを読めなかったので、回答を送っていません',
+              lookup,
             );
+            stdout.write(`${failure}\n`);
+            onFailed?.(failure);
             return 'ok';
           }
           const { approvals } = await lookup.json();
@@ -2558,15 +2563,20 @@ export async function runSlashCommand(
         } else {
           const lookup = await client.approvals[':id'].$get({ param: { id } });
           if (lookup.status !== 404 && !lookup.ok) {
-            stdout.write(
-              `${await withDetail('承認待ちを読めなかったので、回答を送っていません', lookup)}\n`,
+            const failure = await withDetail(
+              '承認待ちを読めなかったので、回答を送っていません',
+              lookup,
             );
+            stdout.write(`${failure}\n`);
+            onFailed?.(failure);
             return 'ok';
           }
           target = lookup.ok ? (await lookup.json()).approval : undefined;
         }
         if (target === undefined) {
-          stdout.write(`[${reference}] （${id}）は見つからなかったので、回答を送っていません\n`);
+          const missing = `[${reference}] （${id}）は見つからなかったので、回答を送っていません`;
+          stdout.write(`${missing}\n`);
+          onFailed?.(missing);
           return 'ok';
         }
         if (target.questions !== undefined && target.questions.length > 0) {
@@ -2574,7 +2584,9 @@ export async function runSlashCommand(
         }
       }
       if (structured !== null && 'error' in structured) {
-        stdout.write(`${redactError(structured.error)}\n`);
+        const failure = redactError(structured.error);
+        stdout.write(`${failure}\n`);
+        onFailed?.(failure);
         return 'ok';
       }
       const answer = structured === null ? rawTail(line, 2) : structured.supplement;
@@ -2591,9 +2603,14 @@ export async function runSlashCommand(
                 ...(answer.length === 0 ? {} : { answer }),
               },
       });
-      stdout.write(
-        `${response.ok ? '回答しました' : await withDetail('回答に失敗しました', response)}\n`,
-      );
+      // 失敗は `onFailed` へも渡す（#4683）: 渡さないと、非対話（パイプ）で止まらず次の行へ進み、終了コードも 0 になり、呼んだ側が成功と読むため（`/answers` と同じ形）
+      if (response.ok) {
+        stdout.write('回答しました\n');
+        return 'ok';
+      }
+      const failure = await withDetail('回答に失敗しました', response);
+      stdout.write(`${failure}\n`);
+      onFailed?.(failure);
       return 'ok';
     }
 
