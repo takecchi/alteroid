@@ -35,6 +35,7 @@ function staleRunner() {
   const sends: { managerId: string; text: string }[] = [];
   const resumes: RunnerResumeCommand[] = [];
   const stops: string[] = [];
+  const stopOptions: ({ keepPeers?: boolean } | undefined)[] = [];
   const behavior: {
     background: number | 'absent';
     stopIgnored: boolean;
@@ -84,8 +85,9 @@ function staleRunner() {
     async answer(): Promise<RunnerAnswerOutcome> {
       return { delivered: false };
     },
-    async stop(managerId) {
+    async stop(managerId, options) {
       stops.push(managerId);
+      stopOptions.push(options);
       if (behavior.stopIgnored) return;
       const at = alive.findIndex((state) => state.managerId === managerId);
       if (at >= 0) alive.splice(at, 1);
@@ -118,6 +120,7 @@ function staleRunner() {
     sends,
     resumes,
     stops,
+    stopOptions,
     behavior,
     push(event: RunnerEvent): void {
       if (emit === null) throw new Error('connect されていない（名乗る前に流している）');
@@ -197,6 +200,26 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
     const after = await summaryOf(s.pool);
     expect(after.tokenGeneration).toBe(60);
     expect(after.activeTokenGeneration).toBe(60);
+    await s.pool.stop();
+  });
+
+  it('⭐ 鍵の付け替えのための畳みでは、runner に peer を預けさせる（keepPeers。#4734）', async () => {
+    const s = await setup();
+    s.rotate();
+
+    await s.pool.send('mgr-stale', '続きをお願い');
+
+    expect(s.fake.stopOptions).toEqual([{ keepPeers: true }]);
+    await s.pool.stop();
+  });
+
+  it('対照: 人間・クローンの停止（abort）では peer を預けさせない（今どおり閉じる。#4734）', async () => {
+    const s = await setup();
+
+    await s.pool.abort('mgr-stale');
+
+    expect(s.fake.stops).toEqual(['mgr-stale']);
+    expect(s.fake.stopOptions).toEqual([undefined]);
     await s.pool.stop();
   });
 
