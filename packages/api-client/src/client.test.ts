@@ -75,7 +75,9 @@ function fakeClone(stores: Stores) {
   };
 
   const clone: CloneHost = {
-    async postPersisted() {
+    // `post` と同じく返事を流す: `/chat` の人間の発言はこちらを通る（#4679）
+    async postPersisted(event) {
+      clone.post(event);
       return 'persisted';
     },
     managers,
