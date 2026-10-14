@@ -225,6 +225,8 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
   }
 
   const pushListeners = new Set<(results: ApplyCredentialsResult['runners']) => void>();
+  // `apply` が runner から外した名前（#4781）。プロセスの中だけで覚える: デーモンを作り直すと消える（永続させるかは別の判断）
+  const pendingRemovals = new Set<string>();
 
   return {
     vaultSnapshot: () => cachedVaultRows,
@@ -248,12 +250,27 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
         const changedForClone = changedCloneNames(existing, rows);
 
         // 正本に在る名前は入力の値ではなく正本の値で配る: 器が値を変えても「配った値＝正本の値」が崩れないため
-        const removed = entries
+        // 範囲を runner に配らない側へ狭めた行も外す（#4781）: 人がこの変更で「この鍵を runner から外す」と明示しており、載せないと runner に古い値が残るため
+        const nowForManager = new Set(
+          rows.filter((row) => scopeAppliesTo(row.scope, 'manager')).map((row) => row.name),
+        );
+        const narrowed = entries
+          .filter((entry) => entry.value.length > 0)
+          .filter((entry) => {
+            const before = existingByName.get(entry.name);
+            return (
+              before !== undefined &&
+              scopeAppliesTo(before.scope, 'manager') &&
+              !nowForManager.has(entry.name)
+            );
+          });
+        const removed = [...entries.filter((entry) => entry.value.length === 0), ...narrowed]
           // 上限超えの名前は外す合図にも載せない: runner の受け口が配列ごと弾くため
-          .filter(
-            (entry) => entry.value.length === 0 && entry.name.length <= CREDENTIAL_NAME_MAX_LENGTH,
-          )
+          .filter((entry) => entry.name.length <= CREDENTIAL_NAME_MAX_LENGTH)
           .map((entry) => ({ name: entry.name, value: '' }));
+        // 外した名前を覚え、runner に効く形で置き直した名前は忘れる（#4781）: 送りが届かなかった runner へ `syncRunner` が外し直すため
+        for (const entry of removed) pendingRemovals.add(entry.name);
+        for (const name of nowForManager) pendingRemovals.delete(name);
         reportOverlong(rows);
         const upserted = rows.filter(
           (row) =>
@@ -290,16 +307,24 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     syncRunner: (runner: RunnerClient) =>
       serial(async () => {
         const rows = await effective();
-        // 「全部外せ」とは言わない: 外す指示は `apply` が明示的に送るため
-        if (rows.length === 0) return null;
+        // 「全部外せ」とは言わない: runner は起動時の環境の鍵も同じ一覧に持つので、正本に無い名前を外すとそれまで消すため。
+        // 外すのは `apply` が外した名前（`pendingRemovals`）だけ（#4781）
+        if (rows.length === 0 && pendingRemovals.size === 0) return null;
 
         // 指紋が取れなかったときは差がある側に倒す: 降ろし損なうと鍵が無いまま走るため
         const current = await runner.credentials().catch(() => undefined);
         const held = new Map((current ?? []).map((entry) => [entry.name, entry.sha256]));
         const behind = rows.filter((row) => held.get(row.name) !== fingerprintOf(row.value));
-        if (behind.length === 0) return null;
+        // 指紋が取れなかったときは外す側にも倒す: 外し損なうと外したはずの鍵が残るため（無い名前を外すのは空振りで済む）
+        const stale = [...pendingRemovals].filter(
+          (name) => current === undefined || held.has(name),
+        );
+        if (behind.length === 0 && stale.length === 0) return null;
 
-        return runner.setCredentials(behind.map(({ name, value }) => ({ name, value })));
+        return runner.setCredentials([
+          ...behind.map(({ name, value }) => ({ name, value })),
+          ...stale.map((name) => ({ name, value: '' })),
+        ]);
       }),
   };
 
