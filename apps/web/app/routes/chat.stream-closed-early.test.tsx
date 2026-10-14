@@ -143,9 +143,39 @@ describe('終端が無いまま閉じた送信（#3564）', () => {
   });
 });
 
+describe('終端が無いまま閉じたら、張り直して続きを出す（#4663 の続き）', () => {
+  it('⭐ 送信の流れが途中で閉じても、ターンが続いていれば張り直して続きを出し、「途中で切れた」を残さない', async () => {
+    const stub = setUp({
+      chat: [
+        { event: 'open', data: { conversationId: ID } },
+        { event: 'text', data: { type: 'text', text: '途中までの返' } },
+      ],
+      replay: [
+        { event: 'open', data: { conversationId: ID, inProgress: true } },
+        { event: 'text', data: { type: 'text', text: '途中までの返事と続き' } },
+        { event: 'done', data: { type: 'done' } },
+      ],
+    });
+    renderChat(`/chat/${ID}`);
+    await waitFor(() =>
+      expect(stub.entries.some((e) => /\/chat\/[^/]+\/stream$/.test(e.url))).toBe(true),
+    );
+    const before = stub.entries.filter((e) => /\/chat\/[^/]+\/stream$/.test(e.url)).length;
+    await sendText('こんにちは');
+
+    expect(await screen.findByText('途中までの返事と続き')).toBeTruthy();
+    await waitFor(() =>
+      expect(stub.entries.filter((e) => /\/chat\/[^/]+\/stream$/.test(e.url)).length).toBe(
+        before + 1,
+      ),
+    );
+    expect(screen.queryByText(CLOSED_EARLY)).toBeNull();
+  });
+});
+
 describe('終端が無いまま閉じた再生（#3564）', () => {
-  it('再生が text の途中で閉じたら、「途中で切れた」と言う', async () => {
-    setUp({
+  it('再生が text の途中で閉じ続けたら、張り直しを上限まで試してから「途中で切れた」と言う（#4663 の続き）', async () => {
+    const stub = setUp({
       replay: [
         { event: 'open', data: { conversationId: ID, inProgress: true } },
         { event: 'text', data: { type: 'text', text: '再生された途中の返' } },
@@ -153,8 +183,19 @@ describe('終端が無いまま閉じた再生（#3564）', () => {
     });
     renderChat(`/chat/${ID}`);
 
-    expect(await screen.findByText(CLOSED_EARLY)).toBeTruthy();
-    expect(screen.getByText(/再生された途中の返/)).toBeTruthy();
+    // 最初の再生 1 回 + 張り直し 3 回で止まる
+    await waitFor(() =>
+      expect(
+        stub.entries.filter((e) => /\/stream$/.test(e.url) && !e.url.includes('journal')).length,
+      ).toBe(4),
+    );
+    await waitFor(() => {
+      expect(screen.getByText(CLOSED_EARLY)).toBeTruthy();
+      expect(screen.getByText(/再生された途中の返/)).toBeTruthy();
+    });
+    expect(
+      stub.entries.filter((e) => /\/stream$/.test(e.url) && !e.url.includes('journal')).length,
+    ).toBe(4);
   });
 
   it('進行中でなければ（open だけで閉じる）何も言わない', async () => {
