@@ -24,7 +24,6 @@ afterAll(() => {
 let originalFetch: typeof fetch;
 
 const NOON = new Date('2026-08-14T03:00:00.000Z');
-const BEFORE_MIDNIGHT = new Date('2026-08-14T14:59:30.000Z');
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
