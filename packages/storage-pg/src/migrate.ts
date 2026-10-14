@@ -633,12 +633,14 @@ export async function findOpenManagerBodyDuplicates(db: Db): Promise<OpenManager
 export async function ensureOpenManagerBodyIndex(
   db: Db,
   warn: (line: string) => void,
+  options: MigrateOptions = {},
 ): Promise<void> {
   // 索引が既に在るなら台帳を1行も走査しない: 起動のたびに通るので、毎回数えると起動の費用が台帳の齢に比例して増える。
   if (await hasOpenManagerBodyIndex(db)) return;
   const duplicates = await findOpenManagerBodyDuplicates(db);
   if (duplicates.length === 0) {
-    await db.execute(sql.raw(CREATE_OPEN_MANAGER_BODY_INDEX));
+    // `STATEMENTS` と同じ道を通す（#4768）: 素のままだと、同時の初回で catalog の一意違反が出て起動が落ち、ロックの待ちにも上限が掛からないため
+    await runMigrationStatement(db, CREATE_OPEN_MANAGER_BODY_INDEX, warn, options);
     return;
   }
   const rows = duplicates.reduce((total, group) => total + group.ids.length, 0);
@@ -657,6 +659,8 @@ export async function ensureOpenManagerBodyIndex(
 export const AUTH_ACCOUNTS_EMAIL_LOWER_INDEX = 'auth_accounts_email_lower_idx';
 
 const AUTH_ACCOUNTS_EMAIL_IDX = 'auth_accounts_email_idx';
+
+const DROP_AUTH_ACCOUNTS_EMAIL_IDX = `drop index if exists ${AUTH_ACCOUNTS_EMAIL_IDX}`;
 
 const CREATE_AUTH_ACCOUNTS_EMAIL_LOWER_INDEX = `create unique index if not exists ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX}
    on auth_accounts (lower(email))`;
@@ -696,15 +700,17 @@ export async function findAuthAccountsEmailLowerDuplicates(
 export async function ensureAuthAccountsEmailLowerIndex(
   db: Db,
   warn: (line: string) => void,
+  options: MigrateOptions = {},
 ): Promise<void> {
+  // 作成も削除も `STATEMENTS` と同じ道を通す（#4768。理由は `ensureOpenManagerBodyIndex` と同じ）
   if (await hasAuthAccountsEmailLowerIndex(db)) {
-    await db.execute(sql.raw(`drop index if exists ${AUTH_ACCOUNTS_EMAIL_IDX}`));
+    await runMigrationStatement(db, DROP_AUTH_ACCOUNTS_EMAIL_IDX, warn, options);
     return;
   }
   const duplicates = await findAuthAccountsEmailLowerDuplicates(db);
   if (duplicates.length === 0) {
-    await db.execute(sql.raw(CREATE_AUTH_ACCOUNTS_EMAIL_LOWER_INDEX));
-    await db.execute(sql.raw(`drop index if exists ${AUTH_ACCOUNTS_EMAIL_IDX}`));
+    await runMigrationStatement(db, CREATE_AUTH_ACCOUNTS_EMAIL_LOWER_INDEX, warn, options);
+    await runMigrationStatement(db, DROP_AUTH_ACCOUNTS_EMAIL_IDX, warn, options);
     return;
   }
   const rows = duplicates.reduce((total, group) => total + group.ids.length, 0);
@@ -746,8 +752,8 @@ export async function migrate(
   for (const statement of STATEMENTS) {
     await runMigrationStatement(db, statement, warn, options);
   }
-  await ensureOpenManagerBodyIndex(db, warn);
-  await ensureAuthAccountsEmailLowerIndex(db, warn);
+  await ensureOpenManagerBodyIndex(db, warn, options);
+  await ensureAuthAccountsEmailLowerIndex(db, warn, options);
 }
 
 /** 流し済みの `STATEMENTS` の指紋を置く `daemon_state` の鍵（#4731）。 */
