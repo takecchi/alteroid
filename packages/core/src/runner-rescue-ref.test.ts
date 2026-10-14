@@ -147,3 +147,70 @@ describe('走行中の退避 ref の配線（Issue #1266）', () => {
     );
   });
 });
+
+describe('担当を畳むときにも退避 ref を撃つ（#4677）', () => {
+  it('⭐ デーモンの指示で止めた担当は、周期が長くても、止めた時点の変更を退避する', async () => {
+    const { host, events } = setup(3_600_000);
+    await host.start({ managerId: 'mgr-4677stop', request: '依頼', cwd: repo });
+    await writeFile(path.join(repo, 'a.txt'), 'edited before stop\n');
+    expect(rescueEvents(events)).toHaveLength(0);
+
+    await host.stop('mgr-4677stop');
+
+    await vi.waitFor(() => expect(rescueEvents(events)).toHaveLength(1), { timeout: 10_000 });
+    const found = rescueEvents(events)[0];
+    expect(found?.managerId).toBe('mgr-4677stop');
+    expect(g(bare, 'show', `${found?.worktrees[0]?.pushed?.ref as string}:a.txt`)).toBe(
+      'edited before stop\n',
+    );
+  });
+});
+
+describe('担当が終わったときにも退避 ref を撃つ（#4677）', () => {
+  it('結果を出さないまま CLI が終わった担当（#finish の経路）も、終わった時点の変更を退避する', async () => {
+    const events: RunnerEvent[] = [];
+    const credentials = createCredentialStore({
+      dir: path.join(root, 'cred-finish'),
+      seed: { GH_TOKEN: 'test-token-value-for-rescue' },
+    });
+    // init の直後に終わる（結果なしで終了）
+    const endingSdk = ((params: { prompt: AsyncIterable<unknown> }) => {
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-end',
+          uuid: 'uuid-init',
+        } as unknown as SDKMessage;
+        void params;
+      }
+      return Object.assign(generate(), {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+    await writeFile(path.join(repo, 'a.txt'), 'edited before the end\n');
+    const host = createRunnerHost({
+      runnerId: 'runner-4677',
+      workspacePath: repo,
+      emit: (event) => events.push(event),
+      queryFn: endingSdk,
+      env: { ...GIT_ENV },
+      credentials,
+      readCgroupEventCountersFn: async () => ({}),
+      finishUnpushedWorkFn: async () => ({ cwd: repo, worktrees: [] }),
+      rescueIntervalMs: 3_600_000,
+    });
+    hosts.push(host);
+    await host.start({ managerId: 'mgr-4677end', request: '依頼', cwd: repo });
+
+    await vi.waitFor(() => expect(events.some((e) => e.type === 'closed')).toBe(true), {
+      timeout: 10_000,
+    });
+    await vi.waitFor(() => expect(rescueEvents(events)).toHaveLength(1), { timeout: 10_000 });
+    const found = rescueEvents(events)[0];
+    expect(g(bare, 'show', `${found?.worktrees[0]?.pushed?.ref as string}:a.txt`)).toBe(
+      'edited before the end\n',
+    );
+  });
+});
