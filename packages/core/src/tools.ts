@@ -41,6 +41,7 @@ import {
 import { describeMissingConversation, lookupConversation } from './conversation-lookup.js';
 import {
   commitmentPosition,
+  compareCommitmentPosition,
   encodeCommitmentCursor,
   resolveCommitmentCursor,
 } from './commitment-cursor.js';
@@ -4872,7 +4873,11 @@ export function createCloneTools(context: ToolContext) {
               });
         // `order` も `origin` / `q` と同じ側（予算で切る前・cursor を解決する前）で効かせる: 後回しにすると絞りや向きに当たらない行が窓を食い尽くすため
         // `CommitmentStore.list` の契約は変えない: この反転はツール層だけの見え方
-        const ordered = effectiveOrder === 'newest' ? [...entries].reverse() : entries;
+        // 継続点の比較（`compareCommitmentPosition`）と同じ順に並べ直してから切る（#4780）: ストアの順（同じ時刻なら入れた順）のまま比較で絞ると、同じ時刻の行が id の順と食い違うとき頁の境目で飛ばされるため（デーモンの `GET /commitments` と同じ形）
+        const positioned = [...entries].sort((a, b) =>
+          compareCommitmentPosition(commitmentPosition(a), commitmentPosition(b)),
+        );
+        const ordered = effectiveOrder === 'newest' ? positioned.reverse() : positioned;
         // `cursor` も予算で切る前に効かせる: 後で解決すると次の頁の起点が切った後に残った行からずれるため
         // 判定できないカーソルは黙って先頭からへ倒さない: 呼び手が続きを読んだつもりで同じ行を繰り返し読むため
         const cursorOutcome = resolveCommitmentCursor(
