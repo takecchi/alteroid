@@ -1,0 +1,94 @@
+name: ベースイメージを GHCR へ写す
+
+# **CI が使うベースイメージを、ECR Public から GHCR（ghcr.io/<owner>/alteroid-mirror/…）へ写す。**
+#
+# ECR Public の匿名の取得は、GitHub の runner が IP を共有しているので `429 toomanyrequests:
+# Data limit exceeded` を返されることがある（main の警報 #4545・#4587・#4622・#4654・#4660。
+# #4624 の「待って1回だけ焼き直す」でも落ちた回がある）。GHCR は同じ GitHub の中で、
+# このリポジトリの `GITHUB_TOKEN` だけで読み書きできるので、新しい鍵を置かずに済む。
+#
+# **写すのは CI が使う分だけで、本番（Railway）の取り元は変えない。** `Dockerfile` /
+# `docker/db.Dockerfile` の `FROM` は ECR Public のまま（Renovate の digest の追跡と、夜の反映の
+# ビルドに触れないため）。CI は写しから焼き、写しが無い・取れないときは ECR Public へ戻る
+# （`ci.yml` の `image`、`storage-pg-real-postgres.yml`）。
+#
+# **digest をそのまま保つ**（`skopeo copy --all --preserve-digests`）。`FROM` は digest で固定して
+# あるので、CI は写しも同じ digest で取る＝中身が同じであることが digest で保証される。
+#
+# **いつ走るか:** 手動・週1回・main で `FROM` が動いたとき（Renovate が digest を上げた後）、
+# それとこのファイルに触れた PR（写しの経路そのものを PR の上で確かめるため）。
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '41 3 * * 1'
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - 'docker/db.Dockerfile'
+      - '.github/workflows/mirror-base-images.yml'
+      - '.github/workflows/storage-pg-real-postgres.yml'
+  pull_request:
+    paths:
+      - '.github/workflows/mirror-base-images.yml'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    # フォークの PR では書けない（`GITHUB_TOKEN` が読み取りだけになる）ので走らせない
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: GHCR へログインする（このリポジトリの GITHUB_TOKEN）
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$TOKEN" | skopeo login ghcr.io -u "$ACTOR" --password-stdin
+
+      - name: 写す（digest を保つ）
+        env:
+          MIRROR: ghcr.io/${{ github.repository_owner }}/alteroid-mirror
+        run: |
+          set -eu
+          # 写す元: `Dockerfile` と `docker/db.Dockerfile` の `FROM`（digest で固定）と、
+          # storage-pg のサービスコンテナ（タグ）。ここに無い取り元を CI へ足したら、ここにも足す
+          refs=$(
+            {
+              grep -hE '^FROM public\.ecr\.aws/docker/library/' Dockerfile docker/db.Dockerfile | awk '{ print $2 }'
+              echo 'public.ecr.aws/docker/library/postgres:17'
+            } | sort -u
+          )
+          test -n "$refs" || { echo "写す元が1つも見つからない" >&2; exit 1; }
+          for src in $refs; do
+            name_tag=${src#public.ecr.aws/docker/library/}
+            repo_tag=${name_tag%@*}
+            dst="$MIRROR/$repo_tag"
+            # ECR Public の取得制限に当たったら待って2回まで試し直す
+            ok=false
+            for attempt in 1 2 3; do
+              if skopeo copy --all --preserve-digests --retry-times 3 "docker://$src" "docker://$dst"; then
+                ok=true
+                break
+              fi
+              echo "写せなかった（$attempt 回目）: $src" >&2
+              sleep 60
+            done
+            "$ok" || { echo "写せなかった: $src" >&2; exit 1; }
+            # digest で固定した元は、写しが同じ digest になったことを確かめる
+            case "$src" in
+              *@sha256:*)
+                want=${src#*@}
+                got=$(skopeo inspect --raw "docker://$dst" | skopeo manifest-digest /dev/stdin)
+                test "$got" = "$want" || { echo "digest が変わった: $src → $dst ($got)" >&2; exit 1; }
+                ;;
+            esac
+            echo "写した: $src → $dst"
+          done
