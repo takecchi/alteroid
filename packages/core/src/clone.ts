@@ -290,6 +290,13 @@ import { notePhase } from './loop-stall.js';
 import { assistantFailureOf, turnFailureKindOf, type SdkFailure } from './sdk-failure.js';
 import { describeProbeError } from './usage-probe.js';
 import {
+  describeDroppedSignals,
+  describeDroppedSignalsForJournal,
+  digestOfDroppedSignal,
+  DROPPED_SIGNAL_NOTICE_MAX,
+  type DroppedSignalDigest,
+} from './dropped-signals.js';
+import {
   classifyContextWindowFailure,
   describeContextWindowFailure,
   type ContextWindowFailure,
@@ -939,6 +946,18 @@ class Clone implements CloneHost {
   readonly #handledHumanAnswerIds = new Set<string>();
   /** `#pump` が1ターンを回す間に `#reportFailure` が呼ばれたか。ターンの前に下ろし、`finally` で読む（#4633）。 */
   #pumpTurnFailed = false;
+  /** そのときの失敗の理由（外した合図の日誌の行に添える）。 */
+  #pumpTurnFailureReason = '';
+  /**
+   * 枠以外の理由で失敗したターンで、処理されないまま受信箱から外れた合図の要旨（#4633 の案C）。
+   * 次の通常ターンの入力に添え、そのターンが失敗せずに終わったら消す（失敗したら次のターンでもう一度添える）。
+   * メモリにしか持たない: 器が入れ替わったら、日誌の「処理されないまま受信箱から外した」の行だけが残る。
+   */
+  #droppedSignals: DroppedSignalDigest[] = [];
+  /** 上限を超えて要旨を落とした件数。 */
+  #droppedSignalsOverflowed = 0;
+  /** いまのターンの入力に添えた要旨の id。 */
+  #droppedSignalsShown: ReadonlySet<string> = new Set();
 
   // これより後に回答された行は拾い直さない: `answerApproval` の配達の途中の行を拾うと、同じ合図を2回 `post` し、2回目の回答を古い回答で上書きしうるため
   readonly #bootedAt = new Date().toISOString();
@@ -1989,6 +2008,7 @@ class Clone implements CloneHost {
         }),
       );
       this.#pumpTurnFailed = false;
+      this.#droppedSignalsShown = new Set();
       try {
         if (mergedHuman !== null) await this.#runHumanTurn(mergedHuman);
         else if (mergedReports !== null) await this.#runManagerReportBatch(mergedReports);
@@ -2004,6 +2024,7 @@ class Clone implements CloneHost {
         // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
         const defer = this.#usageBlocked !== null;
         const failedOutsideUsage = !defer && this.#pumpTurnFailed;
+        await this.#noteDroppedSignals(batch, { failedOutsideUsage, defer });
         for (const held of batch) {
           // 保持した `human_answer` は「処理済み」の印を外す: 枠で失敗した回答はまだ処理されておらず、残すと解除後の再配達が「二重配達」と畳まれて回答が黙って失われるため
           if (defer && held.type === 'human_answer') this.#handledHumanAnswerIds.delete(held.id);
@@ -3244,6 +3265,50 @@ class Clone implements CloneHost {
     }
   }
 
+  /**
+   * 1ターンを回した後の、外れた合図の要旨の出し入れ（#4633 の案C。クローン teto の判断、2026-10-14）。
+   * - 枠以外の理由で失敗したら、渡した合図（回答と蒸留を除く）の要旨を覚え、日誌にも1行残す
+   * - 失敗せずに終わったら、そのターンの入力に添えた要旨を消す
+   * - 枠で保持した回（`defer`）は何もしない: 合図は消えておらず、解除後に配り直されるため
+   */
+  async #noteDroppedSignals(
+    batch: readonly InboxEvent[],
+    outcome: { failedOutsideUsage: boolean; defer: boolean },
+  ): Promise<void> {
+    if (outcome.defer) return;
+    if (!outcome.failedOutsideUsage) {
+      const shown = this.#droppedSignalsShown;
+      if (shown.size === 0) return;
+      this.#droppedSignals = this.#droppedSignals.filter((digest) => !shown.has(digest.id));
+      if (this.#droppedSignals.length === 0) this.#droppedSignalsOverflowed = 0;
+      return;
+    }
+    const digests = batch.flatMap((event) => {
+      const digest = digestOfDroppedSignal(event);
+      return digest === null ? [] : [digest];
+    });
+    if (digests.length === 0) return;
+    this.#droppedSignals.push(...digests);
+    const over = this.#droppedSignals.length - DROPPED_SIGNAL_NOTICE_MAX;
+    if (over > 0) {
+      this.#droppedSignals.splice(0, over);
+      this.#droppedSignalsOverflowed += over;
+    }
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `${EXCHANGE_KIND_FAILURE_PREFIX}${describeDroppedSignalsForJournal(digests, this.#pumpTurnFailureReason)}`,
+    });
+  }
+
+  // 蒸留のターンには載せない: 内部のターンで、拾い直すかを判断する場ではないため
+  #droppedSignalsNotice(kind: 'normal' | 'distill'): string {
+    if (kind === 'distill') return '';
+    this.#droppedSignalsShown = new Set(this.#droppedSignals.map((digest) => digest.id));
+    return describeDroppedSignals(this.#droppedSignals, this.#droppedSignalsOverflowed);
+  }
+
   // 枠以外の理由で失敗したターンに渡した回答は、配達の印を `'pending'` へ戻して起動時の拾い直し（`#reconcileUndeliveredAnswers`）に載せる（#4633）。
   // 回答だけを戻す: 人間の発言や報告は消えても台帳（commitments）に残るが、回答は消えると、確認を出して止まった担当を再開させる経路そのものが切れるため。
   // 回数の上限は置かない: 決定的に失敗する回答は器の入れ替えのたびにターンを1本焼くが、戻すたびに日誌へ1行残し、人間が気づけるようにする（オーナーの判断、2026-10-14）。
@@ -3777,6 +3842,7 @@ class Clone implements CloneHost {
     const message = typeof cause === 'string' ? cause : reasonOf(cause.error);
     // `#pump` が1ターンの後に読む: ターンの印（`running.failure`）は `#finishTurn()` で消え、`#pump` の `finally` からは見えないため（#4633）
     this.#pumpTurnFailed = true;
+    this.#pumpTurnFailureReason = message;
     // 失敗の印はここで立てる: 呼び出し側ごとに立てると、経路が増えたとき印の無い失敗が混ざり「成功して空文字を返した」と区別できないため。`#finishTurn()` より必ず先に呼ぶ: 逆だと `this.#turn` が既に `null` で印が残らないため
     const running = this.#sdkSession.turn;
     if (running !== null) running.failure = message;
@@ -4714,6 +4780,7 @@ class Clone implements CloneHost {
           composeTurnInputText({
             distillGap: await this.#distillGapNotice(kind),
             contextWindowFold: this.#contextWindowFoldNotice(kind),
+            droppedSignals: this.#droppedSignalsNotice(kind),
             ...this.#notices.forTurn(),
             body: text,
           }),

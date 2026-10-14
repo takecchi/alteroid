@@ -5,6 +5,7 @@ import { composeTurnInputText, type TurnInputText } from './turn-input.js';
 const MARKERS: TurnInputText = {
   distillGap: '<distillGap>',
   contextWindowFold: '<contextWindowFold>',
+  droppedSignals: '<droppedSignals>',
   redelivery: '<redelivery>',
   superseded: '<superseded>',
   validity: '<validity>',
@@ -17,6 +18,7 @@ const MARKERS: TurnInputText = {
 const EMPTY: TurnInputText = {
   distillGap: '',
   contextWindowFold: '',
+  droppedSignals: '',
   redelivery: '',
   superseded: '',
   validity: '',
@@ -27,10 +29,11 @@ const EMPTY: TurnInputText = {
 };
 
 describe('composeTurnInputText — ターン入力の並び順', () => {
-  it('9つの欄を、抽出前の `#runTurn` と同じ順で連ねる', () => {
+  it('10の欄を、抽出前の `#runTurn` と同じ順で連ねる（外れた合図の要旨は開き直しの断りの直後。#4633）', () => {
     expect(composeTurnInputText(MARKERS)).toBe(
       '<distillGap>' +
         '<contextWindowFold>' +
+        '<droppedSignals>' +
         '<redelivery>' +
         '<superseded>' +
         '<validity>' +
