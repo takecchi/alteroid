@@ -2,7 +2,7 @@ import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { EllipsisVertical } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { unsentInput } from '~/lib/unsent-input';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 
@@ -483,11 +483,18 @@ const SCOPE_OPTIONS: { value: EnvVarScope; label: string }[] = [
   { value: 'runner', label: 'マネージャーだけ' },
 ];
 
+// 括弧の注記を除いた短い形
+function scopeShortLabel(scope: EnvVarScope): string {
+  const label = SCOPE_OPTIONS.find((option) => option.value === scope)?.label ?? String(scope);
+  return label.replace(/（.*）$/, '');
+}
+
 function AddEnvVarForm() {
   const setEnvVar = useSetEnvVar();
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
-  const [scope, setScope] = useState<EnvVarScope>('all');
+  const [pickedScope, setPickedScope] = useState<EnvVarScope>('all');
+  const [scopeTouched, setScopeTouched] = useState(false);
   const [secret, setSecret] = useState(true);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -500,6 +507,10 @@ function AddEnvVarForm() {
   // 一覧が読めていない（読込中・失敗）: 同名の有無を確かめられない。黙って送るとシークレットの前の値を失いうるので確認を挟む
   const listUnknown = data === undefined;
   const existing = data?.credentials.find((entry) => entry.name === name.trim());
+  // 触っていない間は既存の行の渡す先を使う: 既定の「共通」を黙って送ると、サーバは明示された scope を優先し、マネージャーだけの秘密がクローンにも配られるため
+  const scope: EnvVarScope = scopeTouched ? pickedScope : (existing?.scope ?? 'all');
+  const latestName = useRef(name);
+  latestName.current = name;
 
   const canSubmit = name.trim().length > 0 && value.length > 0;
 
@@ -521,13 +532,18 @@ function AddEnvVarForm() {
   async function send() {
     const sentName = name;
     const sentValue = value;
+    const sentScope = scope;
     setBusy(true);
     setFailure(undefined);
     setResult(undefined);
     try {
-      setResult(await setEnvVar({ name: name.trim(), value, scope, secret }));
+      setResult(
+        await setEnvVar({ name: sentName.trim(), value: sentValue, scope: sentScope, secret }),
+      );
       // 空にしない: 応答を待つ間に打ち足した分を消さないため。
       setName((current) => unsentInput(current, sentName));
+      // 名前を送り切ったときだけ戻す: 名前と同じく、応答を待つ間に打ち足した入力に付いた選択は消さないため
+      if (latestName.current === sentName) setScopeTouched(false);
       setValue((current) => unsentInput(current, sentValue));
     } catch (caught) {
       setFailure(caught);
@@ -567,7 +583,13 @@ function AddEnvVarForm() {
         )}
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">渡す先</span>
-          <Select value={scope} onChange={(event) => setScope(event.target.value as EnvVarScope)}>
+          <Select
+            value={scope}
+            onChange={(event) => {
+              setPickedScope(event.target.value as EnvVarScope);
+              setScopeTouched(true);
+            }}
+          >
             {SCOPE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
@@ -599,7 +621,10 @@ function AddEnvVarForm() {
           description={
             listUnknown
               ? '既存の変数を確かめられなかった。同じ名前があれば置き換わり、シークレットは前の値に戻せない。'
-              : '同じ名前の変数が既に在る。前の値は置き換わり、元に戻せない。'
+              : '同じ名前の変数が既に在る。前の値は置き換わり、元に戻せない。' +
+                (existing !== undefined && existing.scope !== scope
+                  ? `渡す先も『${scopeShortLabel(existing.scope)}』から『${scopeShortLabel(scope)}』に変わる。`
+                  : '')
           }
           confirmLabel={listUnknown ? '送る' : '置き換える'}
           destructive
