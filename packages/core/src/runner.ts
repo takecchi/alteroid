@@ -558,6 +558,11 @@ export interface RunnerHost {
     options?: { signal?: AbortSignal },
   ): Promise<RescueRefDeleteResult>;
   shutdown(): Promise<void>;
+  /**
+   * `shutdown()` を始めてから出した、デーモンに HTTP で取りに来させる物（預けた生ログ・出し箱の退避先ファイル）のうち、まだ取られていない数（#4699）。
+   * runner の入口は、これが 0 になるまで（期限付きで）口を閉じずに待つ。
+   */
+  pendingPickups(): number;
   // 無認証の `/livez` から呼ばない: 誰でも貸し出し期限を延ばせてしまうため
   noteDaemonContact(): void;
   // プロセスの exit で knownTerminated にしない: 作業者の1回の呼び出しは委譲が生きていてもプロセスを終え、その孫（nohup のサーバ等）が撃たれるため
@@ -713,6 +718,9 @@ class Host implements RunnerHost {
       ),
   });
   #daemonAcceptsArchiveRef = false;
+  // 畳み始めてから出した、デーモンに HTTP で取りに来させる物（預けた生ログ・出し箱の退避先ファイル）。取られる（消される）と外す（#4699）
+  #shuttingDown = false;
+  readonly #pickupsSinceShutdown = new Set<string>();
   readonly #finishUnpushedWorkFn:
     ((options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>) | undefined;
   readonly #cwdExistsFn: (cwd: string) => boolean;
@@ -722,7 +730,10 @@ class Host implements RunnerHost {
     this.#workerToolWatchClock = options.workerToolWatchClock;
     this.runnerId = options.runnerId;
     this.workspacePath = options.workspacePath;
-    this.#emit = options.emit;
+    this.#emit = (event) => {
+      this.#notePickup(event);
+      options.emit(event);
+    };
     this.#queryFn = options.queryFn;
     this.#env = options.env ?? process.env;
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
@@ -1450,7 +1461,25 @@ class Host implements RunnerHost {
   }
 
   deleteOutboxFile(managerId: string, fileId: string): Promise<boolean> {
+    this.#pickupsSinceShutdown.delete(pickupKey('outbox', managerId, fileId));
     return removeStagedOutboxFile(this.#outboxStagedRoot, managerId, fileId);
+  }
+
+  pendingPickups(): number {
+    return this.#pickupsSinceShutdown.size;
+  }
+
+  // 畳み始める前の分は数えない: 取りこぼし（デーモンが取り損ねた退避先）を待つと、取りに来ないものを待って器の入れ替えが遅れるため
+  #notePickup(event: RunnerEvent): void {
+    if (!this.#shuttingDown) return;
+    if (event.type === 'archive' && event.ref !== undefined) {
+      this.#pickupsSinceShutdown.add(pickupKey('archive', event.managerId, event.ref.id));
+    }
+    if (event.type === 'report') {
+      for (const file of event.files ?? []) {
+        this.#pickupsSinceShutdown.add(pickupKey('outbox', event.managerId, file.fileId));
+      }
+    }
   }
 
   setDaemonAcceptsArchiveRef(accepts: boolean): void {
@@ -1462,6 +1491,7 @@ class Host implements RunnerHost {
   }
 
   deleteArchive(managerId: string, archiveId: string): void {
+    this.#pickupsSinceShutdown.delete(pickupKey('archive', managerId, archiveId));
     this.#archiveStash.delete(managerId, archiveId);
   }
 
@@ -1616,6 +1646,7 @@ class Host implements RunnerHost {
   }
 
   async shutdown(): Promise<void> {
+    this.#shuttingDown = true;
     // 畳み始めの名乗りを入口ごとに任せない: 積み忘れる形を作らないため
     this.#emit({ type: 'shutting_down', runnerId: this.runnerId });
     // 見張りを先に畳む: 畳み残すと止まったはずの見張りが空の名簿を叩き続け、テストではタイマーが残ってハングするため
@@ -1641,6 +1672,10 @@ class Host implements RunnerHost {
     this.#peerSocket = undefined;
     this.#managerTools?.host.close();
   }
+}
+
+function pickupKey(kind: 'archive' | 'outbox', managerId: string, id: string): string {
+  return `${kind}\u0000${managerId}\u0000${id}`;
 }
 
 const RESOLVED_MEMORY_LIMIT = 512;

@@ -34,12 +34,14 @@ import {
   WITHHELD_ENV_KEYS,
   writeStderrSync,
   type RunnerChildUser,
+  type RunnerHost,
 } from '@alteroid/core';
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, formatOutboxShutdownReport, Outbox } from './app.js';
 import { openManagerToolsSocket } from './manager-tools-socket.js';
 import { planPeerSocket } from './peer-socket.js';
+import { gateDuringShutdown, waitForPickups } from './shutdown-pickups.js';
 import {
   startReclaimSweep,
   TaskBreakdownReader,
@@ -81,6 +83,9 @@ const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
 
 export const DRAIN_WAIT_MS = 3_000;
 
+// 預けた物が取られるのを待つ上限（SIGTERM から）。forced exit（`FORCED_EXIT_MS`）より 5 秒手前にする: 待ち終えた後に口を閉じて exit する分を残すため
+export const PICKUP_WAIT_LIMIT_MS = FORCED_EXIT_MS - 5_000;
+
 export const DRAIN_POLL_INTERVAL_MS = 50;
 
 // タイムアウトしても投げない: 待ち切れなかった分は、この後 `formatOutboxShutdownReport` が残りとして報告するため。
@@ -101,6 +106,41 @@ export async function drainAndReportOutbox(
   }
   const report = formatOutboxShutdownReport(outbox.describeForShutdown());
   if (report !== null) (options.write ?? writeStderrSync)(report);
+}
+
+/**
+ * 担当を畳み、SSE を流し切り、預けた物が取られてから口を閉じる（#4699）。
+ * 口を先に閉じない: 畳みで預けた生ログと出し箱の退避先は、デーモンが HTTP で取りに来るため。閉じていると器の入れ替えのたびに失われる。
+ * 畳みの間に入ってくる要求は、入口の門（`gateDuringShutdown`）が取りに来る分だけに絞る。
+ */
+export async function shutdownHandingOver(deps: {
+  host: Pick<RunnerHost, 'shutdown' | 'pendingPickups'>;
+  outbox: Outbox;
+  closeListener: () => void;
+  startedAt?: number;
+  drainWaitMs?: number;
+  pickupWaitLimitMs?: number;
+  write?: (line: string) => void;
+}): Promise<void> {
+  const startedAt = deps.startedAt ?? Date.now();
+  await deps.host.shutdown().catch(() => undefined);
+
+  await drainAndReportOutbox(deps.outbox, {
+    ...(deps.drainWaitMs === undefined ? {} : { waitMs: deps.drainWaitMs }),
+    ...(deps.write === undefined ? {} : { write: deps.write }),
+  });
+
+  const left = await waitForPickups({
+    pending: () => deps.host.pendingPickups(),
+    subscribed: () => deps.outbox.subscribed,
+    deadlineAt: startedAt + (deps.pickupWaitLimitMs ?? PICKUP_WAIT_LIMIT_MS),
+  });
+  if (left > 0) {
+    (deps.write ?? writeStderrSync)(
+      `alteroid-runner: 畳みで預けた物のうち ${String(left)} 件を、デーモンが取りに来ないまま止まる（生ログの退避・出し箱の退避先）\n`,
+    );
+  }
+  deps.closeListener();
 }
 
 function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
@@ -364,7 +404,11 @@ export async function main(): Promise<void> {
     managerModel: resolveManagerModel(process.env),
     workerModel: resolveWorkerModel(process.env),
   });
-  const server = createAdaptorServer({ fetch: app.fetch });
+  let stopping = false;
+  // 畳みの間は、デーモンが取りに来る要求だけを通す（#4699。`shutdown-pickups.ts`）
+  const server = createAdaptorServer({
+    fetch: gateDuringShutdown(app.fetch, () => stopping),
+  });
   // 大きいファイルの別口（2 GiB）が Node 既定の 300 秒で切られないように
   applyAttachmentRequestTimeout(server as unknown as { requestTimeout: number });
 
@@ -396,17 +440,19 @@ export async function main(): Promise<void> {
     );
   }
 
-  let stopping = false;
   const shutdown = async (): Promise<void> => {
     if (stopping) return;
     stopping = true;
-    server.close();
-    if (socketPath !== undefined) rmSync(socketPath, { force: true });
     const forced = setTimeout(() => process.exit(0), FORCED_EXIT_MS);
     forced.unref();
-    await host.shutdown().catch(() => undefined);
-
-    await drainAndReportOutbox(outbox);
+    await shutdownHandingOver({
+      host,
+      outbox,
+      closeListener: () => {
+        server.close();
+        if (socketPath !== undefined) rmSync(socketPath, { force: true });
+      },
+    });
 
     // `host.shutdown()` より先に止めない: 畳んだ委譲の木が、終わるまで SIGKILL を受けられるように。
     stopReclaimSweep?.();

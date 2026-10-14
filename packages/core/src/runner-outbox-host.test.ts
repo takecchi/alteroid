@@ -241,3 +241,60 @@ describe('Host: 報告の前に畳まれた担当の出し箱（#4675）', () =>
     expect(events.some((e) => e.type === 'report')).toBe(false);
   });
 });
+
+describe('Host: 畳み（shutdown）で預けた物の数（#4699）', () => {
+  async function hostWithHalfDoneManager(managerId: string) {
+    const outboxRoot = await makeTempDir('runner-pickups-');
+    const outboxStagedRoot = await makeTempDir('runner-pickups-staged-');
+    const events: RunnerEvent[] = [];
+    let written = false;
+    const fake = interruptedSdk(async () => {
+      await writeFile(join(outboxRoot, managerId, 'half-done.md'), '途中の成果物');
+      written = true;
+    });
+    const host = createRunnerHost({
+      runnerId: 'runner-pickups',
+      workspacePath: '/workspace',
+      emit: (event) => events.push(event),
+      queryFn: fake.fn,
+      env: { PATH: '/usr/bin' },
+      outboxRoot,
+      outboxStagedRoot,
+      scratchSweep: false,
+      cwdExistsFn: () => true,
+      readCgroupEventCountersFn: async () => ({}),
+      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+    });
+    hosts.push(host);
+    await host.start({ managerId, request: '依頼', cwd: '/workspace' });
+    await vi.waitFor(() => expect(written).toBe(true));
+    return { host, events };
+  }
+
+  it('⭐ shutdown で添えた出し箱の退避先と預けた生ログを数え、デーモンが消すと外す', async () => {
+    const { host, events } = await hostWithHalfDoneManager('mgr-pick1');
+
+    await host.shutdown();
+
+    const report = events.find((e) => e.type === 'report');
+    if (report?.type !== 'report') throw new Error('report が無い');
+    const archives = events.flatMap((e) =>
+      e.type === 'archive' && e.ref !== undefined ? [e.ref.id] : [],
+    );
+    expect(report.files).toHaveLength(1);
+    expect(host.pendingPickups()).toBe(1 + archives.length);
+
+    await host.deleteOutboxFile('mgr-pick1', report.files?.[0]?.fileId ?? '');
+    for (const id of archives) host.deleteArchive('mgr-pick1', id);
+    expect(host.pendingPickups()).toBe(0);
+  });
+
+  it('shutdown より前の stop で添えた物は数えない（取りこぼしを待って器の入れ替えを遅らせない）', async () => {
+    const { host, events } = await hostWithHalfDoneManager('mgr-pick2');
+
+    await host.stop('mgr-pick2');
+
+    expect(events.some((e) => e.type === 'report' && (e.files?.length ?? 0) > 0)).toBe(true);
+    expect(host.pendingPickups()).toBe(0);
+  });
+});
