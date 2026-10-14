@@ -9727,7 +9727,8 @@ export function createApp(deps: AppDeps) {
         ),
         responses: {
           200: {
-            description: '許可した（既に許可済みでも 200）。',
+            description:
+              '許可した（既に許可済みでも 200。その場合、日誌には「付与していない（既に許可済みだった）」の打ち消しが残り、`grantedBy` は先の許可者のまま）。',
             content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
           },
           403: {
@@ -9788,6 +9789,25 @@ export function createApp(deps: AppDeps) {
           );
           return c.json({ error: 'not found' as const }, 404);
         }
+        // 先に読んだ許可と結果が同じなら、この呼びでは何も変わっていない: 先に書いた「付与」を打ち消す。`grantedBy` は先の許可者のままなので、打ち消さないと日誌が操作者を誤って指す。
+        if (
+          before.grantedAt !== null &&
+          result.account.grantedAt === before.grantedAt &&
+          result.account.grantedBy === before.grantedBy
+        ) {
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `アクセス許可を付与していない（既に許可済みだった）: ${describeAccount(before)}`,
+              grounds:
+                `${describeActor(c.get('principal'))}（alteroid access grant、` +
+                `${before.grantedBy ?? '不明'} が ${before.grantedAt} に許可済み）`,
+            },
+            'アクセス許可付与の打ち消しの日誌',
+            `accountId=${accountId}`,
+          );
+        }
         return c.json(
           accessAccountResponseSchema.parse({ account: await accountView(stores, result.account) }),
         );
@@ -9810,7 +9830,8 @@ export function createApp(deps: AppDeps) {
         ),
         responses: {
           200: {
-            description: '取り消した（既に未許可でも 200）。',
+            description:
+              '取り消した（既に未許可でも 200。その場合、日誌には「取り消していない（既に未許可だった）」と残る）。',
             content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
           },
           403: {
@@ -9838,6 +9859,9 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         // 読めない行は「無い」（404）ではなく「読めない形で在る」（409）と言い分ける。
         let account: Awaited<ReturnType<typeof authService.revoke>>;
+        // 日誌の書き分けのためだけに取り消す前の状態を読む: 取り消し自体はこの読みに依らず、`authService.revoke` の型は変えない（`/permission-grants/:id/revoke` の `revokedBefore` と同じ形）。読んでから書くまでに別の操作が割り込んでも、狂うのは日誌の文言だけで状態は狂わない。読めない行は `null` になるが、下の `revoke` が 409 で止める。
+        const revokedBefore =
+          (await stores.auth.getAccount(c.req.param('accountId')))?.grantedAt === null;
         try {
           account = await authService.revoke(c.req.param('accountId'));
         } catch (error) {
@@ -9858,8 +9882,10 @@ export function createApp(deps: AppDeps) {
           stores,
           {
             type: 'decision',
-            decision: `アクセス許可を取り消し: ${describeAccount(account)}`,
-            grounds: `${describeActor(c.get('principal'))}（alteroid access revoke）`,
+            decision: revokedBefore
+              ? `アクセス許可を取り消していない（既に未許可だった）: ${describeAccount(account)}`
+              : `アクセス許可を取り消し: ${describeAccount(account)}`,
+            grounds: `${describeActor(c.get('principal'))}（alteroid access revoke${revokedBefore ? '、取り消す前から未許可' : ''}）`,
           },
           'アクセス許可取り消しの日誌',
           `accountId=${account.id}`,

@@ -30359,7 +30359,7 @@
         },
         "responses": {
           "200": {
-            "description": "許可した（既に許可済みでも 200）。",
+            "description": "許可した（既に許可済みでも 200。その場合、日誌には「付与していない（既に許可済みだった）」の打ち消しが残り、`grantedBy` は先の許可者のまま）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -30540,7 +30540,7 @@
         },
         "responses": {
           "200": {
-            "description": "取り消した（既に未許可でも 200）。",
+            "description": "取り消した（既に未許可でも 200。その場合、日誌には「取り消していない（既に未許可だった）」と残る）。",
             "content": {
               "application/json": {
                 "schema": {
