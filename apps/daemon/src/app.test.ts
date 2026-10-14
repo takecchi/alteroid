@@ -9256,6 +9256,23 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     expect(await response.json()).toEqual({ credentials: [] });
   });
 
+  it('⭐ 名前が上限を超える古い行は、値を空にして送れば消せる。値を置くのは今どおり断る（#4818）', async () => {
+    // 129 字: 上限（128 字）を1字超える
+    const longName = `A${'B'.repeat(128)}`;
+    await stores.credentials.put([
+      { name: longName, value: DUMMY_VALUE, scope: 'all', secret: true },
+    ]);
+    const withVault = withCredentials();
+
+    const refused = await put(withVault, [{ name: longName, value: 'new-value' }]);
+    expect(refused.status).toBe(400);
+    expect((await stores.credentials.list()).map((row) => row.name)).toEqual([longName]);
+
+    const removed = await put(withVault, [{ name: longName, value: '' }]);
+    expect(removed.status).toBe(200);
+    expect(await stores.credentials.list()).toEqual([]);
+  });
+
   it('任意の名前で置けて、runner へ降り、正本にも残る', async () => {
     const runner = fakeRunner('runner-1');
     const withVault = withCredentials([runner]);
