@@ -389,5 +389,12 @@ async function touch(store: AuthStore, record: AccessTokenRecord, at: Date): Pro
   const previous = record.lastUsedAt === null ? 0 : Date.parse(record.lastUsedAt);
   if (at.getTime() - previous < LAST_USED_THROTTLE_MS) return;
   // 行を丸ごと書き戻さない: 読んだ写し（`record`）を `putAccessToken` で書くと、そのあいだに完了したログアウトの `revokedAt` を `null` に戻すため
-  await store.markAccessTokenUsed(record.id, at.toISOString());
+  // 書けなくても照合の結果は変えない（#4788。連携の鍵の #4755 と同じ）: 書くのは表示用の時刻で、投げると有効な鍵の要求が 500 になり、開いている SSE も閉じられるため
+  try {
+    await store.markAccessTokenUsed(record.id, at.toISOString());
+  } catch (error) {
+    process.stderr.write(
+      `alteroidd: アクセストークン ${record.id} の最後に使った時刻を書けなかった（照合は通す）: ${reasonOf(error)}\n`,
+    );
+  }
 }
