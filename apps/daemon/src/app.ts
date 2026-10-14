@@ -950,6 +950,9 @@ function noBodyPostResponses() {
 const SSE_CREDENTIAL_LOST_MESSAGE =
   'この接続の資格が使えなくなった（ログアウト・許可の取り消し・期限切れのどれか）ので、流れを閉じる。';
 
+const CHAT_POST_UNAVAILABLE_MESSAGE =
+  '発言を受信箱へ書けなかったので受け取っていない（記憶の器の不調）。送り直してよい。';
+
 const SSE_CHAT_OVERFLOW_MESSAGE =
   'この接続が読むのに追いつかず、送り待ちの出来事が上限を超えたので、流れを閉じる。' +
   'クローンのターンは続いている。張り直せば続きから見える。';
@@ -2800,7 +2803,7 @@ export function createApp(deps: AppDeps) {
           return c.json(attached.body, attached.status);
         }
         const attachmentRefs = attached.refs;
-        claim?.settle(true);
+        // 受け取りの印（`claim`）は、受信箱へ書けた後で確定させる（#4679）: 書けなかった発言の id を「受け取り済み」と覚えると、再送が重複として畳まれるため
 
         return streamSSE(c, async (stream) => {
           const pump = chatEventPump();
@@ -2812,16 +2815,31 @@ export function createApp(deps: AppDeps) {
             unsubscribe,
             async () => {
               // `open` を書く前に積む（順序に意味がある）: `open` は「投函はもう済んだ」の合図で、追送だけしたい呼び（Web UI）は `open` を見た時点で接続を捨てる。逆順だと `stream.onAbort` が走った後にここへ来て、積む前に抜ける経路が生まれ発言が黙って消える。購読は手前で張ってあるので `queued` も取りこぼさない。
-              clone.post({
-                type: 'human_message',
-                id: randomUUID(),
-                at: new Date().toISOString(),
-                text,
-                conversationId,
-                ...(supersedes === undefined ? {} : { supersedes }),
-                ...(attachmentRefs.length === 0 ? {} : { attachments: attachmentRefs }),
-                ...(clientMessageId === undefined ? {} : { clientMessageId }),
-              });
+              // 受信箱へ書けたのを待ってから `open` を返す（#4679）: 待たずに返すと、書けなかった発言は「送れた」と見えたまま再起動で消えるため。
+              // 書けなかったら `open` を出さずに閉じる: 画面と CLI は「送れたか確かめられなかった」として入力を戻す。日誌の発言の行は書けたときにしか書かれない
+              let outcome: Awaited<ReturnType<CloneHost['postPersisted']>>;
+              try {
+                outcome = await clone.postPersisted({
+                  type: 'human_message',
+                  id: randomUUID(),
+                  at: new Date().toISOString(),
+                  text,
+                  conversationId,
+                  ...(supersedes === undefined ? {} : { supersedes }),
+                  ...(attachmentRefs.length === 0 ? {} : { attachments: attachmentRefs }),
+                  ...(clientMessageId === undefined ? {} : { clientMessageId }),
+                });
+              } catch (error) {
+                claim?.settle(false);
+                throw error;
+              }
+              if (outcome === 'unavailable') {
+                claim?.settle(false);
+                await stream.write(`: ${CHAT_POST_UNAVAILABLE_MESSAGE}\n\n`).catch(() => undefined);
+                pump.finish();
+                return;
+              }
+              claim?.settle(true);
 
               await stream.writeSSE({
                 event: 'open',
