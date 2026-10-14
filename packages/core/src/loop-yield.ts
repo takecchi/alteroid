@@ -50,3 +50,27 @@ export function* eachLine(
     }
   }
 }
+
+function* jsonLinesSteps(values: readonly unknown[], yieldChars: number): YieldingSteps<string> {
+  const lines: string[] = [];
+  let sinceYield = 0;
+  for (const value of values) {
+    // 直列化できない値は `map` と `join` と同じく空の行にする
+    const line = JSON.stringify(value) ?? '';
+    lines.push(line);
+    sinceYield += line.length;
+    if (sinceYield >= yieldChars) {
+      sinceYield = 0;
+      yield;
+    }
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/** 値を1行ずつ JSON にして改行で繋ぐ（末尾にも改行）。約 `yieldChars` 字ごとにループへ順番を返す（#4659）。 */
+export function jsonLinesYielding(
+  values: readonly unknown[],
+  yieldChars: number = LOOP_YIELD_CHARS,
+): Promise<string> {
+  return runStepsYielding(jsonLinesSteps(values, yieldChars));
+}
