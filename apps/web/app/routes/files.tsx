@@ -318,6 +318,8 @@ function UploadCard() {
   const { data: limits } = useAttachmentLimits();
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  // 走っている run の数を数える: ドロップ領域は上げ中も受け付けるので、run は重なりうる
+  const running = useRef(0);
   const [dragging, setDragging] = useState(false);
   const [result, setResult] = useState<{ done: number; problems: string[] }>();
 
@@ -330,8 +332,10 @@ function UploadCard() {
     const rejected = checked.flatMap((result) => result.rejected);
     const problems = rejected.map((item) => `${item.name}: ${item.reason}`);
     let done = 0;
+    // 前の結果を消すのは他に走りが無いときだけ: 重なっているなら、先の run の結果を見せたままにする
+    if (running.current === 0) setResult(undefined);
+    running.current += 1;
     setBusy(true);
-    setResult(undefined);
     try {
       for (const file of accepted) {
         try {
@@ -342,8 +346,14 @@ function UploadCard() {
         }
       }
     } finally {
-      setBusy(false);
-      setResult({ done, problems });
+      running.current -= 1;
+      // 上げ中の表示を外すのは最後の run が終わったときだけ: 先に終わった側が外すと、まだ上げている run の表示が消える
+      if (running.current === 0) setBusy(false);
+      // 結果は足し合わせる: 上書きすると、先に終わった側の件数や断られた理由が画面から消える
+      setResult((prev) => ({
+        done: (prev?.done ?? 0) + done,
+        problems: [...(prev?.problems ?? []), ...problems],
+      }));
     }
   }
 
