@@ -161,6 +161,9 @@ describe('連携の鍵の発行・一覧・失効', () => {
       { source: '' },
       { source: 'a'.repeat(65) },
       { name: '   ' },
+      // NUL だけの名前: ストアが NUL を落とすと空の名前で残り、読めない行になる（#4815）
+      { name: '\u0000' },
+      { name: ' \u0000\u0000 ' },
       { expiresAt: '2026-05-01T00:00:00.000Z' },
       { maxBodyBytes: 0 },
       { ratePerMinute: -1 },
@@ -173,6 +176,7 @@ describe('連携の鍵の発行・一覧・失効', () => {
       expect(response.status, JSON.stringify(bad)).toBe(400);
     }
     expect(await stores.integrationKeys.listIntegrationKeys()).toEqual([]);
+    expect(await stores.integrationKeys.listUnreadableIntegrationKeys()).toEqual([]);
   });
 
   it('許可済みのアカウントも発行できる（createdBy にそのアカウントが残る）。失効は冪等', async () => {
