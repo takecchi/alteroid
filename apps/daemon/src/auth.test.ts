@@ -691,6 +691,42 @@ describe('認証が有効なとき', () => {
       ]);
     });
 
+    it('grant: 既に許可済みのアカウントへ別の操作者が grant すると、打ち消しの行が残り grantedBy は先の許可者のまま（#4809）', async () => {
+      const claimed = await loginThrough(app);
+      await stores.auth.grantAccess(claimed.account.id, '2026-01-01T00:00:00.000Z', 'account-a');
+
+      const response = await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      expect(response.status).toBe(200);
+
+      const after = await stores.auth.getAccount(claimed.account.id);
+      expect(after?.grantedBy).toBe('account-a');
+      expect(after?.grantedAt).toBe('2026-01-01T00:00:00.000Z');
+
+      expect(await decisions()).toEqual([
+        expect.stringContaining('アクセス許可を付与:'),
+        expect.stringContaining('アクセス許可を付与していない（既に許可済みだった）:'),
+      ]);
+    });
+
+    it('revoke: 未許可のアカウントへ revoke すると、「取り消し:」の行は残らず既に未許可だった旨が残る（#4809）', async () => {
+      const claimed = await loginThrough(app);
+
+      const response = await app.request(`/access/${claimed.account.id}/revoke`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      expect(response.status).toBe(200);
+
+      const lines = await decisions();
+      expect(lines.some((line) => line.startsWith('アクセス許可を取り消し:'))).toBe(false);
+      expect(lines).toEqual([
+        expect.stringContaining('アクセス許可を取り消していない（既に未許可だった）:'),
+      ]);
+    });
+
     it(
       'describeAccount の出力は grant の前後で変わらない' +
         '（日誌の文言を前状態から書いても、後状態と食い違わない。#2043）',
