@@ -7347,6 +7347,7 @@ class Pool implements ManagerPool {
           await this.#onEvent(event, fromRunnerId);
           continue;
         }
+        const dropped = await this.#droppedReportFiles(event, fromRunnerId);
         await this.#journal({
           type: 'exchange',
           with: 'manager',
@@ -7356,7 +7357,9 @@ class Pool implements ManagerPool {
             `古いセッションの出来事のため無視。resume は受理された）` +
             (event.type === 'closed'
               ? `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`
-              : `古いセッションの ${event.type} を無視した`),
+              : `古いセッションの ${event.type} を無視した`) +
+            dropped.text,
+          ...dropped.attachments,
         });
         continue;
       }
@@ -7367,10 +7370,12 @@ class Pool implements ManagerPool {
         continue;
       }
       if (moved || fromTarget) {
+        const dropped = await this.#droppedReportFiles(event, fromRunnerId);
         await this.#journal({
           type: 'exchange',
           with: 'manager',
           role: 'inbound',
+          ...dropped.attachments,
           text:
             `${EXCHANGE_KIND_DECISION_PREFIX}[${managerId}] （移送の最中に届いた古い runner の出来事のため無視。` +
             `移送先は ${target ?? '不明'}、この出来事は ${fromRunnerId} から${
@@ -7378,7 +7383,8 @@ class Pool implements ManagerPool {
             }）` +
             (event.type === 'closed'
               ? `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`
-              : `移送の最中に届いた古い runner の ${event.type} を無視した`),
+              : `移送の最中に届いた古い runner の ${event.type} を無視した`) +
+            dropped.text,
         });
       } else {
         await this.#onEvent(event, fromRunnerId);
@@ -8025,6 +8031,7 @@ class Pool implements ManagerPool {
 
     const generation = this.#judgeSessionGeneration(record, event);
     if (generation === 'stale' && isSessionScopedEvent(event)) {
+      const dropped = await this.#droppedReportFiles(event, fromRunnerId);
       await this.#journal({
         type: 'exchange',
         with: 'manager',
@@ -8034,7 +8041,9 @@ class Pool implements ManagerPool {
           `${record.sessionGeneration ?? '不明'}、この出来事の世代は ${event.sessionGeneration ?? '不明'}）` +
           (event.type === 'closed'
             ? `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`
-            : `古いセッションの ${event.type} を無視した`),
+            : `古いセッションの ${event.type} を無視した`) +
+          dropped.text,
+        ...dropped.attachments,
       });
       return;
     }
@@ -8123,7 +8132,9 @@ class Pool implements ManagerPool {
           await this.#persist(record);
           return;
         }
-        if (await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'report')) return;
+        if (await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'report', event)) {
+          return;
+        }
         // `reportId` で冪等にする（`ask` の `requestId` と同型）。
         // `reportId` を送らない旧 runner の report は拒まず毎回処理する: 無条件に捨てると本物の報告が消える。二重配達を見分けられないだけ。
         if (event.reportId !== undefined) {
@@ -9697,8 +9708,13 @@ class Pool implements ManagerPool {
     fromRunnerId: string,
     managerId: string,
     kind: string,
+    report?: Extract<RunnerEvent, { type: 'report' }>,
   ): Promise<boolean> {
     if (!this.#movedAwayFrom(record, fromRunnerId)) return false;
+    const dropped =
+      report === undefined
+        ? NO_DROPPED_FILES
+        : await this.#droppedReportFiles(report, fromRunnerId);
     await this.#journal({
       type: 'exchange',
       with: 'manager',
@@ -9706,9 +9722,32 @@ class Pool implements ManagerPool {
       text:
         `${EXCHANGE_KIND_DECISION_PREFIX}[${managerId}] （runner-id 不一致のため無視。` +
         `いまの宛先は ${record.job.runnerId ?? '不明'}、この出来事は ${fromRunnerId} から）` +
-        `移った後に届いた古い runner の ${kind} を無視した`,
+        `移った後に届いた古い runner の ${kind} を無視した` +
+        dropped.text,
+      ...dropped.attachments,
     });
     return true;
+  }
+
+  /**
+   * 捨てる報告に添えられた成果物も取り寄せ、日誌の行に結び付ける（#4703）。停止済みの報告（#4675）と同じ扱い。
+   * 取り寄せないと、runner が出し箱から退避先へ移した成果物が、名前も残らずに失われるため。受信箱へ回さない・台帳を動かさないのは呼び手のまま。
+   */
+  async #droppedReportFiles(event: RunnerEvent, fromRunnerId: string): Promise<DroppedReportFiles> {
+    if (
+      event.type !== 'report' ||
+      ((event.files?.length ?? 0) === 0 && (event.rejectedFiles?.length ?? 0) === 0)
+    ) {
+      return NO_DROPPED_FILES;
+    }
+    const files = await this.#fetchReportFiles(event, fromRunnerId);
+    return {
+      text: describeStoppedReportFiles(files),
+      attachments:
+        files.attachments.length === 0
+          ? {}
+          : { attachments: files.attachments.map((ref) => ({ ...ref })) },
+    };
   }
 
   // 控えはメモリに持たず台帳の store に置く: デーモンの再起動で消え、毎晩の反映のたびに窓が開く。
@@ -11385,6 +11424,13 @@ function describeHeldTokenState(
 }
 
 // 停止済みの担当の報告に添えられた成果物を、日誌の行の末尾で名乗る（#4675）。中身は行の `attachments` に結び付いている
+interface DroppedReportFiles {
+  readonly text: string;
+  readonly attachments: { attachments?: ManagerReportFiles['attachments'] };
+}
+
+const NO_DROPPED_FILES: DroppedReportFiles = { text: '', attachments: {} };
+
 function describeStoppedReportFiles(files: ManagerReportFiles | undefined): string {
   if (files === undefined) return '';
   const lines: string[] = [];

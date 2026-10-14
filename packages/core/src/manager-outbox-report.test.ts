@@ -34,7 +34,12 @@ interface Fake {
   raw(event: RunnerEvent): void;
 }
 
-function fakeRunner(options: { names: boolean }): Fake {
+function fakeRunner(options: {
+  names: boolean;
+  startGeneration?: string;
+  runnerId?: string;
+}): Fake {
+  const runnerId = options.runnerId ?? 'runner-primary';
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
   const contents: Fake['contents'] = new Map();
@@ -46,7 +51,7 @@ function fakeRunner(options: { names: boolean }): Fake {
     return parsed.data;
   };
   const runner: RunnerClient = {
-    runnerId: 'runner-primary',
+    runnerId,
     runnerIdKnown: true,
     workspacePath: '/work/project',
     workspacePathKnown: true,
@@ -55,13 +60,15 @@ function fakeRunner(options: { names: boolean }): Fake {
       onEvent(
         parse({
           type: 'hello',
-          runnerId: 'runner-primary',
+          runnerId,
           capabilities: options.names ? [RUNNER_CAPABILITY_MANAGER_OUTBOX] : [],
         }),
       );
     },
     async start() {
-      return {};
+      return options.startGeneration === undefined
+        ? {}
+        : { sessionGeneration: options.startGeneration };
     },
     async resume() {
       return {};
@@ -485,6 +492,102 @@ describe('停止済みの担当の報告に添えられたファイル（#4675�
     const ref = row?.type === 'exchange' ? row.attachments?.[0] : undefined;
     const stored = await stores.attachments.get(ref?.id ?? '');
     expect(Buffer.from(stored!.bytes).toString()).toBe('止める前の成果物');
+    expect(reportMessages(inbox)).toHaveLength(0);
+    await pool.stop();
+  });
+});
+
+describe('古い世代として捨てる報告に添えられたファイル（#4703）', () => {
+  it('⭐ 古いセッションの報告は受信箱へは回さないが、添えられたファイルは置き場へ入れて日誌の行に結び付ける', async () => {
+    const stores = createMemoryStores();
+    const fake = fakeRunner({ names: true, startGeneration: 'gen-new' });
+    const inbox: InboxEvent[] = [];
+    const pool = createManagerPool({
+      stores,
+      post: (event) => inbox.push(event),
+      runners: createRunnerRegistry([fake.runner]),
+      synthesizedNoticeWindowMs: 60_000,
+      outboxFetchFileTimeoutMs: 50,
+      outboxFetchTotalTimeoutMs: 20_000,
+    });
+    await pool.restore();
+    const { managerId } = await pool.start({ request: '調べて' });
+    const bytes = encode('古いセッションの成果物');
+    fake.contents.set('c'.repeat(32), async () => ({ size: bytes.length, body: chunked(bytes) }));
+
+    fake.raw(
+      reportWithFiles([{ fileId: 'c'.repeat(32), name: 'old.txt', bytes }], {
+        managerId,
+        reportId: 'report-old',
+        sessionGeneration: 'gen-old',
+      }),
+    );
+
+    const line = await vi.waitFor(async () => {
+      const entries = await stores.journal.list({ types: ['exchange'] });
+      const found = entries.find(
+        (entry) =>
+          entry.type === 'exchange' && entry.text.includes('古いセッションの report を無視した'),
+      );
+      if (found === undefined) throw new Error('捨てた行がまだ無い');
+      return found;
+    });
+    expect(fake.opened).toEqual(['c'.repeat(32)]);
+    expect(fake.deleted).toEqual(['c'.repeat(32)]);
+    if (line.type !== 'exchange') throw new Error('exchange ではない');
+    expect(line.text).toContain('添えられていた成果物 1 件を置き場へ入れた: old.txt');
+    expect(line.attachments?.map((ref) => ref.name)).toEqual(['old.txt']);
+    expect(reportMessages(inbox)).toHaveLength(0);
+    await pool.stop();
+  });
+});
+
+describe('移った後の古い runner から届いた報告に添えられたファイル（#4703）', () => {
+  it('⭐ 受信箱へは回さないが、添えられたファイルは報告を出した古い runner から取り寄せて日誌の行に結び付ける', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({
+      id: MANAGER_ID,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      updatedAt: '2026-09-01T00:00:00.000Z',
+      status: 'running',
+      summary: '調べ物',
+      request: '調べて',
+      cwd: '/work/project',
+      sessionId: `sess-${MANAGER_ID}`,
+      runnerId: 'runner-primary',
+    });
+    const current = fakeRunner({ names: true });
+    const old = fakeRunner({ names: true, runnerId: 'runner-old' });
+    const inbox: InboxEvent[] = [];
+    const pool = createManagerPool({
+      stores,
+      post: (event) => inbox.push(event),
+      runners: createRunnerRegistry([current.runner, old.runner]),
+      synthesizedNoticeWindowMs: 60_000,
+      outboxFetchFileTimeoutMs: 50,
+      outboxFetchTotalTimeoutMs: 20_000,
+    });
+    await pool.restore();
+    const bytes = encode('古い runner の成果物');
+    old.contents.set('d'.repeat(32), async () => ({ size: bytes.length, body: chunked(bytes) }));
+
+    old.raw(reportWithFiles([{ fileId: 'd'.repeat(32), name: 'moved.txt', bytes }]));
+
+    const line = await vi.waitFor(async () => {
+      const entries = await stores.journal.list({ types: ['exchange'] });
+      const found = entries.find(
+        (entry) =>
+          entry.type === 'exchange' &&
+          entry.text.includes('移った後に届いた古い runner の report を無視した'),
+      );
+      if (found === undefined) throw new Error('捨てた行がまだ無い');
+      return found;
+    });
+    expect(old.opened).toEqual(['d'.repeat(32)]);
+    expect(current.opened).toEqual([]);
+    if (line.type !== 'exchange') throw new Error('exchange ではない');
+    expect(line.text).toContain('添えられていた成果物 1 件を置き場へ入れた: moved.txt');
+    expect(line.attachments?.map((ref) => ref.name)).toEqual(['moved.txt']);
     expect(reportMessages(inbox)).toHaveLength(0);
     await pool.stop();
   });
