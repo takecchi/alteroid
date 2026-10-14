@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { readdir, realpath, stat, unlink } from 'node:fs/promises';
+import { lstat, readdir, realpath, stat, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -362,14 +362,17 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
     ...(options.tmpRootDir === undefined ? {} : { tmpRootDir: options.tmpRootDir }),
     ...(options.hintDirs === undefined ? {} : { hintDirs: options.hintDirs }),
   });
+  // 起点が無い（ENOENT）のは「漏れた」ではない: 作業場ごと無ければ、退避から漏れる変更も無いため。知らせるのは在るのに読めない回だけ
+  const unreadable =
+    listed.unreadable !== undefined && (await pathExists(cwd)) ? listed.unreadable : undefined;
   options.onListIncomplete?.(
-    listed.truncatedAtCount === undefined && listed.unreadable === undefined
+    listed.truncatedAtCount === undefined && unreadable === undefined
       ? undefined
       : {
           ...(listed.truncatedAtCount === undefined
             ? {}
             : { truncatedAtCount: listed.truncatedAtCount }),
-          ...(listed.unreadable === undefined ? {} : { unreadable: listed.unreadable }),
+          ...(unreadable === undefined ? {} : { unreadable }),
         },
   );
   const reports: RescueWorktree[] = [];
@@ -893,5 +896,14 @@ async function removeStaleScratch(
     }
   } catch {
     // 掃除は best-effort。
+  }
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await lstat(target);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
   }
 }

@@ -620,11 +620,20 @@ describe('退避の作業ツリーの列挙の打ち切りを呼び手へ返す�
     expect(seen).toEqual([{ truncatedAtCount: 20 }]);
   });
 
-  it('起点が読めなければ、その理由を返す', async () => {
+  it('起点が在るのに読めなければ、その理由を返す', async () => {
+    // ファイルを起点にして、ディレクトリとして読めなくする（権限で塞ぐ形は root で走る器では効かない）
+    const file = path.join(root, 'not-a-dir');
+    await writeFile(file, 'x');
     const seen: unknown[] = [];
-    await run(path.join(root, 'missing'), (value) => seen.push(value));
+    await run(file, (value) => seen.push(value));
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ unreadable: expect.any(String) as unknown });
+  });
+
+  it('起点が存在しなければ知らせない（作業場ごと無いので、退避から漏れる変更も無い）', async () => {
+    const seen: unknown[] = [];
+    await run(path.join(root, 'missing'), (value) => seen.push(value));
+    expect(seen).toEqual([undefined]);
   });
 
   it('打ち切られなければ undefined を返す（呼び手が「直った」を知るため）', async () => {
