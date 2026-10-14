@@ -222,6 +222,11 @@ import {
   JournalStreamQueue,
   type JournalBus,
 } from './journal-bus.js';
+import {
+  CHAT_STREAM_QUEUE_MAX_CHARS,
+  CHAT_STREAM_QUEUE_MAX_EVENTS,
+  ChatStreamQueue,
+} from './chat-stream-queue.js';
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono, type Context, type Next } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -409,6 +414,8 @@ export interface AppDeps {
   sseHeartbeatMs?: number;
   // 環境変数は増やさない（`sseHeartbeatMs` と同じ）: テストで溢れさせる以外に差し替える理由が無い（#4617）。
   journalStreamQueueLimits?: { maxEntries?: number; maxChars?: number };
+  /** `/chat` 系の SSE の購読者1本あたりの送り待ちの上限（#4662）。試験が小さくするための口。 */
+  chatStreamQueueLimits?: { maxEvents?: number; maxChars?: number };
   // 無ければ `storage.state` は `unknown`: 確かめる手段が無いことを `ok` に化けさせない。毎リクエストでは叩かない。
   storageProbe?: () => Promise<void>;
   // 環境変数は増やさない（`sseHeartbeatMs` と同じ）。
@@ -939,6 +946,10 @@ function noBodyPostResponses() {
 
 const SSE_CREDENTIAL_LOST_MESSAGE =
   'この接続の資格が使えなくなった（ログアウト・許可の取り消し・期限切れのどれか）ので、流れを閉じる。';
+
+const SSE_CHAT_OVERFLOW_MESSAGE =
+  'この接続が読むのに追いつかず、送り待ちの出来事が上限を超えたので、流れを閉じる。' +
+  'クローンのターンは続いている。開き直せば続きから見える。';
 
 // `/auth/me` と `/auth/logout` だけは認証が要る: logout は提示している資格そのものを失効させる設計なので、提示なしに叩ける素通しの口にしない。
 function isPublicPath(path: string): boolean {
@@ -1905,7 +1916,7 @@ export function createApp(deps: AppDeps) {
   }
   // ループを2本の口で別々に持たない: 資格が尽きたときの閉じ方や心拍の扱いが片方だけ変わる。購読は呼び出し側で済ませてからここへ来る（`try` を購読の直後から始めるため）。
   function chatEventPump() {
-    const queue: ChatStreamEvent[] = [];
+    const queue = new ChatStreamQueue(deps.chatStreamQueueLimits);
     let wake: (() => void) | null = null;
     let finished = false;
     return {
@@ -1962,8 +1973,36 @@ export function createApp(deps: AppDeps) {
                 });
                 break;
               }
-              const event = queue.shift();
-              if (event === undefined) {
+              const overflow = queue.overflow;
+              if (overflow !== undefined) {
+                // 溢れたら溜めた分は捨ててある。理由を1つ送って閉じる（資格切れと同じ `error` の形。クローンのターンの失敗ではない ⟹ `other`）
+                const summary =
+                  `/chat の流れの受け手が読むのに追いつかず、送り待ちが上限を超えた` +
+                  `（${String(overflow.events)} 件・${String(overflow.chars)} 字。上限 ` +
+                  `${String(deps.chatStreamQueueLimits?.maxEvents ?? CHAT_STREAM_QUEUE_MAX_EVENTS)} 件・` +
+                  `${String(deps.chatStreamQueueLimits?.maxChars ?? CHAT_STREAM_QUEUE_MAX_CHARS)} 字）。` +
+                  '溜めた分を捨ててこの流れを切った。クローンのターンは止めていない（#4662）。';
+                void stores.journal
+                  .append({ type: 'external_event', source: 'chat-stream', summary })
+                  .catch((error: unknown) => {
+                    process.stderr.write(
+                      `alteroidd: /chat の流れを切ったことを日誌へ残せませんでした: ${reasonOf(error)}\n  ${summary}\n`,
+                    );
+                  });
+                await stream
+                  .writeSSE({
+                    event: 'error',
+                    data: JSON.stringify({
+                      type: 'error',
+                      message: SSE_CHAT_OVERFLOW_MESSAGE,
+                      kind: 'other',
+                    }),
+                  })
+                  .catch(() => undefined);
+                break;
+              }
+              const item = queue.shift();
+              if (item === undefined) {
                 if (finished) break;
                 await new Promise<void>((resolve) => {
                   wake = resolve;
@@ -1971,7 +2010,8 @@ export function createApp(deps: AppDeps) {
                 wake = null;
                 continue;
               }
-              await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
+              const { event, data } = item;
+              await stream.writeSSE({ event: event.type, data });
               if (event.type === 'done' || event.type === 'error') break;
             }
           } finally {

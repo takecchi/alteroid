@@ -181,6 +181,7 @@ import {
 import type { TokenRotatorObservation } from './token-rotator.js';
 import { UsageRecordOrder, type UsageRecordTicket, usageDate } from './usage.js';
 import { notePhase } from './loop-stall.js';
+import { jsonLinesYielding } from './loop-yield.js';
 
 /**
  * SDK をここで動かさない: 同じ器で走らせるとマネージャーが `/proc/1/environ` から
@@ -7758,8 +7759,8 @@ class Pool implements ManagerPool {
   async #fromSessionStore(job: Job): Promise<string | null> {
     const material = await this.#loadSession(job.projectKey, job.sessionId ?? '');
     if (material.kind !== 'loaded') return null;
-    const { entries } = material;
-    return `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`;
+    // 1回の `map` と `join` で作らない: 預かりは数百 MB になり、全件の直列化の間ループを塞ぐため（#4659）
+    return jsonLinesYielding(material.entries);
   }
 
   /**

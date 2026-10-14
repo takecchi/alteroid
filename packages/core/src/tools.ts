@@ -47,7 +47,7 @@ import {
 import { isCronExpression } from './cron.js';
 import { isRunningJobStatus } from './job-status-running.js';
 import { journalWindowCrossesHorizon } from './journal-horizon.js';
-import { filterTranscriptLines } from './transcript-filter.js';
+import { filterTranscriptLinesYielding } from './transcript-filter.js';
 import {
   TranscriptPageCache,
   transcriptPageCacheKey,
@@ -8653,7 +8653,12 @@ export function createCloneTools(context: ToolContext) {
                     .split(',')
                     .map((t) => t.trim())
                     .filter((t) => t.length > 0);
-            const filtered = filterTranscriptLines(rawBody, { since, until, types, contains });
+            const filtered = await filterTranscriptLinesYielding(rawBody, {
+              since,
+              until,
+              types,
+              contains,
+            });
             body = filtered.body;
             const { totalLines, matchedLines, noTimestampLines, unparsableLines } = filtered.counts;
             // 「全X行のうちY行が当たった」は0件でも出す: 黙って空の本文を返すと「絞りが効いていない」のか「本当に0件だった」のか区別できないため
