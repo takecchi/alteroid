@@ -156,9 +156,18 @@ export class Outbox {
   readonly #now: () => string;
   #nextSeq: OutboxSeq = 1;
 
-  readonly #sent: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
+  readonly #sent: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq; chars: number }[] = [];
+  #sentChars = 0;
+  /** 字数で控えから落とした出来事のうち、いちばん新しい連番。繋ぎ直しで、それより前を求められたら送り直せない。 */
+  #droppedForCharsThrough: OutboxSeq = 0;
 
   static readonly SENT_HISTORY_LIMIT = 1000;
+  /**
+   * 控えの字数（書き出した本文の合計）の上限（#4669）。生ログの写し（`mirror`）は1件で最大100万字になり、件数だけでは
+   * 数十 MB〜を抱えうるため。控えが要るのは「書いたが届いたか分からない」直近の分だけで、届いた分は二度と要らない。
+   * 値は `/journal/stream`・`/chat` の送り待ちの上限（1,600万字）に揃える。直近の1件は必ず残す。
+   */
+  static readonly SENT_HISTORY_MAX_CHARS = 16_000_000;
 
   constructor(now: () => string = () => new Date().toISOString()) {
     this.#now = now;
@@ -208,15 +217,28 @@ export class Outbox {
     };
   }
 
-  recordSent(event: RunnerEvent, seq: OutboxSeq, queuedAt: string): void {
+  // `chars` は書き出した本文（`JSON.stringify(event)`）の字数。書き出す側が持っているので渡す（2度直列化しない）。省けばここで数える
+  recordSent(event: RunnerEvent, seq: OutboxSeq, queuedAt: string, chars?: number): void {
     // 同じ連番が既に在れば積まない: 読み返して再送した分が控えに二重に入り、デーモンへ同じ出来事が2回届くため。
     for (let i = this.#sent.length - 1; i >= 0; i--) {
       const known = this.#sent[i];
       if (known === undefined || known.seq < seq) break;
       if (known.seq === seq) return;
     }
-    this.#sent.push({ event, seq, queuedAt });
-    while (this.#sent.length > Outbox.SENT_HISTORY_LIMIT) this.#sent.shift();
+    const size = chars ?? JSON.stringify(event).length;
+    this.#sent.push({ event, seq, queuedAt, chars: size });
+    this.#sentChars += size;
+    while (
+      this.#sent.length > Outbox.SENT_HISTORY_LIMIT ||
+      (this.#sentChars > Outbox.SENT_HISTORY_MAX_CHARS && this.#sent.length > 1)
+    ) {
+      const dropped = this.#sent.shift();
+      if (dropped === undefined) break;
+      this.#sentChars -= dropped.chars;
+      if (this.#sent.length < Outbox.SENT_HISTORY_LIMIT) {
+        this.#droppedForCharsThrough = Math.max(this.#droppedForCharsThrough, dropped.seq);
+      }
+    }
   }
 
   isRecorded(seq: OutboxSeq): boolean {
@@ -225,8 +247,19 @@ export class Outbox {
 
   sentSince(lastEventId: OutboxSeq): { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] {
     // 振っていない連番を申告されたら控えを全部返す: runner が入れ替わると連番は1から数え直され、前の runner の高い値で絞ると1件も返らないため。
-    if (lastEventId >= this.#nextSeq) return [...this.#sent];
-    return this.#sent.filter((item) => item.seq > lastEventId);
+    if (lastEventId >= this.#nextSeq)
+      return this.#sent.map(({ event, queuedAt, seq }) => ({ event, queuedAt, seq }));
+    // 字数で落とした分より前を求められたら、送り直せないことを黙らない（#4669）。届いていたかは runner からは分からない
+    if (lastEventId < this.#droppedForCharsThrough) {
+      process.stderr.write(
+        `alteroid-runner: 繋ぎ直しで連番 ${String(lastEventId)} より後を求められたが、` +
+          `${String(this.#droppedForCharsThrough)} までは控えの字数の上限で落としてあり、送り直せない` +
+          `（届いていなければ、その間の出来事は失われた）\n`,
+      );
+    }
+    return this.#sent
+      .filter((item) => item.seq > lastEventId)
+      .map(({ event, queuedAt, seq }) => ({ event, queuedAt, seq }));
   }
 
   // `#queue` の長さだけを数えない: listener が付いている間は購読側に溜まり、デーモンが読まなくなっても 0 のままになるため。
@@ -732,11 +765,12 @@ export function createRunnerApp(deps: RunnerAppDeps) {
             }
             // 書き終わるまで `writing` に持つ: `queue` から出た瞬間に忘れると、固着した1件が数えられなくなるため。
             writing = item;
+            const data = JSON.stringify(item.event);
             const result = await withDeadline(
               () =>
                 stream.writeSSE({
                   event: item.event.type,
-                  data: JSON.stringify(item.event),
+                  data,
                   id: String(item.seq),
                 }),
               sseWriteDeadlineMs,
@@ -757,7 +791,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
               break;
             }
             // 届いたとは限らないので控えへ積む: hono の `write()` は死んだ接続へ書いても例外を出さないため。
-            outbox.recordSent(item.event, item.seq, item.queuedAt);
+            outbox.recordSent(item.event, item.seq, item.queuedAt, data.length);
             // 投げたときは `writing` を残したまま抜ける: `finally` が箱へ戻さないと、書けなかった1件だけが静かに失われるため。
             writing = null;
           }
