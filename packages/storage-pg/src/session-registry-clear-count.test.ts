@@ -43,3 +43,29 @@ describe('PgSessionRegistry.clear() — 4つの欄だけを数え、数えた欄
     expect(marker).toHaveLength(1);
   });
 });
+
+describe('PgSessionRegistry — 墓標の蒸留失敗回数（#4752）', () => {
+  it('未記録なら 0、数えると増え、別の印では 1 から数え直し、kind は独立している', async () => {
+    const sessions = stores.sessions;
+    expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(0);
+    expect(await sessions.noteGraveDistillFailure('transcript', 'a')).toBe(1);
+    expect(await sessions.noteGraveDistillFailure('transcript', 'a')).toBe(2);
+    expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(2);
+
+    // 別の印のぶんは数えていない
+    expect(await sessions.graveDistillFailures('transcript', 'b')).toBe(0);
+    expect(await sessions.noteGraveDistillFailure('transcript', 'b')).toBe(1);
+    expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(0);
+
+    // もう一方の kind には触れない
+    expect(await sessions.graveDistillFailures('lost_session', 'b')).toBe(0);
+    expect(await sessions.noteGraveDistillFailure('lost_session', 'b')).toBe(1);
+    expect(await sessions.graveDistillFailures('transcript', 'b')).toBe(1);
+  });
+
+  it('墓標の本体の突き合わせには触れない（数えても clear…If は今までどおり下ろす）', async () => {
+    await stores.sessions.setTranscriptGrave({ archiveId: 'a1' });
+    await stores.sessions.noteGraveDistillFailure('transcript', 'a1');
+    expect(await stores.sessions.clearTranscriptGraveIf('a1')).toBe(true);
+  });
+});

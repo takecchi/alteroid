@@ -358,3 +358,30 @@ describe('墓標の compare-and-set（#1157）', () => {
     expect(await a.getTranscriptGrave()).toBeNull();
   });
 });
+
+describe('FsSessionRegistry — 墓標の蒸留失敗回数（#4752）', () => {
+  it('未記録なら 0、数えると増え、別の印では 1 から数え直し、kind は独立している', async () => {
+    const sessions = new FsSessionRegistry(dir);
+    expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(0);
+    expect(await sessions.noteGraveDistillFailure('transcript', 'a')).toBe(1);
+    expect(await sessions.noteGraveDistillFailure('transcript', 'a')).toBe(2);
+    expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(2);
+
+    // 別の印のぶんは数えていない
+    expect(await sessions.graveDistillFailures('transcript', 'b')).toBe(0);
+    expect(await sessions.noteGraveDistillFailure('transcript', 'b')).toBe(1);
+    expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(0);
+
+    // もう一方の kind には触れない
+    expect(await sessions.graveDistillFailures('lost_session', 'b')).toBe(0);
+    expect(await sessions.noteGraveDistillFailure('lost_session', 'b')).toBe(1);
+    expect(await sessions.graveDistillFailures('transcript', 'b')).toBe(1);
+  });
+
+  it('読めない記録は 0 として扱い、投げない', async () => {
+    await writeFile(join(dir, 'transcript-grave-distill-failures.json'), '{"graveId":"a', 'utf8');
+    const sessions = new FsSessionRegistry(dir);
+    expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(0);
+    expect(await sessions.noteGraveDistillFailure('transcript', 'a')).toBe(1);
+  });
+});
