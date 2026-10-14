@@ -11,13 +11,14 @@ describe('クローン — SDK のエラーを応答として扱わない（日�
   const orgSpendLimit =
     "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message";
 
-  function postDailyReport(clone: CloneHost, date: string): void {
+  function postDailyReport(clone: CloneHost, date: string, cause?: 'manual'): void {
     clone.post({
       type: 'timer',
       id: `evt-timer-${date}`,
       at: new Date().toISOString(),
       kind: 'daily_report',
       target: date,
+      ...(cause === undefined ? {} : { cause }),
     });
   }
 
@@ -127,6 +128,7 @@ describe('クローン — SDK のエラーを応答として扱わない（日�
     await again.clone.stop();
   });
 
+  // 作り直しの頼み（`manual`）で通す: 定時・後追いの合図は既に書かれた日にはターンを走らせない（#4757）ので、ターンの後の確認を通るのはこの契機だけ
   it('本物の日報が既にある日は、失敗しても印の行を足さない', async () => {
     const stores = createMemoryStores();
     await stores.journal.append({
@@ -138,7 +140,7 @@ describe('クローン — SDK のエラーを応答として扱わない（日�
     const s = setup(() => '書いておいた', stores, {
       resultFor: () => ({ subtype: 'error_during_execution', text: '内部で何かが壊れた' }),
     });
-    postDailyReport(s.clone, '2026-08-19');
+    postDailyReport(s.clone, '2026-08-19', 'manual');
 
     await waitFor(async () => {
       const exchanges = (await stores.journal.list({ types: ['exchange'] })) as {
