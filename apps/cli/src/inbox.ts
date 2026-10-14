@@ -67,9 +67,11 @@ export async function inboxRemoveCommand(options: InboxRemoveOptions): Promise<v
   if (options.before !== undefined) body.before = options.before;
   if (limit !== undefined) body.limit = limit;
 
+  // 送る前に取る: 応答の後に取ると、デーモンが試算で選んだ後〜応答が届くまでに来た、人間が見ていない合図まで実行の対象に入る
+  const startedAt = new Date().toISOString();
   // 失敗を握り潰さない: stdout へ書いて正常 return すると終了コードが 0 になり、「消えたのか消えなかったのか」を読めないため
   const result = await post(target, body);
-  report(result, dryRun, options);
+  report(result, dryRun, options, startedAt);
 }
 
 function splitList(value: string): string[] {
@@ -106,7 +108,12 @@ async function post(target: Target, body: Record<string, unknown>): Promise<Inbo
   return (await response.json()) as InboxRemoveManyResult;
 }
 
-function report(result: InboxRemoveManyResult, dryRun: boolean, options: InboxRemoveOptions): void {
+function report(
+  result: InboxRemoveManyResult,
+  dryRun: boolean,
+  options: InboxRemoveOptions,
+  startedAt: string,
+): void {
   stdout.write(
     `${dryRun ? '[試算] ' : ''}未読 ${result.totalPending} 件中 ${result.matched} 件が絞り込みに一致` +
       `（対象 ${result.targeted} 件、上限で持ち越し ${result.remaining} 件）\n`,
@@ -119,8 +126,13 @@ function report(result: InboxRemoveManyResult, dryRun: boolean, options: InboxRe
       stdout.write(`消すことになる id（${result.removedIds.length}件、古い順）:\n`);
       for (const id of result.removedIds) stdout.write(`  ${id}\n`);
     }
-    stdout.write('実行するには --execute を付けてもう一度:\n');
-    stdout.write(`  ${describeExecuteCommand(options)}\n`);
+    // 案内の --before を試算の時刻に固定する: デーモンは実行のたびに条件で選び直すので、試算の後に届いた合図まで消える（元に戻せない）
+    stdout.write(
+      '実行するには --execute を付けてもう一度（--before を試算の時刻までにしてあるので、試算より後に届いた合図は消さない）:\n',
+    );
+    stdout.write(
+      `  ${describeExecuteCommand({ ...options, before: earlierInstant(options.before, startedAt) })}\n`,
+    );
     return;
   }
 
@@ -142,6 +154,12 @@ function report(result: InboxRemoveManyResult, dryRun: boolean, options: InboxRe
         '（この呼びの最中に他の経路が先に消した）。\n',
     );
   }
+}
+
+/** 渡された境界と試算の時刻のうち早いほう。読めない境界はデーモンが試算で断るので、ここへは来ない。 */
+function earlierInstant(explicit: string | undefined, previewedAt: string): string {
+  if (explicit === undefined) return previewedAt;
+  return Date.parse(explicit) <= Date.parse(previewedAt) ? explicit : previewedAt;
 }
 
 function describeExecuteCommand(options: InboxRemoveOptions): string {
