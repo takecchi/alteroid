@@ -106,7 +106,13 @@ describe('summarizeProgress — backlog', () => {
     expect(b.age.oldestAt).toBeNull();
     expect(b.age.medianHours).toBeNull();
     expect(b.age.buckets).toEqual({ under1h: 0, under24h: 0, under7d: 0, over7d: 0 });
-    expect(b.byState).toEqual({ untouched: 0, responded: 0, delegated: 0, notApplicable: 0 });
+    expect(b.byState).toEqual({
+      untouched: 0,
+      responded: 0,
+      delegated: 0,
+      notApplicable: 0,
+      unjudgeable: 0,
+    });
   });
 
   it('台帳が空でも最古と中央値は null', () => {
@@ -163,19 +169,47 @@ describe('summarizeProgress — backlog', () => {
 
   it('区分は Web の見せ方に揃う: human は 未着手/返答済み、human 以外は notApplicable、delegated は排他でない', () => {
     const b = summarize([
-      row('u', OLD),
-      row('r', OLD, { respondedAt: '2026-08-02T00:00:00.000Z' }),
-      row('ud', OLD, { activeManagerIds: ['m1'] }),
-      row('rd', OLD, { respondedAt: '2026-08-02T00:00:00.000Z', activeManagerIds: ['m2', 'm3'] }),
-      row('e', OLD, { activeManagerIds: [] }),
+      row('u', OLD, { source: 'c1' }),
+      row('r', OLD, { source: 'c2', respondedAt: '2026-08-02T00:00:00.000Z' }),
+      row('ud', OLD, { source: 'c3', activeManagerIds: ['m1'] }),
+      row('rd', OLD, {
+        source: 'c4',
+        respondedAt: '2026-08-02T00:00:00.000Z',
+        activeManagerIds: ['m2', 'm3'],
+      }),
+      row('e', OLD, { source: 'c5', activeManagerIds: [] }),
       row('mg', OLD, { origin: 'manager', activeManagerIds: ['m4'] }),
       row('cl', OLD, {
+        source: 'c6',
         respondedAt: '2026-08-02T00:00:00.000Z',
         closedAt: '2026-08-03T00:00:00.000Z',
       }),
     ]).backlog;
-    expect(b.byState).toEqual({ untouched: 3, responded: 2, delegated: 2, notApplicable: 1 });
+    expect(b.byState).toEqual({
+      untouched: 3,
+      responded: 2,
+      delegated: 2,
+      notApplicable: 1,
+      unjudgeable: 0,
+    });
     expect(b.byState.untouched + b.byState.responded + b.byState.notApplicable).toBe(b.total);
+  });
+
+  it('source の無い human の行は untouched でなく unjudgeable に数え、source のある行は今までどおり（#4817）', () => {
+    const b = summarize([
+      row('nosrc', OLD),
+      row('nosrc-d', OLD, { activeManagerIds: ['m1'] }),
+      row('src', OLD, { source: 'c1' }),
+      row('src-r', OLD, { source: 'c2', respondedAt: '2026-08-02T00:00:00.000Z' }),
+      row('mg', OLD, { origin: 'manager' }),
+    ]).backlog;
+    expect(b.byState.unjudgeable).toBe(2);
+    expect(b.byState.untouched).toBe(1);
+    expect(b.byState.responded).toBe(1);
+    expect(b.byState.notApplicable).toBe(1);
+    expect(
+      b.byState.untouched + b.byState.responded + b.byState.notApplicable + b.byState.unjudgeable,
+    ).toBe(b.total);
   });
 
   it('completeness は unreadable と trimmedClosed をそのまま運ぶ（unreadable は total に入らない）', () => {

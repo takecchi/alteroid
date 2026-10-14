@@ -492,6 +492,15 @@ describe('返答済み・未クローズ / 未着手（issue #1003）', () => {
     expect(screen.queryByText(/返事済み・まだ片付いていない/)).toBeNull();
   });
 
+  it('origin: human でも source（会話）が無い行には「未着手」を出さない: 返事を結べず判定できない（#4817）', async () => {
+    stubCommitments([commitment({ origin: 'human', source: undefined })]);
+    renderPage();
+
+    await screen.findByText('ドキュメントの誤りを直す');
+    expect(screen.queryByText('未着手')).toBeNull();
+    expect(screen.getByText(/返事の判定なし/)).toBeTruthy();
+  });
+
   it('origin が human でなければ、respondedAt があっても両方のバッジを出さない', async () => {
     stubCommitments([
       commitment({ origin: 'self', source: undefined, respondedAt: '2026-09-14T00:00:00.000Z' }),
