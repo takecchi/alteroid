@@ -1,0 +1,139 @@
+import { EventEmitter } from 'node:events';
+import { syncBuiltinESMExports } from 'node:module';
+import { PassThrough } from 'node:stream';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { captureStdout } from './test-support.js';
+
+/**
+ * パイプで、書き込み系のコマンドに一覧に無い番号を渡したら止める（#4795）。偽の readline と偽の標準入力を使うので、実時間の待ちは無い。
+ */
+class FakeRl extends EventEmitter {
+  closed = false;
+  setPrompt(): void {}
+  prompt(): void {}
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.emit('close');
+  }
+}
+
+let rl: FakeRl;
+vi.mock('node:readline/promises', () => ({
+  createInterface: () => rl,
+}));
+
+vi.mock('./target.js', async (orig) => ({
+  ...(await orig<typeof import('./target.js')>()),
+  resolveTarget: async () => ({
+    baseUrl: 'http://127.0.0.1:4517',
+    headers: {},
+    remote: false,
+    note: null,
+  }),
+}));
+
+const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+
+function useStdin(isTTY: boolean): void {
+  const input = Object.assign(new PassThrough(), { isTTY });
+  Object.defineProperty(process, 'stdin', { value: input, configurable: true });
+  syncBuiltinESMExports();
+}
+
+beforeEach(() => {
+  rl = new FakeRl();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  if (realStdin !== undefined) Object.defineProperty(process, 'stdin', realStdin);
+  syncBuiltinESMExports();
+});
+
+const sse = (body: string): Response =>
+  new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+const DONE = 'event: done\ndata: {"type":"done"}\n\n';
+
+function recordFetch(routes: Record<string, () => Response>): string[] {
+  const chats: string[] = [];
+  vi.stubGlobal('fetch', (url: unknown, init?: RequestInit) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/chat') {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      chats.push(body.text);
+      return Promise.resolve(sse(DONE));
+    }
+    return Promise.resolve(routes[path]?.() ?? Response.json({}, { status: 500 }));
+  });
+  return chats;
+}
+
+async function start(): Promise<{ settled: Promise<Error | null> }> {
+  const { chatCommand } = await import('./chat.js');
+  const settled = chatCommand().then(
+    () => null,
+    (error: unknown) => error as Error,
+  );
+  await vi.waitFor(() => expect(rl.listenerCount('line')).toBeGreaterThan(0));
+  return { settled };
+}
+
+describe('非対話で、書き込み系のコマンドに一覧に無い番号を渡したら止まる（#4795）', () => {
+  const lines = [
+    '/msg 3 やって',
+    '/stop 3',
+    '/done 3',
+    '/commit-edit 3 直した本文',
+    '/edit 3 直した本文',
+    '/reply 3 返事',
+    '/allow 3',
+    '/deny 3',
+  ];
+  for (const line of lines) {
+    it(`⭐ ${line}: 一覧に無いと言って止まり、次の行を送らない`, async () => {
+      useStdin(false);
+      const chats = recordFetch({});
+      const out = captureStdout();
+      const { settled } = await start();
+      rl.emit('line', line);
+      rl.emit('line', '次の発言');
+      rl.close();
+      const error = await settled;
+      out();
+      expect(error).toBeInstanceOf(Error);
+      expect(chats).toEqual([]);
+    });
+  }
+
+  it('⭐ 複数行の /edit が始まらなかったら止まり、編集のつもりの次の行を新しい発言として送らない', async () => {
+    useStdin(false);
+    const chats = recordFetch({});
+    const out = captureStdout();
+    const { settled } = await start();
+    rl.emit('line', '/edit 3');
+    rl.emit('line', '直した本文');
+    rl.close();
+    const error = await settled;
+    expect(out()).toContain('一覧にありません');
+    expect(error).toBeInstanceOf(Error);
+    expect(chats).toEqual([]);
+  });
+
+  it('対照: 読み取り系（/manager）は一覧に無いと言うだけで止まらない', async () => {
+    useStdin(false);
+    const chats = recordFetch({});
+    const out = captureStdout();
+    const { settled } = await start();
+    rl.emit('line', '/manager 3');
+    rl.emit('line', '次の発言');
+    rl.close();
+    const error = await settled;
+    out();
+    expect(error).toBeNull();
+    expect(chats).toEqual(['次の発言']);
+  });
+});
