@@ -949,7 +949,7 @@ const SSE_CREDENTIAL_LOST_MESSAGE =
 
 const SSE_CHAT_OVERFLOW_MESSAGE =
   'この接続が読むのに追いつかず、送り待ちの出来事が上限を超えたので、流れを閉じる。' +
-  'クローンのターンは続いている。開き直せば続きから見える。';
+  'クローンのターンは続いている。張り直せば続きから見える。';
 
 // `/auth/me` と `/auth/logout` だけは認証が要る: logout は提示している資格そのものを失効させる設計なので、提示なしに叩ける素通しの口にしない。
 function isPublicPath(path: string): boolean {
@@ -1975,7 +1975,8 @@ export function createApp(deps: AppDeps) {
               }
               const overflow = queue.overflow;
               if (overflow !== undefined) {
-                // 溢れたら溜めた分は捨ててある。理由を1つ送って閉じる（資格切れと同じ `error` の形。クローンのターンの失敗ではない ⟹ `other`）
+                // 溢れたら溜めた分は捨ててある。理由はコメント行で残し、終端の出来事（`done` / `error`）は送らずに閉じる（#4663 の続き）:
+                // `error` を送ると画面はターンの失敗として扱うが、ターンは止めていない。終端の無いまま閉じれば、画面は張り直して続きを読む
                 const summary =
                   `/chat の流れの受け手が読むのに追いつかず、送り待ちが上限を超えた` +
                   `（${String(overflow.events)} 件・${String(overflow.chars)} 字。上限 ` +
@@ -1989,16 +1990,7 @@ export function createApp(deps: AppDeps) {
                       `alteroidd: /chat の流れを切ったことを日誌へ残せませんでした: ${reasonOf(error)}\n  ${summary}\n`,
                     );
                   });
-                await stream
-                  .writeSSE({
-                    event: 'error',
-                    data: JSON.stringify({
-                      type: 'error',
-                      message: SSE_CHAT_OVERFLOW_MESSAGE,
-                      kind: 'other',
-                    }),
-                  })
-                  .catch(() => undefined);
+                await stream.write(`: ${SSE_CHAT_OVERFLOW_MESSAGE}\n\n`).catch(() => undefined);
                 break;
               }
               const item = queue.shift();

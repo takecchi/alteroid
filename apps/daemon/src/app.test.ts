@@ -650,7 +650,7 @@ describe('HTTP API', () => {
       });
     });
 
-    it('受け手が読むのに追いつかず送り待ちが上限を超えたら、溜めた分を捨て、理由の error を1つ送って閉じ、日誌に1行残す（#4662）', async () => {
+    it('受け手が読むのに追いつかず送り待ちが上限を超えたら、溜めた分を捨て、終端の出来事を送らずにコメント行で理由を残して閉じ、日誌に1行残す（#4662・#4663 の続き）', async () => {
       const capped = createApp({
         clone: fake.clone,
         stores,
@@ -675,10 +675,10 @@ describe('HTTP API', () => {
         seen += decoder.decode(value, { stream: true });
       }
 
-      const last = frames(seen).at(-1);
-      expect(last?.event).toBe('error');
-      expect(last?.data).toMatchObject({ type: 'error', kind: 'other' });
-      expect(JSON.stringify(last?.data)).toContain('送り待ちの出来事が上限を超えた');
+      // `error` を送らない: 画面はそれをターンの失敗として扱うが、ターンは止めていない。終端の無いまま閉じれば画面は張り直す
+      expect(frames(seen).map((frame) => frame.event)).not.toContain('error');
+      expect(frames(seen).map((frame) => frame.event)).not.toContain('done');
+      expect(seen).toContain(': この接続が読むのに追いつかず、送り待ちの出来事が上限を超えた');
       // 溢れた後に積まれた分（最後の1件）は流さない
       expect(seen).not.toContain('溜まる5');
       // 手放すのは購読だけ
