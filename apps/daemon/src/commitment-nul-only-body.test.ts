@@ -66,4 +66,21 @@ describe('commitments の HTTP の口と NUL だけの本文', () => {
     expect(edited.status).toBe(200);
     expect((await stores.commitments.get(id))?.body).toBe('直した');
   });
+
+  it('空白だけの body も 400 で断る: POST は行を作らず、PATCH は元の本文を残す（#4816）', async () => {
+    const { stores, send } = setup();
+    const opened = await send('POST', '/commitments', { body: '   ' });
+    expect(opened.status).toBe(400);
+    expect((await stores.commitments.list()).entries).toEqual([]);
+
+    await stores.commitments.open({
+      id: 'c-blank',
+      at: '2026-10-06T00:00:00.000Z',
+      origin: 'human',
+      body: '元の本文',
+    });
+    const edited = await send('PATCH', '/commitments/c-blank', { body: ' \u0000\t\n' });
+    expect(edited.status).toBe(400);
+    expect((await stores.commitments.get('c-blank'))?.body).toBe('元の本文');
+  });
 });

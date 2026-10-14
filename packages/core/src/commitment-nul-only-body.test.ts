@@ -68,4 +68,22 @@ describe('commitment_open / commitment_edit と NUL だけの本文', () => {
     const { entries } = await stores.commitments.list();
     expect(entries.map((entry) => entry.body)).toEqual(['宿題']);
   });
+
+  it('commitment_open / commitment_edit: 空白だけの body も断る（#4816）', async () => {
+    const { stores, call } = setup();
+
+    const opened = await call('commitment_open', { body: '  \u0000 \n' });
+    expect((await stores.commitments.list()).entries).toEqual([]);
+    expect(opened).toContain('body');
+
+    await stores.commitments.open({
+      id: 'c-blank-edit',
+      at: '2026-10-06T00:00:00.000Z',
+      origin: 'self',
+      body: '元の本文',
+    });
+    const edited = await call('commitment_edit', { id: 'c-blank-edit', body: '   ' });
+    expect((await stores.commitments.get('c-blank-edit'))?.body).toBe('元の本文');
+    expect(edited).toContain('body');
+  });
 });
