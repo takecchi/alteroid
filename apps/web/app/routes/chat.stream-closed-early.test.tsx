@@ -109,6 +109,19 @@ describe('終端が無いまま閉じた送信（#3564）', () => {
     expect(stub.entries.filter((e) => e.url.endsWith('/chat')).length).toBe(1);
   });
 
+  it('⭐ 受け取り済みの送り直し（open に duplicate）だけで閉じたら、「途中で切れた」と言わない（#4745）', async () => {
+    const stub = setUp({
+      chat: [{ event: 'open', data: { conversationId: ID, duplicate: true } }],
+    });
+    renderChat(`/chat/${ID}`);
+    await sendText('もう受け取られていた発言');
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: /受信をやめる/ })).toBeNull());
+    expect(stub.entries.filter((e) => e.url.endsWith('/chat')).length).toBe(1);
+    expect(screen.queryByText(CLOSED_EARLY)).toBeNull();
+    expect(screen.queryByText(/送れたか確かめられなかった/)).toBeNull();
+  });
+
   it('done が来て閉じたなら黙る（陰性対照）', async () => {
     setUp({
       chat: [
