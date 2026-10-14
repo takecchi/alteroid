@@ -38,22 +38,32 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
     }
 
     // 1文にまとめない: 片方の衝突指定が他方に効いて、uuid 無しの行が黙って落ちるため。
-    const idempotent = entries.filter((entry) => typeof entry.uuid === 'string');
-    const plain = entries.filter((entry) => typeof entry.uuid !== 'string');
+    // 種類ごとに分けて積まない（#4729）: 分けると uuid 無しの行が後ろへ回り、SDK の約束（1回の append の中は渡された順で積む）を破るため。
+    // 渡された順のまま、同じ種類が続く区間ごとに1文で積む
+    const runs: { idempotent: boolean; entries: SessionStoreEntry[] }[] = [];
+    for (const entry of entries) {
+      const idempotent = typeof entry.uuid === 'string';
+      const last = runs.at(-1);
+      if (last !== undefined && last.idempotent === idempotent) last.entries.push(entry);
+      else runs.push({ idempotent, entries: [entry] });
+    }
 
     await this.#db.transaction(async (tx) => {
-      if (idempotent.length > 0) {
+      for (const run of runs) {
+        const values = run.entries.map((entry) => ({
+          projectKey: key.projectKey,
+          sessionId: key.sessionId,
+          subpath,
+          uuid: run.idempotent ? (entry.uuid ?? null) : null,
+          entry: stripNulls(entry),
+        }));
+        if (!run.idempotent) {
+          await tx.insert(sessionEntries).values(values);
+          continue;
+        }
         await tx
           .insert(sessionEntries)
-          .values(
-            idempotent.map((entry) => ({
-              projectKey: key.projectKey,
-              sessionId: key.sessionId,
-              subpath,
-              uuid: entry.uuid ?? null,
-              entry: stripNulls(entry),
-            })),
-          )
+          .values(values)
           .onConflictDoNothing({
             target: [
               sessionEntries.projectKey,
@@ -64,18 +74,6 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
             // 述語を省かない: 部分ユニーク索引が選ばれず、同じ行が二重に積まれるため。
             where: sql`${sessionEntries.uuid} is not null`,
           });
-      }
-
-      if (plain.length > 0) {
-        await tx.insert(sessionEntries).values(
-          plain.map((entry) => ({
-            projectKey: key.projectKey,
-            sessionId: key.sessionId,
-            subpath,
-            uuid: null,
-            entry: stripNulls(entry),
-          })),
-        );
       }
 
       await tx
