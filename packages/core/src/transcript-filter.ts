@@ -1,3 +1,11 @@
+import {
+  eachLine,
+  LOOP_YIELD_CHARS,
+  runSteps,
+  runStepsYielding,
+  type YieldingSteps,
+} from './loop-yield.js';
+
 export interface TranscriptFilterInput {
   since?: string;
   until?: string;
@@ -15,13 +23,6 @@ export interface TranscriptFilterCounts {
 export interface TranscriptFilterResult {
   body: string;
   counts: TranscriptFilterCounts;
-}
-
-function splitTranscriptLines(body: string): string[] {
-  if (body === '') return [];
-  const lines = body.split('\n');
-  if (lines[lines.length - 1] === '') lines.pop();
-  return lines;
 }
 
 function timestampMs(value: unknown): number | null {
@@ -43,11 +44,11 @@ function parseIsoBoundary(field: 'since' | 'until', value: string | undefined): 
   return ms;
 }
 
-export function filterTranscriptLines(
+function* filterSteps(
   body: string,
   filter: TranscriptFilterInput,
-): TranscriptFilterResult {
-  const lines = splitTranscriptLines(body);
+  yieldChars: number,
+): YieldingSteps<TranscriptFilterResult> {
   const sinceMs = parseIsoBoundary('since', filter.since);
   const untilMs = parseIsoBoundary('until', filter.until);
   const windowActive = sinceMs !== undefined || untilMs !== undefined;
@@ -62,7 +63,9 @@ export function filterTranscriptLines(
   const kept: string[] = [];
   const needsParse = windowActive || types !== undefined;
 
-  for (const line of lines) {
+  let totalLines = 0;
+  const visit = (line: string): void => {
+    totalLines++;
     let parsed: unknown;
     let parseOk = true;
     if (needsParse) {
@@ -80,40 +83,65 @@ export function filterTranscriptLines(
     if (windowActive) {
       if (!parseOk) {
         unparsableLines++;
-        continue;
+        return;
       }
       const ms = timestampMs(record.timestamp);
       if (ms === null) {
         noTimestampLines++;
-        continue;
+        return;
       }
       // until は含まない: 窓を連続して読み進めたとき境界の1行が重複も欠落もしないため
-      if (sinceMs !== undefined && ms < sinceMs) continue;
-      if (untilMs !== undefined && ms >= untilMs) continue;
+      if (sinceMs !== undefined && ms < sinceMs) return;
+      if (untilMs !== undefined && ms >= untilMs) return;
     }
 
     if (types !== undefined) {
       if (!parseOk) {
         unparsableLines++;
-        continue;
+        return;
       }
       const t = record.type;
-      if (typeof t !== 'string' || !types.has(t)) continue;
+      if (typeof t !== 'string' || !types.has(t)) return;
     }
 
-    if (contains !== undefined && !line.includes(contains)) continue;
+    if (contains !== undefined && !line.includes(contains)) return;
 
     matchedLines++;
     kept.push(line);
+  };
+
+  // 全体を `split` で割らない: 数百 MB の生ログでは、割るだけでループを塞ぐため（#4659）
+  // `split` と同じ行を数える: 空の本文は0行、末尾の改行の後ろの空行は数えない
+  if (body !== '') {
+    yield* eachLine(body, yieldChars, (line, _start, end) => {
+      if (line === '' && end === body.length) return;
+      visit(line);
+    });
   }
 
   return {
     body: kept.join('\n'),
     counts: {
-      totalLines: lines.length,
+      totalLines,
       matchedLines,
       noTimestampLines,
       unparsableLines,
     },
   };
+}
+
+export function filterTranscriptLines(
+  body: string,
+  filter: TranscriptFilterInput,
+): TranscriptFilterResult {
+  return runSteps(filterSteps(body, filter, LOOP_YIELD_CHARS));
+}
+
+/** {@link filterTranscriptLines} と同じ結果を、約 `yieldChars` 字ごとにループへ順番を返しながら作る（#4659）。 */
+export function filterTranscriptLinesYielding(
+  body: string,
+  filter: TranscriptFilterInput,
+  yieldChars: number = LOOP_YIELD_CHARS,
+): Promise<TranscriptFilterResult> {
+  return runStepsYielding(filterSteps(body, filter, yieldChars));
 }
