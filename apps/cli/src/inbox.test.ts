@@ -190,8 +190,11 @@ describe('alteroid inbox remove — 応答の表示', () => {
         },
       },
     ];
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-15T01:02:03.004Z'));
     const read = captureStdout();
     await inboxRemoveCommand({ types: 'manager_message', reason: 'r', limit: '10' });
+    vi.useRealTimers();
 
     const text = read();
     expect(text).toContain('[試算]');
@@ -201,8 +204,46 @@ describe('alteroid inbox remove — 応答の表示', () => {
     expect(text).toContain('1件も消していません');
     expect(text).toContain('--execute');
     expect(text).toContain(
-      "alteroid inbox remove --types 'manager_message' --reason 'r' --limit '10' --execute",
+      "alteroid inbox remove --types 'manager_message' --before '2026-10-15T01:02:03.004Z' --reason 'r' --limit '10' --execute",
     );
+  });
+
+  it('⭐ 試算が案内する --execute は、--before を試算を送った時刻に固定する: 試算より後に届いた合図まで消さない（#4806）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-15T01:02:03.004Z'));
+    const read = captureStdout();
+    await inboxRemoveCommand({ types: 'external', reason: 'r' });
+    vi.useRealTimers();
+
+    const text = read();
+    expect(text).toContain(
+      "alteroid inbox remove --types 'external' --before '2026-10-15T01:02:03.004Z' --reason 'r' --execute",
+    );
+    expect(text).toContain('試算より後に届いた合図は消さない');
+  });
+
+  it('渡した --before が試算の時刻より前ならそのまま使い、後なら試算の時刻に縮める（#4806）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-15T01:02:03.004Z'));
+    const earlier = captureStdout();
+    await inboxRemoveCommand({
+      types: 'external',
+      reason: 'r',
+      before: '2026-10-01T00:00:00+09:00',
+    });
+    expect(earlier()).toContain("--before '2026-10-01T00:00:00+09:00'");
+    vi.restoreAllMocks();
+
+    const later = captureStdout();
+    await inboxRemoveCommand({
+      types: 'external',
+      reason: 'r',
+      before: '2026-12-01T00:00:00+09:00',
+    });
+    vi.useRealTimers();
+    const text = later();
+    expect(text).toContain("--before '2026-10-15T01:02:03.004Z'");
+    expect(text).not.toContain('2026-12-01');
   });
 
   it('⭐ 試算でも対象の id を「消すことになる id」として全部並べ、実行コマンドの案内より前に出す（Issue #4082）', async () => {
