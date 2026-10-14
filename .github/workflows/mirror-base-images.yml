@@ -12,6 +12,7 @@ name: ベースイメージを GHCR へ写す
 # ビルドに触れないため）。CI は写しから焼き、写しが無い・取れないときは ECR Public へ戻る
 # （`ci.yml` の `image`、`storage-pg-real-postgres.yml`）。
 #
+# 取り元は ECR Public・mirror.gcr.io・Docker Hub の順に試す（どれも同じ公式像）。
 # **digest をそのまま保つ**（`skopeo copy --all --preserve-digests`）。`FROM` は digest で固定して
 # あるので、CI は写しも同じ digest で取る＝中身が同じであることが digest で保証される。
 #
@@ -75,18 +76,28 @@ jobs:
             case "$src" in
               *@sha256:*)
                 base=${src%@*}
-                from="${base%:*}@${src#*@}"
+                path="${base%:*}"
+                ref="@${src#*@}"
                 ;;
-              *) from=$src ;;
+              *)
+                path="${src%:*}"
+                ref=":${src##*:}"
+                ;;
             esac
-            # ECR Public の取得制限に当たったら待って2回まで試し直す
+            name=${path#public.ecr.aws/docker/library/}
+            # 取り元は ECR Public → mirror.gcr.io（Google の Docker Hub の写し）→ Docker Hub の順。どれも同じ公式像で、
+            # digest で固定した元は下で digest を確かめるので、どこから取っても中身は同じ。ECR Public だけに頼ると、
+            # その 429 の間は写しも作れないため（この PR の1回目の CI で踏んだ）
             ok=false
-            for attempt in 1 2 3; do
-              if skopeo copy --all --preserve-digests --retry-times 3 "docker://$from" "docker://$dst"; then
-                ok=true
-                break
-              fi
-              echo "写せなかった（$attempt 回目）: $src" >&2
+            for attempt in 1 2; do
+              for from in "$path$ref" "mirror.gcr.io/library/$name$ref" "docker.io/library/$name$ref"; do
+                if skopeo copy --all --preserve-digests --retry-times 2 "docker://$from" "docker://$dst"; then
+                  ok=true
+                  echo "取り元: $from"
+                  break 2
+                fi
+                echo "写せなかった（$attempt 回目）: $from" >&2
+              done
               sleep 60
             done
             "$ok" || { echo "写せなかった: $src" >&2; exit 1; }
