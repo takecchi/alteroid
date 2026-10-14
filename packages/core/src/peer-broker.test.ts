@@ -750,6 +750,45 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     broker.closeAll();
   });
 
+  it('⭐ 相手が落ちて終わったセッションは一覧から外し、peer_reply には理由つきで「終わっている」と返す（#4764）', async () => {
+    const { broker, seen } = makeBroker(() => {
+      throw new Error('app-server が落ちた（試験）');
+    });
+    const first = foreground(await broker.run('codex', '調べて'));
+    expect(first.ok).toBe(false);
+    const replied = await broker.reply(first.sessionId, '続き');
+    expect(replied).toContain('終わっている');
+    expect(replied).toContain('app-server が落ちた（試験）');
+    // 外した後は畳みで閉じ直さない（一覧に残っていないことの観測）
+    broker.closeAll();
+    expect(seen.closed).toBe(0);
+  });
+
+  it('⭐ 背景で待っている間に落ちたセッションは、止まりどころを知らせてから一覧から外す（#4764）', async () => {
+    const gate = deferred();
+    const { broker, seen, stops } = makeBroker(async () => {
+      await gate.promise;
+      throw new Error('背景で落ちた（試験）');
+    });
+    const started = await broker.run('codex', '長い仕事', { background: true });
+    const sessionId = (started as { sessionId: string }).sessionId;
+    expect(broker.backgroundTasks()).toHaveLength(1);
+    gate.resolve();
+    await until(() => stops.length === 1);
+    expect(stops[0]?.result).toMatchObject({ sessionId, ok: false });
+    expect(broker.backgroundTasks()).toEqual([]);
+    expect(await broker.reply(sessionId, '続き')).toContain('終わっている');
+    broker.closeAll();
+    expect(seen.closed).toBe(0);
+  });
+
+  it('対照: 終わっていないセッションは畳みで閉じる（#4764）', async () => {
+    const { broker, seen } = makeBroker((turn) => [turnEnded(`答え${turn}`)]);
+    foreground(await broker.run('codex', '調べて'));
+    broker.closeAll();
+    expect(seen.closed).toBe(1);
+  });
+
   it('closeAll は開いた peer セッションを全部閉じる', async () => {
     const { broker, seen } = makeBroker(() => [turnEnded('ok')]);
     await broker.run('codex', 'a');
