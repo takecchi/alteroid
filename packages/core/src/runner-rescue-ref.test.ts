@@ -166,6 +166,23 @@ describe('担当を畳むときにも退避 ref を撃つ（#4677）', () => {
   });
 });
 
+describe('畳む直前に止めた担当の退避を、畳みが待つ（#4789）', () => {
+  it('⭐ デーモンの指示で止めた直後に runner を畳んでも、畳みが返った時点で止めた担当の退避は済んでいる', async () => {
+    const { host, events } = setup(3_600_000);
+    await host.start({ managerId: 'mgr-4789stop', request: '依頼', cwd: repo });
+    await writeFile(path.join(repo, 'a.txt'), 'edited before stop and shutdown\n');
+
+    await host.stop('mgr-4789stop');
+    await host.shutdown();
+
+    const found = rescueEvents(events).filter((event) => event.managerId === 'mgr-4789stop');
+    expect(found).toHaveLength(1);
+    expect(g(bare, 'show', `${found[0]?.worktrees[0]?.pushed?.ref as string}:a.txt`)).toBe(
+      'edited before stop and shutdown\n',
+    );
+  });
+});
+
 describe('担当が終わったときにも退避 ref を撃つ（#4677）', () => {
   it('結果を出さないまま CLI が終わった担当（#finish の経路）も、終わった時点の変更を退避する', async () => {
     const events: RunnerEvent[] = [];
