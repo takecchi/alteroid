@@ -722,13 +722,29 @@ export async function ensureAuthAccountsEmailLowerIndex(
   }
 }
 
+/** 1つの文がロックを待つ上限（ms。#4747）。 */
+export const MIGRATION_LOCK_TIMEOUT_MS = 5_000;
+// 挑み直しの間隔と回数: 間隔 1 秒・最大 60 回で、ロックの待ち（5 秒）と合わせて1つの文につき最長約6分。全体は起動の期限（10 分）が切る
+const MIGRATION_RETRY_DELAY_MS = 1_000;
+const MIGRATION_MAX_ATTEMPTS = 60;
+// 挑み直す失敗: ロックが取れない（55P03）・デッドロック（40P01）・2つのデーモンが同時に作った（23505 / 42P07 / 42710。2回目は `if not exists` で何もしない）
+const RETRYABLE_MIGRATION_CODES = new Set(['55P03', '40P01', '23505', '42P07', '42710']);
+
+export interface MigrateOptions {
+  /** 試験が縮めるための口。既定 {@link MIGRATION_LOCK_TIMEOUT_MS}。 */
+  readonly lockTimeoutMs?: number;
+  readonly retryDelayMs?: number;
+  readonly maxAttempts?: number;
+}
+
 // `warn` を差し替えられるのはテストのため: 警告が出たことと逐語を歯で測れないと、「索引が作られなかった」状態が誰にも見えないまま運用へ出る。
 export async function migrate(
   db: Db,
   warn: (line: string) => void = (line) => process.stderr.write(line),
+  options: MigrateOptions = {},
 ): Promise<void> {
   for (const statement of STATEMENTS) {
-    await db.execute(sql.raw(statement));
+    await runMigrationStatement(db, statement, warn, options);
   }
   await ensureOpenManagerBodyIndex(db, warn);
   await ensureAuthAccountsEmailLowerIndex(db, warn);
@@ -782,4 +798,53 @@ async function appliedStatementsFingerprint(db: Db): Promise<string | undefined>
   } catch {
     return undefined;
   }
+}
+
+/**
+ * 1つの文を、その文だけのトランザクションの中でロックの待ちに上限を掛けて流す（#4747）。
+ * 上限を掛ける: 掛けないと、先行の長い読みがある間 ALTER がテーブルのロックを待ち続け、後ろに並んだ問い合わせ（入れ替え前のデーモンの読み書き）が全部止まるため。
+ * 取れなければ少し置いて挑み直す: 待ちを切って列を空け、先行の読みが終わった後に取る。
+ * 2つのデーモンが空の DB へ同時に流した競合（`create table if not exists` が型の一意違反などで落ちる）も同じく挑み直す: 2回目は `if not exists` で何もしない。
+ */
+async function runMigrationStatement(
+  db: Db,
+  statement: string,
+  warn: (line: string) => void,
+  options: MigrateOptions,
+): Promise<void> {
+  const lockTimeoutMs = options.lockTimeoutMs ?? MIGRATION_LOCK_TIMEOUT_MS;
+  const retryDelayMs = options.retryDelayMs ?? MIGRATION_RETRY_DELAY_MS;
+  const maxAttempts = options.maxAttempts ?? MIGRATION_MAX_ATTEMPTS;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await db.transaction(async (tx) => {
+        await tx.execute(
+          sql.raw(`set local lock_timeout = ${String(Math.max(1, Math.floor(lockTimeoutMs)))}`),
+        );
+        await tx.execute(sql.raw(statement));
+      });
+      return;
+    } catch (error) {
+      const code = pgErrorCode(error);
+      if (code === undefined || !RETRYABLE_MIGRATION_CODES.has(code) || attempt >= maxAttempts) {
+        throw error;
+      }
+      warn(
+        `alteroid: マイグレーションの文を流せなかった（code=${code}、${String(attempt)} 回目）。` +
+          `${String(retryDelayMs)}ms 置いて挑み直す（#4747）: ${statement.replace(/\s+/g, ' ').slice(0, 80)}\n`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
+}
+
+// drizzle は pg の例外を包むので、`cause` を辿って SQLSTATE を探す
+function pgErrorCode(error: unknown): string | undefined {
+  for (let current: unknown = error, depth = 0; current !== undefined && depth < 5; depth += 1) {
+    if (typeof current !== 'object' || current === null) return undefined;
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) return code;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
 }
