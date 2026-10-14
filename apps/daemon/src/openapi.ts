@@ -5,6 +5,7 @@ import {
   agentTokenInputSchema,
   agentTokenViewSchema,
   APPROVAL_TRACE_STATES,
+  CREDENTIAL_NAME,
   commitmentSchema,
   createMemoryStores,
   INBOX_EVENT_TYPE_ORDER,
@@ -1244,8 +1245,10 @@ export const credentialsResponseSchema = z.object({
   credentials: z.array(credentialFingerprintWithMetaSchema),
 });
 
-// 名前の形は `runnerCredentialSchema` をそのまま使う: 名前は器の中のファイル名になり、パスとして解釈されうる形を最初から認めないため。2つ書くと必ずずれる。
+// 名前の形は `runnerCredentialSchema` と同じ `CREDENTIAL_NAME` で見る: 名前は器の中のファイル名になり、パスとして解釈されうる形を最初から認めないため。
+// 長さの上限だけはここで見ない（#4818）: 上限を超える古い行を値を空にして外せなくなるため。値を置くときの上限はサービス層（`CredentialEntryRejectedError`）が断る。
 const credentialInputSchema = runnerCredentialSchema.extend({
+  name: z.string().min(1).regex(CREDENTIAL_NAME, '鍵の名前は英大文字・数字・_ のみ'),
   scope: credentialScopeSchema.optional(),
   secret: z.boolean().optional(),
 });

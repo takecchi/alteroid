@@ -26461,7 +26461,6 @@
                         "name": {
                           "type": "string",
                           "minLength": 1,
-                          "maxLength": 128,
                           "pattern": "^[A-Z][A-Z0-9_]*$"
                         },
                         "value": {
