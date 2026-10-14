@@ -1132,6 +1132,91 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
+  it('⭐ runner が持っていない確認への答えは、台帳の待ちからも外し、取り下げとして日誌に残す（#4775）', async () => {
+    // 可変箱に包む: 素の `let emit` を複数メソッドから触ると、呼び出し側の参照が `never` に narrowing されるため。
+    const wired: { emit: ((event: RunnerEvent) => void) | null } = { emit: null };
+    const legacyRunner: RunnerClient = {
+      runnerId: 'runner-legacy',
+      runnerIdKnown: true,
+      workspacePathKnown: true,
+      workspacePath: '/work/project',
+      async connect(onEvent) {
+        wired.emit = onEvent;
+      },
+      async start(): Promise<{ cwd?: string }> {
+        return {};
+      },
+      async resume(): Promise<{ cwd?: string }> {
+        return {};
+      },
+      async send() {
+        return true;
+      },
+      async answer() {
+        // runner はもうこの確認を持っていない（中断で解けた・器が入れ替わった）
+        return { delivered: false };
+      },
+      async stop() {
+        /* この検証では使わない */
+      },
+      async list() {
+        return [];
+      },
+      async transcript() {
+        return null;
+      },
+      async credentials() {
+        return [];
+      },
+      async setCredentials() {
+        return [];
+      },
+      async profile() {
+        return undefined;
+      },
+      async setProfile() {
+        return { ok: true };
+      },
+      async close() {
+        /* この検証では使わない */
+      },
+    };
+    const s = setup(undefined, { runner: legacyRunner });
+    const { managerId } = await s.pool.start({ request: 'デプロイして' });
+
+    wired.emit?.({
+      type: 'ask',
+      managerId,
+      requestId: 'req-legacy',
+      kind: 'permission',
+      summary: 'Bash の実行許可: git push',
+      askedAt: new Date().toISOString(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const first = await s.pool.send(managerId, 'よい', { decision: 'allow' });
+    expect(first.outcome).toBe('unknown');
+    expect(first.detail).toContain('既に解けている');
+
+    const job = (await s.stores.jobs.listJobs()).find((candidate) => candidate.id === managerId);
+    expect(job?.status).not.toBe('waiting_human');
+    const withdrawn = (await s.stores.journal.list({ types: ['escalation'] })) as {
+      approvalId?: string;
+      withdrawnAt?: string;
+    }[];
+    expect(
+      withdrawn.some(
+        (entry) => entry.approvalId === 'req-legacy' && entry.withdrawnAt !== undefined,
+      ),
+    ).toBe(true);
+
+    // 外したので、次の決定つきの送信は古い確認を選ばない
+    const second = await s.pool.send(managerId, 'よい', { decision: 'allow' });
+    expect(second.detail ?? '').not.toContain('既に解けている');
+
+    await s.pool.stop();
+  });
+
   it('中断で解けた確認は待ち行列に残らない（次の指示を食い潰さない）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '調べて' });
