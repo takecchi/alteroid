@@ -692,6 +692,33 @@ describe('HTTP API', () => {
       });
     });
 
+    it('⭐ 受け手が読まずに書き出しが返らなければ、期限で流れを畳み、購読を外す（#4671）', async () => {
+      const guarded = createApp({
+        clone: fake.clone,
+        stores,
+        token: 'test-token',
+        shutdown: () => undefined,
+        scheduler: schedule.scheduler,
+        journalEvents: journalBus,
+        sseWriteDeadlineMs: 50,
+      });
+      fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
+      const response = await guarded.request('/chat/conv-a/stream');
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      // 購読が始まったことを確かめる。以後は読まない（受け手が止まった）
+      await readUntil(reader, 'event: thinking');
+      expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(1);
+
+      // 書き出しが詰まるまで出来事を積む（大きい本文で、読まない受け手の手前の溜めを埋める）
+      for (let i = 0; i < 20; i += 1) {
+        fake.emit('conv-a', { type: 'text', text: `詰まる${String(i)}${'あ'.repeat(200_000)}` });
+      }
+      await vi.waitFor(() => expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(0), {
+        timeout: 5_000,
+      });
+      await reader.cancel().catch(() => undefined);
+    });
+
     it('進行中でなければ open(inProgress: false, pending: []) だけで閉じ、購読を残さない', async () => {
       const response = await app.request('/chat/conv-none/stream');
       expect(response.status).toBe(200);
