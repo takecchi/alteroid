@@ -50,6 +50,11 @@ import {
   contextUsageWithin,
 } from './context-usage.js';
 import {
+  CLONE_INTERRUPT_TIMEOUT_MS,
+  controlRequestWithin,
+  ControlRequestTimeoutError,
+} from './control-deadline.js';
+import {
   completedTimerRoundVerdict,
   restoredInboxEventVerdict,
   type RestoredInboxEventVerdict,
@@ -602,6 +607,8 @@ export interface CloneOptions {
   dailyReportRetryDelaysMs?: readonly number[];
   restoreUnreadRetryDelaysMs?: readonly number[];
   contextUsageTimeoutMs?: number;
+  /** 人間の「止める」操作が `interrupt` の答えを待つ期限（既定 {@link CLONE_INTERRUPT_TIMEOUT_MS}。#4664）。試験が短くするための口。 */
+  interruptTimeoutMs?: number;
   profile?: ProfileApplier;
   // デーモンが作った同じインスタンスを渡す: 別のインスタンスを持つと直列化の意味が消え、層ごとに違う本文が残るため
   profileService?: ProfileService;
@@ -797,6 +804,7 @@ class Clone implements CloneHost {
   readonly #dailyReportRetryDelays: readonly number[];
   readonly #restoreUnreadRetryDelays: readonly number[];
   readonly #contextUsageTimeoutMs: number;
+  readonly #interruptTimeoutMs: number;
   readonly #dailyReportRetries = new Map<string, number>();
   readonly #dailyReportRetryTimers = new Set<ReturnType<typeof setTimeout>>();
   readonly #mcpServerFactory: typeof createCloneMcpServer;
@@ -1010,6 +1018,7 @@ class Clone implements CloneHost {
       dailyReportRetryDelaysMs,
       restoreUnreadRetryDelaysMs,
       contextUsageTimeoutMs,
+      interruptTimeoutMs,
       profile,
       profileService,
       credentialService,
@@ -1047,6 +1056,7 @@ class Clone implements CloneHost {
     this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
     this.#restoreUnreadRetryDelays = restoreUnreadRetryDelaysMs ?? RESTORE_UNREAD_RETRY_DELAYS_MS;
     this.#contextUsageTimeoutMs = contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
+    this.#interruptTimeoutMs = interruptTimeoutMs ?? CLONE_INTERRUPT_TIMEOUT_MS;
     this.#env = envSource;
     this.#childEnvBase = childEnvBase ?? envSource;
     this.#credentials = credentials;
@@ -1559,8 +1569,22 @@ class Clone implements CloneHost {
     }
 
     try {
-      await q.interrupt();
+      // 期限を付ける（#4664）: CLI が生きたまま答えないと、人間の要求が返らず、日誌には「止めた」だけが残るため
+      await controlRequestWithin(q.interrupt(), this.#interruptTimeoutMs, 'interrupt');
     } catch (error) {
+      if (error instanceof ControlRequestTimeoutError) {
+        // 「止められなかった」と書かない: 答えが無かっただけで、合図が届いて止まった可能性も残るため
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text:
+            `${EXCHANGE_KIND_FAILURE_PREFIX}止める合図（interrupt）に CLI が ${String(error.timeoutMs)}ms 以内に答えなかった。` +
+            '止まったかは分からない（直前の「止めた」の行は確かではない。このターンの終わりの行で確かめる）',
+          ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
+        });
+        throw error;
+      }
       // 伏せる手がかりの env は `process.env` でなく注入された `this.#env` を渡す: `process.env` だと器の環境変数の値に一致する字面まで伏せ、結果が器ごとに変わるため
       await this.#journal({
         type: 'exchange',
