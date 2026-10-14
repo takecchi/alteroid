@@ -128,6 +128,9 @@ function closedQuietlyNotice(sawEvent: boolean): string {
     : '応答が来ないまま接続が閉じた。発言が受け取られたかは分からない（次の送信の前に確かめ直す）';
 }
 
+const FOLLOW_UP_CLOSED_EARLY_MESSAGE =
+  '追送は受け取られなかった（デーモンが受け取りを返さないまま接続を閉じた）。文を入力欄へ戻した。同じ文で送り直せば二重には届かない';
+
 export const RESUME_PROBE_LIMIT = 5;
 
 class ReplyOutcome {
@@ -172,6 +175,8 @@ export class ChatController {
   private uploadAbort: AbortController | null = null;
   // 新しい会話のまま送らない: 添付が最初の会話に結び付いたまま新しい会話として送ると `attachment_conflict` になるため
   private unopened: string | null = null;
+  // open を見ずに閉じた追送の id（#4697）: 同じ文を送り直すときに使い回す。実は受け取られていても、デーモンが重複として前の受け取りを返すので二重に届かない
+  private unsentFollowUp: { readonly key: string; readonly clientMessageId: string } | null = null;
   private lookingUp = false;
   // 直前の /files の並び（番号の引き先）。消したものは null で空けておく
   private fileList: {
@@ -917,10 +922,13 @@ export class ChatController {
         .filter((l) => l !== '')
         .join('\n'),
     );
-    const clientMessageId = randomUUID();
+    const unsentKey = `${edit === null ? '' : edit.id}\u0000${text}`;
+    const clientMessageId =
+      this.unsentFollowUp?.key === unsentKey ? this.unsentFollowUp.clientMessageId : randomUUID();
     // 接続が途中で切れた場合は送り直さない: 受け取られたか分からないため
     let posted = false;
     let sawEvent = false;
+    let sawOpen = false;
     let rejected = false;
     try {
       if (opened === null) throw new Error('会話が始まっていないので、続きを送れなかった');
@@ -940,11 +948,16 @@ export class ChatController {
           abort.signal,
         )) {
           sawEvent = true;
-          if (event.type === 'open') break;
+          if (event.type === 'open') {
+            sawOpen = true;
+            break;
+          }
         }
       } finally {
         abort.abort();
       }
+      // open を見ずに閉じた流れを「送れた」にしない（#4697）: デーモンは受信箱へ書けなかった発言を open なしで閉じ、受け取っていない
+      if (!sawOpen) throw new NotDeliveredError(FOLLOW_UP_CLOSED_EARLY_MESSAGE);
     } catch (error) {
       rejected =
         !sawEvent &&
@@ -958,6 +971,7 @@ export class ChatController {
     if (!sawEvent) this.draft.restore(attached.files);
     if (edit !== null && sawEvent) this.editStash.delete(editKey(edit));
     if (edit !== null && sawEvent && this.editing === edit) this.editing = null;
+    this.unsentFollowUp = rejected && posted ? { key: unsentKey, clientMessageId } : null;
     if (rejected) this.markUnsent(userSeq);
     return !rejected;
   }
