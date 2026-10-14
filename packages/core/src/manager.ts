@@ -3497,9 +3497,16 @@ class Pool implements ManagerPool {
         ...(decision === undefined ? {} : { decision }),
       });
       if (!answered.delivered) {
+        // runner がもう持っていない確認は台帳の待ちからも外す（#4775）: 残すと、requestId を付けない次の答えも同じ古い確認を選び、届かないまま担当が waiting_human に残るため
+        const dropped = this.#dropUndeliveredWaiting(record, pending.requestId);
+        if (dropped) await this.#persist(record);
         return {
           outcome: 'unknown',
-          detail: `${pending.requestId} は runner 側で既に解けている。`,
+          detail:
+            `${pending.requestId} は runner 側で既に解けている。` +
+            (dropped
+              ? '台帳の待ちからも外した（次の送信はこの確認への答えとしては扱われない）。'
+              : ''),
         };
       }
       await this.#journal({
@@ -10882,6 +10889,29 @@ class Pool implements ManagerPool {
    * 書かないと、器と一緒に消えた確認が日誌の上で「未回答」のまま残り、クローンも人間も答えようの無い確認を有効なものとして見続ける。
    * 待たない（`#journal` は投げない）: 呼び手には同期の経路（`markMissing`）がある。
    */
+  /**
+   * 1件だけ外して取り下げを日誌に残す（#4775）。外したら `true`。待ちが空になれば `waiting_human` を `running` に戻す（`case 'settled'` と同じ扱い）。
+   * 待たない（`#journal` は投げない）: `#withdrawWaiting` と同じ。
+   */
+  #dropUndeliveredWaiting(record: ManagerRecord, requestId: string): boolean {
+    const item = record.waiting.find((candidate) => candidate.requestId === requestId);
+    if (item === undefined) return false;
+    record.waiting = record.waiting.filter((candidate) => candidate.requestId !== requestId);
+    if (record.job.status === 'waiting_human' && record.waiting.length === 0) {
+      record.job.status = 'running';
+    }
+    void this.#journal({
+      type: 'escalation',
+      question: item.summary,
+      approvalId: item.requestId,
+      managerId: record.job.id,
+      withdrawnAt: new Date(this.#now()).toISOString(),
+      withdrawnReason:
+        'この確認への答えは届かない（答えを送ったが、runner はこの確認をもう持っていなかった）',
+    });
+    return true;
+  }
+
   #withdrawWaiting(record: ManagerRecord, reason: string): void {
     const dropped = record.waiting;
     record.waiting = [];
