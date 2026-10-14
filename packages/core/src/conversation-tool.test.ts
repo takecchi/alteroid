@@ -30,9 +30,21 @@ function tools(stores: Stores) {
 function spyOnList(stores: Stores): JournalQuery[] {
   const calls: JournalQuery[] = [];
   const original = stores.journal.list.bind(stores.journal);
+  const originalPage = stores.journal.listPage.bind(stores.journal);
+  // 窓は `listPage` で読む（終端を `next` で決めるため）。インメモリの `listPage` は内部で `list` を余り1件付きで呼ぶので、頁の中の呼び出しは数えず、頁へ渡された問い合わせを1件として積む
+  let inPage = false;
   stores.journal.list = async (query?: JournalQuery) => {
-    calls.push(query ?? {});
+    if (!inPage) calls.push(query ?? {});
     return original(query);
+  };
+  stores.journal.listPage = async (query?: JournalQuery) => {
+    calls.push(query ?? {});
+    inPage = true;
+    try {
+      return await originalPage(query);
+    } finally {
+      inPage = false;
+    }
   };
   return calls;
 }
@@ -127,7 +139,7 @@ describe('conversation_read — 窓が小さくても manager の往復に食わ
 });
 
 describe('conversation_read — since / until の伝播', () => {
-  it('since / until が stores.journal.list へそのまま降りる', async () => {
+  it('since / until が stores.journal.list（窓は listPage）へそのまま降りる', async () => {
     const stores = createMemoryStores();
     const calls = spyOnList(stores);
     await humanTurn(stores, 'conv-1', '質問', '返答');
