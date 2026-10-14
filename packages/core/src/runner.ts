@@ -2559,14 +2559,12 @@ class RunnerSession {
           ? new Promise<AgentPermissionDecision>((resolve) => {
               binding.heldAsks.push({
                 run: () => {
-                  binding.session
-                    .#onPermission(request, source)
-                    .then(resolve, (error: unknown) =>
-                      resolve({
-                        behavior: 'deny',
-                        message: `確認を上げられなかった: ${reasonOf(error)}`,
-                      }),
-                    );
+                  binding.session.#onPermission(request, source).then(resolve, (error: unknown) =>
+                    resolve({
+                      behavior: 'deny',
+                      message: `確認を上げられなかった: ${reasonOf(error)}`,
+                    }),
+                  );
                 },
                 deny: (message) => resolve({ behavior: 'deny', message }),
               });
