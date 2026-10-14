@@ -9831,7 +9831,7 @@ export function createApp(deps: AppDeps) {
         responses: {
           200: {
             description:
-              '取り消した（既に未許可でも 200。その場合、日誌には「取り消していない（既に未許可だった）」と残る）。',
+              '取り消した（既に未許可でも 200。その場合、日誌には「アクセス許可の取り消し（読んだ時点で既に未許可だった）」と残る）。',
             content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
           },
           403: {
@@ -9859,7 +9859,7 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         // 読めない行は「無い」（404）ではなく「読めない形で在る」（409）と言い分ける。
         let account: Awaited<ReturnType<typeof authService.revoke>>;
-        // 日誌の書き分けのためだけに取り消す前の状態を読む: 取り消し自体はこの読みに依らず、`authService.revoke` の型は変えない（`/permission-grants/:id/revoke` の `revokedBefore` と同じ形）。読んでから書くまでに別の操作が割り込んでも、狂うのは日誌の文言だけで状態は狂わない。読めない行は `null` になるが、下の `revoke` が 409 で止める。
+        // 日誌の書き分けのためだけに取り消す前の状態を読む: 取り消し自体はこの読みに依らず、`authService.revoke` の型は変えない（`/permission-grants/:id/revoke` の `revokedBefore` と同じ形）。読んでから書くまでに別の人が許可すると、実際には取り消したのに「読んだ時点で未許可」と出るので、「取り消していない」とは言い切らない文言にする。状態はこの読みで狂わない。読めない行は `null` になるが、下の `revoke` が 409 で止める。
         const revokedBefore =
           (await stores.auth.getAccount(c.req.param('accountId')))?.grantedAt === null;
         try {
@@ -9883,7 +9883,7 @@ export function createApp(deps: AppDeps) {
           {
             type: 'decision',
             decision: revokedBefore
-              ? `アクセス許可を取り消していない（既に未許可だった）: ${describeAccount(account)}`
+              ? `アクセス許可の取り消し（読んだ時点で既に未許可だった）: ${describeAccount(account)}`
               : `アクセス許可を取り消し: ${describeAccount(account)}`,
             grounds: `${describeActor(c.get('principal'))}（alteroid access revoke${revokedBefore ? '、取り消す前から未許可' : ''}）`,
           },

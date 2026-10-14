@@ -723,7 +723,7 @@ describe('認証が有効なとき', () => {
       const lines = await decisions();
       expect(lines.some((line) => line.startsWith('アクセス許可を取り消し:'))).toBe(false);
       expect(lines).toEqual([
-        expect.stringContaining('アクセス許可を取り消していない（既に未許可だった）:'),
+        expect.stringContaining('アクセス許可の取り消し（読んだ時点で既に未許可だった）:'),
       ]);
     });
 
