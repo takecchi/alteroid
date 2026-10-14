@@ -825,3 +825,62 @@ describe('apply() が onApplied でクローンへ知らせる', () => {
     expect(await stores.credentials.list()).toHaveLength(1);
   });
 });
+
+describe('runner から外した鍵は、範囲を狭めても配り損ねても残さない（#4781）', () => {
+  it('⭐ 範囲を runner に配らない側（app）へ狭めたら、runner から外す', async () => {
+    const runner = fakeRunner();
+    const { service } = serviceOf([runner]);
+    await service.apply([{ name: 'NPM_TOKEN', value: 'npm_secret' }]);
+    expect(runner.held.get('NPM_TOKEN')).toBe('npm_secret');
+
+    await service.apply([{ name: 'NPM_TOKEN', value: 'npm_secret', scope: 'app' }]);
+
+    expect(runner.held.has('NPM_TOKEN')).toBe(false);
+  });
+
+  it('⭐ 外す送りが runner に届かなかったら、名乗り直した runner へ追いつかせるときに外し直す', async () => {
+    const runner = fakeRunner();
+    const { service } = serviceOf([runner]);
+    await service.apply([
+      { name: 'GH_TOKEN', value: 'ghp_old' },
+      { name: 'NPM_TOKEN', value: 'npm_keep' },
+    ]);
+    // 外す送りの間だけ runner に届かない
+    const setCredentials = runner.setCredentials.bind(runner);
+    runner.setCredentials = () => Promise.reject(new Error('runner に届かない（試験）'));
+    await service.apply([{ name: 'GH_TOKEN', value: '' }]);
+    runner.setCredentials = setCredentials;
+    expect(runner.held.get('GH_TOKEN')).toBe('ghp_old');
+
+    await service.syncRunner(runner);
+
+    expect(runner.held.has('GH_TOKEN')).toBe(false);
+    expect(runner.held.get('NPM_TOKEN')).toBe('npm_keep');
+  });
+
+  it('対照: 正本に無い名前を runner が自分で持っていても（起動時の環境の鍵）、追いつかせる道では外さない', async () => {
+    const runner = fakeRunner();
+    runner.held.set('CLAUDE_CODE_OAUTH_TOKEN', 'boot-env-token');
+    const { service } = serviceOf([runner]);
+    await service.apply([{ name: 'NPM_TOKEN', value: 'npm_keep' }]);
+
+    await service.syncRunner(runner);
+
+    expect(runner.held.get('CLAUDE_CODE_OAUTH_TOKEN')).toBe('boot-env-token');
+  });
+
+  it('対照: 外した後に runner に効く形で置き直したら、追いつかせる道で外さない', async () => {
+    const runner = fakeRunner();
+    const { service } = serviceOf([runner]);
+    await service.apply([{ name: 'GH_TOKEN', value: 'ghp_old' }]);
+    const setCredentials = runner.setCredentials.bind(runner);
+    runner.setCredentials = () => Promise.reject(new Error('runner に届かない（試験）'));
+    await service.apply([{ name: 'GH_TOKEN', value: '' }]);
+    await service.apply([{ name: 'GH_TOKEN', value: 'ghp_new' }]);
+    runner.setCredentials = setCredentials;
+
+    await service.syncRunner(runner);
+
+    expect(runner.held.get('GH_TOKEN')).toBe('ghp_new');
+  });
+});
