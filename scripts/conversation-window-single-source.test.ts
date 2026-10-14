@@ -24,8 +24,9 @@ const ALLOWED_FILES = new Set([
 
 // 前後 240 文字ずつを許容する: 呼び出しごとに `types` の位置が違い、`limit` や `since` / `until` が前後に来るため。
 // `.list(` の直前に識別子を要求する: 文字列中の "types: ['exchange']"（`clone.ts` の案内文言）を除くため。
+// `.listPage(` も数える（#4770）: 窓は終端を `next` で決めるために `listPage` で読むようになり、手組みもそちらで起きうるため。
 const HAND_BUILT_WINDOW =
-  /[A-Za-z_$][\w$]*\.list\(\s*\{[\s\S]{0,240}?types:\s*\[\s*(['"])exchange\1\s*\][\s\S]{0,240}?\}\s*\)/g;
+  /[A-Za-z_$][\w$]*\.(?:list|listPage)\(\s*\{[\s\S]{0,240}?types:\s*\[\s*(['"])exchange\1\s*\][\s\S]{0,240}?\}\s*\)/g;
 
 export interface HandBuiltWindowHit {
   file: string;
