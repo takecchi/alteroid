@@ -304,6 +304,19 @@ export interface RunRescueOptions {
   readonly diffMaxBytes?: number;
   /** 担い手が git を打った場所。決まり（`/tmp/mgr-<委譲 id の頭>`）の外の作業ツリーも退避するため。 */
   readonly hintDirs?: readonly string[];
+  /**
+   * 作業ツリーの列挙が打ち切られた（件数の上限・起点が読めない）ときに呼ぶ（#4681）。打ち切られた分は退避されないので、呼び手が知らせる。
+   * 打ち切られなかった回も `undefined` で呼ぶ: 呼び手が「直った」を知り、同じ知らせを繰り返さないため。
+   */
+  readonly onListIncomplete?: (incomplete: RescueListIncomplete | undefined) => void;
+}
+
+/** 退避の作業ツリーの列挙が打ち切られたこと（#4681）。 */
+export interface RescueListIncomplete {
+  /** 件数の上限で打ち切った（この本数で止めた）。 */
+  readonly truncatedAtCount?: number;
+  /** 起点が読めなかった（理由）。 */
+  readonly unreadable?: string;
 }
 
 function defaultHasCredential(env: Record<string, string | undefined>): boolean {
@@ -326,6 +339,16 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
     ...(options.tmpRootDir === undefined ? {} : { tmpRootDir: options.tmpRootDir }),
     ...(options.hintDirs === undefined ? {} : { hintDirs: options.hintDirs }),
   });
+  options.onListIncomplete?.(
+    listed.truncatedAtCount === undefined && listed.unreadable === undefined
+      ? undefined
+      : {
+          ...(listed.truncatedAtCount === undefined
+            ? {}
+            : { truncatedAtCount: listed.truncatedAtCount }),
+          ...(listed.unreadable === undefined ? {} : { unreadable: listed.unreadable }),
+        },
+  );
   const reports: RescueWorktree[] = [];
   const resend = options.memory.takeResend();
   for (const tree of listed.worktrees) {
