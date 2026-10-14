@@ -2245,9 +2245,23 @@ class RunnerSession {
         }));
       this.#emit({ type: 'shutdown_unpushed_work', managerId: this.#id, unpushedWork });
       await rescued;
+    } else {
+      this.#rescueOnClose();
     }
     await this.#noteWorktreesOutsideScratchConvention();
     this.#onClosed();
+  }
+
+  /**
+   * 担当を畳むときに退避 ref を1回撃つ（#4677）。畳んだ担当は `#sessions` から外れ、周期の退避の対象にならないので、
+   * 撃たないと最後の周期より後の変更が退避に載らない。走行中の回があれば、その終わりを待ってから撃つ。
+   * 待たない: デーモンへの停止の応答・`closed` を退避の push で遅らせないため。作業ツリーはディスクに残っているので、外れた後も走れる。
+   */
+  #rescueOnClose(): void {
+    void this.rescueRef({
+      signal: AbortSignal.timeout(STOP_RESCUE_TIMEOUT_MS),
+      waitForRunning: true,
+    });
   }
 
   /**
@@ -3585,6 +3599,7 @@ class RunnerSession {
       await this.#readCgroupEventCountersFn(),
     );
     await this.#noteWorktreesOutsideScratchConvention();
+    this.#rescueOnClose();
     this.#emit({
       type: 'closed',
       managerId: this.#id,
