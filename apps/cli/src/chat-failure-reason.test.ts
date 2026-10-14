@@ -116,3 +116,52 @@ describe('chat の / コマンドの失敗は、状態コードか理由を出�
     expect(text).not.toContain(sentence);
   });
 });
+
+describe('単発の /answer の失敗は、失敗として扱う（#4683）', () => {
+  async function runWithReasons(
+    line: string,
+    status: number,
+    rawBody: string,
+    listed: Listed = emptyListed(),
+  ): Promise<{ reasons: string[]; text: string }> {
+    const reasons: string[] = [];
+    const read = captureStdout();
+    await runSlashCommand(
+      line,
+      replyingClient(status, rawBody),
+      listed,
+      null,
+      undefined,
+      undefined,
+      (reason) => reasons.push(reason),
+    );
+    const text = read();
+    vi.restoreAllMocks();
+    return { reasons, text };
+  }
+
+  it.each([
+    [409, JSON.stringify({ error: 'もう答えてある' })],
+    [500, JSON.stringify({ error: REASON })],
+  ])(
+    '⭐ 回答の送信が %s で失敗したら onFailed を呼ぶ（非対話で止まり、終了コードが失敗になる）',
+    async (status, body) => {
+      const { reasons, text } = await runWithReasons('/answer appr-1 はい', status, body);
+      expect(text).toContain('回答に失敗しました');
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0]).toContain('回答に失敗しました');
+    },
+  );
+
+  it('一覧に無い番号を指したら onFailed を呼ぶ', async () => {
+    const { reasons, text } = await runWithReasons('/answer 3 はい', 200, '{}');
+    expect(text).toContain('は /approvals の一覧にありません');
+    expect(reasons).toEqual(['[3] は /approvals の一覧にありません']);
+  });
+
+  it('回答できたら onFailed を呼ばない（陰性対照）', async () => {
+    const { reasons, text } = await runWithReasons('/answer appr-1 はい', 200, '{"ok":true}');
+    expect(text).toContain('回答しました');
+    expect(reasons).toEqual([]);
+  });
+});
