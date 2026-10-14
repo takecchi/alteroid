@@ -97,12 +97,18 @@ export class PgPersonaStore implements PersonaStore {
           ifMatch === null
           ? await this.#db
               .insert(memory)
-              .values({ slug: key, content: body, updatedAt: now, createdAt: now })
+              .values({
+                slug: key,
+                content: body,
+                contentSha256: sha256Hex(body),
+                updatedAt: now,
+                createdAt: now,
+              })
               .onConflictDoNothing({ target: memory.slug })
               .returning(returning)
           : await this.#db
               .update(memory)
-              .set({ content: body, updatedAt: now })
+              .set({ content: body, contentSha256: sha256Hex(body), updatedAt: now })
               .where(
                 and(
                   eq(memory.slug, key),
@@ -120,10 +126,17 @@ export class PgPersonaStore implements PersonaStore {
     return await this.#db
       .insert(memory)
       // `created_at` を `set` に入れない: 既存行の `created_at` を保つため。
-      .values({ slug: key, content: body, updatedAt: now, createdAt: now })
+      // ハッシュは本文と同じ1文で書く（#4739）: 別の文で後から書くと、交錯した書き手・途中の失敗で本文とずれ、保護の判定が `unknown` に倒れるため
+      .values({
+        slug: key,
+        content: body,
+        contentSha256: sha256Hex(body),
+        updatedAt: now,
+        createdAt: now,
+      })
       .onConflictDoUpdate({
         target: memory.slug,
-        set: { content: body, updatedAt: now },
+        set: { content: body, contentSha256: sha256Hex(body), updatedAt: now },
       })
       .returning({
         slug: memory.slug,
@@ -205,8 +218,8 @@ export class PgPersonaStore implements PersonaStore {
       next.describedBytesAt === undefined ? null : new Date(next.describedBytesAt);
     await this.#db
       .update(memory)
+      // ハッシュはここで書かない（#4739）: 本文と同じ1文で書いてある。ここで書くと、交錯した別の書き手の本文に古いハッシュを重ねるため
       .set({
-        contentSha256: sha256Hex(written.content),
         describedAt,
         describedBytes,
         describedBytesAt,
@@ -248,17 +261,26 @@ export class PgPersonaStore implements PersonaStore {
     // NUL を落とした結果が空なら改行を足さない: 空行が2つになり、in-memory / fs とずれるため。
     const tail = stripped === '' ? '' : body;
     const now = new Date();
+    const appended = sql`case
+      when right(${memory.content}, 1) = E'\n' then ${memory.content} || E'\n' || ${tail}
+      else ${memory.content} || E'\n\n' || ${tail}
+    end`;
     const rows = await this.#db
       .insert(memory)
       // `created_at` を `set` に入れない: 既存行の `created_at` を保つため。
-      .values({ slug: key, content: body, updatedAt: now, createdAt: now })
+      .values({
+        slug: key,
+        content: body,
+        contentSha256: sha256Hex(body),
+        updatedAt: now,
+        createdAt: now,
+      })
       .onConflictDoUpdate({
         target: memory.slug,
+        // ハッシュは連結した本文から同じ1文で出す（#4739）
         set: {
-          content: sql`case
-            when right(${memory.content}, 1) = E'\n' then ${memory.content} || E'\n' || ${tail}
-            else ${memory.content} || E'\n\n' || ${tail}
-          end`,
+          content: appended,
+          contentSha256: sql`encode(sha256(convert_to(${appended}, 'UTF8')), 'hex')`,
           updatedAt: now,
         },
       })
