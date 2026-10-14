@@ -3298,7 +3298,7 @@ class Clone implements CloneHost {
       type: 'exchange',
       with: 'self',
       role: 'outbound',
-      text: `${EXCHANGE_KIND_FAILURE_PREFIX}${describeDroppedSignalsForJournal(digests, this.#pumpTurnFailureReason)}`,
+      text: `${EXCHANGE_KIND_DECISION_PREFIX}${describeDroppedSignalsForJournal(digests, this.#pumpTurnFailureReason)}`,
     });
   }
 
