@@ -2226,7 +2226,7 @@ class RunnerSession {
     // 止まる前に全文を返す: runner のディスクは器と一緒に消え、渡し損ねると manager_id から生ログへ降りる経路が切れるため
     await this.#shipArchive();
     // `this.#status` ではなく `statusAtStop` を渡す: `#settleAll` が確認を解いた後の `#status` は報告の意味が変わるため
-    this.#flushUnreported(reason, statusAtStop);
+    await this.#flushUnreported(reason, statusAtStop);
     // 例外を投げない（`.catch()` を添える）: 観測1回の失敗で畳みそのものを巻き添えにしないため
     // 期限を切る（`STOP_UNPUSHED_WORK_TIMEOUT_MS`）: SIGTERM から `exit(0)` するまでの猶予 `FORCED_EXIT_MS` を大きく食わないため
     if (options.captureUnpushedWork === true) {
@@ -3525,16 +3525,23 @@ class RunnerSession {
   // 空なら1件も出さない: 中身の無い報告はクローンのターンを1本焼くため
   // 畳んでから出す: `stop()` の後に `#read` の catch から `#finish` が来る経路があり、二度は出さないため
   // `#rejected` を読まない: `result` が来ていないこの経路では「失敗として終わった」と名乗れないため
-  #flushUnreported(reason: string, status: JobStatus): void {
-    if (!this.#turnTally.hasSaid) return;
-    const { said, reportId } = this.#turnTally.takeSaid();
+  // 出し箱に残っている成果物もここで取り込んで添える（#4675）: 取り込みは `result` の報告の直前にしか無く、畳まれた担当の出し箱は `#onClosed` が消すため。
+  // 取り込んだファイルは退避先へ移るので、`#onClosed` の後もデーモンが取りに来られる。本文が無くても、ファイルがあれば報告を出す
+  async #flushUnreported(reason: string, status: JobStatus): Promise<void> {
+    const outbox = this.#outboxHasEntries() ? await this.#collectOutbox() : {};
+    const carriesFiles = (outbox.files?.length ?? 0) > 0 || (outbox.rejectedFiles?.length ?? 0) > 0;
+    if (!this.#turnTally.hasSaid && !carriesFiles) return;
+    const { said, reportId } = this.#turnTally.hasSaid
+      ? this.#turnTally.takeSaid()
+      : { said: [], reportId: undefined };
     this.#emit({
       type: 'report',
       managerId: this.#id,
       ...(reportId === undefined ? {} : { reportId }),
-      text: unreportedText(said, reason),
+      text: said.length > 0 ? unreportedText(said, reason) : outboxOnlyUnreportedText(reason),
       status,
       unreported: { reason },
+      ...outbox,
     });
   }
 
@@ -3569,7 +3576,7 @@ class RunnerSession {
     this.#sdkSession.setStatus(status);
     await this.#shipArchive();
     // `#shipArchive()` の後に置く: この報告を読んだクローンがすぐ `manager_transcript` で裏を取れるようにするため
-    this.#flushUnreported(reason, status);
+    await this.#flushUnreported(reason, status);
     // `closed` を emit する前に runner が自分で取って運ぶ: デーモンが `closed` を受けてから問い合わせると `#onClosed()` でセッションが消えていて空振りするため
     // `.catch()` を添える: 設計が将来守られなくなっても、この1回の観測の失敗が `#finish()` を巻き添えにしないため。取れなかったときは `kind: 'unavailable'` と理由を載せ、欄を省く（古い runner）のと混ぜない
     const unpushedWork = await this.#finishUnpushedWorkFn({
@@ -5070,6 +5077,13 @@ function reportText(
 
 // 先頭で「畳まれた」と言い切る: 無いと通常の報告と区別が付かず、途中で切られた本文を「マネージャーの結論」として読むため
 // 本文を言い換えず全部載せる: 途中まででも次に何を頼み直すかの材料のため
+function outboxOnlyUnreportedText(reason: string): string {
+  return (
+    `（このターンは結果を受け取らないまま畳まれた: ${reason}）\n` +
+    '（マネージャーの本文は無い。畳まれる前に出し箱に置かれていた成果物を添える）'
+  );
+}
+
 function unreportedText(said: readonly string[], reason: string): string {
   const body = said.join('\n\n').trim();
   return (
