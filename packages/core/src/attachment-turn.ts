@@ -55,9 +55,17 @@ export async function resolveTurnAttachmentGroups(
     if (out === undefined) continue;
     for (const ref of groups[index] ?? []) {
       const described = `id=${ref.id} name=${stripNul(ref.name)} type=${ref.mediaType} size=${ref.size} sha256=${ref.sha256}`;
-      let found: Awaited<ReturnType<AttachmentStore['get']>>;
+      // 画像の上限を超える添付は全体を読まない（#4687）: 画像としては渡せないので、要るのは画像かどうか（先頭の数バイト）だけ。
+      // 全体を読むと、外部ストレージの構成では最大 2GiB をデーモンのメモリへ複製するため
+      let found: Awaited<ReturnType<AttachmentStore['get']>> | { head: Uint8Array };
       try {
-        found = await stores.attachments.get(ref.id);
+        const meta = await stores.attachments.getMeta(ref.id);
+        found =
+          meta === undefined
+            ? undefined
+            : meta.size > limits.maxImageBytes
+              ? await readHead(stores.attachments, ref.id)
+              : await stores.attachments.get(ref.id);
       } catch {
         out.noticeLines.push(
           `[添付] ${described} 中身を読めなかった（置き場の失敗。再送で直る場合がある）`,
@@ -66,6 +74,14 @@ export async function resolveTurnAttachmentGroups(
       }
       if (found === undefined) {
         out.noticeLines.push(`[添付] ${described} 見つからない（期限切れの可能性）`);
+        continue;
+      }
+      if ('head' in found) {
+        out.noticeLines.push(
+          sniffAttachmentImageType(found.head) === undefined
+            ? `[添付] ${described}${FETCH_HINT}`
+            : `[添付] ${described}（画像の上限（${formatImageLimit(limits.maxImageBytes)}）を超えるので画像としては渡していない。${OPEN_HINT}）`,
+        );
         continue;
       }
       const imageType = sniffAttachmentImageType(found.bytes);
@@ -111,4 +127,29 @@ export async function resolveTurnAttachments(
 ): Promise<ResolvedTurnAttachments> {
   const [only] = await resolveTurnAttachmentGroups(stores, [refs], limits, routeEnv);
   return only ?? { images: [], noticeLines: [] };
+}
+
+/** 画像かどうかを見分けるのに読む先頭の長さ。`sniffAttachmentImageType` が見るのは先頭の12バイトまで。 */
+const IMAGE_SNIFF_HEAD_BYTES = 64;
+
+// 先頭だけを流しから読み、残りは読まずに閉じる（#4687）
+async function readHead(
+  store: AttachmentStore,
+  id: string,
+): Promise<{ head: Uint8Array } | undefined> {
+  const opened = await store.open(id);
+  if (opened === undefined) return undefined;
+  const chunks: Buffer[] = [];
+  let length = 0;
+  try {
+    for await (const chunk of opened.stream) {
+      const bytes = Buffer.from(chunk as Uint8Array);
+      chunks.push(bytes);
+      length += bytes.length;
+      if (length >= IMAGE_SNIFF_HEAD_BYTES) break;
+    }
+  } finally {
+    opened.stream.destroy();
+  }
+  return { head: new Uint8Array(Buffer.concat(chunks).subarray(0, IMAGE_SNIFF_HEAD_BYTES)) };
 }
