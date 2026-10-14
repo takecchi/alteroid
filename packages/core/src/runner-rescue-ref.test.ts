@@ -216,7 +216,7 @@ describe('担当が終わったときにも退避 ref を撃つ（#4677）', () 
 });
 
 describe('退避から漏れた作業ツリーを note で知らせる（#4681）', () => {
-  it('⭐ 作業ツリーが上限を超えたら、退避が漏れたことを note で1度だけ知らせる（周期が何度回っても繰り返さない）', async () => {
+  it('⭐ 作業ツリーが上限を超えたら、退避が漏れたことを note で知らせる（繰り返さないことは RescueListNotice の試験で見る）', async () => {
     const work = path.join(root, 'many');
     for (let i = 0; i < 21; i += 1) {
       const dir = path.join(work, `r${String(i).padStart(2, '0')}`);
@@ -233,8 +233,5 @@ describe('退避から漏れた作業ツリーを note で知らせる（#4681�
           event.text.includes('打ち切った'),
       );
     await vi.waitFor(() => expect(notes()).toHaveLength(1), { timeout: 5000 });
-    // 偽の時計にしない: 周期は本物の git の子プロセスを起こすので回らない（上の試験と同じ）
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(notes()).toHaveLength(1);
   });
 });

@@ -227,6 +227,7 @@ import { chunkMirrorEntries, MIRROR_EVENT_MAX_CHARS } from './mirror-chunks.js';
 import {
   deleteRescueRef,
   type RescueListIncomplete,
+  RescueListNotice,
   RescueMemory,
   type RescueRefDeleteResult,
   resolveRescueIntervalMs,
@@ -1845,8 +1846,8 @@ class RunnerSession {
   readonly #pidsPressureNotices = new PidsPressureNotices();
   readonly #denialStreaks = new ClassifierDenialStreaks();
   readonly #rescueMemory = new RescueMemory();
-  /** 退避の列挙の打ち切りを最後に知らせた形（同じ状態が続く間は繰り返さない。#4681）。 */
-  #rescueListNoticeKey: string | undefined;
+  /** 退避の列挙の打ち切りの知らせ（同じ状態が続く間は繰り返さない。#4681）。 */
+  readonly #rescueListNotice = new RescueListNotice();
   #rescueRunning: Promise<void> | null = null;
   /** 前の報告から後に走った「外へ出す」コマンドの名前（`outward-commands.ts`）。報告を出すときに空にする。 */
   readonly #outwardActions: string[] = [];
@@ -2258,22 +2259,9 @@ class RunnerSession {
 
   // 退避から漏れた作業ツリーがあることを note で知らせる（#4681）。打ち切られた分は退避されず、知らせないと人間もクローンも気づけないため
   #noteRescueListIncomplete(incomplete: RescueListIncomplete | undefined): void {
-    const key = incomplete === undefined ? undefined : JSON.stringify(incomplete);
-    if (key === this.#rescueListNoticeKey) return;
-    this.#rescueListNoticeKey = key;
-    if (incomplete === undefined) return;
-    const why =
-      incomplete.unreadable !== undefined
-        ? `起点が読めなかった（${incomplete.unreadable}）`
-        : `作業ツリーが多く、${String(incomplete.truncatedAtCount)} 本で探すのを打ち切った`;
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text:
-        `退避 ref（未 push の変更を remote へ預ける仕組み）の作業ツリーの探索が途中で止まった: ${why}。` +
-        '見つからなかった作業ツリーの変更は退避されず、器が入れ替わると失われうる。' +
-        '要る変更は自分で push するか、作業ツリーを減らすこと。',
-    });
+    const text = this.#rescueListNotice.next(incomplete);
+    if (text === undefined) return;
+    this.#emit({ type: 'note', managerId: this.#id, text });
   }
 
   /**

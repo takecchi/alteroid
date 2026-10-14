@@ -311,6 +311,29 @@ export interface RunRescueOptions {
   readonly onListIncomplete?: (incomplete: RescueListIncomplete | undefined) => void;
 }
 
+/**
+ * 退避の列挙の打ち切りを知らせる文を返す。同じ状態が続く間は `undefined`（繰り返さない）。打ち切られなくなったら覚えを消す（#4681）。
+ */
+export class RescueListNotice {
+  #lastKey: string | undefined;
+
+  next(incomplete: RescueListIncomplete | undefined): string | undefined {
+    const key = incomplete === undefined ? undefined : JSON.stringify(incomplete);
+    if (key === this.#lastKey) return undefined;
+    this.#lastKey = key;
+    if (incomplete === undefined) return undefined;
+    const why =
+      incomplete.unreadable !== undefined
+        ? `起点が読めなかった（${incomplete.unreadable}）`
+        : `作業ツリーが多く、${String(incomplete.truncatedAtCount)} 本で探すのを打ち切った`;
+    return (
+      `退避 ref（未 push の変更を remote へ預ける仕組み）の作業ツリーの探索が途中で止まった: ${why}。` +
+      '見つからなかった作業ツリーの変更は退避されず、器が入れ替わると失われうる。' +
+      '要る変更は自分で push するか、作業ツリーを減らすこと。'
+    );
+  }
+}
+
 /** 退避の作業ツリーの列挙が打ち切られたこと（#4681）。 */
 export interface RescueListIncomplete {
   /** 件数の上限で打ち切った（この本数で止めた）。 */

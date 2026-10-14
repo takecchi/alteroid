@@ -11,6 +11,7 @@ import {
   DEFAULT_RESCUE_INTERVAL_MS,
   RESCUE_INTERVAL_MS_ENV_KEY,
   RESCUE_REF_PREFIX,
+  RescueListNotice,
   RescueMemory,
   removeStaleIndexFiles,
   rescueRefName,
@@ -633,5 +634,16 @@ describe('退避の作業ツリーの列挙の打ち切りを呼び手へ返す�
     const seen: unknown[] = [];
     await run(cwd, (value) => seen.push(value));
     expect(seen).toEqual([undefined]);
+  });
+});
+
+describe('RescueListNotice — 退避の列挙の打ち切りの知らせを繰り返さない（#4681）', () => {
+  it('⭐ 同じ状態が続く間は1度だけ知らせ、直ったら覚えを消し、また打ち切られたら知らせ直す', () => {
+    const notice = new RescueListNotice();
+    expect(notice.next({ truncatedAtCount: 20 })).toContain('20 本で探すのを打ち切った');
+    expect(notice.next({ truncatedAtCount: 20 })).toBeUndefined();
+    expect(notice.next(undefined)).toBeUndefined();
+    expect(notice.next({ truncatedAtCount: 20 })).toContain('20 本で探すのを打ち切った');
+    expect(notice.next({ unreadable: 'EACCES' })).toContain('起点が読めなかった（EACCES）');
   });
 });
