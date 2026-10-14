@@ -15650,6 +15650,42 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     expect(second).toContain('オーナーからの新しい依頼——これが埋もれてはいけない');
   });
 
+  for (const order of ['oldest', 'newest'] as const) {
+    it(`⭐ T-ties（${order}）: 同じ時刻の行が id の逆順で入っていても、cursor で辿ると全部の行が一度ずつ出る（#4780）`, async () => {
+      const h = harness();
+      const long = 'あ'.repeat(500);
+      const ids: string[] = [];
+      for (let index = 0; index < 25; index += 1) {
+        // id の逆順に入れる: ストアの順（入れた順）と id の順を食い違わせるため
+        const id = `tie-${String(24 - index).padStart(3, '0')}`;
+        ids.push(id);
+        await h.stores.commitments.open({
+          id,
+          at: '2026-01-01T00:00:00.000Z',
+          origin: 'self',
+          body: `同じ時刻の約束 ${id}: ${long}`,
+        });
+      }
+
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 30; page += 1) {
+        const reply = await h.call('commitment_list', {
+          order,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        for (const id of ids) {
+          if (reply.includes(`同じ時刻の約束 ${id}:`)) seen.push(id);
+        }
+        const match = /cursor=([A-Za-z0-9\-_]+)/.exec(reply);
+        if (match === null) break;
+        cursor = match[1];
+      }
+
+      expect([...seen].sort()).toEqual([...ids].sort());
+    });
+  }
+
   it('T4: 壊れた cursor は明示のエラーで、黙って先頭からへ倒さない', async () => {
     const h = harness();
     await h.stores.commitments.open({
