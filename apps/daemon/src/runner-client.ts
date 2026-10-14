@@ -114,6 +114,11 @@ const CONNECTION_HEALTHY_THRESHOLD_MS = DEFAULT_SSE_HEARTBEAT_MS * 2;
 // 300000ms（undici の既定値）に揃えない: 数の理由がこのシステムの中から導けなくなるため
 const RUNNER_STREAM_SILENCE_TIMEOUT_MS = DEFAULT_SSE_HEARTBEAT_MS * 3;
 
+// Unix ソケット越しの応答の本文に掛ける無通信の期限（#4691）。見出しの後に本文が止まると、`#call` の期限は済んでいて誰も切らないため
+// `RUNNER_CALL_DEADLINE_MS` に揃える: 「返らない」と見なすまで待つ長さは、見出しを待つときも次のバイトを待つときも同じでよいため
+// `/events` の無音の見張り（`RUNNER_STREAM_SILENCE_TIMEOUT_MS`）より長いこと: 短いと `/events` が見張りより先にこちらで切れるため
+const RUNNER_SOCKET_BODY_IDLE_TIMEOUT_MS = RUNNER_CALL_DEADLINE_MS;
+
 // `/events` を読む間、この量を読むたびにループへ順番を返す（#4485）。1MB の解読・区切り探しは数 ms で、返す回数が多すぎず、
 // 数百 MB の流れでも1回の占有が見張りの閾値（1秒）を大きく下回る
 const SSE_READ_YIELD_BYTES = 1024 * 1024;
@@ -215,6 +220,8 @@ export interface HttpRunnerOptions {
   nowFn?: () => number;
   // 運用で縮めない: 縮めると heartbeat の遅れだけで健全な接続を切り始め、切るたびに runner が `hello` を書き直して `#reattach` が走るため
   silenceTimeoutMs?: number;
+  // Unix ソケット越しの応答の本文の無通信の期限（#4691）。試験が短くするための口で、運用で縮めない
+  socketBodyIdleTimeoutMs?: number;
   // `sleepFn` を流用しない: 途中でやめる口が無く、読むたびに張ると取り消せないタイマーがバイトごとに積まれるため
   setTimerFn?: (ms: number, onFire: () => void) => () => void;
   // 運用で縮めない: 期限は「返らない」を掴むためのもので、「遅い」を打ち切るためのものではないため
@@ -370,6 +377,7 @@ class HttpRunner implements RunnerClient {
   readonly #nowFn: () => number;
   readonly #deadlineMs: number;
   readonly #silenceTimeoutMs: number;
+  readonly #socketBodyIdleTimeoutMs: number;
   readonly #setTimerFn: (ms: number, onFire: () => void) => () => void;
   readonly #onUnknown: ((report: RunnerUnknownReport) => void) | undefined;
   readonly #onDroppedEvent: ((report: RunnerDroppedEventReport) => void) | undefined;
@@ -451,6 +459,8 @@ class HttpRunner implements RunnerClient {
     this.#nextDelayMs = this.#retryBaseMs;
     this.#deadlineMs = options.deadlineMs ?? RUNNER_CALL_DEADLINE_MS;
     this.#silenceTimeoutMs = options.silenceTimeoutMs ?? RUNNER_STREAM_SILENCE_TIMEOUT_MS;
+    this.#socketBodyIdleTimeoutMs =
+      options.socketBodyIdleTimeoutMs ?? RUNNER_SOCKET_BODY_IDLE_TIMEOUT_MS;
     this.#setTimerFn = options.setTimerFn ?? defaultSetTimer;
     this.#onUnknown = options.onUnknown;
     this.#onDroppedEvent = options.onDroppedEvent;
@@ -460,7 +470,7 @@ class HttpRunner implements RunnerClient {
   #send(input: string | URL | Request, init?: RequestInit): Promise<Response> {
     if (this.#socketPath === null) return fetch(input, init);
     const url = new URL(typeof input === 'string' ? input : input.toString());
-    return requestOverSocket(this.#socketPath, url, init ?? {});
+    return requestOverSocket(this.#socketPath, url, init ?? {}, this.#socketBodyIdleTimeoutMs);
   }
 
   async hello(): Promise<void> {
@@ -1365,7 +1375,12 @@ function runnerErrorBodyOf(body: string): string {
     : redacted;
 }
 
-function requestOverSocket(socketPath: string, url: URL, init: RequestInit): Promise<Response> {
+function requestOverSocket(
+  socketPath: string,
+  url: URL,
+  init: RequestInit,
+  bodyIdleTimeoutMs: number,
+): Promise<Response> {
   return new Promise((resolve, reject) => {
     const headers = new Headers(init.headers ?? {});
     const outgoing: Record<string, string> = {};
@@ -1381,6 +1396,12 @@ function requestOverSocket(socketPath: string, url: URL, init: RequestInit): Pro
         headers: outgoing,
       },
       (res) => {
+        // 本文の無通信の期限（#4691）: 壊すと本文の流れが失敗し、`text()` / `json()` / `read()` が失敗で返る
+        res.setTimeout(bodyIdleTimeoutMs, () => {
+          res.destroy(
+            new Error(`runner の応答の本文が ${String(bodyIdleTimeoutMs)}ms のあいだ流れなかった`),
+          );
+        });
         const body = Readable.toWeb(res) as ReadableStream<Uint8Array>;
         resolve(
           new Response(body, {
