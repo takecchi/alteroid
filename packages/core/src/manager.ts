@@ -8102,11 +8102,21 @@ class Pool implements ManagerPool {
       case 'report': {
         // 止めた後に届く `report` を無条件に処理しない: `#retire()` 後も `#onEvent` は台帳から像を作り直す（`#load()`）ので、`stopped` を上書きし `#emit()` でクローンのターンを起こしてしまう。日誌には残す（捨てると黙って失われる）。
         if (record.job.status === 'stopped') {
+          // 添えられた成果物は取り寄せて置き場へ入れ、日誌の行に結び付ける（#4675）: 取り寄せないと runner の退避先に残ったまま掃除で消え、止めた担当の成果が黙って失われるため
+          const stoppedFiles =
+            (event.files?.length ?? 0) > 0 || (event.rejectedFiles?.length ?? 0) > 0
+              ? await this.#fetchReportFiles(event, fromRunnerId)
+              : undefined;
           await this.#journal({
             type: 'exchange',
             with: 'manager',
             role: 'inbound',
-            text: `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため受信箱へは回さない）${event.text}`,
+            text:
+              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため受信箱へは回さない）${event.text}` +
+              describeStoppedReportFiles(stoppedFiles),
+            ...(stoppedFiles === undefined || stoppedFiles.attachments.length === 0
+              ? {}
+              : { attachments: stoppedFiles.attachments.map((ref) => ({ ...ref })) }),
           });
           // 本文は台帳にも残す: 日誌だけだと、誤って止めたことに気づく契機が `manager_stop` / `manager_report` のどちらにも出ない。`record.job.status` は動かさず `#emit()` もしない。
           record.job.lastFoldedTurn = { text: event.text, at: new Date().toISOString() };
@@ -11367,4 +11377,22 @@ function describeHeldTokenState(
     case undefined:
       return 'いま使えるか読めなかった';
   }
+}
+
+// 停止済みの担当の報告に添えられた成果物を、日誌の行の末尾で名乗る（#4675）。中身は行の `attachments` に結び付いている
+function describeStoppedReportFiles(files: ManagerReportFiles | undefined): string {
+  if (files === undefined) return '';
+  const lines: string[] = [];
+  if (files.attachments.length > 0) {
+    lines.push(
+      `（添えられていた成果物 ${String(files.attachments.length)} 件を置き場へ入れた: ` +
+        `${files.attachments.map((ref) => `${ref.name}（${ref.id}）`).join('、')}。attachment_fetch で読める）`,
+    );
+  }
+  if (files.rejected.length > 0) {
+    lines.push(
+      `（受け取れなかった成果物: ${files.rejected.map((item) => `${item.name}（${item.reason}）`).join('、')}）`,
+    );
+  }
+  return lines.length === 0 ? '' : `\n\n${lines.join('\n')}`;
 }

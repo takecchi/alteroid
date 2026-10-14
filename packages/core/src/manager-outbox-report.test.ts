@@ -430,3 +430,45 @@ describe('担い手の報告に添えられたファイル — LocalRunner（#41
     await registry.stop();
   }, 20_000);
 });
+
+describe('停止済みの担当の報告に添えられたファイル（#4675）', () => {
+  it('⭐ 止めた担当から届いたファイル付きの報告は、受信箱へは回さないが、ファイルは置き場へ入れて日誌の行に結び付ける', async () => {
+    const { pool, stores, inbox, fake } = await setup();
+    await pool.abort(MANAGER_ID, '人間が止めた');
+    await vi.waitFor(async () => {
+      const job = (await stores.jobs.listJobs()).find((entry) => entry.id === MANAGER_ID);
+      expect(job?.status).toBe('stopped');
+    });
+    const bytes = encode('止める前の成果物');
+    fake.contents.set('c'.repeat(32), async () => ({ size: bytes.length, body: chunked(bytes) }));
+
+    fake.raw(
+      reportWithFiles([{ fileId: 'c'.repeat(32), name: 'half.md', bytes }], {
+        unreported: { reason: 'デーモンから停止を指示された。' },
+      }),
+    );
+
+    await vi.waitFor(async () => {
+      const rows = await stores.journal.list({ types: ['exchange'] });
+      const row = rows.find(
+        (entry) =>
+          entry.type === 'exchange' && entry.text.includes('停止済みのため受信箱へは回さない'),
+      );
+      expect(row).toBeDefined();
+      expect(row?.type === 'exchange' ? row.text : '').toContain('置き場へ入れた: half.md');
+      expect(row?.type === 'exchange' ? row.attachments?.map((ref) => ref.name) : []).toEqual([
+        'half.md',
+      ]);
+    });
+    const rows = await stores.journal.list({ types: ['exchange'] });
+    const row = rows.find(
+      (entry) =>
+        entry.type === 'exchange' && entry.text.includes('停止済みのため受信箱へは回さない'),
+    );
+    const ref = row?.type === 'exchange' ? row.attachments?.[0] : undefined;
+    const stored = await stores.attachments.get(ref?.id ?? '');
+    expect(Buffer.from(stored!.bytes).toString()).toBe('止める前の成果物');
+    expect(reportMessages(inbox)).toHaveLength(0);
+    await pool.stop();
+  });
+});

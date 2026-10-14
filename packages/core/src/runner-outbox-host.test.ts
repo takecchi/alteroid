@@ -140,3 +140,104 @@ describe('Host: 出し箱（Issue #4126 P2a）', () => {
     expect(await readFile(join(dir, 'sub', 'inner.txt'), 'utf8')).toBe('x');
   });
 });
+
+// 結果（result）を出さないまま、閉じられたら終わる偽の SDK（#4675）。ターンの途中で畳まれた担当を作る
+function interruptedSdk(onTurn: () => Promise<void>): { fn: typeof sdkQuery } {
+  const fn = ((params: { prompt: AsyncIterable<unknown> }) => {
+    let close: () => void = () => undefined;
+    const closed = new Promise<void>((resolve) => {
+      close = resolve;
+    });
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-1',
+        uuid: 'uuid-init',
+      } as unknown as SDKMessage;
+      for await (const message of params.prompt) {
+        void message;
+        await onTurn();
+        await closed;
+        return;
+      }
+    }
+    return Object.assign(generate(), {
+      close: () => close(),
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof sdkQuery;
+  return { fn };
+}
+
+describe('Host: 報告の前に畳まれた担当の出し箱（#4675）', () => {
+  it('⭐ 出し箱に置いた後、結果を出す前に止められたら、取り込んで報告に添え、畳んだ後もデーモンが取りに来られる', async () => {
+    const outboxRoot = await makeTempDir('runner-outbox-close-');
+    const outboxStagedRoot = await makeTempDir('runner-outbox-close-staged-');
+    const events: RunnerEvent[] = [];
+    let outboxDir = '';
+    let written = false;
+    const fake = interruptedSdk(async () => {
+      await writeFile(join(outboxDir, 'half-done.md'), '途中の成果物');
+      written = true;
+    });
+    const host = createRunnerHost({
+      runnerId: 'runner-outbox-close',
+      workspacePath: '/workspace',
+      emit: (event) => events.push(event),
+      queryFn: fake.fn,
+      env: { PATH: '/usr/bin' },
+      outboxRoot,
+      outboxStagedRoot,
+      scratchSweep: false,
+      cwdExistsFn: () => true,
+      readCgroupEventCountersFn: async () => ({}),
+      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+    });
+    hosts.push(host);
+    await host.start({ managerId: 'mgr-close1', request: '依頼', cwd: '/workspace' });
+    outboxDir = join(outboxRoot, 'mgr-close1');
+    await vi.waitFor(() => expect(written).toBe(true));
+
+    await host.stop('mgr-close1');
+
+    const report = events.find((e) => e.type === 'report');
+    if (report?.type !== 'report') throw new Error('report が無い');
+    expect(report.unreported).toBeDefined();
+    expect(report.text).toContain('出し箱に置かれていた成果物を添える');
+    expect(report.files?.map((file) => file.name)).toEqual(['half-done.md']);
+    await expect(stat(outboxDir)).rejects.toThrow();
+    const opened = await host.openOutboxFile('mgr-close1', report.files?.[0]?.fileId ?? '');
+    const chunks: Buffer[] = [];
+    for await (const chunk of opened!.stream) chunks.push(chunk as Buffer);
+    expect(Buffer.concat(chunks).toString()).toBe('途中の成果物');
+  });
+
+  it('出し箱が空で本文も無ければ、畳んでも報告は出さない（今までどおり）', async () => {
+    const outboxRoot = await makeTempDir('runner-outbox-close-');
+    const outboxStagedRoot = await makeTempDir('runner-outbox-close-staged-');
+    const events: RunnerEvent[] = [];
+    let started = false;
+    const fake = interruptedSdk(async () => {
+      started = true;
+    });
+    const host = createRunnerHost({
+      runnerId: 'runner-outbox-close-empty',
+      workspacePath: '/workspace',
+      emit: (event) => events.push(event),
+      queryFn: fake.fn,
+      env: { PATH: '/usr/bin' },
+      outboxRoot,
+      outboxStagedRoot,
+      scratchSweep: false,
+      cwdExistsFn: () => true,
+      readCgroupEventCountersFn: async () => ({}),
+      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+    });
+    hosts.push(host);
+    await host.start({ managerId: 'mgr-close2', request: '依頼', cwd: '/workspace' });
+    await vi.waitFor(() => expect(started).toBe(true));
+    await host.stop('mgr-close2');
+    expect(events.some((e) => e.type === 'report')).toBe(false);
+  });
+});
