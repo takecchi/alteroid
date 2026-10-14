@@ -35,6 +35,24 @@ const CLONE_SESSION_KEY = 'clone_session_id';
 const CLONE_TRANSCRIPT_GRAVE_KEY = 'clone_transcript_grave';
 const CLONE_LOST_SESSION_KEY = 'clone_lost_session';
 const CLONE_PROJECT_KEY = 'clone_project_key';
+// 蒸留の失敗回数は墓標の本体と別の key に置く（#4752）: `clearTranscriptGraveIf` が生の文字列で突き合わせるので、墓標の値へ相乗りさせると一致しなくなるため。
+const DISTILL_FAILURES_KEYS = {
+  transcript: 'clone_transcript_grave_distill_failures',
+  lost_session: 'clone_lost_session_distill_failures',
+} as const;
+
+function parseDistillFailures(
+  raw: string,
+  key: string,
+): { graveId: string; failures: number } | null {
+  return parseStoredJson(raw, `墓標の蒸留失敗回数（${key}）`, (parsed) => {
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const { graveId, failures } = parsed as { graveId?: unknown; failures?: unknown };
+    if (typeof graveId !== 'string' || graveId.length === 0) return null;
+    if (typeof failures !== 'number' || !Number.isInteger(failures) || failures < 0) return null;
+    return { graveId, failures };
+  });
+}
 
 export class PgSessionRegistry implements SessionRegistry {
   readonly #db: Db;
@@ -157,6 +175,53 @@ export class PgSessionRegistry implements SessionRegistry {
       if (parsed?.sessionId !== sessionId) return false;
       await tx.delete(daemonState).where(eq(daemonState.key, CLONE_LOST_SESSION_KEY));
       return true;
+    });
+  }
+
+  async graveDistillFailures(
+    kind: 'transcript' | 'lost_session',
+    graveId: string,
+  ): Promise<number> {
+    const key = DISTILL_FAILURES_KEYS[kind];
+    // 読めなければ 0: 数えられないだけで起動を止める理由が無いため
+    try {
+      const rows = await this.#db
+        .select({ value: daemonState.value })
+        .from(daemonState)
+        .where(eq(daemonState.key, key))
+        .limit(1);
+      const raw = rows[0]?.value ?? null;
+      if (raw === null) return 0;
+      const stored = parseDistillFailures(raw, key);
+      return stored?.graveId === graveId ? stored.failures : 0;
+    } catch (error) {
+      noteSessionMaterialUnreadable(`墓標の蒸留失敗回数（${key}）`, error);
+      return 0;
+    }
+  }
+
+  // 読んでから書くまでを1トランザクションにする: 別々だと2つの数え上げが同じ値から始まり、1回ぶん落ちるため
+  async noteGraveDistillFailure(
+    kind: 'transcript' | 'lost_session',
+    graveId: string,
+  ): Promise<number> {
+    const key = DISTILL_FAILURES_KEYS[kind];
+    return this.#db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ value: daemonState.value })
+        .from(daemonState)
+        .where(eq(daemonState.key, key))
+        .for('update')
+        .limit(1);
+      const raw = rows[0]?.value ?? null;
+      const stored = raw === null ? null : parseDistillFailures(raw, key);
+      const failures = stored?.graveId === graveId ? stored.failures + 1 : 1;
+      const value = JSON.stringify({ graveId, failures });
+      await tx
+        .insert(daemonState)
+        .values({ key, value })
+        .onConflictDoUpdate({ target: daemonState.key, set: { value } });
+      return failures;
     });
   }
 

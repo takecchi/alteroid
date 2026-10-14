@@ -15,6 +15,10 @@ import { withPathLock } from './file-lock.js';
 
 const stateSchema = z.object({ cloneSessionId: z.string().nullable().default(null) });
 const graveSchema = z.object({ archiveId: z.string().min(1) });
+const distillFailuresSchema = z.object({
+  graveId: z.string().min(1),
+  failures: z.number().int().nonnegative(),
+});
 const projectKeySchema = z.object({ projectKey: z.string().min(1) });
 const lostSessionSchema = z.object({
   projectKey: z.string().min(1),
@@ -54,6 +58,8 @@ export class FsSessionRegistry implements SessionRegistry {
   // 別のファイルに置く: `#gravePath` と同時に立ちうるうえ、`#path` と同居すると `setCloneSessionId(null)` で消えるため
   readonly #lostSessionPath: string;
   readonly #projectKeyPath: string;
+  // 墓標の本体と別のファイルに置く: 墓標の形と `clear…If` の突き合わせに触れないため（#4752）
+  readonly #distillFailuresPaths: Record<'transcript' | 'lost_session', string>;
 
   constructor(dir: string) {
     this.#dir = dir;
@@ -61,6 +67,10 @@ export class FsSessionRegistry implements SessionRegistry {
     this.#gravePath = join(dir, 'transcript-grave.json');
     this.#lostSessionPath = join(dir, 'lost-session-grave.json');
     this.#projectKeyPath = join(dir, 'project-key.json');
+    this.#distillFailuresPaths = {
+      transcript: join(dir, 'transcript-grave-distill-failures.json'),
+      lost_session: join(dir, 'lost-session-grave-distill-failures.json'),
+    };
   }
 
   async getCloneSessionId(): Promise<string | null> {
@@ -143,6 +153,36 @@ export class FsSessionRegistry implements SessionRegistry {
       if (current?.sessionId !== sessionId) return false;
       await rm(this.#lostSessionPath, { force: true });
       return true;
+    });
+  }
+
+  // 読めなければ `null`: 数えられないだけで起動を止める理由が無いため（`readSessionMaterial` が跡を残す）
+  async #readDistillFailures(path: string) {
+    return readSessionMaterial(path, '墓標の蒸留失敗回数', (raw) =>
+      distillFailuresSchema.parse(JSON.parse(raw)),
+    );
+  }
+
+  async graveDistillFailures(
+    kind: 'transcript' | 'lost_session',
+    graveId: string,
+  ): Promise<number> {
+    const stored = await this.#readDistillFailures(this.#distillFailuresPaths[kind]);
+    return stored?.graveId === graveId ? stored.failures : 0;
+  }
+
+  // 読んでから書くまでを同じパスのロックの中に置く: 別々だと2つの数え上げが同じ値から始まり、1回ぶん落ちるため
+  async noteGraveDistillFailure(
+    kind: 'transcript' | 'lost_session',
+    graveId: string,
+  ): Promise<number> {
+    const path = this.#distillFailuresPaths[kind];
+    return withPathLock(path, async () => {
+      const stored = await this.#readDistillFailures(path);
+      const failures = stored?.graveId === graveId ? stored.failures + 1 : 1;
+      await mkdir(this.#dir, { recursive: true });
+      await writeFileAtomic(path, `${JSON.stringify({ graveId, failures })}\n`);
+      return failures;
     });
   }
 

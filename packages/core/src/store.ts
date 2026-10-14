@@ -1715,6 +1715,17 @@ export interface SessionRegistry {
   /** いま立っているのが `sessionId` の墓標であるときにだけ下ろす。理由と形は {@link SessionRegistry.clearTranscriptGraveIf} と同じ。 */
   clearLostSessionGraveIf(sessionId: string): Promise<boolean>;
   /**
+   * 墓標ごとの「蒸留が続けて失敗した回数」（#4752）。`kind` ごとに高々1件、`{ graveId, failures }` の形で墓標の本体とは別の鍵に置く。
+   * 墓標の本体に載せない: `clear…If` の突き合わせ（pg は生の文字列で比べる）と墓標の形に触れずに済ませるため。
+   * 覚えている記録が `graveId` と別の墓標のものなら 0（印が替われば数え直す）。読めなくても投げない（起動を止めないため）。
+   */
+  graveDistillFailures(kind: 'transcript' | 'lost_session', graveId: string): Promise<number>;
+  /**
+   * 蒸留の失敗を1回数え、数えた後の回数を返す。覚えている記録が `graveId` と別の墓標のものなら 1 から数え直す。
+   * 書けなければ投げる: 呼び出し側（`clone.ts`）が捕まえて、数えられなかった回は今までどおり日誌へ書く。
+   */
+  noteGraveDistillFailure(kind: 'transcript' | 'lost_session', graveId: string): Promise<number>;
+  /**
    * SDK が生ログを預けるときの scope（`SessionKey.projectKey`）を、器を跨いで覚える。
    * `append` が渡してくる値なので `append` が1度も来ていないプロセスは知らず、墓標を立てたい回（`init` すら来ずに落ちた回）はまさにその回（起き直して resume に失敗した直後）である。
    * 前の器が覚えた値をここから読む。`cwd` から計算し直さない（`LostSessionGrave`）。配備してから1度も `append` が来ていないうちは `null`: その窓で落ちた回は墓標が立たない（拾う鍵が無い）。

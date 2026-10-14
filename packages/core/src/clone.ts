@@ -395,6 +395,13 @@ export function compactionLikelyThisTurn(
   return usage.totalTokens + growth >= usage.autoCompactThreshold;
 }
 
+/**
+ * 起動時の拾い直しで、同じ墓標の蒸留が続けて失敗しても日誌へ書く回数の上限（#4752）。
+ * 上限を超えた後は成功するまで、その墓標の「拾い直す」「失敗した」の行と蒸留の入力（`pre_compact_distill`）の行を書かない: 枠以外の理由で失敗し続けると、起動のたびに同じ行（入力は生ログの末尾まるごと）が積もるため。
+ * 数えるのは日誌だけで、蒸留を試みること自体と印は止めない（勝手に区間を捨てないため）。
+ */
+const GRAVE_DISTILL_FAILURE_JOURNAL_LIMIT = 3;
+
 // 単位は文字（UTF-16 の code unit）でバイトではない: 切っているのが `String.prototype.slice` のため
 const DISTILL_TRANSCRIPT_TAIL_CHARS = 60_000;
 
@@ -4318,31 +4325,61 @@ class Clone implements CloneHost {
     }
     const transcript = result.body;
 
-    // 拾い直したことを日誌へ1行残す: `pre_compact_distill` の入力だけだと compaction の蒸留と区別が付かず、後から何回拾い直したかを数えられないため
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: `${EXCHANGE_KIND_RECOVERY_PREFIX}前の器が記憶へ移せなかった区間を拾い直す: ${grave.archiveId}`,
-    });
+    // 上限を超えて失敗し続けている印は日誌へ書かない（#4752）。蒸留は試みる
+    const quiet = await this.#graveDistillQuiet('transcript', grave.archiveId);
 
-    try {
-      await this.#distillFromTranscript(tailOf(transcript));
-    } catch (error) {
-      // 印は残す（#4705）: 蒸留が落ちる主な理由は枠で、次の起動で拾い直せるため
+    // 拾い直したことを日誌へ1行残す: `pre_compact_distill` の入力だけだと compaction の蒸留と区別が付かず、後から何回拾い直したかを数えられないため
+    if (!quiet) {
       await this.#journal({
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}前の器が記憶へ移せなかった区間の蒸留に失敗した: ${reasonOf(error)}` +
-          `（印は残す。次の起動で拾い直す: ${grave.archiveId}）`,
+        text: `${EXCHANGE_KIND_RECOVERY_PREFIX}前の器が記憶へ移せなかった区間を拾い直す: ${grave.archiveId}`,
       });
+    }
+
+    try {
+      await this.#distillFromTranscript(tailOf(transcript), { journalInput: !quiet });
+    } catch (error) {
+      // 印は残す（#4705）: 蒸留が落ちる主な理由は枠で、次の起動で拾い直せるため
+      const note = await this.#graveDistillFailureNote('transcript', grave.archiveId);
+      if (note !== null) {
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text:
+            `${EXCHANGE_KIND_FAILURE_PREFIX}前の器が記憶へ移せなかった区間の蒸留に失敗した: ${reasonOf(error)}` +
+            `（印は残す。次の起動で拾い直す: ${grave.archiveId}）${note}`,
+        });
+      }
       return;
     }
 
     // 印を下ろすのは蒸留が成功したときだけ、引き直してから下ろす: 拾っている間に新しい印が立つ窓があり、素で `null` を書くとその新しい方を消すため
     await this.#stores.sessions.clearTranscriptGraveIf(grave.archiveId);
+  }
+
+  // 読めなければ 0（書く側に倒す）: 数えられないだけで拾い直しを止める理由が無く、黙る側に倒すと失敗が見えなくなるため
+  async #graveDistillQuiet(kind: 'transcript' | 'lost_session', graveId: string): Promise<boolean> {
+    const prior = await this.#stores.sessions.graveDistillFailures(kind, graveId).catch(() => 0);
+    return prior >= GRAVE_DISTILL_FAILURE_JOURNAL_LIMIT;
+  }
+
+  /**
+   * 蒸留の失敗を数え、失敗の行へ添える文を返す（#4752）。行を書かないなら `null`、添える文が無ければ空文字。
+   * 数えられなかったら今までどおり書く（`undefined` 扱い）: 数えられないことを理由に失敗を黙らせると、見えなくなるため。
+   */
+  async #graveDistillFailureNote(
+    kind: 'transcript' | 'lost_session',
+    graveId: string,
+  ): Promise<string | null> {
+    const failures = await this.#stores.sessions
+      .noteGraveDistillFailure(kind, graveId)
+      .catch(() => undefined);
+    if (failures === undefined || failures < GRAVE_DISTILL_FAILURE_JOURNAL_LIMIT) return '';
+    if (failures > GRAVE_DISTILL_FAILURE_JOURNAL_LIMIT) return null;
+    return `。同じ区間の蒸留が ${GRAVE_DISTILL_FAILURE_JOURNAL_LIMIT} 回続けて失敗したので、以後は成功するまで、この区間の拾い直しと失敗の行を日誌に書かない（拾い直しは続ける）`;
   }
 
   // 変わったときだけ器へ書く: `append` はおよそ 100ms ごとに来て、毎回書くとターン1本につき数十回の書き込みになるため。投げない: 失敗しても生ログを預ける本体の仕事を止める理由が無いため
@@ -4392,25 +4429,32 @@ class Clone implements CloneHost {
       return;
     }
 
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: `${EXCHANGE_KIND_RECOVERY_PREFIX}捨てたセッションの区間を、預けた生ログから拾い直す: ${grave.sessionId}`,
-    });
-
-    try {
-      await this.#distillFromTranscript(tailOf(transcript));
-    } catch (error) {
-      // 印は残す（#4705）: 拾い直しの墓標（`#pickUpTranscriptGrave`）と同じ理由
+    // 理由は `#pickUpTranscriptGrave` と同じ（#4752）
+    const quiet = await this.#graveDistillQuiet('lost_session', grave.sessionId);
+    if (!quiet) {
       await this.#journal({
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}捨てたセッションの区間の蒸留に失敗した: ${reasonOf(error)}` +
-          `（印は残す。次の起動で拾い直す: ${grave.sessionId}）`,
+        text: `${EXCHANGE_KIND_RECOVERY_PREFIX}捨てたセッションの区間を、預けた生ログから拾い直す: ${grave.sessionId}`,
       });
+    }
+
+    try {
+      await this.#distillFromTranscript(tailOf(transcript), { journalInput: !quiet });
+    } catch (error) {
+      // 印は残す（#4705）: 拾い直しの墓標（`#pickUpTranscriptGrave`）と同じ理由
+      const note = await this.#graveDistillFailureNote('lost_session', grave.sessionId);
+      if (note !== null) {
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text:
+            `${EXCHANGE_KIND_FAILURE_PREFIX}捨てたセッションの区間の蒸留に失敗した: ${reasonOf(error)}` +
+            `（印は残す。次の起動で拾い直す: ${grave.sessionId}）${note}`,
+        });
+      }
       return;
     }
 
@@ -6145,7 +6189,11 @@ class Clone implements CloneHost {
   }
 
   /** 走行中のセッションは compaction 中なので、蒸留は別の短命セッションで行う。 */
-  async #distillFromTranscript(transcriptTail: string): Promise<void> {
+  async #distillFromTranscript(
+    transcriptTail: string,
+    // 入力の行を書かないのは、同じ墓標の失敗が上限を超えた拾い直しだけ（#4752）。他の呼び出し元は書く
+    options: { journalInput?: boolean } = {},
+  ): Promise<void> {
     // 持たない駆動役では投げる: 黙って返すと、蒸留していないのに成功として扱われるため。
     const driver = this.#driver;
     const distill = driver.distill?.bind(driver);
@@ -6155,7 +6203,9 @@ class Clone implements CloneHost {
     // 載せ直しの控え（`#memoryOnRecord`）は触らない: 別の短命セッションなので、触ると本セッションの差分が消える。
     const memory = renderMemoryDocuments(await this.#stores.persona.documents());
 
-    await this.#journal(turnInputEntry({ type: 'pre_compact_distill', transcriptTail }));
+    if (options.journalInput !== false) {
+      await this.#journal(turnInputEntry({ type: 'pre_compact_distill', transcriptTail }));
+    }
 
     const prompt = [
       buildDistillPrompt('pre_compact'),

@@ -289,6 +289,10 @@ export function createMemoryStores(): Stores {
   let cloneSessionId: string | null = null;
   let transcriptGrave: TranscriptGrave | null = null;
   let lostSessionGrave: LostSessionGrave | null = null;
+  const distillFailureRecords: Record<
+    'transcript' | 'lost_session',
+    { graveId: string; failures: number } | null
+  > = { transcript: null, lost_session: null };
   let projectKey: string | null = null;
   let envProfile = new Map<string, EnvProfileEntry>();
   let storedMcpServers: StoredMcpServers | null = null;
@@ -1004,6 +1008,16 @@ export function createMemoryStores(): Stores {
       if (transcriptGrave?.archiveId !== archiveId) return false;
       transcriptGrave = null;
       return true;
+    },
+    async graveDistillFailures(kind, graveId) {
+      const stored = distillFailureRecords[kind];
+      return stored?.graveId === graveId ? stored.failures : 0;
+    },
+    async noteGraveDistillFailure(kind, graveId) {
+      const stored = distillFailureRecords[kind];
+      const failures = stored?.graveId === graveId ? stored.failures + 1 : 1;
+      distillFailureRecords[kind] = { graveId, failures };
+      return failures;
     },
     async getLostSessionGrave() {
       return lostSessionGrave;
