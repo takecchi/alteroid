@@ -687,10 +687,8 @@ const scheduleBody = z.object({
 });
 
 const commitmentBody = z.object({
-  body: z
-    .string()
-    .min(1)
-    .refine((value) => stripNul(value).length > 0),
+  // 空白だけの本文も断る（close の reason と同じ判定。#4816）: 何も言っていない行が台帳と進捗の未了に残り続けるため
+  body: nonBlankString,
   // NUL だけの source は、ストアが NUL を落として空の source で残すので断る。
   source: z
     .string()
@@ -703,10 +701,7 @@ const commitmentBody = z.object({
 const commitmentCloseBody = z.object({ reason: nonBlankString });
 
 const commitmentEditBody = z.object({
-  body: z
-    .string()
-    .min(1)
-    .refine((value) => stripNul(value).length > 0),
+  body: nonBlankString,
   ifMatch: z.string().optional(),
 });
 

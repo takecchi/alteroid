@@ -5070,6 +5070,12 @@ export function createCloneTools(context: ToolContext) {
         // NUL を落とした後の値で検める: 台帳の入口は本文から NUL を落として残すので、生の値で数えると NUL だけの本文が通って空になるため
         const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
+        // 空白だけの本文も断る（#4816）: 何も言っていない行が台帳と進捗の未了に残り続けるため
+        if (stripNul(body).trim().length === 0) {
+          return text(
+            'body が空白だけです。何を引き受けたかを、後日のあなたが読んで動ける言葉で書いてください。',
+          );
+        }
         // source も NUL を落とした後で見る: NUL だけだと空の source の行になるため
         if (source !== undefined && stripNul(source).length === 0) {
           return text(
@@ -5296,6 +5302,12 @@ export function createCloneTools(context: ToolContext) {
         // NUL を落とした後の値で検める: 台帳の入口は本文から NUL を落として残すので、生の値で数えると NUL だけの本文が通って空になるため
         const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
+        // 空白だけの本文も断る（#4816）: 何も言っていない行が台帳と進捗の未了に残り続けるため
+        if (stripNul(body).trim().length === 0) {
+          return text(
+            'body が空白だけです。何を引き受けたかを、後日のあなたが読んで動ける言葉で書いてください。',
+          );
+        }
         // 読めない行は本文の書き直しを通さず名乗るだけにとどめる: 読める本文が無い以上、書き直して読める行へ戻る保証も無いため
         let existing;
         try {
