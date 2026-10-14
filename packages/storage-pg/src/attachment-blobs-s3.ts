@@ -1,16 +1,21 @@
 import { Readable } from 'node:stream';
 
 import {
+  AbortMultipartUploadCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
+  ListMultipartUploadsCommand,
   ListObjectsV2Command,
   S3Client,
+  type ListMultipartUploadsCommandOutput,
   type ListObjectsV2CommandOutput,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import {
   attachmentBlobPartBytesFor,
+  reasonOf,
+  type AttachmentBlobAbortResult,
   type AttachmentBlobConfig,
   type AttachmentBlobStore,
 } from '@alteroid/core';
@@ -96,6 +101,63 @@ export class S3AttachmentBlobStore implements AttachmentBlobStore {
     } while (token !== undefined);
   }
 
+  /**
+   * 一覧が落ちても投げない（#4763）: 掃除の本体を止めないため。
+   * `Initiated` などが欠けた要素は触らない: 判定できないものは消さない側へ倒すため。
+   */
+  async abortStaleUploads(prefix: string, startedBefore: Date): Promise<AttachmentBlobAbortResult> {
+    let aborted = 0;
+    let failed = 0;
+    let reason: string | undefined;
+    let keyMarker: string | undefined;
+    let uploadIdMarker: string | undefined;
+    try {
+      do {
+        const page: ListMultipartUploadsCommandOutput = await this.#client.send(
+          new ListMultipartUploadsCommand({
+            Bucket: this.#bucket,
+            Prefix: prefix,
+            ...(keyMarker === undefined ? {} : { KeyMarker: keyMarker }),
+            ...(uploadIdMarker === undefined ? {} : { UploadIdMarker: uploadIdMarker }),
+          }),
+        );
+        for (const upload of page.Uploads ?? []) {
+          if (
+            upload.Key === undefined ||
+            upload.UploadId === undefined ||
+            upload.Initiated === undefined ||
+            upload.Initiated.getTime() >= startedBefore.getTime()
+          ) {
+            continue;
+          }
+          try {
+            await this.#client.send(
+              new AbortMultipartUploadCommand({
+                Bucket: this.#bucket,
+                Key: upload.Key,
+                UploadId: upload.UploadId,
+              }),
+            );
+            aborted += 1;
+          } catch (error) {
+            // すでに無い（完了した・別の掃除が消した）なら目的は果たされているため
+            if (isNotFound(error) || isNoSuchUpload(error)) {
+              aborted += 1;
+            } else {
+              failed += 1;
+              reason ??= reasonOf(error);
+            }
+          }
+        }
+        keyMarker = page.IsTruncated === true ? page.NextKeyMarker : undefined;
+        uploadIdMarker = page.IsTruncated === true ? page.NextUploadIdMarker : undefined;
+      } while (keyMarker !== undefined || uploadIdMarker !== undefined);
+    } catch (error) {
+      reason ??= reasonOf(error);
+    }
+    return { aborted, failed, ...(reason === undefined ? {} : { reason }) };
+  }
+
   async remove(keys: readonly string[]): Promise<void> {
     for (let start = 0; start < keys.length; start += DELETE_BATCH) {
       const batch = keys.slice(start, start + DELETE_BATCH);
@@ -144,6 +206,10 @@ function isNotFound(error: unknown): boolean {
     named.name === 'NotFound' ||
     named.$metadata?.httpStatusCode === 404
   );
+}
+
+function isNoSuchUpload(error: unknown): boolean {
+  return (error as { name?: unknown } | null)?.name === 'NoSuchUpload';
 }
 
 /**

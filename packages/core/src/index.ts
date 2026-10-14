@@ -1266,6 +1266,7 @@ export {
   attachmentBlobListPrefix,
   isAttachmentBlobKey,
   readAttachmentBlobConfig,
+  type AttachmentBlobAbortResult,
   type AttachmentBlobSweepResult,
   type AttachmentBlobConfig,
   type AttachmentBlobConfigResult,

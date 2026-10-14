@@ -12,6 +12,20 @@ export interface AttachmentBlobStore {
   remove(keys: readonly string[]): Promise<void>;
   /** 置いた時刻（`lastModified`）が分からない要素は列挙から外す: 判定できないものは消さない側へ倒すため。 */
   list(prefix: string): AsyncIterable<{ key: string; lastModified: Date }>;
+  /**
+   * `prefix` の下で、`startedBefore` より前に始まり未完了のままの分割アップロードを取り消す（#4763）。
+   * 上げている途中でプロセスが落ちると部品が置き場に残り、`list`（完成したオブジェクトだけ）では見えず課金され続けるため。
+   * `startedBefore` 以後に始まったものには触らない: 上げている最中のものを取り消さないため。
+   * 置き場が分割アップロードの一覧を持たない・断られたときは投げず、`{ aborted: 0, failed: 0, reason }` を返す。
+   */
+  abortStaleUploads?(prefix: string, startedBefore: Date): Promise<AttachmentBlobAbortResult>;
+}
+
+/** key・値・資格は載せない（`reason` も同じ）。 */
+export interface AttachmentBlobAbortResult {
+  readonly aborted: number;
+  readonly failed: number;
+  readonly reason?: string;
 }
 
 /** 試験用のインメモリの置き場。 */
@@ -110,7 +124,10 @@ export interface AttachmentBlobSweepResult {
   readonly candidates: number;
   readonly removed: number;
   readonly failed: number;
-  /** key と値は載せない。 */
+  /** 未完了の分割アップロードを取り消した数（#4763）。置き場がその口を持つときだけ載る。 */
+  readonly abortedUploads?: number;
+  readonly abortFailedUploads?: number;
+  /** key と値は載せない。最初の失敗の理由。 */
   readonly reason?: string;
 }
 

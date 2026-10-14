@@ -111,13 +111,23 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
     try {
       const result = await sweep.call(options.stores.attachments, now);
       if (result === undefined) return;
-      if (result.removed > 0 || result.failed > 0) {
+      const aborted = result.abortedUploads ?? 0;
+      const abortFailed = result.abortFailedUploads ?? 0;
+      if (result.removed > 0 || result.failed > 0 || aborted > 0 || abortFailed > 0) {
         const trouble =
           result.failed > 0
             ? `、${result.failed} 件は消せなかった（${result.reason ?? '理由不明'}）`
             : '';
+        // 上げかけの部品は 0 件のとき文に出さない: 既存の文面を変えないため
+        const uploads =
+          aborted > 0 || abortFailed > 0
+            ? `、未完了の分割アップロードを ${aborted} 件取り消した` +
+              (abortFailed > 0
+                ? `（${abortFailed} 件は取り消せなかった: ${result.reason ?? '理由不明'}）`
+                : '')
+            : '';
         process.stderr.write(
-          `alteroidd: 添付の中身の掃除: 控えの無い ${result.removed} 件を消した${trouble}\n`,
+          `alteroidd: 添付の中身の掃除: 控えの無い ${result.removed} 件を消した${trouble}${uploads}\n`,
         );
       }
     } catch (error: unknown) {

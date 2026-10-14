@@ -541,7 +541,31 @@ export class PgAttachmentStore implements AttachmentStore {
       }
     }
     await settle(batch);
-    return { listed, candidates, removed, failed, ...(reason === undefined ? {} : { reason }) };
+
+    // 完成したオブジェクトの掃除のあとに、上げかけの部品を取り消す（#4763）。同じ猶予: 上げている最中のものを取り消さないため
+    let uploads: { abortedUploads: number; abortFailedUploads: number } | undefined;
+    if (blobs.abortStaleUploads !== undefined) {
+      try {
+        const swept = await blobs.abortStaleUploads(
+          attachmentBlobListPrefix(prefix),
+          new Date(cutoff),
+        );
+        uploads = { abortedUploads: swept.aborted, abortFailedUploads: swept.failed };
+        reason ??= swept.reason;
+      } catch (error) {
+        // 口の約束は投げないことだが、投げても完成した側の結果を捨てないため
+        uploads = { abortedUploads: 0, abortFailedUploads: 1 };
+        reason ??= reasonOf(error);
+      }
+    }
+    return {
+      listed,
+      candidates,
+      removed,
+      failed,
+      ...uploads,
+      ...(reason === undefined ? {} : { reason }),
+    };
   }
 
   async setKept(id: string, kept: boolean, now: Date): Promise<AttachmentMeta | undefined> {
