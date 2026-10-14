@@ -2408,6 +2408,8 @@ export function ChatPane({
       let opened = false;
       let sawTerminal = false;
       let cutEarly = false;
+      // デーモンが受け取り済みの送り直しに返す印（#4745）。進行中のターンが無ければ、終わりの合図を送らずに閉じる
+      let duplicateOpen = false;
 
       const { setTransient, apply } = createStreamWriter(stream, controller);
 
@@ -2432,6 +2434,7 @@ export function ChatPane({
         )) {
           if (message.event === 'open') {
             opened = true;
+            if (message.data.duplicate === true) duplicateOpen = true;
             if (stream.id === undefined) {
               // 先にストリームの所属を新しい id へ移してから state を動かす: 逆にすると、上の effect がこのストリームを「前の会話のもの」と見なして止める
               stream.id = message.data.conversationId;
@@ -2461,7 +2464,10 @@ export function ChatPane({
           apply(message.data);
         }
         if (!sawTerminal && !controller.signal.aborted) {
-          if (opened) {
+          if (opened && duplicateOpen) {
+            // 受け取り済みの送り直しは「途中で切れた」ではない（#4745）: 返事は既に履歴に在るか、これから始まるターンで出る。終わりの合図が来たときと同じく追う
+            sawTerminal = true;
+          } else if (opened) {
             setFailures((prev) => new Map(prev).set(stream.id, new StreamClosedEarlyError()));
             markCutOff(stream.id);
             cutEarly = true;
