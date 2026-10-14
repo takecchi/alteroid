@@ -22,7 +22,7 @@ import { formatRelative, redactBody, usageHref, type Progress } from '@alteroid/
 import { useMinuteNow } from '~/lib/use-now';
 
 import { UnreadableScheduleNote } from './schedule';
-import { UnreadableUsageRowsNote } from './usage';
+import { UnmeteredUsageNote, UnreadableUsageRowsNote } from './usage';
 
 // 窓を2日より狭くしない: TZ のオフセットで同じ瞬間の暦の日が最大2日ずれ、1日では足りないため
 const USAGE_WINDOW_DAYS = 2;
@@ -184,6 +184,8 @@ function UsageTile() {
     (row) => row.date === undefined || row.date === today,
   );
   const hasUnreadable = describeUnreadableUsageRows(unreadableRows).length > 0;
+  // 消費を報告しない provider のターンも今日の分に絞って言う（#4800）: 言わないと、それだけの日が「推定 $0.0000」で使っていないように見えるため（/usage と同じ注記）
+  const unmeteredRows = usage.data?.unmeteredRows?.filter((row) => row.date === today);
 
   return (
     <HomeTile
@@ -234,7 +236,10 @@ function UsageTile() {
         </>
       )}
       {usage.data !== undefined && today !== undefined && (
-        <UnreadableUsageRowsNote rows={unreadableRows} className="mt-2" />
+        <>
+          <UnreadableUsageRowsNote rows={unreadableRows} className="mt-2" />
+          <UnmeteredUsageNote rows={unmeteredRows} className="mt-2" />
+        </>
       )}
     </HomeTile>
   );
