@@ -793,3 +793,53 @@ describe('撃ち直されないまま期限切れになった1回だけの許可
     }
   });
 });
+
+// 受け取った時点で中断済みでも、ask を settled より先に出す（#4772）: 逆だとデーモンが後から届いた ask を答えようの無い確認として積むため
+describe('中断済みの合図で受けた確認は ask を settled より先に出す（#4772）', () => {
+  function orderOf(events: readonly RunnerEvent[], requestId: string): string[] {
+    return events.flatMap((event) =>
+      (event.type === 'ask' || event.type === 'settled') && event.requestId === requestId
+        ? [event.type]
+        : [],
+    );
+  }
+
+  it('⭐ canUseTool: 中断済みなら deny で返し、ask → settled の順で知らせる', async () => {
+    const { started, events } = await startSession();
+    const controller = new AbortController();
+    controller.abort();
+    const canUseTool = started.options.canUseTool as unknown as (
+      toolName: string,
+      input: Record<string, unknown>,
+      extra: { signal: AbortSignal; toolUseID?: string; requestId?: string },
+    ) => Promise<{ behavior: string }>;
+    const answer = await canUseTool(
+      'Bash',
+      { command: 'echo aborted-probe' },
+      { signal: controller.signal, toolUseID: 'tu-aborted-1', requestId: 'tu-aborted-1' },
+    );
+    expect(answer.behavior).toBe('deny');
+    const asked = askEvents(events).find((event) => event.summary.includes('aborted-probe'));
+    expect(asked).toBeDefined();
+    expect(orderOf(events, asked!.requestId)).toEqual(['ask', 'settled']);
+  });
+
+  it('⭐ PermissionDenied: 中断済みなら retry を返さず、ask → settled の順で知らせる', async () => {
+    const { started, events } = await startSession();
+    const controller = new AbortController();
+    controller.abort();
+    const decision = await firePermissionDenied(
+      started.options,
+      {
+        hook_event_name: 'PermissionDenied',
+        tool_name: 'Bash',
+        tool_input: { command: 'echo aborted-denied-probe' },
+        tool_use_id: 'tu-aborted-2',
+        reason: '分類器が拒否した（テスト）',
+      },
+      controller.signal,
+    );
+    expect(decision).toEqual({ continue: true });
+    expect(orderOf(events, 'tu-aborted-2')).toEqual(['ask', 'settled']);
+  });
+});
