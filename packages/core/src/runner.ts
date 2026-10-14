@@ -524,7 +524,8 @@ export interface RunnerHost {
     attachments?: readonly RunnerAttachment[],
   ): Promise<boolean>;
   answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome>;
-  stop(managerId: string): Promise<void>;
+  /** `keepPeers`: 鍵の付け替えのための畳み。peer を閉じずに預け、同じ担当の resume で引き継ぐ（#4734）。 */
+  stop(managerId: string, options?: { keepPeers?: boolean }): Promise<void>;
   list(): RunnerManagerState[];
   transcript(managerId: string): Promise<string | null>;
   // 委譲が終わっていても開く（退避先は `closed` では消えず、デーモンの `DELETE` か24時間の掃除まで残る）。形が不正・無ければ `undefined`
@@ -666,6 +667,11 @@ class Host implements RunnerHost {
   /** 最後に名乗った（起動時は構築時に読んだ）接続先の表示行。器だけの状態からの変化だけを名乗るための基準。 */
   #announcedAnthropicRoute: string;
   readonly #sessions = new Map<string, RunnerSession>();
+  // 鍵の付け替えで畳んだ担当から預かった peer（#4734）。同じ担当の resume で新しいセッションへ渡し、戻らなければ期限で閉じる
+  readonly #parkedPeers = new Map<
+    string,
+    { parked: ParkedPeers; timer: ReturnType<typeof setTimeout> }
+  >();
   readonly #generations = new WeakMap<RunnerSession, string>();
   readonly #attachmentsRoot: string;
   readonly #attachmentRemovals = new Map<string, Promise<void>>();
@@ -1263,6 +1269,7 @@ class Host implements RunnerHost {
     // セッションごとに持つ（host の集合に直接足さない）: 終わり方が分かるのは閉じた後で、それまでは守る側のままにするため
     const spawnedPids = new Set<number>();
     const session = new RunnerSession({
+      onPeersParked: (parked) => this.#parkPeers(managerId, parked),
       managerId,
       request,
       cwd: this.#resolveCwd(cwd),
@@ -1421,7 +1428,11 @@ class Host implements RunnerHost {
       }
       const session = this.#create(command.managerId, command.request, command.cwd);
       session.checkFence(command.lease);
+      // 鍵の付け替えで預けた peer を引き継ぐ（#4734）。組む道具が新しい窓口を作らないよう resume の前に渡し、預かった知らせは resume の後に回す
+      const parked = this.#takeParkedPeers(command.managerId);
+      if (parked !== undefined) session.adoptPeers(parked);
       session.resume(command.sessionId, command.entries, resumeInput?.text, resumeInput?.images);
+      if (parked !== undefined) session.releaseAdoptedPeers();
       return { cwd: session.cwd, reusedLiveSession: false, ...this.#generationOf(session) };
     }
   }
@@ -1593,8 +1604,47 @@ class Host implements RunnerHost {
     return session.answer(answer);
   }
 
-  async stop(managerId: string): Promise<void> {
-    await this.#sessions.get(managerId)?.stop('デーモンから停止を指示された。');
+  async stop(managerId: string, options: { keepPeers?: boolean } = {}): Promise<void> {
+    // 鍵の付け替えのためでない停止（人間・クローンが止めた）では、前に預かった peer も閉じる（#4734）
+    if (options.keepPeers !== true) this.#closeParkedPeers(managerId, '人間・クローンが止めた');
+    await this.#sessions
+      .get(managerId)
+      ?.stop(
+        'デーモンから停止を指示された。',
+        options.keepPeers === true ? { keepPeers: true } : {},
+      );
+  }
+
+  #parkPeers(managerId: string, parked: ParkedPeers): void {
+    // 前に預かった分が残っていれば閉じる: 同じ担当の peer が2組あると、どちらを付け替えるか決められないため
+    this.#closeParkedPeers(managerId, '同じ担当の peer を預かり直した');
+    const timer = setTimeout(() => {
+      this.#closeParkedPeers(
+        managerId,
+        `鍵の付け替えで畳んだ担当が ${String(PEER_PARK_TTL_MS / 60_000)} 分戻らなかった`,
+      );
+    }, PEER_PARK_TTL_MS);
+    timer.unref?.();
+    this.#parkedPeers.set(managerId, { parked, timer });
+    this.#emit({
+      type: 'note',
+      managerId,
+      text: '鍵の付け替えのために畳んだので、peer のセッションは閉じずに預けた。起こし直した担当へ引き継ぐ（#4734）',
+    });
+  }
+
+  #takeParkedPeers(managerId: string): ParkedPeers | undefined {
+    const entry = this.#parkedPeers.get(managerId);
+    if (entry === undefined) return undefined;
+    clearTimeout(entry.timer);
+    this.#parkedPeers.delete(managerId);
+    return entry.parked;
+  }
+
+  #closeParkedPeers(managerId: string, reason: string): void {
+    const parked = this.#takeParkedPeers(managerId);
+    if (parked === undefined) return;
+    closeParkedPeers(parked, reason, (text) => this.#emit({ type: 'note', managerId, text }));
   }
 
   list(): RunnerManagerState[] {
@@ -1665,6 +1715,9 @@ class Host implements RunnerHost {
       ),
     );
     this.#sessions.clear();
+    for (const managerId of [...this.#parkedPeers.keys()]) {
+      this.#closeParkedPeers(managerId, '器を畳む');
+    }
     // 予約済みの plugin の片づけ（retainPlugins の投げっぱなし）を待つ: 待たずに返すと、畳んだ後にも展開先を消し続け、呼び手の後片づけと競合するため
     await this.#pluginsChain;
     // セッションを畳んだ後に閉じる: 先に閉じると、畳みの途中の peer の中継が切れるため
@@ -1677,6 +1730,12 @@ class Host implements RunnerHost {
 function pickupKey(kind: 'archive' | 'outbox', managerId: string, id: string): string {
   return `${kind}\u0000${managerId}\u0000${id}`;
 }
+
+/**
+ * 鍵の付け替えで畳んだ担当から預かった peer を待つ長さ（#4734）。デーモンは畳んだ直後に resume するので、普段は数秒で引き取られる。
+ * 戻らない（resume が別の器へ行った・失敗した）ときに peer の子プロセスを残し続けないため、期限で閉じる。
+ */
+export const PEER_PARK_TTL_MS = 10 * 60_000;
 
 const RESOLVED_MEMORY_LIMIT = 512;
 
@@ -1751,6 +1810,40 @@ function classifyBackgroundTaskStatus(status: unknown): 'live' | 'settled' | 'un
   return 'unknown';
 }
 
+/** 鍵の付け替えで畳む間に預かる peer の窓口の結び（#4734）。受け口はいつも `session`（いまの担当のセッション）へ回る。 */
+interface PeerBinding {
+  session: RunnerSession;
+  // 預けている間（前のセッションを畳んだ後・新しいセッションへ付け替える前）は、確認と背景の止まりどころを預かる
+  parked: boolean;
+  heldAsks: { run: () => void; deny: (message: string) => void }[];
+  heldStops: PeerTurnResult[];
+}
+
+/** 畳んだセッションから預かった peer（#4734）。host が持ち、同じ担当の resume で新しいセッションへ渡す。 */
+export interface ParkedPeers {
+  readonly broker: PeerBroker;
+  readonly binding: PeerBinding;
+}
+
+/** 預かった peer を閉じる（担当が戻らなかった・人が止めた・器を畳む）。預かっていた確認は理由を付けて断り、背景の止まりどころは知らせに残す。 */
+export function closeParkedPeers(
+  parked: ParkedPeers,
+  reason: string,
+  note: (text: string) => void,
+): void {
+  const { binding, broker } = parked;
+  for (const ask of binding.heldAsks.splice(0)) {
+    ask.deny(`peer のマネージャーが戻らないので断った（${reason}）`);
+  }
+  for (const result of binding.heldStops.splice(0)) {
+    note(
+      `背景の peer（${result.provider}）[${result.sessionId}] の止まりどころを届けられないまま閉じた（${reason}）: ${describePeerTurnResult(result)}`,
+    );
+  }
+  broker.closeAll();
+  note(`預かっていた peer のセッションを閉じた（${reason}）`);
+}
+
 interface PendingRequest {
   id: string;
   kind: 'question' | 'permission';
@@ -1776,6 +1869,8 @@ type DelegationProcessHandle = AgentChildProcess;
 
 interface RunnerSessionOptions {
   workerToolWatchClock?: WorkerToolWatchClock;
+  /** 鍵の付け替えのための畳みで peer を預けたとき、host へ渡す（#4734）。 */
+  onPeersParked?: (parked: ParkedPeers) => void;
   managerId: string;
   request: string;
   cwd: string;
@@ -1851,10 +1946,12 @@ class RunnerSession {
   readonly #permissionMode: ManagerPermissionMode;
   readonly #bashGuard: BashGuardMode;
   readonly #peer: (() => RunnerPeerOptions | undefined) | undefined;
+  readonly #onPeersParked: ((parked: ParkedPeers) => void) | undefined;
   readonly #managerTools: RunnerManagerToolsOptions | undefined;
   readonly #codexAuth: CodexChatgptAuthHandle | undefined;
   readonly #queryFn: ClaudeQueryFn | undefined;
   #peerBroker: PeerBroker | undefined;
+  #peerBinding: PeerBinding | undefined;
   /** 背景の peer の止まりどころの知らせのうち、まだ届けていないもの（確認待ちの間は溜める）。 */
   readonly #peerNotices: string[] = [];
   readonly #profileEnv: () => Record<string, string>;
@@ -2000,6 +2097,7 @@ class RunnerSession {
     this.#env = options.env;
     this.#withheldEnvKeys = options.withheldEnvKeys;
     this.#childUser = options.childUser;
+    this.#onPeersParked = options.onPeersParked;
     this.#peer = options.peer;
     this.#managerTools = options.managerTools;
     this.#codexAuth = options.codexAuth;
@@ -2230,7 +2328,10 @@ class RunnerSession {
     }
   }
 
-  async stop(reason: string, options: { captureUnpushedWork?: boolean } = {}): Promise<void> {
+  async stop(
+    reason: string,
+    options: { captureUnpushedWork?: boolean; keepPeers?: boolean } = {},
+  ): Promise<void> {
     if (this.#sdkSession.stopped) {
       // 畳み中のものがあれば待ってから返る（2本目は自分では畳まない）: 即座に返すと `stop()` を await した呼び出し元が畳み終わったと思って先へ進むため
       // 例外を飲み込まない: 呼び出し元は既に `stop()` が投げうる前提で受けているため
@@ -2241,7 +2342,10 @@ class RunnerSession {
     await this.#sdkSession.trackClosing(() => this.#stopBody(reason, options));
   }
 
-  async #stopBody(reason: string, options: { captureUnpushedWork?: boolean } = {}): Promise<void> {
+  async #stopBody(
+    reason: string,
+    options: { captureUnpushedWork?: boolean; keepPeers?: boolean } = {},
+  ): Promise<void> {
     this.#sdkSession.markStopped();
 
     // `#settleAll` より前に状態を控える: 控えずに `#status` を読むと確認が解放された後の `running` を報告が名乗ってしまうため
@@ -2259,7 +2363,21 @@ class RunnerSession {
     this.#settleAll(reason);
     this.#workerTools.settleAll();
     this.#sdkSession.wakeInput();
-    this.#peerBroker?.closeAll();
+    // 鍵の付け替えのための畳み（`keepPeers`）では peer を閉じずに預ける（#4734）: peer は担当の Claude の鍵と関係の無い資格で走っていて、閉じると担当が持っていた作業者が黙って消えるため。
+    // 人間・クローンの停止と器の畳みでは今どおり閉じる
+    if (
+      options.keepPeers === true &&
+      this.#peerBroker !== undefined &&
+      this.#peerBinding !== undefined
+    ) {
+      this.#peerBinding.parked = true;
+      const parked: ParkedPeers = { broker: this.#peerBroker, binding: this.#peerBinding };
+      this.#peerBroker = undefined;
+      this.#peerBinding = undefined;
+      this.#onPeersParked?.(parked);
+    } else {
+      this.#peerBroker?.closeAll();
+    }
     this.#sdkSession.closeQuery();
     // 生ログの送り出しと報告を `#reader` が終わるまで待つ: `query.close()` の前に読むと CLI が EOF を受けてから書く最後の数行を取りこぼすため
     await this.#sdkSession.reader?.catch(() => undefined);
@@ -2423,37 +2541,66 @@ class RunnerSession {
     };
   }
 
+  // 受け口はすべて結び（`binding`）を通す（#4734）: 鍵の付け替えで畳んだ後、起こし直した新しいセッションへ窓口ごと付け替えるため。
+  // 預けている間（`parked`）の確認と背景の止まりどころは、黙って捨てず預かり、付け替えた先へ回す
   #createPeerBroker(allowed: readonly AgentProviderId[], peer: RunnerPeerOptions): PeerBroker {
+    const binding: PeerBinding = { session: this, parked: false, heldAsks: [], heldStops: [] };
+    this.#peerBinding = binding;
     return createPeerBroker({
       allowed,
       ...(peer.models === undefined ? {} : { models: peer.models }),
       // 組んだ後に資格が外れたら、相手を起こさずに断る（道具が消えるのは次の組み直し）
       closedReason: (provider) =>
-        this.#peer?.()?.peers.includes(provider) === true
+        binding.session.#peer?.()?.peers.includes(provider) === true
           ? undefined
           : `この器では peer（${provider}）がいま閉じている（資格が外れた。理由は runner_list の peer の行に出る）`,
-      askApproval: (source, request) => this.#onPermission(request, source),
+      askApproval: (source, request) =>
+        binding.parked
+          ? new Promise<AgentPermissionDecision>((resolve) => {
+              binding.heldAsks.push({
+                run: () => {
+                  binding.session
+                    .#onPermission(request, source)
+                    .then(resolve, (error: unknown) =>
+                      resolve({
+                        behavior: 'deny',
+                        message: `確認を上げられなかった: ${reasonOf(error)}`,
+                      }),
+                    );
+                },
+                deny: (message) => resolve({ behavior: 'deny', message }),
+              });
+            })
+          : binding.session.#onPermission(request, source),
       driverOf: (provider) =>
         provider === 'codex'
           ? new CodexManagerDriver(
-              this.#codexAuth === undefined ? {} : { chatgptAuth: this.#codexAuth },
+              binding.session.#codexAuth === undefined
+                ? {}
+                : { chatgptAuth: binding.session.#codexAuth },
             )
-          : new ClaudeManagerDriver(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
+          : new ClaudeManagerDriver(
+              binding.session.#queryFn === undefined ? {} : { queryFn: binding.session.#queryFn },
+            ),
       reportsUsage: (provider) => peer.reportsUsage(provider),
-      onNote: (text) => this.#emit({ type: 'note', managerId: this.#id, text }),
+      onNote: (text) =>
+        binding.session.#emit({ type: 'note', managerId: binding.session.#id, text }),
       // 背景へ回した peer の止まりどころは、マネージャーへの知らせとして入れて起こす
-      onBackgroundStop: (result) => this.#onPeerBackgroundStop(result),
+      onBackgroundStop: (result) => {
+        if (binding.parked) binding.heldStops.push(result);
+        else binding.session.#onPeerBackgroundStop(result);
+      },
       // 作業者の長い道具と同じ口に載せる: ホームの稼働状況に、作業者と同じ形で「実行中」を出すため
       onTurn: (event) => {
         const toolUseId = `peer:${event.turnId}`;
         if (event.kind === 'ended') {
-          this.#emit({ type: 'tool_end', managerId: this.#id, toolUseId });
+          binding.session.#emit({ type: 'tool_end', managerId: binding.session.#id, toolUseId });
           return;
         }
-        this.#emit({
+        binding.session.#emit({
           type: 'tool_running',
-          managerId: this.#id,
-          actor: peerActorOf(this.#id, event.provider),
+          managerId: binding.session.#id,
+          actor: peerActorOf(binding.session.#id, event.provider),
           tool: event.tool,
           toolUseId,
           startedAt: event.startedAt,
@@ -2461,9 +2608,9 @@ class RunnerSession {
         });
       },
       onUsage: (report) =>
-        this.#emit({
+        binding.session.#emit({
           type: 'peer_usage',
-          managerId: this.#id,
+          managerId: binding.session.#id,
           provider: report.provider,
           ...(report.sessionId === undefined ? {} : { sessionId: report.sessionId }),
           models: report.models,
@@ -2472,15 +2619,15 @@ class RunnerSession {
       // 作られたファイルを、道具の記録に残らない作り方（コードで書いた等）でも拾う
       scanWorkdir: (dir, sinceMs) => scanPeerWorkdir(dir, sinceMs),
       makeSpec: (provider, parts) => ({
-        ...this.#buildSpec(undefined, true),
-        ...this.#peerWorkdirSpec(),
+        ...binding.session.#buildSpec(undefined, true),
+        ...binding.session.#peerWorkdirSpec(),
         input: parts.input,
         // 置かれたモデルを peer に効かせない: ホストの provider のものなので、名指しが無ければ各 provider の既定に任せるため
         model: parts.model ?? resolveManagerModel({}),
         modelPlaced: parts.model !== undefined,
         workerModel: resolveWorkerModel({}),
         // `strictApprovals` を載せない: 載せると構えが `default` / `untrusted` に締まるため
-        permissionMode: this.#permissionMode,
+        permissionMode: binding.session.#permissionMode,
         // peer の生ログを預けない: マネージャーの生ログと混ぜないため
         sessionLog: { append: async () => undefined, load: async () => null },
         onPermission: parts.onPermission,
@@ -2488,16 +2635,16 @@ class RunnerSession {
         onPreToolUse: () => ({ kind: 'continue' }),
         onPermissionDenied: async () => ({ kind: 'no-retry' }),
         onPostToolUse: (record) => {
-          this.#emit({
+          binding.session.#emit({
             type: 'tool_use',
-            managerId: this.#id,
-            actor: peerActorOf(this.#id, provider),
+            managerId: binding.session.#id,
+            actor: peerActorOf(binding.session.#id, provider),
             tool: record.toolName ?? '(不明)',
             input: record.toolInput,
           });
           return { kind: 'continue' };
         },
-        onPostToolUseFailure: (record) => this.#notePeerToolUseFailure(provider, record),
+        onPostToolUseFailure: (record) => binding.session.#notePeerToolUseFailure(provider, record),
         onPreCompact: () => undefined,
         onUserPromptSubmit: () => undefined,
         onSubagentStop: () => ({ kind: 'continue' }),
@@ -3382,6 +3529,22 @@ class RunnerSession {
   }
 
   /** 背景の peer が止まりどころに来た。知らせを溜め、届けられるなら届ける。 */
+  /** 鍵の付け替えで畳んだ前のセッションの peer を引き継ぐ（#4734）。`resume()` より前に呼ぶ: 組む道具（MCP）が新しい窓口を作らないため。 */
+  adoptPeers(parked: ParkedPeers): void {
+    this.#peerBroker = parked.broker;
+    this.#peerBinding = parked.binding;
+    parked.binding.session = this;
+  }
+
+  /** 預けている間に届いた確認と背景の止まりどころを、このセッションへ回す（#4734）。`resume()` の後に呼ぶ: 先に入れると、resume の一言より前に知らせが入るため。 */
+  releaseAdoptedPeers(): void {
+    const binding = this.#peerBinding;
+    if (binding === undefined || !binding.parked) return;
+    binding.parked = false;
+    for (const ask of binding.heldAsks.splice(0)) ask.run();
+    for (const result of binding.heldStops.splice(0)) this.#onPeerBackgroundStop(result);
+  }
+
   #onPeerBackgroundStop(result: PeerTurnResult): void {
     if (this.#sdkSession.stopped) return;
     const where =
