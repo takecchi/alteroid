@@ -127,6 +127,8 @@ class StreamClosedEarlyError extends Error {
 
 const REPLAY_MAX_ROUNDS = 40;
 const REPLAY_MAX_WAITS = 10;
+// 流れが終端の無いまま閉じたときに、続けて張り直す回数（#4663）。切れ続ける相手に張り直し続けない
+const AUTO_REATTACH_MAX = 3;
 
 // 「つながっていない・もう一度試して」と読ませない: 送り直して二重に送らせるため
 class ReplyCutOffError extends Error {
@@ -1984,19 +1986,22 @@ export function ChatPane({
   const replayControllerRef = useRef<AbortController | undefined>(undefined);
 
   const replayOnce = useCallback(
-    async (id: string, controller: AbortController) => {
+    async (id: string, controller: AbortController, options: { afterCut?: boolean } = {}) => {
       let stream: Stream | undefined;
       let writer: ReturnType<typeof createStreamWriter> | undefined;
       let sawTerminal = false;
       let pending: ChatStreamPending[] | undefined;
       let busy = false;
       let aborted: boolean | undefined;
+      let closedEarly = false;
       try {
         for await (const message of getChatStream(api, id, { signal: controller.signal })) {
           if (message.event === 'open') {
             pending = message.data.pending;
-            // 進行中でなくても捨てる: 途中の行は本文が違うので pendingOwnLines に引き取られず、確定した本文は履歴が出す
             if (!message.data.inProgress) {
+              // 流れが切れた後の張り直しで、ターンが既に終わっていたら、受け取った分と「途中で切れた」をそのまま残す: 確定した本文が履歴に載ったら、切れた返信の後片付けが入れ替える
+              if (options.afterCut === true) break;
+              // 進行中でなくても捨てる: 途中の行は本文が違うので pendingOwnLines に引き取られず、確定した本文は履歴が出す
               discardUnfinishedReply(id);
               break;
             }
@@ -2006,6 +2011,15 @@ export function ChatPane({
               break;
             }
             discardUnfinishedReply(id);
+            // 張り直して続きが流れるなら、切れたことはもう人間の手当てが要らない（#4663）
+            if (options.afterCut === true) {
+              setFailures((prev) => {
+                if (!(prev.get(id) instanceof StreamClosedEarlyError)) return prev;
+                const next = new Map(prev);
+                next.delete(id);
+                return next;
+              });
+            }
             stream = createStream(controller, id);
             stream.resumeTarget = pickResumeTarget(pending, followUpIdsRef.current.get(id));
             streamRef.current = stream;
@@ -2021,6 +2035,7 @@ export function ChatPane({
         aborted = controller.signal.aborted;
         if (stream !== undefined && !sawTerminal && !aborted) {
           const closedId = stream.id;
+          closedEarly = true;
           setFailures((prev) => new Map(prev).set(closedId, new StreamClosedEarlyError()));
           markCutOff(closedId);
         }
@@ -2049,6 +2064,7 @@ export function ChatPane({
       return {
         streamed: stream !== undefined,
         terminal: sawTerminal,
+        closedEarly,
         pending,
         busy,
         aborted: aborted === true,
@@ -2059,16 +2075,25 @@ export function ChatPane({
 
   // 待って張り直す: 再生の口は進行中でなければ open だけで閉じるので、ターンが始まるのを購読では待てない。上限で諦める（返信は日誌の更新で履歴に載る）
   const replayLoop = useCallback(
-    async (id: string, outer: AbortController) => {
+    async (id: string, outer: AbortController, options: { afterCut?: boolean } = {}) => {
       let waits = 0;
+      let cuts = 0;
+      let afterCut = options.afterCut === true;
       for (let round = 0; round < REPLAY_MAX_ROUNDS && !outer.signal.aborted; round += 1) {
         const pass = new AbortController();
         const link = () => pass.abort();
         outer.signal.addEventListener('abort', link, { once: true });
         pendingResumeRef.current = pass;
-        const result = await replayOnce(id, pass);
+        const result = await replayOnce(id, pass, { afterCut });
         outer.signal.removeEventListener('abort', link);
         if (result.aborted || result.busy || outer.signal.aborted) return;
+        // 終端の無いまま閉じたら、続きを読みに張り直す（#4663）: デーモンは受け手が追いつかないと流れだけを切り、ターンは止めない。上限を使い切ったら「途中で切れた」を残して止める
+        if (result.closedEarly && cuts < AUTO_REATTACH_MAX) {
+          cuts += 1;
+          afterCut = true;
+          continue;
+        }
+        afterCut = false;
         const ids = followUpIdsRef.current.get(id);
         if (ids === undefined || ids.size === 0) return;
         if (result.streamed) {
@@ -2110,6 +2135,17 @@ export function ChatPane({
       const outer = new AbortController();
       replayControllerRef.current = outer;
       void replayLoop(id, outer);
+    },
+    [replayLoop],
+  );
+
+  // 流れが終端の無いまま閉じた会話の続きを読みに行く（#4663）
+  const startReattach = useCallback(
+    (id: string) => {
+      replayControllerRef.current?.abort();
+      const outer = new AbortController();
+      replayControllerRef.current = outer;
+      void replayLoop(id, outer, { afterCut: true });
     },
     [replayLoop],
   );
@@ -2364,6 +2400,7 @@ export function ChatPane({
       stream.turn = { clientMessageId, text, lineKey, supersedes, attachments };
       let opened = false;
       let sawTerminal = false;
+      let cutEarly = false;
 
       const { setTransient, apply } = createStreamWriter(stream, controller);
 
@@ -2420,6 +2457,7 @@ export function ChatPane({
           if (opened) {
             setFailures((prev) => new Map(prev).set(stream.id, new StreamClosedEarlyError()));
             markCutOff(stream.id);
+            cutEarly = true;
           } else {
             giveBack(
               stream.id,
@@ -2483,12 +2521,15 @@ export function ChatPane({
           if (sawTerminal && !controller.signal.aborted && stream.id !== undefined) {
             startFollow(stream.id);
           }
+          // 受信の後片付け（`streamRef` を空ける）の後に張り直す: 先に張ると、再生が自分の送信を「走っている」と見て引く
+          if (cutEarly && stream.id !== undefined) startReattach(stream.id);
         }
       }
     },
     [
       api,
       startFollow,
+      startReattach,
       adjustUploading,
       shownId,
       retries,
