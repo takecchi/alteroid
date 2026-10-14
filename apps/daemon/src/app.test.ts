@@ -650,6 +650,48 @@ describe('HTTP API', () => {
       });
     });
 
+    it('受け手が読むのに追いつかず送り待ちが上限を超えたら、溜めた分を捨て、理由の error を1つ送って閉じ、日誌に1行残す（#4662）', async () => {
+      const capped = createApp({
+        clone: fake.clone,
+        stores,
+        token: 'test-token',
+        shutdown: () => undefined,
+        scheduler: schedule.scheduler,
+        journalEvents: journalBus,
+        chatStreamQueueLimits: { maxEvents: 2 },
+      });
+      fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
+      const response = await capped.request('/chat/conv-a/stream');
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      // 購読が始まったことを確かめる。以後は読まない（遅い受け手）
+      let seen = await readUntil(reader, 'event: thinking');
+
+      for (let i = 0; i < 6; i += 1)
+        fake.emit('conv-a', { type: 'text', text: `溜まる${String(i)}` });
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        seen += decoder.decode(value, { stream: true });
+      }
+
+      const last = frames(seen).at(-1);
+      expect(last?.event).toBe('error');
+      expect(last?.data).toMatchObject({ type: 'error', kind: 'other' });
+      expect(JSON.stringify(last?.data)).toContain('送り待ちの出来事が上限を超えた');
+      // 溢れた後に積まれた分（最後の1件）は流さない
+      expect(seen).not.toContain('溜まる5');
+      // 手放すのは購読だけ
+      expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(0);
+      await vi.waitFor(async () => {
+        const entries = await stores.journal.list({ types: ['external_event'] });
+        const cut = entries.find(
+          (entry) => entry.type === 'external_event' && entry.source === 'chat-stream',
+        );
+        if (cut === undefined) throw new Error('日誌にまだ残っていない');
+      });
+    });
+
     it('進行中でなければ open(inProgress: false, pending: []) だけで閉じ、購読を残さない', async () => {
       const response = await app.request('/chat/conv-none/stream');
       expect(response.status).toBe(200);
