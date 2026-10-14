@@ -12,6 +12,9 @@ export const CLAIM_INTERVAL_MS = 1500;
 
 export const CLAIM_MAX_RETRIES = 4;
 
+/** 1回の claim の期限（ms。#4706）。デーモンは手元の状態を読むだけで、普段は1秒もかからない。CLI の `LOGIN_REQUEST_TIMEOUT_MS` と同じ値。 */
+export const CLAIM_REQUEST_TIMEOUT_MS = 10_000;
+
 function isTransient(error: unknown): boolean {
   return !(error instanceof ApiError) || error.status >= 500;
 }
@@ -53,6 +56,7 @@ export type ClaimOutcome =
 export async function claimOnce(
   client: AlteroidClient,
   pending: Pick<PendingLogin, 'requestId' | 'claimSecret'>,
+  signal?: AbortSignal,
 ): Promise<ClaimOutcome> {
   let body;
   try {
@@ -60,6 +64,7 @@ export async function claimOnce(
       .POST('/auth/login/{requestId}/claim', {
         params: { path: { requestId: pending.requestId } },
         body: { claimSecret: pending.claimSecret },
+        ...(signal === undefined ? {} : { signal }),
       })
       .then(unwrap);
   } catch (error) {
@@ -88,7 +93,12 @@ export async function claimOnce(
 export async function claimUntilReady(
   client: AlteroidClient,
   pending: Omit<PendingLogin, 'baseUrl'>,
-  options: { signal?: AbortSignal; sleep?: (ms: number) => Promise<void> } = {},
+  options: {
+    signal?: AbortSignal;
+    sleep?: (ms: number) => Promise<void>;
+    /** 1回の claim の期限（試験が縮めるための口）。既定 {@link CLAIM_REQUEST_TIMEOUT_MS}。 */
+    requestTimeoutMs?: number;
+  } = {},
 ): Promise<ClaimOutcome> {
   const sleep =
     options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -103,7 +113,13 @@ export async function claimUntilReady(
     }
 
     try {
-      const outcome = await claimOnce(client, pending);
+      // 1回ごとに期限を掛ける（#4706）: 返らない claim に当たると、ログインの期限の判定まで戻らずに止まるため。期限切れは通信の失敗と同じく撃ち直す
+      const timeout = AbortSignal.timeout(options.requestTimeoutMs ?? CLAIM_REQUEST_TIMEOUT_MS);
+      const outcome = await claimOnce(
+        client,
+        pending,
+        options.signal === undefined ? timeout : AbortSignal.any([timeout, options.signal]),
+      );
       if (outcome.status !== 'pending') return outcome;
       failures = 0;
     } catch (error) {

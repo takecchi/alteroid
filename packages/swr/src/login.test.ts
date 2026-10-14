@@ -229,3 +229,36 @@ describe('claimUntilReady の撃ち直し（通信の失敗と 5xx）', () => {
     expect(count()).toBe(1);
   });
 });
+
+describe('claimUntilReady: 返らない claim に期限で見切る（#4706）', () => {
+  // 繋がるが何も返さないデーモンの代わり: signal が切れるまで決着しない
+  function hangingThenReady(): { client: AlteroidClient; signals: (AbortSignal | undefined)[] } {
+    const signals: (AbortSignal | undefined)[] = [];
+    let index = 0;
+    const POST = (_path: string, options: { signal?: AbortSignal }) => {
+      signals.push(options.signal);
+      index += 1;
+      if (index === 1) {
+        return new Promise((_resolve, reject) => {
+          options.signal?.addEventListener('abort', () => reject(options.signal?.reason), {
+            once: true,
+          });
+        });
+      }
+      const response = { status: 200, statusText: '' } as Response;
+      return Promise.resolve({ data: READY_BODY, response });
+    };
+    return { client: { api: { POST } } as unknown as AlteroidClient, signals };
+  }
+
+  it('⭐ claim の1回が返らなくても、期限で見切って待ちを続け、次の ready で引き取れる', async () => {
+    const { client, signals } = hangingThenReady();
+    const outcome = await claimUntilReady(
+      client,
+      { ...PENDING, provider: 'google', expiresAt: '2999-01-01T00:00:00Z' },
+      { sleep: async () => undefined, requestTimeoutMs: 20 },
+    );
+    expect(outcome.status).toBe('ready');
+    expect(signals[0]).toBeDefined();
+  });
+});
