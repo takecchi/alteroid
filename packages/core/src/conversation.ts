@@ -513,8 +513,10 @@ export async function readConversationPage(
   if (hiddenByLimit > 0 && lastShown !== undefined) {
     next = headOf.get(lastShown.conversationId) ?? null;
   } else if (!reached) {
-    // 返った行の最後ではなくストアが読んだ最後の行から続ける: 返った行が空でも進めるため
-    next = window.next;
+    // 読めた最後の行から続ける: ストアの継続点は読めない行を指しうり、それを cursor にすると次の頁の確かめ（`journal.get`）で「読めない」として断られるため。
+    // 読めた行が1つも無い窓だけストアの継続点を使う: 使わないと空の窓で黙って途切れる（その頁の続きは断られうるが、黙って先頭に届いたと言うよりよい）
+    const lastRead = entries[entries.length - 1];
+    next = lastRead === undefined ? window.next : { id: lastRead.id, at: lastRead.at };
   }
   return {
     conversations,

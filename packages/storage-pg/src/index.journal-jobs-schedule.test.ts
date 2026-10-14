@@ -539,7 +539,16 @@ describe('PgJournalStore', () => {
 
       expect(page.conversations.map((c) => c.conversationId)).toEqual(['conv-g2']);
       expect(page.reachedStart).toBe(false);
-      expect(page.next).toEqual({ id: 'b1', at: '2026-08-01T00:00:01.000Z' });
+      // 続きは読めた最後の行から: 読めない行を継続点にすると、次の頁で「カーソルが指す発言が読めない」で落ちるため
+      expect(page.next).toEqual({ id: 'g2', at: '2026-08-01T00:00:02.000Z' });
+
+      const following = await readConversationPage(stores.journal, {
+        limit: 10,
+        scan: 2,
+        cursor: page.next!,
+      });
+      expect(following.conversations.map((c) => c.conversationId)).toEqual(['conv-g0']);
+      expect(following.reachedStart).toBe(true);
     });
 
     it('list() は従来どおり（読めた行だけを返す）', async () => {
