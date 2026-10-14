@@ -4223,18 +4223,17 @@ class Clone implements CloneHost {
     // 控えが無いときは日誌へ書かず黙って通す: 道具を使う前に落ちた回のたびにノイズが1行増えるため
     if (path === null) return { kind: 'none' };
 
+    // セッション id は最初の待ちの前に控える（#4787）: 読み出しの間に次のセッションが init すると、古い生ログを新しいセッションの id で退避するため
+    const sessionId = this.#sdkSession.sdkSessionId ?? 'clone';
     let archiveId: string | null = null;
     try {
       // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため
       const transcript = await redactImagesInTranscriptYielding(await readFile(path, 'utf8'));
-      const write = await this.#stores.archive.archive(
-        this.#sdkSession.sdkSessionId ?? 'clone',
-        transcript,
-      );
+      const write = await this.#stores.archive.archive(sessionId, transcript);
       archiveId = write.id;
       const continuityText = describeArchiveContinuityForJournal({
         caller: `${label}の退避`,
-        sessionId: this.#sdkSession.sdkSessionId ?? 'clone',
+        sessionId,
         continuity: write.continuity,
         comparedTo: write.comparedTo,
         bodyChars: transcript.length,
