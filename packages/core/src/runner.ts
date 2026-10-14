@@ -219,7 +219,10 @@ import type {
   UnpushedWorkResult,
 } from './runner-protocol.js';
 import { readAttachmentLimits, readRunnerAttachmentStageLimit } from './attachment.js';
-import { redactImagesInEntries, redactImagesInTranscript } from './transcript-image-redaction.js';
+import {
+  redactImagesInEntries,
+  redactImagesInTranscriptYielding,
+} from './transcript-image-redaction.js';
 import { chunkMirrorEntries, MIRROR_EVENT_MAX_CHARS } from './mirror-chunks.js';
 import {
   deleteRescueRef,
@@ -2178,7 +2181,10 @@ class RunnerSession {
     if (path === undefined) return { status: 'no-path' };
     try {
       // 返す前に画像の中身を控えへ置き換える: archive と transcript API の両方がここを通り、base64 が生ログに残ると保持期限（30日）後も消えないため
-      return { status: 'ok', body: redactImagesInTranscript(await readFile(path, 'utf8')) };
+      return {
+        status: 'ok',
+        body: await redactImagesInTranscriptYielding(await readFile(path, 'utf8')),
+      };
     } catch (error) {
       return { status: 'unreadable', error };
     }

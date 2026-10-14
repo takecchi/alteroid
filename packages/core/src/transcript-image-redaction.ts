@@ -1,4 +1,11 @@
 import { sha256Hex } from './auth.js';
+import {
+  eachLine,
+  LOOP_YIELD_CHARS,
+  runSteps,
+  runStepsYielding,
+  type YieldingSteps,
+} from './loop-yield.js';
 
 /**
  * 生ログ（pg の sessionStore・アーカイブ・transcript）へ書く前に、添付した画像の
@@ -59,21 +66,42 @@ export function redactImagesInEntries(entries: readonly unknown[]): unknown[] {
   return entries.map(redactImagesInSessionEntry);
 }
 
+function redactLine(line: string): string {
+  if (!IMAGE_MARK.test(line)) return line;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return line;
+  }
+  const redacted = redactImagesInSessionEntry(parsed);
+  return redacted === parsed ? line : JSON.stringify(redacted);
+}
+
+// 画像を含みうる行だけ触る: 他の行をパースし直すと、キー順・空白・エスケープが動いてバイト比較が崩れるため
+// 触らなかった区間は元の文字列から切り出して繋ぐ。1行も変わらなければ元の文字列をそのまま返す
+function* redactSteps(body: string, yieldChars: number): YieldingSteps<string> {
+  const parts: string[] = [];
+  let copiedUpTo = 0;
+  yield* eachLine(body, yieldChars, (line, start, end) => {
+    const replaced = redactLine(line);
+    if (replaced === line) return;
+    parts.push(body.slice(copiedUpTo, start), replaced);
+    copiedUpTo = end;
+  });
+  if (parts.length === 0) return body;
+  parts.push(body.slice(copiedUpTo));
+  return parts.join('');
+}
+
 export function redactImagesInTranscript(body: string): string {
-  // 画像を含みうる行だけ触る: 他の行をパースし直すと、キー順・空白・エスケープが動いてバイト比較が崩れるため
-  if (!IMAGE_MARK.test(body)) return body;
-  return body
-    .split('\n')
-    .map((line) => {
-      if (!IMAGE_MARK.test(line)) return line;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        return line;
-      }
-      const redacted = redactImagesInSessionEntry(parsed);
-      return redacted === parsed ? line : JSON.stringify(redacted);
-    })
-    .join('\n');
+  return runSteps(redactSteps(body, LOOP_YIELD_CHARS));
+}
+
+/** {@link redactImagesInTranscript} と同じ結果を、約 `yieldChars` 字ごとにループへ順番を返しながら作る（#4659。生ログは数百 MB に育つ）。 */
+export function redactImagesInTranscriptYielding(
+  body: string,
+  yieldChars: number = LOOP_YIELD_CHARS,
+): Promise<string> {
+  return runStepsYielding(redactSteps(body, yieldChars));
 }

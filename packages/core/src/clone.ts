@@ -256,7 +256,10 @@ import { CloneSdkSession } from './clone-sdk-session.js';
 import { attachmentCopiesDir } from './attachment-fetch.js';
 import type { AttachmentLimits } from './attachment.js';
 import { resolveTurnAttachmentGroups } from './attachment-turn.js';
-import { redactImagesInEntries, redactImagesInTranscript } from './transcript-image-redaction.js';
+import {
+  redactImagesInEntries,
+  redactImagesInTranscriptYielding,
+} from './transcript-image-redaction.js';
 import { stripNul } from './nul-guard.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
@@ -4116,7 +4119,7 @@ class Clone implements CloneHost {
     let archiveId: string | null = null;
     try {
       // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため
-      const transcript = redactImagesInTranscript(await readFile(path, 'utf8'));
+      const transcript = await redactImagesInTranscriptYielding(await readFile(path, 'utf8'));
       const write = await this.#stores.archive.archive(
         this.#sdkSession.sdkSessionId ?? 'clone',
         transcript,
@@ -5972,7 +5975,9 @@ class Clone implements CloneHost {
     // 退避と蒸留を別の `try` に割る: 生ログが伸びて `readFile` が落ちたとき、蒸留まで道連れに止めないため。
     try {
       // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため
-      const transcript = redactImagesInTranscript(await readFile(transcriptPath, 'utf8'));
+      const transcript = await redactImagesInTranscriptYielding(
+        await readFile(transcriptPath, 'utf8'),
+      );
       const write = await this.#stores.archive.archive(sessionId ?? 'clone', transcript);
       // diverged / unknown のときだけ日誌へ書く。`#journal` は自分で失敗を握るので、退避の成功を道連れにしない。
       const continuityText = describeArchiveContinuityForJournal({
