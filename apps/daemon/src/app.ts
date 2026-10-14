@@ -227,12 +227,13 @@ import {
   CHAT_STREAM_QUEUE_MAX_EVENTS,
   ChatStreamQueue,
 } from './chat-stream-queue.js';
+import { guardSseWrites } from './sse-write-deadline.js';
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono, type Context, type Next } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { createMiddleware } from 'hono/factory';
-import { streamSSE } from 'hono/streaming';
+import { streamSSE as honoStreamSSE } from 'hono/streaming';
 import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-openapi';
 import { z } from 'zod';
 
@@ -412,6 +413,8 @@ export interface AppDeps {
   tokens?: TokenPoolService;
   // 環境変数は増やさない: テストで短くする以外に差し替える理由が無い。
   sseHeartbeatMs?: number;
+  /** SSE の書き出し1回の期限（既定は心拍の3倍。runner の `/events` と同じ）。試験が短くするための口（#4671）。 */
+  sseWriteDeadlineMs?: number;
   // 環境変数は増やさない（`sseHeartbeatMs` と同じ）: テストで溢れさせる以外に差し替える理由が無い（#4617）。
   journalStreamQueueLimits?: { maxEntries?: number; maxChars?: number };
   /** `/chat` 系の SSE の購読者1本あたりの送り待ちの上限（#4662）。試験が小さくするための口。 */
@@ -1536,6 +1539,23 @@ async function probe(
 export function createApp(deps: AppDeps) {
   const { clone, stores } = deps;
   const sseHeartbeatMs = deps.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
+  // `deps.sseHeartbeatMs` から導かない: 試験で心拍を縮めても、書き出しの期限まで縮める理由は無いため（runner と同じ）
+  const sseWriteDeadlineMs = deps.sseWriteDeadlineMs ?? DEFAULT_SSE_HEARTBEAT_MS * 3;
+  // SSE の口はすべてここを通す: 書き出しに期限を掛け、読まない受け手の接続を畳む（#4671）。口ごとに掛けると、足した口だけ守りが漏れるため
+  const streamSSE: typeof honoStreamSSE = (c, cb, onError) =>
+    honoStreamSSE(
+      c,
+      (stream) =>
+        cb(
+          guardSseWrites(stream, sseWriteDeadlineMs, (what) => {
+            process.stderr.write(
+              `alteroidd: ${c.req.path} の SSE の書き出し（${what}）が ${String(sseWriteDeadlineMs)}ms を超えたので、` +
+                'この流れを畳みます（受け手が読んでいない）\n',
+            );
+          }),
+        ),
+      onError,
+    );
   const attachmentLimits = deps.attachmentLimits ?? readAttachmentLimits().limits;
   const attachmentBodyMax = attachmentBodyMaxBytes(attachmentLimits);
   // `hono/body-limit` を使わない: chunked の本文を上限まで溜めるので 2 GiB の枠では使えない。content-length があって超えるときだけ断り、それ以外は溜めずに流しながら数える（置き場の上限と食い違ってもここの上限は必ず効く）。
