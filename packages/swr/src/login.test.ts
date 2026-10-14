@@ -183,6 +183,29 @@ describe('claimUntilReady の撃ち直し（通信の失敗と 5xx）', () => {
     expect(count()).toBe(1);
   });
 
+  it('⭐ 通信の失敗の直後に 400 が返ったら、引き取り済みになった可能性とやり直しの案内を添える（#4751）', async () => {
+    const { client } = scripted(['network', { status: 400, body: { error: 'もう使えない' } }]);
+
+    const outcome = await claimUntilReady(client, pending(), { sleep: noSleep });
+
+    expect(outcome.status).toBe('failed');
+    if (outcome.status !== 'failed') return;
+    expect(outcome.message).toContain('もう使えない');
+    expect(outcome.message).toContain('ログインをやり直してほしい');
+  });
+
+  it('通信の失敗の後に pending を受けていれば、続く 400 に案内を添えない（#4751）', async () => {
+    const { client } = scripted([
+      'network',
+      { status: 202, body: { status: 'pending' } },
+      { status: 400, body: { error: 'もう使えない' } },
+    ]);
+
+    const outcome = await claimUntilReady(client, pending(), { sleep: noSleep });
+
+    expect(outcome).toEqual({ status: 'failed', message: 'もう使えない' });
+  });
+
   it('400 以外の 4xx は撃ち直さず投げる', async () => {
     const { client, count } = scripted([{ status: 403, body: { error: '禁止' } }]);
 
