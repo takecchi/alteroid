@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { appendFile, mkdir, open, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -43,7 +43,10 @@ export class FsJournalStore implements JournalStore {
     // 直列化する: 同時追記で行が混ざるため
     const run = this.#chain.then(async () => {
       await mkdir(this.#dir, { recursive: true });
-      await appendFile(this.#file(entry.at), `${JSON.stringify(entry)}\n`, 'utf8');
+      const file = this.#file(entry.at);
+      // 前の追記が改行を書く前に途切れていたら（ディスクフルなど）、先に改行を足す（#4721）: 足さないと書きかけの行の後ろにくっつき、この行まで読めない行になって消えるため
+      const separator = (await endsMidLine(file)) ? '\n' : '';
+      await appendFile(file, `${separator}${JSON.stringify(entry)}\n`, 'utf8');
     });
     this.#chain = run.catch(() => undefined);
     await run;
@@ -330,4 +333,23 @@ function parseLine(line: string | undefined, dropped: Map<string, number>): Jour
   if (parsed.success) return parsed.data;
   noteDroppedJournalRow(dropped, 'unknown-shape', journalRowType(raw), bytes);
   return null;
+}
+
+// 無いファイル・空のファイル・改行で終わるファイルは偽: 末尾の1バイトだけを読む（日誌のファイルは1日分で大きくなりうるため）
+async function endsMidLine(file: string): Promise<boolean> {
+  let handle;
+  try {
+    handle = await open(file, 'r');
+  } catch {
+    return false;
+  }
+  try {
+    const { size } = await handle.stat();
+    if (size === 0) return false;
+    const last = Buffer.alloc(1);
+    await handle.read(last, 0, 1, size - 1);
+    return last[0] !== 0x0a;
+  } finally {
+    await handle.close();
+  }
 }
