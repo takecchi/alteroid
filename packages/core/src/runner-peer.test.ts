@@ -453,6 +453,90 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     }
   }
 
+  // 鍵の付け替えのための畳み（keepPeers）では peer を閉じず、起こし直した担当へ引き継ぐ（#4734）
+  async function idlePeerThenStop(keepPeers: boolean) {
+    const s = await setupPeerCall();
+    const peerId = /session_id: (peer-[0-9a-f]+)/.exec(s.firstText)?.[1];
+    expect(peerId).toBeDefined();
+    await s.approve('allow');
+    await waitFor(() => s.decisions.length === 1);
+    await s.host.stop('mgr-1', keepPeers ? { keepPeers: true } : {});
+    await s.host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-resumed',
+      cwd: '/work',
+      request: 'やって',
+    });
+    const reply = (await s.client.callTool({
+      name: 'peer_reply',
+      arguments: { session_id: peerId, message: '続けて' },
+    })) as { content: { text: string }[] };
+    return { s, peerId, replyText: reply.content[0]?.text ?? '' };
+  }
+
+  it('⭐ 鍵の付け替えのための畳み（keepPeers）から起こし直すと、前の peer のセッションへそのまま peer_reply できる（#4734）', async () => {
+    const { s, replyText } = await idlePeerThenStop(true);
+    expect(replyText).not.toContain('peer セッションは無い');
+    const notes = s.events.flatMap((e) => (e.type === 'note' ? [e.text] : []));
+    expect(notes.some((text) => text.includes('peer のセッションは閉じずに預けた'))).toBe(true);
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('⭐ 預けている間に背景の peer が止まりどころに来たら、その知らせを起こし直した担当へ届ける（黙って捨てない。#4734）', async () => {
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sdk = readingQuery();
+    const s = await setupPeerCall([], { args: { run_in_background: true }, sdk, gate });
+    expect(s.firstText).toContain('背景で流し始めた');
+    await s.host.stop('mgr-1', { keepPeers: true });
+    // 預けている間に、背景の peer が確認待ちで止まる
+    release();
+    await waitFor(() => false);
+    const before = sdk.inputs.filter((input) =>
+      input.includes('alteroid が自動で送った知らせ'),
+    ).length;
+    await s.host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-resumed',
+      cwd: '/work',
+      request: 'やって',
+    });
+    await waitFor(
+      () =>
+        sdk.inputs.filter((input) => input.includes('alteroid が自動で送った知らせ')).length >
+        before,
+    );
+    expect(sdk.inputs.at(-1)).toContain('approval_id=');
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('預けた後に人が止めたら（印なしの停止）、預かっていた peer を閉じて知らせを残す（#4734）', async () => {
+    const s = await setupPeerCall();
+    await s.approve('allow');
+    await waitFor(() => s.decisions.length === 1);
+    await s.host.stop('mgr-1', { keepPeers: true });
+    await s.host.stop('mgr-1');
+    const notes = s.events.flatMap((e) => (e.type === 'note' ? [e.text] : []));
+    expect(
+      notes.some((text) =>
+        text.includes('預かっていた peer のセッションを閉じた（人間・クローンが止めた）'),
+      ),
+    ).toBe(true);
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('対照: 人間・クローンの停止（印なし）では今どおり peer を閉じ、起こし直しても前の peer は無い（#4734）', async () => {
+    const { s, replyText } = await idlePeerThenStop(false);
+    expect(replyText).toContain('peer セッションは無い');
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
   it('背景の peer_run はすぐ返り、確認待ち・ターンの終わりを知らせとしてマネージャーへ入れて起こす（#4123）', async () => {
     const sdk = readingQuery();
     const s = await setupPeerCall([], { args: { run_in_background: true }, sdk });
