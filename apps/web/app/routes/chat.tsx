@@ -2182,11 +2182,18 @@ export function ChatPane({
       const streamAtStart = streamRef.current;
       // 上げる・会話を引くために待ったか。待つあいだに別の会話へ移りうる。
       let awaited = false;
-      // 再送だけは最初の値を使う: サーバが受け取り済みなら二重に受けない
+      // 再送は最初の値を使う: サーバが受け取り済みなら二重に受けない。
+      // 控えが残っていて中身（文・添付・編集の対象）が同じなら、人が入力欄から送り直したときも控えの値を使う: open を見ないまま落ちた送信をデーモンが受け取り済みでも、別の id にすると同じ発言が2回届く。控えが消えた後（破棄など）は新しく作る
+      const stashedForId = retries.get(shownId);
       const clientMessageId =
         retry === true && options?.clientMessageId !== undefined
           ? options.clientMessageId
-          : newClientMessageId();
+          : retry !== true &&
+              stashedForId?.clientMessageId !== undefined &&
+              sameAsStashed(stashedForId, text, options?.attachments ?? []) &&
+              stashedForId.supersedes === supersedes
+            ? stashedForId.clientMessageId
+            : newClientMessageId();
 
       // 新しい会話で open の前に中断した送信の後は会話を取り直してから送る: 受け取り済みなら添付は最初の会話に結び付いていて、会話 id を知らないまま新しい会話として送ると attachment_conflict（400）で弾かれる。
       // 引けなかったら黙って新しい会話として送らず、案内を出して入力は残す

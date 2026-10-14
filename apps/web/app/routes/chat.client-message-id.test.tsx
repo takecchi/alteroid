@@ -189,3 +189,61 @@ describe('#3203: 受け取りの判定は clientMessageId で行う', () => {
     expect(bodies[1]?.clientMessageId).not.toBe(bodies[0]?.clientMessageId);
   });
 });
+
+describe('open を見ないまま通信エラーで落ちた送信を、人が送り直す', () => {
+  it('入力欄へ戻った同じ文を送信ボタンで送ると、最初の clientMessageId を使う（デーモンが受け取り済みなら重複として畳める）', async () => {
+    let chatPosts = 0;
+    stub = stubFetch((url, init) => {
+      if (url.includes(`/conversations/${A}`))
+        return json({ conversationId: A, messages: history });
+      if (url.includes('/approvals')) return json({ approvals: [] });
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      if (url.endsWith('/chat')) {
+        chatPosts += 1;
+        if (chatPosts === 1) return Promise.reject(new TypeError('Failed to fetch'));
+        return sse([{ event: 'open', data: { conversationId: A } }], { signal: init?.signal });
+      }
+      return undefined;
+    });
+    renderChat(`/chat/${A}`);
+    fireEvent.change(await box(), { target: { value: TEXT } });
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
+    await waitFor(() => expect(chatPosts).toBe(1));
+    // 文が入力欄へ戻り、再送の案内が出る
+    await waitFor(async () => expect((await box()).value).toBe(TEXT));
+    expect(await screen.findByRole('button', { name: '再送' })).toBeTruthy();
+    // 入力欄はそのまま、送信ボタン（Enter と同じ onSend）で送り直す
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
+    await waitFor(() => expect(chatPosts).toBe(2));
+    const bodies = await postedBodies();
+    expect(bodies[0]?.clientMessageId).toBeTruthy();
+    expect(bodies[1]?.clientMessageId).toBe(bodies[0]?.clientMessageId);
+  });
+
+  it('入力欄の文を書き換えて送ると、別の clientMessageId を作る（別の発言を同じ id で送らない）', async () => {
+    let chatPosts = 0;
+    stub = stubFetch((url, init) => {
+      if (url.includes(`/conversations/${A}`))
+        return json({ conversationId: A, messages: history });
+      if (url.includes('/approvals')) return json({ approvals: [] });
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      if (url.endsWith('/chat')) {
+        chatPosts += 1;
+        if (chatPosts === 1) return Promise.reject(new TypeError('Failed to fetch'));
+        return sse([{ event: 'open', data: { conversationId: A } }], { signal: init?.signal });
+      }
+      return undefined;
+    });
+    renderChat(`/chat/${A}`);
+    fireEvent.change(await box(), { target: { value: TEXT } });
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
+    await waitFor(() => expect(chatPosts).toBe(1));
+    await waitFor(async () => expect((await box()).value).toBe(TEXT));
+    fireEvent.change(await box(), { target: { value: `${TEXT}（書き足し）` } });
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
+    await waitFor(() => expect(chatPosts).toBe(2));
+    const bodies = await postedBodies();
+    expect(bodies[1]?.clientMessageId).toBeTruthy();
+    expect(bodies[1]?.clientMessageId).not.toBe(bodies[0]?.clientMessageId);
+  });
+});
