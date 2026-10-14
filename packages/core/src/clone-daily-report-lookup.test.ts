@@ -35,6 +35,11 @@ const lookupNotices = async (rawList: Stores['journal']['list']) =>
     entry.text.startsWith(`${EXCHANGE_KIND_FAILURE_PREFIX}日報の既存確認`),
   );
 
+const skipNotices = async (rawList: Stores['journal']['list']) =>
+  ((await rawList({ types: ['exchange'] })) as { text: string }[]).filter((entry) =>
+    entry.text.includes('日報のターンを走らせなかった'),
+  );
+
 function postDailyReport(post: (event: never) => void, date: string): void {
   (post as (event: unknown) => void)({
     type: 'timer',
@@ -96,17 +101,39 @@ describe('クローン — 日報の既存確認が読めなかった回（#2447
     await s.clone.stop();
   });
 
-  it('対照: 本物の日報が既にある日は、読めたときは書き足さない', async () => {
+  it('⭐ 本物の日報が既にある日は、日報のターンを走らせず、走らせなかったことを日誌に残す（#4757）', async () => {
     const { stores, rawList } = storesWithFailingLookup(null);
     await stores.journal.append({ type: 'daily_report', date: DATE, body: '道具で書いた日報' });
     const s = setup(() => '書いておいた', stores);
 
     postDailyReport(s.clone.post.bind(s.clone), DATE);
-    await waitFor(() => s.calls.length > 0, 'ターンが走る');
+    await waitFor(async () => (await skipNotices(rawList)).length === 1, '走らせなかった跡が残る');
     await s.clone.stop();
 
+    expect(s.calls).toHaveLength(0);
     expect(await reportsOf(rawList)).toHaveLength(1);
     expect(await lookupNotices(rawList)).toHaveLength(0);
+    expect((await skipNotices(rawList))[0]?.text).toContain(DATE);
+  });
+
+  it('対照: 「作れなかった」の印しか無い日は、今までどおり日報のターンを走らせる（#4757）', async () => {
+    const { stores, rawList } = storesWithFailingLookup(null);
+    await stores.journal.append({
+      type: 'daily_report',
+      date: DATE,
+      body: '（この日の日報は作れなかった）',
+      unavailable: '枠',
+    });
+    const s = setup(() => '作り直した日報', stores);
+
+    postDailyReport(s.clone.post.bind(s.clone), DATE);
+    await waitFor(
+      async () => (await reportsOf(rawList)).some((r) => r.unavailable === undefined),
+      '本物が書かれる',
+    );
+    await s.clone.stop();
+
+    expect(await skipNotices(rawList)).toHaveLength(0);
   });
 
   it('digest をまとめられなかった理由は reasonOf を通す（1行目だけ。素の String(error) を残さない）', async () => {
