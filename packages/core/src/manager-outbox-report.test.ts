@@ -592,3 +592,34 @@ describe('移った後の古い runner から届いた報告に添えられた�
     await pool.stop();
   });
 });
+
+describe('器が畳まれて捨てる確認要求（#4719）', () => {
+  it('⭐ runner が取り下げを送らずに閉じたら、待っていた確認を日誌で取り下げにする（未回答のまま残さない）', async () => {
+    const { pool, stores, fake } = await setup();
+    fake.raw({
+      type: 'ask',
+      managerId: MANAGER_ID,
+      requestId: 'req-dropped',
+      kind: 'permission',
+      summary: 'Bash の実行許可（器と一緒に消える確認）',
+    } as RunnerEvent);
+    await vi.waitFor(async () => {
+      const job = (await stores.jobs.listJobs()).find((j) => j.id === MANAGER_ID);
+      expect(job?.status).toBe('waiting_human');
+    });
+
+    fake.raw({ type: 'closed', managerId: MANAGER_ID, status: 'failed', reason: '器ごと落ちた' });
+
+    await vi.waitFor(async () => {
+      const rows = await stores.journal.list({ types: ['escalation'] });
+      const withdrawn = rows.find(
+        (row) =>
+          row.type === 'escalation' &&
+          row.approvalId === 'req-dropped' &&
+          row.withdrawnAt !== undefined,
+      );
+      expect(withdrawn).toBeDefined();
+    });
+    await pool.stop();
+  });
+});

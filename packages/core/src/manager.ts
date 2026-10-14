@@ -6886,7 +6886,7 @@ class Pool implements ManagerPool {
         const markMissing = (): void => {
           record.attached = false;
           // 待っていた確認を持ち越さない: 新しい器はその request_id を知らず、残すと以後の `manager_send` が死んだ確認への回答として横取りされ、誰からも届かないマネージャーになる。
-          record.waiting = [];
+          this.#withdrawWaiting(record, '器が入れ替わり、新しい器はこの確認を知らない');
           record.sessionMissingSince ??= missingAt;
           // 由来を上書きする（格上げ）: ここを抜けて印が残っている ⟺ resume でも入り直せなかった。
           record.sessionMissingKind = 'resume-failed';
@@ -7277,7 +7277,7 @@ class Pool implements ManagerPool {
       );
       if (await this.#noteRelocationRefusal(record, runnerId, reason)) {
         record.attached = false;
-        record.waiting = [];
+        this.#withdrawWaiting(record, '器を失い、移送先でも引き取れなかった');
         await this.#confirmLost(record, reason);
       }
     }
@@ -8996,7 +8996,7 @@ class Pool implements ManagerPool {
         record.job.status = 'lost';
         record.attached = false;
         // `closed` と揃えて畳む: `#retire` で像ごと消すので、「消える時点で waiting が空」を呼び出し元の代入に頼らせない。
-        record.waiting = [];
+        this.#withdrawWaiting(record, 'resume に失敗し、この委譲は戻らない');
         await this.#persist(record);
         this.#notifyUnresumable(record, event.reason, 'session');
         // 枠の印も一緒に下ろす: 台帳に残したままだと、諦めを持たせたはずの `lost` の死体を次のデプロイでまた起こしに行く。
@@ -9111,7 +9111,7 @@ class Pool implements ManagerPool {
         // 自己失効は「終わった」ではない: `lost` をそのまま書くと `#restoreJobs` も `#reattach` も引き取らず、二重実行を止めた代わりに誰も拾わない仕事ができる。状態は動かさず貸し出しだけ返して梯子へ載せる。
         // 判定は構造化された印だけで行う: `reason` の文字列一致だと、マネージャーが同じ文を書いた回まで巻き込む（`sdk-failure.ts` と同じ理由）。
         if (event.selfFenced === true) {
-          record.waiting = [];
+          this.#withdrawWaiting(record, '器が貸し出し期限で自分で畳んだ');
           record.attached = false;
           // 返すのは印を立てることで消すことではない: 世代（`fence`）を残す。
           if (record.job.lease !== undefined) {
@@ -9139,7 +9139,7 @@ class Pool implements ManagerPool {
         }
 
         record.job.status = event.status;
-        record.waiting = [];
+        this.#withdrawWaiting(record, `セッションが閉じた（status=${event.status}）`);
         record.attached = false;
         // 貸し出しは期限を待たず返す（`closed` は持ち主自身が「もう走っていない」と言っている）: 返さないと引き取りが猶予のぶん遅れる。消さずに印を立てる: 消すと世代（`fence`）まで消え、遅れて届いた返却で runner の世代より小さい世代を渡し命令が拒まれ続ける。
         if (record.job.lease !== undefined) {
@@ -10837,6 +10837,29 @@ class Pool implements ManagerPool {
       });
     } catch (error) {
       noteDroppedRecord('受信箱', `scratch_sweep runner=${runnerId}`, error);
+    }
+  }
+
+  /**
+   * 待っていた確認を外し、残っていた分を日誌で取り下げにする（#4719）。
+   * 残っているのは取り下げ（`settled(withdrawn)`）が届かなかった確認だけ: runner が畳むときに送った分は `case 'settled'` が既に外して書いている。
+   * 書かないと、器と一緒に消えた確認が日誌の上で「未回答」のまま残り、クローンも人間も答えようの無い確認を有効なものとして見続ける。
+   * 待たない（`#journal` は投げない）: 呼び手には同期の経路（`markMissing`）がある。
+   */
+  #withdrawWaiting(record: ManagerRecord, reason: string): void {
+    const dropped = record.waiting;
+    record.waiting = [];
+    if (dropped.length === 0) return;
+    const at = new Date(this.#now()).toISOString();
+    for (const item of dropped) {
+      void this.#journal({
+        type: 'escalation',
+        question: item.summary,
+        approvalId: item.requestId,
+        managerId: record.job.id,
+        withdrawnAt: at,
+        withdrawnReason: `この確認への答えは届かない（${reason}）`,
+      });
     }
   }
 
