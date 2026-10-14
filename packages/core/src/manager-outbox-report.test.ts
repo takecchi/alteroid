@@ -358,6 +358,23 @@ describe('担い手の報告に添えられたファイル — プール（#4126
     expect(fake.opened).toEqual([]);
     await pool.stop();
   });
+
+  it('⭐ 背景処理の完了待ちで畳んだターンの報告でも、ファイルが付いていれば畳まずに受信箱へ回す（#4693）', async () => {
+    const { pool, stores, inbox, fake } = await setup();
+    const bytes = encode('背景待ちの成果物');
+    fake.contents.set('b'.repeat(32), async () => ({ size: bytes.length, body: chunked(bytes) }));
+
+    fake.raw(
+      reportWithFiles([{ fileId: 'b'.repeat(32), name: 'compare.png', bytes }], {
+        awaitingBackground: { count: 1, breakdown: 'local_agent×1' },
+      }),
+    );
+    await vi.waitFor(() => expect(reportMessages(inbox)).toHaveLength(1));
+    expect(reportMessages(inbox)[0]?.attachments?.map((ref) => ref.name)).toEqual(['compare.png']);
+    const jobs = await stores.jobs.listJobs();
+    expect(jobs.find((job) => job.id === MANAGER_ID)?.withheldReports).toBeUndefined();
+    await pool.stop();
+  });
 });
 
 function fakeSdk(write: (outbox: string) => Promise<void>): typeof sdkQuery {

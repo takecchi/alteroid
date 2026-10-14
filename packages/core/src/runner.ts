@@ -3234,14 +3234,11 @@ class RunnerSession {
                 contentless: false,
               };
         // 取り込みは `setStatus` より前に済ませる: 後ろへ置くと `await` が `report.status` / `awaitingBackground` の算出との間に挟まり、その間に変わった状態で嘘の報告になる
-        // 背景処理の完了待ちで畳んだだけの報告（デーモンが握り潰しうる）では取り込まない: 載せた `files` が配られないまま退避先にだけ残るため。出し箱に残して次の報告で送る
-        // 1回だけ読む: 背景の peer はこの間にも止まりうるので、2つの判定で別の一覧を見ないため
+        // 背景処理の完了待ちで畳む報告でも取り込む: デーモンはファイルの付いた報告を背景待ちでも畳まずに配る。残すと、背景処理が絶えない担当では成果物が出し箱に置き去りになる
+        // 取り込みの `await` より前に1回だけ読む: 背景の peer はこの間にも止まりうるので、取り込みの前後で別の一覧を見ないため
         const liveBackground = this.#liveBackgroundTasks();
-        const awaitsBackgroundOnly =
-          failure === undefined && this.#pending.length === 0 && liveBackground.length > 0;
         // 出し箱が空なら `await` を挟まない: 余計な yield が報告の出る順序（と、それを前提にした観測）を変えるため
-        const outbox =
-          awaitsBackgroundOnly || !this.#outboxHasEntries() ? {} : await this.#collectOutbox();
+        const outbox = this.#outboxHasEntries() ? await this.#collectOutbox() : {};
         this.#sdkSession.setStatus(this.#pending.length > 0 ? 'waiting_human' : 'done');
         if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
         // 3条件（失敗でない・`done`・背景処理が在る）が揃うときだけ載せる、欠けたら配る側へ倒す: 上限・拒否や確認待ちを黙って畳むと人間の判断が止まるため
