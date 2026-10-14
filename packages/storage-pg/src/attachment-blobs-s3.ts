@@ -116,10 +116,12 @@ function clientConfigOf(
   timeouts: { readonly connectMs?: number; readonly idleMs?: number } = {},
 ): S3ClientConfig {
   return {
-    // 期限を渡す（#4689）: 渡さないと SDK の HTTP の口は接続にも無通信にも期限を持たない
+    // 期限を渡す（#4689）: 渡さないと SDK の HTTP の口（`@smithy/node-http-handler`）は接続にも無通信にも期限を持たない。
+    // 無通信は `socketTimeout` で渡す: `requestTimeout` は全体の時間の期限で、しかも `throwOnRequestTimeout` を立てない限り警告を書くだけで打ち切らないため。
+    // 全体の時間の期限は付けない: 2GiB の取り出しのように長く流れ続ける正当な要求を切らないため
     requestHandler: {
       connectionTimeout: timeouts.connectMs ?? S3_CONNECT_TIMEOUT_MS,
-      requestTimeout: timeouts.idleMs ?? S3_IDLE_TIMEOUT_MS,
+      socketTimeout: timeouts.idleMs ?? S3_IDLE_TIMEOUT_MS,
     },
     region: config.region,
     ...(config.endpoint === undefined ? {} : { endpoint: config.endpoint }),
