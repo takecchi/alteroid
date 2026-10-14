@@ -6611,6 +6611,44 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect(Object.keys(next)).toEqual(['managers']);
   });
 
+  it('⭐ 継続点の担当が頁の間に status の絞りから外れても、次の頁は 400 にならず続きを返す（#4801）', async () => {
+    seed([
+      { managerId: 'mgr-a', status: 'running' },
+      { managerId: 'mgr-b', status: 'running' },
+      { managerId: 'mgr-c', status: 'running' },
+    ]);
+    const first = (await (await app.request('/managers?status=running&limit=1')).json()) as {
+      managers: { managerId: string; startedAt: string }[];
+    };
+    const anchor = first.managers[0] as { managerId: string; startedAt: string };
+    // 継続点の担当が終わる（running の絞りから外れる）
+    const moved = fake.managerList.find((m) => m.managerId === anchor.managerId);
+    if (moved === undefined) throw new Error('継続点の担当が見当たらない');
+    moved.status = 'done';
+
+    const qs = new URLSearchParams({
+      status: 'running',
+      limit: '10',
+      afterId: anchor.managerId,
+      afterStartedAt: anchor.startedAt,
+    });
+    const rest = await ids(`/managers?${qs.toString()}`);
+    expect(rest).not.toContain(anchor.managerId);
+    expect(rest.length).toBeGreaterThan(0);
+  });
+
+  it('対照: 台帳に無い継続点は今どおり 400', async () => {
+    seed([{ managerId: 'mgr-a', status: 'running' }]);
+    const qs = new URLSearchParams({
+      status: 'running',
+      limit: '10',
+      afterId: 'mgr-never',
+      afterStartedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const response = await app.request(`/managers?${qs.toString()}`);
+    expect(response.status).toBe(400);
+  });
+
   it('status の単一指定で、その状態だけが返る', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -6846,8 +6884,8 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect(await ids(`/managers?${qs.toString()}`)).toEqual(['mgr-b']);
   });
 
-  // 錨を先に解決すると、絞りに当たらない行（`done`）を錨として受け付けてしまう: `status=running` の一覧にその行は1度も載っていないので、呼ぶ側がその値を応答から得る経路が無い。
-  it('順序: status で絞ってから錨を解決する（絞りの外の錨は 400 になる）', async () => {
+  // 絞りの外の錨も受ける（#4801）: 頁の間に状態が変わった担当（1頁目の応答には載っていた）を錨にした続きが、二度と読めなくなるため。台帳に無い錨は今どおり 400（別の試験）。続きは絞った一覧の中で、錨より後ろの行になる
+  it('順序: status で絞ってから錨より後ろを返す（絞りの外の錨でも、台帳にあれば続きを返す）', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
       { managerId: 'mgr-b', status: 'done' },
@@ -6867,7 +6905,7 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
       afterId: done.managerId,
       afterStartedAt: done.startedAt,
     });
-    expect((await app.request(`/managers?${outside.toString()}`)).status).toBe(400);
+    expect(await ids(`/managers?${outside.toString()}`)).toEqual(['mgr-c']);
 
     const inside = new URLSearchParams({
       status: 'running',
