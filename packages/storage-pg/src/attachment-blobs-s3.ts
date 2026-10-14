@@ -17,10 +17,6 @@ import {
 
 const DELETE_BATCH = 1000;
 
-/**
- * S3 API で一般に書く（特定の事業者に寄せない）。key は呼び手が prefix 込みで渡す。ここでは足さない。
- * 失敗の文に key・資格・endpoint の値を載せない: 呼び手が stderr へ出すため。
- */
 /** S3 へ繋ぐ期限（ms。#4689）。繋ぐだけなら数百 ms で済む。10 秒を超えたら経路が死んでいる。 */
 export const S3_CONNECT_TIMEOUT_MS = 10_000;
 
@@ -30,10 +26,15 @@ export const S3_CONNECT_TIMEOUT_MS = 10_000;
  */
 export const S3_IDLE_TIMEOUT_MS = 60_000;
 
+/**
+ * S3 API で一般に書く（特定の事業者に寄せない）。key は呼び手が prefix 込みで渡す。ここでは足さない。
+ * 失敗の文に key・資格・endpoint の値を載せない: 呼び手が stderr へ出すため。
+ */
 export class S3AttachmentBlobStore implements AttachmentBlobStore {
   readonly #client: S3Client;
   readonly #bucket: string;
   readonly #partSize: number;
+  readonly #idleMs: number;
 
   /** `maxObjectBytes` は置き場が受けうる最大の大きさ。省けば part は S3 の最小（5 MiB）。 */
   constructor(
@@ -48,6 +49,7 @@ export class S3AttachmentBlobStore implements AttachmentBlobStore {
     this.#bucket = config.bucket;
     this.#client = options.client ?? new S3Client(clientConfigOf(config, options.timeouts));
     this.#partSize = attachmentBlobPartBytesFor(options.maxObjectBytes ?? 0);
+    this.#idleMs = options.timeouts?.idleMs ?? S3_IDLE_TIMEOUT_MS;
   }
 
   async put(key: string, body: AsyncIterable<Uint8Array>): Promise<void> {
@@ -71,6 +73,7 @@ export class S3AttachmentBlobStore implements AttachmentBlobStore {
       if (isNotFound(error)) return undefined;
       throw error;
     }
+    armBodyIdleTimeout(response.Body, this.#idleMs);
     return toReadable(response.Body);
   }
 
@@ -141,6 +144,27 @@ function isNotFound(error: unknown): boolean {
     named.name === 'NotFound' ||
     named.$metadata?.httpStatusCode === 404
   );
+}
+
+/**
+ * 本文を流している間の無通信の期限を、本文の側に掛け直す（#4689）。
+ * SDK の `socketTimeout` は 6 秒以上だと 3 秒遅らせて登録し、その前に頭が届くと登録ごと取り消す。
+ * だから頭がすぐ届いて本文の途中で止まった相手には効かず、`attachment_fetch` が返らない。
+ * 本文が Node の `IncomingMessage` でないとき（試験の差し替えなど）は何もしない。
+ */
+function armBodyIdleTimeout(body: unknown, idleMs: number): void {
+  const message = body as {
+    setTimeout?: (ms: number, callback: () => void) => unknown;
+    destroy?: (error: Error) => unknown;
+  };
+  if (typeof message.setTimeout !== 'function' || typeof message.destroy !== 'function') return;
+  message.setTimeout(idleMs, () => {
+    message.destroy?.(
+      Object.assign(new Error(`S3 の本文が ${String(idleMs)} ms のあいだ流れなかった`), {
+        name: 'TimeoutError',
+      }),
+    );
+  });
 }
 
 async function toReadable(body: unknown): Promise<Readable | undefined> {
