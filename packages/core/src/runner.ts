@@ -667,6 +667,8 @@ class Host implements RunnerHost {
   /** 最後に名乗った（起動時は構築時に読んだ）接続先の表示行。器だけの状態からの変化だけを名乗るための基準。 */
   #announcedAnthropicRoute: string;
   readonly #sessions = new Map<string, RunnerSession>();
+  // 終わった担当が撃った退避の push（#4789）。畳むときに待つ（それぞれ `STOP_RESCUE_TIMEOUT_MS` で切れるので待ちは有限）
+  readonly #closeRescues = new Set<Promise<unknown>>();
   // 鍵の付け替えで畳んだ担当から預かった peer（#4734）。同じ担当の resume で新しいセッションへ渡し、戻らなければ期限で閉じる
   readonly #parkedPeers = new Map<
     string,
@@ -1270,6 +1272,10 @@ class Host implements RunnerHost {
     const spawnedPids = new Set<number>();
     const session = new RunnerSession({
       onPeersParked: (parked) => this.#parkPeers(managerId, parked),
+      onCloseRescue: (rescue) => {
+        this.#closeRescues.add(rescue);
+        void rescue.finally(() => this.#closeRescues.delete(rescue));
+      },
       managerId,
       request,
       cwd: this.#resolveCwd(cwd),
@@ -1715,6 +1721,8 @@ class Host implements RunnerHost {
       ),
     );
     this.#sessions.clear();
+    // 終わった担当の退避も待つ（#4789）: 上で止めた担当の分も、それより前に終わった担当の分もここに積まれている
+    await Promise.all([...this.#closeRescues]);
     for (const managerId of [...this.#parkedPeers.keys()]) {
       this.#closeParkedPeers(managerId, '器を畳む');
     }
@@ -1871,6 +1879,8 @@ interface RunnerSessionOptions {
   workerToolWatchClock?: WorkerToolWatchClock;
   /** 鍵の付け替えのための畳みで peer を預けたとき、host へ渡す（#4734）。 */
   onPeersParked?: (parked: ParkedPeers) => void;
+  /** 終わり際に撃った退避の push を host へ渡す（#4789）。host は畳むときにこれを待つ。 */
+  onCloseRescue?: (rescue: Promise<unknown>) => void;
   managerId: string;
   request: string;
   cwd: string;
@@ -1947,6 +1957,7 @@ class RunnerSession {
   readonly #bashGuard: BashGuardMode;
   readonly #peer: (() => RunnerPeerOptions | undefined) | undefined;
   readonly #onPeersParked: ((parked: ParkedPeers) => void) | undefined;
+  readonly #onCloseRescue: ((rescue: Promise<unknown>) => void) | undefined;
   readonly #managerTools: RunnerManagerToolsOptions | undefined;
   readonly #codexAuth: CodexChatgptAuthHandle | undefined;
   readonly #queryFn: ClaudeQueryFn | undefined;
@@ -2098,6 +2109,7 @@ class RunnerSession {
     this.#withheldEnvKeys = options.withheldEnvKeys;
     this.#childUser = options.childUser;
     this.#onPeersParked = options.onPeersParked;
+    this.#onCloseRescue = options.onCloseRescue;
     this.#peer = options.peer;
     this.#managerTools = options.managerTools;
     this.#codexAuth = options.codexAuth;
@@ -2424,10 +2436,12 @@ class RunnerSession {
    * 待たない: デーモンへの停止の応答・`closed` を退避の push で遅らせないため。作業ツリーはディスクに残っているので、外れた後も走れる。
    */
   #rescueOnClose(): void {
-    void this.rescueRef({
+    const rescue = this.rescueRef({
       signal: AbortSignal.timeout(STOP_RESCUE_TIMEOUT_MS),
       waitForRunning: true,
-    });
+    }).catch(() => undefined);
+    // host へ渡す（#4789）: 終わった担当は host のセッション一覧から外れるので、渡さないと畳み（`shutdown`）がこの push を待たずに終わり、器ごと消える作業ツリーの写しが途中で失われるため
+    this.#onCloseRescue?.(rescue);
   }
 
   /**
