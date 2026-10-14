@@ -254,6 +254,8 @@ class PeerSession {
   readonly id: string;
   readonly provider: AgentProviderId;
   inBackground = false;
+  /** 相手のセッションが終わったときに1回だけ呼ぶ（#4764）。 */
+  onEnded: ((reason: string) => void) | undefined;
   readonly #input = new InputQueue();
   readonly #session: AgentManagerSession;
   readonly #deps: PeerBrokerDeps;
@@ -605,7 +607,10 @@ class PeerSession {
   }
 
   #end(reason: string): void {
+    const first = this.#ended === undefined;
     this.#ended ??= reason;
+    // 一覧から外すのは broker（#4764）: 終わった相手を担当を畳むまで抱え続けないため
+    if (first) this.onEnded?.(reason);
     this.denyPending('セッションが閉じた');
     this.#finishTurn({ ok: false, text: `peer のセッションが途中で終わった（${reason}）` });
     this.#wake();
@@ -837,8 +842,21 @@ function renderPeerCall(result: PeerCallResult): {
   };
 }
 
+const ENDED_REASONS_LIMIT = 64;
+
 export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
   const sessions = new Map<string, PeerSession>();
+  // 外したセッションの終わった理由（#4764）: 外した後の peer_reply に「無い」ではなく理由を返すため。上限を置く: 外しても理由だけが溜まり続けないため
+  const endedReasons = new Map<string, string>();
+  const forget = (session: PeerSession, reason: string): void => {
+    if (sessions.get(session.id) !== session) return;
+    sessions.delete(session.id);
+    endedReasons.set(session.id, reason);
+    if (endedReasons.size > ENDED_REASONS_LIMIT) {
+      const oldest = endedReasons.keys().next();
+      if (oldest.done !== true) endedReasons.delete(oldest.value);
+    }
+  };
   const allowed = new Set<string>(deps.allowed);
   const modelsOf = (provider: AgentProviderId): readonly string[] => deps.models?.[provider] ?? [];
   const allModels = [...new Set(deps.allowed.flatMap((provider) => [...modelsOf(provider)]))];
@@ -871,6 +889,10 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
       return `peer のセッションを開けなかった: ${error instanceof Error ? error.message : String(error)}`;
     }
     sessions.set(sessionId, session);
+    session.onEnded = (reason) => {
+      // 背景で待っている間は外さない: 止まりどころを知らせる前に背景処理の数から消えると、担当が待ち終えたと読むため（知らせた後で外す）
+      if (!session.inBackground) forget(session, reason);
+    };
     deps.onNote(
       `peer（${provider}）[${sessionId}] を起こした${model === undefined ? '' : `（model=${model}）`}`,
     );
@@ -898,6 +920,8 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     void start(undefined).then((result) => {
       // 知らせる前に下ろす: 知らせで起きたマネージャーの報告が、終わった peer を背景待ちに数えないため
       session.inBackground = false;
+      const ended = session.ended;
+      if (ended !== undefined) forget(session, ended);
       try {
         onStop(result);
       } catch (error) {
@@ -911,8 +935,12 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
 
   const reply: PeerBroker['reply'] = async (sessionId, message, options = {}) => {
     const session = sessions.get(sessionId);
-    if (session === undefined)
-      return `session_id「${sessionId}」の peer セッションは無い（peer_run で起こすこと）`;
+    if (session === undefined) {
+      const reason = endedReasons.get(sessionId);
+      return reason === undefined
+        ? `session_id「${sessionId}」の peer セッションは無い（peer_run で起こすこと）`
+        : `peer のセッション ${sessionId} は終わっている（${reason}）。続けるなら peer_run で起こし直すこと`;
+    }
     if (session.pendingIds.length > 0) {
       return (
         `peer のセッション ${sessionId} は確認の答えを待っている（approval_id=${session.pendingIds.join(', ')}）。` +
