@@ -8017,6 +8017,7 @@ export function createCloneTools(context: ToolContext) {
         'その id を attachment_fetch で取り出した写しも消す。すでに会話へ添えた添付を消すと、画面の添付は開けなくなる。',
         '**消す前に**、その控え（id・名前・種類・大きさ・sha256・出所・保存中だったか。中身は書かない）を日誌へ書く。日誌に書けなければ何も消さない（やり直してよい）。',
         '無い id（期限切れで消えた・id の誤り）は「無い」と返り、日誌には何も書かない。',
+        '外部の置き場に預けた中身は先に消す。置き場から消せなかったときは「消していない」と理由が返り（控えも写しも残る）、日誌に断った旨の行が足される。もう一度呼ぶと再試行する。',
       ].join(' '),
       {
         id: z.string().min(1).describe('消す添付の id（file_list / file_put の応答）'),
@@ -8040,6 +8041,14 @@ export function createCloneTools(context: ToolContext) {
                   },
                   'act-not-performed',
                 );
+              },
+              async (meta, reason) => {
+                // 断った後に足す行: 先に書いた「消す」の行だけでは、日誌が消したように読める。書けなくても断りの結果は変えない
+                await appendJournalOrDrop('file_delete', stores.journal, {
+                  type: 'decision',
+                  decision: `添付の中身を置き場から消せなかったので、消していない（控えも残した）: ${meta === undefined ? `id=${id}` : `${meta.name}（id=${meta.id}）`}`,
+                  grounds: `理由: ${reason}。直前の「消す」の行は実行されていない。もう一度 file_delete で再試行できる。`,
+                });
               },
             ),
           );

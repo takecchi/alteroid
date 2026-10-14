@@ -1,4 +1,5 @@
 import {
+  AttachmentContentRemoveError,
   AttachmentCursorError,
   classifyAttachmentFrom,
   encodeAttachmentCursor,
@@ -178,10 +179,24 @@ export async function deleteFile(
   id: string,
   // 消す前に、読んだ控えを日誌へ書く口。投げたら何も消さない（消した後では、名前も大きさも辿れなくなるため）
   beforeRemove?: (meta: AttachmentMeta) => Promise<void>,
+  // 中身を置き場から消せずに断ったとき（`beforeRemove` が「消そうとしている」と書いた後）に、「消せなかった」を日誌へ足す口。
+  // 書いた後に断ると、日誌だけが消したように読めるため（#4814）。落ちても断りの結果は変えないこと
+  afterRefused?: (meta: AttachmentMeta | undefined, reason: string) => Promise<void>,
 ): Promise<string> {
   const meta = await stores.attachments.getMeta(id);
   if (meta !== undefined && beforeRemove !== undefined) await beforeRemove(meta);
-  const removed = await stores.attachments.remove(id);
+  let removed: boolean;
+  try {
+    removed = await stores.attachments.remove(id);
+  } catch (error) {
+    if (!(error instanceof AttachmentContentRemoveError)) throw error;
+    await afterRefused?.(meta, error.reason);
+    // 写しも消さない: 消していないので、取り出した写しも残す
+    return (
+      `添付 ${id} は消していない（控えも残した）。中身を置き場から消せなかった。理由: ${error.reason}。` +
+      'もう一度 file_delete を呼ぶと再試行する。'
+    );
+  }
   // 写しは本体が無かったときも消す（`DELETE /attachments/:id` と同じ。本体だけ先に消えて取り残された写しを片付ける）
   await removeAttachmentCopy(copiesDir, id);
   if (!removed) {

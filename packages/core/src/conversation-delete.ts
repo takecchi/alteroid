@@ -1,3 +1,4 @@
+import { AttachmentContentRemoveError } from './attachment.js';
 import { lookupConversation, type ConversationLookup } from './conversation-lookup.js';
 import { removeInboxEventsAndStopDelivery } from './inbox-backlog.js';
 import { scanJournalPages } from './journal-scan.js';
@@ -185,7 +186,23 @@ export async function deleteConversation(
     '添付を消す',
     async () => {
       let removed = 0;
-      for (const id of attachmentIds) if (await stores.attachments.remove(id)) removed += 1;
+      // 1件の失敗で残りを止めない: 中身を置き場から消せなかった添付は残り（控えも残る）、件数と理由を incomplete に載せる（#4814）
+      let refused = 0;
+      let reason: string | undefined;
+      for (const id of attachmentIds) {
+        try {
+          if (await stores.attachments.remove(id)) removed += 1;
+        } catch (error) {
+          if (!(error instanceof AttachmentContentRemoveError)) throw error;
+          refused += 1;
+          reason ??= error.reason;
+        }
+      }
+      if (refused > 0) {
+        incomplete.push(
+          `添付 ${refused} 件は中身を置き場から消せなかったので消していない（控えも残した。理由: ${reason ?? '不明'}）`,
+        );
+      }
       return removed;
     },
     0,

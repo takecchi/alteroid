@@ -3,6 +3,7 @@ import { Readable } from 'node:stream';
 
 import {
   ATTACHMENT_ORPHAN_BLOB_GRACE_MS,
+  AttachmentContentRemoveError,
   ATTACHMENT_UNBOUND_TTL_MS,
   attachmentBlobListPrefix,
   isAttachmentBlobKey,
@@ -149,6 +150,7 @@ const FROM_CLASS_EXPR = sql<AttachmentFromClass>`case
 end`;
 
 const SWEEP_LOOKUP_BATCH = 500;
+const PRUNE_BATCH = 1000;
 
 export interface PgAttachmentStoreOptions extends AttachmentStoreOptions {
   readonly blobs?: AttachmentBlobStore;
@@ -171,21 +173,39 @@ export class PgAttachmentStore implements AttachmentStore {
     this.#options = options;
   }
 
-  /** 落ちても行の削除は戻さない: 控えの無い blob は {@link sweepOrphanBlobs} が後で掃除するため。 */
-  async #removeBlobs(keys: readonly (string | null)[]): Promise<void> {
-    const present = keys.filter((key): key is string => key !== null);
-    if (present.length === 0) return;
+  /**
+   * 控えの無い blob だけに使う（落ちても握る）: 控えの行が消えている blob は {@link sweepOrphanBlobs} が後で掃除するため。
+   * 控えのある行の中身は {@link #removeContent} で先に消す（消せなければ行を残す）。
+   */
+  async #removeOrphanBlobs(keys: readonly string[]): Promise<void> {
+    if (keys.length === 0) return;
     const blobs = this.#options.blobs;
     if (blobs === undefined) {
       process.stderr.write(
-        `alteroidd: 添付の中身の置き場が設定されていないので、blob ${present.length} 件は消せずに残る\n`,
+        `alteroidd: 添付の中身の置き場が設定されていないので、blob ${keys.length} 件は消せずに残る\n`,
       );
       return;
     }
     try {
-      await blobs.remove(present);
+      await blobs.remove(keys);
     } catch (error) {
-      noteBlobTrouble('削除', present.length, error);
+      noteBlobTrouble('削除', keys.length, error);
+    }
+  }
+
+  /**
+   * 控えのある行の中身を置き場から消す。消せなかったら理由（`reasonOf`。key は載せない）を返し、行を消す側はその行を残す。
+   * 置き場の `remove` は無い key を成功として返すので、中身を消した後に行の削除が落ちても、もう一度呼べば消し切れる。
+   */
+  async #removeContent(keys: readonly string[]): Promise<string | undefined> {
+    if (keys.length === 0) return undefined;
+    const blobs = this.#options.blobs;
+    if (blobs === undefined) return '中身の置き場が設定されていない';
+    try {
+      await blobs.remove(keys);
+      return undefined;
+    } catch (error) {
+      return reasonOf(error);
     }
   }
 
@@ -468,30 +488,73 @@ export class PgAttachmentStore implements AttachmentStore {
     return queryable.filter((id) => done.has(id));
   }
 
+  /**
+   * 期限切れ・未結び付けの残骸を消す。中身を置き場から消せた行と、中身を持たない行だけを消す。
+   * 消せなかった行（置き場が無い・削除が落ちた）は残し、次の掃除で再試行する（stderr に件数と理由を1行）。
+   *
+   * 選んでから消すまでの間に生き返りうる: 期限切れ（`expires_at <= now`）の行は bind・保存の条件（期限内）に当たらないので戻らないが、
+   * 「未結び付けのまま1時間」で選んだ行は期限内なので、その間に bind・保存で生き返りうる。
+   * 中身を消した後に行だけ生き返ると、行が中身を失うので、選ぶのを `FOR UPDATE` で行ごと握り、同じトランザクションで中身を消して行を消す
+   * （bind・保存の UPDATE は握りが解けるまで待ち、解けたら行が無いので「無い」と返る）。行を消す DELETE にも同じ条件を持たせる。
+   */
   async prune(now: Date): Promise<number> {
     const unboundBefore = new Date(now.getTime() - ATTACHMENT_UNBOUND_TTL_MS);
-    const removed = await this.#db
-      .delete(attachments)
-      .where(
+    const prunable = and(
+      // 保存中は期限でも未結び付けでも消さない
+      isNull(attachments.keptAt),
+      or(
+        lte(attachments.expiresAt, now),
         and(
-          // 保存中は期限でも未結び付けでも消さない
-          isNull(attachments.keptAt),
-          or(
-            lte(attachments.expiresAt, now),
-            and(
-              // 一度保存されて外したものは「上げただけの残骸」ではない（期限だけで消える）
-              isNull(attachments.releasedAt),
-              isNull(attachments.conversationId),
-              isNull(attachments.externalEventId),
-              isNull(attachments.managerReportId),
-              lte(attachments.createdAt, unboundBefore),
-            ),
-          ),
+          // 一度保存されて外したものは「上げただけの残骸」ではない（期限だけで消える）
+          isNull(attachments.releasedAt),
+          isNull(attachments.conversationId),
+          isNull(attachments.externalEventId),
+          isNull(attachments.managerReportId),
+          lte(attachments.createdAt, unboundBefore),
         ),
-      )
-      .returning({ id: attachments.id, blobKey: attachments.blobKey });
-    await this.#removeBlobs(removed.map((row) => row.blobKey));
-    return removed.length;
+      ),
+    )!;
+    let kept = 0;
+    let reason: string | undefined;
+    const removed = await this.#db.transaction(async (tx) => {
+      const candidates = await tx
+        .select({ id: attachments.id, blobKey: attachments.blobKey })
+        .from(attachments)
+        .where(prunable)
+        .for('update');
+      const deletable: string[] = [];
+      const keyed: { id: string; blobKey: string }[] = [];
+      for (const row of candidates) {
+        if (row.blobKey === null) deletable.push(row.id);
+        else keyed.push({ id: row.id, blobKey: row.blobKey });
+      }
+      for (let start = 0; start < keyed.length; start += PRUNE_BATCH) {
+        const batch = keyed.slice(start, start + PRUNE_BATCH);
+        const failed = await this.#removeContent(batch.map((row) => row.blobKey));
+        if (failed === undefined) deletable.push(...batch.map((row) => row.id));
+        else {
+          kept += batch.length;
+          reason ??= failed;
+        }
+      }
+      let count = 0;
+      for (let start = 0; start < deletable.length; start += PRUNE_BATCH) {
+        const gone = await tx
+          .delete(attachments)
+          .where(
+            and(inArray(attachments.id, deletable.slice(start, start + PRUNE_BATCH)), prunable),
+          )
+          .returning({ id: attachments.id });
+        count += gone.length;
+      }
+      return count;
+    });
+    if (kept > 0) {
+      process.stderr.write(
+        `alteroidd: 添付の中身を置き場から消せなかったので、期限切れの ${kept} 件は行を残した（次の掃除で再試行する）: ${reason ?? '不明'}\n`,
+      );
+    }
+    return removed;
   }
 
   /**
@@ -599,16 +662,24 @@ export class PgAttachmentStore implements AttachmentStore {
     return rows[0] === undefined ? undefined : toMeta(rows[0]);
   }
 
+  /** 中身を先に消す。消せなければ行を消さずに {@link AttachmentContentRemoveError} を投げる（#4814）。 */
   async remove(id: string): Promise<boolean> {
     if (hasNul(id)) return false;
+    const found = await this.#db
+      .select({ blobKey: attachments.blobKey })
+      .from(attachments)
+      .where(eq(attachments.id, id));
+    if (found[0] === undefined) return false;
+    if (found[0].blobKey !== null) {
+      const failed = await this.#removeContent([found[0].blobKey]);
+      if (failed !== undefined) throw new AttachmentContentRemoveError(id, failed);
+    }
     const removed = await this.#db.delete(attachments).where(eq(attachments.id, id)).returning({
       keptAt: attachments.keptAt,
       expiresAt: attachments.expiresAt,
-      blobKey: attachments.blobKey,
     });
     const row = removed[0];
     if (row === undefined) return false;
-    await this.#removeBlobs([row.blobKey]);
     return row.keptAt !== null || row.expiresAt === null || new Date(row.expiresAt) > this.#now();
   }
 
@@ -699,11 +770,27 @@ export class PgAttachmentStore implements AttachmentStore {
     return usage;
   }
 
+  /** 中身を先に消す。消せなければ行を1件も消さずに {@link AttachmentContentRemoveError} を投げる。 */
   async clear(): Promise<number> {
+    const keyed = await this.#db
+      .select({ id: attachments.id, blobKey: attachments.blobKey })
+      .from(attachments)
+      .where(isNotNull(attachments.blobKey));
+    const first = keyed[0];
+    if (first !== undefined) {
+      const failed = await this.#removeContent(keyed.map((row) => row.blobKey!));
+      if (failed !== undefined) throw new AttachmentContentRemoveError(first.id, failed);
+    }
     const removed = await this.#db
       .delete(attachments)
       .returning({ id: attachments.id, blobKey: attachments.blobKey });
-    await this.#removeBlobs(removed.map((row) => row.blobKey));
+    // 選んだ後に入った行の blob は控えが無くなったので、握って sweepOrphanBlobs に任せる
+    const seen = new Set(keyed.map((row) => row.blobKey));
+    await this.#removeOrphanBlobs(
+      removed.flatMap((row) =>
+        row.blobKey === null || seen.has(row.blobKey) ? [] : [row.blobKey],
+      ),
+    );
     return removed.length;
   }
 }

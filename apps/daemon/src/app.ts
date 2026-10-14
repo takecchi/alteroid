@@ -198,6 +198,7 @@ import {
   type RemoveUnreadableRowsResult,
 } from '@alteroid/core';
 import {
+  AttachmentContentRemoveError,
   AttachmentCursorError,
   AttachmentRejectedError,
   hasNul,
@@ -2546,18 +2547,47 @@ export function createApp(deps: AppDeps) {
         summary: '添付を消す（保存したものも）',
         description:
           '預かっている中身と控えを消す。保存の印が付いていても消す。`attachment_fetch` で取り出した写しも消す。' +
-          '取り消せない。連携の鍵は 403。',
+          '取り消せない。連携の鍵は 403。' +
+          '外部の置き場に預けた中身は先に消す: 消せなかったとき（置き場の障害・設定が無い）は、消さずに 503 で断り（控えも残す）、理由を返す。もう一度消すと再試行する。',
         responses: {
-          204: { description: '消した。' },
+          204: { description: '消した（中身が消えたときだけ）。' },
           404: {
             description: '無い（消えた・期限切れ）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          503: {
+            description:
+              '中身を置き場から消せなかったので、消していない（控えも残した）。本文の `error` に理由。もう一度消すと再試行する。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
       async (c) => {
         const id = c.req.param('id');
-        const removed = await stores.attachments.remove(id);
+        let removed: boolean;
+        try {
+          removed = await stores.attachments.remove(id);
+        } catch (error) {
+          if (!(error instanceof AttachmentContentRemoveError)) throw error;
+          // 断ったことを日誌に残す（消していないのに消したように読まれないため）。名前が読めなくても断りは変えない。
+          const meta = await stores.attachments.getMeta(id).catch(() => undefined);
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `添付を消せなかった（中身を置き場から消せないので、消していない。控えも残した）: ${meta === undefined ? '' : `${meta.name}、`}id=${id}`,
+              grounds: `${describeActor(c.get('principal'))}（DELETE /attachments/:id）。理由: ${error.reason}。もう一度消すと再試行する。`,
+            },
+            '添付の削除の断りの日誌',
+            `id=${id}`,
+          );
+          return c.json(
+            {
+              error: `中身を置き場から消せなかったので消していない（控えも残した）。理由: ${error.reason}。もう一度消すと再試行する`,
+            },
+            503,
+          );
+        }
         // 写しは本体が無かったときも消す: 本体だけ先に消えて取り残された写しを片付ける。
         if (deps.attachmentCopiesDir !== undefined) {
           await removeAttachmentCopy(deps.attachmentCopiesDir, id);
@@ -10023,15 +10053,45 @@ export function createApp(deps: AppDeps) {
             description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          503: {
+            description:
+              '添付の中身を置き場から消せなかったので、添付は消していない（添付より前の順に消すものは消えている。#4814）。本文の `error` に理由。もう一度リセットすると再試行する。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       jsonBody(resetRequestSchema, () => ({
         error: '`confirm: true` を伴っていない（取り消せない操作なので確認を必須にしてある）',
       })),
       async (c) => {
-        const cleared = await resetWorkspaceState(stores, {
-          ...(deps.clearSessionLog === undefined ? {} : { clearSessionLog: deps.clearSessionLog }),
-        });
+        let cleared: Awaited<ReturnType<typeof resetWorkspaceState>>;
+        try {
+          cleared = await resetWorkspaceState(stores, {
+            ...(deps.clearSessionLog === undefined
+              ? {}
+              : { clearSessionLog: deps.clearSessionLog }),
+          });
+        } catch (error) {
+          if (!(error instanceof AttachmentContentRemoveError)) throw error;
+          // 添付は最後のほうに消す: ここへ来た時点で、記憶・日誌などは消えている（途中で止まった）。500 で理由を隠さず、残ったものと再試行できることを言う。
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision:
+                'ワークスペースのリセットが途中で止まった（添付の中身を置き場から消せなかった。添付と、それより後の消去は済んでいない）',
+              grounds: `${describeActor(c.get('principal'))}（POST /reset）。理由: ${error.reason}。もう一度リセットすると再試行する。`,
+            },
+            'ワークスペースリセットの断りの日誌',
+            `id=${error.id}`,
+          );
+          return c.json(
+            {
+              error: `添付の中身を置き場から消せなかったので、リセットが途中で止まった（添付は消していない。それ以前の消去は済んでいる）。理由: ${error.reason}。もう一度リセットすると再試行する`,
+            },
+            503,
+          );
+        }
         // 写しは置き場の外のファイルなのでここで消す。消せなくても 500 にしない: 本体はもう消えており、申告の `cleared` を失わない。
         if (deps.attachmentCopiesDir !== undefined) {
           await rm(deps.attachmentCopiesDir, { recursive: true, force: true }).catch(

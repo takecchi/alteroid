@@ -1442,6 +1442,7 @@ export {
   ATTACHMENT_RETENTION_DAYS_MAX,
   ATTACHMENT_UNBOUND_TTL_MS,
   ATTACHMENT_UPLOADED_BY_CLONE,
+  AttachmentContentRemoveError,
   AttachmentRejectedError,
   ATTACHMENT_FROM_CLASSES,
   AttachmentCursorError,

@@ -89,6 +89,10 @@ export interface AttachmentStore {
    * 以前から同じ宛先に結んであった id を渡すと、その結び付けも戻るため。
    */
   unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]>;
+  /**
+   * 期限切れ・未結び付けの残骸を消し、消した件数を返す。外部の置き場に預けた中身は、置き場から消せた行（と、中身を持たない行）だけを消す。
+   * 消せなかった行は残して次の回に再試行し、投げない（件数と理由は stderr に出す）。
+   */
   prune(now: Date): Promise<number>;
   /**
    * 外部ストレージに残った、控えの無い blob を消す（任意。pg だけが実装する）。消してよいのは
@@ -102,12 +106,16 @@ export interface AttachmentStore {
    * 保存中でないものを外しても何も変えない（期限を延ばさない）。
    */
   setKept(id: string, kept: boolean, now: Date): Promise<AttachmentMeta | undefined>;
-  /** 期限切れの残骸は消すが、戻り値は生きていたもの（期限内）を消したときだけ `true`。 */
+  /**
+   * 期限切れの残骸は消すが、戻り値は生きていたもの（期限内）を消したときだけ `true`。
+   * 外部の置き場に預けた中身は**先に**消し、消せなかった（落ちた・置き場の設定が無い）ときは行を消さずに
+   * {@link AttachmentContentRemoveError} を投げる（#4814）: 「消した」は中身が消えたときだけ。再び呼べば再試行する。
+   */
   remove(id: string): Promise<boolean>;
   /** 中身を読まない（pg は bytes 列を SELECT しない）。 */
   list(query: AttachmentListQuery): Promise<AttachmentListPage>;
   usage(): Promise<AttachmentUsage>;
-  /** 保存したものも消す。 */
+  /** 保存したものも消す。中身を置き場から消せなかったときは、行を消さずに {@link AttachmentContentRemoveError} を投げる。 */
   clear(): Promise<number>;
 }
 
@@ -520,6 +528,23 @@ export class AttachmentRejectedError extends Error {
     super(message);
     this.name = 'AttachmentRejectedError';
     this.code = code;
+  }
+}
+
+/**
+ * 添付の中身を置き場から消せなかったので、消していない（控えも残してある）ことを表す。
+ * 「消した」と言うのは中身が本当に消えたときだけにする（#4814）: 呼び手は消したと言わずに、`reason` を人間へ見せて再試行を促す。
+ * `reason` は人間が読める1行で、key・値・資格を含まない（`reasonOf` を通した文）。`id` は消せなかった添付（複数のときは最初の1件）。
+ */
+export class AttachmentContentRemoveError extends Error {
+  readonly reason: string;
+  readonly id: string;
+
+  constructor(id: string, reason: string) {
+    super(`添付 ${id} の中身を置き場から消せなかった: ${reason}`);
+    this.name = 'AttachmentContentRemoveError';
+    this.reason = reason;
+    this.id = id;
   }
 }
 

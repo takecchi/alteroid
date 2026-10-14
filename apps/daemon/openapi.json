@@ -1019,13 +1019,29 @@
         "operationId": "deleteAttachmentsById",
         "tags": ["attachments"],
         "summary": "添付を消す（保存したものも）",
-        "description": "預かっている中身と控えを消す。保存の印が付いていても消す。`attachment_fetch` で取り出した写しも消す。取り消せない。連携の鍵は 403。",
+        "description": "預かっている中身と控えを消す。保存の印が付いていても消す。`attachment_fetch` で取り出した写しも消す。取り消せない。連携の鍵は 403。外部の置き場に預けた中身は先に消す: 消せなかったとき（置き場の障害・設定が無い）は、消さずに 503 で断り（控えも残す）、理由を返す。もう一度消すと再試行する。",
         "responses": {
           "204": {
-            "description": "消した。"
+            "description": "消した（中身が消えたときだけ）。"
           },
           "404": {
             "description": "無い（消えた・期限切れ）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "中身を置き場から消せなかったので、消していない（控えも残した）。本文の `error` に理由。もう一度消すと再試行する。",
             "content": {
               "application/json": {
                 "schema": {
@@ -31043,6 +31059,22 @@
           },
           "403": {
             "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "添付の中身を置き場から消せなかったので、添付は消していない（添付より前の順に消すものは消えている。#4814）。本文の `error` に理由。もう一度リセットすると再試行する。",
             "content": {
               "application/json": {
                 "schema": {
