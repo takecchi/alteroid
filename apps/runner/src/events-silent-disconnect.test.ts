@@ -349,3 +349,98 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
     expect(all[all.length - 1]?.seq).toBe(limit + 5);
   });
 });
+
+describe('Outbox の送信済みの控えは字数でも締める（#4669）', () => {
+  const at = '2026-01-01T00:00:00.000Z';
+  const mirrorOf = (i: number): RunnerEvent =>
+    ({ type: 'session', managerId: 'a', sessionId: String(i) }) as RunnerEvent;
+
+  it('⭐ 書き出した字数の合計が上限を超えたら、古い分から落とす（件数の上限より手前でも）', () => {
+    const outbox = new Outbox();
+    for (let seq = 1; seq <= 20; seq += 1) outbox.recordSent(mirrorOf(seq), seq, at, 1_000_000);
+    const kept = outbox.sentSince(0).map((item) => item.seq);
+    expect(kept).toEqual([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+  });
+
+  it('上限を1件で超える出来事でも、直近の1件は残す', () => {
+    const outbox = new Outbox();
+    outbox.recordSent(mirrorOf(1), 1, at, 10);
+    outbox.recordSent(mirrorOf(2), 2, at, Outbox.SENT_HISTORY_MAX_CHARS + 1);
+    expect(outbox.sentSince(0).map((item) => item.seq)).toEqual([2]);
+  });
+
+  it('字数を渡さなければ、出来事を直列化した字数で数える', () => {
+    const outbox = new Outbox();
+    const big = {
+      type: 'session',
+      managerId: 'a',
+      sessionId: 'x'.repeat(9_000_000),
+    } as RunnerEvent;
+    outbox.recordSent(mirrorOf(1), 1, at);
+    outbox.recordSent(big, 2, at);
+    outbox.recordSent(big, 3, at);
+    expect(outbox.sentSince(0).map((item) => item.seq)).toEqual([3]);
+  });
+
+  it('字数で落とした分より前を繋ぎ直しで求められたら、送り直せないことを標準エラーに残す。落としていない範囲では黙る', () => {
+    const outbox = new Outbox();
+    for (let seq = 1; seq <= 20; seq += 1) {
+      outbox.push(mirrorOf(seq));
+      outbox.recordSent(mirrorOf(seq), seq, at, 1_000_000);
+    }
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(outbox.sentSince(2).map((item) => item.seq)[0]).toBe(5);
+      expect(spy.mock.calls.map((call) => String(call[0])).join('')).toContain(
+        '控えの字数の上限で落としてあり、送り直せない',
+      );
+      spy.mockClear();
+      outbox.sentSince(10);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('/events へ書いた出来事の控えは、書き出した本文の字数で締まる（#4669）', () => {
+  it('⭐ 100万字級の出来事を20件流すと、控えは字数の上限に収まる分だけ残る', async () => {
+    const host = newHost();
+    const outbox = new Outbox();
+    const big = (i: number): RunnerEvent =>
+      ({
+        type: 'session',
+        managerId: 'mgr-big',
+        sessionId: `${String(i)}${'x'.repeat(1_000_000)}`,
+      }) as RunnerEvent;
+    for (let i = 1; i <= 20; i += 1) outbox.push(big(i));
+    try {
+      const app = createRunnerApp({
+        host,
+        outbox,
+        tokenSha256: TOKEN_SHA256,
+        sseHeartbeatMs: 60_000,
+      });
+      const response = await app.request('/events', { headers: bearer() });
+      const body = response.body;
+      if (body === null) throw new Error('SSE の応答に本文が無い');
+      const reader = body.getReader();
+      // 20件目まで読み切る（書き出した分が控えに積まれる）
+      const decoder = new TextDecoder();
+      let seen = '';
+      while (!seen.includes('id: 20')) {
+        const next = await reader.read();
+        if (next.done) break;
+        seen += decoder.decode(next.value, { stream: true });
+        seen = seen.slice(-64);
+      }
+      await expect
+        .poll(() => outbox.sentSince(0).length, { timeout: 1000 })
+        .toBeLessThanOrEqual(16);
+      expect(outbox.sentSince(0).at(-1)?.seq).toBe(20);
+      await reader.cancel();
+    } finally {
+      await host.shutdown();
+    }
+  });
+});
