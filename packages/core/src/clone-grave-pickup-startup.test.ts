@@ -379,3 +379,91 @@ describe('クローン — 拾い直しの蒸留が失敗で終わったら、�
     await s.clone.stop();
   });
 });
+
+describe('クローン — 同じ印の蒸留が失敗し続けても、日誌は3回で黙る（#4752）', () => {
+  async function selfTexts(stores: Stores): Promise<string[]> {
+    const rows = await stores.journal.list({ types: ['exchange'] });
+    return rows
+      .filter((entry) => entry.type === 'exchange' && entry.with === 'self')
+      .map((entry) => (entry.type === 'exchange' ? entry.text : ''));
+  }
+
+  const count = (texts: string[], needle: string) =>
+    texts.filter((text) => text.includes(needle)).length;
+
+  // 起動を1回ぶん回し、蒸留が失敗として数えられるまで待つ。数えた後に書く行は、書く回（上限以下）だけ待つ
+  async function startupWithFailingDistill(
+    stores: Stores,
+    archiveId: string,
+    nth: number,
+    expectLine: boolean,
+  ) {
+    const failureLines = (await selfTexts(stores)).filter((text) =>
+      text.includes('前の器が記憶へ移せなかった区間の蒸留に失敗した'),
+    ).length;
+    const s = setup(undefined, stores, { resultSubtype: 'error_during_execution' });
+    await waitFor(
+      async () => (await stores.sessions.graveDistillFailures('transcript', archiveId)) === nth,
+      `${nth} 回目の失敗が数えられること`,
+    );
+    if (expectLine) {
+      await waitFor(
+        async () =>
+          count(await selfTexts(stores), '前の器が記憶へ移せなかった区間の蒸留に失敗した') ===
+          failureLines + 1,
+        `${nth} 回目の失敗の行が日誌に残ること`,
+      );
+    }
+    const attempted = s.calls.length;
+    await s.clone.stop();
+    return attempted;
+  }
+
+  it('⭐ 5回起動しても、失敗・拾い直し・蒸留の入力の行は3回ずつで、印は残り、蒸留は試み続ける', async () => {
+    const stores = createMemoryStores();
+    const archiveId = (
+      await stores.archive.archive('sess-old', 'GRAVE-QUIET-DISTILL-5c2f 前の器の生ログ')
+    ).id;
+    await stores.sessions.setTranscriptGrave({ archiveId });
+
+    const attempts: number[] = [];
+    for (let nth = 1; nth <= 5; nth += 1) {
+      attempts.push(await startupWithFailingDistill(stores, archiveId, nth, nth <= 3));
+    }
+
+    const texts = await selfTexts(stores);
+    const failureLines = texts.filter((text) =>
+      text.includes('前の器が記憶へ移せなかった区間の蒸留に失敗した'),
+    );
+    expect(failureLines).toHaveLength(3);
+    // 並びに依らず、3回目の1行だけが「以後は書かない」を添えている
+    const noted = failureLines.filter((text) => text.includes('以後は成功するまで'));
+    expect(noted).toHaveLength(1);
+    expect(noted[0]).toContain('日誌に書かない');
+    expect(count(texts, '前の器が記憶へ移せなかった区間を拾い直す')).toBe(3);
+    expect(count(texts, 'ターンの入力: pre_compact_distill')).toBe(3);
+
+    // 黙るだけで、拾い直しは続け、印は下ろさない
+    expect(attempts.every((n) => n > 0)).toBe(true);
+    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId });
+  });
+
+  it('別の印に替われば数え直し、その印の失敗は再び日誌に書かれる', async () => {
+    const stores = createMemoryStores();
+    const first = (await stores.archive.archive('sess-a', 'GRAVE-QUIET-A-1 生ログ')).id;
+    await stores.sessions.setTranscriptGrave({ archiveId: first });
+    for (let nth = 1; nth <= 4; nth += 1) {
+      await startupWithFailingDistill(stores, first, nth, nth <= 3);
+    }
+    const before = count(await selfTexts(stores), '前の器が記憶へ移せなかった区間の蒸留に失敗した');
+    expect(before).toBe(3);
+
+    const second = (await stores.archive.archive('sess-b', 'GRAVE-QUIET-B-2 生ログ')).id;
+    await stores.sessions.setTranscriptGrave({ archiveId: second });
+    await startupWithFailingDistill(stores, second, 1, true);
+
+    const texts = await selfTexts(stores);
+    expect(count(texts, '前の器が記憶へ移せなかった区間の蒸留に失敗した')).toBe(4);
+    expect(count(texts, `区間を拾い直す: ${second}`)).toBe(1);
+  });
+});
