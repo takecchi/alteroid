@@ -91,6 +91,8 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
   let current: AccountUsageState = { state: 'unknown' };
   let currentKey: { tokenId: string; generation: number } | undefined;
   let inFlight: Promise<AccountUsageState> | null = null;
+  // 最後に測り始めた瞬間の身元（#4737）: 鍵の無いまま「未ログイン」と測った回を見分けるため
+  let lastMeasuredBy: { tokenId: string; generation: number } | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
 
@@ -108,6 +110,7 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
     // 空なら渡さない: 空の `env` を渡すと `fetchAccountUsage` が `env` を組み立ててしまい、既定の構成の挙動が変わりうるため。
     const env = options.env?.();
     const measuredBy = options.identity?.();
+    lastMeasuredBy = measuredBy;
     inFlight = fetchAccountUsage(options.queryFn, {
       cwd: options.cwd,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -168,17 +171,31 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
   const nextInterval = (state: AccountUsageState) =>
     intervalForState(state, { normal: interval, unavailable: unavailableInterval });
 
-  const schedule = (delay: number) => {
+  // 鍵の無いまま「未ログイン」と測った回は、長い間隔を1本のタイマーで待たない（#4737）: 起動直後は鍵の箱が埋まる前に1回目を測り、
+  // 鍵が届いても長い間隔（30分）のあいだ枠が「取れない」のままになるため。通常の間隔ごとに鍵が届いたかだけを見て、届いていればすぐ測り直す。
+  // 鍵が届かないままなら測り直さない: 鍵の無い構成で probe（子プロセス）を増やさないため
+  const waitingForKey = (state: AccountUsageState): boolean =>
+    state.state === 'unavailable' &&
+    state.cause === 'not_logged_in' &&
+    lastMeasuredBy === undefined &&
+    options.identity !== undefined;
+
+  const schedule = (delay: number, forKey: boolean, startedAt: number) => {
     if (stopped) return;
+    const step = forKey ? Math.min(delay, interval) : delay;
     timer = setTimeout(() => {
-      void refresh().then((state) => {
-        schedule(nextInterval(state));
-      });
-    }, delay);
+      if (forKey && options.identity?.() === undefined && Date.now() - startedAt < delay) {
+        schedule(delay, true, startedAt);
+        return;
+      }
+      void refresh().then(scheduleAfter);
+    }, step);
     timer.unref?.();
   };
+  const scheduleAfter = (state: AccountUsageState) =>
+    schedule(nextInterval(state), waitingForKey(state), Date.now());
 
-  void refresh().then((state) => schedule(nextInterval(state)));
+  void refresh().then(scheduleAfter);
 
   return {
     state: () => {

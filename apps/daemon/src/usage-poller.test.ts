@@ -482,3 +482,41 @@ describe('usage-poller — 現役のトークンで測る', () => {
     expect(calls()).toBe(2);
   });
 });
+
+describe('起動直後の「鍵が無い」は、鍵が届いたら長い間隔を待たずに測り直す（#4737）', () => {
+  it('⭐ 鍵の無いまま「未ログイン」と測った後で鍵が届けば、30分を待たずに次の間隔で測り直す', async () => {
+    const key: { identity?: { tokenId: string; generation: number } } = {};
+    const { queryFn } = probe(() => (key.identity === undefined ? NOT_LOGGED_IN : LOGGED_IN));
+    const poller = startUsagePolling({
+      queryFn,
+      cwd: '/work',
+      intervalMs: 5,
+      unavailableIntervalMs: 600_000,
+      identity: () => key.identity,
+    });
+
+    await expect.poll(() => poller.state().state, { timeout: 2000 }).toBe('unavailable');
+    key.identity = { tokenId: 'tok-1', generation: 1 };
+    await expect.poll(() => poller.state().state, { timeout: 2000 }).toBe('ok');
+
+    poller.stop();
+  });
+
+  it('鍵が届かないままなら、長い間隔を待つ（鍵の無い構成で測り直しを増やさない）', async () => {
+    const { queryFn, calls } = probe(() => NOT_LOGGED_IN);
+    const poller = startUsagePolling({
+      queryFn,
+      cwd: '/work',
+      intervalMs: 5,
+      unavailableIntervalMs: 600_000,
+      identity: () => undefined,
+    });
+
+    await expect.poll(() => poller.state().state, { timeout: 2000 }).toBe('unavailable');
+    const after = calls();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(calls()).toBe(after);
+
+    poller.stop();
+  });
+});
