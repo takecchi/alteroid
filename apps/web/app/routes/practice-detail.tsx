@@ -214,8 +214,26 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                 confirmLabel="削除する"
                 destructive
                 onConfirm={() => {
-                  setBusy(true);
                   setConfirmingDelete(false);
+                  // 書き始めた時点に無かったやり方が、いまはある（#4802。記憶の詳細と同じ）: いまの内容は人が見ていないので、送らずに 409 と同じ形で見せる
+                  if (
+                    data !== undefined &&
+                    hasDraft &&
+                    baseVersion === null &&
+                    deleteConflict === undefined
+                  ) {
+                    setDeleteConflict(
+                      new PracticeConflictError(
+                        '書き始めた後にこのやり方が作られた（見ていない内容は消していない）',
+                        {
+                          practice: data.practice,
+                          version: data.version,
+                        },
+                      ),
+                    );
+                    return;
+                  }
+                  setBusy(true);
                   // 読めない形の行は版なしで消せる（版を持たない）。
                   // 書きかけがあるときは、書き始めた時点に読んだ版を前提に消す（保存と同じく、取り直した版へ追従させない）:
                   // 書きかけの間に取り直した版は画面に出ていないので、それを前提にすると、クローンが書いた見ていない内容を 409 なしで消す
