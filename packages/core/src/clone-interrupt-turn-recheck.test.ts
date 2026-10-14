@@ -70,7 +70,10 @@ function gatedSdk(interrupt: () => Promise<void>) {
   return { fn, calls, gates, interrupts, openAll };
 }
 
-function build(interrupt: () => Promise<void> = async () => undefined) {
+function build(
+  interrupt: () => Promise<void> = async () => undefined,
+  interruptTimeoutMs?: number,
+) {
   const stores = createMemoryStores();
   const sdk = gatedSdk(interrupt);
   const clone = createClone({
@@ -81,6 +84,7 @@ function build(interrupt: () => Promise<void> = async () => undefined) {
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
+    ...(interruptTimeoutMs === undefined ? {} : { interruptTimeoutMs }),
   });
   return { stores, clone, ...sdk };
 }
@@ -152,6 +156,25 @@ describe('クローン — interruptTurn は日誌を書いた後にもう一度
     const cancel = texts.filter((x) => x.includes('止められなかった'));
     expect(cancel).toHaveLength(1);
     expect(cancel[0]).toContain('boom-2488');
+
+    t.openAll();
+    await t.clone.stop();
+  });
+});
+
+describe('クローン — interruptTurn は interrupt の答えを期限までしか待たない（#4664）', () => {
+  it('⭐ CLI が interrupt に答えなければ期限で投げ、「止まったかは分からない」の行を残す', async () => {
+    const t = build(() => new Promise<void>(() => undefined), 20);
+    t.clone.post(humanMessage('長いターン'));
+    await waitFor(() => t.calls.some((c) => c.inputs.length === 1), 'ターンが始まる');
+
+    await expect(t.clone.interruptTurn!()).rejects.toThrow('interrupt が 20ms 以内に返らなかった');
+    expect(t.interrupts.count).toBe(1);
+    const texts = await exchangeTexts(t.stores);
+    expect(texts.filter((x) => x.includes(STOPPED))).toHaveLength(1);
+    expect(texts.filter((x) => x.includes('止まったかは分からない'))).toHaveLength(1);
+    // 「止められなかった（ターンは走ったまま）」とは言わない: 合図が届いて止まった可能性が残るため
+    expect(texts.some((x) => x.includes('ターンを止められなかった'))).toBe(false);
 
     t.openAll();
     await t.clone.stop();
