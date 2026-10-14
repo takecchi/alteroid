@@ -2261,7 +2261,8 @@ class RunnerSession {
   #noteRescueListIncomplete(incomplete: RescueListIncomplete | undefined): void {
     const text = this.#rescueListNotice.next(incomplete);
     if (text === undefined) return;
-    this.#emit({ type: 'note', managerId: this.#id, text });
+    // 日誌だけにしない（#4685）: 退避から漏れた作業ツリーは、クローンが手を打つべき出来事のため。同じ状態の間は1度だけ（`RescueListNotice`）
+    this.#emit({ type: 'note', managerId: this.#id, text, notifyClone: true });
   }
 
   /**

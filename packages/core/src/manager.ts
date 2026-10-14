@@ -8367,6 +8367,11 @@ class Pool implements ManagerPool {
           );
         }
 
+        // 欄（`event.notifyClone`）で判定し、本文を嗅がない（#4685）: 成果が失われうる知らせは、日誌だけだとクローンが引かない限り見えないため
+        if (event.notifyClone === true) {
+          this.#emit(event.managerId, 'report', `[${event.managerId}] ${event.text}`);
+        }
+
         // 逃すと自動で追いついたセッションにまで `manager_list` / `runner_list` の世代の食い違いが出続ける。世代の値は受け取らない: runner は世代を知らず、daemon が現役の身元を読み直す。
         if (event.tokenRotation === true) this.#rememberTokenIdentity(event.managerId);
         return;

@@ -874,6 +874,12 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      */
     escalate: z.boolean().optional(),
     /**
+     * 日誌に残したうえで、クローンの受信箱へも担当の知らせとして回す（#4685）。成果が失われうる、クローンが手を打つべき出来事にだけ立てる。
+     * `escalate` と同じく、判定は必ずこの欄で行い `note.text` の文言では行わない。立てるときだけ載せる（`true` 以外は送らない）。
+     * 旧デーモンは未知の欄を落として日誌にだけ残し、旧 runner は欄を送らない。
+     */
+    notifyClone: z.literal(true).optional(),
+    /**
      * `escalate` と同じく、判定は必ずこの欄で行い `note.text` の文言では行わない。
      * 中の欄を optional にしない: `stall` が存在する限り新 runner は全部揃えて送る。`agentType` だけは SDK が `agent_type` を
      * 欠くことがあるので、取れたときだけ載せる。旧デーモンでは新種別 `subagent_stall` としては記録されず `exchange` に留まる。
