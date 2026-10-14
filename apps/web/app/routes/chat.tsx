@@ -2410,6 +2410,8 @@ export function ChatPane({
       let cutEarly = false;
       // デーモンが受け取り済みの送り直しに返す印（#4745）。進行中のターンが無ければ、終わりの合図を送らずに閉じる
       let duplicateOpen = false;
+      // open の後に出来事が来たか（#4749）: 来ていれば、重複でも進行中のターンを流している途中で切れている
+      let sawAfterOpen = false;
 
       const { setTransient, apply } = createStreamWriter(stream, controller);
 
@@ -2460,12 +2462,13 @@ export function ChatPane({
             continue;
           }
 
+          sawAfterOpen = true;
           if (isStreamTerminal(message.data)) sawTerminal = true;
           apply(message.data);
         }
         if (!sawTerminal && !controller.signal.aborted) {
-          if (opened && duplicateOpen) {
-            // 受け取り済みの送り直しは「途中で切れた」ではない（#4745）: 返事は既に履歴に在るか、これから始まるターンで出る。終わりの合図が来たときと同じく追う
+          if (opened && duplicateOpen && !sawAfterOpen) {
+            // open だけで閉じた受け取り済みの送り直しは「途中で切れた」ではない（#4745）: 進行中のターンが無く、返事は既に履歴に在るか、これから始まるターンで出る。終わりの合図が来たときと同じく追う
             sawTerminal = true;
           } else if (opened) {
             setFailures((prev) => new Map(prev).set(stream.id, new StreamClosedEarlyError()));
