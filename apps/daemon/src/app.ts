@@ -6595,6 +6595,7 @@ export function createApp(deps: AppDeps) {
           '（`apps/daemon/src/cursor.ts` の「判定できないを黙って先頭へ倒さない」と同じ理由。' +
           'この口は照合できる——台帳の行が消えないので、「無い」は「消えた」ではなく' +
           '「そんな錨は刷っていない」である）。' +
+          '錨は `status` の絞りの外の行でもよい——頁の間に状態が変わった委譲（前の頁には載っていた）を錨にした続きも読める（issue #4801）。' +
           '**並びは `startedAt` の降順で固定**（`ManagerPool.list()` の契約）で、ここでは選べない' +
           '——`order` は足さない。⟹ 錨の「次」は*より古い*側である。' +
           '**封筒（`total` / `nextCursor`）は持たない**——続きが在るかは `limit` 件ちょうど' +
@@ -6679,7 +6680,8 @@ export function createApp(deps: AppDeps) {
           if (afterId !== undefined && afterStartedAt !== undefined) {
             const pivot = { managerId: afterId, startedAt: afterStartedAt };
             // 実在を確かめる（`/approvals` / `/commitments` と違う）: 台帳の行は消えないので、見当たらないのは「消えた」ではなく「そんな錨は刷っていない」で、黙って先頭から返すと呼ぶ側は同じ頁を無限に読む。
-            const exists = view.some(
+            // 絞る前の一覧で確かめる（#4801）: `status` で絞った一覧からは、頁の間に状態が変わった担当が消え、その錨が二度と使えなくなるため（続きは錨が一覧に無くても比べて決まる）
+            const exists = managers.some(
               (m) => m.managerId === afterId && m.startedAt === afterStartedAt,
             );
             if (!exists) {
