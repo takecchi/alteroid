@@ -1703,6 +1703,8 @@ export interface RunnerRegistryOptions {
   /** 回数では諦めない。主にテスト用。 */
   retryBaseMs?: number;
   retryMaxMs?: number;
+  /** runner を開くのを待つ期限（既定 {@link REGISTRY_OPEN_DEADLINE_MS}）。主にテスト用。 */
+  openDeadlineMs?: number;
   /** 環境変数の設定項目にしない: 数値をつまみとして外へ出すと、そこが実質の制限になる。主にテスト用。 */
   selectWaitMs?: number;
   /**
@@ -1746,6 +1748,11 @@ function measureProbeLoopDefault(): () => ProbeLoopObservation {
 /** 上限は能力の上限ではなく、器が長く戻らないときに秒間何度も叩かないための頭打ち（north_star 禁止2 が禁じるのは実行回数の制限）。 */
 const REGISTRY_RETRY_BASE_MS = 1_000;
 const REGISTRY_RETRY_MAX_MS = 30_000;
+/**
+ * runner を開く（`source.open()`）のを待つ期限（#4673）。HTTP の runner は `hello()` の見出しを `RUNNER_CALL_DEADLINE_MS`（60秒）まで待ち、
+ * 本文の読みには期限が無い。その2倍で打ち切り、返らなかった回を「繋げなかった」として繋ぎ直しの梯子へ戻す。
+ */
+const REGISTRY_OPEN_DEADLINE_MS = 120_000;
 
 /** コードに固定する。環境変数に出さない: つまみにすると、そこが実質の制限になる。待ち続けると呼んだ側が状況を知れない。 */
 const SELECT_WAIT_MS = 3_000;
@@ -1892,6 +1899,7 @@ class Registry implements RunnerRegistry {
     | undefined;
   readonly #retryBaseMs: number;
   readonly #retryMaxMs: number;
+  readonly #openDeadlineMs: number;
   readonly #selectWaitMs: number;
   /** 窓の外は読むたびに畳む（`#freshFailuresOf`）ので、別のタイマーは持たない。 */
   readonly #failures = new Map<string, number[]>();
@@ -1910,6 +1918,7 @@ class Registry implements RunnerRegistry {
     this.#onPlacementResources = options.onPlacementResources;
     this.#retryBaseMs = options.retryBaseMs ?? REGISTRY_RETRY_BASE_MS;
     this.#retryMaxMs = options.retryMaxMs ?? REGISTRY_RETRY_MAX_MS;
+    this.#openDeadlineMs = options.openDeadlineMs ?? REGISTRY_OPEN_DEADLINE_MS;
     this.#selectWaitMs = options.selectWaitMs ?? SELECT_WAIT_MS;
     this.#now = options.now ?? Date.now;
     this.#measureProbeLoop = options.measureProbeLoop ?? measureProbeLoopDefault;
@@ -2276,7 +2285,7 @@ class Registry implements RunnerRegistry {
 
     const opening = (async () => {
       try {
-        const client = await entry.source.open();
+        const client = await this.#openWithinDeadline(entry);
         if (this.#stopped || this.#entries.get(entry.source.label) !== entry) {
           // 開いている間に外された（か止まった）。握り潰さずに閉じる。
           await client.close().catch(() => undefined);
@@ -2323,6 +2332,40 @@ class Registry implements RunnerRegistry {
 
     entry.opening = opening;
     return opening;
+  }
+
+  /**
+   * `source.open()` を期限まで待つ（#4673）。返らなければ `ProbeDeadlineError`（繋ぎ直しの梯子に乗る失敗）で投げる。
+   * 期限の後に開けた接続は閉じて捨てる: 名簿はもう次の `#open` へ進んでおり、残すと誰も持たない接続が残るため。
+   */
+  #openWithinDeadline(entry: RegistryEntry): Promise<RunnerClient> {
+    const ms = this.#openDeadlineMs;
+    return new Promise<RunnerClient>((resolve, reject) => {
+      let expired = false;
+      const timer = setTimeout(() => {
+        expired = true;
+        reject(
+          new ProbeDeadlineError(
+            `${String(ms)}ms 以内に runner を開けなかった（${entry.source.label}）`,
+          ),
+        );
+      }, ms);
+      timer.unref?.();
+      entry.source.open().then(
+        (client) => {
+          clearTimeout(timer);
+          if (expired) {
+            void client.close().catch(() => undefined);
+            return;
+          }
+          resolve(client);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          if (!expired) reject(error);
+        },
+      );
+    });
   }
 
   #scheduleOpen(entry: RegistryEntry): void {
