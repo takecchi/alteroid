@@ -18,6 +18,12 @@ export const CODEX_FILE_AUTH_STORE_OVERRIDE = 'cli_auth_credentials_store="file"
 // 15分は OpenAI のデバイスコードの寿命に合わせた見込みで、実測ではない。
 export const CODEX_DEVICE_LOGIN_TIMEOUT_MS = 15 * 60 * 1000;
 
+/**
+ * 開始（`initialize` と `account/login/start`）の応答を待つ上限（ms。#4765）。上の 15 分の計時は開始の応答の後で始まるので、ここに別の期限が要る。
+ * 起動と2往復だけなので普段は数秒で済む。無期限にしない: 起きたまま答えない app-server でログインの開始が返らず、子プロセスと一時ディレクトリが押し直しのたびに溜まるため。
+ */
+export const CODEX_DEVICE_LOGIN_START_TIMEOUT_MS = 60_000;
+
 export interface CodexDeviceLoginStarted {
   loginId: string;
   userCode: string;
@@ -54,6 +60,8 @@ export interface CodexDeviceLoginOptions {
   spawnProcess?: AgentSpawnProcess;
   tmpRoot?: string;
   timeoutMs?: number;
+  /** 開始の応答を待つ上限（試験が縮めるための口）。既定 {@link CODEX_DEVICE_LOGIN_START_TIMEOUT_MS}。 */
+  startTimeoutMs?: number;
   fs?: CodexDeviceLoginFs;
   clientVersion?: string;
 }
@@ -126,13 +134,24 @@ export async function startCodexDeviceLogin(
   });
 
   let started: CodexDeviceLoginStarted;
+  // 2つの要求にまとめて掛ける（#4765）: 片方ずつに掛けると、合わせた待ちの上限が要求の数だけ伸びるため
+  const startTimeoutMs = options.startTimeoutMs ?? CODEX_DEVICE_LOGIN_START_TIMEOUT_MS;
+  const startDeadline = AbortSignal.timeout(startTimeoutMs);
   try {
-    await client.initialize({
-      name: 'alteroid',
-      title: 'alteroid',
-      version: options.clientVersion ?? '0',
-    });
-    const response = await client.request('account/login/start', { type: 'chatgptDeviceCode' });
+    await client.initialize(
+      {
+        name: 'alteroid',
+        title: 'alteroid',
+        version: options.clientVersion ?? '0',
+      },
+      undefined,
+      { signal: startDeadline },
+    );
+    const response = await client.request(
+      'account/login/start',
+      { type: 'chatgptDeviceCode' },
+      { signal: startDeadline },
+    );
     if (response.type !== 'chatgptDeviceCode') {
       throw new Error(
         `account/login/start がデバイスコードの形で答えなかった（type=${response.type}）`,
@@ -145,12 +164,12 @@ export async function startCodexDeviceLogin(
     };
   } catch (error) {
     await stop();
-    throw new Error(
-      `デバイスコードのログインを始められなかった: ${reasonText(error, options.env)}`,
-      {
-        cause: error,
-      },
-    );
+    const reason = startDeadline.aborted
+      ? `codex app-server が ${String(Math.ceil(startTimeoutMs / 1000))} 秒以内に答えなかった`
+      : reasonText(error, options.env);
+    throw new Error(`デバイスコードのログインを始められなかった: ${reason}`, {
+      cause: error,
+    });
   }
 
   let settle!: (outcome: CodexDeviceLoginOutcome) => void;
