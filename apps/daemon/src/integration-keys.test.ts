@@ -297,6 +297,44 @@ describe('門番: 鍵の照合（401）', () => {
   });
 });
 
+describe('門番: 「最後に使った時刻」が書けなくても出来事は受ける（#4755）', () => {
+  it('⭐ markIntegrationKeyUsed が投げても、POST /events と POST /events/:source は 200 で積み、stderr に1行残す', async () => {
+    // 展開やプロトタイプ継承にしない: メモリ版は私有フィールドを持つため、束縛した窓口を通す。
+    const real = stores.integrationKeys;
+    const integrationKeys = new Proxy(real, {
+      get: (target, prop) => {
+        if (prop === 'markIntegrationKeyUsed') {
+          return () => Promise.reject(new Error('last used down (test)'));
+        }
+        const member = Reflect.get(target, prop) as unknown;
+        return typeof member === 'function' ? member.bind(target) : member;
+      },
+    });
+    const app = buildApp({ stores: { ...stores, integrationKeys } });
+    const { value } = await issue(app);
+    const headers = { ...bearer(value), ...JSON_HEADERS };
+
+    const statuses: number[] = [];
+    const lines = await captureStderr(async () => {
+      statuses.push((await app.request('/events', { ...events('ci.main'), headers })).status);
+      nowMs += 120_000;
+      statuses.push(
+        (
+          await app.request('/events/ci.main', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ status: 'failure' }),
+          })
+        ).status,
+      );
+    });
+
+    expect(statuses).toEqual([200, 200]);
+    expect(posted.filter((event) => event.type === 'external')).toHaveLength(2);
+    expect(lines.filter((line) => line.includes('last used down (test)'))).toHaveLength(2);
+  });
+});
+
 describe('門番: 既定で拒否（403）', () => {
   it('source が一致する POST /events・POST /events/:source だけ通り、載った事象に via が付く', async () => {
     const app = buildApp();
