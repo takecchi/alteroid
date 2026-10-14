@@ -2531,6 +2531,9 @@ class Clone implements CloneHost {
         : await resolveTurnAttachmentGroups(
             this.#stores,
             withRefs.map((event) => event.attachments ?? []),
+            undefined,
+            // 人間の発言・external と同じく、SDK の子プロセスと同じ env で経路の上限を決める（#4709）: 素の `process.env` では、プロファイルや鍵のプールで置いた Bedrock / Vertex が見えないため
+            this.#layeredChildEnv(),
           );
     const images: AgentInputImage[] = [];
     withRefs.forEach((event, index) => {

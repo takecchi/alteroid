@@ -10,7 +10,7 @@ import {
   isBase64CappedImageRoute,
   routeImageCapBytes,
 } from './attachment.js';
-import { setup, waitForDone } from './clone-test-harness.js';
+import { setup, waitFor, waitForDone } from './clone-test-harness.js';
 import { composeAttachmentInput, placeRunnerAttachments } from './runner-attachments.js';
 import { createMemoryStores } from './testing.js';
 
@@ -207,6 +207,46 @@ describe('クローンのターン: 経路は SDK 子プロセスと同じ env�
     const call = s.calls.find((c) => c.kind === 'session');
     const blocks = call?.inputBlocks?.[0] as { type: string }[];
     expect(blocks.filter((block) => block.type === 'image')).toHaveLength(1);
+    expect(call?.inputs[0]).toContain(ROUTE_NOTICE);
+  });
+});
+
+describe('クローンのターン: 担当の報告の添付も、経路は SDK 子プロセスと同じ env（#4709）', () => {
+  it('⭐ env が Bedrock のとき、報告に添えられた 3,750,001 バイトの画像も image ブロックにならず通知行が付く', async () => {
+    const s = setup(() => '見た', undefined, {}, BEDROCK);
+    const over = await s.stores.attachments.put({
+      name: 'over.png',
+      mediaType: 'image/png',
+      bytes: pngOfSize(CAP + 1),
+    });
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-report-route',
+      at: new Date().toISOString(),
+      managerId: 'mgr-files',
+      kind: 'report',
+      text: '画像を添えた',
+      attachments: [
+        {
+          id: over.id,
+          name: over.name,
+          mediaType: over.mediaType,
+          size: over.size,
+          sha256: over.sha256,
+        },
+      ],
+    });
+    await waitFor(
+      () => s.calls.some((c) => c.inputs.some((input) => input.includes('画像を添えた'))),
+      '報告のターンが投げられる',
+    );
+    const call = s.calls.find((c) => c.kind === 'session');
+    const images = (call?.inputBlocks ?? []).flatMap((blocks) =>
+      Array.isArray(blocks)
+        ? (blocks as { type: string }[]).filter((block) => block.type === 'image')
+        : [],
+    );
+    expect(images).toHaveLength(0);
     expect(call?.inputs[0]).toContain(ROUTE_NOTICE);
   });
 });
