@@ -3931,6 +3931,17 @@ class RunnerSession {
     this.#pending.push(request);
     this.#sdkSession.setStatus('waiting_human');
 
+    // `ask` を中断の確かめより先に出す（#4772）: 受けた時点で中断済みだと `settled` が先に出て、デーモンが後から届いた `ask` を答えようの無い確認として積むため
+    this.#emit({
+      type: 'ask',
+      managerId: this.#id,
+      requestId: id,
+      kind,
+      summary,
+      askedAt,
+      ...(source === undefined ? {} : { source: { type: 'peer', provider: source.provider } }),
+    });
+
     const onAbort = () =>
       request.settle({
         message: 'マネージャー側で中断された。',
@@ -3943,16 +3954,6 @@ class RunnerSession {
       signal.addEventListener('abort', onAbort, { once: true });
       unlisten = () => signal.removeEventListener('abort', onAbort);
     }
-
-    this.#emit({
-      type: 'ask',
-      managerId: this.#id,
-      requestId: id,
-      kind,
-      summary,
-      askedAt,
-      ...(source === undefined ? {} : { source: { type: 'peer', provider: source.provider } }),
-    });
 
     return result;
   }
@@ -4123,6 +4124,9 @@ class RunnerSession {
         aborted: true,
       });
     };
+    // `ask` を持ち時間の確かめより先に出す（#4772。理由は `#onPermission` と同じ）
+    this.#emit({ type: 'ask', managerId: this.#id, requestId: id, kind, summary, askedAt });
+
     const signal = record.signal;
     if (signal !== undefined) {
       if (signal.aborted) {
@@ -4132,8 +4136,6 @@ class RunnerSession {
         unlisten = () => signal.removeEventListener('abort', onTimeout);
       }
     }
-
-    this.#emit({ type: 'ask', managerId: this.#id, requestId: id, kind, summary, askedAt });
 
     const answer = await answered;
     const outcome = await result;
