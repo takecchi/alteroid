@@ -2803,6 +2803,24 @@ export function createApp(deps: AppDeps) {
           return c.json(attached.body, attached.status);
         }
         const attachmentRefs = attached.refs;
+        // 新しく引いた会話 id で受信箱へ書けなかったら、結んだ添付を戻す（#4759）: 送り直しは別の新しい会話 id になり、死んだ id に結ばれたままだと `attachment_conflict` で断られ続けるため。
+        // 既存の会話では戻さない: 送り直しも同じ id に結び直すだけで困らず、戻すと同じ会話の他の発言の添付を外しうるため。
+        // 受け取りの印を取り下げる前に呼ぶ: 同じ clientMessageId で待っている要求が、取り下げで起きて同じ添付を自分の会話 id へ結ぼうとするため。
+        // 投げない: 戻せなかった添付は保持の期限まで残るだけで、元の失敗（503・例外）を置き換えないため（`postExternalPersisted` と同じ）
+        const releaseNewConversationAttachments = async (): Promise<void> => {
+          if (given !== undefined || attachmentRefs.length === 0) return;
+          try {
+            await stores.attachments.unbind(
+              attachmentRefs.map((ref) => ref.id),
+              { conversationId },
+            );
+          } catch (releaseError) {
+            process.stderr.write(
+              `alteroidd: 新しい会話 ${conversationId} の添付 ${String(attachmentRefs.length)} 件の結び付けを戻せなかった` +
+                `（期限まで残る）: ${reasonOf(releaseError)}\n`,
+            );
+          }
+        };
         // 受け取りの印（`claim`）は、受信箱へ書けた後で確定させる（#4679）: 書けなかった発言の id を「受け取り済み」と覚えると、再送が重複として畳まれるため
 
         return streamSSE(c, async (stream) => {
@@ -2830,10 +2848,12 @@ export function createApp(deps: AppDeps) {
                   ...(clientMessageId === undefined ? {} : { clientMessageId }),
                 });
               } catch (error) {
+                await releaseNewConversationAttachments();
                 claim?.settle(false);
                 throw error;
               }
               if (outcome === 'unavailable') {
+                await releaseNewConversationAttachments();
                 claim?.settle(false);
                 await stream.write(`: ${CHAT_POST_UNAVAILABLE_MESSAGE}\n\n`).catch(() => undefined);
                 pump.finish();
