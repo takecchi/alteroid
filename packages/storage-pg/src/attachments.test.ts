@@ -43,8 +43,10 @@ describe('PgAttachmentStore', () => {
     queries.length = 0;
     await store.getMeta(meta.id);
     await store.prune(new Date(Date.now() + 2 * 3_600_000));
-    // getMeta の1本と、prune の2本（消す候補を FOR UPDATE で選ぶ・行を消す。中身を先に消すため #4814）
-    expect(queries).toHaveLength(3);
+    // getMeta の1本と、prune の2本（消す候補を FOR UPDATE で選ぶ・行を消す。中身を先に消すため #4814）。
+    // トランザクションの begin / commit は数えない: 本物の PostgreSQL では記録され、PGlite では記録されないため
+    const statements = queries.filter((query) => !/^\s*(begin|commit)\b/i.test(query));
+    expect(statements).toHaveLength(3);
     for (const query of queries) expect(query).not.toMatch(/"bytes"/);
 
     const other = await store.put({ name: 'b.png', mediaType: 'image/png', bytes: PNG });
