@@ -5504,6 +5504,8 @@ class Pool implements ManagerPool {
         return;
       }
       this.#rescueSweptAt = startedAt;
+      // 後始末の前後に印を打つ（#4485）: 退避 ref を消していた日に印の無い停止が出たので、止めていたのがこの周回かを分けるため
+      notePhase(`rescue-sweep:start:${String(jobs.length)}`);
       // 1回あたりの上限（本数と時間）。GitHub 障害の初回などで削除が溜まっていても、
       // 残りは次の回へ回す。
       const budget = {
@@ -5521,6 +5523,7 @@ class Pool implements ManagerPool {
       }
     } finally {
       this.#rescueSweeping = false;
+      notePhase('rescue-sweep:done');
     }
   }
 
@@ -7925,6 +7928,8 @@ class Pool implements ManagerPool {
       usageTicket?.release();
       releaseMirrorTurn?.();
       fetchGate.release();
+      // 非同期の続き（台帳の読み書き・日誌）まで終えた印（#4485）: `runner-event-handled` は同期の部分が返った印で、止まった窓がその後に印なしで続くと、続きの中か外かを分けられないため
+      notePhase(`runner-event-settled:${event.type}`);
     }
   }
 
