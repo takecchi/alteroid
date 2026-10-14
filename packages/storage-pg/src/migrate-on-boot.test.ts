@@ -7,23 +7,38 @@ import { createEmptyTestDb } from './test-db.test-support.js';
 
 // 起動のたびに、何もしない ALTER でテーブルの ACCESS EXCLUSIVE を取りに行かない（#4731）
 
+// `execute` の呼び出しを横取りする。文はトランザクションの中で流す（#4747）ので、`transaction` の `tx` の呼び出しも同じく横取りする
+function intercepting(db: Db, onExecute: (text: string | undefined) => Error | undefined): Db {
+  const wrap = <T extends object>(target: T): T =>
+    new Proxy(target, {
+      get(inner, property, receiver) {
+        if (property === 'execute') {
+          return (query: Parameters<Db['execute']>[0]) => {
+            const text = (query as { queryChunks?: { value?: string[] }[] }).queryChunks
+              ?.flatMap((chunk) => chunk.value ?? [])
+              .join('');
+            const failure = onExecute(text);
+            if (failure !== undefined) return Promise.reject(failure);
+            return (inner as unknown as Db).execute(query);
+          };
+        }
+        if (property === 'transaction') {
+          return (run: (tx: Db) => Promise<unknown>) =>
+            (inner as unknown as Db).transaction((tx) => run(wrap(tx as unknown as Db)));
+        }
+        return Reflect.get(inner, property, receiver) as unknown;
+      },
+    });
+  return wrap(db);
+}
+
 // `STATEMENTS` の文が実際に発行された回数を数える（`ensure*` の索引の確かめは数えない）
 function counting(db: Db): { db: Db; statements: () => number } {
   let count = 0;
   const wanted = new Set<string>(STATEMENTS);
-  const proxied = new Proxy(db, {
-    get(target, property, receiver) {
-      if (property === 'execute') {
-        return (query: Parameters<Db['execute']>[0]) => {
-          const text = (query as { queryChunks?: { value?: string[] }[] }).queryChunks
-            ?.flatMap((chunk) => chunk.value ?? [])
-            .join('');
-          if (text !== undefined && wanted.has(text)) count += 1;
-          return target.execute(query);
-        };
-      }
-      return Reflect.get(target, property, receiver) as unknown;
-    },
+  const proxied = intercepting(db, (text) => {
+    if (text !== undefined && wanted.has(text)) count += 1;
+    return undefined;
   });
   return { db: proxied, statements: () => count };
 }
@@ -58,17 +73,9 @@ describe('migrateOnBoot（#4731）', () => {
   it('途中の文で落ちたら指紋を書かず、次の起動でもう一度流す', async () => {
     const { db } = await createEmptyTestDb();
     let calls = 0;
-    const failing = new Proxy(db, {
-      get(target, property, receiver) {
-        if (property === 'execute') {
-          return (query: Parameters<Db['execute']>[0]) => {
-            calls += 1;
-            if (calls === 5) return Promise.reject(new Error('仕込んだ失敗（#4731）'));
-            return target.execute(query);
-          };
-        }
-        return Reflect.get(target, property, receiver) as unknown;
-      },
+    const failing = intercepting(db, () => {
+      calls += 1;
+      return calls === 5 ? new Error('仕込んだ失敗（#4731）') : undefined;
     });
     await expect(migrateOnBoot(failing, () => undefined)).rejects.toThrow('仕込んだ失敗');
     const probe = counting(db);
