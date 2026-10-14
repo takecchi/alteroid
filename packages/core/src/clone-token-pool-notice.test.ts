@@ -323,3 +323,59 @@ describe('クローン — token-pool の「戻った」通知は同時に未処
     await second.clone.stop();
   });
 });
+
+describe('受信箱から消した token-pool 通知の代表を残さない（#4782）', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  function tokenPoolNotice(id: string): InboxEvent {
+    return {
+      type: 'external',
+      id,
+      at: new Date().toISOString(),
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: { text: '認証トークンが通る状態に戻った: 「alteroid-tok-1」' },
+    };
+  }
+
+  it('⭐ 枠で保持中の代表を受信箱から消した後に届いた同じ通知は、畳まれずに保持され、受信箱に残る', async () => {
+    const stores = createMemoryStores();
+    const s = setup(undefined, stores, {
+      resultFor: () => ({ subtype: 'error_during_execution', text: spendLimitMessage }),
+    });
+
+    s.clone.post(humanMessage('枠に当てる発言'));
+    await waitFor(() => s.clone.usageBlocked, '枠で止まる');
+
+    await s.clone.postPersisted(tokenPoolNotice('n1'));
+    await waitFor(
+      async () => (await stores.inbox.peekPending()).entries.some((row) => row.event.id === 'n1'),
+      'n1 が受信箱に積まれる',
+    );
+    expect(await s.clone.dropQueuedInboxEvents(['n1'])).toBeGreaterThan(0);
+    await stores.inbox.remove('n1');
+
+    await s.clone.postPersisted(tokenPoolNotice('n2'));
+    // 保持の判定が走るまで待つ: 直す前は、消えた n1 を代表とみなして n2 を畳み、受信箱から消す
+    await new Promise((resolve) => setImmediate(resolve));
+    await waitFor(
+      async () => (await stores.inbox.peekPending()).entries.some((row) => row.event.id === 'n2'),
+      'n2 が受信箱に積まれる',
+    );
+    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+
+    expect((await stores.inbox.peekPending()).entries.some((row) => row.event.id === 'n2')).toBe(
+      true,
+    );
+    const journal = (await stores.journal.list({})) as JournalEntry[];
+    expect(
+      journal.some(
+        (entry) =>
+          entry.type === 'exchange' &&
+          'text' in entry &&
+          entry.text.includes('n2') &&
+          entry.text.includes('畳'),
+      ),
+    ).toBe(false);
+    await s.clone.stop();
+  });
+});
