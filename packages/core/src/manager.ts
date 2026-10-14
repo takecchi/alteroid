@@ -7678,8 +7678,30 @@ class Pool implements ManagerPool {
           : { lease: { fence: record.job.lease.fence, ttlMs: record.job.lease.ttlMs } }),
       });
     } catch (error) {
-      this.#endResumeConfirmation(record.job.id);
-      throw error;
+      // 応答の無い失敗（期限切れ・接続の断）は「効かなかった」と決めず、runner の一覧で確かめる（#4715）: runner は受け取って
+      // セッションを起こしたのに応答だけが返らないことがあり、効かなかった側へ倒すと、生きているセッションを引き取らないまま
+      // その出来事を「移った後の古い runner」として捨て続けるため。runner が答えた失敗（`RunnerHttpError`）は確かめずにそのまま投げる
+      const alive =
+        error instanceof RunnerHttpError
+          ? false
+          : await listRunnerManagers(runner)
+              .then(
+                (listing) =>
+                  listing.states.some((state) => state.managerId === record.job.id) ||
+                  listing.unreadableIds.includes(record.job.id),
+              )
+              .catch(() => false);
+      if (!alive) {
+        this.#endResumeConfirmation(record.job.id);
+        throw error;
+      }
+      // 世代は分からないので持たない（応答が運ぶもの）: 世代の判定は「不明」として出来事を受ける
+      resumed = {};
+      await this.#journal({
+        type: 'decision',
+        decision: `[${record.job.id}] resume の応答が返らなかったが、${runner.runnerId} にセッションが居るので、resume は効いたとして引き取った`,
+        grounds: `resume の失敗: ${reasonOf(error)}。${runner.runnerId} の一覧にこの委譲が居た`,
+      });
     }
     // `resumed.cwd` が返らなければ何もしない: 「未確認」を `requestedCwd` で埋めると、倒れていた回まで「頼んだとおり開けた」と嘘をつく。
     // 倒れたかは応答後にしか分からず、resume 前に組む「移送の一言」へ混ぜられないので `cwdSwapNotice` で伝える。前回の通知は持ち越さない。
@@ -9730,19 +9752,19 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * 捨てる報告に添えられた成果物も取り寄せ、日誌の行に結び付ける（#4703）。停止済みの報告（#4675）と同じ扱い。
-   * 取り寄せないと、runner が出し箱から退避先へ移した成果物が、名前も残らずに失われるため。受信箱へ回さない・台帳を動かさないのは呼び手のまま。
+   * 捨てる報告の本文を日誌に残し、添えられた成果物も取り寄せて日誌の行に結び付ける。停止済みの報告（#4675）と同じ扱い。
+   * 本文を残す（#4717）: 「…の report を無視した」とだけ書くと、誤検知で生きていた古いセッションの最終報告（PR の番号など）が誰にも見えずに消えるため。
+   * 成果物を取り寄せる（#4703）: 取り寄せないと、runner が出し箱から退避先へ移した成果物が、名前も残らずに失われるため。受信箱へ回さない・台帳を動かさないのは呼び手のまま。
    */
   async #droppedReportFiles(event: RunnerEvent, fromRunnerId: string): Promise<DroppedReportFiles> {
-    if (
-      event.type !== 'report' ||
-      ((event.files?.length ?? 0) === 0 && (event.rejectedFiles?.length ?? 0) === 0)
-    ) {
-      return NO_DROPPED_FILES;
+    if (event.type !== 'report') return NO_DROPPED_FILES;
+    const body = `\n\n捨てた報告の本文: ${event.text}`;
+    if ((event.files?.length ?? 0) === 0 && (event.rejectedFiles?.length ?? 0) === 0) {
+      return { text: body, attachments: {} };
     }
     const files = await this.#fetchReportFiles(event, fromRunnerId);
     return {
-      text: describeStoppedReportFiles(files),
+      text: body + describeStoppedReportFiles(files),
       attachments:
         files.attachments.length === 0
           ? {}

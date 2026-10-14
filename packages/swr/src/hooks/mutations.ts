@@ -36,6 +36,13 @@ import { saveChatDraft, saveChatDraftMark } from '@alteroid/logic';
 
 import { isKeyOfType, KEY } from './queries';
 import { writeThenRefresh } from './write-then-refresh';
+import {
+  answerWithin,
+  APPROVAL_ANSWER_TIMEOUT_MS,
+  APPROVALS_ANSWER_TIMEOUT_MS,
+  APPROVALS_REFRESH_WAIT_MS,
+  refreshWithin,
+} from './approval-answer-deadline';
 
 export function useRecordOwnMessage() {
   const { mutate } = useSWRConfig();
@@ -240,20 +247,26 @@ export function useAnswerApproval() {
       // 取り直しの失敗で元の失敗を上書きしない: 呼び出し側へ伝えるのは「なぜ答えられなかったか」
       let answerError: unknown;
       try {
-        await api.api
-          .POST('/approvals/{id}/answer', {
-            params: { path: { id } },
-            body: {
-              ...(answer === undefined ? {} : { answer }),
-              ...(selections === undefined ? {} : { selections }),
-            },
-          })
-          .then(unwrap);
+        await answerWithin(APPROVAL_ANSWER_TIMEOUT_MS, (signal) =>
+          api.api
+            .POST('/approvals/{id}/answer', {
+              params: { path: { id } },
+              body: {
+                ...(answer === undefined ? {} : { answer }),
+                ...(selections === undefined ? {} : { selections }),
+              },
+              signal,
+            })
+            .then(unwrap),
+        );
       } catch (caught) {
         answerError = caught;
       }
       try {
-        await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
+        await refreshWithin(
+          Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]),
+          APPROVALS_REFRESH_WAIT_MS,
+        );
       } catch (refreshError) {
         if (answerError === undefined) throw refreshError;
       }
@@ -269,13 +282,20 @@ export function useAnswerApprovals() {
   return useCallback(
     async (answers: { id: string; answer?: string; selections?: ApprovalSelection[] }[]) => {
       // 失敗しても取り直す: 届いて応答だけ失われた書き込みは、取り直さないとカードが未回答のまま残り、送り直しが 409 になるため
-      const post = () => api.api.POST('/approvals/answer', { body: { answers } }).then(unwrap);
+      const post = () =>
+        answerWithin(APPROVALS_ANSWER_TIMEOUT_MS, (signal) =>
+          api.api.POST('/approvals/answer', { body: { answers }, signal }).then(unwrap),
+        );
       let results: Awaited<ReturnType<typeof post>>['results'] = [];
       await writeThenRefresh(
         async () => {
           ({ results } = await post());
         },
-        () => Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]),
+        () =>
+          refreshWithin(
+            Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]),
+            APPROVALS_REFRESH_WAIT_MS,
+          ),
       );
       return results;
     },

@@ -164,7 +164,7 @@ describe('移送の最中に届く移送先 runner 自身の出来事', () => {
     };
   }
 
-  async function setup(resume: 'accepted' | 'refused' = 'accepted') {
+  async function setup(resume: 'accepted' | 'refused' | 'unknown' = 'accepted') {
     const stores = createMemoryStores();
     await stores.jobs.putJob(
       jobWith('mgr-target', 'runner-a', {
@@ -195,6 +195,13 @@ describe('移送の最中に届く移送先 runner 自身の出来事', () => {
       entered();
       await gate;
       if (resume === 'refused') throw new RunnerHttpError('unavailable', 503);
+      // 期限切れ（不明）: runner は受け取ってセッションを起こしたが、応答が期限までに返らなかった（#4715）
+      if (resume === 'unknown') {
+        await originalResume(command);
+        throw new Error(
+          'runner POST /managers/mgr-target/resume が 60000ms 以内に応答を返さなかった',
+        );
+      }
       return originalResume(command);
     };
     fake.addClient(runnerA.client);
@@ -302,6 +309,25 @@ describe('移送の最中に届く移送先 runner 自身の出来事', () => {
       lastReport: '途中まで進めた',
       asks: 0,
       reports: 0,
+    });
+    await pool.stop();
+  });
+  it('⭐ resume の応答が不明（期限切れ）でも、移送先にセッションが居れば引き取り、窓の間に届いた report を台帳へ効かせる（#4715）', async () => {
+    const { stores, pool, runnerB, release, reattach, drain } = await setup('unknown');
+    runnerB.emit?.({
+      type: 'report',
+      managerId: 'mgr-target',
+      status: 'done',
+      text: '応答が届かなかった移送先の報告',
+    });
+    await drain();
+    release();
+    await reattach.catch(() => undefined);
+    await drain();
+    const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-target');
+    expect({ runnerId: after?.runnerId, lastReport: after?.lastReport }).toEqual({
+      runnerId: 'runner-b',
+      lastReport: '応答が届かなかった移送先の報告',
     });
     await pool.stop();
   });
