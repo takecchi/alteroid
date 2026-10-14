@@ -107,3 +107,25 @@ describe('生ログの全文の処理は、同期版と同じ結果を、区切�
     ).toBe(true);
   });
 });
+
+// 書き換える前の作り（#4659 の前）。同期版と順番を返す版は同じ手順を共有するので、両者を比べるだけでは書き換えの誤りを拾えない
+function redactBefore(body: string): string {
+  const mark = /"type"\s*:\s*"image"/;
+  if (!mark.test(body)) return body;
+  return body
+    .split('\n')
+    .map((line) => (mark.test(line) ? redactImagesInTranscript(line) : line))
+    .join('\n');
+}
+
+describe('画像の伏せ字は、書き換える前の作りと同じ本文を作る（#4659）', () => {
+  it.each([
+    ['画像が先頭・途中・末尾', [imageLine(0), textLine(1), imageLine(2)].join('\n')],
+    ['末尾に改行', `${[textLine(0), imageLine(1)].join('\n')}\n`],
+    ['空行を挟む', [imageLine(0), '', '', textLine(1), imageLine(2), ''].join('\n')],
+    ['読めない行に印', ['{"type":"image" 壊れた', imageLine(1)].join('\n')],
+  ])('%s', async (_name, body) => {
+    expect(redactImagesInTranscript(body)).toBe(redactBefore(body));
+    expect(await redactImagesInTranscriptYielding(body, 1)).toBe(redactBefore(body));
+  });
+});
