@@ -279,7 +279,13 @@ export const integrationKeysListResponseSchema = z.object({
 
 // `scopes` のような選べる許可の一覧は無い: 鍵の種類そのものが「固定の1 source で外部イベントを送る」という1つの能力だけを表すため。
 export const integrationKeyCreateRequestSchema = z.object({
-  name: z.string().trim().min(1).max(200),
+  // NUL を落としてから空かを見る: ストアが NUL を落として空の名前で残すと読めない行になり、発行した鍵が使えず失効もできない（#4815）
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .refine((value) => stripNul(value).trim().length > 0, '名前が空（NUL と空白だけ）'),
   source: integrationSourceSchema,
   expiresAt: isoDateTimeSchema.optional(),
   maxBodyBytes: z.number().int().positive().max(2_147_483_647).optional(),
