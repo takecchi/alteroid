@@ -284,3 +284,23 @@ describe('退避先の取得・削除・掃除', () => {
     expect((await stat(join(stagedRoot, 'mgr-live'))).isDirectory()).toBe(true);
   });
 });
+
+describe('生きた委譲の退避先の取りこぼし（#4701）', () => {
+  it('⭐ 生きた委譲でも、退避先の24時間を過ぎたファイルは1つずつ消し、新しいファイルと出し箱は残す', async () => {
+    const { root, stagedRoot } = await setup();
+    const old = new Date(Date.now() - 48 * 3600_000);
+    const live = join(stagedRoot, 'mgr-live');
+    await mkdir(live, { recursive: true });
+    await writeFile(join(live, 'f'.repeat(32)), '取り損ねた');
+    await utimes(join(live, 'f'.repeat(32)), old, old);
+    await writeFile(join(live, 'e'.repeat(32)), 'いま取りに来る');
+    await mkdir(join(root, 'mgr-live'), { recursive: true });
+    await writeFile(join(root, 'mgr-live', 'draft.md'), '送る前');
+    await utimes(join(root, 'mgr-live', 'draft.md'), old, old);
+
+    pruneStaleOutboxRoots({ outboxRoot: root, stagedRoot }, ['mgr-live'], Date.now());
+
+    expect(await readdir(live)).toEqual(['e'.repeat(32)]);
+    expect(await readdir(join(root, 'mgr-live'))).toEqual(['draft.md']);
+  });
+});

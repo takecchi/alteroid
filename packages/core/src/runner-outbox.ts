@@ -517,7 +517,12 @@ export function pruneStaleOutboxRoots(
       continue;
     }
     for (const entry of entries) {
-      if (liveManagerIds.includes(entry)) continue;
+      if (liveManagerIds.includes(entry)) {
+        // 生きた委譲の退避先も、24時間取りに来られなかったファイルは1つずつ消す: デーモンは取れなかったもの・捨てた報告の退避先を消させず、この掃除に任せている。
+        // 丸ごと飛ばすと、退避先の予算（`STAGED_BUDGET_FACTOR`）が取り損ねで埋まり、以後の成果物が「次の報告で送る」のまま出し箱から出られなくなる
+        if (!isOutbox) pruneStaleStagedFiles(join(top, entry), now, maxAgeMs);
+        continue;
+      }
       const dir = join(top, entry);
       try {
         const info = lstatSync(dir);
@@ -527,6 +532,26 @@ export function pruneStaleOutboxRoots(
       } catch {
         // 掃除で新しい仕事を止めない
       }
+    }
+  }
+}
+
+// 出し箱（担い手の作業場）には使わない: 担い手が置いたまま送っていないファイルを、runner の判断で消さないため
+function pruneStaleStagedFiles(dir: string, now: number, maxAgeMs: number): void {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const path = join(dir, name);
+    try {
+      const info = lstatSync(path);
+      if (!info.isFile() || now - info.mtimeMs <= maxAgeMs) continue;
+      rmSync(path, { force: true });
+    } catch {
+      // 掃除で新しい仕事を止めない
     }
   }
 }
