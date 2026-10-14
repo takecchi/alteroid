@@ -145,31 +145,50 @@ describe('終端が無いまま閉じた送信（#3564）', () => {
 
 describe('終端が無いまま閉じたら、張り直して続きを出す（#4663 の続き）', () => {
   it('⭐ 送信の流れが途中で閉じても、ターンが続いていれば張り直して続きを出し、「途中で切れた」を残さない', async () => {
-    const stub = setUp({
-      chat: [
-        { event: 'open', data: { conversationId: ID } },
-        { event: 'text', data: { type: 'text', text: '途中までの返' } },
-      ],
-      replay: [
-        { event: 'open', data: { conversationId: ID, inProgress: true } },
-        { event: 'text', data: { type: 'text', text: '途中までの返事と続き' } },
-        { event: 'done', data: { type: 'done' } },
-      ],
+    // 画面を開いた時点の再生は「進行中でない」。張り直し以降は「進行中」で、続きを最後まで流す
+    let replays = 0;
+    stubFetch((url, init) => {
+      if (/\/chat\/[^/]+\/stream$/.test(url)) {
+        replays += 1;
+        return sse(
+          replays === 1
+            ? [{ event: 'open', data: { conversationId: ID, inProgress: false } }]
+            : [
+                { event: 'open', data: { conversationId: ID, inProgress: true } },
+                { event: 'text', data: { type: 'text', text: '途中までの返事と続き' } },
+                { event: 'done', data: { type: 'done' } },
+              ],
+          { signal: init?.signal },
+        );
+      }
+      if (url.endsWith('/chat')) {
+        return sse(
+          [
+            { event: 'open', data: { conversationId: ID } },
+            { event: 'text', data: { type: 'text', text: '途中までの返' } },
+          ],
+          { signal: init?.signal },
+        );
+      }
+      if (url.includes(`/conversations/${ID}`)) return json({ conversationId: ID, messages: [] });
+      if (url.includes('/approvals')) return json({ approvals: [] });
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      if (url.endsWith('/journal/stream')) {
+        return sse([{ event: 'open', data: { ok: true } }], {
+          keepOpen: true,
+          signal: init?.signal,
+        });
+      }
+      return undefined;
     });
     renderChat(`/chat/${ID}`);
-    await waitFor(() =>
-      expect(stub.entries.some((e) => /\/chat\/[^/]+\/stream$/.test(e.url))).toBe(true),
-    );
-    const before = stub.entries.filter((e) => /\/chat\/[^/]+\/stream$/.test(e.url)).length;
+    await waitFor(() => expect(replays).toBe(1));
     await sendText('こんにちは');
 
     expect(await screen.findByText('途中までの返事と続き')).toBeTruthy();
-    await waitFor(() =>
-      expect(stub.entries.filter((e) => /\/chat\/[^/]+\/stream$/.test(e.url)).length).toBe(
-        before + 1,
-      ),
-    );
-    expect(screen.queryByText(CLOSED_EARLY)).toBeNull();
+    expect(replays).toBe(2);
+    await waitFor(() => expect(screen.queryByText(CLOSED_EARLY)).toBeNull());
+    expect(screen.queryByText(/途中までの返$/)).toBeNull();
   });
 });
 
