@@ -21,6 +21,15 @@ const DELETE_BATCH = 1000;
  * S3 API で一般に書く（特定の事業者に寄せない）。key は呼び手が prefix 込みで渡す。ここでは足さない。
  * 失敗の文に key・資格・endpoint の値を載せない: 呼び手が stderr へ出すため。
  */
+/** S3 へ繋ぐ期限（ms。#4689）。繋ぐだけなら数百 ms で済む。10 秒を超えたら経路が死んでいる。 */
+export const S3_CONNECT_TIMEOUT_MS = 10_000;
+
+/**
+ * S3 との無通信の期限（ms。#4689）。ソケットに何も流れない時間で、流している間は切れない（2GiB の取り出しでも、流れが止まらない限り打ち切られない）。
+ * 無期限にしない: 経路が半開きになると、添付の掃除の周回と `attachment_fetch` が止まったままになるため。
+ */
+export const S3_IDLE_TIMEOUT_MS = 60_000;
+
 export class S3AttachmentBlobStore implements AttachmentBlobStore {
   readonly #client: S3Client;
   readonly #bucket: string;
@@ -29,10 +38,15 @@ export class S3AttachmentBlobStore implements AttachmentBlobStore {
   /** `maxObjectBytes` は置き場が受けうる最大の大きさ。省けば part は S3 の最小（5 MiB）。 */
   constructor(
     config: AttachmentBlobConfig,
-    options: { readonly maxObjectBytes?: number; readonly client?: S3Client } = {},
+    options: {
+      readonly maxObjectBytes?: number;
+      readonly client?: S3Client;
+      /** 期限（試験が短くするための口）。既定 {@link S3_CONNECT_TIMEOUT_MS} / {@link S3_IDLE_TIMEOUT_MS}。 */
+      readonly timeouts?: { readonly connectMs?: number; readonly idleMs?: number };
+    } = {},
   ) {
     this.#bucket = config.bucket;
-    this.#client = options.client ?? new S3Client(clientConfigOf(config));
+    this.#client = options.client ?? new S3Client(clientConfigOf(config, options.timeouts));
     this.#partSize = attachmentBlobPartBytesFor(options.maxObjectBytes ?? 0);
   }
 
@@ -97,8 +111,16 @@ export class S3AttachmentBlobStore implements AttachmentBlobStore {
   }
 }
 
-function clientConfigOf(config: AttachmentBlobConfig): S3ClientConfig {
+function clientConfigOf(
+  config: AttachmentBlobConfig,
+  timeouts: { readonly connectMs?: number; readonly idleMs?: number } = {},
+): S3ClientConfig {
   return {
+    // 期限を渡す（#4689）: 渡さないと SDK の HTTP の口は接続にも無通信にも期限を持たない
+    requestHandler: {
+      connectionTimeout: timeouts.connectMs ?? S3_CONNECT_TIMEOUT_MS,
+      requestTimeout: timeouts.idleMs ?? S3_IDLE_TIMEOUT_MS,
+    },
     region: config.region,
     ...(config.endpoint === undefined ? {} : { endpoint: config.endpoint }),
     forcePathStyle: config.forcePathStyle,
