@@ -295,6 +295,33 @@ probe が読むのは**アカウントの枠**（`five_hour` / `seven_day` / …
 - **短絡の穴は塞いだ（#2877）**: `Host.resume`（`runner.ts`）は alive なセッションが居ると、そこへ message を push して返す。resume の応答の `reusedLiveSession`（短絡した回だけ true）を見て、daemon の `#resume` は **true の回は世代を現役へ書き換えない**（⚠ が偽って消えない。`send` の detail が「生きた旧プロセスへ流した。鍵が現役か確かめていない」と言う）。**欄の無い古い runner は短絡を見分けられず、従来どおり世代を書く**（版が混ざる窓の限界）。
 - **旧プロセスの鍵は指紋で確かめる（#2877 PR2）**: `GET /managers` の `tokenFingerprint`（セッションが起動時に掴んだ鍵の指紋。`token_list` の `sha256` と同じ `fingerprintOf`。値は載せない）を、台帳が「繋がっていない」done（再起動後など）へ `send` するとき、**10秒ごとの生存確認の観測**（registry の `sessionTokenFingerprints`。往復なし）で現役の指紋と比べる。観測が一致なら流して世代を書く。**観測が食い違ったときだけ `GET /managers` を1回取り直して確かめ**、食い違いのままなら #2851 と同じ畳み直し（走っているターン・背景処理・確認待ちが残っていれば `declined`）、一致・居ない・読めないなら畳まない。**読めない（古い runner・現役の指紋が不明）ときは断らず、流して世代は書かない。**
 
+## 鍵の付け替えで畳まれる担当の peer（Codex）は閉じずに引き継ぐ（#4734。2026-10-14）
+
+**上の「done の委譲を、畳んで新しい鍵で起こし直す」（#2851）は、かつてその担当が持っていた peer（`peer_run` で起こした Codex のセッション）まで全部閉じていた。** runner がセッションを畳むときに peer の窓口を `closeAll()` していたためである。peer は Claude の鍵と関係の無い資格で走っているのに、鍵の回転のたびに黙って消えた（2026-10-14、heosterra の TILES-10c で 09:05Z・09:10Z の2回、審査役1・描き手3 の4本が消えた）。
+
+**いまの挙動:**
+
+- **デーモンの `send` の畳み（#2851）だけ**、`runner.stop(managerId, { keepPeers: true })`（HTTP は `DELETE /managers/:id?keepPeers=1`）で止める。runner は peer を閉じずに預け、同じ担当の `resume` で起こし直した新しいセッションへ窓口ごと付け替える。前の peer の `session_id` へ、そのまま `peer_reply` できる。
+- **預けている間に peer が確認を求めたら、断らずに預かり、新しいセッションへ回す**（クローンまで届く）。**背景の peer の止まりどころの知らせも預かり、新しいセッションへ届ける。** 黙って捨てない。
+- **担当が10分（`PEER_PARK_TTL_MS`）戻らない・預けた後に人間・クローンが止めた（印なしの停止）・器を畳む**ときは、預かった peer を閉じる。預かっていた確認には理由を付けて断りを返し、知らせは日誌の note に残す。
+- **人間・クローンの停止（`manager_stop`）と器の入れ替えでは、今どおり peer を閉じる。**
+- runner が自分でターンの境界で畳み直す経路（`#reopenForTokenRotation`。走行中のマネージャーへの鍵の届け方）は、同じセッションのまま中身を開き直すので、もともと peer は閉じていない。
+- **版がずれていると今どおり閉じる**: 古い runner は `keepPeers` を読まず、古いデーモンは送らない。両方がこの版以降のときだけ引き継ぐ。
+
+**実物で確かめる手順**（鍵の回転のあとも peer が生きていること。両方の版が入ってから行う）:
+
+1. Codex の資格がある runner で、担当に `peer_run`（codex）を1回走らせ、ターンを終わらせる。担当が done になるまで待つ。返ってきた peer の `session_id`（`peer-…`）を控える。
+2. 鍵を回す。自然に回るのを待つか、オーナーの判断で現役の鍵を外す（`alteroid token disable <現役の id>`。`pool_changed` で回る）。`token_list` で現役の世代が上がったこと、`manager_list` でその担当に「世代 N≠現役 M」の ⚠ が立ったことを確かめる。
+3. クローン（または人間）から、その担当へ `manager_send` で一言送る。
+4. 日誌を確かめる（`journal_read`）:
+   - 「done の委譲を、畳んで新しい鍵で起こし直す（世代 N → 現役 M）」の decision の行
+   - 「鍵の付け替えのために畳んだので、peer のセッションは閉じずに預けた。起こし直した担当へ引き継ぐ（#4734）」の note
+   - 「預かっていた peer のセッションを閉じた」の note が**出ていない**こと
+5. 担当に、手順1で控えた `session_id` へ `peer_reply` させる。「peer セッションは無い（peer_run で起こすこと）」が返らず、peer が前の文脈のまま答えれば合格。
+6. 対照（任意）: 別の担当で peer を起こしてから `manager_stop` で止め、起こし直すと peer が無いこと（今どおり閉じる）を確かめる。
+
+試験は `packages/core/src/runner-peer.test.ts`（引き継ぎ・預けた間の知らせ・人が止めたら閉じる・印なしなら閉じる）、`packages/core/src/manager-send-stale-token.test.ts`（畳みの経路だけが印を付ける）、`apps/runner/src/stop-keep-peers-route.test.ts` と `apps/daemon/src/runner-client-stop-keep-peers.test.ts`（HTTP で印を運ぶ）。
+
 ## 再接続の瞬間に、現役が降りる（撒く先が無かった回も追いつく）
 
 **runner は繋がるたびに `hello` を送り**（`apps/runner/src/app.ts`。SSE のストリームが張られた最初のフレーム）、デーモンはそれを全部 `#reattach` へ通す（`packages/core/src/manager.ts`）。⟹ **降ろす契機は3つあり、どれも「その瞬間」である:**
