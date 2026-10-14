@@ -789,20 +789,34 @@ export async function buildActivityDigest(
   return sections.join('\n');
 }
 
+function isLocalMidnight(at: Date): boolean {
+  return (
+    at.getHours() === 0 &&
+    at.getMinutes() === 0 &&
+    at.getSeconds() === 0 &&
+    at.getMilliseconds() === 0
+  );
+}
+
 // 取れなかったものを 0 と書かない: 台帳が無かった期間は「記録が無い」であって「使っていない」ではないため
 async function usageSection(stores: Stores, since: Date, until: Date): Promise<string[]> {
+  const from = usageDate(since);
+  // 上端は含まないので 1ms 引いてから日付にする: 境界の日が余分に入らないため
+  const to = usageDate(new Date(until.getTime() - 1));
   let aggregate;
   try {
-    aggregate = await stores.usage.aggregate({
-      from: usageDate(since),
-      // 上端は含まないので 1ms 引いてから日付にする: 境界の日が余分に入らないため
-      to: usageDate(new Date(until.getTime() - 1)),
-    });
+    aggregate = await stores.usage.aggregate({ from, to });
   } catch {
     return ['## 使った分', '（台帳を読めなかった。集計は出せない）'];
   }
 
   const lines = ['## 使った分'];
+  // 日に揃わない窓（直近24時間など）では集計した日付を名乗る（#4756）: 台帳は日ごとにしか持たず、黙ると見出しの期間より広い額が期間の分として読まれるため
+  if (!isLocalMidnight(since) || !isLocalMidnight(until)) {
+    lines.push(
+      `（台帳は日ごとに持つので、${from === to ? from : `${from}〜${to}`} の日ぶんの合計。上の期間より広い）`,
+    );
+  }
   // 取れなかったことをどの分岐よりも先に書く: 落とすと、取れなかったターンしか無い期間が「記録は無い」と読めるため
   const unreadableLines = describeUnreadableUsageRows(aggregate.unreadableRows);
   const unmeteredLines = describeUnmeteredUsage(aggregate.unmeteredRows);
