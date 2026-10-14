@@ -15,6 +15,10 @@ export const CLAIM_MAX_RETRIES = 4;
 /** 1回の claim の期限（ms。#4706）。デーモンは手元の状態を読むだけで、普段は1秒もかからない。CLI の `LOGIN_REQUEST_TIMEOUT_MS` と同じ値。 */
 export const CLAIM_REQUEST_TIMEOUT_MS = 10_000;
 
+/** 通信の失敗の直後に 400 が返ったときに添える案内（#4751）。CLI の `alteroid login` の同じ場面の案内と揃える。 */
+const CLAIM_AFTER_TRANSIENT_HINT =
+  '直前に通信の失敗があったため、その引き取りが応答を返せないまま済んでいた可能性がある。ログインをやり直してほしい。';
+
 function isTransient(error: unknown): boolean {
   return !(error instanceof ApiError) || error.status >= 500;
 }
@@ -105,6 +109,8 @@ export async function claimUntilReady(
   const deadline = Date.parse(pending.expiresAt);
 
   let failures = 0;
+  // 直前の claim が通信の失敗（期限切れを含む）で終わったか（#4751）: その claim がデーモンで引き取り済みになっていれば、次の claim は 400 になる
+  let afterTransient = false;
 
   for (;;) {
     if (options.signal?.aborted === true) return { status: 'failed', message: '中断した' };
@@ -120,12 +126,18 @@ export async function claimUntilReady(
         pending,
         options.signal === undefined ? timeout : AbortSignal.any([timeout, options.signal]),
       );
+      if (outcome.status === 'failed' && afterTransient) {
+        return { status: 'failed', message: `${outcome.message} ${CLAIM_AFTER_TRANSIENT_HINT}` };
+      }
       if (outcome.status !== 'pending') return outcome;
       failures = 0;
+      // pending を受けたなら、その時点ではまだ引き取られていない: 前の通信の失敗は 400 の理由にならない
+      afterTransient = false;
     } catch (error) {
       // 一度の失敗で、認可を済ませた待ちを捨てない
       if (!isTransient(error)) throw error;
       failures += 1;
+      afterTransient = true;
       if (failures > CLAIM_MAX_RETRIES) {
         const reason = error instanceof Error ? error.message : String(error);
         return { status: 'failed', message: `サーバと通信できず、引き取れなかった（${reason}）` };
