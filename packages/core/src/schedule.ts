@@ -220,7 +220,10 @@ class TimerScheduler implements Scheduler {
       const spec = JSON.stringify(plan.spec);
       const existing = this.#requests.get(plan.kind);
       if (plan.pendingRun === undefined) this.#redelivered.delete(plan.kind);
-      if (existing?.spec === spec) {
+      // 作成時刻も見る（#4741）: 同じ周期で消して作り直した依頼を「変わっていない」と読むと、周期の錨（作成時刻）が古いまま残るため。
+      // 依頼の本文だけが変わったら、次の発火は保ったまま説明を作り直す: 説明は作った時点の本文に束ねてあり、保つと再起動まで古い本文を見せるため
+      if (existing?.spec === spec && existing.plan.createdAt === plan.createdAt) {
+        if (existing.plan.request !== plan.request) existing.entry = scheduledRequestEntry(plan);
         existing.plan = plan;
         continue;
       }

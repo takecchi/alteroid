@@ -558,6 +558,43 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     return { posted, scheduler, stores, set: (value: Date) => (clock = value) };
   }
 
+  it('⭐ 同じ周期で消して作り直した依頼は、新しい作成時刻を錨に次の発火を取り直す（#4741）', async () => {
+    const s = setup(at(2026, 8, 12, 8, 10));
+    await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 60 }));
+    await s.scheduler.refresh();
+    const nextOf = () => s.scheduler.list().find((item) => item.kind === 'watch')?.nextAt;
+    expect(nextOf()).toBe(at(2026, 8, 12, 9, 0).toISOString());
+
+    // 次の刻みを待たずに消して、同じ周期で作り直す（クローンの道具は refresh を呼ばない）
+    await s.stores.schedules.remove('watch');
+    await s.stores.schedules.put(
+      plan(
+        'watch',
+        { type: 'every', minutes: 60 },
+        'GitHub の issue を見て実装を進める',
+        at(2026, 8, 12, 8, 20),
+      ),
+    );
+    s.set(at(2026, 8, 12, 8, 21));
+    await s.scheduler.refresh();
+
+    expect(nextOf()).toBe(at(2026, 8, 12, 9, 20).toISOString());
+  });
+
+  it('依頼の本文だけを書き換えたら、説明は新しくなり、次の発火は変えない（#4741）', async () => {
+    const s = setup(at(2026, 8, 12, 8, 10));
+    await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 60 }, '古い依頼'));
+    await s.scheduler.refresh();
+    const item = () => s.scheduler.list().find((entry) => entry.kind === 'watch');
+    const before = item()?.nextAt;
+
+    await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 60 }, '新しい依頼'));
+    await s.scheduler.refresh();
+
+    expect(item()?.description).toContain('新しい依頼');
+    expect(item()?.nextAt).toBe(before);
+  });
+
   it('毎日この時刻 / この分数ごと、のどちらでも次の発火が決まる', () => {
     const daily = scheduledRequestEntry(plan('issue-round', { type: 'daily', at: '09:00' }));
     expect(daily.nextAt(at(2026, 8, 12, 8, 0))).toEqual(at(2026, 8, 12, 9, 0));
