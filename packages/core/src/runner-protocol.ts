@@ -1410,7 +1410,11 @@ export interface RunnerClient {
   ): Promise<boolean>;
   /** `decision` は `delivered` が true でも欠けうる。欠けた回を allow/deny の既定値へ倒さない（journal は「不明」として扱う）。 */
   answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome>;
-  stop(managerId: string): Promise<void>;
+  /**
+   * `keepPeers`: 鍵の付け替えのための畳み。runner は peer を閉じずに預け、同じ担当の resume で引き継ぐ（#4734）。
+   * 知らない runner（古い版）は印を読まずに今どおり閉じる。
+   */
+  stop(managerId: string, options?: { keepPeers?: boolean }): Promise<void>;
   /**
    * 10秒ごとの生存確認もここを叩く。`identity()` などと違い別の URL（`GET /managers`）で、heartbeat 1周につき1台あたり1往復増える。
    * 払う理由: 払わないと、消えたセッションを持つ委譲が誰かが `manager_send` を打つまで `[running]` と出続ける。

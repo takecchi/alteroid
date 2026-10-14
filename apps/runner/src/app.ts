@@ -945,7 +945,9 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     )
 
     .delete('/managers/:id', async (c) => {
-      await host.stop(c.req.param('id'));
+      // `keepPeers=1`: 鍵の付け替えのための畳み。peer を閉じずに預ける（#4734）
+      const keepPeers = c.req.query('keepPeers') === '1';
+      await host.stop(c.req.param('id'), keepPeers ? { keepPeers: true } : {});
       return c.json({ ok: true });
     })
 

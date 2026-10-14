@@ -919,8 +919,10 @@ class HttpRunner implements RunnerClient {
     };
   }
 
-  async stop(managerId: string): Promise<void> {
-    await this.#call('DELETE', `/managers/${encodeURIComponent(managerId)}`);
+  // 印はクエリで運ぶ（#4734）: 知らない runner は読まずに今どおり閉じるので、版がずれても止め方は変わらない
+  async stop(managerId: string, options?: { keepPeers?: boolean }): Promise<void> {
+    const query = options?.keepPeers === true ? '?keepPeers=1' : '';
+    await this.#call('DELETE', `/managers/${encodeURIComponent(managerId)}${query}`);
   }
 
   // `signal` を受ける: 10秒ごとの生存確認がこの口も叩くので、期限で中断できないと返らない1回が `RUNNER_CALL_DEADLINE_MS` まで居座り、次の周期の呼び出しと積み重なるため

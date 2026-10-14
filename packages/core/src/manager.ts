@@ -3922,7 +3922,8 @@ class Pool implements ManagerPool {
 
     let stopError: unknown;
     try {
-      await runner.stop(managerId);
+      // peer は閉じずに預けさせる（#4734）: 畳むのは担当の Claude の鍵を付け替えるためだけで、peer は鍵と関係の無い資格で走っているため
+      await runner.stop(managerId, { keepPeers: true });
     } catch (error) {
       stopError = error;
     }
