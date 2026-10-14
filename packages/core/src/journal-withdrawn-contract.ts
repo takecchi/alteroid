@@ -3,7 +3,10 @@ import type { JournalStore } from './store.js';
 
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg へ vitest を持ち込まないため。
 // 時刻の待ちは使わない: 同じミリ秒に積まれても成り立つ形にする。
-export type JournalStoreWithdrawnContractSubject = Pick<JournalStore, 'append' | 'list' | 'listPage'>;
+export type JournalStoreWithdrawnContractSubject = Pick<
+  JournalStore,
+  'append' | 'list' | 'listPage'
+>;
 
 const MARKER = 'journal-withdrawn-contract';
 const EPOCH = '1970-01-01T00:00:00.000Z';

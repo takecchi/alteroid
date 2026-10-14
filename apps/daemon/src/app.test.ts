@@ -36,6 +36,7 @@ import {
   createManagerPool,
   createMcpServerService,
   createMemoryStores,
+  dropLastRowPerPage,
   createProfileApplier,
   createProfileService,
   createProfileVessel,
@@ -7967,6 +7968,25 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect(wider.status).toBe(200);
     expect(widerBody.messages.map((m) => m.text)).toEqual(['古い発言']);
     expect(widerBody.reachedStart).toBe(true);
+  });
+
+  // pg は LIMIT の後で読めない行を捨てる: 窓が scan 件に満たなくても、先頭に届いたとは限らない（#4770）
+  it('読めない行を捨てて窓が短くなっても、届いていなければ 404 にしない', async () => {
+    await exchange('conv-old', 'inbound', '古い発言');
+    await exchange('conv-new', 'inbound', '新しい発言');
+    const droppingApp = createApp({
+      clone: fake.clone,
+      stores: dropLastRowPerPage(stores),
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+
+    const response = await droppingApp.request('/conversations/conv-old?scan=100');
+    const body = (await response.json()) as { messages: unknown[]; reachedStart: boolean };
+
+    expect(response.status).toBe(200);
+    expect(body.messages).toEqual([]);
+    expect(body.reachedStart).toBe(false);
   });
 
   it('内部ターン（self）は会話に混ざらない', async () => {

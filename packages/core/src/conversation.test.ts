@@ -6,13 +6,16 @@ import {
   computeSupersededIds,
   conversationMessages,
   humanExchanges,
+  readConversationPage,
   readConversationWindow,
+  readConversationWindowPage,
+  readWithdrawnClientMessageIds,
   searchExchanges,
   toMessage,
 } from './conversation.js';
 import type { Exchange } from './conversation.js';
 import type { JournalEntry } from './schema.js';
-import { createMemoryStores } from './testing.js';
+import { createMemoryStores, dropLastRowPerPage } from './testing.js';
 
 /** 孤立サロゲート（高だけ・低だけ）。`isWellFormed()` は tsconfig の lib に無いので直接探す。 */
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
@@ -816,5 +819,67 @@ describe('取り下げた発言は、一覧の見出しにも件数にも入れ�
     expect(page.conversations).toMatchObject([
       { conversationId: 'c1', preview: '残る発言', messages: 1 },
     ]);
+  });
+});
+
+// pg は LIMIT の後で読めない行を捨てる: 窓が短くても先頭に届いたとは限らない（#4770）
+describe('読めない行を捨てて短くなった頁でも、終端を件数から推さない（#4770）', () => {
+  async function seeded() {
+    const stores = createMemoryStores();
+    for (const text of ['古い', '真ん中', '新しい']) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text,
+        conversationId: `conv-${text}`,
+      });
+    }
+    return dropLastRowPerPage(stores);
+  }
+
+  it('readConversationWindowPage: 短い頁でも next が在れば reachedStart は偽', async () => {
+    const { journal } = await seeded();
+
+    const window = await readConversationWindowPage(journal, { scan: 100 });
+
+    expect(window.entries).toHaveLength(2);
+    expect(window.reachedStart).toBe(false);
+  });
+
+  it('readConversationPage: 短い窓でも reachedStart は偽で、続きの cursor を返す', async () => {
+    const { journal } = await seeded();
+
+    const page = await readConversationPage(journal, { limit: 10, scan: 100 });
+
+    expect(page.reachedStart).toBe(false);
+    expect(page.next).not.toBeNull();
+  });
+
+  it('readWithdrawnClientMessageIds: 短い頁で止めず、次の頁の取り下げの印まで読む', async () => {
+    const stores = createMemoryStores();
+    const mark = (conversationId: string, withdrawn?: string) =>
+      stores.journal.append({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: 'x',
+        conversationId,
+        ...(withdrawn === undefined ? {} : { withdrawnClientMessageId: withdrawn }),
+      });
+    await mark('c1');
+    await mark('c1');
+    await mark('c1', 'cm-late');
+    await mark('c1');
+    const { journal } = dropLastRowPerPage(stores);
+
+    const withdrawn = await readWithdrawnClientMessageIds(
+      journal,
+      'c1',
+      '1970-01-01T00:00:00.000Z',
+      2,
+    );
+
+    expect([...withdrawn]).toEqual(['cm-late']);
   });
 });

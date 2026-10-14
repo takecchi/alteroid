@@ -1275,6 +1275,7 @@ export {
 export {
   captureStderr,
   createMemoryStores,
+  dropLastRowPerPage,
   failingJobWrite,
   failingJournalAppend,
   humanMessage,
