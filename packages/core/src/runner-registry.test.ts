@@ -309,3 +309,55 @@ describe('runner の名簿', () => {
     await registry.stop();
   });
 });
+
+describe('名簿が runner を開くのを期限までしか待たない（#4673）', () => {
+  it('⭐ 開く呼び出しが返らなければ期限で打ち切って挑み直し、上がったら宛先になる。遅れて開けた接続は閉じる', async () => {
+    let attempts = 0;
+    let lateClosed = 0;
+    let releaseFirst: (() => void) | undefined;
+    const registry = createRunnerRegistry([], {
+      retryBaseMs: 5,
+      retryMaxMs: 5,
+      openDeadlineMs: 30,
+    });
+    const runnerOf = (id: string): RunnerClient =>
+      createLocalRunner({
+        runnerId: id,
+        workspacePath: '/work/project',
+        queryFn: fakeSdk(),
+        env: {},
+      });
+
+    await registry.register({
+      label: 'http://runner:4673',
+      open: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          // 1回目は返らない（/health の本文が止まった）。後から開けても、名簿はもう次へ進んでいる
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+          const late = runnerOf('runner-late');
+          const close = late.close.bind(late);
+          late.close = async () => {
+            lateClosed += 1;
+            await close();
+          };
+          return late;
+        }
+        return runnerOf('runner-4673');
+      },
+    });
+
+    const runner = await registry.select({});
+    expect(runner.runnerId).toBe('runner-4673');
+    expect(attempts).toBeGreaterThanOrEqual(2);
+
+    releaseFirst?.();
+    await vi.waitFor(() => expect(lateClosed).toBe(1));
+    expect(registry.entries()).toMatchObject([{ state: 'connected', runnerId: 'runner-4673' }]);
+
+    await runner.close();
+    await registry.stop();
+  });
+});
