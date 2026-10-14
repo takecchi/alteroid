@@ -9730,19 +9730,19 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * 捨てる報告に添えられた成果物も取り寄せ、日誌の行に結び付ける（#4703）。停止済みの報告（#4675）と同じ扱い。
-   * 取り寄せないと、runner が出し箱から退避先へ移した成果物が、名前も残らずに失われるため。受信箱へ回さない・台帳を動かさないのは呼び手のまま。
+   * 捨てる報告の本文を日誌に残し、添えられた成果物も取り寄せて日誌の行に結び付ける。停止済みの報告（#4675）と同じ扱い。
+   * 本文を残す（#4717）: 「…の report を無視した」とだけ書くと、誤検知で生きていた古いセッションの最終報告（PR の番号など）が誰にも見えずに消えるため。
+   * 成果物を取り寄せる（#4703）: 取り寄せないと、runner が出し箱から退避先へ移した成果物が、名前も残らずに失われるため。受信箱へ回さない・台帳を動かさないのは呼び手のまま。
    */
   async #droppedReportFiles(event: RunnerEvent, fromRunnerId: string): Promise<DroppedReportFiles> {
-    if (
-      event.type !== 'report' ||
-      ((event.files?.length ?? 0) === 0 && (event.rejectedFiles?.length ?? 0) === 0)
-    ) {
-      return NO_DROPPED_FILES;
+    if (event.type !== 'report') return NO_DROPPED_FILES;
+    const body = `\n\n捨てた報告の本文: ${event.text}`;
+    if ((event.files?.length ?? 0) === 0 && (event.rejectedFiles?.length ?? 0) === 0) {
+      return { text: body, attachments: {} };
     }
     const files = await this.#fetchReportFiles(event, fromRunnerId);
     return {
-      text: describeStoppedReportFiles(files),
+      text: body + describeStoppedReportFiles(files),
       attachments:
         files.attachments.length === 0
           ? {}

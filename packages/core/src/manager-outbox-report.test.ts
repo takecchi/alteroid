@@ -592,3 +592,41 @@ describe('移った後の古い runner から届いた報告に添えられた�
     await pool.stop();
   });
 });
+
+describe('古い世代として捨てる報告の本文（#4717）', () => {
+  it('⭐ ファイルの付かない古いセッションの報告も、本文を日誌の捨てた行に残す', async () => {
+    const stores = createMemoryStores();
+    const fake = fakeRunner({ names: true, startGeneration: 'gen-new' });
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: createRunnerRegistry([fake.runner]),
+      synthesizedNoticeWindowMs: 60_000,
+    });
+    await pool.restore();
+    const { managerId } = await pool.start({ request: '調べて' });
+
+    fake.raw({
+      type: 'report',
+      managerId,
+      status: 'done',
+      text: 'PR #9999 をマージした（古いセッションの最終報告）',
+      reportId: 'report-old-text',
+      sessionGeneration: 'gen-old',
+    });
+
+    const line = await vi.waitFor(async () => {
+      const entries = await stores.journal.list({ types: ['exchange'] });
+      const found = entries.find(
+        (entry) =>
+          entry.type === 'exchange' && entry.text.includes('古いセッションの report を無視した'),
+      );
+      if (found === undefined) throw new Error('捨てた行がまだ無い');
+      return found;
+    });
+    expect(line.type === 'exchange' ? line.text : '').toContain(
+      'PR #9999 をマージした（古いセッションの最終報告）',
+    );
+    await pool.stop();
+  });
+});
