@@ -5140,10 +5140,37 @@ class Clone implements CloneHost {
   }
 
   // 書かれなかった日を作らない（道具を呼び忘れたらその応答を日報にする）。ただし失敗したターンの応答は日報にしない: エラー文言が日報として保存されるため。失敗時は `unavailable`（`schema.ts`）の印を付けた行だけを書く。
+  // 読めなければ「無い」として走らせる側へ倒す: 引き下がると、本物の日報が永久に書かれない恐れがあるため（下の既存確認と同じ理由）
+  async #dailyReportWritten(date: string): Promise<boolean> {
+    try {
+      const written: JournalEntry[] = await this.#stores.journal.list({
+        types: ['daily_report'],
+        limit: DAILY_REPORT_LOOKUP,
+      });
+      return written
+        .filter(isDailyReport)
+        .some((entry) => entry.date === date && isWrittenDailyReport(entry));
+    } catch {
+      return false;
+    }
+  }
+
   async #dailyReport(
     date: string,
     cause: 'schedule' | 'schedule_catchup' | 'manual' = 'schedule',
   ): Promise<void> {
+    // 走らせる前にも見る（#4757）: 同じ日付の合図が2本積まれる（受信箱に残った定時の合図と起動時の後追い）と、2本目もターンを丸ごと払ってから下の確認で捨てるため。
+    // `manual` は除く: 人間が作り直しを頼んだ回は、既にあっても走らせる
+    if (cause !== 'manual' && (await this.#dailyReportWritten(date))) {
+      this.#dailyReportRetries.delete(date);
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${EXCHANGE_KIND_DECISION_PREFIX}${date} の日報は既に書かれているので、日報のターンを走らせなかった（契機: ${cause}）`,
+      });
+      return;
+    }
     const range = localDayRange(date);
     const axes = range === null ? null : await this.#managerDigestAxes();
     const digest =
