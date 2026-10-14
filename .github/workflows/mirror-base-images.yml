@@ -71,10 +71,18 @@ jobs:
             name_tag=${src#public.ecr.aws/docker/library/}
             repo_tag=${name_tag%@*}
             dst="$MIRROR/$repo_tag"
+            # skopeo はタグと digest の両方を持つ参照を受け付けないので、digest で固定した元はタグを外して digest で取る
+            case "$src" in
+              *@sha256:*)
+                base=${src%@*}
+                from="${base%:*}@${src#*@}"
+                ;;
+              *) from=$src ;;
+            esac
             # ECR Public の取得制限に当たったら待って2回まで試し直す
             ok=false
             for attempt in 1 2 3; do
-              if skopeo copy --all --preserve-digests --retry-times 3 "docker://$src" "docker://$dst"; then
+              if skopeo copy --all --preserve-digests --retry-times 3 "docker://$from" "docker://$dst"; then
                 ok=true
                 break
               fi
