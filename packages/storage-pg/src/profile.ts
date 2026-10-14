@@ -74,11 +74,14 @@ export class PgProfileStore implements ProfileStore {
   }
 
   // 旧表も空にする: 全部外したものが、巻き戻した旧版で蘇らないように。
+  // 1つのトランザクションで行う（#4727）: 2文目が落ちると旧表だけが空になり、半分だけ消えた状態が残るため（`replaceAll` と同じ）
   async clear(): Promise<number> {
-    await this.#db.delete(envProfile);
-    const removed = await this.#db
-      .delete(envProfileEntries)
-      .returning({ name: envProfileEntries.name });
-    return removed.length;
+    return this.#db.transaction(async (tx) => {
+      await tx.delete(envProfile);
+      const removed = await tx
+        .delete(envProfileEntries)
+        .returning({ name: envProfileEntries.name });
+      return removed.length;
+    });
   }
 }

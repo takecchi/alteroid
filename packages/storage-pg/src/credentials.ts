@@ -51,20 +51,23 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
     const removed = entries.filter((entry) => entry.value.length === 0).map((entry) => entry.name);
     const upserted = entries.filter((entry) => entry.value.length > 0);
 
-    if (removed.length > 0) {
-      await this.#db.delete(managerCredentials).where(inArray(managerCredentials.name, removed));
-    }
-    for (const entry of upserted) {
-      const scope = entry.scope ?? 'all';
-      const secret = entry.secret ?? true;
-      await this.#db
-        .insert(managerCredentials)
-        .values({ name: entry.name, value: entry.value, updatedAt: at, scope, secret })
-        .onConflictDoUpdate({
-          target: managerCredentials.name,
-          set: { value: entry.value, updatedAt: at, scope, secret },
-        });
-    }
+    // 1つのトランザクションで行う（#4727）: 途中で落ちると、削除と先頭の数件だけが確定した半端な資格が残るため（fs 実装はファイル1つの書き戻しで全部か無しか）
+    await this.#db.transaction(async (tx) => {
+      if (removed.length > 0) {
+        await tx.delete(managerCredentials).where(inArray(managerCredentials.name, removed));
+      }
+      for (const entry of upserted) {
+        const scope = entry.scope ?? 'all';
+        const secret = entry.secret ?? true;
+        await tx
+          .insert(managerCredentials)
+          .values({ name: entry.name, value: entry.value, updatedAt: at, scope, secret })
+          .onConflictDoUpdate({
+            target: managerCredentials.name,
+            set: { value: entry.value, updatedAt: at, scope, secret },
+          });
+      }
+    });
     return this.list();
   }
 
