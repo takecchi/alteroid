@@ -716,7 +716,10 @@ describe('inputHead — escalation にだけ乗り、journal には乗らない�
     expect(text).toContain(
       '答え方: この拒否について「この1回だけ許可しますか」の確認（`requestId` は `toolu_…` の形）が別に届いていれば、',
     );
-    expect(text).toContain('（allow しても自動では撃ち直されない）');
+    // 撃ち直しても分類器にまた止められうることも書く（#4904）
+    expect(text).toContain(
+      '（allow しても自動では撃ち直されず、撃ち直しても分類器にまた止められうる。#4904）',
+    );
     expect(text).toContain(
       'その確認が届いていなければ、この拒否には `requestId` が無く、許可として答える口は無い。',
     );
