@@ -4114,7 +4114,14 @@ class Pool implements ManagerPool {
       }
 
       const status = record.job.status;
-      if (status === 'lost' || status === 'failed' || status === 'stopped') {
+      // 枠で止まった印の付いた failed・lost は終端ではない（#4854）: 鍵の回転で新しい鍵で起こし直す対象なので、預かりを保ち、起こし直して status が戻った後の見回りで届ける（預かった時点の「自動で届ける」の約束どおり）。
+      // 期限切れの返却は下で今どおり効かせる: 起こし直されないまま残ると、本文が期限を過ぎても返らないため
+      const awaitingUsageWake =
+        (status === 'lost' || status === 'failed') && this.#usageStopped.has(managerId);
+      if (
+        !awaitingUsageWake &&
+        (status === 'lost' || status === 'failed' || status === 'stopped')
+      ) {
         await this.#releaseHeld(record, held.length, `委譲が終端した（status=${status}）`);
         return {
           outcome: 'declined',
@@ -4136,6 +4143,7 @@ class Pool implements ManagerPool {
       }
       const batch = record.job.heldMessages ?? [];
       if (batch.length === 0) return undefined;
+      if (awaitingUsageWake) return undefined;
 
       const result = await this.#send(managerId, composeHeldDelivery(batch), {}, 'held-delivery');
       if (result.outcome !== 'delivered' && result.outcome !== 'answered') {
