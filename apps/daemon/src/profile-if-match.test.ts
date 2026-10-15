@@ -125,4 +125,21 @@ describe('PUT / DELETE /profile/:name の ifMatch（#4592）', () => {
     expect(removed.status).toBe(200);
     expect(await stores.profile.list()).toEqual([]);
   });
+
+  it('⭐ ifMatch の綴り違い（ifmatch / if_match）や知らない欄は 400 で断り、比べずに上書きしない（#4840）', async () => {
+    const { stores, profile, app } = setup();
+    await profile.set('rust', `export R=${HUMAN_VALUE}`);
+    const read = await versionOf(app, 'rust');
+    await profile.set('rust', `export R=${CLONE_VALUE}`);
+
+    for (const body of [
+      { script: 'export R=new', ifmatch: read },
+      { script: 'export R=new', if_match: read },
+      { script: 'export R=new', scpoe: 'runner' },
+    ]) {
+      const response = await putRow(app, 'rust', body);
+      expect(response.status, JSON.stringify(Object.keys(body))).toBe(400);
+    }
+    expect((await stores.profile.list())[0]?.script).toBe(`export R=${CLONE_VALUE}\n`);
+  });
 });
