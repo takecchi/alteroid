@@ -16,7 +16,9 @@ import { PEER_MCP_SERVER_NAME } from './peer-broker.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import type { PeerSocketHost } from './peer-socket-host.js';
 import {
+  closeParkedPeers,
   createRunnerHost,
+  type ParkedPeers,
   PEER_PARK_TTL_MS,
   type RunnerHostPeerOptions,
   type RunnerHostOptions,
@@ -285,6 +287,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     toolItems: Json[] = [],
     starts: Json[] = [],
     gate?: Promise<void>,
+    command = 'rm -rf build',
   ): AgentChildProcess {
     const emitter = new EventEmitter();
     const stdin = new PassThrough();
@@ -357,7 +360,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
                 threadId: 'thr-peer',
                 turnId: 'turn-1',
                 itemId: 'cmd-1',
-                command: 'rm -rf build',
+                command,
               },
             });
           });
@@ -387,6 +390,8 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       args?: Json;
       sdk?: ReturnType<typeof readingQuery>;
       gate?: Promise<void>;
+      command?: string;
+      vault?: { name: string; value: string }[];
       childUser?: RunnerHostOptions['childUser'];
     } = {},
   ) {
@@ -403,7 +408,8 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       queryFn: sdk.fn,
       env: options.env ?? {},
       childUser: options.childUser ?? { uid: 1000, gid: 1000 },
-      spawnAgentProcessFn: () => approvingAppServer(decisions, toolItems, starts, options.gate),
+      spawnAgentProcessFn: () =>
+        approvingAppServer(decisions, toolItems, starts, options.gate, options.command),
       ...vessels(),
       peer: {
         openSocket: async () => peerHost,
@@ -413,7 +419,10 @@ describe('runner: peer の承認をクローンへ上げる', () => {
         ...(options.models === undefined ? {} : { models: options.models }),
       },
     });
-    await host.setCredentials([{ name: 'CODEX_API_KEY', value: 'sk-test' }]);
+    await host.setCredentials([
+      { name: 'CODEX_API_KEY', value: 'sk-test' },
+      ...(options.vault ?? []),
+    ]);
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
     const server = peerHost.factory()!();
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
@@ -562,6 +571,70 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('⭐ 預けた peer を閉じるときの止まりどころの抜粋と note は、env と vault の値・固有の形の鍵を伏せる（#4923）', async () => {
+    const envValue = 'plainenvvalue4923';
+    const vaultValue = 'plainvaultvalue4923';
+    const shaped = 'sk-ant-' + 'api03-' + 'Zq9'.repeat(14);
+    vi.stubEnv('ALTEROID_TEST_PEER_TOKEN', envValue);
+    try {
+      let release = (): void => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const s = await setupPeerCall([], {
+        args: { run_in_background: true },
+        sdk: readingQuery(),
+        gate,
+        command: `deploy ${envValue} ${vaultValue} ${shaped}`,
+        vault: [{ name: 'DB_PASS', value: vaultValue }],
+      });
+      await s.host.stop('mgr-1', { keepPeers: true });
+      // 預けている間に、背景の peer が確認待ちで止まる（止まりどころは預かりに積まれる）
+      release();
+      await waitFor(() => false);
+      await s.host.stop('mgr-1');
+      const closed = s.events.find((e) => e.type === 'parked_peers_closed');
+      const peers = closed?.type === 'parked_peers_closed' ? closed.peers : [];
+      expect(peers[0]?.interrupted).toContain('確認待ちで止まっていた');
+      const notes = s.events.flatMap((e) => (e.type === 'note' ? [e.text] : []));
+      const stopNote = notes.find((text) => text.includes('止まりどころを届けられないまま閉じた'));
+      expect(stopNote).toBeDefined();
+      const shown = JSON.stringify([peers, notes]);
+      for (const secret of [envValue, vaultValue, shaped]) expect(shown).not.toContain(secret);
+      await s.client.close();
+      await s.host.shutdown();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('閉じ終えた後に届いた止まりどころの note も、渡した伏せ字を通す（#4923）', async () => {
+    const binding = { heldAsks: [], heldStops: [] } as unknown as ParkedPeers['binding'];
+    const broker = {
+      sessionList: () => [],
+      backgroundTasks: () => [],
+      closeAll: () => undefined,
+    } as unknown as ParkedPeers['broker'];
+    const notes: string[] = [];
+    await closeParkedPeers(
+      { broker, binding },
+      '理由',
+      (text) => notes.push(text),
+      (text) => text.replaceAll('late-secret', '[伏せ字]'),
+    );
+    binding.collectStop?.({
+      sessionId: 'peer-late',
+      provider: 'codex',
+      ok: true,
+      text: '値は late-secret だ',
+      denied: [],
+      approved: [],
+    });
+    expect(notes.at(-1)).toContain('閉じ終えた後に届いた');
+    expect(notes.at(-1)).not.toContain('late-secret');
+    expect(notes.at(-1)).toContain('[伏せ字]');
   });
 
   it('預けた peer に背景ターンが無くても、期限で閉じたことは運ぶ（#4885）', async () => {
