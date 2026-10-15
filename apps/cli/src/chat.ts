@@ -59,7 +59,7 @@ import {
   describeUnpushedWorkObservationSource,
   isEmptyCompleteUnpushedWorkObservation,
 } from '@alteroid/core/unpushed-work-observation-format';
-import { JOURNAL_MAX_LIMIT } from '@alteroid/logic';
+import { JOURNAL_MAX_LIMIT, readThroughUnreadable } from '@alteroid/logic';
 import type { InferResponseType } from 'hono/client';
 
 import {
@@ -1651,21 +1651,40 @@ export async function runSlashCommand(
       if (!parsed.ok) return usageError(`${parsed.message}\n`);
       const { limit: limitToken, q, type } = parsed;
       const limit = limitToken ?? '20';
-      const response = await client.journal.$get({
-        query: {
-          limit,
-          ...(type === undefined ? {} : { type }),
-          ...(q === undefined ? {} : { q }),
-        },
-      });
+      const filters = {
+        limit,
+        ...(type === undefined ? {} : { type }),
+        ...(q === undefined ? {} : { q }),
+      };
+      const response = await client.journal.$get({ query: filters });
       if (!response.ok) {
         stdout.write(
           `${await withDetail('日誌を読めませんでした（件数 / type= / q= の値を確かめてください）', response)}\n`,
         );
         return 'ok';
       }
-      const { entries } = await response.json();
-      if (entries.length === 0) {
+      // 読めない行だけの頁は `entries: []` でも `next` が在る: TUI と同じく `readThroughUnreadable` で読み進める。
+      // 継続点の頁が失敗したら、その応答の説明を出して終える（最初の頁と同じ扱い）
+      let failed: Response | undefined;
+      const page = await readThroughUnreadable(await response.json(), async (cursor) => {
+        const next = await client.journal.$get({
+          query: { ...filters, afterId: cursor.id, afterAt: cursor.at },
+        });
+        if (!next.ok) {
+          failed = next;
+          return { entries: [], next: null };
+        }
+        return next.json();
+      });
+      if (failed !== undefined) {
+        stdout.write(
+          `${await withDetail('日誌を読めませんでした（件数 / type= / q= の値を確かめてください）', failed)}\n`,
+        );
+        return 'ok';
+      }
+      const { entries } = page;
+      // 「空」は `next === null` で0件のときだけ言う: 続きが在るのに「無い」と言わない（`next` を返さない古いデーモンは終端として扱う）
+      if (entries.length === 0 && (page.next ?? null) === null) {
         // 探す対象に入っていない欄が在ることまで言う: 黙ると「日誌にその語は無い」と読めるが、tool_use の input に書かれているかもしれない。
         // `type=` で絞った0件を「日誌はまだ空」と言わない: 絞りを外せば見える日誌まで「無い」と読める。
         if (q === undefined && type === undefined) {
@@ -1687,7 +1706,10 @@ export async function runSlashCommand(
         stdout.write(`  ${entry.at}  [${entry.type}] ${summarize(entry)}\n`);
         stdout.write(`      id: ${entry.id}\n`);
       }
-      noteIfAtLimit(entries.length, limit, '日誌');
+      // 件数でなく `next` で言う: 一部が読めない頁は `limit` に届かないまま続きが在る。
+      // `next` を返さない古いデーモンは、従来どおり件数がちょうど `limit` かで言う
+      if (page.next === undefined) noteIfAtLimit(entries.length, limit, '日誌');
+      else if (page.next !== null) writeOlderMayExist(limit, '日誌');
       return 'ok';
     }
 
@@ -2915,6 +2937,10 @@ function writeReport(report: { date: string; body: string; unavailable?: string 
 // 言えるのは「返った件数が要求した上限とちょうど一致した」という、この API 自身が定めた唯一の合図だけ。
 function noteIfAtLimit(count: number, limit: string, label: string): void {
   if (count !== Number(limit)) return;
+  writeOlderMayExist(limit, label);
+}
+
+function writeOlderMayExist(limit: string, label: string): void {
   stdout.write(`直近 ${limit} 件のみ表示している。これより古い${label}があるかもしれない。\n`);
 }
 
