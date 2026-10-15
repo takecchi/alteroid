@@ -1749,6 +1749,25 @@ export const HELD_MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
  */
 export const HELD_FORCE_FOLD_AFTER_MS = 15 * 60 * 1000;
 
+/** 畳んだ背景処理のコマンドを一言に載せる最大本数と、1本あたりの字数（#4850）。 */
+const FOLD_NOTICE_COMMANDS_MAX = 5;
+const FOLD_NOTICE_COMMAND_CHARS = 160;
+
+/** 鍵の値などの秘密を載せない: 既存の伏せ字（`redactSecretsInText`）を通してから切る。 */
+function redactedBackgroundCommands(commands: readonly string[] | undefined): string[] {
+  return (commands ?? [])
+    .map((command) =>
+      excerptLine(redactSecretsInText(command, undefined), FOLD_NOTICE_COMMAND_CHARS),
+    )
+    .filter((command) => command.length > 0)
+    .slice(0, FOLD_NOTICE_COMMANDS_MAX);
+}
+
+function foldNoticeCommandsClause(commands: readonly string[] | undefined): string {
+  if (commands === undefined || commands.length === 0) return '';
+  return '。畳んだ背景処理のコマンド（分かった分）: ' + commands.map((c) => `\`${c}\``).join(' / ');
+}
+
 /** 届け直す本文。遅れて届いたことと、いつ送られたかを頭に付ける: マネージャーが、その間に変わった状況と突き合わせて読めるように。 */
 export function composeHeldDelivery(batch: readonly HeldMessage[]): string {
   if (batch.length === 1) {
@@ -3406,12 +3425,14 @@ class Pool implements ManagerPool {
 
   /**
    * `mode === 'held-delivery'` は預かった伝言の届け直し（`#deliverHeld`）だけが使う: 断られても預け直さず、預かりの列にも並ばない（並ぶと自分自身を待つ）。
+   * `mode === 'usage-rotation'` は鍵の回転・枠の起こし直し（`#nudgeForUsageRotation`）だけが使う: 預かりに回さず（断られたら届かなかったと返し、周回の掃きが間隔を置いて挑み直す）、
+   * 抱えている古い鍵が ready でなければ背景処理が残っていても畳む（#4850）。
    */
   async #send(
     managerId: string,
     message: string,
     options: ManagerSendOptions,
-    mode: 'caller' | 'held-delivery',
+    mode: 'caller' | 'held-delivery' | 'usage-rotation',
   ): Promise<ManagerSendResult> {
     await this.#ensureConnected();
 
@@ -3562,6 +3583,7 @@ class Pool implements ManagerPool {
           mode === 'held-delivery' &&
           oldestHeldAt !== undefined &&
           this.#now() - Date.parse(oldestHeldAt) >= HELD_FORCE_FOLD_AFTER_MS,
+        foldBackgroundIfHeldTokenNotReady: mode === 'usage-rotation',
       });
       if (folded.declined !== undefined) {
         // 断った本文を捨てない: 呼び手が台帳で追って送り直すしかなく、追い損ねた伝言は誰にも届かないまま消えるため。
@@ -3581,6 +3603,15 @@ class Pool implements ManagerPool {
         record.job.pendingFoldNotice = {
           backgroundTasks:
             folded.foldedBackground + (record.job.pendingFoldNotice?.backgroundTasks ?? 0),
+          ...(folded.foldedBackgroundCommands === undefined &&
+          record.job.pendingFoldNotice?.commands === undefined
+            ? {}
+            : {
+                commands: [
+                  ...(record.job.pendingFoldNotice?.commands ?? []),
+                  ...(folded.foldedBackgroundCommands ?? []),
+                ].slice(0, FOLD_NOTICE_COMMANDS_MAX),
+              }),
           at: new Date(this.#now()).toISOString(),
         };
         // 書けなくても進む: 背景処理は殺してあり、この回に届けば断り書きは付く（失うのは再起動を跨ぐ分だけ）。
@@ -3590,7 +3621,9 @@ class Pool implements ManagerPool {
     if (record.job.pendingFoldNotice !== undefined) {
       outgoing =
         `（alteroid より: 鍵の入れ替えのため、起こしっぱなしだった背景処理 ${String(record.job.pendingFoldNotice.backgroundTasks)} 本を` +
-        'セッションごと畳んで、新しい鍵で起こし直した。背景処理の結果は届いていない。要るなら確かめて起こし直すこと）\n\n' +
+        'セッションごと畳んで、新しい鍵で起こし直した。背景処理の結果は届いていない。要るなら確かめて起こし直すこと' +
+        foldNoticeCommandsClause(record.job.pendingFoldNotice.commands) +
+        '）\n\n' +
         message;
     }
 
@@ -3755,10 +3788,16 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
     runner: RunnerClient,
     managerId: string,
-    options: { foldBackgroundAfterWait?: boolean } = {},
+    options: {
+      foldBackgroundAfterWait?: boolean;
+      /** 鍵の回転・枠の起こし直しの回だけ真（#4850）。抱えている古い鍵が ready でなければ、待たずに背景処理ごと畳む。ready なら今までどおり旧セッションへ届ける。 */
+      foldBackgroundIfHeldTokenNotReady?: boolean;
+    } = {},
   ): Promise<{
-    /** 待ちの上限（`HELD_FORCE_FOLD_AFTER_MS`）を過ぎて、背景処理ごと畳んだ本数。 */
+    /** 背景処理ごと畳んだ本数（待ちの上限 `HELD_FORCE_FOLD_AFTER_MS` を過ぎた回か、鍵の回転の回）。 */
     foldedBackground?: number;
+    /** 畳んだ背景処理のうち、コマンドが分かったもの（伏せ字済み・字数を切ってある）。 */
+    foldedBackgroundCommands?: string[];
     declined?: ManagerSendResult;
     /** 断った理由だけ（取れる手を含まない）。預かる回の応答に使う: 断る回の detail は「送り直すこと」と言い、預かった回とは逆の手になるため。 */
     declinedReason?: string;
@@ -3857,8 +3896,10 @@ class Pool implements ManagerPool {
     // 背景処理だけが理由で、話しかけたい伝言が待ちの上限を過ぎたときは背景処理ごと畳む: 背景処理が終わらない（dev サーバ・見張り）か、
     // 終わったのに静かなセッションへ変化が届かず本数が古いまま残ると、時間では解けず、古い鍵のまま居座るため。
     // 確認待ち・走っているターン・本数が分からない回は畳まない（答えを待っているのはクローンで、分からないものは捨てない）。
+    // 鍵の回転の回は待たない（#4850）: ここへ来るのは抱えている鍵が ready でない回だけ（ready なら下で旧セッションへ流して返る）。冷却中・失効・分からないは同じく畳む側に倒す。
     const foldBackground =
-      options.foldBackgroundAfterWait === true &&
+      (options.foldBackgroundAfterWait === true ||
+        options.foldBackgroundIfHeldTokenNotReady === true) &&
       blockers.length === 1 &&
       state.liveBackgroundTasks !== undefined &&
       state.liveBackgroundTasks > 0
@@ -3956,16 +3997,27 @@ class Pool implements ManagerPool {
 
     record.attached = false;
     if (foldBackground !== undefined) {
+      // 待ちの上限を過ぎた回と、鍵の回転の回を言い分ける: 後者は待っていない
+      const byRotation = options.foldBackgroundAfterWait !== true;
       await this.#journal({
         type: 'decision',
         decision:
           `[${managerId}] done の委譲を、残っていた背景処理 ${String(foldBackground)} 本ごと畳んで新しい鍵で起こし直す` +
-          `（${staleness}。預かった伝言が ${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分届かなかった）`,
+          (byRotation
+            ? `（${staleness}。鍵の回転の起こし直しで、抱えている古い鍵は使えない）`
+            : `（${staleness}。預かった伝言が ${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分届かなかった）`),
         grounds:
           `managerId=${managerId} liveBackgroundTasks=${String(foldBackground)} 確認待ち=0 ` +
-          `鍵の状態=${heldTokenState ?? '（聞いていない）'}（#4472。背景処理が終わらない・終わったのに本数が下りないと、古い鍵のまま居座るため）`,
+          `鍵の状態=${heldTokenState ?? '（聞いていない）'}` +
+          (byRotation
+            ? '（#4850。鍵の回転の起こし直しは背景処理を理由に止めない。待たせると担当が数十分〜数時間止まる）'
+            : '（#4472。背景処理が終わらない・終わったのに本数が下りないと、古い鍵のまま居座るため）'),
       });
-      return { foldedBackground: foldBackground };
+      const commands = redactedBackgroundCommands(state.backgroundTaskCommands);
+      return {
+        foldedBackground: foldBackground,
+        ...(commands.length === 0 ? {} : { foldedBackgroundCommands: commands }),
+      };
     }
     await this.#journal({
       type: 'decision',
@@ -5815,7 +5867,8 @@ class Pool implements ManagerPool {
         return 'gone';
       }
       // 新しい経路を作らず `send()` に相乗りする: どちらの道でも会話は続き、最初からやり直しにならない。
-      const result = await this.send(managerId, usageRotationNudge());
+      // 抱えている古い鍵が使えないとき背景処理を理由に止めない（#4850）。`send()` ではなく `#send()` を使う: 人間・クローンの `manager_send` の振る舞い（預かり・15 分待ち）を変えないため
+      const result = await this.#send(managerId, usageRotationNudge(), {}, 'usage-rotation');
       if (result.outcome === 'delivered' || result.outcome === 'answered') return 'nudged';
       await this.#journal({
         type: 'exchange',

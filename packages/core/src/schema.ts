@@ -1257,6 +1257,8 @@ export const jobSchema = z.object({
   pendingFoldNotice: z
     .object({
       backgroundTasks: z.number().int().nonnegative(),
+      // 畳んだ背景処理のコマンド（伏せ字済み・字数を切ってある）。分かった分だけ。担当が起こし直す手がかり（#4850）
+      commands: z.array(z.string()).optional(),
       at: isoDateTime,
     })
     .optional(),
