@@ -639,6 +639,8 @@ export const managerSummarySchema = z.object({
   lastSystemError: jobSchema.shape.lastSystemError,
   lastCgroupEvents: jobSchema.shape.lastCgroupEvents,
   usageStoppedAt: jobSchema.shape.usageStoppedAt,
+  supersededBy: jobSchema.shape.supersededBy,
+  supersedes: jobSchema.shape.supersedes,
   runnerVanished: z.literal(true).optional(),
   runnerListedAt: isoDateTimeSchema.optional(),
   runnerId: z.string().optional(),

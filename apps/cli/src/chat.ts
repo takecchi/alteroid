@@ -3318,6 +3318,10 @@ export function renderManagerList(
     if (failed !== null) lines.push(`      ${failed}`);
     const usageStopped = usageStoppedLine(manager.usageStoppedAt, manager.status);
     if (usageStopped !== null) lines.push(usageStopped);
+    // 前任・後継は短く出す（#4861）
+    if (manager.supersededBy !== undefined)
+      lines.push(`      後継: ${manager.supersededBy}（以後は自動で起こさない）`);
+    if (manager.supersedes !== undefined) lines.push(`      前任: ${manager.supersedes}`);
     const systemError = systemErrorLine(manager.status, manager.lastSystemError);
     if (systemError !== null) lines.push(systemError);
     const cgroupEvents = cgroupEventsLine(manager.status, manager.lastCgroupEvents);

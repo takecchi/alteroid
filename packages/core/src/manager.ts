@@ -209,6 +209,11 @@ export interface ManagerStartInput {
    * `manager-attachments` を名乗らなければ断る: 欄が黙って捨てられるため。
    */
   attachments?: RunnerAttachment[];
+  /**
+   * 前任の managerId。failed / lost などで終わった担当の後継を立てるときに渡す: 前任の枠で止まった印を下ろし、自動の起こし直しの対象から外す（#4861）。
+   * 前任が終わっていないとき（running / waiting_human / 生きている done）は断る: 止めるのはクローンの判断で、黙って止めない。
+   */
+  supersedes?: string;
 }
 
 /**
@@ -434,6 +439,10 @@ export interface ManagerSummary {
    * もう一方を推測しない。
    */
   usageStoppedAt?: string;
+  /** 後継へ引き継いだ前任の側に立つ。自動の起こし直しの対象外（#4861）。 */
+  supersededBy?: string;
+  /** 後継の側に立つ、前任の id（#4861）。 */
+  supersedes?: string;
   runnerId?: string;
   workspace?: WorkspaceLocator;
   /**
@@ -2519,6 +2528,7 @@ const KNOWN_SYNTHESIZED_NOTICE_LABELS: Record<string, string> = {
   closed_done_silent: 'report を出さないまま閉じた（done）',
   turn_failed: '応答を返さずに終わったターンの報告',
   closed_withheld_flush: '委譲の終了と、背景処理の完了待ちで畳んでいた報告の配り',
+  usage_rewoken: '枠で落ちていた failed / lost の委譲を、新しい鍵で自動で起こし直した',
   resume_fallback: '器の入れ替えで前のセッションへ戻れず、生ログから作り直して続けた',
   resume_failed: '器の入れ替えで前のセッションへ戻れず、再開そのものに失敗した',
   resume_unconfirmed: '器の入れ替えの後の再開が、期限までに戻れたと確かめられなかった',
@@ -3275,6 +3285,8 @@ class Pool implements ManagerPool {
   async start(input: ManagerStartInput): Promise<ManagerSummary> {
     if (this.#stopped) throw new Error('デーモンが停止中のためマネージャーを起こせない');
     await this.#ensureConnected();
+    // 新しい委譲を起こす前に前任を確かめる: 断るなら、後継を起こさず台帳にも跡を残さない（#4861）
+    if (input.supersedes !== undefined) await this.#assertSupersedable(input.supersedes);
 
     const runner = await this.#runners.select({
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
@@ -3330,6 +3342,7 @@ class Pool implements ManagerPool {
         ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
         summary: brief({ request: input.request }),
         request: input.request,
+        ...(input.supersedes === undefined ? {} : { supersedes: input.supersedes }),
         cwd,
         runnerId: runner.runnerId,
         // 確かめずに `runner-volume` と書かない: デーモンからは `/workspace` が永続かを知る手段が無く、
@@ -3385,6 +3398,8 @@ class Pool implements ManagerPool {
       text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${input.request}`,
       ...(startAttachments.length === 0 ? {} : { attachments: attachmentRefsOf(startAttachments) }),
     });
+    if (input.supersedes !== undefined)
+      await this.#handOverToSuccessor(input.supersedes, managerId);
     const silent = this.#silentRunners();
     const registeredRunnerIds = this.#registeredRunnerIds();
     const summary = summaryOf(
@@ -5893,6 +5908,8 @@ class Pool implements ManagerPool {
     try {
       const record = this.#records.get(managerId) ?? (await this.#load(managerId));
       if (record === null) return 'gone';
+      // 後継へ引き継いだ前任は起こさない（#4861）: 枠の印が残っていても、二重に走らせない
+      if (record.job.supersededBy !== undefined) return 'gone';
       const status = record.job.status;
       const allowRunning = options?.allowRunning === true;
       if (status === 'waiting_human') return 'still-running';
@@ -5919,6 +5936,17 @@ class Pool implements ManagerPool {
             `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] 枠で止まっていた委譲を、通る鍵で続きから起こし直した` +
             `（status=${status}, outcome=${result.outcome}）`,
         });
+        // failed / lost だけクローンへ知らせる（#4861）: 終わっていたはずの担当が起き上がるので、後継を立てていたなら二重になる。
+        // done は生きていて続きを促しただけ（いつもの続き）なので積まない。
+        if (status === 'failed' || status === 'lost') {
+          this.#queueSynthesizedNotice(
+            managerId,
+            'usage_rewoken',
+            `[${managerId}] を新しい鍵で起こし直した（枠で落ちていた。status=${status}）。` +
+              '後継を立てていたなら、どちらかを manager_stop で止めること' +
+              '（後継を立てるときは manager_start の supersedes に前任を渡すと、前任は起き上がらない）。',
+          );
+        }
         return 'nudged';
       }
       await this.#journal({
@@ -6012,6 +6040,64 @@ class Pool implements ManagerPool {
       }
     } catch (error) {
       noteDroppedRecord('resets時刻の突き合わせ', `managerId=${event.managerId}`, error);
+    }
+  }
+
+  /**
+   * 前任として受けてよいかを確かめる。断るときは投げる（黙って止めない: 止めるのはクローンの判断）。
+   * 受けるのは failed / lost / stopped、および像に居ない（`#retire` 済み）か、像が居ても生きていない done。
+   * done で `attached` が真なら、runner にセッションが生きている（手が空いただけ）ので断る。
+   */
+  async #assertSupersedable(predecessorId: string): Promise<void> {
+    const record = this.#records.get(predecessorId) ?? (await this.#load(predecessorId));
+    if (record === null) {
+      throw new Error(
+        `前任 ${predecessorId} が台帳に無いため、supersedes に渡せない（id が違うか、manager_list に出ていない）`,
+      );
+    }
+    const status = record.job.status;
+    if (
+      status === 'running' ||
+      status === 'waiting_human' ||
+      (status === 'done' && record.attached)
+    ) {
+      throw new Error(
+        `前任 ${predecessorId} はまだ終わっていない（status=${status}${status === 'done' ? '・セッションが生きている' : ''}）ため、` +
+          '後継を立てない。先に manager_stop で止めること（黙って止めない: 止めるのはクローンの判断）。',
+      );
+    }
+    if (record.job.supersededBy !== undefined) {
+      throw new Error(
+        `前任 ${predecessorId} は既に後継 ${record.job.supersededBy} へ引き継いである。後継を二重に立てない。`,
+      );
+    }
+  }
+
+  /**
+   * 前任を「後継に引き継いだ」として扱う（#4861）。枠の印・挑み直し・借りを下ろし、台帳へ `supersededBy` を写す。
+   * 以後 `#nudgeForUsageRotation` は前任を `gone` とみなし、鍵の回転・周回の掃き・起動時の組み直しが前任を起こさない。
+   * 投げない: 後継は既に起きており、ここで落ちると呼び元が後継の managerId を受け取れなくなる。
+   */
+  async #handOverToSuccessor(predecessorId: string, successorId: string): Promise<void> {
+    try {
+      const record = this.#records.get(predecessorId) ?? (await this.#load(predecessorId));
+      if (record === null) return;
+      record.job.supersededBy = successorId;
+      this.#usageWakeOwed.delete(predecessorId);
+      // 印の解除は台帳へ書く口を兼ねる。印が無くても `supersededBy` は書く
+      await this.#clearUsageStoppedMark(predecessorId);
+      await this.#persist(record);
+      const held = record.job.heldMessages ?? [];
+      if (held.length > 0) {
+        await this.#releaseHeld(record, held.length, `後継 ${successorId} に引き継いだ`);
+      }
+      await this.#journal({
+        type: 'decision',
+        decision: `[${predecessorId}] を後継 [${successorId}] に引き継いだ（以後は自動で起こさない）`,
+        grounds: '後継を立てた前任が、鍵の回転で起き上がって二重に走るのを防ぐ（supersedes）。',
+      });
+    } catch (error) {
+      noteDroppedRecord('前任の引き継ぎ', `managerId=${predecessorId}`, error);
     }
   }
 
@@ -6190,7 +6276,8 @@ class Pool implements ManagerPool {
       if (this.#records.has(job.id)) continue;
 
       // 下で `continue` される `lost` より前に置く: 印を組み直さないと `resumeStoppedByUsage()` が `lost` の委譲を回転の対象にすら入れない。
-      if (job.usageStoppedAt !== undefined) {
+      // 後継へ引き継いだ前任（`supersededBy`）の印は組み直さない（#4861）
+      if (job.usageStoppedAt !== undefined && job.supersededBy === undefined) {
         this.#usageStopped.add(job.id);
         // すぐ挑む挑み直しの状態を入れる（#4852）: 挑み直しの状態はメモリだけで再起動で消え、生きていない委譲は像にも載らないので、入れないと次の鍵の出来事まで誰も起こさない
         if (!this.#usageWakeRetry.has(job.id)) {
@@ -11633,6 +11720,8 @@ function summaryOf(
     ...(job.lastSystemError === undefined ? {} : { lastSystemError: job.lastSystemError }),
     ...(job.lastCgroupEvents === undefined ? {} : { lastCgroupEvents: job.lastCgroupEvents }),
     ...(usageStoppedAt === undefined ? {} : { usageStoppedAt }),
+    ...(job.supersededBy === undefined ? {} : { supersededBy: job.supersededBy }),
+    ...(job.supersedes === undefined ? {} : { supersedes: job.supersedes }),
     ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
     // `unknown` を黙って落とさない: 欄ごと消すと「取れなかった」という観測が消える。
     ...(job.workspace === undefined ? {} : { workspace: job.workspace }),

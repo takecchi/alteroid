@@ -6913,6 +6913,9 @@ export function createCloneTools(context: ToolContext) {
           '全台が飽和でも、runnerId で名指ししても断らず起こす——置き先が飽和と判定されていれば' +
           '応答に「⚠ 置き先の runner は pids 飽和と判定されている: 材料」の行が付くので、' +
           '落ちる前提で読むこと。',
+        'failed / lost の前任の後継を立てるときは supersedes に前任の managerId を渡すこと。' +
+          '渡さないと、鍵の回転で前任が起き上がって二重になりうる。' +
+          '前任が終わっていない（running / waiting_human / 生きている done）と断られる——先に manager_stop で止めること。',
       ].join(' '),
       {
         request: z
@@ -6932,10 +6935,19 @@ export function createCloneTools(context: ToolContext) {
               '指名した器が名簿に無い・使えない・名前が重複のときは失敗し、他の器へは' +
               '自動で落とさない（返ってきた文言をそのまま読むこと）。',
           ),
+        supersedes: z
+          .string()
+          .optional()
+          .describe(
+            '前任の managerId（manager_list に出ている id）。failed / lost の前任の後継を立てるときに渡す。' +
+              '前任の枠で止まった印を下ろし、自動の起こし直しの対象から外す。' +
+              '前任が終わっていなければ断られる（先に manager_stop で止めること）。',
+          ),
       },
       async (rawArgs) => {
-        const { request, cwd, runnerId, attachments } = rawArgs as unknown as {
+        const { request, cwd, runnerId, attachments, supersedes } = rawArgs as unknown as {
           request: string;
+          supersedes?: string | undefined;
           cwd?: string | undefined;
           attachments?: string[] | undefined;
           runnerId?: string | undefined;
@@ -6978,6 +6990,7 @@ export function createCloneTools(context: ToolContext) {
             request,
             ...(cwd === undefined ? {} : { cwd }),
             ...(runnerId === undefined ? {} : { runnerId }),
+            ...(supersedes === undefined ? {} : { supersedes }),
             ...(conversationId === undefined ? {} : { conversationId }),
             ...(handover.attachments.length === 0 ? {} : { attachments: handover.attachments }),
           });
@@ -7542,6 +7555,11 @@ export function createCloneTools(context: ToolContext) {
                   '判断したときだけ manager_start で起こし直すこと。'
                 : null,
               describeJobOrigin(origins, manager.managerId),
+              // 前任・後継は短く1行で出す: 自動の起こし直しの対象外か、どれの後継かを一覧で読めるように（#4861）
+              manager.supersededBy === undefined
+                ? null
+                : `  後継: ${manager.supersededBy}（以後は自動で起こさない）`,
+              manager.supersedes === undefined ? null : `  前任: ${manager.supersedes}`,
               unobservedOutcomeLine(manager),
               // 拒否は `status` に映らないので、状態の値は増やさず状態に添える
               denialLine(context.managers?.denials(manager.managerId) ?? [], manager.lastReportAt),
