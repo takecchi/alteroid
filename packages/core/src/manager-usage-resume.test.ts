@@ -239,6 +239,8 @@ describe('枠で止まった委譲を、鍵が通る状態へ戻った時点で�
     expect(s.fake.sends).toHaveLength(1);
     expect(s.fake.sends[0]?.text).toContain('通る鍵に戻った');
     expect(s.fake.sends[0]?.text).toContain('最初からやり直さないこと');
+    // 枠で落ちた作業者は鍵が戻っても自動では戻らないので、頼み直す道を書く（#4871）
+    expect(s.fake.sends[0]?.text).toContain('SendMessage でその作業者に続きを頼み直すこと');
     expect(s.fake.resumes).toHaveLength(0);
   });
 
