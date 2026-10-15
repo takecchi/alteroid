@@ -1,5 +1,5 @@
 import { reasonOf } from './dropped-record.js';
-import { DAEMON_RESTART_REQUIRED_ENV_NAMES } from './env-vars-boot.js';
+import { DAEMON_RESTART_REQUIRED_ENV_NAMES } from './app-env-var-defaults.js';
 import {
   CREDENTIAL_NAME,
   CREDENTIAL_NAME_MAX_LENGTH,
