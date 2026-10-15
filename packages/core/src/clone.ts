@@ -230,7 +230,14 @@ import { collapseErrorCause } from './error-cause.js';
 import { resolveBuildRevision, resolveBuildTime } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import { UnreadableApprovalError, findOpenManagerDuplicate } from './store.js';
-import type { CommitmentList, PendingInboxEvent, Stores } from './store.js';
+import type {
+  CommitmentList,
+  LostSessionGrave,
+  PendingInboxEvent,
+  Stores,
+  TranscriptGrave,
+} from './store.js';
+import { MAX_PENDING_GRAVES } from './grave-queue.js';
 import {
   cloneToolCarriesSecrets,
   cloneToolJournalsItself,
@@ -4290,11 +4297,7 @@ class Clone implements CloneHost {
       // 墓標を立てる: 蒸留が落ちる主な理由は枠で、枠は待てば開くが、印が無いと開いた後に拾う手がかりが残らないため。投げない: 失敗の報告の途中のため
       const id = archiveId;
       if (id !== null) {
-        await this.#stores.sessions
-          .setTranscriptGrave({ archiveId: id })
-          .catch((graveError: unknown) => {
-            noteDroppedRecord('墓標の記録', id, graveError);
-          });
+        await this.#addTranscriptGrave(id);
       }
     }
     return archived;
@@ -4337,6 +4340,33 @@ class Clone implements CloneHost {
   }
 
   /** 契機から拾い直しを起こす。墓標が無ければ日誌も書かない（毎回の鍵の切替が日誌を埋めないため）。 */
+  /**
+   * 墓標を、既にある墓標を消さずに足す（#4884）。足せたら `true`。投げない（呼び出し側は失敗の報告の途中）。
+   * 上限（`MAX_PENDING_GRAVES`）を超えて古い墓標が落ちたら、落とした区間は記憶へ移せないので ⚠ で日誌に残す。
+   */
+  async #addTranscriptGrave(archiveId: string): Promise<boolean> {
+    try {
+      const { dropped } = await this.#stores.sessions.addTranscriptGrave({ archiveId });
+      await this.#reportDroppedGraves('生ログの墓標', dropped);
+      return true;
+    } catch (graveError) {
+      noteDroppedRecord('墓標の記録', archiveId, graveError);
+      return false;
+    }
+  }
+
+  async #reportDroppedGraves(what: string, dropped: readonly string[]): Promise<void> {
+    if (dropped.length === 0) return;
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_FAILURE_PREFIX}${what}が上限（${String(MAX_PENDING_GRAVES)} 件）を超えたので、` +
+        `古いものから落とした: ${dropped.join(', ')}（⚠️ この区間は記憶へ移せていない）`,
+    });
+  }
+
   #retryGravesFor(trigger: string, options: { onlyIfKeyChanged?: boolean } = {}): void {
     if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return;
     // 鍵が変わっていない契機では起こさない: 同じ鍵で撃ち直しても同じ枠に当たるだけのため。鍵の身元が取れないときは起こす（能力を削らない側）
@@ -4344,11 +4374,11 @@ class Clone implements CloneHost {
       if (this.#currentTokenKey() === this.#graveFailedTokenKey) return;
     }
     void (async () => {
-      const [transcriptGrave, lostGrave] = await Promise.all([
-        this.#stores.sessions.getTranscriptGrave().catch(() => null),
-        this.#stores.sessions.getLostSessionGrave().catch(() => null),
+      const [transcriptGraves, lostGraves] = await Promise.all([
+        this.#stores.sessions.listTranscriptGraves().catch(() => []),
+        this.#stores.sessions.listLostSessionGraves().catch(() => []),
       ]);
-      if (transcriptGrave === null && lostGrave === null) return;
+      if (transcriptGraves.length === 0 && lostGraves.length === 0) return;
       await this.#journal({
         type: 'decision',
         decision: `墓標の拾い直しを、契機（${trigger}）で起こし直した`,
@@ -4364,9 +4394,15 @@ class Clone implements CloneHost {
 
   // 起動時と、鍵が回った・枠が解けた契機（`#retryGravesFor`）で拾う: 契機の無いまま試し直しても枠はまだ閉じているため。`load()` ではなく `archive.readTail` から拾う: 退避は済んでおり、`load` は 60 秒の予算に掛かるため
   async #pickUpTranscriptGrave(): Promise<void> {
-    const grave = await this.#stores.sessions.getTranscriptGrave();
-    if (grave === null) return;
+    // 古い順に1本ずつ（#4884）。1本が落ちても残りは試す: 落ちた1本が居座って後ろの区間を塞がないため
+    for (const grave of await this.#stores.sessions.listTranscriptGraves()) {
+      await this.#pickUpOneTranscriptGrave(grave).catch((error: unknown) => {
+        noteDroppedRecord('墓標の拾い直し', grave.archiveId, error);
+      });
+    }
+  }
 
+  async #pickUpOneTranscriptGrave(grave: TranscriptGrave): Promise<void> {
     // `read()`（全文）ではなく `readTail()`（末尾）を使う: `archive` の1行は最大 78.3 MB に育ち、全体をヒープへ載せると起動のたびに走るこの経路が OOM を起こしうるため
     const result = await this.#stores.archive.readTail(
       grave.archiveId,
@@ -4471,20 +4507,32 @@ class Clone implements CloneHost {
     const projectKey = this.#projectKey ?? (await this.#stores.sessions.getProjectKey());
     if (projectKey === null) return;
 
-    await this.#stores.sessions
-      .setLostSessionGrave({ projectKey, sessionId })
-      .catch((error: unknown) => {
-        noteDroppedRecord('捨てたセッションの記録', sessionId, error);
+    try {
+      const { dropped } = await this.#stores.sessions.addLostSessionGrave({
+        projectKey,
+        sessionId,
       });
+      await this.#reportDroppedGraves('捨てたセッションの墓標', dropped);
+    } catch (error) {
+      noteDroppedRecord('捨てたセッションの記録', sessionId, error);
+    }
   }
 
   // `load()` は使わない: 全件を戻すと SDK が掛けている 60 秒の予算に当たりに行くため
   async #pickUpLostSession(): Promise<void> {
     const tail = this.#stores.sessionTranscriptTail;
     if (tail === undefined) return;
-    const grave = await this.#stores.sessions.getLostSessionGrave();
-    if (grave === null) return;
+    for (const grave of await this.#stores.sessions.listLostSessionGraves()) {
+      await this.#pickUpOneLostSession(tail, grave).catch((error: unknown) => {
+        noteDroppedRecord('捨てたセッションの拾い直し', grave.sessionId, error);
+      });
+    }
+  }
 
+  async #pickUpOneLostSession(
+    tail: NonNullable<Stores['sessionTranscriptTail']>,
+    grave: LostSessionGrave,
+  ): Promise<void> {
     const transcript = await tail.readTail(grave, DISTILL_TRANSCRIPT_TAIL_CHARS);
     if (transcript === null) {
       // 印だけを残さない: 残すと、拾えないものを起動のたびに引きに行くため
@@ -6317,20 +6365,15 @@ class Clone implements CloneHost {
       // 区間を別に持たない: 墓標は1枠で、`archiveId` が「どの時点の生ログか」をそのまま表すため。成功した回は立てない（この `catch` の中だけ）
       const id = archiveId;
       if (id !== null) {
-        await this.#stores.sessions
-          .setTranscriptGrave({ archiveId: id })
-          .then(async () => {
-            await this.#journal({
-              type: 'decision',
-              decision: `PreCompact の蒸留を墓標へ回した: ${id}`,
-              grounds:
-                'compaction で会話が要約に潰れるため、その前の区間は生ログの退避でしか残らない。' +
-                '蒸留が枠で落ちたので、記憶へ移すのを拾い直しへ委ねる（#4884）',
-            });
-          })
-          .catch((graveError: unknown) => {
-            noteDroppedRecord('墓標の記録', id, graveError);
+        if (await this.#addTranscriptGrave(id)) {
+          await this.#journal({
+            type: 'decision',
+            decision: `PreCompact の蒸留を墓標へ回した: ${id}`,
+            grounds:
+              'compaction で会話が要約に潰れるため、その前の区間は生ログの退避でしか残らない。' +
+              '蒸留が枠で落ちたので、記憶へ移すのを拾い直しへ委ねる（#4884）',
           });
+        }
       }
     }
   }

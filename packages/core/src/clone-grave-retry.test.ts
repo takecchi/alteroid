@@ -166,6 +166,37 @@ describe('クローン — 枠で落ちた蒸留を鍵の契機で拾い直す�
     expect(sideCallsWith(t.calls, 'OK-MARKER-3')).toBe(1);
     await t.clone.stop();
   });
+
+  it('未処理の墓標 A があるところへ PreCompact の失敗で B を立てても A は残り、A・B とも記憶へ移って両方下りる', async () => {
+    const stores = createMemoryStores();
+    const archiveA = (await stores.archive.archive('sess-old', 'GRAVE-A-MARKER-4 別のセッション'))
+      .id;
+    await stores.sessions.setTranscriptGrave({ archiveId: archiveA });
+    const t = build({ stores });
+    const { events } = wireEvents(t.clone, 'conv-1');
+    await waitFor(() => sideCallsWith(t.calls, 'GRAVE-A-MARKER-4') === 1, '起動時に A が落ちる');
+    t.clone.post(humanMessage('やあ'));
+    await waitForDone(events);
+
+    const dir = await makeTempDir('alteroid-clone-grave-retry-two-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, 'GRAVE-B-MARKER-4 compaction の前', 'utf8');
+    await firePreCompact(t.calls, transcriptPath);
+
+    const ids = (await stores.sessions.listTranscriptGraves()).map((g) => g.archiveId);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toBe(archiveA);
+
+    t.state.failing = false;
+    t.clone.recycleSessionForToken();
+    await waitFor(
+      async () => (await stores.sessions.listTranscriptGraves()).length === 0,
+      'A・B とも拾われて下りる',
+    );
+    expect(sideCallsWith(t.calls, 'GRAVE-A-MARKER-4')).toBe(2);
+    expect(sideCallsWith(t.calls, 'GRAVE-B-MARKER-4')).toBe(2);
+    await t.clone.stop();
+  });
 });
 
 // 拾い直しの列が空になるのを待つ（実時間の待ちを足さない）。内部の列は見えないので、ストアの読みを数周回して流す

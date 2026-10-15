@@ -99,8 +99,10 @@ export async function foldArchiveOnce(
   const before = new Date(now.getTime() - graceMs).toISOString();
 
   const entries = await options.stores.archive.list();
-  const grave = await options.stores.sessions.getTranscriptGrave();
-  const protectedIds = grave === null ? [] : [grave.archiveId];
+  // 順番待ちの墓標も守る（#4884）
+  const protectedIds = (await options.stores.sessions.listTranscriptGraves()).map(
+    (g) => g.archiveId,
+  );
 
   const selection = selectArchiveRemovalTargets(
     entries,

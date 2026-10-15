@@ -7,6 +7,7 @@ import {
   NulNotAllowedError,
   verifyMcpServerStoreContract,
   verifyMcpServersIfMatchContract,
+  verifySessionRegistryGraveQueueContract,
   verifySessionRegistryNulContract,
   verifyProfileStoreContract,
 } from '@alteroid/core';
@@ -420,6 +421,10 @@ describe('PgTokenPoolStore', () => {
 describe('PgSessionRegistry', () => {
   it('NUL の契約（issue #2927。3実装で同じことを測る）', async () => {
     await verifySessionRegistryNulContract(stores.sessions);
+  });
+
+  it('墓標は上書きされず複数持てる（#4884。3実装で同じことを測る）', async () => {
+    await verifySessionRegistryGraveQueueContract(stores.sessions);
   });
 
   describe('墓標の compare-and-set（#1157）', () => {

@@ -1,5 +1,7 @@
 import {
+  addGrave,
   assertNoNul,
+  listGraves,
   noteSessionMaterialUnreadable,
   type LostSessionGrave,
   type SessionRegistry,
@@ -35,6 +37,63 @@ const CLONE_SESSION_KEY = 'clone_session_id';
 const CLONE_TRANSCRIPT_GRAVE_KEY = 'clone_transcript_grave';
 const CLONE_LOST_SESSION_KEY = 'clone_lost_session';
 const CLONE_PROJECT_KEY = 'clone_project_key';
+// 枠の後ろの順番待ち（#4884）。JSON 配列を1行に置く。行が無ければ空として読めるので、古い版のデータはそのまま読め、表の変更（migrate）は要らない。
+const CLONE_TRANSCRIPT_GRAVE_QUEUE_KEY = 'clone_transcript_grave_queue';
+const CLONE_LOST_SESSION_QUEUE_KEY = 'clone_lost_session_queue';
+
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+function parseArchiveGrave(raw: string): TranscriptGrave | null {
+  return parseStoredJson(raw, '生ログの墓標（clone_transcript_grave）', (parsed) => {
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const archiveId = (parsed as { archiveId?: unknown }).archiveId;
+    return typeof archiveId === 'string' && archiveId.length > 0 ? { archiveId } : null;
+  });
+}
+
+function parseLostGrave(raw: string): LostSessionGrave | null {
+  return parseStoredJson(raw, '再開素材を捨てた回の墓標（clone_lost_session）', (parsed) => {
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const { projectKey, sessionId } = parsed as { projectKey?: unknown; sessionId?: unknown };
+    if (typeof projectKey !== 'string' || projectKey.length === 0) return null;
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return null;
+    return { projectKey, sessionId };
+  });
+}
+
+function parseQueue<T>(raw: string, what: string, one: (value: unknown) => T | null): T[] {
+  return (
+    parseStoredJson(raw, what, (parsed) => {
+      if (!Array.isArray(parsed)) return null;
+      return parsed.map(one).filter((item): item is T => item !== null);
+    }) ?? []
+  );
+}
+
+const parseArchiveQueue = (raw: string): TranscriptGrave[] =>
+  parseQueue(raw, '生ログの墓標の順番待ち', (v) => parseArchiveGrave(JSON.stringify(v)));
+const parseLostQueue = (raw: string): LostSessionGrave[] =>
+  parseQueue(raw, '再開素材を捨てた回の墓標の順番待ち', (v) => parseLostGrave(JSON.stringify(v)));
+
+// 行を先に作ってから `for update` で読む: 行が無いと、ロックの掛けようが無く同時の追加が同じ空の列から始まるため
+async function lockQueue<T>(tx: Tx, key: string, parse: (raw: string) => T[]): Promise<T[]> {
+  await tx.insert(daemonState).values({ key, value: '[]' }).onConflictDoNothing();
+  const rows = await tx
+    .select({ value: daemonState.value })
+    .from(daemonState)
+    .where(eq(daemonState.key, key))
+    .for('update')
+    .limit(1);
+  const raw = rows[0]?.value ?? null;
+  return raw === null ? [] : parse(raw);
+}
+
+async function writeQueue(tx: Tx, key: string, queue: unknown[]): Promise<void> {
+  await tx
+    .update(daemonState)
+    .set({ value: JSON.stringify(queue) })
+    .where(eq(daemonState.key, key));
+}
 // 蒸留の失敗回数は墓標の本体と別の key に置く（#4752）: `clearTranscriptGraveIf` が生の文字列で突き合わせるので、墓標の値へ相乗りさせると一致しなくなるため。
 const DISTILL_FAILURES_KEYS = {
   transcript: 'clone_transcript_grave_distill_failures',
@@ -112,16 +171,92 @@ export class PgSessionRegistry implements SessionRegistry {
   // 判定と削除を1文にする: 読みと書きの間に別の書き手が入る窓を作らないため。
   // 生の文字列で突き合わせる: `TranscriptGrave` の欄が `archiveId` ひとつだけなので一意に決まる。欄が増えたら見直すこと。
   async clearTranscriptGraveIf(archiveId: string): Promise<boolean> {
-    const removed = await this.#db
-      .delete(daemonState)
-      .where(
-        and(
-          eq(daemonState.key, CLONE_TRANSCRIPT_GRAVE_KEY),
-          eq(daemonState.value, JSON.stringify({ archiveId })),
-        ),
-      )
-      .returning({ key: daemonState.key });
-    return removed.length > 0;
+    // 順番待ちの行を先にロックする（足す回と同じ順）: 枠と列を別々に書くと、足す回と下ろす回が互いの書き込みを消す
+    return this.#db.transaction(async (tx) => {
+      const queue = await lockQueue(tx, CLONE_TRANSCRIPT_GRAVE_QUEUE_KEY, parseArchiveQueue);
+      const removed = await tx
+        .delete(daemonState)
+        .where(
+          and(
+            eq(daemonState.key, CLONE_TRANSCRIPT_GRAVE_KEY),
+            eq(daemonState.value, JSON.stringify({ archiveId })),
+          ),
+        )
+        .returning({ key: daemonState.key });
+      const remaining = queue.filter((g) => g.archiveId !== archiveId);
+      if (remaining.length !== queue.length) {
+        await writeQueue(tx, CLONE_TRANSCRIPT_GRAVE_QUEUE_KEY, remaining);
+      }
+      return removed.length > 0 || remaining.length !== queue.length;
+    });
+  }
+
+  async #readTranscriptPrimary(tx: Tx): Promise<TranscriptGrave | null> {
+    const rows = await tx
+      .select({ value: daemonState.value })
+      .from(daemonState)
+      .where(eq(daemonState.key, CLONE_TRANSCRIPT_GRAVE_KEY))
+      .limit(1);
+    const raw = rows[0]?.value ?? null;
+    return raw === null ? null : parseArchiveGrave(raw);
+  }
+
+  async addTranscriptGrave(grave: TranscriptGrave): Promise<{ dropped: string[] }> {
+    return this.#db.transaction(async (tx) => {
+      const queue = await lockQueue(tx, CLONE_TRANSCRIPT_GRAVE_QUEUE_KEY, parseArchiveQueue);
+      const primary = await this.#readTranscriptPrimary(tx);
+      const next = addGrave({ primary, queue }, grave, (a, b) => a.archiveId === b.archiveId);
+      if (next.primary !== null && next.primary.archiveId !== primary?.archiveId) {
+        const value = JSON.stringify(next.primary);
+        await tx
+          .insert(daemonState)
+          .values({ key: CLONE_TRANSCRIPT_GRAVE_KEY, value })
+          .onConflictDoUpdate({ target: daemonState.key, set: { value } });
+      }
+      await writeQueue(tx, CLONE_TRANSCRIPT_GRAVE_QUEUE_KEY, next.queue);
+      return { dropped: next.dropped.map((g) => g.archiveId) };
+    });
+  }
+
+  async listTranscriptGraves(): Promise<TranscriptGrave[]> {
+    return this.#db.transaction(async (tx) => {
+      const queue = await lockQueue(tx, CLONE_TRANSCRIPT_GRAVE_QUEUE_KEY, parseArchiveQueue);
+      return listGraves({ primary: await this.#readTranscriptPrimary(tx), queue });
+    });
+  }
+
+  async #readLostPrimary(tx: Tx): Promise<LostSessionGrave | null> {
+    const rows = await tx
+      .select({ value: daemonState.value })
+      .from(daemonState)
+      .where(eq(daemonState.key, CLONE_LOST_SESSION_KEY))
+      .limit(1);
+    const raw = rows[0]?.value ?? null;
+    return raw === null ? null : parseLostGrave(raw);
+  }
+
+  async addLostSessionGrave(grave: LostSessionGrave): Promise<{ dropped: string[] }> {
+    return this.#db.transaction(async (tx) => {
+      const queue = await lockQueue(tx, CLONE_LOST_SESSION_QUEUE_KEY, parseLostQueue);
+      const primary = await this.#readLostPrimary(tx);
+      const next = addGrave({ primary, queue }, grave, (a, b) => a.sessionId === b.sessionId);
+      if (next.primary !== null && next.primary.sessionId !== primary?.sessionId) {
+        const value = JSON.stringify(next.primary);
+        await tx
+          .insert(daemonState)
+          .values({ key: CLONE_LOST_SESSION_KEY, value })
+          .onConflictDoUpdate({ target: daemonState.key, set: { value } });
+      }
+      await writeQueue(tx, CLONE_LOST_SESSION_QUEUE_KEY, next.queue);
+      return { dropped: next.dropped.map((g) => g.sessionId) };
+    });
+  }
+
+  async listLostSessionGraves(): Promise<LostSessionGrave[]> {
+    return this.#db.transaction(async (tx) => {
+      const queue = await lockQueue(tx, CLONE_LOST_SESSION_QUEUE_KEY, parseLostQueue);
+      return listGraves({ primary: await this.#readLostPrimary(tx), queue });
+    });
   }
 
   async getLostSessionGrave(): Promise<LostSessionGrave | null> {
@@ -159,6 +294,12 @@ export class PgSessionRegistry implements SessionRegistry {
   // 生の文字列で突き合わせない: 欄が2つあり、`projectKey` を呼び出し側が持っていないため。同じトランザクションの中で読んでから消す。
   async clearLostSessionGraveIf(sessionId: string): Promise<boolean> {
     return this.#db.transaction(async (tx) => {
+      // 順番待ちの行を先にロックする（足す回と同じ順）
+      const queue = await lockQueue(tx, CLONE_LOST_SESSION_QUEUE_KEY, parseLostQueue);
+      const remaining = queue.filter((g) => g.sessionId !== sessionId);
+      const queueHit = remaining.length !== queue.length;
+      if (queueHit) await writeQueue(tx, CLONE_LOST_SESSION_QUEUE_KEY, remaining);
+
       const rows = await tx
         .select({ value: daemonState.value })
         .from(daemonState)
@@ -166,13 +307,13 @@ export class PgSessionRegistry implements SessionRegistry {
         .for('update')
         .limit(1);
       const raw = rows[0]?.value ?? null;
-      if (raw === null) return false;
+      if (raw === null) return queueHit;
       const parsed = parseStoredJson(raw, '再開素材を捨てた回の墓標（clone_lost_session）', (v) => {
         if (typeof v !== 'object' || v === null) return null;
         const id = (v as { sessionId?: unknown }).sessionId;
         return typeof id === 'string' && id.length > 0 ? { sessionId: id } : null;
       });
-      if (parsed?.sessionId !== sessionId) return false;
+      if (parsed?.sessionId !== sessionId) return queueHit;
       await tx.delete(daemonState).where(eq(daemonState.key, CLONE_LOST_SESSION_KEY));
       return true;
     });
@@ -251,6 +392,8 @@ export class PgSessionRegistry implements SessionRegistry {
           CLONE_SESSION_KEY,
           CLONE_TRANSCRIPT_GRAVE_KEY,
           CLONE_LOST_SESSION_KEY,
+          CLONE_TRANSCRIPT_GRAVE_QUEUE_KEY,
+          CLONE_LOST_SESSION_QUEUE_KEY,
           CLONE_PROJECT_KEY,
         ]),
       )

@@ -158,6 +158,7 @@ import {
 import { assertNoNul, hasNul, stripNul, stripNulDeep } from './nul-guard.js';
 import { prepareApprovalForWrite, prepareJobForWrite } from './job-input.js';
 import { preparePermissionGrantForPut } from './permission-grant-input.js';
+import { addGrave, listGraves, removeGrave } from './grave-queue.js';
 import { assertProfileRowWritable } from './profile-input.js';
 import { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
 import {
@@ -289,6 +290,9 @@ export function createMemoryStores(): Stores {
   let cloneSessionId: string | null = null;
   let transcriptGrave: TranscriptGrave | null = null;
   let lostSessionGrave: LostSessionGrave | null = null;
+  // 枠の後ろの順番待ち（#4884）
+  let transcriptGraveQueue: TranscriptGrave[] = [];
+  let lostSessionGraveQueue: LostSessionGrave[] = [];
   const distillFailureRecords: Record<
     'transcript' | 'lost_session',
     { graveId: string; failures: number } | null
@@ -1005,9 +1009,39 @@ export function createMemoryStores(): Stores {
     },
     // 判定と書き込みの間に `await` を置かない: 同期なら割り込まれる窓が無く、挟むと窓が生まれる（`SessionRegistry.clearTranscriptGraveIf` の doc）。
     async clearTranscriptGraveIf(archiveId) {
-      if (transcriptGrave?.archiveId !== archiveId) return false;
-      transcriptGrave = null;
-      return true;
+      const next = removeGrave(
+        { primary: transcriptGrave, queue: transcriptGraveQueue },
+        (g) => g.archiveId === archiveId,
+      );
+      transcriptGrave = next.primary;
+      transcriptGraveQueue = next.queue;
+      return next.removed;
+    },
+    async addTranscriptGrave(grave) {
+      const next = addGrave(
+        { primary: transcriptGrave, queue: transcriptGraveQueue },
+        grave,
+        (a, b) => a.archiveId === b.archiveId,
+      );
+      transcriptGrave = next.primary;
+      transcriptGraveQueue = next.queue;
+      return { dropped: next.dropped.map((g) => g.archiveId) };
+    },
+    async listTranscriptGraves() {
+      return listGraves({ primary: transcriptGrave, queue: transcriptGraveQueue });
+    },
+    async addLostSessionGrave(grave) {
+      const next = addGrave(
+        { primary: lostSessionGrave, queue: lostSessionGraveQueue },
+        grave,
+        (a, b) => a.sessionId === b.sessionId,
+      );
+      lostSessionGrave = next.primary;
+      lostSessionGraveQueue = next.queue;
+      return { dropped: next.dropped.map((g) => g.sessionId) };
+    },
+    async listLostSessionGraves() {
+      return listGraves({ primary: lostSessionGrave, queue: lostSessionGraveQueue });
     },
     async graveDistillFailures(kind, graveId) {
       const stored = distillFailureRecords[kind];
@@ -1026,9 +1060,13 @@ export function createMemoryStores(): Stores {
       lostSessionGrave = grave;
     },
     async clearLostSessionGraveIf(sessionId) {
-      if (lostSessionGrave?.sessionId !== sessionId) return false;
-      lostSessionGrave = null;
-      return true;
+      const next = removeGrave(
+        { primary: lostSessionGrave, queue: lostSessionGraveQueue },
+        (g) => g.sessionId === sessionId,
+      );
+      lostSessionGrave = next.primary;
+      lostSessionGraveQueue = next.queue;
+      return next.removed;
     },
     async getProjectKey() {
       return projectKey;
@@ -1044,6 +1082,8 @@ export function createMemoryStores(): Stores {
       cloneSessionId = null;
       transcriptGrave = null;
       lostSessionGrave = null;
+      transcriptGraveQueue = [];
+      lostSessionGraveQueue = [];
       projectKey = null;
       return removed;
     },

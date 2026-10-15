@@ -1706,6 +1706,18 @@ export interface SessionRegistry {
    */
   clearTranscriptGraveIf(archiveId: string): Promise<boolean>;
   /**
+   * 墓標を、**既にある墓標を消さずに**足す（#4884）。枠が空なら枠へ、同じ `archiveId` が既にあれば何もせず、それ以外は枠の後ろの列へ積む。
+   * 枠と列の合計が `MAX_PENDING_GRAVES` を超えたら古い方から落とし、落とした `archiveId` を返す（呼び出し側が日誌に ⚠ で残す）。
+   * `setTranscriptGrave`（枠を置き換える）の代わりに、クローンが墓標を立てる口はこちらを使う。
+   * `clearTranscriptGraveIf` は枠からも列からも下ろす。
+   */
+  addTranscriptGrave(grave: TranscriptGrave): Promise<{ dropped: string[] }>;
+  /** 枠、次に列の順（古い順）。拾い直しはこれを1本ずつ蒸留する。 */
+  listTranscriptGraves(): Promise<TranscriptGrave[]>;
+  /** `addTranscriptGrave` の `LostSessionGrave` 版。落とした `sessionId` を返す。 */
+  addLostSessionGrave(grave: LostSessionGrave): Promise<{ dropped: string[] }>;
+  listLostSessionGraves(): Promise<LostSessionGrave[]>;
+  /**
    * resume 素材を捨てた回の墓標（`TranscriptGrave` とは別の欄）。
    * 同じ欄にしない: 文脈窓で畳む回（退避は済んでいる）と、次の起動がセッションを開けなかった回（退避が無い）は別々に同時に立ちうる。
    * 1つの欄に相乗りさせると後に立った方が前の方を消し、消えた側は誰も拾わない。どちらも「高々1つ」。

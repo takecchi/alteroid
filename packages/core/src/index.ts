@@ -1,5 +1,7 @@
 export * from './schema.js';
 export * from './store.js';
+export { MAX_PENDING_GRAVES, addGrave, listGraves, removeGrave } from './grave-queue.js';
+export type { GraveQueueState } from './grave-queue.js';
 /** 台帳の並び順・継続点の実装は1つにする: `commitment_list` と `GET /commitments` が別々に持つと、契約の一致を見張れない。 */
 export {
   commitmentPosition,
@@ -1379,6 +1381,7 @@ export { prepareMcpServersForWrite } from './mcp-servers.js';
 export { assertProfileRowWritable } from './profile-input.js';
 export { preparePermissionGrantForPut } from './permission-grant-input.js';
 export { verifySessionRegistryNulContract } from './session-registry-nul-contract.js';
+export { verifySessionRegistryGraveQueueContract } from './session-registry-grave-queue-contract.js';
 export { verifyPersonaNulContract } from './persona-nul-contract.js';
 export { verifyScheduleNulContract } from './schedule-nul-contract.js';
 export { verifyScheduleIfMatchContract } from './schedule-if-match-contract.js';
