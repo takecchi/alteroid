@@ -9582,6 +9582,17 @@ class Pool implements ManagerPool {
       }
 
       case 'parked_peers_closed': {
+        // #4924: 移った後の古い器からの知らせは積まない
+        if (
+          await this.#ignoreIfMovedAway(
+            record,
+            fromRunnerId,
+            event.managerId,
+            'parked_peers_closed',
+          )
+        ) {
+          return;
+        }
         const notice: PeerCloseNotice = { reason: event.reason, peers: event.peers };
         const status = record.job.status;
         // 担当が起こされない（人が止めた・もう終端している）なら、クローンへの知らせだけにする。起こされるなら次の起こし直しの先頭へ添える（二重にしない）
@@ -10432,6 +10443,21 @@ class Pool implements ManagerPool {
       }
 
       case 'rescue_files': {
+        // #4924: 移った後の古い器からは取り込まない。退避先は、捨てる回も消させる（器の退避先と待ちの集合に積み残さない）
+        if (this.#movedAwayFrom(record, fromRunnerId)) {
+          const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+          if (runner !== null && runner.deleteRescueFile !== undefined) {
+            for (const file of event.files) {
+              await runner
+                .deleteRescueFile(event.managerId, file.fileId, {
+                  signal: AbortSignal.timeout(5000),
+                })
+                .catch(() => undefined);
+            }
+          }
+          await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'rescue_files');
+          return;
+        }
         // 同じ委譲の預かりは直列にする（job.rescueStash の読み書きの間に await が挟まる）
         const previous = this.#rescueStashChains.get(event.managerId) ?? Promise.resolve();
         const next = previous
@@ -10449,6 +10475,17 @@ class Pool implements ManagerPool {
       }
 
       case 'rescue_restore_request': {
+        // #4924: 移った後の古い器からの依頼は、添付つきの入力を積まない
+        if (
+          await this.#ignoreIfMovedAway(
+            record,
+            fromRunnerId,
+            event.managerId,
+            'rescue_restore_request',
+          )
+        ) {
+          return;
+        }
         // 届けは待たない: 担当が畳まれていれば resume を挟み、出来事の処理を長く塞ぐため。失敗は日誌に残す
         void this.#restoreRescue(record, event).catch((error: unknown) => {
           noteDroppedRecord('預かりの取り戻し', `managerId=${event.managerId}`, error);
