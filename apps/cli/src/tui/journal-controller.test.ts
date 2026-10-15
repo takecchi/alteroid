@@ -292,6 +292,44 @@ describe('古い側と取りこぼし', () => {
     expect(state().selectedId).toBe('e4');
   });
 
+  // 取り直しは `next` が null になるまで読む（#4836。Web の #4577 と同じ形）
+  it('切れていた間に pageSize を超える行が溜まっても、繋ぎ直し（open）で間の行が全部窓に入る', async () => {
+    const { api, controller, state, ids, fire } = setup((a) => {
+      a.journalCursors = true;
+      a.journalEntries = run(2);
+    });
+    controller.setFilter([], '', 2);
+    await waitFor(() => state().status === 'ready');
+    expect(ids()).toEqual(['e2', 'e1']);
+    api.journalEntries = run(7);
+    fire('open');
+    await waitFor(() => ids().length === 7);
+    expect(ids()).toEqual(['e7', 'e6', 'e5', 'e4', 'e3', 'e2', 'e1']);
+    expect(state().newerBlocked).toBe(false);
+  });
+
+  it('取り直しの最中に SSE の新着が届いても、間の行を取りこぼさない。新着は取り直しが済んでから先頭へ積む', async () => {
+    const { api, controller, state, ids, push, fire } = setup((a) => {
+      a.journalCursors = true;
+      a.journalEntries = run(2);
+    });
+    controller.setFilter([], '', 2);
+    await waitFor(() => state().status === 'ready');
+    api.journalEntries = run(7);
+    const slow = gate();
+    const original = api.listJournal.bind(api);
+    api.listJournal = async (query) => {
+      await slow.wait;
+      return original(query);
+    };
+    fire('open');
+    push(said(8));
+    expect(ids()).toEqual(['e2', 'e1']);
+    slow.open();
+    await waitFor(() => ids().length === 8);
+    expect(ids()).toEqual(['e8', 'e7', 'e6', 'e5', 'e4', 'e3', 'e2', 'e1']);
+  });
+
   it('取りこぼし確認が失敗したら印を立てる。loadOlder で error が消えても、のちの確認が成功しても残り、読み直すと下りる（#3483）', async () => {
     const { api, controller, state, ids, push, fire } = setup((a) => {
       a.journalEntries = run(4);
