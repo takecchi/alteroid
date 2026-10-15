@@ -238,6 +238,7 @@ import {
 } from './rescue-ref.js';
 import { defaultRunnerRescueStagedRoot } from './rescue-stash.js';
 import { PeerApprovalNotices } from './runner-peer-approval-notice.js';
+import { WorkerLimitNotices } from './runner-worker-limit-notice.js';
 import { StaleUntrackedNotices } from './runner-stale-untracked.js';
 import {
   ScratchSweeper,
@@ -251,6 +252,7 @@ import type { ContextUsageObservation, JobStatus } from './schema.js';
 import {
   FAILED_REPORT_PARTIAL_MARKER,
   assistantFailureOf,
+  turnFailureKindOf,
   type SdkFailure,
 } from './sdk-failure.js';
 import { systemErrorFactsOf, type SystemErrorFacts } from './system-error.js';
@@ -2161,6 +2163,8 @@ class RunnerSession {
   readonly #pidsPressureNotices = new PidsPressureNotices();
   readonly #staleUntrackedNotices = new StaleUntrackedNotices();
   readonly #peerApprovalNotices = new PeerApprovalNotices();
+  /** 作業者だけが利用上限で落ちた事実。ターンの集計とは別に、ターンをまたいで持つ（#4903）。 */
+  readonly #workerLimitNotices = new WorkerLimitNotices();
   readonly #denialStreaks = new ClassifierDenialStreaks();
   readonly #rescueMemory = new RescueMemory();
   /** 退避の列挙の打ち切りの知らせ（同じ状態が続く間は繰り返さない。#4681）。 */
@@ -3486,8 +3490,18 @@ class RunnerSession {
           }
         } else {
           // 作業者の発言に付いた拒否の印をターンの失敗にしない: 数えるだけ
+          const workerText = assistantText(event.blocks);
           const rejected = assistantFailureOf(event.errorCode, '');
-          if (rejected !== undefined) this.#turnTally.pushWorkerRejection(rejected.code);
+          if (rejected !== undefined) {
+            this.#turnTally.pushWorkerRejection(rejected.code);
+            // 構造化された印（errorCode）だけで判定し、本文の引用では立てない（#4903）
+            if (turnFailureKindOf(assistantFailureOf(event.errorCode, workerText)) === 'quota') {
+              this.#recordWorkerLimit(
+                `tool_use ${event.parentToolUseId}`,
+                workerText.length > 0 ? workerText : rejected.code,
+              );
+            }
+          }
         }
         return;
       }
@@ -3740,6 +3754,13 @@ class RunnerSession {
       const limitNamed =
         event.summary !== undefined && classifyUsageNotice(event.summary) !== undefined;
       this.#turnTally.recordFailedWorkerNotification(taskId, limitNamed);
+      // 失敗の通知で、文言が「上限に当たった」と読めるものに限る（`reached`）。completed の報告の引用では立てない（#4903）
+      if (event.summary !== undefined && classifyUsageNotice(event.summary)?.kind === 'reached') {
+        this.#recordWorkerLimit(
+          taskId === undefined ? '背景の作業者' : `task ${taskId}`,
+          event.summary,
+        );
+      }
     }
 
     if (taskId !== undefined && this.#cutOffWorkers.consumeCutOff(taskId)) {
@@ -4696,13 +4717,19 @@ class RunnerSession {
     const pressure = await this.#pidsPressureNotice(record.agentId);
     const staleUntracked = this.#staleUntrackedNotice(record.agentId);
     const peerApproval = this.#peerApprovalNotice(record.agentId);
+    const workerLimit = this.#workerLimitNotice(record.agentId);
     // 分類器の拒否が続いた後に初めて通った道具に、事情と取れる道を添える
     const streakActor = record.agentId ?? 'manager';
     const denialStreak = this.#denialStreaks.takeNotice(streakActor, Date.now());
     this.#denialStreaks.noteProgress(streakActor);
-    const parts = [additionalContext, pressure, staleUntracked, peerApproval, denialStreak].filter(
-      (part): part is string => part !== null,
-    );
+    const parts = [
+      additionalContext,
+      pressure,
+      staleUntracked,
+      peerApproval,
+      workerLimit,
+      denialStreak,
+    ].filter((part): part is string => part !== null);
     if (parts.length === 0) return { kind: 'continue' };
     return { kind: 'addContext', text: parts.join('\n\n') };
   }
@@ -4777,6 +4804,49 @@ class RunnerSession {
           text:
             `確認待ちの peer が 10 分以上残っている（${String(notice.count)} 本）ので、` +
             'この担当の道具の結果に「peer_approve で答えるか閉じること」という知らせを添えた（止める指示ではない）。',
+        });
+      }
+      return notice?.text ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 作業者が利用上限で落ちた事実を覚え、日誌とクローンの受信箱へ運ぶ（#4903）。担当のターンが成功しても捨てない。
+   * 枠の印（`#usageStopped`）・`usage_notice`・鍵の回転の契機にはしない: 担当は動けるため。原文は伏せ字を通す。
+   */
+  #recordWorkerLimit(label: string, raw: string): void {
+    const shown = redactErrorText(raw, process.env, this.#vaultValues());
+    if (!this.#workerLimitNotices.record(label, shown, Date.now())) return;
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        `作業者（${label}）だけが利用上限で落ちた。担当は動けるので、枠の印も鍵の回転も起こしていない。` +
+        `次の道具の結果に知らせを添える（原文: ${shown.trim().slice(0, 300)}）`,
+      notifyClone: true,
+    });
+  }
+
+  /**
+   * 作業者が利用上限で落ちていれば、知らせの段落を返す（`runner-worker-limit-notice.ts`、#4903）。
+   * 相手（担当本人・作業者ごと）に10分に1回まで。担当本人に添えた回は日誌にも1行残す。投げたときは何も添えない。
+   */
+  #workerLimitNotice(agentId: string | undefined): string | null {
+    try {
+      const notice = this.#workerLimitNotices.next(
+        agentId ?? 'manager',
+        agentId === undefined,
+        Date.now(),
+      );
+      if (notice !== null && agentId === undefined) {
+        this.#emit({
+          type: 'note',
+          managerId: this.#id,
+          text:
+            `作業者が利用上限で落ちている（${String(notice.count)} 体）ので、` +
+            'この担当の道具の結果に「戻るまで作業者を立て直しても同じく落ちうる」という知らせを添えた（止める指示ではない）。',
         });
       }
       return notice?.text ?? null;

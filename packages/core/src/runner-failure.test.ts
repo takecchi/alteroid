@@ -169,8 +169,12 @@ async function jobOf(stores: Stores, managerId: string) {
 async function reportTexts(inbox: InboxEvent[], expected: number): Promise<string[]> {
   return await vi.waitFor(
     () => {
+      // 作業者の上限の note（#4903、`notifyClone`）は担当のターンの報告ではないので数えない
       const found = inbox.filter(
-        (entry) => entry.type === 'manager_message' && entry.kind === 'report',
+        (entry) =>
+          entry.type === 'manager_message' &&
+          entry.kind === 'report' &&
+          !entry.text.includes('だけが利用上限で落ちた。担当は動けるので'),
       );
       if (found.length < expected) {
         throw new Error(
@@ -611,6 +615,33 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
     const job = await jobOf(s.stores, started.managerId);
     expect(job?.lastFailure).toBeUndefined();
 
+    await s.pool.stop();
+  });
+
+  it('作業者だけが上限で落ちて担当のターンが成功しても、クローンの受信箱へ知らせが運ばれる（#4903）', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('task-1');
+    await session.taskNotification('task-1', { status: 'failed', summary: ORG_SPEND_LIMIT });
+    await session.finish('作業者抜きで終えた');
+
+    await vi.waitFor(
+      () => {
+        const carried = s.inbox.filter(
+          (entry) =>
+            entry.type === 'manager_message' &&
+            entry.text.includes('だけが利用上限で落ちた。担当は動けるので'),
+        );
+        expect(carried).toHaveLength(1);
+      },
+      { timeout: 4000 },
+    );
     await s.pool.stop();
   });
 
