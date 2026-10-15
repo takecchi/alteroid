@@ -1292,6 +1292,22 @@ export const jobSchema = z.object({
       at: isoDateTime,
     })
     .optional(),
+  // 台帳に持つ: 預けた peer を期限・器の畳みで閉じたとき、担当は peer が消えたと知る手が他に無く、デーモンの再起動を跨いでも次の起こし直しに添えるため（#4885）
+  // `pendingFoldNotice` と同じく、実際に届いた回に下ろす。人が止めた場合は担当が起こされないので、ここへは置かずクローンへ知らせる
+  pendingPeerCloseNotice: z
+    .object({
+      reason: z.enum(['expired', 'replaced', 'shutdown']),
+      // 閉じた peer。`interrupted` は途中で終わった背景ターンの止まりどころの抜粋（伏せ字済み・字数を切ってある）
+      peers: z.array(
+        z.object({
+          id: z.string(),
+          provider: z.string(),
+          interrupted: z.string().optional(),
+        }),
+      ),
+      at: isoDateTime,
+    })
+    .optional(),
   // 台帳に持つ: 背景処理の完了待ちで畳んだ報告の在庫をプロセス内にだけ置くと、配る前にデーモンが再起動（夜の反映）したとき件数も冒頭も消え、クローンに一度も届かないため（#4626）
   // 正はプロセス内の在庫（`manager.ts` の `WithheldReportMemory`）で、これはその写し。`restore()` が読み戻す。`excerpts` は配るときと同じ字数の予算の内に詰めてある
   withheldReports: z

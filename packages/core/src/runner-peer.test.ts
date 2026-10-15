@@ -15,7 +15,12 @@ import { createCredentialStore } from './credentials.js';
 import { PEER_MCP_SERVER_NAME } from './peer-broker.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import type { PeerSocketHost } from './peer-socket-host.js';
-import { createRunnerHost, type RunnerHostPeerOptions, type RunnerHostOptions } from './runner.js';
+import {
+  createRunnerHost,
+  PEER_PARK_TTL_MS,
+  type RunnerHostPeerOptions,
+  type RunnerHostOptions,
+} from './runner.js';
 
 function capturingQuery(): { fn: typeof sdkQuery; options: () => Record<string, unknown> } {
   let captured: Record<string, unknown> = {};
@@ -528,6 +533,59 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     ).toBe(true);
     await s.client.close();
     await s.host.shutdown();
+  });
+
+  it('⭐ 預けた peer を期限で閉じたら、閉じた peer と、途中で終わった背景ターンの止まりどころを parked_peers_closed で運ぶ（#4885）', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      // 開かないゲート: 背景ターンは走ったまま預けられ、閉じるまで止まりどころに来ない
+      const gate = new Promise<void>(() => undefined);
+      const s = await setupPeerCall([], {
+        args: { run_in_background: true },
+        sdk: readingQuery(),
+        gate,
+      });
+      expect(s.firstText).toContain('背景で流し始めた');
+      await s.host.stop('mgr-1', { keepPeers: true });
+      await vi.advanceTimersByTimeAsync(PEER_PARK_TTL_MS);
+      await vi.waitFor(() => {
+        expect(s.events.some((e) => e.type === 'parked_peers_closed')).toBe(true);
+      });
+      const closed = s.events.find((e) => e.type === 'parked_peers_closed');
+      expect(closed).toMatchObject({ managerId: 'mgr-1', reason: 'expired' });
+      const peers = closed?.type === 'parked_peers_closed' ? closed.peers : [];
+      expect(peers).toHaveLength(1);
+      expect(peers[0]?.provider).toBe('codex');
+      expect(peers[0]?.interrupted).toContain('途中で終わった');
+      await s.client.close();
+      await s.host.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('預けた peer に背景ターンが無くても、期限で閉じたことは運ぶ（#4885）', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const s = await setupPeerCall();
+      await s.approve('allow');
+      await vi.waitFor(() => {
+        expect(s.decisions).toHaveLength(1);
+      });
+      await s.host.stop('mgr-1', { keepPeers: true });
+      await vi.advanceTimersByTimeAsync(PEER_PARK_TTL_MS);
+      await vi.waitFor(() => {
+        expect(s.events.some((e) => e.type === 'parked_peers_closed')).toBe(true);
+      });
+      const closed = s.events.find((e) => e.type === 'parked_peers_closed');
+      const peers = closed?.type === 'parked_peers_closed' ? closed.peers : [];
+      expect(peers).toHaveLength(1);
+      expect(peers[0]?.interrupted).toBeUndefined();
+      await s.client.close();
+      await s.host.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('対照: 人間・クローンの停止（印なし）では今どおり peer を閉じ、起こし直しても前の peer は無い（#4734）', async () => {

@@ -819,6 +819,8 @@ export interface PeerBroker {
   backgroundTasks(): { id: string; taskType: string }[];
   /** 答えを待っている確認（セッション順）。 */
   pendingApprovals(): PeerPendingApprovalInfo[];
+  /** いま開いている peer セッション（閉じる前に、何を閉じるかを控えるため）。 */
+  sessionList(): { id: string; provider: AgentProviderId }[];
   closeAll(): void;
   mcpServer(): ReturnType<typeof createSdkMcpServer>;
 }
@@ -1164,6 +1166,12 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     },
     pendingApprovals() {
       return [...sessions.values()].flatMap((session) => [...session.pendingInfos()]);
+    },
+    sessionList() {
+      return [...sessions.values()].map((session) => ({
+        id: session.id,
+        provider: session.provider,
+      }));
     },
     closeAll() {
       stopSweeping();
