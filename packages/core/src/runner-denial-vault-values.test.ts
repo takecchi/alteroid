@@ -196,4 +196,22 @@ describe('inputHead — 資格の正本の値は名前によらず伏せる（is
     // 対照: 値以外の部分は残る
     expect(head).toContain('psql -h db');
   });
+
+  it('担い手の道具の失敗の文（note）でも、正本の値を伏せる', async () => {
+    const { started, events } = await startWithVault();
+    await firePostToolUseFailure(started.options, {
+      hook_event_name: 'PostToolUseFailure',
+      tool_name: 'Bash',
+      tool_use_id: 'tu-2',
+      agent_id: 'worker-1',
+      error: `psql: password ${VAULT_VALUE} rejected by db`,
+    });
+    await tick();
+
+    const failures = noteEvents(events).filter((note) => note.text.includes('道具=Bash'));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.text).not.toContain(VAULT_VALUE);
+    // 対照: 値以外の部分は残る
+    expect(failures[0]?.text).toContain('rejected by db');
+  });
 });
