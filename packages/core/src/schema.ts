@@ -1245,6 +1245,10 @@ export const jobSchema = z.object({
   lastCgroupEvents: cgroupEventsDeltaSchema.extend({ at: isoDateTime }).optional(),
   // 台帳にも持つ: `#usageStopped` はデーモンが作り直されると消え、終端している `done` / `failed` / `lost` の委譲が誰にも起こされないまま座り続けるため
   usageStoppedAt: isoDateTime.optional(),
+  // 台帳にも持つ: 前任を後継へ引き継いだ事実はデーモンが作り直されても残り、自動の起こし直し（鍵の回転・周回の掃き・起動時の印の組み直し）が前任を起こさない根拠になるため（#4861）
+  supersededBy: z.string().optional(),
+  // `supersededBy` の逆向き: 後継の側から前任をたどる表示用で、判定には使わない（#4861）
+  supersedes: z.string().optional(),
   lastUnpushedWorkObservation: lastUnpushedWorkObservationSchema.optional(),
   // `lastUnpushedWorkObservation` と別の欄にする: あちらは新しいほうが勝つ上書き、こちらは作業ツリーごとに積み増すため
   lastRescue: lastRescueSchema.optional(),

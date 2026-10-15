@@ -189,6 +189,7 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
         startedAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-01T00:00:00.000Z',
         waiting: [],
+        ...(input.supersedes === undefined ? {} : { supersedes: input.supersedes }),
         ...((input.runnerId ?? autoRunnerId) === undefined
           ? {}
           : { runnerId: input.runnerId ?? autoRunnerId }),
@@ -4705,6 +4706,38 @@ describe('クローンの道具', () => {
 
     expect(h.started).toEqual([{ request: 'この器で頼む', runnerId: 'runner-b' }]);
     expect(reply).toContain('runner-b');
+  });
+
+  it('manager_start は supersedes を ManagerPool.start へ渡し、manager_list に前任と後継が出る（#4861）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '前任' });
+    const old = h.running[0];
+    if (!old) throw new Error('準備に失敗');
+    old.status = 'failed';
+    old.live = false;
+
+    const reply = await h.call('manager_start', { request: '後継', supersedes: 'mgr-1' });
+    old.supersededBy = 'mgr-2';
+
+    expect(reply).toContain('mgr-2');
+    expect(h.started[1]).toEqual({ request: '後継', supersedes: 'mgr-1' });
+    const list = await h.call('manager_list', {});
+    expect(list).toContain('後継: mgr-2');
+    expect(list).toContain('前任: mgr-1');
+  });
+
+  it('manager_start の説明は supersedes を渡す場面を言う（#4861）', () => {
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => {},
+      managers: {} as unknown as ManagerPool,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const found = tools.find((entry) => entry.name === 'manager_start');
+
+    expect(found?.description).toContain('supersedes');
+    expect(found?.description).toContain('二重');
   });
 
   it('manager_start は runnerId を指名しなくても、実際に走った runner を返す', async () => {
