@@ -109,12 +109,11 @@ export const PICKUP_WAIT_LIMIT_MS = FORCED_EXIT_MS - 5_000;
 // 預けた生ログがここまでに取られなければ、本文を載せて送り直す（SIGTERM から。#4896）。上限（`PICKUP_WAIT_LIMIT_MS`）の 20 秒手前: 大きい本文を SSE で流し切る時間を残すため
 export const ARCHIVE_INLINE_AFTER_MS = PICKUP_WAIT_LIMIT_MS - 20_000;
 
-// `host.shutdown()` を待つ上限（SIGTERM から。#4925）。超えたら畳みの作業は背景で続けたまま、待ちの段へ進む。
-// 積み上げ（Railway の猶予 `SHUTDOWN_GRACE_MS` 60秒 → `FORCED_EXIT_MS` 55秒 → `PICKUP_WAIT_LIMIT_MS` 50秒）:
-//   0秒 SIGTERM → 30秒 shutdown() の上限（同じ 30秒 = `ARCHIVE_INLINE_AFTER_MS` に、送り直しのタイマーも走る）
-//   → 最大 33秒 出し箱の流し切り（`DRAIN_WAIT_MS` 3秒）→ 50秒 取られるのを待つ上限 → 55秒 forced exit → 60秒 SIGKILL
-// 送り直しは 30秒で始まり、50秒までの 20 秒で流し切る。
-export const SHUTDOWN_WAIT_LIMIT_MS = ARCHIVE_INLINE_AFTER_MS;
+// 畳みの時間の積み上げ（#4925。Railway の猶予 `SHUTDOWN_GRACE_MS` 60秒 → `FORCED_EXIT_MS` 55秒 → `PICKUP_WAIT_LIMIT_MS` 50秒）:
+//   0秒 SIGTERM → 30秒 `ARCHIVE_INLINE_AFTER_MS`（`shutdown()` の途中でも、並行のタイマーが退避を送り直す）
+//   → 50秒 `PICKUP_WAIT_LIMIT_MS`（`shutdown()` の完了と取られるのを待つ上限。口を閉じて exit へ進めるのは、`shutdown()` が終わってから）
+//   → 最大 53秒 出し箱の流し切り（`DRAIN_WAIT_MS` 3秒）→ 55秒 forced exit → 60秒 SIGKILL
+// `shutdown()` の待ちを 30秒で切らない: 未 push の確認・退避 ref の push の途中で exit すると、その作業が失われるため。
 
 export const DRAIN_POLL_INTERVAL_MS = 50;
 
@@ -152,7 +151,6 @@ export async function shutdownHandingOver(deps: {
   drainWaitMs?: number;
   pickupWaitLimitMs?: number;
   inlineArchivesAfterMs?: number;
-  shutdownWaitLimitMs?: number;
   write?: (line: string) => void;
 }): Promise<void> {
   const startedAt = deps.startedAt ?? Date.now();
@@ -178,13 +176,11 @@ export async function shutdownHandingOver(deps: {
     }
   }, afterMs(inlineAtMs));
 
-  // `shutdown()` 全体にも SIGTERM 起点の上限を置く: 超えたら作業は背景で続けたまま、待ちの段へ進む
+  // `shutdown()` の完了を待つのは、従来どおり待ちの上限（`limitMs`）まで: 終わる前に口を閉じて exit すると、
+  // 畳みの途中の push・未 push の確認が切られる。上限を超えて終わらないときだけ、待ちの段へ進む
   let capTimer: NodeJS.Timeout | undefined;
   const cap = new Promise<void>((resolve) => {
-    capTimer = setTimeout(
-      resolve,
-      afterMs(Math.min(deps.shutdownWaitLimitMs ?? SHUTDOWN_WAIT_LIMIT_MS, limitMs)),
-    );
+    capTimer = setTimeout(resolve, afterMs(limitMs));
   });
   try {
     await Promise.race([deps.host.shutdown().catch(() => undefined), cap]);

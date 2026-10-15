@@ -232,7 +232,7 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
 });
 
 // shutdown() が長引いても、送り直しと待ちの段が止まらない（#4925）
-describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() の上限で待ちの段へ進む（#4925）', () => {
+describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() が終わるまで（上限 50 秒）口を閉じない（#4925）', () => {
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -265,13 +265,46 @@ describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() 
     expect(inlined).toBe(0);
     await vi.advanceTimersByTimeAsync(1);
     expect(inlined).toBe(1);
+    // shutdown() が終わらないので、口を閉じるのは待ちの上限（50 秒）
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(closed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     await done;
     detach();
     expect(closed).toBe(true);
     expect(inlined).toBe(1);
   });
 
-  it('⭐ shutdown() が上限（30 秒）を超えたら、打ち切らずに待ちの段へ進んで口を閉じる', async () => {
+  it('⭐ shutdown() が 30 秒を超えて 35 秒で終わるなら、待ちものが無くても 35 秒まで口を閉じず、終わってから閉じる', async () => {
+    vi.useFakeTimers();
+    let closed = false;
+    let finishShutdown: () => void = () => undefined;
+    const outbox = new Outbox();
+    const detach = outbox.attach(() => undefined);
+
+    const done = shutdownHandingOver({
+      host: {
+        shutdown: () =>
+          new Promise<void>((resolve) => {
+            finishShutdown = resolve;
+          }),
+        pendingPickups: () => 0,
+      },
+      outbox,
+      closeListener: () => (closed = true),
+      drainWaitMs: 0,
+      write: () => undefined,
+    });
+
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(closed).toBe(false);
+    finishShutdown();
+    await done;
+    detach();
+    expect(closed).toBe(true);
+  });
+
+  it('⭐ shutdown() が終わらないときは、待ちの上限（50 秒）で口を閉じる', async () => {
     vi.useFakeTimers();
     let closed = false;
     const outbox = new Outbox();
@@ -285,7 +318,7 @@ describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() 
       write: () => undefined,
     });
 
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(49_999);
     expect(closed).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await done;
