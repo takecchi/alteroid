@@ -146,4 +146,87 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
     expect(closed).toBe(true);
     expect(lines.join('')).toContain('1 件を、デーモンが取りに来ないまま止まる');
   });
+
+  // 器の入れ替えの直前に預けた生ログが、取りに行った先の新しいプロセスに無く失われた（#4896）
+  it('⭐ 取られないまま上限の手前に来たら、預けた生ログを本文つきで送り直してから口を閉じる', async () => {
+    const order: string[] = [];
+    let pending = 1;
+    const outbox = new Outbox();
+    const detach = outbox.attach(() => undefined);
+    const lines: string[] = [];
+
+    await shutdownHandingOver({
+      host: {
+        shutdown: async () => undefined,
+        pendingPickups: () => pending,
+        inlineUnpickedArchives: () => {
+          order.push('inline');
+          pending = 0;
+          return 1;
+        },
+      },
+      outbox,
+      closeListener: () => order.push('close'),
+      // 畳み始めから 40 秒経った体にする（実時間を待たない）: 送り直す時刻（既定 30 秒）は過ぎ、上限（50 秒）は過ぎていない
+      startedAt: Date.now() - 40_000,
+      drainWaitMs: 0,
+      write: (line) => lines.push(line),
+    });
+    detach();
+
+    expect(order).toEqual(['inline', 'close']);
+    expect(lines.join('')).toContain('本文を載せて送り直した');
+    expect(lines.join('')).not.toContain('取りに来ないまま止まる');
+  });
+
+  it('送り直す時刻より前に取られたら、送り直さない', async () => {
+    let pending = 1;
+    let inlined = 0;
+    const outbox = new Outbox();
+    const detach = outbox.attach(() => undefined);
+
+    await shutdownHandingOver({
+      host: {
+        shutdown: async () => undefined,
+        // 1回目の確認では残り、次の確認で取られている
+        pendingPickups: () => {
+          const now = pending;
+          pending = 0;
+          return now;
+        },
+        inlineUnpickedArchives: () => {
+          inlined += 1;
+          return 1;
+        },
+      },
+      outbox,
+      closeListener: () => undefined,
+      drainWaitMs: 0,
+      write: () => undefined,
+    });
+    detach();
+
+    expect(inlined).toBe(0);
+  });
+
+  it('デーモンが繋がっていなければ、送り直さない（受ける相手が居ない）', async () => {
+    let inlined = 0;
+    await shutdownHandingOver({
+      host: {
+        shutdown: async () => undefined,
+        pendingPickups: () => 1,
+        inlineUnpickedArchives: () => {
+          inlined += 1;
+          return 1;
+        },
+      },
+      outbox: new Outbox(),
+      closeListener: () => undefined,
+      startedAt: Date.now() - 40_000,
+      drainWaitMs: 0,
+      write: () => undefined,
+    });
+
+    expect(inlined).toBe(0);
+  });
 });

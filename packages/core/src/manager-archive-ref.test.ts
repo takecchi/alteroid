@@ -162,6 +162,41 @@ describe('参照で届いた退避は、runner へ取りに行って置き場へ
     }
   });
 
+  // 器の入れ替えの前後か（#4896）。参照を受けた時と取りに行った時の instanceId を比べた結果を、日誌の文に添える
+  it('runner に本文が無かったとき、日誌の文に器の入れ替えかどうかの材料を添える', async () => {
+    for (const [instanceId, expected] of [
+      [undefined, '入れ替えの前後かは判定できない'],
+      ['boot-1', '入れ替わっていない（instanceId=boot-1）'],
+    ] as const) {
+      const lines: string[] = [];
+      setStderrSinkForTesting((line) => lines.push(line));
+      try {
+        const stores = createMemoryStores();
+        await stores.jobs.putJob(job);
+        const fake = fakeRunner(new Map());
+        if (instanceId !== undefined) {
+          Object.assign(fake.runner, {
+            instanceId,
+            identity: async () => ({ runnerId: 'runner-a', instanceId }),
+          });
+        }
+        // 名簿は開けた瞬間に名乗りを聞く（`register`）。静的な配列で渡すと名乗りを採らない
+        const registry = createRunnerRegistry();
+        await registry.register({ label: 'http://runner-a:4518', open: async () => fake.runner });
+        const local = createManagerPool({ stores, post: () => undefined, runners: registry });
+        pool = local;
+        await local.restore();
+        fake.emit({ type: 'archive', managerId: job.id, ref: { id: ARCHIVE_ID, chars: 6 } });
+        await vi.waitFor(() => expect(lines.join('')).toContain(ARCHIVE_ID));
+        expect(lines.join('')).toContain(expected);
+      } finally {
+        setStderrSinkForTesting(null);
+        await pool?.stop();
+        pool = undefined;
+      }
+    }
+  });
+
   it('本文つきで届いた退避（古い runner）は、これまでどおり置き場へ入れ、取りに行かない', async () => {
     const { stores, fake } = await setup(new Map());
     fake.emit({ type: 'archive', managerId: job.id, body: '古い形の本文' });

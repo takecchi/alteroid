@@ -8597,6 +8597,7 @@ class Pool implements ManagerPool {
     fromRunnerId: string,
   ): Promise<{ body: string; runner: RunnerClient }> {
     const delays = this.#archiveFetchRetryDelaysMs;
+    const instanceBefore = this.#sighting(fromRunnerId).instanceId;
     for (let attempt = 0; ; attempt += 1) {
       let failure: unknown;
       const runner = await this.#runners.get(fromRunnerId);
@@ -8614,8 +8615,16 @@ class Pool implements ManagerPool {
         }
         if (failure === undefined) {
           if (fetched === undefined) {
+            // 入れ替わりの前後かを日誌から読めるようにする（#4896）: 参照を受けた時と取りに行った時の instanceId が違えば、預けたプロセスはもう居ない
+            const instanceAfter = this.#sighting(fromRunnerId).instanceId;
+            const swapNote =
+              instanceBefore === undefined || instanceAfter === undefined
+                ? 'runner の器の入れ替えの前後かは判定できない（instanceId を名乗っていない）'
+                : instanceBefore === instanceAfter
+                  ? `runner の器は入れ替わっていない（instanceId=${instanceAfter}）`
+                  : `runner の器が入れ替わっていた（参照を受けた時の instanceId=${instanceBefore}、取りに行った時=${instanceAfter}）。預けたプロセスは既に居ない`;
             throw new Error(
-              `runner に預けた退避（${archiveId}）が無かった（期限切れで捨てられたか、既に消された）`,
+              `runner に預けた退避（${archiveId}）が無かった（期限切れで捨てられたか、既に消された）。${swapNote}`,
             );
           }
           return { body: fetched, runner };

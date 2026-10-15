@@ -114,6 +114,16 @@ export class ArchiveStash {
     return this.#entries.size;
   }
 
+  /** いま預かっている退避（本文は含めない）。畳み始めに、まだ取られていない分を数えるのに使う（#4896）。 */
+  list(): { managerId: string; id: string; chars: number }[] {
+    this.#expire();
+    return [...this.#entries].map(([id, entry]) => ({
+      managerId: entry.managerId,
+      id,
+      chars: entry.body.length,
+    }));
+  }
+
   #expire(): void {
     const now = this.#now();
     for (const [id, entry] of this.#entries) {

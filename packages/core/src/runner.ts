@@ -575,6 +575,11 @@ export interface RunnerHost {
    * runner の入口は、これが 0 になるまで（期限付きで）口を閉じずに待つ。
    */
   pendingPickups(): number;
+  /**
+   * 待っても取られない預けた退避を、本文を載せて送り直す。送った件数を返す（#4896）。
+   * 参照だけを送って器が入れ替わると、新しいプロセスに本文が無く生ログが失われるため、runner の入口が待ちの途中で呼ぶ。
+   */
+  inlineUnpickedArchives(): number;
   // 無認証の `/livez` から呼ばない: 誰でも貸し出し期限を延ばせてしまうため
   noteDaemonContact(): void;
   // プロセスの exit で knownTerminated にしない: 作業者の1回の呼び出しは委譲が生きていてもプロセスを終え、その孫（nohup のサーバ等）が撃たれるため
@@ -732,12 +737,15 @@ class Host implements RunnerHost {
   readonly #readPids: (() => Promise<{ current: number; max: number } | undefined>) | undefined;
   // 生ログの退避の本文を、デーモンが取りに来るまで預かる（#4485。`archive-ref.ts`）。捨てた分は stderr に残す（デーモンへの経路が無い時にも起きるため）
   readonly #archiveStash = new ArchiveStash({
-    onDrop: (drop) =>
+    onDrop: (drop) => {
+      // 捨てた分を畳みの待ちに残さない: 本文が無いものを待っても取られない
+      this.#pickupsSinceShutdown.delete(pickupKey('archive', drop.managerId, drop.archiveId));
       noteDroppedRecord(
         '預けた生ログの退避',
         `managerId=${drop.managerId} archiveId=${drop.archiveId} chars=${String(drop.chars)} reason=${drop.reason}`,
         new Error('デーモンが取りに来ないまま捨てた'),
-      ),
+      );
+    },
   });
   #daemonAcceptsArchiveRef = false;
   // 畳み始めてから出した、デーモンに HTTP で取りに来させる物（預けた生ログ・出し箱の退避先ファイル）。取られる（消される）と外す（#4699）
@@ -1516,7 +1524,26 @@ class Host implements RunnerHost {
     return this.#pickupsSinceShutdown.size;
   }
 
-  // 畳み始める前の分は数えない: 取りこぼし（デーモンが取り損ねた退避先）を待つと、取りに来ないものを待って器の入れ替えが遅れるため
+  /**
+   * まだデーモンに取られていない預けた退避を、本文を載せた `archive` の出来事として送り直す（#4896）。
+   * 待ちの期限までに取られなかった分を、器と一緒に失わないための最後の手。送った分は預かりから外す（同じ本文を二度送らない）。
+   * 送った件数を返す。
+   */
+  inlineUnpickedArchives(): number {
+    let sent = 0;
+    for (const entry of this.#archiveStash.list()) {
+      if (!this.#pickupsSinceShutdown.has(pickupKey('archive', entry.managerId, entry.id)))
+        continue;
+      const body = this.#archiveStash.get(entry.managerId, entry.id);
+      if (body === undefined) continue;
+      this.#emit({ type: 'archive', managerId: entry.managerId, body });
+      this.deleteArchive(entry.managerId, entry.id);
+      sent += 1;
+    }
+    return sent;
+  }
+
+  // 畳み始める前の出し箱・rescue は数えない: 取りこぼし（デーモンが取り損ねた退避先）を待つと、取りに来ないものを待って器の入れ替えが遅れるため。預けた生ログは `shutdown()` が畳み始めに数える
   #notePickup(event: RunnerEvent): void {
     if (!this.#shuttingDown) return;
     if (event.type === 'archive' && event.ref !== undefined) {
@@ -1767,6 +1794,11 @@ class Host implements RunnerHost {
 
   async shutdown(): Promise<void> {
     this.#shuttingDown = true;
+    // 畳む前に預けた退避も、デーモンに取られるまで待たせる（#4896）: 畳み始めてからの分だけだと、直前に参照を送った退避を
+    // デーモンが取りに来る前に器が入れ替わり、取りに行った先の新しいプロセスに本文が無くなる
+    for (const entry of this.#archiveStash.list()) {
+      this.#pickupsSinceShutdown.add(pickupKey('archive', entry.managerId, entry.id));
+    }
     // 畳み始めの名乗りを入口ごとに任せない: 積み忘れる形を作らないため
     this.#emit({ type: 'shutting_down', runnerId: this.runnerId });
     // 見張りを先に畳む: 畳み残すと止まったはずの見張りが空の名簿を叩き続け、テストではタイマーが残ってハングするため

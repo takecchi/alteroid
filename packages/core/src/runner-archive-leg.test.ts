@@ -335,3 +335,81 @@ describe('参照で受け取れるデーモンには、退避の本文を SSE �
     }
   });
 });
+
+// 器の入れ替えの直前に預けた退避を、デーモンが取りに行った時には新しいプロセスに無く、生ログが失われた（#4896）
+describe('畳むとき、取られていない預けた退避を待ち、取られなければ本文を載せて送る（#4896）', () => {
+  const BODY = '畳む前に預けた生ログ';
+
+  async function stashedBeforeShutdown() {
+    const events: RunnerEvent[] = [];
+    const { fn, sessions } = fakeSdk();
+    const host = createRunnerHost({
+      runnerId: 'runner-archive-shutdown-test',
+      workspacePath: '/work/project',
+      emit: (event) => events.push(event),
+      queryFn: fn,
+    });
+    hosts.push(host);
+    host.setDaemonAcceptsArchiveRef(true);
+    await host.start({ managerId: 'mgr-archive-sd', request: '調べて', cwd: '/work/project' });
+    const session = sessions[0];
+    if (session === undefined) throw new Error('セッションが開いていない');
+    const transcriptPath = join(dir, 'sd-transcript.jsonl');
+    writeFileSync(transcriptPath, BODY, 'utf8');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: transcriptPath,
+    });
+    // 畳む前に預ける（stop は畳み始める前の経路）
+    await host.stop('mgr-archive-sd');
+    const ref = events.find(
+      (event): event is Extract<RunnerEvent, { type: 'archive' }> => event.type === 'archive',
+    )?.ref;
+    if (ref === undefined) throw new Error('参照が出ていない');
+    return { host, events, id: ref.id };
+  }
+
+  it('⭐ 畳む前に預けて、まだ取られていない退避は、畳み始めから待ちに入り、取られると外れる', async () => {
+    const { host, id } = await stashedBeforeShutdown();
+    expect(host.pendingPickups()).toBe(0);
+
+    await host.shutdown();
+    expect(host.pendingPickups()).toBe(1);
+
+    host.deleteArchive('mgr-archive-sd', id);
+    expect(host.pendingPickups()).toBe(0);
+  });
+
+  it('⭐ 取られなかった退避は、本文を載せて送り直し、待ちと預かりから外す', async () => {
+    const { host, events, id } = await stashedBeforeShutdown();
+    await host.shutdown();
+
+    expect(host.inlineUnpickedArchives()).toBe(1);
+
+    const inlined = events.filter(
+      (event): event is Extract<RunnerEvent, { type: 'archive' }> =>
+        event.type === 'archive' && event.body !== undefined,
+    );
+    expect(inlined).toHaveLength(1);
+    expect(inlined[0]?.body).toBe(BODY);
+    expect(inlined[0]?.managerId).toBe('mgr-archive-sd');
+    expect(host.pendingPickups()).toBe(0);
+    expect(host.readArchive('mgr-archive-sd', id)).toBeUndefined();
+    // 二度は送らない
+    expect(host.inlineUnpickedArchives()).toBe(0);
+  });
+
+  it('畳む前にデーモンが取り終えた退避は、待たず、送り直しもしない', async () => {
+    const { host, events, id } = await stashedBeforeShutdown();
+    host.deleteArchive('mgr-archive-sd', id);
+
+    await host.shutdown();
+
+    expect(host.pendingPickups()).toBe(0);
+    expect(host.inlineUnpickedArchives()).toBe(0);
+    expect(events.some((event) => event.type === 'archive' && event.body !== undefined)).toBe(
+      false,
+    );
+  });
+});
