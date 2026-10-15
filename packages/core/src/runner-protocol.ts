@@ -2532,9 +2532,12 @@ class Registry implements RunnerRegistry {
       return;
     }
     entry.alive = true;
+    delete entry.error;
+    // 落ちている間に空けた器は、戻っても `vacating` のまま（#4834）: `vacate()` は `alive` を触らないので、lost の器を空けるとここへ来る。
+    // `connected` に書き戻すと、空けると決めた宛先が置き先に戻り、待っている委譲にも渡ってしまう
+    if (entry.state === 'vacating') return;
     entry.state = 'connected';
     entry.since = new Date().toISOString();
-    delete entry.error;
     for (const waiter of this.#waiting) waiter.resolve(client);
     this.#waiting.clear();
   }
