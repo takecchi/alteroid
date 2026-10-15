@@ -925,9 +925,10 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     }
   };
   // 閉じる: 外す理由を残し、どれをなぜ閉じたかを担当へ知らせる（#4764）
+  // 先に外してから閉じる: `close()` が相手の終わり（`onEnded`）を同じ流れで呼ぶと、先に「終わった」として外され、頼み直しの印が付かないため
   const retire = (session: PeerSession, reason: string): void => {
-    session.close();
     forget(session, reason, true);
+    session.close();
     deps.onNote(`peer（${session.provider}）[${session.id}] を閉じた（${reason}）`);
   };
   // 使われない時間の見回り: 閉じてよいもののうち、最後に使われてから idleMs を超えたものを閉じる
