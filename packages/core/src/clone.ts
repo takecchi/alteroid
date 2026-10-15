@@ -7145,7 +7145,9 @@ class Clone implements CloneHost {
           // 「上限に当たった」と日報に書いた瞬間に上限と誤判定する自家中毒になる。
           // この `await` は `#reportFailure` より先に終える: `usage_limited` は終端ではなく、終端の `error` より先に届く必要がある。
           // grep -Fn -- 'for (const candidate of [failure.text, resultTextOf(event).text, ...event.errorLines])' packages/core/src/runner.ts
-          for (const candidate of [failure.text, event.body, ...event.errorLines]) {
+          // 応答の本文 `event.body` は候補に入れない（#4931）: 作業者の上限の原文（#4911 で道具の結果へ添える）をクローンが引用して別の理由で失敗すると、自分の枠と取り違える。
+          // 失った形は無い: 失敗した result では `failure.text` が `result` そのもの（`resultFailureOf`）で、`body` と同じ文字列。
+          for (const candidate of [failure.text, ...event.errorLines]) {
             const notice = classifyUsageNotice(candidate);
             if (notice !== undefined) {
               await this.#noteUsageNotice(notice, turn?.conversationId ?? null, 'text');
