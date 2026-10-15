@@ -1452,6 +1452,8 @@ function stubClient(
     scheduleUnreadable?: { kind?: string; reason: string }[];
     memoryDocuments?: MemoryDocLike[];
     journalEntries?: JournalEntryLike[];
+    // 呼ばれた順に返す頁（`next` つき）。尽きたら最後の頁を返す。指定が無ければ `journalEntries` を `next` 無しで返す
+    journalPages?: { entries: JournalEntryLike[]; next: { id: string; at: string } | null }[];
     journalByIdStatus?: number;
     usageAggregate?: unknown;
     reports?: { date: string; at: string; body: string; unavailable?: string }[];
@@ -1703,6 +1705,11 @@ function stubClient(
     journal: {
       $get: (args: unknown) => {
         calls.push({ route: 'GET /journal', args });
+        if (options.journalPages !== undefined) {
+          const served = calls.filter((c) => c.route === 'GET /journal').length - 1;
+          const pages = options.journalPages;
+          return Promise.resolve(reply(200, pages[Math.min(served, pages.length - 1)]));
+        }
         return Promise.resolve(reply(200, { entries: options.journalEntries ?? [] }));
       },
       ':id': {
@@ -3327,6 +3334,71 @@ describe('chat の /journal', () => {
     await runSlashCommand('/journal', client, emptyListed());
 
     expect(read()).toContain('日誌はまだ空');
+  });
+
+  // `next` を読む（#4835）: 読めない行だけの頁は `entries: []` でも続きがある
+  describe('継続点 next（#4835）', () => {
+    const row = (id: string, at: string) => ({ id, at, type: 'exchange', text: `本文-${id}` });
+
+    it('1頁目が空でも next が在れば続きを読み、2頁目の行を出して「空」と言わない', async () => {
+      const read = captureStdout();
+      const { calls, client } = stubClient({
+        journalPages: [
+          { entries: [], next: { id: 'j-9', at: '2026-08-16T10:09:00.000Z' } },
+          { entries: [row('j-1', '2026-08-16T10:00:00.000Z')], next: null },
+        ],
+      });
+
+      await runSlashCommand('/journal', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('本文-j-1');
+      expect(text).not.toContain('日誌はまだ空');
+      expect(calls).toHaveLength(2);
+      expect(calls[1]).toEqual({
+        route: 'GET /journal',
+        args: { query: { limit: '20', afterId: 'j-9', afterAt: '2026-08-16T10:09:00.000Z' } },
+      });
+    });
+
+    it('絞り込みでも、空の頁の先に行が在れば「当たる日誌はありません」と言わない', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        journalPages: [
+          { entries: [], next: { id: 'j-9', at: '2026-08-16T10:09:00.000Z' } },
+          { entries: [row('j-1', '2026-08-16T10:00:00.000Z')], next: null },
+        ],
+      });
+
+      await runSlashCommand('/journal type=exchange', client, emptyListed());
+
+      expect(read()).not.toContain('当たる日誌はありません');
+    });
+
+    it('entries が limit 未満でも next が非 null なら、これより古い日誌があるかもしれないと言う', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        journalPages: [
+          {
+            entries: [row('j-1', '2026-08-16T10:00:00.000Z')],
+            next: { id: 'j-1', at: '2026-08-16T10:00:00.000Z' },
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal 5', client, emptyListed());
+
+      expect(read()).toContain('これより古い日誌があるかもしれない');
+    });
+
+    it('対照: next が null の0件は今までどおり「空」', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ journalPages: [{ entries: [], next: null }] });
+
+      await runSlashCommand('/journal', client, emptyListed());
+
+      expect(read()).toContain('日誌はまだ空');
+    });
   });
 
   // `q=` はサーバへ投げる: 画面側・CLI 側で捨てると「出していないだけ」の層ができる
