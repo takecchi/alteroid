@@ -37,6 +37,7 @@ function harness(
     verdict?: Verdict;
     verdictOf?: (id: string) => Verdict;
     probeTakesMs?: number;
+    onProbe?: (id: string) => Promise<void>;
     spreadResults?: TokenSpreadResult[];
   } = {},
 ): Harness {
@@ -57,6 +58,7 @@ function harness(
     async probe(token) {
       probeCalls.push(token);
       nowMs += options.probeTakesMs ?? 0;
+      await options.onProbe?.(token.id);
       return options.verdictOf?.(token.id) ?? options.verdict ?? { verdict: 'usable' };
     },
   };
@@ -3286,5 +3288,95 @@ describe('recordTrialVerdict（Issue #1501: ダメ元の試しの結果を記録
     ]);
     expect(await isCooling(h, 'tok-a')).toBe(true);
     expect(await isCooling(h, 'tok-b')).toBe(false);
+  });
+});
+
+describe('#4844: 値が差し替わった行', () => {
+  it('現役の行の値を差し替えると（pool_changed）、新しい値を撒き直し、世代を上げる', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await h.rotator.restore();
+    h.spreadCalls.length = 0;
+    const rows = await h.stores.tokens.list();
+    await h.stores.tokens.replace(
+      rows.map((row) => (row.id === 'tok-a' ? { ...row, value: 'value-a2' } : row)),
+    );
+
+    const outcome = await h.rotator.reconsider({ reason: 'pool_changed' });
+
+    expect(outcome.kind).toBe('rotated');
+    expect(h.spreadCalls).toEqual([
+      { id: 'tok-a', generation: 2, kind: 'stored', value: 'value-a2' },
+    ]);
+    expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-a', generation: 2 });
+
+    h.spreadCalls.length = 0;
+    const again = await h.rotator.reconsider({ reason: 'pool_changed' });
+    expect(again.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
+  });
+
+  it('対照: 値を変えずラベルだけ変えても、撒き直さない', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await h.rotator.restore();
+    h.spreadCalls.length = 0;
+    const rows = await h.stores.tokens.list();
+    await h.stores.tokens.replace(
+      rows.map((row) => (row.id === 'tok-a' ? { ...row, label: 'renamed' } : row)),
+    );
+
+    const outcome = await h.rotator.reconsider({ reason: 'pool_changed' });
+
+    expect(outcome.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
+    expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-a', generation: 1 });
+  });
+
+  it('付け替えの probe の間に選ばれる行の値を差し替えると、撒かれるのは新しい値', async () => {
+    const stash: { h?: Harness } = {};
+    const h = harness({
+      onProbe: async (id) => {
+        if (id !== 'tok-b' || stash.h === undefined) return;
+        const rows = await stash.h.stores.tokens.list();
+        await stash.h.stores.tokens.replace(
+          rows.map((row) => (row.id === 'tok-b' ? { ...row, value: 'value-b2' } : row)),
+        );
+      },
+    });
+    stash.h = h;
+    await seedTwo(h);
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('rotated');
+    expect(h.probeCalls.map((call) => call.value)).toEqual(['value-b']);
+    expect(h.spreadCalls).toEqual([
+      { id: 'tok-b', generation: 2, kind: 'stored', value: 'value-b2' },
+    ]);
+  });
+
+  it('付け替えの probe の間に選ばれる行が消えたら、撒かず見送る', async () => {
+    const stash: { h?: Harness } = {};
+    const h = harness({
+      onProbe: async (id) => {
+        if (id !== 'tok-b' || stash.h === undefined) return;
+        const rows = await stash.h.stores.tokens.list();
+        await stash.h.stores.tokens.replace(rows.filter((row) => row.id !== 'tok-b'));
+      },
+    });
+    stash.h = h;
+    await seedTwo(h);
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
   });
 });

@@ -63,6 +63,63 @@ describe('normalizeTokenPool', () => {
     ]);
   });
 
+  it('#4844: 値が変わった行は、冷却・拒否・失効の記録を引き継がない（ラベル・順位・無効の印は残る）', () => {
+    const existing: AgentToken[] = [
+      {
+        id: 'tok-a',
+        label: 'keep-label',
+        value: 'tok-aaa',
+        order: 3,
+        disabledAt: '2026-08-03T00:00:00.000Z',
+        cooldownUntil: 12345,
+        cooldownSource: 'default',
+        lastRejectedAt: '2026-08-01T00:00:00.000Z',
+        lastRejectedReason: 'rate_limit',
+        invalidatedAt: '2026-08-02T00:00:00.000Z',
+        invalidatedReason: 'disabled_by_org',
+        createdAt: '2026-07-01T00:00:00.000Z',
+      },
+    ];
+
+    const result = normalizeTokenPool(
+      [{ id: 'tok-a', label: 'keep-label', value: 'tok-bbb', order: 3 }],
+      existing,
+      opts(),
+    );
+
+    expect(result).toEqual([
+      {
+        id: 'tok-a',
+        label: 'keep-label',
+        value: 'tok-bbb',
+        order: 3,
+        disabledAt: '2026-08-03T00:00:00.000Z',
+        createdAt: '2026-07-01T00:00:00.000Z',
+        updatedAt: '2026-08-24T00:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('#4844 対照: 値が同じなら、同じ値を送り直しても記録は残る', () => {
+    const existing: AgentToken[] = [
+      {
+        id: 'tok-a',
+        label: 'a',
+        value: 'tok-aaa',
+        order: 0,
+        cooldownUntil: 12345,
+        invalidatedAt: '2026-08-02T00:00:00.000Z',
+      },
+    ];
+    const result = normalizeTokenPool(
+      [{ id: 'tok-a', label: 'a', value: 'tok-aaa' }],
+      existing,
+      opts(),
+    );
+    expect(result[0]?.cooldownUntil).toBe(12345);
+    expect(result[0]?.invalidatedAt).toBe('2026-08-02T00:00:00.000Z');
+  });
+
   it('入力に value が在れば、引き継がずそちらで上書きする', () => {
     const existing: AgentToken[] = [{ id: 'tok-a', label: 'old', value: 'tok-aaa', order: 0 }];
     const result = normalizeTokenPool(
