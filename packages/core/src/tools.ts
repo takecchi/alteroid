@@ -1873,6 +1873,13 @@ function describeTokenGeneration(manager: ManagerSummary): string | null {
   if (!tokenGenerationMismatched(manager)) {
     return `  認証トークンの世代: ${manager.tokenGeneration}（現役と一致）`;
   }
+  // セッションの終わった委譲には ⚠ を出さない（#4857）: 走っているセッションが無いので「古い鍵で走り続けている」は事実に反し、鍵が回るたびに一覧が終わった委譲の ⚠ で埋まる。done はセッションが生きて待っていることがあるので対象にしない
+  if (manager.status === 'stopped' || manager.status === 'failed' || manager.status === 'lost') {
+    return (
+      `  認証トークンの世代: ${manager.tokenGeneration}（現役は世代 ${manager.activeTokenGeneration}。` +
+      `この委譲のセッションは終わっている（status=${manager.status}）ので、古い鍵で走ってはいない。起こし直すと新しい鍵で起きる）`
+    );
+  }
   return (
     `  ⚠ 認証トークンの世代が食い違っている（世代 ${manager.tokenGeneration} を抱えたまま、` +
     `現役は世代 ${manager.activeTokenGeneration}）。この委譲のセッションが、` +
