@@ -5816,7 +5816,17 @@ class Pool implements ManagerPool {
       }
       // 新しい経路を作らず `send()` に相乗りする: どちらの道でも会話は続き、最初からやり直しにならない。
       const result = await this.send(managerId, usageRotationNudge());
-      if (result.outcome === 'delivered' || result.outcome === 'answered') return 'nudged';
+      if (result.outcome === 'delivered' || result.outcome === 'answered') {
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'outbound',
+          text:
+            `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] 枠で止まっていた委譲を、通る鍵で続きから起こし直した` +
+            `（status=${status}, outcome=${result.outcome}）`,
+        });
+        return 'nudged';
+      }
       await this.#journal({
         type: 'exchange',
         with: 'manager',
@@ -5837,6 +5847,15 @@ class Pool implements ManagerPool {
       });
       return 'skipped';
     }
+  }
+
+  /**
+   * 枠（429）で落ちたと分かった委譲について、回し手へ「利用上限に当たった」と頼む（#4850）。
+   * 使える鍵が在れば回し手が回して `resumeStoppedByUsage()` を呼び、新しい鍵で続きから起こし直される。無ければ、鍵が戻った時点の同じ呼び出しが拾う。
+   * 新しい経路を作らず、`usage_notice` と同じ口（`#observeForTokenRotation`）に乗せる。投げない（口が握る）。
+   */
+  async #requestRotationForFailure(managerId: string, text: string): Promise<void> {
+    await this.#observeForTokenRotation(managerId, { notice: { kind: 'reached', text } });
   }
 
   async #settleUsageWake(managerId: string, stoppedByUsage: boolean): Promise<void> {
@@ -8209,6 +8228,8 @@ class Pool implements ManagerPool {
         // `event.failure` の有無で条件を付けない: `report` が届いたこと自体が「セッションは生きて出力している」を確定させ、`lastSystemError` / `lastCgroupEvents` は過去になる。
         delete record.job.lastSystemError;
         delete record.job.lastCgroupEvents;
+        // この報告で枠の印を新しく立てたか（下の失敗の枝）。立てた回だけ、使える鍵が在れば今すぐ回すよう回し手へ頼む。
+        let markedByFailure = false;
         // 失敗として終わった回は台帳にもそう残す: 包んだ文字列だけに頼ると、一覧を出す側は「報告が来た」と「エラーで死んだ」を本文の先頭を読んで判定することになる（＝ 表示のたびに文言の判定が要る）。
         // 応答として終わった回では消す: 過去の失敗が生きているマネージャーに貼り付く。`delete` なのは `exactOptionalPropertyTypes` のため。
         if (event.failure === undefined) {
@@ -8225,6 +8246,13 @@ class Pool implements ManagerPool {
             via: event.failure.via,
             at: new Date().toISOString(),
           };
+          // 429・枠の失敗は、枠の通知（`usage_notice`）が先に届かなくても印を立てる（#4850）: 通知は本文の文言でしか出ないので、構造化された失敗（`status=429` など）だけで落ちたターンは印が無く、鍵が回っても起こし直しの対象に入らなかった。クラッシュなど枠と無関係な失敗は `isQuotaFailure` が偽なので立てない。
+          // 同期の位置で立てる（`usage_notice` と同じ理由）: 間に `await` を挟むと並行の出来事に先を越される。永続化は下の `#persist` に乗せる。
+          if (isQuotaFailure(event.failure) && !this.#usageStopped.has(event.managerId)) {
+            this.#usageStopped.add(event.managerId);
+            record.job.usageStoppedAt ??= new Date(this.#now()).toISOString();
+            markedByFailure = true;
+          }
         }
         // `event.failure` の有無とは独立に判定する: 両方無いことも片方だけ在ることもある。
         if (event.unreported === undefined) {
@@ -8244,6 +8272,14 @@ class Pool implements ManagerPool {
         // `contentless` / `awaitingBackground` の早い `return` より手前に置く: 後ろだと中身の無い報告で終わった回だけ起こされないまま残る。
         // 判定は `event.failure` ではなく印（`#usageStopped`）で行う: 失敗には SDK のクラッシュも混ざり、枠と無関係に落ちたターンへ「通る鍵に戻った」と言ってしまう。
         await this.#settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
+        // 印を立てた直後に、使える鍵が在れば今すぐ起こし直してもらう（#4850）。起こし直しは回し手が鍵を回した後の `resumeStoppedByUsage()` に乗る。
+        // 上の `#settleUsageWake` が起こせて印が下りていれば頼まない: 要らない鍵の回転を起こさない。
+        if (markedByFailure && this.#usageStopped.has(event.managerId)) {
+          await this.#requestRotationForFailure(
+            event.managerId,
+            failedReportBodyOf(event.text) ?? event.text,
+          );
+        }
         // 添えられたもの・断ったものが在る報告は、本文が空でも背景処理待ちでも配る: 成果物を握り潰さない。何も添えられていない報告は `await` を挟まない。
         const reportFiles =
           (event.files?.length ?? 0) > 0 || (event.rejectedFiles?.length ?? 0) > 0
@@ -9235,6 +9271,8 @@ class Pool implements ManagerPool {
           }
         }
         // `event.reason` を包まない: runner の接頭辞と例外文言が既に1本の文字列に連結されており、この層に `codeSpan()` で包む境目が無い。包むなら `runner.ts` の `#read()`。`event.reason` は1文字も変えず、`systemError` / `cgroupEvents` は末尾に足すだけ。
+        // 枠の文言で落ちた回に、枠の印を新しく立てたか（下の `failed` の枝）。
+        let markedByClosed: string | undefined;
         if (event.status === 'failed') {
           // 本文を日誌へ先に書く: 合流窓の flush の日誌は内訳の1行だけで個々の本文を含まないので、flush 前にプロセスが落ちると本文がどこにも残らない。
           const body = withCgroupEventsNote(
@@ -9249,6 +9287,16 @@ class Pool implements ManagerPool {
           });
           // 枠の印は落ちた理由を既存の分類（`classifyUsageNotice`）に通して付ける: `reached` / `transition` のときだけ。分類できない落ち方（SDK のクラッシュ等）は印を付けず、担当ごとに配る。
           const reasonNotice = classifyUsageNotice(event.reason);
+          // 枠の文言で落ちた回にも、`usage_notice` を待たずに枠の印を立てる（#4850）: セッションの例外で落ちた回は runner が通知を出さず、印が無いと回転の起こし直しの対象に入らない。`reached` だけ（`usage_notice` と同じ）。分類できない落ち方（SDK のクラッシュ等）には立てない。
+          if (reasonNotice?.kind === 'reached' && !this.#usageStopped.has(event.managerId)) {
+            this.#usageStopped.add(event.managerId);
+            record.job.usageStoppedAt ??= new Date(this.#now()).toISOString();
+            markedByClosed = reasonNotice.text;
+            // 書けなくても進む: 台帳に写せないのは再起動を跨ぐ分だけで、メモリの印で今回の回転は拾える。
+            await this.#persist(record).catch((error: unknown) => {
+              noteDroppedRecord('枠で止まった印の永続化', `managerId=${event.managerId}`, error);
+            });
+          }
           this.#queueSynthesizedNotice(
             event.managerId,
             'closed_failed',
@@ -9341,6 +9389,10 @@ class Pool implements ManagerPool {
           }
         }
         this.#retire(event.managerId);
+        // 印を立てた直後に、使える鍵が在れば今すぐ起こし直してもらう（#4850）。`#retire` の後に置く: 回し手が鍵を回して `resumeStoppedByUsage()` を呼ぶと `send()` が像を載せ直すので、手前だと `#retire` がそれを消す。
+        if (markedByClosed !== undefined && this.#usageStopped.has(event.managerId)) {
+          await this.#requestRotationForFailure(event.managerId, markedByClosed);
+        }
         // 枠でセッションごと落ちた回は `report` が出ず、ここしか通らない。`#retire` の後で呼ぶ: 起こし直しは `send()` に相乗りし、像が無ければ台帳から読み直すので resume できる。逆順だと `#retire` が `send()` の載せ直した像を消す。
         await this.#settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
         return;
