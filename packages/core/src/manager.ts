@@ -510,6 +510,11 @@ export interface ManagerSummary {
    */
   classifierDenials?: readonly ClassifierDenialOverLimit[];
   /**
+   * 担当の答え（`peer_approve`）を待っている peer（Codex）の確認の本数と、最古の待ち始めの時刻（#4886）。確認に期限は無く、答え忘れると peer は止まったまま残る。
+   * 待っているものが無いとき・分からないとき（未聴取・古い runner）は欄が無い。名簿の観測を読むだけなので少し古いことがある。
+   */
+  pendingPeerApprovals?: { count: number; oldestSince: string };
+  /**
    * `tokenGeneration` とは独立の材料: あちらは daemon のプロセス内記憶が前提で、こちらは
    * 429の文言と `TokenPoolStore` だけを見るので bookkeeping が無い場面でも判定できる。
    * 欄ごと消えるときを「世代ずれではない」へ倒さない（`undefined` は「健全」ではない）。
@@ -4512,6 +4517,21 @@ class Pool implements ManagerPool {
     return undefined;
   }
 
+  #observedPeerApprovals(
+    runnerId: string | undefined,
+    managerId: string,
+  ): { count: number; oldestSince: string } | undefined {
+    if (runnerId === undefined) return undefined;
+    for (const entry of this.#runners.entries()) {
+      if (entry.runnerId !== runnerId) continue;
+      const approvals = entry.sessionPeerApprovals;
+      if (approvals !== undefined && Object.hasOwn(approvals, managerId)) {
+        return approvals[managerId];
+      }
+    }
+    return undefined;
+  }
+
   async list(): Promise<ManagerSummary[]> {
     await this.#ensureConnected();
 
@@ -4590,6 +4610,11 @@ class Pool implements ManagerPool {
       const current = known.get(record.job.id);
       if (denials !== undefined && current !== undefined) {
         known.set(record.job.id, { ...current, classifierDenials: denials });
+      }
+      const peerApprovals = this.#observedPeerApprovals(record.job.runnerId, record.job.id);
+      const afterDenials = known.get(record.job.id);
+      if (peerApprovals !== undefined && afterDenials !== undefined) {
+        known.set(record.job.id, { ...afterDenials, pendingPeerApprovals: { ...peerApprovals } });
       }
     }
     const summaries = [...known.values()];

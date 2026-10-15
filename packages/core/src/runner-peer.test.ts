@@ -662,6 +662,89 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await s.host.shutdown();
   });
 
+  describe('確認待ちの peer が長く残ったら見える化する（#4886）', () => {
+    const bash = {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'ls' },
+      tool_response: { stdout: '', stderr: '' },
+    };
+    const contextOf = (result: unknown): string | undefined =>
+      (result as { hookSpecificOutput?: { additionalContext?: string } }).hookSpecificOutput
+        ?.additionalContext;
+
+    async function setup() {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-15T00:00:00.000Z'));
+      const sdk = readingQuery();
+      const s = await setupPeerCall([], { sdk });
+      const hook = (
+        sdk.options() as {
+          hooks?: {
+            PostToolUse?: {
+              hooks: ((i: never, id: undefined, o: { signal: AbortSignal }) => Promise<unknown>)[];
+            }[];
+          };
+        }
+      ).hooks?.PostToolUse?.[0]?.hooks[0];
+      if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+      const post = (extra: Record<string, unknown> = {}) =>
+        hook({ ...bash, ...extra } as never, undefined, { signal: new AbortController().signal });
+      return { s, post };
+    }
+
+    it('10 分未満は添えず、state() には本数と待ち始めが出る', async () => {
+      const { s, post } = await setup();
+      try {
+        expect(s.approvalId).toBeDefined();
+        vi.setSystemTime(new Date('2026-10-15T00:09:59.000Z'));
+        expect(contextOf(await post())).toBeUndefined();
+        const state = (await s.host.list()).find((x) => x.managerId === 'mgr-1');
+        expect(state?.pendingPeerApprovals).toEqual({
+          count: 1,
+          oldestSince: '2026-10-15T00:00:00.000Z',
+        });
+      } finally {
+        vi.useRealTimers();
+        await s.client.close();
+        await s.host.shutdown();
+      }
+    });
+
+    it('10 分以上残ると担当にも作業者にも添え、間隔内は添えず、答えたら覚えが消える', async () => {
+      const { s, post } = await setup();
+      try {
+        vi.setSystemTime(new Date('2026-10-15T00:10:00.000Z'));
+        const own = contextOf(await post());
+        expect(own).toContain(`peer ${/session_id: (peer-[0-9a-f]+)/.exec(s.firstText)?.[1]}`);
+        expect(own).toContain(`approval_id ${s.approvalId}`);
+        expect(own).toContain('10 分待っている');
+        expect(own).toContain('peer_approve');
+        expect(own).toContain('止める指示ではない');
+        expect(
+          s.events.filter((e) => e.type === 'note' && e.text.includes('確認待ちの peer')),
+        ).toHaveLength(1);
+
+        const byWorker = contextOf(await post({ agent_id: 'agent-1', agent_type: 'worker' }));
+        expect(byWorker).toContain('peer_approve');
+
+        vi.setSystemTime(new Date('2026-10-15T00:19:59.000Z'));
+        expect(contextOf(await post())).toBeUndefined();
+        vi.setSystemTime(new Date('2026-10-15T00:20:00.000Z'));
+        expect(contextOf(await post())).toContain('20 分待っている');
+
+        await s.approve('allow');
+        expect(contextOf(await post())).toBeUndefined();
+        const state = (await s.host.list()).find((x) => x.managerId === 'mgr-1');
+        expect(state).not.toHaveProperty('pendingPeerApprovals');
+      } finally {
+        vi.useRealTimers();
+        await s.client.close();
+        await s.host.shutdown();
+      }
+    });
+  });
+
   it('マネージャーの deny なら ask を上げずに codex へ decline が返り、結果に拒否の件数が出る', async () => {
     const s = await setupPeerCall();
     const result = await s.approve('deny');

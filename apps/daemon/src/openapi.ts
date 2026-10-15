@@ -663,6 +663,10 @@ export const managerSummarySchema = z.object({
     .enum(['pool-not-wired', 'not-yet-observed', 'reattached-across-restart'])
     .optional(),
   liveBackgroundTasks: z.number().int().nonnegative().optional(),
+  // 担当の答え（`peer_approve`）を待っている peer の確認の本数と最古の待ち始め（#4886）。待っているものが無いとき・分からないときは載らない。
+  pendingPeerApprovals: z
+    .object({ count: z.number().int().positive(), oldestSince: z.string() })
+    .optional(),
   // 名乗らない古い runner の委譲には載らない（`undefined` は「分からない」）。空配列は「越えている相手は居ない」。
   classifierDenials: z
     .array(

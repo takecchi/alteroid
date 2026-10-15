@@ -236,6 +236,7 @@ import {
   UNTRACKED_STALE_AFTER_MS,
 } from './rescue-ref.js';
 import { defaultRunnerRescueStagedRoot } from './rescue-stash.js';
+import { PeerApprovalNotices } from './runner-peer-approval-notice.js';
 import { StaleUntrackedNotices } from './runner-stale-untracked.js';
 import {
   ScratchSweeper,
@@ -2022,6 +2023,7 @@ class RunnerSession {
   readonly #stashArchive: ((body: string) => { id: string; chars: number } | undefined) | undefined;
   readonly #pidsPressureNotices = new PidsPressureNotices();
   readonly #staleUntrackedNotices = new StaleUntrackedNotices();
+  readonly #peerApprovalNotices = new PeerApprovalNotices();
   readonly #denialStreaks = new ClassifierDenialStreaks();
   readonly #rescueMemory = new RescueMemory();
   /** 退避の列挙の打ち切りの知らせ（同じ状態が続く間は繰り返さない。#4681）。 */
@@ -2236,6 +2238,17 @@ class RunnerSession {
       }),
       ...(this.#tokenFingerprint === undefined ? {} : { tokenFingerprint: this.#tokenFingerprint }),
       classifierDenials: this.#denialStreaks.overLimit(),
+      ...this.#pendingPeerApprovalsState(),
+    };
+  }
+
+  /** 確認待ちの peer の本数と最古の待ち始め（#4886）。待っているものが無ければ欄ごと無い。 */
+  #pendingPeerApprovalsState(): Pick<RunnerManagerState, 'pendingPeerApprovals'> {
+    const pending = this.#peerBroker?.pendingApprovals() ?? [];
+    if (pending.length === 0) return {};
+    const oldest = Math.min(...pending.map((entry) => entry.since));
+    return {
+      pendingPeerApprovals: { count: pending.length, oldestSince: new Date(oldest).toISOString() },
     };
   }
 
@@ -4544,11 +4557,12 @@ class RunnerSession {
     // 担当本人にも作業者にも添える: dev サーバーや E2E を起こすのは作業者のことが多い
     const pressure = await this.#pidsPressureNotice(record.agentId);
     const staleUntracked = this.#staleUntrackedNotice(record.agentId);
+    const peerApproval = this.#peerApprovalNotice(record.agentId);
     // 分類器の拒否が続いた後に初めて通った道具に、事情と取れる道を添える
     const streakActor = record.agentId ?? 'manager';
     const denialStreak = this.#denialStreaks.takeNotice(streakActor, Date.now());
     this.#denialStreaks.noteProgress(streakActor);
-    const parts = [additionalContext, pressure, staleUntracked, denialStreak].filter(
+    const parts = [additionalContext, pressure, staleUntracked, peerApproval, denialStreak].filter(
       (part): part is string => part !== null,
     );
     if (parts.length === 0) return { kind: 'continue' };
@@ -4599,6 +4613,35 @@ class RunnerSession {
         });
       }
       return text;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 確認待ちの peer が 10 分以上残っていれば、知らせの段落を返す（`runner-peer-approval-notice.ts`、#4886）。
+   * 確認に期限は無く、自動では閉じない（見える化だけ）。相手（担当本人・作業者ごと）に10分に1回まで。担当本人に添えた回は日誌にも1行残す。
+   * 投げたときは何も添えない。
+   */
+  #peerApprovalNotice(agentId: string | undefined): string | null {
+    const broker = this.#peerBroker;
+    if (broker === undefined) return null;
+    try {
+      const notice = this.#peerApprovalNotices.next(
+        agentId ?? 'manager',
+        broker.pendingApprovals(),
+        Date.now(),
+      );
+      if (notice !== null && agentId === undefined) {
+        this.#emit({
+          type: 'note',
+          managerId: this.#id,
+          text:
+            `確認待ちの peer が 10 分以上残っている（${String(notice.count)} 本）ので、` +
+            'この担当の道具の結果に「peer_approve で答えるか閉じること」という知らせを添えた（止める指示ではない）。',
+        });
+      }
+      return notice?.text ?? null;
     } catch {
       return null;
     }

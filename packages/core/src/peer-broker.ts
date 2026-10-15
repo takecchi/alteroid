@@ -67,6 +67,17 @@ export interface PeerPendingApproval {
 
 export const PEER_APPROVAL_SUMMARY_LIMIT = 1200;
 
+/** 確認待ちの peer が残り続けているとき、担当の道具の結果に知らせを添え始めるまでの待ち（#4886）。確認自体に期限は無い。 */
+export const PEER_APPROVAL_STALE_AFTER_MS = 10 * 60_000;
+
+/** 答えを待っている確認（`PeerBroker.pendingApprovals()` の1行）。 */
+export interface PeerPendingApprovalInfo {
+  readonly sessionId: string;
+  readonly approvalId: string;
+  /** 待ちに入った時刻（エポックミリ秒）。 */
+  readonly since: number;
+}
+
 export interface PeerUsageReport {
   readonly provider: AgentProviderId;
   readonly sessionId?: string;
@@ -292,6 +303,7 @@ interface PendingEntry {
   readonly approvalId: string;
   readonly request: AgentPermissionRequest;
   readonly summary: string;
+  readonly since: number;
   readonly settle: (decision: AgentPermissionDecision, by: PeerApprovalAnswerer) => void;
 }
 
@@ -390,6 +402,14 @@ class PeerSession {
 
   get pendingIds(): readonly string[] {
     return this.#pending.map((entry) => entry.approvalId);
+  }
+
+  pendingInfos(): readonly PeerPendingApprovalInfo[] {
+    return this.#pending.map((entry) => ({
+      sessionId: this.id,
+      approvalId: entry.approvalId,
+      since: entry.since,
+    }));
   }
 
   hasPending(approvalId: string): boolean {
@@ -567,7 +587,13 @@ class PeerSession {
         return;
       }
       request.signal.addEventListener('abort', onAbort, { once: true });
-      this.#pending.push({ approvalId, request, summary: describeRequest(request), settle });
+      this.#pending.push({
+        approvalId,
+        request,
+        summary: describeRequest(request),
+        since: (this.#deps.now?.() ?? new Date()).getTime(),
+        settle,
+      });
       this.#deps.onNote(
         `peer（${this.provider}）[${this.id}] の ${request.toolName} の確認 ${approvalId} をマネージャーへ返した`,
       );
@@ -791,6 +817,8 @@ export interface PeerBroker {
   ): Promise<PeerCallResult>;
   /** 確認待ちで止まったものは入らない（止まりどころとしてマネージャーへ知らせ済みで、答えを待っているのは相手のほう）。 */
   backgroundTasks(): { id: string; taskType: string }[];
+  /** 答えを待っている確認（セッション順）。 */
+  pendingApprovals(): PeerPendingApprovalInfo[];
   closeAll(): void;
   mcpServer(): ReturnType<typeof createSdkMcpServer>;
 }
@@ -1133,6 +1161,9 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
       return [...sessions.values()]
         .filter((session) => session.inBackground)
         .map((session) => ({ id: `peer:${session.id}`, taskType: `peer:${session.provider}` }));
+    },
+    pendingApprovals() {
+      return [...sessions.values()].flatMap((session) => [...session.pendingInfos()]);
     },
     closeAll() {
       stopSweeping();

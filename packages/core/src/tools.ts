@@ -1506,6 +1506,17 @@ function describeDenials(
   );
 }
 
+/** 確認待ちの peer が残っている担当に1行（#4886）。確認に期限は無く、答えるまで peer は止まったままなので、一覧で見えるようにする。 */
+function peerApprovalsLine(
+  approvals: { count: number; oldestSince: string } | undefined,
+): string | null {
+  if (approvals === undefined) return null;
+  return (
+    `  ⚠ 確認待ちの peer が ${String(approvals.count)} 本ある（最古は ${approvals.oldestSince} から待っている）。` +
+    '担当が peer_approve で答えるまで peer は止まったままで、確認の期限は無い。'
+  );
+}
+
 function denialLine(denials: ManagerDenial[], lastReportAt: string | undefined): string | null {
   const note = describeDenials(denials, lastReportAt);
   return note === null ? null : `  ${note}`;
@@ -7576,6 +7587,7 @@ export function createCloneTools(context: ToolContext) {
               denialLine(context.managers?.denials(manager.managerId) ?? [], manager.lastReportAt),
               // 拒否の行の直後に置く: 上限を越えた担当は、この後の返事待ちが分類器の倒した確認で埋まりうるため、返事待ちより先に読ませる
               describeDenialStreakForList(manager.classifierDenials),
+              peerApprovalsLine(manager.pendingPeerApprovals),
               // 待ちの要約も抜粋を通す: `AskUserQuestion` の経路は質問文を連ねて runner 側のキャップを通らないため
               // 欠けていても「実行許可」「undefined から」と嘘をつかず、`種別不明` にして時刻の断片を落とす
               // 件数にも上限を置く: `manager.waiting` は増える一方で、伸びると1本のマネージャーが予算を占有し他が押し出されるため

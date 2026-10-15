@@ -89,7 +89,18 @@ export const runnerManagerStateSchema = z.object({
       }),
     )
     .optional(),
+  /**
+   * 担当が `peer_approve` で答えるのを待っている peer（Codex）の確認の本数と、最古の待ち始めの時刻（ISO 8601）。確認に期限は無いので、
+   * 答え忘れると peer は止まったまま誰にも見えない（#4886）。待っているものが無いとき・数えていない（古い runner）ときは欄が無い。
+   */
+  pendingPeerApprovals: z
+    .object({ count: z.number().int().positive(), oldestSince: z.string() })
+    .optional(),
 });
+
+export type PendingPeerApprovals = NonNullable<
+  z.infer<typeof runnerManagerStateSchema>['pendingPeerApprovals']
+>;
 
 export interface RunnerManagerListing {
   states: RunnerManagerState[];
@@ -1708,6 +1719,8 @@ export interface RunnerEntry {
   sessionBackgroundTasks?: Readonly<Record<string, number>>;
   /** 欄を名乗った委譲だけが載る（`runnerManagerStateSchema.classifierDenials`）。キーが無いのは「分からない」。 */
   sessionClassifierDenials?: Readonly<Record<string, readonly ClassifierDenialOverLimit[]>>;
+  /** 確認待ちの peer が居る委譲だけが載る（`runnerManagerStateSchema.pendingPeerApprovals`）。 */
+  sessionPeerApprovals?: Readonly<Record<string, PendingPeerApprovals>>;
   /** 鍵の指紋で、値は持たない。キーが無いのは「分からない」。 */
   sessionTokenFingerprints?: Readonly<Record<string, string>>;
   /** `entries()` のたびに `entry.client.legState` を読み直す。観測の時刻の対は持たない。無いことは `'never-connected'` とは別の事実。 */
@@ -1952,6 +1965,7 @@ interface RegistryEntry {
   sessionsObservedAt?: string;
   sessionBackgroundTasks?: ReadonlyMap<string, number>;
   sessionClassifierDenials?: ReadonlyMap<string, readonly ClassifierDenialOverLimit[]>;
+  sessionPeerApprovals?: ReadonlyMap<string, PendingPeerApprovals>;
   sessionTokenFingerprints?: ReadonlyMap<string, string>;
   /** 周期より遅い応答を積み上げないための錠: `true` の間はこの entry へ次の探りを投げない。 */
   sessionsProbing?: boolean;
@@ -2096,6 +2110,9 @@ class Registry implements RunnerRegistry {
       ...(entry.sessionClassifierDenials === undefined || entry.sessionsObservedAt === undefined
         ? {}
         : { sessionClassifierDenials: Object.fromEntries(entry.sessionClassifierDenials) }),
+      ...(entry.sessionPeerApprovals === undefined || entry.sessionsObservedAt === undefined
+        ? {}
+        : { sessionPeerApprovals: Object.fromEntries(entry.sessionPeerApprovals) }),
       ...(entry.sessionTokenFingerprints === undefined || entry.sessionsObservedAt === undefined
         ? {}
         : { sessionTokenFingerprints: Object.fromEntries(entry.sessionTokenFingerprints) }),
@@ -2539,6 +2556,7 @@ class Registry implements RunnerRegistry {
         entry.sessions = new Set();
         entry.sessionBackgroundTasks = new Map();
         entry.sessionClassifierDenials = new Map();
+        entry.sessionPeerApprovals = new Map();
         entry.sessionTokenFingerprints = new Map();
         entry.sessionsObservedAt = new Date(at).toISOString();
         return;
@@ -2572,6 +2590,14 @@ class Registry implements RunnerRegistry {
           state.liveBackgroundTasks === undefined
             ? []
             : [[state.managerId, state.liveBackgroundTasks]],
+        ),
+      );
+      // 待っている peer が無い委譲は載せない（欄が無い = 0 本）。一覧が前の観測の本数を残さないよう、毎回作り直す
+      entry.sessionPeerApprovals = new Map(
+        states.flatMap((state): [string, PendingPeerApprovals][] =>
+          state.pendingPeerApprovals === undefined
+            ? []
+            : [[state.managerId, state.pendingPeerApprovals]],
         ),
       );
       entry.sessionTokenFingerprints = new Map(

@@ -21538,6 +21538,20 @@
                             "minimum": 0,
                             "maximum": 9007199254740991
                           },
+                          "pendingPeerApprovals": {
+                            "type": "object",
+                            "properties": {
+                              "count": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "oldestSince": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["count", "oldestSince"]
+                          },
                           "classifierDenials": {
                             "type": "array",
                             "items": {
@@ -22430,6 +22444,20 @@
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 9007199254740991
+                        },
+                        "pendingPeerApprovals": {
+                          "type": "object",
+                          "properties": {
+                            "count": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "oldestSince": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["count", "oldestSince"]
                         },
                         "classifierDenials": {
                           "type": "array",
