@@ -6112,8 +6112,13 @@ class Clone implements CloneHost {
   #childEnv(): NodeJS.ProcessEnv {
     // 鍵は呼ばれるたびに読み直す: `#childEnvBase` は構築時のスナップショットで、後から差し替えた鍵が届かなくなるため。
     // 重ね順は runner.ts と揃える（env → 正本 → 鍵 → プロファイル）: 層ごとに違うと片方にだけ回る鍵が生まれるため。
-    // 身元の捕捉はここ以外でしない: 世代の照合が素通しになる。
+    // 身元の捕捉は本セッションを組むここ以外でしない: 世代の照合が素通しになる。
     this.#sdkSession.captureSessionTokenIdentity(this.#tokenIdentity?.());
+    return this.#childEnvWithoutIdentityCapture();
+  }
+
+  /** 蒸留のセッションは `#childEnv()` ではなくこちらを使う: 走行中の本セッションの鍵の身元を、回した後の鍵で上書きしてしまうため（#4880）。 */
+  #childEnvWithoutIdentityCapture(): NodeJS.ProcessEnv {
     const env = this.#layeredChildEnv();
     // 伏せるのは最後（正本やプロファイルが同じ名前を重ねても生き残らせない）。`this.#env` 自体は動かさない: daemon は OAuth の交換にこの鍵を使い続ける。
     for (const key of this.#withheldEnvKeys) delete env[key];
@@ -6294,7 +6299,8 @@ class Clone implements CloneHost {
         memory,
         ...(this.#self === undefined ? {} : { self: this.#self }),
       }),
-      env: this.#childEnv(),
+      // 身元を捕まえない組み立て（#4880）: 本セッションが走っている間に鍵が回っても、本セッションの身元を新しい鍵で上書きしないため。
+      env: this.#childEnvWithoutIdentityCapture(),
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
       onPostToolUse: (input) => this.#onDistillToolUse(input),
       // 足す: 蒸留は `memory_write` を叩く経路で、失敗を記録しないと「記憶が書かれなかった」が静かに落ちる。
