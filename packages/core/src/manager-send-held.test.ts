@@ -329,6 +329,68 @@ describe('manager_send が届けられない伝言を台帳に預かり、届け
     await s.pool.stop();
   });
 
+  it('⭐ 枠で止まった印の付いた failed・lost の担当の預かりは、起こし直しを待って捨てない（#4854）', async () => {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+    expect((await s.pool.send('mgr-held', '起こし直した後に読む伝言')).outcome).toBe('held');
+    await s.pool.stop();
+
+    for (const status of ['failed', 'lost'] as const) {
+      const job = (await s.stores.jobs.listJobs()).find((entry) => entry.id === 'mgr-held')!;
+      await s.stores.jobs.putJob({ ...job, status, usageStoppedAt: '2026-10-11T02:00:00.000Z' });
+      const s2 = await setup({ stores: s.stores });
+      await deliverHeld(s2.pool);
+
+      expect((await heldOf(s.stores)).map((item) => item.text)).toEqual([
+        '起こし直した後に読む伝言',
+      ]);
+      const decisions = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+        JSON.stringify(e).includes('届けずに捨てた'),
+      );
+      expect(decisions, status).toHaveLength(0);
+      await s2.pool.stop();
+    }
+  });
+
+  it('印の付いた failed の担当でも、預かりの期限を過ぎた分は今どおり本文ごと返す（#4854）', async () => {
+    const clock = { now: Date.parse('2026-10-11T02:00:00.000Z') };
+    const s = await setup({ clock });
+    s.rotate();
+    s.fake.behavior.background = 1;
+    expect((await s.pool.send('mgr-held', '期限を過ぎる伝言')).outcome).toBe('held');
+    await s.pool.stop();
+
+    const job = (await s.stores.jobs.listJobs()).find((entry) => entry.id === 'mgr-held')!;
+    await s.stores.jobs.putJob({
+      ...job,
+      status: 'failed',
+      usageStoppedAt: '2026-10-11T02:00:00.000Z',
+    });
+    clock.now += HELD_MESSAGE_TTL_MS + 60_000;
+    const s2 = await setup({ stores: s.stores, clock });
+    await deliverHeld(s2.pool);
+
+    expect(await heldOf(s.stores)).toEqual([]);
+    await s2.pool.stop();
+  });
+
+  it('対照: 印の無い failed の担当の預かりは、今どおり本文ごと返す（#4854）', async () => {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+    expect((await s.pool.send('mgr-held', '落ちた担当への伝言')).outcome).toBe('held');
+    await s.pool.stop();
+
+    const job = (await s.stores.jobs.listJobs()).find((entry) => entry.id === 'mgr-held')!;
+    await s.stores.jobs.putJob({ ...job, status: 'failed' });
+    const s2 = await setup({ stores: s.stores });
+    await deliverHeld(s2.pool);
+
+    expect(await heldOf(s.stores)).toEqual([]);
+    await s2.pool.stop();
+  });
+
   it('上限を超える分は預からず、これまでどおり declined で断る', async () => {
     const s = await setup();
     s.rotate();
