@@ -1826,7 +1826,9 @@ function composeFoldNotice(notice: {
   }
   return (
     `（alteroid より: 鍵の入れ替えのため、起こしっぱなしだった背景処理 ${String(notice.backgroundTasks)} 本を` +
-    'セッションごと畳んで、新しい鍵で起こし直した。この背景処理の結果は届いていない。要るなら確かめて起こし直すこと' +
+    // 待たせず続きを進めさせる（#4902）: 畳んだ背景処理の完了の知らせは新しいセッションに二度と届かず、任意の言い方だと「報告済みで待つだけ」と読まれるため
+    'セッションごと畳んで、新しい鍵で起こし直した。この背景処理の結果は二度と届かない（古いセッションと一緒に畳んだ）。' +
+    '待たずに、いま自分で状態を確かめて（CI・作業者の結果・dev サーバ）、続きを進めよ。もう終わっていたなら、そう報告して終えること' +
     foldNoticeCommandsClause(notice.commands) +
     (peerClause === '' ? '' : `。${peerClause}`) +
     '）'
@@ -2676,6 +2678,8 @@ const KNOWN_SYNTHESIZED_NOTICE_LABELS: Record<string, string> = {
   turn_failed: '応答を返さずに終わったターンの報告',
   closed_withheld_flush: '委譲の終了と、背景処理の完了待ちで畳んでいた報告の配り',
   usage_rewoken: '枠で落ちていた failed / lost の委譲を、新しい鍵で自動で起こし直した',
+  usage_rewoken_folded:
+    '鍵の入れ替えで背景処理を畳み、新しい鍵で起こし直して、自分で確かめて進めるよう促した',
   resume_fallback: '器の入れ替えで前のセッションへ戻れず、生ログから作り直して続けた',
   resume_failed: '器の入れ替えで前のセッションへ戻れず、再開そのものに失敗した',
   resume_unconfirmed: '器の入れ替えの後の再開が、期限までに戻れたと確かめられなかった',
@@ -3653,6 +3657,8 @@ class Pool implements ManagerPool {
     message: string,
     options: ManagerSendOptions,
     mode: 'caller' | 'held-delivery' | 'usage-rotation',
+    // 届けた断り書きが畳んだ背景処理（peer を除く）の本数を呼び手へ返す（#4902）: 起こし直しが成功した回だけクローンへ知らせるため
+    onFoldNoticeDelivered?: (backgroundTasks: number) => void,
   ): Promise<ManagerSendResult> {
     await this.#ensureConnected();
 
@@ -3982,6 +3988,7 @@ class Pool implements ManagerPool {
       foldedPeerCloseNotice,
     );
     await this.#persist(record);
+    if (foldedFoldNotice !== undefined) onFoldNoticeDelivered?.(foldedFoldNotice.backgroundTasks);
     await this.#journal({
       type: 'exchange',
       with: 'manager',
@@ -6537,7 +6544,16 @@ class Pool implements ManagerPool {
       }
       // 新しい経路を作らず `send()` に相乗りする: どちらの道でも会話は続き、最初からやり直しにならない。
       // 抱えている古い鍵が使えないとき背景処理を理由に止めない（#4850）。`send()` ではなく `#send()` を使う: 人間・クローンの `manager_send` の振る舞い（預かり・15 分待ち）を変えないため
-      const result = await this.#send(managerId, usageRotationNudge(), {}, 'usage-rotation');
+      let foldedBackgroundTasks = 0;
+      const result = await this.#send(
+        managerId,
+        usageRotationNudge(),
+        {},
+        'usage-rotation',
+        (backgroundTasks) => {
+          foldedBackgroundTasks = backgroundTasks;
+        },
+      );
       if (result.outcome === 'delivered' || result.outcome === 'answered') {
         await this.#journal({
           type: 'exchange',
@@ -6556,6 +6572,15 @@ class Pool implements ManagerPool {
             `[${managerId}] を新しい鍵で起こし直した（枠で落ちていた。status=${status}）。` +
               '後継を立てていたなら、どちらかを manager_stop で止めること' +
               '（後継を立てるときは manager_start の supersedes に前任を渡すと、前任は起き上がらない）。',
+          );
+        }
+        // 背景処理を畳んだ回は done でも知らせる（#4902）: 結果は届かないので担当が自分で確かめて進める。クローンは止まったと見誤りうる。peer だけを預けた回といつもの回転では積まない
+        if (foldedBackgroundTasks > 0) {
+          this.#queueSynthesizedNotice(
+            managerId,
+            'usage_rewoken_folded',
+            `[${managerId}] 鍵の入れ替えのため、背景処理 ${String(foldedBackgroundTasks)} 本を畳んで新しい鍵で起こし直し、` +
+              '結果は届かないので自分で確かめて続きを進めるよう促した',
           );
         }
         return 'nudged';
