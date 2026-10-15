@@ -1095,9 +1095,15 @@ export function createMemoryStores(): Stores {
       projectKey = value;
     },
     async clear() {
-      const removed = [cloneSessionId, transcriptGrave, lostSessionGrave, projectKey].filter(
-        (value) => value !== null,
-      ).length;
+      const removed =
+        [cloneSessionId, transcriptGrave, lostSessionGrave, projectKey].filter(
+          (value) => value !== null,
+        ).length +
+        [transcriptGraveQueue.length, lostSessionGraveQueue.length].filter((n) => n > 0).length +
+        Object.values(distillFailureRecords).filter((counts) => Object.keys(counts).length > 0)
+          .length;
+      distillFailureRecords.transcript = {};
+      distillFailureRecords.lost_session = {};
       cloneSessionId = null;
       transcriptGrave = null;
       lostSessionGrave = null;

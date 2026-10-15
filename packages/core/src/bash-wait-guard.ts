@@ -20,10 +20,7 @@ function buildReason(shapeDescription: string): string {
 }
 
 function isTimeoutWrapped(trimmed: string): boolean {
-  return (
-    /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:[^\s=]{0,64}\/)?timeout\b/.test(trimmed) &&
-    isSingleSimpleCommand(trimmed)
-  );
+  return TIMEOUT_WRAPPED_RE.test(trimmed) && isSingleSimpleCommand(trimmed);
 }
 
 function isSingleSimpleCommand(trimmed: string): boolean {
@@ -609,7 +606,12 @@ const COMMAND_POSITION_LOOKBEHIND_SRC = String.raw`(?<=^|[;&|\n()\u0060])`;
 
 // `timeout <期間> …` で始まる単純コマンドの範囲だけを上限と数える: `timeout` という語が別の文や引用符の中に在るだけでは、ループを包んでいない
 const TIMEOUT_SPAN_START_RE = new RegExp(
-  String.raw`^(?:${SHELL_KEYWORD_PREFIX_SRC}|${ENV_ASSIGNMENT_SRC})*${TIMEOUT_COMMAND_PREFIX_SRC}`,
+  String.raw`^(?:${SHELL_KEYWORD_PREFIX_SRC}|${ENV_ASSIGNMENT_SRC}|${ENV_COMMAND_PREFIX_SRC}|${LEADING_COMMAND_PREFIX_SRC})*${TIMEOUT_COMMAND_PREFIX_SRC}`,
+);
+
+// 文全体が `timeout` で始まる形の判定。`sudo`・`env`・`nice`・`nohup` などの前置きの後の `timeout` も数える（前置きが timeout を包まない `sudo true; …` は、続く単純コマンド判定で落ちる）
+const TIMEOUT_WRAPPED_RE = new RegExp(
+  String.raw`^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+|${ENV_COMMAND_PREFIX_SRC}|${LEADING_COMMAND_PREFIX_SRC})*(?:[^\s=]{0,64}\/)?timeout\b`,
 );
 
 function findTimeoutSpans(command: string): SimpleCommandSpan[] {

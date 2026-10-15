@@ -336,6 +336,8 @@ export class FsSessionRegistry implements SessionRegistry {
       this.#graveQueuePath,
       this.#lostSessionQueuePath,
       this.#projectKeyPath,
+      this.#distillFailuresPaths.transcript,
+      this.#distillFailuresPaths.lost_session,
     ];
     let removed = 0;
     for (const path of paths) {

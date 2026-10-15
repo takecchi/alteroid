@@ -118,4 +118,22 @@ export async function verifySessionRegistryGraveQueueContract(
   if ((await failures('lost_session', 'f-L')) !== 0) fail('捨てたセッションの失敗回数が残る');
   await registry.clearTranscriptGraveIf('f-B');
   await registry.clear();
+
+  // `clear()` は墓標が立ったままの失敗回数も消す。消した欄として数える（#4914）
+  await registry.addTranscriptGrave({ archiveId: 'k-T' });
+  await registry.addLostSessionGrave({ projectKey: 'p', sessionId: 'k-L' });
+  await registry.noteGraveDistillFailure('transcript', 'k-T');
+  await registry.noteGraveDistillFailure('lost_session', 'k-L');
+  await registry.noteGraveDistillFailure('lost_session', 'k-L');
+  // 墓標2つ + 失敗回数2種類
+  if ((await registry.clear()) !== 4) fail('clear() が失敗回数の欄を数えない');
+  if ((await failures('transcript', 'k-T')) !== 0) fail('clear() で失敗回数が残る（墓標）');
+  if ((await failures('lost_session', 'k-L')) !== 0)
+    fail('clear() で失敗回数が残る（捨てたセッション）');
+  // 消した後に同じ印を立て直しても、数え直しになる
+  await registry.addTranscriptGrave({ archiveId: 'k-T' });
+  if ((await registry.noteGraveDistillFailure('transcript', 'k-T')) !== 1) {
+    fail('clear() の後の失敗回数が前の回数の続きになる');
+  }
+  await registry.clear();
 }

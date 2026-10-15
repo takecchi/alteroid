@@ -448,6 +448,8 @@ export class PgSessionRegistry implements SessionRegistry {
           CLONE_TRANSCRIPT_GRAVE_QUEUE_KEY,
           CLONE_LOST_SESSION_QUEUE_KEY,
           CLONE_PROJECT_KEY,
+          DISTILL_FAILURES_KEYS.transcript,
+          DISTILL_FAILURES_KEYS.lost_session,
         ]),
       )
       .returning({ key: daemonState.key });
