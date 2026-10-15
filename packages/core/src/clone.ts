@@ -995,9 +995,7 @@ class Clone implements CloneHost {
   /** 墓標の拾い直しの直列化（#4884）。走っている間は1本だけで、走行中に契機が来たら終わってからもう1周する。 */
   #graveSweep: Promise<void> | null = null;
   #graveSweepAgain = false;
-  /** 直近の蒸留のサイドセッションが使った鍵の身元（観測と、鍵が変わったかの判定に使う）。 */
-  #lastDistillTokenKey: string | undefined;
-  /** 墓標の蒸留が最後に落ちたときの鍵。鍵が変わっていない契機（冷却だけの `parked` など）では撃ち直さない。 */
+  /** 墓標の蒸留が最後に枠で落ちたときの、その蒸留を組んだ時点の鍵（観測の前に立て、拾い直しが成功したら下ろす）。鍵が変わっていない契機（冷却だけの `parked` など）では撃ち直さない。 */
   #graveFailedTokenKey: string | undefined;
   // 1回ごとには日誌へ書かない: 「保持 N 件×再武装 M 回」を「抑止 M 回」に置き換えるだけのため。解除を試した瞬間の1行（「枠の解除を試す」）へまとめる
   #usageBlockSuppressedRearms = 0;
@@ -4448,10 +4446,15 @@ class Clone implements CloneHost {
     }
 
     try {
-      await this.#distillFromTranscript(tailOf(transcript), { journalInput: !quiet });
+      await this.#distillFromTranscript(tailOf(transcript), {
+        journalInput: !quiet,
+        onQuotaFailure: (tokenKey) => {
+          this.#graveFailedTokenKey = tokenKey;
+        },
+      });
+      this.#graveFailedTokenKey = undefined;
     } catch (error) {
-      // 印は残す（#4705）: 蒸留が落ちる主な理由は枠で、次の起動か鍵の契機で拾い直せるため
-      this.#graveFailedTokenKey = this.#lastDistillTokenKey;
+      // 印は残す（#4705）: 蒸留が落ちる主な理由は枠で、次の起動か鍵の契機で拾い直せるため。鍵は枠で落ちた時点で、観測の前に控え済み（#4898）
       const note = await this.#graveDistillFailureNote('transcript', grave.archiveId);
       if (note !== null) {
         await this.#journal({
@@ -4563,10 +4566,15 @@ class Clone implements CloneHost {
     }
 
     try {
-      await this.#distillFromTranscript(tailOf(transcript), { journalInput: !quiet });
+      await this.#distillFromTranscript(tailOf(transcript), {
+        journalInput: !quiet,
+        onQuotaFailure: (tokenKey) => {
+          this.#graveFailedTokenKey = tokenKey;
+        },
+      });
+      this.#graveFailedTokenKey = undefined;
     } catch (error) {
       // 印は残す（#4705）: 拾い直しの墓標（`#pickUpTranscriptGrave`）と同じ理由
-      this.#graveFailedTokenKey = this.#lastDistillTokenKey;
       const note = await this.#graveDistillFailureNote('lost_session', grave.sessionId);
       if (note !== null) {
         await this.#journal({
@@ -6382,7 +6390,12 @@ class Clone implements CloneHost {
   async #distillFromTranscript(
     transcriptTail: string,
     // 入力の行を書かないのは、同じ墓標の失敗が上限を超えた拾い直しだけ（#4752）。他の呼び出し元は書く
-    options: { journalInput?: boolean } = {},
+    // `onQuotaFailure` は枠で落ちたときに、観測（`#observeDistillQuota`）の `await` より前に、この蒸留を組んだ時点の鍵を渡して呼ぶ（#4898）:
+    // 観測の中から鍵の契機（`#retryGravesFor`）が来ても、拾い直し側が「同じ鍵では撃ち直さない」を判れるようにするため
+    options: {
+      journalInput?: boolean;
+      onQuotaFailure?: (tokenKey: string | undefined) => void;
+    } = {},
   ): Promise<void> {
     // 持たない駆動役では投げる: 黙って返すと、蒸留していないのに成功として扱われるため。
     const driver = this.#driver;
@@ -6430,7 +6443,12 @@ class Clone implements CloneHost {
     });
     // 蒸留が使う鍵の身元（観測用。env には触れない）。鍵が回ったとき env と身元がずれないよう、`distill` の組み立てと同じ同期区間で読む
     const identity = this.#tokenIdentity?.();
-    this.#lastDistillTokenKey = this.#currentTokenKey();
+    // 蒸留ごとの値として持つ（`#graveFailedTokenKey` へは枠で落ちたときに `onQuotaFailure` で渡す）: 共有の欄へ先に書くと、別の蒸留や、書く前に投げた失敗が古い鍵を拾う（#4898）
+    const tokenKey = this.#currentTokenKey();
+    const observeQuota = async (notice: UsageLimitNotice): Promise<void> => {
+      options.onQuotaFailure?.(tokenKey);
+      await this.#observeDistillQuota(notice, identity);
+    };
     const side = distill({
       prompt,
       model: this.#model,
@@ -6465,7 +6483,7 @@ class Clone implements CloneHost {
             if (candidate === undefined) continue;
             const notice = classifyUsageNotice(candidate);
             if (notice?.kind === 'reached') {
-              await this.#observeDistillQuota(notice, identity);
+              await observeQuota(notice);
               break;
             }
           }
@@ -6479,9 +6497,9 @@ class Clone implements CloneHost {
       const raw = String(error);
       const classified = classifyUsageNotice(raw);
       if (classified?.kind === 'reached') {
-        await this.#observeDistillQuota(classified, identity);
+        await observeQuota(classified);
       } else if (isRateLimitReason(raw)) {
-        await this.#observeDistillQuota({ kind: 'reached', text: reasonOf(error) }, identity);
+        await observeQuota({ kind: 'reached', text: reasonOf(error) });
       }
       throw error;
     }

@@ -367,14 +367,39 @@ describe('FsSessionRegistry — 墓標の蒸留失敗回数（#4752）', () => {
     expect(await sessions.noteGraveDistillFailure('transcript', 'a')).toBe(2);
     expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(2);
 
-    // 別の印のぶんは数えていない
+    // 別の印のぶんは数えていない。数えても a の回数は消えない（#4898）
     expect(await sessions.graveDistillFailures('transcript', 'b')).toBe(0);
     expect(await sessions.noteGraveDistillFailure('transcript', 'b')).toBe(1);
-    expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(0);
+    expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(2);
 
     // もう一方の kind には触れない
     expect(await sessions.graveDistillFailures('lost_session', 'b')).toBe(0);
     expect(await sessions.noteGraveDistillFailure('lost_session', 'b')).toBe(1);
+    expect(await sessions.graveDistillFailures('transcript', 'b')).toBe(1);
+  });
+
+  it('古い形（1件だけの { graveId, failures }）の保存値も読め、数え足すと新しい形で書く（#4898）', async () => {
+    await writeFile(
+      join(dir, 'transcript-grave-distill-failures.json'),
+      '{"graveId":"a","failures":2}',
+      'utf8',
+    );
+    const sessions = new FsSessionRegistry(dir);
+    expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(2);
+    expect(await sessions.graveDistillFailures('transcript', 'b')).toBe(0);
+    expect(await sessions.noteGraveDistillFailure('transcript', 'b')).toBe(1);
+    expect(await sessions.noteGraveDistillFailure('transcript', 'a')).toBe(3);
+    expect(await sessions.graveDistillFailures('transcript', 'b')).toBe(1);
+  });
+
+  it('墓標を下ろすと、その墓標の回数だけが消える', async () => {
+    const sessions = new FsSessionRegistry(dir);
+    await sessions.addTranscriptGrave({ archiveId: 'a' });
+    await sessions.addTranscriptGrave({ archiveId: 'b' });
+    await sessions.noteGraveDistillFailure('transcript', 'a');
+    await sessions.noteGraveDistillFailure('transcript', 'b');
+    await sessions.clearTranscriptGraveIf('a');
+    expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(0);
     expect(await sessions.graveDistillFailures('transcript', 'b')).toBe(1);
   });
 
