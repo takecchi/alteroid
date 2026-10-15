@@ -214,6 +214,9 @@ describe('allow の一往復（issue #1105 P1）', () => {
     expect(allowNote?.text).toContain('担い手のモデルが決める');
     expect(allowNote?.text).toContain('manager_send');
     expect(allowNote?.text).not.toContain('撃ち直せば通る');
+    expect(allowNote?.text).not.toContain('同じ入力で撃ち直してよいこと');
+    expect(allowNote?.text).toContain('同じ入力で撃ち直しても、分類器にまた止められうる');
+    expect(allowNote?.text).toContain('別の手（入力を変える・手順を分ける・人間に頼む）');
     expect(asks[0]?.summary).toContain('撃ち直すかは担い手が決める');
 
     const retryResult = await firePreToolUse(started.options, {
@@ -253,10 +256,14 @@ describe('allow の一往復（issue #1105 P1）', () => {
     const summary = askEvents(events)[0]?.summary ?? '';
     expect(summary.startsWith('分類器が ')).toBe(true);
     expect(summary).toContain('答えたあと: allow しても、この呼び出しは自動では撃ち直されない。');
-    expect(summary).toContain('10分以内に1回だけ通す');
+    expect(summary).toContain('10分以内に1回だけ通そうとする');
+    // 「撃ち直してよい」と伝える案内から、通らないことがある旨と別の手の案内へ替えた（#4904）
+    expect(summary).toContain('allow しても撃ち直しは通らないことがある');
+    expect(summary).toContain('人間が止められた中身を見て誤検知だと確かめる必要がある');
     expect(summary).toContain(
-      'allow の後に manager_send で decision を付けない追加指示として「同じ入力で撃ち直してよい」と伝える。',
+      '続けて同じ入力を撃たず、別の手（入力を変える・手順を分ける・人間に頼む）を取ること',
     );
+    expect(summary).not.toContain('「同じ入力で撃ち直してよい」と伝える');
     expect(summary).toContain('この許可で通るかは確かめていない。');
   });
 
@@ -672,6 +679,86 @@ describe('#1603 と同じ形の検出——allow を返した呼び出しがそ�
     expect(
       notes.some((n) => n.text.includes('allow を') && n.text.includes('それでも拒否された')),
     ).toBe(true);
+  });
+
+  // 拒否の合図が `#noteDenial` より先に届く順と、後に届く順の両方を押さえる（どちらが先かは CLI 次第のため）
+  for (const order of ['hook-after-note', 'hook-before-note'] as const) {
+    it(`allow を返した撃ち直しがまた拒否されても、同じ呼び出しの確認は重ねて上がらない（#4904、${order}）`, async () => {
+      const { started, events, host: h } = await startSession();
+      const input = { command: 'echo chain-probe' };
+      const denied = (toolUseId: string) => ({
+        hook_event_name: 'PermissionDenied',
+        tool_name: 'Bash',
+        tool_input: input,
+        tool_use_id: toolUseId,
+        reason: '分類器が拒否した（テスト）',
+      });
+
+      const first = firePermissionDenied(started.options, denied('tu-chain-1'));
+      await tick();
+      await h.answer('mgr-1', { requestId: 'tu-chain-1', decision: 'allow', message: 'どうぞ' });
+      await first;
+      expect(askEvents(events)).toHaveLength(1);
+
+      const retry = await firePreToolUse(started.options, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: input,
+        tool_use_id: 'tu-chain-2',
+      });
+      expect(
+        (retry as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput
+          ?.permissionDecision,
+      ).toBe('allow');
+
+      if (order === 'hook-after-note') {
+        started.push(liveDenialAsSdkSends('Bash', 'tu-chain-2'));
+        await tick();
+      }
+      const again = await firePermissionDenied(started.options, denied('tu-chain-2'));
+      if (order === 'hook-before-note') {
+        started.push(liveDenialAsSdkSends('Bash', 'tu-chain-2'));
+        await tick();
+      }
+
+      expect(again).toEqual({ continue: true });
+      expect(askEvents(events)).toHaveLength(1);
+      expect(
+        noteEvents(events).some(
+          (n) => n.text.includes('allow しても通らなかった') && n.text.includes('#4904'),
+        ),
+      ).toBe(true);
+    });
+  }
+
+  it('入力が違う別の呼び出しの拒否は、allow を返した撃ち直しの再拒否のあとでも確認が上がる（#4904）', async () => {
+    const { started, events, host: h } = await startSession();
+    const first = firePermissionDenied(started.options, {
+      hook_event_name: 'PermissionDenied',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo chain-a' },
+      tool_use_id: 'tu-chain-a1',
+    });
+    await tick();
+    await h.answer('mgr-1', { requestId: 'tu-chain-a1', decision: 'allow', message: 'どうぞ' });
+    await first;
+    await firePreToolUse(started.options, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo chain-a' },
+      tool_use_id: 'tu-chain-a2',
+    });
+    started.push(liveDenialAsSdkSends('Bash', 'tu-chain-a2'));
+    await tick();
+
+    void firePermissionDenied(started.options, {
+      hook_event_name: 'PermissionDenied',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo chain-b' },
+      tool_use_id: 'tu-chain-b1',
+    });
+    await tick();
+    expect(askEvents(events).map((a) => a.requestId)).toEqual(['tu-chain-a1', 'tu-chain-b1']);
   });
 });
 

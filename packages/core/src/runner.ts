@@ -2240,9 +2240,12 @@ class RunnerSession {
           `使われないまま忘れたので実害は無い（issue #1105 P1）。`,
       }),
   });
+  // `key` と `at` を持つ: allow を返した撃ち直しがまた拒否されたとき、同じ呼び出しへの確認を重ねて上げないために照合する（#4904）
   readonly #oneShotAllowedToolUses = createRecentMap<{
     readonly actor: string;
     readonly tool: string;
+    readonly key: string;
+    readonly at: number;
   }>({
     limit: ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT,
     onForget: (ids) =>
@@ -2255,6 +2258,10 @@ class RunnerSession {
           `忘れた: ${ids.join(', ')}。この tool_use_id への拒否が後から届いても、` +
           `「許可を追い越した」とは検出できない（issue #1105 P1）。`,
       }),
+  });
+  // allow を返した撃ち直しが分類器にまた拒否された呼び出しの鍵（生の入力は持たない）: 同じ呼び出しの確認の連鎖を止めるため（#4904）
+  readonly #allowedButDenied = createRecentMap<{ readonly expiresAt: number }>({
+    limit: ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT,
   });
   readonly #resumeState = new RunnerResumeState();
   #tokenFingerprint: string | undefined;
@@ -3851,6 +3858,10 @@ class RunnerSession {
       const funneled = this.#oneShotAllowedToolUses.get(denial.toolUseId);
       if (funneled !== undefined) {
         this.#oneShotAllowedToolUses.delete(denial.toolUseId);
+        // 同じ呼び出しの次の拒否では確認を上げない（#4904）。期限は許可と同じ: 過ぎれば別の機会として扱うため
+        this.#allowedButDenied.set(funneled.key, {
+          expiresAt: funneled.at + ONE_SHOT_ALLOW_TTL_MS,
+        });
         this.#emit({
           type: 'note',
           managerId: this.#id,
@@ -3859,7 +3870,9 @@ class RunnerSession {
             `返した呼び出しが、それでも拒否された（合図の出所: ${via}）。分類器がこの allow を` +
             `分類器へ回した（リモートの機能フラグ）か、deny 規則が上書きしたかのどちらか` +
             `（あるいは両方）で、alteroid 側からは切り分けられない。この許可はいまは効いて` +
-            `いない可能性がある。`,
+            `いない可能性がある。分類器が迂回・敵対の型で止めた呼び出しは、クローンの allow や` +
+            `担当の伝言を人間の確認と見なさないため、同じ入力の撃ち直しは通らないことがある。` +
+            `同じ呼び出しへの確認は重ねて上げない（#4904）。`,
         });
       }
     }
@@ -4271,6 +4284,25 @@ class RunnerSession {
     );
     const id = record.toolUseId ?? randomUUID();
 
+    // allow を返した撃ち直しがそれでも拒否された呼び出しは、確認を重ねて上げずに止める: 上げても同じ入力は通らないことがあり、確認が1件ずつ積み上がるため（#4904）
+    // 拒否の合図と `#noteDenial` のどちらが先に届いても拾えるよう、控え済みの鍵と、まだ決着していない allow の撃ち直しの両方を見る
+    const nowMs = Date.now();
+    const pendingRetry = this.#oneShotAllowedToolUses
+      .entries()
+      .some(([, use]) => use.key === permitKey && use.at + ONE_SHOT_ALLOW_TTL_MS > nowMs);
+    const deniedAgain = this.#allowedButDenied.get(permitKey);
+    if (pendingRetry || (deniedAgain !== undefined && deniedAgain.expiresAt > nowMs)) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `分類器が ${actor} の ${toolName} 呼び出しを、allow を返した撃ち直しのあとでも再び止めた。` +
+          `同じ呼び出しの確認は重ねて上げない（allow しても通らなかった。人間が止められた中身を見て` +
+          `誤検知だと確かめるまで、同じ入力は通らないことがある。#4904）。`,
+      });
+      return { kind: 'no-retry' };
+    }
+
     const already = this.#pending.find((request) => request.id === id);
     if (already) {
       const outcome = await already.result;
@@ -4290,10 +4322,14 @@ class RunnerSession {
       (streakNote === null ? '' : `${streakNote}\n`) +
       `分類器が ${actor} の ${toolName} 呼び出しを拒否した。この1回だけ許可しますか。\n` +
       `答えたあと: allow しても、この呼び出しは自動では撃ち直されない。` +
-      `allow は「同じ入力での撃ち直しを、10分以内に1回だけ通す」許可で、撃ち直すかは担い手が決める` +
+      `allow は「同じ入力での撃ち直しを、10分以内に1回だけ通そうとする」許可で、撃ち直すかは担い手が決める` +
       `（拒否文が再試行を禁じていると撃ち直されないことがある）。` +
-      `撃ち直させたいなら、allow の後に manager_send で decision を付けない追加指示として` +
-      `「同じ入力で撃ち直してよい」と伝える。この許可で通るかは確かめていない。\n` +
+      `分類器が迂回・敵対の型で止めた場合は、allow しても撃ち直しは通らないことがある` +
+      `（分類器は、クローンの allow や担当からの伝言を人間の確認と見なさない）。` +
+      `通すには、人間が止められた中身を見て誤検知だと確かめる必要がある。` +
+      `allow の後は、担当・作業者へ「同じ入力で撃ち直しても、分類器にまた止められうる。` +
+      `続けて同じ入力を撃たず、別の手（入力を変える・手順を分ける・人間に頼む）を取ること」と伝える（#4904）。` +
+      `この許可で通るかは確かめていない。同じ呼び出しがそれでも拒否されても、確認は重ねて上げない。\n` +
       `理由: ${record.reason ?? '(無し)'}\n` +
       `入力の先頭（伏せ字・最大160字。issue #1105 P0）: ${inputHead ?? '(取れなかった)'}`;
     const askedAt = new Date().toISOString();
@@ -4420,11 +4456,12 @@ class RunnerSession {
       text:
         `クローンが分類器の拒否（${actor}・${toolName}）を1回だけ許可した。同じ入力で撃ち直された` +
         `ときにだけ、${Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000)}分以内なら1回通す（issue #1105 P1）。` +
-        `撃ち直すかどうかは担い手のモデルが決めることで、retry は「もう一度試してよい」という助言でしかない。` +
-        `分類器の拒否文が再試行や別の手段を禁じていると、担い手は撃ち直さないことがある` +
+        `撃ち直すかどうかは担い手のモデルが決めることで、retry は「もう一度試してよい」という助言でしかない` +
         `（撃ち直しが来なければ、この許可は使われないまま期限が切れる）。` +
-        `その場合は許可を出したクローンが、担い手へ manager_send で同じ入力で撃ち直してよいこと` +
-        `（1回だけの許可が有効なこと）を明示して伝える。これで撃ち直されるかは確かめていない。`,
+        `同じ入力で撃ち直しても、分類器にまた止められうる（迂回・敵対の型で止めた呼び出しは、` +
+        `クローンの allow や担当の伝言を人間の確認と見なさない）。続けて同じ入力を撃たず、` +
+        `別の手（入力を変える・手順を分ける・人間に頼む）を取ること（#4904）。` +
+        `担い手へ manager_send で伝えるときも、この趣旨で書く。これで通るかは確かめていない。`,
     });
     return { kind: 'retry' };
   }
@@ -4602,7 +4639,12 @@ class RunnerSession {
     }
 
     if (typeof record.toolUseId === 'string') {
-      this.#oneShotAllowedToolUses.set(record.toolUseId, { actor, tool: toolName });
+      this.#oneShotAllowedToolUses.set(record.toolUseId, {
+        actor,
+        tool: toolName,
+        key,
+        at: Date.now(),
+      });
     }
 
     this.#emit({

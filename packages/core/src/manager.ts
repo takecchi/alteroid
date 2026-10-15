@@ -2432,7 +2432,7 @@ function askDeliveryOf(
 
 const DENIAL_REPLY_ROUTE =
   '\n答え方: この拒否について「この1回だけ許可しますか」の確認（`requestId` は `toolu_…` の形）が別に届いていれば、' +
-  'その `requestId` と `decision` を付けて `manager_send` で答える（allow しても自動では撃ち直されない）。' +
+  'その `requestId` と `decision` を付けて `manager_send` で答える（allow しても自動では撃ち直されず、撃ち直しても分類器にまた止められうる。#4904）。' +
   'その確認が届いていなければ、この拒否には `requestId` が無く、許可として答える口は無い。' +
   'そのときは `manager_send` に `decision` を付けて送らないこと' +
   '（`requestId` 無しの `decision` は、このマネージャーが別に待っている確認へ回答として当たりうる）。' +
