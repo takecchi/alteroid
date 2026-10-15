@@ -192,6 +192,7 @@ import {
   limitRecoveryOf,
   mergeRateLimitFacts,
   classifyUsageNotice,
+  isRateLimitReason,
   rateLimitMemoryKey,
   usageTransitionOf,
   withRecoveryNote,
@@ -12354,9 +12355,4 @@ function describeStoppedReportFiles(files: ManagerReportFiles | undefined): stri
     );
   }
   return lines.length === 0 ? '' : `\n\n${lines.join('\n')}`;
-}
-
-/** 理由文が API の 429 か `rate_limit_error` をはっきり示すか（#4859）。500 などの別の失敗は含めない。 */
-function isRateLimitReason(reason: string): boolean {
-  return /API Error:\s*429\b/.test(reason) || /"type"\s*:\s*"rate_limit_error"/.test(reason);
 }

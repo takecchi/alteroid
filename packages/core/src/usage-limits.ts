@@ -271,3 +271,8 @@ export function usageTransitionOf(
   if (next.usingOverage === true && previous?.usingOverage !== true) return 'entered_overage';
   return undefined;
 }
+
+/** 理由文が API の 429 か `rate_limit_error` をはっきり示すか（#4859）。500 などの別の失敗は含めない。 */
+export function isRateLimitReason(reason: string): boolean {
+  return /API Error:\s*429\b/.test(reason) || /"type"\s*:\s*"rate_limit_error"/.test(reason);
+}
