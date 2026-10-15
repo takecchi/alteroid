@@ -791,6 +791,8 @@ export interface PeerBroker {
   ): Promise<PeerCallResult>;
   /** 確認待ちで止まったものは入らない（止まりどころとしてマネージャーへ知らせ済みで、答えを待っているのは相手のほう）。 */
   backgroundTasks(): { id: string; taskType: string }[];
+  /** いま開いている peer セッション（閉じる前に、何を閉じるかを控えるため）。 */
+  sessionList(): { id: string; provider: AgentProviderId }[];
   closeAll(): void;
   mcpServer(): ReturnType<typeof createSdkMcpServer>;
 }
@@ -1133,6 +1135,12 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
       return [...sessions.values()]
         .filter((session) => session.inBackground)
         .map((session) => ({ id: `peer:${session.id}`, taskType: `peer:${session.provider}` }));
+    },
+    sessionList() {
+      return [...sessions.values()].map((session) => ({
+        id: session.id,
+        provider: session.provider,
+      }));
     },
     closeAll() {
       stopSweeping();

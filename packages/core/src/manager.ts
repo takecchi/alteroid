@@ -1826,6 +1826,36 @@ function composeFoldNotice(notice: {
   );
 }
 
+const PEER_CLOSE_REASON_LABELS = {
+  expired: '鍵の付け替えで畳んだ担当が戻らないまま、預かりの期限が来た',
+  replaced: '同じ担当の peer を預かり直した',
+  shutdown: '器を畳んだ',
+  stopped: '人間・クローンが止めた',
+} as const;
+
+interface PeerCloseNotice {
+  reason: keyof typeof PEER_CLOSE_REASON_LABELS;
+  peers: readonly { id: string; provider: string; interrupted?: string | undefined }[];
+}
+
+/** 預けた peer を閉じたことの断り書き（#4885）。担当の次の起こし直しの先頭へ添える。 */
+function composePeerCloseNotice(notice: PeerCloseNotice): string {
+  const interrupted = notice.peers.filter((peer) => peer.interrupted !== undefined);
+  const interruptedClause =
+    interrupted.length === 0
+      ? ''
+      : `。走っていた背景ターンは途中で終わった: ${interrupted
+          .map((peer) => `${peer.provider}[${peer.id}] ${peer.interrupted ?? ''}`)
+          .join(' / ')}`;
+  return (
+    `（alteroid より: 器の入れ替え・期限で、預けていた peer ${String(notice.peers.length)} 本を閉じた` +
+    `（${PEER_CLOSE_REASON_LABELS[notice.reason]}）。閉じた peer: ${notice.peers
+      .map((peer) => `${peer.provider}[${peer.id}]`)
+      .join(', ')}${interruptedClause}。` +
+    '続きが要るなら peer_run で新しく頼むこと。peer_reply は効かない）'
+  );
+}
+
 function foldNoticeCommandsClause(commands: readonly string[] | undefined): string {
   if (commands === undefined || commands.length === 0) return '';
   return '。畳んだ背景処理のコマンド（分かった分）: ' + commands.map((c) => `\`${c}\``).join(' / ');
@@ -3742,6 +3772,9 @@ class Pool implements ManagerPool {
     if (record.job.pendingFoldNotice !== undefined) {
       outgoing = composeFoldNotice(record.job.pendingFoldNotice) + '\n\n' + message;
     }
+    if (record.job.pendingPeerCloseNotice !== undefined) {
+      outgoing = composePeerCloseNotice(record.job.pendingPeerCloseNotice) + '\n\n' + outgoing;
+    }
 
     // `attached` を信じ切らない: イベント駆動でしか更新されず、`closed` / resume 失敗の合図が届かなかった窓では
     // `true` のまま嘘になる。404 を例外のまま `send()` から貫通させると、どの `outcome` にもならず人間は 500 を受け取る。
@@ -3860,6 +3893,7 @@ class Pool implements ManagerPool {
     record.job.turnStartedAt = laterIso(record.job.turnStartedAt, turnStartedAt);
     // 断り書きは実際に届いた回で下ろす（1回だけ付く）
     record.job.pendingFoldNotice = undefined;
+    record.job.pendingPeerCloseNotice = undefined;
     await this.#persist(record);
     await this.#journal({
       type: 'exchange',
@@ -9381,6 +9415,33 @@ class Pool implements ManagerPool {
               'resume か /clear で SDK 側の累積が 0 から始まったため。記録済みの分は保持している。',
           });
         }
+        return;
+      }
+
+      case 'parked_peers_closed': {
+        const notice: PeerCloseNotice = { reason: event.reason, peers: event.peers };
+        const status = record.job.status;
+        // 担当が起こされない（人が止めた・もう終端している）なら、クローンへの知らせだけにする。起こされるなら次の起こし直しの先頭へ添える（二重にしない）
+        if (
+          event.reason === 'stopped' ||
+          status === 'stopped' ||
+          status === 'failed' ||
+          status === 'lost'
+        ) {
+          this.#emit(
+            event.managerId,
+            'report',
+            `[${event.managerId}] ${composePeerCloseNotice(notice)}`,
+          );
+          return;
+        }
+        const reason = event.reason;
+        record.job.pendingPeerCloseNotice = {
+          reason,
+          peers: [...(record.job.pendingPeerCloseNotice?.peers ?? []), ...event.peers],
+          at: new Date(this.#now()).toISOString(),
+        };
+        await this.#persist(record).catch(() => undefined);
         return;
       }
 
