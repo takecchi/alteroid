@@ -189,7 +189,11 @@ const SHUTDOWN_GRACE_MS = 60_000;
 const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
 
 // forced exit（`FORCED_EXIT_MS`）の内側に収める: 待ったあとに台帳への書き込みの完了待ち・runner の口を閉じる・`storage.close()` が残るため。
-const RUNNER_FAREWELL_DEADLINE_MS = FORCED_EXIT_MS - 10_000;
+// 積み上げ（#4932）: runner の畳みの待ちの上限は自分の SIGTERM から50秒（`apps/runner/src/index.ts` の `PICKUP_WAIT_LIMIT_MS` の写し）+ 取り寄せの余裕2秒 = 52秒。
+// forced exit（55秒）までの残り3秒が、待ったあとの片付けの分。runner の SIGTERM がデーモンより2秒を超えて遅れた回は受け取り切れず、
+// 待てずに諦めたものは `noteRunnerFarewellGaveUp` が残す。`packages/core/src/manager.ts` の `RUNNER_FAREWELL_WAIT_MS` と同じ値。
+const RUNNER_PICKUP_WAIT_LIMIT_MS = 50_000;
+const RUNNER_FAREWELL_DEADLINE_MS = RUNNER_PICKUP_WAIT_LIMIT_MS + 2_000;
 
 // `server.timeout` は入れず TCP keepalive にする: `write()` のたびにタイマーがリセットされ、イベントが来ないだけの健全な長時間接続を切ってしまうため。
 const TCP_KEEPALIVE_DELAY_MS = 30_000;

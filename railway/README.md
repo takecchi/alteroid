@@ -150,7 +150,7 @@ runner が import するのは `@alteroid/core` だけである（`storage-fs` /
 compose の `stop_grace_period: 60s` に対応する。Railway の既定は短く、ここを書かないと SIGTERM の直後に SIGKILL が来る。
 
 - `runner`: 走行中のマネージャーを畳み、**生ログをデーモンへ渡し切る**時間。渡し切れないと `manager_id` から生ログへ降りる経路が切れる
-- `app`: 落ちる前の**最後の蒸留**（クローンのターン1本）が終わる猶予。**同時に畳む runner から最後の出来事（生ログ・未 push の観測）を受け取り切る時間でもある**（runner が `shutting_down` を名乗ったときだけ、SIGTERM から45秒を上限に待つ。`apps/daemon/src/index.ts` の `RUNNER_FAREWELL_DEADLINE_MS`。#2749）
+- `app`: 落ちる前の**最後の蒸留**（クローンのターン1本）が終わる猶予。**同時に畳む runner から最後の出来事（生ログ・未 push の観測）を受け取り切る時間でもある**（runner が `shutting_down` を名乗ったときだけ、SIGTERM から52秒を上限に待つ。runner の畳みの待ちの上限50秒 + 取り寄せの余裕2秒。`apps/daemon/src/index.ts` の `RUNNER_FAREWELL_DEADLINE_MS`。#2749 / #4932）。**runner の SIGTERM がデーモンより2秒を超えて遅れた回と、デーモンが先に畳まれて runner がまだ名乗っていない回は、受け取れない分が出うる**（前者は諦めた旨が stderr に残る。後者は名乗らない runner を待たない＝デーモンだけの入れ替えを50秒遅らせないため、残らない）
 
 **この値を変えるなら `apps/daemon/src/index.ts` / `apps/runner/src/index.ts` の強制 exit も変えること。** どちらのプロセスも SIGTERM から **55秒**（＝ここの 60 から5秒引いた値）で自分に見切りをつけて `exit(0)` する。**`railway/*.json` は JSON なのでファイル側にこの対応を書けない。この節がその導線である。**
 

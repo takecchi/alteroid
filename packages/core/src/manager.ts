@@ -1423,8 +1423,13 @@ export interface ManagerPool {
 /**
  * `stop()` が `shutting_down` の runner を待つ上限の既定（ms）。デーモンの forced exit（SIGTERM から 55 秒）の
  * 内側に収める: 待ったあとに台帳の書き込み待ちと `storage.close()` が残るので 55 秒には届かせない。
+ *
+ * 値の積み上げ（#4932）: runner が畳みで待つ上限は自分の SIGTERM から 50 秒（`apps/runner/src/index.ts` の `PICKUP_WAIT_LIMIT_MS`）なので、
+ * それ + 取り寄せの余裕 2 秒 = 52 秒。forced exit（55 秒）まで残る 3 秒が、待ったあとの吐き出し・口を閉じる・`storage.close()` の分
+ * （以前は 45 秒で、runner の上限より手前だった）。`apps/daemon/src/index.ts` の `RUNNER_FAREWELL_DEADLINE_MS` と同じ値にそろえる。
+ * デーモンの `drainingSeconds`（60 秒）は延ばさない: `LEASE_DRAIN_MS` の写しがあり、延ばす向きは二重実行の窓になる。
  */
-export const RUNNER_FAREWELL_WAIT_MS = 45_000;
+export const RUNNER_FAREWELL_WAIT_MS = 52_000;
 
 export interface ManagerPoolStopOptions {
   /**
@@ -7433,9 +7438,23 @@ class Pool implements ManagerPool {
   async #awaitRunnerFarewells(farewellDeadlineAt: number | undefined): Promise<void> {
     if (this.#farewellRunners.size === 0) return;
     const deadlineAt = farewellDeadlineAt ?? this.#now() + RUNNER_FAREWELL_WAIT_MS;
-    const runners = (await this.#runners.list().catch(() => [])).filter(
-      (runner) => this.#farewellRunners.has(runner.runnerId) && runner.awaitStreamEnd !== undefined,
-    );
+    // 待っている間に新しく名乗った runner（デーモンが先に畳まれ、runner の SIGTERM が少し遅れた回。#4932）も、同じ締切の内側で拾う。
+    // 待ち終えた runner は二度待たない。
+    const waited = new Set<string>();
+    for (;;) {
+      const runners = (await this.#runners.list().catch(() => [])).filter(
+        (runner) =>
+          this.#farewellRunners.has(runner.runnerId) &&
+          runner.awaitStreamEnd !== undefined &&
+          !waited.has(runner.runnerId),
+      );
+      if (runners.length === 0) return;
+      for (const runner of runners) waited.add(runner.runnerId);
+      await this.#awaitFarewellsOf(runners, deadlineAt);
+    }
+  }
+
+  async #awaitFarewellsOf(runners: readonly RunnerClient[], deadlineAt: number): Promise<void> {
     await Promise.all(
       runners.map(async (runner) => {
         const remaining = (): number => Math.max(0, deadlineAt - this.#now());

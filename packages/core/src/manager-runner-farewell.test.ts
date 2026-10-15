@@ -362,3 +362,82 @@ describe('畳み始めた runner の最後の出来事を、デーモンの stop
     await stopping;
   });
 });
+
+describe('既定の締切は runner の畳みの上限（50秒）より後まで待つ（Issue #4932）', () => {
+  it('(e) デーモンの SIGTERM から45秒を過ぎて、畳み中の runner が出来事を送っても受け取る', async () => {
+    let releaseUnpushed!: () => void;
+    const unpushedGate = new Promise<void>((resolve) => {
+      releaseUnpushed = resolve;
+    });
+    const { pool, stores, fake } = await setup({ managerId: 'mgr-e', unpushedGate });
+    releaseGateForCleanup = releaseUnpushed;
+
+    const runnerShutdown = fake.host.shutdown();
+    await flush();
+    // 締切を渡さない: デーモン本体と同じ、既定（`RUNNER_FAREWELL_WAIT_MS`）の締切で待つ。
+    let stopped = false;
+    const stopping = pool.stop().then(() => (stopped = true));
+    await vi.advanceTimersByTimeAsync(46_000);
+    await flush();
+    expect(stopped).toBe(false);
+
+    releaseUnpushed();
+    await runnerShutdown;
+    await flush();
+    fake.exit();
+    await stopping;
+
+    const job = await ledgerOf(stores, 'mgr-e');
+    expect(job.lastUnpushedWorkObservation).toMatchObject({ kind: 'observed', source: 'shutdown' });
+    expect(job.archiveIds?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('(f) デーモンの猶予（52秒）を超える分は諦め、日誌（stderr）に残す', async () => {
+    const { pool, fake } = await setup({ managerId: 'mgr-f' });
+    void fake.host.shutdown();
+    await flush();
+
+    let stopped = false;
+    let stopping!: Promise<void>;
+    const lines = await captureStderr(async () => {
+      stopping = pool.stop().then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(51_999);
+      await flush();
+      expect(stopped).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await stopping;
+    });
+    expect(stopped).toBe(true);
+    const gaveUp = lines.filter((line) => line.includes('stream-open'));
+    expect(gaveUp).toHaveLength(1);
+    expect(gaveUp[0]).toContain('mgr-f');
+  });
+
+  it('(g) 待っている間に別の runner が名乗っても、同じ締切の内側で拾って待つ', async () => {
+    const first = await setup({ managerId: 'mgr-g1' });
+    const second = hostBackedRunner({ runnerId: 'runner-late', unpushedGate: Promise.resolve() });
+    // 2台目の runner を名簿に足した pool を作り直す
+    const pool = createManagerPool({
+      stores: first.stores,
+      post: () => undefined,
+      runners: createRunnerRegistry([first.fake.runner, second.runner]),
+    });
+    await pool.restore();
+    await flush();
+
+    void first.fake.host.shutdown();
+    await flush();
+    const stopping = pool.stop({ farewellDeadlineAt: Date.now() + 30_000 });
+    await flush();
+    // 1台目を待っているあいだに、2台目が名乗る
+    second.send({ type: 'shutting_down', runnerId: 'runner-late' });
+    await flush();
+    first.fake.exit();
+    await flush();
+    expect(second.awaitStreamEndCalls).toBe(1);
+    second.exit();
+    await stopping;
+  });
+});
