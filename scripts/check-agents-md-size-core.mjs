@@ -116,6 +116,18 @@ export const BUDGET_HISTORY = [
       '#3849 の「小さな余白」は上げるときの上げ幅についての指示である。',
     ref: 'https://github.com/takecchi/alteroid/pull/3884',
   },
+  {
+    date: '2026-10-16',
+    bytes: 63933,
+    lines: 390,
+    why:
+      '#4893: 「作業者へ切り出す」に、作業者はシェルでファイルを書かない（sed -i・heredoc・リダイレクト）' +
+      '・依頼文の規約の先頭に例つきで書く、の規則を1行足した（オーナーの決定 2026-10-15、クローン経由）。' +
+      '(a) 委ねるたびに要る判断基準なので、ここに置く。実例（禁止を一覧に並べた依頼でも 6 回流れた）と理由' +
+      '（照合を外すと黙って壊す・差分が道具の記録に残らない）は delegation.md へ置き、本文には規則だけを残して' +
+      '834 B から 344 B へ縮めた。余白はゼロのまま（上げ幅は足した1行ぶんだけ）。',
+    ref: 'https://github.com/takecchi/alteroid/issues/4893',
+  },
 ];
 
 export const AGENTS_MD_MAX_BYTES = BUDGET_HISTORY[BUDGET_HISTORY.length - 1].bytes;
