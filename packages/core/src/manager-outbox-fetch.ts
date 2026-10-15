@@ -98,7 +98,20 @@ export async function fetchManagerOutbox(
 
   const { runner } = input;
   const open = runner.openOutboxFile?.bind(runner);
+  // 取りに行かないと決めたものも、退避先を消させる（#4925）: 消さないと runner の畳みが、取られない出し箱を上限まで待つ。失敗は握る
+  const remove = runner.deleteOutboxFile?.bind(runner);
+  const removeAll = async (files: readonly RunnerOutboxFile[]): Promise<void> => {
+    if (remove === undefined || files.length === 0) return;
+    await Promise.allSettled(
+      files.map((file) =>
+        remove(input.managerId, file.fileId, {
+          signal: AbortSignal.timeout(OUTBOX_DELETE_TIMEOUT_MS),
+        }),
+      ),
+    );
+  };
   if (!input.runnerNamesOutbox || open === undefined) {
+    await removeAll(input.files);
     for (const file of input.files) {
       rejected.push({
         name: normalizeAttachmentName(file.name),
@@ -133,6 +146,7 @@ export async function fetchManagerOutbox(
     } catch (error) {
       if (error instanceof AttachmentRejectedError) {
         rejected.push({ name, reason: `受け取らなかった: ${error.message}` });
+        toRemove.push(file);
         continue;
       }
       throw error;
@@ -142,6 +156,7 @@ export async function fetchManagerOutbox(
         name,
         reason: `受け取れなかった（時間切れ。1回の報告の取り出しは全体で ${seconds(totalTimeoutMs)} 秒まで）`,
       });
+      toRemove.push(file);
       continue;
     }
     const fileTimeoutMs = fileTimeoutOf(file);
@@ -170,21 +185,13 @@ export async function fetchManagerOutbox(
       rejected.push({ name, reason: outcome.reason });
       // 大きさで断ったもの（二度と取りに行かない）も消させる: 外部ストレージの無いデーモンが断る大きいファイルを、
       // runner の退避先に24時間の掃除まで溜めないため
-      if (outcome.neverFetch === true) toRemove.push(file);
+      // 時間切れ（この報告の取り出しでは二度と取りに行かない）も同じ（#4925）
+      if (outcome.neverFetch === true || signal.aborted) toRemove.push(file);
     }
   }
 
   // 失敗は握る: 取りこぼしは runner の24時間の掃除が消す。報告は止めない
-  const remove = runner.deleteOutboxFile?.bind(runner);
-  if (remove !== undefined && toRemove.length > 0) {
-    await Promise.allSettled(
-      toRemove.map((file) =>
-        remove(input.managerId, file.fileId, {
-          signal: AbortSignal.timeout(OUTBOX_DELETE_TIMEOUT_MS),
-        }),
-      ),
-    );
-  }
+  await removeAll(toRemove);
   return { attachments, rejected };
 }
 

@@ -757,7 +757,8 @@ class Host implements RunnerHost {
   #shuttingDown = false;
   readonly #pickupsSinceShutdown = new Set<string>();
   // このプロセスが出来事で送り、まだデーモンに取られていない出し箱・預かりのファイル（#4912）。畳み始めに `#pickupsSinceShutdown` へ積む
-  readonly #emittedPickups = new Set<string>();
+  // 値は送った時刻（ms）。古いものは畳みの待ちに数えない（#4925）
+  readonly #emittedPickups = new Map<string, number>();
   readonly #finishUnpushedWorkFn:
     ((options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>) | undefined;
   readonly #cwdExistsFn: (cwd: string) => boolean;
@@ -1591,11 +1592,13 @@ class Host implements RunnerHost {
   }
 
   #noteEmittedPickup(key: string): void {
-    this.#emittedPickups.add(key);
+    // 入れ直しで時刻を新しくする: 同じ鍵を再び送ったなら、デーモンはまた取りに来る
+    this.#emittedPickups.delete(key);
+    this.#emittedPickups.set(key, Date.now());
     if (this.#shuttingDown) this.#pickupsSinceShutdown.add(key);
     // 上限: 取りに来ない旧いデーモンの下で、長く動く器の集合が増え続けないように（古い順に捨てる）
     if (this.#emittedPickups.size > EMITTED_PICKUPS_MAX) {
-      const oldest = this.#emittedPickups.values().next().value;
+      const oldest = this.#emittedPickups.keys().next().value;
       if (oldest !== undefined) this.#emittedPickups.delete(oldest);
     }
   }
@@ -1852,7 +1855,12 @@ class Host implements RunnerHost {
     // このプロセスが出来事で送り、まだ取られていない出し箱・未追跡の預かりも待たせる（#4912）。
     // 退避先の dir は数えない: 前の担当・前のプロセスの残りや読み捨てられた分まで待つと、入れ替えのたびに上限まで遅れる。
     // 本文を載せて送り直すのは生ログだけ: 大きいファイルを SSE に載せないため
-    for (const key of this.#emittedPickups) this.#pickupsSinceShutdown.add(key);
+    // 送ってから `EMITTED_PICKUP_STALE_MS` を過ぎても取られていないものは数えない（#4925）: デーモンは普通数秒で取りに来る。
+    // 古いものは、取りに行かないと決めた（検めで断った・台帳に無い担当など）か別の事情で、待っても取られず畳みのたびに上限まで待たせる
+    const staleBefore = Date.now() - EMITTED_PICKUP_STALE_MS;
+    for (const [key, emittedAt] of this.#emittedPickups) {
+      if (emittedAt > staleBefore) this.#pickupsSinceShutdown.add(key);
+    }
     // 畳み始めの名乗りを入口ごとに任せない: 積み忘れる形を作らないため
     this.#emit({ type: 'shutting_down', runnerId: this.runnerId });
     // 見張りを先に畳む: 畳み残すと止まったはずの見張りが空の名簿を叩き続け、テストではタイマーが残ってハングするため
@@ -1889,6 +1897,9 @@ class Host implements RunnerHost {
 
 // 送ったまま取られていない出し箱・預かりを覚える数の上限（#4912）
 const EMITTED_PICKUPS_MAX = 10_000;
+
+// 送ってからこれを過ぎて取られていない出し箱・預かりは、畳みの待ちに数えない（#4925）。10分: PEER_PARK_TTL_MS と同じ桁で、普段の数秒に十分な余裕がある
+export const EMITTED_PICKUP_STALE_MS = 10 * 60_000;
 
 function pickupKey(kind: 'archive' | 'outbox' | 'rescue', managerId: string, id: string): string {
   return `${kind}\u0000${managerId}\u0000${id}`;

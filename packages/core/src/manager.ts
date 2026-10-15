@@ -5881,8 +5881,9 @@ class Pool implements ManagerPool {
     const limits = this.#attachmentLimits ?? readAttachmentLimits().limits;
     for (const file of event.files) {
       if (!named) {
-        // 名乗らない器へは取りに行かない（口を持たない）
+        // 名乗らない器へは取りに行かない（口を持たない）。それでも退避先は消させる（#4925）: 消さないと runner の畳みが上限まで待つ
         skipped.push({ path: file.path, reason: 'runner が rescue-files を名乗っていない' });
+        await removeStaged(file.fileId);
         continue;
       }
       const stash = record.job.rescueStash ?? [];
@@ -8869,6 +8870,33 @@ class Pool implements ManagerPool {
     };
   }
 
+  /** 取りに行かないと決めた出来事の出し箱・預かりを、runner へ DELETE して退避先ごと消させる（#4925）。失敗は握る。 */
+  async #discardRunnerPickups(event: RunnerEvent, fromRunnerId: string): Promise<void> {
+    const targets: { fileId: string; kind: 'outbox' | 'rescue' }[] = [];
+    let managerId: string;
+    if (event.type === 'report') {
+      managerId = event.managerId;
+      for (const file of event.files ?? []) targets.push({ fileId: file.fileId, kind: 'outbox' });
+    } else if (event.type === 'rescue_files') {
+      managerId = event.managerId;
+      for (const file of event.files) targets.push({ fileId: file.fileId, kind: 'rescue' });
+    } else {
+      return;
+    }
+    if (targets.length === 0) return;
+    const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+    if (runner === null) return;
+    await Promise.allSettled(
+      targets.map(async ({ fileId, kind }) => {
+        const remove =
+          kind === 'outbox'
+            ? runner.deleteOutboxFile?.bind(runner)
+            : runner.deleteRescueFile?.bind(runner);
+        await remove?.(managerId, fileId, { signal: AbortSignal.timeout(5000) });
+      }),
+    );
+  }
+
   /** 失敗は投げない: 取り出しの不調で報告を止めない。取れなかったものは名前と理由で返し、黙って落とさない。 */
   async #fetchReportFiles(
     event: Extract<RunnerEvent, { type: 'report' }>,
@@ -8982,7 +9010,11 @@ class Pool implements ManagerPool {
     }
 
     const record = this.#records.get(event.managerId) ?? (await this.#load(event.managerId));
-    if (!record) return;
+    if (!record) {
+      // 台帳に無い担当の出来事: 取りに行かない出し箱・預かりも消させる（#4925）。消さないと runner の畳みが、取られない退避先を上限まで待つ
+      await this.#discardRunnerPickups(event, fromRunnerId);
+      return;
+    }
 
     const generation = this.#judgeSessionGeneration(record, event);
     if (generation === 'stale' && isSessionScopedEvent(event)) {

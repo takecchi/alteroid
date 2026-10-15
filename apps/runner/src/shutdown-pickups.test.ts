@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 
 import { createAdaptorServer } from '@hono/node-server';
 import { Hono } from 'hono';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Outbox } from './app.js';
 import { shutdownHandingOver } from './index.js';
@@ -228,5 +228,68 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
     });
 
     expect(inlined).toBe(0);
+  });
+});
+
+// shutdown() が長引いても、送り直しと待ちの段が止まらない（#4925）
+describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() の上限で待ちの段へ進む（#4925）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('⭐ shutdown() が終わらなくても、SIGTERM から 30 秒で退避を送り直す', async () => {
+    vi.useFakeTimers();
+    let pending = 1;
+    let inlined = 0;
+    let closed = false;
+    const outbox = new Outbox();
+    const detach = outbox.attach(() => undefined);
+
+    const done = shutdownHandingOver({
+      host: {
+        shutdown: () => new Promise<void>(() => undefined),
+        pendingPickups: () => pending,
+        inlineUnpickedArchives: () => {
+          inlined += 1;
+          pending = 0;
+          return 1;
+        },
+      },
+      outbox,
+      closeListener: () => (closed = true),
+      drainWaitMs: 0,
+      write: () => undefined,
+    });
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(inlined).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(inlined).toBe(1);
+    await done;
+    detach();
+    expect(closed).toBe(true);
+    expect(inlined).toBe(1);
+  });
+
+  it('⭐ shutdown() が上限（30 秒）を超えたら、打ち切らずに待ちの段へ進んで口を閉じる', async () => {
+    vi.useFakeTimers();
+    let closed = false;
+    const outbox = new Outbox();
+    const detach = outbox.attach(() => undefined);
+
+    const done = shutdownHandingOver({
+      host: { shutdown: () => new Promise<void>(() => undefined), pendingPickups: () => 0 },
+      outbox,
+      closeListener: () => (closed = true),
+      drainWaitMs: 0,
+      write: () => undefined,
+    });
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(closed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await done;
+    detach();
+    expect(closed).toBe(true);
   });
 });

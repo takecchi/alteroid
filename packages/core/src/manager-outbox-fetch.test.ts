@@ -284,7 +284,8 @@ describe('担い手の出し箱の取り出し（Issue #4126 P2b）', () => {
     expect(result.attachments).toEqual([]);
     expect(result.rejected[0]?.reason).toContain('時間切れ');
     expect(closed).toBe(true);
-    expect(fake.deleted).toEqual([]);
+    // 時間切れも二度と取りに行かないので、退避先を消させる（#4925）
+    expect(fake.deleted).toEqual(['f1']);
   });
 
   it('全体の時間を超えた分は「受け取れなかった（時間切れ）」になり、先のファイルの結果は残る', async () => {
@@ -315,6 +316,8 @@ describe('担い手の出し箱の取り出し（Issue #4126 P2b）', () => {
     expect(result.rejected.map((item) => item.name)).toEqual(['two.txt', 'three.txt']);
     for (const item of result.rejected) expect(item.reason).toContain('時間切れ');
     expect(fake.opened).toEqual(['f1', 'f2']);
+    // 取れた分も、時間切れで取らなかった分も、退避先を消させる（#4925）
+    expect([...fake.deleted].sort()).toEqual(['f1', 'f2', 'f3']);
   });
 
   it('宣言が画像で画像の上限を超えるときは、octet-stream に落として受け付ける', async () => {
@@ -416,6 +419,8 @@ describe('担い手の出し箱の取り出し（Issue #4126 P2b）', () => {
     expect(result.attachments.map((ref) => ref.name)).toEqual(['a.txt']);
     expect(result.rejected[0]).toMatchObject({ name: 'b.txt' });
     expect(result.rejected[0]?.reason).toContain('合計は 10 B まで');
+    // 検めで断った分も、退避先を消させる（#4925）
+    expect([...fake.deleted].sort()).toEqual(['f1', 'f2']);
   });
 
   it('runner が取り出しの口を名乗っていなければ、取りに行かず「名乗っていない」で rejected に落とす', async () => {
@@ -432,6 +437,8 @@ describe('担い手の出し箱の取り出し（Issue #4126 P2b）', () => {
     expect(result.rejected).toEqual([
       { name: 'a.txt', reason: 'runner が取り出しの口を名乗っていない' },
     ]);
+    // 取りに行かなくても、退避先は消させる（#4925）
+    expect(fake.deleted).toEqual(['f1']);
   });
 
   it('runner が断ったもの（rejectedFiles）は、取ったものと並べて理由つきで返る', async () => {

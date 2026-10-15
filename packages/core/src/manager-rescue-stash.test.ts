@@ -110,6 +110,9 @@ function fakeRunner(names: boolean): Fake {
     async deleteRescueFile(_managerId: string, fileId: string) {
       deleted.push(fileId);
     },
+    async deleteOutboxFile(_managerId: string, fileId: string) {
+      deleted.push(fileId);
+    },
   } as unknown as RunnerClient;
   alive.push({
     managerId: 'mgr-s',
@@ -281,12 +284,47 @@ describe('未追跡のファイルの預かり（デーモン側。#4863）', ()
 
   it('rescue-files を名乗らない runner からは取りに行かず、日誌へ残す', async () => {
     const { pool, stores, fake } = await setup(false);
-    offer(fake, 'a.txt', 'x');
+    const fileId = offer(fake, 'a.txt', 'x');
     await vi.waitFor(async () =>
       expect(JSON.stringify(await stores.journal.list({ types: ['decision'] }))).toContain('a.txt'),
     );
     expect(fake.opened).toEqual([]);
     expect(await stashOf(stores)).toEqual([]);
+    // 取りに行かなくても、退避先は消させる（#4925）
+    await vi.waitFor(() => expect(fake.deleted).toContain(fileId));
+    await done(pool);
+  });
+
+  it('台帳に無い担当の預かり・出し箱も、退避先を消させる（#4925）', async () => {
+    const { pool, fake } = await setup();
+    const rescueId = 'a'.repeat(32);
+    const outboxId = 'b'.repeat(32);
+    fake.send({
+      type: 'rescue_files',
+      managerId: 'mgr-unknown',
+      worktree: '.',
+      files: [{ fileId: rescueId, path: 'a.txt', size: 1, sha256: sha256Hex(bytesOf('x')) }],
+      skipped: [],
+    });
+    fake.send({
+      type: 'report',
+      managerId: 'mgr-unknown',
+      status: 'done',
+      text: '終わった',
+      files: [
+        {
+          fileId: outboxId,
+          name: 'o.txt',
+          mediaType: 'text/plain',
+          size: 1,
+          sha256: sha256Hex(bytesOf('x')),
+        },
+      ],
+    } as RunnerEvent);
+    await vi.waitFor(() =>
+      expect(fake.deleted).toEqual(expect.arrayContaining([rescueId, outboxId])),
+    );
+    expect(fake.opened).toEqual([]);
     await done(pool);
   });
 

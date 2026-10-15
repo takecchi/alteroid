@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { RUNNER_CAPABILITIES, RUNNER_CAPABILITY_MANAGER_OUTBOX } from './runner-protocol.js';
 import type { RunnerEvent } from './runner-protocol.js';
-import { createRunnerHost, type RunnerHost } from './runner.js';
+import { createRunnerHost, EMITTED_PICKUP_STALE_MS, type RunnerHost } from './runner.js';
 
 function fakeSdk(onTurn: () => Promise<void>): { fn: typeof sdkQuery; options: Options[] } {
   const options: Options[] = [];
@@ -360,6 +360,23 @@ describe('Host: 畳み始める前に退避先へ置いた物も待ちに入る�
     await host.shutdown();
 
     expect(host.pendingPickups()).toBe(0);
+  });
+
+  // 取りに行かないと決められた出し箱・預かりが、畳みのたびに上限まで待たせる（#4925）
+  it('⭐ 送ってから一定時間を過ぎて取られていないものは、畳みの待ちに数えない。新しいものは数える', async () => {
+    const { host } = await hostWithEmittedReport();
+    // 時計だけを進める（実時間は待たない）
+    vi.setSystemTime(Date.now() + EMITTED_PICKUP_STALE_MS - 1_000);
+    try {
+      const fresh = await hostWithEmittedReport();
+      vi.setSystemTime(Date.now() + 2_000);
+      await host.shutdown();
+      expect(host.pendingPickups()).toBe(0);
+      await fresh.host.shutdown();
+      expect(fresh.host.pendingPickups()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('⭐ GET を読み切ったら、DELETE が来なくても待ちから外す', async () => {
