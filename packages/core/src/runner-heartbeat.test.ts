@@ -281,6 +281,28 @@ describe('runner の生存判定', () => {
     await registry.stop();
   });
 
+  it('⭐ 先に落ちて lost になった器を空けても、復帰したときに connected へ黙って戻らない（#4834）', async () => {
+    const runner = new FakeRunner('runner-a');
+    const registry = createRunnerRegistry([], { selectWaitMs: 0 });
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    runner.reply = 'error';
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(registry.entries()).toMatchObject([{ state: 'lost' }]);
+
+    registry.vacate('runner-a');
+    expect(registry.entries()).toMatchObject([{ state: 'vacating' }]);
+
+    runner.reply = 'ok';
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(registry.entries()).toMatchObject([{ state: 'vacating' }]);
+    expect(await registry.list()).toEqual([]);
+    await expect(registry.select({})).rejects.toThrow();
+
+    await registry.stop();
+  });
+
   it('落ちた runner は新しい委譲の宛先から外れる（名簿には残る）', async () => {
     const runner = new FakeRunner('runner-a');
     const registry = createRunnerRegistry([], { selectWaitMs: 0 });
