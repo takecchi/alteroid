@@ -2229,6 +2229,7 @@ class RunnerSession {
         ? {}
         : { sessionId: this.#resumeState.sessionId }),
       liveBackgroundTasks: this.#liveBackgroundTasks().length,
+      liveBackgroundPeers: this.#peerBroker?.backgroundTasks().length ?? 0,
       backgroundTaskCommands: this.#liveBackgroundTasks().flatMap((task) => {
         const command = this.#stopState.backgroundTaskCommand(task.id);
         return command === undefined ? [] : [command];

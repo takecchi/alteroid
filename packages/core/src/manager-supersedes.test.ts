@@ -251,6 +251,21 @@ describe('後継を立てた前任は、自動で起こし直さない（#4861 �
     expect((await s.stores.jobs.listJobs()).find((j) => j.id === ID)?.heldMessages).toBeUndefined();
   });
 
+  it('後継へ引き継いだ前任へ手で送ると、送ることは止めず、返り値に後継の id と二重に走る注意が付く（#4877）', async () => {
+    const s = await setup({ rotateOnObservation: false });
+    s.fake.push(sessionDiedBy429());
+    await settle();
+    const successor = await s.pool.start({ request: '後継', supersedes: ID });
+
+    const toPredecessor = await s.pool.send(ID, '前任へ手で送る');
+    expect(toPredecessor.outcome).not.toBe('unknown');
+    expect(toPredecessor.detail).toContain(`後継 ${successor.managerId} へ引き継いである前任`);
+    expect(toPredecessor.detail).toContain('二重に');
+
+    const toSuccessor = await s.pool.send(successor.managerId, '後継へ送る');
+    expect(toSuccessor.detail).not.toContain('引き継いである前任');
+  });
+
   it('(b) 前任が running なら supersedes は断られ、後継は起きない', async () => {
     const s = await setup({ rotateOnObservation: false, initiallyAlive: true });
 
