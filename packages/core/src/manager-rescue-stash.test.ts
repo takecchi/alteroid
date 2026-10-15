@@ -305,7 +305,19 @@ describe('未追跡のファイルの預かり（デーモン側。#4863）', ()
       ),
     );
     send();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // 実時間で待たない（#2146）: 同じ委譲の預かりは直列に処理されるので、後ろに送った別の出来事が日誌に出たら、重複の分も処理済み
+    fake.send({
+      type: 'rescue_files',
+      managerId: 'mgr-s',
+      worktree: 'wt',
+      files: [],
+      skipped: [{ path: 'fence.txt', reason: 'not-regular' }],
+    });
+    await vi.waitFor(async () =>
+      expect(JSON.stringify(await stores.journal.list({ types: ['decision'] }))).toContain(
+        'fence.txt',
+      ),
+    );
     const entries = await stores.journal.list({ types: ['decision'] });
     expect(entries.filter((e) => JSON.stringify(e).includes('notes.txt'))).toHaveLength(1);
     expect(JSON.stringify(entries)).toContain('鍵らしい文字列');
