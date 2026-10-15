@@ -6653,12 +6653,16 @@ class Clone implements CloneHost {
   async #noteFirstTurnToolSearch(
     contextUsage: ContextUsageObservation | undefined,
     usage: AgentTurnUsage | undefined,
+    succeeded: boolean,
   ): Promise<void> {
     if (this.#firstTurnToolSearchSettled) return;
-    if (this.#sdkSession.turn?.kind !== 'normal') return;
+    const turn = this.#sdkSession.turn;
+    if (turn?.kind !== 'normal') return;
+    // #4926: 失敗したターン（枠・拒否・result の失敗）と文脈が取れなかった回では印を立てず、次の成功したターンへ回す
+    if (!succeeded || turn.rejected != null) return;
+    if (contextUsage === undefined || contextUsage.error !== undefined) return;
     this.#firstTurnToolSearchSettled = true;
     if (this.#onFirstTurnToolSearch === undefined) return;
-    if (contextUsage === undefined || contextUsage.error !== undefined) return;
     try {
       await this.#onFirstTurnToolSearch(describeFirstTurnToolSearch(contextUsage, usage));
     } catch (error) {
@@ -7121,7 +7125,7 @@ class Clone implements CloneHost {
           compactions,
         });
 
-        await this.#noteFirstTurnToolSearch(contextUsage, event.usage);
+        await this.#noteFirstTurnToolSearch(contextUsage, event.usage, event.succeeded);
 
         // 成否で絞らない: 拒否は成功したターンにも失敗したターンにも載る。生の合図と `result` の両方を読む（SDK は前者を best-effort としている）。
         for (const denial of event.denials) {

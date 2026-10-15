@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createMemoryStores, humanMessage } from './testing.js';
-import { setup, waitFor, waitForDone } from './clone-test-harness.js';
+import { isTerminal, setup, waitFor, waitForDone, waitForTerminal } from './clone-test-harness.js';
 
 // #4921: 起動後の最初の本セッションのターンで、ToolSearch が実際に効いたかを1回だけ渡す
 describe('クローン — 最初のターンの ToolSearch の観測（#4921）', () => {
@@ -128,6 +128,84 @@ describe('クローン — 最初のターンの ToolSearch の観測（#4921）
     expect(lines).toHaveLength(1);
     expect(lines[0]).not.toMatch(/要求 \d+ 本/);
     expect(lines[0]).not.toContain('使用量 合計');
+
+    await s.clone.stop();
+  });
+
+  // #4926
+  it('最初の通常ターンが失敗しても印を立てず、2回目の成功したターンで1回だけ出る', async () => {
+    const lines: string[] = [];
+    const s = setup(
+      undefined,
+      createMemoryStores(),
+      {
+        modelUsage,
+        resultUsage,
+        numTurns: () => 7,
+        getContextUsage: () => contextOf([{ name: 'MCP tools', tokens: 3_000, kind: 'deferred' }]),
+        resultFor: (turnIndex) =>
+          turnIndex < 1
+            ? { subtype: 'error_during_execution', text: 'API Error: 500 Internal server error' }
+            : undefined,
+      },
+      {},
+      {
+        onFirstTurnToolSearch: (line) => {
+          lines.push(line);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    s.clone.post(humanMessage('1回目（失敗）'));
+    await waitForTerminal(s.events);
+    expect(lines).toHaveLength(0);
+
+    s.clone.post(humanMessage('2回目'));
+    await waitFor(() => s.events.filter(isTerminal).length === 2, '終端が2件届く');
+    s.clone.post(humanMessage('3回目'));
+    await waitFor(() => s.events.filter(isTerminal).length === 3, '終端が3件届く');
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('MCP の道具は deferred');
+
+    await s.clone.stop();
+  });
+
+  it('成功したターンでも文脈が取れなかった回は印を立てず、次に取れた回で出る', async () => {
+    const lines: string[] = [];
+    let reads = 0;
+    const s = setup(
+      undefined,
+      createMemoryStores(),
+      {
+        modelUsage,
+        resultUsage,
+        numTurns: () => 7,
+        // 同じセッションで2ターン走るので、呼び出しの番号ではなく読んだ回数で分ける
+        getContextUsage: () => {
+          reads += 1;
+          return reads < 2
+            ? undefined
+            : contextOf([{ name: 'MCP tools', tokens: 1, kind: 'used' }]);
+        },
+      },
+      {},
+      {
+        onFirstTurnToolSearch: (line) => {
+          lines.push(line);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+    expect(lines).toHaveLength(0);
+
+    s.clone.post(humanMessage('2回目'));
+    await waitFor(() => lines.length === 1, '2回目で観測が出る');
+    expect(lines[0]).toContain('MCP の道具は used');
 
     await s.clone.stop();
   });
