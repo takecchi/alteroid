@@ -235,6 +235,7 @@ import {
   runRescue,
   UNTRACKED_STALE_AFTER_MS,
 } from './rescue-ref.js';
+import { defaultRunnerRescueStagedRoot } from './rescue-stash.js';
 import { StaleUntrackedNotices } from './runner-stale-untracked.js';
 import {
   ScratchSweeper,
@@ -456,6 +457,8 @@ export interface RunnerHostOptions {
   // 出し箱（担い手 → クローンへのファイルの受け渡し。`runner-outbox.ts`）。置き場は下りの添付と同じ作法で、テストで差し替える
   outboxRoot?: string;
   outboxStagedRoot?: string;
+  /** 未追跡のファイルの預かりの退避先（`rescue-stash.ts`。出し箱の退避先とは別の dir）。テストで差し替える。 */
+  rescueStagedRoot?: string;
   /** 担当の作業場（`/tmp/mgr-<先頭8桁>`）の根。テストで差し替える。既定は `/tmp`。 */
   managerScratchRoot?: string;
   // テスト用: 子の権限で出し箱の中身を消す関数の差し替え口
@@ -535,6 +538,9 @@ export interface RunnerHost {
   openOutboxFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined>;
   // 無くても成功（冪等）。形が不正なら `false`
   deleteOutboxFile(managerId: string, fileId: string): Promise<boolean>;
+  // 未追跡のファイルの預かりの退避先（`rescue_files`。#4863）。意味は出し箱と同じで、dir だけが別
+  openRescueFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined>;
+  deleteRescueFile(managerId: string, fileId: string): Promise<boolean>;
   /**
    * いま繋がっているデーモンが、生ログの退避を参照で受け取れるか（SSE の接続で `archive-ref` を名乗ったか。#4485）。
    * 接続のたびに書き直す: 新しい接続のデーモンが古い版なら、本文を載せる形に戻すため。
@@ -685,6 +691,7 @@ class Host implements RunnerHost {
   readonly attachmentStageLimit: number;
   readonly #outboxRoot: string;
   readonly #outboxStagedRoot: string;
+  readonly #rescueStagedRoot: string;
   readonly #outboxRemoveContentsAsChild: OutboxContentsRemover | undefined;
   readonly #managerScratchRoot: string;
   #mcpServers: { servers: McpServers; fingerprint: RunnerMcpServersFingerprint } | undefined;
@@ -755,6 +762,7 @@ class Host implements RunnerHost {
     this.#outboxRoot = options.outboxRoot ?? defaultRunnerOutboxRoot();
     this.#managerScratchRoot = options.managerScratchRoot ?? '/tmp';
     this.#outboxStagedRoot = options.outboxStagedRoot ?? defaultRunnerOutboxStagedRoot();
+    this.#rescueStagedRoot = options.rescueStagedRoot ?? defaultRunnerRescueStagedRoot();
     this.#outboxRemoveContentsAsChild = options.outboxRemoveContentsAsChild;
     this.#pluginsRoot = options.pluginsRoot ?? defaultRunnerPluginsRoot();
     this.#peer = options.peer;
@@ -840,7 +848,11 @@ class Host implements RunnerHost {
           // `#attachmentPruning` の鎖に乗せない: 添付の掃除が長引いても出し箱の掃除を止めないため（失敗は握る）
           // 出し箱の root は子の権限で消す（担い手が書ける木を runner の権限で再帰削除しない）
           pruneStaleOutboxRoots(
-            { outboxRoot: this.#outboxRoot, stagedRoot: this.#outboxStagedRoot },
+            {
+              outboxRoot: this.#outboxRoot,
+              stagedRoot: this.#outboxStagedRoot,
+              rescueStagedRoot: this.#rescueStagedRoot,
+            },
             [...this.#sessions.keys()],
             Date.now(),
             this.#outboxRemoval(),
@@ -1319,6 +1331,7 @@ class Host implements RunnerHost {
       },
       outboxRoot: this.#outboxRoot,
       outboxStagedRoot: this.#outboxStagedRoot,
+      rescueStagedRoot: this.#rescueStagedRoot,
       managerScratchRoot: this.#managerScratchRoot,
       attachmentStageLimit: this.attachmentStageLimit,
       onDelegationProcessSpawned: (pid) => {
@@ -1485,6 +1498,16 @@ class Host implements RunnerHost {
     return removeStagedOutboxFile(this.#outboxStagedRoot, managerId, fileId);
   }
 
+  // 出し箱の退避先と同じ作り（`fileId` の形・`managerId` の形を検める）で、dir だけが別
+  openRescueFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined> {
+    return openStagedOutboxFile(this.#rescueStagedRoot, managerId, fileId);
+  }
+
+  deleteRescueFile(managerId: string, fileId: string): Promise<boolean> {
+    this.#pickupsSinceShutdown.delete(pickupKey('rescue', managerId, fileId));
+    return removeStagedOutboxFile(this.#rescueStagedRoot, managerId, fileId);
+  }
+
   pendingPickups(): number {
     return this.#pickupsSinceShutdown.size;
   }
@@ -1498,6 +1521,12 @@ class Host implements RunnerHost {
     if (event.type === 'report') {
       for (const file of event.files ?? []) {
         this.#pickupsSinceShutdown.add(pickupKey('outbox', event.managerId, file.fileId));
+      }
+    }
+    // 畳む直前の最後の回の預かりを、デーモンが取りに来るまで待たせる（待たないと、器と一緒に未追跡のファイルが消える）
+    if (event.type === 'rescue_files') {
+      for (const file of event.files) {
+        this.#pickupsSinceShutdown.add(pickupKey('rescue', event.managerId, file.fileId));
       }
     }
   }
@@ -1738,7 +1767,7 @@ class Host implements RunnerHost {
   }
 }
 
-function pickupKey(kind: 'archive' | 'outbox', managerId: string, id: string): string {
+function pickupKey(kind: 'archive' | 'outbox' | 'rescue', managerId: string, id: string): string {
   return `${kind}\u0000${managerId}\u0000${id}`;
 }
 
@@ -1910,6 +1939,7 @@ interface RunnerSessionOptions {
   onClosed: (outcome?: { status: JobStatus }) => void;
   outboxRoot: string;
   outboxStagedRoot: string;
+  rescueStagedRoot: string;
   managerScratchRoot: string;
   /** 出し箱の大きいファイルの1つの上限と1報告の合計（hello の `attachmentStageLimit` と同じ値）。 */
   attachmentStageLimit?: number;
@@ -1974,6 +2004,7 @@ class RunnerSession {
   readonly #onClosed: (outcome?: { status: JobStatus }) => void;
   readonly #outboxRoot: string;
   readonly #outboxStagedRoot: string;
+  readonly #rescueStagedRoot: string;
   readonly #managerScratchRoot: string;
   /** 委譲の CLI に渡す `CLAUDE_CODE_TMPDIR`。用意できた後だけ立つ（`#prepareClaudeTmpDir`）。 */
   #claudeTmpDir: string | undefined;
@@ -2128,6 +2159,7 @@ class RunnerSession {
     this.#outboxRoot = options.outboxRoot;
     this.#managerScratchRoot = options.managerScratchRoot;
     this.#outboxStagedRoot = options.outboxStagedRoot;
+    this.#rescueStagedRoot = options.rescueStagedRoot;
     this.#attachmentStageLimit = options.attachmentStageLimit;
     this.#outboxDir = this.#prepareOutbox();
     this.#onDelegationProcessSpawned = options.onDelegationProcessSpawned ?? (() => undefined);
@@ -2283,11 +2315,31 @@ class RunnerSession {
     }
     const run = (async (): Promise<void> => {
       try {
+        const childEnv = this.#childEnv();
         const worktrees = await runRescue(this.#cwd, {
           managerId: this.#id,
           spawn: this.#gitSpawnFn(),
-          env: this.#childEnv(),
+          env: childEnv,
           memory: this.#rescueMemory,
+          // 未追跡のファイルの預かり（#4863 案A）。畳む直前の回（`waitForRunning`）は安定を待たない。
+          // 所有者の検査は出し箱と同じ（子を降ろす構成なら子の uid、降ろさない構成なら runner 自身の uid）
+          stash: {
+            stagedRoot: this.#rescueStagedRoot,
+            expectedUid: this.#childUser?.uid ?? process.getuid?.(),
+            secretEnv: childEnv,
+            // 資格の置き場（`ALTEROID_CREDENTIAL_DIR`・`*_FILE`）は、子へ渡す env の層と runner 自身の env の両方で見る
+            credentialEnv: { ...this.#env, ...childEnv },
+            ...(options.waitForRunning === true ? { final: true } : {}),
+            onResult: (worktree, result) => {
+              this.#emit({
+                type: 'rescue_files',
+                managerId: this.#id,
+                worktree,
+                files: result.files,
+                skipped: result.skipped,
+              });
+            },
+          },
           hintDirs: this.#gitDirHints,
           onListIncomplete: (incomplete) => this.#noteRescueListIncomplete(incomplete),
           ...(options.signal === undefined ? {} : { signal: options.signal }),

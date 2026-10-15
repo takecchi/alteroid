@@ -82,6 +82,7 @@ export interface LocalRunnerOptions {
   pluginsRoot?: string;
   outboxRoot?: string;
   outboxStagedRoot?: string;
+  rescueStagedRoot?: string;
   contextUsageTimeoutMs?: number;
 }
 
@@ -123,6 +124,9 @@ class LocalRunner implements RunnerClient {
       ...(options.outboxStagedRoot === undefined
         ? {}
         : { outboxStagedRoot: options.outboxStagedRoot }),
+      ...(options.rescueStagedRoot === undefined
+        ? {}
+        : { rescueStagedRoot: options.rescueStagedRoot }),
       ...(options.contextUsageTimeoutMs === undefined
         ? {}
         : { contextUsageTimeoutMs: options.contextUsageTimeoutMs }),
@@ -232,6 +236,18 @@ class LocalRunner implements RunnerClient {
 
   async deleteOutboxFile(managerId: string, fileId: string): Promise<void> {
     await this.#host.deleteOutboxFile(managerId, fileId);
+  }
+
+  async openRescueFile(
+    managerId: string,
+    fileId: string,
+  ): Promise<RunnerOutboxContent | undefined> {
+    const file = await this.#host.openRescueFile(managerId, fileId);
+    return file === undefined ? undefined : { size: file.size, body: file.stream };
+  }
+
+  async deleteRescueFile(managerId: string, fileId: string): Promise<void> {
+    await this.#host.deleteRescueFile(managerId, fileId);
   }
 
   async unpushedWork(

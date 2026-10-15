@@ -968,6 +968,11 @@ export {
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE,
   type RunnerStagedAttachmentMeta,
   RUNNER_CAPABILITY_MANAGER_OUTBOX,
+  RUNNER_CAPABILITY_RESCUE_FILES,
+  runnerRescueFileSchema,
+  runnerRescueSkippedSchema,
+  type RunnerRescueFile,
+  type RunnerRescueSkipped,
   runnerOutboxFileSchema,
   runnerOutboxRejectedFileSchema,
   type RunnerOutboxFile,
@@ -1515,6 +1520,7 @@ export {
 export { verifyAttachmentStoreContract } from './attachment-contract.js';
 export {
   fetchManagerOutbox,
+  fetchRescueFile,
   outboxFetchDeadlineMs,
   outboxFetchTotalDeadlineMs,
   OUTBOX_DELETE_TIMEOUT_MS,
@@ -1594,3 +1600,11 @@ export {
   type LoopStall,
   type LoopStallWatchOptions,
 } from './loop-stall.js';
+export {
+  defaultRunnerRescueStagedRoot,
+  RescueStashMemory,
+  RESCUE_STASH_CYCLE_MAX_BYTES,
+  RESCUE_STASH_FILE_MAX_BYTES,
+  stashUntrackedFiles,
+  type RescueStashResult,
+} from './rescue-stash.js';

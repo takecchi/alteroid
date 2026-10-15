@@ -6,6 +6,13 @@ import path from 'node:path';
 import { reasonOf } from './dropped-record.js';
 import { codePointBoundary } from './excerpt.js';
 import { redactSecretsInBody, secretPatternsInBody, type SecretPatternName } from './redact.js';
+import {
+  newRescueStashCycle,
+  RescueStashMemory,
+  stashUntrackedFiles,
+  type RescueStashCycle,
+  type RescueStashResult,
+} from './rescue-stash.js';
 import type { RescueWorktree } from './schema.js';
 import { listWorktreeRoots, type ProcessSpawnFn } from './unpushed-work.js';
 
@@ -282,6 +289,8 @@ interface RescueEntry {
 export class RescueMemory {
   readonly #entries = new Map<string, RescueEntry>();
   readonly #nowMs: () => number;
+  /** 未追跡のファイルの預かり（`rescue-stash.ts`）の、安定の判定と「送った」の記憶。 */
+  readonly stash = new RescueStashMemory();
   readonly #untracked = new Map<string, { relativePath: string; since: Map<string, number> }>();
   #lastResendMs: number;
   constructor(nowMs: () => number = () => Date.now()) {
@@ -363,6 +372,27 @@ export interface RunRescueOptions {
    * 打ち切られなかった回も `undefined` で呼ぶ: 呼び手が「直った」を知り、同じ知らせを繰り返さないため。
    */
   readonly onListIncomplete?: (incomplete: RescueListIncomplete | undefined) => void;
+  /**
+   * 未追跡のファイルを、デーモンの非公開の置き場へ預ける口（#4863 案A）。無ければ預けない。
+   * 退避 ref の push の成否とは独立に、未追跡の名前が取れた作業ツリーごとに呼ぶ。
+   */
+  readonly stash?: RescueStashHook;
+}
+
+export interface RescueStashHook {
+  readonly stagedRoot: string;
+  readonly expectedUid: number | undefined;
+  readonly secretEnv: NodeJS.ProcessEnv;
+  readonly credentialEnv: NodeJS.ProcessEnv;
+  /** 畳む直前の回。安定を待たずに預ける。 */
+  readonly final?: boolean;
+  /** 預けた・預けなかったものがあるときだけ呼ぶ。 */
+  readonly onResult: (worktree: string, result: RescueStashResult) => void;
+}
+
+interface StashRun {
+  readonly hook: RescueStashHook;
+  readonly cycle: RescueStashCycle;
 }
 
 /**
@@ -431,12 +461,15 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
   );
   const reports: RescueWorktree[] = [];
   const resend = options.memory.takeResend();
+  if (resend) options.memory.stash.forgetSent();
+  const stashRun: StashRun | undefined =
+    options.stash === undefined ? undefined : { hook: options.stash, cycle: newRescueStashCycle() };
   const seenRoots = new Set<string>();
   for (const tree of listed.worktrees) {
     seenRoots.add(tree.repoRoot);
     if (options.signal?.aborted === true) break;
     try {
-      const report = await rescueOne(tree.repoRoot, tree.relativePath, options, resend);
+      const report = await rescueOne(tree.repoRoot, tree.relativePath, options, resend, stashRun);
       if (report !== undefined) reports.push(report);
     } catch (error) {
       // 1本の失敗で他の作業ツリーを止めない。
@@ -456,7 +489,10 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
       }
     }
   }
-  if (!isAborted(options.signal)) options.memory.retainUntracked(seenRoots);
+  if (!isAborted(options.signal)) {
+    options.memory.retainUntracked(seenRoots);
+    options.memory.stash.retain(seenRoots);
+  }
   return reports;
 }
 
@@ -481,6 +517,7 @@ async function rescueOne(
   relativePath: string,
   options: RunRescueOptions,
   resend: boolean,
+  stashRun: StashRun | undefined,
 ): Promise<RescueWorktree | undefined> {
   const { spawn, env, signal } = options;
   const at = (options.now?.() ?? new Date()).toISOString();
@@ -597,7 +634,30 @@ async function rescueOne(
         ...(ok(untrackedResult) ? untrackedResult.stdout.split('\0').filter((n) => n !== '') : []),
       ];
       // 取れたときだけ記録する（失敗では記録を変えない）。報告が省かれる周期でも更新される
-      if (ok(untrackedResult)) options.memory.noteUntracked(repoRoot, relativePath, names);
+      if (ok(untrackedResult)) {
+        options.memory.noteUntracked(repoRoot, relativePath, names);
+        // 退避 ref の push の成否・省略とは独立に預ける。失敗は退避 ref を巻き込まない
+        if (stashRun !== undefined) {
+          try {
+            const result = await stashUntrackedFiles(repoRoot, names, {
+              managerId: options.managerId,
+              stagedRoot: stashRun.hook.stagedRoot,
+              expectedUid: stashRun.hook.expectedUid,
+              secretEnv: stashRun.hook.secretEnv,
+              credentialEnv: stashRun.hook.credentialEnv,
+              memory: options.memory.stash,
+              cycle: stashRun.cycle,
+              ...(stashRun.hook.final === true ? { final: true } : {}),
+              ...(signal === undefined ? {} : { signal }),
+            });
+            if (result.files.length > 0 || result.skipped.length > 0) {
+              stashRun.hook.onResult(relativePath, result);
+            }
+          } catch {
+            // 預かりは best-effort
+          }
+        }
+      }
       if (names.length > 0) {
         untracked = {
           count: names.length,

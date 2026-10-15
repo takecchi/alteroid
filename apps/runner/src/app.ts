@@ -1041,6 +1041,28 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       return c.body(null, 204);
     })
 
+    // 未追跡のファイルの預かりの退避先（`rescue_files`。#4863）。出し箱の退避先とは別の dir（予算・掃除を共有しない）。
+    // デーモンが取りに来る向きだけ。`fileId` の形を先に検める
+    .get('/managers/:id/rescue-files/:fileId', async (c) => {
+      const fileId = c.req.param('fileId');
+      if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
+      const file = await host.openRescueFile(c.req.param('id'), fileId);
+      if (file === undefined) return c.json({ error: 'not found' as const }, 404);
+      return c.body(Readable.toWeb(file.stream) as ReadableStream, 200, {
+        'content-type': 'application/octet-stream',
+        'content-length': String(file.size),
+      });
+    })
+
+    .delete('/managers/:id/rescue-files/:fileId', async (c) => {
+      const fileId = c.req.param('fileId');
+      if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
+      if (!(await host.deleteRescueFile(c.req.param('id'), fileId))) {
+        return c.json({ error: 'invalid managerId' as const }, 400);
+      }
+      return c.body(null, 204);
+    })
+
     // 預けた生ログの退避の本文（#4485）。デーモンが取りに来る向きだけで、SSE には載せない。`archiveId` の形を先に検める
     .get('/managers/:id/archive/:archiveId', (c) => {
       const archiveId = c.req.param('archiveId');

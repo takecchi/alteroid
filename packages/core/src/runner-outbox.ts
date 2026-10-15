@@ -77,7 +77,7 @@ function assertOwnDirectorySync(path: string): void {
   }
 }
 
-function ensureOwnDirectorySync(
+export function ensureOwnDirectorySync(
   path: string,
   mode: number,
   options: { childGid?: number; recursive?: boolean } = {},
@@ -500,16 +500,23 @@ export function removeManagerOutbox(
 }
 
 export function pruneStaleOutboxRoots(
-  roots: { readonly outboxRoot: string; readonly stagedRoot: string },
+  roots: {
+    readonly outboxRoot: string;
+    readonly stagedRoot: string;
+    /** 未追跡のファイルの預かりの退避先（`rescue-stash.ts`）。出し箱の退避先と同じ24時間の掃除を掛ける。 */
+    readonly rescueStagedRoot?: string;
+  },
   liveManagerIds: readonly string[],
   now: number,
   options: OutboxRemovalOptions = {},
   maxAgeMs: number = RUNNER_ATTACHMENT_STALE_MS,
 ): void {
-  for (const [top, isOutbox] of [
+  const tops: (readonly [string, boolean])[] = [
     [roots.outboxRoot, true],
     [roots.stagedRoot, false],
-  ] as const) {
+    ...(roots.rescueStagedRoot === undefined ? [] : [[roots.rescueStagedRoot, false] as const]),
+  ];
+  for (const [top, isOutbox] of tops) {
     let entries: string[];
     try {
       entries = readdirSync(top);
