@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { type ConfirmIo } from './confirm.js';
-import { captureStdout, pretendTty } from './test-support.js';
+import { captureStderr, captureStdout, pretendTty } from './test-support.js';
 
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
@@ -232,6 +232,55 @@ describe('alteroid credential set', () => {
     expect(text).toContain('NPM_TOKEN を置きました');
     expect(text).toContain('runner-1: 降ろしました');
     expect(text).not.toContain(DUMMY);
+  });
+
+  it('⭐ 再起動で効く名前なら、stdout の形は変えず、stderr に1行出す（#4830）', async () => {
+    const path = join(dir, 'value');
+    await writeFile(path, 'UTC');
+    setReply('PUT', '/credentials', {
+      status: 200,
+      body: {
+        credentials: [{ name: 'TZ', sha256: 'cccccccccccc', updatedAt: 'now' }],
+        runners: [{ runnerId: 'runner-1', ok: true }],
+        restartRequired: ['TZ'],
+      },
+    });
+    const readOut = captureStdout();
+    const readErr = captureStderr();
+
+    await credentialSetCommand('TZ', { file: path });
+
+    expect(readOut()).toBe('TZ を置きました。\n  runner-1: 降ろしました\n');
+    expect(readErr()).toBe('TZ はデーモンの再起動で効く（それまでは前の値のまま動く）\n');
+  });
+
+  it('⭐ 外したときも同じ1行を stderr に出す。空・欄なしなら出さない（#4830）', async () => {
+    setReply('GET', '/credentials', {
+      status: 200,
+      body: { credentials: [{ name: 'TZ', sha256: 'a', updatedAt: 'now', scope: 'app' }] },
+    });
+    setReply('PUT', '/credentials', {
+      status: 200,
+      body: { credentials: [], runners: [], restartRequired: ['TZ'] },
+    });
+    captureStdout();
+    const readErr = captureStderr();
+    await credentialRemoveCommand('TZ', { yes: true });
+    expect(readErr()).toContain('TZ はデーモンの再起動で効く');
+
+    vi.restoreAllMocks();
+    setReply('PUT', '/credentials', {
+      status: 200,
+      body: { credentials: [], runners: [], restartRequired: [] },
+    });
+    captureStdout();
+    const readQuiet = captureStderr();
+    await credentialRemoveCommand('TZ', { yes: true });
+    expect(readQuiet()).toBe('');
+
+    setReply('PUT', '/credentials', { status: 200, body: { credentials: [], runners: [] } });
+    await credentialRemoveCommand('TZ', { yes: true });
+    expect(readQuiet()).toBe('');
   });
 
   it('名前の形が誤りなら、値（空の標準入力でも）より先に、名前の誤りを言う', async () => {

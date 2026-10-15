@@ -26300,6 +26300,10 @@
                           },
                           "value": {
                             "type": "string"
+                          },
+                          "restartRequired": {
+                            "type": "boolean",
+                            "const": true
                           }
                         },
                         "required": ["name", "sha256", "updatedAt", "scope", "secret"]
@@ -26365,9 +26369,19 @@
                           },
                           "value": {
                             "type": "string"
+                          },
+                          "restartRequired": {
+                            "type": "boolean",
+                            "const": true
                           }
                         },
                         "required": ["name", "sha256", "updatedAt", "scope", "secret"]
+                      }
+                    },
+                    "restartRequired": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
                       }
                     },
                     "runners": {
