@@ -13,6 +13,7 @@ import {
   rmSync,
   statSync,
 } from 'node:fs';
+import type { Server } from 'node:http';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -63,6 +64,21 @@ export {
   type RunnerAppDeps,
   type RunnerAppType,
 } from './app.js';
+
+/** 入口で作る HTTP サーバ。要求の期限と keep-alive の持ち時間を掛けて返す（試験で配線を縛るために入口から切り出した。#4915）。 */
+export function createRunnerHttpServer(
+  fetchHandler: Parameters<typeof createAdaptorServer>[0]['fetch'],
+): Server {
+  // 既定（`createServer` を渡さない）は HTTP/1.1 の `node:http` のサーバ。型は HTTP/2 との合併なので絞る
+  const server = createAdaptorServer({ fetch: fetchHandler }) as Server;
+  // 大きいファイルの別口（2 GiB）が Node 既定の 300 秒で切られないように
+  applyAttachmentRequestTimeout(server as unknown as { requestTimeout: number });
+  // デーモンが心拍（10秒）を越えて接続を使い回せるように、サーバのほうが先に閉じないようにする（#4890）。
+  // Node の既定は 5 秒で、そのままだとデーモンの接続は毎回切られ、名前解決と接続をやり直す。
+  // SSE（`/events`）のように応答を流している最中の接続は、keep-alive の持ち時間では畳まれない。
+  applyRunnerKeepAlive(server as unknown as { keepAliveTimeout: number; headersTimeout: number });
+  return server;
+}
 
 // 黙って無視しない: 置いた人間は効いていると思ったままになるため。起動は止めない。
 export function reportRetiredLayerProviderEnv(
@@ -434,15 +450,7 @@ export async function main(): Promise<void> {
   });
   let stopping = false;
   // 畳みの間は、デーモンが取りに来る要求だけを通す（#4699。`shutdown-pickups.ts`）
-  const server = createAdaptorServer({
-    fetch: gateDuringShutdown(app.fetch, () => stopping),
-  });
-  // 大きいファイルの別口（2 GiB）が Node 既定の 300 秒で切られないように
-  applyAttachmentRequestTimeout(server as unknown as { requestTimeout: number });
-  // デーモンが心拍（10秒）を越えて接続を使い回せるように、サーバのほうが先に閉じないようにする（#4890）。
-  // Node の既定は 5 秒で、そのままだとデーモンの接続は毎回切られ、名前解決と接続をやり直す。
-  // SSE（`/events`）のように応答を流している最中の接続は、keep-alive の持ち時間では畳まれない。
-  applyRunnerKeepAlive(server as unknown as { keepAliveTimeout: number; headersTimeout: number });
+  const server = createRunnerHttpServer(gateDuringShutdown(app.fetch, () => stopping));
 
   server.on('error', (error: unknown) => {
     // `process.stderr.write` を使わない: fd がパイプだと非同期で、直後の exit に巻き込まれて行が消えるため。
