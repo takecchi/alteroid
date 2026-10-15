@@ -969,6 +969,7 @@ export {
   type RunnerStagedAttachmentMeta,
   RUNNER_CAPABILITY_MANAGER_OUTBOX,
   RUNNER_CAPABILITY_RESCUE_FILES,
+  RUNNER_CAPABILITY_RESCUE_RESTORE,
   runnerRescueFileSchema,
   runnerRescueSkippedSchema,
   type RunnerRescueFile,
@@ -1308,7 +1309,9 @@ export {
   MANAGER_TOOLS_MCP_SERVER_NAME,
   MANAGER_TOOLS_SOCKET_FILENAME,
   OUTPUT_RECORD_TOOL_NAME,
+  RESCUE_RESTORE_TOOL_NAME,
   type ManagerToolsSocketHost,
+  type RescueRestoreInput,
   type OutputRecordInput,
 } from './manager-tools.js';
 export {

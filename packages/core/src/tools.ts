@@ -1962,6 +1962,7 @@ function describeUnpushedWorkObservation(
   const lines = [
     describeUnpushedWorkObservationOnly(manager),
     describeRescue(manager),
+    describeRescueStash(manager),
     describeExternalOutputs(manager, outputs),
     describeHeldMessages(manager),
   ].filter((line): line is string => line !== null);
@@ -2008,6 +2009,16 @@ const RESCUE_REMOVAL_REASON_TEXT: Record<RescueRemovalReason, string> = {
   failed: '委譲が failed のまま猶予を過ぎた',
   stopped: '委譲が stopped のまま猶予を過ぎた',
 };
+
+// 在りかを辿れるように件数と合計を出す。パスは出さない（担当へは器が入れ替わった後の知らせと `rescue_restore` の返事が運ぶ）
+export function describeRescueStash(manager: ManagerSummary): string | null {
+  const stash = manager.rescueStash;
+  if (stash === undefined) return null;
+  return (
+    `  預かっている未追跡のファイル（デーモンの置き場。猶予は退避 ref と同じ）: ${String(stash.count)} 件・合計 ${String(stash.totalBytes)} バイト` +
+    `（最後の預かり ${stash.latestAt}）。器が入れ替わった後、担当は rescue_restore で取り戻せる`
+  );
+}
 
 export function describeRescue(manager: ManagerSummary): string | null {
   const rescue = manager.lastRescue;

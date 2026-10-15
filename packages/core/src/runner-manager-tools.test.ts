@@ -9,11 +9,12 @@ import { createCredentialStore } from './credentials.js';
 import {
   MANAGER_TOOLS_MCP_SERVER_NAME,
   OUTPUT_RECORD_TOOL_NAME,
+  RESCUE_RESTORE_TOOL_NAME,
   type ManagerToolsSocketHost,
 } from './manager-tools.js';
 import { buildManagerSystemPrompt } from './prompt.js';
 import type { RunnerEvent } from './runner-protocol.js';
-import { runnerEventSchema } from './runner-protocol.js';
+import { RUNNER_CAPABILITIES, runnerEventSchema } from './runner-protocol.js';
 import { createRunnerHost, type RunnerManagerToolsOptions } from './runner.js';
 
 function capturingQuery(): { fn: typeof sdkQuery; options: () => Record<string, unknown> } {
@@ -171,6 +172,35 @@ describe('runner: MCP alteroid-manager の output_record（#2987）', () => {
       expect(result.isError).toBe(true);
     }
     expect(externalOutputs(events)).toEqual([]);
+    await client.close();
+    await host.shutdown();
+  });
+
+  it('rescue_restore: 呼ぶと rescue_restore_request を1件送り、結果に届く先を案内する。能力を名乗る', async () => {
+    expect(RUNNER_CAPABILITIES).toContain('rescue-restore');
+    const tools = capturingToolsHost();
+    const { host, events } = hostWith({ host: tools, childEntry: '/app/relay.js' });
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+    const client = await connect(tools.factory()!());
+
+    const result = (await client.callTool({
+      name: RESCUE_RESTORE_TOOL_NAME,
+      arguments: { paths: ['repo/a.txt'], from: 'mgr-old' },
+    })) as { content: { text: string }[]; isError?: boolean };
+    expect(result.isError).not.toBe(true);
+    expect(result.content[0]!.text).toContain('/tmp/alteroid-attachments/mgr-1/');
+
+    await client.callTool({ name: RESCUE_RESTORE_TOOL_NAME, arguments: {} });
+    const sent = events.filter((e) => e.type === 'rescue_restore_request');
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toEqual({
+      type: 'rescue_restore_request',
+      managerId: 'mgr-1',
+      paths: ['repo/a.txt'],
+      from: 'mgr-old',
+    });
+    expect(sent[1]).toEqual({ type: 'rescue_restore_request', managerId: 'mgr-1' });
+    expect(runnerEventSchema.safeParse(sent[0]).success).toBe(true);
     await client.close();
     await host.shutdown();
   });

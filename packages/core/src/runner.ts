@@ -2602,6 +2602,14 @@ class RunnerSession {
               managerId: this.#id,
               output: { ...input, at: new Date().toISOString() },
             }),
+          managerId: this.#id,
+          restore: (input) =>
+            this.#emit({
+              type: 'rescue_restore_request',
+              managerId: this.#id,
+              ...(input.paths === undefined ? {} : { paths: input.paths }),
+              ...(input.from === undefined ? {} : { from: input.from }),
+            }),
         }).instance,
     );
     return {

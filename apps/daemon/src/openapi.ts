@@ -678,6 +678,14 @@ export const managerSummarySchema = z.object({
   resetTimeSkewMatch: z.enum(['active', 'stale']).optional(),
   lastUnpushedWorkObservation: jobSchema.shape.lastUnpushedWorkObservation,
   lastRescue: jobSchema.shape.lastRescue,
+  // パスは載せない（`ManagerSummary.rescueStash` の doc）: 台帳の `rescueStash` の枝は借りない。
+  rescueStash: z
+    .object({
+      count: z.number().int().positive(),
+      totalBytes: z.number().int().nonnegative(),
+      latestAt: z.string(),
+    })
+    .optional(),
   externalOutputs: jobSchema.shape.externalOutputs,
   // 本文は載せない（`ManagerSummary.heldMessages` の doc）: 台帳の `heldMessages` の枝は借りない。
   heldMessages: z

@@ -10,6 +10,12 @@ import { strictTool as tool } from './strict-tool-input.js';
 export const MANAGER_TOOLS_MCP_SERVER_NAME = 'alteroid-manager';
 
 export const OUTPUT_RECORD_TOOL_NAME = 'output_record';
+export const RESCUE_RESTORE_TOOL_NAME = 'rescue_restore';
+
+export interface RescueRestoreInput {
+  paths?: string[];
+  from?: string;
+}
 
 export const DEFAULT_MANAGER_TOOLS_SOCKET_DIR = '/run/alteroid/manager';
 export const MANAGER_TOOLS_SOCKET_FILENAME = 'manager.sock';
@@ -52,6 +58,10 @@ export type OutputRecordInput = Omit<ExternalOutput, 'at'>;
  */
 export function createManagerToolsMcpServer(deps: {
   record: (input: OutputRecordInput) => void;
+  /** `rescue_restore` の依頼を出来事として積むだけ（デーモンへの同期の問い合わせ口は無い）。 */
+  restore: (input: RescueRestoreInput) => void;
+  /** 届く先の案内（`/tmp/alteroid-attachments/<managerId>/…`）に使う。 */
+  managerId: string;
 }): ReturnType<typeof createSdkMcpServer> {
   return createSdkMcpServer({
     name: MANAGER_TOOLS_MCP_SERVER_NAME,
@@ -95,6 +105,46 @@ export function createManagerToolsMcpServer(deps: {
           });
           return Promise.resolve({
             content: [{ type: 'text' as const, text: '委譲の記録へ送った。' }],
+          });
+        },
+      ),
+      tool(
+        RESCUE_RESTORE_TOOL_NAME,
+        '器が入れ替わる前にデーモンが預かった、未追跡のファイル（git に入っていなかった作業ファイル）を取り戻す。' +
+          '依頼を出すだけで、結果はこの呼び出しでは返らない: デーモンが預かりを添付として、次の入力（あなた宛ての知らせ）で届ける。' +
+          '省略すると全部。前任の委譲の分を取るときは from に前任の id を渡す（前任が自分を後継にしているときだけ通る）。',
+        {
+          paths: z
+            .array(z.string().trim().min(1).max(1000))
+            .max(200)
+            .optional()
+            .describe(
+              '取り戻すファイル。`<作業ツリー>/<パス>` の形、またはパスだけ。省けば全部。知らせで残りを案内されたときは、そのパスを渡して呼び直す',
+            ),
+          from: z
+            .string()
+            .trim()
+            .min(1)
+            .max(200)
+            .optional()
+            .describe('前任の委譲 id。省けば自分の預かり'),
+        },
+        (args) => {
+          deps.restore({
+            ...(args.paths === undefined ? {} : { paths: args.paths }),
+            ...(args.from === undefined ? {} : { from: args.from }),
+          });
+          return Promise.resolve({
+            content: [
+              {
+                type: 'text' as const,
+                text:
+                  '依頼した。デーモンが預かりを添付として、次の入力（あなた宛ての知らせ）で届ける。' +
+                  `届いたファイルは /tmp/alteroid-attachments/${deps.managerId}/… に置かれるので、元の場所へ写すこと` +
+                  '（元の場所に別の中身のファイルが在るなら、上書きする前に確かめる）。' +
+                  '届かなければ、預かりが無いか、デーモンが古い。',
+              },
+            ],
           });
         },
       ),
