@@ -1200,6 +1200,45 @@ class HttpRunner implements RunnerClient {
     await response.text().catch(() => '');
   }
 
+  // 未追跡のファイルの預かりの退避先（#4863）。`openOutboxFile` と同じ作りで、パスだけが別
+  async openRescueFile(
+    managerId: string,
+    fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<RunnerOutboxContent | undefined> {
+    let response: Response;
+    try {
+      response = await this.#call(
+        'GET',
+        `/managers/${encodeURIComponent(managerId)}/rescue-files/${encodeURIComponent(fileId)}`,
+        undefined,
+        options?.signal,
+      );
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) return undefined;
+      throw error;
+    }
+    if (response.body === null) throw new Error('runner の応答に本文が無い（預かりの取り出し）');
+    const size = Number(response.headers.get('content-length'));
+    return {
+      ...(Number.isSafeInteger(size) && size >= 0 ? { size } : {}),
+      body: Readable.fromWeb(response.body as unknown as NodeWebReadableStream<Uint8Array>),
+    };
+  }
+
+  async deleteRescueFile(
+    managerId: string,
+    fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void> {
+    await this.#call(
+      'DELETE',
+      `/managers/${encodeURIComponent(managerId)}/rescue-files/${encodeURIComponent(fileId)}`,
+      undefined,
+      options?.signal,
+    );
+  }
+
   async deleteOutboxFile(
     managerId: string,
     fileId: string,

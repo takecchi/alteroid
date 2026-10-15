@@ -49,12 +49,32 @@ export function rescueRemovalDue(
     }
   }
   if (pushed.landedAt !== undefined) return 'landed';
+  return graceElapsed(status, rescue, nowMs);
+}
+
+function graceElapsed(
+  status: Job['status'],
+  rescue: LastRescue,
+  nowMs: number,
+): 'done' | 'failed' | 'stopped' | undefined {
   if (!isGraceStatus(status)) return undefined;
   if (rescue.terminal?.status !== status) return undefined;
   const at = Date.parse(rescue.at);
   const seenAt = Date.parse(rescue.terminal.seenAt);
   if (Number.isNaN(at) || Number.isNaN(seenAt)) return undefined;
   return nowMs - Math.max(at, seenAt) >= RESCUE_GRACE_MS[status] ? status : undefined;
+}
+
+/**
+ * 未追跡のファイルの預かり（`Job.rescueStash`。#4863）を消してよいか。退避 ref と同じ猶予（done 7日・failed/stopped 14日・`lost` は時間で消さない）で、
+ * 起点も同じ（`max(lastRescue.at, terminal.seenAt)`）。`landed` では消さない: 預かりは origin の枝に入っているかを確かめる材料が無い（公開 repo へ送らないファイルのため）。
+ */
+export function rescueStashRemovalDue(
+  status: Job['status'],
+  rescue: LastRescue,
+  nowMs: number,
+): boolean {
+  return graceElapsed(status, rescue, nowMs) !== undefined;
 }
 
 export function syncTerminalMark(

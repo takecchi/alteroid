@@ -1126,6 +1126,27 @@ export const lastRescueSchema = z.object({
 });
 export type LastRescue = z.infer<typeof lastRescueSchema>;
 
+/**
+ * 未追跡のファイルを、デーモンの非公開の置き場（添付ストア。`uploadedBy: manager:<id>`・保存の印つき）へ預けた記録（#4863 案A）。
+ * 退避 ref は公開 repo へ送らないので、未追跡の中身はこちらにしか無い。取り戻すときは `attachmentId` で添付ストアから引く。
+ * 同じ (worktree, path) は1件だけ持つ（新しい中身が来たら古い添付を消して差し替える）。
+ */
+export const rescueStashEntrySchema = z.object({
+  /** 作業ツリーの、担当の作業場からの相対パス（`RescueWorktree.relativePath`）。 */
+  worktree: z.string(),
+  /** 作業ツリーの中の相対パス。 */
+  path: z.string(),
+  attachmentId: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  at: isoDateTime,
+});
+export type RescueStashEntry = z.infer<typeof rescueStashEntrySchema>;
+
+/** 1つの委譲が預けられる上限（件数・合計の大きさ）。超える分は預けず、日誌へ `job-budget` として残す。 */
+export const RESCUE_STASH_MAX_FILES_PER_JOB = 200;
+export const RESCUE_STASH_MAX_BYTES_PER_JOB = 1024 * 1024 * 1024;
+
 export const externalOutputLimits = {
   kindMaxLength: 40,
   whereMaxLength: 500,
@@ -1252,6 +1273,8 @@ export const jobSchema = z.object({
   lastUnpushedWorkObservation: lastUnpushedWorkObservationSchema.optional(),
   // `lastUnpushedWorkObservation` と別の欄にする: あちらは新しいほうが勝つ上書き、こちらは作業ツリーごとに積み増すため
   lastRescue: lastRescueSchema.optional(),
+  // 未追跡のファイルの預かり（#4863 案A）。掃除の猶予は `lastRescue` と同じ（`rescue-cleanup.ts`）
+  rescueStash: z.array(rescueStashEntrySchema).optional(),
   // コード以外の成果は作業ツリーの観測に映らないので、マネージャー自身が記録したものを持つ。古い順・直近 `keptPerJob` 件
   externalOutputs: z.array(externalOutputSchema).optional(),
   // 台帳に持つ: プロセス内に置くとデーモンの再起動（夜の反映）で預かった伝言が黙って消えるため。古い順

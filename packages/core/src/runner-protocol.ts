@@ -543,14 +543,42 @@ export const RUNNER_CAPABILITY_MANAGER_OUTBOX = 'manager-outbox';
  */
 export const RUNNER_CAPABILITY_MANAGER_PEERS = 'manager-peers';
 
+/**
+ * 未追跡のファイルの預かり（`rescue_files` の出来事。#4863 案A）。デーモンはこれを名乗る器からだけ
+ * `GET /managers/:id/rescue-files/:fileId` で取りに行く。
+ */
+export const RUNNER_CAPABILITY_RESCUE_FILES = 'rescue-files';
+
 export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE,
   RUNNER_CAPABILITY_MANAGER_OUTBOX,
   RUNNER_CAPABILITY_MANAGER_PEERS,
+  RUNNER_CAPABILITY_RESCUE_FILES,
 ];
 
+/** 中身は載せない（取りに行く先は `GET /managers/:id/rescue-files/:fileId`）。 */
+export const runnerRescueFileSchema = z.object({
+  fileId: z.string().min(1),
+  /** 作業ツリーの中の相対パス。 */
+  path: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type RunnerRescueFile = z.infer<typeof runnerRescueFileSchema>;
+
+/**
+ * 預けなかった理由。`not-regular` / `too-large` / `cycle-budget` / `secret-like` / `credential` のほか、
+ * `empty` / `hardlink` / `not-owner` / `changed` / `unreadable`。デーモンは知らない値も日誌へそのまま運ぶ（`z.string()`）。
+ * `patterns` は `secret-like` のときの規則の名前だけ（値は載せない）。
+ */
+export const runnerRescueSkippedSchema = z.object({
+  path: z.string(),
+  reason: z.string(),
+  patterns: z.array(z.string()).optional(),
+});
+export type RunnerRescueSkipped = z.infer<typeof runnerRescueSkippedSchema>;
 /** 中身は載せない（取りに行く先は `GET /managers/:id/outbox/:fileId`）。 */
 export const runnerOutboxFileSchema = z.object({
   fileId: z.string().min(1),
@@ -1118,6 +1146,19 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     worktrees: z.array(rescueWorktreeSchema),
   }),
   /**
+   * 未追跡のファイルの預かり（#4863 案A）。中身は載せない: デーモンが `GET /managers/:id/rescue-files/:fileId` で取りに行き、
+   * 預かったら `DELETE` で消させる。`rescue_ref` とは別の出来事にする: 退避 ref の push の成否と独立に運ぶため。
+   * 旧 daemon は未知の type を `safeParse` で落とし、接続は切れない。
+   */
+  z.object({
+    type: z.literal('rescue_files'),
+    managerId: z.string(),
+    /** 担当の作業場からの相対パス（`rescue_ref` の `relativePath` と同じ）。 */
+    worktree: z.string(),
+    files: z.array(runnerRescueFileSchema),
+    skipped: z.array(runnerRescueSkippedSchema),
+  }),
+  /**
    * 古いセッションの出来事でも落とさない: 外へ出した事実はセッションの世代と関係なく残るため。
    * 旧 daemon は未知の type を `safeParse` で落とし、接続は切れない。
    */
@@ -1444,6 +1485,21 @@ export interface RunnerClient {
   ): Promise<RunnerOutboxContent | undefined>;
   /** 冪等。受け取って置き場へ入れた後に呼ぶ。失敗は呼び出し側が握る（取りこぼしは runner の24時間の掃除が消す）。 */
   deleteOutboxFile?(
+    managerId: string,
+    fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void>;
+  /**
+   * `rescue_files` の退避先（出し箱とは別の dir・別の掃除。#4863）。意味は {@link openOutboxFile} と同じ。
+   * `rescue-files` を名乗らない器には呼ばない。
+   */
+  openRescueFile?(
+    managerId: string,
+    fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<RunnerOutboxContent | undefined>;
+  /** 冪等。{@link deleteOutboxFile} と同じ。 */
+  deleteRescueFile?(
     managerId: string,
     fileId: string,
     options?: { signal?: AbortSignal },

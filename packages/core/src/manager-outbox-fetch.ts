@@ -199,6 +199,8 @@ async function fetchOne(input: {
   reportId: string;
   uploadedBy: string;
   timedOutReason: () => string;
+  /** 報告へ結び付けず、保存の印つきで入れる（未追跡のファイルの預かり。#4863）。 */
+  kept?: true;
 }): Promise<FetchOneOutcome> {
   const { file, signal } = input;
   const fileMax = attachmentMaxBytes(input.limits, false);
@@ -326,6 +328,7 @@ async function streamToStore(
       mediaType: file.mediaType,
       body: source,
       uploadedBy: input.uploadedBy,
+      ...(input.kept === true ? { kept: true } : {}),
     });
   } catch (error) {
     if (stop === 'aborted' || (signal.aborted && !ended)) {
@@ -371,6 +374,19 @@ async function bindToReport(
   input: FetchOneInput,
   meta: Awaited<ReturnType<AttachmentStore['put']>>,
 ): Promise<FetchOneOutcome> {
+  if (input.kept === true) {
+    // 保存の印つきで入っているので、結び付けない（期限でも未結び付け1時間の掃除でも消えない）
+    return {
+      ok: true,
+      ref: {
+        id: meta.id,
+        name: meta.name,
+        mediaType: meta.mediaType,
+        size: meta.size,
+        sha256: meta.sha256,
+      },
+    };
+  }
   try {
     const bound = await input.store.bindToManagerReport([meta.id], input.reportId);
     if (!bound.bound.includes(meta.id)) {
@@ -465,4 +481,56 @@ function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | 'ab
 
 function seconds(ms: number): number {
   return Math.round(ms / 100) / 10;
+}
+
+export interface FetchRescueFileInput {
+  readonly runner: RunnerClient;
+  readonly managerId: string;
+  /** 作業ツリーの中の相対パス（添付の名前にする）。 */
+  readonly path: string;
+  readonly file: { readonly fileId: string; readonly size: number; readonly sha256: string };
+  readonly store: AttachmentStore;
+  readonly limits: AttachmentLimits;
+  readonly timeoutMs?: number;
+}
+
+export type FetchRescueFileOutcome =
+  | { readonly ok: true; readonly ref: AttachmentRef }
+  | { readonly ok: false; readonly reason: string };
+
+const RESCUE_FETCH_FALLBACK_MEDIA_TYPE = 'application/octet-stream';
+
+/**
+ * 未追跡のファイルの預かりを1つ取りに行く（#4863）。出し箱の取り込みと同じ取り方（ストリーム・申告の大きさと sha256 の照合・時間の上限）で、
+ * 報告へは結び付けず、`uploadedBy: manager:<id>`・保存の印つき（期限で消えない）で入れる。
+ * 媒体の種類は中身を信じない固定（`application/octet-stream`）: 画像の検査（拡張子と中身の突き合わせ・寸法）で預かりを断らないため。
+ * 退避先の `DELETE` は呼び手がする（置けたとき・同じ sha256 で捨てるときの両方）。
+ */
+export async function fetchRescueFile(
+  input: FetchRescueFileInput,
+): Promise<FetchRescueFileOutcome> {
+  const open = input.runner.openRescueFile?.bind(input.runner);
+  if (open === undefined) return { ok: false, reason: 'runner が取り出しの口を持っていない' };
+  const timeoutMs = input.timeoutMs ?? outboxFetchDeadlineMs(input.file.size);
+  const outcome = await fetchOne({
+    open,
+    managerId: input.managerId,
+    file: {
+      fileId: input.file.fileId,
+      name: input.path,
+      mediaType: RESCUE_FETCH_FALLBACK_MEDIA_TYPE,
+      size: input.file.size,
+      sha256: input.file.sha256,
+    },
+    name: normalizeAttachmentName(input.path),
+    signal: AbortSignal.timeout(timeoutMs),
+    limits: input.limits,
+    store: input.store,
+    reportId: '',
+    uploadedBy: `manager:${input.managerId}`,
+    timedOutReason: () =>
+      `受け取れなかった（時間切れ。1つの取り出しは ${seconds(timeoutMs)} 秒まで）`,
+    kept: true,
+  });
+  return outcome.ok ? { ok: true, ref: outcome.ref } : { ok: false, reason: outcome.reason };
 }

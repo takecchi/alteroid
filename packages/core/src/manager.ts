@@ -91,6 +91,7 @@ import {
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE,
   RUNNER_CAPABILITY_MANAGER_OUTBOX,
   RUNNER_CAPABILITY_MANAGER_PEERS,
+  RUNNER_CAPABILITY_RESCUE_FILES,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
   RunnerPluginsUnsupportedError,
@@ -110,6 +111,7 @@ import {
 import { readAttachmentLimits, type AttachmentLimits, type AttachmentStore } from './attachment.js';
 import {
   fetchManagerOutbox,
+  fetchRescueFile,
   outboxFetchDeadlineMs,
   rejectedFileOf,
   type ManagerReportFiles,
@@ -154,9 +156,19 @@ import type {
   ExternalOutput,
   HeldMessage,
 } from './schema.js';
-import { externalOutputLimits } from './schema.js';
+import {
+  externalOutputLimits,
+  RESCUE_STASH_MAX_BYTES_PER_JOB,
+  RESCUE_STASH_MAX_FILES_PER_JOB,
+  type RescueStashEntry,
+} from './schema.js';
 import { describeUnreadableManagerRow, type Stores } from './store.js';
-import { pruneRescueLedger, rescueRemovalDue, syncTerminalMark } from './rescue-cleanup.js';
+import {
+  pruneRescueLedger,
+  rescueRemovalDue,
+  rescueStashRemovalDue,
+  syncTerminalMark,
+} from './rescue-cleanup.js';
 import { MAX_RESCUE_INTERVAL_MS } from './rescue-ref.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
 import { withSystemErrorNote } from './system-error.js';
@@ -3183,6 +3195,10 @@ class Pool implements ManagerPool {
   /** 名乗っていない runner（旧 runner）は `stop()` が一切待たない。新しい器の `hello` が来たら消す（古い名乗りで新しい器を待たない）。 */
   readonly #farewellRunners = new Set<string>();
   #rescueSweeping = false;
+  /** 未追跡のファイルの預かり（`rescue_files`）を委譲ごとに直列にする: 読み書きの間に await が挟まるため。 */
+  readonly #rescueStashChains = new Map<string, Promise<void>>();
+  /** 日誌へ書いた「預けなかった」の署名（委譲ごと）。運び直しで同じ日誌を積まない。プロセス内だけ。 */
+  readonly #rescueStashJournaled = new Map<string, Set<string>>();
   #rescueSweptAt: number | undefined;
 
   constructor({
@@ -5607,6 +5623,173 @@ class Pool implements ManagerPool {
     return nudged;
   }
 
+  /**
+   * 未追跡のファイルの預かり（#4863 案A）。runner が写した退避先から取りに行き、保存の印つき（期限で消えない）で添付ストアへ入れ、
+   * `job.rescueStash` に載せる。名乗らない runner からは取りに行かない。取れたかどうかに関わらず退避先は消させる
+   * （取れなかった分は runner が30分ごとに運び直すので、退避先に積み残さない）。
+   * 預けなかったものは、パスと理由だけを日誌へ残す（値は出さない）。
+   */
+  async #acceptRescueFiles(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'rescue_files' }>,
+    fromRunnerId: string,
+  ): Promise<void> {
+    const managerId = event.managerId;
+    const skipped: { path: string; reason: string; patterns?: readonly string[] }[] = [
+      ...event.skipped,
+    ];
+    const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+    const named =
+      runner !== null && this.runnerHasCapability(fromRunnerId, RUNNER_CAPABILITY_RESCUE_FILES);
+    const removeStaged = async (fileId: string): Promise<void> => {
+      if (runner === null || runner.deleteRescueFile === undefined) return;
+      await runner
+        .deleteRescueFile(managerId, fileId, { signal: AbortSignal.timeout(5000) })
+        .catch(() => undefined);
+    };
+    const limits = this.#attachmentLimits ?? readAttachmentLimits().limits;
+    for (const file of event.files) {
+      if (!named) {
+        // 名乗らない器へは取りに行かない（口を持たない）
+        skipped.push({ path: file.path, reason: 'runner が rescue-files を名乗っていない' });
+        continue;
+      }
+      const stash = record.job.rescueStash ?? [];
+      const existing = stash.find((e) => e.worktree === event.worktree && e.path === file.path);
+      if (existing?.sha256 === file.sha256) {
+        await removeStaged(file.fileId);
+        continue;
+      }
+      const others = stash.filter((e) => e !== existing);
+      if (
+        others.length >= RESCUE_STASH_MAX_FILES_PER_JOB ||
+        others.reduce((sum, e) => sum + e.size, 0) + file.size > RESCUE_STASH_MAX_BYTES_PER_JOB
+      ) {
+        skipped.push({ path: file.path, reason: 'job-budget' });
+        await removeStaged(file.fileId);
+        continue;
+      }
+      let outcome;
+      try {
+        outcome = await fetchRescueFile({
+          runner: runner!,
+          managerId,
+          path: file.path,
+          file,
+          store: this.#stores.attachments,
+          limits,
+          ...(this.#outboxFetchFileTimeoutMs === undefined
+            ? {}
+            : { timeoutMs: this.#outboxFetchFileTimeoutMs }),
+        });
+      } catch (error) {
+        outcome = { ok: false as const, reason: `取り出しの処理が失敗した: ${reasonOf(error)}` };
+      }
+      await removeStaged(file.fileId);
+      if (!outcome.ok) {
+        skipped.push({ path: file.path, reason: `fetch-failed: ${outcome.reason}` });
+        continue;
+      }
+      const at = new Date(this.#now()).toISOString();
+      const entry: RescueStashEntry = {
+        worktree: event.worktree,
+        path: file.path,
+        attachmentId: outcome.ref.id,
+        size: outcome.ref.size,
+        sha256: outcome.ref.sha256,
+        at,
+      };
+      const current = record.job.rescueStash ?? [];
+      record.job.rescueStash = [
+        ...current.filter((e) => !(e.worktree === entry.worktree && e.path === entry.path)),
+        entry,
+      ];
+      // 猶予の起点（`lastRescue`）が無ければ空の枠を作る: 掃除が終端の印と猶予を `lastRescue` から数えるため
+      const previousRescue = record.job.lastRescue;
+      record.job.lastRescue =
+        previousRescue === undefined ? { at, worktrees: [] } : { ...previousRescue, at };
+      await this.#persist(record);
+      if (existing !== undefined) {
+        // 新しいほうを台帳へ書いた後で古い添付を消す。消せなくても台帳は新しい中身を指している
+        await this.#stores.attachments.remove(existing.attachmentId).catch((error: unknown) => {
+          noteDroppedRecord('預かりの古い添付の削除', `managerId=${managerId}`, error);
+        });
+      }
+    }
+    await this.#journalRescueSkips(managerId, event.worktree, skipped);
+  }
+
+  async #journalRescueSkips(
+    managerId: string,
+    worktree: string,
+    skipped: readonly { path: string; reason: string; patterns?: readonly string[] }[],
+  ): Promise<void> {
+    if (skipped.length === 0) return;
+    let seen = this.#rescueStashJournaled.get(managerId);
+    if (seen === undefined || seen.size > 500) {
+      seen = new Set();
+      this.#rescueStashJournaled.set(managerId, seen);
+    }
+    const fresh = skipped.filter((item) => {
+      const key = `${worktree}\0${item.path}\0${item.reason}\0${(item.patterns ?? []).join(',')}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (fresh.length === 0) return;
+    const shown = fresh.slice(0, 20).map((item) => {
+      const patterns =
+        item.patterns === undefined || item.patterns.length === 0
+          ? ''
+          : `、当たった形: ${item.patterns.join(', ')}`;
+      return `${item.path}（${item.reason}${patterns}）`;
+    });
+    await this.#journal({
+      type: 'decision',
+      decision: `作業ツリー ${worktree} の未追跡のファイル ${String(fresh.length)} 件を、デーモンの置き場へ預けなかった。`,
+      grounds:
+        `${shown.join('、')}${fresh.length > shown.length ? `、ほか ${String(fresh.length - shown.length)} 件` : ''}。` +
+        'パス名と理由だけを記録する（中身・鍵らしい文字列そのものは記録しない）。' +
+        '`secret-like` は取り除くか伏せれば次の周期で預けられる。',
+    });
+  }
+
+  /** 預かりの添付を消し、欄を空にする。消せなかった添付は台帳に残し、次の周回で再試行する。 */
+  async #sweepRescueStashOf(managerId: string, job: Job, rescue: LastRescue): Promise<void> {
+    const stash = job.rescueStash;
+    if (stash === undefined || stash.length === 0) return;
+    if (!rescueStashRemovalDue(job.status, rescue, this.#now())) return;
+    const removed = new Set<string>();
+    for (const entry of stash) {
+      try {
+        await this.#stores.attachments.remove(entry.attachmentId);
+        removed.add(entry.attachmentId);
+      } catch (error) {
+        noteDroppedRecord('預かりの添付の削除', `managerId=${managerId}`, error);
+      }
+    }
+    if (removed.size === 0) return;
+    const apply = (current: Job): Job => {
+      const left = (current.rescueStash ?? []).filter((e) => !removed.has(e.attachmentId));
+      const next = { ...current };
+      if (left.length === 0) delete next.rescueStash;
+      else next.rescueStash = left;
+      return next;
+    };
+    const record = this.#records.get(managerId);
+    if (record !== undefined) {
+      record.job = apply(record.job);
+      await this.#persist(record);
+    } else {
+      await this.#stores.jobs.updateJob(managerId, apply);
+    }
+    await this.#journal({
+      type: 'decision',
+      decision: `預かっていた未追跡のファイル ${String(removed.size)} 件を消した（委譲が ${job.status} のまま猶予を過ぎた）。`,
+      grounds: '退避 ref と同じ猶予（done 7日・failed/stopped 14日・lost は時間で消さない）。',
+    });
+  }
+
   async sweepRescueRefs(): Promise<void> {
     if (this.#stopped || this.#rescueSweeping) return;
     const startedAt = this.#now();
@@ -5672,6 +5855,7 @@ class Pool implements ManagerPool {
       if (!wrote) return;
       rescue = marked;
     }
+    await this.#sweepRescueStashOf(managerId, job, rescue);
     const now = this.#now();
     for (const tree of rescue.worktrees) {
       if (this.#stopped || budget.deletesLeft <= 0 || this.#now() >= budget.until) return;
@@ -5730,7 +5914,17 @@ class Pool implements ManagerPool {
     // 書く**（変わらない委譲へ10分ごとに UPDATE を打たない）。
     await this.#updateRescueLedger(
       managerId,
-      (current) => pruneRescueLedger(job.status, current, this.#now()),
+      (current) => {
+        const pruned = pruneRescueLedger(job.status, current, this.#now());
+        // 預かりが残る間は、猶予の起点（`lastRescue`）を欄ごと外さない
+        if (
+          pruned === undefined &&
+          (this.#records.get(managerId)?.job.rescueStash ?? []).length > 0
+        ) {
+          return { ...current, worktrees: [] };
+        }
+        return pruned;
+      },
       true,
       job.lastRescue,
     );
@@ -9698,6 +9892,23 @@ class Pool implements ManagerPool {
           });
         }
         await this.#persist(record);
+        return;
+      }
+
+      case 'rescue_files': {
+        // 同じ委譲の預かりは直列にする（job.rescueStash の読み書きの間に await が挟まる）
+        const previous = this.#rescueStashChains.get(event.managerId) ?? Promise.resolve();
+        const next = previous
+          .catch(() => undefined)
+          .then(() => this.#acceptRescueFiles(record, event, fromRunnerId));
+        const tail = next.catch(() => undefined);
+        this.#rescueStashChains.set(event.managerId, tail);
+        void tail.then(() => {
+          if (this.#rescueStashChains.get(event.managerId) === tail) {
+            this.#rescueStashChains.delete(event.managerId);
+          }
+        });
+        await next;
         return;
       }
 
