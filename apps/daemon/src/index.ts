@@ -71,7 +71,7 @@ import {
   attachmentCopiesDir,
 } from '@alteroid/core';
 import { codexLoginEnvOf } from './codex-login-env.js';
-import { reportBootToolSearch } from './boot-tool-search.js';
+import { reportBootToolSearch, reportBootToolSearchObserved } from './boot-tool-search.js';
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { startTokenRotationWatch, type TokenRotationWatch } from './token-watch.js';
@@ -827,6 +827,8 @@ export async function main(): Promise<void> {
       wake?.();
     },
     onWorkerToolEvent: (event) => workerToolBus.emit(event),
+    // 起動時の `reportBootToolSearch`（見込み）の隣に、最初のターンの観測（実際）を出す（#4921）
+    onFirstTurnToolSearch: (line) => reportBootToolSearchObserved(stores, line),
     onUsageObservation: async (observation) => {
       // 成功の観測は `observe` へ渡さない: あちらは枠の観測しか扱わず、成功は別の生産者（`reconsider` の `turn_success`）へ振るため。
       if (observation.succeeded === true) {

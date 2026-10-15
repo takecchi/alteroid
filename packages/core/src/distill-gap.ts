@@ -28,9 +28,12 @@ export const BOOT_FOOTPRINT_EVENT_SOURCE = 'boot-storage-footprint';
 
 /** デーモンが起動のたびに書く、クローンの子の env で ToolSearch が止まる見込みかの記録（`apps/daemon` の `reportBootToolSearch`）の source。 */
 export const BOOT_TOOL_SEARCH_EVENT_SOURCE = 'boot-tool-search';
+/** 起動後の最初の本セッションのターンで ToolSearch が実際に効いたかの観測（起動時の `boot-tool-search` の隣に並べて探せる名前。#4921）の source。 */
+export const BOOT_TOOL_SEARCH_OBSERVED_EVENT_SOURCE = 'boot-tool-search-observed';
 const BOOT_EVENT_SOURCES: ReadonlySet<string> = new Set([
   BOOT_FOOTPRINT_EVENT_SOURCE,
   BOOT_TOOL_SEARCH_EVENT_SOURCE,
+  BOOT_TOOL_SEARCH_OBSERVED_EVENT_SOURCE,
 ]);
 
 // 型と構造化フィールドだけで決め、本文は見ない: 文言を直した瞬間に黙って数え方が変わるため

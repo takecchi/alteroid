@@ -818,6 +818,9 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
       const mainLoopUsage = isSuccessResult(message)
         ? mainLoopUsageOf((message as { usage?: unknown }).usage)
         : undefined;
+      const numTurns = isSuccessResult(message)
+        ? (message as { num_turns?: unknown }).num_turns
+        : undefined;
       const body = (message as { result?: unknown }).result;
       const subtype = (message as { subtype?: unknown }).subtype;
       const id = (message as { uuid?: unknown }).uuid;
@@ -836,6 +839,7 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
                 usage: {
                   models,
                   ...(typeof sessionId === 'string' ? { sessionId } : {}),
+                  ...(typeof numTurns === 'number' ? { numTurns } : {}),
                   ...(mainLoopUsage === undefined ? {} : { mainLoopUsage }),
                 },
               }),
