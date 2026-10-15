@@ -50,12 +50,19 @@ function fingerprint(tool: { description: string; inputSchema: unknown }): strin
     .digest('hex');
 }
 
-const BASELINE = '7f3d5a46f07f621c44d9af1fb9f640a270af2cb2f19a308f6e064e240c7c0b5c';
+// supersedes を足した版（#4861）: provider 引数を持たないことは変えていない
+const BASELINE = 'f258dd1d6dda3235127c9952fa1d591b3fcf805e18175e2c18473ea43bd6e0ce';
 
 describe('manager_start の provider 引数（撤去済み）', () => {
   it('provider 引数を持たず、スキーマと説明文は PEERS が閉じていたときと同一', () => {
     const { tool } = build();
-    expect(Object.keys(shapeOf(tool))).toEqual(['request', 'cwd', 'attachments', 'runnerId']);
+    expect(Object.keys(shapeOf(tool))).toEqual([
+      'request',
+      'cwd',
+      'attachments',
+      'runnerId',
+      'supersedes',
+    ]);
     expect(fingerprint(tool as never)).toBe(BASELINE);
   });
 
