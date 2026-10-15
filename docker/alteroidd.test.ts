@@ -30,7 +30,6 @@ function setupFakeNode(root: string): void {
       '  args: process.argv.slice(1),',
       '  NODE_OPTIONS: process.env.NODE_OPTIONS ?? null,',
       '  viaTini: process.env.ALTEROIDD_TEST_VIA_TINI ?? null,',
-      '  UV_THREADPOOL_SIZE: process.env.UV_THREADPOOL_SIZE ?? null,',
       '}));',
       '\' -- "$@"',
       '',
@@ -148,27 +147,6 @@ describe('docker/alteroidd — V8 ヒープ上限の既定（応急処置。#128
     expect(caseIndex).toBeGreaterThan(-1);
     expect(idCheckIndex).toBeGreaterThan(-1);
     expect(caseIndex).toBeLessThan(idCheckIndex);
-  });
-});
-
-describe('docker/alteroidd — libuv のスレッドの枠を広げる（#4890）', () => {
-  it('UV_THREADPOOL_SIZE が無いとき（未設定・空）、16 を node の環境へ渡す', () => {
-    const unset = JSON.parse(run(['--foo']).stdout);
-    expect(unset.UV_THREADPOOL_SIZE).toBe('16');
-    const empty = JSON.parse(run(['--foo'], { UV_THREADPOOL_SIZE: '' }).stdout);
-    expect(empty.UV_THREADPOOL_SIZE).toBe('16');
-  });
-
-  it('人間が置いた値は上書きしない', () => {
-    const out = JSON.parse(run(['--foo'], { UV_THREADPOOL_SIZE: '8' }).stdout);
-    expect(out.UV_THREADPOOL_SIZE).toBe('8');
-  });
-
-  it('id -u の判定より前に置いてある（root・非 root どちらの枝にも効く）', () => {
-    const setIndex = SCRIPT_SOURCE.indexOf('UV_THREADPOOL_SIZE:=16');
-    const idCheckIndex = SCRIPT_SOURCE.indexOf(`if [ "$(id -u)" = '0' ]`);
-    expect(setIndex).toBeGreaterThan(-1);
-    expect(setIndex).toBeLessThan(idCheckIndex);
   });
 });
 

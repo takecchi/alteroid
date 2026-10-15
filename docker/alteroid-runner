@@ -54,15 +54,6 @@ unset ALTEROID_RUNNER_TOKEN
 unset ALTEROID_GOOGLE_CLIENT_ID
 unset ALTEROID_GOOGLE_CLIENT_SECRET
 
-# **libuv のスレッドの枠を広げる（#4890）。** 既定は4本で、ファイルの非同期の読み書き・
-# `dns.lookup`・crypto の非同期が同じ枠を取り合う。器の I/O が詰まって4本がふさがると、
-# ループは空いたまま名前解決と接続だけが待たされる。枠の大きさは「最初に枠を使う処理」の
-# 時点で決まるので、node を起こす前の環境変数として置く（これより確実な場所は無い。
-# Railway・compose・`docker run` のどれもこのシムを通る）。
-# **人間が置いた値は上書きしない**（`:=` は未設定と空のときだけ入れる）。
-: "${UV_THREADPOOL_SIZE:=16}"
-export UV_THREADPOOL_SIZE
-
 # **pid 1 を tini にする（#315）。** コンテナで pid 1 になった `node` は init の仕事を
 # 持たない — 孤児として引き取った子孫（マネージャー配下の subprocess の残骸）を
 # reap（wait）せず、ゾンビのまま溜める。実測(2026-08-28 観測、Issue #315):

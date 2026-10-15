@@ -14,16 +14,6 @@ set -eu
 
 entry=/app/apps/daemon/dist/index.js
 
-# **libuv のスレッドの枠を広げる（#4890）。** 既定は4本で、ファイルの非同期の読み書き・
-# `dns.lookup`（runner への fetch と PostgreSQL の接続の名前解決）・crypto の非同期が
-# 同じ枠を取り合う。器の I/O が詰まって4本がふさがると、ループは空いたまま（使用率 0%）、
-# 名乗りの確認と PostgreSQL への接続がそろって待たされ、runner を8台同時に失う形に化けた。
-# 枠の大きさは「最初に枠を使う処理」の時点で決まるので、node を起こす前の環境変数として
-# 置く（Railway・compose・`docker run` のどれもこのシムを通る）。
-# **人間が置いた値は上書きしない**（`:=` は未設定と空のときだけ入れる）。
-: "${UV_THREADPOOL_SIZE:=16}"
-export UV_THREADPOOL_SIZE
-
 # **V8 のヒープ上限の既定を上げる（応急処置。#1283 系列の暫定値 — オーナーが
 # 決めること）。**
 #
