@@ -246,8 +246,6 @@ describe('Host: 畳み（shutdown）で預けた物の数（#4699）', () => {
   async function hostWithHalfDoneManager(managerId: string) {
     const outboxRoot = await makeTempDir('runner-pickups-');
     const outboxStagedRoot = await makeTempDir('runner-pickups-staged-');
-    // 既定の退避先（tmpdir 直下）は他の試験・プロセスの残りを数えてしまう（畳み始めに退避先を数えるため。#4912）
-    const rescueStagedRoot = await makeTempDir('runner-pickups-rescue-staged-');
     const events: RunnerEvent[] = [];
     let written = false;
     const fake = interruptedSdk(async () => {
@@ -262,7 +260,6 @@ describe('Host: 畳み（shutdown）で預けた物の数（#4699）', () => {
       env: { PATH: '/usr/bin' },
       outboxRoot,
       outboxStagedRoot,
-      rescueStagedRoot,
       scratchSweep: false,
       cwdExistsFn: () => true,
       readCgroupEventCountersFn: async () => ({}),
@@ -307,22 +304,26 @@ describe('Host: 畳み始める前に退避先へ置いた物も待ちに入る�
   const OUTBOX_ID = 'a'.repeat(32);
   const RESCUE_ID = 'b'.repeat(32);
 
-  async function hostWithStagedFiles() {
-    const outboxStagedRoot = await makeTempDir('runner-staged-before-');
-    const rescueStagedRoot = await makeTempDir('runner-rescue-staged-before-');
-    await mkdir(join(outboxStagedRoot, 'mgr-early'));
-    await mkdir(join(rescueStagedRoot, 'mgr-early'));
-    await writeFile(join(outboxStagedRoot, 'mgr-early', OUTBOX_ID), '出し箱');
-    await writeFile(join(rescueStagedRoot, 'mgr-early', RESCUE_ID), '預かり');
-    // 形の合わない名前は数えない
-    await writeFile(join(outboxStagedRoot, 'mgr-early', 'not-a-file-id'), 'x');
+  // 畳み始める前に、ターンの報告で出し箱のファイルを1つ emit した器。退避先には、このプロセスが送っていない前の残りも置く
+  async function hostWithEmittedReport() {
+    const outboxRoot = await makeTempDir('runner-emitted-');
+    const outboxStagedRoot = await makeTempDir('runner-emitted-staged-');
+    const rescueStagedRoot = await makeTempDir('runner-emitted-rescue-staged-');
+    await mkdir(join(outboxStagedRoot, 'mgr-old'));
+    await mkdir(join(rescueStagedRoot, 'mgr-old'));
+    await writeFile(join(outboxStagedRoot, 'mgr-old', OUTBOX_ID), '前の担当の残り');
+    await writeFile(join(rescueStagedRoot, 'mgr-old', RESCUE_ID), '前のプロセスの預かり');
+    const events: RunnerEvent[] = [];
+    const fake = fakeSdk(async () => {
+      await writeFile(join(outboxRoot, 'mgr-early', 'result.txt'), '成果物');
+    });
     const host = createRunnerHost({
-      runnerId: 'runner-staged-before',
+      runnerId: 'runner-emitted',
       workspacePath: '/workspace',
-      emit: () => undefined,
-      queryFn: fakeSdk(async () => undefined).fn,
+      emit: (event) => events.push(event),
+      queryFn: fake.fn,
       env: { PATH: '/usr/bin' },
-      outboxRoot: await makeTempDir('runner-staged-before-root-'),
+      outboxRoot,
       outboxStagedRoot,
       rescueStagedRoot,
       scratchSweep: false,
@@ -331,47 +332,60 @@ describe('Host: 畳み始める前に退避先へ置いた物も待ちに入る�
       finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
     });
     hosts.push(host);
-    return host;
+    await host.start({ managerId: 'mgr-early', request: '依頼', cwd: '/workspace' });
+    await vi.waitFor(() => expect(events.some((e) => e.type === 'report')).toBe(true));
+    const report = events.find((e) => e.type === 'report');
+    if (report?.type !== 'report') throw new Error('report が無い');
+    const fileId = report.files?.[0]?.fileId ?? '';
+    expect(fileId).not.toBe('');
+    return { host, fileId };
   }
 
-  it('⭐ 畳み始めに退避先に残っている出し箱・預かりを待ちに入れ、DELETE で外す', async () => {
-    const host = await hostWithStagedFiles();
+  it('⭐ 畳み始める前に emit した出し箱のファイルは待ちに入り、DELETE で外れる。退避先に残っていても送っていない物は入らない', async () => {
+    const { host, fileId } = await hostWithEmittedReport();
     expect(host.pendingPickups()).toBe(0);
 
     await host.shutdown();
-    expect(host.pendingPickups()).toBe(2);
-
-    await host.deleteOutboxFile('mgr-early', OUTBOX_ID);
+    // 前の残り（出し箱の mgr-old・預かりの mgr-old）は数えない
     expect(host.pendingPickups()).toBe(1);
-    await host.deleteRescueFile('mgr-early', RESCUE_ID);
+
+    await host.deleteOutboxFile('mgr-early', fileId);
+    expect(host.pendingPickups()).toBe(0);
+  });
+
+  it('⭐ 畳み始める前に取られた出し箱のファイルは、待ちに入らない', async () => {
+    const { host, fileId } = await hostWithEmittedReport();
+    await host.deleteOutboxFile('mgr-early', fileId);
+
+    await host.shutdown();
+
     expect(host.pendingPickups()).toBe(0);
   });
 
   it('⭐ GET を読み切ったら、DELETE が来なくても待ちから外す', async () => {
-    const host = await hostWithStagedFiles();
+    const { host, fileId } = await hostWithEmittedReport();
     await host.shutdown();
 
-    const outbox = await host.openOutboxFile('mgr-early', OUTBOX_ID);
+    const outbox = await host.openOutboxFile('mgr-early', fileId);
     // 読み始めただけでは外さない
-    expect(host.pendingPickups()).toBe(2);
-    for await (const chunk of outbox!.stream) void chunk;
     expect(host.pendingPickups()).toBe(1);
-
-    const rescue = await host.openRescueFile('mgr-early', RESCUE_ID);
-    for await (const chunk of rescue!.stream) void chunk;
+    for await (const chunk of outbox!.stream) void chunk;
     expect(host.pendingPickups()).toBe(0);
   });
 
-  it('退避先が無い（何も預けていない）器は、待ちが0のまま', async () => {
+  it('何も送っていない器は、退避先に残りがあっても待ちが0のまま', async () => {
+    const outboxStagedRoot = await makeTempDir('runner-none-staged-');
+    await mkdir(join(outboxStagedRoot, 'mgr-old'));
+    await writeFile(join(outboxStagedRoot, 'mgr-old', OUTBOX_ID), '前の残り');
     const host = createRunnerHost({
-      runnerId: 'runner-staged-none',
+      runnerId: 'runner-none',
       workspacePath: '/workspace',
       emit: () => undefined,
       queryFn: fakeSdk(async () => undefined).fn,
       env: { PATH: '/usr/bin' },
-      outboxRoot: await makeTempDir('runner-staged-none-root-'),
-      outboxStagedRoot: join(await makeTempDir('runner-staged-none-'), 'missing'),
-      rescueStagedRoot: join(await makeTempDir('runner-rescue-none-'), 'missing'),
+      outboxRoot: await makeTempDir('runner-none-root-'),
+      outboxStagedRoot,
+      rescueStagedRoot: await makeTempDir('runner-none-rescue-staged-'),
       scratchSweep: false,
       cwdExistsFn: () => true,
       readCgroupEventCountersFn: async () => ({}),

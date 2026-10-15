@@ -80,6 +80,7 @@ afterEach(async () => {
 function setup(
   rescueIntervalMs: number,
   captured: Options[] = [],
+  rescueStagedRoot?: string,
 ): { host: RunnerHost; events: RunnerEvent[] } {
   const events: RunnerEvent[] = [];
   const credentials = createCredentialStore({
@@ -96,6 +97,7 @@ function setup(
     readCgroupEventCountersFn: async () => ({}),
     finishUnpushedWorkFn: async () => ({ cwd: repo, worktrees: [] }),
     rescueIntervalMs,
+    ...(rescueStagedRoot === undefined ? {} : { rescueStagedRoot }),
   });
   hosts.push(host);
   return { host, events };
@@ -280,6 +282,30 @@ describe('担当が終わったときにも退避 ref を撃つ（#4677）', () 
     expect(g(bare, 'show', `${found?.worktrees[0]?.pushed?.ref as string}:a.txt`)).toBe(
       'edited before the end\n',
     );
+  });
+});
+
+describe('畳む前に emit した未追跡の預かりを、畳みの待ちに入れる（#4912）', () => {
+  it('⭐ 畳み始める前に emit した預かりは待ちに入り、取られたら外れる。退避先の前の残りは入らない', async () => {
+    const staged = await makeTempDir('runner-rescue-staged-4912-');
+    await mkdir(path.join(staged, 'mgr-old'));
+    await writeFile(path.join(staged, 'mgr-old', 'd'.repeat(32)), '前のプロセスの預かり');
+    await writeFile(path.join(repo, 'scratch.txt'), 'untracked');
+    const { host, events } = setup(40, [], staged);
+    await host.start({ managerId: 'mgr-4912rescue', request: '依頼', cwd: repo });
+    const sent = () =>
+      events.flatMap((event) =>
+        event.type === 'rescue_files' ? event.files.map((file) => file.fileId) : [],
+      );
+    await vi.waitFor(() => expect(sent().length).toBeGreaterThan(0), { timeout: 5000 });
+    const fileIds = [...new Set(sent())];
+    expect(host.pendingPickups()).toBe(0);
+
+    await host.shutdown();
+    expect(host.pendingPickups()).toBe(fileIds.length);
+
+    for (const fileId of fileIds) await host.deleteRescueFile('mgr-4912rescue', fileId);
+    expect(host.pendingPickups()).toBe(0);
   });
 });
 
