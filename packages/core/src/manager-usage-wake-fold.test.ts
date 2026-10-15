@@ -18,7 +18,7 @@ import {
   type RunnerProfileResult,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
-import type { Job } from './schema.js';
+import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
 // 鍵の回転の起こし直しは、背景処理を理由に止めない。届かなければ掃きが間隔を伸ばして挑み直す（#4850）
@@ -153,11 +153,12 @@ async function setup(tokenAvailability: ManagerPoolOptions['tokenAvailability'])
   await stores.jobs.putJob(JOB);
   const fake = fakeRunner();
   const registry = createRunnerRegistry([fake.runner]);
+  const inbox: InboxEvent[] = [];
   const active = { tokenId: 'tok-a', generation: 59 };
   const clock = { now: Date.parse('2026-10-15T03:00:00.000Z') };
   const pool = createManagerPool({
     stores,
-    post: () => undefined,
+    post: (event) => inbox.push(event),
     runners: registry,
     profile: createProfileService({ stores, runners: registry }),
     tokenIdentity: () => ({ ...active }),
@@ -183,7 +184,7 @@ async function setup(tokenAvailability: ManagerPoolOptions['tokenAvailability'])
   await settle();
   active.tokenId = 'tok-b';
   active.generation = 60;
-  return { pool, fake, stores, clock };
+  return { pool, fake, stores, clock, inbox };
 }
 
 const SECRET = 'sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF';
@@ -256,6 +257,38 @@ describe('鍵の回転の起こし直しは、背景処理を理由に止めな�
     expect(message).not.toContain('結果は届いていない');
     expect(message).not.toContain('起こしっぱなしだった背景処理');
     await s.pool.stop();
+  });
+
+  it('⭐ (a4b) 背景処理（peer 以外）を畳んだ done の担当は、断り書きが続きを進めよと言い、クローンの受信箱にも1件知らせる（#4902）', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 1;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
+
+    const message = s.fake.resumes[0]?.message ?? '';
+    expect(message).toContain('この背景処理の結果は二度と届かない（古いセッションと一緒に畳んだ）');
+    expect(message).toContain('続きを進めよ。もう終わっていたなら、そう報告して終えること');
+    await s.pool.stop();
+    const text = JSON.stringify(s.inbox);
+    expect(text.match(/鍵の入れ替えのため、背景処理 1 本を畳んで/g)).toHaveLength(1);
+    expect(text).toContain(
+      '[mgr-fold] 鍵の入れ替えのため、背景処理 1 本を畳んで新しい鍵で起こし直し、結果は届かないので自分で確かめて続きを進めるよう促した',
+    );
+    expect(text).not.toContain('枠で落ちていた');
+  });
+
+  it('(a4c) 畳んだ背景処理が 0 本（peer だけ）の起こし直しは、断り書きに促す文を足さず、知らせも積まない（#4902）', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 1;
+    s.fake.behavior.peers = 1;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
+
+    const message = s.fake.resumes[0]?.message ?? '';
+    expect(message).not.toContain('待たずに、いま自分で状態を確かめて');
+    await s.pool.stop();
+    expect(JSON.stringify(s.inbox)).not.toContain('背景処理 0 本');
+    expect(JSON.stringify(s.inbox)).not.toContain('結果は届かないので自分で確かめて');
   });
 
   it('⭐ (a5) 預けた peer が期限で閉じられていたら、閉じた peer と途中で終わった背景ターンを起こし直しの文の先頭へ添え、届いたら下ろす（#4885）', async () => {
