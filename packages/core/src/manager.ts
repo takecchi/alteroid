@@ -5511,6 +5511,12 @@ class Pool implements ManagerPool {
   async settleStalledUsageWakes(): Promise<string[]> {
     if (this.#stopped) return [];
     const nudged: string[] = [];
+    // 挑み直しの状態があるのに像に無い委譲（再起動の後の done・failed・lost）は、台帳から像へ載せてから走査する（#4852）: 像だけを起点にすると拾われない
+    for (const managerId of [...this.#usageWakeRetry.keys()]) {
+      if (this.#records.has(managerId)) continue;
+      const loaded = await this.#load(managerId).catch(() => null);
+      if (loaded === null) this.#usageWakeRetry.delete(managerId);
+    }
     // `#usageWakeOwed` ではなく `#records` を起点に走査する: 借りの managerId は `abort()` / `#retire()` で `#records` から先に消えうる。
     for (const [managerId, record] of [...this.#records]) {
       if (this.#stopped) break;
@@ -6176,7 +6182,13 @@ class Pool implements ManagerPool {
       if (this.#records.has(job.id)) continue;
 
       // 下で `continue` される `lost` より前に置く: 印を組み直さないと `resumeStoppedByUsage()` が `lost` の委譲を回転の対象にすら入れない。
-      if (job.usageStoppedAt !== undefined) this.#usageStopped.add(job.id);
+      if (job.usageStoppedAt !== undefined) {
+        this.#usageStopped.add(job.id);
+        // すぐ挑む挑み直しの状態を入れる（#4852）: 挑み直しの状態はメモリだけで再起動で消え、生きていない委譲は像にも載らないので、入れないと次の鍵の出来事まで誰も起こさない
+        if (!this.#usageWakeRetry.has(job.id)) {
+          this.#usageWakeRetry.set(job.id, { failures: 0, nextAt: this.#now() });
+        }
+      }
 
       // 状態を読めなかったが runner に居る委譲は resume せずに引き取る: 生きているとしか読めない状態を名指しできないので `attached: false`（話しかけたら `host.resume()` が生きたセッションへ流して短絡する）。待ちは持ち越さず、`status` は台帳の値のまま。
       const unreadableOn = alive.has(job.id) ? undefined : unreadable.get(job.id);
