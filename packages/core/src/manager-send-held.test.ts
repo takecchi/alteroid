@@ -47,8 +47,10 @@ function fakeRunner() {
     background: number;
     waiting: RunnerManagerState['waiting'];
     failResume: boolean;
+    peers: number | undefined;
   } = {
     background: 0,
+    peers: undefined,
     waiting: [],
     failResume: false,
   };
@@ -101,6 +103,7 @@ function fakeRunner() {
         ...state,
         waiting: behavior.waiting,
         liveBackgroundTasks: behavior.background,
+        ...(behavior.peers === undefined ? {} : { liveBackgroundPeers: behavior.peers }),
       }));
     },
     async transcript() {
@@ -606,5 +609,53 @@ describe('背景処理だけが理由で預かりが待ちの上限を過ぎた�
     const next = texts.find((text) => text.includes('次の伝言')) ?? '';
     expect(next).not.toContain('背景処理');
     await s.pool.stop();
+  });
+
+  const FOLDED_NOTICE =
+    '背景処理 1 本を畳んで起こし直し、結果は届かないので自分で確かめて続きを進めるよう促した';
+
+  it('⭐ 15 分届かず背景処理ごと畳んで届け直した回は、クローンへ「畳んだ」旨を届け直しの知らせの中で1回だけ出す（#4913）', async () => {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+    expect((await s.pool.send('mgr-held', '居座りの先の伝言')).outcome).toBe('held');
+    s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
+
+    await deliverHeld(s.pool);
+
+    expect(s.fake.stops).toEqual(['mgr-held']);
+    await s.pool.stop();
+    const text = inboxText(s.inbox);
+    expect(text.split(FOLDED_NOTICE)).toHaveLength(2);
+    expect(text).toContain('預かっていた伝言 1 通を mgr-held へ届けた');
+  });
+
+  it('畳みの無い届け直しには「畳んだ」旨を出さない（#4913）', async () => {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+    expect((await s.pool.send('mgr-held', '伝言')).outcome).toBe('held');
+    s.fake.behavior.background = 0;
+
+    await deliverHeld(s.pool);
+
+    await s.pool.stop();
+    expect(inboxText(s.inbox)).toContain('預かっていた伝言 1 通を mgr-held へ届けた');
+    expect(inboxText(s.inbox)).not.toContain('結果は届かないので');
+  });
+
+  it('peer だけの回には「畳んだ」旨を出さない（#4913）', async () => {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+    s.fake.behavior.peers = 1;
+    expect((await s.pool.send('mgr-held', '伝言')).outcome).toBe('held');
+    s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
+
+    await deliverHeld(s.pool);
+
+    await s.pool.stop();
+    expect(inboxText(s.inbox)).not.toContain('結果は届かないので');
+    expect(inboxText(s.inbox)).not.toContain('背景処理 0 本');
   });
 });
