@@ -224,8 +224,16 @@ const QUERY_PARAMS_TAIL = /\bparams:[\s\S]*$/i;
 
 // `buildDenialInputHead` では `params:` を落とさない: 道具の入力に `params:` は普通に現れ、その先頭を残す契約を変えないため
 // `params:` の落としを先に行う: 落とす部分を伏せ字の取りこぼしに頼らないため
-export function redactErrorText(text: string, env: NodeJS.ProcessEnv | undefined): string {
-  return redactSecretsInText(text.replace(QUERY_PARAMS_TAIL, `params: ${REDACTED}`), env);
+export function redactErrorText(
+  text: string,
+  env: NodeJS.ProcessEnv | undefined,
+  alwaysSecretValues?: Iterable<string>,
+): string {
+  return redactSecretsInText(
+    text.replace(QUERY_PARAMS_TAIL, `params: ${REDACTED}`),
+    env,
+    alwaysSecretValues,
+  );
 }
 
 // 一致鍵に使わない（`matchInputOf` を使う）: `command` 以外の欄を捨てるため、使うと撃ち直しにまで1回限りの許可が及ぶ

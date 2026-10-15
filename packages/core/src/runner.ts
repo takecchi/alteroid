@@ -2692,7 +2692,10 @@ class RunnerSession {
   #notePeerToolUseFailure(provider: AgentProviderId, record: AgentToolAuditFailureRecord): void {
     const error =
       typeof record.error === 'string'
-        ? excerptLine(redactErrorText(record.error, process.env), TOOL_USE_FAILURE_ERROR_EXCERPT)
+        ? excerptLine(
+            redactErrorText(record.error, process.env, this.#vaultValues()),
+            TOOL_USE_FAILURE_ERROR_EXCERPT,
+          )
         : '(不明)';
     this.#emit({
       type: 'note',
@@ -2883,7 +2886,11 @@ class RunnerSession {
         clearTimeout(timer);
         const how = code === null ? `signal ${String(signal)}` : `exit code ${String(code)}`;
         // 子に渡した env も値の伏せ字に入れる: プロファイルや鍵の袋にだけある値は runner の process.env に無いため
-        const shown = redactErrorText(tail.trim(), { ...process.env, ...childEnv });
+        const shown = redactErrorText(
+          tail.trim(),
+          { ...process.env, ...childEnv },
+          this.#vaultValues(),
+        );
         this.#emit({
           type: 'note',
           managerId: this.#id,
@@ -3104,7 +3111,7 @@ class RunnerSession {
       // `String(error)` の手前で分類を取る: 文字列になった後で解釈し始めると `reasonType` の doc が禁じる形になるため
       // `reasonOf` を使わず `String(error)` に伏せ字だけ通す: 構造化の欄を足すと `reason` の一文が変わるため。素のままだと値を運ぶ例外が日誌と受信箱へ出る
       const systemError = systemErrorFactsOf(error);
-      const reason = redactErrorText(String(error), process.env);
+      const reason = redactErrorText(String(error), process.env, this.#vaultValues());
       // `#stopped` ならここから下は何もしない: `#finish('failed', …)` を呼ぶと `stop()` の畳みと二重に走り、人間が止めたセッションが `failed` として記録されるため
       if (!this.#sdkSession.stopped) {
         switch (this.#recoverFromFailedResume(reason)) {
@@ -4035,11 +4042,7 @@ class RunnerSession {
       return { kind: 'no-retry' };
     }
 
-    const inputHead = buildDenialInputHead(
-      record.toolInput,
-      this.#env,
-      Object.values(this.#credentials?.values() ?? {}),
-    );
+    const inputHead = buildDenialInputHead(record.toolInput, this.#env, this.#vaultValues());
     const permitKey = oneShotAllowKey(
       oneShotActorOf(this.#id, record),
       toolName,
@@ -4412,14 +4415,15 @@ class RunnerSession {
     }
   }
 
+  // 資格の正本の値を、名前によらず伏せ字の対象にする（#4829）: 正本は名前と値しか降りず「秘密か」の印が無いので、`DB_PASS` のように名前の決まりに合わない秘密が抜粋・日誌・note へ伏せずに出るため
+  #vaultValues(): string[] {
+    return Object.values(this.#credentials?.values() ?? {});
+  }
+
   // 生の入力を保持しない（伏せ字済みの先頭だけ）: 忘れるまでの間ずっと鍵が入りうる文字列を抱え、`onForget` の日誌行へ滲み出る経路も増えるため
   #capturePreToolInputHead(record: AgentPreToolRecord): void {
     if (record.toolUseId === undefined) return;
-    const preview = buildDenialInputHead(
-      record.toolInput,
-      this.#env,
-      Object.values(this.#credentials?.values() ?? {}),
-    );
+    const preview = buildDenialInputHead(record.toolInput, this.#env, this.#vaultValues());
     if (preview === undefined) return;
     this.#preToolInputHeads.set(record.toolUseId, preview);
   }
@@ -4639,7 +4643,10 @@ class RunnerSession {
     const error =
       typeof record.error === 'string'
         ? // 道具の出力（トークン・資格付き URL）を運びうる自由文なので、伏せてから切る
-          excerptLine(redactErrorText(record.error, process.env), TOOL_USE_FAILURE_ERROR_EXCERPT)
+          excerptLine(
+            redactErrorText(record.error, process.env, this.#vaultValues()),
+            TOOL_USE_FAILURE_ERROR_EXCERPT,
+          )
         : '(不明)';
 
     this.#emit({
