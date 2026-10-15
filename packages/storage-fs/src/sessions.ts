@@ -4,9 +4,13 @@ import { join } from 'node:path';
 import {
   addGrave,
   assertNoNul,
+  forgetDistillFailureCounts,
   listGraves,
   noteSessionMaterialUnreadable,
+  parseDistillFailureCounts,
+  readDistillFailureCount,
   removeGrave,
+  serializeDistillFailureCounts,
   type LostSessionGrave,
   type SessionRegistry,
   type TranscriptGrave,
@@ -21,10 +25,6 @@ const graveSchema = z.object({ archiveId: z.string().min(1) });
 // 枠の後ろの順番待ち（#4884）。枠のファイルの形は変えない: 古い版が書いた1枠のファイルをそのまま読め、列のファイルが無ければ列は空として扱う。
 const graveQueueSchema = z.object({ graves: z.array(graveSchema) });
 const lostSessionQueueSchema = z.object({ graves: z.array(z.lazy(() => lostSessionSchema)) });
-const distillFailuresSchema = z.object({
-  graveId: z.string().min(1),
-  failures: z.number().int().nonnegative(),
-});
 const projectKeySchema = z.object({ projectKey: z.string().min(1) });
 const lostSessionSchema = z.object({
   projectKey: z.string().min(1),
@@ -126,6 +126,7 @@ export class FsSessionRegistry implements SessionRegistry {
       const next = removeGrave(state, (g) => g.archiveId === archiveId);
       if (!next.removed) return false;
       await this.#writeTranscriptState(next);
+      await this.#forgetDistillFailures('transcript', [archiveId]);
       return true;
     });
   }
@@ -166,6 +167,10 @@ export class FsSessionRegistry implements SessionRegistry {
         (a, b) => a.archiveId === b.archiveId,
       );
       await this.#writeTranscriptState(next);
+      await this.#forgetDistillFailures(
+        'transcript',
+        next.dropped.map((g) => g.archiveId),
+      );
       return { dropped: next.dropped.map((g) => g.archiveId) };
     });
   }
@@ -212,6 +217,10 @@ export class FsSessionRegistry implements SessionRegistry {
         (a, b) => a.sessionId === b.sessionId,
       );
       await this.#writeLostState(next);
+      await this.#forgetDistillFailures(
+        'lost_session',
+        next.dropped.map((g) => g.sessionId),
+      );
       return { dropped: next.dropped.map((g) => g.sessionId) };
     });
   }
@@ -245,23 +254,46 @@ export class FsSessionRegistry implements SessionRegistry {
       const next = removeGrave(await this.#readLostState(), (g) => g.sessionId === sessionId);
       if (!next.removed) return false;
       await this.#writeLostState(next);
+      await this.#forgetDistillFailures('lost_session', [sessionId]);
       return true;
     });
   }
 
   // 読めなければ `null`: 数えられないだけで起動を止める理由が無いため（`readSessionMaterial` が跡を残す）
   async #readDistillFailures(path: string) {
-    return readSessionMaterial(path, '墓標の蒸留失敗回数', (raw) =>
-      distillFailuresSchema.parse(JSON.parse(raw)),
-    );
+    return readSessionMaterial(path, '墓標の蒸留失敗回数', (raw) => {
+      const counts = parseDistillFailureCounts(JSON.parse(raw));
+      if (counts === null) throw new Error('JSON としては読めたが、形に合わない');
+      return counts;
+    });
   }
 
   async graveDistillFailures(
     kind: 'transcript' | 'lost_session',
     graveId: string,
   ): Promise<number> {
-    const stored = await this.#readDistillFailures(this.#distillFailuresPaths[kind]);
-    return stored?.graveId === graveId ? stored.failures : 0;
+    return readDistillFailureCount(
+      await this.#readDistillFailures(this.#distillFailuresPaths[kind]),
+      graveId,
+    );
+  }
+
+  // 墓標が下りた・上限で落ちたら、その回数も消す（#4898）。数えるのと同じロックの中で読み書きする。記録が空になったらファイルごと消す
+  async #forgetDistillFailures(
+    kind: 'transcript' | 'lost_session',
+    ids: readonly string[],
+  ): Promise<void> {
+    if (ids.length === 0) return;
+    const path = this.#distillFailuresPaths[kind];
+    await withPathLock(path, async () => {
+      const stored = await this.#readDistillFailures(path);
+      if (stored === null) return;
+      const next = forgetDistillFailureCounts(stored, ids);
+      if (Object.keys(next).length === 0) await rm(path, { force: true });
+      else if (Object.keys(next).length !== Object.keys(stored).length) {
+        await writeFileAtomic(path, `${serializeDistillFailureCounts(next)}\n`);
+      }
+    });
   }
 
   // 読んでから書くまでを同じパスのロックの中に置く: 別々だと2つの数え上げが同じ値から始まり、1回ぶん落ちるため
@@ -272,9 +304,12 @@ export class FsSessionRegistry implements SessionRegistry {
     const path = this.#distillFailuresPaths[kind];
     return withPathLock(path, async () => {
       const stored = await this.#readDistillFailures(path);
-      const failures = stored?.graveId === graveId ? stored.failures + 1 : 1;
+      const failures = readDistillFailureCount(stored, graveId) + 1;
       await mkdir(this.#dir, { recursive: true });
-      await writeFileAtomic(path, `${JSON.stringify({ graveId, failures })}\n`);
+      await writeFileAtomic(
+        path,
+        `${serializeDistillFailureCounts({ ...stored, [graveId]: failures })}\n`,
+      );
       return failures;
     });
   }

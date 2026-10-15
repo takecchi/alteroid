@@ -1727,13 +1727,13 @@ export interface SessionRegistry {
   /** いま立っているのが `sessionId` の墓標であるときにだけ下ろす。理由と形は {@link SessionRegistry.clearTranscriptGraveIf} と同じ。 */
   clearLostSessionGraveIf(sessionId: string): Promise<boolean>;
   /**
-   * 墓標ごとの「蒸留が続けて失敗した回数」（#4752）。`kind` ごとに高々1件、`{ graveId, failures }` の形で墓標の本体とは別の鍵に置く。
-   * 墓標の本体に載せない: `clear…If` の突き合わせ（pg は生の文字列で比べる）と墓標の形に触れずに済ませるため。
-   * 覚えている記録が `graveId` と別の墓標のものなら 0（印が替われば数え直す）。読めなくても投げない（起動を止めないため）。
+   * 墓標ごとの「蒸留が続けて失敗した回数」（#4752）。`kind` ごとに、graveId → 回数を墓標の本体とは別の鍵に置く（#4898: 列に複数の墓標があっても互いの回数を消さない。保存値は `{ counts: { [graveId]: n } }`、古い形の `{ graveId, failures }` も読める）。
+   * 墓標の本体に載せない: `clear…If` の突き合わせと墓標の形に触れずに済ませるため。
+   * 墓標が下りる（`clear…If`）か、上限で落ちると、その墓標の回数も消える。数えていない墓標は 0。読めなくても投げない（起動を止めないため）。
    */
   graveDistillFailures(kind: 'transcript' | 'lost_session', graveId: string): Promise<number>;
   /**
-   * 蒸留の失敗を1回数え、数えた後の回数を返す。覚えている記録が `graveId` と別の墓標のものなら 1 から数え直す。
+   * 蒸留の失敗を1回数え、数えた後の回数を返す。他の墓標の回数には触れない。
    * 書けなければ投げる: 呼び出し側（`clone.ts`）が捕まえて、数えられなかった回は今までどおり日誌へ書く。
    */
   noteGraveDistillFailure(kind: 'transcript' | 'lost_session', graveId: string): Promise<number>;

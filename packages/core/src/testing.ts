@@ -158,7 +158,14 @@ import {
 import { assertNoNul, hasNul, stripNul, stripNulDeep } from './nul-guard.js';
 import { prepareApprovalForWrite, prepareJobForWrite } from './job-input.js';
 import { preparePermissionGrantForPut } from './permission-grant-input.js';
-import { addGrave, listGraves, removeGrave } from './grave-queue.js';
+import {
+  addGrave,
+  forgetDistillFailureCounts,
+  listGraves,
+  readDistillFailureCount,
+  removeGrave,
+  type DistillFailureCounts,
+} from './grave-queue.js';
 import { assertProfileRowWritable } from './profile-input.js';
 import { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
 import {
@@ -293,10 +300,14 @@ export function createMemoryStores(): Stores {
   // 枠の後ろの順番待ち（#4884）
   let transcriptGraveQueue: TranscriptGrave[] = [];
   let lostSessionGraveQueue: LostSessionGrave[] = [];
-  const distillFailureRecords: Record<
-    'transcript' | 'lost_session',
-    { graveId: string; failures: number } | null
-  > = { transcript: null, lost_session: null };
+  // 墓標ごとの失敗回数（#4898）
+  const distillFailureRecords: Record<'transcript' | 'lost_session', DistillFailureCounts> = {
+    transcript: {},
+    lost_session: {},
+  };
+  const forgetFailures = (kind: 'transcript' | 'lost_session', ids: readonly string[]): void => {
+    distillFailureRecords[kind] = forgetDistillFailureCounts(distillFailureRecords[kind], ids);
+  };
   let projectKey: string | null = null;
   let envProfile = new Map<string, EnvProfileEntry>();
   let storedMcpServers: StoredMcpServers | null = null;
@@ -1015,6 +1026,7 @@ export function createMemoryStores(): Stores {
       );
       transcriptGrave = next.primary;
       transcriptGraveQueue = next.queue;
+      if (next.removed) forgetFailures('transcript', [archiveId]);
       return next.removed;
     },
     async addTranscriptGrave(grave) {
@@ -1025,6 +1037,10 @@ export function createMemoryStores(): Stores {
       );
       transcriptGrave = next.primary;
       transcriptGraveQueue = next.queue;
+      forgetFailures(
+        'transcript',
+        next.dropped.map((g) => g.archiveId),
+      );
       return { dropped: next.dropped.map((g) => g.archiveId) };
     },
     async listTranscriptGraves() {
@@ -1038,19 +1054,21 @@ export function createMemoryStores(): Stores {
       );
       lostSessionGrave = next.primary;
       lostSessionGraveQueue = next.queue;
+      forgetFailures(
+        'lost_session',
+        next.dropped.map((g) => g.sessionId),
+      );
       return { dropped: next.dropped.map((g) => g.sessionId) };
     },
     async listLostSessionGraves() {
       return listGraves({ primary: lostSessionGrave, queue: lostSessionGraveQueue });
     },
     async graveDistillFailures(kind, graveId) {
-      const stored = distillFailureRecords[kind];
-      return stored?.graveId === graveId ? stored.failures : 0;
+      return readDistillFailureCount(distillFailureRecords[kind], graveId);
     },
     async noteGraveDistillFailure(kind, graveId) {
-      const stored = distillFailureRecords[kind];
-      const failures = stored?.graveId === graveId ? stored.failures + 1 : 1;
-      distillFailureRecords[kind] = { graveId, failures };
+      const failures = readDistillFailureCount(distillFailureRecords[kind], graveId) + 1;
+      distillFailureRecords[kind] = { ...distillFailureRecords[kind], [graveId]: failures };
       return failures;
     },
     async getLostSessionGrave() {
@@ -1066,6 +1084,7 @@ export function createMemoryStores(): Stores {
       );
       lostSessionGrave = next.primary;
       lostSessionGraveQueue = next.queue;
+      if (next.removed) forgetFailures('lost_session', [sessionId]);
       return next.removed;
     },
     async getProjectKey() {

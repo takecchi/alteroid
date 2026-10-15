@@ -38,22 +38,29 @@ function build(options: {
   stores?: Stores;
   observations?: TokenRotatorObservation[];
   keyId?: string;
+  // 鍵を後から差し替える（回し手が鍵を回した、を再現する）
+  keyRef?: { id: string };
+  // 観測の `await` の中で走らせる処理（回し手が `recycleSessionForToken()` を呼ぶ形の再現）
+  onObserve?: (o: TokenRotatorObservation) => void | Promise<void>;
 }) {
   const stores = options.stores ?? createMemoryStores();
   const sdk = makeSdk();
+  const keyRef =
+    options.keyRef ?? (options.keyId === undefined ? undefined : { id: options.keyId });
   const clone = createClone({
     redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: sdk.fn,
     env: {},
-    ...(options.keyId === undefined
+    ...(keyRef === undefined
       ? {}
-      : { tokenIdentity: () => ({ tokenId: options.keyId!, generation: 1 }) }),
-    ...(options.observations === undefined
+      : { tokenIdentity: () => ({ tokenId: keyRef.id, generation: 1 }) }),
+    ...(options.observations === undefined && options.onObserve === undefined
       ? {}
       : {
           onUsageObservation: async (o: TokenRotatorObservation) => {
-            options.observations!.push(o);
+            options.observations?.push(o);
+            await options.onObserve?.(o);
           },
         }),
     runners: createRunnerRegistry([
@@ -195,6 +202,80 @@ describe('クローン — 枠で落ちた蒸留を鍵の契機で拾い直す�
     );
     expect(sideCallsWith(t.calls, 'GRAVE-A-MARKER-4')).toBe(2);
     expect(sideCallsWith(t.calls, 'GRAVE-B-MARKER-4')).toBe(2);
+    await t.clone.stop();
+  });
+});
+
+describe('クローン — 墓標の列の拾い直し（#4898）', () => {
+  it('列に A・B があり両方が毎回落ちると、それぞれ3回で日誌が止まる（拾い直しは続く）', async () => {
+    const stores = createMemoryStores();
+    const arcA = (await stores.archive.archive('sess-a', 'QUIET-MARKER-A 生ログ')).id;
+    const arcB = (await stores.archive.archive('sess-b', 'QUIET-MARKER-B 生ログ')).id;
+    await stores.sessions.addTranscriptGrave({ archiveId: arcA });
+    await stores.sessions.addTranscriptGrave({ archiveId: arcB });
+    const t = build({ stores });
+
+    const bothTried = (n: number) =>
+      sideCallsWith(t.calls, 'QUIET-MARKER-A') >= n &&
+      sideCallsWith(t.calls, 'QUIET-MARKER-B') >= n;
+    await waitFor(() => bothTried(1), '起動時の拾い直しで A・B が落ちる');
+    for (let round = 2; round <= 4; round += 1) {
+      await waitForNoSweep();
+      t.clone.recycleSessionForToken();
+      await waitFor(() => bothTried(round), `${String(round)} 周目`);
+    }
+    await waitForNoSweep();
+
+    const lines = (await stores.journal.list({})).flatMap((r) =>
+      r.type === 'exchange' ? [r.text] : [],
+    );
+    const count = (id: string, marker: string) =>
+      lines.filter((l) => l.includes(marker) && l.includes(id)).length;
+    // 拾い直す行 3 + 失敗の行 3 のあと、4 周目以降は書かない
+    expect(count(arcA, '記憶へ移せなかった区間を拾い直す:')).toBe(3);
+    expect(count(arcB, '記憶へ移せなかった区間を拾い直す:')).toBe(3);
+    expect(count(arcA, '蒸留に失敗した')).toBe(3);
+    expect(count(arcB, '蒸留に失敗した')).toBe(3);
+    expect(await stores.sessions.graveDistillFailures('transcript', arcA)).toBeGreaterThanOrEqual(
+      3,
+    );
+    expect(await stores.sessions.graveDistillFailures('transcript', arcB)).toBeGreaterThanOrEqual(
+      3,
+    );
+    await t.clone.stop();
+  });
+
+  it('枠で落ちた蒸留の観測の中から鍵の契機が来ても、同じ鍵なら2周目を回さない。鍵が変われば回す', async () => {
+    const stores = createMemoryStores();
+    const archiveId = (await stores.archive.archive('sess-old', 'LOOP-MARKER 生ログ')).id;
+    await stores.sessions.setTranscriptGrave({ archiveId });
+    const keyRef = { id: 'key-A' };
+    const holder: { clone?: ReturnType<typeof build>['clone'] } = {};
+    let observed = 0;
+    const t = build({
+      stores,
+      keyRef,
+      // 回し手が、観測を受けた中で `recycleSessionForToken()` を呼ぶ形
+      onObserve: () => {
+        observed += 1;
+        holder.clone?.recycleSessionForToken();
+      },
+    });
+    holder.clone = t.clone;
+
+    await waitFor(() => sideCallsWith(t.calls, 'LOOP-MARKER') >= 1, '起動時の拾い直しが落ちる');
+    await waitFor(() => observed >= 1, '枠の観測が上がる');
+    await waitForNoSweep();
+    await waitForNoSweep();
+    expect(sideCallsWith(t.calls, 'LOOP-MARKER')).toBe(1);
+
+    // 鍵が変われば回す
+    keyRef.id = 'key-B';
+    t.clone.recycleSessionForToken();
+    await waitFor(() => sideCallsWith(t.calls, 'LOOP-MARKER') >= 2, '鍵が変わったので拾い直す');
+    await waitForNoSweep();
+    await waitForNoSweep();
+    expect(sideCallsWith(t.calls, 'LOOP-MARKER')).toBe(2);
     await t.clone.stop();
   });
 });

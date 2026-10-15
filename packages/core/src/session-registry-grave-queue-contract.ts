@@ -61,4 +61,61 @@ export async function verifySessionRegistryGraveQueueContract(
 
   await registry.clear();
   if ((await registry.listTranscriptGraves()).length !== 0) fail('clear() で列が消えない');
+
+  // 枠を下ろしたら列の先頭が枠へ上がる。その後に足すと末尾へ入り、上限で落ちるのは本当に最古（#4898）
+  const addT = async (id: string): Promise<string[]> =>
+    (await registry.addTranscriptGrave({ archiveId: id })).dropped;
+  const listT = async (): Promise<string> =>
+    (await registry.listTranscriptGraves()).map((g) => g.archiveId).join(',');
+  await addT('p-A');
+  await addT('p-B');
+  await addT('p-C');
+  await registry.clearTranscriptGraveIf('p-A');
+  if ((await registry.getTranscriptGrave())?.archiveId !== 'p-B') {
+    fail('枠を下ろしても列の先頭が枠へ上がらない');
+  }
+  await addT('p-D');
+  if ((await listT()) !== 'p-B,p-C,p-D') fail(`枠を下ろした後に足した並び: ${await listT()}`);
+  let promotedDropped: string[] = [];
+  for (let i = 0; i < MAX_PENDING_GRAVES - 2; i += 1)
+    promotedDropped = await addT(`p-${String(i)}`);
+  if (promotedDropped.join(',') !== 'p-B') {
+    fail(`上限で落ちたのが最古でない: ${promotedDropped.join(',')}`);
+  }
+  // 捨てたセッションも同じ
+  await registry.addLostSessionGrave({ projectKey: 'p', sessionId: 'q-A' });
+  await registry.addLostSessionGrave({ projectKey: 'p', sessionId: 'q-B' });
+  await registry.addLostSessionGrave({ projectKey: 'p', sessionId: 'q-C' });
+  await registry.clearLostSessionGraveIf('q-A');
+  if ((await registry.getLostSessionGrave())?.sessionId !== 'q-B') {
+    fail('枠を下ろしても列の先頭が枠へ上がらない（捨てたセッション）');
+  }
+  await registry.addLostSessionGrave({ projectKey: 'p', sessionId: 'q-D' });
+  if (
+    (await registry.listLostSessionGraves()).map((g) => g.sessionId).join(',') !== 'q-B,q-C,q-D'
+  ) {
+    fail('枠を下ろした後に足した並びが違う（捨てたセッション）');
+  }
+  await registry.clear();
+
+  // 蒸留の失敗回数は墓標ごと。別の墓標を数えても互いに消えず、下ろすとその墓標の回数だけ消える（#4898）
+  const failures = (kind: 'transcript' | 'lost_session', id: string) =>
+    registry.graveDistillFailures(kind, id);
+  await registry.addTranscriptGrave({ archiveId: 'f-A' });
+  await registry.addTranscriptGrave({ archiveId: 'f-B' });
+  for (const id of ['f-A', 'f-B', 'f-A', 'f-B', 'f-A']) {
+    await registry.noteGraveDistillFailure('transcript', id);
+  }
+  if ((await failures('transcript', 'f-A')) !== 3) fail('A の失敗回数が B に消された');
+  if ((await failures('transcript', 'f-B')) !== 2) fail('B の失敗回数が A に消された');
+  if ((await failures('lost_session', 'f-A')) !== 0) fail('失敗回数が種類をまたいだ');
+  await registry.clearTranscriptGraveIf('f-A');
+  if ((await failures('transcript', 'f-A')) !== 0) fail('墓標を下ろしても失敗回数が残る');
+  if ((await failures('transcript', 'f-B')) !== 2) fail('A を下ろしたら B の失敗回数が消えた');
+  await registry.addLostSessionGrave({ projectKey: 'p', sessionId: 'f-L' });
+  await registry.noteGraveDistillFailure('lost_session', 'f-L');
+  await registry.clearLostSessionGraveIf('f-L');
+  if ((await failures('lost_session', 'f-L')) !== 0) fail('捨てたセッションの失敗回数が残る');
+  await registry.clearTranscriptGraveIf('f-B');
+  await registry.clear();
 }

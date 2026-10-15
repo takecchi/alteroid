@@ -1,7 +1,16 @@
 export * from './schema.js';
 export * from './store.js';
-export { MAX_PENDING_GRAVES, addGrave, listGraves, removeGrave } from './grave-queue.js';
-export type { GraveQueueState } from './grave-queue.js';
+export {
+  MAX_PENDING_GRAVES,
+  addGrave,
+  forgetDistillFailureCounts,
+  listGraves,
+  parseDistillFailureCounts,
+  readDistillFailureCount,
+  removeGrave,
+  serializeDistillFailureCounts,
+} from './grave-queue.js';
+export type { DistillFailureCounts, GraveQueueState } from './grave-queue.js';
 /** 台帳の並び順・継続点の実装は1つにする: `commitment_list` と `GET /commitments` が別々に持つと、契約の一致を見張れない。 */
 export {
   commitmentPosition,
