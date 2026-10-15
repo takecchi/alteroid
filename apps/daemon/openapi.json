@@ -24507,7 +24507,8 @@
                     ]
                   }
                 },
-                "required": ["script"]
+                "required": ["script"],
+                "additionalProperties": false
               }
             }
           }

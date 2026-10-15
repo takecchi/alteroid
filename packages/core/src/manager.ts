@@ -6741,8 +6741,9 @@ class Pool implements ManagerPool {
         });
       });
       // 委譲を始める前に環境を整える: 名乗り（`hello`）任せにすると、最初のマネージャーが届く前に走り出し、「たまに鍵が無い」という形で現れる。器が作り直されていれば置いたものは消えている。
-      await this.#pushProfile(runner);
+      // 鍵を先に降ろす（#4841）: runner はプロファイルを受け取った時点の env（鍵を含む）で評価して固めるので、後に降ろすと `"$GH_TOKEN"` や gh を叩く行が鍵の無い env で評価されたまま残る
       await this.#pushCredentials(runner);
+      await this.#pushProfile(runner);
       await this.#pushMcpServers(runner);
       await this.#pushPlugins(runner);
       // 失敗は相手の側が日誌に残す。
@@ -6829,8 +6830,9 @@ class Pool implements ManagerPool {
       // `#connections` は触らず別の窓口（`#reattachPushes`）に置く: `#connectTo` の失敗時の後始末が誰の Promise かを見ずに消すため、上書きすると古い接続の失敗がこの降ろし直しを巻き添えで消しうる。
       const push = (async () => {
         // 繋ぎ直してきた runner は器ごと入れ替わっていることがあり、置いた鍵とプロファイルは消えているので降ろし直す。
-        await this.#pushProfile(runner);
+        // 鍵を先に降ろす（#4841）: runner はプロファイルを受け取った時点の env（鍵を含む）で評価して固めるので、後に降ろすと `"$GH_TOKEN"` や gh を叩く行が鍵の無い env で評価されたまま残る
         await this.#pushCredentials(runner);
+        await this.#pushProfile(runner);
         await this.#pushMcpServers(runner);
         await this.#pushPlugins(runner);
         await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
