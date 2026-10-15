@@ -461,6 +461,23 @@ describe('枠で止まった印を台帳へ持たせ、デーモンの入れ替�
     expect(s2.fake.resumes[0]?.message).toContain('通る鍵に戻った');
   });
 
+  it('⭐ 入れ替わりの後は、鍵の出来事を待たずに周回の掃きが起こす（再起動で挑み直しの状態が消えても止まったままにしない。#4852）', async () => {
+    const s = await setup();
+    s.fake.push(reached());
+    s.fake.push(failedReport());
+    await settle();
+    expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeDefined();
+
+    // 新しい Pool では、回し手の `resumeStoppedByUsage()` を呼ばない（鍵の出来事は来ていない）
+    const s2 = await reopen(s.stores);
+    const nudged = await s2.pool.settleStalledUsageWakes();
+
+    expect(nudged).toEqual(['mgr-usage']);
+    expect(s2.fake.resumes).toHaveLength(1);
+    expect(s2.fake.resumes[0]?.sessionId).toBe('sess-1');
+    expect((await s2.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeUndefined();
+  });
+
   it('入れ替わりを跨いで起こす: status=lost で座っている分も拾える（#restoreJobs の continue を跨ぐ）', async () => {
     const s = await setup();
     s.fake.push(reached());
