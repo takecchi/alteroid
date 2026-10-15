@@ -1117,6 +1117,11 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('archive'),
     managerId: z.string(),
+    /**
+     * `body` で送り直した退避の、預けたときの id（#4899）。デーモンが同じ id を参照で取り寄せ中・取り終えたなら、本文を置き場へ入れない。
+     * 古いデーモンの `z.object` は知らない欄を捨てるだけなので、載せても読める。
+     */
+    id: z.string().min(1).optional(),
     body: z.string().optional(),
     ref: z.object({ id: z.string().min(1), chars: z.number().int().nonnegative() }).optional(),
   }),

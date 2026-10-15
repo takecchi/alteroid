@@ -550,6 +550,8 @@ export interface RunnerHost {
   setDaemonAcceptsArchiveRef(accepts: boolean): void;
   /** 預けた退避の本文。無い・期限切れ・別の委譲の id なら `undefined`。 */
   readArchive(managerId: string, archiveId: string): string | undefined;
+  /** デーモンが本文を取り終えた印（GET の応答を返し終えた時点）。畳みの待ちと送り直しの対象から外す（#4899）。 */
+  markArchiveFetched(managerId: string, archiveId: string): void;
   /** 冪等。 */
   deleteArchive(managerId: string, archiveId: string): void;
   /** 別口で受ける1つの大きいファイルの最大バイト（hello の `attachmentStageLimit`。#4128 段3a）。 */
@@ -1532,11 +1534,13 @@ class Host implements RunnerHost {
   inlineUnpickedArchives(): number {
     let sent = 0;
     for (const entry of this.#archiveStash.list()) {
+      if (entry.fetched) continue;
       if (!this.#pickupsSinceShutdown.has(pickupKey('archive', entry.managerId, entry.id)))
         continue;
       const body = this.#archiveStash.get(entry.managerId, entry.id);
       if (body === undefined) continue;
-      this.#emit({ type: 'archive', managerId: entry.managerId, body });
+      // 元の id を載せる: デーモンが同じ id を参照で取り寄せ中・取り終えなら、本文を二重に置かないため（#4899）
+      this.#emit({ type: 'archive', managerId: entry.managerId, id: entry.id, body });
       this.deleteArchive(entry.managerId, entry.id);
       sent += 1;
     }
@@ -1568,6 +1572,11 @@ class Host implements RunnerHost {
 
   readArchive(managerId: string, archiveId: string): string | undefined {
     return this.#archiveStash.get(managerId, archiveId);
+  }
+
+  markArchiveFetched(managerId: string, archiveId: string): void {
+    this.#pickupsSinceShutdown.delete(pickupKey('archive', managerId, archiveId));
+    this.#archiveStash.markFetched(managerId, archiveId);
   }
 
   deleteArchive(managerId: string, archiveId: string): void {
@@ -1797,6 +1806,8 @@ class Host implements RunnerHost {
     // 畳む前に預けた退避も、デーモンに取られるまで待たせる（#4896）: 畳み始めてからの分だけだと、直前に参照を送った退避を
     // デーモンが取りに来る前に器が入れ替わり、取りに行った先の新しいプロセスに本文が無くなる
     for (const entry of this.#archiveStash.list()) {
+      // 取り終えたもの（DELETE が落ちただけ）は待たない（#4899）
+      if (entry.fetched) continue;
       this.#pickupsSinceShutdown.add(pickupKey('archive', entry.managerId, entry.id));
     }
     // 畳み始めの名乗りを入口ごとに任せない: 積み忘れる形を作らないため

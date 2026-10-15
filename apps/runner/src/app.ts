@@ -1069,7 +1069,30 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       if (!isArchiveRefId(archiveId)) return c.json({ error: 'invalid archiveId' as const }, 400);
       const body = host.readArchive(c.req.param('id'), archiveId);
       if (body === undefined) return c.json({ error: 'not found' as const }, 404);
-      return c.body(body, 200, { 'content-type': 'text/plain; charset=utf-8' });
+      // 全部を返し終えた時点で取り終えた印を付ける（#4899）。読み手が最後の塊を受け取って次を求めたときに印を付ける
+      // （`highWaterMark: 0` で、読まれるまで引かない）。途中で切れたら印は付かず、これまでどおり待つ・送り直す
+      const managerId = c.req.param('id');
+      const bytes = new TextEncoder().encode(body);
+      const CHUNK = 1024 * 1024;
+      let offset = 0;
+      const stream = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (offset >= bytes.length) {
+              controller.close();
+              host.markArchiveFetched(managerId, archiveId);
+              return;
+            }
+            controller.enqueue(bytes.subarray(offset, offset + CHUNK));
+            offset += CHUNK;
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      return c.body(stream, 200, {
+        'content-type': 'text/plain; charset=utf-8',
+        'content-length': String(bytes.length),
+      });
     })
 
     // 無くても 204（冪等）

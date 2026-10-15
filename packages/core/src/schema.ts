@@ -1303,6 +1303,8 @@ export const jobSchema = z.object({
           id: z.string(),
           provider: z.string(),
           interrupted: z.string().optional(),
+          // この peer を閉じた理由（#4899）。理由の違う peer を1つの知らせに混ぜないため、peer ごとに持つ。欄が無い古い台帳の peer は `reason`（直近の理由）で読む
+          reason: z.enum(['expired', 'replaced', 'shutdown']).optional(),
         }),
       ),
       at: isoDateTime,

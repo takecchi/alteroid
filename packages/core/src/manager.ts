@@ -1795,6 +1795,8 @@ const USAGE_WAKE_RETRY_MAX_MS = 30 * 60 * 1000;
 
 /** 畳んだ背景処理のコマンドを一言に載せる最大本数と、1本あたりの字数（#4850）。 */
 const FOLD_NOTICE_COMMANDS_MAX = 5;
+/** 退避の id ごとの取り寄せの結果を覚えておく数（送り直しとの二重を防ぐ。#4899）。 */
+const ARCHIVE_REF_OUTCOMES_MAX = 512;
 const FOLD_NOTICE_COMMAND_CHARS = 160;
 
 /** 鍵の値などの秘密を載せない: 既存の伏せ字（`redactSecretsInText`）を通してから切る。 */
@@ -1838,9 +1840,69 @@ const PEER_CLOSE_REASON_LABELS = {
   stopped: '人間・クローンが止めた',
 } as const;
 
+type PeerCloseReason = keyof typeof PEER_CLOSE_REASON_LABELS;
+
 interface PeerCloseNotice {
-  reason: keyof typeof PEER_CLOSE_REASON_LABELS;
-  peers: readonly { id: string; provider: string; interrupted?: string | undefined }[];
+  reason: PeerCloseReason;
+  peers: readonly {
+    id: string;
+    provider: string;
+    interrupted?: string | undefined;
+    reason?: PeerCloseReason | undefined;
+  }[];
+}
+
+/**
+ * 台帳の peer の閉じの知らせを、理由ごとに分けて書く（#4899）。理由の違う peer を1つの文面に混ぜると、理由と peer の対応がずれる。
+ * `peer.reason` が無い（古い台帳）peer は、知らせの `reason` で読む。
+ */
+export function composePeerCloseNotices(notice: PeerCloseNotice): string {
+  const groups = new Map<PeerCloseReason, PeerCloseNotice['peers'][number][]>();
+  for (const peer of notice.peers) {
+    const reason = peer.reason ?? notice.reason;
+    const group = groups.get(reason);
+    if (group === undefined) groups.set(reason, [peer]);
+    else group.push(peer);
+  }
+  return [...groups]
+    .map(([reason, peers]) => composePeerCloseNotice({ reason, peers }))
+    .join('\n\n');
+}
+
+/**
+ * 配達に畳み込んだ畳みの断り書き（`folded`）を、いまの断り書き（`current`）から引く（#4899）。
+ * 積み増しは件数の加算とコマンドの末尾への追加だけなので、畳み込んだ分を引いた残りが「送信の途中で後から積まれた分」になる。残りが無ければ `undefined`。
+ */
+export function remainingFoldNotice<
+  T extends {
+    backgroundTasks: number;
+    peers?: number | undefined;
+    commands?: string[] | undefined;
+  },
+>(current: T | undefined, folded: T | undefined): T | undefined {
+  if (current === undefined || folded === undefined)
+    return folded === undefined ? current : undefined;
+  const backgroundTasks = Math.max(0, current.backgroundTasks - folded.backgroundTasks);
+  const peers = Math.max(0, (current.peers ?? 0) - (folded.peers ?? 0));
+  const commands = (current.commands ?? []).slice((folded.commands ?? []).length);
+  if (backgroundTasks === 0 && peers === 0) return undefined;
+  const next: T = { ...current, backgroundTasks };
+  if (peers === 0) delete next.peers;
+  else next.peers = peers;
+  if (commands.length === 0) delete next.commands;
+  else next.commands = commands;
+  return next;
+}
+
+/** 配達に畳み込んだ peer の閉じの知らせを引く。peer は末尾への追加だけなので、畳み込んだ本数を先頭から落とす。 */
+export function remainingPeerCloseNotice<
+  T extends { reason: PeerCloseReason; peers: { reason?: PeerCloseReason | undefined }[] },
+>(current: T | undefined, folded: T | undefined): T | undefined {
+  if (current === undefined || folded === undefined)
+    return folded === undefined ? current : undefined;
+  const peers = current.peers.slice(folded.peers.length);
+  if (peers.length === 0) return undefined;
+  return { ...current, reason: peers[peers.length - 1]?.reason ?? current.reason, peers };
 }
 
 /** 預けた peer を閉じたことの断り書き（#4885）。担当の次の起こし直しの先頭へ添える。 */
@@ -3230,6 +3292,10 @@ class Pool implements ManagerPool {
   readonly #outboxFetchFileTimeoutMs: number | undefined;
   readonly #outboxFetchTotalTimeoutMs: number | undefined;
   readonly #archiveFetchRetryDelaysMs: readonly number[];
+  // 参照で届いた退避の id ごとに、置き場へ入れられたか（送り直しの本文との二重を防ぐ。#4899）。キーは `managerId/id`
+  readonly #archiveRefOutcomes = new Map<string, Promise<boolean>>();
+  // 本文で（送り直しで）届いた退避の id。参照の取り寄せが「無い」で落ちても落とした扱いにしないため
+  readonly #inlineArchiveIds = new Set<string>();
   readonly #mirrorAppendRetryDelaysMs: readonly number[];
   readonly #stageDeadlineMs: (size: number) => number;
 
@@ -3774,11 +3840,20 @@ class Pool implements ManagerPool {
         await this.#persist(record).catch(() => undefined);
       }
     }
-    if (record.job.pendingFoldNotice !== undefined) {
-      outgoing = composeFoldNotice(record.job.pendingFoldNotice) + '\n\n' + message;
+    // 畳み込んだ分の写しを取っておく（#4899）: 配達の途中の長い await の間に積まれた知らせまで下ろさないため
+    const foldedFoldNotice =
+      record.job.pendingFoldNotice === undefined
+        ? undefined
+        : structuredClone(record.job.pendingFoldNotice);
+    const foldedPeerCloseNotice =
+      record.job.pendingPeerCloseNotice === undefined
+        ? undefined
+        : structuredClone(record.job.pendingPeerCloseNotice);
+    if (foldedFoldNotice !== undefined) {
+      outgoing = composeFoldNotice(foldedFoldNotice) + '\n\n' + message;
     }
-    if (record.job.pendingPeerCloseNotice !== undefined) {
-      outgoing = composePeerCloseNotice(record.job.pendingPeerCloseNotice) + '\n\n' + outgoing;
+    if (foldedPeerCloseNotice !== undefined) {
+      outgoing = composePeerCloseNotices(foldedPeerCloseNotice) + '\n\n' + outgoing;
     }
 
     // `attached` を信じ切らない: イベント駆動でしか更新されず、`closed` / resume 失敗の合図が届かなかった窓では
@@ -3897,8 +3972,15 @@ class Pool implements ManagerPool {
     record.job.status = 'running';
     record.job.turnStartedAt = laterIso(record.job.turnStartedAt, turnStartedAt);
     // 断り書きは実際に届いた回で下ろす（1回だけ付く）
-    record.job.pendingFoldNotice = undefined;
-    record.job.pendingPeerCloseNotice = undefined;
+    // 畳み込んだ分だけ下ろし、送信の途中で積まれた分は次の起こし直しに残す（#4899）
+    record.job.pendingFoldNotice = remainingFoldNotice(
+      record.job.pendingFoldNotice,
+      foldedFoldNotice,
+    );
+    record.job.pendingPeerCloseNotice = remainingPeerCloseNotice(
+      record.job.pendingPeerCloseNotice,
+      foldedPeerCloseNotice,
+    );
     await this.#persist(record);
     await this.#journal({
       type: 'exchange',
@@ -9472,7 +9554,15 @@ class Pool implements ManagerPool {
         const reason = event.reason;
         record.job.pendingPeerCloseNotice = {
           reason,
-          peers: [...(record.job.pendingPeerCloseNotice?.peers ?? []), ...event.peers],
+          // peer ごとに理由を持たせる: 理由の違う知らせを1つに混ぜると、理由と peer の対応がずれる（#4899）
+          peers: [
+            // 理由の欄が無い古い形の peer は、上書きされる前の知らせの理由を写してから積む
+            ...(record.job.pendingPeerCloseNotice?.peers ?? []).map((peer) => ({
+              ...peer,
+              reason: peer.reason ?? record.job.pendingPeerCloseNotice?.reason ?? reason,
+            })),
+            ...event.peers.map((peer) => ({ ...peer, reason })),
+          ],
           at: new Date(this.#now()).toISOString(),
         };
         await this.#persist(record).catch(() => undefined);
@@ -9744,6 +9834,36 @@ class Pool implements ManagerPool {
 
       case 'archive': {
         // 本文は参照で届くことがある（#4485）: SSE の1行で数十 MB を運ぶと、受け取りの間ループが塞がるため。取りに行くのは出来事を出した器
+        // 送り直し（`body` と元の `id`）と参照が同じ退避を指すなら、置き場へ入れるのは1回だけ（#4899）。
+        // 参照の取り寄せが終わった（置き場へ入れた）なら本文は捨てる。取り寄せ中なら結果を待ち、取れなかったときだけ本文を使う
+        const archiveKey =
+          event.ref !== undefined
+            ? `${event.managerId}/${event.ref.id}`
+            : event.id !== undefined
+              ? `${event.managerId}/${event.id}`
+              : undefined;
+        let settleStored: ((stored: boolean) => void) | undefined;
+        if (archiveKey !== undefined && event.ref !== undefined) {
+          const outcome = new Promise<boolean>((resolve) => {
+            settleStored = resolve;
+          });
+          this.#archiveRefOutcomes.set(archiveKey, outcome);
+          // 古いものから忘れる: 退避の id は一度きりで、数を持ち続けない
+          while (this.#archiveRefOutcomes.size > ARCHIVE_REF_OUTCOMES_MAX) {
+            const oldest = this.#archiveRefOutcomes.keys().next().value;
+            if (oldest === undefined) break;
+            this.#archiveRefOutcomes.delete(oldest);
+          }
+        } else if (archiveKey !== undefined && event.body !== undefined) {
+          this.#inlineArchiveIds.add(archiveKey);
+          while (this.#inlineArchiveIds.size > ARCHIVE_REF_OUTCOMES_MAX) {
+            const oldest = this.#inlineArchiveIds.values().next().value;
+            if (oldest === undefined) break;
+            this.#inlineArchiveIds.delete(oldest);
+          }
+          const earlier = this.#archiveRefOutcomes.get(archiveKey);
+          if (earlier !== undefined && (await earlier)) return;
+        }
         const chars = event.body?.length ?? event.ref?.chars ?? 0;
         let body: string;
         let fetchedFrom: { runner: RunnerClient; archiveId: string } | undefined;
@@ -9762,6 +9882,15 @@ class Pool implements ManagerPool {
             throw new Error('本文も参照も無い退避の出来事が届いた');
           }
         } catch (error) {
+          settleStored?.(false);
+          // 本文で届いた id への参照の取り寄せが落ちたのは、runner が送り直して預かりを消したため。本文は届いているので、落とした扱いにしない
+          if (
+            archiveKey !== undefined &&
+            event.ref !== undefined &&
+            this.#inlineArchiveIds.has(archiveKey)
+          ) {
+            return;
+          }
           noteDroppedRecord(
             'トランスクリプトの退避',
             `managerId=${event.managerId} chars=${String(chars)}${event.ref === undefined ? '' : ` ref=${event.ref.id}`}`,
@@ -9772,6 +9901,7 @@ class Pool implements ManagerPool {
         try {
           const write = await this.#stores.archive.archive(event.managerId, body);
           record.job.archiveIds = [...(record.job.archiveIds ?? []), write.id];
+          settleStored?.(true);
           await this.#persist(record);
           // 置き場へ入れてから消させる: 先に消すと、置き場への書き込みが失敗した回に本文がどこにも残らないため。消せなくても runner の期限が消す
           if (fetchedFrom !== undefined) {
@@ -9796,6 +9926,7 @@ class Pool implements ManagerPool {
             });
           }
         } catch (error) {
+          settleStored?.(false);
           // 止めないが黙って消さない: 跡が無いと「そもそも退避しなかった」と区別が付かない。
           noteDroppedRecord(
             'トランスクリプトの退避',

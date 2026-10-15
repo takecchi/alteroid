@@ -137,7 +137,10 @@ class LocalRunner implements RunnerClient {
 
   // 預けた退避の本文を渡す・消す（#4485）: 退避は名乗りを問わず参照で送るので、口が無いと同じプロセスの構成で退避が取れない
   async fetchArchive(managerId: string, archiveId: string): Promise<string | undefined> {
-    return this.#host.readArchive(managerId, archiveId);
+    const body = this.#host.readArchive(managerId, archiveId);
+    // 同じプロセスでは、渡した時点で取り終えている
+    if (body !== undefined) this.#host.markArchiveFetched(managerId, archiveId);
+    return body;
   }
 
   async deleteArchive(managerId: string, archiveId: string): Promise<void> {

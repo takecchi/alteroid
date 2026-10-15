@@ -294,7 +294,13 @@ function socketPathOf(baseUrl: string): string | null {
 
 export async function createHttpRunner(options: HttpRunnerOptions): Promise<RunnerClient> {
   const client = new HttpRunner(options);
-  await client.hello();
+  try {
+    await client.hello();
+  } catch (error) {
+    // 開けなかった client の Agent を残さない: 挑み直しのたびに1つずつ居座るため（#4899）
+    await client.close().catch(() => undefined);
+    throw error;
+  }
   return client;
 }
 

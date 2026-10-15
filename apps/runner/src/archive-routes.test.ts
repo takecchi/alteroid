@@ -54,6 +54,23 @@ describe('GET / DELETE /managers/:id/archive/:archiveId（#4485）', () => {
     expect((await call('GET', `/managers/${MANAGER}/archive/not-a-uuid`)).status).toBe(400);
   });
 
+  it('GET は本文を全部返し終えたときに取り終えた印を付け、無いものには付けない（#4899）', async () => {
+    const { host, call } = setup();
+    vi.spyOn(host, 'readArchive').mockImplementation((managerId, id) =>
+      managerId === MANAGER && id === ARCHIVE_ID ? '生ログの本文'.repeat(400_000) : undefined,
+    );
+    const fetched = vi.spyOn(host, 'markArchiveFetched');
+
+    expect((await call('GET', `/managers/mgr-other/archive/${ARCHIVE_ID}`)).status).toBe(404);
+    expect(fetched).not.toHaveBeenCalled();
+
+    const ok = await call('GET', `/managers/${MANAGER}/archive/${ARCHIVE_ID}`);
+    // 読み切る前には付けない（途中で切れたら、これまでどおり待つ・送り直す）
+    expect(fetched).not.toHaveBeenCalled();
+    expect((await ok.text()).length).toBe('生ログの本文'.length * 400_000);
+    expect(fetched).toHaveBeenCalledExactlyOnceWith(MANAGER, ARCHIVE_ID);
+  });
+
   it('DELETE は冪等に 204 を返し、形の不正な id は 400', async () => {
     const { host, call } = setup();
     const del = vi.spyOn(host, 'deleteArchive');

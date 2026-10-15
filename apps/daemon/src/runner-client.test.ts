@@ -32,6 +32,7 @@ import { join } from 'node:path';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createHttpRunner, type RunnerDroppedEventReport } from './runner-client.js';
+import { RunnerHttpTransport } from './runner-http-transport.js';
 
 const TOKEN = 'test-runner-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -3138,5 +3139,20 @@ describe('awaitStreamEnd（Issue #2749。畳み始めた runner の最後の出�
     });
     await client.awaitStreamEnd?.();
     await client.close();
+  });
+});
+
+describe('開けなかった runner の client（#4899）', () => {
+  it('hello() が落ちたら、作った client の Agent を閉じてから投げる', async () => {
+    const close = vi.spyOn(RunnerHttpTransport.prototype, 'close');
+    try {
+      // 誰も聞いていないポート: 接続拒否で hello が落ちる
+      await expect(
+        createHttpRunner({ baseUrl: 'http://127.0.0.1:1', token: 'tok' }),
+      ).rejects.toThrow();
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      close.mockRestore();
+    }
   });
 });

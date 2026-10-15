@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { HELD_FORCE_FOLD_AFTER_MS, createManagerPool, type ManagerPoolOptions } from './manager.js';
+import {
+  HELD_FORCE_FOLD_AFTER_MS,
+  composePeerCloseNotices,
+  createManagerPool,
+  remainingFoldNotice,
+  type ManagerPoolOptions,
+} from './manager.js';
 import { createProfileService } from './profile-service.js';
 import {
   createRunnerRegistry,
@@ -44,7 +50,9 @@ function fakeRunner() {
     peers: number | undefined;
     commands: string[] | undefined;
     waiting: RunnerManagerState['waiting'];
-  } = { background: 0, peers: undefined, commands: undefined, waiting: [] };
+    // 起こし直しの送信の途中（resume の await の間）に走らせる処理
+    onResume: (() => void) | undefined;
+  } = { background: 0, peers: undefined, commands: undefined, waiting: [], onResume: undefined };
 
   const stateOf = (base: RunnerManagerState): RunnerManagerState => ({
     ...base,
@@ -74,6 +82,7 @@ function fakeRunner() {
     },
     async resume(command): Promise<{ cwd?: string }> {
       resumes.push(command);
+      behavior.onResume?.();
       alive.push({
         managerId: command.managerId,
         status: 'running',
@@ -294,6 +303,79 @@ describe('鍵の回転の起こし直しは、背景処理を理由に止めな�
     expect(message).toContain('預けていた peer 1 本を閉じた');
     expect(message).not.toContain('途中で終わった');
     await s.pool.stop();
+  });
+
+  it('⭐ (a5b) 送信の途中で届いた parked_peers_closed は、配達が成功しても残り、次の起こし直しに添える。理由の違う知らせは混ざらない（#4899）', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.push({
+      type: 'parked_peers_closed',
+      managerId: 'mgr-fold',
+      reason: 'expired',
+      peers: [{ id: 'peer-early', provider: 'codex' }],
+    });
+    await settle();
+    // 配達の途中（resume の await の間）に、理由の違う知らせが届く
+    s.fake.behavior.onResume = () => {
+      s.fake.push({
+        type: 'parked_peers_closed',
+        managerId: 'mgr-fold',
+        reason: 'shutdown',
+        peers: [{ id: 'peer-late', provider: 'codex' }],
+      });
+    };
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
+    s.fake.behavior.onResume = undefined;
+    await settle();
+
+    const first = s.fake.resumes[0]?.message ?? '';
+    expect(first).toContain('codex[peer-early]');
+    expect(first).not.toContain('peer-late');
+    // 後から届いた分は消えず、理由も上書きされない
+    const left = (await s.stores.jobs.listJobs())[0]?.pendingPeerCloseNotice;
+    expect(left?.peers).toEqual([{ id: 'peer-late', provider: 'codex', reason: 'shutdown' }]);
+    expect(left?.reason).toBe('shutdown');
+    await s.pool.stop();
+  });
+
+  it('(a5c) 理由の違う peer が積まれていたら、理由ごとに別の文面にして、peer と理由の対応を保つ。古い形（peer に理由が無い）も読める（#4899）', () => {
+    const text = composePeerCloseNotices({
+      reason: 'shutdown',
+      peers: [
+        { id: 'p1', provider: 'codex', reason: 'expired' },
+        { id: 'p2', provider: 'codex', reason: 'shutdown' },
+        { id: 'p3', provider: 'codex' },
+      ],
+    });
+    const parts = text.split('\n\n');
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toContain('預かりの期限が来た');
+    expect(parts[0]).toContain('codex[p1]');
+    expect(parts[0]).not.toContain('p2');
+    expect(parts[1]).toContain('器を畳んだ');
+    expect(parts[1]).toContain('codex[p2], codex[p3]');
+  });
+
+  it('(a5d) 畳みの断り書きも、畳み込んだ分だけを引き、後から積まれた分を残す（#4899）', () => {
+    const folded = {
+      backgroundTasks: 1,
+      peers: 1,
+      commands: ['a'],
+      at: '2026-10-15T03:00:00.000Z',
+    };
+    const current = {
+      backgroundTasks: 3,
+      peers: 1,
+      commands: ['a', 'b'],
+      at: '2026-10-15T03:00:01.000Z',
+    };
+    expect(remainingFoldNotice(current, folded)).toEqual({
+      backgroundTasks: 2,
+      commands: ['b'],
+      at: '2026-10-15T03:00:01.000Z',
+    });
+    expect(remainingFoldNotice(folded, folded)).toBeUndefined();
+    expect(remainingFoldNotice(current, undefined)).toBe(current);
   });
 
   it('(a7) 人が止めた場合は担当が起こされないので、台帳には預けない（クローンへの知らせだけ。#4885）', async () => {

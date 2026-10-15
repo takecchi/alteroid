@@ -394,6 +394,8 @@ describe('畳むとき、取られていない預けた退避を待ち、取ら�
     expect(inlined).toHaveLength(1);
     expect(inlined[0]?.body).toBe(BODY);
     expect(inlined[0]?.managerId).toBe('mgr-archive-sd');
+    // 元の id を載せる: デーモンが参照と突き合わせて二重を防ぐため（#4899）
+    expect(inlined[0]?.id).toBe(id);
     expect(host.pendingPickups()).toBe(0);
     expect(host.readArchive('mgr-archive-sd', id)).toBeUndefined();
     // 二度は送らない
@@ -406,6 +408,20 @@ describe('畳むとき、取られていない預けた退避を待ち、取ら�
 
     await host.shutdown();
 
+    expect(host.pendingPickups()).toBe(0);
+    expect(host.inlineUnpickedArchives()).toBe(0);
+    expect(events.some((event) => event.type === 'archive' && event.body !== undefined)).toBe(
+      false,
+    );
+  });
+
+  it('⭐ 取り終えた（GET 済み）が DELETE が落ちた退避は、畳みで待たず、送り直さない（取られていないものは上の2件のとおり待って送り直す。#4899）', async () => {
+    const { host, events, id } = await stashedBeforeShutdown();
+    host.markArchiveFetched('mgr-archive-sd', id);
+    // DELETE は呼ばれない: 本文は預かりに残る
+    expect(host.readArchive('mgr-archive-sd', id)).toBe(BODY);
+
+    await host.shutdown();
     expect(host.pendingPickups()).toBe(0);
     expect(host.inlineUnpickedArchives()).toBe(0);
     expect(events.some((event) => event.type === 'archive' && event.body !== undefined)).toBe(

@@ -40,6 +40,8 @@ interface StashedArchive {
   readonly managerId: string;
   readonly body: string;
   readonly at: number;
+  /** デーモンが本文を全部取り終えた（GET の応答を返し終えた）。DELETE が落ちても、畳みの待ちと送り直しの対象にしない（#4899）。 */
+  fetched: boolean;
 }
 
 export interface ArchiveStashDrop {
@@ -81,7 +83,7 @@ export class ArchiveStash {
   put(managerId: string, body: string): { id: string; chars: number } {
     this.#expire();
     const id = randomUUID();
-    this.#entries.set(id, { managerId, body, at: this.#now() });
+    this.#entries.set(id, { managerId, body, at: this.#now(), fetched: false });
     this.#chars += body.length;
     // 入れたばかりの1本は捨てない: 1本で上限を超える本文でも、デーモンが取りに来るまでは持つ
     while (
@@ -102,6 +104,13 @@ export class ArchiveStash {
     return entry === undefined || entry.managerId !== managerId ? undefined : entry.body;
   }
 
+  /** デーモンが本文を取り終えた印を付ける。消しはしない（TTL が消す）。無い・別の委譲の id なら何もしない。 */
+  markFetched(managerId: string, id: string): void {
+    const entry = this.#entries.get(id);
+    if (entry === undefined || entry.managerId !== managerId) return;
+    entry.fetched = true;
+  }
+
   /** 冪等。別の委譲の id は消さない。 */
   delete(managerId: string, id: string): void {
     const entry = this.#entries.get(id);
@@ -115,12 +124,13 @@ export class ArchiveStash {
   }
 
   /** いま預かっている退避（本文は含めない）。畳み始めに、まだ取られていない分を数えるのに使う（#4896）。 */
-  list(): { managerId: string; id: string; chars: number }[] {
+  list(): { managerId: string; id: string; chars: number; fetched: boolean }[] {
     this.#expire();
     return [...this.#entries].map(([id, entry]) => ({
       managerId: entry.managerId,
       id,
       chars: entry.body.length,
+      fetched: entry.fetched,
     }));
   }
 
