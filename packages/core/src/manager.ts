@@ -92,7 +92,10 @@ import {
   RUNNER_CAPABILITY_MANAGER_OUTBOX,
   RUNNER_CAPABILITY_MANAGER_PEERS,
   RUNNER_CAPABILITY_RESCUE_FILES,
+<<<<<<< HEAD
   RUNNER_CAPABILITY_RESCUE_RESTORE,
+=======
+>>>>>>> origin/main
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
   RunnerPluginsUnsupportedError,
@@ -5745,6 +5748,7 @@ class Pool implements ManagerPool {
     await this.#journalRescueSkips(managerId, event.worktree, skipped);
   }
 
+<<<<<<< HEAD
   /**
    * 担当の `rescue_restore` の依頼（#4863 案A その2）。対象の委譲の預かりを選び、添付つきで担当へ送る（クローンの `manager_send` と同じ経路）。
    * 断るとき・残りがあるときの理由は、同じ届け方で本文だけを送る。
@@ -5910,6 +5914,8 @@ class Pool implements ManagerPool {
     });
   }
 
+=======
+>>>>>>> origin/main
   async #journalRescueSkips(
     managerId: string,
     worktree: string,
@@ -10107,6 +10113,7 @@ class Pool implements ManagerPool {
         return;
       }
 
+<<<<<<< HEAD
       case 'rescue_restore_request': {
         // 届けは待たない: 担当が畳まれていれば resume を挟み、出来事の処理を長く塞ぐため。失敗は日誌に残す
         void this.#restoreRescue(record, event).catch((error: unknown) => {
@@ -10115,6 +10122,8 @@ class Pool implements ManagerPool {
         return;
       }
 
+=======
+>>>>>>> origin/main
       case 'tool_running':
       case 'tool_end': {
         // `#journal` を呼ばない: 稼働の地図のメモリへ渡すだけ。コールバックの失敗でイベント処理を止めない。

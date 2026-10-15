@@ -969,7 +969,10 @@ export {
   type RunnerStagedAttachmentMeta,
   RUNNER_CAPABILITY_MANAGER_OUTBOX,
   RUNNER_CAPABILITY_RESCUE_FILES,
+<<<<<<< HEAD
   RUNNER_CAPABILITY_RESCUE_RESTORE,
+=======
+>>>>>>> origin/main
   runnerRescueFileSchema,
   runnerRescueSkippedSchema,
   type RunnerRescueFile,

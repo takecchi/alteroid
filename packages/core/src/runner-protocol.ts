@@ -549,12 +549,15 @@ export const RUNNER_CAPABILITY_MANAGER_PEERS = 'manager-peers';
  */
 export const RUNNER_CAPABILITY_RESCUE_FILES = 'rescue-files';
 
+<<<<<<< HEAD
 /**
  * 担当の道具 `rescue_restore`（`alteroid-manager`。#4863 案A その2）を持つ器。デーモンはこれを名乗る器へだけ、
  * 「`rescue_restore` で取り戻せる」と案内する（道具が無い器へ案内すると、呼べない道具を指す）。
  */
 export const RUNNER_CAPABILITY_RESCUE_RESTORE = 'rescue-restore';
 
+=======
+>>>>>>> origin/main
 export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
@@ -562,7 +565,10 @@ export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_MANAGER_OUTBOX,
   RUNNER_CAPABILITY_MANAGER_PEERS,
   RUNNER_CAPABILITY_RESCUE_FILES,
+<<<<<<< HEAD
   RUNNER_CAPABILITY_RESCUE_RESTORE,
+=======
+>>>>>>> origin/main
 ];
 
 /** 中身は載せない（取りに行く先は `GET /managers/:id/rescue-files/:fileId`）。 */
@@ -1166,6 +1172,7 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     skipped: z.array(runnerRescueSkippedSchema),
   }),
   /**
+<<<<<<< HEAD
    * 担当の道具 `rescue_restore` の依頼（#4863 案A その2）。道具は runner の中で動き、デーモンへ同期で問い合わせる口が無いので、
    * 出来事として積むだけにする。デーモンは預かりを添付として、担当宛ての次の入力で届ける（返事は無い）。
    * 旧 daemon は未知の type を `safeParse` で落とし、接続は切れない。
@@ -1179,6 +1186,8 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     from: z.string().optional(),
   }),
   /**
+=======
+>>>>>>> origin/main
    * 古いセッションの出来事でも落とさない: 外へ出した事実はセッションの世代と関係なく残るため。
    * 旧 daemon は未知の type を `safeParse` で落とし、接続は切れない。
    */
