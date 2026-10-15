@@ -233,7 +233,9 @@ import {
   type RescueRefDeleteResult,
   resolveRescueIntervalMs,
   runRescue,
+  UNTRACKED_STALE_AFTER_MS,
 } from './rescue-ref.js';
+import { StaleUntrackedNotices } from './runner-stale-untracked.js';
 import {
   ScratchSweeper,
   resolveScratchSweepGraceMs,
@@ -1988,6 +1990,7 @@ class RunnerSession {
   readonly #pidsPressureFn: (() => Promise<PidsPressureReading | undefined>) | undefined;
   readonly #stashArchive: ((body: string) => { id: string; chars: number } | undefined) | undefined;
   readonly #pidsPressureNotices = new PidsPressureNotices();
+  readonly #staleUntrackedNotices = new StaleUntrackedNotices();
   readonly #denialStreaks = new ClassifierDenialStreaks();
   readonly #rescueMemory = new RescueMemory();
   /** 退避の列挙の打ち切りの知らせ（同じ状態が続く間は繰り返さない。#4681）。 */
@@ -4479,11 +4482,12 @@ class RunnerSession {
       record.agentId === undefined ? this.#annotateCutOffWorkers(record.toolResponse) : null;
     // 担当本人にも作業者にも添える: dev サーバーや E2E を起こすのは作業者のことが多い
     const pressure = await this.#pidsPressureNotice(record.agentId);
+    const staleUntracked = this.#staleUntrackedNotice(record.agentId);
     // 分類器の拒否が続いた後に初めて通った道具に、事情と取れる道を添える
     const streakActor = record.agentId ?? 'manager';
     const denialStreak = this.#denialStreaks.takeNotice(streakActor, Date.now());
     this.#denialStreaks.noteProgress(streakActor);
-    const parts = [additionalContext, pressure, denialStreak].filter(
+    const parts = [additionalContext, pressure, staleUntracked, denialStreak].filter(
       (part): part is string => part !== null,
     );
     if (parts.length === 0) return { kind: 'continue' };
@@ -4514,6 +4518,29 @@ class RunnerSession {
       });
     }
     return text;
+  }
+
+  /**
+   * 作業ツリーに 30 分以上 commit されていない未追跡のファイルが残っていれば、知らせの段落を返す（`runner-stale-untracked.ts`、#4863 案C）。
+   * 相手（担当本人・作業者ごと）に30分に1回まで。担当本人に添えた回は日誌にも1行残す。投げたときは何も添えない。
+   */
+  #staleUntrackedNotice(agentId: string | undefined): string | null {
+    try {
+      const stale = this.#rescueMemory.staleUntracked(UNTRACKED_STALE_AFTER_MS);
+      const text = this.#staleUntrackedNotices.next(agentId ?? 'manager', stale, Date.now());
+      if (text !== null && agentId === undefined) {
+        this.#emit({
+          type: 'note',
+          managerId: this.#id,
+          text:
+            `作業ツリーに 30 分以上 commit されていない未追跡のファイルがある（${String(stale.length)} 本の作業ツリー）ので、` +
+            'この担当の道具の結果に「commit して push するか出し箱へ写すこと」という知らせを添えた（止める指示ではない）。',
+        });
+      }
+      return text;
+    } catch {
+      return null;
+    }
   }
 
   #annotateCutOffWorkers(toolResponse: unknown): string | null {

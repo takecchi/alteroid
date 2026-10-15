@@ -259,6 +259,18 @@ export function secretLikeAdditionsInDiff(
 
 export const RESCUE_RESEND_AFTER_MS = 30 * 60_000;
 const STALE_INDEX_AGE_MS = 10 * 60_000;
+/** 未追跡のファイルが、この時間以上残っていたら「古い」とみなす（#4863 案C）。 */
+export const UNTRACKED_STALE_AFTER_MS = 30 * 60_000;
+/** 1本の作業ツリーで初出時刻を覚える未追跡の名前の上限。超える分は新しく足さない（既存は保つ）。 */
+export const UNTRACKED_TRACKED_NAMES_LIMIT = 1000;
+const STALE_UNTRACKED_PATHS_LIMIT = 5;
+
+export interface StaleUntrackedTree {
+  readonly relativePath: string;
+  readonly count: number;
+  readonly paths: readonly string[];
+  readonly oldestSinceMs: number;
+}
 
 interface RescueEntry {
   definitiveKey?: string;
@@ -270,8 +282,9 @@ interface RescueEntry {
 export class RescueMemory {
   readonly #entries = new Map<string, RescueEntry>();
   readonly #nowMs: () => number;
+  readonly #untracked = new Map<string, { relativePath: string; since: Map<string, number> }>();
   #lastResendMs: number;
-  constructor(nowMs: () => number = Date.now) {
+  constructor(nowMs: () => number = () => Date.now()) {
     this.#nowMs = nowMs;
     this.#lastResendMs = nowMs();
   }
@@ -281,6 +294,47 @@ export class RescueMemory {
     if (now - this.#lastResendMs < RESCUE_RESEND_AFTER_MS) return false;
     this.#lastResendMs = now;
     return true;
+  }
+  /** 作業ツリーの未追跡の名前を、初めて見た時刻つきで覚える。消えた名前は忘れ、残っている名前の時刻は保つ。 */
+  noteUntracked(repoRoot: string, relativePath: string, names: readonly string[]): void {
+    if (names.length === 0) {
+      this.#untracked.delete(repoRoot);
+      return;
+    }
+    const now = this.#nowMs();
+    const previous = this.#untracked.get(repoRoot)?.since;
+    const since = new Map<string, number>();
+    for (const name of names) {
+      const known = previous?.get(name);
+      if (known !== undefined) since.set(name, known);
+    }
+    for (const name of names) {
+      if (since.size >= UNTRACKED_TRACKED_NAMES_LIMIT) break;
+      if (!since.has(name)) since.set(name, now);
+    }
+    this.#untracked.set(repoRoot, { relativePath, since });
+  }
+  /** 今回列挙されなかった作業ツリーの記録を消す。 */
+  retainUntracked(repoRoots: ReadonlySet<string>): void {
+    for (const root of [...this.#untracked.keys()]) {
+      if (!repoRoots.has(root)) this.#untracked.delete(root);
+    }
+  }
+  /** 初出から thresholdMs 以上経った未追跡の名前を持つ作業ツリーを返す。 */
+  staleUntracked(thresholdMs: number): StaleUntrackedTree[] {
+    const now = this.#nowMs();
+    const result: StaleUntrackedTree[] = [];
+    for (const { relativePath, since } of this.#untracked.values()) {
+      const stale = [...since].filter(([, at]) => now - at >= thresholdMs);
+      if (stale.length === 0) continue;
+      result.push({
+        relativePath,
+        count: stale.length,
+        paths: stale.slice(0, STALE_UNTRACKED_PATHS_LIMIT).map(([name]) => clipPath(name)),
+        oldestSinceMs: Math.min(...stale.map(([, at]) => at)),
+      });
+    }
+    return result;
   }
   entry(repoRoot: string): RescueEntry {
     let entry = this.#entries.get(repoRoot);
@@ -377,7 +431,9 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
   );
   const reports: RescueWorktree[] = [];
   const resend = options.memory.takeResend();
+  const seenRoots = new Set<string>();
   for (const tree of listed.worktrees) {
+    seenRoots.add(tree.repoRoot);
     if (options.signal?.aborted === true) break;
     try {
       const report = await rescueOne(tree.repoRoot, tree.relativePath, options, resend);
@@ -400,6 +456,7 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
       }
     }
   }
+  if (!isAborted(options.signal)) options.memory.retainUntracked(seenRoots);
   return reports;
 }
 
@@ -539,6 +596,8 @@ async function rescueOne(
         ...itaNames,
         ...(ok(untrackedResult) ? untrackedResult.stdout.split('\0').filter((n) => n !== '') : []),
       ];
+      // 取れたときだけ記録する（失敗では記録を変えない）。報告が省かれる周期でも更新される
+      if (ok(untrackedResult)) options.memory.noteUntracked(repoRoot, relativePath, names);
       if (names.length > 0) {
         untracked = {
           count: names.length,

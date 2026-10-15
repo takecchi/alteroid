@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,8 +11,9 @@ import { runnerEventSchema } from './runner-protocol.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-function fakeSdk(): typeof sdkQuery {
-  return ((params: { prompt: AsyncIterable<unknown> }) => {
+function fakeSdk(captured: Options[] = []): typeof sdkQuery {
+  return ((params: { prompt: AsyncIterable<unknown>; options?: Options }) => {
+    captured.push(params.options ?? {});
     let finish: (() => void) | null = null;
     async function* generate(): AsyncGenerator<SDKMessage, void> {
       yield {
@@ -76,7 +77,10 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-function setup(rescueIntervalMs: number): { host: RunnerHost; events: RunnerEvent[] } {
+function setup(
+  rescueIntervalMs: number,
+  captured: Options[] = [],
+): { host: RunnerHost; events: RunnerEvent[] } {
   const events: RunnerEvent[] = [];
   const credentials = createCredentialStore({
     dir: path.join(root, 'cred'),
@@ -86,7 +90,7 @@ function setup(rescueIntervalMs: number): { host: RunnerHost; events: RunnerEven
     runnerId: 'runner-1266r',
     workspacePath: repo,
     emit: (event) => events.push(event),
-    queryFn: fakeSdk(),
+    queryFn: fakeSdk(captured),
     env: { ...GIT_ENV },
     credentials,
     readCgroupEventCountersFn: async () => ({}),
@@ -145,6 +149,53 @@ describe('走行中の退避 ref の配線（Issue #1266）', () => {
     expect(g(bare, 'show', `${found[0]?.worktrees[0]?.pushed?.ref as string}:a.txt`)).toBe(
       'edited at shutdown\n',
     );
+  });
+});
+
+describe('30 分以上残っている未追跡のファイルの知らせ（#4863 案C）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const bash = {
+    hook_event_name: 'PostToolUse',
+    tool_name: 'Bash',
+    tool_input: { command: 'ls' },
+    tool_response: { stdout: '', stderr: '' },
+  };
+  const contextOf = (result: unknown): string | undefined =>
+    (result as { hookSpecificOutput?: { additionalContext?: string } }).hookSpecificOutput
+      ?.additionalContext;
+
+  it('初出から 30 分たつと、担当本人と作業者の道具の結果に添え、担当本人の回だけ日誌へ note を残す', async () => {
+    await writeFile(path.join(repo, 'drawing.png'), 'x');
+    const captured: Options[] = [];
+    const { host, events } = setup(40, captured);
+    await host.start({ managerId: 'mgr-4863', request: '依頼', cwd: repo });
+    const fire = (extra: Record<string, unknown> = {}) => {
+      const hook = captured[0]?.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+      return hook({ ...bash, ...extra } as never, undefined, {
+        signal: new AbortController().signal,
+      });
+    };
+
+    // 記録は退避の周期で付く。最初の報告が届いた時点で付いている
+    await vi.waitFor(() => expect(rescueEvents(events)).toHaveLength(1), { timeout: 5000 });
+    expect(contextOf(await fire())).toBeUndefined();
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 31 * 60_000);
+
+    const own = contextOf(await fire());
+    expect(own).toContain('30 分以上 commit されていない未追跡のファイルがある');
+    expect(own).toContain('drawing.png');
+    const byWorker = contextOf(await fire({ agent_id: 'agent-1', agent_type: 'worker' }));
+    expect(byWorker).toContain('drawing.png');
+    expect(contextOf(await fire())).toBeUndefined();
+    expect(
+      events.filter((e) => e.type === 'note' && e.text.includes('未追跡のファイルがある')),
+    ).toHaveLength(1);
   });
 });
 

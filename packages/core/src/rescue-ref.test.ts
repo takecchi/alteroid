@@ -18,6 +18,8 @@ import {
   resolveRescueIntervalMs,
   runRescue,
   secretLikeAdditionsInDiff,
+  UNTRACKED_STALE_AFTER_MS,
+  UNTRACKED_TRACKED_NAMES_LIMIT,
 } from './rescue-ref.js';
 import { secretPatternsInBody } from './redact.js';
 import type { ProcessSpawnFn } from './unpushed-work.js';
@@ -541,6 +543,25 @@ describe('退避 ref（#1266）', () => {
     expect(again[0]?.pushed?.ref).toBeDefined();
   });
 
+  it('#4863: 報告が省かれる周期でも、未追跡の初出時刻は保たれ、消えた名前は忘れる', async () => {
+    await writeFile(path.join(repo, 'a.txt'), 'changed\n');
+    await writeFile(path.join(repo, 'old.png'), 'x');
+    let nowMs = 1_000_000;
+    const memory = new RescueMemory(() => nowMs);
+    expect(await run({}, memory)).toHaveLength(1);
+    nowMs += 60_000;
+    // 変わらないので報告は省かれるが、記録は初出のまま残る
+    expect(await run({}, memory)).toEqual([]);
+    nowMs += 29 * 60_000;
+    expect(memory.staleUntracked(UNTRACKED_STALE_AFTER_MS)).toMatchObject([
+      { count: 1, paths: ['old.png'], oldestSinceMs: 1_000_000 },
+    ]);
+    // 消えたら、次の周期で記録からも消える
+    await rm(path.join(repo, 'old.png'));
+    await run({}, memory);
+    expect(memory.staleUntracked(0)).toEqual([]);
+  });
+
   it('退避 ref の名前は git の ref として正しい', () => {
     for (const rel of ['.', 'a b/c', '日本語/x', '../../etc', '/tmp/x.lock']) {
       const name = rescueRefName(managerId, '/tmp/x', rel);
@@ -663,5 +684,83 @@ describe('RescueListNotice — 退避の列挙の打ち切りの知らせを繰�
     expect(notice.next(undefined)).toBeUndefined();
     expect(notice.next({ truncatedAtCount: 20 })).toContain('20 本で探すのを打ち切った');
     expect(notice.next({ unreadable: 'EACCES' })).toContain('起点が読めなかった（EACCES）');
+  });
+});
+
+describe('RescueMemory の未追跡の初出時刻（#4863 案C）', () => {
+  const MIN = 60_000;
+
+  it('初出時刻を保ち、消えた名前は忘れ、閾値ちょうどから古いとみなす', () => {
+    let now = 0;
+    const memory = new RescueMemory(() => now);
+    memory.noteUntracked('/r', 'r', ['a', 'b']);
+    now = 10 * MIN;
+    memory.noteUntracked('/r', 'r', ['b', 'c']);
+    now = 30 * MIN - 1;
+    expect(memory.staleUntracked(UNTRACKED_STALE_AFTER_MS)).toEqual([]);
+    now = 30 * MIN;
+    expect(memory.staleUntracked(UNTRACKED_STALE_AFTER_MS)).toEqual([
+      { relativePath: 'r', count: 1, paths: ['b'], oldestSinceMs: 0 },
+    ]);
+    now = 40 * MIN;
+    expect(memory.staleUntracked(UNTRACKED_STALE_AFTER_MS)[0]).toMatchObject({
+      count: 2,
+      paths: ['b', 'c'],
+    });
+  });
+
+  it('名前が 0 件ならその木の記録を消す。再び現れたら初出は今', () => {
+    let now = 0;
+    const memory = new RescueMemory(() => now);
+    memory.noteUntracked('/r', 'r', ['a']);
+    memory.noteUntracked('/r', 'r', []);
+    now = 99 * MIN;
+    memory.noteUntracked('/r', 'r', ['a']);
+    expect(memory.staleUntracked(MIN)).toEqual([]);
+  });
+
+  it('古い名前は先頭 5 件だけパスに出し、件数は全部数える', () => {
+    let now = 0;
+    const memory = new RescueMemory(() => now);
+    memory.noteUntracked(
+      '/r',
+      'r',
+      Array.from({ length: 7 }, (_, i) => `f${String(i)}`),
+    );
+    now = 30 * MIN;
+    expect(memory.staleUntracked(UNTRACKED_STALE_AFTER_MS)[0]).toMatchObject({
+      count: 7,
+      paths: ['f0', 'f1', 'f2', 'f3', 'f4'],
+    });
+  });
+
+  it('覚える名前は上限まで。超える分は新しく足さず、既存は保つ', () => {
+    let now = 0;
+    const memory = new RescueMemory(() => now);
+    memory.noteUntracked('/r', 'r', ['keep']);
+    now = 40 * MIN;
+    const many = [
+      'keep',
+      ...Array.from({ length: UNTRACKED_TRACKED_NAMES_LIMIT + 50 }, (_, i) => `n${String(i)}`),
+    ];
+    memory.noteUntracked('/r', 'r', many);
+    // 今回足された名前は初出が今なので古くない。古いのは既存の keep だけ
+    expect(memory.staleUntracked(UNTRACKED_STALE_AFTER_MS)[0]).toMatchObject({ count: 1 });
+    now = 80 * MIN;
+    expect(memory.staleUntracked(UNTRACKED_STALE_AFTER_MS)[0]).toMatchObject({
+      count: UNTRACKED_TRACKED_NAMES_LIMIT,
+    });
+  });
+
+  it('retainUntracked は渡されなかった木の記録を消す', () => {
+    let now = 0;
+    const memory = new RescueMemory(() => now);
+    memory.noteUntracked('/a', 'a', ['x']);
+    memory.noteUntracked('/b', 'b', ['y']);
+    memory.retainUntracked(new Set(['/b']));
+    now = 30 * MIN;
+    expect(memory.staleUntracked(UNTRACKED_STALE_AFTER_MS).map((t) => t.relativePath)).toEqual([
+      'b',
+    ]);
   });
 });
