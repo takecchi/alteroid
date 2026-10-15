@@ -1647,15 +1647,18 @@ class Host implements RunnerHost {
 
   async stop(managerId: string, options: { keepPeers?: boolean } = {}): Promise<void> {
     // 鍵の付け替えのためでない停止（人間・クローンが止めた）では、前に預かった peer も閉じる（#4734）
-    if (options.keepPeers !== true) {
-      await this.#closeParkedPeers(managerId, 'stopped', '人間・クローンが止めた');
-    }
-    await this.#sessions
+    // 預けた peer を閉じ終えるのを待ってからセッションを止めない: 間に待ちが挟まると「止めると決めた」印が立つ前に子が終わり、止め方どおりの SIGTERM を異常終了と言うため（#4488）。止める指示を先に出し、閉じるのは並べて待つ
+    const closingParked =
+      options.keepPeers !== true
+        ? this.#closeParkedPeers(managerId, 'stopped', '人間・クローンが止めた')
+        : Promise.resolve();
+    const stopping = this.#sessions
       .get(managerId)
       ?.stop(
         'デーモンから停止を指示された。',
         options.keepPeers === true ? { keepPeers: true } : {},
       );
+    await Promise.all([closingParked, stopping]);
   }
 
   #parkPeers(managerId: string, parked: ParkedPeers): void {
