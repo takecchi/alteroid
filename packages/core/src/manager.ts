@@ -3494,12 +3494,27 @@ class Pool implements ManagerPool {
    * そこで先頭に入れてしまうと、拒否のつもりの一言が別の質問の答えになる。
    * 待ちが1件のときも同じである（`#choosePending` の doc）。
    */
-  send(
+  async send(
     managerId: string,
     message: string,
     options: ManagerSendOptions = {},
   ): Promise<ManagerSendResult> {
-    return this.#send(managerId, message, options, 'caller');
+    const result = await this.#send(managerId, message, options, 'caller');
+    // 送ることは止めず、送った側へ注意だけを足す（#4877）: 前任を手で起こすのはクローンの選択でありうるが、黙って起こすと後継と二重に走るため。内部の送り（鍵の回転・預かりの届け直し）は `#send` を直に呼ぶので足さない
+    const successor = this.#records.get(managerId)?.job.supersededBy;
+    if (
+      successor === undefined ||
+      result.outcome === 'unknown' ||
+      result.outcome === 'unreadable'
+    ) {
+      return result;
+    }
+    return {
+      ...result,
+      detail:
+        `${result.detail}\n⚠ ${managerId} は後継 ${successor} へ引き継いである前任である。` +
+        '前任が起きると、後継と同じ仕事を二重に進めうる。続きを頼むなら、普通は後継へ送ること。',
+    };
   }
 
   /**
