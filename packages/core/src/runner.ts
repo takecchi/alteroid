@@ -4035,7 +4035,11 @@ class RunnerSession {
       return { kind: 'no-retry' };
     }
 
-    const inputHead = buildDenialInputHead(record.toolInput, this.#env);
+    const inputHead = buildDenialInputHead(
+      record.toolInput,
+      this.#env,
+      Object.values(this.#credentials?.values() ?? {}),
+    );
     const permitKey = oneShotAllowKey(
       oneShotActorOf(this.#id, record),
       toolName,
@@ -4411,7 +4415,11 @@ class RunnerSession {
   // 生の入力を保持しない（伏せ字済みの先頭だけ）: 忘れるまでの間ずっと鍵が入りうる文字列を抱え、`onForget` の日誌行へ滲み出る経路も増えるため
   #capturePreToolInputHead(record: AgentPreToolRecord): void {
     if (record.toolUseId === undefined) return;
-    const preview = buildDenialInputHead(record.toolInput, this.#env);
+    const preview = buildDenialInputHead(
+      record.toolInput,
+      this.#env,
+      Object.values(this.#credentials?.values() ?? {}),
+    );
     if (preview === undefined) return;
     this.#preToolInputHeads.set(record.toolUseId, preview);
   }

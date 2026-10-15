@@ -24,13 +24,23 @@ function isSecretEnvName(name: string): boolean {
 // 短い値を渡さない: redactEnvSecrets は長さの下限が無く、`LANG=C` のような値まで置換して出力が `[REDACTED]` だらけになるため
 const SECRET_ENV_VALUE_MIN_LENGTH = 8;
 
-function redactSecretEnvValues(text: string, env: NodeJS.ProcessEnv | undefined): string {
-  if (env === undefined) return text;
+// `alwaysSecretValues` は名前の判定を通さずに伏せる: 資格の正本は名前と値しか降りず「秘密か」の印が無いため、`DB_PASS` のような名前の値が取りこぼされる。8字未満を除く扱いは env と同じ
+function redactSecretEnvValues(
+  text: string,
+  env: NodeJS.ProcessEnv | undefined,
+  alwaysSecretValues: Iterable<string> = [],
+): string {
   const candidates: NodeJS.ProcessEnv = {};
-  for (const [name, value] of Object.entries(env)) {
+  for (const [name, value] of Object.entries(env ?? {})) {
     if (!isSecretEnvName(name)) continue;
     if (typeof value !== 'string' || value.length < SECRET_ENV_VALUE_MIN_LENGTH) continue;
     candidates[name] = value;
+  }
+  let index = 0;
+  for (const value of alwaysSecretValues) {
+    if (value.length < SECRET_ENV_VALUE_MIN_LENGTH) continue;
+    candidates[`__ALWAYS_SECRET_${index}`] = value;
+    index += 1;
   }
   return redactEnvSecrets(text, candidates);
 }
@@ -197,8 +207,12 @@ function redactKnownSecretPatterns(text: string): string {
   return result;
 }
 
-export function redactSecretsInText(text: string, env: NodeJS.ProcessEnv | undefined): string {
-  return redactKnownSecretPatterns(redactSecretEnvValues(text, env));
+export function redactSecretsInText(
+  text: string,
+  env: NodeJS.ProcessEnv | undefined,
+  alwaysSecretValues?: Iterable<string>,
+): string {
+  return redactKnownSecretPatterns(redactSecretEnvValues(text, env, alwaysSecretValues));
 }
 
 // 40桁の SHA と英数字混在の長い塊を伏せない: コミットの sha・UUID・枝名が化けると報告や日誌が観測として使えなくなるため
@@ -262,10 +276,11 @@ function sortKeysDeep(value: unknown): unknown {
 export function buildDenialInputHead(
   toolInput: unknown,
   env: NodeJS.ProcessEnv | undefined,
+  alwaysSecretValues?: Iterable<string>,
 ): string | undefined {
   const raw = rawLineOf(toolInput);
   if (raw === undefined) return undefined;
-  const redacted = redactSecretsInText(raw, env);
+  const redacted = redactSecretsInText(raw, env, alwaysSecretValues);
   return redacted.length > DENIAL_INPUT_HEAD_LIMIT
     ? `${redacted.slice(0, codePointBoundary(redacted, DENIAL_INPUT_HEAD_LIMIT))}${TRUNCATION_MARK}`
     : redacted;
