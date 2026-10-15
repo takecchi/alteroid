@@ -63,6 +63,11 @@ export const runnerManagerStateSchema = z.object({
    * 背景処理を抱えた古い runner のセッションを黙って畳むため。
    */
   liveBackgroundTasks: z.number().int().nonnegative().optional(),
+  /**
+   * 起こしっぱなしの背景処理のうち、コマンドを控えられたものの字面（伏せ字にする前の生）。本数より少ないことがある（作業者の背景処理・peer・控えが枝刈りされたもの）。
+   * `undefined` は「分からない」（古い runner）で、空配列は「控えが無い」。畳んだ背景処理を担当が起こし直せるよう、デーモンが伏せ字にして一言に載せる（#4850）。
+   */
+  backgroundTaskCommands: z.array(z.string()).optional(),
   /** `undefined` は「分からない」。デーモンは断らず、流して世代は書かない（再起動後の done へ送れなくなるため）。 */
   tokenFingerprint: z.string().optional(),
   /**

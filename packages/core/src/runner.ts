@@ -2194,6 +2194,10 @@ class RunnerSession {
         ? {}
         : { sessionId: this.#resumeState.sessionId }),
       liveBackgroundTasks: this.#liveBackgroundTasks().length,
+      backgroundTaskCommands: this.#liveBackgroundTasks().flatMap((task) => {
+        const command = this.#stopState.backgroundTaskCommand(task.id);
+        return command === undefined ? [] : [command];
+      }),
       ...(this.#tokenFingerprint === undefined ? {} : { tokenFingerprint: this.#tokenFingerprint }),
       classifierDenials: this.#denialStreaks.overLimit(),
     };
