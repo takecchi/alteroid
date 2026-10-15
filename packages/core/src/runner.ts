@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, chownSync, mkdirSync, statSync } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { chmodSync, chownSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join as joinPath } from 'node:path';
 
@@ -3229,11 +3229,11 @@ class RunnerSession {
     }
   }
 
-  // 非同期（#4906）: 報告のたびに通り、同一プロセスの runner ではデーモンのメインのループ上で走る
-  async #outboxHasEntries(): Promise<boolean> {
+  // 同期のままにする（#4906）: 見るのは担当ごとの小さな出し箱の直下1つだけで、ループを止める重さではない。非同期にすると、報告が出る時機が実際の I/O の待ちに左右されるため
+  #outboxHasEntries(): boolean {
     if (this.#outboxDir === undefined) return false;
     try {
-      return (await readdir(this.#outboxDir)).length > 0;
+      return readdirSync(this.#outboxDir).length > 0;
     } catch {
       return false;
     }
@@ -3669,7 +3669,7 @@ class RunnerSession {
         // 取り込みの `await` より前に1回だけ読む: 背景の peer はこの間にも止まりうるので、取り込みの前後で別の一覧を見ないため
         const liveBackground = this.#liveBackgroundTasks();
         // 出し箱が空なら `await` を挟まない: 余計な yield が報告の出る順序（と、それを前提にした観測）を変えるため
-        const outbox = (await this.#outboxHasEntries()) ? await this.#collectOutbox() : {};
+        const outbox = this.#outboxHasEntries() ? await this.#collectOutbox() : {};
         this.#sdkSession.setStatus(this.#pending.length > 0 ? 'waiting_human' : 'done');
         if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
         // 3条件（失敗でない・`done`・背景処理が在る）が揃うときだけ載せる、欠けたら配る側へ倒す: 上限・拒否や確認待ちを黙って畳むと人間の判断が止まるため
@@ -3999,7 +3999,7 @@ class RunnerSession {
   // 出し箱に残っている成果物もここで取り込んで添える（#4675）: 取り込みは `result` の報告の直前にしか無く、畳まれた担当の出し箱は `#onClosed` が消すため。
   // 取り込んだファイルは退避先へ移るので、`#onClosed` の後もデーモンが取りに来られる。本文が無くても、ファイルがあれば報告を出す
   async #flushUnreported(reason: string, status: JobStatus): Promise<void> {
-    const outbox = (await this.#outboxHasEntries()) ? await this.#collectOutbox() : {};
+    const outbox = this.#outboxHasEntries() ? await this.#collectOutbox() : {};
     const carriesFiles = (outbox.files?.length ?? 0) > 0 || (outbox.rejectedFiles?.length ?? 0) > 0;
     if (!this.#turnTally.hasSaid && !carriesFiles) return;
     const { said, reportId } = this.#turnTally.hasSaid
