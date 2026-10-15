@@ -828,7 +828,7 @@ describe('ManagerPool#settleStalledUsageWakes — report/closed を二度と出�
     expect(s.fake.sends).toHaveLength(0);
   });
 
-  it('空振り（send() が届かない）のとき、借りは下りるが印は残る（次の鍵の回転が拾い直す）', async () => {
+  it('空振り（send() が届かない）のとき、借りは下りるが印は残り、掃きが間隔を置いて挑み直す（#4850）', async () => {
     const s = await setupWithClock();
     s.fake.push(reached());
     await settle();
@@ -851,12 +851,19 @@ describe('ManagerPool#settleStalledUsageWakes — report/closed を二度と出�
     expect(mid[0]?.usageStoppedAt).toBeDefined();
     expect(mid[0]?.status).toBe('running');
 
+    // 間隔が経つ前の掃きは挑まない（届かない状態が続いても叩き続けない）
     const again = await s.pool.settleStalledUsageWakes();
     expect(again).toEqual([]);
     expect(s.fake.sends).toHaveLength(0);
 
-    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+    // 旧い期待は「空振りの後は二度と掃きが拾わない」だった。新しい意図: 1分後に挑み直し、また届かなければ間隔は2分になる
+    s.advance(60_000);
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+    s.advance(60_000);
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+
     s.fake.behavior.sendMode = 'ok';
+    s.advance(60_000);
     const recovered = await s.pool.settleStalledUsageWakes();
 
     expect(recovered).toEqual(['mgr-usage']);
