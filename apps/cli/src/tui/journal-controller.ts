@@ -85,6 +85,9 @@ export class JournalController {
   readonly store = new Store<JournalState>(initialJournalState);
   private gen = 0;
   private pending: JournalEntry[] = [];
+  // 取り直しの最中は SSE の新着を窓へ積まず `pending` に控える（#4836）: 積むと窓の先頭が進み、間の行が新着の手前に挟まって並びが崩れる。
+  // 世代（`gen`）が変わったら 0 へ戻す: 古い取り直しが後から数を触らないように
+  private refreshing = 0;
   private olderCursor: PageCursor | null | undefined = undefined;
   private detachers: (() => void)[] = [];
 
@@ -130,6 +133,7 @@ export class JournalController {
     const gen = ++this.gen;
     const { types, q, pageSize } = this.store.getSnapshot();
     this.pending = [];
+    this.refreshing = 0;
     this.olderCursor = undefined;
     this.patch({
       status: 'loading',
@@ -256,36 +260,79 @@ export class JournalController {
     }
   }
 
+  // Web の `refreshNewerAt`（#4577）と同じ形: `since`（窓の先頭の at）を保ったまま、`next` が null になるまで継続点で読み進める。
+  // 1頁で止めると、切れていた間に頁を超えて溜まった行のうち窓の先頭との間が黙って欠ける
   async refreshNewer(): Promise<void> {
     const s = this.store.getSnapshot();
     if (s.status !== 'ready') return;
     const gen = this.gen;
-    let limit = s.pageSize;
+    this.refreshing += 1;
     try {
-      for (;;) {
-        const current = this.store.getSnapshot();
-        const query = newerPageQuery([...current.entries]);
-        if (query === undefined) return;
+      await this.refreshNewerAt(gen, s.pageSize);
+    } catch (error) {
+      if (gen !== this.gen) return;
+      this.patch({ error: messageOf(error), newerFailed: true });
+    } finally {
+      // 済んだら（落ちたときも）控えた新着を積む: 取り直しの結果に含まれる行は `mergeFront` の id の重複除けで落ちる
+      if (gen === this.gen) {
+        this.refreshing -= 1;
+        if (this.refreshing === 0) this.flushPending();
+      }
+    }
+  }
+
+  private async refreshNewerAt(gen: number, startLimit: number): Promise<void> {
+    let limit = startLimit;
+    for (;;) {
+      const current = this.store.getSnapshot();
+      const query = newerPageQuery([...current.entries]);
+      if (query === undefined) return;
+      const first = await this.api.listJournal({
+        limit,
+        types: current.types,
+        q: current.q,
+        ...query,
+      });
+      if (gen !== this.gen) return;
+      const rows = [...first.entries];
+      let next = first.next;
+      while (next !== undefined && next !== null) {
         const page = await this.api.listJournal({
           limit,
           types: current.types,
           q: current.q,
           ...query,
+          afterId: next.id,
+          afterAt: next.at,
         });
         if (gen !== this.gen) return;
-        const latest = this.store.getSnapshot();
-        const applied = applyNewerPage([...latest.entries], [...page.entries], limit);
-        if (applied.outcome === 'retryLarger') {
-          limit = JOURNAL_MAX_LIMIT;
-          continue;
-        }
-        this.setEntries(applied.entries, { newerBlocked: applied.outcome === 'blocked' });
-        return;
+        rows.push(...page.entries);
+        next = page.next;
       }
-    } catch (error) {
-      if (gen !== this.gen) return;
-      this.patch({ error: messageOf(error), newerFailed: true });
+      const latest = this.store.getSnapshot();
+      const page = applyNewerPage([...latest.entries], rows, limit);
+      // 継続点を終端まで辿ったなら、新着が無いのは「本当に無い」: 件数で推すのは継続点を返さない古いデーモンのときだけ
+      const applied =
+        first.next !== undefined && page.outcome !== 'progress'
+          ? { ...page, outcome: 'end' as const }
+          : page;
+      if (applied.outcome === 'retryLarger') {
+        limit = JOURNAL_MAX_LIMIT;
+        continue;
+      }
+      this.setEntries(applied.entries, { newerBlocked: applied.outcome === 'blocked' });
+      return;
     }
+  }
+
+  private flushPending(): void {
+    const pending = this.pending;
+    this.pending = [];
+    if (pending.length === 0) return;
+    const s = this.store.getSnapshot();
+    if (s.status !== 'ready') return;
+    const merged = mergeFront([...s.entries], pending);
+    if (merged.freshCount > 0) this.setEntries(merged.entries);
   }
 
   private setEntries(entries: JournalEntry[], extra: Partial<JournalState> = {}): void {
@@ -314,7 +361,7 @@ export class JournalController {
     // 届いた新着にも同じ絞りを掛ける: 掛けないと、絞っている画面へ当たらない行が割り込むため
     if (s.types.length > 0 && !(s.types as readonly string[]).includes(entry.type)) return;
     if (s.q !== '' && !matchesJournalSearch(entry, s.q)) return;
-    if (s.status === 'loading') {
+    if (s.status === 'loading' || this.refreshing > 0) {
       this.pending = mergeFront(this.pending, [entry]).entries;
       return;
     }
@@ -326,6 +373,7 @@ export class JournalController {
   setFilter(types: readonly JournalType[], q: string, pageSize?: number): void {
     this.gen += 1;
     this.pending = [];
+    this.refreshing = 0;
     this.olderCursor = undefined;
     this.patch({
       types,
