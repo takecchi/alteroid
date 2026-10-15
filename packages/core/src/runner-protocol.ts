@@ -1028,6 +1028,24 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     answered: z.boolean().optional(),
   }),
   /**
+   * 鍵の付け替えで預けた peer を、担当へ引き継がないまま閉じた（期限・人が止めた・同じ担当の預かり直し・器を畳む。#4885）。
+   * 背景で走っていたターンは途中で終わっており、担当はそれを知らないので、デーモンが担当の次の起こし直しに添えるかクローンへ知らせる。
+   * `interrupted` は止まりどころの抜粋（伏せ字済み・字数を切ってある）。背景ターンが無かった peer には付かない。
+   * 判定は `reason` の欄で行い、`note.text` の文言では行わない。
+   */
+  z.object({
+    type: z.literal('parked_peers_closed'),
+    managerId: z.string(),
+    reason: z.enum(['expired', 'stopped', 'replaced', 'shutdown']),
+    peers: z.array(
+      z.object({
+        id: z.string(),
+        provider: z.string(),
+        interrupted: z.string().optional(),
+      }),
+    ),
+  }),
+  /**
    * `usage` とは別のイベントにする: peer のセッションは基準が別で、マネージャー本体の累積と混ぜると差分が嘘になるため、
    * runner が peer セッションごとの基準で差分にしてから降ろし、デーモンはそのまま積む（`accumulation: 'oneshot'`）。
    * `unmetered` は provider が消費を報告しないターンで、値の行は作らず「取れなかった」と数える。

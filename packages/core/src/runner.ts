@@ -109,6 +109,7 @@ import { fingerprintOf, ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { compareCodeUnits } from './code-unit-order.js';
 import { subreapedProcess, underSubreaper } from './delegation-subreaper.js';
+import { redactSecretsInText } from './denial-input-head.js';
 import { codePointBoundary, excerptLine } from './excerpt.js';
 import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
 import type { McpServers } from './mcp-servers.js';
@@ -683,6 +684,8 @@ class Host implements RunnerHost {
     string,
     { parked: ParkedPeers; timer: ReturnType<typeof setTimeout> }
   >();
+  // 預けた peer を閉じている最中の仕事（#4885）。器を畳むときに待つ
+  readonly #closingPeers = new Set<Promise<unknown>>();
   readonly #generations = new WeakMap<RunnerSession, string>();
   readonly #attachmentsRoot: string;
   readonly #attachmentRemovals = new Map<string, Promise<void>>();
@@ -1644,21 +1647,27 @@ class Host implements RunnerHost {
 
   async stop(managerId: string, options: { keepPeers?: boolean } = {}): Promise<void> {
     // 鍵の付け替えのためでない停止（人間・クローンが止めた）では、前に預かった peer も閉じる（#4734）
-    if (options.keepPeers !== true) this.#closeParkedPeers(managerId, '人間・クローンが止めた');
-    await this.#sessions
+    // 預けた peer を閉じ終えるのを待ってからセッションを止めない: 間に待ちが挟まると「止めると決めた」印が立つ前に子が終わり、止め方どおりの SIGTERM を異常終了と言うため（#4488）。止める指示を先に出し、閉じるのは並べて待つ
+    const closingParked =
+      options.keepPeers !== true
+        ? this.#closeParkedPeers(managerId, 'stopped', '人間・クローンが止めた')
+        : Promise.resolve();
+    const stopping = this.#sessions
       .get(managerId)
       ?.stop(
         'デーモンから停止を指示された。',
         options.keepPeers === true ? { keepPeers: true } : {},
       );
+    await Promise.all([closingParked, stopping]);
   }
 
   #parkPeers(managerId: string, parked: ParkedPeers): void {
     // 前に預かった分が残っていれば閉じる: 同じ担当の peer が2組あると、どちらを付け替えるか決められないため
-    this.#closeParkedPeers(managerId, '同じ担当の peer を預かり直した');
+    void this.#closeParkedPeers(managerId, 'replaced', '同じ担当の peer を預かり直した');
     const timer = setTimeout(() => {
-      this.#closeParkedPeers(
+      void this.#closeParkedPeers(
         managerId,
+        'expired',
         `鍵の付け替えで畳んだ担当が ${String(PEER_PARK_TTL_MS / 60_000)} 分戻らなかった`,
       );
     }, PEER_PARK_TTL_MS);
@@ -1679,10 +1688,32 @@ class Host implements RunnerHost {
     return entry.parked;
   }
 
-  #closeParkedPeers(managerId: string, reason: string): void {
+  /** 閉じ終えるまで（閉じた後に届く背景ターンの止まりどころも）集めてから、デーモンへ `parked_peers_closed` を運ぶ（#4885）。 */
+  #closeParkedPeers(
+    managerId: string,
+    kind: 'expired' | 'stopped' | 'replaced' | 'shutdown',
+    reason: string,
+  ): Promise<void> {
     const parked = this.#takeParkedPeers(managerId);
-    if (parked === undefined) return;
-    closeParkedPeers(parked, reason, (text) => this.#emit({ type: 'note', managerId, text }));
+    if (parked === undefined) return Promise.resolve();
+    const closing = closeParkedPeers(parked, reason, (text) =>
+      this.#emit({ type: 'note', managerId, text }),
+    ).then((closed) => {
+      if (closed.length === 0) return;
+      this.#emit({
+        type: 'parked_peers_closed',
+        managerId,
+        reason: kind,
+        peers: closed.map((peer) => ({
+          id: peer.id,
+          provider: peer.provider,
+          ...(peer.interrupted === undefined ? {} : { interrupted: peer.interrupted }),
+        })),
+      });
+    });
+    this.#closingPeers.add(closing);
+    void closing.finally(() => this.#closingPeers.delete(closing));
+    return closing;
   }
 
   list(): RunnerManagerState[] {
@@ -1756,8 +1787,10 @@ class Host implements RunnerHost {
     // 終わった担当の退避も待つ（#4789）: 上で止めた担当の分も、それより前に終わった担当の分もここに積まれている
     await Promise.all([...this.#closeRescues]);
     for (const managerId of [...this.#parkedPeers.keys()]) {
-      this.#closeParkedPeers(managerId, '器を畳む');
+      void this.#closeParkedPeers(managerId, 'shutdown', '器を畳む');
     }
+    // 閉じた後に届く背景ターンの止まりどころも待つ（#4885）: 待たずに返すと、知らせを運ぶ前に出口が閉じる
+    await Promise.all([...this.#closingPeers]);
     // 予約済みの plugin の片づけ（retainPlugins の投げっぱなし）を待つ: 待たずに返すと、畳んだ後にも展開先を消し続け、呼び手の後片づけと競合するため
     await this.#pluginsChain;
     // セッションを畳んだ後に閉じる: 先に閉じると、畳みの途中の peer の中継が切れるため
@@ -1857,6 +1890,8 @@ interface PeerBinding {
   parked: boolean;
   heldAsks: { run: () => void; deny: (message: string) => void }[];
   heldStops: PeerTurnResult[];
+  // 預けた peer を閉じている間だけ立つ（#4885）: 閉じた後に届く止まりどころを `heldStops`（もう誰も読まない）へ積まず、ここへ集める
+  collectStop?: (result: PeerTurnResult) => void;
 }
 
 /** 畳んだセッションから預かった peer（#4734）。host が持ち、同じ担当の resume で新しいセッションへ渡す。 */
@@ -1866,23 +1901,82 @@ export interface ParkedPeers {
 }
 
 /** 預かった peer を閉じる（担当が戻らなかった・人が止めた・器を畳む）。預かっていた確認は理由を付けて断り、背景の止まりどころは知らせに残す。 */
-export function closeParkedPeers(
+export async function closeParkedPeers(
   parked: ParkedPeers,
   reason: string,
   note: (text: string) => void,
-): void {
+): Promise<ClosedParkedPeer[]> {
   const { binding, broker } = parked;
   for (const ask of binding.heldAsks.splice(0)) {
     ask.deny(`peer のマネージャーが戻らないので断った（${reason}）`);
   }
+  const closed = new Map<string, ClosedParkedPeer>();
+  for (const session of broker.sessionList()) {
+    closed.set(session.id, { id: session.id, provider: session.provider });
+  }
+  const record = (result: PeerTurnResult): void => {
+    closed.set(result.sessionId, {
+      id: result.sessionId,
+      provider: result.provider,
+      interrupted: excerptLine(
+        redactSecretsInText(
+          result.pendingApproval === undefined
+            ? result.text
+            : `確認待ちで止まっていた: ${result.pendingApproval.toolName} ${result.pendingApproval.summary}`,
+          undefined,
+        ),
+        PARKED_PEER_STOP_EXCERPT_CHARS,
+      ),
+    });
+  };
   for (const result of binding.heldStops.splice(0)) {
     note(
       `背景の peer（${result.provider}）[${result.sessionId}] の止まりどころを届けられないまま閉じた（${reason}）: ${describePeerTurnResult(result)}`,
     );
+    record(result);
   }
+  // 閉じるとき走っていた背景ターンは、閉じた後に止まりどころが届く（`readEvents` が終わる → ターンが終わる → `onBackgroundStop`）。
+  // それを `heldStops` へ積ませず、届くまで待って集める（#4885）
+  const awaiting = new Set(broker.backgroundTasks().map((task) => task.id.replace(/^peer:/u, '')));
+  let finish = (): void => undefined;
+  const collected = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let done = false;
+  binding.collectStop = (result) => {
+    if (done) {
+      note(
+        `背景の peer（${result.provider}）[${result.sessionId}] の止まりどころが、閉じ終えた後に届いた（${reason}）: ${describePeerTurnResult(result)}`,
+      );
+      return;
+    }
+    record(result);
+    awaiting.delete(result.sessionId);
+    if (awaiting.size === 0) finish();
+  };
   broker.closeAll();
+  if (awaiting.size > 0) {
+    // 止まりどころが届かない相手（読み取りが終わらない）で器の畳みを止めない: 上限で切り、集めた分だけ運ぶ
+    const timer = setTimeout(finish, PARKED_PEER_STOP_COLLECT_MS);
+    timer.unref?.();
+    await collected;
+    clearTimeout(timer);
+  }
+  done = true;
   note(`預かっていた peer のセッションを閉じた（${reason}）`);
+  return [...closed.values()];
 }
+
+export interface ClosedParkedPeer {
+  readonly id: string;
+  readonly provider: string;
+  /** 閉じるとき背景で走っていた（または預かっていた）ターンの止まりどころの抜粋。 */
+  readonly interrupted?: string;
+}
+
+// 止まりどころの抜粋の長さ。畳んだ背景処理のコマンドの字数（`FOLD_NOTICE_COMMAND_CHARS`）より長く、知らせ1通に peer 数ぶん載っても収まる程度
+const PARKED_PEER_STOP_EXCERPT_CHARS = 300;
+const PARKED_PEER_STOP_COLLECT_MS = 5_000;
 
 interface PendingRequest {
   id: string;
@@ -2669,7 +2763,8 @@ class RunnerSession {
         binding.session.#emit({ type: 'note', managerId: binding.session.#id, text }),
       // 背景へ回した peer の止まりどころは、マネージャーへの知らせとして入れて起こす
       onBackgroundStop: (result) => {
-        if (binding.parked) binding.heldStops.push(result);
+        if (binding.collectStop !== undefined) binding.collectStop(result);
+        else if (binding.parked) binding.heldStops.push(result);
         else binding.session.#onPeerBackgroundStop(result);
       },
       // 作業者の長い道具と同じ口に載せる: ホームの稼働状況に、作業者と同じ形で「実行中」を出すため

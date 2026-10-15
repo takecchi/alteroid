@@ -249,6 +249,67 @@ describe('鍵の回転の起こし直しは、背景処理を理由に止めな�
     await s.pool.stop();
   });
 
+  it('⭐ (a5) 預けた peer が期限で閉じられていたら、閉じた peer と途中で終わった背景ターンを起こし直しの文の先頭へ添え、届いたら下ろす（#4885）', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.push({
+      type: 'parked_peers_closed',
+      managerId: 'mgr-fold',
+      reason: 'expired',
+      peers: [
+        { id: 'peer-aaa', provider: 'codex', interrupted: '調査の途中で止まった' },
+        { id: 'peer-bbb', provider: 'codex' },
+      ],
+    });
+    await settle();
+    expect((await s.stores.jobs.listJobs())[0]?.pendingPeerCloseNotice?.peers).toHaveLength(2);
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
+
+    const message = s.fake.resumes[0]?.message ?? '';
+    expect(message).toContain('預けていた peer 2 本を閉じた');
+    expect(message).toContain('codex[peer-aaa]');
+    expect(message).toContain(
+      '走っていた背景ターンは途中で終わった: codex[peer-aaa] 調査の途中で止まった',
+    );
+    expect(message).toContain('peer_run で新しく頼むこと');
+    expect(message.indexOf('預けていた peer')).toBeLessThan(message.indexOf('認証トークン'));
+    // 届いた回で下ろす: 二度添えない
+    expect((await s.stores.jobs.listJobs())[0]?.pendingPeerCloseNotice).toBeUndefined();
+    await s.pool.stop();
+  });
+
+  it('(a6) 背景ターンの無い peer だけでも、閉じたことは添える（途中で終わった背景ターンの節は出さない。#4885）', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.push({
+      type: 'parked_peers_closed',
+      managerId: 'mgr-fold',
+      reason: 'shutdown',
+      peers: [{ id: 'peer-ccc', provider: 'codex' }],
+    });
+    await settle();
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
+
+    const message = s.fake.resumes[0]?.message ?? '';
+    expect(message).toContain('預けていた peer 1 本を閉じた');
+    expect(message).not.toContain('途中で終わった');
+    await s.pool.stop();
+  });
+
+  it('(a7) 人が止めた場合は担当が起こされないので、台帳には預けない（クローンへの知らせだけ。#4885）', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.push({
+      type: 'parked_peers_closed',
+      managerId: 'mgr-fold',
+      reason: 'stopped',
+      peers: [{ id: 'peer-ddd', provider: 'codex', interrupted: '途中' }],
+    });
+    await settle();
+
+    expect((await s.stores.jobs.listJobs())[0]?.pendingPeerCloseNotice).toBeUndefined();
+    await s.pool.stop();
+  });
+
   it('(b) 古い鍵が ready なら、畳まずに旧セッションへ届ける（今どおり）', async () => {
     const s = await setup(async () => 'ready');
     s.fake.behavior.background = 1;
