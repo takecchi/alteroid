@@ -51,6 +51,7 @@ function fakeRunner(initiallyAlive: boolean) {
   const sends: { managerId: string; text: string }[] = [];
   const resumes: RunnerResumeCommand[] = [];
   const starts: string[] = [];
+  const control: { beforeStart?: () => Promise<void> } = {};
   const runner: RunnerClient = {
     runnerId: 'runner-primary',
     runnerIdKnown: true,
@@ -61,6 +62,7 @@ function fakeRunner(initiallyAlive: boolean) {
     },
     async start(command): Promise<{ cwd?: string }> {
       starts.push(command.managerId);
+      await control.beforeStart?.();
       return {};
     },
     async resume(command): Promise<{ cwd?: string }> {
@@ -113,6 +115,7 @@ function fakeRunner(initiallyAlive: boolean) {
     sends,
     resumes,
     starts,
+    control,
     push(event: RunnerEvent): void {
       if (emit === null) throw new Error('connect されていない');
       emit(event);
@@ -265,6 +268,77 @@ describe('後継を立てた前任は、自動で起こし直さない（#4861 �
       '台帳に無い',
     );
     expect(s.fake.starts).toHaveLength(0);
+  });
+});
+
+describe('引き継ぎ中の前任に印を立てる（#4865）', () => {
+  async function failedByUsage() {
+    const s = await setup({ rotateOnObservation: false });
+    s.fake.push(sessionDiedBy429());
+    await settle();
+    expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeDefined();
+    return s;
+  }
+
+  it('(e) 後継の runner 起動を待っている間に鍵の回転が起きても、前任は起こされない', async () => {
+    const s = await failedByUsage();
+    let release: () => void = () => undefined;
+    s.fake.control.beforeStart = () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+    const starting = s.pool.start({ request: '後継', supersedes: ID });
+    await settle();
+    expect(s.fake.starts).toHaveLength(1);
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+    expect(s.fake.resumes).toHaveLength(0);
+
+    release();
+    const successor = await starting;
+    expect((await s.stores.jobs.listJobs()).find((j) => j.id === ID)?.supersededBy).toBe(
+      successor.managerId,
+    );
+  });
+
+  it('(f) 同じ前任を指す start を並行させると片方が断られ、後継は1本だけ立つ', async () => {
+    const s = await failedByUsage();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    s.fake.control.beforeStart = () => gate;
+
+    const first = s.pool.start({ request: '後継1', supersedes: ID });
+    const second = s.pool.start({ request: '後継2', supersedes: ID });
+    const results = Promise.allSettled([first, second]);
+    await settle();
+    release();
+    const [a, b] = await results;
+
+    expect([a.status, b.status].sort()).toEqual(['fulfilled', 'rejected']);
+    const rejected = [a, b].find((r) => r.status === 'rejected');
+    expect(String((rejected as PromiseRejectedResult).reason)).toContain('引き継ぎ中の後継');
+    expect(s.fake.starts).toHaveLength(1);
+    const jobs = await s.stores.jobs.listJobs();
+    expect(jobs.filter((j) => j.supersedes === ID)).toHaveLength(1);
+  });
+
+  it('(g) 後継の起動が失敗したら印が下り、その後の鍵の回転で前任は従来どおり起こされる', async () => {
+    const s = await failedByUsage();
+    s.fake.control.beforeStart = async () => {
+      throw new Error('起動に失敗');
+    };
+
+    await expect(s.pool.start({ request: '後継', supersedes: ID })).rejects.toThrow('起動に失敗');
+    s.fake.control.beforeStart = undefined;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([ID]);
+    await settle();
+    expect(s.fake.resumes.map((c) => c.managerId)).toEqual([ID]);
+    expect((await s.stores.jobs.listJobs()).find((j) => j.id === ID)?.supersededBy).toBeUndefined();
   });
 });
 

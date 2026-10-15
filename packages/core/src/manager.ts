@@ -2957,6 +2957,8 @@ class Pool implements ManagerPool {
    * ターンが終われば必ず消える。
    */
   readonly #usageWakeOwed = new Set<string>();
+  // 後継を起こしている最中の前任（確認 → `supersededBy` の書き込みの間）。値は後継を起こす start の印（#4865）
+  readonly #supersedePending = new Map<string, symbol>();
   /**
    * 起こし直しが届かなかった（`skipped`）担当の、次に挑み直す時刻と失敗の回数（#4850 / #4733）。揮発してよい: 消えても印（`#usageStopped`、台帳にも写しがある）が残り、次の鍵の出来事か周回の掃きが拾い直す。
    * 周回の掃き（`settleStalledUsageWakes`）だけが読む。成功・印の解除で消す（間隔を戻す）。
@@ -3286,8 +3288,20 @@ class Pool implements ManagerPool {
     if (this.#stopped) throw new Error('デーモンが停止中のためマネージャーを起こせない');
     await this.#ensureConnected();
     // 新しい委譲を起こす前に前任を確かめる: 断るなら、後継を起こさず台帳にも跡を残さない（#4861）
-    if (input.supersedes !== undefined) await this.#assertSupersedable(input.supersedes);
+    if (input.supersedes === undefined) return this.#startAfterSupersedeCheck(input);
+    // 確認で印を立てた start だけが下ろす: 断られた並行の start が先行の印を消すと、先行の引き継ぎ中に前任が起こされる（#4865）
+    const token = await this.#assertSupersedable(input.supersedes);
+    try {
+      return await this.#startAfterSupersedeCheck(input);
+    } finally {
+      // 後継を立てられなかったときも下ろす: 印を残すと前任が永久に自動で起こされなくなるため（#4865）
+      if (this.#supersedePending.get(input.supersedes) === token) {
+        this.#supersedePending.delete(input.supersedes);
+      }
+    }
+  }
 
+  async #startAfterSupersedeCheck(input: ManagerStartInput): Promise<ManagerSummary> {
     const runner = await this.#runners.select({
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
       ...(input.runnerId === undefined ? {} : { runnerId: input.runnerId }),
@@ -5910,6 +5924,8 @@ class Pool implements ManagerPool {
       if (record === null) return 'gone';
       // 後継へ引き継いだ前任は起こさない（#4861）: 枠の印が残っていても、二重に走らせない
       if (record.job.supersededBy !== undefined) return 'gone';
+      // 後継を起こしている最中の前任も起こさない（#4865）: `supersededBy` を書くまでの間に鍵の回転が前任を起こして二重に走るため
+      if (this.#supersedePending.has(managerId)) return 'gone';
       const status = record.job.status;
       const allowRunning = options?.allowRunning === true;
       if (status === 'waiting_human') return 'still-running';
@@ -6048,7 +6064,7 @@ class Pool implements ManagerPool {
    * 受けるのは failed / lost / stopped、および像に居ない（`#retire` 済み）か、像が居ても生きていない done。
    * done で `attached` が真なら、runner にセッションが生きている（手が空いただけ）ので断る。
    */
-  async #assertSupersedable(predecessorId: string): Promise<void> {
+  async #assertSupersedable(predecessorId: string): Promise<symbol> {
     const record = this.#records.get(predecessorId) ?? (await this.#load(predecessorId));
     if (record === null) {
       throw new Error(
@@ -6071,6 +6087,13 @@ class Pool implements ManagerPool {
         `前任 ${predecessorId} は既に後継 ${record.job.supersededBy} へ引き継いである。後継を二重に立てない。`,
       );
     }
+    // ここから印立てまで await を挟まない: 同じ前任を指す並行の start が確認の間に割り込んで両方通るのを防ぐ（#4865）
+    if (this.#supersedePending.has(predecessorId)) {
+      throw new Error(`前任 ${predecessorId} には引き継ぎ中の後継がある。後継を二重に立てない。`);
+    }
+    const token = Symbol(predecessorId);
+    this.#supersedePending.set(predecessorId, token);
+    return token;
   }
 
   /**
