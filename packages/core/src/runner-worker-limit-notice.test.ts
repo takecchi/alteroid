@@ -60,7 +60,7 @@ describe('WorkerLimitNotices', () => {
 
 interface FakeSession {
   options: Options;
-  finish(): Promise<void>;
+  finish(result?: string): Promise<void>;
   say(text: string, options?: { error?: string; parentToolUseId?: string }): Promise<void>;
   notify(taskId: string, options: { status: string; summary: string }): Promise<void>;
 }
@@ -77,11 +77,11 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
     };
     sessions.push({
       options: params.options ?? {},
-      async finish() {
+      async finish(result = '済んだ') {
         push({
           type: 'result',
           subtype: 'success',
-          result: '済んだ',
+          result,
           session_id: 'sess-mgr',
           uuid: `uuid-result-${String((serial += 1))}`,
         } as unknown as SDKMessage);
@@ -237,5 +237,29 @@ describe('作業者だけが利用上限で落ちたとき、担当の道具の�
 
     expect(await postToolUse(session.options)).toEqual({ continue: true });
     expect(notesOf(events, '利用上限で落ちた')).toHaveLength(0);
+  });
+});
+
+describe('担当の枠の判定に応答の本文を使わない（#4934）', () => {
+  // assistant.error だけが失敗の印で、result は成功（本文は作業者の上限の原文の引用）の形
+  it('作業者の上限の原文を引用した応答が別の理由で失敗しても、担当の usage_notice は出ない', async () => {
+    const { session, events } = await start();
+    await session.say('過負荷', { error: 'overloaded' });
+    await session.finish(`作業者が落ちた: ${LIMIT_TEXT}`);
+
+    await vi.waitFor(() => {
+      if (!events.some((event) => event.type === 'report')) throw new Error('報告がまだ無い');
+    });
+    expect(events.some((event) => event.type === 'usage_notice')).toBe(false);
+  });
+
+  it('SDK の失敗の文言（assistant.error の本文）が上限の形なら、今どおり usage_notice が出る', async () => {
+    const { session, events } = await start();
+    await session.say(LIMIT_TEXT, { error: 'overloaded' });
+    await session.finish('本文');
+
+    await vi.waitFor(() => {
+      if (!events.some((event) => event.type === 'usage_notice')) throw new Error('まだ出ていない');
+    });
   });
 });

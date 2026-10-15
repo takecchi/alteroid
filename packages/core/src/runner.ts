@@ -3669,7 +3669,9 @@ class RunnerSession {
         let noCredentialDirHint = false;
         if (failure !== undefined) {
           let classified = false;
-          for (const candidate of [failure.text, resultTextOf(event).text, ...event.errorLines]) {
+          // 応答の本文 `resultTextOf(event)` は候補に入れない（#4934）: 作業者の上限の原文（#4903 で道具の結果へ添える）を担当が引用して別の理由で失敗すると、自分の枠と取り違える。
+          // 失った形は無い: 失敗した result では `failure.text` が `result` そのもの（`resultFailureOf`）で本文と同じ文字列、Codex は `errorLines` に同じ文言が入り、「結果なしで終了: …」は固定の包みで上限の文言を含まない。
+          for (const candidate of [failure.text, ...event.errorLines]) {
             const notice = classifyUsageNotice(candidate);
             if (notice !== undefined) {
               this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
