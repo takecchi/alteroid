@@ -5917,9 +5917,10 @@ class Pool implements ManagerPool {
       (current) => {
         const pruned = pruneRescueLedger(job.status, current, this.#now());
         // 預かりが残る間は、猶予の起点（`lastRescue`）を欄ごと外さない
+        // 像に居ない（`#retire` 済み）委譲は台帳から読んだ `job` で見る: 像だけを見ると、外した後に猶予の起点が消えて預かりが掃除されなくなるため
         if (
           pruned === undefined &&
-          (this.#records.get(managerId)?.job.rescueStash ?? []).length > 0
+          ((this.#records.get(managerId)?.job ?? job).rescueStash ?? []).length > 0
         ) {
           return { ...current, worktrees: [] };
         }
