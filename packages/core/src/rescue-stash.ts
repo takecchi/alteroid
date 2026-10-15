@@ -29,7 +29,7 @@ export const RESCUE_STASH_CYCLE_MAX_BYTES = 200 * 1024 * 1024;
  * 取りに来れば `DELETE` で減り、来なくても24時間の掃除が消す。
  */
 export const RESCUE_STASH_STAGED_MAX_BYTES = 512 * 1024 * 1024;
-/** 1回の呼び出しで調べる名前の上限。超えた分は `cycle-budget` として1件にまとめて知らせる。 */
+/** 1回の呼び出しで中身を読みに進む名前の上限（記憶で飛ばす名前は数えない）。超えた分は `cycle-budget` として1件にまとめて知らせる。 */
 export const RESCUE_STASH_NAMES_PER_CYCLE = 1000;
 
 const SKIPPED_PATH_MAX_LENGTH = 200;
@@ -110,6 +110,8 @@ export interface RescueStashOptions {
   /** 畳む直前の回。安定を待たずに預ける（待つと、畳んだ後の器と一緒に消える）。 */
   readonly final?: boolean;
   readonly signal?: AbortSignal;
+  /** 1回に中身を読む名前の上限。既定は `RESCUE_STASH_NAMES_PER_CYCLE`（試験で小さくするため）。 */
+  readonly namesPerCycle?: number;
 }
 
 export interface RescueStashResult {
@@ -194,21 +196,12 @@ export async function stashUntrackedFiles(
   };
 
   const sorted = [...names].sort();
-  let examined = 0;
+  // 上限は中身を読みに進む名前（realpath・open へ進むもの）だけに掛ける。記憶で飛ばす名前を数えると、先頭側の安定済みが後ろを締め出す（#4874）
+  const namesLimit = options.namesPerCycle ?? RESCUE_STASH_NAMES_PER_CYCLE;
+  let reading = 0;
+  let deferred = 0;
   for (const name of sorted) {
     if (options.signal?.aborted === true) break;
-    if (examined >= RESCUE_STASH_NAMES_PER_CYCLE) {
-      const rest = sorted.length - examined;
-      report(
-        '(省略)',
-        `names:${String(rest)}`,
-        new Skip(
-          `cycle-budget（1回に調べる名前の上限 ${String(RESCUE_STASH_NAMES_PER_CYCLE)} 件。ほか ${String(rest)} 件は次の周期へ回す）`,
-        ),
-      );
-      break;
-    }
-    examined += 1;
     const abs = resolve(root, name);
     if (name === '' || name.includes('\0') || isAbsolute(name) || !abs.startsWith(root + sep)) {
       continue;
@@ -249,6 +242,11 @@ export async function stashUntrackedFiles(
       ) {
         throw new Skip('cycle-budget');
       }
+      if (reading >= namesLimit) {
+        deferred += 1;
+        continue;
+      }
+      reading += 1;
 
       let real: string;
       try {
@@ -336,6 +334,15 @@ export async function stashUntrackedFiles(
       }
       report(name, `unreadable:${signature}`, new Skip('unreadable'));
     }
+  }
+  if (deferred > 0) {
+    report(
+      '(省略)',
+      `names:${String(deferred)}`,
+      new Skip(
+        `cycle-budget（1回に中身を読む名前の上限 ${String(namesLimit)} 件。ほか ${String(deferred)} 件は次の周期へ回す）`,
+      ),
+    );
   }
   return { files, skipped };
 }

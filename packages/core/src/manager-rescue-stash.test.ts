@@ -218,6 +218,25 @@ describe('未追跡のファイルの預かり（デーモン側。#4863）', ()
     await done(pool);
   });
 
+  it('預けた後に添付が消えていたら、同じ sha256 でも取り込み直して項目を差し替える（#4874）', async () => {
+    const { pool, stores, fake } = await setup();
+    offer(fake, 'a.txt', 'v1');
+    await vi.waitFor(async () => expect(await stashOf(stores)).toHaveLength(1));
+    const [first] = await stashOf(stores);
+    await stores.attachments.remove(first!.attachmentId);
+
+    const again = offer(fake, 'a.txt', 'v1');
+    await vi.waitFor(async () => {
+      const stash = await stashOf(stores);
+      expect(stash).toHaveLength(1);
+      expect(stash[0]!.attachmentId).not.toBe(first!.attachmentId);
+    });
+    expect(fake.opened).toContain(again);
+    const [next] = await stashOf(stores);
+    expect(await stores.attachments.getMeta(next!.attachmentId)).toBeDefined();
+    await done(pool);
+  });
+
   it('委譲ごとの上限（件数）を超える分は預けず job-budget として日誌へ残す', async () => {
     const existing: RescueStashEntry[] = Array.from(
       { length: RESCUE_STASH_MAX_FILES_PER_JOB },

@@ -29,6 +29,7 @@ describe('未追跡のファイルの預かり（runner 側。#4863）', () => {
     extra: {
       final?: boolean;
       cycle?: RescueStashCycle;
+      namesPerCycle?: number;
       credentialEnv?: NodeJS.ProcessEnv;
     } = {},
   ) =>
@@ -41,6 +42,7 @@ describe('未追跡のファイルの預かり（runner 側。#4863）', () => {
       memory,
       cycle: extra.cycle ?? newRescueStashCycle(),
       ...(extra.final === true ? { final: true } : {}),
+      ...(extra.namesPerCycle === undefined ? {} : { namesPerCycle: extra.namesPerCycle }),
     });
 
   beforeEach(async () => {
@@ -120,6 +122,21 @@ describe('未追跡のファイルの預かり（runner 側。#4863）', () => {
     expect(first.skipped).toEqual([{ path: 'b.txt', reason: 'cycle-budget' }]);
     const second = await run(['a.txt', 'b.txt'], { final: true });
     expect(second.files.map((f) => f.path)).toEqual(['b.txt']);
+  });
+
+  it('名前の上限は中身を読みに進む名前だけに掛かる: 先頭側が送り済みでも後ろの名前は次の周期で預かる（#4874）', async () => {
+    const names = ['a.txt', 'b.txt', 'c.txt', 'd.txt'];
+    for (const name of names) await writeFile(path.join(repo, name), name);
+    // 上限 2: 1周期目は a・b を預け、c・d は残りとして数えて知らせる
+    const first = await run(names, { final: true, namesPerCycle: 2 });
+    expect(first.files.map((f) => f.path)).toEqual(['a.txt', 'b.txt']);
+    expect(first.skipped).toHaveLength(1);
+    expect(first.skipped[0]!.path).toBe('(省略)');
+    expect(first.skipped[0]!.reason).toContain('ほか 2 件');
+    // 2周期目: a・b は送り済みの記憶で飛ばされ上限に数えられず、c・d が預かれる
+    const second = await run(names, { final: true, namesPerCycle: 2 });
+    expect(second.files.map((f) => f.path)).toEqual(['c.txt', 'd.txt']);
+    expect(second.skipped).toEqual([]);
   });
 
   it('symlink・ディレクトリは not-regular。symlink の先は読まない', async () => {

@@ -27,7 +27,9 @@ interface Sent {
   attachments: RunnerAttachment[];
 }
 
-function fakeRunner(options: { restore?: boolean; alive?: readonly string[] } = {}) {
+function fakeRunner(
+  options: { restore?: boolean; attachments?: boolean; alive?: readonly string[] } = {},
+) {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const sent: Sent[] = [];
   const starts: RunnerStartCommand[] = [];
@@ -51,7 +53,7 @@ function fakeRunner(options: { restore?: boolean; alive?: readonly string[] } = 
         type: 'hello',
         runnerId: 'runner-primary',
         capabilities: [
-          RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+          ...(options.attachments === false ? [] : [RUNNER_CAPABILITY_MANAGER_ATTACHMENTS]),
           ...(options.restore === false ? [] : [RUNNER_CAPABILITY_RESCUE_RESTORE]),
         ],
       });
@@ -294,6 +296,28 @@ describe('rescue_restore: 預かりを担当へ添付で返す（#4863 案A そ�
     await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
     expect(fake.sent[0]!.attachments).toEqual([]);
     expect(fake.sent[0]!.text).toContain('依頼のファイルは無かった');
+    await pool.stop();
+  });
+
+  it('添付つきの送信が通らなければ（添付の口を名乗らない器）、理由と呼び直しの案内を本文だけで送り、日誌は「送れなかった」にする（#4874）', async () => {
+    const { pool, stores, fake } = await setup(
+      async (s) => [
+        jobOf('mgr-s', {
+          rescueStash: await stash(s, 'mgr-s', [{ path: 'a.txt', text: 'alpha' }]),
+        }),
+      ],
+      { attachments: false },
+    );
+    fake.request({ managerId: 'mgr-s' });
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+    const [sent] = fake.sent;
+    expect(sent!.attachments).toEqual([]);
+    expect(sent!.text).toContain('送れなかった');
+    expect(sent!.text).toContain('添付は何も送っていない');
+    expect(sent!.text).toContain('paths');
+    const journal = JSON.stringify(await stores.journal.list({ types: ['decision'] }));
+    expect(journal).toContain('送れなかった');
+    expect(journal).not.toContain('添付で送った');
     await pool.stop();
   });
 });
