@@ -230,7 +230,14 @@ import { collapseErrorCause } from './error-cause.js';
 import { resolveBuildRevision, resolveBuildTime } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import { UnreadableApprovalError, findOpenManagerDuplicate } from './store.js';
-import type { CommitmentList, PendingInboxEvent, Stores } from './store.js';
+import type {
+  CommitmentList,
+  LostSessionGrave,
+  PendingInboxEvent,
+  Stores,
+  TranscriptGrave,
+} from './store.js';
+import { MAX_PENDING_GRAVES } from './grave-queue.js';
 import {
   cloneToolCarriesSecrets,
   cloneToolJournalsItself,
@@ -984,6 +991,14 @@ class Clone implements CloneHost {
    * `post()` は `#pump` の `await` の隙間に同期で割り込むので、そこで状態遷移まで済ませると、隙間に居た合図が1件取り残される。
    */
   #releaseRequested = false;
+
+  /** 墓標の拾い直しの直列化（#4884）。走っている間は1本だけで、走行中に契機が来たら終わってからもう1周する。 */
+  #graveSweep: Promise<void> | null = null;
+  #graveSweepAgain = false;
+  /** 直近の蒸留のサイドセッションが使った鍵の身元（観測と、鍵が変わったかの判定に使う）。 */
+  #lastDistillTokenKey: string | undefined;
+  /** 墓標の蒸留が最後に落ちたときの鍵。鍵が変わっていない契機（冷却だけの `parked` など）では撃ち直さない。 */
+  #graveFailedTokenKey: string | undefined;
   // 1回ごとには日誌へ書かない: 「保持 N 件×再武装 M 回」を「抑止 M 回」に置き換えるだけのため。解除を試した瞬間の1行（「枠の解除を試す」）へまとめる
   #usageBlockSuppressedRearms = 0;
   // `#usageBlockSuppressedRearms` と1本にしない: 増える契機（`post()` 側と `#pump` 側）が違うため
@@ -1147,6 +1162,8 @@ class Clone implements CloneHost {
   // セッションには触らず印だけ立てる: いま走っているターンは最後まで走らせるため。セッションがまだ無ければ印を立てない: 次に作られる新しい鍵のセッションがいきなり畳まれるため
   // 返り値を捨てない: `'deferred'` の回に「再開の合図」を先に入れると、古い鍵のターンに消費されて沈黙する（`onTokenSessionRecycled` が鳴ってから入れる）
   recycleSessionForToken(): 'now' | 'deferred' {
+    // 鍵が回った契機で、枠で落ちた蒸留の墓標を拾い直す（#4884）。セッションの有無・走行中のターンとは無関係（蒸留は別の短命セッションで、鍵は呼ぶたびに読み直す）
+    this.#retryGravesFor('鍵が回った', { onlyIfKeyChanged: true });
     if (this.#sdkSession.query === null) return 'now';
     this.#sdkSession.requestTokenRecycle();
     this.#sdkSession.wakeInput();
@@ -1881,15 +1898,9 @@ class Clone implements CloneHost {
       noteDroppedRecord('未読の読み直し', '', error);
     });
 
-    // 墓標の拾い直しも待たない: こちらはモデルを呼び、枠が閉じていると人間の発言がその間ずっと処理されないため
-    void this.#pickUpTranscriptGrave().catch((error: unknown) => {
-      noteDroppedRecord('墓標の拾い直し', '', error);
-    });
-
-    // 2本に分けたまま畳まない: 指す先と拾い方が違い、畳むとどちらの材料が無かったのかが日誌から消えるため
-    void this.#pickUpLostSession().catch((error: unknown) => {
-      noteDroppedRecord('捨てたセッションの拾い直し', '', error);
-    });
+    // 墓標の拾い直しも待たない: こちらはモデルを呼び、枠が閉じていると人間の発言がその間ずっと処理されないため。
+    // 2本（`#pickUpTranscriptGrave` / `#pickUpLostSession`）に分けたまま `#sweepGraves` が直列に回す: 畳むとどちらの材料が無かったのかが日誌から消え、同時に走らせると同じ蒸留の枠を取り合うため
+    void this.#sweepGraves();
 
     for await (const event of this.#delivery.inbox) {
       this.#inFlight = { events: [event], started: false };
@@ -1902,6 +1913,8 @@ class Clone implements CloneHost {
         this.#releaseRequested = false;
         if (this.#usageBlocked !== null) {
           this.#usageBlocked = null;
+          // 枠が解けた契機でも墓標を拾い直す（#4884）: 枠で落ちた蒸留は、枠が開いたときにしか通らない
+          this.#retryGravesFor('枠の保持を解いた');
           const held = this.#delivery.drainDeferred();
           // `held` → `event` の順で先頭へ戻す: `event` は `held` より後に届いており、末尾へ push すると到着順が崩れるため
           // `#remember` / `#record` / `#commit` はやり直さない: 器には `held` が未読で残っており、やり直すと記帳・日誌追記が二重になるため
@@ -4284,21 +4297,112 @@ class Clone implements CloneHost {
       // 墓標を立てる: 蒸留が落ちる主な理由は枠で、枠は待てば開くが、印が無いと開いた後に拾う手がかりが残らないため。投げない: 失敗の報告の途中のため
       const id = archiveId;
       if (id !== null) {
-        await this.#stores.sessions
-          .setTranscriptGrave({ archiveId: id })
-          .catch((graveError: unknown) => {
-            noteDroppedRecord('墓標の記録', id, graveError);
-          });
+        await this.#addTranscriptGrave(id);
       }
     }
     return archived;
   }
 
-  // 起動時に拾う: 同じプロセスの中で試し直しても枠はまだ閉じているため。`load()` ではなく `archive.readTail` から拾う: 退避は済んでおり、`load` は 60 秒の予算に掛かるため
-  async #pickUpTranscriptGrave(): Promise<void> {
-    const grave = await this.#stores.sessions.getTranscriptGrave();
-    if (grave === null) return;
+  /**
+   * 墓標（`#pickUpTranscriptGrave` / `#pickUpLostSession`）の拾い直しを1本の列で回す（#4884）。
+   * 起動時（`#pump` の先頭）・鍵が回った契機・枠の保持が解けた契機が同じ口を通る。走行中に来た契機は
+   * 取りこぼさず、終わってからもう1周する（拾い直し同士が重ならない）。投げない。
+   */
+  #sweepGraves(): Promise<void> {
+    if (this.#graveSweep !== null) {
+      this.#graveSweepAgain = true;
+      return this.#graveSweep;
+    }
+    const run = (async () => {
+      try {
+        do {
+          this.#graveSweepAgain = false;
+          await this.#pickUpTranscriptGrave().catch((error: unknown) => {
+            noteDroppedRecord('墓標の拾い直し', '', error);
+          });
+          await this.#pickUpLostSession().catch((error: unknown) => {
+            noteDroppedRecord('捨てたセッションの拾い直し', '', error);
+          });
+        } while (this.#graveSweepAgain && !this.#sdkSession.stopped);
+      } finally {
+        this.#graveSweep = null;
+      }
+    })();
+    this.#graveSweep = run;
+    return run;
+  }
 
+  #currentTokenKey(): string | undefined {
+    const identity = this.#tokenIdentity?.();
+    return identity === undefined
+      ? undefined
+      : `${identity.tokenId}#${String(identity.generation)}`;
+  }
+
+  /** 契機から拾い直しを起こす。墓標が無ければ日誌も書かない（毎回の鍵の切替が日誌を埋めないため）。 */
+  /**
+   * 墓標を、既にある墓標を消さずに足す（#4884）。足せたら `true`。投げない（呼び出し側は失敗の報告の途中）。
+   * 上限（`MAX_PENDING_GRAVES`）を超えて古い墓標が落ちたら、落とした区間は記憶へ移せないので ⚠ で日誌に残す。
+   */
+  async #addTranscriptGrave(archiveId: string): Promise<boolean> {
+    try {
+      const { dropped } = await this.#stores.sessions.addTranscriptGrave({ archiveId });
+      await this.#reportDroppedGraves('生ログの墓標', dropped);
+      return true;
+    } catch (graveError) {
+      noteDroppedRecord('墓標の記録', archiveId, graveError);
+      return false;
+    }
+  }
+
+  async #reportDroppedGraves(what: string, dropped: readonly string[]): Promise<void> {
+    if (dropped.length === 0) return;
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_FAILURE_PREFIX}${what}が上限（${String(MAX_PENDING_GRAVES)} 件）を超えたので、` +
+        `古いものから落とした: ${dropped.join(', ')}（⚠️ この区間は記憶へ移せていない）`,
+    });
+  }
+
+  #retryGravesFor(trigger: string, options: { onlyIfKeyChanged?: boolean } = {}): void {
+    if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return;
+    // 鍵が変わっていない契機では起こさない: 同じ鍵で撃ち直しても同じ枠に当たるだけのため。鍵の身元が取れないときは起こす（能力を削らない側）
+    if (options.onlyIfKeyChanged === true && this.#graveFailedTokenKey !== undefined) {
+      if (this.#currentTokenKey() === this.#graveFailedTokenKey) return;
+    }
+    void (async () => {
+      const [transcriptGraves, lostGraves] = await Promise.all([
+        this.#stores.sessions.listTranscriptGraves().catch(() => []),
+        this.#stores.sessions.listLostSessionGraves().catch(() => []),
+      ]);
+      if (transcriptGraves.length === 0 && lostGraves.length === 0) return;
+      await this.#journal({
+        type: 'decision',
+        decision: `墓標の拾い直しを、契機（${trigger}）で起こし直した`,
+        grounds:
+          '蒸留が枠で落ちると墓標が残るが、拾い直すのが起動時だけだと、鍵が回っても記憶への移しが' +
+          '再起動まで遅れるため（#4884）',
+      });
+      await this.#sweepGraves();
+    })().catch((error: unknown) => {
+      noteDroppedRecord('墓標の拾い直しの起こし直し', '', error);
+    });
+  }
+
+  // 起動時と、鍵が回った・枠が解けた契機（`#retryGravesFor`）で拾う: 契機の無いまま試し直しても枠はまだ閉じているため。`load()` ではなく `archive.readTail` から拾う: 退避は済んでおり、`load` は 60 秒の予算に掛かるため
+  async #pickUpTranscriptGrave(): Promise<void> {
+    // 古い順に1本ずつ（#4884）。1本が落ちても残りは試す: 落ちた1本が居座って後ろの区間を塞がないため
+    for (const grave of await this.#stores.sessions.listTranscriptGraves()) {
+      await this.#pickUpOneTranscriptGrave(grave).catch((error: unknown) => {
+        noteDroppedRecord('墓標の拾い直し', grave.archiveId, error);
+      });
+    }
+  }
+
+  async #pickUpOneTranscriptGrave(grave: TranscriptGrave): Promise<void> {
     // `read()`（全文）ではなく `readTail()`（末尾）を使う: `archive` の1行は最大 78.3 MB に育ち、全体をヒープへ載せると起動のたびに走るこの経路が OOM を起こしうるため
     const result = await this.#stores.archive.readTail(
       grave.archiveId,
@@ -4346,7 +4450,8 @@ class Clone implements CloneHost {
     try {
       await this.#distillFromTranscript(tailOf(transcript), { journalInput: !quiet });
     } catch (error) {
-      // 印は残す（#4705）: 蒸留が落ちる主な理由は枠で、次の起動で拾い直せるため
+      // 印は残す（#4705）: 蒸留が落ちる主な理由は枠で、次の起動か鍵の契機で拾い直せるため
+      this.#graveFailedTokenKey = this.#lastDistillTokenKey;
       const note = await this.#graveDistillFailureNote('transcript', grave.archiveId);
       if (note !== null) {
         await this.#journal({
@@ -4402,20 +4507,32 @@ class Clone implements CloneHost {
     const projectKey = this.#projectKey ?? (await this.#stores.sessions.getProjectKey());
     if (projectKey === null) return;
 
-    await this.#stores.sessions
-      .setLostSessionGrave({ projectKey, sessionId })
-      .catch((error: unknown) => {
-        noteDroppedRecord('捨てたセッションの記録', sessionId, error);
+    try {
+      const { dropped } = await this.#stores.sessions.addLostSessionGrave({
+        projectKey,
+        sessionId,
       });
+      await this.#reportDroppedGraves('捨てたセッションの墓標', dropped);
+    } catch (error) {
+      noteDroppedRecord('捨てたセッションの記録', sessionId, error);
+    }
   }
 
   // `load()` は使わない: 全件を戻すと SDK が掛けている 60 秒の予算に当たりに行くため
   async #pickUpLostSession(): Promise<void> {
     const tail = this.#stores.sessionTranscriptTail;
     if (tail === undefined) return;
-    const grave = await this.#stores.sessions.getLostSessionGrave();
-    if (grave === null) return;
+    for (const grave of await this.#stores.sessions.listLostSessionGraves()) {
+      await this.#pickUpOneLostSession(tail, grave).catch((error: unknown) => {
+        noteDroppedRecord('捨てたセッションの拾い直し', grave.sessionId, error);
+      });
+    }
+  }
 
+  async #pickUpOneLostSession(
+    tail: NonNullable<Stores['sessionTranscriptTail']>,
+    grave: LostSessionGrave,
+  ): Promise<void> {
     const transcript = await tail.readTail(grave, DISTILL_TRANSCRIPT_TAIL_CHARS);
     if (transcript === null) {
       // 印だけを残さない: 残すと、拾えないものを起動のたびに引きに行くため
@@ -4449,6 +4566,7 @@ class Clone implements CloneHost {
       await this.#distillFromTranscript(tailOf(transcript), { journalInput: !quiet });
     } catch (error) {
       // 印は残す（#4705）: 拾い直しの墓標（`#pickUpTranscriptGrave`）と同じ理由
+      this.#graveFailedTokenKey = this.#lastDistillTokenKey;
       const note = await this.#graveDistillFailureNote('lost_session', grave.sessionId);
       if (note !== null) {
         await this.#journal({
@@ -6193,12 +6311,14 @@ class Clone implements CloneHost {
     }
 
     // 退避と蒸留を別の `try` に割る: 生ログが伸びて `readFile` が落ちたとき、蒸留まで道連れに止めないため。
+    let archiveId: string | null = null;
     try {
       // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため
       const transcript = await redactImagesInTranscriptYielding(
         await readFile(transcriptPath, 'utf8'),
       );
       const write = await this.#stores.archive.archive(sessionId ?? 'clone', transcript);
+      archiveId = write.id;
       // diverged / unknown のときだけ日誌へ書く。`#journal` は自分で失敗を握るので、退避の成功を道連れにしない。
       const continuityText = describeArchiveContinuityForJournal({
         caller: 'PreCompact の退避',
@@ -6235,8 +6355,26 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の蒸留に失敗した: ${reasonOf(error)}`,
+        text:
+          `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の蒸留に失敗した: ${reasonOf(error)}` +
+          (archiveId !== null
+            ? '（compaction の前の生ログの退避を墓標に残した。鍵が回った・枠が解けた・起動の契機で拾い直す）'
+            : '（⚠️ 退避も失敗しているので墓標を指せず、この区間は記憶へ移せていない）'),
       });
+      // 墓標は退避の id で指す（#4884）: 退避は compaction の前の生ログの全体の写しで、拾い直しは既存の `#pickUpTranscriptGrave` が末尾から蒸留する。
+      // 区間を別に持たない: 墓標は1枠で、`archiveId` が「どの時点の生ログか」をそのまま表すため。成功した回は立てない（この `catch` の中だけ）
+      const id = archiveId;
+      if (id !== null) {
+        if (await this.#addTranscriptGrave(id)) {
+          await this.#journal({
+            type: 'decision',
+            decision: `PreCompact の蒸留を墓標へ回した: ${id}`,
+            grounds:
+              'compaction で会話が要約に潰れるため、その前の区間は生ログの退避でしか残らない。' +
+              '蒸留が枠で落ちたので、記憶へ移すのを拾い直しへ委ねる（#4884）',
+          });
+        }
+      }
     }
   }
 
@@ -6270,36 +6408,41 @@ class Clone implements CloneHost {
     // 本セッションと同じ連携を渡す: 片方だけに見えると人格の書き手だけが別の手を持つ。
     const externalMcpServers = await this.#externalMcpServers();
     const plugins = await this.#plugins();
+    // 蒸留のターンにも本セッションと同じ道具と観測値を、`#cloneToolsFor` 経由で渡す: 欠けるとここだけ自分のことが分からないクローンになる。
+    // `await` はここで済ませる（下の `distill({...})` の中は同期）: 身元を `distill` の env（下の `#childEnvWithoutIdentityCapture()`）と同じ瞬間に読むため
+    const tools = await this.#cloneToolsFor({
+      stores: this.#stores,
+      emit: () => undefined,
+      ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
+      ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
+      ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
+      runtime: () => this.#runtimeFacts(),
+      // 削らない: 既定の `'clone'` に落ち、蒸留が書いた記憶なのに `cause: 'clone'` と名乗る。
+      memoryCause: () => 'distill',
+      // 蒸留にも渡す: 渡さないと「蒸留のターンだけ消せない」という層ごとの能力差になる。
+      dropQueuedInboxEvents: (ids) => this.dropQueuedInboxEvents(ids),
+      queuedInMemory: () => this.#queuedInMemoryCount(),
+      ...this.#attachmentCopiesDirEntry(),
+      ...this.#attachmentLimitsEntry(),
+      // 省略しない: `ToolContext.conversationId` が必須で、省くと `createCloneTools` が throw する。
+      conversationId: () => undefined,
+      recentDenials: () => this.#recentDenials.list(),
+    });
+    // 蒸留が使う鍵の身元（観測用。env には触れない）。鍵が回ったとき env と身元がずれないよう、`distill` の組み立てと同じ同期区間で読む
+    const identity = this.#tokenIdentity?.();
+    this.#lastDistillTokenKey = this.#currentTokenKey();
     const side = distill({
       prompt,
       model: this.#model,
       permissionMode: this.#permissionMode,
-      // 蒸留のターンにも本セッションと同じ道具と観測値を、`#cloneToolsFor` 経由で渡す: 欠けるとここだけ自分のことが分からないクローンになる。
-      tools: await this.#cloneToolsFor({
-        stores: this.#stores,
-        emit: () => undefined,
-        ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
-        ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
-        ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
-        runtime: () => this.#runtimeFacts(),
-        // 削らない: 既定の `'clone'` に落ち、蒸留が書いた記憶なのに `cause: 'clone'` と名乗る。
-        memoryCause: () => 'distill',
-        // 蒸留にも渡す: 渡さないと「蒸留のターンだけ消せない」という層ごとの能力差になる。
-        dropQueuedInboxEvents: (ids) => this.dropQueuedInboxEvents(ids),
-        queuedInMemory: () => this.#queuedInMemoryCount(),
-        ...this.#attachmentCopiesDirEntry(),
-        ...this.#attachmentLimitsEntry(),
-        // 省略しない: `ToolContext.conversationId` が必須で、省くと `createCloneTools` が throw する。
-        conversationId: () => undefined,
-        recentDenials: () => this.#recentDenials.list(),
-      }),
+      tools,
       externalMcpServers,
       plugins,
       systemPrompt: buildCloneSystemPrompt({
         memory,
         ...(this.#self === undefined ? {} : { self: this.#self }),
       }),
-      // 身元を捕まえない組み立て（#4880）: 本セッションが走っている間に鍵が回っても、本セッションの身元を新しい鍵で上書きしないため。
+      // 身元を捕まえない組み立て（#4880。この行は変えていない）: 本セッションが走っている間に鍵が回っても、本セッションの身元を新しい鍵で上書きしないため。
       env: this.#childEnvWithoutIdentityCapture(),
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
       onPostToolUse: (input) => this.#onDistillToolUse(input),
@@ -6307,20 +6450,60 @@ class Clone implements CloneHost {
       onPostToolUseFailure: (input) => this.#onDistillToolUseFailure(input),
     });
 
-    for await (const ended of side) {
-      // `#apply` は通さない: `site`（`distill`）も累積の数え方（`oneshot`）も本セッションと違い、同じ反応をさせてはいけない。
-      if (ended.type !== 'turn_ended') continue;
-      // `result` を読み捨てない: 要約のたびに払う蒸留の費用の唯一の観測点。別の `query()` 呼び出しなので累積は1回で閉じており
-      // （SDK: 「during this query() call」）[sdk-verbatim SDKResultSuccess.modelUsage]、基準は持たせない。要約そのものの費用は本セッションの `modelUsage` に混ざって分離できない。
-      await this.#recordUsage(ended.usage, 'distill', 'oneshot');
-      // 成功の判定は `succeeded`: `#runTurn` を通らないので `TurnOutcome` が無く、成否はターンの終わりからしか取れない。
-      // 失敗は投げる（#4705）: 枠切れ・実行中の失敗は例外ではなく `succeeded: false` で届く。呼び手は「投げなければ成功」と読み、墓標を立てない・下ろすため
-      if (!ended.succeeded)
-        throw new Error('蒸留のターンが成功で終わらなかった（枠切れ・実行中の失敗など）');
-      await this.#journal(distillSucceededEntry('pre_compact'));
-      return;
+    try {
+      for await (const ended of side) {
+        // `#apply` は通さない: `site`（`distill`）も累積の数え方（`oneshot`）も本セッションと違い、同じ反応をさせてはいけない。
+        if (ended.type !== 'turn_ended') continue;
+        // `result` を読み捨てない: 要約のたびに払う蒸留の費用の唯一の観測点。別の `query()` 呼び出しなので累積は1回で閉じており
+        // （SDK: 「during this query() call」）[sdk-verbatim SDKResultSuccess.modelUsage]、基準は持たせない。要約そのものの費用は本セッションの `modelUsage` に混ざって分離できない。
+        await this.#recordUsage(ended.usage, 'distill', 'oneshot');
+        // 成功の判定は `succeeded`: `#runTurn` を通らないので `TurnOutcome` が無く、成否はターンの終わりからしか取れない。
+        // 失敗は投げる（#4705）: 枠切れ・実行中の失敗は例外ではなく `succeeded: false` で届く。呼び手は「投げなければ成功」と読み、墓標を立てない・下ろすため
+        if (!ended.succeeded) {
+          const candidates = [ended.failure?.text, ended.body, ...ended.errorLines];
+          for (const candidate of candidates) {
+            if (candidate === undefined) continue;
+            const notice = classifyUsageNotice(candidate);
+            if (notice?.kind === 'reached') {
+              await this.#observeDistillQuota(notice, identity);
+              break;
+            }
+          }
+          throw new Error('蒸留のターンが成功で終わらなかった（枠切れ・実行中の失敗など）');
+        }
+        await this.#journal(distillSucceededEntry('pre_compact'));
+        return;
+      }
+    } catch (error) {
+      // 例外で来た枠切れ（429）もここで観測へ上げる。`succeeded: false` で来た分は上で上げて、同じ Error を投げているのでここでは数えない
+      const raw = String(error);
+      const classified = classifyUsageNotice(raw);
+      if (classified?.kind === 'reached') {
+        await this.#observeDistillQuota(classified, identity);
+      } else if (isRateLimitReason(raw)) {
+        await this.#observeDistillQuota({ kind: 'reached', text: reasonOf(error) }, identity);
+      }
+      throw error;
     }
     throw new Error('蒸留のターンが終わりを告げないまま閉じた');
+  }
+
+  /**
+   * 蒸留のサイドセッションが枠で落ちたことを、回し手へ観測として上げる（#4884）。
+   * `observedBy` は蒸留が走った鍵の身元（組み立てた時点で控えたもの）で、本セッションの身元（`#sessionTokenIdentity`）ではない:
+   * 本セッションは別の鍵のことがあり、蒸留の失敗で本セッションの鍵を回すことになる（#4880）。身元が取れないなら上げない:
+   * 誰の鍵か分からない観測は、無関係な鍵を回しうるため。`#usageBlocked` は立てない（本セッションは枠に当たっていない）。
+   */
+  async #observeDistillQuota(
+    notice: UsageLimitNotice,
+    identity: { tokenId: string; generation: number; fingerprint?: string } | undefined,
+  ): Promise<void> {
+    if (this.#onUsageObservation === undefined || identity === undefined) return;
+    try {
+      await this.#onUsageObservation({ notice, observedBy: identity });
+    } catch (error) {
+      noteDroppedRecord('認証トークンの切替（蒸留）', 'clone', error);
+    }
   }
 
   /**

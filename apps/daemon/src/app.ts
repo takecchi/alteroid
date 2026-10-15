@@ -9009,8 +9009,8 @@ export function createApp(deps: AppDeps) {
           );
         }
 
-        const grave = await stores.sessions.getTranscriptGrave();
-        const protectedIds = grave === null ? [] : [grave.archiveId];
+        // 順番待ちの墓標も守る（#4884）
+        const protectedIds = (await stores.sessions.listTranscriptGraves()).map((g) => g.archiveId);
 
         const filter: ArchiveRemoveManyFilter = {
           ...(sessionIds === undefined ? {} : { sessionIds }),

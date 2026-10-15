@@ -2,8 +2,11 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  addGrave,
   assertNoNul,
+  listGraves,
   noteSessionMaterialUnreadable,
+  removeGrave,
   type LostSessionGrave,
   type SessionRegistry,
   type TranscriptGrave,
@@ -15,6 +18,9 @@ import { withPathLock } from './file-lock.js';
 
 const stateSchema = z.object({ cloneSessionId: z.string().nullable().default(null) });
 const graveSchema = z.object({ archiveId: z.string().min(1) });
+// 枠の後ろの順番待ち（#4884）。枠のファイルの形は変えない: 古い版が書いた1枠のファイルをそのまま読め、列のファイルが無ければ列は空として扱う。
+const graveQueueSchema = z.object({ graves: z.array(graveSchema) });
+const lostSessionQueueSchema = z.object({ graves: z.array(z.lazy(() => lostSessionSchema)) });
 const distillFailuresSchema = z.object({
   graveId: z.string().min(1),
   failures: z.number().int().nonnegative(),
@@ -57,6 +63,8 @@ export class FsSessionRegistry implements SessionRegistry {
   readonly #gravePath: string;
   // 別のファイルに置く: `#gravePath` と同時に立ちうるうえ、`#path` と同居すると `setCloneSessionId(null)` で消えるため
   readonly #lostSessionPath: string;
+  readonly #graveQueuePath: string;
+  readonly #lostSessionQueuePath: string;
   readonly #projectKeyPath: string;
   // 墓標の本体と別のファイルに置く: 墓標の形と `clear…If` の突き合わせに触れないため（#4752）
   readonly #distillFailuresPaths: Record<'transcript' | 'lost_session', string>;
@@ -66,6 +74,8 @@ export class FsSessionRegistry implements SessionRegistry {
     this.#path = join(dir, 'session.json');
     this.#gravePath = join(dir, 'transcript-grave.json');
     this.#lostSessionPath = join(dir, 'lost-session-grave.json');
+    this.#graveQueuePath = join(dir, 'transcript-grave-queue.json');
+    this.#lostSessionQueuePath = join(dir, 'lost-session-grave-queue.json');
     this.#projectKeyPath = join(dir, 'project-key.json');
     this.#distillFailuresPaths = {
       transcript: join(dir, 'transcript-grave-distill-failures.json'),
@@ -112,15 +122,102 @@ export class FsSessionRegistry implements SessionRegistry {
   async clearTranscriptGraveIf(archiveId: string): Promise<boolean> {
     return withPathLock(this.#gravePath, async () => {
       // 読みをロックの外へ出さない: `get` → 比較 → `set` と同じになり、判定と書き込みの間に割り込まれるため
-      const current = await readSessionMaterial(
-        this.#gravePath,
-        '生ログの墓標（transcript-grave.json）',
-        (raw) => graveSchema.parse(JSON.parse(raw)),
-      );
-      if (current?.archiveId !== archiveId) return false;
-      await rm(this.#gravePath, { force: true });
+      const state = await this.#readTranscriptState();
+      const next = removeGrave(state, (g) => g.archiveId === archiveId);
+      if (!next.removed) return false;
+      await this.#writeTranscriptState(next);
       return true;
     });
+  }
+
+  // 枠と列は同じパスのロックの中で読み書きする: 別々だと足す回と下ろす回が互いの書き込みを消す
+  async #readTranscriptState() {
+    const primary = await readSessionMaterial(
+      this.#gravePath,
+      '生ログの墓標（transcript-grave.json）',
+      (raw) => graveSchema.parse(JSON.parse(raw)),
+    );
+    const queued = await readSessionMaterial(
+      this.#graveQueuePath,
+      '生ログの墓標の順番待ち（transcript-grave-queue.json）',
+      (raw) => graveQueueSchema.parse(JSON.parse(raw)),
+    );
+    return { primary, queue: queued?.graves ?? [] };
+  }
+
+  async #writeTranscriptState(state: {
+    primary: TranscriptGrave | null;
+    queue: TranscriptGrave[];
+  }): Promise<void> {
+    await mkdir(this.#dir, { recursive: true });
+    if (state.primary === null) await rm(this.#gravePath, { force: true });
+    else await writeFileAtomic(this.#gravePath, `${JSON.stringify(state.primary)}\n`);
+    if (state.queue.length === 0) await rm(this.#graveQueuePath, { force: true });
+    else {
+      await writeFileAtomic(this.#graveQueuePath, `${JSON.stringify({ graves: state.queue })}\n`);
+    }
+  }
+
+  async addTranscriptGrave(grave: TranscriptGrave): Promise<{ dropped: string[] }> {
+    return withPathLock(this.#gravePath, async () => {
+      const next = addGrave(
+        await this.#readTranscriptState(),
+        grave,
+        (a, b) => a.archiveId === b.archiveId,
+      );
+      await this.#writeTranscriptState(next);
+      return { dropped: next.dropped.map((g) => g.archiveId) };
+    });
+  }
+
+  async listTranscriptGraves(): Promise<TranscriptGrave[]> {
+    return withPathLock(this.#gravePath, async () => listGraves(await this.#readTranscriptState()));
+  }
+
+  async #readLostState() {
+    const primary = await readSessionMaterial(
+      this.#lostSessionPath,
+      '再開素材を捨てた回の墓標（lost-session-grave.json）',
+      (raw) => lostSessionSchema.parse(JSON.parse(raw)),
+    );
+    const queued = await readSessionMaterial(
+      this.#lostSessionQueuePath,
+      '再開素材を捨てた回の墓標の順番待ち（lost-session-grave-queue.json）',
+      (raw) => lostSessionQueueSchema.parse(JSON.parse(raw)),
+    );
+    return { primary, queue: queued?.graves ?? [] };
+  }
+
+  async #writeLostState(state: {
+    primary: LostSessionGrave | null;
+    queue: LostSessionGrave[];
+  }): Promise<void> {
+    await mkdir(this.#dir, { recursive: true });
+    if (state.primary === null) await rm(this.#lostSessionPath, { force: true });
+    else await writeFileAtomic(this.#lostSessionPath, `${JSON.stringify(state.primary)}\n`);
+    if (state.queue.length === 0) await rm(this.#lostSessionQueuePath, { force: true });
+    else {
+      await writeFileAtomic(
+        this.#lostSessionQueuePath,
+        `${JSON.stringify({ graves: state.queue })}\n`,
+      );
+    }
+  }
+
+  async addLostSessionGrave(grave: LostSessionGrave): Promise<{ dropped: string[] }> {
+    return withPathLock(this.#lostSessionPath, async () => {
+      const next = addGrave(
+        await this.#readLostState(),
+        grave,
+        (a, b) => a.sessionId === b.sessionId,
+      );
+      await this.#writeLostState(next);
+      return { dropped: next.dropped.map((g) => g.sessionId) };
+    });
+  }
+
+  async listLostSessionGraves(): Promise<LostSessionGrave[]> {
+    return withPathLock(this.#lostSessionPath, async () => listGraves(await this.#readLostState()));
   }
 
   async getLostSessionGrave(): Promise<LostSessionGrave | null> {
@@ -145,13 +242,9 @@ export class FsSessionRegistry implements SessionRegistry {
 
   async clearLostSessionGraveIf(sessionId: string): Promise<boolean> {
     return withPathLock(this.#lostSessionPath, async () => {
-      const current = await readSessionMaterial(
-        this.#lostSessionPath,
-        '再開素材を捨てた回の墓標（lost-session-grave.json）',
-        (raw) => lostSessionSchema.parse(JSON.parse(raw)),
-      );
-      if (current?.sessionId !== sessionId) return false;
-      await rm(this.#lostSessionPath, { force: true });
+      const next = removeGrave(await this.#readLostState(), (g) => g.sessionId === sessionId);
+      if (!next.removed) return false;
+      await this.#writeLostState(next);
       return true;
     });
   }
@@ -201,7 +294,14 @@ export class FsSessionRegistry implements SessionRegistry {
   }
 
   async clear(): Promise<number> {
-    const paths = [this.#path, this.#gravePath, this.#lostSessionPath, this.#projectKeyPath];
+    const paths = [
+      this.#path,
+      this.#gravePath,
+      this.#lostSessionPath,
+      this.#graveQueuePath,
+      this.#lostSessionQueuePath,
+      this.#projectKeyPath,
+    ];
     let removed = 0;
     for (const path of paths) {
       try {

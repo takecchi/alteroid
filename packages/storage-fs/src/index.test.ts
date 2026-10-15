@@ -25,6 +25,7 @@ import {
   verifyScheduleNulContract,
   verifyScheduleIfMatchContract,
   verifyScheduleUnreadableContract,
+  verifySessionRegistryGraveQueueContract,
   verifySessionRegistryNulContract,
   verifyProfileStoreContract,
   verifyPermissionGrantStoreContract,
@@ -3171,6 +3172,22 @@ describe('FsCredentialVaultStore', () => {
 describe('FsSessionRegistry', () => {
   it('NUL の契約（issue #2927。3実装で同じことを測る）', async () => {
     await verifySessionRegistryNulContract(stores.sessions);
+  });
+
+  it('墓標は上書きされず複数持てる（#4884。3実装で同じことを測る）', async () => {
+    await verifySessionRegistryGraveQueueContract(stores.sessions);
+  });
+
+  it('古い形（1枠だけのファイル）で保存された墓標も、列の先頭として読める（#4884）', async () => {
+    await stores.sessions.clear();
+    await stores.sessions.setTranscriptGrave({ archiveId: 'arc-legacy' });
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([{ archiveId: 'arc-legacy' }]);
+    await stores.sessions.addTranscriptGrave({ archiveId: 'arc-new' });
+    expect((await stores.sessions.listTranscriptGraves()).map((g) => g.archiveId)).toEqual([
+      'arc-legacy',
+      'arc-new',
+    ]);
+    await stores.sessions.clear();
   });
 
   it('セッション id を覚えて忘れられる', async () => {

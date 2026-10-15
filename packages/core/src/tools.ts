@@ -8959,8 +8959,10 @@ export function createCloneTools(context: ToolContext) {
         if (minStoredBytesError !== null) return text(minStoredBytesError);
 
         // 墓標を守る
-        const grave = await stores.sessions.getTranscriptGrave();
-        const protectedIds: string[] = grave === null ? [] : [grave.archiveId];
+        // 順番待ちの墓標も守る（#4884）
+        const protectedIds: string[] = (await stores.sessions.listTranscriptGraves()).map(
+          (g) => g.archiveId,
+        );
 
         const filter: ArchiveRemoveManyFilter = {
           ...(sessionIds === undefined ? {} : { sessionIds }),
