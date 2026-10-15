@@ -577,6 +577,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     const s = await setupPeerCall([], { args: { run_in_background: true }, sdk, gate });
     expect(s.firstText).toContain('背景で流し始めた');
     expect(s.host.list()[0]?.liveBackgroundTasks).toBe(1);
+    expect(s.host.list()[0]?.liveBackgroundPeers).toBe(1);
     release();
     await waitFor(() =>
       sdk.inputs.some((input) => input.includes('alteroid が自動で送った知らせ')),

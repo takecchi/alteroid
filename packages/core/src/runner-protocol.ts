@@ -64,6 +64,11 @@ export const runnerManagerStateSchema = z.object({
    */
   liveBackgroundTasks: z.number().int().nonnegative().optional(),
   /**
+   * `liveBackgroundTasks` のうち、背景で流れている peer（Codex）のターンの本数（内数）。peer は鍵の回転の畳み（`keepPeers`）で閉じずに預けられ、止まりどころが起こし直した担当へ届く（#4734）ので、
+   * 本当に畳まれる背景処理と分けて断り書きに書く（#4881）。`undefined` は「分からない」（古い runner）で、デーモンは 0 本として扱う（今までどおり全部を畳んだと書く）。
+   */
+  liveBackgroundPeers: z.number().int().nonnegative().optional(),
+  /**
    * 起こしっぱなしの背景処理のうち、コマンドを控えられたものの字面（伏せ字にする前の生）。本数より少ないことがある（作業者の背景処理・peer・控えが枝刈りされたもの）。
    * `undefined` は「分からない」（古い runner）で、空配列は「控えが無い」。畳んだ背景処理を担当が起こし直せるよう、デーモンが伏せ字にして一言に載せる（#4850）。
    */

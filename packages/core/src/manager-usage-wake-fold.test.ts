@@ -41,14 +41,16 @@ function fakeRunner() {
   const counters = { lists: 0 };
   const behavior: {
     background: number | 'absent';
+    peers: number | undefined;
     commands: string[] | undefined;
     waiting: RunnerManagerState['waiting'];
-  } = { background: 0, commands: undefined, waiting: [] };
+  } = { background: 0, peers: undefined, commands: undefined, waiting: [] };
 
   const stateOf = (base: RunnerManagerState): RunnerManagerState => ({
     ...base,
     waiting: behavior.waiting,
     ...(behavior.background === 'absent' ? {} : { liveBackgroundTasks: behavior.background }),
+    ...(behavior.peers === undefined ? {} : { liveBackgroundPeers: behavior.peers }),
     ...(behavior.commands === undefined ? {} : { backgroundTaskCommands: behavior.commands }),
   });
 
@@ -214,6 +216,36 @@ describe('鍵の回転の起こし直しは、背景処理を理由に止めな�
     const message = s.fake.resumes[0]?.message ?? '';
     expect(message).toContain('背景処理 2 本');
     expect(message).not.toContain('コマンド');
+    await s.pool.stop();
+  });
+
+  it('⭐ (a3) 背景の peer 1 本と作業者の背景処理 1 本: 畳んだのは作業者の分だけと数え、peer は続いている・やり直さないと別に書く（#4881）', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 2;
+    s.fake.behavior.peers = 1;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
+
+    const message = s.fake.resumes[0]?.message ?? '';
+    expect(message).toContain('背景処理 1 本をセッションごと畳んで');
+    expect(message).not.toContain('背景処理 2 本');
+    expect(message).toContain('peer 1 本は畳まずに預けてあり、まだ続いている');
+    expect(message).toContain('やり直さないこと');
+    await s.pool.stop();
+  });
+
+  it('⭐ (a4) 背景の peer だけのときは、「畳んだ・結果は届いていない」を出さず、続いている・やり直さないとだけ書く（#4881）', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 1;
+    s.fake.behavior.peers = 1;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
+
+    const message = s.fake.resumes[0]?.message ?? '';
+    expect(message).toContain('peer 1 本は畳まずに預けてあり、まだ続いている');
+    expect(message).toContain('やり直さないこと');
+    expect(message).not.toContain('結果は届いていない');
+    expect(message).not.toContain('起こしっぱなしだった背景処理');
     await s.pool.stop();
   });
 

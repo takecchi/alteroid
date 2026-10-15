@@ -1801,6 +1801,30 @@ function redactedBackgroundCommands(commands: readonly string[] | undefined): st
     .slice(0, FOLD_NOTICE_COMMANDS_MAX);
 }
 
+/** 鍵の回転の畳みの断り書き。本当に畳んだ背景処理と、畳まずに預けた peer を書き分ける（#4881）。 */
+function composeFoldNotice(notice: {
+  backgroundTasks: number;
+  peers?: number | undefined;
+  commands?: readonly string[] | undefined;
+}): string {
+  const peers = notice.peers ?? 0;
+  const peerClause =
+    peers === 0
+      ? ''
+      : `背景で走っていた peer ${String(peers)} 本は畳まずに預けてあり、まだ続いている。` +
+        '止まりどころは起こし直した後に届くので、peer_run でやり直さないこと';
+  if (notice.backgroundTasks === 0) {
+    return `（alteroid より: 鍵の入れ替えのため、セッションを畳んで新しい鍵で起こし直した。${peerClause}）`;
+  }
+  return (
+    `（alteroid より: 鍵の入れ替えのため、起こしっぱなしだった背景処理 ${String(notice.backgroundTasks)} 本を` +
+    'セッションごと畳んで、新しい鍵で起こし直した。この背景処理の結果は届いていない。要るなら確かめて起こし直すこと' +
+    foldNoticeCommandsClause(notice.commands) +
+    (peerClause === '' ? '' : `。${peerClause}`) +
+    '）'
+  );
+}
+
 function foldNoticeCommandsClause(commands: readonly string[] | undefined): string {
   if (commands === undefined || commands.length === 0) return '';
   return '。畳んだ背景処理のコマンド（分かった分）: ' + commands.map((c) => `\`${c}\``).join(' / ');
@@ -3677,11 +3701,13 @@ class Pool implements ManagerPool {
       }
       fingerprintMatched = folded.fingerprintMatched === true;
       staleDelivery = folded.staleDelivery;
-      if (folded.foldedBackground !== undefined) {
+      if (folded.foldedBackground !== undefined || folded.foldedPeers !== undefined) {
         // 畳んだ事実は届くまで台帳に残す: この後の resume が失敗して預かりのまま再試行になると、旧セッションはもう無く、畳んだと知る手が無くなるため。
+        const peers = (folded.foldedPeers ?? 0) + (record.job.pendingFoldNotice?.peers ?? 0);
         record.job.pendingFoldNotice = {
           backgroundTasks:
-            folded.foldedBackground + (record.job.pendingFoldNotice?.backgroundTasks ?? 0),
+            (folded.foldedBackground ?? 0) + (record.job.pendingFoldNotice?.backgroundTasks ?? 0),
+          ...(peers === 0 ? {} : { peers }),
           ...(folded.foldedBackgroundCommands === undefined &&
           record.job.pendingFoldNotice?.commands === undefined
             ? {}
@@ -3698,12 +3724,7 @@ class Pool implements ManagerPool {
       }
     }
     if (record.job.pendingFoldNotice !== undefined) {
-      outgoing =
-        `（alteroid より: 鍵の入れ替えのため、起こしっぱなしだった背景処理 ${String(record.job.pendingFoldNotice.backgroundTasks)} 本を` +
-        'セッションごと畳んで、新しい鍵で起こし直した。背景処理の結果は届いていない。要るなら確かめて起こし直すこと' +
-        foldNoticeCommandsClause(record.job.pendingFoldNotice.commands) +
-        '）\n\n' +
-        message;
+      outgoing = composeFoldNotice(record.job.pendingFoldNotice) + '\n\n' + message;
     }
 
     // `attached` を信じ切らない: イベント駆動でしか更新されず、`closed` / resume 失敗の合図が届かなかった窓では
@@ -3876,6 +3897,8 @@ class Pool implements ManagerPool {
   ): Promise<{
     /** 背景処理ごと畳んだ本数（待ちの上限 `HELD_FORCE_FOLD_AFTER_MS` を過ぎた回か、鍵の回転の回）。 */
     foldedBackground?: number;
+    /** 畳まずに預けた peer の本数（`foldedBackground` には含めない。#4881） */
+    foldedPeers?: number;
     /** 畳んだ背景処理のうち、コマンドが分かったもの（伏せ字済み・字数を切ってある）。 */
     foldedBackgroundCommands?: string[];
     declined?: ManagerSendResult;
@@ -4094,8 +4117,11 @@ class Pool implements ManagerPool {
             : '（#4472。背景処理が終わらない・終わったのに本数が下りないと、古い鍵のまま居座るため）'),
       });
       const commands = redactedBackgroundCommands(state.backgroundTaskCommands);
+      // 本数の内数。欄が無い古い runner は 0 本（今までどおり全部を畳んだと書く）
+      const keptPeers = Math.min(state.liveBackgroundPeers ?? 0, foldBackground);
       return {
-        foldedBackground: foldBackground,
+        foldedBackground: foldBackground - keptPeers,
+        ...(keptPeers === 0 ? {} : { foldedPeers: keptPeers }),
         ...(commands.length === 0 ? {} : { foldedBackgroundCommands: commands }),
       };
     }

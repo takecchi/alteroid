@@ -1283,7 +1283,10 @@ export const jobSchema = z.object({
   // 本文（`heldMessages`）へは織り込まない: 預かりの字数上限・日誌・本文ごと返す経路に断り書きが混ざるため。実際に届いた回に下ろす
   pendingFoldNotice: z
     .object({
+      // 本当に畳んだ背景処理の本数（預けた peer は含まない）
       backgroundTasks: z.number().int().nonnegative(),
+      // 畳まずに預けた peer の本数。続いており、止まりどころは起こし直した後に届く。担当にやり直させない（#4881）。欄が無い台帳は 0 本
+      peers: z.number().int().nonnegative().optional(),
       // 畳んだ背景処理のコマンド（伏せ字済み・字数を切ってある）。分かった分だけ。担当が起こし直す手がかり（#4850）
       commands: z.array(z.string()).optional(),
       at: isoDateTime,
