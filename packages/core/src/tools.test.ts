@@ -6430,6 +6430,37 @@ describe('クローンの道具', () => {
     expect(reply).toContain(STALE_TOKEN_RECOVERY_CAVEAT);
   });
 
+  it('⭐ manager_list は、セッションの終わった委譲（stopped・failed・lost）に「古い鍵で走り続けている」の ⚠ を出さない（#4857）', async () => {
+    for (const status of ['stopped', 'failed', 'lost'] as const) {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.status = status;
+      target.tokenGeneration = 3;
+      target.activeTokenGeneration = 5;
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply, status).not.toContain('⚠ 認証トークンの世代が食い違っている');
+      expect(reply, status).toContain('セッションは終わっている');
+    }
+  });
+
+  it('対照: done の委譲は、今どおり世代の食い違いに ⚠ を出す（セッションが生きて待っていることがある。#4857）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.status = 'done';
+    target.tokenGeneration = 3;
+    target.activeTokenGeneration = 5;
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('⚠ 認証トークンの世代が食い違っている');
+  });
+
   it('manager_list は世代が一致していれば但し書きを足さない（#931 の陰性対照）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
