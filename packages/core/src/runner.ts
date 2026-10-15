@@ -152,6 +152,7 @@ import {
   collectManagerOutbox,
   defaultRunnerOutboxRoot,
   defaultRunnerOutboxStagedRoot,
+  listStagedOutboxFiles,
   openStagedOutboxFile,
   prepareManagerOutbox,
   pruneStaleOutboxRoots,
@@ -753,7 +754,7 @@ class Host implements RunnerHost {
     },
   });
   #daemonAcceptsArchiveRef = false;
-  // 畳み始めてから出した、デーモンに HTTP で取りに来させる物（預けた生ログ・出し箱の退避先ファイル）。取られる（消される）と外す（#4699）
+  // 畳み始めに残っていた物と畳み始めてから出した物のうち、デーモンに HTTP で取りに来させる物（預けた生ログ・出し箱・未追跡の預かりの退避先ファイル。#4912）。取られる（消される）と外す（#4699）
   #shuttingDown = false;
   readonly #pickupsSinceShutdown = new Set<string>();
   readonly #finishUnpushedWorkFn:
@@ -1513,8 +1514,17 @@ class Host implements RunnerHost {
     };
   }
 
-  openOutboxFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined> {
-    return openStagedOutboxFile(this.#outboxStagedRoot, managerId, fileId);
+  async openOutboxFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined> {
+    const file = await openStagedOutboxFile(this.#outboxStagedRoot, managerId, fileId);
+    return this.#releaseWhenRead(file, pickupKey('outbox', managerId, fileId));
+  }
+
+  // 読み切られたら待ちから外す（#4912）: DELETE が落ちても、取り終えた分を上限まで待たない
+  #releaseWhenRead(file: StagedOutboxFile | undefined, key: string): StagedOutboxFile | undefined {
+    file?.stream.once('end', () => {
+      this.#pickupsSinceShutdown.delete(key);
+    });
+    return file;
   }
 
   deleteOutboxFile(managerId: string, fileId: string): Promise<boolean> {
@@ -1523,8 +1533,9 @@ class Host implements RunnerHost {
   }
 
   // 出し箱の退避先と同じ作り（`fileId` の形・`managerId` の形を検める）で、dir だけが別
-  openRescueFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined> {
-    return openStagedOutboxFile(this.#rescueStagedRoot, managerId, fileId);
+  async openRescueFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined> {
+    const file = await openStagedOutboxFile(this.#rescueStagedRoot, managerId, fileId);
+    return this.#releaseWhenRead(file, pickupKey('rescue', managerId, fileId));
   }
 
   deleteRescueFile(managerId: string, fileId: string): Promise<boolean> {
@@ -1557,7 +1568,9 @@ class Host implements RunnerHost {
     return sent;
   }
 
-  // 畳み始める前の出し箱・rescue は数えない: 取りこぼし（デーモンが取り損ねた退避先）を待つと、取りに来ないものを待って器の入れ替えが遅れるため。預けた生ログは `shutdown()` が畳み始めに数える
+  // 畳み始める前に退避先へ置いた出し箱・rescue のファイルも、預けた生ログと同じく `shutdown()` が畳み始めに数える（#4912）。
+  // 数えないと、直前に emit した分をデーモンが取りに来る前に器が入れ替わり、退避先ごと失う（404 になる）。
+  // 取りこぼしを待って入れ替えが遅れる分は、待ちの上限（`PICKUP_WAIT_LIMIT_MS`）が抑える
   #notePickup(event: RunnerEvent): void {
     if (!this.#shuttingDown) return;
     if (event.type === 'archive' && event.ref !== undefined) {
@@ -1819,6 +1832,15 @@ class Host implements RunnerHost {
       // 取り終えたもの（DELETE が落ちただけ）は待たない（#4899）
       if (entry.fetched) continue;
       this.#pickupsSinceShutdown.add(pickupKey('archive', entry.managerId, entry.id));
+    }
+    // 出し箱・未追跡の預かりの退避先に残っている分も待たせる（#4912）。本文を載せて送り直すのは生ログだけ: 大きいファイルを SSE に載せないため
+    for (const [kind, root] of [
+      ['outbox', this.#outboxStagedRoot],
+      ['rescue', this.#rescueStagedRoot],
+    ] as const) {
+      for (const staged of await listStagedOutboxFiles(root)) {
+        this.#pickupsSinceShutdown.add(pickupKey(kind, staged.managerId, staged.fileId));
+      }
     }
     // 畳み始めの名乗りを入口ごとに任せない: 積み忘れる形を作らないため
     this.#emit({ type: 'shutting_down', runnerId: this.runnerId });

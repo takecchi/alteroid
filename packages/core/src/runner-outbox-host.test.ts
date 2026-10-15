@@ -246,6 +246,8 @@ describe('Host: 畳み（shutdown）で預けた物の数（#4699）', () => {
   async function hostWithHalfDoneManager(managerId: string) {
     const outboxRoot = await makeTempDir('runner-pickups-');
     const outboxStagedRoot = await makeTempDir('runner-pickups-staged-');
+    // 既定の退避先（tmpdir 直下）は他の試験・プロセスの残りを数えてしまう（畳み始めに退避先を数えるため。#4912）
+    const rescueStagedRoot = await makeTempDir('runner-pickups-rescue-staged-');
     const events: RunnerEvent[] = [];
     let written = false;
     const fake = interruptedSdk(async () => {
@@ -260,6 +262,7 @@ describe('Host: 畳み（shutdown）で預けた物の数（#4699）', () => {
       env: { PATH: '/usr/bin' },
       outboxRoot,
       outboxStagedRoot,
+      rescueStagedRoot,
       scratchSweep: false,
       cwdExistsFn: () => true,
       readCgroupEventCountersFn: async () => ({}),
@@ -295,6 +298,87 @@ describe('Host: 畳み（shutdown）で預けた物の数（#4699）', () => {
     await host.stop('mgr-pick2');
 
     expect(events.some((e) => e.type === 'report' && (e.files?.length ?? 0) > 0)).toBe(true);
+    expect(host.pendingPickups()).toBe(0);
+  });
+});
+
+// 畳み始める前に emit した出し箱・未追跡の預かりの退避先のファイルも待たせる（#4912）
+describe('Host: 畳み始める前に退避先へ置いた物も待ちに入る（#4912）', () => {
+  const OUTBOX_ID = 'a'.repeat(32);
+  const RESCUE_ID = 'b'.repeat(32);
+
+  async function hostWithStagedFiles() {
+    const outboxStagedRoot = await makeTempDir('runner-staged-before-');
+    const rescueStagedRoot = await makeTempDir('runner-rescue-staged-before-');
+    await mkdir(join(outboxStagedRoot, 'mgr-early'));
+    await mkdir(join(rescueStagedRoot, 'mgr-early'));
+    await writeFile(join(outboxStagedRoot, 'mgr-early', OUTBOX_ID), '出し箱');
+    await writeFile(join(rescueStagedRoot, 'mgr-early', RESCUE_ID), '預かり');
+    // 形の合わない名前は数えない
+    await writeFile(join(outboxStagedRoot, 'mgr-early', 'not-a-file-id'), 'x');
+    const host = createRunnerHost({
+      runnerId: 'runner-staged-before',
+      workspacePath: '/workspace',
+      emit: () => undefined,
+      queryFn: fakeSdk(async () => undefined).fn,
+      env: { PATH: '/usr/bin' },
+      outboxRoot: await makeTempDir('runner-staged-before-root-'),
+      outboxStagedRoot,
+      rescueStagedRoot,
+      scratchSweep: false,
+      cwdExistsFn: () => true,
+      readCgroupEventCountersFn: async () => ({}),
+      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+    });
+    hosts.push(host);
+    return host;
+  }
+
+  it('⭐ 畳み始めに退避先に残っている出し箱・預かりを待ちに入れ、DELETE で外す', async () => {
+    const host = await hostWithStagedFiles();
+    expect(host.pendingPickups()).toBe(0);
+
+    await host.shutdown();
+    expect(host.pendingPickups()).toBe(2);
+
+    await host.deleteOutboxFile('mgr-early', OUTBOX_ID);
+    expect(host.pendingPickups()).toBe(1);
+    await host.deleteRescueFile('mgr-early', RESCUE_ID);
+    expect(host.pendingPickups()).toBe(0);
+  });
+
+  it('⭐ GET を読み切ったら、DELETE が来なくても待ちから外す', async () => {
+    const host = await hostWithStagedFiles();
+    await host.shutdown();
+
+    const outbox = await host.openOutboxFile('mgr-early', OUTBOX_ID);
+    // 読み始めただけでは外さない
+    expect(host.pendingPickups()).toBe(2);
+    for await (const chunk of outbox!.stream) void chunk;
+    expect(host.pendingPickups()).toBe(1);
+
+    const rescue = await host.openRescueFile('mgr-early', RESCUE_ID);
+    for await (const chunk of rescue!.stream) void chunk;
+    expect(host.pendingPickups()).toBe(0);
+  });
+
+  it('退避先が無い（何も預けていない）器は、待ちが0のまま', async () => {
+    const host = createRunnerHost({
+      runnerId: 'runner-staged-none',
+      workspacePath: '/workspace',
+      emit: () => undefined,
+      queryFn: fakeSdk(async () => undefined).fn,
+      env: { PATH: '/usr/bin' },
+      outboxRoot: await makeTempDir('runner-staged-none-root-'),
+      outboxStagedRoot: join(await makeTempDir('runner-staged-none-'), 'missing'),
+      rescueStagedRoot: join(await makeTempDir('runner-rescue-none-'), 'missing'),
+      scratchSweep: false,
+      cwdExistsFn: () => true,
+      readCgroupEventCountersFn: async () => ({}),
+      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+    });
+    hosts.push(host);
+    await host.shutdown();
     expect(host.pendingPickups()).toBe(0);
   });
 });

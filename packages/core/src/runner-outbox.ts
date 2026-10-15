@@ -418,6 +418,25 @@ export async function openStagedOutboxFile(
   return { size: info.size, stream: handle.createReadStream() };
 }
 
+/**
+ * 退避先（出し箱・未追跡の預かりで同じ作り）に、いま残っているファイルを数え上げる（#4912）。
+ * 畳み始めに、まだデーモンに取られていない分を待ちに入れるのに使う。読めない dir は無いものとして扱う（畳みを止めない）。
+ */
+export async function listStagedOutboxFiles(
+  stagedRoot: string,
+): Promise<{ managerId: string; fileId: string }[]> {
+  const found: { managerId: string; fileId: string }[] = [];
+  const managers = await readdir(resolve(stagedRoot)).catch(() => [] as string[]);
+  for (const managerId of managers) {
+    if (!isSafeRunnerSegment(managerId)) continue;
+    const names = await readdir(resolve(stagedRoot, managerId)).catch(() => [] as string[]);
+    for (const fileId of names) {
+      if (isOutboxFileId(fileId)) found.push({ managerId, fileId });
+    }
+  }
+  return found;
+}
+
 export async function removeStagedOutboxFile(
   stagedRoot: string,
   managerId: string,

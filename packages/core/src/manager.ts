@@ -5854,6 +5854,7 @@ class Pool implements ManagerPool {
     const skipped: { path: string; reason: string; patterns?: readonly string[] }[] = [
       ...event.skipped,
     ];
+    const instanceBefore = this.#sighting(fromRunnerId).instanceId;
     const runner = await this.#runners.get(fromRunnerId).catch(() => null);
     const named =
       runner !== null && this.runnerHasCapability(fromRunnerId, RUNNER_CAPABILITY_RESCUE_FILES);
@@ -5902,6 +5903,7 @@ class Pool implements ManagerPool {
           file,
           store: this.#stores.attachments,
           limits,
+          swapNote: () => this.#swapNote(fromRunnerId, instanceBefore),
           ...(this.#outboxFetchFileTimeoutMs === undefined
             ? {}
             : { timeoutMs: this.#outboxFetchFileTimeoutMs }),
@@ -8698,6 +8700,16 @@ class Pool implements ManagerPool {
    * runner に預けた退避の本文を取りに行く。器が名簿に居ない・取りに行く呼び出しが落ちた回は、`#archiveFetchRetryDelaysMs` の間を置いてやり直す。
    * やり直すのは、そのうち取れる見込みのある失敗だけ: 本文が無い（期限切れ・既に消された）・口を持たない器は、何度聞いても同じ答えなので、すぐ投げる。
    */
+  #swapNote(runnerId: string, before: string | undefined): string {
+    const after = this.#sighting(runnerId).instanceId;
+    if (before === undefined || after === undefined) {
+      return 'runner の器の入れ替えの前後かは判定できない（instanceId を名乗っていない）';
+    }
+    return before === after
+      ? `runner の器は入れ替わっていない（instanceId=${after}）`
+      : `runner の器が入れ替わっていた（参照を受けた時の instanceId=${before}、取りに行った時=${after}）。預けたプロセスは既に居ない`;
+  }
+
   async #fetchArchiveRetrying(
     managerId: string,
     archiveId: string,
@@ -8723,13 +8735,7 @@ class Pool implements ManagerPool {
         if (failure === undefined) {
           if (fetched === undefined) {
             // 入れ替わりの前後かを日誌から読めるようにする（#4896）: 参照を受けた時と取りに行った時の instanceId が違えば、預けたプロセスはもう居ない
-            const instanceAfter = this.#sighting(fromRunnerId).instanceId;
-            const swapNote =
-              instanceBefore === undefined || instanceAfter === undefined
-                ? 'runner の器の入れ替えの前後かは判定できない（instanceId を名乗っていない）'
-                : instanceBefore === instanceAfter
-                  ? `runner の器は入れ替わっていない（instanceId=${instanceAfter}）`
-                  : `runner の器が入れ替わっていた（参照を受けた時の instanceId=${instanceBefore}、取りに行った時=${instanceAfter}）。預けたプロセスは既に居ない`;
+            const swapNote = this.#swapNote(fromRunnerId, instanceBefore);
             throw new Error(
               `runner に預けた退避（${archiveId}）が無かった（期限切れで捨てられたか、既に消された）。${swapNote}`,
             );
@@ -8857,6 +8863,7 @@ class Pool implements ManagerPool {
     const files = event.files ?? [];
     const rejectedFiles = event.rejectedFiles ?? [];
     if (files.length === 0) return { attachments: [], rejected: rejectedFiles.map(rejectedFileOf) };
+    const instanceBefore = this.#sighting(fromRunnerId).instanceId;
     const runner = await this.#runners.get(fromRunnerId).catch(() => null);
     const fallbackReason = (reason: string): ManagerReportFiles => ({
       attachments: [],
@@ -8878,6 +8885,7 @@ class Pool implements ManagerPool {
         rejectedFiles,
         store: this.#stores.attachments,
         limits: this.#attachmentLimits ?? readAttachmentLimits().limits,
+        swapNote: () => this.#swapNote(fromRunnerId, instanceBefore),
         ...(this.#outboxFetchFileTimeoutMs === undefined
           ? {}
           : { fileTimeoutMs: this.#outboxFetchFileTimeoutMs }),

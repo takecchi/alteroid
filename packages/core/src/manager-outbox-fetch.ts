@@ -65,6 +65,8 @@ export interface FetchManagerOutboxInput {
   readonly rejectedFiles: readonly RunnerOutboxRejectedFile[];
   readonly store: AttachmentStore;
   readonly limits: AttachmentLimits;
+  /** 退避先に無かった（404）とき、理由へ添える器の入れ替えの材料（#4912）。 */
+  readonly swapNote?: () => string;
   readonly fileTimeoutMs?: number;
   readonly totalTimeoutMs?: number;
 }
@@ -154,6 +156,7 @@ export async function fetchManagerOutbox(
       store: input.store,
       reportId: input.reportId,
       uploadedBy: `manager:${input.managerId}`,
+      ...(input.swapNote === undefined ? {} : { swapNote: input.swapNote }),
       timedOutReason: () =>
         totalSignal.aborted
           ? `受け取れなかった（時間切れ。1回の報告の取り出しは全体で ${seconds(totalTimeoutMs)} 秒まで）`
@@ -199,6 +202,8 @@ async function fetchOne(input: {
   reportId: string;
   uploadedBy: string;
   timedOutReason: () => string;
+  /** 404（退避先に無かった）の理由へ添える（#4912）。 */
+  swapNote?: () => string;
   /** 報告へ結び付けず、保存の印つきで入れる（未追跡のファイルの預かり。#4863）。 */
   kept?: true;
 }): Promise<FetchOneOutcome> {
@@ -227,7 +232,9 @@ async function fetchOne(input: {
     if (content === undefined) {
       return {
         ok: false,
-        reason: '退避先に無かった（runner が消した、または既に取り出された）',
+        reason: `退避先に無かった（runner が消した、または既に取り出された）${
+          input.swapNote === undefined ? '' : `。${input.swapNote()}`
+        }`,
       };
     }
     if (content.size !== undefined && content.size !== file.size) {
@@ -491,6 +498,8 @@ export interface FetchRescueFileInput {
   readonly file: { readonly fileId: string; readonly size: number; readonly sha256: string };
   readonly store: AttachmentStore;
   readonly limits: AttachmentLimits;
+  /** 退避先に無かった（404）とき、理由へ添える器の入れ替えの材料（#4912）。 */
+  readonly swapNote?: () => string;
   readonly timeoutMs?: number;
 }
 
@@ -528,6 +537,7 @@ export async function fetchRescueFile(
     store: input.store,
     reportId: '',
     uploadedBy: `manager:${input.managerId}`,
+    ...(input.swapNote === undefined ? {} : { swapNote: input.swapNote }),
     timedOutReason: () =>
       `受け取れなかった（時間切れ。1つの取り出しは ${seconds(timeoutMs)} 秒まで）`,
     kept: true,

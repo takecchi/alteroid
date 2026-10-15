@@ -348,6 +348,9 @@ describe('畳むとき、取られていない預けた退避を待ち、取ら�
       workspacePath: '/work/project',
       emit: (event) => events.push(event),
       queryFn: fn,
+      // 畳み始めに退避先を数えるので、既定の（tmpdir 直下の共有の）退避先は使わない（#4912）
+      outboxStagedRoot: join(dir, 'outbox-staged'),
+      rescueStagedRoot: join(dir, 'rescue-staged'),
     });
     hosts.push(host);
     host.setDaemonAcceptsArchiveRef(true);

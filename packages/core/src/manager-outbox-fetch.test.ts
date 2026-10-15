@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_ATTACHMENT_LIMITS, type AttachmentLimits } from './attachment.js';
 import { MemoryAttachmentStore } from './attachment-memory.js';
 import { sha256Hex } from './auth.js';
-import { fetchManagerOutbox } from './manager-outbox-fetch.js';
+import { fetchManagerOutbox, fetchRescueFile } from './manager-outbox-fetch.js';
 import type { RunnerClient, RunnerOutboxContent, RunnerOutboxFile } from './runner-protocol.js';
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
@@ -111,6 +111,49 @@ describe('担い手の出し箱の取り出し（Issue #4126 P2b）', () => {
     expect(found!.meta.uploadedBy).toBe('manager:mgr-1');
     expect(found!.meta.managerReportId).toBe('report-1');
     expect(fake.deleted).toEqual(['f1']);
+  });
+
+  // 器の入れ替えで退避先が消えた（404）とき、日誌・理由から入れ替えを読めるようにする（#4912）
+  it('退避先に無かった（404）とき、器の入れ替えの材料を理由に添える', async () => {
+    const bytes = textBytes('消えた成果物');
+    const fake = fakeRunner({});
+    const { args } = input(fake, [describeFile('gone', 'lost.txt', bytes)]);
+
+    const result = await fetchManagerOutbox({
+      ...args,
+      swapNote: () => 'runner の器が入れ替わっていた',
+    });
+
+    expect(result.attachments).toEqual([]);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0]?.reason).toContain('退避先に無かった');
+    expect(result.rejected[0]?.reason).toContain('runner の器が入れ替わっていた');
+  });
+
+  it('預かりの退避先に無かった（404）ときも、入れ替えの材料を理由に添える', async () => {
+    const bytes = textBytes('消えた預かり');
+    const runner = {
+      async openRescueFile() {
+        return undefined;
+      },
+    } as unknown as RunnerClient;
+    const store = new MemoryAttachmentStore({ limits: DEFAULT_ATTACHMENT_LIMITS });
+
+    const outcome = await fetchRescueFile({
+      runner,
+      managerId: 'mgr-1',
+      path: 'notes.md',
+      file: { fileId: 'gone', size: bytes.length, sha256: sha256Hex(bytes) },
+      store,
+      limits: DEFAULT_ATTACHMENT_LIMITS,
+      swapNote: () => 'runner の器が入れ替わっていた',
+    });
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.reason).toContain('退避先に無かった');
+      expect(outcome.reason).toContain('runner の器が入れ替わっていた');
+    }
   });
 
   it('sha256 が申告と合わなければ置かず、理由つきで rejected に載り、退避先は消させない', async () => {
