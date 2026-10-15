@@ -104,6 +104,7 @@ import {
   createAgentTokenHolder,
   createRunnerTokenSync,
   createTokenSpread,
+  runnerProfileEnvNames,
 } from './token-spread.js';
 import { resolvePort } from './port.js';
 import { pruneExtractedPluginsOnBoot } from './plugin-prune.js';
@@ -738,11 +739,14 @@ export async function main(): Promise<void> {
   const tokenSpread = createTokenSpread({
     runners,
     clone: agentTokenHolder,
-    profileEnvNames: () => Promise.resolve(Object.keys(profile.env())),
-    onShadowed: (names) => {
+    profileEnvNames: () => runnerProfileEnvNames(stores),
+    cloneProfileEnvNames: () => Promise.resolve(Object.keys(profile.env())),
+    onShadowed: (names, target) => {
+      // 先を言い分ける: runner は `runner` / `all` の行、クローンは `app` / `all` の行が影にするので、直す行が違うため。
+      const where = target === 'clone' ? 'クローンの' : 'runner へ渡る';
       process.stderr.write(
-        `alteroidd: 実行環境プロファイルが認証の鍵と同じ名前を宣言しています。` +
-          `回した鍵はこれで上書きされます: ${names.join(', ')}\n`,
+        `alteroidd: ${where}実行環境プロファイルが認証の鍵と同じ名前を宣言しています。` +
+          `回した鍵は${target === 'clone' ? 'クローン' : 'runner'}でこれに上書きされます: ${names.join(', ')}\n`,
       );
     },
   });

@@ -821,6 +821,8 @@ export {
 } from './mcp-server-service.js';
 export {
   composeProfileScript,
+  declaredProfileEnvNames,
+  runnerDeclaredEnvNames,
   composedFingerprints,
   createProfileService,
   profileScopeAppliesTo,

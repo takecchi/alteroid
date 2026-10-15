@@ -15,6 +15,7 @@ import {
   composedFingerprints,
   composeProfileScript,
   createProfileService,
+  declaredProfileEnvNames,
   ProfileRollbackFailedError,
   profileScopeAppliesTo,
 } from './profile-service.js';
@@ -427,6 +428,19 @@ describe('降ろし直し', () => {
     runner.received.length = 0;
     await service.syncRunner(runner);
     expect(runner.received).toEqual(['']);
+  });
+});
+
+describe('宣言される名前（declaredProfileEnvNames）', () => {
+  it('export と代入から名前を拾い、コメントとコマンド名は拾わない', () => {
+    const script = [
+      '# export HIDDEN=1',
+      'export A=1 B',
+      'C=2; ls -l && export D="x y"',
+      'declare -x E=3',
+    ].join('\n');
+
+    expect(declaredProfileEnvNames(script)).toEqual(['A', 'B', 'C', 'D', 'E']);
   });
 });
 

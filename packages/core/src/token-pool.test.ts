@@ -97,6 +97,29 @@ describe('normalizeTokenPool', () => {
     ).toThrow();
   });
 
+  it('⭐ 既存の行の順位が飛んでいても、新しく足す行（order 無し）は既存の最大より後ろに入る（#4843）', () => {
+    const existing = normalizeTokenPool(
+      [
+        { label: 'C', value: 'tok-c', order: 2 },
+        { label: 'D', value: 'tok-d', order: 3 },
+      ],
+      [],
+      opts(['id-c', 'id-d']),
+    );
+    // Web・CLI の「追加」と同じ形: 既存の行は id と order を付け、新しい行は付けない
+    const result = normalizeTokenPool(
+      [
+        { id: 'id-c', label: 'C', order: 2 },
+        { id: 'id-d', label: 'D', order: 3 },
+        { label: 'E', value: 'tok-e' },
+      ],
+      existing,
+      opts(['id-e']),
+    );
+    const byLabel = Object.fromEntries(result.map((t) => [t.label, t.order]));
+    expect(byLabel.E).toBeGreaterThan(byLabel.D ?? Infinity);
+  });
+
   it('order は明示があればそれ、無ければ配列内の位置。明示すれば配列の位置を上書きできる', () => {
     const result = normalizeTokenPool(
       [

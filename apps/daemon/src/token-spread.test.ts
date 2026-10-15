@@ -12,6 +12,7 @@ import {
   createAgentTokenHolder,
   createRunnerTokenSync,
   createTokenSpread,
+  runnerProfileEnvNames,
 } from './token-spread.js';
 
 const SECRET = 'sk-ant-oat-do-not-leak';
@@ -202,6 +203,80 @@ describe('プロファイルが鍵を影にしている形', () => {
 
     expect(results.find((r) => r.target === 'runner-primary')?.ok).toBe(true);
     expect(results.find((r) => r.target === 'profile-shadow')).toBeUndefined();
+  });
+});
+
+describe('runner へ渡るプロファイルの行が鍵を影にしている形（#4842）', () => {
+  async function spreadWith(scope: 'runner' | 'app' | 'all', script: string) {
+    const stores = createMemoryStores();
+    await stores.profile.set('10-token', script, scope);
+    const seen: string[][] = [];
+    const spread = createTokenSpread({
+      runners: registry([fakeClient('runner-primary')]),
+      clone: createAgentTokenHolder(),
+      profileEnvNames: () => runnerProfileEnvNames(stores),
+      onShadowed: (names) => seen.push([...names]),
+    });
+    const results = await spread.spread({
+      id: 'tok-a',
+      generation: 2,
+      kind: 'stored',
+      value: SECRET,
+    });
+    return { seen, results };
+  }
+
+  it('scope=runner の行が鍵の名前を宣言していると、警告が出る', async () => {
+    const { seen, results } = await spreadWith('runner', 'export CLAUDE_CODE_OAUTH_TOKEN=old\n');
+
+    expect(seen).toEqual([['CLAUDE_CODE_OAUTH_TOKEN']]);
+    expect(results.find((r) => r.target === 'profile-shadow')?.error).toContain(
+      'CLAUDE_CODE_OAUTH_TOKEN',
+    );
+  });
+
+  it('scope=all の行でも警告が出る（runner へ渡るため）', async () => {
+    const { seen } = await spreadWith('all', 'FOO=1; export CLAUDE_CODE_OAUTH_TOKEN=old\n');
+
+    expect(seen).toEqual([['CLAUDE_CODE_OAUTH_TOKEN']]);
+  });
+
+  it('scope=app の行だけが宣言しているときは、runner 向けの警告は出ない', async () => {
+    const { seen, results } = await spreadWith('app', 'export CLAUDE_CODE_OAUTH_TOKEN=old\n');
+
+    expect(seen).toEqual([]);
+    expect(results.find((r) => r.target === 'profile-shadow')).toBeUndefined();
+  });
+
+  it('クローンのプロファイルの影は、runner とは別の先として言う', async () => {
+    const seen: [string[], string | undefined][] = [];
+    const spread = createTokenSpread({
+      runners: registry([fakeClient('runner-primary')]),
+      clone: createAgentTokenHolder(),
+      profileEnvNames: async () => [],
+      cloneProfileEnvNames: async () => ['CLAUDE_CODE_OAUTH_TOKEN'],
+      onShadowed: (names, target) => seen.push([[...names], target]),
+    });
+
+    const results = await spread.spread({
+      id: 'tok-a',
+      generation: 2,
+      kind: 'stored',
+      value: SECRET,
+    });
+
+    expect(seen).toEqual([[['CLAUDE_CODE_OAUTH_TOKEN'], 'clone']]);
+    expect(results.find((r) => r.target === 'profile-shadow')).toBeUndefined();
+    expect(results.find((r) => r.target === 'profile-shadow-clone')?.ok).toBe(false);
+  });
+
+  it('コメントや値の中の名前は宣言に数えない', async () => {
+    const { seen } = await spreadWith(
+      'runner',
+      '# export CLAUDE_CODE_OAUTH_TOKEN=old\nexport PATH="$PATH:/x" # CLAUDE_CODE_OAUTH_TOKEN=1\n',
+    );
+
+    expect(seen).toEqual([]);
   });
 });
 

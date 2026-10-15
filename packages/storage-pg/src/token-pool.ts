@@ -86,7 +86,11 @@ export class PgTokenPoolStore implements TokenPoolStore {
   }
 
   async list(): Promise<AgentToken[]> {
-    const rows = await this.#db.select().from(agentTokens).orderBy(asc(agentTokens.order));
+    // 同じ順位は id で並べる（#4843）: 第二の鍵が無いと同順位の並びが不定になり、fs と選ぶ順が食い違うため
+    const rows = await this.#db
+      .select()
+      .from(agentTokens)
+      .orderBy(asc(agentTokens.order), asc(agentTokens.id));
     // `source = 'env'` の行を渡さない: 値を持たないので `credentialOf` が「値が無い」で投げるため。
     return rows.filter((row) => row.source !== 'env').map(fromRow);
   }

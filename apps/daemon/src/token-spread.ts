@@ -2,7 +2,9 @@ import {
   credentialNamesShadowedByProfile,
   fingerprintOf,
   ROTATABLE_CREDENTIAL_KEYS,
+  runnerDeclaredEnvNames,
   type RunnerRegistry,
+  type Stores,
   type TokenCredential,
   type TokenSpreadPort,
   type TokenSpreadResult,
@@ -41,8 +43,16 @@ export function createAgentTokenHolder(): AgentTokenHolder {
 export interface TokenSpreadOptions {
   runners: RunnerRegistry;
   clone: AgentTokenHolder;
+  /** runner へ渡るプロファイル（scope が `runner` / `all` の行）が宣言する名前。撒いた鍵が上書きされるかは、ここで決まる。 */
   profileEnvNames: () => Promise<readonly string[]>;
-  onShadowed?: (names: readonly string[]) => void;
+  /** クローンのプロファイル（`app` / `all`）が宣言する名前。runner とは別に言う: 影になる先が違い、直す行も違うため。 */
+  cloneProfileEnvNames?: () => Promise<readonly string[]>;
+  onShadowed?: (names: readonly string[], target?: 'runner' | 'clone') => void;
+}
+
+// 正本の行から静的に拾う: runner の評価結果はデーモンへ戻ってこず、戻す通信を足さないため。
+export async function runnerProfileEnvNames(stores: Pick<Stores, 'profile'>): Promise<string[]> {
+  return runnerDeclaredEnvNames(await stores.profile.list());
 }
 
 // 撒くのは runner が先、クローンが後: 逆順だと runner が落ちたときにクローンだけが新しいトークンを持つ層のずれが残るため。
@@ -62,7 +72,7 @@ export interface TokenSpread extends TokenSpreadPort {
 }
 
 export function createTokenSpread(options: TokenSpreadOptions): TokenSpread {
-  const { runners, clone, profileEnvNames, onShadowed } = options;
+  const { runners, clone, profileEnvNames, cloneProfileEnvNames, onShadowed } = options;
   const listeners = new Set<(results: readonly RunnerTokenPushResult[]) => void>();
 
   return {
@@ -77,11 +87,18 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpread {
     ): Promise<TokenSpreadResult[]> {
       const results: TokenSpreadResult[] = [];
 
-      // 影があっても撒くのはやめない（追加制限にしない）が、黙って効かない形にはしない。
+      // 影があっても撒くのはやめない（追加制限にしない）が、黙って効かない形にはしない。runner は渡る行の名前で、クローンは自分の評価結果で、別々に見る。
       const shadowed = await profileEnvNames()
         .then((names) => credentialNamesShadowedByProfile(ROTATABLE_CREDENTIAL_KEYS, names))
         .catch(() => [] as string[]);
-      if (shadowed.length > 0) onShadowed?.(shadowed);
+      if (shadowed.length > 0) onShadowed?.(shadowed, 'runner');
+      const cloneShadowed =
+        cloneProfileEnvNames === undefined
+          ? []
+          : await cloneProfileEnvNames()
+              .then((names) => credentialNamesShadowedByProfile(ROTATABLE_CREDENTIAL_KEYS, names))
+              .catch(() => [] as string[]);
+      if (cloneShadowed.length > 0) onShadowed?.(cloneShadowed, 'clone');
 
       const clients = await runners.list().catch(() => []);
       const pushed: RunnerTokenPushResult[] = [];
@@ -129,7 +146,14 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpread {
         results.push({
           target: 'profile-shadow',
           ok: false,
-          error: `実行環境プロファイルが同じ名前を宣言しているので、撒いた鍵が上書きされる: ${shadowed.join(', ')}`,
+          error: `runner へ渡る実行環境プロファイルが同じ名前を宣言しているので、runner では撒いた鍵が上書きされる: ${shadowed.join(', ')}`,
+        });
+      }
+      if (cloneShadowed.length > 0) {
+        results.push({
+          target: 'profile-shadow-clone',
+          ok: false,
+          error: `クローンの実行環境プロファイルが同じ名前を宣言しているので、クローンでは撒いた鍵が上書きされる: ${cloneShadowed.join(', ')}`,
         });
       }
 

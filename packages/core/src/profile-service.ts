@@ -52,6 +52,34 @@ export function composeProfileScript(
   return normalizeProfileScript(parts.join('\n'));
 }
 
+/**
+ * 本文が宣言する環境変数の名前を、評価せずに行から拾う（`export NAME=` / `export NAME` / `NAME=`）。
+ * 評価しない: runner の環境を持たないデーモンが他人の本文を走らせると、副作用と鍵の露出が増えるため。
+ * 拾えないものがある（`eval`・条件分岐の中・間接参照）: 警告の判定に使うだけで、置く・弾く判断には使わない。
+ */
+export function declaredProfileEnvNames(script: string): string[] {
+  const names = new Set<string>();
+  for (const line of script.split('\n')) {
+    const code = line.replace(/(^|\s)#.*$/, '').trim();
+    if (code.length === 0) continue;
+    for (const segment of code.split(/[;&|]+/)) {
+      const words = segment.trim().split(/\s+/);
+      const isExport = words[0] === 'export' || words[0] === 'declare' || words[0] === 'typeset';
+      for (const word of isExport ? words.slice(1) : words.slice(0, 1)) {
+        const match = /^([A-Za-z_][A-Za-z0-9_]*)(=|$)/.exec(word);
+        // 代入のない単語は export の後ろだけ名前に数える: 先頭の `ls` のようなコマンド名を拾わないため。
+        if (match !== null && (isExport || match[2] === '=')) names.add(match[1] as string);
+      }
+    }
+  }
+  return [...names].sort();
+}
+
+/** runner へ渡る行（scope が `runner` / `all`）が宣言する名前。 */
+export function runnerDeclaredEnvNames(entries: readonly EnvProfileEntry[]): string[] {
+  return declaredProfileEnvNames(composeProfileScript(entries, 'runner'));
+}
+
 export interface ComposedFingerprint {
   sha256?: string;
   bytes?: number;

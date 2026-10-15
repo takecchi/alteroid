@@ -192,6 +192,16 @@ export function normalizeTokenPool(
   const byId = new Map(existing.map((token) => [token.id, token] as const));
   const seenIds = new Set<string>();
 
+  // 新しく足す行（既存の行を指さず、order の無い行）は、既存の行の order の最大より後ろに置く（#4843）:
+  // 配列の位置のままだと、間の行を消して order が飛んだ後の「追加」が末尾でなく途中の優先順位に入るため
+  let nextNewOrder =
+    Math.max(
+      -1,
+      ...inputs.flatMap((input, index) =>
+        input.id !== undefined && byId.has(input.id) ? [input.order ?? index] : [],
+      ),
+    ) + 1;
+
   const built = inputs.map((input, index) => {
     if (input.id !== undefined) {
       if (seenIds.has(input.id)) {
@@ -228,7 +238,11 @@ export function normalizeTokenPool(
           : undefined;
 
     const id = current?.id ?? input.id ?? options.newId();
-    const order = input.order ?? index;
+    let order = input.order ?? index;
+    if (current === undefined && input.order === undefined) {
+      order = Math.max(index, nextNewOrder);
+      nextNewOrder = order + 1;
+    }
 
     // 比べるのはこの経路で変わりうる4つだけにする: 「全フィールド」だと、引き継ぎの側を直したときに黙って判定が変わるため
     const changed =
