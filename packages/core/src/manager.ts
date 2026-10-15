@@ -9412,10 +9412,12 @@ class Pool implements ManagerPool {
           // 枠の印は落ちた理由を既存の分類（`classifyUsageNotice`）に通して付ける: `reached` / `transition` のときだけ。分類できない落ち方（SDK のクラッシュ等）は印を付けず、担当ごとに配る。
           const reasonNotice = classifyUsageNotice(event.reason);
           // 枠の文言で落ちた回にも、`usage_notice` を待たずに枠の印を立てる（#4850）: セッションの例外で落ちた回は runner が通知を出さず、印が無いと回転の起こし直しの対象に入らない。`reached` だけ（`usage_notice` と同じ）。分類できない落ち方（SDK のクラッシュ等）には立てない。
-          if (reasonNotice?.kind === 'reached' && !this.#usageStopped.has(event.managerId)) {
+          // API の 429（rate_limit_error）をそのまま運ぶ理由文も枠として扱う（#4859）: SDK の枠の決まり文句を含まないことがあり、`closed` には構造化された失敗が無いため
+          const quotaReason = reasonNotice?.kind === 'reached' || isRateLimitReason(event.reason);
+          if (quotaReason && !this.#usageStopped.has(event.managerId)) {
             this.#usageStopped.add(event.managerId);
             record.job.usageStoppedAt ??= new Date(this.#now()).toISOString();
-            markedByClosed = reasonNotice.text;
+            markedByClosed = reasonNotice?.kind === 'reached' ? reasonNotice.text : event.reason;
             // 書けなくても進む: 台帳に写せないのは再起動を跨ぐ分だけで、メモリの印で今回の回転は拾える。
             await this.#persist(record).catch((error: unknown) => {
               noteDroppedRecord('枠で止まった印の永続化', `managerId=${event.managerId}`, error);
@@ -11716,4 +11718,9 @@ function describeStoppedReportFiles(files: ManagerReportFiles | undefined): stri
     );
   }
   return lines.length === 0 ? '' : `\n\n${lines.join('\n')}`;
+}
+
+/** 理由文が API の 429 か `rate_limit_error` をはっきり示すか（#4859）。500 などの別の失敗は含めない。 */
+function isRateLimitReason(reason: string): boolean {
+  return /API Error:\s*429\b/.test(reason) || /"type"\s*:\s*"rate_limit_error"/.test(reason);
 }
