@@ -140,4 +140,32 @@ describe('クローン — 作業者の拒否と上限（#4911）', () => {
     expect(await decisionLines(s.stores)).toEqual([]);
     await s.clone.stop();
   });
+
+  // #4931: 応答の本文は枠の判定に掛けない。assistant.error だけが失敗の印で、result は成功（本文は上限の原文の引用）の形
+  it('作業者の上限の原文を引用した応答が別の理由で失敗しても、クローンの枠の印は立たない', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      assistantErrorAt: () => ({ error: 'overloaded', text: '過負荷' }),
+      resultFor: () => ({ subtype: 'success', text: `作業者が落ちた: ${LIMIT_TEXT}` }),
+    });
+    s.clone.post(humanMessage('やって'));
+    await waitForTerminal(s.events);
+
+    expect(s.events.some((e) => e.type === 'error')).toBe(true);
+    expect(s.events.some((e) => e.type === 'usage_limited')).toBe(false);
+    expect(s.clone.usageBlocked).toBe(false);
+    await s.clone.stop();
+  });
+
+  it('SDK の失敗の文言が上限の形なら、今どおり枠の印が立つ', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      assistantErrorAt: () => ({ error: 'overloaded', text: LIMIT_TEXT }),
+      resultFor: () => ({ subtype: 'success', text: '本文' }),
+    });
+    s.clone.post(humanMessage('やって'));
+    await waitForTerminal(s.events);
+
+    expect(s.events.some((e) => e.type === 'usage_limited')).toBe(true);
+    expect(s.clone.usageBlocked).toBe(true);
+    await s.clone.stop();
+  });
 });
