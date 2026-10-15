@@ -105,7 +105,64 @@ export interface PeerBrokerDeps {
   readonly onBackgroundStop?: (result: PeerTurnResult) => void;
   /** 道具の記録にパスが残らない作り方（コードで書いた等）のファイルを拾うため。省略すると探さない。 */
   readonly scanWorkdir?: PeerWorkdirScanner;
+  /** 担当ごとの上限（#4764）。省略は既定（4 本・30 分）。 */
+  readonly limits?: PeerLimits;
 }
+
+export interface PeerLimits {
+  /** 同時に生きているセッションの数の上限。超えたら、閉じてよいもののうち最後に使われたのがいちばん古いものから閉じる。 */
+  readonly maxLiveSessions: number;
+  /** 使われない時間の上限（ミリ秒）。閉じてよいものがこれを超えたら閉じる。 */
+  readonly idleMs: number;
+}
+
+export const DEFAULT_PEER_MAX_SESSIONS = 4;
+export const MIN_PEER_MAX_SESSIONS = 1;
+export const MAX_PEER_MAX_SESSIONS = 64;
+export const DEFAULT_PEER_IDLE_MINUTES = 30;
+export const MIN_PEER_IDLE_MINUTES = 1;
+export const MAX_PEER_IDLE_MINUTES = 1440;
+export const PEER_MAX_SESSIONS_ENV_KEY = 'ALTEROID_PEER_MAX_SESSIONS';
+export const PEER_IDLE_MINUTES_ENV_KEY = 'ALTEROID_PEER_IDLE_MINUTES';
+
+export const DEFAULT_PEER_LIMITS: PeerLimits = {
+  maxLiveSessions: DEFAULT_PEER_MAX_SESSIONS,
+  idleMs: DEFAULT_PEER_IDLE_MINUTES * 60_000,
+};
+
+// 空・読めない・範囲外は既定へ倒す: 0 や負の値でセッションが溜まり続ける（または即座に閉じ続ける）ことを避けるため
+function readBoundedInt(
+  raw: string | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const text = raw?.trim();
+  if (text === undefined || text === '') return fallback;
+  const parsed = Number(text);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) return fallback;
+  return parsed;
+}
+
+export function resolvePeerLimits(env: NodeJS.ProcessEnv = process.env): PeerLimits {
+  return {
+    maxLiveSessions: readBoundedInt(
+      env[PEER_MAX_SESSIONS_ENV_KEY],
+      DEFAULT_PEER_MAX_SESSIONS,
+      MIN_PEER_MAX_SESSIONS,
+      MAX_PEER_MAX_SESSIONS,
+    ),
+    idleMs:
+      readBoundedInt(
+        env[PEER_IDLE_MINUTES_ENV_KEY],
+        DEFAULT_PEER_IDLE_MINUTES,
+        MIN_PEER_IDLE_MINUTES,
+        MAX_PEER_IDLE_MINUTES,
+      ) * 60_000,
+  };
+}
+
+const PEER_SWEEP_INTERVAL_MAX_MS = 60_000;
 
 export type PeerTurnEvent =
   | {
@@ -254,6 +311,8 @@ class PeerSession {
   readonly id: string;
   readonly provider: AgentProviderId;
   inBackground = false;
+  /** 最後に使われた時刻（ミリ秒）: 起こした時・ターンの開始と終わり・確認の答えで broker が更新する（#4764）。 */
+  lastUsedMs = 0;
   /** 相手のセッションが終わったときに1回だけ呼ぶ（#4764）。 */
   onEnded: ((reason: string) => void) | undefined;
   readonly #input = new InputQueue();
@@ -322,6 +381,11 @@ class PeerSession {
 
   get busy(): boolean {
     return this.#turnActive;
+  }
+
+  /** 閉じてよいか: ターンの最中・確認待ち・背景で待っているものは閉じない（#4764）。 */
+  get closable(): boolean {
+    return !this.busy && this.pendingIds.length === 0 && !this.inBackground;
   }
 
   get pendingIds(): readonly string[] {
@@ -847,15 +911,70 @@ const ENDED_REASONS_LIMIT = 64;
 export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
   const sessions = new Map<string, PeerSession>();
   // 外したセッションの終わった理由（#4764）: 外した後の peer_reply に「無い」ではなく理由を返すため。上限を置く: 外しても理由だけが溜まり続けないため
-  const endedReasons = new Map<string, string>();
-  const forget = (session: PeerSession, reason: string): void => {
+  // retired は上限・時間で閉じたもの: 続きを頼まれたら「新しく頼み直す」と返すため
+  const endedReasons = new Map<string, { reason: string; retired: boolean }>();
+  const limits = deps.limits ?? DEFAULT_PEER_LIMITS;
+  const nowMs = (): number => (deps.now?.() ?? new Date()).getTime();
+  const forget = (session: PeerSession, reason: string, retired = false): void => {
     if (sessions.get(session.id) !== session) return;
     sessions.delete(session.id);
-    endedReasons.set(session.id, reason);
+    endedReasons.set(session.id, { reason, retired });
     if (endedReasons.size > ENDED_REASONS_LIMIT) {
       const oldest = endedReasons.keys().next();
       if (oldest.done !== true) endedReasons.delete(oldest.value);
     }
+  };
+  // 閉じる: 外す理由を残し、どれをなぜ閉じたかを担当へ知らせる（#4764）
+  const retire = (session: PeerSession, reason: string): void => {
+    session.close();
+    forget(session, reason, true);
+    deps.onNote(`peer（${session.provider}）[${session.id}] を閉じた（${reason}）`);
+  };
+  // 使われない時間の見回り: 閉じてよいもののうち、最後に使われてから idleMs を超えたものを閉じる
+  const sweepIdle = (): void => {
+    const now = nowMs();
+    for (const session of [...sessions.values()]) {
+      if (session.closable && now - session.lastUsedMs > limits.idleMs) {
+        retire(session, `${String(Math.round(limits.idleMs / 60_000))} 分使われなかったので閉じた`);
+      }
+    }
+  };
+  // 数の上限: 新しく起こしたもの自身は閉じず、閉じてよいもののうち最後に使われたのがいちばん古いものから減らす
+  const enforceLimit = (fresh: PeerSession): void => {
+    const candidates = [...sessions.values()]
+      .filter((session) => session !== fresh && session.closable)
+      .sort((a, b) => a.lastUsedMs - b.lastUsedMs);
+    while (sessions.size > limits.maxLiveSessions) {
+      const oldest = candidates.shift();
+      if (oldest === undefined) break;
+      retire(
+        oldest,
+        `担当ごとの上限 ${String(limits.maxLiveSessions)} 本を超えたので、いちばん長く使われていないものを閉じた`,
+      );
+    }
+    if (sessions.size > limits.maxLiveSessions) {
+      deps.onNote(
+        `peer のセッションは閉じてよいものが無いので上限 ${String(limits.maxLiveSessions)} を超えて ${String(sessions.size)} 本`,
+      );
+    }
+  };
+  // 定期の見回り: 呼び出しが来なくても使われないセッションを閉じるため。unref するのでプロセスの終了は止めない
+  let sweepTimer: ReturnType<typeof setInterval> | undefined;
+  const stopSweeping = (): void => {
+    if (sweepTimer === undefined) return;
+    clearInterval(sweepTimer);
+    sweepTimer = undefined;
+  };
+  const startSweeping = (): void => {
+    if (sweepTimer !== undefined) return;
+    sweepTimer = setInterval(
+      () => {
+        sweepIdle();
+        if (sessions.size === 0) stopSweeping();
+      },
+      Math.max(1, Math.min(limits.idleMs, PEER_SWEEP_INTERVAL_MAX_MS)),
+    );
+    sweepTimer.unref();
   };
   const allowed = new Set<string>(deps.allowed);
   const modelsOf = (provider: AgentProviderId): readonly string[] => deps.models?.[provider] ?? [];
@@ -881,6 +1000,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     if (options.background === true && deps.onBackgroundStop === undefined) {
       return '背景へ回す口が無い（run_in_background を外して呼ぶこと）';
     }
+    sweepIdle();
     const sessionId = `peer-${randomBytes(6).toString('hex')}`;
     let session: PeerSession;
     try {
@@ -888,7 +1008,9 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     } catch (error) {
       return `peer のセッションを開けなかった: ${error instanceof Error ? error.message : String(error)}`;
     }
+    session.lastUsedMs = nowMs();
     sessions.set(sessionId, session);
+    startSweeping();
     session.onEnded = (reason) => {
       // 背景で待っている間は外さない: 止まりどころを知らせる前に背景処理の数から消えると、担当が待ち終えたと読むため（知らせた後で外す）
       if (!session.inBackground) forget(session, reason);
@@ -896,6 +1018,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     deps.onNote(
       `peer（${provider}）[${sessionId}] を起こした${model === undefined ? '' : `（model=${model}）`}`,
     );
+    enforceLimit(session);
     return follow(
       session,
       options.background === true,
@@ -911,7 +1034,13 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     start: (signal: AbortSignal | undefined) => Promise<PeerTurnResult>,
     signal: AbortSignal | undefined,
   ): Promise<PeerCallResult> => {
-    if (!background) return start(signal);
+    // 使われた時刻はターンの開始と終わりで更新する（#4764）
+    session.lastUsedMs = nowMs();
+    if (!background) {
+      return start(signal).finally(() => {
+        session.lastUsedMs = nowMs();
+      });
+    }
     const onStop = deps.onBackgroundStop;
     if (onStop === undefined) {
       return Promise.resolve('背景へ回す口が無い（run_in_background を外して呼ぶこと）');
@@ -920,6 +1049,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     void start(undefined).then((result) => {
       // 知らせる前に下ろす: 知らせで起きたマネージャーの報告が、終わった peer を背景待ちに数えないため
       session.inBackground = false;
+      session.lastUsedMs = nowMs();
       const ended = session.ended;
       if (ended !== undefined) forget(session, ended);
       try {
@@ -934,12 +1064,16 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
   };
 
   const reply: PeerBroker['reply'] = async (sessionId, message, options = {}) => {
+    sweepIdle();
     const session = sessions.get(sessionId);
     if (session === undefined) {
-      const reason = endedReasons.get(sessionId);
-      return reason === undefined
-        ? `session_id「${sessionId}」の peer セッションは無い（peer_run で起こすこと）`
-        : `peer のセッション ${sessionId} は終わっている（${reason}）。続けるなら peer_run で起こし直すこと`;
+      const ended = endedReasons.get(sessionId);
+      if (ended === undefined) {
+        return `session_id「${sessionId}」の peer セッションは無い（peer_run で起こすこと）`;
+      }
+      return ended.retired
+        ? `peer のセッション ${sessionId} は閉じた（${ended.reason}）。続きは頼めないので、peer_run で新しく頼み直すこと（前の文脈は引き継がれない）`
+        : `peer のセッション ${sessionId} は終わっている（${ended.reason}）。続けるなら peer_run で起こし直すこと`;
     }
     if (session.pendingIds.length > 0) {
       return (
@@ -957,6 +1091,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
   };
 
   const approve: PeerBroker['approve'] = async (approvalId, decision, options = {}) => {
+    sweepIdle();
     for (const session of sessions.values()) {
       if (session.hasPending(approvalId)) {
         return follow(
@@ -999,6 +1134,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
         .map((session) => ({ id: `peer:${session.id}`, taskType: `peer:${session.provider}` }));
     },
     closeAll() {
+      stopSweeping();
       for (const session of sessions.values()) session.close();
       sessions.clear();
     },
@@ -1035,6 +1171,8 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
               '相手は別の担い手で、あなたの文脈を持たない——必要な前提（作業ディレクトリ・完了の条件）は prompt に書くこと。' +
               approvalNote +
               '続きは返ってきた session_id を peer_reply へ渡す。' +
+              `同時に生きているセッションは ${String(limits.maxLiveSessions)} 本までで、超えるといちばん長く使われていないものを、` +
+              `${String(Math.round(limits.idleMs / 60_000))} 分使われなかったものも閉じる（閉じたセッションへの続きは頼めない）。` +
               (allModels.length === 0
                 ? ''
                 : `model で開いているモデル（${allModels.join(' / ')}）を名指しできる。`),
@@ -1054,6 +1192,8 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
           tool(
             'peer_reply',
             'peer_run で立てた相手のセッションへ、続きの指示を送って結果を受け取る。' +
+              `セッションは上限（${String(limits.maxLiveSessions)} 本）を超えたとき、または ${String(Math.round(limits.idleMs / 60_000))} 分使われなかったときに閉じる。` +
+              '閉じたセッションへは続きを頼めないので、peer_run で新しく頼み直すこと。' +
               approvalNote,
             {
               session_id: z.string().min(1).describe('peer_run が返した session_id'),

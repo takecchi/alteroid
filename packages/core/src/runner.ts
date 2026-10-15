@@ -59,6 +59,7 @@ import {
   peerSystemPromptAppend,
   peerActorOf,
   peerApprovalMark,
+  resolvePeerLimits,
   type PeerApprovalSource,
   type PeerBroker,
   type PeerTurnResult,
@@ -2562,6 +2563,7 @@ class RunnerSession {
     this.#peerBinding = binding;
     return createPeerBroker({
       allowed,
+      limits: resolvePeerLimits(this.#env),
       ...(peer.models === undefined ? {} : { models: peer.models }),
       // 組んだ後に資格が外れたら、相手を起こさずに断る（道具が消えるのは次の組み直し）
       closedReason: (provider) =>
