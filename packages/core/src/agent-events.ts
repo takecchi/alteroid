@@ -40,6 +40,8 @@ export type AgentContentBlock =
 export interface AgentTurnUsage {
   models: Record<string, UsageTotals>;
   sessionId?: string;
+  // `result.num_turns`: そのターンでモデルへ出した要求の本数（#4921）。数値でなければ置かない（0 を埋めない）
+  numTurns?: number;
   mainLoopUsage?: {
     inputTokens: number;
     outputTokens: number;

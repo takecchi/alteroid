@@ -85,6 +85,7 @@ import {
   describeDistillGap,
   distillSucceededEntry,
 } from './distill-gap.js';
+import { describeFirstTurnToolSearch } from './boot-tool-search-observed.js';
 import { describeSelectionsViolation, foldSelections } from './approval-choices.js';
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
@@ -636,6 +637,11 @@ export interface CloneOptions {
   dailyReportRetryDelaysMs?: readonly number[];
   restoreUnreadRetryDelaysMs?: readonly number[];
   contextUsageTimeoutMs?: number;
+  /**
+   * 起動後の最初の本セッションのターン（蒸留を除く）で文脈占有が取れたとき、ToolSearch が実際に効いたかの1行を、プロセスの起動につき1回だけ渡す（#4921）。
+   * 出し先（標準出力・日誌）はデーモンが持つ: 起動時の1行（`toolSearchRoute`、#4269）と同じ層から並べて出すため。
+   */
+  onFirstTurnToolSearch?: (line: string) => Promise<void>;
   /** 人間の「止める」操作が `interrupt` の答えを待つ期限（既定 {@link CLONE_INTERRUPT_TIMEOUT_MS}。#4664）。試験が短くするための口。 */
   interruptTimeoutMs?: number;
   profile?: ProfileApplier;
@@ -795,6 +801,9 @@ class Clone implements CloneHost {
   readonly #stores: Stores;
   readonly #driver: AgentCloneDriver;
   #contextUsageUnavailableNoted = false;
+  // 最初の本セッションのターンの終わりで立てる（文脈占有が取れたかに関わらず）: 取れなかった回の次に出すと「最初のターン」の観測でなくなるため。プロセスの起動で数え直す（#4921）
+  #firstTurnToolSearchSettled = false;
+  readonly #onFirstTurnToolSearch: ((line: string) => Promise<void>) | undefined;
   readonly #cwd: string | undefined;
   readonly #attachmentLimits: AttachmentLimits | undefined;
   /** 前回日誌へ書いた plugin の一覧の指紋（`#plugins`）。空は ''。 */
@@ -1068,6 +1077,7 @@ class Clone implements CloneHost {
       dailyReportRetryDelaysMs,
       restoreUnreadRetryDelaysMs,
       contextUsageTimeoutMs,
+      onFirstTurnToolSearch,
       interruptTimeoutMs,
       profile,
       profileService,
@@ -1106,6 +1116,7 @@ class Clone implements CloneHost {
     this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
     this.#restoreUnreadRetryDelays = restoreUnreadRetryDelaysMs ?? RESTORE_UNREAD_RETRY_DELAYS_MS;
     this.#contextUsageTimeoutMs = contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
+    this.#onFirstTurnToolSearch = onFirstTurnToolSearch;
     this.#interruptTimeoutMs = interruptTimeoutMs ?? CLONE_INTERRUPT_TIMEOUT_MS;
     this.#env = envSource;
     this.#childEnvBase = childEnvBase ?? envSource;
@@ -6636,6 +6647,26 @@ class Clone implements CloneHost {
   }
 
   /**
+   * 起動後の最初の本セッションのターンの終わりで、ToolSearch が実際に効いたかを1回だけ渡す（#4921。起動時の見込みは #4269）。
+   * 蒸留のターンは数えない（本セッションの最初のターンではなく、文脈も別）。投げない: 観測であって仕事ではなく、ターンの終わりを止めないため。
+   */
+  async #noteFirstTurnToolSearch(
+    contextUsage: ContextUsageObservation | undefined,
+    usage: AgentTurnUsage | undefined,
+  ): Promise<void> {
+    if (this.#firstTurnToolSearchSettled) return;
+    if (this.#sdkSession.turn?.kind !== 'normal') return;
+    this.#firstTurnToolSearchSettled = true;
+    if (this.#onFirstTurnToolSearch === undefined) return;
+    if (contextUsage === undefined || contextUsage.error !== undefined) return;
+    try {
+      await this.#onFirstTurnToolSearch(describeFirstTurnToolSearch(contextUsage, usage));
+    } catch (error) {
+      noteDroppedRecord('ToolSearch の最初のターンの観測', 'clone', error);
+    }
+  }
+
+  /**
    * セッションを畳む直前に、累積を control channel から1回読んで台帳へ積む。
    * `result` を出さずに終わったターンは `usage` を持たず、セッションごと死ぬと末尾ぶんが二度と積まれないため。
    * `#query` を閉じる前に呼ぶ: 閉じた後の control channel からは何も取れない。
@@ -7089,6 +7120,8 @@ class Clone implements CloneHost {
           contextUsage,
           compactions,
         });
+
+        await this.#noteFirstTurnToolSearch(contextUsage, event.usage);
 
         // 成否で絞らない: 拒否は成功したターンにも失敗したターンにも載る。生の合図と `result` の両方を読む（SDK は前者を best-effort としている）。
         for (const denial of event.denials) {

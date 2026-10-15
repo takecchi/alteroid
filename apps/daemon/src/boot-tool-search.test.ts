@@ -1,7 +1,7 @@
 import { createMemoryStores, failingJournalAppend } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { reportBootToolSearch } from './boot-tool-search.js';
+import { reportBootToolSearch, reportBootToolSearchObserved } from './boot-tool-search.js';
 
 const LINE = 'ToolSearch: クローンの子の env には止める条件が置かれていない';
 
@@ -43,5 +43,21 @@ describe('reportBootToolSearch（標準出力と日誌の両方へ、起動を�
     expect(stdout).toHaveLength(1);
     expect(stderr).toHaveLength(1);
     expect(stderr[0]).toContain('日誌へ残せませんでした');
+  });
+});
+
+describe('reportBootToolSearchObserved（起動時の行の隣に、最初のターンの観測を並べる）', () => {
+  it('標準出力へ1行と、日誌に external_event（source=boot-tool-search-observed）を1行残す', async () => {
+    const stores = createMemoryStores();
+    const { stdout, out } = capture();
+
+    await reportBootToolSearchObserved(stores, LINE, out);
+
+    expect(stdout).toEqual([`alteroidd: ${LINE}\n`]);
+    const entries = (await stores.journal.list()).filter(
+      (entry) => entry.type === 'external_event' && entry.source === 'boot-tool-search-observed',
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ summary: LINE });
   });
 });

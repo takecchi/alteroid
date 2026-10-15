@@ -31,6 +31,8 @@ export function fakeSdk(
     failWith?: string;
     modelUsage?: (callIndex: number) => Record<string, unknown> | undefined;
     resultUsage?: (callIndex: number) => Record<string, unknown> | undefined;
+    /** result の `num_turns`（そのターンでモデルへ出した要求の本数） */
+    numTurns?: (callIndex: number) => number | undefined;
     resultSubtype?: string;
     resultText?: string;
     resultFor?: (
@@ -139,6 +141,7 @@ export function fakeSdk(
       } as unknown as SDKMessage;
       const modelUsage = options.modelUsage?.(callIndex);
       const resultUsage = options.resultUsage?.(callIndex);
+      const numTurns = options.numTurns?.(callIndex);
       const resultOverride = options.resultFor?.(turnIndex);
       const denials = options.permissionDenials?.(callIndex);
       yield {
@@ -153,6 +156,7 @@ export function fakeSdk(
           : { api_error_status: resultOverride.apiErrorStatus }),
         ...(modelUsage === undefined ? {} : { modelUsage }),
         ...(resultUsage === undefined ? {} : { usage: resultUsage }),
+        ...(numTurns === undefined ? {} : { num_turns: numTurns }),
         ...(denials === undefined ? {} : { permission_denials: denials }),
       } as unknown as SDKMessage;
     }
@@ -246,7 +250,10 @@ export function setup(
   sdkOptions: Parameters<typeof fakeSdk>[1] = {},
   // 既定は空にする: 手元の ALTEROID_CLONE_MODEL の有無でテストの結果を変えないため
   env: NodeJS.ProcessEnv = {},
-  cloneOptions: { contextUsageTimeoutMs?: number } = {},
+  cloneOptions: {
+    contextUsageTimeoutMs?: number;
+    onFirstTurnToolSearch?: (line: string) => Promise<void>;
+  } = {},
 ): Setup {
   const { fn, calls } = fakeSdk(reply, sdkOptions);
   const clone = createClone({
