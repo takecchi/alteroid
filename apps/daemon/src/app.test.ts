@@ -431,6 +431,8 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
       lastSystemError: true,
       lastCgroupEvents: true,
       usageStoppedAt: true,
+      supersededBy: true,
+      supersedes: true,
       runnerId: true,
       workspace: true,
       lease: true,
@@ -3555,6 +3557,29 @@ describe('HTTP API', () => {
           '消していたので already が返っただけである）。',
       ).toBeUndefined();
     });
+  });
+
+  it('前任・後継のつながり（supersededBy / supersedes。#4861）が GET /managers まで落ちずに届く', async () => {
+    const base = {
+      status: 'failed' as const,
+      live: false,
+      cwd: '/work/project',
+      request: '監査',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    };
+    fake.managerList.push(
+      { ...base, managerId: 'mgr-old', supersededBy: 'mgr-new' },
+      { ...base, managerId: 'mgr-new', status: 'running', live: true, supersedes: 'mgr-old' },
+    );
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: { managerId: string; supersededBy?: string; supersedes?: string }[];
+    };
+
+    expect(list.managers.find((m) => m.managerId === 'mgr-old')?.supersededBy).toBe('mgr-new');
+    expect(list.managers.find((m) => m.managerId === 'mgr-new')?.supersedes).toBe('mgr-old');
   });
 
   it('manager_id から一覧・状態・生ログへ降りられる（可観測性の下2層）', async () => {
