@@ -446,6 +446,7 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
       resetTimeSkewMatch: true,
       lastUnpushedWorkObservation: true,
       lastRescue: true,
+      rescueStash: true,
       externalOutputs: true,
       heldMessages: true,
     };
