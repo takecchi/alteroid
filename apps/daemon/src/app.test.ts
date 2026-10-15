@@ -9305,6 +9305,67 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     ]);
   });
 
+  it('⭐ デーモン自身が起動時に読む名前（TZ・日報の時刻）を置くと restartRequired に載る。普通の名前は載らない（#4830）', async () => {
+    const withVault = withCredentials();
+
+    const response = await put(withVault, [
+      { name: 'TZ', value: 'UTC', scope: 'app' },
+      { name: 'ALTEROID_DAILY_REPORT_AT', value: '09:00' },
+      { name: 'GH_TOKEN', value: DUMMY_VALUE },
+    ]);
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { restartRequired?: string[] };
+    expect(body.restartRequired).toEqual(['ALTEROID_DAILY_REPORT_AT', 'TZ']);
+
+    const plain = await put(withVault, [{ name: 'GH_TOKEN', value: 'other-value' }]);
+    expect(((await plain.json()) as { restartRequired?: string[] }).restartRequired).toEqual([]);
+  });
+
+  it('⭐ 外したとき・runner へ狭めたときも restartRequired に載る。runner だけの行は載らない（#4830）', async () => {
+    const withVault = withCredentials();
+    await put(withVault, [
+      { name: 'TZ', value: 'UTC', scope: 'all' },
+      { name: 'ALTEROID_MEMORY_TIDY_AT', value: '04:00', scope: 'all' },
+    ]);
+
+    const removed = await put(withVault, [{ name: 'TZ', value: '' }]);
+    expect(((await removed.json()) as { restartRequired?: string[] }).restartRequired).toEqual([
+      'TZ',
+    ]);
+
+    const narrowed = await put(withVault, [
+      { name: 'ALTEROID_MEMORY_TIDY_AT', value: '04:00', scope: 'runner' },
+    ]);
+    expect(((await narrowed.json()) as { restartRequired?: string[] }).restartRequired).toEqual([
+      'ALTEROID_MEMORY_TIDY_AT',
+    ]);
+
+    const runnerOnly = await put(withVault, [
+      { name: 'ALTEROID_REPORT_LOOKBACK_DAYS', value: '5', scope: 'runner' },
+    ]);
+    expect(((await runnerOnly.json()) as { restartRequired?: string[] }).restartRequired).toEqual(
+      [],
+    );
+  });
+
+  it('⭐ GET の行に、再起動で効く名前のときだけ restartRequired: true が付く（#4830）', async () => {
+    const withVault = withCredentials();
+    await put(withVault, [
+      { name: 'TZ', value: 'UTC', scope: 'app' },
+      { name: 'GH_TOKEN', value: DUMMY_VALUE },
+    ]);
+
+    const read = await withVault.request('/credentials');
+    const body = (await read.json()) as {
+      credentials: { name: string; restartRequired?: boolean }[];
+    };
+    expect(body.credentials.find((row) => row.name === 'TZ')?.restartRequired).toBe(true);
+    expect(body.credentials.find((row) => row.name === 'GH_TOKEN')?.restartRequired).toBe(
+      undefined,
+    );
+  });
+
   it('応答に値が1文字も出ない（返るのは指紋だけ）', async () => {
     const runner = fakeRunner('runner-1');
     const withVault = withCredentials([runner]);
