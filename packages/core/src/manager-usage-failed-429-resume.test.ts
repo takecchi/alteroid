@@ -205,6 +205,39 @@ describe('429 で終わった担当を、枠で止まったものとして起こ
     expect(s.fake.sends[0]?.text).toContain('通る鍵に戻った');
   });
 
+  it('⭐ セッションごと落ちた理由文が API の 429（rate_limit_error）なら、枠の決まり文句が無くても印が立ち、起こし直される（#4859）', async () => {
+    const s = await setup({ rotateOnObservation: true });
+
+    s.fake.push({
+      type: 'closed',
+      managerId: ID,
+      status: 'failed',
+      reason:
+        'マネージャーのセッションが落ちた: API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization."}}',
+    } as RunnerEvent);
+    await settle();
+
+    expect(s.observations.map((o) => o.notice?.kind)).toEqual(['reached']);
+    expect(s.fake.resumes.map((c) => [c.managerId, c.sessionId])).toEqual([[ID, 'sess-429']]);
+  });
+
+  it('対照: 理由文が API の 500 なら、今どおり印を立てない（#4859）', async () => {
+    const s = await setup({ rotateOnObservation: true });
+
+    s.fake.push({
+      type: 'closed',
+      managerId: ID,
+      status: 'failed',
+      reason:
+        'マネージャーのセッションが落ちた: API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
+    } as RunnerEvent);
+    await settle();
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+
+    expect(s.observations).toEqual([]);
+    expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeUndefined();
+  });
+
   it('(b) 枠と無関係な失敗（クラッシュ・500）は印を立てず、起こし直さない', async () => {
     const s = await setup({ rotateOnObservation: true });
 
