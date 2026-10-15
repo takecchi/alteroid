@@ -44,6 +44,11 @@ const realSpawn: ProcessSpawnFn = (o) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
+// 再試行を付けて消す（#4827）: 自動の gc を止めても、切り離された git の子が書き終える前に消し始めると ENOTEMPTY になりうるため
+async function removeTree(dir: string): Promise<void> {
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+
 function g(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' });
 }
@@ -72,6 +77,10 @@ describe('退避 ref（#1266）', () => {
     g(root, 'init', '-q', '--bare', bare);
     g(repo, 'init', '-q', '-b', 'main');
     g(repo, 'remote', 'add', 'origin', bare);
+    // 自動の gc を止める（#4827）: push を受けた receive-pack が gc を切り離して走らせ、後片付けの rm と objects/pack で競合して ENOTEMPTY で落ちるため
+    g(bare, 'config', 'receive.autogc', 'false');
+    g(bare, 'config', 'gc.auto', '0');
+    g(repo, 'config', 'gc.auto', '0');
     await writeFile(path.join(repo, 'a.txt'), 'one\n');
     g(repo, 'add', 'a.txt');
     g(repo, 'commit', '-qm', 'first');
@@ -80,7 +89,7 @@ describe('退避 ref（#1266）', () => {
   });
 
   afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
+    await removeTree(root);
   });
 
   it('退避しなかった未追跡のパス名が上限で切られるとき、絵文字の途中で切らない', async () => {
@@ -596,7 +605,7 @@ describe('退避の作業ツリーの列挙の打ち切りを呼び手へ返す�
     root = await makeTempDir('rescue-list-');
   });
   afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
+    await removeTree(root);
   });
   const run = (cwd: string, onListIncomplete: (value: unknown) => void) =>
     runRescue(cwd, {
