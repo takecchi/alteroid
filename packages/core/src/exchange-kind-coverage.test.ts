@@ -195,7 +195,7 @@ function textFieldReferencesAnyPrefix(objectText: string): boolean {
 }
 
 const EXPECTED_SITE_COUNT: Record<string, number> = {
-  'clone.ts': 78,
+  'clone.ts': 80,
   'manager.ts': 66,
 };
 

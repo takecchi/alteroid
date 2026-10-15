@@ -3,6 +3,7 @@
 import type { AgentEvent } from './agent-events.js';
 import type {
   AgentObservationHook,
+  AgentOptionalContextHook,
   AgentPreCompactRecord,
   AgentPreToolHook,
   AgentSubagentStopRecord,
@@ -46,7 +47,8 @@ export interface AgentCloneSessionSpec {
   sessionLog?: AgentSessionLog;
   onPreToolUse: AgentPreToolHook;
   onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
-  onPostToolUse: AgentObservationHook<AgentToolAuditRecord>;
+  // 文脈を返せる形にする: 作業者の上限の知らせを次の道具の結果へ添える口が要るため（#4911）。蒸留側（下）は観測のまま
+  onPostToolUse: AgentOptionalContextHook<AgentToolAuditRecord>;
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
   onSubagentStop: AgentObservationHook<AgentSubagentStopRecord>;
 }

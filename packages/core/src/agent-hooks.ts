@@ -84,6 +84,11 @@ export type AgentContextOutcome = { kind: 'continue' } | { kind: 'addContext'; t
 
 export type AgentContextHook<T> = (record: T) => AgentContextOutcome | Promise<AgentContextOutcome>;
 
+// 何も返さない観測だけのフックも載せられる形: クローンの `PostToolUse` は文脈を添えられるが、添えない実装（観測のみ）を壊さないため。何も返さなければ `continue`
+export type AgentOptionalContextHook<T> = (
+  record: T,
+) => AgentContextOutcome | void | Promise<AgentContextOutcome | void>;
+
 export interface AgentPermissionDeniedRecord {
   toolName?: string;
   toolInput?: unknown;

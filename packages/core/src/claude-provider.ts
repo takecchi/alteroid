@@ -28,7 +28,9 @@ import type {
 import type { AgentProvider } from './agent-ports.js';
 import type {
   AgentContextHook,
+  AgentContextOutcome,
   AgentObservationHook,
+  AgentOptionalContextHook,
   AgentPermissionDeniedHook,
   AgentPermissionDeniedRecord,
   AgentPreCompactRecord,
@@ -490,7 +492,7 @@ export interface CloneSessionOptionsRequest {
   resume: string | null;
   sessionStore?: SessionStore;
   onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
-  onPostToolUse: AgentObservationHook<AgentToolAuditRecord>;
+  onPostToolUse: AgentOptionalContextHook<AgentToolAuditRecord>;
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
   onPreToolUse: AgentPreToolHook;
   // `buildCloneDistillOptions`（蒸留）には配線しない: 蒸留は `Task` を呼ばない設計で、`SubagentStop` が発火する前提が無いため
@@ -553,7 +555,14 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
       // effort を `PreCompact` で拾わない: `PreCompact` はセッション生涯に対して1本のフックで、`BaseHookInput.effort` はツール実行の文脈で発火するフックにしか付かないため
       PostToolUse: [
         {
-          hooks: [wrapToolAuditHook(onPostToolUse)],
+          hooks: [
+            wrapContextHook(
+              'PostToolUse',
+              async (record: AgentToolAuditRecord): Promise<AgentContextOutcome> =>
+                (await onPostToolUse(record)) ?? { kind: 'continue' },
+              toAgentToolAuditRecord,
+            ),
+          ],
         },
       ],
       // `PostToolUse` と `PostToolUseFailure` の片方だけを登録しない: 排他に発火するので両方登録しても二重記録にならず、片方だけだと失敗・中断した道具呼び出しが日誌に1件も残らないため

@@ -13,6 +13,7 @@ import type {
   AgentTurnUsage,
 } from './agent-events.js';
 import type {
+  AgentContextOutcome,
   AgentPreCompactRecord,
   AgentPreToolDecision,
   AgentPreToolRecord,
@@ -87,6 +88,7 @@ import {
 import { describeSelectionsViolation, foldSelections } from './approval-choices.js';
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
+import { WorkerLimitNotices } from './runner-worker-limit-notice.js';
 import { excerpt, excerptLine, renderListingFromEnd, tailByCodePoints } from './excerpt.js';
 import { readConversationWindow } from './conversation.js';
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
@@ -953,6 +955,8 @@ class Clone implements CloneHost {
 
   // タイマーを持たない: 「枠が開いたか」を無料で知る方法が無く、試行の契機は新しい合図が届いたときに限るため
   #usageBlocked: UsageLimitNotice | null = null;
+  // `#usageBlocked` とは別に持つ: 作業者だけが落ちてもクローンは動けるので、枠の印にも鍵の回転にも繋がない（#4911）
+  readonly #workerLimitNotices = new WorkerLimitNotices();
   #restoringUnread = false;
   // 待ち行列から外すだけにしない: `#restoreUnread` は消した後にこれから積むので、消した合図が配られてしまうため
   readonly #droppedWhileRestoring = new Set<string>();
@@ -5948,7 +5952,7 @@ class Clone implements CloneHost {
    * 除外の前提が崩れる回: MCP の入力検証が落ちるとハンドラが一度も呼ばれず、SDK は成功扱いの `isError` 応答にするので、除外だけが効いて何も残らない。除外する前に検証落ちかを見て（`detectMcpInputValidationFailure`）、`#journalSelfJournalingToolValidationFailure` が `tool_use` として残す。
    * 例外を投げない: ツール実行の後続に影響しうる。
    */
-  async #onPostToolUse(record: AgentToolAuditRecord): Promise<void> {
+  async #onPostToolUse(record: AgentToolAuditRecord): Promise<AgentContextOutcome> {
     const level = record.effortLevel;
     if (typeof level === 'string') this.#effort = level;
     this.#noteTranscriptPath(record.transcriptPath);
@@ -5956,6 +5960,50 @@ class Clone implements CloneHost {
     if (typeof record.toolUseId === 'string') this.#allowedByGrantToolUses.delete(record.toolUseId);
 
     await this.#journalToolUse(record, CLONE_ACTOR_ID);
+
+    const workerLimit = await this.#workerLimitNotice(record.agentId);
+    return workerLimit === null ? { kind: 'continue' } : { kind: 'addContext', text: workerLimit };
+  }
+
+  /**
+   * 作業者だけが利用上限で落ちた事実を覚え、日誌へ1行残す（#4911。担当の層は `runner.ts` の `#recordWorkerLimit`、#4903）。
+   * クローン自身の枠の印（`#usageBlocked`）・`usage_limited`・鍵の回転の契機にはしない: クローン本体は動けるため。原文は伏せ字を通す。
+   */
+  async #recordWorkerLimit(label: string, raw: string): Promise<void> {
+    const shown = redactErrorText(raw, this.#env);
+    if (!this.#workerLimitNotices.record(label, shown, Date.now())) return;
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_DECISION_PREFIX}作業者（${label}）だけが利用上限で落ちた。クローンは動けるので、枠の印も鍵の回転も起こしていない。` +
+        `次の道具の結果に知らせを添える（原文: ${shown.trim().slice(0, 300)}）`,
+    });
+  }
+
+  /** 作業者が上限で落ちていれば知らせの段落を返す。相手（クローン本人・作業者ごと）に10分に1回まで。クローン本人に添えた回は日誌にも1行残す。投げたときは何も添えない。 */
+  async #workerLimitNotice(agentId: string | undefined): Promise<string | null> {
+    try {
+      const notice = this.#workerLimitNotices.next(
+        agentId ?? 'clone',
+        agentId === undefined,
+        Date.now(),
+      );
+      if (notice !== null && agentId === undefined) {
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text:
+            `${EXCHANGE_KIND_DECISION_PREFIX}作業者が利用上限で落ちている（${String(notice.count)} 体）ので、` +
+            'この道具の結果に「戻るまで作業者を立て直しても同じく落ちうる」という知らせを添えた（止める指示ではない）。',
+        });
+      }
+      return notice?.text ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /** 本セッションと同じ関数を通す: 片方だけ記録が無いと、蒸留のターンで何をしたかがどこにも残らない。effort はここで拾わない: 別セッションの値を本セッションの観測として持つと嘘になる。 */
@@ -6920,6 +6968,22 @@ class Clone implements CloneHost {
         const turn = this.#sdkSession.turn;
         const said = assistantTextOf(event.blocks);
 
+        // 作業者（`parentToolUseId` 付き = Task の中の別の層）の発言の拒否は、クローン自身のターンの失敗にしない・返答も切り捨てない（#4911）。
+        // クローン本体は動けるのに、作業者だけが上限に当たった回でターンが失敗に化けるため。構造化された印（errorCode）だけで判定し、本文の引用では立てない。
+        if (event.parentToolUseId !== null) {
+          const workerRejected = assistantFailureOf(event.errorCode, '');
+          if (
+            workerRejected !== undefined &&
+            turnFailureKindOf(assistantFailureOf(event.errorCode, said)) === 'quota'
+          ) {
+            await this.#recordWorkerLimit(
+              `tool_use ${event.parentToolUseId}`,
+              said.length > 0 ? said : workerRejected.code,
+            );
+          }
+          if (workerRejected !== undefined) return;
+        }
+
         // 人間へ `text` として流さない: 「返答が来た」と見えるため。終端は `result` の分岐に任せる。
         const rejected = assistantFailureOf(event.errorCode, said);
         if (rejected !== undefined) {
@@ -7090,8 +7154,23 @@ class Clone implements CloneHost {
 
       // 反応を足さない: 区間（`worker_wait`）や背景処理（`background_tasks`）を数えるのはマネージャー層（`runner.ts`）で、
       // この層は見ないと決めてある。クローンのターンは人間が読む面で、報告を握り潰す判断が別に要る。
+      // 例外は `delegation_notified` の失敗通知だけ: 作業者が上限で落ちた事実だけを覚え、次の道具の結果へ添える（#4911）。
+      case 'delegation_notified': {
+        // 失敗の通知で、文言が「上限に当たった」と読めるものに限る。completed の報告の引用では立てない（#4903 と同じ）
+        if (
+          event.status === 'failed' &&
+          event.summary !== undefined &&
+          classifyUsageNotice(event.summary)?.kind === 'reached'
+        ) {
+          await this.#recordWorkerLimit(
+            event.taskId === undefined ? '背景の作業者' : `task ${event.taskId}`,
+            event.summary,
+          );
+        }
+        return;
+      }
+
       case 'delegation_started':
-      case 'delegation_notified':
       case 'background_tasks':
         return;
 
