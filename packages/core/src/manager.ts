@@ -4386,7 +4386,16 @@ class Pool implements ManagerPool {
       if (batch.length === 0) return undefined;
       if (awaitingUsageWake) return undefined;
 
-      const result = await this.#send(managerId, composeHeldDelivery(batch), {}, 'held-delivery');
+      let foldedBackgroundTasks = 0;
+      const result = await this.#send(
+        managerId,
+        composeHeldDelivery(batch),
+        {},
+        'held-delivery',
+        (backgroundTasks) => {
+          foldedBackgroundTasks = backgroundTasks;
+        },
+      );
       if (result.outcome !== 'delivered' && result.outcome !== 'answered') {
         return {
           outcome: 'held',
@@ -4401,9 +4410,14 @@ class Pool implements ManagerPool {
       record.job.heldMessages = remaining.length === 0 ? undefined : remaining;
       await this.#persist(record);
       if (remaining.length === 0) this.#heldMessageJobs.delete(managerId);
+      // 背景処理を畳んだ回は、届け直しの知らせ（poll）か `manager_send` の応答（caller）の本文へ足す（#4913）: 別の種類で積むと同じ届け直しを2回知らせてしまう。結果は届かないので担当が自分で確かめて進める。クローンは止まったと見誤りうる。peer だけを預けた回では足さない
+      const foldedClause =
+        foldedBackgroundTasks > 0
+          ? `背景処理 ${String(foldedBackgroundTasks)} 本を畳んで起こし直し、結果は届かないので自分で確かめて続きを進めるよう促した。`
+          : '';
       const summary =
         `預かっていた伝言 ${String(batch.length)} 通を ${managerId} へ届けた` +
-        `（最初の預かり ${batch[0]?.heldAt ?? '?'}）。${result.detail}`;
+        `（最初の預かり ${batch[0]?.heldAt ?? '?'}）。${foldedClause}${result.detail}`;
       await this.#journal({
         type: 'decision',
         decision: `[${managerId}] 預かっていた伝言 ${String(batch.length)} 通を届けた`,
