@@ -280,6 +280,45 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   // 層の側だと文言とは別の層から事実が届く組で片方の記憶しか使えず、判定へ混ぜると古い記憶が回す/回さないを動かすため
   const rememberedRejections = new Map<string, { tokenId: string; facts: RateLimitFacts }>();
 
+  // いま撒いてある値の指紋を回し手の側で覚える（記憶ストアへは書かない）: 現役の記録（id・世代）は値を持たず、
+  // 行の値が同じ id のまま差し替わったことを、記録だけからは言えないため。
+  // 撒いた直後（nominateRow・restore）にだけ書く: 撒いていない回に書くと「撒いてある」という嘘になる。
+  // 無ければ（再起動後で restore がまだ撒いていない等）撒き直さない: 撒いた値を知らないまま食い違いと決めつけると、健全な現役を毎回撒き直すため
+  let spreadMark: { tokenId: string; generation: number; fingerprint: string } | null = null;
+
+  function rememberSpread(token: AgentToken, generation: number): void {
+    spreadMark =
+      token.value === undefined || token.value === ''
+        ? null
+        : { tokenId: token.id, generation, fingerprint: fingerprintOf(token.value) };
+  }
+
+  // 保存（writeActive）が先、撒くのが後: 保存が落ちたときに誰も成功と言っていない版を1層だけが使わないため
+  async function nominateRow(
+    token: AgentToken,
+    active: ActiveAgentToken | null,
+    activeUnreadableReason: string | undefined,
+  ): Promise<{ generation: number; spread: TokenSpreadResult[] }> {
+    // 読めない指名を上書きするときだけ世代を時刻から作る: 前の世代が読めない以上 +1 は過去の世代と重なりうるため
+    const generation =
+      activeUnreadableReason === undefined ? (active?.generation ?? 0) + 1 : now().getTime();
+    const nextActive: ActiveAgentToken = {
+      tokenId: token.id,
+      generation,
+      rotatedAt: now().toISOString(),
+    };
+    await stores.tokens.writeActive(nextActive);
+    // 撒く前に忘れる: 撒きが落ちたとき、前の値を撒いてあると覚えたままにしないため
+    spreadMark = null;
+    const results = await spread.spread({
+      id: token.id,
+      generation,
+      ...credentialOf(token),
+    });
+    rememberSpread(token, generation);
+    return { generation, spread: results };
+  }
+
   function identityOf(active: ActiveAgentToken | null): string {
     return active === null ? 'none' : `${active.tokenId}#${String(active.generation)}`;
   }
@@ -526,30 +565,37 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         ? ''
         : `\n**現役の指名が読めなかったので、世代 ${String(generation)} で撒き直した**（${activeUnreadableReason}）`;
 
-    // 撒いてから保存しない: 保存が落ちたときに誰も成功と言っていない版を1層だけが使うことになるため
+    // 撒く直前に最新の行から読み直す: probe の間に PUT /tokens が値を差し替えると、probe 前の値を撒いて古い鍵のまま動くため。
+    // 行が消えた・外された・失効した場合は撒かず null を返す（呼ぶ側が見送る。次の reconsider が選び直す）
     const nominate = async (
       token: AgentToken,
-    ): Promise<{ generation: number; spread: TokenSpreadResult[] }> => {
-      // 読めない指名を上書きするときだけ世代を時刻から作る: 前の世代が読めない以上 +1 は過去の世代と重なりうるため
-      const generation =
-        activeUnreadableReason === undefined ? (active?.generation ?? 0) + 1 : now().getTime();
-      const nextActive: ActiveAgentToken = {
-        tokenId: token.id,
-        generation,
-        rotatedAt: now().toISOString(),
-      };
-      await stores.tokens.writeActive(nextActive);
-      const results = await spread.spread({
-        id: token.id,
-        generation,
-        ...credentialOf(token),
-      });
-      return { generation, spread: results };
+    ): Promise<{ generation: number; spread: TokenSpreadResult[] } | null> => {
+      const latest = (await stores.tokens.list()).find((row) => row.id === token.id);
+      if (
+        latest === undefined ||
+        latest.disabledAt !== undefined ||
+        latest.invalidatedAt !== undefined ||
+        latest.value === undefined ||
+        latest.value === ''
+      ) {
+        return null;
+      }
+      return nominateRow(latest, active, activeUnreadableReason);
     };
+
+    // 見送りの顔: exhausted にしない（全層が止まる顔で、ここは選んだ行が撒く直前に消えた・外れただけのため）
+    const withheldOutcome = (label: string): TokenRotationOutcome => ({
+      kind: 'ignored' as const,
+      signal: 'stranded' as const,
+      ...(freshness === undefined ? {} : { freshness }),
+      ...(reason === undefined ? {} : { reason }),
+      why: `${whyHead}。選んだ候補「${label}」は撒く直前に行が消えた・外された・失効した（probe の間に差し替わった）ので撒かない。次の判定で選び直す`,
+    });
 
     if (sweep.chosen !== undefined) {
       const { token, verdict } = sweep.chosen;
       const placed = await nominate(token);
+      if (placed === null) return withheldOutcome(token.label);
       if (endedStaleRun !== null) staleRun = null;
       return {
         kind: 'rotated' as const,
@@ -591,6 +637,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       const row = pool.find((token) => token.id === earliest.tokenId);
       if (row !== undefined) {
         const placed = await nominate(row);
+        if (placed === null) return withheldOutcome(row.label);
         if (endedStaleRun !== null) staleRun = null;
         return {
           kind: 'parked' as const,
@@ -709,6 +756,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           generation: active.generation,
           ...credentialOf(row),
         });
+        rememberSpread(row, active.generation);
         return {
           kind: 'restored' as const,
           tokenId: row.id,
@@ -926,6 +974,36 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             reason,
             whyHead: 'まだ一度も指名していない',
           });
+        }
+
+        // 現役の行の値が同じ id のまま差し替わったら、新しい値を撒き直す: 現役が ready だと下の判定は「回す契機が無い」で終わり、
+        // runner とクローンが前の鍵のまま次に枠へ当たるまで動くため。pool_changed でだけ見る（値が変わるのは PUT /tokens だけ）。
+        // 撒いた値を覚えていて、その世代が現役の記録と一致するときだけ比べる（spreadMark の注釈）。
+        // 世代を上げる: 前の鍵について走っている観測を stale として捨てさせるため
+        if (
+          reason === 'pool_changed' &&
+          currentRow !== undefined &&
+          currentRow.value !== undefined &&
+          currentRow.value !== '' &&
+          spreadMark !== null &&
+          active !== null &&
+          spreadMark.tokenId === active.tokenId &&
+          spreadMark.generation === active.generation &&
+          spreadMark.fingerprint !== fingerprintOf(currentRow.value) &&
+          tokenAvailabilityAt(currentRow, now().getTime()) === 'ready'
+        ) {
+          const placed = await nominateRow(currentRow, active, activeUnreadableReason);
+          return {
+            kind: 'rotated' as const,
+            fromTokenId: currentRow.id,
+            toTokenId: currentRow.id,
+            toLabel: currentRow.label,
+            generation: placed.generation,
+            signal: 'none' as const,
+            reason,
+            spread: placed.spread,
+            why: `現役「${currentRow.label}」の値が差し替わった（同じ id のまま）ので、新しい値を撒き直した`,
+          };
         }
 
         // 世代の門は turn_success だけ: 回った後に届いた前の世代の成功が、未試行の新しい現役の記録を usable にしうるため

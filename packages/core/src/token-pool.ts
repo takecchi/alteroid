@@ -238,6 +238,10 @@ export function normalizeTokenPool(
       current.order !== order ||
       current.disabledAt !== disabledAt;
 
+    // 値が変わった行は新しい鍵として扱い、冷却・拒否・失効の記録を引き継がない: 前の鍵の観測を新しい鍵に当てると、
+    // 冷却中のまま選ばれない・失効の印（人が外す口が無い）が残るため。ラベル・順位・無効の印は人の決定なので引き継ぐ
+    const carry = current !== undefined && current.value === value ? current : undefined;
+
     const token: AgentToken = {
       id,
       label: input.label,
@@ -245,16 +249,16 @@ export function normalizeTokenPool(
       ...(value === undefined ? {} : { value }),
       order,
       ...(disabledAt === undefined ? {} : { disabledAt }),
-      ...(current?.cooldownUntil === undefined ? {} : { cooldownUntil: current.cooldownUntil }),
-      ...(current?.cooldownSource === undefined ? {} : { cooldownSource: current.cooldownSource }),
-      ...(current?.lastRejectedAt === undefined ? {} : { lastRejectedAt: current.lastRejectedAt }),
-      ...(current?.lastRejectedReason === undefined
+      ...(carry?.cooldownUntil === undefined ? {} : { cooldownUntil: carry.cooldownUntil }),
+      ...(carry?.cooldownSource === undefined ? {} : { cooldownSource: carry.cooldownSource }),
+      ...(carry?.lastRejectedAt === undefined ? {} : { lastRejectedAt: carry.lastRejectedAt }),
+      ...(carry?.lastRejectedReason === undefined
         ? {}
-        : { lastRejectedReason: current.lastRejectedReason }),
-      ...(current?.invalidatedAt === undefined ? {} : { invalidatedAt: current.invalidatedAt }),
-      ...(current?.invalidatedReason === undefined
+        : { lastRejectedReason: carry.lastRejectedReason }),
+      ...(carry?.invalidatedAt === undefined ? {} : { invalidatedAt: carry.invalidatedAt }),
+      ...(carry?.invalidatedReason === undefined
         ? {}
-        : { invalidatedReason: current.invalidatedReason }),
+        : { invalidatedReason: carry.invalidatedReason }),
       ...(current === undefined
         ? { createdAt: nowIso }
         : current.createdAt === undefined
