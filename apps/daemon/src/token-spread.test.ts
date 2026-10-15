@@ -248,6 +248,28 @@ describe('runner へ渡るプロファイルの行が鍵を影にしている形
     expect(results.find((r) => r.target === 'profile-shadow')).toBeUndefined();
   });
 
+  it('クローンのプロファイルの影は、runner とは別の先として言う', async () => {
+    const seen: [string[], string | undefined][] = [];
+    const spread = createTokenSpread({
+      runners: registry([fakeClient('runner-primary')]),
+      clone: createAgentTokenHolder(),
+      profileEnvNames: async () => [],
+      cloneProfileEnvNames: async () => ['CLAUDE_CODE_OAUTH_TOKEN'],
+      onShadowed: (names, target) => seen.push([[...names], target]),
+    });
+
+    const results = await spread.spread({
+      id: 'tok-a',
+      generation: 2,
+      kind: 'stored',
+      value: SECRET,
+    });
+
+    expect(seen).toEqual([[['CLAUDE_CODE_OAUTH_TOKEN'], 'clone']]);
+    expect(results.find((r) => r.target === 'profile-shadow')).toBeUndefined();
+    expect(results.find((r) => r.target === 'profile-shadow-clone')?.ok).toBe(false);
+  });
+
   it('コメントや値の中の名前は宣言に数えない', async () => {
     const { seen } = await spreadWith(
       'runner',
