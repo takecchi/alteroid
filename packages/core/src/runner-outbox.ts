@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   readdirSync,
@@ -10,7 +10,7 @@ import {
   mkdirSync,
   rmSync,
 } from 'node:fs';
-import { lstat, open, readdir, rm, stat, unlink, type FileHandle } from 'node:fs/promises';
+import { lstat, open, readdir, rm, rmdir, stat, unlink, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -431,9 +431,24 @@ export async function removeStagedOutboxFile(
 export type OutboxContentsRemover = (
   entries: readonly string[],
   child: { readonly uid: number; readonly gid: number },
-) => void;
+) => unknown;
 
 const REMOVE_CHUNK = 200;
+
+/** {@link removeOutboxContentsAsChild} の非同期版（#4906）。定期の掃除（{@link pruneStaleOutboxRoots}）が使い、`rm` の待ちでメインのループを止めない。 */
+export const removeOutboxContentsAsChildAsync: OutboxContentsRemover = async (entries, child) => {
+  for (let i = 0; i < entries.length; i += REMOVE_CHUNK) {
+    await new Promise<void>((done) => {
+      // 失敗は握る（`spawnSync` も終了コードを見ていない）: 消し残しは次の掃除に任せる
+      execFile(
+        'rm',
+        ['-rf', '--one-file-system', '--', ...entries.slice(i, i + REMOVE_CHUNK)],
+        { uid: child.uid, gid: child.gid, cwd: '/', env: { PATH: '/usr/bin:/bin' } },
+        () => done(),
+      );
+    });
+  }
+};
 
 export const removeOutboxContentsAsChild: OutboxContentsRemover = (entries, child) => {
   for (let i = 0; i < entries.length; i += REMOVE_CHUNK) {
@@ -469,13 +484,42 @@ function removeOutboxDirectory(dir: string, options: OutboxRemovalOptions): void
     return;
   }
   if (names.length > 0) {
-    (options.removeContentsAsChild ?? removeOutboxContentsAsChild)(
+    // 同期の経路（`removeManagerOutbox`）では、渡された消去が Promise を返しても待たない（既定は同期）
+    void (options.removeContentsAsChild ?? removeOutboxContentsAsChild)(
       names.map((name) => join(dir, name)),
       options.child,
     );
   }
   try {
     rmdirSync(dir);
+  } catch {
+    // 空でない・既に無い: 残して次の掃除に任せる
+  }
+}
+
+/** {@link removeOutboxDirectory} の非同期版（#4906）。掃除の走査と削除でメインのループを止めない。 */
+async function removeOutboxDirectoryAsync(
+  dir: string,
+  options: OutboxRemovalOptions,
+): Promise<void> {
+  if (options.child === undefined) {
+    await rm(dir, { recursive: true, force: true });
+    return;
+  }
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return;
+  }
+  if (names.length > 0) {
+    await (options.removeContentsAsChild ?? removeOutboxContentsAsChildAsync)(
+      names.map((name) => join(dir, name)),
+      options.child,
+    );
+  }
+  try {
+    await rmdir(dir);
   } catch {
     // 空でない・既に無い: 残して次の掃除に任せる
   }
@@ -499,18 +543,24 @@ export function removeManagerOutbox(
   removeOutboxDirectory(dir, options);
 }
 
-export function pruneStaleOutboxRoots(
+/**
+ * 非同期にしている（#4906）: 定期の掃除で、同期の走査と再帰削除がデーモンのメインのループ（同一プロセスの runner）を I/O の詰まりの間止めるため。
+ * 走査の間に resume が同じ managerId の出し箱を作り直しうるので、生きた委譲の判定は消す直前に引き直す（関数で渡す）。
+ */
+export async function pruneStaleOutboxRoots(
   roots: {
     readonly outboxRoot: string;
     readonly stagedRoot: string;
     /** 未追跡のファイルの預かりの退避先（`rescue-stash.ts`）。出し箱の退避先と同じ24時間の掃除を掛ける。 */
     readonly rescueStagedRoot?: string;
   },
-  liveManagerIds: readonly string[],
+  liveManagerIds: readonly string[] | (() => readonly string[]),
   now: number,
   options: OutboxRemovalOptions = {},
   maxAgeMs: number = RUNNER_ATTACHMENT_STALE_MS,
-): void {
+): Promise<void> {
+  const isLive = (id: string): boolean =>
+    (typeof liveManagerIds === 'function' ? liveManagerIds() : liveManagerIds).includes(id);
   const tops: (readonly [string, boolean])[] = [
     [roots.outboxRoot, true],
     [roots.stagedRoot, false],
@@ -519,23 +569,25 @@ export function pruneStaleOutboxRoots(
   for (const [top, isOutbox] of tops) {
     let entries: string[];
     try {
-      entries = readdirSync(top);
+      entries = await readdir(top);
     } catch {
       continue;
     }
     for (const entry of entries) {
-      if (liveManagerIds.includes(entry)) {
+      if (isLive(entry)) {
         // 生きた委譲の退避先も、24時間取りに来られなかったファイルは1つずつ消す: デーモンは取れなかったもの・捨てた報告の退避先を消させず、この掃除に任せている。
         // 丸ごと飛ばすと、退避先の予算（`STAGED_BUDGET_FACTOR`）が取り損ねで埋まり、以後の成果物が「次の報告で送る」のまま出し箱から出られなくなる
-        if (!isOutbox) pruneStaleStagedFiles(join(top, entry), now, maxAgeMs);
+        if (!isOutbox) await pruneStaleStagedFiles(join(top, entry), now, maxAgeMs);
         continue;
       }
       const dir = join(top, entry);
       try {
-        const info = lstatSync(dir);
+        const info = await lstat(dir);
         if (!info.isDirectory() || now - info.mtimeMs <= maxAgeMs) continue;
-        if (isOutbox) removeOutboxDirectory(dir, options);
-        else rmSync(dir, { recursive: true, force: true });
+        // 待っている間に生きた委譲になったものは消さない
+        if (isLive(entry)) continue;
+        if (isOutbox) await removeOutboxDirectoryAsync(dir, options);
+        else await rm(dir, { recursive: true, force: true });
       } catch {
         // 掃除で新しい仕事を止めない
       }
@@ -544,19 +596,19 @@ export function pruneStaleOutboxRoots(
 }
 
 // 出し箱（担い手の作業場）には使わない: 担い手が置いたまま送っていないファイルを、runner の判断で消さないため
-function pruneStaleStagedFiles(dir: string, now: number, maxAgeMs: number): void {
+async function pruneStaleStagedFiles(dir: string, now: number, maxAgeMs: number): Promise<void> {
   let names: string[];
   try {
-    names = readdirSync(dir);
+    names = await readdir(dir);
   } catch {
     return;
   }
   for (const name of names) {
     const path = join(dir, name);
     try {
-      const info = lstatSync(path);
+      const info = await lstat(path);
       if (!info.isFile() || now - info.mtimeMs <= maxAgeMs) continue;
-      rmSync(path, { force: true });
+      await rm(path, { force: true });
     } catch {
       // 掃除で新しい仕事を止めない
     }

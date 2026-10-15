@@ -110,6 +110,22 @@ export interface LoopStall {
    * 名前解決と接続だけが待たされる。測れなかった回は無い（文では「不明」）。
    */
   readonly threadpoolWait?: ThreadpoolWait;
+  /**
+   * 窓の中の `process.resourceUsage()` の差分（#4906）。CPU を使わずに止まったとき、ページの読み戻しの待ちか同期の I/O の待ちかを見分ける。
+   * 読み方: `majorPageFault` が多ければページの読み戻し（スワップ・ページキャッシュの追い出し）。少なくて
+   * `voluntaryContextSwitches` があれば、同期の I/O（`*Sync`）の待ち。`resourceUsage` の無い環境では無い。
+   */
+  readonly resourceUsage?: ResourceUsageDelta;
+}
+
+/** `process.resourceUsage()` の2点の差分のうち、止まりの切り分けに使う6つ。 */
+export interface ResourceUsageDelta {
+  readonly majorPageFault: number;
+  readonly minorPageFault: number;
+  readonly fsRead: number;
+  readonly fsWrite: number;
+  readonly voluntaryContextSwitches: number;
+  readonly involuntaryContextSwitches: number;
 }
 
 /** cgroup v2 の `cpu.stat` から読む2つ。 */
@@ -128,6 +144,8 @@ export interface LoopStallWatchOptions {
   readonly now?: () => number;
   /** プロセスの CPU 時間。試験で差し替える。既定は `process.cpuUsage()`。 */
   readonly cpuUsage?: () => NodeJS.CpuUsage;
+  /** プロセスの資源の使用量（#4906）。試験で差し替える。既定は `process.resourceUsage()`。無い環境では `undefined`（欄ごと省く）。 */
+  readonly resourceUsage?: () => NodeJS.ResourceUsage | undefined;
   /** 器の CPU の絞りを読む口。既定は {@link readCgroupCpuThrottle}。読めなければ `undefined`（行に載せない）。 */
   readonly readCpuThrottle?: () => Promise<CpuThrottleSample | undefined>;
   /** 絞りを読んでおく周期（止まっていない間に読んでおき、止まった後に読んだ値との差を出す）。 */
@@ -170,6 +188,7 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
   const thresholdMs = options.thresholdMs ?? DEFAULT_THRESHOLD_MS;
   const cpuUsage = options.cpuUsage ?? (() => process.cpuUsage());
+  const resourceUsage = options.resourceUsage ?? defaultResourceUsage;
   const readCpuThrottle = options.readCpuThrottle ?? (() => readCgroupCpuThrottle());
   const measureWait = options.measureThreadpoolWait ?? (() => measureThreadpoolWait());
   clock = options.now ?? defaultClock;
@@ -209,6 +228,7 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
 
   let last = clock();
   let lastCpu = cpuUsage();
+  let lastRusage = resourceUsage();
   const timer = setInterval(() => {
     const now = clock();
     const from = last;
@@ -217,6 +237,13 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
     const cpu = cpuUsage();
     const cpuDelta = { user: cpu.user - lastCpu.user, system: cpu.system - lastCpu.system };
     lastCpu = cpu;
+    // CPU と同じく毎周取る（#4906）: 窓の始めの値は止まり始めの直前の周でしか取れない
+    const rusage = resourceUsage();
+    const rusageDelta =
+      rusage === undefined || lastRusage === undefined
+        ? undefined
+        : diffResourceUsage(lastRusage, rusage);
+    lastRusage = rusage;
     const stalledMs = now - from - intervalMs;
     if (stalledMs < thresholdMs) return;
     const before = lastThrottle;
@@ -238,6 +265,7 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
           options.onStall({
             ...summarize(from, now, stalledMs, cpuDelta, throttle),
             ...(threadpoolWait === undefined ? {} : { threadpoolWait }),
+            ...(rusageDelta === undefined ? {} : { resourceUsage: rusageDelta }),
           });
         });
     }, GC_SETTLE_MS);
@@ -250,6 +278,30 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
     clearInterval(throttleTimer);
     observer.disconnect();
     clock = defaultClock;
+  };
+}
+
+/** `process.resourceUsage` が無い・投げる環境では `undefined`（#4906）。 */
+function defaultResourceUsage(): NodeJS.ResourceUsage | undefined {
+  try {
+    return typeof process.resourceUsage === 'function' ? process.resourceUsage() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function diffResourceUsage(
+  before: NodeJS.ResourceUsage,
+  after: NodeJS.ResourceUsage,
+): ResourceUsageDelta {
+  const d = (key: keyof ResourceUsageDelta): number => Math.max(0, after[key] - before[key]);
+  return {
+    majorPageFault: d('majorPageFault'),
+    minorPageFault: d('minorPageFault'),
+    fsRead: d('fsRead'),
+    fsWrite: d('fsWrite'),
+    voluntaryContextSwitches: d('voluntaryContextSwitches'),
+    involuntaryContextSwitches: d('involuntaryContextSwitches'),
   };
 }
 
@@ -289,6 +341,17 @@ function summarize(
   };
 }
 
+/** 窓の資源の差分の文（#4906）。読めない環境では空。読み方の注釈を添える。 */
+function describeResourceUsage(usage: ResourceUsageDelta | undefined): string {
+  if (usage === undefined) return '';
+  return (
+    `窓の中の資源: ページの読み戻し ${String(usage.majorPageFault)} 回（軽いもの ${String(usage.minorPageFault)} 回）・` +
+    `ファイルの読み ${String(usage.fsRead)} 回・書き ${String(usage.fsWrite)} 回・` +
+    `自発の切り替え ${String(usage.voluntaryContextSwitches)}・非自発 ${String(usage.involuntaryContextSwitches)}` +
+    `（読み方: ページの読み戻しが多ければページの読み戻しの待ち。少なくて自発の切り替えがあれば同期の I/O の待ち）。`
+  );
+}
+
 export function describeLoopStall(stall: LoopStall): string {
   const during =
     stall.phasesDuring.length === 0
@@ -306,6 +369,7 @@ export function describeLoopStall(stall: LoopStall): string {
     `窓 ${String(stall.windowMs)}ms の中でこのプロセスが使った CPU: user ${String(stall.cpuUserMs)}ms・system ${String(stall.cpuSystemMs)}ms。` +
     throttle +
     `${describeThreadpoolWait(stall.threadpoolWait)}。` +
+    describeResourceUsage(stall.resourceUsage) +
     `ヒープ ${String(stall.heapUsedMb)}/${String(stall.heapTotalMb)}MB・RSS ${String(stall.rssMb)}MB。`
   );
 }

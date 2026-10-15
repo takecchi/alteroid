@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, chownSync, mkdirSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
+import { chmod, chown, mkdir, rm } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { dirname } from 'node:path';
 
@@ -32,11 +33,12 @@ export async function createCloneToolRelayHost(options: {
   const pending = new Map<string, PendingRegistration>();
 
   const dir = dirname(socketPath);
-  mkdirSync(dir, { recursive: true, mode: dirMode });
-  // chmodSync も呼ぶ: mkdirSync の mode は新規作成のときにしか効かないため
-  chmodSync(dir, dirMode);
+  // 非同期で行う（#4906）: 走行中に組み直されても、I/O の詰まりでデーモンのメインのループを止めない
+  await mkdir(dir, { recursive: true, mode: dirMode });
+  // chmod も呼ぶ: mkdir の mode は新規作成のときにしか効かないため
+  await chmod(dir, dirMode);
 
-  rmSync(socketPath, { force: true });
+  await rm(socketPath, { force: true });
 
   const server: Server = createServer((socket) => {
     handleConnection(socket).catch((error: unknown) => {
@@ -47,9 +49,9 @@ export async function createCloneToolRelayHost(options: {
 
   await new Promise<void>((resolve) => server.listen(socketPath, resolve));
   if (options.socketOwner !== undefined) {
-    chownSync(socketPath, options.socketOwner.uid, options.socketOwner.gid);
+    await chown(socketPath, options.socketOwner.uid, options.socketOwner.gid);
   }
-  chmodSync(socketPath, 0o600);
+  await chmod(socketPath, 0o600);
 
   async function handleConnection(socket: Socket): Promise<void> {
     const token = await readToken(socket);
@@ -83,6 +85,7 @@ export async function createCloneToolRelayHost(options: {
       for (const { timer } of pending.values()) clearTimeout(timer);
       pending.clear();
       server.close();
+      // `close()` は同期の契約（呼び出し側が await しない）なので、ここだけ同期のまま: 1ファイルの unlink（#4906）
       rmSync(socketPath, { force: true });
     },
   };

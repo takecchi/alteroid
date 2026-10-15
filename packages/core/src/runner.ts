@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, chownSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { chmodSync, chownSync, mkdirSync, statSync } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join as joinPath } from 'node:path';
 
@@ -724,6 +724,7 @@ class Host implements RunnerHost {
   readonly #scratchAbort = new AbortController();
   #scratchRunning: Promise<void> | null = null;
   #attachmentPruning: Promise<void> | null = null;
+  #outboxPruning: Promise<void> | null = null;
   readonly #knownManagerIds = new Set<string>();
   // `knownTerminated` を固定の集合として持たない: resume で同じ `managerId` が戻っても古い pid が「終端済み」のままになるため
   readonly #liveDelegationPids = new Set<number>();
@@ -861,16 +862,23 @@ class Host implements RunnerHost {
           // 出し箱と退避先の取りこぼしも、添付と同じ周期・同じ基準（生きた委譲に当たらず24時間触れていない）で消す
           // `#attachmentPruning` の鎖に乗せない: 添付の掃除が長引いても出し箱の掃除を止めないため（失敗は握る）
           // 出し箱の root は子の権限で消す（担い手が書ける木を runner の権限で再帰削除しない）
-          pruneStaleOutboxRoots(
-            {
-              outboxRoot: this.#outboxRoot,
-              stagedRoot: this.#outboxStagedRoot,
-              rescueStagedRoot: this.#rescueStagedRoot,
-            },
-            [...this.#sessions.keys()],
-            Date.now(),
-            this.#outboxRemoval(),
-          );
+          // 非同期（#4906）: 同一プロセスの runner では、走査と削除の同期 I/O がデーモンのメインのループを止める。重ならないよう1本ずつ走らせる
+          if (this.#outboxPruning === null) {
+            this.#outboxPruning = pruneStaleOutboxRoots(
+              {
+                outboxRoot: this.#outboxRoot,
+                stagedRoot: this.#outboxStagedRoot,
+                rescueStagedRoot: this.#rescueStagedRoot,
+              },
+              () => [...this.#sessions.keys()],
+              Date.now(),
+              this.#outboxRemoval(),
+            )
+              .catch(() => undefined)
+              .finally(() => {
+                this.#outboxPruning = null;
+              });
+          }
           if (this.#scratchRunning !== null || this.#scratchAbort.signal.aborted) return;
           const run = sweeper
             .sweep(this.#scratchAbort.signal, this.runnerId)
@@ -3221,10 +3229,11 @@ class RunnerSession {
     }
   }
 
-  #outboxHasEntries(): boolean {
+  // 非同期（#4906）: 報告のたびに通り、同一プロセスの runner ではデーモンのメインのループ上で走る
+  async #outboxHasEntries(): Promise<boolean> {
     if (this.#outboxDir === undefined) return false;
     try {
-      return readdirSync(this.#outboxDir).length > 0;
+      return (await readdir(this.#outboxDir)).length > 0;
     } catch {
       return false;
     }
@@ -3660,7 +3669,7 @@ class RunnerSession {
         // 取り込みの `await` より前に1回だけ読む: 背景の peer はこの間にも止まりうるので、取り込みの前後で別の一覧を見ないため
         const liveBackground = this.#liveBackgroundTasks();
         // 出し箱が空なら `await` を挟まない: 余計な yield が報告の出る順序（と、それを前提にした観測）を変えるため
-        const outbox = this.#outboxHasEntries() ? await this.#collectOutbox() : {};
+        const outbox = (await this.#outboxHasEntries()) ? await this.#collectOutbox() : {};
         this.#sdkSession.setStatus(this.#pending.length > 0 ? 'waiting_human' : 'done');
         if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
         // 3条件（失敗でない・`done`・背景処理が在る）が揃うときだけ載せる、欠けたら配る側へ倒す: 上限・拒否や確認待ちを黙って畳むと人間の判断が止まるため
@@ -3990,7 +3999,7 @@ class RunnerSession {
   // 出し箱に残っている成果物もここで取り込んで添える（#4675）: 取り込みは `result` の報告の直前にしか無く、畳まれた担当の出し箱は `#onClosed` が消すため。
   // 取り込んだファイルは退避先へ移るので、`#onClosed` の後もデーモンが取りに来られる。本文が無くても、ファイルがあれば報告を出す
   async #flushUnreported(reason: string, status: JobStatus): Promise<void> {
-    const outbox = this.#outboxHasEntries() ? await this.#collectOutbox() : {};
+    const outbox = (await this.#outboxHasEntries()) ? await this.#collectOutbox() : {};
     const carriesFiles = (outbox.files?.length ?? 0) > 0 || (outbox.rejectedFiles?.length ?? 0) > 0;
     if (!this.#turnTally.hasSaid && !carriesFiles) return;
     const { said, reportId } = this.#turnTally.hasSaid

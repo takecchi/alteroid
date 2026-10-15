@@ -151,6 +151,70 @@ describe('loop-stall（#4485）', () => {
     expect(describeLoopStall(stalls[1] as LoopStall)).toContain('スレッドの枠の待ち: 不明');
   });
 
+  it('窓の始めと終わりの resourceUsage の差分を返し、文言に載せる（#4906）', async () => {
+    let usage: NodeJS.ResourceUsage = { ...process.resourceUsage() };
+    stop?.();
+    stop = startLoopStallWatch({
+      intervalMs: 500,
+      thresholdMs: 1_000,
+      now: () => now,
+      cpuUsage: () => ({ ...cpu }),
+      resourceUsage: () => ({ ...usage }),
+      readCpuThrottle: async () => throttle,
+      measureThreadpoolWait: async () => threadpoolWait,
+      onStall: (stall) => stalls.push(stall),
+    });
+    // 窓より前の増分は差分に入らない
+    usage = { ...usage, majorPageFault: usage.majorPageFault + 100, fsRead: usage.fsRead + 50 };
+    await tick();
+    await stalledTick(1_500, () => {
+      usage = {
+        ...usage,
+        majorPageFault: usage.majorPageFault + 7,
+        minorPageFault: usage.minorPageFault + 11,
+        fsRead: usage.fsRead + 3,
+        fsWrite: usage.fsWrite + 2,
+        voluntaryContextSwitches: usage.voluntaryContextSwitches + 5,
+        involuntaryContextSwitches: usage.involuntaryContextSwitches + 1,
+      };
+    });
+
+    const stall = stalls[0] as LoopStall;
+    expect(stall.resourceUsage).toEqual({
+      majorPageFault: 7,
+      minorPageFault: 11,
+      fsRead: 3,
+      fsWrite: 2,
+      voluntaryContextSwitches: 5,
+      involuntaryContextSwitches: 1,
+    });
+    const text = describeLoopStall(stall);
+    expect(text).toContain('ページの読み戻し 7 回（軽いもの 11 回）');
+    expect(text).toContain('ファイルの読み 3 回・書き 2 回');
+    expect(text).toContain('自発の切り替え 5・非自発 1');
+    expect(text).toContain('同期の I/O の待ち');
+  });
+
+  it('resourceUsage が無い環境では欄ごと省く（#4906）', async () => {
+    stop?.();
+    stop = startLoopStallWatch({
+      intervalMs: 500,
+      thresholdMs: 1_000,
+      now: () => now,
+      cpuUsage: () => ({ ...cpu }),
+      resourceUsage: () => undefined,
+      readCpuThrottle: async () => throttle,
+      measureThreadpoolWait: async () => threadpoolWait,
+      onStall: (stall) => stalls.push(stall),
+    });
+    await tick();
+    await stalledTick(1_200);
+
+    const stall = stalls[0] as LoopStall;
+    expect(stall).not.toHaveProperty('resourceUsage');
+    expect(describeLoopStall(stall)).not.toContain('窓の中の資源');
+  });
+
   it('閾値に満たない遅れでは知らせない', async () => {
     await tick();
     await stalledTick(900);

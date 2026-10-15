@@ -271,17 +271,40 @@ describe('退避先の取得・削除・掃除', () => {
       await utimes(join(top, 'mgr-old'), old, old);
     }
     const calls: string[][] = [];
-    pruneStaleOutboxRoots({ outboxRoot: root, stagedRoot }, [], Date.now(), {
+    await pruneStaleOutboxRoots({ outboxRoot: root, stagedRoot }, [], Date.now(), {
       child: { uid: 1, gid: 1 },
-      removeContentsAsChild: (entries) => calls.push([...entries]),
+      removeContentsAsChild: (entries) => {
+        calls.push([...entries]);
+      },
     });
     expect(calls).toEqual([[join(root, 'mgr-old', 'sub')]]);
     expect((await readdir(join(root, 'mgr-old'))).length).toBe(1);
     await expect(stat(join(stagedRoot, 'mgr-old'))).rejects.toThrow();
     await mkdir(join(stagedRoot, 'mgr-live'));
     await utimes(join(stagedRoot, 'mgr-live'), old, old);
-    pruneStaleOutboxRoots({ outboxRoot: root, stagedRoot }, ['mgr-live'], Date.now());
+    await pruneStaleOutboxRoots({ outboxRoot: root, stagedRoot }, ['mgr-live'], Date.now());
     expect((await stat(join(stagedRoot, 'mgr-live'))).isDirectory()).toBe(true);
+  });
+
+  it('非同期の掃除は、生きた委譲の判定を消す直前に引き直す（走査の間に resume された出し箱を消さない。#4906）', async () => {
+    const { root, stagedRoot } = await setup();
+    const old = new Date(Date.now() - 48 * 3600_000);
+    await mkdir(join(root, 'mgr-a'), { recursive: true });
+    await utimes(join(root, 'mgr-a'), old, old);
+    await mkdir(join(root, 'mgr-b'), { recursive: true });
+    await utimes(join(root, 'mgr-b'), old, old);
+    // 1回目の問い合わせ（走査後・最初の entry）は生きていない、2回目（消す直前）には mgr-a が生きている、という並び
+    let asked = 0;
+    await pruneStaleOutboxRoots(
+      { outboxRoot: root, stagedRoot },
+      () => {
+        asked += 1;
+        return asked === 2 ? ['mgr-a'] : [];
+      },
+      Date.now(),
+    );
+    await expect(stat(join(root, 'mgr-a'))).resolves.toBeTruthy();
+    await expect(stat(join(root, 'mgr-b'))).rejects.toThrow();
   });
 });
 
@@ -298,7 +321,7 @@ describe('生きた委譲の退避先の取りこぼし（#4701）', () => {
     await writeFile(join(root, 'mgr-live', 'draft.md'), '送る前');
     await utimes(join(root, 'mgr-live', 'draft.md'), old, old);
 
-    pruneStaleOutboxRoots({ outboxRoot: root, stagedRoot }, ['mgr-live'], Date.now());
+    await pruneStaleOutboxRoots({ outboxRoot: root, stagedRoot }, ['mgr-live'], Date.now());
 
     expect(await readdir(live)).toEqual(['e'.repeat(32)]);
     expect(await readdir(join(root, 'mgr-live'))).toEqual(['draft.md']);
