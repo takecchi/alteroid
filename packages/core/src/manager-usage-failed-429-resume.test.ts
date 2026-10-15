@@ -129,7 +129,7 @@ async function setup(options: { rotateOnObservation: boolean }) {
   await pool.restore();
   fake.resumes.length = 0;
   fake.sends.length = 0;
-  return { pool, fake, stores, observations };
+  return { pool, fake, stores, observations, inbox };
 }
 
 async function settle(): Promise<void> {
@@ -272,6 +272,83 @@ describe('429 で終わった担当を、枠で止まったものとして起こ
     expect(s.observations).toEqual([]);
     expect(s.fake.sends).toHaveLength(0);
     expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeUndefined();
+  });
+
+  // runner は resume が戻れないとき、`resume_failed(recovered:false)` を出してから同じ理由文で `closed(lost)` を出す（runner-resume-recovery.ts / runner.ts）。
+  const REASON_429 =
+    'API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization."}}';
+  const REASON_OTHER = 'Error: No conversation found with session ID: sess-429';
+  function resumeFailed(reason: string): RunnerEvent {
+    return {
+      type: 'resume_failed',
+      managerId: ID,
+      sessionId: 'sess-429',
+      reason,
+      recovered: false,
+    } as RunnerEvent;
+  }
+  function lostBy(reason: string): RunnerEvent {
+    return { type: 'closed', managerId: ID, status: 'lost', reason } as RunnerEvent;
+  }
+
+  it('⭐ resume が 429 で戻れず lost で閉じた担当は、resume_failed → closed(lost) の順で流れても印が残り、鍵の回転で起こし直され、成功したら印が下りる（#4866）', async () => {
+    const s = await setup({ rotateOnObservation: true });
+
+    s.fake.push(resumeFailed(REASON_429));
+    s.fake.push(lostBy(REASON_429));
+    await settle();
+
+    expect(s.observations.map((o) => o.notice?.kind)).toEqual(['reached']);
+    expect(s.fake.resumes.map((c) => [c.managerId, c.sessionId])).toEqual([[ID, 'sess-429']]);
+    const job = (await s.stores.jobs.listJobs())[0];
+    expect(job?.status).toBe('running');
+    expect(job?.usageStoppedAt).toBeUndefined();
+  });
+
+  it('(#4866) 鍵が無い間は lost の印が台帳に残り、鍵が戻った時点で起こし直される', async () => {
+    const s = await setup({ rotateOnObservation: false });
+
+    s.fake.push(resumeFailed(REASON_429));
+    s.fake.push(lostBy(REASON_429));
+    await settle();
+
+    const lost = (await s.stores.jobs.listJobs())[0];
+    expect(lost?.status).toBe('lost');
+    expect(lost?.usageStoppedAt).toBeDefined();
+    expect(s.fake.resumes).toHaveLength(0);
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([ID]);
+    expect(s.fake.resumes.map((c) => c.sessionId)).toEqual(['sess-429']);
+  });
+
+  it('(#4866) 対照: 枠と無関係な理由の resume 失敗（lost）には印を立てず、起こし直さない', async () => {
+    const s = await setup({ rotateOnObservation: true });
+
+    s.fake.push(resumeFailed(REASON_OTHER));
+    s.fake.push(lostBy(REASON_OTHER));
+    await settle();
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+
+    expect(s.observations).toEqual([]);
+    expect(s.fake.resumes).toHaveLength(0);
+    const job = (await s.stores.jobs.listJobs())[0];
+    expect(job?.status).toBe('lost');
+    expect(job?.usageStoppedAt).toBeUndefined();
+  });
+
+  it('(#4866) lost の知らせは枠の印の有無で増えず、失敗の知らせ（closed_failed）も足さない', async () => {
+    const s = await setup({ rotateOnObservation: false });
+    s.fake.push(resumeFailed(REASON_429));
+    s.fake.push(lostBy(REASON_429));
+    await settle();
+
+    const t = await setup({ rotateOnObservation: false });
+    t.fake.push(resumeFailed(REASON_OTHER));
+    t.fake.push(lostBy(REASON_OTHER));
+    await settle();
+
+    expect(s.inbox.length).toBe(t.inbox.length);
+    expect(s.inbox.filter((e) => JSON.stringify(e).includes('セッションが落ちた'))).toEqual([]);
   });
 
   it('(c) manager_stop で止めた委譲は、429 の印が立っていても起こし直さない', async () => {

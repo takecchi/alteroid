@@ -9295,9 +9295,28 @@ class Pool implements ManagerPool {
         await this.#persist(record);
         this.#notifyUnresumable(record, event.reason, 'session');
         // 枠の印も一緒に下ろす: 台帳に残したままだと、諦めを持たせたはずの `lost` の死体を次のデプロイでまた起こしに行く。
+        // ただし理由文が枠（429・枠の文言）のときは下ろさず立てて保つ（#4866）: 戻れなかった原因が鍵の枠なら、鍵を替えれば戻れる見込みがあり、下ろすと鍵の回転にも周回の掃きにも拾われないため。
+        const reasonNotice = classifyUsageNotice(event.reason);
+        const quotaReason = reasonNotice?.kind === 'reached' || isRateLimitReason(event.reason);
         this.#usageWakeOwed.delete(event.managerId);
-        await this.#clearUsageStoppedMark(event.managerId);
+        if (quotaReason) {
+          this.#usageStopped.add(event.managerId);
+          record.job.usageStoppedAt ??= new Date(this.#now()).toISOString();
+          // 書けなくても進む: 台帳に写せないのは再起動を跨ぐ分だけで、メモリの印で今回の回転は拾える。
+          await this.#persist(record).catch((error: unknown) => {
+            noteDroppedRecord('枠で止まった印の永続化', `managerId=${event.managerId}`, error);
+          });
+        } else {
+          await this.#clearUsageStoppedMark(event.managerId);
+        }
         this.#retire(event.managerId);
+        // 印を立てたら、使える鍵が在れば今すぐ起こし直してもらう（`closed` の枝と同じ）: `#retire` の後に置く理由も同じ。
+        if (quotaReason) {
+          await this.#requestRotationForFailure(
+            event.managerId,
+            reasonNotice?.kind === 'reached' ? reasonNotice.text : event.reason,
+          );
+        }
         return;
       }
 
