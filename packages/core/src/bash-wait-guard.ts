@@ -10,7 +10,10 @@ const ALTERNATIVES =
   '(1) 起動した処理の完了を待つなら、待ち自体が終わる呼び出しにする ' +
   '（例: 対象の完了を返すコマンドを**前景で**。CI なら `gh run watch <id> --exit-status`）。 ' +
   '(2) 待ちに上限が要るなら `timeout <秒> <コマンド>` で自分から終わらせる。 ' +
-  '(3) 完了通知を待つのではなく、成果物が在るかを前景の呼び出しで見に行く。';
+  '(3) 完了通知を待つのではなく、成果物が在るかを前景の呼び出しで見に行く。 ' +
+  '**確認に上がらない書き方の例**（上限があれば通る）: ' +
+  '回数で終わる `for i in $(seq 60); do <条件> && break; sleep 5; done`、' +
+  "外側の timeout で終わる `timeout 300 bash -c 'until <条件>; do sleep 5; done'`。";
 
 function buildReason(shapeDescription: string): string {
   return `${shapeDescription}（無限待ちの形）。${ALTERNATIVES}`;
@@ -604,6 +607,27 @@ const LEADING_ENV_PREFIX_SRC = String.raw`(?:${SHELL_KEYWORD_PREFIX_SRC}|${ENV_A
 // の中に生のバッククォード文字を書くとテンプレートリテラル自体が終端してしまうため
 const COMMAND_POSITION_LOOKBEHIND_SRC = String.raw`(?<=^|[;&|\n()\u0060])`;
 
+// `timeout <期間> …` で始まる単純コマンドの範囲だけを上限と数える: `timeout` という語が別の文や引用符の中に在るだけでは、ループを包んでいない
+const TIMEOUT_SPAN_START_RE = new RegExp(
+  String.raw`^(?:${SHELL_KEYWORD_PREFIX_SRC}|${ENV_ASSIGNMENT_SRC})*${TIMEOUT_COMMAND_PREFIX_SRC}`,
+);
+
+function findTimeoutSpans(command: string): SimpleCommandSpan[] {
+  if (!command.includes('timeout')) return [];
+  const mask = computeOutsideQuoteMask(command);
+  const spans: SimpleCommandSpan[] = [];
+  for (const span of splitOutsideQuoteSimpleCommands(command, mask)) {
+    let start = span.start;
+    while (start < span.end && /[ \t(]/.test(command.charAt(start))) start += 1;
+    if (TIMEOUT_SPAN_START_RE.test(command.slice(start, span.end))) spans.push(span);
+  }
+  return spans;
+}
+
+function isInsideAnySpan(spans: readonly SimpleCommandSpan[], index: number): boolean {
+  return spans.some((span) => index >= span.start && index < span.end);
+}
+
 type OutsideQuoteScanState = 'outside' | 'single' | 'double' | 'ansiC' | 'unknown';
 
 // `$'…'` を専用の状態 `ansiC` で追う: ANSI-C クオートの中では `\'` がエスケープとして効くので、普通の単一引用符として読むと閉じ引用符を誤認するため
@@ -787,11 +811,14 @@ function inspectWaitForms(trimmed: string, invocation: BashInvocation): WaitGuar
     };
   }
 
-  for (const { keyword: loopKeyword, cond, body } of findUntilWhileLoops(waitView)) {
+  const timeoutSpans = findTimeoutSpans(waitView);
+
+  for (const { keyword: loopKeyword, cond, body, index } of findUntilWhileLoops(waitView)) {
     const keyword = loopKeyword as 'until' | 'while';
 
     if (!/\bsleep\b/.test(body)) continue;
     if (isBoundedLoop(keyword, cond, body)) continue;
+    if (isInsideAnySpan(timeoutSpans, index)) continue;
 
     return {
       blocked: true,
@@ -804,9 +831,10 @@ function inspectWaitForms(trimmed: string, invocation: BashInvocation): WaitGuar
   }
 
   // 条件の節をここで見ない: `isBoundedLoop` は `((` をカウンタ比較の印に数えるので、`for ((;;))` の見出しに当てると有界と誤読するため
-  for (const { body } of findUnboundedCFors(waitView)) {
+  for (const { body, index } of findUnboundedCFors(waitView)) {
     if (!/\bsleep\b/.test(body)) continue;
     if (/\bbreak\b/.test(body) || COUNTER_COMPARISON_RE.test(body)) continue;
+    if (isInsideAnySpan(timeoutSpans, index)) continue;
     return {
       blocked: true,
       form: 'for-sleep',
