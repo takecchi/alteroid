@@ -4186,7 +4186,13 @@ class Pool implements ManagerPool {
     const released = held.slice(0, count);
     const remaining = held.slice(count);
     record.job.heldMessages = remaining.length === 0 ? undefined : remaining;
-    await this.#persist(record);
+    try {
+      await this.#persist(record);
+    } catch (error) {
+      // 書けなければメモリを元に戻して投げ直す（#4856）: 空のまま残ると次の見回りが「預かり無し」と見て外し、本文が日誌にもクローンにも返らないまま、後の別の書き込みで台帳からも消える（預かるときの `#holdMessage` と同じ作法）
+      record.job.heldMessages = held.length === 0 ? undefined : held;
+      throw error;
+    }
     if (remaining.length === 0) this.#heldMessageJobs.delete(managerId);
     const body = [
       `${managerId} へ預かっていた伝言 ${String(released.length)} 通を、届けずに捨てた（${why}）。本文を返す。` +

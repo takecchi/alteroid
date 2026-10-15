@@ -329,6 +329,37 @@ describe('manager_send が届けられない伝言を台帳に預かり、届け
     await s.pool.stop();
   });
 
+  it('⭐ 預かりを返す途中で台帳に書けなくても、本文を失わず次の見回りで返し直す（#4856）', async () => {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+    expect((await s.pool.send('mgr-held', '書けなかった回の伝言')).outcome).toBe('held');
+    await s.pool.abort('mgr-held');
+
+    const realPut = s.stores.jobs.putJob.bind(s.stores.jobs);
+    let failOnce = true;
+    s.stores.jobs.putJob = async (job) => {
+      if (failOnce && job.id === 'mgr-held' && (job.heldMessages?.length ?? 0) === 0) {
+        failOnce = false;
+        throw new Error('台帳に書けない（試験）');
+      }
+      return realPut(job);
+    };
+    await deliverHeld(s.pool);
+
+    // 書けなかった回は、メモリも台帳も預かりのまま（黙って消さない）
+    expect((await heldOf(s.stores)).map((item) => item.text)).toEqual(['書けなかった回の伝言']);
+
+    await deliverHeld(s.pool);
+    expect(await heldOf(s.stores)).toEqual([]);
+    const decisions = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('届けずに捨てた'),
+    );
+    expect(decisions).toHaveLength(1);
+    expect(JSON.stringify(decisions[0])).toContain('書けなかった回の伝言');
+    await s.pool.stop();
+  });
+
   it('上限を超える分は預からず、これまでどおり declined で断る', async () => {
     const s = await setup();
     s.rotate();
