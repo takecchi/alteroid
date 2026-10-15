@@ -20,6 +20,7 @@ import type {
   RunnerResumeCommand,
   RunnerProfileFingerprint,
   RunnerProfileResult,
+  RunnerRequestStages,
   RunnerRevisionReport,
   RunnerSetCredentialsCommand,
   RunnerStartCommand,
@@ -35,6 +36,7 @@ import {
   RunnerUnknownError,
   settleWithinDeadline,
 } from './deadline.js';
+import { RunnerHttpTransport } from './runner-http-transport.js';
 import { SseFrameSplitter } from './sse-frames.js';
 
 import {
@@ -369,6 +371,8 @@ class HttpRunner implements RunnerClient {
   // `options.baseUrl` の原文を別に持つ: `#baseUrl` は unix ソケットのとき `'http://runner'` のダミーへ書き換わり、そのままログへ出すと unix ソケットの runner がすべて同じ文字列で名乗ってしまうため
   readonly #displayBaseUrl: string;
   readonly #socketPath: string | null;
+  // TCP の runner だけが持つ（#4890）: 接続を心拍より長く使い回し、名乗りの確認が期限切れになったときの段を取る。ソケットの runner と、`fetchFn` を渡された試験は持たない
+  readonly #transport: RunnerHttpTransport | null;
   readonly #token: string;
   readonly #fetch: typeof fetch;
   readonly #retryBaseMs: number;
@@ -451,6 +455,8 @@ class HttpRunner implements RunnerClient {
     this.#baseUrl =
       this.#socketPath === null ? options.baseUrl.replace(/\/$/, '') : 'http://runner';
     this.#token = options.token;
+    this.#transport =
+      this.#socketPath === null && options.fetchFn === undefined ? new RunnerHttpTransport() : null;
     this.#fetch = options.fetchFn ?? ((input, init) => this.#send(input, init));
     this.#retryBaseMs = options.retryDelayMs ?? RUNNER_STREAM_RETRY_BASE_MS;
     this.#retryMaxMs = options.retryMaxDelayMs ?? RUNNER_STREAM_RETRY_MAX_MS;
@@ -468,6 +474,7 @@ class HttpRunner implements RunnerClient {
 
   // ソケットのときだけ node:http を使う: グローバルの `fetch` はソケットへ繋げず、ソケットにするのはマネージャーと同じ器の中に TCP の口を開けないため
   #send(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+    if (this.#transport !== null) return this.#transport.send(input, init);
     if (this.#socketPath === null) return fetch(input, init);
     const url = new URL(typeof input === 'string' ? input : input.toString());
     return requestOverSocket(this.#socketPath, url, init ?? {}, this.#socketBodyIdleTimeoutMs);
@@ -1337,6 +1344,13 @@ class HttpRunner implements RunnerClient {
     this.#closed = true;
     this.#controller?.abort();
     this.#controller = null;
+    // 使い回している接続を畳む: 開き直しのたびに新しい口を作るので、残すと古い口の接続が keep-alive の間だけ居座る
+    this.#transport?.close();
+  }
+
+  // 名乗りの確認が期限切れになったときの診断（#4890）。ソケット・試験の `fetchFn` では段を取れないので欄を埋めない（＝不明）
+  stagesSince(sinceMs: number): RunnerRequestStages {
+    return this.#transport?.stagesSince(sinceMs) ?? {};
   }
 
   // `RunnerHttpError` の系列に乗せない（`RunnerUnknownError`）: あちらは status を持つ＝相手が答えた証拠で、期限切れは「返らなかった」であって「失敗した」ではないため

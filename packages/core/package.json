@@ -79,6 +79,10 @@
     "./journal-diagnostics-format": {
       "types": "./dist/journal-diagnostics-format.d.ts",
       "import": "./dist/journal-diagnostics-format.js"
+    },
+    "./threadpool-size": {
+      "types": "./dist/threadpool-size.d.ts",
+      "import": "./dist/threadpool-size.js"
     }
   },
   "files": [

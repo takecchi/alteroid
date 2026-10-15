@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// 最初の import に置く（枠の大きさは最初に枠を使う処理で決まる。理由は packages/core/src/threadpool-size.ts）
+import '@alteroid/core/threadpool-size';
+
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';

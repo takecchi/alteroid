@@ -30,6 +30,11 @@ catalog:
   '@modelcontextprotocol/sdk': ^1.30.1
   hono: ^4.13.5
   '@hono/node-server': ^2.1.0
+  # デーモンが runner へ繋ぐ HTTP の接続を使い回す（#4890。apps/daemon/src/runner-client.ts）。Node 同梱の fetch は
+  # 接続の使い回しの長さ（keep-alive）を呼び出し側から指定できず、約4秒で切れて心拍（10秒）ごとに名前解決と接続をやり直す。
+  # `Agent` と `fetch` を同じ版から取るために依存へ置く（Node 同梱の undici は外へ出ておらず、版が Node 次第で変わる）。
+  # すでに推移的に入っている 7 系（lockfile）と同じ実体を指す。
+  undici: ^7.29.1
   '@hono/zod-validator': ^0.9.0
   zod: ^4.4.3
   commander: ^15.0.0

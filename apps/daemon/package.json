@@ -36,6 +36,7 @@
     "hono": "catalog:",
     "hono-openapi": "catalog:",
     "openapi-types": "catalog:",
+    "undici": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

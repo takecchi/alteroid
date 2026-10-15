@@ -24,6 +24,8 @@ export default defineConfig({
     'src/unpushed-work-observation-format.ts',
     'src/journal-diagnostics-format.ts',
     'src/approval-questions-format.ts',
+    // 副作用だけの小さな入口（`UV_THREADPOOL_SIZE` を置く）。デーモンと runner が最初の import にする。何も import しない: 先に評価させるため（#4890）
+    'src/threadpool-size.ts',
   ],
   format: ['esm'],
   dts: true,

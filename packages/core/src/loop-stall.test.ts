@@ -14,6 +14,7 @@ import {
   type CpuThrottleSample,
   type LoopStall,
 } from './loop-stall.js';
+import type { ThreadpoolWait } from './threadpool-wait.js';
 
 // 偽の時計で「止まった」を作る: 実時間でループを塞ぐと、器が混んだときに揺れ、実時間の待ちを試験に足すことにもなるため
 let now = 0;
@@ -22,8 +23,10 @@ let stalls: LoopStall[] = [];
 // CPU 時間（µs）と器の絞りも偽にする: 実物の値は器ごとに揺れるため
 let cpu = { user: 0, system: 0 };
 let throttle: CpuThrottleSample | undefined = { throttledUsec: 0, nrThrottled: 0 };
+let threadpoolWait: ThreadpoolWait | undefined = { waitedMs: 3, settled: true };
 
 beforeEach(() => {
+  threadpoolWait = { waitedMs: 3, settled: true };
   vi.useFakeTimers();
   now = 0;
   stalls = [];
@@ -35,6 +38,8 @@ beforeEach(() => {
     now: () => now,
     cpuUsage: () => ({ ...cpu }),
     readCpuThrottle: async () => throttle,
+    // 実物の枠の待ちは実 I/O で、偽の時計では進まない
+    measureThreadpoolWait: async () => threadpoolWait,
     onStall: (stall) => stalls.push(stall),
   });
 });
@@ -123,6 +128,7 @@ describe('loop-stall（#4485）', () => {
       now: () => now,
       cpuUsage: () => ({ ...cpu }),
       readCpuThrottle: async () => undefined,
+      measureThreadpoolWait: async () => threadpoolWait,
       onStall: (stall) => stalls.push(stall),
     });
     await tick();
@@ -131,6 +137,18 @@ describe('loop-stall（#4485）', () => {
     const stall = stalls[0] as LoopStall;
     expect(stall).not.toHaveProperty('throttle');
     expect(describeLoopStall(stall)).toContain('器の CPU の絞り: 読めない。');
+  });
+
+  it('知らせる時点のスレッドの枠の待ちが文言に載る。測れなかった回は「不明」と書く（#4890）', async () => {
+    await tick();
+    await stalledTick(1_200);
+    expect(describeLoopStall(stalls[0] as LoopStall)).toContain('スレッドの枠の待ち 3ms');
+
+    threadpoolWait = undefined;
+    await tick();
+    await stalledTick(1_200);
+    expect(stalls[1]).not.toHaveProperty('threadpoolWait');
+    expect(describeLoopStall(stalls[1] as LoopStall)).toContain('スレッドの枠の待ち: 不明');
   });
 
   it('閾値に満たない遅れでは知らせない', async () => {

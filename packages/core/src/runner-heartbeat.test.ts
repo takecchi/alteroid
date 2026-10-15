@@ -8,6 +8,7 @@ import type {
   RunnerManagerState,
   RunnerProfileFingerprint,
   RunnerProfileResult,
+  RunnerRequestStages,
 } from './runner-protocol.js';
 
 class FakeRunner implements RunnerClient {
@@ -36,6 +37,10 @@ class FakeRunner implements RunnerClient {
     if (this.reply === 'error') throw new Error('fetch failed');
     await new Promise<never>(() => undefined);
   }
+
+  stages: RunnerRequestStages | undefined;
+  stagesSince?: (sinceMs: number) => RunnerRequestStages = (): RunnerRequestStages =>
+    this.stages ?? {};
 
   async connect(): Promise<void> {}
   async start(): Promise<{ cwd?: string }> {
@@ -137,6 +142,7 @@ describe('runner の生存判定', () => {
     const registry = createRunnerRegistry([], {
       onLost: (event) => lost.push(event),
       measureProbeLoop: () => () => ({ elapsedMs: 7167, loopUtilization: 1 }),
+      measureThreadpoolWait: async () => ({ waitedMs: 1, settled: true }),
     });
     await registry.register({ label: 'http://runner:4518', open: async () => runner });
 
@@ -153,10 +159,68 @@ describe('runner の生存判定', () => {
     await registry.stop();
   });
 
+  it('期限切れの文に、止まった段とスレッドの枠の待ちを添える。取れない段は「不明」と書く（#4890）', async () => {
+    const runner = new FakeRunner('runner-a');
+    const registry = createRunnerRegistry([], {
+      measureThreadpoolWait: async () => ({ waitedMs: 1234, settled: true }),
+    });
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    // 名前解決は 40ms で済み、接続も張れたが、ヘッダは来ない。接続の段は取れていない
+    runner.stages = { lookup: { kind: 'resolved', ms: 40 }, headersReceived: false };
+    runner.reply = 'hang';
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    const error = registry.entries()[0]?.error ?? '';
+    expect(error).toContain('5000ms 以内に名乗りが返らなかった');
+    expect(error).toContain('名前解決 済（40ms）');
+    expect(error).toContain('接続 不明');
+    expect(error).toContain('応答のヘッダ 届いていない');
+    expect(error).toContain('スレッドの枠の待ち 1234ms');
+
+    await registry.stop();
+  });
+
+  it('段を取れない runner の期限切れは、3つの段をすべて「不明」と書く。枠が塞がっていれば上限で測るのをやめたと書く（#4890）', async () => {
+    const runner = new FakeRunner('runner-a');
+    delete runner.stagesSince;
+    const registry = createRunnerRegistry([], {
+      measureThreadpoolWait: async () => ({ waitedMs: 2000, settled: false }),
+    });
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    runner.reply = 'hang';
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    const error = registry.entries()[0]?.error ?? '';
+    expect(error).toContain('名前解決 不明・接続 不明・応答のヘッダ 不明');
+    expect(error).toContain('スレッドの枠の待ち 2000ms 以上');
+
+    await registry.stop();
+  });
+
+  it('期限切れ以外の失敗（接続の拒否など）には、段と枠の待ちを添えない（#4890）', async () => {
+    const runner = new FakeRunner('runner-a');
+    const registry = createRunnerRegistry([], {
+      measureThreadpoolWait: async () => ({ waitedMs: 1, settled: true }),
+    });
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    runner.reply = 'error';
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(registry.entries()[0]?.error).not.toContain('スレッドの枠');
+
+    await registry.stop();
+  });
+
   it('ループが塞がっていない期限切れは、これまでどおり30秒で onLost を出す（#4485）', async () => {
     const lost: { label: string }[] = [];
     const runner = new FakeRunner('runner-a');
-    const registry = createRunnerRegistry([], { onLost: (event) => lost.push(event) });
+    const registry = createRunnerRegistry([], {
+      onLost: (event) => lost.push(event),
+      measureThreadpoolWait: async () => ({ waitedMs: 1, settled: true }),
+    });
     await registry.register({ label: 'http://runner:4518', open: async () => runner });
 
     runner.reply = 'hang';

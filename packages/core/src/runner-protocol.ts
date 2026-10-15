@@ -11,6 +11,11 @@ import type { McpServers } from './mcp-servers.js';
 import type { RunnerPlugin as RunnerPluginPush } from './plugins.js';
 import { type RunnerRevisionReport } from './revision.js';
 import {
+  describeThreadpoolWait,
+  measureThreadpoolWait,
+  type ThreadpoolWait,
+} from './threadpool-wait.js';
+import {
   contextUsageObservationSchema,
   externalOutputSchema,
   jobStatusSchema,
@@ -1482,6 +1487,12 @@ export interface RunnerClient {
     | undefined
   >;
   /**
+   * 名乗りの確認（`/health`）が期限切れになったとき、どの段まで進んでいたかを返す同期の読み取り（#4890）。
+   * `sinceMs` は確認を投げた時刻（`performance.now()`）で、それ以降に起きたことだけを返す。
+   * 取れない段は欄を埋めない（`undefined`＝不明）。推し量らない。持たない実装（テストの偽物・口の無い runner）は省略できる。
+   */
+  stagesSince?(sinceMs: number): RunnerRequestStages;
+  /**
    * `ping` に相乗りさせない: `ping` は本文を読み捨てる設計で、読む物を1つ足すと読んではいけない物も読む口になるため。
    * 採るのは資源だけで、`runnerId` / `workspacePath` は採らない。省略した実装は名簿が「報告しない器」として扱い、`select` で不利にしない。
    * `signal` は配置の期限で、返らない1台が配置全体を止めないために使う。
@@ -1856,6 +1867,31 @@ export interface RunnerRegistryOptions {
    * 既定は `node:perf_hooks` の実時間とイベントループ使用率。
    */
   measureProbeLoop?: () => () => ProbeLoopObservation;
+  /**
+   * 名乗りの確認が期限切れになったとき、スレッドの枠の待ちを測る口（#4890。試験で差し替える）。
+   * 既定は {@link measureThreadpoolWait}（`stat('/')` を1つ投げて返るまで。上限で打ち切る）。
+   */
+  measureThreadpoolWait?: () => Promise<ThreadpoolWait | undefined>;
+}
+
+/**
+ * runner への1回の HTTP 要求が、どの段まで進んだか（#4890）。どの欄も `undefined` は「不明」（取れていない）であって、
+ * 「起きていない」ではない。
+ */
+export interface RunnerRequestStages {
+  /**
+   * 名前解決。`resolved` は済んだ（`ms` は掛かった長さ）、`pending` は始まったが未了（`ms` は今までの経過）、
+   * `failed` は失敗、`none` はこの確認の間に始まっていない（既存の接続を使い回したか、接続を張る前で止まっている）。
+   */
+  readonly lookup?:
+    | { readonly kind: 'resolved'; readonly ms: number }
+    | { readonly kind: 'pending'; readonly ms: number }
+    | { readonly kind: 'failed'; readonly ms: number }
+    | { readonly kind: 'none' };
+  /** 接続（TCP）が張れたか。接続を使い回した回は、張り直していないので `false` ではなく欄を埋めない。 */
+  readonly connected?: boolean;
+  /** 応答のヘッダが届いたか。 */
+  readonly headersReceived?: boolean;
 }
 
 export interface ProbeLoopObservation {
@@ -2035,6 +2071,7 @@ class Registry implements RunnerRegistry {
   readonly #livePidsAtLimit = new Map<string, { at: number; current: number; max: number }>();
   readonly #now: () => number;
   readonly #measureProbeLoop: () => () => ProbeLoopObservation;
+  readonly #measureThreadpoolWait: () => Promise<ThreadpoolWait | undefined>;
   /** `stop()` で必ず畳む（残すとテストがハングする）。 */
   #heartbeat: ReturnType<typeof setInterval> | null = null;
   #stopped = false;
@@ -2050,6 +2087,7 @@ class Registry implements RunnerRegistry {
     this.#selectWaitMs = options.selectWaitMs ?? SELECT_WAIT_MS;
     this.#now = options.now ?? Date.now;
     this.#measureProbeLoop = options.measureProbeLoop ?? measureProbeLoopDefault;
+    this.#measureThreadpoolWait = options.measureThreadpoolWait ?? (() => measureThreadpoolWait());
 
     const heartbeat = setInterval(() => this.#beat(), HEARTBEAT_INTERVAL_MS);
     heartbeat.unref?.();
@@ -2543,6 +2581,7 @@ class Registry implements RunnerRegistry {
     // 失敗の文言にデーモン側の観測を添えるための起点: 全台が同時に倒れたとき、遅れたのが器かデーモン自身かを文言だけで分けるため（#4454）。
     // `performance` は大域ではなく `node:perf_hooks` から読む: `vi.useFakeTimers()` は大域の `performance` を差し替え、`eventLoopUtilization` が無くなって probe ごと投げるため。
     const measure = this.#measureProbeLoop();
+    const probeStartedAt = performance.now();
     try {
       // `identity()` と `ping()` の両方は叩かない: 10秒ごとに全台へ2往復を投げることになる。
       identity = await withDeadline(
@@ -2555,8 +2594,23 @@ class Registry implements RunnerRegistry {
     } catch (error) {
       const observed = measure();
       loopStalled = isProbeLoopStalled(error, observed);
+      // 期限切れの回だけ、止まった段とスレッドの枠の待ちを添える（#4890）。枠の待ちは期限の「後」に測る（上限つき）:
+      // 期限まで待たされた原因が枠の詰まりなら、この時点でも詰まっているはずで、詰まりが解けていれば小さい値が出る。
+      let diagnosis = '';
+      if (error instanceof ProbeDeadlineError) {
+        const stages = (() => {
+          try {
+            return client.stagesSince?.(probeStartedAt);
+          } catch {
+            return undefined;
+          }
+        })();
+        const wait = await this.#measureThreadpoolWait().catch(() => undefined);
+        diagnosis = describeProbeDeadlineDiagnosis(stages, wait);
+      }
       failure = redactErrorText(
         describeProbeFailure(error, observed) +
+          diagnosis +
           (loopStalled ? '（デーモンのループが塞がっていた回なので、器が黙ったとは数えない）' : ''),
         process.env,
       );
@@ -2800,6 +2854,32 @@ export function describeProbeFailure(
     causeSuffixOf(error) +
     `（デーモン側の観測: 投げてから失敗まで ${String(Math.round(observed.elapsedMs))}ms・` +
     `その間のイベントループ使用率 ${String(Math.round(observed.loopUtilization * 100))}%）`
+  );
+}
+
+/**
+ * 期限切れの文に添える、止まった段とスレッドの枠の待ち（#4890）。網・DNS・デーモンの器の I/O の詰まりを、日誌だけで見分けるため。
+ * 取れない段は「不明」と書く。判定には使わない（lost の条件は変えない）。
+ */
+export function describeProbeDeadlineDiagnosis(
+  stages: RunnerRequestStages | undefined,
+  wait: ThreadpoolWait | undefined,
+): string {
+  const lookup =
+    stages?.lookup === undefined
+      ? '不明'
+      : stages.lookup.kind === 'resolved'
+        ? `済（${String(Math.round(stages.lookup.ms))}ms）`
+        : stages.lookup.kind === 'pending'
+          ? `未了（${String(Math.round(stages.lookup.ms))}ms 待っている）`
+          : stages.lookup.kind === 'failed'
+            ? `失敗（${String(Math.round(stages.lookup.ms))}ms）`
+            : '始まっていない（接続の使い回しか、接続を張る前）';
+  const flag = (value: boolean | undefined, yes: string, no: string): string =>
+    value === undefined ? '不明' : value ? yes : no;
+  return (
+    `（止まった段: 名前解決 ${lookup}・接続 ${flag(stages?.connected, '張れた', '張れていない')}・` +
+    `応答のヘッダ ${flag(stages?.headersReceived, '届いた', '届いていない')}。${describeThreadpoolWait(wait)}）`
   );
 }
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// 最初の import に置く（枠の大きさは最初に枠を使う処理で決まる。理由は packages/core/src/threadpool-size.ts）
+import '@alteroid/core/threadpool-size';
+
 import { createHash } from 'node:crypto';
 import {
   accessSync,
@@ -28,6 +31,7 @@ import {
   reasonOf,
   readExecutionResources,
   applyAttachmentRequestTimeout,
+  applyRunnerKeepAlive,
   resolveManagerModel,
   resolveWorkerModel,
   retiredLayerProviderNotices,
@@ -411,6 +415,10 @@ export async function main(): Promise<void> {
   });
   // 大きいファイルの別口（2 GiB）が Node 既定の 300 秒で切られないように
   applyAttachmentRequestTimeout(server as unknown as { requestTimeout: number });
+  // デーモンが心拍（10秒）を越えて接続を使い回せるように、サーバのほうが先に閉じないようにする（#4890）。
+  // Node の既定は 5 秒で、そのままだとデーモンの接続は毎回切られ、名前解決と接続をやり直す。
+  // SSE（`/events`）のように応答を流している最中の接続は、keep-alive の持ち時間では畳まれない。
+  applyRunnerKeepAlive(server as unknown as { keepAliveTimeout: number; headersTimeout: number });
 
   server.on('error', (error: unknown) => {
     // `process.stderr.write` を使わない: fd がパイプだと非同期で、直後の exit に巻き込まれて行が消えるため。

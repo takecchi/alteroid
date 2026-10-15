@@ -1,6 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { PerformanceObserver, performance } from 'node:perf_hooks';
 
+import {
+  describeThreadpoolWait,
+  measureThreadpoolWait,
+  type ThreadpoolWait,
+} from './threadpool-wait.js';
+
 /**
  * プロセスのイベントループが止まった（同期の処理・GC）ことを、止まった後に検知して、何が走っていたかを添えて知らせる（#4485）。
  *
@@ -99,6 +105,11 @@ export interface LoopStall {
     readonly throttledMs: number;
     readonly periods: number;
   };
+  /**
+   * 知らせる時点（止まりが明けた直後）のスレッドの枠の待ち（#4890）。枠が塞がっていると、CPU を使わずループも空いたまま、
+   * 名前解決と接続だけが待たされる。測れなかった回は無い（文では「不明」）。
+   */
+  readonly threadpoolWait?: ThreadpoolWait;
 }
 
 /** cgroup v2 の `cpu.stat` から読む2つ。 */
@@ -121,6 +132,8 @@ export interface LoopStallWatchOptions {
   readonly readCpuThrottle?: () => Promise<CpuThrottleSample | undefined>;
   /** 絞りを読んでおく周期（止まっていない間に読んでおき、止まった後に読んだ値との差を出す）。 */
   readonly throttleSampleMs?: number;
+  /** スレッドの枠の待ちを測る口。試験で差し替える。既定は {@link measureThreadpoolWait}。 */
+  readonly measureThreadpoolWait?: () => Promise<ThreadpoolWait | undefined>;
 }
 
 const DEFAULT_INTERVAL_MS = 500;
@@ -158,6 +171,7 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
   const thresholdMs = options.thresholdMs ?? DEFAULT_THRESHOLD_MS;
   const cpuUsage = options.cpuUsage ?? (() => process.cpuUsage());
   const readCpuThrottle = options.readCpuThrottle ?? (() => readCgroupCpuThrottle());
+  const measureWait = options.measureThreadpoolWait ?? (() => measureThreadpoolWait());
   clock = options.now ?? defaultClock;
   // 始める前の印は捨てる: 別の時計で打った印が窓に紛れ込まないため
   phases.length = 0;
@@ -209,7 +223,8 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
     const settle = setTimeout(() => {
       void readCpuThrottle()
         .catch(() => undefined)
-        .then((after) => {
+        .then(async (after) => {
+          const threadpoolWait = await measureWait().catch(() => undefined);
           const throttle =
             before === undefined || after === undefined
               ? undefined
@@ -220,7 +235,10 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
                   ),
                   periods: Math.max(0, after.nrThrottled - before.sample.nrThrottled),
                 };
-          options.onStall(summarize(from, now, stalledMs, cpuDelta, throttle));
+          options.onStall({
+            ...summarize(from, now, stalledMs, cpuDelta, throttle),
+            ...(threadpoolWait === undefined ? {} : { threadpoolWait }),
+          });
         });
     }, GC_SETTLE_MS);
     settle.unref();
@@ -287,6 +305,7 @@ export function describeLoopStall(stall: LoopStall): string {
     `窓の中の GC: ${String(stall.gcCount)} 回・合計 ${String(stall.gcTotalMs)}ms・最大 ${String(stall.gcMaxMs)}ms。` +
     `窓 ${String(stall.windowMs)}ms の中でこのプロセスが使った CPU: user ${String(stall.cpuUserMs)}ms・system ${String(stall.cpuSystemMs)}ms。` +
     throttle +
+    `${describeThreadpoolWait(stall.threadpoolWait)}。` +
     `ヒープ ${String(stall.heapUsedMb)}/${String(stall.heapTotalMb)}MB・RSS ${String(stall.rssMb)}MB。`
   );
 }
