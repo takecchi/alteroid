@@ -109,7 +109,6 @@ import { fingerprintOf, ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { compareCodeUnits } from './code-unit-order.js';
 import { subreapedProcess, underSubreaper } from './delegation-subreaper.js';
-import { redactSecretsInText } from './denial-input-head.js';
 import { codePointBoundary, excerptLine } from './excerpt.js';
 import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
 import type { McpServers } from './mcp-servers.js';
@@ -1772,8 +1771,13 @@ class Host implements RunnerHost {
   ): Promise<void> {
     const parked = this.#takeParkedPeers(managerId);
     if (parked === undefined) return Promise.resolve();
-    const closing = closeParkedPeers(parked, reason, (text) =>
-      this.#emit({ type: 'note', managerId, text }),
+    // 伏せ字は env と vault の値を渡して行う（#4923）: 形を持たない鍵が peer の出力に載っていても、抜粋・note に残さない
+    const vaultValues = Object.values(this.#credentials?.values() ?? {});
+    const closing = closeParkedPeers(
+      parked,
+      reason,
+      (text) => this.#emit({ type: 'note', managerId, text }),
+      (text) => redactErrorText(text, process.env, vaultValues),
     ).then((closed) => {
       if (closed.length === 0) return;
       this.#emit({
@@ -1995,6 +1999,8 @@ export async function closeParkedPeers(
   parked: ParkedPeers,
   reason: string,
   note: (text: string) => void,
+  // 伏せ字（env と vault の値を渡したもの。#4923）。抜粋はこれを通してから切る（伏せ字が先、切り詰めが後）
+  redact: (text: string) => string,
 ): Promise<ClosedParkedPeer[]> {
   const { binding, broker } = parked;
   for (const ask of binding.heldAsks.splice(0)) {
@@ -2009,11 +2015,10 @@ export async function closeParkedPeers(
       id: result.sessionId,
       provider: result.provider,
       interrupted: excerptLine(
-        redactSecretsInText(
+        redact(
           result.pendingApproval === undefined
             ? result.text
             : `確認待ちで止まっていた: ${result.pendingApproval.toolName} ${result.pendingApproval.summary}`,
-          undefined,
         ),
         PARKED_PEER_STOP_EXCERPT_CHARS,
       ),
@@ -2021,7 +2026,7 @@ export async function closeParkedPeers(
   };
   for (const result of binding.heldStops.splice(0)) {
     note(
-      `背景の peer（${result.provider}）[${result.sessionId}] の止まりどころを届けられないまま閉じた（${reason}）: ${describePeerTurnResult(result)}`,
+      `背景の peer（${result.provider}）[${result.sessionId}] の止まりどころを届けられないまま閉じた（${reason}）: ${redact(describePeerTurnResult(result))}`,
     );
     record(result);
   }
@@ -2036,7 +2041,7 @@ export async function closeParkedPeers(
   binding.collectStop = (result) => {
     if (done) {
       note(
-        `背景の peer（${result.provider}）[${result.sessionId}] の止まりどころが、閉じ終えた後に届いた（${reason}）: ${describePeerTurnResult(result)}`,
+        `背景の peer（${result.provider}）[${result.sessionId}] の止まりどころが、閉じ終えた後に届いた（${reason}）: ${redact(describePeerTurnResult(result))}`,
       );
       return;
     }
