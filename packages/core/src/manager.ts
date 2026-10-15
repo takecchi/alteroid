@@ -5683,8 +5683,16 @@ class Pool implements ManagerPool {
       const stash = record.job.rescueStash ?? [];
       const existing = stash.find((e) => e.worktree === event.worktree && e.path === file.path);
       if (existing?.sha256 === file.sha256) {
-        await removeStaged(file.fileId);
-        continue;
+        // 預けた後に添付が消えていたら、同じ中身でも取り込み直す（#4874）。読めなかった回は消えたと決めつけない
+        const gone =
+          (await this.#stores.attachments
+            .getMeta(existing.attachmentId)
+            .then((meta) => meta === undefined)
+            .catch(() => false)) === true;
+        if (!gone) {
+          await removeStaged(file.fileId);
+          continue;
+        }
       }
       const others = stash.filter((e) => e !== existing);
       if (
@@ -5755,15 +5763,16 @@ class Pool implements ManagerPool {
   ): Promise<void> {
     const requesterId = event.managerId;
     const targetId = event.from ?? requesterId;
-    const tell = async (text: string, attachments?: RunnerAttachment[]): Promise<string> => {
-      const result = await this.#send(
+    const tell = async (
+      text: string,
+      attachments?: RunnerAttachment[],
+    ): Promise<ManagerSendResult> =>
+      this.#send(
         requesterId,
         text,
         attachments === undefined || attachments.length === 0 ? {} : { attachments },
         'caller',
       );
-      return result.outcome;
-    };
     let target = requester;
     if (targetId !== requesterId) {
       const found = this.#records.get(targetId) ?? (await this.#load(targetId));
@@ -5885,12 +5894,29 @@ class Pool implements ManagerPool {
         ? ''
         : `\n\n送れなかった分: ${unsendable.map((u) => `${rescueStashLocation(u.entry)}（${u.reason}）`).join(', ')}。`) +
       (unmatched.length === 0 ? '' : `\n\n預かりに無かった指定: ${unmatched.join(', ')}。`);
-    const outcome = await tell(body, loaded.attachments);
+    const result = await tell(body, loaded.attachments);
+    if (result.outcome !== 'delivered' && result.outcome !== 'answered') {
+      // 添付つきの送信が通らなかったとき（添付の口を名乗らない器など）に担当が黙って待たないよう、本文だけで理由と呼び直しを知らせる（#4874）
+      const reason = result.detail === '' ? '理由の記載なし' : result.detail;
+      await tell(
+        `[system] rescue_restore: 預かり ${String(chosen.length)} 件を送れなかった（結果: ${result.outcome}。${reason}）。` +
+          '添付は何も送っていない。事情が解けたら、paths に必要なパスを渡して' +
+          `rescue_restore を呼び直すこと${targetId === requesterId ? '' : `（from: '${targetId}'）`}。`,
+      );
+      await this.#journal({
+        type: 'decision',
+        decision:
+          `[${requesterId}] の rescue_restore（対象 ${targetId}）で、預かり ${String(chosen.length)} 件を [${requesterId}] へ送れなかった` +
+          `（結果: ${result.outcome}）。`,
+        grounds: `${reason}。本文だけで理由と呼び直しの案内を送った（#4874）。`,
+      });
+      return;
+    }
     await this.#journal({
       type: 'decision',
       decision:
         `[${requesterId}] の rescue_restore（対象 ${targetId}）で、預かり ${String(chosen.length)} 件を [${requesterId}] へ添付で送った` +
-        `（結果: ${outcome}。残り ${String(remaining.length)} 件）。`,
+        `（結果: ${result.outcome}。残り ${String(remaining.length)} 件）。`,
       grounds:
         '器が入れ替わった後、担当が預かった未追跡のファイルを取り戻すため（#4863）。パスと件数だけを記録する。',
     });
