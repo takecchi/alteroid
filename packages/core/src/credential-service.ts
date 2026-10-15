@@ -1,4 +1,5 @@
 import { reasonOf } from './dropped-record.js';
+import { DAEMON_RESTART_REQUIRED_ENV_NAMES } from './env-vars-boot.js';
 import {
   CREDENTIAL_NAME,
   CREDENTIAL_NAME_MAX_LENGTH,
@@ -37,6 +38,8 @@ export interface CredentialServiceOptions {
 
 export interface ApplyCredentialsResult {
   fingerprints: CredentialFingerprint[];
+  // 今回の変更でクローン側に関わった名前のうち、デーモンの再起動まで効かないもの（#4830）。無ければ空
+  restartRequired: string[];
   runners: {
     runnerId: string;
     ok: boolean;
@@ -149,6 +152,9 @@ function fingerprintOfRow(row: StoredCredential): CredentialFingerprint {
     updatedAt: row.updatedAt,
     scope: row.scope ?? 'all',
     secret,
+    ...(DAEMON_RESTART_REQUIRED_ENV_NAMES.includes(row.name) && scopeAppliesTo(row.scope, 'clone')
+      ? { restartRequired: true as const }
+      : {}),
     ...(secret ? {} : { value: row.value }),
   };
 }
@@ -296,7 +302,12 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
           }
         }
 
-        return { fingerprints: fingerprintsOf(rows), runners: pushed };
+        // クローン側に関わった名前だけ: 外した・runner へ狭めた名前も changedForClone に入る。runner だけの行はデーモンの process.env に写らない
+        const restartRequired = changedForClone.filter((name) =>
+          DAEMON_RESTART_REQUIRED_ENV_NAMES.includes(name),
+        );
+
+        return { fingerprints: fingerprintsOf(rows), runners: pushed, restartRequired };
       }),
 
     onPushed: (listener) => {

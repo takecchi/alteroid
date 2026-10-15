@@ -1,5 +1,5 @@
 import { stdin } from 'node:process';
-import { stdout } from './terminal-out.js';
+import { stderr, stdout } from './terminal-out.js';
 
 import { CREDENTIAL_NAME } from '@alteroid/core/cli-light';
 import { hasRunnerPushFailure } from '@alteroid/logic';
@@ -24,6 +24,8 @@ interface CredentialsView {
 
 interface CredentialsUpdateView {
   credentials: CredentialFingerprint[];
+  // 古いデーモンの応答には無い欄（#4830）
+  restartRequired?: string[];
   runners: { runnerId: string; ok: boolean; error?: string }[];
 }
 
@@ -143,6 +145,7 @@ export async function credentialSetCommand(
       : `${name} を置きました。\n`,
   );
   reportRunners(view);
+  reportRestartRequired(view);
   failOnPartialPush(view);
 }
 
@@ -175,7 +178,15 @@ export async function credentialRemoveCommand(
       : `${name} を外しました。\n`,
   );
   reportRunners(view);
+  reportRestartRequired(view);
   failOnPartialPush(view);
+}
+
+// stderr へ出す: stdout の出力の形（他の道具が読みうる）を変えないため（#4830）
+function reportRestartRequired(view: CredentialsUpdateView): void {
+  const names = view.restartRequired ?? [];
+  if (names.length === 0) return;
+  stderr.write(`${names.join(', ')} はデーモンの再起動で効く（それまでは前の値のまま動く）\n`);
 }
 
 function failOnPartialPush(view: CredentialsUpdateView): void {

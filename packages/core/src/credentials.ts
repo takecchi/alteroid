@@ -72,6 +72,8 @@ export interface CredentialFingerprint {
   updatedAt: string;
   scope?: 'all' | 'app' | 'runner';
   secret?: boolean;
+  // デーモンの再起動まで効かない名前の行だけ載せる（#4830）
+  restartRequired?: true;
   // `secret === false` の行だけ載せる: `undefined` を敷き詰めると「値を確認したが空だった」と区別が付かなくなるため
   value?: string;
 }

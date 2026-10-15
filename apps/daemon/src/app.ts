@@ -8074,6 +8074,7 @@ export function createApp(deps: AppDeps) {
           credentialsUpdateResponseSchema.parse({
             credentials: result.fingerprints,
             runners: result.runners,
+            restartRequired: result.restartRequired,
           }),
         );
       },

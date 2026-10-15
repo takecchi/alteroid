@@ -680,6 +680,7 @@ export {
 export {
   APP_ENV_VAR_DEFAULTS,
   applyAppScopedEnvVars,
+  DAEMON_RESTART_REQUIRED_ENV_NAMES,
   ENV_BASE_MIGRATION_MARKER,
   migrateEnvBaseCredentialsOnce,
   seedDefaultEnvVars,

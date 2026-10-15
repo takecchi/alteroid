@@ -120,6 +120,7 @@ function EnvVarList() {
       {removeResult !== undefined && (
         <RunnerPushWarning update={removeResult} saved="外した" className="m-4" />
       )}
+      {removeResult !== undefined && <RestartRequiredNote update={removeResult} className="m-4" />}
       {isLoading ? (
         <Spinner />
       ) : listUnavailable ? null : shownEntries.length === 0 ? (
@@ -176,6 +177,31 @@ function RunnerPushWarning({
   );
 }
 
+// 古いデーモンの応答には欄が無い: 無ければ出さない（#4830）
+function RestartRequiredNote({
+  update,
+  className,
+}: {
+  update: EnvVarUpdateResult;
+  className?: string;
+}) {
+  const names = update.restartRequired ?? [];
+  if (names.length === 0) return null;
+  return (
+    <div
+      role="status"
+      className={`flex flex-col gap-1 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn ${className ?? ''}`}
+    >
+      {names.map((name) => (
+        <p key={name} className="break-words">
+          <span className="font-mono break-all">{name}</span>
+          {' はデーモンの再起動で効く（それまでは前の値のまま動く）'}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function EnvVarRow({
   entry,
   gone,
@@ -206,6 +232,9 @@ function EnvVarRow({
       <Badge tone={scope.tone}>{scope.label}</Badge>
       <span className="truncate font-mono text-sm" title={entry.name}>
         {entry.name}
+        {entry.restartRequired === true && (
+          <span className="ml-2 font-sans text-[11px] text-muted-foreground">再起動で効く</span>
+        )}
       </span>
       <span
         className="truncate font-mono text-sm text-muted-foreground"
@@ -309,9 +338,10 @@ function EditEnvVarDialog({
     try {
       const update = await setEnvVar({ name: entry.name, value, scope });
       setSaved({ value, scope });
-      // 一部の実行環境へ反映できていなければ閉じない: 閉じると警告ごと消えて、成功と見分けが付かないため
-      if (failedRunnerPushes(update).length > 0) setResult(update);
-      else onOpenChange(false);
+      // 一部の実行環境へ反映できていない・再起動まで効かない名前なら閉じない: 閉じると注記ごと消えて、すぐ効いたのと見分けが付かないため
+      if (failedRunnerPushes(update).length > 0 || (update.restartRequired ?? []).length > 0) {
+        setResult(update);
+      } else onOpenChange(false);
     } catch (caught) {
       setFailure(caught);
     } finally {
@@ -371,6 +401,7 @@ function EditEnvVarDialog({
           </label>
           <ErrorNote error={failure} />
           {result !== undefined && <RunnerPushWarning update={result} saved="保存した" />}
+          {result !== undefined && <RestartRequiredNote update={result} />}
         </div>
         <DialogFooter>
           <Button size="sm" disabled={busy} onClick={() => handleOpenChange(false)}>
@@ -610,6 +641,7 @@ function AddEnvVarForm() {
 
         <ErrorNote error={refusal ?? failure} />
         {result !== undefined && <RunnerPushWarning update={result} saved="置いた" />}
+        {result !== undefined && <RestartRequiredNote update={result} />}
         <ConfirmDialog
           open={confirming}
           onOpenChange={setConfirming}
