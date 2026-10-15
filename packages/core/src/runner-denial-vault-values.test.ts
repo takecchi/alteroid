@@ -14,7 +14,7 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { createCredentialStore } from './credentials.js';
 import { BASH_GUARD_ENV } from './bash-guard-mode.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
-import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
+import type { RunnerEvent } from './runner-protocol.js';
 
 const DENY_ENV = { [BASH_GUARD_ENV]: 'deny' };
 
@@ -85,15 +85,6 @@ async function firePreToolUse(
   return hook(input as never, undefined, { signal: new AbortController().signal });
 }
 
-async function firePostToolUse(
-  options: Options,
-  input: Record<string, unknown>,
-): Promise<HookJSONOutput> {
-  const hook = options.hooks?.PostToolUse?.[0]?.hooks?.[0];
-  if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
-  return hook(input as never, undefined, { signal: new AbortController().signal });
-}
-
 async function firePostToolUseFailure(
   options: Options,
   input: Record<string, unknown>,
@@ -110,16 +101,6 @@ type PermissionDeniedEvent = Extract<RunnerEvent, { type: 'permission_denied' }>
 
 function noteEvents(events: readonly RunnerEvent[]): NoteEvent[] {
   return events.filter((event): event is NoteEvent => event.type === 'note');
-}
-
-function waitGuardNotes(events: readonly RunnerEvent[]): NoteEvent[] {
-  return noteEvents(events).filter((note) => note.text.includes('Bash の呼び出しを弾いた'));
-}
-
-function permissionDeniedEvents(events: readonly RunnerEvent[]): PermissionDeniedEvent[] {
-  return events.filter(
-    (event): event is PermissionDeniedEvent => event.type === 'permission_denied',
-  );
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
