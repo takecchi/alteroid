@@ -590,6 +590,21 @@ describe('退避 ref（#1266）', () => {
     ]);
   });
 
+  it('PEM の秘密鍵が追加行に在れば secret-like（private-key-pem）', () => {
+    const diff = [
+      'diff --git a/id.pem b/id.pem',
+      '--- /dev/null',
+      '+++ b/id.pem',
+      '@@ -0,0 +1,3 @@',
+      `+-----BEGIN ${'OPENSSH'} PRIVATE KEY-----`,
+      '+FAKEBODYLINE1',
+      `+-----END ${'OPENSSH'} PRIVATE KEY-----`,
+    ].join('\n');
+    expect(secretLikeAdditionsInDiff(diff, undefined)).toEqual([
+      { file: 'id.pem', patterns: ['private-key-pem'] },
+    ]);
+  });
+
   it('push の失敗を分類する', () => {
     expect(classifyPushFailure({ stderr: '', timedOut: true })).toBe('timeout');
     expect(

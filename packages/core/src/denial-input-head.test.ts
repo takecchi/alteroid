@@ -5,7 +5,9 @@ import {
   DENIAL_INPUT_HEAD_LIMIT,
   matchInputOf,
   redactErrorText,
+  redactSecretsInBody,
   redactSecretsInText,
+  secretPatternsInBody,
 } from './denial-input-head.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
@@ -566,6 +568,85 @@ describe('CODEX_API_KEY の伏せ字（Issue #486 M7 段 S5。名前の規則は
   it('規則は広がっていない: 秘密らしい語を含まない Codex 関連の名前（CODEX_HOME）は伏せない', () => {
     const home = '/home/worker/.codex-state';
     expect(redactErrorText(`using ${home}`, { CODEX_HOME: home })).toBe(`using ${home}`);
+  });
+});
+
+describe('固有の接頭辞を持つ鍵の形（issue #4873）', () => {
+  const pemBegin = `-----BEGIN ${'RSA'} PRIVATE KEY-----`;
+  const pemEnd = `-----END ${'RSA'} PRIVATE KEY-----`;
+  const openaiProj = `sk-proj-${'Ab1'.repeat(10)}`;
+  const openaiLegacy = `sk-${'Cd2'.repeat(14)}`;
+  const slack = `xox${'b'}-${'1234567890'}-${'AbCdEfGh'}`;
+  const stripeLive = `sk_${'live'}_${'Ef3'.repeat(6)}`;
+  const stripeRestricted = `rk_${'live'}_${'Gh4'.repeat(6)}`;
+  const google = `AIza${'X'.repeat(35)}`;
+
+  it.each([
+    ['openai-key', openaiProj],
+    ['openai-key', openaiLegacy],
+    ['slack-token', slack],
+    ['stripe-key', stripeLive],
+    ['stripe-key', stripeRestricted],
+    ['google-api-key', google],
+    ['private-key-pem', `${pemBegin}\nFAKEBODYLINE1\n${pemEnd}`],
+  ])('%s に当たり、値を残さず伏せる（%#）', (name, sample) => {
+    const text = `before ${sample} after`;
+    expect(secretPatternsInBody(text, undefined)).toContain(name);
+    expect(secretPatternsInBody(text, undefined, { binary: true })).toContain(name);
+    const out = redactSecretsInBody(text, undefined);
+    expect(out).toContain('[REDACTED]');
+    expect(out).not.toContain(sample.slice(8, 20));
+  });
+
+  it.each([
+    ['短い sk-', `sk-${'a'.repeat(39)}`],
+    ['短い sk-proj-', `sk-proj-${'a'.repeat(19)}`],
+    ['短い AIza', `AIza${'X'.repeat(34)}`],
+    ['長すぎる AIza（語の続き）', `AIza${'X'.repeat(36)}`],
+    ['語の途中の AIza', `fooAIza${'X'.repeat(35)}`],
+    ['語の途中の sk-', `task-${'a'.repeat(45)}`],
+    ['stripe の test 鍵', `sk_${'test'}_${'a'.repeat(24)}`],
+    ['短い stripe', `sk_${'live'}_${'a'.repeat(15)}`],
+    ['短い slack', `xox${'b'}-123`],
+    ['PUBLIC KEY', `-----BEGIN PUBLIC KEY-----\nFAKEBODYLINE1\n-----END PUBLIC KEY-----`],
+    ['CERTIFICATE', `-----BEGIN CERTIFICATE-----\nFAKEBODYLINE1\n-----END CERTIFICATE-----`],
+  ])('当たらない: %s', (_label, sample) => {
+    const names = new Set([
+      'private-key-pem',
+      'openai-key',
+      'slack-token',
+      'stripe-key',
+      'google-api-key',
+    ]);
+    const hits = secretPatternsInBody(`x ${sample} y`, undefined).filter((n) => names.has(n));
+    expect(hits).toEqual([]);
+  });
+
+  it('PEM: END があればその後ろは残し、本体の行は1行も残さない', () => {
+    const body = ['FAKEBODYLINE1', 'FAKEBODYLINE2', 'FAKEBODYLINE3'].join('\n');
+    const out = redactSecretsInBody(`head\n${pemBegin}\n${body}\n${pemEnd}\ntail`, undefined);
+    expect(out).toBe('head\n[REDACTED]\ntail');
+  });
+
+  it('PEM: END が無ければ BEGIN から本文の終わりまで伏せる', () => {
+    const out = redactSecretsInBody(`head\n${pemBegin}\nFAKEBODYLINE1\nFAKEBODYLINE2`, undefined);
+    expect(out).toBe('head\n[REDACTED]');
+  });
+
+  it('PEM: 複数の鍵はそれぞれ伏せる', () => {
+    const one = `${pemBegin}\nFAKEBODYLINE1\n${pemEnd}`;
+    const two = `-----BEGIN ${'EC'} PRIVATE KEY-----\nFAKEBODYLINE2\n-----END ${'EC'} PRIVATE KEY-----`;
+    const out = redactSecretsInBody(`${one}\nmid\n${two}\n`, undefined);
+    expect(out).toBe('[REDACTED]\nmid\n[REDACTED]\n');
+    expect(out).not.toContain('FAKEBODYLINE');
+  });
+
+  it('sk-ant- は anthropic-key が伏せ、壊れた形を残さない', () => {
+    const out = redactSecretsInBody(
+      `k=${'sk-ant-'}${'ab12cd34ef56'}${'Z'.repeat(40)} end`,
+      undefined,
+    );
+    expect(out).toBe('k=[REDACTED] end');
   });
 });
 

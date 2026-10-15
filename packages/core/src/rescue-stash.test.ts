@@ -145,6 +145,19 @@ describe('未追跡のファイルの預かり（runner 側。#4863）', () => {
     expect(JSON.stringify(result)).not.toContain(AWS_KEY);
   });
 
+  it('PEM の秘密鍵を含むテキストは secret-like（private-key-pem）', async () => {
+    await writeFile(
+      path.join(repo, 'id.pem'),
+      `-----BEGIN ${'RSA'} PRIVATE KEY-----\nFAKEBODYLINE1\n-----END ${'RSA'} PRIVATE KEY-----\n`,
+    );
+    const result = await run(['id.pem'], { final: true });
+    expect(result.files).toEqual([]);
+    expect(result.skipped).toEqual([
+      { path: 'id.pem', reason: 'secret-like', patterns: ['private-key-pem'] },
+    ]);
+    expect(JSON.stringify(result)).not.toContain('FAKEBODYLINE1');
+  });
+
   it('バイナリ（NUL を含む）は固有の接頭辞の規則だけ見る: 形だけの規則には当てず、接頭辞つきには当てる', async () => {
     const plain = Buffer.concat([Buffer.from([0x89, 0x50, 0, 1]), Buffer.from('user:pw@host')]);
     await writeFile(path.join(repo, 'img.png'), plain);

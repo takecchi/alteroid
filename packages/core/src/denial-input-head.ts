@@ -93,6 +93,11 @@ export type SecretPatternName =
   | 'github-pat'
   | 'anthropic-key'
   | 'aws-access-key'
+  | 'private-key-pem'
+  | 'openai-key'
+  | 'slack-token'
+  | 'stripe-key'
+  | 'google-api-key'
   | 'bearer'
   | 'secret-assignment'
   | 'secret-json-field';
@@ -151,6 +156,39 @@ const CREDENTIAL_RULES: readonly CredentialRule[] = [
     name: 'aws-access-key',
     prefixed: true,
     apply: (text) => text.replace(/\bAKIA[0-9A-Z]{16}\b/g, REDACTED),
+  },
+  {
+    name: 'private-key-pem',
+    prefixed: true,
+    // END が無ければ本文の終わりまで伏せる: 途中で切れた抜粋に鍵の本体を残さないため。PUBLIC KEY・CERTIFICATE は当てない
+    apply: (text) =>
+      text.replace(
+        /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----|$)/g,
+        REDACTED,
+      ),
+  },
+  {
+    name: 'openai-key',
+    prefixed: true,
+    apply: (text) =>
+      text
+        .replace(/\bsk-proj-[A-Za-z0-9_-]{20,300}\b/g, REDACTED)
+        .replace(/\bsk-[A-Za-z0-9]{40,300}\b/g, REDACTED),
+  },
+  {
+    name: 'slack-token',
+    prefixed: true,
+    apply: (text) => text.replace(/\bxox[abprs]-[A-Za-z0-9-]{10,300}/g, REDACTED),
+  },
+  {
+    name: 'stripe-key',
+    prefixed: true,
+    apply: (text) => text.replace(/\b(?:sk|rk)_live_[A-Za-z0-9]{16,300}\b/g, REDACTED),
+  },
+  {
+    name: 'google-api-key',
+    prefixed: true,
+    apply: (text) => text.replace(/\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/g, REDACTED),
   },
   {
     name: 'bearer',
