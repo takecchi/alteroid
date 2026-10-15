@@ -1011,7 +1011,8 @@ export const profileErrorResponseSchema = z.object({
   detail: z.string(),
 });
 
-export const profileEntryUpdateRequestSchema = z.object({
+// 知らない欄は断る（#4840）: `ifMatch` の綴り違いが黙って捨てられると、比べずに上書きする（`/mcp-servers` と同じ）
+export const profileEntryUpdateRequestSchema = z.strictObject({
   script: z.string().refine((value) => value.trim().length > 0),
   scope: profileScopeSchema.optional(),
   // 読んだときの行の版（`GET /profile` の各行の `version`）。`null` は「行が無いときだけ作る」。省けば今までどおり比べない
