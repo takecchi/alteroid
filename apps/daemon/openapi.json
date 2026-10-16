@@ -25750,7 +25750,7 @@
             }
           },
           "409": {
-            "description": "名前が既存の名前と大文字小文字だけ違う。",
+            "description": "名前が既存の名前と大文字小文字だけ違う、または、プレビューの後に同じ名前の plugin が変わった（入った・消えた・入れ替わった）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -26090,6 +26090,49 @@
                         "extractorDrops",
                         "skillExcerpts"
                       ]
+                    },
+                    "replaces": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["url", "marketplace"]
+                            },
+                            "url": {
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string"
+                            },
+                            "sha": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            },
+                            "marketplace": {
+                              "type": "string"
+                            },
+                            "plugin": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "url", "sha"]
+                        },
+                        "sha": {
+                          "type": "string"
+                        },
+                        "installedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["name", "source", "sha", "installedAt"]
                     }
                   },
                   "required": ["previewId", "expiresAt", "summary"]

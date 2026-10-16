@@ -7676,12 +7676,24 @@ export function createApp(deps: AppDeps) {
           const status = error.kind === 'invalid' ? 400 : error.kind === 'unavailable' ? 502 : 503;
           return c.json({ error: reasonOf(error) }, status);
         }
-        const { previewId, expiresAt } = pluginPreviews.put(fetched);
+        // 同じ名前の plugin が既にあれば、確定が置き換えになることを言う。その時点の SHA は預かりに結び付け、確定で突き合わせる（#4797）
+        const current = (await deps.stores.plugins.list()).find((p) => p.name === fetched.name);
+        const { previewId, expiresAt } = pluginPreviews.put(fetched, current?.source.sha ?? null);
         return c.json(
           pluginPreviewResponseSchema.parse({
             previewId,
             expiresAt,
             summary: summarizeFetchedPlugin(fetched),
+            ...(current === undefined
+              ? {}
+              : {
+                  replaces: {
+                    name: current.name,
+                    source: current.source,
+                    sha: current.source.sha,
+                    installedAt: current.installedAt,
+                  },
+                }),
           }),
         );
       },
@@ -7711,7 +7723,8 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           409: {
-            description: '名前が既存の名前と大文字小文字だけ違う。',
+            description:
+              '名前が既存の名前と大文字小文字だけ違う、または、プレビューの後に同じ名前の plugin が変わった（入った・消えた・入れ替わった）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           500: {
@@ -7760,15 +7773,20 @@ export function createApp(deps: AppDeps) {
           );
         }
 
-        let previousText = '新規';
-        try {
-          const previous = (await deps.stores.plugins.list()).find((p) => p.name === fetched.name);
-          if (previous !== undefined) {
-            previousText = `置き換え（前の SHA: ${previous.source.sha}）`;
-          }
-        } catch (error) {
-          previousText = `前の状態は読めなかった（${reasonOf(error)}）`;
+        // プレビューの時点の同じ名前の SHA（無ければ null）と、いまのを突き合わせる。違えば入れずに断る（古いプレビューでの巻き戻し・見せていない置き換えを止める。#4797）
+        const previewedSha = pluginPreviews.existingShaOf(previewId) ?? null;
+        const previous = (await deps.stores.plugins.list()).find((p) => p.name === fetched.name);
+        if ((previous?.source.sha ?? null) !== previewedSha) {
+          return c.json(
+            {
+              error:
+                'プレビューの後に、同じ名前の plugin が変わった（または入った・消えた）。もう一度プレビューしてから確定すること',
+            },
+            409,
+          );
         }
+        const previousText =
+          previous === undefined ? '新規' : `置き換え（前の SHA: ${previous.source.sha}）`;
         const flags = `scope: ${scope}、hooks: ${enableHooks ? '有効' : '無効'}、.mcp.json: ${enableMcp ? '有効' : '無効'}`;
         const actor = describeActor(c.get('principal'));
 

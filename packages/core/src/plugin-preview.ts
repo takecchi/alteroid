@@ -170,8 +170,14 @@ export interface PluginPreviewStoreOptions {
 }
 
 export interface PluginPreviewStore {
-  put(fetched: FetchedPlugin): { previewId: string; expiresAt: string };
+  /** `existingSha`: プレビューの時点で入れてあった同じ名前の plugin の SHA（無ければ null）。確定の時点の値と突き合わせる（#4797）。 */
+  put(
+    fetched: FetchedPlugin,
+    existingSha?: string | null,
+  ): { previewId: string; expiresAt: string };
   get(previewId: string): FetchedPlugin | undefined;
+  /** `put` で覚えた `existingSha`。預かりが無ければ undefined（「同じ名前が無かった」の null と区別する）。 */
+  existingShaOf(previewId: string): string | null | undefined;
   discard(previewId: string): void;
 }
 
@@ -184,7 +190,10 @@ export function createPluginPreviewStore(
   const maxEntries = options.maxEntries ?? 8;
   const maxBytes = options.maxBytes ?? 256 * 1024 * 1024;
   const now = options.now ?? (() => Date.now());
-  const entries = new Map<string, { fetched: FetchedPlugin; expiresAt: number; bytes: number }>();
+  const entries = new Map<
+    string,
+    { fetched: FetchedPlugin; expiresAt: number; bytes: number; existingSha: string | null }
+  >();
 
   function sweep(): void {
     const current = now();
@@ -198,7 +207,7 @@ export function createPluginPreviewStore(
   }
 
   return {
-    put(fetched) {
+    put(fetched, existingSha = null) {
       sweep();
       const bytes = fetched.files.reduce((sum, f) => sum + f.content.byteLength, 0);
       while (entries.size > 0 && (entries.size >= maxEntries || totalBytes() + bytes > maxBytes)) {
@@ -208,12 +217,16 @@ export function createPluginPreviewStore(
       }
       const previewId = randomBytes(24).toString('base64url');
       const expiresAt = now() + ttlMs;
-      entries.set(previewId, { fetched, expiresAt, bytes });
+      entries.set(previewId, { fetched, expiresAt, bytes, existingSha });
       return { previewId, expiresAt: new Date(expiresAt).toISOString() };
     },
     get(previewId) {
       sweep();
       return entries.get(previewId)?.fetched;
+    },
+    existingShaOf(previewId) {
+      sweep();
+      return entries.get(previewId)?.existingSha;
     },
     discard(previewId) {
       entries.delete(previewId);

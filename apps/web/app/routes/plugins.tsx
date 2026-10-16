@@ -75,7 +75,6 @@ export default function PluginsPage() {
         {/* クエリが変わったら作り直す: 欄は初期値だけをクエリから取るため */}
         <AddPlugin
           key={query.toString()}
-          installed={data?.plugins ?? []}
           initial={parsePluginPrefill(query) ?? emptyPluginSourceForm()}
         />
       </div>
@@ -204,13 +203,7 @@ function RunnerResults({ runners, appliesFrom }: { runners: Runners; appliesFrom
   );
 }
 
-function AddPlugin({
-  installed,
-  initial,
-}: {
-  installed: readonly PluginRow[];
-  initial: PluginSourceForm;
-}) {
+function AddPlugin({ initial }: { initial: PluginSourceForm }) {
   const previewPlugin = usePreviewPlugin();
   const installPlugin = useInstallPlugin();
   const [form, setForm] = useState<PluginSourceForm>(initial);
@@ -269,6 +262,8 @@ function AddPlugin({
         setExpired(true);
         setPreview(null);
       } else {
+        // 409（プレビューの後に同じ名前が変わった）は、文をそのまま見せて預かりを捨てる。プレビューからやり直させる（#4797）
+        if (caught instanceof ApiError && caught.status === 409) setPreview(null);
         setFailure(caught);
       }
     } finally {
@@ -276,8 +271,8 @@ function AddPlugin({
     }
   }
 
-  const existing =
-    preview === null ? undefined : installed.find((p) => p.name === preview.summary.name);
+  // 置き換えの有無はプレビューの応答（預かりと結び付いた時点の値）から取る: 一覧は後から変わりうる（#4797）
+  const existing = preview?.replaces;
 
   return (
     <Card>
@@ -378,7 +373,7 @@ function AddPlugin({
             <div className="flex flex-col gap-2 rounded-md border border-border px-3 py-2">
               {existing !== undefined && (
                 <p className="text-xs break-all text-warn">
-                  {`置き換え: ${existing.source.sha} → ${preview.summary.sha}`}
+                  {`同じ名前の plugin が既にあり、確定するとそれを置き換える（取り元: ${sourceWhere(existing.source)}、SHA: ${existing.sha} → ${preview.summary.sha}、入れた日時: ${formatDateTime(existing.installedAt)}）`}
                 </p>
               )}
               <label className="flex flex-col gap-1">

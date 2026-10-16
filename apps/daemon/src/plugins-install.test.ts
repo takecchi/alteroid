@@ -424,6 +424,85 @@ describe('POST /plugins（確定）', () => {
     expect((await h.stores.plugins.get('demo'))?.source.sha).toBe(SHA2);
   });
 
+  // 2026-10-17 #4797: 同じ名前の確定は「プレビューの時点の同じ名前の SHA」と突き合わせる。以前は黙って置き換えていた（古いプレビューで古い版へ戻れた）
+  describe('同じ名前の plugin（#4797）', () => {
+    const at = (sha: string) => async () =>
+      fetchedPlugin({ source: { kind: 'url', url: 'https://example.invalid/r.git', sha } });
+    const SHA3 = 'c'.repeat(40);
+
+    async function installedHarness() {
+      const h = harness();
+      const first = await preview(h);
+      expect((await h.send('POST', '/plugins', { previewId: first.previewId })).status).toBe(200);
+      return h;
+    }
+
+    it('プレビューに、置き換える相手（replaces）が載る', async () => {
+      const h = await installedHarness();
+      const again = harness({ stores: h.stores, fetch: at(SHA2) });
+      const p = await preview(again);
+      const stored = await h.stores.plugins.get('demo');
+      expect((p as { replaces?: unknown }).replaces).toEqual({
+        name: 'demo',
+        source: { kind: 'url', url: 'https://example.invalid/r.git', sha: SHA },
+        sha: SHA,
+        installedAt: stored?.installedAt,
+      });
+    });
+
+    it('同じ名前が無ければ replaces は載らない', async () => {
+      const h = harness();
+      const p = await preview(h);
+      expect('replaces' in p).toBe(false);
+    });
+
+    it('プレビューの後に同じ名前が入れ替わったら 409（古いプレビューで巻き戻らない）', async () => {
+      const h = await installedHarness();
+      const stale = harness({ stores: h.stores, fetch: at(SHA2) });
+      const fresh = harness({ stores: h.stores, fetch: at(SHA3) });
+      const oldPreview = await preview(stale);
+      const newPreview = await preview(fresh);
+      expect(
+        (await fresh.send('POST', '/plugins', { previewId: newPreview.previewId })).status,
+      ).toBe(200);
+      const response = await stale.send('POST', '/plugins', { previewId: oldPreview.previewId });
+      expect(response.status).toBe(409);
+      expect(((await response.json()) as { error: string }).error).toBe(
+        'プレビューの後に、同じ名前の plugin が変わった（または入った・消えた）。もう一度プレビューしてから確定すること',
+      );
+      expect((await h.stores.plugins.get('demo'))?.source.sha).toBe(SHA3);
+    });
+
+    it('プレビューの後に同じ名前が入ったら 409。入れない', async () => {
+      const h = harness();
+      const p = await preview(h);
+      const other = harness({ stores: h.stores, fetch: at(SHA2) });
+      const q = await preview(other);
+      expect((await other.send('POST', '/plugins', { previewId: q.previewId })).status).toBe(200);
+      expect((await h.send('POST', '/plugins', { previewId: p.previewId })).status).toBe(409);
+      expect((await h.stores.plugins.get('demo'))?.source.sha).toBe(SHA2);
+    });
+
+    it('プレビューの後に同じ名前が消えても 409', async () => {
+      const h = await installedHarness();
+      const again = harness({ stores: h.stores, fetch: at(SHA2) });
+      const p = await preview(again);
+      expect(await h.stores.plugins.remove('demo')).toBe(true);
+      expect((await again.send('POST', '/plugins', { previewId: p.previewId })).status).toBe(409);
+      expect(await h.stores.plugins.get('demo')).toBeNull();
+    });
+
+    it('変わっていなければ置き換えとして通る', async () => {
+      const h = await installedHarness();
+      const again = harness({ stores: h.stores, fetch: at(SHA2) });
+      const p = await preview(again);
+      expect((await again.send('POST', '/plugins', { previewId: p.previewId })).status).toBe(200);
+      expect((await h.stores.plugins.get('demo'))?.source.sha).toBe(SHA2);
+      const journal = await h.stores.journal.list({ types: ['decision'] });
+      expect(JSON.stringify(journal)).toContain(`置き換え（前の SHA: ${SHA}）`);
+    });
+  });
+
   it('知らない・期限切れの previewId は 404。確定したものは再利用できない', async () => {
     let now = 1_000_000;
     const h = harness({ now: () => now });

@@ -1181,6 +1181,15 @@ export const pluginPreviewResponseSchema = z.object({
   previewId: z.string(),
   expiresAt: z.string(),
   summary: pluginPreviewSummarySchema,
+  // 同じ名前の plugin が既に入っているときだけ載る。確定するとそれを置き換える（#4797）
+  replaces: z
+    .object({
+      name: z.string(),
+      source: pluginSourceViewSchema,
+      sha: z.string(),
+      installedAt: z.string(),
+    })
+    .optional(),
 });
 
 export const pluginInstallRequestSchema = z.strictObject({

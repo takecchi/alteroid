@@ -332,15 +332,46 @@ describe('/plugins 画面 — 入れる（プレビュー → 確定）', () => 
     expect(screen.getByText(/bin\/tool/)).toBeTruthy();
   });
 
-  it('同名がすでに入っていれば、置き換え（旧 SHA → 新 SHA）を出す', async () => {
-    stubPlugins();
+  // 2026-10-17 #4797: 置き換えの出どころを入れてある一覧から、プレビューの応答の replaces に変え、文を広げた。以前の期待値: `置き換え: ${OLD_SHA} → ${NEW_SHA}`
+  it('プレビューに replaces があれば、置き換え（取り元・旧 SHA → 新 SHA・入れた日時）を出す', async () => {
+    stubPlugins({
+      preview: {
+        status: 200,
+        body: {
+          ...PREVIEW,
+          replaces: {
+            name: 'demo',
+            source: INSTALLED.plugins[0]?.source,
+            sha: OLD_SHA,
+            installedAt: '2026-09-20T00:00:00.000Z',
+          },
+        },
+      },
+    });
     renderScreen();
     await screen.findByText('demo');
 
     fireEvent.change(screen.getByLabelText('plugin 名'), { target: { value: 'demo' } });
     fireEvent.click(screen.getByRole('button', { name: 'プレビュー' }));
 
-    expect(await screen.findByText(`置き換え: ${OLD_SHA} → ${NEW_SHA}`)).toBeTruthy();
+    const note = await screen.findByText(
+      /同じ名前の plugin が既にあり、確定するとそれを置き換える/,
+    );
+    expect(note.textContent).toContain('https://example.com/o/demo.git');
+    expect(note.textContent).toContain(`SHA: ${OLD_SHA} → ${NEW_SHA}`);
+    expect(note.textContent).toContain('入れた日時: ');
+  });
+
+  it('replaces が無ければ、一覧に同名があっても置き換えとは言わない', async () => {
+    stubPlugins();
+    renderScreen();
+    await screen.findByText('demo');
+
+    fireEvent.change(screen.getByLabelText('plugin 名'), { target: { value: 'demo' } });
+    fireEvent.click(screen.getByRole('button', { name: 'プレビュー' }));
+    await screen.findByText(NEW_SHA);
+
+    expect(screen.queryByText(/確定するとそれを置き換える/)).toBeNull();
   });
 
   it('預かりの期限切れ（404）では、プレビューからやり直す案内を出す', async () => {

@@ -51,6 +51,7 @@ interface PreviewView {
   previewId: string;
   expiresAt: string;
   summary: PreviewSummary;
+  replaces?: { name: string; source: SourceView; sha: string; installedAt: string };
 }
 
 interface PluginRow {
@@ -155,17 +156,15 @@ export async function pluginAddCommand(
   const preview = (await previewResponse.json()) as PreviewView;
   stdout.write(renderPluginPreview(preview.summary, { enableHooks: options.enableHooks === true }));
 
-  const listResponse = await client.plugins.$get();
-  if (!listResponse.ok) await fail(listResponse, target);
-  const installed = ((await listResponse.json()) as { plugins?: PluginRow[] }).plugins ?? [];
-  const existing = installed.find((p) => p.name === preview.summary.name);
+  // 置き換えの有無はプレビューの応答から取る（預かりと結び付いた時点の値。確定の突き合わせと同じもの。#4797）
+  const existing = preview.replaces;
 
   const enableHooks = options.enableHooks === true;
   const enableMcp = options.enableMcp === true;
   const replacing =
     existing === undefined
       ? ''
-      : `既に入っている「${preview.summary.name}」を置き換えます（SHA ${existing.source.sha} → ${preview.summary.sha}）。`;
+      : `同じ名前の plugin が既にあり、確定するとそれを置き換えます（取り元: ${sourceWhere(existing.source)}、SHA: ${existing.sha} → ${preview.summary.sha}、入れた日時: ${existing.installedAt}）。`;
   // 確認の文には混ぜない: --yes では確認の文が出ず、置き換えの通知が消える。
   if (replacing !== '') stdout.write(`${replacing}\n`);
   await confirmProceed(
