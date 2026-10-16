@@ -46,7 +46,7 @@ jobs:
     # draft の PR では回さない（`ci.yml` の `ci` と同じ判断）。
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: real-postgres (${{ matrix.collate }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     strategy:
       fail-fast: false

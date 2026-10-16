@@ -164,7 +164,7 @@ jobs:
     # 「pull_request 以外は素通りさせる」形を維持しているのは、先例を知らなかった
     # からではなく、**知ったうえで意図的に違えている。**
     if: always() && github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       # needs の全 job の result を見る。success 以外（failure / cancelled / skipped）は
       # すべて失敗として扱う。needs が空・読めないときも失敗にする（0 件で緑にしない）。
@@ -215,7 +215,7 @@ jobs:
     # 元は5本の job（static / build-checks / typecheck / lint / mutation-selftest）だったが、
     # どれも元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
     if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -553,7 +553,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -586,7 +586,7 @@ jobs:
     # イベント（push を含む）が skip される。ここも「先例に揃えよう」で
     # 書き換えないこと。
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
