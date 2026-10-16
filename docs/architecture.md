@@ -707,7 +707,21 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 - **設定で開け閉めできる。** `ALTEROID_BASH_GUARD` = `ask`（既定）/ `deny`（確認に上げずに止める）/ `off`（門を掛けない）。綴り違いは起動時に落とす（`ALTEROID_MEMORY_GUARD` と同じ作法）。これは能力の削減ではなく実行環境の設定である（north_star 禁止2「方針は設定で開けられなければならない」）。門の判定そのものが例外で終わったときも、既定では確認に倒れる（上がらずに止めない）
 - **本番デプロイの起動（`release-prod`）も確認に上げる。** `gh workflow run … release-prod…` と `gh api …/workflows/…release-prod…/dispatches` は、マネージャー・作業者の `Bash` で `ask` になる（`bash-release-prod-guard.ts`）。クローンが許可すれば通り、断れば止まる。`ALTEROID_BASH_GUARD=off` でもこれだけは確認に残し（取り返しがつきにくい操作を黙って通す設定にしない）、`deny` の設定では止める。以前は `docker/gh`（`gh` のシム）が uid（`ALTEROID_RUNNER_CHILD_UID`）で見分けて exit 1 にしていたが、確認に上がらずクローンの許可でも通らなかったので外した（#2884、#865 の決定の置き換え）。シムは鍵の読み場所を挟む役目だけを残している
   - ⚠️ **これは守りではなく見分けである。** 文字列しか見ないので、スクリプトファイルの中・変数で組んだ `gh`・`eval`・workflow の数値 ID 指定・`curl` での REST 呼び出し・`git push origin main:release/prod`・`gh run rerun` は拾えない。旧シムは `gh` を通る限りこれらの一部も止めていたので、捕まえる範囲は狭くなった。**硬い境界は `release/prod` の ruleset 側にしか置けないが、いまの ruleset は削除と force push を止めるだけで、早送りの直 push は止めていない**（#889 の受容の決定。再検討は #2953。設定するかはオーナー判断）
-- **この門に載せないもの。** 特定のリポジトリの運用規約（`gh pr merge` の形など）は、製品の門ではなく、そのリポジトリの指示（`AGENTS.md`・依頼文）で表す
+- **Bash の形の歯（`ALTEROID_BASH_SHAPE_GUARD`。#4947・#4949）は、開けた器にだけ掛かる。** 依頼文で禁じても破られる形を、確認に上げずにその場で断り、理由文に代わりの道を返す（`bash-shape-guard.ts`）。
+  - **既定は `off`。** 特定の運用スタイルを製品の要件にしないため（north_star 禁止2）。`on` にする方法は2つで、runner の env に `ALTEROID_BASH_SHAPE_GUARD=on`（compose では `compose.yaml` の同名の行）を置くか、実行環境プロファイルに `export ALTEROID_BASH_SHAPE_GUARD=on` を置く。プロファイルは呼び出しのたびに読むので、置けば**次の `Bash` の呼び出しから**効く（器の再起動もデプロイも要らない）。実効の値は**プロファイルが優先**で、無ければ runner の env。綴り違いの呼び出しは判定の中で投げ、既存の作法で確認（`ALTEROID_BASH_GUARD=deny` なら deny）に倒れる。
+  - **マネージャー・作業者の両方に掛かる。** `ALTEROID_BASH_GUARD` とは独立で、`ALTEROID_BASH_GUARD=off` でも `on` なら掛かる。`on` のときは `ask` / `deny` に関わらず deny（確認に上げると、打つたびにクローンへ確認が積み上がるため）。判定の順は release-prod → 形の歯 → wait-guard。起動時に `alteroid-runner: Bash の形の歯: on|off（…）` を1行出し、プロファイルが降りて実効の値が変わったときも1行出し直す。
+  - **断る形と代わりの道**（引用符の外にあるか、`bash -c` / `sh -c` の引数と二重引用符の中の `$(...)`・バッククォートの中身だけを読む。`eval`・変数に入れた命令・2段以上の入れ子の `bash -c` は既知の穴）:
+    - ヒアドキュメント → Write / Edit（コミットメッセージは Write でファイルを作り `git commit -F <絶対パス>`）
+    - 出力のリダイレクト（`>`・`>>`・`&>`・`N>`）→ Write、出力を絞るなら `| tail` / `| grep`
+    - 記述子の付け替え（`2>&1`・`>&2`）・`|&` → 要らない（Bash の道具が標準エラーも返す）。`|` だけでよい
+    - `sed -i` → Edit
+    - `node -e`・`python -c`・`perl -e` → Read / grep、処理が要るならスクリプトを Write して絶対パスで実行
+    - `git reset`（全ての形）→ `git restore --staged`、捨てる前に依頼者へ確かめる、戻すなら `git revert`
+    - `git push` の force 系（`--force`・`--force-with-lease`・`-f`・`+refspec`）→ 新しいコミットを積む、書き換えるなら新しい枝と PR
+    - `git rebase`（`git pull --rebase` を含む）→ `git merge origin/main`
+    - `--no-verify`・`git commit -n` → フックが落ちた理由を直す
+    - `gh pr merge --auto` → `timeout 530 gh run watch <id> --exit-status` で前面で待ち、緑なら `--match-head-commit` を付けてマージ
+- **この門に載せないもの。** 特定のリポジトリの運用規約（`gh pr merge` の形など）は、製品の門ではなく、そのリポジトリの指示（`AGENTS.md`・依頼文）で表す。上の形の歯は、これを**設定で開けた器にだけ**掛ける例外である（既定では掛けない）
 - **peer の Codex には、この門は掛からない。** Codex の駆動役は `PreToolUse` に相当するフックを呼ばない（provider の能力の欠落である）。peer のセッションは呼び出し元のマネージャーと同じ構えで起こし、Codex が自分で確認を求めたときだけ peer の承認の経路（まずマネージャー、判断できなければクローン）に乗る。⟹ この門が拾う種類の操作（本番デプロイの起動など）を、peer の Codex は確認なしに行いうる。**これはオーナーが受容した状態である**（2026-10-07。逐語は「これは許容します」）。塞ぎに行かないこと — 塞ぐなら peer を厳しい構えへ戻すことになり、作業を任せられなくなる（同日の決定と正面から当たる）
 
 ## 実装フェーズ

@@ -30,7 +30,12 @@ import type {
 import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
 import { resolvePeerOpening, samePeerOpening, type PeerOpening } from './agent-provider-peers.js';
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
-import { resolveBashGuardMode, type BashGuardMode } from './bash-guard-mode.js';
+import {
+  describeBashShapeGuard,
+  resolveBashGuardMode,
+  resolveEffectiveBashShapeGuard,
+  type BashGuardMode,
+} from './bash-guard-mode.js';
 import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { inspectBashShape } from './bash-shape-guard.js';
@@ -450,6 +455,8 @@ export interface RunnerHostOptions {
   workspacePath: string;
   queryFn?: ClaudeQueryFn;
   env?: NodeJS.ProcessEnv;
+  // 起動後に実効の設定が変わったときの1行の出し口（`Bash の形の歯` の出し直し）。省略なら出さない
+  log?: (line: string) => void;
   peer?: RunnerHostPeerOptions;
   managerTools?: RunnerManagerToolsOptions;
   withheldEnvKeys?: readonly string[];
@@ -508,6 +515,8 @@ export interface RunnerHost {
   setCredentials(entries: readonly CredentialEntry[]): Promise<CredentialFingerprint[]>;
   profile(): RunnerProfileFingerprint | undefined;
   setProfile(script: string): Promise<RunnerProfileResult>;
+  // 起動行に出す `Bash の形の歯` の1行（実効の値。不正な値でも投げない）
+  bashShapeGuardLine(): string;
   // 鍵・プロファイルが降りた後の実効の env から読む（値は返さない）。hello と `anthropic_route` が名乗る
   anthropicRoute(): string[];
   mcpServers(): RunnerMcpServersFingerprint | undefined;
@@ -687,6 +696,8 @@ class Host implements RunnerHost {
   readonly #profile: ProfileApplier | undefined;
   /** 最後に名乗った（起動時は構築時に読んだ）接続先の表示行。器だけの状態からの変化だけを名乗るための基準。 */
   #announcedAnthropicRoute: string;
+  #announcedBashShapeGuard: string;
+  readonly #log: ((line: string) => void) | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
   // 終わった担当が撃った退避の push（#4789）。畳むときに待つ（それぞれ `STOP_RESCUE_TIMEOUT_MS` で切れるので待ちは有限）
   readonly #closeRescues = new Set<Promise<unknown>>();
@@ -919,6 +930,8 @@ class Host implements RunnerHost {
               : { spawnFn: (spawnOptions) => this.#spawnAsChildUser(spawnOptions) }),
           });
     this.#announcedAnthropicRoute = JSON.stringify(this.anthropicRoute());
+    this.#log = options.log;
+    this.#announcedBashShapeGuard = this.bashShapeGuardLine();
   }
 
   credentials(): CredentialFingerprint[] {
@@ -1122,7 +1135,21 @@ class Host implements RunnerHost {
     }
     const result = await this.#profile.apply(script);
     this.#announceAnthropicRoute();
+    this.#announceBashShapeGuard();
     return result;
+  }
+
+  // 起動行に出す1行。不正な値でも投げない（起動は落とさない）
+  bashShapeGuardLine(): string {
+    return describeBashShapeGuard(this.#env, this.#profile?.env() ?? {});
+  }
+
+  // 実効の値が前回と変わったときだけ1行出し直す（新しいプロトコルの出来事は足さない）
+  #announceBashShapeGuard(): void {
+    const line = this.bashShapeGuardLine();
+    if (line === this.#announcedBashShapeGuard) return;
+    this.#announcedBashShapeGuard = line;
+    this.#log?.(`alteroid-runner: ${line}`);
   }
 
   anthropicRoute(): string[] {
@@ -4573,8 +4600,10 @@ class RunnerSession {
           const releaseProd = inspectReleaseProdDispatch(command);
           // 形の歯は release-prod の後・wait-guard の前に置く: release-prod は `off` でも残す門で、形の歯は断る理由が単純（打ち直せば抜けられる）なため先に返す
           // マネージャーにも掛ける（#4949）: heosterra のマネージャーも同じ形を打っていて、オーナーの決まりはマネージャーにも同じ形を禁じているため
+          // `ALTEROID_BASH_GUARD` から切り離す（#4949）: 形の歯は `ALTEROID_BASH_SHAPE_GUARD`（既定 off）だけで決まる。呼び出しのたびに読み、プロファイルの値を優先する（プロファイルに置けば次の呼び出しから効く）。不正な値はここで投げ、下の catch が確認（`deny` 設定なら deny）に倒す
           const shape =
-            !releaseProd.matched && this.#bashGuard !== 'off'
+            !releaseProd.matched &&
+            resolveEffectiveBashShapeGuard(this.#env, this.#profileEnv()) === 'on'
               ? inspectBashShape(command)
               : { blocked: false as const };
           shapeDeny = shape.blocked;

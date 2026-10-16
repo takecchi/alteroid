@@ -37,7 +37,7 @@ description: PR を squash マージする直前に読む。squash の本文は 
 
 ## 5. マージの口には `--match-head-commit <sha>` を付ける（#1192 N7）
 
-**緑を見た head と、マージされる head がずれうる。** PR の CI は `refs/pull/N/merge` を見ていて `strict: false` なので、見た後に push された head は機械では突き合わされていない。`gh pr merge` に `--match-head-commit <sha>`（緑を確かめた head の sha。`gh pr view <N> --json headRefOid` で取る）を付けると、head が動いていれば gh が拒む。`gh pr merge --auto` は使わない（Bash のガードが断る。#4949）。CI を前面で `timeout 530 gh run watch <id> --exit-status` で待ち、緑なら `--match-head-commit` を付けてマージする。
+**緑を見た head と、マージされる head がずれうる。** PR の CI は `refs/pull/N/merge` を見ていて `strict: false` なので、見た後に push された head は機械では突き合わされていない。`gh pr merge` に `--match-head-commit <sha>`（緑を確かめた head の sha。`gh pr view <N> --json headRefOid` で取る）を付けると、head が動いていれば gh が拒む。`gh pr merge --auto` は、このリポジトリの運用では使わない（`ALTEROID_BASH_SHAPE_GUARD=on` の器では Bash のガードが断る。#4949）。CI を前面で `timeout 530 gh run watch <id> --exit-status` で待ち、緑なら `--match-head-commit` を付けてマージする。
 
 - **これはこのリポジトリの規約で、機械の門は無い**（以前は製品の Bash の門が弾いていたが、運用規約を製品へ焼き込むのは誤りだったので外した。#2884）。付け忘れても通るので、マージする人が付ける
 - sha は緑を確かめたときの値を使う（マージの直前に取り直すと、ずれを gh が拒む意味が消える）

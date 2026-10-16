@@ -60,7 +60,7 @@ gh pr list --repo OWNER/REPO --state merged --head <枝名> --json number,state
 gh pr view <N> --repo OWNER/REPO --json headRefOid --jq '.headRefOid'
 git ls-remote <url> refs/heads/<枝名> | cut -f1
 # 3. 食い違うなら、マージ後に積まれた分が main に在るかを測る
-git diff <headRefOid> <枝の先端> | git -C <main のツリー> apply --check -R   # 通れば main に在る（ファイルへ書かずパイプで渡す。Bash のガードがリダイレクトを断る。#4949）
+git diff <headRefOid> <枝の先端> | git -C <main のツリー> apply --check -R   # 通れば main に在る（ファイルへ書かずパイプで渡す。このリポジトリの運用ではリダイレクトを使わない。`ALTEROID_BASH_SHAPE_GUARD=on` の器では Bash のガードが断る。#4949）
 ```
 
 **⚠️ 4段目: 3 が通らなかったら消さない。** 通らないのは「`main` に無い」ではなく「**判定できない**」である —— `main` 側がその後に書き換わっていれば、**中身が在っても文脈が合わずに落ちる。**

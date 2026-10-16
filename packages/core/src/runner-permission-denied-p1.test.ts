@@ -495,9 +495,8 @@ describe('畳んで解いた確認は取り下げとして残し、クローン�
 describe('bash-wait-guard の deny が1回だけの許可より先に効く（issue #1105 P1。`ALTEROID_BASH_GUARD=deny` の設定）', () => {
   it('無限に待つだけの Bash は、1回だけの許可が出ていても弾く', async () => {
     const { started, events, host: h } = await startSession();
-    // 2026-10-16 #4949: 以前のコマンドは末尾に `2>/dev/null` が付いていた。形の歯がマネージャーにも掛かるようになり、そちらが先に断るので外した（この試験は wait-guard を見る）
     const waitingCommand =
-      'until grep -q "^run: まとめ$" /tmp/mutation-run-1105.log; do sleep 5; done';
+      'until grep -q "^run: まとめ$" /tmp/mutation-run-1105.log 2>/dev/null; do sleep 5; done';
 
     const denialPromise = firePermissionDenied(started.options, {
       hook_event_name: 'PermissionDenied',

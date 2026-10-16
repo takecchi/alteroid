@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 import type {
   HookJSONOutput,
   Options,
@@ -9,8 +11,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { BASH_GUARD_ENV } from './bash-guard-mode.js';
-import { createRunnerHost, type RunnerHost } from './runner.js';
+import { BASH_GUARD_ENV, BASH_SHAPE_GUARD_ENV } from './bash-guard-mode.js';
+import { createProfileVessel } from './profile.js';
+import { createRunnerHost, WITHHELD_ENV_KEYS, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
 function fakeRunnerSdk(): { fn: typeof sdkQuery; started: { options: Options }[] } {
@@ -67,8 +70,17 @@ afterEach(async () => {
   await host?.shutdown().catch(() => undefined);
 });
 
+// 形の歯は既定 off（`ALTEROID_BASH_SHAPE_GUARD`）。この節の試験は、on を置いて走らせる
 async function startSession(
   env: NodeJS.ProcessEnv,
+): Promise<{ options: Options; events: RunnerEvent[] }> {
+  return startSessionRaw({ [BASH_SHAPE_GUARD_ENV]: 'on', ...env });
+}
+
+async function startSessionRaw(
+  env: NodeJS.ProcessEnv,
+  profileScript?: string,
+  logs?: string[],
 ): Promise<{ options: Options; events: RunnerEvent[] }> {
   const events: RunnerEvent[] = [];
   const { fn, started } = fakeRunnerSdk();
@@ -78,10 +90,23 @@ async function startSession(
     emit: (event) => events.push(event),
     queryFn: fn,
     env,
+    ...(logs === undefined ? {} : { log: (line: string) => logs.push(line) }),
+    ...(profileScript === undefined
+      ? {}
+      : {
+          profile: createProfileVessel({
+            path: join(dir, 'profile', 'profile.sh'),
+            withheldEnvKeys: WITHHELD_ENV_KEYS,
+          }),
+        }),
   });
   await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
   const options = started[0]?.options;
   if (options === undefined) throw new Error('セッションが開いていない');
+  if (profileScript !== undefined) {
+    const result = await host.setProfile(profileScript);
+    if (!result.ok) throw new Error('プロファイルが置けない');
+  }
   return { options, events };
 }
 
@@ -139,8 +164,8 @@ describe('Bash の形の歯（#4947・マネージャーにも #4949）', () => 
       expect(note).toContain(actor);
     });
 
-    it(`ALTEROID_BASH_GUARD=off なら${label}の形も通す`, async () => {
-      const { options } = await startSession({ [BASH_GUARD_ENV]: 'off' });
+    it(`ALTEROID_BASH_SHAPE_GUARD=off なら${label}の形も通す`, async () => {
+      const { options } = await startSession({ [BASH_SHAPE_GUARD_ENV]: 'off' });
       for (const command of ['pnpm test 2>&1', 'git reset --hard', 'gh pr merge 1 --auto']) {
         expect(await firePreToolUse(options, bash(command, worker))).toEqual({
           continue: true,
@@ -211,4 +236,113 @@ describe('Bash の形の歯（#4947・マネージャーにも #4949）', () => 
       expect(result.hookSpecificOutput?.permissionDecision).toBe('ask');
     },
   );
+});
+
+describe('Bash の形の歯の入り切り（ALTEROID_BASH_SHAPE_GUARD。#4949）', () => {
+  async function decisionOf(
+    env: NodeJS.ProcessEnv,
+    profileScript?: string,
+    worker = false,
+  ): Promise<{ decision: unknown; reason: string }> {
+    const { options } = await startSessionRaw(env, profileScript);
+    const result = (await firePreToolUse(options, bash('pnpm test 2>&1', worker))) as Out;
+    return {
+      decision: result.hookSpecificOutput?.permissionDecision,
+      reason: String(result.hookSpecificOutput?.permissionDecisionReason),
+    };
+  }
+
+  it('既定（未設定）では断らない', async () => {
+    expect((await decisionOf({})).decision).toBeUndefined();
+    await host?.shutdown();
+    expect((await decisionOf({ [BASH_SHAPE_GUARD_ENV]: '' }, undefined, true)).decision).toBe(
+      undefined,
+    );
+  });
+
+  it.each([false, true])('runner の env が on なら断る（作業者=%s）', async (worker) => {
+    const { decision, reason } = await decisionOf(
+      { [BASH_SHAPE_GUARD_ENV]: 'on' },
+      undefined,
+      worker,
+    );
+    expect(decision).toBe('deny');
+    expect(reason).toContain('| tail');
+  });
+
+  it('プロファイルで on なら断る（runner の env は未設定）', async () => {
+    const { decision } = await decisionOf({}, `export ${BASH_SHAPE_GUARD_ENV}=on`);
+    expect(decision).toBe('deny');
+  });
+
+  it('プロファイルは呼び出しのたびに読む: 置く前は通り、置いた次の呼び出しから断る', async () => {
+    const { options } = await startSessionRaw({}, 'export OTHER_VAR=1');
+    const call = async (): Promise<unknown> =>
+      ((await firePreToolUse(options, bash('pnpm test 2>&1', false))) as Out).hookSpecificOutput
+        ?.permissionDecision;
+    expect(await call()).toBeUndefined();
+    const result = await host?.setProfile(`export ${BASH_SHAPE_GUARD_ENV}=on`);
+    expect(result?.ok).toBe(true);
+    expect(await call()).toBe('deny');
+  });
+
+  it('runner の env が on でも、プロファイルが off なら断らない（プロファイルが上書きする）', async () => {
+    const { decision } = await decisionOf(
+      { [BASH_SHAPE_GUARD_ENV]: 'on' },
+      `export ${BASH_SHAPE_GUARD_ENV}=off`,
+    );
+    expect(decision).toBeUndefined();
+  });
+
+  it('ALTEROID_BASH_GUARD=off でも、形の歯が on なら断る', async () => {
+    const { decision } = await decisionOf({
+      [BASH_GUARD_ENV]: 'off',
+      [BASH_SHAPE_GUARD_ENV]: 'on',
+    });
+    expect(decision).toBe('deny');
+  });
+
+  it('ALTEROID_BASH_GUARD=ask・deny でも、形の歯が off なら断らない（独立）', async () => {
+    for (const mode of ['ask', 'deny']) {
+      expect((await decisionOf({ [BASH_GUARD_ENV]: mode })).decision).toBeUndefined();
+      await host?.shutdown();
+    }
+  });
+
+  it('不正な値は判定の中で投げ、確認に倒れる（deny 設定なら deny）。理由に値が出る', async () => {
+    const ask = await decisionOf({ [BASH_SHAPE_GUARD_ENV]: 'yes' });
+    expect(ask.decision).toBe('ask');
+    expect(ask.reason).toContain('ALTEROID_BASH_SHAPE_GUARD の値が不正: yes');
+    await host?.shutdown();
+    const deny = await decisionOf({ [BASH_SHAPE_GUARD_ENV]: 'yes', [BASH_GUARD_ENV]: 'deny' });
+    expect(deny.decision).toBe('deny');
+    expect(deny.reason).toContain('yes');
+  });
+
+  it('実効の値が変わったときだけ1行出し直す（setProfile の後）', async () => {
+    const logs: string[] = [];
+    await startSessionRaw({}, 'export OTHER_VAR=1', logs);
+    expect(logs).toEqual([]);
+    await host?.setProfile('export OTHER_VAR=2');
+    expect(logs).toEqual([]);
+    await host?.setProfile(`export ${BASH_SHAPE_GUARD_ENV}=on`);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('Bash の形の歯: on');
+    await host?.setProfile(`export ${BASH_SHAPE_GUARD_ENV}=on\nexport OTHER_VAR=3`);
+    expect(logs).toHaveLength(1);
+    await host?.setProfile(`export ${BASH_SHAPE_GUARD_ENV}=oops`);
+    expect(logs).toHaveLength(2);
+    expect(logs[1]).toContain('不正な値');
+  });
+
+  it('起動行は実効の値を言い、不正な値でも投げない', async () => {
+    await startSessionRaw({ [BASH_SHAPE_GUARD_ENV]: 'on' });
+    expect(host?.bashShapeGuardLine()).toContain('Bash の形の歯: on（ALTEROID_BASH_SHAPE_GUARD。');
+    await host?.shutdown();
+    await startSessionRaw({});
+    expect(host?.bashShapeGuardLine()).toContain('Bash の形の歯: off');
+    await host?.shutdown();
+    await startSessionRaw({ [BASH_SHAPE_GUARD_ENV]: 'x' });
+    expect(host?.bashShapeGuardLine()).toContain('不正な値');
+  });
 });

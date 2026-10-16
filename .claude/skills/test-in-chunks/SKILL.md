@@ -163,7 +163,7 @@ grep -E 'Test Files|…'` は、打ち切られると `grep` ごと殺され、�
 - **出力は最初から絞る**——`--reporter=dot` に加え、
   `| grep -E 'Test Files|Tests |Duration|FAIL|test-guard'` で集計行・
   失敗行・打ち切りの1行だけを残す（`2>&1` は付けない。Bash の道具が標準エラーも返すうえ、
-  この形は Bash のガードが断る。#4949）。パイプの終了コードは
+  このリポジトリの運用では使わない。`ALTEROID_BASH_SHAPE_GUARD=on` の器では Bash のガードが断る。#4949）。パイプの終了コードは
   `; echo "EXIT:${PIPESTATUS[0]}"` で取る（`grep` 自体の終了コードでは
   判定しない——`AGENTS.md`「静かに失敗する道具」「パイプの終了コードは、
   既定で最後のコマンドのものである」と同じ理由）。

@@ -443,6 +443,8 @@ export async function main(): Promise<void> {
       }
       outbox.push(event);
     },
+    // 実効の値が変わったときの出し直し（`Bash の形の歯`）。新しいプロトコルの出来事は足さない
+    log: (line) => process.stdout.write(`${line}\n`),
     credentials,
     pluginsRoot,
     peer: {
@@ -558,6 +560,9 @@ export async function main(): Promise<void> {
 
   // この時点の袋は0件・プロファイルも未着（後からデーモンが降ろす）。降りて変われば上の `emit` が出し直す。
   for (const line of host.anthropicRoute()) process.stdout.write(`alteroid-runner: ${line}\n`);
+
+  // 既定 off の設定を黙って通さない: 開けた器か閉じた器か、起動行から読めるように。降りたプロファイルで変われば `log` が出し直す
+  process.stdout.write(`alteroid-runner: ${host.bashShapeGuardLine()}\n`);
 
   reportRetiredLayerProviderEnv(process.env);
 

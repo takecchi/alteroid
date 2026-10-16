@@ -222,8 +222,8 @@ describe('Bash の待つだけのループを弾く', () => {
       ...PRE_TOOL_USE_BASE,
       tool_name: 'Bash',
       tool_input: {
-        // 2026-10-16 #4949: 以前のコマンドは末尾に `2>/dev/null` が付いていた。形の歯がマネージャーにも掛かるようになり、そちらが先に断るので外した（この試験は wait-guard を見る）
-        command: 'until grep -q "^run: まとめ$" /tmp/mutation-run-865.log; do sleep 5; done',
+        command:
+          'until grep -q "^run: まとめ$" /tmp/mutation-run-865.log 2>/dev/null; do sleep 5; done',
       },
     });
 
@@ -301,8 +301,7 @@ describe('run_in_background を判定器へ渡す', () => {
       ...PRE_TOOL_USE_BASE,
       tool_name: 'Bash',
       tool_input: {
-        // 2026-10-16 #4949: 以前のコマンドは `--exit-status 2>&1 | tail -60` だった。形の歯がマネージャーにも掛かるようになり、そちらが先に断るので `2>&1` を外した（この試験は wait-guard を見る）
-        command: 'gh run watch 35196482974 --repo takecchi/alteroid --exit-status | tail -60',
+        command: 'gh run watch 35196482974 --repo takecchi/alteroid --exit-status 2>&1 | tail -60',
         run_in_background: true,
       },
     });
@@ -323,8 +322,7 @@ describe('run_in_background を判定器へ渡す', () => {
       ...PRE_TOOL_USE_BASE,
       tool_name: 'Bash',
       tool_input: {
-        // 2026-10-16 #4949: 以前のコマンドは `--exit-status 2>&1 | tail -60` だった。形の歯がマネージャーにも掛かるようになったので `2>&1` を外した
-        command: 'gh run watch 35196482974 --repo takecchi/alteroid --exit-status | tail -60',
+        command: 'gh run watch 35196482974 --repo takecchi/alteroid --exit-status 2>&1 | tail -60',
       },
     });
     expect(result).toEqual({ continue: true });
@@ -348,8 +346,7 @@ describe('run_in_background を判定器へ渡す', () => {
       'git status',
       'pnpm -v',
       'gh pr list --state all --limit 1000',
-      // 2026-10-16 #4949: 以前は `pnpm test --maxWorkers=4 > /tmp/test.log 2>&1` を通していた。形の歯がマネージャーにも掛かるようになり、リダイレクトは断るので、パイプの形に変えた
-      'pnpm test --maxWorkers=4 | tail -n 20',
+      'pnpm test --maxWorkers=4 > /tmp/test.log 2>&1',
       'echo "検証が緑になりました"',
     ]) {
       const result = await firePreToolUse(started.options, {
