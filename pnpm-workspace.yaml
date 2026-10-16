@@ -34,7 +34,7 @@ catalog:
   # 接続の使い回しの長さ（keep-alive）を呼び出し側から指定できず、約4秒で切れて心拍（10秒）ごとに名前解決と接続をやり直す。
   # `Agent` と `fetch` を同じ版から取るために依存へ置く（Node 同梱の undici は外へ出ておらず、版が Node 次第で変わる）。
   # すでに推移的に入っている 7 系（lockfile）と同じ実体を指す。
-  undici: ^7.29.1
+  undici: ^8.0.0
   '@hono/zod-validator': ^0.9.0
   zod: ^4.4.3
   commander: ^15.0.0
