@@ -10,9 +10,13 @@ import {
   markStreamWrites,
   notePhase,
   readCgroupCpuThrottle,
+  readCgroupMemoryEvents,
+  readCgroupPressure,
   startLoopStallWatch,
   type CpuThrottleSample,
   type LoopStall,
+  type MemoryEventsSample,
+  type PressureSample,
 } from './loop-stall.js';
 import type { ThreadpoolWait } from './threadpool-wait.js';
 
@@ -24,6 +28,9 @@ let stalls: LoopStall[] = [];
 let cpu = { user: 0, system: 0 };
 let throttle: CpuThrottleSample | undefined = { throttledUsec: 0, nrThrottled: 0 };
 let threadpoolWait: ThreadpoolWait | undefined = { waitedMs: 3, settled: true };
+// 器の圧迫と memory.events（#4967）も偽にする。既定は読めない器
+let pressure: PressureSample | undefined;
+let memoryEvents: MemoryEventsSample | undefined;
 
 beforeEach(() => {
   threadpoolWait = { waitedMs: 3, settled: true };
@@ -32,12 +39,16 @@ beforeEach(() => {
   stalls = [];
   cpu = { user: 0, system: 0 };
   throttle = { throttledUsec: 0, nrThrottled: 0 };
+  pressure = undefined;
+  memoryEvents = undefined;
   stop = startLoopStallWatch({
     intervalMs: 500,
     thresholdMs: 1_000,
     now: () => now,
     cpuUsage: () => ({ ...cpu }),
     readCpuThrottle: async () => throttle,
+    readPressure: async () => pressure,
+    readMemoryEvents: async () => memoryEvents,
     // 実物の枠の待ちは実 I/O で、偽の時計では進まない
     measureThreadpoolWait: async () => threadpoolWait,
     onStall: (stall) => stalls.push(stall),
@@ -128,6 +139,8 @@ describe('loop-stall（#4485）', () => {
       now: () => now,
       cpuUsage: () => ({ ...cpu }),
       readCpuThrottle: async () => undefined,
+      readPressure: async () => undefined,
+      readMemoryEvents: async () => undefined,
       measureThreadpoolWait: async () => threadpoolWait,
       onStall: (stall) => stalls.push(stall),
     });
@@ -137,6 +150,66 @@ describe('loop-stall（#4485）', () => {
     const stall = stalls[0] as LoopStall;
     expect(stall).not.toHaveProperty('throttle');
     expect(describeLoopStall(stall)).toContain('器の CPU の絞り: 読めない。');
+  });
+
+  it('器の圧迫（PSI）と memory.events の増分（ms・件数）を載せ、文に出す（#4967）', async () => {
+    pressure = {
+      cpu: { someUsec: 1_000_000 },
+      memory: { someUsec: 0, fullUsec: 0 },
+      io: { someUsec: 5_000, fullUsec: 1_000 },
+    };
+    memoryEvents = { high: 1, max: 0, oom: 0, oomKill: 0 };
+    stop?.();
+    stop = startLoopStallWatch({
+      intervalMs: 500,
+      thresholdMs: 1_000,
+      now: () => now,
+      cpuUsage: () => ({ ...cpu }),
+      readCpuThrottle: async () => throttle,
+      readPressure: async () => pressure,
+      readMemoryEvents: async () => memoryEvents,
+      measureThreadpoolWait: async () => threadpoolWait,
+      onStall: (stall) => stalls.push(stall),
+    });
+    await tick();
+    await stalledTick(1_000, () => {
+      pressure = {
+        cpu: { someUsec: 2_400_000 },
+        memory: { someUsec: 700_400, fullUsec: 300_000 },
+        io: { someUsec: 5_000, fullUsec: 1_000 },
+      };
+      memoryEvents = { high: 4, max: 2, oom: 1, oomKill: 1 };
+    });
+
+    const stall = stalls[0] as LoopStall;
+    expect(stall.pressure).toMatchObject({
+      cpuSomeMs: 1_400,
+      memorySomeMs: 700,
+      memoryFullMs: 300,
+      ioSomeMs: 0,
+      ioFullMs: 0,
+    });
+    expect(stall.pressure).not.toHaveProperty('cpuFullMs');
+    expect(stall.pressure?.sinceMs).toBeGreaterThan(0);
+    expect(stall.memoryEvents).toMatchObject({ high: 3, max: 2, oom: 1, oomKill: 1 });
+    const text = describeLoopStall(stall);
+    expect(text).toMatch(
+      /器の圧迫（直近 \d+ms）: CPU 待ち some 1400ms \/ メモリ待ち some 700ms・full 300ms \/ I\/O 待ち some 0ms・full 0ms/,
+    );
+    expect(text).toContain('ホストの CPU の取り合い');
+    expect(text).toMatch(/メモリの上限の出来事（直近 \d+ms）: high 3・max 2・oom 1・oom_kill 1/);
+  });
+
+  it('器の圧迫と memory.events が読めない器では欄も文も無い（0 を作らない）（#4967）', async () => {
+    await tick();
+    await stalledTick(1_200);
+
+    const stall = stalls[0] as LoopStall;
+    expect(stall).not.toHaveProperty('pressure');
+    expect(stall).not.toHaveProperty('memoryEvents');
+    const text = describeLoopStall(stall);
+    expect(text).not.toContain('器の圧迫');
+    expect(text).not.toContain('メモリの上限の出来事');
   });
 
   it('知らせる時点のスレッドの枠の待ちが文言に載る。測れなかった回は「不明」と書く（#4890）', async () => {
@@ -161,6 +234,8 @@ describe('loop-stall（#4485）', () => {
       cpuUsage: () => ({ ...cpu }),
       resourceUsage: () => ({ ...usage }),
       readCpuThrottle: async () => throttle,
+      readPressure: async () => undefined,
+      readMemoryEvents: async () => undefined,
       measureThreadpoolWait: async () => threadpoolWait,
       onStall: (stall) => stalls.push(stall),
     });
@@ -204,6 +279,8 @@ describe('loop-stall（#4485）', () => {
       cpuUsage: () => ({ ...cpu }),
       resourceUsage: () => undefined,
       readCpuThrottle: async () => throttle,
+      readPressure: async () => undefined,
+      readMemoryEvents: async () => undefined,
       measureThreadpoolWait: async () => threadpoolWait,
       onStall: (stall) => stalls.push(stall),
     });
@@ -265,5 +342,45 @@ describe('readCgroupCpuThrottle', () => {
     expect(await readCgroupCpuThrottle(full)).toEqual({ throttledUsec: 123_456, nrThrottled: 7 });
     expect(await readCgroupCpuThrottle(partial)).toBeUndefined();
     expect(await readCgroupCpuThrottle(join(dir, 'missing'))).toBeUndefined();
+  });
+});
+
+describe('readCgroupPressure / readCgroupMemoryEvents（#4967）', () => {
+  const psi = (some: number, full?: number): string =>
+    `some avg10=0.00 avg60=0.00 avg300=0.00 total=${String(some)}\n` +
+    (full === undefined ? '' : `full avg10=0.00 avg60=0.00 avg300=0.00 total=${String(full)}\n`);
+
+  it('some / full の total を読む。cpu.pressure に full が無い形も読める', async () => {
+    const dir = makeTempDirSync('alteroid-psi-');
+    writeFileSync(join(dir, 'cpu.pressure'), psi(123_456));
+    writeFileSync(join(dir, 'memory.pressure'), psi(2_000, 1_000));
+    writeFileSync(join(dir, 'io.pressure'), psi(30, 20));
+
+    expect(await readCgroupPressure(dir)).toEqual({
+      cpu: { someUsec: 123_456 },
+      memory: { someUsec: 2_000, fullUsec: 1_000 },
+      io: { someUsec: 30, fullUsec: 20 },
+    });
+  });
+
+  it('読めないファイルの欄は省き、全部読めなければ undefined', async () => {
+    const dir = makeTempDirSync('alteroid-psi-');
+    writeFileSync(join(dir, 'memory.pressure'), psi(5, 4));
+    writeFileSync(join(dir, 'io.pressure'), 'garbage\n');
+
+    expect(await readCgroupPressure(dir)).toEqual({ memory: { someUsec: 5, fullUsec: 4 } });
+    expect(await readCgroupPressure(join(dir, 'missing'))).toBeUndefined();
+  });
+
+  it('memory.events の high / max / oom / oom_kill を読み、読めなければ undefined', async () => {
+    const dir = makeTempDirSync('alteroid-mem-events-');
+    const file = join(dir, 'memory.events');
+    writeFileSync(file, 'low 0\nhigh 7\nmax 3\noom 2\noom_kill 1\noom_group_kill 0\n');
+    const partial = join(dir, 'partial');
+    writeFileSync(partial, 'high 1\n');
+
+    expect(await readCgroupMemoryEvents(file)).toEqual({ high: 7, max: 3, oom: 2, oomKill: 1 });
+    expect(await readCgroupMemoryEvents(partial)).toBeUndefined();
+    expect(await readCgroupMemoryEvents(join(dir, 'missing'))).toBeUndefined();
   });
 });

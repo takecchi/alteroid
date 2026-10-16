@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PerformanceObserver, performance } from 'node:perf_hooks';
 
 import {
@@ -106,6 +107,28 @@ export interface LoopStall {
     readonly periods: number;
   };
   /**
+   * 器（cgroup v2 の PSI）の圧迫の待ち時間の、直前の読み取りからの増分（#4967。µs の差を ms に丸めたもの）。
+   * `some` はいずれかのタスクが待たされた時間、`full` は全タスクが待たされた時間。読めなかった種類は欄ごと無い（0 を作らない）。
+   * 読み方: CPU が窓に近ければホストの CPU の取り合い、メモリならメモリの回収の待ち、I/O なら I/O の待ち。
+   */
+  readonly pressure?: {
+    readonly sinceMs: number;
+    readonly cpuSomeMs?: number;
+    readonly cpuFullMs?: number;
+    readonly memorySomeMs?: number;
+    readonly memoryFullMs?: number;
+    readonly ioSomeMs?: number;
+    readonly ioFullMs?: number;
+  };
+  /** `memory.events` の `high` / `max` / `oom` / `oom_kill` の、直前の読み取りからの増分（#4967）。読めない器では無い。 */
+  readonly memoryEvents?: {
+    readonly sinceMs: number;
+    readonly high: number;
+    readonly max: number;
+    readonly oom: number;
+    readonly oomKill: number;
+  };
+  /**
    * 知らせる時点（止まりが明けた直後）のスレッドの枠の待ち（#4890）。枠が塞がっていると、CPU を使わずループも空いたまま、
    * 名前解決と接続だけが待たされる。測れなかった回は無い（文では「不明」）。
    */
@@ -134,6 +157,27 @@ export interface CpuThrottleSample {
   readonly nrThrottled: number;
 }
 
+/** PSI の1ファイルの `some` / `full` の `total`（µs）。`cpu.pressure` の `full` は無いカーネルがある。 */
+export interface PressureTotals {
+  readonly someUsec: number;
+  readonly fullUsec?: number;
+}
+
+/** cgroup v2 の `cpu.pressure` / `memory.pressure` / `io.pressure`。読めなかったファイルの欄は無い。 */
+export interface PressureSample {
+  readonly cpu?: PressureTotals;
+  readonly memory?: PressureTotals;
+  readonly io?: PressureTotals;
+}
+
+/** cgroup v2 の `memory.events` から読む4つ。 */
+export interface MemoryEventsSample {
+  readonly high: number;
+  readonly max: number;
+  readonly oom: number;
+  readonly oomKill: number;
+}
+
 export interface LoopStallWatchOptions {
   readonly onStall: (stall: LoopStall) => void;
   /** 見張りの周期。 */
@@ -150,6 +194,10 @@ export interface LoopStallWatchOptions {
   readonly readCpuThrottle?: () => Promise<CpuThrottleSample | undefined>;
   /** 絞りを読んでおく周期（止まっていない間に読んでおき、止まった後に読んだ値との差を出す）。 */
   readonly throttleSampleMs?: number;
+  /** 器の圧迫（PSI）を読む口（#4967）。既定は {@link readCgroupPressure}。読めなければ `undefined`（欄ごと省く）。 */
+  readonly readPressure?: () => Promise<PressureSample | undefined>;
+  /** `memory.events` を読む口（#4967）。既定は {@link readCgroupMemoryEvents}。読めなければ `undefined`（欄ごと省く）。 */
+  readonly readMemoryEvents?: () => Promise<MemoryEventsSample | undefined>;
   /** スレッドの枠の待ちを測る口。試験で差し替える。既定は {@link measureThreadpoolWait}。 */
   readonly measureThreadpoolWait?: () => Promise<ThreadpoolWait | undefined>;
 }
@@ -183,6 +231,115 @@ export async function readCgroupCpuThrottle(
   }
 }
 
+async function readPressureFile(path: string): Promise<PressureTotals | undefined> {
+  try {
+    const text = await readFile(path, 'utf8');
+    const total = (kind: string): number | undefined => {
+      const line = text.split('\n').find((row) => row.startsWith(`${kind} `));
+      const match = line === undefined ? null : /(?:^|\s)total=(\d+)/.exec(line);
+      return match === null ? undefined : Number(match[1]);
+    };
+    const someUsec = total('some');
+    if (someUsec === undefined) return undefined;
+    const fullUsec = total('full');
+    return fullUsec === undefined ? { someUsec } : { someUsec, fullUsec };
+  } catch {
+    return undefined;
+  }
+}
+
+/** cgroup v2 の PSI（#4967）。ファイルごとに読めなければその欄を省き、全部読めなければ `undefined`。 */
+export async function readCgroupPressure(
+  dir = '/sys/fs/cgroup',
+): Promise<PressureSample | undefined> {
+  const [cpu, memory, io] = await Promise.all([
+    readPressureFile(join(dir, 'cpu.pressure')),
+    readPressureFile(join(dir, 'memory.pressure')),
+    readPressureFile(join(dir, 'io.pressure')),
+  ]);
+  if (cpu === undefined && memory === undefined && io === undefined) return undefined;
+  return {
+    ...(cpu === undefined ? {} : { cpu }),
+    ...(memory === undefined ? {} : { memory }),
+    ...(io === undefined ? {} : { io }),
+  };
+}
+
+/** cgroup v2 の `memory.events`（#4967）。読めない・欄が無ければ `undefined`。 */
+export async function readCgroupMemoryEvents(
+  path = '/sys/fs/cgroup/memory.events',
+): Promise<MemoryEventsSample | undefined> {
+  try {
+    const text = await readFile(path, 'utf8');
+    const value = (key: string): number | undefined => {
+      const line = text.split('\n').find((row) => row.startsWith(`${key} `));
+      const parsed = line === undefined ? NaN : Number(line.slice(key.length + 1));
+      return Number.isFinite(parsed) ? parsed : undefined;
+    };
+    const high = value('high');
+    const max = value('max');
+    const oom = value('oom');
+    const oomKill = value('oom_kill');
+    if (high === undefined || max === undefined || oom === undefined || oomKill === undefined)
+      return undefined;
+    return { high, max, oom, oomKill };
+  } catch {
+    return undefined;
+  }
+}
+
+const usecToMs = (before: number, after: number): number =>
+  Math.round(Math.max(0, after - before) / 1000);
+
+function diffPressure(
+  before: { at: number; sample: PressureSample } | undefined,
+  after: PressureSample | undefined,
+  nowMs: number,
+): LoopStall['pressure'] {
+  if (before === undefined || after === undefined) return undefined;
+  const part = (
+    b: PressureTotals | undefined,
+    a: PressureTotals | undefined,
+  ): { some?: number; full?: number } => {
+    if (b === undefined || a === undefined) return {};
+    return {
+      some: usecToMs(b.someUsec, a.someUsec),
+      ...(b.fullUsec === undefined || a.fullUsec === undefined
+        ? {}
+        : { full: usecToMs(b.fullUsec, a.fullUsec) }),
+    };
+  };
+  const cpu = part(before.sample.cpu, after.cpu);
+  const memory = part(before.sample.memory, after.memory);
+  const io = part(before.sample.io, after.io);
+  const fields = {
+    ...(cpu.some === undefined ? {} : { cpuSomeMs: cpu.some }),
+    ...(cpu.full === undefined ? {} : { cpuFullMs: cpu.full }),
+    ...(memory.some === undefined ? {} : { memorySomeMs: memory.some }),
+    ...(memory.full === undefined ? {} : { memoryFullMs: memory.full }),
+    ...(io.some === undefined ? {} : { ioSomeMs: io.some }),
+    ...(io.full === undefined ? {} : { ioFullMs: io.full }),
+  };
+  if (Object.keys(fields).length === 0) return undefined;
+  return { sinceMs: Math.round(nowMs - before.at), ...fields };
+}
+
+function diffMemoryEvents(
+  before: { at: number; sample: MemoryEventsSample } | undefined,
+  after: MemoryEventsSample | undefined,
+  nowMs: number,
+): LoopStall['memoryEvents'] {
+  if (before === undefined || after === undefined) return undefined;
+  const d = (key: keyof MemoryEventsSample): number => Math.max(0, after[key] - before.sample[key]);
+  return {
+    sinceMs: Math.round(nowMs - before.at),
+    high: d('high'),
+    max: d('max'),
+    oom: d('oom'),
+    oomKill: d('oomKill'),
+  };
+}
+
 /** 見張りを始める。返り値で止める。タイマーは unref するので、これだけでプロセスを引き止めない。 */
 export function startLoopStallWatch(options: LoopStallWatchOptions): () => void {
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
@@ -190,6 +347,8 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
   const cpuUsage = options.cpuUsage ?? (() => process.cpuUsage());
   const resourceUsage = options.resourceUsage ?? defaultResourceUsage;
   const readCpuThrottle = options.readCpuThrottle ?? (() => readCgroupCpuThrottle());
+  const readPressure = options.readPressure ?? (() => readCgroupPressure());
+  const readMemoryEvents = options.readMemoryEvents ?? (() => readCgroupMemoryEvents());
   const measureWait = options.measureThreadpoolWait ?? (() => measureThreadpoolWait());
   clock = options.now ?? defaultClock;
   // 始める前の印は捨てる: 別の時計で打った印が窓に紛れ込まないため
@@ -219,9 +378,33 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
         sampling = false;
       });
   };
-  sampleThrottle();
+  // 器の圧迫（PSI）と memory.events も同じ周期で読んでおく（#4967）
+  let lastPressure: { at: number; sample: PressureSample } | undefined;
+  let lastMemoryEvents: { at: number; sample: MemoryEventsSample } | undefined;
+  let samplingExtra = false;
+  const sampleExtra = (): void => {
+    if (samplingExtra) return;
+    samplingExtra = true;
+    const at = clock();
+    void Promise.all([
+      readPressure().catch(() => undefined),
+      readMemoryEvents().catch(() => undefined),
+    ])
+      .then(([pressureSample, eventsSample]) => {
+        if (pressureSample !== undefined) lastPressure = { at, sample: pressureSample };
+        if (eventsSample !== undefined) lastMemoryEvents = { at, sample: eventsSample };
+      })
+      .finally(() => {
+        samplingExtra = false;
+      });
+  };
+  const sampleAll = (): void => {
+    sampleThrottle();
+    sampleExtra();
+  };
+  sampleAll();
   const throttleTimer = setInterval(
-    sampleThrottle,
+    sampleAll,
     options.throttleSampleMs ?? DEFAULT_THROTTLE_SAMPLE_MS,
   );
   throttleTimer.unref();
@@ -247,27 +430,35 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
     const stalledMs = now - from - intervalMs;
     if (stalledMs < thresholdMs) return;
     const before = lastThrottle;
+    const beforePressure = lastPressure;
+    const beforeEvents = lastMemoryEvents;
     const settle = setTimeout(() => {
-      void readCpuThrottle()
-        .catch(() => undefined)
-        .then(async (after) => {
-          const threadpoolWait = await measureWait().catch(() => undefined);
-          const throttle =
-            before === undefined || after === undefined
-              ? undefined
-              : {
-                  sinceMs: Math.round(clock() - before.at),
-                  throttledMs: Math.round(
-                    Math.max(0, after.throttledUsec - before.sample.throttledUsec) / 1000,
-                  ),
-                  periods: Math.max(0, after.nrThrottled - before.sample.nrThrottled),
-                };
-          options.onStall({
-            ...summarize(from, now, stalledMs, cpuDelta, throttle),
-            ...(threadpoolWait === undefined ? {} : { threadpoolWait }),
-            ...(rusageDelta === undefined ? {} : { resourceUsage: rusageDelta }),
-          });
+      void Promise.all([
+        readCpuThrottle().catch(() => undefined),
+        readPressure().catch(() => undefined),
+        readMemoryEvents().catch(() => undefined),
+      ]).then(async ([after, afterPressure, afterEvents]) => {
+        const pressure = diffPressure(beforePressure, afterPressure, clock());
+        const memoryEvents = diffMemoryEvents(beforeEvents, afterEvents, clock());
+        const threadpoolWait = await measureWait().catch(() => undefined);
+        const throttle =
+          before === undefined || after === undefined
+            ? undefined
+            : {
+                sinceMs: Math.round(clock() - before.at),
+                throttledMs: Math.round(
+                  Math.max(0, after.throttledUsec - before.sample.throttledUsec) / 1000,
+                ),
+                periods: Math.max(0, after.nrThrottled - before.sample.nrThrottled),
+              };
+        options.onStall({
+          ...summarize(from, now, stalledMs, cpuDelta, throttle),
+          ...(pressure === undefined ? {} : { pressure }),
+          ...(memoryEvents === undefined ? {} : { memoryEvents }),
+          ...(threadpoolWait === undefined ? {} : { threadpoolWait }),
+          ...(rusageDelta === undefined ? {} : { resourceUsage: rusageDelta }),
         });
+      });
     }, GC_SETTLE_MS);
     settle.unref();
   }, intervalMs);
@@ -352,6 +543,35 @@ function describeResourceUsage(usage: ResourceUsageDelta | undefined): string {
   );
 }
 
+/** 器の圧迫（PSI）の文（#4967）。読めない回は空（文ごと出さない）。 */
+function describePressure(pressure: LoopStall['pressure']): string {
+  if (pressure === undefined) return '';
+  const pair = (some: number | undefined, full: number | undefined): string | undefined => {
+    if (some === undefined) return undefined;
+    return full === undefined
+      ? `some ${String(some)}ms`
+      : `some ${String(some)}ms・full ${String(full)}ms`;
+  };
+  const parts = [
+    ['CPU 待ち', pair(pressure.cpuSomeMs, pressure.cpuFullMs)],
+    ['メモリ待ち', pair(pressure.memorySomeMs, pressure.memoryFullMs)],
+    ['I/O 待ち', pair(pressure.ioSomeMs, pressure.ioFullMs)],
+  ]
+    .filter((part): part is [string, string] => part[1] !== undefined)
+    .map(([label, text]) => `${label} ${text}`);
+  if (parts.length === 0) return '';
+  return (
+    `器の圧迫（直近 ${String(pressure.sinceMs)}ms）: ${parts.join(' / ')}` +
+    `（読み方: CPU 待ちが窓に近ければホストの CPU の取り合い、メモリ待ちならメモリの回収の待ち、I/O 待ちなら I/O の待ち）。`
+  );
+}
+
+/** `memory.events` の増分の文（#4967）。読めない回は空。 */
+function describeMemoryEvents(events: LoopStall['memoryEvents']): string {
+  if (events === undefined) return '';
+  return `メモリの上限の出来事（直近 ${String(events.sinceMs)}ms）: high ${String(events.high)}・max ${String(events.max)}・oom ${String(events.oom)}・oom_kill ${String(events.oomKill)}。`;
+}
+
 export function describeLoopStall(stall: LoopStall): string {
   const during =
     stall.phasesDuring.length === 0
@@ -368,6 +588,8 @@ export function describeLoopStall(stall: LoopStall): string {
     `窓の中の GC: ${String(stall.gcCount)} 回・合計 ${String(stall.gcTotalMs)}ms・最大 ${String(stall.gcMaxMs)}ms。` +
     `窓 ${String(stall.windowMs)}ms の中でこのプロセスが使った CPU: user ${String(stall.cpuUserMs)}ms・system ${String(stall.cpuSystemMs)}ms。` +
     throttle +
+    describePressure(stall.pressure) +
+    describeMemoryEvents(stall.memoryEvents) +
     `${describeThreadpoolWait(stall.threadpoolWait)}。` +
     describeResourceUsage(stall.resourceUsage) +
     `ヒープ ${String(stall.heapUsedMb)}/${String(stall.heapTotalMb)}MB・RSS ${String(stall.rssMb)}MB。`
