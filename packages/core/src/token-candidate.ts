@@ -27,6 +27,22 @@ function extraUsageUsable(extra: NonNullable<AccountUsage['extraUsage']>): boole
   return true;
 }
 
+// 全モデルに効く枠: モデル名の付かない枠だけ。seven_day_opus などは含めない
+const GLOBAL_WINDOW_KINDS: readonly UsageWindow['kind'][] = ['five_hour', 'seven_day'];
+
+function describeWindow(w: UsageWindow): string {
+  const reset =
+    w.resetsAt === undefined ? 'resetsAt 不明' : `resetsAt ${new Date(w.resetsAt).toISOString()}`;
+  return `${w.kind} が ${w.utilization}%（${reset}）`;
+}
+
+function describeBlocking(exhaustedGlobal: UsageWindow[], blocking: UsageWindow[]): string {
+  const list = blocking.map(describeWindow).join('・');
+  return exhaustedGlobal.length > 0
+    ? `全モデルに効く枠が使い切られており（${list}）`
+    : `取れた枠がすべて使い切られており（${list}）`;
+}
+
 function describeUnavailableHead(cause: LimitsUnavailableCause | undefined): string {
   switch (cause) {
     case 'not_logged_in':
@@ -65,10 +81,16 @@ export function judgeTokenCandidate(state: AccountUsageState): TokenCandidateVer
     };
   }
 
+  // 全モデルに効く枠が1つでも尽きたら捨てる候補にする（2026-10-16 #4732）: five_hour が詰まれば、モデルを問わず要求は通らないため
+  // モデル別の枠（seven_day_opus など）は今まで通り全部尽きたときだけ数える: 1つ尽きただけで鍵を捨てると、他のモデルで通る鍵を失うため
+  const exhaustedGlobal = state.usage.windows.filter(
+    (w) => GLOBAL_WINDOW_KINDS.includes(w.kind) && isExhausted(w),
+  );
   const allWindowsExhausted = state.usage.windows.every(isExhausted);
-  if (!allWindowsExhausted) {
+  if (exhaustedGlobal.length === 0 && !allWindowsExhausted) {
     return { verdict: 'usable' };
   }
+  const blocking = exhaustedGlobal.length > 0 ? exhaustedGlobal : state.usage.windows;
 
   // extraUsage が undefined でも unusable へ倒さない: 取れなかったことを根拠に候補を1本捨てることになるため
   const extra = state.usage.extraUsage;
@@ -76,7 +98,7 @@ export function judgeTokenCandidate(state: AccountUsageState): TokenCandidateVer
     return {
       verdict: 'undecidable',
       reason:
-        '取れた枠は全部使い切っているが、課金枠が取れなかった' +
+        `${describeBlocking(exhaustedGlobal, blocking)}が、課金枠が取れなかった` +
         '（取れなかったことを「課金枠が無い」と読まない）',
     };
   }
@@ -84,14 +106,12 @@ export function judgeTokenCandidate(state: AccountUsageState): TokenCandidateVer
     return { verdict: 'usable' };
   }
 
-  const resetTimes = state.usage.windows
-    .map((w) => w.resetsAt)
-    .filter((v): v is number => v !== undefined);
+  const resetTimes = blocking.map((w) => w.resetsAt).filter((v): v is number => v !== undefined);
   const retryAt = resetTimes.length > 0 ? Math.max(...resetTimes) : undefined;
 
   return {
     verdict: 'unusable',
-    reason: '取れた枠がすべて使い切られており、課金枠も使えない',
+    reason: `${describeBlocking(exhaustedGlobal, blocking)}、課金枠も使えない`,
     ...(retryAt !== undefined ? { retryAt } : {}),
   };
 }

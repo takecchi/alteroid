@@ -117,13 +117,107 @@ describe('judgeTokenCandidate — 規則の表を1行ずつ固定する', () => 
     expect(result.verdict).toBe('usable');
   });
 
-  it('ok かつ一部の枠だけ使い切りなら使える（全部使い切りではない）', () => {
+  // 2026-10-16 #4732: 以前の期待値は usable（five_hour=100・seven_day=40 を「全部使い切りではない」として固定していた）。
+  // five_hour が詰まればモデルを問わず通らないため unusable に変えた。課金枠は enabled: false を足した
+  // （課金枠が取れない回は今まで通り undecidable で、unusable へは倒さない）
+  it('ok かつ全モデルに効く枠（five_hour）が使い切りなら、seven_day に空きがあっても使えない', () => {
+    const result = judgeTokenCandidate(
+      ok({
+        windows: [
+          window({ kind: 'five_hour', utilization: 100, resetsAt: Date.parse(AT) }),
+          window({ kind: 'seven_day', utilization: 40 }),
+        ],
+        extraUsage: { enabled: false },
+      }),
+    );
+    expect(result.verdict).toBe('unusable');
+    if (result.verdict === 'unusable') {
+      expect(result.reason).toContain('five_hour');
+      expect(result.reason).toContain('100%');
+      expect(result.reason).toContain(AT);
+      expect(result.reason).not.toContain('seven_day');
+      expect(result.retryAt).toBe(Date.parse(AT));
+    }
+  });
+
+  it('seven_day だけが使い切りでも使えない', () => {
+    const result = judgeTokenCandidate(
+      ok({
+        windows: [
+          window({ kind: 'five_hour', utilization: 10 }),
+          window({ kind: 'seven_day', utilization: 100, resetsAt: 7000 }),
+        ],
+        extraUsage: { enabled: false },
+      }),
+    );
+    expect(result).toEqual({
+      verdict: 'unusable',
+      reason: expect.stringContaining('seven_day'),
+      retryAt: 7000,
+    });
+  });
+
+  it('全モデルに効く枠が使い切りでも、課金枠が使えるなら使える', () => {
     const result = judgeTokenCandidate(
       ok({
         windows: [
           window({ kind: 'five_hour', utilization: 100 }),
           window({ kind: 'seven_day', utilization: 40 }),
         ],
+        extraUsage: { enabled: true, utilization: 40 },
+      }),
+    );
+    expect(result.verdict).toBe('usable');
+  });
+
+  it('全モデルに効く枠が使い切りで課金枠が取れなければ判定できない（取れなかったことを根拠に捨てない）', () => {
+    const result = judgeTokenCandidate(
+      ok({
+        windows: [
+          window({ kind: 'five_hour', utilization: 100 }),
+          window({ kind: 'seven_day', utilization: 40 }),
+        ],
+      }),
+    );
+    expect(result.verdict).toBe('undecidable');
+  });
+
+  it('モデル別の枠が1つ使い切りなだけなら使える（全部尽きたときだけ数える）', () => {
+    const result = judgeTokenCandidate(
+      ok({
+        windows: [
+          window({ kind: 'five_hour', utilization: 10 }),
+          window({ kind: 'seven_day', utilization: 40 }),
+          window({ kind: 'seven_day_opus', utilization: 100 }),
+        ],
+        extraUsage: { enabled: false },
+      }),
+    );
+    expect(result.verdict).toBe('usable');
+  });
+
+  it('全モデルに効く枠が空いていて、観測できた枠がモデル別だけ使い切りでも使える', () => {
+    const result = judgeTokenCandidate(
+      ok({
+        windows: [
+          window({ kind: 'seven_day_opus', utilization: 100 }),
+          window({ kind: 'seven_day_sonnet', utilization: 100 }),
+          window({ kind: 'five_hour', utilization: undefined }),
+        ],
+        extraUsage: { enabled: false },
+      }),
+    );
+    expect(result.verdict).toBe('usable');
+  });
+
+  it('全モデルに効く枠が観測できないなら今まで通り（取れなかった枠を捨てる根拠にしない）', () => {
+    const result = judgeTokenCandidate(
+      ok({
+        windows: [
+          window({ kind: 'five_hour', utilization: undefined }),
+          window({ kind: 'seven_day', utilization: undefined }),
+        ],
+        extraUsage: { enabled: false },
       }),
     );
     expect(result.verdict).toBe('usable');
@@ -145,6 +239,8 @@ describe('judgeTokenCandidate — utilization が付かない枠は「使い切�
     expect(result.verdict).toBe('usable');
   });
 
+  // 2026-10-16 #4732: 以前の期待値は usable（five_hour=100・seven_day=utilization 無し・課金枠なし）。
+  // five_hour が観測できて 100% なので全モデルに効く枠が尽きている。課金枠が取れていないので undecidable（unusable へは倒さない）
   it('使い切った枠と utilization 無しの枠が混在しても、無しの枠のせいで unusable にはならない', () => {
     const result = judgeTokenCandidate(
       ok({
@@ -154,7 +250,20 @@ describe('judgeTokenCandidate — utilization が付かない枠は「使い切�
         ],
       }),
     );
-    expect(result.verdict).toBe('usable');
+    expect(result.verdict).toBe('undecidable');
+  });
+
+  it('使い切った枠と utilization 無しの枠が混在し、課金枠も使えないなら、尽きた枠だけを根拠に unusable（無しの枠の resetsAt は retryAt に入れない）', () => {
+    const result = judgeTokenCandidate(
+      ok({
+        windows: [
+          window({ kind: 'five_hour', utilization: 100, resetsAt: 1000 }),
+          window({ kind: 'seven_day', utilization: undefined, resetsAt: 999999 }),
+        ],
+        extraUsage: { enabled: false },
+      }),
+    );
+    expect(result).toEqual({ verdict: 'unusable', reason: expect.any(String), retryAt: 1000 });
   });
 });
 
