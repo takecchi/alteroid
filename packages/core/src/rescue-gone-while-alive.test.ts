@@ -76,6 +76,23 @@ describe('markRescueGoneWhileAlive（#4985）', () => {
     ).toBeNull();
   });
 
+  it('観測が退避より新しくても、時計のずれの余裕（60秒）の内側なら付けない', () => {
+    expect(
+      markRescueGoneWhileAlive(
+        rescueOf(tree()),
+        observed({ at: '2026-10-05T01:01:00.000Z' }),
+        'inst-A',
+      ),
+    ).toBeNull();
+    expect(
+      markRescueGoneWhileAlive(
+        rescueOf(tree()),
+        observed({ at: '2026-10-05T01:01:00.001Z' }),
+        'inst-A',
+      )?.worktrees[0]?.goneAt,
+    ).toBe('2026-10-05T01:01:00.001Z');
+  });
+
   it('項目に instanceId が無ければ付けない（どの器で取った退避か分からない）', () => {
     const withoutInstance = tree();
     delete withoutInstance.instanceId;
