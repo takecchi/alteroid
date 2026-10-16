@@ -5812,15 +5812,7 @@ class Pool implements ManagerPool {
     const nudged: string[] = [];
     for (const managerId of [...this.#usageStopped]) {
       if (this.#stopped) break;
-      const outcome = await this.#nudgeForUsageRotation(managerId);
-      this.#noteUsageWakeOutcome(managerId, outcome);
-      if (outcome === 'still-running') continue;
-      // `'skipped'`（届かなかった）の印を下ろさない: 空振りで印を失うと、次に拾われるには新しい `usage_notice` が要り、それにはその委譲自身が起きる必要があって、クローンが手で `manager_send` を打つまで戻らなくなる。
-      // 拾い直しは周回の掃き（`settleStalledUsageWakes`）が間隔を伸ばして担う（#4850）。ここでは回数上限を置かない: 戻れない委譲は `resume_failed` で印ごと畳まれる。
-      if (outcome === 'skipped') continue;
-      await this.#clearUsageStoppedMark(managerId);
-      this.#usageWakeOwed.delete(managerId);
-      if (outcome === 'nudged') nudged.push(managerId);
+      if (await this.#wakeStoppedByUsage(managerId)) nudged.push(managerId);
     }
     return nudged;
   }
@@ -6685,6 +6677,50 @@ class Pool implements ManagerPool {
    */
   async #requestRotationForFailure(managerId: string, text: string): Promise<void> {
     await this.#observeForTokenRotation(managerId, { notice: { kind: 'reached', text } });
+    await this.#wakeIfHeldTokenStale(managerId);
+  }
+
+  /**
+   * 抱えていた鍵が回転で古くなった後に枠へ当たった担当を、回転の出来事を待たずにその場で起こし直す（#4980）。
+   * 回し手は古い世代の観測を stale として ignored で返し、`reopenedTokenOf` が立たないので、次の回転まで誰も起こさない。
+   * 現役の鍵がもう通る（`ready`）と分かっているときだけ起こす: 通らないなら起こしても同じ枠に当たる。
+   * 回転の出来事で既に起こされて印が下りていれば何もしない。投げない（判定に失敗したら起こさず、印を残す）。
+   */
+  async #wakeIfHeldTokenStale(managerId: string): Promise<void> {
+    if (this.#stopped || !this.#usageStopped.has(managerId)) return;
+    const held = this.#tokenIdentities.get(managerId)?.generation;
+    const identity = this.#tokenIdentity?.();
+    if (identity === undefined || held === undefined || held >= identity.generation) return;
+    const active = identity.generation;
+    if (this.#tokenAvailability === undefined) return;
+    const availability = await this.#tokenAvailability(identity.tokenId).catch(() => undefined);
+    if (availability !== 'ready') return;
+    // 判定の間に回し手が起こして印を下ろしていたら、二重に起こさない。
+    if (!this.#usageStopped.has(managerId)) return;
+    await this.#journal({
+      type: 'decision',
+      decision: `[${managerId}] 抱えていた古い鍵（世代 ${String(held)}）で枠に当たったが、現役の鍵（世代 ${String(active)}）はもう通るので、回転の出来事を待たずに起こし直す`,
+      grounds:
+        `managerId=${managerId} tokenId=${identity.tokenId} 鍵の状態=ready ` +
+        '（#4980。回し手は古い世代の観測を無視するので、待っても次の回転まで起こされない）',
+    });
+    await this.#wakeStoppedByUsage(managerId);
+  }
+
+  /**
+   * 枠で止まった印の立つ担当1件を起こし直し、結果を挑み直しの状態と印へ写す（`resumeStoppedByUsage()` のループ1件分）。
+   * 起こした（`nudged`）ときは true を返す。
+   */
+  async #wakeStoppedByUsage(managerId: string): Promise<boolean> {
+    const outcome = await this.#nudgeForUsageRotation(managerId);
+    this.#noteUsageWakeOutcome(managerId, outcome);
+    if (outcome === 'still-running') return false;
+    // `'skipped'`（届かなかった）の印を下ろさない: 空振りで印を失うと、次に拾われるには新しい `usage_notice` が要り、それにはその委譲自身が起きる必要があって、クローンが手で `manager_send` を打つまで戻らなくなる。
+    // 拾い直しは周回の掃き（`settleStalledUsageWakes`）が間隔を伸ばして担う（#4850）。ここでは回数上限を置かない: 戻れない委譲は `resume_failed` で印ごと畳まれる。
+    if (outcome === 'skipped') return false;
+    await this.#clearUsageStoppedMark(managerId);
+    this.#usageWakeOwed.delete(managerId);
+    return outcome === 'nudged';
   }
 
   async #settleUsageWake(managerId: string, stoppedByUsage: boolean): Promise<void> {
