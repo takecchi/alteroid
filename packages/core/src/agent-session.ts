@@ -110,6 +110,11 @@ export interface AgentManagerSession {
   close(): void;
   contextUsage(): Promise<AgentContextUsage>;
   sessionModelUsage(): Promise<Record<string, UsageTotals> | undefined>;
+  /**
+   * 走行中のセッションの許可規則（`Bash(<command>)` の形）を、渡した一覧で丸ごと置き直す（#4905）。空なら全部外す。
+   * 持たない provider は口ごと省く（省いた provider では、分類器の拒否への allow は今までどおり1回だけの許可だけになる）。
+   */
+  setSessionAllowRules?(rules: readonly string[]): Promise<void>;
 }
 
 export interface AgentManagerSessionSpec {

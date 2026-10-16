@@ -14,6 +14,7 @@ export const CLI_CLASSIFIER_DENIAL_LIMITS = { consecutive: 3, total: 20 } as con
 /**
  * 分類器の拒否の確認（runner の `#onPermissionDenied`）の、alteroid が組んだ固定の1段落（#4943）。変わる値を1つも含まない。
  * 前後は空行で区切る: クローンの入力の段落の単位（空行）で、同じ会話の2回目から短い参照にできるように（`DigestSessionDelta#foldParagraphs`）。
+ * こちらは一時規則を足せない呼び出し（Bash 以外・規則にできない command・口を持たない provider）の段落。足せるときは `DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE`。
  */
 export const DENIAL_ASK_AFTER_ANSWER_PARAGRAPH =
   `答えたあと: allow しても、この呼び出しは自動では撃ち直されない。` +
@@ -25,6 +26,19 @@ export const DENIAL_ASK_AFTER_ANSWER_PARAGRAPH =
   `allow の後は、担当・作業者へ「同じ入力で撃ち直しても、分類器にまた止められうる。` +
   `続けて同じ入力を撃たず、別の手（入力を変える・手順を分ける・人間に頼む）を取ること」と伝える（#4904）。` +
   `この許可で通るかは確かめていない。同じ呼び出しがそれでも拒否されても、確認は重ねて上げない。`;
+
+/**
+ * 同じ確認の、一時規則を足せる Bash 呼び出し用の固定の1段落（#4905）。変わる値を1つも含まない。
+ * `DENIAL_ASK_AFTER_ANSWER_PARAGRAPH` と1本にまとめない: 1字一致で畳む単位（#4943）なので、呼び出しで分岐する文を混ぜると畳めなくなるため。
+ */
+export const DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE =
+  `答えたあと: allow しても、この呼び出しは自動では撃ち直されない。撃ち直すかは担い手が決める` +
+  `（拒否文が再試行を禁じていると撃ち直されないことがある）。` +
+  `allow すると、同じ入力の1回だけを10分通す一時規則がこのセッションに足される` +
+  `（そのセッションの他の作業者にも効く。#4905）。` +
+  `allow の後は、担当・作業者へ「撃ち直すなら入力を1字も変えないこと。それでも拒否されたら、` +
+  `別の手（入力を変える・手順を分ける・人間に頼む）を取ること」と伝える。` +
+  `この規則で分類器を通れるかは実機では確かめていない。同じ呼び出しがそれでも拒否されても、確認は重ねて上げない。`;
 
 /** 同じ相手へ担当向けの知らせを出し直すまでの間隔。拒否が続く間、道具を使うたびに同じ段落が積まれないため。 */
 export const DENIAL_STREAK_NOTICE_INTERVAL_MS = 30 * 60_000;

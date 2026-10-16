@@ -271,7 +271,10 @@ import {
 } from './clone-refusal.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
-import { DENIAL_ASK_AFTER_ANSWER_PARAGRAPH } from './classifier-denial-streak.js';
+import {
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
+} from './classifier-denial-streak.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
 import { attachmentCopiesDir } from './attachment-fetch.js';
 import type { AttachmentLimits } from './attachment.js';
@@ -445,6 +448,7 @@ const GRAVE_DISTILL_FAILURE_JOURNAL_LIMIT = 3;
 /** 担当からの確認の文のうち、alteroid が組んだ固定の段落（#4943。`#foldConfirmationText`）。足すときは、変わる値を1つも含まない1段落だけを足す。 */
 const SYSTEM_CONFIRMATION_PARAGRAPHS: ReadonlySet<string> = new Set([
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
 ]);
 
 // 単位は文字（UTF-16 の code unit）でバイトではない: 切っているのが `String.prototype.slice` のため

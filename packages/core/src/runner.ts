@@ -199,8 +199,14 @@ import {
 import {
   ClassifierDenialStreaks,
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
   describeDenialStreakForClone,
 } from './classifier-denial-streak.js';
+import {
+  SessionAllowRuleBook,
+  sessionAllowRuleShapeOf,
+  type SessionAllowRuleGrant,
+} from './session-allow-rules.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
@@ -2356,6 +2362,10 @@ class RunnerSession {
   readonly #allowedButDenied = createRecentMap<{ readonly expiresAt: number }>({
     limit: ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT,
   });
+  // クローンの allow で足した一時規則（#4905）。タイマーを置かない（`#noteUnusedExpiredOneShotAllows` と同じ遅延評価）: 期限切れは次の出来事とセッションの終わりで掃くため
+  readonly #sessionAllowRules = new SessionAllowRuleBook();
+  // 置き直しを1本ずつ流す: `applyFlagSettings` は一覧を丸ごと置き換えるので、追い越すと古い一覧が後から勝つため
+  #sessionAllowRulesPush: Promise<unknown> = Promise.resolve();
   readonly #resumeState = new RunnerResumeState();
   #tokenFingerprint: string | undefined;
   readonly #workerWaitWindow = new RunnerWorkerWaitWindow();
@@ -2685,6 +2695,7 @@ class RunnerSession {
 
     this.#settleAll(reason);
     this.#workerTools.settleAll();
+    this.#dropSessionAllowRulesOnClose();
     this.#sdkSession.wakeInput();
     // 鍵の付け替えのための畳み（`keepPeers`）では peer を閉じずに預ける（#4734）: peer は担当の Claude の鍵と関係の無い資格で走っていて、閉じると担当が持っていた作業者が黙って消えるため。
     // 人間・クローンの停止と器の畳みでは今どおり閉じる
@@ -2798,6 +2809,7 @@ class RunnerSession {
     const generation = this.#sdkSession.generation;
     const session = this.#driver.open(this.#buildSpec(resume));
     this.#sdkSession.open(session, this.#read(session, generation));
+    this.#reapplySessionAllowRules();
   }
 
   #peerMcpEntry(): McpServers[string] | undefined {
@@ -3965,6 +3977,8 @@ class RunnerSession {
     const tool = denial.tool ?? '(不明な道具)';
     const input = denial.input;
     if (typeof denial.toolUseId === 'string') this.#settleWorkerTool(denial.toolUseId);
+    // フックと拒否の知らせのどちらが先に届いても決着させる（先に届いた方だけが note を出す。#4905）
+    this.#settleSessionAllowRuleUse(denial.toolUseId, { kind: 'denied', via });
 
     // SDK が付けてきた `denial.toolUseId` で引く: 下で組む代用の `toolUseId` は実在の id ではなく、無関係な一致が起きうるため
     if (typeof denial.toolUseId === 'string') {
@@ -4156,6 +4170,7 @@ class RunnerSession {
     this.#closeWorkerWaitWindow();
     this.#settleAll(reason);
     this.#workerTools.settleAll();
+    this.#dropSessionAllowRulesOnClose();
     // 読み取りが終わっても入力側を起こして本体を閉じる。怠ると閉じられない
     // Query と起きない `#inputStream` が残る。
     this.#sdkSession.wakeInput();
@@ -4339,6 +4354,10 @@ class RunnerSession {
         : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
     const toolName = record.toolName;
 
+    // 道具名や入力の鍵が取れない回より前に置く: 一時規則に当たった呼び出しの拒否は、この先で早く返る回でも決着させるため（#4905）
+    this.#settleSessionAllowRuleUse(record.toolUseId, { kind: 'denied', via: 'PermissionDenied' });
+    this.#sweepExpiredSessionAllowRules();
+
     // 道具名や入力の鍵が取れない回も数える: 分類器が止めた事実は変わらず、CLI の数えも進むため
     const streakActor = record.agentId ?? 'manager';
     if (this.#denialStreaks.noteDenial(streakActor, record.reason)) {
@@ -4431,11 +4450,15 @@ class RunnerSession {
       streakActor,
       this.#denialStreaks.view(streakActor),
     );
+    const ruleShape = sessionAllowRuleShapeOf(toolName, record.toolInput);
+    // 口を持たないセッションでは Bash でも従来の段落にする: 一時規則は足されないので、足されると告げると嘘になるため
+    const ruleable =
+      ruleShape.kind === 'rule' && this.#sdkSession.query?.setSessionAllowRules !== undefined;
     const summary =
       (streakNote === null ? '' : `${streakNote}\n\n`) +
       // 段落を空行で分ける（#4943）: 変わる値の行・固定の長い段落・変わる値（理由・入力の先頭）の行を別の段落にし、クローンの入力で固定の段落だけを同じ会話の2回目から参照にできるようにする
       `分類器が ${actor} の ${toolName} 呼び出しを拒否した。この1回だけ許可しますか。\n\n` +
-      `${DENIAL_ASK_AFTER_ANSWER_PARAGRAPH}\n\n` +
+      `${ruleable ? DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE : DENIAL_ASK_AFTER_ANSWER_PARAGRAPH}\n\n` +
       `理由: ${record.reason ?? '(無し)'}\n` +
       `入力の先頭（伏せ字・最大160字。issue #1105 P0）: ${inputHead ?? '(取れなかった)'}`;
     const askedAt = new Date().toISOString();
@@ -4556,17 +4579,29 @@ class RunnerSession {
       actor,
       tool: toolName,
     });
+    // retry を返す前に置き終える: 撃ち直しが規則の置き直しを追い越すと、規則の無いまま分類器へ回るため
+    const ruleAdded = await this.#addSessionAllowRule({
+      shape: ruleShape,
+      actor,
+      toolName,
+      inputHead,
+    });
+    const ttlMinutes = Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000);
     this.#emit({
       type: 'note',
       managerId: this.#id,
       text:
         `クローンが分類器の拒否（${actor}・${toolName}）を1回だけ許可した。同じ入力で撃ち直された` +
-        `ときにだけ、${Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000)}分以内なら1回通す（issue #1105 P1）。` +
+        `ときにだけ、${ttlMinutes}分以内なら1回通す（issue #1105 P1）。` +
         `撃ち直すかどうかは担い手のモデルが決めることで、retry は「もう一度試してよい」という助言でしかない` +
         `（撃ち直しが来なければ、この許可は使われないまま期限が切れる）。` +
-        `同じ入力で撃ち直しても、分類器にまた止められうる（迂回・敵対の型で止めた呼び出しは、` +
-        `クローンの allow や担当の伝言を人間の確認と見なさない）。続けて同じ入力を撃たず、` +
-        `別の手（入力を変える・手順を分ける・人間に頼む）を取ること（#4904）。` +
+        (ruleAdded
+          ? `同じ入力の1回だけを${ttlMinutes}分通す一時規則をこのセッションに足した` +
+            `（そのセッションの他の作業者にも効く。#4905）。撃ち直すなら入力を1字も変えないこと。` +
+            `それでも拒否されたら、別の手（入力を変える・手順を分ける・人間に頼む）を取ること。`
+          : `同じ入力で撃ち直しても、分類器にまた止められうる（迂回・敵対の型で止めた呼び出しは、` +
+            `クローンの allow や担当の伝言を人間の確認と見なさない）。続けて同じ入力を撃たず、` +
+            `別の手（入力を変える・手順を分ける・人間に頼む）を取ること（#4904）。`) +
         `担い手へ manager_send で伝えるときも、この趣旨で書く。これで通るかは確かめていない。`,
     });
     return { kind: 'retry' };
@@ -4583,6 +4618,9 @@ class RunnerSession {
   async #onPreToolUse(record: AgentPreToolRecord): Promise<AgentPreToolDecision> {
     this.#tryObservation('PreToolUse の入力の頭の控え', () => {
       this.#capturePreToolInputHead(record);
+    });
+    this.#tryObservation('期限切れの一時規則の掃除', () => {
+      this.#sweepExpiredSessionAllowRules();
     });
 
     let guardAsk: { reason: string } | undefined;
@@ -4660,6 +4698,19 @@ class RunnerSession {
         actor: `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`,
         tool: record.toolName ?? '(不明)',
         toolUseId: record.toolUseId,
+      });
+    });
+    // 担い手を問わず印を付ける: 規則はセッション全体に効くので、誰が撃っても1回で外すため（#4905）
+    this.#tryObservation('一時規則に当たる呼び出しの印', () => {
+      this.#sessionAllowRules.markUse({
+        toolUseId: record.toolUseId,
+        toolName: record.toolName,
+        toolInput: record.toolInput,
+        useActor:
+          record.agentId === undefined
+            ? `manager:${this.#id}`
+            : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`,
+        nowMs: Date.now(),
       });
     });
 
@@ -4797,6 +4848,166 @@ class RunnerSession {
     }
   }
 
+  /**
+   * 一時規則（#4905）の一覧を、いまのセッションへ丸ごと置き直す。置けたら undefined、置けなければ理由を返す（投げない）。
+   * 一覧は積んだ時点ではなく順番が来た時点で読む: 先に積んだ置き直しが、後で外した規則を巻き戻さないため。
+   */
+  #pushSessionAllowRules(): Promise<string | undefined> {
+    const run = async (): Promise<string | undefined> => {
+      const session = this.#sdkSession.query;
+      if (session?.setSessionAllowRules === undefined) {
+        return 'このセッションは規則を置く口を持たない';
+      }
+      try {
+        await session.setSessionAllowRules(this.#sessionAllowRules.rules());
+        return undefined;
+      } catch (error) {
+        return `規則の置き直しが失敗した: ${reasonOf(error)}`;
+      }
+    };
+    const next = this.#sessionAllowRulesPush.then(run);
+    this.#sessionAllowRulesPush = next;
+    return next;
+  }
+
+  #sessionAllowRuleLabel(grant: SessionAllowRuleGrant): string {
+    return `一時規則（担当 ${this.#id}・規則を足させた呼び出し: ${grant.grantActor}・Bash）`;
+  }
+
+  // 規則を足せないときは黙らない（Bash 以外と、口を持たない provider は今までどおりなので黙る）: 「足すはずが足りなかった」は、撃ち直しがまた止められたときの切り分けに要るため
+  async #addSessionAllowRule(input: {
+    shape: ReturnType<typeof sessionAllowRuleShapeOf>;
+    actor: string;
+    toolName: string;
+    inputHead: string | undefined;
+  }): Promise<boolean> {
+    const { shape, actor, toolName, inputHead } = input;
+    if (shape.kind === 'not-bash') return false;
+    if (this.#sdkSession.query?.setSessionAllowRules === undefined) return false;
+    const head = inputHead ?? '(取れなかった)';
+    const refused = (reason: string) =>
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `分類器が止めた ${actor} の ${toolName} 呼び出しへのクローンの allow を、一時規則としてセッションに` +
+          `足せなかった（担当 ${this.#id}。理由: ${reason}）。今までどおり、同じ担い手の同じ入力を1回だけ通す` +
+          `許可だけを出す（#4905）。入力の先頭（伏せ字）: ${head}`,
+      });
+    if (shape.kind === 'unruleable') {
+      refused(`command が規則にできない（${shape.reason}。完全一致より広い規則になりうる）`);
+      return false;
+    }
+
+    const grant: SessionAllowRuleGrant = {
+      rule: shape.rule,
+      expiresAt: Date.now() + ONE_SHOT_ALLOW_TTL_MS,
+      grantActor: actor,
+      inputHead,
+    };
+    this.#sessionAllowRules.add(grant);
+    const failure = await this.#pushSessionAllowRules();
+    if (failure !== undefined) {
+      this.#sessionAllowRules.remove(grant.rule);
+      refused(failure);
+      return false;
+    }
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        `分類器が止めた ${actor} の Bash 呼び出しを、クローンの allow を受けて、同じ入力の1回だけを通す` +
+        `一時規則としてこのセッションに足した（担当 ${this.#id}・${Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000)}分で外す。` +
+        `そのセッションの他の作業者が同じ入力を撃っても、1回使えば外れる。#4905）。入力の先頭（伏せ字）: ${head}`,
+    });
+    return true;
+  }
+
+  // 外した後の置き直しの失敗は note に残す: 外したはずの規則がセッションに残っているおそれがあり、次に置き直せるまで効き続けるため
+  async #pushAfterSessionAllowRuleRemoval(): Promise<void> {
+    const failure = await this.#pushSessionAllowRules();
+    if (failure === undefined) return;
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        `一時規則を外したあと、セッションの規則の置き直しが失敗した（担当 ${this.#id}。${failure}）。` +
+        `外したはずの規則がセッションに残っているおそれがある。次に一覧を置き直せたときに消える（#4905）。`,
+    });
+  }
+
+  #sweepExpiredSessionAllowRules(): void {
+    const expired = this.#sessionAllowRules.sweepExpired(Date.now());
+    if (expired.length === 0) return;
+    for (const grant of expired) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `${this.#sessionAllowRuleLabel(grant)}は、使われないまま` +
+          `${Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000)}分の期限が切れたので外した（#4905）。` +
+          `この note は期限後の次の道具呼び出しか次の拒否の時点で出る。入力の先頭（伏せ字）: ${grant.inputHead ?? '(取れなかった)'}`,
+      });
+    }
+    void this.#pushAfterSessionAllowRuleRemoval();
+  }
+
+  /**
+   * 印を付けた呼び出しの決着で、一時規則を外して結果を note に残す。
+   * `passed` は PostToolUse / PostToolUseFailure（道具が失敗で終わっても、分類器は通っている）、`denied` は拒否の合図。
+   */
+  #settleSessionAllowRuleUse(
+    toolUseId: string | undefined,
+    outcome: { kind: 'passed'; toolFailed: boolean } | { kind: 'denied'; via: string },
+  ): void {
+    const use = this.#sessionAllowRules.settleUse(toolUseId);
+    if (use === undefined) return;
+    const head = use.grant.inputHead ?? '(取れなかった)';
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        outcome.kind === 'passed'
+          ? `${this.#sessionAllowRuleLabel(use.grant)}が ${use.useActor} の呼び出しで使われ、分類器を通った` +
+            `（道具の結果: ${outcome.toolFailed ? '失敗。道具は失敗で終わったが、分類器は通っている' : '成功'}）。` +
+            `1回使ったので外した（#4905）。入力の先頭（伏せ字）: ${head}`
+          : `${this.#sessionAllowRuleLabel(use.grant)}に当たる ${use.useActor} の呼び出しが、それでも拒否された` +
+            `（合図の出所: ${outcome.via}）。セッションに許可規則を足すこの口が、分類器に効いていない疑いがある。` +
+            `規則は外した。同じ入力を撃ち直さず、人間が止められた中身を見て誤検知だと確かめるか、` +
+            `別の手（入力を変える・手順を分ける・人間に頼む）を取ること（#4905）。入力の先頭（伏せ字）: ${head}`,
+    });
+    void this.#pushAfterSessionAllowRuleRemoval();
+  }
+
+  // 置き直しは呼ばない: セッションはこの後閉じ、閉じかけの control channel へ投げても届かないため（規則はセッションと一緒に消える）
+  #dropSessionAllowRulesOnClose(): void {
+    for (const grant of this.#sessionAllowRules.drainAll()) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `${this.#sessionAllowRuleLabel(grant)}は、セッションが閉じたので使われないまま外した（#4905）。` +
+          `入力の先頭（伏せ字）: ${grant.inputHead ?? '(取れなかった)'}`,
+      });
+    }
+  }
+
+  // 開き直した CLI は flag 層を持ち越さないので、生きている一時規則を置き直す
+  #reapplySessionAllowRules(): void {
+    this.#sweepExpiredSessionAllowRules();
+    if (this.#sessionAllowRules.size === 0) return;
+    void this.#pushSessionAllowRules().then((failure) => {
+      if (failure === undefined) return;
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `セッションを開き直したが、生きている一時規則（${this.#sessionAllowRules.size}件）を置き直せなかった` +
+          `（担当 ${this.#id}。${failure}）。撃ち直しは、同じ担い手の1回だけの許可でしか通らない（#4905）。`,
+      });
+    });
+  }
+
   // 資格の正本の値を、名前によらず伏せ字の対象にする（#4829）: 正本は名前と値しか降りず「秘密か」の印が無いので、`DB_PASS` のように名前の決まりに合わない秘密が抜粋・日誌・note へ伏せずに出るため
   #vaultValues(): string[] {
     return Object.values(this.#credentials?.values() ?? {});
@@ -4818,6 +5029,7 @@ class RunnerSession {
       this.#oneShotAllowedToolUses.delete(record.toolUseId);
       this.#settleWorkerTool(record.toolUseId);
     }
+    this.#settleSessionAllowRuleUse(record.toolUseId, { kind: 'passed', toolFailed: false });
     if (typeof record.transcriptPath === 'string')
       this.#sdkSession.setTranscriptPath(record.transcriptPath);
     this.#markProgressed();
@@ -5112,6 +5324,7 @@ class RunnerSession {
       this.#oneShotAllowedToolUses.delete(record.toolUseId);
       this.#settleWorkerTool(record.toolUseId);
     }
+    this.#settleSessionAllowRuleUse(record.toolUseId, { kind: 'passed', toolFailed: true });
     if (typeof record.transcriptPath === 'string')
       this.#sdkSession.setTranscriptPath(record.transcriptPath);
     this.#markProgressed();

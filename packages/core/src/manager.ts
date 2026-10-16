@@ -46,7 +46,10 @@ import {
   type ResumeConfirmationState,
 } from './resume-confirmation.js';
 import type { ClassifierDenialOverLimit } from './classifier-denial-streak.js';
-import { DENIAL_ASK_AFTER_ANSWER_PARAGRAPH } from './classifier-denial-streak.js';
+import {
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
+} from './classifier-denial-streak.js';
 import { isQuotaFailure } from './sdk-failure.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
@@ -2416,12 +2419,13 @@ const CLASSIFIER_DENIAL_ASK_HEAD = '分類器が ';
 
 /**
  * 分類器の拒否の確認かどうか。書き出しだけでは見分けない: 拒否が続くと runner が連続の注記（`describeDenialStreakForClone`）を先頭に付け、書き出しが変わるため（#4945）。
- * 固定の段落（`DENIAL_ASK_AFTER_ANSWER_PARAGRAPH`）を含むかでも見る。書き出しの判定は、固定の段落を切り出す前の runner が組んだ待ち（再起動の引き取りで配り直す）のために残す。
+ * 固定の段落（`DENIAL_ASK_AFTER_ANSWER_PARAGRAPH` と、一時規則を足せる Bash 用の `DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE`。#4905）のどちらかを含むかでも見る。書き出しの判定は、固定の段落を切り出す前の runner が組んだ待ち（再起動の引き取りで配り直す）のために残す。
  */
 function isClassifierDenialAsk(summary: string): boolean {
   return (
     summary.startsWith(CLASSIFIER_DENIAL_ASK_HEAD) ||
-    summary.includes(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH)
+    summary.includes(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH) ||
+    summary.includes(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE)
   );
 }
 

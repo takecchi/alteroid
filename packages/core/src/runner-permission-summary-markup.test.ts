@@ -8,6 +8,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
+import { DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE } from './classifier-denial-streak.js';
 import { createManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -15,7 +16,7 @@ import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
 /** manager.ts は `kind === 'permission'` の `summary` を Markdown でないと決め打ちして `markup: 'none'` を立てる。runner.ts がここへ記法を足したら黙って外れるので、字面をバイト単位で固定する。 */
-function fakeManagerSdk() {
+function fakeManagerSdk(fake: { withApplyFlagSettings?: boolean } = {}) {
   const sessions: {
     options: Options;
     ask: (
@@ -58,6 +59,7 @@ function fakeManagerSdk() {
     return Object.assign(generate(), {
       close: () => finish?.(),
       interrupt: async () => undefined,
+      ...(fake.withApplyFlagSettings === true ? { applyFlagSettings: async () => undefined } : {}),
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
 
@@ -209,6 +211,55 @@ describe('runner.ts の #onPermission が組み立てる summary（issue #287）
     expect(streaked.length).toBeGreaterThan(0);
     for (const text of streaked) {
       expect(text).toContain('答えたあと: allow しても、この呼び出しは自動では撃ち直されない。');
+      expect(text).not.toContain('allow すれば、この呼び出しがそのまま通る');
+    }
+
+    await pool.stop();
+  });
+
+  it('一時規則を足せる Bash 用の段落（#4905）の確認にも、連続の注記が付いた回を含めて「allow すればそのまま通る」を足さない', async () => {
+    const stores = createMemoryStores();
+    const manager = fakeManagerSdk({ withApplyFlagSettings: true });
+    const inbox: InboxEvent[] = [];
+    const pool = createManagerPool({
+      stores,
+      post: (event) => inbox.push(event),
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: manager.fn, env: {} }),
+      ]),
+    });
+
+    await pool.start({ request: '確認してくる仕事' });
+    const session = manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    const hook = session.options.hooks?.PermissionDenied?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PermissionDenied フックが無い');
+    const permissionTexts = (): string[] =>
+      inbox.flatMap((entry) =>
+        entry.type === 'manager_message' && entry.kind === 'permission' ? [entry.text] : [],
+      );
+    for (const n of [1, 2, 3, 4]) {
+      void hook(
+        {
+          hook_event_name: 'PermissionDenied',
+          tool_name: 'Bash',
+          tool_input: { command: `git rm notes/rule-${String(n)}.txt` },
+          tool_use_id: `toolu_rule_${String(n)}`,
+          reason: '分類器が拒否した（テスト）',
+        } as never,
+        `toolu_rule_${String(n)}`,
+        { signal: new AbortController().signal },
+      );
+      await vi.waitFor(() => {
+        expect(permissionTexts()).toHaveLength(n);
+      });
+    }
+
+    const texts = permissionTexts();
+    expect(texts.some((text) => text.startsWith('⚠'))).toBe(true);
+    for (const text of texts) {
+      expect(text).toContain(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE);
       expect(text).not.toContain('allow すれば、この呼び出しがそのまま通る');
     }
 

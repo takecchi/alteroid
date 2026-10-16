@@ -1,6 +1,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   PermissionResult,
+  Query,
   SDKUserMessage,
   SessionKey,
   SessionStore,
@@ -38,6 +39,20 @@ async function* toSdkInput(input: AsyncIterable<AgentUserInput>): AsyncGenerator
       parent_tool_use_id: null,
     };
   }
+}
+
+/**
+ * flag 層の `permissions` を、alteroid が足した一時規則（#4905）だけで丸ごと置き直す。
+ * 差分で足し引きしない: 2回目の呼び出しは `permissions` を丸ごと置き換えるので、毎回一覧の全部を渡すほかないため。
+ * マネージャーの `Options.settings`（`buildManagerSessionOptions`）は `permissions` を持たないので、置き直しで消える規則は無い。
+ * user/project/local の設定ファイルの規則は別の層なので、ここでは触らない。
+ */
+// [sdk-verbatim Query.applyFlagSettings]
+// > Successive calls shallow-merge top-level keys — a second call with
+// [sdk-verbatim Query.applyFlagSettings]
+// > `{permissions: {...}}` replaces the entire `permissions` object from a
+function setFlagAllowRules(q: Query, rules: readonly string[]): Promise<void> {
+  return q.applyFlagSettings({ permissions: { allow: [...rules] } });
 }
 
 function toSessionStore(log: AgentSessionLog): SessionStore {
@@ -120,6 +135,10 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
       close: () => q.close(),
       contextUsage: () => q.getContextUsage(),
       sessionModelUsage: () => readSessionUsage(q),
+      // `applyFlagSettings` を持たない Query（テストの fake）では口ごと省く: 出すと呼ぶたびに失敗の note が出て、口が無い provider と同じ「今までどおり」に倒れないため
+      ...(typeof (q as Partial<Query>).applyFlagSettings === 'function'
+        ? { setSessionAllowRules: (rules: readonly string[]) => setFlagAllowRules(q, rules) }
+        : {}),
     };
   }
 }

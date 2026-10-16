@@ -1,7 +1,10 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { DENIAL_ASK_AFTER_ANSWER_PARAGRAPH } from './classifier-denial-streak.js';
+import {
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
+} from './classifier-denial-streak.js';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import { waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
@@ -109,10 +112,14 @@ function boot(script: Script = {}): Boot {
 let seq = 0;
 
 /** runner の `#onPermissionDenied` が組む確認の本文と同じ形（段落は空行で分ける）。 */
-function denialAsk(reason: string, head: string): string {
+function denialAsk(
+  reason: string,
+  head: string,
+  paragraph: string = DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
+): string {
   return (
     `分類器が manager の Bash 呼び出しを拒否した。この1回だけ許可しますか。\n\n` +
-    `${DENIAL_ASK_AFTER_ANSWER_PARAGRAPH}\n\n` +
+    `${paragraph}\n\n` +
     `理由: ${reason}\n` +
     `入力の先頭（伏せ字・最大160字。issue #1105 P0）: ${head}`
   );
@@ -130,13 +137,13 @@ async function send(s: Boot, event: Record<string, unknown>): Promise<string> {
   return s.inputs[before] ?? '';
 }
 
-function denial(s: Boot, reason: string, head: string): Promise<string> {
+function denial(s: Boot, reason: string, head: string, paragraph?: string): Promise<string> {
   return send(s, {
     type: 'manager_message',
     managerId: 'mgr-1',
     kind: 'permission',
     requestId: `toolu_${String(seq + 1)}`,
-    text: denialAsk(reason, head),
+    text: denialAsk(reason, head, paragraph),
   });
 }
 
@@ -168,6 +175,32 @@ describe('システムが作った長い段落は、同じ会話の2回目から
     expect(first.length - second.length).toBeGreaterThanOrEqual(
       DENIAL_ASK_AFTER_ANSWER_PARAGRAPH.length - SYSTEM_PARAGRAPH_REF.length,
     );
+    await s.clone.stop();
+  });
+
+  it('一時規則を足せる Bash 用の固定の段落も、2回目から参照になる（#4905）', async () => {
+    const s = boot();
+    expect(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE.length).toBeGreaterThan(
+      SYSTEM_PARAGRAPH_MIN_CHARS,
+    );
+
+    const first = await denial(
+      s,
+      '外部への送信に見えた（1回目）',
+      'git push origin a',
+      DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
+    );
+    const second = await denial(
+      s,
+      '外部への送信に見えた（2回目）',
+      'git push origin b',
+      DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
+    );
+
+    expect(first).toContain(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE);
+    expect(second).not.toContain('同じ入力の1回だけを10分通す一時規則');
+    expect(second).toContain(SYSTEM_PARAGRAPH_REF);
+    expect(second).toContain('入力の先頭（伏せ字・最大160字。issue #1105 P0）: git push origin b');
     await s.clone.stop();
   });
 
