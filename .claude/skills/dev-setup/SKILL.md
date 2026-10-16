@@ -23,4 +23,4 @@ description: mise / TS6 / catalog / イメージの検査・SDK の PR をマー
 
 この内容は #1192 の再編で AGENTS.md から逐語で移したもの。要約・短縮はしていない。
 
-- **生成物（`apps/daemon/openapi.json` / `pnpm-lock.yaml`）は rebase で手で解けない。** 正しい中身は `pnpm build` / `pnpm install` の出力であって、両側の行を合成したものではない。だから並行して PR を抱えているとき、生成物を触る PR が先に main へ入っていれば、後続は rebase して再生成し直すだけで済む。逆順だと、先に入った側の生成物を作り直すために後続の作業へ割り込むことになる。**後続が生成物に触らないならこの理由は成り立たない**ので、順序は自由である
+- **生成物（`apps/daemon/openapi.json` / `pnpm-lock.yaml`）は rebase で手で解けない。** 正しい中身は `pnpm build` / `pnpm install` の出力であって、両側の行を合成したものではない。だから並行して PR を抱えているとき、生成物を触る PR が先に main へ入っていれば、後続は `git merge origin/main` で取り込んで再生成し直すだけで済む（Bash では `git rebase` を断る。#4949）。逆順だと、先に入った側の生成物を作り直すために後続の作業へ割り込むことになる。**後続が生成物に触らないならこの理由は成り立たない**ので、順序は自由である

@@ -216,8 +216,8 @@ description: PR が本当に緑かを判定するとき、CI の完了を待つ�
 **待ち方を間違えると、待ちが終わらないのではなく「委譲そのものが止まる」。** 2026-09-17 に作業者2人が同じ形で止まった。
 
 ```
-worker a25a28c41 → gh run watch 35196482974 --repo takecchi/alteroid --exit-status 2>&1 | tail -60
-worker a86fd5bd3 → gh run watch 35195863856 --repo takecchi/alteroid --exit-status 2>&1 | tail -40
+worker a25a28c41 → gh run watch 35196482974 --repo takecchi/alteroid --exit-status | tail -60
+worker a86fd5bd3 → gh run watch 35195863856 --repo takecchi/alteroid --exit-status | tail -40
 ```
 
 3つが同時に効く:

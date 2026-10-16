@@ -137,7 +137,7 @@ EXIT:124
 **判定の列（測った列から導いた解釈であって、実測そのものではない）**: `-k`
 の有無に関わらず、`timeout`（`--foreground` を付けない既定の形）は時間切れの
 ときにパイプ全体（子だけでなく `grep` / `tail` などの読み手も含む）へ
-SIGTERM を送る。⟹ 作業者がよく打つ `timeout 590 pnpm test … 2>&1 |
+SIGTERM を送る。⟹ 作業者がよく打つ `timeout 590 pnpm test … |
 grep -E 'Test Files|…'` は、打ち切られると `grep` ごと殺され、それまでの
 出力も「打ち切られたこと」自体も1行も残らない——無出力のまま `EXIT:124` だけ
 が返る（今夜、複数の作業者がこの形で「無出力のまま EXIT:124」に止まった。
@@ -161,8 +161,9 @@ grep -E 'Test Files|…'` は、打ち切られると `grep` ごと殺され、�
   すると、ラッパが「打ち切った」1行を書き切る前に外側から殺される形に
   戻ってしまい、この節の対策が意味を失う。
 - **出力は最初から絞る**——`--reporter=dot` に加え、
-  `2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'` で集計行・
-  失敗行・打ち切りの1行だけを残す。パイプの終了コードは
+  `| grep -E 'Test Files|Tests |Duration|FAIL|test-guard'` で集計行・
+  失敗行・打ち切りの1行だけを残す（`2>&1` は付けない。Bash の道具が標準エラーも返すうえ、
+  この形は Bash のガードが断る。#4949）。パイプの終了コードは
   `; echo "EXIT:${PIPESTATUS[0]}"` で取る（`grep` 自体の終了コードでは
   判定しない——`AGENTS.md`「静かに失敗する道具」「パイプの終了コードは、
   既定で最後のコマンドのものである」と同じ理由）。
@@ -209,21 +210,21 @@ pnpm build
 # 死に、Test Files / Tests の集計行そのものが出ないことがある。
 # AGENTS.md「静かに失敗する道具」）。
 
-cd packages/api-client && pnpm test -- --deadline-seconds=60  --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
-cd apps/cli             && pnpm test -- --deadline-seconds=60  --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
-cd packages/storage-fs  && pnpm test -- --deadline-seconds=60  --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
-cd apps/runner          && pnpm test -- --deadline-seconds=60  --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
-cd apps/daemon          && pnpm test -- --deadline-seconds=90  --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
-cd apps/web             && pnpm test -- --deadline-seconds=150 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/api-client && pnpm test -- --deadline-seconds=60  --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd apps/cli             && pnpm test -- --deadline-seconds=60  --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-fs  && pnpm test -- --deadline-seconds=60  --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd apps/runner          && pnpm test -- --deadline-seconds=60  --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd apps/daemon          && pnpm test -- --deadline-seconds=90  --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd apps/web             && pnpm test -- --deadline-seconds=150 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
 
 # root の scripts/**（railway/ ・ .github/scripts/ ・ docker/ ・ root 直下は
 # scripts/ より小さいので同じコマンドで一緒に流してよい。別に測るなら
 # `pnpm test railway/` のように部分一致で絞る）
-pnpm test scripts/ -- --deadline-seconds=90 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+pnpm test scripts/ -- --deadline-seconds=90 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
 
 # packages/core（309ファイル）は8分割。1本も240秒を超えない（実測は下）
 for i in 1 2 3 4 5 6 7 8; do
-  cd packages/core && pnpm test -- --shard=$i/8 --deadline-seconds=120 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT($i/8):${PIPESTATUS[0]}"
+  cd packages/core && pnpm test -- --shard=$i/8 --deadline-seconds=120 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT($i/8):${PIPESTATUS[0]}"
 done
 
 # packages/storage-pg（43ファイル、@electric-sql/pglite で実サーバ不要）。
@@ -232,13 +233,13 @@ done
 # 1/3 が 335秒になり 300秒の枠に収まらなかった——下の「実測: 割った後」）。
 # --exclude は `=` で繋ぐ形で渡す（空白区切りだと値が位置引数として扱われ、
 # `resolveScopedArgs` が「範囲内に一致なし」の exit 8 で断る。実測 2026-09-29T04:2xZ）。
-cd packages/storage-pg && pnpm test -- index.persona --deadline-seconds=590 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
-cd packages/storage-pg && pnpm test -- index.journal-jobs-schedule --deadline-seconds=590 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
-cd packages/storage-pg && pnpm test -- index.commitments-inbox-archive --deadline-seconds=590 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
-cd packages/storage-pg && pnpm test -- index.sessions-tokens-credentials --deadline-seconds=590 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
-cd packages/storage-pg && pnpm test -- index.auth --deadline-seconds=590 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
-cd packages/storage-pg && pnpm test -- '--exclude=**/index.*.test.ts' --shard=1/2 --deadline-seconds=590 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
-cd packages/storage-pg && pnpm test -- '--exclude=**/index.*.test.ts' --shard=2/2 --deadline-seconds=590 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && pnpm test -- index.persona --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && pnpm test -- index.journal-jobs-schedule --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && pnpm test -- index.commitments-inbox-archive --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && pnpm test -- index.sessions-tokens-credentials --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && pnpm test -- index.auth --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && pnpm test -- '--exclude=**/index.*.test.ts' --shard=1/2 --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && pnpm test -- '--exclude=**/index.*.test.ts' --shard=2/2 --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
 # ⚠️ 7行とも Bash ツールでは1行ずつ別の呼びにし、ツールの timeout 引数に
 # 600000 を入れる（並べると1呼びで10分を超える）。**ツールの timeout 引数は
 # 必ず `--deadline-seconds` の値（秒）× 1000 より大きくすること**——storage-pg
