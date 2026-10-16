@@ -46,6 +46,7 @@ import { noteBackgroundFailure } from './dropped-record.js';
 import { excerpt } from './excerpt.js';
 import { notePhase } from './loop-stall.js';
 import type { PermissionModeName } from './permission-mode.js';
+import type { ReportLanguageMode } from './report-language.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
 import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
@@ -659,6 +660,8 @@ export interface ManagerSessionOptionsRequest {
   onPermissionDenied: AgentPermissionDeniedHook;
   // クローン側に同じ引数を持たせない: auto-memory が「書いた本人の次のセッション」に届く前提は、使い捨てのマネージャーと違い、長寿命1本のクローンでは崩れていないため
   managerAutoMemoryEnabled: boolean;
+  /** 省けば `settings.language` を載せない（今と同じ settings）。#4977 */
+  reportLanguage?: ReportLanguageMode;
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
   /**
    * runner が展開した plugin（`Options.plugins` の `type: 'local'` へ写す）。省略・空なら欄ごと省く。
@@ -667,6 +670,12 @@ export interface ManagerSessionOptionsRequest {
    */
   plugins?: readonly ClonePluginRequest[];
 }
+
+// 段落（`REPORT_LANGUAGE_PROMPT_PARAGRAPH`）を主にし、こちらは添え: 作業者にどこまで効くかは CLI の作り次第で確かめられないため（#4977）
+const SDK_LANGUAGE_OF: Readonly<Record<ReportLanguageMode, string | undefined>> = {
+  ja: 'japanese',
+  off: undefined,
+};
 
 export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest): Options {
   const {
@@ -691,9 +700,11 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onPreToolUse,
     onPermissionDenied,
     managerAutoMemoryEnabled,
+    reportLanguage,
     mcpServers,
     plugins,
   } = request;
+  const sdkLanguage = reportLanguage === undefined ? undefined : SDK_LANGUAGE_OF[reportLanguage];
 
   return {
     model,
@@ -737,9 +748,12 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     // [sdk-verbatim Settings.autoMemoryEnabled]
     // Enable auto-memory for this project. When false, Claude will not read from or write to the auto-memory directory.
     // `autoMemoryEnabled` の doc に「Ignored if set in projectSettings」が付いていないことは、SDK を上げるときに目で確かめる: 不在の主張で `check:sdk-quotes` の印では確かめられないため
+    // [sdk-verbatim Settings.language]
+    // Preferred language for Claude responses and voice dictation (e.g., "japanese", "spanish")
     settings: {
       ...NO_ATTRIBUTION_SETTINGS,
       ...(managerAutoMemoryEnabled ? {} : { autoMemoryEnabled: false }),
+      ...(sdkLanguage === undefined ? {} : { language: sdkLanguage }),
     },
     ...(resume === undefined ? {} : { resume }),
     ...(spawnClaudeCodeProcess === undefined ? {} : { spawnClaudeCodeProcess }),

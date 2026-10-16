@@ -203,6 +203,8 @@ import {
   findEnglishSentences,
   ReportLanguageNotices,
   resolveEffectiveReportLanguage,
+  withReportLanguageParagraph,
+  type ReportLanguageMode,
 } from './report-language.js';
 import {
   ClassifierDenialStreaks,
@@ -3101,9 +3103,47 @@ class RunnerSession {
         managerId: this.#id,
         text: `peer の作業場 ${dir} を作れなかったので、マネージャーの cwd のままにした: ${reasonOf(error)}`,
       });
-      return { systemPromptAppend: PEER_SYSTEM_PROMPT_APPEND };
+      return {
+        systemPromptAppend: withReportLanguageParagraph(
+          PEER_SYSTEM_PROMPT_APPEND,
+          this.#sessionReportLanguage(),
+        ),
+      };
     }
-    return { cwd: dir, systemPromptAppend: peerSystemPromptAppend(dir) };
+    return {
+      cwd: dir,
+      systemPromptAppend: withReportLanguageParagraph(
+        peerSystemPromptAppend(dir),
+        this.#sessionReportLanguage(),
+      ),
+    };
+  }
+
+  /**
+   * セッションを開く時点の `ALTEROID_REPORT_LANGUAGE`（#4977。プロファイルが優先）。
+   * 不正な値は off へ倒す: 言語の指示のためにセッションを開けなくしないため。日誌は `#4965` の知らせと同じ1行に寄せる。
+   */
+  #sessionReportLanguage(): ReportLanguageMode {
+    try {
+      return resolveEffectiveReportLanguage(this.#env, this.#profileEnv());
+    } catch (error) {
+      this.#noteReportLanguageMisconfig(error);
+      return 'off';
+    }
+  }
+
+  // 開く時点と発言の観測の両方から呼ぶ。同じ値は1回だけ書く: 設定の誤りは1つで、日誌を2行にしないため
+  #noteReportLanguageMisconfig(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    if (this.#reportLanguageMisconfigNoted === message) return;
+    this.#reportLanguageMisconfigNoted = message;
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        `報告の言語を掛けていない: ${message}。直すまで、英語の文の知らせも、` +
+        '担当・作業者のプロンプトへの言語の指示も掛けない（指示は直した後に開くセッションから入る）。#4965 #4977',
+    });
   }
 
   // `tool_use` にしない: 旧 daemon が未知の欄を落とすため
@@ -3133,21 +3173,28 @@ class RunnerSession {
     const peerModels = peerEntry === undefined ? undefined : this.#peer?.()?.models?.codex;
     // peer のセッションには出さない: 記録するのはマネージャー自身で、peer の成果はマネージャーが受け取ってから記録する
     const managerToolsEntry = forPeer ? undefined : this.#managerToolsMcpEntry();
+    // 開くたびに読む（新規・resume・鍵の回転の起こし直しはどれも `#open` からここを通る）: system prompt は開く時点で決まるため
+    const reportLanguage = this.#sessionReportLanguage();
     return {
       input: this.#inputStream(),
       model: resolveManagerModel(this.#env),
       modelPlaced: placedModelTier(this.#env, MANAGER_MODEL_ENV_KEY) !== null,
       permissionMode: this.#permissionMode,
-      systemPromptAppend: buildManagerSystemPrompt({
-        managerId: this.#id,
-        workerName: WORKER_AGENT_NAME,
-        ...(peerEntry === undefined
-          ? {}
-          : { peer: peerModels === undefined ? {} : { models: peerModels } }),
-        ...(managerToolsEntry === undefined ? {} : { managerTools: true }),
-      }),
+      systemPromptAppend: withReportLanguageParagraph(
+        buildManagerSystemPrompt({
+          managerId: this.#id,
+          workerName: WORKER_AGENT_NAME,
+          ...(peerEntry === undefined
+            ? {}
+            : { peer: peerModels === undefined ? {} : { models: peerModels } }),
+          ...(managerToolsEntry === undefined ? {} : { managerTools: true }),
+        }),
+        reportLanguage,
+      ),
       workerAgentName: WORKER_AGENT_NAME,
-      workerPrompt: buildWorkerPrompt(),
+      // 作業者にも足す: 作業者は担当の system prompt を継がないため
+      workerPrompt: withReportLanguageParagraph(buildWorkerPrompt(), reportLanguage),
+      ...(reportLanguage === 'off' ? {} : { reportLanguage }),
       // 省略しない: SDK の既定は親の継承で、省くとマネージャーを差し替えた人が作業者まで巻き添えで動かすため
       workerModel: resolveWorkerModel(this.#env),
       cwd: this.#cwd,
@@ -5296,15 +5343,7 @@ class RunnerSession {
       try {
         mode = resolveEffectiveReportLanguage(this.#env, this.#profileEnv());
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (this.#reportLanguageMisconfigNoted !== message) {
-          this.#reportLanguageMisconfigNoted = message;
-          this.#emit({
-            type: 'note',
-            managerId: this.#id,
-            text: `報告の言語の知らせを掛けていない: ${message}。直すまで知らせない。#4965`,
-          });
-        }
+        this.#noteReportLanguageMisconfig(error);
         return;
       }
       if (mode === 'off') return;
