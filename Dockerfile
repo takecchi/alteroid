@@ -16,7 +16,7 @@
 # 上げるときは npm の `latest` dist-tag の安定版（alpha でないもの）を採る:
 #   npm view @openai/codex dist-tags.latest
 # 0.160.1 は 0.160.0 の patch（2026-10-05 公開）。Renovate の catalog の更新に合わせた。
-ARG CODEX_VERSION=0.160.1
+ARG CODEX_VERSION=0.162.1
 
 # base は digest で固定する（Issue #3321）。タグだけだと Docker Hub 側の入れ替わりで
 # image ジョブのキャッシュが外れる時刻を上流に任せることになる。digest は Renovate の PR で
