@@ -388,6 +388,10 @@ export const memoryReadResponseSchema = z.object({
   document: memoryDocumentSchema,
   version: z.string(),
 });
+// `PUT /memory/:slug` の成功応答（#4774）。`journalNotice` は日誌への追記が落ちたときだけ付く任意の欄: 本文は保存済みで、保護の印は立てたが、日誌に行が無いので日誌から作り直すと印が消える、と人に見せるため。
+export const memoryWriteResponseSchema = memoryReadResponseSchema.extend({
+  journalNotice: z.string().optional(),
+});
 export const memoryConflictResponseSchema = z.object({
   error: z.string(),
   current: memoryReadResponseSchema.nullable(),

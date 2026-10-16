@@ -54,6 +54,8 @@ function MemoryDetailBody({ slug }: { slug: string }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [savedAt, setSavedAt] = useState<string | undefined>(undefined);
+  // 日誌への追記だけが落ちた保存のとき、デーモンが返す知らせ（#4774）。次の保存で入れ替わる。
+  const [journalNotice, setJournalNotice] = useState<string | undefined>(undefined);
   // 取得した版へ追従させない: クローンが書いた後に再取得が走っても、人間が見て書き始めた版を前提にし続けないと衝突を検出できない。
   const [baseVersion, setBaseVersion] = useState<string | null | undefined>(undefined);
   // 再取得が追いつく前に編集を再開しても、古い `data.version` を前提にして偽の 409 を起こさないために持つ。
@@ -97,8 +99,9 @@ function MemoryDetailBody({ slug }: { slug: string }) {
     setBusy(true);
     setFailure(undefined);
     saveMemory(slug, sent, ifMatch)
-      .then(({ document, version }) => {
+      .then(({ document, version, journalNotice: notice }) => {
         setSavedAt(document.updatedAt);
+        setJournalNotice(notice);
         setLastSaved({ replaces: data === undefined ? null : data.version, version });
         if (latestDraft.current === sent) {
           setDraft(undefined);
@@ -221,6 +224,11 @@ function MemoryDetailBody({ slug }: { slug: string }) {
       {goneAfterRead && (
         <p role="alert" className="mb-3 rounded-lg border border-warn/50 p-3 text-sm text-warn">
           この記憶は、読んだ後に別の手段で消された（または見つからない）。下の内容は前に読めたときのもので、書きかけもそのまま残してある。保存するときは、消されたものを書き戻すかどうかを確認する。
+        </p>
+      )}
+      {journalNotice !== undefined && (
+        <p role="status" className="mb-3 rounded-lg border border-warn/50 p-3 text-sm text-warn">
+          {journalNotice}
         </p>
       )}
       <ErrorNote error={failure} className="mb-3" />

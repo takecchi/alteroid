@@ -5174,7 +5174,7 @@
         "description": "人間が API から記憶を書き換える口。書き換えは日誌に残る（`cause: human`）。",
         "responses": {
           "200": {
-            "description": "書き換え後の記憶文書。",
+            "description": "書き換え後の記憶文書。日誌への追記だけが落ちたときは、`journalNotice` にそのことを書く（本文は保存済みで、「人が触った」の保護の印は立てた。ただし日誌に行が無いので、日誌から作り直すと印は消える）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -5430,6 +5430,9 @@
                       ]
                     },
                     "version": {
+                      "type": "string"
+                    },
+                    "journalNotice": {
                       "type": "string"
                     }
                   },

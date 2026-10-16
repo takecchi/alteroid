@@ -138,7 +138,11 @@ export function useSaveMemory() {
       }
       const saved = unwrap(result);
       await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
-      return { document: saved.document, version: saved.version };
+      return {
+        document: saved.document,
+        version: saved.version,
+        journalNotice: saved.journalNotice,
+      };
     },
     [api, mutate],
   );

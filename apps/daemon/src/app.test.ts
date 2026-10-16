@@ -1268,11 +1268,20 @@ describe('HTTP API', () => {
     expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
   });
 
+  it('日誌が書けたときの PUT 応答には journalNotice が付かず、印は今までどおり立つ（#4774）', async () => {
+    const put = await app.request('/memory/values', {
+      ...json({ content: '# 価値観\n\n普通\n' }),
+      method: 'PUT',
+    });
+    expect(put.status).toBe(200);
+    expect(await put.json()).not.toHaveProperty('journalNotice');
+    expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+  });
+
   it(
     '日誌への追記が落ちても、書き換えは効いていて応答は成功する（Issue #2037）。' +
       'stderr に跡が1行出て、その行に本文は載らない。' +
-      '**`markHumanTouched` も呼ばれない**（裏付けの日誌行が無いので、保護状態は' +
-      '"human" にならない——`PersonaStore.markHumanTouched` の doc）',
+      '**`markHumanTouched` は呼ばれ、保護状態は "human" になる**（#4774）。応答に `journalNotice` が出る',
     async () => {
       await stores.persona.write('journal-drop-memory', '# 元の内容\n');
       expect(await stores.persona.protectionStatus('journal-drop-memory')).toEqual({
@@ -1309,9 +1318,15 @@ describe('HTTP API', () => {
       const body = (await read.json()) as { document: { content: string } };
       expect(body.document.content).toContain('SECRET-NEW-CONTENT');
 
+      // 2026-10-16 Issue #4774: 以前の期待値は `{ kind: 'clone-only' }`（日誌が落ちたら印を立てない）。
+      // 人の本文を蒸留から守るのを先にする判断で、日誌が落ちても印は立てるに変えた。
       expect(await stores.persona.protectionStatus('journal-drop-memory')).toEqual({
-        kind: 'clone-only',
+        kind: 'human',
       });
+
+      const putBody = (await response?.json()) as { journalNotice?: string };
+      expect(putBody.journalNotice).toContain('日誌に残せなかった');
+      expect(putBody.journalNotice).not.toContain('SECRET-NEW-CONTENT');
 
       const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
       expect(dropped).toHaveLength(1);
