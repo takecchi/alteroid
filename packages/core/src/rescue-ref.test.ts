@@ -643,7 +643,7 @@ describe('退避の作業ツリーの列挙の打ち切りを呼び手へ返す�
   afterEach(async () => {
     await removeTree(root);
   });
-  const run = (cwd: string, onListIncomplete: (value: unknown) => void) =>
+  const run = (cwd: string, onListIncomplete: (value: unknown) => void, maxWorktrees?: number) =>
     runRescue(cwd, {
       managerId: 'mgr-4681aaaa-0000-0000-0000-000000000000',
       spawn: realSpawn,
@@ -651,18 +651,21 @@ describe('退避の作業ツリーの列挙の打ち切りを呼び手へ返す�
       memory: new RescueMemory(),
       tmpRootDir: path.join(root, 'no-tmp'),
       onListIncomplete,
+      ...(maxWorktrees === undefined ? {} : { maxWorktrees }),
     });
 
-  it('⭐ 作業ツリーが上限（20本）を超えたら、打ち切った本数を返す', async () => {
+  // 2026-10-16 #4953: 退避の上限を表示の上限（20本）から切り離して40本にした。以前は21本の作業ツリーを置き、既定の上限で `{ truncatedAtCount: 20 }` を期待していた。
+  // 41本の git を起こすと遅いので、上限を試験の口で3本にして打ち切りを見る（既定の値は unpushed-work-order.test.ts で固定する）
+  it('⭐ 作業ツリーが上限を超えたら、打ち切った本数を返す', async () => {
     const cwd = path.join(root, 'work');
-    for (let i = 0; i < 21; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       const repo = path.join(cwd, `r${String(i).padStart(2, '0')}`);
       await mkdir(repo, { recursive: true });
       g(repo, 'init', '-q', '-b', 'main');
     }
     const seen: unknown[] = [];
-    await run(cwd, (value) => seen.push(value));
-    expect(seen).toEqual([{ truncatedAtCount: 20 }]);
+    await run(cwd, (value) => seen.push(value), 3);
+    expect(seen).toEqual([{ truncatedAtCount: 3 }]);
   });
 
   it('起点が在るのに読めなければ、その理由を返す', async () => {

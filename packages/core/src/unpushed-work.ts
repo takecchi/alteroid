@@ -191,20 +191,25 @@ export async function findManagerScratchRoots(
   return { paths };
 }
 
-// 1本目（job.cwd）の rootUnreadable は部分的な結果を混ぜずに上へ運ぶ: 見つかった分だけを正としてよいという前提が崩れているため
-// 2本目以降の rootUnreadable は捨てずに unreadableDirCount へ数える: どちらの欄にも出ないと「探しきって0本だった」と区別が付かないため
+// 探す順は「担い手が git を打った作業ツリー（hint）→ 担当の作業場 → job.cwd」（#4953）: cwd は担当どうしで共有のことがあり、先に探すと他の担当のチェックアウトで件数の枠を使い切り、未 push の変更をいちばん持っていそうな本人の作業ツリーが打ち切られるため
+// job.cwd の rootUnreadable は部分的な結果を混ぜずに上へ運ぶ: 見つかった分だけを正としてよいという前提が崩れているため。枠が先に尽きて cwd を探さなかった回も、読めるかだけは確かめる（後ろへ回したことで、この合図を落とさないため）
+// cwd 以外の起点の rootUnreadable は捨てずに unreadableDirCount へ数える: どちらの欄にも出ないと「探しきって0本だった」と区別が付かないため
 async function findGitDirsAcrossRoots(
-  roots: readonly string[],
+  cwd: string,
+  otherRoots: readonly string[],
   options: { maxDepth?: number; maxCount?: number; readdirFn?: ReaddirFn },
 ): Promise<FindGitDirsResult> {
   const maxCount = options.maxCount ?? DEFAULT_MAX_WORKTREES;
+  const readdirFn = options.readdirFn ?? defaultReaddirFn;
   const seen = new Set<string>();
   const found: string[] = [];
   let truncated = false;
   let unreadableDirCount = 0;
   let unreadableDirSample: string | undefined;
+  let cwdVisited = false;
 
-  for (const [index, root] of roots.entries()) {
+  const roots = [...otherRoots.map((root) => ({ root, isCwd: false })), { root: cwd, isCwd: true }];
+  for (const { root, isCwd } of roots) {
     if (found.length >= maxCount) {
       truncated = true;
       break;
@@ -213,12 +218,13 @@ async function findGitDirsAcrossRoots(
     const result = await findGitDirs(root, {
       maxDepth: options.maxDepth,
       maxCount: remaining,
-      readdirFn: options.readdirFn,
+      readdirFn,
     });
-    if (index === 0 && result.rootUnreadable !== undefined) {
+    if (isCwd) cwdVisited = true;
+    if (isCwd && result.rootUnreadable !== undefined) {
       return { paths: [], rootUnreadable: result.rootUnreadable };
     }
-    if (index !== 0 && result.rootUnreadable !== undefined) {
+    if (!isCwd && result.rootUnreadable !== undefined) {
       unreadableDirCount += 1;
       unreadableDirSample ??= `${root}: ${result.rootUnreadable}`;
     }
@@ -235,6 +241,14 @@ async function findGitDirsAcrossRoots(
     if (result.truncatedAtCount !== undefined) {
       truncated = true;
       break;
+    }
+  }
+
+  if (!cwdVisited) {
+    try {
+      await readdirFn(cwd);
+    } catch (error) {
+      return { paths: [], rootUnreadable: reasonOf(error) };
     }
   }
 
@@ -457,7 +471,7 @@ export async function computeUnpushedWork(
           options.managerId,
         );
   const hintRoots = await worktreeRootsOfDirs(options.hintDirs ?? [], options.readdirFn);
-  const found = await findGitDirsAcrossRoots([cwd, ...scratchRoots.paths, ...hintRoots], {
+  const found = await findGitDirsAcrossRoots(cwd, [...hintRoots, ...scratchRoots.paths], {
     maxDepth: options.maxDepth,
     maxCount: options.maxWorktrees,
     readdirFn: options.readdirFn,
@@ -537,7 +551,7 @@ export async function listWorktreeRoots(
     options.managerId,
   );
   const hintRoots = await worktreeRootsOfDirs(options.hintDirs ?? [], options.readdirFn);
-  const found = await findGitDirsAcrossRoots([cwd, ...scratchRoots.paths, ...hintRoots], {
+  const found = await findGitDirsAcrossRoots(cwd, [...hintRoots, ...scratchRoots.paths], {
     maxCount: options.maxWorktrees,
     readdirFn: options.readdirFn,
   });

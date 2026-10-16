@@ -81,6 +81,7 @@ function setup(
   rescueIntervalMs: number,
   captured: Options[] = [],
   rescueStagedRoot?: string,
+  rescueMaxWorktrees?: number,
 ): { host: RunnerHost; events: RunnerEvent[] } {
   const events: RunnerEvent[] = [];
   const credentials = createCredentialStore({
@@ -98,6 +99,7 @@ function setup(
     finishUnpushedWorkFn: async () => ({ cwd: repo, worktrees: [] }),
     rescueIntervalMs,
     ...(rescueStagedRoot === undefined ? {} : { rescueStagedRoot }),
+    ...(rescueMaxWorktrees === undefined ? {} : { rescueMaxWorktrees }),
   });
   hosts.push(host);
   return { host, events };
@@ -311,13 +313,14 @@ describe('畳む前に emit した未追跡の預かりを、畳みの待ちに�
 
 describe('退避から漏れた作業ツリーを note で知らせる（#4681）', () => {
   it('⭐ 作業ツリーが上限を超えたら、退避が漏れたことを note で知らせる（繰り返さないことは RescueListNotice の試験で見る）', async () => {
+    // 2026-10-16 #4953: 以前は21本の作業ツリーを置き、既定の上限（20本）で打ち切らせていた。退避の上限を40本にしたので、上限を runner の口で3本にして4本を置く
     const work = path.join(root, 'many');
-    for (let i = 0; i < 21; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       const dir = path.join(work, `r${String(i).padStart(2, '0')}`);
       await mkdir(dir, { recursive: true });
       g(dir, 'init', '-q', '-b', 'main');
     }
-    const { host, events } = setup(40);
+    const { host, events } = setup(40, [], undefined, 3);
     await host.start({ managerId: 'mgr-4681note', request: '依頼', cwd: work });
     const notes = () =>
       events.filter(
