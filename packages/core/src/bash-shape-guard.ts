@@ -49,7 +49,7 @@ const REASONS: Record<BashShapeForm, string> = {
   'git-force-push':
     '`git push` の `--force`・`--force-with-lease`・`--force-if-includes`・`-f`（`-uf` のような組み合わせを含む）と、`+` で始まる refspec（`git push origin +main`）はこの Bash では使えない。新しいコミットを積んで普通に push すること。履歴を書き換える必要があるなら、新しい枝を切って PR にする。',
   'git-rebase':
-    '`git rebase`（`git pull --rebase`・`git pull -r` を含む）はこの Bash では使えない。最新の main を取り込むなら `git merge origin/main` を使うこと。',
+    '`git rebase`（`git pull --rebase`・`git pull -r` を含む）はこの Bash では使えない。最新の main を取り込むなら `git merge origin/main` を使うこと。途中で止まった rebase から抜けるなら、`git rebase --abort` は通る。',
   'no-verify':
     '`--no-verify`（git のどの下位命令でも）と `git commit -n` はこの Bash では使えない。フックが落ちたなら、落ちた理由を直してから打ち直すこと。',
   'gh-merge-auto':
@@ -549,7 +549,10 @@ function inspectGit(args: readonly string[]): BashShapeForm | undefined {
     case 'reset':
       return 'git-reset';
     case 'rebase':
-      return 'git-rebase';
+      // `--abort` / `--quit` の1つだけは通す（#4957）: 履歴を書き換えず、途中で止まった rebase から抜けるだけのため。断ると、`pull.rebase=true` の設定などで rebase の途中に入った担当が抜けられなくなる
+      return g.rest.length === 1 && (g.rest[0] === '--abort' || g.rest[0] === '--quit')
+        ? undefined
+        : 'git-rebase';
     case 'pull':
       return hasShortFlag(opts, 'r', 'sXSj') ||
         opts.some((a) => a === '--rebase' || (a.startsWith('--rebase=') && a !== '--rebase=false'))
