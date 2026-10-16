@@ -684,6 +684,25 @@ describe('退避の作業ツリーの列挙の打ち切りを呼び手へ返す�
     expect(seen).toEqual([undefined]);
   });
 
+  it('⭐ cwd が消えていても、担当の作業場の作業ツリーは退避し、cwd が無かったと知らせる（#4955）', async () => {
+    const tmpRootDir = path.join(root, 'tmp');
+    const scratch = path.join(tmpRootDir, 'mgr-4681aaaa', 'w1');
+    await mkdir(scratch, { recursive: true });
+    g(scratch, 'init', '-q', '-b', 'main');
+    await writeFile(path.join(scratch, 'a.txt'), 'x\n');
+    const seen: unknown[] = [];
+    const reports = await runRescue(path.join(root, 'missing'), {
+      managerId: 'mgr-4681aaaa-0000-0000-0000-000000000000',
+      spawn: realSpawn,
+      env: { ...GIT_ENV },
+      memory: new RescueMemory(),
+      tmpRootDir,
+      onListIncomplete: (value) => seen.push(value),
+    });
+    expect(seen).toEqual([{ cwdMissing: true }]);
+    expect(reports.map((report) => report.relativePath)).toEqual([scratch]);
+  });
+
   it('打ち切られなければ undefined を返す（呼び手が「直った」を知るため）', async () => {
     const cwd = path.join(root, 'one');
     await mkdir(cwd, { recursive: true });
@@ -702,6 +721,19 @@ describe('RescueListNotice — 退避の列挙の打ち切りの知らせを繰�
     expect(notice.next(undefined)).toBeUndefined();
     expect(notice.next({ truncatedAtCount: 20 })).toContain('20 本で探すのを打ち切った');
     expect(notice.next({ unreadable: 'EACCES' })).toContain('起点が読めなかった（EACCES）');
+  });
+
+  it('cwd が無かっただけの回は、漏れではない別の文で知らせる（#4955）', () => {
+    const notice = new RescueListNotice();
+    const text = notice.next({ cwdMissing: true });
+    expect(text).toContain('担当の作業ディレクトリ（cwd）が無かった');
+    expect(text).toContain('担当の作業場と git を打った作業ツリーだけを探して退避した');
+    expect(text).not.toContain('途中で止まった');
+    expect(notice.next({ cwdMissing: true })).toBeUndefined();
+    // 打ち切りも重なったら、漏れの文を優先する
+    expect(notice.next({ cwdMissing: true, truncatedAtCount: 40 })).toContain(
+      '40 本で探すのを打ち切った',
+    );
   });
 });
 

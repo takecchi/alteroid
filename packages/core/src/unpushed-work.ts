@@ -36,10 +36,18 @@ export interface FindGitDirsResult {
   readonly paths: readonly string[];
   readonly truncatedAtCount?: number;
   readonly rootUnreadable?: string;
+  /** 起点が在らなかった（ENOENT）。`rootUnreadable` と一緒に立つ。読めないのとは分ける: 退避は、在らない cwd を「漏れる変更も無い」と扱えるため（#4955）。 */
+  readonly rootMissing?: true;
+  /** cwd が在らなかったが、ほかの起点で見つかった分を `paths` に返した（`keepOthersWhenCwdMissing` のときだけ。#4955）。 */
+  readonly cwdMissing?: true;
   readonly unreadableDirCount?: number;
   readonly unreadableDirSample?: string;
   readonly depthLimitedCount?: number;
   readonly depthLimitedSample?: string;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'ENOENT';
 }
 
 export async function findGitDirs(
@@ -57,6 +65,7 @@ export async function findGitDirs(
   const found: string[] = [];
   let truncated = false;
   let rootUnreadable: string | undefined;
+  let rootMissing = false;
   let unreadableDirCount = 0;
   let unreadableDirSample: string | undefined;
   let depthLimitedCount = 0;
@@ -70,6 +79,7 @@ export async function findGitDirs(
     } catch (error) {
       if (dir === root) {
         rootUnreadable = reasonOf(error);
+        rootMissing = isMissingPathError(error);
       } else {
         unreadableDirCount += 1;
         if (unreadableDirSample === undefined) {
@@ -106,7 +116,9 @@ export async function findGitDirs(
   }
 
   await walk(root, 0);
-  if (rootUnreadable !== undefined) return { paths: found, rootUnreadable };
+  if (rootUnreadable !== undefined) {
+    return { paths: found, rootUnreadable, ...(rootMissing ? { rootMissing: true } : {}) };
+  }
   return {
     paths: found,
     ...(truncated ? { truncatedAtCount: maxCount } : {}),
@@ -194,10 +206,16 @@ export async function findManagerScratchRoots(
 // 探す順は「担い手が git を打った作業ツリー（hint）→ 担当の作業場 → job.cwd」（#4953）: cwd は担当どうしで共有のことがあり、先に探すと他の担当のチェックアウトで件数の枠を使い切り、未 push の変更をいちばん持っていそうな本人の作業ツリーが打ち切られるため
 // job.cwd の rootUnreadable は部分的な結果を混ぜずに上へ運ぶ: 見つかった分だけを正としてよいという前提が崩れているため。枠が先に尽きて cwd を探さなかった回も、読めるかだけは確かめる（後ろへ回したことで、この合図を落とさないため）
 // cwd 以外の起点の rootUnreadable は捨てずに unreadableDirCount へ数える: どちらの欄にも出ないと「探しきって0本だった」と区別が付かないため
+// `keepOthersWhenCwdMissing`（退避の列挙だけ。#4955）: cwd が在らない（ENOENT）ときは、ほかの起点で見つかった分を `cwdMissing` 付きで返す。在らない cwd に漏れる変更は無く、作業場と git を打った作業ツリーの変更を、cwd が消えたことを理由に1本も退避しないのは失うものが大きいため。読めないが在る cwd は今までどおり部分的な結果を混ぜない
 async function findGitDirsAcrossRoots(
   cwd: string,
   otherRoots: readonly string[],
-  options: { maxDepth?: number; maxCount?: number; readdirFn?: ReaddirFn },
+  options: {
+    maxDepth?: number;
+    maxCount?: number;
+    readdirFn?: ReaddirFn;
+    keepOthersWhenCwdMissing?: boolean;
+  },
 ): Promise<FindGitDirsResult> {
   const maxCount = options.maxCount ?? DEFAULT_MAX_WORKTREES;
   const readdirFn = options.readdirFn ?? defaultReaddirFn;
@@ -207,6 +225,7 @@ async function findGitDirsAcrossRoots(
   let unreadableDirCount = 0;
   let unreadableDirSample: string | undefined;
   let cwdVisited = false;
+  let cwdMissing = false;
 
   const roots = [...otherRoots.map((root) => ({ root, isCwd: false })), { root: cwd, isCwd: true }];
   for (const { root, isCwd } of roots) {
@@ -222,7 +241,11 @@ async function findGitDirsAcrossRoots(
     });
     if (isCwd) cwdVisited = true;
     if (isCwd && result.rootUnreadable !== undefined) {
-      return { paths: [], rootUnreadable: result.rootUnreadable };
+      if (options.keepOthersWhenCwdMissing !== true || result.rootMissing !== true) {
+        return { paths: [], rootUnreadable: result.rootUnreadable };
+      }
+      cwdMissing = true;
+      continue;
     }
     if (!isCwd && result.rootUnreadable !== undefined) {
       unreadableDirCount += 1;
@@ -248,12 +271,16 @@ async function findGitDirsAcrossRoots(
     try {
       await readdirFn(cwd);
     } catch (error) {
-      return { paths: [], rootUnreadable: reasonOf(error) };
+      if (options.keepOthersWhenCwdMissing !== true || !isMissingPathError(error)) {
+        return { paths: [], rootUnreadable: reasonOf(error) };
+      }
+      cwdMissing = true;
     }
   }
 
   return {
     paths: found,
+    ...(cwdMissing ? { cwdMissing: true } : {}),
     ...(truncated ? { truncatedAtCount: maxCount } : {}),
     ...(unreadableDirCount > 0 ? { unreadableDirCount, unreadableDirSample } : {}),
   };
@@ -545,15 +572,19 @@ export async function listWorktreeRoots(
   worktrees: { repoRoot: string; relativePath: string }[];
   truncatedAtCount?: number;
   unreadable?: string;
+  /** cwd が在らなかったが、ほかの起点で見つかった分を返した（#4955）。 */
+  cwdMissing?: true;
 }> {
   const scratchRoots = await findManagerScratchRoots(
     options.tmpRootDir ?? MANAGER_SCRATCH_TMP_ROOT,
     options.managerId,
   );
   const hintRoots = await worktreeRootsOfDirs(options.hintDirs ?? [], options.readdirFn);
+  // 退避の列挙だけが cwd の消えた回にもほかの起点を返す（#4955）。表示と自動の畳み（`computeUnpushedWork`）は今までどおり
   const found = await findGitDirsAcrossRoots(cwd, [...hintRoots, ...scratchRoots.paths], {
     maxCount: options.maxWorktrees,
     readdirFn: options.readdirFn,
+    keepOthersWhenCwdMissing: true,
   });
   if (found.rootUnreadable !== undefined) {
     return { worktrees: [], unreadable: found.rootUnreadable };
@@ -564,5 +595,6 @@ export async function listWorktreeRoots(
       relativePath: describeWorktreePath(cwd, repoRoot),
     })),
     ...(found.truncatedAtCount === undefined ? {} : { truncatedAtCount: found.truncatedAtCount }),
+    ...(found.cwdMissing === true ? { cwdMissing: true } : {}),
   };
 }

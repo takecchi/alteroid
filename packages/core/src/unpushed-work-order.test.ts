@@ -6,7 +6,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { RESCUE_MAX_WORKTREES } from './rescue-ref.js';
-import { DEFAULT_MAX_WORKTREES, listWorktreeRoots } from './unpushed-work.js';
+import {
+  computeUnpushedWork,
+  DEFAULT_MAX_WORKTREES,
+  listWorktreeRoots,
+  type ProcessSpawnFn,
+} from './unpushed-work.js';
 
 // 退避の作業ツリーの探索は、共有の cwd より先に、担い手が git を打った作業ツリーと担当の作業場を探す（#4953）
 
@@ -71,5 +76,52 @@ describe('作業ツリーの探す順（#4953）', () => {
   it('退避の上限は、manager_stop の表示の上限から切り離して大きく取る', () => {
     expect(DEFAULT_MAX_WORKTREES).toBe(20);
     expect(RESCUE_MAX_WORKTREES).toBe(40);
+  });
+});
+
+describe('cwd が消えているとき（#4955）', () => {
+  it('退避の列挙は、ほかの起点で見つかった分を cwd が無かった印つきで返す', async () => {
+    const scratch = fakeWorktree(join(tmpRoot, 'mgr-4953abcd', 'w1'));
+    const hinted = fakeWorktree(join(root, 'elsewhere', 'repo'));
+
+    const listed = await listWorktreeRoots(join(root, 'gone'), {
+      managerId,
+      tmpRootDir: tmpRoot,
+      hintDirs: [hinted],
+    });
+
+    expect(listed.worktrees.map((tree) => tree.repoRoot)).toEqual([hinted, scratch]);
+    expect(listed.cwdMissing).toBe(true);
+    expect(listed.unreadable).toBeUndefined();
+  });
+
+  it('枠が先に尽きて cwd を探さなかった回も、cwd が無ければ見つかった分を返す', async () => {
+    for (let i = 0; i < 3; i += 1) fakeWorktree(join(tmpRoot, 'mgr-4953abcd', `w${String(i)}`));
+
+    const listed = await listWorktreeRoots(join(root, 'gone'), {
+      managerId,
+      tmpRootDir: tmpRoot,
+      maxWorktrees: 2,
+    });
+
+    expect(listed.worktrees).toHaveLength(2);
+    expect(listed.cwdMissing).toBe(true);
+    expect(listed.truncatedAtCount).toBe(2);
+  });
+
+  it('表示と自動の畳み（computeUnpushedWork）は今までどおり、cwd が読めないと例外で運ぶ', async () => {
+    fakeWorktree(join(tmpRoot, 'mgr-4953abcd', 'w1'));
+    const spawn: ProcessSpawnFn = () => {
+      throw new Error('git は起こさない（列挙の段で止まるはず）');
+    };
+
+    await expect(
+      computeUnpushedWork(join(root, 'gone'), {
+        spawn,
+        env: {},
+        managerId,
+        tmpRootDir: tmpRoot,
+      }),
+    ).rejects.toThrow('未 push の観測の探索起点（job.cwd）を読めなかった');
   });
 });

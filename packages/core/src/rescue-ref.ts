@@ -414,6 +414,17 @@ export class RescueListNotice {
     if (key === this.#lastKey) return undefined;
     this.#lastKey = key;
     if (incomplete === undefined) return undefined;
+    // cwd が無かっただけ（打ち切りも読めない起点も無い）の回は、漏れではないので別の文にする（#4955）
+    if (
+      incomplete.cwdMissing === true &&
+      incomplete.truncatedAtCount === undefined &&
+      incomplete.unreadable === undefined
+    ) {
+      return (
+        '退避 ref（未 push の変更を remote へ預ける仕組み）: 担当の作業ディレクトリ（cwd）が無かった（消えている）ので、' +
+        '担当の作業場と git を打った作業ツリーだけを探して退避した。cwd に在った作業ツリーは、cwd ごと無いので退避する変更も残っていない。'
+      );
+    }
     const why =
       incomplete.unreadable !== undefined
         ? `起点が読めなかった（${incomplete.unreadable}）`
@@ -432,6 +443,8 @@ export interface RescueListIncomplete {
   readonly truncatedAtCount?: number;
   /** 起点が読めなかった（理由）。 */
   readonly unreadable?: string;
+  /** 担当の cwd が無かったので、作業場と git を打った作業ツリーだけを探した（#4955）。漏れではない。 */
+  readonly cwdMissing?: true;
 }
 
 function defaultHasCredential(env: Record<string, string | undefined>): boolean {
@@ -458,14 +471,17 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
   // 起点が無い（ENOENT）のは「漏れた」ではない: 作業場ごと無ければ、退避から漏れる変更も無いため。知らせるのは在るのに読めない回だけ
   const unreadable =
     listed.unreadable !== undefined && (await pathExists(cwd)) ? listed.unreadable : undefined;
+  // cwd が消えていても、ほかの起点で見つかった作業ツリーは退避する（#4955）。そのときは cwd が無かったことを知らせる: 退避した範囲が作業場と git を打った作業ツリーだけだと、読む側が分かるように
+  const cwdMissing = listed.cwdMissing === true && listed.worktrees.length > 0;
   options.onListIncomplete?.(
-    listed.truncatedAtCount === undefined && unreadable === undefined
+    listed.truncatedAtCount === undefined && unreadable === undefined && !cwdMissing
       ? undefined
       : {
           ...(listed.truncatedAtCount === undefined
             ? {}
             : { truncatedAtCount: listed.truncatedAtCount }),
           ...(unreadable === undefined ? {} : { unreadable }),
+          ...(cwdMissing ? { cwdMissing: true } : {}),
         },
   );
   const reports: RescueWorktree[] = [];
