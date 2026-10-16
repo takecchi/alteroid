@@ -155,72 +155,75 @@ async function poll(s: Setup, times: number): Promise<void> {
   }
 }
 
-// 日誌の decision のうち、本文が「届けずに断った」の行と、畳みの要約の行を数える。
-async function declineCounts(s: Setup): Promise<{ original: number; summaries: string[] }> {
+// 日誌の decision のうち、本文が「届けずに断った」の行を数える。
+async function declineLines(s: Setup): Promise<number> {
   const decisions = await s.stores.journal.list({ types: ['decision'] });
-  const texts = decisions.map((entry) => JSON.stringify(entry));
-  const summaries = texts.filter(
-    (text) => text.includes('届けずに断った') && text.includes('同じ合図が続いたので畳んだ'),
-  );
-  const original = texts.filter(
-    (text) => text.includes('届けずに断った') && !text.includes('同じ合図が続いたので畳んだ'),
-  );
-  return { original: original.length, summaries };
+  return decisions.filter((entry) => JSON.stringify(entry).includes('届けずに断った')).length;
 }
 
-describe('古い鍵の done へ本文を断った decision を日誌で畳む（#4982）', () => {
-  it('⭐ 預かりの届け直しが見回りごとに断られても、「届けずに断った」の decision は最初の1行だけで、残りは畳む', async () => {
+describe('見回りの届け直しが同じ判定で断るだけの回は、断りの decision を書き直さない（#4982）', () => {
+  it('⭐ 同じ理由の見回りの再判定を何回まわしても、「届けずに断った」の decision は最初の1行のまま増えない', async () => {
     const s = await setup();
 
     expect((await s.pool.send('mgr-fold', '続きをお願い')).outcome).toBe('held');
     await poll(s, 5);
 
-    const counts = await declineCounts(s);
-    expect(counts.original).toBe(1);
-    expect(counts.summaries).toHaveLength(0);
+    expect(await declineLines(s)).toBe(1);
+    // decision の行は畳まない（#1311）: 要約の行も作らない
+    const decisions = await s.stores.journal.list({ types: ['decision'] });
+    expect(decisions.some((entry) => JSON.stringify(entry).includes('畳んだ'))).toBe(false);
     await s.pool.stop();
   });
 
-  it('理由が変わると、その場で畳んだ件数の要約1行と新しい本文の1行が出る', async () => {
+  it('⭐ 理由が変わると1行増え、変わった理由のまま見回りを続けても、それ以上は増えない', async () => {
     const s = await setup();
 
     expect((await s.pool.send('mgr-fold', '続きをお願い')).outcome).toBe('held');
     await poll(s, 3);
-    expect((await declineCounts(s)).original).toBe(1);
+    expect(await declineLines(s)).toBe(1);
 
     // 本数が分からない状態から、背景処理が1本残っている状態へ変える（断る理由の文が変わる）
     s.fake.behavior.background = 1;
     await poll(s, 1);
+    expect(await declineLines(s)).toBe(2);
 
-    const counts = await declineCounts(s);
-    expect(counts.original).toBe(2);
-    expect(counts.summaries).toHaveLength(1);
-    expect(counts.summaries[0]).toContain('2回目以降を 3 回ぶん');
+    await poll(s, 3);
+    expect(await declineLines(s)).toBe(2);
     await s.pool.stop();
   });
 
-  it('届けられるようになって預かりが届いた時点で、畳み残しの要約が1行出る', async () => {
+  it('⭐ 見回りの途中で人・クローンの manager_send が来て断られると、理由が同じでも1行書く', async () => {
     const s = await setup();
 
     expect((await s.pool.send('mgr-fold', '続きをお願い')).outcome).toBe('held');
-    await poll(s, 4);
-    expect((await declineCounts(s)).summaries).toHaveLength(0);
+    await poll(s, 2);
+    expect(await declineLines(s)).toBe(1);
 
+    // 預かりの列の後ろに並び、その場で届け直しを試して同じ理由で断られる
+    expect((await s.pool.send('mgr-fold', 'もう一つお願い')).outcome).toBe('held');
+    expect(await declineLines(s)).toBe(2);
+
+    await poll(s, 2);
+    expect(await declineLines(s)).toBe(2);
+    await s.pool.stop();
+  });
+
+  it('届けられるようになれば、断りの行は増えずに「届けた」の行が出る', async () => {
+    const s = await setup();
+
+    expect((await s.pool.send('mgr-fold', '続きをお願い')).outcome).toBe('held');
+    await poll(s, 2);
     s.fake.behavior.background = 0;
     await poll(s, 1);
-
-    const counts = await declineCounts(s);
-    expect(counts.original).toBe(1);
-    expect(counts.summaries).toHaveLength(1);
-    expect(counts.summaries[0]).toContain('2回目以降を 4 回ぶん');
     const delivered = (await s.stores.journal.list({ types: ['decision'] })).filter((entry) =>
       JSON.stringify(entry).includes('預かっていた伝言 1 通を届けた'),
     );
     expect(delivered).toHaveLength(1);
+    expect(await declineLines(s)).toBe(1);
     await s.pool.stop();
   });
 
-  it('期限で預かりを捨てた時点でも、畳み残しの要約が1行出る', async () => {
+  it('期限で預かりを捨てるまで見回りを続けても、断りの行は最初の1行のまま', async () => {
     const s = await setup();
 
     expect((await s.pool.send('mgr-fold', '続きをお願い')).outcome).toBe('held');
@@ -229,10 +232,7 @@ describe('古い鍵の done へ本文を断った decision を日誌で畳む（
     s.clock.now += HELD_MESSAGE_TTL_MS;
     await s.pool.deliverHeldMessages?.();
 
-    const counts = await declineCounts(s);
-    expect(counts.original).toBe(1);
-    expect(counts.summaries).toHaveLength(1);
-    expect(counts.summaries[0]).toContain('2回目以降を 3 回ぶん');
+    expect(await declineLines(s)).toBe(1);
     const released = (await s.stores.journal.list({ types: ['decision'] })).filter((entry) =>
       JSON.stringify(entry).includes('届けずに捨てた'),
     );
