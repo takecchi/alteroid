@@ -178,6 +178,7 @@ import {
 } from './schema.js';
 import { describeUnreadableManagerRow, type Stores } from './store.js';
 import {
+  markRescueGoneWhileAlive,
   pruneRescueLedger,
   rescueRemovalDue,
   rescueStashRemovalDue,
@@ -5499,38 +5500,63 @@ class Pool implements ManagerPool {
     }
     // 観測の時刻は問い合わせる前に取る: 後で取ると遅れて返った観測がいつも新しくなり、上書きガードが働かない。
     const observedAt = new Date(this.#now()).toISOString();
-    const outcome = await this.#probeUnpushedWork(managerId, record, options);
-    await this.#recordUnpushedWorkObservation(record, outcome, options?.source, observedAt);
+    const { outcome, observerInstanceId } = await this.#probeUnpushedWork(
+      managerId,
+      record,
+      options,
+    );
+    await this.#recordUnpushedWorkObservation(
+      record,
+      outcome,
+      options?.source,
+      observedAt,
+      observerInstanceId,
+    );
     return outcome;
   }
 
-  /** `unpushedWork()` の実際の調べもの（台帳への書き込みは呼び出し元が持つ）。 */
+  /**
+   * `unpushedWork()` の実際の調べもの（台帳への書き込みは呼び出し元が持つ）。
+   * `observerInstanceId` は問い合わせる前に取る: 往復の最中に器が入れ替わった回を、入れ替え前の器の答えとして扱わないため。
+   */
   async #probeUnpushedWork(
     managerId: string,
     record: ManagerRecord,
     options?: { signal?: AbortSignal },
-  ): Promise<ManagerUnpushedWork> {
+  ): Promise<{ outcome: ManagerUnpushedWork; observerInstanceId?: string }> {
     const runner = await this.#runnerOf(record);
     if (runner === null) {
-      return { kind: 'unavailable', reason: '宛先の runner がいま開いていない。' };
+      return {
+        outcome: { kind: 'unavailable', reason: '宛先の runner がいま開いていない。' },
+      };
     }
     if (runner.unpushedWork === undefined) {
       return {
-        kind: 'unavailable',
-        reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+        outcome: {
+          kind: 'unavailable',
+          reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+        },
       };
     }
+    const observerInstanceId = this.#sighting(runner.runnerId).instanceId;
+    const withObserver = (outcome: ManagerUnpushedWork) => ({
+      outcome,
+      ...(observerInstanceId === undefined ? {} : { observerInstanceId }),
+    });
     try {
       const result = await runner.unpushedWork(managerId, options);
       if (result === undefined) {
-        return {
+        return withObserver({
           kind: 'unavailable',
           reason: 'runner が答えなかった（セッションが無い・期限切れ・古い版のいずれか）。',
-        };
+        });
       }
-      return { kind: 'ok', result };
+      return withObserver({ kind: 'ok', result });
     } catch (error) {
-      return { kind: 'unavailable', reason: `runner への問い合わせが失敗した: ${reasonOf(error)}` };
+      return withObserver({
+        kind: 'unavailable',
+        reason: `runner への問い合わせが失敗した: ${reasonOf(error)}`,
+      });
     }
   }
 
@@ -5544,6 +5570,7 @@ class Pool implements ManagerPool {
     outcome: ManagerUnpushedWork,
     source: UnpushedWorkObservationSource | undefined,
     observedAt?: string,
+    observerInstanceId?: string,
   ): Promise<void> {
     const at = observedAt ?? new Date(this.#now()).toISOString();
     const observation = unpushedWorkObservationOf(outcome, at, source);
@@ -5556,6 +5583,9 @@ class Pool implements ManagerPool {
       observation,
       record.job.lastUnpushedWorkObservation,
     );
+    // 台帳へ書いた観測だけを当てる: 古い観測で弾かれた回の「無い」を、新しい観測の後の事実として扱わないため。
+    const gone = markRescueGoneWhileAlive(record.job.lastRescue, observation, observerInstanceId);
+    if (gone !== null) record.job.lastRescue = gone;
     await this.#persist(record);
   }
 
@@ -10572,7 +10602,13 @@ class Pool implements ManagerPool {
       case 'shutdown_unpushed_work': {
         // best-effort: 届かなかった回はこの `case` が呼ばれないので「0件」を作らない（既存の観測は残り、`unavailable` と「届いていない」を混同しない）。`source: 'shutdown'` を明示する。
         // `record.job.status` には触れない: `stop()` が `closed` を出さない設計を変えず、`case 'closed'` の他の判断は持ち込まない。
-        await this.#recordUnpushedWorkObservation(record, event.unpushedWork, 'shutdown');
+        await this.#recordUnpushedWorkObservation(
+          record,
+          event.unpushedWork,
+          'shutdown',
+          undefined,
+          this.#sighting(fromRunnerId).instanceId,
+        );
         return;
       }
 
@@ -10589,7 +10625,13 @@ class Pool implements ManagerPool {
         // `pushed` は新しい回が持たなければ前のものを残す: 後の回が「送らなかった」でも remote の ref はまだ在る。`status` / `lease` には触れない。`secret-like` はファイル名だけ日誌へ残し、文字列そのものは持たない。
         const at = new Date(this.#now()).toISOString();
         const previousRescue = record.job.lastRescue;
-        record.job.lastRescue = mergeRescue(previousRescue, event.worktrees, at);
+        // 受け取った時点の器の `instanceId` を項目へ付ける: 後の観測が同じ器のものかを見分ける材料（`markRescueGoneWhileAlive`）。分からなければ付けない。
+        const instanceId = this.#sighting(fromRunnerId).instanceId;
+        const incoming =
+          instanceId === undefined
+            ? event.worktrees
+            : event.worktrees.map((tree) => ({ ...tree, instanceId }));
+        record.job.lastRescue = mergeRescue(previousRescue, incoming, at);
         for (const tree of event.worktrees) {
           if (tree.notPushed?.reason !== 'secret-like') continue;
           // 運び直しで同じ日誌を積まない。

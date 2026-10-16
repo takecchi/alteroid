@@ -1,4 +1,10 @@
-import type { Job, LastRescue, RescueRemovalReason, RescueWorktree } from './schema.js';
+import type {
+  Job,
+  LastRescue,
+  LastUnpushedWorkObservation,
+  RescueRemovalReason,
+  RescueWorktree,
+} from './schema.js';
 
 // 判定できないもの（時刻が読めない・状態が分からない）を「消してよい」へ倒さない。
 // 猶予の起点は `lastRescue.at` だけにしない: `lost` のまま長く放置されたものが abort で `stopped` になった瞬間に、猶予ゼロで唯一の写しが消える。
@@ -90,6 +96,47 @@ export function syncTerminalMark(
   const rest = { ...rescue };
   delete rest.terminal;
   return rest;
+}
+
+/**
+ * 退避した器が生きているうちに、全部を見た観測でその作業ツリーが無かった項目へ `goneAt` を付ける（#4985）。変わらなければ `null`。
+ * 「器の入れ替えで消えた」と区別するため、退避を預かった時の `instanceId` と観測を返した器の `instanceId` が同じときだけ付ける。
+ * どちらかが分からなければ付けない: 付けると rescue-only の案内から外れ、入れ替えで消えた退避を黙って落とす向きに倒れるため。
+ * 観測が途中で切れていた（件数の上限・早期停止・走査の起点が不明・読めないディレクトリ）なら付けない: 「無い」と「見えていない」を分けられないため。
+ */
+export function markRescueGoneWhileAlive(
+  rescue: LastRescue | undefined,
+  observation: LastUnpushedWorkObservation,
+  observerInstanceId: string | undefined,
+): LastRescue | null {
+  if (rescue === undefined || observerInstanceId === undefined) return null;
+  if (
+    observation.kind !== 'observed' ||
+    observation.truncatedAtCount !== undefined ||
+    observation.stoppedEarly !== undefined ||
+    observation.scratchRootsUnknown !== undefined ||
+    observation.unreadableDirCount !== undefined
+  ) {
+    return null;
+  }
+  const seenAt = Date.parse(observation.at);
+  if (Number.isNaN(seenAt)) return null;
+  let changed = false;
+  const worktrees = rescue.worktrees.map((tree) => {
+    const rescuedAt = Date.parse(tree.at);
+    if (
+      tree.goneAt !== undefined ||
+      tree.instanceId !== observerInstanceId ||
+      Number.isNaN(rescuedAt) ||
+      !(seenAt > rescuedAt) ||
+      observation.worktrees.some((worktree) => worktree.relativePath === tree.relativePath)
+    ) {
+      return tree;
+    }
+    changed = true;
+    return { ...tree, goneAt: observation.at };
+  });
+  return changed ? { ...rescue, worktrees } : null;
 }
 
 // ref は触らない: 消すのは `rescueRemovalDue` の判定を通った後始末だけ。

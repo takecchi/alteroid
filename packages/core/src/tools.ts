@@ -2059,6 +2059,10 @@ export function describeRescue(manager: ManagerSummary): string | null {
         `直近の回: ${RESCUE_NOT_PUSHED_TEXT[tree.notPushed.reason]}${rescueNotPushedDetail(tree.notPushed)}`,
       );
     }
+    // 消さず印を添える: 台帳の項目は退避の記録そのもので、生きている間に消えた作業ツリーの ref も取り戻す材料として残す
+    if (tree.goneAt !== undefined) {
+      parts.push(`生きている間に消えた（観測 ${tree.goneAt}）`);
+    }
     lines.push(`    ${tree.relativePath}: ${parts.join('。')}`);
     const unsaved: string[] = [];
     if (tree.untracked !== undefined) {
