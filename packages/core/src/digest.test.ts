@@ -301,10 +301,14 @@ describe('活動の要約', () => {
     const sectionEnd = rest.indexOf('\n\n');
     const section = sectionEnd === -1 ? rest : rest.slice(0, sectionEnd);
 
+    // 2026-10-16 #4938 の案1で期待値を変えた（done は本数と id だけの1行に畳む）。以前の期待値:
+    //   '- mgr-healthy-turn [done/セッション不明] 仕事',
+    //   '  直近の報告: 完了した',
+    // 失敗の一行が出ないことは、畳んだ形でも変わらず測れている（行の全体を toEqual で見ている）
     expect(section.split('\n')).toEqual([
       '## マネージャー（走行中・返事待ちから先に出す）',
-      '- mgr-healthy-turn [done/セッション不明] 仕事',
-      '  直近の報告: 完了した',
+      '- 手が止まっている担当（done・stopped）1 本: mgr-healthy-turn',
+      '依頼と直近の報告は、ここには載せていない。`manager_list` / `manager_report` で引ける。',
     ]);
   });
 
@@ -850,8 +854,13 @@ describe('上限で切ったことを黙らない', () => {
     expect(digest).toContain(`マネージャーへの委譲（この期間に動いたもの）: ${total} 本`);
     expect(digest).toContain('…ほか 3 件');
     expect(digest).toContain('manager_list');
+    // 2026-10-16 #4938 の案1で期待値を変えた（done は1本ずつではなく、id だけの1行に畳む。id の並びにも同じ上限）。以前の期待値:
+    //   const shownIds = …filter((i) => digest.includes(`mgr-${i} [`));
+    //   expect(shownIds).toHaveLength(MAX_ITEMS);
+    const foldedLine =
+      digest.split('\n').find((line) => line.startsWith('- 手が止まっている担当')) ?? '';
     const shownIds = Array.from({ length: total }, (_, i) => i).filter((i) =>
-      digest.includes(`mgr-${i} [`),
+      new RegExp(`(: |, )mgr-${i}(,| |$)`, 'u').test(foldedLine),
     );
     expect(shownIds).toHaveLength(MAX_ITEMS);
     expect(shownIds.length + 3).toBe(total);
@@ -879,7 +888,37 @@ describe('上限で切ったことを黙らない', () => {
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain('mgr-running');
+    // 2026-10-16 #4938 の案1で期待値を変えた（done は1本ずつの枠を食わず、id だけの1行に畳むので、押し出しそのものが起きない）。以前の期待値:
+    //   expect(digest).toContain('mgr-running');
+    //   expect(digest).toContain('…ほか 1 件');
+    expect(digest).toContain('- mgr-running [running/セッション不明] 本番の移行作業');
+    expect(digest).toContain(`- 手が止まっている担当（done・stopped）${MAX_ITEMS} 本: done-0,`);
+    expect(digest).not.toContain('…ほか');
+  });
+
+  it('切るときは走行中・返事待ちを先に残す（1本ずつ出る failed に押し出させない。#4938 で done が畳まれた後もこの順序の歯を残す）', async () => {
+    const stores = createMemoryStores();
+    const inWindow = new Date().toISOString();
+    for (let i = 0; i < MAX_ITEMS; i += 1) {
+      await stores.jobs.putJob({
+        id: `failed-${i}`,
+        createdAt: inWindow,
+        updatedAt: inWindow,
+        status: 'failed',
+        summary: `落ちた ${i}`,
+      });
+    }
+    await stores.jobs.putJob({
+      id: 'mgr-running',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      status: 'running',
+      summary: '本番の移行作業',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain('- mgr-running [running/セッション不明] 本番の移行作業');
     expect(digest).toContain('…ほか 1 件');
   });
 

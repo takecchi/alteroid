@@ -100,6 +100,53 @@ export function isManagerOutcomeUnobserved(status: JobStatus): boolean {
   return status === 'lost' || status === 'failed';
 }
 
+/**
+ * 要約のマネージャーの節で、1本ずつではなく本数と id だけの1行に畳む担当か（#4938 の案1。オーナーの判断待ちの仮置き）。
+ * 畳むのは手が止まっている `done`（畳まれたものを含む）と `stopped` だけ。
+ * 終端でも畳まないもの: 直近のターンが失敗で終わっている（`lastFailure`）・背景処理を待っている。
+ * どちらも「手が空いた」ではなく判断の材料なので、今どおり1本ずつ出す。
+ */
+export function isManagerFoldedInDigest(
+  job: Pick<Job, 'status' | 'lastFailure'>,
+  awaitingBackground: ManagerAwaitingBackground | undefined,
+): boolean {
+  if (job.status !== 'done' && job.status !== 'stopped') return false;
+  return job.lastFailure === undefined && awaitingBackground === undefined;
+}
+
+/** 要約の形（#4938 の案2。オーナーの判断待ちの仮置き）。`counts` は各節の件数の行だけ（定期の依頼の tick 用）。 */
+export type DigestShape = 'full' | 'counts';
+
+export interface ActivityDigestOptions {
+  /** 省略は `full`。 */
+  shape?: DigestShape;
+}
+
+const MANAGER_STATUS_ORDER: readonly JobStatus[] = [
+  'running',
+  'waiting_human',
+  'failed',
+  'lost',
+  'done',
+  'stopped',
+];
+
+const MANAGER_STATUS_LABEL: Record<JobStatus, string> = {
+  running: 'running',
+  waiting_human: '返事待ち',
+  failed: 'failed',
+  lost: 'lost',
+  done: 'done',
+  stopped: 'stopped',
+};
+
+/** 件数の形の要約（#4938 の案2）で、詳しくは道具で引けることを名乗る1行。 */
+export const DIGEST_COUNTS_TOOLS_NOTE =
+  '（#4938: 定期の依頼の回なので、直近の状況は件数だけにしている。中身は道具で引ける —— ' +
+  '担当は `manager_list` / `manager_report`、引き受けた仕事は `commitment_list`、' +
+  '継続中の依頼は `schedule_list`、回答待ちは `approvals_list`、' +
+  '決めたこと・エスカレーション・記憶の更新・外部イベントは `journal_read`、使った分は `usage_read`）';
+
 export type UnobservedReportState = 'none' | 'failure-wrapped' | 'delivered';
 
 export type JudgementRank = 0 | 1 | 2;
@@ -451,6 +498,7 @@ export async function buildActivityDigest(
   window: DigestWindow,
   liveness?: ManagerLiveness,
   awaitingBackground?: ManagerAwaitingBackgroundMap,
+  options: ActivityDigestOptions = {},
 ): Promise<string> {
   const until = window.until ?? new Date(Date.now() + 1);
   const sinceIso = window.since.toISOString();
@@ -574,6 +622,42 @@ export async function buildActivityDigest(
   const escalationCountLine =
     `- エスカレーション: ${escalationGroups.length} 件` +
     (escalationRetainCapped ? ESCALATION_RETAIN_CAPPED_NOTICE : '');
+
+  // #4938 の案2。オーナーの判断待ちの仮置き: 定期の依頼の tick には各節の件数の行だけを付ける（節の中身は道具で引く）
+  if (options.shape === 'counts') {
+    const managerCounts = MANAGER_STATUS_ORDER.map(
+      (status) =>
+        `${MANAGER_STATUS_LABEL[status]} ${managers.filter((job) => job.status === status).length}`,
+    ).join('・');
+    const backgroundCount = managers.filter((job) => awaitingBackground?.has(job.id)).length;
+    const unreadableParts = [
+      ['委譲', unreadableJobs.length],
+      ['承認待ち', approvalList.unreadable.length],
+      ['継続中の依頼', standingList.unreadable.length],
+      ['引き受けた仕事', unreadableCommitments.length],
+    ] as const;
+    const unreadableLine = unreadableParts
+      .filter(([, count]) => count > 0)
+      .map(([label, count]) => `${label} ${count}`)
+      .join(' / ');
+    return [
+      `期間: ${window.since.toISOString()} 〜 ${until.toISOString()}`,
+      ...(journalScanTruncated ? [JOURNAL_SCAN_TRUNCATED_NOTICE] : []),
+      '',
+      `- 担当 ${managerCounts}` +
+        (backgroundCount === 0 ? '' : `（うち背景処理待ち ${backgroundCount}）`) +
+        ` / 引き受けた仕事 ${commitments.length} / 継続中の依頼 ${standing.length}` +
+        ` / 回答待ち ${pending.length} / エスカレーション ${escalationGroups.length}` +
+        ` / 聞かずに決めたこと ${decisionsCount} / 記憶の更新 ${memoryUpdatesCount}` +
+        ` / 外部イベント ${externalsCount} / 片付けた仕事 ${settled.length}` +
+        ` / 人間からの発言 ${humanTurnsCount}`,
+      // 0件のときは行を作らない: 0 の行は「読めない行は無い」と読めてしまうため
+      ...(unreadableLine === ''
+        ? []
+        : [`- 読めない行（壊れた行。上の件数には入っていない）: ${unreadableLine}`]),
+      DIGEST_COUNTS_TOOLS_NOTE,
+    ].join('\n');
+  }
 
   const sections: string[] = [
     `期間: ${window.since.toISOString()} 〜 ${until.toISOString()}`,
@@ -701,7 +785,13 @@ export async function buildActivityDigest(
 
   if (managers.length > 0 || unreadableJobNote !== null) {
     sections.push('', '## マネージャー（走行中・返事待ちから先に出す）');
-    const shownManagers = managers.slice(0, MAX_ITEMS);
+    // #4938 の案1。オーナーの判断待ちの仮置き: 手が止まっている担当（done・stopped）は1本ずつ出さず、本数と id だけの1行に畳む
+    const foldedManagers = managers.filter((job) =>
+      isManagerFoldedInDigest(job, awaitingBackground?.get(job.id)),
+    );
+    const foldedSet = new Set(foldedManagers);
+    const listedManagers = managers.filter((job) => !foldedSet.has(job));
+    const shownManagers = listedManagers.slice(0, MAX_ITEMS);
     for (const job of shownManagers) {
       sections.push(
         `- ${job.id} [${describeManagerState(job.status, liveness?.get(job.id), awaitingBackground?.get(job.id))}] ${brief(job.request ?? job.summary)}` +
@@ -709,13 +799,23 @@ export async function buildActivityDigest(
           describeLastFailureLine(job.lastFailure),
       );
     }
-    if (managers.length > 0) {
+    if (listedManagers.length > 0) {
       sections.push(
         ...omitted(
-          managers.length,
+          listedManagers.length,
           shownManagers.length,
           '`manager_list` で状態を見る。あちらも入る分までで、残りの件数が本文に出る',
         ),
+      );
+    }
+    if (foldedManagers.length > 0) {
+      // id の並びにも上限を置く（一覧の節と同じ `MAX_ITEMS`）: 終わった担当が溜まるほど1行が伸びるため
+      const foldedIds = foldedManagers.slice(0, MAX_ITEMS).map((job) => job.id);
+      const foldedRest = foldedManagers.length - foldedIds.length;
+      sections.push(
+        `- 手が止まっている担当（done・stopped）${foldedManagers.length} 本: ${foldedIds.join(', ')}` +
+          (foldedRest === 0 ? '' : ` …ほか ${foldedRest} 件`),
+        '依頼と直近の報告は、ここには載せていない。`manager_list` / `manager_report` で引ける。',
       );
     }
     if (unreadableJobNote !== null) sections.push(`- ${unreadableJobNote}`);
