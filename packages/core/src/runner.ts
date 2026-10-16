@@ -489,6 +489,8 @@ export interface RunnerHostOptions {
   // runner が自分で記憶ストアを読みに行く形にしない: 読みに行けるということは鍵があるということのため
   profile?: ProfileVessel;
   rescueIntervalMs?: number;
+  // 退避で探す作業ツリーの本数の上限（#4953）。既定は `RESCUE_MAX_WORKTREES`。試験が小さくするための口
+  rescueMaxWorktrees?: number;
   scratchSweep?:
     | false
     | (Partial<
@@ -760,6 +762,7 @@ class Host implements RunnerHost {
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir | undefined;
   readonly #contextUsageTimeoutMs: number | undefined;
   readonly #sessionAllowRulesTimeoutMs: number | undefined;
+  readonly #rescueMaxWorktrees: number | undefined;
   readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
   readonly #readPids: (() => Promise<{ current: number; max: number } | undefined>) | undefined;
   // 生ログの退避の本文を、デーモンが取りに来るまで預かる（#4485。`archive-ref.ts`）。捨てた分は stderr に残す（デーモンへの経路が無い時にも起きるため）
@@ -818,6 +821,7 @@ class Host implements RunnerHost {
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn;
     this.#contextUsageTimeoutMs = options.contextUsageTimeoutMs;
     this.#sessionAllowRulesTimeoutMs = options.sessionAllowRulesTimeoutMs;
+    this.#rescueMaxWorktrees = options.rescueMaxWorktrees;
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
     this.#readPids =
       options.readPidsFn === undefined ? undefined : cachedPidsReader(options.readPidsFn);
@@ -1420,6 +1424,9 @@ class Host implements RunnerHost {
       ...(this.#sessionAllowRulesTimeoutMs === undefined
         ? {}
         : { sessionAllowRulesTimeoutMs: this.#sessionAllowRulesTimeoutMs }),
+      ...(this.#rescueMaxWorktrees === undefined
+        ? {}
+        : { rescueMaxWorktrees: this.#rescueMaxWorktrees }),
       ...(this.#readCgroupEventCountersFn === undefined
         ? {}
         : { readCgroupEventCountersFn: this.#readCgroupEventCountersFn }),
@@ -2195,6 +2202,7 @@ interface RunnerSessionOptions {
   // 一時規則（#4905）の置き直しを待つ期限。既定は `SESSION_ALLOW_RULES_TIMEOUT_MS`。試験が短くするための口
   sessionAllowRulesTimeoutMs?: number;
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
+  rescueMaxWorktrees?: number;
   /** 器の pids と、器の上の担当の本数。渡されたときだけ、上限に近ければ道具の結果へ知らせを添える。 */
   pidsPressureFn?: () => Promise<PidsPressureReading | undefined>;
   /**
@@ -2263,6 +2271,7 @@ class RunnerSession {
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir;
   readonly #contextUsageTimeoutMs: number;
   readonly #sessionAllowRulesTimeoutMs: number;
+  readonly #rescueMaxWorktrees: number | undefined;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
   readonly #pidsPressureFn: (() => Promise<PidsPressureReading | undefined>) | undefined;
   readonly #stashArchive: ((body: string) => { id: string; chars: number } | undefined) | undefined;
@@ -2433,6 +2442,7 @@ class RunnerSession {
     this.#contextUsageTimeoutMs = options.contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
     this.#sessionAllowRulesTimeoutMs =
       options.sessionAllowRulesTimeoutMs ?? SESSION_ALLOW_RULES_TIMEOUT_MS;
+    this.#rescueMaxWorktrees = options.rescueMaxWorktrees;
     this.#readCgroupEventCountersFn =
       options.readCgroupEventCountersFn ?? (() => readCgroupEventCounters());
     this.#pidsPressureFn = options.pidsPressureFn;
@@ -2595,6 +2605,9 @@ class RunnerSession {
           spawn: this.#gitSpawnFn(),
           env: childEnv,
           memory: this.#rescueMemory,
+          ...(this.#rescueMaxWorktrees === undefined
+            ? {}
+            : { maxWorktrees: this.#rescueMaxWorktrees }),
           // 未追跡のファイルの預かり（#4863 案A）。畳む直前の回（`waitForRunning`）は安定を待たない。
           // 所有者の検査は出し箱と同じ（子を降ろす構成なら子の uid、降ろさない構成なら runner 自身の uid）
           stash: {

@@ -86,6 +86,12 @@ async function indexIsReadable(file: string): Promise<boolean> {
 }
 
 export const RESCUE_UNTRACKED_PATHS_LIMIT = 20;
+/**
+ * 退避で探す作業ツリーの本数の上限（#4953）。`manager_stop` の表示の上限（`DEFAULT_MAX_WORKTREES`）から切り離した。
+ * 表示の上限を使い回すと、作業ツリーを20本以上抱える担当で、打ち切られた分の未 push の変更が器の入れ替えで消えるため。
+ * 1本ずつ順番に処理するので、上げても同時に動くプロセス（pids）は増えず、1周の時間が延びるだけである。
+ */
+export const RESCUE_MAX_WORKTREES = 40;
 const PATH_NAME_MAX_LENGTH = 200;
 const SECRET_FILES_LIMIT = 5;
 export const RESCUE_DIFF_MAX_BYTES = 2 * 1024 * 1024;
@@ -360,6 +366,8 @@ export interface RunRescueOptions {
   readonly spawn: ProcessSpawnFn;
   readonly env: Record<string, string | undefined>;
   readonly memory: RescueMemory;
+  /** 探す作業ツリーの本数の上限。既定は {@link RESCUE_MAX_WORKTREES}。試験が小さくするための口。 */
+  readonly maxWorktrees?: number;
   readonly signal?: AbortSignal;
   readonly now?: () => Date;
   readonly hasCredential?: (env: Record<string, string | undefined>) => boolean;
@@ -443,6 +451,7 @@ function clipPath(name: string): string {
 export async function runRescue(cwd: string, options: RunRescueOptions): Promise<RescueWorktree[]> {
   const listed = await listWorktreeRoots(cwd, {
     managerId: options.managerId,
+    maxWorktrees: options.maxWorktrees ?? RESCUE_MAX_WORKTREES,
     ...(options.tmpRootDir === undefined ? {} : { tmpRootDir: options.tmpRootDir }),
     ...(options.hintDirs === undefined ? {} : { hintDirs: options.hintDirs }),
   });
