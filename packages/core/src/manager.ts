@@ -76,7 +76,7 @@ import type { ManagerActivityInput } from './manager-activity.js';
 import type { AgentPluginLoad } from './agent-events.js';
 import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { codeSpan } from './markdown-span.js';
-import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
+import { JournalFoldWindow, foldedRunText, type JournalFoldRun } from './journal-fold.js';
 import type { CredentialService } from './credential-service.js';
 import type { DelegatedPermissionRuleService } from './delegated-permission-rules.js';
 import type { McpServerService } from './mcp-server-service.js';
@@ -1781,6 +1781,15 @@ export const PUSH_FAILURE_FOLD_IDLE_GAP_MS = PUSH_RETRY_MAX_MS * 2;
 export const PUSH_FAILURE_FOLD_MAX_SPAN_MS = 30 * 60_000;
 
 /**
+ * 見回り（apps/daemon の `MANAGER_POLL_INTERVAL_MS` = 60秒）の2倍: 届け直しは見回りごとに来るので、
+ * 既定の60秒では定常の空きが少し超えて毎回「途切れた」と判定される。core から daemon は import できないので値だけ合わせる。
+ */
+export const STALE_TOKEN_DECLINE_FOLD_IDLE_GAP_MS = 120_000;
+
+/** 既定（5分）だと見回り間隔の反復は5件ごとに要約が出るため、`PUSH_FAILURE_FOLD_MAX_SPAN_MS` と同じ30分にする。 */
+export const STALE_TOKEN_DECLINE_FOLD_MAX_SPAN_MS = 30 * 60_000;
+
+/**
  * `tools.ts` の `MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS` と同じ値だが共有しない: `tools.ts` が
  * `manager.ts` を import する向きを逆にしないため。実測に基づく値ではない。
  * 待たない（fire-and-forget）のに上限を置くのは、応答が永久に返らないと
@@ -3310,6 +3319,8 @@ class Pool implements ManagerPool {
   readonly #unsubscribeDirectPushes: (() => void)[] = [];
   readonly #pushRetryDelays = new Map<string, number>();
   readonly #pushFailureFolds = new Map<string, JournalFoldWindow>();
+  /** 古い鍵の done へ本文を断った decision の畳み込み（#4982）。managerId ごとに1つで、畳み残しを吐くたびに外す。 */
+  readonly #staleDeclineFolds = new Map<string, JournalFoldWindow>();
   /** 費用の門のバックオフにしか使わない: ここに載ったこと自体は「症状である」を意味しない。 */
   readonly #turnEndProbedAt = new Map<string, number>();
   readonly #unsubscribe: () => void;
@@ -4219,13 +4230,35 @@ class Pool implements ManagerPool {
         heldTokenState === undefined
           ? ''
           : `抱えている古い鍵（${heldTokenId ?? '?'}）は${heldTokenState}ので、そのまま旧セッションへ届けることもしない。`;
-      await this.#journal({
-        type: 'decision',
-        decision: `[${managerId}] done の委譲へ送られた本文を、届けずに断った（${staleness}）`,
-        grounds:
-          `managerId=${managerId} tokenId=${heldTokenId ?? '（分からない）'} ` +
-          `鍵の状態=${heldTokenState ?? '（聞いていない）'} 畳めない理由=${blockers.join('。')}（#4441）`,
-      });
+      // 同じ本文・同じ理由が続くあいだは2件目以降を畳む（#4982）: 預かりの届け直しが見回りごとに同じ行を積むため。断る判定・預かりは畳まない。
+      const declineBody = `done の委譲へ送られた本文を、届けずに断った（${staleness}）`;
+      const declineDecision = `[${managerId}] ${declineBody}`;
+      const declineGrounds =
+        `managerId=${managerId} tokenId=${heldTokenId ?? '（分からない）'} ` +
+        `鍵の状態=${heldTokenState ?? '（聞いていない）'} 畳めない理由=${blockers.join('。')}（#4441）`;
+      let declineFold = this.#staleDeclineFolds.get(managerId);
+      if (declineFold === undefined) {
+        declineFold = new JournalFoldWindow({
+          idleGapMs: STALE_TOKEN_DECLINE_FOLD_IDLE_GAP_MS,
+          maxSpanMs: STALE_TOKEN_DECLINE_FOLD_MAX_SPAN_MS,
+        });
+        this.#staleDeclineFolds.set(managerId, declineFold);
+      }
+      const declineFolded = declineFold.observe(
+        `${declineDecision}\u0000${declineGrounds}`,
+        declineBody,
+        this.#now(),
+      );
+      if (declineFolded.flush !== undefined) {
+        await this.#journalStaleDeclineSummary(managerId, declineFolded.flush);
+      }
+      if (declineFolded.write) {
+        await this.#journal({
+          type: 'decision',
+          decision: declineDecision,
+          grounds: declineGrounds,
+        });
+      }
       const reason =
         `${managerId} は${staleness}。古い鍵のセッションへ流すとまた枠に当たるので、` +
         '畳んで新しい鍵で起こし直したいが、畳めない理由が残っている: ' +
@@ -4449,6 +4482,7 @@ class Pool implements ManagerPool {
         foldedBackgroundTasks > 0
           ? `背景処理 ${String(foldedBackgroundTasks)} 本を畳んで起こし直し、結果は届かないので自分で確かめて続きを進めるよう促した。`
           : '';
+      await this.#flushStaleDeclineFold(managerId);
       const summary =
         `預かっていた伝言 ${String(batch.length)} 通を ${managerId} へ届けた` +
         `（最初の預かり ${batch[0]?.heldAt ?? '?'}）。${foldedClause}${result.detail}`;
@@ -4479,6 +4513,7 @@ class Pool implements ManagerPool {
   /** 列の頭から `count` 通を捨て、本文ごと日誌とクローンへ返す: 預かった以上、黙って消すと誰にも届かない伝言が生まれるため。 */
   async #releaseHeld(record: ManagerRecord, count: number, why: string): Promise<void> {
     const managerId = record.job.id;
+    await this.#flushStaleDeclineFold(managerId);
     const held = record.job.heldMessages ?? [];
     const released = held.slice(0, count);
     const remaining = held.slice(count);
@@ -4498,6 +4533,23 @@ class Pool implements ManagerPool {
       grounds: body,
     });
     this.#queueSynthesizedNotice(managerId, 'held_released', body);
+  }
+
+  async #journalStaleDeclineSummary(managerId: string, run: JournalFoldRun): Promise<void> {
+    await this.#journal({
+      type: 'decision',
+      decision: `[${managerId}] ${foldedRunText(run)}`,
+      grounds: `managerId=${managerId} 届けずに断った decision の畳み込み（#4982）`,
+    });
+  }
+
+  /** 畳み残しを要約1行にして窓を外す。届いた・捨てた・次の本文が出た時点で呼ぶ。 */
+  async #flushStaleDeclineFold(managerId: string): Promise<void> {
+    const fold = this.#staleDeclineFolds.get(managerId);
+    if (fold === undefined) return;
+    this.#staleDeclineFolds.delete(managerId);
+    const flushed = fold.flush();
+    if (flushed !== undefined) await this.#journalStaleDeclineSummary(managerId, flushed);
   }
 
   async deliverHeldMessages(): Promise<void> {
@@ -12056,6 +12108,8 @@ class Pool implements ManagerPool {
       });
     }
     this.#rateLimitJournalFolds.delete(managerId);
+    // 断った decision の畳み残しも同じ理由で吐く（#4982）。
+    void this.#flushStaleDeclineFold(managerId);
     this.#autoFoldSkipJournalWritten.delete(managerId);
     // busy の取り直しの数えはここで消す: `#reattach` のループは数えを消さずに `continue` で抜けるので、残すと後の busy で上限（`REATTACH_BUSY_MAX_RETRIES`）を前の分で縮める。
     this.#reattachBusyRetries.delete(managerId);
