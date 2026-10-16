@@ -1,4 +1,4 @@
-import { chmod, lstat, readdir, writeFile } from 'node:fs/promises';
+import { chmod, lstat, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
@@ -970,6 +970,44 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
     expect((await exchangeTexts(stores)).filter((text) => text.includes('another@')).length).toBe(
       1,
     );
+
+    await clone.stop();
+  });
+
+  it('展開先の中身が書き換えられていたら展開し直し、日誌に1行残す（Issue #4798）', async () => {
+    const root = await newRoot('alteroid-agent-session-options-plugins-rebuilt-');
+    const { fn, calls } = fakeCloneSdk();
+    const stores = createMemoryStores();
+    await stores.plugins.put(pluginInput('tampered'));
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      cwd: root,
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+    const main = calls[0] as { options: Options };
+    const dir = main.options.plugins?.[0]?.path ?? '';
+    expect(dir).not.toBe('');
+    expect((await exchangeTexts(stores)).filter((text) => text.includes('#4798'))).toEqual([]);
+
+    await makeWritable(dir);
+    await chmod(join(dir, 'skills/one/SKILL.md'), 0o600);
+    await writeFile(join(dir, 'skills/one/SKILL.md'), '# evil\n');
+    await firePreCompact(main, root);
+    await expect.poll(() => calls.length > 1, { timeout: 3000 }).toBe(true);
+
+    const lines = (await exchangeTexts(stores)).filter((text) => text.includes('#4798'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(
+      'plugin tampered の展開先の中身が、入れたときと違っていたので展開し直した',
+    );
+    expect(lines[0]).toContain('"skills/one/SKILL.md"');
+    expect(await readFile(join(dir, 'skills/one/SKILL.md'), 'utf8')).toContain('# body');
+    expect(lines[0]).not.toContain(root);
 
     await clone.stop();
   });

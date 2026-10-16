@@ -195,7 +195,8 @@ function textFieldReferencesAnyPrefix(objectText: string): boolean {
 }
 
 const EXPECTED_SITE_COUNT: Record<string, number> = {
-  'clone.ts': 80,
+  // 2026-10-17 #4798: plugin の展開し直しの日誌1行を足したので 80 -> 81（以前の期待値は 80）
+  'clone.ts': 81,
   'manager.ts': 66,
 };
 
