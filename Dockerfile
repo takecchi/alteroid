@@ -161,6 +161,14 @@ FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:154ba2f4d6fec323d2
 # - `fonts-noto-cjk`: 日本語・中国語・韓国語の字形。無いと日本語の画面が豆腐（□）で描かれ、
 #   見た目を確かめる E2E が通らない。いちばん太い（入れた後で約90MB）が、利用者の画面は日本語が多い。
 # どれも Debian trixie の main に在り、別の出所は足していない。下の `fc-match` が存在確認を兼ねる。
+#
+# **Playwright の Chromium が要る共有ライブラリも同じ RUN に足す（#4971 の続き）。** 器が入れ替わると、
+# 作業者が手元に用意していた共有ライブラリが消え、ヘッドレス Chromium が起動できずに落ちた
+# （AUDIT-5 で画像回帰の55本が全部。手元の libroot を `LD_LIBRARY_PATH` で渡すと通った）。
+# 包みの一覧は、Playwright 1.64.1 の `install-deps chromium` が Debian 13（x64）に入れるもの
+# （`playwright-core` の `nativeDeps` の `debian13-x64` の `chromium`）をそのまま写した。同じ一覧の
+# `tools`（xvfb・各国語のフォント）は、ヘッドレスでは要らず、フォントは上の行で足りるので入れていない。
+# Playwright を上げて一覧が変わったら、ここを写し直す。下の `ldconfig -p` の確かめが存在確認を兼ねる。
 RUN set -eux; \
   apt-get update; \
   apt-get install -y --no-install-recommends ca-certificates curl; \
@@ -174,7 +182,11 @@ RUN set -eux; \
   apt-get install -y --no-install-recommends \
     git ripgrep jq gh tini \
     locales postgresql-17 postgresql-17-pgvector \
-    fontconfig fonts-dejavu-core fonts-noto-cjk; \
+    fontconfig fonts-dejavu-core fonts-noto-cjk \
+    libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 \
+    libcups2t64 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 \
+    libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
+    libxkbcommon0 libxrandr2; \
   rm -rf /etc/postgresql /var/lib/postgresql/17/main; \
   rm -rf /var/lib/apt/lists/*; \
   gh --version; \
@@ -182,7 +194,13 @@ RUN set -eux; \
   /usr/lib/postgresql/17/bin/postgres --version; \
   test -f /etc/fonts/fonts.conf; \
   fc-match sans-serif; \
-  fc-match 'sans-serif:lang=ja' | grep -i 'noto'
+  fc-match 'sans-serif:lang=ja' | grep -i 'noto'; \
+  for so in libasound.so.2 libatk-bridge-2.0.so.0 libatk-1.0.so.0 libatspi.so.0 \
+    libcairo.so.2 libcups.so.2 libdbus-1.so.3 libdrm.so.2 libgbm.so.1 libglib-2.0.so.0 \
+    libnspr4.so libnss3.so libpango-1.0.so.0 libX11.so.6 libxcb.so.1 libXcomposite.so.1 \
+    libXdamage.so.1 libXext.so.6 libXfixes.so.3 libxkbcommon.so.0 libXrandr.so.2; do \
+    ldconfig -p | grep -q "$so" || { echo "Chromium の共有ライブラリが無い: $so"; exit 1; }; \
+  done
 
 # git の資格情報は `gh` から借りる（人間が `gh auth setup-git` でやることと同じ）。
 # **鍵をイメージに焼かない。** ここにあるのは経路だけである。
