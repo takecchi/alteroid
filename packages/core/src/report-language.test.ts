@@ -73,6 +73,14 @@ describe('findEnglishSentences: 引っかけない', () => {
     '> This is a quote from the docs.',
     // インラインのコードの中の英語
     '`revert the order and run the test`',
+    // エラーや道具の出力の引用（開発マネージャーの下調べで、地の文として引っかかっていた形。2026-10-16）
+    'TypeError: stores.jobs.getJob is not a function',
+    "AssertionError: expected 'failed' to be 'running'",
+    "Error: ENOTEMPTY: directory not empty, rmdir '/tmp/x'",
+    "fatal: no upstream configured for branch 'main'",
+    'Test timed out in 5000ms.',
+    'ELIFECYCLE Test failed. See above for more details.',
+    'npm ERR! code ELIFECYCLE and the build failed',
   ])('%j', (text) => {
     expect(findEnglishSentences(text)).toEqual([]);
   });

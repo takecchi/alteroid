@@ -156,8 +156,15 @@ const SENTENCE_BREAK = /[。.!?:\n]/;
 const EDGE_PUNCTUATION = /^[("'[{<*_]+|[)"'\]}>*_,;]+$/g;
 const ENGLISH_WORD = /^[A-Za-z]+(?:'[A-Za-z]+)?$/;
 
+// 行頭がエラーや道具の出力の札（`TypeError:`・`AssertionError:`・`Error:`・`fatal:`・`ELIFECYCLE`・`npm ERR!` など）の行は、出力の引用として外す。
+// 報告でエラーを引くのは正当で、ここで知らせると担当にとってうるさいだけになるため（開発マネージャーの下調べ、2026-10-16）
+const OUTPUT_LINE =
+  /^(?:[A-Za-z]*(?:Error|Exception)\b|error:|fatal:|warning:|warn:|hint:|ELIFECYCLE\b|FAIL\b|PASS\b|npm ERR!)/;
+// 数字を含む語（`5000ms`・`1/2`・`v18`）がある文は、道具の出力の断片として外す: 担当の地の文の英語を少し見逃す側に倒す
+const DIGIT_TOKEN = /\b\w*\d\w*\b/;
+
 function isCommandOrLogLine(line: string): boolean {
-  if (TIMESTAMP_LINE.test(line)) return true;
+  if (TIMESTAMP_LINE.test(line) || OUTPUT_LINE.test(line)) return true;
   const head = line.split(/\s+/, 1)[0] ?? '';
   return COMMAND_NAMES.has(head);
 }
@@ -171,6 +178,7 @@ function dropPaths(line: string): string {
 
 function isEnglishSentence(sentence: string): boolean {
   if (JAPANESE.test(sentence)) return false;
+  if (DIGIT_TOKEN.test(sentence)) return false;
   const words = sentence
     .split(/\s+/)
     .map((token) => token.replace(EDGE_PUNCTUATION, ''))
