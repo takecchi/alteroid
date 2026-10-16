@@ -91,7 +91,7 @@ export class DigestSessionDelta {
   } = { sections: null, fixed: new Set(), requests: new Map() };
   #staged: Staged | null = null;
 
-  /** 差分の記録を全て捨てる（次の回は全文）。会話が変わった・要約が走りうる・走った・起動直後。 */
+  /** 差分の記録を全て捨てる（次の回は全文）。会話が変わった（作り直しの窓を含む）・要約が走りうる・見込みの材料が無い・走った・失敗したターンの後・起動直後（#4941）。 */
   reset(): void {
     this.#committed = { sections: null, fixed: new Set(), requests: new Map() };
     this.#staged = null;

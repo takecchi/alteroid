@@ -411,6 +411,30 @@ export function compactionLikelyThisTurn(
 }
 
 /**
+ * 差分・畳みを使ってよいと言えない回か（#4941）。`compactionLikelyThisTurn` の見込みに加えて、見込みの材料が取れない回（使用量の観測が無い・閾値や量が不明・自動要約の有無が不明）も真にする（安全側）。
+ * 材料が無いまま偽にすると、要約が走っても差分の参照（「全文は会話の上にある」）だけが残る。自動要約が無効と分かっている回（`isAutoCompactEnabled === false`）は、要約が走らないので偽。
+ */
+export function compactionLikelyOrUnknownThisTurn(
+  usage: {
+    totalTokens?: number;
+    autoCompactThreshold?: number;
+    isAutoCompactEnabled?: boolean;
+  } | null,
+  lastGrowthTokens: number,
+): boolean {
+  if (usage === null) return true;
+  if (usage.isAutoCompactEnabled === false) return false;
+  if (
+    usage.isAutoCompactEnabled === undefined ||
+    usage.totalTokens === undefined ||
+    usage.autoCompactThreshold === undefined
+  ) {
+    return true;
+  }
+  return compactionLikelyThisTurn(usage, lastGrowthTokens);
+}
+
+/**
  * 起動時の拾い直しで、同じ墓標の蒸留が続けて失敗しても日誌へ書く回数の上限（#4752）。
  * 上限を超えた後は成功するまで、その墓標の「拾い直す」「失敗した」の行と蒸留の入力（`pre_compact_distill`）の行を書かない: 枠以外の理由で失敗し続けると、起動のたびに同じ行（入力は生ログの末尾まるごと）が積もるため。
  * 数えるのは日誌だけで、蒸留を試みること自体と印は止めない（勝手に区間を捨てないため）。
@@ -2026,12 +2050,8 @@ class Clone implements CloneHost {
 
       // 前の回の持ち越しを捨て、全文へ戻す条件に当たれば記録も消す（#4937）: 台帳の断りより先に行う（断りの固定の1文もこの記録を使うため）
       this.#digestDelta.discardStaged();
-      if (
-        this.#sdkSession.query === null ||
-        compactionLikelyThisTurn(this.#lastContextUsage, this.#lastContextGrowthTokens)
-      ) {
-        this.#digestDelta.reset();
-      }
+      // #4941: 入力を閉じて作り直しを待っている窓（`query` は非 null のまま）も新しい会話になる。使用量の観測が取れない回も全文（安全側）
+      this.#resetDigestDeltaIfNewConversation();
       this.#notices.set('redelivery', this.#redeliveryNoticeFor(batch));
       // `try` の外: 投げれば `for await` ごと抜けて受信箱のループが死ぬので、握り漏らしに備えて外側にも受けを置く（断り書きが付かないことよりループが止まることの方がずっと高い）
       this.#notices.set(
@@ -2081,6 +2101,8 @@ class Clone implements CloneHost {
         // 入力が入らなかった回の全文は控えへ移さず捨てる
         this.#situationExplainedStaged = null;
         this.#digestDelta.discardStaged();
+        // #4941: 失敗したターン（枠・API の失敗・中断・`turn.rejected`。すべて `#reportFailure` を通る）の入力が SDK の履歴に残るかは SDK の挙動に頼らない: 次の回は全文にする
+        if (this.#pumpTurnFailed) this.#digestDelta.reset();
         // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
         const defer = this.#usageBlocked !== null;
         const failedOutsideUsage = !defer && this.#pumpTurnFailed;
@@ -3090,6 +3112,24 @@ class Clone implements CloneHost {
   // `runners()` の内訳から委譲を数え直さない: `unregister()` で名簿から消えた器を持つ委譲がどの束にも載らず落ち、分母が黙って縮むため（本数はいつも `list()` から取る）
   // 蒸留には載せない: 記憶へ移すためだけの内部ターンで、`stop()` 経由はこの直後にプロセスが消えるため
   // 読めなくても行を消さない: 0 で埋めるのも消すのも「全部片付いている」と読める側へ倒れるため。受信箱の滞留は読めなかったとき `undefined` でなく `'unreadable'` を渡す: `undefined` は「省略」に取ってあり、「0件だった」と見分けが付かなくなるため
+  /**
+   * この入力を受け取る会話が、前の全文の載った会話と同じと言えない回か（#4941）。
+   * `query === null`（`#ensureQuery` が resume の有無を問わず開き直す）に加え、入力を閉じて作り直しを待っている窓（`inputEndedForRecycle`。`clearQuery()` まで `query` は非 null で、`#ensureQuery` は resume なしの新しい会話を開く）。
+   * 使用量の観測が取れない回も真（`compactionLikelyOrUnknownThisTurn`）。
+   */
+  #conversationMayDifferFromLastFull(): boolean {
+    return (
+      this.#sdkSession.query === null ||
+      this.#sdkSession.inputEndedForRecycle ||
+      compactionLikelyOrUnknownThisTurn(this.#lastContextUsage, this.#lastContextGrowthTokens)
+    );
+  }
+
+  /** 全文へ戻す条件に当たれば、tick の要約の差分の記録を消す。`#pump` の先頭と、要約を組む直前（組む前の `await` の間に窓が開きうる）から呼ぶ。 */
+  #resetDigestDeltaIfNewConversation(): void {
+    if (this.#conversationMayDifferFromLastFull()) this.#digestDelta.reset();
+  }
+
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
     // 前の回の持ち越しを捨てる: 入力が入らなかった回の全文を、次の回の入力へ引き継がないため
     this.#situationExplainedStaged = null;
@@ -3101,10 +3141,10 @@ class Clone implements CloneHost {
     // セッションが閉じていればこのターンで開き直す（resume が効かなければ別の会話になる）: 全文が会話に残っているとは言えないので全文へ戻す
     // 自動の要約が走りうるターンも全文にする（#4489。2026-10-11 のクローン teto の決定）: 要約で文脈が潰れた直後は同じ会話とみなせず、
     // 「同じ会話の中なら畳んでよい」というオーナーの承認の外になるため。要約は入力を受けた後に走るので、要約の合図を受けてからでは間に合わない
+    // #4941: 作り直しの窓（`inputEndedForRecycle`）と使用量の観測が取れない回も全文（`#conversationMayDifferFromLastFull`）
     if (
-      this.#sdkSession.query === null ||
       this.#situationTurnsSinceFull >= SITUATION_FULL_EVERY_TURNS ||
-      compactionLikelyThisTurn(this.#lastContextUsage, this.#lastContextGrowthTokens)
+      this.#conversationMayDifferFromLastFull()
     ) {
       this.#situationExplained.clear();
       this.#situationTurnsSinceFull = 0;
@@ -4893,6 +4933,8 @@ class Clone implements CloneHost {
         const timerDigest = await this.#recentDigest();
         // 同じ会話の2回目以降は前回からの差分にする（#4937）。日誌の1行は差分にする前の全文の長さのまま（`turnInputEntry` は今までどおり）
         const firedAt = new Date();
+        // 組む直前にも判定し直す（#4941）: `#pump` の判定の後の `await` の間に、作り直しの窓が開きうる
+        this.#resetDigestDeltaIfNewConversation();
         const sentDigest = this.#digestDelta.renderDigest(timerDigest, firedAt);
         const instructionRef = '（固定の指示は会話の上と同じ）';
         const timerInstruction =
@@ -5002,6 +5044,7 @@ class Clone implements CloneHost {
       case 'self_initiative': {
         const digest = await this.#recentDigest();
         // 同じ会話の2回目以降は前回からの差分にする（#4937）。日誌の1行は差分にする前の全文のまま
+        this.#resetDigestDeltaIfNewConversation(); // #4941: 組む直前の判定し直し
         const sentDigest = this.#digestDelta.renderDigest(digest, new Date());
         const fixedInstruction = this.#digestDelta.fixed(
           'self-initiative-instructions',
