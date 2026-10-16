@@ -33,6 +33,7 @@ import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-t
 import { resolveBashGuardMode, type BashGuardMode } from './bash-guard-mode.js';
 import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
+import { inspectWorkerBashShape } from './bash-worker-shape-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
 import {
@@ -4566,16 +4567,25 @@ class RunnerSession {
         // `run_in_background` を `=== true` で受ける: 欠けていても形が崩れていても前景になり、通す側へ倒れるため
         let verdict:
           ReturnType<typeof inspectBashCommand> | { blocked: true; form: string; reason: string };
+        let workerShapeDeny: boolean;
         try {
           // 本番デプロイの起動（release-prod）は `off` でも確認に残す
           const releaseProd = inspectReleaseProdDispatch(command);
+          // 作業者の形の歯は release-prod の後・wait-guard の前に置く: release-prod は `off` でも残す門で、形の歯は断る理由が単純（打ち直せば抜けられる）なため先に返す
+          const workerShape =
+            !releaseProd.matched && this.#bashGuard !== 'off' && record.agentId !== undefined
+              ? inspectWorkerBashShape(command)
+              : { blocked: false as const };
+          workerShapeDeny = workerShape.blocked;
           verdict = releaseProd.matched
             ? { blocked: true, form: releaseProd.form, reason: releaseProd.reason }
-            : this.#bashGuard === 'off'
-              ? { blocked: false }
-              : inspectBashCommand(command, {
-                  backgrounded: toolInput?.run_in_background === true,
-                });
+            : workerShape.blocked
+              ? workerShape
+              : this.#bashGuard === 'off'
+                ? { blocked: false }
+                : inspectBashCommand(command, {
+                    backgrounded: toolInput?.run_in_background === true,
+                  });
         } catch (error) {
           // 判定できなかった呼び出しを素通しにしない: 倒れる先は確認で、上がらずに止めて誰も開けられない形にしない（`deny` を選んだ人にだけ止める）
           const message = reasonOf(error);
@@ -4593,7 +4603,8 @@ class RunnerSession {
             record.agentId === undefined
               ? `manager:${this.#id}`
               : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
-          const asked = this.#bashGuard !== 'deny';
+          // 作業者の形の歯は `ask` でも deny: 確認に上げると、作業者が打つたびにクローンへ確認が積み上がるため（#4947）
+          const asked = this.#bashGuard !== 'deny' && !workerShapeDeny;
 
           this.#tryObservation('ガードの note の送り出し', () => {
             this.#emit({

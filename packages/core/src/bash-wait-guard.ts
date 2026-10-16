@@ -638,7 +638,7 @@ function computeOutsideQuoteMask(command: string): boolean[] {
 }
 
 // `flattenSeparatorsInsideQuotes` は `comment` を別に見る: `outside` のままだとコメントの中の区切りを空白にし、`gh pr merge 1 # ; -d` のように実行されない `-d` まで呼び出し区間へ届いて偽陽性が増えるため
-function computeQuoteScan(command: string): { outside: boolean[]; comment: boolean[] } {
+export function computeQuoteScan(command: string): { outside: boolean[]; comment: boolean[] } {
   const mask: boolean[] = new Array(command.length);
   const comment: boolean[] = new Array(command.length);
   let state: OutsideQuoteScanState | 'comment' = 'outside';
