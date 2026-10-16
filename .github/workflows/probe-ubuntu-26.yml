@@ -1,0 +1,25 @@
+name: 検証用・ubuntu-26.04 の道具を見る（#4987。マージしない）
+
+# PR で走らないワークフロー（mirror-base-images・release-prod・update-claude-sdk・main-ci-alarm・issue-done-trailer）が
+# runner の像に入っているものとして使う道具が、ubuntu-26.04 の像にも在るかを見るだけの使い捨て。#4988 と一緒に捨てる。
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: 道具の有無と版
+        run: |
+          set -u
+          cat /etc/os-release
+          for tool in skopeo docker gh jq psql python3 git node curl; do
+            if command -v "$tool"; then
+              "$tool" --version | head -n 1
+            else
+              echo "無い: $tool"
+            fi
+          done
