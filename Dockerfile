@@ -151,6 +151,16 @@ FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:154ba2f4d6fec323d2
 # `/var/lib/postgresql/17/main` を initdb 済みで自動生成するが、これは
 # 使われないまま太りだけを増やす（イメージには空のクラスタではなく道具だけを
 # 置きたい）。同じ RUN の中で消し、層に残さない。
+#
+# **`fontconfig` と最低限のフォントも同じ RUN に足す（#4971）。** 作業者が器で E2E
+# （Playwright のヘッドレス Chromium）を回すと、/etc/fonts（フォントの設定）が無い器では
+# 文字を描くところで `FATAL: SkFontMgr_FontConfigInterface … Not implemented` を出して
+# ブラウザごと落ちる。担当が毎回 `FONTCONFIG_FILE` を作らずに済むよう、ここで入れる。
+# - `fontconfig`: /etc/fonts は依存の `fontconfig-config` が置く。
+# - `fonts-dejavu-core`: 英字の最低限。
+# - `fonts-noto-cjk`: 日本語・中国語・韓国語の字形。無いと日本語の画面が豆腐（□）で描かれ、
+#   見た目を確かめる E2E が通らない。いちばん太い（入れた後で約90MB）が、利用者の画面は日本語が多い。
+# どれも Debian trixie の main に在り、別の出所は足していない。下の `fc-match` が存在確認を兼ねる。
 RUN set -eux; \
   apt-get update; \
   apt-get install -y --no-install-recommends ca-certificates curl; \
@@ -163,12 +173,16 @@ RUN set -eux; \
   apt-get update; \
   apt-get install -y --no-install-recommends \
     git ripgrep jq gh tini \
-    locales postgresql-17 postgresql-17-pgvector; \
+    locales postgresql-17 postgresql-17-pgvector \
+    fontconfig fonts-dejavu-core fonts-noto-cjk; \
   rm -rf /etc/postgresql /var/lib/postgresql/17/main; \
   rm -rf /var/lib/apt/lists/*; \
   gh --version; \
   tini --version; \
-  /usr/lib/postgresql/17/bin/postgres --version
+  /usr/lib/postgresql/17/bin/postgres --version; \
+  test -f /etc/fonts/fonts.conf; \
+  fc-match sans-serif; \
+  fc-match 'sans-serif:lang=ja' | grep -i 'noto'
 
 # git の資格情報は `gh` から借りる（人間が `gh auth setup-git` でやることと同じ）。
 # **鍵をイメージに焼かない。** ここにあるのは経路だけである。
