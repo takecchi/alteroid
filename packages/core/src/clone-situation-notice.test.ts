@@ -57,6 +57,16 @@ function fakeSdk(): Fake {
     return Object.assign(generator, {
       close: () => undefined,
       interrupt: async () => undefined,
+      // 使用量の観測が取れない回は全文に戻す（#4941）ので、畳みを見る試験では閾値から遠い観測を返す
+      getContextUsage: async () => ({
+        categories: [],
+        totalTokens: 10_000,
+        maxTokens: 1_000_000,
+        rawMaxTokens: 1_000_000,
+        percentage: 1,
+        autoCompactThreshold: 200_000,
+        isAutoCompactEnabled: true,
+      }),
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
   return { fn, inputs };
@@ -734,6 +744,16 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       return Object.assign(generate(), {
         close: () => undefined,
         interrupt: async () => undefined,
+        // 使用量の観測が取れない回は全文に戻す（#4941）ので、畳みを見るために閾値から遠い観測を返す
+        getContextUsage: async () => ({
+          categories: [],
+          totalTokens: 10_000,
+          maxTokens: 1_000_000,
+          rawMaxTokens: 1_000_000,
+          percentage: 1,
+          autoCompactThreshold: 200_000,
+          isAutoCompactEnabled: true,
+        }),
       }) as unknown as Query;
     }) as unknown as typeof sdkQuery;
     const clone = createClone({

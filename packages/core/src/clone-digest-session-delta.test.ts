@@ -24,6 +24,8 @@ interface Boot {
   clone: CloneHost;
   stores: Stores;
   inputs: string[];
+  /** 入力の受け付けが終わった（作り直しのために入力が閉じた）か。 */
+  inputEnded: () => boolean;
 }
 
 interface SdkScript {
@@ -33,6 +35,12 @@ interface SdkScript {
   contextTotals?: readonly number[];
   /** 起動そのものを失敗させる回数（先頭から）。 */
   failFirstStarts?: number;
+  /** 使用量の観測を取れなくする（`getContextUsage` を持たない）。既定は閾値から遠い観測を返す（#4941）。 */
+  noUsage?: boolean;
+  /** n 番目（1始まり）の入力を、成功ではなく失敗の result で終える。 */
+  failResultAt?: number;
+  /** 入力の受け付けが終わった後、この Promise が解けるまで出来事の列を閉じない（作り直しの窓を開けておく）。 */
+  holdAfterInputEnd?: Promise<void>;
 }
 
 async function seed(stores: Stores): Promise<void> {
@@ -90,6 +98,8 @@ function boot(script: SdkScript = {}): Boot {
   const inputs: string[] = [];
   let starts = 0;
   let totalsIndex = 0;
+  let inputEnded = false;
+  const contextTotals = script.contextTotals ?? [10_000];
   const fn = ((params: { prompt: unknown; options?: Options }) => {
     starts += 1;
     if (starts <= (script.failFirstStarts ?? 0)) throw new Error('起動に失敗した');
@@ -105,23 +115,34 @@ function boot(script: SdkScript = {}): Boot {
       }>) {
         inputs.push(String(message.message.content));
         for (const extra of script.after?.(inputs.length) ?? []) yield extra;
-        yield {
-          type: 'result',
-          subtype: 'success',
-          result: 'ok',
-          session_id: 'sess-fake',
-          uuid: `uuid-result-${String(inputs.length)}`,
-        } as unknown as SDKMessage;
+        yield (script.failResultAt === inputs.length
+          ? {
+              type: 'result',
+              subtype: 'error_during_execution',
+              is_error: true,
+              errors: ['途中で失敗した'],
+              session_id: 'sess-fake',
+              uuid: `uuid-result-${String(inputs.length)}`,
+            }
+          : {
+              type: 'result',
+              subtype: 'success',
+              result: 'ok',
+              session_id: 'sess-fake',
+              uuid: `uuid-result-${String(inputs.length)}`,
+            }) as unknown as SDKMessage;
       }
+      inputEnded = true;
+      await script.holdAfterInputEnd;
     }
     return Object.assign(generate(), {
       close: () => undefined,
       interrupt: async () => undefined,
-      ...(script.contextTotals === undefined
+      ...(script.noUsage === true
         ? {}
         : {
             getContextUsage: async () => {
-              const totals = script.contextTotals ?? [];
+              const totals = contextTotals;
               const totalTokens = totals[Math.min(totalsIndex, totals.length - 1)] ?? 0;
               totalsIndex += 1;
               return {
@@ -147,7 +168,7 @@ function boot(script: SdkScript = {}): Boot {
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),
     ]),
   });
-  return { clone, stores, inputs };
+  return { clone, stores, inputs, inputEnded: () => inputEnded };
 }
 
 let eventSeq = 0;
@@ -384,6 +405,80 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     await s.clone.stop();
   });
 
+  it('⭐ 入力を閉じて作り直しを待っている窓で tick が来ると、新しい会話への入力は全文になる（#4941）', async () => {
+    let release: () => void = () => undefined;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const s = boot({ holdAfterInputEnd: hold });
+    await seed(s.stores);
+
+    await timerTick(s);
+    const second = await timerTick(s);
+    expect(second).not.toContain(REQUEST_BODY.trim());
+
+    // 人間の操作で開き直す: 入力は閉じるが、古い会話の終わり（`query` を下ろす）は hold が解けるまで来ない
+    await s.clone.reopenSession?.({ distill: false, actor: 'human', reason: '試験' });
+    await waitFor(() => s.inputEnded(), '入力が閉じる');
+
+    const before = s.inputs.length;
+    eventSeq += 1;
+    s.clone.post({
+      type: 'timer',
+      id: `evt-timer-${eventSeq}`,
+      at: new Date().toISOString(),
+      kind: TIMER_KIND,
+      cause: 'manual',
+    });
+    // 要約が組まれる（日誌に入力の行が残る）まで、古い会話の終わりを待たせる: 先に解くと、組む前に query が下りて窓が閉じてしまう
+    await waitFor(async () => {
+      const rows = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+      return rows.filter((row) => row.text.startsWith('ターンの入力: timer')).length >= 3;
+    }, '窓の中で組まれた3本目の入力の行');
+    release();
+    await waitFor(() => s.inputs.length > before, '新しい会話の最初の入力');
+    const third = s.inputs[before] ?? '';
+
+    expect(third).toContain(REQUEST_BODY.trim());
+    expect(third).toContain(INSTRUCTION_HEAD);
+    expect(third).toContain('担当 7 の途中経過');
+    expect(third).not.toContain(UNCHANGED_SECTION);
+    await s.clone.stop();
+  });
+
+  it('⭐ 使用量の観測が取れない（null の）回の tick は全文（#4941）', async () => {
+    const s = boot({ noUsage: true });
+    await seed(s.stores);
+
+    await timerTick(s);
+    const second = await timerTick(s);
+
+    expect(second).toContain(REQUEST_BODY.trim());
+    expect(second).toContain('担当 7 の途中経過');
+    expect(second).not.toContain(UNCHANGED_SECTION);
+    await s.clone.stop();
+  });
+
+  it('⭐ 失敗したターンの次の tick は全文。成功したターンの次は差分のまま（#4941）', async () => {
+    const s = boot({ failResultAt: 2 });
+    await seed(s.stores);
+
+    await timerTick(s);
+    // 2回目は差分で入るが、そのターンは失敗で終わる
+    const second = await timerTick(s);
+    expect(second).not.toContain(REQUEST_BODY.trim());
+    const third = await timerTick(s);
+    // 3回目は全文
+    expect(third).toContain(REQUEST_BODY.trim());
+    expect(third).toContain('担当 7 の途中経過');
+    expect(third).not.toContain(UNCHANGED_SECTION);
+    // 3回目は成功したので、4回目は今までどおり差分
+    const fourth = await timerTick(s);
+    expect(fourth).not.toContain(REQUEST_BODY.trim());
+    expect(fourth).not.toContain('担当 7 の途中経過');
+    await s.clone.stop();
+  });
+
   it('日報は全文のまま（差分にしない）', async () => {
     const s = boot();
     await seed(s.stores);
@@ -438,6 +533,16 @@ function bootWithHooks(): Boot & { fire: () => Promise<void> } {
     return Object.assign(generate(), {
       close: () => undefined,
       interrupt: async () => undefined,
+      // 使用量の観測が取れない回は全文に戻す（#4941）ので、差分になる側を見るために閾値から遠い観測を返す
+      getContextUsage: async () => ({
+        categories: [],
+        totalTokens: 10_000,
+        maxTokens: 1_000_000,
+        rawMaxTokens: 1_000_000,
+        percentage: 1,
+        autoCompactThreshold: 200_000,
+        isAutoCompactEnabled: true,
+      }),
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
   const stores = createMemoryStores();
@@ -454,6 +559,7 @@ function bootWithHooks(): Boot & { fire: () => Promise<void> } {
     clone,
     stores,
     inputs,
+    inputEnded: () => false,
     fire: async () => {
       const hook = captured.options?.hooks?.PreCompact?.[0]?.hooks?.[0];
       if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
