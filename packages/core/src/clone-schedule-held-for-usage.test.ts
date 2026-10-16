@@ -64,7 +64,8 @@ describe('定期の依頼 — 枠保持で終わった回は消えずに 1 回�
   const timerInputs = (t: Awaited<ReturnType<typeof build>>) =>
     t.sdk.calls
       .flatMap((call) => call.inputs)
-      .filter((text) => text.includes('週に1回、状態を見て進める'));
+      // 依頼の本文では絞らない: 同じ会話の2回目以降は本文が「前回の発火と同じ」の参照になる（#4937）。見出しの行は毎回出る
+      .filter((text) => text.includes('定期ジョブ weekly-check の時刻になった'));
 
   it('(a) 枠保持の間に再起動しても、その回は元の回として配り直される', async () => {
     const t = await build();

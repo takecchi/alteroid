@@ -287,13 +287,12 @@ ${digest}`,
 export interface SelfInitiativePromptInput {
   reason: string;
   digest: string;
+  /** 固定の指示文の代わりに出す文（#4937）。同じ会話で全文を出していれば、clone が短い参照を渡す。省略は全文（`SELF_INITIATIVE_INSTRUCTIONS`）。 */
+  fixedInstruction?: string;
 }
 
-export function buildSelfInitiativePrompt({ reason, digest }: SelfInitiativePromptInput): string {
-  return excerpt(
-    `[system] 誰にも呼ばれていないが、あなた自身のために手が空いた時間である（${reason}）。
-
-記憶にある目的と、いまの状況を見て、次にやることがあるかを決めよ。
+/** 発意 tick の固定の指示文（`reason` を含まない）。同じ会話の2回目以降は短い参照に置き換えられる（#4937）。 */
+export const SELF_INITIATIVE_INSTRUCTIONS = `記憶にある目的と、いまの状況を見て、次にやることがあるかを決めよ。
 
 - あるなら自分で始める。実作業なら \`manager_start\` で委譲する。
 - 走っている仕事の様子が気になるなら \`manager_list\` で見て、必要なら \`manager_send\` で追う。
@@ -301,7 +300,17 @@ export function buildSelfInitiativePrompt({ reason, digest }: SelfInitiativeProm
 - **何もしないという結論でよい。** そのときは何もせず「今回は動かない」とだけ答えよ。無理に仕事を作らないこと。
 - ただし、動いている委譲が無い器があるなら、なぜ空いているのかを先に確かめること。
 
-聞かずに動いたなら \`journal_write\` に残せ。
+聞かずに動いたなら \`journal_write\` に残せ。`;
+
+export function buildSelfInitiativePrompt({
+  reason,
+  digest,
+  fixedInstruction = SELF_INITIATIVE_INSTRUCTIONS,
+}: SelfInitiativePromptInput): string {
+  return excerpt(
+    `[system] 誰にも呼ばれていないが、あなた自身のために手が空いた時間である（${reason}）。
+
+${fixedInstruction}
 
 以下は直近の状況である。
 
@@ -376,7 +385,27 @@ export interface TimerPromptInput {
    */
   unfinishedAt?: string;
   digest: string;
+  /** 固定の指示文の代わりに出す文（#4937）。省略は全文（`request` の有無に応じた `TIMER_*_INSTRUCTION(S)`）。 */
+  fixedInstruction?: string;
+  /** 依頼の本文の代わりに出す文（#4937）。同じ会話で同じ依頼を全文で出していれば、clone が短い参照を渡す。省略は全文。 */
+  requestRef?: string;
 }
+
+/** 本文の無い定期ジョブの固定の指示文。 */
+export const TIMER_PLAIN_INSTRUCTION =
+  'この定期ジョブが何のために仕込まれているかは記憶にある。照らして、必要なことをせよ。何もしなくてよいならそう答えよ。';
+
+/** 依頼の本文を持つ定期ジョブの固定の指示文（本文・前回の時刻・未了の断りの後ろ）。 */
+export const TIMER_REQUEST_INSTRUCTIONS = [
+  'この依頼と記憶にある目的・価値観に照らして、いま何をするかを決めよ。',
+  '',
+  '- 実作業なら `manager_start` で委譲する。',
+  '- **同じ仕事を二重に起こさないこと。** 前回からの続きがあるかを `manager_list` で見てから決める（走行中・返事待ちのものは下の要約にも出ている）。',
+  '- やることが無ければ何もしなくてよい。無理に仕事を作らないこと。',
+  '- この依頼がもう要らない・周期が合っていないと判断したなら、`schedule_remove` や `schedule_create` で自分で直してよい。',
+  '',
+  '聞かずに動いたなら `journal_write` に残せ。',
+].join('\n');
 
 export function buildTimerPrompt({
   kind,
@@ -385,18 +414,18 @@ export function buildTimerPrompt({
   lastRunAt,
   unfinishedAt,
   digest,
+  fixedInstruction,
+  requestRef,
 }: TimerPromptInput): string {
   const head = `[system] 定期ジョブ ${kind} の時刻になった${target === undefined ? '' : `（対象: ${target}）`}。`;
 
   const body =
     request === undefined
-      ? 'この定期ジョブが何のために仕込まれているかは記憶にある。照らして、必要なことをせよ。何もしなくてよいならそう答えよ。'
+      ? (fixedInstruction ?? TIMER_PLAIN_INSTRUCTION)
       : [
-          'これは継続中の依頼である。本文はこうなっている。',
+          `これは継続中の依頼である。${requestRef === undefined ? '本文はこうなっている。' : ''}`,
           '',
-          '---',
-          request.trim(),
-          '---',
+          ...(requestRef === undefined ? ['---', request.trim(), '---'] : [requestRef]),
           '',
           `前回この依頼で動いた時刻: ${lastRunAt ?? '（まだ一度も動いていない）'}`,
           ...(unfinishedAt === undefined
@@ -408,14 +437,7 @@ export function buildTimerPrompt({
                   '`manager_list` と日誌でその時刻の前後に何をしたかを確かめてから決めよ（取り消せない操作を二度やらないこと）。',
               ]),
           '',
-          'この依頼と記憶にある目的・価値観に照らして、いま何をするかを決めよ。',
-          '',
-          '- 実作業なら `manager_start` で委譲する。',
-          '- **同じ仕事を二重に起こさないこと。** 前回からの続きがあるかを `manager_list` で見てから決める（走行中・返事待ちのものは下の要約にも出ている）。',
-          '- やることが無ければ何もしなくてよい。無理に仕事を作らないこと。',
-          '- この依頼がもう要らない・周期が合っていないと判断したなら、`schedule_remove` や `schedule_create` で自分で直してよい。',
-          '',
-          '聞かずに動いたなら `journal_write` に残せ。',
+          fixedInstruction ?? TIMER_REQUEST_INSTRUCTIONS,
         ].join('\n');
 
   return excerpt(

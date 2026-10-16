@@ -20,6 +20,7 @@ import {
   summarizeUsage,
   usageDate,
 } from './usage.js';
+import { USAGE_ESTIMATE_NOTICE } from './usage-format.js';
 
 export interface DigestWindow {
   since: Date;
@@ -384,6 +385,65 @@ const JOURNAL_SCAN_TRUNCATED_NOTICE =
 const ESCALATION_RETAIN_CAPPED_NOTICE =
   '（⚠ 束ねた元の行を全部は読んでいない。保持の上限に当たったので、この件数は少なく出ている可能性がある）';
 
+// 以下は要約の中の固定の注記（#4937）。文言を変えずに定数へ出しただけで、`digest-session-delta.ts` が同じ会話で2回目以降を短い参照に置き換える
+const COMMITMENT_ORDER_NOTE =
+  '**順序はここには無い。** どれを先にやるかは記憶にある目的と価値観に照らして決めること。';
+const EXTERNAL_EVENT_NOTE =
+  'この件数は届いた合図の実数ではない —— 受信箱を通った合図は配達のたびに1行' +
+  '書かれ（配り直し・畳んでターンを起こさない回も含む）、デーモンが受信箱を' +
+  '通さず直接書く行（source `runner` / `boot-storage-footprint` / `boot-tool-search`）も混ざる。';
+const SOURCE_TALLY_HEADING =
+  '**発行元（source）別の件数（正確な総数。上限 `DIGEST_SOURCE_TALLY_LIMIT`=' +
+  `${DIGEST_SOURCE_TALLY_LIMIT} 発行元まで追跡する）**`;
+const BODY_SHAPE_NOTE_TAIL =
+  '「本文の種類」は `summary` の完全一致で数える（末尾に畳んだ件数などの可変値が' +
+  '付くことがあるため、完全一致は同じ出来事を過大に分けうる。正規化はしていない）。';
+
+/**
+ * 同じ会話の2回目以降の要約で、短い参照に置き換える固定の注記（#4937）。`text` は上の定数と1字も違わない。
+ * 要約の中で変わる値（件数・時刻・金額）を含むものは入れない。
+ */
+export const DIGEST_FIXED_PHRASES: readonly { id: string; text: string; ref: string }[] = [
+  {
+    id: 'commitment-order',
+    text: COMMITMENT_ORDER_NOTE,
+    ref: '（順序についての固定の注記は会話の上と同じ）',
+  },
+  {
+    id: 'external-event-note',
+    text: EXTERNAL_EVENT_NOTE,
+    ref: '（外部イベントの件数についての固定の注記は会話の上と同じ）',
+  },
+  {
+    id: 'source-tally-heading',
+    text: SOURCE_TALLY_HEADING,
+    ref: '**発行元（source）別の件数**（見出しの固定の注記は会話の上と同じ）',
+  },
+  {
+    id: 'body-shape-note',
+    text: BODY_SHAPE_NOTE_TAIL,
+    ref: '（本文の種類の数え方についての固定の注記は会話の上と同じ）',
+  },
+  {
+    id: 'usage-estimate-notice',
+    text: USAGE_ESTIMATE_NOTICE,
+    ref: '（推定値についての固定の注記は会話の上と同じ）',
+  },
+];
+
+/** 行が項目の節（見出しの先頭が一致するもの）。同じ会話の2回目以降は、前回と同じ行を省く（#4937）。見出しと固定の注記は行の差分の対象外。 */
+export const DIGEST_LIST_SECTION_NAMES: readonly string[] = [
+  '引き受けたまま終わっていない仕事',
+  '継続中の依頼',
+  'この期間に片付けた仕事',
+  'マネージャー',
+  '聞かずに決めたこと',
+  'エスカレーション',
+  '人間の回答待ち',
+  '記憶の更新',
+  '届いた外部イベント',
+];
+
 // `liveness` を必須にしない: 省略時は全件 `/セッション不明` になり、黙って「繋がっている」と名乗らないため
 // `awaitingBackground` を必須にしない: 省略時は何も書き足さず、取れていないことを「手が空いている」と偽らないため
 export async function buildActivityDigest(
@@ -558,7 +618,7 @@ export async function buildActivityDigest(
       '## 引き受けたまま終わっていない仕事' +
         '（古い側と新しい側の両端。入り切らない分は真ん中を省く。' +
         '片付いたら `commitment_close` で閉じる）',
-      '**順序はここには無い。** どれを先にやるかは記憶にある目的と価値観に照らして決めること。',
+      COMMITMENT_ORDER_NOTE,
     );
     if (unreadableCommitments.length > 0) {
       // 「片付いたのではない」を落とさない: 落とすと、読めない行が静かに未了から消えたのと区別が付かなくなるため
@@ -723,11 +783,7 @@ export async function buildActivityDigest(
 
   if (externalsCount > 0) {
     sections.push('', '## 届いた外部イベント');
-    sections.push(
-      'この件数は届いた合図の実数ではない —— 受信箱を通った合図は配達のたびに1行' +
-        '書かれ（配り直し・畳んでターンを起こさない回も含む）、デーモンが受信箱を' +
-        '通さず直接書く行（source `runner` / `boot-storage-footprint` / `boot-tool-search`）も混ざる。',
-    );
+    sections.push(EXTERNAL_EVENT_NOTE);
     const shownExternals = externals.slice(0, MAX_ITEMS);
     for (const entry of shownExternals) {
       sections.push(`- ${entry.source}: ${brief(entry.summary, 120)}`);
@@ -736,11 +792,7 @@ export async function buildActivityDigest(
       ...omitted(externalsCount, shownExternals.length, journalWhere('external_event')),
     );
 
-    sections.push(
-      '',
-      '**発行元（source）別の件数（正確な総数。上限 `DIGEST_SOURCE_TALLY_LIMIT`=' +
-        `${DIGEST_SOURCE_TALLY_LIMIT} 発行元まで追跡する）**`,
-    );
+    sections.push('', SOURCE_TALLY_HEADING);
     const bySourceRows = externalSourceTally.rows;
     const shownBySourceRows = bySourceRows.slice(0, MAX_ITEMS);
     for (const row of shownBySourceRows) {
@@ -763,8 +815,7 @@ export async function buildActivityDigest(
     sections.push(
       '',
       `**本文の形（保持した ${externals.length} 件の標本。上の件数とは母数が違う）** —— ` +
-        '「本文の種類」は `summary` の完全一致で数える（末尾に畳んだ件数などの可変値が' +
-        '付くことがあるため、完全一致は同じ出来事を過大に分けうる。正規化はしていない）。',
+        BODY_SHAPE_NOTE_TAIL,
     );
     const bodyShapeRows = summarizeExternalSources(externals);
     const shownBodyShapeRows = bodyShapeRows.slice(0, MAX_ITEMS);

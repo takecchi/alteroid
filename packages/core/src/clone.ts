@@ -71,6 +71,7 @@ import {
   type ManagerAwaitingBackgroundMap,
   type ManagerLiveness,
 } from './digest.js';
+import { clockLabel, DigestSessionDelta } from './digest-session-delta.js';
 import {
   describeAnthropicRoute,
   describeToolSearch,
@@ -206,6 +207,9 @@ import {
   externalViaLine,
   buildSelfInitiativePrompt,
   buildTimerPrompt,
+  SELF_INITIATIVE_INSTRUCTIONS,
+  TIMER_PLAIN_INSTRUCTION,
+  TIMER_REQUEST_INSTRUCTIONS,
 } from './prompt.js';
 import { DAILY_REPORT_KIND, dailyReportEvent, localDate, localDayRange } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
@@ -823,6 +827,12 @@ class Clone implements CloneHost {
   #situationExplainedStaged: SituationExplained | null = null;
   #situationExplainedSessionId: string | undefined;
   #situationTurnsSinceFull = 0;
+  /**
+   * tick の要約・固定の文言・依頼の本文のうち、この会話で全文を出したものの控え（#4937）。`#situationExplained` と同じ作り:
+   * 組んだ時点では確定せず（staged）、入力を SDK へ押し込めた後（`#runTurn`）に確定する。
+   * 全文へ戻す（`reset()`）のは、会話が変わった・要約が走りうる／走った・PreCompact・記録が無いとき。「20ターンごとに全文」は入れない（重複の除去であって判断ではない）。
+   */
+  readonly #digestDelta = new DigestSessionDelta();
   readonly #sessionStore: SessionStore | undefined;
   // `cwd` から計算し直さない: SDK の sanitize（200 文字超は切って djb2 のハッシュを足す）の再実装は静かにずれるため
   #projectKey: string | null = null;
@@ -2014,6 +2024,14 @@ class Clone implements CloneHost {
       const batch: InboxEvent[] = mergedHuman ?? mergedReports ?? mergedExternal ?? [event];
       this.#inFlight = { events: batch, started: false };
 
+      // 前の回の持ち越しを捨て、全文へ戻す条件に当たれば記録も消す（#4937）: 台帳の断りより先に行う（断りの固定の1文もこの記録を使うため）
+      this.#digestDelta.discardStaged();
+      if (
+        this.#sdkSession.query === null ||
+        compactionLikelyThisTurn(this.#lastContextUsage, this.#lastContextGrowthTokens)
+      ) {
+        this.#digestDelta.reset();
+      }
       this.#notices.set('redelivery', this.#redeliveryNoticeFor(batch));
       // `try` の外: 投げれば `for await` ごと抜けて受信箱のループが死ぬので、握り漏らしに備えて外側にも受けを置く（断り書きが付かないことよりループが止まることの方がずっと高い）
       this.#notices.set(
@@ -2062,6 +2080,7 @@ class Clone implements CloneHost {
         this.#notices.clearTurn();
         // 入力が入らなかった回の全文は控えへ移さず捨てる
         this.#situationExplainedStaged = null;
+        this.#digestDelta.discardStaged();
         // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
         const defer = this.#usageBlocked !== null;
         const failedOutsideUsage = !defer && this.#pumpTurnFailed;
@@ -3041,8 +3060,13 @@ class Clone implements CloneHost {
             `**読めない行が ${list.unreadable.length} 件ある（片付いたのではない）。**` +
               '`commitment_list` の一覧に件数として出る（本文はここでは取れない）。',
           ]),
-      '全文と齢は `commitment_list` で見られる。**どれを先にやるかは、記憶にある目的と価値観に照らして毎回決め直すこと**' +
-        '（台帳は順序を持たない。溜まっている順に片付ける決まりは無い）。',
+      // 固定の1文は同じ会話で1回だけ全文（#4937）
+      this.#digestDelta.fixed(
+        'commitment-notice-tail',
+        '全文と齢は `commitment_list` で見られる。**どれを先にやるかは、記憶にある目的と価値観に照らして毎回決め直すこと**' +
+          '（台帳は順序を持たない。溜まっている順に片付ける決まりは無い）。',
+        '（全文と齢は `commitment_list`。どれを先にやるかは毎回決め直す、という固定の断りは会話の上と同じ）',
+      ),
       '',
       '---',
       '',
@@ -4867,6 +4891,24 @@ class Clone implements CloneHost {
         const journalCause = event.cause ?? 'schedule';
         const plan = claimed.status === 'ok' ? claimed.plan : null;
         const timerDigest = await this.#recentDigest();
+        // 同じ会話の2回目以降は前回からの差分にする（#4937）。日誌の1行は差分にする前の全文の長さのまま（`turnInputEntry` は今までどおり）
+        const firedAt = new Date();
+        const sentDigest = this.#digestDelta.renderDigest(timerDigest, firedAt);
+        const instructionRef = '（固定の指示は会話の上と同じ）';
+        const timerInstruction =
+          plan === null
+            ? this.#digestDelta.fixed(
+                'timer-plain-instruction',
+                TIMER_PLAIN_INSTRUCTION,
+                instructionRef,
+              )
+            : this.#digestDelta.fixed(
+                'timer-request-instructions',
+                TIMER_REQUEST_INSTRUCTIONS,
+                instructionRef,
+              );
+        const seenRequestAt =
+          plan === null ? null : this.#digestDelta.requestSeenAt(event.kind, plan.request, firedAt);
         // digest の全文は書かない: 材料は日誌の中に在り、形と長さがあれば組み直せるため
         await this.#journal(
           turnInputEntry({
@@ -4878,17 +4920,24 @@ class Clone implements CloneHost {
             digest: timerDigest,
           }),
         );
-        const outcome = await this.#runInternal(
-          buildTimerPrompt({
-            kind: event.kind,
-            ...(event.target === undefined ? {} : { target: event.target }),
-            ...(plan === null ? {} : { request: plan.request }),
-            ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
-            // 走りかけていた可能性があることを隠さない: 二重に手を出さないため
-            ...(plan?.pendingRun === undefined ? {} : { unfinishedAt: plan.pendingRun.at }),
-            digest: timerDigest,
-          }),
-        );
+        const timerPrompt = buildTimerPrompt({
+          kind: event.kind,
+          ...(event.target === undefined ? {} : { target: event.target }),
+          ...(plan === null ? {} : { request: plan.request }),
+          ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
+          // 走りかけていた可能性があることを隠さない: 二重に手を出さないため
+          ...(plan?.pendingRun === undefined ? {} : { unfinishedAt: plan.pendingRun.at }),
+          digest: sentDigest.text,
+          fixedInstruction: timerInstruction,
+          ...(seenRequestAt === null
+            ? {}
+            : {
+                requestRef: `依頼の本文は前回（${clockLabel(seenRequestAt)}）の発火と同じ。会話の上にある`,
+              }),
+        });
+        // 長さの上限で要約の末尾が切られたら、控えを進めない: 会話に載っていない節を「上にある」と言わないため
+        if (!timerPrompt.endsWith(sentDigest.text)) this.#digestDelta.discardStaged();
+        const outcome = await this.#runInternal(timerPrompt);
 
         // 完了の記録は claim とは別に、ここで行う: ここまで来ないうちに器が落ちたら印が残って配り直される
         // 失敗で終わったターンでは `completeRun` を呼ばない: 印が消えて基準が進み、週次なら次の週まで誰も気づかないため（印を残せば次の起動の `#firstDue` と次の周期の刻みで元の発火として配り直される）
@@ -4952,6 +5001,13 @@ class Clone implements CloneHost {
 
       case 'self_initiative': {
         const digest = await this.#recentDigest();
+        // 同じ会話の2回目以降は前回からの差分にする（#4937）。日誌の1行は差分にする前の全文のまま
+        const sentDigest = this.#digestDelta.renderDigest(digest, new Date());
+        const fixedInstruction = this.#digestDelta.fixed(
+          'self-initiative-instructions',
+          SELF_INITIATIVE_INSTRUCTIONS,
+          '（固定の指示は会話の上と同じ）',
+        );
         await this.#journal(
           turnInputEntry({
             type: 'self_initiative',
@@ -4960,7 +5016,13 @@ class Clone implements CloneHost {
             digest,
           }),
         );
-        await this.#runInternal(buildSelfInitiativePrompt({ reason: event.reason, digest }));
+        const initiativePrompt = buildSelfInitiativePrompt({
+          reason: event.reason,
+          digest: sentDigest.text,
+          fixedInstruction,
+        });
+        if (!initiativePrompt.endsWith(sentDigest.text)) this.#digestDelta.discardStaged();
+        await this.#runInternal(initiativePrompt);
         return;
       }
 
@@ -5026,6 +5088,7 @@ class Clone implements CloneHost {
         images,
       );
       this.#commitSituationExplained();
+      this.#digestDelta.commit();
       // `#ensureQuery` より後で送る: セッションの起動そのものはまだ考え始めておらず、先に送ると手が動いていないのに考えていると言うことになるため
       this.#emit(conversationId, { type: 'thinking' });
     } catch (error) {
@@ -6372,6 +6435,8 @@ class Clone implements CloneHost {
 
     // 退避や蒸留の try より前に印を立てる: あちらが落ちても索引の載せ直しは行われなければならないため。
     this.#distillMemory.armMemoryIndexRefresh();
+    // 要約の直前: この後の会話は潰れるので、tick の要約の差分の記録を捨てる（#4937）
+    this.#digestDelta.reset();
 
     if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) {
       return;
@@ -6882,6 +6947,7 @@ class Clone implements CloneHost {
           this.#situationExplainedSessionId !== event.sessionId
         ) {
           this.#situationExplained.clear();
+          this.#digestDelta.reset();
         }
         this.#situationExplainedSessionId = event.sessionId;
         // 投げない: 控えの失敗でセッションを殺さない。跡は残す: 諦め方が「素材が無かった」正常な経路と区別できなくなるため。
@@ -7061,6 +7127,7 @@ class Clone implements CloneHost {
       case 'compaction': {
         // 要約で前の全文は会話から消えうるので、次のターンの「いまの全体」は説明文を全文で出す
         this.#situationExplained.clear();
+        this.#digestDelta.reset();
         // ターンの外で届いた分は捨てる: 対応する `turn_usage` の行が無く、持ち帰る先が無いため。
         this.#sdkSession.turn?.compactions.push({
           trigger: event.trigger,
