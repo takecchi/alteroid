@@ -9170,7 +9170,11 @@ class Pool implements ManagerPool {
         // 並行処理の間に `closed(failed / lost)` が書いた終端を `event.status` で書き戻さない: 台帳は非終端のままクローンに `closed_failed` が出る／`lost` の引き取りの契機が消える。
         // `isTerminalJobStatus` は使わない: `done` を含むが、`done` は idle を兼ね再び走り出せる。managerId ごとの直列化は配達順に効くので採らない。
         const settledByClosed = record.job.status === 'failed' || record.job.status === 'lost';
-        if (!settledByClosed) record.job.status = event.status;
+        // 畳む直前の書き出し（`unreported`）は、台帳を `failed` / `lost` にしない（#4963）: 状態は直後に必ず届く `closed` が決める。
+        // ここで終端にすると、続く `closed(failed)` が「確定済みへの重複」として捨てられ、`closed` にしか無い処理（失敗の行と cgroup の注記・`lastSystemError` / `lastCgroupEvents`・器の失敗の計上・pids の飽和の印・`closed_failed` の知らせ）が全部飛ぶ。
+        const deferTerminalToClosed =
+          event.unreported !== undefined && (event.status === 'failed' || event.status === 'lost');
+        if (!settledByClosed && !deferTerminalToClosed) record.job.status = event.status;
         // `waiting` が空なら `waiting_human` を名乗らせない: `stop()` は `#settleAll` の前に控えた状態で報告を畳むので「解かれる前」の値が届き、器の入れ替え（`abort()` の上書きが無い経路）では食い違いが台帳に残る。
         // `event.status` そのものは書き換えない: 報告が名乗った値は `lastReportStatus` に残し、「何を名乗ったか」と「いまの状態をどう数えるか」を1つに畳まない。
         if (!settledByClosed && event.status === 'waiting_human' && record.waiting.length === 0) {
