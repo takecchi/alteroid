@@ -19,6 +19,8 @@ interface ManualRunner {
   alive: RunnerManagerState[];
   closed(managerId: string, reason: string, cgroupEvents?: CgroupEventsDelta): void;
   reported(managerId: string, text: string): void;
+  /** runner の `#flushUnreported` と同じ形: 畳む直前に、担当が書いていた本文を `status: failed` と `unreported` 付きで先に送る。 */
+  unreportedBeforeClosed(managerId: string, reason: string): void;
 }
 
 function manualRunner(runnerId = 'runner-primary'): ManualRunner {
@@ -95,6 +97,15 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     },
     reported(managerId, text) {
       send({ type: 'report', managerId, text, status: 'done' });
+    },
+    unreportedBeforeClosed(managerId, reason) {
+      send({
+        type: 'report',
+        managerId,
+        text: `（このターンは結果を受け取らないまま畳まれた: ${reason}）\n途中まで書いていた本文`,
+        status: 'failed',
+        unreported: { reason },
+      });
     },
   };
 }
@@ -220,6 +231,48 @@ describe('event.cgroupEvents が、受信箱の本文と台帳の両方まで実
     const listed = await listedOf(pool, 'mgr-old-runner');
     expect(listed.lastCgroupEvents).toBeUndefined();
     expect(Object.hasOwn(listed as object, 'lastCgroupEvents')).toBe(false);
+  });
+
+  it('⭐ 畳む直前の報告（unreported・failed）が先に届いても、続く closed(failed) の注記と記録は落ちない（#4963）', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup('mgr-unreported');
+    const before = reportTextsOf(inbox).length;
+    const reason =
+      'マネージャーのセッションが落ちた: Error: Claude Code process terminated by signal SIGABRT';
+
+    fake.unreportedBeforeClosed('mgr-unreported', reason);
+    // 畳む直前の書き出しは、台帳を終端にしない（状態は closed が決める）
+    await vi.waitFor(async () => {
+      const job = (await stores.jobs.listJobs()).find((entry) => entry.id === 'mgr-unreported');
+      expect(job?.lastUnreported?.reason).toBe(reason);
+      expect(job?.status).toBe('running');
+    });
+
+    fake.closed('mgr-unreported', reason, { pidsMaxDelta: 4, oomKillDelta: 0 });
+    await vi.waitFor(async () => {
+      expect((await listedOf(pool, 'mgr-unreported')).lastCgroupEvents).toEqual({
+        pidsMaxDelta: 4,
+        oomKillDelta: 0,
+        at: expect.any(String) as unknown as string,
+      });
+    });
+
+    const listed = await listedOf(pool, 'mgr-unreported');
+    expect(listed.status).toBe('failed');
+    const exchangeTexts = (await stores.journal.list())
+      .filter((entry) => entry.type === 'exchange')
+      .map((entry) => (entry as { text: string }).text);
+    const failureLines = exchangeTexts.filter((text) => text.startsWith('[障害] [mgr-unreported]'));
+    expect(failureLines).toHaveLength(1);
+    expect(failureLines[0]).toContain('器で fork が pids 上限により 4 回断られた');
+    // 「確定済みへの重複」として捨てていない
+    expect(exchangeTexts.filter((text) => text.includes('failed 確定済みのため'))).toHaveLength(0);
+    // 受信箱への知らせは合流の窓を通るので、`stop()` で流し切ってから見る（上の試験と同じ）
+    await pool.stop();
+    expect(
+      reportTextsOf(inbox)
+        .slice(before)
+        .some((text) => text.includes('4 回断られた')),
+    ).toBe(true);
   });
 
   it('古びる: 立った直後は在り、起こし直されて report が届くと欄ごと消える', async () => {

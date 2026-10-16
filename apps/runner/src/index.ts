@@ -563,6 +563,7 @@ export async function main(): Promise<void> {
 
   // 既定 off の設定を黙って通さない: 開けた器か閉じた器か、起動行から読めるように。降りたプロファイルで変われば `log` が出し直す
   process.stdout.write(`alteroid-runner: ${host.bashShapeGuardLine()}\n`);
+  process.stdout.write(`alteroid-runner: ${host.reportLanguageLine()}\n`);
 
   reportRetiredLayerProviderEnv(process.env);
 
