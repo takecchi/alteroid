@@ -308,6 +308,7 @@ import {
   memoryListResponseSchema,
   memoryConflictResponseSchema,
   memoryReadResponseSchema,
+  memoryWriteResponseSchema,
   meResponseSchema,
   okResponseSchema,
   openApiDocumentation,
@@ -1107,7 +1108,7 @@ function describeTokenPolicyChanges(changes: readonly TokenPolicyChange[]): stri
 // 落ちたら跡だけ残して握る: ここへ来る時点で状態変更は既に効いているので、`.onError` へ抜けて 500 にすると操作そのものが失敗したと誤読される（欠けるのは監査の行だけ）。pg のトランザクションで束ねる案は採らない: fs ストアでは状態変更と日誌の追記を1操作にできない。
 // `detail` に本文を入れない（`noteDroppedRecord` の「本文は出さない」と同じ理由）: id や件数だけ。
 // 能力を広げる口は、状態変更の後にこの関数を当てない: 日誌が落ちると記録の無い変更が生まれるので、日誌を先に書き、書けなければ状態を変えずに 500 にする。状態変更が投げたら打ち消しの行をこの関数で足す（記録が多すぎる側に倒す）。状態変更の後でないと分からない情報は2行目として best-effort で足す。
-// 戻り値は書けた行（書けなければ `undefined`）: `PUT /memory/:slug` だけが `markHumanTouched` へ渡すために見る（日誌に行が無いのに派生値だけ立てると対応が崩れる）。
+// 戻り値は書けた行（書けなければ `undefined`）: `PUT /memory/:slug` だけが見る（印の時刻に使い、落ちたときは応答で知らせる。日誌に行が無くても印は立てる: #4774）。
 async function appendJournalOrDrop(
   stores: Pick<Stores, 'journal'>,
   entry: JournalEntryInput,
@@ -3854,8 +3855,11 @@ export function createApp(deps: AppDeps) {
         description: '人間が API から記憶を書き換える口。書き換えは日誌に残る（`cause: human`）。',
         responses: {
           200: {
-            description: '書き換え後の記憶文書。',
-            content: { 'application/json': { schema: resolver(memoryReadResponseSchema) } },
+            description:
+              '書き換え後の記憶文書。日誌への追記だけが落ちたときは、`journalNotice` にそのことを書く' +
+              '（本文は保存済みで、「人が触った」の保護の印は立てた。ただし日誌に行が無いので、' +
+              '日誌から作り直すと印は消える）。',
+            content: { 'application/json': { schema: resolver(memoryWriteResponseSchema) } },
           },
           400: {
             description: '記憶のスラッグが不正、または本文が JSON として不正。',
@@ -3914,11 +3918,21 @@ export function createApp(deps: AppDeps) {
           '記憶書き換えの日誌',
           `slug=${slug}`,
         );
-        // 日誌への追記が落ちたとき（`entry === undefined`）は呼ばない: 裏付けとなる `cause:'human'` の行が無いのに派生値だけ立てると対応が崩れる。
-        if (entry !== undefined) {
-          await stores.persona.markHumanTouched(slug, entry.at);
-        }
-        return c.json({ document: doc, version: memoryVersion(doc.content) });
+        // 日誌への追記が落ちたとき（`entry === undefined`）も印は立てる（#4774、2026-10-16 の判断）: 人の本文を蒸留から守るのを先にする。
+        // 立てないと、書き込みで本文のハッシュが変わった記憶が「クローンだけが書いたもの」に見え、次の蒸留が人の本文を書き換え・消せる。
+        // 以前は「裏付けとなる `cause:'human'` の行が無いのに派生値だけ立てると対応が崩れる」として呼ばなかった。
+        // 残る穴: この印には日誌の裏付けが無いので、日誌から作り直す（`deriveHumanTouchedAtFromJournal`）と消える。だから応答の `journalNotice` で人に知らせる。
+        await stores.persona.markHumanTouched(slug, entry?.at ?? new Date().toISOString());
+        return c.json({
+          document: doc,
+          version: memoryVersion(doc.content),
+          ...(entry === undefined
+            ? {
+                journalNotice:
+                  '本文は保存したが、日誌に残せなかった（保護の印は立てたが、日誌から作り直すと消える）',
+              }
+            : {}),
+        });
       },
     )
 
