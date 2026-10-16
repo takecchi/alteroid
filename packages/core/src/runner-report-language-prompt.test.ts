@@ -105,7 +105,8 @@ const BASE_APPEND = buildManagerSystemPrompt({ managerId: 'mgr-1', workerName: W
 describe('言語の指示を担当・作業者のプロンプトと SDK の settings に入れる（ALTEROID_REPORT_LANGUAGE。#4977）', () => {
   it('段落は指定の文言そのものである', () => {
     expect(REPORT_LANGUAGE_PROMPT_PARAGRAPH).toBe(
-      '途中の短い文（道具を使う前の一言）も、報告も、すべて日本語で書く。識別子・ファイル名・コマンド・引用するエラーの文は英語のままでよい。',
+      '# 書く言語\n\n' +
+        '途中の短い文（道具を使う前の一言）も、報告も、すべて日本語で書く。識別子・ファイル名・コマンド・引用するエラーの文は英語のままでよい。',
     );
   });
 
