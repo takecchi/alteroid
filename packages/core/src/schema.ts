@@ -1083,6 +1083,10 @@ export const rescueWorktreeSchema = z.object({
   // 在るときは `branch` がこの時刻の回から引き継いだもの: この回の `at` の枝名として読ませないため（`observedWorktreeBranchSchema` と同じ形）
   branchCarriedFromAt: isoDateTime.optional(),
   at: isoDateTime,
+  // デーモンが受け取った時点の runner の `instanceId`（runner は送らない）: どの器の `/workspace` で取った退避かを残し、入れ替えの前後を見分けるため
+  instanceId: z.string().optional(),
+  // 同じ器が全部を見た観測で、この作業ツリーが無いと確かめた時刻（#4985）: 入れ替えで消えたのではなく生きている間に消えたと読ませ、rescue-only の案内から外すため。新しい退避が届けば消える
+  goneAt: isoDateTime.optional(),
   pushed: z
     .object({
       ref: z.string(),
