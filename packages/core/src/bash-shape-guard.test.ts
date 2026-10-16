@@ -121,6 +121,8 @@ describe('inspectBashShape: 足した形（#4949）', () => {
     // 6. rebase
     ['git rebase origin/main', 'git-rebase', 'git merge origin/main'],
     ['git rebase --continue', 'git-rebase', 'git merge origin/main'],
+    ['git rebase --skip', 'git-rebase', 'git rebase --abort'],
+    ['git rebase --abort origin/main', 'git-rebase', 'git merge origin/main'],
     ['git pull --rebase', 'git-rebase', 'git merge origin/main'],
     ['git pull --rebase=true origin main', 'git-rebase', 'git merge origin/main'],
     ['git pull -r', 'git-rebase', 'git merge origin/main'],
@@ -224,6 +226,10 @@ describe('inspectBashShape: 断らないもの（誤検知の防ぎ）', () => {
     'git --no-pager log -n 5',
     'git pull --rebase=false',
     'git pull --no-rebase origin main',
+    // 途中で止まった rebase から抜けるだけの形は通す（#4957）
+    'git rebase --abort',
+    'git rebase --quit',
+    'git -C /tmp/x rebase --abort',
     'git pull -Xtheirs origin main',
     'git pull origin main',
     'git push --follow-tags origin main',
