@@ -3,7 +3,20 @@
 // 控えの作りは「いまの全体」の説明文（`situation.ts` の `SituationExplained`、clone.ts の `#commitSituationExplained`）に揃える:
 // 組んだ時点では控えへ書かず（staged）、入力を SDK へ押し込めた後に確定する。押し込めなかった回に控えを進めると、会話に一度も載っていない全文を畳んでしまうため。
 // 「20ターンごとに全文」は入れない（状況の節との違い）: 判断ではなく重複の除去なので、会話が続く限り前の全文は上にある。全文へ戻すのは会話が変わった・要約が走りうる・記録が無いときだけ（`reset()`）。
+// 段落の重複の除去（#4943）も同じ控えに載せる: 全文へ戻す条件（reset）・入力を押し込めた後の確定（commit）・押し込めなかった回の持ち越しの破棄（discardStaged）を1つの口にし、呼び忘れが出ないようにするため。
+import { createHash } from 'node:crypto';
 import { DIGEST_FIXED_PHRASES, DIGEST_LIST_SECTION_NAMES } from './digest.js';
+
+/** 段落として畳む最小の長さ（文字数）。これより短い段落は、参照にしても得が小さく読みにくくなるだけなので常に全文。 */
+export const SYSTEM_PARAGRAPH_MIN_CHARS = 200;
+/** 前に全文で出した段落の代わりに出す短い参照。 */
+export const SYSTEM_PARAGRAPH_REF = '（前に出した段落と同じ。会話の上にある）';
+// 控えるのは指紋だけで、件数に上限を置く: 変わる値を含む段落が会話の間に溜まり続けないため。溢れて忘れた段落は次に全文へ戻るだけ（安全側）
+const PARAGRAPH_MEMORY_LIMIT = 256;
+
+function paragraphKey(paragraph: string): string {
+  return createHash('sha256').update(paragraph).digest('hex').slice(0, 32);
+}
 
 interface SectionRecord {
   /** その要約を組んだ時刻（`HH:MMZ` の表示用）。 */
@@ -16,6 +29,7 @@ interface Staged {
   sections: SectionRecord | null;
   readonly fixed: Set<string>;
   readonly requests: Map<string, { text: string; at: Date }>;
+  readonly paragraphs: Set<string>;
 }
 
 export interface RenderedDigest {
@@ -88,12 +102,18 @@ export class DigestSessionDelta {
     sections: SectionRecord | null;
     fixed: Set<string>;
     requests: Map<string, { text: string; at: Date }>;
-  } = { sections: null, fixed: new Set(), requests: new Map() };
+    paragraphs: Set<string>;
+  } = { sections: null, fixed: new Set(), requests: new Map(), paragraphs: new Set() };
   #staged: Staged | null = null;
 
-  /** 差分の記録を全て捨てる（次の回は全文）。会話が変わった（作り直しの窓を含む）・要約が走りうる・見込みの材料が無い・走った・失敗したターンの後・起動直後（#4941）。 */
+  /** 差分の記録を全て捨てる（次の回は全文）。会話が変わった（作り直しの窓を含む）・要約が走りうる・見込みの材料が無い・走った・失敗したターンの後・起動直後（#4941）。段落の控え（#4943）も同じ口で消える。 */
   reset(): void {
-    this.#committed = { sections: null, fixed: new Set(), requests: new Map() };
+    this.#committed = {
+      sections: null,
+      fixed: new Set(),
+      requests: new Map(),
+      paragraphs: new Set(),
+    };
     this.#staged = null;
   }
 
@@ -110,11 +130,44 @@ export class DigestSessionDelta {
     if (staged.sections !== null) this.#committed.sections = staged.sections;
     for (const id of staged.fixed) this.#committed.fixed.add(id);
     for (const [kind, request] of staged.requests) this.#committed.requests.set(kind, request);
+    for (const key of staged.paragraphs) this.#committed.paragraphs.add(key);
+    // 古い方から忘れる（Set は挿入順）
+    for (const key of this.#committed.paragraphs) {
+      if (this.#committed.paragraphs.size <= PARAGRAPH_MEMORY_LIMIT) break;
+      this.#committed.paragraphs.delete(key);
+    }
   }
 
   #stage(): Staged {
-    this.#staged ??= { sections: null, fixed: new Set(), requests: new Map() };
+    this.#staged ??= {
+      sections: null,
+      fixed: new Set(),
+      requests: new Map(),
+      paragraphs: new Set(),
+    };
     return this.#staged;
+  }
+
+  /**
+   * システムが作った本文を空行（`\n\n`）で段落に分け、同じ会話で既に全文で出した段落と1字も違わない長い段落を短い参照にする（#4943）。
+   * 比べるのは完全一致だけ: 回数・理由・時刻などの変わる値を含む段落は、自然に全文のままになる。
+   * 呼び出し側は、システムが作った部品にだけ掛けること（人間の発言・外部イベントの中身・担当の報告の本文・人間の回答は、言い換えると意味が変わるので掛けない）。
+   * `eligible` で、システムが作った段落とそうでない段落が混ざる本文（担当の確認の文）の対象を絞る。
+   * 結合は `join('\n\n')` で元に戻せる形にしてあり、畳まない段落は1字も変えない。
+   */
+  foldParagraphs(text: string, eligible: (paragraph: string) => boolean = () => true): string {
+    if (text.length < SYSTEM_PARAGRAPH_MIN_CHARS) return text;
+    return text
+      .split('\n\n')
+      .map((paragraph) => {
+        if (paragraph.length < SYSTEM_PARAGRAPH_MIN_CHARS || !eligible(paragraph)) return paragraph;
+        const key = paragraphKey(paragraph);
+        if (this.#committed.paragraphs.has(key)) return SYSTEM_PARAGRAPH_REF;
+        // 同じ入力の中の2つ目は全文のまま: 参照が指す先（会話の上）に、この入力はまだ載っていないため
+        this.#stage().paragraphs.add(key);
+        return paragraph;
+      })
+      .join('\n\n');
   }
 
   /**

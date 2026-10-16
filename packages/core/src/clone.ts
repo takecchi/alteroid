@@ -271,6 +271,7 @@ import {
 } from './clone-refusal.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
+import { DENIAL_ASK_AFTER_ANSWER_PARAGRAPH } from './classifier-denial-streak.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
 import { attachmentCopiesDir } from './attachment-fetch.js';
 import type { AttachmentLimits } from './attachment.js';
@@ -440,6 +441,11 @@ export function compactionLikelyOrUnknownThisTurn(
  * 数えるのは日誌だけで、蒸留を試みること自体と印は止めない（勝手に区間を捨てないため）。
  */
 const GRAVE_DISTILL_FAILURE_JOURNAL_LIMIT = 3;
+
+/** 担当からの確認の文のうち、alteroid が組んだ固定の段落（#4943。`#foldConfirmationText`）。足すときは、変わる値を1つも含まない1段落だけを足す。 */
+const SYSTEM_CONFIRMATION_PARAGRAPHS: ReadonlySet<string> = new Set([
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
+]);
 
 // 単位は文字（UTF-16 の code unit）でバイトではない: 切っているのが `String.prototype.slice` のため
 const DISTILL_TRANSCRIPT_TAIL_CHARS = 60_000;
@@ -3130,6 +3136,37 @@ class Clone implements CloneHost {
     if (this.#conversationMayDifferFromLastFull()) this.#digestDelta.reset();
   }
 
+  /**
+   * 断り書きのうち、システムが全文を組んだ4本（配り直し・後続の報告・前提の変化・束の打ち切り）の長い段落を、同じ会話の2回目から短い参照にする（#4943）。
+   * 掛けないもの: `commitment`（固定の1文は #4937 の仕組みで既に参照にしている）・`situation`（#4489 の説明の控えが持つ）。どちらも二重に掛けない。
+   * 台帳・日誌・SDK からの文言（人間・担当・外部の言葉）はこの4本には入らない。
+   */
+  #foldNoticeParagraphs(
+    notices: ReturnType<CloneNotices['forTurn']>,
+  ): ReturnType<CloneNotices['forTurn']> {
+    // ここでは `#resetDigestDeltaIfNewConversation` を呼ばない: 同じ控えの `#handle` で畳んだ確認の文（staged）を消してしまうため。全文へ戻す判定は `#pump` の先頭（断り書きを組む前）と `#foldConfirmationText` が持つ
+    const fold = (text: string): string => this.#digestDelta.foldParagraphs(text);
+    return {
+      ...notices,
+      redelivery: fold(notices.redelivery),
+      superseded: fold(notices.superseded),
+      validity: fold(notices.validity),
+      mergedBatchTruncation: fold(notices.mergedBatchTruncation),
+    };
+  }
+
+  /**
+   * 担当からの確認（`permission`）の文のうち、alteroid が組んだ固定の長い段落だけを、同じ会話の2回目から短い参照にする（#4943）。
+   * 線の引き方: 固定の段落そのもの（`SYSTEM_CONFIRMATION_PARAGRAPHS` の1字も違わない一致）だけが対象。
+   * 担当の言葉（道具の入力・`理由:`・入力の先頭・`question` の質問）・回数や理由を含む段落（連続の注記）は、長くても一致しても対象外。
+   */
+  #foldConfirmationText(text: string): string {
+    this.#resetDigestDeltaIfNewConversation();
+    return this.#digestDelta.foldParagraphs(text, (paragraph) =>
+      SYSTEM_CONFIRMATION_PARAGRAPHS.has(paragraph),
+    );
+  }
+
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
     // 前の回の持ち越しを捨てる: 入力が入らなかった回の全文を、次の回の入力へ引き継がないため
     this.#situationExplainedStaged = null;
@@ -4881,8 +4918,13 @@ class Clone implements CloneHost {
           );
           return;
         }
+        // #4943: 実行許可の確認の、alteroid が組んだ固定の長い段落は、同じ会話の2回目から短い参照にする（日誌の本文は上で全文を書き済み）。質問（担当の言葉）と報告の本文は畳まない
+        const sent =
+          event.kind === 'permission'
+            ? { ...event, text: this.#foldConfirmationText(event.text) }
+            : event;
         await this.#runInternal(
-          managerPrompt(event, origin, liveness, settlement, new Date()),
+          managerPrompt(sent, origin, liveness, settlement, new Date()),
           'normal',
           [],
           originConversationIdOf(origin),
@@ -5115,6 +5157,8 @@ class Clone implements CloneHost {
     });
 
     try {
+      // #4943: 断り書き（システムが作った部品）の長い段落は、同じ会話の2回目から短い参照にする（全文へ戻す条件は `#pump` の先頭の `#resetDigestDeltaIfNewConversation` 以下、tick の要約と同じ）
+      const notices = this.#foldNoticeParagraphs(this.#notices.forTurn());
       await this.#ensureQuery();
       // 並び順は `composeTurnInputText` が持ち、ここは作り方だけを持つ: 規則が違うものを同じ場所に置かないため
       // `distillGap` と `contextWindowFold` の呼び出しはここから動かさない: 呼ぶこと自体が遷移（pending を倒す）で、並びが元の `+` の連結と同じ順序を保つため。`...this.#notices.forTurn()` はこの2行より後ろに置く: 前に置くと「まだ消費していない時点の6本」を読むように見え、読む者を誤らせるため
@@ -5124,7 +5168,7 @@ class Clone implements CloneHost {
             distillGap: await this.#distillGapNotice(kind),
             contextWindowFold: this.#contextWindowFoldNotice(kind),
             droppedSignals: this.#droppedSignalsNotice(kind),
-            ...this.#notices.forTurn(),
+            ...notices,
             body: text,
           }),
         ),

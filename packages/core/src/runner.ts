@@ -192,6 +192,7 @@ import {
 } from './runner-pids-pressure.js';
 import {
   ClassifierDenialStreaks,
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
   describeDenialStreakForClone,
 } from './classifier-denial-streak.js';
 import { RunnerResumeState } from './runner-resume-state.js';
@@ -4403,17 +4404,10 @@ class RunnerSession {
       this.#denialStreaks.view(streakActor),
     );
     const summary =
-      (streakNote === null ? '' : `${streakNote}\n`) +
-      `分類器が ${actor} の ${toolName} 呼び出しを拒否した。この1回だけ許可しますか。\n` +
-      `答えたあと: allow しても、この呼び出しは自動では撃ち直されない。` +
-      `allow は「同じ入力での撃ち直しを、10分以内に1回だけ通そうとする」許可で、撃ち直すかは担い手が決める` +
-      `（拒否文が再試行を禁じていると撃ち直されないことがある）。` +
-      `分類器が迂回・敵対の型で止めた場合は、allow しても撃ち直しは通らないことがある` +
-      `（分類器は、クローンの allow や担当からの伝言を人間の確認と見なさない）。` +
-      `通すには、人間が止められた中身を見て誤検知だと確かめる必要がある。` +
-      `allow の後は、担当・作業者へ「同じ入力で撃ち直しても、分類器にまた止められうる。` +
-      `続けて同じ入力を撃たず、別の手（入力を変える・手順を分ける・人間に頼む）を取ること」と伝える（#4904）。` +
-      `この許可で通るかは確かめていない。同じ呼び出しがそれでも拒否されても、確認は重ねて上げない。\n` +
+      (streakNote === null ? '' : `${streakNote}\n\n`) +
+      // 段落を空行で分ける（#4943）: 変わる値の行・固定の長い段落・変わる値（理由・入力の先頭）の行を別の段落にし、クローンの入力で固定の段落だけを同じ会話の2回目から参照にできるようにする
+      `分類器が ${actor} の ${toolName} 呼び出しを拒否した。この1回だけ許可しますか。\n\n` +
+      `${DENIAL_ASK_AFTER_ANSWER_PARAGRAPH}\n\n` +
       `理由: ${record.reason ?? '(無し)'}\n` +
       `入力の先頭（伏せ字・最大160字。issue #1105 P0）: ${inputHead ?? '(取れなかった)'}`;
     const askedAt = new Date().toISOString();

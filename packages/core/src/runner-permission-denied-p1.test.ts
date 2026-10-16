@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { BASH_GUARD_ENV } from './bash-guard-mode.js';
+import { DENIAL_ASK_AFTER_ANSWER_PARAGRAPH } from './classifier-denial-streak.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
 
@@ -265,6 +266,8 @@ describe('allow の一往復（issue #1105 P1）', () => {
     );
     expect(summary).not.toContain('「同じ入力で撃ち直してよい」と伝える');
     expect(summary).toContain('この許可で通るかは確かめていない。');
+    // #4943: 固定の説明は前後を空行で区切った1段落（クローンの入力で、同じ会話の2回目から参照にできる単位）
+    expect(summary).toContain(`\n\n${DENIAL_ASK_AFTER_ANSWER_PARAGRAPH}\n\n理由: `);
   });
 
   it('入力が1文字違えば通さない', async () => {
