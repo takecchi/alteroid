@@ -45,8 +45,11 @@ import {
   DEFAULT_SSE_HEARTBEAT_MS,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
+  RunnerPermissionRulesUnsupportedError,
   RunnerPluginsUnsupportedError,
   encodeRunnerPlugin,
+  runnerPermissionRulesResultSchema,
+  type RunnerPermissionRulesResult,
   runnerPluginFingerprintEntrySchema,
   runnerPluginsFingerprintSchema,
   RunnerCodexAuthUnsupportedError,
@@ -1043,6 +1046,25 @@ class HttpRunner implements RunnerClient {
     if (body.mcpServers === undefined) return undefined;
     const parsed = runnerMcpServersFingerprintSchema.safeParse(body.mcpServers);
     if (!parsed.success) throw new Error('runner の応答を読めなかった（MCP の登録の指紋）');
+    return parsed.data;
+  }
+
+  // 404 は「口を持たない（古い版）」に変える（`setMcpServers` と同じ理由）
+  // 応答の形が読めなかったときは投げる: 「置けた」と読んで件数を日誌に書かないため
+  async setPermissionRules(rules: readonly string[]): Promise<RunnerPermissionRulesResult> {
+    let response: Response;
+    try {
+      response = await this.#call('POST', '/permission-rules', { rules: [...rules] });
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) {
+        throw new RunnerPermissionRulesUnsupportedError(this.runnerId);
+      }
+      throw error;
+    }
+    const body = (await response.json()) as { ok?: unknown };
+    if (body.ok !== true) throw new Error('runner の応答を読めなかった（委譲先の許可規則）');
+    const parsed = runnerPermissionRulesResultSchema.safeParse(body);
+    if (!parsed.success) throw new Error('runner の応答を読めなかった（委譲先の許可規則の件数）');
     return parsed.data;
   }
 

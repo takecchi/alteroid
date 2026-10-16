@@ -325,6 +325,24 @@ export const runnerMcpServersFingerprintSchema = z.object({
 
 export type RunnerMcpServersFingerprint = z.infer<typeof runnerMcpServersFingerprintSchema>;
 
+/**
+ * 委譲先へ載せる許可規則の一覧（#4952）。この層では文字列の配列という袋だけを検める: 中身の検査の正本は
+ * `parseDelegatedPermissionRules` で、ここに書くと2つ目の正本になるため。不正なら runner が 400 を返し、前の一覧が残る。
+ */
+export const runnerSetPermissionRulesCommandSchema = z.object({
+  rules: z.array(z.string()),
+});
+
+export type RunnerSetPermissionRulesCommand = z.infer<typeof runnerSetPermissionRulesCommandSchema>;
+
+/** 規則の本文（command の全文）は返さない。件数と、前の一覧から変わったかだけ。 */
+export const runnerPermissionRulesResultSchema = z.object({
+  count: z.number().int().nonnegative(),
+  changed: z.boolean(),
+});
+
+export type RunnerPermissionRulesResult = z.infer<typeof runnerPermissionRulesResultSchema>;
+
 /** この層では形を緩く運ぶ: 検査の正本は `parseRunnerPlugin` で、受けた runner が検める。 */
 export const runnerPluginFileWireSchema = z.object({
   path: z.string(),
@@ -1315,6 +1333,17 @@ export class RunnerPluginsUnsupportedError extends Error {
   }
 }
 
+/** 挑み直しに数えない（`RunnerMcpServersUnsupportedError` と同じ）。 */
+export class RunnerPermissionRulesUnsupportedError extends Error {
+  constructor(runnerId: string) {
+    super(
+      `${runnerId} は委譲先の許可規則を受け取る口を持たない（古い版の runner。` +
+        'この runner で起こすマネージャー・作業者には、人間が承認した許可が規則として載らない。runner を上げれば次の名乗りで降りる）',
+    );
+    this.name = 'RunnerPermissionRulesUnsupportedError';
+  }
+}
+
 /** `null` は外す。 */
 export const runnerSetCodexAuthCommandSchema = z.object({
   codexAuth: z.object({ value: z.string(), revision: z.string().min(1) }).nullable(),
@@ -1635,6 +1664,12 @@ export interface RunnerClient {
    * 口を持たない古い runner には `RunnerMcpServersUnsupportedError` を投げ、省略した実装へは降ろさない。
    */
   setMcpServers?(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined>;
+  /**
+   * 委譲先の許可規則の一覧を丸ごと置き直す（#4952）。空の配列は全部外す。runner が繋ぎ直すたびに降ろし直す（一覧はプロセスのメモリにしか無い）。
+   * 走行中のセッションへも置き直す（`setMcpServers` と違い、次に開くセッションを待たない）。
+   * 口を持たない古い runner には `RunnerPermissionRulesUnsupportedError` を投げ、省略した実装へは降ろさない。
+   */
+  setPermissionRules?(rules: readonly string[]): Promise<RunnerPermissionRulesResult>;
   /**
    * 持っていなければ `undefined`。口を持たない古い runner も `undefined`（区別は `setPlugin` の 404）。
    * 欄が在るのに読めなかったときは投げる（「持っていない」へ倒さない）。

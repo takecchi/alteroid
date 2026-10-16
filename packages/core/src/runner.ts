@@ -204,10 +204,12 @@ import {
   describeDenialStreakForClone,
 } from './classifier-denial-streak.js';
 import {
+  mergeSessionAllowRules,
   SessionAllowRuleBook,
   sessionAllowRuleShapeOf,
   type SessionAllowRuleGrant,
 } from './session-allow-rules.js';
+import { parseDelegatedPermissionRules } from './delegated-permission-rules.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
@@ -221,6 +223,7 @@ import type {
   RunnerManagerPeerClosed,
   RunnerManagerState,
   RunnerMcpServersFingerprint,
+  RunnerPermissionRulesResult,
   RunnerPluginFingerprintEntry,
   RunnerPluginsFingerprint,
   RunnerProfileFingerprint,
@@ -533,6 +536,9 @@ export interface RunnerHost {
   mcpServers(): RunnerMcpServersFingerprint | undefined;
   // ファイルへ落とさない: 走行中のプロセスが読み直す経路が無く、効くのはセッションを組む瞬間だけのため
   setMcpServers(input: unknown): RunnerMcpServersFingerprint | undefined;
+  // 委譲先の許可規則（#4952）。`setMcpServers` と違い走行中のセッションへも置き直す: flag 層は走行中に差し替えられ、取り消しを次のセッションまで待たせないため
+  // 置く前に `parseDelegatedPermissionRules` を通す: 不正なら投げて前の一覧を残すため
+  setPermissionRules(input: unknown): RunnerPermissionRulesResult;
   plugins(): RunnerPluginsFingerprint | undefined;
   // 置く前に `parseRunnerPlugin` を通す: 不正なら投げて前の状態を残すため
   setPlugin(name: string, input: unknown): Promise<RunnerPluginFingerprintEntry>;
@@ -682,6 +688,12 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
   return new Host(options);
 }
 
+function sameRuleSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const seen = new Set(b);
+  return a.every((rule) => seen.has(rule));
+}
+
 class Host implements RunnerHost {
   readonly runnerId: string;
   readonly workspacePath: string;
@@ -731,6 +743,7 @@ class Host implements RunnerHost {
   readonly #outboxRemoveContentsAsChild: OutboxContentsRemover | undefined;
   readonly #managerScratchRoot: string;
   #mcpServers: { servers: McpServers; fingerprint: RunnerMcpServersFingerprint } | undefined;
+  #permissionRules: readonly string[] = [];
   /**
    * daemon から降りてきた plugin（名前 → 展開済みの印）。**files のバイトは持たない**
    * （多数の大きな plugin でメモリを積まないため。展開したあとはディスクが持つ）。
@@ -1210,6 +1223,18 @@ class Host implements RunnerHost {
     return this.#mcpServers.fingerprint;
   }
 
+  setPermissionRules(input: unknown): RunnerPermissionRulesResult {
+    // 届いたものを信じずにもう一度検査する: ここは制御面の入口のため
+    const rules = parseDelegatedPermissionRules(input);
+    const changed = !sameRuleSet(rules, this.#permissionRules);
+    this.#permissionRules = rules;
+    // 変わらなければ置き直さない: 名乗り直しのたびに同じ一覧が降りてくるため
+    if (changed) {
+      for (const session of this.#sessions.values()) session.reapplyPermissionRules();
+    }
+    return { count: rules.length, changed };
+  }
+
   plugins(): RunnerPluginsFingerprint | undefined {
     if (this.#plugins.size === 0) return undefined;
     const plugins = [...this.#plugins.values()]
@@ -1378,6 +1403,7 @@ class Host implements RunnerHost {
       codexAuth: this.#codexAuth,
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
+      permissionRules: () => this.#permissionRules,
       plugins: () => this.#pluginRefs(),
       onClosed: (outcome) => {
         // `stop()` は outcome を渡さない（done・停止からの resume は守る）: 落ちた・失効した CLI だけを撃つ側に残すため
@@ -2182,6 +2208,8 @@ interface RunnerSessionOptions {
   mcpServers: () => McpServers | undefined;
   // 値で渡さない（関数で受ける）: `mcpServers` と同じ理由
   plugins: () => readonly AgentClonePlugin[];
+  // 委譲先の許可規則（#4952）。値で渡さない（関数で受ける）: `mcpServers` と同じ理由。省けば空
+  permissionRules?: () => readonly string[];
   // 値で渡さない（関数で受ける）: 資格が届く・外れるたびに開閉が変わるため
   peer?: () => RunnerPeerOptions | undefined;
   managerTools?: RunnerManagerToolsOptions;
@@ -2253,6 +2281,7 @@ class RunnerSession {
   readonly #peerNotices: string[] = [];
   readonly #profileEnv: () => Record<string, string>;
   readonly #mcpServers: () => McpServers | undefined;
+  readonly #permissionRules: () => readonly string[];
   readonly #pluginRefs: () => readonly AgentClonePlugin[];
   readonly #onClosed: (outcome?: { status: JobStatus }) => void;
   readonly #outboxRoot: string;
@@ -2423,6 +2452,7 @@ class RunnerSession {
     this.#bashGuard = options.bashGuard;
     this.#profileEnv = options.profileEnv;
     this.#mcpServers = options.mcpServers;
+    this.#permissionRules = options.permissionRules ?? (() => []);
     this.#pluginRefs = options.plugins;
     this.#onClosed = options.onClosed;
     this.#outboxRoot = options.outboxRoot;
@@ -4875,8 +4905,9 @@ class RunnerSession {
   }
 
   /**
-   * 一時規則（#4905）の一覧を、いまのセッションへ丸ごと置き直す。置けたら undefined、置けなければ理由を返す（投げない）。
+   * 委譲先の許可規則（#4952）と一時規則（#4905）をまとめた一覧を、いまのセッションへ丸ごと置き直す。置けたら undefined、置けなければ理由を返す（投げない）。
    * 一覧は積んだ時点ではなく順番が来た時点で読む: 先に積んだ置き直しが、後で外した規則を巻き戻さないため。
+   * 片方だけを置かない: 口は一覧を丸ごと置き換えるので、片方だけを置くともう片方がセッションから消えるため。
    */
   #pushSessionAllowRules(): Promise<string | undefined> {
     const run = async (): Promise<string | undefined> => {
@@ -4887,7 +4918,9 @@ class RunnerSession {
       try {
         // 期限を掛ける: 分類器の拒否のフックの中で待つので、答えない control channel に、フックと後に続く置き直しの鎖ごと止められないため
         await controlRequestWithin(
-          session.setSessionAllowRules(this.#sessionAllowRules.rules()),
+          session.setSessionAllowRules(
+            mergeSessionAllowRules(this.#permissionRules(), this.#sessionAllowRules.rules()),
+          ),
           this.#sessionAllowRulesTimeoutMs,
           'applyFlagSettings（一時規則の置き直し）',
         );
@@ -5023,18 +5056,42 @@ class RunnerSession {
     }
   }
 
-  // 開き直した CLI は flag 層を持ち越さないので、生きている一時規則を置き直す
+  // 開いた・開き直した CLI は flag 層を持ち越さないので、委譲先の許可規則と生きている一時規則を置き直す
+  // 口の無いセッション（Codex）では何もしない: 置けない理由を note にすると、開くたびに同じ断りが積まれるため
   #reapplySessionAllowRules(): void {
     this.#sweepExpiredSessionAllowRules();
-    if (this.#sessionAllowRules.size === 0) return;
+    const granted = this.#permissionRules().length;
+    if (this.#sessionAllowRules.size === 0 && granted === 0) return;
+    if (this.#sdkSession.query?.setSessionAllowRules === undefined) return;
     void this.#pushSessionAllowRules().then((failure) => {
       if (failure === undefined) return;
       this.#emit({
         type: 'note',
         managerId: this.#id,
         text:
-          `セッションを開き直したが、生きている一時規則（${this.#sessionAllowRules.size}件）を置き直せなかった` +
-          `（担当 ${this.#id}。${failure}）。撃ち直しは、同じ担い手の1回だけの許可でしか通らない（#4905）。`,
+          `セッションを開いた（開き直した）が、生きている一時規則（${this.#sessionAllowRules.size}件）と` +
+          `委譲先の許可規則（${granted}件）を置き直せなかった（担当 ${this.#id}。${failure}）。` +
+          `撃ち直しは、同じ担い手の1回だけの許可でしか通らず、人間が承認した許可もこのセッションには効かない（#4905・#4952）。`,
+      });
+    });
+  }
+
+  /**
+   * 委譲先の許可規則の一覧が変わったとき（#4952）に Host から呼ばれ、走行中のセッションへ置き直す。
+   * 口の無いセッション（Codex）・まだ開いていないセッションでは何もしない（開くときに `#reapplySessionAllowRules` が置く）。
+   */
+  reapplyPermissionRules(): void {
+    if (this.#sdkSession.query?.setSessionAllowRules === undefined) return;
+    void this.#pushSessionAllowRules().then((failure) => {
+      if (failure === undefined) return;
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `委譲先の許可規則（人間が承認した許可）の一覧が変わったが、このセッションへ置き直せなかった` +
+          `（担当 ${this.#id}・いまの一覧は ${this.#permissionRules().length}件。${failure}）。` +
+          `取り消された許可の規則がセッションに残っている、または足された許可がまだ効いていないおそれがある。` +
+          `次に一覧を置き直せたときに揃う（#4952）。`,
       });
     });
   }

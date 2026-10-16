@@ -31,6 +31,7 @@ import {
   runnerResumeCommandSchema,
   runnerSetCredentialsCommandSchema,
   runnerSetMcpServersCommandSchema,
+  runnerSetPermissionRulesCommandSchema,
   runnerSetPluginCommandSchema,
   runnerRetainPluginsCommandSchema,
   decodeRunnerPlugin,
@@ -467,6 +468,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/credentials', control)
     .use('/profile', control)
     .use('/mcp-servers', control)
+    .use('/permission-rules', control)
     .use('/plugins', control)
     .use('/plugins/*', control)
     .use('/codex-auth', control)
@@ -557,6 +559,29 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         try {
           const placed = host.setMcpServers(c.req.valid('json').mcpServers);
           return c.json({ ok: true, ...(placed === undefined ? {} : { mcpServers: placed }) });
+        } catch (error) {
+          return c.json({ ok: false, error: reasonOf(error) }, 400);
+        }
+      },
+    )
+
+    /**
+     * 委譲先の許可規則（#4952。人間が承認した許可）の一覧を丸ごと置き直す。**制御面である**（門番を外さないこと）:
+     * マネージャーが叩けると、自分のセッションに許可規則を足せる。袋の形だけをここで受け、中身の検査は `host.setPermissionRules` に任せる。
+     * 規則の本文は返さない（件数と、変わったかだけ）。
+     */
+    .post(
+      '/permission-rules',
+      zValidator('json', runnerSetPermissionRulesCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: '許可規則の一覧の袋の形が不正（置いていない）' }, 400);
+        }
+        return undefined;
+      }),
+      (c) => {
+        try {
+          const placed = host.setPermissionRules(c.req.valid('json').rules);
+          return c.json({ ok: true, ...placed });
         } catch (error) {
           return c.json({ ok: false, error: reasonOf(error) }, 400);
         }

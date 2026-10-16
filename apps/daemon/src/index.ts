@@ -25,6 +25,7 @@ import {
   createProfileApplier,
   createCredentialService,
   createMcpServerService,
+  createDelegatedPermissionRuleService,
   createPluginDistributionService,
   createPluginFetcher,
   resolveMarketplaceUrl,
@@ -638,6 +639,8 @@ export async function main(): Promise<void> {
 
   const mcpServerService = createMcpServerService({ stores, runners });
 
+  const permissionRuleService = createDelegatedPermissionRuleService({ stores, runners });
+
   const pluginDistributionService = createPluginDistributionService({ stores, runners });
 
   // 取り元の URL を書き写し前の環境（`bootEnvSnapshot`）から読む: 正本の環境変数はクローンが書けるので、そこから取り元を差し替えられないようにするため
@@ -814,6 +817,7 @@ export async function main(): Promise<void> {
     withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS],
     mcpServerService,
     pluginDistributionService,
+    permissionRuleService,
     codexAuthService,
     self,
     credentials: () => agentTokenHolder.values(),
@@ -1125,6 +1129,7 @@ export async function main(): Promise<void> {
     profile: profileService,
     credentials: credentialService,
     mcpServers: mcpServerService,
+    permissionRules: permissionRuleService,
     pluginFetcher,
     pluginDistribution: pluginDistributionService,
     codexAuth: codexAuthService,

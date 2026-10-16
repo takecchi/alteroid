@@ -20,6 +20,7 @@ import type {
   McpServerService,
   McpServers,
   StoredMcpServers,
+  DelegatedPermissionRuleService,
   Exchange,
   GrantResult,
   InboxEvent,
@@ -84,6 +85,7 @@ import {
   UnreadableCommitmentError,
   UnreadableJournalEntryError,
   UnreadablePermissionGrantError,
+  delegatedPermissionRuleOf,
   UnreadablePracticeError,
   UnreadableScheduleError,
   approvalUpdatedAt,
@@ -404,6 +406,8 @@ export interface AppDeps {
   credentials?: CredentialService;
   // マネージャーのプールと同じインスタンスを渡す（`profile` と同じ理由）。渡さなければ保存だけして配らない（`runners: []`）。
   mcpServers?: McpServerService;
+  // 委譲先の許可規則（#4952）。マネージャーのプールと同じインスタンスを渡す（`profile` と同じ理由）。渡さなければ取り消しを runner へ配らない（次の名乗りで降りる）。
+  permissionRules?: DelegatedPermissionRuleService;
   pluginFetcher?: PluginFetcher;
   // マネージャーのプールと同じインスタンスを渡す（`profile` と同じ理由）。
   pluginDistribution?: PluginDistributionService;
@@ -5309,6 +5313,13 @@ export function createApp(deps: AppDeps) {
           '許可の取り消しの日誌',
           `id=${id}`,
         );
+        // 委譲先へ配る（#4952）。載せていなかった許可（前方一致など）・既に取り消し済みでは配らない: 一覧は変わらないため
+        // 応答の前に配り終える: 「取り消した」が人間に返った後も委譲先で規則が効き続ける窓を、配れた runner については閉じるため。配れなくても取り消しは効いている（配れなかったことはサービスが日誌に残す）
+        if (!alreadyRevoked && delegatedPermissionRuleOf(grant.rule) !== undefined) {
+          await deps.permissionRules
+            ?.pushAll(`許可 ${grant.id} が取り消された（POST /permission-grants/:id/revoke）`)
+            .catch(() => undefined);
+        }
         return c.json({ ok: true });
       },
     )

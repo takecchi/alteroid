@@ -13,6 +13,7 @@ import type {
   RunnerCredentialFingerprint,
   RunnerEvent,
   RunnerMcpServersFingerprint,
+  RunnerPermissionRulesResult,
   RunnerOutboxContent,
   RunnerPlacementResources,
   RunnerPluginFingerprintEntry,
@@ -292,6 +293,10 @@ class LocalRunner implements RunnerClient {
 
   async setMcpServers(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined> {
     return this.#host.setMcpServers(servers);
+  }
+
+  async setPermissionRules(rules: readonly string[]): Promise<RunnerPermissionRulesResult> {
+    return this.#host.setPermissionRules(rules);
   }
 
   async plugins(): Promise<RunnerPluginsFingerprint | undefined> {

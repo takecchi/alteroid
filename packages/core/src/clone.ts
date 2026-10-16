@@ -171,6 +171,10 @@ import {
 import type { ProfileApplier } from './profile.js';
 import { resolveCredentialRows, type CredentialService } from './credential-service.js';
 import type { McpServerService } from './mcp-server-service.js';
+import {
+  delegatedPermissionRuleOf,
+  type DelegatedPermissionRuleService,
+} from './delegated-permission-rules.js';
 import type { McpServers } from './mcp-servers.js';
 import type { PluginDistributionService } from './plugin-distribution-service.js';
 import { PLUGIN_SCOPES_FOR_CLONE, extractPluginsForScopes } from './plugin-extract.js';
@@ -696,6 +700,12 @@ export interface CloneOptions {
    */
   pluginDistributionService?: PluginDistributionService;
   /**
+   * 人間が承認した許可を、委譲先（マネージャー・作業者）のセッションの許可規則として runner へ配る1本道（#4952）。
+   * **デーモンが作った同じインスタンスを渡すこと**（`mcpServerService` と同じ理由。名乗りの降ろし直しと許可の足し引きの配布を同じ列で直列化する）。
+   * クローン自身の本セッションには効かせない（クローンは `#onPreToolUse` で許可を直に見る）。
+   */
+  permissionRuleService?: DelegatedPermissionRuleService;
+  /**
    * Codex の ChatGPT ログインの正本の持ち主。**デーモンが作った同じインスタンスを渡すこと**
    * （`mcpServerService` と同じ理由。runner が名乗るたびの降ろし直しと、runner からの書き戻しが
    * マネージャーのプールを通る）。
@@ -837,6 +847,7 @@ function buildHumanAnswerEvent(
 
 class Clone implements CloneHost {
   readonly #stores: Stores;
+  readonly #permissionRuleService: DelegatedPermissionRuleService | undefined;
   readonly #driver: AgentCloneDriver;
   #contextUsageUnavailableNoted = false;
   // 最初の本セッションのターンの終わりで立てる（文脈占有が取れたかに関わらず）: 取れなかった回の次に出すと「最初のターン」の観測でなくなるため。プロセスの起動で数え直す（#4921）
@@ -1129,6 +1140,7 @@ class Clone implements CloneHost {
       withheldEnvKeys,
       mcpServerService,
       pluginDistributionService,
+      permissionRuleService,
       codexAuthService,
       accountUsage,
       scheduler,
@@ -1140,6 +1152,7 @@ class Clone implements CloneHost {
       redeliveryGate,
     } = options;
     this.#stores = stores;
+    this.#permissionRuleService = permissionRuleService;
     this.#provider = provider ?? CLAUDE_PROVIDER;
     this.#driver =
       driver ?? new ClaudeCloneDriver({ ...(queryFn === undefined ? {} : { queryFn }) });
@@ -1193,6 +1206,7 @@ class Clone implements CloneHost {
         ...(credentialService === undefined ? {} : { credentials: credentialService }),
         ...(mcpServerService === undefined ? {} : { mcpServers: mcpServerService }),
         ...(pluginDistributionService === undefined ? {} : { plugins: pluginDistributionService }),
+        ...(permissionRuleService === undefined ? {} : { permissionRules: permissionRuleService }),
         ...(codexAuthService === undefined ? {} : { codexAuth: codexAuthService }),
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
@@ -1890,6 +1904,13 @@ class Clone implements CloneHost {
       decision: `許可を記録した: ${permissionRequest.rule}`,
       grounds: `許可されたアカウント（${via.accountId}）の回答（${grounds}）`,
     });
+    // 委譲先へ配る（#4952）。載せない許可（前方一致など）では配らない: 一覧は変わらないため
+    // 待たない: 人間への回答という主作用を runner との往復で遅らせないため。配れなくても許可の記録は済んでいる（配れなかったことはサービスが日誌に残す）
+    if (delegatedPermissionRuleOf(grant.rule) !== undefined) {
+      void this.#permissionRuleService
+        ?.pushAll(`許可 ${grant.id} が記録された（人間の request_permission への回答）`)
+        .catch(() => undefined);
+    }
   }
 
   async stop(options?: { farewellDeadlineAt?: number }): Promise<void> {

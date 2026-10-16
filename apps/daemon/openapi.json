@@ -23576,6 +23576,22 @@
                                   }
                                 },
                                 "required": ["status", "at"]
+                              },
+                              "permissionRules": {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["ok", "failed"]
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  },
+                                  "error": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["status", "at"]
                               }
                             }
                           },

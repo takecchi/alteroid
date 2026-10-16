@@ -186,6 +186,7 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
     ['認証トークン', pushHealth.agentToken],
     ['MCP の登録', pushHealth.mcpServers],
     ['plugin の送り', pushHealth.plugins],
+    ['委譲先の許可規則', pushHealth.permissionRules],
   ];
   const attempted = items.filter(
     (item): item is [string, RunnerPushOutcome] => item[1] !== undefined,
