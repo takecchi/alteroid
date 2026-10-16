@@ -35,6 +35,10 @@ interface FakeOptions {
   withApplyFlagSettings?: boolean;
   /** 渡すと、その回の `applyFlagSettings` を失敗させる（0 始まりの回数）。 */
   failApplyAt?: ReadonlySet<number>;
+  /** 渡すと、その回の `applyFlagSettings` を答えないままにする（0 始まりの回数）。 */
+  hangApplyAt?: ReadonlySet<number>;
+  /** 置き直しを待つ期限（ms）。省けば既定。 */
+  sessionAllowRulesTimeoutMs?: number;
 }
 
 function fakeRunnerSdk(fake: FakeOptions = {}): { fn: typeof sdkQuery; started: Started[] } {
@@ -86,6 +90,7 @@ function fakeRunnerSdk(fake: FakeOptions = {}): { fn: typeof sdkQuery; started: 
       applyCount += 1;
       if (fake.failApplyAt?.has(at) === true)
         throw new Error('control channel が閉じている（テスト）');
+      if (fake.hangApplyAt?.has(at) === true) await new Promise<never>(() => undefined);
       record.flagAllows.push([...(settings.permissions?.allow ?? [])]);
     };
 
@@ -166,6 +171,9 @@ async function startSession(fake: FakeOptions = {}): Promise<{
     emit: (event) => events.push(event),
     queryFn: fn,
     env: DENY_ENV,
+    ...(fake.sessionAllowRulesTimeoutMs === undefined
+      ? {}
+      : { sessionAllowRulesTimeoutMs: fake.sessionAllowRulesTimeoutMs }),
   });
   await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
   const first = started[0];
@@ -549,6 +557,34 @@ describe('一時規則を足さない場合は今までどおり（#4905）', ()
     });
     await tick();
     expect(notesOf(events).some((n) => n.includes(PASSED))).toBe(false);
+  });
+
+  it('置き直しが答えなければ期限で諦めて従来どおりにし、後に続く置き直しも止めない', async () => {
+    const {
+      started,
+      events,
+      host: h,
+    } = await startSession({
+      hangApplyAt: new Set([0]),
+      sessionAllowRulesTimeoutMs: 1,
+    });
+    await denyThenAllow(started, h, {
+      toolInput: { command: 'echo apply-hangs' },
+      toolUseId: 'tu-applyhang-1',
+    });
+
+    const refused = notesOf(events).find((n) => n.includes(REFUSED));
+    expect(refused).toContain('以内に返らなかった');
+    expect(notesOf(events).find((n) => n.includes('1回だけ許可した'))).toContain(
+      '続けて同じ入力を撃たず',
+    );
+
+    // 答えない1回目が鎖を塞いでいない: 次の allow の置き直しは届く
+    await denyThenAllow(started, h, {
+      toolInput: { command: 'echo after-hang' },
+      toolUseId: 'tu-applyhang-2',
+    });
+    expect(started.flagAllows).toEqual([['Bash(echo after-hang)']]);
   });
 });
 
