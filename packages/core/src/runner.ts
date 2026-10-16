@@ -198,6 +198,13 @@ import {
   type PidsPressureReading,
 } from './runner-pids-pressure.js';
 import {
+  describeReportLanguage,
+  excerptExample,
+  findEnglishSentences,
+  ReportLanguageNotices,
+  resolveEffectiveReportLanguage,
+} from './report-language.js';
+import {
   ClassifierDenialStreaks,
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
@@ -528,6 +535,8 @@ export interface RunnerHost {
   setProfile(script: string): Promise<RunnerProfileResult>;
   // 起動行に出す `Bash の形の歯` の1行（実効の値。不正な値でも投げない）
   bashShapeGuardLine(): string;
+  // 起動行に出す `報告の言語の知らせ` の1行（実効の値。不正な値でも投げない。#4965）
+  reportLanguageLine(): string;
   // 鍵・プロファイルが降りた後の実効の env から読む（値は返さない）。hello と `anthropic_route` が名乗る
   anthropicRoute(): string[];
   mcpServers(): RunnerMcpServersFingerprint | undefined;
@@ -708,6 +717,7 @@ class Host implements RunnerHost {
   /** 最後に名乗った（起動時は構築時に読んだ）接続先の表示行。器だけの状態からの変化だけを名乗るための基準。 */
   #announcedAnthropicRoute: string;
   #announcedBashShapeGuard: string;
+  #announcedReportLanguage: string;
   readonly #log: ((line: string) => void) | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
   // 終わった担当が撃った退避の push（#4789）。畳むときに待つ（それぞれ `STOP_RESCUE_TIMEOUT_MS` で切れるので待ちは有限）
@@ -947,6 +957,7 @@ class Host implements RunnerHost {
     this.#announcedAnthropicRoute = JSON.stringify(this.anthropicRoute());
     this.#log = options.log;
     this.#announcedBashShapeGuard = this.bashShapeGuardLine();
+    this.#announcedReportLanguage = this.reportLanguageLine();
   }
 
   credentials(): CredentialFingerprint[] {
@@ -1151,6 +1162,7 @@ class Host implements RunnerHost {
     const result = await this.#profile.apply(script);
     this.#announceAnthropicRoute();
     this.#announceBashShapeGuard();
+    this.#announceReportLanguage();
     return result;
   }
 
@@ -1164,6 +1176,19 @@ class Host implements RunnerHost {
     const line = this.bashShapeGuardLine();
     if (line === this.#announcedBashShapeGuard) return;
     this.#announcedBashShapeGuard = line;
+    this.#log?.(`alteroid-runner: ${line}`);
+  }
+
+  // 起動行に出す1行。不正な値でも投げない（起動は落とさない）
+  reportLanguageLine(): string {
+    return describeReportLanguage(this.#env, this.#profile?.env() ?? {});
+  }
+
+  // 実効の値が前回と変わったときだけ1行出し直す（`#announceBashShapeGuard` と同じ）
+  #announceReportLanguage(): void {
+    const line = this.reportLanguageLine();
+    if (line === this.#announcedReportLanguage) return;
+    this.#announcedReportLanguage = line;
     this.#log?.(`alteroid-runner: ${line}`);
   }
 
@@ -2281,6 +2306,10 @@ class RunnerSession {
   /** 作業者だけが利用上限で落ちた事実。ターンの集計とは別に、ターンをまたいで持つ（#4903）。 */
   readonly #workerLimitNotices = new WorkerLimitNotices();
   readonly #denialStreaks = new ClassifierDenialStreaks();
+  /** 担当の発言に混ざった英語の文の知らせ（#4965）。 */
+  readonly #reportLanguageNotices = new ReportLanguageNotices();
+  /** 不正な `ALTEROID_REPORT_LANGUAGE` を日誌に書いた値（同じ値は1回だけ書く）。 */
+  #reportLanguageMisconfigNoted: string | undefined;
   readonly #rescueMemory = new RescueMemory();
   /** 退避の列挙の打ち切りの知らせ（同じ状態が続く間は繰り返さない。#4681）。 */
   readonly #rescueListNotice = new RescueListNotice();
@@ -3622,6 +3651,7 @@ class RunnerSession {
           }
           if (said.length > 0) {
             this.#turnTally.recordSaid(said, event.id);
+            this.#observeReportLanguage(said);
           }
         } else {
           // 作業者の発言に付いた拒否の印をターンの失敗にしない: 数えるだけ
@@ -5101,6 +5131,7 @@ class RunnerSession {
     const staleUntracked = this.#staleUntrackedNotice(record.agentId);
     const peerApproval = this.#peerApprovalNotice(record.agentId);
     const workerLimit = this.#workerLimitNotice(record.agentId);
+    const reportLanguage = this.#reportLanguageNotice(record.agentId);
     // 分類器の拒否が続いた後に初めて通った道具に、事情と取れる道を添える
     const streakActor = record.agentId ?? 'manager';
     const denialStreak = this.#denialStreaks.takeNotice(streakActor, Date.now());
@@ -5111,6 +5142,7 @@ class RunnerSession {
       staleUntracked,
       peerApproval,
       workerLimit,
+      reportLanguage,
       denialStreak,
     ].filter((part): part is string => part !== null);
     if (parts.length === 0) return { kind: 'continue' };
@@ -5190,6 +5222,54 @@ class RunnerSession {
         });
       }
       return notice?.text ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 担当本人の発言（`parentToolUseId` の無い assistant の本文）に英語の文が混ざっていれば、知らせる待ちに積み、日誌に1行残す（#4965）。
+   * 作業者の発言には掛けない: 作業者の本文は `parentToolUseId`（Task の tool_use id）でしか届かず、知らせを添える PostToolUse の `agent_id` と結ぶ口が無いため。
+   * 設定は発言のたびに読む（プロファイルに1行置けば次の発言から効く）。off なら判定もしない。
+   * 不正な値・判定が投げたときは知らせない側へ倒す: 知らせのために担当の発言の処理を壊さないため。不正な値は同じ値につき1回だけ日誌に書く。
+   */
+  #observeReportLanguage(said: string): void {
+    try {
+      let mode: string;
+      try {
+        mode = resolveEffectiveReportLanguage(this.#env, this.#profileEnv());
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (this.#reportLanguageMisconfigNoted !== message) {
+          this.#reportLanguageMisconfigNoted = message;
+          this.#emit({
+            type: 'note',
+            managerId: this.#id,
+            text: `報告の言語の知らせを掛けていない: ${message}。直すまで知らせない。#4965`,
+          });
+        }
+        return;
+      }
+      if (mode === 'off') return;
+      const found = findEnglishSentences(said);
+      if (found.length === 0) return;
+      if (!this.#reportLanguageNotices.observe('manager', found, Date.now())) return;
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `担当の発言に英語の文が ${String(found.length)} 件混ざっていた` +
+          `（担い手: manager:${this.#id}、例: "${excerptExample(found[0] ?? '')}"）。#4965`,
+      });
+    } catch {
+      return;
+    }
+  }
+
+  /** 担当の発言に英語の文が混ざっていた後の最初の道具の結果に、知らせの段落を返す（#4965）。同じ担い手に10分に1回まで。 */
+  #reportLanguageNotice(agentId: string | undefined): string | null {
+    try {
+      return this.#reportLanguageNotices.next(agentId ?? 'manager', Date.now());
     } catch {
       return null;
     }
