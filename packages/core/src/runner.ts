@@ -94,6 +94,7 @@ import {
   CONTEXT_USAGE_READ_TIMEOUT_MS,
   contextUsageWithin,
 } from './context-usage.js';
+import { controlRequestWithin, SESSION_ALLOW_RULES_TIMEOUT_MS } from './control-deadline.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
 import { buildDenialInputHead, matchInputOf, redactErrorText } from './denial-input-head.js';
 import {
@@ -502,6 +503,8 @@ export interface RunnerHostOptions {
   delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
   contextUsageTimeoutMs?: number;
+  // 一時規則（#4905）の置き直しを待つ期限。既定は `SESSION_ALLOW_RULES_TIMEOUT_MS`。試験が短くするための口
+  sessionAllowRulesTimeoutMs?: number;
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
   /**
    * 器の pids（cgroup の `pids.current` / `pids.max`）を読む口。渡したときだけ、上限に近い器の担当に道具の結果へ知らせを添える
@@ -756,6 +759,7 @@ class Host implements RunnerHost {
   readonly #delegationSubreaper: string | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir | undefined;
   readonly #contextUsageTimeoutMs: number | undefined;
+  readonly #sessionAllowRulesTimeoutMs: number | undefined;
   readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
   readonly #readPids: (() => Promise<{ current: number; max: number } | undefined>) | undefined;
   // 生ログの退避の本文を、デーモンが取りに来るまで預かる（#4485。`archive-ref.ts`）。捨てた分は stderr に残す（デーモンへの経路が無い時にも起きるため）
@@ -813,6 +817,7 @@ class Host implements RunnerHost {
     this.#delegationSubreaper = options.delegationSubreaper;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn;
     this.#contextUsageTimeoutMs = options.contextUsageTimeoutMs;
+    this.#sessionAllowRulesTimeoutMs = options.sessionAllowRulesTimeoutMs;
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
     this.#readPids =
       options.readPidsFn === undefined ? undefined : cachedPidsReader(options.readPidsFn);
@@ -1412,6 +1417,9 @@ class Host implements RunnerHost {
       ...(this.#contextUsageTimeoutMs === undefined
         ? {}
         : { contextUsageTimeoutMs: this.#contextUsageTimeoutMs }),
+      ...(this.#sessionAllowRulesTimeoutMs === undefined
+        ? {}
+        : { sessionAllowRulesTimeoutMs: this.#sessionAllowRulesTimeoutMs }),
       ...(this.#readCgroupEventCountersFn === undefined
         ? {}
         : { readCgroupEventCountersFn: this.#readCgroupEventCountersFn }),
@@ -2184,6 +2192,8 @@ interface RunnerSessionOptions {
   delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
   contextUsageTimeoutMs?: number;
+  // 一時規則（#4905）の置き直しを待つ期限。既定は `SESSION_ALLOW_RULES_TIMEOUT_MS`。試験が短くするための口
+  sessionAllowRulesTimeoutMs?: number;
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
   /** 器の pids と、器の上の担当の本数。渡されたときだけ、上限に近ければ道具の結果へ知らせを添える。 */
   pidsPressureFn?: () => Promise<PidsPressureReading | undefined>;
@@ -2252,6 +2262,7 @@ class RunnerSession {
   readonly #delegationSubreaper: string | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir;
   readonly #contextUsageTimeoutMs: number;
+  readonly #sessionAllowRulesTimeoutMs: number;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
   readonly #pidsPressureFn: (() => Promise<PidsPressureReading | undefined>) | undefined;
   readonly #stashArchive: ((body: string) => { id: string; chars: number } | undefined) | undefined;
@@ -2420,6 +2431,8 @@ class RunnerSession {
     this.#delegationSubreaper = options.delegationSubreaper;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn ?? chownTreeSync;
     this.#contextUsageTimeoutMs = options.contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
+    this.#sessionAllowRulesTimeoutMs =
+      options.sessionAllowRulesTimeoutMs ?? SESSION_ALLOW_RULES_TIMEOUT_MS;
     this.#readCgroupEventCountersFn =
       options.readCgroupEventCountersFn ?? (() => readCgroupEventCounters());
     this.#pidsPressureFn = options.pidsPressureFn;
@@ -4859,7 +4872,12 @@ class RunnerSession {
         return 'このセッションは規則を置く口を持たない';
       }
       try {
-        await session.setSessionAllowRules(this.#sessionAllowRules.rules());
+        // 期限を掛ける: 分類器の拒否のフックの中で待つので、答えない control channel に、フックと後に続く置き直しの鎖ごと止められないため
+        await controlRequestWithin(
+          session.setSessionAllowRules(this.#sessionAllowRules.rules()),
+          this.#sessionAllowRulesTimeoutMs,
+          'applyFlagSettings（一時規則の置き直し）',
+        );
         return undefined;
       } catch (error) {
         return `規則の置き直しが失敗した: ${reasonOf(error)}`;

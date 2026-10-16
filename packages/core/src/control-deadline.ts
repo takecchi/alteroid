@@ -12,6 +12,9 @@ export class ControlRequestTimeoutError extends Error {
 /** 人間の「止める」操作が `interrupt` の答えを待つ期限（#4664）。同じ control channel の `getContextUsage`（`CONTEXT_USAGE_READ_TIMEOUT_MS`）に揃える。 */
 export const CLONE_INTERRUPT_TIMEOUT_MS = 10_000;
 
+/** 担当のセッションへ一時規則（#4905）を置き直す `applyFlagSettings` の答えを待つ期限。分類器の拒否のフックの中で待つので、答えない control channel にフックごと止められないため。 */
+export const SESSION_ALLOW_RULES_TIMEOUT_MS = 10_000;
+
 /**
  * control channel への求めの答えを `ms` まで待つ。過ぎたら {@link ControlRequestTimeoutError} を投げる。
  * 打ち切った後に返ってきた答えと失敗は捨てる（未処理の拒否にしない）。
