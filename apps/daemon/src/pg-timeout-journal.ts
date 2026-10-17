@@ -4,6 +4,7 @@ import {
   reasonOf,
   type Stores,
   type ThreadpoolWait,
+  writeStderrLine,
 } from '@alteroid/core';
 import type { PgTimeoutEvent } from '@alteroid/storage-pg';
 
@@ -30,7 +31,7 @@ export interface PgTimeoutJournal {
  */
 export function createPgTimeoutJournal(
   writeStderr: (text: string) => void = (text) => {
-    process.stderr.write(text);
+    writeStderrLine(text);
   },
   /** 日誌の行に添えるスレッドの枠の待ちを測る口（#4890）。試験で差し替える。 */
   measureWait: () => Promise<ThreadpoolWait | undefined> = () => measureThreadpoolWait(),

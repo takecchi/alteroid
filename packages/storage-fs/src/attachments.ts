@@ -37,6 +37,7 @@ import {
   type AttachmentPutStreamInput,
   type AttachmentStore,
   type AttachmentStoreOptions,
+  writeStderrLine,
 } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -254,7 +255,7 @@ export class FsAttachmentStore implements AttachmentStore {
     } catch (error) {
       // この呼びで新しく結んだ分だけ戻して投げ直す: 呼び手には結果が届かず、先に結んだ分が結び付いたまま残るため
       await this.unbind(newlyBound, target).catch((rollbackError: unknown) => {
-        process.stderr.write(
+        writeStderrLine(
           `alteroidd: 添付の結び付けを戻せなかった（${attachmentBindTargetLabel(target)}へ結んだ ${newlyBound.length} 件が残る）: ${reasonOf(rollbackError)}\n`,
         );
       });
@@ -378,7 +379,7 @@ export class FsAttachmentStore implements AttachmentStore {
       }
     }
     if (failures.length > 0) {
-      process.stderr.write(
+      writeStderrLine(
         `alteroidd: 添付ファイルの掃除で ${failures.length} 件を消せなかった: ${failures.join('; ')}\n`,
       );
     }

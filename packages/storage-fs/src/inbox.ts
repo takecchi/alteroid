@@ -1,7 +1,7 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { compareIsoInstant, earliestIsoInstant, inboxEventSchema } from '@alteroid/core';
+import { compareIsoInstant, earliestIsoInstant, inboxEventSchema, writeStderrLine } from '@alteroid/core';
 import type {
   InboxEvent,
   InboxPeek,
@@ -207,7 +207,7 @@ export class FsInboxStore implements InboxStore {
           ),
         ),
       ];
-      process.stderr.write(
+      writeStderrLine(
         `${describeSkippedInboxRow({ index, fields, id: extractEventId(rawEntry) })}\n`,
       );
     });

@@ -1,4 +1,4 @@
-import { inboxEventSchema } from '@alteroid/core';
+import { inboxEventSchema, writeStderrLine } from '@alteroid/core';
 import type {
   InboxEvent,
   InboxPeek,
@@ -27,7 +27,7 @@ function parseEventOrReason(
       ),
     ),
   ];
-  process.stderr.write(
+  writeStderrLine(
     `alteroid: 受信箱の読めない合図を配る側から外しました（id=${JSON.stringify(id)}、不正な欄: ${fields.join(',')}。行は消していない）\n`,
   );
   // `event.` を前置する: fs 版は行ごと検査して欄名が `event.type` の形になるので、同じ壊れ方が同じ `reason` になるようにそろえる。

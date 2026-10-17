@@ -7,6 +7,7 @@ import {
   type TokenRotationOutcome,
   type TokenRotator,
   type TokenVerdictOrigin,
+  writeStderrLine,
 } from '@alteroid/core';
 
 // 判断を2箇所に置かない: 設定（`rotateOn`）を見る場所が2つになり、`off` でも回る経路が生まれるため。
@@ -70,7 +71,7 @@ export function startTokenRotationWatch(options: TokenRotationWatchOptions): Tok
         });
         await options.onOutcome(outcome);
       } catch (error) {
-        process.stderr.write(
+        writeStderrLine(
           `alteroidd: 認証トークンの見直し（${reason}）が落ちました: ${reasonOf(error)}\n`,
         );
       }

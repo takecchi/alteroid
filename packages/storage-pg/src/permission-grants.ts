@@ -6,6 +6,7 @@ import {
   preparePermissionGrantForPut,
   UnreadablePermissionGrantError,
   unreadableRowKey,
+  writeStderrLine,
 } from '@alteroid/core';
 import type {
   PermissionGrant,
@@ -61,7 +62,7 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
         continue;
       }
       if (this.#unreadableOnce.sawUnreadable(key)) {
-        process.stderr.write(
+        writeStderrLine(
           `${describeUnreadableGrantRow({ id: row.id, reason: summarizeInvalidFields(parsed.error.issues) })}\n`,
         );
       }
@@ -100,7 +101,7 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
       return parsed.data;
     }
     if (this.#unreadableOnce.sawUnreadable(key)) {
-      process.stderr.write(
+      writeStderrLine(
         `${describeUnreadableGrantRow({ id, reason: summarizeInvalidFields(parsed.error.issues) })}\n`,
       );
     }
@@ -136,7 +137,7 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
 
       const parsed = permissionGrantSchema.safeParse(row.record);
       if (!parsed.success) {
-        process.stderr.write(
+        writeStderrLine(
           `${describeUnreadableGrantRow({ id, reason: summarizeInvalidFields(parsed.error.issues) })}\n`,
         );
         throw new UnreadablePermissionGrantError({ id });
@@ -202,7 +203,7 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
 
       const parsed = permissionGrantSchema.safeParse(row.record);
       if (!parsed.success) {
-        process.stderr.write(
+        writeStderrLine(
           `${describeUnreadableGrantRow({ id, reason: summarizeInvalidFields(parsed.error.issues) })}\n`,
         );
         return false;

@@ -19,6 +19,7 @@ import {
   usageTurnRowSchema,
   usageUnmeteredRowSchema,
   compareCodeUnits,
+  writeStderrLine,
 } from '@alteroid/core';
 import type {
   UnreadableUsageRow,
@@ -110,7 +111,7 @@ function splitRecord<T>(
       ),
     ];
     unreadable.push({ raw: value, fields });
-    process.stderr.write(
+    writeStderrLine(
       `alteroid: 使用量台帳の不正なエントリを読み飛ばしました（${label}、鍵=${JSON.stringify(key)}、不正な欄: ${fields.join(',') || '(不明)'}）\n`,
     );
   }

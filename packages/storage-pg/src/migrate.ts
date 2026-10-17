@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { writeStderrLine } from '@alteroid/core';
 import { sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -746,7 +747,7 @@ export interface MigrateOptions {
 // `warn` を差し替えられるのはテストのため: 警告が出たことと逐語を歯で測れないと、「索引が作られなかった」状態が誰にも見えないまま運用へ出る。
 export async function migrate(
   db: Db,
-  warn: (line: string) => void = (line) => process.stderr.write(line),
+  warn: (line: string) => void = (line) => writeStderrLine(line),
   options: MigrateOptions = {},
 ): Promise<void> {
   for (const statement of STATEMENTS) {
@@ -774,7 +775,7 @@ export function statementsFingerprint(statements: readonly string[] = STATEMENTS
  */
 export async function migrateOnBoot(
   db: Db,
-  warn: (line: string) => void = (line) => process.stderr.write(line),
+  warn: (line: string) => void = (line) => writeStderrLine(line),
 ): Promise<void> {
   const fingerprint = statementsFingerprint();
   if ((await appliedStatementsFingerprint(db)) === fingerprint) {

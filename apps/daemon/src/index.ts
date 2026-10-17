@@ -70,6 +70,7 @@ import {
   readAttachmentLimits,
   applyAttachmentRequestTimeout,
   attachmentCopiesDir,
+  writeStderrLine,
 } from '@alteroid/core';
 import { codexLoginEnvOf } from './codex-login-env.js';
 import { reportBootToolSearch, reportBootToolSearchObserved } from './boot-tool-search.js';
@@ -459,13 +460,13 @@ export async function main(): Promise<void> {
   // 器の生死や設定の押し込みの不明は日誌へ載せない: 黙って死んだ器へ挑み直すたびに1行増え、`journal_read` の窓が同じ行で埋まって本物の記録が押し出されるため。
   const reportRunnerUnknown = (report: RunnerUnknownReport): void => {
     if (managerIdOfRunnerPath(report.path) === undefined) {
-      process.stderr.write(`alteroidd: ${describeRunnerUnknown(report)}\n`);
+      writeStderrLine(`alteroidd: ${describeRunnerUnknown(report)}\n`);
       return;
     }
     void stores.journal
       .append({ type: 'external_event', source: 'runner', summary: describeRunnerUnknown(report) })
       .catch((error: unknown) => {
-        process.stderr.write(
+        writeStderrLine(
           `alteroidd: runner の期限切れを日誌へ残せませんでした: ${reasonOf(error)}\n` +
             `  ${describeRunnerUnknown(report)}\n`,
         );
@@ -477,7 +478,7 @@ export async function main(): Promise<void> {
     void stores.journal
       .append({ type: 'external_event', source: 'runner', summary })
       .catch((error: unknown) => {
-        process.stderr.write(
+        writeStderrLine(
           `alteroidd: runner の捨てた出来事を日誌へ残せませんでした: ${reasonOf(error)}\n` +
             `  ${summary}\n`,
         );
@@ -491,7 +492,7 @@ export async function main(): Promise<void> {
     void stores.journal
       .append({ type: 'external_event', source: 'runner', summary })
       .catch((error: unknown) => {
-        process.stderr.write(
+        writeStderrLine(
           `alteroidd: runner を失ったことを日誌へ残せませんでした: ${reasonOf(error)}\n` +
             `  ${summary}\n`,
         );
@@ -506,7 +507,7 @@ export async function main(): Promise<void> {
       void stores.journal
         .append({ type: 'external_event', source: 'loop-stall', summary })
         .catch((error: unknown) => {
-          process.stderr.write(
+          writeStderrLine(
             `alteroidd: ループの停止を日誌へ残せませんでした: ${reasonOf(error)}\n  ${summary}\n`,
           );
         });
@@ -528,7 +529,7 @@ export async function main(): Promise<void> {
   // 直に呼ばない: まだ初期化されていない `const` を触る経路が残るため。
   let postToClone: ((text: string) => void) | undefined = undefined;
   const announce = (text: string): void => {
-    process.stderr.write(`alteroidd: ${text}\n`);
+    writeStderrLine(`alteroidd: ${text}\n`);
     postToClone?.(text);
   };
   // 送る時点の `postToClone` と名簿を読む（どちらも後から決まるため。`runners` は下で作るが、読むのは窓が閉じた後）。
@@ -554,7 +555,7 @@ export async function main(): Promise<void> {
     onLost: ({ label, runnerId, error }) => {
       // stderr・報告・移送は1台ずつその場で行う。合流するのはクローンへの知らせだけ（受信箱が1台1通になるため）。
       const entry = { label, runnerId, reason: redactErrorText(error, process.env) };
-      process.stderr.write(`alteroidd: ${describeRunnerLost(entry)}\n`);
+      writeStderrLine(`alteroidd: ${describeRunnerLost(entry)}\n`);
       runnerLostNotice.add(entry);
       reportRunnerLost({ label, runnerId, error });
       relocateOnLost(runnerId);
@@ -569,7 +570,7 @@ export async function main(): Promise<void> {
         `そこで走っていた委譲の引き取りを試みます` +
         `（貸し出し期限が切れていない委譲は、切れてから自動で引き取ります）: ` +
         `${before} → ${after}`;
-      process.stderr.write(`alteroidd: ${text}\n`);
+      writeStderrLine(`alteroidd: ${text}\n`);
       void noteRunnerSwap({
         notice: text,
         runnerId,
@@ -584,7 +585,7 @@ export async function main(): Promise<void> {
           ),
         journal: (entry) => stores.journal.append(entry),
         wake: postToClone,
-        warn: (message) => process.stderr.write(`alteroidd: ${message}\n`),
+        warn: (message) => writeStderrLine(`alteroidd: ${message}\n`),
       });
       takeOverOnSwap(runnerId);
     },
@@ -687,7 +688,7 @@ export async function main(): Promise<void> {
       .catch((error: unknown) => ({ ok: false, error: reasonOf(error), output: undefined }));
     if (applied !== null && !applied.ok) {
       // 黙って古い環境で走らせない: 何が効いていないかが見えないと、鍵が届いていないのか権限が足りないのかを切り分けられないため。
-      process.stderr.write(
+      writeStderrLine(
         `alteroidd: 実行環境プロファイルを読めませんでした（クローンには効きません）: ${applied.error ?? '理由不明'}\n`,
       );
     }
@@ -754,7 +755,7 @@ export async function main(): Promise<void> {
     onShadowed: (names, target) => {
       // 先を言い分ける: runner は `runner` / `all` の行、クローンは `app` / `all` の行が影にするので、直す行が違うため。
       const where = target === 'clone' ? 'クローンの' : 'runner へ渡る';
-      process.stderr.write(
+      writeStderrLine(
         `alteroidd: ${where}実行環境プロファイルが認証の鍵と同じ名前を宣言しています。` +
           `回した鍵は${target === 'clone' ? 'クローン' : 'runner'}でこれに上書きされます: ${names.join(', ')}\n`,
       );
@@ -875,7 +876,7 @@ export async function main(): Promise<void> {
   });
 
   const archiveFoldConfig = readArchiveFoldConfig();
-  for (const note of archiveFoldConfig.notes) process.stderr.write(`alteroidd: ${note}\n`);
+  for (const note of archiveFoldConfig.notes) writeStderrLine(`alteroidd: ${note}\n`);
   const archiveFolder = startArchiveFolding({
     stores,
     managers: clone.managers,
@@ -884,7 +885,7 @@ export async function main(): Promise<void> {
 
   const attachmentPruneConfig = readAttachmentPruneConfig();
   for (const note of [...readAttachmentLimits().notes, ...attachmentPruneConfig.notes]) {
-    process.stderr.write(`alteroidd: ${note}\n`);
+    writeStderrLine(`alteroidd: ${note}\n`);
   }
   const attachmentPruner = startAttachmentPruning({
     stores,
@@ -974,7 +975,7 @@ export async function main(): Promise<void> {
             );
           })
           .catch((error: unknown) => {
-            process.stderr.write(
+            writeStderrLine(
               `alteroidd: 認証トークンが戻った後のマネージャーの引き継ぎに失敗しました: ${reasonOf(error)}\n`,
             );
           });
@@ -1032,7 +1033,7 @@ export async function main(): Promise<void> {
   const token = randomUUID();
 
   const schedule = readScheduleConfig();
-  for (const note of schedule.notes) process.stderr.write(`alteroidd: ${note}\n`);
+  for (const note of schedule.notes) writeStderrLine(`alteroidd: ${note}\n`);
   const scheduler = createScheduler({
     entries: buildSchedule(schedule),
     post: (event) => clone.post(event),
@@ -1040,7 +1041,7 @@ export async function main(): Promise<void> {
     inbox: stores.inbox,
     // 位相の読み書きの失敗を黙らせない: 時計は止まらないので、ここが唯一「効いていない」に気づける場所のため。
     onError: (message) => {
-      process.stderr.write(`alteroidd: ${message}\n`);
+      writeStderrLine(`alteroidd: ${message}\n`);
     },
   });
 
@@ -1057,7 +1058,7 @@ export async function main(): Promise<void> {
   // 起動時に1度きりにしない: runner を待たずに立ち上がる構成では、誰も繋がっていない名簿を見て「引き取るものは無い」と結論してしまうため。
   const takeOver = async (): Promise<void> => {
     const restored = await clone.managers.restore().catch((error: unknown) => {
-      process.stderr.write(`alteroidd: マネージャーの引き継ぎに失敗しました: ${reasonOf(error)}\n`);
+      writeStderrLine(`alteroidd: マネージャーの引き継ぎに失敗しました: ${reasonOf(error)}\n`);
       return [];
     });
     if (restored.length > 0) {
@@ -1076,7 +1077,7 @@ export async function main(): Promise<void> {
   takeOverOnSwap = (runnerId) => {
     if (runnerId !== undefined) {
       void clone.managers.reattachRunner(runnerId).catch((error: unknown) => {
-        process.stderr.write(
+        writeStderrLine(
           `alteroidd: 入れ替わった runner (${runnerId}) の取り直しに失敗しました: ${reasonOf(error)}\n`,
         );
       });
@@ -1100,7 +1101,7 @@ export async function main(): Promise<void> {
     process.env.ALTEROID_ALLOWED_ORIGINS,
   );
   for (const value of rejected) {
-    process.stderr.write(
+    writeStderrLine(
       `alteroidd: ALTEROID_ALLOWED_ORIGINS の "${value}" を無視しました` +
         '（scheme://host[:port] の形だけを受け付けます。* と経路付きは不可）\n',
     );
@@ -1141,7 +1142,7 @@ export async function main(): Promise<void> {
   // 黙って外へ出さない: ここは叩けばクローンのターンが起きる実行の口のため。
   // 認証が無くても起動は止めない: 手前に境界を置いて開ける運用を壊さないため
   if (hostname !== DEFAULT_BIND && hostname !== 'localhost' && hostname !== '::1') {
-    process.stderr.write(
+    writeStderrLine(
       authPlan.enabled
         ? `alteroidd: ${hostname} で待ち受けます。認証は有効ですが、` +
             'TLS は手前の層（リバースプロキシ・トンネル）で終端してください' +
@@ -1171,7 +1172,7 @@ export async function main(): Promise<void> {
   // 待ち受けを開けてから runner へ繋ぐ: 逆にすると、runner に依存しない chat・日誌・日報・承認への回答が runner が上がるまで受け付けられない。
   for (const seed of seeds) {
     void runners.register(seed).catch((error: unknown) => {
-      process.stderr.write(
+      writeStderrLine(
         `alteroidd: runner (${seed.label}) を名簿に載せられません: ${reasonOf(error)}\n`,
       );
     });
@@ -1227,7 +1228,7 @@ export async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown());
 
   await scheduler.refresh().catch((error: unknown) => {
-    process.stderr.write(`alteroidd: 継続中の依頼を読み込めませんでした: ${reasonOf(error)}\n`);
+    writeStderrLine(`alteroidd: 継続中の依頼を読み込めませんでした: ${reasonOf(error)}\n`);
   });
   scheduler.start();
 

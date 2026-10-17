@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { parseCron } from './cron.js';
-import { noteBackgroundFailure, reasonOf } from './dropped-record.js';
+import { noteBackgroundFailure, reasonOf, writeStderrLine } from './dropped-record.js';
 import { compareIsoInstant } from './iso-instant.js';
 import { isWrittenDailyReport } from './schema.js';
 import type {
@@ -130,7 +130,7 @@ class TimerScheduler implements Scheduler {
     this.#onError =
       onError ??
       ((message): void => {
-        process.stderr.write(`alteroid: ${message}\n`);
+        writeStderrLine(`alteroid: ${message}\n`);
       });
   }
 

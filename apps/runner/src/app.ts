@@ -42,6 +42,7 @@ import {
   runnerTakeCodexAuthWriteBackCommandSchema,
   runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
+  writeStderrLine,
 } from '@alteroid/core';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
@@ -252,7 +253,7 @@ export class Outbox {
       return this.#sent.map(({ event, queuedAt, seq }) => ({ event, queuedAt, seq }));
     // 字数で落とした分より前を求められたら、送り直せないことを黙らない（#4669）。届いていたかは runner からは分からない
     if (lastEventId < this.#droppedForCharsThrough) {
-      process.stderr.write(
+      writeStderrLine(
         `alteroid-runner: 繋ぎ直しで連番 ${String(lastEventId)} より後を求められたが、` +
           `${String(this.#droppedForCharsThrough)} までは控えの字数の上限で落としてあり、送り直せない` +
           `（届いていなければ、その間の出来事は失われた）\n`,
@@ -454,7 +455,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         const res = err.getResponse();
         return c.newResponse(res.body, res);
       }
-      process.stderr.write(
+      writeStderrLine(
         `alteroid-runner: HTTP 経路で例外を捕まえました（本文は出しません）: ${reasonOf(err)}\n`,
       );
       return c.text('Internal Server Error', 500);
@@ -485,7 +486,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       // 遅かった回だけ残す: デーモンの名乗りの確認（期限 5000ms）が全台同時に倒れたとき、器の側で遅れたのかを器のログだけで言えるようにするため（#4454）。
       const elapsedMs = performance.now() - startedAt;
       if (elapsedMs >= SLOW_HEALTH_MS) {
-        process.stderr.write(
+        writeStderrLine(
           `alteroid-runner: /health の材料集め（/proc の走査と cgroup の読み）に ${String(Math.round(elapsedMs))}ms かかりました` +
             `（デーモンの名乗りの確認の期限は 5000ms）\n`,
         );
@@ -768,7 +769,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           if (superseded) {
             // 何もしない: 抱えていた分は `attach` のドレインで既に渡っている。
           } else if (helloResult.outcome === 'deadline-exceeded') {
-            process.stderr.write(
+            writeStderrLine(
               `alteroid-runner: /events への hello 書き込みが ${String(sseWriteDeadlineMs)}ms を超えたため接続を畳みます` +
                 `（この接続が抱えていた ${String(queue.length)} 件を箱へ戻します）\n`,
             );
@@ -808,7 +809,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
               // `writing` を `null` へ戻さない: `finally` が元の `queuedAt` のまま箱へ戻すため。
               // `break` だけで済ませず `stream.abort()` を呼ぶ: pending の書き込みがある間は `close()` が解決せず、応答が終わらないため。
               const stuck = 1 + queue.length;
-              process.stderr.write(
+              writeStderrLine(
                 `alteroid-runner: /events への書き込みが ${String(sseWriteDeadlineMs)}ms を超えたため接続を畳みます` +
                   `（書きかけの1件を含め ${String(stuck)} 件を箱へ戻します）\n`,
               );

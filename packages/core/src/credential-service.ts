@@ -1,4 +1,4 @@
-import { reasonOf } from './dropped-record.js';
+import { reasonOf, writeStderrLine } from './dropped-record.js';
 import { DAEMON_RESTART_REQUIRED_ENV_NAMES } from './app-env-var-defaults.js';
 import {
   CREDENTIAL_NAME,
@@ -201,7 +201,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     if (signature === lastOverlongSignature) return;
     lastOverlongSignature = signature;
     if (names.length === 0) return;
-    process.stderr.write(
+    writeStderrLine(
       `alteroidd: 名前が ${CREDENTIAL_NAME_MAX_LENGTH} 文字を超える鍵の行が正本に残っており、` +
         `**配っていません**（runner の受け口が配列ごと弾くため）。` +
         `消すには PUT /credentials に { name, value: "" } を送る: ` +
