@@ -35,11 +35,15 @@ function to24Hour(hour12: number, meridiem: 'am' | 'pm'): number {
 
 /**
  * 文言に書かれたリセット時刻の言い回し（`resets 12:20am (Asia/Tokyo)`）をそのまま返す。時刻へは直さない。
- * 読む形は {@link parseNoticeResetAt} と同じ正規表現1本を共有する（2つ目を作ると片方だけ直る）。
+ * 読む形は {@link parseNoticeResetAt}（`RESETS_AT_PATTERN`）を先に、当たらなければ {@link parseNoticeResetDatedAt}（`RESETS_DATED_PATTERN`）を見る。
+ * 2本を順に見る: 1本へ広げると、日付を受けない既存の読み手が日付を無視して次の同じ時刻と読む。
  */
 export function noticeResetText(text: string): string | undefined {
-  return RESETS_AT_PATTERN.exec(text)?.[0];
+  return RESETS_AT_PATTERN.exec(text)?.[0] ?? RESETS_DATED_PATTERN.exec(text)?.[0];
 }
+
+/** 日付付きの形を読む窓。週の枠（7日）に1日の余裕を足した先まで。 */
+export const DATED_RESET_LOOKAHEAD_MS = 8 * 24 * 60 * 60 * 1000;
 
 // 日付付きの形（週の枠: `resets Oct 22, 4pm (Asia/Tokyo)`）。上の `RESETS_AT_PATTERN` は日付を受けないので、別の1本で持つ（広げると既存の読み手が日付を無視して次の同じ時刻と読む）。
 // 年は文言に無い: 呼び出し時刻の年（と翌年）から、`at` に近い側を採る
