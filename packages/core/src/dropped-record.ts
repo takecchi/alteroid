@@ -575,6 +575,15 @@ export function setDefaultStderrSinkForTesting(sink: ((line: string) => void) | 
 }
 
 /**
+ * 呼び手が組み立てた1行（接頭辞・改行まで含む）を、`note()` と同じ書き先へそのまま書く（#5003）。
+ * 時刻を足さず、跡の帳面（`rememberTrace`）にも積まない: 本番の出力を、`process.stderr.write` で直に書いていたときと同じ文のままにするため。
+ * 寄せる理由は書き先だけ: 直に書くと試験の準備（`vitest.quiet-traces.ts`）の差し替えを通らず、通った試験の分まで標準エラーへ出て、落ちた試験の名前が埋もれるため。
+ */
+export function writeStderrLine(line: string): void {
+  stderrSink(line);
+}
+
+/**
  * 日誌エントリから、本文を含まない見分けだけを取り出す。
  *
  * 出すのは書き手（＝この実装）が選んだ列挙値と id だけ。自由文は入れず、長さはどの自由文についても出す

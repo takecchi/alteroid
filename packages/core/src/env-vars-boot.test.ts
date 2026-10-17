@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { createCredentialService, resolveCredentialRows } from './credential-service.js';
 import {
@@ -7,7 +7,7 @@ import {
   migrateEnvBaseCredentialsOnce,
   seedDefaultEnvVars,
 } from './env-vars-boot.js';
-import { createMemoryStores } from './testing.js';
+import { captureStderr, createMemoryStores } from './testing.js';
 
 describe('seedDefaultEnvVars', () => {
   it('空の正本には、既定値がある変数だけを scope: app / secret: false で書く', async () => {
@@ -202,17 +202,8 @@ describe('applyAppScopedEnvVars', () => {
     await stores.credentials.put([
       { name: 'ALTEROID_CLONE_MODEL', value: 'opus', scope: 'app', secret: false },
     ]);
-    const written: string[] = [];
-    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
-      written.push(String(chunk));
-      return true;
-    });
-
-    try {
-      await applyAppScopedEnvVars(stores, {});
-    } finally {
-      spy.mockRestore();
-    }
+    // 跡の書き先（`writeStderrLine`）を通るので `captureStderr` で拾う（#5003）
+    const written = await captureStderr(() => applyAppScopedEnvVars(stores, {}));
 
     const line = written.join('');
     expect(line).toContain('ALTEROID_CLONE_MODEL');
@@ -229,9 +220,12 @@ describe('migrateEnvBaseCredentialsOnce', () => {
     NPM_TOKEN: 'npm_dummy',
   };
 
-  function quiet<T>(run: () => Promise<T>): Promise<T> {
-    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    return run().finally(() => spy.mockRestore());
+  async function quiet<T>(run: () => Promise<T>): Promise<T> {
+    let result: T | undefined;
+    await captureStderr(async () => {
+      result = await run();
+    });
+    return result as T;
   }
 
   it('土台だった3つの名前だけを、scope: all / secret: true で写す（プールの名前・任意の名前は写さない）', async () => {
@@ -285,16 +279,9 @@ describe('migrateEnvBaseCredentialsOnce', () => {
 
   it('移した名前を stderr と日誌に残し、値は1文字も出さない', async () => {
     const stores = createMemoryStores();
-    const written: string[] = [];
-    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
-      written.push(String(chunk));
-      return true;
-    });
-    try {
+    const written = await captureStderr(async () => {
       await migrateEnvBaseCredentialsOnce(stores, SNAPSHOT);
-    } finally {
-      spy.mockRestore();
-    }
+    });
 
     const stderr = written.join('');
     expect(stderr).toContain('GH_TOKEN');
@@ -309,16 +296,9 @@ describe('migrateEnvBaseCredentialsOnce', () => {
   it('正本へ書けなくても投げない（起動を止めない）。失敗は stderr に残る', async () => {
     const stores = createMemoryStores();
     stores.credentials.seedOnce = () => Promise.reject(new Error('boom'));
-    const written: string[] = [];
-    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
-      written.push(String(chunk));
-      return true;
-    });
-    try {
+    const written = await captureStderr(async () => {
       await expect(migrateEnvBaseCredentialsOnce(stores, SNAPSHOT)).resolves.toEqual([]);
-    } finally {
-      spy.mockRestore();
-    }
+    });
     expect(written.join('')).toContain('移せませんでした');
   });
 });

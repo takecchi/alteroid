@@ -106,6 +106,7 @@ import {
   noteUnclassifiedFailuresSummary,
   noteUnreadableRecord,
   reasonOf,
+  writeStderrLine,
 } from './dropped-record.js';
 import { ArchiveStash } from './archive-ref.js';
 import {
@@ -1736,7 +1737,7 @@ class Host implements RunnerHost {
   // 名乗りを覚えていない回は stderr に残す: 名乗りがいつ落ちるのかを後から確かめられるように（本文・委譲の中身は書かない）
   #stashArchive(managerId: string, body: string): { id: string; chars: number } | undefined {
     if (!this.#daemonAcceptsArchiveRef) {
-      process.stderr.write(
+      writeStderrLine(
         `alteroid-runner: いま繋がっているデーモンが退避の参照を受けると名乗っていないが、本文は SSE に載せずに預けて参照を送る（managerId=${managerId} chars=${String(body.length)}）\n`,
       );
     }
@@ -4897,7 +4898,7 @@ class RunnerSession {
     try {
       raise = planBashToolTimeoutRaise(input);
     } catch (error) {
-      process.stderr.write(
+      writeStderrLine(
         `alteroid: Bash の timeout 引数の判定が失敗した（書き換えない）: ${reasonOf(error)}\n`,
       );
       return undefined;
@@ -4930,7 +4931,7 @@ class RunnerSession {
     try {
       fn();
     } catch (error) {
-      process.stderr.write(`alteroid: ${label}が失敗した（判定は続ける）: ${reasonOf(error)}\n`);
+      writeStderrLine(`alteroid: ${label}が失敗した（判定は続ける）: ${reasonOf(error)}\n`);
     }
   }
 
