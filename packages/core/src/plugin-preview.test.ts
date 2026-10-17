@@ -192,6 +192,15 @@ describe('createPluginPreviewStore', () => {
     expect(store.get(previewId)).toBeUndefined();
   });
 
+  it('プレビューの時点の同名の SHA を覚える（無ければ null、預かりが無ければ undefined）', () => {
+    const store = createPluginPreviewStore();
+    const withSha = store.put(fetched([file('a', 'a')]), SHA);
+    const without = store.put(fetched([file('a', 'a')]));
+    expect(store.existingShaOf(withSha.previewId)).toBe(SHA);
+    expect(store.existingShaOf(without.previewId)).toBeNull();
+    expect(store.existingShaOf('unknown')).toBeUndefined();
+  });
+
   it('discard で消える', () => {
     const store = createPluginPreviewStore();
     const { previewId } = store.put(fetched([file('a', 'a')]));

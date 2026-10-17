@@ -181,7 +181,6 @@ describe('alteroid plugin add', () => {
 
     expect(sent.map((s) => `${s.method} ${s.path}`)).toEqual([
       'POST /plugins/preview',
-      'GET /plugins',
       'POST /plugins',
     ]);
     expect(sent[0]?.body).toEqual({
@@ -190,7 +189,7 @@ describe('alteroid plugin add', () => {
       path: 'plugins/demo',
       sha: SHA,
     });
-    expect(sent[2]?.body).toEqual({
+    expect(sent[1]?.body).toEqual({
       previewId: PREVIEW.previewId,
       scope: 'runner',
       enableHooks: false,
@@ -210,29 +209,32 @@ describe('alteroid plugin add', () => {
 
   it('同名の plugin が入っているときは、置き換え（前の SHA → 新しい SHA）を見せる', async () => {
     const OLD = 'b'.repeat(40);
-    setReply('GET', '/plugins', {
+    // 2026-10-17 #4797: 置き換えの出どころを GET /plugins から、プレビューの応答の replaces に変えた。以前の期待値: `置き換えます（SHA ${OLD} → ${SHA}）`
+    setReply('POST', '/plugins/preview', {
       status: 200,
       body: {
-        plugins: [
-          {
-            ...installed().plugin,
-            source: { kind: 'url', url: 'https://example.invalid/r.git', sha: OLD },
-          },
-        ],
+        ...PREVIEW,
+        summary: summary(),
+        replaces: {
+          name: 'demo',
+          source: { kind: 'url', url: 'https://example.invalid/old.git', sha: OLD },
+          sha: OLD,
+          installedAt: '2026-09-20T00:00:00.000Z',
+        },
       },
     });
-    setReply('POST', '/plugins/preview', { status: 200, body: { ...PREVIEW, summary: summary() } });
     setReply('POST', '/plugins', { status: 200, body: installed() });
     const read = captureStdout();
     const confirm = io('yes');
 
     await pluginAddCommand('https://example.invalid/r.git', {}, confirm);
 
-    expect(read()).toContain(`置き換えます（SHA ${OLD} → ${SHA}）`);
+    expect(read()).toContain(
+      `同じ名前の plugin が既にあり、確定するとそれを置き換えます（取り元: https://example.invalid/old.git、SHA: ${OLD} → ${SHA}、入れた日時: 2026-09-20T00:00:00.000Z）。`,
+    );
   });
 
   it('同名が入っていなければ、置き換えとは言わない', async () => {
-    setReply('GET', '/plugins', { status: 200, body: { plugins: [] } });
     setReply('POST', '/plugins/preview', { status: 200, body: { ...PREVIEW, summary: summary() } });
     setReply('POST', '/plugins', { status: 200, body: installed() });
     const read = captureStdout();
@@ -243,13 +245,24 @@ describe('alteroid plugin add', () => {
     expect(read()).not.toContain('置き換え');
   });
 
+  it('確定が 409（プレビューの後に同名が変わった）なら、その文をそのまま見せて失敗する', async () => {
+    const reason =
+      'プレビューの後に、同じ名前の plugin が変わった（または入った・消えた）。もう一度プレビューしてから確定すること';
+    setReply('POST', '/plugins/preview', { status: 200, body: { ...PREVIEW, summary: summary() } });
+    setReply('POST', '/plugins', { status: 409, body: { error: reason } });
+    captureStdout();
+    await expect(pluginAddCommand('https://example.invalid/r.git', { yes: true })).rejects.toThrow(
+      reason,
+    );
+  });
+
   it('marketplace 名は kind=marketplace で送る。--path / --sha は添えられない', async () => {
     setReply('POST', '/plugins/preview', { status: 200, body: { ...PREVIEW, summary: summary() } });
     setReply('POST', '/plugins', { status: 200, body: installed() });
     captureStdout();
     await pluginAddCommand('demo', { yes: true });
     expect(sent[0]?.body).toEqual({ kind: 'marketplace', plugin: 'demo' });
-    expect(sent[2]?.body).toEqual({
+    expect(sent[1]?.body).toEqual({
       previewId: PREVIEW.previewId,
       scope: 'all',
       enableHooks: false,
