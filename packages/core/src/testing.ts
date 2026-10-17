@@ -2037,8 +2037,10 @@ export function humanMessage(text: string, conversationId = 'conv-1'): InboxEven
  * stderr へ出た行を集める。記録の書き込み失敗の跡は stderr にしか出ない（本文をログへ落とさない）ので、これが無いと「黙って消える」に戻っても気づけない。
  *
  * `process.stderr.write` だけでは足りない: `dropped-record.ts` の `note()` は `fs.writeSync(2, …)` を使うので `setStderrSinkForTesting` でも差し替える。差し替えは `finally` で戻す（戻し忘れると以降のテストの出力が消える）。
+ *
+ * `body` は何を返してもよい（待つだけで、戻り値は使わない。#5012）: 値を返す関数をそのまま渡せないと、`async () => { await …; }` と包み直す手間が毎回かかるため。
  */
-export async function captureStderr(body: () => void | Promise<void>): Promise<string[]> {
+export async function captureStderr(body: () => unknown): Promise<string[]> {
   const lines: string[] = [];
   const original = process.stderr.write.bind(process.stderr);
   process.stderr.write = ((chunk: unknown): boolean => {

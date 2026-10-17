@@ -279,9 +279,8 @@ describe('migrateEnvBaseCredentialsOnce', () => {
 
   it('移した名前を stderr と日誌に残し、値は1文字も出さない', async () => {
     const stores = createMemoryStores();
-    const written = await captureStderr(async () => {
-      await migrateEnvBaseCredentialsOnce(stores, SNAPSHOT);
-    });
+    // 値を返す関数をそのまま渡せる（#5012）
+    const written = await captureStderr(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
 
     const stderr = written.join('');
     expect(stderr).toContain('GH_TOKEN');
