@@ -10240,6 +10240,253 @@ describe('manager_list（絞った先）に継続点（cursor）を足す（#662
   });
 });
 
+describe('manager_list は q で依頼文の全文と managerId を絞れる（#5020）', () => {
+  const NEWEST = Date.parse('2026-10-17T12:00:00.000Z');
+  const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
+
+  function entry(
+    managerId: string,
+    status: JobStatus,
+    minutesAgo: number,
+    request: string,
+  ): ManagerSummary {
+    return {
+      managerId,
+      status,
+      live: status === 'running' || status === 'waiting_human',
+      cwd: '/workspace/repo',
+      request,
+      startedAt: minutesBefore(minutesAgo),
+      updatedAt: minutesBefore(minutesAgo),
+      waiting: [],
+      runnerId: 'runner-test',
+    };
+  }
+
+  function pool(entries: readonly ManagerSummary[]): Harness {
+    const h = harness();
+    for (const item of [...entries].sort((a, b) => b.startedAt.localeCompare(a.startedAt))) {
+      h.running.push(item);
+    }
+    return h;
+  }
+
+  // 札は抜粋（LIST_REQUEST_EXCERPT）の外、依頼文の後ろに置く: 全文に当たっていて抜粋に当たっているのではないことを測るため
+  const worldbuild = (managerId: string, status: JobStatus, minutesAgo: number) =>
+    entry(managerId, status, minutesAgo, `${'あ'.repeat(600)}【WORLDBUILD-7】の続き`);
+
+  function extractCursor(reply: string): string {
+    const match = /cursor=([A-Za-z0-9\-_]+)/.exec(reply);
+    if (!match) throw new Error(`cursor が案内に無い: ${reply}`);
+    return match[1]!;
+  }
+
+  it('依頼文の札で絞れる。全角の【】と英字の大小を混ぜても当たり、抜粋に出ない後ろの語にも当たる', async () => {
+    const h = pool([
+      worldbuild('mgr-wb', 'running', 1),
+      entry('mgr-other', 'running', 2, '別の仕事【OTHER-1】'),
+    ]);
+
+    for (const q of [
+      '【WORLDBUILD-7】',
+      '【worldbuild-7】',
+      'ＷＯＲＬＤＢＵＩＬＤ-7',
+      'WorldBuild-7',
+    ]) {
+      const reply = await h.call('manager_list', { q });
+      expect(reply, `q=${q} で mgr-wb が出ない`).toContain('mgr-wb');
+      expect(reply, `q=${q} で関係ない委譲まで出た`).not.toContain('mgr-other');
+    }
+  });
+
+  it('managerId で絞れる', async () => {
+    const h = pool([
+      entry('mgr-alpha-1', 'running', 1, '仕事A'),
+      entry('mgr-beta-2', 'running', 2, '仕事B'),
+    ]);
+
+    const reply = await h.call('manager_list', { q: 'ALPHA' });
+
+    expect(reply).toContain('mgr-alpha-1');
+    expect(reply).not.toContain('mgr-beta-2');
+  });
+
+  it('status と併用できる（両方に当たるものだけが出る）', async () => {
+    const h = pool([
+      worldbuild('mgr-wb-run', 'running', 1),
+      worldbuild('mgr-wb-done', 'done', 2),
+      entry('mgr-other-run', 'running', 3, '別の仕事'),
+    ]);
+
+    const reply = await h.call('manager_list', { q: 'WORLDBUILD-7', status: ['running'] });
+
+    expect(reply).toContain('mgr-wb-run');
+    expect(reply).not.toContain('mgr-wb-done');
+    expect(reply).not.toContain('mgr-other-run');
+    expect(reply).toContain('件数: 全 3 本');
+  });
+
+  it('件数の行は絞る前の全体のまま、絞ったことは別の行で言う', async () => {
+    const h = pool([
+      worldbuild('mgr-wb', 'running', 1),
+      entry('mgr-o1', 'done', 2, '別の仕事'),
+      entry('mgr-o2', 'done', 3, '別の仕事'),
+    ]);
+
+    const reply = await h.call('manager_list', { q: 'WORLDBUILD-7' });
+
+    expect(reply).toContain('件数: 全 3 本');
+    expect(reply).toContain('絞り込み: q: "WORLDBUILD-7"');
+    expect(reply).toContain('に当たるのは 1 件');
+  });
+
+  it('0件のときは0件だったと、q の値つきで言う（委譲が居ないとは言わない）', async () => {
+    const h = pool([entry('mgr-a', 'running', 1, '仕事')]);
+
+    const reply = await h.call('manager_list', { q: 'NO-SUCH-TAG' });
+
+    expect(reply).toContain('q: "NO-SUCH-TAG" の絞り込みに当たる委譲は0件だった');
+    expect(reply).not.toContain('マネージャーは1本も居ない');
+    expect(reply).toContain('件数: 全 1 本');
+  });
+
+  it('空文字・空白だけの q は絞らず、絞らなかったと言う（status: [] と同じ倒し方）', async () => {
+    const h = pool([entry('mgr-a', 'running', 1, '仕事A'), entry('mgr-b', 'done', 2, '仕事B')]);
+    const plain = await h.call('manager_list', {});
+
+    for (const q of ['', '   ', '　']) {
+      const reply = await h.call('manager_list', { q });
+      expect(reply).toContain('mgr-a');
+      expect(reply).toContain('mgr-b');
+      expect(reply).toContain('q が空（または空白だけ）だったので、q では絞らなかった');
+      expect(
+        reply
+          .split('\n')
+          .filter((line) => !line.startsWith('絞り込み:'))
+          .join('\n'),
+      ).toBe(plain);
+    }
+  });
+
+  it('q を付けたまま予算で切れても、cursor を辿ると q に当たる全件に重複なく届く', async () => {
+    const all = Array.from({ length: 40 }, (_, index) =>
+      worldbuild(`mgr-wb-${String(index).padStart(2, '0')}`, 'running', index),
+    );
+    const others = Array.from({ length: 5 }, (_, index) =>
+      entry(`mgr-x-${index}`, 'running', index, '別の仕事'),
+    );
+    const h = pool([...all, ...others]);
+    const ids = all.map((m) => m.managerId);
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < ids.length + 1; guard += 1) {
+      const reply: string = await h.call(
+        'manager_list',
+        cursor === undefined ? { q: 'WORLDBUILD-7' } : { q: 'WORLDBUILD-7', cursor },
+      );
+      expect(reply).not.toContain('mgr-x-');
+      for (const id of ids) {
+        if (reply.includes(id)) seen.push(id);
+      }
+      if (!reply.includes('cursor=')) break;
+      expect(reply).toContain('q="WORLDBUILD-7"');
+      cursor = extractCursor(reply);
+    }
+
+    expect([...seen].sort()).toEqual([...ids].sort());
+  });
+
+  it('q を変えて cursor を渡すと q-mismatch の明示のエラーになる（黙って別の一覧へ繋がない）', async () => {
+    const h = pool(
+      Array.from({ length: 40 }, (_, index) => worldbuild(`mgr-wb-${index}`, 'running', index)),
+    );
+
+    const first = await h.call('manager_list', { q: 'WORLDBUILD-7' });
+    const cursor = extractCursor(first);
+
+    const noQuery = await h.call('manager_list', { cursor });
+    const otherQuery = await h.call('manager_list', { q: 'OTHER', cursor });
+
+    for (const reply of [noQuery, otherQuery]) {
+      expect(reply).toContain('食い違う');
+      expect(reply).not.toContain('mgr-wb-');
+    }
+  });
+
+  it('説明文に q が書かれている', () => {
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const description = tools.find((entry) => entry.name === 'manager_list')?.description;
+    expect(description).toContain('q で依頼文の全文と managerId を部分一致で探せる');
+  });
+});
+
+describe('manager_list の退避 ref は件数と最新の1件だけで、manager_report は全部出す（#5020）', () => {
+  const REF = (n: number) => `refs/alteroid-rescue/mgr-r/tree${String(n)}-abcd123${String(n)}`;
+
+  function rescued(): ManagerSummary {
+    return {
+      managerId: 'mgr-r',
+      status: 'running',
+      live: true,
+      cwd: '/workspace/repo',
+      request: '退避の多い仕事',
+      startedAt: '2026-10-17T10:00:00.000Z',
+      updatedAt: '2026-10-17T10:00:00.000Z',
+      waiting: [],
+      runnerId: 'runner-test',
+      lastRescue: {
+        at: '2026-10-17T11:03:00.000Z',
+        worktrees: [1, 2, 3].map((n) => ({
+          relativePath: `tree${String(n)}`,
+          branch: 'main',
+          at: `2026-10-17T11:0${String(n)}:00.000Z`,
+          pushed: {
+            ref: REF(n),
+            commit: String(n).repeat(40),
+            at: `2026-10-17T11:0${String(n)}:00.000Z`,
+          },
+        })),
+      },
+    };
+  }
+
+  it('一覧は件数と最新の1件だけを出し、残りの ref は出さない', async () => {
+    const h = harness();
+    h.running.push(rescued());
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('退避 ref 3 本（最新: ' + REF(3));
+    expect(reply).toContain('全部は manager_report');
+    expect(reply).not.toContain(REF(1));
+    expect(reply).not.toContain(REF(2));
+  });
+
+  it('manager_report は退避 ref を全部出す', async () => {
+    const h = harness();
+    h.running.push({ ...rescued(), lastReport: '報告の本文' });
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-r' });
+
+    for (const n of [1, 2, 3]) expect(reply).toContain(REF(n));
+  });
+
+  it('退避 ref が無い委譲は1文字も足さない', async () => {
+    const h = harness();
+    h.running.push({ ...rescued(), lastRescue: undefined });
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('退避 ref');
+  });
+});
+
 describe('manager_report: 報告が空のとき、生ログを見て言い分ける（#323）', () => {
   function assistantLine(
     text: string,

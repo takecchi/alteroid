@@ -35,6 +35,8 @@ const managerCursorSchema = z.object({
   startedAt: z.string().min(1),
   managerId: z.string().min(1),
   status: z.array(jobStatusSchema).nullable(),
+  // `.default(null)` を付ける: `q` を足す前に発行済みの cursor はこの欄を持たず、必須にすると一斉に `malformed` になる。古い cursor は `q` なしの一覧から出たものなので `null`（絞らない）が正しい
+  q: z.string().nullable().default(null),
 });
 
 export type ManagerCursor = z.infer<typeof managerCursorSchema>;
@@ -55,8 +57,13 @@ function sameStatusFilter(a: readonly JobStatus[] | null, b: readonly JobStatus[
   return as.every((value, index) => value === bs[index]);
 }
 
-export function encodeManagerCursor(cursor: ManagerCursor): string {
-  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+// `q` は省略できる: 語で絞らない呼びの cursor は `q: null` と同じで、呼び手に毎回書かせない
+export function encodeManagerCursor(
+  cursor: Omit<ManagerCursor, 'q'> & { q?: string | null },
+): string {
+  return Buffer.from(JSON.stringify({ ...cursor, q: cursor.q ?? null }), 'utf8').toString(
+    'base64url',
+  );
 }
 
 export type DecodeManagerCursorResult = { ok: true; cursor: ManagerCursor } | { ok: false };
@@ -80,15 +87,21 @@ export function resolveManagerCursor(
   positionOf: (entry: ManagerSummary) => ManagerPosition,
   statusFilter: readonly JobStatus[] | null,
   cursorRaw: string | undefined,
+  // 正規化済みの `q`（絞らないなら `null`）。cursor が持つ `q` と食い違えば `q-mismatch`: `status` と同じ理由で、別の絞りの一覧へ繋ぐと行を繰り返すか飛ばすため
+  queryFilter: string | null = null,
 ):
   | { kind: 'ok'; view: ManagerSummary[] }
   | { kind: 'malformed' }
-  | { kind: 'status-mismatch'; cursorStatus: readonly JobStatus[] | null } {
+  | { kind: 'status-mismatch'; cursorStatus: readonly JobStatus[] | null }
+  | { kind: 'q-mismatch'; cursorQuery: string | null } {
   if (cursorRaw === undefined) return { kind: 'ok', view: [...entries] };
   const decoded = decodeManagerCursor(cursorRaw);
   if (!decoded.ok) return { kind: 'malformed' };
   if (!sameStatusFilter(decoded.cursor.status, statusFilter)) {
     return { kind: 'status-mismatch', cursorStatus: decoded.cursor.status };
+  }
+  if (decoded.cursor.q !== queryFilter) {
+    return { kind: 'q-mismatch', cursorQuery: decoded.cursor.q };
   }
   const pivot: ManagerPosition = decoded.cursor;
   const view = entries.filter((entry) => compareManagerPosition(positionOf(entry), pivot) > 0);
