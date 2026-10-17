@@ -3890,6 +3890,26 @@ export function createApp(deps: AppDeps) {
         }
         const before = await stores.persona.read(slug);
         const { content, ifMatch } = c.req.valid('json');
+        // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す: ふつうの衝突のたびに `write` と `write_failed` の2行を日誌へ積まないため。
+        // ここを抜けた後に割り込まれた回は、下の `persona.write` の排他が 409 にし、打ち消しの行で対応を保つ。
+        if (ifMatch !== undefined) {
+          const matches =
+            ifMatch === null
+              ? before === null
+              : before !== null && memoryVersion(before.content) === ifMatch;
+          if (!matches) {
+            return c.json(
+              {
+                error: '記憶が読んだ後に変わっています（書き換えていません）' as const,
+                current:
+                  before === null
+                    ? null
+                    : { document: before, version: memoryVersion(before.content) },
+              },
+              409,
+            );
+          }
+        }
         // 日誌を先に書き、書けなければ本文を書かずに 500（#4774）: 本文の後に書いて `appendJournalOrDrop` で握ると、本文は変わったのに裏付けの `cause:'human'` の行が無く、`markHumanTouched` も呼べない「印の付かない人間の保存」が生まれる（クローンが次の蒸留で黙って上書きできてしまう）。
         let entry;
         try {

@@ -1123,7 +1123,37 @@ describe('HTTP API', () => {
       expect(body.current?.document.content).toContain('クローンが蒸留した判断');
 
       expect((await stores.persona.read('values'))?.content).toContain('クローンが蒸留した判断');
-      // 日誌を先に書くので、「人間が書いた」の行と、それを打ち消す行が残る（#4774）。
+      // 読んだ版が既に食い違っているので、日誌を書く前に 409 で返す（#4774。ふつうの衝突で日誌へ2行積まない）。
+      expect(await stores.journal.list({ types: ['memory_update'] })).toEqual([]);
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
+    });
+
+    it('版を比べた後・本文を書く前に割り込まれたら 409 で、「人間が書いた」の行と打ち消しの行が残り、印は立たない（#4774）', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const version = await readVersion();
+      // 本文を書く直前にクローンが書く（版の比べの後の割り込み）を作る
+      const racing: Stores = {
+        ...stores,
+        persona: Object.assign(Object.create(stores.persona) as typeof stores.persona, {
+          write: async (...args: Parameters<typeof stores.persona.write>) => {
+            await stores.persona.write('values', '# 価値観\n\nV1\n\n割り込んだ蒸留\n');
+            return stores.persona.write(...args);
+          },
+        }),
+      };
+      const racingApp = createApp({
+        clone: fake.clone,
+        stores: racing,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+
+      const res = await racingApp.request('/memory/values', {
+        ...json({ content: '# 価値観\n\nV1（人間）\n', ifMatch: version }),
+        method: 'PUT',
+      });
+      expect(res.status).toBe(409);
+      expect((await stores.persona.read('values'))?.content).toContain('割り込んだ蒸留');
       const entries = await stores.journal.list({ types: ['memory_update'], order: 'asc' });
       expect(entries.map((entry) => (entry as { action?: string }).action)).toEqual([
         'write',
@@ -1407,8 +1437,16 @@ describe('HTTP API', () => {
 
   it('打ち消しの行が書けなくても、409 は元の失敗のまま返り、stderr に跡が残る（#4774）', async () => {
     await stores.persona.write('conflict', '# 元\n');
+    const version = memoryVersion('# 元\n');
     const failingRevert: Stores = {
       ...stores,
+      // 版の比べの後・本文を書く前に割り込まれた形を作る（前もって比べる段で返ると、打ち消しの行の経路を通らないため）
+      persona: Object.assign(Object.create(stores.persona) as typeof stores.persona, {
+        write: async (...args: Parameters<typeof stores.persona.write>) => {
+          await stores.persona.write('conflict', '# 割り込み\n');
+          return stores.persona.write(...args);
+        },
+      }),
       journal: {
         ...stores.journal,
         append: (entry) => {
@@ -1429,7 +1467,7 @@ describe('HTTP API', () => {
     const lines = await captureStderr(async () => {
       status = (
         await failingApp.request('/memory/conflict', {
-          ...json({ content: '# 人間\n', ifMatch: 'stale' }),
+          ...json({ content: '# 人間\n', ifMatch: version }),
           method: 'PUT',
         })
       ).status;
