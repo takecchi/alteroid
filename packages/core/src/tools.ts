@@ -1971,16 +1971,17 @@ function unpushedWorkObservationIncompleteSuffix(
   return note === null ? '' : `\n  ${note}`;
 }
 
-// 一覧では件数と最後の1件だけにする: 一覧は予算で打ち切られ、1件の委譲が最大20行を取ると出る委譲の数が減るため。全件は `manager_report` が出す
+// 一覧では外へ出した成果も退避 ref も件数と最後の1件だけにする: 一覧は予算で打ち切られ、1件の委譲が最大20行を取ると出る委譲の数が減るため。全件は `manager_report` が出す
 function describeUnpushedWorkObservation(
   manager: ManagerSummary,
-  outputs: 'brief' | 'full' = 'brief',
+  outputs: 'brief' | 'full' | 'report' = 'brief',
 ): string | null {
   const lines = [
     describeUnpushedWorkObservationOnly(manager),
-    describeRescue(manager),
+    describeRescue(manager, outputs),
     describeRescueStash(manager),
-    describeExternalOutputs(manager, outputs),
+    // 'report' でも外へ出した成果は畳まない: 畳むのは退避 ref だけで、成果の記録は件数が上限で締まっている
+    describeExternalOutputs(manager, outputs === 'report' ? 'full' : outputs),
     describeHeldMessages(manager),
   ].filter((line): line is string => line !== null);
   return lines.length === 0 ? null : lines.join('\n');
@@ -2037,26 +2038,111 @@ export function describeRescueStash(manager: ManagerSummary): string | null {
   );
 }
 
-export function describeRescue(manager: ManagerSummary): string | null {
+type RescuePushed = NonNullable<
+  NonNullable<ManagerSummary['lastRescue']>['worktrees'][number]['pushed']
+>;
+
+function describeRescuePushed(pushed: RescuePushed): string {
+  const removal = pushed.removal;
+  // 消した ref を「在る」と読ませない
+  const state =
+    removal === undefined
+      ? ''
+      : removal.failureKind === 'no-remote'
+        ? '・送り先が台帳に無いので自動では消せない（手で消す）'
+        : removal.failureKind === undefined
+          ? `・${removal.at} に消した（${RESCUE_REMOVAL_REASON_TEXT[removal.reason]}）`
+          : `・消せなかった（${removal.failureKind}。${removal.at} 時点で ${String(removal.attempts ?? 1)} 回目。次の機会に再試行する）`;
+  return `${pushed.ref}（${pushed.commit.slice(0, 8)}, ${pushed.at}${state}）`;
+}
+
+// 一覧（brief）は件数と最新の1件だけにする: 作業ツリーごとに数行が付くと1件の委譲が予算を占有し、出る委譲の数が減って頁をめくらされるため。全部は `manager_report`（full）が出す
+// 退避されなかったもの（push 失敗・未追跡・submodule）は件数だけ残す: 消すと「全部退避できた」と読めるため
+function describeRescueBrief(rescue: NonNullable<ManagerSummary['lastRescue']>): string {
+  const pushedTrees = rescue.worktrees.filter((tree) => tree.pushed !== undefined);
+  const latest = pushedTrees.reduce<RescuePushed | undefined>(
+    (best, tree) =>
+      tree.pushed !== undefined && (best === undefined || tree.pushed.at > best.at)
+        ? tree.pushed
+        : best,
+    undefined,
+  );
+  const unsavedTrees = rescue.worktrees.filter(
+    (tree) =>
+      tree.notPushed !== undefined ||
+      tree.untracked !== undefined ||
+      tree.submoduleCount !== undefined,
+  ).length;
+  const refs =
+    latest === undefined
+      ? '0 本'
+      : `${String(pushedTrees.length)} 本（最新: ${describeRescuePushed(latest)}）`;
+  const unsaved =
+    unsavedTrees === 0 ? '' : `。退避されなかったものがある作業ツリー ${String(unsavedTrees)} 本`;
+  return `  退避 ref ${refs}${unsaved}（走行中に自動で push。${rescue.at} に最後に更新。全部は manager_report を rescueAll: true で読む）`;
+}
+
+type RescueTree = NonNullable<ManagerSummary['lastRescue']>['worktrees'][number];
+
+// 畳んでよいのは、読み手がもう何もできない作業ツリーだけにする: 生きている ref・退避されなかったもの・送れなかった失敗は、畳むと「全部退避できた」と読めるため
+type RescueTreeFold =
+  | { kind: 'shown' }
+  | { kind: 'removed'; reason: RescueRemovalReason }
+  | { kind: 'nothing-to-send' };
+
+function classifyRescueTree(tree: RescueTree): RescueTreeFold {
+  const removal = tree.pushed?.removal;
+  const liveRef =
+    tree.pushed !== undefined && (removal === undefined || removal.failureKind !== undefined);
+  if (liveRef) return { kind: 'shown' };
+  if (tree.untracked !== undefined || tree.submoduleCount !== undefined) return { kind: 'shown' };
+  if (tree.notPushed !== undefined && tree.notPushed.reason !== 'nothing-tracked') {
+    return { kind: 'shown' };
+  }
+  if (removal !== undefined) return { kind: 'removed', reason: removal.reason };
+  return { kind: 'nothing-to-send' };
+}
+
+function describeRescueFolded(folded: RescueTreeFold[]): string | null {
+  if (folded.length === 0) return null;
+  const removedGroups = (Object.keys(RESCUE_REMOVAL_REASON_TEXT) as RescueRemovalReason[])
+    .map((reason) => ({
+      reason,
+      count: folded.filter((f) => f.kind === 'removed' && f.reason === reason).length,
+    }))
+    .filter((group) => group.count > 0)
+    .map((group) => `${RESCUE_REMOVAL_REASON_TEXT[group.reason]} ${String(group.count)} 本`);
+  const nothing = folded.filter((f) => f.kind === 'nothing-to-send').length;
+  const breakdown = [
+    removedGroups.length === 0 ? null : `消した ref: ${removedGroups.join('・')}`,
+    nothing === 0 ? null : `送るもの無し ${String(nothing)} 本`,
+  ].filter((part): part is string => part !== null);
+  return (
+    `    ほか ${String(folded.length)} 本の作業ツリーは畳んだ（${breakdown.join('、')}）。` +
+    '全部は manager_report を rescueAll: true で読む'
+  );
+}
+
+export function describeRescue(
+  manager: ManagerSummary,
+  mode: 'brief' | 'full' | 'report' = 'full',
+): string | null {
   const rescue = manager.lastRescue;
   if (rescue === undefined || rescue.worktrees.length === 0) return null;
+  if (mode === 'brief') return describeRescueBrief(rescue);
   const lines = [`  退避 ref（走行中に自動で push。${rescue.at} に最後に更新）:`];
+  const folded: RescueTreeFold[] = [];
   for (const tree of rescue.worktrees) {
+    if (mode === 'report') {
+      const fold = classifyRescueTree(tree);
+      if (fold.kind !== 'shown') {
+        folded.push(fold);
+        continue;
+      }
+    }
     const parts: string[] = [];
     if (tree.pushed !== undefined) {
-      const removal = tree.pushed.removal;
-      // 消した ref を「在る」と読ませない
-      const state =
-        removal === undefined
-          ? ''
-          : removal.failureKind === 'no-remote'
-            ? '・送り先が台帳に無いので自動では消せない（手で消す）'
-            : removal.failureKind === undefined
-              ? `・${removal.at} に消した（${RESCUE_REMOVAL_REASON_TEXT[removal.reason]}）`
-              : `・消せなかった（${removal.failureKind}。${removal.at} 時点で ${String(removal.attempts ?? 1)} 回目。次の機会に再試行する）`;
-      parts.push(
-        `${tree.pushed.ref}（${tree.pushed.commit.slice(0, 8)}, ${tree.pushed.at}${state}）`,
-      );
+      parts.push(describeRescuePushed(tree.pushed));
     } else {
       parts.push('退避された ref は無い');
     }
@@ -2083,6 +2169,8 @@ export function describeRescue(manager: ManagerSummary): string | null {
     }
     if (unsaved.length > 0) lines.push(`      退避されなかったもの: ${unsaved.join('、')}`);
   }
+  const foldedLine = describeRescueFolded(folded);
+  if (foldedLine !== null) lines.push(foldedLine);
   return lines.join('\n');
 }
 
@@ -2132,8 +2220,11 @@ function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | 
   );
 }
 
-function unpushedWorkReportNote(manager: ManagerSummary): string | null {
-  const note = describeUnpushedWorkObservation(manager, 'full');
+function unpushedWorkReportNote(
+  manager: ManagerSummary,
+  rescueAll: boolean = false,
+): string | null {
+  const note = describeUnpushedWorkObservation(manager, rescueAll ? 'full' : 'report');
   return note === null ? null : note.trimStart();
 }
 
@@ -7458,6 +7549,8 @@ export function createCloneTools(context: ToolContext) {
           'そのときは「絞らずに全件を出した」と応答に書く）。' +
           '**journal_read の types / commitment_list の origin とは倒し方が違う** — ' +
           'あちらは [] を「どれにも当たらない」＝0件として扱う。',
+        'q で依頼文の全文と managerId を部分一致で探せる（依頼文の札や語で担当を探すとき。大文字小文字・全角半角は区別しない）。status と併用できる。' +
+          '各行の退避 ref は件数と最新の1件だけで、全部は manager_report を rescueAll: true で呼ぶと、退避 ref を作業ツリーごとに全部出す。',
         '絞った先が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
         '認証トークンの世代の行（`describeTokenGeneration` の doc）が出ているマネージャーでは、' +
           'この委譲が最後に起こした／自動で開き直した時点の世代と、いまの現役の世代を比べられる。' +
@@ -7487,16 +7580,26 @@ export function createCloneTools(context: ToolContext) {
               '空の配列 [] も絞らない（渡さなかったのと同じ。0件にはならない）。' +
               '先頭の件数の行は絞る前の全体を出す',
           ),
+        q: z
+          .string()
+          .optional()
+          .describe(
+            '依頼文の全文と managerId に部分一致で絞る（例: 依頼文の札 "WORLDBUILD-7"）。' +
+              '大文字小文字は区別せず、全角と半角は NFKC で揃えて比べる（【】と [] のような別の字は揃わない）。' +
+              'status と併用できる（両方に当たるものだけが出る）。' +
+              '省略・空文字・空白だけは絞らない（応答にその旨が出る）。' +
+              '先頭の件数の行は絞る前の全体を出す。0件のときは q の値つきでそう言う',
+          ),
         cursor: z
           .string()
           .optional()
           .describe(
             '一覧の続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す' +
               '（自分で組み立てない）。省略すると先頭から。' +
-              'status はカーソルを取った呼びと揃えること（食い違うと明示のエラーになる）。',
+              'status と q はカーソルを取った呼びと揃えること（食い違うと明示のエラーになる）。',
           ),
       },
-      async ({ status, cursor }) => {
+      async ({ status, q, cursor }) => {
         if (!context.managers) return NO_POOL;
         const managers = await context.managers.list();
         // この一覧ぜんぶで同じ「いま」を使う: 行ごとに `new Date()` を呼ぶと、同じ応答の中で判定の基準がずれるため
@@ -7538,12 +7641,31 @@ export function createCloneTools(context: ToolContext) {
         // `status: []`（空配列）は「絞らない」へ倒す。**この面の他の一覧とは逆である**: ストアを通らず、同じ引数名が面によって逆の答えを返すほうが、面の中で倒し方が揃わないことより重いため（`GET /managers?status=` に揃える）
         // 黙って無視しない: `[]` を0件だと思って渡した呼び手には、出力で「絞らずに全件を出した」と言う
         const filtering = status !== undefined && status.length > 0;
-        const view = filtering
+        // `q` は依頼文の全文（`manager.request`。一覧に出す抜粋ではない）と managerId に当てる: 抜粋に当てると、抜粋の後ろに在る札や語で探せないため
+        // 両側を NFKC に揃えて小文字にする: 全角の【】・英数と半角、英字の大小を呼び手が合わせなくても当たるように
+        // 空白だけの `q` は絞らない側へ倒す（`status: []` と同じ。0件へ倒すと絞りを外した呼びが「マネージャーが消えた」ように見える）
+        const queryNeedle = q === undefined ? '' : normalizeManagerQuery(q);
+        const queryFiltering = queryNeedle !== '';
+        const statusView = filtering
           ? attention.filter((manager) => status.includes(manager.status))
           : attention;
-        // cursor は `status` で絞った後・予算で切る前で解決する: 順序を変えると絞りに当たらない行が窓を食い尽くすため
+        const view = queryFiltering
+          ? statusView.filter(
+              (manager) =>
+                normalizeManagerQuery(manager.request).includes(queryNeedle) ||
+                normalizeManagerQuery(manager.managerId).includes(queryNeedle),
+            )
+          : statusView;
+        // cursor は `status` と `q` で絞った後・予算で切る前で解決する: 順序を変えると絞りに当たらない行が窓を食い尽くすため
         const cursorStatus = normalizeManagerCursorStatus(status);
-        const cursorOutcome = resolveManagerCursor(view, managerPositionOf, cursorStatus, cursor);
+        const cursorQuery = queryFiltering ? queryNeedle : null;
+        const cursorOutcome = resolveManagerCursor(
+          view,
+          managerPositionOf,
+          cursorStatus,
+          cursor,
+          cursorQuery,
+        );
         if (cursorOutcome.kind === 'malformed') {
           return text(
             'cursor が壊れている（この道具が返したものではないか、書き換えられている）。' +
@@ -7561,6 +7683,13 @@ export function createCloneTools(context: ToolContext) {
               'status を cursor を取ったときと揃えて呼び直すか（' +
               `manager_list ${cursorOutcome.cursorStatus === null ? '' : `status=${JSON.stringify(cursorOutcome.cursorStatus)} `}cursor=${cursor}）、` +
               'cursor を付けずに status だけで先頭から呼び直すこと。',
+          );
+        }
+        if (cursorOutcome.kind === 'q-mismatch') {
+          return text(
+            `cursor は q: ${cursorOutcome.cursorQuery === null ? '絞っていない' : JSON.stringify(cursorOutcome.cursorQuery)} の一覧から出た続きの位置で、` +
+              `いまの呼び（q: ${queryFiltering ? JSON.stringify(q) : '未指定または空'}）と食い違う。` +
+              'q を cursor を取ったときと揃えて呼び直すか、cursor を付けずに先頭から呼び直すこと。',
           );
         }
         const paged = cursorOutcome.view;
@@ -7686,16 +7815,28 @@ export function createCloneTools(context: ToolContext) {
             status === undefined
               ? null
               : filtering
-                ? `絞り込み: status: ${status.join(',')} に当たるのは ${view.length} 件で、` +
-                  'この一覧はその中だけを出している（すぐ上の件数は絞る前の全体である）。'
+                ? `絞り込み: status: ${status.join(',')} に当たるのは ${statusView.length} 件で、` +
+                  `この一覧は${queryFiltering ? 'その中の q にも当たるものだけ' : 'その中だけ'}を出している（すぐ上の件数は絞る前の全体である）。`
                 : '絞り込み: status に空の配列が渡ったので、絞らずに全件を出した' +
                   '（渡さなかったのと同じ結果である。人間の GET /managers に揃えてある——' +
                   '0件へ倒すと絞りを解除した呼びが「マネージャーが消えた」ように見えるため）。' +
                   '**journal_read の types / commitment_list の origin は [] を0件として扱うので、' +
                   'この道具だけ倒し方が違う**（理由は tools.ts の doc に在る）。',
+            // `q` の注記も件数の行とは別の行で言う。空白だけの `q` は黙って無視せず、絞らなかったと言う
+            q === undefined
+              ? null
+              : queryFiltering
+                ? `絞り込み: q: ${JSON.stringify(q)}（依頼文の全文と managerId への部分一致。` +
+                  `大文字小文字と全角半角は区別しない）に当たるのは ${view.length} 件` +
+                  `${filtering ? `（status で絞った ${statusView.length} 件の中）` : `（全 ${managers.length} 本の中）`}で、` +
+                  'この一覧はその中だけを出している（すぐ上の件数は絞る前の全体である）。'
+                : '絞り込み: q が空（または空白だけ）だったので、q では絞らなかった' +
+                  '（渡さなかったのと同じ結果である。status: [] と同じ倒し方）。',
             // 絞った結果が0件なのと委譲が1本も無いのを分ける: 「無い」と読めると、絞りが厳しかっただけなのに台帳の側を疑うことになるため
             view.length === 0
-              ? '（この status の絞り込みに当たる委譲は無い。絞る前の件数は上の行に在る）'
+              ? queryFiltering
+                ? `（${filtering ? 'この status と ' : ''}q: ${JSON.stringify(q)} の絞り込みに当たる委譲は0件だった。絞る前の件数は上の行に在る）`
+                : '（この status の絞り込みに当たる委譲は無い。絞る前の件数は上の行に在る）'
               : // cursor で辿り切った最後の頁を、絞り込みの0件とは別の文にする
                 paged.length === 0
                 ? '（cursor より後ろの、この絞り込みに当たる委譲は無い。これが最後の頁）'
@@ -7709,19 +7850,25 @@ export function createCloneTools(context: ToolContext) {
                       const nextCursor = encodeManagerCursor({
                         ...managerPositionOf(lastShown),
                         status: cursorStatus === null ? null : [...cursorStatus],
+                        q: cursorQuery,
                       });
                       const statusArg = filtering ? ` status=${JSON.stringify(status)}` : '';
+                      const queryArg = queryFiltering ? ` q=${JSON.stringify(q)}` : '';
+                      const narrowed = [
+                        filtering ? `status: ${status.join(',')}` : null,
+                        queryFiltering ? `q: ${JSON.stringify(q)}` : null,
+                      ].filter((part): part is string => part !== null);
                       return (
                         `…ほか ${rest} 件は省略（` +
-                        (filtering
-                          ? `status: ${status.join(',')} に絞った ${total} 件のうち ${shown} 件を出した`
+                        (narrowed.length > 0
+                          ? `${narrowed.join(' と ')} に絞った ${total} 件のうち ${shown} 件を出した`
                           : `全 ${total} 件`) +
                         '）。走行中・返事待ちを先に出し、次に lost（判断待ち）、そのあとに残りを出す。' +
                         '各群の中は startedAt の新しい順である。' +
                         '**省略されたのは終端したもの（またはより古いもの）の側である。**' +
-                        `続きは manager_list cursor=${nextCursor}${statusArg} で取れる（status は同じまま呼ぶこと）。` +
+                        `続きは manager_list cursor=${nextCursor}${statusArg}${queryArg} で取れる（status と q は同じまま呼ぶこと）。` +
                         '委譲の台帳には保持期間も掃除の機構も無いので、辿る頁数は台帳の本数に比例して増える。' +
-                        'status で絞れば頁数を減らせる。'
+                        'status や q で絞れば頁数を減らせる。'
                       );
                     },
                   }),
@@ -7740,6 +7887,10 @@ export function createCloneTools(context: ToolContext) {
       [
         'マネージャーの依頼文・直近の報告を全文で読む。',
         'manager_list は抜粋なので、欠落に気づいたらここで全部読むこと。',
+        'manager_list の行は退避 ref を件数と最新の1件しか出さない。ここ（manager_report）は報告の本文の前に、作業ツリーごとの退避 ref を既定では畳んで出す:',
+        '生きている退避 ref（消していない・消せなかった・送り先が無い）・退避されなかったもの（未追跡・submodule）・送れなかった失敗（送るもの無し以外）の作業ツリーは1行ずつ出し、',
+        '退避 ref を消し終えたもの（消した理由ごと）と送るもの無しのものは件数にまとめた1行になる。',
+        '全部（消した ref も送るもの無しも1行ずつ）は rescueAll: true で読む。',
         '長い場合は続きの取り方が末尾に出るので、最後まで読み切ること。',
         'それでも足りない（報告に書かれていない中身を確かめたい）ときは manager_transcript で生ログまで降りられる。',
         'report が「まだ無い」と返ったときは、内部で生ログも見ている（#323）——',
@@ -7757,8 +7908,14 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             `何文字目から読むか（${formatIntRangeJa({ min: 0 })}）。前回の応答が示した続きの位置を渡す`,
           ),
+        rescueAll: z
+          .boolean()
+          .optional()
+          .describe(
+            '真なら退避 ref を畳まず作業ツリーごとに全部出す（既定は、消し終えた ref と送るもの無しの作業ツリーを件数にまとめる）',
+          ),
       },
-      async ({ managerId, part = 'report', offset = 0 }) => {
+      async ({ managerId, part = 'report', offset = 0, rescueAll = false }) => {
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         if (!context.managers) return NO_POOL;
@@ -7797,7 +7954,7 @@ export function createCloneTools(context: ToolContext) {
           const denied = describeDenials(context.managers.denials(managerId), found.lastReportAt);
           // この枝でも出す: `manager_list` で「何も届いていない」と読んだクローンが掘りに来る先で、黙ると順位を付けた意味が掘った先で消えるため
           const unobserved = describeUnobservedOutcome(found);
-          const unpushedWork = unpushedWorkReportNote(found);
+          const unpushedWork = unpushedWorkReportNote(found, rescueAll);
           const withheldReportsNote = describeWithheldReports(found);
           return text(
             [
@@ -7843,7 +8000,7 @@ export function createCloneTools(context: ToolContext) {
               );
         // 依頼文（`part === 'request'`）では注記を出さない: 依頼文は報告・失敗・拒否の話ではないため
         const unobserved = part === 'request' ? null : describeUnobservedOutcome(found);
-        const unpushedWork = part === 'request' ? null : unpushedWorkReportNote(found);
+        const unpushedWork = part === 'request' ? null : unpushedWorkReportNote(found, rescueAll);
         const withheldReportsNote = part === 'request' ? null : describeWithheldReports(found);
         const label =
           part === 'request'
@@ -9660,6 +9817,11 @@ function managerAttentionRank(status: JobStatus): 0 | 1 | 2 {
 function managerJudgementRank(entry: ManagerSummary): 0 | 1 | 2 {
   const outcome = classifyUnobservedOutcome(entry);
   return outcome === null ? JUDGEMENT_RANK_NOT_APPLICABLE : outcome.rank;
+}
+
+// NFKC の後に小文字へ: 順序を逆にすると、小文字化で字形が変わる全角英字が半角へ揃う前に素通りするため
+function normalizeManagerQuery(value: string): string {
+  return value.normalize('NFKC').toLowerCase().trim();
 }
 
 function managerPositionOf(entry: ManagerSummary): ManagerPosition {

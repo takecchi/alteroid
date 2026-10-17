@@ -1,6 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseNoticeResetAt } from './usage-reset-text.js';
+import { noticeResetText, parseNoticeResetAt } from './usage-reset-text.js';
+
+describe('noticeResetText: 言い回しをそのまま返す', () => {
+  it('24時間以内の形は今までと同じ言い回しを返す', () => {
+    expect(noticeResetText("You've hit your session limit · resets 10:10pm (Asia/Tokyo)")).toBe(
+      'resets 10:10pm (Asia/Tokyo)',
+    );
+  });
+
+  it('日付付きの形（週の枠）は、24時間以内の形に当たらないときに返す', () => {
+    expect(noticeResetText("You've hit your weekly limit · resets Oct 22, 4pm (Asia/Tokyo)")).toBe(
+      'resets Oct 22, 4pm (Asia/Tokyo)',
+    );
+  });
+
+  it('帯が無い形・resets の無い文言は返さない', () => {
+    expect(noticeResetText("You've hit your limit · resets at 5pm")).toBeUndefined();
+    expect(noticeResetText("You've hit your weekly limit")).toBeUndefined();
+  });
+});
 
 describe('#682: 上限の文言からリセット時刻を読む', () => {
   const FALLBACK = 5 * 60 * 60 * 1000;

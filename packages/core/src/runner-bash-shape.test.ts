@@ -179,7 +179,7 @@ describe('Bash の形の歯（#4947・マネージャーにも #4949）', () => 
       const { options } = await startSession({});
       for (const command of [
         'gh pr create --body "a > b"',
-        "timeout 300 bash -c 'sleep 1; echo done'",
+        "timeout 300 bash -c 'sleep 1 && echo done'",
         "timeout 300 bash -c 'until test -f x; do sleep 5; done'",
         'sort < in.txt',
         'echo git reset',
@@ -276,14 +276,18 @@ describe('管が終了コードを隠す形（#4990）', () => {
       expect(note).toContain(actor);
     });
 
-    it(`${label}の pnpm test | tail は止めず、PostToolUse に知らせを添える。cat f | tail には添えない`, async () => {
-      const { options } = await startSession({});
-      const pre = (await firePreToolUse(options, bash('pnpm test | tail', worker))) as Out;
+    // #5017: 最後の段が head・tail の管は pipe-trim で断つようになった。止めない検査の管は、head・tail 以外の最後の段のものだけ
+    it(`${label}の pnpm test | tail は deny（形=pipe-trim）。pnpm test | grep FAIL は止めず、PostToolUse に知らせを添える。cat f | grep x には添えない`, async () => {
+      const { options, events } = await startSession({});
+      const trimmed = (await firePreToolUse(options, bash('pnpm test | tail', worker))) as Out;
+      expect(trimmed.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(noteTexts(events).find((t) => t.includes('形=pipe-trim'))).toContain(actor);
+      const pre = (await firePreToolUse(options, bash('pnpm test | grep FAIL', worker))) as Out;
       expect(pre.hookSpecificOutput?.permissionDecision).toBeUndefined();
-      const notice = await firePostToolUse(options, 'pnpm test | tail', worker);
-      expect(notice).toContain('管の最後の `tail` の終了コード');
+      const notice = await firePostToolUse(options, 'pnpm test | grep FAIL', worker);
+      expect(notice).toContain('管の最後の `grep` の終了コード');
       expect(notice).toContain('`pnpm test` が通ったことは表さない');
-      expect(await firePostToolUse(options, 'cat f | tail', worker)).toBeUndefined();
+      expect(await firePostToolUse(options, 'cat f | grep x', worker)).toBeUndefined();
     });
   }
 

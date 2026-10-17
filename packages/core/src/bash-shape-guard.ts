@@ -5,6 +5,8 @@ import { computeQuoteScan } from './bash-wait-guard.js';
 // 引用符の中でも実行される所だけ中を読む: `bash -c` / `sh -c` の引数（1段）と、二重引用符の中の `$(...)`・バッククォート
 // git は、コマンドの位置の `git` の全体の選択肢を読み飛ばした先の下位命令で判定する（`echo git reset` は通す）
 // 既知の穴（断らない）: `eval`・変数に入れた命令（`$CMD`）・2段以上の入れ子の `bash -c`
+// `chain`（`;` で繋ぐ形）は外側の `;` だけを見る。`for`・`while`・`until`・`if`・`case`・`select`・関数定義・`{ …; }` のような制御構文が在るコマンドは、丸ごと断らない（制御構文の `;` と繋ぎの `;` を字面では見分けきれないため）
+// `pipe-trim`（管の最後が `head`・`tail`）は、一番外側の文だけを見る。`$(...)`・バッククォートの中の管は断らない（値を1行取る形のため）
 
 export type BashShapeForm =
   | 'heredoc'
@@ -22,6 +24,9 @@ export type BashShapeForm =
   | 'no-verify'
   | 'gh-merge-auto'
   | 'cd-git'
+  | 'cd-chain'
+  | 'chain'
+  | 'pipe-trim'
   | 'pipe-masks-exit';
 
 export type BashShapeVerdict =
@@ -61,7 +66,88 @@ const REASONS: Record<Exclude<BashShapeForm, 'pipe-masks-exit'>, string> = {
     '`gh pr merge --auto` は通らないので、CI を前景で `timeout 530 gh run watch <id> --exit-status` で待ち、緑なら `gh pr merge <番号> --squash --match-head-commit <sha>` でマージすること。',
   'cd-git':
     '`cd` と `git` を1回の Bash に重ねる形（`cd <dir> && git …`）は、Claude Code 本体が確認に上げて手が止まりやすいので通らない。`cd` を外して `git -C <絶対パス> …` で場所を指すこと。',
+  'cd-chain':
+    '`cd` の後ろに別のコマンドを同じ1回で続ける形（`cd <dir> && make`・`cd <dir>; ls`）は通らないので、`cd` を外して、コマンドの側で場所を指すこと（`git -C <絶対パス>`・`pnpm -C <絶対パス>`・`make -C <絶対パス>`・コマンドの引数に絶対パス）。`cd` だけを1回で打つのは通る。',
+  chain:
+    '`;` で2つ以上のコマンドを繋ぐ形は通らないので、1回の Bash には1つのコマンドだけを打ち、前の結果を見てから次を打つ形で順に呼ぶこと（`;` で繋ぐと、前のコマンドが失敗しても後ろが走り、後ろだけが成功して返る）。',
+  'pipe-trim':
+    '管の最後の段が `head`・`tail` の形（`git log | head -20`・`pnpm test | tail -50`）は通らない。管の終了コードは最後の段のものになり、前のコマンドの失敗が成功に見えるので、管を外してそのまま打つこと（長い出力は道具が切って、全文をファイルに残す）。件数を絞りたいなら、コマンド自身の選択肢（`git log -n 20`・`gh … --limit 20`）を使うこと。',
 };
+
+/** 断る形ごとの要約（プロンプトに載せる一覧の元）。型で全部の形を網羅させる: 形を足して要約を書き忘れると typecheck が落ちる（#5017）。 */
+export const BASH_SHAPE_SUMMARIES: Record<BashShapeForm, { shape: string; instead: string }> = {
+  heredoc: { shape: '`<<EOF`', instead: 'Write でファイルを作り、絶対パスで渡す' },
+  'subst-heredoc': {
+    shape: '`"$(cat <<EOF …)"`（二重引用符の中のヒアドキュメント）',
+    instead:
+      'Write でファイルを作り、`git commit -F <絶対パス>`・`gh pr create --body-file <絶対パス>` で渡す',
+  },
+  redirect: {
+    shape: '`>`・`>>`・`&>`・`2>/dev/null`',
+    instead: 'ファイルへ書くなら Write。出力は捨てずにそのまま読む',
+  },
+  'fd-dup': { shape: '`2>&1`・`>&2`', instead: '付け替えを外してそのまま打つ' },
+  'pipe-stderr': { shape: '`|&`', instead: '`|&` を外してそのまま打つ' },
+  'sed-in-place': { shape: '`sed -i`', instead: 'Edit で置き換える' },
+  'node-eval': {
+    shape: '`node -e`・`-p`',
+    instead: 'Read か grep。処理が要るなら Write でスクリプトを作って絶対パスで実行する',
+  },
+  'python-c': {
+    shape: '`python -c`・`python3 -c`',
+    instead: 'Read か grep。処理が要るなら Write でスクリプトを作って絶対パスで実行する',
+  },
+  'perl-eval': {
+    shape: '`perl -e`・`-E`・`-i`',
+    instead: 'Read か grep か Edit。処理が要るなら Write でスクリプトを作って絶対パスで実行する',
+  },
+  'git-reset': {
+    shape: '`git reset`',
+    instead: '`git restore --staged <path>`・`git revert <commit>`',
+  },
+  'git-force-push': {
+    shape: '`git push --force`・`-f`・`--force-with-lease`・`+` で始まる refspec',
+    instead:
+      '新しいコミットを積んで普通に `git push` する。書き換えが要るなら新しい枝を切って PR にする',
+  },
+  'git-rebase': { shape: '`git rebase`・`git pull --rebase`', instead: '`git merge origin/main`' },
+  'no-verify': {
+    shape: '`--no-verify`・`git commit -n`',
+    instead: 'フックが落ちた理由を直して、付けずに打ち直す',
+  },
+  'gh-merge-auto': {
+    shape: '`gh pr merge --auto`',
+    instead:
+      '前景で `timeout 530 gh run watch <id> --exit-status` で待ち、緑なら `gh pr merge <番号> --squash --match-head-commit <sha>`',
+  },
+  'cd-git': { shape: '`cd <dir> && git …`', instead: '`git -C <絶対パス> …`' },
+  'cd-chain': {
+    shape: '`cd <dir> && make`・`cd <dir>; ls`（`cd` の後ろに別のコマンドを続ける形）',
+    instead:
+      '`cd` を外し、コマンドの側で場所を指す（`pnpm -C <絶対パス>`・`make -C <絶対パス>`・絶対パス）',
+  },
+  chain: {
+    shape: '`;` で2つ以上のコマンドを繋ぐ形',
+    instead: '1回の Bash に1つのコマンドを打ち、前の結果を見てから次を打つ',
+  },
+  'pipe-trim': {
+    shape: '`| head`・`| tail`（管の最後の段）',
+    instead:
+      '管を外してそのまま打つ。件数はコマンド自身の選択肢で絞る（`git log -n 20`・`gh … --limit 20`）',
+  },
+  'pipe-masks-exit': {
+    shape:
+      '`git merge`・`git commit`・`gh pr merge`・`prettier --write` などを管の最後でない段に置く形',
+    instead: '管を外して、そのコマンドだけを打つ',
+  },
+};
+
+/** 形の歯が断る形の一覧を、プロンプトに載せる箇条書きにして返す（歯の定義から生成する。#5017）。 */
+export function bashShapePromptLines(): string {
+  return Object.values(BASH_SHAPE_SUMMARIES)
+    .map(({ shape, instead }) => `- ${shape} → ${instead}`)
+    .join('\n');
+}
 
 /** どの形の理由にも最後に添える1文（#4989）。止めたのが1回の呼び出しだけで、書き直して続けてよいことを言う。 */
 export const BASH_SHAPE_CONTINUE_NOTE =
@@ -852,7 +938,109 @@ export function pipeExitNotice(toolName: string | undefined, command: unknown): 
   }
 }
 
-export function inspectBashShape(command: string, depth = 0): BashShapeVerdict {
+// 制御構文の語（文の頭に来る）。これが在るコマンドの `;` は繋ぎではなく構文の一部かもしれないので、`chain` で断らない
+const CONTROL_CONSTRUCT_WORDS = new Set([
+  'for',
+  'while',
+  'until',
+  'if',
+  'then',
+  'elif',
+  'else',
+  'fi',
+  'do',
+  'done',
+  'case',
+  'esac',
+  'select',
+  'function',
+  '{',
+  '}',
+]);
+
+function hasControlConstruct(scrubbed: string, tokenMask: readonly boolean[]): boolean {
+  for (const tokens of splitSegments(scrubbed, tokenMask)) {
+    const first = tokens[0];
+    if (first === undefined) continue;
+    if (CONTROL_CONSTRUCT_WORDS.has(first)) return true;
+  }
+  // 関数定義（`name() { …; }`）: `(` の直後の `)` で区切られるので、語の並びでは見えない
+  return /(?:^|[\s;&|])[A-Za-z_][A-Za-z0-9_-]*[ \t]*\([ \t]*\)/.test(
+    scrubbed.replace(/[^\n]/g, (ch, at: number) => (tokenMask[at] === true ? ch : 'x')),
+  );
+}
+
+// 外側の `;` で、前にも後ろにもコマンドが在るものがあるか。引用符・注釈・`\;`・`$((…))`・`[[ … ]]` の中は見ない
+function findChainSemicolon(
+  scrubbed: string,
+  tokenMask: readonly boolean[],
+  skip: readonly boolean[],
+): boolean {
+  if (hasControlConstruct(scrubbed, tokenMask)) return false;
+  for (let i = 0; i < scrubbed.length; i += 1) {
+    if (scrubbed.charAt(i) !== ';' || tokenMask[i] !== true || skip[i] === true) continue;
+    if (scrubbed.charAt(i + 1) === ';' || scrubbed.charAt(i - 1) === ';') continue;
+    if (scrubbed.slice(0, i).trim() !== '' && scrubbed.slice(i + 1).trim() !== '') return true;
+  }
+  return false;
+}
+
+// 括弧で包まれた `$(...)`・`$((...))`・バッククォートの範囲を、管の判定から外す（値を取るための管は断らない）
+function maskCommandSubstitutions(scrubbed: string, outside: readonly boolean[]): boolean[] {
+  const mask = outside.map((o) => o === true);
+  for (let i = 0; i < scrubbed.length; i += 1) {
+    if (!mask[i]) continue;
+    let close: number;
+    if (scrubbed.charAt(i) === '$' && scrubbed.charAt(i + 1) === '(') {
+      close = findMatchingParen(scrubbed, i + 2);
+    } else if (scrubbed.charAt(i) === '`') {
+      close = findBacktickClose(scrubbed, i + 1);
+    } else {
+      continue;
+    }
+    const end = close < 0 ? scrubbed.length - 1 : close;
+    for (let k = i; k <= end; k += 1) mask[k] = false;
+    i = end;
+  }
+  return mask;
+}
+
+const TAIL_FOLLOW_FLAG_RE = /^-[A-Za-z]*[fF]/;
+
+// 一番外側の文の、管の最後の段が `head`・`tail` か。`tail -f`・`--follow` は待ちの歯の受け持ちなので数えない
+function findTrimmedPipe(command: string): 'head' | 'tail' | undefined {
+  if (/\bPIPESTATUS\b|\bpipefail\b/.test(command)) return undefined;
+  const subs = findQuotedSubstitutions(command);
+  const visible = subs.length > 0 ? maskSubstitutions(command, subs) : command;
+  const scan = computeQuoteScan(visible);
+  const scrubbed = scrubComments(visible, scan.comment);
+  const tokenMask = maskCommandSubstitutions(
+    scrubbed,
+    scan.outside.map((o, i) => o || scan.comment[i] === true),
+  );
+  for (const stages of splitPipelines(scrubbed, tokenMask)) {
+    if (stages.length < 2) continue;
+    const last = commandWordOf(stages[stages.length - 1] ?? []);
+    if (last === undefined || (last.name !== 'head' && last.name !== 'tail')) continue;
+    if (
+      last.name === 'tail' &&
+      last.args.some(
+        (a) => a === '--follow' || a.startsWith('--follow=') || TAIL_FOLLOW_FLAG_RE.test(a),
+      )
+    ) {
+      continue;
+    }
+    return last.name;
+  }
+  return undefined;
+}
+
+// `valueSubstitution` は二重引用符の中の `$(...)` の中身を読むときだけ立てる: 値を1行取る管（`"$(ls | head -1)"`）を `pipe-trim` で断らないため
+export function inspectBashShape(
+  command: string,
+  depth = 0,
+  valueSubstitution = false,
+): BashShapeVerdict {
   const subs = depth <= MAX_SUBSTITUTION_DEPTH ? findQuotedSubstitutions(command) : [];
   const visible = subs.length > 0 ? maskSubstitutions(command, subs) : command;
 
@@ -870,6 +1058,7 @@ export function inspectBashShape(command: string, depth = 0): BashShapeVerdict {
   // `cd` の後の段に `git` が来たら止める（#4993）: Claude Code 本体がこの形を bare リポジトリ攻撃の防ぎとして確認に上げ、
   // 分類器に止められると「止めて依頼者に説明せよ」の文が返って担当が手を止めるため。形の歯は本体の確認より先に返る
   let sawCd = false;
+  let sawCdChain = false;
   for (const tokens of splitSegments(scrubbed, tokenMask)) {
     const word = commandWordOf(tokens);
     if (word === undefined) continue;
@@ -891,10 +1080,13 @@ export function inspectBashShape(command: string, depth = 0): BashShapeVerdict {
         if (inner.blocked) return inner;
       }
     }
+    // `cd` の後ろに別のコマンドが続く形。ここでは返さず、後ろに `git`（`cd-git`）や他の形が在れば、それらの理由を先に返す: 直す道がはっきりしているため
+    if (sawCd && word.name !== 'cd') sawCdChain = true;
   }
+  if (sawCdChain) return blocked('cd-chain');
 
   for (const sub of subs) {
-    const inner = inspectBashShape(sub.body, depth + 1);
+    const inner = inspectBashShape(sub.body, depth + 1, true);
     if (!inner.blocked) continue;
     return inner.form === 'heredoc' ? blocked('subst-heredoc') : inner;
   }
@@ -904,5 +1096,9 @@ export function inspectBashShape(command: string, depth = 0): BashShapeVerdict {
   if (masking?.kind === 'mutating') {
     return { blocked: true, form: 'pipe-masks-exit', reason: pipeMasksExitReason(masking.name) };
   }
+  // 管の最後の `head`・`tail` は pipe-masks-exit の後に置く: 状態を変えるコマンドを管へ渡す形のほうが害が大きく、理由に名前が入るため
+  if (!valueSubstitution && findTrimmedPipe(command) !== undefined) return blocked('pipe-trim');
+  // `;` の繋ぎは最後に置く: ここまでの形のほうが直す道がはっきりしているため
+  if (findChainSemicolon(scrubbed, tokenMask, skip)) return blocked('chain');
   return { blocked: false };
 }

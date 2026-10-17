@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 import type {
   HookJSONOutput,
   Options,
@@ -7,6 +9,9 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
+
+import { createCredentialStore } from './credentials.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import {
@@ -27,6 +32,13 @@ describe('describeWorkerLimit', () => {
     expect(text).toContain('⚠ alteroid からの知らせ: 作業者（task t-1）が利用上限で落ちた');
     expect(text).toContain(`原文: ${LIMIT_TEXT}`);
     expect(text).toContain('止める指示ではない');
+  });
+
+  it('回転前の鍵のセッションでは、「戻るまで〜同じく落ちうる」を言わず、開き直した後に立て直すよう添える（#5021）', () => {
+    const text = describeWorkerLimit([{ label: 'a', raw: LIMIT_TEXT }], true);
+    expect(text).toContain('鍵は回っているので、このターンを終えれば新しい鍵で開き直る');
+    expect(text).toContain('ターンを終えて開き直った後にする（止める指示ではない）');
+    expect(text).not.toContain('戻るまで');
   });
 
   it('原文は 300 字までに抜粋する', () => {
@@ -304,6 +316,102 @@ describe('同じ作業者の2つの合図を1つの知らせにそろえる（#4
       toolUseId: 'toolu-Y',
     });
     expect(lines(events)).toHaveLength(2);
+  });
+});
+
+describe('回転前の鍵で走っているセッションの作業者が落ちたとき（#5021）', () => {
+  // 鍵の差し替えを受け取って境界を待っているセッション（`recycleForToken` の印が立つ）を作る。ターンは走らせたまま終えない
+  async function startWaitingForBoundary(rotate: boolean | 'gh-only') {
+    const dir = makeTempDirSync('alteroid-runner-worker-limit-');
+    const events: RunnerEvent[] = [];
+    const { fn, sessions } = fakeSdk();
+    const credentials = createCredentialStore({
+      dir: join(dir, 'creds'),
+      seed: { CLAUDE_CODE_OAUTH_TOKEN: 'token-fake-old-000', GH_TOKEN: 'gh-fake-old-000' },
+      names: ['CLAUDE_CODE_OAUTH_TOKEN', 'GH_TOKEN'],
+    });
+    const host = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work/project',
+      emit: (event) => events.push(event),
+      queryFn: fn,
+      env: { PATH: '/usr/bin' },
+      credentials,
+      outboxRoot: join(dir, 'outbox'),
+      outboxStagedRoot: join(dir, 'outbox-staged'),
+    });
+    hosts.push(host);
+    await host.start({ managerId: 'mgr-1', request: '走る', cwd: '/work/project' });
+    await vi.waitFor(() => {
+      if (sessions.length < 1) throw new Error('セッションがまだ開いていない');
+    });
+    if (rotate === 'gh-only') {
+      await host.setCredentials([{ name: 'GH_TOKEN', value: 'gh-fake-new-111' }]);
+    } else if (rotate) {
+      await host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-111' }]);
+    }
+    return { session: sessions[0]!, events };
+  }
+
+  const WEEKLY = "You've hit your weekly limit · resets Oct 22, 4pm (Asia/Tokyo)";
+  const ONE_SENTENCE =
+    'このセッションは、鍵の回転の後もまだ回転前の鍵で走っている（ターンの境界で新しい鍵へ移る）。作業者は古い鍵で落ちた見込みが高い。';
+
+  const limitNotes = (events: RunnerEvent[]) =>
+    events.filter(
+      (event): event is Extract<RunnerEvent, { type: 'note' }> =>
+        event.type === 'note' && event.notifyClone === true,
+    );
+
+  it('⭐ 印が立ったセッションで作業者が落ちると、note に1文と構造化した欄が載る。担当への添え書きは新しい文になる', async () => {
+    const { session, events } = await startWaitingForBoundary(true);
+    await session.say(WEEKLY, { error: 'rate_limit', parentToolUseId: 'toolu-1' });
+
+    const [note] = limitNotes(events);
+    expect(limitNotes(events)).toHaveLength(1);
+    expect(note?.text).toContain(ONE_SENTENCE);
+    expect(note?.workerLimit).toEqual({ raw: WEEKLY, preRotationKey: true });
+
+    const context = contextOf(await postToolUse(session.options));
+    expect(context).toContain(
+      '鍵は回っているので、このターンを終えれば新しい鍵で開き直る。' +
+        '作業者を立て直すなら、ターンを終えて開き直った後にする（止める指示ではない）',
+    );
+    expect(context).not.toContain('戻るまで、作業者を立て直しても同じく落ちうる');
+    expect(notesOf(events, '鍵は回っているので、このターンを終えれば')).toHaveLength(1);
+  });
+
+  it('印が無ければ、今までと同じ文のまま（1文も欄の真も載らない）', async () => {
+    const { session, events } = await start();
+    await session.say(WEEKLY, { error: 'rate_limit', parentToolUseId: 'toolu-1' });
+
+    const [note] = limitNotes(events);
+    expect(note?.text).not.toContain(ONE_SENTENCE);
+    expect(note?.workerLimit).toEqual({ raw: WEEKLY, preRotationKey: false });
+
+    const context = contextOf(await postToolUse(session.options));
+    expect(context).toContain('戻るまで、作業者を立て直しても同じく落ちうる');
+    expect(context).not.toContain('鍵は回っているので');
+  });
+
+  it('Claude の鍵以外（GH_TOKEN）だけが差し替わった回は、境界を待っていても「回転前の鍵」とは言わない', async () => {
+    const { session, events } = await startWaitingForBoundary('gh-only');
+    await session.say(WEEKLY, { error: 'rate_limit', parentToolUseId: 'toolu-1' });
+
+    const [note] = limitNotes(events);
+    expect(note?.text).not.toContain(ONE_SENTENCE);
+    expect(note?.workerLimit).toEqual({ raw: WEEKLY, preRotationKey: false });
+
+    const context = contextOf(await postToolUse(session.options));
+    expect(context).toContain('戻るまで、作業者を立て直しても同じく落ちうる');
+    expect(context).not.toContain('鍵は回っているので');
+  });
+
+  it('同じ作業者の2つの合図が来ても note は1つのまま（#4996 の寄せを壊さない）', async () => {
+    const { session, events } = await startWaitingForBoundary(true);
+    await session.say(WEEKLY, { error: 'rate_limit', parentToolUseId: 'toolu-X' });
+    await session.notify('task-T', { status: 'failed', summary: WEEKLY, toolUseId: 'toolu-X' });
+    expect(limitNotes(events)).toHaveLength(1);
   });
 });
 

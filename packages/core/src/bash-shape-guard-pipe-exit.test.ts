@@ -40,32 +40,36 @@ describe('管の最後でない段の状態を変えるコマンドは止める�
     }
   });
 
+  // pipe-masks-exit としては止めない。最後の段が head・tail のものは pipe-trim（#5017）、`;` で繋ぐものは chain が別に止める（null は何も止めない）
   it.each([
-    'git log | head',
-    'git diff | tail',
-    'git stash list | head',
-    'git stash show | head',
-    'cat f | tail',
-    'git merge x',
-    'ls | git commit -F -',
-    'git merge x || tail f',
-    'git merge x && tail f',
-    'git merge x; tail f',
-    'git merge x & tail f',
-    'echo "git merge x | tail"',
-    "echo 'git merge x | tail'",
-    'echo a # git merge x | tail',
-    'grep -n foo a.ts | tail',
-    // 各段の終了コードを自分で拾う形は、止めも知らせもしない
-    'set -o pipefail; git merge x | tail',
-    'pnpm test | grep -E "Tests |FAIL"; echo "EXIT:${PIPESTATUS[0]}"',
-  ])('%j は止めない', (command) => {
+    ['git log | head', 'pipe-trim'],
+    ['git diff | tail', 'pipe-trim'],
+    ['git stash list | head', 'pipe-trim'],
+    ['git stash show | head', 'pipe-trim'],
+    ['cat f | tail', 'pipe-trim'],
+    ['git merge x', null],
+    ['ls | git commit -F -', null],
+    ['git merge x || tail f', null],
+    ['git merge x && tail f', null],
+    ['git merge x; tail f', 'chain'],
+    ['git merge x & tail f', null],
+    ['echo "git merge x | tail"', null],
+    ["echo 'git merge x | tail'", null],
+    ['echo a # git merge x | tail', null],
+    ['grep -n foo a.ts | tail', 'pipe-trim'],
+    // 各段の終了コードを自分で拾う形は、止めも知らせもしない（`;` の繋ぎだけは chain が止める）
+    ['set -o pipefail; git merge x | tail', 'chain'],
+    ['pnpm test | grep -E "Tests |FAIL"; echo "EXIT:${PIPESTATUS[0]}"', 'chain'],
+    ['set -o pipefail\ngit merge x | tail', null],
+  ])('%j は pipe-masks-exit として止めない（ほかの形: %s）', (command, form) => {
     expect(inspectPipeExitMasking(command)).toBeUndefined();
-    expect(inspectBashShape(command)).toEqual({ blocked: false });
+    const verdict = inspectBashShape(command);
+    expect(verdict.blocked ? verdict.form : null).toBe(form);
   });
 });
 
-describe('管の最後でない段の検査のコマンドは止めず、checker として返す（#4990）', () => {
+// #5017 で、最後の段が head・tail の管は pipe-trim で止める。checker としての読みは、知らせ（pipeExitNotice）が使うので残る
+describe('管の最後でない段の検査のコマンドは checker として返す（#4990）。最後が head・tail なら pipe-trim で止める（#5017）', () => {
   it.each([
     ['pnpm test | tail -n 30', 'pnpm test', 'tail'],
     ['pnpm -C packages/core test | tail', 'pnpm test', 'tail'],
@@ -87,7 +91,20 @@ describe('管の最後でない段の検査のコマンドは止めず、checker
     ['bun run build | tail', 'bun build', 'tail'],
   ])('%j は checker（%s・最後は %s）', (command, name, last) => {
     expect(inspectPipeExitMasking(command)).toEqual({ kind: 'checker', name, last });
-    expect(inspectBashShape(command)).toEqual({ blocked: false });
+    const verdict = inspectBashShape(command);
+    expect(verdict.blocked && verdict.form).toBe('pipe-trim');
+  });
+
+  it('最後が head・tail でない検査の管は、止めずに checker のまま通す', () => {
+    expect(inspectPipeExitMasking('pnpm test | grep FAIL')).toEqual({
+      kind: 'checker',
+      name: 'pnpm test',
+      last: 'grep',
+    });
+    expect(inspectBashShape('pnpm test | grep FAIL')).toEqual({ blocked: false });
+    expect(pipeExitNotice('Bash', 'pnpm test | grep FAIL')).toContain(
+      '管の最後の `grep` の終了コード',
+    );
   });
 
   it('mutating は checker より先に返る', () => {
