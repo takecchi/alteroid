@@ -2877,7 +2877,15 @@
                         },
                         "action": {
                           "type": "string",
-                          "enum": ["write", "append", "remove", "describe", "move_in", "move_out"]
+                          "enum": [
+                            "write",
+                            "append",
+                            "remove",
+                            "describe",
+                            "move_in",
+                            "move_out",
+                            "write_failed"
+                          ]
                         },
                         "bytesBefore": {
                           "type": "integer",
@@ -5171,7 +5179,7 @@
         "operationId": "putMemoryBySlug",
         "tags": ["memory"],
         "summary": "記憶文書を全文置換で書く",
-        "description": "人間が API から記憶を書き換える口。書き換えは日誌に残る（`cause: human`）。",
+        "description": "人間が API から記憶を書き換える口。書き換えは日誌に残る（`cause: human`）。日誌を先に書き、書けなければ本文を書かずに 500 を返す（印の付かない保存を起こさない）。本文が書けなかった（409 ほか）ときは、日誌に打ち消しの行（`action: write_failed`）を足す。",
         "responses": {
           "200": {
             "description": "書き換え後の記憶文書。",
@@ -5731,6 +5739,26 @@
                     }
                   },
                   "required": ["error", "current"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**本文を書いていない**）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"]
                 }
               }
             }
@@ -7713,7 +7741,8 @@
                                   "remove",
                                   "describe",
                                   "move_in",
-                                  "move_out"
+                                  "move_out",
+                                  "write_failed"
                                 ]
                               },
                               "bytesBefore": {
@@ -9268,7 +9297,15 @@
                         },
                         "action": {
                           "type": "string",
-                          "enum": ["write", "append", "remove", "describe", "move_in", "move_out"]
+                          "enum": [
+                            "write",
+                            "append",
+                            "remove",
+                            "describe",
+                            "move_in",
+                            "move_out",
+                            "write_failed"
+                          ]
                         },
                         "bytesBefore": {
                           "type": "integer",
@@ -13027,7 +13064,8 @@
                                     "remove",
                                     "describe",
                                     "move_in",
-                                    "move_out"
+                                    "move_out",
+                                    "write_failed"
                                   ]
                                 },
                                 "bytesBefore": {
@@ -14459,7 +14497,8 @@
                                     "remove",
                                     "describe",
                                     "move_in",
-                                    "move_out"
+                                    "move_out",
+                                    "write_failed"
                                   ]
                                 },
                                 "bytesBefore": {
@@ -15891,7 +15930,8 @@
                                   "remove",
                                   "describe",
                                   "move_in",
-                                  "move_out"
+                                  "move_out",
+                                  "write_failed"
                                 ]
                               },
                               "bytesBefore": {
@@ -17311,7 +17351,8 @@
                                   "remove",
                                   "describe",
                                   "move_in",
-                                  "move_out"
+                                  "move_out",
+                                  "write_failed"
                                 ]
                               },
                               "bytesBefore": {

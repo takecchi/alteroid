@@ -127,6 +127,8 @@ export async function deriveHumanTouchedAtFromJournal(
 ): Promise<Map<string, string>> {
   const pageSize = options.pageSize ?? MEMORY_JOURNAL_SCAN_PAGE_SIZE;
   const result = new Map<string, string>();
+  // 直近の人間の `write` が印を立てる前の値（#4774）: 打ち消しの行（`write_failed`）で、その `write` が無かった状態へ戻すため。
+  const beforeLastWrite = new Map<string, string | undefined>();
   await walkMemoryUpdateJournalAscending(journal, pageSize, (page) => {
     for (const entry of page) {
       if (entry.type !== 'memory_update') continue;
@@ -134,9 +136,22 @@ export async function deriveHumanTouchedAtFromJournal(
       // 削除そのものは印にしない: 人間による削除は将来この slug に書かれる新しい内容を保護する理由にならないため
       if (entry.action === 'remove') {
         result.delete(entry.slug);
+        beforeLastWrite.delete(entry.slug);
+        continue;
+      }
+      // 打ち消しの行は印にしない（#4774）: 日誌を先に書くので、本文が書けなかった保存の `write` の行が日誌に残る。それを根拠に再起動の後だけ「人間が書いた」と名乗らせない。
+      // 直前の `write` が無い（見えない）打ち消しは何もしない: 守りすぎの側に倒す（印を外すより残す）
+      if (entry.action === 'write_failed') {
+        if (entry.cause === 'human' && beforeLastWrite.has(entry.slug)) {
+          const previous = beforeLastWrite.get(entry.slug);
+          if (previous === undefined) result.delete(entry.slug);
+          else result.set(entry.slug, previous);
+          beforeLastWrite.delete(entry.slug);
+        }
         continue;
       }
       if (entry.cause !== 'human') continue;
+      if (entry.action === 'write') beforeLastWrite.set(entry.slug, result.get(entry.slug));
       result.set(entry.slug, entry.at);
     }
   });
@@ -150,17 +165,29 @@ export async function deriveMemoryCreatedAtFromJournal(
 ): Promise<Map<string, string>> {
   const pageSize = options.pageSize ?? MEMORY_JOURNAL_SCAN_PAGE_SIZE;
   const result = new Map<string, string>();
+  // 直近の `write` がこの slug の最初の作成として時刻を置いたか（#4774）: 打ち消しの行で、その時刻を取り下げるため。
+  const createdByLastWrite = new Set<string>();
   await walkMemoryUpdateJournalAscending(journal, pageSize, (page) => {
     for (const entry of page) {
       if (entry.type !== 'memory_update') continue;
       // 消した行で、それまでの作った時刻を捨てる（#4773。理由は `deriveHumanTouchedAtFromJournal` と同じ）
       if (entry.action === 'remove') {
         result.delete(entry.slug);
+        createdByLastWrite.delete(entry.slug);
+        continue;
+      }
+      // 本文が書けなかった保存の `write` を、作った時刻の根拠にしない（#4774）
+      if (entry.action === 'write_failed') {
+        if (createdByLastWrite.delete(entry.slug)) result.delete(entry.slug);
         continue;
       }
       // action:'append' と action 無しは対象にしない: 広げて誤って早い時刻を拾うより、根拠が無ければ unknown に倒すため
       if (entry.action !== 'write') continue;
-      if (!result.has(entry.slug)) result.set(entry.slug, entry.at);
+      createdByLastWrite.delete(entry.slug);
+      if (!result.has(entry.slug)) {
+        result.set(entry.slug, entry.at);
+        createdByLastWrite.add(entry.slug);
+      }
     }
   });
   return result;

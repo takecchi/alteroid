@@ -1112,7 +1112,6 @@ function describeTokenPolicyChanges(changes: readonly TokenPolicyChange[]): stri
 // 落ちたら跡だけ残して握る: ここへ来る時点で状態変更は既に効いているので、`.onError` へ抜けて 500 にすると操作そのものが失敗したと誤読される（欠けるのは監査の行だけ）。pg のトランザクションで束ねる案は採らない: fs ストアでは状態変更と日誌の追記を1操作にできない。
 // `detail` に本文を入れない（`noteDroppedRecord` の「本文は出さない」と同じ理由）: id や件数だけ。
 // 能力を広げる口は、状態変更の後にこの関数を当てない: 日誌が落ちると記録の無い変更が生まれるので、日誌を先に書き、書けなければ状態を変えずに 500 にする。状態変更が投げたら打ち消しの行をこの関数で足す（記録が多すぎる側に倒す）。状態変更の後でないと分からない情報は2行目として best-effort で足す。
-// 戻り値は書けた行（書けなければ `undefined`）: `PUT /memory/:slug` だけが `markHumanTouched` へ渡すために見る（日誌に行が無いのに派生値だけ立てると対応が崩れる）。
 async function appendJournalOrDrop(
   stores: Pick<Stores, 'journal'>,
   entry: JournalEntryInput,
@@ -3856,7 +3855,10 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['memory'],
         summary: '記憶文書を全文置換で書く',
-        description: '人間が API から記憶を書き換える口。書き換えは日誌に残る（`cause: human`）。',
+        description:
+          '人間が API から記憶を書き換える口。書き換えは日誌に残る（`cause: human`）。' +
+          '日誌を先に書き、書けなければ本文を書かずに 500 を返す（印の付かない保存を起こさない）。' +
+          '本文が書けなかった（409 ほか）ときは、日誌に打ち消しの行（`action: write_failed`）を足す。',
         responses: {
           200: {
             description: '書き換え後の記憶文書。',
@@ -3872,6 +3874,10 @@ export function createApp(deps: AppDeps) {
               '書いた、または消した）。**何も書いていない。** `current` にいまの版を返す。',
             content: { 'application/json': { schema: resolver(memoryConflictResponseSchema) } },
           },
+          500: {
+            description: '日誌が書けなかった（**本文を書いていない**）。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
+          },
         },
       }),
       jsonBody(memoryBody, (where) => ({
@@ -3884,11 +3890,66 @@ export function createApp(deps: AppDeps) {
         }
         const before = await stores.persona.read(slug);
         const { content, ifMatch } = c.req.valid('json');
+        // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す: ふつうの衝突のたびに `write` と `write_failed` の2行を日誌へ積まないため。
+        // ここを抜けた後に割り込まれた回は、下の `persona.write` の排他が 409 にし、打ち消しの行で対応を保つ。
+        if (ifMatch !== undefined) {
+          const matches =
+            ifMatch === null
+              ? before === null
+              : before !== null && memoryVersion(before.content) === ifMatch;
+          if (!matches) {
+            return c.json(
+              {
+                error: '記憶が読んだ後に変わっています（書き換えていません）' as const,
+                current:
+                  before === null
+                    ? null
+                    : { document: before, version: memoryVersion(before.content) },
+              },
+              409,
+            );
+          }
+        }
+        // 日誌を先に書き、書けなければ本文を書かずに 500（#4774）: 本文の後に書いて `appendJournalOrDrop` で握ると、本文は変わったのに裏付けの `cause:'human'` の行が無く、`markHumanTouched` も呼べない「印の付かない人間の保存」が生まれる（クローンが次の蒸留で黙って上書きできてしまう）。
+        let entry;
+        try {
+          entry = await stores.journal.append({
+            type: 'memory_update',
+            slug,
+            cause: 'human',
+            action: 'write',
+            // クローンの道具（memory_write）と同じ機械可読な面: 片方だけ足すと「人間の書き込みだけ数えられない」が生まれる。
+            bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
+            bytesAfter: Buffer.byteLength(content, 'utf8'),
+            summary: 'HTTP API 経由で人間が記憶を書き換えた',
+          });
+        } catch (error) {
+          noteDroppedRecord(
+            '記憶書き換えの日誌（保存していない）',
+            `slug=${slug}`,
+            kindOfError(error),
+          );
+          return c.json(journalWriteFailedBody(), 500);
+        }
         let doc;
         try {
           doc = await stores.persona.write(slug, content, { ifMatch });
         } catch (error) {
-          // 黙って上書きしない: 書いていないので日誌にも積まない。
+          // 日誌には「人間が書いた」が残っているので打ち消す: `deriveHumanTouchedAtFromJournal` が、この行を印の根拠にしない。足せなければ跡だけ残し（`appendJournalOrDrop`）、応答は元の失敗のまま返す（再構築で印が立ちうるのは守りすぎの側）。
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'memory_update',
+              slug,
+              cause: 'human',
+              action: 'write_failed',
+              summary:
+                'HTTP API 経由の人間の保存は本文に届かなかった（直前の write の行を打ち消す）',
+            },
+            '記憶書き換えの打ち消しの日誌',
+            `slug=${slug}`,
+          );
+          // 黙って上書きしない: 書いていない。
           if (error instanceof MemoryConflictError) {
             return c.json(
               {
@@ -3903,26 +3964,8 @@ export function createApp(deps: AppDeps) {
           }
           throw error;
         }
-        // 書き換え自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
-        const entry = await appendJournalOrDrop(
-          stores,
-          {
-            type: 'memory_update',
-            slug,
-            cause: 'human',
-            action: 'write',
-            // クローンの道具（memory_write）と同じ機械可読な面: 片方だけ足すと「人間の書き込みだけ数えられない」が生まれる。
-            bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
-            bytesAfter: Buffer.byteLength(doc.content, 'utf8'),
-            summary: 'HTTP API 経由で人間が記憶を書き換えた',
-          },
-          '記憶書き換えの日誌',
-          `slug=${slug}`,
-        );
-        // 日誌への追記が落ちたとき（`entry === undefined`）は呼ばない: 裏付けとなる `cause:'human'` の行が無いのに派生値だけ立てると対応が崩れる。
-        if (entry !== undefined) {
-          await stores.persona.markHumanTouched(slug, entry.at);
-        }
+        // 本文が書けた後でだけ立てる: 書けなかったのに立てると、打ち消した行と派生値の対応が崩れる。裏付けの行は上で先に書いてある。
+        await stores.persona.markHumanTouched(slug, entry.at);
         return c.json({ document: doc, version: memoryVersion(doc.content) });
       },
     )
