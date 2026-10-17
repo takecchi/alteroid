@@ -123,6 +123,7 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
       onPostToolUseFailure: spec.onPostToolUseFailure,
       onPreCompact: spec.onPreCompact,
       onUserPromptSubmit: spec.onUserPromptSubmit,
+      ...(spec.onSessionStart === undefined ? {} : { onSessionStart: spec.onSessionStart }),
       onSubagentStop: spec.onSubagentStop,
       onStop: spec.onStop,
     });

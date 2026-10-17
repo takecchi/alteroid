@@ -9,6 +9,7 @@ import type {
   AgentObservationHook,
   AgentPermissionDeniedHook,
   AgentPreToolHook,
+  AgentSessionStartHook,
   AgentStopRecord,
   AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
@@ -154,6 +155,8 @@ export interface AgentManagerSessionSpec {
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
   onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
   onUserPromptSubmit: AgentObservationHook<AgentUserPromptSubmitRecord>;
+  /** 省けば繋がない。担当だけが渡す（#4995）。Codex の駆動役は渡されても使わない。 */
+  onSessionStart?: AgentSessionStartHook;
   onSubagentStop: AgentContextHook<AgentSubagentStopRecord>;
   onStop: AgentObservationHook<AgentStopRecord>;
 }

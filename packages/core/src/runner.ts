@@ -25,6 +25,7 @@ import type {
   AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
+  AgentSessionStartRecord,
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
@@ -203,6 +204,7 @@ import {
   findEnglishSentences,
   ReportLanguageNotices,
   resolveEffectiveReportLanguage,
+  REPORT_LANGUAGE_PROMPT_PARAGRAPH,
   withReportLanguageParagraph,
   type ReportLanguageMode,
 } from './report-language.js';
@@ -3235,6 +3237,7 @@ class RunnerSession {
       onPostToolUseFailure: (input) => this.#onPostToolUseFailure(input),
       onPreCompact: (record) => this.#onPreCompact(record),
       onUserPromptSubmit: (record) => this.#onUserPromptSubmit(record),
+      onSessionStart: (record) => this.#onSessionStart(record),
       onSubagentStop: (record) => this.#onSubagentStop(record),
       onStop: (record) => this.#onStop(record),
     };
@@ -5585,6 +5588,19 @@ class RunnerSession {
       agentId ?? '',
       typeof command === 'string' ? command : undefined,
     );
+  }
+
+  // CLI は resume のとき最初の system prompt を持ち続け、環境・言語の変化だけを知らせで足すので、system prompt の末尾の段落（#4977）は #4977 より前に開いたセッションに届かない。resume・fork の回に会話へ足す（#4995）。
+  // startup は system prompt に入っており、compact は system prompt が残るので足さない
+  async #onSessionStart(record: AgentSessionStartRecord): Promise<string | null> {
+    if (record.source !== 'resume' && record.source !== 'fork') return null;
+    if (this.#sessionReportLanguage() !== 'ja') return null;
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text: `${record.source} で開いたので、応答の言語の段落を会話へ足した。#4995`,
+    });
+    return REPORT_LANGUAGE_PROMPT_PARAGRAPH;
   }
 
   // `{ continue: true }` を返すだけでブロックしない: ブロックすれば能力の削除になるため

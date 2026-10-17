@@ -9,6 +9,7 @@ import type {
   PreCompactHookInput,
   PreToolUseHookInput,
   SDKMessage,
+  SessionStartHookInput,
   SessionStore,
   SpawnedProcess,
   SpawnOptions,
@@ -36,6 +37,8 @@ import type {
   AgentPreCompactRecord,
   AgentPreToolHook,
   AgentPreToolRecord,
+  AgentSessionStartHook,
+  AgentSessionStartRecord,
   AgentStopRecord,
   AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
@@ -207,6 +210,28 @@ function wrapUserPromptSubmitHook(
   return async (input) => {
     await hook(toAgentUserPromptSubmitRecord(input));
     return { continue: true };
+  };
+}
+
+function toAgentSessionStartRecord(input: unknown): AgentSessionStartRecord {
+  const raw = input as Partial<SessionStartHookInput> | null | undefined;
+  return typeof raw?.source === 'string' ? { source: raw.source } : {};
+}
+
+// 投げても握って `{ continue: true }` を返す: 言語の知らせのためにセッションを開けなくしないため
+function wrapSessionStartHook(hook: AgentSessionStartHook): HookCallback {
+  return async (input) => {
+    try {
+      const additionalContext = await hook(toAgentSessionStartRecord(input));
+      if (additionalContext === null) return { continue: true };
+      return {
+        continue: true,
+        hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext },
+      };
+    } catch (error: unknown) {
+      noteBackgroundFailure('SessionStart の文脈の追加', '', error);
+      return { continue: true };
+    }
   };
 }
 
@@ -651,6 +676,8 @@ export interface ManagerSessionOptionsRequest {
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
   onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
   onUserPromptSubmit: AgentObservationHook<AgentUserPromptSubmitRecord>;
+  /** 省けば `SessionStart` を登録しない。担当の組み立てだけが渡す（#4995）。 */
+  onSessionStart?: AgentSessionStartHook;
   // `AgentContextHook` に載せる: `runner.ts` の `#onSubagentStop` は作業者を起こし直す文脈を返す判断を含み、`AgentObservationHook` には載らないため
   onSubagentStop: AgentContextHook<AgentSubagentStopRecord>;
   onStop: AgentObservationHook<AgentStopRecord>;
@@ -695,6 +722,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onPostToolUseFailure,
     onPreCompact,
     onUserPromptSubmit,
+    onSessionStart,
     onSubagentStop,
     onStop,
     onPreToolUse,
@@ -768,6 +796,9 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       PostToolUseFailure: [{ hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)] }],
       PreCompact: [{ hooks: [wrapPreCompactHook(onPreCompact)] }],
       UserPromptSubmit: [{ hooks: [wrapUserPromptSubmitHook(onUserPromptSubmit)] }],
+      ...(onSessionStart === undefined
+        ? {}
+        : { SessionStart: [{ hooks: [wrapSessionStartHook(onSessionStart)] }] }),
       SubagentStop: [
         {
           timeout: SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
