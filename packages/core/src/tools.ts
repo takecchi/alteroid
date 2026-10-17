@@ -2074,7 +2074,7 @@ function describeRescueBrief(rescue: NonNullable<ManagerSummary['lastRescue']>):
   ).length;
   const refs =
     latest === undefined
-      ? '退避された ref は無い'
+      ? '0 本'
       : `${String(pushedTrees.length)} 本（最新: ${describeRescuePushed(latest)}）`;
   const unsaved =
     unsavedTrees === 0 ? '' : `。退避されなかったものがある作業ツリー ${String(unsavedTrees)} 本`;
