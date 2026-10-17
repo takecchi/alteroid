@@ -127,6 +127,7 @@ async function setup(options: {
   rotateOnObservation: boolean;
   initiallyAlive?: boolean;
   job?: Job;
+  windowMs?: number;
 }) {
   const stores = createMemoryStores();
   await stores.jobs.putJob(options.job ?? JOB);
@@ -140,7 +141,7 @@ async function setup(options: {
     post: (event) => inbox.push(event),
     runners: registry,
     profile: createProfileService({ stores, runners: registry }),
-    synthesizedNoticeWindowMs: 0,
+    synthesizedNoticeWindowMs: options.windowMs ?? 0,
     onUsageObservation: async (observation) => {
       observations.push(observation);
       if (options.rotateOnObservation) await ref.pool?.resumeStoppedByUsage();
@@ -375,6 +376,35 @@ describe('自動の起こし直しをクローンへ知らせる（#4861 案B）
     );
     expect(notices[0]).toContain('manager_stop');
     expect(notices[0]).toContain('supersedes');
+  });
+
+  it('(c) 後継の居ない起こし直しの知らせには、台帳に開かない印（commitmentExempt）が付く（#5015）', async () => {
+    const s = await setup({ rotateOnObservation: false });
+    s.fake.push(sessionDiedBy429());
+    await settle();
+    await s.pool.start({ request: '後継（supersedes なし）' });
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([ID]);
+    await settle();
+
+    const notice = s.inbox.find(
+      (event) => event.type === 'manager_message' && event.text.includes('新しい鍵で起こし直した'),
+    );
+    expect(notice?.type === 'manager_message' && notice.commitmentExempt).toBe(true);
+  });
+
+  it('(c) 起こし直し以外の断片（落ちた知らせ）が同じ合流窓の束に混ざる回は、印を付けず今どおり台帳に開く（#5015）', async () => {
+    const s = await setup({ rotateOnObservation: false, windowMs: 150 });
+    s.fake.push(sessionDiedBy429());
+    await settle();
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([ID]);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    const notice = s.inbox.find(
+      (event) => event.type === 'manager_message' && event.text.includes('新しい鍵で起こし直した'),
+    );
+    expect(notice?.type).toBe('manager_message');
+    expect(notice !== undefined && 'commitmentExempt' in notice).toBe(false);
   });
 
   it('(d) done の担当に続きを促しただけのときは、知らせを積まない', async () => {

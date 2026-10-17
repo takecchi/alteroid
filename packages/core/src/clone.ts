@@ -191,6 +191,7 @@ import {
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
 import {
+  backOnCurrentToken,
   describeQuotaRecovery,
   foldableQuotaStopTargetsOf,
   quotaFoldNoticeOf,
@@ -884,6 +885,12 @@ class Clone implements CloneHost {
   /** 直前に人間の発言のターンを回した会話。会話が切り替わったことを次のターンの入力で名乗るため。 */
   // 永続化しない: 再起動の後はセッションの文脈も作り直されるので、そこで「切り替わった」と言える相手が無いため
   #lastHumanConversationId: string | null = null;
+  // 枠の知らせ（`quotaStop`）で台帳に開いた行のうち、担当が戻ったら器が閉じる候補（#5015）。キーは合図の id
+  // 永続化しない: 再起動で失った行は閉じず、今までどおり台帳に残る（残る側へ倒す。閉じ漏れは雑音で、誤って閉じるのは喪失のため）
+  readonly #quotaStopLedgerRows = new Map<
+    string,
+    { readonly eventId: string; readonly managerId: string; readonly at: string }
+  >();
   readonly #managers: ManagerPool;
   // 本セッションと蒸留のサイドクエリで同じものを使う: 片方だけ帯が違うと、蒸留＝人格の書き手だけが別の頭になるため
   readonly #model: string;
@@ -2064,6 +2071,10 @@ class Clone implements CloneHost {
       // まとめ読みより前に1件ずつ見る: 束にしてから見ると、戻っていない担当の知らせ1件のために、戻った担当の知らせまで一緒に届くため（#4499）
       // 枠の短絡より後ろに置く: クローン自身が枠で止まっている間は保持し、解除されて配る時点の状態で判定するため
       const quotaFold = await this.#quotaFoldNoticeFor(event);
+      // 枠の知らせの行の掃除（#5015）: 畳む合図は自分の行も閉じ、ターンを回す合図は自分の行を残す。落ちても受信箱のループは止めない
+      await this.#closeRecoveredQuotaStopRows(event, quotaFold !== null).catch((error: unknown) => {
+        noteDroppedRecord('枠の知らせの行の掃除', inboxEventShape(event), error);
+      });
       if (quotaFold !== null) {
         await this.#foldRecoveredQuotaNotice(event, quotaFold);
         await this.#settleInboxEvent(event, false);
@@ -2918,12 +2929,30 @@ class Clone implements CloneHost {
   // `#journal` を経由せず直接 append する: 通常の `#journal` だと失敗が stderr に沈んで「記録が無い」と「名乗っていない」を区別できず、日誌の失敗から日誌へ書き直す循環も作るため。失敗したら `'unrecorded'` を返す
   #commit(event: InboxEvent): void {
     const entry = commitmentFor(event);
-    if (entry === null) return;
+    if (entry === null) {
+      // 印で開かなかった回だけ日誌へ残す: 型で開かない合図（timer 等）は毎回書くと雑音になるが、受信箱の合図なのに台帳に無い理由は後から取れないと困るため
+      if (event.type === 'manager_message' && event.commitmentExempt === true) {
+        void this.#noteExemptNotCommitted(event);
+      }
+      return;
+    }
+    const quotaStopRow =
+      event.type === 'manager_message' && event.quotaStop === true
+        ? { eventId: event.id, managerId: event.managerId, at: event.at }
+        : undefined;
     this.#delivery.setCommitted(
       event.id,
       this.#stores.commitments.open(entry).then(
         async (result): Promise<CommitOutcome> => {
-          if (!result.opened) return result.folded ? 'folded' : 'existed';
+          if (!result.opened) {
+            // 台帳に在る行（まだ閉じていないかは掃除の `close` の戻り値が決める）を、担当が戻ったら閉じる候補に覚える
+            if (!result.folded && quotaStopRow !== undefined) {
+              this.#quotaStopLedgerRows.set(quotaStopRow.eventId, quotaStopRow);
+            }
+            return result.folded ? 'folded' : 'existed';
+          }
+          if (quotaStopRow !== undefined)
+            this.#quotaStopLedgerRows.set(quotaStopRow.eventId, quotaStopRow);
           try {
             await this.#stores.journal.append({
               type: 'exchange',
@@ -2959,6 +2988,78 @@ class Clone implements CloneHost {
         },
       ),
     );
+  }
+
+  // 受信箱には届いたが台帳に開かなかった理由を日誌へ1行残す（#5015）。`#commit` の「台帳に開いた」行と同じ形で、失敗しても post を落とさない
+  async #noteExemptNotCommitted(event: InboxEvent): Promise<void> {
+    try {
+      await this.#stores.journal.append({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_DECISION_PREFIX}受信箱の合図だが、引き受けた仕事としては台帳に開かなかった（id: ${event.id}）。` +
+          '理由: 枠で落ちていた委譲を新しい鍵で起こし直した知らせで、その委譲には supersedes でつながる後継が居ないため、' +
+          `クローンが手を打つことが無い。合図: ${inboxEventShape(event)}`,
+      });
+    } catch (error) {
+      noteDroppedRecord('台帳に開かなかった理由の記帳', inboxEventShape(event), error);
+    }
+  }
+
+  // 枠の知らせの行を、担当が戻ったら器が閉じる（#5015）。受信箱の合図を1件処理する前に1回走らせる
+  // 一覧を引けなければ何も閉じない（確かめられないまま閉じるより、残す側へ倒す）。`list()` は同期的に投げうるので `try` で囲う
+  // `includeOwn` が偽なら、いま処理する合図自身の行は閉じない: ターンで読ませる合図の行を、読ませる前に台帳から消さないため（畳む合図は自分の行も対象）
+  async #closeRecoveredQuotaStopRows(event: InboxEvent, includeOwn: boolean): Promise<void> {
+    const excludeId = includeOwn ? undefined : event.id;
+    // 自分の行の記帳（`#commit`）を待つ: 待たないと、まだ Map に載っていない行が掃除から漏れ、次の合図まで閉じない
+    if (includeOwn && event.type === 'manager_message' && event.quotaStop === true) {
+      try {
+        await this.#delivery.getCommitted(event.id);
+      } catch {
+        // 記帳の失敗は `#commit` 側が日誌へ残している。ここでは待つだけ
+      }
+    }
+    if (this.#quotaStopLedgerRows.size === 0) return;
+    let managers: readonly QuotaRecoverySummary[];
+    try {
+      managers = await this.#managers.list();
+    } catch {
+      return;
+    }
+    for (const row of [...this.#quotaStopLedgerRows.values()]) {
+      if (row.eventId === excludeId) continue;
+      const found = managers.find((manager) => manager.managerId === row.managerId);
+      if (!backOnCurrentToken(found, row.at)) continue;
+      const reason =
+        `器が自動で閉じた: 枠に当たって止まった知らせだが、名指す担当 ${row.managerId} はいまの世代の鍵で戻っている` +
+        '（running、または done で知らせより後のターンが成功）。人間・クローンが否定するなら開き直すこと';
+      try {
+        const closed = await this.#stores.commitments.close(
+          row.eventId,
+          new Date().toISOString(),
+          reason,
+          'daemon',
+        );
+        // 閉じた行も、既に閉じていた行（`false`）も候補から外す。台帳が読めずに投げた行は残す（次の機会に再試行）
+        this.#quotaStopLedgerRows.delete(row.eventId);
+        if (!closed) continue;
+        await this.#stores.journal.append({
+          type: 'decision',
+          decision: `枠の知らせの行を器が自動で閉じた（${row.eventId}）: 担当 ${row.managerId} が戻っている`,
+          grounds:
+            `担当 ${row.managerId} が quota-recovery-notice の backOnCurrentToken と同じ基準（いまの世代の鍵で live・枠の印なし、` +
+            `running、または done で知らせ ${row.at} より後のターンが成功）で戻っていた。` +
+            '器が閉じたので closedBy は daemon（人間・クローンはこれを読んで後から否定する）',
+        });
+      } catch (error) {
+        noteDroppedRecord(
+          '枠の知らせの行の自動クローズ',
+          `quotaStop manager_message ${row.eventId}`,
+          error,
+        );
+      }
+    }
   }
 
   // 器は起点の中身を読んで順番を付けない: 付けた瞬間に「何を先にやるか」の判断が器へ移るため（人間が待っている合図だけを前へ出す）。一覧そのものは載せない: 件数に比例して伸びるものを毎ターン積むと、溜まっているときほどターンが重くなるため
@@ -7960,7 +8061,11 @@ function externalBatchPrompt(
  * `'unknown'`（既知の2値ではない値）と `'absent'`（欄が無い）を同じ扱いにしない: 原因も対処も別のため。
  */
 type ClosedByState =
-  { kind: 'clone' } | { kind: 'human' } | { kind: 'unknown'; raw: string } | { kind: 'absent' };
+  | { kind: 'clone' }
+  | { kind: 'human' }
+  | { kind: 'daemon' }
+  | { kind: 'unknown'; raw: string }
+  | { kind: 'absent' };
 
 /** {@link ClosedByState} の doc を見よ。 */
 function closedByState(closedBy: string | undefined): ClosedByState {
@@ -7980,6 +8085,8 @@ function closedRedeliveryHeadline(state: ClosedByState): string {
       return '**これは再起動後の配り直しである。クローンは既にこの合図を片付けている。**';
     case 'human':
       return '**これは再起動後の配り直しである。人間が既にこの合図を片付けている。**';
+    case 'daemon':
+      return '**これは再起動後の配り直しである。器（デーモン）が自動で、既にこの合図を片付けている。**';
     case 'unknown':
       return (
         '**これは再起動後の配り直しである。この合図は既に片付いている' +
@@ -8000,6 +8107,7 @@ function closedAtLabel(state: ClosedByState): string {
       return '片付けた時刻（commitment_close）';
     case 'human':
       return '片付けた時刻（POST /commitments/:id/close）';
+    case 'daemon':
     case 'unknown':
     case 'absent':
       return '片付けた時刻';
@@ -8020,6 +8128,12 @@ function closedRedeliveryClosing(state: ClosedByState): string {
         '片付け済みなので、あらためて手を動かす必要は無い。**この判断はあなたが下したものではない**' +
         '（人間が閉じた）ので、心当たりが無くても異常ではない。何が起きたか確かめたいときだけ、' +
         '上の手順で全文を読み直すこと。'
+      );
+    case 'daemon':
+      return (
+        '片付け済みなので、あらためて手を動かす必要は無い。**この判断はあなたが下したものではない**' +
+        '（器が自動で閉じた。理由は台帳と日誌に在る）ので、心当たりが無くても異常ではない。何が起きたか' +
+        '確かめたいときだけ、上の手順で全文を読み直すこと。'
       );
     case 'unknown':
       return (
@@ -8128,6 +8242,8 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
         body: `承認待ち ${event.approvalId} への回答: ${event.answer}`,
       };
     case 'manager_message':
+      // 機構が「クローンが手を打つことの無い知らせ」と印を付けたものは開かない（#5015。受信箱と日誌には届いている）
+      if (event.commitmentExempt === true) return null;
       return {
         ...base,
         origin: 'manager',

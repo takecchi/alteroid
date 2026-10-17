@@ -752,6 +752,12 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
           '5時間枠の印（担当が戻っていればクローンが畳んでよいかの判定材料。Issue #4499）で、' +
           'この関数は参照しない。`quotaStop` と同じ「bool のタグで自由文を運ばない」欄。',
       },
+      commitmentExempt: {
+        emit: 'never',
+        why:
+          '台帳に開かない印（機構が「クローンが手を打つことの無い知らせ」と判定した。Issue #5015）で、' +
+          'この関数は参照しない。`quotaStop` と同じ「bool のタグで自由文を運ばない」欄。',
+      },
       attachments: {
         emit: 'never',
         why:
@@ -843,6 +849,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       foldedTurn: true,
       quotaStop: true,
       quotaSessionWindow: true,
+      commitmentExempt: true,
       attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
       rejectedAttachments: [{ name: SECRET, reason: SECRET }],
     },
