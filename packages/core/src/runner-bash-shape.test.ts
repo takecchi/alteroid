@@ -132,7 +132,9 @@ describe('Bash の形の歯（#4947・マネージャーにも #4949）', () => 
         );
         const result = (await firePreToolUse(options, bash('pnpm test 2>&1', worker))) as Out;
         expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
-        expect(String(result.hookSpecificOutput?.permissionDecisionReason)).toContain('| tail');
+        expect(String(result.hookSpecificOutput?.permissionDecisionReason)).toContain(
+          '付け替えを外して',
+        );
         const note = noteTexts(events).find((t) => t.includes('Bash の呼び出しを弾いた'));
         expect(note).toContain(actor);
         expect(note).toContain('形=fd-dup');
@@ -147,8 +149,8 @@ describe('Bash の形の歯（#4947・マネージャーにも #4949）', () => 
       ["node -e '1'", 'node-eval', 'Write'],
       ["python3 -c 'x'", 'python-c', 'Write'],
       ["perl -e '1'", 'perl-eval', 'Write'],
-      ['pnpm test |& tail', 'pipe-stderr', '`|` だけ'],
-      ["timeout 300 bash -c 'pnpm test 2>&1'", 'fd-dup', '| tail'],
+      ['pnpm test |& tail', 'pipe-stderr', '`|&` を外して'],
+      ["timeout 300 bash -c 'pnpm test 2>&1'", 'fd-dup', '付け替えを外して'],
       ['git commit -m "$(cat <<\'EOF\'\nx\nEOF\n)"', 'subst-heredoc', 'git commit -F'],
       ['git reset --hard', 'git-reset', 'git restore --staged'],
       ['git -C /tmp/x push --force-with-lease', 'git-force-push', '新しい枝'],
@@ -267,7 +269,7 @@ describe('Bash の形の歯の入り切り（ALTEROID_BASH_SHAPE_GUARD。#4949�
       worker,
     );
     expect(decision).toBe('deny');
-    expect(reason).toContain('| tail');
+    expect(reason).toContain('付け替えを外して');
   });
 
   it('プロファイルで on なら断る（runner の env は未設定）', async () => {

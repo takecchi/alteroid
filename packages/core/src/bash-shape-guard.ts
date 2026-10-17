@@ -25,39 +25,45 @@ export type BashShapeForm =
 export type BashShapeVerdict =
   { blocked: false } | { blocked: true; form: BashShapeForm; reason: string };
 
+// 理由の文は、最初の1文で「何を止めたか」と「代わりにどう書けば通るか」を言う（#4989）: 「使えない」とだけ言うと禁止の宣言として読まれ、担当が手を止めて依頼者の指示を待つため。
+// 管（`| tail`）で絞ることは勧めない（#4990）: 終了コードが管の後ろのものになり、前のコマンドの失敗が成功に見えるため
 const REASONS: Record<BashShapeForm, string> = {
   heredoc:
-    'ヒアドキュメント（`<<EOF`）はこの Bash では使えない。ファイルを作るなら Write、直すなら Edit を使うこと。ファイルへ流し込むためなら、内容を Write でファイルに書いてから、そのパスを引数に渡して実行する。',
+    'ヒアドキュメント（`<<EOF`）は通らないので、ファイルを作るなら Write、直すなら Edit で書き、流し込む先のコマンドにはそのファイルの絶対パスを引数で渡すこと。',
   'subst-heredoc':
-    '二重引用符の中のコマンド置換（`"$(cat <<\'EOF\' …)"`）やバッククォートの中のヒアドキュメントは、実行されるのでこの Bash では使えない。コミットメッセージや PR の本文は、Write でメッセージのファイルを作り、`git commit -F <絶対パス>`・`gh pr create --body-file <絶対パス>` のようにファイルを渡すこと。',
+    '二重引用符の中のコマンド置換（`"$(cat <<\'EOF\' …)"`）やバッククォートの中のヒアドキュメントは実行されるので通らない。コミットメッセージや PR の本文は Write でファイルに書き、`git commit -F <絶対パス>`・`gh pr create --body-file <絶対パス>` のようにファイルで渡すこと。',
   redirect:
-    '出力のリダイレクト（`>`・`>>`・`>|`・`&>`・`>/dev/null`・`2>/dev/null`）はこの Bash では使えない。ファイルへ書くなら Write を使うこと。出力を捨てるためなら、捨てずに `| tail -n 20` か `| head` で絞る。要る行だけなら `| grep` を使う。',
+    '出力のリダイレクト（`>`・`>>`・`>|`・`&>`・`>/dev/null`・`2>/dev/null`）は通らないので、ファイルへ書くなら Write を使い、出力を捨てたいだけならリダイレクトを外してそのまま打ち、出力を読むこと（長い出力は道具が切って、全文をファイルに残す）。',
   'fd-dup':
-    '記述子の付け替え（`2>&1`・`>&2`）はこの Bash では使えない。Bash の道具は標準エラーも一緒に返すので要らない。出力を絞るなら、付け替えずに `| tail -n 20` を使うこと。',
+    '記述子の付け替え（`2>&1`・`>&2`）は通らないので、付け替えを外してそのまま打つこと（Bash の道具は標準エラーも一緒に返す）。',
   'pipe-stderr':
-    '`|&`（標準エラーも一緒にパイプへ流す記述子の付け替え）はこの Bash では使えない。`|` だけでよい。Bash の道具は標準エラーも一緒に返すので、絞るなら `| tail -n 20` を使うこと。',
+    '`|&`（標準エラーも一緒に管へ流す形）は通らないので、`|&` を外してそのまま打つこと（Bash の道具は標準エラーも一緒に返す）。',
   'sed-in-place':
-    '`sed -i`（`--in-place`・`-Ei`・`-i.bak` を含む）はこの Bash では使えない。ファイルの置き換えは Edit を使うこと。例えば `foo` を `bar` に直すなら、Edit で old_string に `foo`、new_string に `bar` を渡す（同じ語が複数あるなら replace_all を立てるか、前後の行を含めて一意にする）。',
+    '`sed -i`（`--in-place`・`-Ei`・`-i.bak` を含む）は通らないので、ファイルの置き換えは Edit で、old_string に元の文字列、new_string に新しい文字列を渡して行うこと（同じ語が複数あるなら replace_all を立てるか、前後の行を含めて一意にする）。',
   'node-eval':
-    '`node -e`・`--eval`・`-p`・`--print` はこの Bash では使えない。読むだけなら Read か grep を使うこと。処理が要るなら、スクリプトを Write で作業ディレクトリの中に書き、絶対パスで `node /絶対パス/script.mjs` と実行する。',
+    '`node -e`・`--eval`・`-p`・`--print` は通らないので、読むだけなら Read か grep を使い、処理が要るならスクリプトを Write で作業ディレクトリの中に書いて `node /絶対パス/script.mjs` で実行すること。',
   'python-c':
-    '`python -c`・`python3 -c` はこの Bash では使えない。読むだけなら Read か grep を使うこと。処理が要るなら、スクリプトを Write で作業ディレクトリの中に書き、絶対パスで `python3 /絶対パス/script.py` と実行する。',
+    '`python -c`・`python3 -c` は通らないので、読むだけなら Read か grep を使い、処理が要るならスクリプトを Write で作業ディレクトリの中に書いて `python3 /絶対パス/script.py` で実行すること。',
   'perl-eval':
-    '`perl -e`・`-E`・`-i` はこの Bash では使えない。読むだけなら Read か grep を使うこと。ファイルの置き換えは Edit を使う。処理が要るなら、スクリプトを Write で作業ディレクトリの中に書き、絶対パスで `perl /絶対パス/script.pl` と実行する。',
+    '`perl -e`・`-E`・`-i` は通らないので、読むだけなら Read か grep、ファイルの置き換えは Edit を使い、処理が要るならスクリプトを Write で作業ディレクトリの中に書いて `perl /絶対パス/script.pl` で実行すること。',
   'git-reset':
-    '`git reset`（`--hard`・`--soft`・`--mixed` を含む全ての形）はこの Bash では使えない。ステージを外すなら `git restore --staged <path>` を使うこと。作業ツリーの変更を捨てる・枝を動かすなら、捨てる前に依頼者へ確かめる。コミットを取り消して戻すなら `git revert <commit>` を使う。',
+    '`git reset`（`--hard`・`--soft`・`--mixed` を含む全ての形）は通らないので、ステージを外すなら `git restore --staged <path>`、コミットを取り消して戻すなら `git revert <commit>` を使うこと（作業ツリーの変更を捨てる・枝を動かすのが目的のときだけは、捨てる前に依頼者へ確かめる）。',
   'git-force-push':
-    '`git push` の `--force`・`--force-with-lease`・`--force-if-includes`・`-f`（`-uf` のような組み合わせを含む）と、`+` で始まる refspec（`git push origin +main`）はこの Bash では使えない。新しいコミットを積んで普通に push すること。履歴を書き換える必要があるなら、新しい枝を切って PR にする。',
+    '`git push` の強制（`--force`・`--force-with-lease`・`--force-if-includes`・`-f`・`-uf` のような組み合わせ・`+` で始まる refspec）は通らないので、新しいコミットを積んで普通に `git push` し、履歴を書き換える必要があるなら新しい枝を切って PR にすること。',
   'git-rebase':
-    '`git rebase`（`git pull --rebase`・`git pull -r` を含む）はこの Bash では使えない。最新の main を取り込むなら `git merge origin/main` を使うこと。途中で止まった rebase から抜けるなら、`git rebase --abort` は通る。',
+    '`git rebase`（`git pull --rebase`・`git pull -r` を含む）は通らないので、最新の main を取り込むなら `git merge origin/main` を使うこと（途中で止まった rebase から抜ける `git rebase --abort` は通る）。',
   'no-verify':
-    '`--no-verify`（git のどの下位命令でも）と `git commit -n` はこの Bash では使えない。フックが落ちたなら、落ちた理由を直してから打ち直すこと。',
+    '`--no-verify`（git のどの下位命令でも）と `git commit -n` は通らないので、フックが落ちた理由を直してから、付けずに打ち直すこと。',
   'gh-merge-auto':
-    '`gh pr merge --auto` はこの Bash では使えない。CI を前面で `timeout 530 gh run watch <id> --exit-status` で待ち、緑なら `gh pr merge <番号> --squash --match-head-commit <sha>` のように `--match-head-commit` を付けてマージすること。',
+    '`gh pr merge --auto` は通らないので、CI を前景で `timeout 530 gh run watch <id> --exit-status` で待ち、緑なら `gh pr merge <番号> --squash --match-head-commit <sha>` でマージすること。',
 };
 
+/** どの形の理由にも最後に添える1文（#4989）。止めたのが1回の呼び出しだけで、書き直して続けてよいことを言う。 */
+export const BASH_SHAPE_CONTINUE_NOTE =
+  '止めたのはこの1回の呼び出しだけなので、上のとおり書き直して、依頼者の返事を待たずにそのまま続けること。迷ったら、1回の Bash では1つのコマンドだけを、変数を使わず絶対パスで打ち、出力はそのまま読む。';
+
 function blocked(form: BashShapeForm): BashShapeVerdict {
-  return { blocked: true, form, reason: REASONS[form] };
+  return { blocked: true, form, reason: `${REASONS[form]}${BASH_SHAPE_CONTINUE_NOTE}` };
 }
 
 const SEGMENT_BOUNDARY = new Set([';', '&', '|', '\n', '(', ')', '\u0060']);

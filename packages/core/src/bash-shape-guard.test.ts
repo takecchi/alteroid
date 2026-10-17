@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { inspectBashShape } from './bash-shape-guard.js';
+import { BASH_SHAPE_CONTINUE_NOTE, inspectBashShape } from './bash-shape-guard.js';
 
 function formOf(command: string): string | undefined {
   const v = inspectBashShape(command);
@@ -17,11 +17,11 @@ describe('inspectBashShape: 断る形（#4947）', () => {
     ['echo hi >| out.txt', 'redirect', 'Write'],
     ['echo hi &> out.txt', 'redirect', 'Write'],
     ['ls 3> out.txt', 'redirect', 'Write'],
-    ['pnpm test >/dev/null', 'redirect', '| tail -n 20'],
-    ['pnpm test 2>/dev/null', 'redirect', '| grep'],
-    ['pnpm test 2>&1', 'fd-dup', '| tail'],
+    ['pnpm test >/dev/null', 'redirect', 'リダイレクトを外してそのまま打ち'],
+    ['pnpm test 2>/dev/null', 'redirect', '出力を読む'],
+    ['pnpm test 2>&1', 'fd-dup', '付け替えを外して'],
     ['echo x >&2', 'fd-dup', '標準エラー'],
-    ['pnpm test 2>&1 | tail -n 20', 'fd-dup', '| tail'],
+    ['pnpm test 2>&1 | tail -n 20', 'fd-dup', '付け替えを外して'],
     ["sed -i 's/a/b/' f.ts", 'sed-in-place', 'old_string'],
     ["sed -Ei 's/a/b/' f.ts", 'sed-in-place', 'Edit'],
     ["sed -i.bak 's/a/b/' f.ts", 'sed-in-place', 'Edit'],
@@ -66,16 +66,16 @@ describe('inspectBashShape: 断る形（#4947）', () => {
 describe('inspectBashShape: 足した形（#4949）', () => {
   const cases: [string, string, string][] = [
     // 1. `|&`
-    ['pnpm test |& tail -n 20', 'pipe-stderr', '`|` だけ'],
+    ['pnpm test |& tail -n 20', 'pipe-stderr', '`|&` を外して'],
     ['make |& grep error', 'pipe-stderr', '標準エラー'],
     // 2. bash -c / sh -c の引数の中
     // 2026-10-16 #4949: `bash -c 'echo hi > f'` は以前は通していた（#4947 では引用符の中の形を見なかった）が、引数の引用符を1段はがして中を読むようにしたので断る
     ["bash -c 'echo hi > f'", 'redirect', 'Write'],
-    ["timeout 300 bash -c 'pnpm test 2>&1'", 'fd-dup', '| tail'],
+    ["timeout 300 bash -c 'pnpm test 2>&1'", 'fd-dup', '付け替えを外して'],
     ['sh -c "cat <<EOF\nx\nEOF"', 'heredoc', 'Write'],
     ["bash -lc 'sed -i s/a/b/ f'", 'sed-in-place', 'Edit'],
     ["bash -c 'git reset --hard'", 'git-reset', 'git restore --staged'],
-    ["bash -c 'make |& tail'", 'pipe-stderr', '`|` だけ'],
+    ["bash -c 'make |& tail'", 'pipe-stderr', '`|&` を外して'],
     ["sudo bash -c 'echo x >> /etc/f'", 'redirect', 'Write'],
     // 3. 二重引用符の中のコマンド置換・バッククォート
     [
@@ -86,8 +86,8 @@ describe('inspectBashShape: 足した形（#4949）', () => {
     ['gh pr create --body "$(cat <<EOF\nx\nEOF\n)"', 'subst-heredoc', '--body-file'],
     ['echo "`cat <<EOF\nx\nEOF\n`"', 'subst-heredoc', 'git commit -F'],
     ['echo "$(cat f > g)"', 'redirect', 'Write'],
-    ['echo "a $(pnpm test 2>&1) b"', 'fd-dup', '| tail'],
-    ['echo "`pnpm test 2>/dev/null`"', 'redirect', '| grep'],
+    ['echo "a $(pnpm test 2>&1) b"', 'fd-dup', '付け替えを外して'],
+    ['echo "`pnpm test 2>/dev/null`"', 'redirect', '出力を読む'],
     ['echo "$(echo "x" | sed -i s/a/b/ f)"', 'sed-in-place', 'Edit'],
     ['echo "$(git reset --hard)"', 'git-reset', 'git revert'],
     // 4. git reset（全ての形）
@@ -286,7 +286,10 @@ describe('inspectBashShape: 断らないもの（誤検知の防ぎ）', () => {
       expect(v.blocked).toBe(true);
       expect(v.blocked && /\*\*|^#|^- /m.test(v.reason)).toBe(false);
       expect(v.blocked && v.reason.includes('作業者')).toBe(false);
-      expect(v.blocked && v.reason.includes('この Bash では使えない')).toBe(true);
+      // 最初の1文で「通らない」と代わりの書き方を言い、続けてよいと締める（#4989）。管で絞ることは勧めない（#4990）
+      expect(v.blocked && v.reason.includes('通らない')).toBe(true);
+      expect(v.blocked && v.reason.endsWith(BASH_SHAPE_CONTINUE_NOTE)).toBe(true);
+      expect(v.blocked && v.reason.includes('| tail')).toBe(false);
     }
   });
 
