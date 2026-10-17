@@ -1,4 +1,14 @@
-import { chmod, lstat, mkdir, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -80,7 +90,10 @@ async function listTree(dir: string, prefix = ''): Promise<string[]> {
 }
 
 async function extractedFiles(result: ExtractedPlugin): Promise<string[]> {
-  return (await listTree(result.path)).filter((p) => p !== '.alteroid-extract.json');
+  // 2026-10-17 #4798: 印に加えて中身の一覧（.alteroid-manifest.json）も展開先に置くので、どちらも除く（以前は印だけ除いていた）
+  return (await listTree(result.path)).filter(
+    (p) => p !== '.alteroid-extract.json' && p !== '.alteroid-manifest.json',
+  );
 }
 
 const mode = async (path: string) => (await stat(path)).mode & 0o777;
@@ -866,6 +879,8 @@ describe('呼び手向けの関数', () => {
       plugins: [],
       removed: [],
       failures: [{ name: null, stage: 'list', message: 'list failed' }],
+      // 2026-10-17 #4798: 結果に rebuilt（展開し直した一覧）が加わった。以前の期待値には無かった
+      rebuilt: [],
     });
   });
 
@@ -951,5 +966,131 @@ describe('片づけの chmod', () => {
     expect((await stat(outside)).mode & 0o777).toBe(0o500);
     expect((await stat(join(outside, 'inner'))).mode & 0o777).toBe(0o500);
     await chmod(outside, 0o700);
+  });
+});
+
+describe('展開先の中身の確かめ（Issue #4798）', () => {
+  const SKILL = 'skills/a/SKILL.md';
+  const ORIGINAL = '---\nname: a\ndescription: dummy-content\n---\n# original\n';
+
+  async function seedOne() {
+    const stores = createMemoryStores();
+    await stores.plugins.put({
+      name: 'p-all',
+      scope: 'all',
+      source: { kind: 'url', url: 'https://example.com/repo', sha: SHA_A },
+      files: [file(SKILL, ORIGINAL), file('commands/c.md', '# c\n')],
+      installedAt: '2026-10-07T00:00:00.000Z',
+      installedBy: 'account-1',
+    } as PluginInput);
+    return stores;
+  }
+
+  const run = (root: string, stores: Awaited<ReturnType<typeof seedOne>>) =>
+    extractPluginsForScopes({ root, store: stores.plugins, scopes: ['all'] });
+
+  /** 展開先は読み取り専用なので、持ち主として書込み可へ戻して書き換える（クローンの道具が同じ uid で走る形）。 */
+  async function tamper(path: string, rel: string, text: string): Promise<void> {
+    await makeWritable(path);
+    await chmod(join(path, rel), 0o600).catch(() => undefined);
+    await writeFile(join(path, rel), text);
+  }
+
+  it('展開した直後は使われる（展開し直さない・同じ inode）', async () => {
+    const root = await newRoot();
+    const stores = await seedOne();
+    const first = await run(root, stores);
+    const ino = (await stat(first.plugins[0]!.path)).ino;
+    const second = await run(root, stores);
+    expect(second.rebuilt).toEqual([]);
+    expect(second.plugins).toEqual(first.plugins);
+    expect((await stat(second.plugins[0]!.path)).ino).toBe(ino);
+  });
+
+  it('展開先のファイルを1つ書き換えると、次に展開し直され、元の中身に戻る', async () => {
+    const root = await newRoot();
+    const stores = await seedOne();
+    const first = await run(root, stores);
+    const path = first.plugins[0]!.path;
+    await tamper(path, SKILL, '# evil\n');
+    const second = await run(root, stores);
+    expect(second.rebuilt).toEqual([{ name: 'p-all', reason: 'content-differs', files: [SKILL] }]);
+    expect(second.plugins[0]!.path).toBe(path);
+    expect(await readFile(join(path, SKILL), 'utf8')).toBe(ORIGINAL);
+    expect(await readdir(join(root, 'plugins'))).toEqual([basename(path)]);
+    const third = await run(root, stores);
+    expect(third.rebuilt).toEqual([]);
+  });
+
+  it('ファイルを足す・消すと展開し直される', async () => {
+    const root = await newRoot();
+    const stores = await seedOne();
+    const first = await run(root, stores);
+    const path = first.plugins[0]!.path;
+    await tamper(path, 'skills/a/EXTRA.md', '# extra\n');
+    const added = await run(root, stores);
+    expect(added.rebuilt).toEqual([
+      { name: 'p-all', reason: 'content-differs', files: ['skills/a/EXTRA.md'] },
+    ]);
+    expect(await extractedFiles({ name: 'p-all', path, removed: [] })).not.toContain(
+      'skills/a/EXTRA.md',
+    );
+
+    await makeWritable(path);
+    await rm(join(path, 'commands/c.md'));
+    const removed = await run(root, stores);
+    expect(removed.rebuilt).toEqual([
+      { name: 'p-all', reason: 'content-differs', files: ['commands/c.md'] },
+    ]);
+    expect(await readFile(join(path, 'commands/c.md'), 'utf8')).toBe('# c\n');
+  });
+
+  it('一覧が無い古い展開先（この確認より前のもの）は展開し直される', async () => {
+    const root = await newRoot();
+    const stores = await seedOne();
+    const first = await run(root, stores);
+    const path = first.plugins[0]!.path;
+    await makeWritable(path);
+    await rm(join(path, '.alteroid-manifest.json'));
+    const second = await run(root, stores);
+    expect(second.rebuilt).toEqual([{ name: 'p-all', reason: 'manifest-missing', files: [] }]);
+    expect((await readdir(path)).includes('.alteroid-manifest.json')).toBe(true);
+    expect((await run(root, stores)).rebuilt).toEqual([]);
+  });
+
+  it('一覧のファイル自体を書き換えて中身に合わせても、展開し直される（extractPlugin は作る中身と突き合わせる）', async () => {
+    const root = await newRoot();
+    const input = basePlugin();
+    const first = await extractPlugin(root, input);
+    await tamper(first.path, 'skills/one/SKILL.md', '# evil\n');
+    await tamper(first.path, '.alteroid-manifest.json', '{"version":1,"files":{}}\n');
+    const second = await extractPlugin(root, input);
+    expect(second.rebuilt?.reason).toBe('content-differs');
+    expect(await readFile(join(second.path, 'skills/one/SKILL.md'), 'utf8')).toContain('# body');
+  });
+
+  it('extractPlugin 単体でも、中身が違えば rebuilt を返して作り直す（正常なら付かない）', async () => {
+    const root = await newRoot();
+    const input = basePlugin();
+    const first = await extractPlugin(root, input);
+    expect(first.rebuilt).toBeUndefined();
+    expect((await extractPlugin(root, input)).rebuilt).toBeUndefined();
+    await tamper(first.path, 'skills/one/SKILL.md', '# evil\n');
+    const second = await extractPlugin(root, input);
+    expect(second.rebuilt).toEqual({ reason: 'content-differs', files: ['skills/one/SKILL.md'] });
+  });
+
+  it('展開先の symlink への差し替えも違いとして見つかる', async () => {
+    const root = await newRoot();
+    const stores = await seedOne();
+    const first = await run(root, stores);
+    const path = first.plugins[0]!.path;
+    await makeWritable(path);
+    await rm(join(path, 'commands/c.md'));
+    await symlink('/etc/hostname', join(path, 'commands/c.md'));
+    const second = await run(root, stores);
+    expect(second.rebuilt).toEqual([
+      { name: 'p-all', reason: 'content-differs', files: ['commands/c.md'] },
+    ]);
   });
 });

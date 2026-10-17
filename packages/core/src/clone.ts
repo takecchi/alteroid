@@ -5861,6 +5861,24 @@ class Clone implements CloneHost {
           `このセッションを起こした（段: ${failure.stage}）。`,
       });
     }
+    // 展開先の中身が入れたときと違っていたので展開し直した（Issue #4798）。書き換えられた形跡として残す。
+    for (const rebuilt of result.rebuilt) {
+      const detail =
+        rebuilt.reason === 'manifest-missing'
+          ? '展開先に中身の一覧が無い・読めなかった（この確認より前に展開されたもの、または一覧が壊されたもの）ので展開し直した。'
+          : `展開先の中身が、入れたときと違っていたので展開し直した（違ったファイル: ${rebuilt.files
+              .slice(0, 5)
+              .map((path) => JSON.stringify(path.slice(0, 120)))
+              .join(
+                ', ',
+              )}${rebuilt.files.length > 5 ? ` ほか${rebuilt.files.length - 5}件` : ''}）。`;
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${EXCHANGE_KIND_DECISION_PREFIX}plugin ${rebuilt.name} の${detail} #4798`,
+      });
+    }
     const loaded = result.plugins.map((plugin) => basename(plugin.path)).sort();
     const removedSummary = summarizeRemovedForJournal(result.removed);
     const digest = JSON.stringify([loaded, removedSummary]);

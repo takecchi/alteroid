@@ -43,6 +43,8 @@ const MANIFEST_METADATA_FIELDS: ReadonlySet<string> = new Set([
 ]);
 
 const MARKER_FILE = '.alteroid-extract.json';
+/** 展開した各ファイルの sha256 の一覧（#4798）。使う前に展開先の中身と突き合わせ、書き換えを見つける。 */
+const CONTENT_LIST_FILE = '.alteroid-manifest.json';
 const MANIFEST_PATH = '.claude-plugin/plugin.json';
 const MCP_PATH = '.mcp.json';
 const ALLOWED_PREFIXES = ['skills/', 'agents/', 'commands/'] as const;
@@ -89,10 +91,22 @@ export interface RemovedItem {
   readonly reason: RemovedReason;
 }
 
+/**
+ * 印が合っていたのに、中身が入れたときと違っていたので展開し直した（#4798）。
+ * `manifest-missing`: 一覧が無い・読めない（この確認より前に展開されたもの、または一覧が壊されたもの）。files は空。
+ * `content-differs`: files は違った・足された・消えたファイルの相対パス（辞書順）。
+ */
+export interface PluginRebuild {
+  readonly reason: 'content-differs' | 'manifest-missing';
+  readonly files: readonly string[];
+}
+
 export interface ExtractedPlugin {
   readonly name: string;
   readonly path: string;
   readonly removed: readonly RemovedItem[];
+  /** 展開し直したときだけ付く。 */
+  readonly rebuilt?: PluginRebuild;
 }
 
 interface OutputFile {
@@ -471,6 +485,87 @@ async function readMarker(dir: string): Promise<unknown> {
   }
 }
 
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+/** 一覧の本文。パスの辞書順で固定し、同じ中身なら同じ本文になる。 */
+function contentListBody(hashes: ReadonlyMap<string, string>): string {
+  const files: Record<string, string> = {};
+  for (const path of [...hashes.keys()].sort()) files[path] = hashes.get(path) ?? '';
+  return `${JSON.stringify({ version: 1, files })}\n`;
+}
+
+function expectedHashes(outputs: readonly OutputFile[]): Map<string, string> {
+  return new Map(outputs.map((output) => [output.path, sha256Hex(output.bytes)]));
+}
+
+/** 一覧のファイルを読む。無い・読めない・形が違うときは null（展開し直す側へ倒す）。 */
+async function readContentList(dir: string): Promise<Map<string, string> | null> {
+  const path = join(dir, CONTENT_LIST_FILE);
+  const info = await lstat(path).catch(() => null);
+  if (info === null || !info.isFile()) return null;
+  try {
+    const parsed = JSON.parse(await readFile(path, 'utf8')) as unknown;
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const files = (parsed as Record<string, unknown>).files;
+    if (typeof files !== 'object' || files === null || Array.isArray(files)) return null;
+    const out = new Map<string, string>();
+    for (const [key, value] of Object.entries(files)) {
+      if (typeof value !== 'string') return null;
+      out.set(key, value);
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** 展開先の中身を非同期に1つずつ読んで sha256 にする（ループを塞がない）。印と一覧のファイルは数えない。symlink・通常ファイル以外は辿らず、特別な値にして必ず違いに出す。 */
+async function hashTree(
+  dir: string,
+  prefix = '',
+  out: Map<string, string> = new Map(),
+): Promise<Map<string, string>> {
+  for (const name of (await readdir(dir)).sort()) {
+    const rel = prefix === '' ? name : `${prefix}/${name}`;
+    if (prefix === '' && (name === MARKER_FILE || name === CONTENT_LIST_FILE)) continue;
+    const full = join(dir, name);
+    const info = await lstat(full);
+    if (info.isDirectory()) await hashTree(full, rel, out);
+    else if (info.isFile()) out.set(rel, sha256Hex(await readFile(full)));
+    else out.set(rel, 'not-a-regular-file');
+  }
+  return out;
+}
+
+function differingFiles(
+  expected: ReadonlyMap<string, string>,
+  actual: ReadonlyMap<string, string>,
+): string[] {
+  const out: string[] = [];
+  for (const [path, hash] of expected) if (actual.get(path) !== hash) out.push(path);
+  for (const path of actual.keys()) if (!expected.has(path)) out.push(path);
+  return out.sort();
+}
+
+/** 展開先を一覧（`expected` を渡せばそれ）と突き合わせる。合えば null。 */
+async function checkExtractedContent(
+  dir: string,
+  expected: ReadonlyMap<string, string> | null,
+): Promise<PluginRebuild | null> {
+  const listed = expected ?? (await readContentList(dir));
+  if (listed === null) return { reason: 'manifest-missing', files: [] };
+  let actual: Map<string, string>;
+  try {
+    actual = await hashTree(dir);
+  } catch {
+    return { reason: 'content-differs', files: ['(unreadable)'] };
+  }
+  const files = differingFiles(listed, actual);
+  return files.length === 0 ? null : { reason: 'content-differs', files };
+}
+
 async function writeStage(
   stage: string,
   outputs: OutputFile[],
@@ -520,11 +615,40 @@ async function writeStage(
     await markerHandle.close();
   }
   written.push({ target: markerTarget, executable: false });
+  const listTarget = join(stage, CONTENT_LIST_FILE);
+  const listHandle = await open(listTarget, flags, 0o600);
+  try {
+    await listHandle.writeFile(contentListBody(expectedHashes(outputs)));
+  } finally {
+    await listHandle.close();
+  }
+  written.push({ target: listTarget, executable: false });
 
   for (const file of written) await chmod(file.target, file.executable ? 0o555 : 0o444);
   const ordered = [...dirs].sort((a, b) => b.length - a.length);
   for (const dir of ordered) await chmod(dir, 0o555);
   await chmod(stage, 0o555);
+}
+
+/** 作るつもりの中身（`outputs`）と突き合わせる: 一覧のファイルまで書き換えられていても見つかる。 */
+async function checkExistingAgainstPlan(
+  dir: string,
+  outputs: readonly OutputFile[],
+): Promise<PluginRebuild | null> {
+  const expected = expectedHashes(outputs);
+  const listPath = join(dir, CONTENT_LIST_FILE);
+  const info = await lstat(listPath).catch(() => null);
+  if (info === null || !info.isFile()) return { reason: 'manifest-missing', files: [] };
+  const text = await readFile(listPath, 'utf8').catch(() => null);
+  if (text === null) return { reason: 'manifest-missing', files: [] };
+  const found = await checkExtractedContent(dir, expected);
+  if (text !== contentListBody(expected)) {
+    return {
+      reason: 'content-differs',
+      files: [...(found?.files ?? []), CONTENT_LIST_FILE].sort(),
+    };
+  }
+  return found;
 }
 
 /** 同じ名前に壊れた marker・symlink・dir 以外が先に置かれていれば、辿らずに退避して作り直す。 */
@@ -539,11 +663,16 @@ export async function extractPlugin(
   assertInside(pluginsDir, finalPath);
   const { outputs, removed } = planExtraction(plugin);
   const marker = markerOf(plugin);
-  const result: ExtractedPlugin = { name: plugin.name, path: finalPath, removed };
+  let result: ExtractedPlugin = { name: plugin.name, path: finalPath, removed };
 
   const existing = await lstat(finalPath).catch(() => null);
   const existingIsDir = existing !== null && !existing.isSymbolicLink() && existing.isDirectory();
-  if (existingIsDir && markerMatches(await readMarker(finalPath), marker)) return result;
+  if (existingIsDir && markerMatches(await readMarker(finalPath), marker)) {
+    // 印が合っても、中身が入れたときのままかを確かめる（#4798）。違えば下で展開し直す。
+    const rebuilt = await checkExistingAgainstPlan(finalPath, outputs);
+    if (rebuilt === null) return result;
+    result = { ...result, rebuilt };
+  }
 
   const stage = resolve(pluginsDir, `.tmp-${dirName}-${randomBytes(8).toString('hex')}`);
   await mkdir(stage, { mode: 0o700 });
@@ -599,6 +728,8 @@ async function findCurrentExtraction(
   if (info === null || info.isSymbolicLink() || !info.isDirectory()) return null;
   const found = await readMarker(path);
   if (!markerMatches(found, markerOf(identity))) return null;
+  // 印が合っても中身を読み直して一覧と突き合わせる（#4798）。違えば null（呼び手が get して展開し直す。展開し直しの理由は extractPlugin が返す）。
+  if ((await checkExtractedContent(path, null)) !== null) return null;
   const removed = removedFromMarker(found, identity.name);
   return removed === null ? null : { path, removed };
 }
@@ -692,6 +823,8 @@ export interface ExtractForScopesResult {
   readonly plugins: ExtractedPluginRef[];
   readonly removed: RemovedItem[];
   readonly failures: PluginExtractFailure[];
+  /** 印は合っていたが中身が違っていたので展開し直したもの（#4798）。呼び手が日誌に残す。 */
+  readonly rebuilt: { name: string; reason: PluginRebuild['reason']; files: readonly string[] }[];
 }
 
 /** 1つの失敗で全体を止めない。日誌には書かない（書くのは呼び手）。 */
@@ -701,7 +834,7 @@ export async function extractPluginsForScopes(options: {
   scopes: readonly PluginScope[];
 }): Promise<ExtractForScopesResult> {
   const { root, store, scopes } = options;
-  const out: ExtractForScopesResult = { plugins: [], removed: [], failures: [] };
+  const out: ExtractForScopesResult = { plugins: [], removed: [], failures: [], rebuilt: [] };
   let summaries;
   try {
     summaries = await store.list();
@@ -711,7 +844,7 @@ export async function extractPluginsForScopes(options: {
   }
   for (const summary of summaries) {
     if (!scopes.includes(summary.scope)) continue;
-    // 展開済みなら files を読まない（全 plugin の本体を毎回ストアから引かないため）。読み違えたときは get して展開する側へ倒す。
+    // 展開済みなら files をストアから引かない（全 plugin の本体を毎回ストアから引かないため）。展開先の中身は読み直して確かめる（#4798）。読み違えたときは get して展開する側へ倒す。
     const current = await findCurrentExtraction(root, summary).catch(() => null);
     if (current !== null) {
       out.plugins.push({
@@ -741,6 +874,9 @@ export async function extractPluginsForScopes(options: {
         skipMcpDiscovery: !plugin.enableMcp,
       });
       out.removed.push(...extracted.removed);
+      if (extracted.rebuilt !== undefined) {
+        out.rebuilt.push({ name: plugin.name, ...extracted.rebuilt });
+      }
     } catch (error) {
       out.failures.push({ name: summary.name, stage: 'extract', message: messageOf(error) });
     }
