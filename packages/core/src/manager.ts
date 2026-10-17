@@ -11676,6 +11676,7 @@ class Pool implements ManagerPool {
     foldedTurn = false,
     reportFiles?: ManagerReportFiles,
     quotaStop?: { readonly sessionWindow: boolean },
+    commitmentExempt = false,
   ): void {
     // 握り潰した報告の件数を日誌だけに残さず、配る `text` の末尾にも足す: 日誌だと引きに行かないと、報告まで消していないかに気づけない。
     // 窓へ移した在庫（`closed` が積んだ分）は、この配りで運んで消す。普通の在庫が在れば（窓の後に積み直されることは無いが）そちらを先にする。
@@ -11686,6 +11687,8 @@ class Pool implements ManagerPool {
     this.#withheldCarriedToWindow.delete(managerId);
     const withheld = this.#withheldReports.get(managerId);
     let outgoing = text;
+    // 印は安全側へ倒す: 背景処理の完了待ちで畳んだ報告を運ぶ回と、直前と同文の知らせを数だけ残した旨を足す回は、中身が台帳に要るかもしれないので付けない（#5015）
+    let exempt = commitmentExempt;
     if (withheld !== undefined) {
       // `'flush'` は在庫を `delete` しない: `firstAt` が失われ、次に積んだ回が新しいエピソードとして数え直され、`flushWithheldReports()` が何度でも合図を立て直せてしまう。
       if (withheldSuffixDetail === 'flush') {
@@ -11701,6 +11704,7 @@ class Pool implements ManagerPool {
       }
       // `count === 0` のときは足さない: フラッシュ直後は在庫が `count: 0` で残っており、足すと「0 本配っていない」という嘘の1行が出る。
       if (withheld.count > 0) {
+        exempt = false;
         // `'flush'` でも抜粋を付ける: 件数だけだと、マージの報告のような本文がクローンから見えないまま日誌にだけ残る。
         outgoing =
           `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
@@ -11713,6 +11717,7 @@ class Pool implements ManagerPool {
     const streak = this.#synthesizedNoticeStreaks.get(managerId);
     this.#synthesizedNoticeStreaks.delete(managerId);
     if (streak !== undefined && streak.suppressed > 0) {
+      exempt = false;
       outgoing =
         `${outgoing}\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を ` +
         `${String(streak.suppressed)} 束（通数 ${String(streak.suppressedArrived)} 件）配っていない` +
@@ -11735,6 +11740,7 @@ class Pool implements ManagerPool {
       ...(foldedTurn ? { foldedTurn: true as const } : {}),
       ...(quotaStop === undefined ? {} : { quotaStop: true as const }),
       ...(quotaStop?.sessionWindow === true ? { quotaSessionWindow: true as const } : {}),
+      ...(exempt ? { commitmentExempt: true as const } : {}),
       ...(reportFiles === undefined || reportFiles.attachments.length === 0
         ? {}
         : { attachments: reportFiles.attachments }),
@@ -11870,6 +11876,12 @@ class Pool implements ManagerPool {
     const quotaStop = entry.fragments.every((fragment) => fragment.quota !== undefined)
       ? { sessionWindow: allSessionWindow(entry.fragments) }
       : undefined;
+    // 後継の居ない起こし直しの知らせだけ、台帳に開かない印を付ける（#5015）。
+    // `supersededBy` が在る／後継を起こしている最中の担当は、窓の間に後継がつながった回なので、今までどおり台帳に開く（クローンが手を打つ余地が在る）。
+    const commitmentExempt =
+      entry.fragments.every((fragment) => fragment.label === 'usage_rewoken') &&
+      this.#records.get(managerId)?.job.supersededBy === undefined &&
+      !this.#supersedePending.has(managerId);
     this.#deliver(
       managerId,
       'report',
@@ -11881,6 +11893,7 @@ class Pool implements ManagerPool {
       foldedTurn,
       undefined,
       quotaStop,
+      commitmentExempt,
     );
     // 対象外の束では新しい連鎖を立てない: 次に同じ族が来ても握りつぶす先が無く、記憶を持つだけ無駄。
     if (eligible) {

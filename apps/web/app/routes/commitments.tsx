@@ -502,6 +502,7 @@ function assertClosedByHandled(closedBy: never): void {
 const KNOWN_COMMITMENT_CLOSED_BY = [
   'clone',
   'human',
+  'daemon',
 ] as const satisfies readonly CommitmentClosedBy[];
 
 function isKnownCommitmentClosedBy(value: string): value is CommitmentClosedBy {
@@ -1225,6 +1226,10 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
       );
 
     case 'human':
+      return <PlainClosedReason reason={reason} />;
+
+    // 器が書いた定型文なので Markdown にしない。理由の文頭に「器が自動で閉じた」と入っている
+    case 'daemon':
       return <PlainClosedReason reason={reason} />;
 
     default:
