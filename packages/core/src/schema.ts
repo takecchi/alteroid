@@ -498,7 +498,10 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     cause: z.enum(['distill', 'clone', 'human']),
     // `optional` にする: 既存の日誌エントリを1件も壊さないため（`summary` の自由文は削らない）
     // `describe` を `write` に畳まず、`move_in` / `move_out` を `write` / `remove` にも `move` 1つにも畳まない: 区別が自由文だけに落ちる／増えた側と減った側をバイト数の大小から推測することになるため
-    action: z.enum(['write', 'append', 'remove', 'describe', 'move_in', 'move_out']).optional(),
+    // `write_failed` は「直前の同じ slug の `write`（人間の保存）が本文に届かなかった」を打ち消す行: 日誌を先に書く順序では、本文の書き込みが落ちても `write` の行だけが残るため。`write` を消すのではなく足す（日誌は追記のみ）。
+    action: z
+      .enum(['write', 'append', 'remove', 'describe', 'move_in', 'move_out', 'write_failed'])
+      .optional(),
     bytesBefore: z.number().int().nonnegative().optional(),
     bytesAfter: z.number().int().nonnegative().optional(),
     summary: z.string(),

@@ -36,6 +36,7 @@ import {
   createManagerPool,
   createMcpServerService,
   createMemoryStores,
+  deriveHumanTouchedAtFromJournal,
   dropLastRowPerPage,
   createProfileApplier,
   createProfileService,
@@ -1122,7 +1123,15 @@ describe('HTTP API', () => {
       expect(body.current?.document.content).toContain('クローンが蒸留した判断');
 
       expect((await stores.persona.read('values'))?.content).toContain('クローンが蒸留した判断');
-      expect(await stores.journal.list({ types: ['memory_update'] })).toEqual([]);
+      // 日誌を先に書くので、「人間が書いた」の行と、それを打ち消す行が残る（#4774）。
+      const entries = await stores.journal.list({ types: ['memory_update'], order: 'asc' });
+      expect(entries.map((entry) => (entry as { action?: string }).action)).toEqual([
+        'write',
+        'write_failed',
+      ]);
+      // 日誌から印を作り直しても立たない（打ち消しの行を根拠にしない）。印そのものも立っていない。
+      expect((await deriveHumanTouchedAtFromJournal(stores.journal)).has('values')).toBe(false);
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
     });
 
     it('ifMatch が最新と一致していれば書ける。応答の version は次の ifMatch に使える', async () => {
@@ -1266,10 +1275,9 @@ describe('HTTP API', () => {
   });
 
   it(
-    '日誌への追記が落ちても、書き換えは効いていて応答は成功する（Issue #2037）。' +
+    '日誌への追記が落ちたら、本文を書かずに 500 を返す（Issue #4774）。' +
       'stderr に跡が1行出て、その行に本文は載らない。' +
-      '**`markHumanTouched` も呼ばれない**（裏付けの日誌行が無いので、保護状態は' +
-      '"human" にならない——`PersonaStore.markHumanTouched` の doc）',
+      '印も立たない（印の付かない人間の保存を起こさない）',
     async () => {
       await stores.persona.write('journal-drop-memory', '# 元の内容\n');
       expect(await stores.persona.protectionStatus('journal-drop-memory')).toEqual({
@@ -1300,11 +1308,15 @@ describe('HTTP API', () => {
         });
       });
 
-      expect(response?.status).toBe(200);
+      expect(response?.status).toBe(500);
+      expect(await response?.json()).toEqual({
+        error: '記録（日誌）が書けなかったので、変更していません',
+        code: 'journal_write_failed',
+      });
 
       const read = await app.request('/memory/journal-drop-memory');
       const body = (await read.json()) as { document: { content: string } };
-      expect(body.document.content).toContain('SECRET-NEW-CONTENT');
+      expect(body.document.content).toBe('# 元の内容\n');
 
       expect(await stores.persona.protectionStatus('journal-drop-memory')).toEqual({
         kind: 'clone-only',
@@ -1315,6 +1327,116 @@ describe('HTTP API', () => {
       expect(dropped[0]).not.toContain('SECRET-NEW-CONTENT');
     },
   );
+
+  it('日誌も本文も書ければ、日誌の行が先に立ち、本文が書かれ、印が立つ。日誌から作り直しても印は立つ（#4774）', async () => {
+    const res = await app.request('/memory/ordered', {
+      ...json({ content: '# 人間\n' }),
+      method: 'PUT',
+    });
+    expect(res.status).toBe(200);
+    const entries = await stores.journal.list({ types: ['memory_update'], order: 'asc' });
+    expect(entries.map((entry) => (entry as { action?: string }).action)).toEqual(['write']);
+    expect(await stores.persona.protectionStatus('ordered')).toEqual({ kind: 'human' });
+    expect((await deriveHumanTouchedAtFromJournal(stores.journal)).has('ordered')).toBe(true);
+  });
+
+  it('日誌の行は本文の書き込みより先に書かれる（#4774）', async () => {
+    const order: string[] = [];
+    const tracing: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: async (entry) => {
+          order.push('journal');
+          return stores.journal.append(entry);
+        },
+      },
+      persona: Object.assign(Object.create(stores.persona) as typeof stores.persona, {
+        write: async (...args: Parameters<typeof stores.persona.write>) => {
+          order.push('persona');
+          return stores.persona.write(...args);
+        },
+      }),
+    };
+    const traced = createApp({
+      clone: fake.clone,
+      stores: tracing,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+    const res = await traced.request('/memory/ordered', {
+      ...json({ content: '# 人間\n' }),
+      method: 'PUT',
+    });
+    expect(res.status).toBe(200);
+    expect(order).toEqual(['journal', 'persona']);
+  });
+
+  it('本文の書き込みが例外で落ちたら、打ち消しの行が残り、元の失敗のまま 500 になり、印は立たない（#4774）', async () => {
+    await stores.persona.write('boom', '# 元\n');
+    const failing: Stores = {
+      ...stores,
+      persona: Object.assign(Object.create(stores.persona) as typeof stores.persona, {
+        write: () => Promise.reject(new Error('persona store unavailable (test)')),
+      }),
+    };
+    const failingApp = createApp({
+      clone: fake.clone,
+      stores: failing,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+    await captureStderr(async () => {
+      expect(
+        (
+          await failingApp.request('/memory/boom', {
+            ...json({ content: '# 人間\n' }),
+            method: 'PUT',
+          })
+        ).status,
+      ).toBe(500);
+    });
+    const entries = await stores.journal.list({ types: ['memory_update'], order: 'asc' });
+    expect(entries.map((entry) => (entry as { action?: string }).action)).toEqual([
+      'write',
+      'write_failed',
+    ]);
+    expect(await stores.persona.protectionStatus('boom')).toEqual({ kind: 'clone-only' });
+    expect((await deriveHumanTouchedAtFromJournal(stores.journal)).has('boom')).toBe(false);
+  });
+
+  it('打ち消しの行が書けなくても、409 は元の失敗のまま返り、stderr に跡が残る（#4774）', async () => {
+    await stores.persona.write('conflict', '# 元\n');
+    const failingRevert: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: (entry) => {
+          if (entry.type === 'memory_update' && entry.action === 'write_failed') {
+            throw new Error('journal store unavailable (test)');
+          }
+          return stores.journal.append(entry);
+        },
+      },
+    };
+    const failingApp = createApp({
+      clone: fake.clone,
+      stores: failingRevert,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+    let status: number | undefined;
+    const lines = await captureStderr(async () => {
+      status = (
+        await failingApp.request('/memory/conflict', {
+          ...json({ content: '# 人間\n', ifMatch: 'stale' }),
+          method: 'PUT',
+        })
+      ).status;
+    });
+    expect(status).toBe(409);
+    expect(lines.filter((line) => line.includes('を記録できませんでした'))).toHaveLength(1);
+  });
 
   it('存在しない記憶は 404', async () => {
     expect((await app.request('/memory/nope')).status).toBe(404);

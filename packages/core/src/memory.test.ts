@@ -167,7 +167,7 @@ function fakeJournal(entries: JournalEntry[]): Pick<JournalStore, 'list' | 'list
 function memoryUpdateEntry(
   slug: string,
   at: string,
-  action: 'write' | 'append' | 'remove' | undefined,
+  action: 'write' | 'append' | 'remove' | 'write_failed' | undefined,
   options: { cause?: 'human' | 'clone'; id?: string } = {},
 ): JournalEntry {
   return {
@@ -296,6 +296,41 @@ describe('deriveHumanTouchedAtFromJournal — 日誌から human guard の根拠
     const result = await deriveHumanTouchedAtFromJournal(journal);
 
     expect(result.get('notes')).toBe('2026-03-01T00:00:00.000Z');
+  });
+
+  it('⭐ 打ち消しの行（write_failed）が続く human の write は印にしない（#4774）', async () => {
+    const journal = fakeJournal([
+      memoryUpdateEntry('notes', '2026-01-02T00:00:00.000Z', 'write_failed', { cause: 'human' }),
+      memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write', { cause: 'human' }),
+    ]);
+
+    const result = await deriveHumanTouchedAtFromJournal(journal);
+
+    expect(result.has('notes')).toBe(false);
+  });
+
+  it('打ち消された write の前に、成功した human の write があれば、その印へ戻る（#4774）', async () => {
+    const journal = fakeJournal([
+      memoryUpdateEntry('notes', '2026-01-03T00:00:00.000Z', 'write_failed', { cause: 'human' }),
+      memoryUpdateEntry('notes', '2026-01-02T00:00:00.000Z', 'write', { cause: 'human' }),
+      memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write', { cause: 'human' }),
+    ]);
+
+    const result = await deriveHumanTouchedAtFromJournal(journal);
+
+    expect(result.get('notes')).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('打ち消された write を、作った時刻の根拠にもしない（#4774）', async () => {
+    const journal = fakeJournal([
+      memoryUpdateEntry('notes', '2026-01-03T00:00:00.000Z', 'write', { cause: 'clone' }),
+      memoryUpdateEntry('notes', '2026-01-02T00:00:00.000Z', 'write_failed', { cause: 'human' }),
+      memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write', { cause: 'human' }),
+    ]);
+
+    const result = await deriveMemoryCreatedAtFromJournal(journal);
+
+    expect(result.get('notes')).toBe('2026-01-03T00:00:00.000Z');
   });
 
   it('cause:clone は対象外', async () => {
