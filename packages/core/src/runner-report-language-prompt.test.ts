@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
+import { BASH_GUARD_ENV } from './bash-guard-mode.js';
 import { createProfileVessel } from './profile.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import { REPORT_LANGUAGE_ENV, REPORT_LANGUAGE_PROMPT_PARAGRAPH } from './report-language.js';
@@ -68,7 +69,8 @@ async function open(
     workspacePath: dir,
     emit: (event) => events.push(event),
     queryFn: fn,
-    env: { PATH: '/usr/bin', ...env },
+    // 待ちの歯は既定で ask（プロンプトに待ちの形の節が載る）。この節の試験は言語の段落だけを見るので、歯を閉じて載せない
+    env: { PATH: '/usr/bin', [BASH_GUARD_ENV]: 'off', ...env },
     ...(profileScript === undefined
       ? {}
       : {

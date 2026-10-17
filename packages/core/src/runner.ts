@@ -139,7 +139,12 @@ import {
 import { createProfileApplier, type ProfileApplier, type ProfileVessel } from './profile.js';
 import { createRecentMap } from './recent.js';
 import { scanPeerWorkdir } from './peer-workdir-scan.js';
-import { buildManagerSystemPrompt, buildWorkerPrompt, managerScratchDirOf } from './prompt.js';
+import {
+  buildManagerSystemPrompt,
+  buildWorkerPrompt,
+  managerScratchDirOf,
+  type BashGuardsInPrompt,
+} from './prompt.js';
 import {
   RunnerCutOffWorkers,
   type CutOffBackgroundTaskSummary,
@@ -3140,6 +3145,24 @@ class RunnerSession {
     }
   }
 
+  /**
+   * セッションを開く時点の歯の状態（#5017）。担当・作業者のプロンプトに、断られる形の一覧を載せるかを決める。
+   * 判定が投げたら載せない: プロンプトを作れなくするより、載せないほうへ倒す。
+   * 既知の限界: 開いた後に設定（プロファイルを含む）が変わっても、プロンプトは作り直さない。歯そのものは呼び出しのたびに読むので、断る・断らないは変わるが、告知の一覧は開いた時点のまま。
+   * 両方とも偽なら undefined（プロンプトは1文字も増えない）。
+   */
+  #sessionBashGuards(): BashGuardsInPrompt | undefined {
+    const shape = ((): boolean => {
+      try {
+        return resolveEffectiveBashShapeGuard(this.#env, this.#profileEnv()) === 'on';
+      } catch {
+        return false;
+      }
+    })();
+    const wait = this.#bashGuard !== 'off';
+    return shape || wait ? { shape, wait } : undefined;
+  }
+
   // 開く時点と発言の観測の両方から呼ぶ。同じ値は1回だけ書く: 設定の誤りは1つで、日誌を2行にしないため
   #noteReportLanguageMisconfig(error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
@@ -3183,6 +3206,7 @@ class RunnerSession {
     const managerToolsEntry = forPeer ? undefined : this.#managerToolsMcpEntry();
     // 開くたびに読む（新規・resume・鍵の回転の起こし直しはどれも `#open` からここを通る）: system prompt は開く時点で決まるため
     const reportLanguage = this.#sessionReportLanguage();
+    const bashGuards = this.#sessionBashGuards();
     return {
       input: this.#inputStream(),
       model: resolveManagerModel(this.#env),
@@ -3196,12 +3220,13 @@ class RunnerSession {
             ? {}
             : { peer: peerModels === undefined ? {} : { models: peerModels } }),
           ...(managerToolsEntry === undefined ? {} : { managerTools: true }),
+          ...(bashGuards === undefined ? {} : { bashGuards }),
         }),
         reportLanguage,
       ),
       workerAgentName: WORKER_AGENT_NAME,
       // 作業者にも足す: 作業者は担当の system prompt を継がないため
-      workerPrompt: withReportLanguageParagraph(buildWorkerPrompt(), reportLanguage),
+      workerPrompt: withReportLanguageParagraph(buildWorkerPrompt(bashGuards), reportLanguage),
       ...(reportLanguage === 'off' ? {} : { reportLanguage }),
       // 省略しない: SDK の既定は親の継承で、省くとマネージャーを差し替えた人が作業者まで巻き添えで動かすため
       workerModel: resolveWorkerModel(this.#env),
