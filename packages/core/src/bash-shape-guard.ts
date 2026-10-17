@@ -21,6 +21,7 @@ export type BashShapeForm =
   | 'git-rebase'
   | 'no-verify'
   | 'gh-merge-auto'
+  | 'cd-git'
   | 'pipe-masks-exit';
 
 export type BashShapeVerdict =
@@ -58,6 +59,8 @@ const REASONS: Record<Exclude<BashShapeForm, 'pipe-masks-exit'>, string> = {
     '`--no-verify`（git のどの下位命令でも）と `git commit -n` は通らないので、フックが落ちた理由を直してから、付けずに打ち直すこと。',
   'gh-merge-auto':
     '`gh pr merge --auto` は通らないので、CI を前景で `timeout 530 gh run watch <id> --exit-status` で待ち、緑なら `gh pr merge <番号> --squash --match-head-commit <sha>` でマージすること。',
+  'cd-git':
+    '`cd` と `git` を1回の Bash に重ねる形（`cd <dir> && git …`）は、Claude Code 本体が確認に上げて手が止まりやすいので通らない。`cd` を外して `git -C <絶対パス> …` で場所を指すこと。',
 };
 
 /** どの形の理由にも最後に添える1文（#4989）。止めたのが1回の呼び出しだけで、書き直して続けてよいことを言う。 */
@@ -864,14 +867,20 @@ export function inspectBashShape(command: string, depth = 0): BashShapeVerdict {
 
   const scrubbed = scrubComments(visible, scan.comment);
   const tokenMask = outside.map((o, i) => o || scan.comment[i] === true);
+  // `cd` の後の段に `git` が来たら止める（#4993）: Claude Code 本体がこの形を bare リポジトリ攻撃の防ぎとして確認に上げ、
+  // 分類器に止められると「止めて依頼者に説明せよ」の文が返って担当が手を止めるため。形の歯は本体の確認より先に返る
+  let sawCd = false;
   for (const tokens of splitSegments(scrubbed, tokenMask)) {
     const word = commandWordOf(tokens);
     if (word === undefined) continue;
     const form = inspectInterpreter(word.name, word.args);
     if (form !== undefined) return blocked(form);
-    if (word.name === 'git') {
+    if (word.name === 'cd') {
+      sawCd = true;
+    } else if (word.name === 'git') {
       const gitForm = inspectGit(word.args);
       if (gitForm !== undefined) return blocked(gitForm);
+      if (sawCd) return blocked('cd-git');
     } else if (word.name === 'gh') {
       const ghForm = inspectGh(word.args);
       if (ghForm !== undefined) return blocked(ghForm);
