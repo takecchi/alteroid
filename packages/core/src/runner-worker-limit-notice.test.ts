@@ -321,14 +321,14 @@ describe('同じ作業者の2つの合図を1つの知らせにそろえる（#4
 
 describe('回転前の鍵で走っているセッションの作業者が落ちたとき（#5021）', () => {
   // 鍵の差し替えを受け取って境界を待っているセッション（`recycleForToken` の印が立つ）を作る。ターンは走らせたまま終えない
-  async function startWaitingForBoundary(rotate: boolean) {
+  async function startWaitingForBoundary(rotate: boolean | 'gh-only') {
     const dir = makeTempDirSync('alteroid-runner-worker-limit-');
     const events: RunnerEvent[] = [];
     const { fn, sessions } = fakeSdk();
     const credentials = createCredentialStore({
       dir: join(dir, 'creds'),
-      seed: { CLAUDE_CODE_OAUTH_TOKEN: 'token-fake-old-000' },
-      names: ['CLAUDE_CODE_OAUTH_TOKEN'],
+      seed: { CLAUDE_CODE_OAUTH_TOKEN: 'token-fake-old-000', GH_TOKEN: 'gh-fake-old-000' },
+      names: ['CLAUDE_CODE_OAUTH_TOKEN', 'GH_TOKEN'],
     });
     const host = createRunnerHost({
       runnerId: 'runner-test',
@@ -345,7 +345,9 @@ describe('回転前の鍵で走っているセッションの作業者が落ち�
     await vi.waitFor(() => {
       if (sessions.length < 1) throw new Error('セッションがまだ開いていない');
     });
-    if (rotate) {
+    if (rotate === 'gh-only') {
+      await host.setCredentials([{ name: 'GH_TOKEN', value: 'gh-fake-new-111' }]);
+    } else if (rotate) {
       await host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-111' }]);
     }
     return { session: sessions[0]!, events };
@@ -381,6 +383,19 @@ describe('回転前の鍵で走っているセッションの作業者が落ち�
 
   it('印が無ければ、今までと同じ文のまま（1文も欄の真も載らない）', async () => {
     const { session, events } = await start();
+    await session.say(WEEKLY, { error: 'rate_limit', parentToolUseId: 'toolu-1' });
+
+    const [note] = limitNotes(events);
+    expect(note?.text).not.toContain(ONE_SENTENCE);
+    expect(note?.workerLimit).toEqual({ raw: WEEKLY, preRotationKey: false });
+
+    const context = contextOf(await postToolUse(session.options));
+    expect(context).toContain('戻るまで、作業者を立て直しても同じく落ちうる');
+    expect(context).not.toContain('鍵は回っているので');
+  });
+
+  it('Claude の鍵以外（GH_TOKEN）だけが差し替わった回は、境界を待っていても「回転前の鍵」とは言わない', async () => {
+    const { session, events } = await startWaitingForBoundary('gh-only');
     await session.say(WEEKLY, { error: 'rate_limit', parentToolUseId: 'toolu-1' });
 
     const [note] = limitNotes(events);

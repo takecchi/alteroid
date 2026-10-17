@@ -114,7 +114,11 @@ import {
   inspectAnthropicRoute,
   type AnthropicRouteLayer,
 } from './anthropic-route-env.js';
-import { fingerprintOf, ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
+import {
+  fingerprintOf,
+  POOL_OWNED_CREDENTIAL_NAMES,
+  ROTATABLE_CREDENTIAL_KEYS,
+} from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { compareCodeUnits } from './code-unit-order.js';
 import { subreapedProcess, underSubreaper } from './delegation-subreaper.js';
@@ -1085,7 +1089,11 @@ class Host implements RunnerHost {
     const after = fingerprintsByName(fingerprints);
     // 値を読まず指紋だけで比べる。SDK 子プロセスの env は起動時に凍るので、畳まないと更新が次のセッション作り直しまで届かない
     if (!sameFingerprints(before, after)) {
-      for (const session of this.#sessions.values()) session.recycleForToken();
+      // Claude の鍵が変わったかを別に渡す: 作業者の落ちの知らせが「回転前の鍵で走っている」と言うのは、その回だけのため（#5021）
+      const claudeKeyChanged = POOL_OWNED_CREDENTIAL_NAMES.some(
+        (name) => before.get(name) !== after.get(name),
+      );
+      for (const session of this.#sessions.values()) session.recycleForToken(claudeKeyChanged);
     }
     this.#announceAnthropicRoute();
     // `CODEX_API_KEY` が届いた・外れたら peer の開閉が変わる
@@ -2899,14 +2907,15 @@ class RunnerSession {
   }
 
   // セッションが無ければ印を立てない: 次に `#open()` するのはもう新しい鍵のもとのため
-  recycleForToken(): void {
+  recycleForToken(claudeKeyChanged = false): void {
     if (this.#sdkSession.query === null) return;
-    this.#sdkSession.requestTokenRecycle();
+    this.#sdkSession.requestTokenRecycle(claudeKeyChanged);
     this.#sdkSession.wakeInput();
   }
 
   #open(resume?: string): void {
     if (this.#sdkSession.query) return;
+    this.#sdkSession.clearPreRotationClaudeKey();
     // 「whenever the session's CLI process (re)starts」[sdk-verbatim SDKBackgroundTasksChangedMessage] に対応するのはここで、`init` ではない: `init` はターンの頭ごとに来るだけのため
     this.#sdkSession.resetLiveBackgroundTasks();
     this.#nonWorkerTaskIds.clear();
@@ -5438,7 +5447,8 @@ class RunnerSession {
   #recordWorkerLimit(identity: string, label: string, raw: string): void {
     const shown = redactErrorText(raw, process.env, this.#vaultValues());
     if (!this.#workerLimitNotices.record(identity, label, shown, Date.now())) return;
-    const preRotationKey = this.#sdkSession.wantsTokenRecycle;
+    // `wantsTokenRecycle` で判定しない: `GH_TOKEN` の差し替えや peer の開閉でも立ち、そのときは鍵は回っていないため（Claude の鍵が変わった回だけの印を読む）
+    const preRotationKey = this.#sdkSession.onPreRotationClaudeKey;
     this.#emit({
       type: 'note',
       managerId: this.#id,
@@ -5458,7 +5468,7 @@ class RunnerSession {
    */
   #workerLimitNotice(agentId: string | undefined): string | null {
     try {
-      const preRotationKey = this.#sdkSession.wantsTokenRecycle;
+      const preRotationKey = this.#sdkSession.onPreRotationClaudeKey;
       const notice = this.#workerLimitNotices.next(
         agentId ?? 'manager',
         agentId === undefined,
