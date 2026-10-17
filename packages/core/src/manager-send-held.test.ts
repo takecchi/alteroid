@@ -48,9 +48,11 @@ function fakeRunner() {
     waiting: RunnerManagerState['waiting'];
     failResume: boolean;
     peers: number | undefined;
+    commands: string[] | undefined;
   } = {
     background: 0,
     peers: undefined,
+    commands: undefined,
     waiting: [],
     failResume: false,
   };
@@ -104,6 +106,7 @@ function fakeRunner() {
         waiting: behavior.waiting,
         liveBackgroundTasks: behavior.background,
         ...(behavior.peers === undefined ? {} : { liveBackgroundPeers: behavior.peers }),
+        ...(behavior.commands === undefined ? {} : { backgroundTaskCommands: behavior.commands }),
       }));
     },
     async transcript() {
@@ -642,6 +645,176 @@ describe('背景処理だけが理由で預かりが待ちの上限を過ぎた�
     await s.pool.stop();
     expect(inboxText(s.inbox)).toContain('預かっていた伝言 1 通を mgr-held へ届けた');
     expect(inboxText(s.inbox)).not.toContain('結果は届かないので');
+  });
+
+  describe('15 分届かず畳めない預かりは、クローンへ1回だけ知らせる（#5041）', () => {
+    const STUCK_NOTICE = '待ちの上限（15 分）を過ぎても、畳めずに届けられていない';
+    const WAITING = [
+      {
+        requestId: 'req-1',
+        summary: 'Bash を許可するか',
+        kind: 'permission' as const,
+        askedAt: '2026-10-11T01:00:00.000Z',
+      },
+    ];
+
+    async function stuckSetup() {
+      const s = await setup();
+      s.rotate();
+      s.fake.behavior.background = 1;
+      s.fake.behavior.commands = ['pnpm e2e --watch'];
+      s.fake.behavior.waiting = WAITING;
+      expect((await s.pool.send('mgr-held', '合流の続きを')).outcome).toBe('held');
+      return s;
+    }
+
+    async function stuckDecisions(s: Awaited<ReturnType<typeof setup>>) {
+      return (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+        JSON.stringify(e).includes('クローンへ知らせた'),
+      );
+    }
+
+    it('⭐ 15 分を過ぎた見回りで1回出し、理由・コマンド・預かりの時刻・取れる手を載せ、日誌にも残す', async () => {
+      const s = await stuckSetup();
+      const heldAt = (await heldOf(s.stores))[0]?.heldAt ?? '';
+      s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
+
+      await deliverHeld(s.pool);
+
+      expect(s.fake.stops).toHaveLength(0);
+      expect(await heldOf(s.stores)).toHaveLength(1);
+      expect(await stuckDecisions(s)).toHaveLength(1);
+      await s.pool.stop();
+      const text = inboxText(s.inbox);
+      expect(text.split(STUCK_NOTICE)).toHaveLength(2);
+      expect(text).toContain('確認待ちが 1 件残っている');
+      expect(text).toContain('起こしっぱなしの背景処理が 1 本残っている');
+      expect(text).toContain('pnpm e2e --watch');
+      expect(text).toContain(heldAt);
+      expect(text).toContain('世代 59');
+      expect(text).toContain('manager_stop → manager_start');
+      expect(text).toContain('自動で届ける');
+    });
+
+    it('同じ理由の次の見回りでは知らせない', async () => {
+      const s = await stuckSetup();
+      s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
+      await deliverHeld(s.pool);
+      s.clock.now += 61_000;
+      await deliverHeld(s.pool);
+      s.clock.now += 61_000;
+      await deliverHeld(s.pool);
+
+      expect(await stuckDecisions(s)).toHaveLength(1);
+      await s.pool.stop();
+      expect(inboxText(s.inbox).split(STUCK_NOTICE)).toHaveLength(2);
+    });
+
+    it('理由が変わったら、もう1回知らせる', async () => {
+      const s = await stuckSetup();
+      s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
+      await deliverHeld(s.pool);
+
+      s.fake.behavior.background = 2;
+      s.clock.now += 61_000;
+      await deliverHeld(s.pool);
+
+      expect(await stuckDecisions(s)).toHaveLength(2);
+      await s.pool.stop();
+      const text = inboxText(s.inbox);
+      expect(text.split(STUCK_NOTICE)).toHaveLength(3);
+      expect(text).toContain('起こしっぱなしの背景処理が 2 本残っている');
+    });
+
+    it('15 分より前は知らせない', async () => {
+      const s = await stuckSetup();
+      s.clock.now += HELD_FORCE_FOLD_AFTER_MS - 1;
+
+      await deliverHeld(s.pool);
+
+      expect(await stuckDecisions(s)).toHaveLength(0);
+      await s.pool.stop();
+      expect(inboxText(s.inbox)).not.toContain(STUCK_NOTICE);
+    });
+
+    it('背景処理だけが理由なら、今どおり畳んで届け、知らせは出さない', async () => {
+      const s = await setup();
+      s.rotate();
+      s.fake.behavior.background = 1;
+      expect((await s.pool.send('mgr-held', '伝言')).outcome).toBe('held');
+      s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
+
+      await deliverHeld(s.pool);
+
+      expect(s.fake.stops).toEqual(['mgr-held']);
+      expect(s.fake.resumes).toHaveLength(1);
+      expect(await stuckDecisions(s)).toHaveLength(0);
+      await s.pool.stop();
+      expect(inboxText(s.inbox)).not.toContain(STUCK_NOTICE);
+    });
+
+    // 「届いた後にまた預かって15分過ぎたら、もう1回知らせる」は試験にしていない: 1回目を届けると担当は新しい鍵で起き直し、
+    // この偽の runner では同じ担当に2度目の預かり（古い鍵のまま背景処理待ち）を作り直せないため。記憶を消すのは届けた所（`#deliverHeld`）・捨てた所（`#releaseHeld`）・担当を外した所で、`#lastStaleDecline` と同じ3か所である
+    it('鍵の値は知らせにも日誌にも載らない', async () => {
+      const s = await stuckSetup();
+      const secret = 'sk-ant-oat01-SECRETSECRETSECRET1234567890';
+      s.fake.behavior.commands = [`CLAUDE_CODE_OAUTH_TOKEN=${secret} pnpm e2e`];
+      s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
+
+      await deliverHeld(s.pool);
+
+      const decisions = JSON.stringify(await stuckDecisions(s));
+      expect(decisions).toContain('pnpm e2e');
+      expect(decisions).not.toContain('SECRETSECRET');
+      await s.pool.stop();
+      expect(inboxText(s.inbox)).toContain('pnpm e2e');
+      expect(inboxText(s.inbox)).not.toContain('SECRETSECRET');
+    });
+  });
+
+  describe('背景処理待ちに入った時刻が預かりより早ければ、そこから待ちを数える（#5041）', () => {
+    const WAIT_MS = 20 * 60 * 1000;
+
+    it('⭐ 背景処理待ちに入って 20 分たった担当への伝言は、預かった直後の見回りで背景処理ごと畳んで届ける', async () => {
+      const s = await setup();
+      s.fake.push({
+        type: 'report',
+        managerId: 'mgr-held',
+        text: '完了を待つ',
+        status: 'done',
+        awaitingBackground: { count: 1, breakdown: 'local_bash×1' },
+      } as RunnerEvent);
+      await settle();
+      s.rotate();
+      s.fake.behavior.background = 1;
+      s.clock.now += WAIT_MS;
+      expect((await s.pool.send('mgr-held', '待ち中の伝言')).outcome).toBe('held');
+
+      await deliverHeld(s.pool);
+
+      expect(s.fake.stops).toEqual(['mgr-held']);
+      expect(s.fake.resumes).toHaveLength(1);
+      expect(s.fake.resumes[0]?.message ?? '').toContain('待ち中の伝言');
+      expect(await heldOf(s.stores)).toEqual([]);
+      await s.pool.stop();
+    });
+
+    it('背景処理待ちに入った時刻が分からなければ、今どおり預かりから 15 分で畳む', async () => {
+      const s = await setup();
+      s.rotate();
+      s.fake.behavior.background = 1;
+      s.clock.now += WAIT_MS;
+      expect((await s.pool.send('mgr-held', '伝言')).outcome).toBe('held');
+
+      s.clock.now += HELD_FORCE_FOLD_AFTER_MS - 1;
+      await deliverHeld(s.pool);
+      expect(s.fake.stops).toHaveLength(0);
+
+      s.clock.now += 1;
+      await deliverHeld(s.pool);
+      expect(s.fake.stops).toEqual(['mgr-held']);
+      await s.pool.stop();
+    });
   });
 
   it('peer だけの回には「畳んだ」旨を出さない（#4913）', async () => {
