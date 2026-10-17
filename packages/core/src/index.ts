@@ -1256,6 +1256,8 @@ export {
   reasonOf,
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
+  // 試験の準備（`vitest.quiet-traces.ts`）が、dist から core を読むパッケージの試験でも跡を溜めるための口（試験専用）
+  setDefaultStderrSinkForTesting,
   writeStderrSync,
   type DroppedJournalRowReason,
   type DroppedTraceOrigin,
