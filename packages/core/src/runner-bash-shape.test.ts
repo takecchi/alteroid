@@ -240,6 +240,59 @@ describe('Bash の形の歯（#4947・マネージャーにも #4949）', () => 
   );
 });
 
+async function firePostToolUse(
+  options: Options,
+  command: string,
+  worker: boolean,
+): Promise<string | undefined> {
+  const hook = options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+  if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+  const result = await hook(
+    {
+      hook_event_name: 'PostToolUse',
+      tool_use_id: 'tu-1',
+      tool_name: 'Bash',
+      tool_input: { command },
+      tool_response: { stdout: '', stderr: '' },
+      ...(worker ? { agent_id: 'agent-xyz', agent_type: 'worker' } : {}),
+    } as never,
+    undefined,
+    { signal: new AbortController().signal },
+  );
+  return (result as { hookSpecificOutput?: { additionalContext?: string } }).hookSpecificOutput
+    ?.additionalContext;
+}
+
+describe('管が終了コードを隠す形（#4990）', () => {
+  for (const { label, worker, actor } of ACTORS) {
+    it(`${label}の git merge x | tail は deny（形=pipe-masks-exit）で、名前の入った理由を返す`, async () => {
+      const { options, events } = await startSession({});
+      const result = (await firePreToolUse(options, bash('git merge x | tail', worker))) as Out;
+      expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(String(result.hookSpecificOutput?.permissionDecisionReason)).toContain(
+        '`git merge` の出力を管',
+      );
+      const note = noteTexts(events).find((t) => t.includes('形=pipe-masks-exit'));
+      expect(note).toContain(actor);
+    });
+
+    it(`${label}の pnpm test | tail は止めず、PostToolUse に知らせを添える。cat f | tail には添えない`, async () => {
+      const { options } = await startSession({});
+      const pre = (await firePreToolUse(options, bash('pnpm test | tail', worker))) as Out;
+      expect(pre.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      const notice = await firePostToolUse(options, 'pnpm test | tail', worker);
+      expect(notice).toContain('管の最後の `tail` の終了コード');
+      expect(notice).toContain('`pnpm test` が通ったことは表さない');
+      expect(await firePostToolUse(options, 'cat f | tail', worker)).toBeUndefined();
+    });
+  }
+
+  it('形の歯が off でも、知らせは添える（止めないので入り切りに繋げない）', async () => {
+    const { options } = await startSession({ [BASH_SHAPE_GUARD_ENV]: 'off' });
+    expect(await firePostToolUse(options, 'pnpm test | tail', false)).toContain('#4990');
+  });
+});
+
 describe('Bash の形の歯の入り切り（ALTEROID_BASH_SHAPE_GUARD。#4949）', () => {
   async function decisionOf(
     env: NodeJS.ProcessEnv,

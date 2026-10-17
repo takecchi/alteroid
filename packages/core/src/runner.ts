@@ -38,7 +38,7 @@ import {
 } from './bash-guard-mode.js';
 import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
-import { inspectBashShape } from './bash-shape-guard.js';
+import { inspectBashShape, pipeExitNotice } from './bash-shape-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
 import {
@@ -5236,6 +5236,7 @@ class RunnerSession {
     const peerApproval = this.#peerApprovalNotice(record.agentId);
     const workerLimit = this.#workerLimitNotice(record.agentId);
     const reportLanguage = this.#reportLanguageNotice(record.agentId);
+    const pipeExit = pipeExitNotice(record.toolName, command);
     // 分類器の拒否が続いた後に初めて通った道具に、事情と取れる道を添える
     const streakActor = record.agentId ?? 'manager';
     const denialStreak = this.#denialStreaks.takeNotice(streakActor, Date.now());
@@ -5247,6 +5248,7 @@ class RunnerSession {
       peerApproval,
       workerLimit,
       reportLanguage,
+      pipeExit,
       denialStreak,
     ].filter((part): part is string => part !== null);
     if (parts.length === 0) return { kind: 'continue' };
