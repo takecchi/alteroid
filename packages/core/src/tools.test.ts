@@ -13160,7 +13160,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
   const SWEPT_MARKS: Record<string, RegExp> = {
     memory_list: /…ほか \d+ 件は省略（記憶は全 \d+ 件あり、\d+ 件だけ出した）。/,
     approvals_list:
-      /…ほか \d+ 件は省略（回答待ちは \d+ 件あり、作成が古い順に先頭から \d+ 件だけ出した）。/,
+      /…ほか \d+ 件は詳細を省略（新しい順に先頭から \d+ 件だけ出した。残りは上の索引の id で approvals_list id=<id> として開ける）。/,
     schedule_list: /…ほか \d+ 件は省略（継続中の依頼は \d+ 件あり、\d+ 件だけ出した。/,
     commitment_list: /…ほか \d+ 件は省略（未了は \d+ 件あり、古い順に \d+ 件だけ出した。/,
     token_list: /…ほか \d+ 件は省略（プールは \d+ 件あり、order の昇順に \d+ 件だけ出した）。/,
@@ -17182,7 +17182,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       ).toBeLessThan(backward.indexOf('apr-c'));
     });
 
-    it('省略の行が「作成が古い順に」と断言している（#757 でハンドラが実際に並べ直すようになった）', async () => {
+    it('入りきらないときは、索引が「作成の古い順」、詳細が「新しい順」と断言している（#757・#4997）', async () => {
       const h = harness();
       await seedMany(
         h,
@@ -17191,13 +17191,43 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
 
       const reply = await h.call('approvals_list', {});
 
-      expect(reply, '正の対照: 省略の行が出ていない（本数か長さが足りない）').toContain('は省略');
+      expect(reply, '正の対照: 省略の行が出ていない（本数か長さが足りない）').toContain(
+        'は詳細を省略',
+      );
       expect(
         reply,
-        '【赤の意味】approvals_list の省略の行が「作成が古い順に」と言っていない。' +
+        '【赤の意味】approvals_list の索引が「作成の古い順」と言っていない。' +
           '#757 でハンドラ自身が createdAt 昇順・同着は id 昇順に並べ直すようになった' +
           'ので、断言できるはずである。文言を変えたなら、この歯の期待する語も合わせて直すこと',
-      ).toContain('古い順に');
+      ).toContain('作成の古い順');
+      expect(reply).toContain('詳細（新しい順）');
+    });
+
+    it('回答待ちが予算に入りきらないとき、全件を索引に出し、詳細は新しく積んだ側から出す（#4997）', async () => {
+      const h = harness();
+      // 作成時刻の順に積む: apr-00 がいちばん古く、apr-38 がいちばん新しい
+      for (let index = 0; index < 39; index += 1) {
+        const id = `apr-${String(index).padStart(2, '0')}`;
+        await h.stores.jobs.putApproval({
+          id,
+          createdAt: new Date(Date.UTC(2026, 9, 17, 0, index)).toISOString(),
+          question: `${id} の問い: ${'重複を確かめるための長い背景の説明。'.repeat(8)}`,
+        });
+      }
+
+      const reply = await h.call('approvals_list', {});
+      const [index = '', details = ''] = reply.split('詳細（新しい順）:');
+
+      for (let n = 0; n < 39; n += 1) {
+        expect(index, `索引に apr-${String(n).padStart(2, '0')} が無い`).toContain(
+          `・apr-${String(n).padStart(2, '0')}（`,
+        );
+      }
+      expect(details, '【赤の意味】いちばん新しく積んだ問いの詳細が出ていない').toContain(
+        '- apr-38 ',
+      );
+      expect(details, '正の対照: いちばん古い問いは詳細を省かれるはず').not.toContain('- apr-00 ');
+      expect(details.indexOf('- apr-38 ')).toBeLessThan(details.indexOf('- apr-37 '));
     });
   });
 

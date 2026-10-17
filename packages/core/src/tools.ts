@@ -1079,6 +1079,12 @@ const APPROVAL_TRACE_BUDGET = 8_000;
 const APPROVAL_TRACE_SUMMARY_EXCERPT = 200;
 
 const APPROVAL_TITLE_EXCERPT = 60;
+// 詳細が予算に入りきらないときに出す、全件の短い索引の字数の予算と件名の長さ（#4997）: 索引だけで出力が際限なく育たないため。
+// 詳細はこの索引が使った分を `APPROVAL_LIST_BUDGET` から引いた残りで出すので、一覧の全体は今と同じ大きさに収まる
+const APPROVAL_INDEX_BUDGET = 4_000;
+const APPROVAL_INDEX_TITLE_EXCERPT = 30;
+// 索引が食い尽くしても、詳細に最低これだけは残す
+const APPROVAL_DETAIL_MIN_BUDGET = 2_000;
 
 function approvalTitle(question: string): string {
   const firstLine = (question.split('\n', 1)[0] ?? '').trim();
@@ -4196,17 +4202,52 @@ export function createCloneTools(context: ToolContext) {
             ],
           }),
         );
+        const notes = [
+          '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
+          '（更新＝この1件が最後に変わった時刻。回答待ちだけを出す一覧なので、常に作成と同じになる）',
+          ...(unreadableNote === null ? [] : [unreadableNote]),
+        ];
+        // 詳細が予算に入りきれば、今どおり作成の古い順に全件の詳細を出す
+        if (fillListingBudget(items, APPROVAL_LIST_BUDGET, false).rest === 0) {
+          return text(
+            [
+              renderListing(items, { budget: APPROVAL_LIST_BUDGET, omitted: () => '' }),
+              ...notes,
+              '（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）',
+            ].join('\n'),
+          );
+        }
+        // 入りきらないときは、全件の短い索引を頭に出し、詳細は新しい順に入るだけ出す（#4997）:
+        // 重複を確かめる口なのに、古い順に先頭から切ると、いちばん要る新しく積んだ問いが必ず落ちるため
+        // 索引の行は `- ` で始めない: `- ` は1件の詳細（id・件名／作成・更新／概要）の頭として読まれるため
+        // 予算に入りきらなければ古い側を件数で省く: 重複を確かめたいのは新しく積んだ側のため
+        const indexLines = renderListingFromEnd(
+          pending.map(
+            (approval) =>
+              `・${approval.id}（${approval.createdAt}）${excerpt(approvalTitle(approval.question), APPROVAL_INDEX_TITLE_EXCERPT)}`,
+          ),
+          {
+            budget: APPROVAL_INDEX_BUDGET,
+            omitted: ({ rest }) => `…索引も古い側の ${rest} 件を省いた（id で開ける）。`,
+          },
+        );
+        const newestFirst = [...items].reverse();
         return text(
           [
-            renderListing(items, {
-              budget: APPROVAL_LIST_BUDGET,
-              omitted: ({ rest, shown, total }) =>
-                `…ほか ${rest} 件は省略（回答待ちは ${total} 件あり、作成が古い順に先頭から ${shown} 件だけ出した）。`,
+            `回答待ちは ${pending.length} 件ある。まず索引（id・作成時刻・件名。作成の古い順）:`,
+            indexLines,
+            '',
+            '詳細（新しい順）:',
+            renderListing(newestFirst, {
+              budget: Math.max(
+                APPROVAL_DETAIL_MIN_BUDGET,
+                APPROVAL_LIST_BUDGET - indexLines.length,
+              ),
+              omitted: ({ rest, shown }) =>
+                `…ほか ${rest} 件は詳細を省略（新しい順に先頭から ${shown} 件だけ出した。残りは上の索引の id で approvals_list id=<id> として開ける）。`,
             }),
-            '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
-            '（更新＝この1件が最後に変わった時刻。回答待ちだけを出す一覧なので、常に作成と同じになる）',
-            '（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）',
-            ...(unreadableNote === null ? [] : [unreadableNote]),
+            ...notes,
+            '（索引の並び: 作成時刻の昇順。同じ作成時刻なら id の昇順。詳細はその逆順。保存先の実装には依存しない）',
           ].join('\n'),
         );
       },
