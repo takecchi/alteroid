@@ -637,6 +637,10 @@ function withNoticeTextResetsAt(notice: UsageLimitNotice, at: number): UsageLimi
 
 // synthesized な manager_message は無条件に再武装しない: 機構が合成した失敗の知らせは枠が開いた証拠にならず、1ターン回して 429 を踏むだけのため
 // この判定へ `resetsAt` の比較を畳み込まない: `event` だけを見る純関数でなくなり、インスタンス状態が要るため
+function tokenPoolReopenedSourceOf(event: InboxEvent): boolean {
+  return event.type === 'external' && event.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE;
+}
+
 function usageBlockAlwaysRearms(event: InboxEvent): boolean {
   return (
     isHumanOriginated(event) ||
@@ -1027,6 +1031,8 @@ class Clone implements CloneHost {
 
   // タイマーを持たない: 「枠が開いたか」を無料で知る方法が無く、試行の契機は新しい合図が届いたときに限るため
   #usageBlocked: UsageLimitNotice | null = null;
+  // `UsageLimitNotice` の欄にしない: 通知は日誌・`usage_limited` へ渡る形で、鍵の身元を運ぶ型ではないため。`#usageBlocked` が null の間は読まない（降ろす所で消さない: 立てる所が毎回上書きするため）
+  #usageBlockedAtTokenId: string | undefined;
   // `#usageBlocked` とは別に持つ: 作業者だけが落ちてもクローンは動けるので、枠の印にも鍵の回転にも繋がない（#4911）
   readonly #workerLimitNotices = new WorkerLimitNotices();
   #restoringUnread = false;
@@ -1410,12 +1416,26 @@ class Clone implements CloneHost {
     if (this.#usageBlocked !== null) {
       const resetsAt = this.#usageBlocked.resetsAt;
       const stillCoolingDown = resetsAt !== undefined && Date.now() < resetsAt;
+      const sessionTokenId = this.#sdkSession.sessionTokenIdentity?.tokenId;
       const staleSameKeyRecovery = staleObservedRecoveryNoticeEvent(
         event,
         resetsAt,
-        this.#sdkSession.sessionTokenIdentity?.tokenId,
+        sessionTokenId,
       );
-      if ((!usageBlockAlwaysRearms(event) || staleSameKeyRecovery) && stillCoolingDown) {
+      // 回復予定時刻より前で、鍵が枠に当たったときのまま（どちらも分かっていて一致）なら、合図の種類に関わらず再武装しない（#5032）:
+      // 試しても確実に同じ枠で 429 になり、保持した N 件を配り直して1ターン回すだけになるため。人間の発言は失わない: 短絡の経路（`#pump` の `#reportFailure`）が「枠が閉じている」と人間へ返す
+      // token-pool の知らせはここから外して従来の判定へ残す: 別の鍵で開いた知らせは鍵が変わる前触れで、同じ鍵の知らせは `staleSameKeyRecovery` が裁くため
+      // 鍵が分からない・回復予定時刻が分からない・過ぎた、のどれかなら従来どおり（判定できないときは能力を削らない側へ倒す）
+      const sameKeyAsBlocked =
+        sessionTokenId !== undefined &&
+        this.#usageBlockedAtTokenId !== undefined &&
+        sessionTokenId === this.#usageBlockedAtTokenId;
+      const holdUntilKeyOrTimeChanges =
+        stillCoolingDown && sameKeyAsBlocked && tokenPoolReopenedSourceOf(event) === false;
+      if (
+        holdUntilKeyOrTimeChanges ||
+        ((!usageBlockAlwaysRearms(event) || staleSameKeyRecovery) && stillCoolingDown)
+      ) {
         this.#usageBlockSuppressedRearms += 1;
       } else {
         this.#releaseRequested = true;
@@ -4861,6 +4881,7 @@ class Clone implements CloneHost {
     if (notice.kind !== 'reached') return;
 
     this.#usageBlocked = withNoticeTextResetsAt(notice, Date.now());
+    this.#usageBlockedAtTokenId = this.#sdkSession.sessionTokenIdentity?.tokenId;
     this.#emit(conversationId, { type: 'usage_limited', message: describeUsageNotice(notice) });
 
     // `source === 'text'` に限って数える: `rate_limit_event` 由来はターンの頭ごとに届く「1つぶんの状態」で後続の `result` が成功することがあり、数えると成功するターンの途中でも畳みにかかるため

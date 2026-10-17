@@ -465,6 +465,187 @@ describe('クローン — 枠の回復予定時刻（resetsAt）より前は再
   });
 });
 
+describe('クローン — 回復予定時刻より前で鍵が枠に当たったときと同じ間は、どの合図でも再武装しない（Issue #5032）', () => {
+  const PAST_RESETS_AT_MS = 1_700_000_000_000;
+  const FUTURE_RESETS_AT_MS = () => Date.now() + 60 * 60 * 1000;
+
+  function setupBlocked(
+    resetsAt: number | undefined,
+    identity: () => { tokenId: string; generation: number } | undefined,
+  ): Setup {
+    const stores = createMemoryStores();
+    const { fn, calls } = fakeSdk(
+      undefined,
+      resetsAt === undefined
+        ? {
+            resultSubtype: 'error_during_execution',
+            resultText: "You've hit your individual spend limit for this account.",
+          }
+        : {
+            resultSubtype: 'error_during_execution',
+            resultText: '（結果なし。rate_limit_event だけが上限の理由を運ぶ）',
+            rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour', resetsAt }),
+          },
+    );
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores,
+      queryFn: fn,
+      env: {},
+      tokenIdentity: identity,
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const { events, waitForEvents } = wireEvents(clone, 'conv-1');
+    return { clone, stores, calls, events, waitForEvents };
+  }
+
+  const tokA = () => ({ tokenId: 'tok-a', generation: 1 });
+
+  async function releaseLines(s: Setup): Promise<string[]> {
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    return exchanges.filter((e) => e.text.includes('枠の解除を試す')).map((e) => e.text);
+  }
+
+  async function waitForPending(s: Setup, id: string): Promise<void> {
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === id);
+    }, `${id} が未読のまま保持される`);
+  }
+
+  function humanAnswer(id: string): InboxEvent {
+    return {
+      type: 'human_answer',
+      id,
+      at: new Date().toISOString(),
+      approvalId: 'appr-1',
+      answer: 'はい',
+    };
+  }
+
+  function managerReport(id: string): InboxEvent {
+    return {
+      type: 'manager_message',
+      id,
+      at: new Date().toISOString(),
+      managerId: 'mgr-1',
+      kind: 'report',
+      text: '担当の報告',
+    };
+  }
+
+  function reopened(tokenId: string, observedRecovery: boolean): InboxEvent {
+    return {
+      type: 'external',
+      id: `evt-tokenpool-${tokenId}-${String(observedRecovery)}`,
+      at: new Date().toISOString(),
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: { text: 'ダミー本文', tokenId, observedRecovery },
+    };
+  }
+
+  it('同じ鍵・回復予定時刻より前: 担当の報告と human_answer では保持分を配り直さず、ターンも回さず、抑止を数える', async () => {
+    const s = setupBlocked(FUTURE_RESETS_AT_MS(), tokA);
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+    const inputsBefore = (s.calls[0] as FakeCall).inputs.length;
+
+    s.clone.post(managerReport('evt-mgr-own-5032'));
+    await waitForPending(s, 'evt-mgr-own-5032');
+    s.clone.post(humanAnswer('evt-answer-5032'));
+    await waitForPending(s, 'evt-answer-5032');
+
+    expect(s.clone.usageReleasePending).toBe(false);
+    expect(await releaseLines(s)).toEqual([]);
+    expect(s.calls.length).toBe(1);
+    expect((s.calls[0] as FakeCall).inputs.length).toBe(inputsBefore);
+
+    // 別の鍵で開いた知らせで実際に解除を試させ、それまでの抑止の回数が1行へ畳まれて出ることを見る
+    s.clone.post(reopened('tok-b', true));
+    await waitFor(async () => (await releaseLines(s)).length === 1, '解除の試行が1回になる');
+    expect((await releaseLines(s))[0]).toContain('再武装を抑止: 2 回');
+
+    await s.clone.stop();
+  });
+
+  it('同じ鍵・回復予定時刻より前: 人間の発言でも保持分は配り直さず、人間には「利用上限に当たっている」が返る', async () => {
+    const s = setupBlocked(FUTURE_RESETS_AT_MS(), tokA);
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+    await waitForTerminal(s.events);
+    const inputsBefore = (s.calls[0] as FakeCall).inputs.length;
+    const terminalsBefore = s.events.filter((e) => e.type === 'error').length;
+
+    s.clone.post(humanMessage('二件目'));
+    await s.waitForEvents(
+      (events) => events.filter((e) => e.type === 'error').length > terminalsBefore,
+    );
+
+    expect(s.clone.usageReleasePending).toBe(false);
+    expect(await releaseLines(s)).toEqual([]);
+    expect(s.calls.length).toBe(1);
+    expect((s.calls[0] as FakeCall).inputs.length).toBe(inputsBefore);
+    const rows = (await s.stores.journal.list({ types: ['exchange'], with: ['human'] })) as {
+      role: string;
+      text: string;
+    }[];
+    expect(
+      rows.some(
+        (row) => row.role === 'outbound' && row.text.includes('いま利用上限に当たっている'),
+      ),
+    ).toBe(true);
+
+    await s.clone.stop();
+  });
+
+  it('鍵のプールが別の鍵で開いた知らせは、同じ鍵のセッションでも従来どおり再武装する', async () => {
+    const s = setupBlocked(FUTURE_RESETS_AT_MS(), tokA);
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(reopened('tok-b', false));
+    await waitFor(async () => (await releaseLines(s)).length === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  it('いまのセッションの鍵が分からないなら、判定できないので担当の報告でも従来どおり再武装する', async () => {
+    const s = setupBlocked(FUTURE_RESETS_AT_MS(), () => undefined);
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(managerReport('evt-mgr-nokey-5032'));
+    await waitFor(async () => (await releaseLines(s)).length === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  it('回復予定時刻が分からない枠では、鍵が同じでも担当の報告で従来どおり再武装する', async () => {
+    const s = setupBlocked(undefined, tokA);
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+    expect(s.clone.usageBlockedResetsAt).toBeUndefined();
+
+    s.clone.post(managerReport('evt-mgr-noreset-5032'));
+    await waitFor(async () => (await releaseLines(s)).length === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  it('回復予定時刻を過ぎた後は、鍵が同じでも担当の報告で従来どおり再武装する', async () => {
+    const s = setupBlocked(PAST_RESETS_AT_MS, tokA);
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(managerReport('evt-mgr-past-5032'));
+    await waitFor(async () => (await releaseLines(s)).length === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+});
+
 describe('クローン — token-pool の復帰通知: 畳んだ件数だけが違う2通の扱い（Issue #1298）', () => {
   const FUTURE_RESETS_AT_MS = () => Date.now() + 60 * 60 * 1000;
 
