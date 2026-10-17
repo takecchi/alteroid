@@ -194,12 +194,15 @@ import {
   type WorkspaceCloneHint,
 } from './workspace-swap-hints.js';
 import { matchNoticeResetAgainstPool, type NoticeResetMatch } from './token-reset-match.js';
+import type { AgentToken } from './token-pool.js';
+import { describeWorkerLimitKeyMatch, type RememberedWindow } from './worker-limit-key-match.js';
 import {
   describeUsageNotice,
   limitRecoveryOf,
   mergeRateLimitFacts,
   classifyUsageNotice,
   isRateLimitReason,
+  parseRateLimitMemoryKey,
   rateLimitMemoryKey,
   usageTransitionOf,
   withRecoveryNote,
@@ -6821,6 +6824,38 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 作業者の落ちの原文を、鍵のプールの各鍵の枠と突き合わせた1行を返す（#5021、`worker-limit-key-match.ts`）。
+   * 材料は DB 正本のプール（`#stores.tokens`）と、`rate_limit` の観測の記憶（`#rateLimits`。枠の種類はここにしか無い）。
+   * 投げない: 読めなければ「読めなかった」と書いた行を返す（note の配達を巻き添えにしない）。例外の文言は載せない（鍵の値を含みうる）。
+   */
+  async #describeWorkerLimitKey(raw: string): Promise<string> {
+    let pool: readonly AgentToken[] | undefined;
+    let activeTokenId: string | null | undefined;
+    try {
+      pool = await this.#stores.tokens.list();
+      try {
+        activeTokenId = (await this.#stores.tokens.readActive())?.tokenId ?? null;
+      } catch (error) {
+        noteDroppedRecord('作業者の落ちの現役の読み取り', 'worker_limit_key', error);
+      }
+    } catch (error) {
+      noteDroppedRecord('作業者の落ちの鍵のプールの読み取り', 'worker_limit_key', error);
+      pool = undefined;
+    }
+    const windows: RememberedWindow[] = [];
+    for (const [key, facts] of this.#rateLimits) {
+      const parsed = parseRateLimitMemoryKey(key);
+      if (parsed?.tokenId === undefined || facts.resetsAt === undefined) continue;
+      windows.push({
+        tokenId: parsed.tokenId,
+        kind: facts.kind ?? parsed.kind,
+        resetsAt: facts.resetsAt,
+      });
+    }
+    return describeWorkerLimitKeyMatch({ raw, at: this.#now(), pool, activeTokenId, windows });
+  }
+
+  /**
    * 前任として受けてよいかを確かめる。断るときは投げる（黙って止めない: 止めるのはクローンの判断）。
    * 受けるのは failed / lost / stopped、および像に居ない（`#retire` 済み）か、像が居ても生きていない done。
    * done で `attached` が真なら、runner にセッションが生きている（手が空いただけ）ので断る。
@@ -9521,6 +9556,11 @@ class Pool implements ManagerPool {
       }
 
       case 'note': {
+        // 作業者の落ちの note（`event.workerLimit` の欄で判定する）には、落ちた枠の鍵の突き合わせを1行足す（#5021）。日誌とクローンへの知らせの両方に同じ文を載せる。
+        const noteText =
+          event.workerLimit === undefined
+            ? event.text
+            : `${event.text}\n${await this.#describeWorkerLimitKey(event.workerLimit.raw)}`;
         // 受信箱へは出さず日誌にだけ残す（マネージャーの発言ではない）。`escalate` の有無で変えない（下で足すだけ）。
         // `event.stall` の欄で判定し、本文の文字列で嗅がない。旧 runner の note は `stall` を知らず `exchange` に落ちる。
         if (event.stall === undefined) {
@@ -9528,7 +9568,7 @@ class Pool implements ManagerPool {
             type: 'exchange',
             with: 'manager',
             role: 'inbound',
-            text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${event.text}`,
+            text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${noteText}`,
           });
         } else {
           await this.#journal({
@@ -9557,7 +9597,7 @@ class Pool implements ManagerPool {
 
         // 欄（`event.notifyClone`）で判定し、本文を嗅がない（#4685）: 成果が失われうる知らせは、日誌だけだとクローンが引かない限り見えないため
         if (event.notifyClone === true) {
-          this.#emit(event.managerId, 'report', `[${event.managerId}] ${event.text}`);
+          this.#emit(event.managerId, 'report', `[${event.managerId}] ${noteText}`);
         }
 
         // 逃すと自動で追いついたセッションにまで `manager_list` / `runner_list` の世代の食い違いが出続ける。世代の値は受け取らない: runner は世代を知らず、daemon が現役の身元を読み直す。

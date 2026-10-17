@@ -26,7 +26,18 @@ interface PendingEntry {
   at: number;
 }
 
-export function describeWorkerLimit(entries: readonly { label: string; raw: string }[]): string {
+/** 日誌の note に足す1文。鍵の回転の後も回転前の鍵で走っているセッションの作業者が落ちたとき。 */
+export const WORKER_LIMIT_PRE_ROTATION_KEY_SENTENCE =
+  'このセッションは、鍵の回転の後もまだ回転前の鍵で走っている（ターンの境界で新しい鍵へ移る）。作業者は古い鍵で落ちた見込みが高い。';
+
+/**
+ * `preRotationKey` が真のときだけ、「戻るまで〜同じく落ちうる」を言わない: 鍵は回っていて、境界で新しい鍵へ移るため。
+ * 真偽は配る時点のセッションの印で決める（記録した時点ではない）: 配る前に開き直していれば、もう回転前の鍵ではない。
+ */
+export function describeWorkerLimit(
+  entries: readonly { label: string; raw: string }[],
+  preRotationKey = false,
+): string {
   const shown = entries
     .slice(0, NOTICES_SHOWN)
     .map(
@@ -34,11 +45,12 @@ export function describeWorkerLimit(entries: readonly { label: string; raw: stri
     );
   const omitted = entries.length - NOTICES_SHOWN;
   const list = shown.join('、') + (omitted > 0 ? `、ほか ${String(omitted)} 体` : '');
-  return (
-    `⚠ alteroid からの知らせ: ${list}。` +
-    '戻るまで、作業者を立て直しても同じく落ちうる。自分で進めるか、戻るのを待つか、別の手を選べ。' +
-    'これは状況の知らせで、止める指示ではない。'
-  );
+  const advice = preRotationKey
+    ? '鍵は回っているので、このターンを終えれば新しい鍵で開き直る。' +
+      '作業者を立て直すなら、ターンを終えて開き直った後にする（止める指示ではない）。'
+    : '戻るまで、作業者を立て直しても同じく落ちうる。自分で進めるか、戻るのを待つか、別の手を選べ。' +
+      'これは状況の知らせで、止める指示ではない。';
+  return `⚠ alteroid からの知らせ: ${list}。${advice}`;
 }
 
 /** 名札。分かる id を全部書く（tool_use と task の両方が分かれば両方）。どちらも無ければ「背景の作業者」。 */
@@ -88,7 +100,12 @@ export class WorkerLimitNotices {
   }
 
   /** 知らせるなら本文を、知らせないなら `null` を返す。担当本人に配ったものは消す。 */
-  next(actor: string, isOwner: boolean, nowMs: number): { text: string; count: number } | null {
+  next(
+    actor: string,
+    isOwner: boolean,
+    nowMs: number,
+    preRotationKey = false,
+  ): { text: string; count: number } | null {
     this.#pending = this.#pending.filter((entry) => nowMs - entry.at < WORKER_LIMIT_DEDUPE_MS);
     const fresh = this.#pending.filter((entry) => !this.#deliveredTo.get(entry)?.has(actor));
     if (fresh.length === 0) return null;
@@ -105,6 +122,6 @@ export class WorkerLimitNotices {
       this.#pending = this.#pending.filter((entry) => !delivered.has(entry));
       for (const entry of fresh) this.#deliveredTo.delete(entry);
     }
-    return { text: describeWorkerLimit(fresh), count: fresh.length };
+    return { text: describeWorkerLimit(fresh, preRotationKey), count: fresh.length };
   }
 }

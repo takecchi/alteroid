@@ -41,6 +41,127 @@ export function noticeResetText(text: string): string | undefined {
   return RESETS_AT_PATTERN.exec(text)?.[0];
 }
 
+// 日付付きの形（週の枠: `resets Oct 22, 4pm (Asia/Tokyo)`）。上の `RESETS_AT_PATTERN` は日付を受けないので、別の1本で持つ（広げると既存の読み手が日付を無視して次の同じ時刻と読む）。
+// 年は文言に無い: 呼び出し時刻の年（と翌年）から、`at` に近い側を採る
+const RESETS_DATED_PATTERN =
+  /\bresets\s+([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([A-Za-z0-9_+\-/]+)\)/i;
+
+const MONTH_PREFIXES = [
+  'jan',
+  'feb',
+  'mar',
+  'apr',
+  'may',
+  'jun',
+  'jul',
+  'aug',
+  'sep',
+  'oct',
+  'nov',
+  'dec',
+];
+
+interface ZonedParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+}
+
+function zonedParts(zone: string, at: number): ZonedParts | undefined {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(at));
+    const num = (type: string): number => Number(parts.find((part) => part.type === type)?.value);
+    const result = {
+      year: num('year'),
+      month: num('month'),
+      day: num('day'),
+      hour: num('hour'),
+      minute: num('minute'),
+    };
+    return Object.values(result).every(Number.isInteger) ? result : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// その時間帯の壁時計（年月日時分）が指す瞬間を返す。夏時間の切り替わりなどで描き直しが合わない回は捨てる
+function instantOfZonedWallClock(zone: string, wanted: ZonedParts): number | undefined {
+  const asUtc = Date.UTC(wanted.year, wanted.month - 1, wanted.day, wanted.hour, wanted.minute);
+  const first = zonedParts(zone, asUtc);
+  if (first === undefined) return undefined;
+  const shown = Date.UTC(first.year, first.month - 1, first.day, first.hour, first.minute);
+  const candidate = asUtc - (shown - asUtc);
+  const rendered = zonedParts(zone, candidate);
+  if (
+    rendered === undefined ||
+    rendered.year !== wanted.year ||
+    rendered.month !== wanted.month ||
+    rendered.day !== wanted.day ||
+    rendered.hour !== wanted.hour ||
+    rendered.minute !== wanted.minute
+  ) {
+    return undefined;
+  }
+  return candidate;
+}
+
+/**
+ * 日付付きの言い回し（`resets Oct 22, 4pm (Asia/Tokyo)`）を瞬間へ直す。読めない・日付が存在しない・窓の外なら `undefined`。
+ * 窓は「`at` の1日前から `withinMs` 先まで」: 文言が届いた時点でリセット直後に当たった回を落とさないための1日ぶんの余裕。
+ */
+export function parseNoticeResetDatedAt(
+  text: string,
+  options: ParseNoticeResetOptions,
+): number | undefined {
+  const matched = RESETS_DATED_PATTERN.exec(text);
+  if (matched === null) return undefined;
+  const [, rawMonth, rawDay, rawHour, rawMinute, rawMeridiem, zone] = matched;
+  if (
+    rawMonth === undefined ||
+    rawDay === undefined ||
+    rawHour === undefined ||
+    rawMeridiem === undefined ||
+    zone === undefined
+  ) {
+    return undefined;
+  }
+  const monthIndex = MONTH_PREFIXES.indexOf(rawMonth.slice(0, 3).toLowerCase());
+  const day = Number(rawDay);
+  const hour12 = Number(rawHour);
+  const minute = rawMinute === undefined ? 0 : Number(rawMinute);
+  if (monthIndex < 0 || day < 1 || day > 31 || hour12 < 1 || hour12 > 12 || minute > 59) {
+    return undefined;
+  }
+  const hour = to24Hour(hour12, rawMeridiem.toLowerCase() === 'am' ? 'am' : 'pm');
+  const now = zonedParts(zone, options.at);
+  if (now === undefined) return undefined;
+
+  for (const year of [now.year, now.year + 1]) {
+    const candidate = instantOfZonedWallClock(zone, {
+      year,
+      month: monthIndex + 1,
+      day,
+      hour,
+      minute,
+    });
+    if (candidate === undefined) continue;
+    if (candidate >= options.at - 24 * 60 * 60_000 && candidate <= options.at + options.withinMs) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
 export interface ParseNoticeResetOptions {
   at: number;
   withinMs: number;
