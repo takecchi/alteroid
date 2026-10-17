@@ -800,6 +800,8 @@ export type PipeExitMasking =
  * 最初に当たった mutating を、無ければ最初に当たった checker を返す。引用符・注釈の中は見ない。
  */
 export function inspectPipeExitMasking(command: string): PipeExitMasking | undefined {
+  // 管の各段の終了コードを自分で拾う形（`PIPESTATUS`・`pipefail`）は見ない: 隠れていないので、止めても知らせても邪魔になるだけのため
+  if (/\bPIPESTATUS\b|\bpipefail\b/.test(command)) return undefined;
   const subs = findQuotedSubstitutions(command);
   const visible = subs.length > 0 ? maskSubstitutions(command, subs) : command;
   const scan = computeQuoteScan(visible);

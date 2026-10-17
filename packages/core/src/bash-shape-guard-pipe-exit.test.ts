@@ -56,6 +56,9 @@ describe('管の最後でない段の状態を変えるコマンドは止める�
     "echo 'git merge x | tail'",
     'echo a # git merge x | tail',
     'grep -n foo a.ts | tail',
+    // 各段の終了コードを自分で拾う形は、止めも知らせもしない
+    'set -o pipefail; git merge x | tail',
+    'pnpm test | grep -E "Tests |FAIL"; echo "EXIT:${PIPESTATUS[0]}"',
   ])('%j は止めない', (command) => {
     expect(inspectPipeExitMasking(command)).toBeUndefined();
     expect(inspectBashShape(command)).toEqual({ blocked: false });
