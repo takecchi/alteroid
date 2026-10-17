@@ -635,17 +635,17 @@ function withNoticeTextResetsAt(notice: UsageLimitNotice, at: number): UsageLimi
   return resetsAt === undefined ? notice : { ...notice, resetsAt };
 }
 
-// synthesized な manager_message は無条件に再武装しない: 機構が合成した失敗の知らせは枠が開いた証拠にならず、1ターン回して 429 を踏むだけのため
-// この判定へ `resetsAt` の比較を畳み込まない: `event` だけを見る純関数でなくなり、インスタンス状態が要るため
 function tokenPoolReopenedSourceOf(event: InboxEvent): boolean {
   return event.type === 'external' && event.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE;
 }
 
+// synthesized な manager_message は無条件に再武装しない: 機構が合成した失敗の知らせは枠が開いた証拠にならず、1ターン回して 429 を踏むだけのため
+// この判定へ `resetsAt` の比較を畳み込まない: `event` だけを見る純関数でなくなり、インスタンス状態が要るため
 function usageBlockAlwaysRearms(event: InboxEvent): boolean {
   return (
     isHumanOriginated(event) ||
     (event.type === 'manager_message' && event.synthesized !== true) ||
-    (event.type === 'external' && event.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE)
+    tokenPoolReopenedSourceOf(event)
   );
 }
 
