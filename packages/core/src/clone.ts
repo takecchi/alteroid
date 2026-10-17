@@ -90,7 +90,7 @@ import { describeFirstTurnToolSearch } from './boot-tool-search-observed.js';
 import { describeSelectionsViolation, foldSelections } from './approval-choices.js';
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
-import { WorkerLimitNotices } from './runner-worker-limit-notice.js';
+import { WorkerLimitNotices, workerLimitLabel } from './runner-worker-limit-notice.js';
 import { excerpt, excerptLine, renderListingFromEnd, tailByCodePoints } from './excerpt.js';
 import { readConversationWindow } from './conversation.js';
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
@@ -6155,9 +6155,9 @@ class Clone implements CloneHost {
    * 作業者だけが利用上限で落ちた事実を覚え、日誌へ1行残す（#4911。担当の層は `runner.ts` の `#recordWorkerLimit`、#4903）。
    * クローン自身の枠の印（`#usageBlocked`）・`usage_limited`・鍵の回転の契機にはしない: クローン本体は動けるため。原文は伏せ字を通す。
    */
-  async #recordWorkerLimit(label: string, raw: string): Promise<void> {
+  async #recordWorkerLimit(identity: string, label: string, raw: string): Promise<void> {
     const shown = redactErrorText(raw, this.#env);
-    if (!this.#workerLimitNotices.record(label, shown, Date.now())) return;
+    if (!this.#workerLimitNotices.record(identity, label, shown, Date.now())) return;
     await this.#journal({
       type: 'exchange',
       with: 'self',
@@ -7190,7 +7190,8 @@ class Clone implements CloneHost {
             turnFailureKindOf(assistantFailureOf(event.errorCode, said)) === 'quota'
           ) {
             await this.#recordWorkerLimit(
-              `tool_use ${event.parentToolUseId}`,
+              `tool_use:${event.parentToolUseId}`,
+              workerLimitLabel(event.parentToolUseId, undefined),
               said.length > 0 ? said : workerRejected.code,
             );
           }
@@ -7380,8 +7381,14 @@ class Clone implements CloneHost {
           event.summary !== undefined &&
           classifyUsageNotice(event.summary)?.kind === 'reached'
         ) {
+          // 身元は作業者を呼んだ tool_use の id にそろえる（#4996。担当の層 `runner.ts` と同じ）
           await this.#recordWorkerLimit(
-            event.taskId === undefined ? '背景の作業者' : `task ${event.taskId}`,
+            event.toolUseId !== undefined
+              ? `tool_use:${event.toolUseId}`
+              : event.taskId === undefined
+                ? 'background-worker'
+                : `task:${event.taskId}`,
+            workerLimitLabel(event.toolUseId, event.taskId),
             event.summary,
           );
         }

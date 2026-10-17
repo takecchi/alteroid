@@ -12,7 +12,7 @@ export const WORKER_LIMIT_NOTICE_INTERVAL_MS = 10 * 60_000;
 /** 配る前の知らせを抱える上限。 */
 export const WORKER_LIMIT_PENDING_MAX = 8;
 
-/** 同じ（作業者・原文）を重ねて数えない期間。 */
+/** 同じ作業者を重ねて数えない期間。 */
 export const WORKER_LIMIT_DEDUPE_MS = 60 * 60_000;
 
 /** 原文の抜粋の長さ。 */
@@ -41,6 +41,18 @@ export function describeWorkerLimit(entries: readonly { label: string; raw: stri
   );
 }
 
+/** 名札。分かる id を全部書く（tool_use と task の両方が分かれば両方）。どちらも無ければ「背景の作業者」。 */
+export function workerLimitLabel(
+  toolUseId: string | undefined,
+  taskId: string | undefined,
+): string {
+  if (toolUseId !== undefined && taskId !== undefined)
+    return `tool_use ${toolUseId} ・task ${taskId}`;
+  if (toolUseId !== undefined) return `tool_use ${toolUseId}`;
+  if (taskId !== undefined) return `task ${taskId}`;
+  return '背景の作業者';
+}
+
 function truncateRaw(raw: string): string {
   const flat = raw.trim();
   return flat.length <= WORKER_LIMIT_RAW_MAX_CHARS
@@ -50,20 +62,23 @@ function truncateRaw(raw: string): string {
 
 export class WorkerLimitNotices {
   #pending: PendingEntry[] = [];
-  /** 配り済みでも、同じものを重ねて数えないための控え（キー → 記録した時刻）。 */
+  /** 配り済みでも、同じ作業者を重ねて数えないための控え（身元 → 記録した時刻）。 */
   readonly #recent = new Map<string, number>();
   readonly #lastNotifiedAt = new Map<string, number>();
   /** 担当本人以外（作業者）に配った記録。エントリごとに、誰に配ったかを覚える。 */
   readonly #deliveredTo = new Map<PendingEntry, Set<string>>();
 
-  /** 新しく覚えたら `true`（日誌・クローンへ運ぶ側がこれで1回だけ運ぶ）。重複・上限超えは `false`。 */
-  record(label: string, raw: string, nowMs: number): boolean {
+  /**
+   * 新しく覚えたら `true`（日誌・クローンへ運ぶ側がこれで1回だけ運ぶ）。重複は `false`。
+   * 重複は作業者の身元（`identity`）だけで判定する。名札（`label`）と原文は判定に使わない:
+   * 作業者が落ちると発言の拒否の印とタスクの失敗通知の2つが届き、名札も原文も違うので、名札＋原文で見ると2回記録されたため（#4996）。
+   */
+  record(identity: string, label: string, raw: string, nowMs: number): boolean {
     for (const [key, at] of this.#recent) {
       if (nowMs - at >= WORKER_LIMIT_DEDUPE_MS) this.#recent.delete(key);
     }
-    const key = `${label}\u0000${raw}`;
-    if (this.#recent.has(key)) return false;
-    this.#recent.set(key, nowMs);
+    if (this.#recent.has(identity)) return false;
+    this.#recent.set(identity, nowMs);
     if (this.#pending.length >= WORKER_LIMIT_PENDING_MAX) {
       const dropped = this.#pending.shift();
       if (dropped !== undefined) this.#deliveredTo.delete(dropped);

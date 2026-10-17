@@ -979,6 +979,8 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
   // 委譲の区間は「上限の文言」の総取りより手前で見る: 後ろに置くと `task_started` / `task_notification` がそこで無条件に捨てられて二度と読まれないため
   if (subtype === 'task_started' || subtype === 'task_notification') {
     const taskId = (message as { task_id?: unknown }).task_id;
+    // 作業者を呼んだ tool_use の id: 作業者の発言の拒否の印と失敗通知を同じ作業者と束ねる鍵になる（#4996）。古い CLI は載せない
+    const toolUseId = (message as { tool_use_id?: unknown }).tool_use_id;
     if (subtype === 'task_started') {
       // 作業者かどうかの判定をここでしない: 判定は `runner.ts` 側が持ち、この層は SDK の綴りを読むだけのため
       const taskType = (message as { task_type?: unknown }).task_type;
@@ -987,6 +989,7 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
         {
           type: 'delegation_started',
           ...(typeof taskId === 'string' ? { taskId } : {}),
+          ...(typeof toolUseId === 'string' ? { toolUseId } : {}),
           ...(typeof taskType === 'string' ? { taskType } : {}),
           ...(typeof spawnDepth === 'number' ? { spawnDepth } : {}),
         },
@@ -1001,6 +1004,7 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
       {
         type: 'delegation_notified',
         ...(typeof taskId === 'string' ? { taskId } : {}),
+        ...(typeof toolUseId === 'string' ? { toolUseId } : {}),
         ...(typeof status === 'string' ? { status } : {}),
         ...(typeof summary === 'string'
           ? { summary: excerpt(summary, TASK_NOTIFICATION_SUMMARY_EXCERPT_LIMIT) }

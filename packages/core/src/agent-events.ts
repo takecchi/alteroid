@@ -93,6 +93,8 @@ export interface AgentToolResult {
 export interface AgentDelegationStarted {
   type: 'delegation_started';
   taskId?: string;
+  // 作業者を呼んだ tool_use の id（#4996）
+  toolUseId?: string;
   // 絞らず string のまま運ぶ: SDK が値を増やしても、知らない値は読み手の判定で「作業者ではない」側へ倒れるため
   taskType?: string;
   spawnDepth?: number;
@@ -101,6 +103,8 @@ export interface AgentDelegationStarted {
 export interface AgentDelegationNotified {
   type: 'delegation_notified';
   taskId?: string;
+  // 作業者を呼んだ tool_use の id。古い CLI は載せない（#4996）
+  toolUseId?: string;
   // 絞らず string のまま運ぶ: 握り潰すと「取れなかった」と「'failed' ではない」が区別できなくなるため
   status?: string;
   summary?: string;

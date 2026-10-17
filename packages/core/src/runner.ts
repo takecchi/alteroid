@@ -265,7 +265,7 @@ import {
 } from './rescue-ref.js';
 import { defaultRunnerRescueStagedRoot } from './rescue-stash.js';
 import { PeerApprovalNotices } from './runner-peer-approval-notice.js';
-import { WorkerLimitNotices } from './runner-worker-limit-notice.js';
+import { WorkerLimitNotices, workerLimitLabel } from './runner-worker-limit-notice.js';
 import { StaleUntrackedNotices } from './runner-stale-untracked.js';
 import {
   ScratchSweeper,
@@ -2004,6 +2004,9 @@ class Host implements RunnerHost {
   }
 }
 
+// task id → 作業者を呼んだ tool_use id の対応を覚える数の上限。超えたら古いものから捨てる（#4996）
+const TASK_TOOL_USE_IDS_MAX = 1_000;
+
 // 送ったまま取られていない出し箱・預かりを覚える数の上限（#4912）
 const EMITTED_PICKUPS_MAX = 10_000;
 
@@ -2452,6 +2455,8 @@ class RunnerSession {
   #tokenFingerprint: string | undefined;
   readonly #workerWaitWindow = new RunnerWorkerWaitWindow();
   readonly #nonWorkerTaskIds = new Set<string>();
+  // `task_notification` に tool_use_id を載せない古い CLI のために、`task_started` で見た対応を覚える（#4996）
+  readonly #toolUseIdByTaskId = new Map<string, string>();
 
   readonly #cutOffWorkers = new RunnerCutOffWorkers();
   readonly #stopState = new RunnerSubagentStopState();
@@ -3742,7 +3747,8 @@ class RunnerSession {
             // 構造化された印（errorCode）だけで判定し、本文の引用では立てない（#4903）
             if (turnFailureKindOf(assistantFailureOf(event.errorCode, workerText)) === 'quota') {
               this.#recordWorkerLimit(
-                `tool_use ${event.parentToolUseId}`,
+                `tool_use:${event.parentToolUseId}`,
+                workerLimitLabel(event.parentToolUseId, undefined),
                 workerText.length > 0 ? workerText : rejected.code,
               );
             }
@@ -3974,6 +3980,14 @@ class RunnerSession {
   #onTaskStarted(event: AgentDelegationStarted): void {
     // id を名乗らなければ偽の id で数える: 取りこぼすより多く数える方を選ぶため
     const taskId = event.taskId ?? randomUUID();
+    if (event.taskId !== undefined && event.toolUseId !== undefined) {
+      this.#toolUseIdByTaskId.delete(event.taskId);
+      this.#toolUseIdByTaskId.set(event.taskId, event.toolUseId);
+      if (this.#toolUseIdByTaskId.size > TASK_TOOL_USE_IDS_MAX) {
+        const oldest = this.#toolUseIdByTaskId.keys().next();
+        if (oldest.done !== true) this.#toolUseIdByTaskId.delete(oldest.value);
+      }
+    }
     if (!isWorkerTaskType(event.taskType)) {
       if (event.taskId !== undefined) this.#nonWorkerTaskIds.add(event.taskId);
       return;
@@ -4003,8 +4017,17 @@ class RunnerSession {
       this.#turnTally.recordFailedWorkerNotification(taskId, limitNamed);
       // 失敗の通知で、文言が「上限に当たった」と読めるものに限る（`reached`）。completed の報告の引用では立てない（#4903）
       if (event.summary !== undefined && classifyUsageNotice(event.summary)?.kind === 'reached') {
+        // 身元は作業者を呼んだ tool_use の id にそろえる: 作業者の発言の拒否の印と同じ作業者を、2回記録しないため（#4996）
+        const toolUseId =
+          event.toolUseId ??
+          (taskId === undefined ? undefined : this.#toolUseIdByTaskId.get(taskId));
         this.#recordWorkerLimit(
-          taskId === undefined ? '背景の作業者' : `task ${taskId}`,
+          toolUseId !== undefined
+            ? `tool_use:${toolUseId}`
+            : taskId === undefined
+              ? 'background-worker'
+              : `task:${taskId}`,
+          workerLimitLabel(toolUseId, taskId),
           event.summary,
         );
       }
@@ -5379,10 +5402,12 @@ class RunnerSession {
   /**
    * 作業者が利用上限で落ちた事実を覚え、日誌とクローンの受信箱へ運ぶ（#4903）。担当のターンが成功しても捨てない。
    * 枠の印（`#usageStopped`）・`usage_notice`・鍵の回転の契機にはしない: 担当は動けるため。原文は伏せ字を通す。
+   * 重複は身元（作業者を呼んだ tool_use の id）でそろえる: 作業者が上限で落ちると、作業者の発言の拒否の印とタスクの失敗通知の2つが届き、
+   * 名札も原文も違うので2回記録して知らせが2通になっていた（#4996）。
    */
-  #recordWorkerLimit(label: string, raw: string): void {
+  #recordWorkerLimit(identity: string, label: string, raw: string): void {
     const shown = redactErrorText(raw, process.env, this.#vaultValues());
-    if (!this.#workerLimitNotices.record(label, shown, Date.now())) return;
+    if (!this.#workerLimitNotices.record(identity, label, shown, Date.now())) return;
     this.#emit({
       type: 'note',
       managerId: this.#id,
