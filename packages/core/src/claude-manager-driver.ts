@@ -95,6 +95,7 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
       ...(spec.reportLanguage === undefined ? {} : { reportLanguage: spec.reportLanguage }),
       ...(spec.mcpServers === undefined ? {} : { mcpServers: spec.mcpServers }),
       ...(spec.plugins === undefined ? {} : { plugins: spec.plugins }),
+      ...(spec.outboxDir === undefined ? {} : { outboxDir: spec.outboxDir }),
       sessionStore: toSessionStore(spec.sessionLog),
       ...(spec.resume === undefined ? {} : { resume: spec.resume }),
       ...(spawnProcess === undefined

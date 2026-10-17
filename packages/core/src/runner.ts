@@ -3208,6 +3208,8 @@ class RunnerSession {
       cwd: this.#cwd,
       env: childEnv,
       managerAutoMemoryEnabled: resolveManagerAutoMemoryEnabled(this.#env),
+      // 用意できなかったときは渡さない: 存在しない置き場を分類器に「信頼する行き先」と告げないため
+      ...(this.#outboxDir === undefined ? {} : { outboxDir: this.#outboxDir }),
       ...(() => {
         const plugins = this.#pluginRefs();
         return plugins.length === 0 ? {} : { plugins };

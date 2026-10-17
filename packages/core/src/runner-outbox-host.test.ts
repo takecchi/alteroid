@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
@@ -81,6 +81,13 @@ describe('Host: 出し箱（Issue #4126 P2a）', () => {
     const env = fake.options[0]?.env as Record<string, string | undefined>;
     outboxDir = join(outboxRoot, 'mgr-abc123');
     expect(env.ALTEROID_OUTBOX).toBe(outboxDir);
+    // 同じ出し箱のパスが auto mode 分類器への環境の説明にも載る（#5018）
+    const settings = fake.options[0]?.settings as {
+      autoMode?: { environment: string[] };
+    };
+    expect(settings.autoMode?.environment).toHaveLength(2);
+    expect(settings.autoMode?.environment[0]).toBe('$defaults');
+    expect(settings.autoMode?.environment[1]).toContain(outboxDir);
 
     await vi.waitFor(() => expect(events.some((e) => e.type === 'report')).toBe(true));
     const report = events.find((e) => e.type === 'report');
@@ -107,6 +114,32 @@ describe('Host: 出し箱（Issue #4126 P2a）', () => {
     expect(Buffer.concat(afterChunks).toString()).toBe('成果物');
     expect(await host.deleteOutboxFile('mgr-abc123', fileId)).toBe(true);
     expect(await host.openOutboxFile('mgr-abc123', fileId)).toBeUndefined();
+  });
+
+  it('出し箱を用意できなかったときは ALTEROID_OUTBOX も autoMode も渡さない（#5018）', async () => {
+    const parent = await makeTempDir('runner-outbox-host-bad-');
+    const target = await makeTempDir('runner-outbox-host-bad-target-');
+    await symlink(target, join(parent, 'box'));
+    const fake = fakeSdk(async () => undefined);
+    const host = createRunnerHost({
+      runnerId: 'runner-outbox-bad',
+      workspacePath: '/workspace',
+      emit: () => undefined,
+      queryFn: fake.fn,
+      env: { PATH: '/usr/bin' },
+      outboxRoot: join(parent, 'box'),
+      outboxStagedRoot: await makeTempDir('runner-outbox-host-bad-staged-'),
+      scratchSweep: false,
+      cwdExistsFn: () => true,
+      readCgroupEventCountersFn: async () => ({}),
+      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+    });
+    hosts.push(host);
+    await host.start({ managerId: 'mgr-bad001', request: '依頼', cwd: '/workspace' });
+    await vi.waitFor(() => expect(fake.options).toHaveLength(1));
+    const env = fake.options[0]?.env as Record<string, string | undefined>;
+    expect(env.ALTEROID_OUTBOX).toBeUndefined();
+    expect('autoMode' in (fake.options[0]?.settings as object)).toBe(false);
   });
 
   it('子を降ろす構成では、畳みで出し箱の中身を runner の権限で再帰削除せず、子の権限の削除関数へ渡す', async () => {

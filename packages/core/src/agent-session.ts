@@ -144,6 +144,11 @@ export interface AgentManagerSessionSpec {
    * Codex の駆動役は渡さない（渡していないことを note に残す）。作業者（`agents`）には足さない。
    */
   plugins?: readonly AgentClonePlugin[];
+  /**
+   * この委譲の出し箱の絶対パス（#5018）。省けば渡さない（出し箱を用意できなかったとき）。
+   * Claude の駆動役だけが auto mode 分類器への環境の説明に使う。Codex の駆動役は渡されても使わない。
+   */
+  outboxDir?: string;
   sessionLog: AgentSessionLog;
   spawnProcess?: AgentSpawnProcess;
   onPermission: AgentPermissionHandler;

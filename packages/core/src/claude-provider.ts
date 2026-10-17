@@ -696,6 +696,23 @@ export interface ManagerSessionOptionsRequest {
    * `AgentDefinition.skills` は名前の配列しか取れず、列挙すると増えた分に追いつかない。
    */
   plugins?: readonly ClonePluginRequest[];
+  /**
+   * このセッションの出し箱（報告の添付の置き場）の絶対パス（#5018）。省けば `settings.autoMode` を載せない（今と同じ settings）。
+   * **`agents`（作業者）には何も足さない** — 作業者はマネージャーと同じセッション（同じ CLI プロセス）の中で走り、その settings が効く。
+   */
+  outboxDir?: string;
+}
+
+/**
+ * auto mode 分類器へ渡す環境の説明（#5018）。`$defaults` を先頭に置いて組み込みの説明を残す: 省くと既定を丸ごと置き換えるため。
+ * 文は英語のまま: 分類器の文書（auto-mode-config）の例に合わせてあるため。
+ * `allow` / `soft_deny` / `hard_deny` / `classifyAllShell` は書かない: 確認や拒否の規則の一覧を作ることになるため。書くのは環境の事実だけ。
+ */
+export function outboxAutoModeEnvironment(outboxDir: string): string[] {
+  return [
+    '$defaults',
+    `Trusted local staging directory (not an external destination): ${outboxDir} (environment variable ALTEROID_OUTBOX) is this session's report-attachment outbox inside the same container. The runner hosting this session collects files placed there and attaches them to this session's report to its requester. Copying or writing work products from the working directories into it is the documented way to return files, not data exfiltration.`,
+  ];
 }
 
 // 段落（`REPORT_LANGUAGE_PROMPT_PARAGRAPH`）を主にし、こちらは添え: 作業者にどこまで効くかは CLI の作り次第で確かめられないため（#4977）
@@ -731,6 +748,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     reportLanguage,
     mcpServers,
     plugins,
+    outboxDir,
   } = request;
   const sdkLanguage = reportLanguage === undefined ? undefined : SDK_LANGUAGE_OF[reportLanguage];
 
@@ -778,10 +796,14 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     // `autoMemoryEnabled` の doc に「Ignored if set in projectSettings」が付いていないことは、SDK を上げるときに目で確かめる: 不在の主張で `check:sdk-quotes` の印では確かめられないため
     // [sdk-verbatim Settings.language]
     // Preferred language for Claude responses and voice dictation (e.g., "japanese", "spanish")
+    // `autoMode` は SDK の `Settings` 型に宣言が無い（0.3.302）。末尾の `[k: string]: unknown` で通すため、引用の印は付けない（auto mode 分類器の設定の出典: https://code.claude.com/docs/en/auto-mode-config）
     settings: {
       ...NO_ATTRIBUTION_SETTINGS,
       ...(managerAutoMemoryEnabled ? {} : { autoMemoryEnabled: false }),
       ...(sdkLanguage === undefined ? {} : { language: sdkLanguage }),
+      ...(outboxDir === undefined
+        ? {}
+        : { autoMode: { environment: outboxAutoModeEnvironment(outboxDir) } }),
     },
     ...(resume === undefined ? {} : { resume }),
     ...(spawnClaudeCodeProcess === undefined ? {} : { spawnClaudeCodeProcess }),

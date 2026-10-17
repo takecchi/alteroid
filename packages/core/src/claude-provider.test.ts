@@ -27,6 +27,7 @@ import {
   buildCloneSessionOptions,
   buildManagerSessionOptions,
   foldClaudeMessage,
+  outboxAutoModeEnvironment,
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
   withNoModelFallbackEnv,
   withNoSessionTitleEnv,
@@ -1290,6 +1291,57 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       expect(JSON.stringify(options.agents)).not.toContain('/p/');
       const worker = (options.agents ?? {})[WORKER_AGENT_NAME] as Record<string, unknown>;
       expect(Object.hasOwn(worker, 'skills')).toBe(false);
+    });
+  });
+
+  describe('buildManagerSessionOptions: outboxDir（auto mode 分類器への環境の説明, #5018）', () => {
+    const request = () => ({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: () => ({ kind: 'continue' as const }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSubagentStop: () => ({ kind: 'continue' as const }),
+      onStop: () => {},
+      onPreToolUse: () => ({ kind: 'continue' as const }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' as const }),
+      managerAutoMemoryEnabled: false,
+    });
+
+    it('出し箱のパスがあれば autoMode.environment は $defaults 先頭＋出し箱の1文で、規則の欄は無い', () => {
+      const outbox = '/tmp/alteroid-outbox/mgr-abc123';
+      const settings = buildManagerSessionOptions({ ...request(), outboxDir: outbox })
+        .settings as Record<string, unknown>;
+      expect(settings.autoMode).toEqual({
+        environment: ['$defaults', outboxAutoModeEnvironment(outbox)[1]],
+      });
+      const environment = (settings.autoMode as { environment: string[] }).environment;
+      expect(environment).toHaveLength(2);
+      expect(environment[0]).toBe('$defaults');
+      expect(environment[1]).toContain(
+        `destination): ${outbox} (environment variable ALTEROID_OUTBOX)`,
+      );
+      expect(environment[1]).toContain('not data exfiltration');
+      expect(Object.keys(settings.autoMode as object)).toEqual(['environment']);
+      // 作業者の定義には何も足さない
+      expect(
+        JSON.stringify(buildManagerSessionOptions({ ...request(), outboxDir: outbox }).agents),
+      ).not.toContain(outbox);
+    });
+
+    it('出し箱のパスが無ければ autoMode キーごと無く、settings は今と同じ', () => {
+      const settings = buildManagerSessionOptions(request()).settings;
+      expect(settings).toEqual({ attribution: { commit: '', pr: '' }, autoMemoryEnabled: false });
+      expect('autoMode' in (settings as object)).toBe(false);
     });
   });
 
