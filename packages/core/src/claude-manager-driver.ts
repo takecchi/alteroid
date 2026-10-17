@@ -92,6 +92,7 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
       cwd: spec.cwd,
       env: spec.env,
       managerAutoMemoryEnabled: spec.managerAutoMemoryEnabled,
+      ...(spec.reportLanguage === undefined ? {} : { reportLanguage: spec.reportLanguage }),
       ...(spec.mcpServers === undefined ? {} : { mcpServers: spec.mcpServers }),
       ...(spec.plugins === undefined ? {} : { plugins: spec.plugins }),
       sessionStore: toSessionStore(spec.sessionLog),
@@ -122,6 +123,7 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
       onPostToolUseFailure: spec.onPostToolUseFailure,
       onPreCompact: spec.onPreCompact,
       onUserPromptSubmit: spec.onUserPromptSubmit,
+      ...(spec.onSessionStart === undefined ? {} : { onSessionStart: spec.onSessionStart }),
       onSubagentStop: spec.onSubagentStop,
       onStop: spec.onStop,
     });

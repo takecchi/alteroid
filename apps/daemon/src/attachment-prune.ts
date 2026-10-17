@@ -1,4 +1,4 @@
-import { pruneAttachmentCopies, reasonOf, type Stores } from '@alteroid/core';
+import { pruneAttachmentCopies, reasonOf, writeStderrLine, type Stores } from '@alteroid/core';
 
 export const ATTACHMENT_PRUNE_EVERY_ENV = 'ALTEROID_ATTACHMENT_PRUNE_EVERY';
 
@@ -91,7 +91,7 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
     try {
       await pruneAttachmentCopies(options.stores, options.copiesDir, options.now?.() ?? new Date());
     } catch (error: unknown) {
-      process.stderr.write(`alteroidd: 添付の写しの掃除に失敗しました: ${reasonOf(error)}\n`);
+      writeStderrLine(`alteroidd: 添付の写しの掃除に失敗しました: ${reasonOf(error)}\n`);
     }
   };
 
@@ -126,12 +126,12 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
                 ? `（${abortFailed} 件は取り消せなかった: ${result.reason ?? '理由不明'}）`
                 : '')
             : '';
-        process.stderr.write(
+        writeStderrLine(
           `alteroidd: 添付の中身の掃除: 控えの無い ${result.removed} 件を消した${trouble}${uploads}\n`,
         );
       }
     } catch (error: unknown) {
-      process.stderr.write(`alteroidd: 添付の中身の掃除に失敗しました: ${reasonOf(error)}\n`);
+      writeStderrLine(`alteroidd: 添付の中身の掃除に失敗しました: ${reasonOf(error)}\n`);
     }
   };
 
@@ -144,7 +144,7 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
       try {
         pruned = await options.stores.attachments.prune(options.now?.() ?? new Date());
       } catch (error: unknown) {
-        process.stderr.write(`alteroidd: 添付ファイルの掃除に失敗しました: ${reasonOf(error)}\n`);
+        writeStderrLine(`alteroidd: 添付ファイルの掃除に失敗しました: ${reasonOf(error)}\n`);
       }
       await pruneCopies();
       await sweepOrphanBlobs();

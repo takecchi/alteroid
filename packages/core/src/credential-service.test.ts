@@ -8,7 +8,7 @@ import {
 } from './credentials.js';
 import type { RunnerClient, RunnerCredentialFingerprint } from './runner-protocol.js';
 import type { StoredCredential } from './store.js';
-import { createMemoryStores } from './testing.js';
+import { captureStderr, createMemoryStores } from './testing.js';
 
 const WITHHELD = ['ALTEROID_DATABASE_URL', 'ALTEROID_RUNNER_TOKEN'] as const;
 
@@ -715,8 +715,7 @@ describe('名前が長すぎる既存の行（#2445）', () => {
   });
 
   it('正本に居ても配らず、ほかの鍵は配る。落としたことは stderr に名前の頭と長さで残る', async () => {
-    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    try {
+    const lines = await captureStderr(async () => {
       const runner = fakeRunner();
       const { stores, service } = serviceOf([runner]);
       await stores.credentials.put([
@@ -731,15 +730,13 @@ describe('名前が長すぎる既存の行（#2445）', () => {
       await service.apply([{ name: 'GIT_AUTHOR_NAME', value: 'takecchi' }]);
       expect(runner.held.get('GIT_AUTHOR_NAME')).toBe('takecchi');
       expect(runner.received.flat().some((entry) => entry.name === LONG_NAME)).toBe(false);
+    });
 
-      const out = write.mock.calls.map((call) => String(call[0])).join('');
-      expect(out).toContain('LONG_AAAA');
-      expect(out).toContain(String(LONG_NAME.length));
-      expect(out).not.toContain(LONG_NAME);
-      expect(out).not.toContain('old');
-    } finally {
-      write.mockRestore();
-    }
+    const out = lines.join('');
+    expect(out).toContain('LONG_AAAA');
+    expect(out).toContain(String(LONG_NAME.length));
+    expect(out).not.toContain(LONG_NAME);
+    expect(out).not.toContain('old');
   });
 
   it('resolveCredentialRows は長い名前の行を落とす', () => {

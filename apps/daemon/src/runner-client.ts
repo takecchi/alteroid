@@ -76,6 +76,7 @@ import {
   type RunnerResumeResult,
   unpushedWorkResultSchema,
   notePhase,
+  writeStderrLine,
 } from '@alteroid/core';
 
 // 失敗の種別を口の定義（`@alteroid/core`）に持たせる: この経路だけの都合にすると、同じ判断をインプロセスの runner 側で作り直すことになるため
@@ -635,7 +636,7 @@ class HttpRunner implements RunnerClient {
           const causeInfo = causeInfoOf(failure);
           const causeCode = causeInfo?.code ?? '';
           if (this.#lastLoggedDelayMs !== waitMs || this.#lastLoggedCauseCode !== causeCode) {
-            process.stderr.write(
+            writeStderrLine(
               `alteroidd: ${this.#describeSelf()} のストリームが切れました: ${reasonOf(failure)}${causeSuffixOf(causeInfo)}（次は${waitMs}ms後に再試行）\n`,
             );
             this.#lastLoggedDelayMs = waitMs;
@@ -654,7 +655,7 @@ class HttpRunner implements RunnerClient {
         this.#legLastFailureReason = 'ストリームが持続しないまま終わった';
         this.#neverEscapes(() => {
           if (this.#lastLoggedQuietDelayMs !== waitMs) {
-            process.stderr.write(
+            writeStderrLine(
               `alteroidd: ${this.#describeSelf()} のストリームが持続しないまま終わった（次は${waitMs}ms後に再試行）\n`,
             );
             this.#lastLoggedQuietDelayMs = waitMs;

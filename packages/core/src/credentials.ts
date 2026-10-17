@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chown, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { reasonOf } from './dropped-record.js';
+import { reasonOf, writeStderrLine } from './dropped-record.js';
 import { excerptLine } from './excerpt.js';
 
 const CREDENTIAL_BATCH_LIST_EXCERPT = 400;
@@ -254,7 +254,7 @@ class Store implements CredentialStore {
         this.#lastWriteError = undefined;
       } catch (error) {
         this.#lastWriteError = String(error);
-        process.stderr.write(
+        writeStderrLine(
           `alteroid-runner: 鍵を器へ書けませんでした（走行中の差し替えは届きません）: ${reasonOf(error)}\n`,
         );
       }

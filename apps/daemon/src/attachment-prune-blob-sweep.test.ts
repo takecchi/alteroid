@@ -1,5 +1,5 @@
-import { createMemoryStores, type AttachmentBlobSweepResult } from '@alteroid/core';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { captureStderr, createMemoryStores, type AttachmentBlobSweepResult } from '@alteroid/core';
+import { describe, expect, it } from 'vitest';
 
 import { ATTACHMENT_BLOB_SWEEP_EVERY_MS, startAttachmentPruning } from './attachment-prune.js';
 
@@ -24,10 +24,6 @@ function fixture(result: AttachmentBlobSweepResult | undefined = undefined) {
 }
 
 describe('控えの無い blob の掃除の周期（#4314）', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it('起動直後の1回目は呼び、24時間経つまでは呼ばない。経てば呼ぶ（時刻は注入）', async () => {
     const f = fixture();
     const pruner = startAttachmentPruning({
@@ -73,53 +69,59 @@ describe('控えの無い blob の掃除の周期（#4314）', () => {
   });
 
   it('未設定（undefined）なら stderr に何も出さない', async () => {
-    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const f = fixture(undefined);
     const pruner = startAttachmentPruning({ stores: f.stores, everyMinutes: 60, now: f.now });
     try {
-      await pruner.refresh();
+      const lines = await captureStderr(async () => {
+        await pruner.refresh();
+      });
       expect(f.calls).toHaveLength(1);
-      expect(write).not.toHaveBeenCalled();
+      expect(lines).toEqual([]);
     } finally {
       pruner.stop();
     }
   });
 
   it('何も消さず失敗も無ければ stderr に何も出さない。消したら件数を1行、失敗があれば理由も', async () => {
-    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const quiet = fixture({ listed: 3, candidates: 0, removed: 0, failed: 0 });
     const p1 = startAttachmentPruning({ stores: quiet.stores, everyMinutes: 60, now: quiet.now });
-    await p1.refresh();
+    const quietLines = await captureStderr(async () => {
+      await p1.refresh();
+    });
     p1.stop();
-    expect(write).not.toHaveBeenCalled();
+    expect(quietLines).toEqual([]);
 
     const done = fixture({ listed: 5, candidates: 2, removed: 2, failed: 0 });
     const p2 = startAttachmentPruning({ stores: done.stores, everyMinutes: 60, now: done.now });
-    await p2.refresh();
+    const doneLines = await captureStderr(async () => {
+      await p2.refresh();
+    });
     p2.stop();
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(String(write.mock.calls[0]?.[0])).toContain('2 件を消した');
+    expect(doneLines).toHaveLength(1);
+    expect(doneLines[0]).toContain('2 件を消した');
 
-    write.mockClear();
     const bad = fixture({ listed: 5, candidates: 2, removed: 0, failed: 2, reason: '断られた' });
     const p3 = startAttachmentPruning({ stores: bad.stores, everyMinutes: 60, now: bad.now });
-    await p3.refresh();
+    const badLines = await captureStderr(async () => {
+      await p3.refresh();
+    });
     p3.stop();
-    const line = String(write.mock.calls[0]?.[0]);
+    const line = String(badLines[0]);
     expect(line).toContain('2 件は消せなかった');
     expect(line).toContain('断られた');
   });
 
   it('列挙が投げても落ちず、行の prune の結果は返る。行の prune が落ちていても呼ぶ', async () => {
-    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const f = fixture();
     f.stores.attachments.sweepOrphanBlobs = async () => {
       throw new Error('列挙が落ちた');
     };
     const pruner = startAttachmentPruning({ stores: f.stores, everyMinutes: 60, now: f.now });
     try {
-      await expect(pruner.refresh()).resolves.toBe(0);
-      expect(String(write.mock.calls[0]?.[0])).toContain('列挙が落ちた');
+      const lines = await captureStderr(async () => {
+        await expect(pruner.refresh()).resolves.toBe(0);
+      });
+      expect(String(lines[0])).toContain('列挙が落ちた');
     } finally {
       pruner.stop();
     }
@@ -138,20 +140,22 @@ describe('控えの無い blob の掃除の周期（#4314）', () => {
   });
 
   it('取り消した分割アップロードがあるときだけ、その件数を同じ行に足す（#4763）', async () => {
-    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const none = fixture({ listed: 1, candidates: 0, removed: 0, failed: 0, abortedUploads: 0 });
     const p1 = startAttachmentPruning({ stores: none.stores, everyMinutes: 60, now: none.now });
-    await p1.refresh();
+    const noneLines = await captureStderr(async () => {
+      await p1.refresh();
+    });
     p1.stop();
-    expect(write).not.toHaveBeenCalled();
+    expect(noneLines).toEqual([]);
 
     const done = fixture({ listed: 1, candidates: 0, removed: 0, failed: 0, abortedUploads: 2 });
     const p2 = startAttachmentPruning({ stores: done.stores, everyMinutes: 60, now: done.now });
-    await p2.refresh();
+    const doneLines = await captureStderr(async () => {
+      await p2.refresh();
+    });
     p2.stop();
-    expect(String(write.mock.calls[0]?.[0])).toContain('分割アップロードを 2 件取り消した');
+    expect(String(doneLines[0])).toContain('分割アップロードを 2 件取り消した');
 
-    write.mockClear();
     const bad = fixture({
       listed: 1,
       candidates: 0,
@@ -162,9 +166,11 @@ describe('控えの無い blob の掃除の周期（#4314）', () => {
       reason: '断られた',
     });
     const p3 = startAttachmentPruning({ stores: bad.stores, everyMinutes: 60, now: bad.now });
-    await p3.refresh();
+    const badLines = await captureStderr(async () => {
+      await p3.refresh();
+    });
     p3.stop();
-    const line = String(write.mock.calls[0]?.[0]);
+    const line = String(badLines[0]);
     expect(line).toContain('1 件は取り消せなかった');
     expect(line).toContain('断られた');
   });

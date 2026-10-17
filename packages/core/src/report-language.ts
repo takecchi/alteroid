@@ -38,6 +38,22 @@ export function resolveEffectiveReportLanguage(
   return resolveReportLanguage(env);
 }
 
+// --- 前もっての指示（#4977） ---
+
+/**
+ * ja のとき、担当の system prompt と作業者の指示（サブエージェントの定義の prompt）の末尾に足す段落。
+ * 1か所に置く: 作業者は担当の system prompt を継がないので両方へ足すが、文言が分かれると片方だけ直す形になるため。
+ */
+// 見出しを付ける: 担当の system prompt の最後の節（「# auto-memory について」）の下に見出し無しで続くと、その節の一部に読まれるため
+export const REPORT_LANGUAGE_PROMPT_PARAGRAPH =
+  '# 書く言語\n\n' +
+  '途中の短い文（道具を使う前の一言）も、報告も、すべて日本語で書く。識別子・ファイル名・コマンド・引用するエラーの文は英語のままでよい。';
+
+/** off のときは1文字も変えない（今と同じ文字列）。 */
+export function withReportLanguageParagraph(prompt: string, mode: ReportLanguageMode): string {
+  return mode === 'ja' ? `${prompt}\n\n${REPORT_LANGUAGE_PROMPT_PARAGRAPH}` : prompt;
+}
+
 // 起動行・出し直しの行。不正な値でも投げず、不正だと分かるように書く（起動は落とさない）
 export function describeReportLanguage(
   env: NodeJS.ProcessEnv,

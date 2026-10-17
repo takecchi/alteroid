@@ -9,6 +9,7 @@ import {
   type ArchiveEntry,
   type ManagerPool,
   type Stores,
+  writeStderrLine,
 } from '@alteroid/core';
 
 export const ARCHIVE_FOLD_EVERY_ENV = 'ALTEROID_ARCHIVE_FOLD_EVERY';
@@ -260,7 +261,7 @@ export function startArchiveFolding(options: ArchiveFolderOptions): ArchiveFolde
     })
       .then((result) => {
         if (result.journalDroppedIds.length > 0) {
-          process.stderr.write(
+          writeStderrLine(
             `alteroidd: 退避済み生ログを ${result.folded} 件畳んだが、うち ${result.journalDroppedIds.length} 件は日誌に書けなかった\n`,
           );
         }
@@ -268,7 +269,7 @@ export function startArchiveFolding(options: ArchiveFolderOptions): ArchiveFolde
         return result;
       })
       .catch((error: unknown) => {
-        process.stderr.write(
+        writeStderrLine(
           `alteroidd: 退避済み生ログの自動畳み込みに失敗しました: ${reasonOf(error)}\n`,
         );
         return null;

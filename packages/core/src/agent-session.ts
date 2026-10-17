@@ -9,6 +9,7 @@ import type {
   AgentObservationHook,
   AgentPermissionDeniedHook,
   AgentPreToolHook,
+  AgentSessionStartHook,
   AgentStopRecord,
   AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
@@ -19,6 +20,7 @@ import type {
 import type { AgentProviderId } from './agent-ports.js';
 import type { McpServers } from './mcp-servers.js';
 import type { PermissionModeName } from './permission-mode.js';
+import type { ReportLanguageMode } from './report-language.js';
 import type { UsageTotals } from './usage.js';
 
 export interface AgentUserInput {
@@ -131,6 +133,11 @@ export interface AgentManagerSessionSpec {
   cwd: string;
   env: NodeJS.ProcessEnv;
   managerAutoMemoryEnabled: boolean;
+  /**
+   * 応答の言語（#4977）。省けば何も渡さない。段落は `systemPromptAppend` / `workerPrompt` に既に入っており、
+   * これは provider 自身の言語の設定へ写すためだけに持つ（Claude は `Settings.language`。Codex は対応する口が無いので写さない）。
+   */
+  reportLanguage?: ReportLanguageMode;
   mcpServers?: McpServers;
   /**
    * 展開済みの plugin（runner が置き場へ展開したもの）。省略・空なら渡さない。
@@ -148,6 +155,8 @@ export interface AgentManagerSessionSpec {
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
   onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
   onUserPromptSubmit: AgentObservationHook<AgentUserPromptSubmitRecord>;
+  /** 省けば繋がない。担当だけが渡す（#4995）。Codex の駆動役は渡されても使わない。 */
+  onSessionStart?: AgentSessionStartHook;
   onSubagentStop: AgentContextHook<AgentSubagentStopRecord>;
   onStop: AgentObservationHook<AgentStopRecord>;
 }

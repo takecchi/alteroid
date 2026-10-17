@@ -10,6 +10,7 @@ import type {
   SessionStoreEntry,
 } from '@anthropic-ai/claude-agent-sdk';
 import {
+  captureStderr,
   createManagerPool,
   createRunnerHost,
   createRunnerRegistry,
@@ -17,6 +18,7 @@ import {
   DEFAULT_SSE_HEARTBEAT_MS,
   HEARTBEAT_FRAME,
   RunnerHttpError,
+  setStderrSinkForTesting,
   type ManagerPool,
   type InboxEvent,
   type Stores,
@@ -36,6 +38,21 @@ import { RunnerHttpTransport } from './runner-http-transport.js';
 
 const TOKEN = 'test-runner-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
+
+// `captureStderr` は本体が終わったときにしか行を返さない。テストの終わりまで溜めたいので、本体を「解放の合図を待つだけ」にして、取り出すときに解放する（何度呼んでも同じ配列を返す）。
+function startStderrCapture(): { lines: () => Promise<string[]> } {
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const captured = captureStderr(() => released);
+  return {
+    lines: () => {
+      release();
+      return captured;
+    },
+  };
+}
 
 interface FakeSession {
   options: Options;
@@ -1162,14 +1179,14 @@ describe('hello() が拾う版', () => {
 
 describe('死んだ runner への SSE 再接続（バックオフ）', () => {
   // `stdout` も黙らせる: 黙らせないと `vitest.setup.ts` の歯が「繋ぎ直せた」を stdout へ書くテストを落とす。
-  let stderrSpy: ReturnType<typeof vi.spyOn>;
+  let stderr: ReturnType<typeof startStderrCapture>;
   let stdoutSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
-    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    stderr = startStderrCapture();
     stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   });
-  afterEach(() => {
-    stderrSpy.mockRestore();
+  afterEach(async () => {
+    await stderr.lines();
     stdoutSpy.mockRestore();
   });
 
@@ -1298,7 +1315,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
     await enough;
     await client.close();
 
-    const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    const stderrLines = await stderr.lines();
     const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     const failureLines = stderrLines.filter((line: string) =>
       line.includes('ストリームが切れました'),
@@ -1336,9 +1353,9 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
     await enough;
     await client.close();
 
-    const failureLines = stderrSpy.mock.calls
-      .map((call: unknown[]) => String(call[0]))
-      .filter((line: string) => line.includes('ストリームが切れました'));
+    const failureLines = (await stderr.lines()).filter((line: string) =>
+      line.includes('ストリームが切れました'),
+    );
 
     expect(failureLines).toHaveLength(6);
   });
@@ -1411,7 +1428,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await client.close();
 
       expect(waits.slice(0, 6)).toEqual([1000, 2000, 4000, 8000, 16000, 30000]);
-      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const lines = await stderr.lines();
       expect(lines.some((line: string) => line.includes('繋ぎ直せた'))).toBe(false);
     });
 
@@ -1445,7 +1462,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await client.close();
 
       expect(waits.slice(0, 6)).toEqual([1000, 2000, 4000, 8000, 16000, 30000]);
-      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const lines = await stderr.lines();
       expect(lines.some((line: string) => line.includes('繋ぎ直せた'))).toBe(false);
     });
 
@@ -1537,9 +1554,9 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 20));
 
-      return stderrSpy.mock.calls
-        .map((call: unknown[]) => String(call[0]))
-        .filter((line: string) => line.includes('ストリームが切れました'));
+      return (await stderr.lines()).filter((line: string) =>
+        line.includes('ストリームが切れました'),
+      );
     }
 
     it('cause を持つ例外で切れたとき、ログ行に cause と code が1行で出る', async () => {
@@ -1629,9 +1646,9 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await enough;
       await client.close();
 
-      const failureLines = stderrSpy.mock.calls
-        .map((call: unknown[]) => String(call[0]))
-        .filter((line: string) => line.includes('ストリームが切れました'));
+      const failureLines = (await stderr.lines()).filter((line: string) =>
+        line.includes('ストリームが切れました'),
+      );
 
       expect(failureLines).toHaveLength(7);
       expect(failureLines[5]).toContain('code=UND_ERR_SOCKET');
@@ -1688,7 +1705,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await enough;
       await client.close();
 
-      const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const stderrLines = await stderr.lines();
       const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
       const failureLines = stderrLines.filter((line: string) =>
         line.includes('ストリームが切れました'),
@@ -1732,7 +1749,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
 
       expect(waits.slice(0, 8)).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
 
-      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const lines = await stderr.lines();
       const quietLines = lines.filter((line: string) => line.includes('持続しないまま終わった'));
 
       expect(quietLines).toHaveLength(6);
@@ -1773,7 +1790,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
         1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000,
       ]);
 
-      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const lines = await stderr.lines();
       const failureLines = lines.filter((line: string) => line.includes('ストリームが切れました'));
       const quietLines = lines.filter((line: string) => line.includes('持続しないまま終わった'));
 
@@ -1817,7 +1834,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await enough;
       await client.close();
 
-      const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const stderrLines = await stderr.lines();
       const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
       const quietLines = stderrLines.filter((line: string) =>
         line.includes('持続しないまま終わった'),
@@ -1897,7 +1914,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await enough;
       await client.close();
 
-      const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const stderrLines = await stderr.lines();
       const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
       return {
         failureLines: stderrLines.filter((line: string) => line.includes('ストリームが切れました')),
@@ -1948,7 +1965,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await enough;
       await client.close();
 
-      const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const stderrLines = await stderr.lines();
       const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
       const failureLines = stderrLines.filter((line: string) =>
         line.includes('ストリームが切れました'),
@@ -2247,12 +2264,12 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
 });
 
 describe('解釈できずに捨てた出来事の跡', () => {
-  let stderrSpy: ReturnType<typeof vi.spyOn>;
+  let stderr: ReturnType<typeof startStderrCapture>;
   beforeEach(() => {
-    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    stderr = startStderrCapture();
   });
-  afterEach(() => {
-    stderrSpy.mockRestore();
+  afterEach(async () => {
+    await stderr.lines();
   });
 
   // 2回目以降の `/events` は返らないようにする: `#pump` は正常終了でも1秒後に張り直し、同じ跡が積み増して件数が読めなくなるため。
@@ -2412,12 +2429,12 @@ describe('解釈できずに捨てた出来事の跡', () => {
 });
 
 describe('/events が無音のまま固着したら切る（#323）', () => {
-  let stderrSpy: ReturnType<typeof vi.spyOn>;
+  let stderr: ReturnType<typeof startStderrCapture>;
   beforeEach(() => {
-    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    stderr = startStderrCapture();
   });
-  afterEach(() => {
-    stderrSpy.mockRestore();
+  afterEach(async () => {
+    await stderr.lines();
   });
 
   const SILENCE_MS = DEFAULT_SSE_HEARTBEAT_MS * 3;
@@ -2663,7 +2680,7 @@ describe('/events が無音のまま固着したら切る（#323）', () => {
     await enough;
     await client.close();
 
-    const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    const lines = await stderr.lines();
     const failures = lines.filter((line: string) => line.includes('ストリームが切れました'));
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain('無音');
@@ -2688,7 +2705,7 @@ describe('/events が無音のまま固着したら切る（#323）', () => {
     await settleUntil(() => eventsCalls() >= 2);
     await client.close();
 
-    const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    const lines = await stderr.lines();
     expect(lines.filter((line: string) => line.includes('無音'))).toHaveLength(1);
     expect(eventsCalls()).toBeGreaterThanOrEqual(2);
   });
@@ -2774,7 +2791,7 @@ describe('#pump は周回の途中で投げられても止まらない（#323）
   }
 
   it('stderr が書けなくても、挑み直しは続く', async () => {
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => {
+    setStderrSinkForTesting(() => {
       throw new Error('ERR_STREAM_DESTROYED');
     });
     try {
@@ -2802,13 +2819,12 @@ describe('#pump は周回の途中で投げられても止まらない（#323）
       expect(eventsCalls()).toBeGreaterThanOrEqual(3);
       expect(waits.slice(0, 3)).toEqual([1000, 2000, 4000]);
     } finally {
-      stderrSpy.mockRestore();
+      setStderrSinkForTesting(null);
     }
   });
 
   it('差し替えた待ちが投げても止まらず、待ちそのものは飛ばさない', async () => {
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    try {
+    await captureStderr(async () => {
       const { fetchFn, eventsCalls } = failingFetch();
       const asked: number[] = [];
       const sleepFn = async (ms: number): Promise<void> => {
@@ -2838,9 +2854,7 @@ describe('#pump は周回の途中で投げられても止まらない（#323）
       expect(asked.slice(0, 3)).toEqual([base, max, max]);
       // 下限にする: 器が遅い側へぶれても落ちない（速い側へはぶれようが無い）。
       expect(elapsedMs).toBeGreaterThanOrEqual(base + max - 15);
-    } finally {
-      stderrSpy.mockRestore();
-    }
+    });
   });
 });
 

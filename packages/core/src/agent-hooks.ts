@@ -34,6 +34,14 @@ export interface AgentUserPromptSubmitRecord {
   source?: string;
 }
 
+export interface AgentSessionStartRecord {
+  // 読めなければ欠ける。string のまま運ぶ: 値の集合は provider ごとに違いうるため
+  source?: string;
+}
+
+// null なら何も足さない。例外は provider が握る: 知らせのためにセッションを開けなくしないため
+export type AgentSessionStartHook = (record: AgentSessionStartRecord) => Promise<string | null>;
+
 export interface AgentStopRecord {
   // unknown のまま運ぶ: 中身の形は provider ごとに違いうるため
   backgroundTasks?: unknown[];

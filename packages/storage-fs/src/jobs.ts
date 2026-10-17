@@ -8,6 +8,7 @@ import {
   pendingApprovalSchema,
   UnreadableApprovalError,
   UnreadableJobError,
+  writeStderrLine,
 } from '@alteroid/core';
 import type {
   ApprovalList,
@@ -258,7 +259,7 @@ export class FsJobStore implements JobStore {
           return;
         }
         invalidJobsRaw.push(rawJob);
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedJobRow({
             index,
             reason: summarizeInvalidFields(result.error.issues),
@@ -275,7 +276,7 @@ export class FsJobStore implements JobStore {
           return;
         }
         invalidApprovalsRaw.push(rawApproval);
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedApprovalRow({
             index,
             reason: summarizeInvalidFields(result.error.issues),

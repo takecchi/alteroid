@@ -7,6 +7,8 @@
  * 実作業で埋まり、後者を落とすと道具を持っているのに使わなくなる。
  */
 
+import { bashShapePromptLines } from './bash-shape-guard.js';
+import { waitGuardPromptLines } from './bash-wait-guard.js';
 import { excerpt } from './excerpt.js';
 import type { RenderedMemory } from './memory.js';
 import { buildSelfKnowledge, type SelfFacts } from './self.js';
@@ -457,6 +459,7 @@ ${digest}`,
  *
  * preset を置き換えない: 人間が使っている Claude Code との差分がそのままデグレードになる。
  * 書くのは器の事実の告知だけで、何をしてよい・いけないの一覧も運用スタイル（検証の作法・コミットの粒度など）も書かない。
+ * 歯（Bash の形の歯・待ちの歯）を開けた器でだけ、その器で実際に断られる形を告知する（器の事実であって運用スタイルではない。一覧は歯の定義から生成し、手書きしない。#5017）。
  *
  * - 指示文書の所在: cwd は workspace の根でリポジトリは1階層下へ自分で clone するので、セッション開始時に
  *   どのプロジェクトの指示文書も載らない。後から載るのはハーネス側の挙動で、alteroid は制御していない。
@@ -483,6 +486,40 @@ export interface ManagerSystemPromptInput {
   peer?: { models?: readonly string[] };
   /** `alteroid-manager`（`output_record`）を出したセッションだけ立てる。省けばプロンプトは1文字も増えない。 */
   managerTools?: boolean;
+  /** どの歯が開いているか。偽か省略なら、その歯の節は1文字も増えない。 */
+  bashGuards?: BashGuardsInPrompt;
+}
+
+/** セッションを起こす時点の歯の状態。起こした後に設定が変わってもプロンプトは作り直さない（既知の限界）。 */
+export interface BashGuardsInPrompt {
+  /** 形の歯（`ALTEROID_BASH_SHAPE_GUARD`）が on */
+  shape: boolean;
+  /** 待ちの歯（`ALTEROID_BASH_GUARD`）が ask / deny */
+  wait: boolean;
+}
+
+/**
+ * 歯が断る Bash の形の告知。禁止の宣言の口調にしない: 器の事実（打つとその呼び出しだけが断られて理由が返る）と、通る書き方を渡す。
+ * どちらも偽なら空文字を返す。
+ */
+function bashGuardSections(guards: BashGuardsInPrompt | undefined): string {
+  if (guards === undefined) return '';
+  const sections: string[] = [];
+  if (guards.shape) {
+    sections.push(`# この器で断られる Bash の形
+
+この器では、次の形の Bash は1回ごとに断られる（打つと、その呼び出しだけが拒否されて理由が返る）。最初から右の書き方で打つこと。
+
+${bashShapePromptLines()}`);
+  }
+  if (guards.wait) {
+    sections.push(`# この器で断られる Bash の待ちの形
+
+この器では、次の待ちの形の Bash は、打つとその呼び出しだけが実行されず、確認か拒否の知らせが返る。最初から右の書き方で打つこと。
+
+${waitGuardPromptLines()}`);
+  }
+  return sections.length === 0 ? '' : `\n\n${sections.join('\n\n')}`;
 }
 
 const MANAGER_SCRATCH_ID_PREFIX_LENGTH = 'mgr-'.length + 8;
@@ -526,6 +563,7 @@ export function buildManagerSystemPrompt({
   workerName,
   peer,
   managerTools,
+  bashGuards,
 }: ManagerSystemPromptInput): string {
   const scratchDir = managerScratchDirOf(managerId);
   return `# このセッションについて
@@ -570,7 +608,7 @@ ${peer === undefined ? '' : peerSection(peer)}${managerTools === true ? MANAGER_
 
 # auto-memory について
 
-このセッションの auto-memory（SDK が自動で読み書きする記憶ディレクトリ）は既定で閉じてある。人間が明示的に開いた場合も、ここで書いた記憶はクローンにも次の器にも届かない。学びは報告に書くこと。`;
+このセッションの auto-memory（SDK が自動で読み書きする記憶ディレクトリ）は既定で閉じてある。人間が明示的に開いた場合も、ここで書いた記憶はクローンにも次の器にも届かない。学びは報告に書くこと。${bashGuardSections(bashGuards)}`;
 }
 
 /**
@@ -578,7 +616,7 @@ ${peer === undefined ? '' : peerSection(peer)}${managerTools === true ? MANAGER_
  * 「実装だけをする」という縛りも書かない（代行対象は調査・相談・確認・レビューも含む）。
  * 末尾の事実の理由は `buildManagerSystemPrompt` の doc にある。
  */
-export function buildWorkerPrompt(): string {
+export function buildWorkerPrompt(bashGuards?: BashGuardsInPrompt): string {
   return `あなたはマネージャーから実作業を切り出された担い手である。
 
 - 任される仕事は実装に限らない。調査・下読み・外部サービスの確認・レビュー・比較検討のたたき台づくりも同じように来る。
@@ -589,5 +627,5 @@ export function buildWorkerPrompt(): string {
 - **通知が来ないときに「この環境には通知が無い」と読まないこと。** 追える形で起こしたかを先に見ること。
 - **完了の通知が返っても、実処理の完了と一致しないことがある**（バックグラウンドの指定とシェルの \`&\` を併用した場合の観測）。
 - **プロセス一覧が0本でも、まだ見えていないだけのことがある。** それを根拠に同じ処理を自分で始めないこと。
-- **auto-memory（SDK が自動で読み書きする記憶ディレクトリ）は既定で閉じてある。** 開いていても、ここで書いた記憶はクローンにも次の器にも届かない。学びは報告に書くこと。`;
+- **auto-memory（SDK が自動で読み書きする記憶ディレクトリ）は既定で閉じてある。** 開いていても、ここで書いた記憶はクローンにも次の器にも届かない。学びは報告に書くこと。${bashGuardSections(bashGuards)}`;
 }

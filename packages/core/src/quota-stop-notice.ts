@@ -1,7 +1,12 @@
 import { excerptLine } from './excerpt.js';
 import type { JobStatus } from './schema.js';
 import { FAILED_REPORT_PARTIAL_MARKER } from './sdk-failure.js';
-import { noticeResetText, parseNoticeResetAt } from './usage-reset-text.js';
+import {
+  DATED_RESET_LOOKAHEAD_MS,
+  noticeResetText,
+  parseNoticeResetAt,
+  parseNoticeResetDatedAt,
+} from './usage-reset-text.js';
 
 /**
  * 枠（利用上限）だけが理由の知らせにつける印。**積む時点で呼び手が、構造化された値か既存の分類から付ける**
@@ -75,7 +80,8 @@ export function quotaMarkOf(
     source.resetsAt ??
     (source.text === undefined
       ? undefined
-      : parseNoticeResetAt(source.text, { at: now, withinMs: RESET_LOOKAHEAD_MS }));
+      : (parseNoticeResetAt(source.text, { at: now, withinMs: RESET_LOOKAHEAD_MS }) ??
+        parseNoticeResetDatedAt(source.text, { at: now, withinMs: DATED_RESET_LOOKAHEAD_MS })));
   return {
     ...(resetText === undefined ? {} : { resetText }),
     ...(resetsAt === undefined ? {} : { resetsAt }),

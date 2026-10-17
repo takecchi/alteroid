@@ -37,6 +37,7 @@ import {
   type AttachmentStore,
   type AttachmentStoreOptions,
   type AttachmentUsage,
+  writeStderrLine,
 } from '@alteroid/core';
 import {
   and,
@@ -159,9 +160,7 @@ export interface PgAttachmentStoreOptions extends AttachmentStoreOptions {
 
 /** blob の削除・取り消しに落ちたことを1行だけ出す（件数と理由。key と値は載せない）。 */
 function noteBlobTrouble(what: string, count: number, error: unknown): void {
-  process.stderr.write(
-    `alteroidd: 添付の中身の${what}に失敗した（${count} 件）: ${reasonOf(error)}\n`,
-  );
+  writeStderrLine(`alteroidd: 添付の中身の${what}に失敗した（${count} 件）: ${reasonOf(error)}\n`);
 }
 
 export class PgAttachmentStore implements AttachmentStore {
@@ -181,7 +180,7 @@ export class PgAttachmentStore implements AttachmentStore {
     if (keys.length === 0) return;
     const blobs = this.#options.blobs;
     if (blobs === undefined) {
-      process.stderr.write(
+      writeStderrLine(
         `alteroidd: 添付の中身の置き場が設定されていないので、blob ${keys.length} 件は消せずに残る\n`,
       );
       return;
@@ -355,7 +354,7 @@ export class PgAttachmentStore implements AttachmentStore {
   async #openBlob(blobKey: string): Promise<Readable | undefined> {
     const blobs = this.#options.blobs;
     if (blobs === undefined) {
-      process.stderr.write(
+      writeStderrLine(
         'alteroidd: 添付の中身の置き場が設定されていないので、外部ストレージに置いた添付を読めない\n',
       );
       return undefined;
@@ -435,7 +434,7 @@ export class PgAttachmentStore implements AttachmentStore {
           .where(and(inArray(attachments.id, rest), notExpired))
           .catch(async (error: unknown) => {
             await this.unbind([...newlyBound], target).catch((rollbackError: unknown) => {
-              process.stderr.write(
+              writeStderrLine(
                 `alteroidd: 添付の結び付けを戻せなかった（${attachmentBindTargetLabel(target)}へ結んだ ${newlyBound.size} 件が残る）: ${reasonOf(rollbackError)}\n`,
               );
             });
@@ -550,7 +549,7 @@ export class PgAttachmentStore implements AttachmentStore {
       return count;
     });
     if (kept > 0) {
-      process.stderr.write(
+      writeStderrLine(
         `alteroidd: 添付の中身を置き場から消せなかったので、期限切れの ${kept} 件は行を残した（次の掃除で再試行する）: ${reason ?? '不明'}\n`,
       );
     }

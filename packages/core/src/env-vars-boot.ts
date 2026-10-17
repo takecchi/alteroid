@@ -4,7 +4,7 @@ import {
   POOL_OWNED_CREDENTIAL_NAMES,
   ROTATABLE_CREDENTIAL_KEYS,
 } from './credentials.js';
-import { reasonOf } from './dropped-record.js';
+import { reasonOf, writeStderrLine } from './dropped-record.js';
 import { APP_ENV_VAR_DEFAULTS } from './app-env-var-defaults.js';
 import type { Stores } from './store.js';
 
@@ -18,7 +18,7 @@ export async function seedDefaultEnvVars(
   try {
     existing = new Set((await stores.credentials.list()).map((row) => row.name));
   } catch (error) {
-    process.stderr.write(
+    writeStderrLine(
       `alteroidd: 環境変数の播種のための読み出しに失敗しました: ${reasonOf(error)}\n`,
     );
     return;
@@ -40,7 +40,7 @@ export async function seedDefaultEnvVars(
   try {
     await stores.credentials.put(toSeed);
   } catch (error) {
-    process.stderr.write(`alteroidd: 環境変数の既定値の播種に失敗しました: ${reasonOf(error)}\n`);
+    writeStderrLine(`alteroidd: 環境変数の既定値の播種に失敗しました: ${reasonOf(error)}\n`);
   }
 }
 
@@ -54,7 +54,7 @@ export async function applyAppScopedEnvVars(
   try {
     rows = await stores.credentials.list();
   } catch (error) {
-    process.stderr.write(
+    writeStderrLine(
       `alteroidd: 環境変数の読み出しに失敗しました（既存の process.env のまま動きます）: ${reasonOf(error)}\n`,
     );
     return;
@@ -64,7 +64,7 @@ export async function applyAppScopedEnvVars(
     .filter((row) => ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(row.name))
     .map((row) => row.name);
   if (ignored.length > 0) {
-    process.stderr.write(
+    writeStderrLine(
       `alteroidd: 環境変数の袋に、正本が器の生の環境変数である名前の行が残っています。` +
         `**この行は誰にも配られていません**（効いているのは器の生の環境変数の値です）。` +
         `消すには alteroid credential remove <名前>、または Web UI の環境変数の画面から: ` +
@@ -100,14 +100,14 @@ export async function migrateEnvBaseCredentialsOnce(
   try {
     written = await stores.credentials.seedOnce(ENV_BASE_MIGRATION_MARKER, candidates);
   } catch (error) {
-    process.stderr.write(
+    writeStderrLine(
       `alteroidd: 器の環境変数の鍵を正本へ移せませんでした（このまま起動します。` +
         `正本に無い名前は配られません）: ${reasonOf(error)}\n`,
     );
     return [];
   }
   if (written.length === 0) return [];
-  process.stderr.write(
+  writeStderrLine(
     `alteroidd: 器の環境変数にだけ在った鍵を、正本（環境変数の袋）へ1度だけ移しました` +
       `（scope: all・secret）。以後は正本が唯一の出所で、画面・CLI で消せば消えます。名前: ${written.join(', ')}\n`,
   );
@@ -121,7 +121,7 @@ export async function migrateEnvBaseCredentialsOnce(
         '値は書かない。',
     });
   } catch (error) {
-    process.stderr.write(`alteroidd: 鍵の移行の日誌を書けませんでした: ${reasonOf(error)}\n`);
+    writeStderrLine(`alteroidd: 鍵の移行の日誌を書けませんでした: ${reasonOf(error)}\n`);
   }
   return written;
 }

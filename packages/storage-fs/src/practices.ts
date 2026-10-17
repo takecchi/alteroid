@@ -10,6 +10,7 @@ import {
   practiceVersionSchema,
   UnreadablePracticeError,
   compareCodeUnits,
+  writeStderrLine,
 } from '@alteroid/core';
 import type {
   Practice,
@@ -333,7 +334,7 @@ export class FsPracticeStore implements PracticeStore {
           return;
         }
         invalidPracticesRaw.push(rawEntry);
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedPracticeRow({
             index,
             reason: summarizeInvalidFields(result.error.issues),
@@ -350,7 +351,7 @@ export class FsPracticeStore implements PracticeStore {
           return;
         }
         invalidPracticeVersionsRaw.push(rawVersion);
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedPracticeVersionRow({
             index,
             reason: summarizeInvalidFields(result.error.issues),

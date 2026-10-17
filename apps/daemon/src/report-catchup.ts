@@ -3,6 +3,7 @@ import {
   EXCHANGE_KIND_FAILURE_PREFIX,
   missingDailyReportDates,
   reasonOf,
+  writeStderrLine,
 } from '@alteroid/core';
 import type { InboxEvent, JournalEntry, JournalStore, TimeOfDay } from '@alteroid/core';
 
@@ -24,7 +25,7 @@ export interface DailyReportCatchup {
 export function startDailyReportCatchup(options: DailyReportCatchupOptions): DailyReportCatchup {
   const now = options.now ?? ((): Date => new Date());
   const stdout = options.stdout ?? ((line: string) => void process.stdout.write(line));
-  const stderr = options.stderr ?? ((line: string) => void process.stderr.write(line));
+  const stderr = options.stderr ?? ((line: string) => void writeStderrLine(line));
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 

@@ -405,14 +405,17 @@ describe('マネージャー（runner）へ渡す Options', () => {
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const { options } = started[0] as Started;
 
+    // env が空の既定: 待ちの歯は ask（載る）・形の歯は off（載らない）（#5017）
+    const bashGuards = { shape: false, wait: true };
     const expectedManagerAppend = buildManagerSystemPrompt({
       managerId: 'mgr-1',
       workerName: WORKER_AGENT_NAME,
+      bashGuards,
     });
     expect((options.systemPrompt as { append?: unknown }).append).toBe(expectedManagerAppend);
 
     const worker = (options.agents ?? {})[WORKER_AGENT_NAME] as { prompt?: unknown };
-    expect(worker.prompt).toBe(buildWorkerPrompt());
+    expect(worker.prompt).toBe(buildWorkerPrompt(bashGuards));
   });
 
   it('ALTEROID_MANAGER_MODEL / ALTEROID_WORKER_MODEL を置くと差し替わる', async () => {

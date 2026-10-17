@@ -13,6 +13,7 @@ import type { AgentChildProcess } from './agent-session.js';
 import { CODEX_PEER_CLOSED_REASON } from './agent-provider-peers.js';
 import { createCredentialStore } from './credentials.js';
 import { PEER_MCP_SERVER_NAME } from './peer-broker.js';
+import { REPORT_LANGUAGE_PROMPT_PARAGRAPH } from './report-language.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import type { PeerSocketHost } from './peer-socket-host.js';
 import {
@@ -916,6 +917,26 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await s.approve('allow');
     await s.client.close();
     await s.host.shutdown();
+  });
+
+  it('ALTEROID_REPORT_LANGUAGE=ja なら peer（Codex）の developerInstructions の末尾にも言語の段落が入り、既定では入らない（#4977）', async () => {
+    const own = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
+    const ja = await setupPeerCall([], { childUser: own, env: { ALTEROID_REPORT_LANGUAGE: 'ja' } });
+    expect(
+      String(ja.starts[0]?.['developerInstructions']).endsWith(
+        `\n\n${REPORT_LANGUAGE_PROMPT_PARAGRAPH}`,
+      ),
+    ).toBe(true);
+    await ja.approve('allow');
+    await ja.client.close();
+    await ja.host.shutdown();
+    const byDefault = await setupPeerCall([], { childUser: own });
+    expect(String(byDefault.starts[0]?.['developerInstructions'])).not.toContain(
+      REPORT_LANGUAGE_PROMPT_PARAGRAPH,
+    );
+    await byDefault.approve('allow');
+    await byDefault.client.close();
+    await byDefault.host.shutdown();
   });
 
   it('作業場を子の uid へ渡せなければ、マネージャーの cwd のままにして note を残す（#4143）', async () => {

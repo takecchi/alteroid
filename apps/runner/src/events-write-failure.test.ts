@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/core';
+import { captureStderr, createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/core';
 import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -101,6 +101,53 @@ describe('runner の /events: writeSSE が投げても出来事を失わない�
       await firstReader.cancel();
     } finally {
       spy.mockRestore();
+      await host.shutdown();
+    }
+  });
+
+  // hono に抜くと `console.error` でスタックごと出て、跡の書き先（試験の準備）も通らないため、ほかの /events の跡と同じ1行で書く（#5011）
+  it('⭐ 書き込みが投げたら、console.error ではなく跡の1行（理由つき）を書く', async () => {
+    const host = newHost();
+    const outbox = new Outbox();
+    outbox.push({ type: 'session', managerId: 'mgr-write-fail-2', sessionId: 'sess-2' });
+
+    let thrown = false;
+    // 元の関数は spyOn の前に取る: 後で取ると差し替えた自分自身を呼び続けるため
+    const realWriteSSE = SSEStreamingApi.prototype.writeSSE;
+    const writeSpy = vi.spyOn(SSEStreamingApi.prototype, 'writeSSE');
+    writeSpy.mockImplementation(async function (this: SSEStreamingApi, message: SSEMessage) {
+      if (message.event !== 'hello' && !thrown) {
+        thrown = true;
+        throw new Error('boom: 相手が読まなくなった接続への書き込みが失敗した（模擬）');
+      }
+      return realWriteSSE.call(this, message);
+    });
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const app = createRunnerApp({
+        host,
+        outbox,
+        tokenSha256: TOKEN_SHA256,
+        sseHeartbeatMs: 60_000,
+      });
+      const lines = await captureStderr(async () => {
+        const res = await app.request('/events', { headers: bearer() });
+        const reader = res.body?.getReader();
+        await expect.poll(() => thrown, { timeout: 1000 }).toBe(true);
+        await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(1);
+        await reader?.cancel();
+      });
+
+      expect(consoleSpy).not.toHaveBeenCalled();
+      const text = lines.join('');
+      expect(text).toContain(
+        'alteroid-runner: /events への書き込みが失敗したため接続を畳みます（1 件を箱へ戻します）',
+      );
+      expect(text).toContain('boom: 相手が読まなくなった接続への書き込みが失敗した（模擬）');
+    } finally {
+      writeSpy.mockRestore();
+      consoleSpy.mockRestore();
       await host.shutdown();
     }
   });

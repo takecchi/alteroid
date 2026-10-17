@@ -771,6 +771,17 @@ jobs:
             cd /tmp && git clone --depth 1 -q https://github.com/cli/cli.git probe
           '
 
+      # **#5009。担当は作業場の外（package.json の無い所）から `pnpm -C <絶対パス>` と打つ。** そのとき、
+      # そのリポジトリの packageManager の版で動くか（`docker/pnpm` の包みが、corepack をそのディレクトリで起こす）。
+      # 包みが無いと corepack は既定の最新を選び、版が食い違って ERR_PNPM_BAD_PM_VERSION で止まる。
+      # HOME は書ける所へ向ける: corepack は版を利用者の家の下へ取ってくるため
+      - name: pnpm -C が、そのリポジトリの packageManager の版で動くか（uid 1001・作業場の外から）
+        run: |
+          want=$(jq -r '.packageManager | split("+")[0] | split("@")[1]' package.json)
+          got=$(docker run --rm -u 1001 -w / -e HOME=/tmp alteroid:ci pnpm -C /app --version)
+          echo "期待: $want / 実際: $got"
+          test "$got" = "$want" || { echo "pnpm -C /app の版が packageManager と違う" >&2; exit 1; }
+
       # **Issue #486 S5。Codex CLI が uid 1001 で動き、版が Dockerfile の
       # `ARG CODEX_VERSION`（版を持つ唯一の場所）と一致するか。** 「入れた」と
       # 「マネージャーの主体から動く」は別の主張なので、`-u 1001` で見る。

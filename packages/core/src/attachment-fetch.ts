@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
-import { reasonOf } from './dropped-record.js';
+import { reasonOf, writeStderrLine } from './dropped-record.js';
 import { attachmentDiskName, normalizeAttachmentName, type AttachmentStore } from './attachment.js';
 
 // cwd の外へ置かない: SDK の additionalDirectories / allowedTools を足すと、取り出し先だけでも許可の範囲が広がるため
@@ -201,9 +201,7 @@ export async function pruneAttachmentCopies(
     } catch (error) {
       // 1件の失敗で周回を止めない: 元の名前へ戻して次の周でまた掃く
       await rename(trash, dir).catch(() => undefined);
-      process.stderr.write(
-        `alteroidd: 添付の写しを消せませんでした (${entry}): ${reasonOf(error)}\n`,
-      );
+      writeStderrLine(`alteroidd: 添付の写しを消せませんでした (${entry}): ${reasonOf(error)}\n`);
     }
   }
   return removed;

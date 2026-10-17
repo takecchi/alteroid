@@ -16,7 +16,7 @@
 # 上げるときは npm の `latest` dist-tag の安定版（alpha でないもの）を採る:
 #   npm view @openai/codex dist-tags.latest
 # 0.160.1 は 0.160.0 の patch（2026-10-05 公開）。Renovate の catalog の更新に合わせた。
-ARG CODEX_VERSION=0.160.1
+ARG CODEX_VERSION=0.162.1
 
 # base は digest で固定する（Issue #3321）。タグだけだと Docker Hub 側の入れ替わりで
 # image ジョブのキャッシュが外れる時刻を上流に任せることになる。digest は Renovate の PR で
@@ -280,7 +280,12 @@ RUN install -d -m 0711 /run/alteroid/manager
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 ENV CI=true
-RUN corepack enable
+# `pnpm` の入口は corepack の shim ではなく、`-C` / `--dir` の絶対パスへ移ってから corepack を起こす包みにする（#5009）:
+# corepack は pnpm の版を作業ディレクトリの packageManager で決めるので、担当が作業場の外から `pnpm -C <パス>` と打つと
+# 既定の最新が選ばれ、リポジトリの指定と食い違って止まるため。shim はシンボリックリンクなので、先に消してから置く（上書きするとリンク先の corepack 本体を書き換える）
+RUN corepack enable && rm -f /usr/local/bin/pnpm
+COPY docker/pnpm /usr/local/bin/pnpm
+RUN chmod 0755 /usr/local/bin/pnpm
 
 WORKDIR /app
 

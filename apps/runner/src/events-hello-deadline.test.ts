@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/core';
+import { captureStderr, createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/core';
 import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -84,28 +84,29 @@ describe('runner の /events: 最初の hello 書き込みも締め切りで塞�
     const outbox = new Outbox();
 
     const { spy, calls } = hangOnHello();
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      const app = createRunnerApp({
-        host,
-        outbox,
-        tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
-        sseWriteDeadlineMs: 20,
+      const lines = await captureStderr(async () => {
+        const app = createRunnerApp({
+          host,
+          outbox,
+          tokenSha256: TOKEN_SHA256,
+          sseHeartbeatMs: 60_000,
+          sseWriteDeadlineMs: 20,
+        });
+
+        const response = await app.request('/events', { headers: bearer() });
+        const body = response.body;
+        if (body === null) throw new Error('SSE の応答に本文が無い');
+        const reader = body.getReader();
+
+        await expect.poll(() => calls.length, { timeout: 1000 }).toBe(1);
+        expect(calls[0]).toBe('hello');
+
+        const outcome = await readUntilClosed(reader, 2000);
+        expect(outcome).toBe('closed');
       });
 
-      const response = await app.request('/events', { headers: bearer() });
-      const body = response.body;
-      if (body === null) throw new Error('SSE の応答に本文が無い');
-      const reader = body.getReader();
-
-      await expect.poll(() => calls.length, { timeout: 1000 }).toBe(1);
-      expect(calls[0]).toBe('hello');
-
-      const outcome = await readUntilClosed(reader, 2000);
-      expect(outcome).toBe('closed');
-
-      const logged = stderrSpy.mock.calls.map((args) => String(args[0])).join('');
+      const logged = lines.join('');
       expect(logged).toContain('alteroid-runner:');
       expect(logged).toContain('hello');
       expect(logged).toContain('20ms');
@@ -115,7 +116,6 @@ describe('runner の /events: 最初の hello 書き込みも締め切りで塞�
       await host.shutdown();
     } finally {
       spy.mockRestore();
-      stderrSpy.mockRestore();
     }
   });
 
@@ -130,33 +130,33 @@ describe('runner の /events: 最初の hello 書き込みも締め切りで塞�
     expect(outbox.pending).toBe(2);
 
     const { spy } = hangOnHello();
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      const app = createRunnerApp({
-        host,
-        outbox,
-        tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
-        sseWriteDeadlineMs: 20,
+      const lines = await captureStderr(async () => {
+        const app = createRunnerApp({
+          host,
+          outbox,
+          tokenSha256: TOKEN_SHA256,
+          sseHeartbeatMs: 60_000,
+          sseWriteDeadlineMs: 20,
+        });
+
+        const response = await app.request('/events', { headers: bearer() });
+        const body = response.body;
+        if (body === null) throw new Error('SSE の応答に本文が無い');
+        const reader = body.getReader();
+
+        const outcome = await readUntilClosed(reader, 2000);
+        expect(outcome).toBe('closed');
       });
-
-      const response = await app.request('/events', { headers: bearer() });
-      const body = response.body;
-      if (body === null) throw new Error('SSE の応答に本文が無い');
-      const reader = body.getReader();
-
-      const outcome = await readUntilClosed(reader, 2000);
-      expect(outcome).toBe('closed');
 
       expect(outbox.pending).toBe(2);
 
-      const logged = stderrSpy.mock.calls.map((args) => String(args[0])).join('');
+      const logged = lines.join('');
       expect(logged).toContain('（この接続が抱えていた 2 件を箱へ戻します）');
 
       await host.shutdown();
     } finally {
       spy.mockRestore();
-      stderrSpy.mockRestore();
     }
   });
 
