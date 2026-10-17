@@ -30,7 +30,6 @@ async function setup() {
       managerId: MANAGER,
       scratchParent,
       scratchName: SCRATCH_NAME,
-      cwd,
       expectedUid: process.getuid?.(),
       limits: LIMITS,
       // 大きいファイルは受けない前提（env の既定 2 GiB に依らない）
@@ -48,29 +47,50 @@ const refusal = (results: Awaited<ReturnType<typeof attachToManagerOutbox>>, ind
 };
 
 describe('attachToManagerOutbox: 写せるもの', () => {
-  it('作業場・作業場の別名（-*）・cwd の下のファイルを出し箱の直下へ写し、1件ずつ名前と大きさを返す', async () => {
-    const { scratchParent, scratch, cwd, dir, attach } = await setup();
+  it('作業場・作業場の別名（-*）の下のファイルを出し箱の直下へ写し、1件ずつ名前と大きさを返す', async () => {
+    const { scratchParent, scratch, dir, attach } = await setup();
     await mkdir(join(scratch, 'sub'));
     await mkdir(join(scratchParent, `${SCRATCH_NAME}-wt1`));
     await writeFile(join(scratch, 'sub', 'a.txt'), 'aaaa');
     await writeFile(join(scratchParent, `${SCRATCH_NAME}-wt1`, 'b.md'), 'bb');
-    await writeFile(join(cwd, 'c.csv'), 'c');
 
     const results = await attach([
       join(scratch, 'sub', 'a.txt'),
       join(scratchParent, `${SCRATCH_NAME}-wt1`, 'b.md'),
-      join(cwd, 'c.csv'),
     ]);
 
     expect(results).toEqual([
       { path: join(scratch, 'sub', 'a.txt'), ok: true, name: 'a.txt', size: 4 },
       { path: join(scratchParent, `${SCRATCH_NAME}-wt1`, 'b.md'), ok: true, name: 'b.md', size: 2 },
-      { path: join(cwd, 'c.csv'), ok: true, name: 'c.csv', size: 1 },
     ]);
-    expect((await readdir(dir)).sort()).toEqual(['a.txt', 'b.md', 'c.csv']);
+    expect((await readdir(dir)).sort()).toEqual(['a.txt', 'b.md']);
     expect(await readFile(join(dir, 'a.txt'), 'utf8')).toBe('aaaa');
     // 元のファイルは残る（写すだけ）
     expect(await readFile(join(scratch, 'sub', 'a.txt'), 'utf8')).toBe('aaaa');
+  });
+
+  it('⭐ 他の担当のファイルは写せない: 共有の cwd の下と、他の担当の作業場（別の先頭8桁）の下は、持ち主が同じでも断る', async () => {
+    const { scratchParent, cwd, dir, attach } = await setup();
+    // 共有の cwd（他の担当のチェックアウトが在りうる）
+    await writeFile(join(cwd, 'others.csv'), 'c');
+    // 他の担当の作業場
+    const otherScratch = join(scratchParent, 'mgr-ffffffff');
+    await mkdir(otherScratch);
+    await writeFile(join(otherScratch, 'secret.txt'), 's');
+    await mkdir(join(scratchParent, 'mgr-ffffffff-wt1'));
+    await writeFile(join(scratchParent, 'mgr-ffffffff-wt1', 'b.txt'), 'b');
+
+    const results = await attach([
+      join(cwd, 'others.csv'),
+      join(otherScratch, 'secret.txt'),
+      join(scratchParent, 'mgr-ffffffff-wt1', 'b.txt'),
+    ]);
+
+    expect(results.every((result) => !result.ok)).toBe(true);
+    expect(refusal(results, 0)).toContain('作業場の外は写せない');
+    expect(refusal(results, 1)).toContain('作業場の外は写せない');
+    expect(refusal(results, 2)).toContain('作業場の外は写せない');
+    expect(await readdir(dir)).toEqual([]);
   });
 
   it('写した結果は、今の報告の取り込みでそのまま報告に添えられる', async () => {

@@ -3529,7 +3529,6 @@ class RunnerSession {
       managerId: this.#id,
       scratchParent: this.#managerScratchRoot,
       scratchName: basename(scratchDir),
-      cwd: this.#cwd,
       // 子を降ろす構成なら子の uid、降ろさない構成なら runner 自身の uid（`#collectOutbox` と同じ）
       expectedUid: childUser?.uid ?? process.getuid?.(),
       ...(childUser === undefined ? {} : { chownTo: { uid: childUser.uid, gid: childUser.gid } }),

@@ -183,7 +183,7 @@ export function createManagerToolsMcpServer(deps: {
             tool(
               REPORT_ATTACH_TOOL_NAME,
               '成果物のファイルを、ターンの終わりの報告に添える。名指ししたファイルを runner が開いて出し箱へ写す（`cp` で写さない）。' +
-                '写せるのは自分の作業場（/tmp/mgr-<識別子の先頭8桁> と /tmp/mgr-<識別子の先頭8桁>-*）と cwd の下の、通常のファイルだけ。' +
+                '写せるのは自分の作業場（/tmp/mgr-<識別子の先頭8桁> と /tmp/mgr-<識別子の先頭8桁>-*）の下の、通常のファイルだけ（cwd の下は写せない）。' +
                 '1件ずつ、写した名前と大きさ、または断った理由を返す。',
               {
                 paths: z

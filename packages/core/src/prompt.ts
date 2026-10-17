@@ -565,7 +565,7 @@ const OUTBOX_SECTION_BODY =
 
 /** 名前は `manager-tools.ts` の `REPORT_ATTACH_TOOL_NAME` と同じ（ここから import しない理由は上の `MANAGER_TOOLS_SECTION` と同じ。一致は試験が見る）。 */
 const REPORT_ATTACH_SECTION_BODY =
-  '成果物のファイルを報告に添えたければ、MCP `alteroid-manager` の `report_attach` で絶対パスを名指しすること（道具の一覧に名前しか無ければ ToolSearch で `report_attach` を引く）。runner がそのファイルを開いて出し箱へ写すので、`cp` で出し箱へ写さないこと（この器の分類器に持ち出しとして止められうる）。写せるのは作業場（`/tmp/mgr-<識別子の先頭8桁>` と `/tmp/mgr-<識別子の先頭8桁>-*`）と `cwd` の下の通常のファイルだけで、`..` や symlink を含むパス・ハードリンク・空のファイルは断られる。1件ずつ、写した名前と大きさか断った理由が返る。ターンの終わりの報告で届き、出し箱からは消える。1回の報告で送れる個数と合計には上限があり、超えた分は断られる。';
+  '成果物のファイルを報告に添えたければ、MCP `alteroid-manager` の `report_attach` で絶対パスを名指しすること（道具の一覧に名前しか無ければ ToolSearch で `report_attach` を引く）。runner がそのファイルを開いて出し箱へ写すので、`cp` で出し箱へ写さないこと（この器の分類器に持ち出しとして止められうる）。写せるのは作業場（`/tmp/mgr-<識別子の先頭8桁>` と `/tmp/mgr-<識別子の先頭8桁>-*`）の下の通常のファイルだけで（`cwd` の下は写せない）、`..` や symlink を含むパス・ハードリンク・空のファイルは断られる。1件ずつ、写した名前と大きさか断った理由が返る。ターンの終わりの報告で届き、出し箱からは消える。1回の報告で送れる個数と合計には上限があり、超えた分は断られる。';
 
 export function buildManagerSystemPrompt({
   managerId,

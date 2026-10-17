@@ -37,8 +37,6 @@ export interface AttachToOutboxOptions {
   readonly scratchParent: string;
   /** `managerScratchDirOf` の末尾（`mgr-<先頭8桁>`） */
   readonly scratchName: string;
-  /** 担当の cwd。この下も読む。 */
-  readonly cwd: string;
   /** `undefined` は uid を持たない環境で、所有者を見ない。 */
   readonly expectedUid: number | undefined;
   /** 写したファイルの持ち主を担い手の子へ渡す（取り込みが所有者を見るため）。子を降ろさない構成では省く。 */
@@ -92,12 +90,7 @@ async function matchWorkRoot(
       return { lexical: join(parent, segment), real: join(realParent, segment) };
     }
   }
-  const cwd = resolve(options.cwd);
-  // cwd が `/` のときは、全部が作業場になるので使わない
-  if (cwd !== '/' && path.startsWith(`${cwd}/`)) {
-    const real = await realpath(cwd).catch(() => undefined);
-    if (real !== undefined) return { lexical: cwd, real };
-  }
+  // 担当の cwd の下は読まない: cwd は他の担当と共有で（誰かのチェックアウトのこともある）、担い手の uid が同じなら他の担当のファイルまで報告に添えられるため。作業は `/tmp/mgr-<先頭8桁>` の下でする（システムプロンプトの案内と同じ線）
   return undefined;
 }
 
@@ -203,7 +196,7 @@ async function attachOne(
   const root = await matchWorkRoot(path, options);
   if (root === undefined) {
     return refuse(
-      `作業場の外は写せない（写せるのは ${join(options.scratchParent, options.scratchName)} と ${join(options.scratchParent, options.scratchName)}-* の下、と cwd の下だけ）。成果物を作業場の下へ置いてから名指しする`,
+      `作業場の外は写せない（写せるのは ${join(options.scratchParent, options.scratchName)} と ${join(options.scratchParent, options.scratchName)}-* の下だけ）。成果物を作業場の下へ置いてから名指しする`,
     );
   }
   let handle: FileHandle;
