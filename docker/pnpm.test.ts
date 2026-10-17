@@ -26,6 +26,9 @@ function setup(label: string): {
       'printf "ARGS:%s\\n" "$*"',
       'printf "TOKIO:%s\\n" "${TOKIO_WORKER_THREADS-unset}"',
       'printf "RAYON:%s\\n" "${RAYON_NUM_THREADS-unset}"',
+      'printf "ROLLDOWN:%s\\n" "${ROLLDOWN_WORKER_THREADS-unset}"',
+      'printf "ROLLDOWN_BLOCKING:%s\\n" "${ROLLDOWN_MAX_BLOCKING_THREADS-unset}"',
+      'printf "VITEST:%s\\n" "${VITEST_MAX_WORKERS-unset}"',
       'exit 0',
       '',
     ].join('\n'),
@@ -81,5 +84,34 @@ describe('pnpm の入口: pnpm-native のスレッドを絞る（#5036）', () =
     const out = run(['--version'], { TOKIO_WORKER_THREADS: '8', RAYON_NUM_THREADS: '6' });
     expect(out).toContain('TOKIO:8\n');
     expect(out).toContain('RAYON:6\n');
+  });
+});
+
+describe('pnpm の入口: rolldown のスレッドと vitest の worker を絞る（#5039）', () => {
+  it('⭐ 未設定なら rolldown の2つを 2、VITEST_MAX_WORKERS を 4 にする', () => {
+    const { run } = setup('rolldown');
+    const out = run(['exec', 'vitest', 'run']);
+    expect(out).toContain('ROLLDOWN:2\n');
+    expect(out).toContain('ROLLDOWN_BLOCKING:2\n');
+    expect(out).toContain('VITEST:4\n');
+  });
+
+  it('担当が値を置いていれば、それに従う', () => {
+    const { run } = setup('rolldown-own');
+    const out = run(['test'], {
+      ROLLDOWN_WORKER_THREADS: '8',
+      ROLLDOWN_MAX_BLOCKING_THREADS: '6',
+      VITEST_MAX_WORKERS: '1',
+    });
+    expect(out).toContain('ROLLDOWN:8\n');
+    expect(out).toContain('ROLLDOWN_BLOCKING:6\n');
+    expect(out).toContain('VITEST:1\n');
+  });
+
+  it('⭐ 引数に --maxWorkers があれば VITEST_MAX_WORKERS を置かない（env は CLI を上書きするため）', () => {
+    const { run } = setup('maxworkers');
+    expect(run(['exec', 'vitest', 'run', '--maxWorkers=1'])).toContain('VITEST:unset\n');
+    expect(run(['exec', 'vitest', 'run', '--maxWorkers', '1'])).toContain('VITEST:unset\n');
+    expect(run(['test', '--', '--max-workers=2'])).toContain('VITEST:unset\n');
   });
 });

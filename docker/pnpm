@@ -6,6 +6,7 @@
 set -eu
 dir=''
 prev=''
+max_workers_arg=''
 for arg in "$@"; do
   case "$prev" in
     -C | --dir) dir=$arg ;;
@@ -13,6 +14,7 @@ for arg in "$@"; do
   case "$arg" in
     --dir=*) dir=${arg#--dir=} ;;
     -C/*) dir=${arg#-C} ;;
+    --maxWorkers* | --max-workers*) max_workers_arg=1 ;;
   esac
   prev=$arg
 done
@@ -25,4 +27,15 @@ esac
 TOKIO_WORKER_THREADS=${TOKIO_WORKER_THREADS:-2}
 RAYON_NUM_THREADS=${RAYON_NUM_THREADS:-2}
 export TOKIO_WORKER_THREADS RAYON_NUM_THREADS
+# vite 8 の rolldown も CPU 数に合わせて rolldown-worker を 48 本立て、vite preview・vitest の本体に常駐させる（#5039）。
+# rayon の池と別に自前の tokio を持つので、上の2つと合わせて絞る（実測: 59 → 12。build は遅くならなかった）
+ROLLDOWN_WORKER_THREADS=${ROLLDOWN_WORKER_THREADS:-2}
+ROLLDOWN_MAX_BLOCKING_THREADS=${ROLLDOWN_MAX_BLOCKING_THREADS:-2}
+export ROLLDOWN_WORKER_THREADS ROLLDOWN_MAX_BLOCKING_THREADS
+# vitest の worker の既定は availableParallelism - 1（この器では 31。1本 7 スレッド）なので、alteroid の vitest.config.ts と同じ 4 にする。
+# VITEST_MAX_WORKERS は設定ファイルと CLI の --maxWorkers を上書きするので、引数に --maxWorkers があるときは置かない（担当の指定を消さない）
+if [ -z "$max_workers_arg" ]; then
+  VITEST_MAX_WORKERS=${VITEST_MAX_WORKERS:-4}
+  export VITEST_MAX_WORKERS
+fi
 exec corepack pnpm "$@"
