@@ -821,6 +821,15 @@ export function createRunnerApp(deps: RunnerAppDeps) {
             // 投げたときは `writing` を残したまま抜ける: `finally` が箱へ戻さないと、書けなかった1件だけが静かに失われるため。
             writing = null;
           }
+        } catch (error) {
+          // 書き込みが投げた（相手が読まなくなった接続など）ときはここで受け止め、ほかの /events の跡と同じ1行で書く（#5011）:
+          // 外へ抜くと hono の `streamSSE` が `console.error` でスタックごと標準エラーへ出し、跡の書き先（試験の準備）も通らないため。
+          // hono の `onError` は使わない: 渡すと相手へ取り決めに無い `event: error` を、壊れた接続へもう一度書こうとするため。
+          // 箱へ戻すのは下の `finally` が今どおり担い、接続を閉じるのは hono の `run` が今どおりする
+          const pending = (writing === null ? 0 : 1) + queue.length;
+          writeStderrLine(
+            `alteroid-runner: /events への書き込みが失敗したため接続を畳みます（${String(pending)} 件を箱へ戻します）: ${reasonOf(error)}\n`,
+          );
         } finally {
           stopHeartbeat?.();
           detach();
