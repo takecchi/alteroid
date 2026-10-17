@@ -6808,7 +6808,7 @@ class Pool implements ManagerPool {
   /**
    * 作業者の枠の落ちで手を止めた担当を、通る鍵で起こし直す（#5030）。起こすのは担当の続きだけで、鍵の回転は起こさない（#4903）。
    * `'turn-ended'`: 回転前の鍵で落ちた印を、担当のターンが `done` で終わった時点で起こす。現役の鍵が `ready` と分かっているときだけ（`#wakeIfHeldTokenStale` と同じ: 通らないなら起こしても同じ枠に当たる）。
-   * `'rotation'`: 現役の鍵で落ちた印を、次の鍵の回転（`resumeStoppedByUsage`）で起こす。
+   * `'rotation'`: 印を、次の鍵の回転（`resumeStoppedByUsage`）で起こす。回転前の鍵で落ちてターンの終わりに起こせなかった印も含む。
    * 起こさない: 担当が新しいターンを始めている（印を下ろす）・`running` / `waiting_human`（印は残す）・後継あり / `stopped`（`#nudgeForUsageRotation` が `gone` と返す。印を下ろす）。
    * 印は起こす前に下ろす（二重に起こさない）。届かなかったときだけ戻す。投げない。
    */
@@ -6836,11 +6836,8 @@ class Pool implements ManagerPool {
       }
       if (trigger === 'turn-ended') {
         if (!mark.preRotationKey || record.job.status !== 'done') return false;
-      } else if (
-        mark.preRotationKey ||
-        record.job.status === 'running' ||
-        record.job.status === 'waiting_human'
-      ) {
+      } else if (record.job.status === 'running' || record.job.status === 'waiting_human') {
+        // 回転の契機では回転前の鍵の印も起こす: ターンの終わりに現役が `ready` でなかった印は、ここで拾わないと次の自分のターンまで取り残されるため
         // 走っている間は起こさない（印は残す）: ターンが終われば次の回転が拾う。
         return false;
       }
@@ -6859,7 +6856,7 @@ class Pool implements ManagerPool {
           `[${managerId}] 作業者が上限で落ちた鍵は回ったので、担当を起こし直す` +
           (identity === undefined ? '' : `（現役の世代 ${String(identity.generation)}）`),
         grounds:
-          `managerId=${managerId} 契機=${trigger === 'turn-ended' ? 'ターンの終わり（回転前の鍵で落ちた・現役の鍵は ready）' : '鍵の回転（現役の鍵で落ちた）'} ` +
+          `managerId=${managerId} 契機=${trigger === 'turn-ended' ? 'ターンの終わり（回転前の鍵で落ちた・現役の鍵は ready）' : `鍵の回転（${mark.preRotationKey ? '回転前の鍵' : '現役の鍵'}で落ちた）`} ` +
           '（#5030。鍵の回転は起こさず、担当の続きだけを促す）',
       });
       const outcome = await this.#nudgeForUsageRotation(managerId, {

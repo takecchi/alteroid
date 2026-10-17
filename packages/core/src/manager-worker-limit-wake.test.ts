@@ -200,6 +200,21 @@ describe('作業者の落ちで手を止めた担当を起こす（#5030）', ()
     await s.pool.stop();
   });
 
+  it('回転前の鍵で落ち、ターンの終わりに現役が ready でなかった印も、次の resumeStoppedByUsage で起こす（取り残さない）', async () => {
+    const s = await setup({ availability: async () => 'cooling' });
+    s.fake.push(workerLimitNote(true));
+    s.fake.push(doneReport());
+    await settle();
+    expect(s.fake.delivered).toEqual([]);
+
+    const nudged = await s.pool.resumeStoppedByUsage();
+
+    expect(nudged).toEqual([JOB.id]);
+    expect(s.fake.delivered).toEqual([NUDGE_TEXT]);
+    expect(s.observations).toEqual([]);
+    await s.pool.stop();
+  });
+
   it('担当がまだ running のうちは起こさない（done で終わるまで待つ）', async () => {
     const s = await setup();
     s.fake.push(workerLimitNote(true));
