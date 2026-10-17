@@ -66,7 +66,7 @@ const ownUid = (): number | undefined =>
   typeof process.getuid === 'function' ? process.getuid() : undefined;
 
 // `/tmp` は誰でも書けるので毎回見る
-function assertOwnDirectorySync(path: string): void {
+export function assertOwnDirectorySync(path: string): void {
   const info = lstatSync(path);
   if (info.isSymbolicLink() || !info.isDirectory()) {
     throw new RunnerOutboxUnsafeError(`${path} が実在の dir でない（symlink か dir 以外）`);

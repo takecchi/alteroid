@@ -486,6 +486,8 @@ export interface ManagerSystemPromptInput {
   peer?: { models?: readonly string[] };
   /** `alteroid-manager`（`output_record`）を出したセッションだけ立てる。省けばプロンプトは1文字も増えない。 */
   managerTools?: boolean;
+  /** `report_attach` を出したセッションだけ立てる（`alteroid-manager` と出し箱の両方が要る）。省けば出し箱の節は従来の文のまま。 */
+  reportAttach?: boolean;
   /** どの歯が開いているか。偽か省略なら、その歯の節は1文字も増えない。 */
   bashGuards?: BashGuardsInPrompt;
 }
@@ -558,11 +560,19 @@ const MANAGER_TOOLS_SECTION = `
 メールの送信・予定の登録・投稿・外部サービスへの保存のように、**コード以外で外へ出した成果**は、出すたびに MCP \`alteroid-manager\` の \`output_record\` で1件ずつ記録すること（道具の一覧に名前しか無ければ ToolSearch で \`output_record\` を引く）。git の作業ツリーと違って器からは観測できないので、記録しないと、器が消えたあとにクローンが成果の在りかを辿れない。git に push したものは記録しなくてよい。
 `;
 
+const OUTBOX_SECTION_BODY =
+  '環境変数 `ALTEROID_OUTBOX` が設定されているとき、成果物のファイルを報告に添えたければ `$ALTEROID_OUTBOX` の直下へ写すこと。ターンの終わりの報告で届き、出し箱からは消える。サブディレクトリと symlink は送られない。1回の報告で送れる個数と合計には上限があり、超えた分は断られる（個数と合計で後回しになった分は出し箱に残り、次の報告で送られる）。';
+
+/** 名前は `manager-tools.ts` の `REPORT_ATTACH_TOOL_NAME` と同じ（ここから import しない理由は上の `MANAGER_TOOLS_SECTION` と同じ。一致は試験が見る）。 */
+const REPORT_ATTACH_SECTION_BODY =
+  '成果物のファイルを報告に添えたければ、MCP `alteroid-manager` の `report_attach` で絶対パスを名指しすること（道具の一覧に名前しか無ければ ToolSearch で `report_attach` を引く）。runner がそのファイルを開いて出し箱へ写すので、`cp` で出し箱へ写さないこと（この器の分類器に持ち出しとして止められうる）。写せるのは作業場（`/tmp/mgr-<識別子の先頭8桁>` と `/tmp/mgr-<識別子の先頭8桁>-*`）と `cwd` の下の通常のファイルだけで、`..` や symlink を含むパス・ハードリンク・空のファイルは断られる。1件ずつ、写した名前と大きさか断った理由が返る。ターンの終わりの報告で届き、出し箱からは消える。1回の報告で送れる個数と合計には上限があり、超えた分は断られる。';
+
 export function buildManagerSystemPrompt({
   managerId,
   workerName,
   peer,
   managerTools,
+  reportAttach,
   bashGuards,
 }: ManagerSystemPromptInput): string {
   const scratchDir = managerScratchDirOf(managerId);
@@ -594,7 +604,7 @@ ${peer === undefined ? '' : peerSection(peer)}${managerTools === true ? MANAGER_
 
 # 成果物のファイルを報告に添える
 
-環境変数 \`ALTEROID_OUTBOX\` が設定されているとき、成果物のファイルを報告に添えたければ \`$ALTEROID_OUTBOX\` の直下へ写すこと。ターンの終わりの報告で届き、出し箱からは消える。サブディレクトリと symlink は送られない。1回の報告で送れる個数と合計には上限があり、超えた分は断られる（個数と合計で後回しになった分は出し箱に残り、次の報告で送られる）。
+${reportAttach === true ? REPORT_ATTACH_SECTION_BODY : OUTBOX_SECTION_BODY}
 
 # バックグラウンドの完了を待つとき
 

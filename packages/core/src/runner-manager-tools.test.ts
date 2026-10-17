@@ -2,6 +2,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Query, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
@@ -9,6 +11,7 @@ import { createCredentialStore } from './credentials.js';
 import {
   MANAGER_TOOLS_MCP_SERVER_NAME,
   OUTPUT_RECORD_TOOL_NAME,
+  REPORT_ATTACH_TOOL_NAME,
   RESCUE_RESTORE_TOOL_NAME,
   type ManagerToolsSocketHost,
 } from './manager-tools.js';
@@ -62,7 +65,10 @@ function capturingToolsHost(): ManagerToolsSocketHost & {
   };
 }
 
-function hostWith(managerTools?: RunnerManagerToolsOptions): {
+function hostWith(
+  managerTools?: RunnerManagerToolsOptions,
+  extra: Partial<Parameters<typeof createRunnerHost>[0]> = {},
+): {
   host: ReturnType<typeof createRunnerHost>;
   sdk: ReturnType<typeof capturingQuery>;
   events: RunnerEvent[];
@@ -81,6 +87,7 @@ function hostWith(managerTools?: RunnerManagerToolsOptions): {
     }),
     codexHome: makeTempDirSync('alteroid-runner-manager-tools-codex-'),
     ...(managerTools === undefined ? {} : { managerTools }),
+    ...extra,
   });
   return { host, sdk, events };
 }
@@ -203,6 +210,91 @@ describe('runner: MCP alteroid-manager の output_record（#2987）', () => {
     expect(runnerEventSchema.safeParse(sent[0]).success).toBe(true);
     await client.close();
     await host.shutdown();
+  });
+
+  describe('report_attach（#5018）', () => {
+    const appendOf = (options: Record<string, unknown>): string =>
+      String((options.systemPrompt as { append?: unknown }).append);
+    const toolNames = async (client: Client): Promise<string[]> =>
+      (await client.listTools()).tools.map((t) => t.name);
+
+    it('出し箱があれば道具とプロンプトの案内を出し、名指しした作業場のファイルを出し箱へ写す', async () => {
+      const outboxRoot = makeTempDirSync('alteroid-attach-outbox-');
+      const scratchRoot = makeTempDirSync('alteroid-attach-tmp-');
+      const tools = capturingToolsHost();
+      const { host, sdk, events } = hostWith(
+        { host: tools, childEntry: '/app/relay.js' },
+        { outboxRoot, managerScratchRoot: scratchRoot },
+      );
+      await host.start({ managerId: 'mgr-abcd1234-xyz', request: 'やって', cwd: '/work' });
+      const prompt = appendOf(sdk.options());
+      expect(prompt).toContain(`\`${REPORT_ATTACH_TOOL_NAME}\``);
+      expect(prompt).toContain('`cp` で出し箱へ写さないこと');
+
+      const scratch = join(scratchRoot, 'mgr-abcd1234');
+      mkdirSync(scratch);
+      writeFileSync(join(scratch, 'out.txt'), 'hello');
+      const client = await connect(tools.factory()!());
+      expect(await toolNames(client)).toContain(REPORT_ATTACH_TOOL_NAME);
+
+      const result = (await client.callTool({
+        name: REPORT_ATTACH_TOOL_NAME,
+        arguments: { paths: [join(scratch, 'out.txt'), '/etc/hosts'] },
+      })) as { content: { text: string }[]; isError?: boolean };
+      expect(result.isError).not.toBe(true);
+      expect(result.content[0]!.text).toContain(
+        `写した: ${join(scratch, 'out.txt')} → out.txt（5 バイト）`,
+      );
+      expect(result.content[0]!.text).toContain('断った: /etc/hosts: 作業場の外は写せない');
+      expect(readdirSync(join(outboxRoot, 'mgr-abcd1234-xyz'))).toEqual(['out.txt']);
+      expect(events.filter((e) => e.type === 'note')).toEqual([]);
+
+      const refused = (await client.callTool({
+        name: REPORT_ATTACH_TOOL_NAME,
+        arguments: { paths: ['/etc/hosts'] },
+      })) as { isError?: boolean };
+      expect(refused.isError).toBe(true);
+      await client.close();
+      await host.shutdown();
+    });
+
+    it('出し箱を用意できない構成では、道具も案内も出さず、従来の `cp` の文のまま', async () => {
+      const blocker = join(makeTempDirSync('alteroid-attach-blocker-'), 'file');
+      writeFileSync(blocker, 'x');
+      const tools = capturingToolsHost();
+      const { host, sdk } = hostWith(
+        { host: tools, childEntry: '/app/relay.js' },
+        { outboxRoot: join(blocker, 'outbox') },
+      );
+      await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+      const prompt = appendOf(sdk.options());
+      expect(prompt).not.toContain(REPORT_ATTACH_TOOL_NAME);
+      expect(prompt).toContain('`$ALTEROID_OUTBOX` の直下へ写すこと');
+      const client = await connect(tools.factory()!());
+      expect(await toolNames(client)).not.toContain(REPORT_ATTACH_TOOL_NAME);
+      await client.close();
+      await host.shutdown();
+    });
+
+    it('プロンプトの文は reportAttach の有無で切り替わり、立てなければ従来と1文字も変わらない', () => {
+      const base = buildManagerSystemPrompt({ managerId: 'mgr-1', workerName: 'worker' });
+      const toolsOnly = buildManagerSystemPrompt({
+        managerId: 'mgr-1',
+        workerName: 'worker',
+        managerTools: true,
+      });
+      const withAttach = buildManagerSystemPrompt({
+        managerId: 'mgr-1',
+        workerName: 'worker',
+        managerTools: true,
+        reportAttach: true,
+      });
+      expect(base).toContain('`$ALTEROID_OUTBOX` の直下へ写すこと');
+      expect(toolsOnly).toContain('`$ALTEROID_OUTBOX` の直下へ写すこと');
+      expect(toolsOnly).not.toContain(REPORT_ATTACH_TOOL_NAME);
+      expect(withAttach).toContain(`\`${REPORT_ATTACH_TOOL_NAME}\``);
+      expect(withAttach).not.toContain('`$ALTEROID_OUTBOX` の直下へ写すこと');
+    });
   });
 
   it('プロンプトの案内は manager-tools.ts の名前と一致し、立てなければ1文字も増えない', () => {

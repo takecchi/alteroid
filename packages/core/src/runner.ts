@@ -165,6 +165,7 @@ import {
   stageRunnerAttachment,
   StagedAttachmentLedger,
 } from './runner-attachments.js';
+import { attachToManagerOutbox, type AttachToOutboxResult } from './runner-outbox-attach.js';
 import {
   collectManagerOutbox,
   defaultRunnerOutboxRoot,
@@ -2979,6 +2980,10 @@ class RunnerSession {
               output: { ...input, at: new Date().toISOString() },
             }),
           managerId: this.#id,
+          // 出し箱が無い構成では道具を出さない（プロンプトも同じ判定で `cp` の案内のままにする）
+          ...(this.#outboxDir === undefined
+            ? {}
+            : { attach: (paths: string[]) => this.#attachToOutbox(paths) }),
           restore: (input) =>
             this.#emit({
               type: 'rescue_restore_request',
@@ -3233,6 +3238,9 @@ class RunnerSession {
             ? {}
             : { peer: peerModels === undefined ? {} : { models: peerModels } }),
           ...(managerToolsEntry === undefined ? {} : { managerTools: true }),
+          ...(managerToolsEntry === undefined || this.#outboxDir === undefined
+            ? {}
+            : { reportAttach: true }),
           ...(bashGuards === undefined ? {} : { bashGuards }),
         }),
         reportLanguage,
@@ -3510,6 +3518,27 @@ class RunnerSession {
       });
       return undefined;
     }
+  }
+
+  /** `report_attach`: 名指しされたファイルを、取り込みと同じ検めで出し箱の直下へ写す（`runner-outbox-attach.ts`）。 */
+  async #attachToOutbox(paths: string[]): Promise<AttachToOutboxResult[]> {
+    const childUser = this.#childUser;
+    const scratchDir = managerScratchDirOf(this.#id, this.#managerScratchRoot);
+    return attachToManagerOutbox({
+      outboxRoot: this.#outboxRoot,
+      managerId: this.#id,
+      scratchParent: this.#managerScratchRoot,
+      scratchName: basename(scratchDir),
+      cwd: this.#cwd,
+      // 子を降ろす構成なら子の uid、降ろさない構成なら runner 自身の uid（`#collectOutbox` と同じ）
+      expectedUid: childUser?.uid ?? process.getuid?.(),
+      ...(childUser === undefined ? {} : { chownTo: { uid: childUser.uid, gid: childUser.gid } }),
+      limits: readAttachmentLimits().limits,
+      ...(this.#attachmentStageLimit === undefined
+        ? {}
+        : { maxLargeFileBytes: this.#attachmentStageLimit }),
+      paths,
+    });
   }
 
   // 同期のままにする（#4906）: 見るのは担当ごとの小さな出し箱の直下1つだけで、ループを止める重さではない。非同期にすると、報告が出る時機が実際の I/O の待ちに左右されるため

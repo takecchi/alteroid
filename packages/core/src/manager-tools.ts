@@ -11,6 +11,29 @@ export const MANAGER_TOOLS_MCP_SERVER_NAME = 'alteroid-manager';
 
 export const OUTPUT_RECORD_TOOL_NAME = 'output_record';
 export const RESCUE_RESTORE_TOOL_NAME = 'rescue_restore';
+export const REPORT_ATTACH_TOOL_NAME = 'report_attach';
+
+/** 1回の呼び出しで名指せる個数。取り込みの個数の上限（`ATTACHMENT_MAX_PER_MESSAGE_DEFAULT`）に合わせず、上限を変えた器でも道具の入力は変えない。 */
+export const REPORT_ATTACH_MAX_PATHS = 50;
+
+export type ReportAttachResult =
+  | { path: string; ok: true; name: string; size: number }
+  | { path: string; ok: false; reason: string };
+
+export function renderReportAttachResults(results: readonly ReportAttachResult[]): string {
+  const lines = results.map((r) =>
+    r.ok
+      ? `写した: ${r.path} → ${r.name}（${String(r.size)} バイト）`
+      : `断った: ${r.path}: ${r.reason}`,
+  );
+  const copied = results.filter((r) => r.ok).length;
+  return [
+    ...lines,
+    copied > 0
+      ? `写した ${String(copied)} 件は、ターンの終わりの報告で届く。`
+      : '1件も写せなかった。断った理由を直して、もう一度名指しする。',
+  ].join('\n');
+}
 
 export interface RescueRestoreInput {
   paths?: string[];
@@ -62,7 +85,13 @@ export function createManagerToolsMcpServer(deps: {
   restore: (input: RescueRestoreInput) => void;
   /** 届く先の案内（`/tmp/alteroid-attachments/<managerId>/…`）に使う。 */
   managerId: string;
+  /**
+   * `report_attach` の写す処理。省けば道具を出さない（出し箱を用意できなかった構成）。
+   * 写すのは runner で、担い手は `cp` を打たない（分類器に止められるため）。
+   */
+  attach?: (paths: string[]) => Promise<ReportAttachResult[]>;
 }): ReturnType<typeof createSdkMcpServer> {
+  const attach = deps.attach;
   return createSdkMcpServer({
     name: MANAGER_TOOLS_MCP_SERVER_NAME,
     version: '0.1.0',
@@ -148,6 +177,32 @@ export function createManagerToolsMcpServer(deps: {
           });
         },
       ),
+      ...(attach === undefined
+        ? []
+        : [
+            tool(
+              REPORT_ATTACH_TOOL_NAME,
+              '成果物のファイルを、ターンの終わりの報告に添える。名指ししたファイルを runner が開いて出し箱へ写す（`cp` で写さない）。' +
+                '写せるのは自分の作業場（/tmp/mgr-<識別子の先頭8桁> と /tmp/mgr-<識別子の先頭8桁>-*）と cwd の下の、通常のファイルだけ。' +
+                '1件ずつ、写した名前と大きさ、または断った理由を返す。',
+              {
+                paths: z
+                  .array(z.string().min(1).max(4096))
+                  .min(1)
+                  .max(REPORT_ATTACH_MAX_PATHS)
+                  .describe(
+                    '添えるファイルの絶対パス。`..`・symlink を含まない正規のパス。個数と合計の上限は添付と同じ',
+                  ),
+              },
+              async (args) => {
+                const results = await attach(args.paths);
+                return {
+                  content: [{ type: 'text' as const, text: renderReportAttachResults(results) }],
+                  ...(results.some((r) => r.ok) ? {} : { isError: true }),
+                };
+              },
+            ),
+          ]),
     ],
   });
 }
