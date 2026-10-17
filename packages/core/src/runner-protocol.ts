@@ -959,6 +959,13 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      */
     notifyClone: z.literal(true).optional(),
     /**
+     * 作業者だけが利用上限で落ちた note にだけ載せる（#5021）。デーモンが原文の `resets …` を鍵のプールの枠と突き合わせるための材料で、
+     * `text` の文言から原文を切り出さない。`raw` は伏せ字を通した後の原文（300字まで）。
+     * `preRotationKey` は、落ちた時点でそのセッションが鍵の差し替えを受け取って境界を待っていた（回転前の鍵で走っている）こと。
+     * `.optional()`: 旧デーモンは未知の欄を落として日誌にだけ残し、旧 runner は欄を送らない。
+     */
+    workerLimit: z.object({ raw: z.string(), preRotationKey: z.boolean() }).optional(),
+    /**
      * `escalate` と同じく、判定は必ずこの欄で行い `note.text` の文言では行わない。
      * 中の欄を optional にしない: `stall` が存在する限り新 runner は全部揃えて送る。`agentType` だけは SDK が `agent_type` を
      * 欠くことがあるので、取れたときだけ載せる。旧デーモンでは新種別 `subagent_stall` としては記録されず `exchange` に留まる。

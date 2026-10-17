@@ -240,6 +240,19 @@ export function rateLimitMemoryKey(tokenId: string | undefined, kind: string | u
   return `${String(token.length)}:${token}${kind ?? ''}`;
 }
 
+// `rateLimitMemoryKey` の逆。長さで分けた形だけを読み、壊れた鍵は `undefined`（推測で割らない）
+export function parseRateLimitMemoryKey(
+  key: string,
+): { tokenId: string | undefined; kind: string } | undefined {
+  const head = /^(\d+):/.exec(key);
+  if (head === null) return undefined;
+  const length = Number(head[1]);
+  const rest = key.slice(head[0].length);
+  if (rest.length < length) return undefined;
+  const token = rest.slice(0, length);
+  return { tokenId: token === '' ? undefined : token, kind: rest.slice(length) };
+}
+
 // 置き換えない: status を運ばない観測が rejected の記憶を消し、次の同じ rejected が新しい遷移として再配達されるため
 // allowed で届いたら記憶を上書きする（塞がない）: 塞ぐと本物の再発が黙って消えるため
 export function mergeRateLimitFacts(

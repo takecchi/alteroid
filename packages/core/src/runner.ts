@@ -271,7 +271,11 @@ import {
 } from './rescue-ref.js';
 import { defaultRunnerRescueStagedRoot } from './rescue-stash.js';
 import { PeerApprovalNotices } from './runner-peer-approval-notice.js';
-import { WorkerLimitNotices, workerLimitLabel } from './runner-worker-limit-notice.js';
+import {
+  WORKER_LIMIT_PRE_ROTATION_KEY_SENTENCE,
+  WorkerLimitNotices,
+  workerLimitLabel,
+} from './runner-worker-limit-notice.js';
 import { StaleUntrackedNotices } from './runner-stale-untracked.js';
 import {
   ScratchSweeper,
@@ -5434,13 +5438,17 @@ class RunnerSession {
   #recordWorkerLimit(identity: string, label: string, raw: string): void {
     const shown = redactErrorText(raw, process.env, this.#vaultValues());
     if (!this.#workerLimitNotices.record(identity, label, shown, Date.now())) return;
+    const preRotationKey = this.#sdkSession.wantsTokenRecycle;
     this.#emit({
       type: 'note',
       managerId: this.#id,
       text:
         `作業者（${label}）だけが利用上限で落ちた。担当は動けるので、枠の印も鍵の回転も起こしていない。` +
-        `次の道具の結果に知らせを添える（原文: ${shown.trim().slice(0, 300)}）`,
+        `次の道具の結果に知らせを添える（原文: ${shown.trim().slice(0, 300)}）` +
+        (preRotationKey ? WORKER_LIMIT_PRE_ROTATION_KEY_SENTENCE : ''),
       notifyClone: true,
+      // 構造化して運ぶ: デーモンが落ちた枠の鍵を突き合わせるのに原文と印が要り、`text` の文言では判定しない
+      workerLimit: { raw: shown.trim().slice(0, 300), preRotationKey },
     });
   }
 
@@ -5450,10 +5458,12 @@ class RunnerSession {
    */
   #workerLimitNotice(agentId: string | undefined): string | null {
     try {
+      const preRotationKey = this.#sdkSession.wantsTokenRecycle;
       const notice = this.#workerLimitNotices.next(
         agentId ?? 'manager',
         agentId === undefined,
         Date.now(),
+        preRotationKey,
       );
       if (notice !== null && agentId === undefined) {
         this.#emit({
@@ -5461,7 +5471,9 @@ class RunnerSession {
           managerId: this.#id,
           text:
             `作業者が利用上限で落ちている（${String(notice.count)} 体）ので、` +
-            'この担当の道具の結果に「戻るまで作業者を立て直しても同じく落ちうる」という知らせを添えた（止める指示ではない）。',
+            (preRotationKey
+              ? 'この担当の道具の結果に「鍵は回っているので、このターンを終えれば新しい鍵で開き直る」という知らせを添えた（止める指示ではない）。'
+              : 'この担当の道具の結果に「戻るまで作業者を立て直しても同じく落ちうる」という知らせを添えた（止める指示ではない）。'),
         });
       }
       return notice?.text ?? null;

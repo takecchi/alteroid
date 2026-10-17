@@ -10,7 +10,7 @@ const NOTICE_RESET_HORIZON_MS = 24 * 60 * 60 * 1000;
 // notice_text / default の行とは比べない: 推測どうしは値の作られ方が同じで偶然一致しうるため
 const GUESSED_COOLDOWN_SOURCES: ReadonlySet<CooldownSource> = new Set(['default', 'notice_text']);
 
-function hasAuthoritativeCooldown(
+export function hasAuthoritativeCooldown(
   token: AgentToken,
 ): token is AgentToken & { cooldownUntil: number; cooldownSource: CooldownSource } {
   return (
@@ -21,7 +21,7 @@ function hasAuthoritativeCooldown(
 }
 
 // ±5分などの許容を足さない: 文言の時刻は分単位までで、それ以上は実測が無いため
-function roundDownToMinute(ms: number): number {
+export function roundDownToMinute(ms: number): number {
   return ms - (ms % 60_000);
 }
 
