@@ -308,7 +308,7 @@ describe('活動の要約', () => {
     expect(section.split('\n')).toEqual([
       '## マネージャー（走行中・返事待ちから先に出す）',
       '- 手が止まっている担当（done・stopped）1 本: mgr-healthy-turn',
-      '依頼と直近の報告は、ここには載せていない。`manager_list` / `manager_report` で引ける。',
+      '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。',
     ]);
   });
 

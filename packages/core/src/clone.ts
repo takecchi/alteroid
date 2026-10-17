@@ -5099,8 +5099,8 @@ class Clone implements CloneHost {
         const cause = event.cause === 'manual' ? 'manual' : 'schedule';
         const journalCause = event.cause ?? 'schedule';
         const plan = claimed.status === 'ok' ? claimed.plan : null;
-        // #4938 の案2。オーナーの判断待ちの仮置き: 要約の全体ではなく件数の行だけを付ける。
-        // `renderDigest` に通さない: 件数の行は短いので差分にしなくてよく、通すと節の控えが件数の行で上書きされ、自発の tick の差分の基準が崩れるため
+        // #4938 の案2: 要約の全体ではなく、担当の節・継続中の依頼の節と、他の節の件数の行だけを付ける。
+        // `renderDigest` に通さない: 短いので差分にしなくてよく、通すと節の控えがこの形で上書きされ、自発の tick の差分の基準が崩れるため
         const timerDigest = await this.#recentDigestCounts();
         // 依頼の本文と固定の指示は、同じ会話の2回目以降は短い参照にする（#4937）
         const firedAt = new Date();
@@ -5533,7 +5533,7 @@ class Clone implements CloneHost {
     }
   }
 
-  // #4938 の案2。オーナーの判断待ちの仮置き: 定期の依頼の tick は、要約の全体ではなく各節の件数の行だけを付ける
+  // #4938 の案2: 定期の依頼の tick は、要約の全体ではなく担当の節・継続中の依頼の節と、他の節の件数の行を付ける
   async #recentDigestCounts(): Promise<string> {
     return `${await this.#memoryFloorDigestLine()}\n\n${await this.#recentDigestBare('counts')}`;
   }

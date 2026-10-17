@@ -213,7 +213,8 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     const s = boot();
     await seed(s.stores);
 
-    // 2026-10-16 #4938 の案2で形を変えた: 定期の tick は要約の全体を持たなくなったので、要約の差分は自発の tick で見る。
+    // 2026-10-16 #4938 の案2で形を変えた（2026-10-18 に案2の中身を「担当の節と継続中の依頼の節だけ出す」へ直した）:
+    // 定期の tick は要約の全体を持たなくなったので、要約の差分は自発の tick で見る。
     // 以前は定期の tick 2回（first / second）で、下の要約の節の期待値（'## 届いた外部イベント'・'担当 7 の途中経過'・件数の行・固定の注記）も見ていた
     const firstTimer = await timerTick(s);
     const secondTimer = await timerTick(s);
@@ -536,21 +537,28 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
 });
 
 describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
-  it('⭐ 定期の tick には、要約の全体ではなく件数の行だけが付く', async () => {
+  it('⭐ 定期の tick には、担当の節と継続中の依頼の節が中身つきで付き、他の節は件数の行だけになる', async () => {
     const s = boot();
     await seed(s.stores);
 
     const timer = await timerTick(s);
 
     expect(timer).toContain(REQUEST_BODY.trim());
+    // 中身を出す2節
+    expect(timer).toContain('## マネージャー');
+    expect(timer).toContain('担当 7 の途中経過');
+    expect(timer).toContain('## 継続中の依頼');
+    expect(timer).toContain(`- ${TIMER_KIND}（`);
+    // 他の節は件数の行だけ。重なる数（担当の status 別・継続中の依頼の数）は件数の行に載らない
     expect(timer).toContain(
-      '- 担当 running 30・返事待ち 0・failed 0・lost 0・done 0・stopped 0 / 引き受けた仕事 14 / 継続中の依頼 1',
+      '- 引き受けた仕事 14 / 回答待ち 4 / エスカレーション 0 / 聞かずに決めたこと 6 / 記憶の更新 0' +
+        ' / 外部イベント 20 / 片付けた仕事 0 / 人間からの発言 0',
     );
-    expect(timer).toContain('`manager_list` / `manager_report`');
-    expect(timer).not.toMatch(/^## /mu);
-    expect(timer).not.toContain('担当 7 の途中経過');
+    expect(timer).not.toContain('担当 running');
+    expect(timer.match(/^## /gmu)).toHaveLength(2);
     expect(timer).not.toContain('人間への問い 0');
     expect(timer).not.toContain('届いた出来事 0');
+    expect(timer).not.toContain('記憶の根拠');
     await s.clone.stop();
   });
 
@@ -565,11 +573,11 @@ describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
     expect(self).toContain('## 人間の回答待ち');
     expect(self).toContain('人間への問い 0');
     expect(self).toContain('## 届いた外部イベント');
-    expect(self).not.toContain('- 担当 running 30・');
+    expect(self).not.toContain('- 引き受けた仕事 14 / 回答待ち 4 /');
     await s.clone.stop();
   });
 
-  it('⭐ 定期の tick を挟んでも、自発の tick の差分の基準は前の自発の tick のまま（件数の行で上書きされない）', async () => {
+  it('⭐ 定期の tick を挟んでも、自発の tick の差分の基準は前の自発の tick のまま（定期の形で上書きされない）', async () => {
     const s = boot();
     await seed(s.stores);
 
@@ -587,7 +595,7 @@ describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
     const timer = await timerTick(s);
     const second = await selfTick(s);
 
-    expect(timer).toContain('- 担当 running 31・');
+    expect(timer).toContain('mgr-between');
     // 差分のまま（全文に戻っていない）: 前の自発の tick と変わらない担当の行は出ない
     expect(second).not.toContain('担当 7 の途中経過');
     expect(second).not.toContain(SELF_INSTRUCTION_HEAD);

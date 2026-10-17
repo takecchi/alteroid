@@ -119,12 +119,6 @@ interface DigestRoute {
   event: (stores: Stores) => Promise<InboxEvent>;
   needle: string;
   expected: string[];
-  /**
-   * 入力に載る要約の中身で、日誌に入ってはいけないものの印。
-   * 2026-10-16 #4938 の案2で timer だけ変えた（定期の tick の要約は件数の行だけになり、報告の抜粋が入力に載らない）。
-   * 以前は3経路とも `REPORT_MARKER`（と `直近の報告:`・`## マネージャー`）を入力側で待っていた。
-   */
-  inputMarker?: string;
 }
 
 const DIGEST_ROUTES: DigestRoute[] = [
@@ -142,7 +136,6 @@ const DIGEST_ROUTES: DigestRoute[] = [
     },
     needle: 'ターンの入力: timer',
     expected: ['kind=issue-round', 'cause=manual', 'request=yes', 'digest.chars='],
-    inputMarker: '- 担当 running 1・',
   },
   {
     name: 'self_initiative（発意 tick）',
@@ -196,14 +189,8 @@ describe('ターンの入力を日誌に残す（#243）— digest 経路は形�
       s.clone.post(await route.event(stores));
       const text = await turnInputAfterTurn(stores, s, route.needle);
 
-      if (route.inputMarker === undefined) {
-        await waitFor(() => s.inputs.some((input) => input.includes(REPORT_MARKER)), '報告の抜粋');
-        expect(s.inputs.join('\n')).toContain('直近の報告:');
-      } else {
-        const marker = route.inputMarker;
-        await waitFor(() => s.inputs.some((input) => input.includes(marker)), '件数の行');
-        expect(text).not.toContain(marker);
-      }
+      await waitFor(() => s.inputs.some((input) => input.includes(REPORT_MARKER)), '報告の抜粋');
+      expect(s.inputs.join('\n')).toContain('直近の報告:');
 
       expect(text).not.toContain(REPORT_MARKER);
       expect(text).not.toContain('直近の報告:');

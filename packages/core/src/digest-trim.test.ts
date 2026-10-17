@@ -5,7 +5,7 @@ import { buildSelfInitiativePrompt, buildTimerPrompt } from './prompt.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-// #4938 の案1（担当の節を手を動かしているものに絞る）・案2（定期の tick には件数の行だけ）の測定。
+// #4938 の案1（担当の節を手を動かしているものに絞る）・案2（定期の tick には担当の節と継続中の依頼の節だけ中身ごと出し、他は件数の行）の測定。
 // 道具立ては #4937 と同じ（担当30本・継続中の依頼10本・記憶の更新50件・回答待ち4件・外部イベント20件・引き受けた仕事14件）。
 
 const STATUS_MIX = [
@@ -106,7 +106,9 @@ describe('マネージャーの節は、手を動かしている担当だけを1
     expect(folded[0]).toMatch(/^- 手が止まっている担当（done・stopped）24 本: /u);
     expect(folded[0]).toContain('…ほか 9 件');
     expect(folded[0]?.split(', ')).toHaveLength(15);
-    expect(section).toContain('`manager_list` / `manager_report` で引ける');
+    expect(section).toContain(
+      '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。',
+    );
     // done・stopped の依頼と報告は載らない
     expect(section).not.toContain('担当 10 の途中経過');
     expect(section).not.toMatch(/- mgr-010 \[/u);
@@ -177,24 +179,63 @@ describe('マネージャーの節は、手を動かしている担当だけを1
 });
 
 describe('件数の形の要約（#4938 の案2）', () => {
-  it('各節の件数の行と、道具で引けることの1行だけで、節の中身を持たない', async () => {
+  it('担当の節と継続中の依頼の節は中身つきで出し、他の節は件数の行だけにする', async () => {
     const stores = createMemoryStores();
     await seedLikeIssue(stores);
+
+    const full = await buildActivityDigest(stores, window());
+    const counts = await buildActivityDigest(stores, window(), undefined, undefined, {
+      shape: 'counts',
+    });
+
+    // 出す節は、全体の形と同じ文面（同じ担当が別の言い方で出ない）
+    expect(sectionOf(counts, '## マネージャー')).toBe(sectionOf(full, '## マネージャー'));
+    expect(sectionOf(counts, '## 継続中の依頼')).toBe(sectionOf(full, '## 継続中の依頼'));
+    expect(counts).toMatch(/- mgr-000 \[running\/セッション不明\] 担当 0 の仕事/u);
+    expect(counts).toContain('直近の報告: 担当 0 の途中経過');
+    expect(counts).toContain('- standing-0（');
+    expect(counts).toContain('継続中の依頼 0。');
+    // 他の節は見出しごと無く、件数の行だけが残る
+    const headings = counts.split('\n').filter((line) => line.startsWith('## '));
+    expect(headings).toEqual([
+      expect.stringContaining('## 継続中の依頼'),
+      expect.stringContaining('## マネージャー'),
+    ]);
+    expect(counts).not.toContain('人間への問い 0');
+    expect(counts).not.toContain('引き受けた仕事 0。');
+    expect(counts).not.toContain('記憶を直した 0');
+    expect(counts).not.toContain('届いた出来事 0');
+    expect(counts).toContain(
+      '- 引き受けた仕事 14 / 回答待ち 4 / エスカレーション 0 / 聞かずに決めたこと 0' +
+        ' / 記憶の更新 50 / 外部イベント 20 / 片付けた仕事 0 / 人間からの発言 0',
+    );
+    // 中身を出した2節と重なる数（担当の status 別・継続中の依頼の数）は、件数の行に重ねない
+    expect(counts).not.toContain('担当 running');
+    expect(counts).not.toMatch(/継続中の依頼 \d+ \//u);
+    expect(counts).toContain(DIGEST_COUNTS_TOOLS_NOTE);
+    expect(counts).not.toContain('読めない行');
+  });
+
+  it('読めない行の件数は、中身を出さない節の分だけ件数の行の後ろに残る', async () => {
+    const stores = createMemoryStores();
+    await seedLikeIssue(stores);
+    const listApprovals = stores.jobs.listApprovals.bind(stores.jobs);
+    stores.jobs = {
+      ...stores.jobs,
+      listUnreadableJobs: async () => [{ id: 'broken-job', reason: '壊れている' }],
+      listApprovals: async (options) => ({
+        ...(await listApprovals(options)),
+        unreadable: [{ id: 'broken-approval', reason: '壊れている' }],
+      }),
+    };
 
     const counts = await buildActivityDigest(stores, window(), undefined, undefined, {
       shape: 'counts',
     });
 
-    expect(counts).not.toContain('## ');
-    expect(counts).not.toContain('担当 0 の途中経過');
-    expect(counts).not.toContain('人間への問い 0');
-    expect(counts).toContain(
-      '- 担当 running 4・返事待ち 1・failed 1・lost 1・done 23・stopped 0 / 引き受けた仕事 14 / 継続中の依頼 10' +
-        ' / 回答待ち 4 / エスカレーション 0 / 聞かずに決めたこと 0 / 記憶の更新 50 / 外部イベント 20' +
-        ' / 片付けた仕事 0 / 人間からの発言 0',
-    );
-    expect(counts).toContain(DIGEST_COUNTS_TOOLS_NOTE);
-    expect(counts).not.toContain('読めない行');
+    // 委譲の読めない行は担当の節が自分の断りで言うので、件数の行には載せない。承認待ちは載せる
+    expect(sectionOf(counts, '## マネージャー')).toContain('broken-job');
+    expect(counts).toContain('- 読めない行（壊れた行。上の件数には入っていない）: 承認待ち 1');
   });
 });
 
@@ -218,6 +259,8 @@ describe('#4938 の測定（担当30本・継続中の依頼10本など）', () 
     );
     // 前の節は上限の15本だけを載せていたので、減り方は Issue の見込み（30本を全部載せている前提で6〜7割）より小さい
     expect(managerSection.length).toBeLessThan(3385 * 0.6);
-    expect(timerPrompt.length).toBeLessThan(12007 / 4);
+    // 定期の tick は担当の節と継続中の依頼の節を中身ごと出すので、件数の行だけだった頃（872 字）より長い。それでも自発の tick より短い
+    expect(timerPrompt.length).toBeLessThan(selfPrompt.length);
+    expect(timerPrompt.length).toBeLessThan(12007 * 0.6);
   });
 });
