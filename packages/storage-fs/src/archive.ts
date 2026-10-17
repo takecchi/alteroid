@@ -22,6 +22,7 @@ import {
   type ArchiveWrite,
   type TranscriptArchive,
   type UnreadableRowOnce,
+  writeStderrLine,
 } from '@alteroid/core';
 
 import { writeFileAtomic } from './atomic.js';
@@ -123,7 +124,7 @@ export class FsTranscriptArchive implements TranscriptArchive {
         } catch (error) {
           if (error instanceof UnreadableArchiveSidecarError) {
             if (this.#unreadableOnce.sawUnreadable(`${error.sidecar}:${error.id}`)) {
-              process.stderr.write(`${describeUnreadableSidecar(error)}（一覧から外した）\n`);
+              writeStderrLine(`${describeUnreadableSidecar(error)}（一覧から外した）\n`);
             }
             return undefined;
           }
@@ -347,7 +348,7 @@ export class FsTranscriptArchive implements TranscriptArchive {
     } catch {
       // 読めない sidecar は「無い」と同じに扱う: 呼び手が `fallbackMeta(id)` に倒すので、行は一覧に残るため
       if (this.#unreadableOnce.sawUnreadable(`.meta.json:${id}`)) {
-        process.stderr.write(
+        writeStderrLine(
           `${describeUnreadableSidecar(new UnreadableArchiveSidecarError(id, '.meta.json'))}（id から sessionId と時刻を取った）\n`,
         );
       }

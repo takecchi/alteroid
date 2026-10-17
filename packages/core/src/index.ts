@@ -1258,6 +1258,9 @@ export {
   recentDroppedTraces,
   // 試験の準備（`vitest.quiet-traces.ts`）が、dist から core を読むパッケージの試験でも跡を溜めるための口（試験専用）
   setDefaultStderrSinkForTesting,
+  // 標準エラーへ書けないときの挙動を試すために、書き先を投げる関数へ差し替える口（試験専用。`null` で既定へ戻す）
+  setStderrSinkForTesting,
+  writeStderrLine,
   writeStderrSync,
   type DroppedJournalRowReason,
   type DroppedTraceOrigin,

@@ -577,6 +577,7 @@ export function setDefaultStderrSinkForTesting(sink: ((line: string) => void) | 
 /**
  * 呼び手が組み立てた1行（接頭辞・改行まで含む）を、`note()` と同じ書き先へそのまま書く（#5003）。
  * 時刻を足さず、跡の帳面（`rememberTrace`）にも積まない: 本番の出力を、`process.stderr.write` で直に書いていたときと同じ文のままにするため。
+ * 試験の準備を通るよう、標準エラーへの直書きはここへ寄せる（#5007）。
  * 寄せる理由は書き先だけ: 直に書くと試験の準備（`vitest.quiet-traces.ts`）の差し替えを通らず、通った試験の分まで標準エラーへ出て、落ちた試験の名前が埋もれるため。
  */
 export function writeStderrLine(line: string): void {

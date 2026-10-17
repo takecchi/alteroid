@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 
-import { createRunnerHost, reasonOf, type RunnerHost } from '@alteroid/core';
+import { captureStderr, createRunnerHost, reasonOf, type RunnerHost } from '@alteroid/core';
 import { HTTPException } from 'hono/http-exception';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
 
@@ -34,21 +34,14 @@ function resumeRequest() {
   };
 }
 
-function stderrLines(stderr: ReturnType<typeof vi.spyOn>): string[] {
-  return stderr.mock.calls.map((call: unknown[]) => String(call[0]));
-}
-
 describe('.onError（Issue #249: Hono の既定エラーハンドラの console.error(err) を、本文を出さない形に置き換える）', () => {
   let host: RunnerHost;
-  let stderr: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     host = newHost();
-    stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
   });
 
   afterEach(async () => {
-    stderr.mockRestore();
     await host.shutdown();
   });
 
@@ -59,12 +52,15 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
     };
     const app = createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
 
-    const res = await app.request('/managers/mgr-1/resume', resumeRequest());
+    let res!: Response;
+    const lines = await captureStderr(async () => {
+      res = await app.request('/managers/mgr-1/resume', resumeRequest());
+    });
 
     expect(res.status).toBe(500);
     expect(await res.text()).toBe('Internal Server Error');
 
-    const matching = stderrLines(stderr).filter((line) => line.includes('alteroid-runner:'));
+    const matching = lines.filter((line) => line.includes('alteroid-runner:'));
     expect(matching).toHaveLength(1);
     const line = matching[0]!;
 
@@ -82,11 +78,14 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
     };
     const app = createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
 
-    const res = await app.request('/managers/mgr-1/resume', resumeRequest());
+    let res!: Response;
+    const lines = await captureStderr(async () => {
+      res = await app.request('/managers/mgr-1/resume', resumeRequest());
+    });
 
     expect(res.status).toBe(418);
     expect(await res.text()).toBe('teapot');
-    expect(stderrLines(stderr).some((line) => line.includes('alteroid-runner:'))).toBe(false);
+    expect(lines.some((line) => line.includes('alteroid-runner:'))).toBe(false);
   });
 
   it('RunnerFenceError は既定どおり409へ変換され、こちらの `.onError` は素通りする（既存の分岐を壊していないことの確認）', async () => {
@@ -96,9 +95,12 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
     };
     const app = createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
 
-    const res = await app.request('/managers/mgr-1/resume', resumeRequest());
+    let res!: Response;
+    const lines = await captureStderr(async () => {
+      res = await app.request('/managers/mgr-1/resume', resumeRequest());
+    });
 
     expect(res.status).toBe(409);
-    expect(stderrLines(stderr).some((line) => line.includes('alteroid-runner:'))).toBe(false);
+    expect(lines.some((line) => line.includes('alteroid-runner:'))).toBe(false);
   });
 });

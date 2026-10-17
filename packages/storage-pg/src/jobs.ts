@@ -9,6 +9,7 @@ import {
   pendingApprovalSchema,
   UnreadableApprovalError,
   UnreadableJobError,
+  writeStderrLine,
 } from '@alteroid/core';
 import type {
   ApprovalList,
@@ -203,7 +204,7 @@ export class PgJobStore implements JobStore {
       const parsed = jobSchema.safeParse(row.job);
       if (!parsed.success) {
         const reason = summarizeInvalidFields(parsed.error.issues);
-        process.stderr.write(`${describeUnreadableJobRow({ id, reason })}\n`);
+        writeStderrLine(`${describeUnreadableJobRow({ id, reason })}\n`);
         throw new UnreadableJobError({ id, reason });
       }
       const current = parsed.data;
@@ -249,7 +250,7 @@ export class PgJobStore implements JobStore {
         continue;
       }
       const reason = summarizeInvalidFields(parsed.error.issues);
-      process.stderr.write(
+      writeStderrLine(
         `${describeUnreadableApprovalRow({ op: 'listApprovals', id: row.id, reason })}\n`,
       );
       unreadable.push({ id: row.id, reason });
@@ -269,7 +270,7 @@ export class PgJobStore implements JobStore {
     const parsed = pendingApprovalSchema.safeParse(row.approval);
     if (!parsed.success) {
       const reason = summarizeInvalidFields(parsed.error.issues);
-      process.stderr.write(`${describeUnreadableApprovalRow({ op: 'getApproval', id, reason })}\n`);
+      writeStderrLine(`${describeUnreadableApprovalRow({ op: 'getApproval', id, reason })}\n`);
       throw new UnreadableApprovalError({ id, reason });
     }
     return parsed.data;
@@ -312,9 +313,7 @@ export class PgJobStore implements JobStore {
       const parsed = pendingApprovalSchema.safeParse(row.approval);
       if (!parsed.success) {
         const reason = summarizeInvalidFields(parsed.error.issues);
-        process.stderr.write(
-          `${describeUnreadableApprovalRow({ op: 'updateApproval', id, reason })}\n`,
-        );
+        writeStderrLine(`${describeUnreadableApprovalRow({ op: 'updateApproval', id, reason })}\n`);
         throw new UnreadableApprovalError({ id, reason });
       }
 

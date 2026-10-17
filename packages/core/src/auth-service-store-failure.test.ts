@@ -1,10 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { decodeState } from './auth.js';
 import { createAuthProviderRegistry, type OAuthProvider } from './auth-providers.js';
 import { createAuthService } from './auth-service.js';
 import type { AuthStore } from './auth.js';
-import { createMemoryStores } from './testing.js';
+import { captureStderr, createMemoryStores } from './testing.js';
 
 const provider: OAuthProvider = {
   kind: 'oauth2',
@@ -76,8 +76,7 @@ describe('交換の後の器の失敗（issue #3771）', () => {
   it.each<FlakyOperation>(['findIdentity', 'createAccountWithIdentity', 'putLoginRequest'])(
     '%s が一度投げても、exchange_failed を返し、要求は failed になり、claim は failed を返す',
     async (operation) => {
-      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-      try {
+      await captureStderr(async () => {
         const { store, service } = setup(operation);
         const { started, state } = await start(service);
 
@@ -94,19 +93,12 @@ describe('交換の後の器の失敗（issue #3771）', () => {
             claimSecret: started.claimSecret,
           }),
         ).toEqual({ status: 'error', reason: 'failed' });
-      } finally {
-        stderr.mockRestore();
-      }
+      });
     },
   );
 
   it('failed への書き込みまで投げたら、stderr に1行出して exchange_failed を返す（例外は外へ出さない）', async () => {
-    const written: string[] = [];
-    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
-      written.push(String(chunk));
-      return true;
-    });
-    try {
+    const written = await captureStderr(async () => {
       const inner = createMemoryStores().auth;
       let armed = false;
       const store: AuthStore = {
@@ -134,9 +126,7 @@ describe('交換の後の器の失敗（issue #3771）', () => {
         status: 'error',
         reason: 'exchange_failed',
       });
-      expect(written.join('')).toContain('failed に落とせなかった');
-    } finally {
-      stderr.mockRestore();
-    }
+    });
+    expect(written.join('')).toContain('failed に落とせなかった');
   });
 });

@@ -9,6 +9,7 @@ import {
   usageDate,
   usageLayerSchema,
   usageSiteSchema,
+  writeStderrLine,
 } from '@alteroid/core';
 import type {
   UnreadableUsageRow,
@@ -570,7 +571,7 @@ function noteUnreadableUsageRow(
   const fields = [invalid.layer ? 'layer' : undefined, invalid.site ? 'site' : undefined]
     .filter((field): field is string => field !== undefined)
     .join(',');
-  process.stderr.write(
+  writeStderrLine(
     `alteroid: 使用量の集計から読めない行を外しました（${table}、managerId=${JSON.stringify(row.managerId)}、date=${JSON.stringify(row.date)}、不正な欄: ${fields}）\n`,
   );
 }

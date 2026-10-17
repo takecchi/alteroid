@@ -7,6 +7,7 @@ import {
   stripNul,
   schedulePhaseSchema,
   scheduledRequestSchema,
+  writeStderrLine,
 } from '@alteroid/core';
 import type {
   SchedulePhase,
@@ -73,7 +74,7 @@ export class PgScheduleStore implements ScheduleStore {
         continue;
       }
       const reason = summarizeInvalidFields(parsed.error.issues);
-      process.stderr.write(`${describeSkippedScheduleRow({ kind: row.kind, reason })}\n`);
+      writeStderrLine(`${describeSkippedScheduleRow({ kind: row.kind, reason })}\n`);
       unreadable.push({ kind: row.kind, reason });
     }
     return { entries, unreadable };

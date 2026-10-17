@@ -8,13 +8,14 @@ import {
   reasonOf,
   type ManagerToolsSocketHost,
   type RunnerChildUser,
+  writeStderrLine,
 } from '@alteroid/core';
 
 /** 開けなくても runner は止めない: 道具が出ないだけで、委譲そのものは動くため。理由は stderr に1行出す。 */
 export async function openManagerToolsSocket(
   childUser: RunnerChildUser | undefined,
   dir: string = DEFAULT_MANAGER_TOOLS_SOCKET_DIR,
-  write: (line: string) => void = (line) => process.stderr.write(line),
+  write: (line: string) => void = (line) => writeStderrLine(line),
 ): Promise<ManagerToolsSocketHost | undefined> {
   try {
     return await createManagerToolsSocketHost({

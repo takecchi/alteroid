@@ -1,5 +1,6 @@
 import {
   TOKEN_TRIAL_FALSE_POSITIVE_WINDOW_MS,
+  captureStderr,
   TOKEN_TRIAL_INTERVAL_MS,
   UnreadableActiveTokenError,
   createMemoryStores,
@@ -326,24 +327,17 @@ describe('token-trial-watch: 通ったら', () => {
 });
 
 describe('token-trial-watch: 現役の指名が読めない（issue #2125）', () => {
-  function stderrLines(stderr: ReturnType<typeof vi.spyOn>): string[] {
-    return stderr.mock.calls.map((call: unknown[]) => String(call[0]));
-  }
-
-  let stderr: ReturnType<typeof vi.spyOn>;
   let unhandled: unknown[];
   const onUnhandled = (reason: unknown): void => {
     unhandled.push(reason);
   };
 
   beforeEach(() => {
-    stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     unhandled = [];
     process.on('unhandledRejection', onUnhandled);
   });
 
   afterEach(() => {
-    stderr.mockRestore();
     process.off('unhandledRejection', onUnhandled);
   });
 
@@ -355,23 +349,23 @@ describe('token-trial-watch: 現役の指名が読めない（issue #2125）', (
       throw new UnreadableActiveTokenError(REASON);
     };
     const trial = fakeTrial({ verdict: 'usable' });
-    const watch = startTokenTrialWatch({
-      stores,
-      recordTrialVerdict: realRecordTrialVerdict(stores),
-      trial: trial.port,
-      reconsider: () => Promise.resolve(ROTATED),
-      onOutcome: () => Promise.resolve(),
-      tickMs: 5,
-      now: () => AT,
+    const lines = await captureStderr(async () => {
+      const watch = startTokenTrialWatch({
+        stores,
+        recordTrialVerdict: realRecordTrialVerdict(stores),
+        trial: trial.port,
+        reconsider: () => Promise.resolve(ROTATED),
+        onOutcome: () => Promise.resolve(),
+        tickMs: 5,
+        now: () => AT,
+      });
+      await vi.advanceTimersByTimeAsync(40);
+      watch.stop();
     });
-    await vi.advanceTimersByTimeAsync(40);
-    watch.stop();
 
     expect(trial.calls).toEqual([]);
     expect(unhandled).toEqual([]);
-    const readableLines = stderrLines(stderr).filter((line) =>
-      line.includes('現役の指名が読めない'),
-    );
+    const readableLines = lines.filter((line) => line.includes('現役の指名が読めない'));
     expect(readableLines).toHaveLength(1);
     expect(readableLines[0]).toContain(REASON);
   });
@@ -385,45 +379,43 @@ describe('token-trial-watch: 現役の指名が読めない（issue #2125）', (
       return { tokenId: 'a', generation: 1, rotatedAt: '' };
     };
     const trial = fakeTrial({ verdict: 'undecidable', reason: 'まだ判定できない' });
-    const watch = startTokenTrialWatch({
-      stores,
-      recordTrialVerdict: realRecordTrialVerdict(stores),
-      trial: trial.port,
-      reconsider: () => Promise.resolve(ROTATED),
-      onOutcome: () => Promise.resolve(),
-      tickMs: 5,
-      now: () => AT,
-    });
-    await vi.advanceTimersByTimeAsync(30);
-    expect(trial.calls).toEqual([]);
+    const lines = await captureStderr(async () => {
+      const watch = startTokenTrialWatch({
+        stores,
+        recordTrialVerdict: realRecordTrialVerdict(stores),
+        trial: trial.port,
+        reconsider: () => Promise.resolve(ROTATED),
+        onOutcome: () => Promise.resolve(),
+        tickMs: 5,
+        now: () => AT,
+      });
+      await vi.advanceTimersByTimeAsync(30);
+      expect(trial.calls).toEqual([]);
 
-    unreadable = false;
-    await vi.advanceTimersByTimeAsync(30);
-    watch.stop();
+      unreadable = false;
+      await vi.advanceTimersByTimeAsync(30);
+      watch.stop();
+    });
 
     expect(trial.calls).toEqual(['a']);
     expect(unhandled).toEqual([]);
-    const lines = stderrLines(stderr);
     expect(lines.filter((line) => line.includes('現役の指名が読めない'))).toHaveLength(1);
     expect(lines.filter((line) => line.includes('読めるようになった'))).toHaveLength(1);
   });
 });
 
 describe('token-trial-watch: tick 全体の失敗で未処理の拒否を出さない（#2747）', () => {
-  let stderr: ReturnType<typeof vi.spyOn>;
   let unhandled: unknown[];
   const onUnhandled = (reason: unknown): void => {
     unhandled.push(reason);
   };
 
   beforeEach(() => {
-    stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     unhandled = [];
     process.on('unhandledRejection', onUnhandled);
   });
 
   afterEach(() => {
-    stderr.mockRestore();
     process.off('unhandledRejection', onUnhandled);
   });
 
@@ -439,10 +431,8 @@ describe('token-trial-watch: tick 全体の失敗で未処理の拒否を出さ�
     });
   }
 
-  function fallenLines(): string[] {
-    return stderr.mock.calls
-      .map((call: unknown[]) => String(call[0]))
-      .filter((line: string) => line.includes('認証トークンの試しが落ちました'));
+  function fallenLines(lines: string[]): string[] {
+    return lines.filter((line) => line.includes('認証トークンの試しが落ちました'));
   }
 
   it('stores.tokens.list() が投げても未処理の拒否にならず、stderr へ1行出して次の周期へ進む', async () => {
@@ -455,16 +445,18 @@ describe('token-trial-watch: tick 全体の失敗で未処理の拒否を出さ�
     stores.tokens.readActive = () =>
       Promise.resolve({ tokenId: 'a', generation: 1, rotatedAt: '' });
     const trial = fakeTrial({ verdict: 'undecidable', reason: 'まだ判定できない' });
-    const watch = start(stores, trial.port);
+    const lines = await captureStderr(async () => {
+      const watch = start(stores, trial.port);
 
-    await vi.advanceTimersByTimeAsync(30);
-    expect(unhandled).toEqual([]);
-    expect(fallenLines().length).toBeGreaterThanOrEqual(1);
-    expect(fallenLines()[0]).toContain('接続が切れた（テスト用）');
+      await vi.advanceTimersByTimeAsync(30);
+      expect(unhandled).toEqual([]);
 
-    broken = false;
-    await vi.advanceTimersByTimeAsync(30);
-    watch.stop();
+      broken = false;
+      await vi.advanceTimersByTimeAsync(30);
+      watch.stop();
+    });
+    expect(fallenLines(lines).length).toBeGreaterThanOrEqual(1);
+    expect(fallenLines(lines)[0]).toContain('接続が切れた（テスト用）');
     expect(trial.calls).toEqual(['a']);
     expect(unhandled).toEqual([]);
   });
@@ -474,31 +466,32 @@ describe('token-trial-watch: tick 全体の失敗で未処理の拒否を出さ�
     await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
     stores.tokens.readActive = () => Promise.reject(new Error('読み取り失敗（テスト用）'));
     const trial = fakeTrial({ verdict: 'usable' });
-    const watch = start(stores, trial.port);
+    const lines = await captureStderr(async () => {
+      const watch = start(stores, trial.port);
 
-    await vi.advanceTimersByTimeAsync(30);
-    watch.stop();
+      await vi.advanceTimersByTimeAsync(30);
+      watch.stop();
+    });
     expect(unhandled).toEqual([]);
     expect(trial.calls).toEqual([]);
-    expect(fallenLines().length).toBeGreaterThanOrEqual(1);
+    expect(fallenLines(lines).length).toBeGreaterThanOrEqual(1);
   });
 });
 
 describe('token-trial-watch: 試しが投げた例外の文は伏せ字を通す（#2607）', () => {
   it('Bearer・URL の資格が stderr の跡に出ない', async () => {
-    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    try {
-      const stores = createMemoryStores();
-      await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
-      await stores.tokens.writeActive({ tokenId: 'a', generation: 1, rotatedAt: '' });
-      const port: TokenTrialPort = {
-        trial: () =>
-          Promise.reject(
-            new Error(
-              'boom Authorization: Bearer sk-FAKE0123456789abcdefSECRET https://user:hunter2-FAKE-pass@example.com/x',
-            ),
+    const stores = createMemoryStores();
+    await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
+    await stores.tokens.writeActive({ tokenId: 'a', generation: 1, rotatedAt: '' });
+    const port: TokenTrialPort = {
+      trial: () =>
+        Promise.reject(
+          new Error(
+            'boom Authorization: Bearer sk-FAKE0123456789abcdefSECRET https://user:hunter2-FAKE-pass@example.com/x',
           ),
-      };
+        ),
+    };
+    const lines = await captureStderr(async () => {
       const watch = startTokenTrialWatch({
         stores,
         recordTrialVerdict: realRecordTrialVerdict(stores),
@@ -510,14 +503,12 @@ describe('token-trial-watch: 試しが投げた例外の文は伏せ字を通す
       });
       await settle();
       watch.stop();
-      const written = stderr.mock.calls.map((call: unknown[]) => String(call[0])).join('');
-      expect(written).toContain('判定できなかった');
-      expect(written).toContain('boom');
-      expect(written).not.toContain('sk-FAKE0123456789abcdefSECRET');
-      expect(written).not.toContain('hunter2-FAKE-pass');
-    } finally {
-      stderr.mockRestore();
-    }
+    });
+    const written = lines.join('');
+    expect(written).toContain('判定できなかった');
+    expect(written).toContain('boom');
+    expect(written).not.toContain('sk-FAKE0123456789abcdefSECRET');
+    expect(written).not.toContain('hunter2-FAKE-pass');
   });
 });
 

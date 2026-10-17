@@ -8,6 +8,7 @@ import {
   type CredentialEntry,
   type StoredCredential,
   compareCodeUnits,
+  writeStderrLine,
 } from '@alteroid/core';
 import type { CredentialVaultStore } from '@alteroid/core';
 import { z } from 'zod';
@@ -143,7 +144,7 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
           return;
         }
         invalidRaw.push(rawRow);
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedCredentialRow({
             index,
             reason: summarizeInvalidFields(result.error.issues),

@@ -15,6 +15,7 @@ import {
   reasonOf,
   type AttachmentLimits,
   type Stores,
+  writeStderrLine,
 } from '@alteroid/core';
 import { AUTH_WITHHELD_ENV_KEYS } from './auth.js';
 import { reportBootFootprint } from './boot-footprint.js';
@@ -100,7 +101,7 @@ async function backfillMemoryHumanTouch(stores: Stores): Promise<void> {
       await stores.persona.markHumanTouched(slug, at);
     }
   } catch (error) {
-    process.stderr.write(
+    writeStderrLine(
       `alteroidd: 記憶の保護状態の backfill に失敗した（unknown のまま起動を続ける）: ${reasonOf(error)}\n`,
     );
   }
@@ -122,7 +123,7 @@ async function backfillMemoryCreatedAt(stores: Stores): Promise<void> {
         `（記憶は全 ${metas.length} 件、うち unknown ${unknown} 件）。\n`,
     );
   } catch (error) {
-    process.stderr.write(
+    writeStderrLine(
       `alteroidd: 記憶の created_at backfill に失敗した（unknown のまま起動を続ける）: ${reasonOf(error)}\n`,
     );
   }
@@ -133,12 +134,12 @@ async function ensureConversationReadBaseline(stores: Stores): Promise<void> {
   try {
     const result = await stores.conversationReads.ensureBaseline(new Date().toISOString());
     if (result.state === 'unreadable') {
-      process.stderr.write(
+      writeStderrLine(
         `alteroidd: 会話の既読の記録が読めない（基準時刻は決めていない）: ${result.reason}\n`,
       );
     }
   } catch (error) {
-    process.stderr.write(
+    writeStderrLine(
       `alteroidd: 会話の既読の基準時刻を決められなかった（起動は続ける）: ${reasonOf(error)}\n`,
     );
   }
@@ -152,7 +153,7 @@ async function ensureConversationReadBaseline(stores: Stores): Promise<void> {
 export function planAttachmentBlobs(
   env: NodeJS.ProcessEnv,
   kind: 'fs' | 'pg',
-  write: (line: string) => void = (line) => void process.stderr.write(line),
+  write: (line: string) => void = (line) => void writeStderrLine(line),
 ): {
   config:
     Extract<ReturnType<typeof readAttachmentBlobConfig>, { kind: 'on' }>['config'] | undefined;

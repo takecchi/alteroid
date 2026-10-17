@@ -1,4 +1,4 @@
-import { collapseErrorCause } from '@alteroid/core';
+import { collapseErrorCause, writeStderrLine } from '@alteroid/core';
 import type { Stores } from '@alteroid/core';
 import { drizzle } from 'drizzle-orm/node-postgres';
 
@@ -181,7 +181,7 @@ export async function createPgStores(options: CreatePgStoresOptions | string): P
   const onError =
     config.onError ??
     ((error: Error) => {
-      process.stderr.write(describePgConnectionError(error));
+      writeStderrLine(describePgConnectionError(error));
     });
   pool.on('error', onError);
 

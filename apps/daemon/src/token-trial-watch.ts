@@ -14,6 +14,7 @@ import {
   type TokenRotationOutcome,
   type TokenRotator,
   type TokenTrialPort,
+  writeStderrLine,
 } from '@alteroid/core';
 
 export const TOKEN_TRIAL_WATCH_TICK_MS = 60_000;
@@ -97,13 +98,13 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     failureCount.set(token.id, count);
     if (verdict.verdict === 'unusable') {
       await options.recordTrialVerdict({ tokenId: token.id, verdict });
-      process.stderr.write(
+      writeStderrLine(
         `alteroidd: 認証トークンの試し（id ${token.id} / 「${token.label}」）は通らなかった` +
           `（${verdict.reason}）。連続不通過: ${String(count)}\n`,
       );
       return;
     }
-    process.stderr.write(
+    writeStderrLine(
       `alteroidd: 認証トークンの試し（id ${token.id} / 「${token.label}」）は判定できなかった` +
         `（${verdict.reason}）。連続不通過（未判定を含む）: ${String(count)}\n`,
     );
@@ -174,7 +175,7 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
       // 読めないに変わったときだけ書く: 定期処理なので、読めない状態が続くあいだ毎回書くと埋もれるため。
       if (!activeUnreadable) {
         activeUnreadable = true;
-        process.stderr.write(
+        writeStderrLine(
           `alteroidd: 現役の指名が読めない（${reasonOf(error)}）。読めるようになるまで` +
             'トークンの試しを止める。\n',
         );
@@ -183,9 +184,7 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     }
     if (activeUnreadable) {
       activeUnreadable = false;
-      process.stderr.write(
-        'alteroidd: 現役の指名が読めるようになった。トークンの試しを再開する。\n',
-      );
+      writeStderrLine('alteroidd: 現役の指名が読めるようになった。トークンの試しを再開する。\n');
     }
     const target = selectTokenForTrial({
       tokens,
@@ -199,7 +198,7 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     try {
       await runOneTrial(target);
     } catch (error) {
-      process.stderr.write(`alteroidd: 認証トークンの試しが落ちました: ${reasonOf(error)}\n`);
+      writeStderrLine(`alteroidd: 認証トークンの試しが落ちました: ${reasonOf(error)}\n`);
     } finally {
       inFlight = false;
     }
@@ -210,7 +209,7 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     try {
       await tickBody();
     } catch (error) {
-      process.stderr.write(`alteroidd: 認証トークンの試しが落ちました: ${reasonOf(error)}\n`);
+      writeStderrLine(`alteroidd: 認証トークンの試しが落ちました: ${reasonOf(error)}\n`);
     }
   }
 
