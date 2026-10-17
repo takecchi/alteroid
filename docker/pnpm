@@ -19,4 +19,10 @@ done
 case "$dir" in
   /*) if [ -d "$dir" ]; then cd "$dir"; fi ;;
 esac
+# pnpm 12（Rust 製の pnpm-native）のスレッドを絞る（#5036）。器の pids の上限はスレッド単位で数えられるが、
+# pnpm-native は cgroup の CPU 数（24）に合わせて tokio のワーカー 24 本と rayon の池 16 本を立て、
+# `pnpm --filter … start` のように子を待つ間ずっと常駐させる（実測: 43 → 2 と 2 で 5）。担当が値を置けばそれに従う
+TOKIO_WORKER_THREADS=${TOKIO_WORKER_THREADS:-2}
+RAYON_NUM_THREADS=${RAYON_NUM_THREADS:-2}
+export TOKIO_WORKER_THREADS RAYON_NUM_THREADS
 exec corepack pnpm "$@"

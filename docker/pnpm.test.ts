@@ -10,25 +10,35 @@ import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'pnpm');
 
-function setup(label: string): { root: string; repo: string; run: (args: string[]) => string } {
+function setup(label: string): {
+  root: string;
+  repo: string;
+  run: (args: string[], env?: Record<string, string>) => string;
+} {
   const root = realpathSync(makeTempDirSync(`docker-pnpm-${label}.`));
   const bin = join(root, 'bin');
   mkdirSync(bin);
   writeFileSync(
     join(bin, 'corepack'),
-    ['#!/bin/sh', 'printf "CWD:%s\\n" "$(pwd)"', 'printf "ARGS:%s\\n" "$*"', 'exit 0', ''].join(
-      '\n',
-    ),
+    [
+      '#!/bin/sh',
+      'printf "CWD:%s\\n" "$(pwd)"',
+      'printf "ARGS:%s\\n" "$*"',
+      'printf "TOKIO:%s\\n" "${TOKIO_WORKER_THREADS-unset}"',
+      'printf "RAYON:%s\\n" "${RAYON_NUM_THREADS-unset}"',
+      'exit 0',
+      '',
+    ].join('\n'),
   );
   chmodSync(join(bin, 'corepack'), 0o755);
   const repo = join(root, 'repo');
   mkdirSync(repo);
   const elsewhere = join(root, 'elsewhere');
   mkdirSync(elsewhere);
-  const run = (args: string[]): string =>
+  const run = (args: string[], env: Record<string, string> = {}): string =>
     execFileSync(SCRIPT, args, {
       cwd: elsewhere,
-      env: { PATH: `${bin}:/usr/bin:/bin` },
+      env: { PATH: `${bin}:/usr/bin:/bin`, ...env },
       encoding: 'utf8',
     });
   return { root, repo, run };
@@ -55,5 +65,21 @@ describe('pnpm の入口: -C / --dir の絶対パスへ移ってから corepack 
     expect(run(['--version'])).toContain(`CWD:${elsewhere}\n`);
     expect(run(['-C', 'repo', 'test'])).toContain(`CWD:${elsewhere}\n`);
     expect(run(['-C', join(root, 'no-such-dir'), 'test'])).toContain(`CWD:${elsewhere}\n`);
+  });
+});
+
+describe('pnpm の入口: pnpm-native のスレッドを絞る（#5036）', () => {
+  it('⭐ 未設定なら TOKIO_WORKER_THREADS と RAYON_NUM_THREADS を 2 にして corepack を起こす', () => {
+    const { run } = setup('threads');
+    const out = run(['--version']);
+    expect(out).toContain('TOKIO:2\n');
+    expect(out).toContain('RAYON:2\n');
+  });
+
+  it('担当が値を置いていれば、それに従う', () => {
+    const { run } = setup('threads-own');
+    const out = run(['--version'], { TOKIO_WORKER_THREADS: '8', RAYON_NUM_THREADS: '6' });
+    expect(out).toContain('TOKIO:8\n');
+    expect(out).toContain('RAYON:6\n');
   });
 });
