@@ -175,9 +175,11 @@ describe('inspectBashShape: 断らないもの（誤検知の防ぎ）', () => {
     'sort < in.txt',
     'cat <<< "hello"',
     'diff <(ls a) <(ls b)',
-    'ls | grep foo | tail -n 5',
+    // #5017: `| tail` で終わる管は pipe-trim で断つようになったので、管の途中を通す例は最後の段を変えた
+    'ls | grep foo | wc -l',
     "bash -c 'tail -n 5 f'",
-    "timeout 300 bash -c 'sleep 1; echo done'",
+    // #5017: `;` で繋ぐ形は chain で断つようになったので、timeout の包みを通す例は `;` を外した
+    "timeout 300 bash -c 'sleep 1 && echo done'",
     "sed -n '1,5p' f.ts",
     "sed 's/a/b/' f.ts",
     'sed -e "s/-i/x/" f.ts',
@@ -197,7 +199,7 @@ describe('inspectBashShape: 断らないもの（誤検知の防ぎ）', () => {
     '[[ b > a ]] && echo ok',
     'echo a \\> b',
     'tee >(grep x) < f',
-    'pnpm test | tail -n 20',
+    'pnpm test | grep FAIL',
     'find . -name "*.ts" -exec grep -l foo {} \\;',
     'pnpm exec vitest run --reporter=dot',
     // #4949 で足した形の誤検知の防ぎ
@@ -258,7 +260,7 @@ describe('inspectBashShape: 断らないもの（誤検知の防ぎ）', () => {
     'echo "$(echo "it\'s" | tr a b)"',
     'bash script.sh',
     'bash -n script.sh',
-    "bash -c 'git log --oneline | tail -n 5'",
+    "bash -c 'git log --oneline | wc -l'",
     'echo "# $(date)"',
   ];
   it.each(ok)('%j は通す', (command) => {

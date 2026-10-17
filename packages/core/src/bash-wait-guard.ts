@@ -1,6 +1,38 @@
 export type WaitGuardForm =
   'until-sleep' | 'while-sleep' | 'for-sleep' | 'tail-f' | 'gh-run-watch-background';
 
+/** 待ちの歯が断る形ごとの要約（プロンプトに載せる一覧の元）。型で全部の形を網羅させる: 形を足して要約を書き忘れると typecheck が落ちる（#5017）。 */
+export const WAIT_GUARD_SUMMARIES: Record<WaitGuardForm, { shape: string; instead: string }> = {
+  'gh-run-watch-background': {
+    shape: '`gh run watch` を背景に置く形（`&`・`run_in_background`）',
+    instead: '前景で `timeout <秒> gh run watch <id> --exit-status`',
+  },
+  'tail-f': {
+    shape: '上限の無い `tail -f`・`tail --follow`',
+    instead: '`timeout <秒>` を前に置く（または `--pid=<pid>` を付ける）',
+  },
+  'until-sleep': {
+    shape: '上限の無い `until <条件>; do …sleep…; done`',
+    instead:
+      '回数の上限を決めたループ（`for i in $(seq 60); do …; done`）か、`timeout <秒>` を前に置く',
+  },
+  'while-sleep': {
+    shape: '上限の無い `while <条件>; do …sleep…; done`',
+    instead: '回数の上限を決めたループか、`timeout <秒>` を前に置く',
+  },
+  'for-sleep': {
+    shape: '条件の無い `for ((;;)); do …sleep…; done`',
+    instead: '回数の上限を決めたループか、`timeout <秒>` を前に置く',
+  },
+};
+
+/** 待ちの歯が断る形の一覧を、プロンプトに載せる箇条書きにして返す（歯の定義から生成する。#5017）。 */
+export function waitGuardPromptLines(): string {
+  return Object.values(WAIT_GUARD_SUMMARIES)
+    .map(({ shape, instead }) => `- ${shape} → ${instead}`)
+    .join('\n');
+}
+
 export type WaitGuardVerdict =
   { blocked: false } | { blocked: true; form: WaitGuardForm; reason: string };
 
