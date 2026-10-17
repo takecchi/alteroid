@@ -213,19 +213,28 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     const s = boot();
     await seed(s.stores);
 
-    const first = await timerTick(s);
-    const second = await timerTick(s);
+    // 2026-10-16 #4938 の案2で形を変えた: 定期の tick は要約の全体を持たなくなったので、要約の差分は自発の tick で見る。
+    // 以前は定期の tick 2回（first / second）で、下の要約の節の期待値（'## 届いた外部イベント'・'担当 7 の途中経過'・件数の行・固定の注記）も見ていた
+    const firstTimer = await timerTick(s);
+    const secondTimer = await timerTick(s);
+    // 依頼の本文・固定の指示は、定期の tick の側で今までどおり参照になる
+    expect(firstTimer).toContain(COMPLETELY_FULL_MARK);
+    expect(firstTimer).toContain(REQUEST_BODY.trim());
+    expect(firstTimer).toContain(INSTRUCTION_HEAD);
+    expect(secondTimer).not.toContain(REQUEST_BODY.trim());
+    expect(secondTimer).toMatch(/依頼の本文は前回（\d\d:\d\dZ）の発火と同じ。会話の上にある/u);
+    expect(secondTimer).not.toContain(INSTRUCTION_HEAD);
+    expect(secondTimer).toContain(INSTRUCTION_REF);
+
+    const first = await selfTick(s);
+    const second = await selfTick(s);
 
     // 1回目は全文
-    expect(first).toContain(COMPLETELY_FULL_MARK);
-    expect(first).toContain(REQUEST_BODY.trim());
-    expect(first).toContain(INSTRUCTION_HEAD);
+    expect(first).toContain(SELF_INSTRUCTION_HEAD);
     expect(first).toContain('## 届いた外部イベント');
     expect(first).toContain('担当 7 の途中経過');
-    // 2回目: 依頼の本文・固定の指示・変わらない節は参照
-    expect(second).not.toContain(REQUEST_BODY.trim());
-    expect(second).toMatch(/依頼の本文は前回（\d\d:\d\dZ）の発火と同じ。会話の上にある/u);
-    expect(second).not.toContain(INSTRUCTION_HEAD);
+    // 2回目: 固定の指示・変わらない節は参照
+    expect(second).not.toContain(SELF_INSTRUCTION_HEAD);
     expect(second).toContain(INSTRUCTION_REF);
     expect(second).not.toContain('担当 7 の途中経過');
     // 見出しは残る（節の件数の行はまえがきに残る）
@@ -305,21 +314,22 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     const s = boot({ after: (n) => (n === 2 ? [compactBoundary] : []) });
     await seed(s.stores);
 
-    const first = await timerTick(s);
-    const second = await timerTick(s);
-    const third = await timerTick(s);
+    // 2026-10-16 #4938 の案2: 要約の差分は自発の tick にだけ掛かるので、自発の tick で見る。
+    // 以前は timerTick の3回で、third に REQUEST_BODY と INSTRUCTION_HEAD を期待していた（定期の側は下の別の試験へ移した）
+    const first = await selfTick(s);
+    const second = await selfTick(s);
+    const third = await selfTick(s);
 
     expect(second).not.toContain('担当 7 の途中経過');
-    expect(third).toContain(REQUEST_BODY.trim());
-    expect(third).toContain(INSTRUCTION_HEAD);
+    expect(third).toContain(SELF_INSTRUCTION_HEAD);
     expect(third).toContain('担当 7 の途中経過');
     expect(third).not.toContain(UNCHANGED_SECTION);
     expect(third.length).toBeGreaterThan(first.length * 0.9);
     await s.clone.stop();
   });
 
-  it('⭐ 自動の要約が走りうる tick（前の量に伸びを足すと閾値に届く）は全文を出す', async () => {
-    const s = boot({ contextTotals: [150_000, 180_000, 185_000] });
+  it('⭐ 定期の tick も、自動の要約が走ったあとは依頼の本文と固定の指示を全文へ戻す（#4938 で要約の側を自発の tick へ移した分の残り）', async () => {
+    const s = boot({ after: (n) => (n === 2 ? [compactBoundary] : []) });
     await seed(s.stores);
 
     await timerTick(s);
@@ -327,7 +337,23 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     const third = await timerTick(s);
 
     expect(second).not.toContain(REQUEST_BODY.trim());
+    expect(second).not.toContain(INSTRUCTION_HEAD);
     expect(third).toContain(REQUEST_BODY.trim());
+    expect(third).toContain(INSTRUCTION_HEAD);
+    await s.clone.stop();
+  });
+
+  it('⭐ 自動の要約が走りうる tick（前の量に伸びを足すと閾値に届く）は全文を出す', async () => {
+    const s = boot({ contextTotals: [150_000, 180_000, 185_000] });
+    await seed(s.stores);
+
+    // 2026-10-16 #4938 の案2: 自発の tick で見る。以前は timerTick の3回で REQUEST_BODY の有無を見ていた
+    await selfTick(s);
+    const second = await selfTick(s);
+    const third = await selfTick(s);
+
+    expect(second).not.toContain(SELF_INSTRUCTION_HEAD);
+    expect(third).toContain(SELF_INSTRUCTION_HEAD);
     expect(third).toContain('担当 7 の途中経過');
     await s.clone.stop();
   });
@@ -336,11 +362,12 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     const s = boot({ contextTotals: [50_000, 60_000, 70_000] });
     await seed(s.stores);
 
-    await timerTick(s);
-    await timerTick(s);
-    const third = await timerTick(s);
+    // 2026-10-16 #4938 の案2: 自発の tick で見る。以前は timerTick の3回で REQUEST_BODY が無いことを見ていた
+    await selfTick(s);
+    await selfTick(s);
+    const third = await selfTick(s);
 
-    expect(third).not.toContain(REQUEST_BODY.trim());
+    expect(third).not.toContain(SELF_INSTRUCTION_HEAD);
     expect(third).not.toContain('担当 7 の途中経過');
     await s.clone.stop();
   });
@@ -355,12 +382,13 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     const s = boot({ after: (n) => (n === 2 ? [changedSession] : []) });
     await seed(s.stores);
 
-    await timerTick(s);
-    const second = await timerTick(s);
-    const third = await timerTick(s);
+    // 2026-10-16 #4938 の案2: 自発の tick で見る。以前は timerTick の3回で REQUEST_BODY の有無を見ていた
+    await selfTick(s);
+    const second = await selfTick(s);
+    const third = await selfTick(s);
 
-    expect(second).not.toContain(REQUEST_BODY.trim());
-    expect(third).toContain(REQUEST_BODY.trim());
+    expect(second).not.toContain(SELF_INSTRUCTION_HEAD);
+    expect(third).toContain(SELF_INSTRUCTION_HEAD);
     expect(third).toContain('担当 7 の途中経過');
     await s.clone.stop();
   });
@@ -369,12 +397,13 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     // PreCompact は要約が走る直前の合図: フックを直接叩く（フックの引き方は clone-summary-reindex-and-tail.test.ts と同じ）
     const hooked = bootWithHooks();
     await seed(hooked.stores);
-    await timerTick(hooked);
-    const second = await timerTick(hooked);
-    expect(second).not.toContain(REQUEST_BODY.trim());
+    // 2026-10-16 #4938 の案2: 自発の tick で見る。以前は timerTick の3回で REQUEST_BODY の有無を見ていた
+    await selfTick(hooked);
+    const second = await selfTick(hooked);
+    expect(second).not.toContain(SELF_INSTRUCTION_HEAD);
     await hooked.fire();
-    const afterPreCompact = await timerTick(hooked);
-    expect(afterPreCompact).toContain(REQUEST_BODY.trim());
+    const afterPreCompact = await selfTick(hooked);
+    expect(afterPreCompact).toContain(SELF_INSTRUCTION_HEAD);
     expect(afterPreCompact).toContain('担当 7 の途中経過');
     await hooked.clone.stop();
   });
@@ -413,9 +442,10 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     const s = boot({ holdAfterInputEnd: hold });
     await seed(s.stores);
 
-    await timerTick(s);
-    const second = await timerTick(s);
-    expect(second).not.toContain(REQUEST_BODY.trim());
+    // 2026-10-16 #4938 の案2: 自発の tick で見る。以前は timer の3回（3本目も timer を post）で REQUEST_BODY・INSTRUCTION_HEAD を見ていた
+    await selfTick(s);
+    const second = await selfTick(s);
+    expect(second).not.toContain(SELF_INSTRUCTION_HEAD);
 
     // 人間の操作で開き直す: 入力は閉じるが、古い会話の終わり（`query` を下ろす）は hold が解けるまで来ない
     await s.clone.reopenSession?.({ distill: false, actor: 'human', reason: '試験' });
@@ -424,23 +454,21 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     const before = s.inputs.length;
     eventSeq += 1;
     s.clone.post({
-      type: 'timer',
-      id: `evt-timer-${eventSeq}`,
+      type: 'self_initiative',
+      id: `evt-self-${eventSeq}`,
       at: new Date().toISOString(),
-      kind: TIMER_KIND,
-      cause: 'manual',
+      reason: '窓の中の tick',
     });
     // 要約が組まれる（日誌に入力の行が残る）まで、古い会話の終わりを待たせる: 先に解くと、組む前に query が下りて窓が閉じてしまう
     await waitFor(async () => {
       const rows = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
-      return rows.filter((row) => row.text.startsWith('ターンの入力: timer')).length >= 3;
+      return rows.filter((row) => row.text.startsWith('ターンの入力: self_initiative')).length >= 3;
     }, '窓の中で組まれた3本目の入力の行');
     release();
     await waitFor(() => s.inputs.length > before, '新しい会話の最初の入力');
     const third = s.inputs[before] ?? '';
 
-    expect(third).toContain(REQUEST_BODY.trim());
-    expect(third).toContain(INSTRUCTION_HEAD);
+    expect(third).toContain(SELF_INSTRUCTION_HEAD);
     expect(third).toContain('担当 7 の途中経過');
     expect(third).not.toContain(UNCHANGED_SECTION);
     await s.clone.stop();
@@ -450,10 +478,11 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     const s = boot({ noUsage: true });
     await seed(s.stores);
 
-    await timerTick(s);
-    const second = await timerTick(s);
+    // 2026-10-16 #4938 の案2: 自発の tick で見る。以前は timerTick の2回で REQUEST_BODY を見ていた
+    await selfTick(s);
+    const second = await selfTick(s);
 
-    expect(second).toContain(REQUEST_BODY.trim());
+    expect(second).toContain(SELF_INSTRUCTION_HEAD);
     expect(second).toContain('担当 7 の途中経過');
     expect(second).not.toContain(UNCHANGED_SECTION);
     await s.clone.stop();
@@ -463,18 +492,19 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     const s = boot({ failResultAt: 2 });
     await seed(s.stores);
 
-    await timerTick(s);
+    // 2026-10-16 #4938 の案2: 自発の tick で見る。以前は timerTick の4回で REQUEST_BODY の有無を見ていた
+    await selfTick(s);
     // 2回目は差分で入るが、そのターンは失敗で終わる
-    const second = await timerTick(s);
-    expect(second).not.toContain(REQUEST_BODY.trim());
-    const third = await timerTick(s);
+    const second = await selfTick(s);
+    expect(second).not.toContain(SELF_INSTRUCTION_HEAD);
+    const third = await selfTick(s);
     // 3回目は全文
-    expect(third).toContain(REQUEST_BODY.trim());
+    expect(third).toContain(SELF_INSTRUCTION_HEAD);
     expect(third).toContain('担当 7 の途中経過');
     expect(third).not.toContain(UNCHANGED_SECTION);
     // 3回目は成功したので、4回目は今までどおり差分
-    const fourth = await timerTick(s);
-    expect(fourth).not.toContain(REQUEST_BODY.trim());
+    const fourth = await selfTick(s);
+    expect(fourth).not.toContain(SELF_INSTRUCTION_HEAD);
     expect(fourth).not.toContain('担当 7 の途中経過');
     await s.clone.stop();
   });
@@ -501,6 +531,69 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     expect(report).toContain('担当 7 の途中経過');
     expect(report).not.toContain(UNCHANGED_SECTION);
     expect(report).not.toMatch(/ほかの \d+ 件は前回/u);
+    await s.clone.stop();
+  });
+});
+
+describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
+  it('⭐ 定期の tick には、要約の全体ではなく件数の行だけが付く', async () => {
+    const s = boot();
+    await seed(s.stores);
+
+    const timer = await timerTick(s);
+
+    expect(timer).toContain(REQUEST_BODY.trim());
+    expect(timer).toContain(
+      '- 担当 running 30・返事待ち 0・failed 0・lost 0・done 0・stopped 0 / 引き受けた仕事 14 / 継続中の依頼 1',
+    );
+    expect(timer).toContain('`manager_list` / `manager_report`');
+    expect(timer).not.toMatch(/^## /mu);
+    expect(timer).not.toContain('担当 7 の途中経過');
+    expect(timer).not.toContain('人間への問い 0');
+    expect(timer).not.toContain('届いた出来事 0');
+    await s.clone.stop();
+  });
+
+  it('⭐ 自発の tick には、今までどおり要約の全体が付く', async () => {
+    const s = boot();
+    await seed(s.stores);
+
+    const self = await selfTick(s);
+
+    expect(self).toContain('## マネージャー');
+    expect(self).toContain('担当 7 の途中経過');
+    expect(self).toContain('## 人間の回答待ち');
+    expect(self).toContain('人間への問い 0');
+    expect(self).toContain('## 届いた外部イベント');
+    expect(self).not.toContain('- 担当 running 30・');
+    await s.clone.stop();
+  });
+
+  it('⭐ 定期の tick を挟んでも、自発の tick の差分の基準は前の自発の tick のまま（件数の行で上書きされない）', async () => {
+    const s = boot();
+    await seed(s.stores);
+
+    await selfTick(s);
+    const now = new Date().toISOString();
+    await s.stores.jobs.putJob({
+      id: 'mgr-between',
+      createdAt: now,
+      updatedAt: now,
+      status: 'running',
+      summary: '間に増えた担当',
+      request: '間に増えた担当の依頼',
+      lastReport: '間に増えた担当の最初の報告',
+    });
+    const timer = await timerTick(s);
+    const second = await selfTick(s);
+
+    expect(timer).toContain('- 担当 running 31・');
+    // 差分のまま（全文に戻っていない）: 前の自発の tick と変わらない担当の行は出ない
+    expect(second).not.toContain('担当 7 の途中経過');
+    expect(second).not.toContain(SELF_INSTRUCTION_HEAD);
+    // 基準は前の自発の tick: 間に増えた担当は、定期の tick を挟んでも新しい行として出る
+    expect(second).toContain('mgr-between');
+    expect(second).toContain('間に増えた担当の最初の報告');
     await s.clone.stop();
   });
 });
