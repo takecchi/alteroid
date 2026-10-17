@@ -10485,6 +10485,137 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
 
     expect(reply).not.toContain('退避 ref');
   });
+
+  // #5028: manager_report の既定は意味のある行だけを出し、残りは件数にまとめる
+  const AT = '2026-10-17T11:00:00.000Z';
+  type Tree = NonNullable<ManagerSummary['lastRescue']>['worktrees'][number];
+  const tree = (name: string, extra: Partial<Tree> = {}): Tree => ({
+    relativePath: name,
+    branch: 'main',
+    at: AT,
+    ...extra,
+  });
+  const pushedOf = (
+    name: string,
+    removal?: NonNullable<NonNullable<Tree['pushed']>['removal']>,
+  ): NonNullable<Tree['pushed']> => ({
+    ref: `refs/alteroid-rescue/mgr-r/${name}-abcd1234`,
+    commit: 'a'.repeat(40),
+    at: AT,
+    ...(removal === undefined ? {} : { removal }),
+  });
+  const rescueOf = (worktrees: Tree[]): ManagerSummary => ({
+    ...rescued(),
+    lastReport: '報告の本文',
+    lastRescue: { at: AT, worktrees },
+  });
+  const mixed = (): ManagerSummary =>
+    rescueOf([
+      tree('landed-a', { pushed: pushedOf('landed-a', { at: AT, reason: 'landed' }) }),
+      tree('landed-b', { pushed: pushedOf('landed-b', { at: AT, reason: 'landed' }) }),
+      tree('done-a', { pushed: pushedOf('done-a', { at: AT, reason: 'done' }) }),
+      tree('empty-a', { notPushed: { reason: 'nothing-tracked' } }),
+      tree('live-a', {
+        pushed: pushedOf('live-a'),
+        untracked: { count: 2, paths: ['memo.txt', 'tmp/x.log'], omitted: 0 },
+      }),
+    ]);
+
+  it('manager_report の既定は生きている ref と未追跡の行とまとめの1行だけを出し、消した ref の名前は出さない', async () => {
+    const h = harness();
+    h.running.push(mixed());
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-r' });
+
+    expect(reply).toContain('live-a: refs/alteroid-rescue/mgr-r/live-a-abcd1234');
+    expect(reply).toContain('未追跡 2 件（memo.txt, tmp/x.log）');
+    expect(reply).toContain(
+      'ほか 4 本の作業ツリーは畳んだ（消した ref: 内容が origin の枝に入っていた 2 本・委譲が done のまま猶予を過ぎた 1 本、送るもの無し 1 本）',
+    );
+    expect(reply).toContain('manager_report を rescueAll: true で読む');
+    for (const name of ['landed-a', 'landed-b', 'done-a', 'empty-a']) {
+      expect(reply).not.toContain(name);
+    }
+  });
+
+  it('rescueAll: true は5本の全部を今までどおり出す', async () => {
+    const h = harness();
+    h.running.push(mixed());
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-r', rescueAll: true });
+
+    for (const name of ['landed-a', 'landed-b', 'done-a', 'empty-a', 'live-a']) {
+      expect(reply).toContain(`${name}: `);
+    }
+    expect(reply).toContain('退避された ref は無い');
+    expect(reply).not.toContain('畳んだ');
+  });
+
+  it('全部が畳まれる委譲でも、見出しとまとめの1行は出す（記録が無いとは読ませない）', async () => {
+    const h = harness();
+    h.running.push(
+      rescueOf([
+        tree('landed-a', { pushed: pushedOf('landed-a', { at: AT, reason: 'landed' }) }),
+        tree('empty-a', { notPushed: { reason: 'nothing-tracked' } }),
+      ]),
+    );
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-r' });
+
+    expect(reply).toContain('退避 ref（走行中に自動で push。');
+    expect(reply).toContain('ほか 2 本の作業ツリーは畳んだ');
+    expect(reply).not.toContain('landed-a');
+  });
+
+  it('送れなかった失敗は、ref が無くても1行で出す', async () => {
+    const h = harness();
+    h.running.push(
+      rescueOf([
+        tree('landed-a', { pushed: pushedOf('landed-a', { at: AT, reason: 'landed' }) }),
+        tree('broken-a', { notPushed: { reason: 'push-failed' } }),
+      ]),
+    );
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-r' });
+
+    expect(reply).toContain('broken-a: 退避された ref は無い');
+    expect(reply).toContain('push に失敗した');
+    expect(reply).toContain('ほか 1 本の作業ツリーは畳んだ（消した ref: ');
+  });
+
+  it('消せなかった ref と送り先の無い ref は生きている ref として1行で出す', async () => {
+    const h = harness();
+    h.running.push(
+      rescueOf([
+        tree('stuck-a', {
+          pushed: pushedOf('stuck-a', { at: AT, reason: 'done', failureKind: 'network' }),
+        }),
+        tree('noremote-a', {
+          pushed: pushedOf('noremote-a', { at: AT, reason: 'done', failureKind: 'no-remote' }),
+        }),
+      ]),
+    );
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-r' });
+
+    expect(reply).toContain('stuck-a: ');
+    expect(reply).toContain('noremote-a: ');
+    expect(reply).not.toContain('畳んだ');
+  });
+
+  it('manager_list と manager_report の説明文が、畳み方と rescueAll を書いている', () => {
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const report = tools.find((entry) => entry.name === 'manager_report')?.description;
+    const list = tools.find((entry) => entry.name === 'manager_list')?.description;
+    expect(report).toContain('rescueAll: true');
+    expect(report).toContain('畳んで');
+    expect(list).toContain('manager_report を rescueAll: true');
+  });
 });
 
 describe('manager_report: 報告が空のとき、生ログを見て言い分ける（#323）', () => {

@@ -1974,13 +1974,14 @@ function unpushedWorkObservationIncompleteSuffix(
 // 一覧では外へ出した成果も退避 ref も件数と最後の1件だけにする: 一覧は予算で打ち切られ、1件の委譲が最大20行を取ると出る委譲の数が減るため。全件は `manager_report` が出す
 function describeUnpushedWorkObservation(
   manager: ManagerSummary,
-  outputs: 'brief' | 'full' = 'brief',
+  outputs: 'brief' | 'full' | 'report' = 'brief',
 ): string | null {
   const lines = [
     describeUnpushedWorkObservationOnly(manager),
     describeRescue(manager, outputs),
     describeRescueStash(manager),
-    describeExternalOutputs(manager, outputs),
+    // 'report' でも外へ出した成果は畳まない: 畳むのは退避 ref だけで、成果の記録は件数が上限で締まっている
+    describeExternalOutputs(manager, outputs === 'report' ? 'full' : outputs),
     describeHeldMessages(manager),
   ].filter((line): line is string => line !== null);
   return lines.length === 0 ? null : lines.join('\n');
@@ -2078,18 +2079,67 @@ function describeRescueBrief(rescue: NonNullable<ManagerSummary['lastRescue']>):
       : `${String(pushedTrees.length)} 本（最新: ${describeRescuePushed(latest)}）`;
   const unsaved =
     unsavedTrees === 0 ? '' : `。退避されなかったものがある作業ツリー ${String(unsavedTrees)} 本`;
-  return `  退避 ref ${refs}${unsaved}（走行中に自動で push。${rescue.at} に最後に更新。全部は manager_report）`;
+  return `  退避 ref ${refs}${unsaved}（走行中に自動で push。${rescue.at} に最後に更新。全部は manager_report を rescueAll: true で読む）`;
+}
+
+type RescueTree = NonNullable<ManagerSummary['lastRescue']>['worktrees'][number];
+
+// 畳んでよいのは、読み手がもう何もできない作業ツリーだけにする: 生きている ref・退避されなかったもの・送れなかった失敗は、畳むと「全部退避できた」と読めるため
+type RescueTreeFold =
+  | { kind: 'shown' }
+  | { kind: 'removed'; reason: RescueRemovalReason }
+  | { kind: 'nothing-to-send' };
+
+function classifyRescueTree(tree: RescueTree): RescueTreeFold {
+  const removal = tree.pushed?.removal;
+  const liveRef =
+    tree.pushed !== undefined && (removal === undefined || removal.failureKind !== undefined);
+  if (liveRef) return { kind: 'shown' };
+  if (tree.untracked !== undefined || tree.submoduleCount !== undefined) return { kind: 'shown' };
+  if (tree.notPushed !== undefined && tree.notPushed.reason !== 'nothing-tracked') {
+    return { kind: 'shown' };
+  }
+  if (removal !== undefined) return { kind: 'removed', reason: removal.reason };
+  return { kind: 'nothing-to-send' };
+}
+
+function describeRescueFolded(folded: RescueTreeFold[]): string | null {
+  if (folded.length === 0) return null;
+  const removedGroups = (Object.keys(RESCUE_REMOVAL_REASON_TEXT) as RescueRemovalReason[])
+    .map((reason) => ({
+      reason,
+      count: folded.filter((f) => f.kind === 'removed' && f.reason === reason).length,
+    }))
+    .filter((group) => group.count > 0)
+    .map((group) => `${RESCUE_REMOVAL_REASON_TEXT[group.reason]} ${String(group.count)} 本`);
+  const nothing = folded.filter((f) => f.kind === 'nothing-to-send').length;
+  const breakdown = [
+    removedGroups.length === 0 ? null : `消した ref: ${removedGroups.join('・')}`,
+    nothing === 0 ? null : `送るもの無し ${String(nothing)} 本`,
+  ].filter((part): part is string => part !== null);
+  return (
+    `    ほか ${String(folded.length)} 本の作業ツリーは畳んだ（${breakdown.join('、')}）。` +
+    '全部は manager_report を rescueAll: true で読む'
+  );
 }
 
 export function describeRescue(
   manager: ManagerSummary,
-  mode: 'brief' | 'full' = 'full',
+  mode: 'brief' | 'full' | 'report' = 'full',
 ): string | null {
   const rescue = manager.lastRescue;
   if (rescue === undefined || rescue.worktrees.length === 0) return null;
   if (mode === 'brief') return describeRescueBrief(rescue);
   const lines = [`  退避 ref（走行中に自動で push。${rescue.at} に最後に更新）:`];
+  const folded: RescueTreeFold[] = [];
   for (const tree of rescue.worktrees) {
+    if (mode === 'report') {
+      const fold = classifyRescueTree(tree);
+      if (fold.kind !== 'shown') {
+        folded.push(fold);
+        continue;
+      }
+    }
     const parts: string[] = [];
     if (tree.pushed !== undefined) {
       parts.push(describeRescuePushed(tree.pushed));
@@ -2119,6 +2169,8 @@ export function describeRescue(
     }
     if (unsaved.length > 0) lines.push(`      退避されなかったもの: ${unsaved.join('、')}`);
   }
+  const foldedLine = describeRescueFolded(folded);
+  if (foldedLine !== null) lines.push(foldedLine);
   return lines.join('\n');
 }
 
@@ -2168,8 +2220,11 @@ function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | 
   );
 }
 
-function unpushedWorkReportNote(manager: ManagerSummary): string | null {
-  const note = describeUnpushedWorkObservation(manager, 'full');
+function unpushedWorkReportNote(
+  manager: ManagerSummary,
+  rescueAll: boolean = false,
+): string | null {
+  const note = describeUnpushedWorkObservation(manager, rescueAll ? 'full' : 'report');
   return note === null ? null : note.trimStart();
 }
 
@@ -7495,7 +7550,7 @@ export function createCloneTools(context: ToolContext) {
           '**journal_read の types / commitment_list の origin とは倒し方が違う** — ' +
           'あちらは [] を「どれにも当たらない」＝0件として扱う。',
         'q で依頼文の全文と managerId を部分一致で探せる（依頼文の札や語で担当を探すとき。大文字小文字・全角半角は区別しない）。status と併用できる。' +
-          '各行の退避 ref は件数と最新の1件だけで、全部は manager_report（退避 ref を作業ツリーごとに全部出す）で読む。',
+          '各行の退避 ref は件数と最新の1件だけで、全部は manager_report を rescueAll: true で呼ぶと、退避 ref を作業ツリーごとに全部出す。',
         '絞った先が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
         '認証トークンの世代の行（`describeTokenGeneration` の doc）が出ているマネージャーでは、' +
           'この委譲が最後に起こした／自動で開き直した時点の世代と、いまの現役の世代を比べられる。' +
@@ -7832,7 +7887,10 @@ export function createCloneTools(context: ToolContext) {
       [
         'マネージャーの依頼文・直近の報告を全文で読む。',
         'manager_list は抜粋なので、欠落に気づいたらここで全部読むこと。',
-        'manager_list の行は退避 ref を件数と最新の1件しか出さない。作業ツリーごとの退避 ref・退避されなかったものは、報告の本文の前にここで全部出る。',
+        'manager_list の行は退避 ref を件数と最新の1件しか出さない。ここ（manager_report）は報告の本文の前に、作業ツリーごとの退避 ref を既定では畳んで出す:',
+        '生きている退避 ref（消していない・消せなかった・送り先が無い）・退避されなかったもの（未追跡・submodule）・送れなかった失敗（送るもの無し以外）の作業ツリーは1行ずつ出し、',
+        '退避 ref を消し終えたもの（消した理由ごと）と送るもの無しのものは件数にまとめた1行になる。',
+        '全部（消した ref も送るもの無しも1行ずつ）は rescueAll: true で読む。',
         '長い場合は続きの取り方が末尾に出るので、最後まで読み切ること。',
         'それでも足りない（報告に書かれていない中身を確かめたい）ときは manager_transcript で生ログまで降りられる。',
         'report が「まだ無い」と返ったときは、内部で生ログも見ている（#323）——',
@@ -7850,8 +7908,14 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             `何文字目から読むか（${formatIntRangeJa({ min: 0 })}）。前回の応答が示した続きの位置を渡す`,
           ),
+        rescueAll: z
+          .boolean()
+          .optional()
+          .describe(
+            '真なら退避 ref を畳まず作業ツリーごとに全部出す（既定は、消し終えた ref と送るもの無しの作業ツリーを件数にまとめる）',
+          ),
       },
-      async ({ managerId, part = 'report', offset = 0 }) => {
+      async ({ managerId, part = 'report', offset = 0, rescueAll = false }) => {
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         if (!context.managers) return NO_POOL;
@@ -7890,7 +7954,7 @@ export function createCloneTools(context: ToolContext) {
           const denied = describeDenials(context.managers.denials(managerId), found.lastReportAt);
           // この枝でも出す: `manager_list` で「何も届いていない」と読んだクローンが掘りに来る先で、黙ると順位を付けた意味が掘った先で消えるため
           const unobserved = describeUnobservedOutcome(found);
-          const unpushedWork = unpushedWorkReportNote(found);
+          const unpushedWork = unpushedWorkReportNote(found, rescueAll);
           const withheldReportsNote = describeWithheldReports(found);
           return text(
             [
@@ -7936,7 +8000,7 @@ export function createCloneTools(context: ToolContext) {
               );
         // 依頼文（`part === 'request'`）では注記を出さない: 依頼文は報告・失敗・拒否の話ではないため
         const unobserved = part === 'request' ? null : describeUnobservedOutcome(found);
-        const unpushedWork = part === 'request' ? null : unpushedWorkReportNote(found);
+        const unpushedWork = part === 'request' ? null : unpushedWorkReportNote(found, rescueAll);
         const withheldReportsNote = part === 'request' ? null : describeWithheldReports(found);
         const label =
           part === 'request'
