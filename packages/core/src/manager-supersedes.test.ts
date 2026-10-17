@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
@@ -398,11 +398,15 @@ describe('自動の起こし直しをクローンへ知らせる（#4861 案B）
     s.fake.push(sessionDiedBy429());
     await settle();
     expect(await s.pool.resumeStoppedByUsage()).toEqual([ID]);
-    await new Promise((resolve) => setTimeout(resolve, 400));
-
-    const notice = s.inbox.find(
-      (event) => event.type === 'manager_message' && event.text.includes('新しい鍵で起こし直した'),
-    );
+    // 決まった時間は待たない（#2146）: 合流窓が閉じて知らせが届くまでを条件で待つ
+    const notice = await vi.waitFor(() => {
+      const found = s.inbox.find(
+        (event) =>
+          event.type === 'manager_message' && event.text.includes('新しい鍵で起こし直した'),
+      );
+      expect(found).toBeDefined();
+      return found;
+    });
     expect(notice?.type).toBe('manager_message');
     expect(notice !== undefined && 'commitmentExempt' in notice).toBe(false);
   });
