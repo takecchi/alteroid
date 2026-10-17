@@ -280,7 +280,12 @@ RUN install -d -m 0711 /run/alteroid/manager
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 ENV CI=true
-RUN corepack enable
+# `pnpm` の入口は corepack の shim ではなく、`-C` / `--dir` の絶対パスへ移ってから corepack を起こす包みにする（#5009）:
+# corepack は pnpm の版を作業ディレクトリの packageManager で決めるので、担当が作業場の外から `pnpm -C <パス>` と打つと
+# 既定の最新が選ばれ、リポジトリの指定と食い違って止まるため。shim はシンボリックリンクなので、先に消してから置く（上書きするとリンク先の corepack 本体を書き換える）
+RUN corepack enable && rm -f /usr/local/bin/pnpm
+COPY docker/pnpm /usr/local/bin/pnpm
+RUN chmod 0755 /usr/local/bin/pnpm
 
 WORKDIR /app
 
