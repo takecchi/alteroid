@@ -719,6 +719,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
     - `git reset`（全ての形）→ `git restore --staged`、捨てる前に依頼者へ確かめる、戻すなら `git revert`
     - `git push` の force 系（`--force`・`--force-with-lease`・`-f`・`+refspec`）→ 新しいコミットを積む、書き換えるなら新しい枝と PR
     - `git rebase`（`git pull --rebase` を含む）→ `git merge origin/main`
+      - `git rebase --abort` / `--quit` は通す（#4958）
     - `--no-verify`・`git commit -n` → フックが落ちた理由を直す
     - `gh pr merge --auto` → `timeout 530 gh run watch <id> --exit-status` で前面で待ち、緑なら `--match-head-commit` を付けてマージ
 - **この門に載せないもの。** 特定のリポジトリの運用規約（`gh pr merge` の形など）は、製品の門ではなく、そのリポジトリの指示（`AGENTS.md`・依頼文）で表す。上の形の歯は、これを**設定で開けた器にだけ**掛ける例外である（既定では掛けない）
