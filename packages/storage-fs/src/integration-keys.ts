@@ -6,6 +6,7 @@ import {
   hasNul,
   integrationKeyRecordSchema,
   prepareIntegrationKeyForWrite,
+  writeStderrLine,
 } from '@alteroid/core';
 import type {
   IntegrationKeyRecord,
@@ -172,7 +173,7 @@ export class FsIntegrationKeyStore implements IntegrationKeyStore {
       invalidRaw.push(raw);
       const fields = [...new Set(result.error.issues.map((it) => String(it.path[0] ?? '(root)')))];
       const id = rowIdOf(raw);
-      process.stderr.write(
+      writeStderrLine(
         `alteroid: integration-keys の不正な行を読み飛ばしました（${index + 1} 行目、不正な欄: ${fields.join(',')}）` +
           `${id === undefined ? '' : ` id=${JSON.stringify(id)}`}\n`,
       );

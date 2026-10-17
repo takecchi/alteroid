@@ -9,6 +9,7 @@ import type {
   PreCompactHookInput,
   PreToolUseHookInput,
   SDKMessage,
+  SessionStartHookInput,
   SessionStore,
   SpawnedProcess,
   SpawnOptions,
@@ -36,6 +37,8 @@ import type {
   AgentPreCompactRecord,
   AgentPreToolHook,
   AgentPreToolRecord,
+  AgentSessionStartHook,
+  AgentSessionStartRecord,
   AgentStopRecord,
   AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
@@ -46,6 +49,7 @@ import { noteBackgroundFailure } from './dropped-record.js';
 import { excerpt } from './excerpt.js';
 import { notePhase } from './loop-stall.js';
 import type { PermissionModeName } from './permission-mode.js';
+import type { ReportLanguageMode } from './report-language.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
 import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
@@ -206,6 +210,28 @@ function wrapUserPromptSubmitHook(
   return async (input) => {
     await hook(toAgentUserPromptSubmitRecord(input));
     return { continue: true };
+  };
+}
+
+function toAgentSessionStartRecord(input: unknown): AgentSessionStartRecord {
+  const raw = input as Partial<SessionStartHookInput> | null | undefined;
+  return typeof raw?.source === 'string' ? { source: raw.source } : {};
+}
+
+// 投げても握って `{ continue: true }` を返す: 言語の知らせのためにセッションを開けなくしないため
+function wrapSessionStartHook(hook: AgentSessionStartHook): HookCallback {
+  return async (input) => {
+    try {
+      const additionalContext = await hook(toAgentSessionStartRecord(input));
+      if (additionalContext === null) return { continue: true };
+      return {
+        continue: true,
+        hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext },
+      };
+    } catch (error: unknown) {
+      noteBackgroundFailure('SessionStart の文脈の追加', '', error);
+      return { continue: true };
+    }
   };
 }
 
@@ -650,6 +676,8 @@ export interface ManagerSessionOptionsRequest {
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
   onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
   onUserPromptSubmit: AgentObservationHook<AgentUserPromptSubmitRecord>;
+  /** 省けば `SessionStart` を登録しない。担当の組み立てだけが渡す（#4995）。 */
+  onSessionStart?: AgentSessionStartHook;
   // `AgentContextHook` に載せる: `runner.ts` の `#onSubagentStop` は作業者を起こし直す文脈を返す判断を含み、`AgentObservationHook` には載らないため
   onSubagentStop: AgentContextHook<AgentSubagentStopRecord>;
   onStop: AgentObservationHook<AgentStopRecord>;
@@ -659,6 +687,8 @@ export interface ManagerSessionOptionsRequest {
   onPermissionDenied: AgentPermissionDeniedHook;
   // クローン側に同じ引数を持たせない: auto-memory が「書いた本人の次のセッション」に届く前提は、使い捨てのマネージャーと違い、長寿命1本のクローンでは崩れていないため
   managerAutoMemoryEnabled: boolean;
+  /** 省けば `settings.language` を載せない（今と同じ settings）。#4977 */
+  reportLanguage?: ReportLanguageMode;
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
   /**
    * runner が展開した plugin（`Options.plugins` の `type: 'local'` へ写す）。省略・空なら欄ごと省く。
@@ -667,6 +697,12 @@ export interface ManagerSessionOptionsRequest {
    */
   plugins?: readonly ClonePluginRequest[];
 }
+
+// 段落（`REPORT_LANGUAGE_PROMPT_PARAGRAPH`）を主にし、こちらは添え: 作業者にどこまで効くかは CLI の作り次第で確かめられないため（#4977）
+const SDK_LANGUAGE_OF: Readonly<Record<ReportLanguageMode, string | undefined>> = {
+  ja: 'japanese',
+  off: undefined,
+};
 
 export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest): Options {
   const {
@@ -686,14 +722,17 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onPostToolUseFailure,
     onPreCompact,
     onUserPromptSubmit,
+    onSessionStart,
     onSubagentStop,
     onStop,
     onPreToolUse,
     onPermissionDenied,
     managerAutoMemoryEnabled,
+    reportLanguage,
     mcpServers,
     plugins,
   } = request;
+  const sdkLanguage = reportLanguage === undefined ? undefined : SDK_LANGUAGE_OF[reportLanguage];
 
   return {
     model,
@@ -737,9 +776,12 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     // [sdk-verbatim Settings.autoMemoryEnabled]
     // Enable auto-memory for this project. When false, Claude will not read from or write to the auto-memory directory.
     // `autoMemoryEnabled` の doc に「Ignored if set in projectSettings」が付いていないことは、SDK を上げるときに目で確かめる: 不在の主張で `check:sdk-quotes` の印では確かめられないため
+    // [sdk-verbatim Settings.language]
+    // Preferred language for Claude responses and voice dictation (e.g., "japanese", "spanish")
     settings: {
       ...NO_ATTRIBUTION_SETTINGS,
       ...(managerAutoMemoryEnabled ? {} : { autoMemoryEnabled: false }),
+      ...(sdkLanguage === undefined ? {} : { language: sdkLanguage }),
     },
     ...(resume === undefined ? {} : { resume }),
     ...(spawnClaudeCodeProcess === undefined ? {} : { spawnClaudeCodeProcess }),
@@ -754,6 +796,9 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       PostToolUseFailure: [{ hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)] }],
       PreCompact: [{ hooks: [wrapPreCompactHook(onPreCompact)] }],
       UserPromptSubmit: [{ hooks: [wrapUserPromptSubmitHook(onUserPromptSubmit)] }],
+      ...(onSessionStart === undefined
+        ? {}
+        : { SessionStart: [{ hooks: [wrapSessionStartHook(onSessionStart)] }] }),
       SubagentStop: [
         {
           timeout: SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
@@ -934,6 +979,8 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
   // 委譲の区間は「上限の文言」の総取りより手前で見る: 後ろに置くと `task_started` / `task_notification` がそこで無条件に捨てられて二度と読まれないため
   if (subtype === 'task_started' || subtype === 'task_notification') {
     const taskId = (message as { task_id?: unknown }).task_id;
+    // 作業者を呼んだ tool_use の id: 作業者の発言の拒否の印と失敗通知を同じ作業者と束ねる鍵になる（#4996）。古い CLI は載せない
+    const toolUseId = (message as { tool_use_id?: unknown }).tool_use_id;
     if (subtype === 'task_started') {
       // 作業者かどうかの判定をここでしない: 判定は `runner.ts` 側が持ち、この層は SDK の綴りを読むだけのため
       const taskType = (message as { task_type?: unknown }).task_type;
@@ -942,6 +989,7 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
         {
           type: 'delegation_started',
           ...(typeof taskId === 'string' ? { taskId } : {}),
+          ...(typeof toolUseId === 'string' ? { toolUseId } : {}),
           ...(typeof taskType === 'string' ? { taskType } : {}),
           ...(typeof spawnDepth === 'number' ? { spawnDepth } : {}),
         },
@@ -956,6 +1004,7 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
       {
         type: 'delegation_notified',
         ...(typeof taskId === 'string' ? { taskId } : {}),
+        ...(typeof toolUseId === 'string' ? { toolUseId } : {}),
         ...(typeof status === 'string' ? { status } : {}),
         ...(typeof summary === 'string'
           ? { summary: excerpt(summary, TASK_NOTIFICATION_SUMMARY_EXCERPT_LIMIT) }

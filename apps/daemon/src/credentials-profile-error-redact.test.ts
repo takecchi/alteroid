@@ -1,4 +1,5 @@
 import {
+  captureStderr,
   createCredentialService,
   createManagerPool,
   createProfileService,
@@ -8,7 +9,7 @@ import type { CloneHost, Stores } from '@alteroid/core';
 import { createPgStoresFromDb } from '@alteroid/storage-pg';
 import type { Db } from '@alteroid/storage-pg';
 import { sql } from 'drizzle-orm';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
@@ -61,21 +62,11 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
 
   let stores: Stores;
   let db: Db;
-  let stderr: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     ({ db } = await createMigratedPglite());
     stores = createPgStoresFromDb(db);
-    stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
   });
-
-  afterEach(() => {
-    stderr.mockRestore();
-  });
-
-  function stderrText(): string {
-    return stderr.mock.calls.map((call: unknown[]) => String(call[0])).join('');
-  }
 
   function credentialsApp() {
     return createApp({
@@ -119,9 +110,14 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
     const app = credentialsApp();
     await breakCredentialsTable(db);
 
-    const response = await putJson(app, '/credentials', {
-      credentials: [{ name: 'NPM_TOKEN', value: FAKE_VALUE }],
-    });
+    let response!: Response;
+    const stderrText = (
+      await captureStderr(async () => {
+        response = await putJson(app, '/credentials', {
+          credentials: [{ name: 'NPM_TOKEN', value: FAKE_VALUE }],
+        });
+      })
+    ).join('');
 
     expect(response.status).toBe(400);
     const text = await response.text();
@@ -130,7 +126,7 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
       error: '鍵の差し替えに失敗した（Error）。詳細は値が載りうるので返さない',
     });
     expect(await journalText(stores)).not.toContain(FAKE_VALUE);
-    expect(stderrText()).not.toContain(FAKE_VALUE);
+    expect(stderrText).not.toContain(FAKE_VALUE);
     const journal = await journalText(stores);
     expect(journal).toContain('環境変数（鍵）を差し替えられなかった');
     expect(journal).toContain('状態の変更が失敗');
@@ -139,22 +135,26 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
   it('PUT /credentials: 鍵・値の NUL と不正な名前は、入力の誤りとして 400。欄名だけを返し、値は含まない（#2927）', async () => {
     const app = credentialsApp();
 
-    const nulValue = await putJson(app, '/credentials', {
-      credentials: [{ name: 'NPM_TOKEN', value: NUL_VALUE }],
-    });
-    expect(nulValue.status).toBe(400);
-    const nulValueBody = await nulValue.text();
-    expect(nulValueBody).toContain('credential.value に NUL');
-    expect(nulValueBody).not.toContain(FAKE_VALUE);
+    const stderrText = (
+      await captureStderr(async () => {
+        const nulValue = await putJson(app, '/credentials', {
+          credentials: [{ name: 'NPM_TOKEN', value: NUL_VALUE }],
+        });
+        expect(nulValue.status).toBe(400);
+        const nulValueBody = await nulValue.text();
+        expect(nulValueBody).toContain('credential.value に NUL');
+        expect(nulValueBody).not.toContain(FAKE_VALUE);
 
-    const nulName = await putJson(app, '/credentials', {
-      credentials: [{ name: `NPM_\u0000TOKEN`, value: FAKE_VALUE }],
-    });
-    expect(nulName.status).toBe(400);
-    expect(await nulName.text()).not.toContain(FAKE_VALUE);
+        const nulName = await putJson(app, '/credentials', {
+          credentials: [{ name: `NPM_\u0000TOKEN`, value: FAKE_VALUE }],
+        });
+        expect(nulName.status).toBe(400);
+        expect(await nulName.text()).not.toContain(FAKE_VALUE);
+      })
+    ).join('');
 
     expect(await journalText(stores)).not.toContain(FAKE_VALUE);
-    expect(stderrText()).not.toContain(FAKE_VALUE);
+    expect(stderrText).not.toContain(FAKE_VALUE);
     expect(await stores.credentials.list()).toEqual([]);
   });
 
@@ -214,9 +214,14 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
     const app = profileApp();
     await breakProfileTable(db);
 
-    const response = await putJson(app, '/profile', {
-      script: `export GH_TOKEN=${FAKE_VALUE}`,
-    });
+    let response!: Response;
+    const stderrText = (
+      await captureStderr(async () => {
+        response = await putJson(app, '/profile', {
+          script: `export GH_TOKEN=${FAKE_VALUE}`,
+        });
+      })
+    ).join('');
 
     expect(response.status).toBe(500);
     expect(await response.text()).not.toContain(FAKE_VALUE);
@@ -224,27 +229,33 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
     expect(journal).not.toContain(FAKE_VALUE);
     expect(journal).toContain('実行環境プロファイルを差し替えられなかった');
     expect(journal).toContain('状態の変更が失敗');
-    expect(stderrText()).not.toContain(FAKE_VALUE);
+    expect(stderrText).not.toContain(FAKE_VALUE);
   });
 
   it('PUT /profile: script・行の名前の NUL は入力の誤りとして 400。欄名だけを返し、値は含まない（#2927）', async () => {
     const app = profileApp();
 
-    const nulScript = await putJson(app, '/profile', { script: `export GH_TOKEN=${NUL_VALUE}` });
-    expect(nulScript.status).toBe(400);
-    const nulScriptBody = await nulScript.text();
-    expect(nulScriptBody).toContain('profile.script に NUL');
-    expect(nulScriptBody).not.toContain(FAKE_VALUE);
+    const stderrText = (
+      await captureStderr(async () => {
+        const nulScript = await putJson(app, '/profile', {
+          script: `export GH_TOKEN=${NUL_VALUE}`,
+        });
+        expect(nulScript.status).toBe(400);
+        const nulScriptBody = await nulScript.text();
+        expect(nulScriptBody).toContain('profile.script に NUL');
+        expect(nulScriptBody).not.toContain(FAKE_VALUE);
 
-    const nulEntry = await putJson(app, '/profile/team', {
-      script: `export GH_TOKEN=${NUL_VALUE}`,
-      scope: 'all',
-    });
-    expect(nulEntry.status).toBe(400);
-    expect(await nulEntry.text()).not.toContain(FAKE_VALUE);
+        const nulEntry = await putJson(app, '/profile/team', {
+          script: `export GH_TOKEN=${NUL_VALUE}`,
+          scope: 'all',
+        });
+        expect(nulEntry.status).toBe(400);
+        expect(await nulEntry.text()).not.toContain(FAKE_VALUE);
+      })
+    ).join('');
 
     expect(await journalText(stores)).not.toContain(FAKE_VALUE);
-    expect(stderrText()).not.toContain(FAKE_VALUE);
+    expect(stderrText).not.toContain(FAKE_VALUE);
     expect(await stores.profile.list()).toEqual([]);
   });
 
@@ -256,16 +267,21 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
       shutdown: () => undefined,
     });
 
-    const response = await putJson(app, '/mcp-servers', {
-      mcpServers: { demo: { command: 'x', env: { TOKEN: NUL_VALUE } } },
-    });
+    let response!: Response;
+    const stderrText = (
+      await captureStderr(async () => {
+        response = await putJson(app, '/mcp-servers', {
+          mcpServers: { demo: { command: 'x', env: { TOKEN: NUL_VALUE } } },
+        });
+      })
+    ).join('');
 
     expect(response.status).toBe(400);
     const text = await response.text();
     expect(text).toContain('mcpServer.env.value に NUL');
     expect(text).not.toContain(FAKE_VALUE);
     expect(await journalText(stores)).not.toContain(FAKE_VALUE);
-    expect(stderrText()).not.toContain(FAKE_VALUE);
+    expect(stderrText).not.toContain(FAKE_VALUE);
     expect(await stores.mcpServers.read()).toBeNull();
   });
 

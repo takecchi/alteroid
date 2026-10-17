@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { decodeState } from './auth.js';
 import { createAuthProviderRegistry, type OAuthProvider } from './auth-providers.js';
 import { createAuthService } from './auth-service.js';
-import { createMemoryStores } from './testing.js';
+import { captureStderr, createMemoryStores } from './testing.js';
 
 function provider(subject: string): OAuthProvider {
   return {
@@ -96,12 +96,7 @@ describe('認証の境界の NUL（インメモリ実装）', () => {
 
 describe('NUL 入りの検証済みメール(インメモリ実装。teto の判断、2026-10-06)', () => {
   it('ログインは exchange_failed で断る(アカウントを作らない)。理由は stderr に残り、メールの値は載らない', async () => {
-    const written: string[] = [];
-    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
-      written.push(String(chunk));
-      return true;
-    });
-    try {
+    const written = await captureStderr(async () => {
       const store = createMemoryStores().auth;
       const service = createAuthService({
         store,
@@ -125,13 +120,11 @@ describe('NUL 入りの検証済みメール(インメモリ実装。teto の判
       });
       expect(await store.listAccounts()).toEqual([]);
       expect((await store.getLoginRequest(requestId))?.status).toBe('failed');
-      const log = written.join('');
-      expect(log).toContain('auth.email');
-      expect(log).toContain('NUL');
-      expect(log).not.toContain('SECRET');
-    } finally {
-      spy.mockRestore();
-    }
+    });
+    const log = written.join('');
+    expect(log).toContain('auth.email');
+    expect(log).toContain('NUL');
+    expect(log).not.toContain('SECRET');
   });
 
   it('未検証のメールに NUL があっても、ログインできる(account.email には載せず、identity のメールは落として残す)', async () => {

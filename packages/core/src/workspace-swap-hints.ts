@@ -57,6 +57,8 @@ export function workspaceCloneHintsFrom(
     .filter(
       (tree) =>
         liveRescueRef(tree) !== undefined &&
+        // 生きている器で消えたと確かめた項目は出さない: 入れ替えで失われた退避と混ぜると、案内が「取り戻せ」と誤る（#4985）
+        tree.goneAt === undefined &&
         !observedTrees.some((worktree) => worktree.relativePath === tree.relativePath),
     )
     .map((tree) => ({

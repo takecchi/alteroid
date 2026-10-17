@@ -156,7 +156,10 @@ export function foldableQuotaStopTargetsOf(event: InboxEvent): QuotaStopTargets 
 
 // `describeQuotaRecovery` の「回復」より狭く取る: こちらはクローンに読ませずに消す側なので、`done` は知らせより後に成功したターンが在るときだけ戻ったと読む。
 // `lastFailure` / `lastUnreported` は成功したターンの報告で消える欄（manager.ts の `case 'report'`）なので、残っていれば直近のターンは成功していない。
-function backOnCurrentToken(found: QuotaRecoverySummary | undefined, noticeAt: string): boolean {
+export function backOnCurrentToken(
+  found: QuotaRecoverySummary | undefined,
+  noticeAt: string,
+): boolean {
   if (found === undefined) return false;
   if (!found.live || found.usageStoppedAt !== undefined) return false;
   if (found.tokenGeneration === undefined || found.activeTokenGeneration === undefined)

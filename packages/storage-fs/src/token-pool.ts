@@ -15,6 +15,7 @@ import {
   type TokenPoolStore,
   type TokenRotationSettings,
   type UnreadableToken,
+  writeStderrLine,
 } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -197,7 +198,7 @@ export class FsTokenPoolStore implements TokenPoolStore {
           return;
         }
         invalidTokensRaw.push(rawToken);
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedTokenRow({
             index,
             reason: summarizeInvalidFields(result.error.issues),
@@ -214,7 +215,7 @@ export class FsTokenPoolStore implements TokenPoolStore {
           settings = result.data;
         } else {
           invalidSettingsRaw = top.settings;
-          process.stderr.write(
+          writeStderrLine(
             `${describeUnreadableTokenPoolField({
               field: 'settings',
               reason: summarizeInvalidFields(result.error.issues),
@@ -231,7 +232,7 @@ export class FsTokenPoolStore implements TokenPoolStore {
           active = result.data;
         } else {
           invalidActiveRaw = top.active;
-          process.stderr.write(
+          writeStderrLine(
             `${describeUnreadableTokenPoolField({
               field: 'active',
               reason: summarizeInvalidFields(result.error.issues),

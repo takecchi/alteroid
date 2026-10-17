@@ -118,6 +118,61 @@ describe('Issue #914 提案(2): 429文言のresets時刻とプールのcooldownU
     expect(result).toBeUndefined();
   });
 
+  describe('週の上限（日付付きの resets）も同じ突き合わせで読む（#5026）', () => {
+    const WEEKLY_TEXT = "You've hit your weekly limit · resets Sep 18, 9:30am (Asia/Tokyo)";
+    const WEEKLY_TARGET = Date.parse('2026-09-18T00:30:00.000Z');
+
+    it('降りた鍵の冷却明けと一致したら stale と名乗る', () => {
+      const dropped = tokenOf({
+        id: 'tok-08',
+        cooldownUntil: WEEKLY_TARGET,
+        cooldownSource: 'quota_reset',
+      });
+      const active = tokenOf({ id: 'tok-09' });
+      expect(
+        matchNoticeResetAgainstPool(WEEKLY_TEXT, 'tok-09', [dropped, active], { at: AT }),
+      ).toBe('stale');
+    });
+
+    it('現役の鍵の冷却明けと一致したら active と名乗る', () => {
+      const active = tokenOf({
+        id: 'tok-09',
+        cooldownUntil: WEEKLY_TARGET,
+        cooldownSource: 'quota_reset',
+      });
+      expect(matchNoticeResetAgainstPool(WEEKLY_TEXT, 'tok-09', [active], { at: AT })).toBe(
+        'active',
+      );
+    });
+
+    it('どの鍵の冷却明けとも一致しなければ何も名乗らない', () => {
+      const dropped = tokenOf({
+        id: 'tok-08',
+        cooldownUntil: WEEKLY_TARGET + 60_000,
+        cooldownSource: 'quota_reset',
+      });
+      expect(matchNoticeResetAgainstPool(WEEKLY_TEXT, 'tok-09', [dropped], { at: AT })).toBe(
+        undefined,
+      );
+    });
+
+    it('8日を超える日付は読まず、冷却明けが一致していても何も名乗らない', () => {
+      const dropped = tokenOf({
+        id: 'tok-08',
+        cooldownUntil: Date.parse('2026-09-30T00:30:00.000Z'),
+        cooldownSource: 'quota_reset',
+      });
+      expect(
+        matchNoticeResetAgainstPool(
+          "You've hit your weekly limit · resets Sep 30, 9:30am (Asia/Tokyo)",
+          'tok-09',
+          [dropped],
+          { at: AT },
+        ),
+      ).toBe(undefined);
+    });
+  });
+
   it('canary: CooldownSourceの値集合が4つのままであること（増えたらここの分類を見直す）', () => {
     expect(cooldownSourceSchema.options).toEqual([
       'quota_reset',

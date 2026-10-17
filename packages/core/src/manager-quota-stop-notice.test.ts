@@ -23,6 +23,8 @@ vi.setConfig({ testTimeout: 30_000 });
 
 const SESSION_LIMIT =
   "You've hit your session limit · resets 12:20am (Asia/Tokyo) · /extra-usage to continue";
+const WEEKLY_LIMIT =
+  "You've hit your weekly limit · resets Oct 22, 4pm (Asia/Tokyo) · /extra-usage to continue";
 const OTHER_RESET_LIMIT =
   "You've hit your session limit · resets 3:00am (Asia/Tokyo) · /extra-usage to continue";
 
@@ -285,6 +287,22 @@ describe('枠だけが理由の束は、担当ごとに配らずプール全体�
     expect(
       journal.some((line) => line.includes('[mgr-a]') && line.includes('受信箱へ行かず')),
     ).toBe(false);
+  });
+
+  it('週の上限（日付付きの resets）でも、プール全体の1通にいつ戻るかの言い回しが載る（#5026）', async () => {
+    const { pool, fake, fresh, stores } = await setup(['mgr-a', 'mgr-b']);
+
+    quotaTurnFailed(fake, 'mgr-a', WEEKLY_LIMIT);
+    await waitForOwn(fresh, ['mgr-a']);
+    quotaClosedFailed(fake, 'mgr-b', WEEKLY_LIMIT);
+    await waitForStored(stores, 'mgr-b');
+
+    await waitForExternals(fresh, 1);
+    const text = textOf(externals(fresh())[0]!);
+    expect(text).toContain('枠に当たって 2 本の担当が止まった（resets Oct 22, 4pm (Asia/Tokyo)）');
+    expect(text).not.toContain('リセット時刻は分からない');
+
+    await pool.stop();
   });
 
   it('担当1本だけが枠で止まると、今どおり manager_message がすぐ1通。窓が閉じても追加の知らせは無い', async () => {

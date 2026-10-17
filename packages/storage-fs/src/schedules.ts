@@ -10,6 +10,7 @@ import {
   scheduledRequestSchema,
   scheduleVersionMatches,
   compareCodeUnits,
+  writeStderrLine,
 } from '@alteroid/core';
 import type {
   SchedulePhase,
@@ -357,7 +358,7 @@ export class FsScheduleStore implements ScheduleStore {
           return;
         }
         invalidSchedulesRaw.push(rawEntry);
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedScheduleRow({
             index,
             reason: summarizeInvalidFields(result.error.issues),
@@ -374,7 +375,7 @@ export class FsScheduleStore implements ScheduleStore {
           return;
         }
         invalidPhasesRaw.push(rawPhase);
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedPhaseRow({
             index,
             reason: summarizeInvalidFields(result.error.issues),

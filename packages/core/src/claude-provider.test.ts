@@ -18,6 +18,8 @@ import type {
   AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
+  AgentSessionStartHook,
+  AgentSessionStartRecord,
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import {
@@ -1409,6 +1411,66 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
     expect(captured).toEqual({});
     expect(captured).not.toHaveProperty('agentId');
     expect(captured).not.toHaveProperty('source');
+  });
+
+  describe('SessionStart フックの包み直し（#4995）', () => {
+    const optionsWith = (onSessionStart?: AgentSessionStartHook) =>
+      buildManagerSessionOptions({
+        model: 'opus',
+        permissionMode: DEFAULT_PERMISSION_MODE,
+        systemPromptAppend: '追記',
+        workerAgentName: WORKER_AGENT_NAME,
+        workerPrompt: '作業者のプロンプト',
+        workerModel: 'sonnet',
+        cwd: '/work',
+        env: {},
+        sessionStore,
+        canUseTool,
+        onPostToolUse: () => ({ kind: 'continue' }),
+        onPostToolUseFailure: () => {},
+        onPreCompact: () => {},
+        onUserPromptSubmit: () => {},
+        ...(onSessionStart === undefined ? {} : { onSessionStart }),
+        onSubagentStop: () => ({ kind: 'continue' }),
+        onStop: () => {},
+        onPreToolUse: () => ({ kind: 'continue' }),
+        onPermissionDenied: async () => ({ kind: 'no-retry' }),
+        managerAutoMemoryEnabled: false,
+      });
+    const input = { hook_event_name: 'SessionStart', session_id: 's', source: 'resume' };
+
+    it('文が返れば additionalContext に載せ、source を中立の記録で渡す', async () => {
+      let captured: AgentSessionStartRecord | undefined;
+      const options = optionsWith(async (record) => {
+        captured = record;
+        return '足す文';
+      });
+      const result = await invokeHook(options.hooks?.SessionStart?.[0]?.hooks[0], input);
+      expect(result).toEqual({
+        continue: true,
+        hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: '足す文' },
+      });
+      expect(captured).toEqual({ source: 'resume' });
+    });
+
+    it('null なら hookSpecificOutput を付けない', async () => {
+      const options = optionsWith(async () => null);
+      const result = await invokeHook(options.hooks?.SessionStart?.[0]?.hooks[0], input);
+      expect(result).toEqual({ continue: true });
+      expect(result).not.toHaveProperty('hookSpecificOutput');
+    });
+
+    it('フックが投げても握って { continue: true } を返す', async () => {
+      const options = optionsWith(async () => {
+        throw new Error('壊れた');
+      });
+      const result = await invokeHook(options.hooks?.SessionStart?.[0]?.hooks[0], input);
+      expect(result).toEqual({ continue: true });
+    });
+
+    it('渡さなければ SessionStart を登録しない', () => {
+      expect(optionsWith().hooks).not.toHaveProperty('SessionStart');
+    });
   });
 
   it('buildManagerSessionOptions: Stop の生入力を同じ値のまま中立の記録として渡し、{ continue: true } を返す', async () => {

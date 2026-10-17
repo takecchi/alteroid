@@ -5,6 +5,7 @@ import {
   type CredentialEntry,
   type CredentialVaultStore,
   type StoredCredential,
+  writeStderrLine,
 } from '@alteroid/core';
 import { asc, inArray } from 'drizzle-orm';
 
@@ -29,7 +30,7 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
     rows.forEach((row, index) => {
       // 入口の検査だけで済ませない: DB は直接 `insert` できるため、`../../x` のような名前が runner へ降りて器の外を指す。
       if (!CREDENTIAL_NAME.test(row.name)) {
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedCredentialRow({ index, reason: 'name の形式が不正', name: row.name })}\n`,
         );
         return;

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { randomToken, sha256Hex } from './auth.js';
-import { reasonOf } from './dropped-record.js';
+import { reasonOf, writeStderrLine } from './dropped-record.js';
 import { assertNoNul, stripNul } from './nul-guard.js';
 import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
 
@@ -127,7 +127,7 @@ export async function resolveIntegrationKey(options: {
     try {
       await store.markIntegrationKeyUsed(found.id, now.toISOString());
     } catch (error) {
-      process.stderr.write(
+      writeStderrLine(
         `alteroidd: 連携の鍵 ${found.id} の最後に使った時刻を書けなかった（出来事は受ける）: ${reasonOf(error)}\n`,
       );
     }
