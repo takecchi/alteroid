@@ -1,6 +1,7 @@
 import { afterEach, expect } from 'vitest';
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import type { DelegatedPermissionRuleService } from './delegated-permission-rules.js';
 import type { CloneHost } from './host.js';
 import { renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
@@ -253,6 +254,7 @@ export function setup(
   cloneOptions: {
     contextUsageTimeoutMs?: number;
     onFirstTurnToolSearch?: (line: string) => Promise<void>;
+    permissionRuleService?: DelegatedPermissionRuleService;
   } = {},
 ): Setup {
   const { fn, calls } = fakeSdk(reply, sdkOptions);

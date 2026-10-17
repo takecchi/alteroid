@@ -45,8 +45,11 @@ import {
   DEFAULT_SSE_HEARTBEAT_MS,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
+  RunnerPermissionRulesUnsupportedError,
   RunnerPluginsUnsupportedError,
   encodeRunnerPlugin,
+  runnerPermissionRulesResultSchema,
+  type RunnerPermissionRulesResult,
   runnerPluginFingerprintEntrySchema,
   runnerPluginsFingerprintSchema,
   RunnerCodexAuthUnsupportedError,
@@ -73,6 +76,7 @@ import {
   type RunnerResumeResult,
   unpushedWorkResultSchema,
   notePhase,
+  writeStderrLine,
 } from '@alteroid/core';
 
 // 失敗の種別を口の定義（`@alteroid/core`）に持たせる: この経路だけの都合にすると、同じ判断をインプロセスの runner 側で作り直すことになるため
@@ -632,7 +636,7 @@ class HttpRunner implements RunnerClient {
           const causeInfo = causeInfoOf(failure);
           const causeCode = causeInfo?.code ?? '';
           if (this.#lastLoggedDelayMs !== waitMs || this.#lastLoggedCauseCode !== causeCode) {
-            process.stderr.write(
+            writeStderrLine(
               `alteroidd: ${this.#describeSelf()} のストリームが切れました: ${reasonOf(failure)}${causeSuffixOf(causeInfo)}（次は${waitMs}ms後に再試行）\n`,
             );
             this.#lastLoggedDelayMs = waitMs;
@@ -651,7 +655,7 @@ class HttpRunner implements RunnerClient {
         this.#legLastFailureReason = 'ストリームが持続しないまま終わった';
         this.#neverEscapes(() => {
           if (this.#lastLoggedQuietDelayMs !== waitMs) {
-            process.stderr.write(
+            writeStderrLine(
               `alteroidd: ${this.#describeSelf()} のストリームが持続しないまま終わった（次は${waitMs}ms後に再試行）\n`,
             );
             this.#lastLoggedQuietDelayMs = waitMs;
@@ -1043,6 +1047,25 @@ class HttpRunner implements RunnerClient {
     if (body.mcpServers === undefined) return undefined;
     const parsed = runnerMcpServersFingerprintSchema.safeParse(body.mcpServers);
     if (!parsed.success) throw new Error('runner の応答を読めなかった（MCP の登録の指紋）');
+    return parsed.data;
+  }
+
+  // 404 は「口を持たない（古い版）」に変える（`setMcpServers` と同じ理由）
+  // 応答の形が読めなかったときは投げる: 「置けた」と読んで件数を日誌に書かないため
+  async setPermissionRules(rules: readonly string[]): Promise<RunnerPermissionRulesResult> {
+    let response: Response;
+    try {
+      response = await this.#call('POST', '/permission-rules', { rules: [...rules] });
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) {
+        throw new RunnerPermissionRulesUnsupportedError(this.runnerId);
+      }
+      throw error;
+    }
+    const body = (await response.json()) as { ok?: unknown };
+    if (body.ok !== true) throw new Error('runner の応答を読めなかった（委譲先の許可規則）');
+    const parsed = runnerPermissionRulesResultSchema.safeParse(body);
+    if (!parsed.success) throw new Error('runner の応答を読めなかった（委譲先の許可規則の件数）');
     return parsed.data;
   }
 

@@ -226,6 +226,27 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect((await stores.commitments.get('c-legacy'))?.closedBy).toBeUndefined();
   });
 
+  it("器が自動で閉じた行（closedBy: 'daemon'）が往復する（#5015）", async () => {
+    const stores = createMemoryStores();
+    await stores.commitments.open({
+      id: 'c-daemon',
+      at: new Date().toISOString(),
+      origin: 'manager',
+      body: '枠の知らせ',
+    });
+    expect(
+      await stores.commitments.close(
+        'c-daemon',
+        new Date().toISOString(),
+        '器が自動で閉じた',
+        'daemon',
+      ),
+    ).toBe(true);
+    const closed = await stores.commitments.get('c-daemon');
+    expect(closed?.closedBy).toBe('daemon');
+    expect(closed?.closedReason).toBe('器が自動で閉じた');
+  });
+
   it('editBody は未了の行だけ書き換え、片付いた行・無い id は false（他の欄は無傷）', async () => {
     const stores = createMemoryStores();
 
@@ -1805,6 +1826,16 @@ describe('closedRedeliveryNotice の closedBy 4状態（人間が閉じた commi
       headline: '**これは再起動後の配り直しである。人間が既にこの合図を片付けている。**',
       label: '片付けた時刻（POST /commitments/:id/close）',
       closing: HUMAN_CLOSING,
+    },
+    {
+      name: 'daemon（器が自動で閉じた。#5015）',
+      closedBy: 'daemon',
+      headline:
+        '**これは再起動後の配り直しである。器（デーモン）が自動で、既にこの合図を片付けている。**',
+      label: '片付けた時刻',
+      closing:
+        '片付け済みなので、あらためて手を動かす必要は無い。**この判断はあなたが下したものではない**' +
+        `（器が自動で閉じた。理由は台帳と日誌に在る）ので、${NOT_CLONE_CLOSING_TAIL}`,
     },
     {
       name: '未知（manager）',

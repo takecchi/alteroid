@@ -782,6 +782,7 @@ const runnerPushHealthSchema = z.object({
   agentToken: runnerPushOutcomeSchema.optional(),
   mcpServers: runnerPushOutcomeSchema.optional(),
   plugins: runnerPushOutcomeSchema.optional(),
+  permissionRules: runnerPushOutcomeSchema.optional(),
 });
 
 // `errors: null` は「init がこの欄を省いた」であって、読み込みの成功の断定ではない。

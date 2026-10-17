@@ -1,16 +1,20 @@
-import { parseNoticeResetAt } from './usage-reset-text.js';
+import {
+  DATED_RESET_LOOKAHEAD_MS,
+  parseNoticeResetAt,
+  parseNoticeResetDatedAt,
+} from './usage-reset-text.js';
 import type { AgentToken, CooldownSource } from './token-pool.js';
 
 export type NoticeResetMatch = 'active' | 'stale';
 
-// 24時間: この関数が読める文言は日付付きの形を受けず、24時間以内のどこかを指すものに限られるため
+// 24時間: 日付の無い形は24時間以内のどこかを指すものに限られるため（日付付きの形は別に8日先まで読む）
 const NOTICE_RESET_HORIZON_MS = 24 * 60 * 60 * 1000;
 
 // Exclude の裏返しを手で持つ: 実行時に権威あるかを判定するには具体の文字列が要るため。
 // notice_text / default の行とは比べない: 推測どうしは値の作られ方が同じで偶然一致しうるため
 const GUESSED_COOLDOWN_SOURCES: ReadonlySet<CooldownSource> = new Set(['default', 'notice_text']);
 
-function hasAuthoritativeCooldown(
+export function hasAuthoritativeCooldown(
   token: AgentToken,
 ): token is AgentToken & { cooldownUntil: number; cooldownSource: CooldownSource } {
   return (
@@ -21,7 +25,7 @@ function hasAuthoritativeCooldown(
 }
 
 // ±5分などの許容を足さない: 文言の時刻は分単位までで、それ以上は実測が無いため
-function roundDownToMinute(ms: number): number {
+export function roundDownToMinute(ms: number): number {
   return ms - (ms % 60_000);
 }
 
@@ -38,10 +42,9 @@ export function matchNoticeResetAgainstPool(
 ): NoticeResetMatch | undefined {
   if (activeTokenId === undefined) return undefined;
 
-  const impliedResetAt = parseNoticeResetAt(noticeText, {
-    at: options.at,
-    withinMs: NOTICE_RESET_HORIZON_MS,
-  });
+  const impliedResetAt =
+    parseNoticeResetAt(noticeText, { at: options.at, withinMs: NOTICE_RESET_HORIZON_MS }) ??
+    parseNoticeResetDatedAt(noticeText, { at: options.at, withinMs: DATED_RESET_LOOKAHEAD_MS });
   if (impliedResetAt === undefined) return undefined;
   const target = roundDownToMinute(impliedResetAt);
 

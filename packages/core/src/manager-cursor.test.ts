@@ -123,8 +123,26 @@ describe('encodeManagerCursor / decodeManagerCursor（部品）', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
       managerId: 'mgr-1',
       status: null,
+      q: null,
     };
     expect(decodeManagerCursor(encodeManagerCursor(cursor))).toEqual({ ok: true, cursor });
+  });
+
+  it('q を持つ cursor も往復で保たれ、q を持たない古い cursor は q: null（絞らない）として読める（#5020）', () => {
+    const base = {
+      rank: 0 as const,
+      judgementRank: 0 as const,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      managerId: 'mgr-1',
+      status: null,
+    };
+    const withQuery = { ...base, q: '【worldbuild-7】' };
+    expect(decodeManagerCursor(encodeManagerCursor(withQuery))).toEqual({
+      ok: true,
+      cursor: withQuery,
+    });
+    const legacy = Buffer.from(JSON.stringify(base), 'utf8').toString('base64url');
+    expect(decodeManagerCursor(legacy)).toEqual({ ok: true, cursor: { ...base, q: null } });
   });
 
   it('B2: 壊れた cursor は malformed', () => {

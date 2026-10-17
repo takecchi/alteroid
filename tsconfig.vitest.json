@@ -4,6 +4,8 @@
     "vitest.config.ts",
     "vitest.workspace-config.ts",
     "vitest.setup.ts",
+    "vitest.quiet-traces.ts",
+    "vitest.quiet-traces.test.ts",
     "vitest.tmpdir.ts",
     "vitest.tmpdir-sweep.ts",
     "vitest.tmpdir-sweep.test.ts",

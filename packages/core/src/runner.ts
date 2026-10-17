@@ -25,6 +25,7 @@ import type {
   AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
+  AgentSessionStartRecord,
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
@@ -38,7 +39,7 @@ import {
 } from './bash-guard-mode.js';
 import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
-import { inspectBashShape } from './bash-shape-guard.js';
+import { inspectBashShape, pipeExitNotice } from './bash-shape-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
 import {
@@ -105,6 +106,7 @@ import {
   noteUnclassifiedFailuresSummary,
   noteUnreadableRecord,
   reasonOf,
+  writeStderrLine,
 } from './dropped-record.js';
 import { ArchiveStash } from './archive-ref.js';
 import {
@@ -112,7 +114,11 @@ import {
   inspectAnthropicRoute,
   type AnthropicRouteLayer,
 } from './anthropic-route-env.js';
-import { fingerprintOf, ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
+import {
+  fingerprintOf,
+  POOL_OWNED_CREDENTIAL_NAMES,
+  ROTATABLE_CREDENTIAL_KEYS,
+} from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { compareCodeUnits } from './code-unit-order.js';
 import { subreapedProcess, underSubreaper } from './delegation-subreaper.js';
@@ -137,7 +143,12 @@ import {
 import { createProfileApplier, type ProfileApplier, type ProfileVessel } from './profile.js';
 import { createRecentMap } from './recent.js';
 import { scanPeerWorkdir } from './peer-workdir-scan.js';
-import { buildManagerSystemPrompt, buildWorkerPrompt, managerScratchDirOf } from './prompt.js';
+import {
+  buildManagerSystemPrompt,
+  buildWorkerPrompt,
+  managerScratchDirOf,
+  type BashGuardsInPrompt,
+} from './prompt.js';
 import {
   RunnerCutOffWorkers,
   type CutOffBackgroundTaskSummary,
@@ -198,16 +209,28 @@ import {
   type PidsPressureReading,
 } from './runner-pids-pressure.js';
 import {
+  describeReportLanguage,
+  excerptExample,
+  findEnglishSentences,
+  ReportLanguageNotices,
+  resolveEffectiveReportLanguage,
+  REPORT_LANGUAGE_PROMPT_PARAGRAPH,
+  withReportLanguageParagraph,
+  type ReportLanguageMode,
+} from './report-language.js';
+import {
   ClassifierDenialStreaks,
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
   describeDenialStreakForClone,
 } from './classifier-denial-streak.js';
 import {
+  mergeSessionAllowRules,
   SessionAllowRuleBook,
   sessionAllowRuleShapeOf,
   type SessionAllowRuleGrant,
 } from './session-allow-rules.js';
+import { parseDelegatedPermissionRules } from './delegated-permission-rules.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
@@ -221,6 +244,7 @@ import type {
   RunnerManagerPeerClosed,
   RunnerManagerState,
   RunnerMcpServersFingerprint,
+  RunnerPermissionRulesResult,
   RunnerPluginFingerprintEntry,
   RunnerPluginsFingerprint,
   RunnerProfileFingerprint,
@@ -251,7 +275,11 @@ import {
 } from './rescue-ref.js';
 import { defaultRunnerRescueStagedRoot } from './rescue-stash.js';
 import { PeerApprovalNotices } from './runner-peer-approval-notice.js';
-import { WorkerLimitNotices } from './runner-worker-limit-notice.js';
+import {
+  WORKER_LIMIT_PRE_ROTATION_KEY_SENTENCE,
+  WorkerLimitNotices,
+  workerLimitLabel,
+} from './runner-worker-limit-notice.js';
 import { StaleUntrackedNotices } from './runner-stale-untracked.js';
 import {
   ScratchSweeper,
@@ -528,11 +556,16 @@ export interface RunnerHost {
   setProfile(script: string): Promise<RunnerProfileResult>;
   // 起動行に出す `Bash の形の歯` の1行（実効の値。不正な値でも投げない）
   bashShapeGuardLine(): string;
+  // 起動行に出す `報告の言語の知らせ` の1行（実効の値。不正な値でも投げない。#4965）
+  reportLanguageLine(): string;
   // 鍵・プロファイルが降りた後の実効の env から読む（値は返さない）。hello と `anthropic_route` が名乗る
   anthropicRoute(): string[];
   mcpServers(): RunnerMcpServersFingerprint | undefined;
   // ファイルへ落とさない: 走行中のプロセスが読み直す経路が無く、効くのはセッションを組む瞬間だけのため
   setMcpServers(input: unknown): RunnerMcpServersFingerprint | undefined;
+  // 委譲先の許可規則（#4952）。`setMcpServers` と違い走行中のセッションへも置き直す: flag 層は走行中に差し替えられ、取り消しを次のセッションまで待たせないため
+  // 置く前に `parseDelegatedPermissionRules` を通す: 不正なら投げて前の一覧を残すため
+  setPermissionRules(input: unknown): RunnerPermissionRulesResult;
   plugins(): RunnerPluginsFingerprint | undefined;
   // 置く前に `parseRunnerPlugin` を通す: 不正なら投げて前の状態を残すため
   setPlugin(name: string, input: unknown): Promise<RunnerPluginFingerprintEntry>;
@@ -682,6 +715,12 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
   return new Host(options);
 }
 
+function sameRuleSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const seen = new Set(b);
+  return a.every((rule) => seen.has(rule));
+}
+
 class Host implements RunnerHost {
   readonly runnerId: string;
   readonly workspacePath: string;
@@ -708,6 +747,7 @@ class Host implements RunnerHost {
   /** 最後に名乗った（起動時は構築時に読んだ）接続先の表示行。器だけの状態からの変化だけを名乗るための基準。 */
   #announcedAnthropicRoute: string;
   #announcedBashShapeGuard: string;
+  #announcedReportLanguage: string;
   readonly #log: ((line: string) => void) | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
   // 終わった担当が撃った退避の push（#4789）。畳むときに待つ（それぞれ `STOP_RESCUE_TIMEOUT_MS` で切れるので待ちは有限）
@@ -731,6 +771,7 @@ class Host implements RunnerHost {
   readonly #outboxRemoveContentsAsChild: OutboxContentsRemover | undefined;
   readonly #managerScratchRoot: string;
   #mcpServers: { servers: McpServers; fingerprint: RunnerMcpServersFingerprint } | undefined;
+  #permissionRules: readonly string[] = [];
   /**
    * daemon から降りてきた plugin（名前 → 展開済みの印）。**files のバイトは持たない**
    * （多数の大きな plugin でメモリを積まないため。展開したあとはディスクが持つ）。
@@ -947,6 +988,7 @@ class Host implements RunnerHost {
     this.#announcedAnthropicRoute = JSON.stringify(this.anthropicRoute());
     this.#log = options.log;
     this.#announcedBashShapeGuard = this.bashShapeGuardLine();
+    this.#announcedReportLanguage = this.reportLanguageLine();
   }
 
   credentials(): CredentialFingerprint[] {
@@ -1047,7 +1089,11 @@ class Host implements RunnerHost {
     const after = fingerprintsByName(fingerprints);
     // 値を読まず指紋だけで比べる。SDK 子プロセスの env は起動時に凍るので、畳まないと更新が次のセッション作り直しまで届かない
     if (!sameFingerprints(before, after)) {
-      for (const session of this.#sessions.values()) session.recycleForToken();
+      // Claude の鍵が変わったかを別に渡す: 作業者の落ちの知らせが「回転前の鍵で走っている」と言うのは、その回だけのため（#5021）
+      const claudeKeyChanged = POOL_OWNED_CREDENTIAL_NAMES.some(
+        (name) => before.get(name) !== after.get(name),
+      );
+      for (const session of this.#sessions.values()) session.recycleForToken(claudeKeyChanged);
     }
     this.#announceAnthropicRoute();
     // `CODEX_API_KEY` が届いた・外れたら peer の開閉が変わる
@@ -1151,6 +1197,7 @@ class Host implements RunnerHost {
     const result = await this.#profile.apply(script);
     this.#announceAnthropicRoute();
     this.#announceBashShapeGuard();
+    this.#announceReportLanguage();
     return result;
   }
 
@@ -1164,6 +1211,19 @@ class Host implements RunnerHost {
     const line = this.bashShapeGuardLine();
     if (line === this.#announcedBashShapeGuard) return;
     this.#announcedBashShapeGuard = line;
+    this.#log?.(`alteroid-runner: ${line}`);
+  }
+
+  // 起動行に出す1行。不正な値でも投げない（起動は落とさない）
+  reportLanguageLine(): string {
+    return describeReportLanguage(this.#env, this.#profile?.env() ?? {});
+  }
+
+  // 実効の値が前回と変わったときだけ1行出し直す（`#announceBashShapeGuard` と同じ）
+  #announceReportLanguage(): void {
+    const line = this.reportLanguageLine();
+    if (line === this.#announcedReportLanguage) return;
+    this.#announcedReportLanguage = line;
     this.#log?.(`alteroid-runner: ${line}`);
   }
 
@@ -1208,6 +1268,18 @@ class Host implements RunnerHost {
       },
     };
     return this.#mcpServers.fingerprint;
+  }
+
+  setPermissionRules(input: unknown): RunnerPermissionRulesResult {
+    // 届いたものを信じずにもう一度検査する: ここは制御面の入口のため
+    const rules = parseDelegatedPermissionRules(input);
+    const changed = !sameRuleSet(rules, this.#permissionRules);
+    this.#permissionRules = rules;
+    // 変わらなければ置き直さない: 名乗り直しのたびに同じ一覧が降りてくるため
+    if (changed) {
+      for (const session of this.#sessions.values()) session.reapplyPermissionRules();
+    }
+    return { count: rules.length, changed };
   }
 
   plugins(): RunnerPluginsFingerprint | undefined {
@@ -1378,6 +1450,7 @@ class Host implements RunnerHost {
       codexAuth: this.#codexAuth,
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
+      permissionRules: () => this.#permissionRules,
       plugins: () => this.#pluginRefs(),
       onClosed: (outcome) => {
         // `stop()` は outcome を渡さない（done・停止からの resume は守る）: 落ちた・失効した CLI だけを撃つ側に残すため
@@ -1681,7 +1754,7 @@ class Host implements RunnerHost {
   // 名乗りを覚えていない回は stderr に残す: 名乗りがいつ落ちるのかを後から確かめられるように（本文・委譲の中身は書かない）
   #stashArchive(managerId: string, body: string): { id: string; chars: number } | undefined {
     if (!this.#daemonAcceptsArchiveRef) {
-      process.stderr.write(
+      writeStderrLine(
         `alteroid-runner: いま繋がっているデーモンが退避の参照を受けると名乗っていないが、本文は SSE に載せずに預けて参照を送る（managerId=${managerId} chars=${String(body.length)}）\n`,
       );
     }
@@ -1949,6 +2022,9 @@ class Host implements RunnerHost {
   }
 }
 
+// task id → 作業者を呼んだ tool_use id の対応を覚える数の上限。超えたら古いものから捨てる（#4996）
+const TASK_TOOL_USE_IDS_MAX = 1_000;
+
 // 送ったまま取られていない出し箱・預かりを覚える数の上限（#4912）
 const EMITTED_PICKUPS_MAX = 10_000;
 
@@ -2182,6 +2258,8 @@ interface RunnerSessionOptions {
   mcpServers: () => McpServers | undefined;
   // 値で渡さない（関数で受ける）: `mcpServers` と同じ理由
   plugins: () => readonly AgentClonePlugin[];
+  // 委譲先の許可規則（#4952）。値で渡さない（関数で受ける）: `mcpServers` と同じ理由。省けば空
+  permissionRules?: () => readonly string[];
   // 値で渡さない（関数で受ける）: 資格が届く・外れるたびに開閉が変わるため
   peer?: () => RunnerPeerOptions | undefined;
   managerTools?: RunnerManagerToolsOptions;
@@ -2253,6 +2331,7 @@ class RunnerSession {
   readonly #peerNotices: string[] = [];
   readonly #profileEnv: () => Record<string, string>;
   readonly #mcpServers: () => McpServers | undefined;
+  readonly #permissionRules: () => readonly string[];
   readonly #pluginRefs: () => readonly AgentClonePlugin[];
   readonly #onClosed: (outcome?: { status: JobStatus }) => void;
   readonly #outboxRoot: string;
@@ -2281,6 +2360,10 @@ class RunnerSession {
   /** 作業者だけが利用上限で落ちた事実。ターンの集計とは別に、ターンをまたいで持つ（#4903）。 */
   readonly #workerLimitNotices = new WorkerLimitNotices();
   readonly #denialStreaks = new ClassifierDenialStreaks();
+  /** 担当の発言に混ざった英語の文の知らせ（#4965）。 */
+  readonly #reportLanguageNotices = new ReportLanguageNotices();
+  /** 不正な `ALTEROID_REPORT_LANGUAGE` を日誌に書いた値（同じ値は1回だけ書く）。 */
+  #reportLanguageMisconfigNoted: string | undefined;
   readonly #rescueMemory = new RescueMemory();
   /** 退避の列挙の打ち切りの知らせ（同じ状態が続く間は繰り返さない。#4681）。 */
   readonly #rescueListNotice = new RescueListNotice();
@@ -2390,6 +2473,8 @@ class RunnerSession {
   #tokenFingerprint: string | undefined;
   readonly #workerWaitWindow = new RunnerWorkerWaitWindow();
   readonly #nonWorkerTaskIds = new Set<string>();
+  // `task_notification` に tool_use_id を載せない古い CLI のために、`task_started` で見た対応を覚える（#4996）
+  readonly #toolUseIdByTaskId = new Map<string, string>();
 
   readonly #cutOffWorkers = new RunnerCutOffWorkers();
   readonly #stopState = new RunnerSubagentStopState();
@@ -2423,6 +2508,7 @@ class RunnerSession {
     this.#bashGuard = options.bashGuard;
     this.#profileEnv = options.profileEnv;
     this.#mcpServers = options.mcpServers;
+    this.#permissionRules = options.permissionRules ?? (() => []);
     this.#pluginRefs = options.plugins;
     this.#onClosed = options.onClosed;
     this.#outboxRoot = options.outboxRoot;
@@ -2821,14 +2907,15 @@ class RunnerSession {
   }
 
   // セッションが無ければ印を立てない: 次に `#open()` するのはもう新しい鍵のもとのため
-  recycleForToken(): void {
+  recycleForToken(claudeKeyChanged = false): void {
     if (this.#sdkSession.query === null) return;
-    this.#sdkSession.requestTokenRecycle();
+    this.#sdkSession.requestTokenRecycle(claudeKeyChanged);
     this.#sdkSession.wakeInput();
   }
 
   #open(resume?: string): void {
     if (this.#sdkSession.query) return;
+    this.#sdkSession.clearPreRotationClaudeKey();
     // 「whenever the session's CLI process (re)starts」[sdk-verbatim SDKBackgroundTasksChangedMessage] に対応するのはここで、`init` ではない: `init` はターンの頭ごとに来るだけのため
     this.#sdkSession.resetLiveBackgroundTasks();
     this.#nonWorkerTaskIds.clear();
@@ -3042,9 +3129,65 @@ class RunnerSession {
         managerId: this.#id,
         text: `peer の作業場 ${dir} を作れなかったので、マネージャーの cwd のままにした: ${reasonOf(error)}`,
       });
-      return { systemPromptAppend: PEER_SYSTEM_PROMPT_APPEND };
+      return {
+        systemPromptAppend: withReportLanguageParagraph(
+          PEER_SYSTEM_PROMPT_APPEND,
+          this.#sessionReportLanguage(),
+        ),
+      };
     }
-    return { cwd: dir, systemPromptAppend: peerSystemPromptAppend(dir) };
+    return {
+      cwd: dir,
+      systemPromptAppend: withReportLanguageParagraph(
+        peerSystemPromptAppend(dir),
+        this.#sessionReportLanguage(),
+      ),
+    };
+  }
+
+  /**
+   * セッションを開く時点の `ALTEROID_REPORT_LANGUAGE`（#4977。プロファイルが優先）。
+   * 不正な値は off へ倒す: 言語の指示のためにセッションを開けなくしないため。日誌は `#4965` の知らせと同じ1行に寄せる。
+   */
+  #sessionReportLanguage(): ReportLanguageMode {
+    try {
+      return resolveEffectiveReportLanguage(this.#env, this.#profileEnv());
+    } catch (error) {
+      this.#noteReportLanguageMisconfig(error);
+      return 'off';
+    }
+  }
+
+  /**
+   * セッションを開く時点の歯の状態（#5017）。担当・作業者のプロンプトに、断られる形の一覧を載せるかを決める。
+   * 判定が投げたら載せない: プロンプトを作れなくするより、載せないほうへ倒す。
+   * 既知の限界: 開いた後に設定（プロファイルを含む）が変わっても、プロンプトは作り直さない。歯そのものは呼び出しのたびに読むので、断る・断らないは変わるが、告知の一覧は開いた時点のまま。
+   * 両方とも偽なら undefined（プロンプトは1文字も増えない）。
+   */
+  #sessionBashGuards(): BashGuardsInPrompt | undefined {
+    const shape = ((): boolean => {
+      try {
+        return resolveEffectiveBashShapeGuard(this.#env, this.#profileEnv()) === 'on';
+      } catch {
+        return false;
+      }
+    })();
+    const wait = this.#bashGuard !== 'off';
+    return shape || wait ? { shape, wait } : undefined;
+  }
+
+  // 開く時点と発言の観測の両方から呼ぶ。同じ値は1回だけ書く: 設定の誤りは1つで、日誌を2行にしないため
+  #noteReportLanguageMisconfig(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    if (this.#reportLanguageMisconfigNoted === message) return;
+    this.#reportLanguageMisconfigNoted = message;
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        `報告の言語を掛けていない: ${message}。直すまで、英語の文の知らせも、` +
+        '担当・作業者のプロンプトへの言語の指示も掛けない（指示は直した後に開くセッションから入る）。#4965 #4977',
+    });
   }
 
   // `tool_use` にしない: 旧 daemon が未知の欄を落とすため
@@ -3074,21 +3217,30 @@ class RunnerSession {
     const peerModels = peerEntry === undefined ? undefined : this.#peer?.()?.models?.codex;
     // peer のセッションには出さない: 記録するのはマネージャー自身で、peer の成果はマネージャーが受け取ってから記録する
     const managerToolsEntry = forPeer ? undefined : this.#managerToolsMcpEntry();
+    // 開くたびに読む（新規・resume・鍵の回転の起こし直しはどれも `#open` からここを通る）: system prompt は開く時点で決まるため
+    const reportLanguage = this.#sessionReportLanguage();
+    const bashGuards = this.#sessionBashGuards();
     return {
       input: this.#inputStream(),
       model: resolveManagerModel(this.#env),
       modelPlaced: placedModelTier(this.#env, MANAGER_MODEL_ENV_KEY) !== null,
       permissionMode: this.#permissionMode,
-      systemPromptAppend: buildManagerSystemPrompt({
-        managerId: this.#id,
-        workerName: WORKER_AGENT_NAME,
-        ...(peerEntry === undefined
-          ? {}
-          : { peer: peerModels === undefined ? {} : { models: peerModels } }),
-        ...(managerToolsEntry === undefined ? {} : { managerTools: true }),
-      }),
+      systemPromptAppend: withReportLanguageParagraph(
+        buildManagerSystemPrompt({
+          managerId: this.#id,
+          workerName: WORKER_AGENT_NAME,
+          ...(peerEntry === undefined
+            ? {}
+            : { peer: peerModels === undefined ? {} : { models: peerModels } }),
+          ...(managerToolsEntry === undefined ? {} : { managerTools: true }),
+          ...(bashGuards === undefined ? {} : { bashGuards }),
+        }),
+        reportLanguage,
+      ),
       workerAgentName: WORKER_AGENT_NAME,
-      workerPrompt: buildWorkerPrompt(),
+      // 作業者にも足す: 作業者は担当の system prompt を継がないため
+      workerPrompt: withReportLanguageParagraph(buildWorkerPrompt(bashGuards), reportLanguage),
+      ...(reportLanguage === 'off' ? {} : { reportLanguage }),
       // 省略しない: SDK の既定は親の継承で、省くとマネージャーを差し替えた人が作業者まで巻き添えで動かすため
       workerModel: resolveWorkerModel(this.#env),
       cwd: this.#cwd,
@@ -3129,6 +3281,7 @@ class RunnerSession {
       onPostToolUseFailure: (input) => this.#onPostToolUseFailure(input),
       onPreCompact: (record) => this.#onPreCompact(record),
       onUserPromptSubmit: (record) => this.#onUserPromptSubmit(record),
+      onSessionStart: (record) => this.#onSessionStart(record),
       onSubagentStop: (record) => this.#onSubagentStop(record),
       onStop: (record) => this.#onStop(record),
     };
@@ -3622,6 +3775,7 @@ class RunnerSession {
           }
           if (said.length > 0) {
             this.#turnTally.recordSaid(said, event.id);
+            this.#observeReportLanguage(said);
           }
         } else {
           // 作業者の発言に付いた拒否の印をターンの失敗にしない: 数えるだけ
@@ -3632,7 +3786,8 @@ class RunnerSession {
             // 構造化された印（errorCode）だけで判定し、本文の引用では立てない（#4903）
             if (turnFailureKindOf(assistantFailureOf(event.errorCode, workerText)) === 'quota') {
               this.#recordWorkerLimit(
-                `tool_use ${event.parentToolUseId}`,
+                `tool_use:${event.parentToolUseId}`,
+                workerLimitLabel(event.parentToolUseId, undefined),
                 workerText.length > 0 ? workerText : rejected.code,
               );
             }
@@ -3864,6 +4019,14 @@ class RunnerSession {
   #onTaskStarted(event: AgentDelegationStarted): void {
     // id を名乗らなければ偽の id で数える: 取りこぼすより多く数える方を選ぶため
     const taskId = event.taskId ?? randomUUID();
+    if (event.taskId !== undefined && event.toolUseId !== undefined) {
+      this.#toolUseIdByTaskId.delete(event.taskId);
+      this.#toolUseIdByTaskId.set(event.taskId, event.toolUseId);
+      if (this.#toolUseIdByTaskId.size > TASK_TOOL_USE_IDS_MAX) {
+        const oldest = this.#toolUseIdByTaskId.keys().next();
+        if (oldest.done !== true) this.#toolUseIdByTaskId.delete(oldest.value);
+      }
+    }
     if (!isWorkerTaskType(event.taskType)) {
       if (event.taskId !== undefined) this.#nonWorkerTaskIds.add(event.taskId);
       return;
@@ -3893,8 +4056,17 @@ class RunnerSession {
       this.#turnTally.recordFailedWorkerNotification(taskId, limitNamed);
       // 失敗の通知で、文言が「上限に当たった」と読めるものに限る（`reached`）。completed の報告の引用では立てない（#4903）
       if (event.summary !== undefined && classifyUsageNotice(event.summary)?.kind === 'reached') {
+        // 身元は作業者を呼んだ tool_use の id にそろえる: 作業者の発言の拒否の印と同じ作業者を、2回記録しないため（#4996）
+        const toolUseId =
+          event.toolUseId ??
+          (taskId === undefined ? undefined : this.#toolUseIdByTaskId.get(taskId));
         this.#recordWorkerLimit(
-          taskId === undefined ? '背景の作業者' : `task ${taskId}`,
+          toolUseId !== undefined
+            ? `tool_use:${toolUseId}`
+            : taskId === undefined
+              ? 'background-worker'
+              : `task:${taskId}`,
+          workerLimitLabel(toolUseId, taskId),
           event.summary,
         );
       }
@@ -4764,7 +4936,7 @@ class RunnerSession {
     try {
       raise = planBashToolTimeoutRaise(input);
     } catch (error) {
-      process.stderr.write(
+      writeStderrLine(
         `alteroid: Bash の timeout 引数の判定が失敗した（書き換えない）: ${reasonOf(error)}\n`,
       );
       return undefined;
@@ -4797,7 +4969,7 @@ class RunnerSession {
     try {
       fn();
     } catch (error) {
-      process.stderr.write(`alteroid: ${label}が失敗した（判定は続ける）: ${reasonOf(error)}\n`);
+      writeStderrLine(`alteroid: ${label}が失敗した（判定は続ける）: ${reasonOf(error)}\n`);
     }
   }
 
@@ -4875,8 +5047,9 @@ class RunnerSession {
   }
 
   /**
-   * 一時規則（#4905）の一覧を、いまのセッションへ丸ごと置き直す。置けたら undefined、置けなければ理由を返す（投げない）。
+   * 委譲先の許可規則（#4952）と一時規則（#4905）をまとめた一覧を、いまのセッションへ丸ごと置き直す。置けたら undefined、置けなければ理由を返す（投げない）。
    * 一覧は積んだ時点ではなく順番が来た時点で読む: 先に積んだ置き直しが、後で外した規則を巻き戻さないため。
+   * 片方だけを置かない: 口は一覧を丸ごと置き換えるので、片方だけを置くともう片方がセッションから消えるため。
    */
   #pushSessionAllowRules(): Promise<string | undefined> {
     const run = async (): Promise<string | undefined> => {
@@ -4887,7 +5060,9 @@ class RunnerSession {
       try {
         // 期限を掛ける: 分類器の拒否のフックの中で待つので、答えない control channel に、フックと後に続く置き直しの鎖ごと止められないため
         await controlRequestWithin(
-          session.setSessionAllowRules(this.#sessionAllowRules.rules()),
+          session.setSessionAllowRules(
+            mergeSessionAllowRules(this.#permissionRules(), this.#sessionAllowRules.rules()),
+          ),
           this.#sessionAllowRulesTimeoutMs,
           'applyFlagSettings（一時規則の置き直し）',
         );
@@ -5023,18 +5198,42 @@ class RunnerSession {
     }
   }
 
-  // 開き直した CLI は flag 層を持ち越さないので、生きている一時規則を置き直す
+  // 開いた・開き直した CLI は flag 層を持ち越さないので、委譲先の許可規則と生きている一時規則を置き直す
+  // 口の無いセッション（Codex）では何もしない: 置けない理由を note にすると、開くたびに同じ断りが積まれるため
   #reapplySessionAllowRules(): void {
     this.#sweepExpiredSessionAllowRules();
-    if (this.#sessionAllowRules.size === 0) return;
+    const granted = this.#permissionRules().length;
+    if (this.#sessionAllowRules.size === 0 && granted === 0) return;
+    if (this.#sdkSession.query?.setSessionAllowRules === undefined) return;
     void this.#pushSessionAllowRules().then((failure) => {
       if (failure === undefined) return;
       this.#emit({
         type: 'note',
         managerId: this.#id,
         text:
-          `セッションを開き直したが、生きている一時規則（${this.#sessionAllowRules.size}件）を置き直せなかった` +
-          `（担当 ${this.#id}。${failure}）。撃ち直しは、同じ担い手の1回だけの許可でしか通らない（#4905）。`,
+          `セッションを開いた（開き直した）が、生きている一時規則（${this.#sessionAllowRules.size}件）と` +
+          `委譲先の許可規則（${granted}件）を置き直せなかった（担当 ${this.#id}。${failure}）。` +
+          `撃ち直しは、同じ担い手の1回だけの許可でしか通らず、人間が承認した許可もこのセッションには効かない（#4905・#4952）。`,
+      });
+    });
+  }
+
+  /**
+   * 委譲先の許可規則の一覧が変わったとき（#4952）に Host から呼ばれ、走行中のセッションへ置き直す。
+   * 口の無いセッション（Codex）・まだ開いていないセッションでは何もしない（開くときに `#reapplySessionAllowRules` が置く）。
+   */
+  reapplyPermissionRules(): void {
+    if (this.#sdkSession.query?.setSessionAllowRules === undefined) return;
+    void this.#pushSessionAllowRules().then((failure) => {
+      if (failure === undefined) return;
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `委譲先の許可規則（人間が承認した許可）の一覧が変わったが、このセッションへ置き直せなかった` +
+          `（担当 ${this.#id}・いまの一覧は ${this.#permissionRules().length}件。${failure}）。` +
+          `取り消された許可の規則がセッションに残っている、または足された許可がまだ効いていないおそれがある。` +
+          `次に一覧を置き直せたときに揃う（#4952）。`,
       });
     });
   }
@@ -5101,6 +5300,8 @@ class RunnerSession {
     const staleUntracked = this.#staleUntrackedNotice(record.agentId);
     const peerApproval = this.#peerApprovalNotice(record.agentId);
     const workerLimit = this.#workerLimitNotice(record.agentId);
+    const reportLanguage = this.#reportLanguageNotice(record.agentId);
+    const pipeExit = pipeExitNotice(record.toolName, command);
     // 分類器の拒否が続いた後に初めて通った道具に、事情と取れる道を添える
     const streakActor = record.agentId ?? 'manager';
     const denialStreak = this.#denialStreaks.takeNotice(streakActor, Date.now());
@@ -5111,6 +5312,8 @@ class RunnerSession {
       staleUntracked,
       peerApproval,
       workerLimit,
+      reportLanguage,
+      pipeExit,
       denialStreak,
     ].filter((part): part is string => part !== null);
     if (parts.length === 0) return { kind: 'continue' };
@@ -5196,19 +5399,66 @@ class RunnerSession {
   }
 
   /**
+   * 担当本人の発言（`parentToolUseId` の無い assistant の本文）に英語の文が混ざっていれば、知らせる待ちに積み、日誌に1行残す（#4965）。
+   * 作業者の発言には掛けない: 作業者の本文は `parentToolUseId`（Task の tool_use id）でしか届かず、知らせを添える PostToolUse の `agent_id` と結ぶ口が無いため。
+   * 設定は発言のたびに読む（プロファイルに1行置けば次の発言から効く）。off なら判定もしない。
+   * 不正な値・判定が投げたときは知らせない側へ倒す: 知らせのために担当の発言の処理を壊さないため。不正な値は同じ値につき1回だけ日誌に書く。
+   */
+  #observeReportLanguage(said: string): void {
+    try {
+      let mode: string;
+      try {
+        mode = resolveEffectiveReportLanguage(this.#env, this.#profileEnv());
+      } catch (error) {
+        this.#noteReportLanguageMisconfig(error);
+        return;
+      }
+      if (mode === 'off') return;
+      const found = findEnglishSentences(said);
+      if (found.length === 0) return;
+      if (!this.#reportLanguageNotices.observe('manager', found, Date.now())) return;
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `担当の発言に英語の文が ${String(found.length)} 件混ざっていた` +
+          `（担い手: manager:${this.#id}、例: "${excerptExample(found[0] ?? '')}"）。#4965`,
+      });
+    } catch {
+      return;
+    }
+  }
+
+  /** 担当の発言に英語の文が混ざっていた後の最初の道具の結果に、知らせの段落を返す（#4965）。同じ担い手に10分に1回まで。 */
+  #reportLanguageNotice(agentId: string | undefined): string | null {
+    try {
+      return this.#reportLanguageNotices.next(agentId ?? 'manager', Date.now());
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * 作業者が利用上限で落ちた事実を覚え、日誌とクローンの受信箱へ運ぶ（#4903）。担当のターンが成功しても捨てない。
    * 枠の印（`#usageStopped`）・`usage_notice`・鍵の回転の契機にはしない: 担当は動けるため。原文は伏せ字を通す。
+   * 重複は身元（作業者を呼んだ tool_use の id）でそろえる: 作業者が上限で落ちると、作業者の発言の拒否の印とタスクの失敗通知の2つが届き、
+   * 名札も原文も違うので2回記録して知らせが2通になっていた（#4996）。
    */
-  #recordWorkerLimit(label: string, raw: string): void {
+  #recordWorkerLimit(identity: string, label: string, raw: string): void {
     const shown = redactErrorText(raw, process.env, this.#vaultValues());
-    if (!this.#workerLimitNotices.record(label, shown, Date.now())) return;
+    if (!this.#workerLimitNotices.record(identity, label, shown, Date.now())) return;
+    // `wantsTokenRecycle` で判定しない: `GH_TOKEN` の差し替えや peer の開閉でも立ち、そのときは鍵は回っていないため（Claude の鍵が変わった回だけの印を読む）
+    const preRotationKey = this.#sdkSession.onPreRotationClaudeKey;
     this.#emit({
       type: 'note',
       managerId: this.#id,
       text:
         `作業者（${label}）だけが利用上限で落ちた。担当は動けるので、枠の印も鍵の回転も起こしていない。` +
-        `次の道具の結果に知らせを添える（原文: ${shown.trim().slice(0, 300)}）`,
+        `次の道具の結果に知らせを添える（原文: ${shown.trim().slice(0, 300)}）` +
+        (preRotationKey ? WORKER_LIMIT_PRE_ROTATION_KEY_SENTENCE : ''),
       notifyClone: true,
+      // 構造化して運ぶ: デーモンが落ちた枠の鍵を突き合わせるのに原文と印が要り、`text` の文言では判定しない
+      workerLimit: { raw: shown.trim().slice(0, 300), preRotationKey },
     });
   }
 
@@ -5218,10 +5468,12 @@ class RunnerSession {
    */
   #workerLimitNotice(agentId: string | undefined): string | null {
     try {
+      const preRotationKey = this.#sdkSession.onPreRotationClaudeKey;
       const notice = this.#workerLimitNotices.next(
         agentId ?? 'manager',
         agentId === undefined,
         Date.now(),
+        preRotationKey,
       );
       if (notice !== null && agentId === undefined) {
         this.#emit({
@@ -5229,7 +5481,9 @@ class RunnerSession {
           managerId: this.#id,
           text:
             `作業者が利用上限で落ちている（${String(notice.count)} 体）ので、` +
-            'この担当の道具の結果に「戻るまで作業者を立て直しても同じく落ちうる」という知らせを添えた（止める指示ではない）。',
+            (preRotationKey
+              ? 'この担当の道具の結果に「鍵は回っているので、このターンを終えれば新しい鍵で開き直る」という知らせを添えた（止める指示ではない）。'
+              : 'この担当の道具の結果に「戻るまで作業者を立て直しても同じく落ちうる」という知らせを添えた（止める指示ではない）。'),
         });
       }
       return notice?.text ?? null;
@@ -5407,6 +5661,19 @@ class RunnerSession {
       agentId ?? '',
       typeof command === 'string' ? command : undefined,
     );
+  }
+
+  // CLI は resume のとき最初の system prompt を持ち続け、環境・言語の変化だけを知らせで足すので、system prompt の末尾の段落（#4977）は #4977 より前に開いたセッションに届かない。resume・fork の回に会話へ足す（#4995）。
+  // startup は system prompt に入っており、compact は system prompt が残るので足さない
+  async #onSessionStart(record: AgentSessionStartRecord): Promise<string | null> {
+    if (record.source !== 'resume' && record.source !== 'fork') return null;
+    if (this.#sessionReportLanguage() !== 'ja') return null;
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text: `${record.source} で開いたので、応答の言語の段落を会話へ足した。#4995`,
+    });
+    return REPORT_LANGUAGE_PROMPT_PARAGRAPH;
   }
 
   // `{ continue: true }` を返すだけでブロックしない: ブロックすれば能力の削除になるため

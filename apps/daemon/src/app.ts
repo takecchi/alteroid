@@ -20,6 +20,7 @@ import type {
   McpServerService,
   McpServers,
   StoredMcpServers,
+  DelegatedPermissionRuleService,
   Exchange,
   GrantResult,
   InboxEvent,
@@ -84,6 +85,7 @@ import {
   UnreadableCommitmentError,
   UnreadableJournalEntryError,
   UnreadablePermissionGrantError,
+  delegatedPermissionRuleOf,
   UnreadablePracticeError,
   UnreadableScheduleError,
   approvalUpdatedAt,
@@ -211,6 +213,7 @@ import {
   EVENT_IDEMPOTENCY_KEY_MAX_LENGTH,
   type AttachmentLimits,
   type EventReceipt,
+  writeStderrLine,
 } from '@alteroid/core';
 
 import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal } from './auth.js';
@@ -404,6 +407,8 @@ export interface AppDeps {
   credentials?: CredentialService;
   // マネージャーのプールと同じインスタンスを渡す（`profile` と同じ理由）。渡さなければ保存だけして配らない（`runners: []`）。
   mcpServers?: McpServerService;
+  // 委譲先の許可規則（#4952）。マネージャーのプールと同じインスタンスを渡す（`profile` と同じ理由）。渡さなければ取り消しを runner へ配らない（次の名乗りで降りる）。
+  permissionRules?: DelegatedPermissionRuleService;
   pluginFetcher?: PluginFetcher;
   // マネージャーのプールと同じインスタンスを渡す（`profile` と同じ理由）。
   pluginDistribution?: PluginDistributionService;
@@ -1547,7 +1552,7 @@ export function createApp(deps: AppDeps) {
       (stream) =>
         cb(
           guardSseWrites(stream, sseWriteDeadlineMs, (what) => {
-            process.stderr.write(
+            writeStderrLine(
               `alteroidd: ${c.req.path} の SSE の書き出し（${what}）が ${String(sseWriteDeadlineMs)}ms を超えたので、` +
                 'この流れを畳みます（受け手が読んでいない）\n',
             );
@@ -1772,7 +1777,7 @@ export function createApp(deps: AppDeps) {
       try {
         await release();
       } catch (releaseError) {
-        process.stderr.write(
+        writeStderrLine(
           `alteroidd: 外部イベント ${event.id} の添付 ${String(refs.length)} 件の結び付けを戻せなかった` +
             `（期限まで残る）: ${reasonOf(releaseError)}\n`,
         );
@@ -1828,7 +1833,7 @@ export function createApp(deps: AppDeps) {
         new Date().toISOString(),
       );
     } catch (error) {
-      process.stderr.write(
+      writeStderrLine(
         `alteroidd: 外部イベントの重複キーの記録が読めない（重複かどうか確かめずに積む）: ${reasonOf(error)}\n`,
       );
       return null;
@@ -1839,7 +1844,7 @@ export function createApp(deps: AppDeps) {
     try {
       await stores.eventReceipts.recordEventReceipt(receipt);
     } catch (error) {
-      process.stderr.write(
+      writeStderrLine(
         `alteroidd: 外部イベント ${receipt.eventId} の重複キーを記録できなかった（同じキーの送り直しは二重に積まれうる）: ${reasonOf(error)}\n`,
       );
     }
@@ -1890,7 +1895,7 @@ export function createApp(deps: AppDeps) {
     why: string,
     keyId?: string,
   ): void {
-    process.stderr.write(
+    writeStderrLine(
       `alteroid: 連携の鍵の要求を断った（${String(status)}、${why}）: ` +
         `${c.req.method} ${c.req.path}${keyId === undefined ? '' : ` keyId=${keyId}`}\n`,
     );
@@ -2005,7 +2010,7 @@ export function createApp(deps: AppDeps) {
                 void stores.journal
                   .append({ type: 'external_event', source: 'chat-stream', summary })
                   .catch((error: unknown) => {
-                    process.stderr.write(
+                    writeStderrLine(
                       `alteroidd: /chat の流れを切ったことを日誌へ残せませんでした: ${reasonOf(error)}\n  ${summary}\n`,
                     );
                   });
@@ -2176,7 +2181,7 @@ export function createApp(deps: AppDeps) {
       }
       return c.newResponse(res.body, res);
     }
-    process.stderr.write(
+    writeStderrLine(
       `alteroidd: HTTP 経路で例外を捕まえました（本文は出しません）: ${reasonOf(err)}\n`,
     );
     return c.json({ error: 'Internal Server Error' }, 500);
@@ -2840,7 +2845,7 @@ export function createApp(deps: AppDeps) {
               { conversationId },
             );
           } catch (releaseError) {
-            process.stderr.write(
+            writeStderrLine(
               `alteroidd: 新しい会話 ${conversationId} の添付 ${String(attachmentRefs.length)} 件の結び付けを戻せなかった` +
                 `（期限まで残る）: ${reasonOf(releaseError)}\n`,
             );
@@ -3641,7 +3646,7 @@ export function createApp(deps: AppDeps) {
                   void stores.journal
                     .append({ type: 'external_event', source: 'journal-stream', summary })
                     .catch((error: unknown) => {
-                      process.stderr.write(
+                      writeStderrLine(
                         `alteroidd: 日誌の流れの購読を切ったことを日誌へ残せませんでした: ${reasonOf(error)}\n  ${summary}\n`,
                       );
                     });
@@ -5309,6 +5314,13 @@ export function createApp(deps: AppDeps) {
           '許可の取り消しの日誌',
           `id=${id}`,
         );
+        // 委譲先へ配る（#4952）。載せていなかった許可（前方一致など）・既に取り消し済みでは配らない: 一覧は変わらないため
+        // 応答の前に配り終える: 「取り消した」が人間に返った後も委譲先で規則が効き続ける窓を、配れた runner については閉じるため。配れなくても取り消しは効いている（配れなかったことはサービスが日誌に残す）
+        if (!alreadyRevoked && delegatedPermissionRuleOf(grant.rule) !== undefined) {
+          await deps.permissionRules
+            ?.pushAll(`許可 ${grant.id} が取り消された（POST /permission-grants/:id/revoke）`)
+            .catch(() => undefined);
+        }
         return c.json({ ok: true });
       },
     )
@@ -10092,7 +10104,7 @@ export function createApp(deps: AppDeps) {
         if (deps.attachmentCopiesDir !== undefined) {
           await rm(deps.attachmentCopiesDir, { recursive: true, force: true }).catch(
             (error: unknown) => {
-              process.stderr.write(
+              writeStderrLine(
                 `alteroidd: リセットで添付の写しを消せなかった: ${reasonOf(error)}\n`,
               );
             },

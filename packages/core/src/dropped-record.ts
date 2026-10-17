@@ -557,9 +557,31 @@ export function writeStderrSync(line: string): void {
  */
 let stderrSink: (line: string) => void = writeStderrSync;
 
+/**
+ * `setStderrSinkForTesting(null)` が戻す先。本番では `writeStderrSync` のまま。
+ * 試験の準備（`vitest.quiet-traces.ts`）だけが差し替える（#5001）: 通った試験の跡を本物の標準エラーへ出さず、落ちた試験の分だけ吐き出すため。
+ */
+let defaultStderrSink: (line: string) => void = writeStderrSync;
+
 /** テスト専用: `note()` の書き込み先を差し替える／戻す。`captureStderr` が `finally` で必ず `null` を渡して戻すこと。 */
 export function setStderrSinkForTesting(sink: ((line: string) => void) | null): void {
-  stderrSink = sink ?? writeStderrSync;
+  stderrSink = sink ?? defaultStderrSink;
+}
+
+/** テスト専用: `setStderrSinkForTesting(null)` が戻す既定の書き先を差し替える（`null` で `writeStderrSync` へ戻す）。試験の準備以外から呼ばないこと（#5001）。 */
+export function setDefaultStderrSinkForTesting(sink: ((line: string) => void) | null): void {
+  defaultStderrSink = sink ?? writeStderrSync;
+  stderrSink = defaultStderrSink;
+}
+
+/**
+ * 呼び手が組み立てた1行（接頭辞・改行まで含む）を、`note()` と同じ書き先へそのまま書く（#5003）。
+ * 時刻を足さず、跡の帳面（`rememberTrace`）にも積まない: 本番の出力を、`process.stderr.write` で直に書いていたときと同じ文のままにするため。
+ * 試験の準備を通るよう、標準エラーへの直書きはここへ寄せる（#5007）。
+ * 寄せる理由は書き先だけ: 直に書くと試験の準備（`vitest.quiet-traces.ts`）の差し替えを通らず、通った試験の分まで標準エラーへ出て、落ちた試験の名前が埋もれるため。
+ */
+export function writeStderrLine(line: string): void {
+  stderrSink(line);
 }
 
 /**

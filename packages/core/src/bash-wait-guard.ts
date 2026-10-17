@@ -1,6 +1,38 @@
 export type WaitGuardForm =
   'until-sleep' | 'while-sleep' | 'for-sleep' | 'tail-f' | 'gh-run-watch-background';
 
+/** 待ちの歯が断る形ごとの要約（プロンプトに載せる一覧の元）。型で全部の形を網羅させる: 形を足して要約を書き忘れると typecheck が落ちる（#5017）。 */
+export const WAIT_GUARD_SUMMARIES: Record<WaitGuardForm, { shape: string; instead: string }> = {
+  'gh-run-watch-background': {
+    shape: '`gh run watch` を背景に置く形（`&`・`run_in_background`）',
+    instead: '前景で `timeout <秒> gh run watch <id> --exit-status`',
+  },
+  'tail-f': {
+    shape: '上限の無い `tail -f`・`tail --follow`',
+    instead: '`timeout <秒>` を前に置く（または `--pid=<pid>` を付ける）',
+  },
+  'until-sleep': {
+    shape: '上限の無い `until <条件>; do …sleep…; done`',
+    instead:
+      '回数の上限を決めたループ（`for i in $(seq 60); do …; done`）か、`timeout <秒>` を前に置く',
+  },
+  'while-sleep': {
+    shape: '上限の無い `while <条件>; do …sleep…; done`',
+    instead: '回数の上限を決めたループか、`timeout <秒>` を前に置く',
+  },
+  'for-sleep': {
+    shape: '条件の無い `for ((;;)); do …sleep…; done`',
+    instead: '回数の上限を決めたループか、`timeout <秒>` を前に置く',
+  },
+};
+
+/** 待ちの歯が断る形の一覧を、プロンプトに載せる箇条書きにして返す（歯の定義から生成する。#5017）。 */
+export function waitGuardPromptLines(): string {
+  return Object.values(WAIT_GUARD_SUMMARIES)
+    .map(({ shape, instead }) => `- ${shape} → ${instead}`)
+    .join('\n');
+}
+
 export type WaitGuardVerdict =
   { blocked: false } | { blocked: true; form: WaitGuardForm; reason: string };
 
@@ -158,7 +190,55 @@ function blankQuotedInteriorForNonExecutingCommands(command: string): string {
 function hasUnboundedTailFollow(command: string): boolean {
   const view = blankQuotedInteriorForNonExecutingCommands(command);
   // 引用符とバックスラッシュを外した写しにもかける: `tail "-f" x` / `tail \-f x` は bash が引用を外してから argv にするため追従するが、元の写しでは見落とすため
-  return hasTailFollowPattern(view) || hasTailFollowPattern(stripQuoteCharacters(view));
+  return (
+    hasUnboundedTailFollowPattern(view) || hasUnboundedTailFollowPattern(stripQuoteCharacters(view))
+  );
+}
+
+// `tail` の引数の `--pid=<pid>` / `--pid <pid>`: 指定した pid が終わると tail も終わるので、上限がある（#4976）
+const TAIL_PID_OPTION_RE = /(?:^|\s)--pid(?:=|[ \t]+)\S/;
+
+/**
+ * `hasTailFollowPattern` と同じ区間の切り方で、上限の無い `tail -f` の区間があるかを見る（#4976）。
+ * 区間（`;` `&&` `|` 改行で区切った単純な命令）の頭に `timeout <期間>` がある、または `tail` に `--pid` がある区間は、必ず終わるので数えない。
+ * 外側の `timeout` を見る判定（`isTimeoutWrapped`）は命令全体が1つの単純な命令のときしか効かず、`cd x && timeout 595 tail …` やパイプの左の `timeout 60 tail -f x | grep …` を止めていたため。
+ * `hasTailFollowPattern` そのものは変えない: `TAIL_FOLLOW_RE` と同じ一致を返す写しとして試験が突き合わせているため。
+ */
+function hasUnboundedTailFollowPattern(command: string): boolean {
+  let start = 0;
+  while (start <= command.length) {
+    let end = start;
+    while (end < command.length && boundaryTokenLengthAt(command, end) === 0) end += 1;
+    if (
+      regionHasTailFollow(command, start, end) &&
+      !isBoundedTailRegion(command.slice(start, end))
+    ) {
+      return true;
+    }
+    if (end >= command.length) return false;
+    start = end + boundaryTokenLengthAt(command, end);
+  }
+  return false;
+}
+
+function isBoundedTailRegion(region: string): boolean {
+  const tailAt = TAIL_WORD_ONLY_RE.exec(region);
+  if (tailAt === null) return false;
+  // 区間の切り方は単体の `&`（背景に回す）を境界に数えない: `timeout 60 make & tail -f x` の頭の `timeout` は `&` の後ろの tail を包まないので、tail の直前の単体の `&` より後ろだけを見る
+  let head = 0;
+  for (let i = 0; i < tailAt.index; i += 1) {
+    if (region[i] !== '&') continue;
+    const prev = i > 0 ? region[i - 1] : '';
+    const next = region[i + 1];
+    if (prev === '&' || prev === '>' || prev === '<' || next === '&' || next === '>') continue;
+    head = i + 1;
+  }
+  if (
+    TIMEOUT_SPAN_START_RE.test(region.slice(head, tailAt.index).replace(/^[\s(]+/, '') + 'tail')
+  ) {
+    return true;
+  }
+  return TAIL_PID_OPTION_RE.test(region.slice(tailAt.index + tailAt[0].length));
 }
 
 // 引用符の中の空白と区切り（`;` `&` `|`）は `_` へ替える: 引用符で包んだ1語は引用を外しても1語のままで、`tail -n 5 "my -f file"` の `-f` をフラグと読まないため
@@ -809,7 +889,10 @@ function inspectWaitForms(trimmed: string, invocation: BashInvocation): WaitGuar
     return {
       blocked: true,
       form: 'tail-f',
-      reason: buildReason('`tail -f` / `tail --follow` はファイルの終端で止まらず追従し続ける'),
+      reason: buildReason(
+        '`tail -f` / `tail --follow` はファイルの終端で止まらず追従し続ける' +
+          '（上限を付けるなら、その tail の直前に `timeout <秒>` を置くか、`--pid=<待つ相手の pid>` を付ける。#4976）',
+      ),
     };
   }
 

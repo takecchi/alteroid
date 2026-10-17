@@ -325,6 +325,24 @@ export const runnerMcpServersFingerprintSchema = z.object({
 
 export type RunnerMcpServersFingerprint = z.infer<typeof runnerMcpServersFingerprintSchema>;
 
+/**
+ * 委譲先へ載せる許可規則の一覧（#4952）。この層では文字列の配列という袋だけを検める: 中身の検査の正本は
+ * `parseDelegatedPermissionRules` で、ここに書くと2つ目の正本になるため。不正なら runner が 400 を返し、前の一覧が残る。
+ */
+export const runnerSetPermissionRulesCommandSchema = z.object({
+  rules: z.array(z.string()),
+});
+
+export type RunnerSetPermissionRulesCommand = z.infer<typeof runnerSetPermissionRulesCommandSchema>;
+
+/** 規則の本文（command の全文）は返さない。件数と、前の一覧から変わったかだけ。 */
+export const runnerPermissionRulesResultSchema = z.object({
+  count: z.number().int().nonnegative(),
+  changed: z.boolean(),
+});
+
+export type RunnerPermissionRulesResult = z.infer<typeof runnerPermissionRulesResultSchema>;
+
 /** この層では形を緩く運ぶ: 検査の正本は `parseRunnerPlugin` で、受けた runner が検める。 */
 export const runnerPluginFileWireSchema = z.object({
   path: z.string(),
@@ -941,6 +959,13 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      */
     notifyClone: z.literal(true).optional(),
     /**
+     * 作業者だけが利用上限で落ちた note にだけ載せる（#5021）。デーモンが原文の `resets …` を鍵のプールの枠と突き合わせるための材料で、
+     * `text` の文言から原文を切り出さない。`raw` は伏せ字を通した後の原文（300字まで）。
+     * `preRotationKey` は、落ちた時点でそのセッションが鍵の差し替えを受け取って境界を待っていた（回転前の鍵で走っている）こと。
+     * `.optional()`: 旧デーモンは未知の欄を落として日誌にだけ残し、旧 runner は欄を送らない。
+     */
+    workerLimit: z.object({ raw: z.string(), preRotationKey: z.boolean() }).optional(),
+    /**
      * `escalate` と同じく、判定は必ずこの欄で行い `note.text` の文言では行わない。
      * 中の欄を optional にしない: `stall` が存在する限り新 runner は全部揃えて送る。`agentType` だけは SDK が `agent_type` を
      * 欠くことがあるので、取れたときだけ載せる。旧デーモンでは新種別 `subagent_stall` としては記録されず `exchange` に留まる。
@@ -1315,6 +1340,17 @@ export class RunnerPluginsUnsupportedError extends Error {
   }
 }
 
+/** 挑み直しに数えない（`RunnerMcpServersUnsupportedError` と同じ）。 */
+export class RunnerPermissionRulesUnsupportedError extends Error {
+  constructor(runnerId: string) {
+    super(
+      `${runnerId} は委譲先の許可規則を受け取る口を持たない（古い版の runner。` +
+        'この runner で起こすマネージャー・作業者には、人間が承認した許可が規則として載らない。runner を上げれば次の名乗りで降りる）',
+    );
+    this.name = 'RunnerPermissionRulesUnsupportedError';
+  }
+}
+
 /** `null` は外す。 */
 export const runnerSetCodexAuthCommandSchema = z.object({
   codexAuth: z.object({ value: z.string(), revision: z.string().min(1) }).nullable(),
@@ -1635,6 +1671,12 @@ export interface RunnerClient {
    * 口を持たない古い runner には `RunnerMcpServersUnsupportedError` を投げ、省略した実装へは降ろさない。
    */
   setMcpServers?(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined>;
+  /**
+   * 委譲先の許可規則の一覧を丸ごと置き直す（#4952）。空の配列は全部外す。runner が繋ぎ直すたびに降ろし直す（一覧はプロセスのメモリにしか無い）。
+   * 走行中のセッションへも置き直す（`setMcpServers` と違い、次に開くセッションを待たない）。
+   * 口を持たない古い runner には `RunnerPermissionRulesUnsupportedError` を投げ、省略した実装へは降ろさない。
+   */
+  setPermissionRules?(rules: readonly string[]): Promise<RunnerPermissionRulesResult>;
   /**
    * 持っていなければ `undefined`。口を持たない古い runner も `undefined`（区別は `setPlugin` の 404）。
    * 欄が在るのに読めなかったときは投げる（「持っていない」へ倒さない）。

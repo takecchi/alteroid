@@ -3,6 +3,7 @@ import {
   pruneExtractedPluginsAgainstStore,
   reasonOf,
   type Stores,
+  writeStderrLine,
 } from '@alteroid/core';
 
 /** 失敗しても投げない: 片づけの失敗で daemon が起きなくなると、古い版が残るだけの問題がクローン全体の停止になる。 */
@@ -11,7 +12,7 @@ export async function pruneExtractedPluginsOnBoot(options: {
   store: Stores['plugins'];
   write?: (text: string) => void;
 }): Promise<void> {
-  const write = options.write ?? ((text: string) => void process.stderr.write(text));
+  const write = options.write ?? ((text: string) => void writeStderrLine(text));
   try {
     const result = await pruneExtractedPluginsAgainstStore(
       options.root,

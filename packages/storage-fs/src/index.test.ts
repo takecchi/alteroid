@@ -1954,6 +1954,23 @@ describe('FsCommitmentStore', () => {
     expect(stillLegacy?.closedBy).toBeUndefined();
   });
 
+  it("器が自動で閉じた行（closedBy: 'daemon'）が往復する（#5015）", async () => {
+    await stores.commitments.open(commitment('c-daemon', '2026-08-13T00:00:00.000Z', '枠の知らせ'));
+    expect(
+      await stores.commitments.close(
+        'c-daemon',
+        '2026-08-14T00:00:00.000Z',
+        '器が自動で閉じた',
+        'daemon',
+      ),
+    ).toBe(true);
+    const closed = await stores.commitments.get('c-daemon');
+    expect(closed?.closedBy).toBe('daemon');
+    expect(closed?.closedReason).toBe('器が自動で閉じた');
+    const listed = (await stores.commitments.list({ includeClosed: true })).entries;
+    expect(listed.find((entry) => entry.id === 'c-daemon')?.closedBy).toBe('daemon');
+  });
+
   describe('editBody（本文を後から直す）', () => {
     it('未了の行は書き換えられる（body/editedAt/editedBy が入り、他の欄は壊れない）', async () => {
       await stores.commitments.open({

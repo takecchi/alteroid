@@ -147,12 +147,28 @@ export class RunnerSdkSession {
    */
   #endedInputForTokenRotation = false;
 
-  requestTokenRecycle(): void {
+  /**
+   * `#recycleForToken` のうち、Claude の鍵（プールが持つ資格）の指紋が変わった回だけに立つ印（#5021）。
+   * `#recycleForToken` だけで「回転前の鍵で走っている」と言わない: `GH_TOKEN` の差し替えや peer の開閉でも立ち、そのときは鍵は同じため。
+   */
+  #onPreRotationClaudeKey = false;
+
+  requestTokenRecycle(claudeKeyChanged = false): void {
     this.#recycleForToken = true;
+    if (claudeKeyChanged) this.#onPreRotationClaudeKey = true;
   }
 
   get wantsTokenRecycle(): boolean {
     return this.#recycleForToken;
+  }
+
+  get onPreRotationClaudeKey(): boolean {
+    return this.#onPreRotationClaudeKey;
+  }
+
+  /** 新しい CLI プロセスを起こす時点で下ろす: 起こすのはもう新しい env のもとのため（境界での開き直し以外の経路でも下ろす）。 */
+  clearPreRotationClaudeKey(): void {
+    this.#onPreRotationClaudeKey = false;
   }
 
   consumeTokenRecycleAtBoundary(): void {

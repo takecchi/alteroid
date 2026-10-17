@@ -32,6 +32,17 @@ export function sessionAllowRuleShapeOf(
   return { kind: 'rule', rule: `Bash(${command})`, command };
 }
 
+/**
+ * 委譲先の許可規則（#4952。人間が承認した許可）と一時規則を、セッションへ置く1つの一覧にまとめる（重複は1つ）。
+ * 置く口は一覧を丸ごと置き換えるので、片方だけを置くともう片方が消える。一時規則を外しても、同じ文字列の許可規則は残る。
+ */
+export function mergeSessionAllowRules(
+  granted: readonly string[],
+  temporary: readonly string[],
+): string[] {
+  return [...new Set([...granted, ...temporary])];
+}
+
 export interface SessionAllowRuleGrant {
   readonly rule: string;
   readonly expiresAt: number;

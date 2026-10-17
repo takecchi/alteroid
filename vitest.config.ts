@@ -18,7 +18,7 @@ export default defineConfig({
     },
   },
   test: {
-    setupFiles: ['./vitest.setup.ts'],
+    setupFiles: ['./vitest.setup.ts', './vitest.quiet-traces.ts'],
     globalSetup: ['./vitest.global-setup.ts'],
     // `clearMocks` は `false` に固定する: vitest 5 の既定 `true` だと各テストの前に呼び出し履歴が消え、テストの始まる前に起きた呼び出しを `not.toHaveBeenCalled()` が見なくなるため。`true` へ移すなら `not.toHaveBeenCalled` 系を数え直してから別の変更で入れる。
     clearMocks: false,

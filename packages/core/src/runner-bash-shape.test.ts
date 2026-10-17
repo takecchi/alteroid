@@ -132,7 +132,9 @@ describe('Bash の形の歯（#4947・マネージャーにも #4949）', () => 
         );
         const result = (await firePreToolUse(options, bash('pnpm test 2>&1', worker))) as Out;
         expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
-        expect(String(result.hookSpecificOutput?.permissionDecisionReason)).toContain('| tail');
+        expect(String(result.hookSpecificOutput?.permissionDecisionReason)).toContain(
+          '付け替えを外して',
+        );
         const note = noteTexts(events).find((t) => t.includes('Bash の呼び出しを弾いた'));
         expect(note).toContain(actor);
         expect(note).toContain('形=fd-dup');
@@ -147,8 +149,8 @@ describe('Bash の形の歯（#4947・マネージャーにも #4949）', () => 
       ["node -e '1'", 'node-eval', 'Write'],
       ["python3 -c 'x'", 'python-c', 'Write'],
       ["perl -e '1'", 'perl-eval', 'Write'],
-      ['pnpm test |& tail', 'pipe-stderr', '`|` だけ'],
-      ["timeout 300 bash -c 'pnpm test 2>&1'", 'fd-dup', '| tail'],
+      ['pnpm test |& tail', 'pipe-stderr', '`|&` を外して'],
+      ["timeout 300 bash -c 'pnpm test 2>&1'", 'fd-dup', '付け替えを外して'],
       ['git commit -m "$(cat <<\'EOF\'\nx\nEOF\n)"', 'subst-heredoc', 'git commit -F'],
       ['git reset --hard', 'git-reset', 'git restore --staged'],
       ['git -C /tmp/x push --force-with-lease', 'git-force-push', '新しい枝'],
@@ -177,7 +179,7 @@ describe('Bash の形の歯（#4947・マネージャーにも #4949）', () => 
       const { options } = await startSession({});
       for (const command of [
         'gh pr create --body "a > b"',
-        "timeout 300 bash -c 'sleep 1; echo done'",
+        "timeout 300 bash -c 'sleep 1 && echo done'",
         "timeout 300 bash -c 'until test -f x; do sleep 5; done'",
         'sort < in.txt',
         'echo git reset',
@@ -238,6 +240,63 @@ describe('Bash の形の歯（#4947・マネージャーにも #4949）', () => 
   );
 });
 
+async function firePostToolUse(
+  options: Options,
+  command: string,
+  worker: boolean,
+): Promise<string | undefined> {
+  const hook = options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+  if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+  const result = await hook(
+    {
+      hook_event_name: 'PostToolUse',
+      tool_use_id: 'tu-1',
+      tool_name: 'Bash',
+      tool_input: { command },
+      tool_response: { stdout: '', stderr: '' },
+      ...(worker ? { agent_id: 'agent-xyz', agent_type: 'worker' } : {}),
+    } as never,
+    undefined,
+    { signal: new AbortController().signal },
+  );
+  return (result as { hookSpecificOutput?: { additionalContext?: string } }).hookSpecificOutput
+    ?.additionalContext;
+}
+
+describe('管が終了コードを隠す形（#4990）', () => {
+  for (const { label, worker, actor } of ACTORS) {
+    it(`${label}の git merge x | tail は deny（形=pipe-masks-exit）で、名前の入った理由を返す`, async () => {
+      const { options, events } = await startSession({});
+      const result = (await firePreToolUse(options, bash('git merge x | tail', worker))) as Out;
+      expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(String(result.hookSpecificOutput?.permissionDecisionReason)).toContain(
+        '`git merge` の出力を管',
+      );
+      const note = noteTexts(events).find((t) => t.includes('形=pipe-masks-exit'));
+      expect(note).toContain(actor);
+    });
+
+    // #5017: 最後の段が head・tail の管は pipe-trim で断つようになった。止めない検査の管は、head・tail 以外の最後の段のものだけ
+    it(`${label}の pnpm test | tail は deny（形=pipe-trim）。pnpm test | grep FAIL は止めず、PostToolUse に知らせを添える。cat f | grep x には添えない`, async () => {
+      const { options, events } = await startSession({});
+      const trimmed = (await firePreToolUse(options, bash('pnpm test | tail', worker))) as Out;
+      expect(trimmed.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(noteTexts(events).find((t) => t.includes('形=pipe-trim'))).toContain(actor);
+      const pre = (await firePreToolUse(options, bash('pnpm test | grep FAIL', worker))) as Out;
+      expect(pre.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      const notice = await firePostToolUse(options, 'pnpm test | grep FAIL', worker);
+      expect(notice).toContain('管の最後の `grep` の終了コード');
+      expect(notice).toContain('`pnpm test` が通ったことは表さない');
+      expect(await firePostToolUse(options, 'cat f | grep x', worker)).toBeUndefined();
+    });
+  }
+
+  it('形の歯が off でも、知らせは添える（止めないので入り切りに繋げない）', async () => {
+    const { options } = await startSession({ [BASH_SHAPE_GUARD_ENV]: 'off' });
+    expect(await firePostToolUse(options, 'pnpm test | tail', false)).toContain('#4990');
+  });
+});
+
 describe('Bash の形の歯の入り切り（ALTEROID_BASH_SHAPE_GUARD。#4949）', () => {
   async function decisionOf(
     env: NodeJS.ProcessEnv,
@@ -267,7 +326,7 @@ describe('Bash の形の歯の入り切り（ALTEROID_BASH_SHAPE_GUARD。#4949�
       worker,
     );
     expect(decision).toBe('deny');
-    expect(reason).toContain('| tail');
+    expect(reason).toContain('付け替えを外して');
   });
 
   it('プロファイルで on なら断る（runner の env は未設定）', async () => {

@@ -13,6 +13,7 @@ import {
   prepareAccountForWrite,
   prepareIdentityForWrite,
   prepareLoginRequestForWrite,
+  writeStderrLine,
 } from '@alteroid/core';
 import type {
   AccessTokenRecord,
@@ -559,7 +560,7 @@ export class FsAuthStore implements AuthStore {
           return;
         }
         invalidAccountsRaw.push(rawAccount);
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedAccountRow({
             index,
             reason: summarizeInvalidFields(result.error.issues),
@@ -578,7 +579,7 @@ export class FsAuthStore implements AuthStore {
         }
         invalidIdentitiesRaw.push(rawIdentity);
         const key = extractIdentityKey(rawIdentity);
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedIdentityRow({
             index,
             reason: summarizeInvalidFields(result.error.issues),
@@ -597,7 +598,7 @@ export class FsAuthStore implements AuthStore {
           return;
         }
         invalidAccessTokensRaw.push(rawToken);
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedAccessTokenRow({
             index,
             reason: summarizeInvalidFields(result.error.issues),
@@ -615,7 +616,7 @@ export class FsAuthStore implements AuthStore {
           return;
         }
         invalidLoginRequestsRaw.push(rawRequest);
-        process.stderr.write(
+        writeStderrLine(
           `${describeSkippedLoginRequestRow({
             index,
             reason: summarizeInvalidFields(result.error.issues),

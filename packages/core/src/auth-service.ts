@@ -16,7 +16,7 @@ import {
   type LoginRequest,
 } from './auth.js';
 import type { AuthProviderRegistry } from './auth-providers.js';
-import { reasonOf } from './dropped-record.js';
+import { reasonOf, writeStderrLine } from './dropped-record.js';
 import { hasNul } from './nul-guard.js';
 import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
 
@@ -178,7 +178,7 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
       }
       // NUL を含むメールは閉じる側（ログイン失敗）に倒す: ストアが断るため。stderr には欄名と固定の文だけを残し、メールの値は載せない
       if (profile.emailVerified && profile.email !== null && hasNul(profile.email)) {
-        process.stderr.write(
+        writeStderrLine(
           'alteroid: ログインを断った（auth.email に NUL を含むので断った。プロバイダが返した検証済みメール）\n',
         );
         await fail(claimedForExchange, 'exchange_failed');
@@ -259,13 +259,13 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         return { status: 'ok', accountId: account.id, granted: account.grantedAt !== null };
       } catch (error) {
         // 握りつぶさず stderr に1行出す: 後始末（`failed` への書き込み）も同じ器に頼るため
-        process.stderr.write(
+        writeStderrLine(
           `alteroid: ログインの交換の後の器の操作が失敗した。要求を failed に落とす: ${reasonOf(error)}\n`,
         );
         try {
           await fail(claimedForExchange, 'exchange_failed');
         } catch (failError) {
-          process.stderr.write(
+          writeStderrLine(
             `alteroid: ログイン要求を failed に落とせなかった。要求は processing のまま残る: ${reasonOf(failError)}\n`,
           );
         }
@@ -393,7 +393,7 @@ async function touch(store: AuthStore, record: AccessTokenRecord, at: Date): Pro
   try {
     await store.markAccessTokenUsed(record.id, at.toISOString());
   } catch (error) {
-    process.stderr.write(
+    writeStderrLine(
       `alteroidd: アクセストークン ${record.id} の最後に使った時刻を書けなかった（照合は通す）: ${reasonOf(error)}\n`,
     );
   }

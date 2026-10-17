@@ -1,4 +1,4 @@
-import { createMemoryStores, failingJournalAppend } from '@alteroid/core';
+import { captureStderr, createMemoryStores, failingJournalAppend } from '@alteroid/core';
 import type { StorageFootprint, TableSizeStats } from '@alteroid/storage-pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -191,11 +191,9 @@ describe('describeBootFootprint（pg 構成）', () => {
 
 describe('reportBootFootprint（標準出力と日誌の両方へ、起動を止めずに出す）', () => {
   let stdout: ReturnType<typeof vi.spyOn>;
-  let stderr: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -240,11 +238,13 @@ describe('reportBootFootprint（標準出力と日誌の両方へ、起動を止
   it('⛔ 日誌への追記が失敗しても投げない（起動を止めない）。標準出力へは既に書いている', async () => {
     const stores = failingJournalAppend(createMemoryStores(), '接続がまだ立ち上がっていない');
 
-    await expect(reportBootFootprint(stores, emptyFootprint())).resolves.toBeUndefined();
+    const stderrLines = await captureStderr(async () => {
+      await expect(reportBootFootprint(stores, emptyFootprint())).resolves.toBeUndefined();
+    });
 
     expect(stdout).toHaveBeenCalledTimes(1);
-    expect(stderr).toHaveBeenCalledTimes(1);
-    expect(stderr.mock.calls[0]?.[0] as string).toContain('日誌へ残せませんでした');
+    expect(stderrLines).toHaveLength(1);
+    expect(stderrLines[0]).toContain('日誌へ残せませんでした');
   });
 
   it('⛔ 測定・整形そのものが投げても、関数は投げない（外側の try/catch）', async () => {
@@ -253,10 +253,12 @@ describe('reportBootFootprint（標準出力と日誌の両方へ、起動を止
     });
     const stores = createMemoryStores();
 
-    await expect(reportBootFootprint(stores, emptyFootprint())).resolves.toBeUndefined();
+    const stderrLines = await captureStderr(async () => {
+      await expect(reportBootFootprint(stores, emptyFootprint())).resolves.toBeUndefined();
+    });
 
-    expect(stderr).toHaveBeenCalledTimes(1);
-    expect(stderr.mock.calls[0]?.[0] as string).toContain('測定に失敗しました');
+    expect(stderrLines).toHaveLength(1);
+    expect(stderrLines[0]).toContain('測定に失敗しました');
     const entries = await stores.journal.list();
     expect(
       entries.filter(

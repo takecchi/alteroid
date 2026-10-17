@@ -4,6 +4,7 @@ import {
   type LimitsUnavailableCause,
   type UsageProbeQuery,
   reasonOf,
+  writeStderrLine,
 } from '@alteroid/core';
 
 export const USAGE_POLL_INTERVAL_MS = 5 * 60_000;
@@ -129,7 +130,7 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
             try {
               notify(next, measuredBy);
             } catch (error) {
-              process.stderr.write(
+              writeStderrLine(
                 `alteroidd: 枠の観測を見張りへ渡せませんでした: ${reasonOf(error)}\n`,
               );
             }

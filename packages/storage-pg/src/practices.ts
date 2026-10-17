@@ -10,6 +10,7 @@ import {
   practiceVersionMatches,
   practiceVersionSchema,
   UnreadablePracticeError,
+  writeStderrLine,
 } from '@alteroid/core';
 import type {
   Practice,
@@ -100,7 +101,7 @@ export class PgPracticeStore implements PracticeStore {
         continue;
       }
       const reason = summarizeInvalidFields(parsed.error.issues);
-      process.stderr.write(`${describeSkippedPracticeRow({ slug: row.slug, reason })}\n`);
+      writeStderrLine(`${describeSkippedPracticeRow({ slug: row.slug, reason })}\n`);
       unreadable.push({ slug: row.slug, reason });
     }
     return { entries, unreadable };
@@ -318,7 +319,7 @@ export class PgPracticeStore implements PracticeStore {
         result.push(parsed.data);
         continue;
       }
-      process.stderr.write(
+      writeStderrLine(
         `${describeSkippedPracticeVersionRow({
           slug: row.slug,
           version: row.version,

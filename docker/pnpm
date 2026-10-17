@@ -1,0 +1,22 @@
+#!/bin/sh
+# pnpm の入口（#5009）。corepack は pnpm の版を「いまの作業ディレクトリ」の package.json の packageManager で決めるので、
+# 担当が作業場の外から `pnpm -C <絶対パス> …` と打つと、corepack は既定の最新を選び、リポジトリの指定と食い違って止まる
+# （pnpm は corepack の下では自分で版を切り替えない）。`-C` / `--dir` に絶対パスがあれば、そこへ移ってから corepack を起こす。
+# 引数はそのまま渡す（パスは絶対なので、移った後も同じ場所を指す）。相対パス・指定なしのときは今どおり。
+set -eu
+dir=''
+prev=''
+for arg in "$@"; do
+  case "$prev" in
+    -C | --dir) dir=$arg ;;
+  esac
+  case "$arg" in
+    --dir=*) dir=${arg#--dir=} ;;
+    -C/*) dir=${arg#-C} ;;
+  esac
+  prev=$arg
+done
+case "$dir" in
+  /*) if [ -d "$dir" ]; then cd "$dir"; fi ;;
+esac
+exec corepack pnpm "$@"

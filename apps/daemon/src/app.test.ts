@@ -1199,8 +1199,7 @@ describe('HTTP API', () => {
 
     it('版を付けない DELETE は 428 で断り、何も消さず、日誌にも積まない（段階3）', async () => {
       await stores.persona.write('values', '# 価値観\n\nV1\n');
-      const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-      try {
+      const lines = await captureStderr(async () => {
         const res = await del();
         expect(res.status).toBe(428);
         const body = (await res.json()) as {
@@ -1210,10 +1209,8 @@ describe('HTTP API', () => {
         expect(body.error).toContain('消していません');
         expect(body.current?.document.content).toBe('# 価値観\n\nV1\n');
         expect(body.current?.version).toBe(await readVersion());
-        expect(spy.mock.calls.map((c) => String(c[0])).join('')).not.toContain('版の照合なし');
-      } finally {
-        spy.mockRestore();
-      }
+      });
+      expect(lines.join('')).not.toContain('版の照合なし');
       expect((await stores.persona.read('values'))?.content).toBe('# 価値観\n\nV1\n');
       expect(await stores.journal.list({ types: ['memory_update'] })).toEqual([]);
     });
@@ -1539,8 +1536,7 @@ describe('HTTP API', () => {
     it('版を付けない DELETE は 428 で断り、何も消さず・日誌にも積まず、いまの版を current に返す（段階2）', async () => {
       await stores.practices.write({ ...base, content: 'V1' });
       const journalBefore = await stores.journal.list({ types: ['decision'] });
-      const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-      try {
+      const lines = await captureStderr(async () => {
         const res = await del();
 
         expect(res.status).toBe(428);
@@ -1552,10 +1548,8 @@ describe('HTTP API', () => {
         expect(body.error.match(/消していません/g)).toHaveLength(1);
         expect(body.current?.practice.content).toBe('V1\n');
         expect(body.current?.version).toBe(await readVersion());
-        expect(spy.mock.calls.map((c) => String(c[0])).join('')).not.toContain('版の照合なし');
-      } finally {
-        spy.mockRestore();
-      }
+      });
+      expect(lines.join('')).not.toContain('版の照合なし');
       expect((await stores.practices.read('daily-report'))?.content).toBe('V1\n');
       expect(await stores.journal.list({ types: ['decision'] })).toEqual(journalBefore);
     });

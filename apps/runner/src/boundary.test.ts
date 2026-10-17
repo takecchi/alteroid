@@ -108,6 +108,12 @@ async function attack(env: NodeJS.ProcessEnv, socketPath: string, managerId: str
           JSON.stringify({ mcpServers: { evil: { command: 'attacker' } } }),
         ),
         getMcpServers: await call('GET', '/mcp-servers'),
+        // 自分のセッションに許可規則を自分で足せないこと（#4952）
+        setPermissionRules: await call(
+          'POST',
+          '/permission-rules',
+          JSON.stringify({ rules: ['Bash(rm -rf /)'] }),
+        ),
         // 環境から鍵を拾えるか（runner と同じ UID なら /proc も読める前提で見る）
         token: process.env.ALTEROID_RUNNER_TOKEN ?? null,
         hash: process.env.ALTEROID_RUNNER_TOKEN_SHA256 ?? null,
@@ -180,8 +186,11 @@ describe('制御面の境界', () => {
       setCredentials: 401,
       setMcpServers: 401,
       getMcpServers: 401,
+      setPermissionRules: 401,
     });
     expect(host.mcpServers()).toBeUndefined();
+    // 規則の一覧は空のまま（空を置いても「変わった」にならない）
+    expect(host.setPermissionRules([])).toEqual({ count: 0, changed: false });
 
     expect(result.token).toBeNull();
     expect(result.hash).toBeNull();

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/core';
+import { captureStderr, createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/core';
 import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -382,24 +382,20 @@ describe('Outbox の送信済みの控えは字数でも締める（#4669）', (
     expect(outbox.sentSince(0).map((item) => item.seq)).toEqual([3]);
   });
 
-  it('字数で落とした分より前を繋ぎ直しで求められたら、送り直せないことを標準エラーに残す。落としていない範囲では黙る', () => {
+  it('字数で落とした分より前を繋ぎ直しで求められたら、送り直せないことを標準エラーに残す。落としていない範囲では黙る', async () => {
     const outbox = new Outbox();
     for (let seq = 1; seq <= 20; seq += 1) {
       outbox.push(mirrorOf(seq));
       outbox.recordSent(mirrorOf(seq), seq, at, 1_000_000);
     }
-    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    try {
+    const dropped = await captureStderr(() => {
       expect(outbox.sentSince(2).map((item) => item.seq)[0]).toBe(5);
-      expect(spy.mock.calls.map((call) => String(call[0])).join('')).toContain(
-        '控えの字数の上限で落としてあり、送り直せない',
-      );
-      spy.mockClear();
+    });
+    expect(dropped.join('')).toContain('控えの字数の上限で落としてあり、送り直せない');
+    const silent = await captureStderr(() => {
       outbox.sentSince(10);
-      expect(spy).not.toHaveBeenCalled();
-    } finally {
-      spy.mockRestore();
-    }
+    });
+    expect(silent).toEqual([]);
   });
 });
 

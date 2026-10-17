@@ -8,6 +8,7 @@ import {
   preparePermissionGrantForPut,
   UnreadablePermissionGrantError,
   unreadableRowKey,
+  writeStderrLine,
 } from '@alteroid/core';
 import type {
   PermissionGrant,
@@ -203,7 +204,7 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
         }
         invalidGrantsRaw.push(rawGrant);
         if (this.#unreadableOnce.sawUnreadable(key)) {
-          process.stderr.write(
+          writeStderrLine(
             `${describeSkippedGrantRow({
               index,
               reason: summarizeInvalidFields(result.error.issues),

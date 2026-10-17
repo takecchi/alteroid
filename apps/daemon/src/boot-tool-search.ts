@@ -3,13 +3,14 @@ import {
   BOOT_TOOL_SEARCH_OBSERVED_EVENT_SOURCE,
   reasonOf,
   type Stores,
+  writeStderrLine,
 } from '@alteroid/core';
 
 type Out = { stdout: (text: string) => void; stderr: (text: string) => void };
 
 const PROCESS_OUT: Out = {
   stdout: (text) => process.stdout.write(text),
-  stderr: (text) => process.stderr.write(text),
+  stderr: (text) => writeStderrLine(text),
 };
 
 // 標準出力と日誌の両方に出す: 手元の器で ToolSearch が止まっていたかを、後から日誌だけで辿れるようにするため（#4269）

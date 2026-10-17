@@ -78,6 +78,7 @@ import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { codeSpan } from './markdown-span.js';
 import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
 import type { CredentialService } from './credential-service.js';
+import type { DelegatedPermissionRuleService } from './delegated-permission-rules.js';
 import type { McpServerService } from './mcp-server-service.js';
 import type { PluginDistributionService } from './plugin-distribution-service.js';
 import type { ProfileService } from './profile-service.js';
@@ -99,6 +100,7 @@ import {
   RUNNER_CAPABILITY_RESCUE_RESTORE,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
+  RunnerPermissionRulesUnsupportedError,
   RunnerPluginsUnsupportedError,
 } from './runner-protocol.js';
 import {
@@ -176,6 +178,7 @@ import {
 } from './schema.js';
 import { describeUnreadableManagerRow, type Stores } from './store.js';
 import {
+  markRescueGoneWhileAlive,
   pruneRescueLedger,
   rescueRemovalDue,
   rescueStashRemovalDue,
@@ -191,12 +194,15 @@ import {
   type WorkspaceCloneHint,
 } from './workspace-swap-hints.js';
 import { matchNoticeResetAgainstPool, type NoticeResetMatch } from './token-reset-match.js';
+import type { AgentToken } from './token-pool.js';
+import { describeWorkerLimitKeyMatch, type RememberedWindow } from './worker-limit-key-match.js';
 import {
   describeUsageNotice,
   limitRecoveryOf,
   mergeRateLimitFacts,
   classifyUsageNotice,
   isRateLimitReason,
+  parseRateLimitMemoryKey,
   rateLimitMemoryKey,
   usageTransitionOf,
   withRecoveryNote,
@@ -909,6 +915,8 @@ export interface RunnerPushHealth {
   mcpServers?: RunnerPushOutcome;
   /** 口を持たない古い runner へは `failed` で記録するが、挑み直しには数えない（`RunnerPluginsUnsupportedError` の doc）。 */
   plugins?: RunnerPushOutcome;
+  /** 委譲先の許可規則（#4952）。口を持たない古い runner へは `failed` で記録するが、挑み直しには数えない（`RunnerPermissionRulesUnsupportedError` の doc）。 */
+  permissionRules?: RunnerPushOutcome;
 }
 
 /**
@@ -1698,6 +1706,8 @@ export interface ManagerPoolOptions {
   mcpServers?: McpServerService;
   /** runner は受けた plugin をメモリにしか持たないので、名乗りのたびに降ろし直すのはデーモンの責任である。 */
   plugins?: PluginDistributionService;
+  /** 委譲先の許可規則（#4952）。runner は記憶ストアを読めず一覧をメモリにしか持たないので、名乗りのたびに降ろし直すのはデーモンの責任である。 */
+  permissionRules?: DelegatedPermissionRuleService;
   /** runner は記憶ストアを読めないので、器が作り直されたときに降ろすのはデーモンの責任である。 */
   codexAuth?: CodexAuthRunnerSync;
   /** 期限は時刻そのものが答えを決めるので、渡せないと「猶予の中では奪わない」を確かめる試験が書けない。 */
@@ -3031,6 +3041,8 @@ class Pool implements ManagerPool {
   readonly #mcpServersUnsupported = new Set<string>();
   readonly #plugins: PluginDistributionService | undefined;
   readonly #pluginsUnsupported = new Set<string>();
+  readonly #permissionRules: DelegatedPermissionRuleService | undefined;
+  readonly #permissionRulesUnsupported = new Set<string>();
   readonly #records = new Map<string, ManagerRecord>();
   /** **器の時計を直に読まない**（時計を渡せないと「猶予の中では奪わない」を確かめる試験が書けない）。 */
   readonly #now: () => number;
@@ -3129,6 +3141,17 @@ class Pool implements ManagerPool {
    * ターンが終われば必ず消える。
    */
   readonly #usageWakeOwed = new Set<string>();
+  /**
+   * 作業者（サブエージェント）の枠の落ちで手を止めた担当の印（#5030）。`#usageStopped` とは別の印にする:
+   * 担当自身は枠で落ちておらず、鍵の回転の契機（`#observeForTokenRotation`）にも流さない（#4903「回転は起こさない」）。起こすのは担当の続きだけ。
+   * `turnStartedAt` は落ちが記録されたターンの開始時刻。担当がそのあと新しいターンを始めたら（値が変わったら）印を下ろす。
+   * 6785 の「自力で終えたターンへ一言を投げない」決め（`#settleUsageWake`）の例外は、この印の立つ「作業者の落ちが記録されたターン」だけ。
+   * 永続化しない（既知の限界）: デーモンが再起動すると印は無くなり、今までどおり起こさない。
+   */
+  readonly #workerLimitStopped = new Map<
+    string,
+    { readonly preRotationKey: boolean; readonly turnStartedAt: string | undefined }
+  >();
   // 後継を起こしている最中の前任（確認 → `supersededBy` の書き込みの間）。値は後継を起こす start の印（#4865）
   readonly #supersedePending = new Map<string, symbol>();
   /**
@@ -3302,6 +3325,11 @@ class Pool implements ManagerPool {
   readonly #unsubscribeDirectPushes: (() => void)[] = [];
   readonly #pushRetryDelays = new Map<string, number>();
   readonly #pushFailureFolds = new Map<string, JournalFoldWindow>();
+  /**
+   * 古い鍵の done へ本文を断った decision の、最後に書いた本文（decision と grounds）。managerId ごと（#4982）。
+   * 見回りの届け直しが同じ判定をやり直しただけの回に、同じ decision を書き直さないために使う。預かりが届いた・捨てた・担当を外した時点で消す。
+   */
+  readonly #lastStaleDecline = new Map<string, string>();
   /** 費用の門のバックオフにしか使わない: ここに載ったこと自体は「症状である」を意味しない。 */
   readonly #turnEndProbedAt = new Map<string, number>();
   readonly #unsubscribe: () => void;
@@ -3373,6 +3401,7 @@ class Pool implements ManagerPool {
     credentials,
     mcpServers,
     plugins,
+    permissionRules,
     codexAuth,
     now,
     leaseTtlMs,
@@ -3409,8 +3438,12 @@ class Pool implements ManagerPool {
     this.#credentials = credentials;
     this.#mcpServers = mcpServers;
     this.#plugins = plugins;
+    this.#permissionRules = permissionRules;
     this.#codexAuth = codexAuth;
     for (const unsubscribe of [
+      permissionRules?.onPushed?.((results) =>
+        this.#recordDirectPushResults('permissionRules', results),
+      ),
       profile?.onPushed?.((results) => this.#recordDirectPushResults('profile', results)),
       mcpServers?.onPushed?.((results) => this.#recordDirectPushResults('mcpServers', results)),
       credentials?.onPushed?.((results) => this.#recordDirectPushResults('credentials', results)),
@@ -3680,6 +3713,8 @@ class Pool implements ManagerPool {
     mode: 'caller' | 'held-delivery' | 'usage-rotation',
     // 届けた断り書きが畳んだ背景処理（peer を除く）の本数を呼び手へ返す（#4902）: 起こし直しが成功した回だけクローンへ知らせるため
     onFoldNoticeDelivered?: (backgroundTasks: number) => void,
+    // 見回り（`deliverHeldMessages`）からの届け直しだけ真（#4982）: 前と同じ判定で断るだけなら新しい判断ではないので、decision を書き直さない
+    pollRetry = false,
   ): Promise<ManagerSendResult> {
     await this.#ensureConnected();
 
@@ -3831,6 +3866,7 @@ class Pool implements ManagerPool {
           oldestHeldAt !== undefined &&
           this.#now() - Date.parse(oldestHeldAt) >= HELD_FORCE_FOLD_AFTER_MS,
         foldBackgroundIfHeldTokenNotReady: mode === 'usage-rotation',
+        skipUnchangedDeclineRecord: mode === 'held-delivery' && pollRetry,
       });
       if (folded.declined !== undefined) {
         // 断った本文を捨てない: 呼び手が台帳で追って送り直すしかなく、追い損ねた伝言は誰にも届かないまま消えるため。
@@ -4058,6 +4094,8 @@ class Pool implements ManagerPool {
       foldBackgroundAfterWait?: boolean;
       /** 鍵の回転・枠の起こし直しの回だけ真（#4850）。抱えている古い鍵が ready でなければ、待たずに背景処理ごと畳む。ready なら今までどおり旧セッションへ届ける。 */
       foldBackgroundIfHeldTokenNotReady?: boolean;
+      /** 見回りの届け直しの回だけ真（#4982）。前に書いた断りと本文が同じなら、断りの decision を書かない（断る判定そのものは変えない）。 */
+      skipUnchangedDeclineRecord?: boolean;
     } = {},
   ): Promise<{
     /** 背景処理ごと畳んだ本数（待ちの上限 `HELD_FORCE_FOLD_AFTER_MS` を過ぎた回か、鍵の回転の回）。 */
@@ -4206,13 +4244,24 @@ class Pool implements ManagerPool {
         heldTokenState === undefined
           ? ''
           : `抱えている古い鍵（${heldTokenId ?? '?'}）は${heldTokenState}ので、そのまま旧セッションへ届けることもしない。`;
-      await this.#journal({
-        type: 'decision',
-        decision: `[${managerId}] done の委譲へ送られた本文を、届けずに断った（${staleness}）`,
-        grounds:
-          `managerId=${managerId} tokenId=${heldTokenId ?? '（分からない）'} ` +
-          `鍵の状態=${heldTokenState ?? '（聞いていない）'} 畳めない理由=${blockers.join('。')}（#4441）`,
-      });
+      const declineDecision = `[${managerId}] done の委譲へ送られた本文を、届けずに断った（${staleness}）`;
+      const declineGrounds =
+        `managerId=${managerId} tokenId=${heldTokenId ?? '（分からない）'} ` +
+        `鍵の状態=${heldTokenState ?? '（聞いていない）'} 畳めない理由=${blockers.join('。')}（#4441）`;
+      const declineRecord = `${declineDecision}\u0000${declineGrounds}`;
+      // 見回りの届け直しが前と同じ判定をやり直しただけの回は書かない（#4982）: 新しい判断ではなく、書くと見回りごと（60秒）に同じ行が積まれるため。
+      // decision の行は畳まない（#1311）ので、要約も作らず、繰り返しの元（見回りの再判定）の側で書かない。人・クローンの送信と、理由・鍵の状態が変わった回は書く。
+      if (
+        options.skipUnchangedDeclineRecord !== true ||
+        this.#lastStaleDecline.get(managerId) !== declineRecord
+      ) {
+        await this.#journal({
+          type: 'decision',
+          decision: declineDecision,
+          grounds: declineGrounds,
+        });
+        this.#lastStaleDecline.set(managerId, declineRecord);
+      }
       const reason =
         `${managerId} は${staleness}。古い鍵のセッションへ流すとまた枠に当たるので、` +
         '畳んで新しい鍵で起こし直したいが、畳めない理由が残っている: ' +
@@ -4416,6 +4465,7 @@ class Pool implements ManagerPool {
         (backgroundTasks) => {
           foldedBackgroundTasks = backgroundTasks;
         },
+        trigger === 'poll',
       );
       if (result.outcome !== 'delivered' && result.outcome !== 'answered') {
         return {
@@ -4436,6 +4486,7 @@ class Pool implements ManagerPool {
         foldedBackgroundTasks > 0
           ? `背景処理 ${String(foldedBackgroundTasks)} 本を畳んで起こし直し、結果は届かないので自分で確かめて続きを進めるよう促した。`
           : '';
+      this.#lastStaleDecline.delete(managerId);
       const summary =
         `預かっていた伝言 ${String(batch.length)} 通を ${managerId} へ届けた` +
         `（最初の預かり ${batch[0]?.heldAt ?? '?'}）。${foldedClause}${result.detail}`;
@@ -4466,6 +4517,7 @@ class Pool implements ManagerPool {
   /** 列の頭から `count` 通を捨て、本文ごと日誌とクローンへ返す: 預かった以上、黙って消すと誰にも届かない伝言が生まれるため。 */
   async #releaseHeld(record: ManagerRecord, count: number, why: string): Promise<void> {
     const managerId = record.job.id;
+    this.#lastStaleDecline.delete(managerId);
     const held = record.job.heldMessages ?? [];
     const released = held.slice(0, count);
     const remaining = held.slice(count);
@@ -5462,38 +5514,63 @@ class Pool implements ManagerPool {
     }
     // 観測の時刻は問い合わせる前に取る: 後で取ると遅れて返った観測がいつも新しくなり、上書きガードが働かない。
     const observedAt = new Date(this.#now()).toISOString();
-    const outcome = await this.#probeUnpushedWork(managerId, record, options);
-    await this.#recordUnpushedWorkObservation(record, outcome, options?.source, observedAt);
+    const { outcome, observerInstanceId } = await this.#probeUnpushedWork(
+      managerId,
+      record,
+      options,
+    );
+    await this.#recordUnpushedWorkObservation(
+      record,
+      outcome,
+      options?.source,
+      observedAt,
+      observerInstanceId,
+    );
     return outcome;
   }
 
-  /** `unpushedWork()` の実際の調べもの（台帳への書き込みは呼び出し元が持つ）。 */
+  /**
+   * `unpushedWork()` の実際の調べもの（台帳への書き込みは呼び出し元が持つ）。
+   * `observerInstanceId` は問い合わせる前に取る: 往復の最中に器が入れ替わった回を、入れ替え前の器の答えとして扱わないため。
+   */
   async #probeUnpushedWork(
     managerId: string,
     record: ManagerRecord,
     options?: { signal?: AbortSignal },
-  ): Promise<ManagerUnpushedWork> {
+  ): Promise<{ outcome: ManagerUnpushedWork; observerInstanceId?: string }> {
     const runner = await this.#runnerOf(record);
     if (runner === null) {
-      return { kind: 'unavailable', reason: '宛先の runner がいま開いていない。' };
+      return {
+        outcome: { kind: 'unavailable', reason: '宛先の runner がいま開いていない。' },
+      };
     }
     if (runner.unpushedWork === undefined) {
       return {
-        kind: 'unavailable',
-        reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+        outcome: {
+          kind: 'unavailable',
+          reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+        },
       };
     }
+    const observerInstanceId = this.#sighting(runner.runnerId).instanceId;
+    const withObserver = (outcome: ManagerUnpushedWork) => ({
+      outcome,
+      ...(observerInstanceId === undefined ? {} : { observerInstanceId }),
+    });
     try {
       const result = await runner.unpushedWork(managerId, options);
       if (result === undefined) {
-        return {
+        return withObserver({
           kind: 'unavailable',
           reason: 'runner が答えなかった（セッションが無い・期限切れ・古い版のいずれか）。',
-        };
+        });
       }
-      return { kind: 'ok', result };
+      return withObserver({ kind: 'ok', result });
     } catch (error) {
-      return { kind: 'unavailable', reason: `runner への問い合わせが失敗した: ${reasonOf(error)}` };
+      return withObserver({
+        kind: 'unavailable',
+        reason: `runner への問い合わせが失敗した: ${reasonOf(error)}`,
+      });
     }
   }
 
@@ -5507,6 +5584,7 @@ class Pool implements ManagerPool {
     outcome: ManagerUnpushedWork,
     source: UnpushedWorkObservationSource | undefined,
     observedAt?: string,
+    observerInstanceId?: string,
   ): Promise<void> {
     const at = observedAt ?? new Date(this.#now()).toISOString();
     const observation = unpushedWorkObservationOf(outcome, at, source);
@@ -5519,6 +5597,9 @@ class Pool implements ManagerPool {
       observation,
       record.job.lastUnpushedWorkObservation,
     );
+    // 台帳へ書いた観測だけを当てる: 古い観測で弾かれた回の「無い」を、新しい観測の後の事実として扱わないため。
+    const gone = markRescueGoneWhileAlive(record.job.lastRescue, observation, observerInstanceId);
+    if (gone !== null) record.job.lastRescue = gone;
     await this.#persist(record);
   }
 
@@ -5799,15 +5880,12 @@ class Pool implements ManagerPool {
     const nudged: string[] = [];
     for (const managerId of [...this.#usageStopped]) {
       if (this.#stopped) break;
-      const outcome = await this.#nudgeForUsageRotation(managerId);
-      this.#noteUsageWakeOutcome(managerId, outcome);
-      if (outcome === 'still-running') continue;
-      // `'skipped'`（届かなかった）の印を下ろさない: 空振りで印を失うと、次に拾われるには新しい `usage_notice` が要り、それにはその委譲自身が起きる必要があって、クローンが手で `manager_send` を打つまで戻らなくなる。
-      // 拾い直しは周回の掃き（`settleStalledUsageWakes`）が間隔を伸ばして担う（#4850）。ここでは回数上限を置かない: 戻れない委譲は `resume_failed` で印ごと畳まれる。
-      if (outcome === 'skipped') continue;
-      await this.#clearUsageStoppedMark(managerId);
-      this.#usageWakeOwed.delete(managerId);
-      if (outcome === 'nudged') nudged.push(managerId);
+      if (await this.#wakeStoppedByUsage(managerId)) nudged.push(managerId);
+    }
+    // 現役の鍵で落ちた作業者の担当（#5030）。回転前の鍵で落ちた印は、鍵の回転が済んでいるのでここでは起こさない（ターンの終わりで起こす）。
+    for (const managerId of [...this.#workerLimitStopped.keys()]) {
+      if (this.#stopped) break;
+      if (await this.#wakeForWorkerLimit(managerId, 'rotation')) nudged.push(managerId);
     }
     return nudged;
   }
@@ -6557,7 +6635,11 @@ class Pool implements ManagerPool {
    */
   async #nudgeForUsageRotation(
     managerId: string,
-    options?: { readonly allowRunning?: boolean },
+    options?: {
+      readonly allowRunning?: boolean;
+      // 作業者の落ちの印（#5030）から起こすとき: 専用の文を送り、日誌に理由を書き、クローンへの合成の知らせは積まない。
+      readonly workerLimit?: { readonly generation: number | undefined };
+    },
   ): Promise<'nudged' | 'still-running' | 'gone' | 'skipped'> {
     try {
       const record = this.#records.get(managerId) ?? (await this.#load(managerId));
@@ -6585,7 +6667,9 @@ class Pool implements ManagerPool {
       let foldedBackgroundTasks = 0;
       const result = await this.#send(
         managerId,
-        usageRotationNudge(),
+        options?.workerLimit === undefined
+          ? usageRotationNudge()
+          : workerLimitNudge(options.workerLimit.generation),
         {},
         'usage-rotation',
         (backgroundTasks) => {
@@ -6599,11 +6683,14 @@ class Pool implements ManagerPool {
           role: 'outbound',
           text:
             `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] 枠で止まっていた委譲を、通る鍵で続きから起こし直した` +
+            (options?.workerLimit === undefined
+              ? ''
+              : `（理由: 作業者の落ち${options.workerLimit.generation === undefined ? '' : `, 現役の世代 ${String(options.workerLimit.generation)}`}）`) +
             `（status=${status}, outcome=${result.outcome}）`,
         });
         // failed / lost だけクローンへ知らせる（#4861）: 終わっていたはずの担当が起き上がるので、後継を立てていたなら二重になる。
-        // done は生きていて続きを促しただけ（いつもの続き）なので積まない。
-        if (status === 'failed' || status === 'lost') {
+        // done は生きていて続きを促しただけ（いつもの続き）なので積まない。作業者の落ちからの起こし直しは、文言が「枠で落ちていた」と食い違うので積まない（#5030）。
+        if (options?.workerLimit === undefined && (status === 'failed' || status === 'lost')) {
           this.#queueSynthesizedNotice(
             managerId,
             'usage_rewoken',
@@ -6672,11 +6759,124 @@ class Pool implements ManagerPool {
    */
   async #requestRotationForFailure(managerId: string, text: string): Promise<void> {
     await this.#observeForTokenRotation(managerId, { notice: { kind: 'reached', text } });
+    await this.#wakeIfHeldTokenStale(managerId);
+  }
+
+  /**
+   * 抱えていた鍵が回転で古くなった後に枠へ当たった担当を、回転の出来事を待たずにその場で起こし直す（#4980）。
+   * 回し手は古い世代の観測を stale として ignored で返し、`reopenedTokenOf` が立たないので、次の回転まで誰も起こさない。
+   * 現役の鍵がもう通る（`ready`）と分かっているときだけ起こす: 通らないなら起こしても同じ枠に当たる。
+   * 回転の出来事で既に起こされて印が下りていれば何もしない。投げない（判定に失敗したら起こさず、印を残す）。
+   */
+  async #wakeIfHeldTokenStale(managerId: string): Promise<void> {
+    if (this.#stopped || !this.#usageStopped.has(managerId)) return;
+    const held = this.#tokenIdentities.get(managerId)?.generation;
+    const identity = this.#tokenIdentity?.();
+    if (identity === undefined || held === undefined || held >= identity.generation) return;
+    const active = identity.generation;
+    if (this.#tokenAvailability === undefined) return;
+    const availability = await this.#tokenAvailability(identity.tokenId).catch(() => undefined);
+    if (availability !== 'ready') return;
+    // 判定の間に回し手が起こして印を下ろしていたら、二重に起こさない。
+    if (!this.#usageStopped.has(managerId)) return;
+    await this.#journal({
+      type: 'decision',
+      decision: `[${managerId}] 抱えていた古い鍵（世代 ${String(held)}）で枠に当たったが、現役の鍵（世代 ${String(active)}）はもう通るので、回転の出来事を待たずに起こし直す`,
+      grounds:
+        `managerId=${managerId} tokenId=${identity.tokenId} 鍵の状態=ready ` +
+        '（#4980。回し手は古い世代の観測を無視するので、待っても次の回転まで起こされない）',
+    });
+    await this.#wakeStoppedByUsage(managerId);
+  }
+
+  /**
+   * 枠で止まった印の立つ担当1件を起こし直し、結果を挑み直しの状態と印へ写す（`resumeStoppedByUsage()` のループ1件分）。
+   * 起こした（`nudged`）ときは true を返す。
+   */
+  async #wakeStoppedByUsage(managerId: string): Promise<boolean> {
+    const outcome = await this.#nudgeForUsageRotation(managerId);
+    this.#noteUsageWakeOutcome(managerId, outcome);
+    if (outcome === 'still-running') return false;
+    // `'skipped'`（届かなかった）の印を下ろさない: 空振りで印を失うと、次に拾われるには新しい `usage_notice` が要り、それにはその委譲自身が起きる必要があって、クローンが手で `manager_send` を打つまで戻らなくなる。
+    // 拾い直しは周回の掃き（`settleStalledUsageWakes`）が間隔を伸ばして担う（#4850）。ここでは回数上限を置かない: 戻れない委譲は `resume_failed` で印ごと畳まれる。
+    if (outcome === 'skipped') return false;
+    await this.#clearUsageStoppedMark(managerId);
+    this.#usageWakeOwed.delete(managerId);
+    return outcome === 'nudged';
+  }
+
+  /**
+   * 作業者の枠の落ちで手を止めた担当を、通る鍵で起こし直す（#5030）。起こすのは担当の続きだけで、鍵の回転は起こさない（#4903）。
+   * `'turn-ended'`: 回転前の鍵で落ちた印を、担当のターンが `done` で終わった時点で起こす。現役の鍵が `ready` と分かっているときだけ（`#wakeIfHeldTokenStale` と同じ: 通らないなら起こしても同じ枠に当たる）。
+   * `'rotation'`: 印を、次の鍵の回転（`resumeStoppedByUsage`）で起こす。回転前の鍵で落ちてターンの終わりに起こせなかった印も含む。
+   * 起こさない: 担当が新しいターンを始めている（印を下ろす）・`running` / `waiting_human`（印は残す）・後継あり / `stopped`（`#nudgeForUsageRotation` が `gone` と返す。印を下ろす）。
+   * 印は起こす前に下ろす（二重に起こさない）。届かなかったときだけ戻す。投げない。
+   */
+  async #wakeForWorkerLimit(
+    managerId: string,
+    trigger: 'turn-ended' | 'rotation',
+  ): Promise<boolean> {
+    const mark = this.#workerLimitStopped.get(managerId);
+    if (mark === undefined || this.#stopped) return false;
+    try {
+      const record = this.#records.get(managerId) ?? (await this.#load(managerId));
+      if (record === null || record.job.turnStartedAt !== mark.turnStartedAt) {
+        // 担当は新しいターンを始めている（または台帳に居ない）: 落ちが記録されたターンではなくなった。
+        if (this.#workerLimitStopped.get(managerId) === mark)
+          this.#workerLimitStopped.delete(managerId);
+        return false;
+      }
+      if (
+        record.job.supersededBy !== undefined ||
+        this.#supersedePending.has(managerId) ||
+        record.job.status === 'stopped'
+      ) {
+        this.#workerLimitStopped.delete(managerId);
+        return false;
+      }
+      if (trigger === 'turn-ended') {
+        if (!mark.preRotationKey || record.job.status !== 'done') return false;
+      } else if (record.job.status === 'running' || record.job.status === 'waiting_human') {
+        // 回転の契機では回転前の鍵の印も起こす: ターンの終わりに現役が `ready` でなかった印は、ここで拾わないと次の自分のターンまで取り残されるため
+        // 走っている間は起こさない（印は残す）: ターンが終われば次の回転が拾う。
+        return false;
+      }
+      const identity = this.#tokenIdentity?.();
+      if (trigger === 'turn-ended') {
+        if (identity === undefined || this.#tokenAvailability === undefined) return false;
+        const availability = await this.#tokenAvailability(identity.tokenId).catch(() => undefined);
+        if (availability !== 'ready') return false;
+      }
+      // 判定の間に別の経路が下ろした・差し替えたなら、二重に起こさない。
+      if (this.#workerLimitStopped.get(managerId) !== mark) return false;
+      this.#workerLimitStopped.delete(managerId);
+      await this.#journal({
+        type: 'decision',
+        decision:
+          `[${managerId}] 作業者が上限で落ちた鍵は回ったので、担当を起こし直す` +
+          (identity === undefined ? '' : `（現役の世代 ${String(identity.generation)}）`),
+        grounds:
+          `managerId=${managerId} 契機=${trigger === 'turn-ended' ? 'ターンの終わり（回転前の鍵で落ちた・現役の鍵は ready）' : `鍵の回転（${mark.preRotationKey ? '回転前の鍵' : '現役の鍵'}で落ちた）`} ` +
+          '（#5030。鍵の回転は起こさず、担当の続きだけを促す）',
+      });
+      const outcome = await this.#nudgeForUsageRotation(managerId, {
+        workerLimit: { generation: identity?.generation },
+      });
+      if (outcome === 'skipped' || outcome === 'still-running') {
+        if (!this.#workerLimitStopped.has(managerId)) this.#workerLimitStopped.set(managerId, mark);
+        return false;
+      }
+      return outcome === 'nudged';
+    } catch (error) {
+      noteDroppedRecord('作業者の落ちの起こし直し', `managerId=${managerId}`, error);
+      return false;
+    }
   }
 
   async #settleUsageWake(managerId: string, stoppedByUsage: boolean): Promise<void> {
     if (!this.#usageWakeOwed.has(managerId)) return;
     // 枠で止まったのでなければ借りだけ下ろす: 自力で終えたターンへ一言を投げると、1ターン焼いたうえに会話へ嘘の文脈が入る。
+    // 例外は「作業者の落ちが記録されたターン」だけで、ここではなく `#wakeForWorkerLimit` が別の印（`#workerLimitStopped`）で起こす（#5030）。
     if (!stoppedByUsage) {
       this.#usageWakeOwed.delete(managerId);
       return;
@@ -6715,6 +6915,38 @@ class Pool implements ManagerPool {
     } catch (error) {
       noteDroppedRecord('resets時刻の突き合わせ', `managerId=${event.managerId}`, error);
     }
+  }
+
+  /**
+   * 作業者の落ちの原文を、鍵のプールの各鍵の枠と突き合わせた1行を返す（#5021、`worker-limit-key-match.ts`）。
+   * 材料は DB 正本のプール（`#stores.tokens`）と、`rate_limit` の観測の記憶（`#rateLimits`。枠の種類はここにしか無い）。
+   * 投げない: 読めなければ「読めなかった」と書いた行を返す（note の配達を巻き添えにしない）。例外の文言は載せない（鍵の値を含みうる）。
+   */
+  async #describeWorkerLimitKey(raw: string): Promise<string> {
+    let pool: readonly AgentToken[] | undefined;
+    let activeTokenId: string | null | undefined;
+    try {
+      pool = await this.#stores.tokens.list();
+      try {
+        activeTokenId = (await this.#stores.tokens.readActive())?.tokenId ?? null;
+      } catch (error) {
+        noteDroppedRecord('作業者の落ちの現役の読み取り', 'worker_limit_key', error);
+      }
+    } catch (error) {
+      noteDroppedRecord('作業者の落ちの鍵のプールの読み取り', 'worker_limit_key', error);
+      pool = undefined;
+    }
+    const windows: RememberedWindow[] = [];
+    for (const [key, facts] of this.#rateLimits) {
+      const parsed = parseRateLimitMemoryKey(key);
+      if (parsed?.tokenId === undefined || facts.resetsAt === undefined) continue;
+      windows.push({
+        tokenId: parsed.tokenId,
+        kind: facts.kind ?? parsed.kind,
+        resetsAt: facts.resetsAt,
+      });
+    }
+    return describeWorkerLimitKeyMatch({ raw, at: this.#now(), pool, activeTokenId, windows });
   }
 
   /**
@@ -6765,6 +6997,7 @@ class Pool implements ManagerPool {
       if (record === null) return;
       record.job.supersededBy = successorId;
       this.#usageWakeOwed.delete(predecessorId);
+      this.#workerLimitStopped.delete(predecessorId);
       // 印の解除は台帳へ書く口を兼ねる。印が無くても `supersededBy` は書く
       await this.#clearUsageStoppedMark(predecessorId);
       await this.#persist(record);
@@ -7342,6 +7575,7 @@ class Pool implements ManagerPool {
       record.waiting = [];
       record.attached = false;
       record.job.status = 'stopped';
+      this.#workerLimitStopped.delete(managerId);
       await this.#persist(record);
       const withheld = this.#withheldReports.get(managerId);
       // `count > 0` を条件にする: フラッシュ済みの在庫が残っていると、`withheld !== undefined` だけでは「報告を 0 本抱えたまま止まった」という嘘の1行が出る。
@@ -7626,6 +7860,35 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 委譲先の許可規則（#4952）。別の呼びにする: 片方が落ちても片方は降りるべき。
+   * 日誌に規則の本文（command の全文）を書かない: 失敗の理由は runner の文言をそのまま運ぶが、`parseDelegatedPermissionRules` が値を載せない形で作っている。
+   * 古い runner（口を持たない）は挑み直しに数えない（`#permissionRulesUnsupported`）。
+   */
+  async #pushPermissionRules(runner: RunnerClient): Promise<void> {
+    if (this.#stopped || this.#permissionRules === undefined) return;
+    const runnerId = runner.runnerId;
+    try {
+      await this.#permissionRules.syncRunner(runner);
+      this.#permissionRulesUnsupported.delete(runnerId);
+      this.#notePushOutcome(runnerId, 'permissionRules', { status: 'ok', at: this.#nowIso() });
+    } catch (error) {
+      const unsupported = error instanceof RunnerPermissionRulesUnsupportedError;
+      if (unsupported) this.#permissionRulesUnsupported.add(runnerId);
+      else this.#permissionRulesUnsupported.delete(runnerId);
+      this.#notePushOutcome(runnerId, 'permissionRules', {
+        status: 'failed',
+        at: this.#nowIso(),
+        error: reasonOf(error),
+      });
+      await this.#journalPushFailure(
+        runnerId,
+        'permissionRules',
+        `${runnerId} へ委譲先の許可規則を降ろせなかった（この runner で起こすマネージャー・作業者には、人間が承認した許可が規則として載っていない。前に降りた一覧が残っていればそれが効いている）: ${reasonOf(error)}`,
+      );
+    }
+  }
+
+  /**
    * 一度きりにしない: 「もう繋いだ」を1つの旗で持つと、後から載った runner の報告も許可確認も永久に届かない。旗は宛先ごとに持つ。
    * 転んだ1台に他を道連れにさせない。選んだ相手に繋がっているかどうかは `start` が別に確かめる。
    */
@@ -7671,6 +7934,7 @@ class Pool implements ManagerPool {
       await this.#pushProfile(runner);
       await this.#pushMcpServers(runner);
       await this.#pushPlugins(runner);
+      await this.#pushPermissionRules(runner);
       // 失敗は相手の側が日誌に残す。
       await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
       await this.#pushAgentToken(runner);
@@ -7760,6 +8024,7 @@ class Pool implements ManagerPool {
         await this.#pushProfile(runner);
         await this.#pushMcpServers(runner);
         await this.#pushPlugins(runner);
+        await this.#pushPermissionRules(runner);
         await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
         // 認証トークンを降ろし忘れない: 器が入れ替わっていれば置いた鍵も消えており、器の環境変数（＝回す前のトークン）のまま走るのに、その食い違いは `#pushAgentToken` の doc が言うとおり「マネージャーの側からは見えない」。「実害が出にくい」を「要らない」と読まない。
         await this.#pushAgentToken(runner);
@@ -9170,7 +9435,11 @@ class Pool implements ManagerPool {
         // 並行処理の間に `closed(failed / lost)` が書いた終端を `event.status` で書き戻さない: 台帳は非終端のままクローンに `closed_failed` が出る／`lost` の引き取りの契機が消える。
         // `isTerminalJobStatus` は使わない: `done` を含むが、`done` は idle を兼ね再び走り出せる。managerId ごとの直列化は配達順に効くので採らない。
         const settledByClosed = record.job.status === 'failed' || record.job.status === 'lost';
-        if (!settledByClosed) record.job.status = event.status;
+        // 畳む直前の書き出し（`unreported`）は、台帳を `failed` / `lost` にしない（#4963）: 状態は直後に必ず届く `closed` が決める。
+        // ここで終端にすると、続く `closed(failed)` が「確定済みへの重複」として捨てられ、`closed` にしか無い処理（失敗の行と cgroup の注記・`lastSystemError` / `lastCgroupEvents`・器の失敗の計上・pids の飽和の印・`closed_failed` の知らせ）が全部飛ぶ。
+        const deferTerminalToClosed =
+          event.unreported !== undefined && (event.status === 'failed' || event.status === 'lost');
+        if (!settledByClosed && !deferTerminalToClosed) record.job.status = event.status;
         // `waiting` が空なら `waiting_human` を名乗らせない: `stop()` は `#settleAll` の前に控えた状態で報告を畳むので「解かれる前」の値が届き、器の入れ替え（`abort()` の上書きが無い経路）では食い違いが台帳に残る。
         // `event.status` そのものは書き換えない: 報告が名乗った値は `lastReportStatus` に残し、「何を名乗ったか」と「いまの状態をどう数えるか」を1つに畳まない。
         if (!settledByClosed && event.status === 'waiting_human' && record.waiting.length === 0) {
@@ -9227,6 +9496,8 @@ class Pool implements ManagerPool {
         // `contentless` / `awaitingBackground` の早い `return` より手前に置く: 後ろだと中身の無い報告で終わった回だけ起こされないまま残る。
         // 判定は `event.failure` ではなく印（`#usageStopped`）で行う: 失敗には SDK のクラッシュも混ざり、枠と無関係に落ちたターンへ「通る鍵に戻った」と言ってしまう。
         await this.#settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
+        // 作業者の落ちで手を止めた担当は、ターンが `done` で終わったこの時点で起こす（回転前の鍵で落ちた印だけ。#5030）。
+        await this.#wakeForWorkerLimit(event.managerId, 'turn-ended');
         // 印を立てた直後に、使える鍵が在れば今すぐ起こし直してもらう（#4850）。起こし直しは回し手が鍵を回した後の `resumeStoppedByUsage()` に乗る。
         // 上の `#settleUsageWake` が起こせて印が下りていれば頼まない: 要らない鍵の回転を起こさない。
         if (markedByFailure && this.#usageStopped.has(event.managerId)) {
@@ -9383,6 +9654,19 @@ class Pool implements ManagerPool {
       }
 
       case 'note': {
+        // 作業者の落ちの印を立てる（#5030）。`await` の前に同期で立てる: 鍵の突き合わせの間にターンが終わっても、終わりの契機が印を見られるように。
+        // `#usageStopped` と鍵の回転の観測（`#observeForTokenRotation`）へは流さない（#4903）。
+        if (event.workerLimit !== undefined) {
+          this.#workerLimitStopped.set(event.managerId, {
+            preRotationKey: event.workerLimit.preRotationKey,
+            turnStartedAt: record.job.turnStartedAt,
+          });
+        }
+        // 作業者の落ちの note（`event.workerLimit` の欄で判定する）には、落ちた枠の鍵の突き合わせを1行足す（#5021）。日誌とクローンへの知らせの両方に同じ文を載せる。
+        const noteText =
+          event.workerLimit === undefined
+            ? event.text
+            : `${event.text}\n${await this.#describeWorkerLimitKey(event.workerLimit.raw)}`;
         // 受信箱へは出さず日誌にだけ残す（マネージャーの発言ではない）。`escalate` の有無で変えない（下で足すだけ）。
         // `event.stall` の欄で判定し、本文の文字列で嗅がない。旧 runner の note は `stall` を知らず `exchange` に落ちる。
         if (event.stall === undefined) {
@@ -9390,7 +9674,7 @@ class Pool implements ManagerPool {
             type: 'exchange',
             with: 'manager',
             role: 'inbound',
-            text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${event.text}`,
+            text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${noteText}`,
           });
         } else {
           await this.#journal({
@@ -9419,7 +9703,7 @@ class Pool implements ManagerPool {
 
         // 欄（`event.notifyClone`）で判定し、本文を嗅がない（#4685）: 成果が失われうる知らせは、日誌だけだとクローンが引かない限り見えないため
         if (event.notifyClone === true) {
-          this.#emit(event.managerId, 'report', `[${event.managerId}] ${event.text}`);
+          this.#emit(event.managerId, 'report', `[${event.managerId}] ${noteText}`);
         }
 
         // 逃すと自動で追いついたセッションにまで `manager_list` / `runner_list` の世代の食い違いが出続ける。世代の値は受け取らない: runner は世代を知らず、daemon が現役の身元を読み直す。
@@ -10464,7 +10748,13 @@ class Pool implements ManagerPool {
       case 'shutdown_unpushed_work': {
         // best-effort: 届かなかった回はこの `case` が呼ばれないので「0件」を作らない（既存の観測は残り、`unavailable` と「届いていない」を混同しない）。`source: 'shutdown'` を明示する。
         // `record.job.status` には触れない: `stop()` が `closed` を出さない設計を変えず、`case 'closed'` の他の判断は持ち込まない。
-        await this.#recordUnpushedWorkObservation(record, event.unpushedWork, 'shutdown');
+        await this.#recordUnpushedWorkObservation(
+          record,
+          event.unpushedWork,
+          'shutdown',
+          undefined,
+          this.#sighting(fromRunnerId).instanceId,
+        );
         return;
       }
 
@@ -10481,7 +10771,13 @@ class Pool implements ManagerPool {
         // `pushed` は新しい回が持たなければ前のものを残す: 後の回が「送らなかった」でも remote の ref はまだ在る。`status` / `lease` には触れない。`secret-like` はファイル名だけ日誌へ残し、文字列そのものは持たない。
         const at = new Date(this.#now()).toISOString();
         const previousRescue = record.job.lastRescue;
-        record.job.lastRescue = mergeRescue(previousRescue, event.worktrees, at);
+        // 受け取った時点の器の `instanceId` を項目へ付ける: 後の観測が同じ器のものかを見分ける材料（`markRescueGoneWhileAlive`）。分からなければ付けない。
+        const instanceId = this.#sighting(fromRunnerId).instanceId;
+        const incoming =
+          instanceId === undefined
+            ? event.worktrees
+            : event.worktrees.map((tree) => ({ ...tree, instanceId }));
+        record.job.lastRescue = mergeRescue(previousRescue, incoming, at);
         for (const tree of event.worktrees) {
           if (tree.notPushed?.reason !== 'secret-like') continue;
           // 運び直しで同じ日誌を積まない。
@@ -10778,12 +11074,16 @@ class Pool implements ManagerPool {
 
   // 日誌の行はここでは書かない: 即時の配布の失敗を日誌へ残すのは呼び出し元（`app.ts` / `tools.ts`）で、ここでも書くと二重になる。
   #recordDirectPushResults(
-    kind: 'profile' | 'mcpServers' | 'credentials' | 'plugins' | 'agentToken',
+    kind: 'profile' | 'mcpServers' | 'credentials' | 'plugins' | 'agentToken' | 'permissionRules',
     results: readonly { runnerId: string; ok: boolean; error?: string; unsupported?: true }[],
   ): void {
     if (this.#stopped) return;
     const at = this.#nowIso();
     for (const result of results) {
+      if (kind === 'permissionRules') {
+        if (result.unsupported === true) this.#permissionRulesUnsupported.add(result.runnerId);
+        else this.#permissionRulesUnsupported.delete(result.runnerId);
+      }
       if (kind === 'mcpServers') {
         if (result.unsupported === true) this.#mcpServersUnsupported.add(result.runnerId);
         else this.#mcpServersUnsupported.delete(result.runnerId);
@@ -10812,7 +11112,8 @@ class Pool implements ManagerPool {
         ([kind, outcome]) =>
           outcome?.status === 'failed' &&
           !(kind === 'mcpServers' && this.#mcpServersUnsupported.has(runnerId)) &&
-          !(kind === 'plugins' && this.#pluginsUnsupported.has(runnerId)),
+          !(kind === 'plugins' && this.#pluginsUnsupported.has(runnerId)) &&
+          !(kind === 'permissionRules' && this.#permissionRulesUnsupported.has(runnerId)),
       );
     if (!stillFailing) {
       this.#pushRetryDelays.delete(runnerId);
@@ -10859,6 +11160,12 @@ class Pool implements ManagerPool {
     }
     if (health.plugins?.status === 'failed' && !this.#pluginsUnsupported.has(runnerId)) {
       await this.#pushPlugins(runner);
+    }
+    if (
+      health.permissionRules?.status === 'failed' &&
+      !this.#permissionRulesUnsupported.has(runnerId)
+    ) {
+      await this.#pushPermissionRules(runner);
     }
     this.#settlePushRetry(runnerId);
   }
@@ -11515,6 +11822,7 @@ class Pool implements ManagerPool {
     foldedTurn = false,
     reportFiles?: ManagerReportFiles,
     quotaStop?: { readonly sessionWindow: boolean },
+    commitmentExempt = false,
   ): void {
     // 握り潰した報告の件数を日誌だけに残さず、配る `text` の末尾にも足す: 日誌だと引きに行かないと、報告まで消していないかに気づけない。
     // 窓へ移した在庫（`closed` が積んだ分）は、この配りで運んで消す。普通の在庫が在れば（窓の後に積み直されることは無いが）そちらを先にする。
@@ -11525,6 +11833,8 @@ class Pool implements ManagerPool {
     this.#withheldCarriedToWindow.delete(managerId);
     const withheld = this.#withheldReports.get(managerId);
     let outgoing = text;
+    // 印は安全側へ倒す: 背景処理の完了待ちで畳んだ報告を運ぶ回と、直前と同文の知らせを数だけ残した旨を足す回は、中身が台帳に要るかもしれないので付けない（#5015）
+    let exempt = commitmentExempt;
     if (withheld !== undefined) {
       // `'flush'` は在庫を `delete` しない: `firstAt` が失われ、次に積んだ回が新しいエピソードとして数え直され、`flushWithheldReports()` が何度でも合図を立て直せてしまう。
       if (withheldSuffixDetail === 'flush') {
@@ -11540,6 +11850,7 @@ class Pool implements ManagerPool {
       }
       // `count === 0` のときは足さない: フラッシュ直後は在庫が `count: 0` で残っており、足すと「0 本配っていない」という嘘の1行が出る。
       if (withheld.count > 0) {
+        exempt = false;
         // `'flush'` でも抜粋を付ける: 件数だけだと、マージの報告のような本文がクローンから見えないまま日誌にだけ残る。
         outgoing =
           `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
@@ -11552,6 +11863,7 @@ class Pool implements ManagerPool {
     const streak = this.#synthesizedNoticeStreaks.get(managerId);
     this.#synthesizedNoticeStreaks.delete(managerId);
     if (streak !== undefined && streak.suppressed > 0) {
+      exempt = false;
       outgoing =
         `${outgoing}\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を ` +
         `${String(streak.suppressed)} 束（通数 ${String(streak.suppressedArrived)} 件）配っていない` +
@@ -11574,6 +11886,7 @@ class Pool implements ManagerPool {
       ...(foldedTurn ? { foldedTurn: true as const } : {}),
       ...(quotaStop === undefined ? {} : { quotaStop: true as const }),
       ...(quotaStop?.sessionWindow === true ? { quotaSessionWindow: true as const } : {}),
+      ...(exempt ? { commitmentExempt: true as const } : {}),
       ...(reportFiles === undefined || reportFiles.attachments.length === 0
         ? {}
         : { attachments: reportFiles.attachments }),
@@ -11709,6 +12022,12 @@ class Pool implements ManagerPool {
     const quotaStop = entry.fragments.every((fragment) => fragment.quota !== undefined)
       ? { sessionWindow: allSessionWindow(entry.fragments) }
       : undefined;
+    // 後継の居ない起こし直しの知らせだけ、台帳に開かない印を付ける（#5015）。
+    // `supersededBy` が在る／後継を起こしている最中の担当は、窓の間に後継がつながった回なので、今までどおり台帳に開く（クローンが手を打つ余地が在る）。
+    const commitmentExempt =
+      entry.fragments.every((fragment) => fragment.label === 'usage_rewoken') &&
+      this.#records.get(managerId)?.job.supersededBy === undefined &&
+      !this.#supersedePending.has(managerId);
     this.#deliver(
       managerId,
       'report',
@@ -11720,6 +12039,7 @@ class Pool implements ManagerPool {
       foldedTurn,
       undefined,
       quotaStop,
+      commitmentExempt,
     );
     // 対象外の束では新しい連鎖を立てない: 次に同じ族が来ても握りつぶす先が無く、記憶を持つだけ無駄。
     if (eligible) {
@@ -11961,6 +12281,7 @@ class Pool implements ManagerPool {
       });
     }
     this.#rateLimitJournalFolds.delete(managerId);
+    this.#lastStaleDecline.delete(managerId);
     this.#autoFoldSkipJournalWritten.delete(managerId);
     // busy の取り直しの数えはここで消す: `#reattach` のループは数えを消さずに `continue` で抜けるので、残すと後の busy で上限（`REATTACH_BUSY_MAX_RETRIES`）を前の分で縮める。
     this.#reattachBusyRetries.delete(managerId);
@@ -12425,6 +12746,16 @@ function runnerSwapNudge(
     '[system] この委譲を最後に走らせていた器は、もう居ない（別の器がこの宛先に応えている）。' +
     workspaceAfterSwapClause(workspaceAfterSwap(locator, observation, rescue)) +
     (rescueStashNote === undefined ? '' : `\n${rescueStashNote}`)
+  );
+}
+
+// 作業者の落ちの印から起こす専用の文（#5030）。鍵の値は載せない（世代の数だけ）
+function workerLimitNudge(generation: number | undefined): string {
+  return (
+    '[system] 作業者が上限で落ちた鍵は回った' +
+    (generation === undefined ? '' : `（いまの現役は世代 ${String(generation)}）`) +
+    '。この会話はそのまま続いている（最初からやり直さないこと）。' +
+    '作業者を立て直して、止まっていた続きを進めてよい。'
   );
 }
 

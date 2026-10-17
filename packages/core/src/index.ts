@@ -832,6 +832,16 @@ export {
   type McpServersRunnerResult,
 } from './mcp-server-service.js';
 export {
+  createDelegatedPermissionRuleService,
+  delegatedPermissionRuleOf,
+  delegatedPermissionRulesOf,
+  parseDelegatedPermissionRules,
+  type DelegatedPermissionRuleService,
+  type DelegatedPermissionRuleServiceOptions,
+  type DelegatedPermissionRuleSet,
+  type PermissionRulesRunnerResult,
+} from './delegated-permission-rules.js';
+export {
   composeProfileScript,
   declaredProfileEnvNames,
   runnerDeclaredEnvNames,
@@ -949,6 +959,7 @@ export {
   RunnerFenceError,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
+  RunnerPermissionRulesUnsupportedError,
   RunnerPluginsUnsupportedError,
   RUNNER_PLUGIN_RETAIN_MAX_NAMES,
   runnerPluginFileWireSchema,
@@ -971,6 +982,7 @@ export {
   listRunnerManagers,
   runnerManagerStateSchema,
   runnerMcpServersFingerprintSchema,
+  runnerPermissionRulesResultSchema,
   runnerMessageCommandSchema,
   runnerPlacementResourcesSchema,
   runnerProfileFingerprintSchema,
@@ -999,6 +1011,7 @@ export {
   runnerSessionOpenResultSchema,
   runnerSetCredentialsCommandSchema,
   runnerSetMcpServersCommandSchema,
+  runnerSetPermissionRulesCommandSchema,
   runnerSetCodexAuthCommandSchema,
   runnerTakeCodexAuthWriteBackCommandSchema,
   runnerCodexAuthWriteBackSchema,
@@ -1026,6 +1039,8 @@ export {
   type RunnerManagerListing,
   type RunnerManagerState,
   type RunnerMcpServersFingerprint,
+  type RunnerPermissionRulesResult,
+  type RunnerSetPermissionRulesCommand,
   type PidsSaturation,
   type PidsSaturationBasis,
   type PidsSaturationSign,
@@ -1241,6 +1256,11 @@ export {
   reasonOf,
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
+  // 試験の準備（`vitest.quiet-traces.ts`）が、dist から core を読むパッケージの試験でも跡を溜めるための口（試験専用）
+  setDefaultStderrSinkForTesting,
+  // 標準エラーへ書けないときの挙動を試すために、書き先を投げる関数へ差し替える口（試験専用。`null` で既定へ戻す）
+  setStderrSinkForTesting,
+  writeStderrLine,
   writeStderrSync,
   type DroppedJournalRowReason,
   type DroppedTraceOrigin,

@@ -15,13 +15,13 @@ catalog:
   prettier: ^3.9.6
   # CI の実行系（Node 22）に合わせる
   '@types/node': ^22.20.1
-  '@anthropic-ai/claude-agent-sdk': ^0.3.301
+  '@anthropic-ai/claude-agent-sdk': ^0.3.302
   # codex app-server（#486 M7 S6）。**exact 版で固定**する（`^` を付けない）。生成スキーマ
   # （packages/core/codex-schema/<版>/）と手書き型 packages/core/src/codex-protocol.ts は
   # この版のものと突き合わせてあり、版が動くとプロトコルも動く。上げるときは
   # `pnpm codex:schema` でスキーマを再生成し、差分を読んでから。Dockerfile の版と揃える
   # （揃っていることは `scripts/codex-version-sync.test.ts` が見る）。
-  '@openai/codex': 0.160.1
+  '@openai/codex': 0.162.1
   # `@anthropic-ai/claude-agent-sdk` の peerDependency（`^1.29.0`）と同じ実体
   # （現に解決されている版は 1.30.1。`pnpm why @modelcontextprotocol/sdk -r` で
   # 引き直せる）。#486 48(a) 案D — クローンの道具の中継（relay）host が
@@ -34,7 +34,7 @@ catalog:
   # 接続の使い回しの長さ（keep-alive）を呼び出し側から指定できず、約4秒で切れて心拍（10秒）ごとに名前解決と接続をやり直す。
   # `Agent` と `fetch` を同じ版から取るために依存へ置く（Node 同梱の undici は外へ出ておらず、版が Node 次第で変わる）。
   # すでに推移的に入っている 7 系（lockfile）と同じ実体を指す。
-  undici: ^7.29.1
+  undici: ^8.0.0
   '@hono/zod-validator': ^0.9.0
   zod: ^4.4.3
   commander: ^15.0.0
