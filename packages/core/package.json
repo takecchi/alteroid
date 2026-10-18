@@ -48,6 +48,10 @@
       "types": "./dist/attachment-wording.d.ts",
       "import": "./dist/attachment-wording.js"
     },
+    "./attachment-usage-keys": {
+      "types": "./dist/attachment-usage-keys.d.ts",
+      "import": "./dist/attachment-usage-keys.js"
+    },
     "./mask-url": {
       "types": "./dist/mask-url.d.ts",
       "import": "./dist/mask-url.js"

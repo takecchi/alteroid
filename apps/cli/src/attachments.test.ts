@@ -14,6 +14,7 @@ import {
   fetchAttachmentLimits,
   interpretAttachPath,
   mediaTypeOfName,
+  renderAttachmentUsage,
   uploadAttachment,
   uploadDraft,
 } from './attachments.js';
@@ -228,6 +229,51 @@ describe('/attach から送るまで', () => {
     expect(mediaTypeOfName('x.mp4')).toBe('video/mp4');
     expect(mediaTypeOfName('noext')).toBe('application/octet-stream');
     expect(mediaTypeOfName('a.weird')).toBe('application/octet-stream');
+  });
+});
+
+describe('renderAttachmentUsage: 連携の鍵別', () => {
+  const base = {
+    count: 3,
+    totalBytes: 3000,
+    byFrom: { human: { count: 3, totalBytes: 3000 } },
+  };
+  const keys = (n: number) =>
+    Object.fromEntries(
+      Array.from({ length: n }, (_, i) => [
+        `key-${String(i).padStart(2, '0')}`,
+        { count: 1, totalBytes: 100 + i },
+      ]),
+    );
+
+  it('byIntegrationKey が無い（古いデーモン）・空なら、今の1行のまま', () => {
+    const line = '使用量: 合計 3 件 2.9 KB（人間 3 件 2.9 KB）';
+    expect(renderAttachmentUsage(base)).toBe(line);
+    expect(renderAttachmentUsage({ ...base, byIntegrationKey: {} })).toBe(line);
+  });
+
+  it('大きい順に並び、同じ大きさなら鍵 id の昇順で、改行して1行足す', () => {
+    const text = renderAttachmentUsage({
+      ...base,
+      byIntegrationKey: {
+        'key-b': { count: 2, totalBytes: 500 },
+        'key-z': { count: 1, totalBytes: 2048 },
+        'key-a': { count: 3, totalBytes: 500 },
+      },
+    });
+    const lines = text.split('\n');
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toBe('連携の鍵別: key-z 1 件 2.0 KB / key-a 3 件 500 B / key-b 2 件 500 B');
+  });
+
+  it('21 本なら 20 本までで「ほか 1 本」、20 本ちょうどなら出ない', () => {
+    const last21 = renderAttachmentUsage({ ...base, byIntegrationKey: keys(21) })
+      .split('\n')
+      .at(-1)!;
+    expect(last21.endsWith(' / ほか 1 本')).toBe(true);
+    expect(last21.split(' / ')).toHaveLength(21);
+    expect(last21).not.toContain('key-00');
+    expect(renderAttachmentUsage({ ...base, byIntegrationKey: keys(20) })).not.toContain('ほか');
   });
 });
 

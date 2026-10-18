@@ -16,6 +16,7 @@ export default defineConfig({
     'src/trace-action.ts',
     'src/mask-url.ts',
     'src/attachment-wording.ts',
+    'src/attachment-usage-keys.ts',
     'src/redact.ts',
     'src/manager-activity.ts',
     'src/job-status-running.ts',

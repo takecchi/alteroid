@@ -25,6 +25,7 @@ import {
   validateAttachmentInput,
   type AttachmentLimits,
 } from '@alteroid/core';
+import { integrationKeyUsageView } from '@alteroid/core/attachment-usage-keys';
 import { formatBytes } from '@alteroid/logic';
 
 import { createClient } from './client.js';
@@ -526,14 +527,23 @@ export interface UsageBucket {
 }
 
 export function renderAttachmentUsage(
-  usage: UsageBucket & { byFrom: Record<string, UsageBucket> },
+  // byIntegrationKey は別デプロイの古いデーモンの応答に無いことがある（無ければ空と同じ）
+  usage: UsageBucket & {
+    byFrom: Record<string, UsageBucket>;
+    byIntegrationKey?: Record<string, UsageBucket> | undefined;
+  },
 ) {
   const bucket = (b: UsageBucket): string => `${b.count} 件 ${formatBytes(b.totalBytes)}`;
   const parts = ATTACHMENT_FROM_CLASSES.map((from) => {
     const b = usage.byFrom[from];
     return b === undefined || b.count === 0 ? null : `${FROM_LABEL[from]} ${bucket(b)}`;
   }).filter((part) => part !== null);
-  return `使用量: 合計 ${bucket(usage)}${parts.length === 0 ? '' : `（${parts.join(' / ')}）`}`;
+  const line = `使用量: 合計 ${bucket(usage)}${parts.length === 0 ? '' : `（${parts.join(' / ')}）`}`;
+  const keys = integrationKeyUsageView(usage.byIntegrationKey);
+  if (keys.rows.length === 0) return line;
+  const cells = keys.rows.map((row) => `${row.id} ${bucket(row)}`);
+  if (keys.omitted > 0) cells.push(`ほか ${keys.omitted} 本`);
+  return `${line}\n連携の鍵別: ${cells.join(' / ')}`;
 }
 
 export interface AttachmentsListOptions {

@@ -11,6 +11,7 @@ import {
   type AttachmentUsage,
 } from './attachment.js';
 import { removeAttachmentCopy } from './attachment-fetch.js';
+import { integrationKeyUsageView } from './attachment-usage-keys.js';
 import { excerptLine, renderListing, renderListingEntry } from './excerpt.js';
 
 /**
@@ -71,7 +72,7 @@ function describeFileEntry(meta: AttachmentMeta): string {
   });
 }
 
-/** 使用量の1〜2行（合計と、0 でない出所ごと）。 */
+/** 使用量の1〜3行（合計と、0 でない出所ごと、連携の鍵ごと）。 */
 export function renderFileUsage(usage: AttachmentUsage): string {
   const total = `置き場の使用量: ${usage.count} 件 ${formatAttachmentSize(usage.totalBytes)}`;
   const parts = (Object.keys(FROM_LABELS) as AttachmentFromClass[])
@@ -80,7 +81,17 @@ export function renderFileUsage(usage: AttachmentUsage): string {
       (from) =>
         `${FROM_LABELS[from]} ${usage.byFrom[from].count} 件 ${formatAttachmentSize(usage.byFrom[from].totalBytes)}`,
     );
-  return parts.length === 0 ? total : `${total}\n出所別: ${parts.join(' / ')}`;
+  const lines = [total];
+  if (parts.length > 0) lines.push(`出所別: ${parts.join(' / ')}`);
+  const keys = integrationKeyUsageView(usage.byIntegrationKey);
+  if (keys.rows.length > 0) {
+    const cells = keys.rows.map(
+      (row) => `${row.id} ${row.count} 件 ${formatAttachmentSize(row.totalBytes)}`,
+    );
+    if (keys.omitted > 0) cells.push(`ほか ${keys.omitted} 本`);
+    lines.push(`連携の鍵別: ${cells.join(' / ')}`);
+  }
+  return lines.join('\n');
 }
 
 export interface FileListInput {

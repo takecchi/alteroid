@@ -15,6 +15,7 @@ import {
   useSetAttachmentKept,
   useUploadKeptAttachment,
 } from '@alteroid/swr';
+import { integrationKeyUsageView } from '@alteroid/core/attachment-usage-keys';
 import {
   ATTACHMENT_FROM_LABELS,
   ATTACHMENT_FROM_ORDER,
@@ -275,9 +276,12 @@ function UsageCard({
         count: number;
         totalBytes: number;
         byFrom: Record<AttachmentFrom, { count: number; totalBytes: number }>;
+        // 別デプロイの古いデーモンの応答には無いことがある（無ければ鍵の一覧は出さない）
+        byIntegrationKey?: Record<string, { count: number; totalBytes: number }> | undefined;
       }
     | undefined;
 }) {
+  const keys = integrationKeyUsageView(usage?.byIntegrationKey);
   return (
     <Card>
       <CardHeader
@@ -307,6 +311,25 @@ function UsageCard({
               hint={formatBytes(usage.byFrom[from].totalBytes)}
             />
           ))}
+        </div>
+      )}
+      {usage !== undefined && keys.rows.length > 0 && (
+        <div data-testid="usage-by-key" className="border-t border-border p-4 text-xs">
+          <p className="font-medium">連携の鍵別</p>
+          <ul aria-label="連携の鍵別の使用量" className="mt-2 flex flex-col gap-1">
+            {keys.rows.map((row) => (
+              <li
+                key={row.id}
+                className="flex flex-wrap items-center gap-x-2 text-muted-foreground"
+                data-numeric
+              >
+                <span className="font-mono break-all text-foreground">{row.id}</span>
+                <span>{row.count} 件</span>
+                <span>{formatBytes(row.totalBytes)}</span>
+              </li>
+            ))}
+          </ul>
+          {keys.omitted > 0 && <p className="mt-2 text-muted-foreground">ほか {keys.omitted} 本</p>}
         </div>
       )}
     </Card>

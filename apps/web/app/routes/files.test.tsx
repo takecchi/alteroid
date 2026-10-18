@@ -47,6 +47,8 @@ interface Server {
   /** 行ごとの PATCH / DELETE / 中身の取得への応答の差し替え */
   override: (method: string, id: string) => Response | undefined;
   pageSize: number;
+  /** usage.byIntegrationKey の中身。undefined なら欄ごと返さない（古いデーモンの応答） */
+  byIntegrationKey?: Record<string, { count: number; totalBytes: number }> | undefined;
   log: { method: string; url: URL; body?: unknown }[];
 }
 
@@ -64,6 +66,7 @@ function usageOf(items: Item[]) {
       integration: ZERO,
       unknown: ZERO,
     },
+    ...(server.byIntegrationKey === undefined ? {} : { byIntegrationKey: server.byIntegrationKey }),
   };
 }
 
@@ -207,6 +210,69 @@ describe('ファイル画面: 一覧と使用量', () => {
     for (const label of ['人間', 'クローン', 'マネージャー', '連携', '不明']) {
       expect(within(usageCard).getByText(label)).toBeTruthy();
     }
+  });
+
+  describe('連携の鍵ごとの内訳', () => {
+    const keysOf = (n: number) =>
+      Object.fromEntries(
+        Array.from({ length: n }, (_, i) => [
+          `key-${String(i).padStart(2, '0')}`,
+          { count: 1, totalBytes: 100 + i },
+        ]),
+      );
+
+    it('byIntegrationKey が無い応答（古いデーモン）でも落ちず、鍵の一覧は出ない', async () => {
+      server.items = [item('a', { name: 'a.txt' })];
+      renderFiles();
+      await screen.findByText('a.txt');
+      expect(screen.getByTestId('usage')).toBeTruthy();
+      expect(screen.queryByTestId('usage-by-key')).toBeNull();
+    });
+
+    it('空なら鍵の一覧は出ない', async () => {
+      server.items = [item('a', { name: 'a.txt' })];
+      server.byIntegrationKey = {};
+      renderFiles();
+      await screen.findByText('a.txt');
+      expect(screen.queryByTestId('usage-by-key')).toBeNull();
+    });
+
+    it('大きい順に並び、同じ大きさなら鍵 id の昇順', async () => {
+      server.items = [item('a', { name: 'a.txt' })];
+      server.byIntegrationKey = {
+        'key-b': { count: 2, totalBytes: 500 },
+        'key-z': { count: 1, totalBytes: 900 },
+        'key-a': { count: 3, totalBytes: 500 },
+      };
+      renderFiles();
+      await screen.findByText('a.txt');
+      const rows = within(screen.getByTestId('usage-by-key')).getAllByRole('listitem');
+      expect(rows.map((r) => r.textContent)).toEqual([
+        'key-z1 件900 B',
+        'key-a3 件500 B',
+        'key-b2 件500 B',
+      ]);
+    });
+
+    it('21 本なら 20 本までで「ほか 1 本」', async () => {
+      server.items = [item('a', { name: 'a.txt' })];
+      server.byIntegrationKey = keysOf(21);
+      renderFiles();
+      await screen.findByText('a.txt');
+      const card = screen.getByTestId('usage-by-key');
+      expect(within(card).getAllByRole('listitem')).toHaveLength(20);
+      expect(card.textContent).toContain('ほか 1 本');
+      // いちばん小さい key-00 が切れる
+      expect(card.textContent).not.toContain('key-00');
+    });
+
+    it('20 本ちょうどなら「ほか」は出ない', async () => {
+      server.items = [item('a', { name: 'a.txt' })];
+      server.byIntegrationKey = keysOf(20);
+      renderFiles();
+      await screen.findByText('a.txt');
+      expect(screen.getByTestId('usage-by-key').textContent).not.toContain('ほか');
+    });
   });
 
   it('空のときは「ファイルはまだありません」', async () => {
