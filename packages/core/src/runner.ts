@@ -278,6 +278,7 @@ import { defaultRunnerRescueStagedRoot } from './rescue-stash.js';
 import { PeerApprovalNotices } from './runner-peer-approval-notice.js';
 import {
   WORKER_LIMIT_PRE_ROTATION_KEY_SENTENCE,
+  WORKER_LIMIT_REOPENED_NUDGE,
   WorkerLimitNotices,
   workerLimitLabel,
 } from './runner-worker-limit-notice.js';
@@ -2386,6 +2387,11 @@ class RunnerSession {
   readonly #gitDirHints: string[] = [];
   /** 鍵の回転で入力を閉じる前に、resume の一時ディレクトリから読んだ生ログ。`#reopenForTokenRotation` が受け取って消す。 */
   #rotationSeed: unknown[] | undefined;
+  /**
+   * 鍵の回転の後も回転前の鍵で走っている間に、作業者が利用上限で落ちた印（#5046）。
+   * 境界で新しい鍵へ開き直したとき、続きを促す一言を入れるために使う: 入れないと、知らせに従ってターンを終えた担当が、開き直した後に誰にも起こされず止まるため。
+   */
+  #workerLimitOnPreRotationKey = false;
   readonly #finishUnpushedWorkFn: (options?: {
     signal?: AbortSignal;
   }) => Promise<UnpushedWorkResult>;
@@ -2928,6 +2934,8 @@ class RunnerSession {
   #open(resume?: string): void {
     if (this.#sdkSession.query) return;
     this.#sdkSession.clearPreRotationClaudeKey();
+    // 開いた後は新しい鍵のもと: 前の鍵での作業者の落ちを、次の開き直しへ持ち越さない（#5046）
+    this.#workerLimitOnPreRotationKey = false;
     // 「whenever the session's CLI process (re)starts」[sdk-verbatim SDKBackgroundTasksChangedMessage] に対応するのはここで、`init` ではない: `init` はターンの頭ごとに来るだけのため
     this.#sdkSession.resetLiveBackgroundTasks();
     this.#nonWorkerTaskIds.clear();
@@ -3701,7 +3709,11 @@ class RunnerSession {
       // `text` の言い回しで判定させない: 構造化した旗でデーモンに伝える
       tokenRotation: true,
     });
+    // `#open()` が印を下ろすので先に読む
+    const nudge = this.#workerLimitOnPreRotationKey;
     this.#open(sessionId);
+    // 回転前の鍵で作業者が落ちていたなら、続きを促す（#5046）。担当は知らせに従ってターンを終えて待っているので、入れないと止まったままになる
+    if (nudge) this.push(WORKER_LIMIT_REOPENED_NUDGE);
   }
 
   #markProgressed(): void {
@@ -5488,6 +5500,7 @@ class RunnerSession {
     if (!this.#workerLimitNotices.record(identity, label, shown, Date.now())) return;
     // `wantsTokenRecycle` で判定しない: `GH_TOKEN` の差し替えや peer の開閉でも立ち、そのときは鍵は回っていないため（Claude の鍵が変わった回だけの印を読む）
     const preRotationKey = this.#sdkSession.onPreRotationClaudeKey;
+    if (preRotationKey) this.#workerLimitOnPreRotationKey = true;
     this.#emit({
       type: 'note',
       managerId: this.#id,

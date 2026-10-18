@@ -38,6 +38,7 @@ describe('describeWorkerLimit', () => {
     const text = describeWorkerLimit([{ label: 'a', raw: LIMIT_TEXT }], true);
     expect(text).toContain('鍵は回っているので、このターンを終えれば新しい鍵で開き直る');
     expect(text).toContain('ターンを終えて開き直った後にする（止める指示ではない）');
+    expect(text).toContain('開き直すと、続きを促す一言が届く');
     expect(text).not.toContain('戻るまで');
   });
 
@@ -83,6 +84,8 @@ describe('WorkerLimitNotices', () => {
 
 interface FakeSession {
   options: Options;
+  /** CLI へ届いた入力（JSON の文字列）。 */
+  inputs: string[];
   finish(result?: string): Promise<void>;
   say(text: string, options?: { error?: string; parentToolUseId?: string }): Promise<void>;
   notify(
@@ -102,8 +105,10 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
       queue.push(message);
       wake?.();
     };
+    const inputs: string[] = [];
     sessions.push({
       options: params.options ?? {},
+      inputs,
       async finish(result = '済んだ') {
         push({
           type: 'result',
@@ -163,9 +168,13 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
       } as unknown as SDKMessage;
       void (async () => {
         const iterator = (params.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
-        while (!(await iterator.next()).done) {
-          // 入力は読み捨てる
+        for (;;) {
+          const next = await iterator.next();
+          if (next.done === true) break;
+          inputs.push(JSON.stringify(next.value));
         }
+        // 入力が閉じたら CLI も終わる（本物と同じ。境界での開き直しはこれを合図にする）
+        push(null);
       })();
       for (;;) {
         const next = queue.shift();
@@ -350,7 +359,7 @@ describe('回転前の鍵で走っているセッションの作業者が落ち�
     } else if (rotate) {
       await host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-111' }]);
     }
-    return { session: sessions[0]!, events };
+    return { session: sessions[0]!, sessions, events };
   }
 
   const WEEKLY = "You've hit your weekly limit · resets Oct 22, 4pm (Asia/Tokyo)";
@@ -375,10 +384,50 @@ describe('回転前の鍵で走っているセッションの作業者が落ち�
     const context = contextOf(await postToolUse(session.options));
     expect(context).toContain(
       '鍵は回っているので、このターンを終えれば新しい鍵で開き直る。' +
+        '開き直すと、続きを促す一言が届く。' +
         '作業者を立て直すなら、ターンを終えて開き直った後にする（止める指示ではない）',
     );
     expect(context).not.toContain('戻るまで、作業者を立て直しても同じく落ちうる');
     expect(notesOf(events, '鍵は回っているので、このターンを終えれば')).toHaveLength(1);
+  });
+
+  it('⭐ 回転前の鍵で作業者が落ちたセッションは、ターンを終えて境界で開き直すと、続きを促す一言が入る（#5046）', async () => {
+    const { session, sessions } = await startWaitingForBoundary(true);
+    await session.say(WEEKLY, { error: 'rate_limit', parentToolUseId: 'toolu-1' });
+    await session.finish();
+
+    await vi.waitFor(() => {
+      expect(sessions).toHaveLength(2);
+      expect(sessions[1]?.inputs.join('\n')).toContain(
+        '回転前の鍵のまま作業者が利用上限で落ちていた',
+      );
+    });
+    expect(sessions[1]?.inputs.join('\n')).toContain('未コミットの変更が残っていないか');
+    // 一言は新しい鍵のセッションにだけ入る（古い鍵のセッションへは入れない）
+    expect(sessions[0]?.inputs.join('\n')).not.toContain('回転前の鍵のまま作業者');
+  });
+
+  it('（対照）作業者が落ちていなければ、境界で開き直しても一言は入らない', async () => {
+    const { session, sessions } = await startWaitingForBoundary(true);
+    await session.finish();
+
+    await vi.waitFor(() => {
+      expect(sessions).toHaveLength(2);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sessions[1]?.inputs.join('\n')).not.toContain('回転前の鍵のまま作業者');
+  });
+
+  it('（対照）Claude の鍵以外（GH_TOKEN）だけの差し替えで開き直した回は、作業者が落ちていても一言は入れない', async () => {
+    const { session, sessions } = await startWaitingForBoundary('gh-only');
+    await session.say(WEEKLY, { error: 'rate_limit', parentToolUseId: 'toolu-1' });
+    await session.finish();
+
+    await vi.waitFor(() => {
+      expect(sessions).toHaveLength(2);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sessions[1]?.inputs.join('\n')).not.toContain('回転前の鍵のまま作業者');
   });
 
   it('印が無ければ、今までと同じ文のまま（1文も欄の真も載らない）', async () => {
