@@ -359,7 +359,19 @@ describe('回転前の鍵で走っているセッションの作業者が落ち�
     } else if (rotate) {
       await host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-111' }]);
     }
-    return { session: sessions[0]!, sessions, events };
+    return { session: sessions[0]!, sessions, events, host };
+  }
+
+  // 開き直した後のセッションへ目印を送り、届くまで待ってから入力を返す。入力は届いた順なので、一言が入っていれば目印より前に並ぶ
+  async function inputsAfterReopen(host: RunnerHost, sessions: FakeSession[]): Promise<string> {
+    await vi.waitFor(() => {
+      expect(sessions).toHaveLength(2);
+    });
+    await host.send('mgr-1', '目印-5046');
+    await vi.waitFor(() => {
+      expect(sessions[1]?.inputs.join('\n')).toContain('目印-5046');
+    });
+    return sessions[1]?.inputs.join('\n') ?? '';
   }
 
   const WEEKLY = "You've hit your weekly limit · resets Oct 22, 4pm (Asia/Tokyo)";
@@ -408,26 +420,18 @@ describe('回転前の鍵で走っているセッションの作業者が落ち�
   });
 
   it('（対照）作業者が落ちていなければ、境界で開き直しても一言は入らない', async () => {
-    const { session, sessions } = await startWaitingForBoundary(true);
+    const { session, sessions, host } = await startWaitingForBoundary(true);
     await session.finish();
 
-    await vi.waitFor(() => {
-      expect(sessions).toHaveLength(2);
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(sessions[1]?.inputs.join('\n')).not.toContain('回転前の鍵のまま作業者');
+    expect(await inputsAfterReopen(host, sessions)).not.toContain('回転前の鍵のまま作業者');
   });
 
   it('（対照）Claude の鍵以外（GH_TOKEN）だけの差し替えで開き直した回は、作業者が落ちていても一言は入れない', async () => {
-    const { session, sessions } = await startWaitingForBoundary('gh-only');
+    const { session, sessions, host } = await startWaitingForBoundary('gh-only');
     await session.say(WEEKLY, { error: 'rate_limit', parentToolUseId: 'toolu-1' });
     await session.finish();
 
-    await vi.waitFor(() => {
-      expect(sessions).toHaveLength(2);
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(sessions[1]?.inputs.join('\n')).not.toContain('回転前の鍵のまま作業者');
+    expect(await inputsAfterReopen(host, sessions)).not.toContain('回転前の鍵のまま作業者');
   });
 
   it('印が無ければ、今までと同じ文のまま（1文も欄の真も載らない）', async () => {
