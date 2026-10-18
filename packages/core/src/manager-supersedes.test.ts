@@ -391,6 +391,8 @@ describe('自動の起こし直しをクローンへ知らせる（#4861 案B）
       (event) => event.type === 'manager_message' && event.text.includes('新しい鍵で起こし直した'),
     );
     expect(notice?.type === 'manager_message' && notice.commitmentExempt).toBe(true);
+    // 担当が戻っていればクローンが畳んでよい印も付く（世代の条件なし。#5048）
+    expect(notice?.type === 'manager_message' && notice.foldWhenBack).toEqual({});
   });
 
   it('(c) 起こし直し以外の断片（落ちた知らせ）が同じ合流窓の束に混ざる回は、印を付けず今どおり台帳に開く（#5015）', async () => {
@@ -409,6 +411,8 @@ describe('自動の起こし直しをクローンへ知らせる（#4861 案B）
     });
     expect(notice?.type).toBe('manager_message');
     expect(notice !== undefined && 'commitmentExempt' in notice).toBe(false);
+    // 枠（429）で落ちた断片が混ざる束には、畳んでよい印も付けない（週の上限を消さないため。#5048）
+    expect(notice !== undefined && 'foldWhenBack' in notice).toBe(false);
   });
 
   it('(d) done の担当に続きを促しただけのときは、知らせを積まない', async () => {

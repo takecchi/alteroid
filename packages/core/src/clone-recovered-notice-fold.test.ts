@@ -1,0 +1,203 @@
+import { describe, expect, it } from 'vitest';
+
+import { fakeSdk, waitFor, type FakeCall } from './clone-test-harness.js';
+import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import type { CloneHost } from './host.js';
+import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
+import type { RunnerLiveness } from './runner-protocol.js';
+import type { InboxEvent } from './schema.js';
+import type { Stores } from './store.js';
+import { createMemoryStores } from './testing.js';
+
+// 枠の知らせ以外で、担当がいまの鍵で戻っていれば畳んでよい印（`foldWhenBack`）の付いた知らせを、ターンを起こさず畳む（#5048）。
+// 2026-10-18、鍵が全部冷却中で止まった1時間のあと、担当が既に戻っている知らせ（作業者の落ち・起こし直し・セッションの落ち）を、クローンが1件ずつ受けていた。
+const AT = '2026-10-18T05:10:00.000Z';
+const MANAGER_ID = 'mgr-back';
+const FOLD_LINE = 'ターンを起こさずに畳んだ';
+
+function summary(overrides: Partial<ManagerSummary> = {}): ManagerSummary {
+  return {
+    managerId: MANAGER_ID,
+    status: 'running',
+    live: true,
+    cwd: '/work',
+    request: '依頼',
+    startedAt: AT,
+    updatedAt: AT,
+    waiting: [],
+    tokenGeneration: 3,
+    activeTokenGeneration: 3,
+    ...overrides,
+  };
+}
+
+function stubPool(list: () => Promise<ManagerSummary[]>): ManagerPool {
+  const notImplemented = () => {
+    throw new Error('not implemented');
+  };
+  return {
+    start: notImplemented,
+    send: notImplemented,
+    abort: notImplemented,
+    list,
+    denials: () => [],
+    pushHealthOf: () => undefined,
+    runnerBacklog: () => [],
+    runnerIdOf: () => Promise.resolve(undefined),
+    runners: (): Promise<RunnerFleetOverview> =>
+      Promise.resolve({
+        runners: [
+          {
+            label: 'runner-0',
+            state: 'connected' as RunnerLiveness,
+            since: AT,
+            managers: [],
+            revision: { status: 'unheard' as const },
+          },
+        ],
+        unassigned: [],
+        daemonRevision: { status: 'unknown' as const, reason: 'テスト' },
+      }),
+    transcript: notImplemented,
+    unpushedWork: notImplemented,
+    runningManagerOwning: () => undefined,
+    restore: () => Promise.resolve([]),
+    resumeStoppedByUsage: () => Promise.resolve([]),
+    reattachRunner: () => Promise.resolve(),
+    relocateFrom: notImplemented,
+    vacate: notImplemented,
+    probeTurnEnds: () => Promise.resolve(),
+    flushWithheldReports: () => Promise.resolve(),
+    settleStalledUsageWakes: () => Promise.resolve([]),
+    renotifyStalledDenials: () => Promise.resolve(),
+    stop: () => Promise.resolve(),
+  };
+}
+
+function boot(managers: ManagerPool) {
+  const { fn, calls } = fakeSdk();
+  const stores = createMemoryStores();
+  const clone: CloneHost = createClone({
+    stores,
+    queryFn: fn,
+    env: {},
+    managers,
+    redeliveryGate: ALWAYS_REDELIVER,
+  });
+  return { clone, calls, stores };
+}
+
+function notice(
+  id: string,
+  text: string,
+  foldWhenBack: { movedFromGeneration?: number } | undefined,
+): InboxEvent {
+  return {
+    type: 'manager_message',
+    id,
+    at: AT,
+    managerId: MANAGER_ID,
+    kind: 'report',
+    text,
+    ...(foldWhenBack === undefined ? {} : { foldWhenBack }),
+  };
+}
+
+function allInputs(calls: FakeCall[]): string[] {
+  return calls.flatMap((call) => call.inputs);
+}
+
+async function exchangeTexts(stores: Stores): Promise<string[]> {
+  const rows = (await stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+  return rows.map((row) => row.text);
+}
+
+async function expectFolded(s: ReturnType<typeof boot>, id: string, body: string): Promise<void> {
+  await waitFor(
+    async () => (await exchangeTexts(s.stores)).some((text) => text.includes(FOLD_LINE)),
+    '畳んだ行が日誌に書かれる',
+  );
+  // 本文は日誌に残り、モデルへは渡らない
+  expect((await exchangeTexts(s.stores)).some((text) => text.includes(body))).toBe(true);
+  expect(allInputs(s.calls).some((text) => text.includes(body))).toBe(false);
+  const pending = (await s.stores.inbox.peekPending()).entries;
+  expect(pending.some((p) => p.event.id === id)).toBe(false);
+}
+
+async function expectDelivered(s: ReturnType<typeof boot>, body: string): Promise<void> {
+  await waitFor(() => allInputs(s.calls).some((text) => text.includes(body)), 'ターンが起きる');
+  expect((await exchangeTexts(s.stores)).some((text) => text.includes(FOLD_LINE))).toBe(false);
+}
+
+describe('担当が戻っていれば畳んでよい印の付いた知らせを、ターンを起こさず畳む（#5048）', () => {
+  it('⭐ 起こし直し・セッションの落ちの束（世代の条件なし）: 担当が running・世代一致なら畳み、台帳の行も daemon が閉じる', async () => {
+    const s = boot(stubPool(() => Promise.resolve([summary()])));
+
+    s.clone.post(notice('evt-rewoken', '新しい鍵で起こし直した REWOKEN-BODY', {}));
+    await expectFolded(s, 'evt-rewoken', 'REWOKEN-BODY');
+    await waitFor(
+      async () => (await s.stores.commitments.get('evt-rewoken'))?.closedBy === 'daemon',
+      '台帳の行が daemon で閉じる',
+    );
+
+    await s.clone.stop();
+  });
+
+  it('⭐ セッションが落ちたまま（status: failed）なら届ける', async () => {
+    const s = boot(stubPool(() => Promise.resolve([summary({ status: 'failed' })])));
+
+    s.clone.post(notice('evt-crash', 'マネージャーのセッションが落ちた CRASH-BODY', {}));
+    await expectDelivered(s, 'CRASH-BODY');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 作業者の落ち: 担当が積んだ時点の世代（2）から現役の世代（3）へ移って戻っていれば畳む', async () => {
+    const s = boot(stubPool(() => Promise.resolve([summary()])));
+
+    s.clone.post(
+      notice('evt-worker', '作業者だけが利用上限で落ちた WORKER-BODY', { movedFromGeneration: 2 }),
+    );
+    await expectFolded(s, 'evt-worker', 'WORKER-BODY');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 作業者の落ち: 担当が積んだ時点と同じ世代のまま（同じ鍵で作業者だけが落ちた）なら届ける', async () => {
+    const s = boot(stubPool(() => Promise.resolve([summary()])));
+
+    s.clone.post(
+      notice('evt-same', '作業者だけが利用上限で落ちた SAME-BODY', { movedFromGeneration: 3 }),
+    );
+    await expectDelivered(s, 'SAME-BODY');
+
+    await s.clone.stop();
+  });
+
+  it('担当の世代が現役と違う（まだ古い鍵）なら届ける', async () => {
+    const s = boot(stubPool(() => Promise.resolve([summary({ tokenGeneration: 2 })])));
+
+    s.clone.post(notice('evt-old', '新しい鍵で起こし直した OLD-BODY', {}));
+    await expectDelivered(s, 'OLD-BODY');
+
+    await s.clone.stop();
+  });
+
+  it('印の無い報告は、担当が戻っていても届ける', async () => {
+    const s = boot(stubPool(() => Promise.resolve([summary()])));
+
+    s.clone.post(notice('evt-plain', 'ふつうの報告 PLAIN-BODY', undefined));
+    await expectDelivered(s, 'PLAIN-BODY');
+
+    await s.clone.stop();
+  });
+
+  it('list() が投げたときは畳まず届ける', async () => {
+    const s = boot(stubPool(() => Promise.reject(new Error('list が落ちた'))));
+
+    s.clone.post(notice('evt-throw', '新しい鍵で起こし直した THROW-BODY', {}));
+    await expectDelivered(s, 'THROW-BODY');
+
+    await s.clone.stop();
+  });
+});

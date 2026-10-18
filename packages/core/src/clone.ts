@@ -197,6 +197,7 @@ import {
   foldableQuotaStopTargetsOf,
   quotaFoldNoticeOf,
   quotaStopTargetsOf,
+  recoveredNoticeFoldOf,
   type QuotaRecoverySummary,
 } from './quota-recovery-notice.js';
 import type { AttachmentRef, JobStatus, TurnFailureKind } from './schema.js';
@@ -2103,6 +2104,19 @@ class Clone implements CloneHost {
         continue;
       }
 
+      // 枠の知らせ以外で、担当が戻っていれば畳んでよい印の付いた知らせ（#5048。作業者の落ち・起こし直し・セッションの落ち）。
+      // 枠の知らせと同じく、1件ずつ・枠の短絡より後ろで、配る時点の状態で判定する
+      const recoveredFold = await this.#recoveredNoticeFoldFor(event);
+      if (recoveredFold !== null) {
+        await this.#foldRecoveredNotice(event, recoveredFold);
+        await this.#closeRecoveredNoticeRow(event).catch((error: unknown) => {
+          noteDroppedRecord('畳んだ知らせの行の自動クローズ', inboxEventShape(event), error);
+        });
+        await this.#settleInboxEvent(event, false);
+        this.#inFlight = null;
+        continue;
+      }
+
       // まとめ読みの判定を呼ぶ前に必ずリセットする: `#drainMergeableWithinLimit` は対象外の起点では呼ばれず、戻さないと前の反復で切ったときの断り書きが持ち越されるため。判定の呼び出しより下に置かない: 立った印を拭き取り、`external` の束でだけ断り書きが黙って消えるため
       this.#notices.set('mergedBatchTruncation', '');
       const mergedHuman = this.#mergedHumanBatch(event);
@@ -2466,6 +2480,19 @@ class Clone implements CloneHost {
       role: 'outbound',
       text:
         `${EXCHANGE_KIND_THINNING_PREFIX}名指す担当がもう戻っていた枠の知らせなので、ターンを起こさずに畳んだ（モデルへは1文字も渡して` +
+        `いない）: ${inboxEventShape(event)}\n\n${notice}`,
+    });
+  }
+
+  // `#foldRecoveredQuotaNotice` と同じく、本文と根拠を日誌へ残して、消すのはクローンのターンだけにする（#5048）
+  async #foldRecoveredNotice(event: InboxEvent, notice: string): Promise<void> {
+    await this.#journalIncomingBody(event);
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_THINNING_PREFIX}名指す担当がもう戻っていた知らせなので、ターンを起こさずに畳んだ（モデルへは1文字も渡して` +
         `いない）: ${inboxEventShape(event)}\n\n${notice}`,
     });
   }
@@ -3453,6 +3480,44 @@ class Clone implements CloneHost {
       return null;
     }
     return quotaFoldNoticeOf(targets, managers, Date.now());
+  }
+
+  // 印（`foldWhenBack`）の無い知らせでは一覧を引かない。一覧を引けなければ畳まない（`null`）: 確かめられないまま消さない（#5048）
+  async #recoveredNoticeFoldFor(event: InboxEvent): Promise<string | null> {
+    if (event.type !== 'manager_message' || event.foldWhenBack === undefined) return null;
+    let managers: readonly QuotaRecoverySummary[];
+    try {
+      managers = await this.#managers.list();
+    } catch {
+      return null;
+    }
+    return recoveredNoticeFoldOf(event, managers, Date.now());
+  }
+
+  // 畳んだ知らせ自身の台帳の行を器が閉じる（#5048）。`#closeRecoveredQuotaStopRows` と同じく closedBy は daemon（人間・クローンが後から否定できる）
+  async #closeRecoveredNoticeRow(event: InboxEvent): Promise<void> {
+    if (event.type !== 'manager_message') return;
+    // 記帳（`#commit`）を待つ: 待たないと、まだ書かれていない行を閉じ損ねて、未了のまま残るため
+    try {
+      await this.#delivery.getCommitted(event.id);
+    } catch {
+      // 記帳の失敗は `#commit` 側が日誌へ残している。ここでは待つだけ
+    }
+    const closed = await this.#stores.commitments.close(
+      event.id,
+      new Date().toISOString(),
+      `器が自動で閉じた: 名指す担当 ${event.managerId} はいまの世代の鍵で戻っている` +
+        '（running、または done で知らせより後のターンが成功）。人間・クローンが否定するなら開き直すこと',
+      'daemon',
+    );
+    if (!closed) return;
+    await this.#stores.journal.append({
+      type: 'decision',
+      decision: `担当が戻っていた知らせの行を器が自動で閉じた（${event.id}）: 担当 ${event.managerId}`,
+      grounds:
+        `担当 ${event.managerId} が quota-recovery-notice の recoveredNoticeFoldOf の基準（backOnCurrentToken と、` +
+        '作業者の落ちなら積んだ時点と違う世代へ移ったこと）で戻っていた。器が閉じたので closedBy は daemon',
+    });
   }
 
   async #supersededNoticeFor(events: InboxEvent[]): Promise<string> {

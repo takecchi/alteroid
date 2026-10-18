@@ -173,6 +173,34 @@ export function backOnCurrentToken(
 }
 
 /**
+ * 枠の知らせ以外で「担当が戻っていれば畳んでよい」印（`foldWhenBack`）の付いた知らせを、配る時点で畳むかを決める（#5048）。
+ * 畳むなら日誌へ書く1節を、届けるなら `null` を返す。一覧を引けなかったときも `null`（確かめられないまま消さない）。
+ * 戻ったかの基準は `backOnCurrentToken`（#4499 と同じ）。`movedFromGeneration` が在れば、担当がその世代から別の世代へ移っていることも要る:
+ * 同じ鍵のまま作業者だけが落ちた回（#5021 の筋A）は、担当が動けていても作業者は落ち続けるので消さない。
+ */
+export function recoveredNoticeFoldOf(
+  event: InboxEvent,
+  managers: readonly QuotaRecoverySummary[] | { readonly detail: string },
+  nowMs: number,
+): string | null {
+  if (event.type !== 'manager_message' || event.foldWhenBack === undefined) return null;
+  if ('detail' in managers) return null;
+  const found = managers.find((manager) => manager.managerId === event.managerId);
+  if (!backOnCurrentToken(found, event.at) || found === undefined) return null;
+  const from = event.foldWhenBack.movedFromGeneration;
+  if (from !== undefined && found.tokenGeneration === from) return null;
+  const now = new Date(nowMs).toISOString();
+  return block([
+    `✅ 配る時点（${now}）の担当一覧では、この知らせが名指す担当 ${event.managerId} はいまの世代の鍵で戻っている` +
+      `（\`${found.status}\`・鍵の世代 ${String(found.tokenGeneration)}` +
+      (from === undefined ? '' : `。知らせを積んだ時点の世代 ${String(from)} から移った`) +
+      '）。回復と読んだ根拠は、live であること・枠で止まった印が降りていること・鍵の世代が現役と一致すること・' +
+      '`running`、または `done` で知らせより後のターンが成功していること。',
+    `知らせが積まれたのは ${event.at}${elapsedPhrase(event.at, nowMs)}。`,
+  ]);
+}
+
+/**
  * 名指す担当が全員いまの世代の鍵で戻っていれば、ターンを起こさず日誌へ書く1節を返す。1本でも戻っていなければ `null`（＝届ける）。
  * 一覧を引けなかったときも `null`: 確かめられないまま消すより、届けてクローンに見てもらう側へ倒す。
  */

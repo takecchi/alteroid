@@ -268,6 +268,9 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     quotaSessionWindow: z.literal(true).optional(),
     // 機構が「クローンが手を打つことの無い知らせ」と判定した印。台帳には開かない（受信箱と日誌には今どおり届く）。立っていない回はキーごと書かない（#5015）
     commitmentExempt: z.literal(true).optional(),
+    // 名指しの担当がいまの鍵で戻っていれば、クローンがターンを起こさず日誌にだけ残してよい知らせの印（#5048）。立っていない回はキーごと書かない。
+    // `movedFromGeneration` は積んだ時点の担当の鍵の世代: 在れば、担当がその世代から別の世代へ移って戻ったときだけ畳む（同じ鍵のまま作業者だけが落ちた回を消さないため）
+    foldWhenBack: z.object({ movedFromGeneration: z.number().int().optional() }).optional(),
     // 中身（bytes）は持たない: 担い手が報告に添えたファイルの控え。中身は `stores.attachments` に在る
     attachments: z.array(attachmentRefSchema).optional(),
     // 受け取れなかったものを黙って落とさない: 名前と理由をクローンのターンへ出すため
