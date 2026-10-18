@@ -2758,6 +2758,19 @@ const KNOWN_SYNTHESIZED_NOTICE_LABELS: Record<string, string> = {
 };
 
 /**
+ * 担当が戻っていればクローンが畳んでよい合成の知らせの族（#5048）。ここに無い族が1つでも混ざる束には印を付けない。
+ * - `usage_rewoken`: 枠で落ちていた委譲を新しい鍵で起こし直した（後継が居ない回だけ。呼び手が確かめる）
+ * - `closed_failed`: セッションが落ちた（担当が戻って走っていれば、手を打つことが無い）
+ */
+const FOLD_WHEN_BACK_SYNTHESIZED_LABELS: ReadonlySet<string> = new Set([
+  'usage_rewoken',
+  'closed_failed',
+]);
+
+/** 担当が戻っていればクローンが畳んでよい印（`manager_message.foldWhenBack`。#5048）。 */
+type FoldWhenBack = { movedFromGeneration?: number };
+
+/**
  * **未知の族は素の値をそのまま返す。** 落とさず表示することが「版がずれている」という事実の唯一の跡になる
  * （例外を投げる・既定の1語へ潰すとその跡が消える）。
  */
@@ -9883,7 +9896,21 @@ class Pool implements ManagerPool {
 
         // 欄（`event.notifyClone`）で判定し、本文を嗅がない（#4685）: 成果が失われうる知らせは、日誌だけだとクローンが引かない限り見えないため
         if (event.notifyClone === true) {
-          this.#emit(event.managerId, 'report', `[${event.managerId}] ${noteText}`);
+          // 作業者の落ちには、積んだ時点の担当の鍵の世代を添えて「別の世代へ移って戻ったら畳んでよい」と印を付ける（#5048）。世代が分からなければ付けない
+          const heldGeneration = this.#tokenIdentities.get(event.managerId)?.generation;
+          this.#emit(
+            event.managerId,
+            'report',
+            `[${event.managerId}] ${noteText}`,
+            undefined,
+            undefined,
+            'full',
+            false,
+            undefined,
+            event.workerLimit === undefined || heldGeneration === undefined
+              ? undefined
+              : { movedFromGeneration: heldGeneration },
+          );
         }
 
         // 逃すと自動で追いついたセッションにまで `manager_list` / `runner_list` の世代の食い違いが出続ける。世代の値は受け取らない: runner は世代を知らず、daemon が現役の身元を読み直す。
@@ -11976,6 +12003,7 @@ class Pool implements ManagerPool {
     withheldSuffixDetail: 'full' | 'flush' = 'full',
     foldedTurn = false,
     reportFiles?: ManagerReportFiles,
+    foldWhenBack?: FoldWhenBack,
   ): void {
     this.#flushSynthesizedNotices();
     this.#deliver(
@@ -11988,6 +12016,9 @@ class Pool implements ManagerPool {
       false,
       foldedTurn,
       reportFiles,
+      undefined,
+      false,
+      foldWhenBack,
     );
   }
 
@@ -12003,6 +12034,7 @@ class Pool implements ManagerPool {
     reportFiles?: ManagerReportFiles,
     quotaStop?: { readonly sessionWindow: boolean },
     commitmentExempt = false,
+    foldWhenBack?: FoldWhenBack,
   ): void {
     // 握り潰した報告の件数を日誌だけに残さず、配る `text` の末尾にも足す: 日誌だと引きに行かないと、報告まで消していないかに気づけない。
     // 窓へ移した在庫（`closed` が積んだ分）は、この配りで運んで消す。普通の在庫が在れば（窓の後に積み直されることは無いが）そちらを先にする。
@@ -12015,6 +12047,8 @@ class Pool implements ManagerPool {
     let outgoing = text;
     // 印は安全側へ倒す: 背景処理の完了待ちで畳んだ報告を運ぶ回と、直前と同文の知らせを数だけ残した旨を足す回は、中身が台帳に要るかもしれないので付けない（#5015）
     let exempt = commitmentExempt;
+    // 畳んでよい印も同じ回に外す（#5048）: 足した中身（畳んだ報告・配らなかった知らせの件数）まで、担当が戻ったことを理由に消さないため
+    let foldable = foldWhenBack;
     if (withheld !== undefined) {
       // `'flush'` は在庫を `delete` しない: `firstAt` が失われ、次に積んだ回が新しいエピソードとして数え直され、`flushWithheldReports()` が何度でも合図を立て直せてしまう。
       if (withheldSuffixDetail === 'flush') {
@@ -12031,6 +12065,7 @@ class Pool implements ManagerPool {
       // `count === 0` のときは足さない: フラッシュ直後は在庫が `count: 0` で残っており、足すと「0 本配っていない」という嘘の1行が出る。
       if (withheld.count > 0) {
         exempt = false;
+        foldable = undefined;
         // `'flush'` でも抜粋を付ける: 件数だけだと、マージの報告のような本文がクローンから見えないまま日誌にだけ残る。
         outgoing =
           `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
@@ -12044,6 +12079,7 @@ class Pool implements ManagerPool {
     this.#synthesizedNoticeStreaks.delete(managerId);
     if (streak !== undefined && streak.suppressed > 0) {
       exempt = false;
+      foldable = undefined;
       outgoing =
         `${outgoing}\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を ` +
         `${String(streak.suppressed)} 束（通数 ${String(streak.suppressedArrived)} 件）配っていない` +
@@ -12067,6 +12103,8 @@ class Pool implements ManagerPool {
       ...(quotaStop === undefined ? {} : { quotaStop: true as const }),
       ...(quotaStop?.sessionWindow === true ? { quotaSessionWindow: true as const } : {}),
       ...(exempt ? { commitmentExempt: true as const } : {}),
+      // 添付を運ぶ報告には付けない: 添付は畳むと受け取られないため
+      ...(foldable === undefined || reportFiles !== undefined ? {} : { foldWhenBack: foldable }),
       ...(reportFiles === undefined || reportFiles.attachments.length === 0
         ? {}
         : { attachments: reportFiles.attachments }),
@@ -12204,10 +12242,21 @@ class Pool implements ManagerPool {
       : undefined;
     // 後継の居ない起こし直しの知らせだけ、台帳に開かない印を付ける（#5015）。
     // `supersededBy` が在る／後継を起こしている最中の担当は、窓の間に後継がつながった回なので、今までどおり台帳に開く（クローンが手を打つ余地が在る）。
-    const commitmentExempt =
-      entry.fragments.every((fragment) => fragment.label === 'usage_rewoken') &&
+    const noSuccessor =
       this.#records.get(managerId)?.job.supersededBy === undefined &&
       !this.#supersedePending.has(managerId);
+    const commitmentExempt =
+      entry.fragments.every((fragment) => fragment.label === 'usage_rewoken') && noSuccessor;
+    // 担当が戻っていればクローンが畳んでよい束（#5048）: 起こし直し（後継が居ない回だけ）とセッションの落ちだけでできた束。
+    // 枠の印の付いた断片が1つでも混ざる束は付けない（#4499 の判定に任せる。週の上限で落ちた知らせを消さないため）。後継が居る起こし直しは、どちらかを止める判断が要るので付けない
+    const foldWhenBack =
+      entry.fragments.every(
+        (fragment) =>
+          fragment.quota === undefined && FOLD_WHEN_BACK_SYNTHESIZED_LABELS.has(fragment.label),
+      ) &&
+      (noSuccessor || entry.fragments.every((fragment) => fragment.label !== 'usage_rewoken'))
+        ? {}
+        : undefined;
     this.#deliver(
       managerId,
       'report',
@@ -12220,6 +12269,7 @@ class Pool implements ManagerPool {
       undefined,
       quotaStop,
       commitmentExempt,
+      foldWhenBack,
     );
     // 対象外の束では新しい連鎖を立てない: 次に同じ族が来ても握りつぶす先が無く、記憶を持つだけ無駄。
     if (eligible) {
