@@ -650,6 +650,57 @@ describe('固有の接頭辞を持つ鍵の形（issue #4873）', () => {
   });
 });
 
+describe('secretPatternsInBody / secret-assignment は JSX の属性を鍵の代入と数えない（issue #5051）', () => {
+  const openaiLegacy = `sk-${'Cd2'.repeat(14)}`;
+  const aws = `AKIA${'ABCDEFGH'.repeat(2)}`;
+
+  it.each([
+    ['大文字の名前・接頭辞つきの値', `API_KEY=${openaiLegacy}`],
+    ['大文字の名前・引用符なしの値', 'DB_PASSWORD=FAKEVALUE5051'],
+    ['大文字の名前・引用符つきの短い値', 'export GITHUB_TOKEN="fake5051"'],
+    ['小文字の名前・引用符つきの鍵らしい値', '<Client apiKey="Ab12Cd34Ef56Gh78Ij90" />'],
+    ['URL の query の値', 'https://example.invalid/cb?access_token=Fake5051value'],
+    [
+      'JSX の誤検知と同じ本文に混ざった鍵の代入',
+      '<input onKeyDown={handleKeyDown} />\nSECRET_KEY=fake5051value',
+    ],
+  ])('陰性対照（当たる）: %s', (_label, text) => {
+    expect(secretPatternsInBody(text, undefined)).toContain('secret-assignment');
+  });
+
+  it('陰性対照（当たる）: JSON の鍵の欄と、JSX の式に入れた接頭辞つきの鍵', () => {
+    expect(secretPatternsInBody(`"apiKey": "${aws}"`, undefined)).toEqual([
+      'aws-access-key',
+      'secret-json-field',
+    ]);
+    expect(secretPatternsInBody(`<Client apiKey={"${openaiLegacy}"} />`, undefined)).toEqual([
+      'openai-key',
+    ]);
+  });
+
+  it.each([
+    '<Row key={item.id} />',
+    '<Foo key="a" />',
+    '<Avatar authorId={id} />',
+    '<Input keyBinding={binding} />',
+    '<input onKeyDown={handleKeyDown} />',
+    '<Field showPassword={showPassword} />',
+    '<Gate isAuthenticated={isAuthenticated} />',
+    '<Trans i18nKey="settings.title" />',
+    '<Persist storageKey="heosterra-settings" />',
+    '<a href={`/cb?token=${token}`} />',
+    'TOKEN=$(cat ./token-file)',
+  ])('陽性対照（当たらない）: %s', (text) => {
+    expect(secretPatternsInBody(text, undefined)).toEqual([]);
+  });
+
+  it('伏せ字の側は狭めない: 判定で数えない JSX の属性も、ログへ出すときは従来どおり伏せる', () => {
+    expect(redactSecretsInBody('<input onKeyDown={handleKeyDown} />', undefined)).toBe(
+      '<input onKeyDown=[REDACTED] />',
+    );
+  });
+});
+
 describe('redactSecretsInText / redactErrorText / 語の AUTHOR を AUTH として伏せない（issue #2633）', () => {
   const text = 'clone fakeowner/alteroid by fakeowner@example.invalid';
 

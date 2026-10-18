@@ -605,6 +605,25 @@ describe('退避 ref（#1266）', () => {
     ]);
   });
 
+  it('#5051: JSX の属性だけを足した tsx の差分は secret-like にしない。同じ差分に鍵の代入が混ざれば止める', () => {
+    const tsx = [
+      'diff --git a/src/settings-panel.tsx b/src/settings-panel.tsx',
+      '--- a/src/settings-panel.tsx',
+      '+++ b/src/settings-panel.tsx',
+      '@@ -1 +1,4 @@',
+      '+<input key={item.id} onKeyDown={handleKeyDown} />',
+      '+<Field showPassword={showPassword} authorId={id} />',
+      '+<Trans i18nKey="settings.title" />',
+      '+<Gate isAuthenticated={isAuthenticated} />',
+    ];
+    expect(secretLikeAdditionsInDiff(tsx.join('\n'), undefined)).toEqual([]);
+
+    const withSecret = [...tsx, '+// API_KEY=FAKEVALUE5051xyz'].join('\n');
+    expect(secretLikeAdditionsInDiff(withSecret, undefined)).toEqual([
+      { file: 'src/settings-panel.tsx', patterns: ['secret-assignment'] },
+    ]);
+  });
+
   it('push の失敗を分類する', () => {
     expect(classifyPushFailure({ stderr: '', timedOut: true })).toBe('timeout');
     expect(

@@ -107,6 +107,22 @@ interface CredentialRule {
   // 固有の接頭辞を持つ形か: 形だけの規則（`a:b@c` や `…KEY=…`）はバイナリのでたらめなバイト列にも当たるため
   readonly prefixed: boolean;
   readonly apply: (text: string) => string;
+  // 判定だけを狭める口: 伏せ字の側まで狭めると、ログに残る鍵が増えるため
+  readonly detect?: (text: string) => boolean;
+}
+
+const SECRET_ASSIGNMENT = new RegExp(`\\b(${SECRET_ASSIGNMENT_NAME})=(\\S+)`, 'gi');
+
+const QUOTED_VALUE = /^(["'`])(.*)\1/;
+
+// 名前に小文字を含む代入の引用符つきの値は、鍵らしい塊のときだけ数える: JSX の属性（`i18nKey="settings.title"`）を拾わないため。大文字だけの名前（`.env` やシェル）は値を問わず数える
+function isSecretAssignmentValue(name: string, value: string): boolean {
+  // 式・変数の参照は鍵の文字列そのものではない: JSX の `onKeyDown={handle}`・`token=${t}`・`TOKEN=$(cat f)`
+  if (value.startsWith('{') || value.startsWith('$')) return false;
+  const quoted = QUOTED_VALUE.exec(value);
+  if (quoted === null || !/[a-z]/.test(name)) return true;
+  const inner = quoted[2] ?? '';
+  return /^[A-Za-z0-9_+/=-]{16,}$/.test(inner) && /[0-9]/.test(inner) && /[A-Za-z]/.test(inner);
 }
 
 // userinfo の3つを先に当てる: ほかの規則が userinfo の一部だけを先に伏せると、形が崩れてこの規則に合わなくなるため
@@ -199,9 +215,10 @@ const CREDENTIAL_RULES: readonly CredentialRule[] = [
     name: 'secret-assignment',
     prefixed: false,
     apply: (text) =>
-      text.replace(
-        new RegExp(`\\b(${SECRET_ASSIGNMENT_NAME})=(\\S+)`, 'gi'),
-        (_match, name: string) => `${name}=${REDACTED}`,
+      text.replace(SECRET_ASSIGNMENT, (_match, name: string) => `${name}=${REDACTED}`),
+    detect: (text) =>
+      Array.from(text.matchAll(SECRET_ASSIGNMENT)).some(([, name = '', value = '']) =>
+        isSecretAssignmentValue(name, value),
       ),
   },
   {
@@ -228,7 +245,8 @@ export function secretPatternsInBody(
   if (redactSecretEnvValues(text, env) !== text) hits.push('env-secret-value');
   for (const rule of CREDENTIAL_RULES) {
     if (options.binary === true && !rule.prefixed) continue;
-    if (rule.apply(text) !== text) hits.push(rule.name);
+    const hit = rule.detect === undefined ? rule.apply(text) !== text : rule.detect(text);
+    if (hit) hits.push(rule.name);
   }
   return hits;
 }
