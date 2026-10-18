@@ -744,3 +744,129 @@ describe('failed / lost で閉じた CLI の pid は、同じ managerId を resu
     await t.host.shutdown();
   });
 });
+
+// 最初のセッションだけ、起動直後に CLI の背景処理を `backgroundTasks` 本流す偽物（2本目以降は流さない）
+function sdkWithBackground(sessions: CapturedSession[], backgroundTasks: number): typeof sdkQuery {
+  return ((params: { prompt: unknown; options?: Options }) => {
+    const first = sessions.length === 0;
+    sessions.push({ options: params.options ?? {} });
+    let close = (): void => undefined;
+    const closed = new Promise<void>((resolve) => {
+      close = resolve;
+    });
+
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-fake',
+        uuid: 'uuid-init',
+      } as unknown as SDKMessage;
+      if (first && backgroundTasks > 0) {
+        yield {
+          type: 'system',
+          subtype: 'background_tasks_changed',
+          tasks: Array.from({ length: backgroundTasks }, (_, i) => ({
+            task_id: `bg-${String(i)}`,
+            task_type: 'local_bash',
+            description: '',
+          })),
+          session_id: 'sess-fake',
+          uuid: 'uuid-bg',
+        } as unknown as SDKMessage;
+      }
+      void (async () => {
+        for await (const message of params.prompt as AsyncIterable<unknown>) {
+          void message;
+        }
+      })();
+      await closed;
+    }
+
+    return Object.assign(generate(), {
+      close: () => close(),
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof sdkQuery;
+}
+
+describe('鍵の付け替えの畳み（keepPeers）で背景処理を畳んだ CLI の pid は、同じ担当を resume しても撃つ側に残る（#5044）', () => {
+  async function foldAndResume(
+    backgroundTasks: number,
+    stopOptions: { keepPeers?: boolean },
+  ): Promise<RunnerHost> {
+    const sessions: CapturedSession[] = [];
+    const oldProcess = fakeDelegationProcess(555);
+    const newProcess = fakeDelegationProcess(777);
+    let call = 0;
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: sdkWithBackground(sessions, backgroundTasks),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnAgentProcessFn: () => {
+        call += 1;
+        return call === 1 ? oldProcess.handle : newProcess.handle;
+      },
+    });
+
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    (sessions[0] as CapturedSession).options.spawnClaudeCodeProcess?.({
+      command: 'claude',
+      args: [],
+      env: {},
+      signal: new AbortController().signal,
+    });
+    await vi.waitFor(() => {
+      expect(host.list()[0]?.liveBackgroundTasks).toBe(backgroundTasks);
+    });
+    await host.stop('mgr-1', stopOptions);
+    oldProcess.emitExit();
+
+    await host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-1',
+      cwd: '/work/project',
+      request: 'つづき',
+    });
+    (sessions[1] as CapturedSession).options.spawnClaudeCodeProcess?.({
+      command: 'claude',
+      args: [],
+      env: {},
+      signal: new AbortController().signal,
+    });
+    return host;
+  }
+
+  it('⭐ 背景処理 1 本を抱えたまま鍵の付け替えで畳まれた: resume しても古い pid は knownTerminated、新しい pid は live', async () => {
+    const host = await foldAndResume(1, { keepPeers: true });
+
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set([777]),
+      knownTerminated: new Set([555]),
+    });
+    await host.shutdown();
+  });
+
+  it('（対照）背景処理の無い鍵の付け替えの畳み: resume すると古い pid は knownTerminated から外れる（守られる）', async () => {
+    const host = await foldAndResume(0, { keepPeers: true });
+
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set([777]),
+      knownTerminated: new Set(),
+    });
+    await host.shutdown();
+  });
+
+  it('（対照）人間・畳みの停止（keepPeers 無し）は背景処理があっても今どおり守る（#4433）', async () => {
+    const host = await foldAndResume(1, {});
+
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set([777]),
+      knownTerminated: new Set(),
+    });
+    await host.shutdown();
+  });
+});

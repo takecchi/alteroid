@@ -21,7 +21,7 @@ import {
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-// 鍵の回転の起こし直しは、背景処理を理由に止めない。届かなければ掃きが間隔を伸ばして挑み直す（#4850）
+// 鍵の回転の起こし直しは、背景処理を待ちの上限（15 分）までしか待たない（#4850 / #5044）。届かなければ掃きが間隔を伸ばして挑み直す（#4850）
 
 const JOB: Job = {
   id: 'mgr-fold',
@@ -189,11 +189,12 @@ async function setup(tokenAvailability: ManagerPoolOptions['tokenAvailability'])
 
 const SECRET = 'sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF';
 
-describe('鍵の回転の起こし直しは、背景処理を理由に止めない（#4850 直し方1）', () => {
+describe('鍵の回転の起こし直しは、待ちの上限を過ぎた背景処理を理由に止めない（#4850 直し方1）', () => {
   it('⭐ (a) 背景処理 1 本・古い鍵が冷却中: 畳んで新しい鍵で起こし直し、一言に畳んだ本数とコマンドを載せる（秘密は伏せる）', async () => {
     const s = await setup(async () => 'cooling');
     s.fake.behavior.background = 1;
     s.fake.behavior.commands = [`pnpm dev --token ${SECRET}`];
+    s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
 
     const nudged = await s.pool.resumeStoppedByUsage();
 
@@ -220,6 +221,7 @@ describe('鍵の回転の起こし直しは、背景処理を理由に止めな�
   it('(a2) コマンドが取れない（古い runner）ときは本数だけを載せる', async () => {
     const s = await setup(async () => 'cooling');
     s.fake.behavior.background = 2;
+    s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
 
     expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
 
@@ -233,6 +235,7 @@ describe('鍵の回転の起こし直しは、背景処理を理由に止めな�
     const s = await setup(async () => 'cooling');
     s.fake.behavior.background = 2;
     s.fake.behavior.peers = 1;
+    s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
 
     expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
 
@@ -262,11 +265,16 @@ describe('鍵の回転の起こし直しは、背景処理を理由に止めな�
   it('⭐ (a4b) 背景処理（peer 以外）を畳んだ done の担当は、断り書きが続きを進めよと言い、クローンの受信箱にも1件知らせる（#4902）', async () => {
     const s = await setup(async () => 'cooling');
     s.fake.behavior.background = 1;
+    s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
 
     expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
 
     const message = s.fake.resumes[0]?.message ?? '';
     expect(message).toContain('この背景処理の結果は二度と届かない（古いセッションと一緒に畳んだ）');
+    // 止めたことと途中の出力の在りか、やり直しの前の確かめを言う（#5044）
+    expect(message).toContain('古い背景処理のプロセスは runner が止める');
+    expect(message).toContain('起こしたときの Bash の結果にある出力ファイル');
+    expect(message).toContain('古いプロセスが残っていないか ps で確かめること');
     expect(message).toContain('続きを進めよ。もう終わっていたなら、そう報告して終えること');
     await s.pool.stop();
     const text = JSON.stringify(s.inbox);
@@ -485,6 +493,78 @@ describe('鍵の回転の起こし直しは、背景処理を理由に止めな�
     const again = await s.pool.send('mgr-fold', 'もう一度');
     expect(again.outcome).toBe('held');
     expect(s.fake.stops).toHaveLength(0);
+    await s.pool.stop();
+  });
+});
+
+describe('鍵の回転の起こし直しは、背景処理を待ちの上限まで待つ（#5044）', () => {
+  it('⭐ (f) 枠で止まってから 15 分までは、背景処理 1 本を抱えた担当を畳まずに待ち、待つと日誌に書く', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 1;
+    s.clock.now += HELD_FORCE_FOLD_AFTER_MS - 1;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.fake.resumes).toHaveLength(0);
+    expect(s.fake.sends).toHaveLength(0);
+    const decisions = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('鍵の回転の起こし直しを、背景処理が終わるまで待つ'),
+    );
+    expect(decisions).toHaveLength(1);
+    expect(JSON.stringify(decisions[0])).toContain('2026-10-15T03:15:00.000Z');
+    expect(JSON.stringify(decisions[0])).toContain('#5044');
+    // 印は残る（次の挑み直しで拾う）
+    expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeDefined();
+    await s.pool.stop();
+  });
+
+  it('⭐ (f2) 待つ間に背景処理が終われば、次の挑み直しで背景処理を畳まずに起こし直す（断り書きも知らせも出さない）', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 1;
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+
+    s.fake.behavior.background = 0;
+    s.clock.now += MINUTE;
+    expect(await s.pool.settleStalledUsageWakes()).toEqual(['mgr-fold']);
+
+    expect(s.fake.resumes).toHaveLength(1);
+    const message = s.fake.resumes[0]?.message ?? '';
+    expect(message).not.toContain('起こしっぱなしだった背景処理');
+    await s.pool.stop();
+    expect(JSON.stringify(s.inbox)).not.toContain('背景処理 1 本を畳んで');
+  });
+
+  it('⭐ (f3) 上限を過ぎても背景処理が残っていれば、畳んで起こし直す', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 1;
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+
+    s.clock.now += HELD_FORCE_FOLD_AFTER_MS;
+    expect(await s.pool.settleStalledUsageWakes()).toEqual(['mgr-fold']);
+
+    expect(s.fake.stops).toEqual(['mgr-fold']);
+    expect(s.fake.resumes[0]?.message ?? '').toContain('背景処理 1 本');
+    await s.pool.stop();
+  });
+
+  it('(f4) 挑み直しの間隔が伸びても、待ちの上限の時刻より後へは延ばさない', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 1;
+    // 枠で止まってから 10 分後に鍵が回る（上限は止まってから 15 分）
+    s.clock.now += 10 * MINUTE;
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+    // 1分後・その2分後に挑んで断られる（次の倍々の間隔は4分で、上限を越える）
+    s.clock.now += MINUTE;
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+    s.clock.now += 2 * MINUTE;
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+    expect(s.fake.stops).toHaveLength(0);
+
+    // 止まってから 15 分（4分後ではなく2分後）で挑み、畳んで起こし直す
+    s.clock.now += 2 * MINUTE;
+    expect(await s.pool.settleStalledUsageWakes()).toEqual(['mgr-fold']);
+    expect(s.fake.stops).toEqual(['mgr-fold']);
     await s.pool.stop();
   });
 });

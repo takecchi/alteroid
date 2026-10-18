@@ -236,6 +236,8 @@ describe('古い鍵で枠に当たった担当は、現役の鍵が通るなら�
   it('⭐ report の枝（failure 付きの報告で 429）でも、同じく起こし直す', async () => {
     const s = await setup({ done: false });
     s.rotate();
+    // 背景処理は残さない: 残っていれば、枠で止まってから待ちの上限（15 分）までは畳まずに待つ（#5044。`manager-usage-wake-fold.test.ts`）
+    s.fake.behavior.background = 0;
 
     s.fake.push(failedReport());
     await settle();

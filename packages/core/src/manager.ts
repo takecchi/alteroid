@@ -1883,6 +1883,10 @@ function composeFoldNotice(notice: {
     `（alteroid より: 鍵の入れ替えのため、起こしっぱなしだった背景処理 ${String(notice.backgroundTasks)} 本を` +
     // 待たせず続きを進めさせる（#4902）: 畳んだ背景処理の完了の知らせは新しいセッションに二度と届かず、任意の言い方だと「報告済みで待つだけ」と読まれるため
     'セッションごと畳んで、新しい鍵で起こし直した。この背景処理の結果は二度と届かない（古いセッションと一緒に畳んだ）。' +
+    // 止めたことと途中の出力の在りかを言う（#5044）: 言わないと、まだ走っている古い処理と同じ場所を取り合うやり直しを始めるため
+    '古い背景処理のプロセスは runner が止める（止まるまで1分ほどかかることがある）。' +
+    '途中までの出力は、起こしたときの Bash の結果にある出力ファイルに残っていれば読める。' +
+    '同じ処理をやり直す前に、古いプロセスが残っていないか ps で確かめること。' +
     '待たずに、いま自分で状態を確かめて（CI・作業者の結果・dev サーバ）、続きを進めよ。もう終わっていたなら、そう報告して終えること' +
     foldNoticeCommandsClause(notice.commands) +
     (peerClause === '' ? '' : `。${peerClause}`) +
@@ -3197,6 +3201,11 @@ class Pool implements ManagerPool {
    */
   readonly #usageWakeRetry = new Map<string, { failures: number; nextAt: number }>();
   /**
+   * 鍵の回転の起こし直しを、背景処理を理由に待たせている担当の、待ちの上限の時刻（epoch ms。#5044）。
+   * `#noteUsageWakeOutcome` が次の挑み直しをこの時刻へ寄せるためだけに使い、読んだら下ろす。揮発してよい: 消えても倍々の間隔で挑み直す。
+   */
+  readonly #rotationFoldDueAt = new Map<string, number>();
+  /**
    * `runners()` が `options.resources` 付きで呼ばれ、`resources` が実際に返ってきたときだけ書く
    * （もう1つの由来 `#runners.entries()` は Pool 側で二重に持たない）。
    * `pendingEvents` が `undefined` のときは書かない: 0で埋めると「滞留0」と「観測できていない」の区別が消える。
@@ -3918,9 +3927,32 @@ class Pool implements ManagerPool {
         oldestHeldAt !== undefined &&
         waitStartedAt !== undefined &&
         this.#now() - waitStartedAt >= HELD_FORCE_FOLD_AFTER_MS;
+      // 鍵の回転の起こし直しの待ちの数え始め（#5044）: 枠で止まった時刻と、背景処理待ちに入った時刻の早いほう。
+      // どちらも分からなければ待たない（#4850 の今まで）: 数え始めの無い待ちは、上限が来ないまま古い鍵で居座るため
+      const rotationWaitStartedAt =
+        mode === 'usage-rotation'
+          ? [
+              // 台帳の値を素通しにしない（`ManagerSummary.usageStoppedAt` の doc）: 印が真の参照のため
+              this.#usageStopped.has(managerId) ? record.job.usageStoppedAt : undefined,
+              awaitingSince,
+            ]
+              .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
+              .filter((at) => !Number.isNaN(at))
+              .reduce<number | undefined>(
+                (min, at) => (min === undefined ? at : Math.min(min, at)),
+                undefined,
+              )
+          : undefined;
+      const rotationFoldDueAt =
+        rotationWaitStartedAt === undefined
+          ? undefined
+          : rotationWaitStartedAt + HELD_FORCE_FOLD_AFTER_MS;
       const folded = await this.#foldStaleTokenSession(record, runner, managerId, {
         foldBackgroundAfterWait: waitedLongEnough,
         foldBackgroundIfHeldTokenNotReady: mode === 'usage-rotation',
+        ...(rotationFoldDueAt === undefined || this.#now() >= rotationFoldDueAt
+          ? {}
+          : { rotationFoldDueAt }),
         skipUnchangedDeclineRecord: mode === 'held-delivery' && pollRetry,
       });
       if (folded.declined !== undefined) {
@@ -4148,8 +4180,13 @@ class Pool implements ManagerPool {
     managerId: string,
     options: {
       foldBackgroundAfterWait?: boolean;
-      /** 鍵の回転・枠の起こし直しの回だけ真（#4850）。抱えている古い鍵が ready でなければ、待たずに背景処理ごと畳む。ready なら今までどおり旧セッションへ届ける。 */
+      /** 鍵の回転・枠の起こし直しの回だけ真（#4850）。抱えている古い鍵が ready でなければ、背景処理ごと畳む。ready なら今までどおり旧セッションへ届ける。 */
       foldBackgroundIfHeldTokenNotReady?: boolean;
+      /**
+       * 鍵の回転の起こし直しで、まだ待ちの上限に届いていない回の、上限の時刻（epoch ms。#5044）。
+       * peer 以外の背景処理が残っていれば、この時刻までは畳まずに断る: 背景処理を待つ間、担当は鍵を使わないので枠は焼かず、畳むと結果を失うため。
+       */
+      rotationFoldDueAt?: number;
       /** 見回りの届け直しの回だけ真（#4982）。前に書いた断りと本文が同じなら、断りの decision を書かない（断る判定そのものは変えない）。 */
       skipUnchangedDeclineRecord?: boolean;
     } = {},
@@ -4265,10 +4302,23 @@ class Pool implements ManagerPool {
     // 背景処理だけが理由で、話しかけたい伝言が待ちの上限を過ぎたときは背景処理ごと畳む: 背景処理が終わらない（dev サーバ・見張り）か、
     // 終わったのに静かなセッションへ変化が届かず本数が古いまま残ると、時間では解けず、古い鍵のまま居座るため。
     // 確認待ち・走っているターン・本数が分からない回は畳まない（答えを待っているのはクローンで、分からないものは捨てない）。
-    // 鍵の回転の回は待たない（#4850）: ここへ来るのは抱えている鍵が ready でない回だけ（ready なら下で旧セッションへ流して返る）。冷却中・失効・分からないは同じく畳む側に倒す。
+    // 鍵の回転の回は、peer 以外の背景処理を待ちの上限（`rotationFoldDueAt`）まで待つ（#5044。#4850 は待たなかった）: 待つ間は鍵を使わず枠を焼かない。
+    // 待たずに畳むと、長い検証は鍵が回るたびに途中で失われ、続けて回ると終わらない。上限を過ぎたら、終わらない背景処理（dev サーバ・見張り）とみなして畳む。
+    // ここへ来るのは抱えている鍵が ready でない回だけ（ready なら下で旧セッションへ流して返る）。冷却中・失効・分からないは同じく畳む側に倒す。
+    // peer だけなら待たない: peer は畳まずに預けて続くため（#4734）
+    const peersInBackground = Math.min(
+      state.liveBackgroundPeers ?? 0,
+      state.liveBackgroundTasks ?? 0,
+    );
+    const rotationWaiting =
+      options.foldBackgroundIfHeldTokenNotReady === true &&
+      options.rotationFoldDueAt !== undefined &&
+      blockers.length === 1 &&
+      state.liveBackgroundTasks !== undefined &&
+      state.liveBackgroundTasks - peersInBackground > 0;
     const foldBackground =
       (options.foldBackgroundAfterWait === true ||
-        options.foldBackgroundIfHeldTokenNotReady === true) &&
+        (options.foldBackgroundIfHeldTokenNotReady === true && !rotationWaiting)) &&
       blockers.length === 1 &&
       state.liveBackgroundTasks !== undefined &&
       state.liveBackgroundTasks > 0
@@ -4307,10 +4357,22 @@ class Pool implements ManagerPool {
         heldTokenState === undefined
           ? ''
           : `抱えている古い鍵（${heldTokenId ?? '?'}）は${heldTokenState}ので、そのまま旧セッションへ届けることもしない。`;
-      const declineDecision = `[${managerId}] done の委譲へ送られた本文を、届けずに断った（${staleness}）`;
+      const rotationWaitClause =
+        rotationWaiting && options.rotationFoldDueAt !== undefined
+          ? `鍵の回転の起こし直しは、背景処理が終わるのを待ちの上限（${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分、` +
+            `${new Date(options.rotationFoldDueAt).toISOString()}）まで待つ。終わればそのまま、上限を過ぎれば背景処理ごと畳んで起こし直す（#5044）。`
+          : '';
+      if (rotationWaiting && options.rotationFoldDueAt !== undefined) {
+        // 挑み直しの時刻を上限へ寄せる（`#noteUsageWakeOutcome`）: 倍々の間隔のままだと、上限を最大30分越えて待つため
+        this.#rotationFoldDueAt.set(managerId, options.rotationFoldDueAt);
+      }
+      const declineDecision = rotationWaiting
+        ? `[${managerId}] 鍵の回転の起こし直しを、背景処理が終わるまで待つ（${staleness}）`
+        : `[${managerId}] done の委譲へ送られた本文を、届けずに断った（${staleness}）`;
       const declineGrounds =
         `managerId=${managerId} tokenId=${heldTokenId ?? '（分からない）'} ` +
-        `鍵の状態=${heldTokenState ?? '（聞いていない）'} 畳めない理由=${blockers.join('。')}（#4441）`;
+        `鍵の状態=${heldTokenState ?? '（聞いていない）'} 畳めない理由=${blockers.join('。')}（#4441）` +
+        (rotationWaitClause === '' ? '' : ` ${rotationWaitClause}`);
       const declineRecord = `${declineDecision}\u0000${declineGrounds}`;
       // 見回りの届け直しが前と同じ判定をやり直しただけの回は書かない（#4982）: 新しい判断ではなく、書くと見回りごと（60秒）に同じ行が積まれるため。
       // decision の行は畳まない（#1311）ので、要約も作らず、繰り返しの元（見回りの再判定）の側で書かない。人・クローンの送信と、理由・鍵の状態が変わった回は書く。
@@ -4328,7 +4390,7 @@ class Pool implements ManagerPool {
       const reason =
         `${managerId} は${staleness}。古い鍵のセッションへ流すとまた枠に当たるので、` +
         '畳んで新しい鍵で起こし直したいが、畳めない理由が残っている: ' +
-        `${blockers.join('。')}。${tokenClause}畳んでいないし、送ってもいない。`;
+        `${blockers.join('。')}。${tokenClause}${rotationWaitClause}畳んでいないし、送ってもいない。`;
       return {
         declined: {
           outcome: 'declined',
@@ -4401,7 +4463,8 @@ class Pool implements ManagerPool {
           `managerId=${managerId} liveBackgroundTasks=${String(foldBackground)} 確認待ち=0 ` +
           `鍵の状態=${heldTokenState ?? '（聞いていない）'}` +
           (byRotation
-            ? '（#4850。鍵の回転の起こし直しは背景処理を理由に止めない。待たせると担当が数十分〜数時間止まる）'
+            ? `（#4850 / #5044。鍵の回転の起こし直しは、背景処理を待ちの上限（${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分）までしか待たない` +
+              '（待ち始めが分からない回は待たない）。古い背景処理は runner が止める）'
             : '（#4472。背景処理が終わらない・終わったのに本数が下りないと、古い鍵のまま居座るため）'),
       });
       const commands = redactedBackgroundCommands(state.backgroundTaskCommands);
@@ -6849,13 +6912,21 @@ class Pool implements ManagerPool {
     managerId: string,
     outcome: 'nudged' | 'still-running' | 'gone' | 'skipped',
   ): void {
+    const foldDueAt = this.#rotationFoldDueAt.get(managerId);
+    this.#rotationFoldDueAt.delete(managerId);
     if (outcome === 'skipped') {
       const failures = (this.#usageWakeRetry.get(managerId)?.failures ?? 0) + 1;
       const interval = Math.min(
         USAGE_WAKE_RETRY_BASE_MS * 2 ** (failures - 1),
         USAGE_WAKE_RETRY_MAX_MS,
       );
-      this.#usageWakeRetry.set(managerId, { failures, nextAt: this.#now() + interval });
+      const backoffAt = this.#now() + interval;
+      // 背景処理を待たせている回は、待ちの上限の時刻より後へ延ばさない（#5044）。最短でも1分は空ける
+      const nextAt =
+        foldDueAt === undefined
+          ? backoffAt
+          : Math.min(backoffAt, Math.max(foldDueAt, this.#now() + USAGE_WAKE_RETRY_BASE_MS));
+      this.#usageWakeRetry.set(managerId, { failures, nextAt });
     } else if (outcome !== 'still-running') {
       this.#usageWakeRetry.delete(managerId);
     }

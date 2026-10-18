@@ -1454,8 +1454,12 @@ class Host implements RunnerHost {
       permissionRules: () => this.#permissionRules,
       plugins: () => this.#pluginRefs(),
       onClosed: (outcome) => {
-        // `stop()` は outcome を渡さない（done・停止からの resume は守る）: 落ちた・失効した CLI だけを撃つ側に残すため
-        if (outcome?.status === 'failed' || outcome?.status === 'lost') {
+        // `stop()` は outcome を渡さない（done・停止からの resume は守る）: 落ちた・失効した CLI だけを撃つ側に残すため。
+        // 鍵の付け替えの畳みで背景処理を畳んだ回（`abandonTree`）も撃つ側に残す（#5044）: 同じ担当がすぐ resume で戻り、守ると畳んだはずの背景処理が走り続けて、やり直しと取り合うため
+        if (
+          outcome !== undefined &&
+          ('abandonTree' in outcome || outcome.status === 'failed' || outcome.status === 'lost')
+        ) {
           for (const pid of spawnedPids) {
             // 所有者が今も自分の pid だけ入れる: CAP で忘れた・使い回された pid を足すと集合が育つ・別の CLI を撃つため
             if (this.#pidOwnerManagerId.get(pid) === managerId)
@@ -2234,6 +2238,9 @@ export type HandOverResumeConfigDir = (dir: string, uid: number, gid: number) =>
 
 type DelegationProcessHandle = AgentChildProcess;
 
+/** セッションの閉じ方。`status` は `#finish()` の終わり方、`abandonTree` は鍵の付け替えの畳みで CLI の背景処理を畳んだ回（#5044）。 */
+type RunnerSessionCloseOutcome = { status: JobStatus } | { abandonTree: true };
+
 interface RunnerSessionOptions {
   workerToolWatchClock?: WorkerToolWatchClock;
   /** 鍵の付け替えのための畳みで peer を預けたとき、host へ渡す（#4734）。 */
@@ -2264,8 +2271,9 @@ interface RunnerSessionOptions {
   // 値で渡さない（関数で受ける）: 資格が届く・外れるたびに開閉が変わるため
   peer?: () => RunnerPeerOptions | undefined;
   managerTools?: RunnerManagerToolsOptions;
-  // 終わり方は `#finish()` を通ったときだけ渡る（`stop()` は渡さない）: 落ちた・失効した CLI の木と、人間・畳みの停止の木を host が見分けるため
-  onClosed: (outcome?: { status: JobStatus }) => void;
+  // 終わり方は `#finish()` を通ったときだけ渡る（`stop()` は渡さない）: 落ちた・失効した CLI の木と、人間・畳みの停止の木を host が見分けるため。
+  // 例外は鍵の付け替えの畳みで背景処理を畳んだ回（`abandonTree`。#5044）: 結果の受け手が居なくなった木で、守ると畳んだ後も走り続けるため
+  onClosed: (outcome?: RunnerSessionCloseOutcome) => void;
   outboxRoot: string;
   outboxStagedRoot: string;
   rescueStagedRoot: string;
@@ -2334,7 +2342,7 @@ class RunnerSession {
   readonly #mcpServers: () => McpServers | undefined;
   readonly #permissionRules: () => readonly string[];
   readonly #pluginRefs: () => readonly AgentClonePlugin[];
-  readonly #onClosed: (outcome?: { status: JobStatus }) => void;
+  readonly #onClosed: (outcome?: RunnerSessionCloseOutcome) => void;
   readonly #outboxRoot: string;
   readonly #outboxStagedRoot: string;
   readonly #rescueStagedRoot: string;
@@ -2796,6 +2804,9 @@ class RunnerSession {
 
     // `#settleAll` より前に状態を控える: 控えずに `#status` を読むと確認が解放された後の `running` を報告が名乗ってしまうため
     const statusAtStop = this.#sdkSession.status;
+    // 鍵の付け替えの畳みで CLI の背景処理（peer は数えない。預けて続くため）が残っていたら、その木を撃つ側へ回す（#5044）。閉じる前に数える
+    const abandonTree =
+      options.keepPeers === true && this.#sdkSession.liveBackgroundTasks.length > 0;
 
     // `result` を待たずに渡す: この経路で畳まれたぶんは台帳に1行も残らず、渡し損ねたら二度と取れないため
     await this.#flushUsage();
@@ -2854,7 +2865,7 @@ class RunnerSession {
       this.#rescueOnClose();
     }
     await this.#noteWorktreesOutsideScratchConvention();
-    this.#onClosed();
+    this.#onClosed(abandonTree ? { abandonTree: true } : undefined);
   }
 
   // 退避から漏れた作業ツリーがあることを note で知らせる（#4681）。打ち切られた分は退避されず、知らせないと人間もクローンも気づけないため
