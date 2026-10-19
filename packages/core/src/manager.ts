@@ -6950,9 +6950,17 @@ class Pool implements ManagerPool {
    * 使える鍵が在れば回し手が回して `resumeStoppedByUsage()` を呼び、新しい鍵で続きから起こし直される。無ければ、鍵が戻った時点の同じ呼び出しが拾う。
    * 新しい経路を作らず、`usage_notice` と同じ口（`#observeForTokenRotation`）に乗せる。投げない（口が握る）。
    */
-  async #requestRotationForFailure(managerId: string, text: string): Promise<void> {
-    await this.#observeForTokenRotation(managerId, { notice: { kind: 'reached', text } });
-    await this.#wakeIfHeldTokenStale(managerId);
+  async #requestRotationForFailure(
+    managerId: string,
+    text: string,
+    heldFingerprint: string | undefined = this.#sessionTokenFingerprintOf(managerId),
+  ): Promise<void> {
+    await this.#observeForTokenRotation(
+      managerId,
+      { notice: { kind: 'reached', text } },
+      heldFingerprint,
+    );
+    await this.#wakeIfHeldTokenStale(managerId, heldFingerprint);
   }
 
   /**
@@ -6961,11 +6969,28 @@ class Pool implements ManagerPool {
    * 現役の鍵がもう通る（`ready`）と分かっているときだけ起こす: 通らないなら起こしても同じ枠に当たる。
    * 回転の出来事で既に起こされて印が下りていれば何もしない。投げない（判定に失敗したら起こさず、印を残す）。
    */
-  async #wakeIfHeldTokenStale(managerId: string): Promise<void> {
+  async #wakeIfHeldTokenStale(
+    managerId: string,
+    // 像を外した後（`closed` / `resume_failed` の枝）に呼ぶときは、外す前に控えた指紋を渡す: 像と一緒に引き取りの指紋が消えるため
+    heldFingerprint: string | undefined = this.#sessionTokenFingerprintOf(managerId),
+  ): Promise<void> {
     if (this.#stopped || !this.#usageStopped.has(managerId)) return;
     const held = this.#tokenIdentities.get(managerId)?.generation;
     const identity = this.#tokenIdentity?.();
-    if (identity === undefined || held === undefined || held >= identity.generation) return;
+    if (identity === undefined) return;
+    // 世代を覚えていない（再起動で引き取っただけの）セッションは、鍵の指紋で比べる（#4643 の畳みの判定と同じ）: 世代だけで比べると
+    // 「分からない」で素通りし、回し手も古い指紋の観測を stale として無視するので、引き取りの借りを使い切った後は次の回転まで誰も起こさない
+    const heldLabel =
+      held !== undefined
+        ? held < identity.generation
+          ? `世代 ${String(held)}`
+          : undefined
+        : heldFingerprint !== undefined &&
+            identity.fingerprint !== undefined &&
+            heldFingerprint !== identity.fingerprint
+          ? `再起動で引き取ったセッションの鍵。指紋 ${heldFingerprint} が現役と食い違う`
+          : undefined;
+    if (heldLabel === undefined) return;
     const active = identity.generation;
     if (this.#tokenAvailability === undefined) return;
     const availability = await this.#tokenAvailability(identity.tokenId).catch(() => undefined);
@@ -6974,7 +6999,7 @@ class Pool implements ManagerPool {
     if (!this.#usageStopped.has(managerId)) return;
     await this.#journal({
       type: 'decision',
-      decision: `[${managerId}] 抱えていた古い鍵（世代 ${String(held)}）で枠に当たったが、現役の鍵（世代 ${String(active)}）はもう通るので、回転の出来事を待たずに起こし直す`,
+      decision: `[${managerId}] 抱えていた古い鍵（${heldLabel}）で枠に当たったが、現役の鍵（世代 ${String(active)}）はもう通るので、回転の出来事を待たずに起こし直す`,
       grounds:
         `managerId=${managerId} tokenId=${identity.tokenId} 鍵の状態=ready ` +
         '（#4980。回し手は古い世代の観測を無視するので、待っても次の回転まで起こされない）',
@@ -10635,12 +10660,15 @@ class Pool implements ManagerPool {
         } else {
           await this.#clearUsageStoppedMark(event.managerId);
         }
+        // 像を外す前に指紋を控える（`closed` の枝と同じ）
+        const heldFingerprintAtRetire = this.#sessionTokenFingerprintOf(event.managerId);
         this.#retire(event.managerId);
         // 印を立てたら、使える鍵が在れば今すぐ起こし直してもらう（`closed` の枝と同じ）: `#retire` の後に置く理由も同じ。
         if (quotaReason) {
           await this.#requestRotationForFailure(
             event.managerId,
             reasonNotice?.kind === 'reached' ? reasonNotice.text : event.reason,
+            heldFingerprintAtRetire,
           );
         }
         return;
@@ -10946,10 +10974,16 @@ class Pool implements ManagerPool {
             this.#emit(event.managerId, 'report', closedNote);
           }
         }
+        // 像を外す前に控える: 再起動で引き取っただけのセッションの鍵は、像の上の指紋でしか分からない（`#wakeIfHeldTokenStale`）
+        const heldFingerprintAtClose = this.#sessionTokenFingerprintOf(event.managerId);
         this.#retire(event.managerId);
         // 印を立てた直後に、使える鍵が在れば今すぐ起こし直してもらう（#4850）。`#retire` の後に置く: 回し手が鍵を回して `resumeStoppedByUsage()` を呼ぶと `send()` が像を載せ直すので、手前だと `#retire` がそれを消す。
         if (markedByClosed !== undefined && this.#usageStopped.has(event.managerId)) {
-          await this.#requestRotationForFailure(event.managerId, markedByClosed);
+          await this.#requestRotationForFailure(
+            event.managerId,
+            markedByClosed,
+            heldFingerprintAtClose,
+          );
         } else if (
           (event.status === 'failed' || event.status === 'lost') &&
           this.#usageStopped.has(event.managerId)
@@ -10957,7 +10991,7 @@ class Pool implements ManagerPool {
           // 印が既に立っていた担当（古い鍵のまま背景処理を待たされていた回、#5044）も、セッションが終わった時点で起こし直す:
           // 待つ理由（背景処理）はセッションと一緒に消えたのに、周回の掃きは待ちの上限（15 分）まで拾わず、その間 failed のまま止まる。
           // 落ちた理由の文で絞らない: 背景処理の完了で古い鍵のターンが起き、`exited with code 1` だけを残して落ちる形が在る（2026-10-19 HOUSE-17・PROFILE-2）。
-          await this.#wakeIfHeldTokenStale(event.managerId);
+          await this.#wakeIfHeldTokenStale(event.managerId, heldFingerprintAtClose);
         }
         // 枠でセッションごと落ちた回は `report` が出ず、ここしか通らない。`#retire` の後で呼ぶ: 起こし直しは `send()` に相乗りし、像が無ければ台帳から読み直すので resume できる。逆順だと `#retire` が `send()` の載せ直した像を消す。
         await this.#settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
@@ -11407,15 +11441,15 @@ class Pool implements ManagerPool {
   async #observeForTokenRotation(
     managerId: string,
     observation: Omit<TokenRotatorObservation, 'observedBy'>,
+    // 像を外した後に呼ぶときに、外す前に控えた指紋（`#wakeIfHeldTokenStale` と同じ）
+    heldFingerprint: string | undefined = this.#sessionTokenFingerprintOf(managerId),
   ): Promise<void> {
     if (this.#onUsageObservation === undefined) return;
     const identity = this.#tokenIdentities.get(managerId);
     // 身元が無い（再起動で引き取っただけの）セッションは、runner が名乗る鍵の指紋を添える（#4643）: 添えないと回し手は「分からない」を
     // 現役の通知として扱い、回したばかりの鍵をもう一度回す。成功の観測には添えない: そちらは id と世代のある観測しか照合しない生産者へ渡る
     const fingerprint =
-      identity === undefined && observation.succeeded !== true
-        ? this.#sessionTokenFingerprintOf(managerId)
-        : undefined;
+      identity === undefined && observation.succeeded !== true ? heldFingerprint : undefined;
     const observedBy = identity ?? (fingerprint === undefined ? undefined : { fingerprint });
     // 回し手へ渡す前後に印を打つ（#4485）: 利用上限で担当が一斉に落ちた回（2026-10-13T16:52Z〜）に、`rate_limit` の後で
     // 印の無い停止が続いた。回し手（鍵の回転の判断・配布・セッションの作り直し）が止めていたなら、窓に `-done` が無いまま残る
