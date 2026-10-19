@@ -10946,6 +10946,14 @@ class Pool implements ManagerPool {
         // 印を立てた直後に、使える鍵が在れば今すぐ起こし直してもらう（#4850）。`#retire` の後に置く: 回し手が鍵を回して `resumeStoppedByUsage()` を呼ぶと `send()` が像を載せ直すので、手前だと `#retire` がそれを消す。
         if (markedByClosed !== undefined && this.#usageStopped.has(event.managerId)) {
           await this.#requestRotationForFailure(event.managerId, markedByClosed);
+        } else if (
+          (event.status === 'failed' || event.status === 'lost') &&
+          this.#usageStopped.has(event.managerId)
+        ) {
+          // 印が既に立っていた担当（古い鍵のまま背景処理を待たされていた回、#5044）も、セッションが終わった時点で起こし直す:
+          // 待つ理由（背景処理）はセッションと一緒に消えたのに、周回の掃きは待ちの上限（15 分）まで拾わず、その間 failed のまま止まる。
+          // 落ちた理由の文で絞らない: 背景処理の完了で古い鍵のターンが起き、`exited with code 1` だけを残して落ちる形が在る（2026-10-19 HOUSE-17・PROFILE-2）。
+          await this.#wakeIfHeldTokenStale(event.managerId);
         }
         // 枠でセッションごと落ちた回は `report` が出ず、ここしか通らない。`#retire` の後で呼ぶ: 起こし直しは `send()` に相乗りし、像が無ければ台帳から読み直すので resume できる。逆順だと `#retire` が `send()` の載せ直した像を消す。
         await this.#settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));

@@ -248,6 +248,62 @@ describe('古い鍵で枠に当たった担当は、現役の鍵が通るなら�
     await s.pool.stop();
   });
 
+  describe('背景処理を待たされていた担当が、そのまま failed で終わったら、待ちの上限を待たずに起こし直す', () => {
+    // 2026-10-19 の HOUSE-17・PROFILE-2・PARTY-2: 古い鍵のまま枠で止まり、起こし直しは背景処理 1 本を待って断られ、
+    // その後セッションが failed で終わっても15分の上限まで誰も起こさなかった。
+    async function waitingForBackground(currentKey: { ready: boolean } = { ready: true }) {
+      const s = await setup({
+        done: true,
+        availability: async (tokenId) =>
+          tokenId === 'tok-279' && currentKey.ready ? 'ready' : 'cooling',
+      });
+      s.rotate();
+      s.fake.push(failedReport());
+      await settle();
+      // 前提: 起こし直しは背景処理を待って断られ、印は立ったまま
+      expect(s.fake.resumes).toHaveLength(0);
+      expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeDefined();
+      return s;
+    }
+
+    it.each([
+      ['理由が枠の文でない（exited with code 1）', 'Error: Claude Code process exited with code 1'],
+      ['理由が枠の文', `Error: Claude Code returned an error result: ${LIMIT_TEXT}`],
+    ])('⭐ %s', async (_label, reason) => {
+      const s = await waitingForBackground();
+      s.fake.behavior.background = 0;
+
+      s.fake.push({ type: 'closed', managerId: JOB.id, status: 'failed', reason } as RunnerEvent);
+      await settle();
+
+      expect(s.fake.resumes).toHaveLength(1);
+      expect(s.fake.resumes[0]?.sessionId).toBe('sess-1');
+      expect(await wakeDecisions(s)).toHaveLength(2);
+      expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeUndefined();
+      await s.pool.stop();
+    });
+
+    it('現役の鍵がもう通らないなら起こさず、印を残す', async () => {
+      const currentKey = { ready: true };
+      const s = await waitingForBackground(currentKey);
+      s.fake.behavior.background = 0;
+      currentKey.ready = false;
+
+      s.fake.push({
+        type: 'closed',
+        managerId: JOB.id,
+        status: 'failed',
+        reason: 'Error: Claude Code process exited with code 1',
+      } as RunnerEvent);
+      await settle();
+
+      expect(s.fake.resumes).toHaveLength(0);
+      expect(await wakeDecisions(s)).toHaveLength(1);
+      expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeDefined();
+      await s.pool.stop();
+    });
+  });
+
   it('現役の鍵が cooling なら起こさず、印を残す', async () => {
     const s = await setup({ done: true, availability: async () => 'cooling' });
     s.rotate();
