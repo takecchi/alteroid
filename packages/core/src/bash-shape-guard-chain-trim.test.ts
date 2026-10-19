@@ -151,6 +151,8 @@ describe('断る形の要約は、全部の形を網羅する（#5017）', () =>
     'git-reset',
     'git-force-push',
     'git-rebase',
+    'git-take-side',
+    'mv-across-workspaces',
     'no-verify',
     'gh-merge-auto',
     'cd-git',

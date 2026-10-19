@@ -729,6 +729,8 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
     - `git push` の force 系（`--force`・`--force-with-lease`・`-f`・`+refspec`）→ 新しいコミットを積む、書き換えるなら新しい枝と PR
     - `git rebase`（`git pull --rebase` を含む）→ `git merge origin/main`
       - `git rebase --abort` / `--quit` は通す（#4958）
+    - 衝突を片側の版へ丸ごと寄せる形（merge・pull の `-X theirs` / `-X ours` / `-s ours`、cherry-pick・revert の `-X theirs` / `-X ours`、`git checkout` / `git restore` の `--theirs` / `--ours`）→ 普通に取り込み、衝突の塊を Read で読んで Edit で1つずつ解く。片側を丸ごと捨てるのが目的なら、捨てる前に依頼者へ確かめる（#5056）
+    - 持ち主の違う作業場（`/tmp/mgr-<id>`・`/workspace/mgr-<id>`）をまたぐ `mv` → 元は動かさない。コミットは元のツリーで push して clone し直し、コミットしていないファイルは `cp` で写す（#5056。`mv` 全般は断らない）
     - `--no-verify`・`git commit -n` → フックが落ちた理由を直す
     - `gh pr merge --auto` → `timeout 530 gh run watch <id> --exit-status` で前面で待ち、緑なら `--match-head-commit` を付けてマージ
   - **歯を開けた器では、この一覧を担当と作業者のシステムプロンプトにも載せる**（#5017）。打ってから断られるのではなく、打つ前に知らせるため。一覧は歯の定義（`bash-shape-guard.ts` の要約）から生成し、形を足して要約を書き忘れると型検査で落ちる。待ちの歯（`ALTEROID_BASH_GUARD` が `ask` / `deny`）の形も、同じく載せる。歯が `off` の器には載せない（プロンプトは1文字も変わらない）

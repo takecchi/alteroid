@@ -21,6 +21,8 @@ export type BashShapeForm =
   | 'git-reset'
   | 'git-force-push'
   | 'git-rebase'
+  | 'git-take-side'
+  | 'mv-across-workspaces'
   | 'no-verify'
   | 'gh-merge-auto'
   | 'cd-git'
@@ -60,6 +62,10 @@ const REASONS: Record<Exclude<BashShapeForm, 'pipe-masks-exit'>, string> = {
     '`git push` の強制（`--force`・`--force-with-lease`・`--force-if-includes`・`-f`・`-uf` のような組み合わせ・`+` で始まる refspec）は通らないので、新しいコミットを積んで普通に `git push` し、履歴を書き換える必要があるなら新しい枝を切って PR にすること。',
   'git-rebase':
     '`git rebase`（`git pull --rebase`・`git pull -r` を含む）は通らないので、最新の main を取り込むなら `git merge origin/main` を使うこと（途中で止まった rebase から抜ける `git rebase --abort` は通る）。',
+  'git-take-side':
+    '衝突を片側の版へ丸ごと寄せる形（`-X theirs`・`-X ours`・`-s ours`・`git checkout --theirs`・`git restore --ours` など）は通らないので、選択肢を外して `git merge origin/main` のように普通に取り込み、衝突したファイルを Read で読んで、衝突の塊ごとに Edit で解くこと（片側の変更を丸ごと捨てるのが目的のときだけは、捨てる前に依頼者へ確かめる）。',
+  'mv-across-workspaces':
+    '別の担当の作業場（`/tmp/mgr-<id>`・`/workspace/mgr-<id>`）をまたいで `mv` で動かす形は通らないので、元の作業ツリーは動かさずに残し、要るものを取り出すこと: コミットは元のツリーで `git -C <元の絶対パス> push` してから自分の作業場へ clone し直し、コミットしていないファイルは `cp` で自分の作業場へ写す（元は消さない）。',
   'no-verify':
     '`--no-verify`（git のどの下位命令でも）と `git commit -n` は通らないので、フックが落ちた理由を直してから、付けずに打ち直すこと。',
   'gh-merge-auto':
@@ -111,6 +117,15 @@ export const BASH_SHAPE_SUMMARIES: Record<BashShapeForm, { shape: string; instea
       '新しいコミットを積んで普通に `git push` する。書き換えが要るなら新しい枝を切って PR にする',
   },
   'git-rebase': { shape: '`git rebase`・`git pull --rebase`', instead: '`git merge origin/main`' },
+  'git-take-side': {
+    shape: '`git merge -X theirs`・`-X ours`・`-s ours`・`git checkout --theirs`・`--ours`',
+    instead: '普通に取り込み、衝突の塊を Read で読んで Edit で1つずつ解く',
+  },
+  'mv-across-workspaces': {
+    shape: '別の担当の作業場（`/tmp/mgr-<id>`）をまたぐ `mv`',
+    instead:
+      '元は動かさない。コミットは元のツリーで push して clone し直し、コミットしていないファイルは `cp` で写す',
+  },
   'no-verify': {
     shape: '`--no-verify`・`git commit -n`',
     instead: 'フックが落ちた理由を直して、付けずに打ち直す',
@@ -642,12 +657,39 @@ function isForcePush(rest: readonly string[]): boolean {
   );
 }
 
+// 衝突を片側の版へ丸ごと寄せる戦略か（`-X theirs`・`-Xours`・`--strategy-option=theirs`・`-s ours`・`--strategy=ours`）。
+// `-s` を戦略として読むのは merge・pull だけ（`shortStrategy`）: cherry-pick・revert の `-s` は `--signoff` のため
+function takesSideByStrategy(opts: readonly string[], shortStrategy: boolean): boolean {
+  for (let i = 0; i < opts.length; i += 1) {
+    const a = opts[i] ?? '';
+    let option: string | undefined;
+    if (a === '-X' || a === '--strategy-option') option = opts[i + 1];
+    else if (a.startsWith('--strategy-option=')) option = a.slice('--strategy-option='.length);
+    else if (/^-X./.test(a)) option = a.slice(2);
+    if (option === 'theirs' || option === 'ours') return true;
+    let strategy: string | undefined;
+    if (a === '--strategy' || (shortStrategy && a === '-s')) strategy = opts[i + 1];
+    else if (a.startsWith('--strategy=')) strategy = a.slice('--strategy='.length);
+    else if (shortStrategy && /^-s./.test(a)) strategy = a.slice(2);
+    if (strategy === 'ours') return true;
+  }
+  return false;
+}
+
 function inspectGit(args: readonly string[]): FixedReasonForm | undefined {
   const g = gitSubcommandOf(args);
   if (g === undefined) return undefined;
   const dd = g.rest.indexOf('--');
   const opts = dd < 0 ? g.rest : g.rest.slice(0, dd);
   if (opts.includes('--no-verify')) return 'no-verify';
+  if (
+    ((g.sub === 'merge' || g.sub === 'pull') && takesSideByStrategy(opts, true)) ||
+    ((g.sub === 'cherry-pick' || g.sub === 'revert') && takesSideByStrategy(opts, false)) ||
+    ((g.sub === 'checkout' || g.sub === 'restore') &&
+      opts.some((a) => a === '--theirs' || a === '--ours'))
+  ) {
+    return 'git-take-side';
+  }
   switch (g.sub) {
     case 'reset':
       return 'git-reset';
@@ -668,6 +710,35 @@ function inspectGit(args: readonly string[]): FixedReasonForm | undefined {
     default:
       return undefined;
   }
+}
+
+// 作業場の持ち主（`/tmp/mgr-<8桁>`・`/tmp/mgr-<8桁>-wt1`・`/workspace/mgr-<8桁>` の8桁）。作業場の外のパスは持ち主なし
+const WORKSPACE_OWNER_RE = /^(?:\/tmp|\/workspace)\/mgr-([0-9a-f]{8})(?=[-/]|$)/;
+
+// 持ち主の違う作業場をまたぐ `mv` だけを断る（後継が前任の作業ツリーを自分の作業場へ引っ越す形。2026-10-19 PROFILE-3）。
+// `mv` 全般は断らない: 自分の作業場の中の改名・移動は普通の作業で、分類器に止められた実例も無いため
+function inspectMv(args: readonly string[]): FixedReasonForm | undefined {
+  const operands: string[] = [];
+  let optionsEnded = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    if (!optionsEnded && a === '--') {
+      optionsEnded = true;
+    } else if (!optionsEnded && (a === '-t' || a === '--target-directory')) {
+      operands.push(args[i + 1] ?? '');
+      i += 1;
+    } else if (!optionsEnded && a.startsWith('--target-directory=')) {
+      operands.push(a.slice('--target-directory='.length));
+    } else if (!optionsEnded && (a === '-S' || a === '--suffix')) {
+      i += 1;
+    } else if (optionsEnded || !a.startsWith('-')) {
+      operands.push(a);
+    }
+  }
+  const owners = new Set(
+    operands.flatMap((operand) => WORKSPACE_OWNER_RE.exec(operand)?.[1] ?? []),
+  );
+  return owners.size >= 2 ? 'mv-across-workspaces' : undefined;
 }
 
 // `gh` の先頭の位置引数（`pr merge` など）。`-R <repo>` は読み飛ばす
@@ -1073,6 +1144,9 @@ export function inspectBashShape(
     } else if (word.name === 'gh') {
       const ghForm = inspectGh(word.args);
       if (ghForm !== undefined) return blocked(ghForm);
+    } else if (word.name === 'mv') {
+      const mvForm = inspectMv(word.args);
+      if (mvForm !== undefined) return blocked(mvForm);
     } else if (depth === 0 && SHELLS.has(word.name)) {
       const script = shellScriptOperand(word.rawArgs);
       if (script !== undefined) {

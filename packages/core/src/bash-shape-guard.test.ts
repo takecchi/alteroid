@@ -232,7 +232,9 @@ describe('inspectBashShape: 断らないもの（誤検知の防ぎ）', () => {
     'git rebase --abort',
     'git rebase --quit',
     'git -C /tmp/x rebase --abort',
-    'git pull -Xtheirs origin main',
+    // `-X` の値の中の `r` を rebase の `-r` と読まない。元は `-Xtheirs` で測っていたが、片側寄せとして git-take-side で止めるようにしたので、
+    // 値に `r` を含み片側へ寄せない `renormalize` へ替えた（`-Xtheirs` が rebase ではなく git-take-side になることは bash-shape-guard-take-side-mv.test.ts で測る）
+    'git pull -Xrenormalize origin main',
     'git pull origin main',
     'git push --follow-tags origin main',
     'git push --force-with-leasex',
