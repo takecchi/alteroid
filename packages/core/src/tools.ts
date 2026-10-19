@@ -5337,8 +5337,21 @@ export function createCloneTools(context: ToolContext) {
               `${id} は既に片付けてある（読めない形で入っているため、いつ・どう片付けたかは分からない）。`,
             );
           }
+          // 読み直した行の形どおりに言う: 消えていた（保持上限で刈られた・会話の取り消しで消えた）回と、閉じていない回を「片付けてある」に潰さないため
+          if (after === null) {
+            return text(
+              `${await describeCommitmentNotOnLedger(stores, id)}` +
+                '（確かめた直後に台帳から無くなっていた）。この呼びでは閉じていない。',
+            );
+          }
+          if (after.closedAt === undefined) {
+            return text(
+              `${id} は閉じられなかった（台帳には未了のまま在るが、閉じる書き込みが通らなかった）。` +
+                'commitment_list で確かめてから、もう一度 commitment_close を試すこと。',
+            );
+          }
           return text(
-            `${id} は既に ${after?.closedAt ?? '不明な時刻'} に片付けてある（${after?.closedReason ?? '理由の記録なし'}）。`,
+            `${id} は既に ${after.closedAt} に片付けてある（${after.closedReason ?? '理由の記録なし'}）。`,
           );
         }
         // 自分で閉じたことは日誌に残す: 台帳の片付き行は保持上限で物理削除されうるので、日誌の記録が唯一の手掛かりになるため
@@ -5494,10 +5507,31 @@ export function createCloneTools(context: ToolContext) {
         }
         const before = existing.body;
         if (!(await stores.commitments.editBody(id, body, new Date().toISOString(), 'clone'))) {
-          const after = await stores.commitments.get(id);
+          // 読み直した行の形どおりに言う（commitment_close と同じ）。読めない形になっていても道具ごと落とさない
+          let after: Commitment | null;
+          try {
+            after = await stores.commitments.get(id);
+          } catch (error) {
+            if (!(error instanceof UnreadableCommitmentError)) throw error;
+            return text(
+              `${describeUnreadableCommitment(error)}（直す直前に読めない形になっていた）。この呼びでは直していない。`,
+            );
+          }
+          if (after === null) {
+            return text(
+              `${await describeCommitmentNotOnLedger(stores, id)}` +
+                '（確かめた直後に台帳から無くなっていた）。この呼びでは直していない。',
+            );
+          }
+          if (after.closedAt === undefined) {
+            return text(
+              `${id} は直せなかった（台帳には未了のまま在るが、書き直しが通らなかった）。` +
+                'commitment_list で確かめてから、もう一度 commitment_edit を試すこと。',
+            );
+          }
           return text(
-            `${id} は既に ${after?.closedAt ?? '不明な時刻'} に片付けてある` +
-              `（${after?.closedReason ?? '理由の記録なし'}）ので直せない。` +
+            `${id} は既に ${after.closedAt} に片付けてある` +
+              `（${after.closedReason ?? '理由の記録なし'}）ので直せない。` +
               '片付いた行を書き直したいなら、commitment_open で新しく載せること。',
           );
         }
