@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 
 import { LoadError } from '~/components/load-error';
-import { Button, Spinner, cn } from '@alteroid/ui';
+import { ApprovalConversation, Button, Spinner } from '@alteroid/ui';
 import { useApprovalTrace, useConversation } from '@alteroid/swr';
 import { formatDateTime, journalTypeLabel, redactBody } from '@alteroid/logic';
 import type { PendingApproval } from '@alteroid/logic';
@@ -38,8 +38,11 @@ export function ApprovalEntry({
   bulkError,
   bulkBusy,
   onSendingChange,
+  conversationShownAbove = false,
 }: {
   approval: PendingApproval;
+  /** 一覧で上のカードが同じ会話を既に出している（会話を繰り返さない）。 */
+  conversationShownAbove?: boolean;
   /**
    * まとめて送るための下書き。**未回答の画面（`approvals.tsx`）だけが渡す。** 回答済みの画面
    * （`approvals-answered.tsx`）は決着した件だけを出すので渡さない（カードが自前で持つ）。
@@ -93,6 +96,8 @@ export function ApprovalEntry({
             <p className="text-[11px] text-muted-foreground italic">
               この確認は会話に紐づいていない（マネージャー発・内部ターンには紐づけられる会話が存在しない）
             </p>
+          ) : conversationShownAbove ? (
+            <SameConversationNote conversationId={approval.conversationId} />
           ) : (
             <ConversationPanel conversationId={approval.conversationId} />
           )}
@@ -245,8 +250,8 @@ const TRACE_MISSING: Record<string, string> = {
  * `approvalId` が積まれているが、
  * `packages/core/src/conversation.ts` の `toMessage()` はそれを
  * `ConversationMessage` へ写していない——だから `GET /conversations/:id`
- * の応答にも無く、この画面までは届いていない。ここは会話全体を古い順に
- * 出すだけで、どの発言がこの確認への回答かは特定しない。時刻の近さで
+ * の応答にも無く、この画面までは届いていない。ここは会話を古い順に
+ * 出すだけで（既定は直近の数件。開けば取れた全部）、どの発言がこの確認への回答かは特定しない。時刻の近さで
  * 「この返答はこの確認への返答だ」と決めつけない。
  */
 function ConversationPanel({ conversationId }: { conversationId: string }) {
@@ -295,37 +300,43 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
     );
   }
 
-  // ④ 在る。
+  // ④ 在る。直近の数件と、長い発言の頭だけを出す（畳み方は `ApprovalConversation` の doc）。
   return (
     <div>
       {staleNote}
-      <p className="mb-2 text-[11px] font-semibold text-muted-foreground">この確認が上がった会話</p>
-      {conversation.data?.reachedStart === false && (
-        <p className="mb-2 text-[11px] text-muted-foreground italic">
-          窓が会話の先頭に届いていないので、取れた発言だけを出している
-        </p>
-      )}
-      <ul className="flex flex-col gap-2">
-        {messages.map((message) => (
-          <li
-            key={message.id}
-            className={cn(
-              'rounded border border-border p-2 text-xs break-words whitespace-pre-wrap',
-              message.role === 'inbound' ? 'bg-background' : 'bg-muted',
-            )}
-          >
-            <span className="mr-1 text-[10px] text-muted-foreground">
-              {message.role === 'inbound' ? '人間' : 'クローン'}
-            </span>
-            {redactBody(message.text)}
-            {!!message.attachments?.length && (
-              <span className="block text-[11px] text-muted-foreground">
-                {attachmentNote(message.attachments)}
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
+      <ApprovalConversation
+        messages={messages.map((message) => ({
+          id: message.id,
+          role: message.role,
+          // 伏せてから切る: 切った後では秘密の形が崩れて伏せ損なう
+          text: redactBody(message.text),
+          note: message.attachments?.length ? attachmentNote(message.attachments) : undefined,
+        }))}
+        reachedStart={conversation.data?.reachedStart !== false}
+        footer={<OpenInChat conversationId={conversationId} />}
+      />
+    </div>
+  );
+}
+
+/**
+ * 同じ会話の確認が一覧に並ぶとき、2件目からは会話を繰り返さない。同じ長い会話が
+ * カードごとに付いて、確認そのものが会話に埋もれるため。開けばここにも出せる。
+ */
+function SameConversationNote({ conversationId }: { conversationId: string }) {
+  const [open, setOpen] = useState(false);
+  if (open) return <ConversationPanel conversationId={conversationId} />;
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 text-[11px] text-muted-foreground">
+      <span className="italic">この確認が上がった会話は、上の確認と同じ</span>
+      <button
+        type="button"
+        className="text-primary hover:underline"
+        aria-expanded={false}
+        onClick={() => setOpen(true)}
+      >
+        ここにも出す
+      </button>
       <OpenInChat conversationId={conversationId} />
     </div>
   );
