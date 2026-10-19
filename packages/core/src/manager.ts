@@ -3972,10 +3972,20 @@ class Pool implements ManagerPool {
         if (waitedLongEnough && folded.stuck !== undefined) onStuck?.(folded.stuck);
         // 断った本文を捨てない: 呼び手が台帳で追って送り直すしかなく、追い損ねた伝言は誰にも届かないまま消えるため。
         if (holdable) {
+          // 畳めない理由が背景処理だけなら、待ちの上限で畳んで届ける。その時刻を返事で言う: 言わないと、呼び手はいつ届くか分からず、
+          // 背景処理ごと捨てる manager_stop → manager_start を選ぶ（2026-10-19 に4回。どれも上限の前に手で止めた）
+          const backgroundOnly =
+            folded.stuck !== undefined &&
+            folded.stuck.blockers.length === 1 &&
+            (folded.stuck.backgroundTasks ?? 0) > 0;
+          const foldDueAt = backgroundOnly
+            ? this.#heldFoldDueAt(oldestHeldAt, awaitingSince)
+            : undefined;
           return await this.#holdMessage(
             record,
             message,
             folded.declinedReason ?? folded.declined.detail,
+            foldDueAt,
           );
         }
         return folded.declined;
@@ -4503,10 +4513,25 @@ class Pool implements ManagerPool {
    * 届けられない伝言を台帳に預かる。上限（`HELD_MESSAGES_MAX_COUNT` / `HELD_MESSAGES_MAX_CHARS`）を超えるなら預からず断る。
    * 書けなかったら預かったと言わない（台帳が正で、言った後に消えると呼び手は送り直す機会を失う）。
    */
+  /**
+   * 背景処理だけが理由で預かった伝言を、遅くともいつ畳んで届けるか（epoch ms）。見回りの届け直し（`#deliverHeld`）が畳む時刻
+   * ＝ 最初の預かりと背景処理待ちに入った時刻の早いほう＋上限（`#send` の `waitedLongEnough` と同じ数え方）。これから預かる伝言は、いまを預かりの時刻とする。
+   * 鍵の回転の起こし直しの上限（枠で止まった時刻から数える）は混ぜない: 挑み直しの状態が無い担当には効かず、「遅くとも」が守れない。
+   * そちらが先に畳めば、この時刻より早く届くだけである。
+   */
+  #heldFoldDueAt(oldestHeldAt: string | undefined, awaitingSince: string | undefined): number {
+    const starts = [oldestHeldAt ?? new Date(this.#now()).toISOString(), awaitingSince]
+      .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
+      .filter((at) => !Number.isNaN(at));
+    return Math.min(...starts) + HELD_FORCE_FOLD_AFTER_MS;
+  }
+
   async #holdMessage(
     record: ManagerRecord,
     message: string,
     reason: string,
+    // 背景処理だけが理由の回の、畳んで届ける上限の時刻（`#heldFoldDueAt`）。分からない・他の理由がある回は無い
+    foldDueAt?: number,
   ): Promise<ManagerSendResult> {
     const managerId = record.job.id;
     const held = record.job.heldMessages ?? [];
@@ -4540,14 +4565,25 @@ class Pool implements ManagerPool {
       grounds: `managerId=${managerId} 理由=${excerptLine(reason, NOTIFY_REPORT_EXCERPT)}`,
     });
     const expiresAt = new Date(Date.parse(heldAt) + HELD_MESSAGE_TTL_MS).toISOString();
+    const deadlineClause =
+      foldDueAt === undefined
+        ? ''
+        : `**遅くとも ${new Date(Math.max(foldDueAt, this.#now())).toISOString()}（待ちの上限 ` +
+          `${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分）の後の見回り（1分ごと）で、残っている背景処理ごと畳み、` +
+          '新しい鍵で起こし直してこの伝言を届ける**（背景処理が先に終われば、その時点で届く）。' +
+          'それまで待てば、manager_stop も後継も要らない。';
     return {
       outcome: 'held',
       detail:
         `${reason}\n\nこの伝言は捨てずに預かった（${managerId} の預かり ${String(count)} 通目。期限 ${expiresAt}）。` +
+        deadlineClause +
         '届けられるようになったら（背景処理・確認待ちが片付いて新しい鍵で起こし直せたとき・抱えている鍵が使えるようになったとき・' +
         '器が替わって resume から入るとき）、預かった順に自動で届け、届けたら知らせる。' +
         '送り直さないこと（二重に届く）。続けて送った伝言は、預かりの後ろに並べてまとめて届ける。' +
-        '残っている背景処理を捨ててよいなら manager_stop → manager_start で後継を起こす（預かりは本文ごと返す）。',
+        (foldDueAt === undefined
+          ? '残っている背景処理を捨ててよいなら manager_stop → manager_start で後継を起こす（預かりは本文ごと返す）。'
+          : '上限を待たずに、残っている背景処理（とその結果）を今すぐ捨ててよい場合だけ、' +
+            'manager_stop → manager_start で後継を起こす（預かりは本文ごと返す）。'),
     };
   }
 
