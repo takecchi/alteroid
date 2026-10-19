@@ -160,5 +160,9 @@ export function page(text: string, offset: number, limit: number): Page {
 
 export function describePage(part: Page): string {
   if (part.from === 0 && !part.more) return `全 ${count(part.total)} 文字`;
+  // offset が末尾を越えた回（`page` が末尾へ丸めて本文が空）: 「11〜10 文字目」のような逆転した範囲で空を返すと、呼び手は空の文書と読み違えるため
+  if (part.from >= part.total) {
+    return `全 ${count(part.total)} 文字の末尾を越えている（offset が全体の長さ以上）。この位置に本文は無い`;
+  }
   return `${count(part.from + 1)}〜${count(part.to)} 文字目 / 全 ${count(part.total)} 文字`;
 }

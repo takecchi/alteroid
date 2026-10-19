@@ -134,6 +134,19 @@ describe('page / describePage（全文を分けて渡す）', () => {
     expect(part.body).toBe('');
     expect(part.more).toBe(false);
   });
+
+  // 「11〜10 文字目」のような逆転した範囲で空の本文を返すと、呼び手は「空の文書」と読み違える
+  it('⭐ offset が末尾を越えた回は、範囲を逆転させず「末尾を越えていて本文は無い」と言う', () => {
+    const part = page('あ'.repeat(10), 999, 40);
+
+    expect(describePage(part)).toBe(
+      '全 10 文字の末尾を越えている（offset が全体の長さ以上）。この位置に本文は無い',
+    );
+  });
+
+  it('空の本文（0 文字）は今までどおり「全 0 文字」と言う', () => {
+    expect(describePage(page('', 0, 40))).toBe('全 0 文字');
+  });
 });
 
 describe('renderListingEntry（実体の一覧の1件を決まった順で組む）', () => {
