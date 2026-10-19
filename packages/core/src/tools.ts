@@ -5526,7 +5526,9 @@ export function createCloneTools(context: ToolContext) {
         '閉じた行を開き直す道具はこの器に無いので、撃ち間違えは道具では戻せない。',
         '**`origin` は必須で、在る起点（human / manager / external / self）を全部並べた呼びは断る**' +
           '（「全部閉じる」を1回で撃てる形は作らない）。',
-        '行は消えない（`closedAt` / `closedReason` が付くだけ）。**閉じた id は全部日誌に残る。**',
+        '行は消えない（`closedAt` / `closedReason` が付くだけ）。ただし片付き履歴に保持上限のある置き場（fs）では、' +
+          '上限を超えた片付きの行が古い側から消え、1回で上限を超えて閉じたときは閉じたばかりの行も消える（そのときは応答で件数を言う）。' +
+          '**閉じた id は全部日誌に残る。**',
       ].join(''),
       {
         origin: z
@@ -5612,7 +5614,11 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        const { entries: openEntries, unreadable } = await stores.commitments.list();
+        const {
+          entries: openEntries,
+          unreadable,
+          trimmedClosed: trimmedBefore,
+        } = await stores.commitments.list();
         // 絞りは `commitment_list` と同じ側・同じ当て方で当てる: 下見した結果とこの道具が閉じる集合が食い違わないことが、一括で閉じてよいと判断できる唯一の根拠のため
         const afterOrigin = openEntries.filter((entry) => origin.includes(entry.origin));
         const afterSource =
@@ -5781,6 +5787,19 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
+        // 閉じた直後に片付き履歴の保持上限で刈られた行を数える（fs の置き場。1回で上限を超えて閉じると、閉じたばかりの行も刈る）:
+        // 言わないと、閉じたと言った行が commitment_list id= で「台帳に無い」になる。刈った件数が増えた回だけ読み直す（保持上限の無い置き場では読まない）
+        const trimmedAfter =
+          closedIds.length === 0 ? trimmedBefore : (await stores.commitments.list()).trimmedClosed;
+        let trimmedJustClosed = 0;
+        if (trimmedAfter > trimmedBefore) {
+          const remaining = new Set(
+            (await stores.commitments.list({ includeClosed: true })).entries.map(
+              (entry) => entry.id,
+            ),
+          );
+          trimmedJustClosed = closedIds.filter((id) => !remaining.has(id)).length;
+        }
         // 当たったのに閉じられなかった分を黙らせない: 「全部閉じた」と読まれると次の呼びの判断が狂うため
         const raced = targets.length - closedIds.length;
         const shownClosed = closedIds.slice(0, CLOSE_MANY_IDS_SHOWN);
@@ -5800,6 +5819,12 @@ export function createCloneTools(context: ToolContext) {
               : [
                   `⚠ 対象 ${targets.length} 件のうち ${raced} 件は閉じられなかった` +
                     '（この呼びの最中に他の経路が先に閉じた）。',
+                ]),
+            ...(trimmedJustClosed === 0
+              ? []
+              : [
+                  `⚠ 閉じた ${closedIds.length} 件のうち ${trimmedJustClosed} 件は、片付き履歴の保持上限を超えたため、` +
+                    '閉じた直後に台帳から消えた（commitment_list では読めない）。閉じたことと id は日誌に残っている。',
                 ]),
             ...restNote,
             ...unreadableNote,
