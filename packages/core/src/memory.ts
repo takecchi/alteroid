@@ -2144,9 +2144,14 @@ export const MEMORY_OUTLINE_SIDES = ['head', 'tail'] as const;
 export type MemoryOutlineSide = (typeof MEMORY_OUTLINE_SIDES)[number];
 
 // 予算と省略の文言は共有しない: 道具は `side` で反対側を出せるが焼き込みは1回しか描かず、省いたときに何をすればよいかが違うため
-function memorySectionLines(sections: readonly MemorySection[]): string[] {
+// 重複は `allSections`（文書の全節）で数える: 出す範囲（offset・q の窓）の中だけで数えると、窓の外に同じ id の節があっても印が付かず、
+// memory_section_move（全節で一意かを見る）に断られる id を使えると読ませるため
+function memorySectionLines(
+  sections: readonly MemorySection[],
+  allSections: readonly MemorySection[] = sections,
+): string[] {
   const counts = new Map<string, number>();
-  for (const section of sections) counts.set(section.id, (counts.get(section.id) ?? 0) + 1);
+  for (const section of allSections) counts.set(section.id, (counts.get(section.id) ?? 0) + 1);
   return sections.map((section) => {
     const indent = '  '.repeat(section.depth - 1);
     const ambiguous =
@@ -2267,7 +2272,7 @@ export function renderMemoryOutline(
       );
     }
     const windowed = pool.slice(offset);
-    const items = memorySectionLines(windowed);
+    const items = memorySectionLines(windowed, sections);
     const { lines, shown } = fillListingBudget(items, MEMORY_OUTLINE_BUDGET, false);
     const endIndex = offset + shown;
     const more = endIndex < pool.length;
@@ -2283,7 +2288,7 @@ export function renderMemoryOutline(
       .join('\n');
   }
 
-  const items = memorySectionLines(pool);
+  const items = memorySectionLines(pool, sections);
   const { lines, shown } = fillListingBudget(items, MEMORY_OUTLINE_BUDGET, side === 'tail');
   const omittedCount = pool.length - shown;
   const shownLabel =
