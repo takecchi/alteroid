@@ -382,6 +382,28 @@ describe('担い手の報告に添えられたファイル — プール（#4126
     expect(jobs.find((job) => job.id === MANAGER_ID)?.withheldReports).toBeUndefined();
     await pool.stop();
   });
+
+  it('⭐ 背景処理の完了待ちのターンで出し箱を取り込めなかった報告も、畳まずに理由つきで受信箱へ回す', async () => {
+    const { pool, stores, inbox, fake } = await setup();
+
+    fake.raw({
+      type: 'report',
+      managerId: MANAGER_ID,
+      status: 'done',
+      text: 'ファイルを作った。dev サーバーは背景で動かしたまま',
+      reportId: 'report-bg-refused',
+      awaitingBackground: { count: 1, breakdown: 'local_bash×1' },
+      rejectedFiles: [{ name: 'astra.png', reason: '出し箱を取り込めなかった（EACCES）' }],
+    });
+    await vi.waitFor(() => expect(reportMessages(inbox)).toHaveLength(1));
+
+    expect(reportMessages(inbox)[0]!.rejectedAttachments).toEqual([
+      { name: 'astra.png', reason: '出し箱を取り込めなかった（EACCES）' },
+    ]);
+    const jobs = await stores.jobs.listJobs();
+    expect(jobs.find((job) => job.id === MANAGER_ID)?.withheldReports).toBeUndefined();
+    await pool.stop();
+  });
 });
 
 function fakeSdk(write: (outbox: string) => Promise<void>): typeof sdkQuery {
