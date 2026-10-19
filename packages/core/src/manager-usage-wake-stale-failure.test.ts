@@ -248,6 +248,61 @@ describe('古い鍵で枠に当たった担当は、現役の鍵が通るなら�
     await s.pool.stop();
   });
 
+  describe('ターンの途中の usage_notice で印が先に立っていても、失敗の報告で終わったら起こし直す', () => {
+    // 回転の後も古い鍵のセッションで走っていた担当が、次のターンの途中で usage_notice（reached）を受け、
+    // そのまま 429 の報告で終わる形。印は通知で先に立つので、報告の枝が「新しく立てた」とは見ない
+    function reachedNotice(): RunnerEvent {
+      return {
+        type: 'usage_notice',
+        managerId: JOB.id,
+        notice: { kind: 'reached', text: LIMIT_TEXT },
+      } as RunnerEvent;
+    }
+
+    it('⭐ 現役の鍵が通るなら、回転の出来事を待たずに起こし直し、印を下ろす', async () => {
+      const s = await setup({ done: false });
+      s.rotate();
+      s.fake.behavior.background = 0;
+
+      s.fake.push(reachedNotice());
+      s.fake.push(failedReport());
+      await settle();
+
+      expect(s.fake.resumes).toHaveLength(1);
+      expect(s.fake.resumes[0]?.sessionId).toBe('sess-1');
+      expect(await wakeDecisions(s)).toHaveLength(1);
+      expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeUndefined();
+      await s.pool.stop();
+    });
+
+    it('現役の鍵が通らないなら起こさず、印を残す', async () => {
+      const s = await setup({ done: false, availability: async () => 'cooling' });
+      s.rotate();
+      s.fake.behavior.background = 0;
+
+      s.fake.push(reachedNotice());
+      s.fake.push(failedReport());
+      await settle();
+
+      expect(s.fake.resumes).toHaveLength(0);
+      expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeDefined();
+      await s.pool.stop();
+    });
+
+    it('回転していない（世代が同じ）なら起こさない', async () => {
+      const s = await setup({ done: false, availability: async () => 'ready' });
+      s.fake.behavior.background = 0;
+
+      s.fake.push(reachedNotice());
+      s.fake.push(failedReport());
+      await settle();
+
+      expect(s.fake.resumes).toHaveLength(0);
+      expect(await wakeDecisions(s)).toHaveLength(0);
+      await s.pool.stop();
+    });
+  });
+
   describe('背景処理を待たされていた担当が、そのまま failed で終わったら、待ちの上限を待たずに起こし直す', () => {
     // 2026-10-19 の HOUSE-17・PROFILE-2・PARTY-2: 古い鍵のまま枠で止まり、起こし直しは背景処理 1 本を待って断られ、
     // その後セッションが failed で終わっても15分の上限まで誰も起こさなかった。

@@ -9698,6 +9698,10 @@ class Pool implements ManagerPool {
             event.managerId,
             failedReportBodyOf(event.text) ?? event.text,
           );
+        } else if (event.failure !== undefined && this.#usageStopped.has(event.managerId)) {
+          // 印がターンの途中の `usage_notice` で先に立っていた回も、失敗で終わったこの時点で起こし直す: 通知の枝は印を立てるだけで起こさず、
+          // 回転の借りも挑み直しの状態も無ければ周回の掃きも拾わないので、次の鍵の回転まで止まる（古い鍵のセッションで回転の後も走っていた担当）。
+          await this.#wakeIfHeldTokenStale(event.managerId);
         }
         // 添えられたもの・断ったものが在る報告は、本文が空でも背景処理待ちでも配る: 成果物を握り潰さない。何も添えられていない報告は `await` を挟まない。
         const reportFiles =
