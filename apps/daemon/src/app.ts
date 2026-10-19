@@ -6475,7 +6475,8 @@ export function createApp(deps: AppDeps) {
           409: {
             description:
               '既に片付いている（いつ・どう片付けたかを本文に入れて返す。読めない形で入って' +
-              'いる行は、いつ・どう片付けたかが分からないことがある）。',
+              'いる行は、いつ・どう片付けたかが分からないことがある）。または、未了のまま在るのに' +
+              '閉じる書き込みが通らなかった（本文でそう言う。一覧で確かめてから閉じ直す）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -6501,10 +6502,21 @@ export function createApp(deps: AppDeps) {
             );
           }
           if (existing === null) return c.json({ error: 'not found' as const }, 404);
+          // 未了のまま残っている回を「片付いている」に潰さない（#5072）: 閉じていない行を閉じたと読ませるため
+          if (existing.closedAt === undefined) {
+            return c.json(
+              {
+                error:
+                  `${id} は閉じられなかった（台帳には未了のまま在るが、閉じる書き込みが通らなかった）。` +
+                  '一覧で確かめてから、もう一度閉じること',
+              },
+              409,
+            );
+          }
           return c.json(
             {
               error:
-                `${id} は既に ${existing.closedAt ?? '不明な時刻'} に片付いている` +
+                `${id} は既に ${existing.closedAt} に片付いている` +
                 `（${existing.closedReason ?? '理由の記録なし'}）`,
             },
             409,
@@ -6559,11 +6571,13 @@ export function createApp(deps: AppDeps) {
           },
           409: {
             description:
-              '次の3つ。(1) 既に片付いている（いつ・どう片付いたかを本文に入れて返す）。(2) 台帳に在るが' +
-              '読めない形で入っている（close で閉じることはできるが、書き直せない）。(3) `ifMatch` が' +
+              '次の4つ。(1) 既に片付いている（いつ・どう片付いたかを本文に入れて返す）。(2) 台帳に在るが' +
+              '読めない形で入っている（close で閉じることはできるが、書き直せない。書き直す直前に読めない形になった回も含む）。' +
+              '(3) `ifMatch` が' +
               'いまの版（`editedAt ?? at`）と違う（読んでから書くまでの間に別の書き手が直した、または' +
               '消えた）。**何も書いていない。** `current` にいまの行を返す（消えていれば null）。' +
-              '(3) だけが `current` の鍵を持つ。',
+              '(3) だけが `current` の鍵を持つ。(4) 未了のまま在るのに書き直しが通らなかった（本文でそう言う）。' +
+              '書き直す直前に行が無くなっていた回は、409 ではなく 404 を返す。',
             content: {
               'application/json': {
                 schema: resolver(z.union([commitmentConflictResponseSchema, errorResponseSchema])),
@@ -6629,12 +6643,30 @@ export function createApp(deps: AppDeps) {
           throw error;
         }
         if (!edited) {
-          const after = await stores.commitments.get(id);
+          // 読み直した行の形どおりに返す（#5072）。状態コードは、この口の入口が同じ状態に返すものにそろえる（無い → 404、読めない → 409）
+          let after;
+          try {
+            after = await stores.commitments.get(id);
+          } catch (error) {
+            if (!(error instanceof UnreadableCommitmentError)) throw error;
+            return c.json({ error: describeUnreadableCommitment(error) }, 409);
+          }
+          if (after === null) return c.json({ error: 'not found' as const }, 404);
+          if (after.closedAt === undefined) {
+            return c.json(
+              {
+                error:
+                  `${id} は直せなかった（台帳には未了のまま在るが、書き直しが通らなかった）。` +
+                  '一覧で確かめてから、もう一度直すこと',
+              },
+              409,
+            );
+          }
           return c.json(
             {
               error:
-                `${id} は既に ${after?.closedAt ?? '不明な時刻'} に片付いている` +
-                `（${after?.closedReason ?? '理由の記録なし'}）`,
+                `${id} は既に ${after.closedAt} に片付いている` +
+                `（${after.closedReason ?? '理由の記録なし'}）`,
             },
             409,
           );
