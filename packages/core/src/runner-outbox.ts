@@ -324,18 +324,14 @@ export async function collectManagerOutbox(
   options: CollectManagerOutboxOptions,
 ): Promise<CollectedManagerOutbox> {
   const { root, stagedRoot, managerId, expectedUid, limits } = options;
-  if (!isSafeRunnerSegment(managerId)) return { files: [], rejectedFiles: [] };
+  if (!isSafeRunnerSegment(managerId)) {
+    throw new RunnerOutboxUnsafeError('managerId が dir 名にできない形');
+  }
   const dir = resolve(root, managerId);
   const info = await lstat(dir).catch(() => undefined);
-  const uid = ownUid();
-  if (
-    info === undefined ||
-    info.isSymbolicLink() ||
-    !info.isDirectory() ||
-    (uid !== undefined && info.uid !== uid)
-  ) {
-    return { files: [], rejectedFiles: [] };
-  }
+  if (info === undefined) return { files: [], rejectedFiles: [] };
+  // 空を返さずに投げる: 空だと「置かれていない」と区別が付かず、担い手が添えたファイルが理由も出ないまま出し箱に残り続ける
+  assertOwnDirectorySync(dir);
   const names = (await readdir(dir)).sort();
   if (names.length === 0) return { files: [], rejectedFiles: [] };
 
@@ -388,6 +384,37 @@ export async function collectManagerOutbox(
   if (omitted > 0)
     rejected.push({ name: '(省略)', reason: `ほか ${omitted} 件も取り込まなかった` });
   return { files, rejectedFiles: rejected };
+}
+
+/**
+ * 取り込み（{@link collectManagerOutbox}）そのものが投げたときの断り。出し箱に残った名前ごとに理由を付ける。
+ * 名前を読むだけで中身は開かない（symlink の dir は辿らない）。名前が読めなければ出し箱1つぶんの行にする:
+ * 0件にすると、報告がファイルを持たない報告として扱われ、背景処理待ちなら畳まれて理由がどこにも出ない。
+ */
+export function outboxCollectFailureRefusals(
+  root: string,
+  managerId: string,
+  reason: string,
+): RunnerOutboxRejectedFile[] {
+  let names: string[] = [];
+  if (isSafeRunnerSegment(managerId)) {
+    const dir = resolve(root, managerId);
+    try {
+      if (lstatSync(dir).isDirectory()) names = readdirSync(dir).sort();
+    } catch {
+      names = [];
+    }
+  }
+  if (names.length === 0) return [{ name: '(出し箱)', reason }];
+  const shown = names.slice(0, MAX_REPORTED_REJECTIONS);
+  const rejected = shown.map((name) => ({ name, reason }));
+  if (names.length > shown.length) {
+    rejected.push({
+      name: '(省略)',
+      reason: `ほか ${String(names.length - shown.length)} 件も取り込まなかった`,
+    });
+  }
+  return rejected;
 }
 
 export interface StagedOutboxFile {

@@ -171,6 +171,7 @@ import {
   defaultRunnerOutboxRoot,
   defaultRunnerOutboxStagedRoot,
   openStagedOutboxFile,
+  outboxCollectFailureRefusals,
   prepareManagerOutbox,
   pruneStaleOutboxRoots,
   removeManagerOutbox,
@@ -3587,12 +3588,17 @@ class RunnerSession {
     if (this.#outboxDir === undefined) return false;
     try {
       return readdirSync(this.#outboxDir).length > 0;
-    } catch {
-      return false;
+    } catch (error) {
+      // 読めないことを「空」へ倒さない: 取り込みへ進めて、断りの理由を報告に載せる（無いだけなら取り込みが空を返す）
+      return (error as NodeJS.ErrnoException).code !== 'ENOENT';
     }
   }
 
-  /** 報告の直前に出し箱の直下を取り込む。失敗は報告を止めず、`note` に残す（出し箱の不調でターンの報告を失わない）。 */
+  /**
+   * 報告の直前に出し箱の直下を取り込む。失敗は報告を止めず、`note` に残す（出し箱の不調でターンの報告を失わない）。
+   * 失敗を `note` だけにしない: `note` は日誌にしか残らず、報告はファイルを持たない報告になって背景処理待ちなら畳まれる。
+   * 置かれた名前ごとの断り（`rejectedFiles`）にして報告に載せ、クローンに理由の行を出す。
+   */
   async #collectOutbox(): Promise<{
     files?: RunnerOutboxFile[];
     rejectedFiles?: RunnerOutboxRejectedFile[];
@@ -3615,12 +3621,19 @@ class RunnerSession {
         ...(collected.rejectedFiles.length === 0 ? {} : { rejectedFiles: collected.rejectedFiles }),
       };
     } catch (error) {
+      const reason = reasonOf(error);
       this.#emit({
         type: 'note',
         managerId: this.#id,
-        text: `出し箱を取り込めなかった: ${reasonOf(error)}`,
+        text: `出し箱を取り込めなかった: ${reason}`,
       });
-      return {};
+      return {
+        rejectedFiles: outboxCollectFailureRefusals(
+          this.#outboxRoot,
+          this.#id,
+          `出し箱を取り込めなかった（${reason}）。ファイルは出し箱に残っている`,
+        ),
+      };
     }
   }
 
