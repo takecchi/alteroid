@@ -2971,12 +2971,22 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         slug: z.string().describe('文書のスラッグ'),
-        content: z.string().describe('追記する Markdown'),
+        content: z
+          .string()
+          .describe(`追記する Markdown（${formatStringLengthJa({ min: 1 })}。空白だけは断る）`),
         summary: z.string().describe('何を追記したかの一行要約（日誌に残る）'),
       },
       async ({ slug, content, summary }) => {
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
+        // 空の追記を断る: 置き場は空の本文でも末尾へ空行を1本足して版を進め、「追記した」と答えることになるため（memory_section_move も同じ理由で空を渡さない）
+        const contentError = describeStringLengthViolation('content', stripNul(content), {
+          min: 1,
+        });
+        if (contentError !== null) return text(`${contentError}追記していない。`);
+        if (stripNul(content).trim().length === 0) {
+          return text('content が空白だけなので追記していない。足したい記述を書いて渡すこと。');
         }
         const [before, memoryBefore] = await Promise.all([
           stores.persona.read(slug),
@@ -7103,7 +7113,9 @@ export function createCloneTools(context: ToolContext) {
       {
         request: z
           .string()
-          .describe('依頼内容。人間が Claude Code に書くのと同じ粒度で、背景と狙いを添えて書く'),
+          .describe(
+            `依頼内容。人間が Claude Code に書くのと同じ粒度で、背景と狙いを添えて書く（${formatStringLengthJa({ min: 1 })}。空白だけは断る）`,
+          ),
         cwd: z.string().optional().describe('作業ディレクトリ。省略時はデーモンの既定'),
         attachments: z
           .array(z.string().min(1))
@@ -7136,6 +7148,14 @@ export function createCloneTools(context: ToolContext) {
           runnerId?: string | undefined;
         };
         if (!context.managers) return NO_POOL;
+        // 空の依頼を断る: 日誌に「起こそうとしている」と書き、runner へ何もしない依頼を渡して1本ぶんの器を使うことになるため
+        const requestError = describeStringLengthViolation('request', stripNul(request), {
+          min: 1,
+        });
+        if (requestError !== null) return text(`${requestError}起こしていない。`);
+        if (stripNul(request).trim().length === 0) {
+          return text('request が空白だけなので起こしていない。任せたい仕事を書いて渡すこと。');
+        }
         // conversationId はクローンに渡させず呼び出し文脈から自動で読む: 手で維持する欄を新しく作らないため
         // 返信の宛先ではなく仕事の会話を読む: 報告を受けた内部ターンで続きを委譲したとき、起点が途切れないため
         const conversationId = getWorkConversationId();
