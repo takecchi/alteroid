@@ -4,6 +4,7 @@ export const JOURNAL_DIAGNOSTICS_TYPES = [
   'turn_usage',
   'context_usage',
   'turn_timing',
+  'http_timing',
   'inbox_flow',
 ] as const;
 
@@ -55,6 +56,13 @@ export type JournalDiagnosticsEntryLike =
       firstTextMs?: number;
       phases: Record<string, number>;
       tokens?: { input: number; cacheRead: number; cacheCreation: number; output: number };
+    }
+  | {
+      type: 'http_timing';
+      windowMs: number;
+      requests: number;
+      routes: Array<{ route: string; totalMs: number }>;
+      slowest: Array<{ route: string; totalMs: number }>;
     };
 
 // 秒の言い方は `turn-timing-format.ts` の `formatSeconds` と同じにする（こちらはブラウザへ入るので、あちらを読まず同じ規則で書く）
@@ -140,6 +148,17 @@ export function summarizeJournalDiagnosticsEntry(entry: JournalDiagnosticsEntryL
         (entry.firstTextMs === undefined ? '' : `・最初の文字まで ${seconds(entry.firstTextMs)}`) +
         (slowest === undefined ? '' : `・最も長い段 ${slowest[0]} ${seconds(slowest[1])}`) +
         input
+      );
+    }
+    case 'http_timing': {
+      const [top] = entry.routes;
+      const [slowest] = entry.slowest;
+      return (
+        `[${String(Math.max(1, Math.round(entry.windowMs / 60_000)))}分の窓] 要求 ${String(entry.requests)} 回` +
+        (top === undefined
+          ? ''
+          : `・時間を最も食った経路 ${top.route} 合計 ${seconds(top.totalMs)}`) +
+        (slowest === undefined ? '' : `・最も遅い要求 ${slowest.route} ${seconds(slowest.totalMs)}`)
       );
     }
   }

@@ -232,6 +232,7 @@ import {
   ChatStreamQueue,
 } from './chat-stream-queue.js';
 import { guardSseWrites } from './sse-write-deadline.js';
+import { httpTimingMiddleware, type HttpTimingRecorder } from './http-timing.js';
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono, type Context, type Next } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -384,6 +385,8 @@ export interface AppDeps {
   shutdown: () => void;
   now?: () => Date;
   attachmentLimits?: AttachmentLimits;
+  /** 要求ごとの時間の受け手（#5089）。無くても `Server-Timing` は付ける */
+  httpTiming?: HttpTimingRecorder;
   scheduler?: Scheduler;
   storage?: string;
   // デーモンが鍵を保管しない（降ろすだけ）: 保管すると記憶の器に GitHub の書き込み権が並ぶため（railway/README.md「daemon 側には置かない」）。
@@ -2187,6 +2190,9 @@ export function createApp(deps: AppDeps) {
   });
 
   base.notFound((c) => c.json({ error: 'not found' }, 404));
+
+  // 時間の計測は CORS・認証より前に置く: 認証の DB 引きも、preflight も、その要求の時間として数えるため（#5089）
+  base.use('*', httpTimingMiddleware(deps.httpTiming));
 
   // CORS は認証より先に登録する: preflight（OPTIONS）は `Authorization` を積んで来ないので、門番が先に立つと 401 になり本リクエストが飛ばない。`cors()` は OPTIONS に答えて `next()` を呼ばないので門番も素通りしない。列挙が空なら何も登録しない（CORS ヘッダを返さない姿勢のまま）。
   const allowedOrigins = deps.allowedOrigins ?? [];

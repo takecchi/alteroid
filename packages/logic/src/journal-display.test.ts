@@ -23,6 +23,8 @@ const OLD_TONE_IN_ORDER = [
   ['context_usage', 'neutral'],
   // ターンの時間（#5086）は移した後に足した種別。診断の仲間として context_usage の後に置く
   ['turn_timing', 'neutral'],
+  // API の時間（#5089）も移した後に足した種別。ターンの時間の後に置く
+  ['http_timing', 'neutral'],
   ['token_rotation', 'warn'],
   ['subagent_stall', 'warn'],
   ['inbox_flow', 'neutral'],
@@ -46,7 +48,7 @@ describe('日誌の表示の定数', () => {
 
   it('検索の断りは移す前と同じ文言', () => {
     expect(SEARCH_SCOPE_NOTE).toBe(
-      'tool_use の input・worker_wait・turn_usage・context_usage・turn_timing・inbox_flow・github_observation・conversation_deleted は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
+      'tool_use の input・worker_wait・turn_usage・context_usage・turn_timing・http_timing・inbox_flow・github_observation・conversation_deleted は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
     );
   });
 
@@ -70,7 +72,7 @@ describe('種別の日本語名（issue #2806）', () => {
 
   it('探す対象外の断りは日本語名で言い、識別子を含まない', () => {
     expect(SEARCH_SCOPE_NOTE_JA).toBe(
-      '道具の入力・作業者の待機・ターンの消費・文脈の占有・ターンの時間・受信箱の流量・GitHub の観測・会話の削除は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
+      '道具の入力・作業者の待機・ターンの消費・文脈の占有・ターンの時間・API の時間・受信箱の流量・GitHub の観測・会話の削除は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
     );
     expect(SEARCH_SCOPE_NOTE_JA).not.toMatch(/[a-z]+_[a-z]+/);
   });

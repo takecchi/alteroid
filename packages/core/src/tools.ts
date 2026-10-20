@@ -130,6 +130,12 @@ import {
   renderTurnTimingSummary,
   type TurnTimingEntry,
 } from './turn-timing-format.js';
+import {
+  describeHttpTimingBody,
+  describeHttpTimingHead,
+  renderHttpTimingSummary,
+  type HttpTimingEntry,
+} from './http-timing-format.js';
 import { commandHeadWord, type RecentDenial } from './denial-shape.js';
 import { classifyManagerActivity, describeReportDrift } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
@@ -1193,6 +1199,8 @@ const SELF_DROPPED_BUDGET = 8_000;
 const SELF_DROPPED_DEFAULT_LIMIT = 50;
 // self_status の「直近のターンの時間」が読む件数（#5086）。中央値・90% 点が意味を持つ数で、1回の読みを軽く保つ
 const SELF_STATUS_TURN_TIMING_LIMIT = 30;
+// self_status の「HTTP API の時間」が読む窓の数（#5089）。10 分の窓で直近 2 時間ぶん
+const SELF_STATUS_HTTP_TIMING_LIMIT = 12;
 
 // `JOURNAL_*` を使い回さない: 値は同じでも探す対象（会話の1発言）が違うため
 const CONVERSATION_EXCHANGE_EXCERPT = 200;
@@ -7019,28 +7027,44 @@ export function createCloneTools(context: ToolContext) {
 
         const runnerModels = await context.runnerModels?.();
         const runnerAnthropicRoutes = await context.runnerAnthropicRoutes?.();
-        const [documents, memoryDocuments, aggregate, codexAuth, turnTiming] = await Promise.all([
-          stores.persona.list(),
-          stores.persona.documents(),
-          runtime.sdkModel === null ? Promise.resolve(null) : stores.usage.aggregate({}),
-          // 読めなければ黙らずに言う
-          stores.codexAuth.get().then(
-            (record) =>
-              record === null ? null : describeCodexChatgptAuth(codexChatgptAuthStatusOf(record)),
-            (error: unknown) =>
-              `Codex の ChatGPT ログイン: 正本を読めなかった（${reasonOf(error)}）`,
-          ),
-          // 直近のターンの時間（#5086）。読むのは種別と件数で絞った行だけで、この呼び出しのときにしか読まない
-          stores.journal
-            .list({ types: ['turn_timing'], limit: SELF_STATUS_TURN_TIMING_LIMIT })
-            .then(
-              (entries) =>
-                renderTurnTimingSummary(
-                  entries.filter((entry): entry is TurnTimingEntry => entry.type === 'turn_timing'),
-                ),
-              (error: unknown) => `直近のターンの時間: 日誌を読めなかった（${reasonOf(error)}）。`,
+        const [documents, memoryDocuments, aggregate, codexAuth, turnTiming, httpTiming] =
+          await Promise.all([
+            stores.persona.list(),
+            stores.persona.documents(),
+            runtime.sdkModel === null ? Promise.resolve(null) : stores.usage.aggregate({}),
+            // 読めなければ黙らずに言う
+            stores.codexAuth.get().then(
+              (record) =>
+                record === null ? null : describeCodexChatgptAuth(codexChatgptAuthStatusOf(record)),
+              (error: unknown) =>
+                `Codex の ChatGPT ログイン: 正本を読めなかった（${reasonOf(error)}）`,
             ),
-        ]);
+            // 直近のターンの時間（#5086）。読むのは種別と件数で絞った行だけで、この呼び出しのときにしか読まない
+            stores.journal
+              .list({ types: ['turn_timing'], limit: SELF_STATUS_TURN_TIMING_LIMIT })
+              .then(
+                (entries) =>
+                  renderTurnTimingSummary(
+                    entries.filter(
+                      (entry): entry is TurnTimingEntry => entry.type === 'turn_timing',
+                    ),
+                  ),
+                (error: unknown) =>
+                  `直近のターンの時間: 日誌を読めなかった（${reasonOf(error)}）。`,
+              ),
+            // HTTP API の時間（#5089）。同じく種別と件数で絞って読む
+            stores.journal
+              .list({ types: ['http_timing'], limit: SELF_STATUS_HTTP_TIMING_LIMIT })
+              .then(
+                (entries) =>
+                  renderHttpTimingSummary(
+                    entries.filter(
+                      (entry): entry is HttpTimingEntry => entry.type === 'http_timing',
+                    ),
+                  ),
+                (error: unknown) => `HTTP API の時間: 日誌を読めなかった（${reasonOf(error)}）。`,
+              ),
+          ]);
 
         return text(
           [
@@ -7057,6 +7081,8 @@ export function createCloneTools(context: ToolContext) {
             renderLedgerCrossReference(runtime.sdkModel, aggregate),
             '',
             turnTiming,
+            '',
+            httpTiming,
             ...(await renderPeerReach(context.managers)),
           ].join('\n'),
         );
@@ -10257,6 +10283,8 @@ function renderJournalEntry(
     }
     case 'turn_timing':
       return { head: describeTurnTimingHead(entry), body: describeTurnTimingBody(entry) };
+    case 'http_timing':
+      return { head: describeHttpTimingHead(entry), body: describeHttpTimingBody(entry) };
     case 'token_rotation': {
       // `exhausted`（全層が止まる）を `not_rotated`（正常）と同じ顔にしない: 見出しに `event` を出す
       const where =

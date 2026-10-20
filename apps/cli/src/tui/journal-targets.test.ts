@@ -27,6 +27,7 @@ const TABLE: Record<
   subagent_stall: { approvals: false, managers: false },
   context_usage: { approvals: false, managers: false },
   turn_timing: { approvals: false, managers: false }, // ターンの時間（#5086）。承認・委譲は動かない
+  http_timing: { approvals: false, managers: false }, // API の時間（#5089）。承認・委譲は動かない
   inbox_flow: { approvals: false, managers: false },
   github_observation: { approvals: false, managers: false },
   conversation_deleted: { approvals: false, managers: false }, // 会話の削除。承認・委譲の件数は動かない

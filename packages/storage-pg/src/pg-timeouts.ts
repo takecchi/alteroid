@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import { currentRequestTiming, type RequestTiming } from '@alteroid/core';
 import { Client, Pool, type ClientConfig } from 'pg';
 
 /**
@@ -58,10 +59,17 @@ export function withPgQueryTimeout<T>(timeoutMs: number, fn: () => Promise<T>): 
 
 // プール経由（`pool.query`）の問い合わせは、空きを待った後に別の文脈で `client.query` が呼ばれうる。呼んだ時点の期限を、問い合わせ自身に書いて運ぶ
 const TIMEOUT_KEY = Symbol('alteroid.pgQueryTimeoutMs');
+// HTTP の要求の器（#5089）も同じ理由で問い合わせに書いて運ぶ: 空きを待った後の `client.query` は、接続を返した別の要求の文脈で呼ばれうるため
+const TIMING_KEY = Symbol('alteroid.pgRequestTiming');
 
 const SQL_HEAD_CHARS = 120;
 
-type QueryConfigLike = { text?: unknown; submit?: unknown; [TIMEOUT_KEY]?: number };
+type QueryConfigLike = {
+  text?: unknown;
+  submit?: unknown;
+  [TIMEOUT_KEY]?: number;
+  [TIMING_KEY]?: RequestTiming;
+};
 
 function sqlHeadOf(config: unknown): string | undefined {
   const text = typeof config === 'string' ? config : (config as QueryConfigLike).text;
@@ -123,6 +131,11 @@ export function createTimedPool(options: TimedPoolOptions): Pool {
         typeof config === 'object' ? (config as QueryConfigLike)[TIMEOUT_KEY] : undefined;
       const timeoutMs = queryTimeout.getStore() ?? stamped ?? defaultQueryTimeoutMs;
       const sql = sqlHeadOf(config);
+      // 書いて運んだ器を先に見る: プール経由では、いまの文脈は接続を返した別の要求のものでありうるため
+      const timing =
+        (typeof config === 'object' ? (config as QueryConfigLike)[TIMING_KEY] : undefined) ??
+        currentRequestTiming();
+      const timed = timing?.queryStarted(sql);
       let timedOut = false;
       const timer = setTimeout(() => {
         timedOut = true;
@@ -141,6 +154,7 @@ export function createTimedPool(options: TimedPoolOptions): Pool {
       timer.unref?.();
       const settle = (error: unknown): unknown => {
         clearTimeout(timer);
+        timed?.();
         return timedOut && error !== undefined && error !== null
           ? new PgTimeoutError('query', timeoutMs, sql ?? '本文なし', error)
           : error;
@@ -170,22 +184,38 @@ export function createTimedPool(options: TimedPoolOptions): Pool {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     override query(config: any, values?: any, callback?: any): any {
       const timeoutMs = queryTimeout.getStore();
-      if (timeoutMs === undefined || config === null || config === undefined) {
+      const timing = currentRequestTiming();
+      if (
+        (timeoutMs === undefined && timing === undefined) ||
+        config === null ||
+        config === undefined
+      ) {
         return super.query(config, values, callback);
       }
+      const marks = {
+        ...(timeoutMs === undefined ? {} : { [TIMEOUT_KEY]: timeoutMs }),
+        ...(timing === undefined ? {} : { [TIMING_KEY]: timing }),
+      };
       const stamped =
         typeof config === 'string'
-          ? { text: config, [TIMEOUT_KEY]: timeoutMs }
+          ? { text: config, ...marks }
           : typeof config.submit === 'function'
             ? config
-            : { ...config, [TIMEOUT_KEY]: timeoutMs };
+            : { ...config, ...marks };
       return super.query(stamped, values, callback);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     override connect(callback?: any): any {
+      // 空き待ちの時間を要求の器へ足す（#5089）。`pool.query` も中でここを通る
+      const timing = currentRequestTiming();
+      const waitStarted = timing === undefined ? 0 : performance.now();
+      const waited = (): void => {
+        timing?.waited(performance.now() - waitStarted);
+      };
       if (typeof callback === 'function') {
         return super.connect((error: Error | undefined, client: unknown, done: unknown) => {
+          waited();
           if (error !== undefined && error !== null && isConnectTimeout(error)) {
             report({ kind: 'connect', timeoutMs: connectTimeoutMs });
             (callback as (...args: unknown[]) => void)(
@@ -198,16 +228,28 @@ export function createTimedPool(options: TimedPoolOptions): Pool {
           (callback as (...args: unknown[]) => void)(error, client, done);
         });
       }
-      return super.connect().catch((error: unknown) => {
-        if (!isConnectTimeout(error)) throw error;
-        report({ kind: 'connect', timeoutMs: connectTimeoutMs });
-        throw new PgTimeoutError(
-          'connect',
-          connectTimeoutMs,
-          error instanceof Error ? error.message : String(error),
-          error,
-        );
-      });
+      return super
+        .connect()
+        .then(
+          (client) => {
+            waited();
+            return client;
+          },
+          (error: unknown) => {
+            waited();
+            throw error;
+          },
+        )
+        .catch((error: unknown) => {
+          if (!isConnectTimeout(error)) throw error;
+          report({ kind: 'connect', timeoutMs: connectTimeoutMs });
+          throw new PgTimeoutError(
+            'connect',
+            connectTimeoutMs,
+            error instanceof Error ? error.message : String(error),
+            error,
+          );
+        });
     }
   }
 

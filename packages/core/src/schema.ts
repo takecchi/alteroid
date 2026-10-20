@@ -308,6 +308,14 @@ const inboxFlowByTypeCountSchema = z.object({
   ),
 });
 
+// HTTP の要求の中の DB の内訳（#5089）。`wallMs` は問い合わせが1本以上走っていた時間で、並行した分を二重に数えない
+const httpTimingDbSchema = z.object({
+  count: z.number().int().nonnegative(),
+  totalMs: z.number().int().nonnegative(),
+  wallMs: z.number().int().nonnegative(),
+  waitMs: z.number().int().nonnegative(),
+});
+
 export const contextUsageObservationSchema = z.object({
   durationMs: z.number().int().nonnegative(),
   totalTokens: z.number().int().nonnegative().optional(),
@@ -652,6 +660,45 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       })
       .optional(),
   }),
+  // HTTP API の要求の時間を、窓（既定 10 分）ごとに経路で束ねた行（#5089）。要求の無い窓は書かない。集め方は `http-timing.ts`
+  z.object({
+    type: z.literal('http_timing'),
+    id: z.string(),
+    at: isoDateTime,
+    windowStartedAt: isoDateTime,
+    windowMs: z.number().int().nonnegative(),
+    requests: z.number().int().nonnegative(),
+    routes: z.array(
+      z.object({
+        route: z.string(),
+        count: z.number().int().nonnegative(),
+        errors: z.number().int().nonnegative(),
+        p50Ms: z.number().int().nonnegative(),
+        p90Ms: z.number().int().nonnegative(),
+        maxMs: z.number().int().nonnegative(),
+        totalMs: z.number().int().nonnegative(),
+        db: httpTimingDbSchema,
+        serializeMs: z.number().int().nonnegative(),
+        bytes: z.number().int().nonnegative(),
+        maxBytes: z.number().int().nonnegative(),
+      }),
+    ),
+    omittedRoutes: z.number().int().nonnegative().optional(),
+    slowest: z.array(
+      z.object({
+        route: z.string(),
+        status: z.number().int(),
+        at: isoDateTime,
+        totalMs: z.number().int().nonnegative(),
+        db: httpTimingDbSchema.extend({
+          slowestMs: z.number().int().nonnegative(),
+          slowestSql: z.string().optional(),
+        }),
+        serializeMs: z.number().int().nonnegative(),
+        bytes: z.number().int().nonnegative().optional(),
+      }),
+    ),
+  }),
   // `Inbox#unshift` は `delivered` に数えない: 戻される合図は保持される前に `push` で数えられていて、数え直すと二重に計上されるため
   // `InboxStore.pending()` が読めなければこの窓は書かず、カウンタも戻さない: 次のターンへ持ち越せば、この窓ぶんの到着・配達・消し込みを失わずに済むため
   z.object({
@@ -788,6 +835,7 @@ const journalEntryTypeNames = {
   subagent_stall: true,
   context_usage: true,
   turn_timing: true,
+  http_timing: true,
   inbox_flow: true,
   github_observation: true,
   conversation_deleted: true,

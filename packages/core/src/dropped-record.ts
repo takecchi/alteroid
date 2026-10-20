@@ -735,6 +735,15 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         ` phases=${Object.keys(entry.phases).length}` +
         (entry.tools === undefined ? '' : ` tools=${entry.tools.count}`)
       );
+    // 経路は `GET /conversations/:id` の型で値を含まないが、他の自由文と同じく tag で包む
+    case 'http_timing':
+      return (
+        `http_timing windowStartedAt=${tag(entry.windowStartedAt)} windowMs=${entry.windowMs} ` +
+        `requests=${entry.requests} routes=${entry.routes.length} slowest=${entry.slowest.length}` +
+        (entry.slowest[0] === undefined
+          ? ''
+          : ` slowestRoute=${tag(entry.slowest[0].route)} slowestMs=${entry.slowest[0].totalMs}`)
+      );
     // 自由文を持たない（残りは全部数）ので、他の型のように長さだけに削らず、総数と滞留までそのまま出す。
     case 'inbox_flow':
       return (

@@ -268,7 +268,7 @@ describe('journal_read — q で本文を語で探す（issue #250）', () => {
     expect(reply).toContain('tool_use の input');
     // turn_timing（#5086）も自由文を持たないので、探す対象に入らない側に並ぶ
     expect(reply).toContain(
-      'tool_use の input・worker_wait・turn_usage・context_usage・turn_timing・inbox_flow・github_observation',
+      'tool_use の input・worker_wait・turn_usage・context_usage・turn_timing・http_timing・inbox_flow・github_observation',
     );
     expect(reply).not.toContain('日誌はまだ空');
   });

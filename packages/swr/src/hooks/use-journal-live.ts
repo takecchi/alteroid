@@ -167,6 +167,9 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     // ターンの時間（#5086）は読み直す画面の材料を変えない
     case 'turn_timing':
       break;
+    // API の時間（#5089）も同じ
+    case 'http_timing':
+      break;
     case 'token_rotation':
       void mutate(KEY.tokens);
       break;

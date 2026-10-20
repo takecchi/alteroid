@@ -7,15 +7,31 @@ import {
 } from './journal-diagnostics-format.js';
 
 describe('summarizeJournalDiagnosticsEntry（issue #2016）', () => {
-  // turn_timing（#5086）を足して5種にした
-  it('JOURNAL_DIAGNOSTICS_TYPES はこの5種だけを名乗る', () => {
+  // turn_timing（#5086）と http_timing（#5089）を足して6種にした
+  it('JOURNAL_DIAGNOSTICS_TYPES はこの6種だけを名乗る', () => {
     expect(JOURNAL_DIAGNOSTICS_TYPES).toEqual([
       'worker_wait',
       'turn_usage',
       'context_usage',
       'turn_timing',
+      'http_timing',
       'inbox_flow',
     ]);
+  });
+
+  describe('http_timing（#5089）', () => {
+    it('窓・要求の回数・時間を最も食った経路・最も遅い要求を1行にする', () => {
+      const entry: JournalDiagnosticsEntryLike = {
+        type: 'http_timing',
+        windowMs: 600_000,
+        requests: 42,
+        routes: [{ route: 'GET /progress', totalMs: 12_000 }],
+        slowest: [{ route: 'GET /commitments', totalMs: 3_400 }],
+      };
+      expect(summarizeJournalDiagnosticsEntry(entry)).toBe(
+        '[10分の窓] 要求 42 回・時間を最も食った経路 GET /progress 合計 12秒・最も遅い要求 GET /commitments 3.4秒',
+      );
+    });
   });
 
   describe('turn_timing（#5086）', () => {

@@ -1,5 +1,6 @@
 import { createServer, type Server, type Socket } from 'node:net';
 
+import { RequestTiming, runWithRequestTiming } from '@alteroid/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -163,5 +164,61 @@ describe('PostgreSQL の問い合わせと接続に期限を付ける（#4655）
     expect(error).toBeInstanceOf(PgTimeoutError);
     expect((error as PgTimeoutError).kind).toBe('connect');
     expect(events).toEqual([{ kind: 'connect', timeoutMs: 100 }]);
+  });
+});
+
+describe('HTTP の要求の器へ、問い合わせの本数・時間・空き待ちを数える（#5089）', () => {
+  it('⭐ 要求の中で打った問い合わせだけを数え、最も長い1本の SQL の頭を残す', async () => {
+    const { pool } = await setup({ queryTimeoutMs: 1_000 });
+    const timing = new RequestTiming();
+    await runWithRequestTiming(timing, async () => {
+      await pool.query('select ok');
+      await pool.query('select slow from journal');
+    });
+    // 外で打った分は数えない
+    await pool.query('select ok');
+
+    expect(timing.db.count).toBe(2);
+    expect(timing.db.slowestSql).toBe('select slow from journal');
+    expect(timing.db.slowestMs).toBeGreaterThanOrEqual(100);
+    expect(timing.db.wallMs).toBeGreaterThanOrEqual(timing.db.slowestMs);
+  });
+
+  it('借りた接続（トランザクション）で打った問い合わせも数える', async () => {
+    const { pool } = await setup({ queryTimeoutMs: 1_000 });
+    const timing = new RequestTiming();
+    await runWithRequestTiming(timing, async () => {
+      const client = await pool.connect();
+      await client.query('begin');
+      await client.query('select ok');
+      await client.query('commit');
+      client.release();
+    });
+    expect(timing.db.count).toBe(3);
+  });
+
+  it('⭐ 空きを待ってから打つ問い合わせは、返した側ではなく呼んだ要求に数え、待った時間も足す', async () => {
+    const { pool } = await setup({ max: 1, queryTimeoutMs: 1_000 });
+    const held = await pool.connect();
+    const other = new RequestTiming();
+    const timing = new RequestTiming();
+    // 別の要求の文脈で返す
+    setTimeout(() => {
+      void runWithRequestTiming(other, async () => {
+        held.release();
+      });
+    }, 30);
+    await runWithRequestTiming(timing, () => pool.query('select ok'));
+
+    expect(timing.db.count).toBe(1);
+    expect(timing.db.waitMs).toBeGreaterThanOrEqual(20);
+    expect(other.db.count).toBe(0);
+  });
+
+  it('失敗した問い合わせも1本に数える', async () => {
+    const { pool } = await setup();
+    const timing = new RequestTiming();
+    await runWithRequestTiming(timing, () => pool.query('select hang').catch(() => undefined));
+    expect(timing.db.count).toBe(1);
   });
 });

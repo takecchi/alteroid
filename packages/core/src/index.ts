@@ -1,5 +1,18 @@
 export * from './schema.js';
 export * from './store.js';
+/** HTTP の要求ごとの時間（#5089）。DB の数え方はストアのプールが、窓の集計と日誌の行はデーモンが使う。 */
+export {
+  RequestTiming,
+  currentRequestTiming,
+  runWithRequestTiming,
+  type RequestDbTiming,
+} from './request-timing.js';
+export {
+  HTTP_TIMING_SLOW_MS,
+  HttpTimingWindow,
+  describeHttpTimingSample,
+  type HttpTimingSample,
+} from './http-timing.js';
 export {
   MAX_PENDING_GRAVES,
   addGrave,

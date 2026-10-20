@@ -1570,6 +1570,17 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       contextTokens: { emit: 'never', why: '`firstTextMs` と同じ判断。' },
       tokens: { emit: 'never', why: '`firstTextMs` と同じ判断。' },
     },
+    http_timing: {
+      windowStartedAt: { emit: 'tag', token: 'windowStartedAt' },
+      windowMs: { emit: 'raw', token: 'windowMs' },
+      requests: { emit: 'raw', token: 'requests' },
+      routes: { emit: 'raw', token: 'routes' },
+      slowest: { emit: 'raw', token: 'slowest' },
+      omittedRoutes: {
+        emit: 'never',
+        why: '数で、跡の見分け（どの窓の行が落ちたか）には windowStartedAt で足りる（#5089）。',
+      },
+    },
     github_observation: {
       observedBy: {
         emit: 'never',
@@ -1889,6 +1900,46 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       sdk: { durationMs: 1000, durationApiMs: 700, numTurns: 2 },
       contextTokens: 12000,
       tokens: { input: 10, cacheRead: 9000, cacheCreation: 500, output: 200 },
+    },
+    http_timing: {
+      type: 'http_timing',
+      windowStartedAt: '2026-10-20T00:00:00.000Z',
+      windowMs: 600_000,
+      requests: 3,
+      routes: [
+        {
+          route: 'GET /journal',
+          count: 3,
+          errors: 0,
+          p50Ms: 40,
+          p90Ms: 90,
+          maxMs: 90,
+          totalMs: 150,
+          db: { count: 6, totalMs: 100, wallMs: 100, waitMs: 0 },
+          serializeMs: 5,
+          bytes: 3000,
+          maxBytes: 1500,
+        },
+      ],
+      omittedRoutes: 2,
+      slowest: [
+        {
+          route: 'GET /journal',
+          status: 200,
+          at: '2026-10-20T00:01:00.000Z',
+          totalMs: 90,
+          db: {
+            count: 2,
+            totalMs: 60,
+            wallMs: 60,
+            waitMs: 0,
+            slowestMs: 50,
+            slowestSql: 'select 1',
+          },
+          serializeMs: 2,
+          bytes: 1500,
+        },
+      ],
     },
     github_observation: {
       type: 'github_observation',
