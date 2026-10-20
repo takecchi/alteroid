@@ -173,7 +173,10 @@ export async function traceApproval(
         }
       }
     },
-    { maxScanned: APPROVAL_TRACE_SCAN_LIMIT },
+    // 頁を上限と同じ大きさにして1本で読む（#5089）: 500 行ずつだと、pg は頁ごとに「答えの後の候補の全部」を引いて並べ直すので、
+    // 答えが古いほど往復と並べ直しが積み重なる（偽のデータで 7 日前の答えに 21 頁・444ms）。行の処理は頁をまたいで同じなので、結果は変わらない。
+    // ヒープに載るのは上限の 5,000 行までで、無制限にはならない
+    { maxScanned: APPROVAL_TRACE_SCAN_LIMIT, pageSize: APPROVAL_TRACE_SCAN_LIMIT },
   );
 
   const stampedStart = turnStarts.some(
