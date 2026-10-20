@@ -20,7 +20,7 @@ import {
   type RunnerResumeCommand,
 } from './runner-protocol.js';
 import type { InboxEvent, Job } from './schema.js';
-import { createMemoryStores } from './testing.js';
+import { captureStderr, createMemoryStores } from './testing.js';
 import { describeHeldMessages } from './tools.js';
 
 const JOB: Job = {
@@ -381,18 +381,77 @@ describe('manager_send が届けられない伝言を台帳に預かり、届け
     await s2.pool.stop();
   });
 
-  it('対照: 印の無い failed の担当の預かりは、今どおり本文ごと返す（#4854）', async () => {
+  // 2026-10-20 18:57〜19:01Z の本番: 印の無い failed の預かりを捨てた後、manager_send を打ち直すと resume で届いた（#5111）
+  it('⭐ 印の無い failed・lost の担当の預かりは、捨てずに resume で起こして届ける（#5111）', async () => {
+    for (const status of ['failed', 'lost'] as const) {
+      const s = await setup();
+      s.rotate();
+      s.fake.behavior.background = 1;
+      expect((await s.pool.send('mgr-held', '落ちた担当への伝言')).outcome).toBe('held');
+      await s.pool.stop();
+
+      const job = (await s.stores.jobs.listJobs()).find((entry) => entry.id === 'mgr-held')!;
+      await s.stores.jobs.putJob({ ...job, status });
+      const s2 = await setup({ stores: s.stores });
+      await deliverHeld(s2.pool);
+
+      expect(s2.fake.resumes, status).toHaveLength(1);
+      expect(s2.fake.resumes[0]?.message ?? '', status).toContain('落ちた担当への伝言');
+      expect(await heldOf(s.stores), status).toEqual([]);
+      const released = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+        JSON.stringify(e).includes('届けずに捨てた'),
+      );
+      expect(released, status).toHaveLength(0);
+      await s2.pool.stop();
+      expect(inboxText(s2.inbox), status).toContain('mgr-held へ届けた');
+    }
+  });
+
+  it('印の無い failed の担当で resume が断られたら（会話を引き継ぐ sessionId が無い）、そのときだけ本文ごと返す（#5111）', async () => {
     const s = await setup();
     s.rotate();
     s.fake.behavior.background = 1;
-    expect((await s.pool.send('mgr-held', '落ちた担当への伝言')).outcome).toBe('held');
+    expect((await s.pool.send('mgr-held', '起こせなかった担当への伝言')).outcome).toBe('held');
+    await s.pool.stop();
+
+    const job = (await s.stores.jobs.listJobs()).find((entry) => entry.id === 'mgr-held')!;
+    const withoutSession: Job = { ...job, status: 'failed' };
+    delete withoutSession.sessionId;
+    await s.stores.jobs.putJob(withoutSession);
+    const s2 = await setup({ stores: s.stores });
+    await deliverHeld(s2.pool);
+    expect(s2.fake.resumes).toHaveLength(0);
+
+    expect(await heldOf(s.stores)).toEqual([]);
+    const released = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('届けずに捨てた'),
+    );
+    expect(released).toHaveLength(1);
+    expect(JSON.stringify(released[0])).toContain('resume で起こして届けようとしたが届かなかった');
+    expect(JSON.stringify(released[0])).toContain('起こせなかった担当への伝言');
+    await s2.pool.stop();
+    expect(inboxText(s2.inbox)).toContain('起こせなかった担当への伝言');
+  });
+
+  it('印の無い failed の担当で resume が例外で落ちた（一時的な失敗）なら、返さずに預かったまま次の見回りで挑み直す（#5111）', async () => {
+    const s = await setup();
+    s.rotate();
+    s.fake.behavior.background = 1;
+    expect((await s.pool.send('mgr-held', '挑み直す伝言')).outcome).toBe('held');
     await s.pool.stop();
 
     const job = (await s.stores.jobs.listJobs()).find((entry) => entry.id === 'mgr-held')!;
     await s.stores.jobs.putJob({ ...job, status: 'failed' });
     const s2 = await setup({ stores: s.stores });
-    await deliverHeld(s2.pool);
+    s2.fake.behavior.failResume = true;
+    await captureStderr(async () => {
+      await deliverHeld(s2.pool);
+    });
+    expect((await heldOf(s.stores)).map((item) => item.text)).toEqual(['挑み直す伝言']);
 
+    s2.fake.behavior.failResume = false;
+    await deliverHeld(s2.pool);
+    expect(s2.fake.resumes).toHaveLength(1);
     expect(await heldOf(s.stores)).toEqual([]);
     await s2.pool.stop();
   });

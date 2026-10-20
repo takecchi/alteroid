@@ -4653,16 +4653,19 @@ class Pool implements ManagerPool {
       // 期限切れの返却は下で今どおり効かせる: 起こし直されないまま残ると、本文が期限を過ぎても返らないため
       const awaitingUsageWake =
         (status === 'lost' || status === 'failed') && this.#usageStopped.has(managerId);
-      if (
-        !awaitingUsageWake &&
-        (status === 'lost' || status === 'failed' || status === 'stopped')
-      ) {
+      // 止められた委譲と、後継へ引き継いだ委譲だけは届け先が無い: 本文を返す。
+      // failed・lost は捨てない（#5111）: `manager_send` と同じく resume から入り直せば届くため（2026-10-20 18:57〜19:01Z に、捨てた後で
+      // クローンが打ち直した manager_send が resume で届いた）。届けを試し、届かなかったときだけ下で本文を返す。
+      if (status === 'stopped' || record.job.supersededBy !== undefined) {
         await this.#releaseHeld(record, held.length, `委譲が終端した（status=${status}）`);
         return {
           outcome: 'declined',
           detail: `${managerId} は終端している（status=${status}）ので届けられない。預かっていた伝言は本文ごと返した。`,
         };
       }
+      const resumeToDeliver = !awaitingUsageWake && (status === 'lost' || status === 'failed');
+      // 器の入れ替えで取り直している最中は重ねない（同じ session を二本起こす）: 返さずに次の見回りで試す
+      if (resumeToDeliver && this.#resuming.has(managerId)) return undefined;
       const now = this.#now();
       // 預かりは時刻順に積むので、期限切れは列の頭にだけ居る。
       const expiredCount = held.findIndex(
@@ -4696,6 +4699,20 @@ class Pool implements ManagerPool {
         },
       );
       if (result.outcome !== 'delivered' && result.outcome !== 'answered') {
+        if (resumeToDeliver) {
+          // 終わった委譲を resume で起こして届けようとしたが届かなかった: 待っても届く見込みが無いので、本文を返す
+          await this.#releaseHeld(
+            record,
+            batch.length,
+            `委譲が終わっていて（status=${status}）、resume で起こして届けようとしたが届かなかった: ${excerptLine(result.detail, NOTIFY_REPORT_EXCERPT)}`,
+          );
+          return {
+            outcome: 'declined',
+            detail:
+              `${managerId} は終わっていて（status=${status}）、resume で起こして届けようとしたが届かなかった（${result.detail}）。` +
+              '預かっていた伝言は本文ごと返した。',
+          };
+        }
         if (stuck !== undefined) await this.#noticeHeldStuck(managerId, batch, stuck);
         return {
           outcome: 'held',
