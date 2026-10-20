@@ -3,6 +3,7 @@ import {
   createMemoryStores,
   DAEMON_ATTACHMENT_USAGE_SOURCE,
   emptyAttachmentUsage,
+  readIntegrationAttachmentNoticeBytes,
 } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
@@ -31,6 +32,29 @@ async function decisions(stores: ReturnType<typeof storesWithUsage>): Promise<st
 describe('noteIntegrationAttachmentUsage（連携の鍵の預かりの閾値の知らせ。#4005）', () => {
   it('既定の閾値は 1GiB', () => {
     expect(INTEGRATION_ATTACHMENT_NOTICE_BYTES).toBe(1024 * 1024 * 1024);
+    expect(readIntegrationAttachmentNoticeBytes({})).toEqual({
+      bytes: 1024 * 1024 * 1024,
+      notes: [],
+    });
+  });
+
+  it('閾値は ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES で変えられる。読めない値は既定へ倒し、理由を notes に出す', () => {
+    expect(
+      readIntegrationAttachmentNoticeBytes({
+        ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES: '5000',
+      }),
+    ).toEqual({ bytes: 5000, notes: [] });
+    expect(
+      readIntegrationAttachmentNoticeBytes({ ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES: '  ' }),
+    ).toEqual({ bytes: 1024 * 1024 * 1024, notes: [] });
+    for (const raw of ['0', '-1', '1.5', 'abc']) {
+      const read = readIntegrationAttachmentNoticeBytes({
+        ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES: raw,
+      });
+      expect(read.bytes).toBe(1024 * 1024 * 1024);
+      expect(read.notes).toHaveLength(1);
+      expect(read.notes[0]).toContain('ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES');
+    }
   });
 
   it('この1件で閾値を越えたら、日誌とクローンへ1回ずつ知らせる', async () => {

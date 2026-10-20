@@ -305,6 +305,35 @@ export const ATTACHMENT_RETENTION_DAYS_ENV = 'ALTEROID_ATTACHMENT_RETENTION_DAYS
 export const ATTACHMENT_MAX_TURN_IMAGES_ENV = 'ALTEROID_ATTACHMENT_MAX_TURN_IMAGES';
 export const ATTACHMENT_MAX_TURN_IMAGE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_TURN_IMAGE_BYTES';
 
+/** 連携の鍵1本あたりの、期限内の添付の預かりがこれを越えたら知らせる（#4005。断らない）。既定 1 GiB */
+export const ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT = 1024 * MIB;
+export const ATTACHMENT_INTEGRATION_NOTICE_BYTES_ENV =
+  'ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES';
+
+/**
+ * 連携の鍵の預かりの知らせの閾値（バイト）を読む。未設定・空なら既定。正の整数として読めなければ、既定へ倒して `notes` に理由を1行足す
+ * （`readAttachmentLimits` と同じ作法。起動は止めない）
+ */
+export function readIntegrationAttachmentNoticeBytes(env: NodeJS.ProcessEnv = process.env): {
+  bytes: number;
+  notes: string[];
+} {
+  const raw = env[ATTACHMENT_INTEGRATION_NOTICE_BYTES_ENV]?.trim();
+  if (raw === undefined || raw.length === 0) {
+    return { bytes: ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT, notes: [] };
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    return {
+      bytes: ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT,
+      notes: [
+        `${ATTACHMENT_INTEGRATION_NOTICE_BYTES_ENV}="${raw}" は正の整数として読めないので既定 ${ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT} を使う`,
+      ],
+    };
+  }
+  return { bytes: parsed, notes: [] };
+}
+
 export interface AttachmentLimits {
   readonly maxImageBytes: number;
   readonly maxFileBytes: number;

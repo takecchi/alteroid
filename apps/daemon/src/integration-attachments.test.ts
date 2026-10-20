@@ -8,12 +8,13 @@ import {
   createLocalRunner,
   createMemoryStores,
   createRunnerRegistry,
+  DAEMON_ATTACHMENT_USAGE_SOURCE,
   DEFAULT_ATTACHMENT_LIMITS,
   MemoryAttachmentStore,
   type CloneHost,
   type InboxEvent,
 } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
 
@@ -67,7 +68,11 @@ function recordingSdk(blocks: unknown[]): typeof import('@anthropic-ai/claude-ag
 }
 
 function setup(
-  options: { limits?: typeof DEFAULT_ATTACHMENT_LIMITS; attachmentsNow?: () => Date } = {},
+  options: {
+    limits?: typeof DEFAULT_ATTACHMENT_LIMITS;
+    attachmentsNow?: () => Date;
+    noticeBytes?: number;
+  } = {},
 ) {
   const stores =
     options.attachmentsNow === undefined
@@ -113,6 +118,9 @@ function setup(
     shutdown: () => undefined,
     now: () => new Date(T0),
     ...(options.limits === undefined ? {} : { attachmentLimits: options.limits }),
+    ...(options.noticeBytes === undefined
+      ? {}
+      : { integrationAttachmentNoticeBytes: options.noticeBytes }),
     auth: {
       plan: {
         enabled: true,
@@ -458,5 +466,24 @@ describe('回数: アップロードも鍵の1回に数える（偽の時計）'
       expect(third.headers.get('retry-after')).not.toBeNull();
     });
     expect(s.posted).toHaveLength(0);
+  });
+});
+
+describe('預かりの知らせの閾値は createApp に渡した値を使う（#4005）', () => {
+  it('閾値を添付2つ分より小さくすると、2つ目を上げたときにだけ知らせる（上げることは断らない）', async () => {
+    const s = setup({ noticeBytes: PNG.length + 1 });
+    const key = await issue(s);
+    const notices = () =>
+      s.posted.filter(
+        (event) => event.type === 'external' && event.source === DAEMON_ATTACHMENT_USAGE_SOURCE,
+      );
+
+    await uploadOk(s, bearer(key.value));
+    await uploadOk(s, bearer(key.value));
+
+    await vi.waitFor(() => {
+      expect(notices()).toHaveLength(1);
+    });
+    expect(JSON.stringify(notices()[0])).toContain(key.id);
   });
 });

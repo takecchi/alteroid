@@ -68,6 +68,7 @@ import {
   type TokenRotationEntry,
   type TokenRotationOutcome,
   readAttachmentLimits,
+  readIntegrationAttachmentNoticeBytes,
   applyAttachmentRequestTimeout,
   attachmentCopiesDir,
   writeStderrLine,
@@ -885,7 +886,11 @@ export async function main(): Promise<void> {
   });
 
   const attachmentPruneConfig = readAttachmentPruneConfig();
-  for (const note of [...readAttachmentLimits().notes, ...attachmentPruneConfig.notes]) {
+  for (const note of [
+    ...readAttachmentLimits().notes,
+    ...readIntegrationAttachmentNoticeBytes().notes,
+    ...attachmentPruneConfig.notes,
+  ]) {
     writeStderrLine(`alteroidd: ${note}\n`);
   }
   const attachmentPruner = startAttachmentPruning({

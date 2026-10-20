@@ -211,6 +211,8 @@ import {
   nonBlankString,
   attachmentBodyMaxBytes,
   readAttachmentLimits,
+  readIntegrationAttachmentNoticeBytes,
+  ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT,
   removeAttachmentCopy,
   stripNul,
   EVENT_IDEMPOTENCY_KEY_MAX_LENGTH,
@@ -389,6 +391,8 @@ export interface AppDeps {
   shutdown: () => void;
   now?: () => Date;
   attachmentLimits?: AttachmentLimits;
+  /** 連携の鍵の預かりの知らせの閾値（バイト。#4005）。無ければ `ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES`（既定 1 GiB） */
+  integrationAttachmentNoticeBytes?: number;
   /** 要求ごとの時間の受け手（#5089）。無くても `Server-Timing` は付ける */
   httpTiming?: HttpTimingRecorder;
   scheduler?: Scheduler;
@@ -1192,8 +1196,11 @@ async function appendJournalOrDrop(
   }
 }
 
-/** 連携の鍵1本あたりの、期限内の添付の預かりがこれを越えたら知らせる（#4005。オーナーの判断で 1GiB から始める）。 */
-export const INTEGRATION_ATTACHMENT_NOTICE_BYTES = 1024 * 1024 * 1024;
+/**
+ * 連携の鍵1本あたりの、期限内の添付の預かりがこれを越えたら知らせる（#4005。オーナーの判断で 1GiB から始める）。
+ * 既定値。実際の値は `ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES` で変えられる（`readIntegrationAttachmentNoticeBytes`）
+ */
+export const INTEGRATION_ATTACHMENT_NOTICE_BYTES = ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT;
 
 /**
  * 連携の鍵が上げた添付で、その鍵の預かり（期限内）が閾値を越えたら、日誌とクローンへ1回知らせる（#4005）。
@@ -1626,6 +1633,8 @@ export function createApp(deps: AppDeps) {
       onError,
     );
   const attachmentLimits = deps.attachmentLimits ?? readAttachmentLimits().limits;
+  const integrationAttachmentNoticeBytes =
+    deps.integrationAttachmentNoticeBytes ?? readIntegrationAttachmentNoticeBytes().bytes;
   const attachmentBodyMax = attachmentBodyMaxBytes(attachmentLimits);
   // `hono/body-limit` を使わない: chunked の本文を上限まで溜めるので 2 GiB の枠では使えない。content-length があって超えるときだけ断り、それ以外は溜めずに流しながら数える（置き場の上限と食い違ってもここの上限は必ず効く）。
   const attachmentUploadSizeGate = createMiddleware(async (c, next) => {
@@ -2425,6 +2434,7 @@ export function createApp(deps: AppDeps) {
               (event) => clone.post(event),
               principal.keyId,
               meta.size,
+              integrationAttachmentNoticeBytes,
             );
           }
           return c.json(meta, 200);
