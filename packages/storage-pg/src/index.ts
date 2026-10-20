@@ -103,7 +103,8 @@ export function describePgConnectionError(error: Error): string {
  * 載っていない口は既定の期限で打ち切る。載せる基準: 大きい本文（退避・生ログ・添付・plugin）を運ぶ、件数で締めずに表を走査しうる、全件を消す。
  */
 const LONG_QUERY_METHODS = {
-  journal: ['list', 'listPage', 'clear'],
+  // `humanReplies` は件数で締めずに人間への返答を全履歴から読む（#5089）
+  journal: ['list', 'listPage', 'humanReplies', 'clear'],
   archive: ['archive', 'read', 'readTail', 'remove', 'clear'],
   sessionStore: ['load', 'append', 'readTail', 'delete', 'clearAll'],
   attachments: ['put', 'open', 'get', 'prune', 'clear'],

@@ -294,6 +294,14 @@ export interface JournalStore {
   oldestAt(): Promise<string | null>;
 
   /**
+   * 人間への返答（`exchange`・`with: 'human'`・`role: 'outbound'`・`conversationId` を持つ行）の会話 id と時刻だけを返す（#5089）。並びは契約しない。
+   * 台帳の「返答済み」の判定（`buildCommitmentDerivations`）が、全履歴の人間との往復を本文ごと読まずに済ませるための口。
+   * 削除した会話の行・墓標が名指しした行は `list` と同じく外す。
+   * 省略可能: 持たない器では、呼び手が `readConversationWindow` で読んだ往復から同じものを作る。
+   */
+  humanReplies?(): Promise<{ conversationId: string; at: string }[]>;
+
+  /**
    * 全件を消す（ワークスペースのリセット専用）。「追記専用」の契約への例外で、呼ぶのは `resetWorkspaceState` だけ。
    * 日誌の「聞かずに実行した判断は必ず残る」は、通常運用で消せないことではなく、リセットが常に人間の明示的な決定を経ることで保たれる。消した件数を返す。
    */
