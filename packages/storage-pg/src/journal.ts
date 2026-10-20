@@ -47,11 +47,30 @@ function restoreEntry(row: { id: string; at: Date; type: string; entry: unknown 
   return { id: row.id, at: row.at.toISOString(), type: row.type, ...stored };
 }
 
+/** 返答の覚えを読み足すとき、前回の最後の `seq` から手前に重ねて読む行数（#5089。`humanReplies` の注記） */
+export const HUMAN_REPLIES_OVERLAP = 1_000;
+/** 返答の覚えを全部読み直す間隔（ms） */
+export const HUMAN_REPLIES_FULL_REFRESH_MS = 10 * 60_000;
+
+function maxKey(map: ReadonlyMap<number, unknown>): number {
+  let max = 0;
+  for (const key of map.keys()) if (key > max) max = key;
+  return max;
+}
+
 export class PgJournalStore implements JournalStore {
   readonly #db: Db;
+  readonly #now: () => number;
+  #humanReplies: {
+    tombstones: string;
+    fullAt: number;
+    throughSeq: number;
+    replies: Map<number, { conversationId: string; at: string }>;
+  } | null = null;
 
-  constructor(db: Db) {
+  constructor(db: Db, options: { now?: () => number } = {}) {
     this.#db = db;
+    this.#now = options.now ?? Date.now;
   }
 
   async append(input: JournalEntryInput): Promise<JournalEntry> {
@@ -201,9 +220,54 @@ export class PgJournalStore implements JournalStore {
   // 本文（`text` 等）を流さず、会話 id と時刻だけを読む（#5089）。絞りは `list({ types: ['exchange'], with: ['human'] })` と同じ式で、`journal_exchange_with_seq_idx` に乗る。
   // `list` は読み出しで型（`journalEntrySchema`）に合わない行を落とすので、ここでも返答の判定に使う欄と必須の本文の型までは SQL で確かめる。
   // それ以外の欄だけが型に合わない行（書き込み時の検査があるので、ふつうは無い）は、`list` と違って数える
+  //
+  // 覚えて足していく（#5089）: 日誌は追記専用（消すのは `clear()` だけで、行を書き換えない）なので、返答の一覧は前回より後ろの行だけ読み足せば済む。
+  // 前回から外す行が変わりうるのは墓標（`conversation_deleted`）が増減したときだけなので、墓標の件数と最後の `seq` が変わったら全部読み直す。
+  // `seq` は払い出しの順で、確定の順とはずれうる（先に払い出した行が後で確定する）ので、読み足すときは手前の `HUMAN_REPLIES_OVERLAP` 行ぶん重ねて読み、`seq` で重複を除く。
+  // 念のため `HUMAN_REPLIES_FULL_REFRESH_MS` ごとに全部読み直す
   async humanReplies(): Promise<{ conversationId: string; at: string }[]> {
+    const tombstones = (
+      await this.#db
+        .select({
+          signature: sql<string>`count(*)::text || ':' || coalesce(max(${journal.seq}), 0)::text`,
+        })
+        .from(journal)
+        .where(eq(journal.type, 'conversation_deleted'))
+    )[0]?.signature;
+    const cache = this.#humanReplies;
+    const fresh =
+      cache !== null &&
+      cache.tombstones === tombstones &&
+      this.#now() - cache.fullAt < HUMAN_REPLIES_FULL_REFRESH_MS;
+    if (!fresh) {
+      const replies = new Map<number, { conversationId: string; at: string }>();
+      for (const row of await this.#readHumanReplies(undefined)) {
+        replies.set(row.seq, { conversationId: row.conversationId, at: row.at });
+      }
+      this.#humanReplies = {
+        tombstones: tombstones ?? '',
+        fullAt: this.#now(),
+        throughSeq: maxKey(replies),
+        replies,
+      };
+    } else {
+      for (const row of await this.#readHumanReplies(cache.throughSeq - HUMAN_REPLIES_OVERLAP)) {
+        cache.replies.set(row.seq, { conversationId: row.conversationId, at: row.at });
+        if (row.seq > cache.throughSeq) cache.throughSeq = row.seq;
+      }
+    }
+    return [...(this.#humanReplies?.replies.values() ?? [])].map((reply) => ({ ...reply }));
+  }
+
+  async #readHumanReplies(
+    afterSeq: number | undefined,
+  ): Promise<{ seq: number; conversationId: string; at: string }[]> {
     const rows = await this.#db
-      .select({ at: journal.at, conversationId: sql<string>`${journal.entry}->>'conversationId'` })
+      .select({
+        seq: journal.seq,
+        at: journal.at,
+        conversationId: sql<string>`${journal.entry}->>'conversationId'`,
+      })
       .from(journal)
       .where(
         and(
@@ -213,13 +277,20 @@ export class PgJournalStore implements JournalStore {
           sql`${journal.entry}->>'role' = 'outbound'`,
           sql`jsonb_typeof(${journal.entry}->'conversationId') = 'string'`,
           sql`jsonb_typeof(${journal.entry}->'text') = 'string'`,
+          ...(afterSeq === undefined ? [] : [gt(journal.seq, afterSeq)]),
         ),
       );
-    return rows.map((row) => ({ conversationId: row.conversationId, at: row.at.toISOString() }));
+    return rows.map((row) => ({
+      seq: toNumber(row.seq),
+      conversationId: row.conversationId,
+      at: row.at.toISOString(),
+    }));
   }
 
   async clear(): Promise<number> {
     const removed = await this.#db.delete(journal).returning({ seq: journal.seq });
+    // 消したら返答の覚えも捨てる（読み足しは前回より後ろしか見ないため）
+    this.#humanReplies = null;
     return removed.length;
   }
 }

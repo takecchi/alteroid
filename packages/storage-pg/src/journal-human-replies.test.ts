@@ -147,7 +147,8 @@ describe('JournalStore.humanReplies（pg。#5089）', () => {
     expect(viaStore?.repliesByConversation.get('conv-a')).toHaveLength(1);
   });
 
-  it('本文を読まない（選ぶのは時刻と会話 id だけ）', async () => {
+  // 返答の覚え（#5089 の続き）で、墓標の件数を見る軽い問い合わせが1本増えた。返答を読む問い合わせが本文の列を選ばないことを測る
+  it('本文を読まない（選ぶのは seq・時刻・会話 id だけ）', async () => {
     const queries: string[] = [];
     const logged = createPgStoresFromDb(
       client.withLogger({
@@ -157,7 +158,8 @@ describe('JournalStore.humanReplies（pg。#5089）', () => {
       }),
     );
     await logged.journal.humanReplies?.();
-    expect(queries).toHaveLength(1);
-    expect(queries[0]).toMatch(/^select "at", "entry"->>'conversationId' from "journal"/);
+    const reads = queries.filter((text) => text.includes(`"entry"->>'conversationId'`));
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatch(/^select "seq", "at", "entry"->>'conversationId' from "journal"/);
   });
 });
