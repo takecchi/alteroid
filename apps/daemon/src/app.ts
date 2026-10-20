@@ -4835,13 +4835,21 @@ export function createApp(deps: AppDeps) {
           if (optedIn) {
             return c.json({ error: 'answeredOn は order / limit / cursor と併用できない' }, 400);
           }
-          if (localDayRange(answeredOn) === null) {
+          const day = localDayRange(answeredOn);
+          if (day === null) {
             return c.json({ error: 'answeredOn は YYYY-MM-DD で指定する' as const }, 400);
           }
-          const settled = await stores.jobs.listApprovals({
-            pendingOnly: false,
-            ...(conversationId === undefined ? {} : { conversationId }),
-          });
+          // 器が DB の側で決着の時刻で絞れるなら絞る（#5089）。絞った後も同じ関数で日を決め直すので、結果は全部読んだときと同じ
+          const settled =
+            stores.jobs.listApprovalsSettledAround === undefined
+              ? await stores.jobs.listApprovals({
+                  pendingOnly: false,
+                  ...(conversationId === undefined ? {} : { conversationId }),
+                })
+              : await stores.jobs.listApprovalsSettledAround(
+                  { since: day.since.toISOString(), until: day.until.toISOString() },
+                  conversationId === undefined ? {} : { conversationId },
+                );
           const onDay = approvalsSettledOn(settled.entries, answeredOn);
           // `unreadable` は載せない: 読めない行は決着の日時も分からず、どの日にも置けない。
           return c.json(
@@ -4949,9 +4957,13 @@ export function createApp(deps: AppDeps) {
         if (beforeDate !== undefined && localDayRange(beforeDate) === null) {
           return c.json({ error: 'beforeDate は YYYY-MM-DD で指定する' as const }, 400);
         }
-        const settled = await stores.jobs.listApprovals({ pendingOnly: false });
+        // 器が決着の時刻だけを読めるなら、承認の本文を読まない（#5089）
+        const settled =
+          stores.jobs.listApprovalSettledAts === undefined
+            ? (await stores.jobs.listApprovals({ pendingOnly: false })).entries
+            : (await stores.jobs.listApprovalSettledAts()).map((answeredAt) => ({ answeredAt }));
         return c.json({
-          dates: answeredDates(settled.entries, {
+          dates: answeredDates(settled, {
             limit,
             ...(beforeDate === undefined ? {} : { beforeDate }),
           }),

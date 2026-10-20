@@ -543,6 +543,20 @@ export interface JobStore {
     pendingOnly?: boolean;
     conversationId?: string;
   }): Promise<ApprovalList>;
+  /**
+   * 決着の時刻（`answeredAt`、無ければ `withdrawnAt`）が `[since, until)` に入る承認を**取りこぼさずに**返す（#5089）。
+   * 範囲の外の行が混ざってよい（呼び手が決着の日で絞り直す）。読めない行・`conversationId` の扱いは `listApprovals` と同じ。
+   * 省略可能: 持たない器では、呼び手が `listApprovals({ pendingOnly: false })` で全部読んで絞る。
+   */
+  listApprovalsSettledAround?(
+    range: { since: string; until: string },
+    options?: { conversationId?: string },
+  ): Promise<ApprovalList>;
+  /**
+   * 決着した承認ごとの決着の時刻（`answeredAt`、無ければ `withdrawnAt`）だけを返す（#5089）。本文は読まない。並びは契約しない。
+   * 省略可能: 持たない器では、呼び手が `listApprovals({ pendingOnly: false })` から作る。
+   */
+  listApprovalSettledAts?(): Promise<string[]>;
   /** 承認待ち1件を id で読む。無ければ `null`。在るが読めない行は `UnreadableApprovalError`（`null` に畳むと呼び出し元が「存在しない」と言い切る）。メモリ実装は投げない。 */
   getApproval(id: string): Promise<PendingApproval | null>;
   putApproval(approval: PendingApproval): Promise<void>;
