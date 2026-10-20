@@ -365,6 +365,8 @@ async function newBinaryBlobs(
     collectBinaryPaths(committed.stdout, binaryPaths);
   }
   if (binaryPaths.size === 0) return [];
+  // 改行を含むパスは送らない側へ倒す: 下の `rev-list` の出力を行で読むので名前が崩れ、テキストの差分からも blob の判定からも漏れて、判定を通らずに外へ出るため
+  if ([...binaryPaths].some((name) => name.includes('\n'))) return undefined;
   const listed = await git(
     spawn,
     [

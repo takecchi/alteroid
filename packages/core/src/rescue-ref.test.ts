@@ -354,6 +354,16 @@ describe('退避 ref（#1266）', () => {
         expect(report?.notPushed?.files).toEqual(['edge.png']);
       });
 
+      it('名前に改行を含むバイナリは判定しきれないので送らない（判定を通らずに外へ出さない）', async () => {
+        await writeFile(path.join(repo, 'two\nlines.png'), png('n'));
+        g(repo, 'add', '.');
+
+        const [report] = await run();
+
+        expect(report?.notPushed?.reason).toBe('error');
+        expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
+      });
+
       it('-diff を付けたテキストのファイル（NUL 無し）は、git がバイナリと言っても全部の規則で判定する', async () => {
         await writeFile(path.join(repo, '.gitattributes'), 'conf.txt -diff\n');
         g(repo, 'add', '.gitattributes');
