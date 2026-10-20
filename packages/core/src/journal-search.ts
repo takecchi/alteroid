@@ -25,6 +25,10 @@ export const SEARCHABLE_FIELDS_BY_TYPE = {
   // `contextUsage.error` は入れない: ネストした欄で、トップレベルの素の文字列だけを想定しているため。
   turn_usage: [],
   context_usage: [],
+  // 自由文を持たない（段の名前・道具の名前・数だけ）
+  turn_timing: [],
+  // 自由文を持たない（経路の型・SQL の頭・数だけ）
+  http_timing: [],
   inbox_flow: [],
   // `failed.reason` はネストした欄なので対象外。
   github_observation: [],

@@ -847,10 +847,15 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
 
     // `tool_result` を含むときだけにする: 人間の発言のエコーや replay（`SDKUserMessageReplay`）を「考え始めた」と読み違えないため
     case 'user': {
-      const returned = contentBlocksRaw((message as { message?: unknown }).message).some(
+      const results = contentBlocksRaw((message as { message?: unknown }).message).filter(
         (block) => (block as { type?: unknown }).type === 'tool_result',
       );
-      return returned ? [{ type: 'tool_result' }] : [];
+      if (results.length === 0) return [];
+      // 結果が答えた tool_use の id を運ぶ（#5086。道具ごとの時間を測る鍵）。読めない id は省く
+      const toolUseIds = results
+        .map((block) => (block as { tool_use_id?: unknown }).tool_use_id)
+        .filter((id): id is string => typeof id === 'string' && id !== '');
+      return [{ type: 'tool_result', ...(toolUseIds.length === 0 ? {} : { toolUseIds }) }];
     }
 
     case 'result': {
@@ -870,6 +875,15 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
       const subtype = (message as { subtype?: unknown }).subtype;
       const id = (message as { uuid?: unknown }).uuid;
       const failure = resultFailureOf(message);
+      // 成否で絞らない（#5086）: 時間は失敗したターンでも測った値で、遅さの調べに要る。数値でない欄は省く
+      const durationMs = (message as { duration_ms?: unknown }).duration_ms;
+      const durationApiMs = (message as { duration_api_ms?: unknown }).duration_api_ms;
+      const timing = {
+        ...(typeof durationMs === 'number' && Number.isFinite(durationMs) ? { durationMs } : {}),
+        ...(typeof durationApiMs === 'number' && Number.isFinite(durationApiMs)
+          ? { durationApiMs }
+          : {}),
+      };
       return [
         {
           type: 'turn_ended',
@@ -888,6 +902,7 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
                   ...(mainLoopUsage === undefined ? {} : { mainLoopUsage }),
                 },
               }),
+          ...(Object.keys(timing).length === 0 ? {} : { timing }),
           ...(typeof id === 'string' && id.length > 0 ? { id } : {}),
           denials: permissionDenialsOf(message).map(toAgentPermissionDenial),
         },
@@ -935,6 +950,12 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
   // 生の合図と `result.permission_denials` の両方を読む: `permissionMode: 'auto'` では `canUseTool` が呼ばれず、この合図を捨てると手が止められたことが誰にも見えないが、合図は best-effort で取りこぼしうるため
   if (subtype === 'permission_denied') {
     return [{ type: 'permission_denied', via: 'live', denial: toAgentPermissionDenial(message) }];
+  }
+
+  // 要約の始まりの合図（#5086）。`status: 'compacting'` だけを拾い、`requesting` や null（終わり）は運ばない: 終わりは `compact_boundary` が言う
+  if (subtype === 'status') {
+    const status = (message as { status?: unknown }).status;
+    return status === 'compacting' ? [{ type: 'compaction_started' }] : [];
   }
 
   // 読めない形（`trigger` が2値のどちらでもない・`pre_tokens` が数値でない）は0個にする: SDK が版で形を変えたと見て作り物を返さないため
@@ -1196,7 +1217,10 @@ function contentBlocksOf(message: unknown): AgentContentBlock[] {
     const text = (block as { text?: unknown }).text;
     if (type === 'text' && typeof text === 'string') return { type: 'text', text };
     const name = (block as { name?: unknown }).name;
-    if (type === 'tool_use' && typeof name === 'string') return { type: 'tool_use', name };
+    if (type === 'tool_use' && typeof name === 'string') {
+      const id = (block as { id?: unknown }).id;
+      return { type: 'tool_use', name, ...(typeof id === 'string' && id !== '' ? { id } : {}) };
+    }
     return { type: 'other' };
   });
 }

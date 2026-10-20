@@ -124,6 +124,18 @@ import {
   renderListingEntry,
   renderListingFromEnd,
 } from './excerpt.js';
+import {
+  describeTurnTimingBody,
+  describeTurnTimingHead,
+  renderTurnTimingSummary,
+  type TurnTimingEntry,
+} from './turn-timing-format.js';
+import {
+  describeHttpTimingBody,
+  describeHttpTimingHead,
+  renderHttpTimingSummary,
+  type HttpTimingEntry,
+} from './http-timing-format.js';
 import { commandHeadWord, type RecentDenial } from './denial-shape.js';
 import { classifyManagerActivity, describeReportDrift } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
@@ -1185,6 +1197,10 @@ const PROFILE_LIST_BUDGET = 6_000;
 // 他の一覧と定数を共有しない: 片方だけ直したくなったときに一緒に動かないため
 const SELF_DROPPED_BUDGET = 8_000;
 const SELF_DROPPED_DEFAULT_LIMIT = 50;
+// self_status の「直近のターンの時間」が読む件数（#5086）。中央値・90% 点が意味を持つ数で、1回の読みを軽く保つ
+const SELF_STATUS_TURN_TIMING_LIMIT = 30;
+// self_status の「HTTP API の時間」が読む窓の数（#5089）。10 分の窓で直近 2 時間ぶん
+const SELF_STATUS_HTTP_TIMING_LIMIT = 12;
 
 // `JOURNAL_*` を使い回さない: 値は同じでも探す対象（会話の1発言）が違うため
 const CONVERSATION_EXCHANGE_EXCERPT = 200;
@@ -2971,12 +2987,22 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         slug: z.string().describe('文書のスラッグ'),
-        content: z.string().describe('追記する Markdown'),
+        content: z
+          .string()
+          .describe(`追記する Markdown（${formatStringLengthJa({ min: 1 })}。空白だけは断る）`),
         summary: z.string().describe('何を追記したかの一行要約（日誌に残る）'),
       },
       async ({ slug, content, summary }) => {
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
+        // 空の追記を断る: 置き場は空の本文でも末尾へ空行を1本足して版を進め、「追記した」と答えることになるため（memory_section_move も同じ理由で空を渡さない）
+        const contentError = describeStringLengthViolation('content', stripNul(content), {
+          min: 1,
+        });
+        if (contentError !== null) return text(`${contentError}追記していない。`);
+        if (stripNul(content).trim().length === 0) {
+          return text('content が空白だけなので追記していない。足したい記述を書いて渡すこと。');
         }
         const [before, memoryBefore] = await Promise.all([
           stores.persona.read(slug),
@@ -5337,8 +5363,21 @@ export function createCloneTools(context: ToolContext) {
               `${id} は既に片付けてある（読めない形で入っているため、いつ・どう片付けたかは分からない）。`,
             );
           }
+          // 読み直した行の形どおりに言う: 消えていた（保持上限で刈られた・会話の取り消しで消えた）回と、閉じていない回を「片付けてある」に潰さないため
+          if (after === null) {
+            return text(
+              `${await describeCommitmentNotOnLedger(stores, id)}` +
+                '（確かめた直後に台帳から無くなっていた）。この呼びでは閉じていない。',
+            );
+          }
+          if (after.closedAt === undefined) {
+            return text(
+              `${id} は閉じられなかった（台帳には未了のまま在るが、閉じる書き込みが通らなかった）。` +
+                'commitment_list で確かめてから、もう一度 commitment_close を試すこと。',
+            );
+          }
           return text(
-            `${id} は既に ${after?.closedAt ?? '不明な時刻'} に片付けてある（${after?.closedReason ?? '理由の記録なし'}）。`,
+            `${id} は既に ${after.closedAt} に片付けてある（${after.closedReason ?? '理由の記録なし'}）。`,
           );
         }
         // 自分で閉じたことは日誌に残す: 台帳の片付き行は保持上限で物理削除されうるので、日誌の記録が唯一の手掛かりになるため
@@ -5494,10 +5533,31 @@ export function createCloneTools(context: ToolContext) {
         }
         const before = existing.body;
         if (!(await stores.commitments.editBody(id, body, new Date().toISOString(), 'clone'))) {
-          const after = await stores.commitments.get(id);
+          // 読み直した行の形どおりに言う（commitment_close と同じ）。読めない形になっていても道具ごと落とさない
+          let after: Commitment | null;
+          try {
+            after = await stores.commitments.get(id);
+          } catch (error) {
+            if (!(error instanceof UnreadableCommitmentError)) throw error;
+            return text(
+              `${describeUnreadableCommitment(error)}（直す直前に読めない形になっていた）。この呼びでは直していない。`,
+            );
+          }
+          if (after === null) {
+            return text(
+              `${await describeCommitmentNotOnLedger(stores, id)}` +
+                '（確かめた直後に台帳から無くなっていた）。この呼びでは直していない。',
+            );
+          }
+          if (after.closedAt === undefined) {
+            return text(
+              `${id} は直せなかった（台帳には未了のまま在るが、書き直しが通らなかった）。` +
+                'commitment_list で確かめてから、もう一度 commitment_edit を試すこと。',
+            );
+          }
           return text(
-            `${id} は既に ${after?.closedAt ?? '不明な時刻'} に片付けてある` +
-              `（${after?.closedReason ?? '理由の記録なし'}）ので直せない。` +
+            `${id} は既に ${after.closedAt} に片付けてある` +
+              `（${after.closedReason ?? '理由の記録なし'}）ので直せない。` +
               '片付いた行を書き直したいなら、commitment_open で新しく載せること。',
           );
         }
@@ -5526,7 +5586,9 @@ export function createCloneTools(context: ToolContext) {
         '閉じた行を開き直す道具はこの器に無いので、撃ち間違えは道具では戻せない。',
         '**`origin` は必須で、在る起点（human / manager / external / self）を全部並べた呼びは断る**' +
           '（「全部閉じる」を1回で撃てる形は作らない）。',
-        '行は消えない（`closedAt` / `closedReason` が付くだけ）。**閉じた id は全部日誌に残る。**',
+        '行は消えない（`closedAt` / `closedReason` が付くだけ）。ただし片付き履歴に保持上限のある置き場（fs）では、' +
+          '上限を超えた片付きの行が古い側から消え、1回で上限を超えて閉じたときは閉じたばかりの行も消える（そのときは応答で件数を言う）。' +
+          '**閉じた id は全部日誌に残る。**',
       ].join(''),
       {
         origin: z
@@ -5612,7 +5674,11 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        const { entries: openEntries, unreadable } = await stores.commitments.list();
+        const {
+          entries: openEntries,
+          unreadable,
+          trimmedClosed: trimmedBefore,
+        } = await stores.commitments.list();
         // 絞りは `commitment_list` と同じ側・同じ当て方で当てる: 下見した結果とこの道具が閉じる集合が食い違わないことが、一括で閉じてよいと判断できる唯一の根拠のため
         const afterOrigin = openEntries.filter((entry) => origin.includes(entry.origin));
         const afterSource =
@@ -5781,6 +5847,19 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
+        // 閉じた直後に片付き履歴の保持上限で刈られた行を数える（fs の置き場。1回で上限を超えて閉じると、閉じたばかりの行も刈る）:
+        // 言わないと、閉じたと言った行が commitment_list id= で「台帳に無い」になる。刈った件数が増えた回だけ読み直す（保持上限の無い置き場では読まない）
+        const trimmedAfter =
+          closedIds.length === 0 ? trimmedBefore : (await stores.commitments.list()).trimmedClosed;
+        let trimmedJustClosed = 0;
+        if (trimmedAfter > trimmedBefore) {
+          const remaining = new Set(
+            (await stores.commitments.list({ includeClosed: true })).entries.map(
+              (entry) => entry.id,
+            ),
+          );
+          trimmedJustClosed = closedIds.filter((id) => !remaining.has(id)).length;
+        }
         // 当たったのに閉じられなかった分を黙らせない: 「全部閉じた」と読まれると次の呼びの判断が狂うため
         const raced = targets.length - closedIds.length;
         const shownClosed = closedIds.slice(0, CLOSE_MANY_IDS_SHOWN);
@@ -5800,6 +5879,12 @@ export function createCloneTools(context: ToolContext) {
               : [
                   `⚠ 対象 ${targets.length} 件のうち ${raced} 件は閉じられなかった` +
                     '（この呼びの最中に他の経路が先に閉じた）。',
+                ]),
+            ...(trimmedJustClosed === 0
+              ? []
+              : [
+                  `⚠ 閉じた ${closedIds.length} 件のうち ${trimmedJustClosed} 件は、片付き履歴の保持上限を超えたため、` +
+                    '閉じた直後に台帳から消えた（commitment_list では読めない）。閉じたことと id は日誌に残っている。',
                 ]),
             ...restNote,
             ...unreadableNote,
@@ -6942,18 +7027,44 @@ export function createCloneTools(context: ToolContext) {
 
         const runnerModels = await context.runnerModels?.();
         const runnerAnthropicRoutes = await context.runnerAnthropicRoutes?.();
-        const [documents, memoryDocuments, aggregate, codexAuth] = await Promise.all([
-          stores.persona.list(),
-          stores.persona.documents(),
-          runtime.sdkModel === null ? Promise.resolve(null) : stores.usage.aggregate({}),
-          // 読めなければ黙らずに言う
-          stores.codexAuth.get().then(
-            (record) =>
-              record === null ? null : describeCodexChatgptAuth(codexChatgptAuthStatusOf(record)),
-            (error: unknown) =>
-              `Codex の ChatGPT ログイン: 正本を読めなかった（${reasonOf(error)}）`,
-          ),
-        ]);
+        const [documents, memoryDocuments, aggregate, codexAuth, turnTiming, httpTiming] =
+          await Promise.all([
+            stores.persona.list(),
+            stores.persona.documents(),
+            runtime.sdkModel === null ? Promise.resolve(null) : stores.usage.aggregate({}),
+            // 読めなければ黙らずに言う
+            stores.codexAuth.get().then(
+              (record) =>
+                record === null ? null : describeCodexChatgptAuth(codexChatgptAuthStatusOf(record)),
+              (error: unknown) =>
+                `Codex の ChatGPT ログイン: 正本を読めなかった（${reasonOf(error)}）`,
+            ),
+            // 直近のターンの時間（#5086）。読むのは種別と件数で絞った行だけで、この呼び出しのときにしか読まない
+            stores.journal
+              .list({ types: ['turn_timing'], limit: SELF_STATUS_TURN_TIMING_LIMIT })
+              .then(
+                (entries) =>
+                  renderTurnTimingSummary(
+                    entries.filter(
+                      (entry): entry is TurnTimingEntry => entry.type === 'turn_timing',
+                    ),
+                  ),
+                (error: unknown) =>
+                  `直近のターンの時間: 日誌を読めなかった（${reasonOf(error)}）。`,
+              ),
+            // HTTP API の時間（#5089）。同じく種別と件数で絞って読む
+            stores.journal
+              .list({ types: ['http_timing'], limit: SELF_STATUS_HTTP_TIMING_LIMIT })
+              .then(
+                (entries) =>
+                  renderHttpTimingSummary(
+                    entries.filter(
+                      (entry): entry is HttpTimingEntry => entry.type === 'http_timing',
+                    ),
+                  ),
+                (error: unknown) => `HTTP API の時間: 日誌を読めなかった（${reasonOf(error)}）。`,
+              ),
+          ]);
 
         return text(
           [
@@ -6968,6 +7079,10 @@ export function createCloneTools(context: ToolContext) {
             renderMemorySize(documents, memoryDocuments, renderMemoryDocuments(memoryDocuments)),
             '',
             renderLedgerCrossReference(runtime.sdkModel, aggregate),
+            '',
+            turnTiming,
+            '',
+            httpTiming,
             ...(await renderPeerReach(context.managers)),
           ].join('\n'),
         );
@@ -7078,7 +7193,9 @@ export function createCloneTools(context: ToolContext) {
       {
         request: z
           .string()
-          .describe('依頼内容。人間が Claude Code に書くのと同じ粒度で、背景と狙いを添えて書く'),
+          .describe(
+            `依頼内容。人間が Claude Code に書くのと同じ粒度で、背景と狙いを添えて書く（${formatStringLengthJa({ min: 1 })}。空白だけは断る）`,
+          ),
         cwd: z.string().optional().describe('作業ディレクトリ。省略時はデーモンの既定'),
         attachments: z
           .array(z.string().min(1))
@@ -7111,6 +7228,14 @@ export function createCloneTools(context: ToolContext) {
           runnerId?: string | undefined;
         };
         if (!context.managers) return NO_POOL;
+        // 空の依頼を断る: 日誌に「起こそうとしている」と書き、runner へ何もしない依頼を渡して1本ぶんの器を使うことになるため
+        const requestError = describeStringLengthViolation('request', stripNul(request), {
+          min: 1,
+        });
+        if (requestError !== null) return text(`${requestError}起こしていない。`);
+        if (stripNul(request).trim().length === 0) {
+          return text('request が空白だけなので起こしていない。任せたい仕事を書いて渡すこと。');
+        }
         // conversationId はクローンに渡させず呼び出し文脈から自動で読む: 手で維持する欄を新しく作らないため
         // 返信の宛先ではなく仕事の会話を読む: 報告を受けた内部ターンで続きを委譲したとき、起点が途切れないため
         const conversationId = getWorkConversationId();
@@ -7280,11 +7405,23 @@ export function createCloneTools(context: ToolContext) {
               RESTART_BEFORE_CHECK_ADVICE,
           );
         }
+        // requestId 無しの decision が確認に当たらなかった回を言う: 待っている確認が無いと本文は追加指示として届く（預かりは本文だけを持つ）ので、
+        // 言わないと呼び手は許可・拒否を出したつもりのまま、相手は本文を普通の指示として読む。当たった回の outcome は `answered`
+        const decisionUnusedNote =
+          decision !== undefined &&
+          requestId === undefined &&
+          (result.outcome === 'delivered' || result.outcome === 'held')
+            ? `\n⚠ decision（${decision}）を付けたが、いま答えを待っている確認が無かったので、回答としては使っていない` +
+              '（許可・拒否としてはどこにも当たっていない）。本文は追加指示として' +
+              (result.outcome === 'held' ? '預かった。' : '届けた。') +
+              '確認に答えるつもりだったなら、受信箱に届いた requestId を付けて送り直すこと。'
+            : '';
+        if (result.outcome === 'held') return text(`${result.detail}${decisionUnusedNote}`);
         // 「届けた」が保証する範囲を名乗る: 観測したのは resume の口が成功を返したところまでで、相手がこの本文を読んだかは見ていないため
         // 「同じ本文で立て直さないこと」は落とさない: 送った直後の `manager_list` が `lost` のままで、クローンが指示を失ったと判断し出し直した実害があるため
         if (result.outcome === 'delivered') {
           return text(
-            `[${managerId}] ${result.detail}\n` +
+            `[${managerId}] ${result.detail}${decisionUnusedNote}\n` +
               '**「届けた」は「読んで動いた」ではない。** 観測したのは runner の ' +
               'resume の口を叩いて成功が返ったところまでで、' +
               '相手がこの本文を読んだかは1度も見ていない。' +
@@ -10144,6 +10281,10 @@ function renderJournalEntry(
         body: describeContextLine(context).replace(/^\n/, ''),
       };
     }
+    case 'turn_timing':
+      return { head: describeTurnTimingHead(entry), body: describeTurnTimingBody(entry) };
+    case 'http_timing':
+      return { head: describeHttpTimingHead(entry), body: describeHttpTimingBody(entry) };
     case 'token_rotation': {
       // `exhausted`（全層が止まる）を `not_rotated`（正常）と同じ顔にしない: 見出しに `event` を出す
       const where =

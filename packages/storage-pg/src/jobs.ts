@@ -170,6 +170,23 @@ export class PgJobStore implements JobStore {
     return { found, skipped };
   }
 
+  // 主キーで1行だけ読む（#5089）。覚え（`#cache`）は使わない: 1行の本文を読むのは版を確かめる往復と変わらない重さで、覚えを汚す経路を増やさないため
+  async getJob(id: string): Promise<Job | null> {
+    if (hasNul(id)) return null;
+    const rows = await this.#db
+      .select({ job: jobs.job })
+      .from(jobs)
+      .where(eq(jobs.id, id))
+      .limit(1);
+    const row = rows[0];
+    if (row === undefined) return null;
+    const parsed = jobSchema.safeParse(row.job);
+    if (!parsed.success) {
+      throw new UnreadableJobError({ id, reason: summarizeInvalidFields(parsed.error.issues) });
+    }
+    return parsed.data;
+  }
+
   async putJob(job: Job): Promise<void> {
     const value = stripNulls(prepareJobForWrite(jobSchema.parse(job)));
     await this.#db

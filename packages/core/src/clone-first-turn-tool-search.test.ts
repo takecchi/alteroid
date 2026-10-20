@@ -89,6 +89,45 @@ describe('クローン — 最初のターンの ToolSearch の観測（#4921）
     await s.clone.stop();
   });
 
+  // 本体（CLI 0.3.303）は、ToolSearch で読み込んだ分を「MCP tools」（used）、残りを「MCP tools (deferred)」（deferred）の2行に分けて返す。
+  // 最初のターンでクローンが ToolSearch で道具を読み込むと両方が出る（本番の起動の行が3回とも「取れなかった」だった。#4269）
+  it('⭐ 読み込んだ分（used）と残り（deferred）の2行が出た回は、deferred（ToolSearch は効いていた）と書き、両方の量を添える', async () => {
+    const lines: string[] = [];
+    const s = observe(
+      [
+        { name: 'System prompt', tokens: 13_000, kind: 'used' },
+        { name: 'MCP tools', tokens: 1_200, kind: 'used' },
+        { name: 'MCP server instructions', tokens: 150, kind: 'used' },
+        { name: 'MCP tools (deferred)', tokens: 34_000, kind: 'deferred' },
+      ],
+      lines,
+    );
+
+    s.clone.post(humanMessage('テスト'));
+    await waitForDone(s.events);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('MCP の道具は deferred（ToolSearch は効いていた');
+    expect(lines[0]).toContain('名前だけ 34,000 トークン');
+    expect(lines[0]).toContain('ToolSearch で読み込んだ分 1,200 トークン');
+    expect(lines[0]).not.toContain('取れなかった');
+
+    await s.clone.stop();
+  });
+
+  it('MCP の行が無い回は、行が無かったと理由を添えて「取れなかった」と書く', async () => {
+    const lines: string[] = [];
+    const s = observe([{ name: 'System prompt', tokens: 13_000, kind: 'used' }], lines);
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('MCP の道具の区分は取れなかった（区分に MCP の道具の行が無かった）');
+
+    await s.clone.stop();
+  });
+
   it('区分が無い回は「取れなかった」と書き、推し量らない', async () => {
     const lines: string[] = [];
     const s = observe(undefined, lines);

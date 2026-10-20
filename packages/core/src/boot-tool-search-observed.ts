@@ -9,17 +9,34 @@ function tokens(value: number): string {
   return value.toLocaleString('en-US');
 }
 
+// 本体は、ToolSearch で読み込んだ分を「MCP tools」（used）、残りを「MCP tools (deferred)」（deferred）の2行に分けて返す（CLI 0.3.303 を読んだ）。
+// 最初のターンでクローンが ToolSearch を使うと両方が出るので、`kind` が1種類に揃うことを条件にしない（揃えると、効いた回ほど「取れなかった」になる。#4269）
 function mcpToolsPhrase(contextUsage: ContextUsageObservation): string {
+  if (contextUsage.error !== undefined) {
+    return `MCP の道具の区分は取れなかった（文脈の観測が失敗した: ${contextUsage.error}）`;
+  }
   const rows = (contextUsage.categories ?? []).filter((category) =>
     category.name.startsWith(MCP_TOOLS_CATEGORY_NAME),
   );
-  const kinds = new Set(rows.map((row) => row.kind));
-  const [kind] = [...kinds];
-  if (rows.length === 0 || kinds.size !== 1) return 'MCP の道具の区分は取れなかった';
-  const sum = tokens(rows.reduce((total, row) => total + row.tokens, 0));
-  if (kind === 'deferred') return `MCP の道具は deferred（名前だけ、${sum} トークン）`;
-  if (kind === 'used') return `MCP の道具は used（本体ごと、${sum} トークン）`;
-  return 'MCP の道具の区分は取れなかった';
+  if (rows.length === 0) {
+    return contextUsage.categories === undefined
+      ? 'MCP の道具の区分は取れなかった（区分が返らなかった）'
+      : 'MCP の道具の区分は取れなかった（区分に MCP の道具の行が無かった）';
+  }
+  const deferred = rows.filter((row) => row.kind === 'deferred');
+  const used = rows.filter((row) => row.kind === 'used');
+  if (deferred.length + used.length !== rows.length) {
+    const others = [...new Set(rows.map((row) => row.kind ?? '（無し）'))].join('・');
+    return `MCP の道具の区分は取れなかった（区分の種類 ${others} が used・deferred のどちらでもない）`;
+  }
+  const sumOf = (items: readonly { tokens: number }[]): string =>
+    tokens(items.reduce((total, row) => total + row.tokens, 0));
+  if (used.length === 0) return `MCP の道具は deferred（名前だけ、${sumOf(deferred)} トークン）`;
+  if (deferred.length === 0) return `MCP の道具は used（本体ごと、${sumOf(used)} トークン）`;
+  return (
+    `MCP の道具は deferred（ToolSearch は効いていた。名前だけ ${sumOf(deferred)} トークン、` +
+    `ToolSearch で読み込んだ分 ${sumOf(used)} トークン）`
+  );
 }
 
 /**

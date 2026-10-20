@@ -363,10 +363,16 @@ export default function Approvals() {
         </Card>
       ) : (
         <ul className="flex flex-col gap-3" aria-label="承認待ちの一覧">
-          {approvalsList.map((approval) => (
+          {approvalsList.map((approval, index) => (
             <li key={approval.id}>
               <ApprovalEntry
                 approval={approval}
+                conversationShownAbove={
+                  approval.conversationId != null &&
+                  approvalsList
+                    .slice(0, index)
+                    .some((above) => above.conversationId === approval.conversationId)
+                }
                 draft={drafts.texts[approval.id] ?? ''}
                 onDraftChange={(text) => setDraft(approval.id, text)}
                 questionsDraft={drafts.questions[approval.id] ?? EMPTY_QUESTIONS_DRAFT}

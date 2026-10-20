@@ -1204,6 +1204,12 @@ export interface ManagerPool {
   abort(managerId: string, reason?: string, by?: ManagerStopActor): Promise<ManagerAbortResult>;
   list(): Promise<ManagerSummary[]>;
   /**
+   * 1件だけ読む（#5089）。`list()` の該当の1件と同じ像を返す（ただし一覧の並べ替えと、一覧のついでに書く計器は無い）。
+   * 無ければ `undefined`。台帳の行が読めなければ `UnreadableJobError`。
+   * 省略可能: テストの偽のプールは持たなくてよく、呼び出し側は `list()` から探す形に倒す。
+   */
+  get?(managerId: string): Promise<ManagerSummary | undefined>;
+  /**
    * `ManagerSummary` には載せない: デーモンのプロセス内の像で、台帳には無い（器を作り直せば数え直し）。
    * 台帳から作る `ManagerSummary` を汚さずに、読む側が状態へ添えられる。
    */
@@ -3972,10 +3978,20 @@ class Pool implements ManagerPool {
         if (waitedLongEnough && folded.stuck !== undefined) onStuck?.(folded.stuck);
         // 断った本文を捨てない: 呼び手が台帳で追って送り直すしかなく、追い損ねた伝言は誰にも届かないまま消えるため。
         if (holdable) {
+          // 畳めない理由が背景処理だけなら、待ちの上限で畳んで届ける。その時刻を返事で言う: 言わないと、呼び手はいつ届くか分からず、
+          // 背景処理ごと捨てる manager_stop → manager_start を選ぶ（2026-10-19 に4回。どれも上限の前に手で止めた）
+          const backgroundOnly =
+            folded.stuck !== undefined &&
+            folded.stuck.blockers.length === 1 &&
+            (folded.stuck.backgroundTasks ?? 0) > 0;
+          const foldDueAt = backgroundOnly
+            ? this.#heldFoldDueAt(oldestHeldAt, awaitingSince)
+            : undefined;
           return await this.#holdMessage(
             record,
             message,
             folded.declinedReason ?? folded.declined.detail,
+            foldDueAt,
           );
         }
         return folded.declined;
@@ -4503,10 +4519,25 @@ class Pool implements ManagerPool {
    * 届けられない伝言を台帳に預かる。上限（`HELD_MESSAGES_MAX_COUNT` / `HELD_MESSAGES_MAX_CHARS`）を超えるなら預からず断る。
    * 書けなかったら預かったと言わない（台帳が正で、言った後に消えると呼び手は送り直す機会を失う）。
    */
+  /**
+   * 背景処理だけが理由で預かった伝言を、遅くともいつ畳んで届けるか（epoch ms）。見回りの届け直し（`#deliverHeld`）が畳む時刻
+   * ＝ 最初の預かりと背景処理待ちに入った時刻の早いほう＋上限（`#send` の `waitedLongEnough` と同じ数え方）。これから預かる伝言は、いまを預かりの時刻とする。
+   * 鍵の回転の起こし直しの上限（枠で止まった時刻から数える）は混ぜない: 挑み直しの状態が無い担当には効かず、「遅くとも」が守れない。
+   * そちらが先に畳めば、この時刻より早く届くだけである。
+   */
+  #heldFoldDueAt(oldestHeldAt: string | undefined, awaitingSince: string | undefined): number {
+    const starts = [oldestHeldAt ?? new Date(this.#now()).toISOString(), awaitingSince]
+      .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
+      .filter((at) => !Number.isNaN(at));
+    return Math.min(...starts) + HELD_FORCE_FOLD_AFTER_MS;
+  }
+
   async #holdMessage(
     record: ManagerRecord,
     message: string,
     reason: string,
+    // 背景処理だけが理由の回の、畳んで届ける上限の時刻（`#heldFoldDueAt`）。分からない・他の理由がある回は無い
+    foldDueAt?: number,
   ): Promise<ManagerSendResult> {
     const managerId = record.job.id;
     const held = record.job.heldMessages ?? [];
@@ -4540,14 +4571,25 @@ class Pool implements ManagerPool {
       grounds: `managerId=${managerId} 理由=${excerptLine(reason, NOTIFY_REPORT_EXCERPT)}`,
     });
     const expiresAt = new Date(Date.parse(heldAt) + HELD_MESSAGE_TTL_MS).toISOString();
+    const deadlineClause =
+      foldDueAt === undefined
+        ? ''
+        : `**遅くとも ${new Date(Math.max(foldDueAt, this.#now())).toISOString()}（待ちの上限 ` +
+          `${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分）の後の見回り（1分ごと）で、残っている背景処理ごと畳み、` +
+          '新しい鍵で起こし直してこの伝言を届ける**（背景処理が先に終われば、その時点で届く）。' +
+          'それまで待てば、manager_stop も後継も要らない。';
     return {
       outcome: 'held',
       detail:
         `${reason}\n\nこの伝言は捨てずに預かった（${managerId} の預かり ${String(count)} 通目。期限 ${expiresAt}）。` +
+        deadlineClause +
         '届けられるようになったら（背景処理・確認待ちが片付いて新しい鍵で起こし直せたとき・抱えている鍵が使えるようになったとき・' +
         '器が替わって resume から入るとき）、預かった順に自動で届け、届けたら知らせる。' +
         '送り直さないこと（二重に届く）。続けて送った伝言は、預かりの後ろに並べてまとめて届ける。' +
-        '残っている背景処理を捨ててよいなら manager_stop → manager_start で後継を起こす（預かりは本文ごと返す）。',
+        (foldDueAt === undefined
+          ? '残っている背景処理を捨ててよいなら manager_stop → manager_start で後継を起こす（預かりは本文ごと返す）。'
+          : '上限を待たずに、残っている背景処理（とその結果）を今すぐ捨ててよい場合だけ、' +
+            'manager_stop → manager_start で後継を起こす（預かりは本文ごと返す）。'),
     };
   }
 
@@ -4927,90 +4969,90 @@ class Pool implements ManagerPool {
     return undefined;
   }
 
+  // 名簿・現役の世代は1回だけ引いて使い回す: 一覧を作っている間に動いても、同じ応答の中では全件を同じ像で比べる
+  // （1本ずつ `this.#tokenIdentity?.()` を呼び直すと、回転が割り込んだとき一部だけ新しい現役と比べることになる）。
+  // `list()` と `get()` が同じ組み立てを使う（#5089）: 口ごとに組むと、一覧と詳細で同じ委譲の状態が食い違うため
+  #summaryContext(): SummaryContext {
+    this.#noteMissingSessions();
+    return {
+      silent: this.#silentRunners(),
+      runnerSessions: this.#runnerSessions(),
+      // 一覧を作っている間に名簿が動いても、同じ応答の中では全件を同じ像で比べる: 1回だけ引き、呼び出しごとに読み直さない。
+      registeredRunnerIds: this.#registeredRunnerIds(),
+      activeTokenGeneration: this.#tokenIdentity?.()?.generation,
+      tokenGenerationPoolWired: this.#tokenIdentity !== undefined,
+    };
+  }
+
+  #summarize(record: ManagerRecord, context: SummaryContext): ManagerSummary {
+    const { silent, runnerSessions, registeredRunnerIds } = context;
+    const job = record.job;
+    return summaryOf(
+      record,
+      isLive(record, silent),
+      lostSinceOf(record, silent),
+      vanishedOf(record, registeredRunnerIds),
+      record.sessionMissingSince,
+      record.turnEndedAt,
+      record.turnEndReason,
+      record.turnEndTail,
+      record.toolUseStallAt,
+      record.toolUseStallPending,
+      this.#awaitingBackgroundOf(job.id),
+      this.#tokenIdentities.get(job.id)?.generation,
+      context.activeTokenGeneration,
+      context.tokenGenerationPoolWired,
+      this.#resetTimeSkewMatches.get(job.id),
+      // `ManagerSummary.usageStoppedAt` の doc のとおり門を通す。
+      this.#usageStopped.has(job.id) ? job.usageStoppedAt : undefined,
+      runnerListedAtOf(job, silent, runnerSessions),
+    );
+  }
+
+  // 聞けていない委譲には欄を作らない（0 を捏造しない）。走行中の像（`#records`）に在る委譲だけに添える
+  #withObserved(record: ManagerRecord, summary: ManagerSummary): ManagerSummary {
+    let result = summary;
+    const tasks = this.#observedBackgroundTasks(record.job.runnerId, record.job.id);
+    if (tasks !== undefined) result = { ...result, liveBackgroundTasks: tasks };
+    const denials = this.#observedClassifierDenials(record.job.runnerId, record.job.id);
+    if (denials !== undefined) result = { ...result, classifierDenials: denials };
+    const peerApprovals = this.#observedPeerApprovals(record.job.runnerId, record.job.id);
+    if (peerApprovals !== undefined) {
+      result = { ...result, pendingPeerApprovals: { ...peerApprovals } };
+    }
+    return result;
+  }
+
+  // 1件のために台帳を全部読まない（#5089）。走行中の像に在ればそれを、無ければ台帳の1行だけを読む（`list()` と同じ優先）。
+  // 読めない行は `UnreadableJobError` を投げ直す（`JobStore.getJob` の doc）
+  async get(managerId: string): Promise<ManagerSummary | undefined> {
+    await this.#ensureConnected();
+    const context = this.#summaryContext();
+    const record = this.#records.get(managerId);
+    if (record !== undefined) return this.#withObserved(record, this.#summarize(record, context));
+    const job = await this.#stores.jobs.getJob(managerId);
+    if (job === null) return undefined;
+    return this.#summarize({ job, waiting: [], attached: false }, context);
+  }
+
   async list(): Promise<ManagerSummary[]> {
     await this.#ensureConnected();
 
-    // 名簿・現役の世代は1回だけ引いて使い回す: 一覧を作っている間に動いても、同じ応答の中では全件を同じ像で比べる
-    // （1本ずつ `this.#tokenIdentity?.()` を呼び直すと、回転が割り込んだとき一部だけ新しい現役と比べることになる）。
-    this.#noteMissingSessions();
-    const silent = this.#silentRunners();
-    const runnerSessions = this.#runnerSessions();
-    // 一覧を作っている間に名簿が動いても、同じ応答の中では全件を同じ像で比べる: 1回だけ引き、呼び出しごとに読み直さない。
-    const registeredRunnerIds = this.#registeredRunnerIds();
-    const activeTokenGeneration = this.#tokenIdentity?.()?.generation;
-    const tokenGenerationPoolWired = this.#tokenIdentity !== undefined;
+    const context = this.#summaryContext();
+    const { registeredRunnerIds } = context;
     const known = new Map<string, ManagerSummary>();
     for (const record of this.#records.values()) {
-      known.set(
-        record.job.id,
-        summaryOf(
-          record,
-          isLive(record, silent),
-          lostSinceOf(record, silent),
-          vanishedOf(record, registeredRunnerIds),
-          record.sessionMissingSince,
-          record.turnEndedAt,
-          record.turnEndReason,
-          record.turnEndTail,
-          record.toolUseStallAt,
-          record.toolUseStallPending,
-          this.#awaitingBackgroundOf(record.job.id),
-          this.#tokenIdentities.get(record.job.id)?.generation,
-          activeTokenGeneration,
-          tokenGenerationPoolWired,
-          this.#resetTimeSkewMatches.get(record.job.id),
-          // `ManagerSummary.usageStoppedAt` の doc のとおり門を通す。
-          this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
-          runnerListedAtOf(record.job, silent, runnerSessions),
-        ),
-      );
+      known.set(record.job.id, this.#summarize(record, context));
     }
     // `live: false` を決め打ちしない: `#retire` が `#records` から外した後の「台帳にしか無い」は
     // 「runner に宛先が無い」とは限らず、決め打つと外した瞬間に `live: true` だった委譲が `false` へ化ける。
     for (const job of await this.#stores.jobs.listJobs()) {
       if (known.has(job.id)) continue;
-      const fallback: ManagerRecord = { job, waiting: [], attached: false };
-      known.set(
-        job.id,
-        summaryOf(
-          fallback,
-          isLive(fallback, silent),
-          lostSinceOf(fallback, silent),
-          vanishedOf(fallback, registeredRunnerIds),
-          fallback.sessionMissingSince,
-          fallback.turnEndedAt,
-          fallback.turnEndReason,
-          fallback.turnEndTail,
-          fallback.toolUseStallAt,
-          fallback.toolUseStallPending,
-          this.#awaitingBackgroundOf(job.id),
-          this.#tokenIdentities.get(job.id)?.generation,
-          activeTokenGeneration,
-          tokenGenerationPoolWired,
-          this.#resetTimeSkewMatches.get(job.id),
-          // `ManagerSummary.usageStoppedAt` の doc のとおり門を通す。
-          this.#usageStopped.has(job.id) ? job.usageStoppedAt : undefined,
-          runnerListedAtOf(job, silent, runnerSessions),
-        ),
-      );
+      known.set(job.id, this.#summarize({ job, waiting: [], attached: false }, context));
     }
-    // 聞けていない委譲には欄を作らない（0 を捏造しない）。
     for (const record of this.#records.values()) {
-      const tasks = this.#observedBackgroundTasks(record.job.runnerId, record.job.id);
       const summary = known.get(record.job.id);
-      if (tasks !== undefined && summary !== undefined) {
-        known.set(record.job.id, { ...summary, liveBackgroundTasks: tasks });
-      }
-      const denials = this.#observedClassifierDenials(record.job.runnerId, record.job.id);
-      const current = known.get(record.job.id);
-      if (denials !== undefined && current !== undefined) {
-        known.set(record.job.id, { ...current, classifierDenials: denials });
-      }
-      const peerApprovals = this.#observedPeerApprovals(record.job.runnerId, record.job.id);
-      const afterDenials = known.get(record.job.id);
-      if (peerApprovals !== undefined && afterDenials !== undefined) {
-        known.set(record.job.id, { ...afterDenials, pendingPeerApprovals: { ...peerApprovals } });
-      }
+      if (summary !== undefined) known.set(record.job.id, this.#withObserved(record, summary));
     }
     const summaries = [...known.values()];
     // `isLive()` にも `status` にも触れない独立した計器。新しい tick は足さずここへ載せ、書く頻度は `#noteVanishedRunnerGauge` が絞る。
@@ -6950,9 +6992,17 @@ class Pool implements ManagerPool {
    * 使える鍵が在れば回し手が回して `resumeStoppedByUsage()` を呼び、新しい鍵で続きから起こし直される。無ければ、鍵が戻った時点の同じ呼び出しが拾う。
    * 新しい経路を作らず、`usage_notice` と同じ口（`#observeForTokenRotation`）に乗せる。投げない（口が握る）。
    */
-  async #requestRotationForFailure(managerId: string, text: string): Promise<void> {
-    await this.#observeForTokenRotation(managerId, { notice: { kind: 'reached', text } });
-    await this.#wakeIfHeldTokenStale(managerId);
+  async #requestRotationForFailure(
+    managerId: string,
+    text: string,
+    heldFingerprint: string | undefined = this.#sessionTokenFingerprintOf(managerId),
+  ): Promise<void> {
+    await this.#observeForTokenRotation(
+      managerId,
+      { notice: { kind: 'reached', text } },
+      heldFingerprint,
+    );
+    await this.#wakeIfHeldTokenStale(managerId, heldFingerprint);
   }
 
   /**
@@ -6961,11 +7011,28 @@ class Pool implements ManagerPool {
    * 現役の鍵がもう通る（`ready`）と分かっているときだけ起こす: 通らないなら起こしても同じ枠に当たる。
    * 回転の出来事で既に起こされて印が下りていれば何もしない。投げない（判定に失敗したら起こさず、印を残す）。
    */
-  async #wakeIfHeldTokenStale(managerId: string): Promise<void> {
+  async #wakeIfHeldTokenStale(
+    managerId: string,
+    // 像を外した後（`closed` / `resume_failed` の枝）に呼ぶときは、外す前に控えた指紋を渡す: 像と一緒に引き取りの指紋が消えるため
+    heldFingerprint: string | undefined = this.#sessionTokenFingerprintOf(managerId),
+  ): Promise<void> {
     if (this.#stopped || !this.#usageStopped.has(managerId)) return;
     const held = this.#tokenIdentities.get(managerId)?.generation;
     const identity = this.#tokenIdentity?.();
-    if (identity === undefined || held === undefined || held >= identity.generation) return;
+    if (identity === undefined) return;
+    // 世代を覚えていない（再起動で引き取っただけの）セッションは、鍵の指紋で比べる（#4643 の畳みの判定と同じ）: 世代だけで比べると
+    // 「分からない」で素通りし、回し手も古い指紋の観測を stale として無視するので、引き取りの借りを使い切った後は次の回転まで誰も起こさない
+    const heldLabel =
+      held !== undefined
+        ? held < identity.generation
+          ? `世代 ${String(held)}`
+          : undefined
+        : heldFingerprint !== undefined &&
+            identity.fingerprint !== undefined &&
+            heldFingerprint !== identity.fingerprint
+          ? `再起動で引き取ったセッションの鍵。指紋 ${heldFingerprint} が現役と食い違う`
+          : undefined;
+    if (heldLabel === undefined) return;
     const active = identity.generation;
     if (this.#tokenAvailability === undefined) return;
     const availability = await this.#tokenAvailability(identity.tokenId).catch(() => undefined);
@@ -6974,7 +7041,7 @@ class Pool implements ManagerPool {
     if (!this.#usageStopped.has(managerId)) return;
     await this.#journal({
       type: 'decision',
-      decision: `[${managerId}] 抱えていた古い鍵（世代 ${String(held)}）で枠に当たったが、現役の鍵（世代 ${String(active)}）はもう通るので、回転の出来事を待たずに起こし直す`,
+      decision: `[${managerId}] 抱えていた古い鍵（${heldLabel}）で枠に当たったが、現役の鍵（世代 ${String(active)}）はもう通るので、回転の出来事を待たずに起こし直す`,
       grounds:
         `managerId=${managerId} tokenId=${identity.tokenId} 鍵の状態=ready ` +
         '（#4980。回し手は古い世代の観測を無視するので、待っても次の回転まで起こされない）',
@@ -9698,6 +9765,10 @@ class Pool implements ManagerPool {
             event.managerId,
             failedReportBodyOf(event.text) ?? event.text,
           );
+        } else if (event.failure !== undefined && this.#usageStopped.has(event.managerId)) {
+          // 印がターンの途中の `usage_notice` で先に立っていた回も、失敗で終わったこの時点で起こし直す: 通知の枝は印を立てるだけで起こさず、
+          // 回転の借りも挑み直しの状態も無ければ周回の掃きも拾わないので、次の鍵の回転まで止まる（古い鍵のセッションで回転の後も走っていた担当）。
+          await this.#wakeIfHeldTokenStale(event.managerId);
         }
         // 添えられたもの・断ったものが在る報告は、本文が空でも背景処理待ちでも配る: 成果物を握り潰さない。何も添えられていない報告は `await` を挟まない。
         const reportFiles =
@@ -10631,12 +10702,15 @@ class Pool implements ManagerPool {
         } else {
           await this.#clearUsageStoppedMark(event.managerId);
         }
+        // 像を外す前に指紋を控える（`closed` の枝と同じ）
+        const heldFingerprintAtRetire = this.#sessionTokenFingerprintOf(event.managerId);
         this.#retire(event.managerId);
         // 印を立てたら、使える鍵が在れば今すぐ起こし直してもらう（`closed` の枝と同じ）: `#retire` の後に置く理由も同じ。
         if (quotaReason) {
           await this.#requestRotationForFailure(
             event.managerId,
             reasonNotice?.kind === 'reached' ? reasonNotice.text : event.reason,
+            heldFingerprintAtRetire,
           );
         }
         return;
@@ -10942,10 +11016,24 @@ class Pool implements ManagerPool {
             this.#emit(event.managerId, 'report', closedNote);
           }
         }
+        // 像を外す前に控える: 再起動で引き取っただけのセッションの鍵は、像の上の指紋でしか分からない（`#wakeIfHeldTokenStale`）
+        const heldFingerprintAtClose = this.#sessionTokenFingerprintOf(event.managerId);
         this.#retire(event.managerId);
         // 印を立てた直後に、使える鍵が在れば今すぐ起こし直してもらう（#4850）。`#retire` の後に置く: 回し手が鍵を回して `resumeStoppedByUsage()` を呼ぶと `send()` が像を載せ直すので、手前だと `#retire` がそれを消す。
         if (markedByClosed !== undefined && this.#usageStopped.has(event.managerId)) {
-          await this.#requestRotationForFailure(event.managerId, markedByClosed);
+          await this.#requestRotationForFailure(
+            event.managerId,
+            markedByClosed,
+            heldFingerprintAtClose,
+          );
+        } else if (
+          (event.status === 'failed' || event.status === 'lost') &&
+          this.#usageStopped.has(event.managerId)
+        ) {
+          // 印が既に立っていた担当（古い鍵のまま背景処理を待たされていた回、#5044）も、セッションが終わった時点で起こし直す:
+          // 待つ理由（背景処理）はセッションと一緒に消えたのに、周回の掃きは待ちの上限（15 分）まで拾わず、その間 failed のまま止まる。
+          // 落ちた理由の文で絞らない: 背景処理の完了で古い鍵のターンが起き、`exited with code 1` だけを残して落ちる形が在る（2026-10-19 HOUSE-17・PROFILE-2）。
+          await this.#wakeIfHeldTokenStale(event.managerId, heldFingerprintAtClose);
         }
         // 枠でセッションごと落ちた回は `report` が出ず、ここしか通らない。`#retire` の後で呼ぶ: 起こし直しは `send()` に相乗りし、像が無ければ台帳から読み直すので resume できる。逆順だと `#retire` が `send()` の載せ直した像を消す。
         await this.#settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
@@ -11395,15 +11483,15 @@ class Pool implements ManagerPool {
   async #observeForTokenRotation(
     managerId: string,
     observation: Omit<TokenRotatorObservation, 'observedBy'>,
+    // 像を外した後に呼ぶときに、外す前に控えた指紋（`#wakeIfHeldTokenStale` と同じ）
+    heldFingerprint: string | undefined = this.#sessionTokenFingerprintOf(managerId),
   ): Promise<void> {
     if (this.#onUsageObservation === undefined) return;
     const identity = this.#tokenIdentities.get(managerId);
     // 身元が無い（再起動で引き取っただけの）セッションは、runner が名乗る鍵の指紋を添える（#4643）: 添えないと回し手は「分からない」を
     // 現役の通知として扱い、回したばかりの鍵をもう一度回す。成功の観測には添えない: そちらは id と世代のある観測しか照合しない生産者へ渡る
     const fingerprint =
-      identity === undefined && observation.succeeded !== true
-        ? this.#sessionTokenFingerprintOf(managerId)
-        : undefined;
+      identity === undefined && observation.succeeded !== true ? heldFingerprint : undefined;
     const observedBy = identity ?? (fingerprint === undefined ? undefined : { fingerprint });
     // 回し手へ渡す前後に印を打つ（#4485）: 利用上限で担当が一斉に落ちた回（2026-10-13T16:52Z〜）に、`rate_limit` の後で
     // 印の無い停止が続いた。回し手（鍵の回転の判断・配布・セッションの作り直し）が止めていたなら、窓に `-done` が無いまま残る
@@ -13170,6 +13258,15 @@ function tokenGenerationUnknownReasonOf(
 
 // `live` などに既定値を置かず必須の引数にする: 省略した側が黙って「繋がっている」と名乗り、既定を `false` にしても「繋がっているのに切れて見える」が混ざる。
 // 材料が `record` から読めないプロセス内の状態（名簿・`#usageStopped` など）の欄は、呼ぶ側が計算した値だけを渡す。
+// `ManagerPool` の一覧と1件の読みが、同じ応答の中で全件を同じ像で比べるための材料
+interface SummaryContext {
+  silent: ReadonlyMap<string, string>;
+  runnerSessions: ReadonlyMap<string, { ids: ReadonlySet<string>; observedAt: string }>;
+  registeredRunnerIds: ReadonlySet<string> | null;
+  activeTokenGeneration: number | undefined;
+  tokenGenerationPoolWired: boolean;
+}
+
 function summaryOf(
   record: ManagerRecord,
   live: boolean,

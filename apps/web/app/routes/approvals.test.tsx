@@ -930,6 +930,8 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     });
     renderPage();
 
+    // 既定は直近の3件だけなので、4件すべての添付を見るために開く（畳み方は下の「長い会話を畳む」）。
+    fireEvent.click(await screen.findByRole('button', { name: '全部を見る（4 件）' }));
     expect(await screen.findByText('［添付 2件: a.png、b.log］')).toBeTruthy();
     expect(screen.getByText('本文もある')).toBeTruthy();
     expect(screen.getByText('［添付 1件: 名前の無い添付］')).toBeTruthy();
@@ -957,6 +959,94 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     expect(await screen.findByText('この確認が上がった会話を読み込み中')).toBeTruthy();
     expect(await screen.findByText(/会話 conv-gone は存在しない/)).toBeTruthy();
     expect(screen.queryByRole('link', { name: /この会話をチャットで開く/ })).toBeNull();
+  });
+});
+
+describe('長い会話を畳む（同じ会話から確認がいくつも上がったとき）', () => {
+  const TOKEN = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
+
+  function conversationOf(count: number) {
+    return (id: string) =>
+      json({
+        conversationId: id,
+        messages: Array.from({ length: count }, (_, index) => ({
+          id: `${id}-m${index + 1}`,
+          at: `2026-08-19T09:0${index}:00.000Z`,
+          role: index % 2 === 0 ? 'inbound' : 'outbound',
+          text: `${id} の発言${index + 1}`,
+        })),
+        scanned: count,
+        reachedStart: true,
+      });
+  }
+
+  it('同じ会話の確認が並ぶとき、会話を出すのは最初のカードだけで、2件目からは「上の確認と同じ」と出す', async () => {
+    stubApprovals(
+      [
+        approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' }),
+        approval({ id: 'a-2', question: '質問2', conversationId: 'conv-x' }),
+        approval({ id: 'a-3', question: '質問3', conversationId: 'conv-y' }),
+        approval({ id: 'a-4', question: '質問4', conversationId: 'conv-x' }),
+      ],
+      { conversation: conversationOf(2) },
+    );
+    renderPage();
+
+    expect(await screen.findByText('conv-x の発言2')).toBeTruthy();
+    expect(await screen.findByText('conv-y の発言2')).toBeTruthy();
+    expect(screen.getAllByText('conv-x の発言2')).toHaveLength(1);
+    expect(screen.getAllByText('この確認が上がった会話は、上の確認と同じ')).toHaveLength(2);
+    // 繰り返さないカードからも、チャットへは開ける。
+    expect(
+      screen
+        .getAllByRole('link', { name: /この会話をチャットで開く/ })
+        .map((link) => link.getAttribute('href')),
+    ).toEqual(['/chat/conv-x', '/chat/conv-x', '/chat/conv-y', '/chat/conv-x']);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'ここにも出す' })[0]!);
+    expect(await screen.findAllByText('conv-x の発言2')).toHaveLength(2);
+    expect(screen.getAllByText('この確認が上がった会話は、上の確認と同じ')).toHaveLength(1);
+  });
+
+  it('会話は既定で直近の3件だけを出し、「全部を見る」で取れた全部を出す', async () => {
+    stubApprovals([approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' })], {
+      conversation: conversationOf(6),
+    });
+    renderPage();
+
+    expect(await screen.findByText('conv-x の発言6')).toBeTruthy();
+    expect(screen.getByText('conv-x の発言4')).toBeTruthy();
+    expect(screen.queryByText('conv-x の発言3')).toBeNull();
+    expect(screen.getByText('取れた 6 件のうち、直近の 3 件だけを出している')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '全部を見る（6 件）' }));
+    expect(screen.getByText('conv-x の発言1')).toBeTruthy();
+    expect(screen.getByText('conv-x の発言3')).toBeTruthy();
+  });
+
+  it('長い発言は伏せてから切る: 切り目に掛かった秘密も、頭だけでも全文でも出ない', async () => {
+    // 秘密の頭が200字の切り目より前に、尾が後ろに掛かる位置に置く（切ってから伏せると、頭の断片が型に合わず残る）。
+    // 伏せた後も200字を超えるように尾を足す（伏せ字は秘密より短い）。
+    const text = `${'あ'.repeat(180)}${TOKEN}${'い'.repeat(100)}の後ろ`;
+    stubApprovals([approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' })], {
+      conversation: () =>
+        json({
+          conversationId: 'conv-x',
+          messages: [{ id: 'm1', at: '2026-08-19T09:00:00.000Z', role: 'outbound', text }],
+          scanned: 1,
+          reachedStart: true,
+        }),
+    });
+    renderPage();
+
+    const more = await screen.findByRole('button', { name: '続きを読む' });
+    const list = screen.getByRole('list', { name: '承認待ちの一覧' });
+    expect(list.textContent).not.toContain('ghp_A1b2');
+    expect(list.textContent).not.toContain('の後ろ');
+
+    fireEvent.click(more);
+    expect(list.textContent).toContain('の後ろ');
+    expect(list.textContent).not.toContain('ghp_A1b2');
   });
 });
 

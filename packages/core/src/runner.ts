@@ -171,6 +171,7 @@ import {
   defaultRunnerOutboxRoot,
   defaultRunnerOutboxStagedRoot,
   openStagedOutboxFile,
+  outboxCollectFailureRefusals,
   prepareManagerOutbox,
   pruneStaleOutboxRoots,
   removeManagerOutbox,
@@ -650,6 +651,9 @@ export interface RunnerHost {
 // 無限には覚えない: 長時間走る runner のメモリが際限なく育つため。忘れた分は所有者不明として knownTerminated に入れず、撃たない側へ倒れる
 const PID_OWNER_MANAGER_ID_CAP = 4096;
 
+// 添付を置く間に畳みの片付けが重なったときの、置き直しを含めた試行の上限（`#placeAttachmentInput`）
+const ATTACHMENT_PLACE_ATTEMPTS = 3;
+
 // 裸のリテラルにしない（型で `ROTATABLE_CREDENTIAL_KEYS` に縛る）: 名前が変わると世代の照合が静かに効かなくなるため
 const AGENT_TOKEN_CREDENTIAL_NAME: (typeof ROTATABLE_CREDENTIAL_KEYS)[number] =
   'CLAUDE_CODE_OAUTH_TOKEN';
@@ -764,6 +768,8 @@ class Host implements RunnerHost {
   readonly #generations = new WeakMap<RunnerSession, string>();
   readonly #attachmentsRoot: string;
   readonly #attachmentRemovals = new Map<string, Promise<void>>();
+  // 担当ごとに、片付けを始めた回数（置いている間に片付けが重なったかを見分ける）
+  readonly #attachmentRemovalStarts = new Map<string, number>();
   // 別口で置いて照合を済ませた添付の控え（命令の `staged: true` の参照を突き合わせる。#4128 段3a）
   readonly #stagedAttachments = new StagedAttachmentLedger();
   readonly attachmentStageLimit: number;
@@ -1779,6 +1785,10 @@ class Host implements RunnerHost {
 
   // Promise を握る: 握らないと畳みの `onClosed` が投げた削除が遅れて走り、resume が置き直した添付を消すため
   #removeAttachments(managerId: string): void {
+    this.#attachmentRemovalStarts.set(
+      managerId,
+      (this.#attachmentRemovalStarts.get(managerId) ?? 0) + 1,
+    );
     this.#stagedAttachments.forgetManager(managerId);
     const removal: Promise<void> = removeManagerAttachments(this.#attachmentsRoot, managerId)
       .catch(() => undefined)
@@ -1828,22 +1838,36 @@ class Host implements RunnerHost {
     text: string,
     attachments: readonly RunnerAttachment[],
   ): Promise<AgentUserInput> {
-    await this.#awaitAttachmentRemovals(managerId);
-    void pruneStaleAttachmentDirs(
-      this.#attachmentsRoot,
-      [...this.#sessions.keys(), managerId],
-      Date.now(),
-    ).catch(() => undefined);
-    const placed = await placeRunnerAttachments({
-      root: this.#attachmentsRoot,
-      managerId,
-      attachments,
-      ledger: this.#stagedAttachments,
-      ...(this.#childUser === undefined ? {} : { childGid: this.#childUser.gid }),
-      // 担い手の子プロセスの env と同じ出所（器の env・鍵・プロファイル）で経路を決める。
-      routeEnv: { ...this.#baseChildEnv(), ...(this.#profile?.env() ?? {}) },
-    });
-    return composeAttachmentInput(text, placed);
+    // 置いている間に畳みの片付け（`#removeAttachments`）が始まったら、片付けを待って置き直す: 片付けは担当の置き場ごと消すので、
+    // 置く途中なら mkdir が ENOENT で投げて resume ごと失敗し（作り直しへ落ちない）、置き終えていても参照だけが残ってファイルが無い
+    for (let attempt = 1; ; attempt += 1) {
+      await this.#awaitAttachmentRemovals(managerId);
+      const removalsBefore = this.#attachmentRemovalStarts.get(managerId) ?? 0;
+      void pruneStaleAttachmentDirs(
+        this.#attachmentsRoot,
+        [...this.#sessions.keys(), managerId],
+        Date.now(),
+      ).catch(() => undefined);
+      const outcome = await placeRunnerAttachments({
+        root: this.#attachmentsRoot,
+        managerId,
+        attachments,
+        ledger: this.#stagedAttachments,
+        ...(this.#childUser === undefined ? {} : { childGid: this.#childUser.gid }),
+        // 担い手の子プロセスの env と同じ出所（器の env・鍵・プロファイル）で経路を決める。
+        routeEnv: { ...this.#baseChildEnv(), ...(this.#profile?.env() ?? {}) },
+      }).then(
+        (placed) => ({ placed }),
+        (error: unknown) => ({ error }),
+      );
+      const removedMeanwhile =
+        (this.#attachmentRemovalStarts.get(managerId) ?? 0) !== removalsBefore;
+      // 回数に上限を置く: 畳みが続けて重なっても、置き直しを際限なく繰り返さない
+      if (!removedMeanwhile || attempt >= ATTACHMENT_PLACE_ATTEMPTS) {
+        if ('error' in outcome) throw outcome.error;
+        return composeAttachmentInput(text, outcome.placed);
+      }
+    }
   }
 
   async answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome> {
@@ -3564,12 +3588,17 @@ class RunnerSession {
     if (this.#outboxDir === undefined) return false;
     try {
       return readdirSync(this.#outboxDir).length > 0;
-    } catch {
-      return false;
+    } catch (error) {
+      // 読めないことを「空」へ倒さない: 取り込みへ進めて、断りの理由を報告に載せる（無いだけなら取り込みが空を返す）
+      return (error as NodeJS.ErrnoException).code !== 'ENOENT';
     }
   }
 
-  /** 報告の直前に出し箱の直下を取り込む。失敗は報告を止めず、`note` に残す（出し箱の不調でターンの報告を失わない）。 */
+  /**
+   * 報告の直前に出し箱の直下を取り込む。失敗は報告を止めず、`note` に残す（出し箱の不調でターンの報告を失わない）。
+   * 失敗を `note` だけにしない: `note` は日誌にしか残らず、報告はファイルを持たない報告になって背景処理待ちなら畳まれる。
+   * 置かれた名前ごとの断り（`rejectedFiles`）にして報告に載せ、クローンに理由の行を出す。
+   */
   async #collectOutbox(): Promise<{
     files?: RunnerOutboxFile[];
     rejectedFiles?: RunnerOutboxRejectedFile[];
@@ -3592,12 +3621,19 @@ class RunnerSession {
         ...(collected.rejectedFiles.length === 0 ? {} : { rejectedFiles: collected.rejectedFiles }),
       };
     } catch (error) {
+      const reason = reasonOf(error);
       this.#emit({
         type: 'note',
         managerId: this.#id,
-        text: `出し箱を取り込めなかった: ${reasonOf(error)}`,
+        text: `出し箱を取り込めなかった: ${reason}`,
       });
-      return {};
+      return {
+        rejectedFiles: outboxCollectFailureRefusals(
+          this.#outboxRoot,
+          this.#id,
+          `出し箱を取り込めなかった（${reason}）。ファイルは出し箱に残っている`,
+        ),
+      };
     }
   }
 
@@ -3862,6 +3898,10 @@ class RunnerSession {
         return;
 
       case 'compaction':
+        return;
+
+      // 要約の始まり（#5086）はクローン層がターンの時間を測るためのもので、委譲層では見ない
+      case 'compaction_started':
         return;
 
       // 拒否の合図は委譲層では見ない: 数えて開き直すのはクローン層の仕事で、作業者のセッションは使い捨てのため

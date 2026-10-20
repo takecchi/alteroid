@@ -21,6 +21,7 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import {
   collectManagerOutbox,
   openStagedOutboxFile,
+  outboxCollectFailureRefusals,
   prepareManagerOutbox,
   pruneStaleOutboxRoots,
   removeManagerOutbox,
@@ -98,6 +99,42 @@ describe('collectManagerOutbox', () => {
     expect((await stat(join(stagedRoot, MANAGER))).mode & 0o777).toBe(0o700);
     expect(await readdir(dir)).toEqual([]);
     expect(await collect()).toEqual({ files: [], rejectedFiles: [] });
+  });
+
+  it('出し箱が無ければ空を返し、出し箱が symlink なら空を返さずに投げる（辿らない・リンク先を読まない）', async () => {
+    const root = await makeTempDir('runner-outbox-');
+    const stagedRoot = await makeTempDir('runner-outbox-staged-');
+    const outside = await makeTempDir('runner-outbox-outside-');
+    const collect = () =>
+      collectManagerOutbox({
+        root,
+        stagedRoot,
+        managerId: MANAGER,
+        expectedUid: process.getuid?.(),
+        limits: LIMITS,
+      });
+    expect(await collect()).toEqual({ files: [], rejectedFiles: [] });
+    await writeFile(join(outside, 'secret.txt'), '外');
+    await symlink(outside, join(root, MANAGER));
+    await expect(collect()).rejects.toThrow(/実在の dir でない/);
+    expect(await readdir(outside)).toEqual(['secret.txt']);
+    expect(await readdir(stagedRoot)).toEqual([]);
+  });
+
+  it('取り込みが投げたときの断りは、出し箱に残った名前ごとに理由を付け、名前が読めなければ出し箱1つぶんの行にする', async () => {
+    const { root, dir } = await setup();
+    expect(outboxCollectFailureRefusals(root, MANAGER, '壊れた')).toEqual([
+      { name: '(出し箱)', reason: '壊れた' },
+    ]);
+    await writeFile(join(dir, 'b.png'), 'b');
+    await writeFile(join(dir, 'a.png'), 'a');
+    expect(outboxCollectFailureRefusals(root, MANAGER, '壊れた')).toEqual([
+      { name: 'a.png', reason: '壊れた' },
+      { name: 'b.png', reason: '壊れた' },
+    ]);
+    expect(outboxCollectFailureRefusals(root, '../x', '壊れた')).toEqual([
+      { name: '(出し箱)', reason: '壊れた' },
+    ]);
   });
 
   it('拡張子が不明なら application/octet-stream', async () => {

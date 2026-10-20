@@ -193,6 +193,7 @@ import {
   type AuthService,
   NulNotAllowedError,
   InvalidCredentialNameError,
+  UnreadableJobError,
   type TokenPolicyChange,
   type TokenPoolChange,
   type InboxRemoveManyFilter,
@@ -232,6 +233,7 @@ import {
   ChatStreamQueue,
 } from './chat-stream-queue.js';
 import { guardSseWrites } from './sse-write-deadline.js';
+import { httpTimingMiddleware, type HttpTimingRecorder } from './http-timing.js';
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono, type Context, type Next } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -384,6 +386,8 @@ export interface AppDeps {
   shutdown: () => void;
   now?: () => Date;
   attachmentLimits?: AttachmentLimits;
+  /** 要求ごとの時間の受け手（#5089）。無くても `Server-Timing` は付ける */
+  httpTiming?: HttpTimingRecorder;
   scheduler?: Scheduler;
   storage?: string;
   // デーモンが鍵を保管しない（降ろすだけ）: 保管すると記憶の器に GitHub の書き込み権が並ぶため（railway/README.md「daemon 側には置かない」）。
@@ -2187,6 +2191,9 @@ export function createApp(deps: AppDeps) {
   });
 
   base.notFound((c) => c.json({ error: 'not found' }, 404));
+
+  // 時間の計測は CORS・認証より前に置く: 認証の DB 引きも、preflight も、その要求の時間として数えるため（#5089）
+  base.use('*', httpTimingMiddleware(deps.httpTiming));
 
   // CORS は認証より先に登録する: preflight（OPTIONS）は `Authorization` を積んで来ないので、門番が先に立つと 401 になり本リクエストが飛ばない。`cors()` は OPTIONS に答えて `next()` を呼ばないので門番も素通りしない。列挙が空なら何も登録しない（CORS ヘッダを返さない姿勢のまま）。
   const allowedOrigins = deps.allowedOrigins ?? [];
@@ -6475,7 +6482,8 @@ export function createApp(deps: AppDeps) {
           409: {
             description:
               '既に片付いている（いつ・どう片付けたかを本文に入れて返す。読めない形で入って' +
-              'いる行は、いつ・どう片付けたかが分からないことがある）。',
+              'いる行は、いつ・どう片付けたかが分からないことがある）。または、未了のまま在るのに' +
+              '閉じる書き込みが通らなかった（本文でそう言う。一覧で確かめてから閉じ直す）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -6501,10 +6509,21 @@ export function createApp(deps: AppDeps) {
             );
           }
           if (existing === null) return c.json({ error: 'not found' as const }, 404);
+          // 未了のまま残っている回を「片付いている」に潰さない（#5072）: 閉じていない行を閉じたと読ませるため
+          if (existing.closedAt === undefined) {
+            return c.json(
+              {
+                error:
+                  `${id} は閉じられなかった（台帳には未了のまま在るが、閉じる書き込みが通らなかった）。` +
+                  '一覧で確かめてから、もう一度閉じること',
+              },
+              409,
+            );
+          }
           return c.json(
             {
               error:
-                `${id} は既に ${existing.closedAt ?? '不明な時刻'} に片付いている` +
+                `${id} は既に ${existing.closedAt} に片付いている` +
                 `（${existing.closedReason ?? '理由の記録なし'}）`,
             },
             409,
@@ -6559,11 +6578,13 @@ export function createApp(deps: AppDeps) {
           },
           409: {
             description:
-              '次の3つ。(1) 既に片付いている（いつ・どう片付いたかを本文に入れて返す）。(2) 台帳に在るが' +
-              '読めない形で入っている（close で閉じることはできるが、書き直せない）。(3) `ifMatch` が' +
+              '次の4つ。(1) 既に片付いている（いつ・どう片付いたかを本文に入れて返す）。(2) 台帳に在るが' +
+              '読めない形で入っている（close で閉じることはできるが、書き直せない。書き直す直前に読めない形になった回も含む）。' +
+              '(3) `ifMatch` が' +
               'いまの版（`editedAt ?? at`）と違う（読んでから書くまでの間に別の書き手が直した、または' +
               '消えた）。**何も書いていない。** `current` にいまの行を返す（消えていれば null）。' +
-              '(3) だけが `current` の鍵を持つ。',
+              '(3) だけが `current` の鍵を持つ。(4) 未了のまま在るのに書き直しが通らなかった（本文でそう言う）。' +
+              '書き直す直前に行が無くなっていた回は、409 ではなく 404 を返す。',
             content: {
               'application/json': {
                 schema: resolver(z.union([commitmentConflictResponseSchema, errorResponseSchema])),
@@ -6629,12 +6650,30 @@ export function createApp(deps: AppDeps) {
           throw error;
         }
         if (!edited) {
-          const after = await stores.commitments.get(id);
+          // 読み直した行の形どおりに返す（#5072）。状態コードは、この口の入口が同じ状態に返すものにそろえる（無い → 404、読めない → 409）
+          let after;
+          try {
+            after = await stores.commitments.get(id);
+          } catch (error) {
+            if (!(error instanceof UnreadableCommitmentError)) throw error;
+            return c.json({ error: describeUnreadableCommitment(error) }, 409);
+          }
+          if (after === null) return c.json({ error: 'not found' as const }, 404);
+          if (after.closedAt === undefined) {
+            return c.json(
+              {
+                error:
+                  `${id} は直せなかった（台帳には未了のまま在るが、書き直しが通らなかった）。` +
+                  '一覧で確かめてから、もう一度直すこと',
+              },
+              409,
+            );
+          }
           return c.json(
             {
               error:
-                `${id} は既に ${after?.closedAt ?? '不明な時刻'} に片付いている` +
-                `（${after?.closedReason ?? '理由の記録なし'}）`,
+                `${id} は既に ${after.closedAt} に片付いている` +
+                `（${after.closedReason ?? '理由の記録なし'}）`,
             },
             409,
           );
@@ -6816,7 +6855,18 @@ export function createApp(deps: AppDeps) {
       }),
       async (c) => {
         const id = c.req.param('id');
-        const manager = (await clone.managers.list()).find((entry) => entry.managerId === id);
+        // 1件のために台帳を全部読まない（#5089）。`get` を持たない偽のプールだけ一覧から探す
+        let manager: ManagerSummary | undefined;
+        try {
+          manager =
+            clone.managers.get === undefined
+              ? (await clone.managers.list()).find((entry) => entry.managerId === id)
+              : await clone.managers.get(id);
+        } catch (error) {
+          if (!(error instanceof UnreadableJobError)) throw error;
+          // 読めない行と分かった: 下の言い分け（409）へ落とす
+          manager = undefined;
+        }
         if (!manager) {
           // `list()` は読めない委譲の行を飛ばすので、壊れた行の id はここで見つからない: 見つからなかったときだけ台帳を読み直し、行が在るなら 404 ではなく 409 と言い分ける。本文は載せず、理由は不正な欄名だけ。
           const unreadableRow = (await stores.jobs.listUnreadableJobs()).find(

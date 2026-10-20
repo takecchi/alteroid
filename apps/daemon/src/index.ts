@@ -77,6 +77,7 @@ import { reportBootToolSearch, reportBootToolSearchObserved } from './boot-tool-
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { startTokenRotationWatch, type TokenRotationWatch } from './token-watch.js';
+import { startHttpTimingCollector } from './http-timing.js';
 import {
   isRejectionForTrialBackoff,
   startTokenTrialWatch,
@@ -1112,10 +1113,22 @@ export async function main(): Promise<void> {
     );
   }
 
+  // HTTP API の要求ごとの時間（#5089）。窓ごとに日誌へ1行、遅い要求はその場で stderr へ
+  const httpTiming = startHttpTimingCollector({
+    journal: stores.journal,
+    writeLine: (line) => {
+      writeStderrLine(line);
+    },
+    onDropped: (error) => {
+      noteDroppedRecord('HTTP API の時間（http_timing）', 'journal', error);
+    },
+  });
+
   const app = createApp({
     clone,
     stores,
     token,
+    httpTiming,
     shutdown: () => void shutdown(),
     scheduler,
     storage: storage.description,
@@ -1203,6 +1216,8 @@ export async function main(): Promise<void> {
       });
     }
     server.close();
+    // 最後の窓も書く: 夜の反映のたびに器が入れ替わり、書かずに落ちると反映前の数分が毎回欠けるため
+    await httpTiming.stop().catch(() => undefined);
     await runners.stop().catch(() => undefined);
     await clearRuntimeInfo(paths.state).catch(() => undefined);
 

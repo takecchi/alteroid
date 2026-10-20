@@ -120,6 +120,18 @@ export class FsJobStore implements JobStore {
     });
   }
 
+  // fs は1枚のファイルなので読む量は `listJobs()` と同じ。口を揃えるために置く（#5089）
+  async getJob(id: string): Promise<Job | null> {
+    const file = await this.#read();
+    const found = file.jobs.find((entry) => entry.id === id);
+    if (found !== undefined) return found;
+    // 読めない行にしか無い id は `null` にせず投げる（`updateJob` と同じ）
+    if (file.invalidJobsRaw.some((raw) => extractRowId(raw) === id)) {
+      throw new UnreadableJobError({ id });
+    }
+    return null;
+  }
+
   async putJob(rawJob: Job): Promise<void> {
     const job = prepareJobForWrite(rawJob);
     await this.#update((file) => {

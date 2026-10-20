@@ -207,9 +207,23 @@ export class PgJournalStore implements JournalStore {
 // 墓標（`conversation_deleted`）のある会話の `exchange` を外す条件。部分式索引 `journal_conversation_deleted_idx` で引く。
 // 外側の表の列は `sql.raw` で修飾して書く: drizzle は単表の select の列を修飾しない場合があり、内側（別名 `t`）の列と取り違えるため。
 // 墓標が名指しした行（`hiddenEntryIds`）は、墓標の種別で絞った行だけから引く: 墓標は会話の数に比べて少ないため
+// 名指しした id は、墓標から id の集合に開いて、外側の `id` が集合に無いかで見る（#5089）: `h.entry->'hiddenEntryIds' ? journal.id` と書くと、
+// 外側の行ごとに全墓標の jsonb を評価する入れ子の反結合になる（偽のデータの 8,000 行 × 墓標 50 で約 300ms）。
+// `NOT EXISTS (… named.hid = journal.id)` にもしない: 外側の行数の見積もりが小さいと、墓標の展開を外側の行ごとにやり直す入れ子の反結合が選ばれ、元より遅くなる（同じデータで 7 秒）。
+// `NOT IN (相関の無い部分問い合わせ)` なら、集合をハッシュにして1回だけ作る（hashed SubPlan）ので、外側の計画に左右されない。
+// `NOT IN` は集合に NULL が混ざると全行を外すので、NULL を返さない形で開き、念のため `IS NOT NULL` でも絞る。
+// 開き方は jsonb の `?` と同じ意味にする: 配列なら文字列の要素、オブジェクトなら鍵、文字列ならその値（数・真偽・null の要素は名指しに数えない）
 function hiddenConversationExchangeExcluded(): SQL {
-  return sql`NOT (${sql.raw('"journal"."type"')} = 'exchange' AND EXISTS (SELECT 1 FROM journal t WHERE t.type = 'conversation_deleted' AND t.entry->>'deletedConversationId' = ${sql.raw('"journal"."entry"')}->>'conversationId')) AND NOT EXISTS (SELECT 1 FROM journal h WHERE h.type = 'conversation_deleted' AND h.entry->'hiddenEntryIds' ? ${sql.raw('"journal"."id"')})`;
+  return sql`NOT (${sql.raw('"journal"."type"')} = 'exchange' AND EXISTS (SELECT 1 FROM journal t WHERE t.type = 'conversation_deleted' AND t.entry->>'deletedConversationId' = ${sql.raw('"journal"."entry"')}->>'conversationId')) AND ${sql.raw('"journal"."id"')} NOT IN (${HIDDEN_ENTRY_IDS})`;
 }
+
+const HIDDEN_ENTRY_IDS = sql.raw(
+  `SELECT named.hid FROM journal h CROSS JOIN LATERAL (` +
+    `SELECT e #>> '{}' AS hid FROM jsonb_array_elements(CASE WHEN jsonb_typeof(h.entry->'hiddenEntryIds') = 'array' THEN h.entry->'hiddenEntryIds' ELSE '[]'::jsonb END) e WHERE jsonb_typeof(e) = 'string' ` +
+    `UNION ALL SELECT k FROM jsonb_object_keys(CASE WHEN jsonb_typeof(h.entry->'hiddenEntryIds') = 'object' THEN h.entry->'hiddenEntryIds' ELSE '{}'::jsonb END) k ` +
+    `UNION ALL SELECT h.entry->>'hiddenEntryIds' WHERE jsonb_typeof(h.entry->'hiddenEntryIds') = 'string'` +
+    `) named WHERE h.type = 'conversation_deleted' AND named.hid IS NOT NULL`,
+);
 
 // `JSON.stringify` へ戻して数える: pg の駆動子は渡す時点で JSON を解いてしまい、生の行文字列の長さが取れないため。
 function byteLength(value: unknown): number {

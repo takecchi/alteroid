@@ -621,6 +621,10 @@ export function createMemoryStores(): Stores {
     async listUnreadableJobs() {
       return [];
     },
+    async getJob(id) {
+      const found = jobs.get(id);
+      return found === undefined ? null : isolate(found);
+    },
     // 本物（fs / pg）と同じく `jobSchema` を通す: 通さないと、本物なら弾かれる不正な値をこの器だけが保存できてしまう。
     async putJob(job) {
       jobs.set(job.id, isolate(prepareJobForWrite(jobSchema.parse(job))));
