@@ -772,12 +772,34 @@ async function rescueOne(
       ['diff-tree', '-p', '-r', ...diffArgs, head === undefined ? EMPTY_TREE_SHA1 : head, tree],
       { ...base, maxBytes },
     );
+    // マージは `-m` で読まない: `git merge origin/main` の後は main 側の変更（origin に在り、退避で新しく出るものではない）が丸ごと載り、上限で `too-large` になって退避が止まるため（#5117）。
+    // `--remerge-diff` は手で解消した分だけを出す。3親以上のマージはそれが扱わないので、範囲に在れば今どおり `-m` で読む
+    const octopus =
+      head === undefined || unpushedCount === 0
+        ? undefined
+        : await git(
+            spawn,
+            ['rev-list', '--count', '--min-parents=3', 'HEAD', '--not', '--remotes=origin'],
+            base,
+          );
+    if (octopus !== undefined && !ok(octopus)) return settle(failure(), false);
+    const mergeArgs =
+      octopus !== undefined && octopus.stdout.trim() === '0' ? ['--remerge-diff'] : ['-m'];
     const logDiff =
       head === undefined || unpushedCount === 0
         ? undefined
         : await git(
             spawn,
-            ['log', '-p', '-m', ...diffArgs, '--format=', 'HEAD', '--not', '--remotes=origin'],
+            [
+              'log',
+              '-p',
+              ...mergeArgs,
+              ...diffArgs,
+              '--format=',
+              'HEAD',
+              '--not',
+              '--remotes=origin',
+            ],
             { ...base, maxBytes },
           );
     if (treeDiff.overflow || logDiff?.overflow === true) {

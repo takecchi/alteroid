@@ -424,6 +424,66 @@ describe('退避 ref（#1266）', () => {
     expect(report?.notPushed?.reason).toBe('secret-like');
   });
 
+  describe('未 push のマージで取り込んだ origin 側の変更（#5117）', () => {
+    // 別の clone から origin へ積む: 担当の手元ではなく、他の人が main へ入れた変更として取り込ませるため
+    async function landOnOrigin(branch: string, file: string, body: string): Promise<void> {
+      const other = path.join(root, `other-${branch}`);
+      if (!existsSync(other)) {
+        g(root, 'clone', '-q', '--no-checkout', bare, other);
+        g(other, 'config', 'gc.auto', '0');
+      }
+      g(other, 'checkout', '-q', '-B', branch, 'origin/main');
+      await writeFile(path.join(other, file), body);
+      g(other, 'add', file);
+      g(other, 'commit', '-qm', `land ${file}`);
+      g(other, 'push', '-q', 'origin', branch);
+    }
+
+    beforeEach(async () => {
+      g(repo, 'checkout', '-q', '-b', 'topic');
+      await writeFile(path.join(repo, 'topic.txt'), 'topic work\n');
+      g(repo, 'add', 'topic.txt');
+      g(repo, 'commit', '-qm', 'topic');
+    });
+
+    it('⭐ git merge origin/main で取り込んだ main 側の大きな変更は差分の上限に数えず、退避を送る', async () => {
+      await landOnOrigin('main', 'big.txt', `${'x'.repeat(5000)}\n`);
+      g(repo, 'fetch', '-q', 'origin');
+      g(repo, 'merge', '-q', '--no-edit', 'origin/main');
+
+      const [report] = await run({ diffMaxBytes: 2000 });
+
+      expect(report?.notPushed).toBeUndefined();
+      const ref = report?.pushed?.ref as string;
+      expect(g(bare, 'show', `${ref}:topic.txt`)).toBe('topic work\n');
+      expect(g(bare, 'show', `${ref}:big.txt`)).toBe(`${'x'.repeat(5000)}\n`);
+    });
+
+    it('origin に既に在る鍵らしい文字列をマージで取り込んでも、退避を止めない（退避で新しく外へ出すものではない）', async () => {
+      await landOnOrigin('main', 'landed.txt', `gh${'p'}_${'R4t6'.repeat(9)}\n`);
+      g(repo, 'fetch', '-q', 'origin');
+      g(repo, 'merge', '-q', '--no-edit', 'origin/main');
+
+      const [report] = await run();
+
+      expect(report?.notPushed).toBeUndefined();
+      expect(report?.pushed?.ref).toBeDefined();
+    });
+
+    it('（対照）3 親以上のマージが未 push に在れば、今どおり親ごとの差分で読む', async () => {
+      await landOnOrigin('side-a', 'big-a.txt', `${'a'.repeat(5000)}\n`);
+      await landOnOrigin('side-b', 'big-b.txt', `${'b'.repeat(5000)}\n`);
+      g(repo, 'fetch', '-q', 'origin');
+      g(repo, 'merge', '-q', '--no-edit', 'origin/side-a', 'origin/side-b');
+      expect(g(repo, 'rev-list', '--count', '--min-parents=3', 'HEAD').trim()).toBe('1');
+
+      const [report] = await run({ diffMaxBytes: 2000 });
+
+      expect(report?.notPushed?.reason).toBe('too-large');
+      expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
+    });
+  });
+
   it('B4: 一時 index の複製は spawn（子ユーザー側）で行い、残骸は掃除する', async () => {
     await writeFile(path.join(repo, 'a.txt'), 'changed\n');
     const stale = path.join(repo, '.git', 'alteroid-rescue.index.deadbeef');
