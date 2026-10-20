@@ -217,7 +217,8 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               action={
                 // 使用量を集計し直さず飛ぶだけにする: 数字の意味は `/usage` が持つ。
                 <Link
-                  to={usageHref({ managerId: id })}
+                  // 全期間で開く: 画面の既定（直近 30 日）だと、それより前に走った委譲の使用量が 0 に見える
+                  to={usageHref({ managerId: id, allTime: true })}
                   className="text-xs text-primary hover:underline"
                 >
                   使用量を見る

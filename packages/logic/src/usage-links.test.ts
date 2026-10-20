@@ -19,6 +19,12 @@ describe('usageHref（issue #2077 / #2078）', () => {
     );
   });
 
+  it('allTime は from= を空で立てる（画面の既定の期間ではなく全期間で開く）。from を渡せば from が勝つ', () => {
+    expect(usageHref({ managerId: 'm1', allTime: true })).toBe('/usage?from=&managerId=m1');
+    expect(usageHref({ allTime: true })).toBe('/usage?from=');
+    expect(usageHref({ from: '2026-08-01', allTime: true })).toBe('/usage?from=2026-08-01');
+  });
+
   it('何も渡さないと絞り込み無しの /usage になる', () => {
     expect(usageHref()).toBe('/usage');
     expect(usageHref({})).toBe('/usage');

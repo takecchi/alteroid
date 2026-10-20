@@ -150,11 +150,12 @@ describe('依頼の全文は header ではなく本文に置く', () => {
 });
 
 describe('詳細から、その委譲の使用量へ飛べる（issue #2077）', () => {
-  it('「状態」カードに /usage?managerId=<id> へのリンクがある', async () => {
+  // 全期間（from= を空で立てる）で開く: 画面の既定は直近 30 日で、それより前に走った委譲の使用量が 0 に見えるため
+  it('「状態」カードに /usage?from=&managerId=<id>（全期間）へのリンクがある', async () => {
     renderDetail({ ...BASE, managerId: 'mgr-77' });
 
     const link = await screen.findByRole('link', { name: '使用量を見る' });
-    expect(link.getAttribute('href')).toBe('/usage?managerId=mgr-77');
+    expect(link.getAttribute('href')).toBe('/usage?from=&managerId=mgr-77');
   });
 });
 

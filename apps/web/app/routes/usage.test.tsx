@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { shiftedUsageDate } from '~/lib/usage-dates';
 import { json, Providers, renderedMoneyTexts, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Usage from './usage';
@@ -458,6 +459,57 @@ describe('/usage 画面', () => {
       const tokens = input.className.split(/\s+/);
       expect(tokens).toContain('min-w-0');
     }
+  });
+});
+
+describe('/usage 画面の既定の期間は直近 30 日、開始日を空にすると全期間', () => {
+  function lastUsageParams(stub: { calls: string[] }): URLSearchParams | undefined {
+    const call = stub.calls.findLast((url) => url.includes('/usage'));
+    return call === undefined ? undefined : new URL(call).searchParams;
+  }
+
+  it('⭐ URL に from が無ければ、今日を含む直近 30 日（29 日前から）で問い合わせ、開始日の欄にもその日を出す', async () => {
+    const stub = stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+    const expected = shiftedUsageDate(new Date(), -29);
+
+    renderUsage(['/']);
+
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    expect((screen.getByLabelText('開始日') as HTMLInputElement).value).toBe(expected);
+    expect(screen.getByText('既定は直近 30 日。空にすると全期間')).toBeTruthy();
+    await waitFor(() => {
+      expect(lastUsageParams(stub)?.get('from')).toBe(expected);
+    });
+  });
+
+  it('⭐ from=（空）なら全期間: from を渡さずに問い合わせ、開始日の欄は空', async () => {
+    const stub = stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage(['/?from=&managerId=m1']);
+
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    expect((screen.getByLabelText('開始日') as HTMLInputElement).value).toBe('');
+    await waitFor(() => {
+      const params = lastUsageParams(stub);
+      expect(params?.get('managerId')).toBe('m1');
+      expect(params?.has('from')).toBe(false);
+    });
+  });
+
+  it('開始日の欄を空にすると、URL に from= が空で残り（既定へ戻らない）、全期間で問い合わせ直す', async () => {
+    const stub = stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+    const { router } = renderUsage(['/']);
+    await screen.findByText(/この期間の使用量の記録はありません/);
+
+    fireEvent.change(screen.getByLabelText('開始日'), { target: { value: '' } });
+
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('from')).toBe('');
+    });
+    expect((screen.getByLabelText('開始日') as HTMLInputElement).value).toBe('');
+    await waitFor(() => {
+      expect(lastUsageParams(stub)?.has('from')).toBe(false);
+    });
   });
 });
 

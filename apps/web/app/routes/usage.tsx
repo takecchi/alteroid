@@ -1,6 +1,7 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { shiftedUsageDate } from '~/lib/usage-dates';
 import {
   describeUnmeteredUsage,
   describeUnreadableUsage,
@@ -43,6 +44,7 @@ import {
   usageSiteLabel,
   USAGE_LAYER_LABELS,
   USAGE_SITE_LABELS,
+  USAGE_DEFAULT_DAYS,
   USAGE_FROM_PARAM,
   USAGE_MANAGER_ID_PARAM,
   USAGE_TO_PARAM,
@@ -166,13 +168,24 @@ function shortenRequest(request: string): string {
   return flat.length > 28 ? `${flat.slice(0, 28)}…` : flat;
 }
 
-function FilterField({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+function FilterField({
+  id,
+  label,
+  hint,
+  children,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-1">
       <label htmlFor={id} className="text-xs text-muted-foreground">
         {label}
       </label>
       {children}
+      {hint !== undefined && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }
@@ -213,7 +226,12 @@ function CandidateSelect({
 export default function Usage() {
   // 絞り込みの正本は URL。state に閉じ込めると、開き直すと消える・共有できない。
   const [searchParams, setSearchParams] = useSearchParams();
-  const rawFrom = searchParams.get(FROM_PARAM);
+  // `from` が URL に無いときだけ直近 30 日にする。`from=`（空）は全期間で、欄を空にするとそうなる。
+  // 既定を API に持たせない: CLI や他の口の「指定なし＝全期間」を変えないため。開いた時点の日で固定し、分ごとに描き直さない
+  const [defaultFrom] = useState(() =>
+    shiftedUsageDate(new Date(Date.now()), -(USAGE_DEFAULT_DAYS - 1)),
+  );
+  const rawFrom = searchParams.get(FROM_PARAM) ?? defaultFrom;
   const rawTo = searchParams.get(TO_PARAM);
   const from = parseUsageDate(rawFrom);
   const to = parseUsageDate(rawTo);
@@ -262,7 +280,8 @@ export default function Usage() {
     setSearchParams(
       (previous) => {
         const next = new URLSearchParams(previous);
-        if (value === '') next.delete(param);
+        // 開始日だけは消さずに空で残す: 消すと既定（直近 30 日）に戻り、全期間を選べなくなる
+        if (value === '' && param !== FROM_PARAM) next.delete(param);
         else next.set(param, value);
         return next;
       },
@@ -330,7 +349,11 @@ export default function Usage() {
           `type="date"` の `Input` の `min-w-0` も外さない: 内在幅が大きく（特に iOS Safari）、実機で確かめられないので二重に押さえてある。
         */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <FilterField id={`${idPrefix}-from`} label="開始日">
+          <FilterField
+            id={`${idPrefix}-from`}
+            label="開始日"
+            hint={`既定は直近 ${USAGE_DEFAULT_DAYS} 日。空にすると全期間`}
+          >
             <Input
               id={`${idPrefix}-from`}
               type="date"

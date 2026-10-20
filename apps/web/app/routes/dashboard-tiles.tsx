@@ -1,9 +1,4 @@
-import {
-  describeUnreadableUsageRows,
-  formatUsd,
-  summarizeUsage,
-  usageDate,
-} from '@alteroid/core/usage';
+import { describeUnreadableUsageRows, formatUsd, summarizeUsage } from '@alteroid/core/usage';
 import { CalendarClock, Coins, Hourglass } from 'lucide-react';
 import { Link } from 'react-router';
 
@@ -20,16 +15,13 @@ import { useProgress, useSchedule, useUsage } from '@alteroid/swr';
 import { formatRelative, redactBody, usageHref, type Progress } from '@alteroid/logic';
 
 import { useMinuteNow } from '~/lib/use-now';
+import { shiftedUsageDate } from '~/lib/usage-dates';
 
 import { UnreadableScheduleNote } from './schedule';
 import { UnmeteredUsageNote, UnreadableUsageRowsNote } from './usage';
 
 // 窓を2日より狭くしない: TZ のオフセットで同じ瞬間の暦の日が最大2日ずれ、1日では足りないため
 const USAGE_WINDOW_DAYS = 2;
-
-function shiftedDate(base: Date, days: number): string {
-  return usageDate(new Date(base.getFullYear(), base.getMonth(), base.getDate() + days));
-}
 
 const HOME_REFRESH_MS = 30_000;
 
@@ -170,8 +162,8 @@ function NextRunTile() {
 // today が無いとき黙ってブラウザの今日にしない: 「今日」はデーモンの TZ の日（応答の today）のため
 function UsageTile() {
   const browserNow = new Date(useMinuteNow());
-  const from = shiftedDate(browserNow, -USAGE_WINDOW_DAYS);
-  const to = shiftedDate(browserNow, USAGE_WINDOW_DAYS);
+  const from = shiftedUsageDate(browserNow, -USAGE_WINDOW_DAYS);
+  const to = shiftedUsageDate(browserNow, USAGE_WINDOW_DAYS);
   const usage = useUsage({ from, to }, { refreshInterval: HOME_REFRESH_MS });
   // undefined を許す: 型は string だが、古いデーモンの応答には無いため
   const serverToday: string | undefined = usage.data?.today;
