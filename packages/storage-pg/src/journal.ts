@@ -9,6 +9,7 @@ import {
   stripNulDeep,
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
+  notePhase,
   UnreadableJournalEntryError,
 } from '@alteroid/core';
 import type {
@@ -58,6 +59,23 @@ function maxKey(map: ReadonlyMap<number, unknown>): number {
   return max;
 }
 
+/**
+ * 印に添える本文の長さの見当（文字数）。行の1段目と、`tool_use` の `input` の1段目の文字列だけを足す。
+ * 深くは潜らない: 印のための走査で重くしないため。入れ子の大きな値は数えない（見当であって大きさの正本ではない）
+ */
+function journalTextLengthOf(input: JournalEntryInput): number {
+  let total = 0;
+  const add = (value: unknown): void => {
+    if (value === null || typeof value !== 'object') return;
+    for (const field of Object.values(value as Record<string, unknown>)) {
+      if (typeof field === 'string') total += field.length;
+    }
+  };
+  add(input);
+  if (input.type === 'tool_use') add(input.input);
+  return total;
+}
+
 export class PgJournalStore implements JournalStore {
   readonly #db: Db;
   readonly #now: () => number;
@@ -74,6 +92,9 @@ export class PgJournalStore implements JournalStore {
   }
 
   async append(input: JournalEntryInput): Promise<JournalEntry> {
+    // 書く前の同期の処理（NUL 落とし・検査・JSON への整形）は行の大きさに比例するので、前後に印を打つ（#4485）。
+    // 大きさは数え直さない（数え直しそのものが重い）: 呼び手がもう持っている本文の欄の長さだけを添える
+    notePhase(`journal-append:${input.type}:${String(journalTextLengthOf(input))}ch`);
     const entry = journalEntrySchema.parse({
       ...stripNulDeep(input),
       id: randomUUID(),
@@ -81,12 +102,14 @@ export class PgJournalStore implements JournalStore {
     });
 
     // NUL を落とす: 投げると挿入ごと失敗し、呼び出し側が握り潰して記録が静かに消えるため。
-    await this.#db.insert(journal).values({
+    const insert = this.#db.insert(journal).values({
       id: entry.id,
       at: new Date(entry.at),
       type: entry.type,
       entry: stripNulls(withoutRowColumns(entry)),
     });
+    notePhase('journal-append-built');
+    await insert;
 
     return entry;
   }

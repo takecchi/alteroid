@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-import { currentRequestTiming, type RequestTiming } from '@alteroid/core';
+import { currentRequestTiming, notePhase, type RequestTiming } from '@alteroid/core';
 import { Client, Pool, type ClientConfig } from 'pg';
 
 /**
@@ -76,6 +76,30 @@ function sqlHeadOf(config: unknown): string | undefined {
   if (typeof text !== 'string') return undefined;
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > SQL_HEAD_CHARS ? `${flat.slice(0, SQL_HEAD_CHARS)}…` : flat;
+}
+
+// 印に載せる SQL の頭の長さ。止まった知らせ1行に印が数十本並ぶので、`sqlHeadOf`（120字）より短くする
+const PHASE_SQL_CHARS = 48;
+
+/**
+ * 問い合わせの結果を受け取ったところに印を打つ（#4485）。結果の後の続き（行の変換・集計・整形）は印の無いまま走るので、
+ * ループが止まった窓の「直前の印」が、どの問い合わせの結果を受けた後かを指すようにする。行数を添える: 多い結果の続きほど重いため。
+ * 値（バインドした引数）は載せない（`sqlHeadOf` と同じ）。
+ */
+function notePgDone(sql: string | undefined, error: unknown, result: unknown): void {
+  const head = sql === undefined ? '本文なし' : sql.slice(0, PHASE_SQL_CHARS);
+  if (error !== undefined && error !== null) {
+    notePhase(`pg-error:${head}`);
+    return;
+  }
+  const rows = (result as { rowCount?: unknown; rows?: unknown } | null | undefined) ?? undefined;
+  const count =
+    typeof rows?.rowCount === 'number'
+      ? rows.rowCount
+      : Array.isArray(rows?.rows)
+        ? rows.rows.length
+        : undefined;
+  notePhase(`pg-done:${count === undefined ? '?' : String(count)}r:${head}`);
 }
 
 function isConnectTimeout(error: unknown): boolean {
@@ -164,12 +188,14 @@ export function createTimedPool(options: TimedPoolOptions): Pool {
       const args: unknown = typeof values === 'function' ? undefined : values;
       if (typeof cb === 'function') {
         return super.query(config, args as never, (error: unknown, result: unknown) => {
+          notePgDone(sql, error, result);
           (cb as (error: unknown, result: unknown) => void)(settle(error), result);
         });
       }
       return (super.query(config, args as never) as Promise<unknown>).then(
         (result) => {
           settle(undefined);
+          notePgDone(sql, undefined, result);
           return result;
         },
         (error: unknown) => {

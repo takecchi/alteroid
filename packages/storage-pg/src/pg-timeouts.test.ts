@@ -1,7 +1,16 @@
 import { createServer, type Server, type Socket } from 'node:net';
 
 import { RequestTiming, runWithRequestTiming } from '@alteroid/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// ループの停止の見張りの印だけを差し替えて読む（見張りの本体は使わない）
+const phases = vi.hoisted(() => [] as string[]);
+vi.mock('@alteroid/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@alteroid/core')>()),
+  notePhase: (label: string) => {
+    phases.push(label);
+  },
+}));
 
 import {
   createTimedPool,
@@ -220,5 +229,29 @@ describe('HTTP の要求の器へ、問い合わせの本数・時間・空き�
     const timing = new RequestTiming();
     await runWithRequestTiming(timing, () => pool.query('select hang').catch(() => undefined));
     expect(timing.db.count).toBe(1);
+  });
+});
+
+// 本番の loop-stall（2026-10-20）で「直前の印: runner-event-settled:tool_use・窓の中に印なし」の 1.0〜1.4 秒の停止が続いた。
+// 結果を受けた後の続き（行の変換・集計）は印の無いまま走るので、どの問い合わせの結果を受けた後かを印に残す（#4485）
+describe('問い合わせの結果を受け取ったところに印を打つ（#4485）', () => {
+  it('⭐ 結果の行数と SQL の頭を添えた印を、呼び手の続きより前に打つ', async () => {
+    const { pool } = await setup({ queryTimeoutMs: 1_000 });
+    phases.length = 0;
+    await pool.query('select ok from journal');
+    phases.push('caller-continued');
+    expect(
+      phases.filter((label) => label.startsWith('pg-') || label === 'caller-continued'),
+    ).toEqual(['pg-done:0r:select ok from journal', 'caller-continued']);
+  });
+
+  it('SQL の頭は短く切り、失敗した問い合わせは pg-error の印にする', async () => {
+    const { pool } = await setup();
+    phases.length = 0;
+    await pool.query(`select hang ${'x'.repeat(100)}`).catch(() => undefined);
+    const marks = phases.filter((label) => label.startsWith('pg-'));
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toMatch(/^pg-error:select hang x+$/);
+    expect(marks[0]!.length).toBe('pg-error:'.length + 48);
   });
 });

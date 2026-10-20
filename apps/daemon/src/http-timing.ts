@@ -3,6 +3,7 @@ import {
   HttpTimingWindow,
   RequestTiming,
   describeHttpTimingSample,
+  notePhase,
   runWithRequestTiming,
   type HttpTimingSample,
   type JournalStore,
@@ -58,19 +59,27 @@ export function httpTimingMiddleware(
   return async (c, next) => {
     const started = now();
     const timing = new RequestTiming(now);
+    // ループの停止の見張りへ、どの口を処理していたかを残す（#4485）: 口の処理には印が無く、口の中の同期の処理（集計・整形・検査）が
+    // ループを止めても、止まった窓の「直前の印」が直前に通った別の出来事（runner の tool_use など）に見えていたため
+    const route = routeOf(c);
+    notePhase(`http:${route}`);
     let serializeMs = 0;
     let bytes: number | undefined;
     // `c.json` と同じ応答を作りつつ、文字列にする時間と大きさを測る（hono の `c.json` は `JSON.stringify` して `Content-Type` を既定で付けるだけ）
     const json = ((object: unknown, arg?: unknown, headers?: Record<string, string | string[]>) => {
+      // 口の処理の終わり（応答を作り始めたところ）と整形の終わりにも印を打つ: 窓がこの2つに挟まれれば整形、`http:` との間なら口の処理
+      notePhase(`http-json:${route}`);
       const t = now();
       const text = JSON.stringify(object);
       serializeMs += now() - t;
       bytes = (bytes ?? 0) + Buffer.byteLength(text);
+      notePhase(`http-json-done:${String(text.length)}ch`);
       return c.body(text, arg as never, { 'Content-Type': 'application/json', ...headers });
     }) as unknown as typeof c.json;
     c.json = json;
 
     await runWithRequestTiming(timing, next);
+    notePhase(`http-done:${route}`);
 
     const contentType = c.res.headers.get('content-type') ?? '';
     if (contentType.startsWith('text/event-stream')) return;
