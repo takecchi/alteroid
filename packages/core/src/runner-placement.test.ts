@@ -926,7 +926,7 @@ describe('配置の判断を外へ渡す（RunnerRegistryOptions.onPlacementDeci
         decisions.push(decision);
       },
     });
-    registry.notePidsSaturationSign('runner-a', 'fork-denied');
+    registry.notePidsSaturationSign?.('runner-a', 'fork-denied');
 
     const chosen = await registry.select({});
 
