@@ -193,6 +193,7 @@ import {
   type AuthService,
   NulNotAllowedError,
   InvalidCredentialNameError,
+  UnreadableJobError,
   type TokenPolicyChange,
   type TokenPoolChange,
   type InboxRemoveManyFilter,
@@ -6854,7 +6855,18 @@ export function createApp(deps: AppDeps) {
       }),
       async (c) => {
         const id = c.req.param('id');
-        const manager = (await clone.managers.list()).find((entry) => entry.managerId === id);
+        // 1件のために台帳を全部読まない（#5089）。`get` を持たない偽のプールだけ一覧から探す
+        let manager: ManagerSummary | undefined;
+        try {
+          manager =
+            clone.managers.get === undefined
+              ? (await clone.managers.list()).find((entry) => entry.managerId === id)
+              : await clone.managers.get(id);
+        } catch (error) {
+          if (!(error instanceof UnreadableJobError)) throw error;
+          // 読めない行と分かった: 下の言い分け（409）へ落とす
+          manager = undefined;
+        }
         if (!manager) {
           // `list()` は読めない委譲の行を飛ばすので、壊れた行の id はここで見つからない: 見つからなかったときだけ台帳を読み直し、行が在るなら 404 ではなく 409 と言い分ける。本文は載せず、理由は不正な欄名だけ。
           const unreadableRow = (await stores.jobs.listUnreadableJobs()).find(

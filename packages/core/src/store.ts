@@ -505,6 +505,11 @@ export interface JobStore {
    * 見せる先（`manager_list`・`GET /managers`・digest・進捗）だけがこの口を呼ぶ。本文は返さない（`unreadableJobSchema` の doc）。
    */
   listUnreadableJobs(): Promise<UnreadableJob[]>;
+  /**
+   * 1件を id で読む（#5089）。1件のために `listJobs()` で台帳を全部読まないための口。
+   * 無ければ `null`。在るが読めない行は `null` ではなく `UnreadableJobError`（`updateJob` と同じ: `null` に畳むと「台帳に居ない」と言い切るため）。
+   */
+  getJob(id: string): Promise<Job | null>;
   putJob(job: Job): Promise<void>;
 
   /**

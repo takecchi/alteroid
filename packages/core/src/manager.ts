@@ -1204,6 +1204,12 @@ export interface ManagerPool {
   abort(managerId: string, reason?: string, by?: ManagerStopActor): Promise<ManagerAbortResult>;
   list(): Promise<ManagerSummary[]>;
   /**
+   * 1件だけ読む（#5089）。`list()` の該当の1件と同じ像を返す（ただし一覧の並べ替えと、一覧のついでに書く計器は無い）。
+   * 無ければ `undefined`。台帳の行が読めなければ `UnreadableJobError`。
+   * 省略可能: テストの偽のプールは持たなくてよく、呼び出し側は `list()` から探す形に倒す。
+   */
+  get?(managerId: string): Promise<ManagerSummary | undefined>;
+  /**
    * `ManagerSummary` には載せない: デーモンのプロセス内の像で、台帳には無い（器を作り直せば数え直し）。
    * 台帳から作る `ManagerSummary` を汚さずに、読む側が状態へ添えられる。
    */
@@ -4963,90 +4969,90 @@ class Pool implements ManagerPool {
     return undefined;
   }
 
+  // 名簿・現役の世代は1回だけ引いて使い回す: 一覧を作っている間に動いても、同じ応答の中では全件を同じ像で比べる
+  // （1本ずつ `this.#tokenIdentity?.()` を呼び直すと、回転が割り込んだとき一部だけ新しい現役と比べることになる）。
+  // `list()` と `get()` が同じ組み立てを使う（#5089）: 口ごとに組むと、一覧と詳細で同じ委譲の状態が食い違うため
+  #summaryContext(): SummaryContext {
+    this.#noteMissingSessions();
+    return {
+      silent: this.#silentRunners(),
+      runnerSessions: this.#runnerSessions(),
+      // 一覧を作っている間に名簿が動いても、同じ応答の中では全件を同じ像で比べる: 1回だけ引き、呼び出しごとに読み直さない。
+      registeredRunnerIds: this.#registeredRunnerIds(),
+      activeTokenGeneration: this.#tokenIdentity?.()?.generation,
+      tokenGenerationPoolWired: this.#tokenIdentity !== undefined,
+    };
+  }
+
+  #summarize(record: ManagerRecord, context: SummaryContext): ManagerSummary {
+    const { silent, runnerSessions, registeredRunnerIds } = context;
+    const job = record.job;
+    return summaryOf(
+      record,
+      isLive(record, silent),
+      lostSinceOf(record, silent),
+      vanishedOf(record, registeredRunnerIds),
+      record.sessionMissingSince,
+      record.turnEndedAt,
+      record.turnEndReason,
+      record.turnEndTail,
+      record.toolUseStallAt,
+      record.toolUseStallPending,
+      this.#awaitingBackgroundOf(job.id),
+      this.#tokenIdentities.get(job.id)?.generation,
+      context.activeTokenGeneration,
+      context.tokenGenerationPoolWired,
+      this.#resetTimeSkewMatches.get(job.id),
+      // `ManagerSummary.usageStoppedAt` の doc のとおり門を通す。
+      this.#usageStopped.has(job.id) ? job.usageStoppedAt : undefined,
+      runnerListedAtOf(job, silent, runnerSessions),
+    );
+  }
+
+  // 聞けていない委譲には欄を作らない（0 を捏造しない）。走行中の像（`#records`）に在る委譲だけに添える
+  #withObserved(record: ManagerRecord, summary: ManagerSummary): ManagerSummary {
+    let result = summary;
+    const tasks = this.#observedBackgroundTasks(record.job.runnerId, record.job.id);
+    if (tasks !== undefined) result = { ...result, liveBackgroundTasks: tasks };
+    const denials = this.#observedClassifierDenials(record.job.runnerId, record.job.id);
+    if (denials !== undefined) result = { ...result, classifierDenials: denials };
+    const peerApprovals = this.#observedPeerApprovals(record.job.runnerId, record.job.id);
+    if (peerApprovals !== undefined) {
+      result = { ...result, pendingPeerApprovals: { ...peerApprovals } };
+    }
+    return result;
+  }
+
+  // 1件のために台帳を全部読まない（#5089）。走行中の像に在ればそれを、無ければ台帳の1行だけを読む（`list()` と同じ優先）。
+  // 読めない行は `UnreadableJobError` を投げ直す（`JobStore.getJob` の doc）
+  async get(managerId: string): Promise<ManagerSummary | undefined> {
+    await this.#ensureConnected();
+    const context = this.#summaryContext();
+    const record = this.#records.get(managerId);
+    if (record !== undefined) return this.#withObserved(record, this.#summarize(record, context));
+    const job = await this.#stores.jobs.getJob(managerId);
+    if (job === null) return undefined;
+    return this.#summarize({ job, waiting: [], attached: false }, context);
+  }
+
   async list(): Promise<ManagerSummary[]> {
     await this.#ensureConnected();
 
-    // 名簿・現役の世代は1回だけ引いて使い回す: 一覧を作っている間に動いても、同じ応答の中では全件を同じ像で比べる
-    // （1本ずつ `this.#tokenIdentity?.()` を呼び直すと、回転が割り込んだとき一部だけ新しい現役と比べることになる）。
-    this.#noteMissingSessions();
-    const silent = this.#silentRunners();
-    const runnerSessions = this.#runnerSessions();
-    // 一覧を作っている間に名簿が動いても、同じ応答の中では全件を同じ像で比べる: 1回だけ引き、呼び出しごとに読み直さない。
-    const registeredRunnerIds = this.#registeredRunnerIds();
-    const activeTokenGeneration = this.#tokenIdentity?.()?.generation;
-    const tokenGenerationPoolWired = this.#tokenIdentity !== undefined;
+    const context = this.#summaryContext();
+    const { registeredRunnerIds } = context;
     const known = new Map<string, ManagerSummary>();
     for (const record of this.#records.values()) {
-      known.set(
-        record.job.id,
-        summaryOf(
-          record,
-          isLive(record, silent),
-          lostSinceOf(record, silent),
-          vanishedOf(record, registeredRunnerIds),
-          record.sessionMissingSince,
-          record.turnEndedAt,
-          record.turnEndReason,
-          record.turnEndTail,
-          record.toolUseStallAt,
-          record.toolUseStallPending,
-          this.#awaitingBackgroundOf(record.job.id),
-          this.#tokenIdentities.get(record.job.id)?.generation,
-          activeTokenGeneration,
-          tokenGenerationPoolWired,
-          this.#resetTimeSkewMatches.get(record.job.id),
-          // `ManagerSummary.usageStoppedAt` の doc のとおり門を通す。
-          this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
-          runnerListedAtOf(record.job, silent, runnerSessions),
-        ),
-      );
+      known.set(record.job.id, this.#summarize(record, context));
     }
     // `live: false` を決め打ちしない: `#retire` が `#records` から外した後の「台帳にしか無い」は
     // 「runner に宛先が無い」とは限らず、決め打つと外した瞬間に `live: true` だった委譲が `false` へ化ける。
     for (const job of await this.#stores.jobs.listJobs()) {
       if (known.has(job.id)) continue;
-      const fallback: ManagerRecord = { job, waiting: [], attached: false };
-      known.set(
-        job.id,
-        summaryOf(
-          fallback,
-          isLive(fallback, silent),
-          lostSinceOf(fallback, silent),
-          vanishedOf(fallback, registeredRunnerIds),
-          fallback.sessionMissingSince,
-          fallback.turnEndedAt,
-          fallback.turnEndReason,
-          fallback.turnEndTail,
-          fallback.toolUseStallAt,
-          fallback.toolUseStallPending,
-          this.#awaitingBackgroundOf(job.id),
-          this.#tokenIdentities.get(job.id)?.generation,
-          activeTokenGeneration,
-          tokenGenerationPoolWired,
-          this.#resetTimeSkewMatches.get(job.id),
-          // `ManagerSummary.usageStoppedAt` の doc のとおり門を通す。
-          this.#usageStopped.has(job.id) ? job.usageStoppedAt : undefined,
-          runnerListedAtOf(job, silent, runnerSessions),
-        ),
-      );
+      known.set(job.id, this.#summarize({ job, waiting: [], attached: false }, context));
     }
-    // 聞けていない委譲には欄を作らない（0 を捏造しない）。
     for (const record of this.#records.values()) {
-      const tasks = this.#observedBackgroundTasks(record.job.runnerId, record.job.id);
       const summary = known.get(record.job.id);
-      if (tasks !== undefined && summary !== undefined) {
-        known.set(record.job.id, { ...summary, liveBackgroundTasks: tasks });
-      }
-      const denials = this.#observedClassifierDenials(record.job.runnerId, record.job.id);
-      const current = known.get(record.job.id);
-      if (denials !== undefined && current !== undefined) {
-        known.set(record.job.id, { ...current, classifierDenials: denials });
-      }
-      const peerApprovals = this.#observedPeerApprovals(record.job.runnerId, record.job.id);
-      const afterDenials = known.get(record.job.id);
-      if (peerApprovals !== undefined && afterDenials !== undefined) {
-        known.set(record.job.id, { ...afterDenials, pendingPeerApprovals: { ...peerApprovals } });
-      }
+      if (summary !== undefined) known.set(record.job.id, this.#withObserved(record, summary));
     }
     const summaries = [...known.values()];
     // `isLive()` にも `status` にも触れない独立した計器。新しい tick は足さずここへ載せ、書く頻度は `#noteVanishedRunnerGauge` が絞る。
@@ -13252,6 +13258,15 @@ function tokenGenerationUnknownReasonOf(
 
 // `live` などに既定値を置かず必須の引数にする: 省略した側が黙って「繋がっている」と名乗り、既定を `false` にしても「繋がっているのに切れて見える」が混ざる。
 // 材料が `record` から読めないプロセス内の状態（名簿・`#usageStopped` など）の欄は、呼ぶ側が計算した値だけを渡す。
+// `ManagerPool` の一覧と1件の読みが、同じ応答の中で全件を同じ像で比べるための材料
+interface SummaryContext {
+  silent: ReadonlyMap<string, string>;
+  runnerSessions: ReadonlyMap<string, { ids: ReadonlySet<string>; observedAt: string }>;
+  registeredRunnerIds: ReadonlySet<string> | null;
+  activeTokenGeneration: number | undefined;
+  tokenGenerationPoolWired: boolean;
+}
+
 function summaryOf(
   record: ManagerRecord,
   live: boolean,
