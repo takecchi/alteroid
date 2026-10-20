@@ -69,11 +69,83 @@ function readOpenProbeRow(result: unknown): OpenProbeRow {
   return row as OpenProbeRow;
 }
 
+// 片付いた行の読み出しの覚え（#5089）。版は `xmin` と `ctid` の組: 書き換えるたびに新しい行の版ができ、同じトランザクションで2回書き換えても
+// `ctid` が違うため（`xmin` だけだと同じになる）
+type ClosedRowCacheEntry =
+  | { version: string; ok: true; entry: Commitment }
+  | { version: string; ok: false; unreadable: UnreadableCommitment };
+
 export class PgCommitmentStore implements CommitmentStore {
   readonly #db: Db;
 
+  // 片付いた行は数が多く（台帳の大半）、閉じた後はほとんど書き換わらないので、本文を毎回読み直さない（#5089）。
+  // 毎回読むのは id と版だけで、版が変わった行・新しく片付いた行だけ本文を読む。読めない行も覚えるので、一覧の中身は全部読んだときと同じ。
+  // 覚えの中身は凍らせ、返すときは写しにする: 呼び手が書き換えても覚えが汚れないため（`PgJobStore` と同じ）
+  readonly #closedCache = new Map<string, ClosedRowCacheEntry>();
+
   constructor(db: Db) {
     this.#db = db;
+  }
+
+  async #listClosed(): Promise<{ entries: Commitment[]; unreadable: UnreadableCommitment[] }> {
+    const rows = await this.#db
+      .select({ id: commitments.id, version: sql<string>`xmin::text || '/' || ctid::text` })
+      .from(commitments)
+      .where(isNotNull(commitments.closedAt))
+      .orderBy(desc(commitments.closedAt), asc(commitments.seq), asc(commitments.id));
+
+    const versionById = new Map<string, string>();
+    const staleIds: string[] = [];
+    for (const row of rows) {
+      versionById.set(row.id, row.version);
+      if (this.#closedCache.get(row.id)?.version !== row.version) staleIds.push(row.id);
+    }
+    if (staleIds.length > 0) {
+      // 全部が新しいときは `inArray` を経由しない: バインド変数が1クエリ65,535個までで、台帳がそれを超えると冷たい1回目が落ちるため
+      const freshRows =
+        staleIds.length === rows.length
+          ? await this.#db
+              .select({
+                id: commitments.id,
+                at: commitments.at,
+                commitment: commitments.commitment,
+              })
+              .from(commitments)
+              .where(isNotNull(commitments.closedAt))
+          : await this.#db
+              .select({
+                id: commitments.id,
+                at: commitments.at,
+                commitment: commitments.commitment,
+              })
+              .from(commitments)
+              .where(inArray(commitments.id, staleIds));
+      for (const row of freshRows) {
+        const version = versionById.get(row.id);
+        if (version === undefined) continue;
+        const { entries, unreadable } = splitReadableRows([row]);
+        const entry = entries[0];
+        const broken = unreadable[0];
+        if (entry !== undefined) {
+          this.#closedCache.set(row.id, { version, ok: true, entry: Object.freeze(entry) });
+        } else if (broken !== undefined) {
+          this.#closedCache.set(row.id, { version, ok: false, unreadable: Object.freeze(broken) });
+        }
+      }
+    }
+    for (const id of [...this.#closedCache.keys()]) {
+      if (!versionById.has(id)) this.#closedCache.delete(id);
+    }
+
+    const entries: Commitment[] = [];
+    const unreadable: UnreadableCommitment[] = [];
+    for (const row of rows) {
+      const cached = this.#closedCache.get(row.id);
+      if (cached === undefined) continue;
+      if (cached.ok) entries.push({ ...cached.entry });
+      else unreadable.push({ ...cached.unreadable });
+    }
+    return { entries, unreadable };
   }
 
   async list(options?: { includeClosed?: boolean }): Promise<CommitmentList> {
@@ -86,12 +158,7 @@ export class PgCommitmentStore implements CommitmentStore {
     // `includeClosed` が偽なら片付いた壊れ行を `unreadable` に入れない: 「未了の一覧」という前提が崩れるため。
     if (options?.includeClosed !== true) return { ...open, trimmedClosed: 0 };
 
-    const closedRows = await this.#db
-      .select({ id: commitments.id, at: commitments.at, commitment: commitments.commitment })
-      .from(commitments)
-      .where(isNotNull(commitments.closedAt))
-      .orderBy(desc(commitments.closedAt), asc(commitments.seq), asc(commitments.id));
-    const closed = splitReadableRows(closedRows);
+    const closed = await this.#listClosed();
     return {
       entries: [...open.entries, ...closed.entries],
       unreadable: [...open.unreadable, ...closed.unreadable],
