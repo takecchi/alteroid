@@ -18,7 +18,7 @@ import type {
   RemoveMemoryOptions,
   WriteMemoryOptions,
 } from '@alteroid/core';
-import { and, asc, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { byteOrder, stripNulls, toIso } from './db.js';
@@ -40,11 +40,16 @@ export class PgPersonaStore implements PersonaStore {
     return parsed.data;
   }
 
+  // 一覧のために本文を全部流さない（#5089）: 先頭の `LIST_HEAD_CHARS` 字と大きさだけを読み、題と frontmatter が先頭の完結した行の中で決まる文書はそれで作る。
+  // 決まらない文書（先頭に見出しが無い・frontmatter が閉じていない）だけ本文を読み直す。どちらでも `read()` から作る値と同じになる
   async list(): Promise<MemoryDocumentMeta[]> {
     const rows = await this.#db
       .select({
         slug: memory.slug,
-        content: memory.content,
+        head: sql<string>`left(${memory.content}, ${LIST_HEAD_CHARS})`,
+        chars: sql<number>`char_length(${memory.content})`,
+        // `Buffer.byteLength(content, 'utf8')` と同じ値: 器の文字コードによらず UTF-8 で数える
+        bytes: sql<number>`octet_length(convert_to(${memory.content}, 'UTF8'))`,
         updatedAt: memory.updatedAt,
         describedAt: memory.describedAt,
         describedBytes: memory.describedBytes,
@@ -53,7 +58,37 @@ export class PgPersonaStore implements PersonaStore {
       })
       .from(memory)
       .orderBy(asc(byteOrder(memory.slug)));
-    return rows.map((row) => stripContent(toDocument(row)));
+
+    const metas = new Map<string, MemoryDocumentMeta>();
+    const undecided: string[] = [];
+    for (const row of rows) {
+      const content = decidedPrefix(row.head, Number(row.chars) <= LIST_HEAD_CHARS);
+      if (content === undefined) {
+        undecided.push(row.slug);
+        continue;
+      }
+      metas.set(row.slug, metaOf(row, content, Number(row.bytes)));
+    }
+    if (undecided.length > 0) {
+      const full = await this.#db
+        .select({
+          slug: memory.slug,
+          content: memory.content,
+          updatedAt: memory.updatedAt,
+          describedAt: memory.describedAt,
+          describedBytes: memory.describedBytes,
+          describedBytesAt: memory.describedBytesAt,
+          createdAt: memory.createdAt,
+        })
+        .from(memory)
+        .where(inArray(memory.slug, undecided));
+      for (const row of full) metas.set(row.slug, stripContent(toDocument(row)));
+    }
+    // 1回目の並びを保つ。2回目までの間に消えた文書は落とす
+    return rows.flatMap((row) => {
+      const meta = metas.get(row.slug);
+      return meta === undefined ? [] : [meta];
+    });
   }
 
   async read(slug: string): Promise<MemoryDocument | null> {
@@ -424,11 +459,39 @@ interface MemoryRow {
   createdAt: Date | string | null;
 }
 
-function toDocument(row: MemoryRow): MemoryDocument {
+/** 一覧で読む本文の先頭の字数（#5089）。frontmatter と最初の見出しは、ふつう先頭の数行に在る */
+const LIST_HEAD_CHARS = 4096;
+
+/**
+ * 先頭だけで題と frontmatter が全文と同じに決まるなら、その判定に使う本文（全文か、完結した行までの先頭）を返す。決まらなければ undefined。
+ * 決まる条件: 全文が先頭に収まっている／先頭の完結した行の中に、最初の見出しが在り、かつ frontmatter が無いか閉じている
+ */
+function decidedPrefix(head: string, complete: boolean): string | undefined {
+  if (complete) return head;
+  const lastNewline = head.lastIndexOf('\n');
+  if (lastNewline < 0) return undefined;
+  // 途中で切れた最後の行は使わない: 切れた行が見出しや区切りに見えると、全文と違う判定になるため
+  const prefix = head.slice(0, lastNewline + 1);
+  if (headingOf(prefix) === undefined) return undefined;
+  const lines = prefix.split('\n');
+  if (lines[0]?.trim() === FRONTMATTER_DELIMITER) {
+    const closed = lines.some((line, index) => index > 0 && line.trim() === FRONTMATTER_DELIMITER);
+    if (!closed) return undefined;
+  }
+  return prefix;
+}
+
+// `memory.ts` の `parseMemoryFrontmatter` と同じ区切り
+const FRONTMATTER_DELIMITER = '---';
+
+function metaOf(
+  row: Omit<MemoryRow, 'content'>,
+  content: string,
+  currentBytes: number,
+): MemoryDocumentMeta {
   const updatedAt = toIso(row.updatedAt);
-  const currentBytes = Buffer.byteLength(row.content, 'utf8');
   const derived = deriveMemoryFrontmatter({
-    content: row.content,
+    content,
     updatedAt,
     describedAt: row.describedAt === null ? undefined : toIso(row.describedAt),
     describedBytes: row.describedBytes === null ? undefined : row.describedBytes,
@@ -437,16 +500,33 @@ function toDocument(row: MemoryRow): MemoryDocument {
   });
   return {
     slug: row.slug,
-    title: titleOf(row.content, row.slug),
+    title: titleOf(content, row.slug),
     updatedAt,
     createdAt: toMemoryCreatedAt(row.createdAt),
     bytes: currentBytes,
-    content: row.content,
     frontmatter: derived.frontmatter,
     kind: derived.kind,
     description: derived.description,
     parent: derived.parent,
     descriptionFreshness: derived.descriptionFreshness,
+  };
+}
+
+// 欄の並びは変える前と同じにする（`content` は `bytes` の後）: 応答の JSON の形を変えないため
+function toDocument(row: MemoryRow): MemoryDocument {
+  const meta = metaOf(row, row.content, Buffer.byteLength(row.content, 'utf8'));
+  return {
+    slug: meta.slug,
+    title: meta.title,
+    updatedAt: meta.updatedAt,
+    createdAt: meta.createdAt,
+    bytes: meta.bytes,
+    content: row.content,
+    frontmatter: meta.frontmatter,
+    kind: meta.kind,
+    description: meta.description,
+    parent: meta.parent,
+    descriptionFreshness: meta.descriptionFreshness,
   };
 }
 
@@ -470,9 +550,13 @@ function stripContent(doc: MemoryDocument): MemoryDocumentMeta {
 }
 
 function titleOf(content: string, fallback: string): string {
+  return headingOf(content) ?? fallback;
+}
+
+function headingOf(content: string): string | undefined {
   for (const line of content.split('\n')) {
     const heading = /^#\s+(.+?)\s*$/.exec(line);
     if (heading?.[1]) return heading[1];
   }
-  return fallback;
+  return undefined;
 }
