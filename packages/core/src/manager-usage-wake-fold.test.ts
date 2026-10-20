@@ -48,17 +48,27 @@ function fakeRunner() {
   const behavior: {
     background: number | 'absent';
     peers: number | undefined;
+    // 背景処理のうち作業者（`local_agent`）の本数。`undefined` は欄を返さない（古い runner）
+    agents: number | undefined;
     commands: string[] | undefined;
     waiting: RunnerManagerState['waiting'];
     // 起こし直しの送信の途中（resume の await の間）に走らせる処理
     onResume: (() => void) | undefined;
-  } = { background: 0, peers: undefined, commands: undefined, waiting: [], onResume: undefined };
+  } = {
+    background: 0,
+    peers: undefined,
+    agents: undefined,
+    commands: undefined,
+    waiting: [],
+    onResume: undefined,
+  };
 
   const stateOf = (base: RunnerManagerState): RunnerManagerState => ({
     ...base,
     waiting: behavior.waiting,
     ...(behavior.background === 'absent' ? {} : { liveBackgroundTasks: behavior.background }),
     ...(behavior.peers === undefined ? {} : { liveBackgroundPeers: behavior.peers }),
+    ...(behavior.agents === undefined ? {} : { liveBackgroundAgents: behavior.agents }),
     ...(behavior.commands === undefined ? {} : { backgroundTaskCommands: behavior.commands }),
   });
 
@@ -564,6 +574,79 @@ describe('鍵の回転の起こし直しは、背景処理を待ちの上限ま�
     // 止まってから 15 分（4分後ではなく2分後）で挑み、畳んで起こし直す
     s.clock.now += 2 * MINUTE;
     expect(await s.pool.settleStalledUsageWakes()).toEqual(['mgr-fold']);
+    expect(s.fake.stops).toEqual(['mgr-fold']);
+    await s.pool.stop();
+  });
+});
+
+// 2026-10-20 の本番: PARTY-6・MVP-4 の背景処理は作業者（背景のサブエージェント）で、古い鍵で落ちたまま本数だけが残り、上限の 16 分まで待った
+describe('背景処理が作業者だけで、抱えている鍵が使えないなら待たない（#5109）', () => {
+  it('⭐ (g) 背景処理が作業者 1 本だけ・古い鍵が冷却中: 上限を待たずに畳んで起こし直し、理由を日誌に書く', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 1;
+    s.fake.behavior.agents = 1;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
+
+    expect(s.fake.stops).toEqual(['mgr-fold']);
+    expect(s.fake.resumes).toHaveLength(1);
+    expect(s.fake.resumes[0]?.message ?? '').toContain('背景処理 1 本');
+    const decisions = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('残っている背景処理は作業者だけ'),
+    );
+    expect(decisions).toHaveLength(1);
+    expect(JSON.stringify(decisions[0])).toContain('#5109');
+    expect(JSON.stringify(decisions[0])).toContain('liveBackgroundAgents=1');
+    await s.pool.stop();
+  });
+
+  it('⭐ (g2) 作業者と子プロセスが混ざっていれば、今までどおり上限まで待つ', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 2;
+    s.fake.behavior.agents = 1;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+    expect(s.fake.stops).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it('(g3) 作業者の本数を返さない（古い runner）なら、今までどおり上限まで待つ', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 1;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+    expect(s.fake.stops).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it('(g4) 抱えている鍵が使えるか読めなかったら、作業者だけでも上限まで待つ（分からないものを「使えない」に倒さない）', async () => {
+    const s = await setup(async () => undefined);
+    s.fake.behavior.background = 1;
+    s.fake.behavior.agents = 1;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+    expect(s.fake.stops).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it('(g5) 抱えている鍵が使えるなら、作業者だけでも畳まずに旧セッションへ届ける（今どおり）', async () => {
+    const s = await setup(async () => 'ready');
+    s.fake.behavior.background = 1;
+    s.fake.behavior.agents = 1;
+
+    await s.pool.resumeStoppedByUsage();
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.fake.sends).toHaveLength(1);
+    await s.pool.stop();
+  });
+
+  it('(g6) 作業者 1 本と背景の peer 1 本なら、peer は預けて続くので作業者だけと数え、待たずに畳む', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 2;
+    s.fake.behavior.peers = 1;
+    s.fake.behavior.agents = 1;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
     expect(s.fake.stops).toEqual(['mgr-fold']);
     await s.pool.stop();
   });

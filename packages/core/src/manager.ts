@@ -4351,24 +4351,12 @@ class Pool implements ManagerPool {
       state.liveBackgroundPeers ?? 0,
       state.liveBackgroundTasks ?? 0,
     );
-    const rotationWaiting =
-      options.foldBackgroundIfHeldTokenNotReady === true &&
-      options.rotationFoldDueAt !== undefined &&
-      blockers.length === 1 &&
-      state.liveBackgroundTasks !== undefined &&
-      state.liveBackgroundTasks - peersInBackground > 0;
-    const foldBackground =
-      (options.foldBackgroundAfterWait === true ||
-        (options.foldBackgroundIfHeldTokenNotReady === true && !rotationWaiting)) &&
-      blockers.length === 1 &&
-      state.liveBackgroundTasks !== undefined &&
-      state.liveBackgroundTasks > 0
-        ? state.liveBackgroundTasks
-        : undefined;
     const heldTokenId = this.#tokenIdentities.get(managerId)?.tokenId;
     // 断る回にも鍵の状態を言うために外へ出す: 言わないと、クローンはいつ送り直せばよいかを決められず、
     // 段1（ready なら届ける）で足りているのかを日誌から数えられない（#4441 の段2の判断材料）。
     let heldTokenState: string | undefined;
+    // 抱えている鍵が使えないと分かったか（冷却中・止めてある・無効）。読めなかった・聞いていない回は偽（分からないものは「使えない」に倒さない）
+    let heldTokenUnusable = false;
     if (blockers.length > 0) {
       // 抱えている鍵がいま ready なら断らず旧セッションへ流す: その鍵ならまた枠に当たらず、畳めば確認待ち・背景処理を失うため。
       // 指紋で判定した回（attached=false）は鍵が分からないので流さない。sessionId が無い回も流さない（保守側に倒す）。
@@ -4381,6 +4369,7 @@ class Pool implements ManagerPool {
       ) {
         const availability = await this.#tokenAvailability(heldTokenId).catch(() => undefined);
         heldTokenState = describeHeldTokenState(availability);
+        heldTokenUnusable = availability !== undefined && availability !== 'ready';
         if (availability === 'ready') {
           await this.#journal({
             type: 'decision',
@@ -4393,6 +4382,31 @@ class Pool implements ManagerPool {
         }
       }
     }
+    // 残っている背景処理（peer を除く）が全部作業者（サブエージェント）で、抱えている鍵が使えないと分かっていれば待たない（#5109）:
+    // 作業者は担当と同じ古い鍵で走るので、待っても進まず、本数だけが残って上限まで待つことになる（2026-10-20 の PARTY-6・MVP-4 は 16 分）。
+    // テスト・ビルドのような子プロセスは鍵を使わずに最後まで走るので、今までどおり待つ。種類の分からない runner（欄が無い）も今までどおり待つ。
+    const nonPeerBackground = (state.liveBackgroundTasks ?? 0) - peersInBackground;
+    const agentsStuckOnUnusableKey =
+      heldTokenUnusable &&
+      state.liveBackgroundAgents !== undefined &&
+      nonPeerBackground > 0 &&
+      state.liveBackgroundAgents >= nonPeerBackground;
+    const rotationWaiting =
+      options.foldBackgroundIfHeldTokenNotReady === true &&
+      options.rotationFoldDueAt !== undefined &&
+      blockers.length === 1 &&
+      state.liveBackgroundTasks !== undefined &&
+      nonPeerBackground > 0 &&
+      !agentsStuckOnUnusableKey;
+    const foldBackground =
+      (options.foldBackgroundAfterWait === true ||
+        (options.foldBackgroundIfHeldTokenNotReady === true && !rotationWaiting) ||
+        agentsStuckOnUnusableKey) &&
+      blockers.length === 1 &&
+      state.liveBackgroundTasks !== undefined &&
+      state.liveBackgroundTasks > 0
+        ? state.liveBackgroundTasks
+        : undefined;
     if (blockers.length > 0 && foldBackground === undefined) {
       const tokenClause =
         heldTokenState === undefined
@@ -4491,22 +4505,28 @@ class Pool implements ManagerPool {
 
     record.attached = false;
     if (foldBackground !== undefined) {
-      // 待ちの上限を過ぎた回と、鍵の回転の回を言い分ける: 後者は待っていない
-      const byRotation = options.foldBackgroundAfterWait !== true;
+      // 待ちの上限を過ぎた回と、鍵の回転の回と、作業者だけが古い鍵で止まっている回を言い分ける: 後の2つは待っていない
+      const byAgents = agentsStuckOnUnusableKey && options.foldBackgroundAfterWait !== true;
+      const byRotation = !byAgents && options.foldBackgroundAfterWait !== true;
       await this.#journal({
         type: 'decision',
         decision:
           `[${managerId}] done の委譲を、残っていた背景処理 ${String(foldBackground)} 本ごと畳んで新しい鍵で起こし直す` +
-          (byRotation
-            ? `（${staleness}。鍵の回転の起こし直しで、抱えている古い鍵は使えない）`
-            : `（${staleness}。預かった伝言が ${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分届かなかった）`),
+          (byAgents
+            ? `（${staleness}。残っている背景処理は作業者だけで、抱えている古い鍵は使えないので、待っても進まない）`
+            : byRotation
+              ? `（${staleness}。鍵の回転の起こし直しで、抱えている古い鍵は使えない）`
+              : `（${staleness}。預かった伝言が ${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分届かなかった）`),
         grounds:
-          `managerId=${managerId} liveBackgroundTasks=${String(foldBackground)} 確認待ち=0 ` +
+          `managerId=${managerId} liveBackgroundTasks=${String(foldBackground)} ` +
+          `liveBackgroundAgents=${state.liveBackgroundAgents === undefined ? '（分からない）' : String(state.liveBackgroundAgents)} 確認待ち=0 ` +
           `鍵の状態=${heldTokenState ?? '（聞いていない）'}` +
-          (byRotation
-            ? `（#4850 / #5044。鍵の回転の起こし直しは、背景処理を待ちの上限（${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分）までしか待たない` +
-              '（待ち始めが分からない回は待たない）。古い背景処理は runner が止める）'
-            : '（#4472。背景処理が終わらない・終わったのに本数が下りないと、古い鍵のまま居座るため）'),
+          (byAgents
+            ? '（#5109。作業者は担当と同じ古い鍵で走るので、背景処理の終わりを待たない。子プロセスの背景処理なら待ちの上限まで待つ）'
+            : byRotation
+              ? `（#4850 / #5044。鍵の回転の起こし直しは、背景処理を待ちの上限（${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分）までしか待たない` +
+                '（待ち始めが分からない回は待たない）。古い背景処理は runner が止める）'
+              : '（#4472。背景処理が終わらない・終わったのに本数が下りないと、古い鍵のまま居座るため）'),
       });
       const commands = redactedBackgroundCommands(state.backgroundTaskCommands);
       // 本数の内数。欄が無い古い runner は 0 本（今までどおり全部を畳んだと書く）

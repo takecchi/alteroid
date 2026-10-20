@@ -2115,8 +2115,11 @@ function isOwnerRecordableTaskType(type: unknown): boolean {
 
 // 知らない値を数えない: 数えると SDK が新しい種類（`local_workflow` 等）を増やすたびに作業者の過大計上が黙って再発するため
 // `OWNER_RECORDABLE_TASK_TYPES` と混ぜない: 背景処理の種類と委譲の種類は別の id 空間のため
+/** 背景で起こした作業者（サブエージェント）の、SDK の背景処理の種類（`task_type`）。 */
+const BACKGROUND_AGENT_TASK_TYPE = 'local_agent';
+
 function isWorkerTaskType(taskType: string | undefined): boolean {
-  return taskType === undefined || taskType === 'local_agent';
+  return taskType === undefined || taskType === BACKGROUND_AGENT_TASK_TYPE;
 }
 
 /**
@@ -2627,6 +2630,10 @@ class RunnerSession {
         : { sessionId: this.#resumeState.sessionId }),
       liveBackgroundTasks: this.#liveBackgroundTasks().length,
       liveBackgroundPeers: this.#peerBroker?.backgroundTasks().length ?? 0,
+      // 種類が `local_agent` と分かるものだけを数える: 知らない種類（`(不明)` を含む）を作業者に数えると、鍵を使わない子プロセスを待たずに畳むため
+      liveBackgroundAgents: this.#sdkSession.liveBackgroundTasks.filter(
+        (task) => task.taskType === BACKGROUND_AGENT_TASK_TYPE,
+      ).length,
       backgroundTaskCommands: this.#liveBackgroundTasks().flatMap((task) => {
         const command = this.#stopState.backgroundTaskCommand(task.id);
         return command === undefined ? [] : [command];

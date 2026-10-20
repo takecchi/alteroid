@@ -74,6 +74,12 @@ export const runnerManagerStateSchema = z.object({
    */
   liveBackgroundPeers: z.number().int().nonnegative().optional(),
   /**
+   * `liveBackgroundTasks` のうち、背景で起こした作業者（サブエージェント。SDK の `task_type` が `local_agent`）の本数（内数）。
+   * 作業者は担当と同じ鍵で走るので、抱えている鍵が使えないなら待っても進まない（テスト・ビルドのような子プロセスは鍵を使わずに最後まで走る）。
+   * デーモンはこれで、鍵の回転の起こし直しを背景処理の終わりまで待つかを分ける。`undefined` は「分からない」（古い runner）で、今までどおり待つ。
+   */
+  liveBackgroundAgents: z.number().int().nonnegative().optional(),
+  /**
    * 起こしっぱなしの背景処理のうち、コマンドを控えられたものの字面（伏せ字にする前の生）。本数より少ないことがある（作業者の背景処理・peer・控えが枝刈りされたもの）。
    * `undefined` は「分からない」（古い runner）で、空配列は「控えが無い」。畳んだ背景処理を担当が起こし直せるよう、デーモンが伏せ字にして一言に載せる（#4850）。
    */

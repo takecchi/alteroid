@@ -329,6 +329,31 @@ describe('REPLACE 意味論（差分ではなく、2回目のペイロードが1
     expect(report?.awaitingBackground).toEqual({ count: 1, breakdown: 'shell×1' });
   });
 
+  it('⭐ 状態の liveBackgroundAgents は、背景処理のうち作業者（local_agent）だけを数える（知らない種類は数えない。#5109）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const session = await firstSession(s.sessions);
+
+    await session.backgroundTasksChanged([
+      { id: 'bg-1', taskType: 'local_agent' },
+      { id: 'bg-2', taskType: 'shell' },
+      { id: 'bg-3', taskType: 'local_workflow' },
+    ]);
+    await vi.waitFor(() => {
+      expect(s.host.list()[0]?.liveBackgroundTasks).toBe(3);
+    });
+    expect(s.host.list()[0]?.liveBackgroundAgents).toBe(1);
+
+    await session.backgroundTasksChanged([
+      { id: 'bg-1', taskType: 'local_agent' },
+      { id: 'bg-4', taskType: 'local_agent' },
+    ]);
+    await vi.waitFor(() => {
+      expect(s.host.list()[0]?.liveBackgroundAgents).toBe(2);
+    });
+    expect(s.host.list()[0]?.liveBackgroundTasks).toBe(2);
+  });
+
   it('ambient なタスクは在り高に数えない', async () => {
     const s = setup();
     await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
