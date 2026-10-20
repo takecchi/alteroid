@@ -625,10 +625,14 @@ export const managerSummarySchema = z.object({
   cwdConfirmed: z.literal(true).optional(),
   requestedCwd: z.string().optional(),
   request: z.string(),
+  // 一覧（`GET /managers`）で `request` を先頭に切ったときだけ付く（#5089）。全文は `GET /managers/{id}`
+  requestTruncated: z.literal(true).optional(),
   startedAt: z.string(),
   updatedAt: z.string(),
   sessionId: z.string().optional(),
   lastReport: z.string().optional(),
+  // 一覧で `lastReport` を先頭に切ったときだけ付く（#5089）
+  lastReportTruncated: z.literal(true).optional(),
   lastReportAt: z.string().optional(),
   // `jobSchema` の枝は書き直さず借りる（以下の `jobSchema.shape.*` も同じ）: 欄が片方だけ増えた日に spec が黙って古びるため。
   lastReportStatus: jobSchema.shape.lastReportStatus,

@@ -193,6 +193,8 @@ import {
   type AuthService,
   NulNotAllowedError,
   InvalidCredentialNameError,
+  codePointBoundary,
+  redactSecretsInBody,
   UnreadableJobError,
   type TokenPolicyChange,
   type TokenPoolChange,
@@ -1011,6 +1013,43 @@ function managerView(managers: ManagerPool, summary: ManagerSummary) {
     ...(denials.length === 0 ? {} : { denials }),
     // 取れなければ欄ごと載せない（クローンの道具と同じ読み方。既定の帯で埋めない）。
     ...managerModelsOf(managers, summary),
+  };
+}
+
+/** 一覧（`GET /managers`）で依頼文と報告を切る長さ（UTF-16 の単位）。一覧の利用者が使うのは最長でも 120 字（TUI）で、全文は詳細で取る（#5089） */
+export const MANAGER_LIST_TEXT_HEAD = 200;
+
+/**
+ * 切るときに伏せを掛ける窓の、切る位置より後ろの余白（字）。伏せの規則（`redactSecretsInBody`）はどれも秘密の頭から始まり、
+ * 長さに上限がある（最長は `github_pat_` の 311 字・URL の userinfo の 200 字ほど）か、`…KEY=` の代入・Bearer・PEM（END が無ければ
+ * 文字列の終わりまで伏せる）のように頭から窓の終わりまで伏せる。なので切る位置の前で始まる秘密は、この余白があれば切った頭の中では必ず伏せられる。
+ * 窓の終わりで秘密が切れて規則に当たりやすくなる向き（伏せすぎ）にしかずれない
+ */
+const MANAGER_LIST_REDACT_MARGIN = 512;
+
+// 先頭だけにして末尾に `…` を付ける。切らないなら undefined。コードポイントの途中では切らない。
+// 切るときは、描画の側（Web・CLI の `redactBody`）と同じ伏せを掛けてから切る（`redactedExcerpt` と同じ順）: 生のまま切ると、
+// 切れ目をまたいだ鍵の頭だけが残り、描画の側の伏せの規則に当たらずに出てしまうため。伏せは先頭の窓にだけ掛ける: 全文に掛けると
+// 600 件で 30ms ほど増えるため。切らない行は今までどおり生のまま返す（伏せは描画の側の仕事のまま）
+function textHead(text: string, max: number): string | undefined {
+  if (text.length <= max) return undefined;
+  const readEnd = codePointBoundary(text, max + MANAGER_LIST_REDACT_MARGIN);
+  const redacted = redactSecretsInBody(text.slice(0, readEnd), undefined);
+  if (redacted.length <= max && readEnd >= text.length) return undefined;
+  return `${redacted.slice(0, codePointBoundary(redacted, max))}…`;
+}
+
+// 一覧の1行: 詳細（`managerView`）と同じ欄を持ち、大きい本文（依頼文・報告）だけを先頭に切る（#5089）。
+// 欄ごと外さない: CLI の `/managers` が報告の有無で「報告ゼロ」を言い分け、Web の使用量の画面が依頼文の頭をラベルにするため
+function managerListItem(managers: ManagerPool, summary: ManagerSummary) {
+  const view = managerView(managers, summary);
+  const request = textHead(view.request, MANAGER_LIST_TEXT_HEAD);
+  const lastReport =
+    view.lastReport === undefined ? undefined : textHead(view.lastReport, MANAGER_LIST_TEXT_HEAD);
+  return {
+    ...view,
+    ...(request === undefined ? {} : { request, requestTruncated: true as const }),
+    ...(lastReport === undefined ? {} : { lastReport, lastReportTruncated: true as const }),
   };
 }
 
@@ -6725,7 +6764,12 @@ export function createApp(deps: AppDeps) {
           '**CLI とクローンの `manager_list` はこの窓を使っていない**（別 issue）。' +
           '行が読めない（版ずれ・手編集）委譲が在るときだけ、`unreadable`（id が取れれば id と' +
           '不正な欄名。本文は載せない）を載せる（issue #2345）。**「居ない」でも「畳まれた」でもない**。' +
-          '`status` の絞り・`limit`・錨では切らず、常に全件を返す。0件なら鍵ごと無い。',
+          '`status` の絞り・`limit`・錨では切らず、常に全件を返す。0件なら鍵ごと無い。' +
+          '**依頼文（`request`）と報告（`lastReport`）は一覧では先頭 ' +
+          `${String(MANAGER_LIST_TEXT_HEAD)} 字（UTF-16 の単位）までに切り、末尾に \`…\` を付ける**（#5089。委譲は消えないので、` +
+          '全文を載せると件数に比例して応答が太る）。切った欄は、表示の側と同じ秘密の伏せを掛けてから切る' +
+          '（切れ目をまたいだ鍵の頭が残らないように）。切った欄には `requestTruncated` / `lastReportTruncated` が `true` で付く。' +
+          '全文は `GET /managers/{id}` で取る。欄の有無は変えない（報告が無い委譲は、一覧でも `lastReport` を持たない）。',
         responses: {
           200: {
             description: 'マネージャーの一覧と状態。',
@@ -6824,7 +6868,7 @@ export function createApp(deps: AppDeps) {
 
         return c.json(
           managersListResponseSchema.parse({
-            managers: page.map((summary) => managerView(clone.managers, summary)),
+            managers: page.map((summary) => managerListItem(clone.managers, summary)),
             ...(unreadable.length > 0 ? { unreadable } : {}),
           }),
         );
