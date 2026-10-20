@@ -215,6 +215,47 @@ describe('作業者の落ちで手を止めた担当を起こす（#5030）', ()
     await s.pool.stop();
   });
 
+  it('⭐ 回転前の鍵で落ち、ターンの終わりに現役が ready でなかった印は、ready になった後の周回の掃きで起こす（次の回転を待たない）', async () => {
+    let availability: 'ready' | 'cooling' = 'cooling';
+    const s = await setup({ availability: async () => availability });
+    s.fake.push(workerLimitNote(true));
+    s.fake.push(doneReport());
+    await settle();
+    expect(s.fake.delivered).toEqual([]);
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+
+    availability = 'ready';
+    // 起こせなかった直後は間隔を空ける（毎周回は挑まない）
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+    expect(s.fake.delivered).toEqual([]);
+
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 2 * 60 * 1000 });
+    try {
+      expect(await s.pool.settleStalledUsageWakes()).toEqual([JOB.id]);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(s.fake.delivered).toEqual([NUDGE_TEXT]);
+    // 鍵の回転は起こさず、枠で止まった印も立てない
+    expect(s.observations).toEqual([]);
+    // 起こしたら印が下り、二度は起こさない
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+    expect(s.fake.delivered).toEqual([NUDGE_TEXT]);
+    await s.pool.stop();
+  });
+
+  it('現役の鍵で落ちた印は、周回の掃きでは起こさない（その鍵は通らない見込みが高い。次の回転で起こす）', async () => {
+    const s = await setup();
+    s.fake.push(workerLimitNote(false));
+    s.fake.push(doneReport());
+    await settle();
+
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+    expect(s.fake.delivered).toEqual([]);
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([JOB.id]);
+    await s.pool.stop();
+  });
+
   it('担当がまだ running のうちは起こさない（done で終わるまで待つ）', async () => {
     const s = await setup();
     s.fake.push(workerLimitNote(true));

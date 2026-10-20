@@ -1817,6 +1817,12 @@ export const HELD_FORCE_FOLD_AFTER_MS = 15 * 60 * 1000;
 /** 起こし直しが届かなかった担当への挑み直しの間隔: 1分から倍々に、上限30分（#4850）。 */
 const USAGE_WAKE_RETRY_BASE_MS = 60 * 1000;
 const USAGE_WAKE_RETRY_MAX_MS = 30 * 60 * 1000;
+/**
+ * 作業者の落ちで手を止めた担当への、周回の掃きの挑み直しの間隔: 1分から倍々に、上限5分。
+ * 担当の枠の落ちの挑み直し（上限30分）より短くする: 現役の鍵が `ready` と分かってから起こすので、同じ枠に当たって1ターン焼く心配が無いため。
+ */
+const WORKER_LIMIT_WAKE_RETRY_BASE_MS = 60 * 1000;
+const WORKER_LIMIT_WAKE_RETRY_MAX_MS = 5 * 60 * 1000;
 
 /** 畳んだ背景処理のコマンドを一言に載せる最大本数と、1本あたりの字数（#4850）。 */
 const FOLD_NOTICE_COMMANDS_MAX = 5;
@@ -3219,6 +3225,12 @@ class Pool implements ManagerPool {
    * 周回の掃き（`settleStalledUsageWakes`）だけが読む。成功・印の解除で消す（間隔を戻す）。
    */
   readonly #usageWakeRetry = new Map<string, { failures: number; nextAt: number }>();
+  /**
+   * 回転前の鍵で作業者が落ちた担当（`#workerLimitStopped`）を、周回の掃きで次に挑む時刻と失敗の回数。
+   * ターンの終わりに現役の鍵がまだ `ready` でなかった・起こしが届かなかった担当を、次の鍵の回転まで取り残さないため。
+   * 揮発してよい: 消えても印が残る間は次の周回が拾う。印が消えたら下ろす。
+   */
+  readonly #workerLimitWakeRetry = new Map<string, { failures: number; nextAt: number }>();
   /**
    * 鍵の回転の起こし直しを、背景処理を理由に待たせている担当の、待ちの上限の時刻（epoch ms。#5044）。
    * `#noteUsageWakeOutcome` が次の挑み直しをこの時刻へ寄せるためだけに使い、読んだら下ろす。揮発してよい: 消えても倍々の間隔で挑み直す。
@@ -6175,6 +6187,44 @@ class Pool implements ManagerPool {
         // 1件の失敗で残りを止めないが、黙って握らない: 起きないはずの例外が跡に残らないと、掃きが動いていない回と「対象が無かった」回が見分けられない。
         noteDroppedRecord('枠で止まった借りの清算', `managerId=${managerId}`, error);
       }
+    }
+    for (const managerId of await this.#sweepWorkerLimitWakes()) nudged.push(managerId);
+    return nudged;
+  }
+
+  /**
+   * 回転前の鍵で作業者が落ちて手を止めた担当を、周回の掃きでも起こす（#5030 の続き）。
+   * ターンの終わり（`'turn-ended'`）に現役の鍵がまだ `ready` でなかった印や、起こしが届かなかった印は、今までは次の鍵の回転まで
+   * 取り残された（回転が来なければ担当は止まったまま）。担当は `done` で手を止めて待っているので、起こしても仕事は失わない。
+   * 判定は `'turn-ended'` と同じ（担当が `done`・現役の鍵が `ready`・同じターンのまま）。現役の鍵で落ちた印は拾わない:
+   * その鍵は通らない見込みが高く、`ready` の判定にも作業者の落ちは入っていない（#4903）ので、起こすと同じ枠にまた当たる。
+   * 起こせなかった回は、1分から倍々（上限5分）の間隔を空けて挑み直す。
+   */
+  async #sweepWorkerLimitWakes(): Promise<string[]> {
+    const nudged: string[] = [];
+    for (const managerId of [...this.#workerLimitWakeRetry.keys()]) {
+      if (!this.#workerLimitStopped.has(managerId)) this.#workerLimitWakeRetry.delete(managerId);
+    }
+    for (const [managerId, mark] of [...this.#workerLimitStopped]) {
+      if (this.#stopped) break;
+      if (!mark.preRotationKey) continue;
+      const retry = this.#workerLimitWakeRetry.get(managerId);
+      if (retry !== undefined && this.#now() < retry.nextAt) continue;
+      if (await this.#wakeForWorkerLimit(managerId, 'turn-ended')) {
+        this.#workerLimitWakeRetry.delete(managerId);
+        nudged.push(managerId);
+        continue;
+      }
+      if (!this.#workerLimitStopped.has(managerId)) {
+        this.#workerLimitWakeRetry.delete(managerId);
+        continue;
+      }
+      const failures = (retry?.failures ?? 0) + 1;
+      const delayMs = Math.min(
+        WORKER_LIMIT_WAKE_RETRY_BASE_MS * 2 ** (failures - 1),
+        WORKER_LIMIT_WAKE_RETRY_MAX_MS,
+      );
+      this.#workerLimitWakeRetry.set(managerId, { failures, nextAt: this.#now() + delayMs });
     }
     return nudged;
   }
