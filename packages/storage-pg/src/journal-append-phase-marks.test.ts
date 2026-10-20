@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { migratedTemplate } from './pglite-template.test-support.js';
+
+// 雛形（WASM の起動 + migrate）を前払いする（#3034）: 下の補助は印の差し替えの後に動的に読むので、静的な import の前払いが掛からない
+beforeAll(async () => {
+  await migratedTemplate();
+}, 60_000);
 
 // ループの停止の見張りの印だけを差し替えて読む（見張りの本体は使わない）
 const phases = vi.hoisted(() => [] as string[]);
