@@ -123,9 +123,12 @@ export async function readProgress(
   const commitments = await stores.commitments.list({ includeClosed: true });
   const jobs = await stores.jobs.listJobs();
   const unreadableJobs = (await stores.jobs.listUnreadableJobs()).length;
+  // 「返答済み」「委譲中」を数えるのは未了の行だけ（`summarizeProgress` は片付いた行の `respondedAt` / `activeManagerIds` を読まない）。
+  // 片付いた行まで導出して写すと、台帳の大半を占める片付いた行のぶん毎回無駄になる（#5089）
+  const openEntries = commitments.entries.filter((entry) => entry.closedAt === undefined);
   const { repliesByConversation, activeManagersByConversation } = await buildCommitmentDerivations(
     stores,
-    commitments.entries,
+    openEntries,
     async () => jobs,
   );
   let summary: ProgressSummary;
@@ -133,11 +136,18 @@ export async function readProgress(
     summary = summarizeProgress({
       commitments: {
         ...commitments,
-        entries: commitments.entries.map((entry) => ({
-          ...entry,
-          respondedAt: commitmentRespondedAt(entry, repliesByConversation),
-          activeManagerIds: commitmentActiveDelegationIds(entry, activeManagersByConversation),
-        })),
+        entries: commitments.entries.map((entry) =>
+          entry.closedAt !== undefined
+            ? entry
+            : {
+                ...entry,
+                respondedAt: commitmentRespondedAt(entry, repliesByConversation),
+                activeManagerIds: commitmentActiveDelegationIds(
+                  entry,
+                  activeManagersByConversation,
+                ),
+              },
+        ),
       },
       jobs,
       unreadableJobs,

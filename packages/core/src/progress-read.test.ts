@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { describeProgress } from './progress-describe.js';
+import { summarizeProgress } from './progress.js';
 import {
+  buildCommitmentDerivations,
   DEFAULT_PROGRESS_WINDOW_HOURS,
   PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
   readProgress,
 } from './progress-read.js';
+import { commitmentActiveDelegationIds, commitmentRespondedAt } from './schema.js';
 import { createCloneTools, qualifiedToolName, CLONE_ALLOWED_TOOLS } from './tools.js';
 import { createMemoryStores } from './testing.js';
 
@@ -113,6 +116,83 @@ describe('progress_read — 作業の進捗を読む道具（#2241 の 3）', ()
     const reply = await progressTool(stores)({});
     expect(reply).toContain('GitHub: 観測した側の申告');
     expect(reply).toContain('open Issue 2 件 / open PR 1 件');
+  });
+
+  it('⭐ 片付いた行を導出しなくても、全部の行を導出したときと集計が同じ（#5089）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+    const stores = await seed();
+    for (const [id, source] of [
+      ['h-replied', 'conv-r'],
+      ['h-delegated', 'conv-d'],
+      ['h-untouched', 'conv-u'],
+      ['h-closed', 'conv-r'],
+    ] as const) {
+      await stores.commitments.open({
+        id,
+        at: '2026-09-28T00:00:00.000Z',
+        origin: 'human',
+        body: id,
+        source,
+      });
+    }
+    await stores.commitments.close('h-closed', '2026-09-29T00:00:00.000Z', '済んだ', 'human');
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '返答',
+      conversationId: 'conv-r',
+    });
+    await stores.jobs.putJob({
+      id: 'm-d',
+      createdAt: '2026-09-29T00:00:00.000Z',
+      updatedAt: '2026-09-29T00:00:00.000Z',
+      status: 'running',
+      summary: '委譲中',
+      conversationId: 'conv-d',
+    });
+
+    const view = await readProgress(stores, { now: NOW });
+
+    const all = await stores.commitments.list({ includeClosed: true });
+    const jobs = await stores.jobs.listJobs();
+    const derived = await buildCommitmentDerivations(stores, all.entries, async () => jobs);
+    const reference = summarizeProgress({
+      commitments: {
+        ...all,
+        entries: all.entries.map((entry) => ({
+          ...entry,
+          respondedAt: commitmentRespondedAt(entry, derived.repliesByConversation),
+          activeManagerIds: commitmentActiveDelegationIds(
+            entry,
+            derived.activeManagersByConversation,
+          ),
+        })),
+      },
+      jobs,
+      unreadableJobs: (await stores.jobs.listUnreadableJobs()).length,
+      now: NOW,
+      windowHours: DEFAULT_PROGRESS_WINDOW_HOURS,
+    });
+    expect(view).toEqual({ ...reference, observedAt: view.observedAt, github: view.github });
+    expect(view.backlog.byState).toMatchObject({ responded: 1, delegated: 1, untouched: 2 });
+  });
+
+  it('未了の人間の行が無ければ、返答の一覧を読まない（片付いた行のために読まない。#5089）', async () => {
+    const stores = await seed();
+    await stores.commitments.open({
+      id: 'h-closed',
+      at: '2026-09-28T00:00:00.000Z',
+      origin: 'human',
+      body: '片付いた',
+      source: 'conv-x',
+    });
+    await stores.commitments.close('h-closed', '2026-09-29T00:00:00.000Z', '済んだ', 'human');
+    const humanReplies = vi.fn(async () => []);
+    stores.journal.humanReplies = humanReplies;
+    await readProgress(stores, { now: NOW });
+    expect(humanReplies).not.toHaveBeenCalled();
   });
 
   it('取れない値を 0 と書かない（空の台帳の見込みは時間を作らず、齢は —）', async () => {
