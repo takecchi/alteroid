@@ -3536,7 +3536,7 @@ describe('chat の /journal', () => {
     expect(text).toContain('「ナス」に当たる日誌はありません');
     expect(text).toContain('tool_use の input');
     expect(text).toContain(
-      'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation',
+      'tool_use の input・worker_wait・turn_usage・context_usage・turn_timing・inbox_flow・github_observation',
     );
     expect(text).not.toContain('日誌はまだ空');
   });

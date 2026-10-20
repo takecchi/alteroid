@@ -134,7 +134,8 @@ describe('要旨（Web の summarizeJournalEntry と同じ文言）', () => {
     ).toBe('takecchi/alteroid: 取れなかった（観測者 mgr-1）: rate limited');
   });
 
-  it('絞り込みの選択肢は 15 種すべて（Web のチップと同じ並び）', () => {
+  // ターンの時間（turn_timing、#5086）を足して 16 種にした
+  it('絞り込みの選択肢は 16 種すべて（Web のチップと同じ並び）', () => {
     expect(JOURNAL_TYPES).toEqual([
       'exchange',
       'decision',
@@ -146,6 +147,7 @@ describe('要旨（Web の summarizeJournalEntry と同じ文言）', () => {
       'worker_wait',
       'turn_usage',
       'context_usage',
+      'turn_timing',
       'token_rotation',
       'subagent_stall',
       'inbox_flow',
@@ -210,9 +212,10 @@ describe('詳細の本文', () => {
 });
 
 describe('語で探すときの断り', () => {
-  it('探す対象に入っていない欄を、CLI・Web・道具・GET /journal と同じ7つの並びで言う（#2573）', () => {
+  // turn_timing（#5086）を足して8つにした
+  it('探す対象に入っていない欄を、CLI・Web・道具・GET /journal と同じ8つの並びで言う（#2573）', () => {
     expect(SEARCH_SCOPE_NOTE).toBe(
-      'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation・conversation_deleted は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
+      'tool_use の input・worker_wait・turn_usage・context_usage・turn_timing・inbox_flow・github_observation・conversation_deleted は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
     );
   });
 });

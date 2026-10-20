@@ -7,13 +7,33 @@ import {
 } from './journal-diagnostics-format.js';
 
 describe('summarizeJournalDiagnosticsEntry（issue #2016）', () => {
-  it('JOURNAL_DIAGNOSTICS_TYPES はこの4種だけを名乗る', () => {
+  // turn_timing（#5086）を足して5種にした
+  it('JOURNAL_DIAGNOSTICS_TYPES はこの5種だけを名乗る', () => {
     expect(JOURNAL_DIAGNOSTICS_TYPES).toEqual([
       'worker_wait',
       'turn_usage',
       'context_usage',
+      'turn_timing',
       'inbox_flow',
     ]);
+  });
+
+  describe('turn_timing（#5086）', () => {
+    it('合計・最初の文字・最も長い親の段・入力を1行にする（内訳の段は選ばない）', () => {
+      const entry: JournalDiagnosticsEntryLike = {
+        type: 'turn_timing',
+        triggers: ['human_message'],
+        kinds: ['normal'],
+        succeeded: true,
+        totalMs: 61_000,
+        firstTextMs: 45_000,
+        phases: { queue: 500, model: 58_000, 'model.extra': 70_000, finalize: 1_000 },
+        tokens: { input: 10, cacheRead: 530_000, cacheCreation: 9_000, output: 800 },
+      };
+      expect(summarizeJournalDiagnosticsEntry(entry)).toBe(
+        '[normal human_message 成功] 合計 61秒・最初の文字まで 45秒・最も長い段 model 58秒・入力 539,010 トークン',
+      );
+    });
   });
 
   describe('worker_wait', () => {
