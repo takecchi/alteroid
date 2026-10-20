@@ -470,7 +470,8 @@ describe('fork が断られた回（pids 枯渇）の退避の記録が、前の
         branch: 'fix/1266-before-fork-refused',
         branchCarriedFromAt: '2026-10-10T00:05:00.000Z',
         at: '2026-10-10T00:10:00.000Z',
-        notPushed: { reason: 'error' },
+        // 前の回は送れていたので、送れない状態はこの回から始まる（#5117）
+        notPushed: { reason: 'error', since: '2026-10-10T00:10:00.000Z' },
         pushed,
       },
     ]);

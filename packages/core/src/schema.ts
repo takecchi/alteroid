@@ -1218,6 +1218,8 @@ export const rescueWorktreeSchema = z.object({
       files: z.array(z.string()).optional(),
       // `secret-like` のとき当たった規則の名前（`SecretPatternName`）。文字列そのものは載せない
       patterns: z.array(z.string()).optional(),
+      // 同じ器で同じ理由が続いている起点（デーモンが付ける。runner は送らない）。runner は同じ理由を繰り返し報告しないので、行の `at` からは「いつから送れていないか」が読めないため（#5117）
+      since: isoDateTime.optional(),
     })
     .optional(),
   untracked: z

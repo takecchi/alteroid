@@ -215,7 +215,12 @@ describe('台帳の lastRescue（Issue #1266）', () => {
     const listed = await listedOf(pool, 'mgr-keep');
     const byPath = new Map(listed.lastRescue?.worktrees.map((w) => [w.relativePath, w]));
     expect(byPath.get('.')?.pushed).toEqual(pushed);
-    expect(byPath.get('.')?.notPushed).toEqual({ reason: 'secret-like', files: ['x.env'] });
+    // 前の回は送れていたので、送れない状態はこの回（AT2）から始まる（#5117）
+    expect(byPath.get('.')?.notPushed).toEqual({
+      reason: 'secret-like',
+      files: ['x.env'],
+      since: AT2,
+    });
     expect(byPath.get('wt')?.notPushed?.reason).toBe('no-credential');
     await pool.stop();
   });

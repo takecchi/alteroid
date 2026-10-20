@@ -656,8 +656,19 @@ export function mergeRescue(
       tree.branch === null && before !== undefined && before.branch !== null
         ? { branch: before.branch, branchCarriedFromAt: before.branchCarriedFromAt ?? before.at }
         : {};
+    // 器が替われば起点を引き継がない: 作り直した作業ツリーの「送れない」は、前の器の分とは別の出来事のため
+    const notPushedSince =
+      tree.notPushed === undefined
+        ? undefined
+        : before?.notPushed?.reason === tree.notPushed.reason &&
+            before.instanceId === tree.instanceId
+          ? (before.notPushed.since ?? before.at)
+          : tree.at;
     byPath.set(tree.relativePath, {
       ...tree,
+      ...(tree.notPushed === undefined || notPushedSince === undefined
+        ? {}
+        : { notPushed: { ...tree.notPushed, since: notPushedSince } }),
       ...carriedBranch,
       ...(tree.pushed === undefined && before?.pushed !== undefined
         ? { pushed: before.pushed }

@@ -352,6 +352,7 @@ import {
   isEmptyCompleteUnpushedWorkObservation,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from './unpushed-work-observation-format.js';
+import { formatElapsedAgo } from './format-elapsed.js';
 import { RESCUE_NOT_PUSHED_TEXT, rescueNotPushedDetail } from './workspace-swap-hints.js';
 import { strictToolInput } from './strict-tool-input.js';
 
@@ -1991,10 +1992,11 @@ function unpushedWorkObservationIncompleteSuffix(
 function describeUnpushedWorkObservation(
   manager: ManagerSummary,
   outputs: 'brief' | 'full' | 'report' = 'brief',
+  now?: Date,
 ): string | null {
   const lines = [
     describeUnpushedWorkObservationOnly(manager),
-    describeRescue(manager, outputs),
+    describeRescue(manager, outputs, now),
     describeRescueStash(manager),
     // 'report' でも外へ出した成果は畳まない: 畳むのは退避 ref だけで、成果の記録は件数が上限で締まっている
     describeExternalOutputs(manager, outputs === 'report' ? 'full' : outputs),
@@ -2074,7 +2076,60 @@ function describeRescuePushed(pushed: RescuePushed): string {
 
 // 一覧（brief）は件数と最新の1件だけにする: 作業ツリーごとに数行が付くと1件の委譲が予算を占有し、出る委譲の数が減って頁をめくらされるため。全部は `manager_report`（full）が出す
 // 退避されなかったもの（push 失敗・未追跡・submodule）は件数だけ残す: 消すと「全部退避できた」と読めるため
-function describeRescueBrief(rescue: NonNullable<ManagerSummary['lastRescue']>): string {
+// いまの器で、送るものが在るのに送れていない作業ツリー（#5117）。`goneAt` の行と、前の器の行（最新の行と `instanceId` が違う）は外す: 担当に push を促しても届かない分のため
+function stuckRescueTrees(rescue: NonNullable<ManagerSummary['lastRescue']>): RescueTree[] {
+  const newest = rescue.worktrees.reduce<RescueTree | undefined>(
+    (best, tree) => (best === undefined || tree.at > best.at ? tree : best),
+    undefined,
+  );
+  return rescue.worktrees.filter(
+    (tree) =>
+      tree.notPushed !== undefined &&
+      tree.notPushed.reason !== 'nothing-tracked' &&
+      tree.goneAt === undefined &&
+      tree.instanceId === newest?.instanceId,
+  );
+}
+
+function rescueNotPushedSinceOf(tree: RescueTree): string {
+  return tree.notPushed?.since ?? tree.at;
+}
+
+// 一覧には、いちばん長く続いている1本と残りの本数だけを出す: 作業ツリーごとに並べると1件の委譲が予算を占有するため（`describeRescueBrief` と同じ理由）
+function describeStuckRescueBrief(
+  rescue: NonNullable<ManagerSummary['lastRescue']>,
+  now: Date | undefined,
+): string {
+  const stuck = stuckRescueTrees(rescue);
+  const oldest = stuck.reduce<RescueTree | undefined>(
+    (best, tree) =>
+      best === undefined || rescueNotPushedSinceOf(tree) < rescueNotPushedSinceOf(best)
+        ? tree
+        : best,
+    undefined,
+  );
+  if (oldest?.notPushed === undefined) return '';
+  const since = rescueNotPushedSinceOf(oldest);
+  const elapsed =
+    now === undefined
+      ? ''
+      : `・${formatElapsedAgo(since, now.getTime()).replace(/前$/, '')}続いている`;
+  const rest = stuck.length > 1 ? ` ほか ${String(stuck.length - 1)} 本` : '';
+  // too-large と secret-like は、担当が push すれば退避そのものが要らなくなる: 消える前に声を掛けられるよう、取れる手を添える
+  const hint =
+    oldest.notPushed.reason === 'too-large' || oldest.notPushed.reason === 'secret-like'
+      ? '。担当が push すれば消えずに済む'
+      : '';
+  return (
+    `。退避できていない: ${oldest.relativePath}（${oldest.notPushed.reason}。${since} から${elapsed}）${rest}` +
+    hint
+  );
+}
+
+function describeRescueBrief(
+  rescue: NonNullable<ManagerSummary['lastRescue']>,
+  now?: Date,
+): string {
   const pushedTrees = rescue.worktrees.filter((tree) => tree.pushed !== undefined);
   const latest = pushedTrees.reduce<RescuePushed | undefined>(
     (best, tree) =>
@@ -2095,7 +2150,7 @@ function describeRescueBrief(rescue: NonNullable<ManagerSummary['lastRescue']>):
       : `${String(pushedTrees.length)} 本（最新: ${describeRescuePushed(latest)}）`;
   const unsaved =
     unsavedTrees === 0 ? '' : `。退避されなかったものがある作業ツリー ${String(unsavedTrees)} 本`;
-  return `  退避 ref ${refs}${unsaved}（走行中に自動で push。${rescue.at} に最後に更新。全部は manager_report を rescueAll: true で読む）`;
+  return `  退避 ref ${refs}${unsaved}${describeStuckRescueBrief(rescue, now)}（走行中に自動で push。${rescue.at} に最後に更新。全部は manager_report を rescueAll: true で読む）`;
 }
 
 type RescueTree = NonNullable<ManagerSummary['lastRescue']>['worktrees'][number];
@@ -2142,10 +2197,11 @@ function describeRescueFolded(folded: RescueTreeFold[]): string | null {
 export function describeRescue(
   manager: ManagerSummary,
   mode: 'brief' | 'full' | 'report' = 'full',
+  now?: Date,
 ): string | null {
   const rescue = manager.lastRescue;
   if (rescue === undefined || rescue.worktrees.length === 0) return null;
-  if (mode === 'brief') return describeRescueBrief(rescue);
+  if (mode === 'brief') return describeRescueBrief(rescue, now);
   const lines = [`  退避 ref（走行中に自動で push。${rescue.at} に最後に更新）:`];
   const folded: RescueTreeFold[] = [];
   for (const tree of rescue.worktrees) {
@@ -2164,7 +2220,10 @@ export function describeRescue(
     }
     if (tree.notPushed !== undefined) {
       parts.push(
-        `直近の回: ${RESCUE_NOT_PUSHED_TEXT[tree.notPushed.reason]}${rescueNotPushedDetail(tree.notPushed)}`,
+        `直近の回: ${RESCUE_NOT_PUSHED_TEXT[tree.notPushed.reason]}${rescueNotPushedDetail(tree.notPushed)}` +
+          (tree.notPushed.since === undefined || tree.notPushed.reason === 'nothing-tracked'
+            ? ''
+            : `（${tree.notPushed.since} から続いている）`),
       );
     }
     // 消さず印を添える: 台帳の項目は退避の記録そのもので、生きている間に消えた作業ツリーの ref も取り戻す材料として残す
@@ -7937,7 +7996,7 @@ export function createCloneTools(context: ToolContext) {
               describeTokenGeneration(manager),
               describeResetTimeSkew(manager),
               foldCandidateLine,
-              describeUnpushedWorkObservation(manager),
+              describeUnpushedWorkObservation(manager, 'brief', now),
               // `describeWithheldReports` はここには足さない: 「背景処理待ち×N」の `tasks` と並べると別行でも混同が起き、行を増やしても読み手の次の一手は変わらないため
             ],
           });
