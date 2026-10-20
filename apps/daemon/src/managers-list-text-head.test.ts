@@ -121,6 +121,9 @@ describe('GET /managers は依頼文と報告を先頭だけに切る（#5089）
 
     const row = await listRow(stores, 'mgr-emoji');
     expect(row.request).toBe(`${'x'.repeat(MANAGER_LIST_TEXT_HEAD - 1)}…`);
-    expect(row.request.isWellFormed()).toBe(true);
+    // 孤立したサロゲートが無い（`isWellFormed` は tsconfig の lib に無いので正規表現で見る）
+    expect(row.request).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
   });
 });
