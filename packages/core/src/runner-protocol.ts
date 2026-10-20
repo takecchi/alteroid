@@ -1871,6 +1871,38 @@ export interface RunnerRegistry {
   stop(): Promise<void>;
 }
 
+/** 自動配置の1件の判断（#5113）。 */
+export interface PlacementCandidate {
+  readonly runnerId: string;
+  /** 点数の前の段。小さい段が勝つ（`chooseByResources` の doc）。 */
+  readonly tier: 'healthy' | 'unreachable' | 'pids-saturated';
+  readonly score: number;
+  readonly recentFailures: number;
+  readonly managers?: number;
+  readonly cores?: number;
+  readonly coresSource?: 'cgroup' | 'os';
+  readonly pids?: { readonly current: number; readonly max: number };
+}
+
+export interface PlacementDecision {
+  readonly chosen: string;
+  readonly candidates: readonly PlacementCandidate[];
+}
+
+/** 配置の判断を日誌の1行の文にする（#5113）。値は数と器の名前だけで、秘密を含まない。 */
+export function describePlacementDecision(decision: PlacementDecision): string {
+  const tierLabel = { healthy: '健全', unreachable: '聞けなかった', 'pids-saturated': 'pids 飽和' };
+  const parts = decision.candidates.map(
+    (c) =>
+      `${c.runnerId}（${tierLabel[c.tier]}・点数 ${c.score.toPrecision(3)}` +
+      `${c.managers === undefined ? '' : `・委譲 ${String(c.managers)} 本`}` +
+      `${c.recentFailures === 0 ? '' : `・直近の失敗 ${String(c.recentFailures)}`}` +
+      `${c.cores === undefined ? '' : `・CPU ${String(c.cores)}（${c.coresSource ?? '?'}）`}` +
+      `${c.pids === undefined ? '' : `・pids ${String(c.pids.current)}/${String(c.pids.max)}`}）`,
+  );
+  return `自動配置で ${decision.chosen} を選んだ。候補: ${parts.join(' / ')}`;
+}
+
 export interface RunnerRegistryOptions {
   /** 黙って挑み続けない: 鍵違いや命令の形の誤りは待っても直らず、無限に叩くと設定の誤りが「なぜか繋がらない」として隠れる。 */
   notify?: (failure: { label: string; error: string }) => void;
@@ -1910,6 +1942,11 @@ export interface RunnerRegistryOptions {
       readonly resources: RunnerPlacementResources | undefined;
     }[],
   ) => void;
+  /**
+   * 自動配置（`#place`）がどの器を選んだかと、器ごとの段・点数・材料を渡す（#5113）。配置の判断が日誌に残らず、
+   * 後から「なぜその器を選び続けたか」を辿れなかったため。同期で呼び、投げても配置は止めない。1台だけ・指名の回は呼ばない（選んでいない）。
+   */
+  onPlacementDecision?: (decision: PlacementDecision) => void;
   /**
    * 既定は `Date.now`。主にテスト用: `vi.useFakeTimers()` だと名乗りを聞きに行く `setInterval` と `withDeadline` の `setTimeout` まで止まり、
    * 測りたい窓（`PLACEMENT_FAILURE_MEMORY_MS`）以外の時計が巻き込まれる。本番の起動経路は渡さない。
@@ -2114,6 +2151,7 @@ class Registry implements RunnerRegistry {
         }[],
       ) => void)
     | undefined;
+  readonly #onPlacementDecision: ((decision: PlacementDecision) => void) | undefined;
   readonly #retryBaseMs: number;
   readonly #retryMaxMs: number;
   readonly #openDeadlineMs: number;
@@ -2134,6 +2172,7 @@ class Registry implements RunnerRegistry {
     this.#onLost = options.onLost;
     this.#onSwap = options.onSwap;
     this.#onPlacementResources = options.onPlacementResources;
+    this.#onPlacementDecision = options.onPlacementDecision;
     this.#retryBaseMs = options.retryBaseMs ?? REGISTRY_RETRY_BASE_MS;
     this.#retryMaxMs = options.retryMaxMs ?? REGISTRY_RETRY_MAX_MS;
     this.#openDeadlineMs = options.openDeadlineMs ?? REGISTRY_OPEN_DEADLINE_MS;
@@ -2470,7 +2509,30 @@ class Registry implements RunnerRegistry {
       ),
     );
 
-    return chooseByResources(reports) ?? fallback;
+    const scored: PlacementCandidate[] = [];
+    const chosen =
+      chooseByResources(reports, ({ client, tier, score, failures }) => {
+        const report = reports.find((r) => r.client === client);
+        const resources = report?.resources;
+        scored.push({
+          runnerId: client.runnerId,
+          tier: tier === 2 ? 'pids-saturated' : tier === 1 ? 'unreachable' : 'healthy',
+          score,
+          recentFailures: failures,
+          ...(resources?.managers === undefined ? {} : { managers: resources.managers }),
+          ...(resources?.cpu === undefined
+            ? {}
+            : { cores: resources.cpu.cores, coresSource: resources.cpu.source }),
+          ...(resources?.pids === undefined ? {} : { pids: resources.pids }),
+        });
+      }) ?? fallback;
+    // 待たない・投げない: 日誌へ書くだけの観測で、配置（委譲を起こす経路）を待たせないため
+    try {
+      this.#onPlacementDecision?.({ chosen: chosen.runnerId, candidates: scored });
+    } catch {
+      // 観測の失敗で配置を止めない
+    }
+    return chosen;
   }
 
   /** 状態と直近の失敗を必ず添える: 「繋がりません」だけでは、呼んだ側が「少し置いて投げ直す」か「人間に知らせる」かを判断できない。 */
@@ -3033,6 +3095,13 @@ function chooseByResources(
     /** {@link pidsSaturationFrom} と判定された器か。渡さない呼び出しは `false`。 */
     pidsSaturated?: boolean;
   }[],
+  /** 器ごとの段と点数を受け取る（配置の判断を日誌へ残すため。#5113）。選び方は変えない。 */
+  onScored?: (scored: {
+    client: RunnerClient;
+    tier: number;
+    score: number;
+    failures: number;
+  }) => void,
 ): RunnerClient | undefined {
   const rooms = reports.flatMap((r) =>
     r.resources?.memory ? [memoryRoomOf(r.resources.memory)] : [],
@@ -3076,6 +3145,7 @@ function chooseByResources(
       (report.resources?.cpu?.cores ?? meanCores) /
       ((report.resources?.managers ?? meanHeld) + failures + 1);
     const score = roomTimesPids * share;
+    onScored?.({ client: report.client, tier, score, failures });
 
     // 段が違うなら点数を見ずに決める。
     if (tier !== bestTier) {

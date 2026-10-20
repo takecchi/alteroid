@@ -7438,6 +7438,82 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     await registry.stop();
   });
 
+  // 2026-10-20 の runner-primary: pids 443/1000 なのに fork の拒否 31〜68 回で3本が落ち、80% の門を越えずに畳みが動かなかった（#5113）
+  it('⭐ pids の瞬間値が低くても、窓の内に fork の拒否の印があれば逼迫として畳む（#5113）', async () => {
+    const { id, pool, registry, stores } = await setupActiveDoneCandidate({
+      unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+      pids: { current: 443, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+    });
+    registry.notePidsSaturationSign?.('runner-a', 'fork-denied');
+
+    const overview = await pool.runners({ resources: true });
+
+    const outcomes = overview.autoFolded as AutoFoldOutcome[];
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ managerId: id, outcome: 'folded' });
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    const fold = decisions.find(
+      (entry) => 'decision' in entry && entry.decision.includes('[auto-fold]'),
+    );
+    expect(JSON.stringify(fold)).toContain('#5113');
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('⭐ 鍵の回転で起こし直す前に、起こし直す先の器が fork の拒否で飽和していれば、その器の畳む候補を先に畳む。起こし直す担当は畳まない（#5113）', async () => {
+    const { id, fake, pool, registry, stores } = await setupActiveDoneCandidate({
+      unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+      pids: { current: 443, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+    });
+    const started = await pool.start({ request: '続きの仕事', runnerId: 'runner-a' });
+    fake.closed(started.managerId, 'failed', "You've hit your limit · resets 3am (UTC)");
+    await expect
+      .poll(
+        async () => (await pool.list()).find((m) => m.managerId === started.managerId)?.status,
+        {
+          timeout: 2000,
+        },
+      )
+      .toBe('failed');
+    registry.notePidsSaturationSign?.('runner-a', 'fork-denied');
+
+    await pool.resumeStoppedByUsage();
+
+    expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('stopped');
+    expect((await pool.list()).find((m) => m.managerId === started.managerId)?.status).not.toBe(
+      'stopped',
+    );
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    expect(
+      decisions.some(
+        (entry) =>
+          'decision' in entry &&
+          entry.decision.includes('鍵の回転で起こし直す前に、pids が飽和した runner=runner-a'),
+      ),
+    ).toBe(true);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('対照: pids の瞬間値が低く印も無ければ畳まない（#5113）', async () => {
+    const { id, pool, registry } = await setupActiveDoneCandidate({
+      unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+      pids: { current: 443, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+    });
+
+    const overview = await pool.runners({ resources: true });
+
+    expect(overview.autoFolded).toBeUndefined();
+    expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('done');
+    await pool.stop();
+    await registry.stop();
+  });
+
   it('capabilities を名乗っていない runner では畳まない（条件3が偽のまま）', async () => {
     const { id, pool, registry } = await setupActiveDoneCandidate({
       unpushedWorkResult: { cwd: '/work/project', worktrees: [] },

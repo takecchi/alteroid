@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createRunnerRegistry } from './runner-protocol.js';
+import { createRunnerRegistry, describePlacementDecision } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 import type {
+  PlacementDecision,
   RunnerAnswerOutcome,
   RunnerClient,
   RunnerCredentialFingerprint,
@@ -903,6 +904,63 @@ describe('聞けなかった器は、聞けた器より前に出ない（#712 �
 
     expect((await registry.select({})).runnerId).toBe('runner-quiet');
 
+    await registry.stop();
+  });
+});
+
+describe('配置の判断を外へ渡す（RunnerRegistryOptions.onPlacementDecision、#5113）', () => {
+  it('⭐ 選んだ器と、器ごとの段・点数・委譲の本数・CPU・pids を渡す。選び方は変えない', async () => {
+    const a = new FakeRunner('runner-a', {
+      managers: 5,
+      cpu: { cores: 4, source: 'cgroup' },
+      pids: { current: 443, max: 1000 },
+    });
+    const b = new FakeRunner('runner-b', {
+      managers: 0,
+      cpu: { cores: 4, source: 'cgroup' },
+      pids: { current: 55, max: 1000 },
+    });
+    const decisions: PlacementDecision[] = [];
+    const registry = createRunnerRegistry([a, b], {
+      onPlacementDecision: (decision) => {
+        decisions.push(decision);
+      },
+    });
+    registry.notePidsSaturationSign('runner-a', 'fork-denied');
+
+    const chosen = await registry.select({});
+
+    expect(chosen.runnerId).toBe('runner-b');
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]?.chosen).toBe('runner-b');
+    const byId = new Map(decisions[0]?.candidates.map((c) => [c.runnerId, c]));
+    expect(byId.get('runner-a')).toMatchObject({
+      tier: 'pids-saturated',
+      managers: 5,
+      cores: 4,
+      coresSource: 'cgroup',
+      pids: { current: 443, max: 1000 },
+    });
+    expect(byId.get('runner-b')).toMatchObject({ tier: 'healthy', managers: 0 });
+    const line = describePlacementDecision(decisions[0]!);
+    expect(line).toContain('runner-b を選んだ');
+    expect(line).toContain('runner-a（pids 飽和');
+    expect(line).toContain('委譲 5 本');
+    expect(line).toContain('CPU 4（cgroup）');
+
+    await registry.stop();
+  });
+
+  it('受け手が投げても配置は止まらない', async () => {
+    const a = new FakeRunner('runner-a', { managers: 1 });
+    const b = new FakeRunner('runner-b', { managers: 0 });
+    const registry = createRunnerRegistry([a, b], {
+      onPlacementDecision: () => {
+        throw new Error('日誌に書けない');
+      },
+    });
+
+    expect((await registry.select({})).runnerId).toBe('runner-b');
     await registry.stop();
   });
 });

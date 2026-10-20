@@ -34,6 +34,7 @@ import {
   createProfileService,
   createProfileVessel,
   createRunnerRegistry,
+  describePlacementDecision,
   createScheduler,
   createTokenPoolService,
   createTokenPoolWriteLock,
@@ -594,6 +595,20 @@ export async function main(): Promise<void> {
     // `await` しない: `select()`（延いては `manager_start` の応答）を待たせないため。
     onPlacementResources: (reports) => {
       autoFoldOnPlacementResources(reports);
+    },
+    // 配置の判断を日誌へ1行残す（#5113）: 残っていないと、後から「なぜその器を選び続けたか」を辿れない。待たない（配置を待たせない）
+    onPlacementDecision: (decision) => {
+      void stores.journal
+        .append({
+          type: 'decision',
+          decision: `[配置] ${describePlacementDecision(decision)}`,
+          grounds:
+            '自動配置（manager_start の器の指名なし）の判断。段（健全 → 聞けなかった → pids 飽和）が先、同じ段は点数' +
+            '（メモリの余り × pids の余り × コア数 ÷（委譲＋直近の失敗＋1））の大きい方（#5113）',
+        })
+        .catch((error: unknown) => {
+          noteDroppedRecord('配置の判断', decision.chosen, error);
+        });
     },
   });
   const runnerDescription = describeRunner();

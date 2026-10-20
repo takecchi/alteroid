@@ -5325,7 +5325,7 @@ class Pool implements ManagerPool {
     pids: { readonly current: number; readonly max: number },
     managers: readonly ManagerSummary[],
   ): Promise<AutoFoldOutcome[] | undefined> {
-    if (!isPidsUnderPressure(pids)) return undefined;
+    if (!this.#runnerUnderPidsPressure(runnerId, pids)) return undefined;
 
     const now = new Date(this.#now());
     const capabilityConfirmed = this.runnerHasCapability(
@@ -5475,8 +5475,8 @@ class Pool implements ManagerPool {
           `[auto-fold] ${managerId} を pids 逼迫（runner=${runnerId}、${pidsNote}）を理由に自動で畳む` +
           '（手が空いている・背景処理待ちの印なし・未pushの作業なし、のすべてを満たした）。',
         grounds:
-          'デーモンの自動畳み（Issue #1394 段④⑥⑦）: pidsが上限の80%以上・段⑤の畳む候補の5条件・' +
-          '未push安全弁のすべてを満たした',
+          'デーモンの自動畳み（Issue #1394 段④⑥⑦）: pids の逼迫（上限の80%以上か、窓の内に fork の拒否・EAGAIN の印。#5113）・' +
+          '段⑤の畳む候補の5条件・未push安全弁のすべてを満たした',
       });
 
       const result = await this.abort(
@@ -5716,7 +5716,7 @@ class Pool implements ManagerPool {
     runnerId: string,
     pids: { readonly current: number; readonly max: number },
   ): void {
-    if (!isPidsUnderPressure(pids)) return;
+    if (!this.#runnerUnderPidsPressure(runnerId, pids)) return;
     void this.list()
       .then((managers) => this.#autoFoldIdleOnRunnerIfUnderPressure(runnerId, pids, managers))
       .catch((error: unknown) => {
@@ -5730,6 +5730,20 @@ class Pool implements ManagerPool {
             '例外により判定不能（判定できないときは畳まない側へ倒す）',
         });
       });
+  }
+
+  /**
+   * 自動の畳み（idle な委譲を畳んで pids を空ける）を掛ける逼迫か（#5113）。
+   * 瞬間値の割合（{@link isPidsUnderPressure}）だけでは足りない: 委譲の作業は山で pids を使うので、瞬間値は低くても山で fork が断られる。
+   * 2026-10-20 の runner-primary は 443/1000（44%）なのに、fork の拒否 31〜68 回で3本が落ち、割合の門（80%）を一度も越えずに畳みが動かなかった。
+   * 窓の内側に fork の拒否・EAGAIN の印（`pidsSaturationOf`）があれば、瞬間値によらず逼迫として扱う。
+   */
+  #runnerUnderPidsPressure(
+    runnerId: string,
+    pids: { readonly current: number; readonly max: number },
+  ): boolean {
+    if (isPidsUnderPressure(pids)) return true;
+    return this.#runners.pidsSaturationOf?.(runnerId, pids) !== undefined;
   }
 
   runnerPidsSaturation(runnerId: string): PidsSaturation | undefined {
@@ -6153,6 +6167,8 @@ class Pool implements ManagerPool {
       if (status === 'running' || status === 'waiting_human') this.#usageWakeOwed.add(managerId);
     }
 
+    await this.#autoFoldBeforeWakes([...this.#usageStopped, ...this.#workerLimitStopped.keys()]);
+
     const nudged: string[] = [];
     for (const managerId of [...this.#usageStopped]) {
       if (this.#stopped) break;
@@ -6164,6 +6180,57 @@ class Pool implements ManagerPool {
       if (await this.#wakeForWorkerLimit(managerId, 'rotation')) nudged.push(managerId);
     }
     return nudged;
+  }
+
+  /**
+   * 鍵の回転で起こし直す前に、起こし直す先の器が pids で飽和していれば（窓の内に fork の拒否・EAGAIN の印）、その器の畳む候補を先に畳んで空ける（#5113）。
+   * 起こし直しは配置を通らず元の器へ戻るので、空けないと飽和した器へ一斉に戻ってまた fork が断られる
+   * （2026-10-20 の runner-primary は委譲 143 本・fork の拒否 31〜68 回で3本が落ちた）。
+   * 畳むのは自動の畳みと同じ候補だけ（手が空いて6時間・背景処理待ちの印なし・未 push の作業なし）で、起こし直す担当と預かりのある担当は渡さない。
+   * 起こす本数は絞らない（north_star 禁止2）。失敗しても起こし直しは止めない。
+   */
+  async #autoFoldBeforeWakes(wakeIds: readonly string[]): Promise<void> {
+    const runnerIds = new Set<string>();
+    for (const managerId of wakeIds) {
+      // 像に無い（failed・lost で外れた）担当も台帳まで降りて器を引く: 起こし直す担当の多くはそれ
+      const runnerId = await this.runnerIdOf(managerId).catch(() => undefined);
+      if (runnerId !== undefined && this.#runners.pidsSaturationOf?.(runnerId) !== undefined) {
+        runnerIds.add(runnerId);
+      }
+    }
+    if (runnerIds.size === 0) return;
+    const keep = new Set([
+      ...wakeIds,
+      ...this.#usageStopped,
+      ...this.#workerLimitStopped.keys(),
+      ...this.#heldMessageJobs,
+    ]);
+    try {
+      const managers = (await this.list()).filter((manager) => !keep.has(manager.managerId));
+      for (const runnerId of runnerIds) {
+        if (this.#stopped) return;
+        const runner = await this.#runners.get(runnerId);
+        const resources = await runner?.resources?.({ signal: AbortSignal.timeout(5_000) });
+        if (resources?.pids === undefined) continue;
+        const outcomes = await this.#autoFoldIdleOnRunnerIfUnderPressure(
+          runnerId,
+          resources.pids,
+          managers,
+        );
+        await this.#journal({
+          type: 'decision',
+          decision:
+            `[auto-fold] 鍵の回転で起こし直す前に、pids が飽和した runner=${runnerId}` +
+            `（pids ${String(resources.pids.current)}/${String(resources.pids.max)}）の畳む候補を見た: ` +
+            `畳んだ ${String((outcomes ?? []).filter((o) => o.outcome === 'folded').length)} 本・候補 ${String((outcomes ?? []).length)} 本`,
+          grounds:
+            '起こし直しは配置を通らず元の器へ戻るので、飽和した器を先に空ける（#5113）。' +
+            '起こし直す担当・預かりのある担当は畳まない',
+        });
+      }
+    } catch (error) {
+      noteDroppedRecord('起こし直しの前の自動の畳み', `runners=${[...runnerIds].join(',')}`, error);
+    }
   }
 
   async settleStalledUsageWakes(): Promise<string[]> {
