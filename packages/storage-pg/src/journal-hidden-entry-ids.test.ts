@@ -7,7 +7,7 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { journal } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-// 墓標が名指しした行（`hiddenEntryIds`）を外す条件を、jsonb の `?` から id の集合との反結合へ書き換えた（#5089）。
+// 墓標が名指しした行（`hiddenEntryIds`）を外す条件を、jsonb の `?` から id の集合（`NOT IN`）へ書き換えた（#5089）。
 // 書き換える前の条件と同じ行を外すことを、名指しの形（配列・オブジェクト・文字列・数など）ごとに突き合わせる
 
 let client: TestDbHandle;
@@ -128,6 +128,33 @@ describe('墓標が名指しした行を外す（#5089）', () => {
     ]) {
       expect(listed).toContain(kept);
     }
+  });
+
+  it('⭐ 名指しの集合は外側の行ごとに作り直さず、ハッシュにして1回だけ作る（計画の見積もりに左右されない）', async () => {
+    await insert('t', 'conversation_deleted', tombstone(['x']));
+    // 日誌の読み出しが実際に打つ SQL を捕まえて、そのまま EXPLAIN する
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const logged = createPgStoresFromDb(
+      client.withLogger({
+        logQuery: (text, params) => {
+          queries.push({ sql: text, params });
+        },
+      }),
+    );
+    await captureStderr(async () => {
+      await logged.journal.list({ types: ['exchange'], with: ['human'], limit: 10 });
+    });
+    const query = queries.find((entry) => entry.sql.includes('NOT IN'));
+    if (query === undefined) throw new Error('日誌の読み出しの SQL を捕まえられなかった');
+    const inlined = query.sql.replace(/\$(\d+)/g, (_match, index: string) => {
+      const value = query.params[Number(index) - 1];
+      return typeof value === 'number' ? String(value) : `'${String(value).replaceAll("'", "''")}'`;
+    });
+    const plan = (await client.query<{ 'QUERY PLAN': string }>(`EXPLAIN ${inlined}`)).rows
+      .map((row) => row['QUERY PLAN'])
+      .join('\n');
+    expect(plan).toContain('hashed SubPlan');
+    expect(plan).not.toMatch(/Nested Loop Anti Join/);
   });
 
   it('get と oldestAt も同じく外す', async () => {
