@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream';
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createRunnerHost, type RunnerHost } from './runner.js';
+import { createRunnerHost, PEER_PARK_TTL_MS, type RunnerHost } from './runner.js';
 
 type CapturedSession = { options: Options };
 
@@ -866,6 +866,92 @@ describe('鍵の付け替えの畳み（keepPeers）で背景処理を畳んだ 
     expect(host.delegationSessionPids()).toEqual({
       live: new Set([777]),
       knownTerminated: new Set(),
+    });
+    await host.shutdown();
+  });
+});
+
+describe('鍵の付け替えで畳んでから resume で戻るまでの間も、担当の木を終端扱いにしない（#5115）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // resume は呼ばない: 畳み（stop）と resume の間の窓そのものを観測するため
+  async function foldWithoutResume(
+    backgroundTasks: number,
+  ): Promise<{ host: RunnerHost; stop: (options?: { keepPeers?: boolean }) => Promise<void> }> {
+    const sessions: CapturedSession[] = [];
+    const cli = fakeDelegationProcess(555);
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: sdkWithBackground(sessions, backgroundTasks),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnAgentProcessFn: () => cli.handle,
+    });
+
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    (sessions[0] as CapturedSession).options.spawnClaudeCodeProcess?.({
+      command: 'claude',
+      args: [],
+      env: {},
+      signal: new AbortController().signal,
+    });
+    await vi.waitFor(() => {
+      expect(host.list()[0]?.liveBackgroundTasks).toBe(backgroundTasks);
+    });
+    await host.stop('mgr-1', { keepPeers: true });
+    cli.emitExit();
+    return { host, stop: (options = {}) => host.stop('mgr-1', options) };
+  }
+
+  it('⭐ 背景処理の無い鍵の付け替えの畳み: resume の前でも、古い pid は knownTerminated に入らない（担当の postgres を撃たない）', async () => {
+    const { host } = await foldWithoutResume(0);
+
+    expect(host.list()).toEqual([]);
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set(),
+      knownTerminated: new Set(),
+    });
+    await host.shutdown();
+  });
+
+  it('（対照）背景処理を抱えたまま畳んだ回（#5044）は、resume の前から今どおり knownTerminated', async () => {
+    const { host } = await foldWithoutResume(1);
+
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set(),
+      knownTerminated: new Set([555]),
+    });
+    await host.shutdown();
+  });
+
+  it('畳んだまま PEER_PARK_TTL_MS 戻らなければ、古い pid は knownTerminated へ回る（戻らない担当の木を永久に守らない）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-20T21:00:00Z'));
+    const { host } = await foldWithoutResume(0);
+
+    vi.setSystemTime(new Date(Date.now() + PEER_PARK_TTL_MS - 1));
+    expect(host.delegationSessionPids().knownTerminated).toEqual(new Set());
+
+    vi.setSystemTime(new Date(Date.now() + 1));
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set(),
+      knownTerminated: new Set([555]),
+    });
+    await host.shutdown();
+  });
+
+  it('畳んだ後に keepPeers 無しの停止（人間・クローンが止めた）が来たら、古い pid は knownTerminated へ回る', async () => {
+    const { host, stop } = await foldWithoutResume(0);
+
+    await stop();
+
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set(),
+      knownTerminated: new Set([555]),
     });
     await host.shutdown();
   });

@@ -805,6 +805,8 @@ class Host implements RunnerHost {
   readonly #pidOwnerManagerId = new Map<number, string>();
   // failed / lost で閉じたセッションが起こした pid: 同じ `managerId` を resume しても撃つ側に残す（落ちた CLI の木が pid を占め続けるため。#2352・#1334）
   readonly #abandonedDelegationPids = new Set<number>();
+  // 鍵の付け替えで畳み、resume で戻ってくる担当（managerId → 畳んだ時刻）。`#sessions` から消えている間も木を守る（#5115）
+  readonly #rekeyFoldedAt = new Map<string, number>();
   readonly #spawnAgentProcessFn:
     ((options: SpawnAgentProcessOptions) => DelegationProcessHandle) | undefined;
   readonly #delegationSubreaper: string | undefined;
@@ -1029,16 +1031,32 @@ class Host implements RunnerHost {
   delegationSessionPids(): { live: ReadonlySet<number>; knownTerminated: ReadonlySet<number> } {
     // 内部の集合への参照を渡さない: 渡した後に書き換えられないという前提が呼び出し側の実装に依存するため（写しを返す）
     const knownTerminated = new Set<number>();
+    const now = Date.now();
     for (const [pid, managerId] of this.#pidOwnerManagerId) {
       if (this.#liveDelegationPids.has(pid)) continue;
       // failed / lost で閉じた CLI の pid は、同じ managerId が戻っていても外さない: 落ちた CLI の木を守ると resume のたびに pid が溜まるため
-      if (this.#sessions.has(managerId) && !this.#abandonedDelegationPids.has(pid)) continue;
+      if (
+        (this.#sessions.has(managerId) || this.#awaitingRekeyReturn(managerId, now)) &&
+        !this.#abandonedDelegationPids.has(pid)
+      )
+        continue;
       knownTerminated.add(pid);
     }
     return {
       live: new Set(this.#liveDelegationPids),
       knownTerminated,
     };
+  }
+
+  // 鍵の付け替えの畳み（`stop(…, { keepPeers: true })`）は終端ではない: 名簿から消えてから resume で戻るまでの窓に走査が当たると、
+  // 担当が自分で起こした postgres（`pg_ctl` が setsid して tini に引き取られたもの）が終端した委譲の残骸として SIGTERM を受けるため（#5115）。
+  // 期限は預けた peer と同じ: 戻らない担当の木を永久に守らないため
+  #awaitingRekeyReturn(managerId: string, now: number): boolean {
+    const foldedAt = this.#rekeyFoldedAt.get(managerId);
+    if (foldedAt === undefined) return false;
+    if (now - foldedAt < PEER_PARK_TTL_MS) return true;
+    this.#rekeyFoldedAt.delete(managerId);
+    return false;
   }
 
   #noteDelegationProcessSpawned(pid: number, managerId: string): void {
@@ -1528,6 +1546,7 @@ class Host implements RunnerHost {
     });
     this.#generations.set(session, sessionGeneration);
     this.#sessions.set(managerId, session);
+    this.#rekeyFoldedAt.delete(managerId);
     this.#knownManagerIds.add(managerId);
     return session;
   }
@@ -1883,8 +1902,14 @@ class Host implements RunnerHost {
       options.keepPeers !== true
         ? this.#closeParkedPeers(managerId, 'stopped', '人間・クローンが止めた')
         : Promise.resolve();
-    const stopping = this.#sessions
-      .get(managerId)
+    const session = this.#sessions.get(managerId);
+    // 畳み始める前に立てる: `onClosed` が名簿から消した直後の走査にも守りを効かせるため（#5115）。背景処理を畳んだ回（`abandonTree`）は `#abandonedDelegationPids` が先に効く
+    if (options.keepPeers === true) {
+      if (session !== undefined) this.#rekeyFoldedAt.set(managerId, Date.now());
+    } else {
+      this.#rekeyFoldedAt.delete(managerId);
+    }
+    const stopping = session
       ?.stop(
         'デーモンから停止を指示された。',
         options.keepPeers === true ? { keepPeers: true } : {},
