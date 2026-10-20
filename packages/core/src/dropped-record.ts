@@ -726,6 +726,15 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         (entry.sessionId === undefined ? '' : ` sessionId=${tag(entry.sessionId)}`) +
         ` turnSucceeded=${entry.turnSucceeded}`
       );
+    // 自由文を持たない: 段の名前・合図の種類は実装が決める列挙値で、道具の名前（`tools.top[].name`）は件数だけを出す（MCP の道具名は外の設定が決めるため）
+    case 'turn_timing':
+      return (
+        `turn_timing triggers=${entry.triggers.map(tag).join(',')} batchSize=${entry.batchSize} ` +
+        `kinds=${entry.kinds.join(',')} succeeded=${entry.succeeded} totalMs=${entry.totalMs}` +
+        (entry.conversationId === undefined ? '' : ` conversationId=${tag(entry.conversationId)}`) +
+        ` phases=${Object.keys(entry.phases).length}` +
+        (entry.tools === undefined ? '' : ` tools=${entry.tools.count}`)
+      );
     // 自由文を持たない（残りは全部数）ので、他の型のように長さだけに削らず、総数と滞留までそのまま出す。
     case 'inbox_flow':
       return (

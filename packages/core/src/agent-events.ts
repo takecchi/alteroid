@@ -34,8 +34,11 @@ export interface AgentPermissionDenial {
   agentType?: string;
 }
 
+// `tool_use` の `id` は道具の呼び出しを結果と対にする鍵（#5086。道具ごとの時間を測る）。読めなければ省く
 export type AgentContentBlock =
-  { type: 'text'; text: string } | { type: 'tool_use'; name: string } | { type: 'other' };
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; name: string; id?: string }
+  | { type: 'other' };
 
 export interface AgentTurnUsage {
   models: Record<string, UsageTotals>;
@@ -88,6 +91,8 @@ export interface AgentAssistantMessage {
 
 export interface AgentToolResult {
   type: 'tool_result';
+  // 結果が答えた `tool_use` の id（#5086）。読めたものだけを並べ、読めなければ省く
+  toolUseIds?: readonly string[];
 }
 
 export interface AgentDelegationStarted {
@@ -123,6 +128,11 @@ export interface AgentCompactionEvent {
   postTokens?: number;
 }
 
+// 要約（compaction）が始まった合図（#5086）。終わりは `compaction`。間の時間を要約に掛かった時間として測る
+export interface AgentCompactionStarted {
+  type: 'compaction_started';
+}
+
 // 安全分類器などによる拒否の合図。`category` は provider が付けた分類（'cyber' 等）で、付かなければ null。
 // `fellBack` は降格して再試行した回（true）か、再試行せずに終わった回（false）か
 export interface AgentRefusalEvent {
@@ -141,6 +151,8 @@ export interface AgentTurnEnded {
   outcome?: string;
   errorLines: readonly string[];
   usage?: AgentTurnUsage;
+  // provider が測ったそのターンの所要時間（#5086。SDK の `duration_ms` / `duration_api_ms`）。数値でなければ置かない（0 を埋めない）
+  timing?: { durationMs?: number; durationApiMs?: number };
   id?: string;
   denials: readonly AgentPermissionDenial[];
 }
@@ -156,6 +168,7 @@ export type AgentEvent =
   | AgentDelegationStarted
   | AgentDelegationNotified
   | AgentBackgroundTasksEvent
+  | AgentCompactionStarted
   | AgentCompactionEvent
   | AgentRefusalEvent
   | AgentTurnEnded;

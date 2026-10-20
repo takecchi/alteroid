@@ -145,6 +145,7 @@ describe('CloneSdkSession — turn（beginTurn / finishTurn）', () => {
       compactions: [],
       resolve: overrides.resolve ?? (() => undefined),
       kind: 'normal',
+      timer: null,
     };
   }
 

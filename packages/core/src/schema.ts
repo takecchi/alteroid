@@ -599,6 +599,59 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     turnSucceeded: z.boolean(),
     contextUsage: contextUsageObservationSchema,
   }),
+  // クローンの1ターンを段に分けた時間（#5086）。1ターン1行。段の名前と意味は `turn-timing.ts` の `TurnTimingPhase`。
+  // 欄を `.optional()` にして既定値で埋めない: 測れなかった段を「0 秒だった」と読ませないため
+  z.object({
+    type: z.literal('turn_timing'),
+    id: z.string(),
+    at: isoDateTime,
+    triggers: z.array(z.string()),
+    batchSize: z.number().int().nonnegative(),
+    kinds: z.array(z.enum(['normal', 'distill'])),
+    conversationId: z.string().optional(),
+    succeeded: z.boolean(),
+    totalMs: z.number().int().nonnegative(),
+    firstTextMs: z.number().int().nonnegative().optional(),
+    firstResponseMs: z.number().int().nonnegative().optional(),
+    phases: z.record(z.string(), z.number().int().nonnegative()),
+    tools: z
+      .object({
+        count: z.number().int().nonnegative(),
+        totalMs: z.number().int().nonnegative(),
+        top: z.array(
+          z.object({
+            name: z.string(),
+            count: z.number().int().nonnegative(),
+            totalMs: z.number().int().nonnegative(),
+            maxMs: z.number().int().nonnegative(),
+          }),
+        ),
+      })
+      .optional(),
+    compactions: z
+      .object({
+        count: z.number().int().nonnegative(),
+        totalMs: z.number().int().nonnegative(),
+      })
+      .optional(),
+    sdk: z
+      .object({
+        durationMs: z.number().nonnegative().optional(),
+        durationApiMs: z.number().nonnegative().optional(),
+        numTurns: z.number().int().nonnegative().optional(),
+      })
+      .optional(),
+    contextTokens: z.number().int().nonnegative().optional(),
+    // そのターンのメインループの消費（`result.usage`）。入力の重さと費用を、遅い段と同じ行で突き合わせるため
+    tokens: z
+      .object({
+        input: z.number().int().nonnegative(),
+        cacheRead: z.number().int().nonnegative(),
+        cacheCreation: z.number().int().nonnegative(),
+        output: z.number().int().nonnegative(),
+      })
+      .optional(),
+  }),
   // `Inbox#unshift` は `delivered` に数えない: 戻される合図は保持される前に `push` で数えられていて、数え直すと二重に計上されるため
   // `InboxStore.pending()` が読めなければこの窓は書かず、カウンタも戻さない: 次のターンへ持ち越せば、この窓ぶんの到着・配達・消し込みを失わずに済むため
   z.object({
@@ -734,6 +787,7 @@ const journalEntryTypeNames = {
   token_rotation: true,
   subagent_stall: true,
   context_usage: true,
+  turn_timing: true,
   inbox_flow: true,
   github_observation: true,
   conversation_deleted: true,

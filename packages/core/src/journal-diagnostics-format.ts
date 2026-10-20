@@ -3,6 +3,7 @@ export const JOURNAL_DIAGNOSTICS_TYPES = [
   'worker_wait',
   'turn_usage',
   'context_usage',
+  'turn_timing',
   'inbox_flow',
 ] as const;
 
@@ -44,7 +45,24 @@ export type JournalDiagnosticsEntryLike =
       delivered: { total: number };
       settled: { total: number };
       pending: { count: number; oldestAt?: string };
+    }
+  | {
+      type: 'turn_timing';
+      triggers: string[];
+      kinds: string[];
+      succeeded: boolean;
+      totalMs: number;
+      firstTextMs?: number;
+      phases: Record<string, number>;
+      tokens?: { input: number; cacheRead: number; cacheCreation: number; output: number };
     };
+
+// 秒の言い方は `turn-timing-format.ts` の `formatSeconds` と同じにする（こちらはブラウザへ入るので、あちらを読まず同じ規則で書く）
+function seconds(ms: number): string {
+  if (ms < 1000) return `${String(ms)}ms`;
+  const value = ms / 1000;
+  return value < 10 ? `${value.toFixed(1)}秒` : `${String(Math.round(value))}秒`;
+}
 
 function contextUsageNote(
   context: { percentage?: number; totalTokens?: number } | undefined,
@@ -105,6 +123,23 @@ export function summarizeJournalDiagnosticsEntry(entry: JournalDiagnosticsEntryL
       return (
         `受信箱 到着${entry.arrived.total} / 配達${entry.delivered.total} / ` +
         `消し込み${entry.settled.total} / 滞留${entry.pending.count}${oldest}`
+      );
+    }
+    case 'turn_timing': {
+      // 親の段（`.` の無い段）だけで最も長い段を選ぶ: 内訳は親に含まれるため（#5086）
+      const [slowest] = Object.entries(entry.phases)
+        .filter(([name]) => !name.includes('.'))
+        .sort((a, b) => b[1] - a[1]);
+      const input =
+        entry.tokens === undefined
+          ? ''
+          : `・入力 ${(entry.tokens.input + entry.tokens.cacheRead + entry.tokens.cacheCreation).toLocaleString('en-US')} トークン`;
+      return (
+        `[${entry.kinds.join('+') || 'ターン無し'} ${entry.triggers.join('+')} ${entry.succeeded ? '成功' : '失敗'}]` +
+        ` 合計 ${seconds(entry.totalMs)}` +
+        (entry.firstTextMs === undefined ? '' : `・最初の文字まで ${seconds(entry.firstTextMs)}`) +
+        (slowest === undefined ? '' : `・最も長い段 ${slowest[0]} ${seconds(slowest[1])}`) +
+        input
       );
     }
   }

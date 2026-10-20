@@ -22,6 +22,8 @@ export function retryDelay(attempt: number, base = RETRY_BASE_MS, max = RETRY_MA
 const QUIET_TYPES = new Set([
   'turn_usage',
   'context_usage',
+  // ターンの時間（#5086）。毎ターン積まれるが件数に響かない
+  'turn_timing',
   'inbox_flow',
   // 件数に響かない: GitHub の観測の記帳は承認待ちも委譲も動かさない
   'github_observation',

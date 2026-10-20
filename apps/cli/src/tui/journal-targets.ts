@@ -5,6 +5,8 @@ import { isCloneActor, type JournalEntry } from '@alteroid/core';
 const NEVER_MOVES_MANAGERS = new Set([
   'turn_usage',
   'context_usage',
+  // ターンの時間（#5086）
+  'turn_timing',
   'inbox_flow',
   'github_observation',
   'memory_update',

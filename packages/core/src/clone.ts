@@ -292,6 +292,7 @@ import {
 } from './transcript-image-redaction.js';
 import { stripNul } from './nul-guard.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
+import { TurnTimer } from './turn-timing.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
   CLONE_ACTOR_ID,
@@ -780,6 +781,8 @@ export interface Turn {
   resolve: () => void;
   // `cause` は呼び手（モデル）に申告させない: 書き忘れ・書き間違いがそのまま計器の値になるため
   kind: 'normal' | 'distill';
+  /** このターンを含む受信箱の1回分の時計（#5086）。受信箱のループの外で回したターンには無い */
+  timer: TurnTimer | null;
 }
 
 // スキーマ側から引く: 二重に定義すると、どちらかを直し忘れたときに型は緑のまま日誌の形だけがずれるため
@@ -1046,6 +1049,8 @@ class Clone implements CloneHost {
   readonly #handledHumanAnswerIds = new Set<string>();
   /** `#pump` が1ターンを回す間に `#reportFailure` が呼ばれたか。ターンの前に下ろし、`finally` で読む（#4633）。 */
   #pumpTurnFailed = false;
+  /** 受信箱の1回分（束ねた合図1つ）の時計（#5086）。`#pump` が作り、終わりに1行を日誌へ書いて捨てる */
+  #turnTimer: TurnTimer | null = null;
   /** そのときの失敗の理由（外した合図の日誌の行に添える）。 */
   #pumpTurnFailureReason = '';
   /**
@@ -2124,6 +2129,20 @@ class Clone implements CloneHost {
       const mergedExternal = this.#mergedExternalBatch(event);
       const batch: InboxEvent[] = mergedHuman ?? mergedReports ?? mergedExternal ?? [event];
       this.#inFlight = { events: batch, started: false };
+      // 時計は束が決まった時点で作る（#5086）: 順番待ちは束の中でいちばん古い合図の `at` から数える。読めない `at` は取り出した時刻とみなす
+      const timer = new TurnTimer({
+        now: Date.now,
+        arrivedAt: Math.min(
+          ...batch.map((queued) => {
+            const at = Date.parse(queued.at);
+            return Number.isNaN(at) ? Date.now() : at;
+          }),
+        ),
+        triggers: batch.map((queued) => queued.type),
+        batchSize: batch.length,
+      });
+      this.#turnTimer = timer;
+      const prepareStartedAt = Date.now();
 
       // 前の回の持ち越しを捨て、全文へ戻す条件に当たれば記録も消す（#4937）: 台帳の断りより先に行う（断りの固定の1文もこの記録を使うため）
       this.#digestDelta.discardStaged();
@@ -2133,36 +2152,52 @@ class Clone implements CloneHost {
       // `try` の外: 投げれば `for await` ごと抜けて受信箱のループが死ぬので、握り漏らしに備えて外側にも受けを置く（断り書きが付かないことよりループが止まることの方がずっと高い）
       this.#notices.set(
         'commitment',
-        await this.#commitmentNoticeFor(batch).catch((error: unknown) => {
-          noteDroppedRecord('未了の断り書きの組み立て', inboxEventShape(event), error);
-          return '';
-        }),
+        await timer
+          .time('prepare.commitment', () => this.#commitmentNoticeFor(batch))
+          .catch((error: unknown) => {
+            noteDroppedRecord('未了の断り書きの組み立て', inboxEventShape(event), error);
+            return '';
+          }),
       );
       // 読めなければ消さずに「数えられなかった」と名乗る行を出す: 0 で埋めると「全部片付いている」と読め、いちばん見落としたい向きへ倒れるため
       this.#notices.set(
         'situation',
-        await this.#situationNoticeFor(batch).catch((error: unknown) => {
-          noteDroppedRecord('いまの全体の組み立て', inboxEventShape(event), error);
-          return describeSituationUnavailable(error);
-        }),
+        await timer
+          .time('prepare.situation', () => this.#situationNoticeFor(batch))
+          .catch((error: unknown) => {
+            noteDroppedRecord('いまの全体の組み立て', inboxEventShape(event), error);
+            return describeSituationUnavailable(error);
+          }),
       );
       // 倒れ先は空文字ではなく `describeSuperseded` の `uncountable` の文: 「数えられなかった」を 0 件と混同しないため
-      const validityNotice = await this.#validityNoticeFor(batch);
+      const validityNotice = await timer.time('prepare.validity', () =>
+        this.#validityNoticeFor(batch),
+      );
       // 欄を増やさず `validity` に並べる: どちらも「積まれた時点の前提がいまも当てはまるか」の断りで、読む位置も同じでよいため。
       // 述語 B の計器は `validityNotice` だけで判定する: 回復の1節で鳴らすと、状態の食い違いを数える計器が別の事実で嵩増しされるため
-      this.#notices.set('validity', (await this.#quotaRecoveryNoticeFor(batch)) + validityNotice);
+      this.#notices.set(
+        'validity',
+        (await timer.time('prepare.quotaRecovery', () => this.#quotaRecoveryNoticeFor(batch))) +
+          validityNotice,
+      );
       if (validityNotice !== '' && event.type === 'manager_message') {
         await this.#noteRedeliveryPredicateHitB(event.managerId);
       }
       this.#notices.set(
         'superseded',
-        await this.#supersededNoticeFor(batch).catch((error: unknown) => {
-          noteDroppedRecord('後続の報告の組み立て', inboxEventShape(event), error);
-          return event.type === 'manager_message'
-            ? describeSuperseded({ kind: 'uncountable', detail: reasonOf(error) }, event.managerId)
-            : '';
-        }),
+        await timer
+          .time('prepare.superseded', () => this.#supersededNoticeFor(batch))
+          .catch((error: unknown) => {
+            noteDroppedRecord('後続の報告の組み立て', inboxEventShape(event), error);
+            return event.type === 'manager_message'
+              ? describeSuperseded(
+                  { kind: 'uncountable', detail: reasonOf(error) },
+                  event.managerId,
+                )
+              : '';
+          }),
       );
+      timer.add('prepare', Date.now() - prepareStartedAt);
       this.#pumpTurnFailed = false;
       this.#droppedSignalsShown = new Set();
       try {
@@ -2194,10 +2229,22 @@ class Clone implements CloneHost {
           }
           await this.#settleInboxEvent(held, defer);
         }
+        this.#turnTimer = null;
+        await this.#writeTurnTiming(timer, this.#pumpTurnFailed);
         this.#inFlight = null;
       }
     }
     this.#delivery.settleAllCompletions();
+  }
+
+  /**
+   * 受信箱の1回分の時間を1行だけ日誌へ書く（#5086）。ターンが回らなかった回（畳んだ・保持した）は書かない: 段が無く、0 秒の行が増えるだけのため。
+   * 投げない: 書けなかった分は `#journal` が跡に残す（計器のために応答を止めない）
+   */
+  async #writeTurnTiming(timer: TurnTimer, failed: boolean): Promise<void> {
+    if (!timer.turnStartedAny) return;
+    if (failed) timer.failed();
+    await this.#journal({ type: 'turn_timing', ...timer.finish() });
   }
 
   // 報告（`report`）をこの関数でまとめない: 対象・宛先の決め方・組み立てる本文が違うので `#mergedManagerReportBatch` に分けてある。会話が違う発言と枠で保持した合図はまとめない: 応答の宛先が1つに決まらず、束ねると再試行1回が何件ぶんの仕事かが変わるため
@@ -5345,6 +5392,10 @@ class Clone implements CloneHost {
   ): Promise<TurnOutcome> {
     if (kind !== 'distill') this.#distillMemory.markActivity();
 
+    // 受信箱の1回分の時計を持たせる（#5086）。受信箱のループの外で回したターンは測らない
+    const timer = this.#turnTimer;
+    timer?.turnStarted(kind, conversationId);
+
     // ターンはセッションを起こす前に登録する: セッションの生成が失敗したり読み取りが即死したりしても、待っているターンを必ず誰かが解放できるようにするため
     let turn!: Turn;
     const done = new Promise<void>((resolve) => {
@@ -5365,6 +5416,7 @@ class Clone implements CloneHost {
         compactions: [],
         resolve,
         kind,
+        timer,
       };
       this.#sdkSession.beginTurn(turn);
       if (this.#inFlight !== null) this.#inFlight.started = true;
@@ -5373,21 +5425,25 @@ class Clone implements CloneHost {
     try {
       // #4943: 断り書き（システムが作った部品）の長い段落は、同じ会話の2回目から短い参照にする（全文へ戻す条件は `#pump` の先頭の `#resetDigestDeltaIfNewConversation` 以下、tick の要約と同じ）
       const notices = this.#foldNoticeParagraphs(this.#notices.forTurn());
+      const sessionStartedAt = Date.now();
       await this.#ensureQuery();
+      timer?.add('sessionStart', Date.now() - sessionStartedAt);
       // 並び順は `composeTurnInputText` が持ち、ここは作り方だけを持つ: 規則が違うものを同じ場所に置かないため
       // `distillGap` と `contextWindowFold` の呼び出しはここから動かさない: 呼ぶこと自体が遷移（pending を倒す）で、並びが元の `+` の連結と同じ順序を保つため。`...this.#notices.forTurn()` はこの2行より後ろに置く: 前に置くと「まだ消費していない時点の6本」を読むように見え、読む者を誤らせるため
-      this.#pushInput(
-        await this.#withFreshMemory(
-          composeTurnInputText({
-            distillGap: await this.#distillGapNotice(kind),
-            contextWindowFold: this.#contextWindowFoldNotice(kind),
-            droppedSignals: this.#droppedSignalsNotice(kind),
-            ...notices,
-            body: text,
-          }),
-        ),
-        images,
+      // 入力は投げる前に変数へ受ける（#5086）: 組み立ての時間と、投げてからの時間を分けて測るため。評価の順は引数の中で組んでいたときと同じ
+      const composeStartedAt = Date.now();
+      const input = await this.#withFreshMemory(
+        composeTurnInputText({
+          distillGap: await this.#distillGapNotice(kind),
+          contextWindowFold: this.#contextWindowFoldNotice(kind),
+          droppedSignals: this.#droppedSignalsNotice(kind),
+          ...notices,
+          body: text,
+        }),
       );
+      timer?.add('composeInput', Date.now() - composeStartedAt);
+      timer?.modelStarted();
+      this.#pushInput(input, images);
       this.#commitSituationExplained();
       this.#digestDelta.commit();
       // `#ensureQuery` より後で送る: セッションの起動そのものはまだ考え始めておらず、先に送ると手が動いていないのに考えていると言うことになるため
@@ -7385,6 +7441,7 @@ class Clone implements CloneHost {
         if (turn) {
           turn.streamed = true;
           appendReply(turn, event.text);
+          if (event.text !== '') turn.timer?.responded('text');
         }
         this.#emit(turn?.conversationId ?? null, { type: 'text', text: event.text });
         return;
@@ -7425,8 +7482,11 @@ class Clone implements CloneHost {
 
         const unstreamedInStreamedTurn =
           turn !== null && turn.streamed && turn.reply.length === turn.replyMessageStart;
+        // 時計（#5086）はクローン本体の発言だけで動かす: 作業者（Task の中の別の層）の発言・道具は、Task という1本の道具の時間に入っている
+        const timer = event.parentToolUseId === null ? (turn?.timer ?? null) : null;
         for (const block of event.blocks) {
           if (block.type === 'text') {
+            if (block.text !== '') timer?.responded('text');
             if (turn) turn.text += block.text;
             if (!turn?.streamed) {
               if (turn) appendReply(turn, block.text);
@@ -7435,6 +7495,8 @@ class Clone implements CloneHost {
               appendReply(turn, block.text);
             }
           } else if (block.type === 'tool_use') {
+            if (block.id === undefined) timer?.responded('tool');
+            else timer?.toolStarted(block.id, block.name);
             // 区切りの印は Web が返信の行を分ける点（`tool`）にそろえる: 分けない所に入れると、行の連結が日誌の本文と合わず写しが居座る
             if (turn) turn.replySeparatorPending = true;
             this.#emit(turn?.conversationId ?? null, { type: 'tool', tool: block.name });
@@ -7446,11 +7508,19 @@ class Clone implements CloneHost {
 
       // `tool_result` を含むときだけ `thinking` にする: 人間の発言のエコーや replay を「考え始めた」と読み違えないため。
       case 'tool_result': {
+        this.#sdkSession.turn?.timer?.toolEnded(event.toolUseIds ?? []);
         this.#emit(this.#sdkSession.turn?.conversationId ?? null, { type: 'thinking' });
         return;
       }
 
+      // 要約の始まり（#5086）。終わりは下の `compaction`
+      case 'compaction_started': {
+        this.#sdkSession.turn?.timer?.compactionStarted();
+        return;
+      }
+
       case 'compaction': {
+        this.#sdkSession.turn?.timer?.compactionEnded();
         // 要約で前の全文は会話から消えうるので、次のターンの「いまの全体」は説明文を全文で出す
         this.#situationExplained.clear();
         this.#digestDelta.reset();
@@ -7483,7 +7553,37 @@ class Clone implements CloneHost {
       }
 
       case 'turn_ended': {
-        const contextUsage = await this.#observeContextUsage();
+        // ここでモデルの段を閉じ、後始末（finalize）を数え始める（#5086）
+        const timer = this.#sdkSession.turn?.timer ?? null;
+        const mainLoop = event.usage?.mainLoopUsage;
+        timer?.turnEnded({
+          succeeded: event.succeeded,
+          ...(mainLoop === undefined
+            ? {}
+            : {
+                tokens: {
+                  input: mainLoop.inputTokens,
+                  cacheRead: mainLoop.cacheReadInputTokens,
+                  cacheCreation: mainLoop.cacheCreationInputTokens,
+                  output: mainLoop.outputTokens,
+                },
+              }),
+          ...(event.timing === undefined && event.usage?.numTurns === undefined
+            ? {}
+            : {
+                sdk: {
+                  ...event.timing,
+                  ...(event.usage?.numTurns === undefined
+                    ? {}
+                    : { numTurns: event.usage.numTurns }),
+                },
+              }),
+        });
+        const finalizeStep = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
+          timer === null ? fn() : timer.time(`finalize.${name}`, fn);
+        const contextUsage = await finalizeStep('contextUsage', () => this.#observeContextUsage());
+        if (contextUsage?.totalTokens !== undefined)
+          timer?.contextObserved(contextUsage.totalTokens);
         // `undefined`（未観測）は `null` へ寄せる: `CloneRuntimeFacts.lastContextUsage` の3値を保つため。
         // 伸びは前の観測があって両方測れた回だけ取る: 開き直しの直後や測れなかった回の差は伸びではないため
         const previousTotal = this.#lastContextUsage?.totalTokens;
@@ -7509,14 +7609,16 @@ class Clone implements CloneHost {
         }
 
         // 成否を見ずに毎回呼ぶ: 条件を付けると `journal_read` の推移に穴が空く。
-        await this.#writeInboxFlow();
+        await finalizeStep('inboxFlow', () => this.#writeInboxFlow());
 
         const compactions = this.#sdkSession.turn?.compactions ?? [];
 
-        await this.#recordUsage(event.usage, 'session', 'cumulative', {
-          contextUsage,
-          compactions,
-        });
+        await finalizeStep('usage', () =>
+          this.#recordUsage(event.usage, 'session', 'cumulative', {
+            contextUsage,
+            compactions,
+          }),
+        );
 
         await this.#noteFirstTurnToolSearch(contextUsage, event.usage, event.succeeded);
 
@@ -7529,7 +7631,8 @@ class Clone implements CloneHost {
         const failure = event.failure ?? turn?.rejected ?? undefined;
 
         // 内部ターン（蒸留・自律）も必ず残す: 見えない層を作らない。
-        if (turn) await this.#journalReply(turn, failure !== undefined);
+        if (turn)
+          await finalizeStep('reply', () => this.#journalReply(turn, failure !== undefined));
 
         // 判定は `isAnsweredResult`（`isSuccessResult` ではない）: `subtype: 'success'` かつ `is_error: true` を成功として通してしまうため。
         // `turn.rejected` も見る: `assistant.error` が付いたターンは、`result` が成功でも応答として扱わない。

@@ -3900,6 +3900,10 @@ class RunnerSession {
       case 'compaction':
         return;
 
+      // 要約の始まり（#5086）はクローン層がターンの時間を測るためのもので、委譲層では見ない
+      case 'compaction_started':
+        return;
+
       // 拒否の合図は委譲層では見ない: 数えて開き直すのはクローン層の仕事で、作業者のセッションは使い捨てのため
       case 'refusal':
         return;
