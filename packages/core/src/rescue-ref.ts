@@ -94,7 +94,20 @@ export const RESCUE_UNTRACKED_PATHS_LIMIT = 20;
 export const RESCUE_MAX_WORKTREES = 40;
 const PATH_NAME_MAX_LENGTH = 200;
 const SECRET_FILES_LIMIT = 5;
+/** テキストの差分（`git log -p`・`git diff-tree -p`）の上限。バイナリはここに数えない（#5117）。 */
 export const RESCUE_DIFF_MAX_BYTES = 2 * 1024 * 1024;
+/**
+ * 1作業ツリーの1回の退避で読む、未 push のバイナリの blob の合計の上限（#5117）。
+ * テキストの差分と予算を分ける: バイナリは判定に使う規則が少ない（`secretPatternsInBody` の `binary`）のに、
+ * 差分に丸ごと載せると 2 MiB を食い、絵の担当の未 push が積もっただけで `too-large` になって退避が止まるため。
+ */
+export const RESCUE_BINARY_MAX_BYTES = 64 * 1024 * 1024;
+/** バイナリの blob 1本の上限。超えたら判定しきれないとして `too-large` に倒す。 */
+export const RESCUE_BINARY_BLOB_MAX_BYTES = 16 * 1024 * 1024;
+// 塊ごとに判定し、境目は重ねる: blob を丸ごと文字列に溜めず、メモリを塊の大きさで頭打ちにするため。
+// 重ねは規則の最長（接頭辞つきの形で 315 文字ほど）よりずっと大きく取る: 環境変数の鍵の値は長さが決まっていないため
+const BINARY_SCAN_WINDOW_CHARS = 1024 * 1024;
+const BINARY_SCAN_OVERLAP_CHARS = 64 * 1024;
 const LIST_MAX_BYTES = 4 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 20_000;
 const PUSH_TIMEOUT_MS = 90_000;
@@ -175,6 +188,241 @@ async function git(spawn: ProcessSpawnFn, args: string[], call: GitCall): Promis
 
 function ok(result: GitResult): boolean {
   return result.exitCode === 0 && !result.timedOut && !result.overflow;
+}
+
+interface GitStreamResult {
+  readonly exitCode: number | null;
+  readonly timedOut: boolean;
+  readonly overflow: boolean;
+  readonly bytes: number;
+}
+
+// 出力を溜めずに塊のまま渡す（#5117）。期限・中断の扱いは `git()` と同じ。
+// latin1 で読む: 1バイトを1文字に写すので、バイナリの中の ASCII の鍵の形が、utf8 の置換文字で崩れずに残るため
+async function streamGit(
+  spawn: ProcessSpawnFn,
+  args: string[],
+  call: GitCall & { readonly maxBytes: number },
+  onChunk: (text: string) => void,
+): Promise<GitStreamResult> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const onCallerAbort = (): void => {
+    timedOut = true;
+    controller.abort();
+  };
+  if (call.signal?.aborted === true) onCallerAbort();
+  call.signal?.addEventListener('abort', onCallerAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, call.timeoutMs ?? GIT_TIMEOUT_MS);
+  timer.unref?.();
+  let overflow = false;
+  let bytes = 0;
+  try {
+    const child = spawn({
+      command: 'git',
+      args,
+      cwd: call.cwd,
+      env: { ...call.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
+      signal: controller.signal,
+    });
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (overflow) return;
+      bytes += chunk.length;
+      if (bytes > call.maxBytes) {
+        overflow = true;
+        controller.abort();
+        return;
+      }
+      onChunk(chunk.toString('latin1'));
+    });
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      child.on('error', reject);
+      child.on('close', (code) => resolve(code));
+    });
+    return { exitCode, timedOut, overflow, bytes };
+  } catch {
+    return { exitCode: null, timedOut, overflow, bytes };
+  } finally {
+    clearTimeout(timer);
+    call.signal?.removeEventListener('abort', onCallerAbort);
+  }
+}
+
+type BlobScan =
+  | { readonly kind: 'ok'; readonly patterns: readonly SecretPatternName[]; readonly bytes: number }
+  | { readonly kind: 'too-large' }
+  | { readonly kind: 'failed' };
+
+/**
+ * 届いた塊を窓に積み、窓が埋まるたびに判定する（#5117）。窓の末尾 `overlapChars` 文字は次の窓の頭へ残す:
+ * 境目をまたぐ鍵を、どちらの窓でも取りこぼさないため。塊の届き方（パイプの大きさ）に判定を左右させないよう、窓は塊と独立に切る。
+ * NUL を見た後はバイナリとして判定する（`secretLikeAdditionsInDiff` と同じ線）。git の属性では決めない:
+ * `-diff` を付けたテキストのファイルは git がバイナリと言うが、NUL が無ければ全部の規則を掛けるため
+ */
+export class BlobSecretScanner {
+  readonly #env: NodeJS.ProcessEnv | undefined;
+  readonly #windowChars: number;
+  readonly #overlapChars: number;
+  readonly #found = new Set<SecretPatternName>();
+  #sawNul = false;
+  #pending = '';
+
+  constructor(
+    env: NodeJS.ProcessEnv | undefined,
+    options: { readonly windowChars?: number; readonly overlapChars?: number } = {},
+  ) {
+    this.#env = env;
+    this.#windowChars = options.windowChars ?? BINARY_SCAN_WINDOW_CHARS;
+    this.#overlapChars = options.overlapChars ?? BINARY_SCAN_OVERLAP_CHARS;
+  }
+
+  push(chunk: string): void {
+    this.#pending += chunk;
+    while (this.#pending.length >= this.#windowChars + this.#overlapChars) {
+      this.#scan(this.#pending.slice(0, this.#windowChars + this.#overlapChars));
+      this.#pending = this.#pending.slice(this.#windowChars);
+    }
+  }
+
+  finish(): SecretPatternName[] {
+    if (this.#pending.length > 0) this.#scan(this.#pending);
+    this.#pending = '';
+    return [...this.#found];
+  }
+
+  #scan(text: string): void {
+    if (text.includes('\0')) this.#sawNul = true;
+    for (const name of secretPatternsInBody(text, this.#env, { binary: this.#sawNul })) {
+      this.#found.add(name);
+    }
+  }
+}
+
+async function scanBlobForSecrets(
+  spawn: ProcessSpawnFn,
+  sha: string,
+  call: GitCall,
+  env: NodeJS.ProcessEnv,
+  maxBytes: number,
+): Promise<BlobScan> {
+  const scanner = new BlobSecretScanner(env);
+  const result = await streamGit(spawn, ['cat-file', 'blob', sha], { ...call, maxBytes }, (chunk) =>
+    scanner.push(chunk),
+  );
+  if (result.overflow) return { kind: 'too-large' };
+  if (result.exitCode !== 0 || result.timedOut) return { kind: 'failed' };
+  return { kind: 'ok', patterns: scanner.finish(), bytes: result.bytes };
+}
+
+function collectBinaryPaths(numstatZ: string, into: Set<string>): void {
+  // `--numstat -z --no-renames` の1項目は `追加\t削除\tパス`。git がバイナリと見たものは `-\t-`
+  for (const entry of numstatZ.split('\0')) {
+    const match = /^\n*-\t-\t([\s\S]+)$/.exec(entry);
+    if (match?.[1] !== undefined) into.add(match[1]);
+  }
+}
+
+/**
+ * 退避 ref で新しく外へ出る（origin から辿れない）blob のうち、テキストの差分でバイナリとして省かれたものを返す（#5117）。
+ * 省かれたパスは numstat で git 自身に言わせる: 差分の `Binary files … differ` の行はパスを引用符で包むことがあり、読み分けると取りこぼすため。
+ * マージは `-m` で親ごとに数える: 解消で新しく置いたバイナリのパスも拾うため（origin に在る側の blob は、下の `rev-list` が外す）
+ */
+async function newBinaryBlobs(
+  spawn: ProcessSpawnFn,
+  call: GitCall,
+  head: string | undefined,
+  tree: string,
+  hasUnpushedCommits: boolean,
+): Promise<{ sha: string; path: string }[] | undefined> {
+  const binaryPaths = new Set<string>();
+  const uncommitted = await git(
+    spawn,
+    ['diff-tree', '-r', '--numstat', '-z', '--no-renames', head ?? EMPTY_TREE_SHA1, tree],
+    call,
+  );
+  if (!ok(uncommitted)) return undefined;
+  collectBinaryPaths(uncommitted.stdout, binaryPaths);
+  if (hasUnpushedCommits) {
+    const committed = await git(
+      spawn,
+      [
+        'log',
+        '--numstat',
+        '-z',
+        '--no-renames',
+        '-m',
+        '--format=',
+        'HEAD',
+        '--not',
+        '--remotes=origin',
+      ],
+      call,
+    );
+    if (!ok(committed)) return undefined;
+    collectBinaryPaths(committed.stdout, binaryPaths);
+  }
+  if (binaryPaths.size === 0) return [];
+  const listed = await git(
+    spawn,
+    [
+      'rev-list',
+      '--objects',
+      '--filter=object:type=blob',
+      ...(head === undefined ? [] : ['HEAD']),
+      tree,
+      '--not',
+      '--remotes=origin',
+    ],
+    call,
+  );
+  if (!ok(listed)) return undefined;
+  const blobs: { sha: string; path: string }[] = [];
+  for (const line of listed.stdout.split('\n')) {
+    const space = line.indexOf(' ');
+    if (space === -1) continue;
+    const blobPath = line.slice(space + 1);
+    if (binaryPaths.has(blobPath)) blobs.push({ sha: line.slice(0, space), path: blobPath });
+  }
+  return blobs;
+}
+
+type BinaryScan =
+  | { readonly kind: 'ok'; readonly hits: SecretLikeHit[] }
+  | { readonly kind: 'too-large' }
+  | { readonly kind: 'failed' };
+
+// 1本ずつ順に読む: 並べると pids と I/O を一度に食い、同じ器の他の担当の fork を断らせるため
+async function scanNewBinaryBlobs(
+  spawn: ProcessSpawnFn,
+  call: GitCall,
+  env: NodeJS.ProcessEnv,
+  head: string | undefined,
+  tree: string,
+  hasUnpushedCommits: boolean,
+  limits: { readonly totalMaxBytes: number; readonly blobMaxBytes: number },
+): Promise<BinaryScan> {
+  const blobs = await newBinaryBlobs(spawn, call, head, tree, hasUnpushedCommits);
+  if (blobs === undefined) return { kind: 'failed' };
+  const hits: SecretLikeHit[] = [];
+  let total = 0;
+  for (const blob of blobs) {
+    const remaining = limits.totalMaxBytes - total;
+    if (remaining <= 0) return { kind: 'too-large' };
+    const scanned = await scanBlobForSecrets(
+      spawn,
+      blob.sha,
+      call,
+      env,
+      Math.min(limits.blobMaxBytes, remaining),
+    );
+    if (scanned.kind !== 'ok') return scanned;
+    total += scanned.bytes;
+    if (scanned.patterns.length > 0) hits.push({ file: blob.path, patterns: scanned.patterns });
+  }
+  return { kind: 'ok', hits };
 }
 
 type PushFailureKind = 'auth' | 'network' | 'rejected' | 'timeout' | 'other';
@@ -373,6 +621,9 @@ export interface RunRescueOptions {
   readonly hasCredential?: (env: Record<string, string | undefined>) => boolean;
   readonly tmpRootDir?: string;
   readonly diffMaxBytes?: number;
+  /** バイナリの blob の合計・1本の上限。既定は {@link RESCUE_BINARY_MAX_BYTES}・{@link RESCUE_BINARY_BLOB_MAX_BYTES}。試験が小さくするための口。 */
+  readonly binaryMaxBytes?: number;
+  readonly binaryBlobMaxBytes?: number;
   /** 担い手が git を打った場所。決まり（`/tmp/mgr-<委譲 id の頭>`）の外の作業ツリーも退避するため。 */
   readonly hintDirs?: readonly string[];
   /**
@@ -765,8 +1016,8 @@ async function rescueOne(
     if (!ok(remote)) return settle({ reason: 'no-remote' }, false);
 
     const maxBytes = options.diffMaxBytes ?? RESCUE_DIFF_MAX_BYTES;
-    // `--text`: バイナリ扱いのファイルも中身を差分に出して判定する。
-    const diffArgs = ['--no-color', '--no-ext-diff', '--no-textconv', '--text'];
+    // `--text` を付けない: バイナリは `Binary files … differ` の1行にして、下の blob の判定（別の予算）へ回す（#5117）
+    const diffArgs = ['--no-color', '--no-ext-diff', '--no-textconv'];
     const treeDiff = await git(
       spawn,
       ['diff-tree', '-p', '-r', ...diffArgs, head === undefined ? EMPTY_TREE_SHA1 : head, tree],
@@ -812,6 +1063,13 @@ async function rescueOne(
       ...secretLikeAdditionsInDiff(treeDiff.stdout, env),
       ...(logDiff === undefined ? [] : secretLikeAdditionsInDiff(logDiff.stdout, env)),
     ];
+    const binary = await scanNewBinaryBlobs(spawn, base, env, head, tree, unpushedCount > 0, {
+      totalMaxBytes: options.binaryMaxBytes ?? RESCUE_BINARY_MAX_BYTES,
+      blobMaxBytes: options.binaryBlobMaxBytes ?? RESCUE_BINARY_BLOB_MAX_BYTES,
+    });
+    if (binary.kind === 'too-large') return settle({ reason: 'too-large' }, true);
+    if (binary.kind === 'failed') return settle(failure(), false);
+    hits.push(...binary.hits);
     if (hits.length > 0) {
       const hitFiles = [...new Set(hits.map((hit) => hit.file))];
       return settle(

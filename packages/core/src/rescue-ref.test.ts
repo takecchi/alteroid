@@ -7,6 +7,7 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  BlobSecretScanner,
   classifyPushFailure,
   DEFAULT_RESCUE_INTERVAL_MS,
   RESCUE_INTERVAL_MS_ENV_KEY,
@@ -268,6 +269,108 @@ describe('退避 ref（#1266）', () => {
         'github-token',
       ]);
       expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
+    });
+
+    describe('#5117: バイナリはテキストの差分と予算を分け、新しく外へ出る blob だけを読む', () => {
+      it('⭐ 未 push の PNG はテキストの差分の上限に数えず、退避を送る', async () => {
+        await writeFile(path.join(repo, 'art.png'), png('x'.repeat(5000)));
+        g(repo, 'add', 'art.png');
+        g(repo, 'commit', '-qm', 'big png');
+        await writeFile(path.join(repo, 'wip.png'), png('y'.repeat(5000)));
+        g(repo, 'add', 'wip.png');
+
+        const [report] = await run({ diffMaxBytes: 1000 });
+
+        expect(report?.notPushed).toBeUndefined();
+        const ref = report?.pushed?.ref as string;
+        expect(
+          execFileSync('git', ['show', `${ref}:wip.png`], { cwd: bare, env: GIT_ENV }),
+        ).toEqual(png('y'.repeat(5000)));
+      });
+
+      it('origin に在る PNG は読まない（バイナリの予算を食わない）', async () => {
+        await writeFile(path.join(repo, 'landed.png'), png('z'.repeat(5000)));
+        g(repo, 'add', 'landed.png');
+        g(repo, 'commit', '-qm', 'landed png');
+        g(repo, 'push', '-q', 'origin', 'main');
+        g(repo, 'fetch', '-q', 'origin');
+        await writeFile(path.join(repo, 'a.txt'), 'one\nedited\n');
+
+        const [report] = await run({ binaryMaxBytes: 1000 });
+
+        expect(report?.notPushed).toBeUndefined();
+        expect(report?.pushed?.ref).toBeDefined();
+      });
+
+      it('新しく外へ出るバイナリの合計が上限を超えたら、判定しきれないので too-large', async () => {
+        await writeFile(path.join(repo, 'one.png'), png('1'.repeat(3000)));
+        await writeFile(path.join(repo, 'two.png'), png('2'.repeat(3000)));
+        g(repo, 'add', 'one.png', 'two.png');
+        g(repo, 'commit', '-qm', 'two pngs');
+
+        const [report] = await run({ binaryMaxBytes: 4000 });
+
+        expect(report?.notPushed?.reason).toBe('too-large');
+        expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
+      });
+
+      it('バイナリ1本が上限を超えたら too-large', async () => {
+        await writeFile(path.join(repo, 'huge.png'), png('h'.repeat(5000)));
+        g(repo, 'add', 'huge.png');
+
+        const [report] = await run({ binaryBlobMaxBytes: 1000 });
+
+        expect(report?.notPushed?.reason).toBe('too-large');
+      });
+
+      it('未 push の履歴にだけ在り、作業ツリーでは消した PNG の鍵も止める（退避 ref の履歴で外へ出るため）', async () => {
+        const fake = `gh${'p'}_${'H7k3'.repeat(9)}`;
+        await writeFile(path.join(repo, 'leak.png'), png(fake));
+        g(repo, 'add', 'leak.png');
+        g(repo, 'commit', '-qm', 'leak');
+        g(repo, 'rm', '-q', 'leak.png');
+        g(repo, 'commit', '-qm', 'remove leak');
+
+        const [report] = await run();
+
+        expect(report?.notPushed?.reason).toBe('secret-like');
+        expect(report?.notPushed?.files).toEqual(['leak.png']);
+        expect(report?.notPushed?.patterns).toEqual(['github-token']);
+      });
+
+      it('塊の境目をまたぐ位置に在る鍵も止める', async () => {
+        const fake = `gh${'p'}_${'W5e8'.repeat(9)}`;
+        // 最初の判定の塊（1 MiB + 重ね 64 KiB）の終わりをまたぐ位置に置く
+        const before = 1024 * 1024 + 64 * 1024 - 20;
+        await writeFile(
+          path.join(repo, 'edge.png'),
+          png(`${'e'.repeat(before)}\n${fake}\n${'e'.repeat(4096)}`),
+        );
+        g(repo, 'add', 'edge.png');
+
+        const [report] = await run();
+
+        expect(report?.notPushed?.reason).toBe('secret-like');
+        expect(report?.notPushed?.files).toEqual(['edge.png']);
+      });
+
+      it('-diff を付けたテキストのファイル（NUL 無し）は、git がバイナリと言っても全部の規則で判定する', async () => {
+        await writeFile(path.join(repo, '.gitattributes'), 'conf.txt -diff\n');
+        g(repo, 'add', '.gitattributes');
+        g(repo, 'commit', '-qm', 'attrs');
+        g(repo, 'push', '-q', 'origin', 'main');
+        g(repo, 'fetch', '-q', 'origin');
+        await writeFile(path.join(repo, 'conf.txt'), `${shapeOnly}\n`);
+        g(repo, 'add', 'conf.txt');
+
+        const [report] = await run();
+
+        expect(report?.notPushed).toEqual({
+          reason: 'secret-like',
+          files: ['conf.txt'],
+          patterns: ['schemeless-userinfo', 'secret-assignment'],
+        });
+      });
     });
   });
 
@@ -628,6 +731,32 @@ describe('退避 ref（#1266）', () => {
       expect(() => g(root, 'check-ref-format', name)).not.toThrow();
     }
     expect(rescueRefName(managerId, '/a', '.')).not.toBe(rescueRefName(managerId, '/b', '.'));
+  });
+
+  describe('BlobSecretScanner — バイナリの blob を窓ごとに判定する（#5117）', () => {
+    const fake = `gh${'p'}_${'Q9w2'.repeat(9)}`;
+    // 窓 100・重ね 50 で、最初の窓 [0,150) の終わりをまたぐ位置（140〜）に鍵を置く
+    const body = `${'\0'.repeat(139)}\n${fake}\n${'\0'.repeat(200)}`;
+
+    it('⭐ 窓の境目をまたぐ鍵を、重ねた次の窓で拾う', () => {
+      const scanner = new BlobSecretScanner(undefined, { windowChars: 100, overlapChars: 50 });
+      scanner.push(body);
+      expect(scanner.finish()).toEqual(['github-token']);
+    });
+
+    it('塊の届き方（大きさ）に判定を左右させない', () => {
+      for (const size of [1, 7, 64, 1000]) {
+        const scanner = new BlobSecretScanner(undefined, { windowChars: 100, overlapChars: 50 });
+        for (let i = 0; i < body.length; i += size) scanner.push(body.slice(i, i + size));
+        expect(scanner.finish()).toEqual(['github-token']);
+      }
+    });
+
+    it('NUL を見た窓からはバイナリとして、形だけの規則を掛けない', () => {
+      const scanner = new BlobSecretScanner(undefined, { windowChars: 100, overlapChars: 50 });
+      scanner.push(`\0\nzz:pw0rd@host1 MY_KEY=abc\n`);
+      expect(scanner.finish()).toEqual([]);
+    });
   });
 
   it('伏せ字の判定は追加行だけを見て、ファイル名を返す', () => {
