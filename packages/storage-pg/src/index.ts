@@ -1,6 +1,7 @@
 import { collapseErrorCause, writeStderrLine } from '@alteroid/core';
 import type { Stores } from '@alteroid/core';
 import { drizzle } from 'drizzle-orm/node-postgres';
+import { Client } from 'pg';
 
 import { PgTranscriptArchive } from './archive.js';
 import { PgAttachmentStore, type PgAttachmentStoreOptions } from './attachments.js';
@@ -15,7 +16,7 @@ import { PgConversationReadStore } from './conversation-reads.js';
 import { PgJobStore } from './jobs.js';
 import { PgJournalStore } from './journal.js';
 import { PgMcpServerStore } from './mcp-servers.js';
-import { migrateOnBoot } from './migrate.js';
+import { ensureJournalHumanRepliesIndex, migrateOnBoot } from './migrate.js';
 import {
   createTimedPool,
   PG_LONG_QUERY_TIMEOUT_MS,
@@ -66,7 +67,12 @@ export { PgSessionStore } from './session-store.js';
 export { PgTokenPoolStore } from './token-pool.js';
 export { PgUsageStore } from './usage.js';
 export * from './footprint.js';
-export { migrate, migrateOnBoot } from './migrate.js';
+export {
+  ensureJournalHumanRepliesIndex,
+  JOURNAL_HUMAN_REPLIES_INDEX,
+  migrate,
+  migrateOnBoot,
+} from './migrate.js';
 export type { Db } from './db.js';
 export * as tables from './schema.js';
 
@@ -103,7 +109,8 @@ export function describePgConnectionError(error: Error): string {
  * 載っていない口は既定の期限で打ち切る。載せる基準: 大きい本文（退避・生ログ・添付・plugin）を運ぶ、件数で締めずに表を走査しうる、全件を消す。
  */
 const LONG_QUERY_METHODS = {
-  journal: ['list', 'listPage', 'clear'],
+  // `humanReplies` は件数で締めずに人間への返答を全履歴から読む（#5089）
+  journal: ['list', 'listPage', 'humanReplies', 'clear'],
   archive: ['archive', 'read', 'readTail', 'remove', 'clear'],
   sessionStore: ['load', 'append', 'readTail', 'delete', 'clearAll'],
   attachments: ['put', 'open', 'get', 'prune', 'clear'],
@@ -189,9 +196,27 @@ export async function createPgStores(options: CreatePgStoresOptions | string): P
   // 長い期限で包む: 大きい表への索引の作成・全行の backfill が版の変わり目に通り、既定の期限で切ると器が起き上がらないため
   // 流し済みの文は流し直さない（#4731。`migrateOnBoot`）: 何もしない ALTER でもテーブルを止めるため
   await withPgQueryTimeout(PG_LONG_QUERY_TIMEOUT_MS, () => migrateOnBoot(db));
+
+  // 起き上がった後に、書き込みを止めない索引を裏で作る（#5089。`ensureJournalHumanRepliesIndex`）。
+  // プールとは別の接続で作る: プールで作ると、停止の `pool.end()` が作り終わり（GB 級の日誌では分単位）を待つため。
+  // 停止のときはこの接続を閉じる。作りかけは無効な索引として残り、次の起動で作り直す
+  const indexClient = new Client({ connectionString: config.url });
+  indexClient.on('error', () => undefined);
+  const closeIndexClient = () => indexClient.end().catch(() => undefined);
+  void indexClient
+    .connect()
+    .then(() => ensureJournalHumanRepliesIndex(drizzle(indexClient)))
+    .catch((error: unknown) => {
+      writeStderrLine(
+        `alteroid: 日誌の索引を作る接続を開けなかった（${collapseErrorCause(error)}）。索引なしで動き続ける（#5089）\n`,
+      );
+    })
+    .finally(closeIndexClient);
+
   return createPgStoresFromDb(
     db,
     async () => {
+      await closeIndexClient();
       pool.off('error', onError);
       await pool.end();
     },

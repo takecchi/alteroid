@@ -198,6 +198,26 @@ export class PgJournalStore implements JournalStore {
     return rows[0]?.at.toISOString() ?? null;
   }
 
+  // 本文（`text` 等）を流さず、会話 id と時刻だけを読む（#5089）。絞りは `list({ types: ['exchange'], with: ['human'] })` と同じ式で、`journal_exchange_with_seq_idx` に乗る。
+  // `list` は読み出しで型（`journalEntrySchema`）に合わない行を落とすので、ここでも返答の判定に使う欄と必須の本文の型までは SQL で確かめる。
+  // それ以外の欄だけが型に合わない行（書き込み時の検査があるので、ふつうは無い）は、`list` と違って数える
+  async humanReplies(): Promise<{ conversationId: string; at: string }[]> {
+    const rows = await this.#db
+      .select({ at: journal.at, conversationId: sql<string>`${journal.entry}->>'conversationId'` })
+      .from(journal)
+      .where(
+        and(
+          hiddenConversationExchangeExcluded(),
+          eq(journal.type, 'exchange'),
+          sql`(${journal.entry}->>'with') = 'human'`,
+          sql`${journal.entry}->>'role' = 'outbound'`,
+          sql`jsonb_typeof(${journal.entry}->'conversationId') = 'string'`,
+          sql`jsonb_typeof(${journal.entry}->'text') = 'string'`,
+        ),
+      );
+    return rows.map((row) => ({ conversationId: row.conversationId, at: row.at.toISOString() }));
+  }
+
   async clear(): Promise<number> {
     const removed = await this.#db.delete(journal).returning({ seq: journal.seq });
     return removed.length;

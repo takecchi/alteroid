@@ -58,19 +58,12 @@ export async function buildCommitmentDerivations(
     return { repliesByConversation, activeManagersByConversation };
   }
 
-  // `types` / `with` を手組みし直さない: `with` の絞りを直し忘れる余地が戻る
-  // （`scripts/conversation-window-single-source.test.ts`）。返答済みの判定は全履歴が要るので `scan` は事実上無制限。
-  const humanExchanges = await readConversationWindow(stores.journal, {
-    scan: Number.MAX_SAFE_INTEGER,
-  });
-  for (const exchange of humanExchanges) {
-    if (exchange.type !== 'exchange') continue;
-    if (exchange.role !== 'outbound' || exchange.conversationId === undefined) continue;
-    const existing = repliesByConversation.get(exchange.conversationId);
+  for (const reply of await readHumanReplies(stores)) {
+    const existing = repliesByConversation.get(reply.conversationId);
     if (existing) {
-      existing.push(exchange.at);
+      existing.push(reply.at);
     } else {
-      repliesByConversation.set(exchange.conversationId, [exchange.at]);
+      repliesByConversation.set(reply.conversationId, [reply.at]);
     }
   }
   for (const list of repliesByConversation.values()) list.sort();
@@ -88,6 +81,26 @@ export async function buildCommitmentDerivations(
     }
   }
   return { repliesByConversation, activeManagersByConversation };
+}
+
+/**
+ * 人間への返答の会話 id と時刻。器が口（`humanReplies`）を持てば、本文を読まずにそこから引く（#5089: pg で全履歴の往復を本文ごと読むのが
+ * `/progress`・`/commitments` の時間の多くを占めていた）。持たなければ人間との往復を全部読んで作る。
+ */
+async function readHumanReplies(stores: Stores): Promise<{ conversationId: string; at: string }[]> {
+  if (stores.journal.humanReplies !== undefined) return stores.journal.humanReplies();
+  // `types` / `with` を手組みし直さない: `with` の絞りを直し忘れる余地が戻る
+  // （`scripts/conversation-window-single-source.test.ts`）。返答済みの判定は全履歴が要るので `scan` は事実上無制限。
+  const humanExchanges = await readConversationWindow(stores.journal, {
+    scan: Number.MAX_SAFE_INTEGER,
+  });
+  const replies: { conversationId: string; at: string }[] = [];
+  for (const exchange of humanExchanges) {
+    if (exchange.type !== 'exchange') continue;
+    if (exchange.role !== 'outbound' || exchange.conversationId === undefined) continue;
+    replies.push({ conversationId: exchange.conversationId, at: exchange.at });
+  }
+  return replies;
 }
 
 /** `GET /progress` の応答と、道具 `progress_read` が文にする入力。 */
