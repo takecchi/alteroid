@@ -1909,11 +1909,10 @@ class Host implements RunnerHost {
     } else {
       this.#rekeyFoldedAt.delete(managerId);
     }
-    const stopping = session
-      ?.stop(
-        'デーモンから停止を指示された。',
-        options.keepPeers === true ? { keepPeers: true } : {},
-      );
+    const stopping = session?.stop(
+      'デーモンから停止を指示された。',
+      options.keepPeers === true ? { keepPeers: true } : {},
+    );
     await Promise.all([closingParked, stopping]);
   }
 
