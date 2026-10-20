@@ -565,12 +565,19 @@ export const commitmentConflictResponseSchema = z.object({
 
 // 外向きの view を別に書かない: 伏せるものが無く、別 view にすると人間が API で見る台帳とクローンが `commitment_list` で見る台帳がずれるため。
 // `updatedAt` は `commitmentUpdatedAt` で導く: 受け手に `closedAt ?? at` を書き直させないため。
+// 一覧（`GET /commitments`）と詳細（`GET /commitments/{id}`）で同じ形にする
+export const commitmentViewSchema = commitmentSchema.extend({
+  updatedAt: isoDateTimeSchema,
+  respondedAt: isoDateTimeSchema.optional(),
+  activeManagerIds: z.array(z.string()).optional(),
+});
+
 export const commitmentListResponseSchema = z.object({
   entries: z.array(
-    commitmentSchema.extend({
-      updatedAt: isoDateTimeSchema,
-      respondedAt: isoDateTimeSchema.optional(),
-      activeManagerIds: z.array(z.string()).optional(),
+    commitmentViewSchema.extend({
+      // 一覧で片付いた行の本文・閉じた理由を先頭に切ったときだけ付く（#5089）。全文は `GET /commitments/{id}`
+      bodyTruncated: z.literal(true).optional(),
+      closedReasonTruncated: z.literal(true).optional(),
     }),
   ),
   // 窓（`limit`/`cursor`）では切らず、常に全件を返す。
@@ -582,6 +589,8 @@ export const commitmentListResponseSchema = z.object({
   total: z.number().int().optional(),
   nextCursor: z.string().optional(),
 });
+
+export const commitmentDetailResponseSchema = z.object({ entry: commitmentViewSchema });
 
 // 返さないと閉じられない: 閉じる口は id を取るので、返さないと人間は積めるが自分で閉じられない片道の口になる。
 export const commitmentOpenedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });

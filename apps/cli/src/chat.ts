@@ -2746,18 +2746,20 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /commitments の一覧にありません\n`);
         return 'ok';
       }
-      const response = await client.commitments.$get({ query: { includeClosed: 'true' } });
-      if (!response.ok) {
+      // 全文は詳細の口で取る（#5089）: 一覧は片付いた行の本文・片付けた理由を先頭に切って返すため。
+      // 無い（404）は数えない: 今までも一覧から探して見つからないだけで、失敗には数えていなかったため
+      const response = await absentOkClient.commitments[':id'].$get({ param: { id } });
+      if (!response.ok && response.status !== 404 && response.status !== 409) {
         stdout.write(`${await withDetail('台帳を読めませんでした', response)}\n`);
         return 'ok';
       }
-      const { entries, unreadable, trimmedClosed } = await response.json();
-      const found = entries.find((entry) => entry.id === id);
+      const found = response.ok ? (await response.json()).entry : undefined;
       if (found === undefined) {
+        // 保持上限の注記は一覧が持つので、見つからなかったときだけ一覧を引く（今までと同じ文言にする）
+        const listed = await auxClient.commitments.$get({ query: { includeClosed: 'true' } });
+        const trimmedClosed = listed.ok ? (await listed.json()).trimmedClosed : 0;
         const notes = [
-          unreadable?.some((row) => row.id === id) === true
-            ? '在るが読めない形で入っている（消されたのではない）'
-            : '',
+          response.status === 409 ? '在るが読めない形で入っている（消されたのではない）' : '',
           renderTrimmedClosedNotice(trimmedClosed),
         ].filter((line) => line !== '');
         stdout.write(

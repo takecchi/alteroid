@@ -23532,7 +23532,7 @@
         "operationId": "getCommitments",
         "tags": ["commitments"],
         "summary": "引き受けたまま終わっていない仕事の一覧",
-        "description": "クローンの `commitment_list` と同じものを人間の側から読む。既定は**未了だけ**で、古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。**並べ替え・絞り込みは依然として足さない（理由: 判断がクローンから器へ移る）。窓（`limit`/`cursor`）は 2026-08-25 に人間の明示の「はい」を受けて足した。**`unreadable` は台帳の行が読めなかったもの（issue #296）。**「無い」でも「片付いた」でもない第3の状態**で、0件でも欄自体は必ず返る。**窓では絶対に切らない**（issue #296 が塞いだ穴——読めない行が2頁目以降から消える——が再び開くため）。`trimmedClosed` は保持上限を超えて物理削除された片付き行の累計件数（issue #416）。`unreadable` と同じく窓では切らない。契約を守れている実装は常に `0`（`CommitmentList` の doc、`packages/core/src/store.ts`）。`limit` / `cursor` のいずれかを明示すると頁の封筒（`total` / `nextCursor`）が応答へ載る。**明示しない既定の呼びは、この変更の前と応答が1バイトも変わらない**（opt-in。`.claude/skills/listing-and-detail/SKILL.md` の考え方と同じ——足すのは能力であって、既存の呼び手に新しい欄を押し付けない）。並びは固定（未了は `at` 昇順・片付きは `closedAt` 降順で、その順に連結）で、ここでは選べない——窓はその上に頁を切るだけである（`commitmentsCursorSchema` の doc）。各行の `respondedAt` は「放置」と「進行中」を見分けるための導出値（issue #1003）——クローンから人間への返答が日誌に見つかった最初の時刻で、無ければ欄自体が無い（＝並べ替え・絞り込みの新しい軸ではなく、既存の記録から読めることを1つ増やしただけ）。`packages/core/src/schema.ts` の `commitmentRespondedAt` を参照。各行の `activeManagerIds` も同じ目的の導出値（issue #1003 段2）——同じ会話の中で、この行より後に始まって、いまも走っている委譲の `managerId` を並べたもので、無ければ欄自体が無い。正確な1対1の紐付けではない（`packages/core/src/schema.ts` の `commitmentActiveDelegationIds` を参照）。`unreadableJobs` は読めなかった委譲の行（issue #2359）。`activeManagerIds` は読めた委譲だけから組むので、読めない委譲に紐づく行は「委譲なし」に見える。**どの行に紐づくかは、行が壊れているので言えない**（推測で紐づけない）。1件でも在るときだけ載り（0件なら鍵が無い）、窓では切らない。`activeManagerIds` の導出の対象になる行（`origin` が `human` で `source` を持つ）が1件も無いときは載らない。",
+        "description": "クローンの `commitment_list` と同じものを人間の側から読む。既定は**未了だけ**で、古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。**並べ替え・絞り込みは依然として足さない（理由: 判断がクローンから器へ移る）。窓（`limit`/`cursor`）は 2026-08-25 に人間の明示の「はい」を受けて足した。**`unreadable` は台帳の行が読めなかったもの（issue #296）。**「無い」でも「片付いた」でもない第3の状態**で、0件でも欄自体は必ず返る。**窓では絶対に切らない**（issue #296 が塞いだ穴——読めない行が2頁目以降から消える——が再び開くため）。`trimmedClosed` は保持上限を超えて物理削除された片付き行の累計件数（issue #416）。`unreadable` と同じく窓では切らない。契約を守れている実装は常に `0`（`CommitmentList` の doc、`packages/core/src/store.ts`）。`limit` / `cursor` のいずれかを明示すると頁の封筒（`total` / `nextCursor`）が応答へ載る。**明示しない既定の呼びは、この変更の前と応答が1バイトも変わらない**（opt-in。`.claude/skills/listing-and-detail/SKILL.md` の考え方と同じ——足すのは能力であって、既存の呼び手に新しい欄を押し付けない）。並びは固定（未了は `at` 昇順・片付きは `closedAt` 降順で、その順に連結）で、ここでは選べない——窓はその上に頁を切るだけである（`commitmentsCursorSchema` の doc）。各行の `respondedAt` は「放置」と「進行中」を見分けるための導出値（issue #1003）——クローンから人間への返答が日誌に見つかった最初の時刻で、無ければ欄自体が無い（＝並べ替え・絞り込みの新しい軸ではなく、既存の記録から読めることを1つ増やしただけ）。`packages/core/src/schema.ts` の `commitmentRespondedAt` を参照。各行の `activeManagerIds` も同じ目的の導出値（issue #1003 段2）——同じ会話の中で、この行より後に始まって、いまも走っている委譲の `managerId` を並べたもので、無ければ欄自体が無い。正確な1対1の紐付けではない（`packages/core/src/schema.ts` の `commitmentActiveDelegationIds` を参照）。`unreadableJobs` は読めなかった委譲の行（issue #2359）。`activeManagerIds` は読めた委譲だけから組むので、読めない委譲に紐づく行は「委譲なし」に見える。**どの行に紐づくかは、行が壊れているので言えない**（推測で紐づけない）。1件でも在るときだけ載り（0件なら鍵が無い）、窓では切らない。`activeManagerIds` の導出の対象になる行（`origin` が `human` で `source` を持つ）が1件も無いときは載らない。**片付いた行（`closedAt` を持つ行）の `body` と `closedReason` は、一覧では先頭 200 字（UTF-16 の単位）までに切り、末尾に `…` を付ける**（#5089。片付いた行は消えずに溜まり、全文を載せると一覧が太る）。切るときは表示の側と同じ秘密の伏せを掛けてから切る。切った欄には `bodyTruncated` / `closedReasonTruncated` が `true` で付く。全文は `GET /commitments/{id}` で取る。未了の行は切らない（編集できるのは未了の行だけで、画面は一覧の本文を編集の初期値に使う）。",
         "responses": {
           "200": {
             "description": "台帳の中身。",
@@ -23603,6 +23603,14 @@
                             "items": {
                               "type": "string"
                             }
+                          },
+                          "bodyTruncated": {
+                            "type": "boolean",
+                            "const": true
+                          },
+                          "closedReasonTruncated": {
+                            "type": "boolean",
+                            "const": true
                           }
                         },
                         "required": ["id", "at", "origin", "body", "updatedAt"]
@@ -23773,48 +23781,92 @@
         }
       }
     },
-    "/commitments/{id}/close": {
-      "post": {
-        "operationId": "postCommitmentsByIdClose",
+    "/commitments/{id}": {
+      "get": {
+        "operationId": "getCommitmentsById",
         "tags": ["commitments"],
-        "summary": "引き受けた仕事を片付いたことにする",
-        "description": "クローンの `commitment_close` と同じものを人間の手から。**契約は「行は消さない」** — 消すと「何を片付けたか」が日報の材料から落ちる。`reason` は必須で、人間はこれを読んで後から否定する。**⚠️ fs 実装は保持上限を超えた古い片付き行を物理削除するので、この契約を完全には守れていない（issue #416）。** 削除された累計件数は `GET /commitments` の `trimmedClosed` で見える。**台帳の行が読めない形で入っていても閉じられる**（issue #2148。中身は読めないままなので、閉じた後も本文の書き直しはできない）。",
+        "summary": "引き受けた仕事を1件、全文で読む",
+        "description": "台帳の1行を、`body`・`closedReason` を切らずに返す（一覧の `GET /commitments` は片付いた行のこの2欄を先頭だけに切る）。`updatedAt`・`respondedAt`・`activeManagerIds` は一覧と同じ意味。",
         "responses": {
           "200": {
-            "description": "閉じた。以後は `includeClosed=true` でだけ見える。",
+            "description": "台帳の1行。",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "ok": {
-                      "type": "boolean",
-                      "const": true
+                    "entry": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "origin": {
+                          "type": "string",
+                          "enum": ["human", "manager", "external", "self"]
+                        },
+                        "source": {
+                          "type": "string"
+                        },
+                        "body": {
+                          "type": "string"
+                        },
+                        "closedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "closedReason": {
+                          "type": "string"
+                        },
+                        "closedBy": {
+                          "description": "既知の値は 'clone' | 'human' | 'daemon'（commitmentClosedBySchema）。無いこともある（この欄が入る前の行）。台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。",
+                          "type": "string"
+                        },
+                        "bodyMarkup": {
+                          "type": "string"
+                        },
+                        "editedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "editedBy": {
+                          "description": "既知の値は 'clone' / 'human'（commitmentEditedBySchema）。無ければ一度も編集されていない。台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。",
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "respondedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "activeManagerIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": ["id", "at", "origin", "body", "updatedAt"]
                     }
                   },
-                  "required": ["ok"]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "本文が JSON として不正（`reason` は空にできない）。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"]
+                  "required": ["entry"]
                 }
               }
             }
           },
           "404": {
-            "description": "その id は台帳に無い。",
+            "description": "該当する行が無い。",
             "content": {
               "application/json": {
                 "schema": {
@@ -23830,7 +23882,7 @@
             }
           },
           "409": {
-            "description": "既に片付いている（いつ・どう片付けたかを本文に入れて返す。読めない形で入っている行は、いつ・どう片付けたかが分からないことがある）。または、未了のまま在るのに閉じる書き込みが通らなかった（本文でそう言う。一覧で確かめてから閉じ直す）。",
+            "description": "行は在るが、読めない形で入っている（消されたのではない）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -23846,23 +23898,6 @@
             }
           }
         },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "reason": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                },
-                "required": ["reason"]
-              }
-            }
-          }
-        },
         "parameters": [
           {
             "schema": {
@@ -23873,9 +23908,7 @@
             "required": true
           }
         ]
-      }
-    },
-    "/commitments/{id}": {
+      },
       "patch": {
         "operationId": "patchCommitmentsById",
         "tags": ["commitments"],
@@ -24048,6 +24081,108 @@
                   }
                 },
                 "required": ["body"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/commitments/{id}/close": {
+      "post": {
+        "operationId": "postCommitmentsByIdClose",
+        "tags": ["commitments"],
+        "summary": "引き受けた仕事を片付いたことにする",
+        "description": "クローンの `commitment_close` と同じものを人間の手から。**契約は「行は消さない」** — 消すと「何を片付けたか」が日報の材料から落ちる。`reason` は必須で、人間はこれを読んで後から否定する。**⚠️ fs 実装は保持上限を超えた古い片付き行を物理削除するので、この契約を完全には守れていない（issue #416）。** 削除された累計件数は `GET /commitments` の `trimmedClosed` で見える。**台帳の行が読めない形で入っていても閉じられる**（issue #2148。中身は読めないままなので、閉じた後も本文の書き直しはできない）。",
+        "responses": {
+          "200": {
+            "description": "閉じた。以後は `includeClosed=true` でだけ見える。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正（`reason` は空にできない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その id は台帳に無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "既に片付いている（いつ・どう片付けたかを本文に入れて返す。読めない形で入っている行は、いつ・どう片付けたかが分からないことがある）。または、未了のまま在るのに閉じる書き込みが通らなかった（本文でそう言う。一覧で確かめてから閉じ直す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["reason"]
               }
             }
           }

@@ -76,6 +76,8 @@ export const KEY = {
   approvalsAnsweredOn: (date: string) => ({ type: 'approvals', answeredOn: date }) as const,
   approvalById: (id: string) => ({ type: 'approvals', byId: id }) as const,
   commitments: (includeClosed: boolean) => ({ type: 'commitments', includeClosed }) as const,
+  // `type` を `commitments` のまま揃える: 台帳の一覧を無効にする束（日誌の行・変更の後）で、詳細も一緒に取り直されるため
+  commitmentById: (id: string) => ({ type: 'commitments', byId: id }) as const,
   reports: (limit: number) => ({ type: 'reports', limit }) as const,
   report: (date: string) => ({ type: 'report', date }) as const,
   journal: (limit: number, types: string) => ({ type: 'journal', limit, types }) as const,
@@ -311,6 +313,14 @@ export function useCommitments(includeClosed = false) {
         .then(unwrap),
     // 別キーになっても前の一覧を出したままにする: スピナーに置き換わると、未了の行の書きかけ（下書き・片付ける理由）が unmount で消える
     { keepPreviousData: true },
+  );
+}
+
+// 台帳の1行を全文で読む（#5089）。一覧は片付いた行の本文・閉じた理由を先頭に切るので、全文が要るときだけ引く。`null` の間は取りに行かない
+export function useCommitment(id: string | null) {
+  const api = useApi();
+  return useSWR(id === null ? null : KEY.commitmentById(id), ({ byId }) =>
+    api.api.GET('/commitments/{id}', { params: { path: { id: byId } } }).then(unwrap),
   );
 }
 

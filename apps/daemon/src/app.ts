@@ -271,6 +271,7 @@ import {
   attachmentMetaSchema,
   authProvidersResponseSchema,
   commitmentConflictResponseSchema,
+  commitmentDetailResponseSchema,
   commitmentListResponseSchema,
   progressResponseSchema,
   commitmentOpenedResponseSchema,
@@ -1050,6 +1051,28 @@ function managerListItem(managers: ManagerPool, summary: ManagerSummary) {
     ...view,
     ...(request === undefined ? {} : { request, requestTruncated: true as const }),
     ...(lastReport === undefined ? {} : { lastReport, lastReportTruncated: true as const }),
+  };
+}
+
+/** 一覧（`GET /commitments`）で片付いた行の本文・閉じた理由を切る長さ（UTF-16 の単位。#5089） */
+export const COMMITMENT_LIST_TEXT_HEAD = 200;
+
+// 台帳の一覧の1行（#5089）。片付いた行だけ、本文と閉じた理由を先頭に切る（全文は `GET /commitments/{id}`）。
+// 未了の行は切らない: Web は一覧の本文を編集欄の初期値・編集後の版の取り込み・積んだ行が届いたかの照合に使い、編集できるのは未了の行だけのため。
+// 片付いた行は数が多く（台帳の大半）、一覧の大きさのほとんどを占める
+function commitmentListItem<T extends { closedAt?: string; body: string; closedReason?: string }>(
+  entry: T,
+): T & { bodyTruncated?: true; closedReasonTruncated?: true } {
+  if (entry.closedAt === undefined) return entry;
+  const body = textHead(entry.body, COMMITMENT_LIST_TEXT_HEAD);
+  const closedReason =
+    entry.closedReason === undefined
+      ? undefined
+      : textHead(entry.closedReason, COMMITMENT_LIST_TEXT_HEAD);
+  return {
+    ...entry,
+    ...(body === undefined ? {} : { body, bodyTruncated: true as const }),
+    ...(closedReason === undefined ? {} : { closedReason, closedReasonTruncated: true as const }),
   };
 }
 
@@ -6346,7 +6369,12 @@ export function createApp(deps: AppDeps) {
           '読めた委譲だけから組むので、読めない委譲に紐づく行は「委譲なし」に見える。' +
           '**どの行に紐づくかは、行が壊れているので言えない**（推測で紐づけない）。' +
           '1件でも在るときだけ載り（0件なら鍵が無い）、窓では切らない。`activeManagerIds` の' +
-          '導出の対象になる行（`origin` が `human` で `source` を持つ）が1件も無いときは載らない。',
+          '導出の対象になる行（`origin` が `human` で `source` を持つ）が1件も無いときは載らない。' +
+          '**片付いた行（`closedAt` を持つ行）の `body` と `closedReason` は、一覧では先頭 ' +
+          `${String(COMMITMENT_LIST_TEXT_HEAD)} 字（UTF-16 の単位）までに切り、末尾に \`…\` を付ける**（#5089。` +
+          '片付いた行は消えずに溜まり、全文を載せると一覧が太る）。切るときは表示の側と同じ秘密の伏せを掛けてから切る。' +
+          '切った欄には `bodyTruncated` / `closedReasonTruncated` が `true` で付く。全文は `GET /commitments/{id}` で取る。' +
+          '未了の行は切らない（編集できるのは未了の行だけで、画面は一覧の本文を編集の初期値に使う）。',
         responses: {
           200: {
             description: '台帳の中身。',
@@ -6426,12 +6454,14 @@ export function createApp(deps: AppDeps) {
           total?: number;
           nextCursor?: string;
         } = {
-          entries: page.map((entry) => ({
-            ...entry,
-            updatedAt: commitmentUpdatedAt(entry),
-            respondedAt: commitmentRespondedAt(entry, repliesByConversation),
-            activeManagerIds: commitmentActiveDelegationIds(entry, activeManagersByConversation),
-          })),
+          entries: page.map((entry) =>
+            commitmentListItem({
+              ...entry,
+              updatedAt: commitmentUpdatedAt(entry),
+              respondedAt: commitmentRespondedAt(entry, repliesByConversation),
+              activeManagerIds: commitmentActiveDelegationIds(entry, activeManagersByConversation),
+            }),
+          ),
           unreadable,
           trimmedClosed,
         };
@@ -6450,6 +6480,54 @@ export function createApp(deps: AppDeps) {
           }
         }
         return c.json(commitmentListResponseSchema.parse(responseBody));
+      },
+    )
+
+    // 一覧が片付いた行の本文を先頭に切るので、全文を取る口（#5089）。導出値（`respondedAt`・`activeManagerIds`）は一覧と同じ作り方
+    .get(
+      '/commitments/:id',
+      describeRoute({
+        tags: ['commitments'],
+        summary: '引き受けた仕事を1件、全文で読む',
+        description:
+          '台帳の1行を、`body`・`closedReason` を切らずに返す（一覧の `GET /commitments` は片付いた行のこの2欄を先頭だけに切る）。' +
+          '`updatedAt`・`respondedAt`・`activeManagerIds` は一覧と同じ意味。',
+        responses: {
+          200: {
+            description: '台帳の1行。',
+            content: { 'application/json': { schema: resolver(commitmentDetailResponseSchema) } },
+          },
+          404: {
+            description: '該当する行が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description: '行は在るが、読めない形で入っている（消されたのではない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        let entry;
+        try {
+          entry = await stores.commitments.get(c.req.param('id'));
+        } catch (error) {
+          if (!(error instanceof UnreadableCommitmentError)) throw error;
+          return c.json({ error: describeUnreadableCommitment(error) }, 409);
+        }
+        if (entry === null) return c.json({ error: 'not found' as const }, 404);
+        const { repliesByConversation, activeManagersByConversation } =
+          await buildCommitmentDerivations(stores, [entry]);
+        return c.json(
+          commitmentDetailResponseSchema.parse({
+            entry: {
+              ...entry,
+              updatedAt: commitmentUpdatedAt(entry),
+              respondedAt: commitmentRespondedAt(entry, repliesByConversation),
+              activeManagerIds: commitmentActiveDelegationIds(entry, activeManagersByConversation),
+            },
+          }),
+        );
       },
     )
 

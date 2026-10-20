@@ -1407,6 +1407,7 @@ interface ArchiveSessionSummaryLike {
 function stubClient(
   options: {
     commitments?: Commitment[];
+    commitmentDetailStatus?: number;
     closeStatus?: number;
     closeBody?: unknown;
     editStatus?: number;
@@ -1551,6 +1552,19 @@ function stubClient(
         return Promise.resolve(reply(status, status === 200 ? {} : (options.commitOpenBody ?? {})));
       },
       ':id': {
+        // 1件を全文で返す口（#5089）。無い id は 404
+        $get: (args: { param: { id: string } }) => {
+          calls.push({ route: 'GET /commitments/:id', args });
+          const found = (options.commitments ?? []).find((entry) => entry.id === args.param.id);
+          if (options.commitmentDetailStatus !== undefined) {
+            return Promise.resolve(
+              reply(options.commitmentDetailStatus, { error: '読めない形で入っている' }),
+            );
+          }
+          return Promise.resolve(
+            found === undefined ? reply(404, { error: 'not found' }) : reply(200, { entry: found }),
+          );
+        },
         close: {
           $post: (args: unknown) => {
             calls.push({ route: 'POST /commitments/:id/close', args });
@@ -2180,9 +2194,10 @@ describe('chat の台帳コマンド', () => {
       expect(text).toContain('い'.repeat(200));
       expect(text).toContain('理由の末尾');
       expect(text).toContain('closedBy: human');
+      // 全文は詳細の口で取る（#5089。一覧は片付いた行の本文を先頭に切って返すため）
       expect(calls.at(-1)).toEqual({
-        route: 'GET /commitments',
-        args: { query: { includeClosed: 'true' } },
+        route: 'GET /commitments/:id',
+        args: { param: { id: 'cmt-2' } },
       });
     });
 
@@ -2213,6 +2228,17 @@ describe('chat の台帳コマンド', () => {
       const text = read();
       expect(text).toContain('続き');
       expect(text).not.toContain(SECRET);
+    });
+
+    it('在るが読めない行（409）は、無いとは言わず読めない形だと言う（#5089 で詳細の口から取るようにした後も同じ文言）', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ commitments: [], commitmentDetailStatus: 409 });
+
+      await runSlashCommand('/commitment cmt-bad', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('台帳に cmt-bad は見つかりません');
+      expect(text).toContain('在るが読めない形で入っている（消されたのではない）');
     });
 
     it('無い id は、無いと言う。番号が一覧に無ければ台帳を引かない', async () => {

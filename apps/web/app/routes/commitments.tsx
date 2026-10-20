@@ -34,6 +34,7 @@ import {
   useEditCommitment,
   usePushCommitment,
   useCommitments,
+  useCommitment,
   ApiError,
   useConversation,
   useConversations,
@@ -1172,7 +1173,12 @@ function planFocusAfterRemoval(row: HTMLElement | null, targetSelector: string):
   };
 }
 
+// 一覧は片付いた行の本文・閉じた理由を先頭に切って返す（#5089）。切られた行だけ「全文を見る」を出し、押したときに `GET /commitments/{id}` で全文を取る
 function ClosedRow({ commitment }: { commitment: Commitment }) {
+  const truncated = commitment.bodyTruncated === true || commitment.closedReasonTruncated === true;
+  const [wantFull, setWantFull] = useState(false);
+  const full = useCommitment(wantFull ? commitment.id : null);
+  const shown: Commitment = full.data?.entry ?? commitment;
   return (
     <li className="border-b border-border px-4 py-3 text-muted-foreground last:border-b-0">
       <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px]">
@@ -1183,8 +1189,21 @@ function ClosedRow({ commitment }: { commitment: Commitment }) {
           {formatDateTime(commitment.at)} → {formatDateTime(commitment.closedAt ?? '')}
         </span>
       </div>
-      <CommitmentBody commitment={commitment} />
-      <ClosedReasonBody commitment={commitment} />
+      <CommitmentBody commitment={shown} />
+      <ClosedReasonBody commitment={shown} />
+      {truncated && full.data === undefined && (
+        <div className="mt-1.5 flex items-center gap-2 text-[11px]">
+          {!wantFull ? (
+            <Button size="sm" onClick={() => setWantFull(true)}>
+              全文を見る
+            </Button>
+          ) : full.error !== undefined ? (
+            <span className="text-destructive">全文を読めなかった</span>
+          ) : (
+            <span>全文を読み込み中…</span>
+          )}
+        </div>
+      )}
     </li>
   );
 }
