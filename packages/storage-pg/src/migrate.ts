@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { writeStderrLine } from '@alteroid/core';
+import { collapseErrorCause, writeStderrLine } from '@alteroid/core';
 import { sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -585,6 +585,43 @@ export const STATEMENTS = [
    )`,
   `create index if not exists event_receipts_at_idx on event_receipts (at)`,
 ] as const;
+
+/** 人間への返答（`humanReplies`）だけを持つ部分索引（#5089） */
+export const JOURNAL_HUMAN_REPLIES_INDEX = 'journal_human_replies_idx';
+
+// 述語は `PgJournalStore.humanReplies` の絞りと同じ式にする: 違うと索引が使われない
+const CREATE_JOURNAL_HUMAN_REPLIES_INDEX = `create index concurrently if not exists ${JOURNAL_HUMAN_REPLIES_INDEX}
+   on journal (seq) where type = 'exchange' and (entry->>'with') = 'human' and (entry->>'role') = 'outbound'`;
+
+/**
+ * 人間への返答の部分索引を、書き込みを止めずに作る（#5089。`/progress`・`/commitments` の「返答済み」の判定の読み出しを縮める）。
+ * `STATEMENTS` に置かない: 日誌は大きく（本番で GB 級）、普通の `create index` は作り終わるまで日誌への書き込みを止める。
+ * デプロイの入れ替えでは旧デーモンが書き続けているので、`concurrently` で作る（トランザクションの外でしか打てないので `runMigrationStatement` は通さない）。
+ * 起動を待たせない: 呼び手は起き上がった後に待たずに呼ぶ。作り終わるまでは索引なしで今までどおり動く（遅いだけ）。
+ * 作りかけで落ちると無効（`indisvalid = false`）な索引が残るので、在っても無効なら消して作り直す。
+ * 投げない: 作れなくても遅いだけで正しさは変わらないので、警告を出して次の起動でやり直す。
+ */
+export async function ensureJournalHumanRepliesIndex(
+  db: Db,
+  warn: (line: string) => void = (line) => writeStderrLine(line),
+): Promise<void> {
+  try {
+    const result = await db.execute(
+      sql`select i.indisvalid as valid from pg_class c join pg_index i on i.indexrelid = c.oid where c.relname = ${JOURNAL_HUMAN_REPLIES_INDEX}`,
+    );
+    const found = rowsOf(result)[0] as { valid?: boolean } | undefined;
+    if (found?.valid === true) return;
+    if (found !== undefined) {
+      await db.execute(sql.raw(`drop index concurrently if exists ${JOURNAL_HUMAN_REPLIES_INDEX}`));
+    }
+    await db.execute(sql.raw(CREATE_JOURNAL_HUMAN_REPLIES_INDEX));
+  } catch (error) {
+    warn(
+      `alteroid: 日誌の索引 ${JOURNAL_HUMAN_REPLIES_INDEX} を作れなかった（${collapseErrorCause(error)}）。` +
+        '索引なしで動き続け（台帳の返答済みの判定が遅いだけ）、次の起動でやり直す（#5089）\n',
+    );
+  }
+}
 
 export const OPEN_MANAGER_BODY_INDEX = 'commitments_open_manager_body_idx';
 
