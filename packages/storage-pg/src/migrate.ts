@@ -657,6 +657,39 @@ export async function ensureJournalWithdrawalsIndex(
   }
 }
 
+/** 種別で絞った日誌を `seq` の順に頁で読むための索引 */
+export const JOURNAL_TYPE_SEQ_INDEX = 'journal_type_seq_idx';
+
+// 鍵を `(type, seq)` にする: 頁送りは `ORDER BY seq` と `seq` の継続点で進むので、`(type, at)` では頁ごとに種別の候補を全部拾って並べ直すため
+const CREATE_JOURNAL_TYPE_SEQ_INDEX = `create index concurrently if not exists ${JOURNAL_TYPE_SEQ_INDEX}
+   on journal (type, seq)`;
+
+/**
+ * 種別と `seq` の索引を、書き込みを止めずに作る（起動時の記憶の走査・日報・digest の頁送りを縮める）。
+ * 作り方・倒れ方は `ensureJournalHumanRepliesIndex` と同じ（`STATEMENTS` に置かない・`concurrently`・無効なら作り直す・投げない）。
+ */
+export async function ensureJournalTypeSeqIndex(
+  db: Db,
+  warn: (line: string) => void = (line) => writeStderrLine(line),
+): Promise<void> {
+  try {
+    const result = await db.execute(
+      sql`select i.indisvalid as valid from pg_class c join pg_index i on i.indexrelid = c.oid where c.relname = ${JOURNAL_TYPE_SEQ_INDEX}`,
+    );
+    const found = rowsOf(result)[0] as { valid?: boolean } | undefined;
+    if (found?.valid === true) return;
+    if (found !== undefined) {
+      await db.execute(sql.raw(`drop index concurrently if exists ${JOURNAL_TYPE_SEQ_INDEX}`));
+    }
+    await db.execute(sql.raw(CREATE_JOURNAL_TYPE_SEQ_INDEX));
+  } catch (error) {
+    warn(
+      `alteroid: 日誌の索引 ${JOURNAL_TYPE_SEQ_INDEX} を作れなかった（${collapseErrorCause(error)}）。` +
+        '索引なしで動き続け（種別で絞った日誌の頁送り（起動時の記憶の走査・日報・digest）が遅いだけ）、次の起動でやり直す\n',
+    );
+  }
+}
+
 export const OPEN_MANAGER_BODY_INDEX = 'commitments_open_manager_body_idx';
 
 // `STATEMENTS` に置かない: 既存の重複行が在ると作れず、起動のたびに通る配列でデーモンが上がらなくなる。
