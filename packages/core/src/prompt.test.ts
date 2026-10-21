@@ -111,7 +111,13 @@ describe('分類器に止められた後の巻き添え — 読むだけは道�
       expect(prompt).toContain(
         'ファイルの中身を読む・語を探す・ファイルを探すのは、Bash ではなく `Read`・`Grep`・`Glob` の道具を使うこと。',
       );
-      expect(prompt).toContain('`cd …;`・`bash -c "…"`・管で包まない');
+    }
+  });
+
+  it('形の歯を開けていない器では、Bash の書き方（包まない等）を載せない（運用スタイルを要件にしない）', () => {
+    for (const prompt of [manager, worker]) {
+      expect(prompt).not.toContain('包まない');
+      expect(prompt).not.toContain('`bash -c "…"`');
     }
   });
 
