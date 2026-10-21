@@ -12,6 +12,8 @@ import {
   readCgroupCpuThrottle,
   readCgroupMemoryEvents,
   readCgroupPressure,
+  readProcStatSteal,
+  readSelfSchedstat,
   startLoopStallWatch,
   type CpuThrottleSample,
   type LoopStall,
@@ -31,6 +33,8 @@ let threadpoolWait: ThreadpoolWait | undefined = { waitedMs: 3, settled: true };
 // 器の圧迫と memory.events（#4967）も偽にする。既定は読めない器
 let pressure: PressureSample | undefined;
 let memoryEvents: MemoryEventsSample | undefined;
+// steal と schedstat の既定の口は実物の /proc を読む（steal は実 I/O で、偽の時計では進まない）。ここでは読めない器にしておく
+const noProc = { readSteal: async () => undefined, readSchedstat: () => undefined };
 
 beforeEach(() => {
   threadpoolWait = { waitedMs: 3, settled: true };
@@ -50,6 +54,7 @@ beforeEach(() => {
     readPressure: async () => pressure,
     readMemoryEvents: async () => memoryEvents,
     // 実物の枠の待ちは実 I/O で、偽の時計では進まない
+    ...noProc,
     measureThreadpoolWait: async () => threadpoolWait,
     onStall: (stall) => stalls.push(stall),
   });
@@ -99,17 +104,213 @@ describe('loop-stall（#4485）', () => {
     expect(stall.heapUsedMb).toBeGreaterThan(0);
   });
 
+  describe('最も長い印の無い間（longestGap）と直前の印の経過', () => {
+    // 窓は from=500 から to=500+500+stall。印は during の中で偽の時計を進めて打つ
+    it('印と印の間が最も長いとき、afterLabel がその前の印で、始まりと長さが合う', async () => {
+      notePhase('test:before'); // now=0
+      await tick(); // from は 500
+      await stalledTick(4_000, () => {
+        now += 1_500;
+        notePhase('test:a'); // +1500
+        now += 2_000;
+        notePhase('test:b'); // +3500
+        now -= 3_500;
+      });
+      // 窓は +0 から +4500。区間: 0→1500, 1500→3500（最長 2000）, 3500→4500
+      expect(stalls[0]?.longestGap).toEqual({
+        startOffsetMs: 1_500,
+        gapMs: 2_000,
+        afterLabel: 'test:a',
+      });
+    });
+
+    it('最も長い間が from から始まるとき（窓の中に印が無い場合を含む）は afterLabel が無い', async () => {
+      await tick();
+      await stalledTick(2_000);
+      expect(stalls[0]?.longestGap).toEqual({ startOffsetMs: 0, gapMs: 2_500 });
+      expect(stalls[0]?.longestGap).not.toHaveProperty('afterLabel');
+
+      await tick();
+      await stalledTick(3_000, () => {
+        now += 3_000;
+        notePhase('test:late'); // +3000 の1点だけ。窓は +0 から +3500 なので 0→3000 が最長
+        now -= 3_000;
+      });
+      expect(stalls[1]?.longestGap).toEqual({ startOffsetMs: 0, gapMs: 3_000 });
+      expect(stalls[1]?.longestGap).not.toHaveProperty('afterLabel');
+    });
+
+    it('表示の上限（30本）を超える印があっても、切った後ろ側の印で区間が決まる', async () => {
+      await tick();
+      await stalledTick(4_000, () => {
+        for (let index = 1; index <= 33; index += 1) {
+          now += 10;
+          notePhase(`test:m${String(index)}`);
+        }
+        now -= 330;
+      });
+      const stall = stalls[0] as LoopStall;
+      expect(stall.phasesDuring).toHaveLength(30);
+      expect(stall.phasesOmitted).toBe(3);
+      // 区間は 33 本目（表示されない）から窓の終わりまで: 4500 - 330
+      expect(stall.longestGap).toEqual({
+        startOffsetMs: 330,
+        gapMs: 4_170,
+        afterLabel: 'test:m33',
+      });
+    });
+
+    it('phaseBeforeAgoMs は、見張りが最後に回った時刻から直前の印までの経過。印が無ければ欄ごと無い', async () => {
+      notePhase('test:old'); // now=0
+      await tick(); // from=500
+      await stalledTick(1_000);
+      const stall = stalls[0] as LoopStall;
+      expect(stall.phaseBefore).toBe('test:old');
+      expect(stall.phaseBeforeAgoMs).toBe(500);
+
+      stop?.();
+      stop = startLoopStallWatch({
+        intervalMs: 500,
+        thresholdMs: 1_000,
+        now: () => now,
+        cpuUsage: () => ({ ...cpu }),
+        readCpuThrottle: async () => throttle,
+        readPressure: async () => undefined,
+        readMemoryEvents: async () => undefined,
+        ...noProc,
+        measureThreadpoolWait: async () => threadpoolWait,
+        onStall: (s) => stalls.push(s),
+      });
+      await tick();
+      await stalledTick(1_000);
+      expect(stalls[1]).not.toHaveProperty('phaseBefore');
+      expect(stalls[1]).not.toHaveProperty('phaseBeforeAgoMs');
+    });
+
+    it('文の形: 直前の印に経過を添え、最も長い印の無い間を出し、窓に印が無くても直前の印の処理が犯人とは言わない', async () => {
+      notePhase('test:before'); // now=0
+      await tick();
+      await stalledTick(2_000, () => {
+        now += 1_000;
+        notePhase('test:a');
+        now -= 1_000;
+      });
+      const text = describeLoopStall(stalls[0] as LoopStall);
+      expect(text).toContain('直前の印: test:before（見張りが最後に回った時刻の 500ms 前）');
+      expect(text).toContain('最も長い印の無い間: +1000ms から 1500ms（その前の印: test:a）');
+
+      await tick();
+      await stalledTick(2_000);
+      const empty = describeLoopStall(stalls[1] as LoopStall);
+      expect(empty).toContain(
+        '最も長い印の無い間: +0ms から 2500ms（その前の印: 無い。見張りが回った後）',
+      );
+      expect(empty).toContain('窓の中で通った印は無い。');
+      expect(empty).toContain('印を打たない処理');
+      expect(empty).not.toContain('見込み');
+    });
+  });
+
+  describe('CPU の割合・steal・メインスレッドの schedstat', () => {
+    let stealTicks: number | undefined;
+    let sched: { runNs: number; waitNs: number } | undefined;
+
+    beforeEach(() => {
+      stealTicks = 100;
+      sched = { runNs: 1_000_000_000, waitNs: 0 };
+      stop?.();
+      stop = startLoopStallWatch({
+        intervalMs: 500,
+        thresholdMs: 1_000,
+        now: () => now,
+        cpuUsage: () => ({ ...cpu }),
+        readCpuThrottle: async () => throttle,
+        readPressure: async () => undefined,
+        readMemoryEvents: async () => undefined,
+        ...noProc,
+        measureThreadpoolWait: async () => threadpoolWait,
+        readSteal: async () => (stealTicks === undefined ? undefined : { stealTicks }),
+        readSchedstat: () => (sched === undefined ? undefined : { ...sched }),
+        onStall: (stall) => stalls.push(stall),
+      });
+    });
+
+    it('CPU が窓の 5% を超えれば「止まった」、以下なら「ほぼ眠っていた」と書き分ける', async () => {
+      await tick();
+      await stalledTick(2_000, () => {
+        cpu = { user: cpu.user + 1_200_000, system: 0 };
+      });
+      const busy = describeLoopStall(stalls[0] as LoopStall);
+      expect(busy).toContain('イベントループが 2000ms 止まった');
+      expect(busy).not.toContain('ほぼ眠っていた');
+
+      await tick();
+      await stalledTick(2_000, () => {
+        // 窓 2500ms の 2% = 50ms
+        cpu = { user: cpu.user + 40_000, system: 10_000 };
+      });
+      const asleep = describeLoopStall(stalls[1] as LoopStall);
+      expect(asleep).toContain('イベントループの見張りが 2000ms 遅れた');
+      expect(asleep).toContain('この間このプロセスはほぼ眠っていた（CPU は窓の 2.0%）');
+      expect(asleep).toContain('計算で塞いだのではなく');
+      expect(asleep).not.toContain('イベントループが 2000ms 止まった');
+    });
+
+    it('steal は「後」と「前」の差（USER_HZ=100 で ms）で、文に載る', async () => {
+      await tick();
+      await stalledTick(1_500, () => {
+        stealTicks = 130;
+      });
+      const stall = stalls[0] as LoopStall;
+      expect(stall.steal?.stealMs).toBe(300);
+      expect(stall.steal?.sinceMs).toBeGreaterThan(0);
+      expect(describeLoopStall(stall)).toMatch(/ホストに取られた CPU（steal、直近 \d+ms）: 300ms/);
+    });
+
+    it('steal が読めなければ欄も文も無い', async () => {
+      stealTicks = undefined;
+      await tick();
+      await stalledTick(1_500);
+      expect(stalls[0]).not.toHaveProperty('steal');
+      expect(describeLoopStall(stalls[0] as LoopStall)).not.toContain('ホストに取られた CPU');
+    });
+
+    it('メインスレッドの実行時間と実行待ちは、毎周の前回との差（ns を ms）で、読み分けの注記が付く', async () => {
+      await tick();
+      await stalledTick(1_500, () => {
+        sched = { runNs: 1_000_000_000 + 20_000_000, waitNs: 700_000_000 };
+      });
+      const stall = stalls[0] as LoopStall;
+      expect(stall.mainThread).toEqual({ runMs: 20, runQueueWaitMs: 700 });
+      const text = describeLoopStall(stall);
+      expect(text).toContain('メインスレッドの窓の中: 実行 20ms・実行待ち 700ms');
+      expect(text).toContain('実行待ちが窓に近ければ器の中の CPU の取り合い');
+      expect(text).toContain('steal が窓に近ければホストに取られていた');
+    });
+
+    it('schedstat が読めなければ欄も文も無い', async () => {
+      sched = undefined;
+      await tick();
+      await stalledTick(1_500);
+      expect(stalls[0]).not.toHaveProperty('mainThread');
+      expect(describeLoopStall(stalls[0] as LoopStall)).not.toContain('メインスレッドの窓の中');
+    });
+  });
+
   it('文言に、止まった長さ・直前の印・窓の中の印が無いこと・GC・CPU・器の絞り・ヒープが載る', async () => {
     notePhase('test:culprit');
     await tick();
-    await stalledTick(2_000);
+    // CPU を窓の半分ほど使った回にする: 眠っていた回は文の頭が変わる（下の「CPU の割合」の試験）
+    await stalledTick(2_000, () => {
+      cpu = { user: cpu.user + 1_200_000, system: 0 };
+    });
 
     const text = describeLoopStall(stalls[0] as LoopStall);
     expect(text).toContain('2000ms 止まった');
     expect(text).toContain('直前の印: test:culprit');
     expect(text).toContain('窓の中で通った印は無い');
     expect(text).toMatch(/窓の中の GC: \d+ 回・合計 \d+ms・最大 \d+ms/);
-    expect(text).toContain('窓 2500ms の中でこのプロセスが使った CPU: user 0ms・system 0ms');
+    expect(text).toContain('窓 2500ms の中でこのプロセスが使った CPU: user 1200ms・system 0ms');
     expect(text).toMatch(/器の CPU の絞り（直近 \d+ms）: 0ms・0 周期/);
     expect(text).toMatch(/ヒープ \d+\/\d+MB・RSS \d+MB/);
   });
@@ -141,6 +342,7 @@ describe('loop-stall（#4485）', () => {
       readCpuThrottle: async () => undefined,
       readPressure: async () => undefined,
       readMemoryEvents: async () => undefined,
+      ...noProc,
       measureThreadpoolWait: async () => threadpoolWait,
       onStall: (stall) => stalls.push(stall),
     });
@@ -168,6 +370,7 @@ describe('loop-stall（#4485）', () => {
       readCpuThrottle: async () => throttle,
       readPressure: async () => pressure,
       readMemoryEvents: async () => memoryEvents,
+      ...noProc,
       measureThreadpoolWait: async () => threadpoolWait,
       onStall: (stall) => stalls.push(stall),
     });
@@ -236,6 +439,7 @@ describe('loop-stall（#4485）', () => {
       readCpuThrottle: async () => throttle,
       readPressure: async () => undefined,
       readMemoryEvents: async () => undefined,
+      ...noProc,
       measureThreadpoolWait: async () => threadpoolWait,
       onStall: (stall) => stalls.push(stall),
     });
@@ -281,6 +485,7 @@ describe('loop-stall（#4485）', () => {
       readCpuThrottle: async () => throttle,
       readPressure: async () => undefined,
       readMemoryEvents: async () => undefined,
+      ...noProc,
       measureThreadpoolWait: async () => threadpoolWait,
       onStall: (stall) => stalls.push(stall),
     });
@@ -342,6 +547,27 @@ describe('readCgroupCpuThrottle', () => {
     expect(await readCgroupCpuThrottle(full)).toEqual({ throttledUsec: 123_456, nrThrottled: 7 });
     expect(await readCgroupCpuThrottle(partial)).toBeUndefined();
     expect(await readCgroupCpuThrottle(join(dir, 'missing'))).toBeUndefined();
+  });
+});
+
+describe('readProcStatSteal / readSelfSchedstat', () => {
+  it('/proc/stat の cpu 行の8番目（steal）を読む。無い・読めないときは undefined', async () => {
+    const dir = makeTempDirSync('alteroid-proc-stat-');
+    const file = join(dir, 'stat');
+    writeFileSync(file, 'cpu  10 20 30 400 5 6 7 89 0 0\ncpu0 1 2 3 4 5 6 7 8 0 0\n');
+    expect(await readProcStatSteal(file)).toEqual({ stealTicks: 89 });
+    const short = join(dir, 'short');
+    writeFileSync(short, 'cpu  10 20 30 400\n');
+    expect(await readProcStatSteal(short)).toBeUndefined();
+    expect(await readProcStatSteal(join(dir, 'missing'))).toBeUndefined();
+  });
+
+  it('/proc/self/schedstat の1つ目と2つ目を読む。読めなければ undefined', () => {
+    const dir = makeTempDirSync('alteroid-schedstat-');
+    const file = join(dir, 'schedstat');
+    writeFileSync(file, '123456 789 42\n');
+    expect(readSelfSchedstat(file)).toEqual({ runNs: 123_456, waitNs: 789 });
+    expect(readSelfSchedstat(join(dir, 'missing'))).toBeUndefined();
   });
 });
 

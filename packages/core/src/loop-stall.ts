@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PerformanceObserver, performance } from 'node:perf_hooks';
@@ -78,6 +79,26 @@ export interface LoopStall {
   readonly since: string;
   /** 止まり始めより前に最後に通った印。 */
   readonly phaseBefore?: string;
+  /**
+   * `phaseBefore` の印が、見張りが最後に回った時刻（窓の始め `from`）の何 ms 前だったか。`phaseBefore` が在るときだけ付く。
+   * `phaseBefore` は「止まり始めの直前の印」ではなく「`from` までに最後に通った印」なので、古い印が残っていないかをこれで見分ける。
+   */
+  readonly phaseBeforeAgoMs?: number;
+  /**
+   * 窓の始め `from`・窓の中の印の全部（`phasesDuring` の表示上限で切る前）・窓の終わりを時刻順に並べたとき、隣り合う2点の差が最も大きい区間。
+   * ループが止まっていた間は印を打つ処理も走れないので、止まっていた時間は必ずどれかの「印の無い区間」の中に入る。
+   * 最も長い区間がその置き場所で、区間の始まりの印の後に走った処理（印を打たない処理）が犯人の候補になる。
+   * 区間が `from` から始まるとき（窓の中に印が無い場合を含む）は `afterLabel` が無い: 見張りが回った後に印の無い処理が走ったということで、
+   * 直前の印（`phaseBefore`）の続きとは限らない。
+   */
+  readonly longestGap?: {
+    /** 区間の始まりの、`from` からの経過（ms、丸め）。 */
+    readonly startOffsetMs: number;
+    /** 区間の長さ（ms、丸め）。 */
+    readonly gapMs: number;
+    /** 区間の始まりにある印のラベル。区間が `from` から始まるときは無い。 */
+    readonly afterLabel?: string;
+  };
   /** 止まっていた窓の中で通った印（止まり始めからの経過 ms 付き。古い順）。 */
   readonly phasesDuring: readonly { readonly label: string; readonly offsetMs: number }[];
   /** 窓の中で通った印のうち、載せきれなかった本数。 */
@@ -139,6 +160,77 @@ export interface LoopStall {
    * `voluntaryContextSwitches` があれば、同期の I/O（`*Sync`）の待ち。`resourceUsage` の無い環境では無い。
    */
   readonly resourceUsage?: ResourceUsageDelta;
+  /**
+   * ホスト（VM の外）に CPU を取られた時間（`/proc/stat` 先頭の `cpu` 行の steal）の、直前の読み取りからの増分。読めない環境では無い。
+   * 器の中の物差し（cgroup の `cpu.stat` の絞り・PSI）は、VM の外で仮想 CPU が止められた時間を数えない。
+   * ゲストのカーネルは、その間を steal としてだけ数える。なので CPU も絞りも PSI も小さいまま止まった窓の、ホスト側の説明がこの欄にしか出ない。
+   * USER_HZ は 100（1 tick = 10ms）と見なして ms に直す。読み取りは数秒ごとなので、窓ぴったりではなく「窓を含む直近の数秒」である（`sinceMs`）。
+   */
+  readonly steal?: {
+    readonly sinceMs: number;
+    readonly stealMs: number;
+  };
+  /**
+   * メインスレッドの窓の中の実行時間と、実行可能なのに実行待ちの列で待った時間（`/proc/self/schedstat` の1つ目・2つ目の差。ns を ms に丸めたもの）。
+   * `process.cpuUsage()` はプロセス全体（ワーカー・GC のスレッドを含む）だが、これはメインスレッドだけを指す。読めない環境では無い。
+   */
+  readonly mainThread?: {
+    readonly runMs: number;
+    readonly runQueueWaitMs: number;
+  };
+}
+
+/**
+ * 窓の中の CPU（user + system）が窓の長さのこの割合以下なら、「計算で塞いだ」とは書かない。
+ * 計算で1秒以上塞いだなら CPU は窓の大半を占める。1 割にも満たない（本番で見た 1% 前後を含む）なら、プロセスは眠っていて、
+ * 塞いだのは計算ではない。5% は、見張りや GC など止まっていても動く小さな仕事の揺れより十分大きく、計算での停止より十分小さい値。
+ */
+export const ASLEEP_CPU_SHARE = 0.05;
+
+/** `/proc/stat` の先頭 `cpu` 行の steal（8番目の値。USER_HZ 単位）。 */
+export interface StealSample {
+  readonly stealTicks: number;
+}
+
+/** `/proc/self/schedstat` の1つ目（CPU で走った時間）と2つ目（実行待ちの時間）。単位は ns。 */
+export interface SchedstatSample {
+  readonly runNs: number;
+  readonly waitNs: number;
+}
+
+/** USER_HZ は 100 と見なす（Linux の `/proc/stat` の既定）。 */
+const MS_PER_USER_HZ_TICK = 10;
+
+/** `/proc/stat` の steal。読めない・欄が無ければ `undefined`。 */
+export async function readProcStatSteal(path = '/proc/stat'): Promise<StealSample | undefined> {
+  try {
+    const text = await readFile(path, 'utf8');
+    const line = text.split('\n').find((row) => row.startsWith('cpu '));
+    if (line === undefined) return undefined;
+    // `cpu user nice system idle iowait irq softirq steal …`: 空白で割ると 0 番目が `cpu`、steal は 8 番目
+    const fields = line.trim().split(/\s+/);
+    const steal = Number(fields[8]);
+    return fields[8] === undefined || !Number.isFinite(steal) ? undefined : { stealTicks: steal };
+  } catch {
+    return undefined;
+  }
+}
+
+/** `/proc/self/schedstat`（メインスレッド）を同期で読む。procfs の小さな読みで、ディスク I/O ではない。読めなければ `undefined`。 */
+export function readSelfSchedstat(path = '/proc/self/schedstat'): SchedstatSample | undefined {
+  try {
+    const [run, wait] = readFileSync(path, 'utf8').trim().split(/\s+/);
+    const runNs = Number(run);
+    const waitNs = Number(wait);
+    return run === undefined ||
+      wait === undefined ||
+      !Number.isFinite(runNs) ||
+      !Number.isFinite(waitNs)
+      ? undefined
+      : { runNs, waitNs };
+  } catch {
+    return undefined;
+  }
 }
 
 /** `process.resourceUsage()` の2点の差分のうち、止まりの切り分けに使う6つ。 */
@@ -198,6 +290,10 @@ export interface LoopStallWatchOptions {
   readonly readPressure?: () => Promise<PressureSample | undefined>;
   /** `memory.events` を読む口（#4967）。既定は {@link readCgroupMemoryEvents}。読めなければ `undefined`（欄ごと省く）。 */
   readonly readMemoryEvents?: () => Promise<MemoryEventsSample | undefined>;
+  /** ホストに取られた CPU（steal）を読む口。既定は {@link readProcStatSteal}。読めなければ `undefined`（欄ごと省く）。 */
+  readonly readSteal?: () => Promise<StealSample | undefined>;
+  /** メインスレッドの schedstat を同期で読む口（毎周、`cpuUsage` と同じく前回との差を取る）。既定は {@link readSelfSchedstat}。 */
+  readonly readSchedstat?: () => SchedstatSample | undefined;
   /** スレッドの枠の待ちを測る口。試験で差し替える。既定は {@link measureThreadpoolWait}。 */
   readonly measureThreadpoolWait?: () => Promise<ThreadpoolWait | undefined>;
 }
@@ -340,6 +436,29 @@ function diffMemoryEvents(
   };
 }
 
+function diffSteal(
+  before: { at: number; sample: StealSample } | undefined,
+  after: StealSample | undefined,
+  nowMs: number,
+): LoopStall['steal'] {
+  if (before === undefined || after === undefined) return undefined;
+  return {
+    sinceMs: Math.round(nowMs - before.at),
+    stealMs: Math.max(0, after.stealTicks - before.sample.stealTicks) * MS_PER_USER_HZ_TICK,
+  };
+}
+
+function diffSchedstat(
+  before: SchedstatSample | undefined,
+  after: SchedstatSample | undefined,
+): LoopStall['mainThread'] {
+  if (before === undefined || after === undefined) return undefined;
+  return {
+    runMs: Math.round(Math.max(0, after.runNs - before.runNs) / 1e6),
+    runQueueWaitMs: Math.round(Math.max(0, after.waitNs - before.waitNs) / 1e6),
+  };
+}
+
 /** 見張りを始める。返り値で止める。タイマーは unref するので、これだけでプロセスを引き止めない。 */
 export function startLoopStallWatch(options: LoopStallWatchOptions): () => void {
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
@@ -350,6 +469,8 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
   const readPressure = options.readPressure ?? (() => readCgroupPressure());
   const readMemoryEvents = options.readMemoryEvents ?? (() => readCgroupMemoryEvents());
   const measureWait = options.measureThreadpoolWait ?? (() => measureThreadpoolWait());
+  const readSteal = options.readSteal ?? (() => readProcStatSteal());
+  const readSchedstat = options.readSchedstat ?? (() => readSelfSchedstat());
   clock = options.now ?? defaultClock;
   // 始める前の印は捨てる: 別の時計で打った印が窓に紛れ込まないため
   phases.length = 0;
@@ -398,9 +519,26 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
         samplingExtra = false;
       });
   };
+  // steal も同じ周期で読んでおく
+  let lastSteal: { at: number; sample: StealSample } | undefined;
+  let samplingSteal = false;
+  const sampleSteal = (): void => {
+    if (samplingSteal) return;
+    samplingSteal = true;
+    const at = clock();
+    void readSteal()
+      .catch(() => undefined)
+      .then((sample) => {
+        if (sample !== undefined) lastSteal = { at, sample };
+      })
+      .finally(() => {
+        samplingSteal = false;
+      });
+  };
   const sampleAll = (): void => {
     sampleThrottle();
     sampleExtra();
+    sampleSteal();
   };
   sampleAll();
   const throttleTimer = setInterval(
@@ -412,6 +550,7 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
   let last = clock();
   let lastCpu = cpuUsage();
   let lastRusage = resourceUsage();
+  let lastSched = readSchedstat();
   const timer = setInterval(() => {
     const now = clock();
     const from = last;
@@ -427,17 +566,24 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
         ? undefined
         : diffResourceUsage(lastRusage, rusage);
     lastRusage = rusage;
+    // これも毎周（同期で軽い）: メインスレッドの実行と実行待ちの窓の始めは、止まり始めの直前の周でしか取れない
+    const sched = readSchedstat();
+    const mainThread = diffSchedstat(lastSched, sched);
+    lastSched = sched;
     const stalledMs = now - from - intervalMs;
     if (stalledMs < thresholdMs) return;
     const before = lastThrottle;
     const beforePressure = lastPressure;
     const beforeEvents = lastMemoryEvents;
+    const beforeSteal = lastSteal;
     const settle = setTimeout(() => {
       void Promise.all([
         readCpuThrottle().catch(() => undefined),
         readPressure().catch(() => undefined),
         readMemoryEvents().catch(() => undefined),
-      ]).then(async ([after, afterPressure, afterEvents]) => {
+        readSteal().catch(() => undefined),
+      ]).then(async ([after, afterPressure, afterEvents, afterSteal]) => {
+        const steal = diffSteal(beforeSteal, afterSteal, clock());
         const pressure = diffPressure(beforePressure, afterPressure, clock());
         const memoryEvents = diffMemoryEvents(beforeEvents, afterEvents, clock());
         const threadpoolWait = await measureWait().catch(() => undefined);
@@ -457,6 +603,8 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
           ...(memoryEvents === undefined ? {} : { memoryEvents }),
           ...(threadpoolWait === undefined ? {} : { threadpoolWait }),
           ...(rusageDelta === undefined ? {} : { resourceUsage: rusageDelta }),
+          ...(steal === undefined ? {} : { steal }),
+          ...(mainThread === undefined ? {} : { mainThread }),
         });
       });
     }, GC_SETTLE_MS);
@@ -504,19 +652,46 @@ function summarize(
   throttle: LoopStall['throttle'],
 ): LoopStall {
   let phaseBefore: string | undefined;
+  let phaseBeforeAt: number | undefined;
   const during: { label: string; offsetMs: number }[] = [];
+  // 表示上限で切る前の全部の印から、最も長い印の無い間を求める（始まりの点は `from`）
+  let gapStart = from;
+  let gapStartLabel: string | undefined;
+  let longest: { start: number; gap: number; label: string | undefined } = {
+    start: from,
+    gap: -1,
+    label: undefined,
+  };
+  const closeGap = (end: number): void => {
+    const gap = end - gapStart;
+    if (gap > longest.gap) longest = { start: gapStart, gap, label: gapStartLabel };
+  };
   for (const mark of phases) {
-    if (mark.at <= from) phaseBefore = mark.label;
-    else if (mark.at <= to)
+    if (mark.at <= from) {
+      phaseBefore = mark.label;
+      phaseBeforeAt = mark.at;
+    } else if (mark.at <= to) {
       during.push({ label: mark.label, offsetMs: Math.round(mark.at - from) });
+      closeGap(mark.at);
+      gapStart = mark.at;
+      gapStartLabel = mark.label;
+    }
   }
+  closeGap(to);
   const shown = during.slice(0, PHASES_SHOWN);
   const inWindow = gcs.filter((gc) => gc.at + gc.durationMs > from && gc.at <= to);
   const memory = process.memoryUsage();
   return {
     stalledMs: Math.round(stalledMs),
     since: new Date(Date.now() - Math.round(clock() - from)).toISOString(),
-    ...(phaseBefore === undefined ? {} : { phaseBefore }),
+    ...(phaseBefore === undefined || phaseBeforeAt === undefined
+      ? {}
+      : { phaseBefore, phaseBeforeAgoMs: Math.round(from - phaseBeforeAt) }),
+    longestGap: {
+      startOffsetMs: Math.round(longest.start - from),
+      gapMs: Math.round(longest.gap),
+      ...(longest.label === undefined ? {} : { afterLabel: longest.label }),
+    },
     phasesDuring: shown,
     phasesOmitted: during.length - shown.length,
     gcCount: inWindow.length,
@@ -575,21 +750,53 @@ function describeMemoryEvents(events: LoopStall['memoryEvents']): string {
 export function describeLoopStall(stall: LoopStall): string {
   const during =
     stall.phasesDuring.length === 0
-      ? '（窓の中で通った印は無い＝直前の印の処理が止めていた見込み）'
+      ? '（窓の中で通った印は無い。止めたのは、印を打たない処理（タイマー・GC・SDK の流れなど）か、直前の印の後の続きのどちらか）'
       : stall.phasesDuring.map((mark) => `${mark.label}@+${String(mark.offsetMs)}ms`).join(' → ') +
         (stall.phasesOmitted > 0 ? ` …ほか ${String(stall.phasesOmitted)} 本` : '');
   const throttle =
     stall.throttle === undefined
       ? '器の CPU の絞り: 読めない。'
       : `器の CPU の絞り（直近 ${String(stall.throttle.sinceMs)}ms）: ${String(stall.throttle.throttledMs)}ms・${String(stall.throttle.periods)} 周期。`;
+  const before =
+    stall.phaseBefore === undefined
+      ? '（無い）'
+      : stall.phaseBeforeAgoMs === undefined
+        ? stall.phaseBefore
+        : `${stall.phaseBefore}（見張りが最後に回った時刻の ${String(stall.phaseBeforeAgoMs)}ms 前）`;
+  const gap =
+    stall.longestGap === undefined
+      ? ''
+      : `最も長い印の無い間: +${String(stall.longestGap.startOffsetMs)}ms から ${String(stall.longestGap.gapMs)}ms` +
+        `（その前の印: ${stall.longestGap.afterLabel ?? '無い。見張りが回った後'}）。`;
+  const cpuShare =
+    stall.windowMs > 0 ? (stall.cpuUserMs + stall.cpuSystemMs) / stall.windowMs : undefined;
+  const head =
+    cpuShare !== undefined && cpuShare <= ASLEEP_CPU_SHARE
+      ? `イベントループの見張りが ${String(stall.stalledMs)}ms 遅れた（${stall.since} から）。` +
+        `この間このプロセスはほぼ眠っていた（CPU は窓の ${(cpuShare * 100).toFixed(1)}%）: ` +
+        '計算で塞いだのではなく、器ごと止められたか、CPU をもらえなかったか、計り方の側の遅れ。'
+      : `イベントループが ${String(stall.stalledMs)}ms 止まった（${stall.since} から）。`;
+  const steal =
+    stall.steal === undefined
+      ? ''
+      : `ホストに取られた CPU（steal、直近 ${String(stall.steal.sinceMs)}ms）: ${String(stall.steal.stealMs)}ms。`;
+  const mainThread =
+    stall.mainThread === undefined
+      ? ''
+      : `メインスレッドの窓の中: 実行 ${String(stall.mainThread.runMs)}ms・実行待ち ${String(stall.mainThread.runQueueWaitMs)}ms` +
+        '（読み方: 実行待ちが窓に近ければ器の中の CPU の取り合い。steal が窓に近ければホストに取られていた。' +
+        'どちらも小さく CPU も小さければ、スレッドは眠っていてタイマーが遅れて起きた＝器の一時停止か計り方の側）。';
   return (
-    `イベントループが ${String(stall.stalledMs)}ms 止まった（${stall.since} から）。` +
-    `直前の印: ${stall.phaseBefore ?? '（無い）'}。窓の中の印: ${during}。` +
+    head +
+    `直前の印: ${before}。窓の中の印: ${during}。` +
+    gap +
     `窓の中の GC: ${String(stall.gcCount)} 回・合計 ${String(stall.gcTotalMs)}ms・最大 ${String(stall.gcMaxMs)}ms。` +
     `窓 ${String(stall.windowMs)}ms の中でこのプロセスが使った CPU: user ${String(stall.cpuUserMs)}ms・system ${String(stall.cpuSystemMs)}ms。` +
     throttle +
     describePressure(stall.pressure) +
     describeMemoryEvents(stall.memoryEvents) +
+    steal +
+    mainThread +
     `${describeThreadpoolWait(stall.threadpoolWait)}。` +
     describeResourceUsage(stall.resourceUsage) +
     `ヒープ ${String(stall.heapUsedMb)}/${String(stall.heapTotalMb)}MB・RSS ${String(stall.rssMb)}MB。`
