@@ -8,11 +8,12 @@ import {
   constants as fsConstants,
   lstatSync,
   mkdirSync,
+  renameSync,
   rmSync,
 } from 'node:fs';
 import { lstat, open, readdir, rm, rmdir, stat, unlink, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { extname, join, resolve, sep } from 'node:path';
+import { dirname, extname, join, resolve, sep } from 'node:path';
 import type { Readable } from 'node:stream';
 
 import {
@@ -94,6 +95,41 @@ export function ensureOwnDirectorySync(
   chmodSync(path, mode);
 }
 
+/**
+ * 根（`/tmp` の決まった名前）を自分の持ち物として確保する。
+ * 他人が先に同じ名前を取っていたら、投げ続けずに別名へ退けて作り直す: 投げ続けると器の作り直しまでその器の添付が全部止まるため。
+ * 退けるだけで中身は読まない・消さない: 調べられるよう残すのと、root が他人の持ち物を辿らないため（`rename` は symlink を辿らない）。
+ * 作り直しは recursive にしない: `EEXIST` は退けた隙に他人が作ったということなので、`assertOwnDirectorySync` に投げさせる。
+ */
+export function claimRunnerRootDirectorySync(
+  path: string,
+  mode: number,
+  options: { ownUid?: number | undefined } = {},
+): { movedAsideTo: string | null } {
+  mkdirSync(dirname(path), { recursive: true });
+  const uid = 'ownUid' in options ? options.ownUid : ownUid();
+  let movedAsideTo: string | null = null;
+  const info = lstatSync(path, { throwIfNoEntry: false });
+  if (info !== undefined) {
+    const mine =
+      !info.isSymbolicLink() && info.isDirectory() && (uid === undefined || info.uid === uid);
+    if (mine) {
+      chmodSync(path, mode);
+      return { movedAsideTo };
+    }
+    movedAsideTo = `${path}.foreign-${Date.now()}-${randomBytes(4).toString('hex')}`;
+    renameSync(path, movedAsideTo);
+  }
+  try {
+    mkdirSync(path, { mode });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  assertOwnDirectorySync(path);
+  chmodSync(path, mode);
+  return { movedAsideTo };
+}
+
 export interface PrepareManagerOutboxOptions {
   readonly root: string;
   readonly managerId: string;
@@ -107,7 +143,7 @@ export function prepareManagerOutbox(options: PrepareManagerOutboxOptions): stri
   }
   const base = resolve(options.root);
   // 担い手が自分の dir を辿れるように root だけは x を付ける。r を付けない: 他の委譲の出し箱を列挙させない
-  ensureOwnDirectorySync(base, 0o711, { recursive: true });
+  claimRunnerRootDirectorySync(base, 0o711);
   const dir = resolve(base, managerId);
   ensureOwnDirectorySync(dir, childGid === undefined ? 0o700 : 0o2770, {
     ...(childGid === undefined ? {} : { childGid }),
@@ -335,7 +371,7 @@ export async function collectManagerOutbox(
   const names = (await readdir(dir)).sort();
   if (names.length === 0) return { files: [], rejectedFiles: [] };
 
-  ensureOwnDirectorySync(resolve(stagedRoot), 0o700, { recursive: true });
+  claimRunnerRootDirectorySync(resolve(stagedRoot), 0o700);
   const stagedDir = resolve(stagedRoot, managerId);
   ensureOwnDirectorySync(stagedDir, 0o700);
   // 大きいファイルは別の予算: 1報告の合計は1つの上限（`maxLargeFileBytes`）、退避先はその `LARGE_STAGED_BUDGET_FACTOR` 倍。

@@ -5,6 +5,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rm,
   stat,
   symlink,
   utimes,
@@ -19,6 +20,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import {
+  claimRunnerRootDirectorySync,
   collectManagerOutbox,
   openStagedOutboxFile,
   outboxCollectFailureRefusals,
@@ -66,13 +68,15 @@ describe('prepareManagerOutbox の権限', () => {
     expect(info.gid).toBe(gid);
   });
 
-  it('root が symlink なら用意しない', async () => {
+  // 以前は「root が symlink なら用意しない（投げる）」だった。#5134 で、投げ続けて添付が止まるより別名へ退けて作り直す側へ反転した。
+  // 保証は弱めていない: symlink を辿らず、指す先に何も作らない・書かない点は変わらない。
+  it('root が symlink なら辿らずに退けて用意する（指す先には何も作らない）', async () => {
     const parent = await makeTempDir('runner-outbox-');
     const target = await makeTempDir('runner-outbox-target-');
     await symlink(target, join(parent, 'box'));
-    expect(() => prepareManagerOutbox({ root: join(parent, 'box'), managerId: MANAGER })).toThrow(
-      /実在の dir でない/,
-    );
+    const dir = prepareManagerOutbox({ root: join(parent, 'box'), managerId: MANAGER });
+    expect((await lstat(dir)).isDirectory()).toBe(true);
+    expect((await lstat(join(parent, 'box'))).isSymbolicLink()).toBe(false);
     expect(await readdir(target)).toEqual([]);
   });
 });
@@ -342,6 +346,93 @@ describe('退避先の取得・削除・掃除', () => {
     );
     await expect(stat(join(root, 'mgr-a'))).resolves.toBeTruthy();
     await expect(stat(join(root, 'mgr-b'))).rejects.toThrow();
+  });
+});
+
+describe('claimRunnerRootDirectorySync（#5134）', () => {
+  const realUid = process.getuid?.() ?? 0;
+  const foreignOf = async (parent: string, name: string): Promise<string[]> =>
+    (await readdir(parent)).filter((entry) => entry.startsWith(`${name}.foreign-`));
+
+  it('自分以外の uid の dir が根に在れば、別名へ退けて自分の dir を作り直し、中身は残す', async () => {
+    const parent = await makeTempDir('runner-root-claim-');
+    const root = join(parent, 'box');
+    await mkdir(root);
+    await writeFile(join(root, 'squatter.txt'), '先に居た担い手の置き物');
+
+    const result = claimRunnerRootDirectorySync(root, 0o700, { ownUid: realUid + 1 });
+
+    const [foreign] = await foreignOf(parent, 'box');
+    expect(foreign).toMatch(/^box\.foreign-\d+-[0-9a-f]{8}$/);
+    expect(result.movedAsideTo).toBe(join(parent, foreign!));
+    expect(await readFile(join(parent, foreign!, 'squatter.txt'), 'utf8')).toBe(
+      '先に居た担い手の置き物',
+    );
+    expect(await readdir(root)).toEqual([]);
+    expect((await stat(root)).mode & 0o777).toBe(0o700);
+  });
+
+  it('根が symlink なら辿らずに退け、指す先は無傷のまま自分の dir を作る', async () => {
+    const parent = await makeTempDir('runner-root-claim-');
+    const target = await makeTempDir('runner-root-claim-target-');
+    await writeFile(join(target, 'keep.txt'), 'そのまま');
+    await symlink(target, join(parent, 'box'));
+
+    const result = claimRunnerRootDirectorySync(join(parent, 'box'), 0o711);
+
+    expect(result.movedAsideTo).not.toBeNull();
+    expect((await lstat(result.movedAsideTo!)).isSymbolicLink()).toBe(true);
+    expect(await readdir(target)).toEqual(['keep.txt']);
+    expect((await lstat(join(parent, 'box'))).isDirectory()).toBe(true);
+    expect((await stat(join(parent, 'box'))).mode & 0o777).toBe(0o711);
+  });
+
+  it('根がファイルでも退けて自分の dir を作る', async () => {
+    const parent = await makeTempDir('runner-root-claim-');
+    await writeFile(join(parent, 'box'), 'file');
+
+    const result = claimRunnerRootDirectorySync(join(parent, 'box'), 0o700);
+
+    expect(await readFile(result.movedAsideTo!, 'utf8')).toBe('file');
+    expect((await lstat(join(parent, 'box'))).isDirectory()).toBe(true);
+  });
+
+  it('自分の持ち物の dir なら退けずにそのまま使う（中身もそのまま）', async () => {
+    const parent = await makeTempDir('runner-root-claim-');
+    const root = join(parent, 'box');
+    await mkdir(root, { mode: 0o755 });
+    await writeFile(join(root, 'mine.txt'), '自分の');
+
+    const result = claimRunnerRootDirectorySync(root, 0o700);
+
+    expect(result).toEqual({ movedAsideTo: null });
+    expect(await readdir(root)).toEqual(['mine.txt']);
+    expect((await stat(root)).mode & 0o777).toBe(0o700);
+    expect(await foreignOf(parent, 'box')).toEqual([]);
+  });
+
+  it('根が無ければ親ごと作る', async () => {
+    const parent = await makeTempDir('runner-root-claim-');
+    const root = join(parent, 'a', 'b');
+    expect(claimRunnerRootDirectorySync(root, 0o700)).toEqual({ movedAsideTo: null });
+    expect((await stat(root)).isDirectory()).toBe(true);
+  });
+
+  it('collectManagerOutbox: 退避先の根が自分の持ち物でなくても、退けて取り込みが成功する', async () => {
+    const { dir, stagedRoot, collect } = await setup();
+    const squatted = await makeTempDir('runner-root-claim-squat-');
+    await rm(stagedRoot, { recursive: true });
+    await symlink(squatted, stagedRoot);
+    await writeFile(join(dir, 'result.txt'), '成果物');
+
+    const collected = await collect();
+
+    expect(collected.rejectedFiles).toEqual([]);
+    expect(collected.files).toHaveLength(1);
+    expect(await readdir(squatted)).toEqual([]);
+    expect(await readFile(join(stagedRoot, MANAGER, collected.files[0]!.fileId), 'utf8')).toBe(
+      '成果物',
+    );
   });
 });
 

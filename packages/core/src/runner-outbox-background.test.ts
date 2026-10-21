@@ -84,14 +84,16 @@ async function startHost(
   await host.start({ managerId, request: '依頼', cwd: '/workspace' });
 }
 
-// 退避先の root を symlink にして、取り込み（`collectManagerOutbox`）そのものを投げさせる
-async function brokenStagedRoot(prefix: string): Promise<string> {
+// 担当の退避先を symlink にして、取り込み（`collectManagerOutbox`）そのものを投げさせる
+// （root の symlink は #5134 で退けて作り直すようになったので、投げるのは担当ごとの dir 側）
+async function brokenStagedRoot(prefix: string, managerId: string): Promise<string> {
   const base = await makeTempDir(prefix);
   const target = join(base, 'real');
   await mkdir(target);
-  const link = join(base, 'staged');
-  await symlink(target, link);
-  return link;
+  const staged = join(base, 'staged');
+  await mkdir(staged);
+  await symlink(target, join(staged, managerId));
+  return staged;
 }
 
 describe('Host: 背景処理が残るターンの出し箱', () => {
@@ -120,7 +122,7 @@ describe('Host: 背景処理が残るターンの出し箱', () => {
     '⭐ $label で出し箱を取り込めなかったら、置かれた名前ごとの理由を報告に載せる（note だけで黙らない）',
     async ({ background }) => {
       const outboxRoot = await makeTempDir('runner-outbox-fail-');
-      const outboxStagedRoot = await brokenStagedRoot('runner-outbox-fail-staged-');
+      const outboxStagedRoot = await brokenStagedRoot('runner-outbox-fail-staged-', 'mgr-fail');
       const events: RunnerEvent[] = [];
       const outboxDir = join(outboxRoot, 'mgr-fail');
       const fake = fakeSdk(

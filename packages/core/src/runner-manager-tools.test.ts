@@ -87,6 +87,9 @@ function hostWith(
     }),
     codexHome: makeTempDirSync('alteroid-runner-manager-tools-codex-'),
     ...(managerTools === undefined ? {} : { managerTools }),
+    // 既定の `/tmp/alteroid-*` は本物の runner が使うので、取り込み・預かりの経路を通っても書かせない
+    outboxStagedRoot: makeTempDirSync('alteroid-runner-manager-tools-outbox-staged-'),
+    rescueStagedRoot: makeTempDirSync('alteroid-runner-manager-tools-rescue-staged-'),
     ...extra,
   });
   return { host, sdk, events };

@@ -7,7 +7,7 @@ import { isAbsolute, join, resolve, sep } from 'node:path';
 import { codePointBoundary } from './excerpt.js';
 import { credentialSourceRefusal, resolveCredentialSources } from './file-put.js';
 import { secretPatternsInBody } from './redact.js';
-import { ensureOwnDirectorySync } from './runner-outbox.js';
+import { claimRunnerRootDirectorySync, ensureOwnDirectorySync } from './runner-outbox.js';
 import { isSafeRunnerSegment } from './runner-attachments.js';
 import type { RunnerRescueFile, RunnerRescueSkipped } from './runner-protocol.js';
 
@@ -178,7 +178,7 @@ export async function stashUntrackedFiles(
   for (const known of [...tree.settled.keys()]) if (!present.has(known)) tree.settled.delete(known);
   if (names.length === 0) return { files, skipped };
 
-  ensureOwnDirectorySync(resolve(options.stagedRoot), 0o700, { recursive: true });
+  claimRunnerRootDirectorySync(resolve(options.stagedRoot), 0o700);
   const stagedDir = resolve(options.stagedRoot, options.managerId);
   ensureOwnDirectorySync(stagedDir, 0o700);
   let stagedBytes = await stagedBytesOf(stagedDir);
