@@ -1174,6 +1174,18 @@ const SELF_STATUS_PEER_REACH_BUDGET = 1600;
 
 const RUNNER_MANAGER_PEERS_EXCERPT = 400;
 
+// 内訳が無い（古い runner・材料を渡さない構成）ときは合計だけを出す: 内訳を0に潰さないため
+function describeUnrecognised(
+  total: number,
+  split: { ownerLive: number; ownerListed: number; ownerUnknown: number } | undefined,
+): string {
+  if (split === undefined) return `sid 未認識 ${total}`;
+  return (
+    `sid 未認識 ${total}（持ち主が生きている ${split.ownerLive}・` +
+    `持ち主が名簿に居るので守っている ${split.ownerListed}・持ち主不明 ${split.ownerUnknown}）`
+  );
+}
+
 // `formatElapsed` と共通化しない: 分の位まで丸めると、ゾンビが何時間経っているかが見えなくなるため
 function describeZombieAge(seconds: number): string {
   if (seconds < 60) return `${seconds}秒前`;
@@ -10055,7 +10067,10 @@ export function createCloneTools(context: ToolContext) {
                           `sid 不明 ${outsideRoots.bySid.sidUnknown} / ` +
                           `sid が live ${outsideRoots.bySid.sidLive} / ` +
                           `sid の長が残存 ${outsideRoots.bySid.sidLeaderPresent} / ` +
-                          `sid 未認識 ${outsideRoots.bySid.sidUnrecognised}`;
+                          describeUnrecognised(
+                            outsideRoots.bySid.sidUnrecognised,
+                            outsideRoots.bySid.unrecognisedBy,
+                          );
                     lines.push(
                       `    孤児ルート外: ${outsideRoots.total}（うち親が生存 ` +
                         `${outsideRoots.parentInScan}。孤児ルートの部分木に入らず、撃つ判定に掛からない）` +
@@ -10065,7 +10080,7 @@ export function createCloneTools(context: ToolContext) {
                       lines.push(
                         `    hold（候補のうち撃たなかった理由）: sid 不明 ${held.sidUnknown} / ` +
                           `sid が live ${held.sidLive} / sid の長が残存 ${held.sidLeaderPresent} / ` +
-                          `sid 未認識 ${held.sidUnrecognised}`,
+                          describeUnrecognised(held.sidUnrecognised, held.unrecognisedBy),
                       );
                     } else {
                       lines.push(
@@ -10080,6 +10095,15 @@ export function createCloneTools(context: ToolContext) {
                   }
                 }
               }
+            }
+            // `pids` の読めた・読めないとは独立した材料: 欄が無い（古い runner）ときは行を出さない
+            const ownerRecords = runner.resources?.pidOwnerRecords;
+            if (ownerRecords !== undefined) {
+              lines.push(
+                `  持ち主の記録 ${ownerRecords.remembered.toLocaleString('en-US')}/` +
+                  `${ownerRecords.cap.toLocaleString('en-US')}・` +
+                  `上限で忘れた累計 ${ownerRecords.forgottenTotal.toLocaleString('en-US')}`,
+              );
             }
           }
           blocks.push(lines.join('\n'));

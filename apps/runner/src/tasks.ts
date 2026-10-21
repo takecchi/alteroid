@@ -50,7 +50,11 @@ export interface ReclaimScanOptions {
 
 export type ReclaimSessionView = Pick<
   ReclaimReapOptions,
-  'liveSessionPidsOf' | 'knownTerminatedSessionPidsOf' | 'anyTrackedDelegationsOf' | 'graceMs'
+  | 'liveSessionPidsOf'
+  | 'knownTerminatedSessionPidsOf'
+  | 'ownerListedSessionPidsOf'
+  | 'anyTrackedDelegationsOf'
+  | 'graceMs'
 >;
 
 export interface ReclaimHeldCounts {
@@ -60,13 +64,20 @@ export interface ReclaimHeldCounts {
   sidUnrecognised: number;
 }
 
+// 合計は `sidUnrecognised` と一致する。数えるだけで、撃つ判定には使わない（#5157）。
+export interface UnrecognisedOwnerSplit {
+  ownerLive: number;
+  ownerListed: number;
+  ownerUnknown: number;
+}
+
 export interface ReclaimNotFired {
   outsideRoots: {
     total: number;
     parentInScan: number;
-    bySid?: ReclaimHeldCounts & { wouldFire: number };
+    bySid?: ReclaimHeldCounts & { wouldFire: number; unrecognisedBy?: UnrecognisedOwnerSplit };
   };
-  held?: ReclaimHeldCounts;
+  held?: ReclaimHeldCounts & { unrecognisedBy?: UnrecognisedOwnerSplit };
   observeOnly?: number;
 }
 
@@ -75,6 +86,8 @@ export interface ReclaimReapOptions {
   liveSessionPidsOf: () => ReadonlySet<number>;
   // runner プロセスを跨いで持ち越さない: 作り直し直後の古い孤児は「記憶に無い」側に落とし、撃たないため。
   knownTerminatedSessionPidsOf: () => ReadonlySet<number>;
+  // 持ち主が名簿に居るので `knownTerminated` に入れていない CLI の pid。観測の内訳にだけ使い、撃つ判定には渡さない。省略は「内訳を出さない」（0に潰さない）。
+  ownerListedSessionPidsOf?: () => ReadonlySet<number>;
   // `liveSessionPidsOf()` の大きさで代用しない: `childUser` 無しの構成では常に空集合で、生きた委譲があっても分岐1が撃ってしまうため。省略時は安全側の `true`。
   anyTrackedDelegationsOf?: () => boolean;
   graceMs?: number;
@@ -400,6 +413,23 @@ async function observeReclaim(
     );
   const firesVerdict = (verdict: ReapVerdict): boolean =>
     verdict === 'fireNoDelegations' ? reclaim.reap !== undefined : isFireVerdict(verdict);
+  // 内訳は材料が渡った回だけ数える: 無い回を0に潰すと「持ち主不明が0」と読めるため。
+  const ownerListedSessionPids = view?.ownerListedSessionPidsOf?.();
+  const heldUnrecognisedBy =
+    ownerListedSessionPids === undefined ? undefined : emptyUnrecognisedSplit();
+  const outsideUnrecognisedBy =
+    ownerListedSessionPids === undefined ? undefined : emptyUnrecognisedSplit();
+  const noteUnrecognised = (split: UnrecognisedOwnerSplit | undefined, entry: ScannedProcess) => {
+    if (split === undefined || ownerListedSessionPids === undefined) return;
+    split[
+      unrecognisedOwnerKindOf(
+        entry,
+        attributions.get(entry.pid),
+        liveSessionPids,
+        ownerListedSessionPids,
+      )
+    ] += 1;
+  };
 
   let candidates = 0;
   let candidateThreads = 0;
@@ -443,6 +473,7 @@ async function observeReclaim(
             }
           } else {
             held[verdict] += 1;
+            if (verdict === 'sidUnrecognised') noteUnrecognised(heldUnrecognisedBy, entry);
           }
         }
       }
@@ -467,7 +498,10 @@ async function observeReclaim(
     if (view !== undefined) {
       const verdict = verdictOf(entry);
       if (isFireVerdict(verdict)) outsideBySid.wouldFire += 1;
-      else outsideBySid[verdict] += 1;
+      else {
+        outsideBySid[verdict] += 1;
+        if (verdict === 'sidUnrecognised') noteUnrecognised(outsideUnrecognisedBy, entry);
+      }
     }
   }
 
@@ -500,8 +534,26 @@ async function observeReclaim(
     freedThreads: fired.freedThreads,
     lastRunAt: nowMs,
     notFired: {
-      outsideRoots: view === undefined ? outsideRoots : { ...outsideRoots, bySid: outsideBySid },
-      ...(view === undefined ? {} : { held }),
+      outsideRoots:
+        view === undefined
+          ? outsideRoots
+          : {
+              ...outsideRoots,
+              bySid: {
+                ...outsideBySid,
+                ...(outsideUnrecognisedBy === undefined
+                  ? {}
+                  : { unrecognisedBy: outsideUnrecognisedBy }),
+              },
+            },
+      ...(view === undefined
+        ? {}
+        : {
+            held: {
+              ...held,
+              ...(heldUnrecognisedBy === undefined ? {} : { unrecognisedBy: heldUnrecognisedBy }),
+            },
+          }),
       ...(view !== undefined && reclaim.reap === undefined ? { observeOnly } : {}),
     },
   };
@@ -644,6 +696,24 @@ function reapVerdictOf(
   );
   if (base !== 'fire') return base;
   return anyTrackedDelegations ? 'fireTerminated' : 'fireNoDelegations';
+}
+
+function emptyUnrecognisedSplit(): UnrecognisedOwnerSplit {
+  return { ownerLive: 0, ownerListed: 0, ownerUnknown: 0 };
+}
+
+// 数えるためだけの分類で、`reapVerdictOf` には渡さない（判定を変えない）。
+// 辿る sid は `reapVerdictOf` が帰属を継ぐときと同じ（自分の sid と、先祖・台帳から継いだ sid）。live を名簿より先に見る。
+function unrecognisedOwnerKindOf(
+  entry: ScannedProcess,
+  attribution: SidAttribution | undefined,
+  liveSessionPids: ReadonlySet<number>,
+  ownerListedSessionPids: ReadonlySet<number>,
+): keyof UnrecognisedOwnerSplit {
+  const sids = [entry.sid, attribution?.sid].filter((sid): sid is number => sid !== undefined);
+  if (sids.some((sid) => liveSessionPids.has(sid))) return 'ownerLive';
+  if (sids.some((sid) => ownerListedSessionPids.has(sid))) return 'ownerListed';
+  return 'ownerUnknown';
 }
 
 function emptyHeldCounts(): ReclaimHeldCounts {

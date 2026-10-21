@@ -645,7 +645,14 @@ export interface RunnerHost {
   noteDaemonContact(): void;
   // プロセスの exit で knownTerminated にしない: 作業者の1回の呼び出しは委譲が生きていてもプロセスを終え、その孫（nohup のサーバ等）が撃たれるため
   // failed / lost で閉じたセッションの pid は、同じ managerId を resume しても knownTerminated に残す: 落ちた CLI の木（verify・dev サーバー等）が守られ続けて溜まるため（done・stop() からの resume は守る）
-  delegationSessionPids(): { live: ReadonlySet<number>; knownTerminated: ReadonlySet<number> };
+  // ownerListed は観測の内訳用（#5157）: 持ち主が名簿に居る（または鍵の付け替えの戻り待ち）ので knownTerminated に入れていない CLI の pid。撃つ判定には使わない
+  delegationSessionPids(): {
+    live: ReadonlySet<number>;
+    knownTerminated: ReadonlySet<number>;
+    ownerListed: ReadonlySet<number>;
+  };
+  // 所有者の記録（pid → managerId）の件数。上限で忘れた累計は runner を起こしてからの数（#5157）
+  delegationPidOwnerRecords(): { remembered: number; cap: number; forgottenTotal: number };
 }
 
 // 無限には覚えない: 長時間走る runner のメモリが際限なく育つため。忘れた分は所有者不明として knownTerminated に入れず、撃たない側へ倒れる
@@ -803,6 +810,8 @@ class Host implements RunnerHost {
   // `knownTerminated` を固定の集合として持たない: resume で同じ `managerId` が戻っても古い pid が「終端済み」のままになるため
   readonly #liveDelegationPids = new Set<number>();
   readonly #pidOwnerManagerId = new Map<number, string>();
+  // 上限で忘れた件数の累計（runner を起こしてから。pid の再利用による付け替えは忘れたに数えない）
+  #pidOwnerForgottenTotal = 0;
   // failed / lost で閉じたセッションが起こした pid: 同じ `managerId` を resume しても撃つ側に残す（落ちた CLI の木が pid を占め続けるため。#2352・#1334）
   readonly #abandonedDelegationPids = new Set<number>();
   // 鍵の付け替えで畳み、resume で戻ってくる担当（managerId → 畳んだ時刻）。`#sessions` から消えている間も木を守る（#5115）
@@ -1028,9 +1037,22 @@ class Host implements RunnerHost {
     return { current: pids.current, max: pids.max, delegations: active };
   }
 
-  delegationSessionPids(): { live: ReadonlySet<number>; knownTerminated: ReadonlySet<number> } {
+  delegationPidOwnerRecords(): { remembered: number; cap: number; forgottenTotal: number } {
+    return {
+      remembered: this.#pidOwnerManagerId.size,
+      cap: PID_OWNER_MANAGER_ID_CAP,
+      forgottenTotal: this.#pidOwnerForgottenTotal,
+    };
+  }
+
+  delegationSessionPids(): {
+    live: ReadonlySet<number>;
+    knownTerminated: ReadonlySet<number>;
+    ownerListed: ReadonlySet<number>;
+  } {
     // 内部の集合への参照を渡さない: 渡した後に書き換えられないという前提が呼び出し側の実装に依存するため（写しを返す）
     const knownTerminated = new Set<number>();
+    const ownerListed = new Set<number>();
     const now = Date.now();
     for (const [pid, managerId] of this.#pidOwnerManagerId) {
       if (this.#liveDelegationPids.has(pid)) continue;
@@ -1038,13 +1060,16 @@ class Host implements RunnerHost {
       if (
         (this.#sessions.has(managerId) || this.#awaitingRekeyReturn(managerId, now)) &&
         !this.#abandonedDelegationPids.has(pid)
-      )
+      ) {
+        ownerListed.add(pid);
         continue;
+      }
       knownTerminated.add(pid);
     }
     return {
       live: new Set(this.#liveDelegationPids),
       knownTerminated,
+      ownerListed,
     };
   }
 
@@ -1070,6 +1095,7 @@ class Host implements RunnerHost {
       const oldestPid = this.#pidOwnerManagerId.keys().next().value;
       if (oldestPid === undefined) break;
       this.#pidOwnerManagerId.delete(oldestPid);
+      this.#pidOwnerForgottenTotal += 1;
       // 所有者を忘れた pid は覚えない: 集合が際限なく育つため
       this.#abandonedDelegationPids.delete(oldestPid);
     }

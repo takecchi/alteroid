@@ -62,3 +62,19 @@ describe('runner の /health revision', () => {
     await host.shutdown();
   });
 });
+
+describe('runner の /health resources.pidOwnerRecords（#5157）', () => {
+  it('持ち主の記録の件数・上限・忘れた累計が資源の欄に載る', async () => {
+    const host = newHost();
+    const app = createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
+
+    const body = await readHealth(app);
+
+    expect((body.resources as Record<string, unknown>).pidOwnerRecords).toEqual({
+      remembered: 0,
+      cap: 4096,
+      forgottenTotal: 0,
+    });
+    await host.shutdown();
+  });
+});

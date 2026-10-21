@@ -820,6 +820,39 @@ describe('資源による配置の材料', () => {
     });
   });
 
+  it('持ち主の記録（pidOwnerRecords。#5157）は運ぶ。欄が無い古い runner や壊れた形でも他の材料は落とさない', async () => {
+    const records = { remembered: 3980, cap: 4096, forgottenTotal: 12 };
+    const withRecords = await createHttpRunner({
+      baseUrl: 'http://records.test',
+      token: TOKEN,
+      fetchFn: fetchHealth({
+        ok: true,
+        runnerId: 'runner-records',
+        workspacePath: '/workspace',
+        managers: 1,
+        resources: { pids: { current: 1, max: 10 }, pidOwnerRecords: records },
+      }),
+    });
+    expect(await withRecords.resources?.()).toEqual({
+      managers: 1,
+      pids: { current: 1, max: 10 },
+      pidOwnerRecords: records,
+    });
+
+    const broken = await createHttpRunner({
+      baseUrl: 'http://records-broken.test',
+      token: TOKEN,
+      fetchFn: fetchHealth({
+        ok: true,
+        runnerId: 'runner-records-broken',
+        workspacePath: '/workspace',
+        managers: 1,
+        resources: { pids: { current: 1, max: 10 }, pidOwnerRecords: { remembered: 'たくさん' } },
+      }),
+    });
+    expect(await broken.resources?.()).toEqual({ managers: 1, pids: { current: 1, max: 10 } });
+  });
+
   it('resources がオブジェクトでなくても、managers は落とさない', async () => {
     const client = await createHttpRunner({
       baseUrl: 'http://not-object.test',

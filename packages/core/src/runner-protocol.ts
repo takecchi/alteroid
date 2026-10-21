@@ -397,6 +397,16 @@ export type RunnerPluginFingerprintEntry = z.infer<typeof runnerPluginFingerprin
 export type RunnerPluginsFingerprint = z.infer<typeof runnerPluginsFingerprintSchema>;
 
 /**
+ * `sidUnrecognised` の内訳（合計は一致する）。数えるだけで撃つ判定には効かない。
+ * `.optional()` で受ける側に置く: 内訳の材料を渡さない構成や、この欄より前の runner では出ない（0に潰さない）。
+ */
+const unrecognisedOwnerSplitSchema = z.object({
+  ownerLive: z.number().int().nonnegative(),
+  ownerListed: z.number().int().nonnegative(),
+  ownerUnknown: z.number().int().nonnegative(),
+});
+
+/**
  * フィールド名を `capacity` にしない: 上限として使われ始め、「超えたら断る」という能力の削除になるため。
  * 材料は独立して省略できる。報告できないことを理由に宛先から外してはならない。
  */
@@ -413,6 +423,17 @@ export const runnerExecutionResourcesSchema = z.object({
     .optional(),
   /** `source` を持たない: pids には cgroup が読めないとき倒れる先（ホストの値）が無く、読めなければまるごと省略する。 */
   pids: z.object({ current: z.number().nonnegative(), max: z.number().positive() }).optional(),
+  /**
+   * 委譲の CLI の pid → 持ち主の記録（`#pidOwnerManagerId`）。`cap` を超えると古い順に忘れ、忘れた pid は「持ち主不明」として撃たない側へ倒れる（#5157）。
+   * `forgottenTotal` は runner を起こしてからの累計。`.optional()` は、この欄より前の runner が持たない窓のため（欄が無ければ出さない）。
+   */
+  pidOwnerRecords: z
+    .object({
+      remembered: z.number().int().nonnegative(),
+      cap: z.number().int().positive(),
+      forgottenTotal: z.number().int().nonnegative(),
+    })
+    .optional(),
   /**
    * `pids` の中には入れず兄弟として置く: `chooseByResources` が `pids: { current, max }` の配置そのものを読むため。
    * `.optional()` は、この機能より前の runner が欄自体を持たない窓のため。
@@ -485,6 +506,7 @@ export const runnerExecutionResourcesSchema = z.object({
                     sidLive: z.number().int().nonnegative(),
                     sidLeaderPresent: z.number().int().nonnegative(),
                     sidUnrecognised: z.number().int().nonnegative(),
+                    unrecognisedBy: unrecognisedOwnerSplitSchema.optional(),
                   })
                   .optional(),
               }),
@@ -494,6 +516,7 @@ export const runnerExecutionResourcesSchema = z.object({
                   sidLive: z.number().int().nonnegative(),
                   sidLeaderPresent: z.number().int().nonnegative(),
                   sidUnrecognised: z.number().int().nonnegative(),
+                  unrecognisedBy: unrecognisedOwnerSplitSchema.optional(),
                 })
                 .optional(),
               observeOnly: z.number().int().nonnegative().optional(),

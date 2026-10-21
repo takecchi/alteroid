@@ -481,6 +481,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       const tasks = await taskBreakdownReader.read();
       const resources = {
         ...(await readExecutionResources()),
+        pidOwnerRecords: host.delegationPidOwnerRecords(),
         ...(tasks === undefined ? {} : { tasks }),
       };
       // 遅かった回だけ残す: デーモンの名乗りの確認（期限 5000ms）が全台同時に倒れたとき、器の側で遅れたのかを器のログだけで言えるようにするため（#4454）。

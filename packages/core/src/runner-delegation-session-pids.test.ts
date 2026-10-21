@@ -117,6 +117,15 @@ function fakeDelegationProcess(pid: number | undefined): {
   return { handle, emitExit: () => handle.emitExit(), emitError: () => handle.emitError() };
 }
 
+// 3つ目の集合 `ownerListed`（#5157。観測の内訳用）が増えても、`live` / `knownTerminated` の期待値を1文字も変えないための絞り込み
+function liveAndTerminatedOf(host: RunnerHost): {
+  live: ReadonlySet<number>;
+  knownTerminated: ReadonlySet<number>;
+} {
+  const { live, knownTerminated } = host.delegationSessionPids();
+  return { live, knownTerminated };
+}
+
 describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSessionPids()）', () => {
   it('起きたら live へ。exit しても、委譲(managerId)自身が runner に残っていれば knownTerminated へは移らない', async () => {
     const sessions: CapturedSession[] = [];
@@ -132,7 +141,7 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
       spawnAgentProcessFn: () => fake.handle,
     });
 
-    expect(host.delegationSessionPids()).toEqual({ live: new Set(), knownTerminated: new Set() });
+    expect(liveAndTerminatedOf(host)).toEqual({ live: new Set(), knownTerminated: new Set() });
 
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
     expect(sessions).toHaveLength(1);
@@ -146,7 +155,7 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
       signal: new AbortController().signal,
     });
 
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set([4242]),
       knownTerminated: new Set(),
     });
@@ -154,7 +163,7 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
     fake.emitExit();
 
     // exit では knownTerminated へ入れない: 委譲が生きたままだと、nohup 等で残った子孫が孤児回収で撃たれる
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set(),
       knownTerminated: new Set(),
     });
@@ -188,7 +197,7 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
 
     fake.emitError();
 
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set(),
       knownTerminated: new Set(),
     });
@@ -219,7 +228,7 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
       signal: new AbortController().signal,
     });
 
-    expect(host.delegationSessionPids()).toEqual({ live: new Set(), knownTerminated: new Set() });
+    expect(liveAndTerminatedOf(host)).toEqual({ live: new Set(), knownTerminated: new Set() });
 
     await host.shutdown();
   });
@@ -258,13 +267,13 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
     expect(host.delegationSessionPids().live).toEqual(new Set([101, 102]));
 
     workerA.emitExit();
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set([102]),
       knownTerminated: new Set(),
     });
 
     workerB.emitExit();
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set(),
       knownTerminated: new Set(),
     });
@@ -285,7 +294,7 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
     const { options } = sessions[0] as CapturedSession;
     expect(options.spawnClaudeCodeProcess).toBeUndefined();
-    expect(host.delegationSessionPids()).toEqual({ live: new Set(), knownTerminated: new Set() });
+    expect(liveAndTerminatedOf(host)).toEqual({ live: new Set(), knownTerminated: new Set() });
 
     await host.shutdown();
   });
@@ -344,7 +353,7 @@ describe('孤児回収が「委譲の終端」で判定すること（#1334 段1
 
     fake.emitExit();
 
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set(),
       knownTerminated: new Set(),
     });
@@ -377,7 +386,7 @@ describe('孤児回収が「委譲の終端」で判定すること（#1334 段1
 
     await host.stop('mgr-1');
 
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set(),
       knownTerminated: new Set([555]),
     });
@@ -414,7 +423,7 @@ describe('孤児回収が「委譲の終端」で判定すること（#1334 段1
     oldProcess.emitExit();
     await host.stop('mgr-1');
 
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set(),
       knownTerminated: new Set([555]),
     });
@@ -434,7 +443,7 @@ describe('孤児回収が「委譲の終端」で判定すること（#1334 段1
       signal: new AbortController().signal,
     });
 
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set([777]),
       knownTerminated: new Set(),
     });
@@ -499,7 +508,7 @@ describe('自己失効（lost）した委譲の pid（#2352: 後任が同じ run
 
     lostProcess.emitExit();
 
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set([4601]),
       knownTerminated: new Set([4600]),
     });
@@ -510,7 +519,7 @@ describe('自己失効（lost）した委譲の pid（#2352: 後任が同じ run
   it('（対照）CLI が exit するまでは live に残り、knownTerminated へは回らない（回収は CLI の終了に依る）', async () => {
     const { host } = await selfFencedHost(4700);
 
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set([4700, 4701]),
       knownTerminated: new Set(),
     });
@@ -614,7 +623,7 @@ describe('failed / lost で閉じた CLI の pid は、同じ managerId を resu
     await t.reopen();
     t.spawnIn(1);
 
-    expect(t.host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(t.host)).toEqual({
       live: new Set([777]),
       knownTerminated: new Set([555]),
     });
@@ -664,7 +673,7 @@ describe('failed / lost で閉じた CLI の pid は、同じ managerId を resu
       });
       (sessions[1] as CapturedSession).options.spawnClaudeCodeProcess?.(spawnOptions);
 
-      expect(host.delegationSessionPids()).toEqual({
+      expect(liveAndTerminatedOf(host)).toEqual({
         live: new Set([4801]),
         knownTerminated: new Set([4800]),
       });
@@ -690,7 +699,7 @@ describe('failed / lost で閉じた CLI の pid は、同じ managerId を resu
     await t.reopen();
     t.spawnIn(1);
 
-    expect(t.host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(t.host)).toEqual({
       live: new Set([777]),
       knownTerminated: new Set(),
     });
@@ -708,7 +717,7 @@ describe('failed / lost で閉じた CLI の pid は、同じ managerId を resu
     await t.reopen();
     t.spawnIn(1);
 
-    expect(t.host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(t.host)).toEqual({
       live: new Set([555, 777]),
       knownTerminated: new Set(),
     });
@@ -729,14 +738,14 @@ describe('failed / lost で閉じた CLI の pid は、同じ managerId を resu
     await t.reopen();
     t.spawnIn(1);
 
-    expect(t.host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(t.host)).toEqual({
       live: new Set([555]),
       knownTerminated: new Set(),
     });
 
     // 新しい CLI が exit しても、委譲が生きていれば守る側のまま（古い持ち主の印が残っていると、ここで撃つ側へ回る）
     (t.processes[1] as { emitExit: () => void }).emitExit();
-    expect(t.host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(t.host)).toEqual({
       live: new Set(),
       knownTerminated: new Set(),
     });
@@ -843,7 +852,7 @@ describe('鍵の付け替えの畳み（keepPeers）で背景処理を畳んだ 
   it('⭐ 背景処理 1 本を抱えたまま鍵の付け替えで畳まれた: resume しても古い pid は knownTerminated、新しい pid は live', async () => {
     const host = await foldAndResume(1, { keepPeers: true });
 
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set([777]),
       knownTerminated: new Set([555]),
     });
@@ -853,7 +862,7 @@ describe('鍵の付け替えの畳み（keepPeers）で背景処理を畳んだ 
   it('（対照）背景処理の無い鍵の付け替えの畳み: resume すると古い pid は knownTerminated から外れる（守られる）', async () => {
     const host = await foldAndResume(0, { keepPeers: true });
 
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set([777]),
       knownTerminated: new Set(),
     });
@@ -863,7 +872,7 @@ describe('鍵の付け替えの畳み（keepPeers）で背景処理を畳んだ 
   it('（対照）人間・畳みの停止（keepPeers 無し）は背景処理があっても今どおり守る（#4433）', async () => {
     const host = await foldAndResume(1, {});
 
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set([777]),
       knownTerminated: new Set(),
     });
@@ -911,7 +920,7 @@ describe('鍵の付け替えで畳んでから resume で戻るまでの間も�
     const { host } = await foldWithoutResume(0);
 
     expect(host.list()).toEqual([]);
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set(),
       knownTerminated: new Set(),
     });
@@ -921,7 +930,7 @@ describe('鍵の付け替えで畳んでから resume で戻るまでの間も�
   it('（対照）背景処理を抱えたまま畳んだ回（#5044）は、resume の前から今どおり knownTerminated', async () => {
     const { host } = await foldWithoutResume(1);
 
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set(),
       knownTerminated: new Set([555]),
     });
@@ -937,7 +946,7 @@ describe('鍵の付け替えで畳んでから resume で戻るまでの間も�
     expect(host.delegationSessionPids().knownTerminated).toEqual(new Set());
 
     vi.setSystemTime(new Date(Date.now() + 1));
-    expect(host.delegationSessionPids()).toEqual({
+    expect(liveAndTerminatedOf(host)).toEqual({
       live: new Set(),
       knownTerminated: new Set([555]),
     });
@@ -949,9 +958,128 @@ describe('鍵の付け替えで畳んでから resume で戻るまでの間も�
 
     await stop();
 
+    expect(liveAndTerminatedOf(host)).toEqual({
+      live: new Set(),
+      knownTerminated: new Set([555]),
+    });
+    await host.shutdown();
+  });
+
+  it('ownerListed（#5157）: 畳んで戻りを待つ間は名簿に居るので守る側（ownerListed）、期限切れ・停止で knownTerminated へ移り ownerListed から消える', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-20T21:00:00Z'));
+    const { host } = await foldWithoutResume(0);
+
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set(),
+      knownTerminated: new Set(),
+      ownerListed: new Set([555]),
+    });
+
+    vi.setSystemTime(new Date(Date.now() + PEER_PARK_TTL_MS));
     expect(host.delegationSessionPids()).toEqual({
       live: new Set(),
       knownTerminated: new Set([555]),
+      ownerListed: new Set(),
+    });
+    await host.shutdown();
+  });
+});
+
+describe('委譲の観測の内訳の材料（#5157。撃つ判定の集合は変えない）', () => {
+  const spawnOnce = (sessions: CapturedSession[]): void => {
+    (sessions[0] as CapturedSession).options.spawnClaudeCodeProcess?.({
+      command: 'claude',
+      args: [],
+      env: {},
+      signal: new AbortController().signal,
+    });
+  };
+
+  it('ownerListed: done の担当の exit 済みの CLI は ownerListed に入り、stop すると knownTerminated へ移る', async () => {
+    const sessions: CapturedSession[] = [];
+    const fake = fakeDelegationProcess(555);
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: fakeSdk(sessions),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnAgentProcessFn: () => fake.handle,
+    });
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    spawnOnce(sessions);
+
+    expect(host.delegationSessionPids().ownerListed).toEqual(new Set());
+    fake.emitExit();
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set(),
+      knownTerminated: new Set(),
+      ownerListed: new Set([555]),
+    });
+
+    await host.stop('mgr-1');
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set(),
+      knownTerminated: new Set([555]),
+      ownerListed: new Set(),
+    });
+  });
+
+  it('所有者の記録: 4096 件までは忘れず、4097 件目の登録で忘れた累計が 1 になる', async () => {
+    const sessions: CapturedSession[] = [];
+    let next = 10_000;
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: fakeSdk(sessions),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnAgentProcessFn: () => fakeDelegationProcess((next += 1)).handle,
+    });
+    expect(host.delegationPidOwnerRecords()).toEqual({
+      remembered: 0,
+      cap: 4096,
+      forgottenTotal: 0,
+    });
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    for (let i = 0; i < 4096; i += 1) spawnOnce(sessions);
+    expect(host.delegationPidOwnerRecords()).toEqual({
+      remembered: 4096,
+      cap: 4096,
+      forgottenTotal: 0,
+    });
+
+    spawnOnce(sessions);
+    expect(host.delegationPidOwnerRecords()).toEqual({
+      remembered: 4096,
+      cap: 4096,
+      forgottenTotal: 1,
+    });
+    await host.shutdown();
+  });
+
+  it('所有者の記録: 同じ pid の再登録（pid の使い回し）は忘れたに数えない', async () => {
+    const sessions: CapturedSession[] = [];
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: fakeSdk(sessions),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnAgentProcessFn: () => fakeDelegationProcess(777).handle,
+    });
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    spawnOnce(sessions);
+    spawnOnce(sessions);
+
+    expect(host.delegationPidOwnerRecords()).toEqual({
+      remembered: 1,
+      cap: 4096,
+      forgottenTotal: 0,
     });
     await host.shutdown();
   });

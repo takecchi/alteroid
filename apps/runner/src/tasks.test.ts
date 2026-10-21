@@ -1876,3 +1876,241 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
     expect(started).toBe(2);
   });
 });
+
+describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は変えない）', () => {
+  const OWN_UID = process.getuid?.() ?? 0;
+  const LIVE = [555, 100];
+  const TERMINATED = [777];
+
+  function fakeKillFn(): {
+    fn: (pid: number, signal: NodeJS.Signals) => void;
+    calls: Array<{ pid: number; signal: NodeJS.Signals }>;
+  } {
+    const calls: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    return { fn: (pid, signal) => calls.push({ pid, signal }), calls };
+  }
+
+  function viewOf(ownerListed: number[] | undefined, live = LIVE): ReclaimSessionView {
+    return {
+      liveSessionPidsOf: () => new Set(live),
+      knownTerminatedSessionPidsOf: () => new Set(TERMINATED),
+      ...(ownerListed === undefined
+        ? {}
+        : { ownerListedSessionPidsOf: () => new Set(ownerListed) }),
+      anyTrackedDelegationsOf: () => true,
+    };
+  }
+
+  // 孤児ルートの中: 各 sid は live / 終端のどちらでもなく、判定は sidUnrecognised になる
+  //  810(sid 555 live) ─ 811(sid 902): 先祖から継いだ live の sid
+  //  820(sid 4000): 名簿に居る持ち主   830(sid 5000): どこにも無い
+  //  860(sid 777): 終端した委譲 ⟹ 撃つ
+  // 孤児ルートの外（親 999 が走査に居ない）:
+  //  850(sid 555 live) ─ 851(sid 903): 先祖から継いだ live   840(sid 6000): 名簿   841(sid 6001): 不明
+  function placeLayout(): void {
+    placeProcess(root, 810, 'a', 'S', 1, 0, 1, 555);
+    placeProcess(root, 811, 'a', 'S', 1, 0, 810, 902);
+    placeProcess(root, 820, 'a', 'S', 1, 0, 1, 4000);
+    placeProcess(root, 830, 'a', 'S', 1, 0, 1, 5000);
+    placeProcess(root, 860, 'a', 'S', 1, 0, 1, 777);
+    placeProcess(root, 850, 'a', 'S', 1, 0, 999, 555);
+    placeProcess(root, 851, 'a', 'S', 1, 0, 850, 903);
+    placeProcess(root, 840, 'a', 'S', 1, 0, 999, 6000);
+    placeProcess(root, 841, 'a', 'S', 1, 0, 999, 6001);
+    placeUptime(root, 1000);
+  }
+
+  const LISTED = [4000, 6000];
+
+  it('3通りに数える: 持ち主が生きている（先祖の live の sid を継ぐ）/ 名簿に居る / 不明。孤児ルートの外も同じ', async () => {
+    placeLayout();
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      killFn: fakeKillFn().fn,
+      reclaim: { childUid: OWN_UID, sessions: viewOf(LISTED) },
+    }).read();
+
+    const { held, outsideRoots } = result?.reclaim?.notFired ?? { outsideRoots: undefined };
+    expect(held?.sidUnrecognised).toBe(3);
+    expect(held?.unrecognisedBy).toEqual({ ownerLive: 1, ownerListed: 1, ownerUnknown: 1 });
+    expect(outsideRoots?.bySid?.sidUnrecognised).toBe(3);
+    expect(outsideRoots?.bySid?.unrecognisedBy).toEqual({
+      ownerLive: 1,
+      ownerListed: 1,
+      ownerUnknown: 1,
+    });
+  });
+
+  it('内訳の合計は sidUnrecognised と一致する（held も孤児ルート外も）', async () => {
+    placeLayout();
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      killFn: fakeKillFn().fn,
+      reclaim: { childUid: OWN_UID, sessions: viewOf(LISTED) },
+    }).read();
+    const sum = (split: { ownerLive: number; ownerListed: number; ownerUnknown: number }): number =>
+      split.ownerLive + split.ownerListed + split.ownerUnknown;
+    const notFired = result?.reclaim?.notFired;
+    expect(
+      sum(notFired?.held?.unrecognisedBy ?? { ownerLive: -1, ownerListed: 0, ownerUnknown: 0 }),
+    ).toBe(notFired?.held?.sidUnrecognised);
+    expect(
+      sum(
+        notFired?.outsideRoots.bySid?.unrecognisedBy ?? {
+          ownerLive: -1,
+          ownerListed: 0,
+          ownerUnknown: 0,
+        },
+      ),
+    ).toBe(notFired?.outsideRoots.bySid?.sidUnrecognised);
+  });
+
+  it('台帳から継いだ sid でも分類される（親が先に死んだ孤児の帰属先が、名簿に居る持ち主）', async () => {
+    placeProcess(root, 100, 'a', 'S', 1, 5, 50, 100);
+    placeProcess(root, 101, 'a', 'S', 1, 6, 100, 100);
+    placeProcess(root, 102, 'a', 'S', 1, 7, 101, 102);
+    placeUptime(root, 1000);
+    let live = [100];
+    let listed: number[] = [];
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn: fakeKillFn().fn,
+      ttlMs: 0,
+      reclaim: {
+        childUid: OWN_UID,
+        sessions: {
+          liveSessionPidsOf: () => new Set(live),
+          knownTerminatedSessionPidsOf: () => new Set(),
+          ownerListedSessionPidsOf: () => new Set(listed),
+          anyTrackedDelegationsOf: () => true,
+        },
+      },
+    });
+    await reader.read();
+
+    rmSync(join(root, '100'), { recursive: true });
+    rmSync(join(root, '101'), { recursive: true });
+    placeProcess(root, 102, 'a', 'S', 1, 7, 1, 102);
+    live = [];
+    listed = [100];
+    const listedResult = await reader.read();
+    expect(listedResult?.reclaim?.notFired?.held?.unrecognisedBy).toEqual({
+      ownerLive: 0,
+      ownerListed: 1,
+      ownerUnknown: 0,
+    });
+
+    // 帳は毎回引き直される: 帰属先が名簿からも消えたら、同じ孤児は「不明」へ
+    listed = [];
+    const unknownResult = await reader.read();
+    expect(unknownResult?.reclaim?.notFired?.held?.unrecognisedBy).toEqual({
+      ownerLive: 0,
+      ownerListed: 0,
+      ownerUnknown: 1,
+    });
+  });
+
+  it('⭐ 判定は割る前と同じ: ownerListed の入力をどう変えても、撃つ pid の集合・held の既存の数・孤児ルート外の数は変わらない', async () => {
+    const variants: Array<number[] | undefined> = [
+      undefined,
+      [],
+      LISTED,
+      [100, 555, 777, 902, 903, 4000, 5000, 6000, 6001, 810, 811, 820, 830, 860],
+    ];
+    const outcomes: unknown[] = [];
+    for (const ownerListed of variants) {
+      for (const mode of ['observe', 'reclaim'] as const) {
+        rmSync(root, { recursive: true, force: true });
+        mkdirSync(root, { recursive: true });
+        placeLayout();
+        const { fn, calls } = fakeKillFn();
+        const view = viewOf(ownerListed);
+        const result = await new TaskBreakdownReader({
+          procRoot: root,
+          killFn: fn,
+          reclaim:
+            mode === 'observe'
+              ? { childUid: OWN_UID, sessions: view }
+              : { childUid: OWN_UID, reap: view },
+        }).read();
+        const notFired = result?.reclaim?.notFired;
+        const { unrecognisedBy: heldSplit, ...held } = notFired?.held ?? {};
+        const { unrecognisedBy: outsideSplit, ...bySid } = notFired?.outsideRoots.bySid ?? {};
+        void heldSplit;
+        void outsideSplit;
+        outcomes.push({
+          mode,
+          fired: calls.map((call) => `${call.pid}:${call.signal}`),
+          signalled: result?.reclaim?.signalled,
+          held,
+          bySid,
+          observeOnly: notFired?.observeOnly,
+        });
+      }
+    }
+    expect((outcomes[0] as { fired: string[] }).fired).toEqual(['860:SIGTERM']);
+    for (let i = 0; i < outcomes.length; i += 2) {
+      expect(outcomes[i]).toEqual(outcomes[0]);
+      expect(outcomes[i + 1]).toEqual(outcomes[1]);
+    }
+  });
+
+  it('材料（ownerListedSessionPidsOf）が渡らない構えでは内訳の欄を出さない（0に潰さない）。既存の合計は残る', async () => {
+    placeLayout();
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      killFn: fakeKillFn().fn,
+      reclaim: { childUid: OWN_UID, sessions: viewOf(undefined) },
+    }).read();
+    const notFired = result?.reclaim?.notFired;
+    expect(notFired?.held?.sidUnrecognised).toBe(3);
+    expect(Object.prototype.hasOwnProperty.call(notFired?.held, 'unrecognisedBy')).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(notFired?.outsideRoots.bySid, 'unrecognisedBy'),
+    ).toBe(false);
+  });
+
+  it('観測の出力は schema を通り、内訳が落ちずに残る。内訳の無い古い形も通る', async () => {
+    placeLayout();
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      killFn: fakeKillFn().fn,
+      reclaim: { childUid: OWN_UID, sessions: viewOf(LISTED) },
+    }).read();
+    const schema = runnerExecutionResourcesSchema.shape.tasks.unwrap().shape.reclaim.unwrap();
+    const parsed = schema.parse(result?.reclaim);
+    expect(parsed.notFired?.held?.unrecognisedBy).toEqual(
+      result?.reclaim?.notFired?.held?.unrecognisedBy,
+    );
+    expect(parsed.notFired?.outsideRoots.bySid?.unrecognisedBy).toBeDefined();
+
+    const old = {
+      ...result?.reclaim,
+      notFired: {
+        outsideRoots: { total: 1, parentInScan: 0 },
+        held: { sidUnknown: 0, sidLive: 0, sidLeaderPresent: 0, sidUnrecognised: 2 },
+      },
+    };
+    expect(schema.parse(old).notFired?.held?.sidUnrecognised).toBe(2);
+  });
+
+  it('withTerminatedReclaimSessions は ownerListedSessionPidsOf を運ぶ（あれば）。無ければキーを作らない', () => {
+    const base = { childUid: OWN_UID };
+    const carried = withTerminatedReclaimSessions(base, viewOf(LISTED));
+    expect(carried?.sessions?.ownerListedSessionPidsOf?.()).toEqual(new Set(LISTED));
+    const bare = withTerminatedReclaimSessions(base, viewOf(undefined));
+    expect(Object.prototype.hasOwnProperty.call(bare?.sessions, 'ownerListedSessionPidsOf')).toBe(
+      false,
+    );
+  });
+});
+
+describe('持ち主の記録の資源欄（#5157）', () => {
+  it('schema は pidOwnerRecords を運び、欄が無い古い runner の形も通る', () => {
+    const withField = runnerExecutionResourcesSchema.parse({
+      pidOwnerRecords: { remembered: 3980, cap: 4096, forgottenTotal: 12 },
+    });
+    expect(withField.pidOwnerRecords).toEqual({ remembered: 3980, cap: 4096, forgottenTotal: 12 });
+    expect(runnerExecutionResourcesSchema.parse({}).pidOwnerRecords).toBeUndefined();
+  });
+});

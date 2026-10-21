@@ -355,6 +355,9 @@ export function withTerminatedReclaimSessions(
     sessions: {
       liveSessionPidsOf: view.liveSessionPidsOf,
       knownTerminatedSessionPidsOf: view.knownTerminatedSessionPidsOf,
+      ...(view.ownerListedSessionPidsOf === undefined
+        ? {}
+        : { ownerListedSessionPidsOf: view.ownerListedSessionPidsOf }),
       ...(view.anyTrackedDelegationsOf === undefined
         ? {}
         : { anyTrackedDelegationsOf: view.anyTrackedDelegationsOf }),
@@ -466,6 +469,7 @@ export async function main(): Promise<void> {
   const reap: ReclaimReapOptions = {
     liveSessionPidsOf: () => host.delegationSessionPids().live,
     knownTerminatedSessionPidsOf: () => host.delegationSessionPids().knownTerminated,
+    ownerListedSessionPidsOf: () => host.delegationSessionPids().ownerListed,
     // `live` の集合の大きさでは代用しない: `anyTrackedDelegationsOf` の理由と同じ。
     anyTrackedDelegationsOf: () => host.list().length > 0,
   };

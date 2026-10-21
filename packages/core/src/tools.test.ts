@@ -9436,6 +9436,84 @@ describe('runner_list（器の一覧）', () => {
       expect(reply).not.toContain('hold');
       expect(reply).not.toContain('reclaim でないので');
     });
+
+    it('sid 未認識の内訳（#5157）: hold も孤児ルート外も「合計（持ち主が生きている・名簿に居るので守っている・持ち主不明）」の形で出る', async () => {
+      const reply = await listWith({
+        outsideRoots: {
+          total: 4,
+          parentInScan: 0,
+          bySid: {
+            wouldFire: 0,
+            sidUnknown: 0,
+            sidLive: 1,
+            sidLeaderPresent: 0,
+            sidUnrecognised: 3,
+            unrecognisedBy: { ownerLive: 1, ownerListed: 1, ownerUnknown: 1 },
+          },
+        },
+        held: {
+          sidUnknown: 0,
+          sidLive: 0,
+          sidLeaderPresent: 0,
+          sidUnrecognised: 11,
+          unrecognisedBy: { ownerLive: 2, ownerListed: 8, ownerUnknown: 1 },
+        },
+      });
+
+      expect(reply).toContain(
+        'sid 未認識 11（持ち主が生きている 2・持ち主が名簿に居るので守っている 8・持ち主不明 1）',
+      );
+      expect(reply).toContain(
+        'sid 未認識 3（持ち主が生きている 1・持ち主が名簿に居るので守っている 1・持ち主不明 1）',
+      );
+    });
+
+    it('内訳の欄が無い（古い runner・材料を渡さない構え）ときは合計だけを出し、内訳を0と書かない', async () => {
+      const reply = await listWith({
+        outsideRoots: { total: 0, parentInScan: 0 },
+        held: { sidUnknown: 0, sidLive: 0, sidLeaderPresent: 0, sidUnrecognised: 4 },
+      });
+
+      expect(reply).toContain('sid 未認識 4');
+      expect(reply).not.toContain('持ち主が生きている');
+    });
+  });
+
+  describe('resources.pidOwnerRecords（#5157）', () => {
+    const listWith = async (pidOwnerRecords?: Record<string, number>) => {
+      const h = harness();
+      h.setRunnersOverview({
+        runners: [
+          {
+            label: 'runner-a',
+            revision: { status: 'unheard' },
+            state: 'connected',
+            since: '2026-01-01T00:00:00.000Z',
+            runnerId: 'runner-a',
+            managers: [],
+            resources: {
+              pids: { current: 10, max: 1000 },
+              ...(pidOwnerRecords === undefined ? {} : { pidOwnerRecords }),
+            },
+          },
+        ],
+        unassigned: [],
+        daemonRevision: { status: 'unknown' },
+      } as never);
+      return h.call('runner_list', { resources: true });
+    };
+
+    it('欄があれば「持ち主の記録 現在/上限・上限で忘れた累計」を出す', async () => {
+      const reply = await listWith({ remembered: 3980, cap: 4096, forgottenTotal: 12 });
+
+      expect(reply).toContain('持ち主の記録 3,980/4,096・上限で忘れた累計 12');
+    });
+
+    it('欄が無い（古い runner）ときは出さない', async () => {
+      const reply = await listWith();
+
+      expect(reply).not.toContain('持ち主の記録');
+    });
   });
 
   it('resources.tasks.reclaim が無い回では、孤児の行そのものが出ない（0 本と書かない）', async () => {
