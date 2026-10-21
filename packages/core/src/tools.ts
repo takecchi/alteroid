@@ -38,7 +38,11 @@ import {
   type ConversationCursor,
   type ConversationPage,
 } from './conversation.js';
-import { describeMissingConversation, lookupConversation } from './conversation-lookup.js';
+import {
+  describeResolvedConversationPrefix,
+  describeUnresolvedConversation,
+  resolveConversationId,
+} from './conversation-lookup.js';
 import {
   commitmentPosition,
   compareCommitmentPosition,
@@ -8317,7 +8321,8 @@ export function createCloneTools(context: ToolContext) {
       [
         '人間の会話へ1通書く。いまのターンが人間の発言で起きたものでなくても届く（定期の仕事・外部イベント・委譲の報告を人間へ知らせる口）。',
         'conversationId を指定するとその会話へ、省略すると新しい会話を始めて、その id を返す。',
-        '指定した conversationId の会話が無ければ、何も書かずに断る（その文字列で新しい会話は作らない。略記・前方一致では書かない）。',
+        '指定した conversationId の会話が無ければ、何も書かずに断る（その文字列で新しい会話は作らない）。',
+        'conversationId は、1つの会話に決まる 8 文字以上の先頭でもよい（例 c60b1940。読み替えた完全な id を応答に出す）。2つ以上の会話に当たる先頭は、何も書かずに断って候補を返す。',
         'いまのターンの会話へは書けない（そこへは普通に返答すれば届く）。',
         '人間へファイルを渡すなら、先に file_put で置き場へ入れ、その id を attachments に渡す（添付があれば text は空でもよい。どちらも空の発言は書かない）。',
         '添付の検査（存在・個数・合計の上限）に1つでも落ちたら、何も書かずに断る。',
@@ -8334,7 +8339,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            `書く先の既存の会話 id（conversation_read の一覧で分かる完全な id。${formatStringLengthJa({ min: 1 })}）。省略すると新しい会話`,
+            `書く先の既存の会話 id（conversation_read の一覧で分かる完全な id か、1つの会話に決まる 8 文字以上の先頭。${formatStringLengthJa({ min: 1 })}）。省略すると新しい会話`,
           ),
         attachments: z
           .array(z.string().min(1))
@@ -8363,30 +8368,42 @@ export function createCloneTools(context: ToolContext) {
         );
         if (conversationIdError !== null) return text(conversationIdError);
         const current = getConversationId();
+        const refuseCurrentTurn = (id: string, note: string) => ({
+          ...text(
+            `${note}会話 ${id} はいまのターンの会話なので、この道具では書かなかった。` +
+              (withAttachments
+                ? 'このターンの返答に添付を添えるなら reply_attach を使う。'
+                : 'このターンの返答として書けば、その会話へ届く。'),
+          ),
+          isError: true,
+        });
+        // 解決より先に、そのままの一致で断る: いまのターンの会話は、1通目がまだ日誌に載っていないことがあり、解決に回すと「無い」と取り違えるため
         if (conversationId !== undefined && conversationId === current) {
-          return {
-            ...text(
-              `会話 ${conversationId} はいまのターンの会話なので、この道具では書かなかった。` +
-                (withAttachments
-                  ? 'このターンの返答に添付を添えるなら reply_attach を使う。'
-                  : 'このターンの返答として書けば、その会話へ届く。'),
-            ),
-            isError: true,
-          };
+          return refuseCurrentTurn(conversationId, '');
         }
-        // 前方一致で読み替えない: 略記が別の会話にも当たるようになった日に、黙って別の会話へ書くため（conversation-lookup.ts）
+        // 一意に決まる 8 文字以上の前方一致だけ読み替える（#5130）。2つ以上・無いは書かずに断る（conversation-lookup.ts の resolveConversationId）
+        let resolvedId: string | undefined;
+        let resolvedNote = '';
         if (conversationId !== undefined) {
-          const lookup = await lookupConversation(stores.journal, conversationId);
-          if (!lookup.found) {
+          const resolution = await resolveConversationId(stores.journal, conversationId);
+          if (resolution.kind === 'missing' || resolution.kind === 'ambiguous') {
             return {
               ...text(
-                `会話へは書かなかった。${describeMissingConversation(conversationId, lookup)}`,
+                `会話へは書かなかった。${describeUnresolvedConversation(conversationId, resolution)}`,
               ),
               isError: true,
             };
           }
+          resolvedId = resolution.id;
+          if (resolution.kind === 'prefix') {
+            resolvedNote = describeResolvedConversationPrefix(conversationId, resolution.id);
+          }
         }
-        const target = conversationId ?? randomUUID();
+        // 読み替えた後の id でも比べる: 先頭だけ渡された、いまのターンの会話も断るため
+        if (resolvedId !== undefined && resolvedId === current) {
+          return refuseCurrentTurn(resolvedId, resolvedNote);
+        }
+        const target = resolvedId ?? randomUUID();
         const attached = withAttachments
           ? await checkAndBindOutboundAttachments(stores, attachmentIds, {
               conversationId: target,
@@ -8423,7 +8440,7 @@ export function createCloneTools(context: ToolContext) {
         return text(
           conversationId === undefined
             ? `新しい会話 ${target} を始めて書いた${withNote}（${entry.id}）。`
-            : `会話 ${target} へ書いた${withNote}（${entry.id}）。`,
+            : `${resolvedNote}会話 ${target} へ書いた${withNote}（${entry.id}）。`,
         );
       },
     ),
@@ -8489,7 +8506,13 @@ export function createCloneTools(context: ToolContext) {
           .enum(ATTACHMENT_FROM_CLASSES)
           .optional()
           .describe('上げた主体の分類（人間・クローン・マネージャー・連携の鍵・不明）'),
-        conversationId: z.string().min(1).optional().describe('この会話に結ばれた添付だけ'),
+        conversationId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'この会話に結ばれた添付だけ（完全な id か、1つの会話に決まる 8 文字以上の先頭）',
+          ),
         query: z.string().min(1).optional().describe('名前の部分一致（大文字小文字を問わない）'),
         cursor: z
           .string()
@@ -8497,9 +8520,26 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe('続きの位置。前回の応答の「続きは file_list cursor=…」をそのまま渡す'),
       },
-      async ({ kept, from, conversationId, query, cursor }) => {
+      async ({ kept, from, conversationId: conversationIdInput, query, cursor }) => {
         try {
-          return text(await listFiles(stores, { kept, from, conversationId, query, cursor }));
+          // 一意に決まる 8 文字以上の前方一致だけ読み替える（#5130。conversation_post と同じ線）。当たらない id は今どおりそのまま絞る
+          let conversationId = conversationIdInput;
+          let resolvedNote = '';
+          if (conversationIdInput !== undefined) {
+            const resolution = await resolveConversationId(stores.journal, conversationIdInput);
+            if (resolution.kind === 'ambiguous') {
+              return text(
+                `置き場の一覧は読んでいない。${describeUnresolvedConversation(conversationIdInput, resolution)}`,
+              );
+            }
+            if (resolution.kind === 'prefix') {
+              conversationId = resolution.id;
+              resolvedNote = `${describeResolvedConversationPrefix(conversationIdInput, resolution.id)}\n`;
+            }
+          }
+          return text(
+            resolvedNote + (await listFiles(stores, { kept, from, conversationId, query, cursor })),
+          );
         } catch (error) {
           return text(
             `置き場の一覧を読めなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`,
@@ -8709,7 +8749,9 @@ export function createCloneTools(context: ToolContext) {
         conversationId: z
           .string()
           .optional()
-          .describe('この会話の中身を古い順に読む（一覧に出ている conversationId）'),
+          .describe(
+            'この会話の中身を古い順に読む（一覧に出ている conversationId か、1つの会話に決まる 8 文字以上の先頭）',
+          ),
         q: z
           .string()
           .optional()
@@ -8765,7 +8807,7 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({
-        conversationId,
+        conversationId: conversationIdInput,
         q,
         speaker = 'both',
         since: sinceInput,
@@ -8827,6 +8869,25 @@ export function createCloneTools(context: ToolContext) {
           untilInput === undefined
             ? undefined
             : (normalizeJournalTimeBoundary(untilInput) ?? undefined);
+
+        // 一意に決まる 8 文字以上の前方一致だけ読み替える（#5130。conversation_post と同じ線）。
+        // 当たらない id は今どおり窓の中で読み、「無い／この窓には無い」で答える（解決できなかったことでは断らない）
+        let conversationId = conversationIdInput;
+        const resolvedNoteLines: string[] = [];
+        if (conversationIdInput !== undefined) {
+          const resolution = await resolveConversationId(stores.journal, conversationIdInput);
+          if (resolution.kind === 'ambiguous') {
+            return text(
+              `会話は読んでいない。${describeUnresolvedConversation(conversationIdInput, resolution)}`,
+            );
+          }
+          if (resolution.kind === 'prefix') {
+            conversationId = resolution.id;
+            resolvedNoteLines.push(
+              describeResolvedConversationPrefix(conversationIdInput, resolution.id),
+            );
+          }
+        }
 
         const scanLimit = scan ?? 2000;
         const listMode = conversationId === undefined && q === undefined;
@@ -8922,9 +8983,13 @@ export function createCloneTools(context: ToolContext) {
               : speakerFiltered.filter((message) => message.text.toLowerCase().includes(needle));
           if (matched.length === 0) {
             return text(
-              (reached
-                ? `会話 ${conversationId} に当たる発言は無い。`
-                : `会話 ${conversationId} は、この窓には無い（判定できない）。`) + `\n${scanNote}`,
+              [
+                ...resolvedNoteLines,
+                (reached
+                  ? `会話 ${conversationId} に当たる発言は無い。`
+                  : `会話 ${conversationId} は、この窓には無い（判定できない）。`) +
+                  `\n${scanNote}`,
+              ].join('\n'),
             );
           }
           const lines = matched.map(
@@ -8948,6 +9013,7 @@ export function createCloneTools(context: ToolContext) {
                   `conversation_read conversationId=${conversationId} includeSuperseded=true を指定する）`;
           return text(
             [
+              ...resolvedNoteLines,
               renderListingFromEnd(lines, {
                 budget: CONVERSATION_LIST_BUDGET,
                 // どちら側を落としたかを言う: 「N 件省略」だけだと続きの取り方を間違えるため
