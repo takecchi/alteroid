@@ -115,3 +115,65 @@ describe('pnpm の入口: rolldown のスレッドと vitest の worker を絞�
     expect(run(['test', '--', '--max-workers=2'])).toContain('VITEST:unset\n');
   });
 });
+
+describe('pnpm の入口: repo が並列の数を決めているときは VITEST_MAX_WORKERS を置かない（#5124）', () => {
+  // repo の根（.git を持つ所）を置く: 探すのは根までで、その外は見ない
+  function repoWithConfig(
+    label: string,
+    files: Record<string, string>,
+  ): ReturnType<typeof setup> & { gitRoot: string } {
+    const context = setup(label);
+    mkdirSync(join(context.repo, '.git'));
+    for (const [relative, body] of Object.entries(files)) {
+      const path = join(context.repo, relative);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, body);
+    }
+    return { ...context, gitRoot: context.repo };
+  }
+
+  it('⭐ repo の vitest.config.ts が fileParallelism: false（直列）を決めていれば置かない', () => {
+    const { repo, run } = repoWithConfig('serial', {
+      'vitest.config.ts': 'export default { test: { fileParallelism: false } };\n',
+    });
+    expect(run(['-C', repo, 'test'])).toContain('VITEST:unset\n');
+  });
+
+  it('vite.config.mts の maxWorkers も見る', () => {
+    const { repo, run } = repoWithConfig('vite-mts', {
+      'vite.config.mts': 'export default { test: { maxWorkers: 2 } };\n',
+    });
+    expect(run(['-C', repo, 'exec', 'vitest', 'run'])).toContain('VITEST:unset\n');
+  });
+
+  it('作業ディレクトリが repo の下の階層でも、上へ repo の根まで探す', () => {
+    const { repo, run } = repoWithConfig('nested', {
+      'vitest.config.ts': 'export default { test: { maxWorkers: 1 } };\n',
+      'packages/a/package.json': '{}\n',
+    });
+    expect(run(['-C', join(repo, 'packages', 'a'), 'test'])).toContain('VITEST:unset\n');
+  });
+
+  it('repo の根より外の設定ファイルは見ない（他人の repo の設定で決めない）', () => {
+    const { root, repo, run } = repoWithConfig('outside', {});
+    writeFileSync(join(root, 'vitest.config.ts'), 'export default { test: { maxWorkers: 1 } };\n');
+    expect(run(['-C', repo, 'test'])).toContain('VITEST:4\n');
+  });
+
+  it('設定ファイルが在っても、並列の数を決めていなければ今どおり 4 にする', () => {
+    const { repo, run } = repoWithConfig('unbounded', {
+      'vitest.config.ts': "export default { test: { include: ['src/**/*.test.ts'] } };\n",
+    });
+    expect(run(['-C', repo, 'test'])).toContain('VITEST:4\n');
+  });
+
+  it('担当が ALTEROID_KEEP_VITEST_WORKERS=1 を置けば、設定ファイルが無くても置かない（探し方の見落としを埋める口）', () => {
+    const { repo, run } = repoWithConfig('keep', {});
+    expect(run(['-C', repo, 'test'], { ALTEROID_KEEP_VITEST_WORKERS: '1' })).toContain(
+      'VITEST:unset\n',
+    );
+    expect(run(['-C', repo, 'test'], { ALTEROID_KEEP_VITEST_WORKERS: '0' })).toContain(
+      'VITEST:4\n',
+    );
+  });
+});

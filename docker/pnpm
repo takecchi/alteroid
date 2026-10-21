@@ -33,8 +33,27 @@ ROLLDOWN_WORKER_THREADS=${ROLLDOWN_WORKER_THREADS:-2}
 ROLLDOWN_MAX_BLOCKING_THREADS=${ROLLDOWN_MAX_BLOCKING_THREADS:-2}
 export ROLLDOWN_WORKER_THREADS ROLLDOWN_MAX_BLOCKING_THREADS
 # vitest の worker の既定は availableParallelism - 1（この器では 31。1本 7 スレッド）なので、alteroid の vitest.config.ts と同じ 4 にする。
-# VITEST_MAX_WORKERS は設定ファイルと CLI の --maxWorkers を上書きするので、引数に --maxWorkers があるときは置かない（担当の指定を消さない）
-if [ -z "$max_workers_arg" ]; then
+# VITEST_MAX_WORKERS は設定ファイルと CLI の --maxWorkers を上書きするので、次のときは置かない（担当・repo の指定を消さない）:
+# - 引数に --maxWorkers がある
+# - repo の設定ファイルが並列の数を決めている（#5124）。`fileParallelism: false` の直列が 4 本に上書きされ、同じ DB・Redis を使う結合テストが崩れたため。
+#   いまの作業ディレクトリから上へ repo の根（.git を持つ所）まで、vitest / vite の設定ファイルに `maxWorkers` か `fileParallelism` の語があるかを見る。
+#   文字で探すだけなので、設定を別のファイルから読み込む repo は見落とす（そのときは今どおり 4 が入る。B の口で外せる）
+# - 担当が ALTEROID_KEEP_VITEST_WORKERS=1 を置いた（#5124 の B。上の探し方の見落としを担当が自分で埋める口）
+repo_sets_vitest_workers() {
+  d=$(pwd)
+  while :; do
+    for f in "$d"/vitest.config.* "$d"/vite.config.* "$d"/vitest.workspace.*; do
+      if [ -f "$f" ] && grep -q -E 'maxWorkers|fileParallelism' "$f"; then
+        return 0
+      fi
+    done
+    if [ -e "$d/.git" ] || [ "$d" = / ]; then
+      return 1
+    fi
+    d=$(dirname "$d")
+  done
+}
+if [ -z "$max_workers_arg" ] && [ "${ALTEROID_KEEP_VITEST_WORKERS:-}" != 1 ] && ! repo_sets_vitest_workers; then
   VITEST_MAX_WORKERS=${VITEST_MAX_WORKERS:-4}
   export VITEST_MAX_WORKERS
 fi
