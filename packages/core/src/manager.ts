@@ -176,7 +176,7 @@ import {
   RESCUE_STASH_MAX_FILES_PER_JOB,
   type RescueStashEntry,
 } from './schema.js';
-import { describeUnreadableManagerRow, type Stores } from './store.js';
+import { describeUnreadableManagerRow, UnreadableJobError, type Stores } from './store.js';
 import {
   markRescueGoneWhileAlive,
   pruneRescueLedger,
@@ -5427,7 +5427,7 @@ class Pool implements ManagerPool {
     }
     this.#autoFoldInFlight.add(managerId);
     try {
-      const fresh = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+      const fresh = await this.#findJob(managerId);
       if (fresh === undefined || fresh.status !== 'done') {
         return {
           managerId,
@@ -5765,12 +5765,12 @@ class Pool implements ManagerPool {
     const record = this.#records.get(managerId);
     // 像が `runnerId` を持たなくても、それが正しい「いまの」値なので台帳へ降りて上書きしない。
     if (record !== undefined) return record.job.runnerId;
-    const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+    const job = await this.#findJob(managerId);
     return job?.runnerId;
   }
 
   async transcript(managerId: string): Promise<ManagerTranscript> {
-    const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+    const job = await this.#findJob(managerId);
     if (!job) {
       // 読めない形で在る行は `missing`（＝居ない）にしない。
       const unreadable = await this.#unreadableRowDetail(managerId);
@@ -6112,7 +6112,7 @@ class Pool implements ManagerPool {
   }
 
   async transcriptTail(managerId: string, maxChars: number): Promise<ManagerTranscript> {
-    const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+    const job = await this.#findJob(managerId);
     if (!job) {
       const unreadable = await this.#unreadableRowDetail(managerId);
       return unreadable === undefined
@@ -11899,16 +11899,27 @@ class Pool implements ManagerPool {
 
   async #latestJobOf(managerId: string): Promise<Job | null> {
     try {
-      return (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId) ?? null;
+      return (await this.#findJob(managerId)) ?? null;
     } catch {
       return null;
     }
   }
 
+  // 1件のために台帳を全部読まない（#5140）: `listJobs()` は全行の版を読むので、主キーで1行を読む `getJob` を使う。
+  // 読めない行は見つからない扱いにする: `listJobs()` が読めない行を外していたのと同じ答えにするため（理由が要る呼び手は `#unreadableRowDetail` で引く）
+  async #findJob(managerId: string): Promise<Job | undefined> {
+    try {
+      return (await this.#stores.jobs.getJob(managerId)) ?? undefined;
+    } catch (error) {
+      if (error instanceof UnreadableJobError) return undefined;
+      throw error;
+    }
+  }
+
   // 既に `#records` に像が在れば作らず返す: 無条件に作ると、同時に来た2つの契機が別々の `Job` のコピーを握り、後から `#persist()` した側が先の変更を上書きする。
-  // `listJobs()` の `await` から戻って次の `await` までは同期区間なので、この再確認だけでロック無しに同じ像を握れる。
+  // 台帳の読み（`#findJob`）の `await` から戻って次の `await` までは同期区間なので、この再確認だけでロック無しに同じ像を握れる。
   async #load(managerId: string): Promise<ManagerRecord | null> {
-    const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+    const job = await this.#findJob(managerId);
     if (!job) return null;
     const existing = this.#records.get(managerId);
     if (existing !== undefined) return existing;
