@@ -190,12 +190,21 @@ const WITHDRAWN_PAGE = 500;
  * `with: ['self']` を別に読む。`since` 以降を古い順に頁で読み切る（途中で黙って打ち切らない）。
  */
 export async function readWithdrawnClientMessageIds(
-  journal: Pick<JournalStore, 'listPage'>,
+  journal: Pick<JournalStore, 'listPage' | 'withdrawnClientMessageIds'>,
   // `undefined` は会話を問わない（会話の一覧が、窓の中の全会話の取り下げを一度で読む）
   conversationId: string | undefined,
   since: string,
   pageSize: number = WITHDRAWN_PAGE,
 ): Promise<Set<string>> {
+  // 印だけを引く口を持つ器ではそちらを使う（#5089）: 頁で読み切ると、内部ターンの往復を本文ごと読み、窓が古いほど本番で数秒〜十数秒かかったため
+  if (journal.withdrawnClientMessageIds !== undefined) {
+    return new Set(
+      await journal.withdrawnClientMessageIds({
+        since,
+        ...(conversationId === undefined ? {} : { conversationId }),
+      }),
+    );
+  }
   const withdrawn = new Set<string>();
   let after: JournalCursor | undefined;
   for (;;) {
@@ -426,7 +435,7 @@ async function conversationIdsNewerThan(
  * 継続点が指す発言が日誌に実在しない・人間との往復でないときは `InvalidConversationCursorError`。
  */
 export async function readConversationPage(
-  journal: Pick<JournalStore, 'listPage' | 'get'>,
+  journal: Pick<JournalStore, 'listPage' | 'get' | 'withdrawnClientMessageIds'>,
   options: {
     limit: number;
     scan: number;

@@ -16,7 +16,11 @@ import { PgConversationReadStore } from './conversation-reads.js';
 import { PgJobStore } from './jobs.js';
 import { PgJournalStore } from './journal.js';
 import { PgMcpServerStore } from './mcp-servers.js';
-import { ensureJournalHumanRepliesIndex, migrateOnBoot } from './migrate.js';
+import {
+  ensureJournalHumanRepliesIndex,
+  ensureJournalWithdrawalsIndex,
+  migrateOnBoot,
+} from './migrate.js';
 import {
   createTimedPool,
   PG_LONG_QUERY_TIMEOUT_MS,
@@ -69,7 +73,9 @@ export { PgUsageStore } from './usage.js';
 export * from './footprint.js';
 export {
   ensureJournalHumanRepliesIndex,
+  ensureJournalWithdrawalsIndex,
   JOURNAL_HUMAN_REPLIES_INDEX,
+  JOURNAL_WITHDRAWALS_INDEX,
   migrate,
   migrateOnBoot,
 } from './migrate.js';
@@ -205,7 +211,12 @@ export async function createPgStores(options: CreatePgStoresOptions | string): P
   const closeIndexClient = () => indexClient.end().catch(() => undefined);
   void indexClient
     .connect()
-    .then(() => ensureJournalHumanRepliesIndex(drizzle(indexClient)))
+    // 1本ずつ作る: 並べると同じ日誌を2本の走査が同時に読み、器の I/O を一度に食うため
+    .then(async () => {
+      const indexDb = drizzle(indexClient);
+      await ensureJournalHumanRepliesIndex(indexDb);
+      await ensureJournalWithdrawalsIndex(indexDb);
+    })
     .catch((error: unknown) => {
       writeStderrLine(
         `alteroid: 日誌の索引を作る接続を開けなかった（${collapseErrorCause(error)}）。索引なしで動き続ける（#5089）\n`,

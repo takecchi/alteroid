@@ -3,9 +3,10 @@ import type { JournalStore } from './store.js';
 
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg へ vitest を持ち込まないため。
 // 時刻の待ちは使わない: 同じミリ秒に積まれても成り立つ形にする。
+// 印だけを引く口（`withdrawnClientMessageIds`）を持つ器では、`readWithdrawnClientMessageIds` がそちらを通るので、同じ契約がその口に掛かる
 export type JournalStoreWithdrawnContractSubject = Pick<
   JournalStore,
-  'append' | 'list' | 'listPage'
+  'append' | 'list' | 'listPage' | 'withdrawnClientMessageIds'
 >;
 
 const MARKER = 'journal-withdrawn-contract';

@@ -623,6 +623,40 @@ export async function ensureJournalHumanRepliesIndex(
   }
 }
 
+/** 取り下げの印（`withdrawnClientMessageIds`）だけを持つ部分索引（#5089） */
+export const JOURNAL_WITHDRAWALS_INDEX = 'journal_withdrawals_idx';
+
+// 述語は `PgJournalStore.withdrawnClientMessageIds` の絞りと同じ式にする: 違うと索引が使われない。
+// 鍵を `at` にする: 読みは `since` 以降の範囲で引くため
+const CREATE_JOURNAL_WITHDRAWALS_INDEX = `create index concurrently if not exists ${JOURNAL_WITHDRAWALS_INDEX}
+   on journal (at) where type = 'exchange' and (entry->>'with') = 'self' and (entry->>'withdrawnClientMessageId') is not null`;
+
+/**
+ * 取り下げの印の部分索引を、書き込みを止めずに作る（#5089。会話の一覧・詳細の取り下げの判定の読み出しを縮める）。
+ * 作り方・倒れ方は `ensureJournalHumanRepliesIndex` と同じ（`STATEMENTS` に置かない・`concurrently`・無効なら作り直す・投げない）。
+ */
+export async function ensureJournalWithdrawalsIndex(
+  db: Db,
+  warn: (line: string) => void = (line) => writeStderrLine(line),
+): Promise<void> {
+  try {
+    const result = await db.execute(
+      sql`select i.indisvalid as valid from pg_class c join pg_index i on i.indexrelid = c.oid where c.relname = ${JOURNAL_WITHDRAWALS_INDEX}`,
+    );
+    const found = rowsOf(result)[0] as { valid?: boolean } | undefined;
+    if (found?.valid === true) return;
+    if (found !== undefined) {
+      await db.execute(sql.raw(`drop index concurrently if exists ${JOURNAL_WITHDRAWALS_INDEX}`));
+    }
+    await db.execute(sql.raw(CREATE_JOURNAL_WITHDRAWALS_INDEX));
+  } catch (error) {
+    warn(
+      `alteroid: 日誌の索引 ${JOURNAL_WITHDRAWALS_INDEX} を作れなかった（${collapseErrorCause(error)}）。` +
+        '索引なしで動き続け（会話の一覧・詳細の取り下げの判定が遅いだけ）、次の起動でやり直す（#5089）\n',
+    );
+  }
+}
+
 export const OPEN_MANAGER_BODY_INDEX = 'commitments_open_manager_body_idx';
 
 // `STATEMENTS` に置かない: 既存の重複行が在ると作れず、起動のたびに通る配列でデーモンが上がらなくなる。

@@ -310,6 +310,32 @@ export class PgJournalStore implements JournalStore {
     }));
   }
 
+  // 本文を流さず、印の id だけを読む（#5089）。部分索引 `journal_withdrawals_idx` に乗るよう、索引の述語と同じ式で絞る（`migrate.ts`）。
+  // `list` は型（`journalEntrySchema`）に合わない行を落とすので、ここでも印の欄の型までは SQL で確かめる（`humanReplies` と同じ線）
+  async withdrawnClientMessageIds(query: {
+    since: string;
+    conversationId?: string;
+  }): Promise<string[]> {
+    if (query.conversationId !== undefined && hasNul(query.conversationId)) return [];
+    const rows = await this.#db
+      .select({ id: sql<string>`${journal.entry}->>'withdrawnClientMessageId'` })
+      .from(journal)
+      .where(
+        and(
+          hiddenConversationExchangeExcluded(),
+          eq(journal.type, 'exchange'),
+          sql`(${journal.entry}->>'with') = 'self'`,
+          sql`(${journal.entry}->>'withdrawnClientMessageId') is not null`,
+          sql`jsonb_typeof(${journal.entry}->'withdrawnClientMessageId') = 'string'`,
+          gte(journal.at, new Date(query.since)),
+          ...(query.conversationId === undefined
+            ? []
+            : [sql`(${journal.entry}->>'conversationId') = ${query.conversationId}`]),
+        ),
+      );
+    return rows.map((row) => row.id);
+  }
+
   async clear(): Promise<number> {
     const removed = await this.#db.delete(journal).returning({ seq: journal.seq });
     // 消したら返答の覚えも捨てる（読み足しは前回より後ろしか見ないため）

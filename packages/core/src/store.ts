@@ -302,6 +302,15 @@ export interface JournalStore {
   humanReplies?(): Promise<{ conversationId: string; at: string }[]>;
 
   /**
+   * 取り下げの印（`exchange`・`with: 'self'`・`withdrawnClientMessageId` を持つ行）のうち、`since` 以降のものの `withdrawnClientMessageId` だけを返す（#5089）。
+   * `conversationId` を渡せばその会話の印だけ。並びと重複は契約しない（呼び手が集合にする）。
+   * 会話の一覧・詳細が、内部ターンの往復（量も本文も大きい）を本文ごと頁で読み切らずに済ませるための口。
+   * 削除した会話の行・墓標が名指しした行は `list` と同じく外す。
+   * 省略可能: 持たない器では、呼び手（`readWithdrawnClientMessageIds`）が `listPage` を頁で読み切って同じものを作る。
+   */
+  withdrawnClientMessageIds?(query: { since: string; conversationId?: string }): Promise<string[]>;
+
+  /**
    * 全件を消す（ワークスペースのリセット専用）。「追記専用」の契約への例外で、呼ぶのは `resetWorkspaceState` だけ。
    * 日誌の「聞かずに実行した判断は必ず残る」は、通常運用で消せないことではなく、リセットが常に人間の明示的な決定を経ることで保たれる。消した件数を返す。
    */

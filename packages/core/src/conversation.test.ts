@@ -882,4 +882,30 @@ describe('読めない行を捨てて短くなった頁でも、終端を件数�
 
     expect([...withdrawn]).toEqual(['cm-late']);
   });
+
+  it('⭐ readWithdrawnClientMessageIds: 印だけを引く口を持つ器では、その口に since と会話を渡し、頁で読み切らない（#5089）', async () => {
+    const calls: { since: string; conversationId?: string }[] = [];
+    let pages = 0;
+    const journal = {
+      listPage: () => {
+        pages += 1;
+        return Promise.resolve({ entries: [], next: null });
+      },
+      withdrawnClientMessageIds: (query: { since: string; conversationId?: string }) => {
+        calls.push(query);
+        return Promise.resolve(['cm-1', 'cm-2', 'cm-1']);
+      },
+    };
+
+    const one = await readWithdrawnClientMessageIds(journal, 'c1', '2026-10-01T00:00:00.000Z');
+    const all = await readWithdrawnClientMessageIds(journal, undefined, '2026-10-02T00:00:00.000Z');
+
+    expect([...one].sort()).toEqual(['cm-1', 'cm-2']);
+    expect([...all].sort()).toEqual(['cm-1', 'cm-2']);
+    expect(calls).toEqual([
+      { since: '2026-10-01T00:00:00.000Z', conversationId: 'c1' },
+      { since: '2026-10-02T00:00:00.000Z' },
+    ]);
+    expect(pages).toBe(0);
+  });
 });
