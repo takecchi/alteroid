@@ -79,6 +79,7 @@ describe('ensureJournalWithdrawalsIndex（#5089）', () => {
     if (query === undefined) throw new Error('SQL を捕まえられなかった');
     const inlined = query.sql.replace(/\$(\d+)/g, (_match, index: string) => {
       const value = query.params[Number(index) - 1];
+      if (Array.isArray(value)) return `'{${value.map((item) => JSON.stringify(item)).join(',')}}'`;
       return typeof value === 'number' ? String(value) : `'${String(value).replaceAll("'", "''")}'`;
     });
     // 順の走査を禁じて計画を取る: 測りたいのは「索引の述語が読み出しの絞りとずれていないか」で、3,000 行の表では順に読む方が安いと見積もられ、述語が合っていても索引が選ばれないため

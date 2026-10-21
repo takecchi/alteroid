@@ -130,9 +130,11 @@ describe('墓標が名指しした行を外す（#5089）', () => {
     }
   });
 
-  it('⭐ 名指しの集合は外側の行ごとに作り直さず、ハッシュにして1回だけ作る（計画の見積もりに左右されない）', async () => {
+  // 元は「名指しの集合は外側の行ごとに作り直さず、ハッシュにして1回だけ作る」を、`NOT IN` の計画（hashed SubPlan）で測っていた。
+  // 集合を器の側で覚えて配列で渡す形（#5089）にしたので、読み出しの SQL に墓標を読む部分問い合わせそのものが残っていないことへ測る対象を移した
+  // （計画の見積もりに左右される部分問い合わせが無ければ、ハッシュの作業領域を越える崖も無い。弱めていない: 元の保証は「墓標の数で読み出しが崖を越えない」で、より強い形で測る）
+  it('⭐ 読み出しの SQL に、墓標を読む部分問い合わせが残っていない（集合は配列のパラメータで渡す）', async () => {
     await insert('t', 'conversation_deleted', tombstone(['x']));
-    // 日誌の読み出しが実際に打つ SQL を捕まえて、そのまま EXPLAIN する
     const queries: { sql: string; params: unknown[] }[] = [];
     const logged = createPgStoresFromDb(
       client.withLogger({
@@ -144,17 +146,15 @@ describe('墓標が名指しした行を外す（#5089）', () => {
     await captureStderr(async () => {
       await logged.journal.list({ types: ['exchange'], with: ['human'], limit: 10 });
     });
-    const query = queries.find((entry) => entry.sql.includes('NOT IN'));
+    // 本体は最後の1本（その前は印と集合の引き直し）
+    const query = queries.at(-1);
     if (query === undefined) throw new Error('日誌の読み出しの SQL を捕まえられなかった');
-    const inlined = query.sql.replace(/\$(\d+)/g, (_match, index: string) => {
-      const value = query.params[Number(index) - 1];
-      return typeof value === 'number' ? String(value) : `'${String(value).replaceAll("'", "''")}'`;
-    });
-    const plan = (await client.query<{ 'QUERY PLAN': string }>(`EXPLAIN ${inlined}`)).rows
-      .map((row) => row['QUERY PLAN'])
-      .join('\n');
-    expect(plan).toContain('hashed SubPlan');
-    expect(plan).not.toMatch(/Nested Loop Anti Join/);
+    expect(query.sql).toContain('from "journal"');
+    expect(query.sql).not.toContain('conversation_deleted');
+    expect(query.sql).not.toContain('hiddenEntryIds');
+    expect(query.sql).not.toMatch(/exists|not in|select 1/i);
+    expect(query.params).toContainEqual(['conv-gone']);
+    expect(query.params).toContainEqual(['x']);
   });
 
   it('get と oldestAt も同じく外す', async () => {

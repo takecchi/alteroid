@@ -71,6 +71,7 @@ describe('ensureJournalHumanRepliesIndex（#5089）', () => {
     if (query === undefined) throw new Error('SQL を捕まえられなかった');
     const inlined = query.sql.replace(/\$(\d+)/g, (_match, index: string) => {
       const value = query.params[Number(index) - 1];
+      if (Array.isArray(value)) return `'{${value.map((item) => JSON.stringify(item)).join(',')}}'`;
       return typeof value === 'number' ? String(value) : `'${String(value).replaceAll("'", "''")}'`;
     });
     const plan = (await client.query<{ 'QUERY PLAN': string }>(`EXPLAIN ${inlined}`)).rows

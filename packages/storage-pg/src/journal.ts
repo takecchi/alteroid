@@ -86,6 +86,7 @@ export class PgJournalStore implements JournalStore {
     throughSeq: number;
     replies: Map<number, { conversationId: string; at: string }>;
   } | null = null;
+  #hidden: { signature: string; sets: HiddenSets } | null = null;
 
   constructor(db: Db, options: { now?: () => number } = {}) {
     this.#db = db;
@@ -124,11 +125,12 @@ export class PgJournalStore implements JournalStore {
 
     const afterSeq = query.after === undefined ? undefined : await this.#anchorSeq(query.after);
 
+    const hidden = await this.#hiddenSets(this.#db);
     const filters = [
       ...(query.since === undefined ? [] : [gte(journal.at, new Date(query.since))]),
       ...(query.until === undefined ? [] : [lte(journal.at, new Date(query.until))]),
       // 墓標のある会話の `exchange` を外す。`.limit()` の前（`where` 節）で効かせる: 後で外すと窓が短くなり、`reachedStart` が誤るため。
-      hiddenConversationExchangeExcluded(),
+      hiddenConversationExchangeExcluded(hidden),
       // 空配列を「絞らない」へ倒さない: `inArray` が空配列に `false` を返すので、どれにも当たらない（0件）にする。
       ...(query.types === undefined ? [] : [inArray(journal.type, query.types)]),
       // `.limit()` の後で絞らない: `where` 節で効かせる。
@@ -220,7 +222,12 @@ export class PgJournalStore implements JournalStore {
     const rows = await this.#db
       .select(ROW_SELECTION)
       .from(journal)
-      .where(and(eq(journal.id, id), hiddenConversationExchangeExcluded()))
+      .where(
+        and(
+          eq(journal.id, id),
+          hiddenConversationExchangeExcluded(await this.#hiddenSets(this.#db)),
+        ),
+      )
       .limit(1);
     const row = rows[0];
     if (row === undefined) return null;
@@ -244,7 +251,7 @@ export class PgJournalStore implements JournalStore {
     const rows = await this.#db
       .select({ at: journal.at })
       .from(journal)
-      .where(hiddenConversationExchangeExcluded())
+      .where(hiddenConversationExchangeExcluded(await this.#hiddenSets(this.#db)))
       .orderBy(asc(journal.at))
       .limit(1);
     return rows[0]?.at.toISOString() ?? null;
@@ -259,14 +266,9 @@ export class PgJournalStore implements JournalStore {
   // `seq` は払い出しの順で、確定の順とはずれうる（先に払い出した行が後で確定する）ので、読み足すときは手前の `HUMAN_REPLIES_OVERLAP` 行ぶん重ねて読み、`seq` で重複を除く。
   // 念のため `HUMAN_REPLIES_FULL_REFRESH_MS` ごとに全部読み直す
   async humanReplies(): Promise<{ conversationId: string; at: string }[]> {
-    const tombstones = (
-      await this.#db
-        .select({
-          signature: sql<string>`count(*)::text || ':' || coalesce(max(${journal.seq}), 0)::text`,
-        })
-        .from(journal)
-        .where(eq(journal.type, 'conversation_deleted'))
-    )[0]?.signature;
+    const tombstones = await this.#tombstoneSignature(this.#db);
+    // 印は1本だけ引いて、覚えの読み直しの判定（`#hiddenSets`）と共有する
+    const hidden = await this.#hiddenSets(this.#db, tombstones);
     const cache = this.#humanReplies;
     const fresh =
       cache !== null &&
@@ -274,7 +276,7 @@ export class PgJournalStore implements JournalStore {
       this.#now() - cache.fullAt < HUMAN_REPLIES_FULL_REFRESH_MS;
     if (!fresh) {
       const replies = new Map<number, { conversationId: string; at: string }>();
-      for (const row of await this.#readHumanReplies(undefined)) {
+      for (const row of await this.#readHumanReplies(undefined, hidden)) {
         replies.set(row.seq, { conversationId: row.conversationId, at: row.at });
       }
       this.#humanReplies = {
@@ -284,7 +286,10 @@ export class PgJournalStore implements JournalStore {
         replies,
       };
     } else {
-      for (const row of await this.#readHumanReplies(cache.throughSeq - HUMAN_REPLIES_OVERLAP)) {
+      for (const row of await this.#readHumanReplies(
+        cache.throughSeq - HUMAN_REPLIES_OVERLAP,
+        hidden,
+      )) {
         cache.replies.set(row.seq, { conversationId: row.conversationId, at: row.at });
         if (row.seq > cache.throughSeq) cache.throughSeq = row.seq;
       }
@@ -294,6 +299,7 @@ export class PgJournalStore implements JournalStore {
 
   async #readHumanReplies(
     afterSeq: number | undefined,
+    hidden: HiddenSets,
   ): Promise<{ seq: number; conversationId: string; at: string }[]> {
     const rows = await this.#db
       .select({
@@ -304,7 +310,7 @@ export class PgJournalStore implements JournalStore {
       .from(journal)
       .where(
         and(
-          hiddenConversationExchangeExcluded(),
+          hiddenConversationExchangeExcluded(hidden),
           eq(journal.type, 'exchange'),
           sql`(${journal.entry}->>'with') = 'human'`,
           sql`${journal.entry}->>'role' = 'outbound'`,
@@ -333,12 +339,13 @@ export class PgJournalStore implements JournalStore {
     // DB 全体の `jit` には触れない（`set_config(..., true)` はこのトランザクションの中だけ効く。`withStatementTimeout` と同じ作法）
     const rows = await this.#db.transaction(async (tx) => {
       await tx.execute(sql`select set_config('jit', 'off', true)`);
+      const hidden = await this.#hiddenSets(tx);
       return tx
         .select({ id: sql<string>`${journal.entry}->>'withdrawnClientMessageId'` })
         .from(journal)
         .where(
           and(
-            hiddenConversationExchangeExcluded(),
+            hiddenConversationExchangeExcluded(hidden),
             eq(journal.type, 'exchange'),
             sql`(${journal.entry}->>'with') = 'self'`,
             sql`(${journal.entry}->>'withdrawnClientMessageId') is not null`,
@@ -364,12 +371,13 @@ export class PgJournalStore implements JournalStore {
     // この問い合わせだけ JIT を切る（`withdrawnClientMessageIds` と同じ作法）: 窓の行を数えるだけなのに費用が JIT の閾値を越え、偽の日誌 60 万行で実行の大半（約 110ms）が翻訳だったため
     const rows = await this.#db.transaction(async (tx) => {
       await tx.execute(sql`select set_config('jit', 'off', true)`);
+      const hidden = await this.#hiddenSets(tx);
       return tx
         .select({ actor, count: sql<number>`count(*)::int` })
         .from(journal)
         .where(
           and(
-            hiddenConversationExchangeExcluded(),
+            hiddenConversationExchangeExcluded(hidden),
             eq(journal.type, 'tool_use'),
             gte(journal.at, new Date(query.since)),
             lte(journal.at, new Date(query.until)),
@@ -391,12 +399,13 @@ export class PgJournalStore implements JournalStore {
     // この問い合わせだけ JIT を切る（`withdrawnClientMessageIds` と同じ作法）: 索引で数千行を拾うだけなのに費用が JIT の閾値を越え、偽の日誌 60 万行で実行 121ms のうち約 107ms が翻訳だったため
     const rows = await this.#db.transaction(async (tx) => {
       await tx.execute(sql`select set_config('jit', 'off', true)`);
+      const hidden = await this.#hiddenSets(tx);
       return tx
         .selectDistinct({ conversationId })
         .from(journal)
         .where(
           and(
-            hiddenConversationExchangeExcluded(),
+            hiddenConversationExchangeExcluded(hidden),
             eq(journal.type, 'exchange'),
             sql`(${journal.entry}->>'with') = 'human'`,
             gt(journal.seq, afterSeq),
@@ -410,27 +419,73 @@ export class PgJournalStore implements JournalStore {
     return rows.map((row) => row.conversationId);
   }
 
+  // 墓標の件数と最後の `seq` の印。`humanReplies` の覚えと `#hiddenSets` の覚えが、読み直す時機の判定に共有する
+  async #tombstoneSignature(db: Db): Promise<string | undefined> {
+    return (
+      await db
+        .select({
+          signature: sql<string>`count(*)::text || ':' || coalesce(max(${journal.seq}), 0)::text`,
+        })
+        .from(journal)
+        .where(eq(journal.type, 'conversation_deleted'))
+    )[0]?.signature;
+  }
+
+  // 外す行の集合を、墓標の印が変わったときだけ引き直して覚える（#5089）。読み出しのたびに印を1本だけ引く:
+  // 別のプロセス（反映の入れ替えの間の旧デーモンなど）が墓標を積んでも取りこぼさないため、このプロセスの書き込みだけで覚えを捨てる形にしない。
+  // 印を引いてから本体を打つまでの間に墓標が積まれると、その1回の読みだけ、消したばかりの行が見えうる:
+  // 元は墓標の読みも本体と同じ1文（1つのスナップショット）の中だったので一貫していたが、いまは別の文になる。
+  // 次の読みは印が変わっているので外れる。ふさがない: 墓標を積む側と読む側は元から順序を保証しない（積む直前に読んだ読みは、元でも消したばかりの行を見る）ため
+  async #hiddenSets(db: Db, signature?: string): Promise<HiddenSets> {
+    const current = signature ?? (await this.#tombstoneSignature(db)) ?? '';
+    const cache = this.#hidden;
+    if (cache !== null && cache.signature === current) return cache.sets;
+    const deleted = await db
+      .selectDistinct({ id: sql<string | null>`${journal.entry}->>'deletedConversationId'` })
+      .from(journal)
+      .where(eq(journal.type, 'conversation_deleted'));
+    const named = await db
+      .selectDistinct({ id: sql<string | null>`x.hid` })
+      .from(sql`(${HIDDEN_ENTRY_IDS}) x`);
+    const sets: HiddenSets = {
+      // NULL を入れない: 配列に NULL が混ざると `<> ALL` が NULL になり、全行を落とすため
+      deletedConversationIds: deleted.flatMap((row) => (row.id === null ? [] : [row.id])),
+      hiddenEntryIds: named.flatMap((row) => (row.id === null ? [] : [row.id])),
+    };
+    this.#hidden = { signature: current, sets };
+    return sets;
+  }
+
   async clear(): Promise<number> {
     const removed = await this.#db.delete(journal).returning({ seq: journal.seq });
     // 消したら返答の覚えも捨てる（読み足しは前回より後ろしか見ないため）
     this.#humanReplies = null;
+    this.#hidden = null;
     return removed.length;
   }
 }
 
-// 墓標（`conversation_deleted`）のある会話の `exchange` を外す条件。部分式索引 `journal_conversation_deleted_idx` で引く。
-// 外側の表の列は `sql.raw` で修飾して書く: drizzle は単表の select の列を修飾しない場合があり、内側（別名 `t`）の列と取り違えるため。
-// 墓標が名指しした行（`hiddenEntryIds`）は、墓標の種別で絞った行だけから引く: 墓標は会話の数に比べて少ないため
-// 名指しした id は、墓標から id の集合に開いて、外側の `id` が集合に無いかで見る（#5089）: `h.entry->'hiddenEntryIds' ? journal.id` と書くと、
-// 外側の行ごとに全墓標の jsonb を評価する入れ子の反結合になる（偽のデータの 8,000 行 × 墓標 50 で約 300ms）。
-// `NOT EXISTS (… named.hid = journal.id)` にもしない: 外側の行数の見積もりが小さいと、墓標の展開を外側の行ごとにやり直す入れ子の反結合が選ばれ、元より遅くなる（同じデータで 7 秒）。
-// `NOT IN (相関の無い部分問い合わせ)` なら、集合をハッシュにして1回だけ作る（hashed SubPlan）ので、外側の計画に左右されない。
-// `NOT IN` は集合に NULL が混ざると全行を外すので、NULL を返さない形で開き、念のため `IS NOT NULL` でも絞る。
-// 開き方は jsonb の `?` と同じ意味にする: 配列なら文字列の要素、オブジェクトなら鍵、文字列ならその値（数・真偽・null の要素は名指しに数えない）
-function hiddenConversationExchangeExcluded(): SQL {
-  return sql`NOT (${sql.raw('"journal"."type"')} = 'exchange' AND EXISTS (SELECT 1 FROM journal t WHERE t.type = 'conversation_deleted' AND t.entry->>'deletedConversationId' = ${sql.raw('"journal"."entry"')}->>'conversationId')) AND ${sql.raw('"journal"."id"')} NOT IN (${HIDDEN_ENTRY_IDS})`;
+/** 読み出しから外す行の集合: 墓標（`conversation_deleted`）が消した会話の id と、墓標が名指しした行（`hiddenEntryIds`）の id */
+interface HiddenSets {
+  deletedConversationIds: string[];
+  hiddenEntryIds: string[];
 }
 
+// 墓標のある会話の `exchange` と、墓標が名指しした行を外す条件。集合は器の側（`PgJournalStore.#hiddenSets`）で覚えて、配列のパラメータで渡す（#5089）。
+// 条件の中に墓標を読む部分問い合わせを置かない: 墓標が増えると、名指しの集合の見積もり（墓標1行あたり約 102 行）がハッシュの作業領域を越え、
+// 集合を外側の行ごとに読み直す計画に倒れて、日誌の読み出しの全部が崖のように遅くなる（偽の日誌 60 万行・墓標 1.5 万行で、会話一覧の窓 1.9 秒・humanReplies 約 50 秒）。
+// 墓標が少なくても、読むたびに墓標の行を全部読む費用が付く。
+// `NOT (… = ANY(…))` の形にしない: `conversationId` の無い `exchange` で NULL になり、行を落とす（元の `EXISTS` の形は「消されていない」と扱う）。
+// 配列に NULL を入れない（`#hiddenSets`）: `<> ALL` が NULL になり、全行を落とすため。空の配列は何も外さない（`<> ALL('{}')` は真）。
+// 外側の表の列は `sql.raw` で修飾して書く: drizzle は単表の select の列を修飾しない場合があるため。
+// 配列は `sql.param` で包む: 素の配列は drizzle が `($1, $2, …)` の並びに開いてしまい、1つの配列のパラメータにならないため。
+function hiddenConversationExchangeExcluded(sets: HiddenSets): SQL {
+  const entry = sql.raw('"journal"."entry"');
+  return sql`(${sql.raw('"journal"."type"')} <> 'exchange' OR (${entry}->>'conversationId') IS NULL OR (${entry}->>'conversationId') <> ALL(${sql.param(sets.deletedConversationIds)}::text[])) AND ${sql.raw('"journal"."id"')} <> ALL(${sql.param(sets.hiddenEntryIds)}::text[])`;
+}
+
+// 名指しした id の集合は、墓標から id へ開く。開き方は jsonb の `?` と同じ意味にする: 配列なら文字列の要素、オブジェクトなら鍵、文字列ならその値（数・真偽・null の要素は名指しに数えない）。
+// 意味を JS へ書き写さない: SQL のまま1回だけ打ち、結果を配列で受けるため。NULL は返さない（`IS NOT NULL`）。
 const HIDDEN_ENTRY_IDS = sql.raw(
   `SELECT named.hid FROM journal h CROSS JOIN LATERAL (` +
     `SELECT e #>> '{}' AS hid FROM jsonb_array_elements(CASE WHEN jsonb_typeof(h.entry->'hiddenEntryIds') = 'array' THEN h.entry->'hiddenEntryIds' ELSE '[]'::jsonb END) e WHERE jsonb_typeof(e) = 'string' ` +

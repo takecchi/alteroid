@@ -67,9 +67,12 @@ describe('数えるだけ・会話 id だけを引く口の JIT（#5140）', () 
 
     expect(ids).toEqual(['conv-b']);
     const setAt = queries.findIndex((text) => text.includes(`set_config('jit', 'off',`));
-    const selectAt = queries.findIndex((text) => text.includes('select distinct'));
+    // 最後の1本を取る: 外す行の集合の引き直し（これも `select distinct`）は JIT を切った後に打つが、測りたいのは本体の問い合わせのため
+    const selectAt = queries.findLastIndex((text) => text.includes('select distinct'));
     expect(setAt).toBeGreaterThanOrEqual(0);
     expect(selectAt).toBeGreaterThan(setAt);
+    // 集合の引き直しも JIT を切った後（トランザクションの中）に打つ
+    expect(queries.findIndex((text) => text.includes('select distinct'))).toBeGreaterThan(setAt);
     expect(await currentJit()).toBe(before);
   });
 });
