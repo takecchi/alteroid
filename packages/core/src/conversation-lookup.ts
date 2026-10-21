@@ -1,3 +1,4 @@
+import { readConversationWindowPage } from './conversation.js';
 import { scanJournalPages } from './journal-scan.js';
 import type { JournalStore } from './store.js';
 
@@ -36,6 +37,11 @@ export async function lookupConversation(
   journal: Pick<JournalStore, 'listPage'>,
   conversationId: string,
 ): Promise<ConversationLookup> {
+  // 在る会話は、その会話の行だけを1行引いて答える（#5140）: 頁送りだと、古い会話ほど新しい側の他の会話を読み切るまで見つからないため。
+  // 1行も返らなければ、下の頁送りへそのまま落とす: 候補（前方一致）を集めるのと、読めない行を捨てて空に見えた頁を「無い」と取り違えないのは頁送りの受け持ちのため
+  const exact = await readConversationWindowPage(journal, { scan: 1, conversationId });
+  if (exact.entries.some((entry) => entry.type === 'exchange')) return { found: true };
+
   let found = false;
   const candidates = new Set<string>();
   let moreCandidates = false;
