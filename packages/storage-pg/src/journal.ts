@@ -383,16 +383,25 @@ function journalSearchMatches(q: string): SQL {
   // 空の語を欄ごとの `OR` に任せない: 欄を持たない種別だけが落ちるため。
   if (q === '') return sql`true`;
   const pattern = likePattern(q);
-  return sql`(${journalSearchFieldMatchesSql(pattern)})`;
+  return sql`(${journalSearchFieldMatchesSql(pattern, hasLetterCase(q) ? 'ilike' : 'like')})`;
+}
+
+/**
+ * 語に大文字・小文字の別を持つ文字が在るか（#5126）。無ければ（日本語・数字・記号だけの語）、大文字・小文字を畳んでも畳まなくても当たる行は同じなので、
+ * 畳む手間（`ILIKE`）を省いて `LIKE` で引く。100 万行の偽の日誌で、当たらない語が約 8 秒 → 約 4.5 秒になった。
+ * 畳むと答えが変わるのは、本文の文字が畳まれて語の文字に重なるときだけで、畳んだ先（小文字）はそれ自体が別を持つ文字なので、別を持つ文字の無い語には起きない
+ */
+function hasLetterCase(q: string): boolean {
+  return q.toLowerCase() !== q.toUpperCase();
 }
 
 // 欄名をバインド変数にしない: `jsonb ->> unknown` が `->>(jsonb,int)` と `->>(jsonb,text)` のどちらか決まらず落ちるため、`sql.raw` で埋める。
 // 欄名を書き写さない: JS 側と同じ `JOURNAL_SEARCH_FIELDS` から作らないと、片方だけ直して見る欄がずれるため。
-function journalSearchFieldMatchesSql(pattern: string): SQL {
+function journalSearchFieldMatchesSql(pattern: string, operator: 'ilike' | 'like'): SQL {
   return sql.join(
     JOURNAL_SEARCH_FIELDS.map(
       (field) =>
-        sql`coalesce(${journal.entry}->>${sql.raw(`'${assertPlainFieldName(field)}'`)}, '') ilike ${pattern} escape ${sql.raw("'\\'")}`,
+        sql`coalesce(${journal.entry}->>${sql.raw(`'${assertPlainFieldName(field)}'`)}, '') ${sql.raw(operator)} ${pattern} escape ${sql.raw("'\\'")}`,
     ),
     sql` or `,
   );

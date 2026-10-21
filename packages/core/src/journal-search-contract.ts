@@ -104,6 +104,16 @@ export async function verifyJournalStoreSearchContract(
     );
   }
 
+  // 日本語と英字の混ざった語（#5126）: pg は大文字・小文字の別を持たない語だけを `LIKE` で引くので、混ざった語を `LIKE` へ倒すと、本文の大文字に当たらなくなる
+  const mixed = await ids('をverbatimで');
+  if (!mixed.includes(target.id)) {
+    throw new Error(
+      'JournalStore の q 契約（3: 大文字小文字を区別しない部分一致）が破れている — ' +
+        `本文に 'をVERBATIMで' を含む行（id=${target.id}）が、日本語と英字の混ざった q: 'をverbatimで' で返らなかった。` +
+        '（語の一部だけを見て、大文字小文字を区別する照合へ倒している疑い）',
+    );
+  }
+
   const percent = await ids('50%');
   if (!percent.includes(literal.id)) {
     throw new Error(
