@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { describeDenialStreakForManager } from './classifier-denial-streak.js';
 import { renderMemoryDocuments } from './memory.js';
 import {
   buildCloneSystemPrompt,
@@ -98,6 +99,42 @@ describe('人間に直された判断を基準として記憶へ移す（#5125 c
     for (const reason of ['conversation_end', 'pre_compact', 'scheduled'] as const) {
       expect(buildDistillPrompt(reason)).toContain('人間に直されたあなたの判断と、その基準');
     }
+  });
+});
+
+describe('分類器に止められた後の巻き添え — 読むだけは道具へ（#5138）', () => {
+  const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+  const worker = buildWorkerPrompt();
+
+  it('⭐ 担当と作業者の両方に、読むだけの照会は Read・Grep・Glob で行うよう書いてある', () => {
+    for (const prompt of [manager, worker]) {
+      expect(prompt).toContain(
+        'ファイルの中身を読む・語を探す・ファイルを探すのは、Bash ではなく `Read`・`Grep`・`Glob` の道具を使うこと。',
+      );
+      expect(prompt).toContain('`cd …;`・`bash -c "…"`・管で包まない');
+    }
+  });
+
+  it('止められた操作そのものは回り込まないことを、同じ節で言っている（道具へ寄せるのを回り込みと取り違えさせない）', () => {
+    for (const prompt of [manager, worker]) {
+      expect(prompt).toContain(
+        '止められた操作そのものを、言い換え・別の道具・別の手段で回り込んで通そうとしないこと。',
+      );
+      expect(prompt).toContain(
+        '巻き添えになった読むだけの照会の話であって、止められた操作の話ではない',
+      );
+    }
+  });
+
+  it('許可をコードに焼き込んでいない — 読むだけのコマンドを「通す」と約束していない', () => {
+    expect(manager).not.toContain('分類器を通らない');
+    expect(manager).not.toContain('必ず通る');
+  });
+
+  it('拒否が続いたときの担当への知らせにも、読むだけは道具で、を添え、回り込みではないと言う', () => {
+    const notice = describeDenialStreakForManager({ consecutive: 3, total: 3, firstReason: 'x' });
+    expect(notice).toContain('Bash ではなく `Read`・`Grep`・`Glob` の道具で行うこと');
+    expect(notice).toContain('止められた操作の回り込みではない');
   });
 });
 
