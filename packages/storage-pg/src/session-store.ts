@@ -1,7 +1,7 @@
 import { assertNoNul, countCodePoints, hasNul } from '@alteroid/core';
 import type { LostSessionGrave, SessionTranscriptTail } from '@alteroid/core';
 import type { SessionKey, SessionStore, SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
-import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, lt, ne, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toNumber } from './db.js';
@@ -10,6 +10,7 @@ import { sessionEntries, sessions } from './schema.js';
 
 // 行数の上限を外さない: 1行の大きさが一定でないので、費用の天井になるため。
 const TAIL_SCAN_ROWS = 2_000;
+const TAIL_FIRST_BATCH_ROWS = 16;
 
 function hasKeyNul(key: { projectKey: string; sessionId: string; subpath?: string }): boolean {
   return (
@@ -106,29 +107,55 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
   // `.length` で数えない: 補助面の文字が境目に絡むと、返す量が `maxChars` を上回る契約を破って古い行を静かに落とすため。
   async readTail(key: LostSessionGrave, maxChars: number): Promise<string | null> {
     if (hasKeyNul(key)) return null;
-    const rows = await this.#db
-      .select({ entry: sessionEntries.entry })
-      .from(sessionEntries)
-      .where(
-        and(
-          eq(sessionEntries.projectKey, key.projectKey),
-          eq(sessionEntries.sessionId, key.sessionId),
-          eq(sessionEntries.subpath, ''),
-        ),
-      )
-      .orderBy(desc(sessionEntries.seq))
-      .limit(TAIL_SCAN_ROWS);
-    if (rows.length === 0) return null;
 
-    // `chars >= maxChars` で止めない: 返す長さは `chars - 1` なので、`maxChars` を下回るため。
+    // 新しい側から keyset（`seq < 前の束の最後の seq`）で、小さい束ずつ読み進める。
+    // 一度に `TAIL_SCAN_ROWS` 行を引かない: 必要なのは末尾の `maxChars` 字だけなのに、pg ドライバが jsonb を行ごとに JS のオブジェクトへ戻すため、
+    // 1行 20KB の委譲では毎回 2000 行ぶん（約 40MB）を戻して捨てていた。
+    // 束は TAIL_FIRST_BATCH_ROWS 行から始めて倍に増やす（16 → 32 → 64 …）: 見回りの窓（20 万字）は 1行 20KB なら約 10 行で満ちるので、
+    // 16 行で始めれば1往復で済み、余分に戻す行も最後の束の端数だけで済む。倍にするので、1行が小さい場合（1KB なら約 200 行要る）も
+    // 往復は 4 回（16+32+64+128）で足り、2000 行を読み切る最悪でも 7 回（最後の束は残りの 992 行）で済む。
+    // 読む行の合計は `TAIL_SCAN_ROWS` を越えない（最後の束はその残りへ切る）。
+    // 束の間に append された行は読まない: 新しい行の `seq` は前の束の最後の `seq` より大きく、`seq < cursor` の外だから。
+    // 1回目の束より後ろに積まれた行は、2回目以降の束にも混ざらない。ただし、先に `seq` を取った書き込みが後から commit される場合に限り、
+    // その行は cursor より下に現れうる（1文の snapshot で読んでいた今までとの差。窓の中の1行が増えるだけで、契約は変わらない）。
     const lines: string[] = [];
     let chars = 0;
-    for (const row of rows) {
-      const line = JSON.stringify(row.entry);
-      lines.push(line);
-      chars += countCodePoints(line) + 1;
-      if (chars > maxChars + 1) break;
+    let cursor: number | undefined;
+    let scanned = 0;
+    let batch = TAIL_FIRST_BATCH_ROWS;
+    let done = false;
+    while (!done && scanned < TAIL_SCAN_ROWS) {
+      const limit = Math.min(batch, TAIL_SCAN_ROWS - scanned);
+      const rows = await this.#db
+        .select({ seq: sessionEntries.seq, entry: sessionEntries.entry })
+        .from(sessionEntries)
+        .where(
+          and(
+            eq(sessionEntries.projectKey, key.projectKey),
+            eq(sessionEntries.sessionId, key.sessionId),
+            eq(sessionEntries.subpath, ''),
+            cursor === undefined ? undefined : lt(sessionEntries.seq, cursor),
+          ),
+        )
+        .orderBy(desc(sessionEntries.seq))
+        .limit(limit);
+      scanned += rows.length;
+
+      // `chars >= maxChars` で止めない: 返す長さは `chars - 1` なので、`maxChars` を下回るため。
+      for (const row of rows) {
+        const line = JSON.stringify(row.entry);
+        lines.push(line);
+        chars += countCodePoints(line) + 1;
+        if (chars > maxChars + 1) {
+          done = true;
+          break;
+        }
+      }
+      if (rows.length < limit) break;
+      cursor = rows[rows.length - 1]!.seq;
+      batch *= 2;
     }
+    if (lines.length === 0) return null;
     return lines.reverse().join('\n');
   }
 
