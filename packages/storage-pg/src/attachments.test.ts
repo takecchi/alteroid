@@ -77,6 +77,7 @@ describe('PgAttachmentStore', () => {
       `select indexname from pg_indexes where tablename = 'attachments' order by indexname`,
     );
     expect(rows.rows.map((row) => row.indexname)).toEqual([
+      'attachments_blob_key_idx',
       'attachments_created_at_idx',
       'attachments_expires_at_idx',
       'attachments_pkey',

@@ -584,6 +584,11 @@ export const STATEMENTS = [
      primary key (scope, source, idempotency_key)
    )`,
   `create index if not exists event_receipts_at_idx on event_receipts (at)`,
+  // `archive()` が advisory lock を握ったまま「同じセッションの直前の行」を引くので、無いと外側と `max(at)` の両方が全走査になる（#5140）。
+  // `concurrently` にしない: 本文は TOAST に在り本体の行は細く、退避の書き込みはまれなので、作る間の書き込みの待ちは短いため
+  `create index if not exists archive_session_at_idx on archive (session_id, at)`,
+  // 孤児の掃除（`sweepOrphanBlobs`）が `blob_key in (…)` で引くので、無いと束ごとに全走査になる（#5140）。中身を DB に持つ行は `blob_key` を持たないので外す
+  `create index if not exists attachments_blob_key_idx on attachments (blob_key) where blob_key is not null`,
 ] as const;
 
 /** 人間への返答（`humanReplies`）だけを持つ部分索引（#5089） */
