@@ -3,6 +3,7 @@ import { appendFile, mkdir, open, readFile, readdir, rm } from 'node:fs/promises
 import { join } from 'node:path';
 
 import {
+  countToolUsesByActorFromPages,
   journalEntrySchema,
   JournalAnchorNotFoundError,
   journalRowType,
@@ -151,6 +152,13 @@ export class FsJournalStore implements JournalStore {
 
   async listPage(query: JournalQuery = {}): Promise<JournalPage> {
     return listPageByOverfetch(this, query);
+  }
+
+  async countToolUsesByActor(query: {
+    since: string;
+    until: string;
+  }): Promise<{ actor: string; count: number }[]> {
+    return countToolUsesByActorFromPages(this, query);
   }
 
   async get(id: string): Promise<JournalEntry | null> {

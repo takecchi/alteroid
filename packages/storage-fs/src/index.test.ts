@@ -40,6 +40,7 @@ import {
   verifyJournalStoreSearchContract,
   verifyJournalStoreConversationIdContract,
   verifyJournalStoreDeletedConversationContract,
+  verifyJournalStoreToolUseCountContract,
   verifyJournalStoreWithdrawnContract,
   verifyJournalStoreWithContract,
   verifyTranscriptArchiveContract,
@@ -1184,6 +1185,12 @@ describe('FsJournalStore', () => {
   describe('取り下げの印の契約（issue #3990）', () => {
     it('印の行が書き戻せ、同じ会話の印だけが集まり、since より前は外れ、頁をまたいでも読み落とさない', async () => {
       await verifyJournalStoreWithdrawnContract(stores.journal);
+    });
+  });
+
+  describe('tool_use の件数の契約', () => {
+    it('窓の内の tool_use だけが actor ごとに数えられ、両端を含み、他の種別と墓標が名指しした行は数えない', async () => {
+      await verifyJournalStoreToolUseCountContract(stores.journal);
     });
   });
 

@@ -351,6 +351,31 @@ export class PgJournalStore implements JournalStore {
     return rows.map((row) => row.id);
   }
 
+  // 本文（道具の入力）を流さず、層（`actor`）ごとの件数だけ読む。`journal_type_at_idx`（type, at）に乗る。
+  // `list` は型（`journalEntrySchema`）に合わない行を落とすので、ここでも必須の文字列の欄（`actor`・`tool`）の型までは SQL で確かめる（`humanReplies` と同じ線）。
+  // それ以外の欄だけが型に合わない行（書き込み時の検査があるので、ふつうは無い）は、`list` と違って数える
+  async countToolUsesByActor(query: {
+    since: string;
+    until: string;
+  }): Promise<{ actor: string; count: number }[]> {
+    const actor = sql<string>`${journal.entry}->>'actor'`;
+    const rows = await this.#db
+      .select({ actor, count: sql<number>`count(*)::int` })
+      .from(journal)
+      .where(
+        and(
+          hiddenConversationExchangeExcluded(),
+          eq(journal.type, 'tool_use'),
+          gte(journal.at, new Date(query.since)),
+          lte(journal.at, new Date(query.until)),
+          sql`jsonb_typeof(${journal.entry}->'actor') = 'string'`,
+          sql`jsonb_typeof(${journal.entry}->'tool') = 'string'`,
+        ),
+      )
+      .groupBy(actor);
+    return rows.map((row) => ({ actor: row.actor, count: toNumber(row.count) }));
+  }
+
   async clear(): Promise<number> {
     const removed = await this.#db.delete(journal).returning({ seq: journal.seq });
     // 消したら返答の覚えも捨てる（読み足しは前回より後ろしか見ないため）

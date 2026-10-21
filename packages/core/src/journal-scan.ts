@@ -57,3 +57,23 @@ export async function scanJournalPages(
     after = next;
   }
 }
+
+// 頁で読み切る（`list()` を `limit` なしで呼ばない）: 窓の `tool_use` は桁違いに多く、全件を1度にヒープへ載せると落ちるため。
+// `listPage` の絞り（墓標・名指し・境界）をそのまま通す: 3実装の「窓の内の tool_use」の答えを `listPage` の1本に揃えるため。
+// 本文を運ばずに数える口が要る器（pg）は、これを使わず SQL で数える
+export async function countToolUsesByActorFromPages(
+  journal: Pick<JournalStore, 'listPage'>,
+  query: { since: string; until: string },
+): Promise<{ actor: string; count: number }[]> {
+  const counts = new Map<string, number>();
+  await scanJournalPages(
+    journal,
+    { types: ['tool_use'], since: query.since, until: query.until },
+    (page) => {
+      for (const entry of page) {
+        if (entry.type === 'tool_use') counts.set(entry.actor, (counts.get(entry.actor) ?? 0) + 1);
+      }
+    },
+  );
+  return [...counts].map(([actor, count]) => ({ actor, count }));
+}

@@ -319,6 +319,17 @@ export interface JournalStore {
   withdrawnClientMessageIds?(query: { since: string; conversationId?: string }): Promise<string[]>;
 
   /**
+   * `tool_use` の行を `actor` ごとに数える（`since` 以降・`until` 以前。両端を含む。`listPage` の `since` / `until` と同じ境界）。並びは契約しない。
+   * 活動の要約（`buildActivityDigest`）が、窓の大半を占める `tool_use` を本文（道具の入力）ごと頁で運ばずに、層ごとの件数だけ取るための口。
+   * 削除した会話の行・墓標が名指しした行は `list` と同じく外す。`actor` が文字列でない行は `list` が読み出しで落とすので、数えない。
+   * 省略可能: 持たない器では、呼び手が `listPage` で読んだ行から同じものを作る。
+   */
+  countToolUsesByActor?(query: {
+    since: string;
+    until: string;
+  }): Promise<{ actor: string; count: number }[]>;
+
+  /**
    * 全件を消す（ワークスペースのリセット専用）。「追記専用」の契約への例外で、呼ぶのは `resetWorkspaceState` だけ。
    * 日誌の「聞かずに実行した判断は必ず残る」は、通常運用で消せないことではなく、リセットが常に人間の明示的な決定を経ることで保たれる。消した件数を返す。
    */

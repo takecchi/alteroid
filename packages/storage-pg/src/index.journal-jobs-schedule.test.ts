@@ -18,6 +18,7 @@ import {
   verifyJournalStoreSearchContract,
   verifyJournalStoreConversationIdContract,
   verifyJournalStoreDeletedConversationContract,
+  verifyJournalStoreToolUseCountContract,
   verifyJournalStoreWithdrawnContract,
   verifyJournalStoreWithContract,
   verifyPermissionGrantStoreContract,
@@ -363,6 +364,32 @@ describe('PgJournalStore', () => {
   describe('取り下げの印の契約（issue #3990）', () => {
     it('印の行が書き戻せ、同じ会話の印だけが集まり、since より前は外れ、頁をまたいでも読み落とさない', async () => {
       await verifyJournalStoreWithdrawnContract(stores.journal);
+    });
+  });
+
+  describe('tool_use の件数の契約', () => {
+    it('窓の内の tool_use だけが actor ごとに数えられ、両端を含み、他の種別と墓標が名指しした行は数えない', async () => {
+      await verifyJournalStoreToolUseCountContract(stores.journal);
+    });
+
+    // 生 SQL で insert する: `append()` 経由では `journalEntrySchema.parse` を通ってしまい、型に合わない行を作れないから。
+    // `list` は読み出しで落とす行なので、件数にも入れない（口を使う digest と使わない digest の件数が揃うため）
+    it('actor が文字列でない行・無い行は数えない（list が読み出しで落とす行と揃える）', async () => {
+      const at = '2026-08-12T00:00:00.000Z';
+      const insert = (id: string, entry: Record<string, unknown>) =>
+        db.execute(
+          sql`insert into journal (id, at, type, entry)
+              values (${id}, ${at}, 'tool_use', ${JSON.stringify({ type: 'tool_use', id, at, ...entry })}::jsonb)`,
+        );
+      await insert('tu-ok', { actor: 'clone', tool: 'Bash' });
+      await insert('tu-ok-2', { actor: 'clone', tool: 'Read' });
+      await insert('tu-number', { actor: 5, tool: 'Bash' });
+      await insert('tu-null', { actor: null, tool: 'Bash' });
+      await insert('tu-missing', { tool: 'Bash' });
+
+      const counted = await stores.journal.countToolUsesByActor?.({ since: at, until: at });
+
+      expect(counted).toEqual([{ actor: 'clone', count: 2 }]);
     });
   });
 

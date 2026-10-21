@@ -413,6 +413,10 @@ const JOURNAL_SCAN_TRUNCATED_NOTICE =
   '（実際はもっと多い可能性がある）。新しい側から読んでいるので、新しいものは' +
   '1件も落ちていない——足りないとすれば古い側である。';
 
+// ツール実行の件数は打ち切りの外で数えているので、そのことを言う: 言わないと、窓の全部を数えた件数まで「足りないかもしれない」と読めるため
+const TOOL_USE_COUNTED_IN_FULL_NOTICE =
+  'ただし「ツール実行」の2つの件数は、この走査とは別に窓の全部を数えたもので、打ち切りの影響を受けない。';
+
 const ESCALATION_RETAIN_CAPPED_NOTICE =
   '（⚠ 束ねた元の行を全部は読んでいない。保持の上限に当たったので、この件数は少なく出ている可能性がある）';
 
@@ -542,10 +546,30 @@ export async function buildActivityDigest(
   let cloneToolUsesCount = 0;
   let delegatedToolUsesCount = 0;
 
+  // 口が在れば `tool_use` を走査から外す: 窓の行の大半は `tool_use` で、使うのは層ごとの件数だけなのに、頁ごとに全件を本文（道具の入力）ごと運んでいたため。
+  // 口の `until` は含む側なので `until` の1ms 前を渡す: `withinWindow`（`until` を含まない）と同じ答えにするため。`at` はミリ秒精度で、1ms 前までが「`until` より前」の全部になる
+  const countToolUsesByActor = stores.journal.countToolUsesByActor?.bind(stores.journal);
+  if (countToolUsesByActor !== undefined) {
+    const counted = await countToolUsesByActor({
+      since: sinceIso,
+      until: new Date(until.getTime() - 1).toISOString(),
+    });
+    for (const { actor, count } of counted) {
+      if (isCloneActor(actor)) cloneToolUsesCount += count;
+      else delegatedToolUsesCount += count;
+    }
+  }
+
   const activityScan = await scanJournalPages(
     stores.journal,
     {
-      types: ['decision', 'escalation', 'memory_update', 'external_event', 'tool_use'],
+      types: [
+        'decision',
+        'escalation',
+        'memory_update',
+        'external_event',
+        ...(countToolUsesByActor === undefined ? (['tool_use'] as const) : []),
+      ],
       since: sinceIso,
       until: untilIso,
       order: 'desc',
@@ -579,6 +603,10 @@ export async function buildActivityDigest(
   );
 
   const journalScanTruncated = exchangeScan.truncated || activityScan.truncated;
+  const journalScanTruncatedNotice =
+    countToolUsesByActor === undefined
+      ? JOURNAL_SCAN_TRUNCATED_NOTICE
+      : `${JOURNAL_SCAN_TRUNCATED_NOTICE}${TOOL_USE_COUNTED_IN_FULL_NOTICE}`;
 
   const decisions = decisionBucket.retained;
   const decisionsCount = decisionBucket.count;
@@ -700,7 +728,7 @@ export async function buildActivityDigest(
 
   const sections: string[] = [
     `期間: ${window.since.toISOString()} 〜 ${until.toISOString()}`,
-    ...(journalScanTruncated ? [JOURNAL_SCAN_TRUNCATED_NOTICE] : []),
+    ...(journalScanTruncated ? [journalScanTruncatedNotice] : []),
     '',
     `- 人間からの発言: ${humanTurnsCount} 件`,
     `- マネージャーへの委譲（この期間に動いたもの）: ${managers.length} 本`,
