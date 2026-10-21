@@ -27,7 +27,7 @@ ARG CODEX_VERSION=0.162.1
 # プロジェクトの app と runner が一斉にビルドし、Railway のビルダーが Docker Hub の匿名の
 # 取得制限（429 Too Many Requests）に当たってビルドが落ちた（2026-10-10 JST）。
 # ミラーは Docker 公式イメージと同じ digest を持つので、中身は digest のまま変わらない。
-FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS build
+FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:8eb619e402eaede1748a3c8173bffab391592812e85136452f781741c7242ddf AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -79,7 +79,7 @@ ENV ALTEROID_BUILD_REV=${ALTEROID_BUILD_REV:-$RAILWAY_GIT_COMMIT_SHA}
 RUN pnpm build
 
 
-FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS runtime
+FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:8eb619e402eaede1748a3c8173bffab391592812e85136452f781741c7242ddf AS runtime
 
 # マネージャーが人間と同じ手つきで作業するための素の道具（runner で使う）。
 #
