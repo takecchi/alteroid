@@ -1442,11 +1442,23 @@ async function describeMissingCommitment(stores: Stores, id: string): Promise<st
 }
 
 // 「記録が無い」を「名乗っていない」と断定しない: 古い行には記録が無いため「取り違えた可能性がある」に留める
-async function describeCommitmentNotOnLedger(stores: Stores, id: string): Promise<string> {
+async function describeCommitmentNotOnLedger(
+  stores: Stores,
+  id: string,
+  search: JournalSlicedSearchOptions = {},
+): Promise<string> {
   const notOnLedger = `引き受けた仕事 ${id} は台帳に無い。`;
   let recorded: JournalEntry[];
+  let coverage: JournalSearchCoverage;
   try {
-    recorded = await stores.journal.list({ q: id, limit: 1 });
+    // 1本の問い合わせで日誌の先頭まで読まない（#5140）: 当たらない id では本番の大きさで問い合わせの期限に届き、取り違えの助言が出ずに「判定できない」に倒れるため。`journal_read` の語の検索と同じく1日ずつ遡り、時間の予算で止める
+    const searched = await searchJournalBackwardInSlices(
+      stores.journal,
+      { q: id, limit: 1 },
+      search,
+    );
+    recorded = searched.entries;
+    coverage = searched.coverage;
   } catch (error) {
     // 「在った」「無かった」のどちらへも倒さない: 判定できないという3つ目の状態を持つ
     noteUnreadableRecord('機械が名乗った id の記帳（commitment_close の read-through）', id, error);
@@ -1457,6 +1469,15 @@ async function describeCommitmentNotOnLedger(stores: Stores, id: string): Promis
       `${notOnLedger}**ただしこの id を機械が名乗った記録は日誌に在る**` +
       `（${recorded[0]?.at} の行）。⟹ 台帳に載った後に行が消えたということである（#856 本体）。` +
       'id の取り違えではない。'
+    );
+  }
+  // 予算で打ち切ったら「無い」と言い切らない: 探していない古い側に記録が在りうるため
+  if (coverage.kind === 'budget') {
+    return (
+      `${notOnLedger}**この id を機械が名乗った記録は、日誌の ${coverage.from} 〜 ${coverage.to} には無い。` +
+      `それより古い側は、時間の予算（${String((search.budgetMs ?? JOURNAL_SEARCH_BUDGET_MS) / 1000)} 秒）を使い切って見ていない**` +
+      ' ⟹ id の取り違えか、古い行が消えたのかは判定できない（`commitment_list` で実在する id を確かめること）。' +
+      `古い側を探すなら journal_read q="${id}" until=${journalSearchContinuationUntil(coverage.from)} を打つ。`
     );
   }
   return (
@@ -5464,7 +5485,7 @@ export function createCloneTools(context: ToolContext) {
           unreadable = true;
         }
         if (existing === null && !unreadable) {
-          return text(await describeCommitmentNotOnLedger(stores, id));
+          return text(await describeCommitmentNotOnLedger(stores, id, context.journalSearch));
         }
         if (existing !== null && existing.closedAt !== undefined) {
           return text(
@@ -5485,7 +5506,7 @@ export function createCloneTools(context: ToolContext) {
           // 読み直した行の形どおりに言う: 消えていた（保持上限で刈られた・会話の取り消しで消えた）回と、閉じていない回を「片付けてある」に潰さないため
           if (after === null) {
             return text(
-              `${await describeCommitmentNotOnLedger(stores, id)}` +
+              `${await describeCommitmentNotOnLedger(stores, id, context.journalSearch)}` +
                 '（確かめた直後に台帳から無くなっていた）。この呼びでは閉じていない。',
             );
           }
@@ -5664,7 +5685,7 @@ export function createCloneTools(context: ToolContext) {
           }
           if (after === null) {
             return text(
-              `${await describeCommitmentNotOnLedger(stores, id)}` +
+              `${await describeCommitmentNotOnLedger(stores, id, context.journalSearch)}` +
                 '（確かめた直後に台帳から無くなっていた）。この呼びでは直していない。',
             );
           }

@@ -14887,7 +14887,10 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
       ...stores,
       journal: {
         ...stores.journal,
+        // 読みは1日ずつの窓で遡る（#5140）ので、窓の読み（listPage）と最古の時刻（oldestAt）を壊す
         list: () => Promise.reject(new Error('DB接続断（テスト用）')),
+        listPage: () => Promise.reject(new Error('DB接続断（テスト用）')),
+        oldestAt: () => Promise.reject(new Error('DB接続断（テスト用）')),
       },
     };
     const tools = createCloneTools({
@@ -14907,6 +14910,39 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
     expect(reply).toContain('どちらかは判定できない');
     expect(reply).toContain('DB接続断（テスト用）');
     expect(reply).not.toContain('機械が名乗った記録は日誌に在る');
+    expect(reply).not.toContain('機械が名乗った記録も日誌に無い');
+  });
+
+  it('⭐ 日誌を時間の予算の内で探し切れなければ、探した範囲を名乗り、「無い」とも取り違えとも言い切らない（#5140）', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: '関係の無い内部ターン',
+    });
+    // 窓の上端を3日先に置き、予算を0にする: 最初の1日の窓で日誌の最古に届かず、予算切れで止まる
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+      journalSearch: {
+        budgetMs: 0,
+        now: () => new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+      },
+    });
+    const close = tools.find((entry) => entry.name === 'commitment_close');
+    const result = await close?.handler(
+      { id: 'c-far-away', reason: '片付けようとした' } as never,
+      {},
+    );
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(reply).toContain('台帳に無い');
+    expect(reply).toContain('それより古い側は、時間の予算（0 秒）を使い切って見ていない');
+    expect(reply).toContain('判定できない');
+    expect(reply).toContain('journal_read q="c-far-away" until=');
     expect(reply).not.toContain('機械が名乗った記録も日誌に無い');
   });
 
