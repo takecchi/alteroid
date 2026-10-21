@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { setup, waitForDone } from './clone-test-harness.js';
 import type { JournalEntryInput } from './schema.js';
@@ -16,8 +16,6 @@ function memoryUpdate(
 ): JournalEntryInput {
   return { type: 'memory_update', slug: 'notes', cause, action, summary: 'notes を書いた' };
 }
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 // 1回目のターンでセッションを組ませ、`change` の後の2回目のターン入力を返す
 async function secondTurnInput(stores: Stores, change: () => Promise<void>): Promise<string> {
@@ -77,16 +75,22 @@ describe('記憶の差分に、誰が書き換えたかを添える', () => {
   it('前回載せた時刻より前の人間の行は数えない（古い書き込みで今回の変更を人間のものと名乗らない）', async () => {
     const stores = createMemoryStores();
     await stores.persona.write('notes', NOTES_OLD);
-    await stores.journal.append(memoryUpdate('human'));
-    // 行の時刻とセッションを組む時刻を別のミリ秒にする
-    await sleep(15);
+    // 時計だけを偽にする（タイマーは本物のまま）: 実時間の待ちでミリ秒をずらすと、遅い環境で同じミリ秒に落ちうるため
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-21T00:00:00.000Z'));
+      await stores.journal.append(memoryUpdate('human'));
+      vi.setSystemTime(new Date('2026-10-21T00:01:00.000Z'));
 
-    const input = await secondTurnInput(stores, async () => {
-      await stores.persona.write('notes', NOTES_NEW);
-    });
+      const input = await secondTurnInput(stores, async () => {
+        await stores.persona.write('notes', NOTES_NEW);
+      });
 
-    expect(input).not.toContain(HUMAN_LINE);
-    expect(input).toContain(`${UNTRACED_LINE}notes`);
+      expect(input).not.toContain(HUMAN_LINE);
+      expect(input).toContain(`${UNTRACED_LINE}notes`);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('人間の書き込みが write_failed で打ち消されていれば、人間のものとして名指さない', async () => {
