@@ -342,6 +342,13 @@ import {
   type UsageTotals,
 } from './usage.js';
 import { JOURNAL_SEARCH_UNCOVERED_LIST } from './journal-search.js';
+import {
+  JOURNAL_SEARCH_BUDGET_MS,
+  journalSearchContinuationUntil,
+  searchJournalBackwardInSlices,
+  type JournalSearchCoverage,
+  type JournalSlicedSearchOptions,
+} from './journal-sliced-search.js';
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
 import { describeManagerModels, managerModelsOf } from './manager-models.js';
 import {
@@ -433,6 +440,8 @@ export interface ReplyAttachments {
 
 export interface ToolContext {
   stores: Stores;
+  /** `journal_read` の語の検索の窓・予算・時計（#5126）。試験が小さくするための口。省けば既定（1日・8秒）。 */
+  journalSearch?: JournalSlicedSearchOptions;
   emit(event: ChatStreamEvent): void;
   flushReply?(): Promise<void>;
   // optional にしない: 渡し忘れが型検査を通り、承認が黙って会話に紐づかなくなるため
@@ -3857,6 +3866,7 @@ export function createCloneTools(context: ToolContext) {
         '（新しい順に返るので、until を指定しないと最新分しか見えない）。',
         '一覧の本文は抜粋で、全文が要る1件は id を渡して取る。',
         'q で本文を語で探せる（他の絞りと併用できる）。',
+        'q で探すときは新しい側から1日ずつ遡り、時間の予算（8 秒）を使い切ったら、どこまで探したかと続きの until を最初の行で名乗って止まる。',
         '**q が当たらないことは「日誌にその語が無い」を意味しない** —',
         `${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対象に入っていない。`,
         'with で exchange の相手を絞れる（他の絞りと併用できる）。',
@@ -3982,8 +3992,10 @@ export function createCloneTools(context: ToolContext) {
 
         const requested = limit ?? 20;
         let journalPage: Awaited<ReturnType<JournalStore['listPage']>>;
+        // 語の検索の探した範囲（#5126）。語が無い・空の呼びは今どおり1本で読むので `complete`
+        let coverage: JournalSearchCoverage = { kind: 'complete' };
         try {
-          journalPage = await stores.journal.listPage({
+          const query = {
             limit: requested,
             ...(normalizedSince === undefined ? {} : { since: normalizedSince }),
             ...(normalizedUntil === undefined ? {} : { until: normalizedUntil }),
@@ -3994,7 +4006,19 @@ export function createCloneTools(context: ToolContext) {
             ...(afterId === undefined || afterAt === undefined
               ? {}
               : { after: { id: afterId, at: afterAt } }),
-          });
+          };
+          // 語で探すときは窓で区切って遡る（#5126）: 当たりの少ない語が本番の大きさで1本数十秒かかり、その間なにも返らないため
+          if (q !== undefined && q !== '') {
+            const searched = await searchJournalBackwardInSlices(
+              stores.journal,
+              { ...query, q },
+              context.journalSearch,
+            );
+            journalPage = { entries: searched.entries, next: searched.next };
+            coverage = searched.coverage;
+          } else {
+            journalPage = await stores.journal.listPage(query);
+          }
         } catch (error) {
           // 錨が見つからないのは「判定できない」で「先頭から」ではない: 黙って先頭から読み直すと、続きを読んでいるつもりのクローンが同じ行を読み返すため
           if (error instanceof JournalAnchorNotFoundError) {
@@ -4033,7 +4057,23 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
+        const budgetSeconds = Math.round(
+          (context.journalSearch?.budgetMs ?? JOURNAL_SEARCH_BUDGET_MS) / 1000,
+        );
+
         if (entries.length === 0) {
+          // 予算で打ち切った0件は「無い」と言わず、未探索の範囲を最初の行に出す（#5126。`conversation_read` の「この窓には無い（判定できない）」と同じ形）
+          if (q !== undefined && coverage.kind === 'budget') {
+            return text(
+              [
+                `"${q}" は、この窓（${coverage.from} 〜 ${coverage.to}）には無い（判定できない）。` +
+                  `日誌を ${coverage.from} まで遡ったところで時間の予算（${budgetSeconds} 秒）を使い切り、それより古い側は見ていない。` +
+                  `古い側を探すには journal_read q="${q}" until=${journalSearchContinuationUntil(coverage.from)} を渡す（ほかの絞りは同じものを渡す）。`,
+                `探す対象に入っていない欄（${JOURNAL_SEARCH_UNCOVERED_LIST}）にだけ書かれている語は、ここでは当たらない。`,
+                ...horizonNoteLines,
+              ].join('\n'),
+            );
+          }
           // `q` で0件でも、探す対象に入っていない欄が在ることまで言う: 黙ると「日誌にその語は無い」と読めるが tool_use の input に書かれているかもしれないため
           if (q !== undefined) {
             return text(
@@ -4041,6 +4081,13 @@ export function createCloneTools(context: ToolContext) {
                 `"${q}" に当たる日誌は無い（この条件の中では）。` +
                   `ただし ${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対象に入っていないので、` +
                   'そこにだけ書かれている語はここでは当たらない。',
+                ...(q === ''
+                  ? []
+                  : [
+                      normalizedSince === undefined
+                        ? '（日誌の先頭まで探した）'
+                        : `（since=${normalizedSince} まで探した。それより古い側は見ていない）`,
+                    ]),
                 ...horizonNoteLines,
               ].join('\n'),
             );
@@ -4103,8 +4150,17 @@ export function createCloneTools(context: ToolContext) {
           shownCount < entries.length && lastShown !== undefined
             ? { id: lastShown.id, at: lastShown.at }
             : moreBeyond;
+        // 当たりがあっても、予算で打ち切ったなら未探索の範囲を最初の行に出す: 一覧の末尾に置くと、出た分が全部だと読まれるため（#5126）
+        const coverageHead =
+          q !== undefined && coverage.kind === 'budget'
+            ? [
+                `（"${q}" は、日誌を ${coverage.from} まで遡ったところで時間の予算（${budgetSeconds} 秒）を使い切った。` +
+                  `${coverage.from} より古い側は見ていない。古い側を探すには journal_read until=${journalSearchContinuationUntil(coverage.from)} を渡す（ほかの絞りは同じものを渡す））`,
+              ]
+            : [];
         return text(
           [
+            ...coverageHead,
             listing,
             ...(cursor === null ? [] : [describeJournalContinuation(cursor)]),
             '（本文は抜粋。全文は journal_read id=<id> で取れる）',
