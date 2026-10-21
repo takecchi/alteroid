@@ -74,7 +74,8 @@ describe('ensureJournalWithdrawalsIndex（#5089）', () => {
     expect([...(ids ?? [])].sort()).toEqual(
       Array.from({ length: 10 }, (_, k) => `cm-${String(k * 300)}`).sort(),
     );
-    const query = queries.at(-1);
+    // 最後の1本を取らない: 問い合わせはトランザクションに包まれ（JIT を切るため）、最後は `commit` になりうるため
+    const query = queries.findLast((entry) => entry.sql.includes(`'withdrawnClientMessageId'`));
     if (query === undefined) throw new Error('SQL を捕まえられなかった');
     const inlined = query.sql.replace(/\$(\d+)/g, (_match, index: string) => {
       const value = query.params[Number(index) - 1];
@@ -142,6 +143,25 @@ describe('PgJournalStore.withdrawnClientMessageIds（#5089）', () => {
     });
 
     expect(ids).toEqual(['cm-kept']);
+  });
+
+  it('⭐ 問い合わせはトランザクションの中で JIT を切って打ち、接続の jit の設定は元のまま残す', async () => {
+    const queries: string[] = [];
+    const logged = createPgStoresFromDb(
+      client.withLogger({ logQuery: (text) => void queries.push(text) }),
+    );
+    const before = (await client.query<{ jit: string }>(`select current_setting('jit') as jit`))
+      .rows[0]?.jit;
+
+    await logged.journal.withdrawnClientMessageIds?.({ since: '1970-01-01T00:00:00.000Z' });
+
+    const setAt = queries.findIndex((text) => text.includes(`set_config('jit', 'off',`));
+    const selectAt = queries.findIndex((text) => text.includes(`'withdrawnClientMessageId'`));
+    expect(setAt).toBeGreaterThanOrEqual(0);
+    expect(selectAt).toBeGreaterThan(setAt);
+    const after = (await client.query<{ jit: string }>(`select current_setting('jit') as jit`))
+      .rows[0]?.jit;
+    expect(after).toBe(before);
   });
 
   it('印の欄が文字列でない行は数えない（list が読み出しで落とす形と揃える）', async () => {

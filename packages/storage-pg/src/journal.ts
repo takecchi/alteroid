@@ -317,22 +317,29 @@ export class PgJournalStore implements JournalStore {
     conversationId?: string;
   }): Promise<string[]> {
     if (query.conversationId !== undefined && hasNul(query.conversationId)) return [];
-    const rows = await this.#db
-      .select({ id: sql<string>`${journal.entry}->>'withdrawnClientMessageId'` })
-      .from(journal)
-      .where(
-        and(
-          hiddenConversationExchangeExcluded(),
-          eq(journal.type, 'exchange'),
-          sql`(${journal.entry}->>'with') = 'self'`,
-          sql`(${journal.entry}->>'withdrawnClientMessageId') is not null`,
-          sql`jsonb_typeof(${journal.entry}->'withdrawnClientMessageId') = 'string'`,
-          gte(journal.at, new Date(query.since)),
-          ...(query.conversationId === undefined
-            ? []
-            : [sql`(${journal.entry}->>'conversationId') = ${query.conversationId}`]),
-        ),
-      );
+    // この問い合わせだけ JIT を切る: 印は数十行しか無いのに、部分索引の述語（jsonb の欄）に統計が無く行数を大きく見積もるため、
+    // 費用が JIT の閾値を越え、実行 0.1ms 未満の問い合わせに毎回 100ms を超える翻訳を払っていた（偽の日誌 27 万行で実測）。
+    // 統計（CREATE STATISTICS）で見積もりを直さない: 印は日誌のごく一部で、ANALYZE の標本に入るかどうかで見積もりが揺れるため。
+    // DB 全体の `jit` には触れない（`set_config(..., true)` はこのトランザクションの中だけ効く。`withStatementTimeout` と同じ作法）
+    const rows = await this.#db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('jit', 'off', true)`);
+      return tx
+        .select({ id: sql<string>`${journal.entry}->>'withdrawnClientMessageId'` })
+        .from(journal)
+        .where(
+          and(
+            hiddenConversationExchangeExcluded(),
+            eq(journal.type, 'exchange'),
+            sql`(${journal.entry}->>'with') = 'self'`,
+            sql`(${journal.entry}->>'withdrawnClientMessageId') is not null`,
+            sql`jsonb_typeof(${journal.entry}->'withdrawnClientMessageId') = 'string'`,
+            gte(journal.at, new Date(query.since)),
+            ...(query.conversationId === undefined
+              ? []
+              : [sql`(${journal.entry}->>'conversationId') = ${query.conversationId}`]),
+          ),
+        );
+    });
     return rows.map((row) => row.id);
   }
 
