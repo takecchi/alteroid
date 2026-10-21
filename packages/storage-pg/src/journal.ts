@@ -361,20 +361,24 @@ export class PgJournalStore implements JournalStore {
     until: string;
   }): Promise<{ actor: string; count: number }[]> {
     const actor = sql<string>`${journal.entry}->>'actor'`;
-    const rows = await this.#db
-      .select({ actor, count: sql<number>`count(*)::int` })
-      .from(journal)
-      .where(
-        and(
-          hiddenConversationExchangeExcluded(),
-          eq(journal.type, 'tool_use'),
-          gte(journal.at, new Date(query.since)),
-          lte(journal.at, new Date(query.until)),
-          sql`jsonb_typeof(${journal.entry}->'actor') = 'string'`,
-          sql`jsonb_typeof(${journal.entry}->'tool') = 'string'`,
-        ),
-      )
-      .groupBy(actor);
+    // この問い合わせだけ JIT を切る（`withdrawnClientMessageIds` と同じ作法）: 窓の行を数えるだけなのに費用が JIT の閾値を越え、偽の日誌 60 万行で実行の大半（約 110ms）が翻訳だったため
+    const rows = await this.#db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('jit', 'off', true)`);
+      return tx
+        .select({ actor, count: sql<number>`count(*)::int` })
+        .from(journal)
+        .where(
+          and(
+            hiddenConversationExchangeExcluded(),
+            eq(journal.type, 'tool_use'),
+            gte(journal.at, new Date(query.since)),
+            lte(journal.at, new Date(query.until)),
+            sql`jsonb_typeof(${journal.entry}->'actor') = 'string'`,
+            sql`jsonb_typeof(${journal.entry}->'tool') = 'string'`,
+          ),
+        )
+        .groupBy(actor);
+    });
     return rows.map((row) => ({ actor: row.actor, count: toNumber(row.count) }));
   }
 
@@ -384,21 +388,25 @@ export class PgJournalStore implements JournalStore {
   async conversationIdsAfter(query: { after: JournalCursor; until?: string }): Promise<string[]> {
     const afterSeq = await this.#anchorSeq(query.after);
     const conversationId = sql<string>`${journal.entry}->>'conversationId'`;
-    const rows = await this.#db
-      .selectDistinct({ conversationId })
-      .from(journal)
-      .where(
-        and(
-          hiddenConversationExchangeExcluded(),
-          eq(journal.type, 'exchange'),
-          sql`(${journal.entry}->>'with') = 'human'`,
-          gt(journal.seq, afterSeq),
-          ...(query.until === undefined ? [] : [lte(journal.at, new Date(query.until))]),
-          sql`${journal.entry}->>'role' in ('inbound', 'outbound')`,
-          sql`jsonb_typeof(${journal.entry}->'text') = 'string'`,
-          sql`jsonb_typeof(${journal.entry}->'conversationId') = 'string'`,
-        ),
-      );
+    // この問い合わせだけ JIT を切る（`withdrawnClientMessageIds` と同じ作法）: 索引で数千行を拾うだけなのに費用が JIT の閾値を越え、偽の日誌 60 万行で実行 121ms のうち約 107ms が翻訳だったため
+    const rows = await this.#db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('jit', 'off', true)`);
+      return tx
+        .selectDistinct({ conversationId })
+        .from(journal)
+        .where(
+          and(
+            hiddenConversationExchangeExcluded(),
+            eq(journal.type, 'exchange'),
+            sql`(${journal.entry}->>'with') = 'human'`,
+            gt(journal.seq, afterSeq),
+            ...(query.until === undefined ? [] : [lte(journal.at, new Date(query.until))]),
+            sql`${journal.entry}->>'role' in ('inbound', 'outbound')`,
+            sql`jsonb_typeof(${journal.entry}->'text') = 'string'`,
+            sql`jsonb_typeof(${journal.entry}->'conversationId') = 'string'`,
+          ),
+        );
+    });
     return rows.map((row) => row.conversationId);
   }
 
