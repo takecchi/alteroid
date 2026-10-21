@@ -1,5 +1,6 @@
 import { scanJournalPages } from './journal-scan.js';
 import type { JournalEntry, JournalEntryInput } from './schema.js';
+import { EXCHANGE_WITH_VALUES } from './store.js';
 import type { JournalStore } from './store.js';
 
 // 「始めた」ではなく「成功で終わった」を印にする: 開始の印は `#runInternal` の前に書かれ、途中でプロセスが消えた回が「蒸留した」と読めてしまうため
@@ -61,6 +62,9 @@ export function countsAsUndistilledActivity(entry: JournalEntry): boolean {
 // 無制限に遡らない: 印が1件も無い器で全件を読むと、日誌の大きさに比例した読み出しが起動直後に走るため
 export const DISTILL_GAP_ACTIVITY_SCAN_LIMIT = 500;
 
+// 1分: 並行の追記の遅れ（ミリ秒〜数秒）と時計の小さな巻き戻りを呑める幅で、窓の行数は1分ぶんしか増えないため
+export const DISTILL_GAP_SINCE_SLACK_MS = 60_000;
+
 export interface DistillGap {
   lastDistilledAt: string | null;
   lastActivityAt: string;
@@ -90,7 +94,6 @@ export async function deriveDistillGapFromJournal(
   });
   const lastDistilledAt = marker?.at ?? null;
 
-  // `since: lastDistilledAt` にしない: `since` は時刻を含み、印と同じミリ秒の1つ前の行（その蒸留が移した活動）が窓へ入るため
   let activityCount = 0;
   let firstActivityAt: string | undefined;
   let lastActivityAt: string | undefined;
@@ -105,18 +108,42 @@ export async function deriveDistillGapFromJournal(
     lastActivityAt = activity[0]?.at;
     firstActivityAt = activity.at(-1)?.at;
   } else {
-    const markerAnchor = marker;
+    // 窓の境界は `after`（`seq > 印`）に任せ、`since` は索引へ範囲を教える口にだけ使う: `since` は時刻を含み、
+    // 印と同じミリ秒の1つ前の行（その蒸留が移した活動）が入るが、`after` が先に落とすので数えない
+    // `since` を印の時刻ちょうどにしない: `at` は追記の前にアプリ側で取るので、`seq` の順と `at` の順は並行の追記や時計の巻き戻りで入れ替わりうる。
+    // 印より後に積まれて `at` が少し前の行を、`since` が落とすと数え漏れて断りが消えるため
+    const since = new Date(Date.parse(marker.at) - DISTILL_GAP_SINCE_SLACK_MS).toISOString();
+    const range = {
+      order: 'asc',
+      after: { id: marker.id, at: marker.at },
+      since,
+      until,
+    } as const;
+    // 数える種別だけを読む: 窓の行の大半は `tool_use` と `self` の往復で、数えない行を本文ごと運ぶと最初のターンが日誌の大きさに比例して重くなるため
+    // 判定は `countsAsUndistilledActivity` に残す（`with` と種別は読む行を絞るだけ）: 業務の決まりを SQL とストアの実装へ写さないため
+    // `with` を `EXCHANGE_WITH_VALUES` から作る: 手で書き写すと、値が増えたときに黙ってずれるため
+    const countPage = (page: readonly JournalEntry[]): void => {
+      for (const entry of page) {
+        if (!beforeBoot(entry) || !countsAsUndistilledActivity(entry)) continue;
+        activityCount += 1;
+        // 最初と最後は `at` の最小・最大にする: 2本に分けた走査では `seq` の順に並べ直せないため
+        if (firstActivityAt === undefined || entry.at < firstActivityAt) firstActivityAt = entry.at;
+        if (lastActivityAt === undefined || entry.at > lastActivityAt) lastActivityAt = entry.at;
+      }
+    };
     await scanJournalPages(
       journal,
-      { order: 'asc', after: { id: markerAnchor.id, at: markerAnchor.at }, until },
-      (page) => {
-        for (const entry of page) {
-          if (!beforeBoot(entry) || !countsAsUndistilledActivity(entry)) continue;
-          activityCount += 1;
-          if (firstActivityAt === undefined) firstActivityAt = entry.at;
-          lastActivityAt = entry.at;
-        }
+      {
+        ...range,
+        types: ['exchange'],
+        with: EXCHANGE_WITH_VALUES.filter((value) => value !== 'self'),
       },
+      countPage,
+    );
+    await scanJournalPages(
+      journal,
+      { ...range, types: ['turn_usage', 'external_event'] },
+      countPage,
     );
     if (activityCount === 0) return null;
   }
