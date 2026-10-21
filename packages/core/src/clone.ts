@@ -1095,6 +1095,8 @@ class Clone implements CloneHost {
   readonly #notices = new CloneNotices();
 
   readonly #distillMemory = new CloneDistillMemoryState();
+  // 記憶を読み始めた時刻を控える（載せた後の時刻にしない）: 読んでから載せるまでの間の人間の書き込みを、次の帰属の窓から落とさないため。
+  #memoryCarriedAt = new Date().toISOString();
   readonly #sdkSession = new CloneSdkSession<AgentCloneSession, AgentUserInput>();
   readonly #env: NodeJS.ProcessEnv;
   readonly #childEnvBase: NodeJS.ProcessEnv;
@@ -5893,6 +5895,7 @@ class Clone implements CloneHost {
   // `presentInMemory` に記憶の全体（`documents`）を渡す: 差分だけだと、親が今回変わっていないだけで「親が無い」と出て「ここに出ていない文書は変わっていない」と矛盾するため。
   // `head` で「変わった範囲だけが載る」と「システムプロンプトの記憶はセッション構築時点のもの」を明言する: 省略が黙って行われると記憶の破損と読まれ、システムプロンプトは `#buildSessionSpec` が1回だけ焼くので「現在の内容」と言うのは嘘になるため。
   async #withFreshMemory(text: string): Promise<string> {
+    const readAt = new Date().toISOString();
     let documents: MemoryDocument[];
     try {
       documents = await this.#stores.persona.documents();
@@ -5916,6 +5919,12 @@ class Clone implements CloneHost {
 
     // 控えを差し替える前に、いまの控えを退避する: 順序を逆にすると差分が常に空になり、何も載らないのに「更新された」とだけ言うため。
     const seenContent = this.#distillMemory.commitMemory(documents);
+    const since = this.#memoryCarriedAt;
+    this.#memoryCarriedAt = readAt;
+
+    const attribution = refreshIndex
+      ? []
+      : await this.#memoryEditAttribution([...changed.map((doc) => doc.slug), ...removed], since);
 
     const head = refreshIndex
       ? '[system] この会話の文脈が要約に潰された。**それまでに載せた記憶の差分も、その要約の中へ' +
@@ -5934,6 +5943,7 @@ class Clone implements CloneHost {
     return [
       ...(resumeNotice === null ? [] : [resumeNotice, '']),
       head,
+      ...attribution,
       // 索引の載せ直しは `seenContent` を渡さない: 渡すと「変わった範囲だけ」に縮み、潰された分を埋められないため。
       ...(refreshIndex
         ? ['', renderMemoryDocuments(documents)]
@@ -5955,6 +5965,46 @@ class Clone implements CloneHost {
       '',
       text,
     ].join('\n');
+  }
+
+  // 日誌が読めなければ1行も返さない: 書き手を推測で名指しすると、人間の書き込みでないものを人間のものと言うため。
+  // 引いた行が `limit` 件ちょうどなら untraced を作らない: 窓の外に書き手の行があるかもしれず、「残っていない」と言えないため。
+  async #memoryEditAttribution(slugs: readonly string[], since: string): Promise<string[]> {
+    const limit = 200;
+    let rows: JournalEntry[];
+    try {
+      rows = await this.#stores.journal.list({ types: ['memory_update'], since, limit });
+    } catch {
+      return [];
+    }
+    const human = new Set<string>();
+    const self = new Set<string>();
+    for (const row of rows) {
+      if (row.type !== 'memory_update') continue;
+      if (row.cause === 'human' && row.action !== 'write_failed') human.add(row.slug);
+      else if (row.cause === 'clone' || row.cause === 'distill') self.add(row.slug);
+    }
+    const humanSlugs = slugs.filter((slug) => human.has(slug));
+    const untracedSlugs =
+      rows.length === limit ? [] : slugs.filter((slug) => !human.has(slug) && !self.has(slug));
+    const list = (names: readonly string[]): string =>
+      excerptLine(names.join(' / '), CLONE_ID_LIST_EXCERPT);
+    return [
+      ...(humanSlugs.length === 0
+        ? []
+        : [
+            `**人間が書き換えた記憶: ${list(humanSlugs)}**（日誌に人間の書き込みとして残っている）。` +
+              '人間が直したのは、あなたの理解のどこかが人間の考えとずれていたからである。' +
+              '何が変わったかを読み、同じずれが他の記憶や進行中の判断・委譲に残っていないかを確かめること。' +
+              'なぜ直したのかが読み取れなければ、人間に聞いてよい。',
+          ]),
+      ...(untracedSlugs.length === 0
+        ? []
+        : [
+            `日誌に書き手が残っていない変更: ${list(untracedSlugs)}` +
+              '（人間が記憶のファイルを直接開いて直した可能性がある。あなた自身の更新なら日誌に残っている）。',
+          ]),
+    ];
   }
 
   #pushInput(text: string, images: readonly AgentInputImage[] = []): void {
@@ -6155,11 +6205,13 @@ class Clone implements CloneHost {
   }
 
   async #buildSessionSpec(resume: string | null): Promise<AgentCloneSessionSpec> {
+    const readAt = new Date().toISOString();
     const documents = await this.#stores.persona.documents();
     const memory = renderMemoryDocuments(documents);
 
     // 読み直さず、載せた値そのものを控える: 読み直すと、この間に人間が直した差分を見失う
     this.#distillMemory.commitMemory(documents);
+    this.#memoryCarriedAt = readAt;
     this.#distillMemory.setResumedHistoryHasMemory(resume !== null);
     // 前のセッションの印を持ち越さない: 載せる必要が無い索引をもう一度会話へ積むため（`#memoryIndexRefreshPending` の doc「下ろすのは …と `#buildSessionSpec`」）
     this.#distillMemory.takeMemoryIndexRefreshPending();
