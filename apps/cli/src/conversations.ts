@@ -250,8 +250,8 @@ export function renderConversationDetail(
   }
   lines.push(
     reachedStart
-      ? `（人間との往復を ${scanned} 件遡り、この会話の先頭まで届いた）`
-      : `（人間との往復を ${scanned} 件遡ったが、先頭には届いていない。これより古い発言が残っている` +
+      ? `（この会話の人間との往復を ${scanned} 件遡り、この会話の先頭まで届いた）`
+      : `（この会話の人間との往復を ${scanned} 件遡ったが、先頭には届いていない。これより古い発言が残っている` +
           'かもしれない — 広げるには --scan）',
   );
   if (supersededCount > 0) {

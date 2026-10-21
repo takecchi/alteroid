@@ -2988,7 +2988,7 @@ export function ChatPane({
         <LeftoverDrafts leftovers={leftovers} onDiscard={discardLeftover} />
         {history.data?.reachedStart === false && (
           <p className="mb-3 text-[11px] text-muted-foreground">
-            {`人間との往復を ${history.data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`}
+            {`この会話の人間との往復を ${history.data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`}
           </p>
         )}
         {/* 本文を差し替えるのは読めた data が無いときだけ: SWR は再検証が失敗しても前回の data を残したまま error を立てるので、error だけで分けると、一過性の失敗1回で読めていた履歴まで消える */}
