@@ -74,9 +74,17 @@ function isSingleSimpleCommand(trimmed: string): boolean {
   return true;
 }
 
+// `tail` は独立したシェルの語のときだけ数える。前は区間の頭・空白・`(`・`` ` ``・区切り（`;` `&` `|`）・パスの頭（`/` で終わる並び）、後ろは空白か区間の終わり
+// `\btail\b` に戻さない: `\b` は `-` や `/` との境目でも成り立つので、`/tmp/x-tail/a.sql` や `tail-logs` のようなパス・名前の一部を命令と読み、`psql -f` などの `-f` と合わせて断った（#5156）
+// 引用符（`'` `"`）も前に許す: `sh -c "tail -f x"` のように引用符の中の命令は、引用符を外した写しでは中の空白が `_` になって語の頭が見えなくなるため、元の写しで引用符の直後を語の頭と読む
+// `$(` は `(` が受ける。`docker logs --tail 10 -f` は `--tail` の `-` が前に来るので数えなくなる（`docker logs -f` を止めていないのと揃う。#5156）
+const TAIL_WORD_SRC = '(?<![^\\s(`;&|/\'"])tail(?=\\s|$)';
+
 // 規則を変えるときは hasTailFollowPattern も変える: 同じ一致を返す写しを bash-wait-guard-issue-2195.test.ts が突き合わせるため
-export const TAIL_FOLLOW_RE =
-  /\btail\b(?:(?!;|&&|\|\||\||\n).)*?(?:\s-[a-zA-Z]*[fF][a-zA-Z]*(?=[\s;&|]|$)|\s--follow\b)/;
+export const TAIL_FOLLOW_RE = new RegExp(
+  TAIL_WORD_SRC +
+    String.raw`(?:(?!;|&&|\|\||\||\n).)*?(?:\s-[a-zA-Z]*[fF][a-zA-Z]*(?=[\s;&|]|$)|\s--follow\b)`,
+);
 
 // 単体の `&` を境界に数えない: TAIL_FOLLOW_RE の除外先読みが `&&` だけを見ているのに合わせるため
 function boundaryTokenLengthAt(command: string, i: number): 0 | 1 | 2 {
@@ -86,7 +94,7 @@ function boundaryTokenLengthAt(command: string, i: number): 0 | 1 | 2 {
   return 0;
 }
 
-const TAIL_WORD_ONLY_RE = /\btail\b/;
+const TAIL_WORD_ONLY_RE = new RegExp(TAIL_WORD_SRC);
 const FOLLOW_FLAG_ONLY_RE = /\s-[a-zA-Z]*[fF][a-zA-Z]*(?=[\s;&|]|$)|\s--follow\b/;
 const FOLLOW_FLAG_ANCHORED_RE = /^\s-[a-zA-Z]*[fF][a-zA-Z]*(?=[\s;&|]|$)|^\s--follow\b/;
 
