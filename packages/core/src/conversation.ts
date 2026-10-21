@@ -150,11 +150,14 @@ type ConversationWindowOptions = {
   until?: string;
   order?: 'asc' | 'desc';
   after?: { id: string; at: string };
+  /** 1つの会話に絞る。`scan` はその会話の人間との往復を何件遡るかの意味になる。 */
+  conversationId?: string;
 };
 
 function conversationWindowQuery(options: ConversationWindowOptions): JournalQuery {
   return {
     limit: options.scan,
+    ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
     ...(options.order === undefined ? {} : { order: options.order }),
     ...(options.after === undefined ? {} : { after: options.after }),
     types: ['exchange'],

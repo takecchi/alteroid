@@ -88,6 +88,11 @@ export function createSyntheticJournalStore(
       if (query.with !== undefined) {
         if (entry.type !== 'exchange' || !query.with.includes(entry.with)) continue;
       }
+      if (
+        query.conversationId !== undefined &&
+        !('conversationId' in entry && entry.conversationId === query.conversationId)
+      )
+        continue;
       raw.push(index);
       if (raw.length > query.limit) break;
     }

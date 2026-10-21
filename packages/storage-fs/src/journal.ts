@@ -129,6 +129,11 @@ export class FsJournalStore implements JournalStore {
         // `limit` を数える前に外す:後で外すと窓が短くなり、`reachedStart` が誤るため
         if (isHiddenExchange(entry, tombstoned)) continue;
         if (query.with && (entry.type !== 'exchange' || !query.with.includes(entry.with))) continue;
+        if (
+          query.conversationId !== undefined &&
+          !('conversationId' in entry && entry.conversationId === query.conversationId)
+        )
+          continue;
         // 欄の選び方をここへ書き写さない: 照合は `journal-search.ts` が持ち、3実装が同じ答えを出すため
         if (query.q !== undefined && !matchesJournalSearch(entry, query.q)) continue;
         if (query.since && entry.at < query.since) continue;

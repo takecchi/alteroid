@@ -403,7 +403,33 @@ describe('conversation_read — 判定できないことを2値に潰さない',
   });
 
   it('遡り切れていないなら「判定できない」と言う（無いと言い切らない）', async () => {
+    // 経緯: 会話を名指すと `scan` はその会話の往復だけを数える。別会話の往復で窓が埋まる形は無くなり、
+    // 空かつ未到達になるのは、その会話自身が `scan` を超え、当たらない語で絞ったときである。
     const stores = createMemoryStores();
+    for (let i = 0; i < 5; i += 1) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: `[filler-${i}] この会話の発言`,
+        conversationId: 'conv-long',
+      });
+    }
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', {
+      conversationId: 'conv-long',
+      q: '存在しない語',
+      scan: 3,
+    });
+
+    expect(reply).toContain('判定できない');
+    expect(reply).not.toContain('会話 conv-long に当たる発言は無い。');
+  });
+
+  it('他の会話の往復が scan を超えて新しい側に積まれていても、古い会話は読める（会話を名指すと窓はその会話だけ）', async () => {
+    const stores = createMemoryStores();
+    await humanTurn(stores, 'conv-old', '古い質問', '古い返答');
     for (let i = 0; i < 5; i += 1) {
       await stores.journal.append({
         type: 'exchange',
@@ -415,13 +441,11 @@ describe('conversation_read — 判定できないことを2値に潰さない',
     }
     const call = tools(stores);
 
-    const reply = await call('conversation_read', {
-      conversationId: 'conv-does-not-exist',
-      scan: 3,
-    });
+    const reply = await call('conversation_read', { conversationId: 'conv-old', scan: 3 });
 
-    expect(reply).toContain('判定できない');
-    expect(reply).not.toContain('会話 conv-does-not-exist に当たる発言は無い。');
+    expect(reply).toContain('古い質問');
+    expect(reply).toContain('古い返答');
+    expect(reply).toContain('この会話の人間との往復を 2 件遡った。先頭に届いている');
   });
 
   it('q でも同じ区別を持つ（一覧が空でも reachedStart で言い分ける）', async () => {
@@ -453,7 +477,12 @@ describe('conversation_read — 読めない行を捨てて短くなった窓（
     await humanTurn(base, 'conv-new', '新しい発言', '新しい返答');
     const call = tools(dropLastRowPerPage(base));
 
-    const byId = await call('conversation_read', { conversationId: 'conv-none', scan: 100 });
+    // 経緯: 会話を名指すと窓がその会話だけに絞られ、存在しない id では頁が空になって落とす行が無い。落とす行が在る実在の会話に、当たらない語を添えて空の結果にする。
+    const byId = await call('conversation_read', {
+      conversationId: 'conv-old',
+      q: '存在しない語',
+      scan: 100,
+    });
     const list = await call('conversation_read', { scan: 100 });
 
     for (const reply of [byId, list]) {

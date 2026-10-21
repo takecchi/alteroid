@@ -12,6 +12,7 @@ import type {
   InboxBacklogBreakdown,
   InboxEvent,
   Job,
+  JournalQuery,
   ManagerDenial,
   ManagerPool,
   ManagerSummary,
@@ -8170,19 +8171,22 @@ describe('会話・出来事・マネージャーへの手出し', () => {
 
   // 「無い」と「遡り切れていない」を同じ応答にしない: 判定できないという3つ目の状態を持たないと、判定できない場合が黙ってどちらかへ倒れる。
   it('遡り切れていなければ 404 を返さず、判定できないことを返す', async () => {
-    await exchange('conv-old', 'inbound', '古い発言');
-    await exchange('conv-new', 'inbound', '新しい発言1');
-    await exchange('conv-new', 'inbound', '新しい発言2');
+    // 2026-10 の経緯: `scan` を「全会話の人間との往復の件数」から「この会話の人間との往復の件数」へ変えたので、
+    // 他の会話の往復で窓が埋まっても古い会話は空にならない（下の ⭐）。空かつ `reachedStart: false` の形は、
+    // 読めない行を捨てた窓（下の「読めない行を捨てて…」）と、この会話自身が `scan` を超えるときの `reachedStart: false` が測る。
+    await exchange('conv-old', 'inbound', '古い発言1');
+    await exchange('conv-old', 'inbound', '古い発言2');
+    await exchange('conv-old', 'inbound', '古い発言3');
 
     const response = await app.request('/conversations/conv-old?scan=2');
     const body = (await response.json()) as {
-      messages: unknown[];
+      messages: { text: string }[];
       scanned: number;
       reachedStart: boolean;
     };
 
     expect(response.status).toBe(200);
-    expect(body.messages).toEqual([]);
+    expect(body.messages.map((m) => m.text)).toEqual(['古い発言2', '古い発言3']);
     expect(body.reachedStart).toBe(false);
     expect(body.scanned).toBe(2);
 
@@ -8192,8 +8196,28 @@ describe('会話・出来事・マネージャーへの手出し', () => {
       reachedStart: boolean;
     };
     expect(wider.status).toBe(200);
-    expect(widerBody.messages.map((m) => m.text)).toEqual(['古い発言']);
+    expect(widerBody.messages.map((m) => m.text)).toEqual(['古い発言1', '古い発言2', '古い発言3']);
     expect(widerBody.reachedStart).toBe(true);
+  });
+
+  it('⭐ 直近の往復が scan 件を超えて他の会話で埋まっていても、古い会話の発言が全部返り reachedStart: true になる', async () => {
+    await exchange('conv-old', 'inbound', '古い質問');
+    await exchange('conv-old', 'outbound', '古い返答');
+    for (let i = 0; i < 8; i += 1) {
+      await exchange('conv-busy', i % 2 === 0 ? 'inbound' : 'outbound', `別の会話 ${i}`);
+    }
+
+    const response = await app.request('/conversations/conv-old?scan=5');
+    const body = (await response.json()) as {
+      messages: { text: string }[];
+      scanned: number;
+      reachedStart: boolean;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.messages.map((m) => m.text)).toEqual(['古い質問', '古い返答']);
+    expect(body.scanned).toBe(2);
+    expect(body.reachedStart).toBe(true);
   });
 
   // pg は LIMIT の後で読めない行を捨てる: 窓が scan 件に満たなくても、先頭に届いたとは限らない（#4770）
@@ -8794,6 +8818,50 @@ describe('POST /chat — supersedes（送信済みの人間の発言を編集す
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('既に別の編集に置き換えられている');
     expect(fake.posted).toEqual([]);
+  });
+
+  it('置き換え済みかの判定は、この会話の履歴だけをストア側で絞って読む（他の会話の往復を読まない）', async () => {
+    const original = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の発言',
+      conversationId: 'conv-1',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '別の会話の発言',
+      conversationId: 'conv-other',
+    });
+    const queries: JournalQuery[] = [];
+    const spyApp = createApp({
+      clone: fake.clone,
+      stores: {
+        ...stores,
+        journal: {
+          ...stores.journal,
+          list: async (query) => {
+            queries.push(query ?? {});
+            return stores.journal.list(query);
+          },
+        },
+      },
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+
+    const response = await spyApp.request(
+      '/chat',
+      json({ text: '直した本文', conversationId: 'conv-1', supersedes: original.id }),
+    );
+    await response.text();
+
+    expect(response.status).toBe(200);
+    const fullHistoryReads = queries.filter((query) => query.limit === Number.MAX_SAFE_INTEGER);
+    expect(fullHistoryReads).toHaveLength(1);
+    expect(fullHistoryReads[0]).toMatchObject({ conversationId: 'conv-1' });
   });
 
   it('正しい supersedes は clone.post へそのまま渡る', async () => {

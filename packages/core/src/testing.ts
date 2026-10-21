@@ -556,6 +556,12 @@ export function createMemoryStores(): Stores {
           (entry) => entry.type === 'exchange' && withValues.includes(entry.with),
         );
       }
+      if (query.conversationId !== undefined) {
+        const conversationId = query.conversationId;
+        found = found.filter(
+          (entry) => 'conversationId' in entry && entry.conversationId === conversationId,
+        );
+      }
       // 照合は `journal-search.ts` に任せる: 欄の選び方をここへ書き写すと3実装の答えがずれる。
       if (query.q !== undefined) {
         const q = query.q;

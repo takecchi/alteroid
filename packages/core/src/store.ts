@@ -212,6 +212,14 @@ export interface JournalQuery {
    */
   with?: ExchangeWith[];
   /**
+   * `entry.conversationId` がこの値の行だけ返す。契約は `verifyJournalStoreConversationIdContract` が3実装に当てる:
+   *
+   * - 未指定 = 絞らない。指定 = その値の行だけ（`conversationId` を持たない行・別の値の行は返らない）。**`''` は「絞らない」へ倒さず、値として一致する行だけ（空の id の会話は作られないので実際は0件）**: 倒すと全会話が見えてしまう
+   * - **`limit` より前に効く**: 窓を切ってから絞ると、他の会話の行が窓を食い尽くし、古い会話が空に見える
+   * - `with` / `types` / `after` と併用できる（適用順序は `after` → 絞り込み → `limit`）。消した会話（墓標）の行は今までどおり外れる
+   */
+  conversationId?: string;
+  /**
    * 本文を語で探す。意味論は `conversation_read` の `q`（`conversation.ts` の `searchExchanges`）を踏襲し、
    * 大文字小文字を区別しない単純な部分一致だけ（新しい検索の意味論を発明しない）。どの欄を本文と見るかの正本は `journal-search.ts` の `SEARCHABLE_FIELDS_BY_TYPE`。
    * 契約は `verifyJournalStoreSearchContract` が3実装に当てる:

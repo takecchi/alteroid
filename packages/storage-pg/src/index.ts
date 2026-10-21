@@ -17,6 +17,7 @@ import { PgJobStore } from './jobs.js';
 import { PgJournalStore } from './journal.js';
 import { PgMcpServerStore } from './mcp-servers.js';
 import {
+  ensureJournalConversationSeqIndex,
   ensureJournalHumanRepliesIndex,
   ensureJournalWithdrawalsIndex,
   migrateOnBoot,
@@ -72,8 +73,10 @@ export { PgTokenPoolStore } from './token-pool.js';
 export { PgUsageStore } from './usage.js';
 export * from './footprint.js';
 export {
+  ensureJournalConversationSeqIndex,
   ensureJournalHumanRepliesIndex,
   ensureJournalWithdrawalsIndex,
+  JOURNAL_CONVERSATION_SEQ_INDEX,
   JOURNAL_HUMAN_REPLIES_INDEX,
   JOURNAL_WITHDRAWALS_INDEX,
   migrate,
@@ -216,6 +219,7 @@ export async function createPgStores(options: CreatePgStoresOptions | string): P
       const indexDb = drizzle(indexClient);
       await ensureJournalHumanRepliesIndex(indexDb);
       await ensureJournalWithdrawalsIndex(indexDb);
+      await ensureJournalConversationSeqIndex(indexDb);
     })
     .catch((error: unknown) => {
       writeStderrLine(

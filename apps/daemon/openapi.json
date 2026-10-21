@@ -2001,7 +2001,7 @@
         "operationId": "getConversationsById",
         "tags": ["conversations"],
         "summary": "1つの会話の中身（古い順）",
-        "description": "1つの会話の中身（古い順）。器を替えても続きから話せるための口。**黙って打ち切らない** — `scanned`（人間との往復を何件遡ったか。マネージャーとの往復・内部ターンは数えない。issue #418）でどこまで遡ったか、`reachedStart` で窓が日誌の先頭に届いたかを返す。`404` は `reachedStart` が真のときだけ返る（「無い」と「遡り切れていない」を同じ応答にしないため）。**既定（`includeSuperseded` を渡さない）では、チャットで編集され既定ビューから畳まれた旧発言・その応答を除く。** 応答の `supersededCount` に畳まれた件数を常に含める（0件でも含める）。`includeSuperseded=true` を渡すと畳まれた分も含めて返し、各発言に編集の関係（`supersedes` / `supersededBy`）が付く。",
+        "description": "1つの会話の中身（古い順）。器を替えても続きから話せるための口。**黙って打ち切らない** — `scanned`（この会話の人間との往復を何件遡ったか。他の会話・マネージャーとの往復・内部ターンは数えない。issue #418）でどこまで遡ったか、`reachedStart` で窓がこの会話の先頭に届いたかを返す。`404` は `reachedStart` が真のときだけ返る（「無い」と「遡り切れていない」を同じ応答にしないため）。**既定（`includeSuperseded` を渡さない）では、チャットで編集され既定ビューから畳まれた旧発言・その応答を除く。** 応答の `supersededCount` に畳まれた件数を常に含める（0件でも含める）。`includeSuperseded=true` を渡すと畳まれた分も含めて返し、各発言に編集の関係（`supersedes` / `supersededBy`）が付く。",
         "responses": {
           "200": {
             "description": "会話の中身。`reachedStart` が偽なら、窓の外に続きが残っている可能性がある。`messages` が空でこれが偽の場合は「無い」ではなく**判定できない**。",

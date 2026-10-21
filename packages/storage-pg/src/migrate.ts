@@ -662,6 +662,42 @@ export async function ensureJournalWithdrawalsIndex(
   }
 }
 
+/** 会話を名指した読み（`JournalQuery.conversationId`）だけを持つ部分索引 */
+export const JOURNAL_CONVERSATION_SEQ_INDEX = 'journal_conversation_seq_idx';
+
+// 述語は `PgJournalStore.listPage` の `conversationId` の絞りと同じ式にする: 違うと索引が使われない。
+// 鍵の2つ目を `seq` にする: 読みは `order by seq desc limit` で新しい側から引くため
+const CREATE_JOURNAL_CONVERSATION_SEQ_INDEX = `create index concurrently if not exists ${JOURNAL_CONVERSATION_SEQ_INDEX}
+   on journal ((entry->>'conversationId'), seq) where (entry->>'conversationId') is not null`;
+
+/**
+ * 会話を名指した日誌の読みの部分索引を、書き込みを止めずに作る（会話の画面・既読・編集の判定が、全会話の窓を読まずに1会話だけを引くため）。
+ * 作り方・倒れ方は `ensureJournalHumanRepliesIndex` と同じ（`STATEMENTS` に置かない・`concurrently`・無効なら作り直す・投げない）。
+ */
+export async function ensureJournalConversationSeqIndex(
+  db: Db,
+  warn: (line: string) => void = (line) => writeStderrLine(line),
+): Promise<void> {
+  try {
+    const result = await db.execute(
+      sql`select i.indisvalid as valid from pg_class c join pg_index i on i.indexrelid = c.oid where c.relname = ${JOURNAL_CONVERSATION_SEQ_INDEX}`,
+    );
+    const found = rowsOf(result)[0] as { valid?: boolean } | undefined;
+    if (found?.valid === true) return;
+    if (found !== undefined) {
+      await db.execute(
+        sql.raw(`drop index concurrently if exists ${JOURNAL_CONVERSATION_SEQ_INDEX}`),
+      );
+    }
+    await db.execute(sql.raw(CREATE_JOURNAL_CONVERSATION_SEQ_INDEX));
+  } catch (error) {
+    warn(
+      `alteroid: 日誌の索引 ${JOURNAL_CONVERSATION_SEQ_INDEX} を作れなかった（${collapseErrorCause(error)}）。` +
+        '索引なしで動き続け（会話を名指した日誌の読み（会話の画面・既読・編集の判定）が遅いだけ）、次の起動でやり直す\n',
+    );
+  }
+}
+
 export const OPEN_MANAGER_BODY_INDEX = 'commitments_open_manager_body_idx';
 
 // `STATEMENTS` に置かない: 既存の重複行が在ると作れず、起動のたびに通る配列でデーモンが上がらなくなる。

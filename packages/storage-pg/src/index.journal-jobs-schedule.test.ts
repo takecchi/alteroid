@@ -16,6 +16,7 @@ import {
   verifyJournalStoreUnreadableGetContract,
   UnreadableJournalEntryError,
   verifyJournalStoreSearchContract,
+  verifyJournalStoreConversationIdContract,
   verifyJournalStoreDeletedConversationContract,
   verifyJournalStoreWithdrawnContract,
   verifyJournalStoreWithContract,
@@ -644,6 +645,12 @@ describe('PgJournalStore', () => {
   describe('q 契約（issue #250）', () => {
     it('未指定=絞らない／部分一致／大文字小文字を区別しない／%_ はワイルドカードでない／""=絞らない／limit より前に効く', async () => {
       await verifyJournalStoreSearchContract(stores.journal);
+    });
+  });
+
+  describe('conversationId 契約', () => {
+    it('その会話の行だけ／limit より前／with・after と併用／墓標は外れる／空文字は絞らないへ倒さない', async () => {
+      await verifyJournalStoreConversationIdContract(stores.journal);
     });
   });
 });

@@ -2860,9 +2860,10 @@ export function createApp(deps: AppDeps) {
                 400,
               );
             }
-            // 置き換え済みかは畳み込み規則（`computeSupersededIds`）でしか判定できない: 表示用の窓ではなく全履歴が要るので `scan` に事実上の無制限を渡す。
+            // 置き換え済みかは畳み込み規則（`computeSupersededIds`）でしか判定できない: 表示用の窓ではなくこの会話の全履歴が要るので `scan` に事実上の無制限を渡す。他の会話の往復は読まない（ストア側で絞る）。
             const fullHistory = await readConversationWindow(stores.journal, {
               scan: Number.MAX_SAFE_INTEGER,
+              conversationId: given,
             });
             const chronological = fullHistory
               .filter(
@@ -3375,9 +3376,9 @@ export function createApp(deps: AppDeps) {
         summary: '1つの会話の中身（古い順）',
         description:
           '1つの会話の中身（古い順）。器を替えても続きから話せるための口。' +
-          '**黙って打ち切らない** — `scanned`（人間との往復を何件遡ったか。マネージャー' +
+          '**黙って打ち切らない** — `scanned`（この会話の人間との往復を何件遡ったか。他の会話・マネージャー' +
           'との往復・内部ターンは数えない。issue #418）でどこまで遡ったか、' +
-          '`reachedStart` で窓が日誌の先頭に届いたかを返す。`404` は `reachedStart` が' +
+          '`reachedStart` で窓がこの会話の先頭に届いたかを返す。`404` は `reachedStart` が' +
           '真のときだけ返る（「無い」と「遡り切れていない」を同じ応答にしないため）。' +
           '**既定（`includeSuperseded` を渡さない）では、チャットで編集され既定ビューから' +
           '畳まれた旧発言・その応答を除く。** 応答の `supersededCount` に畳まれた件数を' +
@@ -3409,7 +3410,11 @@ export function createApp(deps: AppDeps) {
         const id = c.req.param('id');
         const { scan, includeSuperseded: includeSupersededRaw } = c.req.valid('query');
         const includeSuperseded = includeSupersededRaw === 'true';
-        const window = await readConversationWindowPage(stores.journal, { scan });
+        // この会話の行だけをストア側で絞る: 全会話の窓を読んでから絞ると、他の会話の往復が `scan` を食い尽くして古い会話が空に見えるため。
+        const window = await readConversationWindowPage(stores.journal, {
+          scan,
+          conversationId: id,
+        });
         const entries = window.entries;
         // 常に `includeSuperseded: true` で1回だけ呼ぶ: 既定の応答でも `supersededCount` を数える必要があるので、まず畳まれた分も含めて取り、既定ビューに戻すかはここでふるう。応答に載せる項目は明示して写す（共有の型の項目が増えても応答が増えない）。
         const allMessages = conversationMessages(entries, id, { includeSuperseded: true });
@@ -3553,6 +3558,7 @@ export function createApp(deps: AppDeps) {
         const readView = await loadConversationReadView(stores.conversationReads, now);
         const entries = await readConversationWindow(stores.journal, {
           scan: conversationsQuery.shape.scan.parse(undefined),
+          conversationId: id,
         });
         const readThrough = effectiveReadThrough(readView, id);
         const visible = conversationMessages(entries, id);

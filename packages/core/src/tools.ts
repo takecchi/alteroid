@@ -8773,7 +8773,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             `人間との往復を何件遡るか（${formatIntRangeJa({ min: 1, max: 10_000 })}。既定 2000。マネージャーとの往復・内部ターンは` +
-              '数えない。issue #418）。遡り切れたかは応答の注記で分かる',
+              '数えない。issue #418。conversationId を指定したときは、その会話の人間との往復だけを数える）。遡り切れたかは応答の注記で分かる',
           ),
         limit: z
           .number()
@@ -8927,8 +8927,10 @@ export function createCloneTools(context: ToolContext) {
             throw error;
           }
         } else {
+          // 会話を名指したときはその会話だけをストア側で絞る: 全会話の窓を読んでから絞ると、他の会話の往復が `scan` を食い尽くして古い会話が「判定できない」になるため。
           const window = await readConversationWindowPage(stores.journal, {
             scan: scanLimit,
+            ...(conversationId === undefined ? {} : { conversationId }),
             ...(since === undefined ? {} : { since }),
             ...(until === undefined ? {} : { until }),
           });
@@ -8941,7 +8943,7 @@ export function createCloneTools(context: ToolContext) {
         const exhausted = listPage === undefined ? windowReachedStart : listPage.reachedStart;
         const reached = exhausted && since === undefined;
         const scanNote =
-          `（人間との往復を ${scannedCount} 件遡った。` +
+          `（${conversationId === undefined ? '' : 'この会話の'}人間との往復を ${scannedCount} 件遡った。` +
           (reached
             ? '先頭に届いている）'
             : exhausted

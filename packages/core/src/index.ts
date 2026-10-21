@@ -453,6 +453,10 @@ export {
   verifyJournalStoreSearchContract,
   type JournalStoreSearchContractSubject,
 } from './journal-search-contract.js';
+export {
+  verifyJournalStoreConversationIdContract,
+  type JournalStoreConversationIdContractSubject,
+} from './journal-conversation-id-contract.js';
 export { verifyTranscriptArchiveContract } from './archive-contract.js';
 export {
   ARCHIVE_REF_ACCEPT_HEADER,

@@ -154,6 +154,14 @@ export class PgJournalStore implements JournalStore {
       ...(query.types === undefined ? [] : [inArray(journal.type, query.types)]),
       // `.limit()` の後で絞らない: `where` 節で効かせる。
       ...(query.with === undefined ? [] : [inArray(sql`(${journal.entry}->>'with')`, query.with)]),
+      // NUL を含む値は DB に投げない（`q` と同じ）: text が NUL を受け付けずエラーになるため、どれにも当たらない扱いにする。
+      ...(query.conversationId === undefined
+        ? []
+        : [
+            hasNul(query.conversationId)
+              ? sql`false`
+              : sql`(${journal.entry}->>'conversationId') = ${query.conversationId}`,
+          ]),
       ...(query.q === undefined
         ? []
         : [hasNul(query.q) ? sql`false` : journalSearchMatches(query.q)]),
