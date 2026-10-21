@@ -13,6 +13,7 @@ import {
   UnreadableJournalEntryError,
 } from '@alteroid/core';
 import type {
+  JournalCursor,
   JournalEntry,
   JournalEntryInput,
   JournalPage,
@@ -121,29 +122,7 @@ export class PgJournalStore implements JournalStore {
   async listPage(query: JournalQuery = {}): Promise<JournalPage> {
     const order = query.order ?? 'desc';
 
-    // 錨の `seq` を絞り込みに通さない。`id` だけの一致にしない: fs（`at` からファイルを決める）と答えが揃わないため。
-    let afterSeq: number | undefined;
-    if (query.after !== undefined) {
-      const after = query.after;
-      // NUL を含む id を DB に投げない: text が NUL を受け付けずエラーになるため。
-      if (hasNul(after.id)) {
-        throw new JournalAnchorNotFoundError(
-          `after で指定された行（id=${after.id}, at=${after.at}）が見つからない`,
-        );
-      }
-      const rows = await this.#db
-        .select({ seq: journal.seq })
-        .from(journal)
-        .where(and(eq(journal.id, after.id), eq(journal.at, new Date(after.at))))
-        .limit(1);
-      const row = rows[0];
-      if (row === undefined) {
-        throw new JournalAnchorNotFoundError(
-          `after で指定された行（id=${after.id}, at=${after.at}）が見つからない`,
-        );
-      }
-      afterSeq = toNumber(row.seq);
-    }
+    const afterSeq = query.after === undefined ? undefined : await this.#anchorSeq(query.after);
 
     const filters = [
       ...(query.since === undefined ? [] : [gte(journal.at, new Date(query.since))]),
@@ -211,6 +190,29 @@ export class PgJournalStore implements JournalStore {
       next:
         hasMore && lastRow !== undefined ? { id: lastRow.id, at: lastRow.at.toISOString() } : null,
     };
+  }
+
+  // 錨の `seq` を絞り込みに通さない。`id` だけの一致にしない: fs（`at` からファイルを決める）と答えが揃わないため。
+  // `listPage` と `conversationIdsAfter` が同じ引き方を共有する: 錨の見つけ方がずれると、2つの口の答えが揃わなくなるため。
+  async #anchorSeq(after: { id: string; at: string }): Promise<number> {
+    // NUL を含む id を DB に投げない: text が NUL を受け付けずエラーになるため。
+    if (hasNul(after.id)) {
+      throw new JournalAnchorNotFoundError(
+        `after で指定された行（id=${after.id}, at=${after.at}）が見つからない`,
+      );
+    }
+    const rows = await this.#db
+      .select({ seq: journal.seq })
+      .from(journal)
+      .where(and(eq(journal.id, after.id), eq(journal.at, new Date(after.at))))
+      .limit(1);
+    const row = rows[0];
+    if (row === undefined) {
+      throw new JournalAnchorNotFoundError(
+        `after で指定された行（id=${after.id}, at=${after.at}）が見つからない`,
+      );
+    }
+    return toNumber(row.seq);
   }
 
   async get(id: string): Promise<JournalEntry | null> {
@@ -374,6 +376,30 @@ export class PgJournalStore implements JournalStore {
       )
       .groupBy(actor);
     return rows.map((row) => ({ actor: row.actor, count: toNumber(row.count) }));
+  }
+
+  // 本文を流さず、会話 id だけを読む。絞りは `listPage({ types: ['exchange'], with: ['human'], order: 'asc', after, until })` と同じ式で、`journal_exchange_with_seq_idx`（`entry->>'with'`, `seq`）に乗る。
+  // `list` は型（`journalEntrySchema`）に合わない行を落とすので、ここでも判定に使う欄（`with`）と必須の欄（`role`・`text`）と `conversationId` の型までは SQL で確かめる（`humanReplies` と同じ線）。
+  // それ以外の欄だけが型に合わない行（書き込み時の検査があるので、ふつうは無い）は、`list` と違って数える
+  async conversationIdsAfter(query: { after: JournalCursor; until?: string }): Promise<string[]> {
+    const afterSeq = await this.#anchorSeq(query.after);
+    const conversationId = sql<string>`${journal.entry}->>'conversationId'`;
+    const rows = await this.#db
+      .selectDistinct({ conversationId })
+      .from(journal)
+      .where(
+        and(
+          hiddenConversationExchangeExcluded(),
+          eq(journal.type, 'exchange'),
+          sql`(${journal.entry}->>'with') = 'human'`,
+          gt(journal.seq, afterSeq),
+          ...(query.until === undefined ? [] : [lte(journal.at, new Date(query.until))]),
+          sql`${journal.entry}->>'role' in ('inbound', 'outbound')`,
+          sql`jsonb_typeof(${journal.entry}->'text') = 'string'`,
+          sql`jsonb_typeof(${journal.entry}->'conversationId') = 'string'`,
+        ),
+      );
+    return rows.map((row) => row.conversationId);
   }
 
   async clear(): Promise<number> {

@@ -3,6 +3,7 @@ import { appendFile, mkdir, open, readFile, readdir, rm } from 'node:fs/promises
 import { join } from 'node:path';
 
 import {
+  conversationIdsAfterFromPages,
   countToolUsesByActorFromPages,
   journalEntrySchema,
   JournalAnchorNotFoundError,
@@ -15,6 +16,7 @@ import {
   UnreadableJournalEntryError,
 } from '@alteroid/core';
 import type {
+  JournalCursor,
   JournalEntry,
   JournalEntryInput,
   JournalPage,
@@ -159,6 +161,10 @@ export class FsJournalStore implements JournalStore {
     until: string;
   }): Promise<{ actor: string; count: number }[]> {
     return countToolUsesByActorFromPages(this, query);
+  }
+
+  async conversationIdsAfter(query: { after: JournalCursor; until?: string }): Promise<string[]> {
+    return conversationIdsAfterFromPages(this, query);
   }
 
   async get(id: string): Promise<JournalEntry | null> {

@@ -408,10 +408,19 @@ export interface ConversationPage {
 
 /** 継続点より新しい側に発言を持つ会話は前の頁までで出し済みなので、それを出し直して重複させないために集める。 */
 async function conversationIdsNewerThan(
-  journal: Pick<JournalStore, 'listPage'>,
+  journal: Pick<JournalStore, 'listPage' | 'conversationIdsAfter'>,
   anchor: ConversationCursor,
   until?: string,
 ): Promise<Set<string>> {
+  // 会話 id だけを引く口を持つ器ではそちらを使う: 頁で読み切ると、継続点より新しい往復を本文ごと全部読み、頁を進めるほど読む量が増えるため
+  if (journal.conversationIdsAfter !== undefined) {
+    return new Set(
+      await journal.conversationIdsAfter({
+        after: anchor,
+        ...(until === undefined ? {} : { until }),
+      }),
+    );
+  }
   const ids = new Set<string>();
   let after: JournalCursor = anchor;
   for (;;) {
@@ -438,7 +447,10 @@ async function conversationIdsNewerThan(
  * 継続点が指す発言が日誌に実在しない・人間との往復でないときは `InvalidConversationCursorError`。
  */
 export async function readConversationPage(
-  journal: Pick<JournalStore, 'listPage' | 'get' | 'withdrawnClientMessageIds'>,
+  journal: Pick<
+    JournalStore,
+    'listPage' | 'get' | 'withdrawnClientMessageIds' | 'conversationIdsAfter'
+  >,
   options: {
     limit: number;
     scan: number;

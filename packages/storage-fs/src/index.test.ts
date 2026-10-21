@@ -41,6 +41,7 @@ import {
   verifyJournalStoreConversationIdContract,
   verifyJournalStoreDeletedConversationContract,
   verifyJournalStoreToolUseCountContract,
+  verifyJournalStoreConversationIdsAfterContract,
   verifyJournalStoreWithdrawnContract,
   verifyJournalStoreWithContract,
   verifyTranscriptArchiveContract,
@@ -1191,6 +1192,12 @@ describe('FsJournalStore', () => {
   describe('tool_use の件数の契約', () => {
     it('窓の内の tool_use だけが actor ごとに数えられ、両端を含み、他の種別と墓標が名指しした行は数えない', async () => {
       await verifyJournalStoreToolUseCountContract(stores.journal);
+    });
+  });
+
+  describe('継続点より後ろの会話 id の契約', () => {
+    it('錨より後ろの人間との往復の会話 id だけが重複なく返り、until で切れ、錨の行・他の相手・消した会話は含まず、錨が無ければ例外を投げる', async () => {
+      await verifyJournalStoreConversationIdsAfterContract(stores.journal);
     });
   });
 

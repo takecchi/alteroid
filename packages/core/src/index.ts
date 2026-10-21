@@ -365,6 +365,10 @@ export {
   type JournalStoreToolUseCountContractSubject,
 } from './journal-tool-use-count-contract.js';
 export {
+  verifyJournalStoreConversationIdsAfterContract,
+  type JournalStoreConversationIdsAfterContractSubject,
+} from './journal-conversation-ids-after-contract.js';
+export {
   verifyJournalStoreOrderContract,
   type JournalStoreOrderContractSubject,
 } from './journal-order-with-contract.js';
@@ -413,6 +417,7 @@ export {
 } from './journal-page-contract.js';
 export {
   JOURNAL_SCAN_PAGE_SIZE,
+  conversationIdsAfterFromPages,
   countToolUsesByActorFromPages,
   scanJournalPages,
   type JournalScanOptions,

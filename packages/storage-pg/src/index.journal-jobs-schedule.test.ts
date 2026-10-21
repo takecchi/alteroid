@@ -19,6 +19,7 @@ import {
   verifyJournalStoreConversationIdContract,
   verifyJournalStoreDeletedConversationContract,
   verifyJournalStoreToolUseCountContract,
+  verifyJournalStoreConversationIdsAfterContract,
   verifyJournalStoreWithdrawnContract,
   verifyJournalStoreWithContract,
   verifyPermissionGrantStoreContract,
@@ -390,6 +391,49 @@ describe('PgJournalStore', () => {
       const counted = await stores.journal.countToolUsesByActor?.({ since: at, until: at });
 
       expect(counted).toEqual([{ actor: 'clone', count: 2 }]);
+    });
+  });
+
+  describe('継続点より後ろの会話 id の契約', () => {
+    it('錨より後ろの人間との往復の会話 id だけが重複なく返り、until で切れ、錨の行・他の相手・消した会話は含まず、錨が無ければ例外を投げる', async () => {
+      await verifyJournalStoreConversationIdsAfterContract(stores.journal);
+    });
+
+    // 生 SQL で insert する: `append()` 経由では `journalEntrySchema.parse` を通ってしまい、型に合わない行を作れないから。
+    // `list` は読み出しで落とす行なので、id にも入れない（口を使う一覧と使わない一覧で出し済みの会話が揃うため）
+    it('role・text・conversationId の型が合わない行は返さない（listPage が読み出しで落とす行と揃える）', async () => {
+      const anchor = await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: 'anchor',
+        conversationId: 'ids-after-anchor',
+      });
+      const at = '2026-08-12T00:00:00.000Z';
+      const insert = (id: string, entry: Record<string, unknown>) =>
+        db.execute(
+          sql`insert into journal (id, at, type, entry)
+              values (${id}, ${at}, 'exchange', ${JSON.stringify({ type: 'exchange', id, at, with: 'human', ...entry })}::jsonb)`,
+        );
+      await insert('ia-ok', { role: 'inbound', text: 't', conversationId: 'ids-after-ok' });
+      await insert('ia-role', { role: 'bogus', text: 't', conversationId: 'ids-after-role' });
+      await insert('ia-no-role', { text: 't', conversationId: 'ids-after-no-role' });
+      await insert('ia-text', { role: 'inbound', text: 5, conversationId: 'ids-after-text' });
+      await insert('ia-no-text', { role: 'inbound', conversationId: 'ids-after-no-text' });
+      await insert('ia-conv', { role: 'inbound', text: 't', conversationId: 5 });
+
+      const ids = await stores.journal.conversationIdsAfter?.({ after: anchor });
+      const viaPages = await stores.journal.list({
+        types: ['exchange'],
+        with: ['human'],
+        order: 'asc',
+        after: anchor,
+      });
+
+      expect(ids).toEqual(['ids-after-ok']);
+      expect(
+        viaPages.flatMap((row) => (row.type === 'exchange' ? [row.conversationId] : [])),
+      ).toEqual(['ids-after-ok']);
     });
   });
 

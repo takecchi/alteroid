@@ -822,6 +822,75 @@ describe('取り下げた発言は、一覧の見出しにも件数にも入れ�
   });
 });
 
+describe('継続点つきの一覧は、継続点より新しい往復を頁送りで読まない', () => {
+  async function seeded() {
+    const stores = createMemoryStores();
+    for (const name of ['c1', 'c2', 'c3', 'c4', 'c5']) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: `発言 ${name}`,
+        conversationId: name,
+      });
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        text: `雑音 ${name}`,
+        conversationId: `m-${name}`,
+      });
+    }
+    return stores.journal;
+  }
+
+  // 頁を全部たどって、出た会話 id の並びと、listPage の呼びを返す
+  async function walk(
+    journal: Awaited<ReturnType<typeof seeded>>,
+    withIdsAfter: boolean,
+  ): Promise<{ ids: string[]; calls: Parameters<typeof journal.listPage>[0][] }> {
+    const calls: Parameters<typeof journal.listPage>[0][] = [];
+    const subject = {
+      listPage: (query?: Parameters<typeof journal.listPage>[0]) => {
+        calls.push(query);
+        return journal.listPage(query);
+      },
+      get: journal.get.bind(journal),
+      ...(withIdsAfter
+        ? { conversationIdsAfter: journal.conversationIdsAfter!.bind(journal) }
+        : {}),
+    };
+    const ids: string[] = [];
+    let cursor: { id: string; at: string } | undefined;
+    for (let i = 0; i < 10; i += 1) {
+      const page = await readConversationPage(subject, {
+        limit: 2,
+        scan: 100,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      ids.push(...page.conversations.map((c) => c.conversationId));
+      if (page.next === null) break;
+      cursor = page.next;
+    }
+    return { ids, calls };
+  }
+
+  it('⭐ 口を持つ器では、after を持つ order: asc の listPage を呼ばず、返る会話は口なしの器と同じ', async () => {
+    const journal = await seeded();
+
+    const withMouth = await walk(journal, true);
+    const without = await walk(journal, false);
+
+    expect(withMouth.ids).toEqual(['c5', 'c4', 'c3', 'c2', 'c1']);
+    expect(withMouth.ids).toEqual(without.ids);
+    const newerReads = (calls: typeof withMouth.calls) =>
+      calls.filter((q) => q?.order === 'asc' && q.after !== undefined);
+    expect(newerReads(withMouth.calls)).toEqual([]);
+    // 口なしの器は、同じ読みを頁送りで行う（上の「無い」が、呼びの形の見落としではないことの確認）
+    expect(newerReads(without.calls).length).toBeGreaterThan(0);
+  });
+});
+
 // pg は LIMIT の後で読めない行を捨てる: 窓が短くても先頭に届いたとは限らない（#4770）
 describe('読めない行を捨てて短くなった頁でも、終端を件数から推さない（#4770）', () => {
   async function seeded() {

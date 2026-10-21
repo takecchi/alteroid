@@ -330,6 +330,15 @@ export interface JournalStore {
   }): Promise<{ actor: string; count: number }[]>;
 
   /**
+   * `after` の行より後ろ（`until` 以前。`after` の行そのものは含まない）にある人間との往復（`exchange`・`with: 'human'`）の `conversationId` を、重複なく返す。
+   * `listPage({ types: ['exchange'], with: ['human'], order: 'asc', after, until })` を最後まで読んだときに現れる行のうち、`conversationId` が文字列のものと同じ集合。並びは契約しない。
+   * 会話の一覧の続き（`readConversationPage`）が、継続点より新しい往復を本文ごと頁で読み切らずに、出し済みの会話を外すための口。
+   * 削除した会話の行・墓標が名指しした行は `list` と同じく外す。`after` の行が見つからないときは `listPage` と同じく `JournalAnchorNotFoundError` を投げる。
+   * 省略可能: 持たない器では、呼び手（`conversationIdsNewerThan`）が `listPage` を頁で読み切って同じものを作る。
+   */
+  conversationIdsAfter?(query: { after: JournalCursor; until?: string }): Promise<string[]>;
+
+  /**
    * 全件を消す（ワークスペースのリセット専用）。「追記専用」の契約への例外で、呼ぶのは `resetWorkspaceState` だけ。
    * 日誌の「聞かずに実行した判断は必ず残る」は、通常運用で消せないことではなく、リセットが常に人間の明示的な決定を経ることで保たれる。消した件数を返す。
    */

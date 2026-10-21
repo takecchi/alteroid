@@ -1,5 +1,5 @@
 import type { JournalEntry } from './schema.js';
-import type { JournalQuery, JournalStore } from './store.js';
+import type { JournalCursor, JournalQuery, JournalStore } from './store.js';
 
 // 500 は実データの分布から決めた値ではなく、安全側に倒した経験則。大きすぎるとページ1枚のヒープが太り、小さすぎると往復が増える。
 export const JOURNAL_SCAN_PAGE_SIZE = 500;
@@ -76,4 +76,31 @@ export async function countToolUsesByActorFromPages(
     },
   );
   return [...counts].map(([actor, count]) => ({ actor, count }));
+}
+
+// `listPage` の絞り（墓標・名指し・錨）をそのまま通す: 3実装の「錨より新しい人間との往復」の答えを `listPage` の1本に揃えるため。
+// 錨が見つからない例外は `scanJournalPages` が握り潰さず伝える。本文を運ばずに引く口が要る器（pg）は、これを使わず SQL で引く
+export async function conversationIdsAfterFromPages(
+  journal: Pick<JournalStore, 'listPage'>,
+  query: { after: JournalCursor; until?: string },
+): Promise<string[]> {
+  const ids = new Set<string>();
+  await scanJournalPages(
+    journal,
+    {
+      types: ['exchange'],
+      with: ['human'],
+      order: 'asc',
+      after: query.after,
+      ...(query.until === undefined ? {} : { until: query.until }),
+    },
+    (page) => {
+      for (const entry of page) {
+        if (entry.type === 'exchange' && entry.conversationId !== undefined) {
+          ids.add(entry.conversationId);
+        }
+      }
+    },
+  );
+  return [...ids];
 }
