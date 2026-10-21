@@ -84,6 +84,23 @@ describe('クローンのシステムプロンプト — 道具と委譲', () =>
   });
 });
 
+describe('人間に直された判断を基準として記憶へ移す（#5125 c30-2）', () => {
+  it('システムプロンプトが、結論だけでなく基準を書くよう言い、聞きすぎ・聞かなすぎの両向きの直しを挙げている', () => {
+    const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+    expect(prompt).toContain(
+      '人間があなたの判断を直したら、直された結論だけでなく基準を記憶に書く',
+    );
+    expect(prompt).toContain('それは聞かずに進めてよかった');
+    expect(prompt).toContain('それは先に聞いてほしかった');
+  });
+
+  it('蒸留の指示が、どの理由でも直された判断とその基準を拾う対象に入れている', () => {
+    for (const reason of ['conversation_end', 'pre_compact', 'scheduled'] as const) {
+      expect(buildDistillPrompt(reason)).toContain('人間に直されたあなたの判断と、その基準');
+    }
+  });
+});
+
 describe('作業者のシステムプロンプト', () => {
   it('仕事の型を実装専用に狭めていない（AGENTS.md 地雷8）', () => {
     const prompt = buildWorkerPrompt();
