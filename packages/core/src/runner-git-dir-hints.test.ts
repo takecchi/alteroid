@@ -1,4 +1,5 @@
-import { mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type {
@@ -112,11 +113,16 @@ describe('決まりの外で git を打った作業ツリーは、片付けで�
   });
 
   it('対照: 決まり（/tmp/mgr-<16進>）の下の作業ツリーだけなら note を出さない（そちらは片付けが扱う）', async () => {
-    const scratch = makeTempDirSync('mgr-abcd1234-');
-    mkdirSync(join(scratch, 'repo', '.git'), { recursive: true });
+    // 決まりは文字どおりの `/tmp`（`unpushed-work.ts`）なので、`os.tmpdir()`（テストの間は専用の dir。#5136）ではなく `/tmp` の下に作る
+    const scratch = join('/tmp', `mgr-abcd1234-${randomUUID()}`);
+    try {
+      mkdirSync(join(scratch, 'repo', '.git'), { recursive: true });
 
-    const notes = await runAndStop([{ command: 'git status', cwd: join(scratch, 'repo') }]);
+      const notes = await runAndStop([{ command: 'git status', cwd: join(scratch, 'repo') }]);
 
-    expect(notes.some((n) => n.text.includes('決まり（担当の作業場か /tmp/mgr-'))).toBe(false);
+      expect(notes.some((n) => n.text.includes('決まり（担当の作業場か /tmp/mgr-'))).toBe(false);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 });
