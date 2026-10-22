@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import {
+  RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
   createRunnerRegistry,
   type RunnerAnswerOutcome,
   type RunnerClient,
@@ -83,6 +84,9 @@ function nudgeRunner() {
     async transcript(managerId: string) {
       return transcripts.get(managerId) ?? null;
     },
+    async transcriptTail(managerId: string) {
+      return transcripts.get(managerId) ?? null;
+    },
     async credentials() {
       return [];
     },
@@ -128,6 +132,12 @@ async function setup() {
     profile: createProfileService({ stores, runners: registry }),
   });
   await pool.restore();
+  // 見回りは末尾の口を名乗る runner からだけ読む（#5160）
+  fake.push({
+    type: 'hello',
+    runnerId: 'runner-primary',
+    capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL],
+  });
   fake.resumes.length = 0;
   fake.sends.length = 0;
   return { pool, fake, stores, inbox };
@@ -144,6 +154,11 @@ async function reopen(stores: Stores) {
     profile: createProfileService({ stores, runners: registry }),
   });
   await pool.restore();
+  fake.push({
+    type: 'hello',
+    runnerId: 'runner-primary',
+    capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL],
+  });
   // 控えを払う: `running` で残ったジョブは起動時の引き取りで無条件に resume されるので、枠の印による resume と区別できなくなる。
   fake.resumes.length = 0;
   fake.sends.length = 0;
@@ -197,6 +212,11 @@ async function setupWithClock() {
     now: () => clock,
   });
   await pool.restore();
+  fake.push({
+    type: 'hello',
+    runnerId: 'runner-primary',
+    capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL],
+  });
   fake.resumes.length = 0;
   fake.sends.length = 0;
   return {

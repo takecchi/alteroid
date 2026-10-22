@@ -216,6 +216,10 @@ class LocalRunner implements RunnerClient {
     return this.#host.transcript(managerId);
   }
 
+  async transcriptTail(managerId: string, maxChars: number): Promise<string | null> {
+    return this.#host.transcriptTail(managerId, maxChars);
+  }
+
   async stageAttachment(
     managerId: string,
     meta: RunnerStagedAttachmentMeta,

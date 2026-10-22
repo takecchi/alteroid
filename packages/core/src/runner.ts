@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, chownSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { readRedactedTranscriptTail } from './transcript-tail.js';
 import { tmpdir } from 'node:os';
 import { basename, join as joinPath } from 'node:path';
 
@@ -595,6 +596,8 @@ export interface RunnerHost {
   stop(managerId: string, options?: { keepPeers?: boolean }): Promise<void>;
   list(): RunnerManagerState[];
   transcript(managerId: string): Promise<string | null>;
+  // 末尾 `maxChars + 1` 字だけ（全文を伏せて切った値と同じ。#5160）。無い・読めないは null
+  transcriptTail(managerId: string, maxChars: number): Promise<string | null>;
   // 委譲が終わっていても開く（退避先は `closed` では消えず、デーモンの `DELETE` か24時間の掃除まで残る）。形が不正・無ければ `undefined`
   openOutboxFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined>;
   // 無くても成功（冪等）。形が不正なら `false`
@@ -2010,6 +2013,10 @@ class Host implements RunnerHost {
     return (await this.#sessions.get(managerId)?.transcript()) ?? null;
   }
 
+  async transcriptTail(managerId: string, maxChars: number): Promise<string | null> {
+    return (await this.#sessions.get(managerId)?.transcriptTail(maxChars)) ?? null;
+  }
+
   async unpushedWork(
     managerId: string,
     options?: { signal?: AbortSignal },
@@ -2736,6 +2743,17 @@ class RunnerSession {
   async transcript(): Promise<string | null> {
     const result = await this.#readTranscript();
     return result.status === 'ok' ? result.body : null;
+  }
+
+  // `#readTranscript` の3状態と同じ扱い（パスが無い・読めないは null）。全文を読まず末尾だけ読む（#5160）
+  async transcriptTail(maxChars: number): Promise<string | null> {
+    const path = this.#sdkSession.transcriptPath;
+    if (path === undefined) return null;
+    try {
+      return (await readRedactedTranscriptTail(path, maxChars)).body;
+    } catch {
+      return null;
+    }
   }
 
   async unpushedWork(options?: { signal?: AbortSignal }): Promise<UnpushedWorkResult> {

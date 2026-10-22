@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { createManagerPool, probeTurnEnd, type ManagerPool, type TurnEndProbe } from './manager.js';
 import {
   createRunnerRegistry,
+  RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
   type RunnerAnswerOutcome,
   type RunnerClient,
+  type RunnerEvent,
 } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 
@@ -193,7 +195,14 @@ class TranscriptRunner implements RunnerClient {
   async identity(): Promise<{ runnerId?: string; instanceId?: string } | undefined> {
     return { runnerId: this.runnerId, instanceId: 'boot-1' };
   }
-  async connect(): Promise<void> {}
+  // 見回りは末尾の口を名乗る runner からだけ読む（#5160）
+  async connect(onEvent: (event: RunnerEvent) => unknown): Promise<void> {
+    onEvent({
+      type: 'hello',
+      runnerId: this.runnerId,
+      capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL],
+    });
+  }
   async start(command: { managerId: string }): Promise<{ cwd?: string }> {
     this.starts.push(command.managerId);
     return {};
@@ -212,6 +221,9 @@ class TranscriptRunner implements RunnerClient {
     return [];
   }
   async transcript(managerId: string): Promise<string | null> {
+    return this.#transcripts.get(managerId) ?? null;
+  }
+  async transcriptTail(managerId: string): Promise<string | null> {
     return this.#transcripts.get(managerId) ?? null;
   }
   async credentials() {

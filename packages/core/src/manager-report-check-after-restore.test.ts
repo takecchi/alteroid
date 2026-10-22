@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createManagerPool } from './manager.js';
 import {
   createRunnerRegistry,
+  RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
   type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerEvent,
@@ -44,6 +45,12 @@ class LivingRunner implements RunnerClient {
   }
   async connect(onEvent: (event: RunnerEvent) => unknown): Promise<void> {
     this.#emit = onEvent;
+    // 見回りは末尾の口を名乗る runner からだけ読む（#5160）
+    await onEvent({
+      type: 'hello',
+      runnerId: this.runnerId,
+      capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL],
+    });
   }
   async start(): Promise<{ cwd?: string }> {
     return {};
@@ -62,6 +69,9 @@ class LivingRunner implements RunnerClient {
     return this.alive;
   }
   async transcript(): Promise<string | null> {
+    return this.liveTranscript;
+  }
+  async transcriptTail(): Promise<string | null> {
     return this.liveTranscript;
   }
   async credentials() {

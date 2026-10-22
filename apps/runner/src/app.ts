@@ -72,6 +72,8 @@ export interface RunnerAppDeps {
   workerModel?: string;
 }
 
+const TRANSCRIPT_TAIL_MAX_CHARS = 2_000_000;
+
 // 別口の添付の控え（クエリ）。`size` は10進の整数、`sha256` は小文字の hex（64桁）だけを受ける。
 const attachmentStageQuery = z.object({
   name: z.string(),
@@ -989,6 +991,22 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
     .get('/managers/:id/transcript', async (c) => {
       const body = await host.transcript(c.req.param('id'));
+      if (body === null) return c.json({ error: 'not found' as const }, 404);
+      return c.text(body);
+    })
+
+    // 上限を持たせる: 末尾の読みは `maxChars` に比例して読み・メモリを使うので、上限が無いと全文を読む口と変わらない。
+    // 見回りが使う値（`TURN_END_PROBE_CHARS` = 20万字）の10倍まで許し、それ以上は断る（全文は `/transcript` が持つ）。
+    .get('/managers/:id/transcript/tail', async (c) => {
+      const raw = c.req.query('maxChars');
+      const maxChars = raw !== undefined && /^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
+      if (!Number.isSafeInteger(maxChars) || maxChars < 1 || maxChars > TRANSCRIPT_TAIL_MAX_CHARS) {
+        return c.json(
+          { error: `maxChars は 1 以上 ${String(TRANSCRIPT_TAIL_MAX_CHARS)} 以下の整数` },
+          400,
+        );
+      }
+      const body = await host.transcriptTail(c.req.param('id'), maxChars);
       if (body === null) return c.json({ error: 'not found' as const }, 404);
       return c.text(body);
     })

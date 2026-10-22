@@ -131,3 +131,43 @@ describe('runner は画像の中身を生ログの入口へ流さない（#4127�
     expect(body.split('\n')[0]).toBe(plain);
   });
 });
+
+describe('transcriptTail(): 末尾だけを読んで伏せ、全文を伏せて切った値と同じ（#5160）', () => {
+  async function pointAt(opts: Options, path: string) {
+    const hook = opts.hooks?.PostToolUse?.[0]?.hooks?.[0] as HookCallback | undefined;
+    if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+    await hook({ tool_name: 'Bash', tool_input: {}, transcript_path: path } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
+  }
+
+  it('画像の行は控えになり、transcript() を maxChars + 1 字へ切った値と一致する', async () => {
+    const { host, opts } = await boot('mgr-tail-image');
+    const plain = JSON.stringify({ type: 'assistant', message: { content: [] } });
+    const lines = Array.from({ length: 300 }, (_, i) => `${plain}${'あ'.repeat(i % 7)}`);
+    const path = join(dir, 'tail.jsonl');
+    writeFileSync(path, `${lines.join('\n')}\n${JSON.stringify(imageEntry)}\n`, 'utf8');
+    await pointAt(opts, path);
+
+    const full = await host.transcript('mgr-tail-image');
+    if (full === null) throw new Error('全文が読めない');
+    const maxChars = 500;
+    const tail = await host.transcriptTail('mgr-tail-image', maxChars);
+
+    expect(tail).toBe(full.slice(-(maxChars + 1)));
+    expect(tail).not.toContain(B64);
+    expect(tail).toContain('[画像の控え] type=image/png');
+  });
+
+  it('生ログのパスが無い・読めない・知らない委譲は null（transcript() と同じ）', async () => {
+    const { host, opts } = await boot('mgr-tail-none');
+    expect(await host.transcriptTail('mgr-tail-none', 100)).toBeNull();
+    expect(await host.transcript('mgr-tail-none')).toBeNull();
+
+    await pointAt(opts, join(dir, 'does-not-exist.jsonl'));
+    expect(await host.transcriptTail('mgr-tail-none', 100)).toBeNull();
+    expect(await host.transcript('mgr-tail-none')).toBeNull();
+
+    expect(await host.transcriptTail('mgr-unknown', 100)).toBeNull();
+  });
+});
