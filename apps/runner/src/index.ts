@@ -358,6 +358,9 @@ export function withTerminatedReclaimSessions(
       ...(view.ownerListedSessionPidsOf === undefined
         ? {}
         : { ownerListedSessionPidsOf: view.ownerListedSessionPidsOf }),
+      ...(view.abandonedOwnerListedSessionPidsOf === undefined
+        ? {}
+        : { abandonedOwnerListedSessionPidsOf: view.abandonedOwnerListedSessionPidsOf }),
       ...(view.anyTrackedDelegationsOf === undefined
         ? {}
         : { anyTrackedDelegationsOf: view.anyTrackedDelegationsOf }),
@@ -470,6 +473,7 @@ export async function main(): Promise<void> {
     liveSessionPidsOf: () => host.delegationSessionPids().live,
     knownTerminatedSessionPidsOf: () => host.delegationSessionPids().knownTerminated,
     ownerListedSessionPidsOf: () => host.delegationSessionPids().ownerListed,
+    abandonedOwnerListedSessionPidsOf: () => host.delegationSessionPids().abandonedOwnerListed,
     // `live` の集合の大きさでは代用しない: `anyTrackedDelegationsOf` の理由と同じ。
     anyTrackedDelegationsOf: () => host.list().length > 0,
   };

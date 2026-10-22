@@ -2105,6 +2105,282 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
   });
 });
 
+describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5162。引き取られた枝は撃たない）', () => {
+  const OWN_UID = process.getuid?.() ?? 0;
+  const TINI = '/usr/bin/tini';
+
+  function fakeKillFn(): {
+    fn: (pid: number, signal: NodeJS.Signals) => void;
+    calls: Array<{ pid: number; signal: NodeJS.Signals }>;
+  } {
+    const calls: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    return { fn: (pid, signal) => calls.push({ pid, signal }), calls };
+  }
+
+  // 委譲の sid = tini の pid（700）。
+  //  700 tini ─ 701 CLI（いちばん古い直の子） ─ 702 背景の Bash ─ 703 その子
+  //          └ 710 postmaster（pg_ctl が setsid して tini に引き取られた。直の子で CLI ではない） ─ 711 backend
+  //          └ 715 `setsid -f` のサーバー
+  const TINI_PID = 700;
+  function placeTiniTree(): void {
+    placeProcess(root, 700, 'tini', 'S', 1, 10, 50, 700);
+    placeProcess(root, 701, 'claude', 'S', 1, 11, 700, 700);
+    placeProcess(root, 702, 'bash', 'S', 1, 12, 701, 700);
+    placeProcess(root, 703, 'sleep', 'S', 1, 13, 702, 700);
+    placeProcess(root, 710, 'postmaster', 'S', 1, 20, 700, 710);
+    placeProcess(root, 711, 'postgres', 'S', 1, 21, 710, 710);
+    placeProcess(root, 715, 'server', 'S', 1, 15, 700, 715);
+    placeUptime(root, 1000);
+  }
+  // CLI が畳まれて tini も終わり、残りは ppid 1 の孤児になる
+  function foldTini(): void {
+    rmSync(join(root, '700'), { recursive: true });
+    rmSync(join(root, '701'), { recursive: true });
+    placeProcess(root, 702, 'bash', 'S', 1, 12, 1, 700);
+    placeProcess(root, 710, 'postmaster', 'S', 1, 20, 1, 710);
+    placeProcess(root, 715, 'server', 'S', 1, 15, 1, 715);
+  }
+
+  interface Phase {
+    live: number[];
+    terminated: number[];
+    abandonedOwnerListed: number[];
+    ownerListed: number[];
+  }
+  function readerOf(
+    phase: () => Phase,
+    options: { subreaper?: string | null; reap?: boolean } = {},
+  ): { reader: TaskBreakdownReader; calls: Array<{ pid: number; signal: NodeJS.Signals }> } {
+    const { fn, calls } = fakeKillFn();
+    const view = (): ReclaimSessionView => ({
+      liveSessionPidsOf: () => new Set(phase().live),
+      knownTerminatedSessionPidsOf: () => new Set(phase().terminated),
+      ownerListedSessionPidsOf: () => new Set(phase().ownerListed),
+      abandonedOwnerListedSessionPidsOf: () => new Set(phase().abandonedOwnerListed),
+      anyTrackedDelegationsOf: () => true,
+    });
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn: fn,
+      ttlMs: 0,
+      reclaim: {
+        childUid: OWN_UID,
+        ...(options.reap === true ? { reap: view() } : { sessions: view() }),
+        delegationSubreaper: options.subreaper === undefined ? TINI : options.subreaper,
+      },
+    });
+    return { reader, calls };
+  }
+  const NONE: Phase = { live: [], terminated: [], abandonedOwnerListed: [], ownerListed: [] };
+  const LIVE: Phase = { ...NONE, live: [TINI_PID] };
+  const ABANDONED_LISTED: Phase = {
+    ...NONE,
+    terminated: [TINI_PID],
+    abandonedOwnerListed: [TINI_PID],
+  };
+  const firedPids = (calls: Array<{ pid: number }>): number[] =>
+    [...new Set(calls.map((call) => call.pid))].sort((a, b) => a - b);
+
+  it('⭐ 持ち主が名簿に居る abandonTree の回: CLI の枝（背景の Bash とその子）は撃ち、引き取られた枝（postmaster・その backend・setsid -f のサーバー）は撃たない', async () => {
+    placeTiniTree();
+    let phase = LIVE;
+    const { reader, calls } = readerOf(() => phase);
+    await reader.read();
+
+    phase = ABANDONED_LISTED;
+    foldTini();
+    const result = await reader.read();
+
+    expect(firedPids(calls)).toEqual([702, 703]);
+    expect(result?.reclaim?.notFired?.held?.sidUnrecognised).toBe(3);
+    expect(result?.reclaim?.notFired?.held?.unrecognisedBy).toEqual({
+      ownerLive: 0,
+      ownerListed: 3,
+      ownerUnknown: 0,
+    });
+  });
+
+  it('持ち主が名簿から消えた後（abandonedOwnerListed が空）は、引き取られた枝も撃つ（今どおり）', async () => {
+    placeTiniTree();
+    let phase = LIVE;
+    const { reader, calls } = readerOf(() => phase);
+    await reader.read();
+
+    phase = { ...NONE, terminated: [TINI_PID] };
+    foldTini();
+    await reader.read();
+
+    expect(firedPids(calls)).toEqual([702, 703, 710, 711, 715]);
+  });
+
+  it('同じ抜け方で、持ち主が名簿から消える前は守り、消えた次の回で撃つ（#5157 の「名簿に居る間は守る」と食い違わない）', async () => {
+    placeTiniTree();
+    let phase = LIVE;
+    const { reader, calls } = readerOf(() => phase);
+    await reader.read();
+    phase = ABANDONED_LISTED;
+    foldTini();
+    await reader.read();
+    expect(firedPids(calls)).toEqual([702, 703]);
+
+    phase = { ...NONE, terminated: [TINI_PID] };
+    await reader.read();
+    expect(firedPids(calls)).toEqual([702, 703, 710, 711, 715]);
+  });
+
+  it('tini を挟まない構成（delegationSubreaper が null）は今どおり木を丸ごと撃つ', async () => {
+    placeTiniTree();
+    let phase = LIVE;
+    const { reader, calls } = readerOf(() => phase, { subreaper: null });
+    await reader.read();
+    phase = ABANDONED_LISTED;
+    foldTini();
+    await reader.read();
+    expect(firedPids(calls)).toEqual([702, 703, 710, 711, 715]);
+  });
+
+  it('abandonedOwnerListedSessionPidsOf を渡さない構えは、絞らず木を丸ごと撃つ（今どおり）', async () => {
+    placeTiniTree();
+    const { fn, calls } = fakeKillFn();
+    let terminated: number[] = [];
+    let live = [TINI_PID];
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn: fn,
+      ttlMs: 0,
+      reclaim: {
+        childUid: OWN_UID,
+        delegationSubreaper: TINI,
+        sessions: {
+          liveSessionPidsOf: () => new Set(live),
+          knownTerminatedSessionPidsOf: () => new Set(terminated),
+          anyTrackedDelegationsOf: () => true,
+        },
+      },
+    });
+    await reader.read();
+    live = [];
+    terminated = [TINI_PID];
+    foldTini();
+    await reader.read();
+    expect(firedPids(calls)).toEqual([702, 703, 710, 711, 715]);
+  });
+
+  it('台帳に無い子孫は撃たない（最後の走査より後に生まれて、tini も居ない背景処理は枝が分からない）', async () => {
+    placeTiniTree();
+    let phase = LIVE;
+    const { reader, calls } = readerOf(() => phase);
+    await reader.read();
+
+    phase = ABANDONED_LISTED;
+    foldTini();
+    // 走査の間に生まれた: 同じ sid（終端した委譲）を持つが、台帳にも先祖にも載らない
+    placeProcess(root, 722, 'bash', 'S', 1, 30, 1, TINI_PID);
+    const result = await reader.read();
+
+    expect(firedPids(calls)).toEqual([702, 703]);
+    expect(result?.reclaim?.notFired?.held?.unrecognisedBy?.ownerListed).toBe(4);
+  });
+
+  it('CLI の枝の子孫が走査の間に増えても撃つ（台帳に載った CLI の枝の祖先から継ぐ）', async () => {
+    placeTiniTree();
+    let phase = LIVE;
+    const { reader, calls } = readerOf(() => phase);
+    await reader.read();
+
+    phase = ABANDONED_LISTED;
+    foldTini();
+    placeProcess(root, 704, 'node', 'S', 1, 30, 703, TINI_PID);
+    await reader.read();
+
+    expect(firedPids(calls)).toEqual([702, 703, 704]);
+  });
+
+  it('CLI は tini の直の子のうち starttime がいちばん古いもの: CLI より後に生まれた直の子は引き取られた枝になる', async () => {
+    // 710（starttime 20）と 715（15）はどちらも CLI（701、11）より後
+    placeTiniTree();
+    let phase = LIVE;
+    const { reader, calls } = readerOf(() => phase);
+    await reader.read();
+    phase = ABANDONED_LISTED;
+    foldTini();
+    await reader.read();
+    expect(firedPids(calls)).not.toContain(710);
+    expect(firedPids(calls)).not.toContain(715);
+    expect(firedPids(calls)).toContain(702);
+  });
+
+  it('引き取られた印は外れない: CLI の枝の孫が tini に引き取られた後は、CLI の枝には戻らない', async () => {
+    placeTiniTree();
+    placeProcess(root, 705, 'server', 'S', 1, 14, 702, TINI_PID);
+    let phase = LIVE;
+    const { reader, calls } = readerOf(() => phase);
+    await reader.read();
+
+    // 親の Bash（702）が先に終わり、705 が tini の直の子になる（tini はまだ居る）
+    rmSync(join(root, '702'), { recursive: true });
+    placeProcess(root, 705, 'server', 'S', 1, 14, 700, TINI_PID);
+    placeProcess(root, 703, 'sleep', 'S', 1, 13, 1, TINI_PID);
+    await reader.read();
+
+    phase = ABANDONED_LISTED;
+    rmSync(join(root, '700'), { recursive: true });
+    rmSync(join(root, '701'), { recursive: true });
+    placeProcess(root, 705, 'server', 'S', 1, 14, 1, TINI_PID);
+    await reader.read();
+
+    expect(firedPids(calls)).not.toContain(705);
+  });
+
+  it('pid が使い回されて starttime が違えば、台帳の枝を引かない', async () => {
+    placeTiniTree();
+    let phase = LIVE;
+    const { reader, calls } = readerOf(() => phase);
+    await reader.read();
+
+    phase = ABANDONED_LISTED;
+    foldTini();
+    // 702 が終わり、同じ pid を別のプロセスが取った（starttime が違う）
+    placeProcess(root, 702, 'bash', 'S', 1, 99, 1, TINI_PID);
+    await reader.read();
+
+    expect(firedPids(calls)).not.toContain(702);
+  });
+
+  it('withTerminatedReclaimSessions は abandonedOwnerListedSessionPidsOf を運ぶ（あれば）。無ければキーを作らない', () => {
+    const base = { childUid: OWN_UID };
+    const view = (withField: boolean): ReclaimSessionView => ({
+      liveSessionPidsOf: () => new Set(),
+      knownTerminatedSessionPidsOf: () => new Set(),
+      ...(withField ? { abandonedOwnerListedSessionPidsOf: () => new Set([700]) } : {}),
+    });
+    expect(
+      withTerminatedReclaimSessions(
+        base,
+        view(true),
+      )?.sessions?.abandonedOwnerListedSessionPidsOf?.(),
+    ).toEqual(new Set([700]));
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        withTerminatedReclaimSessions(base, view(false))?.sessions,
+        'abandonedOwnerListedSessionPidsOf',
+      ),
+    ).toBe(false);
+  });
+
+  it('reap（reclaim）でも同じ: 引き取られた枝は撃たず、CLI の枝は撃つ', async () => {
+    placeTiniTree();
+    let phase = LIVE;
+    const { reader, calls } = readerOf(() => phase, { reap: true });
+    await reader.read();
+    phase = ABANDONED_LISTED;
+    foldTini();
+    const result = await reader.read();
+    expect(firedPids(calls)).toEqual([702, 703]);
+    expect(result?.reclaim?.mode).toBe('reclaim');
+  });
+});
+
 describe('持ち主の記録の資源欄（#5157）', () => {
   it('schema は pidOwnerRecords を運び、欄が無い古い runner の形も通る', () => {
     const withField = runnerExecutionResourcesSchema.parse({

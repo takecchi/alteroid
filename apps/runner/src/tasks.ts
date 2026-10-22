@@ -53,6 +53,7 @@ export type ReclaimSessionView = Pick<
   | 'liveSessionPidsOf'
   | 'knownTerminatedSessionPidsOf'
   | 'ownerListedSessionPidsOf'
+  | 'abandonedOwnerListedSessionPidsOf'
   | 'anyTrackedDelegationsOf'
   | 'graceMs'
 >;
@@ -88,6 +89,9 @@ export interface ReclaimReapOptions {
   knownTerminatedSessionPidsOf: () => ReadonlySet<number>;
   // 持ち主が名簿に居るので `knownTerminated` に入れていない CLI の pid。観測の内訳にだけ使い、撃つ判定には渡さない。省略は「内訳を出さない」（0に潰さない）。
   ownerListedSessionPidsOf?: () => ReadonlySet<number>;
+  // `knownTerminated` の部分集合（#5162）: 鍵の付け替えの畳みで背景処理を畳んだだけで、持ち主はまだ名簿に居る（または戻り待ち）委譲の pid。
+  // 引き取り手（tini）を挟む構成では、この sid の木のうち CLI の枝だけを撃つ。省略は「絞らない」（今までどおり木を丸ごと撃つ）。
+  abandonedOwnerListedSessionPidsOf?: () => ReadonlySet<number>;
   // `liveSessionPidsOf()` の大きさで代用しない: `childUser` 無しの構成では常に空集合で、生きた委譲があっても分岐1が撃ってしまうため。省略時は安全側の `true`。
   anyTrackedDelegationsOf?: () => boolean;
   graceMs?: number;
@@ -140,6 +144,7 @@ export class TaskBreakdownReader {
   #inflight: Promise<TaskBreakdown | undefined> | undefined;
   readonly #reaper = new Map<number, ReaperEntry>();
   readonly #lineage = new Map<number, LineageEntry>();
+  readonly #branches = new Map<number, BranchEntry>();
 
   constructor(options: TaskBreakdownOptions = {}) {
     this.#root = options.procRoot ?? '/proc';
@@ -188,6 +193,7 @@ export class TaskBreakdownReader {
       killFn: this.#killFn,
       reaper: this.#reaper,
       lineage: this.#lineage,
+      branches: this.#branches,
     });
     this.#cache = { at: now, value };
     return value;
@@ -265,6 +271,7 @@ async function scanTasks(
     killFn: (pid: number, signal: NodeJS.Signals) => void;
     reaper: Map<number, ReaperEntry>;
     lineage: Map<number, LineageEntry>;
+    branches: Map<number, BranchEntry>;
   },
 ): Promise<TaskBreakdown | undefined> {
   let entries: string[];
@@ -367,6 +374,7 @@ async function observeReclaim(
     killFn: (pid: number, signal: NodeJS.Signals) => void;
     reaper: Map<number, ReaperEntry>;
     lineage: Map<number, LineageEntry>;
+    branches: Map<number, BranchEntry>;
   },
 ): Promise<ReclaimObservation> {
   const children = new Map<number, ScannedProcess[]>();
@@ -402,6 +410,37 @@ async function observeReclaim(
       deps.lineage.set(entry.pid, { starttime: entry.starttime, sid: attribution.sid });
     }
   }
+  // 枝は引き取り手（tini）を挟む構成でだけ付ける: 挟まない構成では追跡している pid が CLI そのもので、直の子に枝の区別が無いため。
+  const ownerListedSessionPids = view?.ownerListedSessionPidsOf?.();
+  const abandonedOwnerListedSessionPids =
+    view?.abandonedOwnerListedSessionPidsOf?.() ?? new Set<number>();
+  const tiniInUse = typeof reclaim.delegationSubreaper === 'string';
+  if (view !== undefined) {
+    const branches = tiniInUse
+      ? attributeBranches(
+          scanned,
+          new Set([
+            ...liveSessionPids,
+            ...knownTerminatedSessionPids,
+            ...(ownerListedSessionPids ?? []),
+          ]),
+          deps.branches,
+        )
+      : new Map<number, Branch>();
+    deps.branches.clear();
+    for (const entry of scanned) {
+      const branch = branches.get(entry.pid);
+      if (branch !== undefined)
+        deps.branches.set(entry.pid, { starttime: entry.starttime, branch });
+    }
+  }
+  const narrowToCliBranch: CliBranchNarrowing | undefined =
+    tiniInUse && abandonedOwnerListedSessionPids.size > 0
+      ? {
+          sids: abandonedOwnerListedSessionPids,
+          branchOf: (pid) => deps.branches.get(pid)?.branch,
+        }
+      : undefined;
   const verdictOf = (entry: ScannedProcess): ReapVerdict =>
     reapVerdictOf(
       entry,
@@ -410,15 +449,20 @@ async function observeReclaim(
       knownTerminatedSessionPids,
       anyTrackedDelegations,
       scannedPids,
+      narrowToCliBranch,
     );
   const firesVerdict = (verdict: ReapVerdict): boolean =>
     verdict === 'fireNoDelegations' ? reclaim.reap !== undefined : isFireVerdict(verdict);
   // 内訳は材料が渡った回だけ数える: 無い回を0に潰すと「持ち主不明が0」と読めるため。
-  const ownerListedSessionPids = view?.ownerListedSessionPidsOf?.();
   const heldUnrecognisedBy =
     ownerListedSessionPids === undefined ? undefined : emptyUnrecognisedSplit();
   const outsideUnrecognisedBy =
     ownerListedSessionPids === undefined ? undefined : emptyUnrecognisedSplit();
+  // 撃たずに残した abandonTree の木の引き取られた枝も「持ち主が名簿に居るので守っている」に数える（#5162）
+  const ownerListedForSplit =
+    ownerListedSessionPids === undefined
+      ? new Set<number>()
+      : new Set([...ownerListedSessionPids, ...abandonedOwnerListedSessionPids]);
   const noteUnrecognised = (split: UnrecognisedOwnerSplit | undefined, entry: ScannedProcess) => {
     if (split === undefined || ownerListedSessionPids === undefined) return;
     split[
@@ -426,7 +470,7 @@ async function observeReclaim(
         entry,
         attributions.get(entry.pid),
         liveSessionPids,
-        ownerListedSessionPids,
+        ownerListedForSplit,
       )
     ] += 1;
   };
@@ -663,6 +707,98 @@ function attributeSids(
   return result;
 }
 
+// 引き取り手（tini）を挟む構成で、追跡している pid（tini）の木の中の子孫がどちらの枝に居たか（#5162）。
+//  cli: tini の直の子のうち starttime がいちばん古いもの（tini が起こした CLI）と、その子孫。背景の Bash とその子。
+//  adopted: tini の直の子のうち CLI ではないもの（親が先に終わって tini に引き取られた、切り離されたサーバー。`pg_ctl` の postmaster・`setsid -f` など）と、その子孫。
+type Branch = 'cli' | 'adopted';
+
+// pid と starttime の組で引く: pid が別のプロセスへ使い回されても引かないため。
+interface BranchEntry {
+  starttime: number;
+  branch: Branch;
+}
+
+// 鍵の付け替えの畳み（`abandonTree`）で捨てた委譲の sid は、持ち主が名簿に居る間 CLI の枝だけを撃つ。
+// 引き取られた枝と、枝の分からない子孫は撃たずに守る。理由は2つ:
+//  - #5044 が撃ちたいのは畳んだ背景処理で、担当が自分で切り離して起こした長生きのサーバーではない
+//  - `pg_ctl` の postmaster が、鍵の入れ替えのたびに撃たれていた（#5162）
+// 手放すもの: 最後の走査より後に生まれて台帳に無い背景処理は、枝が分からないので撃たない。
+// 木の丸ごとを撃つ従来の形（持ち主が名簿から消えた後・failed / lost・tini を挟まない構成）はこの絞りに掛からない。
+interface CliBranchNarrowing {
+  sids: ReadonlySet<number>;
+  branchOf: (pid: number) => Branch | undefined;
+}
+
+function isOutsideCliBranch(
+  entry: ScannedProcess,
+  firingSid: number,
+  narrowing: CliBranchNarrowing | undefined,
+): boolean {
+  return (
+    narrowing !== undefined &&
+    narrowing.sids.has(firingSid) &&
+    narrowing.branchOf(entry.pid) !== 'cli'
+  );
+}
+
+// 追跡している pid が走査に居る間だけ、その直の子から枝を決める。tini は CLI が終われば終わるので、撃つ回には居ない: 台帳（前の走査の枝）を引き継ぐ。
+// 台帳の `adopted` は外さない: `pg_ctl` の postmaster は引き取られる直前まで CLI の枝の子（pg_ctl の子）に見えるため。
+function attributeBranches(
+  scanned: readonly ScannedProcess[],
+  trackedPids: ReadonlySet<number>,
+  ledger: ReadonlyMap<number, BranchEntry>,
+): Map<number, Branch> {
+  const byPid = new Map(scanned.map((entry) => [entry.pid, entry]));
+  const childrenByPpid = new Map<number, ScannedProcess[]>();
+  for (const entry of scanned) {
+    const siblings = childrenByPpid.get(entry.ppid);
+    if (siblings === undefined) childrenByPpid.set(entry.ppid, [entry]);
+    else siblings.push(entry);
+  }
+  const cliChildOf = new Map<number, number>();
+  for (const pid of trackedPids) {
+    const oldest = (childrenByPpid.get(pid) ?? [])
+      .filter((child) => child.pid !== pid)
+      .sort((a, b) => a.starttime - b.starttime || a.pid - b.pid)[0];
+    if (oldest !== undefined) cliChildOf.set(pid, oldest.pid);
+  }
+
+  const result = new Map<number, Branch | undefined>();
+  const visiting = new Set<number>();
+  const ledgerBranchOf = (entry: ScannedProcess): Branch | undefined => {
+    const row = ledger.get(entry.pid);
+    return row !== undefined && row.starttime === entry.starttime ? row.branch : undefined;
+  };
+  const branchOf = (entry: ScannedProcess): Branch | undefined => {
+    if (result.has(entry.pid)) return result.get(entry.pid);
+    if (visiting.has(entry.pid)) return undefined;
+    visiting.add(entry.pid);
+    const parent = entry.ppid === entry.pid ? undefined : byPid.get(entry.ppid);
+    const recorded = ledgerBranchOf(entry);
+    let branch: Branch | undefined;
+    if (parent !== undefined && trackedPids.has(parent.pid)) {
+      branch =
+        cliChildOf.get(parent.pid) === entry.pid && recorded !== 'adopted' ? 'cli' : 'adopted';
+    } else {
+      const parentBranch = parent === undefined ? undefined : branchOf(parent);
+      branch =
+        parentBranch === 'adopted' || recorded === 'adopted'
+          ? 'adopted'
+          : (parentBranch ?? recorded);
+    }
+    visiting.delete(entry.pid);
+    result.set(entry.pid, branch);
+    return branch;
+  };
+
+  const branches = new Map<number, Branch>();
+  for (const entry of scanned) {
+    const branch = branchOf(entry);
+    if (branch !== undefined) branches.set(entry.pid, branch);
+  }
+  return branches;
+}
+
 // 終端した委譲の判定を分岐1より先に置く: 委譲が0本になった後ほど、終わった委譲の木が残りやすいため。
 // 帰属を継ぐのは自分の sid が認識できないときだけ: 生きた委譲のもの・読めないものは継がない。
 function reapVerdictOf(
@@ -672,11 +808,16 @@ function reapVerdictOf(
   knownTerminatedSessionPids: ReadonlySet<number>,
   anyTrackedDelegations: boolean,
   scannedPids: ReadonlySet<number>,
+  narrowToCliBranch?: CliBranchNarrowing,
 ): ReapVerdict {
   const { sid } = entry;
   if (sid !== undefined && !liveSessionPids.has(sid)) {
     if (knownTerminatedSessionPids.has(sid)) {
-      if (!scannedPids.has(sid)) return 'fireTerminated';
+      if (!scannedPids.has(sid)) {
+        return isOutsideCliBranch(entry, sid, narrowToCliBranch)
+          ? 'sidUnrecognised'
+          : 'fireTerminated';
+      }
     } else if (
       attribution !== undefined &&
       attribution.source !== 'own' &&
@@ -684,6 +825,7 @@ function reapVerdictOf(
       !liveSessionPids.has(attribution.sid) &&
       !scannedPids.has(attribution.sid)
     ) {
+      if (isOutsideCliBranch(entry, attribution.sid, narrowToCliBranch)) return 'sidUnrecognised';
       return attribution.source === 'ledger' ? 'fireLedger' : 'fireInherited';
     }
   }

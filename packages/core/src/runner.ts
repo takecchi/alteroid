@@ -649,10 +649,12 @@ export interface RunnerHost {
   // プロセスの exit で knownTerminated にしない: 作業者の1回の呼び出しは委譲が生きていてもプロセスを終え、その孫（nohup のサーバ等）が撃たれるため
   // failed / lost で閉じたセッションの pid は、同じ managerId を resume しても knownTerminated に残す: 落ちた CLI の木（verify・dev サーバー等）が守られ続けて溜まるため（done・stop() からの resume は守る）
   // ownerListed は観測の内訳用（#5157）: 持ち主が名簿に居る（または鍵の付け替えの戻り待ち）ので knownTerminated に入れていない CLI の pid。撃つ判定には使わない
+  // abandonedOwnerListed は knownTerminated の部分集合（#5162）: 鍵の付け替えの畳みで背景処理を畳んだ（abandonTree）だけで、持ち主はまだ名簿に居る（または戻り待ち）pid。回収は CLI の枝だけを撃つ
   delegationSessionPids(): {
     live: ReadonlySet<number>;
     knownTerminated: ReadonlySet<number>;
     ownerListed: ReadonlySet<number>;
+    abandonedOwnerListed: ReadonlySet<number>;
   };
   // 所有者の記録（pid → managerId）の件数。上限で忘れた累計は runner を起こしてからの数（#5157）
   delegationPidOwnerRecords(): { remembered: number; cap: number; forgottenTotal: number };
@@ -817,6 +819,9 @@ class Host implements RunnerHost {
   #pidOwnerForgottenTotal = 0;
   // failed / lost で閉じたセッションが起こした pid: 同じ `managerId` を resume しても撃つ側に残す（落ちた CLI の木が pid を占め続けるため。#2352・#1334）
   readonly #abandonedDelegationPids = new Set<number>();
+  // `#abandonedDelegationPids` のうち、鍵の付け替えの畳みで背景処理を畳んだ回（`abandonTree`）だけ。failed / lost は含まない（#5162）:
+  // 前者は持ち主が名簿に居る間 CLI の枝だけを撃ち、後者は木を丸ごと撃つため
+  readonly #abandonTreeDelegationPids = new Set<number>();
   // 鍵の付け替えで畳み、resume で戻ってくる担当（managerId → 畳んだ時刻）。`#sessions` から消えている間も木を守る（#5115）
   readonly #rekeyFoldedAt = new Map<string, number>();
   readonly #spawnAgentProcessFn:
@@ -1052,27 +1057,33 @@ class Host implements RunnerHost {
     live: ReadonlySet<number>;
     knownTerminated: ReadonlySet<number>;
     ownerListed: ReadonlySet<number>;
+    abandonedOwnerListed: ReadonlySet<number>;
   } {
     // 内部の集合への参照を渡さない: 渡した後に書き換えられないという前提が呼び出し側の実装に依存するため（写しを返す）
     const knownTerminated = new Set<number>();
     const ownerListed = new Set<number>();
+    const abandonedOwnerListed = new Set<number>();
     const now = Date.now();
     for (const [pid, managerId] of this.#pidOwnerManagerId) {
       if (this.#liveDelegationPids.has(pid)) continue;
+      const ownerIsListed =
+        this.#sessions.has(managerId) || this.#awaitingRekeyReturn(managerId, now);
       // failed / lost で閉じた CLI の pid は、同じ managerId が戻っていても外さない: 落ちた CLI の木を守ると resume のたびに pid が溜まるため
-      if (
-        (this.#sessions.has(managerId) || this.#awaitingRekeyReturn(managerId, now)) &&
-        !this.#abandonedDelegationPids.has(pid)
-      ) {
+      if (ownerIsListed && !this.#abandonedDelegationPids.has(pid)) {
         ownerListed.add(pid);
         continue;
       }
+      // `abandonTree` の回は持ち主が名簿に居ても knownTerminated に残し、`abandonedOwnerListed` にも入れる（#5162）:
+      // ownerListed へ移すと「撃つ側」の経路（帰属・先祖・台帳の継ぎ）が全部切れ、畳んだ背景処理（CLI の枝）まで撃てなくなる。
+      // 撃つ範囲を CLI の枝へ絞るのは回収の判定の側で、ここは「絞る対象の pid」を渡すだけにする
+      if (ownerIsListed && this.#abandonTreeDelegationPids.has(pid)) abandonedOwnerListed.add(pid);
       knownTerminated.add(pid);
     }
     return {
       live: new Set(this.#liveDelegationPids),
       knownTerminated,
       ownerListed,
+      abandonedOwnerListed,
     };
   }
 
@@ -1094,6 +1105,7 @@ class Host implements RunnerHost {
     this.#pidOwnerManagerId.set(pid, managerId);
     // 使い回された pid は新しい CLI のもの: 残すと生きている新しい CLI の木を撃つ側へ回すため
     this.#abandonedDelegationPids.delete(pid);
+    this.#abandonTreeDelegationPids.delete(pid);
     while (this.#pidOwnerManagerId.size > PID_OWNER_MANAGER_ID_CAP) {
       const oldestPid = this.#pidOwnerManagerId.keys().next().value;
       if (oldestPid === undefined) break;
@@ -1101,6 +1113,7 @@ class Host implements RunnerHost {
       this.#pidOwnerForgottenTotal += 1;
       // 所有者を忘れた pid は覚えない: 集合が際限なく育つため
       this.#abandonedDelegationPids.delete(oldestPid);
+      this.#abandonTreeDelegationPids.delete(oldestPid);
     }
   }
 
@@ -1516,8 +1529,10 @@ class Host implements RunnerHost {
         ) {
           for (const pid of spawnedPids) {
             // 所有者が今も自分の pid だけ入れる: CAP で忘れた・使い回された pid を足すと集合が育つ・別の CLI を撃つため
-            if (this.#pidOwnerManagerId.get(pid) === managerId)
-              this.#abandonedDelegationPids.add(pid);
+            if (this.#pidOwnerManagerId.get(pid) !== managerId) continue;
+            this.#abandonedDelegationPids.add(pid);
+            if ('abandonTree' in outcome) this.#abandonTreeDelegationPids.add(pid);
+            else this.#abandonTreeDelegationPids.delete(pid);
           }
         }
         this.#sessions.delete(managerId);

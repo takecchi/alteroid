@@ -631,6 +631,25 @@ describe('failed / lost で閉じた CLI の pid は、同じ managerId を resu
     await t.host.shutdown();
   });
 
+  it('failed で閉じた回は、持ち主が名簿に居ても abandonedOwnerListed に入らない（木を丸ごと撃つ。#5162）', async () => {
+    const t = crashHost([555, 777]);
+    await t.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    t.spawnIn(0);
+
+    (t.controls[0] as SessionControl).crash(new Error('SIGABRT（テストの偽物）'));
+    await t.closedOf();
+    (t.processes[0] as { emitExit: () => void }).emitExit();
+    await t.reopen();
+    t.spawnIn(1);
+
+    const pids = t.host.delegationSessionPids();
+    expect(t.host.list().map((m) => m.managerId)).toContain('mgr-1');
+    expect(pids.knownTerminated).toEqual(new Set([555]));
+    expect(pids.abandonedOwnerListed).toEqual(new Set());
+
+    await t.host.shutdown();
+  });
+
   it('lost（自己失効）: resume しても古い pid は knownTerminated、新しい pid は live', async () => {
     vi.useFakeTimers();
     try {
@@ -859,6 +878,15 @@ describe('鍵の付け替えの畳み（keepPeers）で背景処理を畳んだ 
     await host.shutdown();
   });
 
+  it('⭐ abandonedOwnerListed（#5162）: 背景処理を畳んだ回は、resume で名簿に戻っても knownTerminated の部分集合として abandonedOwnerListed に入る', async () => {
+    const host = await foldAndResume(1, { keepPeers: true });
+
+    const pids = host.delegationSessionPids();
+    expect(pids.knownTerminated).toEqual(new Set([555]));
+    expect(pids.abandonedOwnerListed).toEqual(new Set([555]));
+    await host.shutdown();
+  });
+
   it('（対照）背景処理の無い鍵の付け替えの畳み: resume すると古い pid は knownTerminated から外れる（守られる）', async () => {
     const host = await foldAndResume(0, { keepPeers: true });
 
@@ -937,6 +965,31 @@ describe('鍵の付け替えで畳んでから resume で戻るまでの間も�
     await host.shutdown();
   });
 
+  it('⭐ abandonedOwnerListed（#5162）: 背景処理を畳んだ回の戻り待ちの間は abandonedOwnerListed に入り（引き取られた枝を守る）、期限切れ・停止で外れる（木を丸ごと撃つ）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-20T21:00:00Z'));
+    const { host } = await foldWithoutResume(1);
+
+    expect(host.delegationSessionPids().knownTerminated).toEqual(new Set([555]));
+    expect(host.delegationSessionPids().abandonedOwnerListed).toEqual(new Set([555]));
+
+    vi.setSystemTime(new Date(Date.now() + PEER_PARK_TTL_MS));
+    expect(host.delegationSessionPids().knownTerminated).toEqual(new Set([555]));
+    expect(host.delegationSessionPids().abandonedOwnerListed).toEqual(new Set());
+    await host.shutdown();
+  });
+
+  it('畳んだ後に keepPeers 無しの停止が来たら、背景処理を畳んだ回でも abandonedOwnerListed から外れる', async () => {
+    const { host, stop } = await foldWithoutResume(1);
+    expect(host.delegationSessionPids().abandonedOwnerListed).toEqual(new Set([555]));
+
+    await stop();
+
+    expect(host.delegationSessionPids().knownTerminated).toEqual(new Set([555]));
+    expect(host.delegationSessionPids().abandonedOwnerListed).toEqual(new Set());
+    await host.shutdown();
+  });
+
   it('畳んだまま PEER_PARK_TTL_MS 戻らなければ、古い pid は knownTerminated へ回る（戻らない担当の木を永久に守らない）', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-20T21:00:00Z'));
@@ -970,10 +1023,12 @@ describe('鍵の付け替えで畳んでから resume で戻るまでの間も�
     vi.setSystemTime(new Date('2026-10-20T21:00:00Z'));
     const { host } = await foldWithoutResume(0);
 
+    // abandonedOwnerListed（#5162）は新しい欄: 背景処理を畳んだ回ではないので、この3集合の期待値は変えず空で足すだけ
     expect(host.delegationSessionPids()).toEqual({
       live: new Set(),
       knownTerminated: new Set(),
       ownerListed: new Set([555]),
+      abandonedOwnerListed: new Set(),
     });
 
     vi.setSystemTime(new Date(Date.now() + PEER_PARK_TTL_MS));
@@ -981,6 +1036,7 @@ describe('鍵の付け替えで畳んでから resume で戻るまでの間も�
       live: new Set(),
       knownTerminated: new Set([555]),
       ownerListed: new Set(),
+      abandonedOwnerListed: new Set(),
     });
     await host.shutdown();
   });
@@ -1017,6 +1073,7 @@ describe('委譲の観測の内訳の材料（#5157。撃つ判定の集合は�
       live: new Set(),
       knownTerminated: new Set(),
       ownerListed: new Set([555]),
+      abandonedOwnerListed: new Set(),
     });
 
     await host.stop('mgr-1');
@@ -1024,6 +1081,7 @@ describe('委譲の観測の内訳の材料（#5157。撃つ判定の集合は�
       live: new Set(),
       knownTerminated: new Set([555]),
       ownerListed: new Set(),
+      abandonedOwnerListed: new Set(),
     });
   });
 
