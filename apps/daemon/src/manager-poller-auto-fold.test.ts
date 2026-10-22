@@ -61,8 +61,8 @@ describe('ManagerPoller と周回の自動の畳み（#5157）', () => {
       intervalMs: 3_600_000,
     });
     void poller.refresh();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(called).toBe(true);
+    // 実時間で待たない（#2146）: 段は refresh の頭で呼ばれるので、呼ばれたことだけを待つ
+    await expect.poll(() => called).toBe(true);
     poller.stop();
   });
 

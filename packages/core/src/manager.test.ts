@@ -8130,13 +8130,12 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       await expect.poll(() => slow.resourcesCalls, { timeout: 2000 }).toBe(1);
       // 間引きの 30 分を越えさせて、間引きではなく「同時に2本走らせない守り」だけを測る
       setClock(t0 + THIRTY_ONE_MIN);
-      // 守りが無いと2本目も gate で待つので、待たずに実時間を置いて数える
-      const second = call(pool);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // 実時間で待たない（#2146）: 守りが効いていれば2本目は gate を待たずにすぐ返るので、そのまま待つ。
+      // 守りが無いと2本目も gate で待ち続け、この歯は期限切れで落ちる
+      await call(pool);
       expect(slow.resourcesCalls).toBe(1);
 
       release();
-      await second;
       await first;
       await pool.stop();
       await registry.stop();
