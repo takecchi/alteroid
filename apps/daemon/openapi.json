@@ -23579,6 +23579,15 @@
                           "bodyMarkup": {
                             "type": "string"
                           },
+                          "autoCloseWhenBack": {
+                            "type": "object",
+                            "properties": {
+                              "managerId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["managerId"]
+                          },
                           "editedAt": {
                             "type": "string",
                             "format": "date-time",
@@ -23831,6 +23840,15 @@
                         "bodyMarkup": {
                           "type": "string"
                         },
+                        "autoCloseWhenBack": {
+                          "type": "object",
+                          "properties": {
+                            "managerId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["managerId"]
+                        },
                         "editedAt": {
                           "type": "string",
                           "format": "date-time",
@@ -24029,6 +24047,15 @@
                                 },
                                 "bodyMarkup": {
                                   "type": "string"
+                                },
+                                "autoCloseWhenBack": {
+                                  "type": "object",
+                                  "properties": {
+                                    "managerId": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["managerId"]
                                 },
                                 "editedAt": {
                                   "type": "string",

@@ -47,6 +47,7 @@ export type QuotaRecoverySummary = Pick<
   | 'lastFailure'
   | 'lastUnreported'
   | 'lastReportAt'
+  | 'supersededBy'
 >;
 
 type Verdict = { recovered: true; line: string } | { recovered: false; line: string };

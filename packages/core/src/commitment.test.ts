@@ -14,6 +14,7 @@ import {
 } from './clone.js';
 import { verifyCommitmentEditIfMatchContract } from './commitment-edit-if-match-contract.js';
 import { verifyCommitmentRemoveForConversationContract } from './commitment-remove-for-conversation-contract.js';
+import { verifyCommitmentAutoCloseMarkContract } from './commitment-auto-close-mark-contract.js';
 import { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 import { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 import { verifyStoreIsolationContract } from './store-isolation-contract.js';
@@ -1915,6 +1916,10 @@ describe('台帳の契約（インメモリ）', () => {
 
   it('同じ at の未了の並びの契約（#3285。3実装で同じことを測る。入れた順のまま、editBody・close・closeMany の後も）', async () => {
     await verifyCommitmentTieOrderContract(createMemoryStores().commitments);
+  });
+
+  it('自動クローズの印の契約（#5164。3実装で同じことを測る）', async () => {
+    await verifyCommitmentAutoCloseMarkContract(createMemoryStores().commitments);
   });
 
   it('editBody の ifMatch の契約（#3786。3実装で同じことを測る）', async () => {
