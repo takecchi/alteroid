@@ -45,6 +45,7 @@ import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
+  RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
   RunnerHttpError,
   type RunnerAnswerOutcome,
   type RunnerClient,
@@ -2114,6 +2115,10 @@ function swappableRunner(runnerId = 'runner-primary') {
       return [...state.alive];
     },
     async transcript() {
+      return state.transcript;
+    },
+    // 見回りは `transcript-tail` を名乗る runner の末尾の口だけを読む（#5160）。名乗らせるのは `helloWithCapabilities`
+    async transcriptTail() {
       return state.transcript;
     },
     async resources() {
@@ -7363,6 +7368,8 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     });
 
     await pool.restore();
+    // 探りが末尾の口を使えるよう、探りの前に名乗らせる（#5160）。`options.capabilities` は探りの後に名乗り直す
+    fake.helloWithCapabilities([RUNNER_CAPABILITY_TRANSCRIPT_TAIL]);
     // `restore()` が `updatedAt` を「いま」へ進めるので、そのままだと `probeTurnEnds()` の10分の門に
     // 引っかかり探りが一度も走らない。経過を作ってから呼ぶ。
     clock += 20 * 60_000;

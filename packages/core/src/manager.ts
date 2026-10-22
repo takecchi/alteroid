@@ -98,6 +98,7 @@ import {
   RUNNER_CAPABILITY_MANAGER_PEERS,
   RUNNER_CAPABILITY_RESCUE_FILES,
   RUNNER_CAPABILITY_RESCUE_RESTORE,
+  RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
   RunnerPermissionRulesUnsupportedError,
@@ -3481,6 +3482,8 @@ class Pool implements ManagerPool {
   readonly #rescueStashChains = new Map<string, Promise<void>>();
   /** 日誌へ書いた「預けなかった」の署名（委譲ごと）。運び直しで同じ日誌を積まない。プロセス内だけ。 */
   readonly #rescueStashJournaled = new Map<string, Set<string>>();
+  /** 見回りの末尾の段（#5160）を日誌へ書いた印（種類と委譲）。プロセス内だけ。 */
+  readonly #transcriptTailJournaled = new Set<string>();
   #rescueSweptAt: number | undefined;
 
   constructor({
@@ -6104,7 +6107,7 @@ class Pool implements ManagerPool {
    * 見回りの判定に渡す生ログ。判定（`probeTurnEnd` / `probeToolUseStall`）は末尾の `TURN_END_PROBE_CHARS` 文字しか読まないので、末尾だけを取る（#4628）。
    * `transcript()` を使わない: あちらは人間・クローンが全文を読む口で、runner の全文・退避の全文・預かりの全件の直列化をデーモンのループの上で行い、60秒ごとに静かな委譲の本数ぶん回すとループを塞ぐ（#4485）。
    * 上限に同じ数を渡す: `readTail` は本文が長ければ上限を厳密に上回る量を返す契約で、判定はその先頭の欠けた1行を捨てる。
-   * 末尾の口が無い構成（fs）だけ、いままでどおり runner の全文に落とす。
+   * runner の全文には落ちない（#5160）。`transcript-tail` を名乗る runner だけ末尾の口で取り、名乗らなければ退避へ進む。
    */
   async #probeTranscriptOf(record: ManagerRecord): Promise<string | null> {
     const result = await this.#transcriptTailOf(record.job, record, TURN_END_PROBE_CHARS);
@@ -6124,7 +6127,7 @@ class Pool implements ManagerPool {
 
   /**
    * 生ログの末尾だけを取る。`transcript()`（全文）と同じ3段を、末尾を読む口で回す（#4628 / #4638）:
-   * pg の生ログの預かりの末尾 → runner の全文（末尾へ切って返す）→ 退避の末尾（`archive.readTail`）。
+   * pg の生ログの預かりの末尾 → runner の末尾の口（`transcript-tail`。#5160）→ 退避の末尾（`archive.readTail`）。
    * 返す量は `readTail` と同じ契約（本文が `maxChars` より長ければ、それを厳密に上回る量）。読み手は先頭の欠けた1行を捨てる。
    * 預かりを全件読む `#fromSessionStore` には落ちない: 1段目が同じ預かりの末尾を読むため。
    */
@@ -6141,11 +6144,27 @@ class Pool implements ManagerPool {
       );
       if (tail !== null && tail.length > 0) return { kind: 'body', body: tail };
     }
+    let tailWithheld = false;
     if (record !== undefined) {
       const runner = await this.#runnerOf(record);
-      const live = await runner?.transcript(job.id).catch(() => null);
-      if (live !== null && live !== undefined && live.length > 0) {
-        return { kind: 'body', body: live.length > maxChars ? live.slice(-(maxChars + 1)) : live };
+      if (runner !== null) {
+        // 末尾の口を名乗らない runner には `transcript()`（全文）へ落ちない: 全文を文字へ直すだけでループを塞ぐため（#5160）
+        const tailOf = runner.transcriptTail?.bind(runner);
+        const claimsTail =
+          tailOf !== undefined &&
+          this.runnerHasCapability(runner.runnerId, RUNNER_CAPABILITY_TRANSCRIPT_TAIL);
+        await this.#journalTranscriptTailStage(job.id, runner.runnerId, claimsTail);
+        if (claimsTail) {
+          const live = await tailOf(job.id, maxChars).catch(() => null);
+          if (live !== null && live.length > 0) {
+            return {
+              kind: 'body',
+              body: live.length > maxChars ? live.slice(-(maxChars + 1)) : live,
+            };
+          }
+        } else {
+          tailWithheld = true;
+        }
       }
     }
     let removed: { archiveId: string; removedAt: string; bytes: number } | undefined;
@@ -6156,7 +6175,38 @@ class Pool implements ManagerPool {
         removed = { archiveId: id, removedAt: result.removedAt, bytes: result.bytes };
       }
     }
-    return removed !== undefined ? { kind: 'removed', ...removed } : { kind: 'missing' };
+    if (removed !== undefined) return { kind: 'removed', ...removed };
+    return tailWithheld
+      ? {
+          kind: 'unreadable',
+          detail:
+            'runner が末尾の口（transcript-tail）を名乗っていないので、全文は取らずに読まなかった（退避にも本文が無い）',
+        }
+      : { kind: 'missing' };
+  }
+
+  /**
+   * 2の段に入ったことを、委譲ごと・種類ごとにデーモンのプロセスにつき1回だけ日誌へ書く（#5160）。60秒ごとの見回りで書き続けない。
+   * 前例は `#journalRescueSkips`（`decision`・プロセス内だけの記憶で重ねて書かない）。
+   * 本番でこの段に入る委譲があるかを、日誌（`journal_read`）から確かめるための計器。
+   */
+  async #journalTranscriptTailStage(
+    managerId: string,
+    runnerId: string,
+    claimsTail: boolean,
+  ): Promise<void> {
+    const key = `${claimsTail ? 'taken' : 'withheld'}\0${managerId}`;
+    if (this.#transcriptTailJournaled.has(key)) return;
+    this.#transcriptTailJournaled.add(key);
+    await this.#journal({
+      type: 'decision',
+      decision: claimsTail
+        ? `見回りが、生ログの末尾を pg の預かりに見つけられず、runner の末尾の口から取った（委譲 ${managerId}・runner ${runnerId}）`
+        : `見回りが、生ログの末尾を pg の預かりに見つけられず、runner が末尾の口（transcript-tail）を名乗っていないので、全文は取らずに読めないとした（委譲 ${managerId}・runner ${runnerId}）`,
+      grounds:
+        '#5160。pg の預かりの末尾が無いか空のときだけ、この段に入る。' +
+        '同じ委譲・同じ種類は、デーモンのプロセスにつき1回だけ書く。',
+    });
   }
 
   /** runner ごと作り直されていたら実際に resume する: 「話しかけられるまで止めておく」は人間の不在で仕事が止まらないという要件に反する。 */

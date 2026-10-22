@@ -1171,6 +1171,19 @@ class HttpRunner implements RunnerClient {
     }
   }
 
+  // 404 を含む失敗は `transcript()` と同じく null: 呼び手（見回り）は「取れなかった」を「本文が無い」として次の段へ進む
+  async transcriptTail(managerId: string, maxChars: number): Promise<string | null> {
+    try {
+      const response = await this.#call(
+        'GET',
+        `/managers/${encodeURIComponent(managerId)}/transcript/tail?maxChars=${String(maxChars)}`,
+      );
+      return await response.text();
+    } catch {
+      return null;
+    }
+  }
+
   // 404 だけを `undefined`（無い）にする: 接続断・期限切れ・ほかの非2xx も `undefined` にすると、「取れなかった」と「無い」が混ざるため
   async openOutboxFile(
     managerId: string,

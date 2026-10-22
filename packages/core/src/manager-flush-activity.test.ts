@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import {
   createRunnerRegistry,
+  RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
   type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerEvent,
@@ -39,6 +40,8 @@ function flushRunner(runnerId = 'runner-primary'): FlushRunner {
     workspacePathKnown: true,
     async connect(onEvent) {
       emit = onEvent;
+      // 見回りは末尾の口を名乗る runner からだけ読む（#5160）
+      onEvent({ type: 'hello', runnerId, capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL] });
     },
     async start(): Promise<{ cwd?: string }> {
       return {};
@@ -60,6 +63,9 @@ function flushRunner(runnerId = 'runner-primary'): FlushRunner {
       return [...alive];
     },
     async transcript(managerId) {
+      return transcripts.get(managerId) ?? null;
+    },
+    async transcriptTail(managerId) {
       return transcripts.get(managerId) ?? null;
     },
     async credentials() {

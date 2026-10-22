@@ -623,6 +623,12 @@ export const RUNNER_CAPABILITY_RESCUE_FILES = 'rescue-files';
  */
 export const RUNNER_CAPABILITY_RESCUE_RESTORE = 'rescue-restore';
 
+/**
+ * 生ログの末尾だけを返す口（`GET /managers/:id/transcript/tail`。#5160）。デーモンの見回りは、これを名乗らない器からは
+ * 全文を取らない（全文を文字へ直すだけでデーモンのループを塞ぐため）。名乗らない器は「末尾を読めない」ものとして扱う。
+ */
+export const RUNNER_CAPABILITY_TRANSCRIPT_TAIL = 'transcript-tail';
+
 export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
@@ -631,6 +637,7 @@ export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_MANAGER_PEERS,
   RUNNER_CAPABILITY_RESCUE_FILES,
   RUNNER_CAPABILITY_RESCUE_RESTORE,
+  RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
 ];
 
 /** 中身は載せない（取りに行く先は `GET /managers/:id/rescue-files/:fileId`）。 */
@@ -1609,6 +1616,11 @@ export interface RunnerClient {
   listWithUnreadable?(options?: { signal?: AbortSignal }): Promise<RunnerManagerListing>;
   /** runner のローカルにある生ログ。無ければ null。 */
   transcript(managerId: string): Promise<string | null>;
+  /**
+   * 生ログの末尾だけ（`transcript-tail` を名乗る器だけが持つ）。無ければ null。
+   * 省略できるのは `transcript-tail` を名乗らない旧い runner と偽物のため。呼び手は名乗りを確かめてから呼ぶ。
+   */
+  transcriptTail?(managerId: string, maxChars: number): Promise<string | null>;
   /**
    * 無ければ `undefined`（404・退避先が消えた）。取れなかった（接続断・期限切れ・非2xx）ときは投げる。
    * 読む側が大きさを数えて途中で打ち切る。口を持たない実装は、呼び出し側が「取り出しの口を名乗っていない」として扱い、取れたことにしない。

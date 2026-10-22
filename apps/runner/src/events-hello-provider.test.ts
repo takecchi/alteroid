@@ -6,6 +6,7 @@ import {
   createRunnerHost,
   readAttachmentLimits,
   RUNNER_CAPABILITY_MANAGER_PEERS,
+  RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
   runnerAttachmentBodyLimit,
   type RunnerHost,
 } from '@alteroid/core';
@@ -118,6 +119,12 @@ describe('runner の hello', () => {
     expect(hello.capabilities).toContain(RUNNER_CAPABILITY_MANAGER_PEERS);
     expect(hello.managerPeers).toEqual([{ provider: 'codex', models: ['gpt-5.5'] }]);
     expect(hello).not.toHaveProperty('managerPeersClosed');
+  });
+
+  it('生ログの末尾の口を持つ版であることを、能力 transcript-tail で名乗る（#5160）', async () => {
+    const hello = await helloFrame();
+    expect(hello.capabilities).toContain(RUNNER_CAPABILITY_TRANSCRIPT_TAIL);
+    expect(RUNNER_CAPABILITY_TRANSCRIPT_TAIL).toBe('transcript-tail');
   });
 
   it('資格が届いていなければ managerPeers を送らず、閉じている理由を managerPeersClosed で送る（#4118）', async () => {
