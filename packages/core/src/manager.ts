@@ -1293,6 +1293,14 @@ export interface ManagerPool {
     runnerId: string,
     pids: { readonly current: number; readonly max: number },
   ): void;
+  /**
+   * 周回の見回りから、開いている各 runner の pids を読み、逼迫していれば自動の畳みを掛ける（#5157）。
+   * `runner_list resources:true`・配置・鍵の回転の前、のどれの契機も来ない間に器が飽和しても畳めるようにする口。
+   * 判定と実行は `#autoFoldIdleOnRunnerIfUnderPressure` と共有し、条件は変えない。
+   * 走らせる間隔は 30 分で、ここで間引く（毎分の呼び出しは何もせず返る）。前の回が終わっていなければ何もしない。
+   * 1つの runner の失敗で残りを止めない。省略可能なのは `sweepRescueRefs` と同じ理由。
+   */
+  autoFoldUnderPressure?(): Promise<void>;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<ManagerTranscript>;
   /**
@@ -3074,6 +3082,12 @@ async function probeRunnerResources(
   }
 }
 
+/**
+ * 周回の見回り（60 秒ごと）から呼ばれる自動の畳みを間引く間隔（#5157）。
+ * 毎分見ない理由は2つ: (1) 自動の畳みは「手が空いて6時間」の担当しか畳まないので、毎分見ても畳める担当はほぼ増えない。
+ * (2) 各 runner へ資源を問い合わせる往復（最大 5 秒 × 台数）を毎分払いたくない。
+ */
+const AUTO_FOLD_PERIODIC_INTERVAL_MS = 30 * 60_000;
 /** 台帳の全委譲を読むので毎分は撃たない。 */
 const RESCUE_SWEEP_INTERVAL_MS = 10 * 60_000;
 /** HTTP の期限 60 秒の内側。 */
@@ -3485,6 +3499,8 @@ class Pool implements ManagerPool {
   /** 見回りの末尾の段（#5160）を日誌へ書いた印（種類と委譲）。プロセス内だけ。 */
   readonly #transcriptTailJournaled = new Set<string>();
   #rescueSweptAt: number | undefined;
+  #autoFoldPeriodicRunning = false;
+  #autoFoldPeriodicAt: number | undefined;
 
   constructor({
     stores,
@@ -5423,7 +5439,7 @@ class Pool implements ManagerPool {
         runnerId,
         outcome: 'skipped-concurrent',
         detail:
-          'この委譲は、もう一方の契機（runner_list resources:true / manager_start の自動配置）が' +
+          'この委譲は、もう一方の契機（runner_list resources:true / manager_start の自動配置 / 周回の見回り）が' +
           '同時に処理中だったので、この回は見送った（二重に abort() を呼ばないため。' +
           '判定できなかったわけではない）。',
       };
@@ -5744,6 +5760,58 @@ class Pool implements ManagerPool {
             '例外により判定不能（判定できないときは畳まない側へ倒す）',
         });
       });
+  }
+
+  async autoFoldUnderPressure(): Promise<void> {
+    if (this.#stopped || this.#autoFoldPeriodicRunning) return;
+    const startedAt = this.#now();
+    if (
+      this.#autoFoldPeriodicAt !== undefined &&
+      startedAt - this.#autoFoldPeriodicAt < AUTO_FOLD_PERIODIC_INTERVAL_MS
+    ) {
+      return;
+    }
+    this.#autoFoldPeriodicRunning = true;
+    this.#autoFoldPeriodicAt = startedAt;
+    try {
+      const open = await this.#runners.list().catch((error: unknown) => {
+        noteDroppedRecord('周回の自動の畳み', 'runner の一覧を読めなかった', error);
+        return [];
+      });
+      // 逼迫した器が見つかるまで台帳を読まない: 逼迫していない大半の回で `list()` を払わないため。
+      let managers: readonly ManagerSummary[] | undefined;
+      for (const runner of open) {
+        if (this.#stopped) return;
+        const runnerId = runner.runnerId;
+        try {
+          const resources = await runner.resources?.({ signal: AbortSignal.timeout(5_000) });
+          const pids = resources?.pids;
+          if (pids === undefined) continue;
+          if (!this.#runnerUnderPidsPressure(runnerId, pids)) continue;
+          managers ??= await this.list();
+          const outcomes = await this.#autoFoldIdleOnRunnerIfUnderPressure(
+            runnerId,
+            pids,
+            managers,
+          );
+          if (outcomes === undefined || outcomes.length === 0) continue;
+          await this.#journal({
+            type: 'decision',
+            decision:
+              `[auto-fold] 周回の見回りで、pids が逼迫した runner=${runnerId}` +
+              `（pids ${String(pids.current)}/${String(pids.max)}）の畳む候補を見た: ` +
+              `畳んだ ${String(outcomes.filter((o) => o.outcome === 'folded').length)} 本・候補 ${String(outcomes.length)} 本`,
+            grounds:
+              'runner_list・配置・鍵の回転のどの契機も来ない間に器が飽和しても畳めるようにする（#5157）。' +
+              '条件は他の契機と同じ（手が空いて6時間・背景処理待ちの印なし・未 push の作業なし）',
+          });
+        } catch (error) {
+          noteDroppedRecord('周回の自動の畳み', `runner=${runnerId}`, error);
+        }
+      }
+    } finally {
+      this.#autoFoldPeriodicRunning = false;
+    }
   }
 
   /**

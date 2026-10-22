@@ -22,6 +22,7 @@ describe('委譲の見回りは段ごとに印を打つ（#4485）', () => {
     };
     const managers = {
       sweepRescueRefs: step('rescue-refs'),
+      autoFoldUnderPressure: step('auto-fold'),
       probeTurnEnds: () => {
         phases.push('run:turn-ends');
         throw new Error('同期で投げる段');
@@ -41,6 +42,8 @@ describe('委譲の見回りは段ごとに印を打つ（#4485）', () => {
     expect(phases).toEqual([
       'poller:rescue-refs',
       'run:rescue-refs',
+      'poller:auto-fold',
+      'run:auto-fold',
       'poller:turn-ends',
       'run:turn-ends',
       'poller:withheld-reports',

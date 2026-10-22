@@ -7315,6 +7315,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     unpushedWorkResult?: UnpushedWorkResult;
     pids?: { current: number; max: number };
     capabilities?: string[];
+    extraRunners?: RunnerClient[];
   }) {
     const id = 'mgr-idle';
     const fake = swappableRunner('runner-a');
@@ -7353,13 +7354,18 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     const posted: unknown[] = [];
     // 既定の `stop()` は no-op: `abort()` の `sessionGone` 判定（`runner.list()` が空か）で畳まれたことを
     // 確かめるため、`state.alive` を落とす `stop` を上乗せする。
+    const resourceCalls = { count: 0 };
     const runner: RunnerClient = {
       ...fake.runner,
       async stop(managerId: string) {
         fake.state.alive = fake.state.alive.filter((s) => s.managerId !== managerId);
       },
+      async resources(...args: Parameters<NonNullable<RunnerClient['resources']>>) {
+        resourceCalls.count += 1;
+        return fake.runner.resources?.(...args);
+      },
     };
-    const registry = createRunnerRegistry([runner]);
+    const registry = createRunnerRegistry([...(options.extraRunners ?? []), runner]);
     const pool = createManagerPool({
       stores,
       post: (event) => posted.push(event),
@@ -7388,7 +7394,16 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     // 下準備が積んだ分は捨てる: 下準備も `#post` を使うので、残すと「何も配っていない」を確かめるテストが常に失敗するため。
     posted.length = 0;
 
-    return { id, fake, stores, pool, registry, posted, setClock: (ms: number) => (clock = ms) };
+    return {
+      id,
+      fake,
+      stores,
+      pool,
+      registry,
+      posted,
+      resourceCalls,
+      setClock: (ms: number) => (clock = ms),
+    };
   }
 
   it('pids が逼迫していなければ、候補が居ても見ない（autoFolded 欄そのものが無い）', async () => {
@@ -7941,6 +7956,224 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
         (entry) => 'decision' in entry && entry.decision.includes('[auto-fold]'),
       );
       expect(foldDecisions).toHaveLength(1);
+
+      await pool.stop();
+      await registry.stop();
+    });
+  });
+
+  describe('周回の契機（ManagerPool.autoFoldUnderPressure、#5157）', () => {
+    const THIRTY_ONE_MIN = 31 * 60_000;
+    const foldLinesOf = async (
+      stores: Awaited<ReturnType<typeof setupActiveDoneCandidate>>['stores'],
+      id: string,
+    ) =>
+      (await stores.journal.list({ types: ['decision'] })).filter(
+        (entry) => 'decision' in entry && entry.decision.includes(`${id} を pids 逼迫`),
+      );
+    const periodicLinesOf = async (
+      stores: Awaited<ReturnType<typeof setupActiveDoneCandidate>>['stores'],
+    ) =>
+      (await stores.journal.list({ types: ['decision'] })).filter(
+        (entry) => 'decision' in entry && entry.decision.includes('周回の見回りで'),
+      );
+    // 下準備（見回りの末尾の段など）が書く無関係な decision と分ける
+    const autoFoldLinesOf = async (
+      stores: Awaited<ReturnType<typeof setupActiveDoneCandidate>>['stores'],
+    ) =>
+      (await stores.journal.list({ types: ['decision'] })).filter(
+        (entry) => 'decision' in entry && entry.decision.includes('[auto-fold'),
+      );
+    const call = (pool: ManagerPool) => {
+      if (pool.autoFoldUnderPressure === undefined) {
+        throw new Error('createManagerPool() が返す本物は常にこの口を持つはず');
+      }
+      return pool.autoFoldUnderPressure();
+    };
+
+    it('⭐ 逼迫した器の手が空いて6時間を過ぎた done は、runner_list も配置も来なくても周回の口が畳み、日誌に decision が出る', async () => {
+      const { id, pool, registry, stores } = await setupActiveDoneCandidate({
+        unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+        pids: { current: 900, max: 1000 },
+        capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+      });
+
+      await call(pool);
+
+      expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('stopped');
+      expect(await foldLinesOf(stores, id)).toHaveLength(1);
+      const summary = await periodicLinesOf(stores);
+      expect(summary).toHaveLength(1);
+      expect(JSON.stringify(summary[0])).toContain('畳んだ 1 本・候補 1 本');
+
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('逼迫していなければ、何もしない（候補を読まない・日誌を書かない）', async () => {
+      const { id, pool, registry, stores, resourceCalls } = await setupActiveDoneCandidate({
+        unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+        pids: { current: 100, max: 1000 },
+        capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+      });
+      let listCalls = 0;
+      const originalList = pool.list.bind(pool);
+      pool.list = (...args: Parameters<typeof pool.list>) => {
+        listCalls += 1;
+        return originalList(...args);
+      };
+
+      await call(pool);
+
+      expect(resourceCalls.count).toBe(1);
+      expect(listCalls).toBe(0);
+      expect((await originalList()).find((m) => m.managerId === id)?.status).toBe('done');
+      expect(await autoFoldLinesOf(stores)).toEqual([]);
+
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('手が空いて6時間未満の担当は畳まない（候補の条件は据え置き）', async () => {
+      const { id, pool, registry, stores, setClock } = await setupActiveDoneCandidate({
+        unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+        pids: { current: 900, max: 1000 },
+        capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+      });
+      setClock(Date.parse(REPORT_AT) + 5 * 3_600_000);
+
+      await call(pool);
+
+      expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('done');
+      expect(await autoFoldLinesOf(stores)).toEqual([]);
+
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('未 push が確かめられなかった担当は畳まない。見送りは日誌に残る', async () => {
+      const { id, pool, registry, stores } = await setupActiveDoneCandidate({
+        pids: { current: 900, max: 1000 },
+        capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+      });
+
+      await call(pool);
+
+      expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('done');
+      const decisions = await stores.journal.list({ types: ['decision'] });
+      expect(
+        decisions.some((e) => 'decision' in e && e.decision.includes('[auto-fold-skip]')),
+      ).toBe(true);
+
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('背景処理待ちの印を名乗れない runner（版を確かめられない）の担当は畳まない', async () => {
+      const { id, pool, registry } = await setupActiveDoneCandidate({
+        unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+        pids: { current: 900, max: 1000 },
+        capabilities: [],
+      });
+
+      await call(pool);
+
+      expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('done');
+
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('30 分以内の2回目は資源を問い合わせない。30 分を過ぎればまた走る', async () => {
+      const { pool, registry, resourceCalls, setClock } = await setupActiveDoneCandidate({
+        unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+        pids: { current: 100, max: 1000 },
+        capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+      });
+      const t0 = Date.parse(REPORT_AT) + 7 * 3_600_000;
+
+      await call(pool);
+      expect(resourceCalls.count).toBe(1);
+
+      setClock(t0 + 29 * 60_000);
+      await call(pool);
+      expect(resourceCalls.count).toBe(1);
+
+      setClock(t0 + THIRTY_ONE_MIN);
+      await call(pool);
+      expect(resourceCalls.count).toBe(2);
+
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('前の回が走っている間に呼ばれたら、何もせずに返る', async () => {
+      const slow = new FakePoolRunner('runner-slow', { managers: 0 });
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      slow.resources = async () => {
+        slow.resourcesCalls += 1;
+        await gate;
+        return slow.report;
+      };
+      const { pool, registry, setClock } = await setupActiveDoneCandidate({
+        unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+        pids: { current: 100, max: 1000 },
+        capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+        extraRunners: [slow],
+      });
+      const t0 = Date.parse(REPORT_AT) + 7 * 3_600_000;
+
+      const first = call(pool);
+      await expect.poll(() => slow.resourcesCalls, { timeout: 2000 }).toBe(1);
+      // 間引きの 30 分を越えさせて、間引きではなく「同時に2本走らせない守り」だけを測る
+      setClock(t0 + THIRTY_ONE_MIN);
+      // 守りが無いと2本目も gate で待つので、待たずに実時間を置いて数える
+      const second = call(pool);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(slow.resourcesCalls).toBe(1);
+
+      release();
+      await second;
+      await first;
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('1つの runner の資源の読みが投げても、ほかの runner の担当は畳まれる', async () => {
+      const broken = new FakePoolRunner('runner-broken', { managers: 0 });
+      broken.resourcesError = '読めない（テストの模擬）';
+      const { id, pool, registry } = await setupActiveDoneCandidate({
+        unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+        pids: { current: 900, max: 1000 },
+        capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+        extraRunners: [broken],
+      });
+
+      await call(pool);
+
+      expect(broken.resourcesCalls).toBe(1);
+      expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('stopped');
+
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('周回の契機と runner_list の契機が重なっても、同じ担当を二重に畳まない', async () => {
+      const { id, pool, registry, stores } = await setupActiveDoneCandidate({
+        unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+        pids: { current: 900, max: 1000 },
+        capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+      });
+
+      const runnersPromise = pool.runners({ resources: true });
+      const periodic = call(pool);
+      await Promise.all([runnersPromise, periodic]);
+
+      expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('stopped');
+      expect(await foldLinesOf(stores, id)).toHaveLength(1);
 
       await pool.stop();
       await registry.stop();
