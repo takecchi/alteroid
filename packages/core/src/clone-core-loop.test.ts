@@ -1430,6 +1430,19 @@ describe('クローン', () => {
       () => (s.calls[0] as FakeCall).inputs.some((input) => input.includes('よい')),
       '承認への回答「よい」がクローンの入力に届く',
     );
+    // 答えを基準として写すよう、理由と条件を「どの種類の確認に効く基準か」で書けと言う（#5125 c30-2。「必要なら」に任せない）
+    const answerInputOf = (): string | undefined =>
+      s.calls
+        .flatMap((call) => (call as FakeCall).inputs)
+        .find((input) => input.includes('承認待ちにしていた質問に人間が答えた'));
+    await waitFor(
+      () => answerInputOf() !== undefined,
+      '承認への回答のターンがクローンの入力に届く',
+    );
+    const answerInput = answerInputOf();
+    expect(answerInput).toContain('拒否・条件付き・理由付きの答えなら');
+    expect(answerInput).toContain('どの種類の確認に効く基準か');
+    expect(answerInput).not.toContain('必要なら記憶へ残すこと');
 
     await waitFor(async () => {
       const entries = await s.stores.journal.list({ types: ['exchange'], limit: 100 });

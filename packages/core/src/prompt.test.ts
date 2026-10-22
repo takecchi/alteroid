@@ -100,6 +100,27 @@ describe('人間に直された判断を基準として記憶へ移す（#5125 c
       expect(buildDistillPrompt(reason)).toContain('人間に直されたあなたの判断と、その基準');
     }
   });
+
+  it('⭐ システムプロンプトが、承認・確認への答えも判断の直しとして基準を写すよう言っている', () => {
+    const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+    expect(prompt).toContain('承認・確認への人間の答えも、判断の直しである');
+    expect(prompt).toContain('結論ではなく理由と条件を');
+  });
+
+  it('⭐ システムプロンプトが、聞く前に過去の同じ種類の確認と答えを escalation から探すよう言っている', () => {
+    const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+    expect(prompt).toContain('人間に聞く前に、同じ種類のことを前に聞いていないかを探す');
+    expect(prompt).toContain('types: ["escalation"]');
+    // 聞かずに進めたときの記録と、迷ったら聞く逃げ道を両方言う（聞かなすぎへ倒さない）
+    expect(prompt).toContain('どの答えを根拠にしたかを `journal_write` に残すこと');
+    expect(prompt).toContain('当てはまるか迷うなら、聞いてよい');
+  });
+
+  it('蒸留の指示が、どの理由でも承認・確認への答えから読み取れる基準を拾う対象に入れている', () => {
+    for (const reason of ['conversation_end', 'pre_compact', 'scheduled'] as const) {
+      expect(buildDistillPrompt(reason)).toContain('承認・確認への人間の答え');
+    }
+  });
 });
 
 describe('分類器に止められた後の巻き添え — 読むだけは道具へ（#5138）', () => {
