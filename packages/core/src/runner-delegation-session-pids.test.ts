@@ -631,7 +631,9 @@ describe('failed / lost で閉じた CLI の pid は、同じ managerId を resu
     await t.host.shutdown();
   });
 
-  it('failed で閉じた回は、持ち主が名簿に居ても abandonedOwnerListed に入らない（木を丸ごと撃つ。#5162）', async () => {
+  // #5168 で反転: 元は「failed で閉じた回は、持ち主が名簿に居ても abandonedOwnerListed に入らない（木を丸ごと撃つ。#5162）」。
+  // 担当が自分で切り離して tini に引き取られたサーバー（postgres）まで撃っていたため、名簿に居る間は CLI の枝だけを撃つ形へ変えた
+  it('⭐ failed で閉じて resume で名簿に戻った回は、abandonedOwnerListed に入る（CLI の枝だけを撃つ。#5168）', async () => {
     const t = crashHost([555, 777]);
     await t.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
     t.spawnIn(0);
@@ -644,6 +646,43 @@ describe('failed / lost で閉じた CLI の pid は、同じ managerId を resu
 
     const pids = t.host.delegationSessionPids();
     expect(t.host.list().map((m) => m.managerId)).toContain('mgr-1');
+    expect(pids.knownTerminated).toEqual(new Set([555]));
+    expect(pids.abandonedOwnerListed).toEqual(new Set([555]));
+
+    await t.host.shutdown();
+  });
+
+  it('failed で閉じて resume されていない（名簿に居ない）回は、abandonedOwnerListed に入らない（木を丸ごと撃つ）', async () => {
+    const t = crashHost([555, 777]);
+    await t.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    t.spawnIn(0);
+
+    (t.controls[0] as SessionControl).crash(new Error('SIGABRT（テストの偽物）'));
+    await t.closedOf();
+    (t.processes[0] as { emitExit: () => void }).emitExit();
+
+    const pids = t.host.delegationSessionPids();
+    expect(pids.knownTerminated).toEqual(new Set([555]));
+    expect(pids.abandonedOwnerListed).toEqual(new Set());
+
+    await t.host.shutdown();
+  });
+
+  it('failed で閉じて resume した後、持ち主が名簿から消えたら abandonedOwnerListed から外れる（木を丸ごと撃つ）', async () => {
+    const t = crashHost([555, 777]);
+    await t.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    t.spawnIn(0);
+
+    (t.controls[0] as SessionControl).crash(new Error('SIGABRT（テストの偽物）'));
+    await t.closedOf();
+    (t.processes[0] as { emitExit: () => void }).emitExit();
+    await t.reopen();
+    t.spawnIn(1);
+    expect(t.host.delegationSessionPids().abandonedOwnerListed).toEqual(new Set([555]));
+
+    await t.host.stop('mgr-1');
+
+    const pids = t.host.delegationSessionPids();
     expect(pids.knownTerminated).toEqual(new Set([555]));
     expect(pids.abandonedOwnerListed).toEqual(new Set());
 
@@ -696,6 +735,10 @@ describe('failed / lost で閉じた CLI の pid は、同じ managerId を resu
         live: new Set([4801]),
         knownTerminated: new Set([4800]),
       });
+      // 名簿に戻っている間は CLI の枝だけを撃つ（#5168）。名簿から消えれば木を丸ごと撃つ
+      expect(host.delegationSessionPids().abandonedOwnerListed).toEqual(new Set([4800]));
+      await host.stop('mgr-1');
+      expect(host.delegationSessionPids().abandonedOwnerListed).toEqual(new Set());
 
       await host.shutdown();
     } finally {
