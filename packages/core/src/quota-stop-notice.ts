@@ -1,6 +1,7 @@
 import { excerptLine } from './excerpt.js';
 import type { JobStatus } from './schema.js';
-import { FAILED_REPORT_PARTIAL_MARKER } from './sdk-failure.js';
+import { FAILED_REPORT_PARTIAL_MARKER, isQuotaFailure } from './sdk-failure.js';
+import { matchedUsageLimitPrefix } from './usage-limits.js';
 import {
   DATED_RESET_LOOKAHEAD_MS,
   noticeResetText,
@@ -106,6 +107,46 @@ export function partialBeforeFailureOf(failedReport: string): string | undefined
   if (at === -1) return undefined;
   const partial = failedReport.slice(at + FAILED_REPORT_PARTIAL_MARKER.length).trim();
   return partial.length === 0 ? undefined : partial;
+}
+
+/** 本文に「失敗する前に出ていた本文」が付いているか。付いていれば担当の進み具合が書かれているので、器は自動では閉じない。 */
+export function carriesPartialBeforeFailure(text: string): boolean {
+  return text.includes(FAILED_REPORT_PARTIAL_MARKER);
+}
+
+// runner.ts の `failedReportText` の見出し。`code` は `resultFailureOf` の `${subtype}(/${status})?` か assistant の error 名
+const FAILED_REPORT_HEAD =
+  /^（このターンは応答を返さずに終わった: ([A-Za-z0-9_()-]+?)(?:\/(\d{3}))? \/ (assistant_error|result_subtype|result_is_error)）\n([^\n]*)$/;
+const BARE_SDK_TEXT_MAX = 300;
+
+/**
+ * 台帳に印が付く前に開いた行の本文（`commitmentFor` が付ける `[report] ` を除いたもの）が、
+ * 枠の知らせの定型だけ（担当の言葉も、失敗する前に出ていた本文も、作業者の注記も、束ねた知らせの見出しも無い）かを答える。
+ * 形の持ち主は runner.ts の `failedReportText` が `workerNote` も `partial` も空のときに作る
+ * `（このターンは応答を返さずに終わった: <code> / <via>）\n<SDK の本文>` の1つだけ。
+ * 枠かどうかは文言ではなく構造化された値（`isQuotaFailure`）で決め、SDK の本文は `classifyUsageNotice` と同じ接頭辞（`matchedUsageLimitPrefix`）で
+ * 「SDK が作った上限の文言」の形であることだけを確かめる。判定できないものは受けない（閉じ漏れは雑音、誤って閉じるのは喪失）。
+ */
+export function isBareQuotaStopReportText(text: string): boolean {
+  const match = FAILED_REPORT_HEAD.exec(text);
+  if (match === null) return false;
+  const [, code, statusText, via, sdkText] = match;
+  if (code === undefined || via === undefined || sdkText === undefined) return false;
+  const status = statusText === undefined ? undefined : Number(statusText);
+  if (
+    !isQuotaFailure({
+      via,
+      code: statusText === undefined ? code : `${code}/${statusText}`,
+      ...(status === undefined ? {} : { status }),
+    })
+  ) {
+    return false;
+  }
+  if (sdkText.length === 0 || sdkText.length > BARE_SDK_TEXT_MAX) return false;
+  const prefix = matchedUsageLimitPrefix(sdkText);
+  return (
+    prefix !== undefined && sdkText.startsWith(prefix) && !carriesPartialBeforeFailure(sdkText)
+  );
 }
 
 /** `failedReportText` の見出し行の次から、最初の空行か注記（`（…`）の手前までを SDK の本文として返す。 */

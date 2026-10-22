@@ -6,6 +6,7 @@ import {
   verifyCommitmentEditIfMatchContract,
   verifyCommitmentRemoveForConversationContract,
   verifyCommitmentEditUnreadableContract,
+  verifyCommitmentAutoCloseMarkContract,
   verifyCommitmentFoldContract,
   verifyCommitmentTieOrderContract,
   verifyJournalStoreHorizonContract,
@@ -491,6 +492,10 @@ describe('PgJournalStore', () => {
 
     it('同じ at の未了の並びの契約（#3285。3実装で同じことを測る。入れた順のまま、editBody・close・closeMany の後も）', async () => {
       await verifyCommitmentTieOrderContract(stores.commitments);
+    });
+
+    it('自動クローズの印の契約（#5164。3実装で同じことを測る）', async () => {
+      await verifyCommitmentAutoCloseMarkContract(stores.commitments);
     });
 
     it('editBody の ifMatch の契約（#3786。3実装で同じことを測る）', async () => {

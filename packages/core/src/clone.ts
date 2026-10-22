@@ -200,6 +200,7 @@ import {
   recoveredNoticeFoldOf,
   type QuotaRecoverySummary,
 } from './quota-recovery-notice.js';
+import { carriesPartialBeforeFailure, isBareQuotaStopReportText } from './quota-stop-notice.js';
 import type { AttachmentRef, JobStatus, TurnFailureKind } from './schema.js';
 import { DEFAULT_TOKEN_COOLDOWN_MS, toAgentTokenView } from './token-pool.js';
 import { parseNoticeResetAt } from './usage-reset-text.js';
@@ -895,11 +896,15 @@ class Clone implements CloneHost {
   // 永続化しない: 再起動の後はセッションの文脈も作り直されるので、そこで「切り替わった」と言える相手が無いため
   #lastHumanConversationId: string | null = null;
   // 枠の知らせ（`quotaStop`）で台帳に開いた行のうち、担当が戻ったら器が閉じる候補（#5015）。キーは合図の id
-  // 永続化しない: 再起動で失った行は閉じず、今までどおり台帳に残る（残る側へ倒す。閉じ漏れは雑音で、誤って閉じるのは喪失のため）
+  // 候補そのものは永続化せず、台帳の行の印（`autoCloseWhenBack`）から起動のあと最初の掃除で組み直す（#5164。`#restoreQuotaStopLedgerRows`）。
+  // 印の無い古い行は、`origin` が manager で本文が枠の知らせの定型だけ（`isBareQuotaStopReportText`）のものに限って戻す。
+  // 台帳が読めなければ何も戻さない（残る側へ倒す。閉じ漏れは雑音で、誤って閉じるのは喪失のため）
   readonly #quotaStopLedgerRows = new Map<
     string,
     { readonly eventId: string; readonly managerId: string; readonly at: string }
   >();
+  /** 台帳から候補を組み直し終えたか。読めなかった回は偽のまま、次の掃除でやり直す。 */
+  #quotaStopRowsRestored = false;
   readonly #managers: ManagerPool;
   // 本セッションと蒸留のサイドクエリで同じものを使う: 片方だけ帯が違うと、蒸留＝人格の書き手だけが別の頭になるため
   readonly #model: string;
@@ -3034,7 +3039,9 @@ class Clone implements CloneHost {
       return;
     }
     const quotaStopRow =
-      event.type === 'manager_message' && event.quotaStop === true
+      event.type === 'manager_message' &&
+      event.quotaStop === true &&
+      !carriesPartialBeforeFailure(event.text)
         ? { eventId: event.id, managerId: event.managerId, at: event.at }
         : undefined;
     this.#delivery.setCommitted(
@@ -3104,6 +3111,32 @@ class Clone implements CloneHost {
     }
   }
 
+  // 開いている行のうち、印（`autoCloseWhenBack`）のあるもの、または印の無い古い行で本文が定型だけのものを、閉じる候補へ戻す（#5164）
+  // 台帳が読めなければ何も戻さず、次の掃除でやり直す。読めない行（`unreadable`）は戻さない
+  // `commitmentFor` と対にする: 古い行の本文は `[report] <text>` の形で入っているので、接頭辞を剥がして `isBareQuotaStopReportText` に通す
+  async #restoreQuotaStopLedgerRows(): Promise<void> {
+    if (this.#quotaStopRowsRestored) return;
+    let entries: readonly Commitment[];
+    try {
+      entries = (await this.#stores.commitments.list()).entries;
+    } catch {
+      return;
+    }
+    this.#quotaStopRowsRestored = true;
+    for (const entry of entries) {
+      if (entry.closedAt !== undefined || entry.origin !== 'manager') continue;
+      if (this.#quotaStopLedgerRows.has(entry.id)) continue;
+      const managerId =
+        entry.autoCloseWhenBack !== undefined
+          ? entry.autoCloseWhenBack.managerId
+          : entry.source !== undefined && isLegacyBareQuotaStopBody(entry.body)
+            ? entry.source
+            : undefined;
+      if (managerId === undefined) continue;
+      this.#quotaStopLedgerRows.set(entry.id, { eventId: entry.id, managerId, at: entry.at });
+    }
+  }
+
   // 枠の知らせの行を、担当が戻ったら器が閉じる（#5015）。受信箱の合図を1件処理する前に1回走らせる
   // 一覧を引けなければ何も閉じない（確かめられないまま閉じるより、残す側へ倒す）。`list()` は同期的に投げうるので `try` で囲う
   // `includeOwn` が偽なら、いま処理する合図自身の行は閉じない: ターンで読ませる合図の行を、読ませる前に台帳から消さないため（畳む合図は自分の行も対象）
@@ -3117,6 +3150,7 @@ class Clone implements CloneHost {
         // 記帳の失敗は `#commit` 側が日誌へ残している。ここでは待つだけ
       }
     }
+    await this.#restoreQuotaStopLedgerRows();
     if (this.#quotaStopLedgerRows.size === 0) return;
     let managers: readonly QuotaRecoverySummary[];
     try {
@@ -3126,10 +3160,11 @@ class Clone implements CloneHost {
     }
     for (const row of [...this.#quotaStopLedgerRows.values()]) {
       if (row.eventId === excludeId) continue;
-      const found = managers.find((manager) => manager.managerId === row.managerId);
-      if (!backOnCurrentToken(found, row.at)) continue;
+      const recovery = recoveryOfQuotaStopRow(managers, row);
+      if (recovery === undefined) continue;
       const reason =
-        `器が自動で閉じた: 枠に当たって止まった知らせだが、名指す担当 ${row.managerId} はいまの世代の鍵で戻っている` +
+        `器が自動で閉じた: 枠に当たって止まった知らせだが、名指す担当 ${row.managerId}` +
+        `${recovery.successorId === undefined ? '' : ` の後継 ${recovery.successorId}`} はいまの世代の鍵で戻っている` +
         '（running、または done で知らせより後のターンが成功）。人間・クローンが否定するなら開き直すこと';
       try {
         const closed = await this.#stores.commitments.close(
@@ -3143,9 +3178,13 @@ class Clone implements CloneHost {
         if (!closed) continue;
         await this.#stores.journal.append({
           type: 'decision',
-          decision: `枠の知らせの行を器が自動で閉じた（${row.eventId}）: 担当 ${row.managerId} が戻っている`,
+          decision:
+            `枠の知らせの行を器が自動で閉じた（${row.eventId}）: ` +
+            (recovery.successorId === undefined
+              ? `担当 ${row.managerId} が戻っている`
+              : `担当 ${row.managerId} は後継 ${recovery.successorId} へ替わり、その後継が戻っている`),
           grounds:
-            `担当 ${row.managerId} が quota-recovery-notice の backOnCurrentToken と同じ基準（いまの世代の鍵で live・枠の印なし、` +
+            `担当 ${recovery.successorId ?? row.managerId} が quota-recovery-notice の backOnCurrentToken と同じ基準（いまの世代の鍵で live・枠の印なし、` +
             `running、または done で知らせ ${row.at} より後のターンが成功）で戻っていた。` +
             '器が閉じたので closedBy は daemon（人間・クローンはこれを読んで後から否定する）',
         });
@@ -8519,6 +8558,10 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
         // `bodyMarkup` は接頭辞を除いた `event.text` を指す（表示側は接頭辞を剥がしてから当てる）。
         // 印が無いときは既定へ倒さず立てない（`textMarkupSchema` の doc）。
         ...(event.markup === undefined ? {} : { bodyMarkup: event.markup }),
+        // 進み具合が書かれた知らせ（失敗する前に出ていた本文付き）には付けない: 器が閉じると読まれないまま消えるため
+        ...(event.quotaStop === true && !carriesPartialBeforeFailure(event.text)
+          ? { autoCloseWhenBack: { managerId: event.managerId } }
+          : {}),
       };
     case 'external':
       // デーモン自身が出した合図には始末をつける相手が居ない（`isDaemonSelfNotice` の doc）。
@@ -8533,6 +8576,39 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
     case 'self_initiative':
     case 'distill':
       return null;
+  }
+}
+
+const COMMITMENT_REPORT_PREFIX = '[report] ';
+
+/** 印の付く前に開いた行の本文が、枠の知らせの定型だけか（`commitmentFor` の接頭辞 `[report] ` の形に限る）。 */
+function isLegacyBareQuotaStopBody(body: string): boolean {
+  return (
+    body.startsWith(COMMITMENT_REPORT_PREFIX) &&
+    isBareQuotaStopReportText(body.slice(COMMITMENT_REPORT_PREFIX.length))
+  );
+}
+
+/**
+ * 枠の知らせの行の担当が戻っているか。名指す担当が戻っていなければ、`supersededBy` で後継をたどり、
+ * 後継のどれかが戻っていれば戻ったとみなす（#5164。担当が failed・lost・stopped で畳まれ、後継が引き継いだ回）。
+ * 後継の居ない担当は `supersededBy` が無いので、ここで止まる（今までどおり閉じない）。輪になっていたら止める。
+ */
+function recoveryOfQuotaStopRow(
+  managers: readonly QuotaRecoverySummary[],
+  row: { readonly managerId: string; readonly at: string },
+): { successorId?: string } | undefined {
+  const seen = new Set<string>();
+  let currentId = row.managerId;
+  let successorId: string | undefined;
+  for (;;) {
+    seen.add(currentId);
+    const found = managers.find((manager) => manager.managerId === currentId);
+    if (backOnCurrentToken(found, row.at)) return successorId === undefined ? {} : { successorId };
+    const next = found?.supersededBy;
+    if (next === undefined || seen.has(next)) return undefined;
+    currentId = next;
+    successorId = next;
   }
 }
 

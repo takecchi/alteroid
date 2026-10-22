@@ -955,6 +955,9 @@ export const commitmentSchema = z.object({
     ),
   // `z.enum` を置かない: `closedBy` と同じく未知の値1つで台帳の一覧が丸ごと読めなくなるため（網羅性は書き込み側の型 `TextMarkup` と表示側の narrow で保つ）
   bodyMarkup: z.string().optional(),
+  // 枠の知らせ（`quotaStop`）で開いた行に付く、「名指す担当が戻ったら器が閉じてよい」印（#5164）。再起動で閉じる候補を失わないよう台帳へ持たせる。
+  // 「失敗する前に出ていた本文」付きの知らせには付けない（進み具合が書かれているので、器は閉じない）。無い行は閉じる候補にならない
+  autoCloseWhenBack: z.object({ managerId: z.string() }).optional(),
   // 日誌へ前後の本文を残さない編集の口を足さない: 台帳が静かに書き換わると、クローンが過去の自分を追えなくなるため
   editedAt: isoDateTime.optional(),
   editedBy: z
