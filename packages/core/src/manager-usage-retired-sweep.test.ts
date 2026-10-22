@@ -167,6 +167,25 @@ async function setCooldown(s: Awaited<ReturnType<typeof setup>>, until: number |
   ]);
 }
 
+// 現役の鍵の行を直に置く（成功の観測は `markTokenUsable` が `updatedAt` を進めて `lastRejectedAt` と `cooldownUntil` を消した形）
+async function setRow(
+  s: Awaited<ReturnType<typeof setup>>,
+  row: { updatedAt?: number; lastRejectedAt?: number; cooldownUntil?: number },
+) {
+  await s.stores.tokens.replace([
+    {
+      id: 'tok-a',
+      label: 'a',
+      order: 0,
+      ...(row.updatedAt === undefined ? {} : { updatedAt: new Date(row.updatedAt).toISOString() }),
+      ...(row.lastRejectedAt === undefined
+        ? {}
+        : { lastRejectedAt: new Date(row.lastRejectedAt).toISOString() }),
+      ...(row.cooldownUntil === undefined ? {} : { cooldownUntil: row.cooldownUntil }),
+    },
+  ]);
+}
+
 const MIN = 60_000;
 
 describe('枠で failed になり像から外れた担当を、掃きが起こす（#5166）', () => {
@@ -244,6 +263,45 @@ describe('枠で failed になり像から外れた担当を、掃きが起こ�
 
     expect(s.fake.resumes).toHaveLength(0);
     expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeDefined();
+  });
+
+  it('⭐ 同じ世代のまま冷却明けが消えて、止まった後の成功が観測されていれば（鍵が尽きて同じ鍵に戻る形）起こす', async () => {
+    const s = await setup();
+    await failedByQuota(s);
+    const stoppedAt = Date.parse((await s.stores.jobs.listJobs())[0]?.usageStoppedAt ?? '');
+
+    s.key.availability = 'ready';
+    await setRow(s, { updatedAt: stoppedAt + 5 * MIN });
+    s.clock.now = stoppedAt + 10 * MIN;
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([ID]);
+    expect(s.fake.resumes).toHaveLength(1);
+  });
+
+  it('成功の観測の材料: 行の更新が止まった時刻より前なら起こさない', async () => {
+    const s = await setup();
+    await failedByQuota(s);
+    const stoppedAt = Date.parse((await s.stores.jobs.listJobs())[0]?.usageStoppedAt ?? '');
+
+    s.key.availability = 'ready';
+    s.clock.now = stoppedAt + 10 * MIN;
+    await setRow(s, { updatedAt: stoppedAt - MIN });
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+    // 更新の時刻が無い行も同じ（分からないは起こさない）
+    await setRow(s, {});
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+    expect(s.fake.resumes).toHaveLength(0);
+  });
+
+  it('成功の観測の材料: 拒否の記録（lastRejectedAt）が残っていれば、更新が後でも起こさない', async () => {
+    const s = await setup();
+    await failedByQuota(s);
+    const stoppedAt = Date.parse((await s.stores.jobs.listJobs())[0]?.usageStoppedAt ?? '');
+
+    s.key.availability = 'ready';
+    s.clock.now = stoppedAt + 10 * MIN;
+    await setRow(s, { updatedAt: stoppedAt + 5 * MIN, lastRejectedAt: stoppedAt + 5 * MIN });
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+    expect(s.fake.resumes).toHaveLength(0);
   });
 
   it('人が止めた担当（stopped）は、印が残っていて材料が揃っていても起こさない', async () => {

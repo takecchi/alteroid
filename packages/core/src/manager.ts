@@ -6364,8 +6364,14 @@ class Pool implements ManagerPool {
    * 鍵の出来事（`rotated` / `recovered` / `reopened`）が出ない戻り方では、契機は他に無い。
    * 起こすのは次の両方が成り立つときだけ（片方でも欠ければ印を残す）:
    * (a) 現役の鍵が `ready`（`#wakeIfHeldTokenStale` と同じ口。通らないなら起こしても同じ枠に当たる）。
-   * (b) 担当が止まった後に鍵が通る状態へ戻ったと言える: 現役の世代が担当の抱えていた世代と違う、または現役の鍵の冷却明けが
-   *     `usageStoppedAt` より後で、もう過ぎている。材料が無ければ起こさない（「分からない」を起こす側へ倒さない）。
+   * (b) 担当が止まった後に鍵が通る状態へ戻ったと言える。次の3つの材料のどれかが成り立つとき。材料が無ければ起こさない（「分からない」を起こす側へ倒さない）。
+   *     1. 世代: 現役の世代が、担当の抱えていた世代（`#tokenIdentities`）と違う。
+   *     2. 冷却明け: 現役の鍵の `cooldownUntil` が `usageStoppedAt` より後で、もう過ぎている。
+   *     3. 成功の観測: 現役の鍵の行に `lastRejectedAt` も `cooldownUntil` も無く、`updatedAt` が `usageStoppedAt` より後。
+   *        鍵が尽きて同じ世代へ戻る形では、成功を観測した回し手が `markTokenUsable` で 2 を消すので、2 だけでは拾えない。
+   *        `lastRejectedAt` を消すのは `markTokenUsable` だけだが、`updatedAt` は人の編集（ラベル・順位・無効の切り替え・値の差し替え。
+   *        `buildTokens` の `changed`）でも進む。拒否の記録が無い行で、止まった後に人が編集した回は誤って起こしうる
+   *        （起こして枠に当たれば、既存の挑み直しの間隔と印に戻る。ready は成り立っているので被害は 1 ターン）。
    * 人が止めた担当・後継の居る担当は `#nudgeForUsageRotation` の許可リストが `gone` と返す（ここでは緩めない）。
    * 同じ担当を二重に起こさないのは、掃きを直列のままにして `#resuming` の busy と `#nudge` の判定に任せるため。ここに専用の排他は足さない。
    */
@@ -6379,20 +6385,22 @@ class Pool implements ManagerPool {
     if (identity === undefined || this.#tokenAvailability === undefined) return nudged;
     const availability = await this.#tokenAvailability(identity.tokenId).catch(() => undefined);
     if (availability !== 'ready') return nudged;
-    // 冷却明けの時刻は(b)の2つ目の材料で、世代が違えば要らないので、要る担当が現れるまで読まない。1周で1度だけ読む。
-    let cooldownUntil: number | undefined | 'unread' = 'unread';
-    const readCooldownUntil = async (): Promise<number | undefined> => {
-      if (cooldownUntil === 'unread') {
+    // 現役の鍵の行は(b)の2つ目・3つ目の材料で、世代が違えば要らないので、要る担当が現れるまで読まない。1周で1度だけ読む。
+    let activeRow: Pick<AgentToken, 'cooldownUntil' | 'lastRejectedAt' | 'updatedAt'> | undefined;
+    let activeRowRead = false;
+    const readActiveRow = async (): Promise<typeof activeRow> => {
+      if (!activeRowRead) {
+        activeRowRead = true;
         try {
-          cooldownUntil = (await this.#stores.tokens.list()).find(
+          activeRow = (await this.#stores.tokens.list()).find(
             (token) => token.id === identity.tokenId,
-          )?.cooldownUntil;
+          );
         } catch (error) {
-          noteDroppedRecord('枠で止まった担当の冷却明けの読み取り', identity.tokenId, error);
-          cooldownUntil = undefined;
+          noteDroppedRecord('枠で止まった担当の鍵の行の読み取り', identity.tokenId, error);
+          activeRow = undefined;
         }
       }
-      return cooldownUntil;
+      return activeRow;
     };
     for (const managerId of candidates) {
       if (this.#stopped) break;
@@ -6412,12 +6420,19 @@ class Pool implements ManagerPool {
         let returned = heldGeneration !== undefined && heldGeneration !== identity.generation;
         if (!returned && job.usageStoppedAt !== undefined) {
           const stoppedAt = Date.parse(job.usageStoppedAt);
-          const until = await readCooldownUntil();
-          returned =
-            !Number.isNaN(stoppedAt) &&
-            until !== undefined &&
-            until > stoppedAt &&
-            until <= this.#now();
+          const row = await readActiveRow();
+          if (!Number.isNaN(stoppedAt) && row !== undefined) {
+            const until = row.cooldownUntil;
+            const updatedAt = row.updatedAt === undefined ? NaN : Date.parse(row.updatedAt);
+            returned =
+              // 冷却明け: 止まった後に明けていて、もう過ぎている
+              (until !== undefined && until > stoppedAt && until <= this.#now()) ||
+              // 成功の観測: 拒否も冷却も残っておらず、行が止まった後に更新されている（`markTokenUsable` だけが `lastRejectedAt` を消して `updatedAt` をその時刻にする）
+              (until === undefined &&
+                row.lastRejectedAt === undefined &&
+                !Number.isNaN(updatedAt) &&
+                updatedAt > stoppedAt);
+          }
         }
         if (!returned) continue;
         // 判定の間に別の契機が起こして印を下ろしていたら、二重に起こさない。
