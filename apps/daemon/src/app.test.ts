@@ -58,6 +58,7 @@ import {
   recentDroppedTraces,
   summarizeInboxBacklog,
   summarizeProgress,
+  UnreadablePracticeError,
   UnreadableTokenSettingsError,
 } from '@alteroid/core';
 import ts from 'typescript';
@@ -115,7 +116,7 @@ function fakeClone() {
   const vacateCalls: string[] = [];
   let vacateResult: VacateResult = {};
   let abortOutcome: 'stopped' | 'not_stopped' | 'unknown' = 'stopped';
-  let sendOutcome: 'answered' | 'delivered' | 'session_missing' = 'delivered';
+  let sendOutcome: 'answered' | 'delivered' | 'session_missing' | 'declined' | 'held' = 'delivered';
   let persistOutcome: 'persisted' | 'unavailable' = 'persisted';
   const pushHealthByRunnerId = new Map<string, RunnerPushHealth>();
   const pluginLoadByRunnerId = new Map<string, RunnerPluginLoadObservation>();
@@ -304,7 +305,7 @@ function fakeClone() {
     setPersistOutcome(outcome: 'persisted' | 'unavailable') {
       persistOutcome = outcome;
     },
-    setSendOutcome(outcome: 'answered' | 'delivered' | 'session_missing') {
+    setSendOutcome(outcome: 'answered' | 'delivered' | 'session_missing' | 'declined' | 'held') {
       sendOutcome = outcome;
     },
     setReply(events: ChatStreamEvent[]) {
@@ -12555,5 +12556,455 @@ describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#32
     const body = (await response.json()) as { runners: unknown[]; sha256?: string };
     expect(body.runners).toEqual([]);
     expect(body.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
+  });
+});
+
+describe('人間が API から直接した操作に、日誌の人間の操作の印（humanAction）を付ける（#5175）', () => {
+  const DISABLED = { kind: 'operator', auth: 'disabled' } as const;
+
+  async function marks() {
+    const rows = await stores.journal.list({ types: ['decision'], order: 'asc' });
+    return rows.flatMap((row) =>
+      row.type === 'decision' && row.humanAction !== undefined ? [row] : [],
+    );
+  }
+
+  function addManager() {
+    fake.managerList.push({
+      managerId: 'mgr-1',
+      status: 'running',
+      live: true,
+      cwd: '/work',
+      request: '実装して',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      waiting: [],
+    });
+  }
+
+  const practiceBase = { kind: '日報', title: '日報の書き方', content: '本文' };
+  const putPractice = (slug: string, body: unknown) =>
+    app.request(`/practices/${slug}`, { ...json(body), method: 'PUT' });
+  const versionOf = async (slug: string) =>
+    ((await (await app.request(`/practices/${slug}`)).json()) as { version: string }).version;
+
+  describe('成功した回に、kind・target・via の付いた decision が1行積まれる', () => {
+    it('台帳を閉じる（commitment_close、target は行の id）', async () => {
+      const { id } = (await (
+        await app.request('/commitments', json({ body: '日報の体裁を直す' }))
+      ).json()) as { id: string };
+
+      expect(
+        (await app.request(`/commitments/${id}/close`, json({ reason: '直した' }))).status,
+      ).toBe(200);
+
+      const rows = await marks();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        grounds: '人間が直接 API から閉じた',
+        humanAction: { kind: 'commitment_close', target: id, via: DISABLED },
+      });
+    });
+
+    it('定期の依頼を外す（schedule_remove、target は kind）', async () => {
+      await stores.schedules.put({
+        kind: 'issue-round',
+        spec: { type: 'daily', at: '09:00' },
+        request: 'open issue を見る',
+        createdAt: '2026-08-12T00:00:00.000Z',
+        updatedAt: '2026-08-12T00:00:00.000Z',
+      });
+
+      const removed = await app.request('/schedule/issue-round', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+      });
+
+      expect(removed.status).toBe(200);
+      const rows = await marks();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        grounds: '人間が直接 API から外した',
+        humanAction: { kind: 'schedule_remove', target: 'issue-round', via: DISABLED },
+      });
+    });
+
+    it('やり方を消す（practice_remove、target は slug）。既存の target（やり方の印）も今までどおり付く', async () => {
+      await stores.practices.write({ slug: 'to-remove', ...practiceBase });
+      const version = await versionOf('to-remove');
+
+      const del = await app.request(`/practices/to-remove?ifMatch=${version}`, {
+        method: 'DELETE',
+      });
+
+      expect(del.status).toBe(200);
+      const rows = await marks();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        target: { kind: 'practice', slug: 'to-remove' },
+        humanAction: { kind: 'practice_remove', target: 'to-remove', via: DISABLED },
+      });
+    });
+
+    it('読めない形で入っていたやり方を消した回にも付く', async () => {
+      const real = stores.practices;
+      stores.practices = {
+        ...real,
+        async read(slug) {
+          if (slug === 'broken') {
+            throw new UnreadablePracticeError('読めない', { slug });
+          }
+          return real.read(slug);
+        },
+        async remove(slug, options) {
+          if (slug === 'broken') return;
+          return real.remove(slug, options);
+        },
+      };
+
+      expect((await app.request('/practices/broken', { method: 'DELETE' })).status).toBe(200);
+
+      const rows = await marks();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        humanAction: { kind: 'practice_remove', target: 'broken', via: DISABLED },
+      });
+    });
+
+    it('やり方を書き直す（practice_write、target は slug）', async () => {
+      await stores.practices.write({ slug: 'daily-report', ...practiceBase });
+
+      const res = await putPractice('daily-report', { ...practiceBase, content: '人間の書き直し' });
+
+      expect(res.status).toBe(200);
+      const rows = await marks();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        target: { kind: 'practice', slug: 'daily-report' },
+        humanAction: { kind: 'practice_write', target: 'daily-report', via: DISABLED },
+      });
+    });
+
+    it('読めない形の行を書き直した回は、書き直しとして practice_write を付ける', async () => {
+      const real = stores.practices;
+      stores.practices = {
+        ...real,
+        async read(slug) {
+          if (slug === 'broken') {
+            throw new UnreadablePracticeError('読めない', { slug });
+          }
+          return real.read(slug);
+        },
+      };
+
+      expect((await putPractice('broken', practiceBase)).status).toBe(200);
+
+      const rows = await marks();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        humanAction: { kind: 'practice_write', target: 'broken', via: DISABLED },
+      });
+    });
+
+    it.each(['answered', 'delivered', 'held'] as const)(
+      'マネージャーへ直接送る（manager_message、target は managerId）: %s の回',
+      async (outcome) => {
+        addManager();
+        fake.setSendOutcome(outcome);
+
+        const res = await app.request('/managers/mgr-1/messages', json({ text: '続けて' }));
+
+        expect(res.status).toBe(200);
+        const rows = await marks();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          decision: '人間が直接 mgr-1 へ送った: 続けて',
+          grounds: '人間が直接 API から送った',
+          humanAction: { kind: 'manager_message', target: 'mgr-1', via: DISABLED },
+        });
+      },
+    );
+
+    it('マネージャーへの送信の抜粋は 80 字ほどで切れる', async () => {
+      addManager();
+
+      await app.request('/managers/mgr-1/messages', json({ text: 'あ'.repeat(500) }));
+
+      const rows = await marks();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.decision.length).toBeLessThan(200);
+      expect(rows[0]?.decision).toContain('あ'.repeat(80));
+      expect(rows[0]?.decision).not.toContain('あ'.repeat(81));
+    });
+  });
+
+  describe('成功しなかった回には積まれない', () => {
+    it('台帳: 無い id は 404、二度目は 409', async () => {
+      expect((await app.request('/commitments/nope/close', json({ reason: 'x' }))).status).toBe(
+        404,
+      );
+      const { id } = (await (
+        await app.request('/commitments', json({ body: '二度閉じ' }))
+      ).json()) as {
+        id: string;
+      };
+      await app.request(`/commitments/${id}/close`, json({ reason: '最初' }));
+      const before = (await marks()).length;
+
+      expect(
+        (await app.request(`/commitments/${id}/close`, json({ reason: '二度目' }))).status,
+      ).toBe(409);
+      expect((await app.request(`/commitments/${id}/close`, json({ reason: '' }))).status).toBe(
+        400,
+      );
+
+      expect(before).toBe(1);
+      expect(await marks()).toHaveLength(1);
+    });
+
+    it('定期の依頼: 無い kind は 404、不正な本文は 400、版違いは 409', async () => {
+      await stores.schedules.put({
+        kind: 'issue-round',
+        spec: { type: 'daily', at: '09:00' },
+        request: '見る',
+        createdAt: '2026-08-12T00:00:00.000Z',
+        updatedAt: '2026-08-12T00:00:00.000Z',
+      });
+
+      expect(
+        (
+          await app.request('/schedule/nope', {
+            method: 'DELETE',
+            headers: { 'content-type': 'application/json' },
+          })
+        ).status,
+      ).toBe(404);
+      expect(
+        (
+          await app.request('/schedule/issue-round', {
+            method: 'DELETE',
+            headers: { 'content-type': 'application/json' },
+            body: '{壊れた',
+          })
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await app.request('/schedule/issue-round', {
+            method: 'DELETE',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ ifMatch: 'ずれた版' }),
+          })
+        ).status,
+      ).toBe(409);
+
+      expect(await marks()).toEqual([]);
+      expect((await stores.schedules.list()).entries).toHaveLength(1);
+    });
+
+    it('やり方を消す: 不正な slug は 400、無いものは 404、版なしは 428、版違いは 409', async () => {
+      await stores.practices.write({ slug: 'daily-report', ...practiceBase });
+      const stale = await versionOf('daily-report');
+      await stores.practices.write({
+        slug: 'daily-report',
+        ...practiceBase,
+        content: '別の書き手',
+      });
+
+      expect((await app.request('/practices/Bad_Slug', { method: 'DELETE' })).status).toBe(400);
+      expect((await app.request('/practices/nope', { method: 'DELETE' })).status).toBe(404);
+      expect((await app.request('/practices/daily-report', { method: 'DELETE' })).status).toBe(428);
+      expect(
+        (await app.request(`/practices/daily-report?ifMatch=${stale}`, { method: 'DELETE' }))
+          .status,
+      ).toBe(409);
+
+      expect(await marks()).toEqual([]);
+      expect(await stores.practices.read('daily-report')).not.toBeNull();
+    });
+
+    it('やり方を書き直す: 不正な slug・本文は 400、版違いは 409', async () => {
+      await stores.practices.write({ slug: 'daily-report', ...practiceBase });
+      const stale = await versionOf('daily-report');
+      await stores.practices.write({
+        slug: 'daily-report',
+        ...practiceBase,
+        content: '別の書き手',
+      });
+
+      expect((await putPractice('Bad_Slug', practiceBase)).status).toBe(400);
+      expect((await putPractice('daily-report', { kind: '日報' })).status).toBe(400);
+      expect(
+        (await putPractice('daily-report', { ...practiceBase, content: '人間', ifMatch: stale }))
+          .status,
+      ).toBe(409);
+
+      expect(await marks()).toEqual([]);
+    });
+
+    it('やり方を新しく作った回は、日誌には残るが印は付かない（人間が新しく足す操作は範囲外）', async () => {
+      const res = await putPractice('brand-new', practiceBase);
+
+      expect(res.status).toBe(200);
+      const decisions = await stores.journal.list({ types: ['decision'] });
+      expect(decisions).toHaveLength(1);
+      expect(decisions[0]).toMatchObject({
+        grounds: '人間が直接 API から新しいやり方を器に置いた',
+        target: { kind: 'practice', slug: 'brand-new' },
+      });
+      expect(await marks()).toEqual([]);
+    });
+
+    it('マネージャーへ送れなかった回（居ない・届けておらず預かってもいない）は印の行を足さない', async () => {
+      expect(
+        (await app.request('/managers/mgr-none/messages', json({ text: 'やあ' }))).status,
+      ).toBe(404);
+      expect((await app.request('/managers/mgr-1/messages', json({ text: '' }))).status).toBe(400);
+
+      addManager();
+      for (const outcome of ['session_missing', 'declined'] as const) {
+        fake.setSendOutcome(outcome);
+        expect(
+          (await app.request('/managers/mgr-1/messages', json({ text: '続けて' }))).status,
+        ).toBe(200);
+      }
+
+      expect(await marks()).toEqual([]);
+      expect(await stores.journal.list({ types: ['decision'] })).toEqual([]);
+    });
+  });
+
+  it('日誌の追記が落ちても、マネージャーへの送信は成功のまま返る', async () => {
+    addManager();
+    const failing = createApp({
+      clone: fake.clone,
+      stores: {
+        ...stores,
+        journal: { ...stores.journal, append: () => Promise.reject(new Error('日誌が落ちた')) },
+      },
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+
+    const res = await failing.request('/managers/mgr-1/messages', json({ text: '続けて' }));
+
+    expect(res.status).toBe(200);
+  });
+
+  describe('via は要求の資格から作る（承認への回答と同じ作り方）', () => {
+    const OPERATOR = { authorization: 'Bearer operator-token' };
+    const FAKE_PROVIDER = {
+      kind: 'oauth2' as const,
+      id: 'fake',
+      label: 'Fake',
+      authorizationUrl: (request: { state: string }) =>
+        `https://example.test/authorize?state=${request.state}`,
+      exchange: async () => ({
+        subject: 'sub-human-action',
+        email: 'sub-human-action@example.test',
+        emailVerified: true,
+        displayName: 'sub-human-action',
+      }),
+    };
+
+    function buildAuthedApp() {
+      const authStores = createMemoryStores();
+      const plan: AuthPlan = {
+        enabled: true,
+        providers: [FAKE_PROVIDER],
+        publicBaseUrl: 'http://127.0.0.1:4517',
+        tokenTtlDays: 30,
+        description: 'テスト',
+      };
+      const authFake = fakeClone();
+      authFake.managerList.push({
+        managerId: 'mgr-1',
+        status: 'running',
+        live: true,
+        cwd: '/work',
+        request: '実装して',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        waiting: [],
+      });
+      const authedApp = createApp({
+        clone: authFake.clone,
+        stores: authStores,
+        token: 'operator-token',
+        shutdown: () => undefined,
+        tokens: createTokenPoolService({ stores: authStores }),
+        auth: {
+          plan,
+          service: createAuthService({
+            store: authStores.auth,
+            providers: createAuthProviderRegistry(plan.providers),
+          }),
+        },
+      });
+      return { app: authedApp, stores: authStores };
+    }
+
+    async function grantedAccountToken(authedApp: ReturnType<typeof createApp>) {
+      const started = (await (
+        await authedApp.request('/auth/login', {
+          ...post,
+          body: JSON.stringify({ provider: 'fake' }),
+        })
+      ).json()) as { requestId: string; authorizationUrl: string; claimSecret: string };
+      const state = new URL(started.authorizationUrl).searchParams.get('state') ?? '';
+      await authedApp.request(`/auth/fake/callback?code=any&state=${encodeURIComponent(state)}`);
+      const claimed = (await (
+        await authedApp.request(`/auth/login/${started.requestId}/claim`, {
+          ...post,
+          body: JSON.stringify({ claimSecret: started.claimSecret }),
+        })
+      ).json()) as { token: string; account: { id: string } };
+      await authedApp.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      return { token: claimed.token, accountId: claimed.account.id };
+    }
+
+    async function viaOf(authStores: Stores) {
+      const rows = await authStores.journal.list({ types: ['decision'] });
+      return rows.flatMap((row) =>
+        row.type === 'decision' && row.humanAction !== undefined ? [row.humanAction.via] : [],
+      );
+    }
+
+    it('operator token 経路は auth="operator-token"（認証無効の経路とは区別する）', async () => {
+      const authed = buildAuthedApp();
+
+      const res = await authed.app.request('/managers/mgr-1/messages', {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+        body: JSON.stringify({ text: '続けて' }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await viaOf(authed.stores)).toEqual([{ kind: 'operator', auth: 'operator-token' }]);
+    });
+
+    it('account 経路は { kind: "account", accountId }', async () => {
+      const authed = buildAuthedApp();
+      const { token, accountId } = await grantedAccountToken(authed.app);
+      const opened = (await (
+        await authed.app.request('/commitments', {
+          ...post,
+          headers: { ...post.headers, authorization: `Bearer ${token}` },
+          body: JSON.stringify({ body: '閉じる行' }),
+        })
+      ).json()) as { id: string };
+
+      const res = await authed.app.request(`/commitments/${opened.id}/close`, {
+        ...post,
+        headers: { ...post.headers, authorization: `Bearer ${token}` },
+        body: JSON.stringify({ reason: '片付いた' }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await viaOf(authed.stores)).toEqual([{ kind: 'account', accountId }]);
+    });
   });
 });

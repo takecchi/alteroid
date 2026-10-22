@@ -354,6 +354,23 @@ export const contextUsageObservationSchema = z.object({
 
 export type ContextUsageObservation = z.infer<typeof contextUsageObservationSchema>;
 
+export const humanActionKindSchema = z.enum([
+  'manager_message',
+  'commitment_close',
+  'schedule_remove',
+  'practice_remove',
+  'practice_write',
+]);
+export type HumanActionKind = z.infer<typeof humanActionKindSchema>;
+
+export const humanActionSchema = z.object({
+  kind: humanActionKindSchema,
+  // 委譲の id・台帳の行の id・定期の依頼の kind・やり方の slug
+  target: z.string(),
+  via: answeredViaSchema,
+});
+export type HumanAction = z.infer<typeof humanActionSchema>;
+
 export const journalEntrySchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('exchange'),
@@ -398,6 +415,20 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * （この欄が入る前のやり方の書き込みにも無い）。読む側は無い行を壊さず「印なし」として扱う。
      */
     target: z.object({ kind: z.literal('practice'), slug: z.string().min(1) }).optional(),
+    /**
+     * 人間が API から直接した操作（クローンの作ったもの・進めていたものを取り消す・書き換える）の印。
+     * `POST /managers/:id/messages`・`POST /commitments/:id/close`・`POST /schedule/:kind/remove`・
+     * `DELETE` / `PUT /practices/:slug`（既存のやり方の書き直しだけ）の成功した回にだけ、デーモンが付ける。
+     * クローンの道具（`commitment_close` など）と器の内部の処理（自動で閉じる）は付けない。
+     * 文面（grounds の「人間が直接 API から…」）から推測する代わりに構造で持つ。
+     *
+     * **optional（版のずれへの備え）。** 無い行は「人間の操作ではない」とは限らない
+     * （この欄が入る前の人間の操作にも無い）。読む側は無い行を壊さず「印なし」として扱う。
+     *
+     * **`via` は監査の記録であって、人間がした証拠ではない。** 持ち主のトークンや認証を切った構成では、
+     * クローンの Bash からも同じ口を叩けるため（architecture.md「承認への回答と許可の記録 — 境界ではなく監査の層」と同じ扱い）。
+     */
+    humanAction: humanActionSchema.optional(),
   }),
   // `exchange` に混ぜず種別を分ける: 雑多入れだと `journal_read` の `types` で絞れず、クローンが出どころの混ざった中を漁ることになるため
   // 値（`value`）を入れない: 日誌は Web にもクローンにも流れるため

@@ -62,6 +62,7 @@ const REQUIRED_CONTRACTS = [
   'verifyJournalStoreConversationIdContract',
   'verifyJournalStoreToolUseCountContract',
   'verifyJournalStoreConversationIdsAfterContract',
+  'verifyJournalStoreHumanActionContract',
 ] as const;
 
 const READABILITY_CONTRACTS = ['verifyJournalStoreUnreadableGetContract'] as const;
@@ -81,6 +82,7 @@ const KNOWN_IMPLEMENTATIONS: Record<string, RegistryEntry> = {
       'packages/core/src/journal-conversation-id-contract.test.ts',
       'packages/core/src/journal-tool-use-count-contract.test.ts',
       'packages/core/src/journal-conversation-ids-after-contract.test.ts',
+      'packages/core/src/journal-human-action-contract.test.ts',
     ],
     contracts: REQUIRED_CONTRACTS,
     notApplicable: {

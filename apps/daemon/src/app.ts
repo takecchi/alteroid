@@ -194,8 +194,10 @@ import {
   NulNotAllowedError,
   InvalidCredentialNameError,
   codePointBoundary,
+  excerptLine,
   redactSecretsInBody,
   UnreadableJobError,
+  type HumanAction,
   type TokenPolicyChange,
   type TokenPoolChange,
   type InboxRemoveManyFilter,
@@ -1335,6 +1337,19 @@ function answerApprovalViaOf(principal: Principal): AnswerApprovalVia {
   return principal.kind === 'operator'
     ? { kind: 'operator', auth: principal.auth }
     : { kind: 'account', accountId: principal.account.id };
+}
+
+/** 人間が直接送った本文を、印の行の `decision` へ抜粋する長さ（UTF-16 の単位） */
+const MANAGER_MESSAGE_EXCERPT = 80;
+
+// 5つの口（`HumanAction['kind']`）の成功した回にだけ付ける。クローンの道具と器の内部の処理は呼ばない。`via` は監査の記録であって、人間がした証拠ではない（`schema.ts` の `humanAction` の doc）。
+// 副作用の前に呼ぶ: 連携の鍵だと `answerApprovalViaOf` が投げるので、状態を変えた後に投げて「効いたのに 500」にしないため。
+function humanActionOf(
+  kind: HumanAction['kind'],
+  target: string,
+  principal: Principal,
+): { humanAction: HumanAction } {
+  return { humanAction: { kind, target, via: answerApprovalViaOf(principal) } };
 }
 
 async function accountView(
@@ -4269,6 +4284,7 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
         }
         const { kind, title, content, ifMatch } = c.req.valid('json');
+        const mark = humanActionOf('practice_write', slug, c.get('principal'));
         // `UnreadablePracticeError` を捕まえて先へ進む: 投げっぱなしにすると PUT がここで落ち、壊れた行を書き直す唯一の回復手段が塞がる。
         let before: Practice | null;
         let beforeWasUnreadable = false;
@@ -4314,6 +4330,8 @@ export function createApp(deps: AppDeps) {
                 : '人間が直接 API からやり方を書き直した（全文置換。前の本文は' +
                   'GET /practices/:slug/versions の版の履歴に残る——#1309）',
             target: { kind: 'practice', slug },
+            // 新しく作った回（`before === null`、読めない行の書き直しではない）は印を付けない: 人間が新しく足す操作は範囲外（#5175）。読めない形の行の書き直しは書き直しとして付ける
+            ...(before === null && !beforeWasUnreadable ? {} : mark),
           },
           'やり方書き換えの日誌',
           `slug=${slug}`,
@@ -4369,6 +4387,7 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
         }
         const { ifMatch } = c.req.valid('query');
+        const mark = humanActionOf('practice_remove', slug, c.get('principal'));
         // `UnreadablePracticeError` を捕まえて先へ進む: 投げっぱなしにすると DELETE がここで落ち、壊れた行を消す唯一の HTTP 経由の手段が塞がる。本当に無い場合だけ 404。
         let existing: Practice | null;
         let wasUnreadable = false;
@@ -4419,6 +4438,7 @@ export function createApp(deps: AppDeps) {
               decision: `やり方 ${slug}（${existing.kind}）を消した: ${existing.title}`,
               grounds: '人間が直接 API からやり方を消した',
               target: { kind: 'practice', slug },
+              ...mark,
             },
             'やり方削除の日誌',
             `slug=${slug}`,
@@ -4431,6 +4451,7 @@ export function createApp(deps: AppDeps) {
               decision: `読めない形で入っていたやり方 ${slug} を消した`,
               grounds: '人間が直接 API から、読めない形で入っていたやり方を消した',
               target: { kind: 'practice', slug },
+              ...mark,
             },
             'やり方削除の日誌',
             `slug=${slug}`,
@@ -6251,6 +6272,7 @@ export function createApp(deps: AppDeps) {
       deliberateClient,
       async (c) => {
         const kind = c.req.param('kind');
+        const mark = humanActionOf('schedule_remove', kind, c.get('principal'));
         // `jsonBody` で検査しない: 本文は空でも `{}` でも通す約束（`noBodyPostRequestBody` の注記）で、本文を付けない呼び手（CLI の /unschedule）が居る。
         // 本文が在って `ifMatch` が在るときだけ読み、形が違えば外さずに 400
         const raw = await c.req.text();
@@ -6303,6 +6325,7 @@ export function createApp(deps: AppDeps) {
                   `人間が読めない形で入っていた依頼を外した: ${kind}`
                 : `人間が定期の依頼を外した: ${kind}: ${removed.request}`,
             grounds: '人間が直接 API から外した',
+            ...mark,
           },
           '定期の依頼を外した日誌',
           `kind=${kind}`,
@@ -6639,6 +6662,7 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { reason } = c.req.valid('json');
+        const mark = humanActionOf('commitment_close', id, c.get('principal'));
         if (!(await stores.commitments.close(id, new Date().toISOString(), reason, 'human'))) {
           // 読めない行が既に閉じられているときは `get` が投げる: `close()` が中身を読めるようにしたわけではなく、`get()` の契約は変えていない。
           let existing;
@@ -6681,6 +6705,7 @@ export function createApp(deps: AppDeps) {
             type: 'decision',
             decision: `人間が引き受けた仕事を片付けた（${id}）: ${reason}`,
             grounds: '人間が直接 API から閉じた',
+            ...mark,
           },
           '引き受けた仕事を片付けた日誌',
           `id=${id}`,
@@ -7133,7 +7158,9 @@ export function createApp(deps: AppDeps) {
       })),
       async (c) => {
         const { text, requestId, decision } = c.req.valid('json');
-        const result = await clone.managers.send(c.req.param('id'), text, {
+        const managerId = c.req.param('id');
+        const mark = humanActionOf('manager_message', managerId, c.get('principal'));
+        const result = await clone.managers.send(managerId, text, {
           ...(requestId === undefined ? {} : { requestId }),
           ...(decision === undefined ? {} : { decision }),
         });
@@ -7141,6 +7168,24 @@ export function createApp(deps: AppDeps) {
         if (result.outcome === 'unknown') return c.json({ error: result.detail }, 404);
         // 行は在るが読めないものは「居ない」の 404 にしない（409）。
         if (result.outcome === 'unreadable') return c.json({ error: result.detail }, 409);
+        // 届いた（`answered`・`delivered`）か、預かった（`held`）回にだけ印の行を足す: `session_missing`・`declined` は届けておらず預かってもいないので、人間の言葉はマネージャーへ渡っていない。`exchange` の行（送信そのもの）は変えず、印は別の `decision` に付ける。
+        if (
+          result.outcome === 'answered' ||
+          result.outcome === 'delivered' ||
+          result.outcome === 'held'
+        ) {
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `人間が直接 ${managerId} へ送った: ${excerptLine(text, MANAGER_MESSAGE_EXCERPT)}`,
+              grounds: '人間が直接 API から送った',
+              ...mark,
+            },
+            'マネージャーへ直接送った日誌',
+            `managerId=${managerId}`,
+          );
+        }
         return c.json({ outcome: result.outcome, detail: result.detail });
       },
     )

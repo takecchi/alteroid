@@ -1398,6 +1398,10 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         emit: 'never',
         why: '書いたやり方の slug。落ちた行の形を追うのに要らず、slug の文字列を運ぶ側へ足さない。',
       },
+      humanAction: {
+        emit: 'never',
+        why: '人間が直接した操作の印（#5175）。対象の id・slug と経路を持つが、落ちた行の形を追うのに要らず、それらの文字列を運ぶ側へ足さない。',
+      },
     },
     escalation: {
       question: { emit: 'size', token: 'question' },
@@ -1754,6 +1758,11 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       grounds: SECRET,
       answeredApprovalId: 'ap-2',
       target: { kind: 'practice', slug: 'daily' },
+      humanAction: {
+        kind: 'commitment_close',
+        target: SECRET,
+        via: { kind: 'account', accountId: SECRET },
+      },
     },
     escalation: {
       type: 'escalation',

@@ -234,6 +234,10 @@ describe('担当が戻った枠の知らせの行を、器が閉じる（#5015�
     expect(
       decisions.filter((text) => text.includes('evt-q1') && text.includes(MANAGER_ID)),
     ).toHaveLength(1);
+    // 器の内部の処理には人間の操作の印（#5175）を付けない: 人間の操作として次のターンで名指しされてしまうため
+    const rows = await s.stores.journal.list({ types: ['decision'] });
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.filter((row) => row.type === 'decision' && 'humanAction' in row)).toEqual([]);
 
     await s.clone.stop();
   });

@@ -19719,3 +19719,46 @@ describe('クローンの記憶の削除は読んだ版を前提にする（#288
     expect(await h.stores.persona.read('ops')).toBeNull();
   });
 });
+
+describe('クローンの道具が書く日誌の行には、人間の操作の印（humanAction。#5175）を付けない', () => {
+  it('commitment_close・schedule_remove・practice_write・practice_remove・manager_send が書く decision に humanAction が無い', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'cm-human-mark',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'human',
+      body: '印の確認',
+    });
+    await h.call('schedule_create', { kind: 'watch', request: '見張る', everyMinutes: 30 });
+
+    await h.call('commitment_close', { id: 'cm-human-mark', reason: '片付いた' });
+    await h.call('schedule_remove', { kind: 'watch' });
+    await h.call('practice_write', {
+      slug: 'mark-practice',
+      kind: '実装',
+      title: '印の確認',
+      content: '本文',
+    });
+    const written = await h.stores.practices.read('mark-practice');
+    await h.call('practice_write', {
+      slug: 'mark-practice',
+      kind: '実装',
+      title: '印の確認（書き直し）',
+      content: '本文2',
+      base_version: written === null ? undefined : practiceVersion(written),
+    });
+    const rewritten = await h.stores.practices.read('mark-practice');
+    await h.call('practice_remove', {
+      slug: 'mark-practice',
+      base_version: rewritten === null ? undefined : practiceVersion(rewritten),
+    });
+    await h.call('manager_send', { managerId: 'mgr-1', message: '続けて' });
+
+    expect(await h.stores.commitments.get('cm-human-mark')).toMatchObject({ closedBy: 'clone' });
+    expect(await h.stores.practices.read('mark-practice')).toBeNull();
+    const decisions = await h.stores.journal.list({ types: ['decision'] });
+    // 道具が実際に日誌へ書いていること（空のまま「付いていない」が通らないための前提）
+    expect(decisions.length).toBeGreaterThanOrEqual(4);
+    expect(decisions.filter((row) => 'humanAction' in row)).toEqual([]);
+  });
+});

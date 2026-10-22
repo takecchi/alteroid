@@ -21,6 +21,7 @@ import {
   verifyJournalStoreDeletedConversationContract,
   verifyJournalStoreToolUseCountContract,
   verifyJournalStoreConversationIdsAfterContract,
+  verifyJournalStoreHumanActionContract,
   verifyJournalStoreWithdrawnContract,
   verifyJournalStoreWithContract,
   verifyPermissionGrantStoreContract,
@@ -366,6 +367,12 @@ describe('PgJournalStore', () => {
   describe('取り下げの印の契約（issue #3990）', () => {
     it('印の行が書き戻せ、同じ会話の印だけが集まり、since より前は外れ、頁をまたいでも読み落とさない', async () => {
       await verifyJournalStoreWithdrawnContract(stores.journal);
+    });
+  });
+
+  describe('人間の操作の印の契約（#5175）', () => {
+    it('5種の印が via ごと書き戻せ、印の無い行は無いまま読める', async () => {
+      await verifyJournalStoreHumanActionContract(stores.journal);
     });
   });
 
