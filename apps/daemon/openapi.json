@@ -2585,6 +2585,57 @@
                             }
                           },
                           "required": ["kind", "slug"]
+                        },
+                        "humanAction": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "manager_message",
+                                "commitment_close",
+                                "schedule_remove",
+                                "practice_remove",
+                                "practice_write"
+                              ]
+                            },
+                            "target": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "via": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "const": "operator"
+                                    },
+                                    "auth": {
+                                      "type": "string",
+                                      "enum": ["disabled", "operator-token"]
+                                    }
+                                  },
+                                  "required": ["kind", "auth"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "const": "account"
+                                    },
+                                    "accountId": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["kind", "accountId"]
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["kind", "target", "via"]
                         }
                       },
                       "required": ["type", "id", "at", "decision", "grounds"]
@@ -7842,6 +7893,57 @@
                                   }
                                 },
                                 "required": ["kind", "slug"]
+                              },
+                              "humanAction": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "manager_message",
+                                      "commitment_close",
+                                      "schedule_remove",
+                                      "practice_remove",
+                                      "practice_write"
+                                    ]
+                                  },
+                                  "target": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "via": {
+                                    "oneOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "operator"
+                                          },
+                                          "auth": {
+                                            "type": "string",
+                                            "enum": ["disabled", "operator-token"]
+                                          }
+                                        },
+                                        "required": ["kind", "auth"]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "account"
+                                          },
+                                          "accountId": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["kind", "accountId"]
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": ["kind", "target", "via"]
                               }
                             },
                             "required": ["type", "id", "at", "decision", "grounds"]
@@ -9816,6 +9918,57 @@
                             }
                           },
                           "required": ["kind", "slug"]
+                        },
+                        "humanAction": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "manager_message",
+                                "commitment_close",
+                                "schedule_remove",
+                                "practice_remove",
+                                "practice_write"
+                              ]
+                            },
+                            "target": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "via": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "const": "operator"
+                                    },
+                                    "auth": {
+                                      "type": "string",
+                                      "enum": ["disabled", "operator-token"]
+                                    }
+                                  },
+                                  "required": ["kind", "auth"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "const": "account"
+                                    },
+                                    "accountId": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["kind", "accountId"]
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["kind", "target", "via"]
                         }
                       },
                       "required": ["type", "id", "at", "decision", "grounds"]
@@ -13976,6 +14129,57 @@
                                     }
                                   },
                                   "required": ["kind", "slug"]
+                                },
+                                "humanAction": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "manager_message",
+                                        "commitment_close",
+                                        "schedule_remove",
+                                        "practice_remove",
+                                        "practice_write"
+                                      ]
+                                    },
+                                    "target": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "via": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "const": "operator"
+                                            },
+                                            "auth": {
+                                              "type": "string",
+                                              "enum": ["disabled", "operator-token"]
+                                            }
+                                          },
+                                          "required": ["kind", "auth"]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "const": "account"
+                                            },
+                                            "accountId": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": ["kind", "accountId"]
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": ["kind", "target", "via"]
                                 }
                               },
                               "required": ["type", "id", "at", "decision", "grounds"]
@@ -15821,6 +16025,57 @@
                                     }
                                   },
                                   "required": ["kind", "slug"]
+                                },
+                                "humanAction": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "manager_message",
+                                        "commitment_close",
+                                        "schedule_remove",
+                                        "practice_remove",
+                                        "practice_write"
+                                      ]
+                                    },
+                                    "target": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "via": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "const": "operator"
+                                            },
+                                            "auth": {
+                                              "type": "string",
+                                              "enum": ["disabled", "operator-token"]
+                                            }
+                                          },
+                                          "required": ["kind", "auth"]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "const": "account"
+                                            },
+                                            "accountId": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": ["kind", "accountId"]
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": ["kind", "target", "via"]
                                 }
                               },
                               "required": ["type", "id", "at", "decision", "grounds"]
@@ -17666,6 +17921,57 @@
                                   }
                                 },
                                 "required": ["kind", "slug"]
+                              },
+                              "humanAction": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "manager_message",
+                                      "commitment_close",
+                                      "schedule_remove",
+                                      "practice_remove",
+                                      "practice_write"
+                                    ]
+                                  },
+                                  "target": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "via": {
+                                    "oneOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "operator"
+                                          },
+                                          "auth": {
+                                            "type": "string",
+                                            "enum": ["disabled", "operator-token"]
+                                          }
+                                        },
+                                        "required": ["kind", "auth"]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "account"
+                                          },
+                                          "accountId": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["kind", "accountId"]
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": ["kind", "target", "via"]
                               }
                             },
                             "required": ["type", "id", "at", "decision", "grounds"]
@@ -19499,6 +19805,57 @@
                                   }
                                 },
                                 "required": ["kind", "slug"]
+                              },
+                              "humanAction": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "manager_message",
+                                      "commitment_close",
+                                      "schedule_remove",
+                                      "practice_remove",
+                                      "practice_write"
+                                    ]
+                                  },
+                                  "target": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "via": {
+                                    "oneOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "operator"
+                                          },
+                                          "auth": {
+                                            "type": "string",
+                                            "enum": ["disabled", "operator-token"]
+                                          }
+                                        },
+                                        "required": ["kind", "auth"]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "account"
+                                          },
+                                          "accountId": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["kind", "accountId"]
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": ["kind", "target", "via"]
                               }
                             },
                             "required": ["type", "id", "at", "decision", "grounds"]

@@ -186,6 +186,8 @@ import {
   resolveIntegrationKey,
   sha256Hex,
   type AnswerApprovalVia,
+  type HumanAction,
+  type HumanActionKind,
   type ApprovalPagingKey,
   type IntegrationKeyRecord,
   type ArchiveRemoveManyFilter,
@@ -194,6 +196,7 @@ import {
   NulNotAllowedError,
   InvalidCredentialNameError,
   codePointBoundary,
+  excerptLine,
   redactSecretsInBody,
   UnreadableJobError,
   type TokenPolicyChange,
@@ -1335,6 +1338,16 @@ function answerApprovalViaOf(principal: Principal): AnswerApprovalVia {
   return principal.kind === 'operator'
     ? { kind: 'operator', auth: principal.auth }
     : { kind: 'account', accountId: principal.account.id };
+}
+
+// `answerApprovalViaOf` をそのまま呼ばない: あれは連携の鍵で投げる。ここは連携の鍵の呼び出しを断らず、人間の操作の印だけを付けない（連携は人間ではない）。
+export function humanActionOf(
+  principal: Principal,
+  kind: HumanActionKind,
+  target: string,
+): { humanAction: HumanAction } | Record<string, never> {
+  if (principal.kind === 'integration') return {};
+  return { humanAction: { kind, target, via: answerApprovalViaOf(principal) } };
 }
 
 async function accountView(
@@ -4314,6 +4327,10 @@ export function createApp(deps: AppDeps) {
                 : '人間が直接 API からやり方を書き直した（全文置換。前の本文は' +
                   'GET /practices/:slug/versions の版の履歴に残る——#1309）',
             target: { kind: 'practice', slug },
+            // 新しく置いた回には付けない: 取り消しでも書き換えでもなく、直しの合図として薄いため
+            ...(before === null && !beforeWasUnreadable
+              ? {}
+              : humanActionOf(c.get('principal'), 'practice_write', slug)),
           },
           'やり方書き換えの日誌',
           `slug=${slug}`,
@@ -4419,6 +4436,7 @@ export function createApp(deps: AppDeps) {
               decision: `やり方 ${slug}（${existing.kind}）を消した: ${existing.title}`,
               grounds: '人間が直接 API からやり方を消した',
               target: { kind: 'practice', slug },
+              ...humanActionOf(c.get('principal'), 'practice_remove', slug),
             },
             'やり方削除の日誌',
             `slug=${slug}`,
@@ -4431,6 +4449,7 @@ export function createApp(deps: AppDeps) {
               decision: `読めない形で入っていたやり方 ${slug} を消した`,
               grounds: '人間が直接 API から、読めない形で入っていたやり方を消した',
               target: { kind: 'practice', slug },
+              ...humanActionOf(c.get('principal'), 'practice_remove', slug),
             },
             'やり方削除の日誌',
             `slug=${slug}`,
@@ -6303,6 +6322,7 @@ export function createApp(deps: AppDeps) {
                   `人間が読めない形で入っていた依頼を外した: ${kind}`
                 : `人間が定期の依頼を外した: ${kind}: ${removed.request}`,
             grounds: '人間が直接 API から外した',
+            ...humanActionOf(c.get('principal'), 'schedule_remove', kind),
           },
           '定期の依頼を外した日誌',
           `kind=${kind}`,
@@ -6681,6 +6701,7 @@ export function createApp(deps: AppDeps) {
             type: 'decision',
             decision: `人間が引き受けた仕事を片付けた（${id}）: ${reason}`,
             grounds: '人間が直接 API から閉じた',
+            ...humanActionOf(c.get('principal'), 'commitment_close', id),
           },
           '引き受けた仕事を片付けた日誌',
           `id=${id}`,
@@ -7141,6 +7162,28 @@ export function createApp(deps: AppDeps) {
         if (result.outcome === 'unknown') return c.json({ error: result.detail }, 404);
         // 行は在るが読めないものは「居ない」の 404 にしない（409）。
         if (result.outcome === 'unreadable') return c.json({ error: result.detail }, 409);
+        // 効かなかった回（`session_missing` / `declined`）には積まない: 届いていないものを「人間が送った」と学ばせないため。`exchange` 行は変えず、直しの合図は別の1行（`decision`）に持つ。
+        if (
+          result.outcome === 'answered' ||
+          result.outcome === 'delivered' ||
+          result.outcome === 'held'
+        ) {
+          const managerId = c.req.param('id');
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision:
+                requestId === undefined
+                  ? `人間が担当 ${managerId} へ直接送った（抜粋: ${excerptLine(text, 200)}）`
+                  : `人間が担当 ${managerId} の許可確認（${requestId}）へ直接答えた（抜粋: ${excerptLine(text, 200)}）`,
+              grounds: '人間が直接 API からマネージャーへ送った',
+              ...humanActionOf(c.get('principal'), 'manager_message', managerId),
+            },
+            '人間からマネージャーへの直接送信の日誌',
+            `id=${managerId}`,
+          );
+        }
         return c.json({ outcome: result.outcome, detail: result.detail });
       },
     )

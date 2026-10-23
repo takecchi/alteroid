@@ -386,6 +386,10 @@ export {
   type JournalStoreUnreadableGetContractSubject,
 } from './journal-unreadable-get-contract.js';
 export {
+  verifyJournalStoreHumanActionContract,
+  type JournalStoreHumanActionContractSubject,
+} from './journal-human-action-contract.js';
+export {
   verifyJournalStoreHorizonContract,
   type JournalStoreHorizonContractSubject,
 } from './journal-horizon-contract.js';
@@ -508,7 +512,7 @@ export {
   type ArchiveIdStampMatch,
 } from './archive-id.js';
 /** `storage-fs` / `storage-pg` はパッケージが別なので、このバレルを経由しないと届かない。 */
-export { codePointBoundary, countCodePoints, tailByCodePoints } from './excerpt.js';
+export { codePointBoundary, countCodePoints, excerptLine, tailByCodePoints } from './excerpt.js';
 /** 並びを pg の `timestamptz` 順と揃えるため、オフセット付き ISO 時刻は文字列でなく実時刻で比べる。 */
 export { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 export {

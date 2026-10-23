@@ -1398,6 +1398,12 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         emit: 'never',
         why: '書いたやり方の slug。落ちた行の形を追うのに要らず、slug の文字列を運ぶ側へ足さない。',
       },
+      humanAction: {
+        emit: 'never',
+        why:
+          '人間の操作の印（種類・対象の id・経路）。`answeredVia`（escalation）と同じく、' +
+          '入れ子の中へ踏み込まない第1階層までの一般原則（冒頭 doc）を適用し、`never` へ倒す。',
+      },
     },
     escalation: {
       question: { emit: 'size', token: 'question' },
@@ -1754,6 +1760,11 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       grounds: SECRET,
       answeredApprovalId: 'ap-2',
       target: { kind: 'practice', slug: 'daily' },
+      humanAction: {
+        kind: 'practice_write',
+        target: SECRET,
+        via: { kind: 'account', accountId: SECRET },
+      },
     },
     escalation: {
       type: 'escalation',
