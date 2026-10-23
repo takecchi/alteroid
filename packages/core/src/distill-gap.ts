@@ -31,10 +31,13 @@ export const BOOT_FOOTPRINT_EVENT_SOURCE = 'boot-storage-footprint';
 export const BOOT_TOOL_SEARCH_EVENT_SOURCE = 'boot-tool-search';
 /** 起動後の最初の本セッションのターンで ToolSearch が実際に効いたかの観測（起動時の `boot-tool-search` の隣に並べて探せる名前。#4921）の source。 */
 export const BOOT_TOOL_SEARCH_OBSERVED_EVENT_SOURCE = 'boot-tool-search-observed';
+/** デーモンが起動のたびに、起動の後に作る日誌の索引を作り終えたとき書く、索引ごとの結果（`apps/daemon` の `createDeferredIndexesReporter`）の source。 */
+export const BOOT_DEFERRED_INDEXES_EVENT_SOURCE = 'boot-deferred-indexes';
 const BOOT_EVENT_SOURCES: ReadonlySet<string> = new Set([
   BOOT_FOOTPRINT_EVENT_SOURCE,
   BOOT_TOOL_SEARCH_EVENT_SOURCE,
   BOOT_TOOL_SEARCH_OBSERVED_EVENT_SOURCE,
+  BOOT_DEFERRED_INDEXES_EVENT_SOURCE,
 ]);
 
 // 型と構造化フィールドだけで決め、本文は見ない: 文言を直した瞬間に黙って数え方が変わるため

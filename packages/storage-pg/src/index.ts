@@ -17,12 +17,11 @@ import { PgJobStore } from './jobs.js';
 import { PgJournalStore } from './journal.js';
 import { PgMcpServerStore } from './mcp-servers.js';
 import {
-  ensureJournalConversationSeqIndex,
-  ensureJournalHumanExchangeSeqIndex,
-  ensureJournalHumanRepliesIndex,
-  ensureJournalWithdrawalsIndex,
-  migrateOnBoot,
-} from './migrate.js';
+  buildDeferredIndexes,
+  deferredIndexesUnreachable,
+  type DeferredIndexOutcome,
+} from './deferred-indexes.js';
+import { migrateOnBoot } from './migrate.js';
 import {
   createTimedPool,
   PG_LONG_QUERY_TIMEOUT_MS,
@@ -74,6 +73,12 @@ export { PgTokenPoolStore } from './token-pool.js';
 export { PgUsageStore } from './usage.js';
 export * from './footprint.js';
 export {
+  buildDeferredIndexes,
+  DEFERRED_INDEX_NAMES,
+  deferredIndexesUnreachable,
+  type DeferredIndexOutcome,
+} from './deferred-indexes.js';
+export {
   ensureJournalConversationSeqIndex,
   ensureJournalHumanExchangeSeqIndex,
   ensureJournalHumanRepliesIndex,
@@ -109,6 +114,8 @@ export interface CreatePgStoresOptions {
   onError?: (error: Error) => void;
   /** 問い合わせ・接続を期限で打ち切ったときに呼ぶ（#4655）。日誌へ残すのは呼び手の仕事。 */
   onTimeout?: (event: PgTimeoutEvent) => void;
+  /** 起動の後に作る索引を作り終えたとき（作れなかったときも）、索引ごとの結果を1度だけ渡す。日誌へ残すのは呼び手の仕事。 */
+  onDeferredIndexes?: (outcomes: DeferredIndexOutcome[]) => void;
 }
 
 // `error.message` だけにしない: SQLSTATE 等の識別子が落ちる。`collapseErrorCause` を通す。
@@ -217,19 +224,16 @@ export async function createPgStores(options: CreatePgStoresOptions | string): P
   const closeIndexClient = () => indexClient.end().catch(() => undefined);
   void indexClient
     .connect()
-    // 1本ずつ作る: 並べると同じ日誌を2本の走査が同時に読み、器の I/O を一度に食うため
-    .then(async () => {
-      const indexDb = drizzle(indexClient);
-      // 会話の一覧の窓の索引を先に作る: 4本の中で人の待ちに直に効くのはこれで、既に在る索引の確かめは一瞬で済むため
-      await ensureJournalHumanExchangeSeqIndex(indexDb);
-      await ensureJournalHumanRepliesIndex(indexDb);
-      await ensureJournalWithdrawalsIndex(indexDb);
-      await ensureJournalConversationSeqIndex(indexDb);
-    })
+    .then(async () => buildDeferredIndexes(drizzle(indexClient)))
     .catch((error: unknown) => {
       writeStderrLine(
         `alteroid: 日誌の索引を作る接続を開けなかった（${collapseErrorCause(error)}）。索引なしで動き続ける（#5089）\n`,
       );
+      return deferredIndexesUnreachable(error);
+    })
+    .then((outcomes) => {
+      // 作り終えた後に1度だけ渡す: 呼び手（デーモン）が日誌へ残し、本番の DB を見ずに索引が有効かを確かめられるようにするため
+      config.onDeferredIndexes?.(outcomes);
     })
     .finally(closeIndexClient);
 
