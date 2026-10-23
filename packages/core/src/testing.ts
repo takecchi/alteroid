@@ -131,6 +131,7 @@ import {
   CommitmentConflictError,
   commitmentVersionMatches,
   compareProfileEntryNames,
+  withoutClosedRecord,
   ensureTrailingNewline,
   findOpenManagerDuplicate,
   JournalAnchorNotFoundError,
@@ -849,14 +850,7 @@ export function createMemoryStores(): Stores {
       const existing = commitments.get(id);
       if (!existing) return { kind: 'not-found' };
       if (existing.closedAt === undefined) return { kind: 'not-closed' };
-      const {
-        closedAt: _closedAt,
-        closedReason: _closedReason,
-        closedBy: _closedBy,
-        autoCloseWhenBack: _autoCloseWhenBack,
-        ...reopened
-      } = existing;
-      commitments.set(id, reopened);
+      commitments.set(id, withoutClosedRecord(existing));
       return { kind: 'reopened', before: isolate(existing) };
     },
     // `origin` の判定はしない: 呼び出し側（`PATCH /commitments/:id`）が確かめてから呼ぶ（`CommitmentStore.editBody` の doc）。

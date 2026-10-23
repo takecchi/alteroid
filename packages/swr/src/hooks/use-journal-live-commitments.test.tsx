@@ -81,6 +81,7 @@ describe('台帳の取り直し（SSE）', () => {
       'commitment_close_many',
       'commitment_edit',
       'commitment_open',
+      'commitment_reopen',
     ]);
   });
 

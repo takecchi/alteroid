@@ -18159,6 +18159,35 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
+      tool: 'commitment_reopen',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-13c');
+        await stores.commitments.open({
+          id: 'c-reopen-test',
+          at: '2026-01-01T00:00:00.000Z',
+          origin: 'self',
+          body: '開き直す件',
+        });
+        await stores.commitments.close(
+          'c-reopen-test',
+          '2026-01-01T01:00:00.000Z',
+          '閉じた',
+          'clone',
+        );
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'commitment_reopen', {
+          id: 'c-reopen-test',
+          reason: 'まだ終わっていなかった',
+        });
+      },
+    },
+    {
       tool: 'commitment_edit',
       firstLine: ACT_COMPLETED,
       async run() {

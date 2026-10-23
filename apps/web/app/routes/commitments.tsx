@@ -31,6 +31,7 @@ import {
 import {
   CommitmentConflictError,
   useCloseCommitment,
+  useReopenCommitment,
   useEditCommitment,
   usePushCommitment,
   useCommitments,
@@ -1204,7 +1205,85 @@ function ClosedRow({ commitment }: { commitment: Commitment }) {
           )}
         </div>
       )}
+      <ReopenForm commitment={commitment} label={snippet(commitment.body)} />
     </li>
+  );
+}
+
+// 閉じた行を否定する口。`commitment` の `at` と起点は変わらないので、積み直さずここから戻す。
+// 閉じた主体（器が自動で閉じた行も含む）で出し分けない: 否定できる相手を画面の側で狭めると、サーバの規則が変わった日に画面だけがずれる。
+function ReopenForm({ commitment, label }: { commitment: Commitment; label: string }) {
+  const reopenCommitment = useReopenCommitment();
+  const reasonId = useId();
+  const [opened, setOpened] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
+  useReportDirty(`reopen-reason:${commitment.id}`, reason.trim() !== '');
+
+  async function submit() {
+    if (busy || reason.trim() === '') return;
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      await reopenCommitment(commitment.id, reason.trim());
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!opened) {
+    return (
+      <div className="mt-1.5 text-[11px]">
+        <Button size="sm" aria-label={`「${label}」を開き直す`} onClick={() => setOpened(true)}>
+          開き直す
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <>
+      <label htmlFor={reasonId} className="mt-2 block text-xs font-medium text-muted-foreground">
+        開き直す理由
+      </label>
+      <div className="mt-1 flex items-center gap-2">
+        <Input
+          id={reasonId}
+          value={reason}
+          aria-label={`「${label}」を開き直す理由`}
+          placeholder="例: まだ終わっていなかった"
+          onChange={(event) => setReason(event.target.value)}
+          onSubmitShortcut={() => void submit()}
+        />
+        <Button
+          variant="primary"
+          size="sm"
+          className="shrink-0"
+          loading={busy}
+          aria-label={`「${label}」の開き直しを確定`}
+          // 理由なしでは開き直せない: 閉じた記録が行から消えるので、日誌に残る理由が唯一の手掛かりになる。
+          disabled={reason.trim() === ''}
+          onClick={() => void submit()}
+        >
+          開き直す
+        </Button>
+        <Button
+          size="sm"
+          className="shrink-0"
+          disabled={busy}
+          onClick={() => {
+            setOpened(false);
+            setReason('');
+            setFailure(undefined);
+          }}
+        >
+          やめる
+        </Button>
+      </div>
+      <ErrorNote error={failure} className="mt-2" />
+    </>
   );
 }
 

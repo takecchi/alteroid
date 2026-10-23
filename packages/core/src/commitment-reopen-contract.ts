@@ -64,12 +64,14 @@ export async function verifyCommitmentReopenContract(store: CommitmentStore): Pr
 
   // 開き直した行は未了なので、もう一度開き直すのは not-closed
   const again = await store.reopen('reopen-1');
-  if (again.kind !== 'not-closed') fail(`開き直した行の再度の reopen が not-closed にならない: ${again.kind}`);
+  if (again.kind !== 'not-closed')
+    fail(`開き直した行の再度の reopen が not-closed にならない: ${again.kind}`);
 
   // `open` は冪等のまま: 開き直した後も同じ id の open は何もしない（本文で上書きしない）
   const reopened = await store.open({ ...base, id: 'reopen-1', body: '別の本文' });
   if (reopened.opened || reopened.folded) fail('開き直した行の同じ id の open が何かをした');
-  if ((await store.get('reopen-1'))?.body !== '開き直す行') fail('同じ id の open が本文を上書きした');
+  if ((await store.get('reopen-1'))?.body !== '開き直す行')
+    fail('同じ id の open が本文を上書きした');
 
   // 開き直した後に閉じ直せる
   if (!(await store.close('reopen-1', '2026-03-01T00:10:00.000Z', '閉じ直した', 'human')))

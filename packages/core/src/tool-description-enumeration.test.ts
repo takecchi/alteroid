@@ -105,6 +105,10 @@ const EXEMPT: readonly Exemption[] = [
     tool: 'commitment_close',
     why: '説明文が名乗る一覧（enum・配列）が無い（かつて数え直していた評定の値は、評定の仕組みごと #2699 で消えた）',
   },
+  {
+    tool: 'commitment_reopen',
+    why: '説明文が名乗る一覧（enum・配列）が無い（言うのは外れる欄の名前と closedBy の例だけ）。ふるまいの歯は commitment-reopen.test.ts が持つ',
+  },
   { tool: 'memory_read', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'memory_write', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'memory_append', why: '実装側に、説明文が数え直すような一覧が無い' },

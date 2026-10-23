@@ -13,6 +13,7 @@ import {
   stripNul,
   UnreadableCommitmentError,
   unreadableCommitmentSchema,
+  withoutClosedRecord,
 } from '@alteroid/core';
 import type {
   Commitment,
@@ -305,16 +306,11 @@ export class FsCommitmentStore implements CommitmentStore {
         return { next: file, result: { kind: 'not-found' } };
       }
       if (found.closedAt === undefined) return { next: file, result: { kind: 'not-closed' } };
-      const {
-        closedAt: _closedAt,
-        closedReason: _closedReason,
-        closedBy: _closedBy,
-        autoCloseWhenBack: _autoCloseWhenBack,
-        ...reopened
-      } = found;
       return {
         next: {
-          entries: file.entries.map((entry) => (entry.id === id ? reopened : entry)),
+          entries: file.entries.map((entry) =>
+            entry.id === id ? withoutClosedRecord(entry) : entry,
+          ),
           unreadable: file.unreadable,
           trimmedClosedCount: file.trimmedClosedCount,
           trimmedClosedIds: file.trimmedClosedIds,

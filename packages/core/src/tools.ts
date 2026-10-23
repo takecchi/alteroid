@@ -5562,62 +5562,6 @@ export function createCloneTools(context: ToolContext) {
       [
         '閉じた行を未了へ開き直す。クローンが閉じた行も、人間が閉じた行も、器が自動で閉じた行（`closedBy: daemon`）も、後から否定できる。',
         '**`commitment_open` で積み直さない**: 受け取った時刻と起点が切れる。`commitment_open` は同じ id なら何もしない（冪等）ので、閉じた行は蘇らない。',
-        '受け取った時刻・起点・本文はそのままで、`closedAt` / `closedReason` / `closedBy` と`autoCloseWhenBack` が外れる',
-        '（器が自動で閉じた行を否定したのに、担当が戻った合図で器がまた閉じることはない）。',
-        '**開き直す前の閉じた時刻・閉じた主体・理由は日誌へ逐語で残る**（行からは消えるため）。',
-      ].join(' '),
-      {
-        id: z.string().describe('commitment_list（includeClosed: true）に出ている、閉じた行の id'),
-        reason: z
-          .string()
-          .describe(
-            `なぜ開き直すか（閉じたのが誤りだった理由、状況が変わった理由。${formatStringLengthJa({ min: 1 })}）。人間はこれを読んで後から否定する`,
-          ),
-      },
-      async ({ id, reason }) => {
-        const reasonError =
-          describeStringLengthViolation('reason', reason, { min: 1 }) ??
-          describeBlankViolation('reason', reason);
-        if (reasonError !== null) return text(reasonError);
-        // 閉じているかの判定は台帳の戻り値に任せる（`commitment_close` と同じ）: 先に `get` して判断すると、2つの開き直しが両方「閉じている」を読んで二重に日誌へ残る
-        let result;
-        try {
-          result = await stores.commitments.reopen(id);
-        } catch (error) {
-          if (!(error instanceof UnreadableCommitmentError)) throw error;
-          return text(
-            `${error.message}。読めない形のまま書き直さないので、開き直していない。`,
-          );
-        }
-        if (result.kind === 'not-found') {
-          return text(await describeCommitmentNotOnLedger(stores, id, context.journalSearch));
-        }
-        if (result.kind === 'not-closed') {
-          return text(`${id} は閉じていない（未了のまま在る）。何もしていない。`);
-        }
-        const { before } = result;
-        // 閉じた記録は行から消えるので、日誌へ逐語で残す: 残さないと「誰がいつ何と言って閉じたか」が二度と読めない
-        await appendJournalOrThrow(
-          'commitment_reopen',
-          stores.journal,
-          {
-            type: 'decision',
-            decision: `閉じた仕事を自分で開き直した（${id}）: ${reason}`,
-            grounds:
-              'クローン自身が commitment_reopen で開き直した。開き直す前の記録: ' +
-              `closedAt=${before.closedAt ?? '記録なし'}・closedBy=${before.closedBy ?? '記録なし'}・closedReason=${before.closedReason ?? '記録なし'}`,
-          },
-          'act-completed',
-        );
-        return text(`${id} を開き直した（閉じた記録は日誌に残してある）。`);
-      },
-    ),
-
-    tool(
-      'commitment_reopen',
-      [
-        '閉じた行を未了へ開き直す。クローンが閉じた行も、人間が閉じた行も、器が自動で閉じた行（`closedBy: daemon`）も、後から否定できる。',
-        '**`commitment_open` で積み直さない**: 受け取った時刻と起点が切れる。`commitment_open` は同じ id なら何もしない（冪等）ので、閉じた行は蘇らない。',
         '受け取った時刻・起点・本文はそのままで、`closedAt` / `closedReason` / `closedBy` と `autoCloseWhenBack` が外れる',
         '（器が自動で閉じた行を否定したのに、担当が戻った合図で器がまた閉じることはない）。',
         '**開き直す前の閉じた時刻・閉じた主体・理由は日誌へ逐語で残る**（行からは消えるため）。',

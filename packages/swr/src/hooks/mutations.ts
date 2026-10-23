@@ -348,6 +348,24 @@ export function useCloseCommitment() {
   );
 }
 
+export function useReopenCommitment() {
+  const api = useApi();
+  const refresh = useRefreshCommitments();
+  return useCallback(
+    async (id: string, reason: string) => {
+      await writeThenRefresh(async () => {
+        expectOk(
+          await api.api.POST('/commitments/{id}/reopen', {
+            params: { path: { id } },
+            body: { reason },
+          }),
+        );
+      }, refresh);
+    },
+    [api, refresh],
+  );
+}
+
 // 可否をここで先回りして弾かない: サーバの規則を写すと、サーバ側の線が変わった日に画面だけがずれるため
 /** 読んだ版（`editedAt ?? at`）と違うと断られた。`current` が null なら、読んだあとに行が消えている。 */
 export class CommitmentConflictError extends ApiError {

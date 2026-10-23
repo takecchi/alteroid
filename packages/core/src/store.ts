@@ -955,6 +955,19 @@ export type CommitmentReopenResult =
   | { readonly kind: 'not-closed' };
 
 /**
+ * 閉じた行から、閉じた記録（`closedAt` / `closedReason` / `closedBy`）と `autoCloseWhenBack` を外した写しを返す（`CommitmentStore.reopen` の書き込み側）。
+ * 外す欄の規則をここに1本だけ置く: in-memory と fs がそれぞれ持つと、片方だけ欄が増えたときにずれる（`storage-pg` だけは SQL で同じ欄を外す）。
+ */
+export function withoutClosedRecord(entry: Commitment): Commitment {
+  const reopened = { ...entry };
+  delete reopened.closedAt;
+  delete reopened.closedReason;
+  delete reopened.closedBy;
+  delete reopened.autoCloseWhenBack;
+  return reopened;
+}
+
+/**
  * `entry` と同じマネージャー（`origin: 'manager'` かつ同じ `source`）× 同じ `body` の未了行を `entries` から探す。
  * 判定の規則をここに1本だけ置く: 3実装がそれぞれ持つと必ずずれる。`storage-pg` だけが同じ規則を SQL で書き直す
  * （DB の制約にしないとプロセスを跨げない）ので、3実装が同じ答えを返すことを `commitment-fold-contract.ts` が測る。
