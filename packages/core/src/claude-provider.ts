@@ -45,6 +45,7 @@ import type {
   AgentToolAuditRecord,
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
+import { splitInProcessMcpServers } from './clone-mcp-config-file.js';
 import { noteBackgroundFailure } from './dropped-record.js';
 import { excerpt } from './excerpt.js';
 import { notePhase } from './loop-stall.js';
@@ -435,6 +436,21 @@ export function cloneMcpServers(
   return { ...(external ?? {}), [MCP_SERVER_NAME]: own };
 }
 
+// ファイルを書かず、書かれたパスだけを受ける（純粋に保つ）: 在れば SDK が argv へ載せるのはインプロセスの分だけになる
+// `mcpServers` に人間の登録を残したまま `extraArgs` を足さない: SDK が `--mcp-config <JSON>` も載せ、旗が2回現れて資格が argv に残るため
+function cloneMcpOptions(
+  mcpServer: McpServerConfig,
+  externalMcpServers: Readonly<Record<string, McpServerConfig>> | undefined,
+  mcpConfigPath: string | undefined,
+): Pick<Options, 'mcpServers' | 'extraArgs'> {
+  const all = cloneMcpServers(mcpServer, externalMcpServers);
+  if (mcpConfigPath === undefined) return { mcpServers: all };
+  return {
+    mcpServers: splitInProcessMcpServers(all).inProcess,
+    extraArgs: { 'mcp-config': mcpConfigPath },
+  };
+}
+
 export interface ClonePluginRequest {
   path: string;
   skipMcpDiscovery: boolean;
@@ -510,6 +526,8 @@ export interface CloneSessionOptionsRequest {
   permissionMode: PermissionModeName;
   mcpServer: McpServerConfig;
   externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /** インプロセス以外の MCP 登録を書いたファイル（`clone-mcp-config-file.ts`）。在れば `--mcp-config` はそのパスだけを指す。 */
+  mcpConfigPath?: string;
   /** 展開済みの plugin（`Options.plugins` の `type: 'local'` へ写す）。省略・空なら欄ごと省く。 */
   plugins?: readonly ClonePluginRequest[];
   systemPrompt: string;
@@ -531,6 +549,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     permissionMode,
     mcpServer,
     externalMcpServers,
+    mcpConfigPath,
     plugins,
     systemPrompt,
     env,
@@ -553,7 +572,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     // `default` のまま道具を渡さない: このセッションには `canUseTool` が無く、SDK は確認相手が居ないとき `ask` をそのまま拒否で終わらせるため
     // `canUseTool` を繋がない: クローンは長寿命セッション1本で全ターンが直列に通るので、人間の回答を待って止めると止まるのが全部になるため
     permissionMode,
-    mcpServers: cloneMcpServers(mcpServer, externalMcpServers),
+    ...cloneMcpOptions(mcpServer, externalMcpServers, mcpConfigPath),
     ...clonePluginOptions(plugins),
     systemPrompt,
     // `settingSources` を `[]` にしない: 人間が Claude Code で使っている MCP 連携がクローンから1つも見えなくなる（能力の削除）ため
@@ -611,6 +630,8 @@ export interface CloneDistillOptionsRequest {
   permissionMode: PermissionModeName;
   mcpServer: McpServerConfig;
   externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /** 本セッションと同じもの（`CloneSessionOptionsRequest.mcpConfigPath`）。 */
+  mcpConfigPath?: string;
   /** 本セッションと同じもの（`CloneSessionOptionsRequest.plugins`）。 */
   plugins?: readonly ClonePluginRequest[];
   systemPrompt: string;
@@ -626,6 +647,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     permissionMode,
     mcpServer,
     externalMcpServers,
+    mcpConfigPath,
     plugins,
     systemPrompt,
     env,
@@ -639,7 +661,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     // 本セッションと同じ配置にする: 片方だけ道具や設定が違うと、人格の書き手（蒸留）だけが別の頭になるため
     allowedTools: CLONE_ALLOWED_TOOLS,
     permissionMode,
-    mcpServers: cloneMcpServers(mcpServer, externalMcpServers),
+    ...cloneMcpOptions(mcpServer, externalMcpServers, mcpConfigPath),
     ...clonePluginOptions(plugins),
     systemPrompt,
     settingSources: ['user', 'project', 'local'],

@@ -1,7 +1,14 @@
 import { chmod, lstat, readFile, readdir, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  McpServerConfig,
+  Options,
+  Query,
+  SDKMessage,
+  query as sdkQuery,
+} from '@anthropic-ai/claude-agent-sdk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -50,11 +57,32 @@ vi.mock('./clone-tools-transport.js', async (importOriginal) => {
   };
 });
 
-function fakeCloneSdk(): { fn: typeof sdkQuery; calls: { options: Options }[] } {
-  const calls: { options: Options }[] = [];
+interface CloneSdkCall {
+  options: Options;
+  // 起こした瞬間に読んで写す: ファイルはセッションが終わると消えるため、後からは読めない
+  mcpConfig: Record<string, McpServerConfig>;
+}
+
+// 人間の登録は argv に載る `mcpServers` ではなく `--mcp-config` のファイルで渡るので、CLI が見る全体は両方を合わせたもの
+function effectiveMcpServers(call: CloneSdkCall): Record<string, McpServerConfig> {
+  return { ...call.mcpConfig, ...(call.options.mcpServers ?? {}) };
+}
+
+function fakeCloneSdk(): { fn: typeof sdkQuery; calls: CloneSdkCall[] } {
+  const calls: CloneSdkCall[] = [];
 
   const fn = ((params: { prompt: unknown; options?: Options }) => {
-    calls.push({ options: params.options ?? {} });
+    const options = params.options ?? {};
+    const path = (options.extraArgs as Record<string, string | null> | undefined)?.['mcp-config'];
+    const mcpConfig =
+      typeof path === 'string'
+        ? (
+            JSON.parse(readFileSync(path, 'utf8')) as {
+              mcpServers: Record<string, McpServerConfig>;
+            }
+          ).mcpServers
+        : {};
+    calls.push({ options, mcpConfig });
 
     function* turn(): Generator<SDKMessage> {
       yield {
@@ -198,7 +226,9 @@ describe('クローン本セッションへ渡す Options', () => {
     clone.post(humanMessage('やあ'));
     await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
 
-    const mcpServers = (calls[0] as { options: Options }).options.mcpServers ?? {};
+    // 中継の資格（socket・token の env）は stdio 形なので、argv に載る mcpServers ではなくファイルへ回る
+    expect((calls[0] as CloneSdkCall).options.mcpServers).toEqual({});
+    const mcpServers = effectiveMcpServers(calls[0] as CloneSdkCall);
     expect(Object.keys(mcpServers)).toEqual([MCP_SERVER_NAME]);
     const own = mcpServers[MCP_SERVER_NAME] as {
       type?: string;
@@ -250,9 +280,11 @@ describe('クローン本セッションへ渡す Options', () => {
       clone.post(humanMessage('やあ'));
       await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
 
-      const own = ((calls[0] as { options: Options }).options.mcpServers ?? {})[
-        MCP_SERVER_NAME
-      ] as { command: string; args: string[]; env: Record<string, string> };
+      const own = effectiveMcpServers(calls[0] as CloneSdkCall)[MCP_SERVER_NAME] as {
+        command: string;
+        args: string[];
+        env: Record<string, string>;
+      };
 
       const transport = new StdioClientTransport({
         command: own.command,
@@ -516,11 +548,13 @@ describe('人間の MCP 連携の登録をクローンへ渡す（#325 段2）',
     clone.post(humanMessage('やあ'));
     await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
 
-    const main = calls[0] as { options: Options };
-    expect(Object.keys(main.options.mcpServers ?? {}).sort()).toEqual(
+    const main = calls[0] as CloneSdkCall;
+    // 人間の登録（env を含む）は argv に載る mcpServers に居ず、ファイルにだけ在る
+    expect(Object.keys(main.options.mcpServers ?? {})).toEqual([MCP_SERVER_NAME]);
+    expect(Object.keys(effectiveMcpServers(main)).sort()).toEqual(
       ['github', MCP_SERVER_NAME].sort(),
     );
-    expect(main.options.mcpServers?.github).toEqual({ command: 'gh-mcp', env: { TOKEN: 'dummy' } });
+    expect(main.mcpConfig.github).toEqual({ command: 'gh-mcp', env: { TOKEN: 'dummy' } });
     expect(main.options.mcpServers?.[MCP_SERVER_NAME]?.type).toBe('sdk');
 
     await stores.mcpServers.write({
@@ -529,8 +563,9 @@ describe('人間の MCP 連携の登録をクローンへ渡す（#325 段2）',
     });
     await firePreCompact(main);
     await expect.poll(() => calls.length > 1, { timeout: 3000 }).toBe(true);
-    const distill = calls[1] as { options: Options };
-    expect(Object.keys(distill.options.mcpServers ?? {}).sort()).toEqual(
+    const distill = calls[1] as CloneSdkCall;
+    expect(Object.keys(distill.options.mcpServers ?? {})).toEqual([MCP_SERVER_NAME]);
+    expect(Object.keys(effectiveMcpServers(distill)).sort()).toEqual(
       ['github', MCP_SERVER_NAME, 'remote'].sort(),
     );
     expect(distill.options.mcpServers?.[MCP_SERVER_NAME]?.type).toBe('sdk');

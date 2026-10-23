@@ -1,0 +1,57 @@
+import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as joinPath } from 'node:path';
+
+export interface SplitMcpServers {
+  inProcess: Record<string, McpServerConfig>;
+  external: Record<string, McpServerConfig>;
+}
+
+function isInProcess(config: McpServerConfig): boolean {
+  return config.type === 'sdk' && 'instance' in config && config.instance !== undefined;
+}
+
+export function splitInProcessMcpServers(
+  servers: Readonly<Record<string, McpServerConfig>>,
+): SplitMcpServers {
+  const inProcess: Record<string, McpServerConfig> = {};
+  const external: Record<string, McpServerConfig> = {};
+  for (const [name, config] of Object.entries(servers)) {
+    (isInProcess(config) ? inProcess : external)[name] = config;
+  }
+  return { inProcess, external };
+}
+
+export interface CloneMcpConfigFile {
+  path: string;
+  remove: () => void;
+}
+
+// JSON を argv へ戻さない: 書けないときは投げる。argv は同じ器の他のプロセスから読めるため、資格が出る
+export function writeCloneMcpConfigFile(
+  external: Readonly<Record<string, McpServerConfig>>,
+): CloneMcpConfigFile | undefined {
+  if (Object.keys(external).length === 0) return undefined;
+  const dir = mkdtempSync(joinPath(tmpdir(), 'alteroid-clone-mcp-'));
+  const path = joinPath(dir, 'mcp-config.json');
+  const remove = (): void => {
+    rmSync(dir, { recursive: true, force: true });
+  };
+  try {
+    writeFileSync(path, JSON.stringify({ mcpServers: external }), { mode: 0o600, flag: 'wx' });
+  } catch (error) {
+    remove();
+    throw error;
+  }
+  return { path, remove };
+}
+
+// 全体を分けて、外へ出す側だけをファイルにする。インプロセス側は SDK が argv に載せない
+export function stageCloneMcpServers(servers: Readonly<Record<string, McpServerConfig>>): {
+  inProcess: Record<string, McpServerConfig>;
+  file: CloneMcpConfigFile | undefined;
+} {
+  const { inProcess, external } = splitInProcessMcpServers(servers);
+  return { inProcess, file: writeCloneMcpConfigFile(external) };
+}

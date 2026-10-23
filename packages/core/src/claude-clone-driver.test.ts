@@ -1,4 +1,6 @@
 import type { Options, Query, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentCloneSessionSpec } from './agent-clone-session.js';
@@ -158,6 +160,123 @@ describe('ClaudeCloneDriver#open', () => {
       seen.push(event.type);
     });
     expect(seen).toContain('session_started');
+  });
+});
+
+describe('ClaudeCloneDriver: 人間の MCP 登録は argv ではなくファイルで渡る', () => {
+  const external = {
+    human: { type: 'stdio', command: 'x', env: { TOKEN: 'dummy-secret-env' } },
+    remote: {
+      type: 'http',
+      url: 'https://example.invalid/mcp',
+      headers: { A: 'dummy-secret-hdr' },
+    },
+  } as never;
+
+  function configPathOf(options: Options | undefined): string {
+    return (options?.extraArgs as Record<string, string>)['mcp-config']!;
+  }
+
+  it('open: mcpServers はインプロセスだけで、mcp-config のファイルに人間の登録が入り、close で消える', () => {
+    const captured: { options?: Options } = {};
+    const session = new ClaudeCloneDriver({ queryFn: fakeQueryFn(captured).queryFn }).open(
+      makeSpec({ externalMcpServers: external }),
+    );
+    expect(Object.keys(captured.options!.mcpServers!)).toEqual(['alteroid']);
+    const path = configPathOf(captured.options);
+    const written = JSON.parse(readFileSync(path, 'utf8')) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(written.mcpServers).toEqual(external);
+    session.close();
+    expect(existsSync(dirname(path))).toBe(false);
+    session.close();
+  });
+
+  it('open: readEvents が終わったら消え、投げても消える', async () => {
+    const captured: { options?: Options } = {};
+    const ok = new ClaudeCloneDriver({ queryFn: fakeQueryFn(captured).queryFn }).open(
+      makeSpec({ externalMcpServers: external }),
+    );
+    const okPath = configPathOf(captured.options);
+    expect(existsSync(okPath)).toBe(true);
+    await ok.readEvents(async () => undefined);
+    expect(existsSync(dirname(okPath))).toBe(false);
+
+    const failing = new ClaudeCloneDriver({
+      queryFn: fakeQueryFn(captured, [], {
+        [Symbol.asyncIterator]: async function* () {
+          yield* [];
+          throw new Error('boom');
+        },
+      }).queryFn,
+    }).open(makeSpec({ externalMcpServers: external }));
+    const failPath = configPathOf(captured.options);
+    await expect(failing.readEvents(async () => undefined)).rejects.toThrow('boom');
+    expect(existsSync(dirname(failPath))).toBe(false);
+  });
+
+  it('open: query() が同期で投げたらその場で消す', () => {
+    let path = '';
+    const queryFn = ((params: { options?: Options }) => {
+      path = configPathOf(params.options);
+      throw new Error('sync boom');
+    }) as unknown as typeof sdkQuery;
+    expect(() =>
+      new ClaudeCloneDriver({ queryFn }).open(makeSpec({ externalMcpServers: external })),
+    ).toThrow('sync boom');
+    expect(path).not.toBe('');
+    expect(existsSync(dirname(path))).toBe(false);
+  });
+
+  it('open: 全部インプロセスなら extraArgs を足さずファイルも作らない', () => {
+    const captured: { options?: Options } = {};
+    new ClaudeCloneDriver({ queryFn: fakeQueryFn(captured).queryFn }).open(makeSpec());
+    expect('extraArgs' in captured.options!).toBe(false);
+  });
+
+  it('distill: 最後まで回すと消え、途中で return しても消える', async () => {
+    const spec = {
+      prompt: 'p',
+      model: 'opus',
+      permissionMode: 'auto' as const,
+      tools: { kind: 'inproc' as const, server: { type: 'sdk', name: 'alteroid', instance: {} } },
+      externalMcpServers: external,
+      systemPrompt: 'sp',
+      env: {},
+      onPostToolUse: async () => undefined,
+      onPostToolUseFailure: async () => undefined,
+    };
+    const init = {
+      type: 'system',
+      subtype: 'init',
+      session_id: 's',
+      uuid: 'u',
+      model: 'm',
+      claude_code_version: '1',
+      apiKeySource: 'user',
+      permissionMode: 'default',
+      mcp_servers: [],
+    };
+    const captured: { options?: Options } = {};
+    const full = new ClaudeCloneDriver({
+      queryFn: fakeQueryFn(captured, [init, init]).queryFn,
+    }).distill(spec);
+    const fullPath = configPathOf(captured.options);
+    expect(Object.keys(captured.options!.mcpServers!)).toEqual(['alteroid']);
+    expect(existsSync(fullPath)).toBe(true);
+    for await (const event of full) void event;
+    expect(existsSync(dirname(fullPath))).toBe(false);
+
+    const early = new ClaudeCloneDriver({
+      queryFn: fakeQueryFn(captured, [init, init]).queryFn,
+    }).distill(spec);
+    const earlyPath = configPathOf(captured.options);
+    for await (const event of early) {
+      void event;
+      break;
+    }
+    expect(existsSync(dirname(earlyPath))).toBe(false);
   });
 });
 
