@@ -11,6 +11,7 @@ import { compareIsoInstant } from './iso-instant.js';
 import type { AttachmentRef, JournalEntry, TurnFailureKind } from './schema.js';
 import {
   UnreadableJournalEntryError,
+  type ExchangeTextHead,
   type JournalCursor,
   type JournalQuery,
   type JournalStore,
@@ -101,7 +102,9 @@ export interface ConversationMessage {
  * T が見つからない（窓の外）・T が E より後ろ・会話が違う編集は何も隠さない（落ちてはいけない）。
  * 先に付いた理由を上書きしない。
  */
-export function computeSupersededIds(chronological: Exchange[]): Map<string, string> {
+export function computeSupersededIds(
+  chronological: readonly Pick<Exchange, 'id' | 'supersedes' | 'conversationId'>[],
+): Map<string, string> {
   const indexById = new Map<string, number>();
   chronological.forEach((entry, index) => indexById.set(entry.id, index));
 
@@ -239,6 +242,18 @@ export async function readWithdrawnClientMessageIds(
 
 const EMPTY_VIEW: ConversationReadView = { baseline: null, positions: {} };
 
+/** 会話の一覧の判定に要る欄。全文の `Exchange` と、本文を持たない `ConversationWindowRow` の両方が満たす。 */
+type WindowMessage = Pick<
+  Exchange,
+  'id' | 'at' | 'role' | 'conversationId' | 'supersedes' | 'clientMessageId' | 'turnFailure'
+>;
+
+/** 会話1つぶんの、題（`preview`）を除いた要約と、題を取る発言。 */
+interface ConversationParts<T extends WindowMessage> {
+  summary: Omit<ConversationSummary, 'preview'>;
+  titled: T | undefined;
+}
+
 /**
  * `at` で並べ直さない: 同じミリ秒の発言の前後は時刻では決められず、追記専用の記録の順序のほうが正しい。
  * `preview` と `messages` は畳んだ後で数える（隠された旧発言を一覧に出し続けないため）。
@@ -248,9 +263,71 @@ export function collectConversations(
   readView: ConversationReadView = EMPTY_VIEW,
   withdrawnClientMessageIds: ReadonlySet<string> = new Set(),
 ): ConversationSummary[] {
-  const byConversation = new Map<string, Exchange[]>();
+  return collectConversationParts(humanExchanges(entries), readView, withdrawnClientMessageIds).map(
+    (parts) => withPreview(parts.summary, previewOfTitled(parts.titled)),
+  );
+}
+
+/** 題の文字列。題を取る発言が無ければ空、本文が空で添付だけなら添付の数。 */
+export function previewOfTitled(
+  titled: Pick<Exchange, 'text' | 'attachments'> | undefined,
+): string {
+  if (titled === undefined) return '';
+  return previewOf(titled.text, titled.attachments?.length ?? 0);
+}
+
+function previewOf(text: string, attachmentCount: number): string {
+  if (text.trim() === '' && attachmentCount > 0) return `[添付 ${attachmentCount} 件]`;
+  return preview(text);
+}
+
+/**
+ * 細い窓で題を引くときに、DB から受け取る本文の先頭の長さ（コードポイント）。
+ * 題（{@link CONVERSATION_PREVIEW}）より十分長くする: 空白の連なりは1つにまとめるので、先頭が短いとまとめた後に題の長さに届かず、全文を引き直すことになるため。
+ */
+export const CONVERSATION_PREVIEW_HEAD_CHARS = 400;
+
+/**
+ * 本文の先頭（`JournalStore.exchangeTextHeads`）から、全文で作るのと同じ題を作る。作れないときは `undefined`（呼び手がその1件だけ全文を引き直す）。
+ * 先頭が切れていないなら全文と同じ計算をする。切れているなら、空白をまとめた先頭が題の長さを2字以上超えるときだけ作る:
+ * まとめた全文の最初の {@link CONVERSATION_PREVIEW}+1 字は、まとめた先頭の同じ範囲と一致する（末尾の空白は全文の側でも1つの空白にまとまる）ので、切り口も同じになるため。
+ */
+export function previewFromHead(head: ExchangeTextHead): string | undefined {
+  if (!head.truncated) return previewOf(head.head, head.attachments);
+  const flat = head.head.replace(/\s+/g, ' ').trimStart();
+  if (flat.length < CONVERSATION_PREVIEW + 2) return undefined;
+  return `${flat.slice(0, codePointBoundary(flat, CONVERSATION_PREVIEW))}…`;
+}
+
+// 欄の並びを変えない: 応答の JSON の欄の順に出るため
+function withPreview(
+  summary: Omit<ConversationSummary, 'preview'>,
+  previewText: string,
+): ConversationSummary {
+  return {
+    conversationId: summary.conversationId,
+    startedAt: summary.startedAt,
+    updatedAt: summary.updatedAt,
+    messages: summary.messages,
+    preview: previewText,
+    unread: summary.unread,
+    readThrough: summary.readThrough,
+  };
+}
+
+/**
+ * 会話ごとの畳み（編集で隠す・取り下げ・既読の数え）と題を取る発言の選び方を、ここ1か所だけが持つ。
+ * 全文の行（`collectConversations`）と本文を持たない行（`readConversationPage` の細い窓）の両方がここを通る:
+ * 口ごとに書き写すと、片方だけ規則を直し忘れて、器によって一覧が変わる余地ができるため。
+ */
+function collectConversationParts<T extends WindowMessage>(
+  newestFirstExchanges: readonly T[],
+  readView: ConversationReadView,
+  withdrawnClientMessageIds: ReadonlySet<string>,
+): ConversationParts<T>[] {
+  const byConversation = new Map<string, T[]>();
   const order: string[] = [];
-  for (const entry of humanExchanges(entries)) {
+  for (const entry of newestFirstExchanges) {
     const id = entry.conversationId;
     if (id === undefined) continue;
     let bucket = byConversation.get(id);
@@ -262,7 +339,7 @@ export function collectConversations(
     bucket.push(entry);
   }
 
-  const summaries: ConversationSummary[] = [];
+  const summaries: ConversationParts<T>[] = [];
   for (const id of order) {
     const newestFirst = byConversation.get(id);
     if (newestFirst === undefined) continue;
@@ -286,20 +363,15 @@ export function collectConversations(
     const titled =
       [...counted].reverse().find((entry) => entry.turnFailure === undefined) ?? counted.at(-1);
     summaries.push({
-      conversationId: id,
-      startedAt: first.at,
-      updatedAt: last.at,
-      messages: counted.length,
-      preview:
-        titled === undefined
-          ? ''
-          : titled.text.trim() === '' &&
-              titled.attachments !== undefined &&
-              titled.attachments.length > 0
-            ? `[添付 ${titled.attachments.length} 件]`
-            : preview(titled.text),
-      unread: countUnread(visible, readThrough),
-      readThrough,
+      summary: {
+        conversationId: id,
+        startedAt: first.at,
+        updatedAt: last.at,
+        messages: counted.length,
+        unread: countUnread(visible, readThrough),
+        readThrough,
+      },
+      titled,
     });
   }
   return summaries;
@@ -449,7 +521,12 @@ async function conversationIdsNewerThan(
 export async function readConversationPage(
   journal: Pick<
     JournalStore,
-    'listPage' | 'get' | 'withdrawnClientMessageIds' | 'conversationIdsAfter'
+    | 'listPage'
+    | 'get'
+    | 'withdrawnClientMessageIds'
+    | 'conversationIdsAfter'
+    | 'conversationWindowHeads'
+    | 'exchangeTextHeads'
   >,
   options: {
     limit: number;
@@ -485,34 +562,29 @@ export async function readConversationPage(
     exclude = newer;
   }
 
-  const window = await readConversationWindowPage(journal, {
+  const window = await readConversationWindowRows(journal, {
     scan,
     ...(since === undefined ? {} : { since }),
     ...(until === undefined ? {} : { until }),
     ...(cursor === undefined ? {} : { after: cursor }),
   });
-  const entries = window.entries;
+  const rows = window.rows;
   const fresh =
     exclude.size === 0
-      ? entries
-      : entries.filter(
-          (entry) =>
-            !(
-              entry.type === 'exchange' &&
-              entry.conversationId !== undefined &&
-              exclude.has(entry.conversationId)
-            ),
+      ? rows
+      : rows.filter(
+          (entry) => !(entry.conversationId !== undefined && exclude.has(entry.conversationId)),
         );
 
   const headOf = new Map<string, JournalCursor>();
-  for (const entry of humanExchanges(fresh)) {
+  for (const entry of fresh) {
     if (entry.conversationId !== undefined && !headOf.has(entry.conversationId)) {
       headOf.set(entry.conversationId, { id: entry.id, at: entry.at });
     }
   }
 
   // 取り下げの印は人間との往復の窓に入らないので、窓の中で印を持ちうる最古の発言から別に読む
-  const withdrawable = humanExchanges(fresh).filter(
+  const withdrawable = fresh.filter(
     (entry) => entry.role === 'inbound' && entry.clientMessageId !== undefined,
   );
   const withdrawn =
@@ -526,8 +598,10 @@ export async function readConversationPage(
             withdrawable[0]!.at,
           ),
         );
-  const all = collectConversations(fresh, readView, withdrawn);
-  const conversations = all.slice(0, limit);
+  const all = collectConversationParts(fresh, readView ?? EMPTY_VIEW, withdrawn);
+  const shown = all.slice(0, limit);
+  // 題は一覧に載る会話のぶんだけ作る: 細い窓では題の本文を別に引くので、載らない会話の分まで引かない
+  const conversations = await withPreviews(journal, shown, window.fullText);
   const hiddenByLimit = all.length - conversations.length;
   // 終端は件数から推さない: 読めない行を捨てて短くなった窓を「先頭に届いた」と誤るため
   const reached = window.reachedStart;
@@ -539,15 +613,96 @@ export async function readConversationPage(
   } else if (!reached) {
     // 読めた最後の行から続ける: ストアの継続点は読めない行を指しうり、それを cursor にすると次の頁の確かめ（`journal.get`）で「読めない」として断られるため。
     // 読めた行が1つも無い窓だけストアの継続点を使う: 使わないと空の窓で黙って途切れる（その頁の続きは断られうるが、黙って先頭に届いたと言うよりよい）
-    const lastRead = entries[entries.length - 1];
+    const lastRead = rows[rows.length - 1];
     next = lastRead === undefined ? window.next : { id: lastRead.id, at: lastRead.at };
   }
   return {
     conversations,
-    scanned: entries.length,
+    scanned: window.scanned,
     reachedStart: reached,
     hiddenByLimit,
     next,
     positions: headOf,
   };
+}
+
+/**
+ * 会話の一覧の窓を読む。器が本文を運ばない口（`conversationWindowHeads` と `exchangeTextHeads` の組）を持てばそちらを使う:
+ * 一覧に要るのは題になる1件の先頭だけなのに、窓の全行（既定 2001 行）の本文を運んでいたため（偽の日誌で窓1回 約 7.4 MB）。
+ * 持たない器では今までどおり本文ごと読み、題は手元の全文から作る（`fullText`）。
+ */
+async function readConversationWindowRows(
+  journal: Pick<JournalStore, 'listPage' | 'conversationWindowHeads' | 'exchangeTextHeads'>,
+  options: { scan: number; since?: string; until?: string; after?: JournalCursor },
+): Promise<{
+  rows: readonly WindowMessage[];
+  /** この頁で読んだ人間との発言の数（`ConversationPage.scanned`） */
+  scanned: number;
+  reachedStart: boolean;
+  next: JournalCursor | null;
+  /** 本文ごと読んだときの全文（id ごと）。細い窓では `undefined` */
+  fullText: ReadonlyMap<string, Exchange> | undefined;
+}> {
+  if (journal.conversationWindowHeads !== undefined && journal.exchangeTextHeads !== undefined) {
+    const page = await journal.conversationWindowHeads(options);
+    return {
+      rows: page.rows,
+      scanned: page.rows.length,
+      reachedStart: page.next === null,
+      next: page.next,
+      fullText: undefined,
+    };
+  }
+  const page = await readConversationWindowPage(journal, options);
+  const exchanges = humanExchanges(page.entries);
+  return {
+    rows: exchanges,
+    scanned: page.entries.length,
+    reachedStart: page.reachedStart,
+    next: page.next,
+    fullText: new Map(exchanges.map((entry) => [entry.id, entry])),
+  };
+}
+
+/**
+ * 載せる会話の題を作る。全文が手元に在ればそこから、無ければ題になる発言の本文の先頭を DB から引いて作る。
+ * 先頭だけでは作れない題（空白の長い連なりで、まとめた後に題の長さに届かない）は、その1件だけ全文を引き直す。
+ * 題になる発言が引けない（読む間に会話が消された）ときは題を空にする: 一覧そのものは返す。
+ */
+async function withPreviews(
+  journal: Pick<JournalStore, 'get' | 'exchangeTextHeads'>,
+  shown: readonly ConversationParts<WindowMessage>[],
+  fullText: ReadonlyMap<string, Exchange> | undefined,
+): Promise<ConversationSummary[]> {
+  if (fullText !== undefined || journal.exchangeTextHeads === undefined) {
+    return shown.map((parts) =>
+      withPreview(
+        parts.summary,
+        previewOfTitled(parts.titled === undefined ? undefined : fullText?.get(parts.titled.id)),
+      ),
+    );
+  }
+  const ids = shown.flatMap((parts) => (parts.titled === undefined ? [] : [parts.titled.id]));
+  const heads =
+    ids.length === 0
+      ? []
+      : await journal.exchangeTextHeads({ ids, chars: CONVERSATION_PREVIEW_HEAD_CHARS });
+  const headById = new Map(heads.map((head) => [head.id, head]));
+  const summaries: ConversationSummary[] = [];
+  for (const parts of shown) {
+    const titledId = parts.titled?.id;
+    let previewText = '';
+    if (titledId !== undefined) {
+      const head = headById.get(titledId);
+      const fromHead = head === undefined ? undefined : previewFromHead(head);
+      if (fromHead !== undefined) {
+        previewText = fromHead;
+      } else {
+        const entry = await journal.get(titledId).catch(() => null);
+        previewText = entry?.type === 'exchange' ? previewOfTitled(entry) : '';
+      }
+    }
+    summaries.push(withPreview(parts.summary, previewText));
+  }
+  return summaries;
 }

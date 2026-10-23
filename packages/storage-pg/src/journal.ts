@@ -13,6 +13,8 @@ import {
   UnreadableJournalEntryError,
 } from '@alteroid/core';
 import type {
+  ConversationWindowRow,
+  ExchangeTextHead,
   JournalCursor,
   JournalEntry,
   JournalEntryInput,
@@ -23,7 +25,7 @@ import type {
 import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql, type SQL } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { stripNulls, toNumber } from './db.js';
+import { stripNulls, toIso, toNumber } from './db.js';
 import { journal } from './schema.js';
 
 // `entry` に `id` / `at` / `type` を書かない: 列から復元できる二重持ちで、日誌は行数が多く heap を食うため。
@@ -47,6 +49,11 @@ function restoreEntry(row: { id: string; at: Date; type: string; entry: unknown 
       ? (row.entry as Record<string, unknown>)
       : {};
   return { id: row.id, at: row.at.toISOString(), type: row.type, ...stored };
+}
+
+// `execute` の結果は器（node-postgres・PGlite）で形が違う: 配列そのものか、`rows` を持つ形
+function rowsOf(result: unknown): unknown[] {
+  return Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
 }
 
 /** 返答の覚えを読み足すとき、前回の最後の `seq` から手前に重ねて読む行数（#5089。`humanReplies` の注記） */
@@ -417,6 +424,118 @@ export class PgJournalStore implements JournalStore {
         );
     });
     return rows.map((row) => row.conversationId);
+  }
+
+  // 本文を流さず、会話の一覧の判定に要る欄だけを読む。絞り・並び・`limit`・継続点は `listPage({ types: ['exchange'], with: ['human'], order: 'desc', limit: scan, ... })` と同じにする
+  // （`journal_human_exchange_seq_idx` に乗る）。型の確かめは `listPage` と同じく `limit` の後で行う: 前で絞ると、読めない行の分だけ窓が古い側へ伸び、`listPage` と窓がずれるため。
+  // 確かめるのは判定に使う欄と必須の欄（`role`・`text`）までで、それ以外の欄だけが型に合わない行は返す（`conversationIdsAfter` と同じ線）
+  async conversationWindowHeads(query: {
+    scan: number;
+    since?: string;
+    until?: string;
+    after?: JournalCursor;
+  }): Promise<{ rows: ConversationWindowRow[]; next: JournalCursor | null }> {
+    const afterSeq = query.after === undefined ? undefined : await this.#anchorSeq(query.after);
+    const hidden = await this.#hiddenSets(this.#db);
+    const entry = journal.entry;
+    // 絞りは `listPage` と同じ式・同じ順に組む: 部分索引の述語との一致を planner が確かめられる形を崩さないため
+    const filters = and(
+      ...(query.since === undefined ? [] : [gte(journal.at, new Date(query.since))]),
+      ...(query.until === undefined ? [] : [lte(journal.at, new Date(query.until))]),
+      hiddenConversationExchangeExcluded(hidden),
+      inArray(journal.type, ['exchange']),
+      inArray(sql`(${entry}->>'with')`, ['human']),
+      ...(afterSeq === undefined ? [] : [lt(journal.seq, afterSeq)]),
+    );
+    const limit = query.scan > 0 ? query.scan + 1 : query.scan;
+    // 欄ごとに `entry->'…'` を書かず、`jsonb_to_record` で1行1回だけ開く: 欄ごとに書くと、TOAST に出た本文を欄の数だけ展開し直し、
+    // 偽の日誌で窓1回に触るページが 8,198 から 32,443 に増えた（1行1回なら 11,440。本文ごと運ぶ形の 8,198 との差は、絞りが先に1回開く分）
+    const result = await this.#db.execute(sql`
+      select ${journal.id} as id, ${journal.at} as at, r.role as role,
+        jsonb_typeof(r.text) = 'string' as "textIsString",
+        case when jsonb_typeof(r."conversationId") = 'string' then r."conversationId" #>> '{}' end as "conversationId",
+        case when jsonb_typeof(r.supersedes) = 'string' then r.supersedes #>> '{}' end as supersedes,
+        case when jsonb_typeof(r."clientMessageId") = 'string' then r."clientMessageId" #>> '{}' end as "clientMessageId",
+        r."turnFailure" as "turnFailure"
+      from ${journal}
+      cross join lateral jsonb_to_record(${entry}) as r(role text, text jsonb, "conversationId" jsonb, supersedes jsonb, "clientMessageId" jsonb, "turnFailure" text)
+      where ${filters}
+      order by ${journal.seq} desc
+      limit ${limit}
+    `);
+    const rows = rowsOf(result) as {
+      id: string;
+      at: Date | string;
+      role: string | null;
+      textIsString: boolean | null;
+      conversationId: string | null;
+      supersedes: string | null;
+      clientMessageId: string | null;
+      turnFailure: string | null;
+    }[];
+
+    const pageLimit = query.scan > 0 ? query.scan : undefined;
+    const hasMore = pageLimit !== undefined && rows.length > pageLimit;
+    const pageRows = pageLimit === undefined ? rows : rows.slice(0, pageLimit);
+    const lastRow = pageRows[pageRows.length - 1];
+    const found = pageRows.flatMap((row): ConversationWindowRow[] => {
+      const role = row.role;
+      if ((role !== 'inbound' && role !== 'outbound') || row.textIsString !== true) {
+        return [];
+      }
+      return [
+        {
+          id: row.id,
+          at: toIso(row.at),
+          role,
+          ...(row.conversationId === null ? {} : { conversationId: row.conversationId }),
+          ...(row.supersedes === null ? {} : { supersedes: row.supersedes }),
+          ...(row.clientMessageId === null ? {} : { clientMessageId: row.clientMessageId }),
+          ...(row.turnFailure === 'failed' || row.turnFailure === 'held'
+            ? { turnFailure: row.turnFailure }
+            : {}),
+        },
+      ];
+    });
+    return {
+      rows: found,
+      next: hasMore && lastRow !== undefined ? { id: lastRow.id, at: toIso(lastRow.at) } : null,
+    };
+  }
+
+  // 題に要る本文の先頭だけを DB で切って返す（`left`・`length` はどちらもコードポイントで数える）。全文は運ばない
+  async exchangeTextHeads(query: {
+    ids: readonly string[];
+    chars: number;
+  }): Promise<ExchangeTextHead[]> {
+    // NUL を含む id は DB に投げない（`get` と同じ）: text が NUL を受け付けずエラーになるため
+    const ids = query.ids.filter((id) => !hasNul(id));
+    if (ids.length === 0) return [];
+    const hidden = await this.#hiddenSets(this.#db);
+    const entry = journal.entry;
+    const rows = await this.#db
+      .select({
+        id: journal.id,
+        head: sql<string>`left(${entry}->>'text', ${query.chars}::int)`,
+        truncated: sql<boolean>`length(${entry}->>'text') > ${query.chars}::int`,
+        attachments: sql<number>`case when jsonb_typeof(${entry}->'attachments') = 'array' then jsonb_array_length(${entry}->'attachments') else 0 end`,
+      })
+      .from(journal)
+      .where(
+        and(
+          hiddenConversationExchangeExcluded(hidden),
+          inArray(journal.id, ids),
+          eq(journal.type, 'exchange'),
+          sql`(${entry}->>'with') = 'human'`,
+          sql`jsonb_typeof(${entry}->'text') = 'string'`,
+        ),
+      );
+    return rows.map((row) => ({
+      id: row.id,
+      head: row.head,
+      truncated: row.truncated,
+      attachments: toNumber(row.attachments),
+    }));
   }
 
   // 墓標の件数と最後の `seq` の印。`humanReplies` の覚えと `#hiddenSets` の覚えが、読み直す時機の判定に共有する
