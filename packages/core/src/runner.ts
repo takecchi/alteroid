@@ -134,6 +134,10 @@ import { compareCodeUnits } from './code-unit-order.js';
 import { subreapedProcess, underSubreaper } from './delegation-subreaper.js';
 import { codePointBoundary, excerptLine } from './excerpt.js';
 import { relocateMcpConfigArgs } from './mcp-config-arg.js';
+import {
+  RUNNER_MCP_CONFIG_DIR_PREFIX,
+  sweepRunnerMcpConfigDirs,
+} from './runner-mcp-config-sweep.js';
 import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
 import type { McpServers } from './mcp-servers.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
@@ -547,6 +551,8 @@ export interface RunnerHostOptions {
   delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
   handOverMcpConfigDirFn?: HandOverResumeConfigDir;
+  // 委譲の CLI の MCP 設定を置く親と、その掃き（`scratchSweep` の周期）の親。既定は `tmpdir()`。試験が本物の /tmp に触れないための口
+  mcpConfigTmpRoot?: string;
   contextUsageTimeoutMs?: number;
   // 一時規則（#4905）の置き直しを待つ期限。既定は `SESSION_ALLOW_RULES_TIMEOUT_MS`。試験が短くするための口
   sessionAllowRulesTimeoutMs?: number;
@@ -840,6 +846,12 @@ class Host implements RunnerHost {
   readonly #delegationSubreaper: string | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir | undefined;
   readonly #handOverMcpConfigDirFn: HandOverResumeConfigDir | undefined;
+  readonly #mcpConfigTmpRoot: string;
+  // 全担当で共有する: 掃きは runner 全体で1本なので、どの担当の委譲が置いたディレクトリも外せる必要があるため
+  readonly #liveMcpConfigDirs = new Set<string>();
+  // 同じ失敗を周期ごとに note へ出し直さない
+  #mcpConfigSweepFailedNotified = new Set<string>();
+  #mcpConfigSweeping = false;
   readonly #contextUsageTimeoutMs: number | undefined;
   readonly #sessionAllowRulesTimeoutMs: number | undefined;
   readonly #rescueMaxWorktrees: number | undefined;
@@ -900,6 +912,7 @@ class Host implements RunnerHost {
     this.#delegationSubreaper = options.delegationSubreaper;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn;
     this.#handOverMcpConfigDirFn = options.handOverMcpConfigDirFn;
+    this.#mcpConfigTmpRoot = options.mcpConfigTmpRoot ?? tmpdir();
     this.#contextUsageTimeoutMs = options.contextUsageTimeoutMs;
     this.#sessionAllowRulesTimeoutMs = options.sessionAllowRulesTimeoutMs;
     this.#rescueMaxWorktrees = options.rescueMaxWorktrees;
@@ -992,6 +1005,13 @@ class Host implements RunnerHost {
                 this.#outboxPruning = null;
               });
           }
+          // scratch の掃きの鎖に乗せない: あちらは git の判定で長引きうるが、資格入りのファイルを長く残さないため
+          if (!this.#mcpConfigSweeping && !this.#scratchAbort.signal.aborted) {
+            this.#mcpConfigSweeping = true;
+            void this.#sweepMcpConfigDirs().finally(() => {
+              this.#mcpConfigSweeping = false;
+            });
+          }
           if (this.#scratchRunning !== null || this.#scratchAbort.signal.aborted) return;
           const run = sweeper
             .sweep(this.#scratchAbort.signal, this.runnerId)
@@ -1033,6 +1053,47 @@ class Host implements RunnerHost {
 
   credentials(): CredentialFingerprint[] {
     return this.#credentials?.fingerprints() ?? [];
+  }
+
+  // runner が落ちると、委譲の CLI の MCP 設定（資格入り）のディレクトリが残る。消すのは自分の権限で行う（ディレクトリは子の uid の持ち主）
+  async #sweepMcpConfigDirs(): Promise<void> {
+    try {
+      const { removed, failed, scanError } = await sweepRunnerMcpConfigDirs({
+        tmpRoot: this.#mcpConfigTmpRoot,
+        liveDirs: this.#liveMcpConfigDirs,
+        now: Date.now(),
+      });
+      if (this.#scratchAbort.signal.aborted) return;
+      // 失敗は note ではなく scratch_sweep の kept / scanError へ載せる: note は担当の managerId を要するが、この掃きは担当に属さない
+      const keys = [
+        ...failed.map((f) => `${f.name}\u0000${f.reason}`),
+        ...(scanError === undefined ? [] : [`__scan__\u0000${scanError}`]),
+      ];
+      const notified = this.#mcpConfigSweepFailedNotified;
+      this.#mcpConfigSweepFailedNotified = new Set(keys);
+      const kept = failed
+        .filter((f) => !notified.has(`${f.name}\u0000${f.reason}`))
+        .map((f) => ({
+          name: f.name,
+          kind: 'directory' as const,
+          reason: 'rm-failed' as const,
+          detail: `委譲の CLI の MCP 設定の残骸を掃けなかった: ${f.reason}`,
+        }));
+      const newScanError =
+        scanError !== undefined && !notified.has(`__scan__\u0000${scanError}`)
+          ? scanError
+          : undefined;
+      if (removed.length === 0 && kept.length === 0 && newScanError === undefined) return;
+      this.#emit({
+        type: 'scratch_sweep',
+        runnerId: this.runnerId,
+        removed: removed.map((name) => ({ name, kind: 'directory' as const })),
+        kept,
+        ...(newScanError === undefined ? {} : { scanError: newScanError }),
+      });
+    } catch {
+      // 掃きの失敗で runner の周期を止めない
+    }
   }
 
   noteDaemonContact(): void {
@@ -1577,6 +1638,8 @@ class Host implements RunnerHost {
       ...(this.#handOverMcpConfigDirFn === undefined
         ? {}
         : { handOverMcpConfigDirFn: this.#handOverMcpConfigDirFn }),
+      mcpConfigTmpRoot: this.#mcpConfigTmpRoot,
+      liveMcpConfigDirs: this.#liveMcpConfigDirs,
       ...(this.#contextUsageTimeoutMs === undefined
         ? {}
         : { contextUsageTimeoutMs: this.#contextUsageTimeoutMs }),
@@ -2398,6 +2461,8 @@ interface RunnerSessionOptions {
   delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
   handOverMcpConfigDirFn?: HandOverResumeConfigDir;
+  mcpConfigTmpRoot?: string;
+  liveMcpConfigDirs?: Set<string>;
   contextUsageTimeoutMs?: number;
   // 一時規則（#4905）の置き直しを待つ期限。既定は `SESSION_ALLOW_RULES_TIMEOUT_MS`。試験が短くするための口
   sessionAllowRulesTimeoutMs?: number;
@@ -2471,6 +2536,8 @@ class RunnerSession {
   readonly #delegationSubreaper: string | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir;
   readonly #handOverMcpConfigDirFn: HandOverResumeConfigDir;
+  readonly #mcpConfigTmpRoot: string;
+  readonly #liveMcpConfigDirs: Set<string>;
   readonly #contextUsageTimeoutMs: number;
   readonly #sessionAllowRulesTimeoutMs: number;
   readonly #rescueMaxWorktrees: number | undefined;
@@ -2654,6 +2721,8 @@ class RunnerSession {
     this.#delegationSubreaper = options.delegationSubreaper;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn ?? chownTreeSync;
     this.#handOverMcpConfigDirFn = options.handOverMcpConfigDirFn ?? chownTreeSync;
+    this.#mcpConfigTmpRoot = options.mcpConfigTmpRoot ?? tmpdir();
+    this.#liveMcpConfigDirs = options.liveMcpConfigDirs ?? new Set<string>();
     this.#contextUsageTimeoutMs = options.contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
     this.#sessionAllowRulesTimeoutMs =
       options.sessionAllowRulesTimeoutMs ?? SESSION_ALLOW_RULES_TIMEOUT_MS;
@@ -3536,12 +3605,17 @@ class RunnerSession {
     const childUser = this.#childUser;
     let dir: string | undefined;
     const remove = (): void => {
-      if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+      if (dir === undefined) return;
+      this.#liveMcpConfigDirs.delete(dir);
+      rmSync(dir, { recursive: true, force: true });
     };
     try {
       let count = 0;
       const args = relocateMcpConfigArgs(options.args, (json) => {
-        dir ??= mkdtempSync(joinPath(tmpdir(), 'alteroid-mcp-'));
+        if (dir === undefined) {
+          dir = mkdtempSync(joinPath(this.#mcpConfigTmpRoot, RUNNER_MCP_CONFIG_DIR_PREFIX));
+          this.#liveMcpConfigDirs.add(dir);
+        }
         count += 1;
         const file = joinPath(dir, `mcp-config-${String(count)}.json`);
         writeFileSync(file, json, { mode: 0o600, flag: 'wx' });

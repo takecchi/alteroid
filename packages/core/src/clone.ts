@@ -233,6 +233,7 @@ import type {
   ChatStreamEvent,
   Commitment,
   InboxEvent,
+  HumanAction,
   HumanActionKind,
   JournalEntry,
   JournalEntryInput,
@@ -1118,6 +1119,8 @@ class Clone implements CloneHost {
   #memoryCarriedAt = new Date().toISOString();
   // `#memoryCarriedAt` と別に持つ: 記憶に差分が無いターンでは後者が進まず、人間の操作の窓だけが古いまま残るため。
   #humanActionCarriedAt = new Date().toISOString();
+  // 時刻の控えだけで切らない: `since` は境目を含むので、読み始めと同じミリ秒の行は次の回にも引かれ、二度載るため。前回引いた印の行の id で外す
+  #humanActionCarriedIds: ReadonlySet<string> = new Set();
   readonly #sdkSession = new CloneSdkSession<AgentCloneSession, AgentUserInput>();
   readonly #env: NodeJS.ProcessEnv;
   readonly #childEnvBase: NodeJS.ProcessEnv;
@@ -6076,13 +6079,21 @@ class Clone implements CloneHost {
   async #withHumanActions(text: string): Promise<string> {
     const readAt = new Date().toISOString();
     const since = this.#humanActionCarriedAt;
-    const section = await this.#humanActionSection(since);
+    const { lines: section, readIds } = await this.#humanActionSection(
+      since,
+      this.#humanActionCarriedIds,
+    );
     this.#humanActionCarriedAt = readAt;
+    // 読めなかった回は控えを残す: 空で上書きすると、境目の行を次の回にもう一度載せるため
+    if (readIds !== undefined) this.#humanActionCarriedIds = readIds;
     return section.length === 0 ? text : [...section, '', '---', '', text].join('\n');
   }
 
   // 件数の窓（`limit`）は `types` で切った後に効き、`humanAction` の有無では切れない: 引いた行が `limit` 件ちょうどなら窓の外にも在りうるので「これで全部」と言わない。
-  async #humanActionSection(since: string): Promise<string[]> {
+  async #humanActionSection(
+    since: string,
+    carriedIds: ReadonlySet<string>,
+  ): Promise<{ lines: string[]; readIds?: ReadonlySet<string> }> {
     let rows: JournalEntry[];
     try {
       rows = await this.#stores.journal.list({
@@ -6091,18 +6102,27 @@ class Clone implements CloneHost {
         limit: HUMAN_ACTION_WINDOW,
       });
     } catch {
-      return [];
+      return { lines: [] };
     }
     const marked = rows.flatMap((row) =>
       row.type === 'decision' && row.humanAction !== undefined
-        ? [{ decision: row.decision, action: row.humanAction }]
+        ? [{ id: row.id, decision: row.decision, action: row.humanAction }]
         : [],
     );
-    if (marked.length === 0) return [];
+    const readIds = new Set(marked.map((row) => row.id));
+    const fresh = marked.filter((row) => !carriedIds.has(row.id));
+    if (fresh.length === 0) return { lines: [], readIds };
+    return { lines: this.#renderHumanActionSection(fresh, rows.length), readIds };
+  }
+
+  #renderHumanActionSection(
+    marked: readonly { decision: string; action: HumanAction }[],
+    rowCount: number,
+  ): string[] {
     // 新しい順で返るので、新しい側を残して古い順に並べ直す
     const shown = marked.slice(0, HUMAN_ACTION_SHOWN).reverse();
     const hidden = marked.length - shown.length;
-    const windowFull = rows.length === HUMAN_ACTION_WINDOW;
+    const windowFull = rowCount === HUMAN_ACTION_WINDOW;
     return [
       '[system] 前回のターンの後に、人間が自分の手で直したことがある（日誌の decision に、人間が API から直接した操作の印が残っている）。',
       ...shown.map(

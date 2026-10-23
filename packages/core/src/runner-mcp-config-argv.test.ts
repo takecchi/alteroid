@@ -1,14 +1,16 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { createCredentialStore } from './credentials.js';
 import type { ManagerToolsSocketHost } from './manager-tools.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
+import { RUNNER_MCP_CONFIG_DIR_PREFIX } from './runner-mcp-config-sweep.js';
 
 const RELAY_TOKEN = 'dummy-secret-relay-token';
 const HUMAN_ENV_VALUE = 'dummy-secret-human-env';
@@ -57,18 +59,22 @@ function fakeChild(onExit: (listener: Exit) => void): never {
 
 let hosts: RunnerHost[] = [];
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(hosts.map((host) => host.shutdown().catch(() => undefined)));
   hosts = [];
 });
 
 async function start(
   handOverMcpConfigDirFn: (dir: string, uid: number, gid: number) => void,
+  sweepIntervalMs?: number,
 ): Promise<{
+  root: string;
   launch: () => string[];
   spawned: string[][];
   exits: Exit[];
   events: RunnerEvent[];
 }> {
+  const mcpConfigTmpRoot = makeTempDirSync('alteroid-mcp-argv-root-');
   const sessions: Options[] = [];
   const events: RunnerEvent[] = [];
   const spawned: string[][] = [];
@@ -99,6 +105,16 @@ async function start(
     },
     handOverResumeConfigDirFn: () => undefined,
     handOverMcpConfigDirFn,
+    mcpConfigTmpRoot,
+    // 本物の /tmp を scratch の掃きの対象にしない
+    ...(sweepIntervalMs === undefined
+      ? {}
+      : {
+          scratchSweep: {
+            tmpRoot: makeTempDirSync('alteroid-mcp-argv-scratch-'),
+            intervalMs: sweepIntervalMs,
+          },
+        }),
   });
   hosts.push(host);
   host.setMcpServers({
@@ -122,6 +138,7 @@ async function start(
     '--verbose',
   ];
   return {
+    root: mcpConfigTmpRoot,
     launch: () => {
       void options.spawnClaudeCodeProcess?.({
         command: 'claude',
@@ -161,6 +178,9 @@ describe('Host: 委譲の CLI の argv に MCP の資格を載せない', () => 
     const dir = file.slice(0, file.lastIndexOf('/'));
     expect(statSync(dir).mode & 0o777).toBe(0o700);
     expect(handed).toEqual([[dir, 1001, 1002]]);
+    // CLI の一時ディレクトリ（`alteroid-mcp-`）と名前が重ならない: 接頭辞で掃いても CLI のものを巻き込まないため
+    expect(path.basename(dir).startsWith(RUNNER_MCP_CONFIG_DIR_PREFIX)).toBe(true);
+    expect(path.basename(dir).startsWith('alteroid-mcp-')).toBe(false);
   });
 
   it('子が終わるとディレクトリごと消える（終わるまでは残る）', async () => {
@@ -170,6 +190,37 @@ describe('Host: 委譲の CLI の argv に MCP の資格を載せない', () => 
     expect(existsSync(dir)).toBe(true);
     for (const listener of exits) listener();
     expect(existsSync(dir)).toBe(false);
+  });
+
+  it('周期の掃きは、落ちた runner の古い残骸だけを消す（走っている委譲・若いもの・別の接頭辞は残す）', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const { launch, exits, root } = await start(() => undefined, 20);
+    const live = (launch()[2] as string).replace(/\/[^/]+$/, '');
+    const old = new Date(Date.now() - 60 * 60_000);
+    const plant = (name: string, mtime: Date | undefined): string => {
+      const dir = path.join(root, name);
+      mkdirSync(dir);
+      writeFileSync(path.join(dir, 'mcp-config-1.json'), '{}');
+      if (mtime !== undefined) utimesSync(dir, mtime, mtime);
+      return dir;
+    };
+    const stale = plant(`${RUNNER_MCP_CONFIG_DIR_PREFIX}stale`, old);
+    const young = plant(`${RUNNER_MCP_CONFIG_DIR_PREFIX}young`, undefined);
+    const cli = plant('alteroid-mcp-cli', old);
+    // 走っている委譲は古く見えても守る: 生きた集合で外す
+    utimesSync(live, old, old);
+
+    await vi.advanceTimersByTimeAsync(20);
+    for (let i = 0; i < 5000 && existsSync(stale); i += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(live)).toBe(true);
+    expect(existsSync(young)).toBe(true);
+    expect(existsSync(cli)).toBe(true);
+
+    for (const listener of exits) listener();
+    expect(existsSync(live)).toBe(false);
   });
 
   it('子へ渡せなければ起動しない（資格を argv へ戻さず、ディレクトリも残さない）', async () => {

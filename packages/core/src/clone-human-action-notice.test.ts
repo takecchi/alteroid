@@ -80,6 +80,24 @@ describe('人間が API から直接した操作を、次のターンの入力�
     }
   });
 
+  it('⭐ 行の時刻が読み始めと同じミリ秒でも、次のターンに二度載せない（窓の境目は含むため）', async () => {
+    const stores = createMemoryStores();
+    // 時計を止める: 書き込みと読み始めを必ず同じミリ秒にそろえ、境目を毎回踏ませる（実時間だと CI でまれにしか踏まない）
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-23T00:00:00.000Z'));
+      const inputs = await turnInputs(stores, async () => {
+        await stores.journal.append(humanDecision('practice_remove', 'same-ms'));
+      });
+
+      expect(inputs[1]).toContain('やり方を消した: same-ms');
+      expect(inputs[2]).not.toContain(HEAD);
+      expect(inputs[2]).not.toContain('same-ms');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('載せた後のターンでは、同じ行を二度載せない', async () => {
     const stores = createMemoryStores();
 

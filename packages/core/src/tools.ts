@@ -10464,11 +10464,15 @@ function renderJournalEntry(
     }
     case 'decision': {
       // 印の無い行の head は従来の `[decision]` のまま: 既存の読み手（画面・試験）の形を変えないため
+      const practice = entry.target === undefined ? '' : ` practice=${entry.target.slug}`;
       const human =
         entry.humanAction === undefined
           ? ''
           : ` humanAction=${entry.humanAction.kind} target=${entry.humanAction.target} via=${describeAnsweredVia(entry.humanAction.via)}`;
-      return { head: `[decision${human}]`, body: `${entry.decision}（根拠: ${entry.grounds}）` };
+      return {
+        head: `[decision${practice}${human}]`,
+        body: `${entry.decision}（根拠: ${entry.grounds}）`,
+      };
     }
     case 'escalation': {
       const to = entry.managerId === undefined ? '' : ` manager=${entry.managerId}`;
