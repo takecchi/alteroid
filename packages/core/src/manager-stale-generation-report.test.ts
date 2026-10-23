@@ -256,3 +256,62 @@ describe('起こし直した新しいセッションが黙っている間の、�
     await h.close();
   });
 });
+
+function oldAsk(summary: string, requestId: string): RunnerEvent {
+  return {
+    type: 'ask',
+    managerId: JOB.id,
+    requestId,
+    kind: 'permission',
+    summary,
+    sessionGeneration: OLD,
+  } as RunnerEvent;
+}
+
+describe('起こし直した新しいセッションが黙っている間の、古いセッションの確認の要求（#5203）', () => {
+  it('⭐ 新しい世代がまだ何も出していなければ、古い世代の確認を捨てずにクローンへ知らせる。答えを求める形にはしない', async () => {
+    const h = await harness();
+    await h.runner.emit(oldAsk('Bash の実行許可: gh pr merge 4184', 'req-old'));
+    await h.settle();
+
+    const inbox = h.inboxText();
+    expect(inbox).toContain('起こし直す前の古いセッションが確認を求めて止まっている');
+    expect(inbox).toContain('Bash の実行許可: gh pr merge 4184');
+    expect(inbox).toContain('manager_answer で答えても届かない');
+    // 答えられる確認として配らない（requestId を付けない・kind は report）
+    const notices = inbox.split('\n').filter((line) => line.includes('確認を求めて止まっている'));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('"kind":"report"');
+    expect(notices[0]).not.toContain('"requestId"');
+    // 待ちの列にも載せない: 台帳は running のまま
+    expect((await h.job())?.status).toBe('running');
+    const journal = await h.journalText();
+    expect(journal).toContain('捨てずにクローンへ知らせる（答えは届かない。#5203）');
+    expect(journal).not.toContain('"type":"escalation"');
+    expect(journal).not.toContain('古いセッションの出来事のため無視');
+
+    // 同じ確認がもう一度届いても二度は知らせない（requestId）
+    await h.runner.emit(oldAsk('Bash の実行許可: gh pr merge 4184', 'req-old'));
+    await h.settle();
+    expect(h.inboxText().match(/確認を求めて止まっている/g)).toHaveLength(1);
+    await h.close();
+  });
+
+  it('新しい世代が一度でも出来事を出していれば、古い世代の確認は今どおり捨てる', async () => {
+    const h = await harness();
+    await h.runner.emit({
+      type: 'session',
+      managerId: JOB.id,
+      sessionId: 'sess-landrule',
+      sessionGeneration: NEW,
+    } as RunnerEvent);
+    await h.settle();
+    await h.runner.emit(oldAsk('古いセッションの遅れた確認', 'req-late'));
+    await h.settle();
+
+    expect(h.inboxText()).not.toContain('古いセッションの遅れた確認');
+    expect((await h.job())?.status).toBe('running');
+    expect(await h.journalText()).toContain('古いセッションの出来事のため無視');
+    await h.close();
+  });
+});

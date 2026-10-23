@@ -2267,6 +2267,12 @@ const TURN_END_PROBE_BACKOFF_MS = 60_000;
 /** 担当ごとに覚える、出来事に付いて届いた世代の数の上限（#5195）。比べたいのはいま追っている世代だけで、古いものは要らない。 */
 const OBSERVED_SESSION_GENERATIONS_MAX = 8;
 
+/** いま追っている世代があり、その世代の出来事がまだ1つも届いていないか（#5195 / #5203）。追っていなければ偽（判定しない）。 */
+function trackedGenerationSilent(record: ManagerRecord): boolean {
+  const tracked = record.sessionGeneration;
+  return tracked !== undefined && record.observedSessionGenerations?.has(tracked) !== true;
+}
+
 /** 旗が立っている相手のほうを長くする: 生ログの末尾が動かない限り助言は変わらない。 */
 const TURN_END_PROBE_BACKOFF_FLAGGED_MS = 5 * 60_000;
 
@@ -9269,14 +9275,13 @@ class Pool implements ManagerPool {
         const record = this.#records.get(managerId);
         const generation =
           record === undefined ? 'unknown' : this.#judgeSessionGeneration(record, event);
-        // 古い世代の `report` でも、新しい世代がまだ何も出していなければ処理し直す（#5195）: 捨てるか配るかは `#handleEvent` の同じ判定に任せる
-        const trackedSilent =
-          record?.sessionGeneration !== undefined &&
-          record.observedSessionGenerations?.has(record.sessionGeneration) !== true;
+        // 古い世代の `report` / `ask` でも、新しい世代がまだ何も出していなければ処理し直す（#5195 / #5203）: 捨てるか知らせるかは `#handleEvent` の同じ判定に任せる
+        const trackedSilent = record !== undefined && trackedGenerationSilent(record);
         if (
           !moved ||
           generation === 'current' ||
-          (event.type === 'report' && (generation === 'unknown' || trackedSilent))
+          (event.type === 'report' && (generation === 'unknown' || trackedSilent)) ||
+          (event.type === 'ask' && trackedSilent)
         ) {
           await this.#onEvent(event, fromRunnerId);
           continue;
@@ -9354,6 +9359,48 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 古い世代の確認の要求（`ask`）でも、いま追っている世代がまだ1つも出来事を出していなければ、捨てずにクローンへ知らせる（#5203）。知らせたら `true`。
+   *
+   * 古いセッションは答えを待って止まり、新しいセッションは黙り、台帳は `running` のまま — 捨てると誰も気づかない。条件は報告（#5195）と同じ。
+   * 待ちの列（`waiting`）には積まず、`waiting_human` にもしない: runner の `answer` は名簿に居るセッション（起こし直した新しい側）にしか
+   * 答えを渡さないので、`manager_answer` で答えても古いセッションへは届かない。答えられるように見せると、答えたのに止まったままになる。
+   * 日誌は `escalation` ではなく `decision` に書く: `escalation` は答えを待つ確認として数えられるため。
+   */
+  async #noticeAskFromUnreplacedSession(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'ask' }>,
+    fromRunnerId: string,
+  ): Promise<boolean> {
+    const tracked = record.sessionGeneration;
+    if (tracked === undefined || !trackedGenerationSilent(record)) return false;
+    if (record.job.status === 'stopped') return false;
+    if (record.job.runnerId !== undefined && record.job.runnerId !== fromRunnerId) return false;
+    const asked = this.#askedOf(record);
+    if (asked.has(event.requestId)) return true;
+    asked.set(event.requestId, true);
+    const managerId = event.managerId;
+    await this.#journal({
+      type: 'decision',
+      decision: `[${managerId}] 古いセッションの確認の要求だが、起こし直した新しいセッションがまだ何も出していないので、捨てずにクローンへ知らせる（答えは届かない。#5203）`,
+      grounds:
+        `いま追っている世代=${tracked} この確認の世代=${event.sessionGeneration ?? '不明'} ` +
+        `runnerId=${fromRunnerId} requestId=${event.requestId} kind=${event.kind} 内容: ${excerptLine(event.summary, WITHHELD_REPORT_EXCERPT)}`,
+    });
+    this.#emit(
+      managerId,
+      'report',
+      [
+        `[${managerId}] （alteroid より: 起こし直す前の古いセッションが確認を求めて止まっている。起こし直した新しいセッションはまだ何も出していない。#5203）`,
+        `確認の種類: ${event.kind}`,
+        `内容: ${event.summary}`,
+        'この確認には manager_answer で答えても届かない（runner は答えを起こし直した新しいセッションへ渡し、古いセッションへの経路が無い）。古いセッションは答えを待ったまま止まり続ける。',
+        '取れる手: 内容が要る仕事なら、manager_send で新しいセッションに同じことを頼み直す。古いセッションは runner の名簿に居ないので manager_stop の対象にならない — 止める必要があれば人間へ上げる。',
+      ].join('\n'),
+    );
+    return true;
+  }
+
+  /**
    * 古い世代の報告でも、いま追っている世代がまだ1つも出来事を出していなければ、捨てずにクローンへ配る（#5195）。配ったら `true`。
    *
    * 起こし直した新しいセッションが黙ったまま、古いセッションが生きてターンを回し続け、その完遂の報告が全部「古いセッションの出来事」として
@@ -9370,9 +9417,7 @@ class Pool implements ManagerPool {
     fromRunnerId: string,
   ): Promise<boolean> {
     const tracked = record.sessionGeneration;
-    if (tracked === undefined || record.observedSessionGenerations?.has(tracked) === true) {
-      return false;
-    }
+    if (tracked === undefined || !trackedGenerationSilent(record)) return false;
     if (event.failure !== undefined) return false;
     if (record.job.status === 'stopped') return false;
     if (record.job.runnerId !== undefined && record.job.runnerId !== fromRunnerId) return false;
@@ -10123,6 +10168,12 @@ class Pool implements ManagerPool {
       if (
         event.type === 'report' &&
         (await this.#deliverReportFromUnreplacedSession(record, event, fromRunnerId))
+      ) {
+        return;
+      }
+      if (
+        event.type === 'ask' &&
+        (await this.#noticeAskFromUnreplacedSession(record, event, fromRunnerId))
       ) {
         return;
       }
