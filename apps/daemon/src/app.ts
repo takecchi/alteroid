@@ -6760,7 +6760,7 @@ export function createApp(deps: AppDeps) {
           if (!(error instanceof UnreadableCommitmentError)) throw error;
           return c.json(
             {
-              error: `${error.message}。読めない形のまま書き直さないので、開き直していない。`,
+              error: `${reasonOf(error)}。読めない形のまま書き直さないので、開き直していない。`,
             },
             409,
           );
@@ -6799,7 +6799,7 @@ export function createApp(deps: AppDeps) {
           if (!(error instanceof UnreadableCommitmentError)) throw error;
           // 開き直しは効いているので 500 にせず、そう言う（返す行が読めなくなっただけ）
           return c.json(
-            { error: `${id} は開き直したが、その後に読めない形になっている: ${error.message}` },
+            { error: `${id} は開き直したが、その後に読めない形になっている: ${reasonOf(error)}` },
             409,
           );
         }

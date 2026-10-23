@@ -5585,7 +5585,7 @@ export function createCloneTools(context: ToolContext) {
           result = await stores.commitments.reopen(id);
         } catch (error) {
           if (!(error instanceof UnreadableCommitmentError)) throw error;
-          return text(`${error.message}。読めない形のまま書き直さないので、開き直していない。`);
+          return text(`${reasonOf(error)}。読めない形のまま書き直さないので、開き直していない。`);
         }
         if (result.kind === 'not-found') {
           return text(await describeCommitmentNotOnLedger(stores, id, context.journalSearch));
