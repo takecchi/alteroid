@@ -18,6 +18,7 @@ import { PgJournalStore } from './journal.js';
 import { PgMcpServerStore } from './mcp-servers.js';
 import {
   ensureJournalConversationSeqIndex,
+  ensureJournalHumanExchangeSeqIndex,
   ensureJournalHumanRepliesIndex,
   ensureJournalWithdrawalsIndex,
   migrateOnBoot,
@@ -74,9 +75,11 @@ export { PgUsageStore } from './usage.js';
 export * from './footprint.js';
 export {
   ensureJournalConversationSeqIndex,
+  ensureJournalHumanExchangeSeqIndex,
   ensureJournalHumanRepliesIndex,
   ensureJournalWithdrawalsIndex,
   JOURNAL_CONVERSATION_SEQ_INDEX,
+  JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX,
   JOURNAL_HUMAN_REPLIES_INDEX,
   JOURNAL_WITHDRAWALS_INDEX,
   migrate,
@@ -217,6 +220,8 @@ export async function createPgStores(options: CreatePgStoresOptions | string): P
     // 1本ずつ作る: 並べると同じ日誌を2本の走査が同時に読み、器の I/O を一度に食うため
     .then(async () => {
       const indexDb = drizzle(indexClient);
+      // 会話の一覧の窓の索引を先に作る: 4本の中で人の待ちに直に効くのはこれで、既に在る索引の確かめは一瞬で済むため
+      await ensureJournalHumanExchangeSeqIndex(indexDb);
       await ensureJournalHumanRepliesIndex(indexDb);
       await ensureJournalWithdrawalsIndex(indexDb);
       await ensureJournalConversationSeqIndex(indexDb);

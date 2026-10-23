@@ -698,6 +698,45 @@ export async function ensureJournalConversationSeqIndex(
   }
 }
 
+/** 人間との往復（`type = 'exchange'` かつ `with = 'human'`）だけを `seq` の順に持つ部分索引 */
+export const JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX = 'journal_human_exchange_seq_idx';
+
+// 述語は `PgJournalStore.listPage` の `types: ['exchange'], with: ['human']` の絞りと同じ式にする: 違うと索引が使われない。
+// 鍵を `seq` だけにする: 読みは `order by seq desc limit`（会話の一覧の窓）と、継続点から `seq` の範囲で頁を進める読みのため。
+// `journal_exchange_with_seq_idx`（`with`, `seq`）があるのに足す理由: planner は `type = 'exchange'` と `with = 'human'` を独立と見て行数を数分の1に見積もり、
+// 2つの索引の BitmapAnd で人間との往復を**全部**本文ごと読んで並べ替えてから `limit` で切る計画に倒れる（偽の日誌 70 万行で窓 1 回 37,216 ページ・99ms、索引ありで約 8,200 ページ・13ms）。
+// 本番は人間との往復の総数が多いほど読む量が増え、会話の一覧（`GET /conversations?limit=30`）で 9 秒かかった
+const CREATE_JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX = `create index concurrently if not exists ${JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX}
+   on journal (seq) where type = 'exchange' and (entry->>'with') = 'human'`;
+
+/**
+ * 人間との往復の部分索引を、書き込みを止めずに作る（会話の一覧の窓・会話 id の前方一致・日報・会話の削除の読み出しを、新しい順に辿って途中で止める形にする）。
+ * 作り方・倒れ方は `ensureJournalHumanRepliesIndex` と同じ（`STATEMENTS` に置かない・`concurrently`・無効なら作り直す・投げない）。
+ */
+export async function ensureJournalHumanExchangeSeqIndex(
+  db: Db,
+  warn: (line: string) => void = (line) => writeStderrLine(line),
+): Promise<void> {
+  try {
+    const result = await db.execute(
+      sql`select i.indisvalid as valid from pg_class c join pg_index i on i.indexrelid = c.oid where c.relname = ${JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX}`,
+    );
+    const found = rowsOf(result)[0] as { valid?: boolean } | undefined;
+    if (found?.valid === true) return;
+    if (found !== undefined) {
+      await db.execute(
+        sql.raw(`drop index concurrently if exists ${JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX}`),
+      );
+    }
+    await db.execute(sql.raw(CREATE_JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX));
+  } catch (error) {
+    warn(
+      `alteroid: 日誌の索引 ${JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX} を作れなかった（${collapseErrorCause(error)}）。` +
+        '索引なしで動き続け（会話の一覧・会話 id の前方一致の読み出しが遅いだけ）、次の起動でやり直す\n',
+    );
+  }
+}
+
 export const OPEN_MANAGER_BODY_INDEX = 'commitments_open_manager_body_idx';
 
 // `STATEMENTS` に置かない: 既存の重複行が在ると作れず、起動のたびに通る配列でデーモンが上がらなくなる。
