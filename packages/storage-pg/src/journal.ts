@@ -390,6 +390,39 @@ export class PgJournalStore implements JournalStore {
     return rows.map((row) => ({ actor: row.actor, count: toNumber(row.count) }));
   }
 
+  // 本文を流さず、前方一致する会話 id だけを、その会話の最新の発言（`seq` の最大）の新しい順に返す。
+  // 絞りは `listPage({ types: ['exchange'], with: ['human'] })` と同じ式で、`journal_human_exchange_seq_idx` に乗る。
+  // 型の確かめは `conversationIdsAfter` と同じ線（判定に使う欄と必須の欄まで）。`jsonb_to_record` で1行1回だけ開く: 欄ごとに `entry->'…'` を書くと、TOAST に出た本文を欄の数だけ展開し直すため
+  async conversationIdsWithPrefix(query: { prefix: string; limit: number }): Promise<string[]> {
+    // NUL を含む値は DB に投げない（`q` と同じ）: text が NUL を受け付けずエラーになるため。どの会話 id も NUL を含まないので、当たりは無い
+    if (hasNul(query.prefix) || query.limit <= 0) return [];
+    const entry = journal.entry;
+    // この問い合わせだけ JIT を切る（`withdrawnClientMessageIds` と同じ作法）: 人間との往復を数千行開いて束ねるだけなのに、費用が JIT の閾値を越えうるため
+    const result = await this.#db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('jit', 'off', true)`);
+      const hidden = await this.#hiddenSets(tx);
+      return tx.execute(sql`
+        select r."conversationId" #>> '{}' as id, max(${journal.seq}) as last
+        from ${journal}
+        cross join lateral jsonb_to_record(${entry}) as r(role text, text jsonb, "conversationId" jsonb)
+        where ${and(
+          hiddenConversationExchangeExcluded(hidden),
+          inArray(journal.type, ['exchange']),
+          inArray(sql`(${entry}->>'with')`, ['human']),
+        )}
+          and r.role in ('inbound', 'outbound')
+          and jsonb_typeof(r.text) = 'string'
+          and jsonb_typeof(r."conversationId") = 'string'
+          and starts_with(r."conversationId" #>> '{}', ${query.prefix})
+        group by 1
+        order by last desc
+        limit ${query.limit}
+      `);
+    });
+    const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
+    return (rows as { id: string }[]).map((row) => row.id);
+  }
+
   // 本文を流さず、会話 id だけを読む。絞りは `listPage({ types: ['exchange'], with: ['human'], order: 'asc', after, until })` と同じ式で、`journal_exchange_with_seq_idx`（`entry->>'with'`, `seq`）に乗る。
   // `list` は型（`journalEntrySchema`）に合わない行を落とすので、ここでも判定に使う欄（`with`）と必須の欄（`role`・`text`）と `conversationId` の型までは SQL で確かめる（`humanReplies` と同じ線）。
   // それ以外の欄だけが型に合わない行（書き込み時の検査があるので、ふつうは無い）は、`list` と違って数える
