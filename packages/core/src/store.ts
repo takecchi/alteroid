@@ -264,6 +264,28 @@ export class JournalAnchorNotFoundError extends Error {
  */
 export type JournalCursor = { id: string; at: string };
 
+/**
+ * 人間との往復の窓の1行を、会話の一覧の判定に要る欄だけで持つ（`JournalStore.conversationWindowHeads`）。
+ * 本文（`text`）と添付は持たない: 一覧に要るのは題になる1件の先頭だけで、それは `exchangeTextHeads` で引く。
+ */
+export interface ConversationWindowRow {
+  id: string;
+  at: string;
+  role: 'inbound' | 'outbound';
+  conversationId?: string;
+  supersedes?: string;
+  clientMessageId?: string;
+  turnFailure?: 'failed' | 'held';
+}
+
+/** 発言の本文の先頭（`JournalStore.exchangeTextHeads`）。`truncated` は本文が `head` より長かったか。`attachments` は添付の数。 */
+export interface ExchangeTextHead {
+  id: string;
+  head: string;
+  truncated: boolean;
+  attachments: number;
+}
+
 export interface JournalPage {
   /** `list()` と同じ中身（読めた行だけ）。 */
   entries: JournalEntry[];
@@ -337,6 +359,29 @@ export interface JournalStore {
    * 省略可能: 持たない器では、呼び手（`conversationIdsNewerThan`）が `listPage` を頁で読み切って同じものを作る。
    */
   conversationIdsAfter?(query: { after: JournalCursor; until?: string }): Promise<string[]>;
+
+  /**
+   * 人間との往復の窓を、本文（`text`・`attachments`）を運ばずに読む。
+   * `listPage({ types: ['exchange'], with: ['human'], order: 'desc', limit: scan, since, until, after })` と同じ行を同じ順で返し、`next` も同じ意味を持つ
+   * （`null` = 先頭に届いた。そうでなければ実際に読んだ最後の行）。
+   * 会話の一覧（`readConversationPage`）が、題に要る1件の先頭のためだけに窓の全行の本文を運ばずに済ませるための口。題の本文は `exchangeTextHeads` で引く。
+   * 削除した会話の行・墓標が名指しした行は `list` と同じく外す。`list` が読み出しで落とす行のうち、判定に使う欄（`with`）と必須の欄（`role`・`text`）の型が合わない行は返さない。
+   * それ以外の欄だけが型に合わない行（書き込み時の検査があるので、ふつうは無い）は返す（`conversationIdsAfter` と同じ線）。
+   * 省略可能: 持たない器では、呼び手が `listPage` で本文ごと読む。
+   */
+  conversationWindowHeads?(query: {
+    scan: number;
+    since?: string;
+    until?: string;
+    after?: JournalCursor;
+  }): Promise<{ rows: ConversationWindowRow[]; next: JournalCursor | null }>;
+
+  /**
+   * 人間との往復の発言の本文の先頭 `chars` 文字（コードポイント）と、それより長かったか・添付の数を、id ごとに返す。並びは契約しない。
+   * 渡した id のうち、人間との往復でない・本文が文字列でない・削除した会話の行・墓標が名指しした行は返さない。
+   * 省略可能: `conversationWindowHeads` と組で持つ（片方だけの器では、呼び手は本文ごと読む道を使う）。
+   */
+  exchangeTextHeads?(query: { ids: readonly string[]; chars: number }): Promise<ExchangeTextHead[]>;
 
   /**
    * 全件を消す（ワークスペースのリセット専用）。「追記専用」の契約への例外で、呼ぶのは `resetWorkspaceState` だけ。
