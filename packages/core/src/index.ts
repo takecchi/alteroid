@@ -449,6 +449,7 @@ export {
 } from './approval-trace.js';
 /** 「蒸留を始めた」ではなく「蒸留が成功で終わった」記録で数える: 開始で数えると、始めたが完了しなかった回（検出したい形）が落ちる。 */
 export {
+  BOOT_DEFERRED_INDEXES_EVENT_SOURCE,
   BOOT_FOOTPRINT_EVENT_SOURCE,
   BOOT_TOOL_SEARCH_EVENT_SOURCE,
   BOOT_TOOL_SEARCH_OBSERVED_EVENT_SOURCE,
