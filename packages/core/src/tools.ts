@@ -5593,6 +5593,11 @@ export function createCloneTools(context: ToolContext) {
         if (result.kind === 'not-closed') {
           return text(`${id} は閉じていない（未了のまま在る）。何もしていない。`);
         }
+        if (result.kind === 'duplicate-open') {
+          return text(
+            `同じ担当・同じ本文の未了の行 ${result.openId} が既に在るので、${id} は開き直していない。`,
+          );
+        }
         const { before } = result;
         // 閉じた記録は行から消えるので、日誌へ逐語で残す: 残さないと「誰がいつ何と言って閉じたか」が二度と読めない
         await appendJournalOrThrow(

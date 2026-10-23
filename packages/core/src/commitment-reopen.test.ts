@@ -76,6 +76,18 @@ describe('commitment_reopen（#5176）', () => {
     expect((await h.stores.commitments.get('c1'))?.closedAt).toBe(CLOSED_AT);
   });
 
+  it('同じ担当・同じ本文の未了の行が在れば、開き直さずその id を言う', async () => {
+    const h = harness();
+    const base = { at: AT, origin: 'manager', source: 'mgr-1', body: '同じ本文' } as const;
+    await h.stores.commitments.open({ ...base, id: 'old' });
+    await h.stores.commitments.close('old', CLOSED_AT, '片付けた', 'clone');
+    await h.stores.commitments.open({ ...base, id: 'new' });
+    const out = await h.call('commitment_reopen', { id: 'old', reason: '戻す' });
+    expect(out).toContain('new');
+    expect(out).toContain('開き直していない');
+    expect((await h.stores.commitments.get('old'))?.closedAt).toBe(CLOSED_AT);
+  });
+
   it('無い id は台帳に無いと言う', async () => {
     const h = harness();
     const out = await h.call('commitment_reopen', { id: 'nope', reason: '戻す' });

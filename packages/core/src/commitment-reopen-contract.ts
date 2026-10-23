@@ -83,4 +83,49 @@ export async function verifyCommitmentReopenContract(store: CommitmentStore): Pr
   // 閉じた行へ同じ id の open は何もしない（冪等）。閉じ直した行は閉じたまま
   const reopenedClosed = await store.open({ ...base, id: 'reopen-1', body: '別の本文' });
   if (reopenedClosed.opened) fail('閉じ直した行の同じ id の open が行を蘇らせた');
+
+  // 同一マネージャー×同一本文の未了が在る間は、閉じた manager 起点の行を開き直さない（`open` の畳み込みと同じ規則。pg は部分一意索引にも当たる）
+  const dup = { at: '2026-03-02T00:00:00.000Z', origin: 'manager', source: 'mgr-dup' } as const;
+  if (!(await store.open({ ...dup, id: 'dup-old', body: '同じ本文' })).opened)
+    fail('重複の試験の行が開かない');
+  if (!(await store.close('dup-old', closedAt, '片付けた', 'clone')))
+    fail('重複の試験の行が閉じられない');
+  if (!(await store.open({ ...dup, id: 'dup-new', body: '同じ本文' })).opened)
+    fail('閉じた後の同文の manager 行が開かない');
+  const duplicate = await store.reopen('dup-old');
+  if (duplicate.kind !== 'duplicate-open' || duplicate.openId !== 'dup-new')
+    fail(`重複になる開き直しが duplicate-open にならない: ${JSON.stringify(duplicate)}`);
+  const stillClosed = await store.get('dup-old');
+  if (stillClosed?.closedAt !== closedAt) fail('duplicate-open が行を書き換えた');
+
+  // 未了の相手が閉じれば開き直せる
+  if (!(await store.close('dup-new', closedAt, '片付けた', 'clone'))) fail('相手が閉じられない');
+  if ((await store.reopen('dup-old')).kind !== 'reopened') fail('相手が閉じた後も開き直せない');
+
+  // origin が manager でない行・source の違う行は、本文が同じでも開き直せる
+  const other = [
+    { id: 'dup-human-a', origin: 'human', source: undefined },
+    { id: 'dup-human-b', origin: 'human', source: undefined },
+  ] as const;
+  for (const entry of other) {
+    if (
+      !(await store.open({ at: dup.at, origin: entry.origin, id: entry.id, body: '人間の同文' }))
+        .opened
+    )
+      fail('人間起点の行が開かない');
+    if (!(await store.close(entry.id, closedAt, '片付けた', 'human')))
+      fail('人間起点の行が閉じられない');
+  }
+  if ((await store.reopen('dup-human-a')).kind !== 'reopened') fail('人間起点の行が開き直せない');
+  if ((await store.reopen('dup-human-b')).kind !== 'reopened')
+    fail('同文の未了が在っても、manager でない行は開き直せるはず');
+
+  const srcA = { at: dup.at, origin: 'manager', body: '出所違いの同文' } as const;
+  if (!(await store.open({ ...srcA, id: 'src-a', source: 'mgr-a' })).opened)
+    fail('src-a が開かない');
+  if (!(await store.open({ ...srcA, id: 'src-b', source: 'mgr-b' })).opened)
+    fail('src-b が開かない');
+  if (!(await store.close('src-a', closedAt, '片付けた', 'clone'))) fail('src-a が閉じられない');
+  if ((await store.reopen('src-a')).kind !== 'reopened')
+    fail('source が違う同文の未了が在っても、開き直せるはず');
 }

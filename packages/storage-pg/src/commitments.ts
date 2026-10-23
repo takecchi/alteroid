@@ -55,6 +55,17 @@ function splitReadableRows(rows: { id: string; at: Date; commitment: unknown }[]
   return { entries, unreadable };
 }
 
+// drizzle は pg の例外を包むので、`cause` を辿って SQLSTATE を探す（`migrate.ts` と同じ作法）
+function sqlStateOf(error: unknown): string | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 8 && typeof current === 'object' && current !== null; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) return code;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
 interface OpenProbeRow {
   inserted: string | null;
   folded_into: string | null;
@@ -289,23 +300,54 @@ export class PgCommitmentStore implements CommitmentStore {
   async reopen(id: string): Promise<CommitmentReopenResult> {
     if (hasNul(id)) return { kind: 'not-found' };
     const reopened = sql`${commitments.commitment} - 'closedAt' - 'closedReason' - 'closedBy' - 'autoCloseWhenBack'`;
-    return this.#db.transaction(async (tx) => {
-      const rows = await tx
-        .select({ closedAt: commitments.closedAt, commitment: commitments.commitment })
-        .from(commitments)
-        .where(eq(commitments.id, id))
-        .limit(1)
-        .for('update');
-      const row = rows[0];
-      if (row === undefined) return { kind: 'not-found' } as const;
-      const before = parseCommitment(id, row.commitment);
-      if (row.closedAt === null) return { kind: 'not-closed' } as const;
-      await tx
-        .update(commitments)
-        .set({ closedAt: null, commitment: reopened })
-        .where(eq(commitments.id, id));
-      return { kind: 'reopened', before } as const;
-    });
+    // 重複の判定は `open` と同じ条件を SQL で書き直す（部分一意索引 `commitments_open_manager_body_idx` と同じ組）。索引が無い DB でも守るため、索引に頼らず先に探す。
+    // それでも並行する `open` に先を越されて 23505 に当たったら、トランザクションは捨てて `duplicate-open` に倒す（500 にしない）。
+    const findDuplicate = async (
+      executor: Pick<Db, 'execute'>,
+      before: Commitment,
+    ): Promise<string | undefined> => {
+      if (before.origin !== 'manager' || before.source === undefined) return undefined;
+      const result = await executor.execute(sql`
+        select id from ${commitments}
+        where id <> ${id}
+          and closed_at is null
+          and commitment->>'origin' = 'manager'
+          and commitment->>'source' = ${stripNulls(before.source)}
+          and commitment->>'body' = ${before.body}
+        limit 1
+      `);
+      const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
+      const found = rows[0] as { id: string } | undefined;
+      return found?.id;
+    };
+    let beforeForRetry: Commitment | undefined;
+    try {
+      return await this.#db.transaction(async (tx): Promise<CommitmentReopenResult> => {
+        const rows = await tx
+          .select({ closedAt: commitments.closedAt, commitment: commitments.commitment })
+          .from(commitments)
+          .where(eq(commitments.id, id))
+          .limit(1)
+          .for('update');
+        const row = rows[0];
+        if (row === undefined) return { kind: 'not-found' };
+        const before = parseCommitment(id, row.commitment);
+        if (row.closedAt === null) return { kind: 'not-closed' };
+        beforeForRetry = before;
+        const openId = await findDuplicate(tx, before);
+        if (openId !== undefined) return { kind: 'duplicate-open', openId };
+        await tx
+          .update(commitments)
+          .set({ closedAt: null, commitment: reopened })
+          .where(eq(commitments.id, id));
+        return { kind: 'reopened', before };
+      });
+    } catch (error) {
+      if (beforeForRetry === undefined || sqlStateOf(error) !== '23505') throw error;
+      const openId = await findDuplicate(this.#db, beforeForRetry);
+      if (openId === undefined) throw error;
+      return { kind: 'duplicate-open', openId };
+    }
   }
 
   // 読んでから書く形にしない: 「編集」と「片付け」の競合で後勝ちが黙って先の書き込みを踏み消すため。

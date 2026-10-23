@@ -306,11 +306,15 @@ export class FsCommitmentStore implements CommitmentStore {
         return { next: file, result: { kind: 'not-found' } };
       }
       if (found.closedAt === undefined) return { next: file, result: { kind: 'not-closed' } };
+      // 重複の判定も同じ排他区間で行う: `open` の畳み込みが守る不変条件を、開き直しの経路で破らないため
+      const reopened = withoutClosedRecord(found);
+      const duplicate = findOpenManagerDuplicate(file.entries, reopened);
+      if (duplicate !== undefined) {
+        return { next: file, result: { kind: 'duplicate-open', openId: duplicate.id } };
+      }
       return {
         next: {
-          entries: file.entries.map((entry) =>
-            entry.id === id ? withoutClosedRecord(entry) : entry,
-          ),
+          entries: file.entries.map((entry) => (entry.id === id ? reopened : entry)),
           unreadable: file.unreadable,
           trimmedClosedCount: file.trimmedClosedCount,
           trimmedClosedIds: file.trimmedClosedIds,

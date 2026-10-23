@@ -84,6 +84,43 @@ describe('POST /commitments/:id/reopen', () => {
     expect(response.status).toBe(404);
   });
 
+  it('同じ担当・同じ本文の未了の行が在れば 409 で、その id を言い、閉じたまま日誌にも残さない', async () => {
+    const { stores, call } = setup();
+    const base = { at: AT, origin: 'manager', source: 'mgr-1', body: '同じ本文' } as const;
+    await stores.commitments.open({ ...base, id: 'old' });
+    await stores.commitments.close('old', CLOSED_AT, '片付けた', 'clone');
+    await stores.commitments.open({ ...base, id: 'new' });
+
+    const response = await call('POST', '/commitments/old/reopen', { reason: '戻す' });
+
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toContain('new');
+    expect((await stores.commitments.get('old'))?.closedAt).toBe(CLOSED_AT);
+    expect(JSON.stringify(await stores.journal.list({ types: ['decision'] }))).not.toContain(
+      '開き直した',
+    );
+  });
+
+  it('開き直した後に行が読めなくなっても 500 にせず、開き直しは効いていると言う', async () => {
+    const base = createMemoryStores();
+    const stores: Stores = {
+      ...base,
+      commitments: {
+        ...base.commitments,
+        get: async (id) => {
+          throw new UnreadableCommitmentError(`${id} は読めない形で入っている`);
+        },
+      },
+    };
+    const { call } = setup(stores);
+    await openAndClose(stores);
+
+    const response = await call('POST', '/commitments/c-1/reopen', { reason: '戻す' });
+
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toContain('開き直した');
+  });
+
   it('未了の行は 409 で、日誌にも残さない', async () => {
     const { stores, call } = setup();
     await stores.commitments.open({ id: 'c-1', at: AT, origin: 'human', body: '本文' });

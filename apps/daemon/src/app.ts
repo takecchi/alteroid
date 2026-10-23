@@ -6720,7 +6720,8 @@ export function createApp(deps: AppDeps) {
           },
           409: {
             description:
-              'まだ閉じていない（何もしない）。または行が読めない形で入っている（書き直さない）。',
+              'まだ閉じていない（何もしない）。同じ担当・同じ本文の未了の行が既に在る（本文にその id を入れて返す。開き直していない）。' +
+              '行が読めない形で入っている（書き直さない）。または開き直した後に行が読めなくなった（開き直しは効いている）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -6747,6 +6748,14 @@ export function createApp(deps: AppDeps) {
         if (result.kind === 'not-closed') {
           return c.json({ error: `${id} は閉じていない（未了のまま在る）。何もしていない` }, 409);
         }
+        if (result.kind === 'duplicate-open') {
+          return c.json(
+            {
+              error: `同じ担当・同じ本文の未了の行 ${result.openId} が既に在るので、${id} は開き直していない`,
+            },
+            409,
+          );
+        }
         const { before } = result;
         // 開き直すこと自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
         await appendJournalOrDrop(
@@ -6761,7 +6770,17 @@ export function createApp(deps: AppDeps) {
           '閉じた仕事を開き直した日誌',
           `id=${id}`,
         );
-        const entry = await stores.commitments.get(id);
+        let entry;
+        try {
+          entry = await stores.commitments.get(id);
+        } catch (error) {
+          if (!(error instanceof UnreadableCommitmentError)) throw error;
+          // 開き直しは効いているので 500 にせず、そう言う（返す行が読めなくなっただけ）
+          return c.json(
+            { error: `${id} は開き直したが、その後に読めない形になっている: ${error.message}` },
+            409,
+          );
+        }
         if (entry === null) return c.json({ error: 'not found' as const }, 404);
         return c.json(commitmentSchema.parse(entry));
       },

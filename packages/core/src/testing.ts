@@ -850,7 +850,10 @@ export function createMemoryStores(): Stores {
       const existing = commitments.get(id);
       if (!existing) return { kind: 'not-found' };
       if (existing.closedAt === undefined) return { kind: 'not-closed' };
-      commitments.set(id, withoutClosedRecord(existing));
+      const reopened = withoutClosedRecord(existing);
+      const duplicate = findOpenManagerDuplicate([...commitments.values()], reopened);
+      if (duplicate !== undefined) return { kind: 'duplicate-open', openId: duplicate.id };
+      commitments.set(id, reopened);
       return { kind: 'reopened', before: isolate(existing) };
     },
     // `origin` の判定はしない: 呼び出し側（`PATCH /commitments/:id`）が確かめてから呼ぶ（`CommitmentStore.editBody` の doc）。

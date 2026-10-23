@@ -952,7 +952,9 @@ export interface CommitmentOpenResult {
 export type CommitmentReopenResult =
   | { readonly kind: 'reopened'; readonly before: Commitment }
   | { readonly kind: 'not-found' }
-  | { readonly kind: 'not-closed' };
+  | { readonly kind: 'not-closed' }
+  /** 開き直すと {@link findOpenManagerDuplicate} と同じ規則で重複になる。何も書いていない（行は閉じたまま）。 */
+  | { readonly kind: 'duplicate-open'; readonly openId: string };
 
 /**
  * 閉じた行から、閉じた記録（`closedAt` / `closedReason` / `closedBy`）と `autoCloseWhenBack` を外した写しを返す（`CommitmentStore.reopen` の書き込み側）。
@@ -1102,6 +1104,8 @@ export interface CommitmentStore {
    * （受け取った時刻と起点が切れないことが、新しく積み直さずに開き直す理由）。
    *
    * 閉じているかの判定と書き込みは1操作に畳む（読んでから書く形にしない。`close` / `editBody` と同じ）。
+   * 開き直した行が同一マネージャー×同一本文の未了と重複するなら、何も書かず `duplicate-open`（`open` が守る不変条件を、開き直しの経路で破らない。
+   * `storage-pg` はこの組に部分一意索引を持つので、破ると UPDATE が一意制約違反で落ちる）。判定は書き込みと同じ排他区間で行う。
    * 読めない行は `get` と同じく `UnreadableCommitmentError` を投げ、書き直さない。NUL を含む id は `not-found`。
    * 外した閉じた記録は行から消えるので、呼び出し側は `before` を日誌へ逐語で残すこと。
    */
