@@ -3382,6 +3382,11 @@ class Pool implements ManagerPool {
   readonly #reattachBusyRetries = new Map<string, number>();
   readonly #resuming = new Set<string>();
   /**
+   * 委譲ごとの、resume が通った回数（`#resume` が `resumed` を返した回。#5207）。鍵の付け替えの畳み（`#foldStaleTokenSession`）が、
+   * 判断を始めてから畳む直前までの間に、別の経路が起こし直していないかを見るためだけに使う。数そのものに意味は無い。
+   */
+  readonly #resumedCount = new Map<string, number>();
+  /**
    * 永続化しない: 試すのを止める印ではなく（断った runner も `hello` のたびに試される）、
    * 再起動後に候補を1巡し直すのは妥当で、無限には試さない。
    */
@@ -4296,6 +4301,8 @@ class Pool implements ManagerPool {
     fingerprintMatched?: true;
     staleDelivery?: { generation: number; blockers: string[] };
   }> {
+    // 判断を始めた時点の resume の回数を控える（#5207）: 畳む直前に読み直し、その間に別の経路が起こし直していたら畳まない
+    const resumedAtStart = this.#resumedCount.get(managerId) ?? 0;
     const held = this.#tokenIdentities.get(managerId)?.generation;
     const identity = this.#tokenIdentity?.();
     const active = identity?.generation;
@@ -4524,6 +4531,29 @@ class Pool implements ManagerPool {
       signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
       source: 'stop',
     }).catch(() => undefined);
+
+    // 畳む直前に読み直す（#5207）: ここまでに runner の一覧・鍵の状態・未 push の観測を待っており、その間に別の経路（枠の回復と鍵の世代の食い違い）が
+    // 同じ担当を新しい鍵で起こし直していることがある。頭で読んだ古い値のまま畳むと、起きたばかりのセッションを壊してもう一度起こし直す
+    // （2026-10-23 heosterra。担当のターンが1つ壊れ、#5205 の引き金にもなった）。畳まなければ、呼び手はいまのセッションへそのまま届ける
+    const resumedMeanwhile = (this.#resumedCount.get(managerId) ?? 0) !== resumedAtStart;
+    const heldNow = this.#tokenIdentities.get(managerId)?.generation;
+    const activeNow = this.#tokenIdentity?.()?.generation;
+    const caughtUp =
+      byGeneration &&
+      heldNow !== undefined &&
+      activeNow !== undefined &&
+      !tokenGenerationMismatched({ tokenGeneration: heldNow, activeTokenGeneration: activeNow });
+    if (resumedMeanwhile || caughtUp) {
+      await this.#journal({
+        type: 'decision',
+        decision: `[${managerId}] 畳む直前に、別の経路が新しい鍵で起こし直していたので、畳まずにいまのセッションへ届ける（#5207）`,
+        grounds:
+          `managerId=${managerId} 判断を始めたときの理由=${staleness} ` +
+          `resume の回数=${String(resumedAtStart)}→${String(this.#resumedCount.get(managerId) ?? 0)} ` +
+          `抱えている鍵の世代=${heldNow === undefined ? '（分からない）' : String(heldNow)} 現役=${activeNow === undefined ? '（分からない）' : String(activeNow)}`,
+      });
+      return {};
+    }
 
     let stopError: unknown;
     try {
@@ -9823,6 +9853,7 @@ class Pool implements ManagerPool {
       material.kind === 'absent' &&
       resumed.reusedLiveSession !== true;
     this.#unresumable.delete(record.job.id);
+    this.#resumedCount.set(record.job.id, (this.#resumedCount.get(record.job.id) ?? 0) + 1);
     return 'resumed';
   }
 

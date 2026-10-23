@@ -714,3 +714,62 @@ describe('起こし直しが届かなかったら、掃きが間隔を伸ばし�
     await s.pool.stop();
   });
 });
+
+describe('畳む直前に読み直す（#5207）', () => {
+  /**
+   * 同じ担当へ2本の送りを同時に出し、2本とも「抱えている鍵が古い」と判断させる。
+   * 2本目の判断が runner の一覧を待っている間に、1本目が畳んで新しい鍵で起こし直す（2026-10-23 heosterra の 3 秒の間の2本）。
+   */
+  async function twoFoldsRacing() {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 0;
+    let release!: () => void;
+    const firstResumed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    s.fake.behavior.onResume = () => release();
+    const originalList = s.fake.runner.list.bind(s.fake.runner);
+    let lists = 0;
+    s.fake.runner.list = async () => {
+      lists += 1;
+      // 2本目の判断の一覧（2回目の呼び出し）だけ、1本目の resume が通るまで待たせる
+      if (lists === 2) await firstResumed;
+      return originalList();
+    };
+    const first = s.pool.send('mgr-fold', '1本目の送り');
+    const second = s.pool.send('mgr-fold', '2本目の送り');
+    const results = await Promise.all([first, second]);
+    await settle();
+    return { s, results };
+  }
+
+  it('⭐ 判断を始めてから畳むまでの間に別の経路が起こし直していたら、畳まずにいまのセッションへ届ける', async () => {
+    const { s, results } = await twoFoldsRacing();
+
+    // 畳みと起こし直しは1本目の1回だけ
+    expect(s.fake.stops).toEqual(['mgr-fold']);
+    expect(s.fake.resumes).toHaveLength(1);
+    // 2本目は、起こし直したセッションへそのまま届く
+    expect(s.fake.sends.map((send) => send.text)).toContain('2本目の送り');
+    expect(results.map((result) => result.outcome)).not.toContain('declined');
+    const decisions = await s.stores.journal.list({ types: ['decision'] });
+    expect(JSON.stringify(decisions)).toContain(
+      '畳む直前に、別の経路が新しい鍵で起こし直していたので、畳まずにいまのセッションへ届ける（#5207）',
+    );
+    await s.pool.stop();
+  });
+
+  it('陽性対照: 1本だけなら、今どおり畳んで新しい鍵で起こし直す', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 0;
+
+    await s.pool.send('mgr-fold', '1本だけの送り');
+    await settle();
+
+    expect(s.fake.stops).toEqual(['mgr-fold']);
+    expect(s.fake.resumes).toHaveLength(1);
+    const decisions = await s.stores.journal.list({ types: ['decision'] });
+    expect(JSON.stringify(decisions)).not.toContain('畳む直前に、別の経路が');
+    await s.pool.stop();
+  });
+});
