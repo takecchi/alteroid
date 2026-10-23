@@ -3131,6 +3131,8 @@ class RunnerSession {
 
   #open(resume?: string): void {
     if (this.#sdkSession.query) return;
+    // 止めたセッションでは CLI を起こさない（#5205）: 立て直し・鍵の回転の開き直しのどの経路から呼ばれても、名簿から外れた後に生きた CLI が残り、stop も答えも届かなくなるため
+    if (this.#sdkSession.stopped) return;
     this.#sdkSession.clearPreRotationClaudeKey();
     // 開いた後は新しい鍵のもと: 前の鍵での作業者の落ちを、次の開き直しへ持ち越さない（#5046）
     this.#workerLimitOnPreRotationKey = false;
@@ -4228,7 +4230,9 @@ class RunnerSession {
           }
         }
 
-        if (!event.succeeded) {
+        // 止めた後の失敗の結果は立て直さない（#5205。`#read` の他の2か所と揃える）: 畳み（stop）で終わったターンの失敗を「resume が戻れなかった」と読み、
+        // 止めたはずのセッションの中に CLI を作り直していた。作り直した CLI は名簿から外れたまま古い世代で出来事を出し続け、stop も答えも届かない
+        if (!event.succeeded && !this.#sdkSession.stopped) {
           const outcome = this.#recoverFromFailedResume(
             `結果なしで終了: ${resultTextOf(event).text}`,
           );
