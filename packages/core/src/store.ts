@@ -319,6 +319,15 @@ export interface JournalStore {
   withdrawnClientMessageIds?(query: { since: string; conversationId?: string }): Promise<string[]>;
 
   /**
+   * 人間との往復（`exchange`・`with: 'human'`）の `conversationId` のうち、`prefix` で始まるものを、その会話の最新の発言の新しい順に、重複なく最大 `limit` 件返す。
+   * `listPage({ types: ['exchange'], with: ['human'] })` を新しい順に最後まで読み、`conversationId` が `prefix` で始まるものを現れた順に集めたときと同じ並び。
+   * 会話 id の確かめ（`lookupConversation`）が、見つからないときに人間との往復を本文ごと頁で最後まで読まずに、前方一致の候補を集めるための口。
+   * 削除した会話の行・墓標が名指しした行は `list` と同じく外す。判定に使う欄（`with`・`conversationId`）と必須の欄（`role`・`text`）の型が合わない行は数えない（`conversationIdsAfter` と同じ線）。
+   * 省略可能: 持たない器では、呼び手が `listPage` を頁で読み切って同じものを作る。
+   */
+  conversationIdsWithPrefix?(query: { prefix: string; limit: number }): Promise<string[]>;
+
+  /**
    * `tool_use` の行を `actor` ごとに数える（`since` 以降・`until` 以前。両端を含む。`listPage` の `since` / `until` と同じ境界）。並びは契約しない。
    * 活動の要約（`buildActivityDigest`）が、窓の大半を占める `tool_use` を本文（道具の入力）ごと頁で運ばずに、層ごとの件数だけ取るための口。
    * 削除した会話の行・墓標が名指しした行は `list` と同じく外す。`actor` が文字列でない行は `list` が読み出しで落とすので、数えない。
