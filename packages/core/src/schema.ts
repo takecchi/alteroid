@@ -134,6 +134,7 @@ export { describeAnsweredVia } from './answered-via.js';
 export const humanActionKindSchema = z.enum([
   'manager_message',
   'commitment_close',
+  'commitment_reopen',
   'schedule_remove',
   'practice_remove',
   'practice_write',

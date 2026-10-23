@@ -189,6 +189,61 @@ describe('POST /commitments/:id/close の印', () => {
   });
 });
 
+describe('POST /commitments/:id/reopen の印', () => {
+  // grounds は開き直す前の記録を後ろに続けるので、前方一致で1行に絞る
+  function reopenDecision(all: Awaited<ReturnType<typeof decisions>>) {
+    const found = all.filter((entry) => entry.grounds?.startsWith('人間が直接 API から開き直した'));
+    expect(found).toHaveLength(1);
+    return found[0] as (typeof all)[number];
+  }
+
+  async function openClosed(): Promise<string> {
+    const app = buildPlainApp();
+    const opened = await app.request(
+      '/commitments',
+      call({}, 'POST', { body: '日報の体裁を直す' }),
+    );
+    const id = ((await opened.json()) as { id: string }).id;
+    await app.request(`/commitments/${id}/close`, call({}, 'POST', { reason: '直した' }));
+    return id;
+  }
+
+  it.each([
+    ['認証を切った構成', {}, { kind: 'operator', auth: 'disabled' }],
+    ['持ち主のトークン', OPERATOR, { kind: 'operator', auth: 'operator-token' }],
+  ])('%s: commitment_reopen と行の id と via が付く', async (_name, headers, via) => {
+    const id = await openClosed();
+    const response = await buildPlainApp().request(
+      `/commitments/${id}/reopen`,
+      call(headers, 'POST', { reason: 'まだ終わっていない' }),
+    );
+    expect(response.status).toBe(200);
+
+    expect(reopenDecision(await decisions()).humanAction).toEqual({
+      kind: 'commitment_reopen',
+      target: id,
+      via,
+    });
+  });
+
+  it('アカウント経路: via に accountId が写る', async () => {
+    const app = buildAuthedApp();
+    const { headers, accountId } = await grantedAccountToken(app);
+    const id = await openClosed();
+    const response = await app.request(
+      `/commitments/${id}/reopen`,
+      call(headers, 'POST', { reason: 'まだ終わっていない' }),
+    );
+    expect(response.status).toBe(200);
+
+    expect(reopenDecision(await decisions()).humanAction).toEqual({
+      kind: 'commitment_reopen',
+      target: id,
+      via: { kind: 'account', accountId },
+    });
+  });
+});
+
 describe('DELETE /schedule/:kind の印', () => {
   async function put(kind: string): Promise<void> {
     await stores.schedules.put({
@@ -430,7 +485,7 @@ describe('連携の鍵（人間ではない）には付けない', () => {
     });
   });
 
-  it('連携の鍵でこの5つの口を叩いても門で 403 になり、decision は1行も積まれない', async () => {
+  it('連携の鍵でこの6つの口を叩いても門で 403 になり、decision は1行も積まれない', async () => {
     const app = buildAuthedApp();
     const created = (await (
       await app.request(
@@ -443,6 +498,7 @@ describe('連携の鍵（人間ではない）には付けない', () => {
 
     const statuses = await Promise.all([
       app.request('/commitments/c-1/close', call(headers, 'POST', { reason: 'x' })),
+      app.request('/commitments/c-1/reopen', call(headers, 'POST', { reason: 'x' })),
       app.request('/schedule/issue-round', call(headers, 'DELETE')),
       app.request('/practices/daily', call(headers, 'DELETE')),
       app.request(
@@ -452,7 +508,7 @@ describe('連携の鍵（人間ではない）には付けない', () => {
       app.request('/managers/mgr-1/messages', call(headers, 'POST', { text: 'x' })),
     ]).then((responses) => responses.map((response) => response.status));
 
-    expect(statuses).toEqual([403, 403, 403, 403, 403]);
+    expect(statuses).toEqual([403, 403, 403, 403, 403, 403]);
     expect((await decisions()).length).toBe(before);
     expect(sends).toEqual([]);
   });

@@ -6787,6 +6787,7 @@ export function createApp(deps: AppDeps) {
             grounds:
               '人間が直接 API から開き直した。開き直す前の記録: ' +
               `closedAt=${before.closedAt ?? '記録なし'}・closedBy=${before.closedBy ?? '記録なし'}・closedReason=${before.closedReason ?? '記録なし'}`,
+            ...humanActionOf(c.get('principal'), 'commitment_reopen', id),
           },
           '閉じた仕事を開き直した日誌',
           `id=${id}`,

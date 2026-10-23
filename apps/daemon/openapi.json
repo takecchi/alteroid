@@ -2594,6 +2594,7 @@
                               "enum": [
                                 "manager_message",
                                 "commitment_close",
+                                "commitment_reopen",
                                 "schedule_remove",
                                 "practice_remove",
                                 "practice_write"
@@ -7902,6 +7903,7 @@
                                     "enum": [
                                       "manager_message",
                                       "commitment_close",
+                                      "commitment_reopen",
                                       "schedule_remove",
                                       "practice_remove",
                                       "practice_write"
@@ -9927,6 +9929,7 @@
                               "enum": [
                                 "manager_message",
                                 "commitment_close",
+                                "commitment_reopen",
                                 "schedule_remove",
                                 "practice_remove",
                                 "practice_write"
@@ -14138,6 +14141,7 @@
                                       "enum": [
                                         "manager_message",
                                         "commitment_close",
+                                        "commitment_reopen",
                                         "schedule_remove",
                                         "practice_remove",
                                         "practice_write"
@@ -16034,6 +16038,7 @@
                                       "enum": [
                                         "manager_message",
                                         "commitment_close",
+                                        "commitment_reopen",
                                         "schedule_remove",
                                         "practice_remove",
                                         "practice_write"
@@ -17930,6 +17935,7 @@
                                     "enum": [
                                       "manager_message",
                                       "commitment_close",
+                                      "commitment_reopen",
                                       "schedule_remove",
                                       "practice_remove",
                                       "practice_write"
@@ -19814,6 +19820,7 @@
                                     "enum": [
                                       "manager_message",
                                       "commitment_close",
+                                      "commitment_reopen",
                                       "schedule_remove",
                                       "practice_remove",
                                       "practice_write"
@@ -24687,7 +24694,7 @@
             }
           },
           "409": {
-            "description": "まだ閉じていない（何もしない）。または行が読めない形で入っている（書き直さない）。",
+            "description": "まだ閉じていない（何もしない）。同じ担当・同じ本文の未了の行が既に在る（本文にその id を入れて返す。開き直していない）。行が読めない形で入っている（書き直さない）。または開き直した後に行が読めなくなった（開き直しは効いている）。",
             "content": {
               "application/json": {
                 "schema": {
