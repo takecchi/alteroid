@@ -8,6 +8,10 @@ describe('実物の SDK: mcpServers は CLI の --mcp-config の引数として�
   // SDK が資格を載せる口を別の形（環境変数・stdin）へ変えたら、差し替えが空振りしていることに気づくための歯
   it('spawnClaudeCodeProcess の args に JSON の --mcp-config が現れ、差し替えると資格が消える', async () => {
     let captured: string[] | undefined;
+    let onSpawned: () => void = () => undefined;
+    const spawned = new Promise<void>((resolve) => {
+      onSpawned = resolve;
+    });
     const q = query({
       prompt: 'x',
       options: {
@@ -17,6 +21,7 @@ describe('実物の SDK: mcpServers は CLI の --mcp-config の引数として�
         },
         spawnClaudeCodeProcess: (spawnOptions) => {
           captured = spawnOptions.args;
+          onSpawned();
           const stdout = new PassThrough();
           queueMicrotask(() => stdout.end());
           return {
@@ -41,9 +46,8 @@ describe('実物の SDK: mcpServers は CLI の --mcp-config の引数として�
         // 閉じた後の失敗は見たいものではない
       }
     })();
-    for (let i = 0; i < 100 && captured === undefined; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+    // 実時間で回して待たない（`wallclock-waits-baseline.json`）: 起こされた瞬間に解ける約束で待つ
+    await spawned;
     q.close();
     await drained;
     expect(captured).toBeDefined();
