@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildActivityDigest,
@@ -1950,12 +1950,20 @@ describe('tool_use は件数の口で数え、走査には載せない', () => {
   it('⭐ 口がある器では、2本目の走査に tool_use が渡らず、件数（clone / delegated）は口が無い器と同じ', async () => {
     const withPort = spiedStores({ withPort: true });
     const withoutPort = spiedStores({ withPort: false });
-    await appendMixed(withPort.stores);
-    await appendMixed(withoutPort.stores);
-    const since = new Date(Date.now() - 60_000);
+    // 時計を止める: 2つの店へ書く行の `at` がミリ秒の境をまたぐと、本文の比べ（「聞かずに決めたこと」の時刻）が揺れて落ちるため
+    vi.useFakeTimers({ toFake: ['Date'] });
+    let viaPort: string;
+    let viaPages: string;
+    try {
+      await appendMixed(withPort.stores);
+      await appendMixed(withoutPort.stores);
+      const since = new Date(Date.now() - 60_000);
 
-    const viaPort = await buildActivityDigest(withPort.stores, { since });
-    const viaPages = await buildActivityDigest(withoutPort.stores, { since });
+      viaPort = await buildActivityDigest(withPort.stores, { since });
+      viaPages = await buildActivityDigest(withoutPort.stores, { since });
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(withPort.types.flat()).not.toContain('tool_use');
     expect(withoutPort.types.flat()).toContain('tool_use');

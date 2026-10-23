@@ -130,6 +130,26 @@ export type AnsweredVia = z.infer<typeof answeredViaSchema>;
 
 export { describeAnsweredVia } from './answered-via.js';
 
+// 値を足すときは書き手（`apps/daemon/src/app.ts`）と同じ変更で足す。`.catch` で未知の値を畳まない: 他の enum 欄（`turnFailureKind` など）と同じく、版のずれで読めない行は「読めない行」として数えられる側に倒す（黙って別の種類に読み替えない）
+export const humanActionKindSchema = z.enum([
+  'manager_message',
+  'commitment_close',
+  'schedule_remove',
+  'practice_remove',
+  'practice_write',
+]);
+
+export type HumanActionKind = z.infer<typeof humanActionKindSchema>;
+
+export const humanActionSchema = z.object({
+  kind: humanActionKindSchema,
+  // 委譲の id・台帳の行の id・定期の依頼の kind・やり方の slug。種類ごとに指すものが違うので、型を分けず文字列で持つ
+  target: z.string().min(1),
+  via: answeredViaSchema,
+});
+
+export type HumanAction = z.infer<typeof humanActionSchema>;
+
 type AssertTrue<T extends true> = T;
 
 // `AnsweredVia` をそのまま使わず手で写す: 軽い口（`answered-via.ts`）は zod を import できないため
@@ -398,6 +418,19 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * （この欄が入る前のやり方の書き込みにも無い）。読む側は無い行を壊さず「印なし」として扱う。
      */
     target: z.object({ kind: z.literal('practice'), slug: z.string().min(1) }).optional(),
+    /**
+     * 人間が API から直接した操作（クローンの作ったもの・進めていたものを取り消す・書き換える）の印。
+     * 文面（grounds）から拾う代わりに構造で持つ: 文言を直した瞬間に黙って外れるため。
+     * 器の内部の処理（自動で閉じる・自動で畳む）と、連携の鍵の呼び出しには付けない。
+     *
+     * **`via` は「人間がした」の証拠ではなく、どの口から来たかの監査の記録である。**
+     * 持ち主のトークンや認証を切った構成では、クローンの Bash からも同じ口を叩けるため
+     * （docs/architecture.md「承認への回答と許可の記録 — 境界ではなく監査の層」と同じ扱い）。
+     *
+     * **optional（版のずれへの備え）。** 無い行は「人間の操作ではない」とは限らない
+     * （この欄が入る前の人間の操作にも無い）。読む側は無い行を壊さず「印なし」として扱う。
+     */
+    humanAction: humanActionSchema.optional(),
   }),
   // `exchange` に混ぜず種別を分ける: 雑多入れだと `journal_read` の `types` で絞れず、クローンが出どころの混ざった中を漁ることになるため
   // 値（`value`）を入れない: 日誌は Web にもクローンにも流れるため
