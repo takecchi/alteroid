@@ -1,5 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
+  Options,
   PermissionResult,
   Query,
   SDKUserMessage,
@@ -19,6 +20,7 @@ import type {
 } from './agent-session.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import { toSdkContent } from './claude-user-content.js';
+import { stageCloneMcpServers, type CloneMcpConfigFile } from './clone-mcp-config-file.js';
 import { isDaemonAnsweredTool } from './daemon-answered-tool.js';
 import { readSessionUsage } from './usage.js';
 
@@ -82,7 +84,47 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
 
   open(spec: AgentManagerSessionSpec): AgentManagerSession {
     const spawnProcess = spec.spawnProcess;
-    const options = buildManagerSessionOptions({
+    // `spawnProcess` が在る（childUser の経路）ときはファイルへ逃がさない: そちらは runner の `#stageMcpConfig` が argv の JSON を差し替えていて、二重にしないため
+    // 書けなければ投げる: JSON を argv へ戻して始めると、資格が同じ器の他のプロセスから読める
+    const file =
+      spawnProcess === undefined && spec.mcpServers !== undefined
+        ? stageCloneMcpServers(spec.mcpServers).file
+        : undefined;
+    const removeMcpConfig = (): void => file?.remove();
+    let q: Query;
+    try {
+      q = this.#queryFn({ prompt: toSdkInput(spec.input), options: this.#options(spec, file) });
+    } catch (error) {
+      removeMcpConfig();
+      throw error;
+    }
+    return {
+      readEvents: async (onEvent) => {
+        try {
+          for await (const message of q) {
+            for (const event of foldClaudeMessage(message)) await onEvent(event);
+          }
+        } finally {
+          removeMcpConfig();
+        }
+      },
+      close: () => {
+        // 先に消す: close が投げても資格のファイルを残さないため
+        removeMcpConfig();
+        q.close();
+      },
+      contextUsage: () => q.getContextUsage(),
+      sessionModelUsage: () => readSessionUsage(q),
+      // `applyFlagSettings` を持たない Query（テストの fake）では口ごと省く: 出すと呼ぶたびに失敗の note が出て、口が無い provider と同じ「今までどおり」に倒れないため
+      ...(typeof (q as Partial<Query>).applyFlagSettings === 'function'
+        ? { setSessionAllowRules: (rules: readonly string[]) => setFlagAllowRules(q, rules) }
+        : {}),
+    };
+  }
+
+  #options(spec: AgentManagerSessionSpec, file: CloneMcpConfigFile | undefined): Options {
+    const spawnProcess = spec.spawnProcess;
+    return buildManagerSessionOptions({
       model: spec.model,
       permissionMode: spec.strictApprovals === true ? 'default' : spec.permissionMode,
       systemPromptAppend: spec.systemPromptAppend,
@@ -94,6 +136,7 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
       managerAutoMemoryEnabled: spec.managerAutoMemoryEnabled,
       ...(spec.reportLanguage === undefined ? {} : { reportLanguage: spec.reportLanguage }),
       ...(spec.mcpServers === undefined ? {} : { mcpServers: spec.mcpServers }),
+      ...(file === undefined ? {} : { mcpConfigPath: file.path }),
       ...(spec.plugins === undefined ? {} : { plugins: spec.plugins }),
       sessionStore: toSessionStore(spec.sessionLog),
       ...(spec.resume === undefined ? {} : { resume: spec.resume }),
@@ -127,20 +170,5 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
       onSubagentStop: spec.onSubagentStop,
       onStop: spec.onStop,
     });
-    const q = this.#queryFn({ prompt: toSdkInput(spec.input), options });
-    return {
-      readEvents: async (onEvent) => {
-        for await (const message of q) {
-          for (const event of foldClaudeMessage(message)) await onEvent(event);
-        }
-      },
-      close: () => q.close(),
-      contextUsage: () => q.getContextUsage(),
-      sessionModelUsage: () => readSessionUsage(q),
-      // `applyFlagSettings` を持たない Query（テストの fake）では口ごと省く: 出すと呼ぶたびに失敗の note が出て、口が無い provider と同じ「今までどおり」に倒れないため
-      ...(typeof (q as Partial<Query>).applyFlagSettings === 'function'
-        ? { setSessionAllowRules: (rules: readonly string[]) => setFlagAllowRules(q, rules) }
-        : {}),
-    };
   }
 }

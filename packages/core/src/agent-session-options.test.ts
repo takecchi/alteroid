@@ -23,6 +23,7 @@ import {
 import { buildCloneToolRelayChildDistForTesting } from './clone-tool-relay-child-build.test-support.js';
 import { CLONE_TOOLS_TRANSPORT_ENV_KEY } from './clone-tools-transport.js';
 import { ALWAYS_REDELIVER, CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
+import { withEffectiveMcpServers } from './mcp-config-file.test-support.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import {
@@ -313,7 +314,7 @@ interface Started {
 function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
   const started: Started[] = [];
   const fn = ((input: { options: Options }) => {
-    started.push({ options: input.options });
+    started.push({ options: withEffectiveMcpServers(input.options) });
     let finish: (() => void) | undefined;
 
     async function* generate(): AsyncGenerator<SDKMessage, void> {

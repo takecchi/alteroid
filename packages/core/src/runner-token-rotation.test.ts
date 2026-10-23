@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createCredentialStore, fingerprintOf } from './credentials.js';
+import { withEffectiveMcpServers } from './mcp-config-file.test-support.js';
 import { PEER_MCP_SERVER_NAME } from './peer-broker.js';
 import { createRunnerHost, type RunnerHost, type RunnerHostOptions } from './runner.js';
 import { runnerManagerStateSchema, type RunnerEvent } from './runner-protocol.js';
@@ -33,7 +34,7 @@ function fakeSdk(opts: { abortOnInputClose?: boolean; skipInit?: boolean } = {})
 
   const fn = ((params: { prompt: unknown; options?: Options }) => {
     const isFirstSession = sessions.length === 0;
-    startedOptions.push(params.options as Options);
+    startedOptions.push(withEffectiveMcpServers(params.options as Options));
     const label =
       (params.options as Options | undefined)?.resume ?? `sess-${String(sessions.length + 1)}`;
     const iterator = (params.prompt as AsyncIterable<{ message: { content: unknown } }>)[
@@ -185,7 +186,7 @@ function fakeSdkOutOfBand(): {
   let seq = 0;
 
   const fn = ((params: { prompt: unknown; options?: Options }) => {
-    startedOptions.push(params.options as Options);
+    startedOptions.push(withEffectiveMcpServers(params.options as Options));
     const label =
       (params.options as Options | undefined)?.resume ?? `sess-${String(sessions.length + 1)}`;
 

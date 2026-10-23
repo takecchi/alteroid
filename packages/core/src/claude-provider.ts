@@ -712,12 +712,32 @@ export interface ManagerSessionOptionsRequest {
   /** 省けば `settings.language` を載せない（今と同じ settings）。#4977 */
   reportLanguage?: ReportLanguageMode;
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /** インプロセス以外の MCP 登録を書いたファイル（`clone-mcp-config-file.ts`）。在れば `--mcp-config` はそのパスだけを指す。 */
+  mcpConfigPath?: string;
   /**
    * runner が展開した plugin（`Options.plugins` の `type: 'local'` へ写す）。省略・空なら欄ごと省く。
    * **`agents`（作業者）には何も足さない** — 作業者は親のセッションから受け継ぐ見込みで、
    * `AgentDefinition.skills` は名前の配列しか取れず、列挙すると増えた分に追いつかない。
    */
   plugins?: readonly ClonePluginRequest[];
+}
+
+// 空なら載せない: 登録を置いていない構成の挙動を動かさないため
+// `mcpServers` に人間の登録を残したまま `extraArgs` を足さない: SDK が `--mcp-config <JSON>` も載せ、旗が2回現れて資格が argv に残るため
+function managerMcpOptions(
+  mcpServers: Readonly<Record<string, McpServerConfig>> | undefined,
+  mcpConfigPath: string | undefined,
+): Pick<Options, 'mcpServers' | 'extraArgs'> {
+  if (mcpConfigPath === undefined) {
+    return mcpServers === undefined || Object.keys(mcpServers).length === 0
+      ? {}
+      : { mcpServers: { ...mcpServers } };
+  }
+  const inProcess = splitInProcessMcpServers(mcpServers ?? {}).inProcess;
+  return {
+    ...(Object.keys(inProcess).length === 0 ? {} : { mcpServers: inProcess }),
+    extraArgs: { 'mcp-config': mcpConfigPath },
+  };
 }
 
 // 段落（`REPORT_LANGUAGE_PROMPT_PARAGRAPH`）を主にし、こちらは添え: 作業者にどこまで効くかは CLI の作り次第で確かめられないため（#4977）
@@ -752,6 +772,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     managerAutoMemoryEnabled,
     reportLanguage,
     mcpServers,
+    mcpConfigPath,
     plugins,
   } = request;
   const sdkLanguage = reportLanguage === undefined ? undefined : SDK_LANGUAGE_OF[reportLanguage];
@@ -782,10 +803,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     cwd,
     // 記憶ストアの MCP 登録は `.mcp.json` とは別に `mcpServers` で渡す: Railway では `.mcp.json` の置き場が再デプロイで消え、設定だけだとこの層の連携が0本になるため
     settingSources: ['user', 'project', 'local'],
-    // 空なら載せない: 登録を置いていない構成の挙動を動かさないため
-    ...(mcpServers === undefined || Object.keys(mcpServers).length === 0
-      ? {}
-      : { mcpServers: { ...mcpServers } }),
+    ...managerMcpOptions(mcpServers, mcpConfigPath),
     ...clonePluginOptions(plugins),
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     // 上の `agents`（作業者）側には `skills` を書かない: `AgentDefinition.skills` は `'all'` を受けず、名前の配列は明示リストで絞ることになり、preload で作業者の文脈へ先に載って畳んだ意味も消えるため

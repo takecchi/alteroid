@@ -5,13 +5,14 @@ import { PassThrough } from 'node:stream';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { Query, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import type { Options, Query, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import type { AgentChildProcess } from './agent-session.js';
 import { CODEX_PEER_CLOSED_REASON } from './agent-provider-peers.js';
 import { createCredentialStore } from './credentials.js';
+import { withEffectiveMcpServers } from './mcp-config-file.test-support.js';
 import { PEER_MCP_SERVER_NAME } from './peer-broker.js';
 import { REPORT_LANGUAGE_PROMPT_PARAGRAPH } from './report-language.js';
 import type { RunnerEvent } from './runner-protocol.js';
@@ -28,7 +29,7 @@ import {
 function capturingQuery(): { fn: typeof sdkQuery; options: () => Record<string, unknown> } {
   let captured: Record<string, unknown> = {};
   const fn = vi.fn((args: { options: Record<string, unknown> }) => {
-    captured = args.options;
+    captured = withEffectiveMcpServers(args.options as Options);
     let close = (): void => undefined;
     const closed = new Promise<void>((resolve) => {
       close = resolve;

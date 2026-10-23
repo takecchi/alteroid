@@ -1,13 +1,14 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { Query, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import type { Options, Query, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { createCredentialStore } from './credentials.js';
+import { withEffectiveMcpServers } from './mcp-config-file.test-support.js';
 import {
   MANAGER_TOOLS_MCP_SERVER_NAME,
   OUTPUT_RECORD_TOOL_NAME,
@@ -23,7 +24,7 @@ import { createRunnerHost, type RunnerManagerToolsOptions } from './runner.js';
 function capturingQuery(): { fn: typeof sdkQuery; options: () => Record<string, unknown> } {
   let captured: Record<string, unknown> = {};
   const fn = vi.fn((args: { options: Record<string, unknown> }) => {
-    captured = args.options;
+    captured = withEffectiveMcpServers(args.options as Options);
     let close = (): void => undefined;
     const closed = new Promise<void>((resolve) => {
       close = resolve;
