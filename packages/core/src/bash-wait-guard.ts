@@ -872,7 +872,10 @@ export function inspectBashCommand(
 }
 
 function inspectWaitForms(trimmed: string, invocation: BashInvocation): WaitGuardVerdict {
-  const waitView = stripDataHeredocsForWaitForms(trimmed);
+  // 引数を実行しないコマンドの引用符の中身は、tail だけでなくループと gh run watch の判定でも消す（#5198）: `gh issue comment --body "while …; do sleep …; done"` のような説明の文を待ちの形と読んで断っていたため。長さは変えないので位置はそのまま使える
+  const waitView = blankQuotedInteriorForNonExecutingCommands(
+    stripDataHeredocsForWaitForms(trimmed),
+  );
 
   if (isBackgroundedGhRunWatch(waitView, invocation.backgrounded === true)) {
     return {
