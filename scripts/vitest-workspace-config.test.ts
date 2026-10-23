@@ -14,6 +14,11 @@ import { listGitScannableFiles } from './git-scannable-files-core.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
+// 歯B は子の vitest を1本まるごと起こすので、単独でも1秒を超え、器が混んでいると既定の 5 秒に収まらない（#5212）。
+// 子の上限を試験の上限より短くする: 子が戻らないとき、試験の上限より先に子を止めて、止めたことと子の出力を失敗の文言に残すため
+const CHILD_VITEST_TIMEOUT_MS = 50_000;
+const INTEGRATION_TEST_TIMEOUT_MS = 60_000;
+
 // `scripts/test.mjs` を経由せず vitest を直接起こす: 経由すると `--root=../..` を vitest へ渡すので、直接叩いた形の再現にならないため。
 describe('vitest.workspace-config.ts の配線（#2157）', () => {
   it('歯A: root を repo の根に固定し、test.dir をそのパッケージへ絞り、include を1本に置き換える', () => {
@@ -78,11 +83,15 @@ describe('vitest.workspace-config.ts の配線（#2157）', () => {
             NO_COLOR: '1',
           },
           encoding: 'utf8',
+          timeout: CHILD_VITEST_TIMEOUT_MS,
         });
 
         expect(
           result.status,
-          `子の vitest が非0で終わった。\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+          (result.signal === null
+            ? '子の vitest が非0で終わった。'
+            : `子の vitest が ${String(CHILD_VITEST_TIMEOUT_MS)}ms で終わらず ${result.signal} で止めた。`) +
+            `\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
         ).toBe(0);
 
         const testsLine = result.stdout.match(/Tests\s+(\d+) passed \((\d+)\)/);
@@ -96,5 +105,6 @@ describe('vitest.workspace-config.ts の配線（#2157）', () => {
         }
       }
     },
+    INTEGRATION_TEST_TIMEOUT_MS,
   );
 });
