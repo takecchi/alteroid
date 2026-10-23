@@ -198,7 +198,8 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // 2026-10-17 #4798: plugin の展開し直しの日誌1行を足したので 81 -> 82（main 取り込み後の以前の期待値は 81）
   // 2026-10-18 #5048: 担当が戻っていた知らせを畳んだ日誌1行（`#foldRecoveredNotice`、接頭辞 THINNING）を足したので 82 -> 83
   'clone.ts': 83,
-  'manager.ts': 66,
+  // 2026-10-23 #5195: 新しい世代が黙っている間の古い世代の報告を配る日誌1行（`#deliverReportFromUnreplacedSession`、接頭辞 REPLY）を足したので 66 -> 67
+  'manager.ts': 67,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
