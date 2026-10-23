@@ -8,6 +8,7 @@ import {
   verifyCommitmentEditUnreadableContract,
   verifyCommitmentAutoCloseMarkContract,
   verifyCommitmentFoldContract,
+  verifyCommitmentReopenContract,
   verifyCommitmentTieOrderContract,
   verifyJournalStoreHorizonContract,
   verifyConversationPageContract,
@@ -496,6 +497,10 @@ describe('PgJournalStore', () => {
 
     it('自動クローズの印の契約（#5164。3実装で同じことを測る）', async () => {
       await verifyCommitmentAutoCloseMarkContract(stores.commitments);
+    });
+
+    it('開き直しの契約（#5176。3実装で同じことを測る）', async () => {
+      await verifyCommitmentReopenContract(stores.commitments);
     });
 
     it('editBody の ifMatch の契約（#3786。3実装で同じことを測る）', async () => {

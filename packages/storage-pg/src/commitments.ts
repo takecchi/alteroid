@@ -13,6 +13,7 @@ import type {
   CommitmentList,
   EditCommitmentBodyOptions,
   CommitmentOpenResult,
+  CommitmentReopenResult,
   CommitmentStore,
   UnreadableCommitment,
 } from '@alteroid/core';
@@ -281,6 +282,30 @@ export class PgCommitmentStore implements CommitmentStore {
       .where(and(inArray(commitments.id, [...queryable]), isNull(commitments.closedAt)))
       .returning({ id: commitments.id });
     return updated.map((row) => row.id);
+  }
+
+  // 行ロック（`for update`）の中で読んで書く: 閉じているかの判定と書き込みのあいだに別の書き込みが入ると、`before` が実際に外した記録とずれるため。
+  // 読めない行は `editBody` と同じく書き直さず投げる。jsonb の欄から `-` で外す: 列 `closed_at` と中身を両方戻さないと、読み出しが閉じたままの値を見るため。
+  async reopen(id: string): Promise<CommitmentReopenResult> {
+    if (hasNul(id)) return { kind: 'not-found' };
+    const reopened = sql`${commitments.commitment} - 'closedAt' - 'closedReason' - 'closedBy' - 'autoCloseWhenBack'`;
+    return this.#db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ closedAt: commitments.closedAt, commitment: commitments.commitment })
+        .from(commitments)
+        .where(eq(commitments.id, id))
+        .limit(1)
+        .for('update');
+      const row = rows[0];
+      if (row === undefined) return { kind: 'not-found' } as const;
+      const before = parseCommitment(id, row.commitment);
+      if (row.closedAt === null) return { kind: 'not-closed' } as const;
+      await tx
+        .update(commitments)
+        .set({ closedAt: null, commitment: reopened })
+        .where(eq(commitments.id, id));
+      return { kind: 'reopened', before } as const;
+    });
   }
 
   // 読んでから書く形にしない: 「編集」と「片付け」の競合で後勝ちが黙って先の書き込みを踏み消すため。

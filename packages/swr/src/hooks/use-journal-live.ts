@@ -103,6 +103,7 @@ const LEDGER_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'commitment_open',
   'commitment_close',
   'commitment_close_many',
+  'commitment_reopen',
   'commitment_edit',
 ]);
 

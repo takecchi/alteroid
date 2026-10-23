@@ -532,6 +532,7 @@ export const CLONE_TOOL_NAMES = [
   'commitment_open',
   'commitment_close',
   'commitment_close_many',
+  'commitment_reopen',
   'commitment_edit',
   'progress_read',
   'github_observation_record',
@@ -581,6 +582,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'commitment_open',
   'commitment_close',
   'commitment_close_many',
+  'commitment_reopen',
   'commitment_edit',
   'inbox_remove_many',
   'profile_write',
@@ -671,6 +673,7 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   commitment_open: false,
   commitment_close: false,
   commitment_close_many: false,
+  commitment_reopen: false,
   commitment_edit: false,
   inbox_remove_many: false,
   profile_write: true,
@@ -5471,6 +5474,7 @@ export function createCloneTools(context: ToolContext) {
         '引き受けた仕事が片付いたことを記録する。**返事をしただけでは閉じない。**',
         '委譲したなら、マネージャーが報告を返して始末がつくまでは開いたままにしておくこと。',
         'やらないと決めたのなら、それも片付いたうちである（理由にそう書いて閉じる）。',
+        '閉じた行を後から否定するなら `commitment_reopen` で開き直す（`commitment_open` で積み直すと受け取った時刻と起点が切れる）。',
       ].join(' '),
       {
         id: z.string().describe('commitment_list に出ている id'),
@@ -5550,6 +5554,116 @@ export function createCloneTools(context: ToolContext) {
             ? `${id}（読めない形で入っていた仕事）を片付けた。中身が読めないため、本文の書き直しはできない。`
             : `${id} を片付けた。`,
         );
+      },
+    ),
+
+    tool(
+      'commitment_reopen',
+      [
+        '閉じた行を未了へ開き直す。クローンが閉じた行も、人間が閉じた行も、器が自動で閉じた行（`closedBy: daemon`）も、後から否定できる。',
+        '**`commitment_open` で積み直さない**: 受け取った時刻と起点が切れる。`commitment_open` は同じ id なら何もしない（冪等）ので、閉じた行は蘇らない。',
+        '受け取った時刻・起点・本文はそのままで、`closedAt` / `closedReason` / `closedBy` と`autoCloseWhenBack` が外れる',
+        '（器が自動で閉じた行を否定したのに、担当が戻った合図で器がまた閉じることはない）。',
+        '**開き直す前の閉じた時刻・閉じた主体・理由は日誌へ逐語で残る**（行からは消えるため）。',
+      ].join(' '),
+      {
+        id: z.string().describe('commitment_list（includeClosed: true）に出ている、閉じた行の id'),
+        reason: z
+          .string()
+          .describe(
+            `なぜ開き直すか（閉じたのが誤りだった理由、状況が変わった理由。${formatStringLengthJa({ min: 1 })}）。人間はこれを読んで後から否定する`,
+          ),
+      },
+      async ({ id, reason }) => {
+        const reasonError =
+          describeStringLengthViolation('reason', reason, { min: 1 }) ??
+          describeBlankViolation('reason', reason);
+        if (reasonError !== null) return text(reasonError);
+        // 閉じているかの判定は台帳の戻り値に任せる（`commitment_close` と同じ）: 先に `get` して判断すると、2つの開き直しが両方「閉じている」を読んで二重に日誌へ残る
+        let result;
+        try {
+          result = await stores.commitments.reopen(id);
+        } catch (error) {
+          if (!(error instanceof UnreadableCommitmentError)) throw error;
+          return text(
+            `${error.message}。読めない形のまま書き直さないので、開き直していない。`,
+          );
+        }
+        if (result.kind === 'not-found') {
+          return text(await describeCommitmentNotOnLedger(stores, id, context.journalSearch));
+        }
+        if (result.kind === 'not-closed') {
+          return text(`${id} は閉じていない（未了のまま在る）。何もしていない。`);
+        }
+        const { before } = result;
+        // 閉じた記録は行から消えるので、日誌へ逐語で残す: 残さないと「誰がいつ何と言って閉じたか」が二度と読めない
+        await appendJournalOrThrow(
+          'commitment_reopen',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `閉じた仕事を自分で開き直した（${id}）: ${reason}`,
+            grounds:
+              'クローン自身が commitment_reopen で開き直した。開き直す前の記録: ' +
+              `closedAt=${before.closedAt ?? '記録なし'}・closedBy=${before.closedBy ?? '記録なし'}・closedReason=${before.closedReason ?? '記録なし'}`,
+          },
+          'act-completed',
+        );
+        return text(`${id} を開き直した（閉じた記録は日誌に残してある）。`);
+      },
+    ),
+
+    tool(
+      'commitment_reopen',
+      [
+        '閉じた行を未了へ開き直す。クローンが閉じた行も、人間が閉じた行も、器が自動で閉じた行（`closedBy: daemon`）も、後から否定できる。',
+        '**`commitment_open` で積み直さない**: 受け取った時刻と起点が切れる。`commitment_open` は同じ id なら何もしない（冪等）ので、閉じた行は蘇らない。',
+        '受け取った時刻・起点・本文はそのままで、`closedAt` / `closedReason` / `closedBy` と `autoCloseWhenBack` が外れる',
+        '（器が自動で閉じた行を否定したのに、担当が戻った合図で器がまた閉じることはない）。',
+        '**開き直す前の閉じた時刻・閉じた主体・理由は日誌へ逐語で残る**（行からは消えるため）。',
+      ].join(' '),
+      {
+        id: z.string().describe('commitment_list（includeClosed: true）に出ている、閉じた行の id'),
+        reason: z
+          .string()
+          .describe(
+            `なぜ開き直すか（閉じたのが誤りだった理由、状況が変わった理由。${formatStringLengthJa({ min: 1 })}）。人間はこれを読んで後から否定する`,
+          ),
+      },
+      async ({ id, reason }) => {
+        const reasonError =
+          describeStringLengthViolation('reason', reason, { min: 1 }) ??
+          describeBlankViolation('reason', reason);
+        if (reasonError !== null) return text(reasonError);
+        // 閉じているかの判定は台帳の戻り値に任せる（`commitment_close` と同じ）: 先に `get` して判断すると、2つの開き直しが両方「閉じている」を読んで二重に日誌へ残る
+        let result;
+        try {
+          result = await stores.commitments.reopen(id);
+        } catch (error) {
+          if (!(error instanceof UnreadableCommitmentError)) throw error;
+          return text(`${error.message}。読めない形のまま書き直さないので、開き直していない。`);
+        }
+        if (result.kind === 'not-found') {
+          return text(await describeCommitmentNotOnLedger(stores, id, context.journalSearch));
+        }
+        if (result.kind === 'not-closed') {
+          return text(`${id} は閉じていない（未了のまま在る）。何もしていない。`);
+        }
+        const { before } = result;
+        // 閉じた記録は行から消えるので、日誌へ逐語で残す: 残さないと「誰がいつ何と言って閉じたか」が二度と読めない
+        await appendJournalOrThrow(
+          'commitment_reopen',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `閉じた仕事を自分で開き直した（${id}）: ${reason}`,
+            grounds:
+              'クローン自身が commitment_reopen で開き直した。開き直す前の記録: ' +
+              `closedAt=${before.closedAt ?? '記録なし'}・closedBy=${before.closedBy ?? '記録なし'}・closedReason=${before.closedReason ?? '記録なし'}`,
+          },
+          'act-completed',
+        );
+        return text(`${id} を開き直した（閉じた記録は日誌に残してある）。`);
       },
     ),
 
@@ -5735,7 +5849,7 @@ export function createCloneTools(context: ToolContext) {
         '台帳の未了の行を、**絞り込みを渡してまとめて閉じる**。',
         '1件ずつの `commitment_close` では到達できない数（数千件）が溜まったときの口である。',
         '**既定は試算で、1件も閉じない。** 実際に閉じるには `dryRun: false` を明示すること —— ',
-        '閉じた行を開き直す道具はこの器に無いので、撃ち間違えは道具では戻せない。',
+        '閉じた行は `commitment_reopen` で1件ずつ開き直せるが、まとめて開き直す口は無いので、数千件の撃ち間違えは実質戻せない。',
         '**`origin` は必須で、在る起点（human / manager / external / self）を全部並べた呼びは断る**' +
           '（「全部閉じる」を1回で撃てる形は作らない）。',
         '行は消えない（`closedAt` / `closedReason` が付くだけ）。ただし片付き履歴に保持上限のある置き場（fs）では、' +
@@ -5945,7 +6059,7 @@ export function createCloneTools(context: ToolContext) {
               ];
 
         if (dryRun !== false) {
-          // 省略された `dryRun` は試算にする: 閉じた行を開き直す道具が無く、撃ち間違えた一括 close は戻せないため
+          // 省略された `dryRun` は試算にする: 開き直す口（`commitment_reopen`）は1件ずつで、まとめて開き直す口が無く、撃ち間違えた一括 close は実質戻せないため
           const shown = targets.slice(0, CLOSE_MANY_IDS_SHOWN).map((entry) => entry.id);
           const hidden = targets.length - shown.length;
           return text(

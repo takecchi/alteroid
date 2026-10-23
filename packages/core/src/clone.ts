@@ -3165,7 +3165,8 @@ class Clone implements CloneHost {
       const reason =
         `器が自動で閉じた: 枠に当たって止まった知らせだが、名指す担当 ${row.managerId}` +
         `${recovery.successorId === undefined ? '' : ` の後継 ${recovery.successorId}`} はいまの世代の鍵で戻っている` +
-        '（running、または done で知らせより後のターンが成功）。人間・クローンが否定するなら開き直すこと';
+        '（running、または done で知らせより後のターンが成功）。人間・クローンが否定するなら開き直すこと' +
+        '（POST /commitments/:id/reopen・commitment_reopen）';
       try {
         const closed = await this.#stores.commitments.close(
           row.eventId,
@@ -3186,7 +3187,7 @@ class Clone implements CloneHost {
           grounds:
             `担当 ${recovery.successorId ?? row.managerId} が quota-recovery-notice の backOnCurrentToken と同じ基準（いまの世代の鍵で live・枠の印なし、` +
             `running、または done で知らせ ${row.at} より後のターンが成功）で戻っていた。` +
-            '器が閉じたので closedBy は daemon（人間・クローンはこれを読んで後から否定する）',
+            '器が閉じたので closedBy は daemon（人間・クローンはこれを読んで後から否定する。否定するなら POST /commitments/:id/reopen・commitment_reopen で開き直す）',
         });
       } catch (error) {
         noteDroppedRecord(
@@ -3595,7 +3596,8 @@ class Clone implements CloneHost {
       event.id,
       new Date().toISOString(),
       `器が自動で閉じた: 名指す担当 ${event.managerId} はいまの世代の鍵で戻っている` +
-        '（running、または done で知らせより後のターンが成功）。人間・クローンが否定するなら開き直すこと',
+        '（running、または done で知らせより後のターンが成功）。人間・クローンが否定するなら開き直すこと' +
+        '（POST /commitments/:id/reopen・commitment_reopen）',
       'daemon',
     );
     if (!closed) return;

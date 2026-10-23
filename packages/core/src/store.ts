@@ -944,6 +944,17 @@ export interface CommitmentOpenResult {
 }
 
 /**
+ * `CommitmentStore.reopen` が実際に何をしたか。
+ *
+ * `boolean` にしない: 「無い」と「閉じていない」は呼び出し側の応答が違う（404 と 409）。
+ * `before` を返す: 開き直すと `closedAt` / `closedReason` / `closedBy` が行から消えるので、呼び出し側が日誌へ逐語で残す材料はここにしか無い。
+ */
+export type CommitmentReopenResult =
+  | { readonly kind: 'reopened'; readonly before: Commitment }
+  | { readonly kind: 'not-found' }
+  | { readonly kind: 'not-closed' };
+
+/**
  * `entry` と同じマネージャー（`origin: 'manager'` かつ同じ `source`）× 同じ `body` の未了行を `entries` から探す。
  * 判定の規則をここに1本だけ置く: 3実装がそれぞれ持つと必ずずれる。`storage-pg` だけが同じ規則を SQL で書き直す
  * （DB の制約にしないとプロセスを跨げない）ので、3実装が同じ答えを返すことを `commitment-fold-contract.ts` が測る。
@@ -1068,6 +1079,20 @@ export interface CommitmentStore {
     reason: string,
     by: CommitmentClosedBy,
   ): Promise<string[]>;
+
+  /**
+   * 閉じた行を未了へ戻す。`open` は冪等のまま変えない（同じ id の `open` は閉じた行を蘇らせない）ので、開き直す口は別に持つ。
+   * 呼ばれるのは人間（`POST /commitments/:id/reopen`）かクローン（`commitment_reopen`）が閉じた行を名指ししたときだけで、受信箱の配り直しからは呼ばれない。
+   *
+   * `closedAt` / `closedReason` / `closedBy` を外し、`autoCloseWhenBack` も外す: 器が自動で閉じた行を人間が否定したのに、
+   * 担当が戻った合図で器がまた閉じると、否定が黙って覆る。`id` / `at` / `origin` / `source` / `body` / `bodyMarkup` / `editedAt` / `editedBy` は変えない
+   * （受け取った時刻と起点が切れないことが、新しく積み直さずに開き直す理由）。
+   *
+   * 閉じているかの判定と書き込みは1操作に畳む（読んでから書く形にしない。`close` / `editBody` と同じ）。
+   * 読めない行は `get` と同じく `UnreadableCommitmentError` を投げ、書き直さない。NUL を含む id は `not-found`。
+   * 外した閉じた記録は行から消えるので、呼び出し側は `before` を日誌へ逐語で残すこと。
+   */
+  reopen(id: string): Promise<CommitmentReopenResult>;
 
   /**
    * `body` を書き換える。まだ片付いていない行だけ: 片付いている行・無い id は `false`。

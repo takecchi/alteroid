@@ -927,7 +927,7 @@ export const commitmentOriginSchema = z.enum(['human', 'manager', 'external', 's
 
 // `origin` から導出しない: 人間が積んだ仕事をクローンが片付けることも、クローンが立てた仕事を人間が片付けることもあるため
 // 書き込み側だけをこの enum で縛る: `commitmentSchema.closedBy` に使うと、保存層（`parseCommitment`）は未知の enum 値1つで台帳の一覧を丸ごと読めなくするため
-// `'daemon'` は器が自動で閉じた行（#5015。枠の知らせの担当が戻ったとき）。人間・クローンが否定するなら開き直す
+// `'daemon'` は器が自動で閉じた行（#5015。枠の知らせの担当が戻ったとき）。人間・クローンが否定するなら開き直す（`POST /commitments/:id/reopen`・`commitment_reopen`。`autoCloseWhenBack` も外れるので器はまた閉じない）
 export const commitmentClosedBySchema = z.enum(['clone', 'human', 'daemon']);
 
 export const commitmentEditedBySchema = z.enum(['clone', 'human']);

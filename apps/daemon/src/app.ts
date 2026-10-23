@@ -97,6 +97,7 @@ import {
   commitmentActiveDelegationIds,
   commitmentPosition,
   commitmentRespondedAt,
+  commitmentSchema,
   commitmentUpdatedAt,
   describeUnreadableCommitment,
   describeUnreadableScheduleEdit,
@@ -716,6 +717,7 @@ const commitmentBody = z.object({
 
 // 理由は空を許さない: 否定する材料の無い閉じ方を受け付けると、人間が後から否定できるという最終承認の実体が崩れる（north_star）。
 const commitmentCloseBody = z.object({ reason: nonBlankString });
+const commitmentReopenBody = z.object({ reason: nonBlankString });
 
 const commitmentEditBody = z.object({
   body: nonBlankString,
@@ -6686,6 +6688,82 @@ export function createApp(deps: AppDeps) {
           `id=${id}`,
         );
         return c.json(okResponseSchema.parse({ ok: true }));
+      },
+    )
+
+    // 先に読んで判断しない（`close` と同じ）: 「閉じているか」の判定と書き込みは台帳の1操作（`reopen`）に任せる。`open` を開き直しに使わない: `open` は冪等のままで、受信箱の配り直しで閉じた行が蘇らないことの要。
+    // 開き直すと閉じた時刻・主体・理由が行から消えるので、日誌へ逐語で残す（残さないと「誰がいつ何と言って閉じたか」が二度と読めない）。
+    .post(
+      '/commitments/:id/reopen',
+      describeRoute({
+        tags: ['commitments'],
+        summary: '片付いた仕事を未了へ開き直す',
+        description:
+          'クローンの `commitment_reopen` と同じものを人間の手から。閉じた行を名指しして、未了へ戻す。' +
+          '受け取った時刻・起点・本文はそのままで、`closedAt` / `closedReason` / `closedBy` と' +
+          '`autoCloseWhenBack` が外れる（器が自動で閉じた行を否定したのに、担当が戻った合図で' +
+          '器がまた閉じるのを防ぐため）。`reason` は必須で、開き直す前の閉じた時刻・主体・理由とともに' +
+          '日誌（`decision`）へ残る。**同じ id の `open` は冪等のままで、閉じた行を蘇らせない** — ' +
+          '開き直せるのはこの口と `commitment_reopen` だけ。',
+        responses: {
+          200: {
+            description: '開き直した。未了の一覧に戻る。',
+            content: { 'application/json': { schema: resolver(commitmentSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正（`reason` は空にできない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: 'その id は台帳に無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              'まだ閉じていない（何もしない）。または行が読めない形で入っている（書き直さない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(commitmentReopenBody, (where) => ({
+        error: 'reason の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const id = c.req.param('id');
+        const { reason } = c.req.valid('json');
+        let result;
+        try {
+          result = await stores.commitments.reopen(id);
+        } catch (error) {
+          if (!(error instanceof UnreadableCommitmentError)) throw error;
+          return c.json(
+            {
+              error: `${error.message}。読めない形のまま書き直さないので、開き直していない。`,
+            },
+            409,
+          );
+        }
+        if (result.kind === 'not-found') return c.json({ error: 'not found' as const }, 404);
+        if (result.kind === 'not-closed') {
+          return c.json({ error: `${id} は閉じていない（未了のまま在る）。何もしていない` }, 409);
+        }
+        const { before } = result;
+        // 開き直すこと自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision: `人間が閉じた仕事を開き直した（${id}）: ${reason}`,
+            grounds:
+              '人間が直接 API から開き直した。開き直す前の記録: ' +
+              `closedAt=${before.closedAt ?? '記録なし'}・closedBy=${before.closedBy ?? '記録なし'}・closedReason=${before.closedReason ?? '記録なし'}`,
+          },
+          '閉じた仕事を開き直した日誌',
+          `id=${id}`,
+        );
+        const entry = await stores.commitments.get(id);
+        if (entry === null) return c.json({ error: 'not found' as const }, 404);
+        return c.json(commitmentSchema.parse(entry));
       },
     )
 

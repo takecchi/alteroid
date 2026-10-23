@@ -844,6 +844,21 @@ export function createMemoryStores(): Stores {
       }
       return closedIds;
     },
+    // 判定と書き込みのあいだに `await` を挟まない（`open` と同じ）。`autoCloseWhenBack` も外す理由は `CommitmentStore.reopen` の doc。
+    async reopen(id) {
+      const existing = commitments.get(id);
+      if (!existing) return { kind: 'not-found' };
+      if (existing.closedAt === undefined) return { kind: 'not-closed' };
+      const {
+        closedAt: _closedAt,
+        closedReason: _closedReason,
+        closedBy: _closedBy,
+        autoCloseWhenBack: _autoCloseWhenBack,
+        ...reopened
+      } = existing;
+      commitments.set(id, reopened);
+      return { kind: 'reopened', before: isolate(existing) };
+    },
     // `origin` の判定はしない: 呼び出し側（`PATCH /commitments/:id`）が確かめてから呼ぶ（`CommitmentStore.editBody` の doc）。
     async editBody(id, body, at, by: CommitmentEditedBy, options) {
       const existing = commitments.get(id);
