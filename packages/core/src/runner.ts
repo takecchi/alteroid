@@ -1,6 +1,15 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, chownSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  chownSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { readRedactedTranscriptTail } from './transcript-tail.js';
 import { tmpdir } from 'node:os';
@@ -124,6 +133,7 @@ import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './
 import { compareCodeUnits } from './code-unit-order.js';
 import { subreapedProcess, underSubreaper } from './delegation-subreaper.js';
 import { codePointBoundary, excerptLine } from './excerpt.js';
+import { relocateMcpConfigArgs } from './mcp-config-arg.js';
 import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
 import type { McpServers } from './mcp-servers.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
@@ -536,6 +546,7 @@ export interface RunnerHostOptions {
   // 委譲の CLI を `<この実行ファイル> -s --` の子として起こす（tini の絶対パス。#4494）。無ければ CLI を直に起こす: tini の無い手元の構成でも動かすため
   delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
+  handOverMcpConfigDirFn?: HandOverResumeConfigDir;
   contextUsageTimeoutMs?: number;
   // 一時規則（#4905）の置き直しを待つ期限。既定は `SESSION_ALLOW_RULES_TIMEOUT_MS`。試験が短くするための口
   sessionAllowRulesTimeoutMs?: number;
@@ -828,6 +839,7 @@ class Host implements RunnerHost {
     ((options: SpawnAgentProcessOptions) => DelegationProcessHandle) | undefined;
   readonly #delegationSubreaper: string | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir | undefined;
+  readonly #handOverMcpConfigDirFn: HandOverResumeConfigDir | undefined;
   readonly #contextUsageTimeoutMs: number | undefined;
   readonly #sessionAllowRulesTimeoutMs: number | undefined;
   readonly #rescueMaxWorktrees: number | undefined;
@@ -887,6 +899,7 @@ class Host implements RunnerHost {
     this.#spawnAgentProcessFn = options.spawnAgentProcessFn;
     this.#delegationSubreaper = options.delegationSubreaper;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn;
+    this.#handOverMcpConfigDirFn = options.handOverMcpConfigDirFn;
     this.#contextUsageTimeoutMs = options.contextUsageTimeoutMs;
     this.#sessionAllowRulesTimeoutMs = options.sessionAllowRulesTimeoutMs;
     this.#rescueMaxWorktrees = options.rescueMaxWorktrees;
@@ -1561,6 +1574,9 @@ class Host implements RunnerHost {
       ...(this.#handOverResumeConfigDirFn === undefined
         ? {}
         : { handOverResumeConfigDirFn: this.#handOverResumeConfigDirFn }),
+      ...(this.#handOverMcpConfigDirFn === undefined
+        ? {}
+        : { handOverMcpConfigDirFn: this.#handOverMcpConfigDirFn }),
       ...(this.#contextUsageTimeoutMs === undefined
         ? {}
         : { contextUsageTimeoutMs: this.#contextUsageTimeoutMs }),
@@ -2381,6 +2397,7 @@ interface RunnerSessionOptions {
   spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
   delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
+  handOverMcpConfigDirFn?: HandOverResumeConfigDir;
   contextUsageTimeoutMs?: number;
   // 一時規則（#4905）の置き直しを待つ期限。既定は `SESSION_ALLOW_RULES_TIMEOUT_MS`。試験が短くするための口
   sessionAllowRulesTimeoutMs?: number;
@@ -2453,6 +2470,7 @@ class RunnerSession {
   readonly #spawnAgentProcessFn: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
   readonly #delegationSubreaper: string | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir;
+  readonly #handOverMcpConfigDirFn: HandOverResumeConfigDir;
   readonly #contextUsageTimeoutMs: number;
   readonly #sessionAllowRulesTimeoutMs: number;
   readonly #rescueMaxWorktrees: number | undefined;
@@ -2635,6 +2653,7 @@ class RunnerSession {
         spawnAsUser(this.#childUser as RunnerChildUser, { ...spawnOptions, detached: true }));
     this.#delegationSubreaper = options.delegationSubreaper;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn ?? chownTreeSync;
+    this.#handOverMcpConfigDirFn = options.handOverMcpConfigDirFn ?? chownTreeSync;
     this.#contextUsageTimeoutMs = options.contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
     this.#sessionAllowRulesTimeoutMs =
       options.sessionAllowRulesTimeoutMs ?? SESSION_ALLOW_RULES_TIMEOUT_MS;
@@ -3480,13 +3499,23 @@ class RunnerSession {
   // `#spawnAsChildUser` と共有しない: `detached: true` と pid 追跡を委譲そのものの起動経路にだけ効かせるため
   #spawnDelegationProcess(options: SpawnAgentProcessOptions): DelegationProcessHandle {
     this.#handOverResumeConfigDir(options.env);
+    const staged = this.#stageMcpConfig(options);
     // 追う pid は tini のもの: tini が sid の主になり、CLI と子孫はその sid の下に居るため（孤児の回収が撃つ単位は変わらない）
-    const child =
-      this.#delegationSubreaper === undefined
-        ? this.#spawnAgentProcessFn(options)
-        : subreapedProcess(
-            this.#spawnAgentProcessFn(underSubreaper(options, this.#delegationSubreaper)),
-          );
+    let child: DelegationProcessHandle;
+    try {
+      child =
+        this.#delegationSubreaper === undefined
+          ? this.#spawnAgentProcessFn(staged.options)
+          : subreapedProcess(
+              this.#spawnAgentProcessFn(underSubreaper(staged.options, this.#delegationSubreaper)),
+            );
+    } catch (error) {
+      staged.remove();
+      throw error;
+    }
+    // 起動直後には消さない: CLI は起動後に設定ファイルを読み直しうるため。子が終わるまで置く
+    child.once('exit', staged.remove);
+    child.once('error', staged.remove);
     const pid = child.pid;
     if (pid !== undefined) {
       this.#onDelegationProcessSpawned(pid);
@@ -3497,6 +3526,37 @@ class RunnerSession {
     }
     this.#watchDelegationStderr(child, options.env, options.signal);
     return child;
+  }
+
+  // 失敗したら握り潰さず投げる: 元の引数のまま起こすと MCP の資格（中継のトークン・人間の登録の env / headers）が argv に戻り、同じ器の他のプロセスから `ps` で読めるため
+  #stageMcpConfig(options: SpawnAgentProcessOptions): {
+    options: SpawnAgentProcessOptions;
+    remove: () => void;
+  } {
+    const childUser = this.#childUser;
+    let dir: string | undefined;
+    const remove = (): void => {
+      if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+    };
+    try {
+      let count = 0;
+      const args = relocateMcpConfigArgs(options.args, (json) => {
+        dir ??= mkdtempSync(joinPath(tmpdir(), 'alteroid-mcp-'));
+        count += 1;
+        const file = joinPath(dir, `mcp-config-${String(count)}.json`);
+        writeFileSync(file, json, { mode: 0o600, flag: 'wx' });
+        return file;
+      });
+      if (dir !== undefined && childUser !== undefined) {
+        this.#handOverMcpConfigDirFn(dir, childUser.uid, childUser.gid);
+      }
+      return { options: dir === undefined ? options : { ...options, args }, remove };
+    } catch (error) {
+      remove();
+      const text = `委譲の CLI の MCP 設定を argv の外（0600 のファイル）へ置けなかったので、起動しない: ${reasonOf(error)}`;
+      this.#emit({ type: 'note', managerId: this.#id, text });
+      throw new Error(text, { cause: error });
+    }
   }
 
   /**
