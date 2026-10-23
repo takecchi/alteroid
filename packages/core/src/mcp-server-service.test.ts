@@ -2,6 +2,7 @@ import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-a
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { withEffectiveMcpServers } from './mcp-config-file.test-support.js';
 import { createMcpServerService } from './mcp-server-service.js';
 import { mcpServersFingerprintOf, type McpServers } from './mcp-servers.js';
 import { createLocalRunner } from './runner-local.js';
@@ -20,7 +21,7 @@ const REGISTRATION: McpServers = {
 function fakeSdk(): { fn: typeof sdkQuery; started: Options[] } {
   const started: Options[] = [];
   const fn = ((input: { options: Options }) => {
-    started.push(input.options);
+    started.push(withEffectiveMcpServers(input.options));
     let finish: (() => void) | undefined;
     async function* generate(): AsyncGenerator<SDKMessage, void> {
       yield {

@@ -18,6 +18,7 @@ import { createRunnerApp, Outbox } from '@alteroid/runner';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 import { createHttpRunner } from './runner-client.js';
 
@@ -33,10 +34,21 @@ const REGISTRATION: McpServers = {
   },
 };
 
+// childUser の無い runner は資格つきの登録を `--mcp-config` のファイルで渡し、ファイルはセッションが終わると消える。CLI が見る全体は起こした瞬間に合わせて読む
+function withEffectiveMcpServers(options: Options): Options {
+  const path = (options.extraArgs as Record<string, string | null> | undefined)?.['mcp-config'];
+  if (typeof path !== 'string') return options;
+  const fromFile = (
+    JSON.parse(readFileSync(path, 'utf8')) as { mcpServers: NonNullable<Options['mcpServers']> }
+  ).mcpServers;
+  const merged = { ...fromFile, ...(options.mcpServers ?? {}) };
+  return Object.keys(merged).length === 0 ? options : { ...options, mcpServers: merged };
+}
+
 function fakeSdk(): { fn: typeof sdkQuery; started: Options[] } {
   const started: Options[] = [];
   const fn = ((input: { options: Options }) => {
-    started.push(input.options);
+    started.push(withEffectiveMcpServers(input.options));
     let finish: (() => void) | undefined;
     async function* generate(): AsyncGenerator<SDKMessage, void> {
       yield {
