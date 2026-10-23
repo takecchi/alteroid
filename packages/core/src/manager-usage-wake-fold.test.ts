@@ -284,7 +284,12 @@ describe('鍵の回転の起こし直しは、待ちの上限を過ぎた背景�
     // 止めたことと途中の出力の在りか、やり直しの前の確かめを言う（#5044）
     expect(message).toContain('古い背景処理のプロセスは runner が止める');
     expect(message).toContain('起こしたときの Bash の結果にある出力ファイル');
-    expect(message).toContain('古いプロセスが残っていないか ps で確かめること');
+    // やり直しの前の確かめは、資格が出力に載らない手だけを案内する（#5196）
+    expect(message).toContain(
+      '出力ファイルの末尾が伸びていないか・作業ツリーのファイルの更新時刻が動いていないかで確かめること',
+    );
+    expect(message).toContain('ps・/proc・env は使わない');
+    expect(message).not.toContain('ps で確かめ');
     expect(message).toContain('続きを進めよ。もう終わっていたなら、そう報告して終えること');
     await s.pool.stop();
     const text = JSON.stringify(s.inbox);
