@@ -2120,6 +2120,13 @@ interface ManagerRecord {
    */
   sessionGeneration?: string;
   /**
+   * 出来事に付いて届いた世代（#5195）。**メモリだけで持つ**。いま追っている世代がここに無い間に古い世代から届いた報告は、捨てずに配る:
+   * 起こし直した新しいセッションが黙ったまま、古いセッションが生きてターンを回し続け、その報告を全部捨てていたことがあるため
+   * （2026-10-23 heosterra。古いセッションが止まらなかった理由はまだ分かっていない）。
+   * 印（いまの世代を見たか）ではなく集合で持つ: 新しいセッションの出来事は resume の応答より先に届きうり、その間は追う世代が決まっていないため。
+   */
+  observedSessionGenerations?: Set<string>;
+  /**
    * 直近の resume を、預かった生ログ無しで（`#loadSession` が `absent`）新しいプロセスへ出したか（#4501）。
    * 器が作り直された・別の器へ移った後なら、新しい CLI に会話は無いので、戻れない見込みが高い。その旨を受理の知らせに添えるためだけに使う。
    * **プロセス内の像にしか置かない**。`#resume` が resume を出すたびに書き直す。
@@ -2256,6 +2263,9 @@ const TURN_END_TAIL_EXCERPT = 400;
 const TURN_END_PROBE_QUIET_MS = 10 * 60_000;
 
 const TURN_END_PROBE_BACKOFF_MS = 60_000;
+
+/** 担当ごとに覚える、出来事に付いて届いた世代の数の上限（#5195）。比べたいのはいま追っている世代だけで、古いものは要らない。 */
+const OBSERVED_SESSION_GENERATIONS_MAX = 8;
 
 /** 旗が立っている相手のほうを長くする: 生ログの末尾が動かない限り助言は変わらない。 */
 const TURN_END_PROBE_BACKOFF_FLAGGED_MS = 5 * 60_000;
@@ -9259,10 +9269,14 @@ class Pool implements ManagerPool {
         const record = this.#records.get(managerId);
         const generation =
           record === undefined ? 'unknown' : this.#judgeSessionGeneration(record, event);
+        // 古い世代の `report` でも、新しい世代がまだ何も出していなければ処理し直す（#5195）: 捨てるか配るかは `#handleEvent` の同じ判定に任せる
+        const trackedSilent =
+          record?.sessionGeneration !== undefined &&
+          record.observedSessionGenerations?.has(record.sessionGeneration) !== true;
         if (
           !moved ||
           generation === 'current' ||
-          (event.type === 'report' && generation === 'unknown')
+          (event.type === 'report' && (generation === 'unknown' || trackedSilent))
         ) {
           await this.#onEvent(event, fromRunnerId);
           continue;
@@ -9322,6 +9336,90 @@ class Pool implements ManagerPool {
     const tracked = record.sessionGeneration;
     if (given === undefined || given.length === 0 || tracked === undefined) return 'unknown';
     return given === tracked ? 'current' : 'stale';
+  }
+
+  /** 出来事に付いて届いた世代を覚える（#5195）。古い順に捨てて上限で締める: 担当の像は起こし直しのたびに世代が増えるため。 */
+  #observeSessionGeneration(record: ManagerRecord, event: RunnerEvent): void {
+    if (!isSessionScopedEvent(event)) return;
+    const given = event.sessionGeneration;
+    if (given === undefined || given.length === 0) return;
+    const observed = (record.observedSessionGenerations ??= new Set<string>());
+    observed.delete(given);
+    observed.add(given);
+    while (observed.size > OBSERVED_SESSION_GENERATIONS_MAX) {
+      const oldest = observed.values().next().value;
+      if (oldest === undefined) break;
+      observed.delete(oldest);
+    }
+  }
+
+  /**
+   * 古い世代の報告でも、いま追っている世代がまだ1つも出来事を出していなければ、捨てずにクローンへ配る（#5195）。配ったら `true`。
+   *
+   * 起こし直した新しいセッションが黙ったまま、古いセッションが生きてターンを回し続け、その完遂の報告が全部「古いセッションの出来事」として
+   * 捨てられていた（2026-10-23 heosterra。担当は報告したつもりで待ち、PR が誰にも拾われなかった）。生きて話しているのは古い側なので、聞く。
+   * 新しい世代が一度でも出来事を出したら、今どおり捨てる（そちらが本物で、古い側は畳みの遅れである）。
+   *
+   * 配るのは本文と台帳の `lastReport` まで。`status`・枠の印・鍵の回転には触らない: 台帳が追っているのは新しいセッションで、
+   * 古い側の `done` で書き換えると、次の送りが走っている新しいセッションを畳むため。失敗の報告（`failure`）も今どおり捨てる:
+   * 古い鍵の失敗で枠の印や回転を動かさないため。止めた担当・別の runner へ移った担当の古い報告も今どおり捨てる。
+   */
+  async #deliverReportFromUnreplacedSession(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'report' }>,
+    fromRunnerId: string,
+  ): Promise<boolean> {
+    const tracked = record.sessionGeneration;
+    if (tracked === undefined || record.observedSessionGenerations?.has(tracked) === true) {
+      return false;
+    }
+    if (event.failure !== undefined) return false;
+    if (record.job.status === 'stopped') return false;
+    if (record.job.runnerId !== undefined && record.job.runnerId !== fromRunnerId) return false;
+    if (event.reportId !== undefined) {
+      const reported = this.#reportedOf(record);
+      if (reported.has(event.reportId)) return true;
+      reported.set(event.reportId, true);
+    }
+    const managerId = event.managerId;
+    record.job.lastReport = event.text;
+    record.job.lastReportAt = new Date(this.#now()).toISOString();
+    record.job.lastReportStatus = event.status;
+    delete record.job.lastFoldedTurn;
+    await this.#persist(record);
+    await this.#journal({
+      type: 'decision',
+      decision: `[${managerId}] 古いセッションの報告だが、起こし直した新しいセッションがまだ何も出していないので、捨てずにクローンへ配る（#5195）`,
+      grounds:
+        `いま追っている世代=${tracked} この報告の世代=${event.sessionGeneration ?? '不明'} ` +
+        `runnerId=${fromRunnerId} 報告が名乗った status=${event.status} 台帳の status=${record.job.status}（書き換えない）`,
+    });
+    await this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${event.text}`,
+    });
+    const reportFiles =
+      (event.files?.length ?? 0) > 0 || (event.rejectedFiles?.length ?? 0) > 0
+        ? await this.#fetchReportFiles(event, fromRunnerId)
+        : undefined;
+    const carriesFiles =
+      reportFiles !== undefined &&
+      (reportFiles.attachments.length > 0 || reportFiles.rejected.length > 0);
+    if (event.contentless === true && !carriesFiles) return true;
+    this.#emit(
+      managerId,
+      'report',
+      `[${managerId}] （alteroid より: 起こし直す前の古いセッションからの報告。起こし直した新しいセッションはまだ何も出していないので、捨てずに配る。` +
+        `台帳の状態は ${record.job.status} のまま書き換えていない。#5195）\n\n${event.text}`,
+      undefined,
+      undefined,
+      'full',
+      event.unreported !== undefined,
+      carriesFiles ? reportFiles : undefined,
+    );
+    return true;
   }
 
   /** 移送の窓の間に届いた出来事を、届いた順に預ける（`#deferredEvents`）。同期で呼ぶこと。 */
@@ -10019,8 +10117,15 @@ class Pool implements ManagerPool {
       return;
     }
 
+    this.#observeSessionGeneration(record, event);
     const generation = this.#judgeSessionGeneration(record, event);
     if (generation === 'stale' && isSessionScopedEvent(event)) {
+      if (
+        event.type === 'report' &&
+        (await this.#deliverReportFromUnreplacedSession(record, event, fromRunnerId))
+      ) {
+        return;
+      }
       const dropped = await this.#droppedReportFiles(event, fromRunnerId);
       await this.#journal({
         type: 'exchange',

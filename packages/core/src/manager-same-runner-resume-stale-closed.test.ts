@@ -371,10 +371,12 @@ describe('同じ runner への復帰の最中に届く closed', () => {
       });
       const lastReport = async (): Promise<string | undefined> =>
         (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same')?.lastReport;
-      runnerA.emit?.(report('古いセッションの報告', 'gen-old'));
-      await settle();
-      expect(await lastReport()).toBe('途中まで進めた');
+      // 新しい世代の報告を先に流す（#5195）: 新しい世代がまだ何も出していない間の古い世代の報告は、捨てずに配る形へ変えた
+      // （その形は manager-stale-generation-report.test.ts が持つ）。ここが測るのは、新しい世代が出た後の古い報告が lastReport を書き換えないこと
       runnerA.emit?.(report('新しいセッションの報告', 'gen-new'));
+      await settle();
+      expect(await lastReport()).toBe('新しいセッションの報告');
+      runnerA.emit?.(report('古いセッションの報告', 'gen-old'));
       await settle();
       expect(await lastReport()).toBe('新しいセッションの報告');
       runnerA.emit?.(report('世代なしの報告'));

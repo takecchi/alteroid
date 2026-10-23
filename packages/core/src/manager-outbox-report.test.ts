@@ -519,6 +519,14 @@ describe('停止済みの担当の報告に添えられたファイル（#4675�
   });
 });
 
+/** 新しい世代（`gen-new`）の `session` を1つ流し、デーモンがそれを受け取るまで待つ（#5195）。受信箱には何も出さない出来事を選ぶ。 */
+async function newGenerationSpoke(stores: Stores, fake: Fake, managerId: string): Promise<void> {
+  const job = (await stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+  const sessionId = job?.sessionId ?? `sess-${managerId}`;
+  fake.raw({ type: 'session', managerId, sessionId, sessionGeneration: 'gen-new' });
+  for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
 describe('古い世代として捨てる報告に添えられたファイル（#4703）', () => {
   it('⭐ 古いセッションの報告は受信箱へは回さないが、添えられたファイルは置き場へ入れて日誌の行に結び付ける', async () => {
     const stores = createMemoryStores();
@@ -536,6 +544,8 @@ describe('古い世代として捨てる報告に添えられたファイル（#
     const { managerId } = await pool.start({ request: '調べて' });
     const bytes = encode('古いセッションの成果物');
     fake.contents.set('c'.repeat(32), async () => ({ size: bytes.length, body: chunked(bytes) }));
+    // 新しい世代が先に出来事を出した形にする（#5195）: まだ何も出していない間の古い世代の報告は、捨てずに配る形へ変えたため。ここが測るのは捨てる側
+    await newGenerationSpoke(stores, fake, managerId);
 
     fake.raw(
       reportWithFiles([{ fileId: 'c'.repeat(32), name: 'old.txt', bytes }], {
@@ -627,6 +637,8 @@ describe('古い世代として捨てる報告の本文（#4717）', () => {
     });
     await pool.restore();
     const { managerId } = await pool.start({ request: '調べて' });
+    // 新しい世代が先に出来事を出した形にする（#5195）。理由は #4703 の試験と同じ
+    await newGenerationSpoke(stores, fake, managerId);
 
     fake.raw({
       type: 'report',

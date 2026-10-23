@@ -364,6 +364,8 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
     resumeGeneration?: string;
     reportGeneration?: string;
     resumeFails?: boolean;
+    /** 古い世代の report より先に、新しい世代（`resumeGeneration`）の出来事を1つ流す（#5195） */
+    newGenerationFirst?: boolean;
   }): Promise<{ job: Job | undefined; inboxText: string }> {
     const stores = createMemoryStores();
     await stores.jobs.putJob(jobWith('mgr-same', 'runner-a'));
@@ -396,6 +398,16 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
     await pool.abort('mgr-does-not-exist');
     const reattach = pool.reattachRunner('runner-a');
     await enteredResume;
+    if (options.newGenerationFirst === true && options.resumeGeneration !== undefined) {
+      runnerA.emit?.({
+        type: 'report',
+        managerId: 'mgr-same',
+        reportId: 'r-new-first',
+        status: 'running',
+        text: '新しい世代の最初の報告',
+        sessionGeneration: options.resumeGeneration,
+      });
+    }
     runnerA.emit?.({
       type: 'report',
       managerId: 'mgr-same',
@@ -415,14 +427,30 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
     return { job, inboxText: inbox.map((e) => JSON.stringify(e)).join('\n') };
   }
 
-  it('(a) resume が受理された後、窓の間に届いた古い世代の report は lastReport を動かさず、受信箱にも出ない', async () => {
+  // 経緯（#5195）: 元は「(a) resume が受理された後、窓の間に届いた古い世代の report は lastReport を動かさず、受信箱にも出ない」で、
+  // 古い世代の report を無条件に捨てることを固定していた。2026-10-23 heosterra で、起こし直した新しいセッションが黙ったまま
+  // 古いセッションが生きて完遂の報告を出し続け、それを全部捨てていた。新しい世代がまだ何も出していないうちは捨てずに配る形へ期待を反転した。
+  // 台帳の status は今どおり動かさない（下の toBe('running')）。新しい世代が先に出した回の「捨てる」は (a3) が持つ。
+  it('(a) resume が受理された後、新しい世代がまだ何も出していないうちに窓の間に届いた古い世代の report は、status を動かさずに配る（#5195 で反転）', async () => {
     const { job, inboxText } = await reportInWindow({
       resumeGeneration: 'gen-new',
       reportGeneration: 'gen-old',
     });
     expect(job?.status).toBe('running');
-    expect(job?.lastReport).toBe('途中まで進めた');
-    expect(job?.lastReportAt).toBeUndefined();
+    expect(job?.lastReport).toBe('窓の間に届いた報告');
+    expect(job?.lastReportAt).toBeDefined();
+    expect(inboxText).toContain('窓の間に届いた報告');
+    expect(inboxText).toContain('起こし直す前の古いセッションからの報告');
+  });
+
+  it('(a3) 新しい世代が先に出来事を出していれば、窓の間に届いた古い世代の report は lastReport を動かさず、受信箱にも出ない（#5195 の後も元の (a) の保証）', async () => {
+    const { job, inboxText } = await reportInWindow({
+      resumeGeneration: 'gen-new',
+      reportGeneration: 'gen-old',
+      newGenerationFirst: true,
+    });
+    expect(job?.lastReport).toBe('新しい世代の最初の報告');
+    expect(inboxText).toContain('新しい世代の最初の報告');
     expect(inboxText).not.toContain('窓の間に届いた報告');
   });
 
