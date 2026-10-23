@@ -3437,6 +3437,8 @@ class Pool implements ManagerPool {
   readonly #lastHeldStuckNotice = new Map<string, string>();
   /** 費用の門のバックオフにしか使わない: ここに載ったこと自体は「症状である」を意味しない。 */
   readonly #turnEndProbedAt = new Map<string, number>();
+  /** 届かなかった報告を生ログから拾って配ったターンの終わり（`turnEndedAt`）を委譲ごとに覚える（#5195）: 同じターンの終わりを見回りのたびに配らない。担当を外しても消さない（起こし直した後に同じ行を配り直さないため） */
+  readonly #undeliveredTurnEndRecovered = new Map<string, string>();
   readonly #unsubscribe: () => void;
   #stopped = false;
   readonly #eventsInFlight = new Set<Promise<unknown>>();
@@ -6031,6 +6033,7 @@ class Pool implements ManagerPool {
         this.#turnEndProbedAt.set(managerId, now);
         await this.#probeTurnEndOf(record);
         this.#settleReportCheckAfterRestore(record);
+        await this.#recoverUndeliveredTurnEnd(record, now);
       } catch {
         // 1件の失敗で残りを止めない。古い助言が残るのは「揮発してよい」側の代償。
       }
@@ -6157,6 +6160,8 @@ class Pool implements ManagerPool {
       const reportedAt = Date.parse(lastReportAt);
       if (Number.isNaN(reportedAt) || turnEndedAt <= reportedAt) return;
     }
+    // 同じターンの終わりを、届かなかった報告の拾い直し（#5195）がもう一度配らないように覚える
+    this.#undeliveredTurnEndRecovered.set(managerId, record.turnEndedAt);
     this.#emit(
       managerId,
       'report',
@@ -6164,6 +6169,58 @@ class Pool implements ManagerPool {
         `[${managerId}] デーモンが落ちたあと（再起動の後）に、生ログから拾い直した報告。` +
           '前のデーモンがこの報告を受け取ったまま配り終えずに落ちた可能性がある。',
         `ターンの終わり: ${record.turnEndedAt} / 最後に届いた報告: ${lastReportAt ?? '（無い）'}`,
+        '添付があっても結ばれていない。全文は manager_report / manager_transcript で読める。',
+        '',
+        `末尾の発言:\n${record.turnEndTail}`,
+      ].join('\n'),
+    );
+  }
+
+  /**
+   * `end_turn` で終わったターンの報告が、終わりから `TURN_END_PROBE_QUIET_MS` たっても届かず、台帳が `running` のままなら、
+   * 生ログの末尾を添えてクローンへ1通配る（#5195）。再起動をまたがない回の受け皿で、`#settleReportCheckAfterRestore` と対になる。
+   *
+   * 枠で落ちて起こし直された担当で、ターンは `end_turn` で終わったのに `report` が台帳にも受信箱にも届かないことが同じ日に2回あった。
+   * 落ちた場所（runner が出さなかったのか、デーモンが捨てたのか）はまだ突き止めていないので、原因の側ではなく届かなかったことの側で拾う。
+   * `manager_list` の ⚠ だけでは、クローンが一覧を開くまで誰も気づかない。
+   * ターンの終わりの直後には配らない: 報告はふつう数秒で届き、添付の取り寄せ（`OUTBOX_FETCH_TOTAL_TIMEOUT_MS`）を待っても十分に収まる。
+   * 早く配ると、届く途中の報告と二重になる。
+   * `end_turn` に限る: `stop_sequence`（枠の壁）は失敗の報告として別に届く（#567）。
+   */
+  async #recoverUndeliveredTurnEnd(record: ManagerRecord, now: number): Promise<void> {
+    const managerId = record.job.id;
+    if (record.job.status !== 'running') return;
+    if (record.turnEndReason !== 'end_turn') return;
+    if (record.turnEndedAt === undefined || record.turnEndTail === undefined) return;
+    // 背景処理の完了待ちで畳んだ報告は、まとめ配り（`flushWithheldReports`）が配る
+    if ((this.#withheldReports.get(managerId)?.count ?? 0) > 0) return;
+    if (this.#undeliveredTurnEndRecovered.get(managerId) === record.turnEndedAt) return;
+    const turnEndedAt = Date.parse(record.turnEndedAt);
+    if (Number.isNaN(turnEndedAt)) return;
+    if (now - turnEndedAt < TURN_END_PROBE_QUIET_MS) return;
+    const lastReportAt = record.job.lastReportAt;
+    if (lastReportAt !== undefined) {
+      const reportedAt = Date.parse(lastReportAt);
+      if (Number.isNaN(reportedAt) || turnEndedAt <= reportedAt) return;
+    }
+    this.#undeliveredTurnEndRecovered.set(managerId, record.turnEndedAt);
+    const waitedMinutes = Math.floor((now - turnEndedAt) / 60_000);
+    // 落ちた場所を後から辿れるよう、追っている世代と runner を残す（#5195 は原因が分かっていない）
+    await this.#journal({
+      type: 'decision',
+      decision: `[${managerId}] end_turn で終わったターンの報告が ${String(waitedMinutes)} 分届かないので、生ログの末尾から拾ってクローンへ配る（#5195）`,
+      grounds:
+        `turnEndedAt=${record.turnEndedAt} lastReportAt=${lastReportAt ?? '（無い）'} ` +
+        `status=${record.job.status} runnerId=${record.job.runnerId ?? '（不明）'} ` +
+        `sessionGeneration=${record.sessionGeneration ?? '（不明）'}`,
+    });
+    this.#emit(
+      managerId,
+      'report',
+      [
+        `[${managerId}] ターンは ${record.turnEndedAt} に end_turn で終わったが、報告が ${String(waitedMinutes)} 分たっても届いていないので、生ログの末尾から拾って配る。` +
+          '担当は報告したつもりで待っている。',
+        `最後に届いた報告: ${lastReportAt ?? '（無い）'}`,
         '添付があっても結ばれていない。全文は manager_report / manager_transcript で読める。',
         '',
         `末尾の発言:\n${record.turnEndTail}`,
