@@ -201,6 +201,7 @@ ${options.tidyTargets}
 - 「これはやっていい / やらないで」と言われたこと
 - 人間に直されたあなたの判断と、その基準（なぜそう判断するのか）
 - 承認・確認への人間の答え（\`journal_read\` の \`types: ["escalation"]\` で引ける）のうち、拒否・条件・理由から読み取れる基準で、まだ記憶に写っていないもの
+- 人間が API から直接した操作（\`journal_read\` の \`types: ["decision"]\` のうち、\`humanAction\` の付いた行）から読み取れる基準で、まだ記憶に写っていないもの
 - 次に同じ判断をするときに根拠になること
 
 あるなら \`memory_write\` か \`memory_append\` で記憶を更新し（既存の文書を \`memory_write\` で書き直すときは、先に \`memory_read\` で読んで \`base_version\` を渡す）、何を更新したかを \`journal_write\` に残せ。

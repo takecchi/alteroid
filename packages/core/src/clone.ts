@@ -233,6 +233,7 @@ import type {
   ChatStreamEvent,
   Commitment,
   InboxEvent,
+  HumanActionKind,
   JournalEntry,
   JournalEntryInput,
   MemoryDocument,
@@ -502,6 +503,19 @@ const EXTERNAL_PAYLOAD_LIMIT = 8_000;
 const EXTERNAL_JOURNAL_LIMIT = 200_000;
 
 const CLONE_ID_LIST_EXCERPT = 400;
+
+const HUMAN_ACTION_WINDOW = 200;
+const HUMAN_ACTION_SHOWN = 20;
+const HUMAN_ACTION_DECISION_EXCERPT = 160;
+// `Record` で全種を強いる: kind を足したときに言い方の追加を忘れると、型が落ちる前に英語の識別子が入力へ漏れるため
+const HUMAN_ACTION_LABEL: Record<HumanActionKind, string> = {
+  manager_message: '担当へ直接送った',
+  commitment_close: '台帳の行を閉じた',
+  commitment_reopen: '台帳の行を開き直した',
+  schedule_remove: '定期の依頼を外した',
+  practice_remove: 'やり方を消した',
+  practice_write: 'やり方を書き直した',
+};
 
 // 空文字や省略で表さない: 読めなかったことを黙って落とすと、監査の穴が「何も起きなかった」と同じ見え方になるため
 const UNKNOWN_TOOL_NAME = '(不明な道具)';
@@ -1102,6 +1116,8 @@ class Clone implements CloneHost {
   readonly #distillMemory = new CloneDistillMemoryState();
   // 記憶を読み始めた時刻を控える（載せた後の時刻にしない）: 読んでから載せるまでの間の人間の書き込みを、次の帰属の窓から落とさないため。
   #memoryCarriedAt = new Date().toISOString();
+  // `#memoryCarriedAt` と別に持つ: 記憶に差分が無いターンでは後者が進まず、人間の操作の窓だけが古いまま残るため。
+  #humanActionCarriedAt = new Date().toISOString();
   readonly #sdkSession = new CloneSdkSession<AgentCloneSession, AgentUserInput>();
   readonly #env: NodeJS.ProcessEnv;
   readonly #childEnvBase: NodeJS.ProcessEnv;
@@ -5480,13 +5496,15 @@ class Clone implements CloneHost {
       // 入力は投げる前に変数へ受ける（#5086）: 組み立ての時間と、投げてからの時間を分けて測るため。評価の順は引数の中で組んでいたときと同じ
       const composeStartedAt = Date.now();
       const input = await this.#withFreshMemory(
-        composeTurnInputText({
-          distillGap: await this.#distillGapNotice(kind),
-          contextWindowFold: this.#contextWindowFoldNotice(kind),
-          droppedSignals: this.#droppedSignalsNotice(kind),
-          ...notices,
-          body: text,
-        }),
+        await this.#withHumanActions(
+          composeTurnInputText({
+            distillGap: await this.#distillGapNotice(kind),
+            contextWindowFold: this.#contextWindowFoldNotice(kind),
+            droppedSignals: this.#droppedSignalsNotice(kind),
+            ...notices,
+            body: text,
+          }),
+        ),
       );
       timer?.add('composeInput', Date.now() - composeStartedAt);
       timer?.modelStarted();
@@ -6052,6 +6070,62 @@ class Clone implements CloneHost {
     ];
   }
 
+  // 日誌が読めなければ1行も出さない: 読めない理由を「人間の操作は無い」と読ませないため（ターンも止めない）。
+  // 控えは読み始めた時刻へ進める（載せた後にしない）: 読んでから載せるまでの間の操作を、次の窓から落とさないため。
+  // 受信箱には積まない: 人間の操作1件ごとにターンを起こすと、人間が画面を触るたびにクローンの時間を使うため。次に起きるターンの頭で足りる。
+  async #withHumanActions(text: string): Promise<string> {
+    const readAt = new Date().toISOString();
+    const since = this.#humanActionCarriedAt;
+    const section = await this.#humanActionSection(since);
+    this.#humanActionCarriedAt = readAt;
+    return section.length === 0 ? text : [...section, '', '---', '', text].join('\n');
+  }
+
+  // 件数の窓（`limit`）は `types` で切った後に効き、`humanAction` の有無では切れない: 引いた行が `limit` 件ちょうどなら窓の外にも在りうるので「これで全部」と言わない。
+  async #humanActionSection(since: string): Promise<string[]> {
+    let rows: JournalEntry[];
+    try {
+      rows = await this.#stores.journal.list({
+        types: ['decision'],
+        since,
+        limit: HUMAN_ACTION_WINDOW,
+      });
+    } catch {
+      return [];
+    }
+    const marked = rows.flatMap((row) =>
+      row.type === 'decision' && row.humanAction !== undefined
+        ? [{ decision: row.decision, action: row.humanAction }]
+        : [],
+    );
+    if (marked.length === 0) return [];
+    // 新しい順で返るので、新しい側を残して古い順に並べ直す
+    const shown = marked.slice(0, HUMAN_ACTION_SHOWN).reverse();
+    const hidden = marked.length - shown.length;
+    const windowFull = rows.length === HUMAN_ACTION_WINDOW;
+    return [
+      '[system] 前回のターンの後に、人間が自分の手で直したことがある（日誌の decision に、人間が API から直接した操作の印が残っている）。',
+      ...shown.map(
+        ({ decision, action }) =>
+          `- ${HUMAN_ACTION_LABEL[action.kind]}: ${action.target}` +
+          `（${excerptLine(decision, HUMAN_ACTION_DECISION_EXCERPT)}）` +
+          ` 経路: ${describeAnsweredVia(action.via)}`,
+      ),
+      ...(hidden > 0
+        ? [`- ほか ${hidden} 件（\`journal_read\` の \`types: ["decision"]\` で読める）`]
+        : []),
+      ...(windowFull
+        ? ['（日誌の直近の窓だけを見た。窓の外にもあるかもしれない。これで全部とは限らない）']
+        : []),
+      '人間が自分の手で直したのは、あなたの判断か進め方のどこかが人間の考えとずれていたからである。' +
+        '何が変わったかを確かめ、そこから読み取れる基準があれば記憶に書くこと。' +
+        '人間が取り消したものを、同じ形でやり直さないこと。' +
+        'なぜそうしたのかが読み取れなければ、人間に聞いてよい。' +
+        '経路は監査の記録であって、人間がした証拠ではない' +
+        '（持ち主のトークンや認証を切った構成では、あなたの Bash からも同じ口を叩ける）。',
+    ];
+  }
+
   #pushInput(text: string, images: readonly AgentInputImage[] = []): void {
     // `#usageBlockedAccumulatedChars` を積む場所はここ1か所だけ: `#runTurn` 側で数え直すと、並び順（`composeTurnInputText`）が変わったときに二重管理になるため。
     this.#usageBlockedAccumulatedChars += text.length;
@@ -6257,6 +6331,7 @@ class Clone implements CloneHost {
     // 読み直さず、載せた値そのものを控える: 読み直すと、この間に人間が直した差分を見失う
     this.#distillMemory.commitMemory(documents);
     this.#memoryCarriedAt = readAt;
+    this.#humanActionCarriedAt = readAt;
     this.#distillMemory.setResumedHistoryHasMemory(resume !== null);
     // 前のセッションの印を持ち越さない: 載せる必要が無い索引をもう一度会話へ積むため（`#memoryIndexRefreshPending` の doc「下ろすのは …と `#buildSessionSpec`」）
     this.#distillMemory.takeMemoryIndexRefreshPending();

@@ -229,6 +229,7 @@ import {
   PERMISSION_GRANT_CONSENT_PHRASE,
   approvalQuestionSchema,
   approvalUpdatedAt,
+  describeAnsweredVia,
   commitmentOriginSchema,
   commitmentUpdatedAt,
   externalOutputLimits,
@@ -10461,8 +10462,14 @@ function renderJournalEntry(
         body: entry.text,
       };
     }
-    case 'decision':
-      return { head: '[decision]', body: `${entry.decision}（根拠: ${entry.grounds}）` };
+    case 'decision': {
+      // 印の無い行の head は従来の `[decision]` のまま: 既存の読み手（画面・試験）の形を変えないため
+      const human =
+        entry.humanAction === undefined
+          ? ''
+          : ` humanAction=${entry.humanAction.kind} target=${entry.humanAction.target} via=${describeAnsweredVia(entry.humanAction.via)}`;
+      return { head: `[decision${human}]`, body: `${entry.decision}（根拠: ${entry.grounds}）` };
+    }
     case 'escalation': {
       const to = entry.managerId === undefined ? '' : ` manager=${entry.managerId}`;
       const status =

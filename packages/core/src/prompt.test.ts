@@ -121,6 +121,15 @@ describe('人間に直された判断を基準として記憶へ移す（#5125 c
       expect(buildDistillPrompt(reason)).toContain('承認・確認への人間の答え');
     }
   });
+
+  it('蒸留の指示が、どの理由でも人間が API から直接した操作（humanAction の付いた decision）を拾う対象に入れている', () => {
+    for (const reason of ['conversation_end', 'pre_compact', 'scheduled'] as const) {
+      const prompt = buildDistillPrompt(reason);
+      expect(prompt).toContain('人間が API から直接した操作');
+      expect(prompt).toContain('`types: ["decision"]`');
+      expect(prompt).toContain('`humanAction` の付いた行');
+    }
+  });
 });
 
 describe('分類器に止められた後の巻き添え — 読むだけは道具へ（#5138）', () => {
