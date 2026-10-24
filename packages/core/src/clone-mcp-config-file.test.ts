@@ -1,12 +1,14 @@
 import { createSdkMcpServer, query } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
 import { buildCloneSessionOptions } from './claude-provider.js';
 import {
+  CLONE_MCP_CONFIG_DIR_PREFIX,
+  liveCloneMcpConfigDirPaths,
   splitInProcessMcpServers,
   stageCloneMcpServers,
   writeCloneMcpConfigFile,
@@ -63,6 +65,26 @@ describe('writeCloneMcpConfigFile', () => {
     }
     expect(existsSync(dirname(path))).toBe(false);
     expect(() => remove()).not.toThrow();
+  });
+
+  it('ディレクトリの名前に自分の pid が入り、live の集合に入って remove で外れる', () => {
+    const file = writeCloneMcpConfigFile({ a: stdio });
+    expect(file).toBeDefined();
+    const dir = dirname(file!.path);
+    expect(basename(dir).startsWith(`${CLONE_MCP_CONFIG_DIR_PREFIX}${String(process.pid)}-`)).toBe(
+      true,
+    );
+    expect(liveCloneMcpConfigDirPaths().has(dir)).toBe(true);
+    file!.remove();
+    expect(liveCloneMcpConfigDirPaths().has(dir)).toBe(false);
+  });
+
+  it('書けなかったときは live の集合に残さない', () => {
+    const before = liveCloneMcpConfigDirPaths().size;
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(() => writeCloneMcpConfigFile({ a: circular as unknown as McpServerConfig })).toThrow();
+    expect(liveCloneMcpConfigDirPaths().size).toBe(before);
   });
 
   it('外へ出すものが無ければファイルを作らない', () => {

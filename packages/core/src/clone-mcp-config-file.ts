@@ -28,15 +28,30 @@ export interface CloneMcpConfigFile {
   remove: () => void;
 }
 
+// CLI（`alteroid-mcp-`）と runner（`alteroid-runner-mcp-config-`）のどちらもこの接頭辞で始まらない: 掃きが巻き込まないため
+export const CLONE_MCP_CONFIG_DIR_PREFIX = 'alteroid-clone-mcp-';
+
+// このプロセスが作って、まだ remove していないディレクトリ。掃きが「今使っているもの」を消さないために読む
+const liveCloneMcpConfigDirs = new Set<string>();
+
+export function liveCloneMcpConfigDirPaths(): ReadonlySet<string> {
+  return liveCloneMcpConfigDirs;
+}
+
 // JSON を argv へ戻さない: 書けないときは投げる。argv は同じ器の他のプロセスから読めるため、資格が出る
+// 名前に pid を入れる: デーモンが落ちて残ったものを、持ち主が居ないと見分けて掃くため
 export function writeCloneMcpConfigFile(
   external: Readonly<Record<string, McpServerConfig>>,
 ): CloneMcpConfigFile | undefined {
   if (Object.keys(external).length === 0) return undefined;
-  const dir = mkdtempSync(joinPath(tmpdir(), 'alteroid-clone-mcp-'));
+  const dir = mkdtempSync(
+    joinPath(tmpdir(), `${CLONE_MCP_CONFIG_DIR_PREFIX}${String(process.pid)}-`),
+  );
+  liveCloneMcpConfigDirs.add(dir);
   const path = joinPath(dir, 'mcp-config.json');
   const remove = (): void => {
     rmSync(dir, { recursive: true, force: true });
+    liveCloneMcpConfigDirs.delete(dir);
   };
   try {
     writeFileSync(path, JSON.stringify({ mcpServers: external }), { mode: 0o600, flag: 'wx' });
