@@ -52,6 +52,18 @@ describe('archive_remove は日誌を先に書いてから消す', () => {
     expect(seenAtRemove?.[0]).toContain('順序を測る');
   });
 
+  it('先の行が書けなければ消さず、行為は起きていないと投げる', async () => {
+    const stores = createMemoryStores();
+    const id = (await stores.archive.archive('sess-first-fail', 'BODY\n')).id;
+    stores.journal.append = () => Promise.reject(new Error('日誌が落ちた（テスト用）'));
+
+    await expect(
+      tool(stores, 'archive_remove')({ archiveId: id, summary: '消す' }),
+    ).rejects.toThrow('行為は起きていない');
+
+    expect(await stores.archive.read(id)).toEqual({ kind: 'body', body: 'BODY\n' });
+  });
+
   it('消した後でないと分からないバイト数は、2行目として足される', async () => {
     const stores = createMemoryStores();
     const id = (await stores.archive.archive('sess-after', 'BODY\n')).id;
