@@ -88,6 +88,7 @@ describe('非対話で、書き込み系のコマンドに一覧に無い番号�
     '/stop 3',
     '/done 3',
     '/commit-edit 3 直した本文',
+    '/commit-reopen 3 まだ終わっていない',
     '/edit 3 直した本文',
     '/reply 3 返事',
     '/allow 3',

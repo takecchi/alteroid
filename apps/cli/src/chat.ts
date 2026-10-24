@@ -1321,6 +1321,8 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
 /commit-edit <番号|id> <新しい本文>  台帳の本文を後から直す（番号は /commitments の並び。
                      直せるのは自分が積んだ未了の行だけ——断りの理由はサーバが返す）
 /done <番号|id> <理由>  片付けたことを記録する（理由は必須。番号は /commitments の並び）
+/commit-reopen <番号|id> <理由>  片付けた行を未了へ開き直す（理由は必須。閉じた行の番号は
+                     /commitments all の並び。/commitments だと閉じた行は番号が振られないので id で指す）
 /usage [from=YYYY-MM-DD] [to=YYYY-MM-DD] [manager=<id>] [layer=<種>] [site=<場所>] [token=<id>]  利用状況（いくら使ったか）
                      layer= は ${usageLayerSchema.options.join(' / ')}、site= は
                      ${usageSiteSchema.options.join(' / ')} のどれか。token= は
@@ -2733,6 +2735,9 @@ export async function runSlashCommand(
       if (ids.length > 0) {
         stdout.write('  /done <番号> <理由> で片付けたことを記録できます\n');
       }
+      if (includeClosed && entries.some((entry) => entry.closedAt !== undefined)) {
+        stdout.write('  /commit-reopen <番号> <理由> で開き直せます（片付けた行だけ）\n');
+      }
       return 'ok';
     }
 
@@ -2837,6 +2842,40 @@ export async function runSlashCommand(
               : await errorDetail(response)
         }\n`,
       );
+      return 'ok';
+    }
+
+    // `/done` に相乗りせず、`alteroid reopen`（クローンのセッションを開き直す別物）とも混ぜない。
+    // 409 は「まだ閉じていない」「同じ担当・同じ本文の未了が在る」「読めない形」と中身が複数あるので、サーバの文言をそのまま出す。
+    case '/commit-reopen': {
+      const [reference] = rest;
+      const reason = rawTail(line, 2);
+      if (!reference || reason.length === 0) {
+        return usageError(
+          '使い方: /commit-reopen <番号|id> <理由>（閉じた行の番号は /commitments all の並び）\n' +
+            '  理由が要ります（なぜ開き直すかを、後から読んで確かめられるように日誌へ残すため）。' +
+            '/commitments だと閉じた行に番号が振られないので、その場合は id を渡します\n',
+        );
+      }
+      const id = resolveListedId(reference, listed.commitments);
+      if (id === null) {
+        const missing = `[${reference}] は /commitments の一覧にありません`;
+        stdout.write(`${missing}\n`);
+        // 書き込み系なので失敗として渡す（#4795）
+        onFailed?.(missing);
+        return 'ok';
+      }
+      const response = await client.commitments[':id'].reopen.$post({
+        param: { id },
+        json: { reason },
+      });
+      if (response.ok) {
+        stdout.write('開き直しました（閉じた時刻・主体・理由は日誌に逐語で残っています）\n');
+        return 'ok';
+      }
+      const failure = await errorDetail(response);
+      stdout.write(`${failure}\n`);
+      onFailed?.(failure);
       return 'ok';
     }
 
@@ -3588,6 +3627,7 @@ const REFERENCE_FIRST_COMMANDS: ReadonlySet<string> = new Set([
   '/commitment',
   '/done',
   '/commit-edit',
+  '/commit-reopen',
 ]);
 
 function resolveListedId(reference: string, listed: string[]): string | null {

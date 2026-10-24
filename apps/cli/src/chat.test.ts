@@ -1410,6 +1410,8 @@ function stubClient(
     commitmentDetailStatus?: number;
     closeStatus?: number;
     closeBody?: unknown;
+    reopenStatus?: number;
+    reopenBody?: unknown;
     editStatus?: number;
     commitOpenStatus?: number;
     commitOpenBody?: unknown;
@@ -1570,6 +1572,13 @@ function stubClient(
             calls.push({ route: 'POST /commitments/:id/close', args });
             const status = options.closeStatus ?? 200;
             return Promise.resolve(reply(status, status === 200 ? {} : (options.closeBody ?? {})));
+          },
+        },
+        reopen: {
+          $post: (args: unknown) => {
+            calls.push({ route: 'POST /commitments/:id/reopen', args });
+            const status = options.reopenStatus ?? 200;
+            return Promise.resolve(reply(status, status === 200 ? {} : (options.reopenBody ?? {})));
           },
         },
         $patch: (args: unknown) => {
@@ -2160,6 +2169,161 @@ describe('chat の台帳コマンド', () => {
 
     expect(calls.some((call) => call.route === 'PATCH /commitments/:id')).toBe(false);
     expect(out()).toContain('使い方');
+  });
+
+  describe('/commit-reopen（閉じた行を開き直す）', () => {
+    const closed = (id: string) =>
+      commitment({
+        id,
+        closedAt: '2026-08-17T00:00:00.000Z',
+        closedReason: '片付けた',
+        closedBy: 'human',
+      });
+
+    it('/commitments all の番号を id へ引き直し、書かれた理由を送って、日誌に残る旨を言う', async () => {
+      const out = captureStdout();
+      const { calls, client } = stubClient({
+        commitments: [commitment({ id: 'cmt-1' }), closed('cmt-2')],
+      });
+      const listed = emptyListed();
+
+      await runSlashCommand('/commitments all', client, listed);
+      await runSlashCommand('/commit-reopen 2 まだ終わっていなかった', client, listed);
+
+      const reopen = calls.find((call) => call.route === 'POST /commitments/:id/reopen');
+      expect((reopen?.args as { param: { id: string } }).param).toEqual({ id: 'cmt-2' });
+      expect((reopen?.args as { json: { reason: string } }).json).toEqual({
+        reason: 'まだ終わっていなかった',
+      });
+      expect(out()).toContain('開き直しました');
+      expect(out()).toContain('日誌に逐語で残っています');
+    });
+
+    it('番号でなく id でも通る（/commitments では閉じた行に番号が振られない）', async () => {
+      captureStdout();
+      const { calls, client } = stubClient();
+
+      await runSlashCommand('/commit-reopen cmt-9 やり直す', client, emptyListed());
+
+      const reopen = calls.find((call) => call.route === 'POST /commitments/:id/reopen');
+      expect((reopen?.args as { param: { id: string } }).param).toEqual({ id: 'cmt-9' });
+    });
+
+    it('/commitments all の後に、閉じた行があるときだけ開き直しの案内を出す', async () => {
+      const withClosed = captureStdout();
+      const { client: closedClient } = stubClient({ commitments: [closed('cmt-1')] });
+      await runSlashCommand('/commitments all', closedClient, emptyListed());
+      const withClosedText = withClosed();
+      vi.restoreAllMocks();
+
+      const openOnly = captureStdout();
+      const { client: openClient } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
+      await runSlashCommand('/commitments all', openClient, emptyListed());
+      const openOnlyText = openOnly();
+
+      expect(withClosedText).toContain('/commit-reopen <番号> <理由> で開き直せます');
+      expect(openOnlyText).not.toContain('/commit-reopen');
+    });
+
+    it('理由が無い・空白だけなら何も送らず、使い方と理由が要る旨を出す', async () => {
+      const out = captureStdout();
+      const { calls, client } = stubClient({ commitments: [closed('cmt-1')] });
+      const listed = emptyListed();
+
+      await runSlashCommand('/commitments all', client, listed);
+      await runSlashCommand('/commit-reopen 1', client, listed);
+      await runSlashCommand('/commit-reopen 1    ', client, listed);
+
+      expect(calls.some((call) => call.route === 'POST /commitments/:id/reopen')).toBe(false);
+      expect(out()).toContain('使い方: /commit-reopen <番号|id> <理由>');
+      expect(out()).toContain('理由が要ります');
+    });
+
+    it('一覧に無い番号は何も送らず、失敗として渡す（#4795）', async () => {
+      const out = captureStdout();
+      const { calls, client } = stubClient();
+      const failed: string[] = [];
+
+      await runSlashCommand(
+        '/commit-reopen 3 理由',
+        client,
+        emptyListed(),
+        null,
+        undefined,
+        undefined,
+        (reason) => failed.push(reason),
+      );
+
+      expect(calls).toEqual([]);
+      expect(out()).toContain('/commitments の一覧にありません');
+      expect(failed).toHaveLength(1);
+    });
+
+    it('404 はサーバの文言を出し、失敗として渡す', async () => {
+      const out = captureStdout();
+      const { client } = stubClient({
+        commitments: [closed('cmt-1')],
+        reopenStatus: 404,
+        reopenBody: { error: 'not found' },
+      });
+      const listed = emptyListed();
+      const failed: string[] = [];
+
+      await runSlashCommand('/commitments all', client, listed);
+      await runSlashCommand(
+        '/commit-reopen 1 理由',
+        client,
+        listed,
+        null,
+        undefined,
+        undefined,
+        (reason) => failed.push(reason),
+      );
+
+      expect(out()).toContain('not found');
+      expect(out()).not.toContain('開き直しました');
+      expect(failed).toHaveLength(1);
+    });
+
+    // 409 は中身が複数ある: 1つの文に畳むと、次の一手（何もしなくてよい・既に在る行を見る・読めない行を直す）が消える
+    it.each([
+      'cmt-1 は閉じていない（未了のまま在る）。何もしていない',
+      '同じ担当・同じ本文の未了の行 cmt-7 が既に在るので、cmt-1 は開き直していない',
+      '行が読めない形。読めない形のまま書き直さないので、開き直していない。',
+    ])('409 はサーバの文言をそのまま出す: %s', async (message) => {
+      const out = captureStdout();
+      const { client } = stubClient({
+        commitments: [closed('cmt-1')],
+        reopenStatus: 409,
+        reopenBody: { error: message },
+      });
+      const listed = emptyListed();
+      const failed: string[] = [];
+
+      await runSlashCommand('/commitments all', client, listed);
+      await runSlashCommand(
+        '/commit-reopen 1 理由',
+        client,
+        listed,
+        null,
+        undefined,
+        undefined,
+        (reason) => failed.push(reason),
+      );
+
+      expect(out()).toContain(message);
+      expect(out()).not.toContain('開き直しました');
+      expect(failed).toEqual([expect.stringContaining(message)]);
+    });
+
+    it('/help に載っている', async () => {
+      const read = captureStdout();
+      const { client } = stubClient();
+
+      await runSlashCommand('/help', client, emptyListed());
+
+      expect(read()).toContain('/commit-reopen <番号|id> <理由>');
+    });
   });
 
   describe('/commitment（1件を全文で）', () => {
