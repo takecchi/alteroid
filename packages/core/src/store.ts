@@ -361,6 +361,15 @@ export interface JournalStore {
   }): Promise<{ actor: string; count: number }[]>;
 
   /**
+   * 人間からの発言（`exchange`・`with: 'human'`・`role: 'inbound'`）の数を返す（`since` 以降・`until` 以前。両端を含む。`listPage` の `since` / `until` と同じ境界）。
+   * `list({ types: ['exchange'], with: ['human'], since, until })` が返す行のうち `role === 'inbound'` の数と同じ答え。
+   * 活動の要約（`buildActivityDigest`）が、人間との往復を本文ごと頁で読み切らずに、発言の件数だけ取るための口。
+   * 削除した会話の行・墓標が名指しした行は `list` と同じく外す。判定に使う欄（`with`・`role`）と必須の欄（`text`）の型が合わない行は `list` が読み出しで落とすので、数えない。
+   * 省略可能: 持たない器では、呼び手が `listPage` で読んだ行から同じものを作る。
+   */
+  countHumanInboundTurns?(query: { since: string; until: string }): Promise<number>;
+
+  /**
    * `after` の行より後ろ（`until` 以前。`after` の行そのものは含まない）にある人間との往復（`exchange`・`with: 'human'`）の `conversationId` を、重複なく返す。
    * `listPage({ types: ['exchange'], with: ['human'], order: 'asc', after, until })` を最後まで読んだときに現れる行のうち、`conversationId` が文字列のものと同じ集合。並びは契約しない。
    * 会話の一覧の続き（`readConversationPage`）が、継続点より新しい往復を本文ごと頁で読み切らずに、出し済みの会話を外すための口。

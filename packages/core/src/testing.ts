@@ -11,7 +11,11 @@ import { setStderrSinkForTesting } from './dropped-record.js';
 import { tailByCodePoints } from './excerpt.js';
 import { deriveMemoryFrontmatter, nextDescribedState } from './memory.js';
 import { listPageByOverfetch } from './journal-page.js';
-import { conversationIdsAfterFromPages, countToolUsesByActorFromPages } from './journal-scan.js';
+import {
+  conversationIdsAfterFromPages,
+  countHumanInboundTurnsFromPages,
+  countToolUsesByActorFromPages,
+} from './journal-scan.js';
 import { matchesJournalSearch } from './journal-search.js';
 import { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 import type { ConversationReadPosition } from './conversation-read.js';
@@ -584,6 +588,9 @@ export function createMemoryStores(): Stores {
     },
     async countToolUsesByActor(query) {
       return countToolUsesByActorFromPages(journal, query);
+    },
+    async countHumanInboundTurns(query) {
+      return countHumanInboundTurnsFromPages(journal, query);
     },
     async conversationIdsAfter(query) {
       return conversationIdsAfterFromPages(journal, query);

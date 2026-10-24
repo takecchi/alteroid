@@ -416,6 +416,9 @@ const JOURNAL_SCAN_TRUNCATED_NOTICE =
 // ツール実行の件数は打ち切りの外で数えているので、そのことを言う: 言わないと、窓の全部を数えた件数まで「足りないかもしれない」と読めるため
 const TOOL_USE_COUNTED_IN_FULL_NOTICE =
   'ただし「ツール実行」の2つの件数は、この走査とは別に窓の全部を数えたもので、打ち切りの影響を受けない。';
+// 人間からの発言の件数も同じ: 口で数えたときは走査に載せていないので、打ち切りの影響を受けない
+const HUMAN_TURNS_COUNTED_IN_FULL_NOTICE =
+  'ただし「人間からの発言」の件数は、この走査とは別に窓の全部を数えたもので、打ち切りの影響を受けない。';
 
 const ESCALATION_RETAIN_CAPPED_NOTICE =
   '（⚠ 束ねた元の行を全部は読んでいない。保持の上限に当たったので、この件数は少なく出ている可能性がある）';
@@ -521,17 +524,29 @@ export async function buildActivityDigest(
 
   // `exchange` は別の走査にする: `JournalQuery.with` は `exchange` にしか効かない契約で、他の種別と1本に混ぜると契約に無い動きになるため
   let humanTurnsCount = 0;
-  const exchangeScan = await scanJournalPages(
-    stores.journal,
-    { types: ['exchange'], with: ['human'], since: sinceIso, until: untilIso, order: 'desc' },
-    (page) => {
-      for (const entry of page) {
-        if (entry.type !== 'exchange' || !withinWindow(entry)) continue;
-        if (entry.role === 'inbound') humanTurnsCount += 1;
-      }
-    },
-    { maxScanned: DIGEST_JOURNAL_SCAN_LIMIT },
-  );
+  // 口が在れば `exchange` を本文ごと読む走査をやめる: 使うのは人間からの発言の件数だけで、窓の往復を頁ごとに全件運んでいたため。
+  // 口の `until` は含む側なので `until` の1ms 前を渡す（下の `tool_use` と同じ）。数えた口は打ち切らないので、走査を打ち切った印は立たない
+  const countHumanInboundTurns = stores.journal.countHumanInboundTurns?.bind(stores.journal);
+  let exchangeScanTruncated = false;
+  if (countHumanInboundTurns !== undefined) {
+    humanTurnsCount = await countHumanInboundTurns({
+      since: sinceIso,
+      until: new Date(until.getTime() - 1).toISOString(),
+    });
+  } else {
+    const exchangeScan = await scanJournalPages(
+      stores.journal,
+      { types: ['exchange'], with: ['human'], since: sinceIso, until: untilIso, order: 'desc' },
+      (page) => {
+        for (const entry of page) {
+          if (entry.type !== 'exchange' || !withinWindow(entry)) continue;
+          if (entry.role === 'inbound') humanTurnsCount += 1;
+        }
+      },
+      { maxScanned: DIGEST_JOURNAL_SCAN_LIMIT },
+    );
+    exchangeScanTruncated = exchangeScan.truncated;
+  }
 
   const decisionBucket =
     createRetainBucket<Extract<JournalEntry, { type: 'decision' }>>(DIGEST_RETAIN_LIMIT);
@@ -602,11 +617,12 @@ export async function buildActivityDigest(
     { maxScanned: DIGEST_JOURNAL_SCAN_LIMIT },
   );
 
-  const journalScanTruncated = exchangeScan.truncated || activityScan.truncated;
+  // 数えた口は打ち切らないので、口で数えた分は `exchangeScanTruncated` に入らない（走査していない）
+  const journalScanTruncated = exchangeScanTruncated || activityScan.truncated;
   const journalScanTruncatedNotice =
-    countToolUsesByActor === undefined
-      ? JOURNAL_SCAN_TRUNCATED_NOTICE
-      : `${JOURNAL_SCAN_TRUNCATED_NOTICE}${TOOL_USE_COUNTED_IN_FULL_NOTICE}`;
+    JOURNAL_SCAN_TRUNCATED_NOTICE +
+    (countToolUsesByActor === undefined ? '' : TOOL_USE_COUNTED_IN_FULL_NOTICE) +
+    (countHumanInboundTurns === undefined ? '' : HUMAN_TURNS_COUNTED_IN_FULL_NOTICE);
 
   const decisions = decisionBucket.retained;
   const decisionsCount = decisionBucket.count;
@@ -709,7 +725,7 @@ export async function buildActivityDigest(
       .join(' / ');
     return [
       `期間: ${window.since.toISOString()} 〜 ${until.toISOString()}`,
-      ...(journalScanTruncated ? [JOURNAL_SCAN_TRUNCATED_NOTICE] : []),
+      ...(journalScanTruncated ? [journalScanTruncatedNotice] : []),
       ...standingSection(),
       ...managersSection(),
       '',

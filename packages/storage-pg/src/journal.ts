@@ -397,6 +397,33 @@ export class PgJournalStore implements JournalStore {
     return rows.map((row) => ({ actor: row.actor, count: toNumber(row.count) }));
   }
 
+  // 本文を流さず、人間からの発言（`role = 'inbound'`）の件数だけ読む。窓の絞りは `journal_type_at_idx`（type, at）に乗り、`with` と `role` は拾った行の上で確かめる。
+  // `list` は型（`journalEntrySchema`）に合わない行を落とすので、ここでも判定に使う欄（`with`・`role`）と必須の文字列の欄（`text`）の型までは SQL で確かめる（`conversationIdsAfter` と同じ線）。
+  // `with` と `role` は `->>` の値の一致で確かめる（jsonb の文字列だけが一致する）。`text` は `jsonb_typeof` で確かめる。
+  // それ以外の欄だけが型に合わない行（書き込み時の検査があるので、ふつうは無い）は、`list` と違って数える
+  async countHumanInboundTurns(query: { since: string; until: string }): Promise<number> {
+    // この問い合わせだけ JIT を切る（`withdrawnClientMessageIds` と同じ作法）: 窓の行を数えるだけなのに費用が JIT の閾値を越えうるため
+    const rows = await this.#db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('jit', 'off', true)`);
+      const hidden = await this.#hiddenSets(tx);
+      return tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(journal)
+        .where(
+          and(
+            hiddenConversationExchangeExcluded(hidden),
+            eq(journal.type, 'exchange'),
+            sql`(${journal.entry}->>'with') = 'human'`,
+            sql`${journal.entry}->>'role' = 'inbound'`,
+            sql`jsonb_typeof(${journal.entry}->'text') = 'string'`,
+            gte(journal.at, new Date(query.since)),
+            lte(journal.at, new Date(query.until)),
+          ),
+        );
+    });
+    return toNumber(rows[0]?.count ?? 0);
+  }
+
   // 本文を流さず、前方一致する会話 id だけを、その会話の最新の発言（`seq` の最大）の新しい順に返す。
   // 絞りは `listPage({ types: ['exchange'], with: ['human'] })` と同じ式で、`journal_human_exchange_seq_idx` に乗る。
   // 型の確かめは `conversationIdsAfter` と同じ線（判定に使う欄と必須の欄まで）。`jsonb_to_record` で1行1回だけ開く: 欄ごとに `entry->'…'` を書くと、TOAST に出た本文を欄の数だけ展開し直すため

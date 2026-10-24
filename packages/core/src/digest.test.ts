@@ -2075,6 +2075,95 @@ describe('tool_use は件数の口で数え、走査には載せない', () => {
   });
 });
 
+describe('人間からの発言は件数の口で数え、exchange を本文ごと読まない', () => {
+  function spiedStores(options: { withPort: boolean }) {
+    const stores = createMemoryStores();
+    const types: (readonly string[] | undefined)[] = [];
+    let insidePort = false;
+    const listPage = stores.journal.listPage.bind(stores.journal);
+    // 口の内側の読み出しは数えない: インメモリの口は `listPage` で数えるので、digest の走査と区別するため
+    stores.journal.listPage = async (query) => {
+      if (!insidePort) types.push(query?.types);
+      return listPage(query);
+    };
+    const count = stores.journal.countHumanInboundTurns?.bind(stores.journal);
+    if (!options.withPort || count === undefined) {
+      delete stores.journal.countHumanInboundTurns;
+    } else {
+      stores.journal.countHumanInboundTurns = async (query) => {
+        insidePort = true;
+        try {
+          return await count(query);
+        } finally {
+          insidePort = false;
+        }
+      };
+    }
+    return { stores, types };
+  }
+
+  async function appendTurns(stores: Stores) {
+    for (const role of ['inbound', 'outbound', 'inbound'] as const) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role,
+        text: `発言 ${role}`,
+        conversationId: 'conv-1',
+      });
+    }
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text: 'マネージャーとの往復',
+    });
+  }
+
+  it('⭐ 口がある器では、exchange を読む呼び出しが無く、件数は口が無い器と同じ', async () => {
+    const withPort = spiedStores({ withPort: true });
+    const withoutPort = spiedStores({ withPort: false });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    let viaPort: string;
+    let viaPages: string;
+    try {
+      await appendTurns(withPort.stores);
+      await appendTurns(withoutPort.stores);
+      const since = new Date(Date.now() - 60_000);
+
+      viaPort = await buildActivityDigest(withPort.stores, { since });
+      viaPages = await buildActivityDigest(withoutPort.stores, { since });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(withPort.types.flat()).not.toContain('exchange');
+    expect(withoutPort.types.flat()).toContain('exchange');
+    expect(viaPort).toContain('人間からの発言: 2 件');
+    const body = (text: string) => text.split('\n').filter((line) => !line.startsWith('期間:'));
+    expect(body(viaPort)).toEqual(body(viaPages));
+  });
+
+  it('走査を打ち切っても、口で数えた人間からの発言は打ち切られず、文面はそのことを言う', async () => {
+    const fake = createSyntheticJournalStore({
+      total: 150_000,
+      baseTimeMs: Date.now(),
+      entryAt: (index) => ({ type: 'decision', decision: `decision-${index}`, grounds: 'g' }),
+    });
+    const store = { ...fake.store, countHumanInboundTurns: async () => 123_456 };
+
+    const digest = await buildActivityDigest(
+      { ...createMemoryStores(), journal: store },
+      { since: new Date(0) },
+    );
+
+    expect(digest).toContain('DIGEST_JOURNAL_SCAN_LIMIT');
+    expect(digest).toContain('「人間からの発言」の件数は、この走査とは別に窓の全部を数えた');
+    expect(digest).toContain('人間からの発言: 123456 件');
+    expect(fake.calls.flatMap((call) => call.types ?? [])).not.toContain('exchange');
+  });
+});
+
 describe('OOM の本体を直す（issue #1283）— 日誌走査をページ単位に有界化する', () => {
   function storesWithSyntheticJournal(journal: Stores['journal']): Stores {
     return { ...createMemoryStores(), journal };

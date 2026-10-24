@@ -42,6 +42,7 @@ import {
   verifyJournalStoreSearchContract,
   verifyJournalStoreConversationIdContract,
   verifyJournalStoreDeletedConversationContract,
+  verifyJournalStoreHumanInboundCountContract,
   verifyJournalStoreToolUseCountContract,
   verifyJournalStoreConversationIdsAfterContract,
   verifyJournalStoreWithdrawnContract,
@@ -1194,6 +1195,40 @@ describe('FsJournalStore', () => {
   describe('tool_use の件数の契約', () => {
     it('窓の内の tool_use だけが actor ごとに数えられ、両端を含み、他の種別と墓標が名指しした行は数えない', async () => {
       await verifyJournalStoreToolUseCountContract(stores.journal);
+    });
+  });
+
+  describe('人間からの発言の件数の契約', () => {
+    it('窓の内の人間からの発言だけが数えられ、両端を含み、outbound・マネージャーとの往復・他の種別と墓標が外した行は数えず、list の答えと一致する', async () => {
+      await verifyJournalStoreHumanInboundCountContract(stores.journal);
+    });
+
+    // 型に合わない行は読み出しで落ちる（`list` と同じ）ので数えない
+    it('型の合わない行は数えない（list が読み出しで落とす行と揃える）', async () => {
+      const journalDir = join(root, 'journal');
+      const at = '2026-08-12T00:00:00.000Z';
+      await mkdir(journalDir, { recursive: true });
+      const row = (id: string, entry: Record<string, unknown>) =>
+        JSON.stringify({ type: 'exchange', id, at, with: 'human', ...entry });
+      await writeFile(
+        join(journalDir, '2026-08-12.jsonl'),
+        [
+          row('hi-ok', { role: 'inbound', text: 't' }),
+          row('hi-out', { role: 'outbound', text: 't' }),
+          row('hi-role', { role: 'bogus', text: 't' }),
+          row('hi-text', { role: 'inbound', text: 5 }),
+          row('hi-no-text', { role: 'inbound' }),
+        ].join('\n') + '\n',
+        'utf8',
+      );
+
+      // 落とした行の警告が stderr に出るので、捕まえて試験の出力へ流さない
+      let counted: number | undefined;
+      await captureStderr(async () => {
+        counted = await stores.journal.countHumanInboundTurns?.({ since: at, until: at });
+      });
+
+      expect(counted).toBe(1);
     });
   });
 

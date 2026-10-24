@@ -365,6 +365,10 @@ export {
   type JournalStoreToolUseCountContractSubject,
 } from './journal-tool-use-count-contract.js';
 export {
+  verifyJournalStoreHumanInboundCountContract,
+  type JournalStoreHumanInboundCountContractSubject,
+} from './journal-human-inbound-count-contract.js';
+export {
   verifyJournalStoreConversationIdsAfterContract,
   type JournalStoreConversationIdsAfterContractSubject,
 } from './journal-conversation-ids-after-contract.js';
@@ -422,6 +426,7 @@ export {
 export {
   JOURNAL_SCAN_PAGE_SIZE,
   conversationIdsAfterFromPages,
+  countHumanInboundTurnsFromPages,
   countToolUsesByActorFromPages,
   scanJournalPages,
   type JournalScanOptions,

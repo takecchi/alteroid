@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import {
   conversationIdsAfterFromPages,
+  countHumanInboundTurnsFromPages,
   countToolUsesByActorFromPages,
   journalEntrySchema,
   JournalAnchorNotFoundError,
@@ -161,6 +162,10 @@ export class FsJournalStore implements JournalStore {
     until: string;
   }): Promise<{ actor: string; count: number }[]> {
     return countToolUsesByActorFromPages(this, query);
+  }
+
+  async countHumanInboundTurns(query: { since: string; until: string }): Promise<number> {
+    return countHumanInboundTurnsFromPages(this, query);
   }
 
   async conversationIdsAfter(query: { after: JournalCursor; until?: string }): Promise<string[]> {

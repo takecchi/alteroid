@@ -78,6 +78,25 @@ export async function countToolUsesByActorFromPages(
   return [...counts].map(([actor, count]) => ({ actor, count }));
 }
 
+// 頁で読み切る（`list()` を `limit` なしで呼ばない）。`listPage` の絞り（墓標・名指し・境界）をそのまま通す: 3実装の「窓の内の人間からの発言」の答えを `listPage` の1本に揃えるため。
+// 本文を運ばずに数える口が要る器（pg）は、これを使わず SQL で数える
+export async function countHumanInboundTurnsFromPages(
+  journal: Pick<JournalStore, 'listPage'>,
+  query: { since: string; until: string },
+): Promise<number> {
+  let count = 0;
+  await scanJournalPages(
+    journal,
+    { types: ['exchange'], with: ['human'], since: query.since, until: query.until },
+    (page) => {
+      for (const entry of page) {
+        if (entry.type === 'exchange' && entry.role === 'inbound') count += 1;
+      }
+    },
+  );
+  return count;
+}
+
 // `listPage` の絞り（墓標・名指し・錨）をそのまま通す: 3実装の「錨より新しい人間との往復」の答えを `listPage` の1本に揃えるため。
 // 錨が見つからない例外は `scanJournalPages` が握り潰さず伝える。本文を運ばずに引く口が要る器（pg）は、これを使わず SQL で引く
 export async function conversationIdsAfterFromPages(

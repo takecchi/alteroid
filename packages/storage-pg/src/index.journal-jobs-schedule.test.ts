@@ -20,6 +20,7 @@ import {
   verifyJournalStoreSearchContract,
   verifyJournalStoreConversationIdContract,
   verifyJournalStoreDeletedConversationContract,
+  verifyJournalStoreHumanInboundCountContract,
   verifyJournalStoreToolUseCountContract,
   verifyJournalStoreConversationIdsAfterContract,
   verifyJournalStoreWithdrawnContract,
@@ -393,6 +394,43 @@ describe('PgJournalStore', () => {
       const counted = await stores.journal.countToolUsesByActor?.({ since: at, until: at });
 
       expect(counted).toEqual([{ actor: 'clone', count: 2 }]);
+    });
+  });
+
+  describe('人間からの発言の件数の契約', () => {
+    it('窓の内の人間からの発言だけが数えられ、両端を含み、outbound・マネージャーとの往復・他の種別と墓標が外した行は数えず、list の答えと一致する', async () => {
+      await verifyJournalStoreHumanInboundCountContract(stores.journal);
+    });
+
+    // 生 SQL で insert する: `append()` 経由では `journalEntrySchema.parse` を通ってしまい、型に合わない行を作れないから。
+    // `list` は読み出しで落とす行なので、件数にも入れない（口を使う digest と使わない digest の件数が揃うため）
+    it('role・text の型が合わない行は数えない（list が読み出しで落とす行と揃える）', async () => {
+      const at = '2026-08-12T00:00:00.000Z';
+      const insert = (id: string, entry: Record<string, unknown>) =>
+        db.execute(
+          sql`insert into journal (id, at, type, entry)
+              values (${id}, ${at}, 'exchange', ${JSON.stringify({ type: 'exchange', id, at, with: 'human', ...entry })}::jsonb)`,
+        );
+      await insert('hi-ok', { role: 'inbound', text: 't' });
+      await insert('hi-out', { role: 'outbound', text: 't' });
+      await insert('hi-role', { role: 'bogus', text: 't' });
+      await insert('hi-no-role', { text: 't' });
+      await insert('hi-text', { role: 'inbound', text: 5 });
+      await insert('hi-no-text', { role: 'inbound' });
+      await insert('hi-with', { with: 'bogus', role: 'inbound', text: 't' });
+
+      const counted = await stores.journal.countHumanInboundTurns?.({ since: at, until: at });
+      const viaPages = await stores.journal.list({
+        types: ['exchange'],
+        with: ['human'],
+        since: at,
+        until: at,
+      });
+
+      expect(counted).toBe(1);
+      expect(
+        viaPages.filter((row) => row.type === 'exchange' && row.role === 'inbound'),
+      ).toHaveLength(1);
     });
   });
 

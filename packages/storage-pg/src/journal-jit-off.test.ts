@@ -39,6 +39,25 @@ describe('数えるだけ・会話 id だけを引く口の JIT（#5140）', () 
     expect(await currentJit()).toBe(before);
   });
 
+  it('⭐ countHumanInboundTurns はトランザクションの中で JIT を切ってから数え、接続の jit の設定は元のまま残す', async () => {
+    const queries: string[] = [];
+    const logged = createPgStoresFromDb(
+      client.withLogger({ logQuery: (text) => void queries.push(text) }),
+    );
+    const before = await currentJit();
+
+    await logged.journal.countHumanInboundTurns?.({
+      since: '1970-01-01T00:00:00.000Z',
+      until: '2100-01-01T00:00:00.000Z',
+    });
+
+    const setAt = queries.findIndex((text) => text.includes(`set_config('jit', 'off',`));
+    const countAt = queries.findIndex((text) => text.includes('count(*)::int'));
+    expect(setAt).toBeGreaterThanOrEqual(0);
+    expect(countAt).toBeGreaterThan(setAt);
+    expect(await currentJit()).toBe(before);
+  });
+
   it('⭐ conversationIdsAfter はトランザクションの中で JIT を切ってから引き、接続の jit の設定は元のまま残す', async () => {
     const stores = createPgStoresFromDb(client.withLogger({ logQuery: () => undefined }));
     const anchor = await stores.journal.append({
