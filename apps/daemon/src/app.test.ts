@@ -2775,9 +2775,11 @@ describe('HTTP API', () => {
     const read = await app.request(`/archive/${id}`);
     expect(read.status).toBe(410);
 
+    // #5244: override の理由は消す前に決まるので、先の行（「本文を消す: 」）に載る。2行目（結果）には載らない
     const journalEntries = await stores.journal.list({ types: ['decision'] });
-    const entry = journalEntries.find((e) => e.type === 'decision' && e.decision.includes(id)) as
-      { type: 'decision'; decision: string; grounds: string } | undefined;
+    const entry = journalEntries.find(
+      (e) => e.type === 'decision' && e.decision.startsWith(`退避済み生ログの本文を消す: ${id}`),
+    ) as { type: 'decision'; decision: string; grounds: string } | undefined;
     expect(entry?.decision).toContain('override');
     expect(entry?.decision).toContain('mgr-running-2');
     expect(entry?.decision).toContain('本番障害の調査で緊急に消す必要があった');
@@ -2791,8 +2793,11 @@ describe('HTTP API', () => {
     expect(response.status).toBe(409);
   });
 
+  // #5244 で反転（元の題は「日誌への追記が落ちても、本文の削除は効いていて応答は成功する（Issue #2037）。stderr に跡が1行出て、その行に id 以外の本文は載らない」）。
+  // 以前は消した後に日誌を書き、落ちても 200・本文は 410 だった。本文は戻らず、何を・なぜ（override の理由）消したかは日誌にしか残らないので、日誌を先に書き、書けなければ消さずに 500 にする。
+  // 跡が1行 stderr に出て、その行に id 以外の本文が載らないことは変えていない。
   it(
-    '日誌への追記が落ちても、本文の削除は効いていて応答は成功する（Issue #2037）。' +
+    '日誌への追記が落ちたら、本文は消さずに 500（journal_write_failed。Issue #5244）。' +
       'stderr に跡が1行出て、その行に id 以外の本文は載らない',
     async () => {
       const id = (await stores.archive.archive('sess-journal-drop', 'SECRET-BODY\n')).id;
@@ -2817,17 +2822,71 @@ describe('HTTP API', () => {
         response = await withFailingJournal.request(`/archive/${id}`, { method: 'DELETE' });
       });
 
-      expect(response?.status).toBe(200);
-      expect(await response?.json()).toMatchObject({ ok: true, id });
+      expect(response?.status).toBe(500);
+      expect(await response?.json()).toMatchObject({ code: 'journal_write_failed' });
 
       const read = await app.request(`/archive/${id}`);
-      expect(read.status).toBe(410);
+      expect(read.status).toBe(200);
+      expect(await read.text()).toBe('SECRET-BODY\n');
 
       const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
       expect(dropped).toHaveLength(1);
       expect(dropped[0]).not.toContain('SECRET-BODY');
     },
   );
+
+  it('DELETE /archive/:id は消す瞬間に、先の行（id と override の理由）が日誌に既に在る（順序の歯。#5244）', async () => {
+    const id = (await stores.archive.archive('sess-order', 'BODY\n')).id;
+    fake.runningOwners.set(id, 'mgr-order');
+    let seenAtRemove: string[] | undefined;
+    const originalRemove = stores.archive.remove.bind(stores.archive);
+    const spying: Stores = {
+      ...stores,
+      archive: {
+        ...stores.archive,
+        remove: async (target: string) => {
+          seenAtRemove = (await stores.journal.list({ types: ['decision'] })).map((e) =>
+            e.type === 'decision' ? e.decision : '',
+          );
+          return originalRemove(target);
+        },
+      },
+    };
+    const spyApp = createApp({
+      clone: fake.clone,
+      stores: spying,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+
+    const response = await spyApp.request(
+      `/archive/${id}?overrideReason=${encodeURIComponent('順序を測る')}`,
+      { method: 'DELETE' },
+    );
+
+    expect(response.status).toBe(200);
+    expect(seenAtRemove).toHaveLength(1);
+    expect(seenAtRemove?.[0]).toContain(id);
+    expect(seenAtRemove?.[0]).toContain('順序を測る');
+    expect(seenAtRemove?.[0]).toContain('mgr-order');
+  });
+
+  it('DELETE /archive/:id は消した後でないと分からないバイト数を2行目に足し、無い id では先の行を打ち消す（#5244）', async () => {
+    const id = (await stores.archive.archive('sess-after', 'BODY\n')).id;
+
+    await app.request(`/archive/${id}`, { method: 'DELETE' });
+    await app.request('/archive/居ない', { method: 'DELETE' });
+
+    const texts = (await stores.journal.list({ types: ['decision'] }))
+      .map((e) => (e.type === 'decision' ? e.decision : ''))
+      .reverse();
+    expect(texts).toHaveLength(4);
+    expect(texts[0]).not.toContain('バイト');
+    expect(texts[1]).toContain('5 バイト');
+    expect(texts[2]).toContain('居ない');
+    expect(texts[3]).toContain('効いていない');
+    expect(texts[3]).toContain('居ない');
+  });
 
   describe('POST /inbox/remove', () => {
     const managerReport = (id: string, at: string, managerId = 'mgr-1'): InboxEvent => ({
@@ -3097,6 +3156,113 @@ describe('HTTP API', () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ dryRun: true, droppedFromDelivery: 0 });
       expect(fake.droppedFromDelivery).toEqual([]);
+    });
+
+    it('日誌に書けなければ消さず、配達も止めずに 500（journal_write_failed。#5244）', async () => {
+      await stores.inbox.put(
+        managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      const failingJournal: Stores = {
+        ...stores,
+        journal: {
+          ...stores.journal,
+          append: async () => {
+            throw new Error('journal store unavailable (test)');
+          },
+        },
+      };
+      const withFailingJournal = createApp({
+        clone: fake.clone,
+        stores: failingJournal,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+
+      let response: Response | undefined;
+      await captureStderr(async () => {
+        response = await withFailingJournal.request(
+          '/inbox/remove',
+          json({ types: ['manager_message'], reason: '書けない', dryRun: false }),
+        );
+      });
+
+      expect(response?.status).toBe(500);
+      expect(await response?.json()).toMatchObject({
+        code: 'journal_write_failed',
+        removedIds: [],
+        droppedFromDelivery: 0,
+      });
+      expect((await stores.inbox.peekPending()).entries.map((r) => r.event.id)).toEqual(['evt-1']);
+      expect(fake.droppedFromDelivery).toEqual([]);
+    });
+
+    it('消す瞬間に、先の行が日誌に既に在る（順序の歯。#5244）', async () => {
+      await stores.inbox.put(
+        managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      let seenAtRemove: string[] | undefined;
+      const spying: Stores = {
+        ...stores,
+        inbox: {
+          ...stores.inbox,
+          removeMany: async (ids) => {
+            seenAtRemove = (await stores.journal.list({ types: ['decision'] })).map((e) =>
+              e.type === 'decision' ? e.decision : '',
+            );
+            return stores.inbox.removeMany(ids);
+          },
+        },
+      };
+      const spyApp = createApp({
+        clone: fake.clone,
+        stores: spying,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+
+      const response = await spyApp.request(
+        '/inbox/remove',
+        json({ types: ['manager_message'], reason: '順序を測る', dryRun: false }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(seenAtRemove).toHaveLength(1);
+      expect(seenAtRemove?.[0]).toContain('evt-1');
+      expect(seenAtRemove?.[0]).toContain('順序を測る');
+    });
+
+    it('消せなかった id（他経路が先に消していた）は、先の行を打ち消す行が足される（#5244）', async () => {
+      await stores.inbox.put(
+        managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      const raced: Stores = {
+        ...stores,
+        inbox: { ...stores.inbox, removeMany: async () => [] },
+      };
+      const racedApp = createApp({
+        clone: fake.clone,
+        stores: raced,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+
+      const response = await racedApp.request(
+        '/inbox/remove',
+        json({ types: ['manager_message'], reason: '競合', dryRun: false }),
+      );
+
+      expect(response.status).toBe(200);
+      const texts = (await stores.journal.list({ types: ['decision'] })).map((e) =>
+        e.type === 'decision' ? e.decision : '',
+      );
+      expect(texts).toHaveLength(2);
+      expect(texts.filter((t) => t.includes('消していない') && t.includes('evt-1'))).toHaveLength(
+        1,
+      );
+      expect(texts.some((t) => t.includes('消した id'))).toBe(false);
     });
   });
 
@@ -3610,7 +3776,11 @@ describe('HTTP API', () => {
       expect(entry?.grounds).toBe('人間が直接 API から操作した');
     });
 
-    it('1塊目の日誌への追記が落ちても2塊目以降は消え続け、応答の件数は全件と合う（Issue #2037）', async () => {
+    // #5244 で反転（元の題は「1塊目の日誌への追記が落ちても2塊目以降は消え続け、応答の件数は全件と合う（Issue #2037）」）。
+    // 以前は消した後に塊ごとの日誌を書き、落ちても残りの塊を消し続けて 200 だった（落ちた塊は「消えたのに記録が無い」）。
+    // 日誌を先に書く順では、ある塊の先の行が書けなければその塊は消さずに止める（後ろの塊も消さない）。止める前の塊は消えているので、500 の本文でどこまで消したかを返す。
+    // 「応答の数が実際に消えた数と合う」「stderr の跡が1行で、理由の本文を載せない」は変えていない。
+    it('2塊目の先の日誌への追記が落ちたら、1塊目だけ消えて止まり、500 でどこまで消したかを返す（Issue #5244）', async () => {
       // 2塊に割れるように、id が長くなる長い sessionId を使う: 予算 `ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS`（3,600文字）に対し2,000文字超なら id が2つで超え、1id ずつ2塊に割れる。
       const bigSessionId = `sess-chunk-${'x'.repeat(2000)}`;
       await stores.archive.archive(bigSessionId, 'A');
@@ -3624,7 +3794,7 @@ describe('HTTP API', () => {
           ...stores.journal,
           append: async (entry) => {
             callCount += 1;
-            if (callCount === 1) throw new Error('journal store unavailable (test)');
+            if (callCount === 2) throw new Error('journal store unavailable (test)');
             return stores.journal.append(entry);
           },
         },
@@ -3644,19 +3814,25 @@ describe('HTTP API', () => {
         );
       });
 
-      expect(response?.status).toBe(200);
+      expect(response?.status).toBe(500);
       const body = (await response?.json()) as {
-        targeted: number;
+        code: string;
         removedIds: string[];
         removedBytes: number;
+        raced: number;
       };
-      expect(body.targeted).toBe(2);
-      expect(body.removedIds).toHaveLength(2);
+      expect(body.code).toBe('journal_write_failed');
+      // 1塊目だけ消えている（2塊目は先の行が書けなかったので消えていない）
+      expect(body.removedIds).toHaveLength(1);
+      expect(body.removedBytes).toBeGreaterThan(0);
+      expect(body.raced).toBe(0);
 
-      for (const id of body.removedIds) {
-        const read = await app.request(`/archive/${id}`);
-        expect(read.status).toBe(410);
-      }
+      const states = await Promise.all(
+        (await stores.archive.list())
+          .filter((row) => row.id !== idNewest)
+          .map(async (row) => (await stores.archive.read(row.id)).kind),
+      );
+      expect(states.sort()).toEqual(['body', 'removed']);
       const readNewest = await app.request(`/archive/${idNewest}`);
       expect(readNewest.status).toBe(200);
 
@@ -3665,7 +3841,88 @@ describe('HTTP API', () => {
       expect(dropped[0]).not.toContain('SECRET-REASON-INSTRUCTION');
     });
 
-    it('選んだ後に他経路が先に本文を墓標にしていた行（remove() が already を返す）は raced に数え、removedIds/removedBytes/日誌には載せない', async () => {
+    it('1塊目の先の日誌への追記が落ちたら、1件も消さずに 500（removedIds は空。Issue #5244）', async () => {
+      const bigSessionId = `sess-chunk-first-${'x'.repeat(2000)}`;
+      await stores.archive.archive(bigSessionId, 'A');
+      await stores.archive.archive(bigSessionId, 'AB');
+      await stores.archive.archive(bigSessionId, 'ABC');
+      const failingJournal: Stores = {
+        ...stores,
+        journal: {
+          ...stores.journal,
+          append: async () => {
+            throw new Error('journal store unavailable (test)');
+          },
+        },
+      };
+      const withFailingJournal = createApp({
+        clone: fake.clone,
+        stores: failingJournal,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+
+      let response: Response | undefined;
+      await captureStderr(async () => {
+        response = await withFailingJournal.request(
+          '/archive/remove',
+          json({ minStoredBytes: 0, reason: '1塊目で止める', dryRun: false }),
+        );
+      });
+
+      expect(response?.status).toBe(500);
+      expect(await response?.json()).toMatchObject({
+        code: 'journal_write_failed',
+        removedIds: [],
+        removedBytes: 0,
+        raced: 0,
+      });
+      for (const row of await stores.archive.list()) {
+        expect((await stores.archive.read(row.id)).kind, row.id).toBe('body');
+      }
+    });
+
+    it('塊を消す瞬間に、その塊の先の行が日誌に既に在る（順序の歯。#5244）', async () => {
+      await stores.archive.archive('sess-order-many', 'A');
+      await stores.archive.archive('sess-order-many', 'AB');
+      const seen: string[][] = [];
+      const originalRemove = stores.archive.remove.bind(stores.archive);
+      const spying: Stores = {
+        ...stores,
+        archive: {
+          ...stores.archive,
+          remove: async (id: string) => {
+            seen.push(
+              (await stores.journal.list({ types: ['decision'] })).map((e) =>
+                e.type === 'decision' ? e.decision : '',
+              ),
+            );
+            return originalRemove(id);
+          },
+        },
+      };
+      const spyApp = createApp({
+        clone: fake.clone,
+        stores: spying,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+
+      const response = await spyApp.request(
+        '/archive/remove',
+        json({ minStoredBytes: 0, reason: '順序を測る', dryRun: false }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toHaveLength(1);
+      expect(seen[0]?.[0]).toContain('順序を測る');
+    });
+
+    // #5244 で反転（元の題の末尾は「removedIds/removedBytes/日誌には載せない」）。
+    // 日誌を先に書く順にしたので、競合した id は先の行（「消す id」）には載る。保証は「行っていない tombstone を、行ったと残さない」へ移した:
+    // 競合した id は打ち消しの行（「消していない」）で名指しされ、「消した」と読める行には載らない。removedIds/removedBytes に載らないことは変えていない。
+    it('選んだ後に他経路が先に本文を墓標にしていた行（remove() が already を返す）は raced に数え、removedIds/removedBytes には載せず、日誌では打ち消す', async () => {
       const idOld = (await stores.archive.archive('sess-http-race', 'AAA')).id;
       const rowNew = await stores.archive.archive('sess-http-race', 'AAABBB');
       expect(rowNew.continuity, '前方一致の前提が崩れている（テストの組み立てミス）').toBe(
@@ -3707,13 +3964,19 @@ describe('HTTP API', () => {
         type: 'decision';
         decision: string;
       }[];
-      const entry = journalEntries.find((e) => e.decision.includes(idOld));
+      const retraction = journalEntries.find(
+        (e) => e.decision.includes('消していない') && e.decision.includes(idOld),
+      );
       expect(
-        entry,
-        '実際には行っていない tombstone を「行った」と日誌へ書く' +
+        retraction,
+        '先の行に載せた idOld を打ち消す行が無い' +
           '（このハンドラは idOld に対して remove() を呼んだが、既に他経路が' +
           '消していたので already が返っただけである）。',
-      ).toBeUndefined();
+      ).toBeDefined();
+      expect(
+        journalEntries.filter((e) => e.decision.includes('消した id')),
+        '競合した id を「消した」と名乗る行が在る。',
+      ).toEqual([]);
     });
   });
 
@@ -5592,6 +5855,9 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
       },
       '2026-08-10T00:00:00.000Z',
     );
+    const archiveSingleId = (await stores.archive.archive('table-single', 'SINGLE\n')).id;
+    const archiveBulkOldId = (await stores.archive.archive('table-bulk', 'AAA')).id;
+    await stores.archive.archive('table-bulk', 'AAABBB');
 
     const failingJournal: Stores = {
       ...stores,
@@ -5682,11 +5948,33 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
           }),
       },
       {
+        // #5244 で反転: 消した後に日誌を書いていた（落ちても 200）のを、日誌を先に書く（落ちたら消さず 500）へ。消すと配達も止まって戻らないので、跡が日誌に無いまま消せてはいけない。
         name: 'POST /inbox/remove',
+        widened: true,
+        tracesDrop: true,
         request: () =>
           withFailingJournal.request(
             '/inbox/remove',
             json({ types: ['human_message'], reason: '表駆動で撃つ', dryRun: false }),
+          ),
+      },
+      {
+        // #5244 で反転（同じ理由）。本文は戻らず、何を・なぜ（override の理由を含む）消したかは日誌にしか残らない。
+        name: 'DELETE /archive/:id',
+        widened: true,
+        tracesDrop: true,
+        request: () =>
+          withFailingJournal.request(`/archive/${archiveSingleId}`, { method: 'DELETE' }),
+      },
+      {
+        // #5244 で反転（同じ理由）。
+        name: 'POST /archive/remove',
+        widened: true,
+        tracesDrop: true,
+        request: () =>
+          withFailingJournal.request(
+            '/archive/remove',
+            json({ sessionIds: ['table-bulk'], reason: '表駆動で撃つ', dryRun: false }),
           ),
       },
     ];
@@ -5708,6 +5996,12 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
     expect(await stores.mcpServers.read()).toBeNull();
     // 編集前の本文が日誌に無いまま上書きしていない（#5242）
     expect((await stores.commitments.get(patchId))?.body).toBe('編集対象');
+    // 消す前の日誌が書けなかったので、消えていない・配達も止めていない（#5244）
+    expect((await stores.inbox.peekPending()).entries.map((r) => r.event.id)).toEqual([
+      'table-inbox-1',
+    ]);
+    expect(await stores.archive.read(archiveSingleId)).toEqual({ kind: 'body', body: 'SINGLE\n' });
+    expect(await stores.archive.read(archiveBulkOldId)).toEqual({ kind: 'body', body: 'AAA' });
 
     const tracedCaseCount = cases.filter((c) => c.widened !== true || c.tracesDrop === true).length;
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));

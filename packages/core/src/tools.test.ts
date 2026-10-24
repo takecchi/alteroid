@@ -11624,9 +11624,12 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     expect(reply).toContain('mgr-running-2');
     expect(await h.stores.archive.read(archiveId)).toMatchObject({ kind: 'removed' });
 
+    // #5244: override の理由は消す前に決まるので、先の行（「本文を消す: 」）に載る。2行目（結果）には載らない
     const entries = await h.stores.journal.list({ types: ['decision'] });
-    const entry = entries.find((e) => e.type === 'decision' && e.decision.includes(archiveId)) as
-      { type: 'decision'; decision: string; grounds: string } | undefined;
+    const entry = entries.find(
+      (e) =>
+        e.type === 'decision' && e.decision.startsWith(`退避済み生ログの本文を消す: ${archiveId}`),
+    ) as { type: 'decision'; decision: string; grounds: string } | undefined;
     expect(entry?.decision).toContain('override');
     expect(entry?.decision).toContain('mgr-running-2');
     expect(entry?.decision).toContain('本番障害の調査で緊急に消す必要があった');
@@ -18444,8 +18447,9 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
+      // #5244 で反転: 消した後に日誌を書いていた（act-completed）のを、日誌を先に書く（書けなければ消さない = act-not-performed）へ。消すと配達も止まって戻らないので、跡が日誌に無いまま消せてはいけない。
       tool: 'inbox_remove_many',
-      firstLine: ACT_COMPLETED,
+      firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-14b');
         await stores.inbox.put(
@@ -18466,11 +18470,15 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           conversationId: () => undefined,
           dropQueuedInboxEvents: async (ids) => ids.length,
         });
-        return callExpectingError(tools, 'inbox_remove_many', {
+        const outcome = await callExpectingError(tools, 'inbox_remove_many', {
           types: ['manager_message'],
           reason: '同じ失敗の写しを畳む',
           dryRun: false,
         });
+        expect((await stores.inbox.peekPending()).entries.map((row) => row.event.id)).toEqual([
+          'evt-remove-many-test',
+        ]);
+        return outcome;
       },
     },
     {
@@ -18592,8 +18600,9 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
+      // #5244 で反転: 消した後に日誌を書いていた（act-completed）のを、日誌を先に書く（書けなければ消さない = act-not-performed）へ。本文は戻らないので、跡が日誌に無いまま消せてはいけない。
       tool: 'archive_remove',
-      firstLine: ACT_COMPLETED,
+      firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-17');
         const archiveId = (await stores.archive.archive('sess-case-17', 'BODY\n')).id;
@@ -18605,18 +18614,21 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           memoryCause: () => 'clone',
           conversationId: () => undefined,
         });
-        return callExpectingError(tools, 'archive_remove', {
+        const outcome = await callExpectingError(tools, 'archive_remove', {
           archiveId,
           summary: '不要になったので消す',
         });
+        expect(await stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
+        return outcome;
       },
     },
     {
+      // #5244 で反転（archive_remove と同じ理由）。
       tool: 'archive_remove_many',
-      firstLine: ACT_COMPLETED,
+      firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-18');
-        await stores.archive.archive('sess-case-18', 'AAA');
+        const oldId = (await stores.archive.archive('sess-case-18', 'AAA')).id;
         await stores.archive.archive('sess-case-18', 'AAABBB');
         const managers = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
         const tools = createCloneTools({
@@ -18626,11 +18638,13 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           memoryCause: () => 'clone',
           conversationId: () => undefined,
         });
-        return callExpectingError(tools, 'archive_remove_many', {
+        const outcome = await callExpectingError(tools, 'archive_remove_many', {
           sessionIds: ['sess-case-18'],
           summary: '不要になったので消す',
           dryRun: false,
         });
+        expect(await stores.archive.read(oldId)).toEqual({ kind: 'body', body: 'AAA' });
+        return outcome;
       },
     },
     {

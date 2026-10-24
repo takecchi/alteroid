@@ -80,14 +80,21 @@ describe('archive_remove_many は、選んだ後に他経路が消していた�
         '実際には触っていない oldId を「1 件の本文を tombstone' + 'した」に数えて応答する。',
       ).toContain('**0 件の本文を tombstone した**');
 
+      // #5244 で反転: 以前は「競合した id は日誌に1行も載せない」（消した後に書いていたので載せずに済んだ）。
+      // 日誌を先に書く順にしたので、先の行（「消す id」）には載る。保証は「行っていない tombstone を、行ったと残さない」へ移した:
+      // 競合した id は打ち消しの行（「消していない」）で名指しされ、「消した」と読める行には載らない。
       const texts = await decisionTexts(stores);
-      const entry = texts.find((t) => t.includes(oldId));
+      const retraction = texts.find((t) => t.includes('消していない') && t.includes(oldId));
       expect(
-        entry,
-        '実際には行っていない tombstone を「行った」と日誌へ書く' +
+        retraction,
+        '先の行に載せた oldId を打ち消す行が無い' +
           '（このプロセスは oldId に対して remove() を呼んだが、既に他経路が' +
           '消していたので `already` が返っただけである）。',
-      ).toBeUndefined();
+      ).toBeDefined();
+      expect(
+        texts.filter((t) => t.includes('消した id')),
+        '競合した id を「消した」と名乗る行が在る。',
+      ).toEqual([]);
     },
   );
 });

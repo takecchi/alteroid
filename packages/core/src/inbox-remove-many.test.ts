@@ -456,23 +456,26 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     const texts = await decisionTexts(stores);
     expect(texts.length).toBeGreaterThanOrEqual(2);
 
-    for (const text of texts) expect(text).toContain('消した id: ');
+    // #5244: 日誌を先に書く順にしたので、塊の行の見出しは「消した id」ではなく「消す id」（消す前に書くため）。過不足なく全 id が載ることの保証は変わらない。
+    for (const text of texts) expect(text).toContain('消す id: ');
 
     const seen = new Set<string>();
     for (const text of texts) {
-      const idsPart = text.slice(text.indexOf('消した id: ') + '消した id: '.length);
+      const idsPart = text.slice(text.indexOf('消す id: ') + '消す id: '.length);
       for (const id of idsPart.split(' ')) if (id.length > 0) seen.add(id);
     }
     expect(seen.size).toBe(allIds.length);
     expect(seen).toEqual(new Set(allIds));
 
     for (const text of texts) {
-      const idsPart = text.slice(text.indexOf('消した id: ') + '消した id: '.length);
+      const idsPart = text.slice(text.indexOf('消す id: ') + '消す id: '.length);
       expect(idsPart.length).toBeLessThanOrEqual(REMOVE_MANY_JOURNAL_ID_CHARS_COPY + 10);
     }
   });
 
-  it('10. 1件も消せなかった塊では日誌へ書かない（他の経路が先に消していた形を模す）', async () => {
+  // #5244 で反転: 以前は「1件も消せなかった塊では日誌へ書かない」（消した後に書いていたので、消えた id が無ければ書く物が無かった）。
+  // 消す前に書く順にしたので、先の行は書かれる。保証は「消せなかった id を、消したと残さない」へ移した: 先の行（「消す id」）を打ち消す行（「消していない」）が同じ id を名指しし、「消した id」と名乗る行は無い。
+  it('10. 1件も消せなかった塊は、先の行が打ち消される（他の経路が先に消していた形を模す）', async () => {
     const stores = createMemoryStores();
     const events = [managerEvent(0), managerEvent(1), managerEvent(2)];
     await putAll(stores, events);
@@ -491,10 +494,117 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
       dryRun: false,
     });
 
-    expect(await decisionTexts(stores)).toEqual([]);
+    const texts = await decisionTexts(stores);
+    expect(texts).toHaveLength(2);
+    expect(texts.filter((t) => t.includes('消す id: evt-0 evt-1 evt-2'))).toHaveLength(1);
+    const retraction = texts.find((t) => t.includes('消していない'));
+    expect(retraction).toContain('evt-0 evt-1 evt-2');
+    expect(texts.some((t) => t.includes('消した id'))).toBe(false);
   });
 
-  it('11. 塊の途中で日誌が落ちると throw し、①最初の塊の id は日誌に残り ②途中まで消した行は消したまま', async () => {
+  it('10b. 先の行が書けなければ、その塊は消さず1件も消えない（行為は起きていないと投げる）', async () => {
+    const stores = createMemoryStores();
+    const events = [managerEvent(0), managerEvent(1), managerEvent(2)];
+    await putAll(stores, events);
+    const dropped: string[][] = [];
+    const failing: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: () => Promise.reject(new Error('日誌が落ちた（テスト用）')),
+      },
+    };
+
+    await expect(
+      remover(failing, async (ids) => {
+        dropped.push([...ids]);
+        return ids.length;
+      })({ types: ['manager_message'], reason: '書けない', dryRun: false }),
+    ).rejects.toThrow('行為は起きていない');
+
+    expect((await stores.inbox.peekPending()).entries.map((r) => r.event.id)).toEqual([
+      'evt-0',
+      'evt-1',
+      'evt-2',
+    ]);
+    expect(dropped).toEqual([]);
+  });
+
+  it('10c. 消す瞬間に、先の行が日誌に既に在る（順序の歯）', async () => {
+    const stores = createMemoryStores();
+    await putAll(stores, [managerEvent(0), managerEvent(1)]);
+    let seenAtRemove: string[] | undefined;
+    const spying: Stores = {
+      ...stores,
+      inbox: {
+        ...stores.inbox,
+        removeMany: async (ids) => {
+          seenAtRemove = await decisionTexts(stores);
+          return stores.inbox.removeMany(ids);
+        },
+      },
+    };
+
+    await remover(spying)({ types: ['manager_message'], reason: '順序を測る', dryRun: false });
+
+    expect(seenAtRemove).toHaveLength(1);
+    expect(seenAtRemove?.[0]).toContain('消す id: evt-0 evt-1');
+  });
+
+  it('10d. 消した後でないと分からない分（実際に消えたか）は、先の行に書かない', async () => {
+    const stores = createMemoryStores();
+    await putAll(stores, [managerEvent(0)]);
+
+    await remover(stores)({ types: ['manager_message'], reason: '消す', dryRun: false });
+
+    const texts = await decisionTexts(stores);
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).not.toContain('消した id');
+  });
+
+  it('10e. 消す操作が投げたら、結果が確かめられていない行を足して投げ直す', async () => {
+    const stores = createMemoryStores();
+    await putAll(stores, [managerEvent(0)]);
+    const broken: Stores = {
+      ...stores,
+      inbox: {
+        ...stores.inbox,
+        removeMany: () => Promise.reject(new Error('器が落ちた（テスト用）')),
+      },
+    };
+
+    await expect(
+      remover(broken)({ types: ['manager_message'], reason: '落ちる', dryRun: false }),
+    ).rejects.toThrow('器が落ちた');
+
+    const texts = await decisionTexts(stores);
+    expect(texts).toHaveLength(2);
+    expect(texts.filter((t) => t.includes('確かめられていない'))).toHaveLength(1);
+  });
+
+  it('10g. 道具は消し込みの前に塊を日誌へ書く: 1つ目の塊が書けなければ1件も消えない（投げる）', async () => {
+    // 10b と同じ歯を、複数の塊の入力で確かめる（止まるのが1つ目の塊でも、後ろの塊を消さない）
+    const stores = createMemoryStores();
+    const events = Array.from({ length: 250 }, (_, i) => managerEventWithUuid(i));
+    await putAll(stores, events);
+    const failing: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: () => Promise.reject(new Error('日誌が落ちた（テスト用）')),
+      },
+    };
+
+    await expect(
+      remover(failing)({ types: ['manager_message'], reason: '全部書けない', dryRun: false }),
+    ).rejects.toThrow('行為は起きていない');
+    expect(await stores.inbox.pending()).toMatchObject({ count: 250 });
+  });
+
+  // #5244 で反転（元の題は「塊の途中で日誌が落ちると throw し、①最初の塊の id は日誌に残り ②途中まで消した行は消したまま」）。
+  // 以前は2つ目の塊を消してから日誌が落ちて throw し、2つ目の塊は「消えたのに日誌に無い」だった。
+  // 先に書く順では、2つ目の塊の先の行が書けないとその塊は消えない（最初の塊だけ消えて止まる）。止める前の塊は日誌にも在るので、投げずにどこまで消したかを返す（最初の塊が書けない回は 10b/10g が投げることを測る）。
+  it('11. 2つ目の塊の先の行が書けないと、最初の塊だけ消えて止まる（どこまで消したかを返し、日誌には最初の塊の行だけが在る）', async () => {
     const stores = createMemoryStores();
     const events = Array.from({ length: 250 }, (_, i) => managerEventWithUuid(i));
     await putAll(stores, events);
@@ -515,21 +625,27 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
       },
     };
 
-    await expect(
-      remover(flaky)({ types: ['manager_message'], reason: '途中で落ちた', dryRun: false }),
-    ).rejects.toThrow();
+    const reply = await remover(flaky)({
+      types: ['manager_message'],
+      reason: '途中で落ちた',
+      dryRun: false,
+    });
 
+    expect(reply).toContain(`2/${chunks.length} 塊目の先の日誌が書けなかった`);
+    expect(reply).toContain(`**${chunks[0]!.length} 件を畳んだ（消した）**`);
     const texts = await decisionTexts(stores);
     expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain(`消す id: ${chunks[0]!.join(' ')}`);
 
-    for (const id of [...chunks[0]!, ...chunks[1]!]) {
+    for (const id of chunks[0]!) {
       const remaining = (await stores.inbox.peekPending()).entries;
       expect(
         remaining.some((r) => r.event.id === id),
         id,
       ).toBe(false);
     }
-    for (const id of chunks[2]!) {
+    // 先の行が書けなかった塊（2つ目）と、それ以降の塊は消えていない
+    for (const id of chunks.slice(1).flat()) {
       const remaining = (await stores.inbox.peekPending()).entries;
       expect(
         remaining.some((r) => r.event.id === id),
@@ -572,7 +688,12 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     expect(claimed, '省略の断り書きが出ていない（20件を超えて消していない）').not.toBeNull();
     const chunkEntries = (await decisionTexts(stores)).filter((text) => text.includes('塊目'));
     expect(chunkEntries.length).toBeGreaterThan(0);
-    expect(chunkEntries.length).toBeLessThan(calls);
+    // #5244 で反転: 以前は丸ごと競合した塊には日誌の行が無く（`toBeLessThan(calls)`）、行の数は消せた塊の数だった。
+    // 先に書く順では全部の塊に先の行が在り、競合した塊には打ち消しの行が足される。「応答の N は書いた塊の行の数」の保証は変わらない。
+    expect(chunkEntries.length).toBe(calls);
+    expect(
+      (await decisionTexts(stores)).filter((text) => text.includes('消していない')),
+    ).toHaveLength(calls - 1);
     expect(Number(claimed?.[1])).toBe(chunkEntries.length);
   });
 });

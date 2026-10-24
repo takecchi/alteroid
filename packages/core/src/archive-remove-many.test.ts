@@ -316,18 +316,19 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
     const texts = await decisionTexts(stores);
     expect(texts.length).toBeGreaterThanOrEqual(2);
 
-    for (const text of texts) expect(text).toContain('消した id: ');
+    // #5244: 日誌を先に書く順にしたので、塊の行の見出しは「消した id」ではなく「消す id」（消す前に書くため）。過不足なく全 id が載ることの保証は変わらない。
+    for (const text of texts) expect(text).toContain('消す id: ');
 
     const seen = new Set<string>();
     for (const text of texts) {
-      const idsPart = text.slice(text.indexOf('消した id: ') + '消した id: '.length);
+      const idsPart = text.slice(text.indexOf('消す id: ') + '消す id: '.length);
       for (const id of idsPart.split(' ')) if (id.length > 0) seen.add(id);
     }
     expect(seen.size).toBe(oldIds.length);
     expect(seen).toEqual(new Set(oldIds));
 
     for (const text of texts) {
-      const idsPart = text.slice(text.indexOf('消した id: ') + '消した id: '.length);
+      const idsPart = text.slice(text.indexOf('消す id: ') + '消す id: '.length);
       expect(idsPart.length).toBeLessThanOrEqual(ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS_COPY + 60);
     }
 
