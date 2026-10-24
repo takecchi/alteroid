@@ -841,8 +841,9 @@ class Host implements RunnerHost {
   // failed / lost / abandonTree で閉じたセッションが起こした pid: 同じ `managerId` を resume しても撃つ側に残す（落ちた CLI の木が pid を占め続けるため。#2352・#1334）。
   // 持ち主が名簿に居る間は CLI の枝だけを撃ち、引き取られた枝は撃たない（#5162・#5168）。abandonTree と failed / lost を分ける必要は無くなった: 回収の絞り方が同じため
   readonly #abandonedDelegationPids = new Set<number>();
-  // 鍵の付け替えで畳み、resume で戻ってくる担当（managerId → 畳んだ時刻）。`#sessions` から消えている間も木を守る（#5115）
-  readonly #rekeyFoldedAt = new Map<string, number>();
+  // resume で戻ってくる担当（managerId → 名簿から消えた時刻）。`#sessions` から消えている間も木を守る。
+  // 鍵の付け替えで畳んだ担当（#5115）と、failed / lost で閉じた担当（#5168: 枠で落ちた担当は通る鍵で起こし直されるが、それまでの窓に走査が当たる）
+  readonly #returnAwaitedSince = new Map<string, number>();
   readonly #spawnAgentProcessFn:
     ((options: SpawnAgentProcessOptions) => DelegationProcessHandle) | undefined;
   readonly #delegationSubreaper: string | undefined;
@@ -1148,8 +1149,7 @@ class Host implements RunnerHost {
     const now = Date.now();
     for (const [pid, managerId] of this.#pidOwnerManagerId) {
       if (this.#liveDelegationPids.has(pid)) continue;
-      const ownerIsListed =
-        this.#sessions.has(managerId) || this.#awaitingRekeyReturn(managerId, now);
+      const ownerIsListed = this.#sessions.has(managerId) || this.#awaitingReturn(managerId, now);
       // failed / lost / abandonTree で閉じた CLI の pid は、同じ managerId が戻っていても ownerListed へ移さない: 落ちた CLI の木（CLI の枝）を守ると resume のたびに pid が溜まるため（#4433）
       if (ownerIsListed && !this.#abandonedDelegationPids.has(pid)) {
         ownerListed.add(pid);
@@ -1169,14 +1169,15 @@ class Host implements RunnerHost {
     };
   }
 
-  // 鍵の付け替えの畳み（`stop(…, { keepPeers: true })`）は終端ではない: 名簿から消えてから resume で戻るまでの窓に走査が当たると、
-  // 担当が自分で起こした postgres（`pg_ctl` が setsid して tini に引き取られたもの）が終端した委譲の残骸として SIGTERM を受けるため（#5115）。
+  // 鍵の付け替えの畳み（`stop(…, { keepPeers: true })`）と failed / lost の閉じは終端ではない: 名簿から消えてから resume で戻るまでの窓に走査が当たると、
+  // 担当が自分で起こした postgres（`pg_ctl` が setsid して tini に引き取られたもの）が終端した委譲の残骸として SIGTERM を受けるため（#5115・#5168）。
+  // failed / lost の CLI の枝は、戻り待ちの間も `abandonedOwnerListed` として撃つ（#4433）。守るのは引き取られた枝だけである。
   // 期限は預けた peer と同じ: 戻らない担当の木を永久に守らないため
-  #awaitingRekeyReturn(managerId: string, now: number): boolean {
-    const foldedAt = this.#rekeyFoldedAt.get(managerId);
-    if (foldedAt === undefined) return false;
-    if (now - foldedAt < PEER_PARK_TTL_MS) return true;
-    this.#rekeyFoldedAt.delete(managerId);
+  #awaitingReturn(managerId: string, now: number): boolean {
+    const since = this.#returnAwaitedSince.get(managerId);
+    if (since === undefined) return false;
+    if (now - since < PEER_PARK_TTL_MS) return true;
+    this.#returnAwaitedSince.delete(managerId);
     return false;
   }
 
@@ -1613,6 +1614,15 @@ class Host implements RunnerHost {
             this.#abandonedDelegationPids.add(pid);
           }
         }
+        // failed / lost は戻り待ちにする（#5168）: 枠で落ちた担当は通る鍵で起こし直されるが、名簿から消えてから resume までの窓
+        // （鍵が尽きていれば数時間）に走査が当たると、担当の postgres を落ちた CLI の木ごと撃つため。名簿から消すのと同じ同期の区間で立てる
+        if (
+          outcome !== undefined &&
+          'status' in outcome &&
+          (outcome.status === 'failed' || outcome.status === 'lost')
+        ) {
+          this.#returnAwaitedSince.set(managerId, Date.now());
+        }
         this.#sessions.delete(managerId);
         this.#schedulePluginPrune();
         this.#removeAttachments(managerId);
@@ -1673,7 +1683,7 @@ class Host implements RunnerHost {
     });
     this.#generations.set(session, sessionGeneration);
     this.#sessions.set(managerId, session);
-    this.#rekeyFoldedAt.delete(managerId);
+    this.#returnAwaitedSince.delete(managerId);
     this.#knownManagerIds.add(managerId);
     return session;
   }
@@ -2031,10 +2041,11 @@ class Host implements RunnerHost {
         : Promise.resolve();
     const session = this.#sessions.get(managerId);
     // 畳み始める前に立てる: `onClosed` が名簿から消した直後の走査にも守りを効かせるため（#5115）。背景処理を畳んだ回（`abandonTree`）は `#abandonedDelegationPids` が先に効く
+    // keepPeers 無しの停止（人間・クローンが止めた）は、failed / lost で閉じて戻りを待っている担当の守りも外す（#5168）
     if (options.keepPeers === true) {
-      if (session !== undefined) this.#rekeyFoldedAt.set(managerId, Date.now());
+      if (session !== undefined) this.#returnAwaitedSince.set(managerId, Date.now());
     } else {
-      this.#rekeyFoldedAt.delete(managerId);
+      this.#returnAwaitedSince.delete(managerId);
     }
     const stopping = session?.stop(
       'デーモンから停止を指示された。',
