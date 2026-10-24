@@ -225,6 +225,26 @@ describe('rescue_restore: 預かりを担当へ添付で返す（#4863 案A そ�
     await pool.stop();
   });
 
+  it('git でない置き場（絶対パスの worktree）の預かりも、`<置き場>/<path>` でも path だけでも戻せる（#5255）', async () => {
+    const bench = '/tmp/mgr-abcd1234-bench';
+    const { pool, fake } = await setup(async (s) => [
+      jobOf('mgr-s', {
+        rescueStash: await stash(s, 'mgr-s', [
+          { worktree: bench, path: 'tools/measure.mjs', text: 'measure' },
+          { worktree: bench, path: 'request.md', text: 'ask' },
+          { path: 'a.txt', text: 'alpha' },
+        ]),
+      }),
+    ]);
+    fake.request({ managerId: 'mgr-s', paths: [`${bench}/tools/measure.mjs`, 'request.md'] });
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+    const [sent] = fake.sent;
+    expect(sent!.attachments.map(decode).sort()).toEqual(['ask', 'measure']);
+    expect(sent!.text).toContain(`${bench}/tools/measure.mjs`);
+    expect(sent!.text).toContain(`${bench}/request.md`);
+    await pool.stop();
+  });
+
   it('上限（1通の個数）を超える分は送らず、残りのパスと呼び直しの案内を本文に書く', async () => {
     const limits: AttachmentLimits = {
       maxImageBytes: 1_000_000,
