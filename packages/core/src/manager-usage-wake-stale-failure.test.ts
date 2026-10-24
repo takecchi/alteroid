@@ -38,7 +38,8 @@ function fakeRunner() {
   const sends: { managerId: string; text: string }[] = [];
   const resumes: RunnerResumeCommand[] = [];
   const stops: string[] = [];
-  const behavior: { background: number } = { background: 0 };
+  // `resumeGate`: 起こし直し（resume）を、外から開けるまで返さない。1本目の起こし直しが走っている間に2本目の契機を流すため
+  const behavior: { background: number; resumeGate?: Promise<void> } = { background: 0 };
 
   const runner: RunnerClient = {
     runnerId: 'runner-primary',
@@ -60,6 +61,7 @@ function fakeRunner() {
     },
     async resume(command): Promise<{ cwd?: string }> {
       resumes.push(command);
+      if (behavior.resumeGate !== undefined) await behavior.resumeGate;
       alive.push({
         managerId: command.managerId,
         status: 'running',
@@ -244,6 +246,65 @@ describe('古い鍵で枠に当たった担当は、現役の鍵が通るなら�
 
     expect(s.fake.resumes).toHaveLength(1);
     expect(await wakeDecisions(s)).toHaveLength(1);
+    expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeUndefined();
+    await s.pool.stop();
+  });
+
+  it('⭐ 失敗の報告と closed が続けて届いても、起こし直しは1本だけ通る（#5205 の引き金。2本目は1本目の終わりを待って重ねない）', async () => {
+    const s = await setup({ done: false });
+    s.rotate();
+    s.fake.behavior.background = 0;
+    let release = (): void => undefined;
+    s.fake.behavior.resumeGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    // 本番の順（2026-10-23 mgr-3b537374）: 429 の失敗の報告 → 同じセッションの closed(failed)。1本目の起こし直しが走っている間に2本目の契機が来る
+    s.fake.push(failedReport());
+    await settle();
+    s.fake.push(closedByLimit());
+    await settle();
+    release();
+    await settle();
+    await settle();
+
+    expect(s.fake.resumes).toHaveLength(1);
+    // 畳むのは、古い鍵を抱えた done のセッションを1本目が畳んだ1回だけ（起こし直したばかりのセッションを2本目が畳まない）
+    expect(s.fake.stops).toEqual([JOB.id]);
+    // 2本目の契機は「起こし直す」と判断せず、走っている1本目を待つ
+    expect(await wakeDecisions(s)).toHaveLength(1);
+    const joined = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('枠の起こし直しが既に走っているので、重ねて起こさない'),
+    );
+    expect(joined.length).toBeLessThanOrEqual(1);
+    expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeUndefined();
+    await s.pool.stop();
+  });
+
+  it('起こし直しの最中に回し手の resumeStoppedByUsage が来ても、重ねずに1本目の終わりを待つ（#5205）', async () => {
+    const s = await setup({ done: false });
+    s.rotate();
+    s.fake.behavior.background = 0;
+    let release = (): void => undefined;
+    s.fake.behavior.resumeGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    s.fake.push(failedReport());
+    await settle();
+    // 1本目（失敗の報告の枝）が resume の途中で止まっている間に、回し手の契機が来る
+    const second = s.pool.resumeStoppedByUsage();
+    await settle();
+    release();
+    expect(await second).toEqual([]);
+    await settle();
+
+    expect(s.fake.resumes).toHaveLength(1);
+    expect(s.fake.stops).toEqual([JOB.id]);
+    const joined = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('枠の起こし直しが既に走っているので、重ねて起こさない'),
+    );
+    expect(joined).toHaveLength(1);
     expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeUndefined();
     await s.pool.stop();
   });

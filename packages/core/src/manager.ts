@@ -1834,6 +1834,9 @@ export const HELD_MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
  */
 export const HELD_FORCE_FOLD_AFTER_MS = 15 * 60 * 1000;
 
+/** 枠の起こし直しの結果。`'joined'` は同じ担当の起こし直しが既に走っていて、重ねなかった回（#5205）。 */
+type UsageNudgeOutcome = 'nudged' | 'still-running' | 'gone' | 'skipped' | 'joined';
+
 /** 起こし直しが届かなかった担当への挑み直しの間隔: 1分から倍々に、上限30分（#4850）。 */
 const USAGE_WAKE_RETRY_BASE_MS = 60 * 1000;
 const USAGE_WAKE_RETRY_MAX_MS = 30 * 60 * 1000;
@@ -3271,6 +3274,12 @@ class Pool implements ManagerPool {
    * 周回の掃き（`settleStalledUsageWakes`）だけが読む。成功・印の解除で消す（間隔を戻す）。
    */
   readonly #usageWakeRetry = new Map<string, { failures: number; nextAt: number }>();
+  /**
+   * いま走っている枠の起こし直し（`#nudgeForUsageRotation`）。担当ごとに1本だけ通す（#5205 の引き金）。
+   * 起こす契機は複数ある（失敗の報告・closed・回し手の `resumeStoppedByUsage`・周回の掃き・作業者の落ち）。印を下ろすのは起こし終えた後なので、
+   * その間に来た2本目も判定を通り、起こし直したばかりのセッションを「古い鍵」と見て畳んで起こし直していた（2026-10-23 mgr-3b537374）
+   */
+  readonly #usageNudgeInFlight = new Map<string, Promise<unknown>>();
   /**
    * 回転前の鍵で作業者が落ちた担当（`#workerLimitStopped`）を、周回の掃きで次に挑む時刻と失敗の回数。
    * ターンの終わりに現役の鍵がまだ `ready` でなかった・起こしが届かなかった担当を、次の鍵の回転まで取り残さないため。
@@ -6610,8 +6619,8 @@ class Pool implements ManagerPool {
           }
         }
         if (!returned) continue;
-        // 判定の間に別の契機が起こして印を下ろしていたら、二重に起こさない。
-        if (!this.#usageStopped.has(managerId)) continue;
+        // 判定の間に別の契機が起こして印を下ろしていたら、二重に起こさない。走っている間も同じ（#5205）
+        if (!this.#usageStopped.has(managerId) || this.#usageNudgeInFlight.has(managerId)) continue;
         await this.#journal({
           type: 'decision',
           decision: `[${managerId}] 枠で落ちて像から外れた担当を、掃きで起こし直す（現役の鍵は世代 ${String(identity.generation)}、ready。止まった後に通る状態へ戻った）`,
@@ -7345,17 +7354,51 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * 印と借りは呼び出し側が下ろす: 呼び出し元によって下ろす条件が違う。
-   * `'gone'`（台帳に居ない・`stopped`）は下ろしてよいが、`'skipped'`（届かなかった）は残す: 下ろすと次の鍵の回転でも二度と拾われない。
-   * ホワイトリストで書く（`!== 'running' && …` の形にしない）: 状態が増えたとき既定が「起こす」＝1ターン焼く側へ倒れるのを避ける。
-   * `allowRunning` が真でも `waiting_human` は通さない: 待っているのは枠ではなく人間の回答。
-   * 投げない: 走査の途中で投げると、後ろに並んだ委譲が誰にも起こされないまま残る。
+   * 枠の起こし直しを、担当ごとに1本だけ通す（#5205 の引き金）。走っている間に来た2本目は、自分では起こさず、1本目の終わりを待って `'joined'` を返す。
+   * `'joined'` を受けた呼び出し側は、印・借り・挑み直しの状態に触らない: 後始末は1本目の呼び出し側が持つ。
+   * 2本目の契機が持っていた理由（作業者の落ちなど）は、1本目の起こし直し（同じ担当への続きの一言）で満たされる。
    */
   async #nudgeForUsageRotation(
     managerId: string,
     options?: {
       readonly allowRunning?: boolean;
       // 作業者の落ちの印（#5030）から起こすとき: 専用の文を送り、日誌に理由を書き、クローンへの合成の知らせは積まない。
+      readonly workerLimit?: { readonly generation: number | undefined };
+    },
+  ): Promise<UsageNudgeOutcome> {
+    const inFlight = this.#usageNudgeInFlight.get(managerId);
+    if (inFlight !== undefined) {
+      await this.#journal({
+        type: 'decision',
+        decision: `[${managerId}] 枠の起こし直しが既に走っているので、重ねて起こさない（終わるのを待つ）`,
+        grounds:
+          `managerId=${managerId}（#5205。2本目の起こし直しは、起こし直したばかりのセッションを古い鍵と見て畳み、` +
+          '止めたセッションと新しいセッションを並べて走らせる元になった）',
+      });
+      await inFlight.catch(() => undefined);
+      return 'joined';
+    }
+    const run = this.#nudgeForUsageRotationOnce(managerId, options);
+    this.#usageNudgeInFlight.set(managerId, run);
+    try {
+      return await run;
+    } finally {
+      if (this.#usageNudgeInFlight.get(managerId) === run)
+        this.#usageNudgeInFlight.delete(managerId);
+    }
+  }
+
+  /**
+   * 印と借りは呼び出し側が下ろす: 呼び出し元によって下ろす条件が違う。
+   * `'gone'`（台帳に居ない・`stopped`）は下ろしてよいが、`'skipped'`（届かなかった）は残す: 下ろすと次の鍵の回転でも二度と拾われない。
+   * ホワイトリストで書く（`!== 'running' && …` の形にしない）: 状態が増えたとき既定が「起こす」＝1ターン焼く側へ倒れるのを避ける。
+   * `allowRunning` が真でも `waiting_human` は通さない: 待っているのは枠ではなく人間の回答。
+   * 投げない: 走査の途中で投げると、後ろに並んだ委譲が誰にも起こされないまま残る。
+   */
+  async #nudgeForUsageRotationOnce(
+    managerId: string,
+    options?: {
+      readonly allowRunning?: boolean;
       readonly workerLimit?: { readonly generation: number | undefined };
     },
   ): Promise<'nudged' | 'still-running' | 'gone' | 'skipped'> {
@@ -7454,10 +7497,9 @@ class Pool implements ManagerPool {
    * 起こし直しの結果を、挑み直しの間隔へ写す（#4850）: 届かなかったら間隔を倍にして（1分・2分・4分…上限30分）次を決め、届いたら戻す。
    * 回数の上限は置かない（担当が枠で止まったまま黙るほうが高くつく）。間隔で、届かない状態が続いても日誌と runner を叩き続けない。
    */
-  #noteUsageWakeOutcome(
-    managerId: string,
-    outcome: 'nudged' | 'still-running' | 'gone' | 'skipped',
-  ): void {
+  #noteUsageWakeOutcome(managerId: string, outcome: UsageNudgeOutcome): void {
+    // 重ねなかった回は数えない: 結果は1本目の呼び出し側が写す（#5205）
+    if (outcome === 'joined') return;
     const foldDueAt = this.#rotationFoldDueAt.get(managerId);
     this.#rotationFoldDueAt.delete(managerId);
     if (outcome === 'skipped') {
@@ -7529,7 +7571,8 @@ class Pool implements ManagerPool {
     const availability = await this.#tokenAvailability(identity.tokenId).catch(() => undefined);
     if (availability !== 'ready') return;
     // 判定の間に回し手が起こして印を下ろしていたら、二重に起こさない。
-    if (!this.#usageStopped.has(managerId)) return;
+    // 別の契機の起こし直しが走っている間も起こさない（#5205）: 失敗の報告と closed が続けて届くと、両方の枝がここへ来る
+    if (!this.#usageStopped.has(managerId) || this.#usageNudgeInFlight.has(managerId)) return;
     await this.#journal({
       type: 'decision',
       decision: `[${managerId}] 抱えていた古い鍵（${heldLabel}）で枠に当たったが、現役の鍵（世代 ${String(active)}）はもう通るので、回転の出来事を待たずに起こし直す`,
@@ -7547,7 +7590,8 @@ class Pool implements ManagerPool {
   async #wakeStoppedByUsage(managerId: string): Promise<boolean> {
     const outcome = await this.#nudgeForUsageRotation(managerId);
     this.#noteUsageWakeOutcome(managerId, outcome);
-    if (outcome === 'still-running') return false;
+    // 重ねなかった回は印に触らない: 下ろすかどうかは、走っていた1本目の呼び出し側が結果を見て決める（#5205）
+    if (outcome === 'still-running' || outcome === 'joined') return false;
     // `'skipped'`（届かなかった）の印を下ろさない: 空振りで印を失うと、次に拾われるには新しい `usage_notice` が要り、それにはその委譲自身が起きる必要があって、クローンが手で `manager_send` を打つまで戻らなくなる。
     // 拾い直しは周回の掃き（`settleStalledUsageWakes`）が間隔を伸ばして担う（#4850）。ここでは回数上限を置かない: 戻れない委譲は `resume_failed` で印ごと畳まれる。
     if (outcome === 'skipped') return false;
@@ -7617,6 +7661,7 @@ class Pool implements ManagerPool {
         if (!this.#workerLimitStopped.has(managerId)) this.#workerLimitStopped.set(managerId, mark);
         return false;
       }
+      // `'joined'` は印を戻さない: 走っていた枠の起こし直しが、同じ担当へ続きを促している（#5205）
       return outcome === 'nudged';
     } catch (error) {
       noteDroppedRecord('作業者の落ちの起こし直し', `managerId=${managerId}`, error);
@@ -7636,7 +7681,7 @@ class Pool implements ManagerPool {
     // 印は起こせたと分かってから下ろす: 起こす前に下ろすと、空振りで印が消えて次の鍵の回転でも拾われなくなる。
     const outcome = await this.#nudgeForUsageRotation(managerId);
     this.#noteUsageWakeOutcome(managerId, outcome);
-    if (outcome === 'skipped' || outcome === 'still-running') return;
+    if (outcome === 'skipped' || outcome === 'still-running' || outcome === 'joined') return;
     await this.#clearUsageStoppedMark(managerId);
   }
 
