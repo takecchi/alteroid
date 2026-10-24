@@ -68,7 +68,8 @@ type QueryConfigLike = {
   text?: unknown;
   submit?: unknown;
   [TIMEOUT_KEY]?: number;
-  [TIMING_KEY]?: RequestTiming;
+  /** `null` は「呼んだ時点で要求の器が無かった」 */
+  [TIMING_KEY]?: RequestTiming | null;
 };
 
 function sqlHeadOf(config: unknown): string | undefined {
@@ -151,14 +152,17 @@ export function createTimedPool(options: TimedPoolOptions): Pool {
       if (config === null || config === undefined || typeof config.submit === 'function') {
         return super.query(config, values, callback);
       }
-      const stamped =
-        typeof config === 'object' ? (config as QueryConfigLike)[TIMEOUT_KEY] : undefined;
-      const timeoutMs = queryTimeout.getStore() ?? stamped ?? defaultQueryTimeoutMs;
+      // 書いて運んだ印を先に見る: プール経由では、いまの文脈は接続を返した別の処理のものでありうるため。
+      // 器が無いことも印として運ぶ（`null`）: 運ばないと、要求の外の問い合わせ（背景の処理）が空きを待った後、接続を返した要求の器を拾い、
+      // その要求の本数・時間に数えられていた（#5140: 会話の一覧の1要求に、一覧が打たない `since` 付きの日誌の読みが 4 秒載っていた）
+      const marks =
+        typeof config === 'object' && TIMING_KEY in config
+          ? (config as QueryConfigLike)
+          : undefined;
+      const timeoutMs = marks?.[TIMEOUT_KEY] ?? queryTimeout.getStore() ?? defaultQueryTimeoutMs;
       const sql = sqlHeadOf(config);
-      // 書いて運んだ器を先に見る: プール経由では、いまの文脈は接続を返した別の要求のものでありうるため
       const timing =
-        (typeof config === 'object' ? (config as QueryConfigLike)[TIMING_KEY] : undefined) ??
-        currentRequestTiming();
+        marks === undefined ? currentRequestTiming() : (marks[TIMING_KEY] ?? undefined);
       const timed = timing?.queryStarted(sql);
       let timedOut = false;
       const timer = setTimeout(() => {
@@ -209,18 +213,14 @@ export function createTimedPool(options: TimedPoolOptions): Pool {
     // pg の多重定義をそのまま受けて渡す
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     override query(config: any, values?: any, callback?: any): any {
-      const timeoutMs = queryTimeout.getStore();
-      const timing = currentRequestTiming();
-      if (
-        (timeoutMs === undefined && timing === undefined) ||
-        config === null ||
-        config === undefined
-      ) {
+      if (config === null || config === undefined) {
         return super.query(config, values, callback);
       }
+      // 期限も器も、無いときでも書いて運ぶ: 空きを待った後の `client.query` は接続を返した側の文脈で呼ばれ、
+      // 書いていないと、そちらの延びた期限・要求の器を拾うため
       const marks = {
-        ...(timeoutMs === undefined ? {} : { [TIMEOUT_KEY]: timeoutMs }),
-        ...(timing === undefined ? {} : { [TIMING_KEY]: timing }),
+        [TIMEOUT_KEY]: queryTimeout.getStore() ?? defaultQueryTimeoutMs,
+        [TIMING_KEY]: currentRequestTiming() ?? null,
       };
       const stamped =
         typeof config === 'string'

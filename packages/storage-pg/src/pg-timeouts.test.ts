@@ -224,6 +224,34 @@ describe('HTTP の要求の器へ、問い合わせの本数・時間・空き�
     expect(other.db.count).toBe(0);
   });
 
+  it('⭐ 要求の外で打って空きを待った問い合わせは、接続を返した要求に数えない（#5140）', async () => {
+    const { pool } = await setup({ max: 1, queryTimeoutMs: 1_000 });
+    const held = await pool.connect();
+    const timing = new RequestTiming();
+    // 要求の外（背景の処理）で打つ: 空きが無いので待つ
+    const background = pool.query('select slow from journal');
+    // 要求の中で返す: 待っていた問い合わせは、ここ（返した要求の文脈）で打たれる
+    await runWithRequestTiming(timing, async () => {
+      held.release();
+      await background;
+    });
+
+    expect(timing.db.count).toBe(0);
+    expect(timing.db.slowestSql).toBeUndefined();
+  });
+
+  it('⭐ 要求の外で打って空きを待った問い合わせは、接続を返した側の延びた期限を拾わない', async () => {
+    const { pool, events } = await setup({ max: 1 });
+    const held = await pool.connect();
+    const background = pool.query('select slow').catch((caught: unknown) => caught);
+    await withPgQueryTimeout(1_000, async () => {
+      held.release();
+    });
+
+    expect(await background).toBeInstanceOf(PgTimeoutError);
+    expect(events).toEqual([{ kind: 'query', timeoutMs: 50, sql: 'select slow' }]);
+  });
+
   it('失敗した問い合わせも1本に数える', async () => {
     const { pool } = await setup();
     const timing = new RequestTiming();
