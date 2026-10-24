@@ -42,7 +42,8 @@ describe('許可の同意の検査と NUL（残る値と同じ値で判定する
     expect(grants).toHaveLength(1);
     expect(grants[0]?.answer).toBe(stored?.answer);
     expect(grants[0]?.rule).toBe('Bash(gh release edit:*)');
-    expect(decisions).toContain('許可を記録した: Bash(gh release edit:*)');
+    // 日誌を先に書く順にしたので、行は「記録した」ではなく「記録する」（#5241。許可の後に日誌を書く旧順は、日誌が落ちると記録無しで許可が効いた）
+    expect(decisions).toContain('許可を記録する: Bash(gh release edit:*)');
   });
 
   it('NUL の無い定型文は今までどおり同意になる（前後の空白だけ trim）', async () => {
