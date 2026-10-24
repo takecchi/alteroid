@@ -13,8 +13,15 @@ import {
   type RescueStashCycle,
   type RescueStashResult,
 } from './rescue-stash.js';
+import { listScratchFiles, type ScratchReaddirFn } from './rescue-scratch-files.js';
 import type { RescueWorktree } from './schema.js';
-import { listWorktreeRoots, type ProcessSpawnFn } from './unpushed-work.js';
+import {
+  describeWorktreePath,
+  findManagerScratchRoots,
+  listWorktreeRoots,
+  MANAGER_SCRATCH_TMP_ROOT,
+  type ProcessSpawnFn,
+} from './unpushed-work.js';
 
 // 未追跡のファイルは送らない: repo が public で、未追跡の自動送信は可視性での出し分けもしない決定。
 // 実 index のコピーを土台にする: `git add` 済みで未コミットの新規ファイルと unborn の HEAD を取りこぼさないため。
@@ -548,6 +555,7 @@ export class RescueMemory {
   /** 未追跡のファイルの預かり（`rescue-stash.ts`）の、安定の判定と「送った」の記憶。 */
   readonly stash = new RescueStashMemory();
   readonly #untracked = new Map<string, { relativePath: string; since: Map<string, number> }>();
+  readonly #scratchNotices = new Map<string, string>();
   #lastResendMs: number;
   constructor(nowMs: () => number = () => Date.now()) {
     this.#nowMs = nowMs;
@@ -578,6 +586,28 @@ export class RescueMemory {
       if (!since.has(name)) since.set(name, now);
     }
     this.#untracked.set(repoRoot, { relativePath, since });
+  }
+  /**
+   * 担当の作業場（git でない置き場。#5255）の列挙が打ち切られた知らせを、同じ内容では繰り返さない。
+   * 変わったときだけ `true`。知らせなくなったら覚えを消す（また打ち切られたら知らせ直す）。
+   */
+  noteScratchNotice(scratchRoot: string, signature: string | undefined): boolean {
+    if (signature === undefined) {
+      this.#scratchNotices.delete(scratchRoot);
+      return false;
+    }
+    if (this.#scratchNotices.get(scratchRoot) === signature) return false;
+    this.#scratchNotices.set(scratchRoot, signature);
+    return true;
+  }
+  /** 「送った」記憶を捨てる周期（`takeResend`）に合わせて、知らせの覚えも捨てる。 */
+  forgetScratchNotices(): void {
+    this.#scratchNotices.clear();
+  }
+  retainScratchNotices(scratchRoots: ReadonlySet<string>): void {
+    for (const root of [...this.#scratchNotices.keys()]) {
+      if (!scratchRoots.has(root)) this.#scratchNotices.delete(root);
+    }
   }
   /** 今回列挙されなかった作業ツリーの記録を消す。 */
   retainUntracked(repoRoots: ReadonlySet<string>): void {
@@ -638,6 +668,8 @@ export interface RunRescueOptions {
    * 退避 ref の push の成否とは独立に、未追跡の名前が取れた作業ツリーごとに呼ぶ。
    */
   readonly stash?: RescueStashHook;
+  /** 担当の作業場（git でない置き場）の列挙に使う readdir。試験が上限と symlink を再現するための口。 */
+  readonly scratchReaddirFn?: ScratchReaddirFn;
 }
 
 export interface RescueStashHook {
@@ -739,7 +771,10 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
   );
   const reports: RescueWorktree[] = [];
   const resend = options.memory.takeResend();
-  if (resend) options.memory.stash.forgetSent();
+  if (resend) {
+    options.memory.stash.forgetSent();
+    options.memory.forgetScratchNotices();
+  }
   const stashRun: StashRun | undefined =
     options.stash === undefined ? undefined : { hook: options.stash, cycle: newRescueStashCycle() };
   const seenRoots = new Set<string>();
@@ -767,11 +802,75 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
       }
     }
   }
+  const scratchRoots =
+    stashRun === undefined || isAborted(options.signal)
+      ? new Set<string>()
+      : await stashScratchDirs(cwd, options, stashRun, seenRoots);
   if (!isAborted(options.signal)) {
     options.memory.retainUntracked(seenRoots);
-    options.memory.stash.retain(seenRoots);
+    // 置き場の根も残す: 外すと毎周期記憶が捨てられ、安定の判定がいつまでも通らない（#5255）
+    const stashRoots = new Set([...seenRoots, ...scratchRoots]);
+    options.memory.stash.retain(stashRoots);
+    options.memory.retainScratchNotices(scratchRoots);
   }
   return reports;
+}
+
+/**
+ * 担当の作業場のうち、git の作業ツリーの外のファイルを預ける（#5255）。作業ツリーの中は `rescueOne` が預ける。
+ * 預かりの予算（`stashRun.cycle`）は作業ツリーと共有する。預けたものの `worktree` は、作業ツリーと同じ書き方の置き場の位置にする。
+ * 預けた置き場の根を返す（記憶を残すため）。
+ */
+async function stashScratchDirs(
+  cwd: string,
+  options: RunRescueOptions,
+  stashRun: StashRun,
+  worktreeRoots: ReadonlySet<string>,
+): Promise<Set<string>> {
+  const kept = new Set<string>();
+  const found = await findManagerScratchRoots(
+    options.tmpRootDir ?? MANAGER_SCRATCH_TMP_ROOT,
+    options.managerId,
+  );
+  for (const scratch of found.paths) {
+    if (isAborted(options.signal)) break;
+    // 作業ツリーの根そのものは、今の経路だけで扱う（二重に預けない）
+    if (worktreeRoots.has(scratch)) continue;
+    try {
+      const listing = await listScratchFiles(scratch, {
+        ...(options.scratchReaddirFn === undefined ? {} : { readdirFn: options.scratchReaddirFn }),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      if (listing.isWorktree) continue;
+      kept.add(scratch);
+      const result = await stashUntrackedFiles(scratch, listing.names, {
+        managerId: options.managerId,
+        stagedRoot: stashRun.hook.stagedRoot,
+        expectedUid: stashRun.hook.expectedUid,
+        secretEnv: stashRun.hook.secretEnv,
+        credentialEnv: stashRun.hook.credentialEnv,
+        memory: options.memory.stash,
+        cycle: stashRun.cycle,
+        ...(stashRun.hook.final === true ? { final: true } : {}),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      const notice = listing.skipped.map((s) => s.reason).join('\n');
+      const changed = options.memory.noteScratchNotice(
+        scratch,
+        listing.skipped.length === 0 ? undefined : notice,
+      );
+      const skipped = [...(changed ? listing.skipped : []), ...result.skipped];
+      if (result.files.length > 0 || skipped.length > 0) {
+        stashRun.hook.onResult(describeWorktreePath(cwd, scratch), {
+          files: result.files,
+          skipped,
+        });
+      }
+    } catch {
+      // 預かりは best-effort。1つの置き場の失敗で他を止めない
+    }
+  }
+  return kept;
 }
 
 export const RESCUE_LANDED_SCAN_COMMITS = 300;

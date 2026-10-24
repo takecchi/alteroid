@@ -200,6 +200,21 @@ describe('未追跡のファイルの預かり（デーモン側。#4863）', ()
     await done(pool);
   });
 
+  it('git でない置き場の位置（絶対パスの worktree）でも、同じに取り込み、同じ path でも作業ツリーの預かりと別の項目にする（#5255）', async () => {
+    const { pool, stores, fake } = await setup();
+    const fileId = offer(fake, 'script.sh', 'echo bench', '/tmp/mgr-abcd1234-bench');
+    offer(fake, 'script.sh', 'echo tree', '.');
+    await vi.waitFor(async () => expect(await stashOf(stores)).toHaveLength(2));
+    const entries = await stashOf(stores);
+    const scratch = entries.find((e) => e.worktree === '/tmp/mgr-abcd1234-bench');
+    expect(scratch).toMatchObject({ path: 'script.sh', sha256: sha256Hex(bytesOf('echo bench')) });
+    const stored = await stores.attachments.get(scratch!.attachmentId);
+    expect(new TextDecoder().decode(stored?.bytes)).toBe('echo bench');
+    expect(entries.find((e) => e.worktree === '.')?.path).toBe('script.sh');
+    await vi.waitFor(() => expect(fake.deleted).toContain(fileId));
+    await done(pool);
+  });
+
   it('同じ (worktree, path) が新しい中身で来たら古い添付を消して差し替える。同じ sha256 なら取りに行かず退避先だけ消す', async () => {
     const { pool, stores, fake } = await setup();
     offer(fake, 'a.txt', 'v1');

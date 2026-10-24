@@ -160,7 +160,7 @@ export async function worktreeRootsOfDirs(
 }
 
 // `os.tmpdir()` を使わない: 担い手は文字どおりの `/tmp/mgr-<id の先頭>` に作業場を作り、runner の `TMPDIR` が別の場所を指していても探す先は `/tmp` でなければ当たらないため
-const MANAGER_SCRATCH_TMP_ROOT = '/tmp';
+export const MANAGER_SCRATCH_TMP_ROOT = '/tmp';
 
 export function matchesManagerScratchDirName(name: string, managerId: string): boolean {
   const match = MANAGER_SCRATCH_DIR_NAME_PATTERN.exec(name);
@@ -479,7 +479,7 @@ export interface ComputeUnpushedWorkOptions {
 }
 
 // cwd の外は絶対パスを出す: `..` で始まる相対パスは読みにくいため
-function describeWorktreePath(cwd: string, repoRoot: string): string {
+export function describeWorktreePath(cwd: string, repoRoot: string): string {
   const relativePath = path.relative(cwd, repoRoot);
   if (relativePath.length === 0) return '.';
   if (relativePath.startsWith(`..${path.sep}`) || relativePath === '..') return repoRoot;
