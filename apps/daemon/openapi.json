@@ -7128,6 +7128,27 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "消す前の日誌が書けなかった（**消していない**）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -7529,6 +7550,27 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "既に在るやり方を書き直す前の日誌が書けなかった（**書き直していない**）。新しく置く回は日誌を後に書くので、これを返さない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -7787,6 +7829,27 @@
                     }
                   },
                   "required": ["error", "current"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "消す前の日誌が書けなかった（**消していない**）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
                   "additionalProperties": false
                 }
               }
@@ -25439,6 +25502,27 @@
                     }
                   },
                   "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "閉じる前の日誌が書けなかった（**閉じていない**）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
                   "additionalProperties": false
                 }
               }

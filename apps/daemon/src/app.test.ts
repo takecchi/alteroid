@@ -51,6 +51,7 @@ import {
   memoryVersion,
   noteDroppedRecord,
   parseMcpServers,
+  practiceVersion,
   RunnerMcpServersUnsupportedError,
   RECENT_TRACE_LIMIT,
   RESERVED_SCHEDULE_KINDS,
@@ -5063,7 +5064,8 @@ describe('HTTP API', () => {
     });
     expect((await stores.commitments.get(id))?.closedBy).toBe('human');
     expect(await stores.commitments.get(id)).not.toBeNull();
-    expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(2);
+    // #5243: 積んだ行（1）＋閉じる前の行（2）＋閉じた後の行（3）。旧は積んだ行と閉じた後の行の2行
+    expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(3);
   });
 
   // 片方の枝だけ測ると導出を潰す変異が生き残るので、未了（右枝＝`at`）と片付いた（左枝＝`closedAt`）の両方を測る。
@@ -5130,8 +5132,9 @@ describe('HTTP API', () => {
     expect((await stores.commitments.get(other.id))?.closedAt).toBeUndefined();
   });
 
+  // #5243 で反転（Issue #2037 の「落ちても 200」を、日誌を先に書く「落ちたら閉じず 500」へ）: 閉じた後に書いて握ると、人間が取り消したのにクローンへ名指しされず学びにもならない。stderr に跡が1行出て、その行に理由の本文は載らない保証は残してある。
   it(
-    '日誌への追記が落ちても、片付けは効いていて応答は成功する（Issue #2037）。' +
+    '日誌への追記が落ちたら、閉じずに 500 を返す（Issue #5243。旧 #2037）。' +
       'stderr に跡が1行出て、その行に理由の本文は載らない',
     async () => {
       const opened = await app.request('/commitments', json({ body: '日誌が落ちても片付く件' }));
@@ -5161,12 +5164,10 @@ describe('HTTP API', () => {
         );
       });
 
-      expect(response?.status).toBe(200);
-      expect(await response?.json()).toEqual({ ok: true });
+      expect(response?.status).toBe(500);
+      expect(await response?.json()).toMatchObject({ code: 'journal_write_failed' });
 
-      expect(await stores.commitments.get(id)).toMatchObject({
-        closedReason: 'SECRET-CLOSE-REASON',
-      });
+      expect((await stores.commitments.get(id))?.closedAt).toBeUndefined();
 
       const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
       expect(dropped).toHaveLength(1);
@@ -5573,6 +5574,14 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
   it('各口とも、日誌への追記が落ちても応答は 500 にならず、stderr に跡が出る。能力を広げる2口（issue #2123）は逆に 500 で状態も変わらない', async () => {
     await stores.persona.write('table-memory', '# 元の内容\n');
     await stores.practices.write({ slug: 'table-practice', kind: 'k', title: 't', content: 'c' });
+    const tablePracticeDel = await stores.practices.write({
+      slug: 'table-practice-del',
+      kind: 'k',
+      title: 't',
+      content: 'c',
+    });
+    const openedForClose = await app.request('/commitments', json({ body: '閉じる対象' }));
+    const { id: closeId } = (await openedForClose.json()) as { id: string };
     await stores.schedules.put({
       kind: 'table-kind',
       spec: { type: 'daily', at: '09:00' },
@@ -5618,7 +5627,10 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
       tracesDrop?: true;
     }[] = [
       {
+        // #5243 で反転: 消した後に日誌を書いていた（落ちても 200）のを、日誌を先に書く（落ちたら消さず 500）へ。
         name: 'DELETE /memory/:slug',
+        widened: true,
+        tracesDrop: true,
         request: () =>
           withFailingJournal.request(
             `/memory/table-memory?ifMatch=${memoryVersion('# 元の内容\n')}`,
@@ -5626,7 +5638,10 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
           ),
       },
       {
-        name: 'PUT /practices/:slug',
+        // #5243 で反転: 既に在るやり方の書き直しは、日誌を先に書く（落ちたら書き直さず 500）へ。新しく置く回は今までどおり（下の個別のテスト）。
+        name: 'PUT /practices/:slug（既に在るやり方の書き直し）',
+        widened: true,
+        tracesDrop: true,
         request: () =>
           withFailingJournal.request('/practices/table-practice', {
             ...json({ kind: 'k', title: 't2', content: 'c2' }),
@@ -5656,6 +5671,27 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
             method: 'DELETE',
             headers: { 'content-type': 'application/json' },
           }),
+      },
+      {
+        // #5243 で追加: 閉じる前に日誌を書く。
+        name: 'DELETE /practices/:slug',
+        widened: true,
+        tracesDrop: true,
+        request: async () =>
+          withFailingJournal.request(
+            `/practices/table-practice-del?ifMatch=${encodeURIComponent(practiceVersion(tablePracticeDel))}`,
+            { method: 'DELETE' },
+          ),
+      },
+      {
+        name: 'POST /commitments/:id/close',
+        widened: true,
+        tracesDrop: true,
+        request: () =>
+          withFailingJournal.request(
+            `/commitments/${closeId}/close`,
+            json({ reason: '表で閉じる' }),
+          ),
       },
       {
         name: 'POST /commitments',
@@ -5703,6 +5739,11 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
     // 外す前の日誌が書けなかったので、外していない（#5234）
     expect((await stores.schedules.get('table-kind'))?.request).toBe('既存の依頼');
     expect(await stores.mcpServers.read()).toBeNull();
+    // 日誌が書けなかった4口は、状態を変えていない（#5243）
+    expect((await stores.persona.read('table-memory'))?.content).toBe('# 元の内容\n');
+    expect((await stores.practices.read('table-practice'))?.title).toBe('t');
+    expect(await stores.practices.read('table-practice-del')).not.toBeNull();
+    expect((await stores.commitments.get(closeId))?.closedAt).toBeUndefined();
 
     const tracedCaseCount = cases.filter((c) => c.widened !== true || c.tracesDrop === true).length;
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));

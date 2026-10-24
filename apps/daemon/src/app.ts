@@ -24,6 +24,7 @@ import type {
   Exchange,
   GrantResult,
   InboxEvent,
+  Commitment,
   JobStatus,
   JournalEntry,
   JournalEntryInput,
@@ -1262,6 +1263,15 @@ export async function noteIntegrationAttachmentUsage(
 
 function journalWriteFailedBody(): { error: string; code: typeof JOURNAL_WRITE_FAILED_CODE } {
   return { error: JOURNAL_WRITE_FAILED_MESSAGE, code: JOURNAL_WRITE_FAILED_CODE };
+}
+
+// 日誌を先に書いた人間の取り消し・書き換えが、状態に届かなかったときの打ち消しの行（`removeScheduleJournalFirst` の打ち消しと同じ書式）。印（humanAction）を持たないので、クローンに「人間がした」と学ばせない。
+function undoneByHumanEntry(operation: string, subject: string, why: string): JournalEntryInput {
+  return {
+    type: 'decision',
+    decision: `直前の${operation}の行は効いていない（変えていない）。理由: ${why}`,
+    grounds: `${subject}。日誌を先に書いたが、状態を変える操作が実行されなかったため打ち消す`,
+  };
 }
 
 // 人間の答えを届ける前の日誌が書けなかったことだけを、`managers.send` から抜ける他の例外と見分けるための印。`beforeAnswer` が投げた例外は `send` をそのまま通って route へ戻るので、型で拾う。
@@ -4125,6 +4135,10 @@ export function createApp(deps: AppDeps) {
             description: '該当する記憶が無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          500: {
+            description: '消す前の日誌が書けなかった（**消していない**）。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
+          },
         },
       }),
       queryParams(memoryDeleteQuery),
@@ -4146,11 +4160,47 @@ export function createApp(deps: AppDeps) {
             428,
           );
         }
+        // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（消さないので書く跡が無い。ふつうの衝突のたびに2行を積まない）。
+        if (memoryVersion(existing.content) !== ifMatch) {
+          return c.json(
+            {
+              error: '記憶が読んだ後に変わっています（消していません）' as const,
+              current: { document: existing, version: memoryVersion(existing.content) },
+            },
+            409,
+          );
+        }
+        // 日誌を先に書き、書けなければ消さずに 500（#5243）: 消した後に書いて `appendJournalOrDrop` で握ると、人間がクローンの記憶を消したのにクローンへ名指しされず、学びにもならない。
+        // 先の行は `memory_update`（`cause:'human'`）にせず `decision` にする: `memory_update` の `cause:'human'` は `deriveHumanTouchedAtFromJournal` などが派生値の根拠に読む行なので、消せなかった回に残すと派生を誤らせる。`decision` の先の行は humanAction を持たないので、クローンへ名指しもされない。
+        // 効いた後の `memory_update` の行（下）は今までどおり。
+        const entryBefore: JournalEntryInput = {
+          type: 'decision',
+          decision: `人間が記憶 ${slug} を消す`,
+          grounds: '人間が直接 API から消そうとしている',
+        };
+        try {
+          await stores.journal.append(entryBefore);
+        } catch (error) {
+          noteDroppedRecord('記憶削除の日誌（消していない）', `slug=${slug}`, kindOfError(error));
+          return c.json(journalWriteFailedBody(), 500);
+        }
         // `markHumanTouched` はここでは呼ばない: `PersonaStore.remove` が保護状態の派生値も一緒に消す（実体の無い印は監査上の嘘になる）ので、印を立てても同じ操作の中で消える。delete は「人間の意思で消した」であって、将来ここに書かれる新しい内容を無条件に保護する理由にならない。
         try {
           await stores.persona.remove(slug, { ifMatch });
         } catch (error) {
-          // 黙って消さない: 消していないので日誌にも積まない。
+          // 先の行を打ち消す: 消していない。
+          await appendJournalOrDrop(
+            stores,
+            undoneByHumanEntry(
+              '記憶を消す',
+              `記憶 ${slug} の削除`,
+              error instanceof MemoryConflictError
+                ? '消す直前に記憶が書き換えられていた（見た版と違う）'
+                : '記憶の削除が失敗した',
+            ),
+            '記憶削除の打ち消しの日誌',
+            `slug=${slug}`,
+          );
           if (error instanceof MemoryConflictError) {
             return c.json(
               {
@@ -4289,6 +4339,12 @@ export function createApp(deps: AppDeps) {
               '`current` にいまの版を返す。',
             content: { 'application/json': { schema: resolver(practiceConflictResponseSchema) } },
           },
+          500: {
+            description:
+              '既に在るやり方を書き直す前の日誌が書けなかった（**書き直していない**）。' +
+              '新しく置く回は日誌を後に書くので、これを返さない。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
+          },
         },
       }),
       jsonBody(practiceBody, (where) => ({
@@ -4310,49 +4366,86 @@ export function createApp(deps: AppDeps) {
           before = null;
           beforeWasUnreadable = true;
         }
+        // 既に在る行（読めない形の行を含む）の書き直しだけが、日誌を先に書く対象（#5243）。新しく置く回は取り消しでも書き換えでもないので、今までどおり書いた後に残す。
+        const rewriting = before !== null || beforeWasUnreadable;
+        const conflictBody = (current: Practice | null) => ({
+          error: 'やり方が読んだ後に変わっています（書き換えていません）' as const,
+          current:
+            current === null ? null : { practice: current, version: practiceVersion(current) },
+        });
+        // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（書かないので書く跡が無い）。読めない行は版が比べられないので、store の排他の中の判定に任せる。
+        if (
+          ifMatch !== undefined &&
+          !beforeWasUnreadable &&
+          !(ifMatch === null
+            ? before === null
+            : before !== null && practiceVersion(before) === ifMatch)
+        ) {
+          return c.json(conflictBody(before), 409);
+        }
+        const entryAfter: JournalEntryInput = {
+          type: 'decision',
+          decision: beforeWasUnreadable
+            ? `読めない形で入っていたやり方 ${slug}（${kind}）を書き直した: ${title}`
+            : `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
+          grounds: beforeWasUnreadable
+            ? '人間が直接 API から、読めない形で入っていたやり方を書き直した（全文置換。' +
+              '前の本文は読めなかったため分からない）'
+            : before === null
+              ? '人間が直接 API から新しいやり方を器に置いた'
+              : '人間が直接 API からやり方を書き直した（全文置換。前の本文は' +
+                'GET /practices/:slug/versions の版の履歴に残る——#1309）',
+          target: { kind: 'practice', slug },
+          // 新しく置いた回には付けない: 取り消しでも書き換えでもなく、直しの合図として薄いため
+          ...(rewriting ? humanActionOf(c.get('principal'), 'practice_write', slug) : {}),
+        };
+        if (rewriting) {
+          // 日誌を先に書き、書けなければ書き直さずに 500（#5243）。先の行に humanAction を付けない: 印は効いた後の行（下）だけが持つ。書き直せなかった操作を、クローンに「人間がした」と学ばせないため。
+          // 行を作るのは try の外: 作る側の例外を「日誌に書けなかった」と取り違えない。
+          const entryBefore: JournalEntryInput = {
+            type: 'decision',
+            decision: beforeWasUnreadable
+              ? `人間が読めない形で入っていたやり方 ${slug}（${kind}）を書き直す: ${title}`
+              : `人間がやり方 ${slug}（${kind}）を書き直す: ${title}`,
+            grounds: '人間が直接 API から書き直そうとしている',
+          };
+          try {
+            await stores.journal.append(entryBefore);
+          } catch (error) {
+            noteDroppedRecord(
+              'やり方書き直しの日誌（書き直していない）',
+              `slug=${slug}`,
+              kindOfError(error),
+            );
+            return c.json(journalWriteFailedBody(), 500);
+          }
+        }
         let practice: Practice;
         try {
           practice = await stores.practices.write({ slug, kind, title, content }, { ifMatch });
         } catch (error) {
-          // 黙って上書きしない: 書いていないので日誌にも積まない。
-          if (error instanceof PracticeConflictError) {
-            return c.json(
-              {
-                error: 'やり方が読んだ後に変わっています（書き換えていません）' as const,
-                current:
-                  error.current === null
-                    ? null
-                    : { practice: error.current, version: practiceVersion(error.current) },
-              },
-              409,
+          if (rewriting) {
+            await appendJournalOrDrop(
+              stores,
+              undoneByHumanEntry(
+                'やり方を書き直す',
+                `やり方 ${slug} の書き直し`,
+                error instanceof PracticeConflictError
+                  ? '書き直す直前にやり方が変わっていた（見た版と違う）'
+                  : 'やり方の書き込みが失敗した',
+              ),
+              'やり方書き直しの打ち消しの日誌',
+              `slug=${slug}`,
             );
+          }
+          // 黙って上書きしない: 書いていない。
+          if (error instanceof PracticeConflictError) {
+            return c.json(conflictBody(error.current), 409);
           }
           throw error;
         }
         // 書き換え自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
-        await appendJournalOrDrop(
-          stores,
-          {
-            type: 'decision',
-            decision: beforeWasUnreadable
-              ? `読めない形で入っていたやり方 ${slug}（${kind}）を書き直した: ${title}`
-              : `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
-            grounds: beforeWasUnreadable
-              ? '人間が直接 API から、読めない形で入っていたやり方を書き直した（全文置換。' +
-                '前の本文は読めなかったため分からない）'
-              : before === null
-                ? '人間が直接 API から新しいやり方を器に置いた'
-                : '人間が直接 API からやり方を書き直した（全文置換。前の本文は' +
-                  'GET /practices/:slug/versions の版の履歴に残る——#1309）',
-            target: { kind: 'practice', slug },
-            // 新しく置いた回には付けない: 取り消しでも書き換えでもなく、直しの合図として薄いため
-            ...(before === null && !beforeWasUnreadable
-              ? {}
-              : humanActionOf(c.get('principal'), 'practice_write', slug)),
-          },
-          'やり方書き換えの日誌',
-          `slug=${slug}`,
-        );
+        await appendJournalOrDrop(stores, entryAfter, 'やり方書き換えの日誌', `slug=${slug}`);
         return c.json({ practice, version: practiceVersion(practice) });
       },
     )
@@ -4395,6 +4488,10 @@ export function createApp(deps: AppDeps) {
             description: '該当するやり方が無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          500: {
+            description: '消す前の日誌が書けなかった（**消していない**）。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
+          },
         },
       }),
       queryParams(practiceDeleteQuery),
@@ -4427,52 +4524,70 @@ export function createApp(deps: AppDeps) {
             428,
           );
         }
+        const conflictBody = (current: Practice | null) => ({
+          error: 'やり方が読んだ後に変わっています（消していません）' as const,
+          current:
+            current === null ? null : { practice: current, version: practiceVersion(current) },
+        });
+        // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（消さないので書く跡が無い）。
+        if (existing !== null && ifMatch !== undefined && practiceVersion(existing) !== ifMatch) {
+          return c.json(conflictBody(existing), 409);
+        }
+        // 行を作るのは try の外: 作る側の例外を「日誌に書けなかった」と取り違えない。
+        const entryBefore: JournalEntryInput = {
+          type: 'decision',
+          decision:
+            existing !== null
+              ? `人間がやり方 ${slug}（${existing.kind}）を消す: ${existing.title}`
+              : `人間が読めない形で入っていたやり方 ${slug} を消す`,
+          grounds: '人間が直接 API から消そうとしている',
+        };
+        const entryAfter: JournalEntryInput =
+          existing !== null
+            ? {
+                type: 'decision',
+                decision: `やり方 ${slug}（${existing.kind}）を消した: ${existing.title}`,
+                grounds: '人間が直接 API からやり方を消した',
+                target: { kind: 'practice', slug },
+                ...humanActionOf(c.get('principal'), 'practice_remove', slug),
+              }
+            : {
+                type: 'decision',
+                decision: `読めない形で入っていたやり方 ${slug} を消した`,
+                grounds: '人間が直接 API から、読めない形で入っていたやり方を消した',
+                target: { kind: 'practice', slug },
+                ...humanActionOf(c.get('principal'), 'practice_remove', slug),
+              };
+        // 日誌を先に書き、書けなければ消さずに 500（#5243）: 消すと題と本文が行から消えるので、後に書いて握ると何を消したかが残らない。先の行に humanAction を付けない（印は効いた後の行だけが持つ）。
+        try {
+          await stores.journal.append(entryBefore);
+        } catch (error) {
+          noteDroppedRecord('やり方削除の日誌（消していない）', `slug=${slug}`, kindOfError(error));
+          return c.json(journalWriteFailedBody(), 500);
+        }
         try {
           await stores.practices.remove(slug, ifMatch === undefined ? undefined : { ifMatch });
         } catch (error) {
-          // 黙って消さない: 消していないので日誌にも積まない。
+          await appendJournalOrDrop(
+            stores,
+            undoneByHumanEntry(
+              'やり方を消す',
+              `やり方 ${slug} の削除`,
+              error instanceof PracticeConflictError
+                ? '消す直前にやり方が変わっていた（見た版と違う）'
+                : 'やり方の削除が失敗した',
+            ),
+            'やり方削除の打ち消しの日誌',
+            `slug=${slug}`,
+          );
+          // 黙って消さない。
           if (error instanceof PracticeConflictError) {
-            return c.json(
-              {
-                error: 'やり方が読んだ後に変わっています（消していません）' as const,
-                current:
-                  error.current === null
-                    ? null
-                    : { practice: error.current, version: practiceVersion(error.current) },
-              },
-              409,
-            );
+            return c.json(conflictBody(error.current), 409);
           }
           throw error;
         }
         // 削除自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
-        if (existing !== null) {
-          await appendJournalOrDrop(
-            stores,
-            {
-              type: 'decision',
-              decision: `やり方 ${slug}（${existing.kind}）を消した: ${existing.title}`,
-              grounds: '人間が直接 API からやり方を消した',
-              target: { kind: 'practice', slug },
-              ...humanActionOf(c.get('principal'), 'practice_remove', slug),
-            },
-            'やり方削除の日誌',
-            `slug=${slug}`,
-          );
-        } else {
-          await appendJournalOrDrop(
-            stores,
-            {
-              type: 'decision',
-              decision: `読めない形で入っていたやり方 ${slug} を消した`,
-              grounds: '人間が直接 API から、読めない形で入っていたやり方を消した',
-              target: { kind: 'practice', slug },
-              ...humanActionOf(c.get('principal'), 'practice_remove', slug),
-            },
-            'やり方削除の日誌',
-            `slug=${slug}`,
-          );
-        }
+        await appendJournalOrDrop(stores, entryAfter, 'やり方削除の日誌', `slug=${slug}`);
         return c.json({ ok: true as const, slug });
       },
     )
@@ -6653,7 +6768,8 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 先に読んで判断しない: 「読む → 未了と分かる → 閉じる」に割ると、同じ id への同時の2つの close が両方書きにいき、後から来た理由で上書きされる。判定は台帳の1操作（`close`）に任せ、読むのは 404 と 409 を書き分けるためだけにする。読めない約束も閉じられるよう、読めない行に対しても直接 `close()` を試す。
+    // 先に読んだ結果で閉じる・閉じないを決めない: 「読む → 未了と分かる → 閉じる」に割ると、同じ id への同時の2つの close が両方書きにいき、後から来た理由で上書きされる。判定は台帳の1操作（`close`）に任せる。読むのは、既に断ると分かる回で日誌を積まないことと、404 と 409 を書き分けるためだけである。読めない約束も閉じられるよう、読めない行に対しても直接 `close()` を試す。
+    // 日誌を先に書いてから閉じる（#5243）: 書けなければ閉じずに 500。`close` が `false` を返したら先の行を打ち消す行を足す。
     .post(
       '/commitments/:id/close',
       describeRoute({
@@ -6687,6 +6803,10 @@ export function createApp(deps: AppDeps) {
               '閉じる書き込みが通らなかった（本文でそう言う。一覧で確かめてから閉じ直す）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          500: {
+            description: '閉じる前の日誌が書けなかった（**閉じていない**）。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
+          },
         },
       }),
       jsonBody(commitmentCloseBody, (where) => ({
@@ -6695,20 +6815,8 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { reason } = c.req.valid('json');
-        if (!(await stores.commitments.close(id, new Date().toISOString(), reason, 'human'))) {
-          // 読めない行が既に閉じられているときは `get` が投げる: `close()` が中身を読めるようにしたわけではなく、`get()` の契約は変えていない。
-          let existing;
-          try {
-            existing = await stores.commitments.get(id);
-          } catch (error) {
-            if (!(error instanceof UnreadableCommitmentError)) throw error;
-            return c.json(
-              {
-                error: `${id} は既に片付けてある（読めない形で入っているため、いつ・どう片付けたかは分からない）`,
-              },
-              409,
-            );
-          }
+        // `close` が閉じなかった（または読んだ時点で閉じられない）回の応答。読んだ行の状態で 404 と 409 を書き分ける。
+        const respondNotClosed = (existing: Commitment | null) => {
           if (existing === null) return c.json({ error: 'not found' as const }, 404);
           // 未了のまま残っている回を「片付いている」に潰さない（#5072）: 閉じていない行を閉じたと読ませるため
           if (existing.closedAt === undefined) {
@@ -6729,19 +6837,90 @@ export function createApp(deps: AppDeps) {
             },
             409,
           );
+        };
+        // 読めない行が既に閉じられているときは `get` が投げる: `close()` が中身を読めるようにしたわけではなく、`get()` の契約は変えていない。
+        const respondUnreadableClosed = () =>
+          c.json(
+            {
+              error: `${id} は既に片付けてある（読めない形で入っているため、いつ・どう片付けたかは分からない）`,
+            },
+            409,
+          );
+        // 読んだ版で既に断ると分かる回（無い・既に閉じている）は、日誌を書かずに返す（閉じないので書く跡が無い）。読めない行は閉じられるか分からないので、先へ進む。
+        let before: Commitment | null;
+        let beforeUnreadable = false;
+        try {
+          before = await stores.commitments.get(id);
+        } catch (error) {
+          if (!(error instanceof UnreadableCommitmentError)) throw error;
+          before = null;
+          beforeUnreadable = true;
+        }
+        if (!beforeUnreadable && (before === null || before.closedAt !== undefined)) {
+          return respondNotClosed(before);
+        }
+        // 日誌を先に書き、書けなければ閉じずに 500（#5243）: 閉じた後に書いて `appendJournalOrDrop` で握ると、人間が取り消したのにクローンへ名指しされず、学びにもならない。
+        // 先の行に humanAction を付けない: 印は効いた後の行（下）だけが持つ。閉じられなかった操作を、クローンに「人間がした」と学ばせないため。
+        // 行を作るのは try の外: 作る側の例外を「日誌に書けなかった」と取り違えない。
+        const entryBefore: JournalEntryInput = {
+          type: 'decision',
+          decision: `人間が引き受けた仕事を片付ける（${id}）: ${reason}`,
+          grounds: '人間が直接 API から閉じようとしている',
+        };
+        const entryAfter: JournalEntryInput = {
+          type: 'decision',
+          decision: `人間が引き受けた仕事を片付けた（${id}）: ${reason}`,
+          grounds: '人間が直接 API から閉じた',
+          ...humanActionOf(c.get('principal'), 'commitment_close', id),
+        };
+        try {
+          await stores.journal.append(entryBefore);
+        } catch (error) {
+          noteDroppedRecord(
+            '引き受けた仕事を片付ける日誌（閉じていない）',
+            `id=${id}`,
+            kindOfError(error),
+          );
+          return c.json(journalWriteFailedBody(), 500);
+        }
+        let closed: boolean;
+        try {
+          closed = await stores.commitments.close(id, new Date().toISOString(), reason, 'human');
+        } catch (error) {
+          await appendJournalOrDrop(
+            stores,
+            undoneByHumanEntry(
+              '引き受けた仕事を片付ける',
+              `${id} を閉じる操作`,
+              '台帳の閉じる操作が失敗した',
+            ),
+            '引き受けた仕事を片付ける日誌の打ち消し',
+            `id=${id}`,
+          );
+          throw error;
+        }
+        if (!closed) {
+          await appendJournalOrDrop(
+            stores,
+            undoneByHumanEntry(
+              '引き受けた仕事を片付ける',
+              `${id} を閉じる操作`,
+              '閉じる直前に行が無くなっていた・既に閉じられていた・閉じる書き込みが通らなかった',
+            ),
+            '引き受けた仕事を片付ける日誌の打ち消し',
+            `id=${id}`,
+          );
+          let existing;
+          try {
+            existing = await stores.commitments.get(id);
+          } catch (error) {
+            if (!(error instanceof UnreadableCommitmentError)) throw error;
+            return respondUnreadableClosed();
+          }
+          return respondNotClosed(existing);
         }
         // 片付けること自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
-        await appendJournalOrDrop(
-          stores,
-          {
-            type: 'decision',
-            decision: `人間が引き受けた仕事を片付けた（${id}）: ${reason}`,
-            grounds: '人間が直接 API から閉じた',
-            ...humanActionOf(c.get('principal'), 'commitment_close', id),
-          },
-          '引き受けた仕事を片付けた日誌',
-          `id=${id}`,
-        );
+        await appendJournalOrDrop(stores, entryAfter, '引き受けた仕事を片付けた日誌', `id=${id}`);
         return c.json(okResponseSchema.parse({ ok: true }));
       },
     )

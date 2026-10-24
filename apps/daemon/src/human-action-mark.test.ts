@@ -322,8 +322,10 @@ describe('/practices/:slug の印', () => {
     );
     expect(response.status).toBe(200);
 
-    const [entry, ...rest] = await decisions();
+    // #5243: 日誌を先に書くので、印の無い先の行と、効いた後の印つきの行の2行になる（旧: 印つきの1行だけ。印つきの行の中身は変えていない）
+    const [first, entry, ...rest] = await decisions();
     expect(rest).toEqual([]);
+    expect(first).not.toHaveProperty('humanAction');
     expect(entry?.grounds).toContain('人間が直接 API からやり方を書き直した');
     expect(entry?.humanAction).toEqual({ kind: 'practice_write', target: 'daily', via });
     expect(entry?.target).toEqual({ kind: 'practice', slug: 'daily' });
