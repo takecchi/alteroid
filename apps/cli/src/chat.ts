@@ -1468,14 +1468,17 @@ export async function runSlashCommand(
         const created = await client.schedule.$post({
           json: { kind: kind ?? '', request: parsed.request, spec: parsed.spec },
         });
-        stdout.write(
-          created.ok
-            ? `${kind ?? ''} を仕込みました（/schedule で確認できます）\n`
-            : `${await withDetail(
-                '仕込めませんでした（名前は英小文字・数字・. _ -、既定の定期ジョブの名前は使えません。cron 式なら書式も確かめてください）',
-                created,
-              )}\n`,
+        if (created.ok) {
+          stdout.write(`${kind ?? ''} を仕込みました（/schedule で確認できます）\n`);
+          return 'ok';
+        }
+        const failure = await withDetail(
+          '仕込めませんでした（名前は英小文字・数字・. _ -、既定の定期ジョブの名前は使えません。cron 式なら書式も確かめてください）',
+          created,
         );
+        stdout.write(`${failure}\n`);
+        // 書き込み系の HTTP の失敗も失敗として渡す（#5240。`/done` と同じ形）
+        onFailed?.(failure);
         return 'ok';
       }
       if (rest.length > 0) {
@@ -1549,16 +1552,18 @@ export async function runSlashCommand(
         return usageError('使い方: /unschedule <kind>（/schedule で一覧）\n');
       }
       const response = await client.schedule[':kind'].$delete({ param: { kind } });
+      if (response.ok) {
+        stdout.write(`${kind} を外しました\n`);
+        return 'ok';
+      }
       // 「無い」は 404 だけ。それ以外の失敗を「ありません」と言わない。
-      stdout.write(
-        `${
-          response.ok
-            ? `${kind} を外しました`
-            : response.status === 404
-              ? `${kind} という継続中の依頼はありません（既定の定期ジョブは外せません）`
-              : await withDetail(`${kind} を外せませんでした`, response)
-        }\n`,
-      );
+      const failure =
+        response.status === 404
+          ? `${kind} という継続中の依頼はありません（既定の定期ジョブは外せません）`
+          : await withDetail(`${kind} を外せませんでした`, response);
+      stdout.write(`${failure}\n`);
+      // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
+      onFailed?.(failure);
       return 'ok';
     }
 
@@ -1568,15 +1573,17 @@ export async function runSlashCommand(
         return usageError('使い方: /run <kind>（/schedule で一覧）\n');
       }
       const response = await client.schedule[':kind'].run.$post({ param: { kind } });
-      stdout.write(
-        `${
-          response.ok
-            ? `${kind} を起こしました（結果は日誌・日報に出ます）`
-            : response.status === 404
-              ? `${kind} という定期ジョブはありません`
-              : await withDetail(`${kind} を起こせませんでした`, response)
-        }\n`,
-      );
+      if (response.ok) {
+        stdout.write(`${kind} を起こしました（結果は日誌・日報に出ます）\n`);
+        return 'ok';
+      }
+      const failure =
+        response.status === 404
+          ? `${kind} という定期ジョブはありません`
+          : await withDetail(`${kind} を起こせませんでした`, response);
+      stdout.write(`${failure}\n`);
+      // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
+      onFailed?.(failure);
       return 'ok';
     }
 
@@ -1590,13 +1597,14 @@ export async function runSlashCommand(
       const response = await client.events.$post({
         json: { source, payload: parseEventPayload(body) },
       });
-      stdout.write(
-        `${
-          response.ok
-            ? '外部イベントとして届けました（クローンが判断します）'
-            : await withDetail('届けられませんでした', response)
-        }\n`,
-      );
+      if (response.ok) {
+        stdout.write('外部イベントとして届けました（クローンが判断します）\n');
+        return 'ok';
+      }
+      const failure = await withDetail('届けられませんでした', response);
+      stdout.write(`${failure}\n`);
+      // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
+      onFailed?.(failure);
       return 'ok';
     }
 
@@ -1949,11 +1957,16 @@ export async function runSlashCommand(
       }
       const owningConversationId = listed.messagesConversationId;
       if (owningConversationId === null) {
-        stdout.write('先に /conversation <番号|id> でその発言が含まれる会話を開いてください\n');
+        const notOpened = '先に /conversation <番号|id> でその発言が含まれる会話を開いてください';
+        stdout.write(`${notOpened}\n`);
+        // 送る前に止めた回も失敗として渡す（#5240）
+        onFailed?.(notOpened);
         return 'ok';
       }
       if (target === undefined) {
-        stdout.write('編集を送れませんでした（接続先が分かりません）\n');
+        const noTarget = '編集を送れませんでした（接続先が分かりません）';
+        stdout.write(`${noTarget}\n`);
+        onFailed?.(noTarget);
         return 'ok';
       }
       const carried = (listed.messageAttachments[id] ?? []).map((a) => a.id);
@@ -2066,13 +2079,13 @@ export async function runSlashCommand(
       });
       if (!response.ok) {
         // 404 以外はサーバの理由をそのまま出す: 状態コードだけを見せて「打ち間違えた」と誤読させない。
-        stdout.write(
-          `${
-            response.status === 404
-              ? `そのマネージャーは見つかりませんでした: ${id}`
-              : await errorDetail(response)
-          }\n`,
-        );
+        const failure =
+          response.status === 404
+            ? `そのマネージャーは見つかりませんでした: ${id}`
+            : await errorDetail(response);
+        stdout.write(`${failure}\n`);
+        // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
+        onFailed?.(failure);
         return 'ok';
       }
       reportOutcome(await response.json(), STOPPED_OUTCOMES, onFailed);
@@ -2127,13 +2140,13 @@ export async function runSlashCommand(
         json: { text },
       });
       if (!response.ok) {
-        stdout.write(
-          `${
-            response.status === 404
-              ? `そのマネージャーは見つかりませんでした: ${id}`
-              : await errorDetail(response)
-          }\n`,
-        );
+        const failure =
+          response.status === 404
+            ? `そのマネージャーは見つかりませんでした: ${id}`
+            : await errorDetail(response);
+        stdout.write(`${failure}\n`);
+        // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
+        onFailed?.(failure);
         return 'ok';
       }
       reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
@@ -2159,13 +2172,13 @@ export async function runSlashCommand(
         json: { text, requestId: target.requestId },
       });
       if (!response.ok) {
-        stdout.write(
-          `${
-            response.status === 404
-              ? `そのマネージャーは見つかりませんでした: ${target.managerId}`
-              : await errorDetail(response)
-          }\n`,
-        );
+        const failure =
+          response.status === 404
+            ? `そのマネージャーは見つかりませんでした: ${target.managerId}`
+            : await errorDetail(response);
+        stdout.write(`${failure}\n`);
+        // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
+        onFailed?.(failure);
         return 'ok';
       }
       reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
@@ -2193,13 +2206,12 @@ export async function runSlashCommand(
           json: { text: defaultText, decision },
         });
         if (!response.ok) {
-          stdout.write(
-            `${
-              response.status === 404
-                ? `そのマネージャーは見つかりませんでした: ${target.managerId}`
-                : await errorDetail(response)
-            }\n`,
-          );
+          const failure =
+            response.status === 404
+              ? `そのマネージャーは見つかりませんでした: ${target.managerId}`
+              : await errorDetail(response);
+          stdout.write(`${failure}\n`);
+          onFailed?.(failure);
           return 'ok';
         }
         reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
@@ -2224,13 +2236,12 @@ export async function runSlashCommand(
         },
       });
       if (!response.ok) {
-        stdout.write(
-          `${
-            response.status === 404
-              ? `そのマネージャーは見つかりませんでした: ${target.managerId}`
-              : await errorDetail(response)
-          }\n`,
-        );
+        const failure =
+          response.status === 404
+            ? `そのマネージャーは見つかりませんでした: ${target.managerId}`
+            : await errorDetail(response);
+        stdout.write(`${failure}\n`);
+        onFailed?.(failure);
         return 'ok';
       }
       reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
@@ -2280,19 +2291,25 @@ export async function runSlashCommand(
           param: { id: removeId },
           query: reason === '' ? {} : { overrideReason: reason },
         });
+        // 書き込み系の HTTP の失敗も失敗として渡す（#5240）。表示した文のまま
         if (response.status === 404) {
-          stdout.write('その生ログはありません\n');
+          const failure = 'その生ログはありません';
+          stdout.write(`${failure}\n`);
+          onFailed?.(failure);
           return 'ok';
         }
         if (response.status === 409) {
-          stdout.write(
+          const failure =
             `${await errorDetail(response)}\n` +
-              `理由を付けて上書きするには: /archive remove ${removeId} <理由>\n`,
-          );
+            `理由を付けて上書きするには: /archive remove ${removeId} <理由>`;
+          stdout.write(`${failure}\n`);
+          onFailed?.(failure);
           return 'ok';
         }
         if (!response.ok) {
-          stdout.write(`${await errorDetail(response)}\n`);
+          const failure = await errorDetail(response);
+          stdout.write(`${failure}\n`);
+          onFailed?.(failure);
           return 'ok';
         }
         const result = await response.json();
