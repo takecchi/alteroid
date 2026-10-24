@@ -989,6 +989,11 @@ function whereValidationFailed(issues: readonly { readonly path?: readonly unkno
     .join(', ');
 }
 
+// 必須の項目を持たないが、本文が無ければ 400 で断る経路の `describeRoute` に置く（#5194）: hono-openapi 1.5 は、必須の項目を
+// 持たないオブジェクトの本文に `requestBody.required` を付けない。`refine` で「どれか1つが要る」と縛った本文は spec からそれが見えず、
+// 何も言わないと本文を省けると読めるため。本文が無い要求は `jsonBody` が `{}` として検査するので、全部省略可の本文には付けない（省いても通る）
+const REQUIRED_JSON_BODY = { required: true, content: {} } as const;
+
 // `app.ts` の中で `validator('json', ...)` を直接書かない: `hook` を渡し忘れた経路だけ `@hono/standard-validator` の既定の 400（本文そのものを返す）に落ちるので、ここへ集約して付け忘れを作れなくする。`onInvalid` を上書きしてよいのも、混ぜてよいのは `where` だけで送られてきた値は混ぜない。
 function jsonBody<Schema extends z.ZodTypeAny>(
   schema: Schema,
@@ -5286,6 +5291,7 @@ export function createApp(deps: AppDeps) {
           '一方が要る。`selections` があれば `answer` は省略でき、併用すると補足になる。デーモンが' +
           '設問・選択肢・その他・補足を人間が読める文に畳んで回答として残す（構造は `selections` に残る。' +
           '未回答の設問があってもよい）。',
+        requestBody: REQUIRED_JSON_BODY,
         responses: {
           200: {
             description: '答えた。',

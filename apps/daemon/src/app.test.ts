@@ -7980,6 +7980,37 @@ describe('OpenAPI', () => {
     expect(Object.keys(journalStreamContent ?? {})).toContain('text/event-stream');
   });
 
+  it('JSON の本文を省けると spec が言うのは、本文なしの要求を実際に受ける経路だけである（#5194）', async () => {
+    const spec = (await (await app.request('/openapi.json')).json()) as {
+      paths: Record<
+        string,
+        Record<string, { requestBody?: { required?: boolean; content?: Record<string, unknown> } }>
+      >;
+    };
+    const optional = Object.entries(spec.paths).flatMap(([path, methods]) =>
+      Object.entries(methods)
+        .filter(([, op]) => op.requestBody?.content?.['application/json'] !== undefined)
+        .filter(([, op]) => op.requestBody?.required !== true)
+        .map(([method]) => `${method.toUpperCase()} ${path}`),
+    );
+    // hono-openapi は必須の項目を持たない本文に required を付けない。全部省略可の本文はそのとおりで、`refine` で縛った回答の本文は明示して必須にする
+    expect(optional.sort()).toEqual(['DELETE /managers/{id}', 'PUT /tokens/policy']);
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores }),
+    });
+    // 省けると言った経路は、本文なしで形の検査を通る（400 にならない）
+    expect((await withTokens.request('/tokens/policy', { method: 'PUT' })).status).toBe(200);
+    expect((await withTokens.request('/managers/nope', { method: 'DELETE' })).status).toBe(404);
+    // 必須と言った経路は、本文なしを 400 で断る
+    expect((await withTokens.request('/approvals/nope/answer', { method: 'POST' })).status).toBe(
+      400,
+    );
+  });
+
   it('/managers に status / limit / afterId / afterStartedAt のクエリが載る（offset は増えない）', async () => {
     const spec = (await (await app.request('/openapi.json')).json()) as {
       paths: Record<
