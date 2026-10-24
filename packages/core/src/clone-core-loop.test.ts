@@ -1678,6 +1678,7 @@ describe('クローン', () => {
       await s.clone.stop();
     });
 
+    // 日誌を先に書く順にしたので、文言は「許可を記録した」から「許可を記録する」へ変えた（#5241。旧順は日誌が落ちると記録無しで許可が効いた）
     it('記録した事実も日誌（decision）に残る', async () => {
       const s = setup();
       await s.stores.jobs.putApproval(PERMISSION_REQUEST_APPROVAL);
@@ -1690,7 +1691,7 @@ describe('クローン', () => {
       const decisions = await s.stores.journal.list({ types: ['decision'] });
       expect(
         decisions.some(
-          (entry) => entry.type === 'decision' && entry.decision.includes('許可を記録した'),
+          (entry) => entry.type === 'decision' && entry.decision.includes('許可を記録する'),
         ),
       ).toBe(true);
 

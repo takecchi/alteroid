@@ -1898,7 +1898,7 @@ class Clone implements CloneHost {
   }
 
   // `via.kind === 'operator'` や `via === undefined` では記録しない: operator の token はクローン自身の Bash からも読め、クローンが `answer` を偽造できて人間の証拠にならないため
-  // 記録に失敗しても投げない: 許可の記録は副産物で、人間への回答という主作用を巻き込まないため
+  // 記録に失敗しても投げない（日誌が書けない場合も同じ）: 許可の記録は副産物で、人間への回答という主作用を巻き込まないため
   async #recordPermissionGrantIfConsented(
     approval: PendingApproval,
     rawAnswer: string,
@@ -1950,21 +1950,34 @@ class Clone implements CloneHost {
       grantedAt: answeredAt,
       route: { principalKind: 'account', accountId: via.accountId },
     };
+    // 日誌を先に書く: 許可は能力を広げる変更（分類器の判定より先に効く）なので、日誌に1行も無いまま効く窓を作らない。
+    // `#journal` は書けなくても握って捨てるので使わない: 書けたかを知る必要があるため
+    // 書けなければ許可だけ書かない: 人間への回答（主作用）は止めず、回答を受けたクローンへの知らせにも許可の結果は載せていない（本文は回答そのもの）
+    try {
+      await this.#stores.journal.append({
+        type: 'decision',
+        decision: `許可を記録する: ${permissionRequest.rule}`,
+        grounds: `許可されたアカウント（${via.accountId}）の回答（${grounds}）`,
+      });
+    } catch (error) {
+      noteDroppedRecord(
+        '許可の記録（日誌に書けないので許可を記録しなかった）',
+        `approvalId=${approval.id}・rule=${permissionRequest.rule}`,
+        error,
+      );
+      return;
+    }
     try {
       await this.#stores.permissionGrants.put(grant);
     } catch (error) {
+      // 先の「許可を記録する」の行を打ち消す: 許可が無いのに「記録する」だけが残ると事実と食い違うため
       await this.#journal({
         type: 'decision',
-        decision: `許可の記録に失敗した: ${permissionRequest.rule}`,
+        decision: `直前の「許可を記録する」の行は効いていない（許可の記録に失敗した）: ${permissionRequest.rule}`,
         grounds: `${collapseErrorCause(error)}（${grounds}）`,
       });
       return;
     }
-    await this.#journal({
-      type: 'decision',
-      decision: `許可を記録した: ${permissionRequest.rule}`,
-      grounds: `許可されたアカウント（${via.accountId}）の回答（${grounds}）`,
-    });
     // 委譲先へ配る（#4952）。載せない許可（前方一致など）では配らない: 一覧は変わらないため
     // 待たない: 人間への回答という主作用を runner との往復で遅らせないため。配れなくても許可の記録は済んでいる（配れなかったことはサービスが日誌に残す）
     if (delegatedPermissionRuleOf(grant.rule) !== undefined) {
