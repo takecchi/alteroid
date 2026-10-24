@@ -5698,7 +5698,10 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
         request: () => withFailingJournal.request('/commitments', json({ body: '積む対象' })),
       },
       {
+        // #5242 で反転: 書き直した後に日誌を書いていた（落ちても 200）のを、日誌を先に書く（落ちたら書き直さず 500）へ。編集前の本文は日誌にしか残らないので、跡が日誌に無いまま上書きしてはいけない。
         name: 'PATCH /commitments/:id',
+        widened: true,
+        tracesDrop: true,
         request: () =>
           withFailingJournal.request(`/commitments/${patchId}`, {
             ...json({ body: '直した本文' }),
@@ -5744,6 +5747,8 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
     expect((await stores.practices.read('table-practice'))?.title).toBe('t');
     expect(await stores.practices.read('table-practice-del')).not.toBeNull();
     expect((await stores.commitments.get(closeId))?.closedAt).toBeUndefined();
+    // 編集前の本文が日誌に無いまま上書きしていない（#5242）
+    expect((await stores.commitments.get(patchId))?.body).toBe('編集対象');
 
     const tracedCaseCount = cases.filter((c) => c.widened !== true || c.tracesDrop === true).length;
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
