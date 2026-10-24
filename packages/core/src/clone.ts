@@ -93,6 +93,7 @@ import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
 import { WorkerLimitNotices, workerLimitLabel } from './runner-worker-limit-notice.js';
 import { excerpt, excerptLine, renderListingFromEnd, tailByCodePoints } from './excerpt.js';
+import { closeCommitmentJournalFirst } from './commitment-auto-close.js';
 import { readConversationWindow } from './conversation.js';
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
 import {
@@ -3187,27 +3188,33 @@ class Clone implements CloneHost {
         '（running、または done で知らせより後のターンが成功）。人間・クローンが否定するなら開き直すこと' +
         '（POST /commitments/:id/reopen・commitment_reopen）';
       try {
-        const closed = await this.#stores.commitments.close(
-          row.eventId,
-          new Date().toISOString(),
+        // 日誌を先に書いてから閉じる（#5235）。書けなければ閉じず、候補にも残して次の機会に再試行する
+        const result = await closeCommitmentJournalFirst(this.#stores, row.eventId, {
           reason,
-          'daemon',
-        );
-        // 閉じた行も、既に閉じていた行（`false`）も候補から外す。台帳が読めずに投げた行は残す（次の機会に再試行）
-        this.#quotaStopLedgerRows.delete(row.eventId);
-        if (!closed) continue;
-        await this.#stores.journal.append({
-          type: 'decision',
-          decision:
-            `枠の知らせの行を器が自動で閉じた（${row.eventId}）: ` +
-            (recovery.successorId === undefined
-              ? `担当 ${row.managerId} が戻っている`
-              : `担当 ${row.managerId} は後継 ${recovery.successorId} へ替わり、その後継が戻っている`),
-          grounds:
-            `担当 ${recovery.successorId ?? row.managerId} が quota-recovery-notice の backOnCurrentToken と同じ基準（いまの世代の鍵で live・枠の印なし、` +
-            `running、または done で知らせ ${row.at} より後のターンが成功）で戻っていた。` +
-            '器が閉じたので closedBy は daemon（人間・クローンはこれを読んで後から否定する。否定するなら POST /commitments/:id/reopen・commitment_reopen で開き直す）',
+          entry: {
+            type: 'decision',
+            decision:
+              `枠の知らせの行を器が自動で閉じる（${row.eventId}）: ` +
+              (recovery.successorId === undefined
+                ? `担当 ${row.managerId} が戻っている`
+                : `担当 ${row.managerId} は後継 ${recovery.successorId} へ替わり、その後継が戻っている`),
+            grounds:
+              `担当 ${recovery.successorId ?? row.managerId} が quota-recovery-notice の backOnCurrentToken と同じ基準（いまの世代の鍵で live・枠の印なし、` +
+              `running、または done で知らせ ${row.at} より後のターンが成功）で戻っていた。` +
+              '器が閉じるので closedBy は daemon（人間・クローンはこれを読んで後から否定する。否定するなら POST /commitments/:id/reopen・commitment_reopen で開き直す）',
+          },
         });
+        // 閉じた行も、無い・既に閉じていた行も候補から外す。読めない行・日誌に書けず閉じなかった行は残す（次の機会に再試行）
+        if (result.kind === 'unreadable') continue;
+        if (result.kind === 'journal-failed') {
+          noteDroppedRecord(
+            '枠の知らせの行の自動クローズ（日誌に書けないので閉じていない）',
+            `quotaStop manager_message ${row.eventId}`,
+            result.error,
+          );
+          continue;
+        }
+        this.#quotaStopLedgerRows.delete(row.eventId);
       } catch (error) {
         noteDroppedRecord(
           '枠の知らせの行の自動クローズ',
@@ -3611,22 +3618,27 @@ class Clone implements CloneHost {
     } catch {
       // 記帳の失敗は `#commit` 側が日誌へ残している。ここでは待つだけ
     }
-    const closed = await this.#stores.commitments.close(
-      event.id,
-      new Date().toISOString(),
-      `器が自動で閉じた: 名指す担当 ${event.managerId} はいまの世代の鍵で戻っている` +
+    // 日誌を先に書いてから閉じる（#5235）。書けなければ閉じず、行は未了のまま残す
+    const result = await closeCommitmentJournalFirst(this.#stores, event.id, {
+      reason:
+        `器が自動で閉じた: 名指す担当 ${event.managerId} はいまの世代の鍵で戻っている` +
         '（running、または done で知らせより後のターンが成功）。人間・クローンが否定するなら開き直すこと' +
         '（POST /commitments/:id/reopen・commitment_reopen）',
-      'daemon',
-    );
-    if (!closed) return;
-    await this.#stores.journal.append({
-      type: 'decision',
-      decision: `担当が戻っていた知らせの行を器が自動で閉じた（${event.id}）: 担当 ${event.managerId}`,
-      grounds:
-        `担当 ${event.managerId} が quota-recovery-notice の recoveredNoticeFoldOf の基準（backOnCurrentToken と、` +
-        '作業者の落ちなら積んだ時点と違う世代へ移ったこと）で戻っていた。器が閉じたので closedBy は daemon',
+      entry: {
+        type: 'decision',
+        decision: `担当が戻っていた知らせの行を器が自動で閉じる（${event.id}）: 担当 ${event.managerId}`,
+        grounds:
+          `担当 ${event.managerId} が quota-recovery-notice の recoveredNoticeFoldOf の基準（backOnCurrentToken と、` +
+          '作業者の落ちなら積んだ時点と違う世代へ移ったこと）で戻っていた。器が閉じるので closedBy は daemon',
+      },
     });
+    if (result.kind === 'journal-failed') {
+      noteDroppedRecord(
+        '畳んだ知らせの行の自動クローズ（日誌に書けないので閉じていない）',
+        inboxEventShape(event),
+        result.error,
+      );
+    }
   }
 
   async #supersededNoticeFor(events: InboxEvent[]): Promise<string> {
