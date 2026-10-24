@@ -5583,23 +5583,19 @@ export function createCloneTools(context: ToolContext) {
         if (reasonError !== null) return text(reasonError);
         // 閉じた記録は行から消えるので、日誌へ逐語で残してから行から外す（`reopenCommitmentJournalFirst`）: 残さないと「誰がいつ何と言って閉じたか」が二度と読めない。
         // 2つの開き直しが両方「閉じている」を読んで二重に日誌へ残っても、台帳の1操作（`reopen`）で負けた側が打ち消しの行を足す。
-        let journaled: JournalEntryInput | undefined;
-        const result = await reopenCommitmentJournalFirst(stores, id, (before) => {
-          journaled = {
-            type: 'decision',
-            decision: `閉じた仕事を自分で開き直した（${id}）: ${reason}`,
-            grounds:
-              'クローン自身が commitment_reopen で開き直した。開き直す前の記録: ' +
-              describeClosedRecord(before),
-          };
-          return journaled;
-        });
-        if (result.kind === 'journal-failed' && journaled !== undefined) {
+        const result = await reopenCommitmentJournalFirst(stores, id, (before) => ({
+          type: 'decision',
+          decision: `閉じた仕事を自分で開き直した（${id}）: ${reason}`,
+          grounds:
+            'クローン自身が commitment_reopen で開き直した。開き直す前の記録: ' +
+            describeClosedRecord(before),
+        }));
+        if (result.kind === 'journal-failed') {
           // 開き直す前に落ちたので何も起きていない（`act-not-performed`）
-          noteDroppedRecord('日誌', journalEntryShape(journaled), result.error);
+          noteDroppedRecord('日誌', journalEntryShape(result.entry), result.error);
           throw new JournalNotRecordedError(
             'commitment_reopen',
-            journaled,
+            result.entry,
             'act-not-performed',
             result.error,
           );

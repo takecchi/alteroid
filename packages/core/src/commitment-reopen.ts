@@ -9,8 +9,12 @@ export type JournalFirstReopenResult =
   | { readonly kind: 'not-closed' }
   | { readonly kind: 'duplicate-open'; readonly openId: string }
   | { readonly kind: 'unreadable'; readonly error: UnreadableCommitmentError }
-  /** 日誌に書けなかったので開き直していない（行は閉じたまま）。 */
-  | { readonly kind: 'journal-failed'; readonly error: unknown };
+  /** 日誌に書けなかったので開き直していない（行は閉じたまま）。`entry` は書けなかった行。 */
+  | {
+      readonly kind: 'journal-failed';
+      readonly error: unknown;
+      readonly entry: JournalEntryInput;
+    };
 
 type ClosedRecord = Pick<Commitment, 'closedAt' | 'closedBy' | 'closedReason'>;
 
@@ -55,10 +59,12 @@ export async function reopenCommitmentJournalFirst(
   if (read === null) return { kind: 'not-found' };
   if (read.closedAt === undefined) return { kind: 'not-closed' };
 
+  // 行を作るのは try の外: 作る側の例外を「日誌に書けなかった」と取り違えない
+  const entry = buildEntry(read);
   try {
-    await stores.journal.append(buildEntry(read));
+    await stores.journal.append(entry);
   } catch (error) {
-    return { kind: 'journal-failed', error };
+    return { kind: 'journal-failed', error, entry };
   }
 
   let result;
