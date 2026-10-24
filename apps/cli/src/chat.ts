@@ -2806,9 +2806,11 @@ export async function runSlashCommand(
         stdout.write('台帳に積みました（/commitments で確認できます）\n');
         return 'ok';
       }
-      stdout.write(
-        `${response.status === 404 ? '台帳に積めませんでした' : await errorDetail(response)}\n`,
-      );
+      const failure =
+        response.status === 404 ? '台帳に積めませんでした' : await errorDetail(response);
+      stdout.write(`${failure}\n`);
+      // 書き込み系の HTTP の失敗も失敗として渡す（#5236。`/commit-reopen` と同じ形）
+      onFailed?.(failure);
       return 'ok';
     }
 
@@ -2839,15 +2841,15 @@ export async function runSlashCommand(
         return 'ok';
       }
       // 失敗の理由を1つに畳まない: 「既に片付いている」と「そんな id は無い」は次の一手が違う。
-      stdout.write(
-        `${
-          response.status === 409
-            ? 'それは既に片付いています'
-            : response.status === 404
-              ? 'その id は台帳にありません'
-              : await errorDetail(response)
-        }\n`,
-      );
+      const failure =
+        response.status === 409
+          ? 'それは既に片付いています'
+          : response.status === 404
+            ? 'その id は台帳にありません'
+            : await errorDetail(response);
+      stdout.write(`${failure}\n`);
+      // 「既に片付いている」も失敗として渡す（#5236）: 閉じるつもりの行が既に閉じていた回を、呼び手が見分けられるように
+      onFailed?.(failure);
       return 'ok';
     }
 
@@ -2911,7 +2913,9 @@ export async function runSlashCommand(
         stdout.write('本文を直しました（直す前の本文は日誌に逐語で残っています）\n');
         return 'ok';
       }
-      stdout.write(`${await errorDetail(response)}\n`);
+      const failure = await errorDetail(response);
+      stdout.write(`${failure}\n`);
+      onFailed?.(failure);
       return 'ok';
     }
 
