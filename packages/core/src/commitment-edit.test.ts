@@ -106,8 +106,10 @@ describe('editCommitmentBodyJournalFirst（#5242）', () => {
       JSON.stringify(row),
     );
     expect(decisions).toHaveLength(2);
-    expect(decisions[1]).toContain('実際に上書きした本文は次のとおり: 「別の書き手の本文」');
-    expect(decisions[1]).toContain('編集前「直す前の本文」→ 編集後「直した後の本文」');
+    // 一覧の並びに頼らず、補いの行を中身で探す
+    const supplement = decisions.find((text) => text.includes('実際に上書きした本文は次のとおり'));
+    expect(supplement).toContain('実際に上書きした本文は次のとおり: 「別の書き手の本文」');
+    expect(supplement).toContain('編集前「直す前の本文」→ 編集後「直した後の本文」');
   });
 
   it('補いの行が書けなくても、書き直しの結果は edited のまま（best-effort）（#5251）', async () => {
