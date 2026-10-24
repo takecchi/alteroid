@@ -143,6 +143,54 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
     await s.clone.stop();
   });
 
+  it('⭐ 台帳の行を閉じる瞬間には、器が閉じる日誌の行が既に在る（#5235。日誌が先）', async () => {
+    const s = boot(stubPool(() => Promise.resolve([summary()])));
+    const decisionsAtClose: string[] = [];
+    const realClose = s.stores.commitments.close.bind(s.stores.commitments);
+    s.stores.commitments.close = async (id, at, reason, by) => {
+      decisionsAtClose.push(JSON.stringify(await s.stores.journal.list({ types: ['decision'] })));
+      return realClose(id, at, reason, by);
+    };
+
+    s.clone.post(notice('evt-order', '新しい鍵で起こし直した ORDER-BODY', {}));
+    await waitFor(
+      async () => (await s.stores.commitments.get('evt-order'))?.closedBy === 'daemon',
+      '台帳の行が daemon で閉じる',
+    );
+    expect(decisionsAtClose).toHaveLength(1);
+    expect(decisionsAtClose[0]).toContain('evt-order');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 日誌に器が閉じる行を書けないときは、台帳の行を閉じない（#5235。未了のまま残る）', async () => {
+    const s = boot(stubPool(() => Promise.resolve([summary()])));
+    const realAppend = s.stores.journal.append.bind(s.stores.journal);
+    let refused = 0;
+    s.stores.journal.append = (entry) => {
+      if (entry.type === 'decision' && entry.decision.includes('自動で閉じる')) {
+        refused += 1;
+        return Promise.reject(new Error('journal down'));
+      }
+      return realAppend(entry);
+    };
+    let closeCalls = 0;
+    const realClose = s.stores.commitments.close.bind(s.stores.commitments);
+    s.stores.commitments.close = (...args) => {
+      closeCalls += 1;
+      return realClose(...args);
+    };
+
+    s.clone.post(notice('evt-nojournal', '新しい鍵で起こし直した NOJOURNAL-BODY', {}));
+    await expectFolded(s, 'evt-nojournal', 'NOJOURNAL-BODY');
+    // 日誌の行を書こうとして断られた後でも、閉じる処理は呼ばれず、行は開いたまま
+    await waitFor(() => refused > 0, '日誌の行が断られる');
+    expect(closeCalls).toBe(0);
+    expect((await s.stores.commitments.get('evt-nojournal'))?.closedAt).toBeUndefined();
+
+    await s.clone.stop();
+  });
+
   it('⭐ セッションが落ちたまま（status: failed）なら届ける', async () => {
     const s = boot(stubPool(() => Promise.resolve([summary({ status: 'failed' })])));
 

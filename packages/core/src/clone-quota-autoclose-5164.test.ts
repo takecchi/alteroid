@@ -372,6 +372,75 @@ describe('後継に替わった担当の行を、後継が戻っていれば閉�
   });
 });
 
+describe('枠の知らせの行は、日誌を先に書いてから閉じる（#5235）', () => {
+  it('日誌に書けない間は閉じず（行は未了・候補に残る）、日誌が戻った次の機会に閉じる', async () => {
+    const stores = createMemoryStores();
+    await seedMarked(stores, 'evt-j1', MANAGER_ID);
+    let journalUp = false;
+    const realAppend = stores.journal.append.bind(stores.journal);
+    stores.journal.append = (entry) =>
+      !journalUp && entry.type === 'decision' && entry.decision.includes('自動で閉じる')
+        ? Promise.reject(new Error('journal down'))
+        : realAppend(entry);
+    const s = boot(
+      stubPool(() => Promise.resolve([summary()])),
+      stores,
+    );
+    s.clone.post(plainReport('evt-p11'));
+    await waitForTurnWith(s, 'PLAIN-evt-p11');
+    expect((await stores.commitments.get('evt-j1'))?.closedAt).toBeUndefined();
+
+    journalUp = true;
+    s.clone.post(plainReport('evt-p12'));
+    await waitClosedByDaemon(stores, 'evt-j1');
+    expect((await decisionTexts(stores)).some((text) => text.includes('evt-j1'))).toBe(true);
+    await s.clone.stop();
+  });
+
+  it('⭐ 閉じる瞬間には、器が閉じる日誌の行が既に在る（順序）', async () => {
+    const stores = createMemoryStores();
+    await seedMarked(stores, 'evt-j2', MANAGER_ID);
+    const journalAtClose: boolean[] = [];
+    const realClose = stores.commitments.close.bind(stores.commitments);
+    stores.commitments.close = async (id, at, reason, by) => {
+      journalAtClose.push((await decisionTexts(stores)).some((text) => text.includes(id)));
+      return realClose(id, at, reason, by);
+    };
+    const s = boot(
+      stubPool(() => Promise.resolve([summary()])),
+      stores,
+    );
+    s.clone.post(plainReport('evt-p13'));
+    await waitClosedByDaemon(stores, 'evt-j2');
+    expect(journalAtClose).toEqual([true]);
+    await s.clone.stop();
+  });
+
+  it('日誌を書いた後に別の手で閉じられたら、打ち消しの行が足され、候補から外れる', async () => {
+    const stores = createMemoryStores();
+    await seedMarked(stores, 'evt-j3', MANAGER_ID);
+    const realClose = stores.commitments.close.bind(stores.commitments);
+    stores.commitments.close = async (id, at, reason, by) => {
+      await realClose(id, at, '人間が閉じた', 'human');
+      return realClose(id, at, reason, by);
+    };
+    const s = boot(
+      stubPool(() => Promise.resolve([summary()])),
+      stores,
+    );
+    s.clone.post(plainReport('evt-p14'));
+    await waitFor(
+      async () =>
+        (await decisionTexts(stores)).some((text) =>
+          text.includes('直前の自動クローズの行は効いていない（閉じていない）'),
+        ),
+      '打ち消しの行',
+    );
+    expect((await stores.commitments.get('evt-j3'))?.closedBy).toBe('human');
+    await s.clone.stop();
+  });
+});
+
 describe('印の無い古い行を、定型だけのものに限って候補へ戻す（#5164）', () => {
   it('定型だけの行は候補に戻り、担当が戻っていれば閉じる', async () => {
     const stores = createMemoryStores();
