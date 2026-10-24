@@ -33190,6 +33190,27 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "消す前の日誌が書けなかったので消していない（`code` は `journal_write_failed`。本文は戻せないので、日誌を先に書く）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -33216,7 +33237,7 @@
         "operationId": "postArchiveRemove",
         "tags": ["archive"],
         "summary": "アーカイブ済み生ログを絞り込んでまとめて tombstone する",
-        "description": "クローン専用の口（クローンの道具 `archive_remove_many` と同じ関数。CLI・Web UI には出さない）。アーカイブ済み生ログの本文を絞り込んでまとめて消す（issue #698）。**既定は試算（`dryRun` を省略すると true）で、1件も消さない。** `sessionIds` / `before` / `minStoredBytes` のどれも渡さない呼びは断る——絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。走行中のマネージャーの退避（`skipped.inUse`）とセッションの最新行（`skipped.newest`）は一括では開けない——開放が要るなら対象を1件ずつ名指しして `DELETE /archive/:id` の`overrideReason` を使うこと。含有が証明できない行（`skipped.notContained`）は `requireContainment: false` を明示しない限り既定で守る。まだ記憶へ蒸留していない区間の墓標は`requireContainment` に関わらず常に守る（`skipped.protected`）。本文だけを落とす（tombstone）——行そのものは消えない。**下見（既定）でも走行中の委譲の判定は評価する**——`targeted` /`skipped.inUse` は下見と実行で同じ値になる。下見が返さない実行だけの事実は `removedBytes`（下見は常に0）と `raced`（下見は常に0。`remove()` 自体を呼ばないので測れない）だけである。**実行時の `raced` は、選定と走行中チェックを通った行が、実際にtombstone する瞬間には他経路（別の一括呼び出し・自動の畳み・単発の `DELETE /archive/:id` など）にすでに tombstone されていた件数である。** この行はこの呼びが消したことにしない——`removedIds` にも `removedBytes` にも日誌にも載らず、`raced` だけで数える。",
+        "description": "クローン専用の口（クローンの道具 `archive_remove_many` と同じ関数。CLI・Web UI には出さない）。アーカイブ済み生ログの本文を絞り込んでまとめて消す（issue #698）。**既定は試算（`dryRun` を省略すると true）で、1件も消さない。** `sessionIds` / `before` / `minStoredBytes` のどれも渡さない呼びは断る——絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。走行中のマネージャーの退避（`skipped.inUse`）とセッションの最新行（`skipped.newest`）は一括では開けない——開放が要るなら対象を1件ずつ名指しして `DELETE /archive/:id` の`overrideReason` を使うこと。含有が証明できない行（`skipped.notContained`）は `requireContainment: false` を明示しない限り既定で守る。まだ記憶へ蒸留していない区間の墓標は`requireContainment` に関わらず常に守る（`skipped.protected`）。本文だけを落とす（tombstone）——行そのものは消えない。**下見（既定）でも走行中の委譲の判定は評価する**——`targeted` /`skipped.inUse` は下見と実行で同じ値になる。下見が返さない実行だけの事実は `removedBytes`（下見は常に0）と `raced`（下見は常に0。`remove()` 自体を呼ばないので測れない）だけである。**実行時の `raced` は、選定と走行中チェックを通った行が、実際にtombstone する瞬間には他経路（別の一括呼び出し・自動の畳み・単発の `DELETE /archive/:id` など）にすでに tombstone されていた件数である。** この行はこの呼びが消したことにしない——`removedIds` にも `removedBytes` にも載らず、`raced` だけで数える（日誌には塊の先の行へ書いたうえで、消せなかった id の打ち消しの行を足す）。**塊ごとに、日誌の先の行を書いてから消す。** 書けなかったらその塊は消さずにそこで止め（後ろの塊も消さない）、500 でそれまでに消した分を返す。",
         "responses": {
           "200": {
             "description": "試算、または実際に消した結果。",
@@ -33341,6 +33362,43 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "塊の先の日誌が書けなかったので、その塊とそれ以降を消さずに止めた（`code` は `journal_write_failed`）。止める前の塊は消えている——`removedIds` / `removedBytes` / `raced` がどこまでかを言う。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    },
+                    "removedIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "removedBytes": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "raced": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["error", "code", "removedIds", "removedBytes", "raced"],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -33395,7 +33453,7 @@
         "operationId": "postInboxRemove",
         "tags": ["inbox"],
         "summary": "受信箱の未読を、絞り込みを渡してまとめて畳む（消す）",
-        "description": "人間の入口から、受信箱の未読を絞り込んでまとめて消す（issue #972）。同じ失敗の写しが数千件積もると、クローン側は1ターン1件のペースでしか排出できず、排出それ自体が文脈窓を食い潰す——人間はこの口から直接まとめて消せる。**既定は試算（`dryRun` を省略すると true）で、1件も消さない。** `types` は必須で、在る7種類（human_message / human_answer / distill / timer / external / self_initiative / manager_message）を全部並べた呼びは断る（「全部消す」を1回で撃てる形は作らない——それは`POST /reset`（記憶ごと全部消す）の役目である）。行は台帳の close とは違い**物理的に消える**——`InboxStore` は「まだ処理し終えていない」という事実だけを持つ器で、片付いた後の記録を残す場所ではない。**消した id は全部日誌に残る。**",
+        "description": "人間の入口から、受信箱の未読を絞り込んでまとめて消す（issue #972）。同じ失敗の写しが数千件積もると、クローン側は1ターン1件のペースでしか排出できず、排出それ自体が文脈窓を食い潰す——人間はこの口から直接まとめて消せる。**既定は試算（`dryRun` を省略すると true）で、1件も消さない。** `types` は必須で、在る7種類（human_message / human_answer / distill / timer / external / self_initiative / manager_message）を全部並べた呼びは断る（「全部消す」を1回で撃てる形は作らない——それは`POST /reset`（記憶ごと全部消す）の役目である）。行は台帳の close とは違い**物理的に消える**——`InboxStore` は「まだ処理し終えていない」という事実だけを持つ器で、片付いた後の記録を残す場所ではない。**消す id は塊ごとに、消す前に日誌へ残す**（書けなかったらその塊は消さずに止める）。",
         "responses": {
           "200": {
             "description": "試算、または実際に消した結果。",
@@ -33470,6 +33528,38 @@
                     }
                   },
                   "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "塊の先の日誌が書けなかったので、その塊とそれ以降を消さずに止めた（`code` は `journal_write_failed`）。止める前の塊は消えている——`removedIds` / `droppedFromDelivery` がどこまでかを言う。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    },
+                    "removedIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "droppedFromDelivery": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["error", "code", "removedIds", "droppedFromDelivery"],
                   "additionalProperties": false
                 }
               }

@@ -1618,6 +1618,13 @@ export const archiveRemoveManyResponseSchema = z.object({
   raced: z.number().int(),
 });
 
+// 塊の先の日誌が書けなかったので、そこで止めた回の応答（500）。止める前の塊は消えているので、どこまで消したかを返す（`journalWriteFailedResponseSchema` に足した形）。
+export const archiveRemoveManyStoppedResponseSchema = journalWriteFailedResponseSchema.extend({
+  removedIds: z.array(z.string()),
+  removedBytes: z.number().int(),
+  raced: z.number().int(),
+});
+
 // ここでは集計しない: 複製するとクローンの道具（`manager_list`）とこの口が違う数を見るため。
 export const inboxBacklogResponseSchema = z.object({
   total: z.number().int(),
@@ -1671,6 +1678,12 @@ export const inboxRemoveManyResponseSchema = z.object({
   removedIds: z.array(z.string()),
   droppedFromDelivery: z.number().int(),
   remaining: z.number().int(),
+});
+
+// 塊の先の日誌が書けなかったので、そこで止めた回の応答（500）。止める前の塊は消えているので、どこまで消したかを返す。
+export const inboxRemoveManyStoppedResponseSchema = journalWriteFailedResponseSchema.extend({
+  removedIds: z.array(z.string()),
+  droppedFromDelivery: z.number().int(),
 });
 
 // `confirm: true` を必須にする: UI の確認を経ずにこの口を直接叩く呼び出しを 400 で止めるため。

@@ -151,6 +151,11 @@ import {
 import { editCommitmentBodyJournalFirst } from './commitment-edit.js';
 import { describeClosedRecord, reopenCommitmentJournalFirst } from './commitment-reopen.js';
 import { removeScheduleJournalFirst } from './schedule-remove.js';
+import {
+  removeArchiveChunkJournalFirst,
+  removeArchiveJournalFirst,
+  removeInboxChunkJournalFirst,
+} from './removal-journal-first.js';
 import { describeProgress } from './progress-describe.js';
 import { describeGithubCi } from './progress-github.js';
 import {
@@ -325,7 +330,6 @@ import {
   describeNoReadableInboxEvents,
   inboxRemoveManyTypesSchema,
   matchesInboxRemoveManyFilter,
-  removeInboxEventsAndStopDelivery,
   summarizeInboxBacklog,
 } from './inbox-backlog.js';
 import type { InboxRemoveManyFilter } from './inbox-backlog.js';
@@ -6320,49 +6324,63 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // 塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す: まとめて消してから日誌を書くと、器が落ちたとき消えたのに記録が無い行が最大 `REMOVE_MANY_LIMIT_DEFAULT` 件できるため
+        // 塊ごとに「その塊の id を日誌へ書く → 消す」を交互に回す（`removeInboxChunkJournalFirst`）: 消すと配達も止まって戻らないので、消してから書くと日誌が落ちた回に何を畳んだかが残らないため
+        // `stores.inbox.removeMany` を直に呼ばない: 器から消すのと配達を止めるのを1つの呼びで行う関数を通す（helper の中）
         const chunks = chunkIdsByChars(
           targets.map((row) => row.event.id),
           REMOVE_MANY_JOURNAL_ID_CHARS,
         );
         const removedIds: string[] = [];
         let droppedFromDelivery = 0;
-        // 「日誌に N 件」は実際に書いた件数で数える: `chunks.length` で言うと、塊が丸ごと競合になった回に無い日誌の行を名乗るため
+        let raced = 0;
+        // 「日誌に N 件」は実際に書いた件数で数える: 先の行が書けて止めた回に、書いていない行を名乗らないため
         let journaledChunks = 0;
+        let stoppedNote: string | undefined;
         for (const [index, chunk] of chunks.entries()) {
-          // `stores.inbox.removeMany` を直に呼ばない: 器から消すのと配達を止めるのを1つの呼びで行う関数を通すため
-          const outcome = await removeInboxEventsAndStopDelivery(
-            stores.inbox,
+          const outcome = await removeInboxChunkJournalFirst(
+            stores,
             { dropQueuedInboxEvents: stopDelivery },
             chunk,
-          );
-          const removed = outcome.removedIds;
-          droppedFromDelivery += outcome.droppedFromDelivery;
-          removedIds.push(...removed);
-          if (removed.length === 0) continue;
-          journaledChunks += 1;
-          await appendJournalOrThrow(
-            'inbox_remove_many',
-            stores.journal,
-            {
+            () => ({
               type: 'decision',
               decision:
-                `受信箱の未読を絞り込みで一括して畳んだ（消した）` +
-                `（${index + 1}/${chunks.length} 塊目、この塊は ${removed.length} 件）: ${reason}\n` +
+                `受信箱の未読を絞り込みで一括して畳む（消す）` +
+                `（${index + 1}/${chunks.length} 塊目、この塊は ${chunk.length} 件）: ${reason}\n` +
                 `絞り込み: ${filterText}\n` +
-                `消した id: ${removed.join(' ')}`,
+                `消す id: ${chunk.join(' ')}`,
               grounds:
-                'クローン自身が inbox_remove_many で絞り込んで消した（人間はこれを読んで後から否定する）',
-            },
-            'act-completed',
+                'クローン自身が inbox_remove_many で絞り込んで消す（人間はこれを読んで後から否定する）',
+            }),
           );
+          if (outcome.kind === 'journal-failed') {
+            // 先の行が書けなかった塊は消していない。1つも消していなければ行為は起きていない（`act-not-performed`）。
+            noteDroppedRecord('日誌', journalEntryShape(outcome.entry), outcome.error);
+            if (journaledChunks === 0) {
+              throw new JournalNotRecordedError(
+                'inbox_remove_many',
+                outcome.entry,
+                'act-not-performed',
+                outcome.error,
+              );
+            }
+            // 前の塊は消えていて日誌にも在るので投げず、どこまで消したかを返す（投げると「やり直してよい」が前の塊について嘘になる）
+            stoppedNote =
+              `⚠⚠ ${index + 1}/${chunks.length} 塊目の先の日誌が書けなかったので、この塊（${chunk.length} 件）と` +
+              `それ以降は消さずに止めた（${collapseErrorCause(outcome.error)}）。` +
+              `止める前の ${index} 塊は消えていて日誌にも残っている。残りは同じ絞り込みでもう一度呼べば続きから消せる。`;
+            break;
+          }
+          journaledChunks += 1;
+          droppedFromDelivery += outcome.droppedFromDelivery;
+          removedIds.push(...outcome.removedIds);
+          raced += outcome.racedIds.length;
         }
 
-        const raced = targets.length - removedIds.length;
         const shownRemoved = removedIds.slice(0, REMOVE_MANY_IDS_SHOWN);
         const hiddenRemoved = removedIds.length - shownRemoved.length;
         return text(
           [
+            ...(stoppedNote === undefined ? [] : [stoppedNote]),
             `**${removedIds.length} 件を畳んだ（消した）**（理由: ${reason}）。`,
             funnel,
             `絞り込み: ${filterText}`,
@@ -9525,7 +9543,39 @@ export function createCloneTools(context: ToolContext) {
               '理由を書くこと。#698）。',
           );
         }
-        const result = await stores.archive.remove(archiveId);
+        // 本文は消すと戻らないので、日誌を先に書いてから消す（`removeArchiveJournalFirst`）。書けなければ消さない（`act-not-performed`）。
+        // 消す対象・理由・override は消す前に決まるので先の行へ。バイト数と「前から消されていたか」は消した後でないと分からないので2行目に足す（落ちても握る）。
+        const overrideNote =
+          guard.kind === 'allowed-with-override'
+            ? `（⚠️ override — 走行中のマネージャー ${guard.managerId} の退避だが、` +
+              `理由「${guard.reason}」により消す）`
+            : '';
+        const grounds =
+          guard.kind === 'allowed-with-override' ? `${summary}／${overrideNote}` : summary;
+        const result = await removeArchiveJournalFirst(stores, archiveId, {
+          buildEntry: () => ({
+            type: 'decision',
+            decision: `退避済み生ログの本文を消す: ${archiveId}: ${summary}${overrideNote}`,
+            grounds,
+          }),
+          buildAfterEntry: (done) => ({
+            type: 'decision',
+            decision:
+              `退避済み生ログの本文を消した結果: ${archiveId}（${done.bytes} バイト${describeArchiveRemovedBytesUnit()}。` +
+              `${done.kind === 'already' ? '前から消されていたので今回は何も変わっていない' : 'いま消した'}）`,
+            grounds,
+          }),
+        });
+        if (result.kind === 'journal-failed') {
+          // 消す前に落ちたので何も起きていない（`act-not-performed`）
+          noteDroppedRecord('日誌', journalEntryShape(result.entry), result.error);
+          throw new JournalNotRecordedError(
+            'archive_remove',
+            result.entry,
+            'act-not-performed',
+            result.error,
+          );
+        }
         if (result.kind === 'missing') {
           return text(`アーカイブ ${archiveId} は存在しない（消せない。何も変わっていない）。`);
         }
@@ -9535,24 +9585,6 @@ export function createCloneTools(context: ToolContext) {
               `${result.bytes.toLocaleString('ja-JP')} バイトを落とした${describeArchiveRemovedBytesUnit()}）。何も変わっていない。`,
           );
         }
-        const overrideNote =
-          guard.kind === 'allowed-with-override'
-            ? `（⚠️ override — 走行中のマネージャー ${guard.managerId} の退避だったが、` +
-              `理由「${guard.reason}」により消した）`
-            : '';
-        await appendJournalOrThrow(
-          'archive_remove',
-          stores.journal,
-          {
-            type: 'decision',
-            decision:
-              `退避済み生ログの本文を消した: ${archiveId}（${result.bytes} バイト${describeArchiveRemovedBytesUnit()}）: ${summary}` +
-              overrideNote,
-            grounds:
-              guard.kind === 'allowed-with-override' ? `${summary}／${overrideNote}` : summary,
-          },
-          'act-completed',
-        );
         return text(
           `アーカイブ ${archiveId} の本文を消した（${result.bytes.toLocaleString('ja-JP')} バイト${describeArchiveRemovedBytesUnit()}）。` +
             `行そのものは残っている（list には引き続き出る）。${overrideNote}`,
@@ -9728,7 +9760,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // 塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す: まとめて消してから日誌を書くと、デーモンが落ちたとき消えたのに記録が無い行ができるため
+        // 塊ごとに「その塊の id を日誌へ書く → 消す」を交互に回す（`removeArchiveChunkJournalFirst`）: 本文は戻らないので、消してから書くと日誌が落ちた回に何を消したかが残らないため
         const chunks = chunkIdsByChars(
           removableTargets.map((row) => row.id),
           ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
@@ -9736,46 +9768,53 @@ export function createCloneTools(context: ToolContext) {
         const removedIds: string[] = [];
         let removedBytes = 0;
         let raced = 0;
-        // 「日誌に N 件」は実際に書いた件数で数える: `chunks.length` で言うと、塊が丸ごと競合になった回に無い日誌の行を名乗るため
+        // 「日誌に N 件」は実際に書いた件数で数える: 塊の先の行が書けて止めた回に、書いていない行を名乗らないため
         let journaledChunks = 0;
+        let stoppedNote: string | undefined;
         for (const [index, chunk] of chunks.entries()) {
           const chunkIds = new Set(chunk);
-          const chunkTargets = removableTargets.filter((row) => chunkIds.has(row.id));
-          const removedThisChunk: string[] = [];
-          for (const target of chunkTargets) {
-            const result = await stores.archive.remove(target.id);
-            if (result.kind === 'missing' || result.kind === 'already') {
-              // 他経路が先に消していた回は `raced` へ数える（`already` も同じ競合）: この呼びが消したことにしない（触っていない id を応答・日誌に載せない）
-              raced += 1;
-              continue;
+          const chunkTargetIds = removableTargets
+            .filter((row) => chunkIds.has(row.id))
+            .map((row) => row.id);
+          const outcome = await removeArchiveChunkJournalFirst(stores, chunkTargetIds, () => ({
+            type: 'decision',
+            decision:
+              `退避済み生ログの本文を絞り込みで一括して tombstone する` +
+              `（${index + 1}/${chunks.length} 塊目、この塊は ${chunkTargetIds.length} 件）: ${summary}\n` +
+              `絞り込み: ${filterText}\n` +
+              `消す id: ${chunkTargetIds.join(' ')}`,
+            grounds: summary,
+          }));
+          if (outcome.kind === 'journal-failed') {
+            // 先の行が書けなかった塊は消していない。1つも消していなければ行為は起きていない（`act-not-performed`）。
+            noteDroppedRecord('日誌', journalEntryShape(outcome.entry), outcome.error);
+            if (removedIds.length === 0 && raced === 0 && journaledChunks === 0) {
+              throw new JournalNotRecordedError(
+                'archive_remove_many',
+                outcome.entry,
+                'act-not-performed',
+                outcome.error,
+              );
             }
-            removedThisChunk.push(target.id);
-            removedBytes += result.bytes;
+            // 前の塊は消えていて日誌にも在るので投げず、どこまで消したかを返す（投げると「やり直してよい」が前の塊について嘘になる）
+            stoppedNote =
+              `⚠⚠ ${index + 1}/${chunks.length} 塊目の先の日誌が書けなかったので、この塊（${chunkTargetIds.length} 件）と` +
+              `それ以降は消さずに止めた（${collapseErrorCause(outcome.error)}）。` +
+              `止める前の ${index} 塊は消えていて日誌にも残っている。残りは同じ絞り込みでもう一度呼べば続きから消せる。`;
+            break;
           }
-          removedIds.push(...removedThisChunk);
-          if (removedThisChunk.length === 0) continue;
-
           journaledChunks += 1;
-          await appendJournalOrThrow(
-            'archive_remove_many',
-            stores.journal,
-            {
-              type: 'decision',
-              decision:
-                `退避済み生ログの本文を絞り込みで一括して tombstone した` +
-                `（${index + 1}/${chunks.length} 塊目、この塊は ${removedThisChunk.length} 件）: ${summary}\n` +
-                `絞り込み: ${filterText}\n` +
-                `消した id: ${removedThisChunk.join(' ')}`,
-              grounds: summary,
-            },
-            'act-completed',
-          );
+          // 他経路が先に消していた回は `raced` へ数える（`already` も同じ競合）: この呼びが消したことにしない（打ち消しの行は helper が足してある）
+          removedIds.push(...outcome.removedIds);
+          removedBytes += outcome.removedBytes;
+          raced += outcome.racedIds.length;
         }
 
         const shownRemoved = removedIds.slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN);
         const hiddenRemoved = removedIds.length - shownRemoved.length;
         return text(
           [
+            ...(stoppedNote === undefined ? [] : [stoppedNote]),
             `**${removedIds.length} 件の本文を tombstone した**（理由: ${summary}）。` +
               '行そのものは残っている（list には引き続き出る）。',
             funnel,

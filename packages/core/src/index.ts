@@ -490,6 +490,16 @@ export { editCommitmentBodyJournalFirst } from './commitment-edit.js';
 export type { JournalFirstEditResult } from './commitment-edit.js';
 export { removeScheduleJournalFirst } from './schedule-remove.js';
 export type { JournalFirstScheduleRemoveResult, ScheduleRemoveTarget } from './schedule-remove.js';
+export {
+  removeArchiveChunkJournalFirst,
+  removeArchiveJournalFirst,
+  removeInboxChunkJournalFirst,
+} from './removal-journal-first.js';
+export type {
+  JournalFirstArchiveChunkResult,
+  JournalFirstArchiveRemoveResult,
+  JournalFirstInboxChunkResult,
+} from './removal-journal-first.js';
 export { verifyCommitmentEditIfMatchContract } from './commitment-edit-if-match-contract.js';
 export { verifyCommitmentRemoveForConversationContract } from './commitment-remove-for-conversation-contract.js';
 export { verifyCommitmentEditUnreadableContract } from './commitment-edit-unreadable-contract.js';
