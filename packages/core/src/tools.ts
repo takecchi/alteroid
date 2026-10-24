@@ -167,6 +167,7 @@ import { describeTokenDiff } from './token-diff.js';
 import type {
   ManagerDenial,
   ManagerPool,
+  ManagerSendResult,
   ManagerSummary,
   ManagerTranscript,
   ManagerUnpushedWork,
@@ -1125,6 +1126,9 @@ function approvalTitle(question: string): string {
     APPROVAL_TITLE_EXCERPT,
   );
 }
+
+// app.ts の人間の直接送信の行（`excerptLine(text, 200)`）に合わせる
+const MANAGER_ANSWER_MESSAGE_EXCERPT = 200;
 
 const SCHEDULE_LIST_BUDGET = 8_000;
 const SCHEDULE_REQUEST_EXCERPT = 200;
@@ -7608,11 +7612,54 @@ export function createCloneTools(context: ToolContext) {
           context.attachmentLimits ?? readAttachmentLimits().limits,
         );
         if (!handover.ok) return text(handover.message);
-        const result = await context.managers.send(managerId, message, {
-          ...(decision === undefined ? {} : { decision }),
-          ...(requestId === undefined ? {} : { requestId }),
-          ...(handover.attachments.length === 0 ? {} : { attachments: handover.attachments }),
-        });
+        // 答える前に判断の行を書く: 答えが届いたのに跡が無い窓を作らないため。
+        // この道具は自己記録なので PostToolUse の行が無く、この行が「クローンが人間に聞かず答えた」唯一の跡になる。
+        // 行を書いたかを旗で持つ: 確認に当たらなかった送信では呼ばれず、書いていない行は打ち消さない
+        // 閉包から代入するので、`let` ではなく箱にする（`let` だと代入後も `undefined` へ絞られる）
+        const answerJournaled: { requestId?: string } = {};
+        // 先に書いた行が効かなかったとき（答えが届かなかった）の打ち消し。書けなければ跡だけ残す
+        const retractAnswerJournal = async (detail: string): Promise<void> => {
+          if (answerJournaled.requestId === undefined) return;
+          await appendJournalOrDrop('manager_send', stores.journal, {
+            type: 'decision',
+            decision:
+              `クローンが担当 ${managerId} の確認（${answerJournaled.requestId}）へ答えるとした直前の回答の行は` +
+              `効いていない（答えは届いていない）。理由: ${excerptLine(detail, MANAGER_ANSWER_MESSAGE_EXCERPT)}`,
+            grounds: '先に書いた回答の行の後で、答えが届かなかったため打ち消す',
+          });
+        };
+        const send = async (pool: ManagerPool): Promise<ManagerSendResult> => {
+          try {
+            return await pool.send(managerId, message, {
+              ...(decision === undefined ? {} : { decision }),
+              ...(requestId === undefined ? {} : { requestId }),
+              ...(handover.attachments.length === 0 ? {} : { attachments: handover.attachments }),
+              beforeAnswer: async (pending) => {
+                await appendJournalOrThrow(
+                  'manager_send',
+                  stores.journal,
+                  {
+                    type: 'decision',
+                    decision:
+                      `クローンが担当 ${managerId} の確認（${pending.requestId}: ` +
+                      `${excerptLine(pending.summary, JOURNAL_TEXT_EXCERPT)}）に自分で答える` +
+                      `（decision=${decision ?? '指定なし（runner が本文から読む）'}。` +
+                      `抜粋: ${excerptLine(message, MANAGER_ANSWER_MESSAGE_EXCERPT)}）`,
+                    grounds:
+                      'クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）',
+                  },
+                  'act-not-performed',
+                );
+                answerJournaled.requestId = pending.requestId;
+              },
+            });
+          } catch (error) {
+            await retractAnswerJournal(`送信が例外で終わった: ${reasonOf(error)}`);
+            throw error;
+          }
+        };
+        const result = await send(context.managers);
+        if (result.outcome !== 'answered') await retractAnswerJournal(result.detail);
         // `session_missing` は必ず言い足す: そのものは居る側なので、`manager_start` で起こし直すと同じ仕事が2本になりうるため
         if (result.outcome === 'session_missing') {
           return text(

@@ -1138,6 +1138,15 @@ export interface ManagerSendOptions {
    * 回答として扱われる回に添付があれば、何も送らずに断る。
    */
   attachments?: RunnerAttachment[];
+  /**
+   * 確認への回答として `runner.answer` を呼ぶ直前に、答える確認を渡して呼ぶ。投げたら答えず、例外をそのまま呼び手へ伝える。
+   * 回答でない送信（確認待ちに当たらなかった回）では呼ばれない。
+   *
+   * Why not 呼び手が自分で確認を特定して先に日誌を書く: 答える確認を選ぶのは `send` の中（`#choosePending`）で、
+   * 呼び手は `requestId` 無しの `decision` がどの確認に当たるかを知らない。呼び手が推測して書くと、
+   * 日誌の確認と実際に答えた確認がずれうる。
+   */
+  beforeAnswer?: (pending: { requestId: string; summary: string }) => Promise<void>;
 }
 
 /**
@@ -3941,6 +3950,8 @@ class Pool implements ManagerPool {
     }
 
     if (pending) {
+      // 答える前に呼ぶ: 答えが届いた後に日誌が書けない窓を作らないため（投げたら答えない）
+      await options.beforeAnswer?.({ requestId: pending.requestId, summary: pending.summary });
       const answered = await runner.answer(managerId, {
         requestId: pending.requestId,
         message,

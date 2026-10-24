@@ -1218,6 +1218,151 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
+  describe('beforeAnswer: 確認に答える直前の口（クローンの判断を答えより先に日誌へ残すため）', () => {
+    async function setupAsking(answer: (managerId: string) => Promise<{ delivered: boolean }>) {
+      const wired: { emit: ((event: RunnerEvent) => void) | null } = { emit: null };
+      const runner: RunnerClient = {
+        runnerId: 'runner-legacy',
+        runnerIdKnown: true,
+        workspacePathKnown: true,
+        workspacePath: '/work/project',
+        async connect(onEvent) {
+          wired.emit = onEvent;
+        },
+        async start(): Promise<{ cwd?: string }> {
+          return {};
+        },
+        async resume(): Promise<{ cwd?: string }> {
+          return {};
+        },
+        async send() {
+          return true;
+        },
+        answer,
+        async stop() {
+          /* この検証では使わない */
+        },
+        async list() {
+          return [];
+        },
+        async transcript() {
+          return null;
+        },
+        async credentials() {
+          return [];
+        },
+        async setCredentials() {
+          return [];
+        },
+        async profile() {
+          return undefined;
+        },
+        async setProfile() {
+          return { ok: true };
+        },
+        async close() {
+          /* この検証では使わない */
+        },
+      };
+      const s = setup(undefined, { runner });
+      const { managerId } = await s.pool.start({ request: 'デプロイして' });
+      wired.emit?.({
+        type: 'ask',
+        managerId,
+        requestId: 'req-before',
+        kind: 'permission',
+        summary: 'Bash の実行許可: git push',
+        askedAt: new Date().toISOString(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return { s, managerId };
+    }
+
+    it('runner.answer より先に呼ばれ、答える確認の requestId と summary を渡す', async () => {
+      const log: string[] = [];
+      const { s, managerId } = await setupAsking(async () => {
+        log.push('answer');
+        return { delivered: true, decision: 'allow' as const };
+      });
+      const seen: { requestId: string; summary: string }[] = [];
+
+      const result = await s.pool.send(managerId, 'よい', {
+        decision: 'allow',
+        beforeAnswer: async (pending) => {
+          log.push('beforeAnswer');
+          seen.push(pending);
+        },
+      });
+
+      expect(result.outcome).toBe('answered');
+      expect(
+        log,
+        '【赤の意味】答えが先に届いている。日誌（beforeAnswer）が書けない窓で答えだけが届く。',
+      ).toEqual(['beforeAnswer', 'answer']);
+      expect(seen).toEqual([{ requestId: 'req-before', summary: 'Bash の実行許可: git push' }]);
+
+      await s.pool.stop();
+    });
+
+    it('beforeAnswer が投げたら答えず、例外を呼び手へ伝え、担当は確認待ちのまま', async () => {
+      let answerCalls = 0;
+      const { s, managerId } = await setupAsking(async () => {
+        answerCalls += 1;
+        return { delivered: true };
+      });
+
+      await expect(
+        s.pool.send(managerId, 'よい', {
+          decision: 'allow',
+          beforeAnswer: async () => {
+            throw new Error('日誌に書けない');
+          },
+        }),
+      ).rejects.toThrow('日誌に書けない');
+
+      expect(answerCalls, '日誌が書けなかったのに runner へ答えが送られた').toBe(0);
+      const after = (await s.pool.list()).find((m) => m.managerId === managerId);
+      expect(after?.status).toBe('waiting_human');
+      expect(after?.waiting.map((item) => item.requestId)).toEqual(['req-before']);
+
+      await s.pool.stop();
+    });
+
+    it('runner 側で既に解けていた回も beforeAnswer は呼ばれ、結果は unknown になる', async () => {
+      const { s, managerId } = await setupAsking(async () => ({ delivered: false }));
+      let called = 0;
+
+      const result = await s.pool.send(managerId, 'よい', {
+        decision: 'allow',
+        beforeAnswer: async () => {
+          called += 1;
+        },
+      });
+
+      expect(called).toBe(1);
+      expect(result.outcome).toBe('unknown');
+
+      await s.pool.stop();
+    });
+
+    it('確認でない普通の送信（requestId も decision も無く、確認待ちでもない）では呼ばれない', async () => {
+      const s = setup();
+      const { managerId } = await s.pool.start({ request: '調べて' });
+      let called = 0;
+
+      const result = await s.pool.send(managerId, 'こっちを見て', {
+        beforeAnswer: async () => {
+          called += 1;
+        },
+      });
+
+      expect(result.outcome).toBe('delivered');
+      expect(called).toBe(0);
+
+      await s.pool.stop();
+    });
+  });
+
   it('中断で解けた確認は待ち行列に残らない（次の指示を食い潰さない）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '調べて' });

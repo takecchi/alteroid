@@ -86,6 +86,11 @@ interface Harness {
   setAutoRunnerId(runnerId: string | undefined): void;
   setPidsSaturation(runnerId: string, saturation: PidsSaturation | undefined): void;
   setSendResult(result: ManagerSendResult): void;
+  /** 設定すると、`send` が確認に当たった形で `beforeAnswer` を呼ぶ。`hook` は答える瞬間（runner.answer の位置）に走る。 */
+  setPendingToAnswer(
+    pending: { requestId: string; summary: string } | undefined,
+    hook?: () => Promise<void>,
+  ): void;
   setRunnersOverview(overview: RunnerFleetOverview): void;
   setRunnerBacklog(snapshots: RunnerBacklogSnapshot[]): void;
   setTranscript(managerId: string, body: string | null, archiveId?: string): void;
@@ -154,6 +159,8 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   let autoRunnerId: string | undefined = 'runner-test';
   const pidsSaturations = new Map<string, PidsSaturation>();
   let sendResult: ManagerSendResult = { outcome: 'answered', detail: '回答した。' };
+  let pendingToAnswer: { requestId: string; summary: string } | undefined;
+  let onAnswer: (() => Promise<void>) | undefined;
   let runnersOverview: RunnerFleetOverview = {
     runners: [],
     unassigned: [],
@@ -198,7 +205,13 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
       return summary;
     },
     async send(managerId, message, options = {}) {
-      sent.push({ managerId, message, ...options });
+      const { beforeAnswer, ...recorded } = options;
+      sent.push({ managerId, message, ...recorded });
+      // 本物の `send` は確認に当たったときだけ、答える直前に `beforeAnswer` を呼ぶ
+      if (pendingToAnswer !== undefined) {
+        await beforeAnswer?.(pendingToAnswer);
+        await onAnswer?.();
+      }
       return sendResult;
     },
     async list() {
@@ -359,6 +372,10 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     setPidsSaturation(runnerId, saturation) {
       if (saturation === undefined) pidsSaturations.delete(runnerId);
       else pidsSaturations.set(runnerId, saturation);
+    },
+    setPendingToAnswer(pending, hook) {
+      pendingToAnswer = pending;
+      onAnswer = hook;
     },
     setSendResult(result) {
       sendResult = result;
@@ -4810,6 +4827,183 @@ describe('クローンの道具', () => {
     expect(h.sent).toEqual([
       { managerId: 'mgr-1', message: 'よい', decision: 'allow', requestId: 'req-9' },
     ]);
+  });
+
+  describe('manager_send: クローンが確認に答えるときは、答える前に判断を日誌へ残す', () => {
+    const PENDING = { requestId: 'req-9', summary: 'Bash: git push origin main' };
+
+    async function decisionsOf(h: Harness): Promise<{ decision?: string; grounds?: string }[]> {
+      return (await h.stores.journal.list({ types: ['decision'], order: 'asc' })) as {
+        decision?: string;
+        grounds?: string;
+      }[];
+    }
+
+    it('答えが届く前に、クローンが自分で答える判断の行が日誌に在る（順序）', async () => {
+      const h = harness();
+      let journaledWhenAnswering: string[] | undefined;
+      h.setPendingToAnswer(PENDING, async () => {
+        journaledWhenAnswering = (await decisionsOf(h)).map((entry) => entry.decision ?? '');
+      });
+
+      const reply = await h.call('manager_send', {
+        managerId: 'mgr-1',
+        message: 'よい、進めて',
+        decision: 'allow',
+        requestId: 'req-9',
+      });
+
+      expect(
+        journaledWhenAnswering,
+        '【赤の意味】runner.answer の位置に来た時点で、判断の行がまだ日誌に無い。' +
+          '答えが届いたのに跡が無い窓が戻っている。',
+      ).toHaveLength(1);
+      expect(journaledWhenAnswering?.[0]).toContain('クローンが担当 mgr-1 の確認');
+      expect(journaledWhenAnswering?.[0]).toContain('req-9');
+      expect(journaledWhenAnswering?.[0]).toContain('Bash: git push origin main');
+      expect(journaledWhenAnswering?.[0]).toContain('decision=allow');
+      expect(journaledWhenAnswering?.[0]).toContain('よい、進めて');
+      const entries = await decisionsOf(h);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.grounds).toContain('人間に聞かずに答えた');
+      expect(reply).toContain('回答した。');
+    });
+
+    it('decision を付けなかった回は「指定なし」と書く', async () => {
+      const h = harness();
+      h.setPendingToAnswer(PENDING);
+
+      await h.call('manager_send', { managerId: 'mgr-1', message: 'どうぞ', requestId: 'req-9' });
+
+      expect((await decisionsOf(h))[0]?.decision).toContain('decision=指定なし');
+    });
+
+    it('日誌に書けないときは、確認に答えず、行為は起きていないと言う', async () => {
+      const stores = failingJournalAppend(createMemoryStores(), 'boom-answer-journal');
+      let answered = false;
+      let sentOnce = false;
+      const managers = {
+        async send(
+          _managerId: string,
+          _message: string,
+          options: { beforeAnswer?: (p: { requestId: string; summary: string }) => Promise<void> },
+        ) {
+          sentOnce = true;
+          await options.beforeAnswer?.(PENDING);
+          answered = true;
+          return { outcome: 'answered', detail: '回答した。' };
+        },
+      } as unknown as ManagerPool;
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        managers,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+      const found = tools.find((entry) => entry.name === 'manager_send');
+
+      const outcome = await found!
+        .handler(
+          { managerId: 'mgr-1', message: 'よい', decision: 'allow', requestId: 'req-9' } as never,
+          {},
+        )
+        .then(
+          (result) => ({
+            isError: result.isError === true,
+            text: (result.content ?? [])
+              .map((block) => (block.type === 'text' ? block.text : ''))
+              .join(''),
+          }),
+          (error: unknown) => ({
+            isError: true,
+            text: error instanceof Error ? error.message : String(error),
+          }),
+        );
+
+      expect(sentOnce).toBe(true);
+      expect(answered, '日誌に書けなかったのに、答えが送られた').toBe(false);
+      expect(outcome.isError).toBe(true);
+      expect(outcome.text).toContain('行為は起きていない');
+      expect(outcome.text).toContain('manager_send');
+    });
+
+    it('答えが効かなかった（runner 側で既に解けていた）ときは、先の行を打ち消す行を足す', async () => {
+      const h = harness();
+      h.setPendingToAnswer(PENDING);
+      h.setSendResult({
+        outcome: 'unknown',
+        detail: 'req-9 は runner 側で既に解けている。',
+      });
+
+      await h.call('manager_send', {
+        managerId: 'mgr-1',
+        message: 'よい',
+        decision: 'allow',
+        requestId: 'req-9',
+      });
+
+      const entries = await decisionsOf(h);
+      expect(entries).toHaveLength(2);
+      expect(entries[0]?.decision).toContain('に自分で答える');
+      expect(entries[1]?.decision).toContain('直前の回答の行は効いていない（答えは届いていない）');
+      expect(entries[1]?.decision).toContain('req-9');
+      expect(entries[1]?.decision).toContain('runner 側で既に解けている');
+    });
+
+    it('send が例外を投げたときも、行を書いた後なら打ち消しを足してから例外を上げ直す', async () => {
+      const stores = createMemoryStores();
+      const managers = {
+        async send(
+          _managerId: string,
+          _message: string,
+          options: { beforeAnswer?: (p: { requestId: string; summary: string }) => Promise<void> },
+        ) {
+          await options.beforeAnswer?.(PENDING);
+          throw new Error('runner が落ちた');
+        },
+      } as unknown as ManagerPool;
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        managers,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+      const found = tools.find((entry) => entry.name === 'manager_send');
+
+      await expect(
+        found!.handler(
+          { managerId: 'mgr-1', message: 'よい', decision: 'allow', requestId: 'req-9' } as never,
+          {},
+        ),
+      ).rejects.toThrow('runner が落ちた');
+
+      const entries = (await stores.journal.list({ types: ['decision'], order: 'asc' })) as {
+        decision?: string;
+      }[];
+      expect(entries).toHaveLength(2);
+      expect(entries[1]?.decision).toContain('効いていない');
+      expect(entries[1]?.decision).toContain('runner が落ちた');
+    });
+
+    it('確認に当たらない普通の送信では、判断の行を足さない（beforeAnswer が呼ばれない）', async () => {
+      const h = harness();
+      h.setSendResult({ outcome: 'delivered', detail: '追加指示として届けた。' });
+
+      await h.call('manager_send', { managerId: 'mgr-1', message: '続けて' });
+
+      expect(await decisionsOf(h)).toEqual([]);
+    });
+
+    it('確認に当たらなかった decision 付きの送信（delivered）も、打ち消す行を足さない', async () => {
+      const h = harness();
+      h.setSendResult({ outcome: 'delivered', detail: '追加指示として届けた。' });
+
+      await h.call('manager_send', { managerId: 'mgr-1', message: '続けて', decision: 'allow' });
+
+      expect(await decisionsOf(h)).toEqual([]);
+    });
   });
 
   it('manager_stop は人間と同じ口で止め、止まったことを確かめてから返す', async () => {
@@ -18299,6 +18493,38 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
+      tool: 'manager_send',
+      firstLine: ACT_NOT_PERFORMED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-manager-send');
+        const managers = {
+          async send(
+            _managerId: string,
+            _message: string,
+            options: {
+              beforeAnswer?: (p: { requestId: string; summary: string }) => Promise<void>;
+            },
+          ) {
+            await options.beforeAnswer?.({ requestId: 'req-1', summary: '確認' });
+            return { outcome: 'answered', detail: '回答した。' };
+          },
+        } as unknown as ManagerPool;
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          managers,
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'manager_send', {
+          managerId: 'mgr-1',
+          message: 'よい',
+          decision: 'allow',
+          requestId: 'req-1',
+        });
+      },
+    },
+    {
       tool: 'manager_start',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
@@ -18462,10 +18688,9 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
     },
   );
 
-  it('CASES の道具名の集合は、SELF_JOURNALING_CLONE_TOOLS から manager_send / manager_stop を除いたものと一致する', () => {
-    const EXPECTED_TOOLS = SELF_JOURNALING_CLONE_TOOLS.filter(
-      (name) => name !== 'manager_send' && name !== 'manager_stop',
-    );
+  it('CASES の道具名の集合は、SELF_JOURNALING_CLONE_TOOLS から manager_stop を除いたものと一致する', () => {
+    // manager_send は、確認への回答の行（答える前に書く decision）で表に入った
+    const EXPECTED_TOOLS = SELF_JOURNALING_CLONE_TOOLS.filter((name) => name !== 'manager_stop');
     const actualTools = [...new Set(CASES.map((c) => c.tool))];
     expect(actualTools.sort()).toEqual([...EXPECTED_TOOLS].sort());
   });
