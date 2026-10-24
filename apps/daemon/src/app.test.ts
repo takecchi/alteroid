@@ -58,7 +58,6 @@ import {
   recentDroppedTraces,
   summarizeInboxBacklog,
   summarizeProgress,
-  ScheduleConflictError,
   UnreadableScheduleError,
   UnreadableTokenSettingsError,
 } from '@alteroid/core';
@@ -5705,9 +5704,7 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
     expect((await stores.schedules.get('table-kind'))?.request).toBe('既存の依頼');
     expect(await stores.mcpServers.read()).toBeNull();
 
-    const tracedCaseCount = cases.filter(
-      (c) => c.widened !== true || c.tracesDrop === true,
-    ).length;
+    const tracedCaseCount = cases.filter((c) => c.widened !== true || c.tracesDrop === true).length;
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
     expect(dropped).toHaveLength(tracedCaseCount);
   });
