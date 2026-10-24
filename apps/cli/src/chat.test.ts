@@ -1456,6 +1456,12 @@ function stubClient(
     approvalTraceBody?: unknown;
     scheduleEntries?: ScheduleEntryLike[];
     scheduleUnreadable?: { kind?: string; reason: string }[];
+    schedulePostStatus?: number;
+    scheduleDeleteStatus?: number;
+    scheduleRunStatus?: number;
+    scheduleWriteBody?: unknown;
+    eventsStatus?: number;
+    eventsBody?: unknown;
     memoryDocuments?: MemoryDocLike[];
     journalEntries?: JournalEntryLike[];
     // 呼ばれた順に返す頁（`next` つき）。尽きたら最後の頁を返す。指定が無ければ `journalEntries` を `next` 無しで返す
@@ -1543,7 +1549,10 @@ function stubClient(
     events: {
       $post: (args: unknown) => {
         calls.push({ route: 'POST /events', args });
-        return Promise.resolve(reply(200, { id: 'evt-1' }));
+        const status = options.eventsStatus ?? 200;
+        return Promise.resolve(
+          reply(status, status === 200 ? { id: 'evt-1' } : (options.eventsBody ?? {})),
+        );
       },
     },
     commitments: {
@@ -1720,6 +1729,31 @@ function stubClient(
               : { unreadable: options.scheduleUnreadable }),
           }),
         );
+      },
+      $post: (args: unknown) => {
+        calls.push({ route: 'POST /schedule', args });
+        const status = options.schedulePostStatus ?? 200;
+        return Promise.resolve(
+          reply(status, status === 200 ? {} : (options.scheduleWriteBody ?? {})),
+        );
+      },
+      ':kind': {
+        $delete: (args: unknown) => {
+          calls.push({ route: 'DELETE /schedule/:kind', args });
+          const status = options.scheduleDeleteStatus ?? 200;
+          return Promise.resolve(
+            reply(status, status === 200 ? {} : (options.scheduleWriteBody ?? {})),
+          );
+        },
+        run: {
+          $post: (args: unknown) => {
+            calls.push({ route: 'POST /schedule/:kind/run', args });
+            const status = options.scheduleRunStatus ?? 200;
+            return Promise.resolve(
+              reply(status, status === 200 ? {} : (options.scheduleWriteBody ?? {})),
+            );
+          },
+        },
       },
     },
     memory: {
@@ -2639,6 +2673,278 @@ describe('chat の台帳コマンド', () => {
     expect(text).toContain('/commitments');
     expect(text).toContain('/commit ');
     expect(text).toContain('/done ');
+  });
+});
+
+// 書き込み系のスラッシュコマンドは、サーバの失敗（404・409・5xx）も失敗として返す（#5240）。表示した文をそのまま onFailed へ渡し、
+// 成功の回は渡さない。渡さないと、非対話（パイプ・スクリプト）で止まらず、終了状態も成功と同じになる。
+describe('書き込み系のスラッシュコマンドは HTTP の失敗を onFailed に渡す（#5240）', () => {
+  const SERVER_MESSAGE = '書き込みが失敗した（issue #5240 のテスト用）';
+
+  async function runWrite(
+    line: string,
+    options: Parameters<typeof stubClient>[0],
+    listed: Listed = emptyListed(),
+  ) {
+    const out = captureStdout();
+    const { client } = stubClient(options);
+    const failed: string[] = [];
+    await runSlashCommand(line, client, listed, null, undefined, confirmYes, (reason) =>
+      failed.push(reason),
+    );
+    return { text: out(), failed };
+  }
+
+  // 表示した文のまま渡すこと（文言は変えない）
+  function expectFailedAsShown(result: { text: string; failed: string[] }, message: string) {
+    expect(result.text).toContain(message);
+    expect(result.failed).toEqual([result.text.trimEnd()]);
+  }
+
+  const waitingListed = (): Listed => ({
+    ...emptyListed(),
+    managers: ['mgr-a'],
+    waiting: [{ managerId: 'mgr-a', requestId: 'req-1' }],
+  });
+
+  describe.each([
+    {
+      line: '/schedule daily-x 09:00 本文',
+      statusOption: 'schedulePostStatus',
+      notFound: SERVER_MESSAGE,
+      success: 'を仕込みました',
+    },
+    {
+      line: '/unschedule daily-x',
+      statusOption: 'scheduleDeleteStatus',
+      notFound: 'daily-x という継続中の依頼はありません',
+      success: 'を外しました',
+    },
+    {
+      line: '/run daily-x',
+      statusOption: 'scheduleRunStatus',
+      notFound: 'daily-x という定期ジョブはありません',
+      success: 'を起こしました',
+    },
+  ] as const)('$line', ({ line, statusOption, notFound, success }) => {
+    it.each([404, 409, 500])('%i を表示した文のまま失敗として渡す', async (status) => {
+      const result = await runWrite(line, {
+        [statusOption]: status,
+        scheduleWriteBody: { error: SERVER_MESSAGE },
+      });
+
+      expectFailedAsShown(result, status === 404 ? notFound : SERVER_MESSAGE);
+    });
+
+    it('成功の回に onFailed を呼ばない', async () => {
+      const result = await runWrite(line, {});
+
+      expect(result.text).toContain(success);
+      expect(result.failed).toEqual([]);
+    });
+  });
+
+  describe('/event', () => {
+    it.each([404, 409, 500])('%i を表示した文のまま失敗として渡す', async (status) => {
+      const result = await runWrite('/event ci ビルドが落ちた', {
+        eventsStatus: status,
+        eventsBody: { error: SERVER_MESSAGE },
+      });
+
+      expectFailedAsShown(result, SERVER_MESSAGE);
+    });
+
+    it('成功の回に onFailed を呼ばない', async () => {
+      const result = await runWrite('/event ci ビルドが落ちた', {});
+
+      expect(result.text).toContain('外部イベントとして届けました');
+      expect(result.failed).toEqual([]);
+    });
+  });
+
+  describe.each([
+    {
+      name: '/stop',
+      line: '/stop mgr-1',
+      statusOption: 'abortStatus',
+      bodyOption: 'abortBody',
+      listed: emptyListed,
+      success: 'stopped: mgr-1 を止めた',
+      missing: 'そのマネージャーは見つかりませんでした: mgr-1',
+    },
+    {
+      name: '/msg',
+      line: '/msg mgr-1 明日までに終わらせて',
+      statusOption: 'messagesStatus',
+      bodyOption: 'messagesBody',
+      listed: emptyListed,
+      success: '追加指示として届けた',
+      missing: 'そのマネージャーは見つかりませんでした: mgr-1',
+    },
+    {
+      name: '/reply',
+      line: '/reply 1 了解です',
+      statusOption: 'messagesStatus',
+      bodyOption: 'messagesBody',
+      listed: waitingListed,
+      success: '追加指示として届けた',
+      missing: 'そのマネージャーは見つかりませんでした: mgr-a',
+    },
+    {
+      name: '/allow（引数あり）',
+      line: '/allow 1',
+      statusOption: 'messagesStatus',
+      bodyOption: 'messagesBody',
+      listed: waitingListed,
+      success: '追加指示として届けた',
+      missing: 'そのマネージャーは見つかりませんでした: mgr-a',
+    },
+    {
+      name: '/deny（引数あり）',
+      line: '/deny 1 だめです',
+      statusOption: 'messagesStatus',
+      bodyOption: 'messagesBody',
+      listed: waitingListed,
+      success: '追加指示として届けた',
+      missing: 'そのマネージャーは見つかりませんでした: mgr-a',
+    },
+  ] as const)('$name', ({ line, statusOption, bodyOption, listed, success, missing }) => {
+    it.each([404, 409, 500])('%i を表示した文のまま失敗として渡す', async (status) => {
+      const result = await runWrite(
+        line,
+        { [statusOption]: status, [bodyOption]: { error: SERVER_MESSAGE } },
+        listed(),
+      );
+
+      expectFailedAsShown(result, status === 404 ? missing : SERVER_MESSAGE);
+    });
+
+    it('成功の回に、HTTP の失敗としては onFailed を呼ばない', async () => {
+      const result = await runWrite(line, {}, listed());
+
+      expect(result.text).toContain(success);
+      expect(result.failed).toEqual([]);
+    });
+  });
+
+  describe('/allow・/deny（引数なし）', () => {
+    const solo = [
+      manager({ managerId: 'mgr-solo', waiting: [waitingItem({ requestId: 'req-solo' })] }),
+    ];
+
+    it.each([
+      ['/allow', 404],
+      ['/allow', 409],
+      ['/deny', 500],
+    ])('%s は %i を表示した文のまま失敗として渡す', async (line, status) => {
+      const result = await runWrite(line, {
+        managers: solo,
+        messagesStatus: status,
+        messagesBody: { error: SERVER_MESSAGE },
+      });
+
+      expectFailedAsShown(
+        result,
+        status === 404 ? 'そのマネージャーは見つかりませんでした: mgr-solo' : SERVER_MESSAGE,
+      );
+    });
+
+    it('成功の回に、HTTP の失敗としては onFailed を呼ばない', async () => {
+      const result = await runWrite('/allow', { managers: solo });
+
+      expect(result.text).toContain('追加指示として届けた');
+      expect(result.failed).toEqual([]);
+    });
+  });
+
+  describe('/archive remove', () => {
+    it('404 を表示した文のまま失敗として渡す', async () => {
+      const result = await runWrite('/archive remove sess-1.jsonl', { archiveRemoveStatus: 404 });
+
+      expectFailedAsShown(result, 'その生ログはありません');
+    });
+
+    it('409 を、上書きの案内を含む表示した文のまま失敗として渡す', async () => {
+      const result = await runWrite('/archive remove sess-1.jsonl', {
+        archiveRemoveStatus: 409,
+        archiveRemoveBody: { error: SERVER_MESSAGE },
+      });
+
+      expectFailedAsShown(
+        result,
+        '理由を付けて上書きするには: /archive remove sess-1.jsonl <理由>',
+      );
+      expect(result.failed[0]).toContain(SERVER_MESSAGE);
+    });
+
+    it('その他（500）を表示した文のまま失敗として渡す', async () => {
+      const result = await runWrite('/archive remove sess-1.jsonl', {
+        archiveRemoveStatus: 500,
+        archiveRemoveBody: { error: SERVER_MESSAGE },
+      });
+
+      expectFailedAsShown(result, SERVER_MESSAGE);
+    });
+
+    it('成功の回に onFailed を呼ばない', async () => {
+      const result = await runWrite('/archive remove sess-1.jsonl', {});
+
+      expect(result.text).toContain('消しました');
+      expect(result.failed).toEqual([]);
+    });
+  });
+
+  describe('/edit が送る前に止める回', () => {
+    const target: Target = {
+      baseUrl: 'http://127.0.0.1:4517',
+      headers: { authorization: 'Bearer token' },
+      remote: false,
+      note: null,
+    };
+
+    it('会話を開いていなければ、表示した文のまま失敗として渡す', async () => {
+      const out = captureStdout();
+      const failed: string[] = [];
+      const listed: Listed = { ...emptyListed(), messages: ['m1'] };
+
+      await runSlashCommand(
+        '/edit 1 直した文',
+        {} as unknown as Parameters<typeof runSlashCommand>[1],
+        listed,
+        null,
+        target,
+        undefined,
+        (reason) => failed.push(reason),
+      );
+
+      const text = out();
+      expect(text).toContain('先に /conversation');
+      expect(failed).toEqual([text.trimEnd()]);
+    });
+
+    it('接続先が分からなければ、表示した文のまま失敗として渡す', async () => {
+      const out = captureStdout();
+      const failed: string[] = [];
+      const listed: Listed = {
+        ...emptyListed(),
+        messages: ['m1'],
+        messagesConversationId: 'conv-1',
+      };
+
+      await runSlashCommand(
+        '/edit 1 直した文',
+        {} as unknown as Parameters<typeof runSlashCommand>[1],
+        listed,
+        null,
+        undefined,
+        undefined,
+        (reason) => failed.push(reason),
+      );
+
+      const text = out();
+      expect(text).toContain('編集を送れませんでした（接続先が分かりません）');
+      expect(failed).toEqual([text.trimEnd()]);
+    });
   });
 });
 

@@ -203,6 +203,89 @@ describe('非対話で、書き込み系のコマンドに一覧に無い番号�
     }
   });
 
+  // 会話を開いていない /edit は送る前に止まる回で、通信の口が先に失敗を立てない。onFailed に渡さないと、止まらず次の行を送る（#5240）
+  it('⭐ /edit: 会話を開いていなければ止まり、次の行を送らない', async () => {
+    useStdin(false);
+    const chats = recordFetch({});
+    const out = captureStdout();
+    const { settled } = await start();
+    rl.emit('line', '/edit m1 直した本文');
+    rl.emit('line', '次の発言');
+    rl.close();
+    const error = await settled;
+    expect(out()).toContain('先に /conversation');
+    expect(error).toBeInstanceOf(Error);
+    expect(chats).toEqual([]);
+  });
+
+  // id を直に書く書き込み系の、サーバが断った回（#5240）。成功の回は止まらない。
+  // 注意: #5236 の節と同じく、パイプの停止そのものは通信の口が先に立てる。文を onFailed に渡す歯は chat.test.ts 側にある。
+  describe('HTTP の失敗（#5240）', () => {
+    const writes = [
+      { line: '/schedule daily-x 09:00 本文', path: '/schedule', method: 'POST' },
+      { line: '/unschedule daily-x', path: '/schedule/daily-x', method: 'DELETE' },
+      { line: '/run daily-x', path: '/schedule/daily-x/run', method: 'POST' },
+      { line: '/event ci ビルドが落ちた', path: '/events', method: 'POST' },
+      { line: '/msg mgr-1 やって', path: '/managers/mgr-1/messages', method: 'POST' },
+      // /stop・/archive remove は非対話では確認が取れず、HTTP に届く前に止まる（#3141）ので、ここには並べない
+    ];
+
+    function recordWriteFetch(status: number, path: string, method: string): string[] {
+      const chats: string[] = [];
+      vi.stubGlobal('fetch', (url: unknown, init?: RequestInit) => {
+        const target = new URL(String(url)).pathname;
+        if (target === '/chat') {
+          const body = JSON.parse(String(init?.body)) as { text: string };
+          chats.push(body.text);
+          return Promise.resolve(sse(DONE));
+        }
+        if (target === path && (init?.method ?? 'GET') === method) {
+          return Promise.resolve(
+            Response.json(
+              status === 200 ? { outcome: 'delivered', detail: 'ok' } : { error: 'サーバが断った' },
+              { status },
+            ),
+          );
+        }
+        return Promise.resolve(Response.json({}, { status: 500 }));
+      });
+      return chats;
+    }
+
+    for (const { line, path, method } of writes) {
+      for (const status of [404, 409, 500]) {
+        it(`⭐ ${line}（${status}）: 失敗として止まり、次の行を送らない`, async () => {
+          useStdin(false);
+          const chats = recordWriteFetch(status, path, method);
+          const out = captureStdout();
+          const { settled } = await start();
+          rl.emit('line', line);
+          rl.emit('line', '次の発言');
+          rl.close();
+          const error = await settled;
+          out();
+          expect(error).toBeInstanceOf(Error);
+          expect(error?.message).toContain(`コマンド ${line.split(' ')[0] ?? ''} が失敗した`);
+          expect(chats).toEqual([]);
+        });
+      }
+
+      it(`対照: ${line}（成功）: 止まらず、次の行を送る`, async () => {
+        useStdin(false);
+        const chats = recordWriteFetch(200, path, method);
+        const out = captureStdout();
+        const { settled } = await start();
+        rl.emit('line', line);
+        rl.emit('line', '次の発言');
+        rl.close();
+        const error = await settled;
+        out();
+        expect(error).toBeNull();
+        expect(chats).toEqual(['次の発言']);
+      });
+    }
+  });
+
   it('対照: 読み取り系（/manager）は一覧に無いと言うだけで止まらない', async () => {
     useStdin(false);
     const chats = recordFetch({});
