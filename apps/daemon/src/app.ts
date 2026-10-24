@@ -1263,6 +1263,14 @@ function journalWriteFailedBody(): { error: string; code: typeof JOURNAL_WRITE_F
   return { error: JOURNAL_WRITE_FAILED_MESSAGE, code: JOURNAL_WRITE_FAILED_CODE };
 }
 
+// 人間の答えを届ける前の日誌が書けなかったことだけを、`managers.send` から抜ける他の例外と見分けるための印。`beforeAnswer` が投げた例外は `send` をそのまま通って route へ戻るので、型で拾う。
+class AnswerJournalWriteError extends Error {
+  constructor(readonly journalError: unknown) {
+    super('答えを届ける前の日誌が書けなかった');
+    this.name = 'AnswerJournalWriteError';
+  }
+}
+
 // 日誌を先に書き、書けなければ状態を変えずに投げ直す。日誌に残すのは消す id と件数だけで行の中身は書かない。指した id が読めない行に1つでも無ければ何も消さず日誌も書かずに `unknown`（指された文字列は返さない）。例外の本文は日誌にも応答にも載せない（種類 `name` だけ）。
 async function removeUnreadableRowsWithJournal(params: {
   stores: Stores;
@@ -7255,6 +7263,12 @@ export function createApp(deps: AppDeps) {
               'issue #2359）。送っていない。本文は載せず、理由は不正な欄名だけ。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          500: {
+            description:
+              '確認への答えを届ける前の日誌が書けなかった（**答えていない**。担当は確認待ちのまま）。' +
+              '日誌を先に書き、書けなければ答えを届けない。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
+          },
         },
       }),
       jsonBody(managerMessageBody, (where) => ({
@@ -7262,10 +7276,59 @@ export function createApp(deps: AppDeps) {
       })),
       async (c) => {
         const { text, requestId, decision } = c.req.valid('json');
-        const result = await clone.managers.send(c.req.param('id'), text, {
-          ...(requestId === undefined ? {} : { requestId }),
-          ...(decision === undefined ? {} : { decision }),
-        });
+        const managerId = c.req.param('id');
+        // 答えを届ける前に判断の行を書く: 答えが届いたのに日誌に跡が無い窓を作らないため（人間の答えは承認の跡そのもの）。
+        // 行を書いたかを旗で持つ: 確認に当たらなかった送信では `beforeAnswer` が呼ばれず、書いていない行は打ち消さない。
+        // この行には humanAction を付けない: 付けた行は次のターンでクローンに名指しされるので、答えが届かず打ち消す回に、届いていないものを「人間が送った」と学ばせないため。印は答えが効いた後の行（下）が持つ。
+        const answerJournaled: { requestId?: string } = {};
+        const retractAnswerJournal = async (detail: string): Promise<void> => {
+          if (answerJournaled.requestId === undefined) return;
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision:
+                `人間が担当 ${managerId} の確認（${answerJournaled.requestId}）へ直接答えるとした直前の回答の行は` +
+                `効いていない（答えは届いていない）。理由: ${excerptLine(detail, 200)}`,
+              grounds: '先に書いた回答の行の後で、答えが届かなかったため打ち消す',
+            },
+            '人間の直接の回答の打ち消しの日誌',
+            `id=${managerId}`,
+          );
+        };
+        let result;
+        try {
+          result = await clone.managers.send(managerId, text, {
+            ...(requestId === undefined ? {} : { requestId }),
+            ...(decision === undefined ? {} : { decision }),
+            beforeAnswer: async (pending) => {
+              try {
+                await stores.journal.append({
+                  type: 'decision',
+                  decision:
+                    `人間が担当 ${managerId} の確認（${pending.requestId}: ${excerptLine(pending.summary, 200)}）へ直接答える` +
+                    `（decision=${decision ?? '指定なし（runner が本文から読む）'}。抜粋: ${excerptLine(text, 200)}）`,
+                  grounds: '人間が直接 API からマネージャーの確認へ答えた（答えを届ける前に残す）',
+                });
+              } catch (error) {
+                throw new AnswerJournalWriteError(error);
+              }
+              answerJournaled.requestId = pending.requestId;
+            },
+          });
+        } catch (error) {
+          if (error instanceof AnswerJournalWriteError) {
+            noteDroppedRecord(
+              '人間の直接の回答の日誌（答えていない）',
+              `id=${managerId}`,
+              kindOfError(error.journalError),
+            );
+            return c.json(journalWriteFailedBody(), 500);
+          }
+          await retractAnswerJournal(`送信が例外で終わった: ${reasonOf(error)}`);
+          throw error;
+        }
+        if (result.outcome !== 'answered') await retractAnswerJournal(result.detail);
         // `session_missing` を 404 に混ぜない: 「そのものは居る」側で、待てば直る状態を 404 という機械可読な終端で返すことになる。200 + `outcome` で返し、読み手に解釈の余地を残す。
         if (result.outcome === 'unknown') return c.json({ error: result.detail }, 404);
         // 行は在るが読めないものは「居ない」の 404 にしない（409）。
@@ -7276,7 +7339,6 @@ export function createApp(deps: AppDeps) {
           result.outcome === 'delivered' ||
           result.outcome === 'held'
         ) {
-          const managerId = c.req.param('id');
           await appendJournalOrDrop(
             stores,
             {

@@ -27836,6 +27836,27 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "確認への答えを届ける前の日誌が書けなかった（**答えていない**。担当は確認待ちのまま）。日誌を先に書き、書けなければ答えを届けない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         },
         "requestBody": {
