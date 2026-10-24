@@ -24634,6 +24634,27 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "外す前の日誌が書けなかったので外していない（`code` は `journal_write_failed`）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         },
         "parameters": [

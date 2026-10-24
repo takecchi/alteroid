@@ -131,6 +131,7 @@ import {
   noteDroppedRecord,
   describeClosedRecord,
   reopenCommitmentJournalFirst,
+  removeScheduleJournalFirst,
   reasonOf,
   redactErrorText,
   managerModelsOf,
@@ -6282,6 +6283,11 @@ export function createApp(deps: AppDeps) {
               '`current` はいまの依頼（読めないときは `null`）。',
             content: { 'application/json': { schema: resolver(scheduleConflictResponseSchema) } },
           },
+          500: {
+            description:
+              '外す前の日誌が書けなかったので外していない（`code` は `journal_write_failed`）。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
+          },
           ...noBodyPostResponses(),
         },
       }),
@@ -6308,36 +6314,48 @@ export function createApp(deps: AppDeps) {
           }
           ifMatch = checked.data.ifMatch;
         }
-        // `get(kind)` を先に呼ばない: `get` は読めない行で throw するので、壊れた行を外す目的まで届かない。`removeIfPresent` は3値を1回の往復で返すので、読んでから書くまでの隙間も無い。
-        // 版の比較もストアの排他の中で行う（`editRequest` と同じ）
-        let removed: Awaited<ReturnType<typeof stores.schedules.removeIfPresent>>;
-        try {
-          removed = await stores.schedules.removeIfPresent(
-            kind,
-            ifMatch === undefined ? undefined : { ifMatch },
+        // 外した行の本文は行から消えるので、日誌を先に書いてから外す（`removeScheduleJournalFirst`）。書けなければ外さずに 500。
+        // 先の行に humanAction を付けない: 印はクローンに「人間がこれを取り消した」と学ばせる行なので、効いた回だけに置く（下の2行目）。外せなかった回に印が残ると、届いていない操作を学ばせる。
+        // 壊れた行は `get` が投げるので、helper が「読めない形で入っていた依頼」として扱って外せるようにしてある。
+        const result = await removeScheduleJournalFirst(stores, kind, {
+          ifMatch,
+          buildEntry: (before) => ({
+            type: 'decision',
+            decision:
+              before === 'unreadable'
+                ? // 本文を持たない: 読めなかった行を壊れた形のまま日誌へ書くと、読めない値を持ち回ることになる。
+                  `人間が読めない形で入っていた依頼を外す: ${kind}`
+                : `人間が定期の依頼を外す: ${kind}: ${before.request}`,
+            grounds: '人間が直接 API から外そうとしている',
+          }),
+        });
+        if (result.kind === 'journal-failed') {
+          noteDroppedRecord(
+            '定期の依頼を外す日誌（外していない）',
+            `kind=${kind}`,
+            kindOfError(result.error),
           );
-        } catch (error) {
-          if (error instanceof ScheduleConflictError) {
-            return c.json(
-              {
-                error: '継続中の依頼が見た後に変わっています（外していません）' as const,
-                current: error.current,
-              },
-              409,
-            );
-          }
-          throw error;
+          return c.json(journalWriteFailedBody(), 500);
         }
-        if (removed === null) return c.json({ error: 'not found' as const }, 404);
-        // 外すこと自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
+        if (result.kind === 'conflict') {
+          return c.json(
+            {
+              error: '継続中の依頼が見た後に変わっています（外していません）' as const,
+              current: result.current,
+            },
+            409,
+          );
+        }
+        if (result.kind === 'not-found') return c.json({ error: 'not found' as const }, 404);
+        const removed = result.removed;
+        // 外せた回だけ印つきの行を足す（先の行と中身が重なるのは、印のある行を効いた回だけに置くため）。外すこと自体は効いているので、落ちても 500 を返さない（`appendJournalOrDrop`）。
         await appendJournalOrDrop(
           stores,
           {
             type: 'decision',
             decision:
               removed === 'unreadable'
-                ? // 本文を持たない: 読めなかった行を壊れた形のまま日誌へ書くと、読めない値を持ち回ることになる。
-                  `人間が読めない形で入っていた依頼を外した: ${kind}`
+                ? `人間が読めない形で入っていた依頼を外した: ${kind}`
                 : `人間が定期の依頼を外した: ${kind}: ${removed.request}`,
             grounds: '人間が直接 API から外した',
             ...humanActionOf(c.get('principal'), 'schedule_remove', kind),

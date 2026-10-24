@@ -149,6 +149,7 @@ import {
   readProgress,
 } from './progress-read.js';
 import { describeClosedRecord, reopenCommitmentJournalFirst } from './commitment-reopen.js';
+import { removeScheduleJournalFirst } from './schedule-remove.js';
 import { describeProgress } from './progress-describe.js';
 import { describeGithubCi } from './progress-github.js';
 import {
@@ -5071,23 +5072,30 @@ export function createCloneTools(context: ToolContext) {
       '継続中の依頼を片付ける。済んだ依頼・もう要らない依頼はここで外す。',
       { kind: z.string().describe('schedule_list に出ている kind') },
       async ({ kind }) => {
-        // `get(kind)` を先に呼ばない: 壊れた行を先に読もうとすると例外が上がり、外すという本来の目的まで届かないため
-        const removed = await stores.schedules.removeIfPresent(kind);
-        if (removed === null) return text(`継続中の依頼 ${kind} は無い。`);
-        await appendJournalOrThrow(
-          'schedule_remove',
-          stores.journal,
-          {
+        // 外した行の本文は行から消えるので、日誌へ残してから外す（`removeScheduleJournalFirst`）。壊れた行は `get` が投げるので、読めない形で入っていた依頼として扱い、外す目的まで届かせる。
+        const result = await removeScheduleJournalFirst(stores, kind, {
+          buildEntry: (before) => ({
             type: 'decision',
             decision:
-              removed === 'unreadable'
+              before === 'unreadable'
                 ? // 読めなかった行なので本文（`request`）は取り出せない
-                  `読めない形で入っていた依頼を外した: ${kind}`
-                : `定期の依頼を外した: ${kind}: ${removed.request}`,
+                  `読めない形で入っていた依頼を外す: ${kind}`
+                : `定期の依頼を外す: ${kind}: ${before.request}`,
             grounds: 'この依頼はもう要らないという判断',
-          },
-          'act-completed',
-        );
+          }),
+        });
+        if (result.kind === 'journal-failed') {
+          // 外す前に落ちたので何も起きていない（`act-not-performed`）
+          noteDroppedRecord('日誌', journalEntryShape(result.entry), result.error);
+          throw new JournalNotRecordedError(
+            'schedule_remove',
+            result.entry,
+            'act-not-performed',
+            result.error,
+          );
+        }
+        // 外せなかった（先に読んだ後で消えていた）: 打ち消しの行は helper が足してある
+        if (result.kind !== 'removed') return text(`継続中の依頼 ${kind} は無い。`);
         return text(`${kind} を外した。`);
       },
     ),

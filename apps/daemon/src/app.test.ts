@@ -58,6 +58,8 @@ import {
   recentDroppedTraces,
   summarizeInboxBacklog,
   summarizeProgress,
+  ScheduleConflictError,
+  UnreadableScheduleError,
   UnreadableTokenSettingsError,
 } from '@alteroid/core';
 import ts from 'typescript';
@@ -4786,8 +4788,10 @@ describe('HTTP API', () => {
       ...real,
       async get(kind) {
         if (kind === 'broken' && brokenPresent) {
-          throw new Error(
+          // #5234: 実物のストアが投げる型にそろえた（外す前に読む helper は `UnreadableScheduleError` だけを「読めない形」と見分けるため）
+          throw new UnreadableScheduleError(
             '継続中の依頼 broken が読めない形で入っている（消されたのではない）: 実測用のダミー',
+            { kind },
           );
         }
         return real.get(kind);
@@ -4810,11 +4814,14 @@ describe('HTTP API', () => {
 
     await expect(stores.schedules.get('broken')).resolves.toBeNull();
 
-    const decisions = await stores.journal.list({ types: ['decision'] });
-    expect(decisions).toHaveLength(1);
-    expect(decisions[0]).toMatchObject({
-      decision: expect.stringContaining('読めない形で入っていた'),
-    });
+    // #5234: 外す前の行と、外した後の印つきの行の2行になった（どちらも「読めない形で入っていた」で、本文は持たない）
+    const decisions = await stores.journal.list({ types: ['decision'], order: 'asc' });
+    expect(decisions).toHaveLength(2);
+    for (const entry of decisions) {
+      expect(entry).toMatchObject({
+        decision: expect.stringContaining('読めない形で入っていた'),
+      });
+    }
 
     const missing = await app.request('/schedule/nope', {
       method: 'DELETE',
@@ -5608,6 +5615,8 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
       request: () => Response | Promise<Response>;
       // 能力を広げる口は逆に 500・状態は変わらない。
       widened?: true;
+      // 500 にしつつ、書けなかった行の跡を stderr へ残す口（#5234 の外す口）。
+      tracesDrop?: true;
     }[] = [
       {
         name: 'DELETE /memory/:slug',
@@ -5639,7 +5648,10 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
           ),
       },
       {
+        // #5234 で反転: 外した後に日誌を書いていた（落ちても 200）のを、日誌を先に書く（落ちたら外さず 500）へ。本文（`request`）は外した行と一緒に消えるので、跡が日誌に無いまま外せてはいけない。
         name: 'DELETE /schedule/:kind',
+        widened: true,
+        tracesDrop: true,
         request: () =>
           withFailingJournal.request('/schedule/table-kind', {
             method: 'DELETE',
@@ -5689,11 +5701,15 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
     });
 
     expect(await stores.schedules.get('table-new-kind')).toBeNull();
+    // 外す前の日誌が書けなかったので、外していない（#5234）
+    expect((await stores.schedules.get('table-kind'))?.request).toBe('既存の依頼');
     expect(await stores.mcpServers.read()).toBeNull();
 
-    const narrowCaseCount = cases.filter((c) => c.widened !== true).length;
+    const tracedCaseCount = cases.filter(
+      (c) => c.widened !== true || c.tracesDrop === true,
+    ).length;
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
-    expect(dropped).toHaveLength(narrowCaseCount);
+    expect(dropped).toHaveLength(tracedCaseCount);
   });
 });
 

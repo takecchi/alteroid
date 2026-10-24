@@ -486,6 +486,8 @@ export { verifyCommitmentAutoCloseMarkContract } from './commitment-auto-close-m
 export { verifyCommitmentReopenContract } from './commitment-reopen-contract.js';
 export { reopenCommitmentJournalFirst, describeClosedRecord } from './commitment-reopen.js';
 export type { JournalFirstReopenResult } from './commitment-reopen.js';
+export { removeScheduleJournalFirst } from './schedule-remove.js';
+export type { JournalFirstScheduleRemoveResult, ScheduleRemoveTarget } from './schedule-remove.js';
 export { verifyCommitmentEditIfMatchContract } from './commitment-edit-if-match-contract.js';
 export { verifyCommitmentRemoveForConversationContract } from './commitment-remove-for-conversation-contract.js';
 export { verifyCommitmentEditUnreadableContract } from './commitment-edit-unreadable-contract.js';

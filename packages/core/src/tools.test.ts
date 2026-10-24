@@ -1889,8 +1889,10 @@ describe('クローンの道具', () => {
       ...real,
       async get(kind) {
         if (kind === 'broken' && brokenPresent) {
-          throw new Error(
+          // #5234: 実物のストアが投げる型にそろえた（外す前に読む helper は `UnreadableScheduleError` だけを「読めない形」と見分けるため）
+          throw new UnreadableScheduleError(
             '継続中の依頼 broken が読めない形で入っている（消されたのではない）: 実測用のダミー',
+            { kind },
           );
         }
         return real.get(kind);
@@ -18302,8 +18304,9 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
+      // #5234 で反転: 外した後に日誌を書いて `act-completed` だったのを、外す前に書く `act-not-performed` へ（跡が無いまま外せてはいけない）
       tool: 'schedule_remove',
-      firstLine: ACT_COMPLETED,
+      firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-11');
         await stores.schedules.put({
