@@ -2744,6 +2744,25 @@ describe('書き込み系のスラッシュコマンドは HTTP の失敗を onF
     });
   });
 
+  // 送る前に止めた回も失敗として渡す（#5249）: 仕込めていないのに成功と同じ終了状態にしない
+  describe('/schedule の周期が読めない・本文が空', () => {
+    it.each(['/schedule daily-x 25時 本文', '/schedule daily-x 09:00 '])(
+      '%s はデーモンへ送らず、使い方の誤りとして渡す',
+      async (line) => {
+        const out = captureStdout();
+        const { client, calls } = stubClient({});
+        const failed: string[] = [];
+        await runSlashCommand(line, client, emptyListed(), null, undefined, confirmYes, (reason) =>
+          failed.push(reason),
+        );
+
+        expect(out()).toContain('周期は HH:MM');
+        expect(calls.some((call) => call.route.startsWith('POST /schedule'))).toBe(false);
+        expect(failed).toEqual(['使い方の誤り（/schedule）']);
+      },
+    );
+  });
+
   describe('/event', () => {
     it.each([404, 409, 500])('%i を表示した文のまま失敗として渡す', async (status) => {
       const result = await runWrite('/event ci ビルドが落ちた', {

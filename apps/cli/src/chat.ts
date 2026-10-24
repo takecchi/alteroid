@@ -1459,11 +1459,11 @@ export async function runSlashCommand(
       if (rest.length >= 3) {
         const [kind] = rest;
         const parsed = takeWhen(rawTail(line, 2));
+        // 送る前に止めた回も失敗として渡す（#5249）: 仕込めていないのに成功と同じ終了状態にしない
         if (parsed === null || parsed.request.length === 0) {
-          stdout.write(
+          return usageError(
             `周期は HH:MM（毎日その時刻）／30m・30（分ごと。1〜${SCHEDULE_EVERY_MINUTES_MAX} 分）／cron <5項目>（例: cron 0 10 * * 1）\n`,
           );
-          return 'ok';
         }
         const created = await client.schedule.$post({
           json: { kind: kind ?? '', request: parsed.request, spec: parsed.spec },
