@@ -10491,7 +10491,9 @@ function renderJournalEntry(
           : entry.answer === undefined
             ? entry.question
             : `${entry.question} → ${entry.answer}`;
-      return { head: `[escalation approval=${entry.approvalId}${to} ${status}]`, body };
+      const via =
+        entry.answeredVia === undefined ? '' : ` via=${describeAnsweredVia(entry.answeredVia)}`;
+      return { head: `[escalation approval=${entry.approvalId}${to} ${status}${via}]`, body };
     }
     case 'tool_use':
       return {

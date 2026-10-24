@@ -1,4 +1,4 @@
-import { summarizeQuestions } from '@alteroid/core';
+import { describeAnsweredVia, summarizeQuestions, type AnsweredVia } from '@alteroid/core';
 import { codePointBoundary } from '@alteroid/core/cli-light';
 
 import type { DaemonClient } from './client.js';
@@ -12,6 +12,7 @@ export interface ConversationApproval {
   questions?: Parameters<typeof summarizeQuestions>[0];
   answeredAt?: string | null;
   answer?: string | null;
+  answeredVia?: AnsweredVia | null;
   withdrawnAt?: string | null;
   withdrawnReason?: string | null;
 }
@@ -114,7 +115,10 @@ export function approvalText(approval: ConversationApproval): string {
   }
   if (approval.answeredAt) {
     const answer = approval.answer ? oneLine(approval.answer, 120) : '（回答の記録なし）';
-    return `${head} → 回答済み（${approval.answeredAt}）: ${answer}`;
+    const via = approval.answeredVia
+      ? `（回答経路: ${describeAnsweredVia(approval.answeredVia)}）`
+      : '';
+    return `${head} → 回答済み（${approval.answeredAt}）: ${answer}${via}`;
   }
   return `${head} → 未回答`;
 }

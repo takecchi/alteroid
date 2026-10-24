@@ -1,3 +1,4 @@
+import { describeAnsweredVia } from '@alteroid/core/answered-via';
 import { Link } from 'react-router';
 
 import { ApprovalEntry } from '~/components/approval-entry';
@@ -224,6 +225,9 @@ function DayBody({ date, approvalId }: { date: string; approvalId: string | unde
                     time={at === undefined ? '' : formatDateTime(at)}
                     question={redactBody(approval.question)}
                     {...(approval.answer != null ? { answer: redactBody(approval.answer) } : {})}
+                    {...(approval.answeredVia != null
+                      ? { answeredVia: describeAnsweredVia(approval.answeredVia) }
+                      : {})}
                     {...(approval.withdrawnReason != null
                       ? { withdrawnReason: redactBody(approval.withdrawnReason) }
                       : {})}

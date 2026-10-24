@@ -30,6 +30,15 @@ describe('approvalLine（承認1件の1行）', () => {
     expect(line).toContain('→ 回答済み（2026-10-06T10:03:00.000Z）: A案で');
   });
 
+  it('answeredVia が在れば回答経路を添え、無ければ何も足さない', () => {
+    const settled = { answeredAt: '2026-10-06T10:03:00.000Z', answer: 'A案で' };
+    expect(
+      approvalLine(approval({ ...settled, answeredVia: { kind: 'account', accountId: 'acc-1' } })),
+    ).toContain(': A案で（回答経路: account（acc-1））');
+    expect(approvalLine(approval(settled))).not.toContain('回答経路');
+    expect(approvalLine(approval({ ...settled, answeredVia: null }))).not.toContain('回答経路');
+  });
+
   it('取り下げは理由を出し、回答済みと両方立っていたら取り下げを優先する', () => {
     const line = approvalLine(
       approval({

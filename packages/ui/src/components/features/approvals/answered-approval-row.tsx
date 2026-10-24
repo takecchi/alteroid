@@ -10,6 +10,7 @@ export function AnsweredApprovalRow({
   time,
   question,
   answer,
+  answeredVia,
   withdrawnReason,
   renderLink,
 }: {
@@ -17,6 +18,8 @@ export function AnsweredApprovalRow({
   time: ReactNode;
   question: string;
   answer?: string;
+  // 人の読む文へ直した回答経路。無ければ欄を出さない
+  answeredVia?: string;
   withdrawnReason?: string;
   renderLink: (props: { className: string; children: ReactNode }) => ReactNode;
 }) {
@@ -38,6 +41,11 @@ export function AnsweredApprovalRow({
           <span className="mt-1 line-clamp-2 block break-words whitespace-pre-line text-xs text-muted-foreground">
             <span className="mr-1">答え</span>
             {answer}
+          </span>
+        )}
+        {state === 'answered' && answeredVia !== undefined && (
+          <span className="mt-1 block text-[11px] text-muted-foreground">
+            回答経路: {answeredVia}
           </span>
         )}
         {state === 'withdrawn' && withdrawnReason !== undefined && (

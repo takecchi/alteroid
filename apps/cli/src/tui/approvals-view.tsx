@@ -1,4 +1,5 @@
 import {
+  describeAnsweredVia,
   describeQuestionLines,
   summarizeQuestions,
   PERMISSION_GRANT_CONSENT_PHRASE,
@@ -124,9 +125,13 @@ export function answeredDayLine(row: ApprovalRow, now: number): string {
     : row.answer === undefined
       ? ''
       : `  回答: ${oneLine(redactBody(row.answer), 60)}`;
+  const via =
+    withdrawn || row.answeredVia === undefined
+      ? ''
+      : `  回答経路: ${describeAnsweredVia(row.answeredVia)}`;
   return sanitizeForTerminal(
     `${withdrawn ? '取り下げ済み' : '回答済み'} ${formatElapsedAgo(settledAt, now)} ` +
-      `${shortId(row.id)}  ${oneLine(redactBody(row.question), 80)}${tail}`,
+      `${shortId(row.id)}  ${oneLine(redactBody(row.question), 80)}${tail}${via}`,
   );
 }
 
@@ -388,6 +393,9 @@ export function approvalDocument(detail: DetailState, width: number): ApprovalDo
     b.push(a.answer === undefined ? '（回答の文は記録されていない）' : redactBody(a.answer), {
       indent: 2,
     });
+    if (a.answeredVia !== undefined) {
+      b.push(`回答経路: ${describeAnsweredVia(a.answeredVia)}`, { indent: 2, dim: true });
+    }
   } else if (a.withdrawnAt !== undefined) {
     b.push(`取り下げ済み（${a.withdrawnAt}）`, { bold: true });
     b.push(a.withdrawnReason === undefined ? '（理由の記録なし）' : redactBody(a.withdrawnReason), {

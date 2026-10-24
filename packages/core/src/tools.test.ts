@@ -13334,6 +13334,38 @@ describe('journal_read — inbox_flow.retained（Issue #1264）', () => {
   });
 });
 
+describe('journal_read — escalation の回答経路（answeredVia）', () => {
+  const answeredEscalation = {
+    type: 'escalation' as const,
+    question: '進めてよいか',
+    approvalId: 'ap-via',
+    answeredAt: '2026-10-01T00:05:00.000Z',
+    answer: 'よい',
+  };
+
+  it('answeredVia が在れば head に via= を出す', async () => {
+    const h = harness();
+    const entry = await h.stores.journal.append({
+      ...answeredEscalation,
+      answeredVia: { kind: 'account', accountId: 'acc-1' },
+    });
+
+    const reply = await h.call('journal_read', { id: entry.id });
+
+    expect(reply).toContain('via=account（acc-1）');
+  });
+
+  it('answeredVia が無ければ via= を足さない', async () => {
+    const h = harness();
+    const entry = await h.stores.journal.append(answeredEscalation);
+
+    const reply = await h.call('journal_read', { id: entry.id });
+
+    expect(reply).toContain('回答済み');
+    expect(reply).not.toContain('via=');
+  });
+});
+
 describe('journal_read — memory_update の action / バイト数（#339）', () => {
   it('action と前後バイト数を出す（新形式のエントリ）', async () => {
     const h = harness();
