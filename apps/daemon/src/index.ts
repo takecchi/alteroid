@@ -90,6 +90,7 @@ import { startUsagePolling } from './usage-poller.js';
 import { startManagerPolling } from './manager-poller.js';
 import { readArchiveFoldConfig, startArchiveFolding } from './archive-folder.js';
 import { readAttachmentPruneConfig, startAttachmentPruning } from './attachment-prune.js';
+import { startCloneMcpConfigSweeping } from './clone-mcp-config-sweep.js';
 import { AUTH_WITHHELD_ENV_KEYS, planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
 import { createWorkerToolBus } from './topology-activity.js';
@@ -913,6 +914,8 @@ export async function main(): Promise<void> {
     copiesDir: attachmentCopiesDir(paths.root),
     everyMinutes: attachmentPruneConfig.everyMinutes,
   });
+  // 起動時に1回、その後は周期。デーモンが異常終了して /tmp に残ったクローンの MCP 設定（資格入り）を掃く（#5222）
+  const cloneMcpConfigSweeper = startCloneMcpConfigSweeping({ journal: stores.journal });
 
   // 観測から来た回と状態から来た回で同じここを通す: 別々に書くと、片方だけが `parked` を知らない・セッションを作り直す、という食い違いが静かに生まれるため。
   async function settleTokenOutcome(
@@ -1225,6 +1228,7 @@ export async function main(): Promise<void> {
     managerPoller.stop();
     archiveFolder.stop();
     attachmentPruner.stop();
+    cloneMcpConfigSweeper.stop();
     tokenWatch?.stop();
     tokenTrialWatch?.stop();
     // 窓に残っている器喪失の知らせは、クローンが止まる前に送る。

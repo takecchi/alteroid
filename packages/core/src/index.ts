@@ -696,6 +696,14 @@ export {
 } from './runner.js';
 export { managerModelsOf, type ManagerModels } from './manager-models.js';
 export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
+/** デーモンが落ちて /tmp に残ったクローンの MCP 設定（資格入り）の掃き。デーモン側が周期で呼ぶ */
+export { liveCloneMcpConfigDirPaths } from './clone-mcp-config-file.js';
+export {
+  sweepCloneMcpConfigDirs,
+  type CloneMcpConfigSweepOptions,
+  type CloneMcpConfigSweepResult,
+} from './clone-mcp-config-sweep.js';
+export { DEFAULT_SCRATCH_SWEEP_INTERVAL_MS } from './scratch-sweep.js';
 /** 伏せるのは上（記憶）へ到達する鍵だけで、下（外の世界）へ手を伸ばす鍵は配る。器を作り直さずに回せる形で持つ。 */
 export {
   CREDENTIAL_NAME,
