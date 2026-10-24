@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { mkdir, rm, rmdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -93,7 +95,7 @@ describe('pnpm test:shard-files（実物の vitest）', () => {
     return lines.slice(0, -1);
   }
 
-  it('shard ごとの一覧は互いに重ならず、合わせると範囲の全テストファイルになる', () => {
+  function expectShardsCoverScope(): void {
     const first = runCli('1/2');
     const second = runCli('2/2');
     const all = collectRepoFiles(ROOT, new Set(['node_modules']))
@@ -101,8 +103,31 @@ describe('pnpm test:shard-files（実物の vitest）', () => {
       .sort();
     expect(all.length).toBeGreaterThanOrEqual(2);
     expect(first.filter((f) => second.includes(f))).toEqual([]);
-    expect([...first, ...second].sort()).toEqual(all);
+    // 比べるのは git が見るファイルだけ: vitest は `.gitignore` 済みの置き場（`src/generated/`）の一時ファイルも列挙するが、
+    // `all` には出ない。並んで走る歯（`vitest-workspace-config.test.ts` の歯B）がそこへ probe を置いては消すので、
+    // 列挙の瞬間に在るか無いかで食い違っていた（#5214）
+    const scannable = new Set(all);
+    expect([...first, ...second].filter((f) => scannable.has(f)).sort()).toEqual(all);
     expect(first.length).toBeGreaterThan(0);
     expect(second.length).toBeGreaterThan(0);
+  }
+
+  it('shard ごとの一覧は互いに重ならず、合わせると範囲の全テストファイルになる', () => {
+    expectShardsCoverScope();
+  }, 240_000);
+
+  it('`.gitignore` 済みの置き場に一時の .test.ts が在っても、比べ方が食い違わない（#5214）', async () => {
+    const generatedDir = path.join(ROOT, SCOPE, 'generated');
+    const stray = path.join(generatedDir, 'test-shard-files-stray.test.ts');
+    const createdDir = !existsSync(generatedDir);
+    await mkdir(generatedDir, { recursive: true });
+    await writeFile(stray, "import { it } from 'vitest';\n\nit('stray', () => undefined);\n");
+    try {
+      expectShardsCoverScope();
+    } finally {
+      await rm(stray, { force: true });
+      // 作った側だけが、空なら消す: 並んで走る歯B が同じ置き場に probe を置いている途中でありうるため、中身ごとは消さない
+      if (createdDir) await rmdir(generatedDir).catch(() => undefined);
+    }
   }, 240_000);
 });
