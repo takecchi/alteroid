@@ -6,6 +6,7 @@ import { compareIsoInstant } from './iso-instant.js';
 import { isWrittenDailyReport } from './schema.js';
 import type {
   InboxEvent,
+  JournalEntry,
   SchedulePhase,
   ScheduleSpec,
   ScheduledRequest,
@@ -704,37 +705,84 @@ export async function missingDailyReportDates({
 
   const oldest = startOfLocalDay(new Date(now.getFullYear(), now.getMonth(), now.getDate() - days));
 
+  // 日報の行だけを種別で読む。窓の全行を本文ごと読まない: 起動のたびに数日ぶんの `tool_use` まで本文ごと運び（偽の日誌 72 万行で 260 本）、
+  // 本番では起動の直後に、この読みの最長 4.0 秒の問い合わせが会話の一覧の要求の計測に紛れていたため（#5140）
   const reported = new Set<string>();
-  const active = new Set<string>();
-  // `types` で絞らない: `daily_report` 以外のあらゆる種別が「その日に動きがあった」証拠になるため
-  let after: JournalQuery['after'];
-  for (;;) {
-    const { entries: page, next } = await journal.listPage({
-      since: oldest.toISOString(),
-      order: 'asc',
-      limit: scanPageSize,
-      ...(after === undefined ? {} : { after }),
-    });
-    for (const entry of page) {
-      if (entry.type === 'daily_report') {
-        // 「書けなかった」印の行を日報に数えない: 数えると、その日の本物の日報が二度と書かれないため
-        if (isWrittenDailyReport(entry)) reported.add(entry.date);
-        continue;
-      }
-      active.add(localDate(new Date(entry.at)));
-    }
-    // ページの長さで終端を決めない: store が壊れた行を捨てると、ページが短くても空でも先に行が在りうるため
-    if (next === null) break;
-    after = next;
-  }
+  await scanAllPages(
+    journal,
+    { types: ['daily_report'], since: oldest.toISOString() },
+    scanPageSize,
+    (entry) => {
+      // 「書けなかった」印の行を日報に数えない: 数えると、その日の本物の日報が二度と書かれないため
+      if (entry.type === 'daily_report' && isWrittenDailyReport(entry)) reported.add(entry.date);
+      return true;
+    },
+  );
 
   const missing: string[] = [];
   for (let back = days; back >= 0; back -= 1) {
     const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - back);
     if (atTimeOnDay(day, at).getTime() > now.getTime()) continue;
     const date = localDate(day);
-    if (reported.has(date) || !active.has(date)) continue;
+    if (reported.has(date)) continue;
+    if (!(await hadActivityOn(journal, day, scanPageSize))) continue;
     missing.push(date);
   }
   return missing;
+}
+
+// 動きの有無を見るだけの頁の大きさ: ふつうはその日の最初の1行で決まるので、日報の行や読めない行を挟んでも数頁で済む幅にする
+const ACTIVITY_PROBE_PAGE_SIZE = 20;
+
+/**
+ * その日（ローカル）に `daily_report` 以外の行が1つでも在るか。`types` で絞らない: 日報以外のあらゆる種別が「その日に動きがあった」証拠になるため。
+ * 見つかった時点で止める: 日の全行を本文ごと読まないため
+ */
+async function hadActivityOn(
+  journal: Pick<JournalStore, 'listPage'>,
+  day: Date,
+  scanPageSize: number,
+): Promise<boolean> {
+  const start = startOfLocalDay(day);
+  const next = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1);
+  let found = false;
+  await scanAllPages(
+    journal,
+    {
+      since: start.toISOString(),
+      // `until` は含む側なので翌日の0時の1ms 前まで: `at` はミリ秒精度で、そこまでがこの日の全部になる
+      until: new Date(next.getTime() - 1).toISOString(),
+    },
+    Math.min(scanPageSize, ACTIVITY_PROBE_PAGE_SIZE),
+    (entry) => {
+      if (entry.type === 'daily_report') return true;
+      found = true;
+      return false;
+    },
+  );
+  return found;
+}
+
+/** 古い順に頁で読み、`visit` が `false` を返したら止める */
+async function scanAllPages(
+  journal: Pick<JournalStore, 'listPage'>,
+  query: Omit<JournalQuery, 'order' | 'limit' | 'after'>,
+  pageSize: number,
+  visit: (entry: JournalEntry) => boolean,
+): Promise<void> {
+  let after: JournalQuery['after'];
+  for (;;) {
+    const { entries: page, next } = await journal.listPage({
+      ...query,
+      order: 'asc',
+      limit: pageSize,
+      ...(after === undefined ? {} : { after }),
+    });
+    for (const entry of page) {
+      if (!visit(entry)) return;
+    }
+    // ページの長さで終端を決めない: store が壊れた行を捨てると、ページが短くても空でも先に行が在りうるため
+    if (next === null) return;
+    after = next;
+  }
 }

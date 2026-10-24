@@ -1560,6 +1560,73 @@ describe('取りこぼした日報', () => {
       ).resolves.toEqual(['2026-08-10', '2026-08-11']);
     });
 
+    it('⭐ 窓の全行を読まない: 日報の行と、日ごとに動きを見つけるまでの行だけを読む（#5140）', async () => {
+      const busy: JournalEntry[] = [];
+      for (const day of [9, 10, 11]) {
+        for (let i = 0; i < 500; i += 1) {
+          busy.push(entry('decision', new Date(at(2026, 8, day, 1, 0).getTime() + i * 60_000)));
+        }
+      }
+      const inner = fakeJournal([...busy, report('2026-08-10', at(2026, 8, 10, 22, 0))]);
+      let read = 0;
+      const journal: JournalStore = {
+        ...inner,
+        listPage: async (query) => {
+          const page = await inner.listPage(query);
+          read += page.entries.length;
+          return page;
+        },
+      };
+
+      await expect(
+        missingDailyReportDates({
+          journal,
+          at: cutoff,
+          now: at(2026, 8, 12, 9, 0),
+          lookbackDays: 3,
+        }),
+      ).resolves.toEqual(['2026-08-09', '2026-08-11']);
+      // 日報の1行と、動きを確かめた2日（日報の在る 10日は見ない）の頁の頭だけ
+      expect(read).toBeLessThanOrEqual(1 + 2 * 20);
+    });
+
+    it('日報の行しか無い日は、動きのあった日に数えない', async () => {
+      const journal = fakeJournal([report('2026-08-10', at(2026, 8, 11, 1, 0))]);
+
+      await expect(
+        missingDailyReportDates({
+          journal,
+          at: cutoff,
+          now: at(2026, 8, 12, 9, 0),
+          lookbackDays: 3,
+        }),
+      ).resolves.toEqual([]);
+    });
+
+    it('その日の頭が日報の行で頁が埋まっても、先の行まで見て動きを拾う', async () => {
+      const reports: JournalEntry[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        reports.push({
+          ...report(
+            `2026-08-0${String(i + 1)}`,
+            new Date(at(2026, 8, 11, 0, 10).getTime() + i * 60_000),
+          ),
+          id: `late-report-${String(i)}`,
+        });
+      }
+      const journal = fakeJournal([...reports, entry('decision', at(2026, 8, 11, 15, 0))]);
+
+      await expect(
+        missingDailyReportDates({
+          journal,
+          at: cutoff,
+          now: at(2026, 8, 12, 9, 0),
+          lookbackDays: 3,
+          scanPageSize: 2,
+        }),
+      ).resolves.toEqual(['2026-08-11']);
+    });
+
     it('scanPageSize を省略しても既定値（MISSING_DAILY_REPORT_SCAN_PAGE_SIZE）で動く', async () => {
       expect(MISSING_DAILY_REPORT_SCAN_PAGE_SIZE).toBeGreaterThan(0);
       const journal = fakeJournal([entry('decision', at(2026, 8, 11, 15, 0))]);
