@@ -84,7 +84,9 @@ describe('POST /commitments/:id/reopen', () => {
     expect(response.status).toBe(404);
   });
 
-  it('同じ担当・同じ本文の未了の行が在れば 409 で、その id を言い、閉じたまま日誌にも残さない', async () => {
+  // 反転（#5176 の順序変更）: 以前は「日誌にも残さない」だった。重複は台帳の `reopen` の排他区間でしか確定しないので、
+  // 日誌を先に書いた後に判明し、先の行を打ち消す行が足される（開き直していないことは変わらない）。
+  it('同じ担当・同じ本文の未了の行が在れば 409 で、その id を言い、閉じたまま、日誌には打ち消しの行を足す', async () => {
     const { stores, call } = setup();
     const base = { at: AT, origin: 'manager', source: 'mgr-1', body: '同じ本文' } as const;
     await stores.commitments.open({ ...base, id: 'old' });
@@ -96,19 +98,121 @@ describe('POST /commitments/:id/reopen', () => {
     expect(response.status).toBe(409);
     expect(((await response.json()) as { error: string }).error).toContain('new');
     expect((await stores.commitments.get('old'))?.closedAt).toBe(CLOSED_AT);
-    expect(JSON.stringify(await stores.journal.list({ types: ['decision'] }))).not.toContain(
-      '開き直した',
+    expect(JSON.stringify(await stores.journal.list({ types: ['decision'] }))).toContain(
+      '直前の開き直しの行は効いていない（開き直していない）',
     );
   });
 
-  it('開き直した後に行が読めなくなっても 500 にせず、開き直しは効いていると言う', async () => {
+  it('日誌に書けないときは 500 で、開き直さず、閉じた記録は行に残る', async () => {
+    const base = createMemoryStores();
+    const stores: Stores = {
+      ...base,
+      journal: {
+        ...base.journal,
+        append: async () => {
+          throw new Error('journal down');
+        },
+      },
+    };
+    const { call } = setup(stores);
+    await openAndClose(stores);
+
+    const response = await call('POST', '/commitments/c-1/reopen', { reason: '戻す' });
+
+    expect(response.status).toBe(500);
+    expect(((await response.json()) as { code: string }).code).toBe('journal_write_failed');
+    const row = await stores.commitments.get('c-1');
+    expect(row?.closedAt).toBe(CLOSED_AT);
+    expect(row?.closedBy).toBe('daemon');
+    expect(row?.closedReason).toBe('器が自動で閉じた');
+  });
+
+  it('日誌の行は、台帳の行がまだ閉じているうちに書かれる', async () => {
+    const base = createMemoryStores();
+    const closedAtAtAppend: (string | undefined)[] = [];
+    const stores: Stores = {
+      ...base,
+      journal: {
+        ...base.journal,
+        append: async (entry) => {
+          closedAtAtAppend.push((await base.commitments.get('c-1'))?.closedAt);
+          return base.journal.append(entry);
+        },
+      },
+    };
+    const { call } = setup(stores);
+    await openAndClose(stores);
+
+    const response = await call('POST', '/commitments/c-1/reopen', { reason: '戻す' });
+
+    expect(response.status).toBe(200);
+    expect(closedAtAtAppend).toEqual([CLOSED_AT]);
+  });
+
+  it('先読みの後に別の手で開き直されたら、打ち消しの行を足して 409 を返す', async () => {
     const base = createMemoryStores();
     const stores: Stores = {
       ...base,
       commitments: {
         ...base.commitments,
+        reopen: async (id) => {
+          await base.commitments.reopen(id);
+          return base.commitments.reopen(id);
+        },
+      },
+    };
+    const { call } = setup(stores);
+    await openAndClose(stores);
+
+    const response = await call('POST', '/commitments/c-1/reopen', { reason: '戻す' });
+
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toContain('閉じていない');
+    expect(JSON.stringify(await base.journal.list({ types: ['decision'] }))).toContain(
+      '直前の開き直しの行は効いていない（開き直していない）',
+    );
+  });
+
+  it('先読みと開き直しの間に閉じ直されたら、実際に外した記録を補いの行へ残す', async () => {
+    const base = createMemoryStores();
+    const stores: Stores = {
+      ...base,
+      commitments: {
+        ...base.commitments,
+        reopen: async (id) => {
+          await base.commitments.reopen(id);
+          await base.commitments.close(id, '2026-10-19T02:00:00.000Z', '閉じ直した', 'human');
+          return base.commitments.reopen(id);
+        },
+      },
+    };
+    const { call } = setup(stores);
+    await openAndClose(stores);
+
+    const response = await call('POST', '/commitments/c-1/reopen', { reason: '戻す' });
+
+    expect(response.status).toBe(200);
+    const journal = JSON.stringify(await base.journal.list({ types: ['decision'] }));
+    expect(journal).toContain('closedAt=2026-10-19T02:00:00.000Z');
+    expect(journal).toContain('closedReason=閉じ直した');
+  });
+
+  it('開き直した後に行が読めなくなっても 500 にせず、開き直しは効いていると言う', async () => {
+    const base = createMemoryStores();
+    // 先読み（日誌より前）は読め、開き直した後の読み直しだけが読めない
+    let reopened = false;
+    const stores: Stores = {
+      ...base,
+      commitments: {
+        ...base.commitments,
+        reopen: async (id) => {
+          const result = await base.commitments.reopen(id);
+          reopened = true;
+          return result;
+        },
         get: async (id) => {
-          throw new UnreadableCommitmentError(`${id} は読めない形で入っている`);
+          if (reopened) throw new UnreadableCommitmentError(`${id} は読めない形で入っている`);
+          return base.commitments.get(id);
         },
       },
     };
@@ -159,6 +263,7 @@ describe('POST /commitments/:id/reopen', () => {
       },
     };
     const { call } = setup(stores);
+    await openAndClose(stores);
 
     const response = await call('POST', '/commitments/c-1/reopen', { reason: '戻す' });
 

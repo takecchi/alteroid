@@ -148,6 +148,7 @@ import {
   InvalidProgressWindowError,
   readProgress,
 } from './progress-read.js';
+import { describeClosedRecord, reopenCommitmentJournalFirst } from './commitment-reopen.js';
 import { describeProgress } from './progress-describe.js';
 import { describeGithubCi } from './progress-github.js';
 import {
@@ -5580,13 +5581,33 @@ export function createCloneTools(context: ToolContext) {
           describeStringLengthViolation('reason', reason, { min: 1 }) ??
           describeBlankViolation('reason', reason);
         if (reasonError !== null) return text(reasonError);
-        // 閉じているかの判定は台帳の戻り値に任せる（`commitment_close` と同じ）: 先に `get` して判断すると、2つの開き直しが両方「閉じている」を読んで二重に日誌へ残る
-        let result;
-        try {
-          result = await stores.commitments.reopen(id);
-        } catch (error) {
-          if (!(error instanceof UnreadableCommitmentError)) throw error;
-          return text(`${reasonOf(error)}。読めない形のまま書き直さないので、開き直していない。`);
+        // 閉じた記録は行から消えるので、日誌へ逐語で残してから行から外す（`reopenCommitmentJournalFirst`）: 残さないと「誰がいつ何と言って閉じたか」が二度と読めない。
+        // 2つの開き直しが両方「閉じている」を読んで二重に日誌へ残っても、台帳の1操作（`reopen`）で負けた側が打ち消しの行を足す。
+        let journaled: JournalEntryInput | undefined;
+        const result = await reopenCommitmentJournalFirst(stores, id, (before) => {
+          journaled = {
+            type: 'decision',
+            decision: `閉じた仕事を自分で開き直した（${id}）: ${reason}`,
+            grounds:
+              'クローン自身が commitment_reopen で開き直した。開き直す前の記録: ' +
+              describeClosedRecord(before),
+          };
+          return journaled;
+        });
+        if (result.kind === 'journal-failed' && journaled !== undefined) {
+          // 開き直す前に落ちたので何も起きていない（`act-not-performed`）
+          noteDroppedRecord('日誌', journalEntryShape(journaled), result.error);
+          throw new JournalNotRecordedError(
+            'commitment_reopen',
+            journaled,
+            'act-not-performed',
+            result.error,
+          );
+        }
+        if (result.kind === 'unreadable') {
+          return text(
+            `${reasonOf(result.error)}。読めない形のまま書き直さないので、開き直していない。`,
+          );
         }
         if (result.kind === 'not-found') {
           return text(await describeCommitmentNotOnLedger(stores, id, context.journalSearch));
@@ -5599,20 +5620,6 @@ export function createCloneTools(context: ToolContext) {
             `同じ担当・同じ本文の未了の行 ${result.openId} が既に在るので、${id} は開き直していない。`,
           );
         }
-        const { before } = result;
-        // 閉じた記録は行から消えるので、日誌へ逐語で残す: 残さないと「誰がいつ何と言って閉じたか」が二度と読めない
-        await appendJournalOrThrow(
-          'commitment_reopen',
-          stores.journal,
-          {
-            type: 'decision',
-            decision: `閉じた仕事を自分で開き直した（${id}）: ${reason}`,
-            grounds:
-              'クローン自身が commitment_reopen で開き直した。開き直す前の記録: ' +
-              `closedAt=${before.closedAt ?? '記録なし'}・closedBy=${before.closedBy ?? '記録なし'}・closedReason=${before.closedReason ?? '記録なし'}`,
-          },
-          'act-completed',
-        );
         return text(`${id} を開き直した（閉じた記録は日誌に残してある）。`);
       },
     ),

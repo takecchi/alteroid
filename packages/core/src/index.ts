@@ -484,6 +484,8 @@ export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 export { verifyCommitmentAutoCloseMarkContract } from './commitment-auto-close-mark-contract.js';
 export { verifyCommitmentReopenContract } from './commitment-reopen-contract.js';
+export { reopenCommitmentJournalFirst, describeClosedRecord } from './commitment-reopen.js';
+export type { JournalFirstReopenResult } from './commitment-reopen.js';
 export { verifyCommitmentEditIfMatchContract } from './commitment-edit-if-match-contract.js';
 export { verifyCommitmentRemoveForConversationContract } from './commitment-remove-for-conversation-contract.js';
 export { verifyCommitmentEditUnreadableContract } from './commitment-edit-unreadable-contract.js';

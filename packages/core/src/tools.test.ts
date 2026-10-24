@@ -18160,7 +18160,8 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
     },
     {
       tool: 'commitment_reopen',
-      firstLine: ACT_COMPLETED,
+      // 反転（#5176）: 以前は reopen が先で ACT_COMPLETED だった。いまは日誌が先で、落ちたら開き直していない。
+      firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-13c');
         await stores.commitments.open({

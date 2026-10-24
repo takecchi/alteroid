@@ -129,6 +129,8 @@ import {
   practiceSlugSchema,
   fingerprintOf,
   noteDroppedRecord,
+  describeClosedRecord,
+  reopenCommitmentJournalFirst,
   reasonOf,
   redactErrorText,
   managerModelsOf,
@@ -6718,8 +6720,8 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 先に読んで判断しない（`close` と同じ）: 「閉じているか」の判定と書き込みは台帳の1操作（`reopen`）に任せる。`open` を開き直しに使わない: `open` は冪等のままで、受信箱の配り直しで閉じた行が蘇らないことの要。
-    // 開き直すと閉じた時刻・主体・理由が行から消えるので、日誌へ逐語で残す（残さないと「誰がいつ何と言って閉じたか」が二度と読めない）。
+    // 日誌を先に書いてから行から外す（`reopenCommitmentJournalFirst`）: 開き直すと閉じた時刻・主体・理由が行から消えるので、日誌が落ちたまま外すと「誰がいつ何と言って閉じたか」が二度と読めない。書けなければ開き直さず 500。
+    // 先に読んだ後に割り込まれた回（まだ閉じていない・重複）は、台帳の1操作（`reopen`）の結果で判定し、先に書いた行を打ち消す。`open` を開き直しに使わない: `open` は冪等のままで、受信箱の配り直しで閉じた行が蘇らないことの要。
     .post(
       '/commitments/:id/reopen',
       describeRoute({
@@ -6730,7 +6732,8 @@ export function createApp(deps: AppDeps) {
           '受け取った時刻・起点・本文はそのままで、`closedAt` / `closedReason` / `closedBy` と' +
           '`autoCloseWhenBack` が外れる（器が自動で閉じた行を否定したのに、担当が戻った合図で' +
           '器がまた閉じるのを防ぐため）。`reason` は必須で、開き直す前の閉じた時刻・主体・理由とともに' +
-          '日誌（`decision`）へ残る。**同じ id の `open` は冪等のままで、閉じた行を蘇らせない** — ' +
+          '日誌（`decision`）へ残る。日誌を先に書き、書けなければ開き直さずに 500 を返す。' +
+          '**同じ id の `open` は冪等のままで、閉じた行を蘇らせない** — ' +
           '開き直せるのはこの口と `commitment_reopen` だけ。',
         responses: {
           200: {
@@ -6751,6 +6754,10 @@ export function createApp(deps: AppDeps) {
               '行が読めない形で入っている（書き直さない）。または開き直した後に行が読めなくなった（開き直しは効いている）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          500: {
+            description: '日誌が書けなかった（**開き直していない**。行は閉じたまま）。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
+          },
         },
       }),
       jsonBody(commitmentReopenBody, (where) => ({
@@ -6759,14 +6766,26 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { reason } = c.req.valid('json');
-        let result;
-        try {
-          result = await stores.commitments.reopen(id);
-        } catch (error) {
-          if (!(error instanceof UnreadableCommitmentError)) throw error;
+        const principal = c.get('principal');
+        const result = await reopenCommitmentJournalFirst(stores, id, (before) => ({
+          type: 'decision',
+          decision: `人間が閉じた仕事を開き直した（${id}）: ${reason}`,
+          grounds:
+            '人間が直接 API から開き直した。開き直す前の記録: ' + describeClosedRecord(before),
+          ...humanActionOf(principal, 'commitment_reopen', id),
+        }));
+        if (result.kind === 'journal-failed') {
+          noteDroppedRecord(
+            '閉じた仕事を開き直した日誌（開き直していない）',
+            `id=${id}`,
+            kindOfError(result.error),
+          );
+          return c.json(journalWriteFailedBody(), 500);
+        }
+        if (result.kind === 'unreadable') {
           return c.json(
             {
-              error: `${reasonOf(error)}。読めない形のまま書き直さないので、開き直していない。`,
+              error: `${reasonOf(result.error)}。読めない形のまま書き直さないので、開き直していない。`,
             },
             409,
           );
@@ -6783,21 +6802,6 @@ export function createApp(deps: AppDeps) {
             409,
           );
         }
-        const { before } = result;
-        // 開き直すこと自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
-        await appendJournalOrDrop(
-          stores,
-          {
-            type: 'decision',
-            decision: `人間が閉じた仕事を開き直した（${id}）: ${reason}`,
-            grounds:
-              '人間が直接 API から開き直した。開き直す前の記録: ' +
-              `closedAt=${before.closedAt ?? '記録なし'}・closedBy=${before.closedBy ?? '記録なし'}・closedReason=${before.closedReason ?? '記録なし'}`,
-            ...humanActionOf(c.get('principal'), 'commitment_reopen', id),
-          },
-          '閉じた仕事を開き直した日誌',
-          `id=${id}`,
-        );
         let entry;
         try {
           entry = await stores.commitments.get(id);
