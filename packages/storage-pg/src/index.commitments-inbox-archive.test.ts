@@ -289,7 +289,7 @@ describe('PgCommitmentStore', () => {
 
       expect(
         await stores.commitments.editBody('c-1', '直した依頼', '2026-08-13T00:00:00.000Z', 'human'),
-      ).toBe(true);
+      ).toMatchObject({ kind: 'edited', before: { body: 'もとの依頼' } });
 
       const entry = await stores.commitments.get('c-1');
       expect(entry?.body).toBe('直した依頼');
@@ -303,7 +303,7 @@ describe('PgCommitmentStore', () => {
       expect(listed?.body).toBe('直した依頼');
     });
 
-    it('片付いた行は書き換えられない（false を返し、body はそのまま）', async () => {
+    it('片付いた行は書き換えられない（not-edited を返し、body はそのまま）', async () => {
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'もとの依頼'));
       await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '片付けた', 'human');
 
@@ -314,7 +314,7 @@ describe('PgCommitmentStore', () => {
           '2026-08-14T00:00:00.000Z',
           'human',
         ),
-      ).toBe(false);
+      ).toEqual({ kind: 'not-edited' });
 
       const entry = await stores.commitments.get('c-1');
       expect(entry?.body).toBe('もとの依頼');
@@ -324,7 +324,7 @@ describe('PgCommitmentStore', () => {
       expect(entry?.closedReason).toBe('片付けた');
     });
 
-    it('存在しない id は false（勝手に行を作らない）', async () => {
+    it('存在しない id は not-edited（勝手に行を作らない）', async () => {
       expect(
         await stores.commitments.editBody(
           'しらない',
@@ -332,7 +332,7 @@ describe('PgCommitmentStore', () => {
           '2026-08-13T00:00:00.000Z',
           'human',
         ),
-      ).toBe(false);
+      ).toEqual({ kind: 'not-edited' });
 
       expect(await stores.commitments.list({ includeClosed: true })).toEqual({
         entries: [],

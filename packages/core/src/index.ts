@@ -501,6 +501,7 @@ export type {
   JournalFirstInboxChunkResult,
 } from './removal-journal-first.js';
 export { verifyCommitmentEditIfMatchContract } from './commitment-edit-if-match-contract.js';
+export { verifyCommitmentEditBeforeContract } from './commitment-edit-before-contract.js';
 export { verifyCommitmentRemoveForConversationContract } from './commitment-remove-for-conversation-contract.js';
 export { verifyCommitmentEditUnreadableContract } from './commitment-edit-unreadable-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';

@@ -22,6 +22,7 @@ import type {
   CommitmentList,
   EditCommitmentBodyOptions,
   CommitmentOpenResult,
+  CommitmentEditResult,
   CommitmentReopenResult,
   CommitmentStore,
   UnreadableCommitment,
@@ -330,10 +331,11 @@ export class FsCommitmentStore implements CommitmentStore {
     at: string,
     by: CommitmentEditedBy,
     options?: EditCommitmentBodyOptions,
-  ): Promise<boolean> {
+  ): Promise<CommitmentEditResult> {
     const body = stripNul(rawBody);
-    // `#update` の排他区間で行う: 読んでから書く形にすると、並行編集や片付けとの競合で後勝ちが先の書き込みを黙って踏み消すため
-    return this.#update((file) => {
+    // `#update` の排他区間で行う: 読んでから書く形にすると、並行編集や片付けとの競合で後勝ちが先の書き込みを黙って踏み消すため。
+    // `before` もこの区間で読んだ行を返す（`reopen` と同じ）: 呼び出し側が先に読んだ行は、実際に上書きした本文と違いうるため
+    return this.#update<CommitmentEditResult>((file) => {
       const found = file.entries.find((entry) => entry.id === id);
       if (found === undefined) {
         // 読めない行は「無い」に数えず投げる（pg と同じ）。片付いた行は読める行と同じく false
@@ -343,13 +345,13 @@ export class FsCommitmentStore implements CommitmentStore {
             `引き受けた仕事 ${id} が読めない形で入っている（片付いたのではない）: ${broken.reason}`,
           );
         }
-        if (broken !== undefined) return { next: file, result: false };
+        if (broken !== undefined) return { next: file, result: { kind: 'not-edited' } };
       }
       if (found === undefined && options?.ifMatch !== undefined) {
         throw new CommitmentConflictError(id, null);
       }
       if (found === undefined || found.closedAt !== undefined) {
-        return { next: file, result: false };
+        return { next: file, result: { kind: 'not-edited' } };
       }
       if (!commitmentVersionMatches(found, options?.ifMatch)) {
         throw new CommitmentConflictError(id, found);
@@ -363,7 +365,7 @@ export class FsCommitmentStore implements CommitmentStore {
           trimmedClosedCount: file.trimmedClosedCount,
           trimmedClosedIds: file.trimmedClosedIds,
         },
-        result: true,
+        result: { kind: 'edited', before: found },
       };
     });
   }

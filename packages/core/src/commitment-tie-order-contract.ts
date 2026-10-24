@@ -17,8 +17,8 @@ export async function verifyCommitmentTieOrderContract(store: CommitmentStore): 
   for (const id of ['a', 'b', 'c']) await store.open(row(id));
   await expectIds('a,b,c', '同じ at の行が入れた順でない');
 
-  if (!(await store.editBody('a', '直した', '2026-01-02T00:00:00.000Z', 'clone')))
-    fail('editBody が false を返した');
+  if ((await store.editBody('a', '直した', '2026-01-02T00:00:00.000Z', 'clone')).kind !== 'edited')
+    fail('editBody が not-edited を返した');
   await expectIds('a,b,c', 'editBody の後に並びが変わった');
 
   if (!(await store.close('b', '2026-01-03T00:00:00.000Z', '片付けた', 'clone')))
@@ -44,7 +44,10 @@ export async function verifyCommitmentTieOrderContract(store: CommitmentStore): 
     if (actual !== expected) fail(`${when}（期待: ${expected}、実際: ${actual}）`);
   };
   await expectClosed('a,c,d,e,b', '閉じた側の同じ closedAt が入れた順（昇順）でない');
-  if (await store.editBody('c', '閉じた後の直し', '2026-01-05T00:00:00.000Z', 'clone'))
-    fail('閉じた行の editBody が true を返した');
+  if (
+    (await store.editBody('c', '閉じた後の直し', '2026-01-05T00:00:00.000Z', 'clone')).kind ===
+    'edited'
+  )
+    fail('閉じた行の editBody が edited を返した');
   await expectClosed('a,c,d,e,b', '閉じた行を直そうとした後に閉じた側の並びが変わった');
 }

@@ -4,6 +4,7 @@ import {
   createRunnerRegistry,
   scanJournalPages,
   verifyCommitmentEditIfMatchContract,
+  verifyCommitmentEditBeforeContract,
   verifyCommitmentRemoveForConversationContract,
   verifyCommitmentEditUnreadableContract,
   verifyCommitmentAutoCloseMarkContract,
@@ -505,6 +506,10 @@ describe('PgJournalStore', () => {
 
     it('editBody の ifMatch の契約（#3786。3実装で同じことを測る）', async () => {
       await verifyCommitmentEditIfMatchContract(stores.commitments);
+    });
+
+    it('editBody が返す before の契約（#5251。3実装で同じことを測る。書き換えと同じ排他の中で読んだ行）', async () => {
+      await verifyCommitmentEditBeforeContract(stores.commitments);
     });
 
     it('removeForConversation の契約（#4218・#4355。3実装で同じことを測る。human / self かつ source 一致の行だけを未了・片付いたとも物理的に消す）', async () => {

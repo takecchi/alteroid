@@ -21,7 +21,7 @@ export async function verifyCommitmentEditIfMatchContract(store: CommitmentStore
 
   await store.open({ id, at: t(0), origin: 'human', body: '最初' });
 
-  if (!(await store.editBody(id, '二番目', t(1), 'human', { ifMatch: t(0) }))) {
+  if ((await store.editBody(id, '二番目', t(1), 'human', { ifMatch: t(0) })).kind !== 'edited') {
     fail('いまの版を前提にした editBody が書けない');
   }
   const afterFirst = await store.get(id);
@@ -39,7 +39,7 @@ export async function verifyCommitmentEditIfMatchContract(store: CommitmentStore
   if (unchanged?.body !== '二番目' || unchanged.editedAt !== t(1))
     fail('衝突したのに行が書き換わった');
 
-  if (!(await store.editBody(id, '後勝ち', t(3), 'clone')))
+  if ((await store.editBody(id, '後勝ち', t(3), 'clone')).kind !== 'edited')
     fail('ifMatch 省略の editBody が断られた');
   if ((await store.get(id))?.body !== '後勝ち') fail('ifMatch 省略の editBody が書けていない');
 
@@ -48,13 +48,13 @@ export async function verifyCommitmentEditIfMatchContract(store: CommitmentStore
   );
   if (ghost === null || ghost.current !== null)
     fail('無い行への版つき editBody が current: null の衝突にならない');
-  if (await store.editBody('contract-if-match-ghost', 'x', t(1), 'human')) {
-    fail('無い行への ifMatch 省略の editBody が true を返した');
+  if ((await store.editBody('contract-if-match-ghost', 'x', t(1), 'human')).kind === 'edited') {
+    fail('無い行への ifMatch 省略の editBody が edited を返した');
   }
 
   if (!(await store.close(id, t(4), '片付けた', 'human'))) fail('close が通らない');
   const closedEdit = await store.editBody(id, '閉じた後', t(5), 'human', { ifMatch: t(3) });
-  if (closedEdit) fail('片付いた行への版つき editBody が true を返した');
+  if (closedEdit.kind === 'edited') fail('片付いた行への版つき editBody が edited を返した');
   if ((await store.get(id))?.body !== '後勝ち') fail('片付いた行が書き換わった');
 
   const raceId = 'contract-if-match-race';

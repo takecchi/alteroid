@@ -44,7 +44,7 @@ function racingStores(after: AfterWrite): Stores {
       },
       editBody: async () => {
         wrote = true;
-        return false;
+        return { kind: 'not-edited' };
       },
     },
   };

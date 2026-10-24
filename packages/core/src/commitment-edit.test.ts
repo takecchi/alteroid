@@ -80,6 +80,89 @@ describe('editCommitmentBodyJournalFirst（#5242）', () => {
     expect(text).toContain('編集前「直す前の本文」→ 編集後「直した後の本文」');
   });
 
+  it('先に読んだ後で別の書き手が本文を変えていたら（ifMatch なし）、実際に上書きした本文を補いの行で逐語に残す（#5251）', async () => {
+    const stores = createMemoryStores();
+    const existing = await openRow(stores, 'human');
+    const raced = interruptEdit(stores, async () => {
+      await stores.commitments.editBody(
+        'c1',
+        '別の書き手の本文',
+        '2026-10-07T00:30:00.000Z',
+        'human',
+      );
+    });
+
+    const result = await editCommitmentBodyJournalFirst(
+      raced,
+      existing,
+      '直した後の本文',
+      'human',
+      entry,
+    );
+
+    expect(result.kind).toBe('edited');
+    expect((await stores.commitments.get('c1'))?.body).toBe('直した後の本文');
+    const decisions = (await stores.journal.list({ types: ['decision'] })).map((row) =>
+      JSON.stringify(row),
+    );
+    expect(decisions).toHaveLength(2);
+    expect(decisions[1]).toContain('実際に上書きした本文は次のとおり: 「別の書き手の本文」');
+    expect(decisions[1]).toContain('編集前「直す前の本文」→ 編集後「直した後の本文」');
+  });
+
+  it('補いの行が書けなくても、書き直しの結果は edited のまま（best-effort）（#5251）', async () => {
+    const stores = createMemoryStores();
+    const existing = await openRow(stores, 'human');
+    let appended = 0;
+    const raced = interruptEdit(stores, async () => {
+      await stores.commitments.editBody(
+        'c1',
+        '別の書き手の本文',
+        '2026-10-07T00:30:00.000Z',
+        'human',
+      );
+    });
+    const flaky = {
+      ...raced,
+      journal: {
+        ...stores.journal,
+        async append(...args: Parameters<MemoryStores['journal']['append']>) {
+          appended += 1;
+          if (appended > 1) throw new Error('journal down');
+          return stores.journal.append(...args);
+        },
+      },
+    } as unknown as MemoryStores;
+
+    const result = await editCommitmentBodyJournalFirst(
+      flaky,
+      existing,
+      '直した後の本文',
+      'human',
+      entry,
+    );
+
+    expect(result.kind).toBe('edited');
+    expect(appended).toBe(2);
+    expect((await stores.commitments.get('c1'))?.body).toBe('直した後の本文');
+  });
+
+  it('上書きした本文が先に読んだ本文と同じなら、補いの行は足さない（#5251）', async () => {
+    const stores = createMemoryStores();
+    const existing = await openRow(stores);
+
+    const result = await editCommitmentBodyJournalFirst(
+      stores,
+      existing,
+      '直した後の本文',
+      'clone',
+      entry,
+    );
+
+    expect(result.kind).toBe('edited');
+    expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(1);
+  });
+
   it('日誌に書けなければ journal-failed を返し、行の本文は元のまま', async () => {
     const stores = createMemoryStores();
     const existing = await openRow(stores);

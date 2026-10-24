@@ -1,11 +1,11 @@
 import { noteDroppedRecord } from './dropped-record.js';
 import type { Commitment, CommitmentEditedBy, JournalEntryInput } from './schema.js';
 import { CommitmentConflictError, commitmentVersionMatches } from './store.js';
-import type { Stores } from './store.js';
+import type { CommitmentEditResult, Stores } from './store.js';
 
 export type JournalFirstEditResult =
   | { readonly kind: 'edited' }
-  /** `editBody` が `false`（閉じていた・無かった・通らなかった）。台帳は変わっていない。 */
+  /** `editBody` が `not-edited`（閉じていた・無かった・通らなかった）。台帳は変わっていない。 */
   | { readonly kind: 'not-edited' }
   /** `ifMatch` が合わず書かなかった（読んだ版で既に合わないと分かった回は日誌も書いていない）。 */
   | { readonly kind: 'conflict'; readonly error: CommitmentConflictError }
@@ -21,7 +21,9 @@ export type JournalFirstEditResult =
  * だから日誌へ逐語で残してから書き直す（正典の順序）。
  *
  * 先に `editBody` して後で日誌を書く順にしない: 日誌が落ちると、上書きされた本文が行にも日誌にも残らない窓ができる。
- * 日誌を書いた後に台帳が割り込まれたら（`false`・`CommitmentConflictError`・それ以外の例外）、先の行を打ち消す行を足す
+ * 書いた後、`editBody` が排他の中で読んだ本文が先に読んだ本文と違えば、実際に上書きした本文を補いの行で残す
+ * （{@link removeScheduleJournalFirst} と同じ考え方。#5251）。
+ * 日誌を書いた後に台帳が割り込まれたら（`not-edited`・`CommitmentConflictError`・それ以外の例外）、先の行を打ち消す行を足す
  * （{@link reopenCommitmentJournalFirst} と同じ考え方。日誌に「直した」だけが残ると事実と食い違うため）。
  *
  * `existing` は呼び出し側が読んで `origin` を確かめた行。`entry` はその本文（編集前）と `body`（編集後）を逐語で含めること。
@@ -48,7 +50,7 @@ export async function editCommitmentBodyJournalFirst(
     return { kind: 'journal-failed', error, entry };
   }
 
-  let edited: boolean;
+  let edited: CommitmentEditResult;
   try {
     edited = await stores.commitments.editBody(
       id,
@@ -68,13 +70,29 @@ export async function editCommitmentBodyJournalFirst(
     if (error instanceof CommitmentConflictError) return { kind: 'conflict', error };
     throw error;
   }
-  if (!edited) {
+  if (edited.kind === 'not-edited') {
     await retractEditEntry(
       stores,
       id,
       '直す直前に行が閉じられた・消えた、または書き直しが通らなかった',
     );
     return { kind: 'not-edited' };
+  }
+  // 先の行に書いたのは読んだ時点の本文。`ifMatch` を付けない書き直しは、読んでから書くまでに別の書き手が本文を変えていても通るので、
+  // 実際に上書きした本文（`editBody` の排他の中で読んだ行）が違えば、日誌に無い本文が消えないよう逐語で補う
+  if (edited.before.body !== existing.body) {
+    try {
+      await stores.journal.append({
+        type: 'decision',
+        decision:
+          `引き受けた仕事の本文の書き直し（${id}）の間に本文が書き換わっていた。` +
+          `先の行に書いた編集前の本文ではなく、実際に上書きした本文は次のとおり: 「${edited.before.body}」`,
+        grounds: `先の行の記録: 編集前「${existing.body}」→ 編集後「${body}」`,
+      });
+    } catch (error) {
+      // 書き直しは済んでおり、呼び出し側の応答も決まっている: 跡だけ残す
+      noteDroppedRecord('本文編集で実際に上書きした本文の補いの日誌', `id=${id}`, error);
+    }
   }
   return { kind: 'edited' };
 }

@@ -1058,6 +1058,15 @@ export function commitmentBodyVersion(entry: Pick<Commitment, 'at' | 'editedAt'>
   return entry.editedAt ?? entry.at;
 }
 
+/**
+ * `CommitmentStore.editBody` の結果。`CommitmentReopenResult` の `before` と同じ作り。
+ * `before` は書き換えと同じ排他の中で読んだ行（上書きされる前の本文を持つ）。呼び出し側が先に読んだ行とは限らない。
+ */
+export type CommitmentEditResult =
+  | { readonly kind: 'edited'; readonly before: Commitment }
+  /** 片付いている行・無い id。何も書いていない。 */
+  | { readonly kind: 'not-edited' };
+
 export interface EditCommitmentBodyOptions {
   /** 前提の版（`commitmentBodyVersion`）。書く瞬間の版と違えば書かず `CommitmentConflictError`。省略は後勝ち。無い行は `current: null` の衝突。片付いている行は版を見ず `false`。 */
   ifMatch?: string;
@@ -1097,7 +1106,7 @@ export interface CommitmentStore {
    * 1件を読む。「無い（`null`）」と「読めない」は別物: 単票なので型へ逃がす先が無く、読めない行は `UnreadableCommitmentError` を投げる。
    * 呼び出し側（`commitment_list`）は `instanceof` で捕まえて「読めない」を返し、それ以外の例外（器そのものの障害）は上へ通す。
    *
-   * NUL: 読むだけの口（`get`・`close`・`closeMany`・`editBody` の id）は NUL を含む id でも断らず「無い」と同じ結果（`null`・`false`・閉じた id に含めない）を返す。
+   * NUL: 読むだけの口（`get`・`close`・`closeMany`・`editBody` の id）は NUL を含む id でも断らず「無い」と同じ結果（`null`・`false`・`not-edited`・閉じた id に含めない）を返す。
    * `open` は `id` の NUL を `NulNotAllowedError` で断り、`body`・`closedReason` の NUL は落として残す（3実装とも）。
    * `source`（出所の注記。行を指す鍵ではない）の NUL も断らず落として残す（畳み込みの判定も落とした値で揃う）:
    * 断ると引き受けた仕事が台帳から消え、害が大きいのはそちら（`UsageStore` と同じ事情）。
@@ -1166,7 +1175,9 @@ export interface CommitmentStore {
   reopen(id: string): Promise<CommitmentReopenResult>;
 
   /**
-   * `body` を書き換える。まだ片付いていない行だけ: 片付いている行・無い id は `false`。
+   * `body` を書き換える。まだ片付いていない行だけ: 片付いている行・無い id は `{ kind: 'not-edited' }`。
+   * 書いたら `{ kind: 'edited', before }`。`before` は書き換えと同じ排他の中で読んだ行で、実際に上書きした本文を持つ
+   * （呼び出し側が先に読んだ行は、読んでから書くまでに別の書き手が変えているかもしれない）。
    * 書き換えるのは `body` / `editedAt` / `editedBy` の3つだけで、`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` には触れない。
    *
    * `origin` の判定はここでは行わない: `origin` は開いたときから変わらず並行に呼ばれても競合しない。
@@ -1184,7 +1195,7 @@ export interface CommitmentStore {
     at: string,
     by: CommitmentEditedBy,
     options?: EditCommitmentBodyOptions,
-  ): Promise<boolean>;
+  ): Promise<CommitmentEditResult>;
 
   /**
    * 全件を消す（ワークスペースのリセット専用）。未了・片付いた行の両方、`unreadable` に回っていた読めない行も含めて消す。消した件数を返す。

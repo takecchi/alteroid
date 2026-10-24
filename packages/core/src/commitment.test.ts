@@ -12,6 +12,7 @@ import {
   hasOpenManagerDuplicate,
   isDaemonSelfNotice,
 } from './clone.js';
+import { verifyCommitmentEditBeforeContract } from './commitment-edit-before-contract.js';
 import { verifyCommitmentEditIfMatchContract } from './commitment-edit-if-match-contract.js';
 import { verifyCommitmentRemoveForConversationContract } from './commitment-remove-for-conversation-contract.js';
 import { verifyCommitmentAutoCloseMarkContract } from './commitment-auto-close-mark-contract.js';
@@ -249,7 +250,7 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(closed?.closedReason).toBe('器が自動で閉じた');
   });
 
-  it('editBody は未了の行だけ書き換え、片付いた行・無い id は false（他の欄は無傷）', async () => {
+  it('editBody は未了の行だけ書き換え、片付いた行・無い id は not-edited（他の欄は無傷）', async () => {
     const stores = createMemoryStores();
 
     await stores.commitments.open({
@@ -261,7 +262,7 @@ describe('引き受けたまま終わっていない仕事', () => {
     });
     expect(
       await stores.commitments.editBody('c-1', '直した依頼', '2026-08-13T00:00:00.000Z', 'human'),
-    ).toBe(true);
+    ).toMatchObject({ kind: 'edited', before: { body: 'もとの依頼' } });
     const edited = await stores.commitments.get('c-1');
     expect(edited?.body).toBe('直した依頼');
     expect(edited?.editedAt).toBe('2026-08-13T00:00:00.000Z');
@@ -284,7 +285,7 @@ describe('引き受けたまま終わっていない仕事', () => {
         '2026-08-14T00:00:00.000Z',
         'human',
       ),
-    ).toBe(false);
+    ).toEqual({ kind: 'not-edited' });
     const closed = await stores.commitments.get('c-closed');
     expect(closed?.body).toBe('もう片付いた依頼');
     expect(closed?.closedReason).toBe('片付けた');
@@ -296,7 +297,7 @@ describe('引き受けたまま終わっていない仕事', () => {
         '2026-08-14T00:00:00.000Z',
         'human',
       ),
-    ).toBe(false);
+    ).toEqual({ kind: 'not-edited' });
   });
 
   // 応答や日誌の文面を完全一致で固定しない: 守りたいものと無関係な変更まで赤くするため。台帳の欄と日誌の中身の有無で見る
@@ -1929,6 +1930,10 @@ describe('台帳の契約（インメモリ）', () => {
 
   it('editBody の ifMatch の契約（#3786。3実装で同じことを測る）', async () => {
     await verifyCommitmentEditIfMatchContract(createMemoryStores().commitments);
+  });
+
+  it('editBody が返す before の契約（#5251。3実装で同じことを測る。書き換えと同じ排他の中で読んだ行）', async () => {
+    await verifyCommitmentEditBeforeContract(createMemoryStores().commitments);
   });
 
   it('removeForConversation の契約（#4218・#4355。3実装で同じことを測る。human / self かつ source 一致の行だけを未了・片付いたとも物理的に消す）', async () => {

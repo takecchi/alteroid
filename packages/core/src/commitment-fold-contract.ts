@@ -89,9 +89,9 @@ export async function verifyCommitmentFoldContract(
         false,
       ],
       [
-        'editBody(NULを含むid)はfalse',
-        () => store.editBody(nulId, 'x', '2026-01-03T00:00:00.000Z', 'clone'),
-        false,
+        'editBody(NULを含むid)はnot-edited',
+        async () => (await store.editBody(nulId, 'x', '2026-01-03T00:00:00.000Z', 'clone')).kind,
+        'not-edited',
       ],
     ];
     for (const [label, call, expected] of readOutcomes) {
@@ -105,7 +105,7 @@ export async function verifyCommitmentFoldContract(
     }
 
     const edited = await store.editBody(bodyId, '直\u0000し', '2026-01-03T00:00:00.000Z', 'clone');
-    if (!edited) fail('editBody が通らない');
+    if (edited.kind !== 'edited') fail('editBody が通らない');
     if ((await store.get(bodyId))?.body !== '直し') fail('editBody の本文の NUL が残る');
 
     let closedMany: string[] = [];

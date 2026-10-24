@@ -10,6 +10,7 @@ import {
   decodeState,
   renderMemoryDocuments,
   verifyCommitmentEditIfMatchContract,
+  verifyCommitmentEditBeforeContract,
   verifyCommitmentRemoveForConversationContract,
   verifyCommitmentEditUnreadableContract,
   verifyCommitmentAutoCloseMarkContract,
@@ -1311,6 +1312,10 @@ describe('FsJournalStore', () => {
       await verifyCommitmentEditIfMatchContract(stores.commitments);
     });
 
+    it('editBody が返す before の契約（#5251。3実装で同じことを測る。書き換えと同じ排他の中で読んだ行）', async () => {
+      await verifyCommitmentEditBeforeContract(stores.commitments);
+    });
+
     it('removeForConversation の契約（#4218・#4355。3実装で同じことを測る。human / self かつ source 一致の行だけを未了・片付いたとも物理的に消す）', async () => {
       await verifyCommitmentRemoveForConversationContract(stores.commitments);
     });
@@ -2014,7 +2019,7 @@ describe('FsCommitmentStore', () => {
 
       expect(
         await stores.commitments.editBody('c-1', '直した依頼', '2026-08-13T00:00:00.000Z', 'human'),
-      ).toBe(true);
+      ).toMatchObject({ kind: 'edited', before: { body: 'もとの依頼' } });
 
       const entry = await stores.commitments.get('c-1');
       expect(entry?.body).toBe('直した依頼');
@@ -2026,7 +2031,7 @@ describe('FsCommitmentStore', () => {
       expect(entry?.closedAt).toBeUndefined();
     });
 
-    it('片付いた行は書き換えられない（false を返し、body はそのまま）', async () => {
+    it('片付いた行は書き換えられない（not-edited を返し、body はそのまま）', async () => {
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'もとの依頼'));
       await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '片付けた', 'human');
 
@@ -2037,7 +2042,7 @@ describe('FsCommitmentStore', () => {
           '2026-08-14T00:00:00.000Z',
           'human',
         ),
-      ).toBe(false);
+      ).toEqual({ kind: 'not-edited' });
 
       const entry = await stores.commitments.get('c-1');
       expect(entry?.body).toBe('もとの依頼');
@@ -2047,7 +2052,7 @@ describe('FsCommitmentStore', () => {
       expect(entry?.closedReason).toBe('片付けた');
     });
 
-    it('存在しない id は false（勝手に行を作らない）', async () => {
+    it('存在しない id は not-edited（勝手に行を作らない）', async () => {
       expect(
         await stores.commitments.editBody(
           'しらない',
@@ -2055,7 +2060,7 @@ describe('FsCommitmentStore', () => {
           '2026-08-13T00:00:00.000Z',
           'human',
         ),
-      ).toBe(false);
+      ).toEqual({ kind: 'not-edited' });
 
       expect(await stores.commitments.list({ includeClosed: true })).toEqual({
         entries: [],

@@ -45,12 +45,14 @@ export async function verifyCommitmentEditUnreadableContract(
     fail('断られた後、読めない行が list().unreadable から消えた');
   }
 
-  if (!(await store.editBody(good, '直した', t(2), 'human'))) {
+  if ((await store.editBody(good, '直した', t(2), 'human')).kind !== 'edited') {
     fail('読めない行が在ると、読める行の editBody が通らない');
   }
   if ((await store.get(good))?.body !== '直した') fail('読める行の editBody が書けていない');
-  if (await store.editBody('contract-edit-unreadable-ghost', 'x', t(1), 'human')) {
-    fail('無い行への editBody が true を返した');
+  if (
+    (await store.editBody('contract-edit-unreadable-ghost', 'x', t(1), 'human')).kind === 'edited'
+  ) {
+    fail('無い行への editBody が edited を返した');
   }
 
   await store.clear();

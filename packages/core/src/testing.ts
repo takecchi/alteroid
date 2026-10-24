@@ -860,12 +860,13 @@ export function createMemoryStores(): Stores {
     async editBody(id, body, at, by: CommitmentEditedBy, options) {
       const existing = commitments.get(id);
       if (!existing && options?.ifMatch !== undefined) throw new CommitmentConflictError(id, null);
-      if (!existing || existing.closedAt !== undefined) return false;
+      if (!existing || existing.closedAt !== undefined) return { kind: 'not-edited' };
       if (!commitmentVersionMatches(existing, options?.ifMatch)) {
         throw new CommitmentConflictError(id, isolate(existing));
       }
       commitments.set(id, { ...existing, body: stripNul(body), editedAt: at, editedBy: by });
-      return true;
+      // `before` は読んだ行そのもの（同じ同期の区間で書き換えている）
+      return { kind: 'edited', before: isolate(existing) };
     },
     async removeForConversation(conversationId) {
       if (hasNul(conversationId)) return 0;

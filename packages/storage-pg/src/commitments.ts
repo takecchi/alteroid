@@ -13,6 +13,7 @@ import type {
   CommitmentList,
   EditCommitmentBodyOptions,
   CommitmentOpenResult,
+  CommitmentEditResult,
   CommitmentReopenResult,
   CommitmentStore,
   UnreadableCommitment,
@@ -359,17 +360,18 @@ export class PgCommitmentStore implements CommitmentStore {
     at: string,
     by: CommitmentEditedBy,
     options?: EditCommitmentBodyOptions,
-  ): Promise<boolean> {
+  ): Promise<CommitmentEditResult> {
     const ifMatch = options?.ifMatch;
     if (hasNul(id)) {
       if (ifMatch !== undefined) throw new CommitmentConflictError(id, null);
-      return false;
+      return { kind: 'not-edited' };
     }
     const editedBody = stripNulls(body);
     const edited = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{body}', ${JSON.stringify(editedBody)}::jsonb, true), '{editedAt}', ${JSON.stringify(at)}::jsonb, true), '{editedBy}', ${JSON.stringify(by)}::jsonb, true)`;
 
     // `ifMatch` 省略も行ロックの後に読めるかを確かめる: 1文の update だと読めない行の JSON へ黙って書き、「編集できた」と答えるため。
-    return this.#db.transaction(async (tx) => {
+    // `before` は行ロックの中で読んだ `current`（書き換えと同じ排他）。呼び出し側が先に読んだ行は、実際に上書きした本文と違いうる。
+    return this.#db.transaction(async (tx): Promise<CommitmentEditResult> => {
       const rows = await tx
         .select({ closedAt: commitments.closedAt, commitment: commitments.commitment })
         .from(commitments)
@@ -379,15 +381,15 @@ export class PgCommitmentStore implements CommitmentStore {
       const row = rows[0];
       if (row === undefined) {
         if (ifMatch !== undefined) throw new CommitmentConflictError(id, null);
-        return false;
+        return { kind: 'not-edited' };
       }
-      if (row.closedAt !== null) return false;
+      if (row.closedAt !== null) return { kind: 'not-edited' };
       const current = parseCommitment(id, row.commitment);
       if (ifMatch !== undefined && !commitmentVersionMatches(current, ifMatch)) {
         throw new CommitmentConflictError(id, current);
       }
       await tx.update(commitments).set({ commitment: edited }).where(eq(commitments.id, id));
-      return true;
+      return { kind: 'edited', before: current };
     });
   }
 
