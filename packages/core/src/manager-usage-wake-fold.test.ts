@@ -285,8 +285,10 @@ describe('鍵の回転の起こし直しは、待ちの上限を過ぎた背景�
     expect(message).toContain('古い背景処理のプロセスは runner が止める');
     expect(message).toContain('起こしたときの Bash の結果にある出力ファイル');
     // やり直しの前の確かめは、資格が出力に載らない手だけを案内する（#5196）
+    expect(message).toContain('作業ツリーの未コミットの変更が増えていないか（git status）');
+    expect(message).toContain('.git/index.lock が残っていないか');
     expect(message).toContain(
-      '出力ファイルの末尾が伸びていないか・作業ツリーのファイルの更新時刻が動いていないかで確かめること',
+      '作業ツリーのファイルの最後の更新時刻と出力ファイルの末尾が動いていないかで確かめること',
     );
     expect(message).toContain('ps・/proc・env は使わない');
     expect(message).not.toContain('ps で確かめ');
