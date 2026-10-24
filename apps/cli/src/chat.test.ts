@@ -2329,6 +2329,115 @@ describe('chat の台帳コマンド', () => {
     });
   });
 
+  // 台帳の書き込み系は、HTTP の失敗も失敗として返す（#5236）。表示した文をそのまま onFailed へ渡し、成功の回は渡さない
+  describe('台帳の書き込み系は HTTP の失敗を onFailed に渡す（#5236）', () => {
+    const SERVER_MESSAGE = '台帳の書き込みが失敗した（issue #5236 のテスト用）';
+
+    async function runWrite(
+      line: string,
+      options: Parameters<typeof stubClient>[0],
+      needsList: boolean,
+    ) {
+      const out = captureStdout();
+      const { client } = stubClient(options);
+      const listed = emptyListed();
+      const failed: string[] = [];
+      if (needsList) await runSlashCommand('/commitments', client, listed);
+      await runSlashCommand(line, client, listed, 'conv-7', undefined, undefined, (reason) =>
+        failed.push(reason),
+      );
+      return { text: out(), failed };
+    }
+
+    it.each([
+      [404, 'その id は台帳にありません'],
+      [409, 'それは既に片付いています'],
+      [500, SERVER_MESSAGE],
+    ])('/done は %i を表示した文のまま失敗として渡す', async (status, message) => {
+      const { text, failed } = await runWrite(
+        '/done 1 片付けた',
+        {
+          commitments: [commitment({ id: 'cmt-1' })],
+          closeStatus: status,
+          closeBody: { error: SERVER_MESSAGE },
+        },
+        true,
+      );
+
+      expect(text).toContain(message);
+      expect(failed).toEqual([message]);
+    });
+
+    it('/done は成功の回に onFailed を呼ばない', async () => {
+      const { text, failed } = await runWrite(
+        '/done 1 片付けた',
+        { commitments: [commitment({ id: 'cmt-1' })] },
+        true,
+      );
+
+      expect(text).toContain('片付いたことを記録しました');
+      expect(failed).toEqual([]);
+    });
+
+    it.each([404, 409, 500])(
+      '/commit-edit は %i のサーバの文言を失敗として渡す',
+      async (status) => {
+        const { text, failed } = await runWrite(
+          '/commit-edit 1 直したい',
+          {
+            commitments: [commitment({ id: 'cmt-1' })],
+            editStatus: status,
+            editBody: { error: SERVER_MESSAGE },
+          },
+          true,
+        );
+
+        expect(text).toContain(SERVER_MESSAGE);
+        expect(failed).toEqual([expect.stringContaining(SERVER_MESSAGE)]);
+      },
+    );
+
+    it('/commit-edit は成功の回に onFailed を呼ばない', async () => {
+      const { text, failed } = await runWrite(
+        '/commit-edit 1 直した',
+        { commitments: [commitment({ id: 'cmt-1' })] },
+        true,
+      );
+
+      expect(text).toContain('本文を直しました');
+      expect(failed).toEqual([]);
+    });
+
+    it('/commit は 404 の文を失敗として渡す', async () => {
+      const { text, failed } = await runWrite(
+        '/commit 週明けに設計を見直す',
+        { commitOpenStatus: 404, commitOpenBody: {} },
+        false,
+      );
+
+      expect(text).toContain('台帳に積めませんでした');
+      expect(failed).toEqual(['台帳に積めませんでした']);
+    });
+
+    it.each([400, 409, 500])('/commit は %i のサーバの文言を失敗として渡す', async (status) => {
+      const { text, failed } = await runWrite(
+        '/commit 週明けに設計を見直す',
+        { commitOpenStatus: status, commitOpenBody: { error: SERVER_MESSAGE } },
+        false,
+      );
+
+      expect(text).toContain(SERVER_MESSAGE);
+      expect(failed).toEqual([expect.stringContaining(SERVER_MESSAGE)]);
+    });
+
+    it('/commit は成功の回に onFailed を呼ばない', async () => {
+      const { text, failed } = await runWrite('/commit 週明けに設計を見直す', {}, false);
+
+      expect(text).toContain('台帳に積みました');
+      expect(failed).toEqual([]);
+    });
+  });
+
   describe('/commitment（1件を全文で）', () => {
     const SECRET = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
     const LONG = `長い依頼。${'あ'.repeat(200)}\n2行目の末尾`;
