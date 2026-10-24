@@ -2381,6 +2381,9 @@ export async function runSlashCommand(
             } else if (approval.answer) {
               stdout.write(`      回答: ${summarizeText(approval.answer)}\n`);
             }
+            if (!withdrawn && approval.answeredVia) {
+              stdout.write(`      回答経路: ${describeAnsweredVia(approval.answeredVia)}\n`);
+            }
           }
           stdout.write(
             '  全文・設問は /approval <id>、答えの後の行動は /approval-trace <id> で読めます\n',
@@ -2559,6 +2562,9 @@ export async function runSlashCommand(
       } else if (approval.answeredAt) {
         stdout.write(`      状態: 回答済み（${approval.answeredAt}）\n`);
         if (approval.answer) stdout.write(`      回答: ${redactBody(approval.answer)}\n`);
+        if (approval.answeredVia) {
+          stdout.write(`      回答経路: ${describeAnsweredVia(approval.answeredVia)}\n`);
+        }
       }
       if (approval.questions === undefined || approval.questions.length === 0) {
         stdout.write('      （設問はありません。/answer <番号> <回答> で自由文で答えます）\n');

@@ -59,6 +59,33 @@ describe('AnsweredApprovalRow', () => {
     expect(screen.getByRole('link').textContent).not.toContain('理由');
   });
 
+  it('answeredVia が在れば回答経路を出し、無ければ出さない。取り下げ済には出さない', () => {
+    const { rerender } = render(
+      <AnsweredApprovalRow
+        state="answered"
+        time="t"
+        question="q"
+        answeredVia="operator（認証無効）"
+        renderLink={renderLink}
+      />,
+    );
+    expect(screen.getByRole('link').textContent).toContain('回答経路: operator（認証無効）');
+    rerender(
+      <AnsweredApprovalRow state="answered" time="t" question="q" renderLink={renderLink} />,
+    );
+    expect(screen.getByRole('link').textContent).not.toContain('回答経路');
+    rerender(
+      <AnsweredApprovalRow
+        state="withdrawn"
+        time="t"
+        question="q"
+        answeredVia="operator（認証無効）"
+        renderLink={renderLink}
+      />,
+    );
+    expect(screen.getByRole('link').textContent).not.toContain('回答経路');
+  });
+
   it('本文は2行で切る（line-clamp）。全文は詳細で読む', () => {
     render(
       <AnsweredApprovalRow

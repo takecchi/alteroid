@@ -247,6 +247,37 @@ describe('summarizeJournalEntry — escalation（取り下げ #963）', () => {
     };
     expect(summarizeJournalEntry(answered)).toBe('回答済: 進めてよいですか？');
   });
+
+  it('answeredVia が在れば回答経路を添え、無ければ何も足さない', () => {
+    const answered: JournalEntry = {
+      type: 'escalation',
+      id: 'esc-via',
+      at: '2026-09-15T00:00:00.000Z',
+      question: '進めてよいですか？',
+      approvalId: 'ap-3',
+      answeredAt: '2026-09-15T00:05:00.000Z',
+      answer: 'よい',
+    };
+    expect(
+      summarizeJournalEntry({ ...answered, answeredVia: { kind: 'account', accountId: 'acc-1' } }),
+    ).toBe('回答済: 進めてよいですか？（回答経路: account（acc-1））');
+    expect(
+      summarizeJournalEntry({ ...answered, answeredVia: { kind: 'operator', auth: 'disabled' } }),
+    ).toBe('回答済: 進めてよいですか？（回答経路: operator（認証無効））');
+    expect(summarizeJournalEntry(answered)).toBe('回答済: 進めてよいですか？');
+  });
+
+  it('未回答の行には回答経路を足さない', () => {
+    const asked = {
+      type: 'escalation',
+      id: 'esc-asked-via',
+      at: '2026-09-15T00:00:00.000Z',
+      question: '進めてよいですか？',
+      approvalId: 'ap-4',
+      answeredVia: { kind: 'account', accountId: 'acc-1' },
+    } as JournalEntry;
+    expect(summarizeJournalEntry(asked)).toBe('確認: 進めてよいですか？');
+  });
 });
 
 describe('summarizeJournalEntry — github_observation の CI（#2608）', () => {

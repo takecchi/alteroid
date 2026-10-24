@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
+  AnsweredVia,
   ApprovalQuestion,
   ApprovalSelection,
   AttachmentLimits,
@@ -130,6 +131,7 @@ export interface ApprovalRow {
   conversationId?: string;
   answeredAt?: string;
   answer?: string;
+  answeredVia?: AnsweredVia;
   questions?: ApprovalQuestion[];
   selections?: ApprovalSelection[];
   withdrawnAt?: string;

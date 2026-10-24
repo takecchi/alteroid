@@ -289,4 +289,30 @@ describe('回答済みの一覧の行（#3340）', () => {
       answeredDayLine(approvalRow('ap-w2', { withdrawnAt: '2026-09-30T05:00:00.000Z' }), now),
     ).toContain('（理由の記録なし）');
   });
+
+  it('answeredVia が在れば回答経路を出し、無ければ何も足さない', () => {
+    const settled = { answeredAt: '2026-09-30T10:00:00.000Z', answer: '済み' };
+    expect(
+      answeredDayLine(
+        approvalRow('ap-v', { ...settled, answeredVia: { kind: 'account', accountId: 'acc-1' } }),
+        now,
+      ),
+    ).toContain('回答経路: account（acc-1）');
+    expect(answeredDayLine(approvalRow('ap-n', settled), now)).not.toContain('回答経路');
+  });
+});
+
+describe('詳細の回答経路', () => {
+  const docOf = (over: Parameters<typeof approvalRow>[1]) =>
+    approvalDocument(detailOf({ approval: approvalRow('ap-1', over) }), 80)
+      .rows.map((r) => r.text)
+      .join('\n');
+  const settled = { answeredAt: '2026-10-02T02:00:00.000Z', answer: '済み' };
+
+  it('answeredVia が在れば回答の下に出し、無ければ出さない', () => {
+    expect(
+      docOf({ ...settled, answeredVia: { kind: 'operator', auth: 'operator-token' } }),
+    ).toContain('回答経路: operator（operator token）');
+    expect(docOf(settled)).not.toContain('回答経路');
+  });
 });

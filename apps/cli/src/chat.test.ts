@@ -1347,6 +1347,9 @@ interface ApprovalLike {
   jobId?: string;
   answeredAt?: string;
   answer?: string;
+  answeredVia?:
+    | { kind: 'operator'; auth: 'disabled' | 'operator-token' }
+    | { kind: 'account'; accountId: string };
   questions?: {
     id: string;
     prompt: string;
@@ -2588,6 +2591,21 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     expect(text).toContain('--select');
   });
 
+  it('/approval は answeredVia が在れば回答経路を出し、無ければ出さない', async () => {
+    const read = captureStdout();
+    const settled = { ...approval, answeredAt: '2026-09-30T10:00:00.000Z', answer: '待たない' };
+    const { client } = stubClient({
+      approvals: [{ ...settled, answeredVia: { kind: 'operator', auth: 'operator-token' } }],
+    });
+    await runSlashCommand('/approval 1', client, listedOne());
+    expect(read()).toContain('回答経路: operator（operator token）');
+
+    const readPlain = captureStdout();
+    const plain = stubClient({ approvals: [settled] });
+    await runSlashCommand('/approval 1', plain.client, listedOne());
+    expect(readPlain()).not.toContain('回答経路');
+  });
+
   it('/approval <id> は id で1件引く口（GET /approvals/:id）を1回だけ呼ぶ（全件は読まない）', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ approvals: [approval] });
@@ -3147,6 +3165,25 @@ describe('chat の /approvals（一覧）', () => {
       expect(text).toContain('取り下げ済み  取り下げた確認');
       expect(text).toContain('取り下げた理由: 自分で答えを見つけた');
       expect(text).toContain('/approval <id>');
+    });
+
+    it('answeredVia が在れば回答経路を出し、無ければ出さない。取り下げ済みには出さない', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        approvals: [
+          { ...answered, answeredVia: { kind: 'account', accountId: 'acc-1' } },
+          { ...withdrawn, answeredVia: { kind: 'operator', auth: 'disabled' } },
+        ],
+      });
+      await runSlashCommand('/approvals answered 2026-09-30', client, emptyListed());
+      const text = read();
+      expect(text).toContain('回答経路: account（acc-1）');
+      expect(text).not.toContain('operator（認証無効）');
+
+      const readPlain = captureStdout();
+      const plain = stubClient({ approvals: [answered] });
+      await runSlashCommand('/approvals answered 2026-09-30', plain.client, emptyListed());
+      expect(readPlain()).not.toContain('回答経路');
     });
 
     it('一覧は全文を載せない（長い問い・答えは切る）', async () => {

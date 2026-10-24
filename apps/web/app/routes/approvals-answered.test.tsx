@@ -421,6 +421,16 @@ describe('その日の件', () => {
     expect(within(row).queryAllByRole('button')).toHaveLength(0);
   });
 
+  it('行に回答経路を出す。answeredVia が無い行には足さない', async () => {
+    stubApi({ dates: DATES, days: { '2026-09-30': [NEWER, OLDER] } });
+    renderAt('/approvals/answered/2026-09-30');
+
+    const withVia = (await screen.findByText('夜のリリースを待つか')).closest('a')!;
+    expect(withVia.textContent).toContain('回答経路: operator（operator token）');
+    const without = screen.getByText('朝の migrate を当てるか').closest('a')!;
+    expect(without.textContent).not.toContain('回答経路');
+  });
+
   it('行のどこを押しても詳細へ行く（時刻・札・問い・答えのどれを押しても）', async () => {
     for (const target of [
       () => screen.getByText('回答済'),
