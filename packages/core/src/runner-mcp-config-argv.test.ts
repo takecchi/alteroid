@@ -67,6 +67,11 @@ afterEach(async () => {
 async function start(
   handOverMcpConfigDirFn: (dir: string, uid: number, gid: number) => void,
   sweepIntervalMs?: number,
+  extra: {
+    // 起こす前に置き場へ残骸を置く: 前の runner が落ちて残した形を作るため
+    beforeHost?: (root: string) => void;
+    sweepMcpConfigOnStart?: boolean;
+  } = {},
 ): Promise<{
   root: string;
   launch: () => string[];
@@ -75,6 +80,7 @@ async function start(
   events: RunnerEvent[];
 }> {
   const mcpConfigTmpRoot = makeTempDirSync('alteroid-mcp-argv-root-');
+  extra.beforeHost?.(mcpConfigTmpRoot);
   const sessions: Options[] = [];
   const events: RunnerEvent[] = [];
   const spawned: string[][] = [];
@@ -106,6 +112,9 @@ async function start(
     handOverResumeConfigDirFn: () => undefined,
     handOverMcpConfigDirFn,
     mcpConfigTmpRoot,
+    ...(extra.sweepMcpConfigOnStart === undefined
+      ? {}
+      : { sweepMcpConfigOnStart: extra.sweepMcpConfigOnStart }),
     // 本物の /tmp を scratch の掃きの対象にしない
     ...(sweepIntervalMs === undefined
       ? {}
@@ -221,6 +230,57 @@ describe('Host: 委譲の CLI の argv に MCP の資格を載せない', () => 
 
     for (const listener of exits) listener();
     expect(existsSync(live)).toBe(false);
+  });
+
+  describe('起動時の掃き（#5186）', () => {
+    const old = new Date(Date.now() - 60 * 60_000);
+    const plantLeftovers = (planted: Record<string, string>) => (root: string) => {
+      const plant = (name: string, mtime: Date | undefined): string => {
+        const dir = path.join(root, name);
+        mkdirSync(dir);
+        writeFileSync(path.join(dir, 'mcp-config-1.json'), '{}');
+        if (mtime !== undefined) utimesSync(dir, mtime, mtime);
+        return dir;
+      };
+      planted.stale = plant(`${RUNNER_MCP_CONFIG_DIR_PREFIX}stale`, old);
+      planted.young = plant(`${RUNNER_MCP_CONFIG_DIR_PREFIX}young`, undefined);
+      planted.cli = plant('alteroid-mcp-cli', old);
+    };
+
+    it('有効にすると、最初の周期を待たずに前の runner の古い残骸を消す（若いもの・別の接頭辞は残す）', async () => {
+      const planted: Record<string, string> = {};
+      // 周期は1時間にして、周期の掃きでは消えないようにする
+      const { events } = await start(() => undefined, 60 * 60_000, {
+        beforeHost: plantLeftovers(planted),
+        sweepMcpConfigOnStart: true,
+      });
+
+      for (let i = 0; i < 5000 && !events.some((e) => e.type === 'scratch_sweep'); i += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(existsSync(planted.stale as string)).toBe(false);
+      expect(existsSync(planted.young as string)).toBe(true);
+      expect(existsSync(planted.cli as string)).toBe(true);
+      expect(events.filter((e) => e.type === 'scratch_sweep')).toEqual([
+        expect.objectContaining({
+          removed: [{ name: `${RUNNER_MCP_CONFIG_DIR_PREFIX}stale`, kind: 'directory' }],
+        }),
+      ]);
+    });
+
+    it('既定では起動時に掃かない（試験・runner-local が本物の /tmp を他の runner と共有しうるため）', async () => {
+      const planted: Record<string, string> = {};
+      const { events } = await start(() => undefined, 60 * 60_000, {
+        beforeHost: plantLeftovers(planted),
+      });
+
+      // 掃きが走っていたなら終わるだけの回数を流してから見る
+      for (let i = 0; i < 200; i += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(existsSync(planted.stale as string)).toBe(true);
+      expect(events.filter((e) => e.type === 'scratch_sweep')).toEqual([]);
+    });
   });
 
   it('子へ渡せなければ起動しない（資格を argv へ戻さず、ディレクトリも残さない）', async () => {

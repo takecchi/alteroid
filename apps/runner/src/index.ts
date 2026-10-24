@@ -464,6 +464,8 @@ export async function main(): Promise<void> {
     ...(childUser === undefined ? {} : { childUser }),
     // 自己失効はこの器だけが有効にする: 同一プロセスの `runner-local` では「デーモンだけが消える」ことが起こり得ないため。
     enforceLease: true,
+    // 起動時に、前の runner が落ちて残した委譲の MCP 設定（資格入り）を掃く（#5186）。/tmp を他の runner と共有しないこの器だけが有効にする
+    sweepMcpConfigOnStart: true,
     ...(delegationSubreaper === undefined ? {} : { delegationSubreaper }),
     // 器の pids が上限に近いとき、走っている担当に知らせる（runner-pids-pressure.ts）。cgroup が読めない器では `undefined` で、何も添えない
     readPidsFn: async () => (await readExecutionResources()).pids,

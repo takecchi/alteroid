@@ -553,6 +553,8 @@ export interface RunnerHostOptions {
   handOverMcpConfigDirFn?: HandOverResumeConfigDir;
   // 委譲の CLI の MCP 設定を置く親と、その掃き（`scratchSweep` の周期）の親。既定は `tmpdir()`。試験が本物の /tmp に触れないための口
   mcpConfigTmpRoot?: string;
+  // 起動時にもその掃きを1回走らせる（#5186）。既定で有効にしない: 試験や同一プロセスの `runner-local` は本物の /tmp を他の runner と共有しうるため
+  sweepMcpConfigOnStart?: boolean;
   contextUsageTimeoutMs?: number;
   // 一時規則（#4905）の置き直しを待つ期限。既定は `SESSION_ALLOW_RULES_TIMEOUT_MS`。試験が短くするための口
   sessionAllowRulesTimeoutMs?: number;
@@ -1006,12 +1008,7 @@ class Host implements RunnerHost {
               });
           }
           // scratch の掃きの鎖に乗せない: あちらは git の判定で長引きうるが、資格入りのファイルを長く残さないため
-          if (!this.#mcpConfigSweeping && !this.#scratchAbort.signal.aborted) {
-            this.#mcpConfigSweeping = true;
-            void this.#sweepMcpConfigDirs().finally(() => {
-              this.#mcpConfigSweeping = false;
-            });
-          }
+          this.#kickMcpConfigSweep();
           if (this.#scratchRunning !== null || this.#scratchAbort.signal.aborted) return;
           const run = sweeper
             .sweep(this.#scratchAbort.signal, this.runnerId)
@@ -1028,6 +1025,8 @@ class Host implements RunnerHost {
       );
       scratchTimer.unref?.();
       this.#scratchTimer = scratchTimer;
+      // 起動時にも1回掃く（#5186）: 前の runner が落ちて残した資格入りのファイルを、最初の周期（既定10分）まで残さないため
+      if (options.sweepMcpConfigOnStart === true) this.#kickMcpConfigSweep();
     }
     if (this.#enforceLease) {
       const watcher = setInterval(() => this.#checkLeaseExpiry(), LEASE_WATCH_INTERVAL_MS);
@@ -1053,6 +1052,15 @@ class Host implements RunnerHost {
 
   credentials(): CredentialFingerprint[] {
     return this.#credentials?.fingerprints() ?? [];
+  }
+
+  // 前の掃きが続いている間は重ねない
+  #kickMcpConfigSweep(): void {
+    if (this.#mcpConfigSweeping || this.#scratchAbort.signal.aborted) return;
+    this.#mcpConfigSweeping = true;
+    void this.#sweepMcpConfigDirs().finally(() => {
+      this.#mcpConfigSweeping = false;
+    });
   }
 
   // runner が落ちると、委譲の CLI の MCP 設定（資格入り）のディレクトリが残る。消すのは自分の権限で行う（ディレクトリは子の uid の持ち主）
