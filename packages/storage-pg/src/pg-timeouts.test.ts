@@ -211,13 +211,15 @@ describe('HTTP の要求の器へ、問い合わせの本数・時間・空き�
     const held = await pool.connect();
     const other = new RequestTiming();
     const timing = new RequestTiming();
+    // 先に打って空きを待たせてから、返す時計を掛ける: 時計を先に掛けると、打つまでの遅れ（CI が混むと 10ms を超える）だけ待つ時間が縮み、下限を割ったため（#5218）
+    const query = runWithRequestTiming(timing, () => pool.query('select ok'));
     // 別の要求の文脈で返す
     setTimeout(() => {
       void runWithRequestTiming(other, async () => {
         held.release();
       });
     }, 30);
-    await runWithRequestTiming(timing, () => pool.query('select ok'));
+    await query;
 
     expect(timing.db.count).toBe(1);
     expect(timing.db.waitMs).toBeGreaterThanOrEqual(20);
