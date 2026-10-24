@@ -74,6 +74,9 @@ describe('manager_send: decision が回答に当たらなかったら、そう�
 
     await s.call({ managerId: 'mgr-1', message: 'いいよ', decision: 'allow' });
 
-    expect(s.calls).toEqual([{ message: 'いいよ', options: { decision: 'allow' } }]);
+    // `beforeAnswer` は答える前に判断を日誌へ残す口で、本文や decision の届け方とは別。関数であることだけを見る
+    expect(s.calls).toEqual([
+      { message: 'いいよ', options: { decision: 'allow', beforeAnswer: expect.any(Function) } },
+    ]);
   });
 });
