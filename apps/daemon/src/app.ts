@@ -39,7 +39,6 @@ import type {
   TokenPoolService,
 } from '@alteroid/core';
 import {
-  CommitmentConflictError,
   MemoryConflictError,
   memoryVersion,
   PracticeConflictError,
@@ -131,6 +130,7 @@ import {
   noteDroppedRecord,
   describeClosedRecord,
   reopenCommitmentJournalFirst,
+  editCommitmentBodyJournalFirst,
   removeScheduleJournalFirst,
   reasonOf,
   redactErrorText,
@@ -6845,7 +6845,7 @@ export function createApp(deps: AppDeps) {
     )
 
     // 編集できるのは `origin` が `human` かつ未了の行の `body` だけ: 台帳は「クローンが何を引き受けたか」の記録で、それが静かに書き換わるとクローンが過去の自分を追えなくなる。`origin` / `source` / `at` / `closed*` は直さない。クローンは `commitment_edit` で自分の行を直せ、`manager` の行は誰も直せない。
-    // 先に `get` で `origin` を確かめてから `editBody` を呼ぶ: `origin` は不変なので競合せず、競合しうる「まだ閉じていない」だけを `editBody` の1操作へ畳む。原文は日誌へ逐語で残す（前後の本文を両方書くことで「静かに」を消している）。読めない行は書き直さず 409 で止める: 本文が読める形へ戻る保証が無い。
+    // 先に `get` で `origin` を確かめてから `editBody` を呼ぶ: `origin` は不変なので競合せず、競合しうる「まだ閉じていない」だけを `editBody` の1操作へ畳む。原文は日誌へ逐語で残す（前後の本文を両方書くことで「静かに」を消している）。台帳の行は編集後の本文しか持たないので、日誌を先に書き、書けなければ書き直さず 500（`editCommitmentBodyJournalFirst`）。読めない行は書き直さず 409 で止める: 本文が読める形へ戻る保証が無い。
     .patch(
       '/commitments/:id',
       describeRoute({
@@ -6855,7 +6855,7 @@ export function createApp(deps: AppDeps) {
           '編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。' +
           'クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。' +
           '`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。' +
-          '編集の前後の本文は日誌（`decision`）へ逐語で残る。' +
+          '編集の前後の本文は日誌（`decision`）へ逐語で残る。日誌を先に書き、書けなければ書き直さずに 500 を返す。' +
           '任意の `ifMatch`（`GET /commitments` で読んだ行の `editedAt ?? at`）を付けると、' +
           '版が違うときは書かずに 409。省略は従来どおり後勝ち。',
         responses: {
@@ -6890,6 +6890,10 @@ export function createApp(deps: AppDeps) {
                 schema: resolver(z.union([commitmentConflictResponseSchema, errorResponseSchema])),
               },
             },
+          },
+          500: {
+            description: '日誌が書けなかった（**書き直していない**。行の本文は元のまま）。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
           },
         },
       }),
@@ -6926,30 +6930,41 @@ export function createApp(deps: AppDeps) {
           );
         }
 
-        const before = existing.body;
-        let edited: boolean;
-        try {
-          edited = await stores.commitments.editBody(
-            id,
-            body,
-            new Date().toISOString(),
-            'human',
-            ifMatch === undefined ? undefined : { ifMatch },
+        // 台帳の行は編集後の本文だけを持つので、編集前の本文は日誌にしか残らない: 日誌を先に書き、書けなければ書き直さず 500（`editCommitmentBodyJournalFirst`）。
+        // 日誌の行は先に作る（作る側の例外を「日誌に書けなかった」と取り違えない）。
+        const entry: JournalEntryInput = {
+          type: 'decision',
+          decision:
+            `人間が引き受けた仕事の本文を直した（${id}）: ` +
+            `編集前「${existing.body}」→ 編集後「${body}」`,
+          grounds: '人間が直接 API から編集した',
+        };
+        const result = await editCommitmentBodyJournalFirst(
+          stores,
+          existing,
+          body,
+          'human',
+          entry,
+          ifMatch === undefined ? undefined : { ifMatch },
+        );
+        if (result.kind === 'journal-failed') {
+          noteDroppedRecord(
+            '引き受けた仕事の本文編集の日誌（書き直していない）',
+            `id=${id}`,
+            kindOfError(result.error),
           );
-        } catch (error) {
-          // 日誌は編集が効いた後にしか積まないので、打ち消すものも無い。
-          if (error instanceof CommitmentConflictError) {
-            return c.json(
-              {
-                error: '引き受けた仕事が読んだ後に変わっています（書き換えていません）' as const,
-                current: error.current,
-              },
-              409,
-            );
-          }
-          throw error;
+          return c.json(journalWriteFailedBody(), 500);
         }
-        if (!edited) {
+        if (result.kind === 'conflict') {
+          return c.json(
+            {
+              error: '引き受けた仕事が読んだ後に変わっています（書き換えていません）' as const,
+              current: result.error.current,
+            },
+            409,
+          );
+        }
+        if (result.kind === 'not-edited') {
           // 読み直した行の形どおりに返す（#5072）。状態コードは、この口の入口が同じ状態に返すものにそろえる（無い → 404、読めない → 409）
           let after;
           try {
@@ -6978,19 +6993,6 @@ export function createApp(deps: AppDeps) {
             409,
           );
         }
-        // 編集自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
-        await appendJournalOrDrop(
-          stores,
-          {
-            type: 'decision',
-            decision:
-              `人間が引き受けた仕事の本文を直した（${id}）: ` +
-              `編集前「${before}」→ 編集後「${body}」`,
-            grounds: '人間が直接 API から編集した',
-          },
-          '引き受けた仕事の本文編集の日誌',
-          `id=${id}`,
-        );
         return c.json(okResponseSchema.parse({ ok: true }));
       },
     )

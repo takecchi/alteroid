@@ -25167,7 +25167,7 @@
         "operationId": "patchCommitmentsById",
         "tags": ["commitments"],
         "summary": "引き受けた仕事の本文を後から直す",
-        "description": "編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。編集の前後の本文は日誌（`decision`）へ逐語で残る。任意の `ifMatch`（`GET /commitments` で読んだ行の `editedAt ?? at`）を付けると、版が違うときは書かずに 409。省略は従来どおり後勝ち。",
+        "description": "編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。編集の前後の本文は日誌（`decision`）へ逐語で残る。日誌を先に書き、書けなければ書き直さずに 500 を返す。任意の `ifMatch`（`GET /commitments` で読んだ行の `editedAt ?? at`）を付けると、版が違うときは書かずに 409。省略は従来どおり後勝ち。",
         "responses": {
           "200": {
             "description": "直した。",
@@ -25331,6 +25331,27 @@
                       "additionalProperties": false
                     }
                   ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**書き直していない**。行の本文は元のまま）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
+                  "additionalProperties": false
                 }
               }
             }

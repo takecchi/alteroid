@@ -18419,7 +18419,8 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
     },
     {
       tool: 'commitment_edit',
-      firstLine: ACT_COMPLETED,
+      // #5242 で反転: 書き直した後に日誌を書いて `act-completed` だったのを、書き直す前に書く `act-not-performed` へ（編集前の本文は日誌にしか残らない）
+      firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-14');
         await stores.commitments.open({
@@ -18434,10 +18435,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           memoryCause: () => 'clone',
           conversationId: () => undefined,
         });
-        return callExpectingError(tools, 'commitment_edit', {
+        const outcome = await callExpectingError(tools, 'commitment_edit', {
           id: 'c-edit-test',
           body: '直した後の本文',
         });
+        expect((await stores.commitments.get('c-edit-test'))?.body).toBe('直す前の本文');
+        return outcome;
       },
     },
     {

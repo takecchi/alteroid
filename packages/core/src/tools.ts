@@ -148,6 +148,7 @@ import {
   InvalidProgressWindowError,
   readProgress,
 } from './progress-read.js';
+import { editCommitmentBodyJournalFirst } from './commitment-edit.js';
 import { describeClosedRecord, reopenCommitmentJournalFirst } from './commitment-reopen.js';
 import { removeScheduleJournalFirst } from './schedule-remove.js';
 import { describeProgress } from './progress-describe.js';
@@ -5762,8 +5763,24 @@ export function createCloneTools(context: ToolContext) {
               '書き換えてよいのは、あなたが commitment_open で載せた行（self）だけである。',
           );
         }
-        const before = existing.body;
-        if (!(await stores.commitments.editBody(id, body, new Date().toISOString(), 'clone'))) {
+        // 台帳の行は編集後の本文だけを持つので、編集前の本文は日誌にしか残らない: 日誌へ編集の前後を逐語で先に残してから書き直す（`editCommitmentBodyJournalFirst`）。
+        // 書けなければ書き直さない（`act-not-performed`）。行は try の外で作る（作る側の例外を「日誌に書けなかった」と取り違えない）。
+        const entry: JournalEntryInput = {
+          type: 'decision',
+          decision: `引き受けた仕事の本文を直した（${id}）: 編集前「${existing.body}」→ 編集後「${body}」`,
+          grounds: '自分で載せた行の本文を自分で直した（原文は日誌に残す）',
+        };
+        const result = await editCommitmentBodyJournalFirst(stores, existing, body, 'clone', entry);
+        if (result.kind === 'journal-failed') {
+          noteDroppedRecord('日誌', journalEntryShape(result.entry), result.error);
+          throw new JournalNotRecordedError(
+            'commitment_edit',
+            result.entry,
+            'act-not-performed',
+            result.error,
+          );
+        }
+        if (result.kind !== 'edited') {
           // 読み直した行の形どおりに言う（commitment_close と同じ）。読めない形になっていても道具ごと落とさない
           let after: Commitment | null;
           try {
@@ -5792,18 +5809,6 @@ export function createCloneTools(context: ToolContext) {
               '片付いた行を書き直したいなら、commitment_open で新しく載せること。',
           );
         }
-        // 編集の前後を両方、日誌へ逐語で残す: 原文が日誌から読み戻せることが、クローンが過去の自分を追える条件のため
-        await appendJournalOrThrow(
-          'commitment_edit',
-          stores.journal,
-          {
-            type: 'decision',
-            decision:
-              `引き受けた仕事の本文を直した（${id}）: ` + `編集前「${before}」→ 編集後「${body}」`,
-            grounds: '自分で載せた行の本文を自分で直した（原文は日誌に残す）',
-          },
-          'act-completed',
-        );
         return text(`${id} の本文を直した（元の本文は日誌に残してある）。`);
       },
     ),
