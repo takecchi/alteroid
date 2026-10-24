@@ -652,7 +652,42 @@ describe('failed / lost で閉じた CLI の pid は、同じ managerId を resu
     await t.host.shutdown();
   });
 
-  it('failed で閉じて resume されていない（名簿に居ない）回は、abandonedOwnerListed に入らない（木を丸ごと撃つ）', async () => {
+  // #5168 の続きで反転: 元は「failed で閉じて resume されていない回は、abandonedOwnerListed に入らない（木を丸ごと撃つ）」。
+  // 枠で落ちた担当は通る鍵で起こし直されるが、それまでの窓（鍵が尽きていれば数時間）に走査が当たり、resume の前に postgres を撃っていたため、
+  // 鍵の付け替えの畳み（#5115）と同じ期限で戻りを待つ形へ変えた
+  it('⭐ failed で閉じて resume を待つ間（PEER_PARK_TTL_MS）は abandonedOwnerListed に入り（CLI の枝だけを撃つ）、期限を過ぎたら外れる（木を丸ごと撃つ）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-24T06:00:00Z'));
+      const t = crashHost([555, 777]);
+      await t.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+      t.spawnIn(0);
+
+      (t.controls[0] as SessionControl).crash(new Error('SIGABRT（テストの偽物）'));
+      await t.closedOf();
+      (t.processes[0] as { emitExit: () => void }).emitExit();
+
+      // 名簿には居ない（resume 前）が、戻り待ちとして CLI の枝だけを撃つ側に置く
+      expect(t.host.list().map((m) => m.managerId)).not.toContain('mgr-1');
+      expect(t.host.delegationSessionPids().knownTerminated).toEqual(new Set([555]));
+      expect(t.host.delegationSessionPids().abandonedOwnerListed).toEqual(new Set([555]));
+
+      // 余裕を持たせて測る: 閉じる処理の間にも偽の時計は少し進むので、期限ちょうどの1ミリ秒では測れない
+      vi.setSystemTime(new Date(Date.now() + PEER_PARK_TTL_MS - 60_000));
+      expect(t.host.delegationSessionPids().abandonedOwnerListed).toEqual(new Set([555]));
+
+      vi.setSystemTime(new Date(Date.now() + 120_000));
+      const pids = t.host.delegationSessionPids();
+      expect(pids.knownTerminated).toEqual(new Set([555]));
+      expect(pids.abandonedOwnerListed).toEqual(new Set());
+
+      await t.host.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('failed で閉じて戻りを待つ間に keepPeers 無しの停止（人間・クローンが止めた）が来たら、abandonedOwnerListed から外れる（木を丸ごと撃つ）', async () => {
     const t = crashHost([555, 777]);
     await t.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
     t.spawnIn(0);
@@ -660,10 +695,30 @@ describe('failed / lost で閉じた CLI の pid は、同じ managerId を resu
     (t.controls[0] as SessionControl).crash(new Error('SIGABRT（テストの偽物）'));
     await t.closedOf();
     (t.processes[0] as { emitExit: () => void }).emitExit();
+    expect(t.host.delegationSessionPids().abandonedOwnerListed).toEqual(new Set([555]));
+
+    await t.host.stop('mgr-1');
 
     const pids = t.host.delegationSessionPids();
     expect(pids.knownTerminated).toEqual(new Set([555]));
     expect(pids.abandonedOwnerListed).toEqual(new Set());
+
+    await t.host.shutdown();
+  });
+
+  it('（対照）ストリームが正常に閉じた（done）担当は戻り待ちにしない: 今どおり knownTerminated で、abandonedOwnerListed にも ownerListed にも入らない', async () => {
+    const t = crashHost([555]);
+    await t.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    t.spawnIn(0);
+
+    (t.controls[0] as SessionControl).end();
+    await t.closedOf();
+    (t.processes[0] as { emitExit: () => void }).emitExit();
+
+    const pids = t.host.delegationSessionPids();
+    expect(pids.knownTerminated).toEqual(new Set([555]));
+    expect(pids.abandonedOwnerListed).toEqual(new Set());
+    expect(pids.ownerListed).toEqual(new Set());
 
     await t.host.shutdown();
   });
