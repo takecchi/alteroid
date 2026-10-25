@@ -1,5 +1,6 @@
 import { excerptLine, renderListing } from './excerpt.js';
 import { scanJournalPages } from './journal-scan.js';
+import { wrapJournalStore } from './journal-wrap.js';
 import { describeAnsweredVia } from './schema.js';
 import type { JournalEntry, JournalEntryInput, PendingApproval } from './schema.js';
 import type { JournalStore, Stores } from './store.js';
@@ -30,14 +31,9 @@ export function stampingJournal(
   journal: JournalStore,
   currentApprovalId: () => string | null,
 ): JournalStore {
-  return {
+  return wrapJournalStore(journal, {
     append: (entry) => journal.append(stampAnsweredApproval(entry, currentApprovalId())),
-    list: (query) => journal.list(query),
-    listPage: (query) => journal.listPage(query),
-    get: (id) => journal.get(id),
-    oldestAt: () => journal.oldestAt(),
-    clear: () => journal.clear(),
-  };
+  });
 }
 
 // 無制限にしない: 受信箱が詰まると答えのターンが遠くなり、その間の `tool_use` が数百行になりうるため
