@@ -11,6 +11,10 @@ import {
   createRunnerRegistry,
   loadConversationReadView,
   readConversationPage,
+  type JournalEntry,
+  type JournalEntryInput,
+  type JournalQuery,
+  type JournalStore,
   type Stores,
 } from '@alteroid/core';
 import type { PgStores } from '@alteroid/storage-pg';
@@ -26,6 +30,8 @@ import { nowIso, openStoresNoWait, rawQuery, round, stats } from './common.js';
 //   warm     温まった口の時間（21 回の中央値ほか）・2 頁目・unread-count・内訳（SQL 全部と JS 側）
 //   cold     PG を再起動した直後の最初の呼び（BENCH_EVICT=1 で日誌の関係ファイルの OS キャッシュも落とす）
 //   explain  主な SQL の EXPLAIN (ANALYZE, BUFFERS)。温まった状態と、冷えた状態（PG 再起動のみ・再起動 + OS キャッシュ落とし）
+//   route    BENCH_ROUTE（progress / reports / reports7）の温まった口の時間・SQL の内訳（`BENCH_ROUTE` を渡した `cold` / `explain` も同じ口を測る）
+//   rows     journal の daily_report・github_observation の行数と、commitments・jobs の行数
 // 出力は stdout と bench/conversations-list/out/<step>-<時刻>.txt の両方へ。
 const step = process.env['BENCH_STEP'] ?? '';
 const PG_BIN = process.env['BENCH_PG_BIN'] ?? '/usr/lib/postgresql/17/bin';
@@ -38,7 +44,7 @@ const LIMIT = Number(process.env['BENCH_LIMIT'] ?? '30');
 const OUT_DIR = join(import.meta.dirname, 'out');
 const OUT_FILE = join(
   OUT_DIR,
-  `${step}-${process.env['BENCH_WRAP'] ?? 'bus'}-${nowIso().replaceAll(':', '')}.txt`,
+  `${step}-${process.env['BENCH_ROUTE'] === undefined ? '' : `${process.env['BENCH_ROUTE']}-`}${process.env['BENCH_WRAP'] ?? 'bus'}${process.env['BENCH_EVICT'] === '1' ? '-evict' : ''}-${nowIso().replaceAll(':', '')}.txt`,
 );
 
 function out(line: string): void {
@@ -70,11 +76,51 @@ const quietSdk = (() => {
 // BENCH_WRAP=bus（既定）: 本番のデーモン（apps/daemon/src/index.ts）と同じく、日誌のストアを `createJournalBus` で包んで app に渡す。
 //   この包みは append/list/listPage/get/oldestAt/clear しか渡さないので、pg の細い口が落ちて本文ごと読む道に倒れる。
 // BENCH_WRAP=none: 包まず pg のストアをそのまま渡す。
+// BENCH_WRAP=legacy: #5262 の前の `createJournalBus` の再現。append / list / listPage / get / oldestAt / clear の6つだけを並べた包み（本番の今の形）。
+//   今の `bus` は #5262 の後（`wrapJournalStore` で残りの口を中身へ通す）。
 const WRAP = process.env['BENCH_WRAP'] ?? 'bus';
+
+// BENCH_ROUTE: 測る口。既定は `/conversations`（Web の一覧と同じ limit=30）。
+//   progress = `GET /progress`（Web の useProgress() の既定。windowHours を渡さない）
+//   reports  = `GET /reports?limit=1`（Web のダッシュボード dashboard-report.tsx の useReports(1)）
+//   reports7 = `GET /reports?limit=7`（useReports の既定 limit = 7。packages/swr/src/hooks/queries.ts）
+const ROUTE = process.env['BENCH_ROUTE'] ?? 'conversations';
+const ROUTE_PATHS: Record<string, string> = {
+  conversations: `/conversations?limit=${LIMIT}`,
+  progress: '/progress',
+  reports: '/reports?limit=1',
+  reports7: '/reports?limit=7',
+};
+const ROUTE_PATH = ROUTE_PATHS[ROUTE] ?? '';
+if (ROUTE_PATH === '')
+  throw new Error(`BENCH_ROUTE は ${Object.keys(ROUTE_PATHS).join(' / ')}: ${ROUTE}`);
+
+function legacyJournalBus(inner: JournalStore): JournalStore {
+  const listeners = new Set<(entry: JournalEntry) => void>();
+  let notified: Promise<void> = Promise.resolve();
+  return {
+    async append(entry: JournalEntryInput): Promise<JournalEntry> {
+      const appended = await inner.append(entry);
+      if (listeners.size === 0) return appended;
+      const step = notified.then(async () => {
+        for (const listener of listeners) listener(appended);
+      });
+      notified = step;
+      await step;
+      return appended;
+    },
+    list: (query?: JournalQuery) => inner.list(query),
+    listPage: (query?: JournalQuery) => inner.listPage(query),
+    get: (id: string) => inner.get(id),
+    oldestAt: () => inner.oldestAt(),
+    clear: () => inner.clear(),
+  };
+}
 
 function servedStores(raw: PgStores): Stores {
   if (WRAP === 'none') return raw;
-  if (WRAP !== 'bus') throw new Error(`BENCH_WRAP は bus か none: ${WRAP}`);
+  if (WRAP === 'legacy') return { ...raw, journal: legacyJournalBus(raw.journal) };
+  if (WRAP !== 'bus') throw new Error(`BENCH_WRAP は legacy / bus / none: ${WRAP}`);
   return { ...raw, journal: createJournalBus(raw.journal).journal };
 }
 
@@ -505,6 +551,72 @@ describe.skipIf(step !== 'warm')('warm', () => {
 });
 
 // ---------------------------------------------------------------------------
+describe.skipIf(step !== 'rows')('rows', () => {
+  it('journal の種別と台帳・jobs の行数', async () => {
+    const stores = await openStoresNoWait();
+    out(`# rows ${nowIso()}`);
+    const rows = await rawQuery<Record<string, unknown>>(
+      stores,
+      `select (select count(*) from journal where type = 'daily_report')::int as daily_report,
+              (select count(distinct entry->>'date') from journal where type = 'daily_report')::int as daily_report_distinct_dates,
+              (select count(*) from journal where type = 'github_observation')::int as github_observation,
+              (select count(*) from commitments)::int as commitments,
+              (select count(*) from commitments where closed_at is null)::int as commitments_open,
+              (select count(*) from jobs)::int as jobs,
+              (select count(*) from journal)::int as journal_total`,
+    );
+    out(JSON.stringify(rows[0]));
+    await stores.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe.skipIf(step !== 'route')('route', () => {
+  it('BENCH_ROUTE の温まった口の時間と内訳', async () => {
+    const stores = await openStoresNoWait();
+    instrument(stores);
+    const app = appOver(stores);
+    out(`# route ${nowIso()}  route=${ROUTE} path=${ROUTE_PATH} wrap=${WRAP} repeat=${REPEAT}`);
+    const first = await callWithLog(() => get(app, ROUTE_PATH));
+    out(
+      `first(process-cold, pg-warm) ${ROUTE_PATH}: ${round(first.value.ms)} ms status=${first.value.status} bytes=${first.value.text.length}`,
+    );
+    printSqlLog('first call', first.records);
+    for (let i = 0; i < 3; i += 1) await get(app, ROUTE_PATH);
+    const times: number[] = [];
+    let lastTiming: string | null = null;
+    for (let i = 0; i < REPEAT; i += 1) {
+      const r = await get(app, ROUTE_PATH);
+      expect(r.status).toBe(200);
+      times.push(r.ms);
+      lastTiming = r.timing;
+    }
+    out(
+      `warm ${ROUTE_PATH} ${JSON.stringify(stats(times))} (ms, ${REPEAT} 回, 3 回の助走の後) times=${JSON.stringify(times.map(round))}`,
+    );
+    out(`server-timing(最後の1回) ${lastTiming ?? '無し'}`);
+    const detail = await callWithLog(() => get(app, ROUTE_PATH));
+    out(`breakdown call: total ${round(detail.value.ms)} ms bytes=${detail.value.text.length}`);
+    printSqlLog('warm call (内訳)', detail.records);
+    const byPrint = new Map<string, { n: number; ms: number }>();
+    for (const r of detail.records) {
+      const key = fingerprint(r.text);
+      const e = byPrint.get(key) ?? { n: 0, ms: 0 };
+      e.n += 1;
+      e.ms += r.ms;
+      byPrint.set(key, e);
+    }
+    out('--- 文ごとの本数と client 側の合計');
+    for (const [key, e] of [...byPrint].sort((a, b) => b[1].ms - a[1].ms)) {
+      out(`  x${e.n} ${String(round(e.ms)).padStart(8)} ms  ${key}`);
+    }
+    const sqlSum = detail.records.reduce((a, r) => a + r.ms, 0);
+    out(`JS 側（total − SQL の client 合計）≈ ${round(detail.value.ms - sqlSum)} ms`);
+    await stores.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe.skipIf(step !== 'serverlog')('serverlog', () => {
   it('log_min_duration_statement = 0 で、温まった 1 回ぶんの SQL をサーバ側の時間で読む', async () => {
     const stores = await openStoresNoWait();
@@ -562,10 +674,10 @@ describe.skipIf(step !== 'cold')('cold', () => {
     const app = appOver(stores);
     const calls: { label: string; ms: number }[] = [];
     for (let i = 1; i <= 5; i += 1) {
-      const r = await callWithLog(() => get(app, `/conversations?limit=${LIMIT}`));
+      const r = await callWithLog(() => get(app, ROUTE_PATH));
       calls.push({ label: `call#${i}`, ms: r.value.ms });
       out(
-        `cold curve /conversations call#${i}: ${round(r.value.ms)} ms status=${r.value.status} ${i === 1 ? summarize(r.value.text) : ''}`,
+        `cold curve ${ROUTE_PATH} call#${i}: ${round(r.value.ms)} ms status=${r.value.status} ${i === 1 ? (ROUTE === 'conversations' ? summarize(r.value.text) : `bytes=${r.value.text.length}`) : ''}`,
       );
       if (i <= 2) printSqlLog(`cold call#${i}`, r.records);
     }
@@ -586,16 +698,21 @@ describe.skipIf(step !== 'explain')('explain', () => {
     instrument(stores);
     const app = appOver(stores);
     // 1 頁目・2 頁目で流れる SQL（初回の呼びと、温まってからの呼びでは流れる文が違いうる: 墓標の印が変わらなければ集合の引き直しは無い）
-    await get(app, `/conversations?limit=${LIMIT}`);
-    const page1 = await callWithLog(() => get(app, `/conversations?limit=${LIMIT}`));
-    const cursor = (JSON.parse(page1.value.text) as { nextCursor?: string }).nextCursor;
+    await get(app, ROUTE_PATH);
+    const page1 = await callWithLog(() => get(app, ROUTE_PATH));
+    const isConversations = ROUTE === 'conversations';
+    const cursor = isConversations
+      ? (JSON.parse(page1.value.text) as { nextCursor?: string }).nextCursor
+      : undefined;
     const page2 =
       cursor === undefined
         ? { records: [] as SqlRecord[] }
         : await callWithLog(() =>
             get(app, `/conversations?limit=${LIMIT}&cursor=${encodeURIComponent(cursor)}`),
           );
-    const unread = await callWithLog(() => get(app, '/conversations/unread-count'));
+    const unread = isConversations
+      ? await callWithLog(() => get(app, '/conversations/unread-count'))
+      : { records: [] as SqlRecord[] };
     const candidates = [
       ...page1.records.map((r) => ({ origin: 'page1', r })),
       ...page2.records.map((r) => ({ origin: 'page2', r })),
@@ -611,6 +728,12 @@ describe.skipIf(step !== 'explain')('explain', () => {
       if (seen.has(key)) continue;
       seen.add(key);
       picked.push(c);
+    }
+    if (!isConversations) {
+      // 口が別のときは client 側で長かった文から BENCH_TOP 本（既定 3）だけ EXPLAIN する
+      picked.sort((a, b) => b.r.ms - a.r.ms);
+      picked.splice(Number(process.env['BENCH_TOP'] ?? '3'));
+      out(`長かった順: ${picked.map((c) => `${round(c.r.ms)} ms`).join(', ')}`);
     }
     out(
       `EXPLAIN 対象 ${picked.length} 文（page1=${page1.records.length} 本・page2=${page2.records.length} 本・unread=${unread.records.length} 本のうち、select/with の重複を除く）`,

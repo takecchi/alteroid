@@ -1,0 +1,30 @@
+# cold 2026-10-25T07:15:45.435Z  wrap=legacy evict_os_cache=true
+OS キャッシュを落とした（dd iflag=nocache count=0）: 13 関係 / 13 ファイル
+pg_ctl restart: server started
+OS キャッシュを落とした（dd iflag=nocache count=0）: 13 関係 / 13 ファイル
+cold curve /reports?limit=1 call#1: 222.12 ms status=200 bytes=7962
+--- SQL cold call#1: 16 本、client 側の合計 201.06 ms（往復込み・直列）
+  #00     1.48 ms  begin
+  #01     1.61 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #02     0.87 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #00    11.75 ms  update "inbox_events" set "deliveries" = "inbox_events"."deliveries" + 1 returning "id", "event", "at", "deliv
+  #03     2.46 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #04     1.13 ms  select "id", "approval" from "approvals" order by "approvals"."created_at" asc
+  #05     0.91 ms  commit
+  #07      0.8 ms  begin
+  #08     0.43 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #09     0.57 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #10      0.7 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #11     0.61 ms  commit
+  #00   101.61 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #13     3.28 ms  select distinct "entry"->>'deletedConversationId' from "journal" where "journal"."type" = $1
+  #14     3.28 ms  select distinct x.hid from (SELECT named.hid FROM journal h CROSS JOIN LATERAL (SELECT e #>> '{}' AS hid FROM 
+  #15    69.56 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+cold curve /reports?limit=1 call#2: 8.23 ms status=200 
+--- SQL cold call#2: 2 本、client 側の合計 5.34 ms（往復込み・直列）
+  #16     1.73 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #17     3.62 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+cold curve /reports?limit=1 call#3: 6.79 ms status=200 
+cold curve /reports?limit=1 call#4: 7.76 ms status=200 
+cold curve /reports?limit=1 call#5: 7.66 ms status=200 
+pg_stat_database（再起動後の累計）{"x":"1","blks_read":"2787889","blks_hit":"44511682"}

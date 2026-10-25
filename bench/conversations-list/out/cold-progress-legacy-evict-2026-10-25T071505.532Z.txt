@@ -1,0 +1,38 @@
+# cold 2026-10-25T07:15:05.542Z  wrap=legacy evict_os_cache=true
+OS キャッシュを落とした（dd iflag=nocache count=0）: 13 関係 / 13 ファイル
+pg_ctl restart: server started
+OS キャッシュを落とした（dd iflag=nocache count=0）: 13 関係 / 13 ファイル
+cold curve /progress call#1: 220.05 ms status=200 bytes=1106
+--- SQL cold call#1: 20 本、client 側の合計 219.66 ms（往復込み・直列）
+  #00     1.29 ms  begin
+  #01      1.1 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #02     0.89 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #00    12.34 ms  update "inbox_events" set "deliveries" = "inbox_events"."deliveries" + 1 returning "id", "event", "at", "deliv
+  #03     4.32 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #04     2.49 ms  select "id", "approval" from "approvals" order by "approvals"."created_at" asc
+  #00    15.47 ms  select "id", "at", "commitment" from "commitments" where "commitments"."closed_at" is null order by "commitmen
+  #07      1.4 ms  select "id", xmin::text || '/' || ctid::text from "commitments" where "commitments"."closed_at" is not null or
+  #08     1.07 ms  select "id", xmin::text, "updated_at" from "jobs" order by "jobs"."created_at" asc
+  #09     0.75 ms  select "id", xmin::text, "updated_at" from "jobs" order by "jobs"."created_at" asc
+  #05    24.42 ms  commit
+  #11     0.73 ms  begin
+  #12     0.45 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #13     0.45 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #14     0.37 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #15     8.57 ms  commit
+  #10   133.88 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #17     2.91 ms  select distinct "entry"->>'deletedConversationId' from "journal" where "journal"."type" = $1
+  #18     3.81 ms  select distinct x.hid from (SELECT named.hid FROM journal h CROSS JOIN LATERAL (SELECT e #>> '{}' AS hid FROM 
+  #19     2.93 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+cold curve /progress call#2: 12.52 ms status=200 
+--- SQL cold call#2: 6 本、client 側の合計 7.63 ms（往復込み・直列）
+  #20     1.27 ms  select "id", "at", "commitment" from "commitments" where "commitments"."closed_at" is null order by "commitmen
+  #21     1.97 ms  select "id", xmin::text || '/' || ctid::text from "commitments" where "commitments"."closed_at" is not null or
+  #22      0.5 ms  select "id", xmin::text, "updated_at" from "jobs" order by "jobs"."created_at" asc
+  #23      0.5 ms  select "id", xmin::text, "updated_at" from "jobs" order by "jobs"."created_at" asc
+  #24     1.18 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #25     2.22 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+cold curve /progress call#3: 14.86 ms status=200 
+cold curve /progress call#4: 12.55 ms status=200 
+cold curve /progress call#5: 12.62 ms status=200 
+pg_stat_database（再起動後の累計）{"x":"1","blks_read":"2785198","blks_hit":"44484983"}
