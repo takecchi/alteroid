@@ -158,8 +158,31 @@ describe('JournalStore.humanReplies（pg。#5089）', () => {
       }),
     );
     await logged.journal.humanReplies?.();
-    const reads = queries.filter((text) => text.includes(`"entry"->>'conversationId'`));
+    // #5264 で行を `jsonb_to_record` で1回だけ開く形にしたので、読みの見分けと選ぶ列の形をそれに合わせた（測るものは同じ: 選ぶのは seq・時刻・会話 id だけで、本文の列を運ばない）
+    const reads = queries.filter((text) => text.includes('jsonb_to_record('));
     expect(reads).toHaveLength(1);
-    expect(reads[0]).toMatch(/^select "seq", "at", "entry"->>'conversationId' from "journal"/);
+    expect(reads[0]?.trim()).toMatch(
+      /^select "journal"\."seq" as seq, "journal"\."at" as at, r\."conversationId" #>> '\{\}' as "conversationId"\s+from "journal"/,
+    );
+  });
+
+  // 欄ごとに `entry->'…'` を書くと、TOAST に出た返答の本文を欄の数だけ展開し直す（#5264。偽の日誌で全部読み1回 62,242 → 26,437 ページ）。
+  // `entry` に直に触ってよいのは、部分索引 `journal_human_replies_idx` の述語に合わせる `with`・`role` の2か所だけ（他の欄は `jsonb_to_record` で開いた値から読む）
+  it('返答を読む SQL は、行を1回だけ開く（entry に直に触るのは索引の述語の with・role だけ）', async () => {
+    const queries: string[] = [];
+    const logged = createPgStoresFromDb(
+      client.withLogger({
+        logQuery: (text) => {
+          queries.push(text);
+        },
+      }),
+    );
+    await logged.journal.humanReplies?.();
+    const read = queries.find((text) => text.includes('jsonb_to_record('));
+    if (read === undefined) throw new Error('返答を読む SQL を捕まえられなかった');
+    const direct = [...read.matchAll(/"journal"\."entry"\s*->>?\s*'([^']+)'/g)].map(
+      (match) => match[1],
+    );
+    expect(direct.sort()).toEqual(['role', 'with']);
   });
 });

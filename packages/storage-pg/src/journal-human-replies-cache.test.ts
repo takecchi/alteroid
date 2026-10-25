@@ -118,7 +118,8 @@ describe('PgJournalStore.humanReplies の覚え（#5089）', () => {
     await store.humanReplies();
     queries.length = 0;
     await store.humanReplies();
-    const reads = queries.filter((text) => text.includes(`"entry"->>'conversationId'`));
+    // 読みの見分けは #5264 で `jsonb_to_record(` に替えた（行を1回だけ開く形になり、`"entry"->>'conversationId'` を書かなくなったため）
+    const reads = queries.filter((text) => text.includes('jsonb_to_record('));
     expect(reads).toHaveLength(1);
     expect(reads[0]).toMatch(/"journal"\."seq" > \$\d+/);
   });

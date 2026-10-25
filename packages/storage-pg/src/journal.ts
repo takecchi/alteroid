@@ -308,28 +308,30 @@ export class PgJournalStore implements JournalStore {
     afterSeq: number | undefined,
     hidden: HiddenSets,
   ): Promise<{ seq: number; conversationId: string; at: string }[]> {
-    const rows = await this.#db
-      .select({
-        seq: journal.seq,
-        at: journal.at,
-        conversationId: sql<string>`${journal.entry}->>'conversationId'`,
-      })
-      .from(journal)
-      .where(
-        and(
-          hiddenConversationExchangeExcluded(hidden),
-          eq(journal.type, 'exchange'),
-          sql`(${journal.entry}->>'with') = 'human'`,
-          sql`${journal.entry}->>'role' = 'outbound'`,
-          sql`jsonb_typeof(${journal.entry}->'conversationId') = 'string'`,
-          sql`jsonb_typeof(${journal.entry}->'text') = 'string'`,
-          ...(afterSeq === undefined ? [] : [gt(journal.seq, afterSeq)]),
-        ),
-      );
-    return rows.map((row) => ({
+    // 欄ごとに `entry->'…'` を書かず、`jsonb_to_record` で1行1回だけ開く（#5264）: 欄ごとに書くと、TOAST に出た返答の本文を欄の数（消した会話の判定を含めて 5〜7 回）だけ展開し直し、
+    // 偽の日誌（返答 9,491 行）で全部読み1回に触るページが 62,242 から 26,437 に、時間が 168ms から 45ms に減った（冷えた読みのディスクの read は 14,058 ページで変わらない）。
+    // `with`・`role` だけは `entry->>'…'` のまま書く: 部分索引 `journal_human_replies_idx` の述語と同じ式でないと、planner が索引を選ばないため。
+    // 消した会話の判定は `hiddenConversationExchangeExcluded` と同じ意味を、開いた値で書く（ここに来る行は `exchange` で会話 id が文字列なので、
+    // 「`exchange` でない／会話 id が無い」の枝は常に偽になり、残るのは会話 id と行 id の2つの照合だけ）
+    const result = await this.#db.execute(sql`
+      select ${journal.seq} as seq, ${journal.at} as at, r."conversationId" #>> '{}' as "conversationId"
+      from ${journal}
+      cross join lateral jsonb_to_record(${journal.entry}) as r(text jsonb, "conversationId" jsonb)
+      where ${journal.type} = 'exchange'
+        and (${journal.entry}->>'with') = 'human'
+        and (${journal.entry}->>'role') = 'outbound'
+        and jsonb_typeof(r."conversationId") = 'string'
+        and jsonb_typeof(r.text) = 'string'
+        and (r."conversationId" #>> '{}') <> all(${sql.param(hidden.deletedConversationIds)}::text[])
+        and ${journal.id} <> all(${sql.param(hidden.hiddenEntryIds)}::text[])
+        ${afterSeq === undefined ? sql`` : sql`and ${journal.seq} > ${afterSeq}`}
+    `);
+    return (
+      rowsOf(result) as { seq: number | string; at: Date | string; conversationId: string }[]
+    ).map((row) => ({
       seq: toNumber(row.seq),
       conversationId: row.conversationId,
-      at: row.at.toISOString(),
+      at: toIso(row.at),
     }));
   }
 
