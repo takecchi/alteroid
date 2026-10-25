@@ -1,9 +1,8 @@
-import type {
-  JournalEntry,
-  JournalEntryInput,
-  JournalPage,
-  JournalQuery,
-  JournalStore,
+import {
+  wrapJournalStore,
+  type JournalEntry,
+  type JournalEntryInput,
+  type JournalStore,
 } from '@alteroid/core';
 
 /** 受け口がこれを呼ぶ: 追記の時点の見直し（下の `visible`）は、溜めている間に積まれた墓標を知らないため。 */
@@ -99,7 +98,8 @@ export function createJournalBus(inner: JournalStore): JournalBus {
     return (await inner.get(appended.id)) !== null;
   }
 
-  const journal: JournalStore = {
+  // `clear()` も中身へそのまま渡し、購読者へ流さない: 日誌に載った出来事ではなく日誌そのものを空にする操作で、この層が中継するのは `append` の通知だけのため。
+  const journal = wrapJournalStore(inner, {
     async append(entry: JournalEntryInput): Promise<JournalEntry> {
       const appended = await inner.append(entry);
       if (listeners.size === 0) return appended;
@@ -117,23 +117,7 @@ export function createJournalBus(inner: JournalStore): JournalBus {
       await step;
       return appended;
     },
-    list(query?: JournalQuery): Promise<JournalEntry[]> {
-      return inner.list(query);
-    },
-    listPage(query?: JournalQuery): Promise<JournalPage> {
-      return inner.listPage(query);
-    },
-    get(id: string): Promise<JournalEntry | null> {
-      return inner.get(id);
-    },
-    oldestAt(): Promise<string | null> {
-      return inner.oldestAt();
-    },
-    // `clear()` は購読者へ流さない: 日誌に載った出来事ではなく日誌そのものを空にする操作で、この層が中継するのは `append` の通知だけのため。
-    clear(): Promise<number> {
-      return inner.clear();
-    },
-  };
+  });
 
   return {
     journal,
