@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
-// chown は記録だけして実際には移さない: 試験は子の uid を持たないので、渡した相手と対象を観測する
+// chown は記録だけして実際には移さない: 子の uid で置く経路が chown を呼ばないことを観測する
 const chowned = vi.hoisted(() => [] as [string, number, number][]);
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -19,6 +19,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 const { placeSeedInConfigDir, placeSubagentsInConfigDir, safeSubagentSubpath } =
   await import('./runner-resume-config-dir.js');
+const { childFileWriter } = await import('./runner-child-fs.js');
+const { sameUidSpawn } = await import('./runner-child-fs.test-support.js');
 
 const KEY = { projectKey: '-work-project', sessionId: 'sess-1' };
 const META = { type: 'agent_metadata', agentType: 'worker', cwd: '/work/project' };
@@ -133,27 +135,51 @@ describe('placeSubagentsInConfigDir: 作業者の記録を主の記録の隣に 
     );
   });
 
-  it('owner を渡すと、作った段（sessionId 以下）と置いたファイルを子の uid・gid へ移す。既に在る段は移さない', async () => {
+  // 反転（#5259）: これまでは「作った段だけ runner（root）が子へ chown する」ことを確かめていた。子を別 UID で起こす構成は、子の uid の子プロセスで置く
+  // ようにしたので持ち主は最初から子で、chown は要らない（symlink を辿る root の窓ごと無くなる）。置く中身・mode・入れ子の段は変わらない。
+  it('writer（子の uid の子プロセス）を渡すと、runner は chown せず、同じ中身・0600・入れ子の段で置く', async () => {
     await mkdir(join(configDir, 'projects', KEY.projectKey), { recursive: true });
 
+    const result = await placeSubagentsInConfigDir(
+      configDir,
+      KEY,
+      [{ subpath: 'subagents/workflows/w1/agent-a1', entries: [META, ...LINES] }],
+      childFileWriter(sameUidSpawn, process.env),
+    );
+
+    expect(result).toEqual({ placed: 1, rejected: [] });
+    expect(chowned).toEqual([]);
+    const jsonl = join(sessionDir, 'subagents', 'workflows', 'w1', 'agent-a1.jsonl');
+    expect(await readFile(jsonl, 'utf8')).toBe(LINES.map((l) => `${JSON.stringify(l)}\n`).join(''));
+    expect((await stat(jsonl)).mode & 0o777).toBe(0o600);
+    expect((await stat(join(sessionDir, 'subagents'))).mode & 0o777).toBe(0o700);
+    expect(
+      JSON.parse(
+        await readFile(
+          join(sessionDir, 'subagents', 'workflows', 'w1', 'agent-a1.meta.json'),
+          'utf8',
+        ),
+      ),
+    ).toEqual({ agentType: 'worker', cwd: '/work/project' });
+  });
+
+  it('writer を渡したとき、既に在るファイルは上書きしない（wx）', async () => {
+    const writer = childFileWriter(sameUidSpawn, process.env);
     await placeSubagentsInConfigDir(
       configDir,
       KEY,
-      [{ subpath: 'subagents/agent-a1', entries: [META, ...LINES] }],
-      {
-        uid: 1001,
-        gid: 1002,
-      },
+      [{ subpath: 'subagents/agent-a1', entries: LINES }],
+      writer,
     );
-
-    expect(chowned.every(([, uid, gid]) => uid === 1001 && gid === 1002)).toBe(true);
-    expect(chowned.map(([path]) => path).sort()).toEqual(
-      [
-        sessionDir,
-        join(sessionDir, 'subagents'),
-        join(sessionDir, 'subagents', 'agent-a1.jsonl'),
-        join(sessionDir, 'subagents', 'agent-a1.meta.json'),
-      ].sort(),
+    const result = await placeSubagentsInConfigDir(
+      configDir,
+      KEY,
+      [{ subpath: 'subagents/agent-a1', entries: [{ type: 'user', message: 'newer' }] }],
+      writer,
+    );
+    expect(result.placed).toBe(0);
+    expect(await readFile(join(sessionDir, 'subagents', 'agent-a1.jsonl'), 'utf8')).toContain(
+      '済んだ',
     );
   });
 

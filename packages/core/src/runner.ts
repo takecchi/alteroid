@@ -218,13 +218,18 @@ import {
   chownTreeSync,
   parseTranscriptEntries,
   placePeersInCodexHome,
-  placeSeedInConfigDir,
-  placeSubagentsInConfigDir,
+  placeResumeMaterialAsChild,
   sdkResumeConfigDirOf,
   sessionIdInSdkResumeConfigDir,
   type PeerRolloutSeed,
   type SubagentTranscriptSeed,
 } from './runner-resume-config-dir.js';
+import {
+  childFileWriter,
+  childRolloutIo,
+  type ChildFileWriter,
+  type RolloutIo,
+} from './runner-child-fs.js';
 import { PeerRolloutMirror } from './runner-peer-rollout.js';
 import {
   cachedPidsReader,
@@ -3281,6 +3286,16 @@ class RunnerSession {
       mirror: (key, entries) =>
         binding.session.#emit({ type: 'mirror', managerId: binding.session.#id, key, entries }),
       note: (text) => binding.session.#emit({ type: 'note', managerId: binding.session.#id, text }),
+      // rollout の読みは子の uid の子プロセスで行う（#5259）。env は呼ぶたびに引く（`#childEnv()` は変わりうる）
+      ...(this.#childUser === undefined
+        ? {}
+        : {
+            io: {
+              realpaths: (paths) => binding.session.#childRolloutIo()!.realpaths(paths),
+              readChunk: (file, offset, length) =>
+                binding.session.#childRolloutIo()!.readChunk(file, offset, length),
+            },
+          }),
     });
     const binding: PeerBinding = {
       session: this,
@@ -3643,12 +3658,19 @@ class RunnerSession {
         const seed = this.#resumeState.seed;
         if (seed === undefined) return null;
         // 子のふだんの設定ディレクトリへ自分で置き、SDK には材料を返さない: 返すと SDK が /tmp/claude-resume-* に書き出し、CLI が終わると消えるため（`placeSeedInConfigDir`）
-        const childUser = this.#childUser;
-        const configDir = childUser === undefined ? undefined : this.#childEnv().CLAUDE_CONFIG_DIR;
-        if (childUser !== undefined && configDir !== undefined) {
+        const writer = this.#childFileWriter();
+        const configDir = writer === undefined ? undefined : this.#childEnv().CLAUDE_CONFIG_DIR;
+        if (writer !== undefined && configDir !== undefined) {
           try {
-            await placeSeedInConfigDir(configDir, key, seed, childUser);
-            await this.#placeSubagents(configDir, key, childUser);
+            // 主と作業者の分を1回の子プロセスで置く（子の uid で。#5259）
+            const placed = await placeResumeMaterialAsChild(
+              configDir,
+              key,
+              seed,
+              this.#resumeState.subagents,
+              writer,
+            );
+            this.#noteSubagentPlacement(configDir, placed);
             return null;
           } catch (error) {
             this.#emit({
@@ -3664,29 +3686,36 @@ class RunnerSession {
   }
 
   // 作業者の分を置けなくても主の resume は止めない（主の記録は置けている）。置けなかった・断った分は note に残す: 黙ると `SendMessage` の失敗の理由が追えない
-  async #placeSubagents(
+  #noteSubagentPlacement(
     configDir: string,
-    key: { readonly projectKey: string; readonly sessionId: string },
-    owner: { readonly uid: number; readonly gid: number },
-  ): Promise<void> {
-    const subagents = this.#resumeState.subagents;
-    if (subagents.length === 0) return;
-    try {
-      const { rejected } = await placeSubagentsInConfigDir(configDir, key, subagents, owner);
-      if (rejected.length > 0) {
-        this.#emit({
-          type: 'note',
-          managerId: this.#id,
-          text: `resume の作業者の記録 ${String(rejected.length)} 件を、subpath が安全でないので置かなかった: ${rejected.join(', ')}`,
-        });
-      }
-    } catch (error) {
+    placed: { subagents: { rejected: string[] }; subagentFailure?: string },
+  ): void {
+    const { rejected } = placed.subagents;
+    if (rejected.length > 0) {
       this.#emit({
         type: 'note',
         managerId: this.#id,
-        text: `resume の作業者の記録を子の設定ディレクトリ（${configDir}）へ置けなかった（その作業者への SendMessage は記録が無く失敗する）: ${reasonOf(error)}`,
+        text: `resume の作業者の記録 ${String(rejected.length)} 件を、subpath が安全でないので置かなかった: ${rejected.join(', ')}`,
       });
     }
+    if (placed.subagentFailure !== undefined) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `resume の作業者の記録を子の設定ディレクトリ（${configDir}）へ置けなかった（その作業者への SendMessage は記録が無く失敗する）: ${placed.subagentFailure}`,
+      });
+    }
+  }
+
+  /** 子を別 UID で起こす構成だけ: 子の書ける場所への書き込みを、子の uid の子プロセスで行う口（#5259）。 */
+  #childFileWriter(): ChildFileWriter | undefined {
+    if (this.#childUser === undefined) return undefined;
+    return childFileWriter((options) => this.#spawnAsChildUser(options), this.#childEnv());
+  }
+
+  #childRolloutIo(): RolloutIo | undefined {
+    if (this.#childUser === undefined) return undefined;
+    return childRolloutIo((options) => this.#spawnAsChildUser(options), this.#childEnv());
   }
 
   #spawnAsChildUser(options: {
@@ -4593,7 +4622,7 @@ class RunnerSession {
       if (seed === undefined) throw new Error('戻された記録が無い');
       const home = this.#peerCodexHome();
       if (home === undefined) throw new Error('Codex の CODEX_HOME が分からない');
-      const result = await placePeersInCodexHome(home, [seed], this.#childUser);
+      const result = await placePeersInCodexHome(home, [seed], this.#childFileWriter());
       if (result.rejected.length > 0) {
         throw new Error('rollout の置き場（relPath・ファイル名）が安全でないか、戻せる行が無い');
       }

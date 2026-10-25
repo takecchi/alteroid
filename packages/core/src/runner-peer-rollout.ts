@@ -1,7 +1,7 @@
-import { open, realpath } from 'node:fs/promises';
 import { basename, join, relative, sep } from 'node:path';
 
 import { chunkMirrorEntries, MIRROR_EVENT_MAX_CHARS } from './mirror-chunks.js';
+import { localRolloutIo, type RolloutIo } from './runner-child-fs.js';
 import { PEER_META_ENTRY_TYPE, PEER_SUBPATH_PREFIX, type PeerMetaEntry } from './resume-peers.js';
 
 /** 1回の読みで取り込む最大バイト数。1つのターンで巨大な rollout を丸ごとメモリへ載せない。続きは次の止まりどころで読む。 */
@@ -19,6 +19,8 @@ export interface PeerRolloutDeps {
   readonly mainKey: () => PeerRolloutKey | undefined;
   readonly mirror: (key: PeerRolloutKey & { subpath: string }, entries: unknown[]) => void;
   readonly note: (text: string) => void;
+  /** rollout の解決と読み取りの口。子を別 UID で起こす構成では子の uid の子プロセスで行う口を渡す（#5259）。無ければ runner 自身で読む。 */
+  readonly io?: RolloutIo;
 }
 
 interface TrackedPeer {
@@ -44,6 +46,7 @@ export async function resolveRolloutFile(
   codexHome: string,
   location: string,
   threadId: string,
+  io: RolloutIo = localRolloutIo,
 ): Promise<
   { ok: true; file: string; relPath: string } | { ok: false; reason: string; missing?: true }
 > {
@@ -56,15 +59,26 @@ export async function resolveRolloutFile(
   let realSessions: string;
   let realFile: string;
   try {
-    realSessions = await realpath(join(codexHome, 'sessions'));
-    realFile = await realpath(location);
+    // 子を別 UID で起こす構成では、実体の解決も子の uid の子プロセスで行う（#5259）: 子が `sessions` を symlink にしても、子が読めない場所へは届かない
+    const [sessionsResult, fileResult] = await io.realpaths([
+      join(codexHome, 'sessions'),
+      location,
+    ]);
+    if (sessionsResult === undefined || fileResult === undefined) throw new Error('missing result');
+    for (const result of [sessionsResult, fileResult]) {
+      if ('code' in result) {
+        return {
+          ok: false,
+          reason: `実体を解決できない: ${result.code}`,
+          // まだ書かれていない（Codex が最初のターンまで rollout を作らない場合）。呼び出し側は後でもう一度検める
+          ...(result.code === 'ENOENT' ? { missing: true as const } : {}),
+        };
+      }
+    }
+    realSessions = (sessionsResult as { path: string }).path;
+    realFile = (fileResult as { path: string }).path;
   } catch (error) {
-    return {
-      ok: false,
-      reason: `実体を解決できない: ${errorCode(error)}`,
-      // まだ書かれていない（Codex が最初のターンまで rollout を作らない場合）。呼び出し側は後でもう一度検める
-      ...(errorCode(error) === 'ENOENT' ? { missing: true as const } : {}),
-    };
+    return { ok: false, reason: `実体を解決できない: ${errorCode(error)}` };
   }
   if (!realFile.startsWith(`${realSessions}${sep}`)) {
     return { ok: false, reason: 'CODEX_HOME/sessions/ の下ではない（symlink の先を含む）' };
@@ -135,7 +149,8 @@ export class PeerRolloutMirror {
       );
       return;
     }
-    const resolved = await resolveRolloutFile(home, info.transcriptLocation, info.threadId);
+    const io = this.#deps.io ?? localRolloutIo;
+    const resolved = await resolveRolloutFile(home, info.transcriptLocation, info.threadId, io);
     if (!resolved.ok) {
       // 記録がまだ無いだけなら、次の止まりどころでもう一度検める（断ったとは数えない）
       if (resolved.missing === true) this.#waiting.set(peerId, info);
@@ -151,12 +166,7 @@ export class PeerRolloutMirror {
     let offset = 0;
     if (info.resumed) {
       try {
-        const handle = await open(resolved.file, 'r');
-        try {
-          offset = (await handle.stat()).size;
-        } finally {
-          await handle.close();
-        }
+        offset = (await io.readChunk(resolved.file, 0, 0)).size;
       } catch (error) {
         this.#skip(peerId, `記録を開けない: ${errorCode(error)}`);
         return;
@@ -220,36 +230,33 @@ export class PeerRolloutMirror {
   }
 
   async #collectNow(peer: TrackedPeer): Promise<void> {
-    const handle = await open(peer.file, 'r');
-    try {
-      const size = (await handle.stat()).size;
-      while (peer.offset < size) {
-        const length = Math.min(size - peer.offset, READ_CHUNK_BYTES);
-        const buffer = Buffer.alloc(length);
-        const { bytesRead } = await handle.read(buffer, 0, length, peer.offset);
-        const text = buffer.subarray(0, bytesRead);
-        // 改行で終わった行だけ取る: 書きかけの最後の行を読んで欠けた JSON にしない
-        const lastNewline = text.lastIndexOf(0x0a);
-        if (lastNewline === -1) {
-          // 改行が無いまま塊が尽きた: 書きかけ（次の止まりどころで読む）か、1行が塊より大きい（読めない）
-          if (bytesRead === READ_CHUNK_BYTES) {
-            this.#deps.note(
-              `peer [${peer.peerId}] の記録に ${String(READ_CHUNK_BYTES)} バイトを超える1行があり、以降は預けない`,
-            );
-          }
-          break;
+    const io = this.#deps.io ?? localRolloutIo;
+    // 読むたびに大きさも返る: 子の uid の子プロセスで読む構成では、1回の読みで1本の子プロセスなので、大きさだけを別に問わない
+    for (;;) {
+      const { size, data: text } = await io.readChunk(peer.file, peer.offset, READ_CHUNK_BYTES);
+      if (text.length === 0) break;
+      // 改行で終わった行だけ取る: 書きかけの最後の行を読んで欠けた JSON にしない
+      const lastNewline = text.lastIndexOf(0x0a);
+      if (lastNewline === -1) {
+        // 改行が無いまま塊が尽きた: 書きかけ（次の止まりどころで読む）か、1行が塊より大きい（読めない）
+        if (text.length === READ_CHUNK_BYTES) {
+          this.#deps.note(
+            `peer [${peer.peerId}] の記録に ${String(READ_CHUNK_BYTES)} バイトを超える1行があり、以降は預けない`,
+          );
         }
-        peer.offset += lastNewline + 1;
-        const lines: unknown[] = [];
-        for (const raw of text.subarray(0, lastNewline).toString('utf8').split('\n')) {
-          if (raw.trim() === '') continue;
-          try {
-            lines.push(JSON.parse(raw));
-          } catch {
-            this.#deps.note(`peer [${peer.peerId}] の記録に読めない行があったので飛ばした`);
-          }
+        break;
+      }
+      peer.offset += lastNewline + 1;
+      const lines: unknown[] = [];
+      for (const raw of text.subarray(0, lastNewline).toString('utf8').split('\n')) {
+        if (raw.trim() === '') continue;
+        try {
+          lines.push(JSON.parse(raw));
+        } catch {
+          this.#deps.note(`peer [${peer.peerId}] の記録に読めない行があったので飛ばした`);
         }
-        if (lines.length === 0) continue;
+      }
+      if (lines.length > 0) {
         if (peer.metaPending) {
           const meta: PeerMetaEntry = {
             type: PEER_META_ENTRY_TYPE,
@@ -263,8 +270,7 @@ export class PeerRolloutMirror {
         peer.buffered.push(...lines);
         this.#emitBuffered(peer);
       }
-    } finally {
-      await handle.close();
+      if (peer.offset >= size) break;
     }
   }
 
