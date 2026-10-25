@@ -17,9 +17,19 @@ export async function openStores(): Promise<{
   return { stores, indexes };
 }
 
-/** 索引を待たずに器を開く（デーモンの起動直後と同じ。索引が既に在れば確かめるだけで一瞬） */
+/**
+ * 索引が既に有効かの確かめ（pg_class の問い合わせ数本。索引が在れば一瞬）が済むまで、最大 5 秒だけ待って器を開く。
+ * 待たずに閉じると、確かめが閉じた接続に当たって「索引を作れなかった（Client was closed）」の警告が毎回出る（索引は有効）。
+ * 待つのは索引の確かめだけで、日誌の表には触れないので、冷えの測りに影響しない。索引が無い DB では作りに行くので、その場合は待ちを切る。
+ */
 export async function openStoresNoWait(): Promise<PgStores> {
-  return createPgStores({ url: PG_URL, onDeferredIndexes: () => undefined });
+  let done: () => void = () => undefined;
+  const checked = new Promise<void>((resolve) => {
+    done = resolve;
+  });
+  const stores = await createPgStores({ url: PG_URL, onDeferredIndexes: () => done() });
+  await Promise.race([checked, new Promise<void>((resolve) => setTimeout(resolve, 5000))]);
+  return stores;
 }
 
 /** 器の接続（drizzle の `$client` = pg の Pool）で素の SQL を打つ */

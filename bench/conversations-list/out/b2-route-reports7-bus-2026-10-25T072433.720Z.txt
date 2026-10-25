@@ -1,0 +1,28 @@
+# route 2026-10-25T07:24:33.796Z  route=reports7 path=/reports?limit=7 wrap=bus repeat=21
+first(process-cold, pg-warm) /reports?limit=7: 70.51 ms status=200 bytes=29200
+--- SQL first call: 15 本、client 側の合計 75.22 ms（往復込み・直列）
+  #00     0.86 ms  begin
+  #01     0.87 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #02      0.9 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #00    16.73 ms  update "inbox_events" set "deliveries" = "inbox_events"."deliveries" + 1 returning "id", "event", "at", "deliv
+  #03     9.96 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #04     1.23 ms  select "id", "approval" from "approvals" order by "approvals"."created_at" asc
+  #00    18.68 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #05     3.58 ms  commit
+  #08     0.55 ms  begin
+  #07      4.2 ms  select distinct "entry"->>'deletedConversationId' from "journal" where "journal"."type" = $1
+  #09     3.55 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #11     1.53 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #10     4.65 ms  select distinct x.hid from (SELECT named.hid FROM journal h CROSS JOIN LATERAL (SELECT e #>> '{}' AS hid FROM 
+  #12     3.41 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #13      4.5 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+warm /reports?limit=7 {"n":21,"median":5.9,"p90":7.89,"max":9.91,"min":4.68} (ms, 21 回, 3 回の助走の後) times=[6.7,7.43,5.9,6.23,8.4,9.91,7.89,5.57,6.02,5.77,4.94,4.68,5.28,5.83,6.09,5.58,5.92,6.16,5.45,5.43,5.47]
+server-timing(最後の1回) db;dur=3.6;desc="DB 2 queries", dbwait;dur=0.1;desc="pool wait", serialize;dur=0.1, app;dur=1.5, total;dur=5.1
+breakdown call: total 5.52 ms bytes=29200
+--- SQL warm call (内訳): 2 本、client 側の合計 3.8 ms（往復込み・直列）
+  #16     1.18 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #17     2.62 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+--- 文ごとの本数と client 側の合計
+  x1     2.62 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+  x1     1.18 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+JS 側（total − SQL の client 合計）≈ 1.72 ms

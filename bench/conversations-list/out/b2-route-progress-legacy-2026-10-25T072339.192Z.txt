@@ -1,0 +1,46 @@
+# route 2026-10-25T07:23:39.254Z  route=progress path=/progress wrap=legacy repeat=21
+first(process-cold, pg-warm) /progress: 823.97 ms status=200 bytes=1978
+--- SQL first call: 24 本、client 側の合計 582.82 ms（往復込み・直列）
+  #00     0.66 ms  begin
+  #01     1.07 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #02     7.07 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #03     5.53 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #04     0.87 ms  commit
+  #00    24.38 ms  update "inbox_events" set "deliveries" = "inbox_events"."deliveries" + 1 returning "id", "event", "at", "deliv
+  #05     5.64 ms  begin
+  #06     3.02 ms  select "id", "approval" from "approvals" order by "approvals"."created_at" asc
+  #07     4.73 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #00    34.57 ms  select "id", "at", "commitment" from "commitments" where "commitments"."closed_at" is null order by "commitmen
+  #09     7.57 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #11     0.47 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #12     1.21 ms  commit
+  #10    10.22 ms  select "id", xmin::text || '/' || ctid::text from "commitments" where "commitments"."closed_at" is not null or
+  #14    41.87 ms  select "id", "at", "commitment" from "commitments" where "commitments"."closed_at" is not null
+  #15    10.71 ms  select "id", xmin::text, "updated_at" from "jobs" order by "jobs"."created_at" asc
+  #16   117.15 ms  select "id", "job" from "jobs"
+  #17     6.62 ms  select "id", xmin::text, "updated_at" from "jobs" order by "jobs"."created_at" asc
+  #18     5.13 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #19     1.96 ms  select distinct "entry"->>'deletedConversationId' from "journal" where "journal"."type" = $1
+  #20     3.44 ms  select distinct x.hid from (SELECT named.hid FROM journal h CROSS JOIN LATERAL (SELECT e #>> '{}' AS hid FROM 
+  #21   283.83 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+  #22     1.79 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #23      3.3 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+warm /progress {"n":21,"median":498.89,"p90":581.82,"max":652.55,"min":420.34} (ms, 21 回, 3 回の助走の後) times=[564.33,529,581.82,476.86,461.74,522.89,465.62,498.89,512.47,605.27,652.55,491.84,573.45,502.4,503.58,471.22,453.13,466.27,420.34,431.75,444.6]
+server-timing(最後の1回) db;dur=300.4;desc="DB 8 queries", dbwait;dur=0.5;desc="pool wait", serialize;dur=0.0, app;dur=143.7, total;dur=444.1
+breakdown call: total 480.72 ms bytes=1984
+--- SQL warm call (内訳): 8 本、client 側の合計 363.83 ms（往復込み・直列）
+  #24     2.55 ms  select "id", "at", "commitment" from "commitments" where "commitments"."closed_at" is null order by "commitmen
+  #25     7.56 ms  select "id", xmin::text || '/' || ctid::text from "commitments" where "commitments"."closed_at" is not null or
+  #26     5.52 ms  select "id", xmin::text, "updated_at" from "jobs" order by "jobs"."created_at" asc
+  #27     5.78 ms  select "id", xmin::text, "updated_at" from "jobs" order by "jobs"."created_at" asc
+  #28     1.39 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #29   336.08 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+  #30     2.17 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #31     2.79 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+--- 文ごとの本数と client 側の合計
+  x2   338.87 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+  x2     11.3 ms  select "id", xmin::text, "updated_at" from "jobs" order by "jobs"."created_at" asc
+  x1     7.56 ms  select "id", xmin::text || '/' || ctid::text from "commitments" where "commitments"."closed_at" is not null or
+  x2     3.56 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  x1     2.55 ms  select "id", "at", "commitment" from "commitments" where "commitments"."closed_at" is null order by "commitmen
+JS 側（total − SQL の client 合計）≈ 116.89 ms
