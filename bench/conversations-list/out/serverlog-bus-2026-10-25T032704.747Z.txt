@@ -1,0 +1,135 @@
+# serverlog 2026-10-25T03:27:04.810Z  wrap=bus（サーバのログ /tmp/mgr-bd7bd1b3-pg/pg.log の、この呼びの間の増分。duration はサーバ側の実行時間で、往復・JS 側を含まない）
+
+=== /conversations?limit=30  http 219.13 ms status=200  ログの duration 行 103 本、合計 122.32 ms
+2026-10-25 12:27:06.878 JST [5605] LOG:  duration: 0.074 ms  parse <unnamed>: insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict do nothing
+2026-10-25 12:27:06.878 JST [5605] LOG:  duration: 0.058 ms  bind <unnamed>: insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict do nothing
+2026-10-25 12:27:06.878 JST [5605] LOG:  duration: 0.061 ms  execute <unnamed>: insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict do nothing
+2026-10-25 12:27:06.879 JST [5605] LOG:  duration: 0.085 ms  parse <unnamed>: select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:06.879 JST [5605] LOG:  duration: 0.075 ms  bind <unnamed>: select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:06.879 JST [5605] LOG:  duration: 0.020 ms  execute <unnamed>: select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:06.880 JST [5605] LOG:  duration: 0.046 ms  parse <unnamed>: select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:06.880 JST [5605] LOG:  duration: 0.061 ms  bind <unnamed>: select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:06.880 JST [5605] LOG:  duration: 0.016 ms  execute <unnamed>: select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:06.882 JST [5605] LOG:  duration: 0.602 ms  statement: select "conversation_id", "read_through", "updated_at" from "conversation_read"
+2026-10-25 12:27:06.886 JST [5605] LOG:  duration: 0.114 ms  parse <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.886 JST [5605] LOG:  duration: 0.166 ms  bind <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.886 JST [5605] LOG:  duration: 0.372 ms  execute <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.888 JST [5605] LOG:  duration: 0.151 ms  parse <unnamed>: select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entry"->>'conversationId') <…
+2026-10-25 12:27:06.889 JST [5605] LOG:  duration: 0.694 ms  bind <unnamed>: select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entry"->>'conversationId') <>…
+2026-10-25 12:27:06.911 JST [5605] LOG:  duration: 21.761 ms  execute <unnamed>: select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entry"->>'conversationId'…
+2026-10-25 12:27:06.926 JST [5605] LOG:  duration: 0.147 ms  parse <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.926 JST [5605] LOG:  duration: 0.235 ms  bind <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.927 JST [5605] LOG:  duration: 0.528 ms  execute <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.930 JST [5605] LOG:  duration: 0.128 ms  parse <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."ent…
+2026-10-25 12:27:06.931 JST [5605] LOG:  duration: 0.514 ms  bind <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entr…
+2026-10-25 12:27:06.948 JST [5605] LOG:  duration: 17.227 ms  execute <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."…
+2026-10-25 12:27:06.954 JST [5605] LOG:  duration: 0.109 ms  parse <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:06.955 JST [5605] LOG:  duration: 0.196 ms  bind <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:06.955 JST [5605] LOG:  duration: 0.035 ms  execute <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:06.955 JST [5605] LOG:  duration: 0.071 ms  parse <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.955 JST [5605] LOG:  duration: 0.115 ms  bind <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.956 JST [5605] LOG:  duration: 0.335 ms  execute <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.957 JST [5605] LOG:  duration: 0.091 ms  parse <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."ent…
+2026-10-25 12:27:06.957 JST [5605] LOG:  duration: 0.515 ms  bind <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entr…
+2026-10-25 12:27:06.969 JST [5605] LOG:  duration: 11.232 ms  execute <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."…
+2026-10-25 12:27:06.972 JST [5605] LOG:  duration: 0.172 ms  parse <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:06.972 JST [5605] LOG:  duration: 0.193 ms  bind <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:06.973 JST [5605] LOG:  duration: 0.461 ms  execute <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:06.973 JST [5605] LOG:  duration: 0.090 ms  parse <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.973 JST [5605] LOG:  duration: 0.144 ms  bind <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.974 JST [5605] LOG:  duration: 0.411 ms  execute <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.975 JST [5605] LOG:  duration: 0.140 ms  parse <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."ent…
+2026-10-25 12:27:06.976 JST [5605] LOG:  duration: 0.516 ms  bind <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entr…
+2026-10-25 12:27:06.984 JST [5605] LOG:  duration: 8.514 ms  execute <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."e…
+2026-10-25 12:27:06.993 JST [5605] LOG:  duration: 0.122 ms  parse <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:06.993 JST [5605] LOG:  duration: 0.188 ms  bind <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:06.996 JST [5605] LOG:  duration: 3.285 ms  execute <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:06.998 JST [5605] LOG:  duration: 0.137 ms  parse <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.998 JST [5605] LOG:  duration: 0.182 ms  bind <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.998 JST [5605] LOG:  duration: 0.395 ms  execute <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:06.999 JST [5605] LOG:  duration: 0.112 ms  parse <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."ent…
+2026-10-25 12:27:07.000 JST [5605] LOG:  duration: 0.892 ms  bind <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entr…
+2026-10-25 12:27:07.009 JST [5605] LOG:  duration: 9.000 ms  execute <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."e…
+2026-10-25 12:27:07.014 JST [5605] LOG:  duration: 0.155 ms  parse <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.014 JST [5605] LOG:  duration: 0.168 ms  bind <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.014 JST [5605] LOG:  duration: 0.034 ms  execute <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.015 JST [5605] LOG:  duration: 0.065 ms  parse <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.015 JST [5605] LOG:  duration: 0.114 ms  bind <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.016 JST [5605] LOG:  duration: 0.649 ms  execute <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.017 JST [5605] LOG:  duration: 0.111 ms  parse <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."ent…
+2026-10-25 12:27:07.017 JST [5605] LOG:  duration: 0.494 ms  bind <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entr…
+2026-10-25 12:27:07.024 JST [5605] LOG:  duration: 6.772 ms  execute <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."e…
+2026-10-25 12:27:07.029 JST [5605] LOG:  duration: 0.091 ms  parse <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.029 JST [5605] LOG:  duration: 0.167 ms  bind <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.029 JST [5605] LOG:  duration: 0.027 ms  execute <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.032 JST [5605] LOG:  duration: 0.105 ms  parse <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.032 JST [5605] LOG:  duration: 0.164 ms  bind <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.032 JST [5605] LOG:  duration: 0.325 ms  execute <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.033 JST [5605] LOG:  duration: 0.098 ms  parse <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."ent…
+2026-10-25 12:27:07.034 JST [5605] LOG:  duration: 0.411 ms  bind <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entr…
+2026-10-25 12:27:07.040 JST [5605] LOG:  duration: 5.926 ms  execute <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."e…
+2026-10-25 12:27:07.043 JST [5605] LOG:  duration: 0.075 ms  parse <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.043 JST [5605] LOG:  duration: 0.128 ms  bind <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.043 JST [5605] LOG:  duration: 0.023 ms  execute <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.044 JST [5605] LOG:  duration: 0.074 ms  parse <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.044 JST [5605] LOG:  duration: 0.119 ms  bind <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.045 JST [5605] LOG:  duration: 0.350 ms  execute <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.046 JST [5605] LOG:  duration: 0.086 ms  parse <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."ent…
+2026-10-25 12:27:07.047 JST [5605] LOG:  duration: 0.519 ms  bind <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entr…
+2026-10-25 12:27:07.052 JST [5605] LOG:  duration: 5.223 ms  execute <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."e…
+2026-10-25 12:27:07.055 JST [5605] LOG:  duration: 0.097 ms  parse <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.056 JST [5605] LOG:  duration: 0.201 ms  bind <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.056 JST [5605] LOG:  duration: 0.028 ms  execute <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.056 JST [5605] LOG:  duration: 0.078 ms  parse <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.057 JST [5605] LOG:  duration: 0.141 ms  bind <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.057 JST [5605] LOG:  duration: 0.394 ms  execute <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.058 JST [5605] LOG:  duration: 0.103 ms  parse <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."ent…
+2026-10-25 12:27:07.059 JST [5605] LOG:  duration: 0.660 ms  bind <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entr…
+2026-10-25 12:27:07.068 JST [5605] LOG:  duration: 8.969 ms  execute <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."e…
+2026-10-25 12:27:07.072 JST [5605] LOG:  duration: 0.148 ms  parse <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.072 JST [5605] LOG:  duration: 0.158 ms  bind <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.073 JST [5605] LOG:  duration: 0.028 ms  execute <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.073 JST [5605] LOG:  duration: 0.077 ms  parse <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.073 JST [5605] LOG:  duration: 0.143 ms  bind <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.074 JST [5605] LOG:  duration: 0.385 ms  execute <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.077 JST [5605] LOG:  duration: 0.141 ms  parse <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."ent…
+2026-10-25 12:27:07.078 JST [5605] LOG:  duration: 0.498 ms  bind <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entr…
+2026-10-25 12:27:07.082 JST [5605] LOG:  duration: 3.801 ms  execute <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."e…
+2026-10-25 12:27:07.085 JST [5605] LOG:  duration: 0.104 ms  parse <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.085 JST [5605] LOG:  duration: 0.388 ms  bind <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.085 JST [5605] LOG:  duration: 0.025 ms  execute <unnamed>: select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+2026-10-25 12:27:07.086 JST [5605] LOG:  duration: 0.102 ms  parse <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.086 JST [5605] LOG:  duration: 0.135 ms  bind <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.087 JST [5605] LOG:  duration: 0.767 ms  execute <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.088 JST [5605] LOG:  duration: 0.108 ms  parse <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."ent…
+2026-10-25 12:27:07.089 JST [5605] LOG:  duration: 0.584 ms  bind <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entr…
+2026-10-25 12:27:07.090 JST [5605] LOG:  duration: 0.798 ms  execute <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."e…
+
+=== /conversations/unread-count  http 22.75 ms status=200  ログの duration 行 27 本、合計 3.65 ms
+2026-10-25 12:27:07.411 JST [5605] LOG:  duration: 0.083 ms  parse <unnamed>: insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict do nothing
+2026-10-25 12:27:07.411 JST [5605] LOG:  duration: 0.089 ms  bind <unnamed>: insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict do nothing
+2026-10-25 12:27:07.411 JST [5605] LOG:  duration: 0.049 ms  execute <unnamed>: insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict do nothing
+2026-10-25 12:27:07.411 JST [5605] LOG:  duration: 0.046 ms  parse <unnamed>: select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:07.411 JST [5605] LOG:  duration: 0.069 ms  bind <unnamed>: select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:07.411 JST [5605] LOG:  duration: 0.016 ms  execute <unnamed>: select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:07.412 JST [5605] LOG:  duration: 0.026 ms  parse <unnamed>: select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:07.412 JST [5605] LOG:  duration: 0.035 ms  bind <unnamed>: select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:07.412 JST [5605] LOG:  duration: 0.009 ms  execute <unnamed>: select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:07.413 JST [5605] LOG:  duration: 0.643 ms  statement: select "conversation_id", "read_through", "updated_at" from "conversation_read"
+2026-10-25 12:27:07.417 JST [5605] LOG:  duration: 0.086 ms  parse <unnamed>: select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:07.417 JST [5605] LOG:  duration: 0.079 ms  bind <unnamed>: select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:07.417 JST [5605] LOG:  duration: 0.023 ms  execute <unnamed>: select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:07.418 JST [5605] LOG:  duration: 0.376 ms  statement: select "conversation_id", "at" from "conversation_outbound_latest"
+2026-10-25 12:27:07.421 JST [5605] LOG:  duration: 0.109 ms  parse <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.421 JST [5605] LOG:  duration: 0.181 ms  bind <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.422 JST [5605] LOG:  duration: 0.300 ms  execute <unnamed>: select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+2026-10-25 12:27:07.423 JST [5605] LOG:  duration: 0.112 ms  parse <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."ent…
+2026-10-25 12:27:07.424 JST [5605] LOG:  duration: 0.633 ms  bind <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."entr…
+2026-10-25 12:27:07.424 JST [5605] LOG:  duration: 0.014 ms  execute <unnamed>: select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchange' OR ("journal"."entry"->>'conversationId') IS NULL OR ("journal"."e…
+2026-10-25 12:27:07.425 JST [5605] LOG:  duration: 0.051 ms  parse <unnamed>: update "conversation_read_baseline" set "scanned_through" = greatest(coalesce("conversation_read_baseline"."scanned_through", $1), $2) where "conversation_read_baseline"."id" = $3
+2026-10-25 12:27:07.425 JST [5605] LOG:  duration: 0.058 ms  bind <unnamed>: update "conversation_read_baseline" set "scanned_through" = greatest(coalesce("conversation_read_baseline"."scanned_through", $1), $2) where "conversation_read_baseline"."id" = $3
+2026-10-25 12:27:07.425 JST [5605] LOG:  duration: 0.050 ms  execute <unnamed>: update "conversation_read_baseline" set "scanned_through" = greatest(coalesce("conversation_read_baseline"."scanned_through", $1), $2) where "conversation_read_baseline"."id" = $3
+2026-10-25 12:27:07.426 JST [5605] LOG:  duration: 0.042 ms  parse <unnamed>: select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:07.426 JST [5605] LOG:  duration: 0.044 ms  bind <unnamed>: select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:07.426 JST [5605] LOG:  duration: 0.013 ms  execute <unnamed>: select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+2026-10-25 12:27:07.427 JST [5605] LOG:  duration: 0.417 ms  statement: select "conversation_id", "at" from "conversation_outbound_latest"

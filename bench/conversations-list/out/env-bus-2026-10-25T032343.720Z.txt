@@ -1,4 +1,4 @@
-# env 2026-10-25T03:19:08.206Z
+# env 2026-10-25T03:23:43.763Z
 SHOW shared_buffers = 128MB
 SHOW work_mem = 4MB
 SHOW jit = on
@@ -23,7 +23,7 @@ SHOW lc_messages = C.utf8
   i journal_withdrawals_idx                          rel=     16 kB  total=     16 kB
   r journal                                          rel=    313 MB  total=    759 MB
   t pg_toast_16398                                   rel=    330 MB  total=    335 MB
---- journal 全体 {"table_incl_toast":"648 MB","heap":"313 MB","indexes":"110 MB","total":"759 MB","reltuples":"500630","relpages":40106}
+--- journal 全体 {"table_incl_toast":"648 MB","heap":"313 MB","indexes":"110 MB","total":"759 MB","reltuples":"500249","relpages":40107}
 --- journal の索引の有効性
   {"relname":"journal_at_idx","indisvalid":true,"indisready":true}
   {"relname":"journal_conversation_deleted_idx","indisvalid":true,"indisready":true}

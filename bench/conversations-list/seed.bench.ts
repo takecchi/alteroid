@@ -22,27 +22,100 @@ describe.skipIf(step !== 'probe')('probe', () => {
     const j = stores.journal;
     const conv = 'probe-conv-1';
     const written = [
-      await j.append({ type: 'exchange', with: 'human', role: 'inbound', text: 'こんにちは', conversationId: conv, clientMessageId: 'cm-probe-1' }),
-      await j.append({ type: 'exchange', with: 'human', role: 'outbound', text: 'はい', conversationId: conv, turnFailure: 'failed' }),
-      await j.append({ type: 'exchange', with: 'human', role: 'inbound', text: '直す', conversationId: conv, supersedes: 'x' }),
-      await j.append({ type: 'exchange', with: 'manager', role: 'inbound', text: 'm', managerId: 'mgr-1' }),
-      await j.append({ type: 'exchange', with: 'self', role: 'outbound', text: '[判断] 取り下げ', conversationId: conv, withdrawnClientMessageId: 'cm-probe-1' }),
+      await j.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: 'こんにちは',
+        conversationId: conv,
+        clientMessageId: 'cm-probe-1',
+      }),
+      await j.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'outbound',
+        text: 'はい',
+        conversationId: conv,
+        turnFailure: 'failed',
+      }),
+      await j.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: '直す',
+        conversationId: conv,
+        supersedes: 'x',
+      }),
+      await j.append({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        text: 'm',
+        managerId: 'mgr-1',
+      }),
+      await j.append({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: '[判断] 取り下げ',
+        conversationId: conv,
+        withdrawnClientMessageId: 'cm-probe-1',
+      }),
       await j.append({ type: 'tool_use', actor: 'clone', tool: 'Bash', input: { command: 'ls' } }),
-      await j.append({ type: 'memory_update', slug: 'note-1', cause: 'clone', action: 'write', bytesBefore: 1, bytesAfter: 2, summary: 's' }),
+      await j.append({
+        type: 'memory_update',
+        slug: 'note-1',
+        cause: 'clone',
+        action: 'write',
+        bytesBefore: 1,
+        bytesAfter: 2,
+        summary: 's',
+      }),
       await j.append({ type: 'decision', decision: 'd', grounds: 'g' }),
       await j.append({ type: 'daily_report', date: '2026-10-25', body: 'b' }),
       await j.append({ type: 'escalation', question: 'q', approvalId: 'ap-1' }),
       await j.append({
-        type: 'turn_timing', triggers: ['human_message'], batchSize: 1, kinds: ['normal'], succeeded: true, totalMs: 10, phases: { queue: 1 },
+        type: 'turn_timing',
+        triggers: ['human_message'],
+        batchSize: 1,
+        kinds: ['normal'],
+        succeeded: true,
+        totalMs: 10,
+        phases: { queue: 1 },
       }),
       await j.append({
-        type: 'http_timing', windowStartedAt: nowIso(), windowMs: 600000, requests: 1,
-        routes: [{ route: 'GET /x', count: 1, errors: 0, p50Ms: 1, p90Ms: 1, maxMs: 1, totalMs: 1, db: { count: 1, totalMs: 1, wallMs: 1, waitMs: 0 }, serializeMs: 0, bytes: 1, maxBytes: 1 }],
+        type: 'http_timing',
+        windowStartedAt: nowIso(),
+        windowMs: 600000,
+        requests: 1,
+        routes: [
+          {
+            route: 'GET /x',
+            count: 1,
+            errors: 0,
+            p50Ms: 1,
+            p90Ms: 1,
+            maxMs: 1,
+            totalMs: 1,
+            db: { count: 1, totalMs: 1, wallMs: 1, waitMs: 0 },
+            serializeMs: 0,
+            bytes: 1,
+            maxBytes: 1,
+          },
+        ],
         slowest: [],
       }),
-      await j.append({ type: 'conversation_deleted', deletedConversationId: 'probe-conv-2', deletedBy: 'operator', hiddenCount: 1 }),
+      await j.append({
+        type: 'conversation_deleted',
+        deletedConversationId: 'probe-conv-2',
+        deletedBy: 'operator',
+        hiddenCount: 1,
+      }),
     ];
-    for (const row of await rawQuery<{ type: string; entry: unknown }>(stores, 'select type, entry from journal order by seq')) {
+    for (const row of await rawQuery<{ type: string; entry: unknown }>(
+      stores,
+      'select type, entry from journal order by seq',
+    )) {
       console.log(`PROBE ${row.type} ${JSON.stringify(row.entry)}`);
     }
     const listed = await j.list({});
@@ -50,7 +123,12 @@ describe.skipIf(step !== 'probe')('probe', () => {
     expect(listed.length).toBe(written.length);
     await rawQuery(stores, 'truncate journal restart identity');
     await rawQuery(stores, 'truncate conversation_read');
-    for (const name of ['journal_human_exchange_seq_idx', 'journal_human_replies_idx', 'journal_withdrawals_idx', 'journal_conversation_seq_idx']) {
+    for (const name of [
+      'journal_human_exchange_seq_idx',
+      'journal_human_replies_idx',
+      'journal_withdrawals_idx',
+      'journal_conversation_seq_idx',
+    ]) {
       await rawQuery(stores, `drop index if exists ${name}`);
     }
     await stores.close();
@@ -83,10 +161,16 @@ describe.skipIf(step !== 'verify')('verify', () => {
     for (const { type, n } of counts) {
       const want = Math.min(5000, n);
       const newest = await stores.journal.list({ types: [type as never], limit: 5000 });
-      const oldest = await stores.journal.list({ types: [type as never], limit: 5000, order: 'asc' });
+      const oldest = await stores.journal.list({
+        types: [type as never],
+        limit: 5000,
+        order: 'asc',
+      });
       const ok = newest.length === want && oldest.length === want;
       if (!ok) bad += 1;
-      console.log(`VERIFY ${type} sql=${n} readable_newest=${newest.length}/${want} readable_oldest=${oldest.length}/${want} ${ok ? 'OK' : 'DROPPED'}`);
+      console.log(
+        `VERIFY ${type} sql=${n} readable_newest=${newest.length}/${want} readable_oldest=${oldest.length}/${want} ${ok ? 'OK' : 'DROPPED'}`,
+      );
     }
     await stores.close();
     expect(bad).toBe(0);

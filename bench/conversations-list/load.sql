@@ -41,7 +41,8 @@ $$;
 -- 段1: 行ごとの種別・時刻・id
 CREATE TABLE bench_stage AS
 SELECT i,
-  '2026-07-01T00:00:00Z'::timestamptz + (i * interval '20 seconds') + (random() * 15000) * interval '1 millisecond' AS at,
+  -- ミリ秒に丸める: 本物の行は JS の Date（ミリ秒）で書かれる。マイクロ秒が残ると `at = $2` の錨の引き直し（#anchorSeq）が当たらず、頁送りが落ちる
+  date_trunc('milliseconds', '2026-07-01T00:00:00Z'::timestamptz + (i * interval '20 seconds') + (random() * 15000) * interval '1 millisecond') AS at,
   gen_random_uuid()::text AS id,
   CASE
     WHEN u < 0.50 THEN 'tool_use'
@@ -84,7 +85,7 @@ UPDATE bench_stage SET role = CASE WHEN r1 < 0.5 THEN 'inbound' ELSE 'outbound' 
 -- 墓標 300 本: 最後の発言から 1〜8 日後に積む。会話 id は 21〜1500 から無作為に（人間との往復が在る会話だけ）
 CREATE TABLE bench_tomb AS
 SELECT row_number() OVER () + 10000000 AS i,
-  least(last_at + (1 + random() * 7) * interval '1 day', '2026-10-24T00:00:00Z'::timestamptz) AS at,
+  date_trunc('milliseconds', least(last_at + (1 + random() * 7) * interval '1 day', '2026-10-24T00:00:00Z'::timestamptz)) AS at,
   gen_random_uuid()::text AS id, 'conversation_deleted'::text AS cat, random() AS r1, random() AS r2, random() AS r3,
   conv, CAST(NULL AS text) AS role, conv_id
 FROM (

@@ -1,0 +1,308 @@
+# warm 2026-10-25T03:23:51.958Z  wrap=bus  limit=30 repeat=21  GET /conversations?limit=30（scan は既定）
+first(process-cold, pg-warm) /conversations: 353.12 ms status=200 conversations=30 scanned=2000 reachedStart=false hiddenByLimit=157 nextCursor=あり bytes=8993
+--- SQL first call: 49 本、client 側の合計 267.75 ms（往復込み・直列）
+  #00     0.81 ms  begin
+  #01     5.33 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #02      1.4 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #03     2.72 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #00    17.92 ms  update "inbox_events" set "deliveries" = "inbox_events"."deliveries" + 1 returning "id", "event", "at", "deliv
+  #00    18.67 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #04     4.19 ms  commit
+  #06     1.54 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #05     4.58 ms  select "id", "approval" from "approvals" order by "approvals"."created_at" asc
+  #08     1.24 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #07     3.16 ms  begin
+  #10     5.45 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #11    13.55 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #13     1.26 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #14     0.65 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #15     1.11 ms  commit
+  #12     5.99 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #17     2.83 ms  select distinct "entry"->>'deletedConversationId' from "journal" where "journal"."type" = $1
+  #18     4.02 ms  select distinct x.hid from (SELECT named.hid FROM journal h CROSS JOIN LATERAL (SELECT e #>> '{}' AS hid FROM 
+  #19    31.71 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+  #20     1.48 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #21    40.55 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #22     1.27 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #23     1.17 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #24    11.35 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #25      4.2 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #26     1.13 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #27    15.58 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #28     1.01 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #29     1.15 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #30    11.06 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #31      0.9 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #32     0.95 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #33     8.08 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #34     0.78 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #35     0.96 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #36     7.51 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #37     0.98 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #38     1.23 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #39     8.57 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #40     2.16 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #41     1.09 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #42     6.02 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #43     0.83 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #44     0.91 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #45     4.55 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #46     0.94 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #47     1.11 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #48     2.09 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+warm /conversations?limit=30 {"n":21,"median":196.7,"p90":211.96,"max":222.86,"min":166.71} (ms, 21 回, 3 回の助走の後) times=[210.58,195.68,222.86,204.92,211.96,203.55,206.02,212.02,197.58,170.04,172.2,181.79,203.08,198.03,169.56,166.71,196.7,179.57,181.82,189.4,188.86]
+server-timing(最後の1回) db;dur=128.0;desc="DB 35 queries", dbwait;dur=1.7;desc="pool wait", serialize;dur=0.1, app;dur=60.4, total;dur=188.5
+breakdown call: total 188.23 ms  conversations=30 scanned=2000 reachedStart=false hiddenByLimit=157 nextCursor=あり bytes=8993
+--- SQL warm call (内訳): 35 本、client 側の合計 137.86 ms（往復込み・直列）
+  #49     1.67 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #50     0.58 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #51     0.41 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #52     1.11 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #53     1.29 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #54    22.31 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+  #55     1.32 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #56    20.63 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #57     2.19 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #58     1.29 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #59    13.34 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #60     0.83 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #61     0.88 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #62    10.62 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #63     0.74 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #64     1.32 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #65     9.52 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #66     0.94 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #67     1.32 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #68     7.97 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #69     2.45 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #70     1.16 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #71      7.7 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #72     0.85 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #73     1.23 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #74      6.7 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #75     0.77 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #76     0.85 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #77     5.29 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #78     0.68 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #79      0.9 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #80     4.56 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #81     1.07 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #82     1.23 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #83     2.15 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+--- 文ごとの本数と client 側の合計
+  x10    88.46 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  x1    22.31 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+  x11     12.8 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  x9    10.52 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  x1     1.67 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  x1     1.11 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  x2     0.99 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+JS 側（total − SQL の client 合計）≈ 50.38 ms
+phase loadConversationReadView {"n":21,"median":5.55,"p90":6.76,"max":7.7,"min":4.59}
+phase readConversationPage     {"n":21,"median":182.27,"p90":192.17,"max":208.87,"min":158.12}
+phase 整形(map+JSON.stringify) {"n":21,"median":0.08,"p90":0.14,"max":0.17,"min":0.06}
+readView: positions=730 baseline=2026-07-11T00:00:00.000Z unreadable=なし
+page2 first: 232.07 ms status=200 conversations=30 scanned=2000 reachedStart=false hiddenByLimit=130 nextCursor=あり bytes=8892
+--- SQL page2 first call: 41 本、client 側の合計 177.22 ms（往復込み・直列）
+  #84     0.54 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #85     0.63 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #86     0.41 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #87      1.3 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #88     1.89 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #89     1.34 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."id" = $1 and ("journal"."type" <> 'exchang
+  #90     0.48 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #91     1.09 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #92     1.64 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+  #93     0.71 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #94     0.98 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #95    30.15 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+  #96     1.45 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #97    23.05 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #98     0.88 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #99     1.23 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #100    11.71 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #101     3.74 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #102      1.3 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #103     15.2 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #104      0.9 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #105     3.81 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #106    10.26 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #107      0.8 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #108     0.95 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #109     9.65 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #110     0.84 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #111     0.95 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #112     9.36 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #113     0.84 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #114     1.05 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #115    11.38 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #116     1.11 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #117     1.11 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #118     9.15 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #119     3.19 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #120     1.27 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #121     5.31 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #122     0.91 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #123     0.87 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #124      3.8 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+warm page2 /conversations?limit=30&cursor=… {"n":21,"median":204.81,"p90":229.68,"max":240.95,"min":183.93} (ms, 21 回) times=[224.26,240.95,216.48,229.68,211.32,233.36,204.81,205.61,200.88,186.95,212.97,227.21,200.64,194.74,204.87,200.17,190.17,194.85,183.93,184.01,200.59]
+--- SQL page2 warm call (内訳): 41 本、client 側の合計 147.96 ms（往復込み・直列）
+  #125     0.66 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #126     0.49 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #127     0.33 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #128     1.15 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #129     1.21 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #130     1.37 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."id" = $1 and ("journal"."type" <> 'exchang
+  #131     0.58 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #132      0.9 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #133     2.08 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+  #134     0.51 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #135     0.75 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #136    20.93 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+  #137     1.46 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #138    20.51 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #139     0.81 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #140     1.05 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #141    12.52 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #142      0.9 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #143     0.97 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #144    10.16 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #145     0.75 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #146     0.93 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #147     9.77 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #148      0.7 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #149     0.94 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #150      8.3 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #151     3.36 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #152     1.42 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #153     8.64 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #154     0.97 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #155      1.3 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #156     8.01 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #157     0.91 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #158        1 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #159     7.48 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #160     0.92 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #161     1.17 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #162     6.34 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #163     0.85 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #164     0.86 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #165     4.02 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+unread-count first(process-cold, 返答の覚え空): 586.37 ms status=200 body={"count":99,"capped":true}
+--- SQL unread-count first call: 102 本、client 側の合計 443.33 ms（往復込み・直列）
+  #166     0.58 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #167     0.35 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #168     0.21 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #169     0.92 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #170     1.12 ms  select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit 
+  #171     0.73 ms  select "conversation_id", "at" from "conversation_outbound_latest"
+  #172      1.3 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #173    31.36 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #174     0.95 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #175     1.42 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #176    14.09 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #177     0.96 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #178     2.35 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #179    18.31 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #180     1.15 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #181     1.57 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #182    14.21 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #183     1.07 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #184     1.01 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #185    10.55 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #186     0.97 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #187     1.04 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #188    11.31 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #189     0.86 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #190     0.86 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #191    10.68 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #192     0.83 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #193     1.18 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #194    10.57 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #195     0.85 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #196     1.09 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #197    10.78 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #198     0.83 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #199     1.04 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #200    11.42 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #201     0.78 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #202     1.11 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #203     9.58 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #204     0.86 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #205        1 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #206     9.73 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #207     0.79 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #208        1 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #209    10.13 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #210     0.83 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #211     0.95 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #212     9.62 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #213     0.79 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #214     1.17 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #215     9.77 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #216     1.39 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #217      1.1 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #218    11.74 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #219     0.94 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #220     1.02 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #221     11.7 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #222     0.76 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #223     0.95 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #224    11.96 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #225     0.74 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #226     0.96 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #227    10.45 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #228     0.72 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #229     0.84 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #230    10.61 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #231     0.95 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #232     1.11 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #233    12.93 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #234     0.81 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #235     1.16 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #236    11.52 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #237      0.8 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #238     1.13 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #239    14.01 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #240     0.94 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #241     1.16 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #242    11.82 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #243     0.93 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #244     0.93 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #245    13.11 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #246     0.69 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #247     0.82 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #248     9.93 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #249     0.81 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #250     1.12 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #251    11.69 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #252     0.82 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #253     3.14 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #254    12.95 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #255     1.04 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #256     0.94 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #257     6.39 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #258     0.72 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #259     0.83 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #260     6.68 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #261     0.75 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #262     0.99 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #263     1.75 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #264    11.92 ms  insert into "conversation_outbound_latest" ("conversation_id", "at") values ($1, $2), ($3, $4), ($5, $6), ($7,
+  #265     1.59 ms  update "conversation_read_baseline" set "scanned_through" = greatest(coalesce("conversation_read_baseline"."sc
+  #266     0.53 ms  select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit 
+  #267     1.41 ms  select "conversation_id", "at" from "conversation_outbound_latest"
+warm /conversations/unread-count {"n":21,"median":21.52,"p90":24.7,"max":33.13,"min":18.65} (ms, 21 回) times=[24.86,21.52,23.07,23.01,19.78,23.82,33.13,24.04,22.18,21.7,24.7,20.63,18.65,19.74,22.04,18.74,19.45,21.26,20.56,19.26,20.62]
+--- SQL unread-count warm call (内訳): 11 本、client 側の合計 11.01 ms（往復込み・直列）
+  #268     0.66 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #269     0.56 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #270     0.32 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #271     0.75 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #272     1.15 ms  select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit 
+  #273     1.29 ms  select "conversation_id", "at" from "conversation_outbound_latest"
+  #274     1.99 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #275     1.35 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."at" >= $1 and ("journal"."type" <> 'exchan
+  #276     1.14 ms  update "conversation_read_baseline" set "scanned_through" = greatest(coalesce("conversation_read_baseline"."sc
+  #277     0.56 ms  select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit 
+  #278     1.23 ms  select "conversation_id", "at" from "conversation_outbound_latest"
+並行 1 回: /conversations 211.78 ms + unread-count 27.96 ms（同時, 全体 211.89 ms）

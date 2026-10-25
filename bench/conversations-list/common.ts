@@ -28,8 +28,11 @@ export async function rawQuery<T = Record<string, unknown>>(
   text: string,
   values: unknown[] = [],
 ): Promise<T[]> {
-  const client = (stores.db as unknown as { $client: { query: (t: string, v: unknown[]) => Promise<{ rows: T[] }> } })
-    .$client;
+  const client = (
+    stores.db as unknown as {
+      $client: { query: (t: string, v: unknown[]) => Promise<{ rows: T[] }> };
+    }
+  ).$client;
   return (await client.query(text, values)).rows;
 }
 
