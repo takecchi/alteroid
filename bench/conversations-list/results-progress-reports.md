@@ -1,6 +1,6 @@
 # `/progress` と `/reports` の測り（#5264）
 
-観測は 2026-10-25T07:13Z〜07:17Z（UTC）。worktree は枝 `bench/conversations-list-5140`（#5262 を取り込み済み、core はビルド済み）。PG は同じ `alteroid_bench`（ポート 55931）。生の出力は全部 `out/`（ファイル名に口・包み・時刻）。
+観測は 2026-10-25T07:13Z〜07:20Z（UTC）。worktree は枝 `bench/conversations-list-5140`。`BENCH_WRAP=bus` の値は、今の main **7476b801528a8ed291f513cc82d1a009a459de3c**（#5262 マージ済み）を `git merge origin/main` で取り込み、`pnpm --filter "@alteroid/daemon..." build` し直した後に取り直したもの（取り込み前の bus の値は out/ に残し、本文の表は取り直した値）。PG は同じ `alteroid_bench`（ポート 55931）。生の出力は全部 `out/`（ファイル名に口・包み・時刻）。
 
 **先に結論: この偽データでは `/progress` も `/reports` も 5〜7 ms で、(legacy) と (bus) に差が出なかった。ただしこのデータは両方の口の重い部分を踏んでいない（下の「データの限界」）。本番の遅さの再現にはなっていない。**
 
@@ -27,25 +27,29 @@
 
 単位 ms。「/」は中央値 / p90 / 最大。DB 本数は `Server-Timing` の `DB n queries`（`warm call (内訳)` の SQL の本数と一致）。
 
-| 口                       | legacy 中央値 / p90 / 最大 | DB 本数 | bus 中央値 / p90 / 最大 | DB 本数 | 出所（out/）                                                      |
-| ------------------------ | -------------------------- | ------- | ----------------------- | ------- | ----------------------------------------------------------------- |
-| `/progress`              | 7.12 / 11.30 / 18.55       | 6       | 6.39 / 7.66 / 8.05      | 6       | route-progress-legacy-…071354.892Z / route-progress-bus-…071404.524Z |
-| `/reports?limit=1`       | 6.20 / 7.76 / 8.73         | 2       | 6.91 / 8.77 / 12.32     | 2       | route-reports-legacy-…071410.562Z / route-reports-bus-…071422.949Z   |
-| `/reports?limit=7`       | 6.35 / 8.51 / 11.20        | 2       | 5.85 / 7.01 / 9.01      | 2       | route-reports7-legacy-…071429.077Z / route-reports7-bus-…071440.391Z |
+**bus は今の main（7476b801528a8ed291f513cc82d1a009a459de3c。#5262 取り込み済み）を取り込んで `--filter "@alteroid/daemon..." build` し直した後の値**（2026-10-25T07:18Z）。legacy は取り込み前（07:13Z）と、bus と同じ負荷の時間帯に取り直した値（07:18Z）の 2 つを出す（器が共有で、07:18Z 台は全体に 1〜3 ms 遅く揺れていたため、同じ時間帯どうしで比べる）。
 
-最初の 1 回（プロセス起動直後・PG は温）: `/progress` legacy 88.59 / bus 72.99、`/reports?limit=1` legacy 106.27 / bus 64.90、`/reports?limit=7` legacy 73.57 / bus 69.18（いずれも起動の裏の問い合わせ約 14 本を含む。最初の 1 回の本数は 11〜20）。応答の大きさ: `/progress` 1,106 バイト、`/reports?limit=1` 7,962、`/reports?limit=7` 34,748。
+| 口                 | legacy 07:18Z 中央値 / p90 / 最大 | DB 本数 | bus（main 7476b801）中央値 / p90 / 最大 | DB 本数 | （参考）legacy 07:13Z 中央値 / p90 / 最大 |
+| ------------------ | --------------------------------- | ------- | --------------------------------------- | ------- | ----------------------------------------- |
+| `/progress`        | 10.01 / 14.89 / 19.69             | 6       | 8.48 / 15.01 / 20.17                    | 6       | 7.12 / 11.30 / 18.55                      |
+| `/reports?limit=1` | 7.24 / 10.27 / 14.27              | 2       | 8.01 / 13.48 / 19.77                    | 2       | 6.20 / 7.76 / 8.73                        |
+| `/reports?limit=7` | 7.50 / 10.09 / 11.76              | 2       | 7.57 / 10.90 / 15.19                    | 2       | 6.35 / 8.51 / 11.20                       |
+
+出所（out/）: legacy 07:18Z は `route-{progress,reports,reports7}-legacy-2026-10-25T0718…`、bus は `route-{progress,reports,reports7}-bus-2026-10-25T0718…`、legacy 07:13Z は `route-…-legacy-2026-10-25T0713…`〜`0714…`。取り込み前の bus（07:14Z。`-bus-…0714…`）の値は `/progress` 6.39 / 7.66 / 8.05、`/reports?limit=1` 6.91 / 8.77 / 12.32、`limit=7` 5.85 / 7.01 / 9.01 で、同じく legacy との差は無い。
+
+最初の 1 回（プロセス起動直後・PG は温。起動の裏の問い合わせ約 14 本を含む。本数は 11〜20）: bus 07:18Z は `/progress` 254.80 / `/reports?limit=1` 181.79 / `limit=7` 87.81、legacy 07:18Z は 99.65 / 71.01 / 68.26（最初の 1 回はキャッシュの状態でばらつきが大きく、差とは読まない）。応答の大きさ: `/progress` 1,106 バイト、`/reports?limit=1` 7,962、`/reports?limit=7` 34,748。
 
 ### SQL の内訳（温まった 1 回、client 側の ms。legacy と bus で文も本数も同じ）
 
 `/progress`（6 本、合計 3.43 ms〈legacy〉/ 4.16 ms〈bus〉、JS 側 ≈ 1.6〜2.1 ms）:
 
-| 文（先頭）                                                                                        | 本数 | ms（legacy） |
-| ------------------------------------------------------------------------------------------------- | ---- | ------------ |
-| `select "id","at","type","entry" from "journal" where (… type = 'github_observation' …)`（頁 502 行） | 1    | 0.98         |
-| `select "id","at","commitment" from "commitments" where "closed_at" is null order by …`            | 1    | 0.88         |
-| `select count(*)::text \|\| ':' \|\| coalesce(max("seq"),0)::text from "journal" where "type" = $1`（墓標の印） | 1  | 0.81         |
-| `select "id", xmin::text, "updated_at" from "jobs" order by "created_at"`                          | 2    | 0.44         |
-| `select "id", xmin::text \|\| '/' \|\| ctid::text from "commitments" where "closed_at" is not null or …` | 1 | 0.32         |
+| 文（先頭）                                                                                                      | 本数 | ms（legacy） |
+| --------------------------------------------------------------------------------------------------------------- | ---- | ------------ |
+| `select "id","at","type","entry" from "journal" where (… type = 'github_observation' …)`（頁 502 行）           | 1    | 0.98         |
+| `select "id","at","commitment" from "commitments" where "closed_at" is null order by …`                         | 1    | 0.88         |
+| `select count(*)::text \|\| ':' \|\| coalesce(max("seq"),0)::text from "journal" where "type" = $1`（墓標の印） | 1    | 0.81         |
+| `select "id", xmin::text, "updated_at" from "jobs" order by "created_at"`                                       | 2    | 0.44         |
+| `select "id", xmin::text \|\| '/' \|\| ctid::text from "commitments" where "closed_at" is not null or …`        | 1    | 0.32         |
 
 `/reports?limit=1` と `limit=7`（2 本、合計 4.9 ms / 4.8 ms、JS 側 ≈ 1.8 ms）: 墓標の印 1 本（1.3〜1.5 ms）と、`select "id","at","type","entry" from "journal" where (… type = 'daily_report') order by seq desc limit 34`（limit=1 のとき 34 = limit + 窓の余裕 33。limit=7 は 40。3.2〜3.5 ms）。
 
@@ -53,12 +57,14 @@
 
 (i) 再起動のみ（`shared_buffers` 空・OS キャッシュ温）、(ii) 再起動 + 日誌の関係ファイル 13 本の OS キャッシュ落とし（`BENCH_EVICT=1`。best effort）。単位 ms。call#2 以降は全て 7〜22 ms で、冷えの影響は 1 回目だけ。
 
-| 口 / 包み                    | (i) call#1 | (i) #2 / #3 / #4 / #5 | (ii) call#1 | (ii) #2 / #3 / #4 / #5 | 出所（out/）                                           |
-| ---------------------------- | ---------- | --------------------- | ----------- | ---------------------- | ------------------------------------------------------ |
-| `/progress` legacy           | 109.85     | 10.06 / 10.78 / 8.66 / 9.63 | 220.05 | 12.52 / 14.86 / 12.55 / 12.62 | cold-progress-legacy-…071446 / -evict-…071505   |
-| `/progress` bus              | 80.00      | 8.99 / 10.31 / 10.86 / 11.52 | 196.10 | 11.78 / 12.91 / 9.29 / 8.12 | cold-progress-bus-…071458 / -evict-…071511       |
-| `/reports?limit=1` legacy    | 131.50     | 8.44 / 7.32 / 7.74 / 22.43 | 222.12  | 8.23 / 6.79 / 7.76 / 7.66 | cold-reports-legacy-…071524 / -evict-…071545      |
-| `/reports?limit=1` bus       | 72.65      | 7.66 / 10.07 / 13.79 / 7.13 | 220.54 | 7.81 / 8.76 / 7.70 / 9.93 | cold-reports-bus-…071530 / -evict-…071551         |
+| 口 / 包み                               | (i) call#1 | (i) #2 / #3 / #4 / #5       | (ii) call#1 | (ii) #2 / #3 / #4 / #5        | 出所（out/）                                  |
+| --------------------------------------- | ---------- | --------------------------- | ----------- | ----------------------------- | --------------------------------------------- |
+| `/progress` legacy                      | 109.85     | 10.06 / 10.78 / 8.66 / 9.63 | 220.05      | 12.52 / 14.86 / 12.55 / 12.62 | cold-progress-legacy-…071446 / -evict-…071505 |
+| `/progress` bus（main 7476b801）        | 86.02      | 8.38 / 7.64 / 6.65 / 8.47   | 183.22      | 7.28 / 7.88 / 6.82 / 8.37     | cold-progress-bus-…071911 / -evict-…071918    |
+| `/reports?limit=1` legacy               | 131.50     | 8.44 / 7.32 / 7.74 / 22.43  | 222.12      | 8.23 / 6.79 / 7.76 / 7.66     | cold-reports-legacy-…071524 / -evict-…071545  |
+| `/reports?limit=1` bus（main 7476b801） | 130.50     | 10.49 / 7.44 / 6.33 / 6.25  | 226.91      | 10.11 / 6.29 / 6.01 / 7.03    | cold-reports-bus-…071930 / -evict-…071936     |
+
+legacy の冷えは取り込み前（07:14Z〜07:15Z）の値、bus の冷えは取り込み後（07:19Z）の値。取り込み前の bus の冷え（`/progress` 80.00 / 196.10、`/reports?limit=1` 72.65 / 220.54。`cold-*-bus-…0714…`〜`0715…`）は out/ に残してある。
 
 call#1 の中身（client 側。起動の裏の問い合わせを除く）: OS キャッシュを落とすと、墓標の印 `count(*) … where type = 'conversation_deleted'`（303 ページ）が 97〜134 ms、`/reports` の日報の窓の select が 68〜70 ms。(i) の再起動のみでは、その 2 本は 18〜24 ms（印）・5.8〜70 ms（窓。legacy の 1 回は 70 ms、bus の 1 回は 5.8 ms でばらつく。1 回ずつの測りなので、差とは読まない）。
 
@@ -66,13 +72,13 @@ call#1 の中身（client 側。起動の裏の問い合わせを除く）: OS �
 
 全文は `out/explain-reports-legacy-2026-10-25T071603.617Z.txt` と `out/explain-progress-legacy-2026-10-25T071616.984Z.txt`。ページ数は shared hit / read（8KB）、時間はサーバ側の Execution Time。
 
-| 口      | 文                                                                                     | 温まった         | PG 再起動のみ                | OS キャッシュ落とし           |
-| ------- | -------------------------------------------------------------------------------------- | ---------------- | ---------------------------- | ----------------------------- |
-| reports | 日報の窓（`journal_pkey` の Index Scan Backward、`type = 'daily_report'`、34 行）        | hit 248 / 0.55 ms | hit 84 + read 164 / 1.89 ms  | hit 84 + read 164 / **44.6 ms** |
-| reports | 墓標の印（`count(*)`、Bitmap Heap Scan on `journal_type_at_idx`）                      | hit 303 / 0.42 ms | read 303 / 3.36 ms           | read 303 / **79.9 ms**        |
-| progress | 墓標の印（同上）                                                                      | hit 303 / 0.35 ms | read 303 / 4.55 ms           | read 303 / **107.2 ms**       |
-| progress | `github_observation` の頁（`type = 'github_observation'`、502 行。0 行）               | hit 3 / 0.04 ms   | hit 3 + read 3 / 0.14 ms     | read 3 / 1.1 ms               |
-| progress | `commitments`（`closed_at is null`、0 行）                                             | hit 1 / 0.01 ms   | hit 10 / 0.14 ms             | hit 10 / 0.05 ms              |
+| 口       | 文                                                                                | 温まった          | PG 再起動のみ               | OS キャッシュ落とし             |
+| -------- | --------------------------------------------------------------------------------- | ----------------- | --------------------------- | ------------------------------- |
+| reports  | 日報の窓（`journal_pkey` の Index Scan Backward、`type = 'daily_report'`、34 行） | hit 248 / 0.55 ms | hit 84 + read 164 / 1.89 ms | hit 84 + read 164 / **44.6 ms** |
+| reports  | 墓標の印（`count(*)`、Bitmap Heap Scan on `journal_type_at_idx`）                 | hit 303 / 0.42 ms | read 303 / 3.36 ms          | read 303 / **79.9 ms**          |
+| progress | 墓標の印（同上）                                                                  | hit 303 / 0.35 ms | read 303 / 4.55 ms          | read 303 / **107.2 ms**         |
+| progress | `github_observation` の頁（`type = 'github_observation'`、502 行。0 行）          | hit 3 / 0.04 ms   | hit 3 + read 3 / 0.14 ms    | read 3 / 1.1 ms                 |
+| progress | `commitments`（`closed_at is null`、0 行）                                        | hit 1 / 0.01 ms   | hit 10 / 0.14 ms            | hit 10 / 0.05 ms                |
 
 日報の窓の計画（温まった。生の要所）: `Limit (actual rows=34)` → `Index Scan Backward using journal_pkey on journal (cost=1.61..63191.92 rows=5908) (actual rows=34)`、`Buffers: shared hit=248`。見積もり 5,908 行に対し実際は 34 行で止まる（日報が密なので）。
 
@@ -98,6 +104,8 @@ call#1 の中身（client 側。起動の裏の問い合わせを除く）: OS �
 2026-10-25T07:13Z  env BENCH_STEP=rows <cmd>
 2026-10-25T07:13Z〜07:14Z  env BENCH_STEP=route BENCH_ROUTE={progress,reports,reports7} BENCH_WRAP={legacy,bus} <cmd>（6 回）
 2026-10-25T07:14Z〜07:15Z  env BENCH_STEP=cold BENCH_ROUTE={progress,reports} BENCH_WRAP={legacy,bus} [BENCH_EVICT=1] <cmd>（8 回）
+2026-10-25T07:17Z  git fetch origin / git merge origin/main（7476b801。衝突なし）/ pnpm --filter "@alteroid/daemon..." build
+2026-10-25T07:18Z〜07:19Z  bus の route（3 口）・cold（2 口 × 再起動のみ/EVICT）と、同じ時間帯の legacy の route（3 口）を取り直し
 2026-10-25T07:16Z  env BENCH_STEP=explain BENCH_ROUTE={reports,progress} BENCH_WRAP=legacy BENCH_TOP=3 <cmd>（bus は文が同じなので取っていない）
 ```
 
