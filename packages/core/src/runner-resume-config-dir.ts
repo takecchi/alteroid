@@ -1,7 +1,9 @@
 import { lchownSync, lstatSync, readdirSync } from 'node:fs';
-import { chown, mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep, win32 } from 'node:path';
+
+import type { ChildFileWriter, FileWriteOutcome, PlannedFile } from './runner-child-fs.js';
 
 // パスの1段に使える名前か: SDK が渡す projectKey・sessionId でも、`/` や `..` を含めば書かない
 function isPlainSegment(name: string): boolean {
@@ -14,7 +16,7 @@ function isPlainSegment(name: string): boolean {
  * `mkdir -p` と `writeFile` はそれを辿り、root が子の選んだ場所にファイルを作って子へ渡してしまう（`wx` は最後の段の symlink しか断らない）。
  * 無い段は飛ばす（これから `mkdir` が作る）。作った後にもう一度呼んで、作る間の差し替えも拾う。
  */
-function assertNoSymlinkDirs(base: string, dir: string): void {
+export function assertNoSymlinkDirs(base: string, dir: string): void {
   const root = resolve(base);
   const target = resolve(dir);
   if (target !== root && !target.startsWith(`${root}${sep}`)) {
@@ -43,37 +45,56 @@ function assertNoSymlinkDirs(base: string, dir: string): void {
  * 長すぎた出力の保存もそこへ書かれて `/tmp/claude-*` を読まない担当から見えないため（2026-10-13）。
  * 形は SDK と同じ（1件ずつ JSON にして改行で区切る、0600）。
  * 既に在れば上書きしない（`'present'`）: そちらは CLI が書き続けた最新で、材料のほうが古いため。
+ * `writer` があれば（子を別 UID で起こす構成）子の uid の子プロセスで置く: 持ち主は最初から子で、symlink を辿っても子が書ける場所にしか届かない（#5259）。
+ * 無ければ runner 自身で置き、symlink の段を `assertNoSymlinkDirs` で断る。
  */
 export async function placeSeedInConfigDir(
   configDir: string,
   key: { readonly projectKey: string; readonly sessionId: string },
   entries: readonly unknown[],
-  owner?: { readonly uid: number; readonly gid: number },
+  writer?: ChildFileWriter,
 ): Promise<'placed' | 'present'> {
+  const planned = planSeedFile(configDir, key, entries);
+  if (writer !== undefined) return outcomeToPlaced((await writer([planned]))[0]);
+  return (await writeNewHere(configDir, planned)) ? 'placed' : 'present';
+}
+
+function planSeedFile(
+  configDir: string,
+  key: { readonly projectKey: string; readonly sessionId: string },
+  entries: readonly unknown[],
+): PlannedFile {
   if (!isPlainSegment(key.projectKey) || !isPlainSegment(key.sessionId)) {
     throw new Error('projectKey か sessionId がパスの1段として使えない形');
   }
-  const projectsDir = join(configDir, 'projects');
-  const projectDir = join(projectsDir, key.projectKey);
-  assertNoSymlinkDirs(configDir, projectDir);
-  const created = await mkdir(projectDir, { recursive: true, mode: 0o700 });
-  assertNoSymlinkDirs(configDir, projectDir);
-  if (owner !== undefined && created !== undefined) {
-    // 作った段だけ子へ渡す: 既に在る段（子の HOME など）の持ち主は変えないため
-    for (const dir of [configDir, projectsDir, projectDir]) {
-      if (dir === created || dir.startsWith(`${created}/`)) await chown(dir, owner.uid, owner.gid);
-    }
-  }
-  const file = join(projectDir, `${key.sessionId}.jsonl`);
-  const body = entries.map((entry) => `${JSON.stringify(entry)}\n`).join('');
+  return {
+    path: join(configDir, 'projects', key.projectKey, `${key.sessionId}.jsonl`),
+    body: entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''),
+  };
+}
+
+function outcomeToPlaced(outcome: FileWriteOutcome | undefined): 'placed' | 'present' {
+  if (outcome === undefined) throw new Error('子プロセスの応答が足りない');
+  if (outcome.status === 'error') throw new Error(`子の uid で置けなかった: ${outcome.code}`);
+  return outcome.status;
+}
+
+/**
+ * runner 自身で置く（子を別 UID で起こさない構成）。symlink の段は `assertNoSymlinkDirs` で断る。
+ * 子を別 UID で起こす構成はこちらを通らず、子の uid の子プロセスで置く（{@link ChildFileWriter}）。
+ */
+async function writeNewHere(configDir: string, file: PlannedFile): Promise<boolean> {
+  const dir = dirname(file.path);
+  assertNoSymlinkDirs(configDir, dir);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  assertNoSymlinkDirs(configDir, dir);
   try {
-    await writeFile(file, body, { flag: 'wx', mode: 0o600 });
+    await writeFile(file.path, file.body, { flag: 'wx', mode: 0o600 });
   } catch (error) {
-    if ((error as { code?: unknown }).code === 'EEXIST') return 'present';
+    if ((error as { code?: unknown }).code === 'EEXIST') return false;
     throw error;
   }
-  if (owner !== undefined) await chown(file, owner.uid, owner.gid);
-  return 'placed';
+  return true;
 }
 
 export interface SubagentTranscriptSeed {
@@ -104,56 +125,23 @@ export function safeSubagentSubpath(sessionDir: string, subpath: string): string
   return subpath;
 }
 
-// `created`（`mkdir -p` が最初に作った段）から `dir` までの、作った段だけを子へ渡す
-async function chownCreated(
-  dir: string,
-  created: string | undefined,
-  owner: { readonly uid: number; readonly gid: number } | undefined,
-): Promise<void> {
-  if (owner === undefined || created === undefined) return;
-  const chain: string[] = [];
-  for (let current = dir; current === created || current.startsWith(`${created}${sep}`);) {
-    chain.unshift(current);
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  for (const path of chain) await chown(path, owner.uid, owner.gid);
+interface PlannedSubagentFile extends PlannedFile {
+  /** `placed` に数えるか（jsonl は数え、`.meta.json` は数えない）。 */
+  readonly counted: boolean;
 }
 
-async function writeNew(
-  file: string,
-  body: string,
-  owner: { readonly uid: number; readonly gid: number } | undefined,
-): Promise<boolean> {
-  try {
-    await writeFile(file, body, { flag: 'wx', mode: 0o600 });
-  } catch (error) {
-    if ((error as { code?: unknown }).code === 'EEXIST') return false;
-    throw error;
-  }
-  if (owner !== undefined) await chown(file, owner.uid, owner.gid);
-  return true;
-}
-
-/**
- * 作業者（サブエージェント）の記録を、主の記録の隣（`<configDir>/projects/<projectKey>/<sessionId>/<subpath>.jsonl`）に置く。
- * 形は SDK が `listSubkeys` を使って戻すときと同じ（`sdk.mjs` の `M9e`）: `agent_metadata` の行は jsonl に入れず、最後の1件から `type` を除いた JSON を
- * `<subpath>.meta.json` に書き、残りの行を1件ずつ JSON にして改行で区切る。どちらも 0600。jsonl に残る行が無ければ jsonl は作らない（SDK と同じ）。
- * 既に在るファイルは上書きしない（主と同じ理由: CLI が書き続けた最新が在る）。危ない `subpath` は置かずに、断った subpath を返す。
- */
-export async function placeSubagentsInConfigDir(
+/** 置く先と中身だけを決める（fs には触れない）。危ない `subpath` は置かずに `rejected` へ。 */
+function planSubagentFiles(
   configDir: string,
   key: { readonly projectKey: string; readonly sessionId: string },
   subagents: readonly SubagentTranscriptSeed[],
-  owner?: { readonly uid: number; readonly gid: number },
-): Promise<{ placed: number; rejected: string[] }> {
+): { files: PlannedSubagentFile[]; rejected: string[] } {
   if (!isPlainSegment(key.projectKey) || !isPlainSegment(key.sessionId)) {
     throw new Error('projectKey か sessionId がパスの1段として使えない形');
   }
   const sessionDir = join(configDir, 'projects', key.projectKey, key.sessionId);
   const rejected: string[] = [];
-  let placed = 0;
+  const files: PlannedSubagentFile[] = [];
   for (const subagent of subagents) {
     const subpath = safeSubagentSubpath(sessionDir, subagent.subpath);
     if (subpath === undefined) {
@@ -166,24 +154,194 @@ export async function placeSubagentsInConfigDir(
       if (isAgentMetadataEntry(entry)) metadata.push(entry);
       else lines.push(entry);
     }
-    if (lines.length === 0 && metadata.length === 0) continue;
-    const file = join(sessionDir, `${subpath}.jsonl`);
-    assertNoSymlinkDirs(configDir, dirname(file));
-    const created = await mkdir(dirname(file), { recursive: true, mode: 0o700 });
-    assertNoSymlinkDirs(configDir, dirname(file));
-    // 持ち主は、主の記録の段（`projects/<projectKey>`）から下の、作った段だけ移す
-    await chownCreated(dirname(file), created, owner);
     if (lines.length > 0) {
-      const body = lines.map((entry) => `${JSON.stringify(entry)}\n`).join('');
-      if (await writeNew(file, body, owner)) placed += 1;
+      files.push({
+        path: join(sessionDir, `${subpath}.jsonl`),
+        body: lines.map((entry) => `${JSON.stringify(entry)}\n`).join(''),
+        counted: true,
+      });
     }
     const last = metadata.at(-1);
     if (last !== undefined) {
       const sidecar = Object.fromEntries(Object.entries(last).filter(([name]) => name !== 'type'));
-      await writeNew(join(sessionDir, `${subpath}.meta.json`), JSON.stringify(sidecar), owner);
+      files.push({
+        path: join(sessionDir, `${subpath}.meta.json`),
+        body: JSON.stringify(sidecar),
+        counted: false,
+      });
     }
   }
+  return { files, rejected };
+}
+
+/**
+ * 作業者（サブエージェント）の記録を、主の記録の隣（`<configDir>/projects/<projectKey>/<sessionId>/<subpath>.jsonl`）に置く。
+ * 形は SDK が `listSubkeys` を使って戻すときと同じ（`sdk.mjs` の `M9e`）: `agent_metadata` の行は jsonl に入れず、最後の1件から `type` を除いた JSON を
+ * `<subpath>.meta.json` に書き、残りの行を1件ずつ JSON にして改行で区切る。どちらも 0600。jsonl に残る行が無ければ jsonl は作らない（SDK と同じ）。
+ * 既に在るファイルは上書きしない（主と同じ理由: CLI が書き続けた最新が在る）。危ない `subpath` は置かずに、断った subpath を返す。
+ */
+export async function placeSubagentsInConfigDir(
+  configDir: string,
+  key: { readonly projectKey: string; readonly sessionId: string },
+  subagents: readonly SubagentTranscriptSeed[],
+  writer?: ChildFileWriter,
+): Promise<{ placed: number; rejected: string[] }> {
+  const { files, rejected } = planSubagentFiles(configDir, key, subagents);
+  let placed = 0;
+  if (writer !== undefined) {
+    const outcomes = await writer(files);
+    files.forEach((file, index) => {
+      if (outcomeToPlaced(outcomes[index]) === 'placed' && file.counted) placed += 1;
+    });
+    return { placed, rejected };
+  }
+  for (const file of files) {
+    if ((await writeNewHere(configDir, file)) && file.counted) placed += 1;
+  }
   return { placed, rejected };
+}
+
+/**
+ * 主の記録と作業者の記録を、1回の子プロセスでまとめて置く（子を別 UID で起こす構成。resume のたびに起こす子プロセスを1本にするため）。
+ * 主の記録が置けなければ投げる（呼び手は SDK の一時ディレクトリへ落とす）。作業者の記録の失敗は投げずに `subagentFailure` に返す（主の resume は止めない）。
+ */
+export async function placeResumeMaterialAsChild(
+  configDir: string,
+  key: { readonly projectKey: string; readonly sessionId: string },
+  seed: readonly unknown[],
+  subagents: readonly SubagentTranscriptSeed[],
+  writer: ChildFileWriter,
+): Promise<{
+  seed: 'placed' | 'present';
+  subagents: { placed: number; rejected: string[] };
+  subagentFailure?: string;
+}> {
+  const seedFile = planSeedFile(configDir, key, seed);
+  const planned = planSubagentFiles(configDir, key, subagents);
+  const outcomes = await writer([seedFile, ...planned.files]);
+  const seedResult = outcomeToPlaced(outcomes[0]);
+  let placed = 0;
+  const failedCodes = new Set<string>();
+  planned.files.forEach((file, index) => {
+    const outcome = outcomes[index + 1];
+    if (outcome === undefined || outcome.status === 'error') {
+      failedCodes.add(outcome?.code ?? 'MISSING');
+    } else if (outcome.status === 'placed' && file.counted) {
+      placed += 1;
+    }
+  });
+  return {
+    seed: seedResult,
+    subagents: { placed, rejected: planned.rejected },
+    ...(failedCodes.size === 0
+      ? {}
+      : { subagentFailure: `子の uid で置けなかった: ${[...failedCodes].join(', ')}` }),
+  };
+}
+
+export interface PeerRolloutSeed {
+  readonly peerId: string;
+  readonly threadId: string;
+  readonly relPath: string;
+  readonly entries: readonly unknown[];
+}
+
+/**
+ * peer（Codex）の rollout の置き場の相対パス（`CODEX_HOME/sessions/` から下）を検める。通れば `relPath`、通らなければ `undefined`。
+ * 断る形: 空・NUL・絶対パス・`..` の段・`sessions/` の外へ出る・ファイル名が `rollout-` で始まり `<threadId>.jsonl` で終わらない。
+ * ファイル名の条件は Codex が thread を探す条件そのもの（違う名前では `no rollout found` で断られる）で、同時に、資格など
+ * rollout 以外のファイルを `CODEX_HOME` の下へ作らせないための歯でもある。
+ */
+export function safePeerRolloutRelPath(
+  sessionsDir: string,
+  relPath: string,
+  threadId: string,
+): string | undefined {
+  if (relPath.length === 0 || relPath.includes('\0')) return undefined;
+  if (!isPlainSegment(threadId)) return undefined;
+  if (isAbsolute(relPath) || win32.isAbsolute(relPath)) return undefined;
+  const segments = relPath.split(/[\\/]/);
+  if (segments.includes('..') || segments.includes('')) return undefined;
+  const name = segments[segments.length - 1] ?? '';
+  if (!name.startsWith('rollout-') || !name.endsWith(`${threadId}.jsonl`)) return undefined;
+  const base = resolve(sessionsDir);
+  if (!resolve(base, relPath).startsWith(`${base}${sep}`)) return undefined;
+  return relPath;
+}
+
+/** `ordinal` で重複を落として並べる。`ordinal` を持たない行は rollout の行ではないので捨てる（数を `dropped` に返す）。 */
+export function orderRolloutEntries(entries: readonly unknown[]): {
+  lines: Record<string, unknown>[];
+  dropped: number;
+} {
+  const byOrdinal = new Map<number, Record<string, unknown>>();
+  let dropped = 0;
+  for (const entry of entries) {
+    if (typeof entry !== 'object' || entry === null) {
+      dropped += 1;
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const ordinal = record.ordinal;
+    if (record.type === 'alteroid_peer_meta') continue;
+    if (typeof ordinal !== 'number' || !Number.isInteger(ordinal) || ordinal < 0) {
+      dropped += 1;
+      continue;
+    }
+    if (!byOrdinal.has(ordinal)) byOrdinal.set(ordinal, record);
+  }
+  const lines = [...byOrdinal.entries()].sort((a, b) => a[0] - b[0]).map(([, entry]) => entry);
+  return { lines, dropped };
+}
+
+/**
+ * peer（Codex）の rollout を `<codexHome>/sessions/<relPath>` へ書き戻す（`peer_reply` が `thread/resume` で起こせるように）。
+ * 作業者の分（{@link placeSubagentsInConfigDir}）と同じ守りを掛ける: `wx`（既にあれば上書きしない。Codex が書き続けた最新が在る）・0600。
+ * `writer` があれば（子を別 UID で起こす構成）全 peer のファイルを1回の子の uid の子プロセスで置く。持ち主は最初から子で、symlink は子が書ける場所にしか届かないので、段の検めも持ち主の付け替えも要らない。無ければ runner 自身で置き、symlink の段を断る。
+ * 危ない `relPath`・ファイル名の peer は置かずに `peerId` を `rejected` に返す。
+ */
+export async function placePeersInCodexHome(
+  codexHome: string,
+  peers: readonly PeerRolloutSeed[],
+  writer?: ChildFileWriter,
+): Promise<{ placed: string[]; present: string[]; rejected: string[]; droppedLines: number }> {
+  const sessionsDir = join(codexHome, 'sessions');
+  const result = {
+    placed: [] as string[],
+    present: [] as string[],
+    rejected: [] as string[],
+    droppedLines: 0,
+  };
+  const planned: { peerId: string; file: PlannedFile }[] = [];
+  for (const peer of peers) {
+    const relPath = safePeerRolloutRelPath(sessionsDir, peer.relPath, peer.threadId);
+    if (relPath === undefined) {
+      result.rejected.push(peer.peerId);
+      continue;
+    }
+    const { lines, dropped } = orderRolloutEntries(peer.entries);
+    result.droppedLines += dropped;
+    if (lines.length === 0) {
+      result.rejected.push(peer.peerId);
+      continue;
+    }
+    planned.push({
+      peerId: peer.peerId,
+      file: {
+        path: join(sessionsDir, relPath),
+        body: lines.map((line) => `${JSON.stringify(line)}\n`).join(''),
+      },
+    });
+  }
+  const outcomes = writer === undefined ? undefined : await writer(planned.map(({ file }) => file));
+  for (const [index, { peerId, file }] of planned.entries()) {
+    const placed =
+      outcomes === undefined
+        ? await writeNewHere(codexHome, file)
+        : outcomeToPlaced(outcomes[index]) === 'placed';
+    (placed ? result.placed : result.present).push(peerId);
+  }
+  return result;
 }
 
 /**

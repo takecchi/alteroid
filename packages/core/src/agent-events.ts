@@ -57,6 +57,11 @@ export interface AgentSessionStarted {
   type: 'session_started';
   sessionId: string;
   runtime: AgentRuntimeFacts;
+  /**
+   * provider が会話の記録を実際に書いた場所（ディスク上のパス）。provider が知らせたときだけ置き、
+   * 知らせなければ省く（推測で埋めない）。記録の形は provider ごとに違うので、中身は読まず場所だけ運ぶ。
+   */
+  transcriptLocation?: string;
 }
 
 // 別の枝にしない: 層が消費を積む前に読むか後に読むかを自分で決めており、揃えると日誌へ書く順が変わるため

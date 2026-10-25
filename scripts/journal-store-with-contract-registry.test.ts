@@ -16,10 +16,12 @@ const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-r
 // `.test.ts` / `.test.tsx` は対象外: テストが自分専用に書く `JournalStore` のスタブは本番の実装ではなく使い捨てのため。
 const CLASS_IMPLEMENTS = /class\s+\w+[^{;]*\bimplements\b[^{;]*\bJournalStore\b/g;
 const TYPED_OBJECT_LITERAL = /:\s*JournalStore\s*=\s*\{/g;
+// 包みも実装として拾う（#5140）: 口を並べた包みは器の任意の口を黙って落とすので、`wrapJournalStore` に寄せた包みも一覧に載せ、どれが委ねているかを登録で言わせる。定義（`function wrapJournalStore(`）は拾わない
+const WRAPPED_STORE = /(?<!function\s+)\bwrapJournalStore\s*\(/g;
 
 export interface DetectedImplementation {
   file: string;
-  form: 'class' | 'typed-object-literal';
+  form: 'class' | 'typed-object-literal' | 'wrap';
 }
 
 export function findJournalStoreImplementations(
@@ -34,6 +36,8 @@ export function findJournalStoreImplementations(
     CLASS_IMPLEMENTS.lastIndex = 0;
     if (TYPED_OBJECT_LITERAL.test(text)) out.push({ file, form: 'typed-object-literal' });
     TYPED_OBJECT_LITERAL.lastIndex = 0;
+    if (WRAPPED_STORE.test(text)) out.push({ file, form: 'wrap' });
+    WRAPPED_STORE.lastIndex = 0;
   }
   return out;
 }
@@ -102,9 +106,14 @@ const KNOWN_IMPLEMENTATIONS: Record<string, RegistryEntry> = {
   'apps/daemon/src/journal-bus.ts': {
     status: 'delegates',
     reason:
-      '`createJournalBus` の `journal.list` は `inner.list(query)` をそのまま返す ' +
-      '（`journal-bus.ts` の doc「ここに判断は無い」）。絞りの実装を持たないので、' +
-      '契約群を測る対象は inner 側（実際のストア）である。',
+      '`createJournalBus` は `wrapJournalStore` で `append` だけを差し替え、読み出しの口は全部 inner をそのまま返す。' +
+      '絞りの実装を持たないので、契約群を測る対象は inner 側（実際のストア）である。',
+  },
+  'packages/core/src/approval-trace.ts': {
+    status: 'delegates',
+    reason:
+      '`stampingJournal` は `wrapJournalStore` で `append`（印を付ける）だけを差し替え、読み出しの口は全部 inner をそのまま返す。' +
+      '絞りの実装を持たないので、契約群を測る対象は inner 側（実際のストア）である。',
   },
 };
 
@@ -116,7 +125,8 @@ describe('JournalStore 実装の一覧が with 契約の登録から漏れてい
     expect(detected.length).toBeGreaterThan(0);
   });
 
-  it('前提: 登録した4つの実装がすべて実在する（ファイルそのものが動いていないか）', () => {
+  // 「4つ」は包みを登録に足した（#5140）ので5つになった。数は名前にしか効いていない（下は登録の全部を回す）
+  it('前提: 登録した5つの実装がすべて実在する（ファイルそのものが動いていないか）', () => {
     for (const file of Object.keys(KNOWN_IMPLEMENTATIONS)) {
       expect(
         detected.some((d) => d.file === file),
