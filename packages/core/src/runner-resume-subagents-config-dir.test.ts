@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, stat } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,7 +17,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-const { placeSubagentsInConfigDir, safeSubagentSubpath } =
+const { placeSeedInConfigDir, placeSubagentsInConfigDir, safeSubagentSubpath } =
   await import('./runner-resume-config-dir.js');
 
 const KEY = { projectKey: '-work-project', sessionId: 'sess-1' };
@@ -33,6 +33,31 @@ beforeEach(async () => {
   chowned.length = 0;
   configDir = await makeTempDir('resume-subagents-');
   sessionDir = join(configDir, 'projects', KEY.projectKey, KEY.sessionId);
+});
+
+// 子が書ける設定ディレクトリの途中の段を symlink に差し替えられても、runner が辿って外へ書かない
+describe('途中の段が symlink なら書かずに断る', () => {
+  it('作業者の記録: <sessionId>/subagents が外を指す symlink なら、外へ何も作らない', async () => {
+    const outside = await makeTempDir('resume-subagents-outside-');
+    await mkdir(sessionDir, { recursive: true });
+    await symlink(outside, join(sessionDir, 'subagents'));
+
+    await expect(
+      placeSubagentsInConfigDir(configDir, KEY, [
+        { subpath: 'subagents/agent-a1', entries: [META, ...LINES] },
+      ]),
+    ).rejects.toThrow('symlink');
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  it('主の記録: projects/<projectKey> が外を指す symlink なら、外へ何も作らない', async () => {
+    const outside = await makeTempDir('resume-main-outside-');
+    await mkdir(join(configDir, 'projects'), { recursive: true });
+    await symlink(outside, join(configDir, 'projects', KEY.projectKey));
+
+    await expect(placeSeedInConfigDir(configDir, KEY, LINES)).rejects.toThrow('symlink');
+    expect(await readdir(outside)).toEqual([]);
+  });
 });
 
 // 規則は SDK が `listSubkeys` を使って戻す実装（`sdk.mjs` の `M9e`）と同じ:

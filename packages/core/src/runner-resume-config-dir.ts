@@ -9,6 +9,35 @@ function isPlainSegment(name: string): boolean {
 }
 
 /**
+ * `base` から `dir` までの在る段が、どれも symlink でない実在のディレクトリかを確かめる。違えば投げる（書かない）。
+ * runner（root のことがある）が、子が書ける設定ディレクトリの中へ書くため: 子が途中の段を symlink に差し替えておくと、
+ * `mkdir -p` と `writeFile` はそれを辿り、root が子の選んだ場所にファイルを作って子へ渡してしまう（`wx` は最後の段の symlink しか断らない）。
+ * 無い段は飛ばす（これから `mkdir` が作る）。作った後にもう一度呼んで、作る間の差し替えも拾う。
+ */
+function assertNoSymlinkDirs(base: string, dir: string): void {
+  const root = resolve(base);
+  const target = resolve(dir);
+  if (target !== root && !target.startsWith(`${root}${sep}`)) {
+    throw new Error('書き込み先が設定ディレクトリの外');
+  }
+  const segments = target === root ? [] : target.slice(root.length + 1).split(sep);
+  let current = root;
+  for (const segment of ['', ...segments]) {
+    if (segment !== '') current = join(current, segment);
+    let info;
+    try {
+      info = lstatSync(current);
+    } catch (error) {
+      if ((error as { code?: unknown }).code === 'ENOENT') return;
+      throw error;
+    }
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new Error('設定ディレクトリの途中の段が symlink か、ディレクトリでない');
+    }
+  }
+}
+
+/**
  * resume の材料（生ログ）を、子のふだんの設定ディレクトリ `<configDir>/projects/<projectKey>/<sessionId>.jsonl` に置く。
  * SDK の一時ディレクトリ（`/tmp/claude-resume-*`）へ書かせない: CLI が終わると SDK が消し、鍵の回転で開き直すと会話が見つからず、
  * 長すぎた出力の保存もそこへ書かれて `/tmp/claude-*` を読まない担当から見えないため（2026-10-13）。
@@ -26,7 +55,9 @@ export async function placeSeedInConfigDir(
   }
   const projectsDir = join(configDir, 'projects');
   const projectDir = join(projectsDir, key.projectKey);
+  assertNoSymlinkDirs(configDir, projectDir);
   const created = await mkdir(projectDir, { recursive: true, mode: 0o700 });
+  assertNoSymlinkDirs(configDir, projectDir);
   if (owner !== undefined && created !== undefined) {
     // 作った段だけ子へ渡す: 既に在る段（子の HOME など）の持ち主は変えないため
     for (const dir of [configDir, projectsDir, projectDir]) {
@@ -137,7 +168,9 @@ export async function placeSubagentsInConfigDir(
     }
     if (lines.length === 0 && metadata.length === 0) continue;
     const file = join(sessionDir, `${subpath}.jsonl`);
+    assertNoSymlinkDirs(configDir, dirname(file));
     const created = await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+    assertNoSymlinkDirs(configDir, dirname(file));
     // 持ち主は、主の記録の段（`projects/<projectKey>`）から下の、作った段だけ移す
     await chownCreated(dirname(file), created, owner);
     if (lines.length > 0) {
