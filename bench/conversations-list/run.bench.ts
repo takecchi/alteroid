@@ -44,11 +44,12 @@ const LIMIT = Number(process.env['BENCH_LIMIT'] ?? '30');
 const OUT_DIR = join(import.meta.dirname, 'out');
 const OUT_FILE = join(
   OUT_DIR,
-  `${step}-${process.env['BENCH_ROUTE'] === undefined ? '' : `${process.env['BENCH_ROUTE']}-`}${process.env['BENCH_WRAP'] ?? 'bus'}${process.env['BENCH_EVICT'] === '1' ? '-evict' : ''}-${nowIso().replaceAll(':', '')}.txt`,
+  `${process.env['BENCH_TAG'] === undefined ? '' : `${process.env['BENCH_TAG']}-`}${step}-${process.env['BENCH_ROUTE'] === undefined ? '' : `${process.env['BENCH_ROUTE']}-`}${process.env['BENCH_WRAP'] ?? 'bus'}${process.env['BENCH_EVICT'] === '1' ? '-evict' : ''}-${nowIso().replaceAll(':', '')}.txt`,
 );
 
 function out(line: string): void {
-  console.log(line);
+  // BENCH_QUIET=1 のときは画面へ出さず out/ のファイルだけに書く（SQL が数百本流れる口で画面が溢れるため）
+  if (process.env['BENCH_QUIET'] !== '1') console.log(line);
   mkdirSync(OUT_DIR, { recursive: true });
   appendFileSync(OUT_FILE, `${line}\n`);
 }
