@@ -1,0 +1,10 @@
+# env 2026-10-25T03:19:00.568Z
+SHOW shared_buffers = 128MB
+SHOW work_mem = 4MB
+SHOW jit = on
+SHOW random_page_cost = 4
+SHOW effective_cache_size = 4GB
+SHOW track_io_timing = off
+SHOW max_parallel_workers_per_gather = 2
+SHOW default_statistics_target = 100
+SHOW server_version = 17.11 (Debian 17.11-0+deb13u1)
