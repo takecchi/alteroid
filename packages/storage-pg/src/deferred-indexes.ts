@@ -6,10 +6,12 @@ import {
   ensureJournalConversationSeqIndex,
   ensureJournalHumanExchangeSeqIndex,
   ensureJournalHumanRepliesIndex,
+  ensureJournalTypeSeqIndex,
   ensureJournalWithdrawalsIndex,
   JOURNAL_CONVERSATION_SEQ_INDEX,
   JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX,
   JOURNAL_HUMAN_REPLIES_INDEX,
+  JOURNAL_TYPE_SEQ_INDEX,
   JOURNAL_WITHDRAWALS_INDEX,
 } from './migrate.js';
 
@@ -39,6 +41,7 @@ const DEFERRED_INDEXES: readonly {
   { name: JOURNAL_HUMAN_REPLIES_INDEX, ensure: ensureJournalHumanRepliesIndex },
   { name: JOURNAL_WITHDRAWALS_INDEX, ensure: ensureJournalWithdrawalsIndex },
   { name: JOURNAL_CONVERSATION_SEQ_INDEX, ensure: ensureJournalConversationSeqIndex },
+  { name: JOURNAL_TYPE_SEQ_INDEX, ensure: ensureJournalTypeSeqIndex },
 ];
 
 /** 起動の後に作る索引の名前（並びは作る順） */
