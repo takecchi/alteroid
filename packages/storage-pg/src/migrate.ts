@@ -737,6 +737,41 @@ export async function ensureJournalHumanExchangeSeqIndex(
   }
 }
 
+/** 種別で絞った日誌を `seq` の順に読むための索引（#5264） */
+export const JOURNAL_TYPE_SEQ_INDEX = 'journal_type_seq_idx';
+
+// 鍵を `(type, seq)` にする: `listPage({ types })` は `order by seq desc limit` で新しい側から引くので、`journal_type_at_idx`（`type`, `at`）は並びに使えず、
+// planner は主キーを新しい側から辿って種別で捨てる計画を選ぶ。日報（1 日 1 行前後）や GitHub の観測の記録のように薄い種別では、`limit` に届くまで日誌の大半を辿る（`GET /reports`・`GET /progress`）。
+// 種別ごとの部分索引にしない: 種別はパラメータで渡るので、汎用の計画では部分索引の述語との一致を planner が確かめられず、使われないことがあるため
+const CREATE_JOURNAL_TYPE_SEQ_INDEX = `create index concurrently if not exists ${JOURNAL_TYPE_SEQ_INDEX}
+   on journal (type, seq)`;
+
+/**
+ * 種別と `seq` の索引を、書き込みを止めずに作る（#5264。日報の一覧・進捗の GitHub の観測の記録の読み出しを、新しい順に辿って途中で止める形にする）。
+ * 作り方・倒れ方は `ensureJournalHumanRepliesIndex` と同じ（`STATEMENTS` に置かない・`concurrently`・無効なら作り直す・投げない）。
+ */
+export async function ensureJournalTypeSeqIndex(
+  db: Db,
+  warn: (line: string) => void = (line) => writeStderrLine(line),
+): Promise<void> {
+  try {
+    const result = await db.execute(
+      sql`select i.indisvalid as valid from pg_class c join pg_index i on i.indexrelid = c.oid where c.relname = ${JOURNAL_TYPE_SEQ_INDEX}`,
+    );
+    const found = rowsOf(result)[0] as { valid?: boolean } | undefined;
+    if (found?.valid === true) return;
+    if (found !== undefined) {
+      await db.execute(sql.raw(`drop index concurrently if exists ${JOURNAL_TYPE_SEQ_INDEX}`));
+    }
+    await db.execute(sql.raw(CREATE_JOURNAL_TYPE_SEQ_INDEX));
+  } catch (error) {
+    warn(
+      `alteroid: 日誌の索引 ${JOURNAL_TYPE_SEQ_INDEX} を作れなかった（${collapseErrorCause(error)}）。` +
+        '索引なしで動き続け（日報の一覧・進捗の GitHub の観測の記録など、種別で絞った読み出しが遅いだけ）、次の起動でやり直す（#5264）\n',
+    );
+  }
+}
+
 export const OPEN_MANAGER_BODY_INDEX = 'commitments_open_manager_body_idx';
 
 // `STATEMENTS` に置かない: 既存の重複行が在ると作れず、起動のたびに通る配列でデーモンが上がらなくなる。
