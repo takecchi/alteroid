@@ -44,7 +44,9 @@ export async function resolveRolloutFile(
   codexHome: string,
   location: string,
   threadId: string,
-): Promise<{ ok: true; file: string; relPath: string } | { ok: false; reason: string }> {
+): Promise<
+  { ok: true; file: string; relPath: string } | { ok: false; reason: string; missing?: true }
+> {
   const matches = (name: string): boolean =>
     name.startsWith('rollout-') && name.endsWith(`${threadId}.jsonl`);
   if (location.includes('\0')) return { ok: false, reason: 'パスに NUL を含む' };
@@ -59,7 +61,9 @@ export async function resolveRolloutFile(
   } catch (error) {
     return {
       ok: false,
-      reason: `実体を解決できない: ${(error as { code?: unknown }).code?.toString() ?? 'unknown'}`,
+      reason: `実体を解決できない: ${errorCode(error)}`,
+      // まだ書かれていない（Codex が最初のターンまで rollout を作らない場合）。呼び出し側は後でもう一度検める
+      ...(errorCode(error) === 'ENOENT' ? { missing: true as const } : {}),
     };
   }
   if (!realFile.startsWith(`${realSessions}${sep}`)) {
@@ -81,6 +85,16 @@ export class PeerRolloutMirror {
   readonly #peers = new Map<string, TrackedPeer>();
   readonly #untracked = new Set<string>();
   readonly #tracking = new Map<string, Promise<void>>();
+  readonly #waiting = new Map<
+    string,
+    {
+      peerId: string;
+      provider: string;
+      threadId: string;
+      transcriptLocation: string | undefined;
+      resumed: boolean;
+    }
+  >();
   #closed = false;
 
   constructor(deps: PeerRolloutDeps) {
@@ -123,9 +137,12 @@ export class PeerRolloutMirror {
     }
     const resolved = await resolveRolloutFile(home, info.transcriptLocation, info.threadId);
     if (!resolved.ok) {
-      this.#skip(peerId, resolved.reason);
+      // 記録がまだ無いだけなら、次の止まりどころでもう一度検める（断ったとは数えない）
+      if (resolved.missing === true) this.#waiting.set(peerId, info);
+      else this.#skip(peerId, resolved.reason);
       return;
     }
+    this.#waiting.delete(peerId);
     // 同じ peer を同じ記録で起こし直した回は、読み済みの位置を引き継ぐ（作り直すと、閉じる間際に書かれた分を読み飛ばす）
     if (this.#peers.get(peerId)?.file === resolved.file) {
       this.#untracked.delete(peerId);
@@ -167,7 +184,12 @@ export class PeerRolloutMirror {
 
   /** 増えた行を読んで預ける。同じ peer への呼び出しは順に行う。 */
   collect(peerId: string): Promise<void> {
-    return (this.#tracking.get(peerId) ?? Promise.resolve()).then(() => {
+    return (this.#tracking.get(peerId) ?? Promise.resolve()).then(async () => {
+      const waiting = this.#waiting.get(peerId);
+      if (waiting !== undefined) {
+        this.#waiting.delete(peerId);
+        await this.#trackNow(waiting).catch(() => undefined);
+      }
       const peer = this.#peers.get(peerId);
       if (peer === undefined || this.#closed) return undefined;
       const run = peer.chain.then(() => this.#collectNow(peer));
