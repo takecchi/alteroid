@@ -341,6 +341,7 @@ class PeerSession {
   #workdirChanges: PeerWorkdirChanges | undefined;
   #turnStartedMs = 0;
   readonly #cwd: string | undefined;
+  readonly #resumed: boolean;
   #baseline: UsageBaseline | null = null;
   #providerSessionId: string | undefined;
   #model: string | undefined;
@@ -367,6 +368,7 @@ class PeerSession {
       ...(model === undefined ? {} : { model }),
     });
     this.#cwd = spec.cwd;
+    this.#resumed = spec.resume !== undefined;
     this.#session = deps.driverOf(provider).open({
       ...spec,
       onPostToolUse: (record) => {
@@ -710,6 +712,10 @@ class PeerSession {
     switch (event.type) {
       case 'session_started':
         this.#providerSessionId = event.sessionId;
+        // 記録の置き場を本番で測るための観測: 相手の記録をどこへ預けるか決める材料にする
+        this.#deps.onNote(
+          `peer（${this.provider}）[${this.id}] の相手のセッション ${event.sessionId} を${this.#resumed ? '続きから起こした' : '始めた'}。記録の置き場: ${event.transcriptLocation ?? '応答に無い'}`,
+        );
         if (typeof event.runtime?.model === 'string' && event.runtime.model.length > 0) {
           const known = this.#model;
           this.#model = event.runtime.model;

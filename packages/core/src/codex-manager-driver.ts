@@ -462,6 +462,9 @@ class CodexManagerSession implements CodexSession {
     await this.#emit({
       type: 'session_started',
       sessionId: response.thread.id,
+      ...(typeof response.thread.path === 'string' && response.thread.path.length > 0
+        ? { transcriptLocation: response.thread.path }
+        : {}),
       runtime: {
         sessionId: response.thread.id,
         model: response.model,

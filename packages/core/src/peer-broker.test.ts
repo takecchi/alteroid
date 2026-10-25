@@ -46,6 +46,7 @@ function turnEnded(body: string, models?: Record<string, UsageTotals>): AgentEve
 function scriptedDriver(
   script: (turn: number, spec: AgentManagerSessionSpec) => Promise<AgentEvent[]> | AgentEvent[],
   seen: { specs: AgentManagerSessionSpec[]; closed: number },
+  transcriptLocation?: string,
 ): AgentManagerDriver {
   return {
     providerId: 'codex',
@@ -58,6 +59,7 @@ function scriptedDriver(
             type: 'session_started',
             sessionId: 'thr-1',
             runtime: { model: 'gpt-from-runtime' } as never,
+            ...(transcriptLocation === undefined ? {} : { transcriptLocation }),
           });
           for await (const input of spec.input) {
             void input;
@@ -89,6 +91,8 @@ function makeBroker(
     cwd?: string;
     scanWorkdir?: PeerBrokerDeps['scanWorkdir'];
     now?: PeerBrokerDeps['now'];
+    transcriptLocation?: string;
+    resume?: string;
   } = {},
 ) {
   const seen = { specs: [] as AgentManagerSessionSpec[], closed: 0 };
@@ -101,7 +105,7 @@ function makeBroker(
   const ref: { broker?: ReturnType<typeof createPeerBroker> } = {};
   const deps: PeerBrokerDeps = {
     allowed: ['codex'],
-    driverOf: () => scriptedDriver(script, seen),
+    driverOf: () => scriptedDriver(script, seen, options.transcriptLocation),
     makeSpec: (_provider, given) => {
       parts.push({ ...given });
       return {
@@ -112,6 +116,7 @@ function makeBroker(
         onPostToolUseFailure: () => undefined,
         ...(given.model === undefined ? {} : { model: given.model }),
         ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+        ...(options.resume === undefined ? {} : { resume: options.resume }),
       } as unknown as AgentManagerSessionSpec;
     },
     ...(options.scanWorkdir === undefined ? {} : { scanWorkdir: options.scanWorkdir }),
@@ -436,6 +441,37 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     expect(typeof (await broker.run('codex', 'x'))).not.toBe('string');
     expect(seen.specs).toHaveLength(1);
     broker.closeAll();
+  });
+
+  it('session_started を受けたら、peer の id・相手の thread id・記録の置き場を note に1回出す', async () => {
+    const location = '/codex-home/sessions/rollout-1.jsonl';
+    const { broker, notes } = makeBroker((turn) => [turnEnded(`答え${turn}`)], {
+      transcriptLocation: location,
+    });
+    const first = foreground(await broker.run('codex', '調べて'));
+    foreground(await broker.reply(first.sessionId, '続けて'));
+    const started = notes.filter((note) => note.includes('thr-1'));
+    expect(started).toHaveLength(1);
+    expect(started[0]).toContain(first.sessionId);
+    expect(started[0]).toContain('始めた');
+    expect(started[0]).toContain(location);
+    broker.closeAll();
+  });
+
+  it('置き場が応答に無ければ、無いと書く。resume の peer は続きから起こしたと書く', async () => {
+    const fresh = makeBroker((turn) => [turnEnded(`答え${turn}`)]);
+    const first = foreground(await fresh.broker.run('codex', '調べて'));
+    const freshNote = fresh.notes.find((note) => note.includes('thr-1'));
+    expect(freshNote).toContain(first.sessionId);
+    expect(freshNote).toContain('記録の置き場: 応答に無い');
+    fresh.broker.closeAll();
+
+    const resumed = makeBroker((turn) => [turnEnded(`答え${turn}`)], { resume: 'thr-1' });
+    foreground(await resumed.broker.run('codex', '調べて'));
+    const resumedNote = resumed.notes.find((note) => note.includes('thr-1'));
+    expect(resumedNote).toContain('続きから起こした');
+    expect(resumedNote).not.toContain('始めた');
+    resumed.broker.closeAll();
   });
 
   it('承認の口が無ければ、escalate した確認は拒否し、結果と日誌に出す（素通しにしない）', async () => {

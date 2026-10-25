@@ -156,6 +156,8 @@ export type CodexUserInput = CodexUserInputText | CodexUserInputImage;
 export interface CodexThread {
   id: string;
   cwd: string;
+  /** [UNSTABLE] Path to the thread on disk（会話の記録 rollout の置き場）。無いことも null のこともある。 */
+  path?: string | null;
 }
 
 export interface CodexTurnError {
@@ -744,7 +746,7 @@ export const CODEX_SCHEMA_USES: readonly CodexSchemaUse[] = [
     model: 'required',
     approvalPolicy: 'required',
   }),
-  use<CodexThread>('v2/Thread', 'receive', { id: 'required', cwd: 'required' }),
+  use<CodexThread>('v2/Thread', 'receive', { id: 'required', cwd: 'required', path: 'optional' }),
   use<CodexTurnStartParams>('v2/TurnStartParams', 'send', {
     threadId: 'required',
     input: 'required',

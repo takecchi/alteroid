@@ -48,6 +48,7 @@ class FakeAppServer extends EventEmitter {
     turnStartError?: string;
     onTurn?: (turnNumber: number, text: string, turnId: string) => void;
     model?: string;
+    threadPath?: string | null;
   } = {};
 
   constructor() {
@@ -133,7 +134,11 @@ class FakeAppServer extends EventEmitter {
         const threadId =
           method === 'thread/resume' ? String((message['params'] as Json)['threadId']) : 'thr-1';
         reply({
-          thread: { id: threadId, cwd: '/w' },
+          thread: {
+            id: threadId,
+            cwd: '/w',
+            ...(this.script.threadPath === undefined ? {} : { path: this.script.threadPath }),
+          },
           model: this.script.model ?? 'gpt-5',
           approvalPolicy: 'on-request',
         });
@@ -399,6 +404,46 @@ describe('CodexManagerDriver: 起動・認証・thread', () => {
     expect(resume['threadId']).toBe('thr-old');
     expect(resume['sandbox']).toBe('danger-full-access');
     expect(h.events[0]).toMatchObject({ type: 'session_started', sessionId: 'thr-old' });
+  });
+
+  it('thread.path があれば session_started の transcriptLocation に載る（start も resume も）', async () => {
+    const started = setup({
+      env: { CODEX_API_KEY: FAKE_KEY },
+      script: { threadPath: '/codex/sessions/rollout-a.jsonl' },
+    });
+    started.feed.end();
+    await started.run();
+    expect(started.events[0]).toMatchObject({
+      type: 'session_started',
+      transcriptLocation: '/codex/sessions/rollout-a.jsonl',
+    });
+
+    const resumed = setup({
+      env: { CODEX_API_KEY: FAKE_KEY },
+      resume: 'thr-old',
+      script: { threadPath: '/codex/sessions/rollout-b.jsonl' },
+    });
+    resumed.feed.end();
+    await resumed.run();
+    expect(resumed.events[0]).toMatchObject({
+      type: 'session_started',
+      sessionId: 'thr-old',
+      transcriptLocation: '/codex/sessions/rollout-b.jsonl',
+    });
+  });
+
+  it('thread.path が無い・null・空なら transcriptLocation は載せない（undefined）', async () => {
+    for (const threadPath of [undefined, null, '']) {
+      const h = setup({
+        env: { CODEX_API_KEY: FAKE_KEY },
+        script: threadPath === undefined ? {} : { threadPath },
+      });
+      h.feed.end();
+      await h.run();
+      const event = h.events[0] as { transcriptLocation?: string };
+      expect(event.transcriptLocation).toBeUndefined();
+      expect('transcriptLocation' in event).toBe(false);
+    }
   });
 
   it('鍵なし・ChatGPT ログインあり: ephemeral にせず、login もしない', async () => {
