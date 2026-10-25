@@ -51,12 +51,12 @@ psql -h 127.0.0.1 -p 55931 -U postgres -c "create database alteroid_bench"
 - `BENCH_WRAP=bus`（既定）: 本番のデーモン（`apps/daemon/src/index.ts`）と同じく日誌のストアを `createJournalBus`（`apps/daemon/src/journal-bus.ts`）で包んで app に渡す。この包みは `append/list/listPage/get/oldestAt/clear` しか渡さないので、pg の細い口（`conversationWindowHeads` など）が落ちて本文ごと読む道に倒れる。**「前」の値はこちら。**
 - `BENCH_WRAP=none`: 包まず pg のストアをそのまま渡す。
 
-| 段                                                         | 中身                                                                                                                                                                                                                                                         |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `BENCH_STEP=warm`                                          | 最初の 1 回（プロセスは冷え・PG は温まっている）・3 回の助走の後の 21 回（`/conversations?limit=30`）の中央値/p90/最大・SQL の全部（client 側の時間つき）・JS 側の段・2 頁目（`nextCursor`）21 回・`/conversations/unread-count` 21 回・同時に叩いた 1 回 |
-| `BENCH_STEP=cold` / `BENCH_EVICT=1` を足す                 | `pg_ctl restart` の直後の最初の 1 回と、その後 5 回の曲線。`BENCH_EVICT=1` は日誌の関係ファイルの OS キャッシュも落とす（`dd iflag=nocache count=0`。root 不要。落ちたことは 1 回目が 1 桁遅くなることで確かめた）                                              |
-| `BENCH_STEP=serverlog`                                     | `log_min_duration_statement = 0` を一時的に入れて 1 回ぶんのサーバ側の duration を出し、元へ戻す                                                                                                                                                             |
-| `BENCH_STEP=explain`（`BENCH_ONLY=<番号>` で 1 文だけ）    | 1・2 頁目・unread-count で流れる select の `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)`。文ごとに 温まった（3 回目）・PG 再起動直後・PG 再起動 + OS キャッシュ落とし の 3 通り（`track_io_timing` はそのトランザクションだけ on）                                      |
+| 段                                                      | 中身                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BENCH_STEP=warm`                                       | 最初の 1 回（プロセスは冷え・PG は温まっている）・3 回の助走の後の 21 回（`/conversations?limit=30`）の中央値/p90/最大・SQL の全部（client 側の時間つき）・JS 側の段・2 頁目（`nextCursor`）21 回・`/conversations/unread-count` 21 回・同時に叩いた 1 回 |
+| `BENCH_STEP=cold` / `BENCH_EVICT=1` を足す              | `pg_ctl restart` の直後の最初の 1 回と、その後 5 回の曲線。`BENCH_EVICT=1` は日誌の関係ファイルの OS キャッシュも落とす（`dd iflag=nocache count=0`。root 不要。落ちたことは 1 回目が 1 桁遅くなることで確かめた）                                        |
+| `BENCH_STEP=serverlog`                                  | `log_min_duration_statement = 0` を一時的に入れて 1 回ぶんのサーバ側の duration を出し、元へ戻す                                                                                                                                                          |
+| `BENCH_STEP=explain`（`BENCH_ONLY=<番号>` で 1 文だけ） | 1・2 頁目・unread-count で流れる select の `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)`。文ごとに 温まった（3 回目）・PG 再起動直後・PG 再起動 + OS キャッシュ落とし の 3 通り（`track_io_timing` はそのトランザクションだけ on）                               |
 
 出力は stdout と `out/<段>-<wrap>-<時刻>.txt`。`BENCH_REPEAT`（既定 21）・`BENCH_LIMIT`（既定 30）で変えられる。
 
@@ -67,4 +67,14 @@ psql -h 127.0.0.1 -p 55931 -U postgres -c "create database alteroid_bench"
 - 先頭の「SQL first call / cold call#1」の本数には、`createClone` の起動の裏の問い合わせ（`inbox_events` の更新・`approvals`・`daemon_state`）が混ざる。`warm call (内訳)` の本数が `/conversations` だけの本数（`Server-Timing` の `DB n queries` と一致する）。
 - client 側の ms は往復込みで、測りと PG が同じ器の中なので、ネットワークの往復はほぼ 0。本番は本数 × 往復が足される。
 - `pg_stat_database` の `blks_read` は再起動をまたいで累計されるので、再起動後の値としては使えない（`cold` が出す行は参考にならない）。
-- 「起動後の索引を作れなかった（Client was closed）」の警告は、`openStoresNoWait` をすぐ閉じたときの索引の確かめが閉じた接続に当たっただけ（索引は有効。`env` の「索引の有効性」で確かめる）。
+- 「起動後の索引を作れなかった（Client was closed）」の警告は、`openStoresNoWait` をすぐ閉じたときの索引の確かめが閉じた接続に当たっただけ（索引は有効。`env` の「索引の有効性」で確かめる）。`common.ts` の `openStoresNoWait` は、この確かめが済むまで最大 5 秒待つ形に直したので、以後は出ない。
+
+## `/progress`・`/reports` の測りと、別 DB（`alteroid_bench2`）の作り方
+
+- `BENCH_WRAP=legacy`（#5262 の前の `createJournalBus` の再現。6 つの口だけ）・`bus`（今の main）・`none`。`BENCH_ROUTE=progress|reports|reports7|conversations`。段 `route`（温まった 21 回と SQL の内訳）・`rows`（`daily_report` / `github_observation` / 台帳 / jobs の行数）。`explain` は口が `conversations` 以外のとき、client 側で長かった文から `BENCH_TOP` 本（既定 3）を取る。
+- `BENCH_PG_URL`（接続先 DB）・`BENCH_TAG`（出力ファイル名の頭）・`BENCH_QUIET=1`（画面へ出さず `out/` だけ）。
+- 本番に近い密度の別 DB:
+  1. 測りのプロセスが無いときに `create database alteroid_bench2 template alteroid_bench`（接続が残っていると作れない）。
+  2. `env BENCH_STEP=density BENCH_PG_URL=postgres://postgres@127.0.0.1:55931/alteroid_bench2 pnpm -C <worktree> exec vitest run --config bench/conversations-list/vitest.config.ts bench/conversations-list/density.bench.ts`（元の `alteroid_bench` を指すと断る）。`daily_report` を日付ごとの最新 1 行（5 日だけ 2 行）にし、消した行の `seq` と `at` の穴に `github_observation` を 300 行入れ（日誌の中の時刻順を保つため。形は本物の `append` で確かめる）、台帳 1,500 行（未了 60）と jobs 3,000 行（running 5）を `stores.commitments.open/close`・`stores.jobs.putJob` で書く。乱数は固定（同じ行が出る）。
+  3. `psql -d alteroid_bench2 -c "VACUUM ANALYZE journal" -c "VACUUM ANALYZE commitments" -c "VACUUM ANALYZE jobs"`
+- 索引を足す測り: `psql -d alteroid_bench2 -c "create index concurrently journal_type_seq_idx on journal (type, seq)"` → `VACUUM ANALYZE journal` → `BENCH_TAG=b2idx` で同じ測り → `drop index concurrently journal_type_seq_idx`。

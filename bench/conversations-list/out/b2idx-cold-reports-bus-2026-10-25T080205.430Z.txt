@@ -1,0 +1,28 @@
+# cold 2026-10-25T08:02:05.439Z  wrap=bus evict_os_cache=false
+pg_ctl restart: server started
+cold curve /reports?limit=1 call#1: 90.31 ms status=200 bytes=7962
+--- SQL cold call#1: 16 本、client 側の合計 94.62 ms（往復込み・直列）
+  #00     8.25 ms  begin
+  #01      1.1 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #02     0.85 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #03     1.04 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #00    17.69 ms  update "inbox_events" set "deliveries" = "inbox_events"."deliveries" + 1 returning "id", "event", "at", "deliv
+  #04     1.77 ms  commit
+  #00     17.5 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #06     1.05 ms  begin
+  #05     2.31 ms  select "id", "approval" from "approvals" order by "approvals"."created_at" asc
+  #08     0.59 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #10     0.43 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #11     0.41 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #07     5.24 ms  select distinct "entry"->>'deletedConversationId' from "journal" where "journal"."type" = $1
+  #13     3.16 ms  select distinct x.hid from (SELECT named.hid FROM journal h CROSS JOIN LATERAL (SELECT e #>> '{}' AS hid FROM 
+  #12     11.9 ms  commit
+  #14    21.34 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+cold curve /reports?limit=1 call#2: 6.33 ms status=200 
+--- SQL cold call#2: 2 本、client 側の合計 3.31 ms（往復込み・直列）
+  #16     1.04 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #17     2.27 ms  select "id", "at", "type", "entry" from "journal" where (("journal"."type" <> 'exchange' OR ("journal"."entry"
+cold curve /reports?limit=1 call#3: 6.04 ms status=200 
+cold curve /reports?limit=1 call#4: 5.47 ms status=200 
+cold curve /reports?limit=1 call#5: 5.67 ms status=200 
+pg_stat_database（再起動後の累計）{"x":"1","blks_read":"1184097","blks_hit":"3632240"}
