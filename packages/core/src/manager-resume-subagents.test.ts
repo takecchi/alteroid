@@ -1,4 +1,4 @@
-import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
+import type { SessionStore, SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
@@ -79,7 +79,7 @@ function job(): Job {
 
 // `main` が null でない鍵は主の記録、`sub` の各鍵は subpath つきの記録。`withListSubkeys: false` は口を持たない預かり先
 function storeOf(
-  sub: Record<string, unknown[]>,
+  sub: Record<string, SessionStoreEntry[]>,
   options: { withListSubkeys?: boolean; failLoadOf?: string } = {},
 ): SessionStore {
   const store: SessionStore = {

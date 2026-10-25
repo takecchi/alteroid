@@ -146,8 +146,8 @@ export async function placeSubagentsInConfigDir(
     }
     const last = metadata.at(-1);
     if (last !== undefined) {
-      const { type: _type, ...rest } = last;
-      await writeNew(join(sessionDir, `${subpath}.meta.json`), JSON.stringify(rest), owner);
+      const sidecar = Object.fromEntries(Object.entries(last).filter(([name]) => name !== 'type'));
+      await writeNew(join(sessionDir, `${subpath}.meta.json`), JSON.stringify(sidecar), owner);
     }
   }
   return { placed, rejected };
