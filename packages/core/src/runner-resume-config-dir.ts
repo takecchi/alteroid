@@ -1,7 +1,7 @@
 import { lchownSync, lstatSync, readdirSync } from 'node:fs';
 import { chown, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep, win32 } from 'node:path';
 
 // パスの1段に使える名前か: SDK が渡す projectKey・sessionId でも、`/` や `..` を含めば書かない
 function isPlainSegment(name: string): boolean {
@@ -43,6 +43,114 @@ export async function placeSeedInConfigDir(
   }
   if (owner !== undefined) await chown(file, owner.uid, owner.gid);
   return 'placed';
+}
+
+export interface SubagentTranscriptSeed {
+  readonly subpath: string;
+  readonly entries: readonly unknown[];
+}
+
+function isAgentMetadataEntry(entry: unknown): entry is Record<string, unknown> {
+  return (
+    typeof entry === 'object' &&
+    entry !== null &&
+    (entry as { type?: unknown }).type === 'agent_metadata'
+  );
+}
+
+/**
+ * 作業者の `subpath` を、`<sessionDir>` の下の相対パスとして検める。通れば `subagents/` で始まる安全な形、通らなければ `undefined`。
+ * SDK の resume の材料の書き出し（`sdk.mjs` の `M9e`）が断る形（空・絶対パス・`..` の段・`sessionDir` の外へ出る）に、NUL と
+ * `subagents/` で始まらないものを足して断る: 作業者の記録以外を、SDK が知らない場所へ書かないため。
+ */
+export function safeSubagentSubpath(sessionDir: string, subpath: string): string | undefined {
+  if (subpath.length === 0 || subpath.includes('\0')) return undefined;
+  if (!subpath.startsWith('subagents/')) return undefined;
+  if (isAbsolute(subpath) || win32.isAbsolute(subpath)) return undefined;
+  if (subpath.split(/[\\/]/).includes('..')) return undefined;
+  const base = resolve(sessionDir);
+  if (!resolve(base, `${subpath}.jsonl`).startsWith(`${base}${sep}`)) return undefined;
+  return subpath;
+}
+
+// `created`（`mkdir -p` が最初に作った段）から `dir` までの、作った段だけを子へ渡す
+async function chownCreated(
+  dir: string,
+  created: string | undefined,
+  owner: { readonly uid: number; readonly gid: number } | undefined,
+): Promise<void> {
+  if (owner === undefined || created === undefined) return;
+  const chain: string[] = [];
+  for (let current = dir; current === created || current.startsWith(`${created}${sep}`);) {
+    chain.unshift(current);
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  for (const path of chain) await chown(path, owner.uid, owner.gid);
+}
+
+async function writeNew(
+  file: string,
+  body: string,
+  owner: { readonly uid: number; readonly gid: number } | undefined,
+): Promise<boolean> {
+  try {
+    await writeFile(file, body, { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 'EEXIST') return false;
+    throw error;
+  }
+  if (owner !== undefined) await chown(file, owner.uid, owner.gid);
+  return true;
+}
+
+/**
+ * 作業者（サブエージェント）の記録を、主の記録の隣（`<configDir>/projects/<projectKey>/<sessionId>/<subpath>.jsonl`）に置く。
+ * 形は SDK が `listSubkeys` を使って戻すときと同じ（`sdk.mjs` の `M9e`）: `agent_metadata` の行は jsonl に入れず、最後の1件から `type` を除いた JSON を
+ * `<subpath>.meta.json` に書き、残りの行を1件ずつ JSON にして改行で区切る。どちらも 0600。jsonl に残る行が無ければ jsonl は作らない（SDK と同じ）。
+ * 既に在るファイルは上書きしない（主と同じ理由: CLI が書き続けた最新が在る）。危ない `subpath` は置かずに、断った subpath を返す。
+ */
+export async function placeSubagentsInConfigDir(
+  configDir: string,
+  key: { readonly projectKey: string; readonly sessionId: string },
+  subagents: readonly SubagentTranscriptSeed[],
+  owner?: { readonly uid: number; readonly gid: number },
+): Promise<{ placed: number; rejected: string[] }> {
+  if (!isPlainSegment(key.projectKey) || !isPlainSegment(key.sessionId)) {
+    throw new Error('projectKey か sessionId がパスの1段として使えない形');
+  }
+  const sessionDir = join(configDir, 'projects', key.projectKey, key.sessionId);
+  const rejected: string[] = [];
+  let placed = 0;
+  for (const subagent of subagents) {
+    const subpath = safeSubagentSubpath(sessionDir, subagent.subpath);
+    if (subpath === undefined) {
+      rejected.push(subagent.subpath);
+      continue;
+    }
+    const metadata: Record<string, unknown>[] = [];
+    const lines: unknown[] = [];
+    for (const entry of subagent.entries) {
+      if (isAgentMetadataEntry(entry)) metadata.push(entry);
+      else lines.push(entry);
+    }
+    if (lines.length === 0 && metadata.length === 0) continue;
+    const file = join(sessionDir, `${subpath}.jsonl`);
+    const created = await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+    // 持ち主は、主の記録の段（`projects/<projectKey>`）から下の、作った段だけ移す
+    await chownCreated(dirname(file), created, owner);
+    if (lines.length > 0) {
+      const body = lines.map((entry) => `${JSON.stringify(entry)}\n`).join('');
+      if (await writeNew(file, body, owner)) placed += 1;
+    }
+    const last = metadata.at(-1);
+    if (last !== undefined) {
+      const { type: _type, ...rest } = last;
+      await writeNew(join(sessionDir, `${subpath}.meta.json`), JSON.stringify(rest), owner);
+    }
+  }
+  return { placed, rejected };
 }
 
 /**

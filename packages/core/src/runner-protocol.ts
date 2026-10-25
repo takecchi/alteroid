@@ -189,6 +189,13 @@ export const runnerResumeCommandSchema = z.object({
   request: z.string().min(1),
   message: z.string().optional(),
   entries: z.array(z.unknown()).optional(),
+  /**
+   * 作業者（サブエージェント）の会話の記録。`subpath` は `subagents/` で始まるもの（`agent_metadata` の行も含む）。
+   * 任意: 古い runner は未知の欄として捨て（作業者の続きは戻らないだけ）、古いデーモンは送らない。
+   */
+  subagents: z
+    .array(z.object({ subpath: z.string().min(1), entries: z.array(z.unknown()) }))
+    .optional(),
   lease: runnerLeaseSchema.optional(),
   /** `message` が無ければ使わない。`manager_send` が resume から入り直す回に、添付を黙って落とさないために要る。 */
   attachments: z.array(runnerAttachmentSchema).optional(),

@@ -217,8 +217,10 @@ import {
   chownTreeSync,
   parseTranscriptEntries,
   placeSeedInConfigDir,
+  placeSubagentsInConfigDir,
   sdkResumeConfigDirOf,
   sessionIdInSdkResumeConfigDir,
+  type SubagentTranscriptSeed,
 } from './runner-resume-config-dir.js';
 import {
   cachedPidsReader,
@@ -1770,7 +1772,13 @@ class Host implements RunnerHost {
       // 鍵の付け替えで預けた peer を引き継ぐ（#4734）。組む道具が新しい窓口を作らないよう resume の前に渡し、預かった知らせは resume の後に回す
       const parked = this.#takeParkedPeers(command.managerId);
       if (parked !== undefined) session.adoptPeers(parked);
-      session.resume(command.sessionId, command.entries, resumeInput?.text, resumeInput?.images);
+      session.resume(
+        command.sessionId,
+        command.entries,
+        resumeInput?.text,
+        resumeInput?.images,
+        command.subagents,
+      );
       if (parked !== undefined) session.releaseAdoptedPeers();
       return { cwd: session.cwd, reusedLiveSession: false, ...this.#generationOf(session) };
     }
@@ -2781,8 +2789,9 @@ class RunnerSession {
     entries: unknown[] | undefined,
     message: string | undefined,
     images?: readonly AgentInputImage[],
+    subagents?: readonly SubagentTranscriptSeed[],
   ): void {
-    this.#resumeState.beginResume(sessionId, entries);
+    this.#resumeState.beginResume(sessionId, entries, subagents);
     if (message !== undefined) this.push(message, images);
     this.#open(sessionId);
   }
@@ -3552,8 +3561,16 @@ class RunnerSession {
         }
         this.#emit({ type: 'project_key', managerId: this.#id, projectKey: key.projectKey });
       },
+      // SDK に渡す経路（子 UID でない器・置けなかった回）でだけ呼ばれる: 自分で置いて主の `load` が `null` を返した回、SDK は一覧を引く前に戻す材料が無いと見て終わる
+      listSubkeys: async () => this.#resumeState.subagents.map((subagent) => subagent.subpath),
       load: async (key: AgentSessionLogKey) => {
-        if (key.subpath !== undefined) return null;
+        if (key.subpath !== undefined) {
+          // 預かった分の中の subpath だけ返す: 一覧に無い鍵を SDK が引いても、作業者の記録を作り出さない
+          const found = this.#resumeState.subagents.find(
+            (subagent) => subagent.subpath === key.subpath,
+          );
+          return found === undefined ? null : [...found.entries];
+        }
         const seed = this.#resumeState.seed;
         if (seed === undefined) return null;
         // 子のふだんの設定ディレクトリへ自分で置き、SDK には材料を返さない: 返すと SDK が /tmp/claude-resume-* に書き出し、CLI が終わると消えるため（`placeSeedInConfigDir`）
@@ -3562,6 +3579,7 @@ class RunnerSession {
         if (childUser !== undefined && configDir !== undefined) {
           try {
             await placeSeedInConfigDir(configDir, key, seed, childUser);
+            await this.#placeSubagents(configDir, key, childUser);
             return null;
           } catch (error) {
             this.#emit({
@@ -3574,6 +3592,32 @@ class RunnerSession {
         return seed;
       },
     };
+  }
+
+  // 作業者の分を置けなくても主の resume は止めない（主の記録は置けている）。置けなかった・断った分は note に残す: 黙ると `SendMessage` の失敗の理由が追えない
+  async #placeSubagents(
+    configDir: string,
+    key: { readonly projectKey: string; readonly sessionId: string },
+    owner: { readonly uid: number; readonly gid: number },
+  ): Promise<void> {
+    const subagents = this.#resumeState.subagents;
+    if (subagents.length === 0) return;
+    try {
+      const { rejected } = await placeSubagentsInConfigDir(configDir, key, subagents, owner);
+      if (rejected.length > 0) {
+        this.#emit({
+          type: 'note',
+          managerId: this.#id,
+          text: `resume の作業者の記録 ${String(rejected.length)} 件を、subpath が安全でないので置かなかった: ${rejected.join(', ')}`,
+        });
+      }
+    } catch (error) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `resume の作業者の記録を子の設定ディレクトリ（${configDir}）へ置けなかった（その作業者への SendMessage は記録が無く失敗する）: ${reasonOf(error)}`,
+      });
+    }
   }
 
   #spawnAsChildUser(options: {

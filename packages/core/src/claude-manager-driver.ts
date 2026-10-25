@@ -57,12 +57,13 @@ function setFlagAllowRules(q: Query, rules: readonly string[]): Promise<void> {
   return q.applyFlagSettings({ permissions: { allow: [...rules] } });
 }
 
-function toSessionStore(log: AgentSessionLog): SessionStore {
+export function toSessionStore(log: AgentSessionLog): SessionStore {
   const keyOf = (key: SessionKey) => ({
     projectKey: key.projectKey,
     sessionId: key.sessionId,
     ...(key.subpath === undefined ? {} : { subpath: key.subpath }),
   });
+  const listSubkeys = log.listSubkeys?.bind(log);
   return {
     append: async (key: SessionKey, entries: SessionStoreEntry[]) => {
       await log.append(keyOf(key), entries);
@@ -71,6 +72,8 @@ function toSessionStore(log: AgentSessionLog): SessionStore {
       const loaded = await log.load(keyOf(key));
       return (loaded ?? null) as SessionStoreEntry[] | null;
     },
+    // 在るときだけ渡す: SDK は「実装しているか」で、resume が作業者の分も戻すかを決める
+    ...(listSubkeys === undefined ? {} : { listSubkeys }),
   };
 }
 

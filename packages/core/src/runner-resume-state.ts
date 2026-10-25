@@ -1,3 +1,5 @@
+import type { SubagentTranscriptSeed } from './runner-resume-config-dir.js';
+
 /**
  * `RunnerSession`（`runner.ts`）の resume/seed の状態4フィールドの器。
  *
@@ -17,6 +19,13 @@ export class RunnerResumeState {
    * （`renderSessionLog(this.#seed)`）に `#seed` が要る。
    */
   #seed: unknown[] | undefined;
+
+  /**
+   * resume のために預かった作業者（サブエージェント）の記録。`#seed` と同じ寿命: `load()` の1回で使い切るので `markProgressed` で解放する。
+   * 鍵の回転の開き直し（`beginRotationResume`）では持ち直さない: その経路の材料は設定ディレクトリの主の記録だけで、作業者の分は
+   * 最初の resume で置いた設定ディレクトリに残っている前提（SDK の一時ディレクトリで戻した回は残らない。確かめていない）。
+   */
+  #subagents: readonly SubagentTranscriptSeed[] = [];
 
   /**
    * 投げたが、まだ効いたと確かめられていない resume。
@@ -54,9 +63,18 @@ export class RunnerResumeState {
     return this.#progressed && !this.#rotationResumePending;
   }
 
-  beginResume(sessionId: string, entries: unknown[] | undefined): void {
+  get subagents(): readonly SubagentTranscriptSeed[] {
+    return this.#subagents;
+  }
+
+  beginResume(
+    sessionId: string,
+    entries: unknown[] | undefined,
+    subagents?: readonly SubagentTranscriptSeed[],
+  ): void {
     this.#sessionId = sessionId;
     this.#seed = entries;
+    this.#subagents = subagents ?? [];
     this.#resumeAttempt = { sessionId };
   }
 
@@ -85,6 +103,7 @@ export class RunnerResumeState {
     this.#progressed = true;
     this.#rotationResumePending = false;
     this.#seed = undefined;
+    this.#subagents = [];
   }
 
   // 比較は代入より前に行う。`init` はターンの頭ごとに来る（根拠は `runner.ts` の `#liveBackgroundTasks`）。
@@ -97,6 +116,7 @@ export class RunnerResumeState {
   discardForRecreate(): void {
     this.#sessionId = undefined;
     this.#seed = undefined;
+    this.#subagents = [];
     this.#rotationResumePending = false;
   }
 }

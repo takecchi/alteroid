@@ -62,6 +62,11 @@ export interface AgentSessionLogKey {
 export interface AgentSessionLog {
   append(key: AgentSessionLogKey, entries: unknown[]): Promise<void>;
   load(key: AgentSessionLogKey): Promise<unknown[] | null>;
+  /**
+   * 主の記録に付く subpath（作業者の分）を列挙する。省略できる: 在れば SDK が resume のとき、`load` で subpath つきの鍵を引いて戻す。
+   * 省略すると SDK は主の記録だけを戻す。
+   */
+  listSubkeys?(key: { readonly projectKey: string; readonly sessionId: string }): Promise<string[]>;
 }
 
 export interface AgentSpawnOptions {

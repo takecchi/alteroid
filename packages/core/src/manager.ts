@@ -132,6 +132,12 @@ import {
   type ManagerReportFiles,
 } from './manager-outbox-fetch.js';
 import { runnerAttachmentBodyLimit } from './runner-attachments.js';
+import {
+  RESUME_SUBAGENT_BUDGET_CHARS,
+  isSubagentSubpath,
+  selectSubagentsWithinBudget,
+  type ResumeSubagentTranscript,
+} from './resume-subagents.js';
 import type {
   RunnerAttachment,
   RunnerClient,
@@ -9803,6 +9809,12 @@ class Pool implements ManagerPool {
     // 引けなかったものを「無い」として進めない: 材料無しで resume すると `resume_failed` の `recovered: false` が `lost` に確定し、一時的に DB が読めなかっただけで委譲が恒久に終端する。
     if (material.kind === 'unreadable') return 'unreadable';
 
+    // 主の記録が戻る回だけ作業者の分も戻す: 主が無い回に作業者だけ戻しても、続ける会話が無い
+    const subagents =
+      material.kind === 'loaded' && projectKey !== undefined
+        ? await this.#loadSubagents(record.job.id, projectKey, sessionId)
+        : [];
+
     // チェックポイント1: `#claimForResume` の後・`runner.resume()` の直前に置く。前に置くと確認から呼び出しまでの窓が開くだけで得が無く、呼ぶ前に見送れる回は実 I/O を減らす。
     if (record.stopConfirmedAt !== undefined) return 'stopped-meanwhile';
 
@@ -9824,6 +9836,7 @@ class Pool implements ManagerPool {
           ? {}
           : { attachments }),
         ...(material.kind === 'loaded' ? { entries: material.entries } : {}),
+        ...(subagents.length === 0 ? {} : { subagents }),
         ...(record.job.lease === undefined
           ? {}
           : { lease: { fence: record.job.lease.fence, ttlMs: record.job.lease.ttlMs } }),
@@ -9934,6 +9947,69 @@ class Pool implements ManagerPool {
       );
       return { kind: 'unreadable' };
     }
+  }
+
+  /**
+   * 作業者（`subagents/…`）の記録を預かり先から引く。引けなくても resume は止めない（主の記録だけで続けられる）が、
+   * 戻せなかった作業者と上限で入らなかった作業者は日誌へ残す: 黙って落とすと、`SendMessage` が「記録が無い」で失敗する理由が追えない。
+   * `listSubkeys` を持たない預かり先は、作業者の分が無いものとして空を返す。
+   */
+  async #loadSubagents(
+    managerId: string,
+    projectKey: string,
+    sessionId: string,
+  ): Promise<ResumeSubagentTranscript[]> {
+    const store = this.#stores.sessionStore;
+    if (store?.listSubkeys === undefined) return [];
+    const failed: string[] = [];
+    const candidates: ResumeSubagentTranscript[] = [];
+    try {
+      const subpaths = (await store.listSubkeys({ projectKey, sessionId })).filter(
+        isSubagentSubpath,
+      );
+      for (const subpath of subpaths) {
+        try {
+          const entries = await store.load({ projectKey, sessionId, subpath });
+          if (entries !== null && entries.length > 0) candidates.push({ subpath, entries });
+        } catch (error) {
+          failed.push(subpath);
+          noteUnreadableRecord(
+            '預かってある作業者の生ログ',
+            `projectKey=${projectKey} sessionId=${sessionId} subpath=${subpath}`,
+            error,
+          );
+        }
+      }
+    } catch (error) {
+      noteUnreadableRecord(
+        '預かってある作業者の生ログの一覧',
+        `projectKey=${projectKey} sessionId=${sessionId}`,
+        error,
+      );
+      await this.#journal({
+        type: 'decision',
+        decision: `[${managerId}] resume で、作業者の生ログの一覧を読めなかったので、作業者の記録は戻さずに起こす`,
+        grounds: `listSubkeys の失敗: ${reasonOf(error)}`,
+      });
+      return [];
+    }
+    const { included, omitted } = selectSubagentsWithinBudget(candidates);
+    if (omitted.length > 0 || failed.length > 0) {
+      const parts = [
+        omitted.length === 0
+          ? undefined
+          : `合計の上限（${String(RESUME_SUBAGENT_BUDGET_CHARS)} 文字）に入らず戻さなかった作業者 ${String(omitted.length)} 件: ${omitted.join(', ')}`,
+        failed.length === 0
+          ? undefined
+          : `読めずに戻さなかった作業者 ${String(failed.length)} 件: ${failed.join(', ')}`,
+      ].filter((part) => part !== undefined);
+      await this.#journal({
+        type: 'decision',
+        decision: `[${managerId}] resume で、作業者の記録の一部を戻さなかった（その作業者への SendMessage は記録が無く失敗する）`,
+        grounds: parts.join('。'),
+      });
+    }
+    return included;
   }
 
   async #fromSessionStore(job: Job): Promise<string | null> {
