@@ -14,7 +14,7 @@ function isPlainSegment(name: string): boolean {
  * `mkdir -p` と `writeFile` はそれを辿り、root が子の選んだ場所にファイルを作って子へ渡してしまう（`wx` は最後の段の symlink しか断らない）。
  * 無い段は飛ばす（これから `mkdir` が作る）。作った後にもう一度呼んで、作る間の差し替えも拾う。
  */
-function assertNoSymlinkDirs(base: string, dir: string): void {
+export function assertNoSymlinkDirs(base: string, dir: string): void {
   const root = resolve(base);
   const target = resolve(dir);
   if (target !== root && !target.startsWith(`${root}${sep}`)) {
@@ -184,6 +184,102 @@ export async function placeSubagentsInConfigDir(
     }
   }
   return { placed, rejected };
+}
+
+export interface PeerRolloutSeed {
+  readonly peerId: string;
+  readonly threadId: string;
+  readonly relPath: string;
+  readonly entries: readonly unknown[];
+}
+
+/**
+ * peer（Codex）の rollout の置き場の相対パス（`CODEX_HOME/sessions/` から下）を検める。通れば `relPath`、通らなければ `undefined`。
+ * 断る形: 空・NUL・絶対パス・`..` の段・`sessions/` の外へ出る・ファイル名が `rollout-` で始まり `<threadId>.jsonl` で終わらない。
+ * ファイル名の条件は Codex が thread を探す条件そのもの（違う名前では `no rollout found` で断られる）で、同時に、資格など
+ * rollout 以外のファイルを `CODEX_HOME` の下へ作らせないための歯でもある。
+ */
+export function safePeerRolloutRelPath(
+  sessionsDir: string,
+  relPath: string,
+  threadId: string,
+): string | undefined {
+  if (relPath.length === 0 || relPath.includes('\0')) return undefined;
+  if (!isPlainSegment(threadId)) return undefined;
+  if (isAbsolute(relPath) || win32.isAbsolute(relPath)) return undefined;
+  const segments = relPath.split(/[\\/]/);
+  if (segments.includes('..') || segments.includes('')) return undefined;
+  const name = segments[segments.length - 1] ?? '';
+  if (!name.startsWith('rollout-') || !name.endsWith(`${threadId}.jsonl`)) return undefined;
+  const base = resolve(sessionsDir);
+  if (!resolve(base, relPath).startsWith(`${base}${sep}`)) return undefined;
+  return relPath;
+}
+
+/** `ordinal` で重複を落として並べる。`ordinal` を持たない行は rollout の行ではないので捨てる（数を `dropped` に返す）。 */
+export function orderRolloutEntries(entries: readonly unknown[]): {
+  lines: Record<string, unknown>[];
+  dropped: number;
+} {
+  const byOrdinal = new Map<number, Record<string, unknown>>();
+  let dropped = 0;
+  for (const entry of entries) {
+    if (typeof entry !== 'object' || entry === null) {
+      dropped += 1;
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const ordinal = record.ordinal;
+    if (record.type === 'alteroid_peer_meta') continue;
+    if (typeof ordinal !== 'number' || !Number.isInteger(ordinal) || ordinal < 0) {
+      dropped += 1;
+      continue;
+    }
+    if (!byOrdinal.has(ordinal)) byOrdinal.set(ordinal, record);
+  }
+  const lines = [...byOrdinal.entries()].sort((a, b) => a[0] - b[0]).map(([, entry]) => entry);
+  return { lines, dropped };
+}
+
+/**
+ * peer（Codex）の rollout を `<codexHome>/sessions/<relPath>` へ書き戻す（`peer_reply` が `thread/resume` で起こせるように）。
+ * 作業者の分（{@link placeSubagentsInConfigDir}）と同じ守りを掛ける: symlink の段を断る・`wx`（既にあれば上書きしない。Codex が書き続けた最新が在る）・0600・作った段だけ子へ渡す。
+ * 危ない `relPath`・ファイル名の peer は置かずに `peerId` を `rejected` に返す。
+ */
+export async function placePeersInCodexHome(
+  codexHome: string,
+  peers: readonly PeerRolloutSeed[],
+  owner?: { readonly uid: number; readonly gid: number },
+): Promise<{ placed: string[]; present: string[]; rejected: string[]; droppedLines: number }> {
+  const sessionsDir = join(codexHome, 'sessions');
+  const result = {
+    placed: [] as string[],
+    present: [] as string[],
+    rejected: [] as string[],
+    droppedLines: 0,
+  };
+  for (const peer of peers) {
+    const relPath = safePeerRolloutRelPath(sessionsDir, peer.relPath, peer.threadId);
+    if (relPath === undefined) {
+      result.rejected.push(peer.peerId);
+      continue;
+    }
+    const { lines, dropped } = orderRolloutEntries(peer.entries);
+    result.droppedLines += dropped;
+    if (lines.length === 0) {
+      result.rejected.push(peer.peerId);
+      continue;
+    }
+    const file = join(sessionsDir, relPath);
+    assertNoSymlinkDirs(codexHome, dirname(file));
+    const created = await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+    assertNoSymlinkDirs(codexHome, dirname(file));
+    await chownCreated(dirname(file), created, owner);
+    const body = lines.map((line) => `${JSON.stringify(line)}\n`).join('');
+    if (await writeNew(file, body, owner)) result.placed.push(peer.peerId);
+    else result.present.push(peer.peerId);
+  }
+  return result;
 }
 
 /**

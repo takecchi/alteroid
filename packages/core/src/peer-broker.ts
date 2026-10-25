@@ -99,8 +99,22 @@ export interface PeerBrokerDeps {
       onPermission: AgentPermissionHandler;
       onNote: (text: string) => void;
       model?: string;
+      /** 相手のセッション（thread）の id。在れば新しく始めず、この続きから起こす。 */
+      resume?: string;
     },
   ) => AgentManagerSessionSpec;
+  /**
+   * 相手のセッションの動き（記録を預ける側へ知らせる）。`started` は相手が自分の記録の置き場を名乗ったとき（`transcriptLocation`）、
+   * `stopped` はターンが止まるたび（終わり・確認待ち）と閉じるとき。投げても peer の作業は止めない。
+   */
+  readonly onThread?: (event: PeerThreadEvent) => void;
+  /**
+   * 器の入れ替わりの後も続きから起こせる peer（id → thread）。`peer_reply` が知らない id（上限・アイドルで閉じた id を含む）を
+   * 受けたとき、ここに在れば `resume` 付きで起こす。作った時点の値を渡す（broker は読むだけで書かない）。
+   */
+  readonly resumable?: ReadonlyMap<string, PeerResumable>;
+  /** 続きから起こす直前に待つ（記録を相手の置き場へ書き戻す）。落ちたら、`resumable` から外して今までどおり断る側へ倒す。 */
+  readonly prepareResume?: (peerId: string) => Promise<void>;
   readonly reportsUsage: (provider: AgentProviderId) => boolean;
   readonly onNote: (text: string) => void;
   readonly onUsage: (report: PeerUsageReport) => void;
@@ -119,6 +133,22 @@ export interface PeerBrokerDeps {
   /** 担当ごとの上限（#4764）。省略は既定（4 本・30 分）。 */
   readonly limits?: PeerLimits;
 }
+
+export interface PeerResumable {
+  readonly provider: AgentProviderId;
+  readonly threadId: string;
+}
+
+export type PeerThreadEvent =
+  | {
+      readonly kind: 'started';
+      readonly peerId: string;
+      readonly provider: AgentProviderId;
+      readonly threadId: string;
+      readonly resumed: boolean;
+      readonly transcriptLocation?: string;
+    }
+  | { readonly kind: 'stopped'; readonly peerId: string; readonly provider: AgentProviderId };
 
 export interface PeerLimits {
   /** 同時に生きているセッションの数の上限。超えたら、閉じてよいもののうち最後に使われたのがいちばん古いものから閉じる。 */
@@ -355,6 +385,7 @@ class PeerSession {
     provider: AgentProviderId,
     deps: PeerBrokerDeps,
     model: string | undefined,
+    resumeThreadId?: string,
   ) {
     this.id = id;
     this.provider = provider;
@@ -366,6 +397,7 @@ class PeerSession {
       onPermission,
       onNote: (text) => deps.onNote(`peer（${provider}）[${id}] ${text}`),
       ...(model === undefined ? {} : { model }),
+      ...(resumeThreadId === undefined ? {} : { resume: resumeThreadId }),
     });
     this.#cwd = spec.cwd;
     this.#resumed = spec.resume !== undefined;
@@ -503,8 +535,21 @@ class PeerSession {
     }
   }
 
+  #notifyThread(event: PeerThreadEvent): void {
+    try {
+      this.#deps.onThread?.(event);
+    } catch {
+      // 握りつぶす: 記録を預ける口の失敗で peer の作業を止めない
+    }
+  }
+
+  #notifyStopped(): void {
+    this.#notifyThread({ kind: 'stopped', peerId: this.id, provider: this.provider });
+  }
+
   close(): void {
     this.denyPending('セッションを閉じた');
+    this.#notifyStopped();
     this.#input.close();
     try {
       this.#session.close();
@@ -599,6 +644,7 @@ class PeerSession {
       this.#deps.onNote(
         `peer（${this.provider}）[${this.id}] の ${request.toolName} の確認 ${approvalId} をマネージャーへ返した`,
       );
+      this.#notifyStopped();
       this.#wake();
     });
   }
@@ -695,6 +741,7 @@ class PeerSession {
     }
     this.#finished = outcome;
     this.denyPending('ターンが終わった');
+    this.#notifyStopped();
     this.#wake();
   }
 
@@ -716,6 +763,16 @@ class PeerSession {
         this.#deps.onNote(
           `peer（${this.provider}）[${this.id}] の相手のセッション ${event.sessionId} を${this.#resumed ? '続きから起こした' : '始めた'}。記録の置き場: ${event.transcriptLocation ?? '応答に無い'}`,
         );
+        this.#notifyThread({
+          kind: 'started',
+          peerId: this.id,
+          provider: this.provider,
+          threadId: event.sessionId,
+          resumed: this.#resumed,
+          ...(event.transcriptLocation === undefined
+            ? {}
+            : { transcriptLocation: event.transcriptLocation }),
+        });
         if (typeof event.runtime?.model === 'string' && event.runtime.model.length > 0) {
           const known = this.#model;
           this.#model = event.runtime.model;
@@ -1100,10 +1157,63 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     return Promise.resolve({ background: true, sessionId: session.id, provider: session.provider });
   };
 
+  // 器の入れ替わりの前の peer を、記録（rollout）から続きから起こす。起こさないときは `undefined`（呼び出し側が今までの断りを返す）。
+  // 同じ id で起こす: 担当が持っている id のまま続きを頼めて、預けた記録の鍵（`peers/<peerId>`）も続く
+  const resumeFromStore = async (
+    sessionId: string,
+    message: string,
+    options: { signal?: AbortSignal; background?: boolean },
+  ): Promise<PeerCallResult | undefined> => {
+    const known = deps.resumable?.get(sessionId);
+    if (known === undefined || !allowed.has(known.provider)) return undefined;
+    if (deps.closedReason?.(known.provider) !== undefined) return undefined;
+    if (options.background === true && deps.onBackgroundStop === undefined) {
+      return '背景へ回す口が無い（run_in_background を外して呼ぶこと）';
+    }
+    try {
+      await deps.prepareResume?.(sessionId);
+    } catch (error) {
+      deps.onNote(
+        `peer（${known.provider}）[${sessionId}] を続きから起こせなかった（記録を戻せない）: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return undefined;
+    }
+    // 待つ間に別の呼び出しが起こしていれば、それに合流する
+    const raced = sessions.get(sessionId);
+    if (raced !== undefined) return reply(sessionId, message, options);
+    // 戻せなかった peer は、準備が一覧から外す
+    const resumable = deps.resumable?.get(sessionId);
+    if (resumable === undefined) return undefined;
+    sweepIdle();
+    let session: PeerSession;
+    try {
+      session = new PeerSession(sessionId, resumable.provider, deps, undefined, resumable.threadId);
+    } catch (error) {
+      return `peer のセッションを続きから開けなかった: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    session.lastUsedMs = nowMs();
+    sessions.set(sessionId, session);
+    endedReasons.delete(sessionId);
+    startSweeping();
+    session.onEnded = (reason) => {
+      if (!session.inBackground) forget(session, reason);
+    };
+    deps.onNote(`peer（${resumable.provider}）[${sessionId}] を記録から起こした`);
+    enforceLimit(session);
+    return follow(
+      session,
+      options.background === true,
+      (signal) => session.turn(message, signal, 'peer_reply'),
+      options.signal,
+    );
+  };
+
   const reply: PeerBroker['reply'] = async (sessionId, message, options = {}) => {
     sweepIdle();
     const session = sessions.get(sessionId);
     if (session === undefined) {
+      const resumed = await resumeFromStore(sessionId, message, options);
+      if (resumed !== undefined) return resumed;
       const ended = endedReasons.get(sessionId);
       if (ended === undefined) {
         return `session_id「${sessionId}」の peer セッションは無い（peer_run で起こすこと）`;
@@ -1218,7 +1328,8 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
               approvalNote +
               '続きは返ってきた session_id を peer_reply へ渡す。' +
               `同時に生きているセッションは ${String(limits.maxLiveSessions)} 本までで、超えるといちばん長く使われていないものを、` +
-              `${String(Math.round(limits.idleMs / 60_000))} 分使われなかったものも閉じる（閉じたセッションへの続きは頼めない）。` +
+              `${String(Math.round(limits.idleMs / 60_000))} 分使われなかったものも閉じる` +
+              '（閉じたセッションへの続きは、基本は頼めない。器の入れ替わりの前から記録が残っている相手だけ、peer_reply で続きから起こせることがある）。' +
               (allModels.length === 0
                 ? ''
                 : `model で開いているモデル（${allModels.join(' / ')}）を名指しできる。`),
@@ -1239,7 +1350,8 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
             'peer_reply',
             'peer_run で立てた相手のセッションへ、続きの指示を送って結果を受け取る。' +
               `セッションは上限（${String(limits.maxLiveSessions)} 本）を超えたとき、または ${String(Math.round(limits.idleMs / 60_000))} 分使われなかったときに閉じる。` +
-              '閉じたセッションへは続きを頼めないので、peer_run で新しく頼み直すこと。' +
+              '閉じたセッションへの続きは、器の入れ替わりの前から記録が残っている相手なら、この呼び出しで続きから起こせることがある' +
+              '（起こせないときは「頼み直す」と返る。そのときは peer_run で新しく頼み直すこと。前の文脈は引き継がれない）。' +
               approvalNote,
             {
               session_id: z.string().min(1).describe('peer_run が返した session_id'),

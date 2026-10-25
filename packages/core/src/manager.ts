@@ -138,6 +138,14 @@ import {
   selectSubagentsWithinBudget,
   type ResumeSubagentTranscript,
 } from './resume-subagents.js';
+import {
+  RESUME_PEER_BUDGET_CHARS,
+  buildPeerTranscript,
+  isPeerSubpath,
+  peerIdOfSubpath,
+  selectPeersWithinBudget,
+  type ResumePeerTranscript,
+} from './resume-peers.js';
 import type {
   RunnerAttachment,
   RunnerClient,
@@ -9814,6 +9822,11 @@ class Pool implements ManagerPool {
       material.kind === 'loaded' && projectKey !== undefined
         ? await this.#loadSubagents(record.job.id, projectKey, sessionId)
         : [];
+    // peer（Codex）の記録も同じ条件で戻す: 主が無ければ、peer の続きを頼む担当の会話そのものが無い
+    const peers =
+      material.kind === 'loaded' && projectKey !== undefined
+        ? await this.#loadPeers(record.job.id, projectKey, sessionId)
+        : [];
 
     // チェックポイント1: `#claimForResume` の後・`runner.resume()` の直前に置く。前に置くと確認から呼び出しまでの窓が開くだけで得が無く、呼ぶ前に見送れる回は実 I/O を減らす。
     if (record.stopConfirmedAt !== undefined) return 'stopped-meanwhile';
@@ -9837,6 +9850,7 @@ class Pool implements ManagerPool {
           : { attachments }),
         ...(material.kind === 'loaded' ? { entries: material.entries } : {}),
         ...(subagents.length === 0 ? {} : { subagents }),
+        ...(peers.length === 0 ? {} : { peers }),
         ...(record.job.lease === undefined
           ? {}
           : { lease: { fence: record.job.lease.fence, ttlMs: record.job.lease.ttlMs } }),
@@ -10006,6 +10020,75 @@ class Pool implements ManagerPool {
       await this.#journal({
         type: 'decision',
         decision: `[${managerId}] resume で、作業者の記録の一部を戻さなかった（その作業者への SendMessage は記録が無く失敗する）`,
+        grounds: parts.join('。'),
+      });
+    }
+    return included;
+  }
+
+  /**
+   * peer（`peers/<peerId>`）の記録を預かり先から引く。引けなくても resume は止めない（担当は peer を新しく頼み直せる）が、
+   * 戻せなかった・上限で入らなかった・置き場の印が無い peer は日誌へ残す: 黙って落とすと、`peer_reply` が「無い」で断られる理由が追えない。
+   * `listSubkeys` を持たない預かり先は、peer の分が無いものとして空を返す。
+   */
+  async #loadPeers(
+    managerId: string,
+    projectKey: string,
+    sessionId: string,
+  ): Promise<ResumePeerTranscript[]> {
+    const store = this.#stores.sessionStore;
+    if (store?.listSubkeys === undefined) return [];
+    const failed: string[] = [];
+    const unplaceable: string[] = [];
+    const candidates: ResumePeerTranscript[] = [];
+    try {
+      const subpaths = (await store.listSubkeys({ projectKey, sessionId })).filter(isPeerSubpath);
+      for (const subpath of subpaths) {
+        const peerId = peerIdOfSubpath(subpath);
+        try {
+          const stored = await store.load({ projectKey, sessionId, subpath });
+          if (stored === null || stored.length === 0) continue;
+          const peer = buildPeerTranscript(peerId, stored);
+          if (peer === undefined) unplaceable.push(peerId);
+          else candidates.push(peer);
+        } catch (error) {
+          failed.push(peerId);
+          noteUnreadableRecord(
+            '預かってある peer の生ログ',
+            `projectKey=${projectKey} sessionId=${sessionId} subpath=${subpath}`,
+            error,
+          );
+        }
+      }
+    } catch (error) {
+      noteUnreadableRecord(
+        '預かってある peer の生ログの一覧',
+        `projectKey=${projectKey} sessionId=${sessionId}`,
+        error,
+      );
+      await this.#journal({
+        type: 'decision',
+        decision: `[${managerId}] resume で、peer の生ログの一覧を読めなかったので、peer の記録は戻さずに起こす`,
+        grounds: `listSubkeys の失敗: ${reasonOf(error)}`,
+      });
+      return [];
+    }
+    const { included, omitted } = selectPeersWithinBudget(candidates);
+    if (omitted.length > 0 || failed.length > 0 || unplaceable.length > 0) {
+      const parts = [
+        omitted.length === 0
+          ? undefined
+          : `合計の上限（${String(RESUME_PEER_BUDGET_CHARS)} 文字）に入らず戻さなかった peer ${String(omitted.length)} 件: ${omitted.join(', ')}`,
+        failed.length === 0
+          ? undefined
+          : `読めずに戻さなかった peer ${String(failed.length)} 件: ${failed.join(', ')}`,
+        unplaceable.length === 0
+          ? undefined
+          : `置き場の印（${'alteroid_peer_meta'}）が無く戻せなかった peer ${String(unplaceable.length)} 件: ${unplaceable.join(', ')}`,
+      ].filter((part) => part !== undefined);
+      await this.#journal({
+        type: 'decision',
+        decision: `[${managerId}] resume で、peer の記録の一部を戻さなかった（その peer への peer_reply は続きから起こせず、新しく頼み直すことになる）`,
         grounds: parts.join('。'),
       });
     }

@@ -12,7 +12,7 @@ import {
 } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { readRedactedTranscriptTail } from './transcript-tail.js';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, join as joinPath } from 'node:path';
 
 import type {
@@ -79,6 +79,7 @@ import {
   resolvePeerLimits,
   type PeerApprovalSource,
   type PeerBroker,
+  type PeerResumable,
   type PeerTurnResult,
 } from './peer-broker.js';
 import type { PeerSocketHost } from './peer-socket-host.js';
@@ -216,12 +217,15 @@ import { outwardCommandsIn } from './outward-commands.js';
 import {
   chownTreeSync,
   parseTranscriptEntries,
+  placePeersInCodexHome,
   placeSeedInConfigDir,
   placeSubagentsInConfigDir,
   sdkResumeConfigDirOf,
   sessionIdInSdkResumeConfigDir,
+  type PeerRolloutSeed,
   type SubagentTranscriptSeed,
 } from './runner-resume-config-dir.js';
+import { PeerRolloutMirror } from './runner-peer-rollout.js';
 import {
   cachedPidsReader,
   PidsPressureNotices,
@@ -1778,6 +1782,7 @@ class Host implements RunnerHost {
         resumeInput?.text,
         resumeInput?.images,
         command.subagents,
+        command.peers,
       );
       if (parked !== undefined) session.releaseAdoptedPeers();
       return { cwd: session.cwd, reusedLiveSession: false, ...this.#generationOf(session) };
@@ -2328,6 +2333,10 @@ interface PeerBinding {
   parked: boolean;
   heldAsks: { run: () => void; deny: (message: string) => void }[];
   heldStops: PeerTurnResult[];
+  /** peer の rollout の読み済みの位置を持つ。結びと一緒に付け替え先へ渡る（作り直すと、読み済みの位置が消えて全行を預け直す）。 */
+  rollouts: PeerRolloutMirror;
+  /** 付け替え先が主の記録の鍵を知るまでの間、前のセッションが知っていた値を引き継ぐ。 */
+  lastMainKey?: { projectKey: string; sessionId: string };
   // 預けた peer を閉じている間だけ立つ（#4885）: 閉じた後に届く止まりどころを `heldStops`（もう誰も読まない）へ積まず、ここへ集める
   collectStop?: (result: PeerTurnResult) => void;
 }
@@ -2541,6 +2550,11 @@ class RunnerSession {
   readonly #queryFn: ClaudeQueryFn | undefined;
   #peerBroker: PeerBroker | undefined;
   #peerBinding: PeerBinding | undefined;
+  /** 担当の主の記録の鍵（SDK の書き出しで分かる）。peer の記録を同じ `projectKey`/`sessionId` の下に預けるのに要る。 */
+  #mainLogKey: { projectKey: string; sessionId: string } | undefined;
+  /** resume で戻された peer の記録（`peer_reply` が来て置くまで持つ）。置いたら（または置けないと分かったら）手放す。 */
+  readonly #peerSeeds = new Map<string, PeerRolloutSeed & { provider: string }>();
+  readonly #peerPlacements = new Map<string, Promise<void>>();
   /** 背景の peer の止まりどころの知らせのうち、まだ届けていないもの（確認待ちの間は溜める）。 */
   readonly #peerNotices: string[] = [];
   readonly #profileEnv: () => Record<string, string>;
@@ -2790,8 +2804,14 @@ class RunnerSession {
     message: string | undefined,
     images?: readonly AgentInputImage[],
     subagents?: readonly SubagentTranscriptSeed[],
+    peers?: readonly (PeerRolloutSeed & { provider: string })[],
   ): void {
     this.#resumeState.beginResume(sessionId, entries, subagents);
+    // peer の分は `#resumeState` に入れない: 主の `load()` で使い切る材料ではなく、`peer_reply` が来た回に戻す（置き場が資格の状態に依るため）
+    for (const peer of peers ?? []) {
+      if (peer.provider !== 'codex') continue;
+      this.#peerSeeds.set(peer.peerId, peer);
+    }
     if (message !== undefined) this.push(message, images);
     this.#open(sessionId);
   }
@@ -3066,6 +3086,7 @@ class RunnerSession {
       this.#peerBinding = undefined;
       this.#onPeersParked?.(parked);
     } else {
+      await this.#peerBinding?.rollouts.closeAfterCollecting();
       this.#peerBroker?.closeAll();
     }
     this.#sdkSession.closeQuery();
@@ -3254,10 +3275,54 @@ class RunnerSession {
   // 受け口はすべて結び（`binding`）を通す（#4734）: 鍵の付け替えで畳んだ後、起こし直した新しいセッションへ窓口ごと付け替えるため。
   // 預けている間（`parked`）の確認と背景の止まりどころは、黙って捨てず預かり、付け替えた先へ回す
   #createPeerBroker(allowed: readonly AgentProviderId[], peer: RunnerPeerOptions): PeerBroker {
-    const binding: PeerBinding = { session: this, parked: false, heldAsks: [], heldStops: [] };
+    const rollouts = new PeerRolloutMirror({
+      codexHome: () => binding.session.#peerCodexHome(),
+      mainKey: () => binding.session.#mainLogKey,
+      mirror: (key, entries) =>
+        binding.session.#emit({ type: 'mirror', managerId: binding.session.#id, key, entries }),
+      note: (text) => binding.session.#emit({ type: 'note', managerId: binding.session.#id, text }),
+    });
+    const binding: PeerBinding = {
+      session: this,
+      parked: false,
+      heldAsks: [],
+      heldStops: [],
+      rollouts,
+      ...(this.#mainLogKey === undefined ? {} : { lastMainKey: this.#mainLogKey }),
+    };
     this.#peerBinding = binding;
+    // 組む（遅延で1回）時点で戻されている peer。置けなかった id はここから外れ、`peer_reply` は今までどおり断る
+    const resumable = new Map<string, PeerResumable>();
+    for (const [peerId, seed] of this.#peerSeeds) {
+      resumable.set(peerId, {
+        provider: seed.provider as AgentProviderId,
+        threadId: seed.threadId,
+      });
+    }
     return createPeerBroker({
       allowed,
+      resumable,
+      prepareResume: async (peerId) => {
+        try {
+          await binding.session.#placePeerRollout(peerId);
+        } catch (error) {
+          resumable.delete(peerId);
+          throw error;
+        }
+      },
+      onThread: (event) => {
+        if (event.kind === 'started') {
+          void rollouts.track({
+            peerId: event.peerId,
+            provider: event.provider,
+            threadId: event.threadId,
+            transcriptLocation: event.transcriptLocation,
+            resumed: event.resumed,
+          });
+        } else {
+          void rollouts.collect(event.peerId);
+        }
+      },
       limits: resolvePeerLimits(this.#env),
       ...(peer.models === undefined ? {} : { models: peer.models }),
       // 組んだ後に資格が外れたら、相手を起こさずに断る（道具が消えるのは次の組み直し）
@@ -3332,6 +3397,7 @@ class RunnerSession {
         ...binding.session.#buildSpec(undefined, true),
         ...binding.session.#peerWorkdirSpec(),
         input: parts.input,
+        ...(parts.resume === undefined ? {} : { resume: parts.resume }),
         // 置かれたモデルを peer に効かせない: ホストの provider のものなので、名指しが無ければ各 provider の既定に任せるため
         model: parts.model ?? resolveManagerModel({}),
         modelPlaced: parts.model !== undefined,
@@ -3551,6 +3617,9 @@ class RunnerSession {
           sessionId: key.sessionId,
           ...(key.subpath === undefined ? {} : { subpath: key.subpath }),
         };
+        if (key.subpath === undefined) {
+          this.#setMainLogKey({ projectKey: key.projectKey, sessionId: key.sessionId });
+        }
         // 画像の中身は mirror（pg）へ流さない: 保持期限後も消えない生ログになるため
         // 書き出し1回分を丸ごと1件にしない: 数十 MB の1行をデーモンが受けて処理する間、ループが秒単位で塞がるため（#4485）
         for (const chunk of chunkMirrorEntries(
@@ -4482,6 +4551,67 @@ class RunnerSession {
     this.#peerBroker = parked.broker;
     this.#peerBinding = parked.binding;
     parked.binding.session = this;
+    // 新しいセッションが主の記録の鍵を知るまで、前のセッションの値で peer の記録を預け続ける（同じ担当の同じ会話の鍵）
+    this.#mainLogKey ??= parked.binding.lastMainKey;
+  }
+
+  #setMainLogKey(key: { projectKey: string; sessionId: string }): void {
+    const known = this.#mainLogKey;
+    if (known?.projectKey === key.projectKey && known.sessionId === key.sessionId) return;
+    this.#mainLogKey = key;
+    const binding = this.#peerBinding;
+    if (binding === undefined) return;
+    binding.lastMainKey = key;
+    // 鍵が分かる前に読んで溜めていた peer の記録を預ける
+    binding.rollouts.flushBuffered();
+  }
+
+  /**
+   * peer（Codex）の `CODEX_HOME`: peer の spawn と同じ値に揃える（`codex-manager-driver.ts` の `#produce`）。
+   * API キーで走るなら ChatGPT ログインの置き場に触らず、子の `HOME/.codex`（env に `CODEX_HOME` があればそれ）。
+   * そうでなければ ChatGPT ログインを書き出す `CODEX_HOME`（ログインが降りていないとき peer は閉じているので `undefined`）。
+   */
+  #peerCodexHome(): string | undefined {
+    const env = this.#childEnv();
+    const apiKey = env.CODEX_API_KEY?.trim();
+    if (apiKey === undefined || apiKey === '') {
+      const auth = this.#codexAuth;
+      return auth?.codexHome !== undefined && auth.status?.().placed === true
+        ? auth.codexHome
+        : undefined;
+    }
+    if (env.CODEX_HOME !== undefined && env.CODEX_HOME !== '') return env.CODEX_HOME;
+    return joinPath(this.#childUser?.home ?? env.HOME ?? homedir(), '.codex');
+  }
+
+  /** 戻された peer の記録を、Codex の `CODEX_HOME/sessions/` へ書き戻す（`thread/resume` が rollout を見つけられるように）。同じ peer は1回だけ。 */
+  #placePeerRollout(peerId: string): Promise<void> {
+    const earlier = this.#peerPlacements.get(peerId);
+    if (earlier !== undefined) return earlier;
+    const placing = (async (): Promise<void> => {
+      const seed = this.#peerSeeds.get(peerId);
+      if (seed === undefined) throw new Error('戻された記録が無い');
+      const home = this.#peerCodexHome();
+      if (home === undefined) throw new Error('Codex の CODEX_HOME が分からない');
+      const result = await placePeersInCodexHome(home, [seed], this.#childUser);
+      if (result.rejected.length > 0) {
+        throw new Error('rollout の置き場（relPath・ファイル名）が安全でないか、戻せる行が無い');
+      }
+      this.#peerSeeds.delete(peerId);
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `peer [${peerId}] の記録を ${home}/sessions へ${result.placed.length > 0 ? '置いた' : '置かなかった（既に在る）'}` +
+          (result.droppedLines > 0
+            ? `（ordinal の無い行 ${String(result.droppedLines)} 行は捨てた）`
+            : ''),
+      });
+    })();
+    this.#peerPlacements.set(peerId, placing);
+    // 失敗した約束は残さない（broker 側は失敗した id を起こせる一覧から外す）
+    placing.catch(() => this.#peerPlacements.delete(peerId));
+    return placing;
   }
 
   /** 預けている間に届いた確認と背景の止まりどころを、このセッションへ回す（#4734）。`resume()` の後に呼ぶ: 先に入れると、resume の一言より前に知らせが入るため。 */
@@ -4750,6 +4880,7 @@ class RunnerSession {
     // 読み取りが終わっても入力側を起こして本体を閉じる。怠ると閉じられない
     // Query と起きない `#inputStream` が残る。
     this.#sdkSession.wakeInput();
+    await this.#peerBinding?.rollouts.closeAfterCollecting();
     this.#peerBroker?.closeAll();
     this.#sdkSession.closeQuery();
     this.#sdkSession.setStatus(status);

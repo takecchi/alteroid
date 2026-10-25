@@ -128,6 +128,10 @@ export interface CodexChatgptAuthHandle {
   check(): Promise<void>;
   /** 切れた・失効した・更新に失敗した。理由は伏せ字を通したものを渡す。 */
   reportFailure(reason: string): void;
+  /** 書き出し先の `CODEX_HOME`（peer の記録を預ける・戻す先を、子と同じ値に揃えるため）。 */
+  readonly codexHome?: string;
+  /** ログインが降りているか。降りていなければ `prepare()` は何も書き出さず、子は `CODEX_HOME` を置かれない。 */
+  status?(): { placed: boolean };
 }
 
 const TOOL_NAME_COMMAND = 'commandExecution';

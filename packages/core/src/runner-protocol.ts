@@ -196,6 +196,21 @@ export const runnerResumeCommandSchema = z.object({
   subagents: z
     .array(z.object({ subpath: z.string().min(1), entries: z.array(z.unknown()) }))
     .optional(),
+  /**
+   * 担当が使っていた peer（Codex）の会話の記録（rollout の行）。`relPath` は Codex の `CODEX_HOME/sessions/` から下の相対パス。
+   * 任意: 古い runner は未知の欄として捨て（peer の続きは起こせないだけ）、古いデーモンは送らない。
+   */
+  peers: z
+    .array(
+      z.object({
+        peerId: z.string().min(1),
+        provider: z.string().min(1),
+        threadId: z.string().min(1),
+        relPath: z.string().min(1),
+        entries: z.array(z.unknown()),
+      }),
+    )
+    .optional(),
   lease: runnerLeaseSchema.optional(),
   /** `message` が無ければ使わない。`manager_send` が resume から入り直す回に、添付を黙って落とさないために要る。 */
   attachments: z.array(runnerAttachmentSchema).optional(),
