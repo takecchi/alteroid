@@ -1,0 +1,50 @@
+# cold 2026-10-25T04:42:55.217Z  wrap=bus evict_os_cache=false
+pg_ctl restart: server started
+cold curve /conversations call#1: 138.25 ms status=200 conversations=30 scanned=2000 reachedStart=false hiddenByLimit=157 nextCursor=あり bytes=8993
+--- SQL cold call#1: 27 本、client 側の合計 133.45 ms（往復込み・直列）
+  #00     0.92 ms  begin
+  #01     4.73 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #02     0.93 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #03     1.81 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #00    15.67 ms  update "inbox_events" set "deliveries" = "inbox_events"."deliveries" + 1 returning "id", "event", "at", "deliv
+  #04     1.61 ms  commit
+  #00    16.13 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #06     1.91 ms  begin
+  #05     3.33 ms  select "id", "approval" from "approvals" order by "approvals"."created_at" asc
+  #08     0.59 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #07     2.54 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #10     1.81 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #11     2.18 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #12     0.79 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #13     5.58 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #14    12.44 ms  commit
+  #15     5.41 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #17     2.51 ms  select distinct "entry"->>'deletedConversationId' from "journal" where "journal"."type" = $1
+  #18     3.03 ms  select distinct x.hid from (SELECT named.hid FROM journal h CROSS JOIN LATERAL (SELECT e #>> '{}' AS hid FROM 
+  #19    36.62 ms  select "journal"."id" as id, "journal"."at" as at, r.role as role, jsonb_typeof(r.text) = 'string' as "textIsS
+  #20     0.46 ms  begin
+  #21      0.6 ms  select set_config('jit', 'off', true)
+  #22     1.24 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #23     1.58 ms  select "entry"->>'withdrawnClientMessageId' from "journal" where (("journal"."type" <> 'exchange' OR ("journal
+  #24     0.24 ms  commit
+  #25     1.12 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #26     7.68 ms  select "id", left("entry"->>'text', $1::int), length("entry"->>'text') > $2::int, case when jsonb_typeof("entr
+cold curve /conversations call#2: 50.14 ms status=200 
+--- SQL cold call#2: 13 本、client 側の合計 32.8 ms（往復込み・直列）
+  #27     0.72 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #28     0.49 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #29     0.56 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #30     2.27 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #31     1.43 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #32     13.5 ms  select "journal"."id" as id, "journal"."at" as at, r.role as role, jsonb_typeof(r.text) = 'string' as "textIsS
+  #33      0.4 ms  begin
+  #34     0.33 ms  select set_config('jit', 'off', true)
+  #35     0.87 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #36     1.04 ms  select "entry"->>'withdrawnClientMessageId' from "journal" where (("journal"."type" <> 'exchange' OR ("journal
+  #37     0.24 ms  commit
+  #38     2.69 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #39     8.27 ms  select "id", left("entry"->>'text', $1::int), length("entry"->>'text') > $2::int, case when jsonb_typeof("entr
+cold curve /conversations call#3: 43.93 ms status=200 
+cold curve /conversations call#4: 52.24 ms status=200 
+cold curve /conversations call#5: 39.74 ms status=200 
+pg_stat_database（再起動後の累計）{"x":"1","blks_read":"2759220","blks_hit":"44173980"}

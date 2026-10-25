@@ -1,0 +1,138 @@
+# warm 2026-10-25T04:42:39.969Z  wrap=bus  limit=30 repeat=21  GET /conversations?limit=30（scan は既定）
+first(process-cold, pg-warm) /conversations: 168.54 ms status=200 conversations=30 scanned=2000 reachedStart=false hiddenByLimit=157 nextCursor=あり bytes=8993
+--- SQL first call: 27 本、client 側の合計 177.19 ms（往復込み・直列）
+  #00     0.91 ms  begin
+  #01     6.32 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #02     1.14 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #03      2.2 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #00    17.42 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #00    21.04 ms  update "inbox_events" set "deliveries" = "inbox_events"."deliveries" + 1 returning "id", "event", "at", "deliv
+  #04     4.02 ms  commit
+  #05     4.54 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #08     1.06 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #07     3.44 ms  begin
+  #06     5.15 ms  select "id", "approval" from "approvals" order by "approvals"."created_at" asc
+  #09     6.24 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #10    12.58 ms  insert into "daemon_state" ("key", "value") values ($1, $2) on conflict do nothing
+  #13      1.6 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #14     0.55 ms  select "value" from "daemon_state" where "daemon_state"."key" = $1 limit $2 for update
+  #15     0.87 ms  commit
+  #12     4.93 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #17     2.39 ms  select distinct "entry"->>'deletedConversationId' from "journal" where "journal"."type" = $1
+  #18     3.44 ms  select distinct x.hid from (SELECT named.hid FROM journal h CROSS JOIN LATERAL (SELECT e #>> '{}' AS hid FROM 
+  #19    47.82 ms  select "journal"."id" as id, "journal"."at" as at, r.role as role, jsonb_typeof(r.text) = 'string' as "textIsS
+  #20     0.37 ms  begin
+  #21     0.58 ms  select set_config('jit', 'off', true)
+  #22     0.99 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #23     1.79 ms  select "entry"->>'withdrawnClientMessageId' from "journal" where (("journal"."type" <> 'exchange' OR ("journal
+  #24     0.24 ms  commit
+  #25     1.16 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #26    24.42 ms  select "id", left("entry"->>'text', $1::int), length("entry"->>'text') > $2::int, case when jsonb_typeof("entr
+warm /conversations?limit=30 {"n":21,"median":43.89,"p90":49.28,"max":50.96,"min":36.56} (ms, 21 回, 3 回の助走の後) times=[42.65,43.01,43.02,43.89,48.21,48.97,50.96,40.73,39.9,44.94,38.71,39.63,45.48,36.56,46.51,44.1,49.37,46.84,39.7,42.39,49.28]
+server-timing(最後の1回) db;dur=29.8;desc="DB 13 queries", dbwait;dur=0.4;desc="pool wait", serialize;dur=0.1, app;dur=19.1, total;dur=48.9
+breakdown call: total 42.22 ms  conversations=30 scanned=2000 reachedStart=false hiddenByLimit=157 nextCursor=あり bytes=8993
+--- SQL warm call (内訳): 13 本、client 側の合計 28.46 ms（往復込み・直列）
+  #27     0.65 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #28     0.76 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #29     0.47 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #30     1.32 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #31     1.35 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #32    11.95 ms  select "journal"."id" as id, "journal"."at" as at, r.role as role, jsonb_typeof(r.text) = 'string' as "textIsS
+  #33     2.13 ms  begin
+  #34     0.42 ms  select set_config('jit', 'off', true)
+  #35     0.83 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #36     0.94 ms  select "entry"->>'withdrawnClientMessageId' from "journal" where (("journal"."type" <> 'exchange' OR ("journal
+  #37     0.22 ms  commit
+  #38     0.94 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #39     6.47 ms  select "id", left("entry"->>'text', $1::int), length("entry"->>'text') > $2::int, case when jsonb_typeof("entr
+--- 文ごとの本数と client 側の合計
+  x1    11.95 ms  select "journal"."id" as id, "journal"."at" as at, r.role as role, jsonb_typeof(r.text) = 'string' as "textIsS
+  x1     6.47 ms  select "id", left("entry"->>'text', $1::int), length("entry"->>'text') > $2::int, case when jsonb_typeof("entr
+  x3     3.12 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  x1     2.13 ms  begin
+  x1     1.32 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  x2     1.23 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  x1     0.94 ms  select "entry"->>'withdrawnClientMessageId' from "journal" where (("journal"."type" <> 'exchange' OR ("journal
+  x1     0.65 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  x1     0.42 ms  select set_config('jit', 'off', true)
+  x1     0.22 ms  commit
+JS 側（total − SQL の client 合計）≈ 13.76 ms
+phase loadConversationReadView {"n":21,"median":5.94,"p90":7.33,"max":7.59,"min":4.94}
+phase readConversationPage     {"n":21,"median":37.11,"p90":43.06,"max":44.57,"min":31.4}
+phase 整形(map+JSON.stringify) {"n":21,"median":0.09,"p90":0.17,"max":0.35,"min":0.06}
+readView: positions=730 baseline=2026-07-11T00:00:00.000Z unreadable=なし
+page2 first: 92.99 ms status=200 conversations=30 scanned=2000 reachedStart=false hiddenByLimit=130 nextCursor=あり bytes=8892
+--- SQL page2 first call: 22 本、client 側の合計 72.89 ms（往復込み・直列）
+  #40     0.79 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #41     0.42 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #42     0.54 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #43     1.86 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #44     1.56 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #45     1.24 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."id" = $1 and ("journal"."type" <> 'exchang
+  #46     1.53 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #47     0.27 ms  begin
+  #48     0.36 ms  select set_config('jit', 'off', true)
+  #49     0.86 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #50     1.82 ms  select distinct "entry"->>'conversationId' from "journal" where (("journal"."type" <> 'exchange' OR ("journal"
+  #51     0.28 ms  commit
+  #52     0.74 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #53     1.26 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #54    31.88 ms  select "journal"."id" as id, "journal"."at" as at, r.role as role, jsonb_typeof(r.text) = 'string' as "textIsS
+  #55      0.4 ms  begin
+  #56     0.32 ms  select set_config('jit', 'off', true)
+  #57     2.38 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #58      1.4 ms  select "entry"->>'withdrawnClientMessageId' from "journal" where (("journal"."type" <> 'exchange' OR ("journal
+  #59      0.3 ms  commit
+  #60     1.35 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #61    21.33 ms  select "id", left("entry"->>'text', $1::int), length("entry"->>'text') > $2::int, case when jsonb_typeof("entr
+warm page2 /conversations?limit=30&cursor=… {"n":21,"median":57.67,"p90":68.4,"max":83.83,"min":43.22} (ms, 21 回) times=[57.67,72.91,83.83,64.69,60.81,68.4,57.8,55.25,62.67,59.02,57.54,55.78,67.5,49.82,52.41,46.01,53.19,61.44,47,51.95,43.22]
+--- SQL page2 warm call (内訳): 22 本、client 側の合計 33.55 ms（往復込み・直列）
+  #62     0.57 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #63     0.41 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #64     0.41 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #65     1.17 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #66      1.4 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #67     1.03 ms  select "id", "at", "type", "entry" from "journal" where ("journal"."id" = $1 and ("journal"."type" <> 'exchang
+  #68     0.58 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #69     0.26 ms  begin
+  #70     0.23 ms  select set_config('jit', 'off', true)
+  #71     0.76 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #72      1.3 ms  select distinct "entry"->>'conversationId' from "journal" where (("journal"."type" <> 'exchange' OR ("journal"
+  #73      0.3 ms  commit
+  #74     0.52 ms  select "seq" from "journal" where ("journal"."id" = $1 and "journal"."at" = $2) limit $3
+  #75     0.67 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #76    13.79 ms  select "journal"."id" as id, "journal"."at" as at, r.role as role, jsonb_typeof(r.text) = 'string' as "textIsS
+  #77     0.34 ms  begin
+  #78     0.32 ms  select set_config('jit', 'off', true)
+  #79     0.89 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #80     0.87 ms  select "entry"->>'withdrawnClientMessageId' from "journal" where (("journal"."type" <> 'exchange' OR ("journal
+  #81     0.19 ms  commit
+  #82     1.14 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #83     6.41 ms  select "id", left("entry"->>'text', $1::int), length("entry"->>'text') > $2::int, case when jsonb_typeof("entr
+unread-count first(process-cold, 返答の覚え空): 293.86 ms status=200 body={"count":99,"capped":true}
+--- SQL unread-count first call: 11 本、client 側の合計 236.18 ms（往復込み・直列）
+  #84     0.51 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #85     0.54 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #86     0.77 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #87     0.94 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #88     0.65 ms  select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit 
+  #89     1.44 ms  select "conversation_id", "at" from "conversation_outbound_latest"
+  #90     1.38 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #91    226.7 ms  select "seq", "at", "entry"->>'conversationId' from "journal" where (("journal"."type" <> 'exchange' OR ("jour
+  #92     1.83 ms  update "conversation_read_baseline" set "scanned_through" = greatest(coalesce("conversation_read_baseline"."sc
+  #93     0.46 ms  select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit 
+  #94     0.96 ms  select "conversation_id", "at" from "conversation_outbound_latest"
+warm /conversations/unread-count {"n":21,"median":30.54,"p90":124.79,"max":177.85,"min":24.75} (ms, 21 回) times=[30.33,24.75,30.88,27.33,26.6,30.54,28.58,30.2,28.74,31.02,24.85,27.49,48.06,28.01,59.83,177.85,141.28,120.73,124.79,122.18,119.45]
+--- SQL unread-count warm call (内訳): 11 本、client 側の合計 15.4 ms（往復込み・直列）
+  #95     1.15 ms  insert into "conversation_read_baseline" ("id", "at", "scanned_through") values ($1, $2, default) on conflict 
+  #96     0.91 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #97     0.64 ms  select "at" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit $2
+  #98     2.25 ms  select "conversation_id", "read_through", "updated_at" from "conversation_read"
+  #99     1.15 ms  select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit 
+  #100     2.25 ms  select "conversation_id", "at" from "conversation_outbound_latest"
+  #101      1.2 ms  select count(*)::text || ':' || coalesce(max("seq"), 0)::text from "journal" where "journal"."type" = $1
+  #102     2.04 ms  select "seq", "at", "entry"->>'conversationId' from "journal" where (("journal"."type" <> 'exchange' OR ("jour
+  #103     1.18 ms  update "conversation_read_baseline" set "scanned_through" = greatest(coalesce("conversation_read_baseline"."sc
+  #104      0.5 ms  select "scanned_through" from "conversation_read_baseline" where "conversation_read_baseline"."id" = $1 limit 
+  #105     2.14 ms  select "conversation_id", "at" from "conversation_outbound_latest"
+並行 1 回: /conversations 66.94 ms + unread-count 44.31 ms（同時, 全体 67.06 ms）
