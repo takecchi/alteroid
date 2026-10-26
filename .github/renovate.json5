@@ -110,6 +110,17 @@
       enabled: false,
     },
 
+    // 内蔵 PostgreSQL（`docker/db.Dockerfile`）の major は手で上げる。major はデータの形式が変わり、
+    // 既存のデータディレクトリはそのままでは新しい版で起動できない（`pg_upgrade` か入れ直しが要る）。
+    // 17 → 18 は #1583 で閉じた。その後 #4383 で取り元を ECR Public のミラーへ替え、depName が
+    // `public.ecr.aws/docker/library/postgres` に変わったため、閉じた PR の見送りが効かず再提案された。
+    // Node の規則と同じく、両方の名前を並べる。
+    {
+      matchDepNames: ['postgres', 'public.ecr.aws/docker/library/postgres'],
+      matchUpdateTypes: ['major'],
+      enabled: false,
+    },
+
     // `@types/node` は実行系（Node 22）に合わせてあるので major を追わない。
     {
       matchPackageNames: ['@types/node'],
