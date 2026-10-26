@@ -2858,12 +2858,9 @@ export async function runSlashCommand(
         return 'ok';
       }
       // 失敗の理由を1つに畳まない: 「既に片付いている」と「そんな id は無い」は次の一手が違う。
+      // 409 は言い換えずにサーバの文言を出す（#5273）: 「既に片付いている」のほかに「未了のまま在るのに閉じられなかった」があり（#5072）、潰すと閉じていない行を閉じたと読ませる
       const failure =
-        response.status === 409
-          ? 'それは既に片付いています'
-          : response.status === 404
-            ? 'その id は台帳にありません'
-            : await errorDetail(response);
+        response.status === 404 ? 'その id は台帳にありません' : await errorDetail(response);
       stdout.write(`${failure}\n`);
       // 「既に片付いている」も失敗として渡す（#5236）: 閉じるつもりの行が既に閉じていた回を、呼び手が見分けられるように
       onFailed?.(failure);
