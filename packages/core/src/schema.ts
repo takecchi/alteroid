@@ -992,6 +992,9 @@ export const commitmentSchema = z.object({
   // 枠の知らせ（`quotaStop`）で開いた行に付く、「名指す担当が戻ったら器が閉じてよい」印（#5164）。再起動で閉じる候補を失わないよう台帳へ持たせる。
   // 「失敗する前に出ていた本文」付きの知らせには付けない（進み具合が書かれているので、器は閉じない）。無い行は閉じる候補にならない
   autoCloseWhenBack: z.object({ managerId: z.string() }).optional(),
+  // 開き直された行に付く消えない印（#5271）。器の自動クローズの候補にしない（印の無い古い行の道を含む）。
+  // 否定した直後に器が同じ合図でまた閉じないため（`autoCloseWhenBack` は開き直しで外れるので、外れたことだけでは古い行の道を塞げない）
+  autoCloseDeclined: z.literal(true).optional(),
   // 日誌へ前後の本文を残さない編集の口を足さない: 台帳が静かに書き換わると、クローンが過去の自分を追えなくなるため
   editedAt: isoDateTime.optional(),
   editedBy: z

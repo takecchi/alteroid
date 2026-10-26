@@ -1011,7 +1011,7 @@ export type CommitmentReopenResult =
   | { readonly kind: 'duplicate-open'; readonly openId: string };
 
 /**
- * 閉じた行から、閉じた記録（`closedAt` / `closedReason` / `closedBy`）と `autoCloseWhenBack` を外した写しを返す（`CommitmentStore.reopen` の書き込み側）。
+ * 閉じた行から、閉じた記録（`closedAt` / `closedReason` / `closedBy`）と `autoCloseWhenBack` を外し、`autoCloseDeclined: true` を付けた写しを返す（`CommitmentStore.reopen` の書き込み側）。
  * 外す欄の規則をここに1本だけ置く: in-memory と fs がそれぞれ持つと、片方だけ欄が増えたときにずれる（`storage-pg` だけは SQL で同じ欄を外す）。
  */
 export function withoutClosedRecord(entry: Commitment): Commitment {
@@ -1020,6 +1020,7 @@ export function withoutClosedRecord(entry: Commitment): Commitment {
   delete reopened.closedReason;
   delete reopened.closedBy;
   delete reopened.autoCloseWhenBack;
+  reopened.autoCloseDeclined = true;
   return reopened;
 }
 
@@ -1163,7 +1164,9 @@ export interface CommitmentStore {
    * 呼ばれるのは人間（`POST /commitments/:id/reopen`）かクローン（`commitment_reopen`）が閉じた行を名指ししたときだけで、受信箱の配り直しからは呼ばれない。
    *
    * `closedAt` / `closedReason` / `closedBy` を外し、`autoCloseWhenBack` も外す: 器が自動で閉じた行を人間が否定したのに、
-   * 担当が戻った合図で器がまた閉じると、否定が黙って覆る。`id` / `at` / `origin` / `source` / `body` / `bodyMarkup` / `editedAt` / `editedBy` は変えない
+   * 担当が戻った合図で器がまた閉じると、否定が黙って覆る。外した印の代わりに消えない印 `autoCloseDeclined: true` を付ける（#5271）:
+   * 印を外しただけでは、印の無い古い行の道（再起動後の掃除が本文の定型だけで候補へ戻す）と、候補の Map に残った行が、開き直した行をまた閉じる。
+   * `id` / `at` / `origin` / `source` / `body` / `bodyMarkup` / `editedAt` / `editedBy` は変えない
    * （受け取った時刻と起点が切れないことが、新しく積み直さずに開き直す理由）。
    *
    * 閉じているかの判定と書き込みは1操作に畳む（読んでから書く形にしない。`close` / `editBody` と同じ）。

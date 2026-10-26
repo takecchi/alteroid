@@ -300,7 +300,7 @@ export class PgCommitmentStore implements CommitmentStore {
   // 読めない行は `editBody` と同じく書き直さず投げる。jsonb の欄から `-` で外す: 列 `closed_at` と中身を両方戻さないと、読み出しが閉じたままの値を見るため。
   async reopen(id: string): Promise<CommitmentReopenResult> {
     if (hasNul(id)) return { kind: 'not-found' };
-    const reopened = sql`${commitments.commitment} - 'closedAt' - 'closedReason' - 'closedBy' - 'autoCloseWhenBack'`;
+    const reopened = sql`${commitments.commitment} - 'closedAt' - 'closedReason' - 'closedBy' - 'autoCloseWhenBack' || '{"autoCloseDeclined": true}'::jsonb`;
     // 重複の判定は `open` と同じ条件を SQL で書き直す（部分一意索引 `commitments_open_manager_body_idx` と同じ組）。索引が無い DB でも守るため、索引に頼らず先に探す。
     // それでも並行する `open` に先を越されて 23505 に当たったら、トランザクションは捨てて `duplicate-open` に倒す（500 にしない）。
     const findDuplicate = async (
