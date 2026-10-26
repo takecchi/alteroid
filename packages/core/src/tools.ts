@@ -5581,7 +5581,7 @@ export function createCloneTools(context: ToolContext) {
       [
         '閉じた行を未了へ開き直す。クローンが閉じた行も、人間が閉じた行も、器が自動で閉じた行（`closedBy: daemon`）も、後から否定できる。',
         '**`commitment_open` で積み直さない**: 受け取った時刻と起点が切れる。`commitment_open` は同じ id なら何もしない（冪等）ので、閉じた行は蘇らない。',
-        '受け取った時刻・起点・本文はそのままで、`closedAt` / `closedReason` / `closedBy` と `autoCloseWhenBack` が外れる',
+        '受け取った時刻・起点・本文はそのままで、`closedAt` / `closedReason` / `closedBy` と `autoCloseWhenBack` が外れ、代わりに消えない印 `autoCloseDeclined` が付く',
         '（器が自動で閉じた行を否定したのに、担当が戻った合図で器がまた閉じることはない）。',
         '**開き直す前の閉じた時刻・閉じた主体・理由は日誌へ逐語で残る**（行からは消えるため）。',
       ].join(' '),

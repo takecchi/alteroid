@@ -372,6 +372,88 @@ describe('後継に替わった担当の行を、後継が戻っていれば閉�
   });
 });
 
+// #5271: 開き直した行（人間・クローンが否定した行）を、器が同じ合図でまた閉じない
+describe('開き直した行は、器が自動でまた閉じない（#5271）', () => {
+  const reopenOf = async (stores: Stores, id: string) => {
+    const result = await stores.commitments.reopen(id);
+    expect(result.kind).toBe('reopened');
+  };
+
+  it('⭐ 筋書き A: 器が閉じた印ありの行を開き直し、再起動の後の掃除が走っても未了のまま', async () => {
+    let managers: ManagerSummary[] = [summary({ usageStoppedAt: AT })];
+    const first = boot(stubPool(() => Promise.resolve(managers)));
+    first.clone.post(quotaNotice('evt-a1', `枠に当たって止まった A1`));
+    await waitFor(
+      async () => (await first.stores.commitments.get('evt-a1')) !== null,
+      '台帳に開く',
+    );
+    managers = [summary()];
+    first.clone.post(plainReport('evt-pa1'));
+    await waitClosedByDaemon(first.stores, 'evt-a1');
+    await reopenOf(first.stores, 'evt-a1');
+    await first.clone.stop();
+
+    await seedMarked(first.stores, 'evt-a1-ctl', 'mgr-ctl');
+    const second = boot(
+      stubPool(() => Promise.resolve([summary(), summary({ managerId: 'mgr-ctl' })])),
+      first.stores,
+    );
+    second.clone.post(plainReport('evt-pa2'));
+    await waitClosedByDaemon(second.stores, 'evt-a1-ctl');
+    await waitForTurnWith(second, 'PLAIN-evt-pa2');
+    const row = await second.stores.commitments.get('evt-a1');
+    expect(row?.closedAt).toBeUndefined();
+    expect(row?.closedBy).toBeUndefined();
+    expect(row?.autoCloseDeclined).toBe(true);
+    await second.clone.stop();
+  });
+
+  it('⭐ 印の無い古い行（本文が定型だけ）も、開き直した後は再起動で候補に戻らない', async () => {
+    const stores = createMemoryStores();
+    await seedLegacy(stores, 'evt-a2');
+    await seedLegacy(stores, 'evt-a2-ctl', { source: 'mgr-ctl' });
+    expect(await stores.commitments.close('evt-a2', AT, '器が閉じた', 'daemon')).toBe(true);
+    await reopenOf(stores, 'evt-a2');
+    const s = boot(
+      stubPool(() => Promise.resolve([summary(), summary({ managerId: 'mgr-ctl' })])),
+      stores,
+    );
+    s.clone.post(plainReport('evt-pa3'));
+    await waitClosedByDaemon(stores, 'evt-a2-ctl');
+    await waitForTurnWith(s, 'PLAIN-evt-pa3');
+    expect((await stores.commitments.get('evt-a2'))?.closedAt).toBeUndefined();
+    await s.clone.stop();
+  });
+
+  it('⭐ 筋書き B: 候補の Map に残っている行を人間が閉じて開き直しても、次の掃除は閉じない', async () => {
+    let managers: ManagerSummary[] = [
+      summary({ usageStoppedAt: AT }),
+      summary({ managerId: 'mgr-ctl', usageStoppedAt: AT }),
+    ];
+    const s = boot(stubPool(() => Promise.resolve(managers)));
+    s.clone.post(quotaNotice('evt-b1', `枠に当たって止まった B1`));
+    s.clone.post(quotaNotice('evt-b1-ctl', `枠に当たって止まった B1ctl`, 'mgr-ctl'));
+    await waitFor(
+      async () =>
+        (await s.stores.commitments.get('evt-b1')) !== null &&
+        (await s.stores.commitments.get('evt-b1-ctl')) !== null,
+      '台帳に開く',
+    );
+    // 担当が戻っていない掃除を1回通して、候補が Map に載った後にする
+    s.clone.post(plainReport('evt-pb1'));
+    await waitForTurnWith(s, 'PLAIN-evt-pb1');
+    expect(await s.stores.commitments.close('evt-b1', AT, '人間が閉じた', 'human')).toBe(true);
+    await reopenOf(s.stores, 'evt-b1');
+
+    managers = [summary(), summary({ managerId: 'mgr-ctl' })];
+    s.clone.post(plainReport('evt-pb2'));
+    await waitClosedByDaemon(s.stores, 'evt-b1-ctl');
+    await waitForTurnWith(s, 'PLAIN-evt-pb2');
+    expect((await s.stores.commitments.get('evt-b1'))?.closedAt).toBeUndefined();
+    await s.clone.stop();
+  });
+});
+
 describe('枠の知らせの行は、日誌を先に書いてから閉じる（#5235）', () => {
   it('日誌に書けない間は閉じず（行は未了・候補に残る）、日誌が戻った次の機会に閉じる', async () => {
     const stores = createMemoryStores();

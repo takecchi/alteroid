@@ -97,6 +97,17 @@ describe('closeCommitmentJournalFirst（#5235）', () => {
     expect(await stores.journal.list({ types: ['decision'] })).toEqual([]);
   });
 
+  it('開き直された行（autoCloseDeclined）は日誌を書かず閉じず、declined を返す（#5271）', async () => {
+    const stores = createMemoryStores();
+    await openRow(stores);
+    await stores.commitments.close('c1', AT, '器が閉じた', 'daemon');
+    expect((await stores.commitments.reopen('c1')).kind).toBe('reopened');
+    const result = await closeCommitmentJournalFirst(stores, 'c1', input);
+    expect(result.kind).toBe('declined');
+    expect((await stores.commitments.get('c1'))?.closedAt).toBeUndefined();
+    expect(await stores.journal.list({ types: ['decision'] })).toEqual([]);
+  });
+
   it('読めない行は閉じず、日誌も書かず、unreadable を返す', async () => {
     const stores = createMemoryStores();
     await openRow(stores);

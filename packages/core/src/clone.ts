@@ -3158,6 +3158,8 @@ class Clone implements CloneHost {
     this.#quotaStopRowsRestored = true;
     for (const entry of entries) {
       if (entry.closedAt !== undefined || entry.origin !== 'manager') continue;
+      // 開き直された行は、印の無い古い行の道も含めて候補にしない（#5271）
+      if (entry.autoCloseDeclined === true) continue;
       if (this.#quotaStopLedgerRows.has(entry.id)) continue;
       const managerId =
         entry.autoCloseWhenBack !== undefined
@@ -3217,7 +3219,7 @@ class Clone implements CloneHost {
               '器が閉じるので closedBy は daemon（人間・クローンはこれを読んで後から否定する。否定するなら POST /commitments/:id/reopen・commitment_reopen で開き直す）',
           },
         });
-        // 閉じた行も、無い・既に閉じていた行も候補から外す。読めない行・日誌に書けず閉じなかった行は残す（次の機会に再試行）
+        // 閉じた行も、無い・既に閉じていた行も、開き直された行（`declined`）も候補から外す。読めない行・日誌に書けず閉じなかった行は残す（次の機会に再試行）
         if (result.kind === 'unreadable') continue;
         if (result.kind === 'journal-failed') {
           noteDroppedRecord(

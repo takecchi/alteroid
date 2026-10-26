@@ -6939,8 +6939,8 @@ export function createApp(deps: AppDeps) {
         description:
           'クローンの `commitment_reopen` と同じものを人間の手から。閉じた行を名指しして、未了へ戻す。' +
           '受け取った時刻・起点・本文はそのままで、`closedAt` / `closedReason` / `closedBy` と' +
-          '`autoCloseWhenBack` が外れる（器が自動で閉じた行を否定したのに、担当が戻った合図で' +
-          '器がまた閉じるのを防ぐため）。`reason` は必須で、開き直す前の閉じた時刻・主体・理由とともに' +
+          '`autoCloseWhenBack` が外れ、代わりに消えない印 `autoCloseDeclined: true` が付く' +
+          '（器が自動で閉じた行を否定したのに、担当が戻った合図で器がまた閉じるのを防ぐため）。`reason` は必須で、開き直す前の閉じた時刻・主体・理由とともに' +
           '日誌（`decision`）へ残る。日誌を先に書き、書けなければ開き直さずに 500 を返す。' +
           '**同じ id の `open` は冪等のままで、閉じた行を蘇らせない** — ' +
           '開き直せるのはこの口と `commitment_reopen` だけ。',

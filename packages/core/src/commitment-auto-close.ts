@@ -7,6 +7,8 @@ export type JournalFirstCloseResult =
   | { readonly kind: 'closed' }
   /** 無い、または既に閉じている。日誌は書いていない。 */
   | { readonly kind: 'not-open' }
+  /** 開き直された行（`autoCloseDeclined`）なので閉じない。日誌は書いていない（#5271）。 */
+  | { readonly kind: 'declined' }
   /** 行が読めない形で入っている。閉じていない（残す側）。 */
   | { readonly kind: 'unreadable'; readonly error: UnreadableCommitmentError }
   /** 日誌に書けなかったので閉じていない（行は未了のまま）。 */
@@ -29,6 +31,7 @@ export async function closeCommitmentJournalFirst(
   try {
     const read = await stores.commitments.get(id);
     if (read === null || read.closedAt !== undefined) return { kind: 'not-open' };
+    if (read.autoCloseDeclined === true) return { kind: 'declined' };
   } catch (error) {
     if (!(error instanceof UnreadableCommitmentError)) throw error;
     return { kind: 'unreadable', error };

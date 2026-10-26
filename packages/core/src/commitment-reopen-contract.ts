@@ -20,7 +20,8 @@ export async function verifyCommitmentReopenContract(store: CommitmentStore): Pr
 
   const notClosed = await store.reopen('reopen-1');
   if (notClosed.kind !== 'not-closed') fail(`未了の行が not-closed にならない: ${notClosed.kind}`);
-  if ((await store.get('reopen-1'))?.autoCloseWhenBack === undefined)
+  const untouched = await store.get('reopen-1');
+  if (untouched?.autoCloseWhenBack === undefined || untouched.autoCloseDeclined !== undefined)
     fail('not-closed の呼び出しが行を書き換えた');
 
   const missing = await store.reopen('reopen-missing');
@@ -50,6 +51,8 @@ export async function verifyCommitmentReopenContract(store: CommitmentStore): Pr
   )
     fail(`閉じた記録が残った: ${JSON.stringify(after)}`);
   if (after.autoCloseWhenBack !== undefined) fail('autoCloseWhenBack が残った');
+  if (after.autoCloseDeclined !== true)
+    fail(`開き直した行に autoCloseDeclined: true が付かない: ${JSON.stringify(after)}`);
   if (
     after.id !== 'reopen-1' ||
     after.at !== base.at ||
