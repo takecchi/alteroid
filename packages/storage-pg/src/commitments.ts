@@ -100,8 +100,10 @@ export class PgCommitmentStore implements CommitmentStore {
     this.#db = db;
   }
 
-  async #listClosed(): Promise<{ entries: Commitment[]; unreadable: UnreadableCommitment[] }> {
-    const rows = await this.#db
+  async #listClosed(
+    reader: Pick<Db, 'select'>,
+  ): Promise<{ entries: Commitment[]; unreadable: UnreadableCommitment[] }> {
+    const rows = await reader
       .select({ id: commitments.id, version: sql<string>`xmin::text || '/' || ctid::text` })
       .from(commitments)
       .where(isNotNull(commitments.closedAt))
@@ -117,7 +119,7 @@ export class PgCommitmentStore implements CommitmentStore {
       // 全部が新しいときは `inArray` を経由しない: バインド変数が1クエリ65,535個までで、台帳がそれを超えると冷たい1回目が落ちるため
       const freshRows =
         staleIds.length === rows.length
-          ? await this.#db
+          ? await reader
               .select({
                 id: commitments.id,
                 at: commitments.at,
@@ -125,7 +127,7 @@ export class PgCommitmentStore implements CommitmentStore {
               })
               .from(commitments)
               .where(isNotNull(commitments.closedAt))
-          : await this.#db
+          : await reader
               .select({
                 id: commitments.id,
                 at: commitments.at,
@@ -162,21 +164,30 @@ export class PgCommitmentStore implements CommitmentStore {
   }
 
   async list(options?: { includeClosed?: boolean }): Promise<CommitmentList> {
-    const openRows = await this.#db
-      .select({ id: commitments.id, at: commitments.at, commitment: commitments.commitment })
-      .from(commitments)
-      .where(isNull(commitments.closedAt))
-      .orderBy(asc(commitments.at), asc(commitments.seq), asc(commitments.id));
-    const open = splitReadableRows(openRows);
+    const selectOpen = (reader: Pick<Db, 'select'>) =>
+      reader
+        .select({ id: commitments.id, at: commitments.at, commitment: commitments.commitment })
+        .from(commitments)
+        .where(isNull(commitments.closedAt))
+        .orderBy(asc(commitments.at), asc(commitments.seq), asc(commitments.id));
     // `includeClosed` が偽なら片付いた壊れ行を `unreadable` に入れない: 「未了の一覧」という前提が崩れるため。
-    if (options?.includeClosed !== true) return { ...open, trimmedClosed: 0 };
+    if (options?.includeClosed !== true) {
+      return { ...splitReadableRows(await selectOpen(this.#db)), trimmedClosed: 0 };
+    }
 
-    const closed = await this.#listClosed();
-    return {
-      entries: [...open.entries, ...closed.entries],
-      unreadable: [...open.unreadable, ...closed.unreadable],
-      trimmedClosed: 0,
-    };
+    // 1つのスナップショットで読む: 未了と片付いたを別々の文で読むと、間に閉じる・開き直すが入って行が二重に出る・消える（#5281）。
+    return this.#db.transaction(
+      async (tx) => {
+        const open = splitReadableRows(await selectOpen(tx));
+        const closed = await this.#listClosed(tx);
+        return {
+          entries: [...open.entries, ...closed.entries],
+          unreadable: [...open.unreadable, ...closed.unreadable],
+          trimmedClosed: 0,
+        };
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
   }
 
   async get(id: string): Promise<Commitment | null> {
