@@ -382,13 +382,14 @@ describe('開き直した行は、器が自動でまた閉じない（#5271）',
   it('⭐ 筋書き A: 器が閉じた印ありの行を開き直し、再起動の後の掃除が走っても未了のまま', async () => {
     let managers: ManagerSummary[] = [summary({ usageStoppedAt: AT })];
     const first = boot(stubPool(() => Promise.resolve(managers)));
-    first.clone.post(quotaNotice('evt-a1', `枠に当たって止まった A1`));
+    // 本文は定型だけ（実際の枠の知らせの形）: 開き直しで印が外れても、本文の形で古い行の道に当たる
+    first.clone.post(quotaNotice('evt-a1'));
     await waitFor(
       async () => (await first.stores.commitments.get('evt-a1')) !== null,
       '台帳に開く',
     );
     // 担当が戻っていない掃除を1回通してから戻す（同じターンへ束ねられると、戻った後の掃除が走らない）
-    await waitForTurnWith(first, '止まった A1');
+    await waitForTurnWith(first, SDK_TEXT);
     managers = [summary()];
     first.clone.post(plainReport('evt-pa1'));
     await waitClosedByDaemon(first.stores, 'evt-a1');
