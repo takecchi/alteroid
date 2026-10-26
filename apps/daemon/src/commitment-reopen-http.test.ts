@@ -127,15 +127,21 @@ describe('POST /commitments/:id/reopen', () => {
     expect(row?.closedReason).toBe('器が自動で閉じた');
   });
 
-  it('日誌の行は、台帳の行がまだ閉じているうちに書かれる', async () => {
+  // 以前は日誌の行が1本だけで `[CLOSED_AT]` を見ていた。#5272 で印（humanAction）の付いた行を開き直しの後へ分けたので、
+  // 閉じた記録を持つ先の行は閉じているうちに、印の付いた後の行は開き直した後に書かれることを、行ごとに見る
+  it('閉じた記録を残す先の行は台帳の行がまだ閉じているうちに、印の付いた行は開き直した後に書かれる', async () => {
     const base = createMemoryStores();
-    const closedAtAtAppend: (string | undefined)[] = [];
+    const appended: { closedAt: string | undefined; marked: boolean; grounds: string }[] = [];
     const stores: Stores = {
       ...base,
       journal: {
         ...base.journal,
         append: async (entry) => {
-          closedAtAtAppend.push((await base.commitments.get('c-1'))?.closedAt);
+          appended.push({
+            closedAt: (await base.commitments.get('c-1'))?.closedAt,
+            marked: entry.type === 'decision' && entry.humanAction !== undefined,
+            grounds: entry.type === 'decision' ? entry.grounds : '',
+          });
           return base.journal.append(entry);
         },
       },
@@ -146,7 +152,34 @@ describe('POST /commitments/:id/reopen', () => {
     const response = await call('POST', '/commitments/c-1/reopen', { reason: '戻す' });
 
     expect(response.status).toBe(200);
-    expect(closedAtAtAppend).toEqual([CLOSED_AT]);
+    expect(appended.map(({ closedAt, marked }) => ({ closedAt, marked }))).toEqual([
+      { closedAt: CLOSED_AT, marked: false },
+      { closedAt: undefined, marked: true },
+    ]);
+    expect(appended[0]?.grounds).toContain(`closedAt=${CLOSED_AT}`);
+  });
+
+  it('印の付いた後の行が書けなくても、開き直しは効いているので 200 を返す', async () => {
+    const base = createMemoryStores();
+    let appends = 0;
+    const stores: Stores = {
+      ...base,
+      journal: {
+        ...base.journal,
+        append: async (entry) => {
+          appends += 1;
+          if (appends > 1) throw new Error('journal down');
+          return base.journal.append(entry);
+        },
+      },
+    };
+    const { call } = setup(stores);
+    await openAndClose(stores);
+
+    const response = await call('POST', '/commitments/c-1/reopen', { reason: '戻す' });
+
+    expect(response.status).toBe(200);
+    expect((await base.commitments.get('c-1'))?.closedAt).toBeUndefined();
   });
 
   it('先読みの後に別の手で開き直されたら、打ち消しの行を足して 409 を返す', async () => {

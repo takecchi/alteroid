@@ -1,7 +1,12 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import {
+  ALWAYS_REDELIVER,
+  createClone,
+  REPORT_FOLLOW_UP_GUIDE,
+  REPORT_FOLLOW_UP_GUIDE_REF,
+} from './clone.js';
 import { waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { DigestSessionDelta } from './digest-session-delta.js';
@@ -729,5 +734,59 @@ describe('DigestSessionDelta（単体）', () => {
     delta.commit();
     const out = delta.renderDigest(digest.replace('$1', '$2'), at).text;
     expect(out).toContain('- 合計: $2');
+  });
+});
+
+// 報告の包みの固定の文言（応じ方の案内）も、同じ会話の2回目から参照にする。本文は畳まない
+describe('担当の報告の包みの固定の文言は、同じ会話の中では2回目から参照になる', () => {
+  async function report(s: Boot, managerId: string, text: string): Promise<string> {
+    const before = s.inputs.length;
+    eventSeq += 1;
+    s.clone.post({
+      type: 'manager_message',
+      id: `evt-report-${eventSeq}`,
+      at: new Date().toISOString(),
+      managerId,
+      kind: 'report',
+      text,
+    });
+    await waitFor(() => s.inputs.length > before, `報告の入力 ${before + 1} 本目`);
+    return s.inputs[before] ?? '';
+  }
+
+  it('⭐ 1件目は案内の全文、2件目は短い参照になる。報告の本文はどちらも全文', async () => {
+    const s = boot();
+
+    const first = await report(s, 'mgr-a', '1件目の報告の本文');
+    const second = await report(s, 'mgr-b', '2件目の報告の本文');
+
+    expect(first).toContain('1件目の報告の本文');
+    expect(first).toContain(REPORT_FOLLOW_UP_GUIDE);
+    expect(second).toContain('2件目の報告の本文');
+    expect(second).not.toContain(REPORT_FOLLOW_UP_GUIDE);
+    expect(second).toContain(REPORT_FOLLOW_UP_GUIDE_REF);
+    await s.clone.stop();
+  });
+
+  it('⭐ 自動の要約が走った（compact_boundary）あとの報告は、案内を全文へ戻す', async () => {
+    const s = boot({ after: (n) => (n === 2 ? [compactBoundary] : []) });
+
+    await report(s, 'mgr-a', '1件目');
+    const second = await report(s, 'mgr-b', '2件目');
+    const third = await report(s, 'mgr-c', '3件目');
+
+    expect(second).toContain(REPORT_FOLLOW_UP_GUIDE_REF);
+    expect(third).toContain(REPORT_FOLLOW_UP_GUIDE);
+    await s.clone.stop();
+  });
+
+  it('⭐ 使用量の観測が取れない回は、毎回全文（安全側）', async () => {
+    const s = boot({ noUsage: true });
+
+    await report(s, 'mgr-a', '1件目');
+    const second = await report(s, 'mgr-b', '2件目');
+
+    expect(second).toContain(REPORT_FOLLOW_UP_GUIDE);
+    await s.clone.stop();
   });
 });

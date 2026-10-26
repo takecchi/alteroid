@@ -2383,9 +2383,11 @@ describe('chat の台帳コマンド', () => {
       return { text: out(), failed };
     }
 
+    // 409 は以前 'それは既に片付いています' を期待していた（#5236）。サーバの 409 には「未了のまま在るのに閉じられなかった」もあり（#5072）、
+    // その言い換えは閉じていない行を閉じたと読ませるので、サーバの文言のまま出す期待へ反転した（#5273）
     it.each([
       [404, 'その id は台帳にありません'],
-      [409, 'それは既に片付いています'],
+      [409, SERVER_MESSAGE],
       [500, SERVER_MESSAGE],
     ])('/done は %i を表示した文のまま失敗として渡す', async (status, message) => {
       const { text, failed } = await runWrite(
@@ -2400,6 +2402,25 @@ describe('chat の台帳コマンド', () => {
 
       expect(text).toContain(message);
       expect(failed).toEqual([message]);
+    });
+
+    it('/done は「未了のまま閉じられなかった」409 を「既に片付いています」と言い換えない', async () => {
+      const notClosed =
+        'cmt-1 は閉じられなかった（台帳には未了のまま在るが、閉じる書き込みが通らなかった）。' +
+        '一覧で確かめてから、もう一度閉じること';
+      const { text, failed } = await runWrite(
+        '/done 1 片付けた',
+        {
+          commitments: [commitment({ id: 'cmt-1' })],
+          closeStatus: 409,
+          closeBody: { error: notClosed },
+        },
+        true,
+      );
+
+      expect(text).toContain(notClosed);
+      expect(text).not.toContain('既に片付いています');
+      expect(failed).toEqual([notClosed]);
     });
 
     it('/done は成功の回に onFailed を呼ばない', async () => {
@@ -2593,9 +2614,13 @@ describe('chat の台帳コマンド', () => {
 
   it('/done は 409（既に片付いている）と 404（id が無い）を別の言葉で返す', async () => {
     const conflict = captureStdout();
+    // 409 の文言はサーバが持つ（#5273）。ここではサーバの「既に片付いている」の本文を返させる
     const { client: conflictClient } = stubClient({
       commitments: [commitment({ id: 'cmt-1' })],
       closeStatus: 409,
+      closeBody: {
+        error: 'cmt-1 は既に 2026-10-01T00:00:00.000Z に片付いている（PR をマージした）',
+      },
     });
     const listedConflict = emptyListed();
     await runSlashCommand('/commitments', conflictClient, listedConflict);
@@ -2613,10 +2638,10 @@ describe('chat の台帳コマンド', () => {
     await runSlashCommand('/done 1 片付けた', missingClient, listedMissing);
     const missingText = missing();
 
-    expect(conflictText).toContain('既に片付いています');
+    expect(conflictText).toContain('既に 2026-10-01T00:00:00.000Z に片付いている');
     expect(missingText).toContain('台帳にありません');
     expect(conflictText).not.toContain('台帳にありません');
-    expect(missingText).not.toContain('既に片付いています');
+    expect(missingText).not.toContain('片付いている');
   });
 
   it('/done は 404/409 以外はサーバの理由（{ error }）をそのまま出す', async () => {

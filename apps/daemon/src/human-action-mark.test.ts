@@ -242,6 +242,51 @@ describe('POST /commitments/:id/reopen の印', () => {
       via: { kind: 'account', accountId },
     });
   });
+
+  // 開き直しは日誌を先に書く。重複・割り込みで効かなかった回に、先の行が印を持ったまま残らないこと（#5272）
+  it('同じ担当・同じ本文の未了が在って開き直せなかった回は、どの行にも印が付かない', async () => {
+    const base = { at: '2026-10-19T00:00:00.000Z', origin: 'manager', source: 'mgr-1' } as const;
+    await stores.commitments.open({ ...base, id: 'old', body: '同じ本文' });
+    await stores.commitments.close('old', '2026-10-19T01:00:00.000Z', '片付けた', 'clone');
+    await stores.commitments.open({ ...base, id: 'new', body: '同じ本文' });
+
+    const response = await buildPlainApp().request(
+      '/commitments/old/reopen',
+      call(OPERATOR, 'POST', { reason: 'まだ終わっていない' }),
+    );
+    expect(response.status).toBe(409);
+
+    const all = await decisions();
+    expect(all.filter((entry) => entry.humanAction !== undefined)).toEqual([]);
+    // 先の行そのものは残っている（印だけが無い）
+    expect(all.some((entry) => entry.grounds?.includes('closedReason=片付けた'))).toBe(true);
+  });
+
+  it('先読みの後に別の手で開き直されていた回は、どの行にも印が付かない', async () => {
+    const id = await openClosed();
+    const reopen = stores.commitments.reopen.bind(stores.commitments);
+    stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        reopen: async (target) => {
+          await reopen(target);
+          return reopen(target);
+        },
+      },
+    };
+
+    const response = await buildPlainApp().request(
+      `/commitments/${id}/reopen`,
+      call(OPERATOR, 'POST', { reason: 'まだ終わっていない' }),
+    );
+    expect(response.status).toBe(409);
+
+    const marked = (await decisions()).filter(
+      (entry) => entry.humanAction?.kind === 'commitment_reopen',
+    );
+    expect(marked).toEqual([]);
+  });
 });
 
 describe('DELETE /schedule/:kind の印', () => {
