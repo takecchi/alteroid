@@ -85,6 +85,10 @@ import {
   startTokenTrialWatch,
   type TokenTrialWatch,
 } from './token-trial-watch.js';
+import {
+  RunnerEventJournalFold,
+  createRunnerEventJournalWriter,
+} from './runner-event-journal-fold.js';
 import { TokenRotationJournalFold } from './token-rotation-journal-fold.js';
 import { startUsagePolling } from './usage-poller.js';
 import { startManagerPolling } from './manager-poller.js';
@@ -460,21 +464,29 @@ export async function main(): Promise<void> {
   await pruneExtractedPluginsOnBoot({ root: paths.root, store: stores.plugins });
 
   const workspace = process.env.ALTEROID_WORKSPACE || process.cwd();
+  const runnerEventJournalFold = new RunnerEventJournalFold();
 
   // 器の生死や設定の押し込みの不明は日誌へ載せない: 黙って死んだ器へ挑み直すたびに1行増え、`journal_read` の窓が同じ行で埋まって本物の記録が押し出されるため。
+  // 同一本文の反復だけを畳む（#1311）。キーごとに窓を持ち、書く型は `external_event` / `runner` の1つに固定してある。
+  const runnerEventJournalWriter = createRunnerEventJournalWriter({
+    journal: stores.journal,
+    fold: runnerEventJournalFold,
+    now: Date.now,
+    onDropped: ({ kind, summary, error }) => {
+      writeStderrLine(
+        `alteroidd: runner の出来事${kind === 'folded' ? '（畳んだ要約）' : ''}を日誌へ残せませんでした: ${reasonOf(error)}\n` +
+          `  ${summary}\n`,
+      );
+    },
+  });
+
   const reportRunnerUnknown = (report: RunnerUnknownReport): void => {
-    if (managerIdOfRunnerPath(report.path) === undefined) {
+    const managerId = managerIdOfRunnerPath(report.path);
+    if (managerId === undefined) {
       writeStderrLine(`alteroidd: ${describeRunnerUnknown(report)}\n`);
       return;
     }
-    void stores.journal
-      .append({ type: 'external_event', source: 'runner', summary: describeRunnerUnknown(report) })
-      .catch((error: unknown) => {
-        writeStderrLine(
-          `alteroidd: runner の期限切れを日誌へ残せませんでした: ${reasonOf(error)}\n` +
-            `  ${describeRunnerUnknown(report)}\n`,
-        );
-      });
+    void runnerEventJournalWriter.write(`unknown:${managerId}`, describeRunnerUnknown(report));
   };
 
   const reportRunnerDropped = (report: RunnerDroppedEventReport): void => {
@@ -493,14 +505,7 @@ export async function main(): Promise<void> {
     const summary =
       `runner (${report.label}${report.runnerId === undefined ? '' : ` / ${report.runnerId}`}) を` +
       `失いました（onLost）: ${report.error}`;
-    void stores.journal
-      .append({ type: 'external_event', source: 'runner', summary })
-      .catch((error: unknown) => {
-        writeStderrLine(
-          `alteroidd: runner を失ったことを日誌へ残せませんでした: ${reasonOf(error)}\n` +
-            `  ${summary}\n`,
-        );
-      });
+    void runnerEventJournalWriter.write(`lost:${report.label}:${report.runnerId ?? ''}`, summary);
   };
 
   // デーモンのイベントループが止まったら、何が走っていたかと GC・ヒープを添えて日誌に残す（#4485）。
@@ -1239,6 +1244,7 @@ export async function main(): Promise<void> {
         noteDroppedRecord('認証トークンの切替（畳んだ要約、停止時）', 'journal', error);
       });
     }
+    await runnerEventJournalWriter.flushAll();
     server.close();
     // 最後の窓も書く: 夜の反映のたびに器が入れ替わり、書かずに落ちると反映前の数分が毎回欠けるため
     await httpTiming.stop().catch(() => undefined);
