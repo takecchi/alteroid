@@ -387,6 +387,8 @@ describe('開き直した行は、器が自動でまた閉じない（#5271）',
       async () => (await first.stores.commitments.get('evt-a1')) !== null,
       '台帳に開く',
     );
+    // 担当が戻っていない掃除を1回通してから戻す（同じターンへ束ねられると、戻った後の掃除が走らない）
+    await waitForTurnWith(first, '止まった A1');
     managers = [summary()];
     first.clone.post(plainReport('evt-pa1'));
     await waitClosedByDaemon(first.stores, 'evt-a1');
