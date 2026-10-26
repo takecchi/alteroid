@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { PgCommitmentStore } from './commitments.js';
 import type { Db } from './db.js';
-import { createMigratedTestDb, realPostgresUrl, type TestDbHandle } from './test-db.test-support.js';
+import {
+  createMigratedTestDb,
+  realPostgresUrl,
+  type TestDbHandle,
+} from './test-db.test-support.js';
 
 // 未了の select と片付いた行の問い合わせのあいだに閉じる・開き直すが入っても、行が二重に出たり消えたりしない（#5281）。
 // 本物の PostgreSQL でだけ回す: 割り込みには別の接続が要り、PGlite は単一接続で再現できないため。
