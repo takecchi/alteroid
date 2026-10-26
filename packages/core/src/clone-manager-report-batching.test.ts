@@ -4,6 +4,9 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, lineStartingWith, waitFor } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 
+// 3つの describe で共有する: 定義を describe ごとに置くと、実時間の待ちの数（scripts/wallclock-waits-baseline.json、#2146）が describe の数だけ増えるため
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));
+
 describe('クローン — 同じマネージャーの連続する report をまとめて読む（#562）', () => {
   const spendLimitMessage = "You've hit your individual spend limit for this account.";
 
@@ -22,8 +25,6 @@ describe('クローン — 同じマネージャーの連続する report をま
     text,
     ...(requestId === undefined ? {} : { requestId }),
   });
-
-  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));
 
   it('同じマネージャーの連続する report 3件が1ターンにまとめて読まれ、全文が届く', async () => {
     const s = setup();
@@ -658,8 +659,6 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     text,
   });
 
-  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));
-
   it('中身（source・payload）が完全に同じ external が3件連続で届くと、1ターンへ束ねられ、本文に件数と全件の届いた時刻が載る', async () => {
     const s = setup();
 
@@ -986,8 +985,6 @@ describe('クローン — 起点の違う合図をまとめて読む', () => {
     source,
     payload: { text },
   });
-
-  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));
 
   it('別々の担当の報告・質問と外部イベントが、届いた順に全文で1ターンにまとまる。質問は宛先（managerId・requestId）を持ったまま', async () => {
     const s = setup();
