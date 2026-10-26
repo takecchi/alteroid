@@ -51,6 +51,7 @@ import {
   composedFingerprints,
   composeProfileScript,
   createPluginPreviewStore,
+  describeAttachmentForJournal,
   isValidPluginName,
   mcpServerNames,
   normalizePluginDescription,
@@ -2671,12 +2672,18 @@ export function createApp(deps: AppDeps) {
         description:
           '預かっている中身と控えを消す。保存の印が付いていても消す。`attachment_fetch` で取り出した写しも消す。' +
           '取り消せない。連携の鍵は 403。' +
+          '消す前に、控え（id・名前・種類・大きさ・sha256・出所・保存中だったか。中身は書かない）と誰が消したかを日誌（`decision`）へ残す' +
+          '（クローンの `file_delete` と同じ）。日誌に書けなければ消さずに 500 を返す。' +
           '外部の置き場に預けた中身は先に消す: 消せなかったとき（置き場の障害・設定が無い）は、消さずに 503 で断り（控えも残す）、理由を返す。もう一度消すと再試行する。',
         responses: {
           204: { description: '消した（中身が消えたときだけ）。' },
           404: {
             description: '無い（消えた・期限切れ）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description: '日誌が書けなかった（**消していない**。中身も控えも残っている）。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
           },
           503: {
             description:
@@ -2687,19 +2694,37 @@ export function createApp(deps: AppDeps) {
       }),
       async (c) => {
         const id = c.req.param('id');
+        const actor = `${describeActor(c.get('principal'))}（DELETE /attachments/:id）`;
+        // 消す前に控えを日誌へ書き、書けなければ消さずに 500（#5280）: 消した後では名前も大きさも sha256 も辿れない（`file_delete` と同じ順序）。
+        // 控えが無い（404 になる）回は書かない: 消すものが無い
+        const meta = await stores.attachments.getMeta(id);
+        if (meta !== undefined) {
+          try {
+            await stores.journal.append({
+              type: 'decision',
+              decision: `添付の中身と控えを消す: ${meta.name}（id=${meta.id}）`,
+              grounds: `${actor}。消す前の控え: ${describeAttachmentForJournal(meta)}`,
+            });
+          } catch (error) {
+            noteDroppedRecord('添付の削除の日誌（消していない）', `id=${id}`, kindOfError(error));
+            return c.json(journalWriteFailedBody(), 500);
+          }
+        }
         let removed: boolean;
         try {
           removed = await stores.attachments.remove(id);
         } catch (error) {
           if (!(error instanceof AttachmentContentRemoveError)) throw error;
-          // 断ったことを日誌に残す（消していないのに消したように読まれないため）。名前が読めなくても断りは変えない。
-          const meta = await stores.attachments.getMeta(id).catch(() => undefined);
+          // 断ったことを日誌に残す（先に書いた「消す」の行だけでは、消したように読まれるため）。書けなくても断りは変えない。
           await appendJournalOrDrop(
             stores,
             {
               type: 'decision',
               decision: `添付を消せなかった（中身を置き場から消せないので、消していない。控えも残した）: ${meta === undefined ? '' : `${meta.name}、`}id=${id}`,
-              grounds: `${describeActor(c.get('principal'))}（DELETE /attachments/:id）。理由: ${error.reason}。もう一度消すと再試行する。`,
+              grounds:
+                `${actor}。理由: ${error.reason}。` +
+                (meta === undefined ? '' : '直前の「消す」の行は実行されていない。') +
+                'もう一度消すと再試行する。',
             },
             '添付の削除の断りの日誌',
             `id=${id}`,
@@ -2715,7 +2740,22 @@ export function createApp(deps: AppDeps) {
         if (deps.attachmentCopiesDir !== undefined) {
           await removeAttachmentCopy(deps.attachmentCopiesDir, id);
         }
-        if (!removed) return c.json({ error: 'not found' as const }, 404);
+        if (!removed) {
+          // 控えを読んだ後に別の手で消えていた回: 先に書いた「消す」の行はこの呼びでは実行されていない
+          if (meta !== undefined) {
+            await appendJournalOrDrop(
+              stores,
+              {
+                type: 'decision',
+                decision: `直前の添付の削除の行は効いていない（この呼びでは消していない）: ${meta.name}（id=${id}）`,
+                grounds: `${actor}。消す直前に、添付が置き場から無くなっていた（期限切れ・別の手で消された）`,
+              },
+              '添付の削除の打ち消しの日誌',
+              `id=${id}`,
+            );
+          }
+          return c.json({ error: 'not found' as const }, 404);
+        }
         return c.body(null, 204);
       },
     )

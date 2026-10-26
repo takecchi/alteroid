@@ -1048,7 +1048,7 @@
         "operationId": "deleteAttachmentsById",
         "tags": ["attachments"],
         "summary": "添付を消す（保存したものも）",
-        "description": "預かっている中身と控えを消す。保存の印が付いていても消す。`attachment_fetch` で取り出した写しも消す。取り消せない。連携の鍵は 403。外部の置き場に預けた中身は先に消す: 消せなかったとき（置き場の障害・設定が無い）は、消さずに 503 で断り（控えも残す）、理由を返す。もう一度消すと再試行する。",
+        "description": "預かっている中身と控えを消す。保存の印が付いていても消す。`attachment_fetch` で取り出した写しも消す。取り消せない。連携の鍵は 403。消す前に、控え（id・名前・種類・大きさ・sha256・出所・保存中だったか。中身は書かない）と誰が消したかを日誌（`decision`）へ残す（クローンの `file_delete` と同じ）。日誌に書けなければ消さずに 500 を返す。外部の置き場に預けた中身は先に消す: 消せなかったとき（置き場の障害・設定が無い）は、消さずに 503 で断り（控えも残す）、理由を返す。もう一度消すと再試行する。",
         "responses": {
           "204": {
             "description": "消した（中身が消えたときだけ）。"
@@ -1065,6 +1065,27 @@
                     }
                   },
                   "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**消していない**。中身も控えも残っている）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
                   "additionalProperties": false
                 }
               }

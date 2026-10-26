@@ -366,6 +366,65 @@ describe('DELETE /attachments/:id（保存したものも消す）', () => {
   });
 });
 
+// 人間が消した添付を後から辿れるよう、消す前に控えを日誌へ残す（#5280。クローンの `file_delete` と同じ順序）
+describe('DELETE /attachments/:id は消す前に控えを日誌へ残す（#5280）', () => {
+  it('名前・大きさ・sha256・誰が消したかが、中身がまだ在るうちに日誌へ書かれる', async () => {
+    const meta = await uploadOk('report.txt', '&keep=1', 'hello world');
+    const stored = await stores.attachments.getMeta(meta.id);
+    const present: boolean[] = [];
+    const append = stores.journal.append.bind(stores.journal);
+    vi.spyOn(stores.journal, 'append').mockImplementation(async (entry) => {
+      present.push((await stores.attachments.getMeta(meta.id)) !== undefined);
+      return append(entry);
+    });
+
+    expect((await del(meta.id)).status).toBe(204);
+
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    expect(decisions).toHaveLength(1);
+    const line = JSON.stringify(decisions[0]);
+    expect(line).toContain('report.txt');
+    expect(line).toContain(meta.id);
+    expect(line).toContain(`size=${String(meta.size)}`);
+    expect(line).toContain(`sha256=${stored?.sha256 ?? '?'}`);
+    expect(line).toContain('保存中だった');
+    expect(line).toContain('実行環境の持ち主による操作');
+    expect(line).not.toContain('hello world');
+    expect(present).toEqual([true]);
+  });
+
+  it('日誌に書けなければ 500 で、消さない（控えも中身も残る）', async () => {
+    const meta = await uploadOk('a.txt');
+    vi.spyOn(stores.journal, 'append').mockRejectedValue(new Error('journal down'));
+
+    const response = await del(meta.id);
+
+    expect(response.status).toBe(500);
+    expect(((await response.json()) as { code: string }).code).toBe('journal_write_failed');
+    expect((await app.request(`/attachments/${meta.id}/meta`, { headers: OPERATOR })).status).toBe(
+      200,
+    );
+    expect((await app.request(`/attachments/${meta.id}`, { headers: OPERATOR })).status).toBe(200);
+  });
+
+  it('無い id は 404 で、日誌を書かない', async () => {
+    expect((await del('11111111-2222-3333-4444-555555555555')).status).toBe(404);
+    expect(await stores.journal.list({ types: ['decision'] })).toEqual([]);
+  });
+
+  it('控えを読んだ後に別の手で消えていたら 404 で、「消す」の行を打ち消す', async () => {
+    const meta = await uploadOk('a.txt');
+    vi.spyOn(stores.attachments, 'remove').mockResolvedValue(false);
+
+    expect((await del(meta.id)).status).toBe(404);
+
+    const decisions = await stores.journal.list({ types: ['decision'], order: 'asc' });
+    expect(decisions).toHaveLength(2);
+    expect(JSON.stringify(decisions[0])).toContain('添付の中身と控えを消す');
+    expect(JSON.stringify(decisions[1])).toContain('直前の添付の削除の行は効いていない');
+  });
+});
+
 describe('連携の鍵（altk_）は POST /attachments だけ通り、keep は付けられない', () => {
   it('鍵は keep なしで上げられ、keep=1 は 403（何も預からない）', async () => {
     const key = await issueKey();
@@ -447,7 +506,7 @@ describe('POST /reset は添付（保存したものを含む）と写しを消�
 });
 
 describe('DELETE /attachments/:id: 中身を置き場から消せなかったとき（#4814）', () => {
-  it('503 で断り、本文に理由を載せ、日誌に1行残し、控えも写しも残す。直れば消せる', async () => {
+  it('503 で断り、本文に理由を載せ、日誌に「消す」の行と断りの行を残し、控えも写しも残す。直れば消せる', async () => {
     const meta = await uploadOk('a.txt');
     await mkdir(join(copiesDir, meta.id), { recursive: true });
     await writeFile(join(copiesDir, meta.id, 'copy.txt'), 'copy');
@@ -462,13 +521,17 @@ describe('DELETE /attachments/:id: 中身を置き場から消せなかったと
     expect(body.error).toContain('消していない');
     expect(body.error).toContain('置き場への削除を断られた');
     expect(body.error).toContain('もう一度');
-    const decisions = await stores.journal.list({ types: ['decision'] });
-    expect(decisions).toHaveLength(1);
-    const line = JSON.stringify(decisions[0]);
+    // 以前は断りの1行だけだった。#5280 で消す前に控えの行を書くようになったので、
+    // 「消す」の行と、それが実行されていないと言う断りの行の2本を、書いた順に見る
+    const decisions = await stores.journal.list({ types: ['decision'], order: 'asc' });
+    expect(decisions).toHaveLength(2);
+    expect(JSON.stringify(decisions[0])).toContain('添付の中身と控えを消す');
+    const line = JSON.stringify(decisions[1]);
     expect(line).toContain('a.txt');
     expect(line).toContain(meta.id);
     expect(line).toContain('置き場への削除を断られた');
     expect(line).toContain('実行環境の持ち主による操作');
+    expect(line).toContain('直前の「消す」の行は実行されていない');
     expect((await app.request(`/attachments/${meta.id}/meta`, { headers: OPERATOR })).status).toBe(
       200,
     );
