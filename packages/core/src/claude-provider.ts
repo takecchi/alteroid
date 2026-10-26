@@ -521,6 +521,30 @@ export function withNoSessionTitleEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
 // Older Claude Code versions reject true or false here, so use the object form in settings files shared across versions.
 export const NO_ATTRIBUTION_SETTINGS = { attribution: { commit: '', pr: '' } } as const;
 
+/** 人間が自動の要約の窓を置く env の名前（CLI が読む名前そのもの）。 */
+export const AUTO_COMPACT_WINDOW_ENV_KEY = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW';
+
+/**
+ * クローンの本セッションとマネージャーが、自動の要約を走らせる文脈の大きさ（トークン）の既定。
+ *
+ * 既定のままだと 1M の窓を持つモデルは約 967K まで要約せずに育ち、ターンの中の道具の呼び出しのたびにその全部をキャッシュから読み直す。
+ * 本番の実測（2026-10-25、turn_usage の全文）ではマネージャーの1ターンが文脈 713K・キャッシュ読み 23.9M トークン・$10.84 で、
+ * 文脈の 97% は会話の履歴（Messages）だった。費用はほぼ「文脈の長さ × 呼び出し回数」で決まるので、窓を下げるのがいちばん効く。
+ * 要約の前の全文は PreCompact でアーカイブへ落ちる（クローンは蒸留も走る）ので、細部は捨てずに引ける口が残る。
+ */
+// [sdk-verbatim Settings.modelOverrides.autoCompactWindow]
+// Auto-compact window for this model, in tokens (100000 to 1000000), or "auto" for the window tuned for the model.
+export const DEFAULT_AUTO_COMPACT_WINDOW_TOKENS = 300_000;
+
+/**
+ * 自動の要約の窓を `Options.settings` へ載せる分。人間が env に窓を置いていれば何も載せない。
+ * `Options.settings` は利用者の設定の中で最も優先されるので、載せると人間の指定より勝ってしまうため（north_star 禁止2: 方針は設定で開けられること）。
+ */
+export function autoCompactWindowSettings(env: NodeJS.ProcessEnv): { autoCompactWindow?: number } {
+  if ((env[AUTO_COMPACT_WINDOW_ENV_KEY] ?? '').trim() !== '') return {};
+  return { autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS };
+}
+
 export interface CloneSessionOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
@@ -577,7 +601,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     systemPrompt,
     // `settingSources` を `[]` にしない: 人間が Claude Code で使っている MCP 連携がクローンから1つも見えなくなる（能力の削除）ため
     settingSources: ['user', 'project', 'local'],
-    settings: { ...NO_ATTRIBUTION_SETTINGS },
+    settings: { ...NO_ATTRIBUTION_SETTINGS, ...autoCompactWindowSettings(env) },
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     skills: 'all',
     env: withNoSessionTitleEnv(withNoModelFallbackEnv(env)),
@@ -820,6 +844,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     // Preferred language for Claude responses and voice dictation (e.g., "japanese", "spanish")
     settings: {
       ...NO_ATTRIBUTION_SETTINGS,
+      ...autoCompactWindowSettings(env),
       ...(managerAutoMemoryEnabled ? {} : { autoMemoryEnabled: false }),
       ...(sdkLanguage === undefined ? {} : { language: sdkLanguage }),
     },

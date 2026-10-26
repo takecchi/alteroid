@@ -15,7 +15,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { cloneMcpServers } from './claude-provider.js';
+import { cloneMcpServers, DEFAULT_AUTO_COMPACT_WINDOW_TOKENS } from './claude-provider.js';
 import {
   CLONE_TOOL_RELAY_SOCKET_ENV,
   CLONE_TOOL_RELAY_TOKEN_ENV,
@@ -165,7 +165,10 @@ describe('クローン本セッションへ渡す Options', () => {
     expect(options.maxTurns).toBeUndefined();
     expect(options.canUseTool).toBeUndefined();
     expect(options.resume).toBeUndefined();
-    expect(options.settings).toEqual({ attribution: { commit: '', pr: '' } });
+    expect(options.settings).toEqual({
+      attribution: { commit: '', pr: '' },
+      autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
+    });
 
     await clone.stop();
   });
@@ -390,6 +393,7 @@ describe('マネージャー（runner）へ渡す Options', () => {
 
     expect(options.settings).toEqual({
       attribution: { commit: '', pr: '' },
+      autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
       autoMemoryEnabled: false,
     });
   });
@@ -407,7 +411,10 @@ describe('マネージャー（runner）へ渡す Options', () => {
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const { options } = started[0] as Started;
 
-    expect(options.settings).toEqual({ attribution: { commit: '', pr: '' } });
+    expect(options.settings).toEqual({
+      attribution: { commit: '', pr: '' },
+      autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
+    });
   });
 
   it('ALTEROID_MANAGER_AUTO_MEMORY に true/false 以外を置くと落ちる（不正な値を黙って既定へ倒さない）', async () => {

@@ -23,9 +23,11 @@ import type {
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import {
+  AUTO_COMPACT_WINDOW_ENV_KEY,
   buildCloneDistillOptions,
   buildCloneSessionOptions,
   buildManagerSessionOptions,
+  DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
   foldClaudeMessage,
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
   withNoModelFallbackEnv,
@@ -2169,5 +2171,52 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
     const env: NodeJS.ProcessEnv = { PATH: '/bin' };
     withNoModelFallbackEnv(env);
     expect(env).toEqual({ PATH: '/bin' });
+  });
+
+  // 同じ describe に置く: 3つの builder の組み立て（`cloneOptions` / `distillOptions` / `managerOptions`）をそのまま使うため
+  describe('自動の要約の窓（autoCompactWindow）', () => {
+    const sessions = [
+      ['クローン本体', cloneOptions],
+      ['マネージャー', managerOptions],
+    ] as const;
+
+    it.each(sessions)(
+      '%s: 人間が窓を置いていなければ、既定の窓を settings に載せる',
+      (_, build) => {
+        expect(build({ PATH: '/bin' }).settings).toMatchObject({
+          autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
+        });
+      },
+    );
+
+    it.each(sessions)(
+      '%s: 人間が env に窓を置いていれば settings に載せず、env はそのまま渡す（settings は env より優先されうるため）',
+      (_, build) => {
+        const options = build({ [AUTO_COMPACT_WINDOW_ENV_KEY]: '500k' });
+        expect(options.settings).not.toHaveProperty('autoCompactWindow');
+        expect(options.env).toMatchObject({ [AUTO_COMPACT_WINDOW_ENV_KEY]: '500k' });
+      },
+    );
+
+    it.each(sessions)('%s: 空文字・空白だけは「置いていない」と読む', (_, build) => {
+      expect(build({ [AUTO_COMPACT_WINDOW_ENV_KEY]: '  ' }).settings).toMatchObject({
+        autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
+      });
+    });
+
+    it('帰属を消す settings は窓と一緒に残る（窓を足して帰属の設定を落とさない）', () => {
+      for (const build of [cloneOptions, managerOptions]) {
+        expect(build({}).settings).toMatchObject({ attribution: { commit: '', pr: '' } });
+      }
+    });
+
+    it('蒸留は窓を載せない（1回きりで会話を持ち越さず、要約が走る場面が無いため）', () => {
+      expect(distillOptions({}).settings).not.toHaveProperty('autoCompactWindow');
+    });
+
+    it('既定は SDK が受ける範囲（100000〜1000000）の中にある', () => {
+      expect(DEFAULT_AUTO_COMPACT_WINDOW_TOKENS).toBeGreaterThanOrEqual(100_000);
+      expect(DEFAULT_AUTO_COMPACT_WINDOW_TOKENS).toBeLessThanOrEqual(1_000_000);
+    });
   });
 });

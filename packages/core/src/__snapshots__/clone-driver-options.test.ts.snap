@@ -84,7 +84,8 @@ exports[`クローン — query() へ渡る Options は駆動役の切り出し�
     "attribution": {
       "commit": "",
       "pr": ""
-    }
+    },
+    "autoCompactWindow": 300000
   },
   "skills": "all",
   "env": {
@@ -218,7 +219,8 @@ exports[`クローン — query() へ渡る Options は駆動役の切り出し�
     "attribution": {
       "commit": "",
       "pr": ""
-    }
+    },
+    "autoCompactWindow": 300000
   },
   "skills": "all",
   "env": {
