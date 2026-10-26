@@ -6976,12 +6976,13 @@ export function createApp(deps: AppDeps) {
         const id = c.req.param('id');
         const { reason } = c.req.valid('json');
         const principal = c.get('principal');
+        // 先の行に humanAction を付けない（#5272）: 印は効いた後の行（下）だけが持つ。重複・割り込みで開き直せなかった操作を、クローンに「人間がした」と学ばせないため（close の口と同じ）。
         const result = await reopenCommitmentJournalFirst(stores, id, (before) => ({
           type: 'decision',
-          decision: `人間が閉じた仕事を開き直した（${id}）: ${reason}`,
+          decision: `人間が閉じた仕事を開き直す（${id}）: ${reason}`,
           grounds:
-            '人間が直接 API から開き直した。開き直す前の記録: ' + describeClosedRecord(before),
-          ...humanActionOf(principal, 'commitment_reopen', id),
+            '人間が直接 API から開き直そうとしている。開き直す前の記録: ' +
+            describeClosedRecord(before),
         }));
         if (result.kind === 'journal-failed') {
           noteDroppedRecord(
@@ -7011,6 +7012,18 @@ export function createApp(deps: AppDeps) {
             409,
           );
         }
+        // 開き直すこと自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`。close の口と同じ）。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision: `人間が閉じた仕事を開き直した（${id}）: ${reason}`,
+            grounds: '人間が直接 API から開き直した',
+            ...humanActionOf(principal, 'commitment_reopen', id),
+          },
+          '閉じた仕事を開き直した日誌',
+          `id=${id}`,
+        );
         let entry;
         try {
           entry = await stores.commitments.get(id);
