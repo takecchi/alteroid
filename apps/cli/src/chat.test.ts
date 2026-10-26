@@ -2618,7 +2618,9 @@ describe('chat の台帳コマンド', () => {
     const { client: conflictClient } = stubClient({
       commitments: [commitment({ id: 'cmt-1' })],
       closeStatus: 409,
-      closeBody: { error: 'cmt-1 は既に 2026-10-01T00:00:00.000Z に片付いている（PR をマージした）' },
+      closeBody: {
+        error: 'cmt-1 は既に 2026-10-01T00:00:00.000Z に片付いている（PR をマージした）',
+      },
     });
     const listedConflict = emptyListed();
     await runSlashCommand('/commitments', conflictClient, listedConflict);
