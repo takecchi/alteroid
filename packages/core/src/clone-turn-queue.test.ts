@@ -406,7 +406,7 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
     await waitForAllDelivered(s, [markerHuman, markerMgrA, markerMgrB, markerTimer]);
     await settle();
 
-    // 本文の中の位置で比べる（ターンの番号で比べない）: A と B は起点の違う合図の束として同じターンに入りうるため（2026-10-26 のオーナー決定）。到着順の約束は位置で測れる
+    // 本文の中の位置で比べる（ターンの番号で比べない）: A と B は起点の違う合図の束として同じターンに入りうるため（2026-10-26、トークン節約の依頼〈会話 3d91a736〉と承認 a6048e8a に基づく teto の決め）。到着順の約束は位置で測れる
     const joined = (s.calls[0]?.inputs ?? []).join('\n');
     const idxHuman = joined.indexOf(markerHuman);
     const idxMgrA = joined.indexOf(markerMgrA);
@@ -489,7 +489,7 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
 
     const inputs = s.calls[0]?.inputs ?? [];
 
-    // 経緯（2026-10-26、オーナー決定）: もと 7 本（先客・H1・I1・H2・A・B・C）だった。人間の発言が先に読まれた後、
+    // 経緯（2026-10-26、トークン節約の依頼〈会話 3d91a736〉と承認 a6048e8a に基づく teto の決め）: もと 7 本（先客・H1・I1・H2・A・B・C）だった。人間の発言が先に読まれた後、
     // A・B・C は連続して残るので、起点の違う合図の束として1ターンになり 5 本。人間の発言どうしの扱い（会話が違えばまとめない・送信順）は変わらない
     expect(inputs).toHaveLength(5);
     const turnOf = (marker: string): number => inputs.findIndex((text) => text.includes(marker));
