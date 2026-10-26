@@ -2469,7 +2469,14 @@ class Clone implements CloneHost {
     // 束の先頭だけで引く: 束ねるのは同じ `managerId` の報告だけ（`#mergedManagerReportBatch`）なので、起点も1つに決まるため
     const origin = await this.#managerOrigin(events[0]?.managerId);
     await this.#runInternal(
-      managerReportBatchPrompt(events, origin, settlements, new Date(), attached?.linesOf),
+      managerReportBatchPrompt(
+        events,
+        origin,
+        settlements,
+        new Date(),
+        attached?.linesOf,
+        this.#fixedTextFold(),
+      ),
       'normal',
       attached?.images,
       originConversationIdOf(origin),
@@ -3467,6 +3474,15 @@ class Clone implements CloneHost {
     return this.#digestDelta.foldParagraphs(text, (paragraph) =>
       SYSTEM_CONFIRMATION_PARAGRAPHS.has(paragraph),
     );
+  }
+
+  /**
+   * 報告・確認の包みの固定の文言（応じ方の案内・起点の会話の説明）を、同じ会話の2回目から短い参照にする口。
+   * 控えは `#digestDelta`（#4937）と同じもの: 全文へ戻す条件（会話が変わった・要約が走りうる／走った・観測が無い）も同じになるため。
+   * ここでは全文へ戻す判定をしない: `#pump` の先頭が済ませており、ここで呼ぶと同じターンで先に畳んだ断り書きの staged を消すため（`#foldNoticeParagraphs` と同じ理由）。
+   */
+  #fixedTextFold(): FixedTextFold {
+    return (id, full, ref) => this.#digestDelta.fixed(`manager-message:${id}`, full, ref);
   }
 
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
@@ -5262,6 +5278,7 @@ class Clone implements CloneHost {
               settlement,
               new Date(),
               attached.linesOf.get(event.id),
+              this.#fixedTextFold(),
             ),
             'normal',
             attached.images,
@@ -5275,7 +5292,7 @@ class Clone implements CloneHost {
             ? { ...event, text: this.#foldConfirmationText(event.text) }
             : event;
         await this.#runInternal(
-          managerPrompt(sent, origin, liveness, settlement, new Date()),
+          managerPrompt(sent, origin, liveness, settlement, new Date(), [], this.#fixedTextFold()),
           'normal',
           [],
           originConversationIdOf(origin),
@@ -8269,6 +8286,25 @@ async function confirmationLiveness(
  * `now` は呼び出し元から渡す: 純関数に保つため `new Date()` を呼ばない（既定値は本番用で、テストは明示的に渡す）。
  * `event.foldedTurn` の回は見出しを「直近のターンの中身」にする。判定は構造化された印だけで、本文の文言は見ない。
  */
+/**
+ * 固定の文言を、同じ会話の2回目から短い参照にする口（`DigestSessionDelta.fixed` と同じ形）。
+ * 既定は畳まない: 試験と、控えを持たない呼び出しでは今までどおり全文を出すため。
+ */
+export type FixedTextFold = (id: string, full: string, ref: string) => string;
+
+const NO_FOLD: FixedTextFold = (_id, full) => full;
+
+/** 報告への応じ方の案内（単発の報告の末尾）。毎回同じ文なので、同じ会話の2回目からは参照にする。 */
+export const REPORT_FOLLOW_UP_GUIDE =
+  '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。\n' +
+  '学びや判断の基準になったことがあれば記憶へ移すこと。';
+export const REPORT_FOLLOW_UP_GUIDE_REF = '（応じ方の案内は前の報告と同じ。会話の上にある）';
+
+/** 束ねた報告への応じ方の案内。 */
+export const BATCH_REPORT_FOLLOW_UP_GUIDE =
+  '続きが要るなら、それぞれの報告に対して `manager_send` で指示を出せ。要らないなら何もしなくてよい。\n' +
+  '学びや判断の基準になったことがあれば記憶へ移すこと。';
+
 function managerPrompt(
   event: Extract<InboxEvent, { type: 'manager_message' }>,
   origin: ManagerOrigin,
@@ -8276,6 +8312,7 @@ function managerPrompt(
   settlement: ReportSettlement = { kind: 'unknown' },
   now: Date = new Date(),
   attachmentLines: readonly string[] = [],
+  fold: FixedTextFold = NO_FOLD,
 ): string {
   const head = `[system] マネージャー ${event.managerId} から届いた。`;
 
@@ -8291,11 +8328,10 @@ function managerPrompt(
       '',
       // 経過も印も本文の後ろに置く: 前に置くと「読まなくてよい」と読まれて本文を飛ばされる。
       describeReportAge(event.at, now),
-      describeManagerOrigin(origin),
+      describeManagerOrigin(origin, fold),
       '',
       ...(closed === null ? [] : [closed, '']),
-      '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。',
-      '学びや判断の基準になったことがあれば記憶へ移すこと。',
+      fold('report-follow-up', REPORT_FOLLOW_UP_GUIDE, REPORT_FOLLOW_UP_GUIDE_REF),
     ].join('\n');
   }
 
@@ -8316,7 +8352,7 @@ function managerPrompt(
           ]
         : []),
       ...(closedConfirmation === null ? [] : [closedConfirmation]),
-      describeManagerOrigin(origin),
+      describeManagerOrigin(origin, fold),
     ].join('\n');
   }
 
@@ -8331,7 +8367,7 @@ function managerPrompt(
     '',
     event.text,
     '',
-    describeManagerOrigin(origin),
+    describeManagerOrigin(origin, fold),
     `返事をするまで ${event.managerId} のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。`,
     `記憶に根拠があるなら自分で決めて \`manager_send\`（${to}）で返し、その判断を \`journal_write\` に残せ。`,
     event.kind === 'permission' ? '許可確認なので `decision` に allow / deny を明示すること。' : '',
@@ -8353,15 +8389,28 @@ export function originConversationIdOf(origin: ManagerOrigin): string | null {
   return origin.kind === 'conversation' ? origin.conversationId : null;
 }
 
-export function describeManagerOrigin(origin: ManagerOrigin): string {
+/** 起点の会話の扱いの説明（会話の id は畳まない。説明の括弧の中だけを、同じ会話の2回目から参照にする）。 */
+export const ORIGIN_CONVERSATION_GUIDE =
+  '（この委譲はこの会話で頼まれた。人間へ知らせるなら ' +
+  '`conversation_post` でこの会話へ書く。このターンで続きを委譲・確認すると、同じ会話に結びつく）';
+export const ORIGIN_CONVERSATION_GUIDE_REF =
+  '（扱いは前に出した案内と同じ: 知らせるならこの会話へ）';
+export const ORIGIN_NONE_GUIDE =
+  '（会話の外〔定期の仕事・外部イベント・自発など〕で起こした委譲。人間へ知らせるなら宛先は自分で選ぶ）';
+export const ORIGIN_NONE_GUIDE_REF = '（会話の外で起こした委譲。宛先は自分で選ぶ）';
+
+export function describeManagerOrigin(
+  origin: ManagerOrigin,
+  fold: FixedTextFold = NO_FOLD,
+): string {
   switch (origin.kind) {
     case 'conversation':
       return (
-        `起点の会話: ${origin.conversationId}（この委譲はこの会話で頼まれた。人間へ知らせるなら ` +
-        '`conversation_post` でこの会話へ書く。このターンで続きを委譲・確認すると、同じ会話に結びつく）'
+        `起点の会話: ${origin.conversationId}` +
+        fold('origin-conversation', ORIGIN_CONVERSATION_GUIDE, ORIGIN_CONVERSATION_GUIDE_REF)
       );
     case 'none':
-      return '起点の会話: 無し（会話の外〔定期の仕事・外部イベント・自発など〕で起こした委譲。人間へ知らせるなら宛先は自分で選ぶ）';
+      return `起点の会話: 無し${fold('origin-none', ORIGIN_NONE_GUIDE, ORIGIN_NONE_GUIDE_REF)}`;
     case 'missing':
       return '起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）';
     case 'unreadable':
@@ -8410,6 +8459,7 @@ function managerReportBatchPrompt(
   settlements: ReportSettlement[],
   now: Date,
   attachmentLinesOf: ReadonlyMap<string, readonly string[]> = new Map(),
+  fold: FixedTextFold = NO_FOLD,
 ): string {
   const head = events[0];
   if (head === undefined) return '';
@@ -8441,10 +8491,9 @@ function managerReportBatchPrompt(
         ` ${managerReportRetrievalHint(head)}`,
     }),
     '',
-    describeManagerOrigin(origin),
+    describeManagerOrigin(origin, fold),
     '',
-    '続きが要るなら、それぞれの報告に対して `manager_send` で指示を出せ。要らないなら何もしなくてよい。',
-    '学びや判断の基準になったことがあれば記憶へ移すこと。',
+    fold('batch-report-follow-up', BATCH_REPORT_FOLLOW_UP_GUIDE, REPORT_FOLLOW_UP_GUIDE_REF),
   ].join('\n');
 }
 
