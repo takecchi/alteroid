@@ -4459,6 +4459,9 @@ class RunnerSession {
           managerId: this.#id,
           reportId: event.id,
           text: outcome.text,
+          ...('fullText' in outcome && outcome.fullText !== undefined
+            ? { fullText: outcome.fullText }
+            : {}),
           status: this.#sdkSession.status,
           ...(failure === undefined
             ? {}
@@ -6852,14 +6855,19 @@ function summarizeBackgroundTasks(tasks: readonly { id: string; taskType: string
 
 // `result` が含まれていなくても落とさずに足す: 本文には出ないまま結果だけが来ることがあり、黙って捨てると終わり方が分からなくなるため
 // `（報告なし）` という文字列に一致させない: `contentless` は構造化された印で、文言の判定ではないため
-function reportText(
+// 結論は「最後の発言」で切る: SDK の `result` は最後の assistant の本文で、Codex の `turn_ended.body` も最後の agentMessage なので、両 provider で同じ線になるため
+// 全文（`fullText`）は捨てずに運ぶ: 途中の発言を見たいときに `manager_report` と画面から引けることがオーナーの条件のため
+export function reportText(
   said: readonly string[],
   result: { text: string; empty: boolean },
-): { text: string; contentless: boolean } {
+): { text: string; fullText?: string; contentless: boolean } {
   const body = said.join('\n\n').trim();
   if (body.length === 0) return { text: result.text, contentless: result.empty };
-  if (body.includes(result.text.trim())) return { text: body, contentless: false };
-  return { text: `${body}\n\n${result.text}`, contentless: false };
+  const full = body.includes(result.text.trim()) ? body : `${body}\n\n${result.text}`;
+  const last = (said.at(-1) ?? '').trim();
+  const conclusion = last.includes(result.text.trim()) ? last : `${last}\n\n${result.text}`.trim();
+  if (conclusion === full) return { text: full, contentless: false };
+  return { text: conclusion, fullText: full, contentless: false };
 }
 
 // 先頭で「畳まれた」と言い切る: 無いと通常の報告と区別が付かず、途中で切られた本文を「マネージャーの結論」として読むため

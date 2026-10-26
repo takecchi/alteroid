@@ -3867,10 +3867,14 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
 });
 
 // `result` だけを報告にしない: ターンの本文は道具を挟むたびに切れ、`result` は最後の一片でしかないので、クローンには末尾だけが届き、欠けていることが誰にも見えない。
+// 経緯（2026-10-26、オーナー「見ようと思ったら見れるようにはしてください。ただし大体は結果だけでいいはず」）:
+// もとは「6つとも受信箱へ届く」を固定していたが、途中の「〜を確かめます」の連なりまで毎回クローンの文脈へ積まれ、読み直しの費用になっていた。
+// 受信箱へは最後の発言（`result` の一片ではなく、最後の assistant の本文まるごと）だけを配り、全文は台帳（`lastReport` ＝ manager_report と画面）と日誌に残す。
+// 「欠けていることが誰にも見えない」は、配る本文に全文の在りかと字数を1行添えることで塞ぐ。
 describe('マネージャーの報告を黙って落とさない', () => {
-  it('道具で分断された本文も、6つ出したなら6つとも届く', async () => {
+  it('道具で分断された本文は、受信箱へは最後の発言と全文の在りかが届き、6つとも台帳と日誌に残る', async () => {
     const s = setup();
-    await s.pool.start({ request: '6セクションで報告して' });
+    const { managerId } = await s.pool.start({ request: '6セクションで報告して' });
     const session = s.sessions[0] as FakeSession;
 
     await session.say('## 1\n本文1\n\n## 2\n本文2\n\n## 3\n本文3');
@@ -3886,8 +3890,22 @@ describe('マネージャーの報告を黙って落とさない', () => {
     });
     const delivered = reports.map((event) => (event as { text: string }).text).join('\n');
 
-    for (const section of ['## 1', '## 2', '## 3', '## 4', '## 5', '## 6']) {
+    // 最後の発言は `result` の一片（## 5・## 6）ではなく、まるごと届く
+    for (const section of ['## 4', '## 5', '## 6']) {
       expect(delivered).toContain(section);
+    }
+    for (const section of ['## 1', '## 2', '## 3']) {
+      expect(delivered).not.toContain(section);
+    }
+    expect(delivered).toContain(`manager_report managerId=${managerId}`);
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === managerId);
+    const journal = ((await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[])
+      .map((entry) => entry.text)
+      .join('\n');
+    for (const section of ['## 1', '## 2', '## 3', '## 4', '## 5', '## 6']) {
+      expect(listed?.lastReport).toContain(section);
+      expect(journal).toContain(section);
     }
 
     await s.pool.stop();

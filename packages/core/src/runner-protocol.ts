@@ -871,7 +871,15 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * `.optional()`: 旧 runner が送らない。`reportId` が無い report も黙って捨てない。
      */
     reportId: z.string().optional(),
+    /** クローンへ配る本文。ターンの最後の発言（結論と質問）。`fullText` が無い回は全文と同じ。 */
     text: z.string(),
+    /**
+     * ターンの途中の発言も含めた全文。最後の発言のほかに本文があった回だけ載る。
+     * デーモンは日誌と台帳（`lastReport` ＝ `manager_report` と画面の「最後の報告」）にこちらを残し、クローンの受信箱へは `text` だけを配る:
+     * 途中の「〜を確かめます」の連なりが毎回クローンの文脈へ積まれ、読み直しの費用になっていたため（オーナー「見ようと思ったら見れるように。ただし大体は結果だけでいいはず」）。
+     * `.optional()`: 旧 runner は送らず、そのときは `text` が全文なので今までどおり全文が配られる。
+     */
+    fullText: z.string().optional(),
     status: jobStatusSchema,
     /**
      * `status` では表せない: あちらは仕事の状態で、ここは「その1ターンがどう終わったか」。

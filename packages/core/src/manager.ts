@@ -10515,14 +10515,17 @@ class Pool implements ManagerPool {
             with: 'manager',
             role: 'inbound',
             text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため受信箱へは回さない）${event.text}` +
+              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため受信箱へは回さない）${reportFullTextOf(event)}` +
               describeStoppedReportFiles(stoppedFiles),
             ...(stoppedFiles === undefined || stoppedFiles.attachments.length === 0
               ? {}
               : { attachments: stoppedFiles.attachments.map((ref) => ({ ...ref })) }),
           });
           // 本文は台帳にも残す: 日誌だけだと、誤って止めたことに気づく契機が `manager_stop` / `manager_report` のどちらにも出ない。`record.job.status` は動かさず `#emit()` もしない。
-          record.job.lastFoldedTurn = { text: event.text, at: new Date().toISOString() };
+          record.job.lastFoldedTurn = {
+            text: reportFullTextOf(event),
+            at: new Date().toISOString(),
+          };
           await this.#persist(record);
           return;
         }
@@ -10536,7 +10539,8 @@ class Pool implements ManagerPool {
           if (reported.has(event.reportId)) return;
           reported.set(event.reportId, true);
         }
-        record.job.lastReport = event.text;
+        // 台帳と日誌には全文を残す: `manager_report` と画面の「最後の報告」は `lastReport` を読むので、途中の発言を見たいときはそこから引ける
+        record.job.lastReport = reportFullTextOf(event);
         // `#noteRunnerSessionSince` と同じ時計（`this.#now()`）で書く: `reportSeenInSession` が前後を比べるので、別の時計だと注入した時計の試験で崩れる。
         record.job.lastReportAt = new Date(this.#now()).toISOString();
         // 並行処理の間に `closed(failed / lost)` が書いた終端を `event.status` で書き戻さない: 台帳は非終端のままクローンに `closed_failed` が出る／`lost` の引き取りの契機が消える。
@@ -10596,7 +10600,7 @@ class Pool implements ManagerPool {
           type: 'exchange',
           with: 'manager',
           role: 'inbound',
-          text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${event.text}`,
+          text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${reportFullTextOf(event)}`,
         });
         // 待たない: 完了を待つと、報告を受けてからクローンのターンが起きるまでに runner への往復が乗る。`contentless` / `awaitingBackground` の早い `return` より手前に置く（後ろだと中身の無い報告・背景待ちの報告で観測が取られない）。停止済みの早期 return は通らないので、止めた委譲へ往復を起こさない。
         this.#observeUnpushedWorkOnce(event.managerId, 'report');
@@ -10683,7 +10687,7 @@ class Pool implements ManagerPool {
           this.#emit(
             event.managerId,
             'report',
-            event.text,
+            reportDeliveryTextOf(event),
             undefined,
             undefined,
             'full',
@@ -14124,6 +14128,28 @@ interface SummaryContext {
   registeredRunnerIds: ReadonlySet<string> | null;
   activeTokenGeneration: number | undefined;
   tokenGenerationPoolWired: boolean;
+}
+
+/** 報告の全文（途中の発言を含む）。旧 runner は `fullText` を送らず、`text` が全文。 */
+export function reportFullTextOf(event: { text: string; fullText?: string }): string {
+  return event.fullText ?? event.text;
+}
+
+/**
+ * クローンの受信箱へ配る報告の本文。途中の発言があった回は、最後の発言（結論と質問）に全文の在りかを1行添える。
+ * 添える行を省かない: 「途中があった」こと自体が見えないと、クローンは結論だけで足りない回に全文を引く契機を持てないため。
+ */
+export function reportDeliveryTextOf(event: {
+  managerId: string;
+  text: string;
+  fullText?: string;
+}): string {
+  if (event.fullText === undefined) return event.text;
+  return (
+    `${event.text}\n\n` +
+    `（途中の発言を含む全文 ${String(event.fullText.length)} 字は manager_report managerId=${event.managerId} で読める。` +
+    'これはターンの最後の発言だけである）'
+  );
 }
 
 function summaryOf(
