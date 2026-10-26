@@ -104,10 +104,17 @@ describe.skipIf(realPostgresUrl() === undefined)(
       await writer.open(row('y', 1));
       await closeRow(writer, 'x');
 
+      let interrupted = false;
       const reader = new PgCommitmentStore(
-        await dbInterruptedAfterOpenSelect(() => closeRow(writer, 'y')),
+        await dbInterruptedAfterOpenSelect(async () => {
+          await closeRow(writer, 'y');
+          interrupted = true;
+        }),
       );
       const ids = (await reader.list({ includeClosed: true })).entries.map((entry) => entry.id);
+      // 割り込みが入らないまま通る（差し込みが効かなくなった）ことを、ここで落とす
+      expect(interrupted).toBe(true);
+      expect((await writer.get('y'))?.closedAt).toBeDefined();
       expect(countOf(ids, 'x')).toBe(1);
       expect(countOf(ids, 'y')).toBe(1);
     });
@@ -117,12 +124,16 @@ describe.skipIf(realPostgresUrl() === undefined)(
       await writer.open(row('y', 1));
       await closeRow(writer, 'x');
 
+      let interrupted = false;
       const reader = new PgCommitmentStore(
         await dbInterruptedAfterOpenSelect(async () => {
-          await writer.reopen('x');
+          expect((await writer.reopen('x')).kind).toBe('reopened');
+          interrupted = true;
         }),
       );
       const ids = (await reader.list({ includeClosed: true })).entries.map((entry) => entry.id);
+      expect(interrupted).toBe(true);
+      expect((await writer.get('x'))?.closedAt).toBeUndefined();
       expect(countOf(ids, 'x')).toBe(1);
       expect(countOf(ids, 'y')).toBe(1);
     });
