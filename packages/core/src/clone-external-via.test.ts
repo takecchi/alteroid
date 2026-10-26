@@ -52,7 +52,12 @@ describe('クローン — 外部イベントの枠付けと via', () => {
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
 
+    // 2件目は1件目のターンが投げられてから積む: 続けて積むと、起点の違う合図の束（#mixedSignalBatch）として1ターンにまとまり、単発の経路を通らないため
     s.clone.post(external('e1', VIA, 'ci.via'));
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('ci.via')),
+      '1件目のターンが投げられる',
+    );
     s.clone.post(external('e2', undefined, 'ci.plain', { status: 'ok' }));
     await waitFor(
       () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('ci.plain')),

@@ -140,7 +140,11 @@ function stubPool(input: {
   };
 }
 
-function bootClone(stores: Stores, managers: ManagerPool): Fake & { clone: CloneHost } {
+function bootClone(
+  stores: Stores,
+  managers: ManagerPool,
+  mergedBatchLimit?: number,
+): Fake & { clone: CloneHost } {
   const fake = fakeSdk();
   const clone = createClone({
     stores,
@@ -148,6 +152,7 @@ function bootClone(stores: Stores, managers: ManagerPool): Fake & { clone: Clone
     env: {},
     managers,
     redeliveryGate: ALWAYS_REDELIVER,
+    ...(mergedBatchLimit === undefined ? {} : { mergedBatchLimit }),
   });
   return { ...fake, clone };
 }
@@ -523,7 +528,8 @@ describe('受信箱の内訳（種類）は、閾値を超えた回だけ組む�
 
 describe('状況の節にメモリの配達待ち行列の行が載る（issue #1084）', () => {
   it('先客の処理中に積み上がった分が、メモリの配達待ち行列として載る', async () => {
-    const s = bootClone(createMemoryStores(), busyPool());
+    // 束の上限を1にする: 別々の担当の報告は起点の違う合図の束（#mixedSignalBatch）として A のターンへまとまり、待ち行列に残らないため。測っているのは待ち行列の数え方
+    const s = bootClone(createMemoryStores(), busyPool(), 1);
 
     s.clone.post({
       type: 'manager_message',
@@ -625,6 +631,8 @@ describe('状況の節と manager_list は、メモリの配達待ち行列を�
       env: {},
       managers: busyPool(),
       redeliveryGate: ALWAYS_REDELIVER,
+      // 束の上限を1にする: 上の試験と同じ理由（別々の担当の報告が A のターンへまとまり、待ち行列に残らないため）
+      mergedBatchLimit: 1,
       mcpServerFactory: (context) => {
         captured = context;
         return createCloneMcpServer(context);

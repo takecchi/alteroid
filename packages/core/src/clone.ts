@@ -2167,7 +2167,16 @@ class Clone implements CloneHost {
       const mergedHuman = this.#mergedHumanBatch(event);
       const mergedReports = this.#mergedManagerReportBatch(event);
       const mergedExternal = this.#mergedExternalBatch(event);
-      const batch: InboxEvent[] = mergedHuman ?? mergedReports ?? mergedExternal ?? [event];
+      // 起点の違う合図の束は、前からの束（同じ担当の報告の連続・同じ中身の external の連続）に当たらなかったときだけ試す:
+      // 前からの束の振る舞い（本文の組み方・予算で省く形・配り直しの束）を1字も変えないため
+      const mergedSignals =
+        mergedHuman === null && mergedReports === null && mergedExternal === null
+          ? this.#mixedSignalBatch(event)
+          : null;
+      const batch: InboxEvent[] = mergedHuman ??
+        mergedReports ??
+        mergedExternal ??
+        mergedSignals ?? [event];
       this.#inFlight = { events: batch, started: false };
       // 時計は束が決まった時点で作る（#5086）: 順番待ちは束の中でいちばん古い合図の `at` から数える。読めない `at` は取り出した時刻とみなす
       const timer = new TurnTimer({
@@ -2244,6 +2253,7 @@ class Clone implements CloneHost {
         if (mergedHuman !== null) await this.#runHumanTurn(mergedHuman);
         else if (mergedReports !== null) await this.#runManagerReportBatch(mergedReports);
         else if (mergedExternal !== null) await this.#runExternalBatch(mergedExternal);
+        else if (mergedSignals !== null) await this.#runMixedSignalBatch(mergedSignals);
         else await this.#handle(event);
       } catch (error) {
         await this.#reportFailure(this.#conversationOf(event), { error });
@@ -2329,6 +2339,36 @@ class Clone implements CloneHost {
     );
     if (rest.length === 0) return null;
     return [event, ...rest.filter(isExternalEvent)];
+  }
+
+  /**
+   * 起点の違う合図（別々の担当からの報告・質問・確認、外部イベント）を、待ち行列の先頭から連続している分だけ1ターンにまとめる。
+   * 1件ずつ別のターンで読むと、合図の数だけ長い文脈をまるごと読み直すことになり、それが費用の大半だったため（2026-10-26 のオーナー決定。architecture.md「同時実行モデル」）。
+   * 束ねないもの: 人間の発言と人間の回答（返事の行き先が会話ごとに違う。挟まったらそこで止まる）・タイマーなど別の起点（止まる）・
+   * 枠で保持した合図（`#mergeable`）・配り直し（`redeliveryState`）・添付を持つ合図（画像の予算が束の中で割り振れないため）。
+   */
+  // 字数の予算を超える分は束に入れず次のターンへ回す（束の中で本文を省かない）: 省くと、質問・確認が requestId ごと見えなくなるため
+  #mixedSignalBatch(event: InboxEvent): MixableSignal[] | null {
+    if (!this.#mixable(event)) return null;
+    let total = mixableSignalChars(event);
+    const rest = this.#drainMergeableWithinLimit((queued) => {
+      if (!this.#mixable(queued)) return false;
+      const chars = mixableSignalChars(queued);
+      if (total + chars > MIXED_SIGNAL_BATCH_BUDGET) return false;
+      total += chars;
+      return true;
+    });
+    if (rest.length === 0) return null;
+    return [event, ...rest.filter(isMixableSignal)];
+  }
+
+  #mixable(event: InboxEvent): event is MixableSignal {
+    if (!isMixableSignal(event)) return false;
+    if (!this.#mergeable(event)) return false;
+    if (this.#delivery.redeliveryState.get(event.id) !== undefined) return false;
+    return event.type === 'manager_message'
+      ? !hasReportFiles(event)
+      : (event.attachments?.length ?? 0) === 0;
   }
 
   // 跡に本文は残さない: `noteDroppedRecord` の「本文を出さない」約束を守るため
@@ -2495,6 +2535,51 @@ class Clone implements CloneHost {
       externalBatchPrompt(events, attached.noticeLines),
       'normal',
       attached.images,
+    );
+  }
+
+  // `#handle` の `manager_message` / `external` 分岐が1件ごとにしていることを件数ぶん繰り返す: 落とすと、まとめた側だけ日誌への追記・台帳の判定・確認の生死の判定が抜けて能力の削除になるため
+  // 添付を持つ合図は束に入っていない（`#mixable`）ので、ここでは添付を解かない
+  async #runMixedSignalBatch(events: MixableSignal[]): Promise<void> {
+    const now = new Date();
+    const fold = this.#fixedTextFold();
+    const items: string[] = [];
+    const origins = new Set<string | null>();
+    for (const event of events) {
+      await this.#journalIncomingBody(event);
+      if (event.type === 'external') {
+        items.push(
+          buildExternalEventPrompt({
+            source: event.source,
+            body: renderPayload(event.payload, event.at, event.attachments),
+            ...(event.via === undefined ? {} : { viaKeyNames: [event.via.name] }),
+          }),
+        );
+        continue;
+      }
+      const liveness: ConfirmationLiveness =
+        (event.kind === 'question' || event.kind === 'permission') && event.requestId !== undefined
+          ? await confirmationLiveness(this.#managers, event.managerId, event.requestId)
+          : 'unknown';
+      const settlement = await reportSettlement(this.#stores.commitments, event.id);
+      if (event.kind === 'report' && closedReportNotice(settlement) !== null) {
+        await this.#noteRedeliveryPredicateHitA(event.managerId);
+      }
+      const origin = await this.#managerOrigin(event.managerId);
+      origins.add(originConversationIdOf(origin));
+      const sent =
+        event.kind === 'permission'
+          ? { ...event, text: this.#foldConfirmationText(event.text) }
+          : event;
+      items.push(managerPrompt(sent, origin, liveness, settlement, now, [], fold));
+    }
+    // 起点の会話が1つに決まるときだけ結びつける: 別々の会話で頼まれた委譲を1つの会話へ結びつけると、知らせる先を取り違えるため（各件の本文が自分の起点を名乗る）
+    const [onlyOrigin] = origins;
+    await this.#runInternal(
+      mixedSignalBatchPrompt(items),
+      'normal',
+      [],
+      origins.size === 1 ? (onlyOrigin ?? null) : null,
     );
   }
 
@@ -3577,26 +3662,35 @@ class Clone implements CloneHost {
 
   // `list()` の失敗を握り潰さず呼び出し側（`#pump`）へ返す: 握り潰すと呼び出し側の `.catch()` を外しても何も赤くならないため
   // 文言は「いまは」でなく「この断り書きを組んだ時点では」と言う: `#situationNoticeFor` とは別々の `list()` 呼び出しで、まれに食い違うため
+  // 担当ごとに最初の報告で見る: 起点の違う合図の束（`#mixedSignalBatch`）には別々の担当の報告が混ざり、先頭だけ見ると他の担当の前提の変化が落ちるため。担当が1人の束は今までどおり先頭1件で見る
   async #validityNoticeFor(events: InboxEvent[]): Promise<string> {
-    const event = events[0];
-    if (event === undefined) return '';
     // `kind` まで絞る: 質問・許可確認は `#situationNoticeFor` 側で見ており、絞らないと `list()` を1本余計に引くため
-    if (event.type !== 'manager_message' || event.kind !== 'report') return '';
+    const firsts = firstReportPerManager(events);
+    if (firsts.length === 0) return '';
 
     // `try` で囲う: `list()` は同期的に投げうり、`.catch()` だけでは拾えないため
-    let now: { readonly status: JobStatus } | { readonly detail: string };
+    let managers: readonly ManagerSummary[] | { readonly detail: string };
     try {
-      const managers = await this.#managers.list();
-      const found = managers.find((manager) => manager.managerId === event.managerId);
-      now =
-        found === undefined
-          ? { detail: `${event.managerId} が一覧に居ない` }
-          : { status: found.status };
+      managers = await this.#managers.list();
     } catch (error) {
-      now = { detail: reasonOf(error) };
+      managers = { detail: reasonOf(error) };
     }
 
-    return describeValidity(inboxEventValidity(event, now), event.managerId);
+    return firsts
+      .map((event) => {
+        let now: { readonly status: JobStatus } | { readonly detail: string };
+        if ('detail' in managers) {
+          now = managers;
+        } else {
+          const found = managers.find((manager) => manager.managerId === event.managerId);
+          now =
+            found === undefined
+              ? { detail: `${event.managerId} が一覧に居ない` }
+              : { status: found.status };
+        }
+        return describeValidity(inboxEventValidity(event, now), event.managerId);
+      })
+      .join('');
   }
 
   // 積む側（デーモン）で畳まず、配る直前にここで見る: クローン自身が枠で止まっていた間は保持されて遅れて配られるので、積んだ時点の状態はもう古いため（#4497）
@@ -3670,28 +3764,30 @@ class Clone implements CloneHost {
     }
   }
 
+  // 担当ごとに数える: 起点の違う合図の束には別々の担当の件が混ざるため。担当が1人の束は今までどおり1回だけ数える
   async #supersededNoticeFor(events: InboxEvent[]): Promise<string> {
-    const event = events[0];
-    if (event === undefined) return '';
-    if (event.type !== 'manager_message') return '';
-
     // `at` は畳まずそのまま渡す: ここで `Date.parse` すると、読めなかった回の基準が `-Infinity` になり、この委譲の報告が全部「後続」に見えるため
-    const afterAts: string[] = [];
+    const afterAtsOf = new Map<string, string[]>();
     const excludeIds = new Set<string>();
     for (const item of events) {
       excludeIds.add(item.id);
       if (item.type !== 'manager_message') continue;
-      afterAts.push(item.at);
+      const ats = afterAtsOf.get(item.managerId) ?? [];
+      ats.push(item.at);
+      afterAtsOf.set(item.managerId, ats);
     }
+    // 担当の件が無ければ台帳を引かない: 人間の発言などのターンで毎回読み直さないため
+    if (afterAtsOf.size === 0) return '';
 
     const list = await this.#stores.commitments.list({ includeClosed: true });
-    const decision = countSupersedingReports({
-      list,
-      managerId: event.managerId,
-      afterAts,
-      excludeIds,
-    });
-    return describeSuperseded(decision, event.managerId);
+    return [...afterAtsOf]
+      .map(([managerId, afterAts]) =>
+        describeSuperseded(
+          countSupersedingReports({ list, managerId, afterAts, excludeIds }),
+          managerId,
+        ),
+      )
+      .join('');
   }
 
   // 書き込みの完了を待ってから消す: 待たないと短いターンでは消し込みが書き込みを追い越し、消したはずの合図が後から書かれて起動のたびに永久に配り直されるため
@@ -8091,6 +8187,54 @@ export type ExternalEvent = Extract<InboxEvent, { type: 'external' }>;
 
 function isExternalEvent(event: InboxEvent): event is ExternalEvent {
   return event.type === 'external';
+}
+
+/** 束の中の報告を、担当ごとに最初の1件だけ（届いた順）。 */
+function firstReportPerManager(events: readonly InboxEvent[]): ManagerReportMessage[] {
+  const seen = new Set<string>();
+  const firsts: ManagerReportMessage[] = [];
+  for (const event of events) {
+    if (!isManagerReport(event) || seen.has(event.managerId)) continue;
+    seen.add(event.managerId);
+    firsts.push(event);
+  }
+  return firsts;
+}
+
+/** 起点が違っても1ターンにまとめてよい種類（`#mixedSignalBatch`）。人間の発言・回答・タイマー・発意・蒸留は入らない。 */
+type MixableSignal = Extract<InboxEvent, { type: 'manager_message' }> | ExternalEvent;
+
+function isMixableSignal(event: InboxEvent): event is MixableSignal {
+  return event.type === 'manager_message' || event.type === 'external';
+}
+
+/**
+ * 起点の違う合図の束の本文の合計の予算（字）。報告の束（`MANAGER_REPORT_BATCH_BODY_BUDGET`）と同じ値だが別に置く（用途ごとに別の定数）。
+ * 先頭の1件はこれを超えても束の頭になる（単発でも同じ長さを読む）。
+ */
+const MIXED_SIGNAL_BATCH_BUDGET = 47_500;
+
+/** 束の予算に数える字数。外部イベントの中身が文字列にできなければ予算いっぱいと数える（混ぜない側へ倒す）。 */
+function mixableSignalChars(event: MixableSignal): number {
+  if (event.type === 'manager_message') return event.text.length;
+  try {
+    return JSON.stringify(event.payload ?? null).length;
+  } catch {
+    return MIXED_SIGNAL_BATCH_BUDGET;
+  }
+}
+
+/**
+ * 起点の違う合図の束の本文。各件は単発のときと同じ本文（`managerPrompt` / `buildExternalEventPrompt`）をそのまま並べる（要約しない）。
+ */
+export function mixedSignalBatchPrompt(items: readonly string[]): string {
+  return [
+    `[system] 処理待ちのあいだに届いた合図を **${String(items.length)} 件** まとめて渡す（届いた順。要約していない）。` +
+      '別々の担当・外部からの件が混ざっている。',
+    '**最後まで読んでから、1件ずつ要る手を打て。** 質問・確認には、それぞれの宛先（managerId と requestId）で答えること。',
+    '',
+    ...items.flatMap((item, index) => [`---`, `**(${String(index + 1)})**`, '', item, '']),
+  ].join('\n');
 }
 
 /** 人間の発言のターンの入力の先頭に置く、会話の名乗り。セッションが1本なので、名乗らないと別の会話の件を混ぜる。 */

@@ -32,6 +32,8 @@ interface Script {
   after?: (inputCount: number) => SDKMessage[];
   /** 起動そのものを失敗させる回数（先頭から）。 */
   failFirstStarts?: number;
+  /** 1ターンへ束ねる合図の上限（`createClone` の `mergedBatchLimit`）。 */
+  mergedBatchLimit?: number;
 }
 
 function boot(script: Script = {}): Boot {
@@ -92,6 +94,7 @@ function boot(script: Script = {}): Boot {
     queryFn: fn,
     env: {},
     redeliveryGate: ALWAYS_REDELIVER,
+    ...(script.mergedBatchLimit === undefined ? {} : { mergedBatchLimit: script.mergedBatchLimit }),
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),
     ]),
@@ -310,7 +313,8 @@ describe('システムが作った長い段落は、同じ会話の2回目から
   });
 
   it('⭐ 入力を SDK へ押し込めなかった回（起動の失敗）では控えが進まず、最初に実際に入る確認は全文', async () => {
-    const s = boot({ failFirstStarts: 1 });
+    // 束の上限を1にする: 続けて積んだ2件の確認は起点の違う合図の束（#mixedSignalBatch）として1ターンにまとまり、2件とも起動の失敗に入るため。測っているのは「入らなかった回の全文を控えへ移さない」こと
+    const s = boot({ failFirstStarts: 1, mergedBatchLimit: 1 });
 
     seq += 1;
     s.clone.post({

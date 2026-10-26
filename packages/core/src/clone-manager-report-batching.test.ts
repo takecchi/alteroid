@@ -219,7 +219,9 @@ describe('クローン — 同じマネージャーの連続する report をま
     await s.clone.stop();
   }, 15_000);
 
-  it('間に別のマネージャーの報告が挟まったら、そこで止まる（飛び越えない）', async () => {
+  // 経緯（2026-10-26、オーナー決定。architecture.md「同時実行モデル」）: もとは B1・A3 がそれぞれ単独のターン（4本）だったことを固定していた。
+  // 起点の違う合図をまとめて読むようになったので、B1 と A3 は1ターン（混ぜた束）になる。同じ担当の束（A1・A2）が A3 を飛び越えて取り込まないことは変わらない
+  it('間に別のマネージャーの報告が挟まったら、同じ担当の束はそこで止まる（飛び越えない）。残りは起点の違う合図の束になる', async () => {
     const s = setup();
 
     s.clone.post(humanMessage('先客'));
@@ -231,13 +233,13 @@ describe('クローン — 同じマネージャーの連続する report をま
     s.clone.post(managerMessage('a3', 'mgr-A', 'A3本目'));
 
     await waitFor(
-      () => s.calls[0]?.inputs[3]?.includes('A3本目') ?? false,
-      '4本目（A3単独）のターンが投げられる',
+      () => s.calls[0]?.inputs[2]?.includes('A3本目') ?? false,
+      '3本目（B1・A3の束）のターンが投げられる',
     );
     await settle();
 
     const inputs = (s.calls[0] as FakeCall).inputs;
-    expect(inputs).toHaveLength(4);
+    expect(inputs).toHaveLength(3);
 
     expect(inputs[1] ?? '').toContain('A1本目');
     expect(inputs[1] ?? '').toContain('A2本目');
@@ -245,12 +247,10 @@ describe('クローン — 同じマネージャーの連続する report をま
     expect(inputs[1] ?? '').not.toContain('A3本目');
 
     expect(inputs[2] ?? '').toContain('B1本目');
+    expect(inputs[2] ?? '').toContain('A3本目');
     expect(inputs[2] ?? '').not.toContain('A1本目');
-    expect(inputs[2] ?? '').not.toContain('A3本目');
-
-    expect(inputs[3] ?? '').toContain('A3本目');
-    expect(inputs[3] ?? '').not.toContain('A1本目');
-    expect(inputs[3] ?? '').not.toContain('B1本目');
+    // 届いた順に並ぶ
+    expect((inputs[2] ?? '').indexOf('B1本目')).toBeLessThan((inputs[2] ?? '').indexOf('A3本目'));
 
     await s.clone.stop();
   }, 15_000);
@@ -712,7 +712,10 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     await s.clone.stop();
   }, 15_000);
 
-  it('🔴 source が違えば payload が同じでも束ねない（2ターンのまま）', async () => {
+  // 経緯（2026-10-26、オーナー決定。architecture.md「同時実行モデル」）: 下の2本はもと「束ねない（2ターンのまま）」を固定していた。
+  // #841 の「同じ中身の束」（本文を1回だけ出す形）には今も入らないが、起点の違う合図の束（各件の本文を全文で並べる形）として1ターンになる。
+  // 守っているもの: 重要な1件が同じ出所の重複に埋もれない（各件が自分の本文を全文で持つ）こと
+  it('source が違えば payload が同じでも「同じ中身の束」にはしない。起点の違う合図の束として、両方の本文が全文で1ターンに並ぶ', async () => {
     const s = setup();
 
     s.clone.post(humanMessage('先客'));
@@ -727,21 +730,22 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
 
     await waitFor(
       () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('runner-registry')),
-      '2件目のターンが投げられる',
+      '2件目を含むターンが投げられる',
     );
     await settle();
 
     const inputs = (s.calls[0] as FakeCall).inputs;
-    expect(inputs).toHaveLength(3);
-    expect(inputs[1] ?? '').toContain('source: token-pool');
-    expect(inputs[1] ?? '').not.toContain('runner-registry');
-    expect(inputs[2] ?? '').toContain('source: runner-registry');
-    expect(inputs[2] ?? '').not.toContain('token-pool');
+    expect(inputs).toHaveLength(2);
+    const merged = inputs[1] ?? '';
+    expect(merged).toContain('source: token-pool');
+    expect(merged).toContain('source: runner-registry');
+    expect(merged).not.toContain('同じ中身の合図を続けて');
+    expect(merged.split('同じ中身').length - 1).toBe(2);
 
     await s.clone.stop();
   }, 15_000);
 
-  it('🔴 source が同じでも payload が違えば束ねない（2ターンのまま）', async () => {
+  it('source が同じでも payload が違えば「同じ中身の束」にはしない。起点の違う合図の束として、両方の本文が全文で1ターンに並ぶ', async () => {
     const s = setup();
 
     s.clone.post(humanMessage('先客'));
@@ -752,16 +756,17 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
 
     await waitFor(
       () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('中身B')),
-      '2件目のターンが投げられる',
+      '2件目を含むターンが投げられる',
     );
     await settle();
 
     const inputs = (s.calls[0] as FakeCall).inputs;
-    expect(inputs).toHaveLength(3);
-    expect(inputs[1] ?? '').toContain('中身A');
-    expect(inputs[1] ?? '').not.toContain('中身B');
-    expect(inputs[2] ?? '').toContain('中身B');
-    expect(inputs[2] ?? '').not.toContain('中身A');
+    expect(inputs).toHaveLength(2);
+    const merged = inputs[1] ?? '';
+    expect(merged).toContain('中身A');
+    expect(merged).toContain('中身B');
+    expect(merged).not.toContain('同じ中身の合図を続けて');
+    expect(merged.indexOf('中身A')).toBeLessThan(merged.indexOf('中身B'));
 
     await s.clone.stop();
   }, 15_000);
@@ -793,7 +798,8 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     await s.clone.stop();
   }, 15_000);
 
-  it('🔴 external と manager_message（report）が混在すると束ねない', async () => {
+  // 経緯（2026-10-26、オーナー決定）: もと「external と report が混在すると束ねない」を固定していた。起点の違う合図の束として1ターンになる
+  it('external と manager_message（report）は、起点の違う合図の束として1ターンに届いた順で並ぶ', async () => {
     const s = setup();
 
     s.clone.post(humanMessage('先客'));
@@ -806,16 +812,22 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
 
     await waitFor(
       () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('報告本文')),
-      'マネージャーの報告のターンが投げられる',
+      'マネージャーの報告を含むターンが投げられる',
     );
     await settle();
 
     const inputs = (s.calls[0] as FakeCall).inputs;
-    expect(inputs).toHaveLength(3);
-    expect(inputs[1] ?? '').toContain('token-pool');
-    expect(inputs[1] ?? '').not.toContain('報告本文');
-    expect(inputs[2] ?? '').toContain('報告本文');
-    expect(inputs[2] ?? '').not.toContain('token-pool');
+    expect(inputs).toHaveLength(2);
+    const merged = inputs[1] ?? '';
+    expect(merged).toContain('**2 件** まとめて渡す');
+    expect(merged.indexOf('token-pool')).toBeLessThan(merged.indexOf('報告本文'));
+    expect(merged).toContain('マネージャー mgr-mix から届いた。（報告）');
+
+    // 日誌への追記は件数ぶん個別に残る
+    const externals = (await s.stores.journal.list({ types: ['external_event'] })) as {
+      source: string;
+    }[];
+    expect(externals.filter((entry) => entry.source === 'token-pool')).toHaveLength(1);
 
     await s.clone.stop();
   }, 15_000);
@@ -944,6 +956,211 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
       async () => (await s.stores.inbox.claimPending()).length === 0,
       '4件とも消し込まれる',
     );
+
+    await s.clone.stop();
+  }, 15_000);
+});
+
+// 2026-10-26 のオーナー決定（architecture.md「同時実行モデル」）: 人間の発言以外の連続する合図は、起点が違ってもまとめて読む
+describe('クローン — 起点の違う合図をまとめて読む', () => {
+  const managerMessage = (
+    id: string,
+    managerId: string,
+    text: string,
+    extra: Record<string, unknown> = {},
+  ): InboxEvent =>
+    ({
+      type: 'manager_message',
+      id,
+      at: new Date().toISOString(),
+      managerId,
+      kind: 'report',
+      text,
+      ...extra,
+    }) as InboxEvent;
+
+  const externalEvent = (id: string, source: string, text: string): InboxEvent => ({
+    type: 'external',
+    id,
+    at: new Date().toISOString(),
+    source,
+    payload: { text },
+  });
+
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));
+
+  it('別々の担当の報告・質問と外部イベントが、届いた順に全文で1ターンにまとまる。質問は宛先（managerId・requestId）を持ったまま', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('m1', 'mgr-A', 'Aの報告の本文'));
+    s.clone.post(
+      managerMessage('m2', 'mgr-B', 'Bからの質問の本文', { kind: 'question', requestId: 'req-b' }),
+    );
+    s.clone.post(externalEvent('x1', 'ci.main', '外部の出来事の本文'));
+    s.clone.post(managerMessage('m3', 'mgr-C', 'Cの報告の本文'));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('Cの報告の本文')),
+      'まとめたターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(2);
+    const merged = inputs[1] ?? '';
+    expect(merged).toContain('**4 件** まとめて渡す');
+    const order = ['Aの報告の本文', 'Bからの質問の本文', '外部の出来事の本文', 'Cの報告の本文'].map(
+      (text) => merged.indexOf(text),
+    );
+    expect(order.every((index) => index > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(merged).toContain('managerId: "mgr-B", requestId: "req-b"');
+
+    // 日誌への追記は件数ぶん個別に残る（合図は件数ぶん）
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    for (const managerId of ['mgr-A', 'mgr-B', 'mgr-C']) {
+      expect(exchanges.some((entry) => entry.text.includes(`[${managerId}/`))).toBe(true);
+    }
+    await waitFor(
+      async () => (await s.stores.inbox.claimPending()).length === 0,
+      '4件とも消し込まれる',
+    );
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('人間の発言が挟まったらそこで止まる（人間優先を切って到着順で確かめる）', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_CLONE_HUMAN_PRIORITY: '0' });
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('m1', 'mgr-A', 'A本文'));
+    s.clone.post(humanMessage('割り込む人間'));
+    s.clone.post(managerMessage('m2', 'mgr-B', 'B本文'));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('B本文')),
+      'B のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(4);
+    expect(inputs[1] ?? '').toContain('A本文');
+    expect(inputs[1] ?? '').not.toContain('割り込む人間');
+    expect(inputs[2] ?? '').toContain('割り込む人間');
+    expect(inputs[3] ?? '').toContain('B本文');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('枠で保持した合図は束ねない（別々の担当の報告でも、保持した1件は単独で再試行される）', async () => {
+    const spendLimitMessage = "You've hit your individual spend limit for this account.";
+    const s = setup(undefined, createMemoryStores(), {
+      resultFor: (turnIndex) =>
+        turnIndex < 1 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
+    });
+
+    s.clone.post(managerMessage('h1', 'mgr-A', '保持されるA'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 1, '一件目のターンが投げられる');
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === 'h1');
+    }, '一件目が未読として保持される');
+
+    s.clone.post(managerMessage('h2', 'mgr-B', 'B本文'));
+    s.clone.post(managerMessage('h3', 'mgr-C', 'C本文'));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('C本文')),
+      'C を含むターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain('保持されるA');
+    expect(inputs[1] ?? '').not.toContain('B本文');
+    expect(inputs[2] ?? '').toContain('B本文');
+    expect(inputs[2] ?? '').toContain('C本文');
+    expect(inputs[2] ?? '').not.toContain('保持されるA');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('配り直しは束ねない（別々の担当の報告でも1件ずつ）', async () => {
+    const stores = createMemoryStores();
+    await stores.inbox.put(managerMessage('r1', 'mgr-X', '配り直しX'), new Date(0).toISOString());
+    await stores.inbox.put(managerMessage('r2', 'mgr-Y', '配り直しY'), new Date(1).toISOString());
+
+    const s = setup(undefined, stores);
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('配り直しY')),
+      '2件目が渡る',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0] ?? '').not.toContain('配り直しY');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('添付の付いた報告は束ねない（画像の予算を束の中で割り振れないため）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('m1', 'mgr-A', 'A本文'));
+    s.clone.post(
+      managerMessage('m2', 'mgr-B', '添付つきB本文', {
+        rejectedAttachments: [{ name: 'a.png', reason: '大きすぎる' }],
+      }),
+    );
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('添付つきB本文')),
+      'B のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').not.toContain('添付つきB本文');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('本文の合計が予算（47,500 字）を超える分は束に入れず、次のターンへ回す（本文は省かない）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    const big = (label: string): string => `${label}${'x'.repeat(20_000)}`;
+    s.clone.post(managerMessage('m1', 'mgr-A', big('大A')));
+    s.clone.post(managerMessage('m2', 'mgr-B', big('大B')));
+    s.clone.post(managerMessage('m3', 'mgr-C', big('大C')));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('大C')),
+      'C を含むターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain(big('大A'));
+    expect(inputs[1] ?? '').toContain(big('大B'));
+    expect(inputs[1] ?? '').not.toContain('大C');
+    expect(inputs[2] ?? '').toContain(big('大C'));
 
     await s.clone.stop();
   }, 15_000);
