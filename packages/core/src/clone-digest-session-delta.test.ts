@@ -245,8 +245,8 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     expect(second).not.toContain('担当 7 の途中経過');
     // 見出しは残る（節の件数の行はまえがきに残る）
     expect(second).toContain('## 届いた外部イベント');
-    expect(second).toContain('- 外部イベント（日誌 external_event の行数）: 20 件');
-    expect(second).toContain('- 引き受けたまま終わっていない仕事: 14 件');
+    expect(second).toContain('外部イベント（日誌の行数）20 /');
+    expect(second).toContain('未了の仕事 14 /');
     // 固定の注記は1回だけ全文
     expect(first).toContain('この件数は届いた合図の実数ではない');
     expect(second).not.toContain('この件数は届いた合図の実数ではない');
@@ -289,7 +289,7 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     expect(second).not.toContain('担当 3 の途中経過');
     expect(second).not.toContain('人間への問い 0');
     // 回答待ちは件数が減っている（まえがき）・残りは「変わっていない」と数えて名乗る
-    expect(second).toContain('- いま人間の回答を待っているもの: 3 件');
+    expect(second).toContain('回答待ち 3 /');
     expect(second).toMatch(/ほかの 3 件は前回/u);
     // 発意の固定の指示も参照になる
     expect(second).not.toContain(SELF_INSTRUCTION_HEAD);

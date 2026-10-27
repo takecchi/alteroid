@@ -34,7 +34,7 @@ describe('この期間に片付けた仕事の一覧は DIGEST_SETTLED_LIMIT 件
     const digest = await buildActivityDigest(stores, { since: since() });
     const section = settledSection(digest);
 
-    expect(digest).toContain(`- この期間に片付けた仕事: ${total} 件`);
+    expect(digest).toContain(`片付けた仕事 ${total} /`);
     const shown = Array.from({ length: total }, (_, i) => i).filter((i) =>
       section.includes(`- 片付け ${i}\n`),
     );
@@ -52,7 +52,7 @@ describe('この期間に片付けた仕事の一覧は DIGEST_SETTLED_LIMIT 件
     const digest = await buildActivityDigest(stores, { since: since() });
     const section = settledSection(digest);
 
-    expect(digest).toContain(`- この期間に片付けた仕事: ${DIGEST_SETTLED_LIMIT} 件`);
+    expect(digest).toContain(`片付けた仕事 ${DIGEST_SETTLED_LIMIT} /`);
     for (let i = 0; i < DIGEST_SETTLED_LIMIT; i += 1) expect(section).toContain(`- 片付け ${i}\n`);
     expect(section).not.toContain('…ほか');
   });

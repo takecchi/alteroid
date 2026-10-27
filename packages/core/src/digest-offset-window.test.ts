@@ -17,7 +17,7 @@ describe('digest の窓は実時刻で切る（#2451）', () => {
       since: new Date('2026-10-06T00:00:00.000Z'),
       until: new Date('2026-10-06T01:00:00.000Z'),
     });
-    expect(text).toContain('この期間に片付けた仕事: 1 件');
+    expect(text).toContain('片付けた仕事 1 /');
   });
 
   it('-05:00 表記の closedAt（実時刻 06:30Z）は 00:00Z〜01:00Z の窓に入らない', async () => {
@@ -33,6 +33,6 @@ describe('digest の窓は実時刻で切る（#2451）', () => {
       since: new Date('2026-10-06T00:00:00.000Z'),
       until: new Date('2026-10-06T01:00:00.000Z'),
     });
-    expect(text).toContain('この期間に片付けた仕事: 0 件');
+    expect(text).toContain('片付けた仕事 0 /');
   });
 });

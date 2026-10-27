@@ -20,7 +20,6 @@ import {
   summarizeUsage,
   usageDate,
 } from './usage.js';
-import { USAGE_ESTIMATE_NOTICE } from './usage-format.js';
 
 export interface DigestWindow {
   since: Date;
@@ -458,7 +457,7 @@ const TOOL_USE_COUNTED_IN_FULL_NOTICE =
   'ただし「ツール実行」の2つの件数は、この走査とは別に窓の全部を数えたもので、打ち切りの影響を受けない。';
 
 const ESCALATION_RETAIN_CAPPED_NOTICE =
-  '（⚠ 束ねた元の行を全部は読んでいない。保持の上限に当たったので、この件数は少なく出ている可能性がある）';
+  '- ⚠ エスカレーションの件数は少なく出ている可能性がある（保持の上限に当たり、束ねた元の行を全部は読んでいない）';
 
 // 以下は要約の中の固定の注記（#4937）。文言を変えずに定数へ出しただけで、`digest-session-delta.ts` が同じ会話で2回目以降を短い参照に置き換える
 const COMMITMENT_ORDER_NOTE =
@@ -467,6 +466,9 @@ const EXTERNAL_EVENT_NOTE =
   'この件数は届いた合図の実数ではない —— 受信箱を通った合図は配達のたびに1行' +
   '書かれ（配り直し・畳んでターンを起こさない回も含む）、デーモンが受信箱を' +
   '通さず直接書く行（source `runner` / `boot-storage-footprint` / `boot-tool-search`）も混ざる。';
+// 「使った分」の推定値の注記は、台帳の全文（`USAGE_ESTIMATE_NOTICE`）ではなく短い1行にする: 毎回同じ固定文で、全文は `usage_read` の説明と応答にある。
+// 短い行は差分の対象（`DIGEST_FIXED_PHRASES`）にしない: 参照に置き換えても、参照のほうが長くなるため。「請求明細ではない」は落とさない（確定した金額に読まれるため）
+const USAGE_ESTIMATE_DIGEST_LINE = '- 推定値（請求明細ではない。詳しくは `usage_read`）';
 const SOURCE_TALLY_HEADING =
   '**発行元（source）別の件数（正確な総数。上限 `DIGEST_SOURCE_TALLY_LIMIT`=' +
   `${DIGEST_SOURCE_TALLY_LIMIT} 発行元まで追跡する）**`;
@@ -498,11 +500,6 @@ export const DIGEST_FIXED_PHRASES: readonly { id: string; text: string; ref: str
     id: 'body-shape-note',
     text: BODY_SHAPE_NOTE_TAIL,
     ref: '（本文の種類の数え方についての固定の注記は会話の上と同じ）',
-  },
-  {
-    id: 'usage-estimate-notice',
-    text: USAGE_ESTIMATE_NOTICE,
-    ref: '（推定値についての固定の注記は会話の上と同じ）',
   },
 ];
 
@@ -673,10 +670,7 @@ export async function buildActivityDigest(
       return b.updatedAt.localeCompare(a.updatedAt);
     });
 
-  // 束ねた問いの数を出す（日誌の行数ではない）: 1問に「聞いた」「答えた」の2行が付くことがあり、二重に数えるため
-  const escalationCountLine =
-    `- エスカレーション: ${escalationGroups.length} 件` +
-    (escalationRetainCapped ? ESCALATION_RETAIN_CAPPED_NOTICE : '');
+  // エスカレーションは束ねた問いの数を出す（日誌の行数ではない）: 1問に「聞いた」「答えた」の2行が付くことがあり、二重に数えるため
 
   // 担当の節と継続中の依頼の節は、全体の形と定期の依頼の形（`counts`）で同じものを使う: 2つの形で文面がずれると、同じ担当が別の言い方で出るため
   const standingSection = (): string[] => {
@@ -787,36 +781,39 @@ export async function buildActivityDigest(
     `期間: ${window.since.toISOString()} 〜 ${until.toISOString()}`,
     ...(journalScanTruncated ? [journalScanTruncatedNotice] : []),
     '',
-    `- 人間からの発言: ${humanTurnsCount} 件`,
-    `- マネージャーへの委譲（この期間に動いたもの）: ${managers.length} 本`,
+    // 件数は1行にまとめる（毎回同じ14行・約370字の枠を畳む）。0 も書く: 取れている軸の 0 は「無かった」という情報で、行ごと消すと取れていないのと区別が付かないため。
+    // 次の行動のきっかけになる件数（回答待ち・エスカレーション）は先頭側に置く。`externals.length` ではなく `externalsCount` を出す: 上限に当たっている回に、黙って少なく出るため
+    `- 件数: ${[
+      `人間の発言 ${humanTurnsCount}`,
+      `回答待ち ${pending.length}`,
+      `エスカレーション ${escalationGroups.length}`,
+      `委譲（この期間に動いた）${managers.length} 本`,
+      `自分で決めたこと ${decisionsCount}`,
+      `記憶の更新 ${memoryUpdatesCount}`,
+      `外部イベント（日誌の行数）${externalsCount}`,
+      `委譲側のツール実行 ${delegatedToolUsesCount}`,
+      `自分の手（委譲せず使った道具）${cloneToolUsesCount}`,
+      `継続中の依頼 ${standing.length}`,
+      `未了の仕事 ${commitments.length}`,
+      `片付けた仕事 ${settled.length}`,
+      `読めない未了の行 ${unreadableCommitments.length}`,
+      `物理削除された片付き行（累計）${trimmedClosedCount}`,
+    ].join(' / ')}`,
+    ...(escalationRetainCapped ? [ESCALATION_RETAIN_CAPPED_NOTICE] : []),
+    // 0件のときは行を作らない: 0 の行は「読めない行は無い」と読めてしまうため
     ...(unreadableJobs.length === 0
       ? []
       : [`- 読めない委譲（壊れた行。上の本数には入っていない）: ${unreadableJobs.length} 件`]),
-    `- 自分で決めたこと（日誌の decision）: ${decisionsCount} 件`,
-    escalationCountLine,
-    `- 記憶の更新: ${memoryUpdatesCount} 件`,
-    // `externals.length` ではなく `externalsCount` を出す: 上限に当たっている回に、この行が黙って少なく出るため
-    `- 外部イベント（日誌 external_event の行数）: ${externalsCount} 件`,
-    `- マネージャー・作業者のツール実行: ${delegatedToolUsesCount} 件`,
-    `- あなた自身が手を動かした回数（委譲せずに使った道具）: ${cloneToolUsesCount} 件`,
-    `- いま人間の回答を待っているもの: ${pending.length} 件`,
-    // 0件のときは行を作らない: 0 の行は「読めない行は無い」と読めてしまうため
     ...(approvalList.unreadable.length === 0
       ? []
       : [
           `- 読めない承認待ち（壊れた行。上の件数には入っていない）: ${approvalList.unreadable.length} 件`,
         ]),
-    `- 継続中の依頼（定期の仕込み）: ${standing.length} 件`,
     ...(standingList.unreadable.length === 0
       ? []
       : [
           `- 読めない継続中の依頼（壊れた行。上の件数には入っていない）: ${standingList.unreadable.length} 件`,
         ]),
-    `- 引き受けたまま終わっていない仕事: ${commitments.length} 件`,
-    // 0件でも出す: 実際に取れている軸なので0を隠さない
-    `- 読めない行（台帳が壊れている。片付いたのではない）: ${unreadableCommitments.length} 件`,
-    `- この期間に片付けた仕事: ${settled.length} 件`,
-    `- 保持上限を超えて物理削除された片付き行（累計。この記憶ストアが最初から数えている分）: ${trimmedClosedCount} 件`,
   ];
 
   // `commitments.length` だけを出し分けの条件にしない: 0件でも読めない行だけは在りうるため
@@ -1125,7 +1122,7 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
         'その分の層と場所は**既定値であって観測ではない**',
     );
   }
-  lines.push(`- ${aggregate.notice}`);
+  lines.push(USAGE_ESTIMATE_DIGEST_LINE);
   return lines;
 }
 

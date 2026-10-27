@@ -41,7 +41,7 @@ describe('decision.routine の要約への効き方', () => {
     const stores = createMemoryStores();
     await seed(stores, 2, 3);
     const digest = await buildActivityDigest(stores, window());
-    expect(digest).toContain('自分で決めたこと（日誌の decision）: 2 件');
+    expect(digest).toContain('自分で決めたこと 2 /');
     const section = sectionOf(digest, '## 聞かずに決めたこと');
     expect(section).toContain('判断 0');
     expect(section).not.toContain('未追跡のファイル');
@@ -57,7 +57,7 @@ describe('decision.routine の要約への効き方', () => {
     await stores.journal.append({ ...routineRow(9), routine: undefined });
     const digest = await buildActivityDigest(stores, window());
     expect(digest).not.toContain(NOTE_HEAD);
-    expect(digest).toContain('自分で決めたこと（日誌の decision）: 4 件');
+    expect(digest).toContain('自分で決めたこと 4 /');
     expect(sectionOf(digest, '## 聞かずに決めたこと')).toContain('未追跡のファイル');
   });
 
@@ -65,7 +65,7 @@ describe('decision.routine の要約への効き方', () => {
     const stores = createMemoryStores();
     await seed(stores, 0, 2);
     const digest = await buildActivityDigest(stores, window());
-    expect(digest).toContain('自分で決めたこと（日誌の decision）: 0 件');
+    expect(digest).toContain('自分で決めたこと 0 /');
     expect(sectionOf(digest, '## 聞かずに決めたこと')).toContain(`${NOTE_HEAD}2 件`);
   });
 
@@ -77,7 +77,7 @@ describe('decision.routine の要約への効き方', () => {
     }
     await stores.journal.append({ type: 'decision', decision: '古い側の判断', grounds: '記憶' });
     const digest = await buildActivityDigest(stores, window());
-    expect(digest).toContain('自分で決めたこと（日誌の decision）: 1 件');
+    expect(digest).toContain('自分で決めたこと 1 /');
     expect(digest).toContain(`${NOTE_HEAD}${DIGEST_RETAIN_LIMIT + 6} 件`);
   });
 

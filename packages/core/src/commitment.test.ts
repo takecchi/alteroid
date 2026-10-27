@@ -1591,7 +1591,7 @@ describe('未了の見え方', () => {
       since: new Date(Date.now() - 60 * 60 * 1000),
     });
 
-    expect(digest).toContain('引き受けたまま終わっていない仕事: 1 件');
+    expect(digest).toContain('未了の仕事 1 /');
     expect(digest).toContain('10 日前に頼まれてまだやっていないこと');
   });
 
@@ -1609,8 +1609,8 @@ describe('未了の見え方', () => {
       since: new Date(Date.now() - 60 * 60 * 1000),
     });
 
-    expect(digest).toContain('引き受けたまま終わっていない仕事: 0 件');
-    expect(digest).toContain('この期間に片付けた仕事: 1 件');
+    expect(digest).toContain('未了の仕事 0 /');
+    expect(digest).toContain('片付けた仕事 1 /');
     expect(digest).toContain('片付いたとした理由: 済んだ');
   });
 
@@ -1629,7 +1629,7 @@ describe('未了の見え方', () => {
       since: new Date(Date.now() - 60 * 60 * 1000),
     });
 
-    expect(digest).toContain('この期間に片付けた仕事: 0 件');
+    expect(digest).toContain('片付けた仕事 0 /');
     expect(digest).not.toContain('10 日前に片付けた依頼');
   });
 
