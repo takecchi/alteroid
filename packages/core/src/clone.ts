@@ -617,10 +617,12 @@ export function resolveInboxSettleMs(env: NodeJS.ProcessEnv = process.env): numb
   return Math.floor(parsed);
 }
 
-// 待つのはマネージャーの報告と外部の合図だけ: 人間・許可確認・質問・timer・蒸留・自発・デーモン自身の知らせは待たせない
+// 待つのはマネージャーの報告と外部の合図だけ: 人間・許可確認・質問・timer・蒸留・自発・token-pool の「鍵が戻った」は待たせない
+// runner-registry・attachment-usage の知らせは待つ: 器の入れ替えの知らせの直後に restored の報告が続くと、先頭の知らせが単独ターンになるため
+// token-pool は待たない: 枠の解除は `post()` の印と `unshift` が担い待ちには依らないが、復帰の合図そのものを遅らせない（直前に1件へ絞られていて束ねる相手も少ない）
 function isSettleCandidate(event: InboxEvent): boolean {
   if (event.type === 'manager_message') return event.kind === 'report';
-  if (event.type === 'external') return !isDaemonSelfNotice(event);
+  if (event.type === 'external') return !tokenPoolReopenedSourceOf(event);
   return false;
 }
 

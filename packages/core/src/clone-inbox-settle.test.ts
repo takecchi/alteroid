@@ -193,6 +193,52 @@ describe('クローン — 暇なときの報告・外部の合図の束ね待�
     await s.clone.stop();
   });
 
+  it('デーモン自身の知らせ（runner-registry・attachment-usage）は待ち、続く報告と同じ束に入る', async () => {
+    for (const source of ['runner-registry', 'attachment-usage']) {
+      const s = setup(undefined, undefined, {}, {}, ON);
+      s.clone.post(external('n1', `${source}の知らせ`, source));
+      await advance(300);
+      s.clone.post(report('r1', `${source}の後の報告`));
+      // 待ちの間はターンを投げない
+      await advance(1000);
+      expect(turnInputs(s)).toHaveLength(0);
+      await advance(SETTLE_MS);
+      await settleAsync();
+      const inputs = turnInputs(s);
+      expect(inputs).toHaveLength(1);
+      expect(inputs[0]).toContain(`${source}の知らせ`);
+      expect(inputs[0]).toContain(`${source}の後の報告`);
+      await s.clone.stop();
+    }
+  });
+
+  it('効きの数字: runner-registry の知らせ + 300ms 後の報告は、設定 0 では2ターン、既定では1ターン', async () => {
+    const turnsFor = async (options: { inboxSettleMs: number }): Promise<number> => {
+      const s = setup(undefined, undefined, {}, {}, options);
+      s.clone.post(external('n1', '器の入れ替えの知らせ', 'runner-registry'));
+      await advance(300);
+      s.clone.post(report('r1', 'restored の報告'));
+      await advance(SETTLE_MS + 500);
+      await settleAsync();
+      const turns = turnInputs(s).length;
+      await s.clone.stop();
+      return turns;
+    };
+    expect(await turnsFor(OFF)).toBe(2);
+    expect(await turnsFor(ON)).toBe(1);
+  });
+
+  it('待ち中に人間の発言が届くと、デーモン自身の知らせの待ちも打ち切る', async () => {
+    const s = setup(undefined, undefined, {}, {}, ON);
+    s.clone.post(external('n1', '器の入れ替えの知らせ', 'runner-registry'));
+    await advance(500);
+    expect(turnInputs(s)).toHaveLength(0);
+    s.clone.post(humanMessage('割り込み'));
+    await advance(500);
+    expect(turnInputs(s).length).toBeGreaterThanOrEqual(1);
+    await s.clone.stop();
+  });
+
   it('待っている間に停止しても、タイマーが残らない', async () => {
     const s = setup(undefined, undefined, {}, {}, ON);
     s.clone.post(report('r1', '報告1本目'));
