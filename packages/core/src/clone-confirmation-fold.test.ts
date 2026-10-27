@@ -299,6 +299,20 @@ describe('マネージャーの質問・許可確認の応じ方は、同じ会�
   });
 });
 
+describe('根拠が無いときの ask_human の宛先の指定は、短い形にも残る', () => {
+  it.each(['question', 'permission'] as const)('%s の2回目', async (kind) => {
+    const s = boot();
+    await deliver(s, confirmation(kind, 'rq1'));
+    const second = guideOf(await deliver(s, confirmation(kind, 'rq2')));
+    expect(second).not.toContain(SKELETON);
+    expect(second).toContain(
+      `\`ask_human\` に managerId: "${MANAGER_ID}", requestId: "rq2" を対で添える`,
+    );
+    expect(second).toContain('添え損ねると人間が答えても再開できない');
+    await s.clone.stop();
+  });
+});
+
 // 人間の発言などの無関係な入力では起きない: 確認の分岐だけが対象
 describe('確認の分岐以外は変わらない', () => {
   it('人間の発言の入力に、確認の応じ方は出ない', async () => {
