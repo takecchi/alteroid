@@ -3439,19 +3439,37 @@ class Clone implements CloneHost {
       CLONE_ID_LIST_EXCERPT,
     );
     const oldest = open[0];
-    const lines = [
+    // 台帳の2行は、同じ会話の2回目から骨組みの文だけを参照にする（#5297）。件数・最古の時刻・この一件の id は毎回出す: 数と id は毎ターンの判断に使うため。控えは #4937 の `fixed()`（全文へ戻す条件も、入力を SDK へ入れた後に確定する約束も同じ）
+    const countLine = this.#digestDelta.fixed(
+      'commitment-notice-head',
       `[system] 引き受けたまま終わっていない仕事は（${readAtLabel(at)} に数えた材料）` +
         `**${open.length} 件** ある` +
         (oldest === undefined ? '。' : `（いちばん古いものは ${oldest.at} に受け取ったもの）。`),
+      `[system] 未了 ${open.length} 件（` +
+        (oldest === undefined ? '' : `最古 ${oldest.at}、`) +
+        `${readAtLabel(at)} 時点）`,
+    );
+    const closeSkeleton =
+      '**片付いたら `commitment_close` で閉じること** — 返事をしただけでは閉じない。' +
+      '雑談や、その場で答えて終わる話なら、答えたうえですぐ閉じてよい。';
+    const lines = [
+      countLine,
       ...(mine.length === 0
         ? []
         : [
-            (mine.length === 1
-              ? `いま届いたこの一件も台帳に載せた（id: ${idList}）。`
+            mine.length === 1
+              ? `いま届いたこの一件も台帳に載せた（id: ${idList}）。` +
+                this.#digestDelta.fixed(
+                  'commitment-notice-close',
+                  closeSkeleton,
+                  '（閉じ方は会話の上と同じ: `commitment_close`）',
+                )
               : `いま届いたこの ${mine.length} 件も台帳に載せた（id: ${idList}）。` +
-                '**まとめて1つの応答で答えても、閉じるのは id ごとである。**') +
-              '**片付いたら `commitment_close` で閉じること** — 返事をしただけでは閉じない。' +
-              '雑談や、その場で答えて終わる話なら、答えたうえですぐ閉じてよい。',
+                this.#digestDelta.fixed(
+                  'commitment-notice-close-bundle',
+                  `**まとめて1つの応答で答えても、閉じるのは id ごとである。**${closeSkeleton}`,
+                  '（閉じ方は会話の上と同じ: まとめて答えても id ごとに `commitment_close`）',
+                ),
           ]),
       // 分母は `events.length` でなく `outcomes.size`: `events` には台帳と無関係な合図も混じり、母数が大きくなって「このうち何件」の比率が嘘になるため
       ...(missingConfirmed.length === 0
