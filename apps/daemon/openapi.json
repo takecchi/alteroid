@@ -3505,6 +3505,68 @@
                               "minimum": 0,
                               "maximum": 9007199254740991
                             },
+                            "messageBreakdown": {
+                              "type": "object",
+                              "properties": {
+                                "toolCallTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "toolResultTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "attachmentTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "assistantMessageTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "userMessageTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "toolsByName": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "callTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "resultTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": ["name", "callTokens", "resultTokens"],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "toolCallTokens",
+                                "toolResultTokens",
+                                "attachmentTokens",
+                                "assistantMessageTokens",
+                                "userMessageTokens",
+                                "toolsByName"
+                              ],
+                              "additionalProperties": false
+                            },
                             "error": {
                               "type": "string"
                             }
@@ -3711,6 +3773,68 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "messageBreakdown": {
+                              "type": "object",
+                              "properties": {
+                                "toolCallTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "toolResultTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "attachmentTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "assistantMessageTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "userMessageTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "toolsByName": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "callTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "resultTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": ["name", "callTokens", "resultTokens"],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "toolCallTokens",
+                                "toolResultTokens",
+                                "attachmentTokens",
+                                "assistantMessageTokens",
+                                "userMessageTokens",
+                                "toolsByName"
+                              ],
+                              "additionalProperties": false
                             },
                             "error": {
                               "type": "string"
@@ -9135,6 +9259,68 @@
                                     "minimum": 0,
                                     "maximum": 9007199254740991
                                   },
+                                  "messageBreakdown": {
+                                    "type": "object",
+                                    "properties": {
+                                      "toolCallTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "toolResultTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "attachmentTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "assistantMessageTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "userMessageTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "toolsByName": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "name": {
+                                              "type": "string"
+                                            },
+                                            "callTokens": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "resultTokens": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["name", "callTokens", "resultTokens"],
+                                          "additionalProperties": false
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "toolCallTokens",
+                                      "toolResultTokens",
+                                      "attachmentTokens",
+                                      "assistantMessageTokens",
+                                      "userMessageTokens",
+                                      "toolsByName"
+                                    ],
+                                    "additionalProperties": false
+                                  },
                                   "error": {
                                     "type": "string"
                                   }
@@ -9349,6 +9535,68 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "messageBreakdown": {
+                                    "type": "object",
+                                    "properties": {
+                                      "toolCallTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "toolResultTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "attachmentTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "assistantMessageTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "userMessageTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "toolsByName": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "name": {
+                                              "type": "string"
+                                            },
+                                            "callTokens": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "resultTokens": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["name", "callTokens", "resultTokens"],
+                                          "additionalProperties": false
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "toolCallTokens",
+                                      "toolResultTokens",
+                                      "attachmentTokens",
+                                      "assistantMessageTokens",
+                                      "userMessageTokens",
+                                      "toolsByName"
+                                    ],
+                                    "additionalProperties": false
                                   },
                                   "error": {
                                     "type": "string"
@@ -11275,6 +11523,68 @@
                               "minimum": 0,
                               "maximum": 9007199254740991
                             },
+                            "messageBreakdown": {
+                              "type": "object",
+                              "properties": {
+                                "toolCallTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "toolResultTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "attachmentTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "assistantMessageTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "userMessageTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "toolsByName": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "callTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "resultTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": ["name", "callTokens", "resultTokens"],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "toolCallTokens",
+                                "toolResultTokens",
+                                "attachmentTokens",
+                                "assistantMessageTokens",
+                                "userMessageTokens",
+                                "toolsByName"
+                              ],
+                              "additionalProperties": false
+                            },
                             "error": {
                               "type": "string"
                             }
@@ -11481,6 +11791,68 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "messageBreakdown": {
+                              "type": "object",
+                              "properties": {
+                                "toolCallTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "toolResultTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "attachmentTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "assistantMessageTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "userMessageTokens": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "toolsByName": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "callTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "resultTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": ["name", "callTokens", "resultTokens"],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "toolCallTokens",
+                                "toolResultTokens",
+                                "attachmentTokens",
+                                "assistantMessageTokens",
+                                "userMessageTokens",
+                                "toolsByName"
+                              ],
+                              "additionalProperties": false
                             },
                             "error": {
                               "type": "string"
@@ -15667,6 +16039,68 @@
                                       "minimum": 0,
                                       "maximum": 9007199254740991
                                     },
+                                    "messageBreakdown": {
+                                      "type": "object",
+                                      "properties": {
+                                        "toolCallTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "toolResultTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "attachmentTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "assistantMessageTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "userMessageTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "toolsByName": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "name": {
+                                                "type": "string"
+                                              },
+                                              "callTokens": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "resultTokens": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              }
+                                            },
+                                            "required": ["name", "callTokens", "resultTokens"],
+                                            "additionalProperties": false
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "toolCallTokens",
+                                        "toolResultTokens",
+                                        "attachmentTokens",
+                                        "assistantMessageTokens",
+                                        "userMessageTokens",
+                                        "toolsByName"
+                                      ],
+                                      "additionalProperties": false
+                                    },
                                     "error": {
                                       "type": "string"
                                     }
@@ -15881,6 +16315,68 @@
                                       "type": "integer",
                                       "minimum": 0,
                                       "maximum": 9007199254740991
+                                    },
+                                    "messageBreakdown": {
+                                      "type": "object",
+                                      "properties": {
+                                        "toolCallTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "toolResultTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "attachmentTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "assistantMessageTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "userMessageTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "toolsByName": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "name": {
+                                                "type": "string"
+                                              },
+                                              "callTokens": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "resultTokens": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              }
+                                            },
+                                            "required": ["name", "callTokens", "resultTokens"],
+                                            "additionalProperties": false
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "toolCallTokens",
+                                        "toolResultTokens",
+                                        "attachmentTokens",
+                                        "assistantMessageTokens",
+                                        "userMessageTokens",
+                                        "toolsByName"
+                                      ],
+                                      "additionalProperties": false
                                     },
                                     "error": {
                                       "type": "string"
@@ -17672,6 +18168,68 @@
                                       "minimum": 0,
                                       "maximum": 9007199254740991
                                     },
+                                    "messageBreakdown": {
+                                      "type": "object",
+                                      "properties": {
+                                        "toolCallTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "toolResultTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "attachmentTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "assistantMessageTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "userMessageTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "toolsByName": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "name": {
+                                                "type": "string"
+                                              },
+                                              "callTokens": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "resultTokens": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              }
+                                            },
+                                            "required": ["name", "callTokens", "resultTokens"],
+                                            "additionalProperties": false
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "toolCallTokens",
+                                        "toolResultTokens",
+                                        "attachmentTokens",
+                                        "assistantMessageTokens",
+                                        "userMessageTokens",
+                                        "toolsByName"
+                                      ],
+                                      "additionalProperties": false
+                                    },
                                     "error": {
                                       "type": "string"
                                     }
@@ -17886,6 +18444,68 @@
                                       "type": "integer",
                                       "minimum": 0,
                                       "maximum": 9007199254740991
+                                    },
+                                    "messageBreakdown": {
+                                      "type": "object",
+                                      "properties": {
+                                        "toolCallTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "toolResultTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "attachmentTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "assistantMessageTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "userMessageTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "toolsByName": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "name": {
+                                                "type": "string"
+                                              },
+                                              "callTokens": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "resultTokens": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              }
+                                            },
+                                            "required": ["name", "callTokens", "resultTokens"],
+                                            "additionalProperties": false
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "toolCallTokens",
+                                        "toolResultTokens",
+                                        "attachmentTokens",
+                                        "assistantMessageTokens",
+                                        "userMessageTokens",
+                                        "toolsByName"
+                                      ],
+                                      "additionalProperties": false
                                     },
                                     "error": {
                                       "type": "string"
@@ -19677,6 +20297,68 @@
                                     "minimum": 0,
                                     "maximum": 9007199254740991
                                   },
+                                  "messageBreakdown": {
+                                    "type": "object",
+                                    "properties": {
+                                      "toolCallTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "toolResultTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "attachmentTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "assistantMessageTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "userMessageTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "toolsByName": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "name": {
+                                              "type": "string"
+                                            },
+                                            "callTokens": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "resultTokens": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["name", "callTokens", "resultTokens"],
+                                          "additionalProperties": false
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "toolCallTokens",
+                                      "toolResultTokens",
+                                      "attachmentTokens",
+                                      "assistantMessageTokens",
+                                      "userMessageTokens",
+                                      "toolsByName"
+                                    ],
+                                    "additionalProperties": false
+                                  },
                                   "error": {
                                     "type": "string"
                                   }
@@ -19891,6 +20573,68 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "messageBreakdown": {
+                                    "type": "object",
+                                    "properties": {
+                                      "toolCallTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "toolResultTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "attachmentTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "assistantMessageTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "userMessageTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "toolsByName": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "name": {
+                                              "type": "string"
+                                            },
+                                            "callTokens": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "resultTokens": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["name", "callTokens", "resultTokens"],
+                                          "additionalProperties": false
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "toolCallTokens",
+                                      "toolResultTokens",
+                                      "attachmentTokens",
+                                      "assistantMessageTokens",
+                                      "userMessageTokens",
+                                      "toolsByName"
+                                    ],
+                                    "additionalProperties": false
                                   },
                                   "error": {
                                     "type": "string"
@@ -21673,6 +22417,68 @@
                                     "minimum": 0,
                                     "maximum": 9007199254740991
                                   },
+                                  "messageBreakdown": {
+                                    "type": "object",
+                                    "properties": {
+                                      "toolCallTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "toolResultTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "attachmentTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "assistantMessageTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "userMessageTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "toolsByName": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "name": {
+                                              "type": "string"
+                                            },
+                                            "callTokens": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "resultTokens": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["name", "callTokens", "resultTokens"],
+                                          "additionalProperties": false
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "toolCallTokens",
+                                      "toolResultTokens",
+                                      "attachmentTokens",
+                                      "assistantMessageTokens",
+                                      "userMessageTokens",
+                                      "toolsByName"
+                                    ],
+                                    "additionalProperties": false
+                                  },
                                   "error": {
                                     "type": "string"
                                   }
@@ -21887,6 +22693,68 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "messageBreakdown": {
+                                    "type": "object",
+                                    "properties": {
+                                      "toolCallTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "toolResultTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "attachmentTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "assistantMessageTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "userMessageTokens": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "toolsByName": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "name": {
+                                              "type": "string"
+                                            },
+                                            "callTokens": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "resultTokens": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["name", "callTokens", "resultTokens"],
+                                          "additionalProperties": false
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "toolCallTokens",
+                                      "toolResultTokens",
+                                      "attachmentTokens",
+                                      "assistantMessageTokens",
+                                      "userMessageTokens",
+                                      "toolsByName"
+                                    ],
+                                    "additionalProperties": false
                                   },
                                   "error": {
                                     "type": "string"
