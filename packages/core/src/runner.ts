@@ -40,7 +40,7 @@ import type {
 } from './agent-hooks.js';
 import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
 import { resolvePeerOpening, samePeerOpening, type PeerOpening } from './agent-provider-peers.js';
-import { RUN_WATCH_COMPACT_NOTE, planRunWatchCompact } from './bash-run-watch-compact.js';
+import { describeRunWatchRewrite, planRunWatchCompact } from './bash-run-watch-compact.js';
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
 import {
   describeBashShapeGuard,
@@ -5495,12 +5495,16 @@ class RunnerSession {
       const compact = planRunWatchCompact(original);
       if (compact !== undefined) {
         input = { ...original, command: compact.command };
-        notes.push(RUN_WATCH_COMPACT_NOTE);
-        this.#tryObservation('gh run watch の --compact の note の送り出し', () => {
+        notes.push(describeRunWatchRewrite(compact));
+        const added = [
+          ...(compact.addedCompact ? ['--compact'] : []),
+          ...(compact.addedInterval ? ['--interval 30'] : []),
+        ].join(' と ');
+        this.#tryObservation('gh run watch の --compact / --interval の note の送り出し', () => {
           this.#emit({
             type: 'note',
             managerId: this.#id,
-            text: `gh run watch に --compact を足した（${actor}・形=run-watch-compact）。`,
+            text: `gh run watch に ${added} を足した（${actor}・形=run-watch-compact）。`,
           });
         });
       }

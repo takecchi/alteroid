@@ -659,13 +659,16 @@ describe('gh run watch に --compact を足す（#5322）', () => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         updatedInput: {
-          command: 'timeout 540 gh run watch --compact 123 --exit-status',
+          command: 'timeout 540 gh run watch --compact --interval 30 123 --exit-status',
           timeout: 600_000,
         },
       },
     });
     const output = (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput;
     expect(output).not.toHaveProperty('permissionDecision');
+    // 両方を足しても案内は1つ
+    expect(String(output?.additionalContext)).toContain('--compact');
+    expect(String(output?.additionalContext)).toContain('--interval 30');
     expect(String(output?.additionalContext)).toContain('gh run view <id>');
     expect(String(output?.additionalContext)).toContain('--log-failed');
     expect(compactNotes(events)).toHaveLength(1);
@@ -681,7 +684,7 @@ describe('gh run watch に --compact を足す（#5322）', () => {
     });
     const output = (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput;
     expect(output?.updatedInput).toEqual({
-      command: 'timeout 540 gh run watch --compact 123 --exit-status',
+      command: 'timeout 540 gh run watch --compact --interval 30 123 --exit-status',
       timeout: 550_000,
     });
     expect(String(output?.additionalContext)).toContain('--compact');
@@ -700,18 +703,33 @@ describe('gh run watch に --compact を足す（#5322）', () => {
     expect(compactNotes(events)[0]?.text).toContain('worker:');
   });
 
-  it('既に --compact があれば何も足さない', async () => {
+  it('--compact と --interval が既にあれば何も足さない（値も変えない）', async () => {
     const { started, events } = await startSession();
     const result = await firePreToolUse(started.options, {
       ...PRE_TOOL_USE_BASE,
       tool_name: 'Bash',
       tool_input: {
-        command: 'timeout 540 gh run watch 123 --compact --exit-status',
+        command: 'timeout 540 gh run watch 123 --compact --exit-status --interval=5',
         timeout: 600_000,
       },
     });
     expect(result).toEqual({ continue: true });
     expect(compactNotes(events)).toHaveLength(0);
+  });
+
+  it('--interval が既にあれば値を変えず、--compact だけを足す', async () => {
+    const { started } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'timeout 540 gh run watch 123 -i 10', timeout: 600_000 },
+    });
+    const output = (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput;
+    expect(output?.updatedInput).toEqual({
+      command: 'timeout 540 gh run watch --compact 123 -i 10',
+      timeout: 600_000,
+    });
+    expect(String(output?.additionalContext)).not.toContain('--interval 30');
   });
 
   it('他の gh の呼び出しには触れない', async () => {
