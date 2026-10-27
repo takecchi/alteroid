@@ -2823,7 +2823,12 @@ export function createCloneTools(context: ToolContext) {
   const getWorkConversationId = context.workConversationId ?? getConversationId;
 
   // `commitment_close` の本体（`closes` 付きの呼びも同じものを使う。挙動がずれないよう1つだけ持つ）
-  async function closeCommitmentBody(id: string, reason: string): Promise<string> {
+  // `via`: どの呼びで閉じたか。日誌の grounds にそのまま書く（decision の文面は変えない）
+  async function closeCommitmentBody(
+    id: string,
+    reason: string,
+    via: string = 'commitment_close',
+  ): Promise<string> {
     const reasonError =
       describeStringLengthViolation('reason', reason, { min: 1 }) ??
       describeBlankViolation('reason', reason);
@@ -2877,7 +2882,7 @@ export function createCloneTools(context: ToolContext) {
         decision: unreadable
           ? `読めない形で入っていた仕事を自分で片付けた（${id}）: ${reason}`
           : `引き受けた仕事を自分で片付けた（${id}）: ${reason}`,
-        grounds: 'クローン自身が commitment_close で閉じた（人間はこれを読んで後から否定する）',
+        grounds: `クローン自身が ${via} で閉じた（人間はこれを読んで後から否定する）`,
       },
       'act-completed',
     );
@@ -2892,24 +2897,34 @@ export function createCloneTools(context: ToolContext) {
     res: ToolText,
     closes: readonly { id: string; reason: string }[] | undefined,
     workDone: boolean,
-  ): Promise<ToolText> {
+    via: 'manager_send' | 'journal_write',
+  ): Promise<ToolText & { isError?: boolean }> {
     if (closes === undefined || closes.length === 0) return res;
     const head = res.content[0]?.text ?? '';
     if (!workDone) {
       return text(`${head}\n本来の作業が通っていないので、closes の行は1行も閉じていない。`);
     }
     const lines: string[] = [];
+    let failed = false;
     for (const entry of closes) {
       try {
-        lines.push(`closes ${entry.id}: ${await closeCommitmentBody(entry.id, entry.reason)}`);
-      } catch (error) {
         lines.push(
-          `closes ${entry.id}: 閉じる処理が失敗した（${reasonOf(error)}）。` +
-            'commitment_list で確かめてから、必要なら commitment_close を呼ぶこと。',
+          `closes ${entry.id}: ${await closeCommitmentBody(entry.id, entry.reason, `${via} の closes`)}`,
+        );
+      } catch (error) {
+        // 単独の `commitment_close` は日誌が書けないと `isError` で返る。ここも握り潰して成功の1行にせず、`isError` で合図する
+        // （本来の作業の結果は先頭に残す: 作業は済んでいるので、応答ごと失敗に見えて同じ送信をやり直されないため）
+        failed = true;
+        lines.push(
+          error instanceof JournalNotRecordedError
+            ? `closes ${entry.id}: **台帳の行は閉じている**が、日誌に残せていない（既に閉じているので、閉じ直す呼びは要らない）。` +
+                '人間が後から読めるよう、journal_write で閉じたことを書き残すこと。'
+            : `closes ${entry.id}: 閉じる処理が失敗した（${reasonOf(error)}）。閉じたかどうかは commitment_list で確かめること。`,
         );
       }
     }
-    return text(`${head}\n${lines.join('\n')}`);
+    const body = text(`${head}\n${lines.join('\n')}`);
+    return failed ? { ...body, isError: true } : body;
   }
 
   // `default` のときは足さない: 日誌を読む側と歯が、その文言で見ているため
@@ -4039,6 +4054,7 @@ export function createCloneTools(context: ToolContext) {
           ),
           closes,
           true,
+          'journal_write',
         );
       },
     ),
@@ -7695,7 +7711,7 @@ export function createCloneTools(context: ToolContext) {
         const closesError = describeClosesViolation(closes);
         if (closesError !== null) return text(closesError);
         // 送れなかった（早い断り・保留・失敗）呼びは1行も閉じず、そう書く
-        const notDone = (res: ToolText) => finishWithCloses(res, closes, false);
+        const notDone = (res: ToolText) => finishWithCloses(res, closes, false, 'manager_send');
         if (!context.managers) return notDone(NO_POOL);
         // 空白だけは断らない: HTTP も通すため
         const messageError = describeStringLengthViolation('message', message, { min: 1 });
@@ -7784,9 +7800,10 @@ export function createCloneTools(context: ToolContext) {
             ),
             closes,
             sent,
+            'manager_send',
           );
         }
-        return finishWithCloses(text(result.detail), closes, sent);
+        return finishWithCloses(text(result.detail), closes, sent, 'manager_send');
       },
     ),
 

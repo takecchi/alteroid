@@ -29,10 +29,12 @@ function harness(options: { stores?: Stores; send?: ManagerSendResult } = {}) {
   return {
     stores,
     sent,
+    isError: false,
     async call(name: string, args: Record<string, unknown>): Promise<string> {
       const found = tools.find((entry) => entry.name === name);
       if (!found) throw new Error(`ツール ${name} が無い`);
       const result = await found.handler(args as never, {});
+      this.isError = result.isError === true;
       return (result.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
     },
   };
@@ -216,8 +218,8 @@ describe('本来の作業が通らなかったら、1行も閉じない', () => 
   });
 });
 
-describe('閉じる側の失敗は本来の作業を失敗にしない', () => {
-  it('manager_send: 閉じる記録が日誌に書けなくても、送信は成功のまま行ごとに言う', async () => {
+describe('閉じた後に日誌が書けなかったら、握り潰さず isError で事実どおり返す', () => {
+  it('manager_send: 送信は済んでいる（先頭に残る）。行は閉じている・日誌に無い・isError', async () => {
     const base = createMemoryStores();
     await open(base, 'c1');
     const stores = failingJournalAppend(base, '書けない');
@@ -229,6 +231,79 @@ describe('閉じる側の失敗は本来の作業を失敗にしない', () => {
     });
     expect(h.sent).toEqual(['続けて']);
     expect(out).toContain('届けた。');
-    expect(out).toContain('closes c1: 閉じる処理が失敗した');
+    expect(out).toContain('closes c1: **台帳の行は閉じている**が、日誌に残せていない');
+    expect(out).not.toContain('commitment_close を');
+    expect(h.isError).toBe(true);
+    expect((await base.commitments.get('c1'))?.closedAt).toBeDefined();
+    expect(await closeJournalRows(base)).toHaveLength(0);
+  });
+
+  it('journal_write: 本体の書き込みは済んでいて、閉じた後の日誌が落ちると isError', async () => {
+    const base = createMemoryStores();
+    await open(base, 'c1');
+    let appends = 0;
+    const stores: Stores = {
+      ...base,
+      journal: {
+        ...base.journal,
+        append: async (entry) => {
+          appends += 1;
+          if (appends > 1) throw new Error('書けない');
+          return base.journal.append(entry);
+        },
+      },
+    };
+    const h = harness({ stores });
+    const out = await h.call('journal_write', {
+      decision: '判断した',
+      grounds: '根拠',
+      closes: [{ id: 'c1', reason: '済んだ' }],
+    });
+    expect(out).toContain('日誌に記録した');
+    expect(out).toContain('**台帳の行は閉じている**');
+    expect(h.isError).toBe(true);
+    expect((await base.commitments.get('c1'))?.closedAt).toBeDefined();
+    expect(await closeJournalRows(base)).toHaveLength(0);
+  });
+
+  it('成功時は isError ではない', async () => {
+    const h = harness();
+    await open(h.stores, 'c1');
+    await h.call('journal_write', {
+      decision: '判断した',
+      grounds: '根拠',
+      closes: [{ id: 'c1', reason: '済んだ' }],
+    });
+    expect(h.isError).toBe(false);
+  });
+});
+
+describe('閉じた呼びを日誌の grounds に書く', () => {
+  async function groundsOfClose(stores: Stores): Promise<string> {
+    const rows = await stores.journal.list({ types: ['decision'] });
+    const row = rows.find((r) => JSON.stringify(r).includes('自分で片付けた')) as
+      { decision: string; grounds: string } | undefined;
+    return `${row?.decision}|${row?.grounds}`;
+  }
+
+  it.each([
+    ['commitment_close', 'commitment_close', { id: 'c1', reason: '済んだ' }],
+    [
+      'manager_send',
+      'manager_send の closes',
+      { managerId: 'mgr-1', message: '続けて', closes: [{ id: 'c1', reason: '済んだ' }] },
+    ],
+    [
+      'journal_write',
+      'journal_write の closes',
+      { decision: 'd', grounds: 'g', closes: [{ id: 'c1', reason: '済んだ' }] },
+    ],
+  ])('%s で閉じた回は grounds に「%s」と書く（decision の形は同じ）', async (tool, via, args) => {
+    const h = harness();
+    await open(h.stores, 'c1');
+    await h.call(tool, args);
+    const got = await groundsOfClose(h.stores);
+    expect(got).toContain('引き受けた仕事を自分で片付けた（c1）: 済んだ');
+    expect(got).toContain(`クローン自身が ${via} で閉じた`);
   });
 });
