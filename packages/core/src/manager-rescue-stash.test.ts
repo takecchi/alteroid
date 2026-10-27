@@ -275,6 +275,10 @@ describe('未追跡のファイルの預かり（デーモン側。#4863）', ()
     const journal = JSON.stringify(await stores.journal.list({ types: ['decision'] }));
     expect(journal).toContain('one-too-many');
     expect(journal).toContain('job-budget');
+    // 器の機構が定型で書く行: 要約の一覧から外す印が付く
+    const rows = await stores.journal.list({ types: ['decision'] });
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row).toMatchObject({ routine: true });
     await done(pool);
   });
 

@@ -461,6 +461,14 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * （この欄が入る前の人間の操作にも無い）。読む側は無い行を壊さず「印なし」として扱う。
      */
     humanAction: humanActionSchema.optional(),
+    /**
+     * 器の機構が定型で書いた、判断の材料ではない行の印（要約の「聞かずに決めたこと」の一覧と件数から外す）。
+     * 文面から拾う代わりに構造で持つ: 文言を直した瞬間に黙って外れるため。日誌には残り、`journal_read`・Web には全部出る。
+     *
+     * **optional（版のずれへの備え）。** 無い行は「定型でない」とは限らない
+     * （この欄が入る前の定型の行にも無い）。読む側は無い行を壊さず「印なし」として扱う。
+     */
+    routine: z.literal(true).optional(),
   }),
   // `exchange` に混ぜず種別を分ける: 雑多入れだと `journal_read` の `types` で絞れず、クローンが出どころの混ざった中を漁ることになるため
   // 値（`value`）を入れない: 日誌は Web にもクローンにも流れるため

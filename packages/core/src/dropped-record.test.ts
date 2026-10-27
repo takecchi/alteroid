@@ -1404,6 +1404,10 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           '人間の操作の印（種類・対象の id・経路）。`answeredVia`（escalation）と同じく、' +
           '入れ子の中へ踏み込まない第1階層までの一般原則（冒頭 doc）を適用し、`never` へ倒す。',
       },
+      routine: {
+        emit: 'never',
+        why: '要約から外す印（`true` の1語）。落ちた行の形を追うのに要らない。',
+      },
     },
     escalation: {
       question: { emit: 'size', token: 'question' },
@@ -1858,6 +1862,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         target: SECRET,
         via: { kind: 'account', accountId: SECRET },
       },
+      routine: true,
     },
     escalation: {
       type: 'escalation',

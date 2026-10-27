@@ -7026,6 +7026,7 @@ class Pool implements ManagerPool {
         `${shown.join('、')}${fresh.length > shown.length ? `、ほか ${String(fresh.length - shown.length)} 件` : ''}。` +
         'パス名と理由だけを記録する（中身・鍵らしい文字列そのものは記録しない）。' +
         '`secret-like` は取り除くか伏せれば次の周期で預けられる。',
+      routine: true,
     });
   }
 

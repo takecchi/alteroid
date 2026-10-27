@@ -535,6 +535,7 @@ export async function buildActivityDigest(
 
   const decisionBucket =
     createRetainBucket<Extract<JournalEntry, { type: 'decision' }>>(DIGEST_RETAIN_LIMIT);
+  let routineDecisionsCount = 0;
   const escalationBucket =
     createRetainBucket<Extract<JournalEntry, { type: 'escalation' }>>(DIGEST_RETAIN_LIMIT);
   const memoryUpdateBucket =
@@ -579,7 +580,9 @@ export async function buildActivityDigest(
         if (!withinWindow(entry)) continue;
         switch (entry.type) {
           case 'decision':
-            decisionBucket.push(entry);
+            // 定型の行は保持の枠（`DIGEST_RETAIN_LIMIT`）に入れず別に数える: 判断の材料の行を押し出さないため
+            if (entry.routine === true) routineDecisionsCount += 1;
+            else decisionBucket.push(entry);
             break;
           case 'escalation':
             escalationBucket.push(entry);
@@ -837,13 +840,19 @@ export async function buildActivityDigest(
 
   sections.push(...managersSection());
 
-  if (decisionsCount > 0) {
+  if (decisionsCount > 0 || routineDecisionsCount > 0) {
     sections.push('', '## 聞かずに決めたこと');
     const shownDecisions = decisions.slice(0, MAX_ITEMS);
     for (const entry of shownDecisions) {
       sections.push(`- ${entry.at} ${brief(entry.decision)}（根拠: ${brief(entry.grounds, 80)}）`);
     }
     sections.push(...omitted(decisionsCount, shownDecisions.length, journalWhere('decision')));
+    if (routineDecisionsCount > 0) {
+      sections.push(
+        `（器の機構が定型で書いた記録 ${routineDecisionsCount} 件は一覧に入れていない。` +
+          '`journal_read` の types=["decision"] で見える）',
+      );
+    }
   }
 
   if (escalationGroups.length > 0) {
