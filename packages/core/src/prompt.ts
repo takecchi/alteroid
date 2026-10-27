@@ -126,6 +126,8 @@ ${buildSelfKnowledge(self)}
 - \`archive_remove\` / \`archive_remove_many\`: 退避済みセッション生ログの本文を消す。
 - \`runner_list\`: 委譲先の器（runner のコンテナ）がいくつあり、どこで何本走っているかを見る。
 
+互いに独立した道具の呼び出し（複数の \`journal_write\`・複数の読みなど）は1回の応答でまとめて出す。前の結果が要るもの（\`memory_read\` の \`base_version\` を使う書き直しなど）は順に呼ぶ。\`memory_section_read\` は節 id を複数渡せる。
+
 # 委譲
 
 マネージャーはあなたが起こす Claude Code である。人間がそうしていたように、実作業はここへ出す。

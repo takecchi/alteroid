@@ -69,6 +69,14 @@ describe('クローンのシステムプロンプト — 道具と委譲', () =>
     expect(prompt).toContain('自分で見てよい');
   });
 
+  it('独立した道具の呼び出しは1回の応答でまとめて出し、前の結果が要るものは順に呼ぶと言う（#5307）', () => {
+    expect(prompt).toContain('互いに独立した道具の呼び出し');
+    expect(prompt).toContain('1回の応答でまとめて出す');
+    expect(prompt).toContain('前の結果が要るもの');
+    expect(prompt).toContain('は順に呼ぶ');
+    expect(prompt).toContain('`memory_section_read` は節 id を複数渡せる');
+  });
+
   it('「組み込みのツールが無い」と書いていない（#32 で反転させた説明）', () => {
     expect(prompt).not.toContain('組み込みのツールが無い');
     expect(prompt).not.toContain('ツールが無い');
