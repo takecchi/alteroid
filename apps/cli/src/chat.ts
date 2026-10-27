@@ -565,7 +565,7 @@ export async function chatCommand(): Promise<void> {
           slashFailure = null;
           const handled = await runLocal(
             `（${line.split(/\s+/)[0] ?? ''} を取り消しました。クローンのターンには触れていません）`,
-            () =>
+            (signal) =>
               runSlashCommand(
                 line,
                 slashClient,
@@ -588,6 +588,8 @@ export async function chatCommand(): Promise<void> {
                 auxClient,
                 absentOkClient,
                 removedOkClient,
+                draft,
+                signal,
               ),
           );
           if (handled === CANCELLED) {
@@ -1253,7 +1255,7 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
                      // で始めると、先頭の / を 1 つ外した文をそのまま発言として送る（例: //var/log/app.log を見て）
                      標準入力が端末でない（パイプ）ときは、送信が失敗した行・不明なコマンド・使い方の誤りの行で止まり、非 0 で終わる
                      key=value の知らないキー・空の値・使わない語も使い方の誤りで、何も実行しない（使えるキーを言う）
-/attach <path>       次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる。添えかけがあれば空行の Enter で添付だけも送れる）
+/attach <path>       次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる（/msg でも送れる）。添えかけがあれば空行の Enter で添付だけも送れる）
 /attachments         添えかけのファイルの一覧
 /detach <番号|all>   添えかけを外す
 /report [日付]        日報（既定は直近。日付は YYYY-MM-DD）
@@ -1374,6 +1376,8 @@ export async function runSlashCommand(
   auxClient: ReturnType<typeof createClient> = client,
   absentOkClient: ReturnType<typeof createClient> = client,
   removedOkClient: ReturnType<typeof createClient> = client,
+  draft?: AttachmentDraft,
+  signal?: AbortSignal,
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
   const usageError = (message: string): 'ok' => {
@@ -2121,6 +2125,7 @@ export async function runSlashCommand(
     }
 
     // `requestId` も `decision` も付けない: 足すと、確認の待ちが在るときに追加指示が回答へ化ける。
+    // 添えかけは追加指示にだけ載せる（`/reply` / `/allow` / `/deny` は確認への回答なので、載せるとデーモンが 400 を返す）。
     case '/msg': {
       const [reference] = rest;
       const text = rawTail(line, 2);
@@ -2135,9 +2140,26 @@ export async function runSlashCommand(
         onFailed?.(missing);
         return 'ok';
       }
+      let attachmentIds: string[] | undefined;
+      let sentFiles: DraftFile[] = [];
+      if (draft !== undefined && target !== undefined && draft.count > 0) {
+        const uploaded = await uploadDraft(draft, (file) => uploadAttachment(target, file, signal));
+        if (!uploaded.ok) {
+          // 上げられなかったら送らない（添付を落として本文だけ届けない）。添えかけは残す
+          const failure = `添付を上げられなかったので送っていません: ${uploaded.reason}`;
+          stdout.write(
+            `${failure}\n（添えかけは残してあります。/attachments で確認、/detach で外せます）\n`,
+          );
+          onFailed?.(failure);
+          return 'ok';
+        }
+        attachmentIds = uploaded.uploaded.map((a) => a.id);
+        sentFiles = uploaded.files;
+        for (const a of uploaded.uploaded) stdout.write(`  ${describeAttachment(a)}\n`);
+      }
       const response = await client.managers[':id'].messages.$post({
         param: { id },
-        json: { text },
+        json: { text, ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }) },
       });
       if (!response.ok) {
         const failure =
@@ -2149,6 +2171,8 @@ export async function runSlashCommand(
         onFailed?.(failure);
         return 'ok';
       }
+      // 受け取られた時点で外す（通常発言の `onAccepted` と同じ）。届かなかった結果（`session_missing` など）でも送信自体は通っている
+      draft?.discard(sentFiles);
       reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
       return 'ok';
     }
@@ -4340,7 +4364,9 @@ export async function runAttachmentCommand(
   const args = (match?.[2] ?? '').trim();
   if (command === 'attach') {
     if (args === '') {
-      stdout.write('使い方: /attach <path>\n');
+      stdout.write(
+        '使い方: /attach <path>（次の発言か /msg でマネージャーへ送るときに一緒に上がる）\n',
+      );
       onFailed?.('使い方の誤り（/attach <path>）');
       return;
     }
