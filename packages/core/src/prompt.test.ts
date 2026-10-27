@@ -623,3 +623,51 @@ describe('peer（Codex）に頼めることの案内（#4125）', () => {
     }
   });
 });
+
+describe('読み込みの節約の規則（#5323）— マネージャーと作業者の層だけ', () => {
+  const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+  const worker = buildWorkerPrompt();
+  const clone = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+
+  it('作業者: 報告は結論先頭・長い根拠はファイル・在りかを書く・3,000 字', () => {
+    expect(worker).toContain('結論・PR 番号・SHA・残りを先に書く');
+    expect(worker).toContain('/tmp/mgr-<識別子>/');
+    expect(worker).toContain('3,000 字');
+    expect(worker).toContain('ファイルの在りかは報告に必ず書く');
+  });
+
+  it('マネージャー: 作業者の報告の形を知っている', () => {
+    expect(manager).toContain('作業者の最終の報告は、結論・PR 番号・SHA・残りを先に');
+  });
+
+  it('AGENTS.md と CLAUDE.md が同一なら片方だけ読む（両層）', () => {
+    for (const prompt of [manager, worker]) {
+      expect(prompt).toContain('同一内容');
+      expect(prompt).toContain('片方だけ読む');
+    }
+  });
+
+  it('Output too large の退避ファイルは全文を読み戻さない（両層）', () => {
+    for (const prompt of [manager, worker]) {
+      expect(prompt).toContain('Output too large');
+      expect(prompt).toContain('全文を Read で読み戻さず');
+    }
+  });
+
+  it('作業者の Bash は出力を絞る', () => {
+    expect(worker).toContain('--reporter=dot');
+    expect(worker).toContain('git diff --stat');
+  });
+
+  it('クローンのプロンプトには入っていない', () => {
+    for (const marker of [
+      '同一内容',
+      'Output too large',
+      '--reporter=dot',
+      '3,000 字',
+      '/tmp/mgr-<識別子>/',
+    ]) {
+      expect(clone).not.toContain(marker);
+    }
+  });
+});
