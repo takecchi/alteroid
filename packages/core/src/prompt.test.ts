@@ -77,6 +77,11 @@ describe('クローンのシステムプロンプト — 道具と委譲', () =>
     expect(prompt).toContain('`memory_section_read` は節 id を複数渡せる');
   });
 
+  it('発言に全文が載っている報告は引き直さず、状態の注記は manager_list の行を見ると言う', () => {
+    expect(prompt).toContain('発言に全文が載っている報告は引き直さない');
+    expect(prompt).toContain('未 push などの状態の注記が要るときは `manager_list` の行を見る');
+  });
+
   it('「組み込みのツールが無い」と書いていない（#32 で反転させた説明）', () => {
     expect(prompt).not.toContain('組み込みのツールが無い');
     expect(prompt).not.toContain('ツールが無い');
