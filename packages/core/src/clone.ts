@@ -5445,14 +5445,21 @@ class Clone implements CloneHost {
             tidyTargets = `棚卸しの的: 測れなかった（理由: ${reasonOf(error)}）。memory_list から自分で探すこと。`;
           }
         }
-        const distillPrompt = buildDistillPrompt(
-          event.reason === 'shutdown' ? 'conversation_end' : event.reason,
-          {
-            ...(tidyTargets === undefined ? {} : { tidyTargets }),
-          },
-        );
+        // 固定の本体は同じ会話の2回目以降は短い参照にする（#4937 と同じ仕組み）。枕と棚卸しの的は毎回出す。組む直前に判定し直す（上の `await` の間に作り直しの窓が開きうる）
+        this.#resetDigestDeltaIfNewConversation();
+        const distillReason = event.reason === 'shutdown' ? 'conversation_end' : event.reason;
+        const tidyOption = tidyTargets === undefined ? {} : { tidyTargets };
+        const distillPrompt = buildDistillPrompt(distillReason, {
+          ...tidyOption,
+          fold: (id, full, ref) => this.#digestDelta.fixed(id, full, ref),
+        });
+        // 日誌には畳む前の全文の長さを残す（差分にする前のまま）
         await this.#journal(
-          turnInputEntry({ type: 'distill', reason: event.reason, prompt: distillPrompt }),
+          turnInputEntry({
+            type: 'distill',
+            reason: event.reason,
+            prompt: buildDistillPrompt(distillReason, tidyOption),
+          }),
         );
         const outcome = await this.#runInternal(distillPrompt, 'distill');
         // 成功で終わった蒸留だけが印を下ろす: 失敗した蒸留（枠で保持された場合を含む）で下ろすと、移せなかった記憶を「移した」ことにして落とすため
