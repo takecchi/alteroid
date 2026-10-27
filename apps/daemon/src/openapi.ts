@@ -485,6 +485,17 @@ export const approvalTraceResponseSchema = z.object({
 
 export const okResponseSchema = z.object({ ok: z.literal(true) });
 
+// `replaced` は省略可能: 古いデーモンは `{ ok: true }` だけを返すので、読み手は欠けていても「分からない」として扱う。
+export const scheduleCreateResponseSchema = z.object({
+  ok: z.literal(true),
+  replaced: z
+    .boolean()
+    .optional()
+    .describe(
+      '既に在った kind を置き換えたとき true、新しく作ったとき false。置き換えたときは旧本文・旧周期が日誌（decision）に残っている。',
+    ),
+});
+
 export const clientMessageLookupResponseSchema = z.object({ conversationId: z.string() });
 
 // `conversationId` と `clientMessageId` は2つとも省くか、2つとも渡す（片方だけは 400）。

@@ -490,6 +490,7 @@ export { reopenCommitmentJournalFirst, describeClosedRecord } from './commitment
 export type { JournalFirstReopenResult } from './commitment-reopen.js';
 export { editCommitmentBodyJournalFirst } from './commitment-edit.js';
 export type { JournalFirstEditResult } from './commitment-edit.js';
+export { scheduleReplaceEntry } from './schedule-replace.js';
 export { removeScheduleJournalFirst } from './schedule-remove.js';
 export type { JournalFirstScheduleRemoveResult, ScheduleRemoveTarget } from './schedule-remove.js';
 export {

@@ -25463,10 +25463,10 @@
         "operationId": "postSchedule",
         "tags": ["schedule"],
         "summary": "継続中の依頼を仕込む・直す",
-        "description": "「定期的に〜しておいて」をクローンの記憶任せにせず、時刻が来れば必ず届く形で置く。同じ kind なら置き換わる（前回動いた時刻は保つ）。任意の `ifMatch`（`GET /schedule` で読んだ時の `updatedAt`。無かったなら null）を付けると、版が違うときは書かずに 409。省略は従来どおり後勝ち。真実はストア側にあり、スケジューラはそれを読み直すだけなので、デーモンを作り直しても残る。既定の定期ジョブ（daily_report / self_initiative / memory_tidy）の名前は奪えない（→ 409）。",
+        "description": "「定期的に〜しておいて」をクローンの記憶任せにせず、時刻が来れば必ず届く形で置く。同じ kind なら置き換わる（前回動いた時刻は保つ）。任意の `ifMatch`（`GET /schedule` で読んだ時の `updatedAt`。無かったなら null）を付けると、版が違うときは書かずに 409。省略は従来どおり後勝ち。既存の kind を置き換えるときは、置き換える前に旧本文・旧周期を日誌（decision）へ残す（書けなければ置き換えず 500）。応答の `replaced` が置換（true）か新規（false）かを言う。真実はストア側にあり、スケジューラはそれを読み直すだけなので、デーモンを作り直しても残る。既定の定期ジョブ（daily_report / self_initiative / memory_tidy）の名前は奪えない（→ 409）。",
         "responses": {
           "200": {
-            "description": "仕込んだ。次の発火は `GET /schedule` で見える。",
+            "description": "仕込んだ。次の発火は `GET /schedule` で見える。`replaced` は既存の kind を置き換えたとき true。",
             "content": {
               "application/json": {
                 "schema": {
@@ -25475,6 +25475,10 @@
                     "ok": {
                       "type": "boolean",
                       "const": true
+                    },
+                    "replaced": {
+                      "description": "既に在った kind を置き換えたとき true、新しく作ったとき false。置き換えたときは旧本文・旧周期が日誌（decision）に残っている。",
+                      "type": "boolean"
                     }
                   },
                   "required": ["ok"],

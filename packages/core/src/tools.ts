@@ -235,6 +235,7 @@ import {
   parseTimeOfDay,
 } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
+import { scheduleReplaceEntry } from './schedule-replace.js';
 import {
   JOURNAL_ENTRY_TYPES,
   PERMISSION_GRANT_CONSENT_PHRASE,
@@ -5045,14 +5046,11 @@ export function createCloneTools(context: ToolContext) {
                   decision: `定期の依頼を設定しようとしている: ${parsedKind.data}: ${request}`,
                   grounds: '継続する依頼を時間起点として持つ判断',
                 }
-              : {
-                  type: 'decision',
-                  decision:
-                    `定期の依頼を置き換えようとしている: ${parsedKind.data}: ` +
-                    `置き換え前（${describeScheduleSpec(previous.spec)}）「${previous.request}」→ ` +
-                    `置き換え後（${describeScheduleSpec(parsedSpec.data)}）「${request}」`,
-                  grounds: '同じ kind の依頼を置き換える判断（置き換え前の本文と周期は日誌に残す）',
-                },
+              : scheduleReplaceEntry({
+                  kind: parsedKind.data,
+                  previous,
+                  next: { request, spec: parsedSpec.data },
+                }),
             'act-not-performed',
           );
           replaceEntryId = previous === null ? undefined : attemptEntry.id;
