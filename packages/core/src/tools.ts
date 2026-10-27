@@ -1146,6 +1146,8 @@ const MANAGER_ANSWER_MESSAGE_EXCERPT = 200;
 
 const SCHEDULE_LIST_BUDGET = 8_000;
 const SCHEDULE_REQUEST_EXCERPT = 200;
+// `schedule_create` が、読んだ後に版が変わって書き込みが衝突したとき読み直す回数（上限が無いと、書き換え続ける相手と無限に競る）
+const SCHEDULE_CREATE_ATTEMPTS = 3;
 const SCHEDULE_PAGE = 8_000;
 
 // 取れないときも黙って行を消さない: scheduler が渡っていない（配線の欠落）と未反映（一時的）を文言で分ける
@@ -4853,6 +4855,7 @@ export function createCloneTools(context: ToolContext) {
         '時刻が来れば必ずあなたの受信箱へ届き、そのとき依頼の本文と前回動いた時刻が一緒に渡る。',
         '記憶に書くのは判断の根拠であって、記憶は時計を持たない。継続する依頼はここにも置くこと。',
         '同じ kind で呼べば置き換わる（周期や本文の直しはこれで行う）。',
+        '置き換えたときは、応答が置き換え前の本文と周期を言い、置き換え前の本文は日誌にも逐語で残る。',
         // 予約名は `RESERVED_SCHEDULE_KINDS` から導出する: 手で書き写すと既定の刻みが増えたときここだけ古くなるため
         `既定の定期ジョブの名前（${RESERVED_SCHEDULE_KINDS.join(' / ')}）は使えない——別の名前を付けること。`,
         `既定の刻みそのもの（締め時刻・間隔）はデーモンの設定で決まる（${describeReservedScheduleKindEnvKeys()}）ので、変えたいなら人間に頼むこと。`,
@@ -4934,89 +4937,117 @@ export function createCloneTools(context: ToolContext) {
 
         const now = new Date().toISOString();
 
-        // 日誌を先に書く: 書けなければ仕込まずに道具のエラーで返すため
-        await appendJournalOrThrow(
-          'schedule_create',
-          stores.journal,
-          {
-            type: 'decision',
-            decision: `定期の依頼を設定しようとしている: ${parsedKind.data}: ${request}`,
-            grounds: '継続する依頼を時間起点として持つ判断',
-          },
-          'act-not-performed',
-        );
-
-        // 編集は `editRequest`、新規作成だけ `put`: 読んでから書く間に定期発火の `claimRun` が割り込むと、その印を消す lost update になるため
-        let edited: ScheduledRequest | null;
-        try {
-          edited = await stores.schedules.editRequest(
-            parsedKind.data,
-            { request, spec: parsedSpec.data },
-            now,
-          );
-        } catch (error) {
-          // 読めない行は例外のまま落とさず、理由の分かる文で返す
-          const unreadable = error instanceof UnreadableScheduleError;
-          await appendJournalOrDrop('schedule_create', stores.journal, {
-            type: 'decision',
-            decision: unreadable
-              ? `定期の依頼を設定できなかった（読めない形で入っている）: ${parsedKind.data}: ${request}`
-              : `定期の依頼を設定できなかった: ${parsedKind.data}: ${request}`,
-            grounds: unreadable
-              ? '継続する依頼を時間起点として持とうとしたが、その kind の行が読めないので書いていない'
-              : '継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した',
-          });
-          if (unreadable) return text(describeUnreadableScheduleEdit(error));
-          throw error;
-        }
-        let plan: ScheduledRequest;
-        if (edited !== null) {
-          plan = edited;
-        } else {
-          plan = {
-            kind: parsedKind.data,
-            spec: parsedSpec.data,
-            request,
-            createdAt: now,
-            updatedAt: now,
-          };
+        // 置き換えの旧値は、書く直前に読んだ行の版（`ifMatch`）で書き込みへ結びつける: 日誌に残した本文と実際に上書きされる本文を同じものにするため。
+        // 読んだ後に版が変わっていたら先の行を打ち消して読み直す（`removeScheduleJournalFirst` と同じ考え方）。
+        // 新規作成は「無いときだけ」（`ifMatch: null`）で書く: `editRequest` が「無い」と答えてから書くまでに同じ名前が作られていたら、
+        // 無条件の `put` はその依頼を丸ごと置き換え、引き受け中の発火の印（`pendingRun`）まで消すため。作られていたら同じ kind として置き換える
+        const changes = { request, spec: parsedSpec.data };
+        let plan: ScheduledRequest | undefined;
+        let previous: ScheduledRequest | null = null;
+        let replaceEntryId: string | undefined;
+        for (let attempt = 1; plan === undefined; attempt += 1) {
+          // 読めない行は `null` のまま進める: `editRequest` が `UnreadableScheduleError` を投げ、下で理由の分かる文にする
           try {
-            // 「無いときだけ作る」（`ifMatch: null`）で書く: `editRequest` が「無い」と答えてから書くまでに同じ名前が作られていたら、
-            // 無条件の `put` はその依頼を丸ごと置き換え、引き受け中の発火の印（`pendingRun`）まで消すため。
-            // 作られていたら、道具の説明どおり同じ kind として置き換える（`editRequest` は発火の印を引き継ぐ）
-            try {
-              await stores.schedules.put(plan, { ifMatch: null });
-            } catch (error) {
-              if (!(error instanceof ScheduleConflictError)) throw error;
-              const replaced = await stores.schedules.editRequest(
-                parsedKind.data,
-                { request, spec: parsedSpec.data },
-                now,
-              );
-              // 作られた依頼がもう消えていた（同時に外された）: そのまま作る
-              if (replaced === null) await stores.schedules.put(plan, { ifMatch: null });
-              else plan = replaced;
+            previous = await stores.schedules.get(parsedKind.data);
+          } catch (error) {
+            if (!(error instanceof UnreadableScheduleError)) throw error;
+            previous = null;
+          }
+
+          // 日誌を先に書く: 書けなければ仕込まずに道具のエラーで返すため。置き換えるときは旧本文・旧周期を逐語で残す（置き換えると行から消える）
+          const attemptEntry = await appendJournalOrThrow(
+            'schedule_create',
+            stores.journal,
+            previous === null
+              ? {
+                  type: 'decision',
+                  decision: `定期の依頼を設定しようとしている: ${parsedKind.data}: ${request}`,
+                  grounds: '継続する依頼を時間起点として持つ判断',
+                }
+              : {
+                  type: 'decision',
+                  decision:
+                    `定期の依頼を置き換えようとしている: ${parsedKind.data}: ` +
+                    `置き換え前（${describeScheduleSpec(previous.spec)}）「${previous.request}」→ ` +
+                    `置き換え後（${describeScheduleSpec(parsedSpec.data)}）「${request}」`,
+                  grounds: '同じ kind の依頼を置き換える判断（置き換え前の本文と周期は日誌に残す）',
+                },
+            'act-not-performed',
+          );
+          replaceEntryId = previous === null ? undefined : attemptEntry.id;
+
+          // 編集は `editRequest`、新規作成だけ `put`: 読んでから書く間に定期発火の `claimRun` が割り込むと、その印を消す lost update になるため
+          try {
+            const edited = await stores.schedules.editRequest(parsedKind.data, changes, now, {
+              ifMatch: previous?.updatedAt ?? null,
+            });
+            if (edited !== null) {
+              plan = edited;
+            } else {
+              const created: ScheduledRequest = {
+                kind: parsedKind.data,
+                spec: parsedSpec.data,
+                request,
+                createdAt: now,
+                updatedAt: now,
+              };
+              await stores.schedules.put(created, { ifMatch: null });
+              plan = created;
             }
           } catch (error) {
+            const unreadable = error instanceof UnreadableScheduleError;
+            const conflict = error instanceof ScheduleConflictError;
+            if (conflict && attempt < SCHEDULE_CREATE_ATTEMPTS) {
+              await appendJournalOrDrop('schedule_create', stores.journal, {
+                type: 'decision',
+                decision: `直前の定期の依頼の設定の行は効いていない（${parsedKind.data} は書き換えていない）。理由: 読んだ後に同じ kind が別の書き手に変えられていた`,
+                grounds:
+                  '日誌を先に書いたが、依頼の書き込みが実行されなかったため打ち消して読み直す',
+              });
+              continue;
+            }
+            // 読めない行は例外のまま落とさず、理由の分かる文で返す
             await appendJournalOrDrop('schedule_create', stores.journal, {
               type: 'decision',
-              decision: `定期の依頼を設定できなかった: ${parsedKind.data}: ${request}`,
-              grounds: '継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した',
+              decision: unreadable
+                ? `定期の依頼を設定できなかった（読めない形で入っている）: ${parsedKind.data}: ${request}`
+                : `定期の依頼を設定できなかった: ${parsedKind.data}: ${request}`,
+              grounds: unreadable
+                ? '継続する依頼を時間起点として持とうとしたが、その kind の行が読めないので書いていない'
+                : '継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した',
             });
-            if (error instanceof UnreadableScheduleError)
-              return text(describeUnreadableScheduleEdit(error));
+            if (unreadable) return text(describeUnreadableScheduleEdit(error));
+            if (conflict) {
+              return text(
+                `${parsedKind.data} は書き込みの直前に別の書き手に変えられ続けたので、設定していない。` +
+                  'schedule_list で確かめてから、もう一度 schedule_create を試すこと。',
+              );
+            }
             throw error;
           }
         }
         await appendJournalOrDrop('schedule_create', stores.journal, {
           type: 'decision',
           decision:
-            `${edited !== null ? '定期の依頼を直した' : '定期の依頼を仕込んだ'}: ` +
+            `${previous !== null ? '定期の依頼を直した' : '定期の依頼を仕込んだ'}: ` +
             `${plan.kind}（${describeScheduleSpec(plan.spec)}）: ${request}`,
           grounds: '継続する依頼を時間起点として持つ判断',
         });
+        // 新規作成の応答は変えない
+        if (previous === null) {
+          return text(
+            `${plan.kind} を ${describeScheduleSpec(plan.spec)} で仕込んだ。時刻が来たら依頼の本文とともに届く。`,
+          );
+        }
+        const oldRequest = excerpt(previous.request, SCHEDULE_REQUEST_EXCERPT);
+        const truncated = oldRequest !== previous.request;
         return text(
-          `${plan.kind} を ${describeScheduleSpec(plan.spec)} で仕込んだ。時刻が来たら依頼の本文とともに届く。`,
+          `${plan.kind} は既に在ったので置き換えた（${describeScheduleSpec(plan.spec)} で仕込み直した）。` +
+            `置き換え前は ${describeScheduleSpec(previous.spec)}、依頼本文は「${oldRequest}」だった。` +
+            (truncated
+              ? `（本文は抜粋。置き換え前の全文は日誌に逐語で残してある: journal_read id=${replaceEntryId ?? ''}）`
+              : '（置き換え前の本文は日誌にも残してある）') +
+            '時刻が来たら新しい依頼の本文とともに届く。',
         );
       },
     ),
