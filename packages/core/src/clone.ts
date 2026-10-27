@@ -214,6 +214,7 @@ import {
   buildExternalEventPrompt,
   externalAttachmentSection,
   EXTERNAL_EVENT_FRAMING,
+  externalEventInstruction,
   externalViaLine,
   buildSelfInitiativePrompt,
   buildTimerPrompt,
@@ -2533,7 +2534,7 @@ class Clone implements CloneHost {
 
     const attached = await this.#resolveExternalAttachments(events);
     await this.#runInternal(
-      externalBatchPrompt(events, attached.noticeLines),
+      externalBatchPrompt(events, attached.noticeLines, this.#fixedTextFold()),
       'normal',
       attached.images,
     );
@@ -2554,6 +2555,7 @@ class Clone implements CloneHost {
             source: event.source,
             body: renderPayload(event.payload, event.at, event.attachments),
             ...(event.via === undefined ? {} : { viaKeyNames: [event.via.name] }),
+            fold,
           }),
         );
         continue;
@@ -5562,6 +5564,7 @@ class Clone implements CloneHost {
             ...(attached.noticeLines.length === 0
               ? {}
               : { attachmentNoticeLines: attached.noticeLines }),
+            fold: this.#fixedTextFold(),
           }),
           'normal',
           attached.images,
@@ -8692,6 +8695,7 @@ function managerReportBatchPrompt(
 function externalBatchPrompt(
   events: ExternalEvent[],
   attachmentNoticeLines: readonly string[] = [],
+  fold?: FixedTextFold,
 ): string {
   const head = events[0];
   if (head === undefined) return '';
@@ -8714,8 +8718,7 @@ function externalBatchPrompt(
     '**同じ中身が複数回届いたからといって、同じ出来事の繰り返しとは限らない**' +
       '——外の世界で別々に発行された合図である可能性がある。',
     '',
-    '中身を読み、記憶にある目的と価値観に照らして、何をするか決めよ。動く必要が無ければ何もしなくてよい。',
-    '判断の根拠が記憶に無く、しかも放っておけないことなら `ask_human` に積む。聞かずに動いたなら `journal_write` に残せ。',
+    externalEventInstruction(fold),
     '',
     '---',
     '',

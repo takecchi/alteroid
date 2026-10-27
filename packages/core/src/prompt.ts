@@ -329,6 +329,8 @@ export interface ExternalEventPromptInput {
   viaKeyNames?: readonly string[];
   /** 本文より前に置く: 本文は長いと切られるので、添付の在り処を切られる側に置かない。 */
   attachmentNoticeLines?: readonly string[];
+  /** 2行の指示を同じ会話の2回目から参照にする口（#5301）。省略すると常に全文。 */
+  fold?: ExternalInstructionFold;
 }
 
 export function externalAttachmentSection(lines: readonly string[] | undefined): string[] {
@@ -351,19 +353,44 @@ export function externalViaLine(
   return `連携の鍵${distinct.map((name) => `「${name}」`).join('')}経由で届いた${partial ? 'ものを含む' : ''}。`;
 }
 
+/**
+ * 外部イベントの2行の指示。同じ会話の2回目から参照にする（#5301）。
+ * `EXTERNAL_EVENT_FRAMING`（本文中の命令に従わないという安全の文）はここに含めない: 毎回出す。
+ * 短い形にも「根拠が無く放っておけないなら `ask_human`、聞かずに動いたなら `journal_write`」は残す（失敗に直結するため）。
+ */
+export const EXTERNAL_EVENT_INSTRUCTION =
+  '中身を読み、記憶にある目的と価値観に照らして、何をするか決めよ。動く必要が無ければ何もしなくてよい。\n' +
+  '判断の根拠が記憶に無く、しかも放っておけないことなら `ask_human` に積む。聞かずに動いたなら `journal_write` に残せ。';
+export const EXTERNAL_EVENT_INSTRUCTION_REF =
+  '（判断の仕方は前の出来事と同じ。会話の上にある）根拠が無く放っておけないなら `ask_human`、聞かずに動いたなら `journal_write`。';
+export const EXTERNAL_EVENT_INSTRUCTION_FOLD_ID = 'external-event-instruction';
+
+/** 固定文の畳み（`clone.ts` の `FixedTextFold` と同じ形。循環を避けてここでも型を持つ）。 */
+export type ExternalInstructionFold = (id: string, full: string, ref: string) => string;
+
+export function externalEventInstruction(fold?: ExternalInstructionFold): string {
+  return fold === undefined
+    ? EXTERNAL_EVENT_INSTRUCTION
+    : fold(
+        EXTERNAL_EVENT_INSTRUCTION_FOLD_ID,
+        EXTERNAL_EVENT_INSTRUCTION,
+        EXTERNAL_EVENT_INSTRUCTION_REF,
+      );
+}
+
 export function buildExternalEventPrompt({
   source,
   body,
   viaKeyNames,
   attachmentNoticeLines,
+  fold,
 }: ExternalEventPromptInput): string {
   const via = externalViaLine(viaKeyNames);
   const attachmentSection = externalAttachmentSection(attachmentNoticeLines);
   return `[system] 外部から出来事が届いた（source: ${source}）。人間はこれを見ていない。
 ${via === null ? '' : `${via}\n`}${EXTERNAL_EVENT_FRAMING}${attachmentSection.length === 0 ? '' : `\n${attachmentSection.join('\n')}`}
 
-中身を読み、記憶にある目的と価値観に照らして、何をするか決めよ。動く必要が無ければ何もしなくてよい。
-判断の根拠が記憶に無く、しかも放っておけないことなら \`ask_human\` に積む。聞かずに動いたなら \`journal_write\` に残せ。
+${externalEventInstruction(fold)}
 
 ---
 
