@@ -12,6 +12,7 @@ import {
   MEMORY_TIDY_TARGETS_BUDGET,
   describeMemoryTidyTargets,
   MEMORY_PROMPT_OUTLINE_BUDGET,
+  MEMORY_PROMPT_OUTLINE_HEADING_WIDTH,
   MEMORY_PROMPT_OMITTED_TAIL_BUDGET,
   MEMORY_TOC_CHAR_BUDGET,
   MEMORY_TOC_ENTRY_LIMIT,
@@ -5380,5 +5381,171 @@ describe('焼き込みの目次の行は文字数を載せない（道具の応�
     expect(rendered).toContain('予算で押し出された節');
     expect(rendered).not.toContain('いまは無い節');
     expect(rendered).not.toMatch(CHARS_SUFFIX);
+  });
+});
+
+describe('焼き込みの目次の見出しは、長いものだけ先頭から一定の幅で切る', () => {
+  const WIDTH = MEMORY_PROMPT_OUTLINE_HEADING_WIDTH;
+
+  // 先頭に連番を置く: 切った後（先頭 WIDTH-1 字）でも節どうしが区別できるため
+  const longHeading = (i: number, length: number): string =>
+    `${i}.`.padEnd(length, 'あ').slice(0, length);
+
+  const premiseOf = (slug: string, headings: readonly string[]): MemoryPart => ({
+    slug,
+    content:
+      '---\ntype: premise\ndescription: 要旨\n---\n' +
+      headings.map((heading) => `## ${heading}\n本文である。`).join('\n'),
+  });
+
+  const cardLines = (rendered: string): string[] =>
+    rendered.split('\n').filter((line) => /^\s*\[[0-9a-f]{8}-[0-9a-f]{8}\] /.test(line));
+
+  it('⭐ 幅ちょうどまでは切らず、1字でも超えたら（幅 − 1）字 + 「…」に切る', () => {
+    const exact = `## ${'あ'.repeat(WIDTH - 3)}`;
+    const over = `## ${'い'.repeat(WIDTH - 2)}`;
+    expect(exact.length).toBe(WIDTH);
+    expect(over.length).toBe(WIDTH + 1);
+    const doc: MemoryPart = {
+      slug: 'doc',
+      content: `---\ntype: premise\ndescription: 要旨\n---\n${exact}\n本文\n${over}\n本文\n`,
+    };
+    const [first, second] = scanMemorySections(doc.content).sections;
+    const rendered = renderMemoryDocuments([doc]);
+
+    expect(rendered).toContain(`[${first!.id}] ${exact}\n`);
+    expect(rendered).not.toContain(`${exact}…`);
+    expect(rendered).toContain(`[${second!.id}] ${over.slice(0, WIDTH - 1)}…`);
+    expect(rendered).not.toContain(over);
+  });
+
+  it('⭐ 切った行にも節id が残り、節id で本文を開く口は変わらない', () => {
+    const doc = premiseOf('doc', [longHeading(1, 200), longHeading(2, 150)]);
+    const sections = scanMemorySections(doc.content).sections;
+    const lines = cardLines(renderMemoryDocuments([doc]));
+
+    expect(lines).toHaveLength(2);
+    sections.forEach((section, index) => {
+      expect(lines[index]).toMatch(new RegExp(`^\\s*\\[${section.id}\\] .{1,${WIDTH - 1}}…$`));
+      expect(lookupMemorySection(sections, section.id).kind).toBe('found');
+    });
+  });
+
+  it('切った見出しの全文は memory_outline に出る', () => {
+    const doc = premiseOf('doc', [longHeading(1, 200)]);
+    const sections = scanMemorySections(doc.content).sections;
+
+    expect(renderMemoryOutline(sections)).toContain(`${sections[0]!.heading} — `);
+  });
+
+  it('⭐ 切った行が1本でもあるときだけ、カードが切ったことと全文の在処を言う', () => {
+    const NOTE = '見出しが長いものは … で切ってある。全文は memory_outline';
+    expect(renderMemoryDocuments([premiseOf('short', ['短い見出し'])])).not.toContain(NOTE);
+    expect(renderMemoryDocuments([premiseOf('long', ['短い', longHeading(1, 100)])])).toContain(
+      NOTE,
+    );
+  });
+
+  it('⭐ 見出しを切ると、予算に収まる節が増える', () => {
+    const headings = Array.from({ length: 200 }, (_, i) => longHeading(i, 150));
+    const doc = premiseOf('long', headings);
+    const untruncated = fillListingBudget(
+      scanMemorySections(doc.content).sections.map(
+        (section) => `${'  '.repeat(section.depth - 1)}[${section.id}] ${section.heading}`,
+      ),
+      MEMORY_PROMPT_OUTLINE_BUDGET,
+    );
+    const fit = measurePremiseOutlineFit(doc);
+
+    expect(untruncated.rest).toBeGreaterThan(0);
+    expect(fit).not.toBeNull();
+    expect(fit!.shown).toBeGreaterThan(untruncated.shown);
+  });
+
+  it('⭐⭐ 押し出し判定は、切った見出しでも節を取り違えない（押し出された節が名指しされる）', () => {
+    const base = Array.from({ length: 200 }, (_, i) => longHeading(i, 120));
+    const before = premiseOf('doc', base);
+    const after = premiseOf('doc', [
+      ...base,
+      ...Array.from({ length: 120 }, (_, i) => longHeading(1000 + i, 120)),
+    ]);
+    const idsIn = (text: string): Set<string> =>
+      new Set([...text.matchAll(/\[([0-9a-f]{8}-[0-9a-f]{8})\]/g)].map((match) => match[1]!));
+    const vanished = [...idsIn(renderMemoryDocuments([before]))].filter(
+      (id) => !idsIn(renderMemoryDocuments([after])).has(id),
+    );
+    expect(vanished.length).toBeGreaterThan(0);
+
+    const rendered = renderMemoryDocuments([after], {
+      seenContent: new Map([[after.slug, before.content]]),
+    });
+
+    expect(rendered).toContain(`予算で押し出された節: ${vanished.length} 節`);
+    expect(rendered).not.toContain('いまは無い節');
+    expect(rendered).not.toContain('判定できない節');
+    expect(vanished.some((id) => idsIn(rendered).has(id))).toBe(true);
+  });
+
+  it('切った見出しが同じ先頭を共有する節は「判定できない」と名乗る（取り違えて断定しない）', () => {
+    const shared = 'あ'.repeat(WIDTH + 20);
+    const tail = (n: number) => `${shared}${n}`;
+    const filler = Array.from({ length: 60 }, (_, i) => `節${i}`);
+    const before = premiseOf('doc', [...filler, tail(1)]);
+    const after = premiseOf('doc', [...filler, tail(2), tail(3)]);
+
+    const rendered = renderMemoryDocuments([after], {
+      seenContent: new Map([[after.slug, before.content]]),
+    });
+
+    expect(rendered).not.toContain('押し出された節');
+    expect(rendered).toContain('判定できない節: 1 節');
+  });
+});
+
+describe('合成した本番相当の記憶（4 文書）で、各変更が焼き込みの字数を減らす', () => {
+  // 33・54・25・56 節。見出し長は 60〜200 字で平均 130 字前後、要旨は 1,000〜3,000 字
+  const SECTION_COUNTS = [33, 54, 25, 56];
+  const DESCRIPTION_LENGTHS = [1_000, 2_200, 1_600, 3_000];
+
+  const corpus = (): MemoryPart[] =>
+    SECTION_COUNTS.map((count, docIndex) => {
+      const headings = Array.from({ length: count }, (_, i) => {
+        const length = 60 + ((i * 37 + docIndex * 11) % 141);
+        return `${docIndex}-${i}. `.padEnd(length, '規則の引用').slice(0, length);
+      });
+      return {
+        slug: `corpus-${docIndex}`,
+        content:
+          `---\ntype: premise\ndescription: ${'要'.repeat(DESCRIPTION_LENGTHS[docIndex]!)}\n---\n` +
+          headings.map((heading) => `## ${heading}\n${'本文'.repeat(30)}`).join('\n'),
+      };
+    });
+
+  const shownLineChars = (lines: readonly string[]): number =>
+    lines.reduce((sum, line) => sum + line.length, 0);
+
+  it('⭐ 文字数を外した効果と、見出しを切った効果が、それぞれ 0 ではない', () => {
+    const docs = corpus();
+    const rendered = renderMemoryDocuments(docs);
+    const renderedLines = rendered
+      .split('\n')
+      .filter((line) => /^\s*\[[0-9a-f]{8}-[0-9a-f]{8}\] /.test(line));
+
+    let withCharsAndFull = 0;
+    let withoutCharsFull = 0;
+    for (const doc of docs) {
+      for (const section of scanMemorySections(doc.content).sections) {
+        const base = `${'  '.repeat(section.depth - 1)}[${section.id}] `;
+        const suffix = ` — ${section.chars.toLocaleString('en-US')} 文字`;
+        withCharsAndFull += (base + section.heading + suffix).length;
+        withoutCharsFull += (base + section.heading).length;
+      }
+    }
+    const withoutCharsTruncated = shownLineChars(renderedLines);
+
+    expect(renderedLines.length).toBeGreaterThan(0);
+    expect(withCharsAndFull - withoutCharsFull).toBeGreaterThan(0);
+    expect(withoutCharsFull - withoutCharsTruncated).toBeGreaterThan(0);
+    expect(rendered).not.toMatch(/ — [\d,]+ 文字/);
   });
 });

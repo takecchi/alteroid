@@ -1003,15 +1003,24 @@ function renderPremiseCard(part: MemoryPart): string {
 
   // 1行の形は1回だけ組む: 断り書きも同じ行を名指しに使うので、2回組むと目次に載っている行と落ちたと名乗る行が別々の計算になりうるため
   const items = memorySectionLines(sections, sections, 'prompt');
+  // 断り書きには切った後の見出しを渡す: 固定費を「行の長さ − 見出しの長さ」で引き算するので、全文の長さを渡すと狂うため
+  const displaySections = sections.map((section) => ({
+    ...section,
+    heading: truncateOutlineHeading(section.heading),
+  }));
   const listing = renderListing(items, {
     budget: MEMORY_PROMPT_OUTLINE_BUDGET,
-    omitted: (part) => renderPremiseOutlineOmission(items, sections, part),
+    omitted: (part) => renderPremiseOutlineOmission(items, displaySections, part),
   });
+  const anyTruncated = sections.some(
+    (section) => truncateOutlineHeading(section.heading) !== section.heading,
+  );
 
   return [
     head,
     summaryLine,
     '節（memory_section_read に節id を渡せば本文が開く。文字数（子込み）は memory_outline で見られる）:',
+    ...(anyTruncated ? ['見出しが長いものは … で切ってある。全文は memory_outline。'] : []),
     listing,
   ].join('\n');
 }
@@ -1051,6 +1060,18 @@ function renderIndexedCard(part: MemoryPart): string {
   return [head, summaryLine, sectionsLine].join('\n');
 }
 
+// 焼き込みの行の見出しの幅: 長い見出しは逐語の引用を含み、目次の予算の大半を食うため。節id は切らない（節を開く口は変わらない）
+export const MEMORY_PROMPT_OUTLINE_HEADING_WIDTH = 80;
+
+// 幅を超えるときだけ切る（幅 − 1 字 + 「…」）。サロゲートペアの上位だけが残ると壊れた文字になるので、そのときは1字手前で切る
+function truncateOutlineHeading(heading: string): string {
+  if (heading.length <= MEMORY_PROMPT_OUTLINE_HEADING_WIDTH) return heading;
+  let cut = heading.slice(0, MEMORY_PROMPT_OUTLINE_HEADING_WIDTH - 1);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${cut}…`;
+}
+
 // 行から見出しの候補を返す（先に試すものから）: 焼き込みの行（文字数なし）と道具の行（`— N 文字` 付き）の両方を読める。
 // 見出しが `— N 文字` で終わる節と区別が付かないので、末尾を外さない読みを先に置く
 function parseOutlineLineHeadings(line: string): string[] | null {
@@ -1075,9 +1096,12 @@ function classifyDroppedOutlineLines(
 } {
   const byHeading = new Map<string, MemorySection[]>();
   for (const section of currentSections) {
-    const list = byHeading.get(section.heading);
-    if (list) list.push(section);
-    else byHeading.set(section.heading, [section]);
+    // 行に出る形（切った後）でも引けるようにする: 切った見出しは行から全文へ戻せないので、前方一致の代わりに切った後の形で突き合わせる
+    for (const key of new Set([section.heading, truncateOutlineHeading(section.heading)])) {
+      const list = byHeading.get(key);
+      if (list) list.push(section);
+      else byHeading.set(key, [section]);
+    }
   }
   // 節ごとに単独で `memorySectionLines` を呼び直さない: id の衝突マーカーは文書全体を見て初めて正しく判定できるため
   const currentLineBySectionId = new Map<string, string>();
@@ -2159,7 +2183,7 @@ export type MemoryOutlineSide = (typeof MEMORY_OUTLINE_SIDES)[number];
 // 予算と省略の文言は共有しない: 道具は `side` で反対側を出せるが焼き込みは1回しか描かず、省いたときに何をすればよいかが違うため
 // 重複は `allSections`（文書の全節）で数える: 出す範囲（offset・q の窓）の中だけで数えると、窓の外に同じ id の節があっても印が付かず、
 // memory_section_move（全節で一意かを見る）に断られる id を使えると読ませるため
-// 'tool' は道具の応答の行（文字数あり）、'prompt' は毎ターンの焼き込みの行（文字数なし）。
+// 'tool' は道具の応答の行（文字数あり・見出しは全文）、'prompt' は毎ターンの焼き込みの行（文字数なし・長い見出しは切る）。
 // 道具の応答の形は変えない: 全文と文字数を見たい読み手は memory_outline へ来るため
 type OutlineLineForm = 'tool' | 'prompt';
 
@@ -2177,7 +2201,7 @@ function memorySectionLines(
     const indent = '  '.repeat(section.depth - 1);
     const ambiguous = (counts.get(section.id) ?? 0) > 1 ? OUTLINE_AMBIGUOUS_MARKER : '';
     return form === 'prompt'
-      ? `${indent}[${section.id}] ${section.heading}${ambiguous}`
+      ? `${indent}[${section.id}] ${truncateOutlineHeading(section.heading)}${ambiguous}`
       : `${indent}[${section.id}] ${section.heading} — ${formatMemoryCharCount(section.chars)} 文字${ambiguous}`;
   });
 }
