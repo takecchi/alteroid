@@ -13729,6 +13729,83 @@ describe('システムプロンプトの道具一覧', () => {
     const missing = CLONE_TOOL_NAMES.filter((name) => !(section ?? '').includes(`\`${name}\``));
     expect(missing).toEqual([]);
   });
+
+  it('索引として短いまま（道具の説明と同じ内容をプロンプトへ重ねて書き戻さない。#5288）', () => {
+    const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+    const section = prompt.split('# 道具')[1]?.split('# 委譲')[0] ?? '';
+    expect(section.length).toBeLessThanOrEqual(4500);
+  });
+
+  it('プロンプトに1か所だけ残した、複数の道具にまたがる・人間の安全に関わる規則が在る', () => {
+    const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+    const section = prompt.split('# 道具')[1]?.split('# 委譲')[0] ?? '';
+    // 資格・鍵を人間へ渡さない（file_put / reply_attach / conversation_post の attachments をまたぐ）
+    expect(section).toContain('資格・鍵を含むファイル');
+    // token_list: 枠を理由に仕事を見送らない
+    expect(section).toContain('枠を理由に仕事を見送らないこと');
+    // 委譲の報告は起点の会話へ（conversation_post と manager_list をまたぐ）
+    expect(section).toContain('その委譲の起点の会話へ書く');
+    // 人間が書いた記憶を統合の走行から守る（memory_* をまたぐ）
+    expect(section).toContain('人間が一度でも書いた文書');
+    // 台帳は順序を持たない
+    expect(section).toContain('順序は持たない');
+    // 記号・指示語の指す先は推測で埋めず conversation_read を引く
+    expect(section).toContain('推測で埋めずにここを引くこと');
+    // 実行される定義ではない（practice_*）
+    expect(section).toContain('実行される定義ではない');
+  });
+});
+
+// #5288: プロンプトの「# 道具」から外した、道具1つの使い方の規則。外した行の正本は道具の説明文である。
+// プロンプトが索引へ縮んでも規則が読まれなくなっていないことを、説明文の側で固定する
+describe('プロンプトの索引から外した規則は、道具の説明文に在る（#5288）', () => {
+  function descriptionOf(tool: string): string {
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    return tools.find((entry) => entry.name === tool)?.description ?? '';
+  }
+
+  const RULES: readonly (readonly [tool: string, phrase: string])[] = [
+    ['memory_delete', '部分削除ではない'],
+    ['memory_delete', '消した事実は日誌に残る'],
+    ['memory_delete', '人間が一度でも書いた文書・履歴の無い文書は消せない'],
+    ['memory_write', '人間が手で書いた記述を、整形の都合で消さないこと'],
+    ['memory_frontmatter_set', '本文には一切触れない'],
+    ['memory_frontmatter_set', '人間が一度でも書いた文書・履歴の無い文書には使えない'],
+    ['memory_outline', '本文は1文字も返さない'],
+    ['memory_section_read', '読めなかった節id は理由ごとに分けて言う'],
+    ['memory_section_move', '本文はこの呼び出しにも応答にも一度も現れない'],
+    ['memory_section_move', 'この口だけは、統合の走行（distill）からでも'],
+    ['journal_read', 'until を指定しないと最新分しか見えない'],
+    ['journal_read', 'context_window_failure'],
+    ['conversation_read', 'ask_human への人間の回答は、この道具では出ない'],
+    ['conversation_read', 'speaker: "human"'],
+    ['attachment_fetch', '中身は記憶にも日誌にも写さない'],
+    ['file_put', '資格・鍵を含むファイルは入れない'],
+    ['file_put', '1時間で消える'],
+    ['reply_attach', '資格・鍵を含むファイルは添えないこと'],
+    ['conversation_post', 'いまのターンの会話へは書けない'],
+    ['conversation_post', 'ask_human を使うこと'],
+    ['approval_withdraw', 'manager_send（decision 付き）'],
+    ['usage_read', '「取れなかった」と「0」は分けて出る'],
+    ['commitment_edit', '`origin` が `self`'],
+    ['commitment_close_many', '`dryRun: false` を明示'],
+    ['inbox_remove_many', '`human_message` / `human_answer`'],
+    ['progress_read', '`github_observation_record`'],
+    ['practice_write', '実行される定義ではない'],
+    ['practice_remove', '先に practice_read で読んで'],
+    ['token_list', '書き込みは無い'],
+    ['archive_remove', 'overrideReason'],
+    ['manager_list', 'manager_report で取ること'],
+  ];
+
+  it.each(RULES)('%s の説明文に「%s」が在る', (tool, phrase) => {
+    expect(descriptionOf(tool)).toContain(phrase);
+  });
 });
 
 describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELESS_CLONE_TOOLS）', () => {
