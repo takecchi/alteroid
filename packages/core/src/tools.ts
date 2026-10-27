@@ -5411,7 +5411,7 @@ export function createCloneTools(context: ToolContext) {
                     const shownOrderNote = effectiveOrder === 'newest' ? '新しい順に' : '古い順に';
                     return (
                       `…ほか ${rest} 件は省略（${scopeNote}${countNote}、${shownOrderNote} ${shown} 件だけ` +
-                      `出した。${directionNote}続きは commitment_list cursor=${nextCursor} で取れる` +
+                      `出した。${directionNote}続きは commitment_list cursor=${nextCursor} で取れる。` +
                       `includeClosed=${includeClosed === true} / order=${effectiveOrder} のまま呼ぶこと）。`
                     );
                   },

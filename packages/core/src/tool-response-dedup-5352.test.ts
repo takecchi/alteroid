@@ -126,6 +126,79 @@ describe('commitment_list は全文の取り方を末尾の1か所で言い、�
     expect(omittedLine.endsWith('）。')).toBe(true);
   });
 
+  // 文の切れ目と括弧の対応を、省略の行の全文で固定する（末尾の「）。」だけ見ると、語のくっつきを見逃す）
+  const OMITTED_LINE_CASES = [
+    {
+      args: {},
+      scope: '',
+      count: '未了は 60 件あり',
+      order: '古い順に',
+      direction: '省いたのは、これより新しい依頼である。',
+      flags: 'includeClosed=false / order=oldest',
+    },
+    {
+      args: { order: 'newest' },
+      scope: '',
+      count: '未了は 60 件あり',
+      order: '新しい順に',
+      direction: '省いたのは、これより古い依頼である。',
+      flags: 'includeClosed=false / order=newest',
+    },
+    {
+      args: { includeClosed: true },
+      scope: '',
+      count: '片付けた分を含めて 60 件あり',
+      order: '古い順に',
+      direction: '省いたのは、未了ならこれより新しい依頼、片付いた分ならこれより古い記録である。',
+      flags: 'includeClosed=true / order=oldest',
+    },
+    {
+      args: { includeClosed: true, order: 'newest' },
+      scope: '',
+      count: '片付けた分を含めて 60 件あり',
+      order: '新しい順に',
+      direction: '省いたのは、未了ならこれより古い依頼、片付いた分ならこれより新しい記録である。',
+      flags: 'includeClosed=true / order=newest',
+    },
+    {
+      args: { origin: ['human'], q: 'あ' },
+      scope: 'origin: human / q: "あ" に絞った、',
+      count: '未了は 60 件あり',
+      order: '古い順に',
+      direction: '省いたのは、これより新しい依頼である。',
+      flags: 'includeClosed=false / order=oldest',
+    },
+  ];
+
+  it.each(OMITTED_LINE_CASES)(
+    '予算で省いた行は、文の切れ目と括弧が正しい1行になる（$flags $scope）',
+    async ({ args, scope, count: countNote, order, direction, flags }) => {
+      const h = harness();
+      for (let n = 0; n < 60; n += 1) {
+        await h.stores.commitments.open({
+          id: `c-${String(n).padStart(3, '0')}`,
+          at: `2026-04-01T00:${String(n).padStart(2, '0')}:00.000Z`,
+          origin: 'human',
+          body: `${n}:${'あ'.repeat(COMMITMENT_BODY_LIMIT)}`,
+        });
+      }
+      const reply = await h.call('commitment_list', args);
+      const line = reply.split('\n').find((entry) => entry.startsWith('…ほか'))!;
+      const parsed =
+        /^…ほか (\d+) 件は省略.* (\d+) 件だけ出した。.*cursor=([A-Za-z0-9\-_]+) で取れる。/.exec(
+          line,
+        )!;
+      const rest = Number(parsed[1]);
+      const shown = Number(parsed[2]);
+      expect(rest + shown).toBe(60);
+      expect(line).toBe(
+        `…ほか ${rest} 件は省略（${scope}${countNote}、${order} ${shown} 件だけ出した。` +
+          `${direction}続きは commitment_list cursor=${parsed[3]} で取れる。` +
+          `${flags} のまま呼ぶこと）。`,
+      );
+    },
+  );
+
   it('切れていない応答にも、全文の取り方は従来どおり1回出る', async () => {
     const h = harness();
     await h.stores.commitments.open({
