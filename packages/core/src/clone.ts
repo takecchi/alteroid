@@ -5344,10 +5344,11 @@ class Clone implements CloneHost {
           `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
           `${selectionsLine}${viaLine}${waiting}\n\n` +
           'この回答に沿って続きを進めよ。\n\n' +
-          // 「必要なら」で写すかを任せない（#5125 c30-2）: 承認への答えは人間の判断の合図で最も濃いのに、基準として記憶へ写されず、同じ種類の確認を何度も人間へ上げていたため
-          'この回答は、同じ種類の確認が次に来たときにあなたが自分で決めるための材料である。' +
-          '拒否・条件付き・理由付きの答えなら、結論だけでなく理由と条件を、どの種類の確認に効く基準かが分かる言葉に言い換えて記憶へ書くこと。' +
-          '基準が読み取れないなら、推測で書かずに人間に訊くこと。';
+          this.#fixedTextFold()(
+            'human-answer-criteria',
+            HUMAN_ANSWER_CRITERIA_GUIDE,
+            HUMAN_ANSWER_CRITERIA_GUIDE_REF,
+          );
         // 入口の行にも印を立てる: `traceApproval` の錨で、本文の `approvalId=<id>` は64字で切られうるため、錨は構造化した欄に持たせる
         const turnStart = turnInputEntry({
           type: 'human_answer',
@@ -8574,6 +8575,16 @@ export type ManagerOrigin =
 export function originConversationIdOf(origin: ManagerOrigin): string | null {
   return origin.kind === 'conversation' ? origin.conversationId : null;
 }
+
+// 「必要なら」で写すかを任せない（#5125 c30-2）: 承認への答えは人間の判断の合図で最も濃いのに、基準として記憶へ写されず、同じ種類の確認を何度も人間へ上げていたため
+// 同じ会話の2回目から参照にする（#5301）。ただし「拒否・条件付き・理由付きの答えは基準として記憶へ書く」「読み取れなければ訊く」は、人間の答えを受けたターンの基本動作なので短い形にも残す。
+// 畳むのは「材料である」という説明と、書き方の言い換えの詳細だけ。
+export const HUMAN_ANSWER_CRITERIA_GUIDE =
+  'この回答は、同じ種類の確認が次に来たときにあなたが自分で決めるための材料である。' +
+  '拒否・条件付き・理由付きの答えなら、結論だけでなく理由と条件を、どの種類の確認に効く基準かが分かる言葉に言い換えて記憶へ書くこと。' +
+  '基準が読み取れないなら、推測で書かずに人間に訊くこと。';
+export const HUMAN_ANSWER_CRITERIA_GUIDE_REF =
+  '（扱いは前の回答と同じ。会話の上にある）拒否・条件付き・理由付きの答えは、理由と条件を基準として記憶へ書くこと。読み取れなければ人間に訊くこと。';
 
 /** 起点の会話の扱いの説明（会話の id は畳まない。説明の括弧の中だけを、同じ会話の2回目から参照にする）。 */
 export const ORIGIN_CONVERSATION_GUIDE =
