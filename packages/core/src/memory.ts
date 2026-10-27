@@ -909,7 +909,6 @@ const MEMORY_MIN_HEADING_CHARS = 3;
 
 function renderPremiseOutlineOmission(
   items: readonly string[],
-  sections: readonly MemorySection[],
   { rest, shown, total }: { rest: number; shown: number; total: number },
 ): string {
   const dropped = items.slice(shown);
@@ -920,9 +919,27 @@ function renderPremiseOutlineOmission(
       `…（この上にさらに ${formatMemoryCharCount(above)} 節落ちている。全部は memory_outline の side=tail で見る）`,
   });
 
+  // 毎ターン焼かれるので、数と開き方と移す基準だけにする。仕組みと算術の説明は memory_outline の応答側（`renderPremiseOutlineOverflowNote`）
+  return [
+    `…末尾 ${formatMemoryCharCount(rest)} 節は目次から省略（全 ${formatMemoryCharCount(total)} 節のうち先頭 ` +
+      `${formatMemoryCharCount(shown)} 節だけ載せた）。` +
+      '落ちた末尾のうち直近の節（節id はそのまま memory_section_read に渡せる）:',
+    tail,
+    'memory_outline の side=tail（末尾）・q=<文字列>（見出しで絞る）・offset=<N>（窓をずらす）で残りの節id に届く。' +
+      '割るなら memory_section_move で付録へ。**移すのは済んだ経緯・失効した手順であって、末尾の新しい節ではない。**',
+  ].join('\n');
+}
+
+// 焼き込みの断り書きから移した説明: その文書の目次が premise の焼き込み予算を超えているときだけ memory_outline の応答に出す。
+// 焼き込みと同じ `memorySectionLines`・同じ予算・同じ `fillListingBudget` で数える: 別の計算にすると、焼き込みが省いた節数とこの説明が食い違うため
+function renderPremiseOutlineOverflowNote(sections: readonly MemorySection[]): string {
+  const items = memorySectionLines(sections);
+  const { rest, shown, total } = fillListingBudget(items, MEMORY_PROMPT_OUTLINE_BUDGET, false);
+  if (rest === 0) return '';
+
   const outlineChars = items.reduce((sum, item) => sum + item.length, 0);
   const shownChars = items.slice(0, shown).reduce((sum, item) => sum + item.length, 0);
-  const droppedChars = dropped.reduce((sum, item) => sum + item.length, 0);
+  const droppedChars = items.slice(shown).reduce((sum, item) => sum + item.length, 0);
   const headingChars = sections.reduce((sum, section) => sum + section.heading.length, 0);
   // 固定費は引き算で出す: 1行の形（`memorySectionLines`）が変わったときに、書き写した数だけが古くなるのを防ぐため
   const fixedChars = outlineChars - headingChars;
@@ -942,9 +959,7 @@ function renderPremiseOutlineOmission(
         `${formatMemoryCharCount(Math.round(headingChars / total))} 文字）まで縮める必要がある。`;
 
   return [
-    `…末尾 ${formatMemoryCharCount(rest)} 節は目次から省略（全 ${formatMemoryCharCount(total)} 節のうち先頭 ` +
-      `${formatMemoryCharCount(shown)} 節だけ載せた）。` +
-      '⚠ この文書は大きすぎて、目次すら毎ターンの焼き込みに収まっていない。' +
+    '⚠ この文書は大きすぎて、目次すら毎ターンの焼き込みに収まっていない。' +
       `節の目次は全 ${formatMemoryCharCount(total)} 節ぶんで ${formatMemoryCharCount(outlineChars)} 文字` +
       `（節の本文の総量ではない）——うち焼き込みに載った分 ${formatMemoryCharCount(shownChars)} 文字、` +
       `予算に入らず省いた分 ${formatMemoryCharCount(droppedChars)} 文字。` +
@@ -952,11 +967,8 @@ function renderPremiseOutlineOmission(
       '——目次の費用は1文書あたりの予算に張り付いていて、節を減らしても「載る節が入れ替わる」だけ' +
       `だからである。${formatMemoryCharCount(shown)} 節まで割り切った時点で省略が消え、この断り書きごと` +
       '床から落ちる——そこが節の移動が床に効き始める点である。',
-    '落ちた末尾のうち直近の節（節id はそのまま memory_section_read に渡せる。' +
-      '**足したばかりの節はここに出る**）:',
-    tail,
     arithmetic,
-    'memory_outline は side=tail で末尾も見られるほか、q=<文字列> で見出しを絞り込めば一致した節の節id へ直接届き、' +
+    'q=<文字列> で見出しを絞り込めば一致した節の節id へ直接届き、' +
       'offset=<N> で先頭から窓をずらして読むこともできる——後者は窓の大きさぶんずつ進めれば、' +
       'この文書がどれだけ大きくても全節の節id に有限回で届く（中央の節も含めて）。これらで残りを確かめてから、' +
       'memory_section_move で付録の文書へ割ること。**移すのは済んだ経緯・' +
@@ -965,7 +977,8 @@ function renderPremiseOutlineOmission(
       '——読んで確かめた末尾をそのまま移すと、いちばん新しい学びを fact へ追い出すことになる。' +
       '同じ理由で、q や offset で中央の節id が読めても、それをそのまま移してよいとは限らない——' +
       '何を移すかの基準（直上）は変わらない。',
-  ].join('\n');
+    // 1行にまとめる: 注記が複数行だと、行ごとに節の並びを読む呼び出し側（断り書きは穴の側の端の行に在る）が注記の行と並びの行を取り違えるため
+  ].join(' ');
 }
 
 function renderMemoryCardSummaryLine(description: string | undefined, budget: number): string {
@@ -1005,7 +1018,7 @@ function renderPremiseCard(part: MemoryPart): string {
   const items = memorySectionLines(sections);
   const listing = renderListing(items, {
     budget: MEMORY_PROMPT_OUTLINE_BUDGET,
-    omitted: (part) => renderPremiseOutlineOmission(items, sections, part),
+    omitted: (part) => renderPremiseOutlineOmission(items, part),
   });
 
   return [
@@ -2220,6 +2233,8 @@ export function renderMemoryOutline(
     typeof sideOrOptions === 'string' ? { side: sideOrOptions } : sideOrOptions;
   const side = options.side ?? 'head';
   const { q, offset } = options;
+  // 絞り込み後の節ではなく文書の全節で測る: 焼き込みが載せるのは文書の全節の目次のため。超えていなければ空で、行ごと出さない
+  const overflowNote = renderPremiseOutlineOverflowNote(sections);
 
   if (q === undefined && offset === undefined) {
     const items = memorySectionLines(sections);
@@ -2227,7 +2242,7 @@ export function renderMemoryOutline(
     // tail は `renderListingFromEnd` を通すだけにする: 向きが違うだけの予算のループがあちらに既に在るため
     const render = side === 'tail' ? renderListingFromEnd : renderListing;
     const budgetNote = renderMemoryOutlineBudgetNote();
-    return render(items, {
+    const listing = render(items, {
       budget: MEMORY_OUTLINE_BUDGET,
       omitted: ({ rest, shown, total }) =>
         side === 'tail'
@@ -2242,6 +2257,7 @@ export function renderMemoryOutline(
             '⚠中央（どちらの端からも予算の外に出る節）は、どちらの向きでも出ない。' +
             ` ${budgetNote}`,
     });
+    return overflowNote === '' ? listing : `${overflowNote}\n${listing}`;
   }
 
   let pool = sections;
@@ -2287,7 +2303,7 @@ export function renderMemoryOutline(
       ? `続きが在る。次は offset=${endIndex} で呼ぶこと` +
         '（窓の大きさぶんずつ進めれば、有限回で全節に届く）。'
       : '続きは無い（最後まで出した）。';
-    return [queryHeader, rangeLine, continuationLine, budgetNote, ...lines]
+    return [queryHeader, rangeLine, continuationLine, overflowNote, budgetNote, ...lines]
       .filter((line) => line !== '')
       .join('\n');
   }
@@ -2307,5 +2323,7 @@ export function renderMemoryOutline(
           'offset を併用すればこの絞り込みの先頭側も出せる）。'
         : `（末尾側の ${formatMemoryCharCount(omittedCount)} 節は予算で省略。` +
           'side=tail か offset を併用すれば続きが出せる）。';
-  return [`${queryHeader}${shownLabel}${remainderNote}`, budgetNote, ...lines].join('\n');
+  return [`${queryHeader}${shownLabel}${remainderNote}`, overflowNote, budgetNote, ...lines]
+    .filter((line) => line !== '')
+    .join('\n');
 }

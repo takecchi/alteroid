@@ -1849,7 +1849,7 @@ describe('premise のカードの束ねた蓋（MEMORY_PREMISE_CARD_BUDGET）—
   // 逐語で持つ: 定数を import して両側を一緒に動かさない。
   const DEMOTION_NOTE_HEAD = '<!-- memory: カードを落とした分（premise / indexed';
 
-  it('⭐⭐ doc の導出（premise 5枚 / indexed 9枚で収まり、6枚目の premise で噛む）が現物と一致する', () => {
+  it('⭐⭐ doc の導出（premise 6枚 / indexed 9枚で収まり、7枚目の premise で噛む）が現物と一致する', () => {
     const saturated = (index: number, kind: 'premise' | 'indexed'): MemoryPart => ({
       slug: `${kind}-${String(index).padStart(3, '0')}`,
       content: [
@@ -1868,13 +1868,13 @@ describe('premise のカードの束ねた蓋（MEMORY_PREMISE_CARD_BUDGET）—
       renderMemoryDocuments([saturated(0, kind), saturated(1, kind)]).length -
       renderMemoryDocuments([saturated(0, kind)]).length;
 
-    expect(Math.floor(MEMORY_PREMISE_CARD_BUDGET / marginal('premise'))).toBe(5);
+    expect(Math.floor(MEMORY_PREMISE_CARD_BUDGET / marginal('premise'))).toBe(6);
     expect(Math.floor(MEMORY_PREMISE_CARD_BUDGET / marginal('indexed'))).toBe(9);
 
-    const six = renderMemoryDocuments(
-      Array.from({ length: 6 }, (_, index) => saturated(index, 'premise')),
+    const seven = renderMemoryDocuments(
+      Array.from({ length: 7 }, (_, index) => saturated(index, 'premise')),
     );
-    expect(six).toContain(DEMOTION_NOTE_HEAD);
+    expect(seven).toContain(DEMOTION_NOTE_HEAD);
   });
 
   it('⭐⭐ 蓋は indexed のカードにも掛かる（indexed を蓋の外に置かない）', () => {
@@ -3371,8 +3371,11 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       });
 
       it('断り書きは穴が空いている側へ置く（既定は最後の行、tail は先頭の行）', () => {
-        const head = renderMemoryOutline(sectionsOf()).split('\n');
-        const tail = renderMemoryOutline(sectionsOf(), 'tail').split('\n');
+        // 400 節の文書は premise の焼き込み予算も超えるので、先頭に1行の注記が付く。それは断り書きではないので除いて端の行を見る
+        const withoutOverflowNote = (text: string): string[] =>
+          text.split('\n').filter((line) => !line.startsWith('⚠ この文書は大きすぎて'));
+        const head = withoutOverflowNote(renderMemoryOutline(sectionsOf()));
+        const tail = withoutOverflowNote(renderMemoryOutline(sectionsOf(), 'tail'));
 
         expect(head.at(-1)).toContain('節は省略');
         expect(head[0]).not.toContain('節は省略');
@@ -4661,6 +4664,10 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     return `---\ntype: premise\ndescription: 前提の要旨\n---\n${body}${extra}`;
   }
 
+  // memory_outline の既定の応答（焼き込みと同じ文書の節から描く）
+  const outlineOf = (content: string): string =>
+    renderMemoryOutline(scanMemorySections(content).sections);
+
   it('⭐ カードには本文が載らず、要旨・節の見出し・節id・文字数・開き方が載る', () => {
     const rendered = renderMemoryDocuments([
       {
@@ -4701,9 +4708,114 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     ]);
 
     expect(rendered).toContain('節は目次から省略');
-    expect(rendered).toContain('目次すら毎ターンの焼き込みに収まっていない');
     expect(rendered).toContain('memory_section_move');
     expect(rendered.length).toBeLessThan(MEMORY_PROMPT_OUTLINE_BUDGET * 2);
+    // 焼き込みには仕組みの説明を載せない（毎ターン読み直されるため）。説明は memory_outline の応答側にある
+    expect(rendered).not.toContain('目次すら毎ターンの焼き込みに収まっていない');
+    expect(outlineOf(`---\ntype: premise\ndescription: 大きい\n---\n${huge}`)).toContain(
+      '目次すら毎ターンの焼き込みに収まっていない',
+    );
+  });
+
+  // 焼き込みの断り書き: 落ちた末尾の一覧（`renderListingFromEnd` が組む）を除いた、断り書きそのものの文字数
+  const omissionNoteChars = (rendered: string): number => {
+    const start = rendered.indexOf('…末尾');
+    const tailStart = rendered.indexOf('落ちた末尾のうち直近の節');
+    const listingStart = rendered.indexOf('\n', tailStart) + 1;
+    const closingStart = rendered.indexOf('memory_outline の side=tail');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(tailStart).toBeGreaterThan(start);
+    expect(closingStart).toBeGreaterThan(listingStart);
+    return listingStart - start + (rendered.length - closingStart);
+  };
+
+  it('⭐⭐ 焼き込みの断り書きは短く（落ちた末尾の一覧を除いて 500 字以下）、節数・直近の節・開き方・移す基準が在る', () => {
+    const content =
+      `---\ntype: premise\ndescription: 大きい\n---\n` +
+      Array.from({ length: 33 }, (_, i) => `## ${i + 1}. ${'あ'.repeat(190)}\n本文`).join('\n');
+    const rendered = renderMemoryDocuments([{ slug: 'heosterra-dev', content }]);
+    const { sections } = scanMemorySections(content);
+    const fit = measurePremiseOutlineFit({ slug: 'heosterra-dev', content });
+    expect(fit).not.toBeNull();
+
+    // 節数: 全何節のうち何節が載り何節が省略か
+    expect(rendered).toContain(
+      `…末尾 ${fit!.rest} 節は目次から省略（全 ${fit!.total} 節のうち先頭 ${fit!.shown} 節だけ載せた）。`,
+    );
+    expect(fit!.total).toBe(sections.length);
+    // 直近の節: 落ちた末尾の最後の節が節id つきで載る
+    const last = sections[sections.length - 1]!;
+    expect(rendered).toContain(`[${last.id}] ${last.heading}`);
+    // 開き方と移す基準
+    expect(rendered).toContain('side=tail');
+    expect(rendered).toContain('q=<文字列>');
+    expect(rendered).toContain('offset=<N>');
+    expect(rendered).toContain('memory_section_move');
+    expect(rendered).toContain(
+      '移すのは済んだ経緯・失効した手順であって、末尾の新しい節ではない。',
+    );
+
+    expect(omissionNoteChars(rendered)).toBeLessThanOrEqual(500);
+  });
+
+  it('⭐⭐ 移した説明（仕組み・算術・⭐・side=tail の向き）は memory_outline の応答にあり、焼き込みには無い', () => {
+    const content =
+      `---\ntype: premise\ndescription: 大きい\n---\n` +
+      Array.from({ length: 33 }, (_, i) => `## ${i + 1}. ${'あ'.repeat(190)}\n本文`).join('\n');
+    const rendered = renderMemoryDocuments([{ slug: 'heosterra-dev', content }]);
+    const outline = outlineOf(content);
+    const moved = [
+      '1行の平均は',
+      '固定費',
+      '見出しを平均',
+      '節の目次は全 33 節ぶん',
+      '毎ターンの床はほとんど動かない',
+      'side=tail は末尾を**読む**ための向きであって',
+      '末尾を**移す**ための指示ではない',
+    ];
+    for (const phrase of moved) {
+      expect(outline, `outline に「${phrase}」が無い`).toContain(phrase);
+      expect(rendered, `焼き込みに「${phrase}」が残っている`).not.toContain(phrase);
+    }
+    // 他の経路（offset / q）でも同じ注記が付く
+    expect(renderMemoryOutline(scanMemorySections(content).sections, { offset: 5 })).toContain(
+      '毎ターンの床はほとんど動かない',
+    );
+    expect(renderMemoryOutline(scanMemorySections(content).sections, { q: '1.' })).toContain(
+      '毎ターンの床はほとんど動かない',
+    );
+  });
+
+  it('⭐ 焼き込みの予算に収まる文書の outline には、注記を1文字も出さない', () => {
+    const content = `---\ntype: premise\ndescription: 小さい\n---\n${Array.from({ length: 10 }, (_, i) => `## 節${i}\n本文`).join('\n')}`;
+    const outline = outlineOf(content);
+    expect(outline).not.toContain('焼き込み');
+    expect(outline).not.toContain('固定費');
+    expect(outline).not.toContain('毎ターンの床');
+    // 先頭行が節の行そのもの（何も前置きされない）
+    expect(outline.split('\n')[0]).toMatch(/^\s*\[[0-9a-f]{8}-[0-9a-f]{8}\] ## 節0 — /);
+    // 焼き込み側にも断り書きは出ていない（同じ判定線の反対側）
+    expect(renderMemoryDocuments([{ slug: 'small', content }])).not.toContain('目次から省略');
+  });
+
+  it('⭐ outline の注記が出る線は、焼き込みが省略を名乗る線と一致する（崖の前後）', () => {
+    const headingLength = 40;
+    const build = (n: number) =>
+      `---\ntype: premise\ndescription: d\n---\n` +
+      Array.from({ length: n }, (_, i) => `## ${i}. ${'あ'.repeat(headingLength)}\n本文`).join(
+        '\n',
+      );
+    const fit = measurePremiseOutlineFit({ slug: 'cliff', content: build(400) });
+    expect(fit).not.toBeNull();
+    const at = fit!.shown;
+    const noteIn = (n: number) =>
+      outlineOf(build(n)).includes('目次すら毎ターンの焼き込みに収まっていない');
+    const omittedIn = (n: number) =>
+      renderMemoryDocuments([{ slug: 'cliff', content: build(n) }]).includes('節は目次から省略');
+    expect(noteIn(at)).toBe(false);
+    expect(omittedIn(at)).toBe(false);
+    expect(noteIn(at + 1)).toBe(true);
+    expect(omittedIn(at + 1)).toBe(true);
   });
 
   it('⭐⭐ 目次が予算で切れた文書は、落ちた末尾の直近の節を節id つきで名指しする', () => {
@@ -4751,24 +4863,25 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       { length: 120 },
       (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
     ).join('\n');
-    const rendered = renderMemoryDocuments([
-      { slug: 'big', content: `---\ntype: premise\ndescription: 大きい\n---\n${huge}` },
-    ]);
+    const content = `---\ntype: premise\ndescription: 大きい\n---\n${huge}`;
+    const outline = outlineOf(content);
 
-    expect(rendered).toMatch(/1行の平均は \d+ 文字（うち節id と文字数の固定費が \d+ 文字）。/);
-    expect(rendered).toMatch(/見出しを平均 \d+ 文字（いま \d+ 文字）まで縮める必要がある。/);
+    expect(outline).toMatch(/1行の平均は \d+ 文字（うち節id と文字数の固定費が \d+ 文字）。/);
+    expect(outline).toMatch(/見出しを平均 \d+ 文字（いま \d+ 文字）まで縮める必要がある。/);
+    expect(renderMemoryDocuments([{ slug: 'big', content }])).not.toContain('1行の平均は');
   });
 
   // 達成不能な助言を出さない: 固定費は節数に比例し、節が増えると最短（`# x`）まで縮めても予算に入らない点を越える。そこで「縮めれば載る」は嘘になるので「割るしかない」と名乗る。
   it('🔴 見出しを最短まで縮めても載らない文書には「縮めれば載る」と言わず、割れと言う', () => {
     const many = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
-    const rendered = renderMemoryDocuments([
-      { slug: 'log', content: `---\ntype: premise\ndescription: 追記だけの文書\n---\n${many}` },
-    ]);
+    const content = `---\ntype: premise\ndescription: 追記だけの文書\n---\n${many}`;
+    const rendered = renderMemoryDocuments([{ slug: 'log', content }]);
+    const outline = outlineOf(content);
 
     expect(rendered).toContain('節は目次から省略');
-    expect(rendered).toContain('見出しを最短');
-    expect(rendered).toContain('割るしかない');
+    expect(outline).toContain('見出しを最短');
+    expect(outline).toContain('割るしかない');
+    expect(outline).not.toMatch(/まで縮める必要がある/);
     expect(rendered).not.toMatch(/まで縮める必要がある/);
   });
 
@@ -4780,7 +4893,9 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       Array.from({ length: 106 }, (_, i) => `${make(i + 1)}\n${'本文'.repeat(60)}`).join('\n');
 
     const before = renderMemoryDocuments([{ slug: 'rules', content: build(heading) }]);
-    const target = /見出しを平均 (\d+) 文字（いま \d+ 文字）まで縮める必要がある。/.exec(before);
+    const target = /見出しを平均 (\d+) 文字（いま \d+ 文字）まで縮める必要がある。/.exec(
+      outlineOf(build(heading)),
+    );
     expect(target).not.toBeNull();
     const limit = Number((target as RegExpExecArray)[1]);
 
@@ -4796,10 +4911,8 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     const claims: number[] = [];
     for (let n = 150; n <= 260; n += 1) {
       const body = Array.from({ length: n }, (_, i) => `# ${i}\n本`).join('\n');
-      const rendered = renderMemoryDocuments([
-        { slug: 'log', content: `---\ntype: premise\ndescription: d\n---\n${body}` },
-      ]);
-      const hit = /見出しを平均 (\d+) 文字（いま \d+ 文字）まで縮める必要がある。/.exec(rendered);
+      const outline = outlineOf(`---\ntype: premise\ndescription: d\n---\n${body}`);
+      const hit = /見出しを平均 (\d+) 文字（いま \d+ 文字）まで縮める必要がある。/.exec(outline);
       if (hit !== null) claims.push(Number(hit[1]));
     }
     expect(claims.length).toBeGreaterThan(0);
@@ -4813,22 +4926,14 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       { length: 120 },
       (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
     ).join('\n');
-    const nonInverted = renderMemoryDocuments([
-      {
-        slug: 'shrinkable',
-        content: `---\ntype: premise\ndescription: 大きい\n---\n${shrinkable}`,
-      },
-    ]);
+    const nonInverted = outlineOf(`---\ntype: premise\ndescription: 大きい\n---\n${shrinkable}`);
     expect(nonInverted).toMatch(/見出しを平均 \d+ 文字（いま \d+ 文字）まで縮める必要がある。/);
     expect(nonInverted).toContain(budgetPhrase);
 
     const unshrinkable = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
-    const inverted = renderMemoryDocuments([
-      {
-        slug: 'unshrinkable',
-        content: `---\ntype: premise\ndescription: 追記だけの文書\n---\n${unshrinkable}`,
-      },
-    ]);
+    const inverted = outlineOf(
+      `---\ntype: premise\ndescription: 追記だけの文書\n---\n${unshrinkable}`,
+    );
     expect(inverted).toContain('見出しを最短');
     expect(inverted).not.toMatch(/まで縮める必要がある。/);
     expect(inverted).toContain(budgetPhrase);
@@ -4845,12 +4950,7 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       { length: 120 },
       (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
     ).join('\n');
-    const nonInverted = renderMemoryDocuments([
-      {
-        slug: 'shrinkable-total',
-        content: `---\ntype: premise\ndescription: 大きい\n---\n${shrinkable}`,
-      },
-    ]);
+    const nonInverted = outlineOf(`---\ntype: premise\ndescription: 大きい\n---\n${shrinkable}`);
     expect(nonInverted).toMatch(/見出しを平均 \d+ 文字（いま \d+ 文字）まで縮める必要がある。/);
     expect(nonInverted).toContain(totalNamingPhrase);
     expect(nonInverted).toContain(notBodyPhrase);
@@ -4862,12 +4962,9 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(toNumber(nDropped)).toBeGreaterThan(0);
 
     const unshrinkable = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
-    const inverted = renderMemoryDocuments([
-      {
-        slug: 'unshrinkable-total',
-        content: `---\ntype: premise\ndescription: 追記だけの文書\n---\n${unshrinkable}`,
-      },
-    ]);
+    const inverted = outlineOf(
+      `---\ntype: premise\ndescription: 追記だけの文書\n---\n${unshrinkable}`,
+    );
     expect(inverted).toContain('見出しを最短');
     expect(inverted).not.toMatch(/まで縮める必要がある。/);
     expect(inverted).toContain(totalNamingPhrase);
@@ -4889,17 +4986,14 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       { length: 120 },
       (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
     ).join('\n');
-    const nonInverted = renderMemoryDocuments([
-      {
-        slug: 'sentence-shrinkable',
-        content: `---\ntype: premise\ndescription: d\n---\n${shrinkable}`,
-      },
-    ]);
+    const shrinkableContent = `---\ntype: premise\ndescription: d\n---\n${shrinkable}`;
+    const nonInverted = outlineOf(shrinkableContent);
     const nonInvertedHit = sentence.exec(nonInverted);
     expect(nonInvertedHit).not.toBeNull();
+    // 数は焼き込み側の断り書きと一致する（移した説明が焼き込みの数と食い違わない）
     const omissionHit =
       /末尾 ([\d,]+) 節は目次から省略（全 ([\d,]+) 節のうち先頭 ([\d,]+) 節だけ載せた）/.exec(
-        nonInverted,
+        renderMemoryDocuments([{ slug: 'sentence-shrinkable', content: shrinkableContent }]),
       );
     expect(omissionHit).not.toBeNull();
     const [, nRest = '', , nShown = ''] = omissionHit as RegExpExecArray;
@@ -4908,15 +5002,10 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(toNumber(sentenceShown)).toBe(toNumber(nShown));
 
     const unshrinkable = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
-    const inverted = renderMemoryDocuments([
-      {
-        slug: 'sentence-unshrinkable',
-        content: `---\ntype: premise\ndescription: d\n---\n${unshrinkable}`,
-      },
-    ]);
+    const inverted = outlineOf(`---\ntype: premise\ndescription: d\n---\n${unshrinkable}`);
     expect(sentence.test(inverted)).toBe(true);
 
-    const notSaturated = renderMemoryDocuments([premise('not-saturated', '本文')]);
+    const notSaturated = outlineOf('---\ntype: premise\ndescription: d\n---\n## 節\n本文');
     expect(notSaturated).not.toContain('落ちている');
     expect(notSaturated).not.toContain('移し切るまで');
   });
@@ -4930,42 +5019,38 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       { length: 120 },
       (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
     ).join('\n');
-    const nonInverted = renderMemoryDocuments([
-      {
-        slug: 'shrinkable-budget-once',
-        content: `---\ntype: premise\ndescription: 大きい\n---\n${shrinkable}`,
-      },
-    ]);
+    const nonInverted = outlineOf(`---\ntype: premise\ndescription: 大きい\n---\n${shrinkable}`);
     expect(nonInverted).toMatch(/見出しを平均 \d+ 文字（いま \d+ 文字）まで縮める必要がある。/);
     expect(countOccurrences(nonInverted, budgetPhrase)).toBe(1);
 
     const unshrinkable = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
-    const inverted = renderMemoryDocuments([
-      {
-        slug: 'unshrinkable-budget-once',
-        content: `---\ntype: premise\ndescription: 追記だけの文書\n---\n${unshrinkable}`,
-      },
-    ]);
+    const inverted = outlineOf(
+      `---\ntype: premise\ndescription: 追記だけの文書\n---\n${unshrinkable}`,
+    );
     expect(inverted).toContain('見出しを最短');
     expect(inverted).not.toMatch(/まで縮める必要がある。/);
     expect(countOccurrences(inverted, budgetPhrase)).toBe(1);
   });
 
   // 締めは「何を移すか」の基準を持つ: `side=tail` と `memory_section_move` が隣接していて、「末尾を見て移す」と誤読すると新しい学びを fact へ追い出しかねない。
-  it('⭐⭐ 断り書きの締めは、移す対象の基準と side=tail の誤読の両方を名乗る', () => {
+  it('⭐⭐ 焼き込みの断り書きは移す基準を1文で名乗り、side=tail の誤読への詳しい注意は memory_outline の応答が名乗る', () => {
     const huge = Array.from(
       { length: 200 },
       (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
     ).join('\n');
-    const rendered = renderMemoryDocuments([
-      { slug: 'big', content: `---\ntype: premise\ndescription: 大きい\n---\n${huge}` },
-    ]);
+    const content = `---\ntype: premise\ndescription: 大きい\n---\n${huge}`;
+    const rendered = renderMemoryDocuments([{ slug: 'big', content }]);
+    const outline = outlineOf(content);
 
     expect(rendered).toContain(
+      '移すのは済んだ経緯・失効した手順であって、末尾の新しい節ではない。',
+    );
+    expect(outline).toContain(
       '移すのは済んだ経緯・1回きりの実測・失効した手順であって、末尾の新しい節ではない。',
     );
-    expect(rendered).toContain('side=tail は末尾を**読む**ための向きであって');
-    expect(rendered).toContain('末尾を**移す**ための指示ではない');
+    expect(outline).toContain('side=tail は末尾を**読む**ための向きであって');
+    expect(outline).toContain('末尾を**移す**ための指示ではない');
+    expect(rendered).not.toContain('side=tail は末尾を**読む**');
   });
 
   it('⭐ 要旨が長すぎる文書は、切ったことと全文の在り処と直し方を名乗る', () => {
