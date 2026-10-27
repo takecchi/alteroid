@@ -2868,7 +2868,7 @@ const FOLD_WHEN_BACK_SYNTHESIZED_LABELS: ReadonlySet<string> = new Set([
 ]);
 
 /** 担当が戻っていればクローンが畳んでよい印（`manager_message.foldWhenBack`。#5048）。 */
-type FoldWhenBack = { movedFromGeneration?: number };
+type FoldWhenBack = { movedFromGeneration?: number; attached?: true };
 
 /**
  * **未知の族は素の値をそのまま返す。** 落とさず表示することが「版がずれている」という事実の唯一の跡になる
@@ -12776,6 +12776,11 @@ class Pool implements ManagerPool {
         .filter((line) => line !== '')
         .join('\n'),
       ...this.#statusAtDelivery(job.id),
+      // デーモン再起動の引き取り直し（`attached`）だけに付ける: 担当の状態が変わった印（移送・器の作り直し・resume）は畳まない。
+      // 日誌には上で全文を書いてあり、畳むかはクローンが配る時点の担当の状態で決める（live かつ running のときだけ）。
+      ...(how === 'attached' && cause === 'daemon'
+        ? { foldWhenBack: { attached: true as const } }
+        : {}),
     });
   }
 

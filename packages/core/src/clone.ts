@@ -3921,6 +3921,7 @@ class Clone implements CloneHost {
   // 畳んだ知らせ自身の台帳の行を器が閉じる（#5048）。`#closeRecoveredQuotaStopRows` と同じく closedBy は daemon（人間・クローンが後から否定できる）
   async #closeRecoveredNoticeRow(event: InboxEvent): Promise<void> {
     if (event.type !== 'manager_message') return;
+    const attached = event.foldWhenBack?.attached === true;
     // 記帳（`#commit`）を待つ: 待たないと、まだ書かれていない行を閉じ損ねて、未了のまま残るため
     try {
       await this.#delivery.getCommitted(event.id);
@@ -3930,15 +3931,20 @@ class Clone implements CloneHost {
     // 日誌を先に書いてから閉じる（#5235）。書けなければ閉じず、行は未了のまま残す
     const result = await closeCommitmentJournalFirst(this.#stores, event.id, {
       reason:
-        `器が自動で閉じた: 名指す担当 ${event.managerId} はいまの世代の鍵で戻っている` +
-        '（running、または done で知らせより後のターンが成功）。人間・クローンが否定するなら開き直すこと' +
+        (attached
+          ? `器が自動で閉じた: デーモン再起動で引き取り直した担当 ${event.managerId} は live で running（枠停止の印なし）`
+          : `器が自動で閉じた: 名指す担当 ${event.managerId} はいまの世代の鍵で戻っている` +
+            '（running、または done で知らせより後のターンが成功）') +
+        '。人間・クローンが否定するなら開き直すこと' +
         '（POST /commitments/:id/reopen・commitment_reopen）',
       entry: {
         type: 'decision',
         decision: `担当が戻っていた知らせの行を器が自動で閉じる（${event.id}）: 担当 ${event.managerId}`,
-        grounds:
-          `担当 ${event.managerId} が quota-recovery-notice の recoveredNoticeFoldOf の基準（backOnCurrentToken と、` +
-          '作業者の落ちなら積んだ時点と違う世代へ移ったこと）で戻っていた。器が閉じるので closedBy は daemon',
+        grounds: attached
+          ? `担当 ${event.managerId} が quota-recovery-notice の recoveredNoticeFoldOf の attached の基準（live・枠停止の印なし・running）を満たした。` +
+            '器が閉じるので closedBy は daemon'
+          : `担当 ${event.managerId} が quota-recovery-notice の recoveredNoticeFoldOf の基準（backOnCurrentToken と、` +
+            '作業者の落ちなら積んだ時点と違う世代へ移ったこと）で戻っていた。器が閉じるので closedBy は daemon',
       },
     });
     if (result.kind === 'journal-failed') {

@@ -291,7 +291,13 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     commitmentExempt: z.literal(true).optional(),
     // 名指しの担当がいまの鍵で戻っていれば、クローンがターンを起こさず日誌にだけ残してよい知らせの印（#5048）。立っていない回はキーごと書かない。
     // `movedFromGeneration` は積んだ時点の担当の鍵の世代: 在れば、担当がその世代から別の世代へ移って戻ったときだけ畳む（同じ鍵のまま作業者だけが落ちた回を消さないため）
-    foldWhenBack: z.object({ movedFromGeneration: z.number().int().optional() }).optional(),
+    // `attached: true` は「デーモンの再起動で担当を引き取り直した」知らせ: 鍵の世代を記録しない回なので、世代ではなく「担当が live で running」だけで畳む
+    foldWhenBack: z
+      .object({
+        movedFromGeneration: z.number().int().optional(),
+        attached: z.literal(true).optional(),
+      })
+      .optional(),
     // 中身（bytes）は持たない: 担い手が報告に添えたファイルの控え。中身は `stores.attachments` に在る
     attachments: z.array(attachmentRefSchema).optional(),
     // 受け取れなかったものを黙って落とさない: 名前と理由をクローンのターンへ出すため

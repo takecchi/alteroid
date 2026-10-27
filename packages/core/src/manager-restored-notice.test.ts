@@ -241,6 +241,8 @@ describe('取り戻した知らせは、1本目はすぐ・同じ cause の残�
     );
     // 失敗の知らせを見分ける語（「戻せなかった」）を、受理の知らせに混ぜない。
     expect(text).not.toContain('戻せなかった');
+    // 担当の状態が変わった印（器の作り直しの resume）は畳まない
+    expect('foldWhenBack' in restoredMessages(inbox)[0]!).toBe(false);
 
     await sleep(POOL_WINDOW_MS + 500);
     expect(restoredMessages(inbox)).toHaveLength(1);
@@ -301,6 +303,8 @@ describe('取り戻した知らせは、1本目はすぐ・同じ cause の残�
       expect(message.text).toContain(
         'デーモンが再起動した。この委譲は runner の中で走り続けている。',
       );
+      // 引き取り直しの知らせには、担当が live で running なら畳んでよい印が付く（世代は記録しないので attached の種別）
+      expect(message.foldWhenBack).toEqual({ attached: true });
     }
     await sleep(POOL_WINDOW_MS + 500);
     expect(restoredLists(inbox)).toHaveLength(0);

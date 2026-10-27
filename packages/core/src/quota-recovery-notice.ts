@@ -187,6 +187,16 @@ export function recoveredNoticeFoldOf(
   if (event.type !== 'manager_message' || event.foldWhenBack === undefined) return null;
   if ('detail' in managers) return null;
   const found = managers.find((manager) => manager.managerId === event.managerId);
+  if (event.foldWhenBack.attached === true) {
+    // デーモン再起動の引き取り直し: 鍵の世代を記録しない回なので世代は見ない。live・枠停止の印なし・running のすべてが要る（倒れ側は届ける）
+    if (found === undefined || !found.live || found.usageStoppedAt !== undefined) return null;
+    if (found.status !== 'running') return null;
+    return block([
+      `✅ 配る時点（${new Date(nowMs).toISOString()}）の担当一覧では、デーモン再起動で引き取り直したこの担当 ${event.managerId} は live で \`running\`` +
+        '（枠で止まった印なし）。runner の中で走り続けていると読み、本文（最後の報告の抜粋）は日誌に全文で残してある。',
+      `知らせが積まれたのは ${event.at}${elapsedPhrase(event.at, nowMs)}。`,
+    ]);
+  }
   if (!backOnCurrentToken(found, event.at) || found === undefined) return null;
   const from = event.foldWhenBack.movedFromGeneration;
   if (from !== undefined && found.tokenGeneration === from) return null;
