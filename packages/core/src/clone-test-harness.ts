@@ -444,7 +444,10 @@ export function fakeGatedSdk() {
 export type ScriptedStep =
   | { delta: string }
   | {
-      assistant: Array<{ type: 'text'; text: string } | { type: 'tool_use'; name: string }>;
+      assistant: Array<
+        | { type: 'text'; text: string }
+        | { type: 'tool_use'; name: string; id?: string; input?: unknown }
+      >;
       error?: string;
     }
   | { toolResult: true }

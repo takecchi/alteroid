@@ -1284,8 +1284,27 @@ function contentBlocksOf(message: unknown): AgentContentBlock[] {
     const name = (block as { name?: unknown }).name;
     if (type === 'tool_use' && typeof name === 'string') {
       const id = (block as { id?: unknown }).id;
-      return { type: 'tool_use', name, ...(typeof id === 'string' && id !== '' ? { id } : {}) };
+      const unparsedInputLen = unparsedInputLenOf((block as { input?: unknown }).input);
+      return {
+        type: 'tool_use',
+        name,
+        ...(typeof id === 'string' && id !== '' ? { id } : {}),
+        ...(unparsedInputLen !== undefined ? { unparsedInputLen } : {}),
+      };
     }
     return { type: 'other' };
   });
+}
+
+// 本体が JSON として読めない入力を断るとき、input は `{__unparsedToolInput:{raw,len}}` になる（#5313）。
+// raw は記憶の本文・資格を運びうるので取り出さない。形が少しでも違えば何も返さない（普通の入力として扱う）
+function unparsedInputLenOf(input: unknown): number | undefined {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return undefined;
+  const keys = Object.keys(input);
+  if (keys.length !== 1 || keys[0] !== '__unparsedToolInput') return undefined;
+  const inner = (input as { __unparsedToolInput?: unknown }).__unparsedToolInput;
+  if (typeof inner !== 'object' || inner === null) return undefined;
+  const { raw, len } = inner as { raw?: unknown; len?: unknown };
+  if (typeof raw !== 'string' || typeof len !== 'number' || !Number.isFinite(len)) return undefined;
+  return len;
 }

@@ -118,6 +118,7 @@ import {
   isAccountGranted,
   isDailyReport,
   jobStatusSchema,
+  JOURNAL_ENTRY_TYPES,
   journalEntrySchema,
   journalWindowCrossesHorizon,
   localDayRange,
@@ -205,6 +206,7 @@ import {
   InvalidCredentialNameError,
   codePointBoundary,
   excerptLine,
+  loadManagerAttachments,
   redactSecretsInBody,
   UnreadableJobError,
   type TokenPolicyChange,
@@ -624,6 +626,7 @@ const journalQuery = z.object({
   since: z.string().optional(),
   // `since` だけでは過去の一区間を取れない: 新しい順に返すので、最新のものが `limit` を食い尽くす。
   until: z.string().optional(),
+  // カンマ区切りで複数。知らない値は 400 で断る（ハンドラで検査）: 黙って無視すると、綴りを間違えた呼びが「0件」として返り、「起きていない」と読み違える。スキーマを `z.enum` にしないのは、未知のキーを拒まない方針と同じく検査をハンドラに寄せて、有効値の案内を error に載せるため。
   type: z.string().optional(),
   // `q=`（空文字列）は絞らない: 検索欄を空にした呼びが 0 件を返すと「消えた」と読まれるので `.min(1)` を掛けない。画面のために別の口を足さない。
   q: z.string().optional(),
@@ -696,6 +699,8 @@ const managerMessageBody = z.object({
     .refine((value) => stripNul(value).length > 0),
   requestId: z.string().min(1).optional(),
   decision: z.enum(['allow', 'deny']).optional(),
+  // `POST /attachments` が返した id。道具 `manager_send` の `attachments` と同じ意味・同じ検証（`loadManagerAttachments`）。
+  attachments: z.array(z.string().min(1)).optional(),
 });
 const abortBody = z.object({
   // NUL だけの reason は、止めた後の文言と日誌の理由が空欄になるので入口で断る。
@@ -4734,6 +4739,10 @@ export function createApp(deps: AppDeps) {
         summary: '日誌を読む',
         description:
           '日誌（追記専用の記録）を読む。`type` `since` `until` で掘れる。' +
+          '`type` はカンマ区切りで複数を渡せ、**知らない値は 400**（綴り違いを黙って0件にしない。' +
+          '使える値は 400 の `error` に載る）。' +
+          '**`with`（exchange の相手での絞り込み）はこの口に無い** —— 渡しても無視されて絞られない' +
+          '（未知のキーは拒まない）。相手で絞るには `journal_read` の `with` を使う。' +
           '`q` で本文を語で探せる（大文字小文字を区別しない部分一致。他の絞りと併用できる）。' +
           '**`q` が当たらないことは「日誌にその語が無い」を意味しない** —— ' +
           `${JOURNAL_SEARCH_UNCOVERED_LIST_MD} は探す対象に入っていない。` +
@@ -4765,7 +4774,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description:
-              'クエリが不正、または `since` / `until` が日時として読めない・' +
+              'クエリが不正、`type` に知らない値が入っている、または `since` / `until` が日時として読めない・' +
               '`afterId` / `afterAt` の片方だけが渡された・' +
               '`afterAt` の形式が不正、または `afterId`/`afterAt` が指す行が見当たらない。',
             content: {
@@ -4780,8 +4789,21 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const { limit, since, until, type, q, order, afterId, afterAt, horizon } =
           c.req.valid('query');
-        const types = type?.split(',').filter((value) => value.length > 0) as
-          JournalEntryType[] | undefined;
+        const requestedTypes = type?.split(',').filter((value) => value.length > 0);
+        const unknownTypes = (requestedTypes ?? []).filter(
+          (value) => !(JOURNAL_ENTRY_TYPES as readonly string[]).includes(value),
+        );
+        if (unknownTypes.length > 0) {
+          return c.json(
+            {
+              error:
+                `type に知らない値が入っている: ${unknownTypes.join(', ')}` +
+                `（使えるのは ${JOURNAL_ENTRY_TYPES.join(' / ')}。カンマ区切りで複数）`,
+            },
+            400,
+          );
+        }
+        const types = requestedTypes as JournalEntryType[] | undefined;
 
         // 片方だけでは境界が決まらない。この2つの if で TypeScript が `afterId`/`afterAt` を以降 `string` に絞る。
         if (afterId === undefined && afterAt !== undefined) {
@@ -7486,7 +7508,12 @@ export function createApp(deps: AppDeps) {
         description:
           'これが無いと、人間の言葉はクローンを経由してしか届かない。クローンの代わりに判断' +
           'するための口ではない（判断はクローンの仕事のまま）。人間が自分の言葉を自分で届ける' +
-          'ための口である。許可確認への回答なら `requestId` を付ける。',
+          'ための口である。許可確認への回答なら `requestId` を付ける。' +
+          '**`attachments`（任意）— `POST /attachments` で上げた添付の id を渡すと、その添付が担い手の手元に' +
+          'ファイルとして置かれ（画像は画像としても見える）、日誌には参照だけが残る（クローンの道具 `manager_send` の' +
+          '`attachments` と同じ）。** 存在しない id（保持期限切れ・誤り）・個数や合計が上限（`GET /attachments/limits`）を' +
+          '超える・確認への回答（`requestId` / `decision`）に添える、のいずれかなら 400 で、何も送らない。' +
+          '`text` は添付があっても必須。添付は会話・報告には結び付けない（他の入口が上げた添付も渡せる）。',
         responses: {
           200: {
             description:
@@ -7507,7 +7534,9 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(managerActionResponseSchema) } },
           },
           400: {
-            description: '本文が JSON として不正。',
+            description:
+              '本文が JSON として不正、または `attachments` の検証に失敗した（見つからない id・上限超過・' +
+              '確認への回答への添付）。何も送っていない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           404: {
@@ -7532,8 +7561,28 @@ export function createApp(deps: AppDeps) {
         error: 'text の形が不正' + (where === '' ? '' : `: ${where}`),
       })),
       async (c) => {
-        const { text, requestId, decision } = c.req.valid('json');
+        const { text, requestId, decision, attachments: attachmentIds } = c.req.valid('json');
         const managerId = c.req.param('id');
+        // 検証は送る前に済ませる: 失敗したら何も送らない（`manager_send` と同じ `loadManagerAttachments`）。結び付け（bind）はしない: 担い手へ渡すのは中身の写しで、会話・報告の持ち物にはならない
+        if (
+          (attachmentIds?.length ?? 0) > 0 &&
+          (requestId !== undefined || decision !== undefined)
+        ) {
+          return c.json(
+            {
+              error:
+                '確認への回答（requestId / decision を付けた送信）には添付を載せられない。' +
+                '何も送っていない。回答は添付なしで送り、添付は追加指示として別に送ること。',
+            },
+            400,
+          );
+        }
+        const handover = await loadManagerAttachments(
+          stores,
+          attachmentIds ?? [],
+          attachmentLimits,
+        );
+        if (!handover.ok) return c.json({ error: handover.message }, 400);
         // 答えを届ける前に判断の行を書く: 答えが届いたのに日誌に跡が無い窓を作らないため（人間の答えは承認の跡そのもの）。
         // 行を書いたかを旗で持つ: 確認に当たらなかった送信では `beforeAnswer` が呼ばれず、書いていない行は打ち消さない。
         // この行には humanAction を付けない: 付けた行は次のターンでクローンに名指しされるので、答えが届かず打ち消す回に、届いていないものを「人間が送った」と学ばせないため。印は答えが効いた後の行（下）が持つ。
@@ -7558,6 +7607,7 @@ export function createApp(deps: AppDeps) {
           result = await clone.managers.send(managerId, text, {
             ...(requestId === undefined ? {} : { requestId }),
             ...(decision === undefined ? {} : { decision }),
+            ...(handover.attachments.length === 0 ? {} : { attachments: handover.attachments }),
             beforeAnswer: async (pending) => {
               try {
                 await stores.journal.append({

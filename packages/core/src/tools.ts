@@ -3946,7 +3946,9 @@ export function createCloneTools(context: ToolContext) {
         types: z
           .array(z.enum(JOURNAL_ENTRY_TYPES))
           .optional()
-          .describe('種別で絞る。省略すると全種別'),
+          .describe(
+            '例 {"types":["escalation"]}。配列で渡し、値は引用符で囲む。種別で絞る。省略すると全種別',
+          ),
         // 説明文は `conversation_read` の `q` と変えない: 同じ語で探す口の言い方が違うと違う意味論を疑われるため
         q: z
           .string()
@@ -5141,7 +5143,9 @@ export function createCloneTools(context: ToolContext) {
         origin: z
           .array(z.enum(commitmentOriginSchema.options))
           .optional()
-          .describe('出所（human/manager/external/self）で絞る。省略すると絞らない'),
+          .describe(
+            '例 {"origin":["external"]}。配列で渡し、値は引用符で囲む。出所（human/manager/external/self）で絞る。省略すると絞らない',
+          ),
         // `q` は `body` と `source` の両方に当てる: `origin: 'manager'` の行は `source` が managerId で本文に入らず、`body` だけだと委譲の行を探せないため
         q: z
           .string()
@@ -5837,14 +5841,16 @@ export function createCloneTools(context: ToolContext) {
         origin: z
           .array(z.enum(commitmentOriginSchema.options))
           .describe(
-            `閉じる対象の起点（必須。${formatArrayLengthJa({ min: 1 })}）。在る起点を全部（human / manager / external / self）並べると断られる。` +
+            `例 {"origin":["self"]}。配列で渡し、値は引用符で囲む。` +
+              `閉じる対象の起点（必須。${formatArrayLengthJa({ min: 1 })}）。在る起点を全部（human / manager / external / self）並べると断られる。` +
               'manager の行を巻き込むつもりなら manager と自分で打つこと',
           ),
         source: z
           .array(z.string())
           .optional()
           .describe(
-            `出所の**完全一致**（例 ["token-pool"]。配列は${formatArrayLengthJa({ min: 1 })}、各要素は${formatStringLengthJa({ min: 1 })}）。q の部分一致とは別物で、` +
+            `例 {"source":["token-pool"]}。配列で渡し、値は引用符で囲む。` +
+              `出所の**完全一致**（配列は${formatArrayLengthJa({ min: 1 })}、各要素は${formatStringLengthJa({ min: 1 })}）。q の部分一致とは別物で、` +
               '器が自分へ出している合図だけを狙い撃つためにある',
           ),
         q: z
@@ -6159,7 +6165,8 @@ export function createCloneTools(context: ToolContext) {
       ].join(''),
       {
         types: inboxRemoveManyTypesToolInputSchema.describe(
-          `消す対象の種類（必須。${formatArrayLengthJa({ min: 1 })}）。選べる5種類 ` +
+          `例 {"types":["manager_message"]}。配列で渡し、値は引用符で囲む。` +
+            `消す対象の種類（必須。${formatArrayLengthJa({ min: 1 })}）。選べる5種類 ` +
             `(${CLONE_REMOVABLE_INBOX_EVENT_TYPES.join(' / ')}) を全部並べると断られる。` +
             '人間起点の human_message / human_answer はここに無い——選べない' +
             '（自分の受信箱から人間の発言・回答を自分の判断で畳むことはできない）。' +
@@ -6169,7 +6176,8 @@ export function createCloneTools(context: ToolContext) {
           .array(z.string())
           .optional()
           .describe(
-            `送信元の**完全一致**（配列は${formatArrayLengthJa({ min: 1 })}、各要素は${formatStringLengthJa({ min: 1 })}）。\`manager_list\` の内訳（送信元）に出る表記` +
+            `例 {"sources":["external:token-pool"]}。配列で渡し、値は引用符で囲む。` +
+              `送信元の**完全一致**（配列は${formatArrayLengthJa({ min: 1 })}、各要素は${formatStringLengthJa({ min: 1 })}）。\`manager_list\` の内訳（送信元）に出る表記` +
               '（例 "external:token-pool" / "manager:mgr-xxx"）をそのまま渡す。' +
               '送信元を言えない種類（distill / timer / self_initiative）の行は、' +
               'これを渡すと必ず対象から外れる',
@@ -7981,12 +7989,7 @@ export function createCloneTools(context: ToolContext) {
           '成果がリモートに届いているかを誰も確かめていない＝判断待ちである）、' +
           'そのあとに残りの終端（done / failed / stopped）を出す。' +
           '各群の中は startedAt の新しい順である。',
-        'status で状態を絞れる（省略すると絞らない）。先頭の件数の行は**絞る前の全体**を出すので、絞っても全体の実像は消えない。',
-        // `[]` の倒し方はクローンが読む面にも書く: 他の一覧は `[]` を0件として扱うので、ここだけ違うことを黙っていると読み手が「0件だ」と読むため
-        'status に空の配列を渡した呼びは絞らない（渡さなかったのと同じ全件が出る。' +
-          'そのときは「絞らずに全件を出した」と応答に書く）。' +
-          '**journal_read の types / commitment_list の origin とは倒し方が違う** — ' +
-          'あちらは [] を「どれにも当たらない」＝0件として扱う。',
+        // status の説明は欄（status の describe）へ集めてある: 2か所に分かれていると、読み手が欄だけ見て呼ぶときに片方を取りこぼすため
         'q で依頼文の全文と managerId を部分一致で探せる（依頼文の札や語で担当を探すとき。大文字小文字・全角半角は区別しない）。status と併用できる。' +
           '各行の退避 ref は件数と最新の1件だけで、全部は manager_report を rescueAll: true で呼ぶと、退避 ref を作業ツリーごとに全部出す。',
         '絞った先が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
@@ -8013,9 +8016,12 @@ export function createCloneTools(context: ToolContext) {
           .array(jobStatusSchema)
           .optional()
           .describe(
-            '状態（running / waiting_human / done / failed / lost / stopped）で絞る。' +
+            '例 {"status":["waiting_human"]}。配列で渡し、値は引用符で囲む。' +
+              '状態（running / waiting_human / done / failed / lost / stopped の6つ。`waiting` ではなく `waiting_human`）で絞る。' +
               '省略すると絞らない。走っているものだけを見たいなら ["running","waiting_human"]。' +
-              '空の配列 [] も絞らない（渡さなかったのと同じ。0件にはならない）。' +
+              // `[]` の倒し方はクローンが読む面にも書く: 他の一覧は `[]` を0件として扱うので、ここだけ違うことを黙っていると読み手が「0件だ」と読むため
+              '空の配列 [] も絞らない（渡さなかったのと同じ全件が出て、応答に「絞らずに全件を出した」と書く）。' +
+              '**journal_read の types / commitment_list の origin とは倒し方が違う**（あちらは [] を0件として扱う）。' +
               '先頭の件数の行は絞る前の全体を出す',
           ),
         q: z

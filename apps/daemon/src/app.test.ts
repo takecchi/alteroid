@@ -46,6 +46,7 @@ import {
   createTokenPoolService,
   droppedTraceLedgerSince,
   fingerprintOf,
+  JOURNAL_ENTRY_TYPES,
   mcpServersFingerprintOf,
   mcpServersVersionOf,
   memoryVersion,
@@ -2125,6 +2126,57 @@ describe('HTTP API', () => {
     };
     expect(body.entries).toHaveLength(1);
     expect(body.entries[0]).toMatchObject({ type: 'worker_wait', tasks: 2, turns: 5 });
+  });
+
+  describe('GET /journal の type の検証（#5316）', () => {
+    beforeEach(async () => {
+      await stores.journal.append({ type: 'exchange', with: 'human', role: 'inbound', text: 'a' });
+      await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+    });
+
+    it('有効な type は従来どおり絞れる', async () => {
+      const res = await app.request('/journal?type=decision');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { entries: { type: string }[] };
+      expect(body.entries.map((e) => e.type)).toEqual(['decision']);
+    });
+
+    it('綴り違いは 400 で、error に有効な値が載る（0件の200にしない）', async () => {
+      const res = await app.request('/journal?type=decison');
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toContain('decison');
+      for (const valid of JOURNAL_ENTRY_TYPES) expect(body.error).toContain(valid);
+    });
+
+    it('カンマ区切りの複数 type は全部有効なら絞れ、1つでも未知なら 400', async () => {
+      const ok = await app.request('/journal?type=decision,exchange');
+      expect(ok.status).toBe(200);
+      const body = (await ok.json()) as { entries: { type: string }[] };
+      expect(body.entries.map((e) => e.type).sort()).toEqual(['decision', 'exchange']);
+
+      const bad = await app.request('/journal?type=decision,decison');
+      expect(bad.status).toBe(400);
+      expect(((await bad.json()) as { error: string }).error).toContain('decison');
+    });
+
+    it('type= （空）は絞らない（従来どおり）', async () => {
+      const res = await app.request('/journal?type=');
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { entries: unknown[] }).entries.length).toBeGreaterThan(1);
+    });
+
+    it('未知のキー（with など）は従来どおり受理され無視される（strict 化していない）', async () => {
+      const plain = (await (await app.request('/journal')).json()) as { entries: unknown[] };
+      for (const query of ['with=manager', 'nosuchkey=1', 'decision=1&type=decision']) {
+        const res = await app.request(`/journal?${query}`);
+        expect(res.status).toBe(200);
+      }
+      const withKey = (await (await app.request('/journal?with=manager')).json()) as {
+        entries: unknown[];
+      };
+      expect(withKey.entries).toHaveLength(plain.entries.length);
+    });
   });
 
   it('GET /journal?type=turn_usage が通る（新しい種別も既存の絞り込み経路に乗る）', async () => {

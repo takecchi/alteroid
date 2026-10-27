@@ -1001,6 +1001,10 @@ class Clone implements CloneHost {
     },
   });
   readonly #recentDenials = new RecentDenialLog(RECENT_DENIAL_LIMIT);
+  // 入力が読めず断られた tool_use の id（#5313）。上限で忘れた id の再送は二重に書かれうるが、行が1本増えるだけで欠けはしない
+  readonly #unparsedToolInputJournaled = createRecentMap<true>({
+    limit: DENIED_TOOL_USE_MEMORY_LIMIT,
+  });
   // 決着（`#onPostToolUse` / `#onPostToolUseFailure`）で消す: その後は拒否が来ないため。上限で忘れた id への拒否は検出できず、`onForget` がその代償を日誌へ残す
   readonly #allowedByGrantToolUses = createRecentMap<AllowedByGrantRecord>({
     limit: ALLOWED_BY_GRANT_MEMORY_LIMIT,
@@ -6981,6 +6985,39 @@ class Clone implements CloneHost {
   }
 
   /**
+   * 入力が JSON として読めず本体が断った呼び出し（`__unparsedToolInput`。#5313）を `tool_use` / `failed` で1行残す。
+   * 本体は hook より前に断るので、`PostToolUseFailure` では拾えない。assistant メッセージの tool_use が運ぶ長さだけを根拠にする。
+   * `input` は書かない・`error` に raw を写さない: 入力が記憶の本文・資格を運びうるため（`cloneToolCarriesSecrets` の道具に限らず全道具で伏せる。どの道具の入力が読めなかったかは道具名で足りる）。
+   * 同じ `id` は1回だけ書く: 再送・再生で同じメッセージが届いても行が増えないため。
+   */
+  async #journalUnparsedToolInput(
+    tool: string,
+    toolUseId: string | undefined,
+    len: number,
+    parentToolUseId: string | null,
+  ): Promise<void> {
+    if (toolUseId !== undefined) {
+      if (this.#unparsedToolInputJournaled.has(toolUseId)) return;
+      this.#unparsedToolInputJournaled.set(toolUseId, true);
+    }
+    // 作業者（`parentToolUseId` 付き）の手は、hook 側と同じ `cloneToolActor` の規則で `clone:sub:` に寄せる
+    const actor =
+      parentToolUseId === null
+        ? CLONE_ACTOR_ID
+        : cloneToolActor({ agentId: parentToolUseId }, CLONE_ACTOR_ID);
+    await this.#journal({
+      type: 'tool_use',
+      actor,
+      tool,
+      outcome: 'failed',
+      error: excerptLine(
+        `入力が JSON として読めず本体が断った（${String(len)} bytes。入力は日誌へ写さない）`,
+        TOOL_USE_ERROR_EXCERPT,
+      ),
+    });
+  }
+
+  /**
    * `tool_use` としては記録しない: 拒否は道具を使ったのではなく、混ぜると `digest` の「自分で手を動かした回数」が使えていない回数まで数える。
    * 生の合図と `result.permission_denials` の両方から呼ばれるので、`tool_use_id` で二重書きを防ぐ。
    */
@@ -7897,6 +7934,14 @@ class Clone implements CloneHost {
             // 区切りの印は Web が返信の行を分ける点（`tool`）にそろえる: 分けない所に入れると、行の連結が日誌の本文と合わず写しが居座る
             if (turn) turn.replySeparatorPending = true;
             this.#emit(turn?.conversationId ?? null, { type: 'tool', tool: block.name });
+            if (block.unparsedInputLen !== undefined) {
+              await this.#journalUnparsedToolInput(
+                block.name,
+                block.id,
+                block.unparsedInputLen,
+                event.parentToolUseId,
+              );
+            }
           }
         }
         if (turn) turn.replyMessageStart = turn.reply.length;
