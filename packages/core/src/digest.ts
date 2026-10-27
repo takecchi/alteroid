@@ -30,6 +30,11 @@ export interface DigestWindow {
 
 export const MAX_ITEMS = 15;
 
+// 履歴の性格の節は `MAX_ITEMS` より短くする: 次の判断の材料ではなく、毎回全文で出すと入力が嵩むため（省略の行から辿れる）
+// 片付けた仕事は `commitments.list({ includeClosed: true })` が `closedAt` の新しい順で返すので、先頭から切ると新しい側が残る
+export const DIGEST_SETTLED_LIMIT = 5;
+export const DIGEST_BODY_SHAPE_LIMIT = 5;
+
 // `MAX_ITEMS` を保持の上限にしない: `omitted()` へ渡す「実際に保持できた件数」との差を確かめる余地が無くなるため
 export const DIGEST_RETAIN_LIMIT = 200;
 
@@ -820,7 +825,7 @@ export async function buildActivityDigest(
 
   if (settled.length > 0) {
     sections.push('', '## この期間に片付けた仕事');
-    const shownSettled = settled.slice(0, MAX_ITEMS);
+    const shownSettled = settled.slice(0, DIGEST_SETTLED_LIMIT);
     for (const entry of shownSettled) {
       sections.push(
         `- ${brief(entry.body, 120)}\n  片付いたとした理由: ${brief(entry.closedReason ?? '', 120)}`,
@@ -934,7 +939,7 @@ export async function buildActivityDigest(
         BODY_SHAPE_NOTE_TAIL,
     );
     const bodyShapeRows = summarizeExternalSources(externals);
-    const shownBodyShapeRows = bodyShapeRows.slice(0, MAX_ITEMS);
+    const shownBodyShapeRows = bodyShapeRows.slice(0, DIGEST_BODY_SHAPE_LIMIT);
     for (const row of shownBodyShapeRows) {
       sections.push(
         `- ${row.source}: 同じ本文は ${row.distinctSummaries} 種。` +

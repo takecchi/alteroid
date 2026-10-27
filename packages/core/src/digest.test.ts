@@ -6,8 +6,10 @@ import {
   describeManagerState,
   describeSessionMissingKind,
   describeUnobservedOutcome,
+  DIGEST_BODY_SHAPE_LIMIT,
   DIGEST_JOURNAL_SCAN_LIMIT,
   DIGEST_RETAIN_LIMIT,
+  DIGEST_SETTLED_LIMIT,
   DIGEST_SOURCE_TALLY_LIMIT,
   isManagerAwaitingJudgement,
   isManagerOutcomeUnobserved,
@@ -1080,9 +1082,44 @@ describe('届いた外部イベント — 発行元（source）別の内訳（#7
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    const occurrences = digest.split('…ほか 3 件').length - 1;
-    expect(occurrences).toBe(2);
+    // 個別行（MAX_ITEMS 件まで）の省略は 3 件、「本文の形」（DIGEST_BODY_SHAPE_LIMIT 行まで）の省略は total - 上限 件
+    expect(digest.split('…ほか 3 件').length - 1).toBe(1);
+    expect(digest).toContain(`…ほか ${total - DIGEST_BODY_SHAPE_LIMIT} 件`);
     expect(digest).toContain('- その他: 3 件（3 の発行元）');
+  });
+
+  it('本文の形は DIGEST_BODY_SHAPE_LIMIT 行までで、省略の行が件数と引き方を名乗る。5 行以下なら省略は出ない', async () => {
+    const stores = createMemoryStores();
+    const total = DIGEST_BODY_SHAPE_LIMIT + 3;
+    for (let i = 0; i < total; i += 1) {
+      await stores.journal.append({
+        type: 'external_event',
+        source: `src-${i}`,
+        summary: `s ${i}`,
+      });
+    }
+    const digest = await buildActivityDigest(stores, { since: since() });
+    const shape = digest.slice(digest.indexOf('**本文の形'), digest.indexOf('## 使った分'));
+    const rows = shape.split('\n').filter((line) => line.includes('同じ本文は'));
+    expect(rows).toHaveLength(DIGEST_BODY_SHAPE_LIMIT);
+    expect(shape).toContain('…ほか 3 件');
+    expect(shape).toContain('source では絞れない');
+    // 発行元別の正確な件数は縮めない
+    for (let i = 0; i < total; i += 1) expect(digest).toContain(`- src-${i}: 1 件`);
+
+    const small = createMemoryStores();
+    for (let i = 0; i < DIGEST_BODY_SHAPE_LIMIT; i += 1) {
+      await small.journal.append({ type: 'external_event', source: `src-${i}`, summary: `s ${i}` });
+    }
+    const smallDigest = await buildActivityDigest(small, { since: since() });
+    const smallShape = smallDigest.slice(
+      smallDigest.indexOf('**本文の形'),
+      smallDigest.indexOf('## 使った分'),
+    );
+    expect(smallShape.split('\n').filter((line) => line.includes('同じ本文は'))).toHaveLength(
+      DIGEST_BODY_SHAPE_LIMIT,
+    );
+    expect(smallShape).not.toContain('…ほか');
   });
 
   it('既存の個別行と「…ほか N 件」が消えていない', async () => {
@@ -1685,14 +1722,16 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
         origin: 'human',
         body: `未了 ${i}`,
       });
-      const closedId = `q-closed-${i}`;
-      await stores.commitments.open({
-        id: closedId,
-        at: now,
-        origin: 'human',
-        body: `片付け ${i}`,
-      });
-      await stores.commitments.close(closedId, now, `理由 ${i}`, 'clone');
+      if (i < DIGEST_SETTLED_LIMIT) {
+        const closedId = `q-closed-${i}`;
+        await stores.commitments.open({
+          id: closedId,
+          at: now,
+          origin: 'human',
+          body: `片付け ${i}`,
+        });
+        await stores.commitments.close(closedId, now, `理由 ${i}`, 'clone');
+      }
       await stores.schedules.put({
         kind: `q-kind-${i}`,
         spec: { type: 'daily', at: '09:00' },
