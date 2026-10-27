@@ -7788,8 +7788,9 @@ export function createApp(deps: AppDeps) {
           400: {
             description:
               '本文が JSON として不正、または `attachments` の検証に失敗した（見つからない id・上限超過・' +
-              '確認への回答への添付）。何も送っていない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+              '確認への回答への添付）。何も送っていない。' +
+              '`attachments` の検証失敗には `code` が付く（見つからない・期限切れは `attachment_missing`、個数・サイズの上限超過は `too_many` / `total_too_large` / `too_large` など。`POST /chat` と同じ綴り）。',
+            content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
           },
           404: {
             description: '該当するマネージャーが無い。',
@@ -7834,7 +7835,15 @@ export function createApp(deps: AppDeps) {
           attachmentIds ?? [],
           attachmentLimits,
         );
-        if (!handover.ok) return c.json({ error: handover.message }, 400);
+        if (!handover.ok) {
+          return c.json(
+            {
+              error: handover.message,
+              ...(handover.code === undefined ? {} : { code: handover.code }),
+            },
+            400,
+          );
+        }
         // 答えを届ける前に判断の行を書く: 答えが届いたのに日誌に跡が無い窓を作らないため（人間の答えは承認の跡そのもの）。
         // 行を書いたかを旗で持つ: 確認に当たらなかった送信では `beforeAnswer` が呼ばれず、書いていない行は打ち消さない。
         // この行には humanAction を付けない: 付けた行は次のターンでクローンに名指しされるので、答えが届かず打ち消す回に、届いていないものを「人間が送った」と学ばせないため。印は答えが効いた後の行（下）が持つ。

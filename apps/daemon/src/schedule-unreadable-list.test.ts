@@ -201,7 +201,7 @@ describe.each([
         digest = await buildActivityDigest(stores, { since: since() });
       });
 
-      expect(digest).toContain('- 継続中の依頼（定期の仕込み）: 1 件');
+      expect(digest).toContain('継続中の依頼 1 /');
       expect(digest).toContain(
         '- 読めない継続中の依頼（壊れた行。上の件数には入っていない）: 1 件',
       );

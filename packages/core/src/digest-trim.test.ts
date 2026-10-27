@@ -114,7 +114,7 @@ describe('マネージャーの節は、手を動かしている担当だけを1
     expect(section).not.toMatch(/- mgr-010 \[/u);
     expect(section).not.toContain('止めた担当の報告の本文');
     // 前置きの本数は今どおり（畳んだ分も数える）
-    expect(digest).toContain('- マネージャーへの委譲（この期間に動いたもの）: 31 本');
+    expect(digest).toContain('委譲（この期間に動いた）31 本 /');
   });
 
   it('running・返事待ち・failed・lost は今どおり1本ずつ、依頼と直近の報告つきで出る', async () => {

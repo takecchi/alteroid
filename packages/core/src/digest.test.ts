@@ -136,7 +136,7 @@ describe('活動の要約', () => {
       since: new Date(Date.now() - 60_000),
     });
 
-    expect(digest).toContain('人間からの発言: 1 件');
+    expect(digest).toContain('人間の発言 1 /');
     expect(digest).toContain('ログイン周りの修正を委譲した');
     expect(digest).toContain('小さな修正は任せてよい');
     expect(digest).toContain('検証の粒度についての好みを追記');
@@ -163,8 +163,8 @@ describe('活動の要約', () => {
 
     const digest = await buildActivityDigest(stores, { since: new Date(Date.now() - 60_000) });
 
-    expect(digest).toContain('マネージャー・作業者のツール実行: 2 件');
-    expect(digest).toContain('あなた自身が手を動かした回数（委譲せずに使った道具）: 3 件');
+    expect(digest).toContain('委譲側のツール実行 2 /');
+    expect(digest).toContain('自分の手（委譲せず使った道具）3 /');
   });
 
   it('継続中の依頼は期間の外でも常に材料に載る（頼まれたままの仕事を忘れないため）', async () => {
@@ -204,7 +204,7 @@ describe('活動の要約', () => {
         updatedAt: '2026-01-01T00:00:00.000Z',
       });
       const digest = await buildActivityDigest(stores, { since: since() });
-      expect(digest).toContain('- 継続中の依頼（定期の仕込み）: 1 件');
+      expect(digest).toContain('継続中の依頼 1 /');
       expect(digest).toContain(
         '- 読めない継続中の依頼（壊れた行。上の件数には入っていない）: 1 件',
       );
@@ -250,7 +250,7 @@ describe('活動の要約', () => {
 
     expect(digest).toContain('mgr-1234');
     expect(digest).toContain('原因まで分かった');
-    expect(digest).toContain('いま人間の回答を待っているもの: 1 件');
+    expect(digest).toContain('回答待ち 1 /');
     expect(digest).toContain('本番へ流してよいか');
   });
 
@@ -402,7 +402,7 @@ describe('活動の要約', () => {
       until: new Date(Date.now() - 30_000),
     });
 
-    expect(digest).toContain('自分で決めたこと（日誌の decision）: 0 件');
+    expect(digest).toContain('自分で決めたこと 0 /');
     expect(digest).not.toContain('いま決めた');
   });
 });
@@ -434,7 +434,7 @@ describe('## エスカレーション — approvalId で束ねる（同じ問い
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain('エスカレーション: 1 件');
+    expect(digest).toContain('エスカレーション 1 /');
     const escalationLines = digest.split('\n').filter((line) => line.includes('virchamate の hub'));
     expect(escalationLines).toHaveLength(1);
     expect(escalationLines[0]).toContain('回答: 立てて良いです');
@@ -514,7 +514,7 @@ describe('## エスカレーション — approvalId で束ねる（同じ問い
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain('いま人間の回答を待っているもの: 1 件');
+    expect(digest).toContain('回答待ち 1 /');
     const line = digest.split('\n').find((l) => l.includes('本番へ流してよいか →'));
     expect(line).toContain('承認待ちキューに在る');
     expect(line).not.toContain('回答あり');
@@ -654,8 +654,8 @@ describe('## エスカレーション — approvalId で束ねる（同じ問い
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain('エスカレーション: 2 件');
-    expect(digest).toContain('いま人間の回答を待っているもの: 1 件');
+    expect(digest).toContain('エスカレーション 2 /');
+    expect(digest).toContain('回答待ち 1 /');
     const pendingSection = digest.slice(digest.indexOf('## 人間の回答待ち'));
     expect(pendingSection).toContain('ap-a');
     expect(pendingSection).not.toContain('ap-b');
@@ -724,7 +724,7 @@ describe('## エスカレーション — approvalId で束ねる（同じ問い
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain(`エスカレーション: ${total} 件`);
+    expect(digest).toContain(`エスカレーション ${total} /`);
     expect(listApprovalsCalls).toBe(1);
     expect(getApprovalCalls).toBeLessThanOrEqual(MAX_ITEMS);
     expect(getApprovalCalls).toBeGreaterThan(0);
@@ -749,7 +749,7 @@ describe('## エスカレーション — approvalId で束ねる（同じ問い
         question: '読める質問',
       });
       const digest = await buildActivityDigest(stores, { since: since() });
-      expect(digest).toContain('- いま人間の回答を待っているもの: 1 件');
+      expect(digest).toContain('回答待ち 1 /');
       expect(digest).toContain('- 読めない承認待ち（壊れた行。上の件数には入っていない）: 1 件');
       expect(digest).toContain('ap-ok');
       expect(digest).toContain('読めない承認待ちが 1 件ある（id: ap-bad-1）');
@@ -854,7 +854,7 @@ describe('上限で切ったことを黙らない', () => {
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain(`マネージャーへの委譲（この期間に動いたもの）: ${total} 本`);
+    expect(digest).toContain(`委譲（この期間に動いた）${total} 本 /`);
     expect(digest).toContain('…ほか 3 件');
     expect(digest).toContain('manager_list');
     // 2026-10-16 #4938 の案1で期待値を変えた（done は1本ずつではなく、id だけの1行に畳む。id の並びにも同じ上限）。以前の期待値:
@@ -983,17 +983,14 @@ describe('上限で切ったことを黙らない', () => {
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain('保持上限を超えて物理削除された片付き行');
-    expect(digest).toContain('12 件');
+    expect(digest).toContain('物理削除された片付き行（累計）12');
   });
 
   it('物理削除された片付き行が0件でも、その旨の行は出す（他の集計行と同じ扱い）', async () => {
     const stores = createMemoryStores();
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain(
-      '保持上限を超えて物理削除された片付き行（累計。この記憶ストアが最初から数えている分）: 0 件',
-    );
+    expect(digest).toContain('物理削除された片付き行（累計）0');
   });
 
   const journalSections = [
@@ -1158,7 +1155,7 @@ describe('届いた外部イベント — 発行元（source）別の内訳（#7
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain(`外部イベント（日誌 external_event の行数）: ${total} 件`);
+    expect(digest).toContain(`外部イベント（日誌の行数）${total} /`);
     for (const [i, count] of counts.entries()) {
       expect(digest).toContain(`- src-${i}: ${count} 件`);
     }
@@ -1183,7 +1180,7 @@ describe('届いた外部イベント — 発行元（source）別の内訳（#7
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain(`外部イベント（日誌 external_event の行数）: ${total} 件`);
+    expect(digest).toContain(`外部イベント（日誌の行数）${total} /`);
     expect(digest).toContain(`- source-a: ${countA} 件`);
     expect(digest).toContain(`- source-b: ${countB} 件`);
     expect(countA + countB).toBe(total);
@@ -1203,7 +1200,7 @@ describe('届いた外部イベント — 発行元（source）別の内訳（#7
     expect(total).toBeGreaterThan(DIGEST_RETAIN_LIMIT);
     expect(digest).toContain(`- ci: ${total} 件`);
     expect(digest).not.toContain(`- ci: ${DIGEST_RETAIN_LIMIT} 件`);
-    expect(digest).toContain(`外部イベント（日誌 external_event の行数）: ${total} 件`);
+    expect(digest).toContain(`外部イベント（日誌の行数）${total} /`);
   });
 
   it('表示上限（MAX_ITEMS）を超えた追跡済み発行元が「その他: N 件（M の発行元）」へ畳まれ、N と M が正しい（N ≠ M）', async () => {
@@ -1234,7 +1231,7 @@ describe('届いた外部イベント — 発行元（source）別の内訳（#7
     expect(digest).toContain(`- その他: ${foldedTotal} 件（${foldedCounts.length} の発行元）`);
     const shownTotal = shownCounts.reduce((sum, count) => sum + count, 0);
     expect(shownTotal + foldedTotal).toBe(total);
-    expect(digest).toContain(`外部イベント（日誌 external_event の行数）: ${total} 件`);
+    expect(digest).toContain(`外部イベント（日誌の行数）${total} /`);
     expect(digest).not.toContain('上限（`DIGEST_SOURCE_TALLY_LIMIT`）を超えて現れた発行元');
   });
 
@@ -1268,7 +1265,7 @@ describe('届いた外部イベント — 発行元（source）別の内訳（#7
     expect(digest).toContain(
       `- 上限（\`DIGEST_SOURCE_TALLY_LIMIT\`）を超えて現れた発行元: ${overflowSourceCount} 件（発行元の数は数えていない`,
     );
-    expect(digest).toContain(`外部イベント（日誌 external_event の行数）: ${sourceCount} 件`);
+    expect(digest).toContain(`外部イベント（日誌の行数）${sourceCount} /`);
     expect(shownSources.length + foldedSources.length + overflowSourceCount).toBe(sourceCount);
   });
 });
@@ -2007,9 +2004,9 @@ describe('tool_use は件数の口で数え、走査には載せない', () => {
 
     expect(withPort.types.flat()).not.toContain('tool_use');
     expect(withoutPort.types.flat()).toContain('tool_use');
-    expect(viaPort).toContain('マネージャー・作業者のツール実行: 2 件');
-    expect(viaPort).toContain('あなた自身が手を動かした回数（委譲せずに使った道具）: 3 件');
-    expect(viaPort).toContain('自分で決めたこと（日誌の decision）: 1 件');
+    expect(viaPort).toContain('委譲側のツール実行 2 /');
+    expect(viaPort).toContain('自分の手（委譲せず使った道具）3 /');
+    expect(viaPort).toContain('自分で決めたこと 1 /');
     // 期間の行は窓の終わり（`Date.now()` 由来）が違うので、そこだけ外して比べる
     const body = (text: string) => text.split('\n').filter((line) => !line.startsWith('期間:'));
     expect(body(viaPort)).toEqual(body(viaPages));
@@ -2050,8 +2047,8 @@ describe('tool_use は件数の口で数え、走査には載せない', () => {
     });
 
     for (const digest of [viaPort, viaPages]) {
-      expect(digest).toContain('マネージャー・作業者のツール実行: 0 件');
-      expect(digest).toContain('あなた自身が手を動かした回数（委譲せずに使った道具）: 1 件');
+      expect(digest).toContain('委譲側のツール実行 0 /');
+      expect(digest).toContain('自分の手（委譲せず使った道具）1 /');
     }
   });
 
@@ -2068,8 +2065,8 @@ describe('tool_use は件数の口で数え、走査には載せない', () => {
 
     const digest = await buildActivityDigest(stores, { since: new Date(edge.at) });
 
-    expect(digest).toContain('マネージャー・作業者のツール実行: 1 件');
-    expect(digest).toContain('あなた自身が手を動かした回数（委譲せずに使った道具）: 0 件');
+    expect(digest).toContain('委譲側のツール実行 1 /');
+    expect(digest).toContain('自分の手（委譲せず使った道具）0 /');
   });
 
   it('走査を打ち切っても、口で数えたツール実行の件数は打ち切られず、文面はそのことを言う', async () => {
@@ -2093,8 +2090,8 @@ describe('tool_use は件数の口で数え、走査には載せない', () => {
 
     expect(digest).toContain('DIGEST_JOURNAL_SCAN_LIMIT');
     expect(digest).toContain('打ち切りの影響を受けない');
-    expect(digest).toContain('マネージャー・作業者のツール実行: 123456 件');
-    expect(digest).toContain('あなた自身が手を動かした回数（委譲せずに使った道具）: 7 件');
+    expect(digest).toContain('委譲側のツール実行 123456 /');
+    expect(digest).toContain('自分の手（委譲せず使った道具）7 /');
     expect(fake.calls.flatMap((call) => call.types ?? [])).not.toContain('tool_use');
   });
 
@@ -2148,7 +2145,7 @@ describe('OOM の本体を直す（issue #1283）— 日誌走査をページ単
 
     expect(digest).toContain('DIGEST_JOURNAL_SCAN_LIMIT');
 
-    expect(digest).toContain(`マネージャー・作業者のツール実行: ${DIGEST_JOURNAL_SCAN_LIMIT} 件`);
+    expect(digest).toContain(`委譲側のツール実行 ${DIGEST_JOURNAL_SCAN_LIMIT} /`);
   });
 
   it('打ち切っていない普通の窓では、件数が正確で、打ち切りの名乗りが出力に無い', async () => {
@@ -2180,10 +2177,10 @@ describe('OOM の本体を直す（issue #1283）— 日誌走査をページ単
     });
 
     expect(digest).not.toContain('DIGEST_JOURNAL_SCAN_LIMIT');
-    expect(digest).toContain('自分で決めたこと（日誌の decision）: 3 件');
-    expect(digest).toContain('記憶の更新: 3 件');
-    expect(digest).toContain('外部イベント（日誌 external_event の行数）: 3 件');
-    expect(digest).toContain('あなた自身が手を動かした回数（委譲せずに使った道具）: 3 件');
+    expect(digest).toContain('自分で決めたこと 3 /');
+    expect(digest).toContain('記憶の更新 3 /');
+    expect(digest).toContain('外部イベント（日誌の行数）3 /');
+    expect(digest).toContain('自分の手（委譲せず使った道具）3 /');
   });
 
   it('保持の上限（DIGEST_RETAIN_LIMIT）を超えた種別があっても、走査そのものは打ち切っておらず、件数はカウンタの値で正確なまま（保持した配列の .length から取っていない）', async () => {
@@ -2199,7 +2196,7 @@ describe('OOM の本体を直す（issue #1283）— 日誌走査をページ単
     });
 
     expect(digest).not.toContain('DIGEST_JOURNAL_SCAN_LIMIT');
-    expect(digest).toContain(`自分で決めたこと（日誌の decision）: ${total} 件`);
+    expect(digest).toContain(`自分で決めたこと ${total} /`);
     const shown = digest.split('\n').filter((row) => row.includes('decision-')).length;
     expect(shown).toBe(MAX_ITEMS);
     expect(digest).toContain(`…ほか ${total - MAX_ITEMS} 件`);
@@ -2227,7 +2224,7 @@ describe('OOM の本体を直す（issue #1283）— 日誌走査をページ単
       expect(call.with).toEqual(['human']);
     }
 
-    expect(digest).toContain('人間からの発言: 1 件');
+    expect(digest).toContain('人間の発言 1 /');
   });
 
   it('escalation の保持上限に当たったときは、件数の行に「束ねた元の行を全部は読んでいない」という注記が付く', async () => {
@@ -2248,7 +2245,7 @@ describe('OOM の本体を直す（issue #1283）— 日誌走査をページ単
 
     expect(digest).not.toContain('DIGEST_JOURNAL_SCAN_LIMIT');
 
-    const line = digest.split('\n').find((row) => row.startsWith('- エスカレーション:'));
+    const line = digest.split('\n').find((row) => row.startsWith('- ⚠ エスカレーションの件数'));
     expect(line).toBeDefined();
     expect(line).toContain('束ねた元の行を全部は読んでいない');
   });
@@ -2268,7 +2265,80 @@ describe('OOM の本体を直す（issue #1283）— 日誌走査をページ単
       since: new Date(0),
     });
 
-    const line = digest.split('\n').find((row) => row.startsWith('- エスカレーション:'));
-    expect(line).toBe('- エスカレーション: 3 件');
+    expect(digest).toContain('エスカレーション 3 /');
+    expect(digest).not.toContain('エスカレーションの件数は少なく出ている');
+  });
+});
+
+describe('先頭の件数は1行にまとまる', () => {
+  const since = () => new Date(Date.now() - 60_000);
+  const headOf = (digest: string): string[] =>
+    digest.split('\n').slice(2, digest.split('\n').indexOf('## 使った分'));
+
+  it('件数は「- 件数:」の1行に全部入り、0 も省かず、字数は前の約370字の半分ほどに収まる', async () => {
+    const digest = await buildActivityDigest(createMemoryStores(), { since: since() });
+
+    const head = headOf(digest).filter((line) => line.startsWith('- '));
+    expect(head).toHaveLength(1);
+    expect(head[0]?.startsWith('- 件数: ')).toBe(true);
+    for (const label of [
+      '人間の発言 0',
+      '回答待ち 0',
+      'エスカレーション 0',
+      '委譲（この期間に動いた）0 本',
+      '自分で決めたこと 0',
+      '記憶の更新 0',
+      '外部イベント（日誌の行数）0',
+      '委譲側のツール実行 0',
+      '自分の手（委譲せず使った道具）0',
+      '継続中の依頼 0',
+      '未了の仕事 0',
+      '片付けた仕事 0',
+      '読めない未了の行 0',
+      '物理削除された片付き行（累計）0',
+    ]) {
+      expect(head[0]).toContain(label);
+    }
+    expect(head[0]?.length).toBeLessThan(200);
+  });
+
+  it('読めない行が0件のときは、その旨の行を別に作らない。在るときだけ件数の行の下に出る', async () => {
+    const clean = await buildActivityDigest(createMemoryStores(), { since: since() });
+    expect(clean).not.toContain('- 読めない委譲');
+    expect(clean).not.toContain('- 読めない承認待ち');
+    expect(clean).not.toContain('- 読めない継続中の依頼');
+  });
+});
+
+describe('「使った分」の推定値の注記は短い1行で、全文は usage_read にある', () => {
+  it('全文の注記ではなく、請求明細ではないことと辿り先だけを言う', async () => {
+    const stores = createMemoryStores();
+    const at = new Date(2026, 7, 14, 10, 0);
+    await stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
+      managerId: 'mgr-heavy',
+      date: usageDate(at),
+      at: at.toISOString(),
+      snapshot: {
+        models: {
+          'claude-opus-5': {
+            inputTokens: 10,
+            outputTokens: 100,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUsd: 2,
+          },
+        },
+      },
+    });
+
+    const digest = await buildActivityDigest(stores, { since: new Date(2026, 7, 14) });
+    const usage = digest.slice(digest.indexOf('## 使った分'));
+
+    expect(usage).toContain('- 推定値（請求明細ではない。詳しくは `usage_read`）');
+    expect(usage).not.toContain('SDK が返す推定値であり');
   });
 });

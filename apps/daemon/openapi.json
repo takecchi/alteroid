@@ -29425,7 +29425,7 @@
             }
           },
           "400": {
-            "description": "本文が JSON として不正、または `attachments` の検証に失敗した（見つからない id・上限超過・確認への回答への添付）。何も送っていない。",
+            "description": "本文が JSON として不正、または `attachments` の検証に失敗した（見つからない id・上限超過・確認への回答への添付）。何も送っていない。`attachments` の検証失敗には `code` が付く（見つからない・期限切れは `attachment_missing`、個数・サイズの上限超過は `too_many` / `total_too_large` / `too_large` など。`POST /chat` と同じ綴り）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -29433,6 +29433,23 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "too_large",
+                        "image_dimension_too_large",
+                        "magic_mismatch",
+                        "too_many",
+                        "total_too_large",
+                        "media_type_missing",
+                        "empty",
+                        "attachment_missing",
+                        "attachment_conflict",
+                        "attachment_forbidden",
+                        "reserved_source",
+                        "invalid_source"
+                      ]
                     }
                   },
                   "required": ["error"],

@@ -143,9 +143,11 @@ describe('POST /managers/:id/messages の attachments', () => {
     const before = (await s.stores.journal.list()).length;
     const res = await s.post(s.managerId, { text: 'x', attachments: [meta.id, 'no-such'] });
     expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
+    const body = (await res.json()) as { error: string; code?: string };
     expect(body.error).toContain('no-such');
     expect(body.error).toContain('何も送っていない');
+    // POST /chat と同じ綴りの機械可読の理由（#5339）
+    expect(body.code).toBe('attachment_missing');
     expect(s.sends).toEqual([]);
     expect((await s.stores.journal.list()).length).toBe(before);
   });
@@ -163,7 +165,37 @@ describe('POST /managers/:id/messages の attachments', () => {
     const b = await s.putFile('b.txt');
     const res = await s.post(s.managerId, { text: 'x', attachments: [a.id, b.id] });
     expect(res.status).toBe(400);
+    expect(((await res.json()) as { code?: string }).code).toBe('too_many');
     expect(s.sends).toEqual([]);
+  });
+
+  it('(b) 合計サイズの上限を超えれば 400 total_too_large で、何も送られない', async () => {
+    const s = await setup({
+      maxImageBytes: 1024,
+      maxFileBytes: 1024,
+      maxLargeFileBytes: 0,
+      maxPerMessage: 5,
+      maxTotalBytes: BYTES.length + 1,
+      retentionDays: 30,
+    });
+    const a = await s.putFile('a.txt');
+    const b = await s.putFile('b.txt');
+    const res = await s.post(s.managerId, { text: 'x', attachments: [a.id, b.id] });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code?: string }).code).toBe('total_too_large');
+    expect(s.sends).toEqual([]);
+  });
+
+  it('(b) 確認への回答への添付の 400 には code が付かない（検証の失敗ではないため）', async () => {
+    const s = await setup();
+    const meta = await s.putFile('a.txt');
+    const res = await s.post(s.managerId, {
+      text: 'よい',
+      decision: 'allow',
+      attachments: [meta.id],
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).not.toHaveProperty('code');
   });
 
   it('(b) 確認への回答（requestId / decision）に添付を付けると 400 で、何も送られない', async () => {

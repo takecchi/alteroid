@@ -4139,7 +4139,10 @@ export function createCloneTools(context: ToolContext) {
             return (
               `…ほか ${rest} 件は省略（この条件で ${total} 件あり、${order === 'asc' ? '古い' : '新しい'}順に ${shown} 件だけ出した）。` +
               '省略した行から読み継ぐには、下の続きの位置を afterId / afterAt に渡すこと' +
-              '（狭めるなら since / types / with / q を指定する）。'
+              // asc では q を勧めない: q と order=asc の組は断られるため（勧めのとおりに呼ぶと失敗する）
+              (order === 'asc'
+                ? '（狭めるなら since / until / types / with を指定する）。'
+                : '（狭めるなら since / types / with / q を指定する）。')
             );
           },
         });

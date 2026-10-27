@@ -61,7 +61,7 @@ afterEach(() => {
 
 async function run(
   input: string[],
-  options: { uploadFails?: boolean } = {},
+  options: { uploadFails?: boolean; msgMissingOnce?: boolean } = {},
 ): Promise<{
   msgBodies: Record<string, unknown>[];
   chatBodies: Record<string, unknown>[];
@@ -76,6 +76,17 @@ async function run(
     const u = String(url);
     if (u.endsWith('/managers/mgr-1/messages')) {
       msgBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (options.msgMissingOnce === true && msgBodies.length === 1) {
+        return Promise.resolve(
+          Response.json(
+            {
+              error: '添付が見つからない（保持期限が過ぎて消えた）: att-1。',
+              code: 'attachment_missing',
+            },
+            { status: 400 },
+          ),
+        );
+      }
       return Promise.resolve(Response.json({ outcome: 'delivered', detail: '届けた' }));
     }
     if (u.endsWith('/chat')) {
@@ -143,6 +154,21 @@ describe('chat: /msg に添えかけを載せる', () => {
     expect(output).toContain('添えかけは残してあります');
     // 残っているので /attachments が 1 件を出す
     expect(output).toMatch(/1\b.*a\.log/);
+  });
+
+  it('attachment_missing で断られたら、上げ済みの印を捨てて、次の /msg で上げ直す（#5339。POST /chat と同じ扱い）', async () => {
+    const path = await attachedFile();
+    const { msgBodies, uploads, output } = await run(
+      [`/attach ${path}`, '/msg mgr-1 これを見て', '/msg mgr-1 もう一度'],
+      { msgMissingOnce: true },
+    );
+    expect(output).toContain('添付が見つからない');
+    expect(output).toContain('添付が期限切れだったので送っていない');
+    expect(uploads).toBe(2);
+    expect(msgBodies).toEqual([
+      { text: 'これを見て', attachments: ['att-1'] },
+      { text: 'もう一度', attachments: ['att-2'] },
+    ]);
   });
 
   it('添えかけが無ければ従来どおり text だけを送り、上げない', async () => {

@@ -203,7 +203,7 @@ describe.each([
       digest = await buildActivityDigest(stores, { since: since() });
     });
 
-    expect(digest).toContain('- マネージャーへの委譲（この期間に動いたもの）: 1 本');
+    expect(digest).toContain('委譲（この期間に動いた）1 本 /');
     expect(digest).toContain('- 読めない委譲（壊れた行。上の本数には入っていない）: 1 件');
     expect(digest).toContain('読めない委譲が 1 件ある（id: mgr-bad）');
     expect(digest).toContain('mgr-good');
