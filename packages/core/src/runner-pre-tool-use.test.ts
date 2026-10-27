@@ -288,7 +288,11 @@ describe('Bash の有界な形は通す', () => {
         tool_name: 'Bash',
         tool_input: { command },
       });
-      expect(result).toEqual({ continue: true });
+      // `gh run watch` は `--compact` の書き換え（#5322）が付くので `toEqual` にしない。通すこと（deny / ask が無いこと）が測る対象
+      expect(result).toMatchObject({ continue: true });
+      expect(
+        (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput ?? {},
+      ).not.toHaveProperty('permissionDecision');
       expect(waitGuardNotes(events).length).toBe(0);
     });
   }
@@ -336,7 +340,11 @@ describe('run_in_background を判定器へ渡す', () => {
       tool_name: 'Bash',
       tool_input: { command: 'gh run watch 123 --exit-status', run_in_background: 'yes' },
     });
-    expect(result).toEqual({ continue: true });
+    // 前景として通り、`--compact` の書き換え（#5322）が付く。deny / ask が無いことが測る対象
+    expect(result).toMatchObject({ continue: true });
+    expect(
+      (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput ?? {},
+    ).not.toHaveProperty('permissionDecision');
     expect(waitGuardNotes(events).length).toBe(0);
   });
 
@@ -631,5 +639,102 @@ describe('Bash のツールの timeout 引数を引き上げる（#2088）', () 
     });
     expect(result).toEqual({ continue: true });
     expect(timeoutNotes(events)).toHaveLength(0);
+  });
+});
+
+describe('gh run watch に --compact を足す（#5322）', () => {
+  function compactNotes(events: readonly RunnerEvent[]): NoteEvent[] {
+    return noteEvents(events).filter((note) => note.text.includes('形=run-watch-compact'));
+  }
+
+  it('待ちの正規の形に --compact を足し、timeout の値と --exit-status は変えず、全文の取り方を案内する', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'timeout 540 gh run watch 123 --exit-status', timeout: 600_000 },
+    });
+    expect(result).toMatchObject({
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        updatedInput: {
+          command: 'timeout 540 gh run watch --compact 123 --exit-status',
+          timeout: 600_000,
+        },
+      },
+    });
+    const output = (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput;
+    expect(output).not.toHaveProperty('permissionDecision');
+    expect(String(output?.additionalContext)).toContain('gh run view <id>');
+    expect(String(output?.additionalContext)).toContain('--log-failed');
+    expect(compactNotes(events)).toHaveLength(1);
+    expect(compactNotes(events)[0]?.text).toContain('manager:mgr-1');
+  });
+
+  it('timeout 引数の引き上げと同時に起きても、両方が1つの書き換えに入る', async () => {
+    const { started } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'timeout 540 gh run watch 123 --exit-status' },
+    });
+    const output = (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput;
+    expect(output?.updatedInput).toEqual({
+      command: 'timeout 540 gh run watch --compact 123 --exit-status',
+      timeout: 550_000,
+    });
+    expect(String(output?.additionalContext)).toContain('--compact');
+    expect(String(output?.additionalContext)).toContain('550000ms');
+  });
+
+  it('作業者の呼び出しにも掛かり、note の actor は worker: を名乗る', async () => {
+    const { started, events } = await startSession();
+    await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'timeout 540 gh run watch 123 --exit-status', timeout: 600_000 },
+      agent_id: 'agent-1',
+      agent_type: 'worker',
+    });
+    expect(compactNotes(events)[0]?.text).toContain('worker:');
+  });
+
+  it('既に --compact があれば何も足さない', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: {
+        command: 'timeout 540 gh run watch 123 --compact --exit-status',
+        timeout: 600_000,
+      },
+    });
+    expect(result).toEqual({ continue: true });
+    expect(compactNotes(events)).toHaveLength(0);
+  });
+
+  it('他の gh の呼び出しには触れない', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'gh run view 123 --log-failed' },
+    });
+    expect(result).toEqual({ continue: true });
+    expect(compactNotes(events)).toHaveLength(0);
+  });
+
+  it('背景に置く形は待ちの歯が断り、書き換えない', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'gh run watch 123 --exit-status', run_in_background: true },
+    });
+    const output = (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput;
+    expect(output?.permissionDecision).toBe('deny');
+    expect(output).not.toHaveProperty('updatedInput');
+    expect(compactNotes(events)).toHaveLength(0);
   });
 });

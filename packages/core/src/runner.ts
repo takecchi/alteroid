@@ -40,6 +40,7 @@ import type {
 } from './agent-hooks.js';
 import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
 import { resolvePeerOpening, samePeerOpening, type PeerOpening } from './agent-provider-peers.js';
+import { RUN_WATCH_COMPACT_NOTE, planRunWatchCompact } from './bash-run-watch-compact.js';
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
 import {
   describeBashShapeGuard,
@@ -5474,14 +5475,41 @@ class RunnerSession {
     return { ...resolved, rewrite };
   }
 
-  // 弾かず `timeout` の欄だけを引き上げる。判定が投げても呼び出しを止めない: 書き換えは安全弁ではなく便宜なので、倒れる先は「書き換えない」
+  // 弾かず入力を書き換える（`timeout` の欄の引き上げと、`gh run watch` への `--compact`。#5322）。判定が投げても呼び出しを止めない: 書き換えは安全弁ではなく便宜なので、倒れる先は「書き換えない」
   #planBashToolTimeoutRewrite(record: AgentPreToolRecord): AgentPreToolRewrite | undefined {
     if (record.toolName !== 'Bash') return undefined;
     const toolInput = record.toolInput;
     if (toolInput === null || typeof toolInput !== 'object' || Array.isArray(toolInput)) {
       return undefined;
     }
-    const input = toolInput as Record<string, unknown>;
+    const original = toolInput as Record<string, unknown>;
+    const actor =
+      record.agentId === undefined
+        ? `manager:${this.#id}`
+        : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+
+    // `gh run watch` の `--compact` は、`timeout` 引数の引き上げより先に当てる: 引き上げは書き換え後の入力を見るため（どちらも `timeout <秒>` の値は変えない）
+    let input = original;
+    const notes: string[] = [];
+    try {
+      const compact = planRunWatchCompact(original);
+      if (compact !== undefined) {
+        input = { ...original, command: compact.command };
+        notes.push(RUN_WATCH_COMPACT_NOTE);
+        this.#tryObservation('gh run watch の --compact の note の送り出し', () => {
+          this.#emit({
+            type: 'note',
+            managerId: this.#id,
+            text: `gh run watch に --compact を足した（${actor}・形=run-watch-compact）。`,
+          });
+        });
+      }
+    } catch (error) {
+      writeStderrLine(
+        `alteroid: gh run watch の --compact の判定が失敗した（書き換えない）: ${reasonOf(error)}\n`,
+      );
+    }
+
     let raise: ReturnType<typeof planBashToolTimeoutRaise>;
     try {
       raise = planBashToolTimeoutRaise(input);
@@ -5489,23 +5517,23 @@ class RunnerSession {
       writeStderrLine(
         `alteroid: Bash の timeout 引数の判定が失敗した（書き換えない）: ${reasonOf(error)}\n`,
       );
-      return undefined;
+      raise = undefined;
     }
-    if (raise === undefined) return undefined;
-
-    const actor =
-      record.agentId === undefined
-        ? `manager:${this.#id}`
-        : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
-    const from = raise.fromMs === undefined ? '未指定' : `${raise.fromMs}ms`;
-    this.#tryObservation('timeout 引数の引き上げの note の送り出し', () => {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `Bash の呼び出しの timeout 引数を引き上げた（${actor}・形=bash-tool-timeout-raised・${from}→${raise.toMs}ms）。`,
+    if (raise !== undefined) {
+      const from = raise.fromMs === undefined ? '未指定' : `${raise.fromMs}ms`;
+      const toMs = raise.toMs;
+      this.#tryObservation('timeout 引数の引き上げの note の送り出し', () => {
+        this.#emit({
+          type: 'note',
+          managerId: this.#id,
+          text: `Bash の呼び出しの timeout 引数を引き上げた（${actor}・形=bash-tool-timeout-raised・${from}→${toMs}ms）。`,
+        });
       });
-    });
-    return { input: { ...input, timeout: raise.toMs }, note: describeBashToolTimeoutRaise(raise) };
+      input = { ...input, timeout: raise.toMs };
+      notes.push(describeBashToolTimeoutRaise(raise));
+    }
+    if (notes.length === 0) return undefined;
+    return { input, note: notes.join(' ') };
   }
 
   #settleWorkerTool(toolUseId: string): void {
