@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { z } from 'zod';
 
 import { ATTACHMENT_FROM_CLASSES } from './attachment.js';
 import { CLONE_REMOVABLE_INBOX_EVENT_TYPES } from './inbox-backlog.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
-import { commitmentOriginSchema } from './schema.js';
+import { commitmentOriginSchema, jobStatusSchema } from './schema.js';
 import { RESERVED_SCHEDULE_KINDS, RESERVED_SCHEDULE_KIND_ENV_KEYS } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS } from './self.js';
 import { createMemoryStores } from './testing.js';
@@ -220,6 +221,76 @@ function descriptionOf(tool: string): string {
   });
   return tools.find((entry) => entry.name === tool)?.description ?? '';
 }
+
+// 配列の欄の description の先頭に置いた、呼び出しの例（#5312）。単数名で配列を受ける欄が、`[` と `"` を落とした入力（`{"status": waiting}`）で呼ばれて断られた
+interface ArrayExampleSubject {
+  readonly tool: string;
+  readonly field: string;
+}
+
+// 値は欄の zod で確かめる。enum の欄は実在する値だけが通る。自由文字列の欄（source / sources）は文字列の配列であることまでしか確かめられない
+const ARRAY_EXAMPLE_SUBJECTS: readonly ArrayExampleSubject[] = [
+  { tool: 'manager_list', field: 'status' },
+  { tool: 'commitment_close_many', field: 'origin' },
+  { tool: 'commitment_close_many', field: 'source' },
+  { tool: 'commitment_list', field: 'origin' },
+  { tool: 'inbox_remove_many', field: 'types' },
+  { tool: 'inbox_remove_many', field: 'sources' },
+  { tool: 'journal_read', field: 'types' },
+];
+
+function fieldOf(tool: string, field: string): z.ZodTypeAny {
+  const tools = createCloneTools({
+    stores: createMemoryStores(),
+    emit: () => undefined,
+    memoryCause: () => 'clone',
+    conversationId: () => undefined,
+  });
+  const schema = tools.find((entry) => entry.name === tool)?.inputSchema as unknown as
+    z.ZodObject<Record<string, z.ZodTypeAny>> | undefined;
+  const found = schema?.shape[field];
+  if (found === undefined) throw new Error(`${tool}.${field} が道具の入力に無い`);
+  return found;
+}
+
+describe('配列の欄の説明の先頭の例（#5312）', () => {
+  describe.each(ARRAY_EXAMPLE_SUBJECTS)('$tool.$field', (subject) => {
+    const description = fieldOf(subject.tool, subject.field).description ?? '';
+    const match = /^例 (\{.*?\})。/.exec(description);
+
+    it('説明の先頭に、配列で渡す JSON の例が1つ在る', () => {
+      expect(
+        match,
+        `【赤の意味】${subject.tool}.${subject.field} の description が「例 {"${subject.field}":[…]}。」で始まっていない。` +
+          '例を奥へ回すと、生成が `[` や `"` を落とした入力で呼んで断られる（#5312）。',
+      ).not.toBeNull();
+    });
+
+    it('例が、その欄の名前の配列で、全要素が実在する値である', () => {
+      const parsed = JSON.parse(match![1]!) as Record<string, unknown>;
+      expect(Object.keys(parsed), '例の鍵は欄の名前ただ1つ').toEqual([subject.field]);
+      const result = fieldOf(subject.tool, subject.field).safeParse(parsed[subject.field]);
+      expect(
+        result.success,
+        `【赤の意味】${subject.tool}.${subject.field} の例 ${match![1]} が、その欄の zod を通らない。` +
+          '説明が実在しない値（例: waiting。実在するのは waiting_human）を教えている。',
+      ).toBe(true);
+      expect(Array.isArray(parsed[subject.field])).toBe(true);
+    });
+  });
+
+  it('manager_list の status は6つの値を全部載せ、waiting_human を明記する', () => {
+    const description = fieldOf('manager_list', 'status').description ?? '';
+    const missing = jobStatusSchema.options.filter((value) => !description.includes(value));
+    expect(missing).toEqual([]);
+    expect(description).toContain('`waiting` ではなく `waiting_human`');
+  });
+
+  it('manager_list の status の説明は、欄の側にだけ在る（道具の説明文に重ねて書かない）', () => {
+    expect(descriptionOf('manager_list')).not.toContain('status に空の配列');
+    expect(descriptionOf('manager_list')).not.toContain('status で状態を絞れる');
+  });
+});
 
 describe('実装が持つ一覧と、クローンへ渡る説明文', () => {
   describe.each(SUBJECTS)('$tool（出所: $label）', (subject) => {
