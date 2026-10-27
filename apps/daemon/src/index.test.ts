@@ -115,12 +115,17 @@ describe('index.ts の原文で測る配線（onLost が日誌へ残るか。#13
   });
 
   it('記録用の関数は、日誌へ external_event として書く', () => {
-    // ブロックを1つの文字列にしてから見る: Prettier がメソッドチェーンを2行に割るので、1行の部分一致では見えないため。
+    // ブロックを1つの文字列にしてから見る: Prettier が呼び出しを2行に割ることがあるので、1行の部分一致では見えないため。
     const bodyText = code(blockOf(/^\s*const reportRunnerLost\s*=\s*\(/)).join('\n');
+    // 日誌へ書く口は、畳みの窓を持つ writer（#1311）へ移した。書く型（external_event / runner）はその writer が持つ。
+    const writerText = code(
+      readFileSync(new URL('./runner-event-journal-fold.ts', import.meta.url), 'utf8').split('\n'),
+    ).join('\n');
 
-    expect(/stores\.journal[\s\S]*?\.append\(/.test(bodyText)).toBe(true);
-    expect(bodyText.includes("type: 'external_event'")).toBe(true);
-    expect(bodyText.includes("source: 'runner'")).toBe(true);
+    expect(/runnerEventJournalWriter\.write\(/.test(bodyText)).toBe(true);
+    expect(/journal\.append\(/.test(writerText)).toBe(true);
+    expect(writerText.includes("type: 'external_event'")).toBe(true);
+    expect(writerText.includes("source: 'runner'")).toBe(true);
   });
 
   it('記録用の関数を呼ぶのは onLost の1箇所だけ（onLost 以外まで記録しない）', () => {

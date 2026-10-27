@@ -21,7 +21,8 @@ const ALLOWED = [
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === 'node_modules' || entry.name === 'dist') continue;
+    // generated は焼き込みの出力（`write-canon`。docs の文言を含む）で、畳む経路の実装ではない。
+    if (['node_modules', 'dist', 'generated'].includes(entry.name)) continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) out.push(...sourceFiles(full));
     else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
