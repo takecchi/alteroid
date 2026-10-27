@@ -1002,7 +1002,7 @@ function renderPremiseCard(part: MemoryPart): string {
   }
 
   // 1行の形は1回だけ組む: 断り書きも同じ行を名指しに使うので、2回組むと目次に載っている行と落ちたと名乗る行が別々の計算になりうるため
-  const items = memorySectionLines(sections);
+  const items = memorySectionLines(sections, sections, 'prompt');
   const listing = renderListing(items, {
     budget: MEMORY_PROMPT_OUTLINE_BUDGET,
     omitted: (part) => renderPremiseOutlineOmission(items, sections, part),
@@ -1011,7 +1011,7 @@ function renderPremiseCard(part: MemoryPart): string {
   return [
     head,
     summaryLine,
-    '節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:',
+    '節（memory_section_read に節id を渡せば本文が開く。文字数（子込み）は memory_outline で見られる）:',
     listing,
   ].join('\n');
 }
@@ -1020,7 +1020,7 @@ function renderPremiseCard(part: MemoryPart): string {
 export function measurePremiseOutlineFit(part: MemoryPart): PremiseOutlineFit | null {
   const { sections } = scanMemorySections(part.content);
   if (sections.length === 0) return null;
-  const items = memorySectionLines(sections);
+  const items = memorySectionLines(sections, sections, 'prompt');
   const { shown, rest, total } = fillListingBudget(items, MEMORY_PROMPT_OUTLINE_BUDGET);
   if (rest === 0) return null;
   return { slug: part.slug, total, shown, rest };
@@ -1051,9 +1051,16 @@ function renderIndexedCard(part: MemoryPart): string {
   return [head, summaryLine, sectionsLine].join('\n');
 }
 
-function parseOutlineLineHeading(line: string): string | null {
-  const match = /^\s*\[[^\]]+\] (.+) — [\d,]+ 文字/.exec(line);
-  return match ? (match[1] as string) : null;
+// 行から見出しの候補を返す（先に試すものから）: 焼き込みの行（文字数なし）と道具の行（`— N 文字` 付き）の両方を読める。
+// 見出しが `— N 文字` で終わる節と区別が付かないので、末尾を外さない読みを先に置く
+function parseOutlineLineHeadings(line: string): string[] | null {
+  const match = /^\s*\[[^\]]+\] (.+)$/.exec(line);
+  if (!match) return null;
+  let rest = match[1] as string;
+  if (rest.endsWith(OUTLINE_AMBIGUOUS_MARKER))
+    rest = rest.slice(0, -OUTLINE_AMBIGUOUS_MARKER.length);
+  const withoutChars = /^(.+) — [\d,]+ 文字$/.exec(rest);
+  return withoutChars ? [rest, withoutChars[1] as string] : [rest];
 }
 
 function classifyDroppedOutlineLines(
@@ -1074,7 +1081,7 @@ function classifyDroppedOutlineLines(
   }
   // 節ごとに単独で `memorySectionLines` を呼び直さない: id の衝突マーカーは文書全体を見て初めて正しく判定できるため
   const currentLineBySectionId = new Map<string, string>();
-  const currentLines = memorySectionLines(currentSections);
+  const currentLines = memorySectionLines(currentSections, currentSections, 'prompt');
   currentSections.forEach((section, index) => {
     currentLineBySectionId.set(section.id, currentLines[index]!);
   });
@@ -1085,11 +1092,12 @@ function classifyDroppedOutlineLines(
   const other: string[] = [];
 
   for (const line of droppedLines) {
-    const heading = parseOutlineLineHeading(line);
-    if (heading === null) {
+    const candidates = parseOutlineLineHeadings(line);
+    if (candidates === null) {
       other.push(line);
       continue;
     }
+    const heading = candidates.find((candidate) => byHeading.has(candidate)) ?? candidates[0]!;
     const matches = byHeading.get(heading) ?? [];
     if (matches.length === 0) {
       removedOrRewritten.push(line);
@@ -1117,7 +1125,8 @@ function renderPushedOutSections(
 ): string {
   const uniqueById = new Map<string, MemorySection>();
   for (const { section } of pushedOut) uniqueById.set(section.id, section);
-  const items = memorySectionLines([...uniqueById.values()]);
+  const sections = [...uniqueById.values()];
+  const items = memorySectionLines(sections, sections, 'prompt');
   return renderListing(items, {
     budget: MEMORY_DELTA_PUSHED_OUT_BUDGET,
     omitted: ({ rest, shown, total }) =>
@@ -1867,7 +1876,7 @@ export function describeMemoryTidyTargets(documents: readonly MemoryPart[]): str
     const description =
       (frontmatter.kind === 'parsed' ? frontmatter.description : undefined)?.trim() ?? '';
     const { sections } = scanMemorySections(part.content);
-    const outlineChars = memorySectionLines(sections).join('\n').length;
+    const outlineChars = memorySectionLines(sections, sections, 'prompt').join('\n').length;
 
     const reasons: string[] = [];
     if (outlineChars > MEMORY_PROMPT_OUTLINE_BUDGET) {
@@ -2150,19 +2159,26 @@ export type MemoryOutlineSide = (typeof MEMORY_OUTLINE_SIDES)[number];
 // 予算と省略の文言は共有しない: 道具は `side` で反対側を出せるが焼き込みは1回しか描かず、省いたときに何をすればよいかが違うため
 // 重複は `allSections`（文書の全節）で数える: 出す範囲（offset・q の窓）の中だけで数えると、窓の外に同じ id の節があっても印が付かず、
 // memory_section_move（全節で一意かを見る）に断られる id を使えると読ませるため
+// 'tool' は道具の応答の行（文字数あり）、'prompt' は毎ターンの焼き込みの行（文字数なし）。
+// 道具の応答の形は変えない: 全文と文字数を見たい読み手は memory_outline へ来るため
+type OutlineLineForm = 'tool' | 'prompt';
+
+const OUTLINE_AMBIGUOUS_MARKER =
+  ' ⚠この id は複数箇所に当たる。この id では動かせない（memory_section_move は断る）';
+
 function memorySectionLines(
   sections: readonly MemorySection[],
   allSections: readonly MemorySection[] = sections,
+  form: OutlineLineForm = 'tool',
 ): string[] {
   const counts = new Map<string, number>();
   for (const section of allSections) counts.set(section.id, (counts.get(section.id) ?? 0) + 1);
   return sections.map((section) => {
     const indent = '  '.repeat(section.depth - 1);
-    const ambiguous =
-      (counts.get(section.id) ?? 0) > 1
-        ? ' ⚠この id は複数箇所に当たる。この id では動かせない（memory_section_move は断る）'
-        : '';
-    return `${indent}[${section.id}] ${section.heading} — ${formatMemoryCharCount(section.chars)} 文字${ambiguous}`;
+    const ambiguous = (counts.get(section.id) ?? 0) > 1 ? OUTLINE_AMBIGUOUS_MARKER : '';
+    return form === 'prompt'
+      ? `${indent}[${section.id}] ${section.heading}${ambiguous}`
+      : `${indent}[${section.id}] ${section.heading} — ${formatMemoryCharCount(section.chars)} 文字${ambiguous}`;
   });
 }
 
