@@ -118,6 +118,7 @@ import {
   isAccountGranted,
   isDailyReport,
   jobStatusSchema,
+  JOURNAL_ENTRY_TYPES,
   journalEntrySchema,
   journalWindowCrossesHorizon,
   localDayRange,
@@ -624,6 +625,7 @@ const journalQuery = z.object({
   since: z.string().optional(),
   // `since` だけでは過去の一区間を取れない: 新しい順に返すので、最新のものが `limit` を食い尽くす。
   until: z.string().optional(),
+  // カンマ区切りで複数。知らない値は 400 で断る（ハンドラで検査）: 黙って無視すると、綴りを間違えた呼びが「0件」として返り、「起きていない」と読み違える。スキーマを `z.enum` にしないのは、未知のキーを拒まない方針と同じく検査をハンドラに寄せて、有効値の案内を error に載せるため。
   type: z.string().optional(),
   // `q=`（空文字列）は絞らない: 検索欄を空にした呼びが 0 件を返すと「消えた」と読まれるので `.min(1)` を掛けない。画面のために別の口を足さない。
   q: z.string().optional(),
@@ -4734,6 +4736,10 @@ export function createApp(deps: AppDeps) {
         summary: '日誌を読む',
         description:
           '日誌（追記専用の記録）を読む。`type` `since` `until` で掘れる。' +
+          '`type` はカンマ区切りで複数を渡せ、**知らない値は 400**（綴り違いを黙って0件にしない。' +
+          '使える値は 400 の `error` に載る）。' +
+          '**`with`（exchange の相手での絞り込み）はこの口に無い** —— 渡しても無視されて絞られない' +
+          '（未知のキーは拒まない）。相手で絞るには `journal_read` の `with` を使う。' +
           '`q` で本文を語で探せる（大文字小文字を区別しない部分一致。他の絞りと併用できる）。' +
           '**`q` が当たらないことは「日誌にその語が無い」を意味しない** —— ' +
           `${JOURNAL_SEARCH_UNCOVERED_LIST_MD} は探す対象に入っていない。` +
@@ -4765,7 +4771,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description:
-              'クエリが不正、または `since` / `until` が日時として読めない・' +
+              'クエリが不正、`type` に知らない値が入っている、または `since` / `until` が日時として読めない・' +
               '`afterId` / `afterAt` の片方だけが渡された・' +
               '`afterAt` の形式が不正、または `afterId`/`afterAt` が指す行が見当たらない。',
             content: {
@@ -4780,8 +4786,21 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const { limit, since, until, type, q, order, afterId, afterAt, horizon } =
           c.req.valid('query');
-        const types = type?.split(',').filter((value) => value.length > 0) as
-          JournalEntryType[] | undefined;
+        const requestedTypes = type?.split(',').filter((value) => value.length > 0);
+        const unknownTypes = (requestedTypes ?? []).filter(
+          (value) => !(JOURNAL_ENTRY_TYPES as readonly string[]).includes(value),
+        );
+        if (unknownTypes.length > 0) {
+          return c.json(
+            {
+              error:
+                `type に知らない値が入っている: ${unknownTypes.join(', ')}` +
+                `（使えるのは ${JOURNAL_ENTRY_TYPES.join(' / ')}。カンマ区切りで複数）`,
+            },
+            400,
+          );
+        }
+        const types = requestedTypes as JournalEntryType[] | undefined;
 
         // 片方だけでは境界が決まらない。この2つの if で TypeScript が `afterId`/`afterAt` を以降 `string` に絞る。
         if (afterId === undefined && afterAt !== undefined) {
