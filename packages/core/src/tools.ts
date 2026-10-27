@@ -377,6 +377,28 @@ import {
 import { formatElapsedAgo } from './format-elapsed.js';
 import { RESCUE_NOT_PUSHED_TEXT, rescueNotPushedDetail } from './workspace-swap-hints.js';
 import { strictToolInput } from './strict-tool-input.js';
+import { chunkIdsByChars } from './chunk-ids.js';
+import {
+  CLOSE_MANY_IDS_SHOWN,
+  CLOSE_MANY_JOURNAL_ID_CHARS,
+  CLOSE_MANY_LIMIT_MAX,
+  CLOSE_MANY_SOURCES_SHOWN,
+  closeManyInChunks,
+  countTrimmedJustClosed,
+  describeCloseManyFilter,
+  describeCloseManyViolation,
+  selectCloseManyTargets,
+} from './commitment-close-many.js';
+import {
+  describeArrayLengthViolation,
+  describeBlankViolation,
+  describeIntRangeViolation,
+  describeStringArrayElementLengthViolation,
+  describeStringLengthViolation,
+  formatArrayLengthJa,
+  formatIntRangeJa,
+  formatStringLengthJa,
+} from './tool-arg-checks.js';
 
 const MISSING_ARG_HINT =
   '引数が届いていない（received undefined ＝ 呼び出しの JSON にその鍵が最初から無かった。道具が受け取ってから落としたのではない）。書いたつもりなら、まず呼び出しの生の形を疑うこと —— タグの接頭辞の脱落など、呼び出しの組み立てが壊れていると引数は静かに落ちる。決定的な対照: 引数の並びも長さも1文字も変えず、タグだけ正しく書いて1回送り直す。それで通れば、原因は呼び出しの形であって、この道具でも引数の中身でもない';
@@ -1038,13 +1060,8 @@ async function describeMissingReport(
 const COMMITMENT_LIST_BUDGET = 8_000;
 const COMMITMENT_BODY_LIMIT = 240;
 const UNREADABLE_COMMITMENT_IDS_SHOWN = 20;
-const CLOSE_MANY_LIMIT_DEFAULT = 500;
-// store 側に同じ上限を置いて二重にしない: どちらが効いたのか呼び出し側から読めなくなるため
-export const CLOSE_MANY_LIMIT_MAX = 2_000;
-// id 列は件数ではなく文字数の予算で塊に割り、塊ごとに1件の日誌を書く: 全件を1行へ詰めると予算が文字数という面の規約に反するため
-export const CLOSE_MANY_JOURNAL_ID_CHARS = 3_600;
-const CLOSE_MANY_IDS_SHOWN = 20;
-const CLOSE_MANY_SOURCES_SHOWN = 8;
+// 定数は道具と HTTP で共有するので `commitment-close-many.ts` に在る。外へ出していた名前はここから変えない
+export { CLOSE_MANY_LIMIT_MAX, CLOSE_MANY_JOURNAL_ID_CHARS };
 import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from './remove-many-limit.js';
 
 export { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX };
@@ -1063,24 +1080,8 @@ const COMMITMENT_ORIGIN_LABEL: Record<CommitmentOrigin, string> = {
   self: '自分で気づいた宿題',
 };
 
-// id は1つも落とさない: 1つの id だけで予算を超えても単独の塊として返す（予算のほうを譲る）
-export function chunkIdsByChars(ids: readonly string[], budget: number): string[][] {
-  const chunks: string[][] = [];
-  let current: string[] = [];
-  let width = 0;
-  for (const id of ids) {
-    const added = current.length === 0 ? id.length : id.length + 1;
-    if (current.length > 0 && width + added > budget) {
-      chunks.push(current);
-      current = [];
-      width = 0;
-    }
-    current.push(id);
-    width += current.length === 1 ? id.length : added;
-  }
-  if (current.length > 0) chunks.push(current);
-  return chunks;
-}
+// `commitment-close-many.ts` から使うため `chunk-ids.ts` へ移した（`tools.ts` を import すると循環する）。外へ出す名前はここから変えない
+export { chunkIdsByChars };
 
 function commitmentOriginBadge(entry: { origin: CommitmentOrigin; source?: string }): string {
   const label = COMMITMENT_ORIGIN_LABEL[entry.origin];
@@ -1267,55 +1268,8 @@ function text(body: string) {
   return { content: [{ type: 'text' as const, text: body }] };
 }
 
-// `.describe()` と断り文の両方から同じ関数を呼ぶ: 数値を2箇所へ手で書き写すと片方だけ直して食い違うため
-export function formatIntRangeJa(range: { min?: number; max?: number }): string {
-  const { min, max } = range;
-  if (min !== undefined && max !== undefined) return `${min}以上${max}以下の整数`;
-  if (min !== undefined) return `${min}以上の整数`;
-  if (max !== undefined) return `${max}以下の整数`;
-  return '整数';
-}
-
-// 入力スキーマ側（`.int()` / `.min()` 等）へ置かない: SDK の `tool()` がハンドラより前に検証し、英語の zod の JSON が `isError` で返って兄弟の欄と応答の形が食い違うため
-function describeIntRangeViolation(
-  field: string,
-  value: number | undefined,
-  range: { min?: number; max?: number },
-): string | null {
-  if (value === undefined) return null;
-  const { min, max } = range;
-  const withinRange = (min === undefined || value >= min) && (max === undefined || value <= max);
-  if (Number.isInteger(value) && withinRange) return null;
-  return `${field} ${value} は使えない（${formatIntRangeJa(range)}のみ）。`;
-}
-
-export function formatStringLengthJa(range: { min?: number; max?: number }): string {
-  const { min, max } = range;
-  if (min !== undefined && max !== undefined) return `${min}文字以上${max}文字以下`;
-  if (min !== undefined) return `${min}文字以上`;
-  if (max !== undefined) return `${max}文字以下`;
-  return '任意の長さ';
-}
-
-function describeStringLengthViolation(
-  field: string,
-  value: string | undefined,
-  range: { min?: number; max?: number },
-): string | null {
-  if (value === undefined) return null;
-  const { min, max } = range;
-  // NUL を落としてから数える: ストアや日誌は NUL を落として残すため、NUL だけの値が「1文字以上」を通って空として残る
-  const length = stripNul(value).length;
-  const withinRange = (min === undefined || length >= min) && (max === undefined || length <= max);
-  if (withinRange) return null;
-  return `${field} は使えない（${formatStringLengthJa(range)}のみ）。`;
-}
-
-function describeBlankViolation(field: string, value: string | undefined): string | null {
-  if (value === undefined) return null;
-  if (stripNul(value).trim().length > 0) return null;
-  return `${field} は使えない（空白だけの値は空と同じ。${formatStringLengthJa({ min: 1 })}のみ）。`;
-}
+// 断り文の部品は `tool-arg-checks.ts` へ切り出してある（道具と HTTP が同じ関数を共有するため）。既存の import 元（この文書）を変えないよう、書式の関数だけここから再公開する
+export { formatIntRangeJa, formatStringLengthJa, formatArrayLengthJa };
 
 // 下限・上限の数値を書き写さない: 2箇所に手で書くと片方だけ直して食い違うため `practiceKindSchema` を検査・説明文の両方から参照する
 export function formatPracticeKindRangeJa(): string {
@@ -1339,40 +1293,6 @@ function describePracticeKindViolation(
 
 // `.min(1)` を入力スキーマ側に置かない: SDK の `tool()` がハンドラより前に検証するため、件数の検査はハンドラの先頭の `safeParse` へ渡す
 const inboxRemoveManyTypesToolInputSchema = z.array(z.enum(CLONE_REMOVABLE_INBOX_EVENT_TYPES));
-
-export function formatArrayLengthJa(range: { min?: number; max?: number }): string {
-  const { min, max } = range;
-  if (min !== undefined && max !== undefined) return `${min}件以上${max}件以下`;
-  if (min !== undefined) return `${min}件以上`;
-  if (max !== undefined) return `${max}件以下`;
-  return '任意の件数';
-}
-
-function describeArrayLengthViolation(
-  field: string,
-  value: readonly unknown[] | undefined,
-  range: { min?: number; max?: number },
-): string | null {
-  if (value === undefined) return null;
-  const { min, max } = range;
-  const withinRange =
-    (min === undefined || value.length >= min) && (max === undefined || value.length <= max);
-  if (withinRange) return null;
-  return `${field} は使えない（${formatArrayLengthJa(range)}）。`;
-}
-
-function describeStringArrayElementLengthViolation(
-  field: string,
-  value: readonly string[] | undefined,
-): string | null {
-  if (value === undefined) return null;
-  const emptyIndex = value.findIndex((entry) => stripNul(entry).length === 0);
-  if (emptyIndex === -1) return null;
-  return (
-    `${field} は使えない（${emptyIndex} 番目（0起点）が空文字。各要素とも` +
-    `${formatStringLengthJa({ min: 1 })}）。`
-  );
-}
 
 // 一律に「完了した」と書かない: 記録そのものが行為の道具では「やり直すな」が嘘になり、やり直すべきときに止めてしまうため
 type JournalFailureOutcome = 'act-completed' | 'act-not-performed' | 'act-partially-completed';
@@ -5909,76 +5829,26 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ origin, source, q, until, reason, dryRun, limit }) => {
-        const limitError = describeIntRangeViolation('limit', limit, {
-          min: 1,
-          max: CLOSE_MANY_LIMIT_MAX,
-        });
-        if (limitError !== null) return text(limitError);
-        const originError = describeArrayLengthViolation('origin', origin, { min: 1 });
-        if (originError !== null) return text(originError);
-        const sourceLengthError = describeArrayLengthViolation('source', source, { min: 1 });
-        if (sourceLengthError !== null) return text(sourceLengthError);
-        const sourceElementError = describeStringArrayElementLengthViolation('source', source);
-        if (sourceElementError !== null) return text(sourceElementError);
-        const qError = describeStringLengthViolation('q', q, { min: 1 });
-        if (qError !== null) return text(qError);
-        const untilLengthError = describeStringLengthViolation('until', until, { min: 1 });
-        if (untilLengthError !== null) return text(untilLengthError);
-        const reasonError =
-          describeStringLengthViolation('reason', reason, { min: 1 }) ??
-          describeBlankViolation('reason', reason);
-        if (reasonError !== null) return text(reasonError);
-        // 絞り込みの無い呼びを断る: 「全部閉じる」が事故で撃てる形を作らないため。確認用の追加の引数は作らない: `dryRun` の既定と2重に問うことになり、どちらが効いたのか読めなくなるため
-        if (commitmentOriginSchema.options.every((known) => origin.includes(known))) {
-          return text(
-            'origin に在る起点を全部（human / manager / external / self）並べた呼びは断る——' +
-              'それは絞り込みが無いのと同じで、1回で台帳を空にできてしまう。' +
-              '閉じたい起点だけを名指しすること（例 origin: ["external"]）。**1件も閉じていない。**',
-          );
-        }
-        // 読めない `until` を「絞り込みが当たらなかった」に混ぜない: 打ち間違いが「0件だった」に化けて静かに通るため
-        // 時差（`Z` / `±hh:mm`）を必須にする: 元に戻せない一括操作で、時差の無い形は `Date.parse` が地方時刻として読み境界が黙ってずれるため
-        if (until !== undefined && !isOffsetQualifiedTimeBoundary(until)) {
-          return text(
-            describeOffsetRequiredTimeBoundary('until', until, '2026-09-11T19:00:00.000Z') +
-              '**1件も閉じていない。**',
-          );
-        }
+        // 検証・絞り込み・塊ごとの閉じ方は `POST /commitments/close-many`（人間）と共有する（`commitment-close-many.ts`）
+        const input = { origin, source, q, until, reason, dryRun, limit };
+        const violation = describeCloseManyViolation(input);
+        if (violation !== null) return text(violation);
 
+        const selection = await selectCloseManyTargets(stores.commitments, input);
         const {
-          entries: openEntries,
-          unreadable,
+          openEntries,
+          afterOrigin,
+          afterSource,
+          afterQ,
+          matched,
+          targets,
+          rest: remainingCount,
+          effectiveLimit,
+          unreadableCount,
           trimmedClosed: trimmedBefore,
-        } = await stores.commitments.list();
-        // 絞りは `commitment_list` と同じ側・同じ当て方で当てる: 下見した結果とこの道具が閉じる集合が食い違わないことが、一括で閉じてよいと判断できる唯一の根拠のため
-        const afterOrigin = openEntries.filter((entry) => origin.includes(entry.origin));
-        const afterSource =
-          source === undefined
-            ? afterOrigin
-            : afterOrigin.filter(
-                (entry) => entry.source !== undefined && source.includes(entry.source),
-              );
-        const needle = q?.toLowerCase();
-        const afterQ =
-          needle === undefined
-            ? afterSource
-            : afterSource.filter(
-                (entry) =>
-                  entry.body.toLowerCase().includes(needle) ||
-                  (entry.source !== undefined && entry.source.toLowerCase().includes(needle)),
-              );
-        const untilMs = until === undefined ? undefined : Date.parse(until);
-        const matched =
-          untilMs === undefined
-            ? afterQ
-            : afterQ.filter((entry) => Date.parse(entry.at) <= untilMs);
+        } = selection;
 
-        const filterText = [
-          `origin=[${origin.join(', ')}]`,
-          ...(source === undefined ? [] : [`source=[${source.join(', ')}]（完全一致）`]),
-          ...(q === undefined ? [] : [`q="${q}"`]),
-          ...(until === undefined ? [] : [`until=${until}`]),
-        ].join(' / ');
+        const filterText = describeCloseManyFilter(input);
         // 漏斗（段ごとの残数）を必ず出す: 「0件だった」と「絞り込みが間違っていた」はどの段で0になったかでしか区別できないため
         const funnel = [
           `未了 ${openEntries.length} 件`,
@@ -5989,10 +5859,10 @@ export function createCloneTools(context: ToolContext) {
         ].join(' → ');
         // 読めない行は件数を黙って落とさない: 「これで全部だ」と読まれるため
         const unreadableNote =
-          unreadable.length === 0
+          unreadableCount === 0
             ? []
             : [
-                `⚠ 読めない行が ${unreadable.length} 件ある。` +
+                `⚠ 読めない行が ${unreadableCount} 件ある。` +
                   'この道具は絞り込みを当てられないので対象に含めていない（commitment_list で確かめること）。',
               ];
 
@@ -6052,14 +5922,11 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        const effectiveLimit = limit ?? CLOSE_MANY_LIMIT_DEFAULT;
-        const targets = matched.slice(0, effectiveLimit);
-        const rest = matched.length - targets.length;
         const restNote =
-          rest === 0
+          remainingCount === 0
             ? []
             : [
-                `1回の上限（${effectiveLimit} 件）に当たったので、残り ${rest} 件は対象にしていない。` +
+                `1回の上限（${effectiveLimit} 件）に当たったので、残り ${remainingCount} 件は対象にしていない。` +
                   '**同じ絞り込みでもう一度呼べば続きを閉じられる。**',
               ];
 
@@ -6086,51 +5953,43 @@ export function createCloneTools(context: ToolContext) {
         }
 
         // 塊ごとに「閉じる → その塊の id を日誌へ書く」を交互に回す: まとめて閉じてから日誌を書くと、器が落ちたとき閉じたのに記録が無い行が最大 `CLOSE_MANY_LIMIT_DEFAULT` 件できるため
-        const chunks = chunkIdsByChars(
-          targets.map((entry) => entry.id),
-          CLOSE_MANY_JOURNAL_ID_CHARS,
-        );
-        const now = new Date().toISOString();
-        const closedIds: string[] = [];
-        // 「日誌に N 件」は実際に書いた件数で数える: `chunks.length` で言うと、塊が丸ごと競合になった回に無い日誌の行を名乗るため
+        // 「日誌に N 件」は実際に書いた件数で数える: 塊の数で言うと、塊が丸ごと競合になった回に無い日誌の行を名乗るため
         let journaledChunks = 0;
-        for (const [index, chunk] of chunks.entries()) {
-          const closed = await stores.commitments.closeMany(chunk, now, reason, 'clone');
-          closedIds.push(...closed);
-          // 1件も閉じられなかった塊では日誌へ書かない: 抜けている塊番号そのものが「その塊は1件も閉じなかった」を意味するため
-          if (closed.length === 0) continue;
-          journaledChunks += 1;
-          await appendJournalOrThrow(
-            'commitment_close_many',
-            stores.journal,
-            {
-              type: 'decision',
-              decision:
-                `引き受けた仕事を絞り込みで一括して片付けた` +
-                `（${index + 1}/${chunks.length} 塊目、この塊は ${closed.length} 件）: ${reason}\n` +
-                `絞り込み: ${filterText}\n` +
-                `閉じた id: ${closed.join(' ')}`,
-              // `grounds` には id を置かない: この欄は操作の由来を名乗る文で、控えを置く場所ではないため
-              grounds:
-                'クローン自身が commitment_close_many で絞り込んで閉じた（人間はこれを読んで後から否定する）',
+        const closedIds = await closeManyInChunks(
+          stores.commitments,
+          targets.map((entry) => entry.id),
+          { reason, by: 'clone', at: new Date().toISOString() },
+          {
+            after: async (chunk, closed) => {
+              // 1件も閉じられなかった塊では日誌へ書かない: 抜けている塊番号そのものが「その塊は1件も閉じなかった」を意味するため
+              if (closed.length === 0) return;
+              journaledChunks += 1;
+              await appendJournalOrThrow(
+                'commitment_close_many',
+                stores.journal,
+                {
+                  type: 'decision',
+                  decision:
+                    `引き受けた仕事を絞り込みで一括して片付けた` +
+                    `（${chunk.number}/${chunk.total} 塊目、この塊は ${closed.length} 件）: ${reason}\n` +
+                    `絞り込み: ${filterText}\n` +
+                    `閉じた id: ${closed.join(' ')}`,
+                  // `grounds` には id を置かない: この欄は操作の由来を名乗る文で、控えを置く場所ではないため
+                  grounds:
+                    'クローン自身が commitment_close_many で絞り込んで閉じた（人間はこれを読んで後から否定する）',
+                },
+                'act-completed',
+              );
             },
-            'act-completed',
-          );
-        }
+          },
+        );
 
-        // 閉じた直後に片付き履歴の保持上限で刈られた行を数える（fs の置き場。1回で上限を超えて閉じると、閉じたばかりの行も刈る）:
-        // 言わないと、閉じたと言った行が commitment_list id= で「台帳に無い」になる。刈った件数が増えた回だけ読み直す（保持上限の無い置き場では読まない）
-        const trimmedAfter =
-          closedIds.length === 0 ? trimmedBefore : (await stores.commitments.list()).trimmedClosed;
-        let trimmedJustClosed = 0;
-        if (trimmedAfter > trimmedBefore) {
-          const remaining = new Set(
-            (await stores.commitments.list({ includeClosed: true })).entries.map(
-              (entry) => entry.id,
-            ),
-          );
-          trimmedJustClosed = closedIds.filter((id) => !remaining.has(id)).length;
-        }
+        // 閉じたと言った行が刈られていたら言う（理由は `countTrimmedJustClosed`）
+        const trimmedJustClosed = await countTrimmedJustClosed(
+          stores.commitments,
+          closedIds,
+          trimmedBefore,
+        );
         // 当たったのに閉じられなかった分を黙らせない: 「全部閉じた」と読まれると次の呼びの判断が狂うため
         const raced = targets.length - closedIds.length;
         const shownClosed = closedIds.slice(0, CLOSE_MANY_IDS_SHOWN);

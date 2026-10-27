@@ -1173,6 +1173,22 @@ export {
   type PermissionGrantStaleness,
   type PermissionGrantStalenessInput,
 } from './permission-staleness.js';
+// 道具 `commitment_close_many` と `POST /commitments/close-many` が共有する検証・絞り込み・塊ごとの閉じ方
+export {
+  CLOSE_MANY_IDS_SHOWN,
+  CLOSE_MANY_JOURNAL_ID_CHARS,
+  CLOSE_MANY_LIMIT_DEFAULT,
+  CLOSE_MANY_LIMIT_MAX,
+  closeManyInChunks,
+  countTrimmedJustClosed,
+  describeCloseManyFilter,
+  describeCloseManyViolation,
+  selectCloseManyTargets,
+  type CloseManyChunk,
+  type CloseManyChunkHooks,
+  type CloseManyInput,
+  type CloseManySelection,
+} from './commitment-close-many.js';
 export {
   CLONE_ALLOWED_TOOLS,
   CLONE_TOOL_NAMES,

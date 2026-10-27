@@ -138,6 +138,32 @@ describe('人間が API から直接した操作を、次のターンの入力�
     expect(inputs[1]).toContain('これで全部とは限らない');
   });
 
+  // `POST /commitments/close-many`（#5336）は塊ごとに印を1行付ける（対象は塊の先頭の id、件数は decision の文）。HUMAN_ACTION_DECISION_EXCERPT（160字）の抜粋に件数が残り、塊が多いときは既存の「ほか N 件」で畳まれることを測る。文面は app.ts の `commitment_close` の行と同じ形
+  it('⭐ 台帳の一括の片付けは、塊ごとに1行で件数が名指しに載り、多い塊は「ほか N 件」に畳まれる', async () => {
+    const stores = createMemoryStores();
+    const reason = '外部イベントの宿題は解消済みだった。'.repeat(8);
+    const chunkRow = (number: number, total: number, count: number): JournalEntryInput =>
+      humanDecision(
+        'commitment_close',
+        `first-${number}`,
+        `人間が引き受けた仕事を絞り込みで一括して片付けた（${number}/${total} 塊目、この塊は ${count} 件）: ${reason}\n` +
+          `絞り込み: origin=[external]\n閉じた id: ${'x'.repeat(200)}`,
+      );
+
+    const inputs = await turnInputs(stores, async () => {
+      for (let number = 1; number <= 22; number += 1) {
+        await stores.journal.append(chunkRow(number, 22, 97));
+      }
+    });
+
+    // 新しい側から 20 行だけ載せ、残りは件数で畳む
+    expect(inputs[1]).toContain(
+      '台帳の行を閉じた: first-22（人間が引き受けた仕事を絞り込みで一括して片付けた（22/22 塊目、この塊は 97 件）',
+    );
+    expect(inputs[1]?.match(/台帳の行を閉じた: first-/gu)).toHaveLength(20);
+    expect(inputs[1]).toContain('ほか 2 件');
+  });
+
   it('日誌の読み出しが投げても、ターンは進み、節は出ない', async () => {
     const stores = createMemoryStores();
     const failing: Stores = {

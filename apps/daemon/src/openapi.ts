@@ -6,6 +6,9 @@ import {
   agentTokenViewSchema,
   APPROVAL_TRACE_STATES,
   CREDENTIAL_NAME,
+  CLOSE_MANY_LIMIT_DEFAULT,
+  CLOSE_MANY_LIMIT_MAX,
+  commitmentOriginSchema,
   commitmentSchema,
   createMemoryStores,
   INBOX_EVENT_TYPE_ORDER,
@@ -594,6 +597,69 @@ export const commitmentDetailResponseSchema = z.object({ entry: commitmentViewSc
 
 // 返さないと閉じられない: 閉じる口は id を取るので、返さないと人間は積めるが自分で閉じられない片道の口になる。
 export const commitmentOpenedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
+
+// 検証の本体（空・NUL だけ・空白だけ・`limit` の範囲・在る起点を全部並べた呼び・`until` の時差）はハンドラが `describeCloseManyViolation`（クローンの道具 `commitment_close_many` と同じ関数）へ任せる: ここで `.min(1)` や `.int()` を書くと、zod の英語の断り文が道具と違う文面で返り、「共有した検証」が2つの実装の一致に戻るため。ここが持つのは型だけ。
+export const commitmentCloseManyRequestSchema = z.object({
+  origin: z
+    .array(commitmentOriginSchema)
+    .describe('閉じる対象の起点（1件以上。在る起点を全部並べた呼びは断る）'),
+  source: z.array(z.string()).optional().describe('出所の完全一致（q の部分一致とは別物）'),
+  q: z.string().optional().describe('本文か出所への部分一致（大文字小文字を区別しない）'),
+  until: z
+    .string()
+    .optional()
+    .describe('この時刻までに載った行だけ（ISO8601。時差が必須。その瞬間ちょうどの行は含む）'),
+  reason: z
+    .string()
+    .describe('何をもってこの絞り込みに当たる行が片付いたとするか（空白だけは断る）'),
+  dryRun: z.boolean().optional().describe('省略すると true（数えるだけで1件も閉じない）'),
+  limit: z
+    .number()
+    .optional()
+    .describe(
+      `1回で閉じる上限（1以上${CLOSE_MANY_LIMIT_MAX}以下の整数。省略すると ${CLOSE_MANY_LIMIT_DEFAULT}）。古い側から閉じる`,
+    ),
+});
+
+const commitmentCloseManySampleSchema = z.object({
+  id: z.string(),
+  at: z.string(),
+  origin: commitmentOriginSchema,
+  source: z.string().optional(),
+  bodyExcerpt: z.string(),
+});
+
+// クローンの道具と同じ情報を構造にした応答（試算と実行で同じ形）: `closed` / `chunks` は試算では 0。`ids` は試算では対象、実行では閉じた id で、どちらも先頭だけ（残りは `idsOmitted`。実行のときは全 id が日誌に塊ごとに残る）。
+export const commitmentCloseManyResponseSchema = z.object({
+  ok: z.literal(true),
+  dryRun: z.boolean(),
+  funnel: z.object({
+    open: z.number().int(),
+    origin: z.number().int(),
+    source: z.number().int().optional(),
+    q: z.number().int().optional(),
+    until: z.number().int().optional(),
+  }),
+  matched: z.number().int(),
+  targeted: z.number().int(),
+  closed: z.number().int(),
+  chunks: z.number().int(),
+  remaining: z.number().int(),
+  ids: z.array(z.string()),
+  idsOmitted: z.number().int(),
+  oldestAt: z.string().optional(),
+  newestAt: z.string().optional(),
+  samples: z.array(commitmentCloseManySampleSchema).optional(),
+  raced: z.number().int(),
+  trimmedJustClosed: z.number().int(),
+  unreadable: z.number().int(),
+});
+
+// 塊の先の日誌が書けなかったので、そこで止めた回の応答（500）。止める前の塊は閉じているので、どこまで閉じたかを返す。
+export const commitmentCloseManyStoppedResponseSchema = journalWriteFailedResponseSchema.extend({
+  closed: z.number().int(),
+  closedIds: z.array(z.string()),
+});
 
 const managerWaitingSchema = z.object({
   requestId: z.string(),
