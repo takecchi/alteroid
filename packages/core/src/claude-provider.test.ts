@@ -585,6 +585,51 @@ describe('foldClaudeMessage — assistant', () => {
     });
   });
 
+  it('input が `__unparsedToolInput` だけを持つ tool_use は長さだけを載せ、raw は載せない（#5313）', () => {
+    const event = only(
+      sdk({
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'tu-1',
+              name: 'Write',
+              input: { __unparsedToolInput: { raw: 'SECRET-RAW', len: 10 } },
+            },
+            // 形が近いだけのものは普通の入力として扱う
+            {
+              type: 'tool_use',
+              id: 'tu-2',
+              name: 'Write',
+              input: { __unparsedToolInput: { raw: 'x', len: 1 }, extra: true },
+            },
+            { type: 'tool_use', id: 'tu-3', name: 'Write', input: { __unparsedToolInput: 'x' } },
+            {
+              type: 'tool_use',
+              id: 'tu-4',
+              name: 'Write',
+              input: { __unparsedToolInput: { raw: 1, len: 1 } },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(event).toMatchObject({
+      blocks: [
+        { type: 'tool_use', name: 'Write', id: 'tu-1', unparsedInputLen: 10 },
+        { type: 'tool_use', name: 'Write', id: 'tu-2' },
+        { type: 'tool_use', name: 'Write', id: 'tu-3' },
+        { type: 'tool_use', name: 'Write', id: 'tu-4' },
+      ],
+    });
+    expect(JSON.stringify(event)).not.toContain('SECRET-RAW');
+    const blocks = (event as unknown as { blocks: object[] }).blocks;
+    for (const block of blocks.slice(1)) expect('unparsedInputLen' in block).toBe(false);
+  });
+
   it('作業者（委譲の中）の発言は親の道具 id を保って写す（切るのは層の仕事）', () => {
     expect(
       only(

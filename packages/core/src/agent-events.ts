@@ -35,9 +35,10 @@ export interface AgentPermissionDenial {
 }
 
 // `tool_use` の `id` は道具の呼び出しを結果と対にする鍵（#5086。道具ごとの時間を測る）。読めなければ省く
+// `unparsedInputLen` は、入力が JSON として読めず本体が断った印（`__unparsedToolInput`。#5313）。長さだけを運び、入力の本文は運ばない
 export type AgentContentBlock =
   | { type: 'text'; text: string }
-  | { type: 'tool_use'; name: string; id?: string }
+  | { type: 'tool_use'; name: string; id?: string; unparsedInputLen?: number }
   | { type: 'other' };
 
 export interface AgentTurnUsage {
