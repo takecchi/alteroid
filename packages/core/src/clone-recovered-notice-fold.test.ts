@@ -231,6 +231,40 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
     await s.clone.stop();
   });
 
+  it('⭐ 鍵の入れ替えで背景処理を畳んだ起こし直しの知らせ（usage_rewoken_folded）: 戻っていれば畳み、本文（結果は届かない旨）は日誌に残り、台帳の行も daemon が閉じる', async () => {
+    const s = boot(stubPool(() => Promise.resolve([summary()])));
+    const body = `[${MANAGER_ID}] 鍵の入れ替えのため、背景処理 2 本を畳んで新しい鍵で起こし直し、結果は届かないので自分で確かめて続きを進めるよう促した`;
+
+    s.clone.post(notice('evt-folded', body, {}));
+    await expectFolded(s, 'evt-folded', body);
+    await waitFor(
+      async () => (await s.stores.commitments.get('evt-folded'))?.closedBy === 'daemon',
+      '台帳の行が daemon で閉じる',
+    );
+    // ターンは1回も回らない
+    expect(s.calls).toHaveLength(0);
+
+    await s.clone.stop();
+  });
+
+  it('⭐ usage_rewoken_folded: 担当が戻っていない（done で知らせより後の成功が無い）なら届ける', async () => {
+    const s = boot(stubPool(() => Promise.resolve([summary({ status: 'done' })])));
+
+    s.clone.post(notice('evt-folded-notback', '背景処理 1 本を畳んで FOLDED-NOTBACK-BODY', {}));
+    await expectDelivered(s, 'FOLDED-NOTBACK-BODY');
+
+    await s.clone.stop();
+  });
+
+  it('usage_rewoken_folded: list() が投げたときは畳まず届ける', async () => {
+    const s = boot(stubPool(() => Promise.reject(new Error('list が落ちた'))));
+
+    s.clone.post(notice('evt-folded-throw', '背景処理 1 本を畳んで FOLDED-THROW-BODY', {}));
+    await expectDelivered(s, 'FOLDED-THROW-BODY');
+
+    await s.clone.stop();
+  });
+
   it('印の無い報告は、担当が戻っていても届ける', async () => {
     const s = boot(stubPool(() => Promise.resolve([summary()])));
 
