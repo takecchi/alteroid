@@ -721,7 +721,8 @@ describe('クローンの道具', () => {
 
       const reply = await writeBased(h, {
         slug: 'about-me-core',
-        content: '# 私の芯\n\n'.concat('大事にしていること。'.repeat(50)),
+        // 大きさはカードで測る（要旨＋節の目次）。目次の行は文字数を載せなくなったので、本文を長くしても大きくならない——節を増やして大きくする
+        content: Array.from({ length: 20 }, (_, i) => `## 大事にしていること${i}\n本文`).join('\n'),
         summary: '新しい芯を作った',
       });
 
