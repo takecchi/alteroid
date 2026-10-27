@@ -265,7 +265,8 @@ describe('活動の要約', () => {
       lastFailure: {
         code: 'sentinel-code-9f2a71',
         via: 'sentinel-via-7c1b44',
-        at: '2026-09-01T00:00:00.000Z',
+        // 窓の中の時刻にする: 窓より前に終わった失敗は、終端が古い担当として畳まれる（digest-old-failed.test.ts）
+        at: now,
       },
     });
 
@@ -276,7 +277,7 @@ describe('活動の要約', () => {
     const block = digest.slice(start);
     expect(block).toContain('sentinel-code-9f2a71');
     expect(block).toContain('sentinel-via-7c1b44');
-    expect(block).toContain('2026-09-01T00:00:00.000Z');
+    expect(block).toContain(now);
     expect(digest.split('sentinel-code-9f2a71')).toHaveLength(2);
   });
 

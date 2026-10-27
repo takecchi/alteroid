@@ -100,18 +100,53 @@ export function isManagerOutcomeUnobserved(status: JobStatus): boolean {
   return status === 'lost' || status === 'failed';
 }
 
+type TerminatedAtFields = Pick<
+  Job,
+  'status' | 'lease' | 'lastFailure' | 'lastSystemError' | 'lastUnreported' | 'lastReportAt'
+>;
+
 /**
- * 要約のマネージャーの節で、1本ずつではなく本数と id だけの1行に畳む担当か（#4938 の案1）。
- * 畳むのは手が止まっている `done`（畳まれたものを含む）と `stopped` だけ。
- * 終端でも畳まないもの: 直近のターンが失敗で終わっている（`lastFailure`）・背景処理を待っている。
- * どちらも「手が空いた」ではなく判断の材料なので、今どおり1本ずつ出す。
+ * 終端した担当が終端した時刻（ミリ秒）。取れなければ `undefined`（呼ぶ側は「新しい」側に倒す）。
+ * `updatedAt` は使わない: `#persist` が終端した担当にも無条件に進める（退避・預かりの掃除・像の作り直し）ため、古い担当が毎回「新しい」に見える。
+ * 代わりに `#persist` に押されない欄の最大を取る: `lease.releasedAt`（`closed` で返す）・`lastFailure.at`・`lastSystemError.at`・`lastUnreported.at`・`lastReportAt`（`report` で終端する done の印）。
+ * 最大を取るのは、どれか1つだけでは足りないため: `closed(failed)` は `lastReportAt` を進めず、done は `report` で終端して貸し出しの返却を伴わない。
+ * `failed` は終端そのものを刻む欄（返却・失敗・システムエラー）が1つも無ければ取れない扱い: `lastReportAt` だけでは、長く走った担当が今日落ちた回を古く見積もる。
  */
-export function isManagerFoldedInDigest(
-  job: Pick<Job, 'status' | 'lastFailure'>,
+export function managerTerminatedAtMs(job: TerminatedAtFields): number | undefined {
+  const stamps = [
+    job.lease?.releasedAt,
+    job.lastFailure?.at,
+    job.lastSystemError?.at,
+    job.lastUnreported?.at,
+  ]
+    .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
+    .filter((ms) => !Number.isNaN(ms));
+  if (job.status === 'failed' && stamps.length === 0) return undefined;
+  const report = job.lastReportAt === undefined ? Number.NaN : Date.parse(job.lastReportAt);
+  const all = Number.isNaN(report) ? stamps : [...stamps, report];
+  return all.length === 0 ? undefined : Math.max(...all);
+}
+
+export type ManagerDigestFold = 'listed' | 'idle' | 'old-failed';
+
+/**
+ * 要約のマネージャーの節での扱い（#4938 の案1: 手が止まっている担当は1本ずつ出さず、本数と id だけの行に畳む）。
+ * `lastFailure` 付きの done・stopped と failed は、判断の材料なので終端が窓の中なら1本ずつ出す。
+ * `idle` は手が止まっている done・stopped の1行、`old-failed` は窓より前に終端した failed の1行。
+ * `listed`（1本ずつ）に残すもの: 走行中・返事待ち・lost・窓の中で終端したもの・背景処理を待っているもの・終端した時刻が取れないもの。
+ * 窓の判定は `updatedAt` ではなく `managerTerminatedAtMs`。
+ */
+export function classifyManagerForDigest(
+  job: TerminatedAtFields,
   awaitingBackground: ManagerAwaitingBackground | undefined,
-): boolean {
-  if (job.status !== 'done' && job.status !== 'stopped') return false;
-  return job.lastFailure === undefined && awaitingBackground === undefined;
+  since: Date,
+): ManagerDigestFold {
+  if (awaitingBackground !== undefined) return 'listed';
+  if (job.status !== 'done' && job.status !== 'stopped' && job.status !== 'failed') return 'listed';
+  if (job.status !== 'failed' && job.lastFailure === undefined) return 'idle';
+  const terminatedAt = managerTerminatedAtMs(job);
+  if (terminatedAt === undefined || terminatedAt >= since.getTime()) return 'listed';
+  return job.status === 'failed' ? 'old-failed' : 'idle';
 }
 
 /**
@@ -657,11 +692,16 @@ export async function buildActivityDigest(
     if (managers.length === 0 && unreadableJobNote === null) return [];
     const lines = ['', '## マネージャー（走行中・返事待ちから先に出す）'];
     // #4938 の案1: 手が止まっている担当（done・stopped）は1本ずつ出さず、本数と id だけの1行に畳む
-    const foldedManagers = managers.filter((job) =>
-      isManagerFoldedInDigest(job, awaitingBackground?.get(job.id)),
+    // 窓より前に終端した failed は別の行に畳む（failed と見えるように）。窓の判定は `updatedAt` ではなく終端の時刻（`classifyManagerForDigest`）
+    const foldOf = new Map(
+      managers.map((job) => [
+        job,
+        classifyManagerForDigest(job, awaitingBackground?.get(job.id), window.since),
+      ]),
     );
-    const foldedSet = new Set(foldedManagers);
-    const listedManagers = managers.filter((job) => !foldedSet.has(job));
+    const foldedManagers = managers.filter((job) => foldOf.get(job) === 'idle');
+    const oldFailedManagers = managers.filter((job) => foldOf.get(job) === 'old-failed');
+    const listedManagers = managers.filter((job) => foldOf.get(job) === 'listed');
     const shownManagers = listedManagers.slice(0, MAX_ITEMS);
     for (const job of shownManagers) {
       lines.push(
@@ -687,6 +727,15 @@ export async function buildActivityDigest(
         `- 手が止まっている担当（done・stopped）${foldedManagers.length} 本: ${foldedIds.join(', ')}` +
           (foldedRest === 0 ? '' : ` …ほか ${foldedRest} 件`),
         '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。',
+      );
+    }
+    if (oldFailedManagers.length > 0) {
+      const oldFailedIds = oldFailedManagers.slice(0, MAX_ITEMS).map((job) => job.id);
+      const oldFailedRest = oldFailedManagers.length - oldFailedIds.length;
+      lines.push(
+        `- 終端して窓より前の failed ${oldFailedManagers.length} 本: ${oldFailedIds.join(', ')}` +
+          (oldFailedRest === 0 ? '' : ` …ほか ${oldFailedRest} 件`),
+        '失敗の中身と依頼・報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。',
       );
     }
     if (unreadableJobNote !== null) lines.push(`- ${unreadableJobNote}`);
