@@ -488,7 +488,13 @@ async function write(
       ),
     );
   }
-  stdout.write(`書き換えました: ${slug}\n`);
+  // `created` が無い（古いデーモン）応答は従来どおり。新規と言い分けるのは、slug の打ち間違いに気づけるようにするため。
+  const body = (await response.json().catch(() => ({}))) as { created?: boolean };
+  stdout.write(
+    body.created === true
+      ? `新規作成しました: ${slug}（同じ slug の既存のやり方は無かったので、置き換えではありません）\n`
+      : `書き換えました: ${slug}\n`,
+  );
 }
 
 async function readAll(): Promise<string> {

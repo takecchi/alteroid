@@ -372,6 +372,11 @@ describe('/practices/:slug の印', () => {
     expect(rest).toEqual([]);
     expect(first).not.toHaveProperty('humanAction');
     expect(entry?.grounds).toContain('人間が直接 API からやり方を書き直した');
+    // 内部の issue 番号を日誌の文に残さない。全文で固定する
+    expect(entry?.grounds).toBe(
+      '人間が直接 API からやり方を書き直した（全文置換。前の本文は' +
+        'GET /practices/:slug/versions の版の履歴に残る）',
+    );
     expect(entry?.humanAction).toEqual({ kind: 'practice_write', target: 'daily', via });
     expect(entry?.target).toEqual({ kind: 'practice', slug: 'daily' });
   });

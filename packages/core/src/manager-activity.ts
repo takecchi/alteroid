@@ -67,16 +67,16 @@ export function describeManagerActivityForFlush(kind: ManagerActivityKind): stri
     case 'stalled-turn-end':
       return (
         ' ⚠ この委譲はターンが終わっているらしいのに、報告がまだ届いていない' +
-        '（#567 の形）。manager_list で `turnEndedAt` / `turnEndReason` を確かめること。'
+        '。manager_list で `turnEndedAt` / `turnEndReason` を確かめること。'
       );
     case 'stalled-tool-use':
       return (
         ' ⚠ この委譲は道具の応答待ちのまま、誰もその応答を待っていない' +
-        '（#572 の形）。manager_list で `toolUseStallPending` を確かめること。'
+        '。manager_list で `toolUseStallPending` を確かめること。'
       );
     case 'tool-running':
       return (
-        ' 道具を実行中。止まっている兆候ではない（Issue #2173）。' +
+        ' 道具を実行中。止まっている兆候ではない。' +
         'manager_list で `toolUseStallPending` の name を確かめること。急かさなくてよい。'
       );
     case 'unknown':

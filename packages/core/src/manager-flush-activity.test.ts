@@ -225,7 +225,8 @@ describe('flushWithheldReports が配る文面に、manager_list と同じ判定
 
     const text = await lastDeliveredText(inbox, '配っていない');
     expect(text).toContain('⚠');
-    expect(text).toContain('#567');
+    expect(text).toContain('報告がまだ届いていない。manager_list で `turnEndedAt`');
+    expect(text).not.toMatch(/#\d+/);
 
     await pool.stop();
   });
@@ -248,7 +249,8 @@ describe('flushWithheldReports が配る文面に、manager_list と同じ判定
 
     const text = await lastDeliveredText(inbox, '配っていない');
     expect(text).toContain('⚠');
-    expect(text).toContain('#572');
+    expect(text).toContain('誰もその応答を待っていない。manager_list で `toolUseStallPending`');
+    expect(text).not.toMatch(/#\d+/);
 
     await pool.stop();
   });

@@ -295,6 +295,12 @@ describe('鍵の回転の起こし直しは、待ちの上限を過ぎた背景�
     expect(message).toContain('続きを進めよ。もう終わっていたなら、そう報告して終えること');
     await s.pool.stop();
     const text = JSON.stringify(s.inbox);
+    // 担当が戻っていればクローンが畳んでよい印が付く（ターンを起こさず日誌へ。戻りを確かめられなければ届く）
+    const folded = s.inbox.filter(
+      (e) => e.type === 'manager_message' && e.text.includes('背景処理 1 本を畳んで'),
+    );
+    expect(folded).toHaveLength(1);
+    expect((folded[0] as { foldWhenBack?: unknown }).foldWhenBack).toEqual({});
     expect(text.match(/鍵の入れ替えのため、背景処理 1 本を畳んで/g)).toHaveLength(1);
     expect(text).toContain(
       '[mgr-fold] 鍵の入れ替えのため、背景処理 1 本を畳んで新しい鍵で起こし直し、結果は届かないので自分で確かめて続きを進めるよう促した',
