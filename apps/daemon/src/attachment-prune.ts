@@ -49,6 +49,15 @@ export function readAttachmentPruneConfig(
   return { everyMinutes, notes };
 }
 
+/**
+ * 行の掃除で消した件数を、1件以上のときだけ stderr に1行出す。0件の回は出さない（周期ごとにログが増えない。blob の掃除と同じ流儀）。
+ * 日誌へは書かない: 周期の運用の行で DB（最大のテーブルが日誌）を増やさないため。写し（`pruneAttachmentCopies`）の件数は対象外。
+ */
+export function reportAttachmentPruned(pruned: number): void {
+  if (pruned < 1) return;
+  writeStderrLine(`alteroidd: 添付の期限掃除: 期限を過ぎた ${pruned} 件を消した\n`);
+}
+
 export interface AttachmentPrunerOptions {
   readonly stores: Pick<Stores, 'attachments'>;
   readonly everyMinutes: number | null;

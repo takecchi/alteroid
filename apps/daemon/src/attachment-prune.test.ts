@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { createMemoryStores, fetchAttachmentCopy } from '@alteroid/core';
+import { createMemoryStores, fetchAttachmentCopy, setStderrSinkForTesting } from '@alteroid/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
@@ -11,6 +11,7 @@ import {
   MAX_ATTACHMENT_PRUNE_INTERVAL_MS,
   MIN_ATTACHMENT_PRUNE_EVERY_MINUTES,
   readAttachmentPruneConfig,
+  reportAttachmentPruned,
   startAttachmentPruning,
 } from './attachment-prune.js';
 
@@ -202,5 +203,51 @@ describe('添付の掃除の周期は setTimeout の範囲に収まる（#3539�
     const delays = await collectDelays({ everyMinutes: DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES });
     expect(delays).toEqual([3_600_000]);
     expect(MAX_ATTACHMENT_PRUNE_INTERVAL_MS).toBe(2_147_483_647);
+  });
+});
+
+describe('添付の期限掃除の件数の報告（#5384）', () => {
+  function captureStderr(): { lines: string[] } {
+    const lines: string[] = [];
+    setStderrSinkForTesting((line) => {
+      lines.push(line);
+    });
+    return { lines };
+  }
+
+  afterEach(() => {
+    setStderrSinkForTesting(null);
+  });
+
+  it('1件以上なら、件数を入れた1行を stderr に出す（全文一致）', () => {
+    const { lines } = captureStderr();
+    reportAttachmentPruned(3);
+    expect(lines).toEqual(['alteroidd: 添付の期限掃除: 期限を過ぎた 3 件を消した\n']);
+  });
+
+  it('0件なら何も出さない（周期ごとにログを増やさない）', () => {
+    const { lines } = captureStderr();
+    reportAttachmentPruned(0);
+    expect(lines).toEqual([]);
+  });
+
+  it('掃除器に onResult として渡すと、行の掃除が消した件数が1行で出て、0件の回は出ない', async () => {
+    const { lines } = captureStderr();
+    const counts = [2, 0];
+    const stores = {
+      attachments: { prune: () => Promise.resolve(counts.shift() ?? 0) },
+    } as unknown as Parameters<typeof startAttachmentPruning>[0]['stores'];
+    const pruner = startAttachmentPruning({
+      stores,
+      everyMinutes: 60,
+      onResult: reportAttachmentPruned,
+    });
+    try {
+      expect(await pruner.refresh()).toBe(2);
+      expect(await pruner.refresh()).toBe(0);
+    } finally {
+      pruner.stop();
+    }
+    expect(lines).toEqual(['alteroidd: 添付の期限掃除: 期限を過ぎた 2 件を消した\n']);
   });
 });

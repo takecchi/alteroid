@@ -93,7 +93,11 @@ import { TokenRotationJournalFold } from './token-rotation-journal-fold.js';
 import { startUsagePolling } from './usage-poller.js';
 import { startManagerPolling } from './manager-poller.js';
 import { readArchiveFoldConfig, startArchiveFolding } from './archive-folder.js';
-import { readAttachmentPruneConfig, startAttachmentPruning } from './attachment-prune.js';
+import {
+  readAttachmentPruneConfig,
+  reportAttachmentPruned,
+  startAttachmentPruning,
+} from './attachment-prune.js';
 import { startCloneMcpConfigSweeping } from './clone-mcp-config-sweep.js';
 import { AUTH_WITHHELD_ENV_KEYS, planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
@@ -918,6 +922,7 @@ export async function main(): Promise<void> {
     stores,
     copiesDir: attachmentCopiesDir(paths.root),
     everyMinutes: attachmentPruneConfig.everyMinutes,
+    onResult: reportAttachmentPruned,
   });
   // 起動時に1回、その後は周期。デーモンが異常終了して /tmp に残ったクローンの MCP 設定（資格入り）を掃く（#5222）
   const cloneMcpConfigSweeper = startCloneMcpConfigSweeping({ journal: stores.journal });
