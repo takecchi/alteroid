@@ -2588,7 +2588,7 @@ class Clone implements CloneHost {
     this.#lastHumanConversationId = head.conversationId;
     await this.#runTurn(
       head.conversationId,
-      `${header}\n\n${humanTurnText(events, priorTexts, notices)}`,
+      `${header}\n\n${humanTurnText(events, priorTexts, notices, this.#fixedTextFold())}`,
       'normal',
       null,
       images,
@@ -2721,7 +2721,7 @@ class Clone implements CloneHost {
     }
     // 起点の会話が1つに決まるときだけ結びつける: 別々の会話で頼まれた委譲を1つの会話へ結びつけると、知らせる先を取り違えるため（各件の本文が自分の起点を名乗る）
     const [onlyOrigin] = origins;
-    const prompt = mixedSignalBatchPrompt(grouped);
+    const prompt = mixedSignalBatchPrompt(grouped, fold);
     this.#stageReportsShown(events, prompt, now);
     await this.#runInternal(prompt, 'normal', [], origins.size === 1 ? (onlyOrigin ?? null) : null);
   }
@@ -8440,7 +8440,9 @@ function isHumanMessage(event: InboxEvent): event is HumanMessage {
 }
 
 /** 報告（`kind === 'report'`）だけを指す。`Extract` ではメンバー内の `kind` を絞れないので交差型で表す。 */
-type ManagerReportMessage = Extract<InboxEvent, { type: 'manager_message' }> & { kind: 'report' };
+export type ManagerReportMessage = Extract<InboxEvent, { type: 'manager_message' }> & {
+  kind: 'report';
+};
 
 function isManagerReport(event: InboxEvent): event is ManagerReportMessage {
   return event.type === 'manager_message' && event.kind === 'report';
@@ -8496,7 +8498,10 @@ function mixableSignalChars(event: MixableSignal): number {
 /**
  * 起点の違う合図の束の本文。各件は単発のときと同じ本文（`managerPrompt` / `buildExternalEventPrompt`）をそのまま並べる（要約しない）。
  */
-export function mixedSignalBatchPrompt(items: readonly MixedBatchItem[]): string {
+export function mixedSignalBatchPrompt(
+  items: readonly MixedBatchItem[],
+  fold: FixedTextFold = NO_FOLD,
+): string {
   const total = items.reduce(
     (sum, item) => sum + (typeof item === 'string' ? 1 : item.parts.length),
     0,
@@ -8513,7 +8518,11 @@ export function mixedSignalBatchPrompt(items: readonly MixedBatchItem[]): string
     const chunk = [
       `---`,
       `**マネージャー ${item.managerId} からの報告が続けて ${String(item.parts.length)} 件（(${String(first)})〜(${String(last)})）。** ` +
-        '後の報告が前の報告を補足・訂正していることがある。**この続きの報告は最後まで読んでから判断すること。**',
+        fold(
+          'batch-mixed-report-run-notice',
+          '後の報告が前の報告を補足・訂正していることがある。**この続きの報告は最後まで読んでから判断すること。**',
+          '（補足・訂正があるので最後まで読んでから判断する。同じ注意が会話の上にある）',
+        ),
       '',
     ];
     for (const part of item.parts) {
@@ -8525,7 +8534,11 @@ export function mixedSignalBatchPrompt(items: readonly MixedBatchItem[]): string
   return [
     `[system] 処理待ちのあいだに届いた合図を **${String(total)} 件** まとめて渡す（届いた順。要約していない）。` +
       '別々の担当・外部からの件が混ざっている。',
-    '**最後まで読んでから、1件ずつ要る手を打て。** 質問・確認には、それぞれの宛先（managerId と requestId）で答えること。',
+    fold(
+      'batch-mixed-heading-guide',
+      '**最後まで読んでから、1件ずつ要る手を打て。** 質問・確認には、それぞれの宛先（managerId と requestId）で答えること。',
+      '（最後まで読んでから1件ずつ打つ。質問は各宛先で答える。同じ注意が会話の上にある）',
+    ),
     '',
     ...lines,
   ].join('\n');
@@ -8558,6 +8571,7 @@ export function humanTurnText(
   events: HumanMessage[],
   priorTexts: ReadonlyMap<string, string> = new Map(),
   attachmentNotices: ReadonlyMap<string, string> = new Map(),
+  fold: FixedTextFold = NO_FOLD,
 ): string {
   const head = events[0];
   if (head === undefined) return '';
@@ -8572,8 +8586,12 @@ export function humanTurnText(
   return [
     `[system] 前のターンを処理しているあいだに人間から届いた発言を、続けて **${events.length} 件** ` +
       'まとめて渡す（届いた順の全文で、要約していない）。',
-    '**まとめて1つの応答で答えよ。** 1件目に答えたうえで、後の発言が' +
-      'それを言い直している・取り消している・条件を足していることがある。**最後まで読んでから答えること。**',
+    fold(
+      'batch-human-heading-guide',
+      '**まとめて1つの応答で答えよ。** 1件目に答えたうえで、後の発言が' +
+        'それを言い直している・取り消している・条件を足していることがある。**最後まで読んでから答えること。**',
+      '（1つの応答で答える。言い直し・取り消しがあるので最後まで読む。同じ注意が会話の上にある）',
+    ),
     '',
     '---',
     '',
@@ -8922,7 +8940,7 @@ function boundedReportBody(event: ManagerReportMessage): string[] {
  * 「N 件が届いた」と書かない: 上限で束を切ると偽になるため「N件をまとめて渡す」とする
  * （切った事実は `#notices` の `mergedBatchTruncation` が言う）。
  */
-function managerReportBatchPrompt(
+export function managerReportBatchPrompt(
   events: ManagerReportMessage[],
   origin: ManagerOrigin,
   settlements: ReportSettlement[],
@@ -8948,7 +8966,12 @@ function managerReportBatchPrompt(
 
   return [
     `[system] マネージャー ${head.managerId} から届いた報告を、処理待ちのあいだに続けて **${events.length} 件** まとめて渡す（要約していない）。`,
-    '**まとめて読んでから答えよ。** 後の報告が前の報告を補足・訂正していることがある。**最後まで読んでから判断すること。**',
+    // 件数・担当名は上の行で毎回出す。固定の注意だけを、同じ会話の2回目から参照にする（要点は参照にも残す）
+    fold(
+      'batch-report-heading-guide',
+      '**まとめて読んでから答えよ。** 後の報告が前の報告を補足・訂正していることがある。**最後まで読んでから判断すること。**',
+      '（補足・訂正があるので最後まで読んでから判断する。同じ注意が会話の上にある）',
+    ),
     '',
     '---',
     '',
@@ -8972,7 +8995,7 @@ function managerReportBatchPrompt(
  * 「N件が届いた」と書かない: 上限で束を切ると偽になるため「N件をまとめて渡す」とする。
  * 呼び出し元は常に2件以上で呼ぶので、0・1件の見た目は用意しない。
  */
-function externalBatchPrompt(
+export function externalBatchPrompt(
   events: ExternalEvent[],
   attachmentNoticeLines: readonly string[] = [],
   fold?: FixedTextFold,
@@ -8995,8 +9018,12 @@ function externalBatchPrompt(
       '（本文は1回だけ。全件で `source` と中身が一致している）。',
     `届いた時刻（届いた順）: ${timestamps}`,
     '',
-    '**同じ中身が複数回届いたからといって、同じ出来事の繰り返しとは限らない**' +
-      '——外の世界で別々に発行された合図である可能性がある。',
+    (fold ?? NO_FOLD)(
+      'batch-external-same-content-warning',
+      '**同じ中身が複数回届いたからといって、同じ出来事の繰り返しとは限らない**' +
+        '——外の世界で別々に発行された合図である可能性がある。',
+      '（同じ中身でも同じ出来事の繰り返しとは限らない。同じ注意が会話の上にある）',
+    ),
     '',
     externalEventInstruction(fold),
     '',
