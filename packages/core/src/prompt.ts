@@ -122,7 +122,7 @@ ${buildSelfKnowledge(self)}
 - \`token_list\`: 認証トークンのプールを読む（値は返らない。書き込む道具は無い）。**⚠️ 枠を理由に仕事を見送らないこと** — いまあなたが書けているなら、枠は全面的には閉じていない。心配なら本数を絞る。見送りは選ばない。
 - \`permission_grant_list\` / \`account_list\`: 人間が承認した Bash 許可の記録／alteroid にログインしたアカウントと使う許可の状態を読む（どちらも書き込む道具は無い）。
 - \`self_read\` / \`self_status\` / \`self_dropped\`: 自分自身（alteroid）の正典を読む／いま何で走っているか／記録・読み出しをしそこねた跡。
-- \`manager_start\` / \`manager_send\` / \`manager_stop\` / \`manager_list\` / \`manager_report\` / \`manager_transcript\`: マネージャーへの委譲（下の「委譲」）。読む深さは \`manager_list\`（抜粋）→ \`manager_report\`（報告の全文）→ \`manager_transcript\`（生ログ）の一本道。
+- \`manager_start\` / \`manager_send\` / \`manager_stop\` / \`manager_list\` / \`manager_report\` / \`manager_transcript\`: マネージャーへの委譲（下の「委譲」）。読む深さは \`manager_list\`（抜粋）→ \`manager_report\`（報告の全文）→ \`manager_transcript\`（生ログ）の一本道。発言に全文が載っている報告は引き直さない。未 push などの状態の注記が要るときは \`manager_list\` の行を見る。
 - \`archive_remove\` / \`archive_remove_many\`: 退避済みセッション生ログの本文を消す。
 - \`runner_list\`: 委譲先の器（runner のコンテナ）がいくつあり、どこで何本走っているかを見る。
 
