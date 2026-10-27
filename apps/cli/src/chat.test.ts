@@ -3322,6 +3322,74 @@ describe('chat の /answers（まとめて答える）', () => {
     expect(text).toContain('[approval-2] 回答に失敗: already answered');
   });
 
+  // 飛ばした・0 件・まとめての POST 失敗も onFailed に渡す（#5386）
+  describe('onFailed への渡し方（#5386）', () => {
+    async function run(
+      line: string,
+      ids: string[],
+      options: Parameters<typeof stubClient>[0] = {},
+    ) {
+      const out = captureStdout();
+      const { client, calls } = stubClient(options);
+      const failed: string[] = [];
+      await runSlashCommand(
+        line,
+        client,
+        listedApprovals(ids),
+        null,
+        undefined,
+        confirmYes,
+        (reason) => failed.push(reason),
+      );
+      return { text: out(), failed, calls };
+    }
+
+    it('全部成功した回は呼ばない', async () => {
+      const result = await run('/answers 1 allow 2 deny', ['approval-1', 'approval-2']);
+
+      expect(result.text).toContain('[approval-1] 回答しました');
+      expect(result.failed).toEqual([]);
+    });
+
+    it('一覧に無い番号だけの回（0 件）は、2 つの文を失敗として渡す', async () => {
+      const result = await run('/answers 9 ok', ['approval-1']);
+
+      expect(result.calls).toEqual([]);
+      expect(result.failed).toEqual([
+        '[9] は /approvals の一覧にありません（飛ばしました） / 送れる回答がありませんでした',
+      ]);
+    });
+
+    it('一部だけ無い番号の回は、送れた分を送ったうえで飛ばした分を失敗として渡す', async () => {
+      const result = await run('/answers 9 allow 1 deny', ['approval-1']);
+
+      const sent = (result.calls[0]?.args as { json: AnswersRequest }).json.answers;
+      expect(sent).toEqual([{ id: 'approval-1', answer: 'deny' }]);
+      expect(result.text).toContain('[approval-1] 回答しました');
+      expect(result.failed).toEqual(['[9] は /approvals の一覧にありません（飛ばしました）']);
+    });
+
+    it('飛ばしと結果行の失敗が混ざる回は、1 回にまとめて渡す', async () => {
+      const result = await run('/answers 9 allow 1 deny', ['approval-1'], {
+        approvalsAnswerResults: (answers) =>
+          answers.map((entry) => ({ id: entry.id, ok: false, error: 'already answered' })),
+      });
+
+      expect(result.failed).toEqual([
+        '[9] は /approvals の一覧にありません（飛ばしました） / [approval-1] 回答に失敗: already answered',
+      ]);
+    });
+
+    it('まとめての POST が 400 で落ちた回は、表示した文を失敗として渡す', async () => {
+      const result = await run('/answers 1 allow', ['approval-1'], { approvalsAnswerStatus: 400 });
+
+      expect(result.failed).toEqual([result.text.trimEnd()]);
+      expect(result.failed).toEqual([
+        'まとめて答えられませんでした（サーバ側の検査に落ちました） — HTTP 400（理由は読めませんでした）',
+      ]);
+    });
+  });
+
   it('引数が無ければ何も送らない', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient();

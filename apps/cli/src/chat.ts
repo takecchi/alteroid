@@ -2733,30 +2733,39 @@ export async function runSlashCommand(
         );
       }
 
+      // 飛ばした・0 件・まとめての POST 失敗も `onFailed` へ渡す（#5386）: 渡さないと非対話で止まらず終了コードも 0 になる（`/answer` と同じ理由）。
+      // 送れた分は巻き戻さず、飛ばしが 1 件でもあれば末尾で失敗として渡す。
+      const failures: string[] = [];
       const requests: { id: string; answer: string }[] = [];
       for (const pair of pairs) {
         const id = resolveListedId(pair.reference, listed.approvals);
         if (id === null) {
-          stdout.write(`  [${pair.reference}] は /approvals の一覧にありません（飛ばしました）\n`);
+          const skipped = `[${pair.reference}] は /approvals の一覧にありません（飛ばしました）`;
+          stdout.write(`  ${skipped}\n`);
+          failures.push(skipped);
           continue;
         }
         requests.push({ id, answer: pair.answer });
       }
 
       if (requests.length === 0) {
-        stdout.write('送れる回答がありませんでした\n');
+        const none = '送れる回答がありませんでした';
+        stdout.write(`${none}\n`);
+        onFailed?.([...failures, none].join(' / '));
         return 'ok';
       }
 
       const response = await client.approvals.answer.$post({ json: { answers: requests } });
       if (!response.ok) {
-        stdout.write(
-          `${await withDetail('まとめて答えられませんでした（サーバ側の検査に落ちました）', response)}\n`,
+        const failure = await withDetail(
+          'まとめて答えられませんでした（サーバ側の検査に落ちました）',
+          response,
         );
+        stdout.write(`${failure}\n`);
+        onFailed?.([...failures, failure].join(' / '));
         return 'ok';
       }
       const { results } = await response.json();
-      const failures: string[] = [];
       for (const result of results) {
         if (result.ok) {
           stdout.write(`  [${result.id}] 回答しました\n`);
@@ -2766,7 +2775,7 @@ export async function runSlashCommand(
         stdout.write(`  ${failure}\n`);
         failures.push(failure);
       }
-      // 全件を出し終えてから知らせる: 通った件と通らなかった件を人間が見分けられるように。
+      // 全件（飛ばした分を含む）を出し終えてから知らせる: 通った件と通らなかった件を人間が見分けられるように。
       if (failures.length > 0) onFailed?.(failures.join(' / '));
       return 'ok';
     }
