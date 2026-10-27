@@ -2162,13 +2162,17 @@ export async function runSlashCommand(
         json: { text, ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }) },
       });
       if (!response.ok) {
+        const body: unknown = await response.json().catch(() => null);
         const failure =
           response.status === 404
             ? `そのマネージャーは見つかりませんでした: ${id}`
-            : await errorDetail(response);
+            : await errorDetail({ status: response.status, json: () => Promise.resolve(body) });
         stdout.write(`${failure}\n`);
         // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
         onFailed?.(failure);
+        // `POST /chat` と同じ: 期限切れの印を捨てて、次の送信で上げ直す（捨てないと同じ 400 を繰り返す）
+        const missing = attachmentMissingMessageOf(body);
+        if (missing !== null) stdout.write(`${expireUploads(sentFiles, missing)}\n`);
         return 'ok';
       }
       // 受け取られた時点で外す（通常発言の `onAccepted` と同じ）。届かなかった結果（`session_missing` など）でも送信自体は通っている

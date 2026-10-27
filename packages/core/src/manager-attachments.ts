@@ -21,7 +21,12 @@ export type LoadedManagerAttachments =
       readonly attachments: RunnerAttachment[];
       readonly staged: readonly StagedManagerAttachment[];
     }
-  | { readonly ok: false; readonly message: string };
+  | {
+      readonly ok: false;
+      readonly message: string;
+      // 機械可読の理由（POST /chat と同じ綴り）。道具の本文には載せない（文だけを使う）。読めなかった（ストアの失敗）ときは付けない。
+      readonly code?: 'attachment_missing' | AttachmentRejectedError['code'];
+    };
 
 export async function loadManagerAttachments(
   stores: { readonly attachments: AttachmentStore },
@@ -46,6 +51,7 @@ export async function loadManagerAttachments(
   if (missing.length > 0) {
     return {
       ok: false,
+      code: 'attachment_missing',
       message:
         `添付が見つからない（保持期限が過ぎて消えた、または id の誤り）: ${missing.join(', ')}。` +
         '担い手には何も送っていない。人間に再送を頼むか、id を確かめること。',
@@ -56,7 +62,11 @@ export async function loadManagerAttachments(
     validateAttachmentBatch(metas.map(attachmentBatchItemOf), limits);
   } catch (error) {
     if (error instanceof AttachmentRejectedError) {
-      return { ok: false, message: `${reasonOf(error)}。担い手には何も送っていない。` };
+      return {
+        ok: false,
+        code: error.code,
+        message: `${reasonOf(error)}。担い手には何も送っていない。`,
+      };
     }
     throw error;
   }
@@ -86,6 +96,7 @@ export async function loadManagerAttachments(
     if (found === undefined) {
       return {
         ok: false,
+        code: 'attachment_missing',
         message: `添付 ${meta.id} は読む間に消えた（保持期限）。担い手には何も送っていない。`,
       };
     }
