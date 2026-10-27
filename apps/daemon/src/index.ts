@@ -546,6 +546,18 @@ export async function main(): Promise<void> {
     send: (text) => postToClone?.(text),
     isBackNow: (lost) =>
       runners.entries().some((entry) => entry.label === lost.label && entry.state === 'connected'),
+    // 全台が名乗り直していて未了の委譲が 0 本なら送らない（日誌にだけ残す）。数えられなければ送る。
+    listJobs: () => stores.jobs.listJobs(),
+    aliveRunnerIds: () =>
+      new Set(
+        runners
+          .entries()
+          .flatMap((entry) =>
+            entry.state === 'connected' && entry.runnerId !== undefined ? [entry.runnerId] : [],
+          ),
+      ),
+    recordSkipped: (entry) => stores.journal.append({ type: 'decision', ...entry, routine: true }),
+    warn: (message) => writeStderrLine(`alteroidd: ${message}\n`),
   });
   let takeOverOnSwap: (runnerId?: string) => void = () => {};
   let relocateOnLost: (runnerId?: string) => void = () => {};

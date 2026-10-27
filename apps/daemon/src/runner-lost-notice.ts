@@ -1,3 +1,7 @@
+import { reasonOf, type Job } from '@alteroid/core';
+
+import { decideRunnerSwapNotice } from './runner-swap-notice.js';
+
 // 器が一斉に作り直されると `onLost` が1台ごとに来て、クローンの受信箱へ1台1通届く（実測: 約20秒で8通）。
 // クローンへの知らせだけをここで1通へ合流する。stderr の1行・移送・日誌は1台ずつその場で行い、ここへは通さない（遅らせると移送が遅れるため）。
 
@@ -76,10 +80,50 @@ export function describeRunnersBack(
   return `\n送る時点では、${scope}名乗り直している（connected）。${RELOCATION_STILL_TRIED}`;
 }
 
+export interface RunnerLostSkipDecision {
+  readonly skip: boolean;
+  /** 日誌の `grounds` に載せる、なぜそう判定したかの文。 */
+  readonly grounds: string;
+}
+
+/**
+ * 送る必要が無いのは、全台が名乗り直していて、どの器にも未了の委譲が 0 本と数え切れたときだけ（倒れ側は「送る」）。
+ * 数える部品は `decideRunnerSwapNotice`（器の入れ替えの知らせ）と同じ。移送そのものは別の restored の知らせが担う。
+ */
+export function decideRunnerLostNoticeSkip(input: {
+  readonly entries: readonly RunnerLostEntry[];
+  readonly back: readonly RunnerLostEntry[];
+  readonly jobs: readonly Job[] | undefined;
+  readonly aliveRunnerIds: ReadonlySet<string> | undefined;
+}): RunnerLostSkipDecision {
+  const { entries, back, jobs, aliveRunnerIds } = input;
+  if (entries.length === 0 || back.length !== entries.length) {
+    return { skip: false, grounds: 'まだ名乗り直していない台があるので送る' };
+  }
+  const grounds: string[] = [];
+  for (const entry of entries) {
+    const decision = decideRunnerSwapNotice({ runnerId: entry.runnerId, jobs, aliveRunnerIds });
+    if (decision.wake) {
+      return { skip: false, grounds: `${nameOf(entry)}: ${decision.grounds}（送る）` };
+    }
+    grounds.push(`${nameOf(entry)}: ${decision.grounds}`);
+  }
+  return { skip: true, grounds: grounds.join(' / ') };
+}
+
 export interface RunnerLostNoticeDeps {
   readonly send: (text: string) => void;
   /** 送る時点で、その器がまた名乗っているか。省略時は確かめない（何も足さない）。 */
   readonly isBackNow?: (entry: RunnerLostEntry) => boolean;
+  /**
+   * 台帳と名簿を読めるとき、全台が戻っていて未了の委譲が 0 本なら送らない。省略時は常に送る。
+   * 読みが投げたら数えられなかったものとして送る。
+   */
+  readonly listJobs?: () => Promise<readonly Job[]>;
+  readonly aliveRunnerIds?: () => ReadonlySet<string>;
+  /** 送らなかった回を日誌へ残す（起こさない回だけ。`routine` の印付き）。 */
+  readonly recordSkipped?: (entry: { decision: string; grounds: string }) => Promise<unknown>;
+  readonly warn?: (message: string) => void;
   readonly setTimer?: (fn: () => void, ms: number) => unknown;
   readonly clearTimer?: (handle: unknown) => void;
   readonly windowMs?: number;
@@ -107,7 +151,29 @@ export function createRunnerLostNotice(deps: RunnerLostNoticeDeps): RunnerLostNo
   let timer: unknown = undefined;
   let open = false;
 
-  const drain = (): void => {
+  const skipDecision = async (
+    entries: readonly RunnerLostEntry[],
+    back: readonly RunnerLostEntry[],
+  ): Promise<RunnerLostSkipDecision> => {
+    const { listJobs } = deps;
+    if (listJobs === undefined) return { skip: false, grounds: '' };
+    // 台帳の読みを先に発行する（名簿の読みが同期で投げても、数えられなかった側に倒す）。
+    let jobs: readonly Job[] | undefined;
+    try {
+      jobs = await listJobs();
+    } catch {
+      jobs = undefined;
+    }
+    let aliveRunnerIds: ReadonlySet<string> | undefined;
+    try {
+      aliveRunnerIds = deps.aliveRunnerIds?.();
+    } catch {
+      aliveRunnerIds = undefined;
+    }
+    return decideRunnerLostNoticeSkip({ entries, back, jobs, aliveRunnerIds });
+  };
+
+  const drain = (allowSkip: boolean): void => {
     open = false;
     timer = undefined;
     const entries = pending;
@@ -121,7 +187,32 @@ export function createRunnerLostNotice(deps: RunnerLostNoticeDeps): RunnerLostNo
         return false;
       }
     });
-    deps.send(`${composeRunnerLostNotice(entries)}${describeRunnersBack(entries, back)}`);
+    const text = `${composeRunnerLostNotice(entries)}${describeRunnersBack(entries, back)}`;
+    // 全台が戻っているときだけ台帳を読む。flush（停止）は読みの完了を待てないので、常に送る。
+    if (!allowSkip || deps.listJobs === undefined || back.length !== entries.length) {
+      deps.send(text);
+      return;
+    }
+    void skipDecision(entries, back).then(
+      (decision) => {
+        if (!decision.skip) {
+          deps.send(text);
+          return;
+        }
+        const decisionText = `runner の名乗らなくなった知らせ（${entries.map(nameOf).join('・')}）: 送る時点で全台が名乗り直していて、未了の委譲が 0 本だったので、クローンへ送らなかった（日誌にだけ残す）`;
+        void Promise.resolve(
+          deps.recordSkipped?.({
+            decision: decisionText,
+            grounds: `${decision.grounds}。元の知らせ: ${text}`,
+          }),
+        ).catch((error: unknown) => {
+          deps.warn?.(
+            `名乗らなくなった知らせを送らなかった判断を日誌へ残せませんでした: ${reasonOf(error)}\n  ${decisionText}`,
+          );
+        });
+      },
+      () => deps.send(text),
+    );
   };
 
   return {
@@ -129,11 +220,11 @@ export function createRunnerLostNotice(deps: RunnerLostNoticeDeps): RunnerLostNo
       pending.push(entry); // 窓は最初の1台で開き、延長しない: 来続ける限り送られない形にしないため。
       if (open) return;
       open = true;
-      timer = setTimer(drain, windowMs);
+      timer = setTimer(() => drain(true), windowMs);
     },
     flush() {
       if (timer !== undefined) clearTimer(timer);
-      drain();
+      drain(false);
     },
   };
 }

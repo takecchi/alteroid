@@ -1,3 +1,4 @@
+import type { Job, JobStatus } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -259,5 +260,119 @@ describe('送る時点で、名乗り直した器を言う（#4449）', () => {
     notice.add({ label: 'a', reason: 'r' });
     notice.flush();
     expect(sent[0]).toContain('送る時点では、この器は名乗り直している');
+  });
+});
+
+describe('全台戻り＋未了の委譲 0 本なら送らない', () => {
+  function jobOf(id: string, status: JobStatus, runnerId?: string): Job {
+    return {
+      id,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      updatedAt: '2026-09-01T00:00:00.000Z',
+      status,
+      summary: `job ${id}`,
+      runnerId,
+    };
+  }
+
+  function setupSkip(opts: {
+    back: ReadonlySet<string>;
+    jobs: () => Promise<readonly Job[]>;
+    alive?: ReadonlySet<string>;
+  }) {
+    const clock = fakeClock();
+    const sent: string[] = [];
+    const journal: { decision: string; grounds: string }[] = [];
+    const notice = createRunnerLostNotice({
+      send: (text) => sent.push(text),
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+      isBackNow: (entry) => opts.back.has(entry.label),
+      listJobs: opts.jobs,
+      aliveRunnerIds: () => opts.alive ?? new Set(['runner-a', 'runner-b']),
+      recordSkipped: (entry) => {
+        journal.push(entry);
+        return Promise.resolve();
+      },
+    });
+    return { clock, sent, journal, notice };
+  }
+
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+
+  const both = () => [
+    { label: 'a', runnerId: 'runner-a', reason: 'r' },
+    { label: 'b', runnerId: 'runner-b', reason: 'r' },
+  ];
+
+  it('全台戻り＋委譲 0 本 → 送らず、日誌に1行だけ残す', async () => {
+    const { clock, sent, journal, notice } = setupSkip({
+      back: new Set(['a', 'b']),
+      jobs: () => Promise.resolve([jobOf('1', 'done', 'runner-a')]),
+    });
+    both().forEach((entry) => notice.add(entry));
+    clock.advance(RUNNER_LOST_COALESCE_MS);
+    await settle();
+    expect(sent).toEqual([]);
+    expect(journal).toHaveLength(1);
+    expect(journal[0]?.decision).toContain('クローンへ送らなかった');
+  });
+
+  it('全台戻りでも、その器に未了の委譲があれば送る', async () => {
+    const { clock, sent, journal, notice } = setupSkip({
+      back: new Set(['a', 'b']),
+      jobs: () => Promise.resolve([jobOf('1', 'running', 'runner-b')]),
+    });
+    both().forEach((entry) => notice.add(entry));
+    clock.advance(RUNNER_LOST_COALESCE_MS);
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(journal).toEqual([]);
+  });
+
+  it('一部だけ戻っていれば、委譲 0 本でも送る', async () => {
+    const { clock, sent, notice } = setupSkip({
+      back: new Set(['a']),
+      jobs: () => Promise.resolve([]),
+    });
+    both().forEach((entry) => notice.add(entry));
+    clock.advance(RUNNER_LOST_COALESCE_MS);
+    await settle();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('台帳の一覧が引けなければ送る', async () => {
+    const { clock, sent, journal, notice } = setupSkip({
+      back: new Set(['a', 'b']),
+      jobs: () => Promise.reject(new Error('読めない（テスト）')),
+    });
+    both().forEach((entry) => notice.add(entry));
+    clock.advance(RUNNER_LOST_COALESCE_MS);
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(journal).toEqual([]);
+  });
+
+  it('runnerId を聞けていない台がいれば送る', async () => {
+    const { clock, sent, notice } = setupSkip({
+      back: new Set(['a']),
+      jobs: () => Promise.resolve([]),
+    });
+    notice.add({ label: 'a', reason: 'r' });
+    clock.advance(RUNNER_LOST_COALESCE_MS);
+    await settle();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('flush（停止）は台帳を待たずに送る', () => {
+    const { sent, notice } = setupSkip({
+      back: new Set(['a']),
+      jobs: () => Promise.resolve([]),
+    });
+    notice.add({ label: 'a', runnerId: 'runner-a', reason: 'r' });
+    notice.flush();
+    expect(sent).toHaveLength(1);
   });
 });
