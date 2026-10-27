@@ -282,6 +282,10 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
 
       expect(entry.contextUsage?.mcpToolTokens).toBe(1_000);
       expect(entry.contextUsage?.mcpToolCount).toBe(3);
+      // サーバごとの内訳（#5291）: 道具ごとの名前は載らず、serverName ごとの本数とトークンだけが載る
+      expect(entry.contextUsage?.mcpToolsByServer).toEqual([
+        { name: 'alteroid', count: 3, tokens: 1_000 },
+      ]);
       expect(entry.contextUsage?.memoryFileTokens).toBe(700);
       expect(entry.contextUsage?.memoryFileCount).toBe(1);
       expect(entry.contextUsage?.systemPromptTokens).toBe(8_000);

@@ -3462,6 +3462,29 @@
                               "minimum": 0,
                               "maximum": 9007199254740991
                             },
+                            "mcpToolsByServer": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "tokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": ["name", "count", "tokens"],
+                                "additionalProperties": false
+                              }
+                            },
                             "memoryFileTokens": {
                               "type": "integer",
                               "minimum": 0,
@@ -3645,6 +3668,29 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "mcpToolsByServer": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "tokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": ["name", "count", "tokens"],
+                                "additionalProperties": false
+                              }
                             },
                             "memoryFileTokens": {
                               "type": "integer",
@@ -9046,6 +9092,29 @@
                                     "minimum": 0,
                                     "maximum": 9007199254740991
                                   },
+                                  "mcpToolsByServer": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "name": {
+                                          "type": "string"
+                                        },
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "tokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": ["name", "count", "tokens"],
+                                      "additionalProperties": false
+                                    }
+                                  },
                                   "memoryFileTokens": {
                                     "type": "integer",
                                     "minimum": 0,
@@ -9237,6 +9306,29 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "mcpToolsByServer": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "name": {
+                                          "type": "string"
+                                        },
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "tokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": ["name", "count", "tokens"],
+                                      "additionalProperties": false
+                                    }
                                   },
                                   "memoryFileTokens": {
                                     "type": "integer",
@@ -11140,6 +11232,29 @@
                               "minimum": 0,
                               "maximum": 9007199254740991
                             },
+                            "mcpToolsByServer": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "tokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": ["name", "count", "tokens"],
+                                "additionalProperties": false
+                              }
+                            },
                             "memoryFileTokens": {
                               "type": "integer",
                               "minimum": 0,
@@ -11323,6 +11438,29 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "mcpToolsByServer": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "tokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": ["name", "count", "tokens"],
+                                "additionalProperties": false
+                              }
                             },
                             "memoryFileTokens": {
                               "type": "integer",
@@ -15486,6 +15624,29 @@
                                       "minimum": 0,
                                       "maximum": 9007199254740991
                                     },
+                                    "mcpToolsByServer": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "tokens": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          }
+                                        },
+                                        "required": ["name", "count", "tokens"],
+                                        "additionalProperties": false
+                                      }
+                                    },
                                     "memoryFileTokens": {
                                       "type": "integer",
                                       "minimum": 0,
@@ -15677,6 +15838,29 @@
                                       "type": "integer",
                                       "minimum": 0,
                                       "maximum": 9007199254740991
+                                    },
+                                    "mcpToolsByServer": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "tokens": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          }
+                                        },
+                                        "required": ["name", "count", "tokens"],
+                                        "additionalProperties": false
+                                      }
                                     },
                                     "memoryFileTokens": {
                                       "type": "integer",
@@ -17445,6 +17629,29 @@
                                       "minimum": 0,
                                       "maximum": 9007199254740991
                                     },
+                                    "mcpToolsByServer": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "tokens": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          }
+                                        },
+                                        "required": ["name", "count", "tokens"],
+                                        "additionalProperties": false
+                                      }
+                                    },
                                     "memoryFileTokens": {
                                       "type": "integer",
                                       "minimum": 0,
@@ -17636,6 +17843,29 @@
                                       "type": "integer",
                                       "minimum": 0,
                                       "maximum": 9007199254740991
+                                    },
+                                    "mcpToolsByServer": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "tokens": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          }
+                                        },
+                                        "required": ["name", "count", "tokens"],
+                                        "additionalProperties": false
+                                      }
                                     },
                                     "memoryFileTokens": {
                                       "type": "integer",
@@ -19404,6 +19634,29 @@
                                     "minimum": 0,
                                     "maximum": 9007199254740991
                                   },
+                                  "mcpToolsByServer": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "name": {
+                                          "type": "string"
+                                        },
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "tokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": ["name", "count", "tokens"],
+                                      "additionalProperties": false
+                                    }
+                                  },
                                   "memoryFileTokens": {
                                     "type": "integer",
                                     "minimum": 0,
@@ -19595,6 +19848,29 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "mcpToolsByServer": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "name": {
+                                          "type": "string"
+                                        },
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "tokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": ["name", "count", "tokens"],
+                                      "additionalProperties": false
+                                    }
                                   },
                                   "memoryFileTokens": {
                                     "type": "integer",
@@ -21354,6 +21630,29 @@
                                     "minimum": 0,
                                     "maximum": 9007199254740991
                                   },
+                                  "mcpToolsByServer": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "name": {
+                                          "type": "string"
+                                        },
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "tokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": ["name", "count", "tokens"],
+                                      "additionalProperties": false
+                                    }
+                                  },
                                   "memoryFileTokens": {
                                     "type": "integer",
                                     "minimum": 0,
@@ -21545,6 +21844,29 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "mcpToolsByServer": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "name": {
+                                          "type": "string"
+                                        },
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "tokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": ["name", "count", "tokens"],
+                                      "additionalProperties": false
+                                    }
                                   },
                                   "memoryFileTokens": {
                                     "type": "integer",

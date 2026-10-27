@@ -106,7 +106,8 @@ export interface AgentContextUsage {
     tokens: number;
     kind: 'used' | 'free' | 'buffer' | 'deferred';
   }[];
-  mcpTools?: readonly { tokens: number }[];
+  // `serverName` は SDK が持つ欄（#5291）。持たない駆動役のために任意にし、無い道具は畳みの側が 'unknown' へ寄せる。
+  mcpTools?: readonly { name?: string; serverName?: string; tokens: number }[];
   memoryFiles?: readonly { tokens: number }[];
   systemPromptSections?: readonly { tokens: number }[];
 }

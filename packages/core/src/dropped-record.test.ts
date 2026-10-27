@@ -1635,6 +1635,13 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     categoriesOmitted: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
     mcpToolTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
     mcpToolCount: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    mcpToolsByServer: {
+      emit: 'never',
+      why:
+        '構造化された欄そのもの（#5291）。サーバ名は人間の設定が決める自由文で、' +
+        '`categories[].name` と同じ理由で跡へ出さない。要素は' +
+        '`CONTEXT_USAGE_MCP_SERVER_SHAPE_PLAN` が別に守る。',
+    },
     memoryFileTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
     memoryFileCount: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
     systemPromptTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
@@ -1675,6 +1682,18 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     FieldPlan
   >;
 
+  const CONTEXT_USAGE_MCP_SERVER_SHAPE_PLAN = {
+    name: {
+      emit: 'never',
+      why: 'サーバ名は人間の設定が決める自由文（#5291）。`categories[].name` と同じ判断で跡へ出さない。',
+    },
+    count: { emit: 'never', why: '同上（`CONTEXT_USAGE_SHAPE_PLAN` の durationMs と同じ判断）。' },
+    tokens: { emit: 'never', why: '同上（`CONTEXT_USAGE_SHAPE_PLAN` の durationMs と同じ判断）。' },
+  } satisfies Record<
+    keyof Required<NonNullable<ContextUsageObservation['mcpToolsByServer']>[number]>,
+    FieldPlan
+  >;
+
   const SECRET = 'ghp_222222222222222222222222222222222222';
 
   // 他の欄の値と衝突しない桁を割り当てる（小さい値だと衝突しうる）。
@@ -1691,6 +1710,8 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
   const CU_SYSTEM_PROMPT_TOKENS = 910011;
   const CU_SYSTEM_PROMPT_SECTION_COUNT = 910012;
   const CU_CATEGORY_TOKENS = 910013;
+  const CU_MCP_SERVER_COUNT = 910014;
+  const CU_MCP_SERVER_TOKENS = 910015;
 
   const CONTEXT_USAGE_NUMBER_MARKERS: readonly number[] = [
     CU_DURATION_MS,
@@ -1706,6 +1727,8 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     CU_SYSTEM_PROMPT_TOKENS,
     CU_SYSTEM_PROMPT_SECTION_COUNT,
     CU_CATEGORY_TOKENS,
+    CU_MCP_SERVER_COUNT,
+    CU_MCP_SERVER_TOKENS,
   ];
 
   const FULL_CONTEXT_USAGE_CATEGORY: Required<
@@ -1727,6 +1750,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     categoriesOmitted: CU_CATEGORIES_OMITTED,
     mcpToolTokens: CU_MCP_TOOL_TOKENS,
     mcpToolCount: CU_MCP_TOOL_COUNT,
+    mcpToolsByServer: [{ name: SECRET, count: CU_MCP_SERVER_COUNT, tokens: CU_MCP_SERVER_TOKENS }],
     memoryFileTokens: CU_MEMORY_FILE_TOKENS,
     memoryFileCount: CU_MEMORY_FILE_COUNT,
     systemPromptTokens: CU_SYSTEM_PROMPT_TOKENS,
@@ -2076,10 +2100,20 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     expect(plannedFields).toEqual(implementedFields);
   });
 
+  it('CONTEXT_USAGE_MCP_SERVER_SHAPE_PLAN のキー集合は mcpToolsByServer[] の要素の実装側の欄と両方向に一致する（zod から機械的に引く）', () => {
+    const serverShape = contextUsageObservationSchema.shape.mcpToolsByServer.unwrap().element.shape;
+    const implementedFields = new Set(Object.keys(serverShape));
+    expect(implementedFields.size).toBeGreaterThan(0);
+
+    const plannedFields = new Set(Object.keys(CONTEXT_USAGE_MCP_SERVER_SHAPE_PLAN));
+    expect(plannedFields).toEqual(implementedFields);
+  });
+
   it('turn_usage.contextUsage / context_usage.contextUsage の入れ子は、秘密・目印・欄名のどれも跡に現れない（#981）', () => {
     const contextUsageFieldNames = [
       ...Object.keys(CONTEXT_USAGE_SHAPE_PLAN),
       ...Object.keys(CONTEXT_USAGE_CATEGORY_SHAPE_PLAN),
+      ...Object.keys(CONTEXT_USAGE_MCP_SERVER_SHAPE_PLAN),
     ];
 
     for (const type of ['turn_usage', 'context_usage'] as const) {

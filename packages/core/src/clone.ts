@@ -88,6 +88,7 @@ import {
   distillSucceededEntry,
 } from './distill-gap.js';
 import { describeFirstTurnToolSearch } from './boot-tool-search-observed.js';
+import { foldMcpToolsByServer } from './mcp-tools-by-server.js';
 import { describeSelectionsViolation, foldSelections } from './approval-choices.js';
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
@@ -7405,7 +7406,11 @@ class Clone implements CloneHost {
         ...(omittedCategories > 0 ? { categoriesOmitted: omittedCategories } : {}),
         ...(mcpTools.length === 0
           ? {}
-          : { mcpToolTokens: sumTokens(mcpTools), mcpToolCount: mcpTools.length }),
+          : {
+              mcpToolTokens: sumTokens(mcpTools),
+              mcpToolCount: mcpTools.length,
+              mcpToolsByServer: foldMcpToolsByServer(mcpTools),
+            }),
         ...(memoryFiles.length === 0
           ? {}
           : { memoryFileTokens: sumTokens(memoryFiles), memoryFileCount: memoryFiles.length }),

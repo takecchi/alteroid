@@ -366,6 +366,17 @@ export const contextUsageObservationSchema = z.object({
   categoriesOmitted: z.number().int().positive().optional(),
   mcpToolTokens: z.number().int().nonnegative().optional(),
   mcpToolCount: z.number().int().nonnegative().optional(),
+  // サーバごとの内訳（#5291）。トークンの大きい順、上限を超えた分は名前が固定の「ほか」の1行へ合算する（`mcp-tools-by-server.ts`）。
+  // `.optional()` にする: この欄が増える前に書かれた `turn_usage` の行が読み出しで落ちないため
+  mcpToolsByServer: z
+    .array(
+      z.object({
+        name: z.string(),
+        count: z.number().int().nonnegative(),
+        tokens: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
   memoryFileTokens: z.number().int().nonnegative().optional(),
   memoryFileCount: z.number().int().nonnegative().optional(),
   systemPromptTokens: z.number().int().nonnegative().optional(),

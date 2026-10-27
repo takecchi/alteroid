@@ -1,4 +1,5 @@
 import type { AgentTurnUsage } from './agent-events.js';
+import { MCP_SERVER_OTHER } from './mcp-tools-by-server.js';
 import type { ContextUsageObservation } from './schema.js';
 
 // MCP の道具の行を名前で探す: `kind` は「その行が何か」までは言わず、`deferred` か `used` かだけを言うため（分類は kind、どの行かの特定だけ名前）。
@@ -39,6 +40,20 @@ function mcpToolsPhrase(contextUsage: ContextUsageObservation): string {
   );
 }
 
+// 1行が伸びないよう、トークンの大きい上位だけを名前とトークンで出す（#5291。全サーバの内訳は `turn_usage.contextUsage.mcpToolsByServer`）。
+// 「ほか」の行は塊であってサーバではないので順位に入れない。内訳が無い回（古い行・SDK が返さなかった回）は書かない（0 を埋めない）。
+const TOP_SERVERS_SHOWN = 3;
+
+function topServersPhrase(contextUsage: ContextUsageObservation): string | undefined {
+  const rows = (contextUsage.mcpToolsByServer ?? []).filter((row) => row.name !== MCP_SERVER_OTHER);
+  if (rows.length === 0) return undefined;
+  const top = [...rows]
+    .sort((a, b) => b.tokens - a.tokens)
+    .slice(0, TOP_SERVERS_SHOWN)
+    .map((row) => `${row.name} ${tokens(row.tokens)}`);
+  return `MCP の道具の上位サーバ（トークン）: ${top.join('・')}`;
+}
+
 /**
  * 起動後の最初の本セッションのターンで、ToolSearch が実際に効いたかを1行にする（#4921。起動時の1行は #4269）。
  * 起動時の1行は env から見た「見込み」で、これはその後の `getContextUsage()` の区分から見た「実際」。
@@ -49,6 +64,8 @@ export function describeFirstTurnToolSearch(
   usage: AgentTurnUsage | undefined,
 ): string {
   const parts = [mcpToolsPhrase(contextUsage)];
+  const topServers = topServersPhrase(contextUsage);
+  if (topServers !== undefined) parts.push(topServers);
   if (contextUsage.totalTokens !== undefined) {
     parts.push(`文脈 ${tokens(contextUsage.totalTokens)} トークン`);
   }

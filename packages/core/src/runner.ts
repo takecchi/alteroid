@@ -317,6 +317,7 @@ import {
   type ScratchSweeperOptions,
 } from './scratch-sweep.js';
 import { computeUnpushedWork, worktreeRootsOfDirs } from './unpushed-work.js';
+import { foldMcpToolsByServer } from './mcp-tools-by-server.js';
 import type { ContextUsageObservation, JobStatus } from './schema.js';
 // クローンと同じ判定を呼ぶ: 層ごとに書くと片方だけが印を見落として非対称になるため
 import {
@@ -4829,7 +4830,11 @@ class RunnerSession {
         ...(omittedCategories > 0 ? { categoriesOmitted: omittedCategories } : {}),
         ...(mcpTools.length === 0
           ? {}
-          : { mcpToolTokens: sumTokens(mcpTools), mcpToolCount: mcpTools.length }),
+          : {
+              mcpToolTokens: sumTokens(mcpTools),
+              mcpToolCount: mcpTools.length,
+              mcpToolsByServer: foldMcpToolsByServer(mcpTools),
+            }),
         ...(memoryFiles.length === 0
           ? {}
           : { memoryFileTokens: sumTokens(memoryFiles), memoryFileCount: memoryFiles.length }),
