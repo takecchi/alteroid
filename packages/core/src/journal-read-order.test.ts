@@ -177,6 +177,28 @@ describe('journal_read — order', () => {
     expect(reply).not.toContain('order=');
   });
 
+  it('省略の案内は、asc では q を勧めず（q は断られるため）since / until / types / with に絞り、desc では今までの文言のまま', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 100; i += 1) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        text: `[mgr-${i}] ${'長い報告本文。'.repeat(120)}`,
+      });
+    }
+    const read = call(stores);
+
+    const asc = await read({ order: 'asc', limit: 100 });
+    expect(asc).toContain('件は省略');
+    expect(asc).toContain('（狭めるなら since / until / types / with を指定する）。');
+    expect(asc).not.toMatch(/狭めるなら[^）]*\bq\b/);
+
+    const desc = await read({ limit: 100 });
+    expect(desc).toContain('件は省略');
+    expect(desc).toContain('（狭めるなら since / types / with / q を指定する）。');
+  });
+
   it('asc で頁が読めない行だけのとき、「新しい側」に行が在ると言い、order=asc 付きの続きで先へ進める', async () => {
     const synthetic = createSyntheticJournalStore({
       total: 10,
