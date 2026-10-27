@@ -239,7 +239,6 @@ import {
   JOURNAL_ENTRY_TYPES,
   PERMISSION_GRANT_CONSENT_PHRASE,
   approvalQuestionSchema,
-  approvalUpdatedAt,
   describeAnsweredVia,
   commitmentOriginSchema,
   commitmentUpdatedAt,
@@ -1112,7 +1111,7 @@ async function describeMissingReport(
 }
 
 const COMMITMENT_LIST_BUDGET = 8_000;
-const COMMITMENT_BODY_LIMIT = 240;
+export const COMMITMENT_BODY_LIMIT = 240;
 const UNREADABLE_COMMITMENT_IDS_SHOWN = 20;
 // 定数は道具と HTTP で共有するので `commitment-close-many.ts` に在る。外へ出していた名前はここから変えない
 export { CLOSE_MANY_LIMIT_MAX, CLOSE_MANY_JOURNAL_ID_CHARS };
@@ -4401,6 +4400,7 @@ export function createCloneTools(context: ToolContext) {
         'いま人間の回答を待っている件の一覧。',
         '人間が席に居ないあいだに溜まる。溜まっていても他の仕事は進めてよい。',
         '一覧の質問は抜粋で、全文が要る1件は id を渡して取る。',
+        '一覧の各件は作成時刻だけを出す（回答待ちだけの一覧なので、更新はいつも作成と同じ）。',
       ].join(' '),
       {
         id: z
@@ -4476,9 +4476,8 @@ export function createCloneTools(context: ToolContext) {
           renderListingEntry({
             id: approval.id,
             title: approvalTitle(approval.question),
-            // 更新は `createdAt` をそのまま出す: 回答待ちだけの一覧では「まだ一度も変わっていない」という観測で、値を作らないため
+            // 更新は出さない: 回答待ちだけの一覧では `approvalUpdatedAt` が常に `createdAt` と同じで、同じ時刻の2回目は情報にならないため（読み方は説明文が持つ）
             createdAt: approval.createdAt,
-            updatedAt: approvalUpdatedAt(approval),
             summary: excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT),
             extra: [
               approval.questions === undefined || approval.questions.length === 0
@@ -4493,7 +4492,6 @@ export function createCloneTools(context: ToolContext) {
         );
         const notes = [
           '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
-          '（更新＝この1件が最後に変わった時刻。回答待ちだけを出す一覧なので、常に作成と同じになる）',
           ...(unreadableNote === null ? [] : [unreadableNote]),
         ];
         // 詳細が予算に入りきれば、今どおり作成の古い順に全件の詳細を出す
@@ -5148,6 +5146,7 @@ export function createCloneTools(context: ToolContext) {
         '**載っているものは、あなたが閉じるまで消えない。**',
         'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
         '1件の全文（依頼本文と、片付けたならその理由）が要るなら id を渡す。片付いた件も id で読める。',
+        '一覧の各件で更新が出ないときは作成と同じ（更新＝最後に変わった時刻）。includeClosed なしは全件が未了で、状態の札は行に付かない。',
         'origin で出所を絞れる（他の絞りと併用できる）。',
         'q で本文・出所を語で探せる（他の絞りと併用できる）。',
         'order で新しい順に変えられる（台帳が膨らんで予算で切れるとき、直近の行へ届くにはこちらを使う）。',
@@ -5350,12 +5349,17 @@ export function createCloneTools(context: ToolContext) {
             id: entry.id,
             title: commitmentOriginBadge(entry),
             createdAt: entry.at,
-            updatedAt: commitmentUpdatedAt(entry),
+            // 作成と違うときだけ更新を出す（未了の行は常に同じ）: 同じ時刻の2回目は情報にならないため
+            updatedAt:
+              commitmentUpdatedAt(entry) === entry.at ? undefined : commitmentUpdatedAt(entry),
             summary: excerptLine(entry.body, COMMITMENT_BODY_LIMIT),
             extra: [
-              entry.closedAt === undefined
-                ? '  状態: 未了'
-                : `  状態: ${entry.closedAt} に片付けた（${excerptLine(entry.closedReason ?? '', 120)}）`,
+              entry.closedAt !== undefined
+                ? `  状態: ${entry.closedAt} に片付けた（${excerptLine(entry.closedReason ?? '', 120)}）`
+                : // 片付けた分を出さない呼びでは全行が未了で、先頭の1行が言う: 行ごとの同じ札を積まないため
+                  includeClosed === true
+                  ? '  状態: 未了'
+                  : null,
             ],
           }),
         );
@@ -5408,8 +5412,7 @@ export function createCloneTools(context: ToolContext) {
                     return (
                       `…ほか ${rest} 件は省略（${scopeNote}${countNote}、${shownOrderNote} ${shown} 件だけ` +
                       `出した。${directionNote}続きは commitment_list cursor=${nextCursor} で取れる` +
-                      `（includeClosed=${includeClosed === true} / order=${effectiveOrder} のまま呼ぶこと）。` +
-                      '1件の全文は commitment_list id=<id> で取れる）。'
+                      `includeClosed=${includeClosed === true} / order=${effectiveOrder} のまま呼ぶこと）。`
                     );
                   },
                 }),
@@ -5417,9 +5420,9 @@ export function createCloneTools(context: ToolContext) {
         // `entries` ではなく `view` で見る: 最後の頁で1件も出していないのにこの2行だけが付くのを避けるため
         if (view.length > 0) {
           lines.push(
-            '（本文は240字の抜粋。1件の全文は commitment_list id=<id> で取れる。片付いた件も読める）',
-            '（更新＝この1件が最後に変わった時刻。まだ片付けていなければ、受け取った時刻と同じ）',
+            `（本文は${COMMITMENT_BODY_LIMIT}字の抜粋。1件の全文は commitment_list id=<id> で取れる。片付いた件も読める）`,
           );
+          if (includeClosed !== true) lines.unshift('（以下はすべて未了）');
         }
         if (unreadable.length > 0) {
           const idsAll = unreadable
@@ -6966,6 +6969,7 @@ export function createCloneTools(context: ToolContext) {
         '**write のたびに版が1つ増える。remove しても版は消えない**——消した slug を',
         '同じ名前で作り直しても、版番号は消える前の続きから振られる。',
         '中身が要るなら practice_read slug=<slug> version=<版番号> で開くこと。',
+        '各版は作成時刻だけを出す（版は追記専用なので、更新はいつも作成と同じ）。',
       ].join(' '),
       {
         slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
@@ -6987,7 +6991,7 @@ export function createCloneTools(context: ToolContext) {
             title: `[${entry.kind}] ${entry.title}`,
             summary: `${String(entry.chars)} 文字`,
             createdAt: entry.at,
-            updatedAt: entry.at,
+            // 更新は出さない: 版は追記専用で、書かれた時刻が作成でも更新でもあるため（同じ値の2回目を積まない）
           }),
         );
         return text(

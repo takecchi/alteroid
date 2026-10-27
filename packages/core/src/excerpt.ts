@@ -125,7 +125,8 @@ export interface ListingEntryFields {
   title: string;
   summary: string;
   createdAt: string;
-  updatedAt: string;
+  // 省くと作成だけを出す: 呼び手が「更新は作成と同じ」と分かっている一覧で、同じ時刻を2回積まないため
+  updatedAt?: string;
 }
 
 export function renderListingEntry(
@@ -133,7 +134,9 @@ export function renderListingEntry(
 ): string {
   return [
     `- ${entry.id} ${entry.title}`,
-    `  作成: ${entry.createdAt} / 更新: ${entry.updatedAt}`,
+    entry.updatedAt === undefined
+      ? `  作成: ${entry.createdAt}`
+      : `  作成: ${entry.createdAt} / 更新: ${entry.updatedAt}`,
     `  ${entry.summary}`,
     ...(entry.extra ?? []).filter((line) => line !== null),
   ].join('\n');
