@@ -2196,14 +2196,19 @@ class Clone implements CloneHost {
       // まとめ読みの判定を呼ぶ前に必ずリセットする: `#drainMergeableWithinLimit` は対象外の起点では呼ばれず、戻さないと前の反復で切ったときの断り書きが持ち越されるため。判定の呼び出しより下に置かない: 立った印を拭き取り、`external` の束でだけ断り書きが黙って消えるため
       this.#notices.set('mergedBatchTruncation', '');
       const mergedHuman = this.#mergedHumanBatch(event);
-      const mergedReports = this.#mergedManagerReportBatch(event);
+      const sameManagerReports = this.#mergedManagerReportBatch(event);
       const mergedExternal = this.#mergedExternalBatch(event);
-      // 起点の違う合図の束は、前からの束（同じ担当の報告の連続・同じ中身の external の連続）に当たらなかったときだけ試す:
-      // 前からの束の振る舞い（本文の組み方・予算で省く形・配り直しの束）を1字も変えないため
+      // 起点の違う合図の束は、前からの束（同じ担当の報告の連続・同じ中身の external の連続）に当たらなかったときに試す。
+      // 例外は同じ担当の報告の束の続きに混合の束に入る合図が連続しているとき: 1つの混合の束へ広げる（同じ担当の束の本文が予算に収まるときだけ。
+      // 同じ担当の塊の見出しと注意は混合の本文の中でも保つ）。広げられない束の振る舞い（本文の組み方・予算で省く形・配り直しの束）は1字も変えない
+      const extendedSignals =
+        sameManagerReports === null ? null : this.#extendReportBatchToMixed(sameManagerReports);
+      const mergedReports = extendedSignals === null ? sameManagerReports : null;
       const mergedSignals =
-        mergedHuman === null && mergedReports === null && mergedExternal === null
+        extendedSignals ??
+        (mergedHuman === null && sameManagerReports === null && mergedExternal === null
           ? this.#mixedSignalBatch(event)
-          : null;
+          : null);
       const batch: InboxEvent[] = mergedHuman ??
         mergedReports ??
         mergedExternal ??
@@ -2381,16 +2386,34 @@ class Clone implements CloneHost {
   // 字数の予算を超える分は束に入れず次のターンへ回す（束の中で本文を省かない）: 省くと、質問・確認が requestId ごと見えなくなるため
   #mixedSignalBatch(event: InboxEvent): MixableSignal[] | null {
     if (!this.#mixable(event)) return null;
-    let total = mixableSignalChars(event);
-    const rest = this.#drainMergeableWithinLimit((queued) => {
+    const rest = this.#drainMixableWithinBudget(mixableSignalChars(event), 1);
+    if (rest.length === 0) return null;
+    return [event, ...rest.filter(isMixableSignal)];
+  }
+
+  /**
+   * 同じ担当の報告の束（`#mergedManagerReportBatch`）の続きに、混合の束に入る合図が連続しているときは、1つの混合の束にまとめる。
+   * 広げるのは「同じ担当の束がすべて混合の束の条件を満たし、本文の合計が予算に収まる」ときだけ: 収まらない束は、古い側を省く従来の同じ担当の束の本文のまま（混合は予算超過分を次のターンへ回すので、扱いが違う）。
+   * 続きが無ければ `null`（従来の同じ担当の束をそのまま使う）。
+   */
+  #extendReportBatchToMixed(reports: ManagerReportMessage[]): MixableSignal[] | null {
+    if (!reports.every((report) => this.#mixable(report))) return null;
+    const total = reports.reduce((sum, report) => sum + mixableSignalChars(report), 0);
+    if (total > MIXED_SIGNAL_BATCH_BUDGET) return null;
+    const rest = this.#drainMixableWithinBudget(total, reports.length);
+    if (rest.length === 0) return null;
+    return [...reports, ...rest.filter(isMixableSignal)];
+  }
+
+  #drainMixableWithinBudget(initialTotal: number, alreadyTaken: number): InboxEvent[] {
+    let total = initialTotal;
+    return this.#drainMergeableWithinLimit((queued) => {
       if (!this.#mixable(queued)) return false;
       const chars = mixableSignalChars(queued);
       if (total + chars > MIXED_SIGNAL_BATCH_BUDGET) return false;
       total += chars;
       return true;
-    });
-    if (rest.length === 0) return null;
-    return [event, ...rest.filter(isMixableSignal)];
+    }, alreadyTaken);
   }
 
   #mixable(event: InboxEvent): event is MixableSignal {
@@ -2414,9 +2437,13 @@ class Clone implements CloneHost {
 
   // `1` から数え始める: 呼び出し元が `event` 自身を先頭に足すので、`taken` を `0` から始めると上限より1件多く束ねるため
   // 「本当に届いた件数」とは名乗らない: 処理済みの分は待ち行列に残っておらず測りようがなく、言えるのは待ち行列の先頭に残っている件数だけのため
-  #drainMergeableWithinLimit(predicate: (queued: InboxEvent) => boolean): InboxEvent[] {
+  // `alreadyTaken` は既に束に入っている件数（同じ担当の束を混合へ広げるときの続きの数え始め）
+  #drainMergeableWithinLimit(
+    predicate: (queued: InboxEvent) => boolean,
+    alreadyTaken = 1,
+  ): InboxEvent[] {
     const limit = this.#mergedBatchLimit;
-    let taken = 1;
+    let taken = alreadyTaken;
     const matchesRule = (queued: InboxEvent): boolean =>
       predicate(queued) && this.#mergeable(queued);
     const rest = this.#delivery.inbox.drainWhile((queued) => {
@@ -2602,9 +2629,32 @@ class Clone implements CloneHost {
           : event;
       items.push(managerPrompt(sent, origin, liveness, settlement, now, [], fold));
     }
+    // 同じ担当の報告が隣り合って2件以上続く所は塊にする（見出しと「補足・訂正がある可能性」の注意を保つ）。質問・確認・external・別の担当を挟んだ報告は塊にしない: 順序を入れ替えないため
+    const grouped: MixedBatchItem[] = [];
+    for (let index = 0; index < events.length;) {
+      const event = events[index];
+      const text = items[index];
+      if (event === undefined || text === undefined) break;
+      let end = index + 1;
+      if (isManagerReport(event)) {
+        while (end < events.length) {
+          const next = events[end];
+          if (next === undefined || !isManagerReport(next) || next.managerId !== event.managerId) {
+            break;
+          }
+          end += 1;
+        }
+      }
+      grouped.push(
+        end - index >= 2 && isManagerReport(event)
+          ? { managerId: event.managerId, parts: items.slice(index, end) }
+          : text,
+      );
+      index = end;
+    }
     // 起点の会話が1つに決まるときだけ結びつける: 別々の会話で頼まれた委譲を1つの会話へ結びつけると、知らせる先を取り違えるため（各件の本文が自分の起点を名乗る）
     const [onlyOrigin] = origins;
-    const prompt = mixedSignalBatchPrompt(items);
+    const prompt = mixedSignalBatchPrompt(grouped);
     this.#stageReportsShown(events, prompt, now);
     await this.#runInternal(prompt, 'normal', [], origins.size === 1 ? (onlyOrigin ?? null) : null);
   }
@@ -8366,15 +8416,44 @@ function mixableSignalChars(event: MixableSignal): number {
 /**
  * 起点の違う合図の束の本文。各件は単発のときと同じ本文（`managerPrompt` / `buildExternalEventPrompt`）をそのまま並べる（要約しない）。
  */
-export function mixedSignalBatchPrompt(items: readonly string[]): string {
+export function mixedSignalBatchPrompt(items: readonly MixedBatchItem[]): string {
+  const total = items.reduce(
+    (sum, item) => sum + (typeof item === 'string' ? 1 : item.parts.length),
+    0,
+  );
+  let number = 0;
+  const lines = items.flatMap((item): string[] => {
+    if (typeof item === 'string') {
+      number += 1;
+      return [`---`, `**(${String(number)})**`, '', item, ''];
+    }
+    // 同じ担当の報告の連続（`#mergedManagerReportBatch` の束と同じ見出しと注意）を束の中でも保つ: 後の報告が前の報告の補足・訂正のことがあり、並べただけだと連続だと読めないため
+    const first = number + 1;
+    const last = number + item.parts.length;
+    const chunk = [
+      `---`,
+      `**マネージャー ${item.managerId} からの報告が続けて ${String(item.parts.length)} 件（(${String(first)})〜(${String(last)})）。** ` +
+        '後の報告が前の報告を補足・訂正していることがある。**この続きの報告は最後まで読んでから判断すること。**',
+      '',
+    ];
+    for (const part of item.parts) {
+      number += 1;
+      chunk.push(`**(${String(number)})**`, '', part, '');
+    }
+    return chunk;
+  });
   return [
-    `[system] 処理待ちのあいだに届いた合図を **${String(items.length)} 件** まとめて渡す（届いた順。要約していない）。` +
+    `[system] 処理待ちのあいだに届いた合図を **${String(total)} 件** まとめて渡す（届いた順。要約していない）。` +
       '別々の担当・外部からの件が混ざっている。',
     '**最後まで読んでから、1件ずつ要る手を打て。** 質問・確認には、それぞれの宛先（managerId と requestId）で答えること。',
     '',
-    ...items.flatMap((item, index) => [`---`, `**(${String(index + 1)})**`, '', item, '']),
+    ...lines,
   ].join('\n');
 }
+
+/** 起点の違う合図の束の1項目。文字列は1件、`parts` は同じ担当の報告が連続した塊（見出しと注意が付く）。 */
+export type MixedBatchItem =
+  string | { readonly managerId: string; readonly parts: readonly string[] };
 
 /** 人間の発言のターンの入力の先頭に置く、会話の名乗り。セッションが1本なので、名乗らないと別の会話の件を混ぜる。 */
 // 同じ会話が続く回は id の1行だけにする: いちばん多い普通の一往復で、読ませるものを増やさないため（`humanTurnText` の doc）

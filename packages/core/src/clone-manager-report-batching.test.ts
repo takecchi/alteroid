@@ -222,7 +222,8 @@ describe('クローン — 同じマネージャーの連続する report をま
 
   // 経緯（2026-10-26、トークン節約の依頼〈会話 3d91a736〉と承認 a6048e8a に基づく teto の決め。architecture.md「同時実行モデル」）: もとは B1・A3 がそれぞれ単独のターン（4本）だったことを固定していた。
   // 起点の違う合図をまとめて読むようになったので、B1 と A3 は1ターン（混ぜた束）になる。同じ担当の束（A1・A2）が A3 を飛び越えて取り込まないことは変わらない
-  it('間に別のマネージャーの報告が挟まったら、同じ担当の束はそこで止まる（飛び越えない）。残りは起点の違う合図の束になる', async () => {
+  it('間に別のマネージャーの報告が挟まっても、同じ担当の束は飛び越えない。続きの合図と1つの束（1ターン）にまとまり、届いた順に並ぶ', async () => {
+    // 仕様変更: 以前は [A1,A2] と [B1,A3] の2ターンに割れていた。同じ担当の束の続きに混合の束の条件を満たす合図が連続しているので、1ターンへ広げる
     const s = setup();
 
     s.clone.post(humanMessage('先客'));
@@ -234,24 +235,23 @@ describe('クローン — 同じマネージャーの連続する report をま
     s.clone.post(managerMessage('a3', 'mgr-A', 'A3本目'));
 
     await waitFor(
-      () => s.calls[0]?.inputs[2]?.includes('A3本目') ?? false,
-      '3本目（B1・A3の束）のターンが投げられる',
+      () => s.calls[0]?.inputs[1]?.includes('A3本目') ?? false,
+      '2本目（全件の束）のターンが投げられる',
     );
     await settle();
 
     const inputs = (s.calls[0] as FakeCall).inputs;
-    expect(inputs).toHaveLength(3);
+    expect(inputs).toHaveLength(2);
 
-    expect(inputs[1] ?? '').toContain('A1本目');
-    expect(inputs[1] ?? '').toContain('A2本目');
-    expect(inputs[1] ?? '').not.toContain('B1本目');
-    expect(inputs[1] ?? '').not.toContain('A3本目');
-
-    expect(inputs[2] ?? '').toContain('B1本目');
-    expect(inputs[2] ?? '').toContain('A3本目');
-    expect(inputs[2] ?? '').not.toContain('A1本目');
+    const merged = inputs[1] ?? '';
+    expect(merged).toContain('**4 件** まとめて渡す');
+    const order = ['A1本目', 'A2本目', 'B1本目', 'A3本目'].map((text) => merged.indexOf(text));
+    expect(order.every((index) => index > -1)).toBe(true);
     // 届いた順に並ぶ
-    expect((inputs[2] ?? '').indexOf('B1本目')).toBeLessThan((inputs[2] ?? '').indexOf('A3本目'));
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // 同じ担当の連続（A1・A2）の塊だけに見出しと注意が付く。単独の B1・A3 には付かない
+    expect(merged.match(/からの報告が続けて/g)).toHaveLength(1);
+    expect(merged).toContain('マネージャー mgr-A からの報告が続けて 2 件（(1)〜(2)）');
 
     await s.clone.stop();
   }, 15_000);
@@ -289,7 +289,8 @@ describe('クローン — 同じマネージャーの連続する report をま
     await s.clone.stop();
   }, 15_000);
 
-  it('question / permission はまとめられない（同じマネージャーの report のすぐ後ろでも止まる）', async () => {
+  it('question / permission は同じ担当の束には入らない。報告の後ろでは、順序を保ったまま起点の違う合図の束に載り、宛先を持つ', async () => {
+    // 仕様変更: 以前は [r1,r2] と [q1] の2ターンだった。質問は混合の束の対象なので、同じ担当の束の続きとして1ターンにまとまる
     const s = setup();
 
     s.clone.post(humanMessage('先客'));
@@ -300,20 +301,19 @@ describe('クローン — 同じマネージャーの連続する report をま
     s.clone.post(managerMessage('q1', 'mgr-Q', '質問1本目', 'question', 'req-1'));
 
     await waitFor(
-      () => s.calls[0]?.inputs[2]?.includes('質問1本目') ?? false,
-      '3本目（question単独）のターンが投げられる',
+      () => s.calls[0]?.inputs[1]?.includes('質問1本目') ?? false,
+      '2本目（全件の束）のターンが投げられる',
     );
     await settle();
 
     const inputs = (s.calls[0] as FakeCall).inputs;
-    expect(inputs).toHaveLength(3);
-    expect(inputs[1] ?? '').toContain('報告1本目');
-    expect(inputs[1] ?? '').toContain('報告2本目');
-    expect(inputs[1] ?? '').not.toContain('質問1本目');
-    expect(inputs[2] ?? '').toContain('質問1本目');
-    expect(inputs[2] ?? '').not.toContain('報告1本目');
-    expect(inputs[2] ?? '').not.toContain('報告2本目');
-    expect(inputs[2]).toContain('manager_send');
+    expect(inputs).toHaveLength(2);
+    const merged = inputs[1] ?? '';
+    const order = ['報告1本目', '報告2本目', '質問1本目'].map((text) => merged.indexOf(text));
+    expect(order.every((index) => index > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(merged).toContain('managerId: "mgr-Q", requestId: "req-1"');
+    expect(merged).toContain('manager_send');
 
     await s.clone.stop();
   }, 15_000);
@@ -1158,6 +1158,254 @@ describe('クローン — 起点の違う合図をまとめて読む', () => {
     expect(inputs[1] ?? '').toContain(big('大B'));
     expect(inputs[1] ?? '').not.toContain('大C');
     expect(inputs[2] ?? '').toContain(big('大C'));
+
+    await s.clone.stop();
+  }, 15_000);
+
+  // 同じ担当の報告の束の続きに他担当の合図が連続するときは、1ターンへ広げる（効き: A A B B は 2 ターン → 1 ターン）
+  it('A A B B は1ターン。同じ担当の塊ごとに見出しと「補足・訂正」の注意が付く', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('a1', 'mgr-A', 'A1本文'));
+    s.clone.post(managerMessage('a2', 'mgr-A', 'A2本文'));
+    s.clone.post(managerMessage('b1', 'mgr-B', 'B1本文'));
+    s.clone.post(managerMessage('b2', 'mgr-B', 'B2本文'));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('B2本文')),
+      '束のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(2);
+    const merged = inputs[1] ?? '';
+    expect(merged).toContain('**4 件** まとめて渡す');
+    expect(merged).toContain('マネージャー mgr-A からの報告が続けて 2 件（(1)〜(2)）');
+    expect(merged).toContain('マネージャー mgr-B からの報告が続けて 2 件（(3)〜(4)）');
+    expect(merged.match(/補足・訂正していることがある/g)).toHaveLength(2);
+    expect(merged.match(/最後まで読んでから判断すること/g)).toHaveLength(2);
+
+    await waitFor(
+      async () => (await s.stores.inbox.claimPending()).length === 0,
+      '4件とも消し込まれる',
+    );
+    await s.clone.stop();
+  }, 15_000);
+
+  it('A A B C D は1ターン（以前は [A,A] [B,C,D] の2ターン）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('a1', 'mgr-A', 'A1本文'));
+    s.clone.post(managerMessage('a2', 'mgr-A', 'A2本文'));
+    s.clone.post(managerMessage('b1', 'mgr-B', 'B1本文'));
+    s.clone.post(managerMessage('c1', 'mgr-C', 'C1本文'));
+    s.clone.post(managerMessage('d1', 'mgr-D', 'D1本文'));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('D1本文')),
+      '束のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(2);
+    expect(inputs[1] ?? '').toContain('**5 件** まとめて渡す');
+    expect(inputs[1] ?? '').toContain('マネージャー mgr-A からの報告が続けて 2 件');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('同じ担当の束の続きが添付つきなら、広げず従来どおり分かれる（[A,A] の束と添付つきBの単発）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('a1', 'mgr-A', 'A1本文'));
+    s.clone.post(managerMessage('a2', 'mgr-A', 'A2本文'));
+    s.clone.post(
+      managerMessage('b1', 'mgr-B', '添付つきB本文', {
+        rejectedAttachments: [{ name: 'a.png', reason: '大きすぎる' }],
+      }),
+    );
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('添付つきB本文')),
+      'B のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain('A2本文');
+    expect(inputs[1] ?? '').not.toContain('添付つきB本文');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('同じ担当の束に添付つきが含まれるときは広げない（同じ担当の束のまま。続きは次のターン）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(
+      managerMessage('a1', 'mgr-A', 'A1添付つき', {
+        rejectedAttachments: [{ name: 'a.png', reason: '大きすぎる' }],
+      }),
+    );
+    s.clone.post(managerMessage('a2', 'mgr-A', 'A2本文'));
+    s.clone.post(managerMessage('b1', 'mgr-B', 'B1本文'));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('B1本文')),
+      'B のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain('A2本文');
+    expect(inputs[1] ?? '').not.toContain('B1本文');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('同じ担当の束の本文が予算に収まらないときは広げない（古い側を省く従来の同じ担当の束のまま）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    const big = (label: string): string => `${label}${'x'.repeat(30_000)}`;
+    s.clone.post(managerMessage('a1', 'mgr-A', big('大A1')));
+    s.clone.post(managerMessage('a2', 'mgr-A', big('大A2')));
+    s.clone.post(managerMessage('b1', 'mgr-B', 'B1本文'));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('B1本文')),
+      'B のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain('大A2');
+    expect(inputs[1] ?? '').toContain('補足・訂正');
+    expect(inputs[1] ?? '').not.toContain('B1本文');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('広げた束でも本文の合計予算を超える分は次のターンへ回る（本文は省かない）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    const big = (label: string): string => `${label}${'x'.repeat(20_000)}`;
+    s.clone.post(managerMessage('a1', 'mgr-A', big('大A1')));
+    s.clone.post(managerMessage('a2', 'mgr-A', big('大A2')));
+    s.clone.post(managerMessage('b1', 'mgr-B', big('大B1')));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('大B1')),
+      'B を含むターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain(big('大A2'));
+    expect(inputs[1] ?? '').not.toContain('大B1');
+    expect(inputs[2] ?? '').toContain(big('大B1'));
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('広げた束も人間の発言を飛び越えない（人間優先を切って到着順で確かめる）', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_CLONE_HUMAN_PRIORITY: '0' });
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('a1', 'mgr-A', 'A1本文'));
+    s.clone.post(managerMessage('a2', 'mgr-A', 'A2本文'));
+    s.clone.post(humanMessage('割り込む人間'));
+    s.clone.post(managerMessage('b1', 'mgr-B', 'B1本文'));
+    s.clone.post(managerMessage('b2', 'mgr-B', 'B2本文'));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('B2本文')),
+      'B の束のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(4);
+    expect(inputs[1] ?? '').toContain('A2本文');
+    expect(inputs[1] ?? '').not.toContain('割り込む人間');
+    expect(inputs[2] ?? '').toContain('割り込む人間');
+    expect(inputs[3] ?? '').toContain('B1本文');
+    expect(inputs[3] ?? '').toContain('B2本文');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('広げた束も件数の上限を超えない（上限2: [A,A] は2件で止まり、続きは次のターン）', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('a1', 'mgr-A', 'A1本文'));
+    s.clone.post(managerMessage('a2', 'mgr-A', 'A2本文'));
+    s.clone.post(managerMessage('b1', 'mgr-B', 'B1本文'));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('B1本文')),
+      'B のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain('A2本文');
+    expect(inputs[1] ?? '').not.toContain('B1本文');
+    expect(inputs[2] ?? '').toContain('B1本文');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('広げた束の件数は既定の上限 50 を超えない（A 2件 + B 60件 → 50 件の束と残り12件）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('a1', 'mgr-A', 'A1本文'));
+    s.clone.post(managerMessage('a2', 'mgr-A', 'A2本文'));
+    for (let i = 1; i <= 60; i += 1) {
+      s.clone.post(managerMessage(`b${i}`, `mgr-B${i}`, `B本文${i}。`));
+    }
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('B本文60。')),
+      '最後の束のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain('**50 件** まとめて渡す');
+    expect(inputs[2] ?? '').toContain('**12 件** まとめて渡す');
 
     await s.clone.stop();
   }, 15_000);
