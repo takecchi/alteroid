@@ -1328,6 +1328,29 @@ function text(body: string) {
   return { content: [{ type: 'text' as const, text: body }] };
 }
 
+type ToolText = ReturnType<typeof text>;
+
+// `manager_send` / `journal_write` の任意引数 `closes` の上限: 1回の呼びで片付く行の数として十分で、引数が肥大しない大きさ
+const CLOSES_MAX = 5;
+// 説明文は2道具で同じ1文にする（道具定義は毎ターン読み直されるため、長くしない）
+const CLOSES_SCHEMA = z
+  .array(z.object({ id: z.string(), reason: z.string() }))
+  .optional()
+  .describe('任意。この呼びで片付いた台帳の行を、id と理由で閉じる（返事だけでは閉じない）');
+
+// 件数と各 reason の形は、本来の作業の前に丸ごと検査する（`commitment_close` と同じ検査）
+function describeClosesViolation(closes: readonly { id: string; reason: string }[] | undefined) {
+  const lengthError = describeArrayLengthViolation('closes', closes, { max: CLOSES_MAX });
+  if (lengthError !== null) return `${lengthError}何もしていない。`;
+  for (const [index, entry] of (closes ?? []).entries()) {
+    const reasonError =
+      describeStringLengthViolation(`closes[${index}].reason`, entry.reason, { min: 1 }) ??
+      describeBlankViolation(`closes[${index}].reason`, entry.reason);
+    if (reasonError !== null) return `${reasonError}何もしていない。`;
+  }
+  return null;
+}
+
 // 断り文の部品は `tool-arg-checks.ts` へ切り出してある（道具と HTTP が同じ関数を共有するため）。既存の import 元（この文書）を変えないよう、書式の関数だけここから再公開する
 export { formatIntRangeJa, formatStringLengthJa, formatArrayLengthJa };
 
@@ -2798,6 +2821,96 @@ export function createCloneTools(context: ToolContext) {
   const getConversationId = context.conversationId;
   const getWorkConversationId = context.workConversationId ?? getConversationId;
 
+  // `commitment_close` の本体（`closes` 付きの呼びも同じものを使う。挙動がずれないよう1つだけ持つ）
+  async function closeCommitmentBody(id: string, reason: string): Promise<string> {
+    const reasonError =
+      describeStringLengthViolation('reason', reason, { min: 1 }) ??
+      describeBlankViolation('reason', reason);
+    if (reasonError !== null) return reasonError;
+    // 読めない行でも閉じられるようにする: 投げ直さず、下の `close()` の戻り値だけで「閉じられたか」を判定する
+    let existing: Commitment | null;
+    let unreadable = false;
+    try {
+      existing = await stores.commitments.get(id);
+    } catch (error) {
+      if (!(error instanceof UnreadableCommitmentError)) throw error;
+      existing = null;
+      unreadable = true;
+    }
+    if (existing === null && !unreadable) {
+      return await describeCommitmentNotOnLedger(stores, id, context.journalSearch);
+    }
+    if (existing !== null && existing.closedAt !== undefined) {
+      return `${id} は既に ${existing.closedAt} に片付けてある（${existing.closedReason ?? ''}）。`;
+    }
+    // 片付いているかの判定は台帳の戻り値に任せる: 直前の `get` の後に他の経路が先に閉じていると、実際には閉じていないのに日誌へ「片付けた」と書くことになるため
+    if (!(await stores.commitments.close(id, new Date().toISOString(), reason, 'clone'))) {
+      let after: Commitment | null;
+      try {
+        after = await stores.commitments.get(id);
+      } catch (error) {
+        if (!(error instanceof UnreadableCommitmentError)) throw error;
+        return `${id} は既に片付けてある（読めない形で入っているため、いつ・どう片付けたかは分からない）。`;
+      }
+      // 読み直した行の形どおりに言う: 消えていた（保持上限で刈られた・会話の取り消しで消えた）回と、閉じていない回を「片付けてある」に潰さないため
+      if (after === null) {
+        return (
+          `${await describeCommitmentNotOnLedger(stores, id, context.journalSearch)}` +
+          '（確かめた直後に台帳から無くなっていた）。この呼びでは閉じていない。'
+        );
+      }
+      if (after.closedAt === undefined) {
+        return (
+          `${id} は閉じられなかった（台帳には未了のまま在るが、閉じる書き込みが通らなかった）。` +
+          'commitment_list で確かめてから、もう一度 commitment_close を試すこと。'
+        );
+      }
+      return `${id} は既に ${after.closedAt} に片付けてある（${after.closedReason ?? '理由の記録なし'}）。`;
+    }
+    // 自分で閉じたことは日誌に残す: 台帳の片付き行は保持上限で物理削除されうるので、日誌の記録が唯一の手掛かりになるため
+    await appendJournalOrThrow(
+      'commitment_close',
+      stores.journal,
+      {
+        type: 'decision',
+        decision: unreadable
+          ? `読めない形で入っていた仕事を自分で片付けた（${id}）: ${reason}`
+          : `引き受けた仕事を自分で片付けた（${id}）: ${reason}`,
+        grounds: 'クローン自身が commitment_close で閉じた（人間はこれを読んで後から否定する）',
+      },
+      'act-completed',
+    );
+    return unreadable
+      ? `${id}（読めない形で入っていた仕事）を片付けた。中身が読めないため、本文の書き直しはできない。`
+      : `${id} を片付けた。`;
+  }
+
+  // `closes` 付きの呼びの仕上げ: 本来の作業が通ったときだけ閉じ、閉じた id ごとの結果を各1行で応答の末尾へ足す。
+  // 閉じる側の失敗（日誌が書けない等）は本来の作業を失敗にしない: 作業は済んでいるため、その行の結果として言う
+  async function finishWithCloses(
+    res: ToolText,
+    closes: readonly { id: string; reason: string }[] | undefined,
+    workDone: boolean,
+  ): Promise<ToolText> {
+    if (closes === undefined || closes.length === 0) return res;
+    const head = res.content[0]?.text ?? '';
+    if (!workDone) {
+      return text(`${head}\n本来の作業が通っていないので、closes の行は1行も閉じていない。`);
+    }
+    const lines: string[] = [];
+    for (const entry of closes) {
+      try {
+        lines.push(`closes ${entry.id}: ${await closeCommitmentBody(entry.id, entry.reason)}`);
+      } catch (error) {
+        lines.push(
+          `closes ${entry.id}: 閉じる処理が失敗した（${reasonOf(error)}）。` +
+            'commitment_list で確かめてから、必要なら commitment_close を呼ぶこと。',
+        );
+      }
+    }
+    return text(`${head}\n${lines.join('\n')}`);
+  }
+
   // `default` のときは足さない: 日誌を読む側と歯が、その文言で見ているため
   function profileRowLabel(name: string): string {
     return name === 'default' ? '' : `（行 ${name}）`;
@@ -3894,8 +4007,11 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '記憶のどこに根拠があったか。無いなら「根拠なし」と書く。省いた呼び出しも記録は通るが、根拠は「届かなかった」として残る',
           ),
+        closes: CLOSES_SCHEMA,
       },
-      async ({ decision, grounds }) => {
+      async ({ decision, grounds, closes }) => {
+        const closesError = describeClosesViolation(closes);
+        if (closesError !== null) return text(closesError);
         // 省いた回は日誌の本文で名乗り `self_dropped` にも跡を残す: 道具は成功しているので、ここで残さないと「根拠が届かなかった」がどこにも出ないため
         if (grounds === undefined) {
           noteDroppedRecord(
@@ -3904,19 +4020,24 @@ export function createCloneTools(context: ToolContext) {
             new Error('呼び出しに grounds が届かなかった（issue #1338）'),
           );
         }
+        // 書き込みが落ちて投げたときは、ここから先へ進まない（1行も閉じない）
         const entry = await appendJournalOrThrow(
           'journal_write',
           stores.journal,
           { type: 'decision', decision, grounds: grounds ?? GROUNDS_NOT_DELIVERED },
           'act-not-performed',
         );
-        return text(
-          grounds === undefined
-            ? `日誌に記録した（${entry.id}）。⚠ grounds が呼び出しに届かなかったので、` +
-                '根拠は「届かなかった」として残してある（あなたが「根拠なし」と' +
-                '書いた場合とは区別してある）。根拠が在るなら、もう一度 grounds 付きで' +
-                '呼べば別の行として残る。'
-            : `日誌に記録した（${entry.id}）。`,
+        return finishWithCloses(
+          text(
+            grounds === undefined
+              ? `日誌に記録した（${entry.id}）。⚠ grounds が呼び出しに届かなかったので、` +
+                  '根拠は「届かなかった」として残してある（あなたが「根拠なし」と' +
+                  '書いた場合とは区別してある）。根拠が在るなら、もう一度 grounds 付きで' +
+                  '呼べば別の行として残る。'
+              : `日誌に記録した（${entry.id}）。`,
+          ),
+          closes,
+          true,
         );
       },
     ),
@@ -5572,76 +5693,7 @@ export function createCloneTools(context: ToolContext) {
               '人間はこれを読んで後から否定する',
           ),
       },
-      async ({ id, reason }) => {
-        const reasonError =
-          describeStringLengthViolation('reason', reason, { min: 1 }) ??
-          describeBlankViolation('reason', reason);
-        if (reasonError !== null) return text(reasonError);
-        // 読めない行でも閉じられるようにする: 投げ直さず、下の `close()` の戻り値だけで「閉じられたか」を判定する
-        let existing: Commitment | null;
-        let unreadable = false;
-        try {
-          existing = await stores.commitments.get(id);
-        } catch (error) {
-          if (!(error instanceof UnreadableCommitmentError)) throw error;
-          existing = null;
-          unreadable = true;
-        }
-        if (existing === null && !unreadable) {
-          return text(await describeCommitmentNotOnLedger(stores, id, context.journalSearch));
-        }
-        if (existing !== null && existing.closedAt !== undefined) {
-          return text(
-            `${id} は既に ${existing.closedAt} に片付けてある（${existing.closedReason ?? ''}）。`,
-          );
-        }
-        // 片付いているかの判定は台帳の戻り値に任せる: 直前の `get` の後に他の経路が先に閉じていると、実際には閉じていないのに日誌へ「片付けた」と書くことになるため
-        if (!(await stores.commitments.close(id, new Date().toISOString(), reason, 'clone'))) {
-          let after: Commitment | null;
-          try {
-            after = await stores.commitments.get(id);
-          } catch (error) {
-            if (!(error instanceof UnreadableCommitmentError)) throw error;
-            return text(
-              `${id} は既に片付けてある（読めない形で入っているため、いつ・どう片付けたかは分からない）。`,
-            );
-          }
-          // 読み直した行の形どおりに言う: 消えていた（保持上限で刈られた・会話の取り消しで消えた）回と、閉じていない回を「片付けてある」に潰さないため
-          if (after === null) {
-            return text(
-              `${await describeCommitmentNotOnLedger(stores, id, context.journalSearch)}` +
-                '（確かめた直後に台帳から無くなっていた）。この呼びでは閉じていない。',
-            );
-          }
-          if (after.closedAt === undefined) {
-            return text(
-              `${id} は閉じられなかった（台帳には未了のまま在るが、閉じる書き込みが通らなかった）。` +
-                'commitment_list で確かめてから、もう一度 commitment_close を試すこと。',
-            );
-          }
-          return text(
-            `${id} は既に ${after.closedAt} に片付けてある（${after.closedReason ?? '理由の記録なし'}）。`,
-          );
-        }
-        // 自分で閉じたことは日誌に残す: 台帳の片付き行は保持上限で物理削除されうるので、日誌の記録が唯一の手掛かりになるため
-        await appendJournalOrThrow(
-          'commitment_close',
-          stores.journal,
-          {
-            type: 'decision',
-            decision: unreadable
-              ? `読めない形で入っていた仕事を自分で片付けた（${id}）: ${reason}`
-              : `引き受けた仕事を自分で片付けた（${id}）: ${reason}`,
-            grounds: 'クローン自身が commitment_close で閉じた（人間はこれを読んで後から否定する）',
-          },
-          'act-completed',
-        );
-        return text(
-          unreadable
-            ? `${id}（読めない形で入っていた仕事）を片付けた。中身が読めないため、本文の書き直しはできない。`
-            : `${id} を片付けた。`,
-        );
-      },
+      async ({ id, reason }) => text(await closeCommitmentBody(id, reason)),
     ),
 
     tool(
@@ -7649,18 +7701,24 @@ export function createCloneTools(context: ToolContext) {
               '生ログから拾った toolu_…（tool_use_id）や req_…（API の request id）は、確認として届いていなければ通らない。' +
               '受信箱に届いていない確認に、生ログから答える手段は無い',
           ),
+        closes: CLOSES_SCHEMA,
       },
-      async ({ managerId, message, decision, requestId, attachments }) => {
-        if (!context.managers) return NO_POOL;
+      async ({ managerId, message, decision, requestId, attachments, closes }) => {
+        // 閉じる指定の誤りは、送る前に丸ごと断る（送ってから閉じる側だけ断ると、半分だけ済んだ呼びになるため）
+        const closesError = describeClosesViolation(closes);
+        if (closesError !== null) return text(closesError);
+        // 送れなかった（早い断り・保留・失敗）呼びは1行も閉じず、そう書く
+        const notDone = (res: ToolText) => finishWithCloses(res, closes, false);
+        if (!context.managers) return notDone(NO_POOL);
         // 空白だけは断らない: HTTP も通すため
         const messageError = describeStringLengthViolation('message', message, { min: 1 });
-        if (messageError !== null) return text(messageError);
+        if (messageError !== null) return notDone(text(messageError));
         const handover = await loadManagerAttachments(
           stores,
           attachments ?? [],
           context.attachmentLimits ?? readAttachmentLimits().limits,
         );
-        if (!handover.ok) return text(handover.message);
+        if (!handover.ok) return notDone(text(handover.message));
         // 答える前に判断の行を書く: 答えが届いたのに跡が無い窓を作らないため。
         // この道具は自己記録なので PostToolUse の行が無く、この行が「クローンが人間に聞かず答えた」唯一の跡になる。
         // 行を書いたかを旗で持つ: 確認に当たらなかった送信では呼ばれず、書いていない行は打ち消さない
@@ -7709,31 +7767,39 @@ export function createCloneTools(context: ToolContext) {
         };
         const result = await send(context.managers);
         if (result.outcome !== 'answered') await retractAnswerJournal(result.detail);
+        // 届いた（delivered）か答えた（answered）ときだけ閉じる。それ以外は本来の作業が通っていない
+        const sent = result.outcome === 'delivered' || result.outcome === 'answered';
         // `session_missing` は必ず言い足す: そのものは居る側なので、`manager_start` で起こし直すと同じ仕事が2本になりうるため
         if (result.outcome === 'session_missing') {
-          return text(
-            `[${managerId}] ${result.detail}\n` +
-              '**この委譲そのものは台帳に在る**（「そんな id は無い」ではない）。' +
-              'runner に生きたセッションが無く、resume でも入り直せなかっただけである。' +
-              'manager_list で状態を確かめ、時間で解ける理由（引き取り中・貸し出し期限）' +
-              'なら少し置いてから送り直すこと。' +
-              RESTART_BEFORE_CHECK_ADVICE,
+          return notDone(
+            text(
+              `[${managerId}] ${result.detail}\n` +
+                '**この委譲そのものは台帳に在る**（「そんな id は無い」ではない）。' +
+                'runner に生きたセッションが無く、resume でも入り直せなかっただけである。' +
+                'manager_list で状態を確かめ、時間で解ける理由（引き取り中・貸し出し期限）' +
+                'なら少し置いてから送り直すこと。' +
+                RESTART_BEFORE_CHECK_ADVICE,
+            ),
           );
         }
         // 警告の文は HTTP（POST /managers/:id/messages）と共有する（`decisionUnusedNote`）
         const unusedNote = decisionUnusedNote(decision, requestId, result.outcome);
-        if (result.outcome === 'held') return text(`${result.detail}${unusedNote}`);
+        if (result.outcome === 'held') return notDone(text(`${result.detail}${unusedNote}`));
         // 「届けた」が保証する範囲を名乗る: 観測したのは resume の口が成功を返したところまでで、相手がこの本文を読んだかは見ていないため
         // 「同じ本文で立て直さないこと」は落とさない: 送った直後の `manager_list` が `lost` のままで、クローンが指示を失ったと判断し出し直した実害があるため
         if (result.outcome === 'delivered') {
           // 毎回返る文なので短く保つ（理由の詳しい説明は道具の説明文の側に1回だけ置く）: 送るたびにクローンの文脈へ積まれ、読み直しの費用になるため
-          return text(
-            `[${managerId}] ${result.detail}${unusedNote}\n` +
-              '（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。' +
-              '同じ本文で新しい委譲を立てないこと）',
+          return finishWithCloses(
+            text(
+              `[${managerId}] ${result.detail}${unusedNote}\n` +
+                '（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。' +
+                '同じ本文で新しい委譲を立てないこと）',
+            ),
+            closes,
+            sent,
           );
         }
-        return text(result.detail);
+        return finishWithCloses(text(result.detail), closes, sent);
       },
     ),
 
