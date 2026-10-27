@@ -1,4 +1,13 @@
+import { topToolResults } from './message-breakdown.js';
+import type { MessageBreakdownToolRow } from './message-breakdown.js';
+
 // `schema.ts` を import せず型を手で複製する: zod ごとブラウザバンドルへ入るため
+type ContextUsageLike = {
+  percentage?: number;
+  totalTokens?: number;
+  messageBreakdown?: { toolsByName: readonly MessageBreakdownToolRow[] };
+};
+
 export const JOURNAL_DIAGNOSTICS_TYPES = [
   'worker_wait',
   'turn_usage',
@@ -28,7 +37,7 @@ export type JournalDiagnosticsEntryLike =
         string,
         { costUsd: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }
       >;
-      contextUsage?: { percentage?: number; totalTokens?: number };
+      contextUsage?: ContextUsageLike;
       compactions?: unknown[];
       reset?: unknown;
     }
@@ -38,7 +47,7 @@ export type JournalDiagnosticsEntryLike =
       site: string;
       managerId: string;
       turnSucceeded: boolean;
-      contextUsage: { percentage?: number; totalTokens?: number; error?: string };
+      contextUsage: ContextUsageLike & { error?: string };
     }
   | {
       type: 'inbox_flow';
@@ -72,13 +81,14 @@ function seconds(ms: number): string {
   return value < 10 ? `${value.toFixed(1)}秒` : `${String(Math.round(value))}秒`;
 }
 
-function contextUsageNote(
-  context: { percentage?: number; totalTokens?: number } | undefined,
-): string {
+function contextUsageNote(context: ContextUsageLike | undefined): string {
   if (context === undefined || context.percentage === undefined) return '';
+  // 履歴の内訳が無い回（古い行・SDK が返さなかった回）と道具の行が無い回は書かない（0 を埋めない）
+  const top = topToolResults(context.messageBreakdown?.toolsByName ?? []);
   return (
     ` 文脈 ${context.percentage}%` +
-    (context.totalTokens === undefined ? '' : `（${context.totalTokens} トークン）`)
+    (context.totalTokens === undefined ? '' : `（${context.totalTokens} トークン）`) +
+    (top.length === 0 ? '' : `・履歴の道具の結果が大きい順: ${top.join('・')}`)
   );
 }
 

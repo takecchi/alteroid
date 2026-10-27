@@ -300,6 +300,53 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       await s.clone.stop();
     });
 
+    it('⭐⭐⭐ 会話の履歴の内訳（messageBreakdown）は5つの合計と、結果の大きい順の道具ごとの行として載る', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+        getContextUsage: () => ({
+          totalTokens: 12_000,
+          rawMaxTokens: 200_000,
+          percentage: 6,
+          isAutoCompactEnabled: true,
+          messageBreakdown: {
+            toolCallTokens: 300,
+            toolResultTokens: 5_000,
+            attachmentTokens: 40,
+            assistantMessageTokens: 700,
+            userMessageTokens: 200,
+            redirectedContextTokens: 0,
+            unattributedTokens: 0,
+            toolCallsByType: [
+              { name: 'Read', callTokens: 100, resultTokens: 1_000 },
+              { name: 'Bash', callTokens: 200, resultTokens: 4_000 },
+            ],
+            attachmentsByType: [],
+          },
+        }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+
+      expect(entry.contextUsage?.messageBreakdown).toEqual({
+        toolCallTokens: 300,
+        toolResultTokens: 5_000,
+        attachmentTokens: 40,
+        assistantMessageTokens: 700,
+        userMessageTokens: 200,
+        toolsByName: [
+          { name: 'Bash', callTokens: 200, resultTokens: 4_000 },
+          { name: 'Read', callTokens: 100, resultTokens: 1_000 },
+        ],
+      });
+
+      await s.clone.stop();
+    });
+
     it('⭐⭐ kind を返さない SDK でも、categories の欄は壊れず kind だけが無い', async () => {
       const s = setup(undefined, createMemoryStores(), {
         modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),

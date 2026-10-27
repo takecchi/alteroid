@@ -381,6 +381,24 @@ export const contextUsageObservationSchema = z.object({
   memoryFileCount: z.number().int().nonnegative().optional(),
   systemPromptTokens: z.number().int().nonnegative().optional(),
   systemPromptSectionCount: z.number().int().nonnegative().optional(),
+  // 会話の履歴（Messages）の内訳。SDK の `messageBreakdown` の5つの合計と、道具ごとの行（結果のトークンの大きい順、上限を超えた分は固定名の「ほか」の1行へ合算。`message-breakdown.ts`）。
+  // `.optional()` にする: この欄が増える前に書かれた行が読み出しで落ちないため。SDK が返さなかった回は欄を作らない（0 を置かない）
+  messageBreakdown: z
+    .object({
+      toolCallTokens: z.number().int().nonnegative(),
+      toolResultTokens: z.number().int().nonnegative(),
+      attachmentTokens: z.number().int().nonnegative(),
+      assistantMessageTokens: z.number().int().nonnegative(),
+      userMessageTokens: z.number().int().nonnegative(),
+      toolsByName: z.array(
+        z.object({
+          name: z.string(),
+          callTokens: z.number().int().nonnegative(),
+          resultTokens: z.number().int().nonnegative(),
+        }),
+      ),
+    })
+    .optional(),
   error: z.string().optional(),
 });
 

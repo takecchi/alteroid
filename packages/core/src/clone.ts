@@ -89,6 +89,7 @@ import {
 } from './distill-gap.js';
 import { describeFirstTurnToolSearch } from './boot-tool-search-observed.js';
 import { foldMcpToolsByServer } from './mcp-tools-by-server.js';
+import { foldMessageBreakdown } from './message-breakdown.js';
 import { describeSelectionsViolation, foldSelections } from './approval-choices.js';
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
@@ -7428,6 +7429,7 @@ class Clone implements CloneHost {
       const mcpTools = usage.mcpTools ?? [];
       const memoryFiles = usage.memoryFiles ?? [];
       const systemPromptSections = usage.systemPromptSections ?? [];
+      const messageBreakdown = foldMessageBreakdown(usage.messageBreakdown);
       return {
         durationMs: Date.now() - startedAt,
         totalTokens: usage.totalTokens,
@@ -7456,6 +7458,8 @@ class Clone implements CloneHost {
               systemPromptTokens: sumTokens(systemPromptSections),
               systemPromptSectionCount: systemPromptSections.length,
             }),
+        // SDK が返さなかった回は欄を作らない（0 を置くと「測ったが 0」と読める）。
+        ...(messageBreakdown === undefined ? {} : { messageBreakdown }),
       };
     } catch (error) {
       return {

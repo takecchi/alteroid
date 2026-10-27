@@ -110,6 +110,15 @@ export interface AgentContextUsage {
   mcpTools?: readonly { name?: string; serverName?: string; tokens: number }[];
   memoryFiles?: readonly { tokens: number }[];
   systemPromptSections?: readonly { tokens: number }[];
+  // 会話の履歴の内訳。持たない駆動役のために任意にする（無い回は日誌の欄も作らない）。
+  messageBreakdown?: {
+    toolCallTokens: number;
+    toolResultTokens: number;
+    attachmentTokens: number;
+    assistantMessageTokens: number;
+    userMessageTokens: number;
+    toolCallsByType: readonly { name: string; callTokens: number; resultTokens: number }[];
+  };
 }
 
 export interface AgentManagerSession {

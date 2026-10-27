@@ -13479,6 +13479,44 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
     expect(reply).not.toContain('CLAUDE.md 系');
   });
 
+  it('⭐⭐⭐ messageBreakdown は1行で、結果が大きい上位3道具だけを名前と数で出す', async () => {
+    const h = harness();
+    const entry = await appendTurnUsage(h, {
+      durationMs: 12,
+      totalTokens: 12_000,
+      messageBreakdown: {
+        toolCallTokens: 300,
+        toolResultTokens: 9_000,
+        attachmentTokens: 40,
+        assistantMessageTokens: 700,
+        userMessageTokens: 200,
+        toolsByName: [
+          { name: 'Bash', callTokens: 10, resultTokens: 5_000 },
+          { name: 'Read', callTokens: 10, resultTokens: 2_000 },
+          { name: 'Grep', callTokens: 10, resultTokens: 1_000 },
+          { name: 'Edit', callTokens: 10, resultTokens: 500 },
+          { name: '(other)', callTokens: 10, resultTokens: 99_999 },
+        ],
+      },
+    });
+
+    const reply = await h.call('journal_read', { id: entry.id });
+
+    expect(reply).toContain('会話の履歴の内訳: 道具の結果 9,000 / 道具の呼び出し 300');
+    expect(reply).toContain('結果が大きい道具: Bash 5,000・Read 2,000・Grep 1,000');
+    expect(reply).not.toContain('Edit 500');
+    expect(reply).not.toContain('(other)');
+  });
+
+  it('⭐⭐ messageBreakdown を持たない行では、履歴の内訳を1文字も出さない', async () => {
+    const h = harness();
+    const entry = await appendTurnUsage(h, { durationMs: 12, totalTokens: 12_000 });
+
+    const reply = await h.call('journal_read', { id: entry.id });
+
+    expect(reply).not.toContain('会話の履歴の内訳');
+  });
+
   it('⭐⭐ カテゴリを切った行では、省いた軸数を名乗る', async () => {
     const h = harness();
     const entry = await appendTurnUsage(h, {

@@ -185,6 +185,7 @@ import type {
   TokenGenerationUnknownReason,
 } from './manager.js';
 import { resolveMemoryCursor } from './memory-cursor.js';
+import { describeMessageBreakdown } from './message-breakdown.js';
 import {
   applyMemoryFrontmatterPatch,
   assertNeverMemoryDocKind,
@@ -10505,7 +10506,13 @@ function describeContextBreakdown(context: ContextUsageRow): string {
           ? ''
           : `…ほか ${context.categoriesOmitted} 軸は省略`);
 
-  return (parts.length === 0 ? '' : `\n  内訳: ${parts.join(' / ')}。`) + categories;
+  // 1行に収める: 道具ごとの全行は日誌の `contextUsage.messageBreakdown.toolsByName` にあり、ここは上位だけ。欄が無い回は書かない
+  const messages =
+    context.messageBreakdown === undefined
+      ? ''
+      : `\n  ${describeMessageBreakdown(context.messageBreakdown)}。`;
+
+  return (parts.length === 0 ? '' : `\n  内訳: ${parts.join(' / ')}。`) + messages + categories;
 }
 
 // 付けるのは窓の始点が地平より前にかかるときだけ: 窓がまるごと地平より後ろなら0件でも「本当に無かった」と言い切れ、注記を出すと確定できることまで「判定できない」と言う誤りになるため。前にかかるなら非空でも付ける: 同じ区間について同じ区別が付かないため

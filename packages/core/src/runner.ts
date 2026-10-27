@@ -318,6 +318,7 @@ import {
 } from './scratch-sweep.js';
 import { computeUnpushedWork, worktreeRootsOfDirs } from './unpushed-work.js';
 import { foldMcpToolsByServer } from './mcp-tools-by-server.js';
+import { foldMessageBreakdown } from './message-breakdown.js';
 import type { ContextUsageObservation, JobStatus } from './schema.js';
 // クローンと同じ判定を呼ぶ: 層ごとに書くと片方だけが印を見落として非対称になるため
 import {
@@ -4816,6 +4817,7 @@ class RunnerSession {
       const mcpTools = usage.mcpTools ?? [];
       const memoryFiles = usage.memoryFiles ?? [];
       const systemPromptSections = usage.systemPromptSections ?? [];
+      const messageBreakdown = foldMessageBreakdown(usage.messageBreakdown);
       return {
         durationMs: Date.now() - startedAt,
         totalTokens: usage.totalTokens,
@@ -4844,6 +4846,8 @@ class RunnerSession {
               systemPromptTokens: sumTokens(systemPromptSections),
               systemPromptSectionCount: systemPromptSections.length,
             }),
+        // SDK が返さなかった回は欄を作らない（0 を置くと「測ったが 0」と読める）。
+        ...(messageBreakdown === undefined ? {} : { messageBreakdown }),
       };
     } catch (error) {
       return {

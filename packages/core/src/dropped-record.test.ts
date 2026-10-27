@@ -1646,6 +1646,14 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     memoryFileCount: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
     systemPromptTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
     systemPromptSectionCount: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    messageBreakdown: {
+      emit: 'never',
+      why:
+        '構造化された欄そのもの。道具の名前は MCP の設定が決める自由文で、' +
+        '`categories[].name` と同じ理由で跡へ出さない。内訳の欄は' +
+        '`CONTEXT_USAGE_MESSAGE_BREAKDOWN_SHAPE_PLAN`、道具の行は' +
+        '`CONTEXT_USAGE_MESSAGE_TOOL_SHAPE_PLAN` が別に守る。',
+    },
     error: {
       emit: 'never',
       why:
@@ -1694,6 +1702,39 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     FieldPlan
   >;
 
+  const CONTEXT_USAGE_MESSAGE_BREAKDOWN_SHAPE_PLAN = {
+    toolCallTokens: {
+      emit: 'never',
+      why: '同上（`CONTEXT_USAGE_SHAPE_PLAN` の durationMs と同じ判断）。',
+    },
+    toolResultTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    attachmentTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    assistantMessageTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    userMessageTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    toolsByName: {
+      emit: 'never',
+      why: '構造化された欄そのもの。要素は `CONTEXT_USAGE_MESSAGE_TOOL_SHAPE_PLAN` が別に守る。',
+    },
+  } satisfies Record<
+    keyof Required<NonNullable<ContextUsageObservation['messageBreakdown']>>,
+    FieldPlan
+  >;
+
+  const CONTEXT_USAGE_MESSAGE_TOOL_SHAPE_PLAN = {
+    name: {
+      emit: 'never',
+      why: '道具の名前は MCP の設定が決める自由文。`categories[].name` と同じ判断で跡へ出さない。',
+    },
+    callTokens: {
+      emit: 'never',
+      why: '同上（`CONTEXT_USAGE_SHAPE_PLAN` の durationMs と同じ判断）。',
+    },
+    resultTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+  } satisfies Record<
+    keyof Required<NonNullable<ContextUsageObservation['messageBreakdown']>['toolsByName'][number]>,
+    FieldPlan
+  >;
+
   const SECRET = 'ghp_222222222222222222222222222222222222';
 
   // 他の欄の値と衝突しない桁を割り当てる（小さい値だと衝突しうる）。
@@ -1712,6 +1753,13 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
   const CU_CATEGORY_TOKENS = 910013;
   const CU_MCP_SERVER_COUNT = 910014;
   const CU_MCP_SERVER_TOKENS = 910015;
+  const CU_MESSAGE_TOOL_CALL_TOKENS = 910016;
+  const CU_MESSAGE_TOOL_RESULT_TOKENS = 910017;
+  const CU_MESSAGE_ATTACHMENT_TOKENS = 910018;
+  const CU_MESSAGE_ASSISTANT_TOKENS = 910019;
+  const CU_MESSAGE_USER_TOKENS = 910020;
+  const CU_MESSAGE_TOOL_ROW_CALL_TOKENS = 910021;
+  const CU_MESSAGE_TOOL_ROW_RESULT_TOKENS = 910022;
 
   const CONTEXT_USAGE_NUMBER_MARKERS: readonly number[] = [
     CU_DURATION_MS,
@@ -1729,6 +1777,13 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     CU_CATEGORY_TOKENS,
     CU_MCP_SERVER_COUNT,
     CU_MCP_SERVER_TOKENS,
+    CU_MESSAGE_TOOL_CALL_TOKENS,
+    CU_MESSAGE_TOOL_RESULT_TOKENS,
+    CU_MESSAGE_ATTACHMENT_TOKENS,
+    CU_MESSAGE_ASSISTANT_TOKENS,
+    CU_MESSAGE_USER_TOKENS,
+    CU_MESSAGE_TOOL_ROW_CALL_TOKENS,
+    CU_MESSAGE_TOOL_ROW_RESULT_TOKENS,
   ];
 
   const FULL_CONTEXT_USAGE_CATEGORY: Required<
@@ -1755,6 +1810,20 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     memoryFileCount: CU_MEMORY_FILE_COUNT,
     systemPromptTokens: CU_SYSTEM_PROMPT_TOKENS,
     systemPromptSectionCount: CU_SYSTEM_PROMPT_SECTION_COUNT,
+    messageBreakdown: {
+      toolCallTokens: CU_MESSAGE_TOOL_CALL_TOKENS,
+      toolResultTokens: CU_MESSAGE_TOOL_RESULT_TOKENS,
+      attachmentTokens: CU_MESSAGE_ATTACHMENT_TOKENS,
+      assistantMessageTokens: CU_MESSAGE_ASSISTANT_TOKENS,
+      userMessageTokens: CU_MESSAGE_USER_TOKENS,
+      toolsByName: [
+        {
+          name: SECRET,
+          callTokens: CU_MESSAGE_TOOL_ROW_CALL_TOKENS,
+          resultTokens: CU_MESSAGE_TOOL_ROW_RESULT_TOKENS,
+        },
+      ],
+    },
     error: SECRET,
   };
 
@@ -2109,11 +2178,24 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     expect(plannedFields).toEqual(implementedFields);
   });
 
+  it('CONTEXT_USAGE_MESSAGE_BREAKDOWN_SHAPE_PLAN / CONTEXT_USAGE_MESSAGE_TOOL_SHAPE_PLAN のキー集合は messageBreakdown の実装側の欄と両方向に一致する（zod から機械的に引く）', () => {
+    const breakdownShape = contextUsageObservationSchema.shape.messageBreakdown.unwrap().shape;
+    expect(new Set(Object.keys(CONTEXT_USAGE_MESSAGE_BREAKDOWN_SHAPE_PLAN))).toEqual(
+      new Set(Object.keys(breakdownShape)),
+    );
+    const toolShape = breakdownShape.toolsByName.element.shape;
+    expect(new Set(Object.keys(CONTEXT_USAGE_MESSAGE_TOOL_SHAPE_PLAN))).toEqual(
+      new Set(Object.keys(toolShape)),
+    );
+  });
+
   it('turn_usage.contextUsage / context_usage.contextUsage の入れ子は、秘密・目印・欄名のどれも跡に現れない（#981）', () => {
     const contextUsageFieldNames = [
       ...Object.keys(CONTEXT_USAGE_SHAPE_PLAN),
       ...Object.keys(CONTEXT_USAGE_CATEGORY_SHAPE_PLAN),
       ...Object.keys(CONTEXT_USAGE_MCP_SERVER_SHAPE_PLAN),
+      ...Object.keys(CONTEXT_USAGE_MESSAGE_BREAKDOWN_SHAPE_PLAN),
+      ...Object.keys(CONTEXT_USAGE_MESSAGE_TOOL_SHAPE_PLAN),
     ];
 
     for (const type of ['turn_usage', 'context_usage'] as const) {

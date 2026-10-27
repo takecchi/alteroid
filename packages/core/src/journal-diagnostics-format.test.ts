@@ -141,6 +141,34 @@ describe('summarizeJournalDiagnosticsEntry（issue #2016）', () => {
       const summary = summarizeJournalDiagnosticsEntry(entry);
       expect(summary).toContain('文脈 30%');
       expect(summary).toContain('500 トークン');
+      expect(summary).not.toContain('履歴の道具の結果');
+    });
+
+    it('messageBreakdown があれば結果が大きい上位3道具を出し、「ほか」は順位に入れない', () => {
+      const entry: JournalDiagnosticsEntryLike = {
+        type: 'turn_usage',
+        layer: 'clone',
+        site: 'session',
+        managerId: 'clone',
+        models: {},
+        contextUsage: {
+          percentage: 30,
+          totalTokens: 500,
+          messageBreakdown: {
+            toolsByName: [
+              { name: 'a', callTokens: 1, resultTokens: 40 },
+              { name: 'b', callTokens: 1, resultTokens: 30 },
+              { name: 'c', callTokens: 1, resultTokens: 20 },
+              { name: 'd', callTokens: 1, resultTokens: 10 },
+              { name: '(other)', callTokens: 1, resultTokens: 900 },
+            ],
+          },
+        },
+      };
+      const summary = summarizeJournalDiagnosticsEntry(entry);
+      expect(summary).toContain('履歴の道具の結果が大きい順: a 40・b 30・c 20');
+      expect(summary).not.toContain('d 10');
+      expect(summary).not.toContain('(other)');
     });
   });
 

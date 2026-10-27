@@ -175,6 +175,71 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
     await s.pool.stop();
   });
 
+  it('messageBreakdown は畳まれて turn_usage.contextUsage に載り、SDK が返さない回は欄を作らない', async () => {
+    const s = setup({
+      getContextUsage: (callIndex) => ({
+        totalTokens: 12_000,
+        rawMaxTokens: 200_000,
+        percentage: 6,
+        ...(callIndex === 0
+          ? {
+              messageBreakdown: {
+                toolCallTokens: 30,
+                toolResultTokens: 500,
+                attachmentTokens: 4,
+                assistantMessageTokens: 70,
+                userMessageTokens: 20,
+                toolCallsByType: [
+                  { name: 'Read', callTokens: 10, resultTokens: 100 },
+                  { name: 'Bash', callTokens: 20, resultTokens: 400 },
+                ],
+              },
+            }
+          : {}),
+      }),
+    });
+    await s.pool.start({ request: '調べて' });
+    const session = await firstSession(s.sessions);
+    await session.finish('できました');
+
+    const rows = await vi.waitFor(async () => {
+      const found = await turnUsageRows(s.stores);
+      if (found.length === 0) throw new Error('turn_usage がまだ日誌に無い');
+      return found;
+    });
+    expect(rows[0]?.contextUsage?.messageBreakdown).toEqual({
+      toolCallTokens: 30,
+      toolResultTokens: 500,
+      attachmentTokens: 4,
+      assistantMessageTokens: 70,
+      userMessageTokens: 20,
+      toolsByName: [
+        { name: 'Bash', callTokens: 20, resultTokens: 400 },
+        { name: 'Read', callTokens: 10, resultTokens: 100 },
+      ],
+    });
+
+    await s.pool.stop();
+  });
+
+  it('SDK が messageBreakdown を返さない回は、欄そのものを作らない（0 を置かない）', async () => {
+    const s = setup({
+      getContextUsage: () => ({ totalTokens: 12_000, rawMaxTokens: 200_000, percentage: 6 }),
+    });
+    await s.pool.start({ request: '調べて' });
+    const session = await firstSession(s.sessions);
+    await session.finish('できました');
+
+    const rows = await vi.waitFor(async () => {
+      const found = await turnUsageRows(s.stores);
+      if (found.length === 0) throw new Error('turn_usage がまだ日誌に無い');
+      return found;
+    });
+    expect(rows[0]?.contextUsage).not.toHaveProperty('messageBreakdown');
+
+    await s.pool.stop();
+  });
+
   it('失敗したターンでも contextUsage は context_usage として残る（#976 の直った後の挙動）', async () => {
     const s = setup({
       getContextUsage: () => ({
