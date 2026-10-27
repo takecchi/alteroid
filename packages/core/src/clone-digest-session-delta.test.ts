@@ -254,8 +254,8 @@ function expectLeanFull(text: string, options: { withSettledAndMemory?: boolean 
   expect(text).toContain('## 届いた外部イベント');
   expect(text).toContain('届いた出来事 19');
   // 先頭の件数行は節の外で、省いた節の件数も残る
-  expect(text).toContain('- 外部イベント（日誌 external_event の行数）: 20 件');
-  expect(text).toContain('- この期間に片付けた仕事:');
+  expect(text).toContain('外部イベント（日誌の行数）20');
+  expect(text).toMatch(/片付けた仕事 \d+ \//);
   // 省く
   expect(text).toContain('## 使った分\n（この節は省いた。`usage_read` で引ける）');
   expect(text).toContain(
