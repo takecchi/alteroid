@@ -2861,10 +2861,12 @@ const KNOWN_SYNTHESIZED_NOTICE_LABELS: Record<string, string> = {
  * 担当が戻っていればクローンが畳んでよい合成の知らせの族（#5048）。ここに無い族が1つでも混ざる束には印を付けない。
  * - `usage_rewoken`: 枠で落ちていた委譲を新しい鍵で起こし直した（後継が居ない回だけ。呼び手が確かめる）
  * - `closed_failed`: セッションが落ちた（担当が戻って走っていれば、手を打つことが無い）
+ * - `usage_rewoken_folded`: 鍵の入れ替えで背景処理を畳んで起こし直した（結果を確かめて進めるのは担当自身。担当が現役の鍵で戻っていれば、クローンが止まったと見誤る余地も無い）
  */
 const FOLD_WHEN_BACK_SYNTHESIZED_LABELS: ReadonlySet<string> = new Set([
   'usage_rewoken',
   'closed_failed',
+  'usage_rewoken_folded',
 ]);
 
 /** 担当が戻っていればクローンが畳んでよい印（`manager_message.foldWhenBack`。#5048）。 */
@@ -7512,7 +7514,8 @@ class Pool implements ManagerPool {
               '（後継を立てるときは manager_start の supersedes に前任を渡すと、前任は起き上がらない）。',
           );
         }
-        // 背景処理を畳んだ回は done でも知らせる（#4902）: 結果は届かないので担当が自分で確かめて進める。クローンは止まったと見誤りうる。peer だけを預けた回といつもの回転では積まない
+        // 背景処理を畳んだ回は done でも知らせる（#4902）: 結果は届かないので担当が自分で確かめて進める。クローンは止まったと見誤りうる。peer だけを預けた回といつもの回転では積まない。
+        // 担当が現役の鍵で戻っていれば、配る直前にクローンが畳む（`FOLD_WHEN_BACK_SYNTHESIZED_LABELS`。本文は日誌に残る）。戻りを確かめられなければ従来どおり届ける
         if (foldedBackgroundTasks > 0) {
           this.#queueSynthesizedNotice(
             managerId,
@@ -13225,7 +13228,7 @@ class Pool implements ManagerPool {
       !this.#supersedePending.has(managerId);
     const commitmentExempt =
       entry.fragments.every((fragment) => fragment.label === 'usage_rewoken') && noSuccessor;
-    // 担当が戻っていればクローンが畳んでよい束（#5048）: 起こし直し（後継が居ない回だけ）とセッションの落ちだけでできた束。
+    // 担当が戻っていればクローンが畳んでよい束（#5048）: 起こし直し（後継が居ない回だけ）・背景処理を畳んだ起こし直し・セッションの落ちだけでできた束。
     // 枠の印の付いた断片が1つでも混ざる束は付けない（#4499 の判定に任せる。週の上限で落ちた知らせを消さないため）。後継が居る起こし直しは、どちらかを止める判断が要るので付けない
     const foldWhenBack =
       entry.fragments.every(

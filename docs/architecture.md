@@ -115,7 +115,7 @@
 子プロセス（＝マネージャー）がその経路でデーモンの API へ、つまり記憶へ届くようになる。
 **この向きを反転させないこと。**
 
-**担い手への添付も、この向きのまま下す**（Issue #3111 段3）。`POST /managers`（start）・`POST /managers/:id/messages`・`POST /managers/:id/resume`（`message` に添えるとき）は、任意の `attachments` を受ける。**中身は本文に base64 で載る**（`runnerAttachmentSchema`: id・名前・種類・大きさ・sha256・`data`）。runner は `AttachmentStore` に触れず、ストアの鍵も持たない — デーモンがクローンの道具（`manager_start` / `manager_send`）から id を受け、置き場から読んで押し込む。**runner からデーモンへ取りに行く経路は作らない。**
+**担い手への添付も、この向きのまま下す**（Issue #3111 段3）。`POST /managers`（start）・`POST /managers/:id/messages`・`POST /managers/:id/resume`（`message` に添えるとき）は、任意の `attachments` を受ける。**中身は本文に base64 で載る**（`runnerAttachmentSchema`: id・名前・種類・大きさ・sha256・`data`）。runner は `AttachmentStore` に触れず、ストアの鍵も持たない — デーモンがクローンの道具（`manager_start` / `manager_send`）と、人間が直接送る HTTP の `POST /managers/:id/messages`（デーモン側の口。`attachments` は `manager_send` と同じ検証で、失敗は 400）から id を受け、置き場から読んで押し込む。**runner からデーモンへ取りに行く経路は作らない。**
 
 **大きいファイル**（画像以外で `maxFileBytes` を超えるもの。外部ストレージが有効なときだけ在る。#4128 段3a）は本文に載せず、**別口へストリームで押す。** 向きは同じ（デーモンが押す）で、runner から取りに行く経路は作っていない。
 

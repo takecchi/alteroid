@@ -1473,7 +1473,17 @@ export async function runSlashCommand(
           json: { kind: kind ?? '', request: parsed.request, spec: parsed.spec },
         });
         if (created.ok) {
-          stdout.write(`${kind ?? ''} を仕込みました（/schedule で確認できます）\n`);
+          // `replaced` は省略可能（古いデーモンは返さない）: 欠けていたら「置き換えた」と言わず、従来どおり仕込んだと言う。
+          // 旧本文は応答に載らない: 長い本文を応答へ載せ直さず、置き換える前に日誌（decision）へ逐語で残してあるので、その取り方を言う。
+          const replaced = await created
+            .json()
+            .then((body) => body.replaced === true)
+            .catch(() => false);
+          stdout.write(
+            replaced
+              ? `${kind ?? ''} は既に在ったので置き換えました（旧本文・旧周期は日誌に残してあります。/journal type=decision q=置き換えようとしている: ${kind ?? ''} で読めます。/schedule で確認できます）\n`
+              : `${kind ?? ''} を仕込みました（/schedule で確認できます）\n`,
+          );
           return 'ok';
         }
         const failure = await withDetail(

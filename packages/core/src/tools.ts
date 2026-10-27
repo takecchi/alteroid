@@ -235,6 +235,7 @@ import {
   parseTimeOfDay,
 } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
+import { scheduleReplaceEntry } from './schedule-replace.js';
 import {
   JOURNAL_ENTRY_TYPES,
   PERMISSION_GRANT_CONSENT_PHRASE,
@@ -1156,7 +1157,7 @@ const JOURNAL_PAGE = 8_000;
 // クローンが書いた「根拠なし」と同じ文字列にしない: 日誌を読む人間が「根拠を持たずに実行した」と「根拠が記録経路から落ちた」を区別できなくなるため
 export const GROUNDS_NOT_DELIVERED =
   '（根拠は記録されていない —— 呼び出しに grounds が届かなかった。' +
-  'クローンが「根拠なし」と書いたのではない。issue #1338）';
+  'クローンが「根拠なし」と書いたのではない）';
 
 const APPROVAL_LIST_BUDGET = 8_000;
 // `APPROVAL_LIST_BUDGET` を使い回さない: 由来が違い、「ふつう数本だから溢れない」を根拠にすると外れたときに一覧が丸ごと使えなくなるため
@@ -2815,7 +2816,7 @@ export function createCloneTools(context: ToolContext) {
     throw new Error(
       'conversationId が届いていない。ToolContext を組む側で明示すること' +
         '（既定値へ倒すと、ask_human が積む承認が会話 id を持てなくなり、' +
-        '#768 の穴が再発する）。',
+        '承認への回答を受けたターンのクローンの返答が会話に紐づかなくなる）。',
     );
   }
   const getConversationId = context.conversationId;
@@ -3859,7 +3860,7 @@ export function createCloneTools(context: ToolContext) {
           if (toBefore === null) {
             throw new Error(
               '到達しないはずの分岐: toBefore が無いのに toAppend が0件になった' +
-                '（#1230 の冪等化ロジックの前提が崩れている）。',
+                '（やり直しても重複させない冪等化の前提が崩れている）。',
             );
           }
           // 追記そのものを行わない: 空文字列を `persona.append` に渡すと fs/pg どちらも書き込みが起き、末尾に空行が増え `updatedAt` が進むため
@@ -4017,7 +4018,7 @@ export function createCloneTools(context: ToolContext) {
           noteDroppedRecord(
             '判断の根拠（journal_write の grounds）',
             `decision.chars=${decision.length}`,
-            new Error('呼び出しに grounds が届かなかった（issue #1338）'),
+            new Error('呼び出しに grounds が届かなかった'),
           );
         }
         // 書き込みが落ちて投げたときは、ここから先へ進まない（1行も閉じない）
@@ -5166,14 +5167,11 @@ export function createCloneTools(context: ToolContext) {
                   decision: `定期の依頼を設定しようとしている: ${parsedKind.data}: ${request}`,
                   grounds: '継続する依頼を時間起点として持つ判断',
                 }
-              : {
-                  type: 'decision',
-                  decision:
-                    `定期の依頼を置き換えようとしている: ${parsedKind.data}: ` +
-                    `置き換え前（${describeScheduleSpec(previous.spec)}）「${previous.request}」→ ` +
-                    `置き換え後（${describeScheduleSpec(parsedSpec.data)}）「${request}」`,
-                  grounds: '同じ kind の依頼を置き換える判断（置き換え前の本文と周期は日誌に残す）',
-                },
+              : scheduleReplaceEntry({
+                  kind: parsedKind.data,
+                  previous,
+                  next: { request, spec: parsedSpec.data },
+                }),
             'act-not-performed',
           );
           replaceEntryId = previous === null ? undefined : attemptEntry.id;
@@ -7161,11 +7159,11 @@ export function createCloneTools(context: ToolContext) {
               : `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
             grounds: beforeWasUnreadable
               ? '読めない形で入っていたやり方を書き直した（全文置換。前の本文は読めなかった' +
-                'ため分からない。版の履歴には今回の内容だけが新しい版として積まれる——#1309）'
+                'ため分からない。版の履歴には今回の内容だけが新しい版として積まれる）'
               : before === null
                 ? '新しいやり方を器に置いた'
                 : 'やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、' +
-                  '前の本文は版の履歴（practice_history）に残る——#1309）',
+                  '前の本文は版の履歴（practice_history）に残る）',
             target: { kind: 'practice', slug },
           },
           'act-completed',
@@ -7643,23 +7641,12 @@ export function createCloneTools(context: ToolContext) {
         'どちらも無い本文は、相手が返事待ちでも回答にはならず追加指示として届く。',
         '許可確認への回答では decision を必ず付けること。',
         // 答える先の無い合図に decision を付けさせない: requestId 無しの decision は待ちが1件ならその1件へ当たり、無関係の確認を許可してしまうため
-        '許可確認は2種類で、答えたあとが違う。' +
-          '(1) 「分類器が … を拒否した。この1回だけ許可しますか」（requestId は toolu_… の形）: ' +
-          'allow は同じ入力の撃ち直しを10分以内に1回だけ通そうとする許可で、自動では撃ち直されない。' +
-          '分類器が迂回・敵対の型で止めた場合は、allow しても撃ち直しは通らないことがある' +
-          '（クローンの allow や担当の伝言は人間の確認と見なされない。通すには人間が中身を見て誤検知だと確かめる必要がある）。' +
-          'allow の後は、同じ入力で撃ち直しても分類器にまた止められうるので、' +
-          '続けて同じ入力を撃たず別の手（入力を変える・手順を分ける・人間に頼む）を取るよう、' +
-          'decision を付けない追加指示で伝えること。' +
-          'ただし Bash で、command に * と改行を含まない呼び出しなら、allow すると同じ入力の1回だけを10分通す一時規則が' +
-          'そのセッションに足される（そのセッションの他の作業者にも効く。確認の本文がそう言う）。' +
-          'そのときは「撃ち直すなら入力を1字も変えないこと。それでも拒否されたら別の手を取ること」と伝えること。' +
-          '(2) それ以外の許可確認（requestId は UUID の形。分類器の拒否が続いて通常の確認へ落ちた回を含む）: ' +
-          'allow すれば、その呼び出しがそのまま通る（撃ち直しは要らない）。',
-        // 答える先の無い合図に decision を付けさせない: requestId 無しの decision は待ちが1件ならその1件へ当たり、無関係の確認を許可してしまうため
-        '確認として届かない拒否の合図（拒否の報告だけが届き、上の (1) が来ていない回）には requestId が無く、' +
-          '許可として答える口は無い。decision を付けずに、別の形を追加指示として送ること' +
-          '（requestId 無しの decision は、そのマネージャーが別に待っている確認へ回答として当たりうる）。',
+        // 答え方の細則（allow のあとの撃ち直し・一時規則・伝える文言）はここに書かない: 確認の本文が言うため（`classifier-denial-streak.ts` の `DENIAL_ASK_AFTER_ANSWER_PARAGRAPH*`、`manager.ts` の `DENIAL_REPLY_ROUTE`）。ここに残すのは、本文に無い規則と、どの本文を読むかの指し先だけ
+        '許可確認は2種類（分類器の拒否の確認は requestId が toolu_… の形、それ以外は UUID の形）で、答えたあとが違う。' +
+          '答え方の細則は、届いた確認の本文が言う。' +
+          'allow のあとに撃ち直し方を伝えるときは、decision を付けない追加指示で送ること。',
+        '確認として届かない拒否の合図（拒否の報告だけが届いた回）には requestId が無く、許可として答える口は無い。' +
+          'requestId 無しの decision は付けないこと（待っている別の確認へ当たりうる）。答え方は報告の本文が言う。',
         'manager_list が [running] と出していても、runner の側でセッションが畳まれていることがある' +
           '（その合図が届かなかった窓）。そのときは resume から入り直して届けるので、' +
           '返り値にそう書いてある。入り直せなかったときも「そんな id は無い」ではなく' +

@@ -208,6 +208,12 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
     const grounds = written?.type === 'decision' ? written.grounds : '';
     expect(grounds).toBe(GROUNDS_NOT_DELIVERED);
     expect(grounds).not.toBe('根拠なし');
+    // 内部の issue 番号を日誌の文に残さない。定数と同じ字面の全文で固定する（定数側が書き換わっても気づけるように）
+    expect(grounds).toBe(
+      '（根拠は記録されていない —— 呼び出しに grounds が届かなかった。' +
+        'クローンが「根拠なし」と書いたのではない）',
+    );
+    expect(grounds).not.toMatch(/#\d+/);
     expect(result.text).toContain('grounds が呼び出しに届かなかった');
   });
 

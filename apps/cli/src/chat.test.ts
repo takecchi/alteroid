@@ -1457,6 +1457,7 @@ function stubClient(
     scheduleEntries?: ScheduleEntryLike[];
     scheduleUnreadable?: { kind?: string; reason: string }[];
     schedulePostStatus?: number;
+    schedulePostOkBody?: unknown;
     scheduleDeleteStatus?: number;
     scheduleRunStatus?: number;
     scheduleWriteBody?: unknown;
@@ -1734,7 +1735,10 @@ function stubClient(
         calls.push({ route: 'POST /schedule', args });
         const status = options.schedulePostStatus ?? 200;
         return Promise.resolve(
-          reply(status, status === 200 ? {} : (options.scheduleWriteBody ?? {})),
+          reply(
+            status,
+            status === 200 ? (options.schedulePostOkBody ?? {}) : (options.scheduleWriteBody ?? {}),
+          ),
         );
       },
       ':kind': {
@@ -3788,6 +3792,44 @@ describe('chat の /approvals（一覧）', () => {
       expect(text).toContain('回答: はい、進めてよい');
       expect(text).not.toContain('状態: 取り下げ済み');
     });
+  });
+});
+
+describe('chat の /schedule <kind> <周期> <本文>（#5374）', () => {
+  it('応答が replaced: true なら「置き換えました」と言い、旧本文・旧周期の取り方を言う', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({ schedulePostOkBody: { ok: true, replaced: true } });
+
+    await runSlashCommand('/schedule daily-x 09:00 本文', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('daily-x は既に在ったので置き換えました');
+    expect(text).toContain('日誌');
+    expect(text).not.toContain('を仕込みました');
+    // ifMatch は送らない（この Issue では足さない）
+    expect(
+      JSON.stringify(calls.find((call) => call.route === 'POST /schedule')?.args),
+    ).not.toContain('ifMatch');
+  });
+
+  it('応答が replaced: false なら従来どおり「仕込みました」と言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ schedulePostOkBody: { ok: true, replaced: false } });
+
+    await runSlashCommand('/schedule daily-x 09:00 本文', client, emptyListed());
+
+    expect(read()).toContain('daily-x を仕込みました');
+  });
+
+  it('replaced が無い応答（古いデーモン）は置き換えたと言わない', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ schedulePostOkBody: { ok: true } });
+
+    await runSlashCommand('/schedule daily-x 09:00 本文', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('daily-x を仕込みました');
+    expect(text).not.toContain('置き換えました');
   });
 });
 
