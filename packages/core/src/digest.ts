@@ -467,7 +467,7 @@ const EXTERNAL_EVENT_NOTE =
   'この件数は届いた合図の実数ではない —— 受信箱を通った合図は配達のたびに1行' +
   '書かれ（配り直し・畳んでターンを起こさない回も含む）、デーモンが受信箱を' +
   '通さず直接書く行（source `runner` / `boot-storage-footprint` / `boot-tool-search`）も混ざる。';
-const SOURCE_TALLY_HEADING =
+export const SOURCE_TALLY_HEADING =
   '**発行元（source）別の件数（正確な総数。上限 `DIGEST_SOURCE_TALLY_LIMIT`=' +
   `${DIGEST_SOURCE_TALLY_LIMIT} 発行元まで追跡する）**`;
 const BODY_SHAPE_NOTE_TAIL =

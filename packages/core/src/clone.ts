@@ -3570,16 +3570,27 @@ class Clone implements CloneHost {
    * 使用量の観測が取れない回も真（`compactionLikelyOrUnknownThisTurn`）。
    */
   #conversationMayDifferFromLastFull(): boolean {
-    return (
-      this.#sdkSession.query === null ||
-      this.#sdkSession.inputEndedForRecycle ||
-      compactionLikelyOrUnknownThisTurn(this.#lastContextUsage, this.#lastContextGrowthTokens)
-    );
+    return this.#fullReasonThisTurn() !== null;
+  }
+
+  /**
+   * 全文へ戻す理由（案 A）。`'compaction'` は「要約が走るという見込みが材料から立つ」ときだけ: 会話の上には前の全文の元が残る（要約された姿で）ので、判断の節だけの軽い全文でよい。
+   * それ以外は `'full'`（完全な全文）: 会話が変わった・作り直しの窓（会話の上に何も残らない）、使用量の観測が無い・閾値や量が不明（要約の有無が確かめられない。安全側）。
+   */
+  #fullReasonThisTurn(): 'full' | 'compaction' | null {
+    if (this.#sdkSession.query === null || this.#sdkSession.inputEndedForRecycle) return 'full';
+    if (!compactionLikelyOrUnknownThisTurn(this.#lastContextUsage, this.#lastContextGrowthTokens)) {
+      return null;
+    }
+    return compactionLikelyThisTurn(this.#lastContextUsage, this.#lastContextGrowthTokens)
+      ? 'compaction'
+      : 'full';
   }
 
   /** 全文へ戻す条件に当たれば、tick の要約の差分の記録を消す。`#pump` の先頭と、要約を組む直前（組む前の `await` の間に窓が開きうる）から呼ぶ。 */
   #resetDigestDeltaIfNewConversation(): void {
-    if (this.#conversationMayDifferFromLastFull()) this.#digestDelta.reset();
+    const reason = this.#fullReasonThisTurn();
+    if (reason !== null) this.#digestDelta.reset(reason);
   }
 
   /**
@@ -7242,8 +7253,8 @@ class Clone implements CloneHost {
 
     // 退避や蒸留の try より前に印を立てる: あちらが落ちても索引の載せ直しは行われなければならないため。
     this.#distillMemory.armMemoryIndexRefresh();
-    // 要約の直前: この後の会話は潰れるので、tick の要約の差分の記録を捨てる（#4937）
-    this.#digestDelta.reset();
+    // 要約の直前: この後の会話は潰れるので、tick の要約の差分の記録を捨てる（#4937）。理由は要約なので、次の要約は軽い全文でよい（案 A）
+    this.#digestDelta.reset('compaction');
 
     if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) {
       return;
@@ -7965,7 +7976,7 @@ class Clone implements CloneHost {
         this.#sdkSession.turn?.timer?.compactionEnded();
         // 要約で前の全文は会話から消えうるので、次のターンの「いまの全体」は説明文を全文で出す
         this.#situationExplained.clear();
-        this.#digestDelta.reset();
+        this.#digestDelta.reset('compaction');
         // ターンの外で届いた分は捨てる: 対応する `turn_usage` の行が無く、持ち帰る先が無いため。
         this.#sdkSession.turn?.compactions.push({
           trigger: event.trigger,

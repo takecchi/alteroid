@@ -2,10 +2,37 @@
 // 純粋な重複の除去であって、判断の材料は減らさない: 前に出した全文は会話の上に残っている。
 // 控えの作りは「いまの全体」の説明文（`situation.ts` の `SituationExplained`、clone.ts の `#commitSituationExplained`）に揃える:
 // 組んだ時点では控えへ書かず（staged）、入力を SDK へ押し込めた後に確定する。押し込めなかった回に控えを進めると、会話に一度も載っていない全文を畳んでしまうため。
+// 全文へ戻す理由は2つに分ける（`reset(reason)`）: 要約が走りうる／走った（`'compaction'`）は会話の上に要約された前の文脈が残るので、判断の節だけの軽い全文（`isLean`）にする。
+// 会話が変わった・失敗したターンの後・起動直後・見込みの材料が無い（`'full'`。区別できない箇所の既定）は完全な全文。軽い全文で省いた節は控えへ入れない（次の回に「前と同じ」と畳ませない）。
 // 「20ターンごとに全文」は入れない（状況の節との違い）: 判断ではなく重複の除去なので、会話が続く限り前の全文は上にある。全文へ戻すのは会話が変わった・要約が走りうる・記録が無いときだけ（`reset()`）。
 // 段落の重複の除去（#4943）も同じ控えに載せる: 全文へ戻す条件（reset）・入力を押し込めた後の確定（commit）・押し込めなかった回の持ち越しの破棄（discardStaged）を1つの口にし、呼び忘れが出ないようにするため。
 import { createHash } from 'node:crypto';
-import { DIGEST_FIXED_PHRASES, DIGEST_LIST_SECTION_NAMES } from './digest.js';
+import { DIGEST_FIXED_PHRASES, DIGEST_LIST_SECTION_NAMES, SOURCE_TALLY_HEADING } from './digest.js';
+
+/**
+ * 要約が走りうる／走った回の軽い全文（案 A）で、中身を省いて1行の参照にする節（見出しの先頭が一致するもの）と、その引き口。
+ * 引き口は `tools.ts` に実在する道具と引数だけを書く: `commitment_list`（`includeClosed`）・`journal_read`（`types`）・`usage_read`。
+ * 先頭の件数行（まえがき）は節の外なので、省いた節の件数もそのまま残る。
+ * 残す節（人間の回答待ち・エスカレーション・担当・自分の台帳の未了・聞かずに決めたこと・継続中の依頼・読めない行の注記）はここに無い。
+ */
+export const LEAN_DROPPED_SECTIONS: readonly { name: string; ref: string }[] = [
+  {
+    name: 'この期間に片付けた仕事',
+    ref: '（この節は省いた。`commitment_list` に includeClosed=true を渡すと引ける）',
+  },
+  {
+    name: '記憶の更新',
+    ref: '（この節は省いた。`journal_read` に types=["memory_update"] を渡すと引ける）',
+  },
+  {
+    name: '使った分',
+    ref: '（この節は省いた。`usage_read` で引ける）',
+  },
+];
+/** 外部イベントの節のうち、発行元別の件数と本文の形（標本）を省いた跡に出す参照。件名の一覧と固定の注記は残す。 */
+export const LEAN_EXTERNAL_TALLY_REF =
+  '（発行元別の件数と本文の形は省いた。`journal_read` に types=["external_event"] を渡すと引ける）';
+const EXTERNAL_SECTION_NAME = '届いた外部イベント';
 
 /** 段落として畳む最小の長さ（文字数）。これより短い段落は、参照にしても得が小さく読みにくくなるだけなので常に全文。 */
 export const SYSTEM_PARAGRAPH_MIN_CHARS = 200;
@@ -105,9 +132,19 @@ export class DigestSessionDelta {
     paragraphs: Set<string>;
   } = { sections: null, fixed: new Set(), requests: new Map(), paragraphs: new Set() };
   #staged: Staged | null = null;
+  // 次の要約を「判断の節だけの軽い全文」にしてよいか。会話の上に何も残っていない理由（起動直後・会話が変わった・失敗したターンの後・見込みの材料が無い）の reset が1度でもあれば、
+  // その全文が確定（commit）するまでは完全な全文（`#fullForced`）。起動直後は記録が無いので真から始める
+  #fullForced = true;
+  #compactionReset = false;
 
-  /** 差分の記録を全て捨てる（次の回は全文）。会話が変わった（作り直しの窓を含む）・要約が走りうる・見込みの材料が無い・走った・失敗したターンの後・起動直後（#4941）。段落の控え（#4943）も同じ口で消える。 */
-  reset(): void {
+  /**
+   * 差分の記録を全て捨てる（次の回は全文）。会話が変わった（作り直しの窓を含む）・要約が走りうる・見込みの材料が無い・走った・失敗したターンの後・起動直後（#4941）。段落の控え（#4943）も同じ口で消える。
+   * `reason`: `'full'`（既定。区別できない箇所はここへ倒す）は会話の上に何も残っていない回で、次の要約は完全な全文。
+   * `'compaction'` は要約が走りうる／走った回で、次の要約は判断の節だけの軽い全文にしてよい（`renderDigest`）。ただし先に `'full'` の reset があって、その全文がまだ確定していなければ完全な全文のまま。
+   */
+  reset(reason: 'full' | 'compaction' = 'full'): void {
+    if (reason === 'full') this.#fullForced = true;
+    else this.#compactionReset = true;
     this.#committed = {
       sections: null,
       fixed: new Set(),
@@ -115,6 +152,11 @@ export class DigestSessionDelta {
       paragraphs: new Set(),
     };
     this.#staged = null;
+  }
+
+  /** 次の要約が軽い全文か: 要約が走りうる／走った理由の reset があり、完全な全文へ倒す理由の reset が（確定した全文の後に）無いとき。 */
+  isLean(): boolean {
+    return this.#compactionReset && !this.#fullForced;
   }
 
   /** 前の回の持ち越しを捨てる（入力が入らなかった回の全文を、次の回へ引き継がない）。 */
@@ -127,7 +169,12 @@ export class DigestSessionDelta {
     const staged = this.#staged;
     if (staged === null) return;
     this.#staged = null;
-    if (staged.sections !== null) this.#committed.sections = staged.sections;
+    if (staged.sections !== null) {
+      this.#committed.sections = staged.sections;
+      // 要約が会話に載った: 次の reset の理由からやり直す
+      this.#fullForced = false;
+      this.#compactionReset = false;
+    }
     for (const id of staged.fixed) this.#committed.fixed.add(id);
     for (const [kind, request] of staged.requests) this.#committed.requests.set(kind, request);
     for (const key of staged.paragraphs) this.#committed.paragraphs.add(key);
@@ -201,11 +248,30 @@ export class DigestSessionDelta {
     if (parsed.sections.length === 0) return { text: digest, fullChars: digest.length };
 
     const previous = this.#committed.sections;
+    const lean = this.isLean();
     const fullSections = new Map<string, string>();
     const out: string[] = [...parsed.preamble];
     for (const section of parsed.sections) {
       const { content, trailing } = splitTrailingBlank(section.body);
       const bodyText = content.join('\n');
+      if (lean) {
+        const sectionName = section.heading.replace(SECTION_HEADING, '');
+        const dropped = LEAN_DROPPED_SECTIONS.find((candidate) =>
+          sectionName.startsWith(candidate.name),
+        );
+        if (dropped !== undefined) {
+          // 控え（fullSections）へ入れない: 次の回の差分が「前と同じ」と畳んでも、指す先（会話の上の全文）が無いため。次の回はこの節を全文で出す
+          out.push(section.heading, dropped.ref, ...trailing);
+          continue;
+        }
+        const tallyAt = content.indexOf(SOURCE_TALLY_HEADING);
+        if (sectionName.startsWith(EXTERNAL_SECTION_NAME) && tallyAt >= 0) {
+          // 件名の一覧と固定の注記は残し、発行元別の件数・本文の形だけを省く。節ごと控えへ入れない（上と同じ理由）
+          const kept = splitTrailingBlank(content.slice(0, tallyAt)).content;
+          out.push(section.heading, ...this.#foldFixed(kept), LEAN_EXTERNAL_TALLY_REF, ...trailing);
+          continue;
+        }
+      }
       fullSections.set(section.heading, bodyText);
       const before = previous?.sections.get(section.heading);
       out.push(section.heading);
