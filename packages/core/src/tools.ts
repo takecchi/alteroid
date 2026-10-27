@@ -733,9 +733,14 @@ function describeWaitingKind(kind: ManagerWaitingItem['kind']): string {
   return '種別不明';
 }
 
-function describeJournalContinuation(cursor: { id: string; at: string }): string {
+// `asc` のときだけ `order=asc` を名乗る: afterId の「次」は返る順序の次なので、order を揃えないと逆向き（desc）に読み継いでしまう。desc の文言は変えない
+function describeJournalContinuation(
+  cursor: { id: string; at: string },
+  order?: 'asc' | 'desc',
+): string {
   return (
     `続きは journal_read afterId=${cursor.id} afterAt=${cursor.at}` +
+    (order === 'asc' ? ' order=asc' : '') +
     ' （ほかの絞りは同じものを渡す）'
   );
 }
@@ -3981,6 +3986,13 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '続きの位置の時刻（ISO 8601）。afterId と必ず対で渡す。応答に出た値をそのまま渡すこと',
           ),
+        order: z
+          .enum(['asc', 'desc'])
+          .optional()
+          .describe(
+            '返す順序。既定 desc（新しい順）、asc で古い順。afterId / afterAt の「次」は返る順序の次なので、asc で読み継ぐときは order=asc も揃えて渡す。' +
+              '**q とは組めない**（q は新しい側から遡る検索で、asc を指定すると断られる。古い側から読むなら since / until で窓を閉じる）',
+          ),
       },
       async ({
         limit,
@@ -3993,11 +4005,19 @@ export function createCloneTools(context: ToolContext) {
         offset = 0,
         afterId,
         afterAt,
+        order,
       }) => {
         const limitError = describeIntRangeViolation('limit', limit, { min: 1, max: 200 });
         if (limitError !== null) return text(limitError);
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
+        // 語の検索は新しい側から1日ずつ遡る前提（続きの案内・coverage の until もその向き）なので、asc とは組まない。`q=`（空）は絞らないので断らない。id の全文読みは他の条件を無視するので対象外
+        if (id === undefined && order === 'asc' && q !== undefined && q !== '') {
+          return text(
+            'q は新しい側から遡る検索で、order=asc とは合わない。古い側から読むなら since / until で窓を閉じること。' +
+              '**日誌は読んでいない。**',
+          );
+        }
         if (id !== undefined) {
           let entry: JournalEntry | null;
           try {
@@ -4060,6 +4080,7 @@ export function createCloneTools(context: ToolContext) {
             ...(types === undefined ? {} : { types }),
             ...(q === undefined ? {} : { q }),
             ...(withFilter === undefined ? {} : { with: withFilter }),
+            ...(order === undefined ? {} : { order }),
             ...(afterId === undefined || afterAt === undefined
               ? {}
               : { after: { id: afterId, at: afterAt } }),
@@ -4106,9 +4127,9 @@ export function createCloneTools(context: ToolContext) {
           return text(
             [
               `この頁の ${requested} 行は読めない形の行だけだった（日誌が無いのではない）。` +
-                'さらに古い側に行が在る。下の続きの位置を afterId / afterAt に渡せば、' +
+                `さらに${order === 'asc' ? '新しい' : '古い'}側に行が在る。下の続きの位置を afterId / afterAt に渡せば、` +
                 '読めない行の向こうへ進める（窓をずらして読み直す必要は無い）。',
-              describeJournalContinuation(moreBeyond),
+              describeJournalContinuation(moreBeyond, order),
               ...horizonNoteLines,
             ].join('\n'),
           );
@@ -4156,7 +4177,7 @@ export function createCloneTools(context: ToolContext) {
             until === undefined &&
             types === undefined &&
             withFilter === undefined
-              ? '（この位置より先（古い側）に日誌の行は無い。日誌が空なのではない）'
+              ? `（この位置より先（${order === 'asc' ? '新しい' : '古い'}側）に日誌の行は無い。日誌が空なのではない）`
               : since === undefined &&
                   until === undefined &&
                   types === undefined &&
@@ -4196,7 +4217,7 @@ export function createCloneTools(context: ToolContext) {
           omitted: ({ rest, shown, total }) => {
             shownCount = shown;
             return (
-              `…ほか ${rest} 件は省略（この条件で ${total} 件あり、新しい順に ${shown} 件だけ出した）。` +
+              `…ほか ${rest} 件は省略（この条件で ${total} 件あり、${order === 'asc' ? '古い' : '新しい'}順に ${shown} 件だけ出した）。` +
               '省略した行から読み継ぐには、下の続きの位置を afterId / afterAt に渡すこと' +
               '（狭めるなら since / types / with / q を指定する）。'
             );
@@ -4219,7 +4240,7 @@ export function createCloneTools(context: ToolContext) {
           [
             ...coverageHead,
             listing,
-            ...(cursor === null ? [] : [describeJournalContinuation(cursor)]),
+            ...(cursor === null ? [] : [describeJournalContinuation(cursor, order)]),
             '（本文は抜粋。全文は journal_read id=<id> で取れる）',
             ...toolUseNotice,
             ...horizonNoteLines,
