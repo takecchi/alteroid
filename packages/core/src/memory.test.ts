@@ -34,6 +34,7 @@ import {
   describeMemoryPremiseRanking,
   describeMemoryProtectionStatus,
   describeMemoryReinjectionEstimate,
+  MEMORY_REINJECTION_ESTIMATE_NOTE,
   describeMemorySectionMoveHierarchyJumpWarning,
   describeMemorySessionDelta,
   describeMemoryWriteDiff,
@@ -4417,6 +4418,21 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
       expect(reply).toContain('他に何も変わらなければ');
       expect(reply).toContain('単純に合算しないこと');
     }
+  });
+
+  it('予測文は短い固定の1文で、見込みの行の次に1回だけ出る（全文を固定）', () => {
+    const note = '⚠️ 予測であって実測ではない（他に何も変わらなければ。単純に合算しないこと）。';
+    const old =
+      '⚠️ これは予測であって実測ではない。「他に何も変わらなければ」という前提が付く' +
+      '——同じターンで他の文書も変われば、次のターンにはそれも合わせて載るので、' +
+      '書き込みごとに出るこの数を単純に合算しないこと。';
+    const doc = premise('a', '本文');
+    const lines = describeMemoryReinjectionEstimate([doc], [doc], new Map()).split('\n');
+
+    expect(MEMORY_REINJECTION_ESTIMATE_NOTE).toBe(note);
+    expect(lines[1]).toBe(note);
+    expect(lines.filter((line) => line.includes('予測であって実測ではない'))).toHaveLength(1);
+    expect(note.length).toBeLessThan(old.length / 2);
   });
 
   it('⭐ memory_section_move の形（2文書）では、両方の合計が1つの数として出る（別々に render して足したものとは限らず、まとめて render した値と一致する）', () => {

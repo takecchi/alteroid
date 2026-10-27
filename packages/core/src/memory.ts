@@ -1769,7 +1769,12 @@ export function describeMemoryFloor(input: {
   return `${actionLabel}: ${slug}（区分: ${kind}）。\n${floorLine}`;
 }
 
-// 2文書を別々に render して足さない: 区切り文字のぶん実物より少なく出るため、まとめて1回 render した単一の合計を返す
+// 見込みの行に添える予測文。意味は3点: 予測であって実測ではない／「他に何も変わらなければ」の前提／書き込みごとの数は単純に合算しない
+// 実測の取り方は名指さない: 載る量を測る道具は無く、memory_list は一覧であって再注入量の実測ではないため
+export const MEMORY_REINJECTION_ESTIMATE_NOTE =
+  '⚠️ 予測であって実測ではない（他に何も変わらなければ。単純に合算しないこと）。';
+
+// 2文書を別々に render して足さない:区切り文字のぶん実物より少なく出るため、まとめて1回 render した単一の合計を返す
 // memoryAfter を必須にする: 省略できる形にすると、渡し忘れが黙って「見つからない」寄りの短い数へ倒れるため。ここでストアを読み直さない: 呼び手が既に手元に持っているため
 // memoryAfter が空でも投げない: 書き込みの成功後に呼ぶので、投げると記憶は書けているのに応答がエラーになり、二重書きを誘発するため
 export function describeMemoryReinjectionEstimate(
@@ -1811,9 +1816,7 @@ export function describeMemoryReinjectionEstimate(
 
   const lines = [
     `${subjectLabel}が次のターンの会話へ載る見込み: ${formatMemoryCharCount(chars)} 文字（${breakdown}）。`,
-    '⚠️ これは予測であって実測ではない。「他に何も変わらなければ」という前提が付く' +
-      '——同じターンで他の文書も変われば、次のターンにはそれも合わせて載るので、' +
-      '書き込みごとに出るこの数を単純に合算しないこと。',
+    MEMORY_REINJECTION_ESTIMATE_NOTE,
   ];
   if (parts.length > 1) {
     lines.push(
