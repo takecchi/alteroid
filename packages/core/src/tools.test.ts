@@ -750,6 +750,138 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('memory_frontmatter_set');
     });
 
+    // 応答の重複の直し（#5359）: 意図して入れた差分・床・見込み・セッション差・順位は残し、重複と条件外の文だけを削る
+    describe('応答の重複（#5359）', () => {
+      const seedPremises = async (h: Harness): Promise<void> => {
+        for (let i = 0; i < 20; i += 1) {
+          await h.stores.persona.write(
+            `prem-${i}`,
+            `---\ntype: premise\ndescription: 前提${i}\n---\n# 前提${i}\n${'## 節\n本文\n'.repeat(i + 1)}`,
+          );
+        }
+      };
+      const count = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
+
+      it('新規 fact の書き込みと追記には premise の順位が出ない（premise が20件在っても）', async () => {
+        const h = harness();
+        await seedPremises(h);
+
+        const created = await h.call('memory_write', {
+          slug: 'fact-new',
+          content: '---\ntype: fact\ndescription: 事実\n---\n# 事実\n本文',
+          summary: '新規',
+        });
+        const appended = await h.call('memory_append', {
+          slug: 'fact-new',
+          content: '追記',
+          summary: '追記',
+        });
+
+        for (const reply of [created, appended]) {
+          expect(reply).not.toContain('premise の大きさの順位');
+          expect(reply).toContain('毎ターンの床');
+          expect(reply).toContain('次のターンの会話へ載る見込み');
+          expect(reply).toContain('いまの記憶の総量');
+        }
+        expect(created.length).toBeLessThan(700);
+        expect(appended.length).toBeLessThan(600);
+      });
+
+      it('premise の書き込みには順位が出る', async () => {
+        const h = harness();
+        await seedPremises(h);
+
+        const created = await h.call('memory_write', {
+          slug: 'prem-new',
+          content: '# 新\n本文',
+          summary: '新規',
+        });
+        const appended = await h.call('memory_append', {
+          slug: 'prem-0',
+          content: '追記',
+          summary: '追記',
+        });
+
+        expect(created).toContain('premise の大きさの順位（大きい順、全 21 件）');
+        expect(appended).toContain('premise の大きさの順位（大きい順、全 21 件）');
+      });
+
+      it('fact の書き込みでも、premise の並びが変わる（premise から fact へ落とす）ときは順位が出る', async () => {
+        const h = harness();
+        await seedPremises(h);
+
+        const reply = await writeBased(h, {
+          slug: 'prem-19',
+          content: '---\ntype: fact\ndescription: 落とした\n---\n# 前提19\n本文',
+          summary: 'fact へ',
+        });
+
+        expect(reply).toContain('premise の大きさの順位（大きい順、全 19 件）');
+      });
+
+      it('新規作成の応答は「新規作成」を1回だけ言い、「更新した」と言わない（write / append・fact / premise）', async () => {
+        const h = harness();
+        const factReply = await h.call('memory_write', {
+          slug: 'fact-new',
+          content: '---\ntype: fact\n---\n# 事実',
+          summary: '新規',
+        });
+        const premiseReply = await h.call('memory_write', {
+          slug: 'prem-new',
+          content: '# 前提',
+          summary: '新規',
+        });
+        const appendReply = await h.call('memory_append', {
+          slug: 'appended-new',
+          content: '最初の1行',
+          summary: '新規',
+        });
+
+        for (const reply of [factReply, premiseReply, appendReply]) {
+          expect(count(reply, '新規作成')).toBe(1);
+          expect(reply).not.toContain('更新した');
+          expect(reply).not.toContain('追記した');
+        }
+        expect(factReply).toContain('記憶 fact-new を作った（');
+      });
+
+      it('既存文書の書き換えは従来どおり「更新した」と差分を言う', async () => {
+        const h = harness();
+        await h.stores.persona.write('doc', '# 総論\n本文');
+
+        const reply = await writeBased(h, {
+          slug: 'doc',
+          content: '# 総論\n本文を増やした',
+          summary: 'x',
+        });
+
+        expect(reply).toContain('記憶 doc を更新した。');
+        expect(reply).toContain('→');
+        expect(reply).not.toContain('新規作成');
+      });
+
+      it('予測の注意文は、見込みを出した応答に1回だけ付く', async () => {
+        const h = harness();
+        await seedPremises(h);
+
+        for (const reply of [
+          await h.call('memory_write', { slug: 'prem-new', content: '# 新', summary: 'x' }),
+          await h.call('memory_append', { slug: 'prem-0', content: '追記', summary: 'x' }),
+        ]) {
+          expect(count(reply, '予測であって実測ではない')).toBe(1);
+        }
+      });
+
+      it('セッション構築時点の値が引けない回の現在値の断りは、現在値の語を重ねない', async () => {
+        const h = harness();
+
+        const reply = await h.call('memory_write', { slug: 'a', content: '# a', summary: 'x' });
+
+        expect(reply).toContain('現在値である');
+        expect(count(reply, '現在値だけを出している')).toBe(0);
+      });
+    });
+
     it('memory_append の新規作成でも同じ3要素が出る（premise）', async () => {
       const h = harness();
 
@@ -1034,7 +1166,20 @@ describe('クローンの道具', () => {
       expect(idxMedium).toBeLessThan(idxSmall);
     });
 
-    it('premise がまだ無ければ、順位ではなくその旨を出す', async () => {
+    it('最後の premise を fact へ落とした回は、順位ではなく premise がもう無い旨を出す', async () => {
+      const h = harness(() => RUNTIME_BASE);
+      await h.stores.persona.write('only-premise', '# 唯一の前提\n本文');
+      const reply = await writeBased(h, {
+        slug: 'only-premise',
+        content: '---\ntype: fact\ndescription: 事実\n---\n# 事実\n本文',
+        summary: 'fact へ',
+      });
+
+      expect(reply).toContain('premise の大きさの順位');
+      expect(reply).toContain('premise はまだ無い');
+    });
+
+    it('premise がまだ無い状態で fact を書いても、順位は出ない（fact は順位の対象外）', async () => {
       const h = harness(() => RUNTIME_BASE);
       const reply = await writeBased(h, {
         slug: 'fact-only',
@@ -1042,8 +1187,7 @@ describe('クローンの道具', () => {
         summary: '新規',
       });
 
-      expect(reply).toContain('premise の大きさの順位');
-      expect(reply).toContain('premise はまだ無い');
+      expect(reply).not.toContain('premise の大きさの順位');
     });
 
     it('⭐ premise が多いと、順位は文字数の予算で切り、省いた件数を言う', async () => {
@@ -20054,7 +20198,7 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
   it('新規作成は版なしで書けるが、読んだ後に誰かが作っていれば書かない', async () => {
     const h = harness();
     expect(await h.call('memory_write', { slug: 'fresh', content: '新', summary: 'n' })).toContain(
-      '更新した',
+      '作った',
     );
   });
 

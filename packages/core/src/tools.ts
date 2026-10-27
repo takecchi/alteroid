@@ -2494,9 +2494,13 @@ function memoryFloorNote(
 }
 
 // `memoryFloorNote` と混ぜない: 引数の形が違い、既存の糊を条件分岐だらけにしないため
+// 順位は premise が動いたときだけ出す: fact は焼き込みの対象外で、順位は fact を書いた回の読み手に関係しないため
+// 書いた文書が fact でも順位の文字列が前後で変わっていれば出す（premise → fact への変更で順位から落ちた回を黙らせない）
 function memorySessionGrowthNote(
+  memoryBefore: readonly MemoryPart[],
   memoryAfter: readonly MemoryPart[],
   runtime: CloneRuntimeFacts | undefined,
+  writtenContents: readonly string[],
 ): string {
   const afterChars = measureMemoryFloor(memoryAfter).totalChars;
   const sessionDelta = describeMemorySessionDelta({
@@ -2504,6 +2508,12 @@ function memorySessionGrowthNote(
     injectedMemoryChars: runtime?.injectedMemoryChars ?? null,
   });
   const ranking = describeMemoryPremiseRanking(memoryAfter);
+  const touchesPremise = writtenContents.some(
+    (content) => resolveMemoryDocKind(parseMemoryFrontmatter(content)) === 'premise',
+  );
+  if (!touchesPremise && ranking === describeMemoryPremiseRanking(memoryBefore)) {
+    return sessionDelta;
+  }
   return [sessionDelta, ranking].join('\n\n');
 }
 
@@ -3068,13 +3078,18 @@ export function createCloneTools(context: ToolContext) {
           memoryAfter,
           seenBefore(slug, before),
         );
-        const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
+        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
+          written.content,
+        ]);
         const tokenDiff = describeTokenDiff(
           before === null ? null : before.content,
           written.content,
         );
+        // 新規作成は「新規作成」を床の行の1回だけにする: 「更新した」と言わず、差分の要約にも同じ語を重ねない
         return text(
-          `記憶 ${slug} を更新した。\n\n${diff}` +
+          (before === null
+            ? `記憶 ${slug} を作った（${written.content.length.toLocaleString('en-US')} 文字）。`
+            : `記憶 ${slug} を更新した。\n\n${diff}`) +
             (tokenDiff === null ? '' : `\n${tokenDiff}`) +
             `\n\n${floor}\n\n${reinjection}\n\n${growth}\n\n${versionLine(written.content)}`,
         );
@@ -3143,10 +3158,14 @@ export function createCloneTools(context: ToolContext) {
           memoryAfter,
           seenBefore(slug, before),
         );
-        const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
-        return text(
-          `記憶 ${slug} に追記した。\n\n${diff}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
-        );
+        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
+          written.content,
+        ]);
+        const head =
+          before === null
+            ? `記憶 ${slug} を作った（${written.content.length.toLocaleString('en-US')} 文字）。`
+            : `記憶 ${slug} に追記した。\n\n${diff}`;
+        return text(`${head}\n\n${floor}\n\n${reinjection}\n\n${growth}`);
       },
     ),
 
@@ -3401,7 +3420,9 @@ export function createCloneTools(context: ToolContext) {
           memoryAfter,
           seenBefore(slug, existing),
         );
-        const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
+        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
+          written.content,
+        ]);
 
         return text(
           `記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
@@ -3791,7 +3812,10 @@ export function createCloneTools(context: ToolContext) {
           memoryAfter,
           new Map([...seenBefore(toSlug, toBefore), ...seenBefore(fromSlug, existing)]),
         );
-        const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
+        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
+          toWritten.content,
+          fromWritten.content,
+        ]);
 
         // 古い本文を1文字も出さない: 出せば文脈に入り、この道具の存在理由が消えるため
         const listing = renderListing(
