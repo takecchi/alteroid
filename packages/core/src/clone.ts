@@ -8531,17 +8531,32 @@ function managerPrompt(
       ? `managerId: "${event.managerId}"`
       : `managerId: "${event.managerId}", requestId: "${event.requestId}"`;
 
+  const decisionLine = '許可確認なので `decision` に allow / deny を明示すること。';
+  // 骨組みの説明だけを、同じ会話の2回目から参照にする（#5299）。宛先（managerId・requestId）と decision の指定は、返事の書き方に直接効くので短い形にも残す。
+  // 質問と許可確認は骨組みが違うので控えの id を分ける。
+  const guide = [
+    `返事をするまで ${event.managerId} のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。`,
+    `記憶に根拠があるなら自分で決めて \`manager_send\`（${to}）で返し、その判断を \`journal_write\` に残せ。`,
+    event.kind === 'permission' ? decisionLine : '',
+    `根拠が無いなら \`ask_human\` に ${to} を添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返せ。` +
+      '（宛先を添えないと、人間が答えてもこの仕事を再開できない）',
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
+  const guideRef = [
+    `（応じ方は前の${label}と同じ。会話の上にある。返事は \`manager_send\`、宛先: ${to}）`,
+    event.kind === 'permission' ? decisionLine : '',
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
+
   return [
     `${head}（${label}）`,
     '',
     event.text,
     '',
     describeManagerOrigin(origin, fold),
-    `返事をするまで ${event.managerId} のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。`,
-    `記憶に根拠があるなら自分で決めて \`manager_send\`（${to}）で返し、その判断を \`journal_write\` に残せ。`,
-    event.kind === 'permission' ? '許可確認なので `decision` に allow / deny を明示すること。' : '',
-    `根拠が無いなら \`ask_human\` に ${to} を添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返せ。` +
-      '（宛先を添えないと、人間が答えてもこの仕事を再開できない）',
+    fold(`confirmation-${event.kind}`, guide, guideRef),
   ]
     .filter((line) => line !== '')
     .join('\n');
