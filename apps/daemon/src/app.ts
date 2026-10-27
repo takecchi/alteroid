@@ -137,6 +137,7 @@ import {
   reopenCommitmentJournalFirst,
   editCommitmentBodyJournalFirst,
   removeScheduleJournalFirst,
+  scheduleReplaceEntry,
   reasonOf,
   redactErrorText,
   managerModelsOf,
@@ -344,8 +345,10 @@ import {
   memoryListResponseSchema,
   memoryConflictResponseSchema,
   memoryReadResponseSchema,
+  memoryWriteResponseSchema,
   meResponseSchema,
   okResponseSchema,
+  scheduleCreateResponseSchema,
   openApiDocumentation,
   openApiExcludePaths,
   permissionGrantsResponseSchema,
@@ -353,6 +356,7 @@ import {
   practiceListResponseSchema,
   practiceConflictResponseSchema,
   practiceReadResponseSchema,
+  practiceWriteResponseSchema,
   practiceVersionListResponseSchema,
   practiceVersionReadResponseSchema,
   mcpServersConflictResponseSchema,
@@ -1280,7 +1284,7 @@ export async function noteIntegrationAttachmentUsage(
     {
       type: 'decision',
       decision: text,
-      grounds: `keyId=${keyId} totalBytes=${String(total)} threshold=${String(threshold)}（#4005）`,
+      grounds: `keyId=${keyId} totalBytes=${String(total)} threshold=${String(threshold)}`,
     },
     '連携の鍵の添付の閾値の知らせ',
     `keyId=${keyId}`,
@@ -4059,8 +4063,8 @@ export function createApp(deps: AppDeps) {
           '本文が書けなかった（409 ほか）ときは、日誌に打ち消しの行（`action: write_failed`）を足す。',
         responses: {
           200: {
-            description: '書き換え後の記憶文書。',
-            content: { 'application/json': { schema: resolver(memoryReadResponseSchema) } },
+            description: '書き換え後の記憶文書。`created` は新規なら true、置換なら false。',
+            content: { 'application/json': { schema: resolver(memoryWriteResponseSchema) } },
           },
           400: {
             description: '記憶のスラッグが不正、または本文が JSON として不正。',
@@ -4164,7 +4168,12 @@ export function createApp(deps: AppDeps) {
         }
         // 本文が書けた後でだけ立てる: 書けなかったのに立てると、打ち消した行と派生値の対応が崩れる。裏付けの行は上で先に書いてある。
         await stores.persona.markHumanTouched(slug, entry.at);
-        return c.json({ document: doc, version: memoryVersion(doc.content) });
+        // 無い slug への書き込みは新規作成: 打ち間違いの slug が更新と同じ 200 に紛れないよう、応答で言い分ける。
+        return c.json({
+          document: doc,
+          version: memoryVersion(doc.content),
+          created: before === null,
+        });
       },
     )
 
@@ -4398,7 +4407,7 @@ export function createApp(deps: AppDeps) {
         responses: {
           200: {
             description: '書き換え後のやり方。',
-            content: { 'application/json': { schema: resolver(practiceReadResponseSchema) } },
+            content: { 'application/json': { schema: resolver(practiceWriteResponseSchema) } },
           },
           400: {
             description: 'やり方のスラッグが不正、または本文が JSON として不正。',
@@ -4466,7 +4475,7 @@ export function createApp(deps: AppDeps) {
             : before === null
               ? '人間が直接 API から新しいやり方を器に置いた'
               : '人間が直接 API からやり方を書き直した（全文置換。前の本文は' +
-                'GET /practices/:slug/versions の版の履歴に残る——#1309）',
+                'GET /practices/:slug/versions の版の履歴に残る）',
           target: { kind: 'practice', slug },
           // 新しく置いた回には付けない: 取り消しでも書き換えでもなく、直しの合図として薄いため
           ...(rewriting ? humanActionOf(c.get('principal'), 'practice_write', slug) : {}),
@@ -4518,7 +4527,8 @@ export function createApp(deps: AppDeps) {
         }
         // 書き換え自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
         await appendJournalOrDrop(stores, entryAfter, 'やり方書き換えの日誌', `slug=${slug}`);
-        return c.json({ practice, version: practiceVersion(practice) });
+        // 読めない形の行の書き直しは置換（`rewriting`）: 新規ではない。
+        return c.json({ practice, version: practiceVersion(practice), created: !rewriting });
       },
     )
 
@@ -6323,14 +6333,17 @@ export function createApp(deps: AppDeps) {
           '同じ kind なら置き換わる（前回動いた時刻は保つ）。' +
           '任意の `ifMatch`（`GET /schedule` で読んだ時の `updatedAt`。無かったなら null）を付けると、' +
           '版が違うときは書かずに 409。省略は従来どおり後勝ち。' +
+          '既存の kind を置き換えるときは、置き換える前に旧本文・旧周期を日誌（decision）へ残す' +
+          '（書けなければ置き換えず 500）。応答の `replaced` が置換（true）か新規（false）かを言う。' +
           '真実はストア側にあり、' +
           'スケジューラはそれを読み直すだけなので、デーモンを作り直しても残る。' +
           // 一覧を数え直さず `RESERVED_SCHEDULE_KINDS` から導出する: この description は `openapi.json` へ焼かれるので、数え直すと生成物も同じ嘘を持つ。
           `既定の定期ジョブ（${RESERVED_SCHEDULE_KINDS.join(' / ')}）の名前は奪えない（→ 409）。`,
         responses: {
           200: {
-            description: '仕込んだ。次の発火は `GET /schedule` で見える。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+            description:
+              '仕込んだ。次の発火は `GET /schedule` で見える。`replaced` は既存の kind を置き換えたとき true。',
+            content: { 'application/json': { schema: resolver(scheduleCreateResponseSchema) } },
           },
           400: {
             description: '本文が JSON として不正（kind の形・時刻の範囲もここで弾く）。',
@@ -6367,70 +6380,98 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: 'reserved kind' as const }, 409);
         }
         const now = new Date().toISOString();
-        // 能力を広げる口は日誌を先に書く: 書けなければ仕込まずに 500。「仕込んだ」か「直した」かは `editRequest` の戻り値でしか分からないので、先の行はそれを含まず、後で分かる分は2行目として best-effort で足す。
-        await stores.journal.append({
-          type: 'decision',
-          decision: `人間が定期の依頼を設定しようとしている: ${kind}: ${request}`,
-          grounds: '人間が直接 API から仕込んだ',
-        });
-
-        // 編集は `editRequest`、新規作成だけ `put`: `get()` して `put()` すると、その間に定期発火の `claimRun` が割り込んだ印を丸ごと消す lost update になる。`editRequest` は現在値を排他区間の中で読み直して引き継ぐ。
+        // 呼び手が `ifMatch` を渡さなかったとき、読んだ後に別の書き手が同じ kind を変えていたら読み直す回数（上限が無いと、書き換え続ける相手と無限に競る）
+        const implicitAttempts = 3;
         let edited: Awaited<ReturnType<Stores['schedules']['editRequest']>>;
-        try {
-          edited = await stores.schedules.editRequest(kind, { request, spec }, now, { ifMatch });
-          if (edited === null) {
-            // 版つき（`ifMatch: null`）なら「無いときだけ作る」をストアの排他の中で行う。
-            await stores.schedules.put(
-              { kind, spec, request, createdAt: now, updatedAt: now },
-              ifMatch === undefined ? undefined : { ifMatch: null },
-            );
+        for (let attempt = 1; ; attempt += 1) {
+          // 読めない行は `null` のまま進める: `editRequest` が `UnreadableScheduleError` を投げ、下で 409 にする
+          let previous: Awaited<ReturnType<Stores['schedules']['get']>>;
+          try {
+            previous = await stores.schedules.get(kind);
+          } catch (error) {
+            if (!(error instanceof UnreadableScheduleError)) throw error;
+            previous = null;
           }
-        } catch (error) {
-          // 黙って上書きしない: 書いていないので、先に積んだ「設定しようとしている」を打ち消す。
-          if (error instanceof ScheduleConflictError) {
-            await appendJournalOrDrop(
-              stores,
-              {
-                type: 'decision',
-                decision: `人間が定期の依頼を設定できなかった（読んだ後に変わっていた）: ${kind}: ${request}`,
-                grounds: '人間が直接 API から仕込もうとしたが、読んだ版と違うので書いていない',
-              },
-              '定期の依頼の打ち消しの日誌',
-              `kind=${kind}`,
-            );
-            return c.json(
-              {
-                error: '継続中の依頼が読んだ後に変わっています（書き換えていません）' as const,
-                current: error.current,
-              },
-              409,
-            );
-          }
-          if (error instanceof UnreadableScheduleError) {
-            await appendJournalOrDrop(
-              stores,
-              {
-                type: 'decision',
-                decision: `人間が定期の依頼を設定できなかった（読めない形で入っている）: ${kind}: ${request}`,
-                grounds:
-                  '人間が直接 API から仕込もうとしたが、その kind の行が読めないので書いていない',
-              },
-              '定期の依頼の打ち消しの日誌',
-              `kind=${kind}`,
-            );
-            return c.json({ error: describeUnreadableScheduleEdit(error) }, 409);
-          }
-          await appendJournalOrDrop(
-            stores,
-            {
-              type: 'decision',
-              decision: `人間が定期の依頼を設定できなかった: ${kind}: ${request}`,
-              grounds: '人間が直接 API から仕込もうとしたが、状態の変更が失敗した',
-            },
-            '定期の依頼の打ち消しの日誌',
-            `kind=${kind}`,
+          // 能力を広げる口は日誌を先に書く: 書けなければ仕込まずに 500。置き換えるときは旧本文・旧周期を逐語で残す（置き換えると行から消える。道具 `schedule_create` と同じ `scheduleReplaceEntry`）。
+          // 「仕込んだ」か「直した」かの最終の区別は `editRequest` の戻り値でしか分からないので、後で分かる分は2行目として best-effort で足す。
+          await stores.journal.append(
+            previous === null
+              ? {
+                  type: 'decision',
+                  decision: `人間が定期の依頼を設定しようとしている: ${kind}: ${request}`,
+                  grounds: '人間が直接 API から仕込んだ',
+                }
+              : scheduleReplaceEntry({
+                  kind,
+                  previous,
+                  next: { request, spec },
+                  actor: '人間が',
+                }),
           );
-          throw error;
+
+          // 編集は `editRequest`、新規作成だけ `put`: `get()` して `put()` すると、その間に定期発火の `claimRun` が割り込んだ印を丸ごと消す lost update になる。`editRequest` は現在値を排他区間の中で読み直して引き継ぐ。
+          // `ifMatch` が無いときは、いま読んだ行の版で書く: 日誌に残した旧本文と実際に上書きされる本文を同じものにするため（無いなら「無いときだけ作る」）。渡されたときは呼び手の版を優先する（意味は変えない）。
+          const writeIfMatch = ifMatch !== undefined ? ifMatch : (previous?.updatedAt ?? null);
+          try {
+            edited = await stores.schedules.editRequest(kind, { request, spec }, now, {
+              ifMatch: writeIfMatch,
+            });
+            if (edited === null) {
+              // 「無いときだけ作る」をストアの排他の中で行う。
+              await stores.schedules.put(
+                { kind, spec, request, createdAt: now, updatedAt: now },
+                { ifMatch: null },
+              );
+            }
+            break;
+          } catch (error) {
+            // 黙って上書きしない: 書いていないので、先に積んだ行を打ち消す。
+            if (error instanceof ScheduleConflictError) {
+              await appendJournalOrDrop(
+                stores,
+                {
+                  type: 'decision',
+                  decision: `人間が定期の依頼を設定できなかった（読んだ後に変わっていた）: ${kind}: ${request}`,
+                  grounds: '人間が直接 API から仕込もうとしたが、読んだ版と違うので書いていない',
+                },
+                '定期の依頼の打ち消しの日誌',
+                `kind=${kind}`,
+              );
+              if (ifMatch === undefined && attempt < implicitAttempts) continue;
+              return c.json(
+                {
+                  error: '継続中の依頼が読んだ後に変わっています（書き換えていません）' as const,
+                  current: error.current,
+                },
+                409,
+              );
+            }
+            if (error instanceof UnreadableScheduleError) {
+              await appendJournalOrDrop(
+                stores,
+                {
+                  type: 'decision',
+                  decision: `人間が定期の依頼を設定できなかった（読めない形で入っている）: ${kind}: ${request}`,
+                  grounds:
+                    '人間が直接 API から仕込もうとしたが、その kind の行が読めないので書いていない',
+                },
+                '定期の依頼の打ち消しの日誌',
+                `kind=${kind}`,
+              );
+              return c.json({ error: describeUnreadableScheduleEdit(error) }, 409);
+            }
+            await appendJournalOrDrop(
+              stores,
+              {
+                type: 'decision',
+                decision: `人間が定期の依頼を設定できなかった: ${kind}: ${request}`,
+                grounds: '人間が直接 API から仕込もうとしたが、状態の変更が失敗した',
+              },
+              '定期の依頼の打ち消しの日誌',
+              `kind=${kind}`,
+            );
+            throw error;
+          }
         }
         // 仕込み・直しは効いているので、後で分かった区別は2行目として足す（落ちても 500 にしない。`appendJournalOrDrop`）。
         await appendJournalOrDrop(
@@ -6445,7 +6486,7 @@ export function createApp(deps: AppDeps) {
         );
         // 次の刻みを待たずに効かせる: 人間が仕込んだのに1分間存在しないのは嘘になる。
         await deps.scheduler?.refresh().catch(() => undefined);
-        return c.json(okResponseSchema.parse({ ok: true }));
+        return c.json(scheduleCreateResponseSchema.parse({ ok: true, replaced: edited !== null }));
       },
     )
 

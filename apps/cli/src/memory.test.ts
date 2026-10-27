@@ -98,6 +98,45 @@ describe('alteroid memory set', () => {
   });
 });
 
+describe('alteroid memory set の created の言い分け（#5379）', () => {
+  async function putReply(created: boolean | undefined): Promise<string> {
+    const read = captureStdout();
+    const dir = await makeTempDir('alteroid-memory-test-');
+    const path = join(dir, 'typo.md');
+    await writeFile(path, '本文\n', 'utf8');
+    replies.push({ status: 404, body: { error: 'not found' } });
+    replies.push({
+      status: 200,
+      body: {
+        document: { slug: 'typo', content: '本文\n' },
+        version: 'v',
+        ...(created === undefined ? {} : { created }),
+      },
+    });
+    await memorySetCommand('typo', { file: path });
+    return read();
+  }
+
+  it('created: true なら、新規作成と言う', async () => {
+    expect(await putReply(true)).toBe(
+      '新規作成しました: typo（同じ slug の既存の記憶は無かったので、置き換えではありません）\n' +
+        '（次の会話からクローンの判断に入ります）\n',
+    );
+  });
+
+  it('created: false なら、従来どおり書き換えたと言う', async () => {
+    expect(await putReply(false)).toBe(
+      '書き換えました: typo\n（次の会話からクローンの判断に入ります）\n',
+    );
+  });
+
+  it('created が無い（古いデーモン）なら、従来どおり書き換えたと言う', async () => {
+    expect(await putReply(undefined)).toBe(
+      '書き換えました: typo\n（次の会話からクローンの判断に入ります）\n',
+    );
+  });
+});
+
 describe('alteroid memory set の空の本文（#3456）', () => {
   async function emptyFile(content: string): Promise<string> {
     const dir = await makeTempDir('alteroid-memory-test-');

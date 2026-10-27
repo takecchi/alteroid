@@ -154,6 +154,33 @@ describe('alteroid practice set', () => {
   });
 });
 
+describe('alteroid practice set の created の言い分け（#5379）', () => {
+  async function putReply(created: boolean | undefined): Promise<string> {
+    const read = captureStdout();
+    replies.push({ status: 404, body: { error: 'not found' } });
+    replies.push({
+      status: 200,
+      body: { ...(practiceBody() as object), ...(created === undefined ? {} : { created }) },
+    });
+    await practiceSetCommand('typo', { file: fileWith('本文\n'), kind: '調査', title: '題' });
+    return read();
+  }
+
+  it('created: true なら、新規作成と言う', async () => {
+    expect(await putReply(true)).toBe(
+      '新規作成しました: typo（同じ slug の既存のやり方は無かったので、置き換えではありません）\n',
+    );
+  });
+
+  it('created: false なら、従来どおり書き換えたと言う', async () => {
+    expect(await putReply(false)).toBe('書き換えました: typo\n');
+  });
+
+  it('created が無い（古いデーモン）なら、従来どおり書き換えたと言う', async () => {
+    expect(await putReply(undefined)).toBe('書き換えました: typo\n');
+  });
+});
+
 describe('alteroid practice set の空の本文（#3456）', () => {
   it.each([
     ['空', ''],
