@@ -1143,6 +1143,28 @@ export interface ManagerSendResult {
   detail: string;
 }
 
+/**
+ * requestId 無しの decision が確認に当たらなかった回を言う警告（当たらない回は空文字）。
+ * 待っている確認が無いと本文は追加指示として届く（預かりは本文だけを持つ）ので、言わないと、
+ * 呼び手は許可・拒否を出したつもりのまま、相手は本文を普通の指示として読む。当たった回の outcome は `answered`。
+ * 道具（`manager_send`）と HTTP（`POST /managers/:id/messages`）で入口ごとに文が変わると、同じ失敗の見え方が割れるので、
+ * 文はここ1か所に置く。
+ */
+export function decisionUnusedNote(
+  decision: ManagerDecision | undefined,
+  requestId: string | undefined,
+  outcome: ManagerSendResult['outcome'],
+): string {
+  if (decision === undefined || requestId !== undefined) return '';
+  if (outcome !== 'delivered' && outcome !== 'held') return '';
+  return (
+    `\n⚠ decision（${decision}）を付けたが、いま答えを待っている確認が無かったので、回答としては使っていない` +
+    '（許可・拒否としてはどこにも当たっていない）。本文は追加指示として' +
+    (outcome === 'held' ? '預かった。' : '届けた。') +
+    '確認に答えるつもりだったなら、受信箱に届いた requestId を付けて送り直すこと。'
+  );
+}
+
 export interface ManagerSendOptions {
   decision?: ManagerDecision;
   /** どの確認への回答か。複数を待っているときは省略できない。 */

@@ -205,6 +205,7 @@ import {
   NulNotAllowedError,
   InvalidCredentialNameError,
   codePointBoundary,
+  decisionUnusedNote,
   excerptLine,
   loadManagerAttachments,
   redactSecretsInBody,
@@ -7530,7 +7531,9 @@ export function createApp(deps: AppDeps) {
               '`held` = `declined` と同じ理由でいまは届けられないので、**伝言を台帳に預かった**' +
               '（#4441。届けられるようになったら自動で届け、日誌とクローンへ知らせる。送り直すと二重に届く）。' +
               '⚠️ `session_missing` を 404 にしないのは、**そのものは居る**からである — ' +
-              '委譲は台帳に在り、時間で解ける理由（引き取り中・貸し出し期限）なら送り直しで通る。',
+              '委譲は台帳に在り、時間で解ける理由（引き取り中・貸し出し期限）なら送り直しで通る。' +
+              '⚠️ `requestId` 無しで `decision` を付け、待っている確認に当たらず `delivered` / `held` になった回は、' +
+              '`detail` の末尾に「回答としては使っていない」警告が付く（クローンの道具 `manager_send` と同じ文）。',
             content: { 'application/json': { schema: resolver(managerActionResponseSchema) } },
           },
           400: {
@@ -7661,7 +7664,11 @@ export function createApp(deps: AppDeps) {
             `id=${managerId}`,
           );
         }
-        return c.json({ outcome: result.outcome, detail: result.detail });
+        // 道具（`manager_send`）と同じ警告を `detail` の末尾へ足す: 足さないと Web・CLI の人間が、許可したつもりで何も通っていないことに気づけない
+        return c.json({
+          outcome: result.outcome,
+          detail: `${result.detail}${decisionUnusedNote(decision, requestId, result.outcome)}`,
+        });
       },
     )
 

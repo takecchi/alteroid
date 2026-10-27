@@ -165,6 +165,7 @@ import {
 } from './archive-prune.js';
 import type { ArchiveRemoveManyFilter } from './archive-prune.js';
 import {
+  decisionUnusedNote,
   describeDenialFollowUp,
   guardArchiveRemoval,
   HELD_MESSAGE_TTL_MS,
@@ -7718,24 +7719,15 @@ export function createCloneTools(context: ToolContext) {
               RESTART_BEFORE_CHECK_ADVICE,
           );
         }
-        // requestId 無しの decision が確認に当たらなかった回を言う: 待っている確認が無いと本文は追加指示として届く（預かりは本文だけを持つ）ので、
-        // 言わないと呼び手は許可・拒否を出したつもりのまま、相手は本文を普通の指示として読む。当たった回の outcome は `answered`
-        const decisionUnusedNote =
-          decision !== undefined &&
-          requestId === undefined &&
-          (result.outcome === 'delivered' || result.outcome === 'held')
-            ? `\n⚠ decision（${decision}）を付けたが、いま答えを待っている確認が無かったので、回答としては使っていない` +
-              '（許可・拒否としてはどこにも当たっていない）。本文は追加指示として' +
-              (result.outcome === 'held' ? '預かった。' : '届けた。') +
-              '確認に答えるつもりだったなら、受信箱に届いた requestId を付けて送り直すこと。'
-            : '';
-        if (result.outcome === 'held') return text(`${result.detail}${decisionUnusedNote}`);
+        // 警告の文は HTTP（POST /managers/:id/messages）と共有する（`decisionUnusedNote`）
+        const unusedNote = decisionUnusedNote(decision, requestId, result.outcome);
+        if (result.outcome === 'held') return text(`${result.detail}${unusedNote}`);
         // 「届けた」が保証する範囲を名乗る: 観測したのは resume の口が成功を返したところまでで、相手がこの本文を読んだかは見ていないため
         // 「同じ本文で立て直さないこと」は落とさない: 送った直後の `manager_list` が `lost` のままで、クローンが指示を失ったと判断し出し直した実害があるため
         if (result.outcome === 'delivered') {
           // 毎回返る文なので短く保つ（理由の詳しい説明は道具の説明文の側に1回だけ置く）: 送るたびにクローンの文脈へ積まれ、読み直しの費用になるため
           return text(
-            `[${managerId}] ${result.detail}${decisionUnusedNote}\n` +
+            `[${managerId}] ${result.detail}${unusedNote}\n` +
               '（「届けた」は「読んで動いた」ではない。読んだかは1度も見ていない。' +
               '直後の manager_list が lost でも「届かなかった」の証拠にはならない。' +
               '同じ本文で新しい委譲を立てないこと。読まれたかは manager_report で見る）',

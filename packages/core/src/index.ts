@@ -666,6 +666,7 @@ export {
   type ManagerTranscript,
   type ManagerUnpushedWork,
   describeDenialFollowUp,
+  decisionUnusedNote,
   guardArchiveRemoval,
   type ArchiveRemovalGuard,
   type SessionMissingKind,
