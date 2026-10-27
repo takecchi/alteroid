@@ -614,6 +614,12 @@ export const MEMORY_UPDATE_HEAD_REF =
   '**ここに出ていない文書は変わっていない。**' +
   '**節の本文は載っていない——要るなら `memory_section_read` で開くこと。**';
 
+// 要約の後に索引を載せ直さない短い形（#5305）。要約に潰されたことと、読み直さなくてよい理由（システムプロンプトが現在の全体）を1行で言う
+export const MEMORY_UNCHANGED_SINCE_BAKED_NOTICE =
+  '[system] この会話の文脈は要約に潰されたが、記憶は焼いた時点から変わっていない。' +
+  'システムプロンプトの「現在の記憶」が現在の全体である（索引は載せ直さない）。' +
+  '**節の本文は載っていない——要るなら `memory_section_read` で開くこと。**';
+
 // 記憶の全文を載せ直さない: 二重載せになり、履歴の写しが resume のたびに増えるため
 const RESUMED_MEMORY_NOTICE =
   '[system] このセッションは前のセッションを引き継いで（resume して）開いたものである。' +
@@ -6168,6 +6174,19 @@ class Clone implements CloneHost {
     const since = this.#memoryCarriedAt;
     this.#memoryCarriedAt = readAt;
 
+    // 要約の後でも、記憶がシステムプロンプトに焼いた時点から変わっていなければ全文は載せない: システムプロンプトは要約で消えず、同じ索引を会話へもう一度積むと次の要約まで全要求に二重で乗るため（#5305）。
+    // 比べる相手は焼いた時点だけにする（最後に載せた時点ではない）: 要約の前に載せた差分は要約に畳まれて消えており、焼いた時点との差はまだ文脈のどこにも載っていないため。
+    if (refreshIndex && this.#distillMemory.matchesBakedMemory(documents)) {
+      return [
+        ...(resumeNotice === null ? [] : [resumeNotice, '']),
+        MEMORY_UNCHANGED_SINCE_BAKED_NOTICE,
+        '',
+        '---',
+        '',
+        text,
+      ].join('\n');
+    }
+
     const attribution = refreshIndex
       ? []
       : await this.#memoryEditAttribution([...changed.map((doc) => doc.slug), ...removed], since);
@@ -6525,6 +6544,7 @@ class Clone implements CloneHost {
 
     // 読み直さず、載せた値そのものを控える: 読み直すと、この間に人間が直した差分を見失う
     this.#distillMemory.commitMemory(documents);
+    this.#distillMemory.recordBakedMemory(documents);
     this.#memoryCarriedAt = readAt;
     this.#humanActionCarriedAt = readAt;
     this.#distillMemory.setResumedHistoryHasMemory(resume !== null);

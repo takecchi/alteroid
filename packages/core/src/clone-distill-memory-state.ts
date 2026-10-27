@@ -177,6 +177,20 @@ export class CloneDistillMemoryState {
     this.#memoryOnRecord.clear();
   }
 
+  // `#memoryOnRecord`（最後に載せた時点）とは別に持つ: あちらは差分を載せるたびに進むが、その差分は次の要約に畳まれて消える。要約を越えて残るのはシステムプロンプトに焼いた記憶だけで、要約後の索引の載せ直しが比べる相手はこちらのため。
+  // `null` は「焼いた控えが無い」: 無ければ一致とは言えず、載せ直す側（全文）へ倒す。
+  #bakedMemory: ReadonlyMap<string, string> | null = null;
+
+  recordBakedMemory(documents: readonly MemoryDocument[]): void {
+    this.#bakedMemory = new Map(documents.map((doc) => [doc.slug, doc.content]));
+  }
+
+  matchesBakedMemory(documents: readonly MemoryDocument[]): boolean {
+    const baked = this.#bakedMemory;
+    if (baked === null || baked.size !== documents.length) return false;
+    return documents.every((doc) => baked.get(doc.slug) === doc.content);
+  }
+
   #resumedHistoryHasMemory = false;
 
   setResumedHistoryHasMemory(resumed: boolean): void {

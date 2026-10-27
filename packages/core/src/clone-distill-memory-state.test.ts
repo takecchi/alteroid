@@ -259,3 +259,27 @@ describe('CloneDistillMemoryState — forgetMemory（クリアだけ。差し替
     expect(seen.size).toBe(0);
   });
 });
+
+describe('CloneDistillMemoryState — 焼いた時点の記憶（#5305）', () => {
+  it('焼いた控えが無ければ一致とは言わない（全文を載せる側へ倒す）', () => {
+    const s = new CloneDistillMemoryState();
+    expect(s.matchesBakedMemory([doc('a', 'A')])).toBe(false);
+  });
+
+  it('同じ内容なら一致、内容・件数が違えば不一致', () => {
+    const s = new CloneDistillMemoryState();
+    s.recordBakedMemory([doc('a', 'A'), doc('b', 'B')]);
+    expect(s.matchesBakedMemory([doc('b', 'B'), doc('a', 'A')])).toBe(true);
+    expect(s.matchesBakedMemory([doc('a', 'A'), doc('b', 'B2')])).toBe(false);
+    expect(s.matchesBakedMemory([doc('a', 'A')])).toBe(false);
+    expect(s.matchesBakedMemory([doc('a', 'A'), doc('b', 'B'), doc('c', 'C')])).toBe(false);
+  });
+
+  it('commitMemory しても焼いた控えは動かない（載せた差分は要約で畳まれるため）', () => {
+    const s = new CloneDistillMemoryState();
+    s.recordBakedMemory([doc('a', 'A')]);
+    s.commitMemory([doc('a', 'A2')]);
+    expect(s.matchesBakedMemory([doc('a', 'A2')])).toBe(false);
+    expect(s.matchesBakedMemory([doc('a', 'A')])).toBe(true);
+  });
+});

@@ -5,6 +5,7 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import {
   ALWAYS_REDELIVER,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+  MEMORY_UNCHANGED_SINCE_BAKED_NOTICE,
   commitmentFor,
   createClone,
 } from './clone.js';
@@ -54,11 +55,16 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
     );
   }
 
-  it('⭐ 潰された次のターンでは、変わっていない文書も含めて索引の全体が載る', async () => {
-    const s = setup(undefined, await twoPremises());
+  const VALUES_V2 = '---\ntype: premise\ndescription: 価値観の要旨\n---\n## VALUES-HEAD-V2\n本文\n';
+  const VALUES_V3 = '---\ntype: premise\ndescription: 価値観の要旨\n---\n## VALUES-HEAD-V3\n本文\n';
+
+  it('⭐ 潰された次のターンでは、変わっていない文書も含めて索引の全体が載る（焼いた時点から差がある）', async () => {
+    const stores = await twoPremises();
+    const s = setup(undefined, stores);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
+    await stores.persona.write('values', VALUES_V2);
     await firePreCompact(s);
 
     const { events } = wireEvents(s.clone, 'conv-2');
@@ -76,10 +82,12 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
   });
 
   it('⭐ 載せ直すのはその回だけ。次のターンには載らない（毎ターン2万トークンを払わない）', async () => {
-    const s = setup(undefined, await twoPremises());
+    const stores = await twoPremises();
+    const s = setup(undefined, stores);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
+    await stores.persona.write('values', VALUES_V2);
     await firePreCompact(s);
 
     const { events: second } = wireEvents(s.clone, 'conv-2');
@@ -94,6 +102,81 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
     expect(inputs[1] ?? '').toContain('要約に潰された');
     expect(inputs[2] ?? '').not.toContain('要約に潰された');
     expect(inputs[2] ?? '').not.toContain('## HABITS-HEAD');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 焼いた時点から記憶が変わっていなければ、索引の全文は載らず短い1行になる（#5305）', async () => {
+    const s = setup(undefined, await twoPremises());
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await firePreCompact(s);
+
+    const { events } = wireEvents(s.clone, 'conv-2');
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+
+    const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(input).toContain(MEMORY_UNCHANGED_SINCE_BAKED_NOTICE);
+    expect(input).not.toContain('いまの索引を丸ごと載せ直す');
+    expect(input).not.toContain('## VALUES-HEAD');
+    expect(input).not.toContain('## HABITS-HEAD');
+    expect(input).toContain('2回目');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 要約の前に差分を載せ済みで、要約後も焼いた時点との差が残るなら全文が載る（差分は要約に畳まれたため）', async () => {
+    const stores = await twoPremises();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await stores.persona.write('values', VALUES_V2);
+    const { events: second } = wireEvents(s.clone, 'conv-2');
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(second);
+    expect((s.calls[0] as FakeCall).inputs[1] ?? '').toContain('## VALUES-HEAD-V2');
+
+    await firePreCompact(s);
+
+    const { events: third } = wireEvents(s.clone, 'conv-3');
+    s.clone.post(humanMessage('3回目', 'conv-3'));
+    await waitForDone(third);
+
+    const input = (s.calls[0] as FakeCall).inputs[2] ?? '';
+    expect(input).toContain('いまの索引を丸ごと載せ直す');
+    expect(input).toContain('## VALUES-HEAD-V2');
+    expect(input).toContain('## HABITS-HEAD');
+    expect(input).not.toContain(MEMORY_UNCHANGED_SINCE_BAKED_NOTICE);
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 短い1行のときも印は下りる（次のターンに何も載らず、その後の更新は差分で載る）', async () => {
+    const stores = await twoPremises();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await firePreCompact(s);
+
+    const { events: second } = wireEvents(s.clone, 'conv-2');
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(second);
+    expect((s.calls[0] as FakeCall).inputs[1] ?? '').toContain(MEMORY_UNCHANGED_SINCE_BAKED_NOTICE);
+
+    await stores.persona.write('values', VALUES_V3);
+    const { events: third } = wireEvents(s.clone, 'conv-3');
+    s.clone.post(humanMessage('3回目', 'conv-3'));
+    await waitForDone(third);
+
+    const input = (s.calls[0] as FakeCall).inputs[2] ?? '';
+    expect(input).not.toContain(MEMORY_UNCHANGED_SINCE_BAKED_NOTICE);
+    expect(input).not.toContain('要約に潰された');
+    expect(input).toContain('## VALUES-HEAD-V3');
+    expect(input).not.toContain('## HABITS-HEAD');
 
     await s.clone.stop();
   });
