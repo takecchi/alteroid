@@ -742,6 +742,60 @@ const MANAGER_STOP_FOLDED_TURN_EXCERPT = 240;
 // runner 側のキャップを根拠にしない: `AskUserQuestion` は `brief` を通らないため、出す側で締める
 const LIST_WAITING_EXCERPT = 200;
 const LIST_BUDGET = 8_000;
+
+// 行ごとに同じ長い固定文を繰り返さず、行には印だけを置いて意味は一覧の末尾に1回だけ書く（#5347）。
+// 429 の波で runner が一斉に黙る・lost が並ぶときに、同じ文が行の数だけ積まれて LIST_BUDGET が尽き、後続の行が省略されるため
+type ManagerListNoteMark = 'runner-lost' | 'session-missing' | 'lost';
+const MANAGER_LIST_NOTE_MARKS: Record<ManagerListNoteMark, string> = {
+  'runner-lost': '［runner 消失］',
+  'session-missing': '［セッション無し］',
+  lost: '［lost］',
+};
+const MANAGER_LIST_NOTE_BODIES: Record<ManagerListNoteMark, string> = {
+  'runner-lost':
+    '宛先の器が行の時刻以降 名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。' +
+    '**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。' +
+    '話しかけることは塞いでいない — 戻る先（session_id）が在れば manager_send が resume を試みる（届くとは限らない）。' +
+    '器そのものは runner_list で見る。',
+  'session-missing':
+    '行の時刻の時点で、宛先の runner がこの委譲のセッションを持っていなかった（runner がそう答えた。聞けなかったのではない）。' +
+    '**この委譲が失われたという意味ではない** — ' +
+    '完遂した後にセッションが畳まれ、終端イベントだけが届かなかった回も同じ形に見える' +
+    '（デーモンにこの2つを区別する材料は無い）。まず manager_report を見ること' +
+    '（報告が空でも、生ログから「生成されたが配られていない」報告を拾える）。' +
+    'session_id が残っていれば manager_send が resume から入り直す。',
+  lost:
+    '前のセッションへ戻れなかった。**戻れたかどうかしか見ていない** — ' +
+    'この仕事が終わっていたかは分からない（成果がリモートの PR・ブランチ・' +
+    'コミットまで届いていることがある）。まずそこを確かめ、続きが要ると' +
+    '判断したときだけ manager_start で起こし直すこと。',
+};
+const MANAGER_LIST_NOTE_ORDER: readonly ManagerListNoteMark[] = [
+  'runner-lost',
+  'session-missing',
+  'lost',
+];
+
+// 出ている行が使った印の分だけ書く（使われなければ1文字も足さない）。RESTART_BEFORE_CHECK_ADVICE は
+// runner 消失・セッション無しの両方に掛かるので、並べずここで1回だけ言う
+function managerListNotes(rowMarks: readonly ReadonlySet<ManagerListNoteMark>[]): string {
+  const used = MANAGER_LIST_NOTE_ORDER.filter((mark) => rowMarks.some((marks) => marks.has(mark)));
+  if (used.length === 0) return '';
+  const lines = used.map(
+    (mark) => `${MANAGER_LIST_NOTE_MARKS[mark]} ${MANAGER_LIST_NOTE_BODIES[mark]}`,
+  );
+  if (used.includes('runner-lost') || used.includes('session-missing')) {
+    lines.splice(
+      used.includes('lost') ? used.length - 1 : used.length,
+      0,
+      `${used
+        .filter((mark) => mark !== 'lost')
+        .map((mark) => MANAGER_LIST_NOTE_MARKS[mark])
+        .join('')} ${RESTART_BEFORE_CHECK_ADVICE}`,
+    );
+  }
+  return `行の印の意味（同じ文を行ごとには繰り返さない）:\n${lines.join('\n')}`;
+}
 const MANAGER_WAITING_LIST_LIMIT = 10;
 const LIST_DENIED_TOOLS = 3;
 const LIST_TOOL_USE_STALL_LIMIT = 3;
@@ -8035,46 +8089,41 @@ export function createCloneTools(context: ToolContext) {
             },
             now,
           );
-          return renderListingEntry({
+          const marks = new Set<ManagerListNoteMark>();
+          if (manager.runnerLostSince !== undefined) marks.add('runner-lost');
+          if (manager.sessionMissingSince !== undefined) marks.add('session-missing');
+          if (manager.status === 'lost') marks.add('lost');
+          const entry = renderListingEntry({
             id: manager.managerId,
             title: `[${describeManagerState(manager.status, manager.live, manager.awaitingBackground)}]`,
             createdAt: manager.startedAt,
             updatedAt: manager.updatedAt,
             summary: `依頼: ${excerptLine(manager.request, LIST_REQUEST_EXCERPT)}`,
             extra: [
+              // 行ごとに同じ長い固定文を繰り返さない（#5347）: 行には印と固有の値（since・kind）だけを残し、印の意味は一覧の末尾に1回だけ書く（`managerListNotes`）
               // runnerId は空欄にしない: 空欄だと「取れていない」のか「読み忘れ」なのか区別できないため「未記録」と書く
               // 断定は「器が黙っている」までにする: その中で走っていたかはこの観測から言えない
               // 「いま話しかけられない」と書かない: 名簿が `lost` と判定した器の委譲へも `send()` は実際に届くため
               `  runner: ${manager.runnerId ?? '未記録'}${
                 manager.runnerLostSince === undefined
                   ? ''
-                  : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。話しかけることは塞いでいない — 戻る先（session_id）が在れば manager_send が resume を試みる（届くとは限らない）。${RESTART_BEFORE_CHECK_ADVICE}器そのものは runner_list で見る）`
+                  : `（この器は ${manager.runnerLostSince} 以降 名乗っていない${MANAGER_LIST_NOTE_MARKS['runner-lost']}）`
               }`,
               // 取れない側は「不明」と書き、既定の帯（opus / sonnet）と推測しない
               `  モデル: ${describeManagerModels(managerModelsOf(context.managers, manager))}`,
               // 別の行として出し `describeManagerState` は動かさない: `manager_list` と要約で字面が割れるのを防ぐための関数のため
               manager.sessionMissingSince === undefined
                 ? null
-                : `  ⚠ 宛先の runner は ${manager.sessionMissingSince} の時点で、この委譲のセッションを持っていなかった` +
-                  '（runner がそう答えた。聞けなかったのではない）。' +
+                : `  ⚠ 宛先の runner は ${manager.sessionMissingSince} の時点で、この委譲のセッションを持っていなかった${MANAGER_LIST_NOTE_MARKS['session-missing']}。` +
                   // 由来を畳まない: 「resume でも入り直せなかった」と「名簿に載っていなかっただけ」では読み手の次の一手が違うため
-                  describeSessionMissingKind(manager.sessionMissingKind) +
-                  '**この委譲が失われたという意味ではない** — ' +
-                  '完遂した後にセッションが畳まれ、終端イベントだけが届かなかった回も同じ形に見える' +
-                  '（デーモンにこの2つを区別する材料は無い）。まず manager_report を見ること' +
-                  '（報告が空でも、生ログから「生成されたが配られていない」報告を拾える）。' +
-                  'session_id が残っていれば manager_send が resume から入り直す。' +
-                  RESTART_BEFORE_CHECK_ADVICE,
+                  describeSessionMissingKind(manager.sessionMissingKind),
               `  cwd: ${manager.cwd}`,
               // `lost` を状態名だけで済ませない: 「終わった」と読まれると完了していない仕事がそのまま片付くため
               // 言い切るのは観測した分までにする: 落ちる直前にマージまで済ませていた仕事が、その
               // 1分半後の器の作り直しで `lost` になり、この行が「途中で失われて
               // いる（完了ではない）」と嘘をついた実害があるため
               manager.status === 'lost'
-                ? '  ⚠ 前のセッションへ戻れなかった。**戻れたかどうかしか見ていない** — ' +
-                  'この仕事が終わっていたかは分からない（成果がリモートの PR・ブランチ・' +
-                  'コミットまで届いていることがある）。まずそこを確かめ、続きが要ると' +
-                  '判断したときだけ manager_start で起こし直すこと。'
+                ? `  ⚠ 前のセッションへ戻れなかった${MANAGER_LIST_NOTE_MARKS.lost}。`
                 : null,
               describeJobOrigin(origins, manager.managerId),
               // 前任・後継は短く1行で出す: 自動の起こし直しの対象外か、どれの後継かを一覧で読めるように（#4861）
@@ -8123,7 +8172,22 @@ export function createCloneTools(context: ToolContext) {
               // `describeWithheldReports` はここには足さない: 「背景処理待ち×N」の `tasks` と並べると別行でも混同が起き、行を増やしても読み手の次の一手は変わらないため
             ],
           });
+          return { entry, marks };
         });
+        const itemTexts = items.map((item) => item.entry);
+        // 末尾の注は予算の内側で数える: 外に置くと lost が多い一覧で LIST_BUDGET を越える。出る行が減れば要る注も減るので、2回目の締めは1回目の部分集合で収まる
+        const firstFill = fillListingBudget(itemTexts, LIST_BUDGET, false);
+        const firstNotes = managerListNotes(
+          items.slice(0, firstFill.shown).map((item) => item.marks),
+        );
+        const secondFill = fillListingBudget(
+          itemTexts,
+          Math.max(0, LIST_BUDGET - firstNotes.length),
+          false,
+        );
+        const noteBlock = managerListNotes(
+          items.slice(0, secondFill.shown).map((item) => item.marks),
+        );
         return text(
           [
             // 本数は一覧の外に出す: 一覧は予算で打ち切られ、出ている行を数えても全体の本数にならないため。件数は絞る前の全件で出す: 絞りのせいで全体の実像が見えなくなる形にしないため
@@ -8159,8 +8223,8 @@ export function createCloneTools(context: ToolContext) {
               : // cursor で辿り切った最後の頁を、絞り込みの0件とは別の文にする
                 paged.length === 0
                 ? '（cursor より後ろの、この絞り込みに当たる委譲は無い。これが最後の頁）'
-                : renderListing(items, {
-                    budget: LIST_BUDGET,
+                : renderListing(itemTexts, {
+                    budget: Math.max(0, LIST_BUDGET - firstNotes.length),
                     // `status` の有無ではなく `filtering` で分ける: `status: []` は絞っていないので、有無で分けると渡した文字が無いのに絞ったと言う嘘になるため
                     // 母数は `renderListing` が渡す `total` ではなく `view.length` を使う: 頁が進んでも変わらない数にするため
                     omitted: ({ rest, shown }) => {
@@ -8192,6 +8256,7 @@ export function createCloneTools(context: ToolContext) {
                     },
                   }),
             '（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）',
+            noteBlock === '' ? null : noteBlock,
             inboxBacklog,
             runnerBacklog,
           ]

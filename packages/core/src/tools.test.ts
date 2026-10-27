@@ -5635,6 +5635,76 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('器そのものは runner_list で見る');
   });
 
+  describe('行ごとの固定文は一覧の末尾に1回だけ出す（#5347）', () => {
+    async function listWithLost(count: number, runnerLost = true) {
+      const h = harness();
+      for (let i = 0; i < count; i += 1) await h.call('manager_start', { request: `依頼${i}` });
+      h.running.forEach((m, i) => {
+        m.status = 'lost';
+        m.live = false;
+        m.runnerId = `runner-${i}`;
+        if (runnerLost) m.runnerLostSince = `2026-08-27T09:00:0${i}.000Z`;
+        m.sessionMissingSince = `2026-08-27T10:00:0${i}.000Z`;
+        m.sessionMissingKind = 'resume-failed';
+      });
+      return h.call('manager_list', {});
+    }
+    const count = (text: string, needle: string) => text.split(needle).length - 1;
+
+    it('6 本が lost・runner 消失・セッション無しでも、固定文は1回ずつしか出ない', async () => {
+      const reply = await listWithLost(6);
+
+      expect(count(reply, '新しい委譲の宛先からは外れている')).toBe(1);
+      expect(count(reply, '話しかけることは塞いでいない')).toBe(1);
+      expect(count(reply, '（runner がそう答えた。聞けなかったのではない）')).toBe(1);
+      expect(count(reply, '戻れたかどうかしか見ていない')).toBe(1);
+      // 件数の行（行の外）に在る1回と、末尾の注の1回。行の本数では増えない（変更前は行ごとに2回ずつだった）
+      const advice = '確かめる前に manager_start で起こし直さないこと';
+      expect(count(reply, advice)).toBe(2);
+      expect(count(await listWithLost(2), advice)).toBe(2);
+    });
+
+    it('行には印と、その行に固有の値（since・runnerId・由来）が残る', async () => {
+      const reply = await listWithLost(6);
+
+      for (let i = 0; i < 6; i += 1) {
+        expect(reply).toContain(
+          `runner: runner-${i}（この器は 2026-08-27T09:00:0${i}.000Z 以降 名乗っていない［runner 消失］）`,
+        );
+        expect(reply).toContain(
+          `宛先の runner は 2026-08-27T10:00:0${i}.000Z の時点で、この委譲のセッションを持っていなかった［セッション無し］。resume でも入り直せなかった。`,
+        );
+      }
+      expect(count(reply, '⚠ 前のセッションへ戻れなかった［lost］。')).toBe(6);
+    });
+
+    it('印は使われたものの注だけが末尾に出る', async () => {
+      const reply = await listWithLost(2, false);
+
+      expect(reply).toContain('行の印の意味');
+      expect(reply).not.toContain('［runner 消失］');
+      expect(reply).not.toContain('新しい委譲の宛先からは外れている');
+      expect(reply).toContain('［セッション無し］ 行の時刻の時点で');
+    });
+
+    it('6 本 lost の応答は、1行あたりの固定文の分だけ短い（前後の字数）', async () => {
+      const reply = await listWithLost(6);
+
+      // 変更前（origin/main）で同じ入力を組んだ実測は 7,719 字、変更後は 4,791 字（固定文が行ごとに約 800 字あった）
+      expect(reply.length).toBeLessThan(7_719 - 6 * 400);
+    });
+
+    it('lost が多くても、予算に収まる行は変更前より多く、省略の案内は今のまま出る', async () => {
+      const reply = await listWithLost(16);
+      const shown = count(reply, '\n- ') + (reply.startsWith('- ') ? 1 : 0);
+
+      // 変更前は同じ入力（16 本すべて lost）で 6 本しか入らず、変更後は 12 本入る
+      expect(shown).toBeGreaterThan(6);
+      expect(reply).toMatch(/…ほか \d+ 件は省略/);
+      expect(reply).toContain('manager_list cursor=');
+    });
+  });
+
   it('sessionMissingKind: resume-failed は「resume でも入り直せなかった」を出す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -11732,8 +11802,12 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     const doneEntry = reply.slice(reply.indexOf('mgr-2'));
 
     expect(lostEntry).toContain('⚠');
-    expect(lostEntry).toContain('manager_start');
+    // 取る手（manager_start の条件）は行ごとではなく末尾の注に1回だけ在る（#5347）。行には印が残る
+    expect(lostEntry).toContain('［lost］');
+    expect(reply).toContain('［lost］ 前のセッションへ戻れなかった。');
+    expect(reply).toContain('判断したときだけ manager_start で起こし直すこと');
     expect(doneEntry).not.toContain('⚠');
+    expect(doneEntry.slice(0, doneEntry.indexOf('（依頼と報告は抜粋'))).not.toContain('［lost］');
   });
 
   it('拒否で手が止まっていることが、状態に添えて一覧に出る', async () => {
