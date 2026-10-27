@@ -279,10 +279,12 @@ describe('全台戻り＋未了の委譲 0 本なら送らない', () => {
     back: ReadonlySet<string>;
     jobs: () => Promise<readonly Job[]>;
     alive?: ReadonlySet<string>;
+    record?: 'ok' | 'throws' | 'rejects' | 'absent';
   }) {
     const clock = fakeClock();
     const sent: string[] = [];
     const journal: { decision: string; grounds: string }[] = [];
+    const warned: string[] = [];
     const notice = createRunnerLostNotice({
       send: (text) => sent.push(text),
       setTimer: clock.setTimer,
@@ -290,12 +292,20 @@ describe('全台戻り＋未了の委譲 0 本なら送らない', () => {
       isBackNow: (entry) => opts.back.has(entry.label),
       listJobs: opts.jobs,
       aliveRunnerIds: () => opts.alive ?? new Set(['runner-a', 'runner-b']),
-      recordSkipped: (entry) => {
-        journal.push(entry);
-        return Promise.resolve();
-      },
+      ...(opts.record === 'absent'
+        ? {}
+        : {
+            recordSkipped: (entry: { decision: string; grounds: string }) => {
+              if (opts.record === 'throws') throw new Error('日誌が同期で投げた（テスト）');
+              if (opts.record === 'rejects')
+                return Promise.reject(new Error('日誌が落ちた（テスト）'));
+              journal.push(entry);
+              return Promise.resolve();
+            },
+          }),
+      warn: (message) => warned.push(message),
     });
-    return { clock, sent, journal, notice };
+    return { clock, sent, journal, warned, notice };
   }
 
   const settle = async (): Promise<void> => {
@@ -364,6 +374,42 @@ describe('全台戻り＋未了の委譲 0 本なら送らない', () => {
     clock.advance(RUNNER_LOST_COALESCE_MS);
     await settle();
     expect(sent).toHaveLength(1);
+  });
+
+  it.each(['throws', 'rejects', 'absent'] as const)(
+    '日誌に残せない（%s）なら、知らせを捨てず送る',
+    async (record) => {
+      const { clock, sent, warned, notice } = setupSkip({
+        back: new Set(['a', 'b']),
+        jobs: () => Promise.resolve([]),
+        record,
+      });
+      both().forEach((entry) => notice.add(entry));
+      clock.advance(RUNNER_LOST_COALESCE_MS);
+      await settle();
+      expect(sent).toHaveLength(1);
+      expect(warned).toHaveLength(record === 'absent' ? 0 : 1);
+    },
+  );
+
+  it('判定中（台帳の読み待ち）に flush が来たら、待たずに1通だけ送る', async () => {
+    let resolveJobs: (jobs: Job[]) => void = () => {};
+    const { clock, sent, journal, notice } = setupSkip({
+      back: new Set(['a']),
+      jobs: () =>
+        new Promise<Job[]>((resolve) => {
+          resolveJobs = resolve;
+        }),
+    });
+    notice.add({ label: 'a', runnerId: 'runner-a', reason: 'r' });
+    clock.advance(RUNNER_LOST_COALESCE_MS);
+    expect(sent).toEqual([]);
+    notice.flush();
+    expect(sent).toHaveLength(1);
+    resolveJobs([]);
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(journal).toEqual([]);
   });
 
   it('flush（停止）は台帳を待たずに送る', () => {

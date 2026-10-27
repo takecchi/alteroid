@@ -129,6 +129,11 @@ export interface RunnerLostNoticeDeps {
   readonly windowMs?: number;
 }
 
+interface InflightNotice {
+  readonly text: string;
+  settled: boolean;
+}
+
 export interface RunnerLostNotice {
   add(entry: RunnerLostEntry): void;
   /** 窓の中の分をすぐ送り、タイマーを止める。空なら何も送らない。 */
@@ -150,6 +155,7 @@ export function createRunnerLostNotice(deps: RunnerLostNoticeDeps): RunnerLostNo
   let pending: RunnerLostEntry[] = [];
   let timer: unknown = undefined;
   let open = false;
+  const inflightNotices = new Set<InflightNotice>();
 
   const skipDecision = async (
     entries: readonly RunnerLostEntry[],
@@ -193,26 +199,51 @@ export function createRunnerLostNotice(deps: RunnerLostNoticeDeps): RunnerLostNo
       deps.send(text);
       return;
     }
-    void skipDecision(entries, back).then(
-      (decision) => {
-        if (!decision.skip) {
-          deps.send(text);
-          return;
-        }
-        const decisionText = `runner の名乗らなくなった知らせ（${entries.map(nameOf).join('・')}）: 送る時点で全台が名乗り直していて、未了の委譲が 0 本だったので、クローンへ送らなかった（日誌にだけ残す）`;
-        void Promise.resolve(
-          deps.recordSkipped?.({
+    // 判定中・日誌書き込み中の知らせ。flush が拾えるように持つ。どちらかが先に `settle` したら、もう一方は何もしない（二重に送らない）。
+    const inflight: InflightNotice = { text, settled: false };
+    inflightNotices.add(inflight);
+    const settle = (): boolean => {
+      if (inflight.settled) return false;
+      inflight.settled = true;
+      inflightNotices.delete(inflight);
+      return true;
+    };
+    const sendOnce = (): void => {
+      if (settle()) deps.send(text);
+    };
+    void skipDecision(entries, back).then((decision) => {
+      // flush が先に送っていたら、「送らなかった」と日誌に残さない（食い違うため）。
+      if (inflight.settled) return;
+      if (!decision.skip) {
+        sendOnce();
+        return;
+      }
+      const decisionText = `runner の名乗らなくなった知らせ（${entries.map(nameOf).join('・')}）: 送る時点で全台が名乗り直していて、未了の委譲が 0 本だったので、クローンへ送らなかった（日誌にだけ残す）`;
+      // 日誌に残せていない判断で知らせを消さない: 渡されていない・投げた・落ちたときは送る側に倒す。
+      const { recordSkipped } = deps;
+      if (recordSkipped === undefined) {
+        sendOnce();
+        return;
+      }
+      void new Promise<unknown>((resolve) => {
+        resolve(
+          recordSkipped({
             decision: decisionText,
             grounds: `${decision.grounds}。元の知らせ: ${text}`,
           }),
-        ).catch((error: unknown) => {
+        );
+      }).then(
+        () => {
+          settle();
+        },
+        (error: unknown) => {
           deps.warn?.(
-            `名乗らなくなった知らせを送らなかった判断を日誌へ残せませんでした: ${reasonOf(error)}\n  ${decisionText}`,
+            `名乗らなくなった知らせを送らなかった判断を日誌へ残せませんでした（知らせは送ります）: ${reasonOf(error)}\n  ${decisionText}`,
           );
-        });
-      },
-      () => deps.send(text),
-    );
+          sendOnce();
+        },
+      );
+    }, sendOnce);
   };
 
   return {
@@ -224,6 +255,13 @@ export function createRunnerLostNotice(deps: RunnerLostNoticeDeps): RunnerLostNo
     },
     flush() {
       if (timer !== undefined) clearTimer(timer);
+      // 判定中・日誌書き込み中のものは待たずに送る側に倒す: 停止時に知らせを落とさない契約のため（待つと停止が台帳の読みに縛られる）。
+      for (const notice of [...inflightNotices]) {
+        if (notice.settled) continue;
+        notice.settled = true;
+        inflightNotices.delete(notice);
+        deps.send(notice.text);
+      }
       drain(false);
     },
   };
