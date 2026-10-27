@@ -500,6 +500,11 @@ export interface ToolContext {
   // 無い器（テスト等）では `reply_attach` は断る: 返信に添える先が無いまま「添えた」と言わないため
   replyAttachments?: ReplyAttachments;
   managers?: ManagerPool;
+  /**
+   * この報告の全文を、いまの会話の発言にそのまま載せたか。載せていれば、その時刻（確定した控えだけ。reset 後・押し込めなかった回・切り詰めた報告は `null`）。
+   * 無い器（テスト・蒸留）は常に `null` と同じ: 引き直せば全文が返る（安全側）。
+   */
+  managerReportShownAt?: (managerId: string, text: string) => Date | null;
   profile?: ProfileService;
   accountUsage?: () => AccountUsageState;
   runtime?: () => CloneRuntimeFacts;
@@ -8308,6 +8313,7 @@ export function createCloneTools(context: ToolContext) {
         '全部（消した ref も送るもの無しも1行ずつ）は rescueAll: true で読む。',
         '長い場合は続きの取り方が末尾に出るので、最後まで読み切ること。',
         'それでも足りない（報告に書かれていない中身を確かめたい）ときは manager_transcript で生ログまで降りられる。',
+        '直近の報告の全文が既にあなたの発言（会話の上）に載っているときは、本文を繰り返さず、載っている時刻を示す注記だけを返す。引き直したいときは refetch: true を付ける（offset で頁を送る・依頼文は影響を受けない）。',
         'report が「まだ無い」と返ったときは、内部で生ログも見ている（#323）——',
         '「まだ書いていない」のか「書いたのに配られていない」のかを、応答の文言（⚠ の有無）で見分けられる。',
       ].join(' '),
@@ -8329,8 +8335,14 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '真なら退避 ref を畳まず作業ツリーごとに全部出す（既定は、消し終えた ref と送るもの無しの作業ツリーを件数にまとめる）',
           ),
+        refetch: z
+          .boolean()
+          .optional()
+          .describe(
+            '真なら、報告の全文が既に会話の上に載っていても本文を必ず返す（既定は、載っているときは注記だけ返す）',
+          ),
       },
-      async ({ managerId, part = 'report', offset = 0, rescueAll = false }) => {
+      async ({ managerId, part = 'report', offset = 0, rescueAll = false, refetch = false }) => {
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         if (!context.managers) return NO_POOL;
@@ -8460,6 +8472,19 @@ export function createCloneTools(context: ToolContext) {
         const unpushedWorkNote = unpushedWork === null ? '' : `${unpushedWork}\n\n`;
         const withheldReportsFooterNote =
           withheldReportsNote === null ? '' : `${withheldReportsNote}\n\n`;
+        // 本文だけを畳む: 状態の注記（失敗・拒否・退避 ref など）は発言の後に変わりうるので残す。依頼文・頁送り（offset > 0）・refetch は従来どおり本文を出す
+        const shownAt =
+          part === 'report' && offset === 0 && !refetch
+            ? (context.managerReportShownAt?.(managerId, body) ?? null)
+            : null;
+        if (shownAt !== null) {
+          return text(
+            `${head}\n\n${modelLine}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${withheldReportsFooterNote}` +
+              `この報告の全文（${body.length.toLocaleString('en-US')} 文字）は ${shownAt.toISOString().slice(11, 16)}Z の発言に載っている（会話の上）。` +
+              '引き直すには `refetch: true` を付ける。' +
+              `\n\n（さらに掘るなら manager_transcript managerId=${managerId} で生ログへ）`,
+          );
+        }
         const tail = part1.more
           ? `\n\n…（ここで切れている。続きは manager_report managerId=${managerId}` +
             `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`

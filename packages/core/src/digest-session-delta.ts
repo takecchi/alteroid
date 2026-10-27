@@ -52,11 +52,25 @@ interface SectionRecord {
   readonly sections: ReadonlyMap<string, string>;
 }
 
+/** 担当の報告の全文を発言に載せたことの控え。本文そのものは持たず、指紋と長さだけを持つ（最大 47,500 字を担当の数だけ抱えないため）。 */
+interface ReportShown {
+  readonly key: string;
+  readonly chars: number;
+  readonly at: Date;
+}
+
+/**
+ * この長さに満たない報告は控えない。引き直しても得が小さく、短い本文は別の箇所の文字列と偶然一致しやすいため。
+ * 控えないだけで安全側（引き直せば全文が返る）。
+ */
+export const REPORT_SHOWN_MIN_CHARS = 1_000;
+
 interface Staged {
   sections: SectionRecord | null;
   readonly fixed: Set<string>;
   readonly requests: Map<string, { text: string; at: Date }>;
   readonly paragraphs: Set<string>;
+  readonly reports: Map<string, ReportShown>;
 }
 
 export interface RenderedDigest {
@@ -130,7 +144,14 @@ export class DigestSessionDelta {
     fixed: Set<string>;
     requests: Map<string, { text: string; at: Date }>;
     paragraphs: Set<string>;
-  } = { sections: null, fixed: new Set(), requests: new Map(), paragraphs: new Set() };
+    reports: Map<string, ReportShown>;
+  } = {
+    sections: null,
+    fixed: new Set(),
+    requests: new Map(),
+    paragraphs: new Set(),
+    reports: new Map(),
+  };
   #staged: Staged | null = null;
   // 次の要約を「判断の節だけの軽い全文」にしてよいか。会話の上に何も残っていない理由（起動直後・会話が変わった・失敗したターンの後・見込みの材料が無い）の reset が1度でもあれば、
   // その全文が確定（commit）するまでは完全な全文（`#fullForced`）。起動直後は記録が無いので真から始める
@@ -150,6 +171,7 @@ export class DigestSessionDelta {
       fixed: new Set(),
       requests: new Map(),
       paragraphs: new Set(),
+      reports: new Map(),
     };
     this.#staged = null;
   }
@@ -178,6 +200,7 @@ export class DigestSessionDelta {
     for (const id of staged.fixed) this.#committed.fixed.add(id);
     for (const [kind, request] of staged.requests) this.#committed.requests.set(kind, request);
     for (const key of staged.paragraphs) this.#committed.paragraphs.add(key);
+    for (const [managerId, shown] of staged.reports) this.#committed.reports.set(managerId, shown);
     // 古い方から忘れる（Set は挿入順）
     for (const key of this.#committed.paragraphs) {
       if (this.#committed.paragraphs.size <= PARAGRAPH_MEMORY_LIMIT) break;
@@ -191,8 +214,26 @@ export class DigestSessionDelta {
       fixed: new Set(),
       requests: new Map(),
       paragraphs: new Set(),
+      reports: new Map(),
     };
     return this.#staged;
+  }
+
+  /**
+   * 担当 `managerId` の報告 `text` を、全文のまま発言に載せた（束の予算で省いた・切り詰めた報告は渡さない）。確定は `commit` の後。
+   * `manager_report` が同じ本文を引き直すときの重複を畳む控えで、鍵は担当 id と本文そのもの（台帳の `lastReport` と同じ文字列）。
+   * 担当ごとに最新の1件だけ持つ: 台帳が持つのも最新の1件のため。
+   */
+  reportShown(managerId: string, text: string, at: Date): void {
+    if (text.length < REPORT_SHOWN_MIN_CHARS) return;
+    this.#stage().reports.set(managerId, { key: paragraphKey(text), chars: text.length, at });
+  }
+
+  /** 確定した控えがあれば、全文を発言に載せた時刻。無ければ（reset 後・押し込めなかった回・別の本文）`null` で、呼び手は全文を返す。 */
+  reportShownAt(managerId: string, text: string): Date | null {
+    const shown = this.#committed.reports.get(managerId);
+    if (shown === undefined || shown.chars !== text.length) return null;
+    return shown.key === paragraphKey(text) ? shown.at : null;
   }
 
   /**

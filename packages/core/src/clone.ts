@@ -2539,19 +2539,16 @@ class Clone implements CloneHost {
       : undefined;
     // 束の先頭だけで引く: 束ねるのは同じ `managerId` の報告だけ（`#mergedManagerReportBatch`）なので、起点も1つに決まるため
     const origin = await this.#managerOrigin(events[0]?.managerId);
-    await this.#runInternal(
-      managerReportBatchPrompt(
-        events,
-        origin,
-        settlements,
-        new Date(),
-        attached?.linesOf,
-        this.#fixedTextFold(),
-      ),
-      'normal',
-      attached?.images,
-      originConversationIdOf(origin),
+    const prompt = managerReportBatchPrompt(
+      events,
+      origin,
+      settlements,
+      new Date(),
+      attached?.linesOf,
+      this.#fixedTextFold(),
     );
+    this.#stageReportsShown(events, prompt, new Date());
+    await this.#runInternal(prompt, 'normal', attached?.images, originConversationIdOf(origin));
   }
 
   // `#handle` の `'external'` 分岐がしていることを件数ぶん繰り返す: 落とすと、まとめた側だけ日誌への追記が抜けて能力の削除になるため
@@ -2607,12 +2604,9 @@ class Clone implements CloneHost {
     }
     // 起点の会話が1つに決まるときだけ結びつける: 別々の会話で頼まれた委譲を1つの会話へ結びつけると、知らせる先を取り違えるため（各件の本文が自分の起点を名乗る）
     const [onlyOrigin] = origins;
-    await this.#runInternal(
-      mixedSignalBatchPrompt(items),
-      'normal',
-      [],
-      origins.size === 1 ? (onlyOrigin ?? null) : null,
-    );
+    const prompt = mixedSignalBatchPrompt(items);
+    this.#stageReportsShown(events, prompt, now);
+    await this.#runInternal(prompt, 'normal', [], origins.size === 1 ? (onlyOrigin ?? null) : null);
   }
 
   // 2箇所の呼び出しを1本にまとめる: 別々に書くと、台帳の控えを外し忘れる・待っている相手を起こし忘れるといった漏れが片方にだけ起きるため
@@ -3631,6 +3625,20 @@ class Clone implements CloneHost {
    */
   #fixedTextFold(): FixedTextFold {
     return (id, full, ref) => this.#digestDelta.fixed(`manager-message:${id}`, full, ref);
+  }
+
+  /**
+   * 組んだ入力 `prompt` に報告の全文がそのまま載っているものを控える（`manager_report` の引き直しを畳むため）。
+   * 載ったかは入力の文字列で確かめる: 束の予算で本文を省いた報告・切り詰めた報告・断り書きが足された報告（台帳の `lastReport` と本文が一致しない）は含まれないので、自然に控えから外れる。
+   * 控えは staged で、入力を押し込めた後の `commit` で確定する。`#pump` 先頭の reset と `discardStaged` が捨てる条件も同じ口に乗る。
+   * 入力を組んだ後に呼ぶこと（組む途中の `#foldConfirmationText` の reset が staged を消すため）。
+   */
+  #stageReportsShown(events: readonly InboxEvent[], prompt: string, at: Date): void {
+    for (const event of events) {
+      if (!isManagerReport(event)) continue;
+      if (prompt.includes(event.text))
+        this.#digestDelta.reportShown(event.managerId, event.text, at);
+    }
   }
 
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
@@ -5430,16 +5438,18 @@ class Clone implements CloneHost {
         const origin = await this.#managerOrigin(event.managerId);
         if (event.kind === 'report' && hasReportFiles(event)) {
           const attached = await this.#resolveManagerReportAttachments([event]);
+          const prompt = managerPrompt(
+            event,
+            origin,
+            liveness,
+            settlement,
+            new Date(),
+            attached.linesOf.get(event.id),
+            this.#fixedTextFold(),
+          );
+          this.#stageReportsShown([event], prompt, new Date());
           await this.#runInternal(
-            managerPrompt(
-              event,
-              origin,
-              liveness,
-              settlement,
-              new Date(),
-              attached.linesOf.get(event.id),
-              this.#fixedTextFold(),
-            ),
+            prompt,
             'normal',
             attached.images,
             originConversationIdOf(origin),
@@ -5451,12 +5461,17 @@ class Clone implements CloneHost {
           event.kind === 'permission'
             ? { ...event, text: this.#foldConfirmationText(event.text) }
             : event;
-        await this.#runInternal(
-          managerPrompt(sent, origin, liveness, settlement, new Date(), [], this.#fixedTextFold()),
-          'normal',
+        const prompt = managerPrompt(
+          sent,
+          origin,
+          liveness,
+          settlement,
+          new Date(),
           [],
-          originConversationIdOf(origin),
+          this.#fixedTextFold(),
         );
+        this.#stageReportsShown([event], prompt, new Date());
+        await this.#runInternal(prompt, 'normal', [], originConversationIdOf(origin));
         return;
       }
 
@@ -6664,6 +6679,7 @@ class Clone implements CloneHost {
       emit: (event) => this.#emit(this.#sdkSession.turn?.conversationId ?? null, event),
       flushReply: () => this.#flushReply(),
       managers: this.#managers,
+      managerReportShownAt: (managerId, text) => this.#digestDelta.reportShownAt(managerId, text),
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
