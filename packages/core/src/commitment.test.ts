@@ -102,6 +102,7 @@ function setup(
     stores,
     queryFn: fn,
     env: {},
+    inboxSettleMs: 0,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),

@@ -3,6 +3,8 @@ import type { InboxEvent } from './schema.js';
 export class Inbox {
   readonly #queue: InboxEvent[] = [];
   readonly #waiters: ((event: InboxEvent | null) => void)[] = [];
+  readonly #bypassed = new WeakSet<InboxEvent>();
+  #settleWatcher: { finish: () => void; onPush: (event: InboxEvent) => void } | null = null;
   #closed = false;
 
   get size(): number {
@@ -63,22 +65,53 @@ export class Inbox {
     if (this.#closed) throw new Error('受信箱は既に閉じている');
     const waiter = this.#waiters.shift();
     if (waiter) {
+      // 暇なときに素通りした印を付ける: 待ち行列で順番を待ったものと区別し、後者に「束ねるための待ち」を重ねないため
+      this.#bypassed.add(event);
       waiter(event);
       return;
     }
     if (insertAfterLast === undefined) {
       this.#queue.push(event);
-      return;
-    }
-    let at = 0;
-    for (let i = this.#queue.length - 1; i >= 0; i--) {
-      const queued = this.#queue[i];
-      if (queued !== undefined && insertAfterLast(queued)) {
-        at = i + 1;
-        break;
+    } else {
+      let at = 0;
+      for (let i = this.#queue.length - 1; i >= 0; i--) {
+        const queued = this.#queue[i];
+        if (queued !== undefined && insertAfterLast(queued)) {
+          at = i + 1;
+          break;
+        }
       }
+      this.#queue.splice(at, 0, event);
     }
-    this.#queue.splice(at, 0, event);
+    this.#settleWatcher?.onPush(event);
+  }
+
+  // 待ち行列を素通りして取り出されたか（1回で消費する）。`unshift` の配り直しには付けない: 配り直しは暇なときの新着ではないため
+  consumeBypass(event: InboxEvent): boolean {
+    return this.#bypassed.delete(event);
+  }
+
+  // 取り出した1件の後ろに続く合図を `ms` だけ待つ。次のどれかで即座に戻る: 期限・`interruptWhen` を満たす合図の到着・受信箱が閉じる。
+  // 待っている間に届いたものは通常どおり待ち行列へ積まれる（`next()` の待ち手は居ない）。タイマーは戻る前に必ず片付ける。
+  settle(ms: number, interruptWhen: (event: InboxEvent) => boolean): Promise<void> {
+    if (this.#closed || ms <= 0) return Promise.resolve();
+    // 同時に2つは待たない: 取り出しは直列で、2つ目が来たら先の待ちを畳む
+    this.#settleWatcher?.finish();
+    return new Promise<void>((resolve) => {
+      const finish = (): void => {
+        clearTimeout(timer);
+        if (this.#settleWatcher === watcher) this.#settleWatcher = null;
+        resolve();
+      };
+      const watcher = {
+        finish,
+        onPush: (event: InboxEvent): void => {
+          if (interruptWhen(event)) finish();
+        },
+      };
+      const timer = setTimeout(finish, ms);
+      this.#settleWatcher = watcher;
+    });
   }
 
   // `push` で代用しない: 末尾へ積むと到着順（FIFO）が壊れるため
@@ -105,6 +138,7 @@ export class Inbox {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#settleWatcher?.finish();
     while (this.#waiters.length > 0) {
       this.#waiters.shift()?.(null);
     }

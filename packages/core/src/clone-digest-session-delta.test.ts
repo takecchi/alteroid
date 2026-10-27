@@ -169,6 +169,7 @@ function boot(script: SdkScript = {}): Boot {
     stores,
     queryFn: fn,
     env: {},
+    inboxSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),
@@ -784,6 +785,7 @@ function bootWithHooks(): Boot & { fire: () => Promise<void> } {
     stores,
     queryFn: fn,
     env: {},
+    inboxSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),

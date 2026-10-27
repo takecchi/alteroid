@@ -73,6 +73,7 @@ describe('クローン — 安全分類器に弾かれ続けたセッション',
       stores,
       queryFn,
       env: options.env ?? {},
+      inboxSettleMs: 0,
       runners: createRunnerRegistry([
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),

@@ -94,6 +94,7 @@ function boot(script: SdkScript = {}): Boot {
     stores: createMemoryStores(),
     queryFn: fn,
     env: {},
+    inboxSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),
