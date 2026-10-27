@@ -690,17 +690,19 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
     return s.inputs[n - 1] ?? '';
   }
 
-  it('⭐ 1ターン目は全文、2ターン目は要点に畳み、数の行は残る', async () => {
+  // #5295: 材料が前のターンと同じなら2ターン目は「変化なし」の1行になる（要点・数の行は出ない）。材料が違うときの畳み形は situation-fold.test.ts が固定する
+  it('⭐ 1ターン目は全文、材料が同じ2ターン目は「変化なし」の1行になる（#5295）', async () => {
     const s = bootClone(createMemoryStores(), busyPool());
 
     const first = await humanTurn(s, 1);
     const second = await humanTurn(s, 2);
 
     expect(first).toContain(READINGS_HEAD);
+    expect(first).toContain('委譲 全 3 本');
+    expect(first).toContain('器 2 台: connected 1 / vacating 1。');
     expect(second).not.toContain(READINGS_HEAD);
-    expect(second).toContain('要点だけにした');
-    expect(second).toContain('委譲 全 3 本');
-    expect(second).toContain('器 2 台: connected 1 / vacating 1。');
+    expect(second).toContain('いまの全体: 前のターンと変化なし');
+    expect(second).not.toContain('委譲 全 3 本');
     await s.clone.stop();
   });
 

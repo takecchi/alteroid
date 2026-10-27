@@ -26,10 +26,14 @@ const SITUATION_HEAD = '[system] いまの全体';
  * 本文が1バイトでも違えば全文を出し直す。同じなら要点の1文だけを残して畳む: 毎ターン同じ説明が約5千字ずつ会話に積もり、文脈を食うため（2026-10-11、#4476）。
  * 数の行は畳まない。控えを空にするのは呼び手（会話の始まり・文脈の要約・一定ターンごと）: 会話の中に全文が1つも残っていない状態で参照だけを出さないため。
  */
-export type SituationExplained = Map<SituationExplanationKey, string>;
+export type SituationExplained = Map<SituationExplanationKey | typeof MATERIALS_KEY, string>;
 
 export type SituationExplanationKey =
   'lost' | 'lastFailure' | 'usageStopped' | 'runnerVanished' | 'readings' | 'tokenInvariant';
+
+// 材料の行（委譲・器・受信箱・鍵）を前回出した形のまま控える鍵（#5295）。説明文ではないので `SituationExplanationKey`（要点の表を持つ型）には混ぜず、同じ控えに同居させる:
+// 空にする条件・入力が SDK へ入った後にだけ確定する仕組み（#4484）を、別の控えを作らず丸ごと使うため
+const MATERIALS_KEY = 'materials';
 
 // 要点は畳んでも残す: 注意書きの趣旨（読み替えを防ぐ）は、参照だけでは毎ターンの判断に効かないため
 const EXPLANATION_GIST: Record<SituationExplanationKey, string> = {
@@ -459,40 +463,69 @@ export function describeSituation(input: {
     latestStart === undefined
       ? ''
       : `（最後に起こしたのは ${formatElapsedSinceLastStart(at - latestStart)}）`;
-  // 鍵の行の不変条件も同じ控えで畳む: 鍵の行そのもの（数）は毎回出す
   const showTokens = !(input.tokens === undefined && input.active === undefined);
+  // lost は「その他」の直前に置く: lost はそこから切り出したもので、隣に並べば「その他が減って lost が増えた」と読めるため
+  // 経過の句だけ引数にする: 経過は時刻の流れだけで毎回変わるので、「変化なし」の比較（`materials`）には入れず、出す行にだけ入れるため
+  const delegationLineWith = (startClause: string): string =>
+    `委譲 全 ${counts.total} 本: 走行中 ${counts.running} / 返事待ち ${counts.waitingHuman} / ` +
+    `背景処理待ち ${counts.awaitingBackground} / 手が空いている ${counts.idle} / ` +
+    (counts.lost === 0 ? '' : `${LOST_LABEL} ${counts.lost} / `) +
+    `その他 ${counts.other}。話しかけられるのは ${counts.reachable} 本。` +
+    // 横断する軸は分割の後ろに置く: 区分の並びの中へ差し込むと、足せば total になる数の列に別の軸が混ざるため
+    (counts.lastTurnFailed === 0
+      ? ''
+      : `${LAST_FAILURE_LABEL}のは ${counts.lastTurnFailed} 本` +
+        `（うち「手が空いている」に数えたものが ${counts.lastTurnFailedIdle} 本。` +
+        '上の区分とは足し合わせない）。') +
+    // lastTurnFailed の直後に置く: 離すと片方だけが「唯一の失敗の軸」に見えるため
+    (counts.usageStopped === 0
+      ? ''
+      : `${USAGE_STOPPED_LABEL}のは ${counts.usageStopped} 本` +
+        `（うち「手が空いている」に数えたものが ${counts.usageStoppedIdle} 本。` +
+        '上の区分とは足し合わせない）。') +
+    (counts.runnerVanished === 0
+      ? ''
+      : `${RUNNER_VANISHED_LABEL}のは ${counts.runnerVanished} 本` +
+        '（必ず「走行中」の内側。上の区分とは足し合わせない）。') +
+    // 0 本でも出す: 0 が合図で、閾値も ⚠ も持たないため
+    `直近${RECENT_MANAGER_START_WINDOW_HOURS}時間に新しく起こした委譲: ${recentStarts} 本${startClause}。`;
+  const runnerLine = `器 ${input.runners.length} 台${runnerBreakdown === '' ? '' : `: ${runnerBreakdown}`}。`;
+  // 鍵の行は不変条件を除いて比べる: 不変条件は固定の説明文で、畳むかどうかは `tokenInvariant` の控えが決めるため
+  const tokenMaterialLine = showTokens
+    ? describeTokenSituation({
+        tokens: input.tokens,
+        active: input.active,
+        at,
+        withInvariant: false,
+      })
+    : null;
+  // 材料の行（見出しの時刻・説明文・要点を除く）が前回出した形と1文字も違わなければ、全体を1行にする（#5295）。
+  // 比べるのは数を含む行の文字列そのもの（数が変わった行を落とさない）。最後の起動の時刻は経過の代わりに入れる: 経過は動くが起動そのものが変わったかは見たいため。
+  // 控えへの書き込みは `explain` と同じ写しへ行い、確定は呼び手（入力を SDK へ入れた後）。同じなら何も書かない: 全文は会話に在るため
+  const materials = [
+    delegationLineWith(`@${String(latestStart)}`),
+    runnerLine,
+    inboxBacklogLine,
+    inboxQueuedLine,
+    tokenMaterialLine,
+  ]
+    .filter((line) => line !== null)
+    .join('\n');
+  if (input.explained?.get(MATERIALS_KEY) === materials) {
+    return block([`${SITUATION_HEAD}: 前のターンと変化なし（${readAtLabel(at)} に数え直した）。`]);
+  }
+  input.explained?.set(MATERIALS_KEY, materials);
+  // 鍵の行の不変条件も同じ控えで畳む: 鍵の行そのもの（数）は毎回出す
   const tokenInvariantShown = showTokens && explain('tokenInvariant', TOKEN_INVARIANT).length > 0;
   const lines = [
     `${SITUATION_HEAD}（${readAtLabel(at)} に数えた材料だけ。ここから何をするかは決めない）。`,
-    // lost は「その他」の直前に置く: lost はそこから切り出したもので、隣に並べば「その他が減って lost が増えた」と読めるため
-    `委譲 全 ${counts.total} 本: 走行中 ${counts.running} / 返事待ち ${counts.waitingHuman} / ` +
-      `背景処理待ち ${counts.awaitingBackground} / 手が空いている ${counts.idle} / ` +
-      (counts.lost === 0 ? '' : `${LOST_LABEL} ${counts.lost} / `) +
-      `その他 ${counts.other}。話しかけられるのは ${counts.reachable} 本。` +
-      // 横断する軸は分割の後ろに置く: 区分の並びの中へ差し込むと、足せば total になる数の列に別の軸が混ざるため
-      (counts.lastTurnFailed === 0
-        ? ''
-        : `${LAST_FAILURE_LABEL}のは ${counts.lastTurnFailed} 本` +
-          `（うち「手が空いている」に数えたものが ${counts.lastTurnFailedIdle} 本。` +
-          '上の区分とは足し合わせない）。') +
-      // lastTurnFailed の直後に置く: 離すと片方だけが「唯一の失敗の軸」に見えるため
-      (counts.usageStopped === 0
-        ? ''
-        : `${USAGE_STOPPED_LABEL}のは ${counts.usageStopped} 本` +
-          `（うち「手が空いている」に数えたものが ${counts.usageStoppedIdle} 本。` +
-          '上の区分とは足し合わせない）。') +
-      (counts.runnerVanished === 0
-        ? ''
-        : `${RUNNER_VANISHED_LABEL}のは ${counts.runnerVanished} 本` +
-          '（必ず「走行中」の内側。上の区分とは足し合わせない）。') +
-      // 0 本でも出す: 0 が合図で、閾値も ⚠ も持たないため
-      `直近${RECENT_MANAGER_START_WINDOW_HOURS}時間に新しく起こした委譲: ${recentStarts} 本${lastStartClause}。`,
+    delegationLineWith(lastStartClause),
     // 断りは本数の直後に並べる: 数と、そこから何を確かめるかを離すと数だけが読まれるため。0 のときは1文字も出さない
     ...(counts.lost === 0 ? [] : explain('lost', LOST_NOTICE)),
     ...(counts.lastTurnFailed === 0 ? [] : explain('lastFailure', LAST_FAILURE_NOTICE)),
     ...(counts.usageStopped === 0 ? [] : explain('usageStopped', USAGE_STOPPED_NOTICE)),
     ...(counts.runnerVanished === 0 ? [] : explain('runnerVanished', RUNNER_VANISHED_NOTICE)),
-    `器 ${input.runners.length} 台${runnerBreakdown === '' ? '' : `: ${runnerBreakdown}`}。`,
+    runnerLine,
     ...explain('readings', READINGS_NOTICE),
   ];
   // 畳んだ説明文は要点だけを1行にまとめ、元の場所（器の行の直後）に置く: 参照だけでは毎ターンの判断に効かないため
@@ -508,16 +541,9 @@ export function describeSituation(input: {
     // メモリの配達待ち行列は器の行数の直後に置く: 離すと器の行数の1行だけが「受信箱の全部」に見えるため
     ...(inboxQueuedLine === null ? [] : [inboxQueuedLine]),
     // 鍵の行は最後に置く: 数えた材料の後に、判断を縛る不変条件が来る順にするため
-    ...(showTokens
-      ? [
-          describeTokenSituation({
-            tokens: input.tokens,
-            active: input.active,
-            at,
-            withInvariant: tokenInvariantShown,
-          }),
-        ]
-      : []),
+    ...(tokenMaterialLine === null
+      ? []
+      : [tokenInvariantShown ? tokenMaterialLine + TOKEN_INVARIANT : tokenMaterialLine]),
   ]);
 }
 
