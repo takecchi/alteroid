@@ -116,7 +116,64 @@ describe('turn_timing の描き方', () => {
   });
 
   it('記録が無ければ、まだ無いと言う（0 秒と書かない）', () => {
-    expect(renderTurnTimingSummary([])).toContain('まだ記録が無い');
+    const summary = renderTurnTimingSummary([]);
+    expect(summary).toContain('まだ記録が無い');
+    expect(summary).not.toContain('合図別');
+  });
+
+  it('⭐ 合図別: 種別ごとにターン数・入力・割合を数え、複数種の束は「束」1つに数える（重複計上しない）', () => {
+    const summary = renderTurnTimingSummary([
+      entry({ id: 'a', triggers: ['human_message'] }),
+      entry({
+        id: 'b',
+        triggers: ['timer', 'manager_message'],
+        batchSize: 2,
+        tokens: { input: 0, cacheRead: 539_010, cacheCreation: 0, output: 1 },
+      }),
+      entry({
+        id: 'c',
+        triggers: ['timer'],
+        tokens: { input: 1, cacheRead: 0, cacheCreation: 0, output: 1 },
+      }),
+    ]);
+    // 合計 539,010 + 539,010 + 1 = 1,078,021
+    expect(summary).toContain('human_message 1 ターン 539,010（50%）');
+    expect(summary).toContain('束 1 ターン 539,010（50%）');
+    expect(summary).toContain('timer 1 ターン 1（0%）');
+    expect(summary).not.toContain('manager_message');
+  });
+
+  it('⭐ 合図別: トークンが欠けたターンも件数に数え、入力は 0 として足す。全部欠けたら割合を出さない', () => {
+    const summary = renderTurnTimingSummary([
+      entry({ id: 'a', triggers: ['self_initiative'], tokens: undefined }),
+      entry({ id: 'b', triggers: [], tokens: undefined }),
+    ]);
+    expect(summary).toContain('self_initiative 1 ターン 0 / ? 1 ターン 0');
+    expect(summary).not.toContain('ターン 0（');
+  });
+
+  it('⭐ 合図別: 種別が多いときは上位だけ出し、残りは件数で言う', () => {
+    const summary = renderTurnTimingSummary(
+      ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((name) => entry({ id: name, triggers: [name] })),
+    );
+    expect(summary).toContain('/ 他 2 種');
+  });
+
+  it('⭐ 道具を呼ばなかった割合は self_initiative と timer だけ数える', () => {
+    const summary = renderTurnTimingSummary([
+      entry({ id: 'a', triggers: ['self_initiative'], tools: undefined }),
+      entry({ id: 'b', triggers: ['self_initiative'] }),
+      entry({ id: 'c', triggers: ['timer'], tools: undefined }),
+      entry({ id: 'd', triggers: ['human_message'], tools: undefined }),
+    ]);
+    expect(summary).toContain(
+      '道具を1回も呼ばなかったターン: self_initiative 1/2（50%）・timer 1/1（100%）',
+    );
+    expect(summary).not.toContain('human_message 1/1');
+  });
+
+  it('その2種のターンが無ければ、道具の行は出さない', () => {
+    expect(renderTurnTimingSummary([entry()])).not.toContain('道具を1回も呼ばなかった');
   });
 });
 
@@ -141,5 +198,7 @@ describe('self_status に「直近のターンの時間」の節が出る', () =
 
     expect(text).toContain('直近のターンの時間（1 件。');
     expect(text).toContain('最も長い段 モデル');
+    expect(text).toContain('合図別の入力');
+    expect(text).toContain('human_message 1 ターン 539,010（100%）');
   });
 });

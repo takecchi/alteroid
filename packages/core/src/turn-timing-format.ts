@@ -141,6 +141,70 @@ function percentile(sorted: readonly number[], ratio: number): number {
   return sorted[index] ?? 0;
 }
 
+// トリガー別の行の上限。他の一覧と定数を共有しない（片方だけ直したくなったときに一緒に動かないため）
+const TRIGGER_BREAKDOWN_KEYS = 5;
+const TRIGGER_NAME_CHARS = 24;
+const BUNDLE_KEY = '束';
+// 動くかどうかを自分で決めるトリガー。「道具を呼ばなかった」割合を出す対象
+const IDLE_CHECK_TRIGGERS = ['self_initiative', 'timer'];
+
+/** 数える鍵: 種別が1つならその名前、複数種が束ねられていれば「束」（全種に重複計上しない）、無ければ `?` */
+export function turnTriggerKey(entry: Pick<TurnTimingEntry, 'triggers'>): string {
+  const distinct = [...new Set(entry.triggers)];
+  if (distinct.length === 0) return '?';
+  if (distinct.length > 1) return BUNDLE_KEY;
+  return (distinct[0] ?? '?').slice(0, TRIGGER_NAME_CHARS);
+}
+
+/** トリガー別の入力トークンと、self_initiative・timer のうち道具を呼ばなかったターンの割合。取れる材料が無ければ空配列 */
+function renderTriggerBreakdown(entries: readonly TurnTimingEntry[]): string[] {
+  const byKey = new Map<string, { turns: number; input: number }>();
+  const idle = new Map<string, { idle: number; all: number }>();
+  let total = 0;
+  for (const entry of entries) {
+    const key = turnTriggerKey(entry);
+    const row = byKey.get(key) ?? { turns: 0, input: 0 };
+    const input = turnInputTokens(entry) ?? 0;
+    row.turns += 1;
+    row.input += input;
+    total += input;
+    byKey.set(key, row);
+    if (IDLE_CHECK_TRIGGERS.includes(key)) {
+      const counts = idle.get(key) ?? { idle: 0, all: 0 };
+      counts.all += 1;
+      // `tools` は道具を1回も呼ばなかったターンでは書かれない
+      if (entry.tools === undefined) counts.idle += 1;
+      idle.set(key, counts);
+    }
+  }
+  const rows = [...byKey.entries()].sort(
+    (a, b) => b[1].input - a[1].input || b[1].turns - a[1].turns,
+  );
+  const shown = rows
+    .slice(0, TRIGGER_BREAKDOWN_KEYS)
+    .map(
+      ([key, row]) =>
+        `${key} ${String(row.turns)} ターン ${formatTokens(row.input)}` +
+        (total === 0 ? '' : `（${String(Math.round((row.input / total) * 100))}%）`),
+    );
+  const rest = rows.length - TRIGGER_BREAKDOWN_KEYS;
+  const lines = [
+    `- 合図別の入力（素＋キャッシュ読み書き。複数種の合図が束ねられたターンは「${BUNDLE_KEY}」）: ${shown.join(' / ')}` +
+      (rest > 0 ? ` / 他 ${String(rest)} 種` : ''),
+  ];
+  const idleParts = IDLE_CHECK_TRIGGERS.flatMap((key) => {
+    const counts = idle.get(key);
+    if (counts === undefined) return [];
+    return [
+      `${key} ${String(counts.idle)}/${String(counts.all)}（${String(Math.round((counts.idle / counts.all) * 100))}%）`,
+    ];
+  });
+  if (idleParts.length > 0) {
+    lines.push(`- 道具を1回も呼ばなかったターン: ${idleParts.join('・')}`);
+  }
+  return lines;
+}
+
 /**
  * 直近のターンの時間を要約する（`self_status` の節）。どの段が遅さの元かを、段ごとの合計の多い順に出す。
  * 0件なら、まだ測っていないと言う（0 秒と書かない）
@@ -189,6 +253,7 @@ export function renderTurnTimingSummary(entries: readonly TurnTimingEntry[]): st
       : `- 最初の文字まで: 中央値 ${formatSeconds(percentile(firstTexts, 0.5))}・90% 点 ${formatSeconds(percentile(firstTexts, 0.9))}`,
     `- 時間を食っている段（合計の多い順）: ${phaseShare.join(' / ')}`,
     inputLine,
+    ...renderTriggerBreakdown(entries),
     '- 最も長かったターン:',
     ...slowest.map((entry) => {
       const [phase] = topLevelPhases(entry);
