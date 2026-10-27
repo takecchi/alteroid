@@ -93,7 +93,8 @@ import { describeSelectionsViolation, foldSelections } from './approval-choices.
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
 import { WorkerLimitNotices, workerLimitLabel } from './runner-worker-limit-notice.js';
-import { excerpt, excerptLine, renderListingFromEnd, tailByCodePoints } from './excerpt.js';
+import { excerpt, excerptLine, renderListingFromEnd } from './excerpt.js';
+import { distillTailOf } from './distill-transcript-tail.js';
 import { closeCommitmentJournalFirst } from './commitment-auto-close.js';
 import { readConversationWindow } from './conversation.js';
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
@@ -7285,7 +7286,8 @@ class Clone implements CloneHost {
     const prompt = [
       buildDistillPrompt('pre_compact'),
       '',
-      '以下は、要約に潰される直前の会話の生ログ（末尾）である。',
+      '以下は、要約に潰される直前の会話の末尾である（生ログの JSONL を「発言者: テキスト」の行に整形してある。' +
+        'tool_use・tool_result は先頭だけ。整形できなかった行は生のまま。全文は退避に残っている）。',
       '',
       transcriptTail,
     ].join('\n');
@@ -9191,14 +9193,9 @@ function withProjectKeyProbe(
 
 /**
  * 蒸留に渡す末尾。全文はアーカイブに残っているので、ここでは直近だけでよい。
- * 行の途中と壊れた文字で始めないように整える。
- *
- * `DISTILL_TRANSCRIPT_TAIL_CHARS` を `.length` で数えない: コードポイントで数える `TranscriptArchive.readTail` と食い違い、
- * 切り詰めていない本文の先頭を静かに消す。判定は「切り詰めた結果が元の文字列と一致するか」で行う。
+ * 生の JSONL を「発言者: テキスト」へ整形してから `DISTILL_TRANSCRIPT_TAIL_CHARS` で切る（#5306。整形が落ちたら生の末尾）。
+ * 切り方（コードポイントで数える理由・行の途中と壊れた文字で始めない整え方）は {@link distillTailOf}。
  */
 function tailOf(transcript: string): string {
-  const cut = tailByCodePoints(transcript, DISTILL_TRANSCRIPT_TAIL_CHARS);
-  if (cut === transcript) return transcript;
-  const newline = cut.indexOf('\n');
-  return newline === -1 ? cut : cut.slice(newline + 1);
+  return distillTailOf(transcript, DISTILL_TRANSCRIPT_TAIL_CHARS);
 }
