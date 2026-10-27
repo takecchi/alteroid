@@ -76,9 +76,14 @@ export function createCodexChatgptAuthService(
     return run;
   }
 
-  async function note(decision: string, grounds: string): Promise<void> {
+  async function note(decision: string, grounds: string, routine = false): Promise<void> {
     try {
-      await journal({ type: 'decision', decision: `${SUBJECT}: ${decision}`, grounds });
+      await journal({
+        type: 'decision',
+        decision: `${SUBJECT}: ${decision}`,
+        grounds,
+        ...(routine ? { routine: true } : {}),
+      });
     } catch {
       // 日誌に書けなくても、正本の操作は止めない（書けなかったことは日誌の側が跡を残す）。
     }
@@ -307,6 +312,7 @@ export function createCodexChatgptAuthService(
       await note(
         `runner ${runnerId} で Codex が更新したトークンを正本へ書き戻した`,
         `指紋 ${fingerprintOf(current.value)} → ${fingerprintOf(next.value)}。全 runner へ降ろし直す。値は記録しない。`,
+        true,
       );
       await pushAll(next);
       return;
@@ -314,6 +320,7 @@ export function createCodexChatgptAuthService(
     await note(
       `runner ${runnerId} の古い版からの書き戻しを捨てた（正本は既に新しい）`,
       `書き戻しの指紋 ${fingerprint}。正本（指紋 ${fingerprintOf(current.value)}）をこの runner へ降ろし直す。`,
+      true,
     );
     await pushTo(runner, current);
   }

@@ -121,6 +121,10 @@ describe('foldArchiveOnce（issue #698）', () => {
     expect((await stores.archive.read(row1.id)).kind).toBe('removed');
     expect((await stores.archive.read(row2.id)).kind).toBe('removed');
     expect((await stores.archive.read(row3.id)).kind).toBe('body');
+    // 定期実行の定型の行: 要約の一覧から外す印が付く
+    const rows = await stores.journal.list({ types: ['decision'] });
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row).toMatchObject({ routine: true });
   });
 
   it('diverged / unknown / continuity を持たない行（門より前の残骸）は畳まれない', async () => {

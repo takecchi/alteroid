@@ -224,6 +224,8 @@ describe('manager が握り潰したとき（case "report" の awaitingBackgroun
       ),
     );
     expect(found).toBeDefined();
+    // 定型の行: 要約の一覧から外す印が付く
+    expect(found).toMatchObject({ routine: true });
     expect(JSON.stringify(found)).toContain('mgr-withhold');
     expect(JSON.stringify(found)).toContain('shell×1');
     expect(JSON.stringify(found)).toContain('完了を待つ');

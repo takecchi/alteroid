@@ -5912,6 +5912,7 @@ class Pool implements ManagerPool {
             grounds:
               'runner_list・配置・鍵の回転のどの契機も来ない間に器が飽和しても畳めるようにする（#5157）。' +
               '条件は他の契機と同じ（手が空いて6時間・背景処理待ちの印なし・未 push の作業なし）',
+            routine: true,
           });
         } catch (error) {
           noteDroppedRecord('周回の自動の畳み', `runner=${runnerId}`, error);
@@ -6518,6 +6519,7 @@ class Pool implements ManagerPool {
           grounds:
             '起こし直しは配置を通らず元の器へ戻るので、飽和した器を先に空ける（#5113）。' +
             '起こし直す担当・預かりのある担当は畳まない',
+          routine: true,
         });
       }
     } catch (error) {
@@ -7085,6 +7087,7 @@ class Pool implements ManagerPool {
       type: 'decision',
       decision: `預かっていた未追跡のファイル ${String(removed.size)} 件を消した（委譲が ${job.status} のまま猶予を過ぎた）。`,
       grounds: '退避 ref と同じ猶予（done 7日・failed/stopped 14日・lost は時間で消さない）。',
+      routine: true,
     });
   }
 
@@ -7197,6 +7200,7 @@ class Pool implements ManagerPool {
             `作業ツリー ${tree.relativePath}、退避 commit ${pushed.commit.slice(0, 8)}。` +
             (outcome.alreadyGone ? '消そうとしたときには既に無かった。' : '') +
             '台帳の pushed は残し、消した時刻と理由を removal に付けた。',
+          routine: true,
         });
       } else if (pushed.removal?.failureKind !== outcome.kind) {
         await this.#journal({
@@ -10681,6 +10685,7 @@ class Pool implements ManagerPool {
               `awaitingBackground.count=${String(awaitingBackground.count)} ` +
               `breakdown=${awaitingBackground.breakdown} ` +
               `本文冒頭: ${excerptLine(event.text, WITHHELD_REPORT_EXCERPT)}`,
+            routine: true,
           });
           this.#withholdBackgroundReport(event.managerId, event.text, awaitingBackground);
           return;

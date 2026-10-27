@@ -89,6 +89,8 @@ export function startCloneMcpConfigSweeping(
             'デーモンが /tmp に残っていたクローンの MCP 設定（資格入り）の一時ディレクトリを片付けた' +
             `（消した ${String(removed.length)} 件、新しく残した ${String(newFailed.length)} 件）。`,
           grounds,
+          // 掃けなかった残り・走査の失敗が混ざる回は判断の材料なので印を付けない
+          ...(newFailed.length === 0 && newScanError === undefined ? { routine: true } : {}),
         })
         .catch((error: unknown) => {
           writeLine(

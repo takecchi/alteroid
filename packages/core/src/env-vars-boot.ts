@@ -119,6 +119,7 @@ export async function migrateEnvBaseCredentialsOnce(
         '2026-10-06 のオーナー決定（GH_TOKEN・CODEX_API_KEY も普通の名前と同じ扱い）。' +
         '器の環境変数を最後の土台にする経路を撤去したため、既存の器を黙って壊さないための1回きりの移行。' +
         '値は書かない。',
+      routine: true,
     });
   } catch (error) {
     writeStderrLine(`alteroidd: 鍵の移行の日誌を書けませんでした: ${reasonOf(error)}\n`);

@@ -151,14 +151,18 @@ function recordingWarn(): { warn: (message: string) => void; calls: string[] } {
 
 function recordingJournal(opts: { rejects?: boolean } = {}): {
   journal: NoteRunnerSwapDeps['journal'];
-  calls: Array<{ decision: string; grounds: string }>;
+  calls: Array<{ decision: string; grounds: string; routine?: boolean }>;
 } {
-  const calls: Array<{ decision: string; grounds: string }> = [];
+  const calls: Array<{ decision: string; grounds: string; routine?: boolean }> = [];
   return {
     calls,
     journal: async (entry) => {
       if (opts.rejects === true) throw new Error('journal 書き込み失敗（テスト用）');
-      calls.push({ decision: entry.decision, grounds: entry.grounds });
+      calls.push({
+        decision: entry.decision,
+        grounds: entry.grounds,
+        ...(entry.routine === undefined ? {} : { routine: entry.routine }),
+      });
       return undefined;
     },
   };
@@ -183,6 +187,8 @@ describe('noteRunnerSwap', () => {
     expect(wakeCalls).toEqual([]);
     expect(journalCalls).toHaveLength(1);
     expect(journalCalls[0]?.decision).toContain('0 本だったので、クローンを起こさなかった');
+    // 起こさなかった回は定型の行: 要約の一覧から外す印が付く
+    expect(journalCalls[0]?.routine).toBe(true);
   });
 
   it('対象が1本以上あるときは必ず起こす（notice そのもので）。日誌にも1本残る', async () => {
@@ -203,6 +209,8 @@ describe('noteRunnerSwap', () => {
     expect(wakeCalls).toEqual(['入れ替えの知らせ・本文そのもの']);
     expect(journalCalls).toHaveLength(1);
     expect(journalCalls[0]?.decision).toContain('1 本あったので、クローンを起こした');
+    // 起こした回は次の手のきっかけなので印を付けない
+    expect(journalCalls[0]?.routine).toBeUndefined();
   });
 
   it('runnerId を聞けていないときは起こす', async () => {

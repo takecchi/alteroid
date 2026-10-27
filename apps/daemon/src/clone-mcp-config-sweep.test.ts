@@ -78,6 +78,8 @@ describe('デーモンのクローンの MCP 設定の掃きの配線', () => {
       'デーモンが /tmp に残っていたクローンの MCP 設定（資格入り）の一時ディレクトリを片付けた',
     );
     expect(entry.grounds).toContain('  - 消した alteroid-clone-mcp-1-abc（directory）');
+    // 消しただけの定型の回は要約の一覧から外す印が付く
+    expect(entry).toMatchObject({ routine: true });
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/^alteroidd: .*\n$/);
     sweeper.stop();
@@ -93,6 +95,8 @@ describe('デーモンのクローンの MCP 設定の掃きの配線', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(appended).toHaveLength(1);
     const entry = appended[0] as { grounds: string };
+    // 掃けなかった・走査の失敗が混ざる回は判断の材料なので印を付けない
+    expect(entry).not.toHaveProperty('routine');
     expect(entry.grounds).toContain('走査の失敗: /x を読めなかった: EACCES');
     expect(entry.grounds).toContain(
       '  - 残した alteroid-clone-mcp-1-bad（directory） 理由 rm-failed:',

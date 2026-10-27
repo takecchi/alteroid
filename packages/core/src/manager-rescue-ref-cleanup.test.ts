@@ -105,7 +105,7 @@ async function setup(jobs: Job[], runners: Fake[] = [fakeRunner()]) {
 describe('退避 ref の後始末の走査（#1266）', () => {
   it('done が猶予（7日）を過ぎていたら runner に消させ、pushed を残して removal を付け、日誌へ書く', async () => {
     const fake = fakeRunner();
-    const { pool, jobOfId, journal } = await setup(
+    const { pool, stores, jobOfId, journal } = await setup(
       [jobOf('mgr-x', 'done', 8, [wt(pushedOf())])],
       [fake],
     );
@@ -117,6 +117,12 @@ describe('退避 ref の後始末の走査（#1266）', () => {
     const text = await journal();
     expect(text).toContain(REF);
     expect(text).toContain('猶予');
+    // 消せた回の行は定型: 要約の一覧から外す印が付く（消せなかった回は付けない）
+    const removedRows = (await stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('を origin から消した'),
+    );
+    expect(removedRows.length).toBeGreaterThan(0);
+    for (const row of removedRows) expect(row).toMatchObject({ routine: true });
     await pool.stop();
   });
 
