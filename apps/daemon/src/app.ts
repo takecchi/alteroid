@@ -344,6 +344,7 @@ import {
   memoryListResponseSchema,
   memoryConflictResponseSchema,
   memoryReadResponseSchema,
+  memoryWriteResponseSchema,
   meResponseSchema,
   okResponseSchema,
   openApiDocumentation,
@@ -353,6 +354,7 @@ import {
   practiceListResponseSchema,
   practiceConflictResponseSchema,
   practiceReadResponseSchema,
+  practiceWriteResponseSchema,
   practiceVersionListResponseSchema,
   practiceVersionReadResponseSchema,
   mcpServersConflictResponseSchema,
@@ -4059,8 +4061,8 @@ export function createApp(deps: AppDeps) {
           '本文が書けなかった（409 ほか）ときは、日誌に打ち消しの行（`action: write_failed`）を足す。',
         responses: {
           200: {
-            description: '書き換え後の記憶文書。',
-            content: { 'application/json': { schema: resolver(memoryReadResponseSchema) } },
+            description: '書き換え後の記憶文書。`created` は新規なら true、置換なら false。',
+            content: { 'application/json': { schema: resolver(memoryWriteResponseSchema) } },
           },
           400: {
             description: '記憶のスラッグが不正、または本文が JSON として不正。',
@@ -4164,7 +4166,12 @@ export function createApp(deps: AppDeps) {
         }
         // 本文が書けた後でだけ立てる: 書けなかったのに立てると、打ち消した行と派生値の対応が崩れる。裏付けの行は上で先に書いてある。
         await stores.persona.markHumanTouched(slug, entry.at);
-        return c.json({ document: doc, version: memoryVersion(doc.content) });
+        // 無い slug への書き込みは新規作成: 打ち間違いの slug が更新と同じ 200 に紛れないよう、応答で言い分ける。
+        return c.json({
+          document: doc,
+          version: memoryVersion(doc.content),
+          created: before === null,
+        });
       },
     )
 
@@ -4398,7 +4405,7 @@ export function createApp(deps: AppDeps) {
         responses: {
           200: {
             description: '書き換え後のやり方。',
-            content: { 'application/json': { schema: resolver(practiceReadResponseSchema) } },
+            content: { 'application/json': { schema: resolver(practiceWriteResponseSchema) } },
           },
           400: {
             description: 'やり方のスラッグが不正、または本文が JSON として不正。',
@@ -4518,7 +4525,8 @@ export function createApp(deps: AppDeps) {
         }
         // 書き換え自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
         await appendJournalOrDrop(stores, entryAfter, 'やり方書き換えの日誌', `slug=${slug}`);
-        return c.json({ practice, version: practiceVersion(practice) });
+        // 読めない形の行の書き直しは置換（`rewriting`）: 新規ではない。
+        return c.json({ practice, version: practiceVersion(practice), created: !rewriting });
       },
     )
 

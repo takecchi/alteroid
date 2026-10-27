@@ -6028,7 +6028,7 @@
         "description": "人間が API から記憶を書き換える口。書き換えは日誌に残る（`cause: human`）。日誌を先に書き、書けなければ本文を書かずに 500 を返す（印の付かない保存を起こさない）。本文が書けなかった（409 ほか）ときは、日誌に打ち消しの行（`action: write_failed`）を足す。",
         "responses": {
           "200": {
-            "description": "書き換え後の記憶文書。",
+            "description": "書き換え後の記憶文書。`created` は新規なら true、置換なら false。",
             "content": {
               "application/json": {
                 "schema": {
@@ -6298,6 +6298,10 @@
                     },
                     "version": {
                       "type": "string"
+                    },
+                    "created": {
+                      "description": "新規に作ったなら true、既存の記憶を置き換えたなら false（slug の打ち間違いに気づく手掛かり）",
+                      "type": "boolean"
                     }
                   },
                   "required": ["document", "version"],
@@ -7640,6 +7644,10 @@
                     },
                     "version": {
                       "type": "string"
+                    },
+                    "created": {
+                      "description": "新規に作ったなら true、既存（読めない形の行を含む）を置き換えたなら false",
+                      "type": "boolean"
                     }
                   },
                   "required": ["practice", "version"],

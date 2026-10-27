@@ -391,6 +391,15 @@ export const memoryReadResponseSchema = z.object({
   document: memoryDocumentSchema,
   version: z.string(),
 });
+// PUT の応答だけが持つ: GET は読むだけで「作った」の別が無い。省略可能にして、既存の呼び手と古いデーモンの応答を壊さない。
+export const memoryWriteResponseSchema = memoryReadResponseSchema.extend({
+  created: z
+    .boolean()
+    .optional()
+    .describe(
+      '新規に作ったなら true、既存の記憶を置き換えたなら false（slug の打ち間違いに気づく手掛かり）',
+    ),
+});
 export const memoryConflictResponseSchema = z.object({
   error: z.string(),
   current: memoryReadResponseSchema.nullable(),
@@ -409,6 +418,12 @@ export const practiceListResponseSchema = z.object({
 export const practiceReadResponseSchema = z.object({
   practice: practiceSchema,
   version: z.string(),
+});
+export const practiceWriteResponseSchema = practiceReadResponseSchema.extend({
+  created: z
+    .boolean()
+    .optional()
+    .describe('新規に作ったなら true、既存（読めない形の行を含む）を置き換えたなら false'),
 });
 export const practiceConflictResponseSchema = z.object({
   error: z.string(),
