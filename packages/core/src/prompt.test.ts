@@ -485,6 +485,13 @@ describe('発意 tick の結び — 「何もしないという結論でよい�
       'ただし、動いている委譲が無い器があるなら、なぜ空いているのかを先に確かめること。',
     );
   });
+
+  it('situation の本数・内訳で足りるなら manager_list / runner_list を引かない旨の1文がある', () => {
+    const prompt = buildSelfInitiativePrompt({ reason: 'timer', digest: '短い digest' });
+    expect(prompt).toContain(
+      'いまの全体（situation）の本数・内訳で足りるなら `manager_list` / `runner_list` は引かない。内訳が要るときだけ引く。',
+    );
+  });
 });
 
 describe('branded type — RenderedMemory を経由しない記憶は buildCloneSystemPrompt に渡せない', () => {
