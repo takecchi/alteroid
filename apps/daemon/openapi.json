@@ -26703,6 +26703,263 @@
         ]
       }
     },
+    "/commitments/close-many": {
+      "post": {
+        "operationId": "postCommitmentsCloseMany",
+        "tags": ["commitments"],
+        "summary": "引き受けた仕事を、絞り込みを渡してまとめて片付いたことにする",
+        "description": "クローンの道具 `commitment_close_many` と同じ絞り込み・同じ検証で、人間の手からまとめて閉じる。**既定は試算で、`dryRun` を省略すると true（1件も閉じない）。** 実際に閉じるには `dryRun: false` を明示する。**閉じた行を戻す口は `POST /commitments/{id}/reopen` の1件ずつしか無く、まとめて開き直す口は無い**ので、先に試算で件数と対象を確かめること。`origin` は必須で、在る起点（`human` / `manager` / `external` / `self`）を全部並べた呼びは断る（「全部閉じる」を1回で撃てる形は作らない）。`source` は出所の完全一致の配列、`q` は本文か出所への部分一致、`until` は時差（`Z` / `+09:00`）が必須でその瞬間ちょうどの行を含む。`reason` は空白だけを断る。`limit` は 1 以上 2000 以下（省略すると 500）で、**古い側から**閉じる。残りは同じ絞り込みでもう一度呼べば続けられる。閉じるのは未了の行だけで、`closedBy` は `human`。行は消えない（`closedAt` / `closedReason` が付くだけ。⚠️ fs 実装は保持上限を超えた古い片付き行を物理削除するので、1回で上限を超えて閉じると閉じたばかりの行も消える。`trimmedJustClosed` がその件数）。**日誌は塊ごと（id 列を文字数の予算で割る）に、先の行を書いてから閉じる。** 書けなかったらその塊は閉じずにそこで止め（後ろの塊も閉じない）、500 でそれまでに閉じた分を返す。閉じられなかった塊・閉じる操作が投げた塊には、先の行を打ち消す行を足す。閉じた塊の日誌には、クローンが次のターンの頭で名指しできるよう、塊ごとに1行の人間の操作の印（`commitment_close`。対象は塊の先頭の id で、件数は日誌の文に入る）を付ける。応答の `ids` は試算では対象・実行では閉じた id の先頭だけ（20 件まで。残りは `idsOmitted`）で、実行したときの全 id は日誌に残る。",
+        "responses": {
+          "200": {
+            "description": "試算、または実際に閉じた結果。`dryRun` が試算かどうかを言う。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "dryRun": {
+                      "type": "boolean"
+                    },
+                    "funnel": {
+                      "type": "object",
+                      "properties": {
+                        "open": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "origin": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "source": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "q": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "until": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": ["open", "origin"],
+                      "additionalProperties": false
+                    },
+                    "matched": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "targeted": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "closed": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "chunks": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "remaining": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "idsOmitted": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "oldestAt": {
+                      "type": "string"
+                    },
+                    "newestAt": {
+                      "type": "string"
+                    },
+                    "samples": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "string"
+                          },
+                          "origin": {
+                            "type": "string",
+                            "enum": ["human", "manager", "external", "self"]
+                          },
+                          "source": {
+                            "type": "string"
+                          },
+                          "bodyExcerpt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "at", "origin", "bodyExcerpt"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "raced": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "trimmedJustClosed": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "unreadable": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "dryRun",
+                    "funnel",
+                    "matched",
+                    "targeted",
+                    "closed",
+                    "chunks",
+                    "remaining",
+                    "ids",
+                    "idsOmitted",
+                    "raced",
+                    "trimmedJustClosed",
+                    "unreadable"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正、または絞り込み・入力が断られた（`origin` が空・在る起点を全部並べている・`source` の要素が空・`q` が空・`until` に時差が無い・`reason` が空白だけ・`limit` が範囲外・NUL だけの値）。文言はクローンの道具と同じ。**1件も閉じていない。**",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "塊の先の日誌が書けなかったので、その塊とそれ以降を閉じずに止めた（`code` は `journal_write_failed`）。止める前の塊は閉じている——`closed` / `closedIds` がどこまでかを言う。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    },
+                    "closed": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "closedIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": ["error", "code", "closed", "closedIds"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "origin": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": ["human", "manager", "external", "self"]
+                    },
+                    "description": "閉じる対象の起点（1件以上。在る起点を全部並べた呼びは断る）"
+                  },
+                  "source": {
+                    "description": "出所の完全一致（q の部分一致とは別物）",
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "q": {
+                    "description": "本文か出所への部分一致（大文字小文字を区別しない）",
+                    "type": "string"
+                  },
+                  "until": {
+                    "description": "この時刻までに載った行だけ（ISO8601。時差が必須。その瞬間ちょうどの行は含む）",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "description": "何をもってこの絞り込みに当たる行が片付いたとするか（空白だけは断る）"
+                  },
+                  "dryRun": {
+                    "description": "省略すると true（数えるだけで1件も閉じない）",
+                    "type": "boolean"
+                  },
+                  "limit": {
+                    "description": "1回で閉じる上限（1以上2000以下の整数。省略すると 500）。古い側から閉じる",
+                    "type": "number"
+                  }
+                },
+                "required": ["origin", "reason"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/commitments/{id}/close": {
       "post": {
         "operationId": "postCommitmentsByIdClose",

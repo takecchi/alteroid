@@ -443,14 +443,18 @@ describe('預かりの掃除（退避 ref と同じ猶予）', () => {
     await pool.sweepRescueRefs?.();
     const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-s')!;
     const attachment = await stores.attachments.getMeta(meta.id);
+    const decisions = await stores.journal.list({ types: ['decision'] });
     await pool.stop();
-    return { job, attachment };
+    return { job, attachment, decisions };
   }
 
   it('done は7日を過ぎたら添付を消し、欄を空にする。6日では消さない', async () => {
     const gone = await sweepCase('done', 8);
     expect(gone.attachment).toBeUndefined();
     expect(gone.job.rescueStash).toBeUndefined();
+    // 預かりの掃除の行は定型: 要約の一覧から外す印が付く
+    expect(gone.decisions.length).toBeGreaterThan(0);
+    for (const row of gone.decisions) expect(row).toMatchObject({ routine: true });
     const kept = await sweepCase('done', 6);
     expect(kept.attachment).toBeDefined();
     expect(kept.job.rescueStash).toHaveLength(1);

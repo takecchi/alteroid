@@ -176,6 +176,15 @@ describe('Codex の ChatGPT ログインの正本（#3939）', () => {
       expect(runner.last()).toEqual({ value: REFRESHED_A, revision: 'rev-2' });
     }
     expect(JSON.stringify(h.journal)).toContain('古い版からの書き戻しを捨てた');
+    // 定型の行（トークンの書き戻し・古い版の書き戻しの破棄）には要約から外す印が付く。ログインなどの行には付かない
+    for (const needle of ['トークンを正本へ書き戻した', '古い版からの書き戻しを捨てた']) {
+      const rows = h.journal.filter((e) => JSON.stringify(e).includes(needle));
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) expect(row).toMatchObject({ routine: true });
+    }
+    for (const row of h.journal.filter((e) => JSON.stringify(e).includes('ログインした'))) {
+      expect(row).not.toHaveProperty('routine');
+    }
     expect(JSON.stringify(h.journal)).not.toContain('rt-A-fake');
     expect(JSON.stringify(h.journal)).not.toContain('rt-B-fake');
   });

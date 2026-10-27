@@ -156,6 +156,12 @@ import {
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
   chunkIdsByChars,
+  CLOSE_MANY_IDS_SHOWN,
+  closeManyInChunks,
+  countTrimmedJustClosed,
+  describeCloseManyFilter,
+  describeCloseManyViolation,
+  selectCloseManyTargets,
   REMOVE_MANY_JOURNAL_ID_CHARS,
   REMOVE_MANY_LIMIT_DEFAULT,
   REMOVE_MANY_LIMIT_MAX,
@@ -200,6 +206,7 @@ import {
   type ApprovalPagingKey,
   type IntegrationKeyRecord,
   type ArchiveRemoveManyFilter,
+  type CloseManyChunk,
   type AuthAccount,
   type AuthService,
   NulNotAllowedError,
@@ -289,6 +296,9 @@ import {
   authProvidersResponseSchema,
   commitmentConflictResponseSchema,
   commitmentDetailResponseSchema,
+  commitmentCloseManyRequestSchema,
+  commitmentCloseManyResponseSchema,
+  commitmentCloseManyStoppedResponseSchema,
   commitmentListResponseSchema,
   progressResponseSchema,
   commitmentOpenedResponseSchema,
@@ -1081,6 +1091,18 @@ function managerListItem(managers: ManagerPool, summary: ManagerSummary) {
     ...(request === undefined ? {} : { request, requestTruncated: true as const }),
     ...(lastReport === undefined ? {} : { lastReport, lastReportTruncated: true as const }),
   };
+}
+
+/** `POST /commitments/close-many` の試算が返す抜粋の件数と、本文を切る長さ（UTF-16 の単位）。対象の id は別に先頭 `CLOSE_MANY_IDS_SHOWN` 件まで返す */
+const COMMITMENT_CLOSE_MANY_SAMPLES = 5;
+const COMMITMENT_CLOSE_MANY_SAMPLE_HEAD = 120;
+
+// 塊の先の日誌が書けなかったことだけを、`closeManyInChunks` から抜ける他の例外（台帳の書き込みの失敗）と見分けるための印。型で拾う（`AnswerJournalWriteError` と同じ）。
+class CloseManyJournalError extends Error {
+  constructor() {
+    super('一括して片付ける前の日誌が書けなかった');
+    this.name = 'CloseManyJournalError';
+  }
 }
 
 /** 一覧（`GET /commitments`）で片付いた行の本文・閉じた理由を切る長さ（UTF-16 の単位。#5089） */
@@ -6832,6 +6854,233 @@ export function createApp(deps: AppDeps) {
           `id=${entry.id}`,
         );
         return c.json(commitmentOpenedResponseSchema.parse({ ok: true, id: entry.id }));
+      },
+    )
+
+    // `/commitments/:id/close` より前に登録する: 経路の本数が違う（2本と3本）ので今は取り違えないが、`:id` が `close-many` を名乗る形（`/commitments/close-many/...`）の口が将来増えても、一括の口が先に当たるようにしておく。
+    // 検証・絞り込み・塊ごとの閉じ方はクローンの道具 `commitment_close_many` と同じ関数（`commitment-close-many.ts`）。違うのは日誌の順序だけ: 道具は「閉じてから書く」、ここは `/commitments/:id/close` と同じ「先に書き、書けなければ閉じない」（#5243）。
+    .post(
+      '/commitments/close-many',
+      describeRoute({
+        tags: ['commitments'],
+        summary: '引き受けた仕事を、絞り込みを渡してまとめて片付いたことにする',
+        description:
+          'クローンの道具 `commitment_close_many` と同じ絞り込み・同じ検証で、人間の手からまとめて閉じる。' +
+          '**既定は試算で、`dryRun` を省略すると true（1件も閉じない）。** 実際に閉じるには `dryRun: false` を明示する。' +
+          '**閉じた行を戻す口は `POST /commitments/{id}/reopen` の1件ずつしか無く、まとめて開き直す口は無い**ので、' +
+          '先に試算で件数と対象を確かめること。' +
+          '`origin` は必須で、在る起点（`human` / `manager` / `external` / `self`）を全部並べた呼びは断る' +
+          '（「全部閉じる」を1回で撃てる形は作らない）。`source` は出所の完全一致の配列、`q` は本文か出所への部分一致、' +
+          '`until` は時差（`Z` / `+09:00`）が必須でその瞬間ちょうどの行を含む。`reason` は空白だけを断る。' +
+          '`limit` は 1 以上 2000 以下（省略すると 500）で、**古い側から**閉じる。残りは同じ絞り込みでもう一度呼べば続けられる。' +
+          '閉じるのは未了の行だけで、`closedBy` は `human`。行は消えない（`closedAt` / `closedReason` が付くだけ。' +
+          '⚠️ fs 実装は保持上限を超えた古い片付き行を物理削除するので、1回で上限を超えて閉じると閉じたばかりの行も消える。' +
+          '`trimmedJustClosed` がその件数）。' +
+          '**日誌は塊ごと（id 列を文字数の予算で割る）に、先の行を書いてから閉じる。** 書けなかったらその塊は閉じずにそこで止め' +
+          '（後ろの塊も閉じない）、500 でそれまでに閉じた分を返す。閉じられなかった塊・閉じる操作が投げた塊には、先の行を打ち消す行を足す。' +
+          '閉じた塊の日誌には、クローンが次のターンの頭で名指しできるよう、塊ごとに1行の人間の操作の印（`commitment_close`。' +
+          '対象は塊の先頭の id で、件数は日誌の文に入る）を付ける。応答の `ids` は試算では対象・実行では閉じた id の先頭だけ' +
+          `（${String(CLOSE_MANY_IDS_SHOWN)} 件まで。残りは \`idsOmitted\`）で、実行したときの全 id は日誌に残る。`,
+        responses: {
+          200: {
+            description: '試算、または実際に閉じた結果。`dryRun` が試算かどうかを言う。',
+            content: {
+              'application/json': { schema: resolver(commitmentCloseManyResponseSchema) },
+            },
+          },
+          400: {
+            description:
+              '本文が JSON として不正、または絞り込み・入力が断られた（`origin` が空・在る起点を全部並べている・' +
+              '`source` の要素が空・`q` が空・`until` に時差が無い・`reason` が空白だけ・`limit` が範囲外・NUL だけの値）。' +
+              '文言はクローンの道具と同じ。**1件も閉じていない。**',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description:
+              '塊の先の日誌が書けなかったので、その塊とそれ以降を閉じずに止めた（`code` は `journal_write_failed`）。' +
+              '止める前の塊は閉じている——`closed` / `closedIds` がどこまでかを言う。',
+            content: {
+              'application/json': { schema: resolver(commitmentCloseManyStoppedResponseSchema) },
+            },
+          },
+        },
+      }),
+      jsonBody(commitmentCloseManyRequestSchema, (where) => ({
+        error: 'body の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const input = c.req.valid('json');
+        const violation = describeCloseManyViolation(input);
+        if (violation !== null) return c.json({ error: violation }, 400);
+
+        const selection = await selectCloseManyTargets(stores.commitments, input);
+        const { openEntries, afterOrigin, afterSource, afterQ, matched, targets } = selection;
+        const funnel = {
+          open: openEntries.length,
+          origin: afterOrigin.length,
+          ...(input.source === undefined ? {} : { source: afterSource.length }),
+          ...(input.q === undefined ? {} : { q: afterQ.length }),
+          ...(input.until === undefined ? {} : { until: matched.length }),
+        };
+        const shownTargets = targets.slice(0, CLOSE_MANY_IDS_SHOWN);
+
+        if (input.dryRun !== false) {
+          return c.json(
+            commitmentCloseManyResponseSchema.parse({
+              ok: true,
+              dryRun: true,
+              funnel,
+              matched: matched.length,
+              targeted: targets.length,
+              closed: 0,
+              chunks: 0,
+              remaining: selection.rest,
+              ids: shownTargets.map((entry) => entry.id),
+              idsOmitted: targets.length - shownTargets.length,
+              oldestAt: targets[0]?.at,
+              newestAt: targets[targets.length - 1]?.at,
+              samples: shownTargets.slice(0, COMMITMENT_CLOSE_MANY_SAMPLES).map((entry) => ({
+                id: entry.id,
+                at: entry.at,
+                origin: entry.origin,
+                ...(entry.source === undefined ? {} : { source: entry.source }),
+                bodyExcerpt: textHead(entry.body, COMMITMENT_CLOSE_MANY_SAMPLE_HEAD) ?? entry.body,
+              })),
+              raced: 0,
+              trimmedJustClosed: 0,
+              unreadable: selection.unreadableCount,
+            }),
+          );
+        }
+
+        const { reason } = input;
+        const filterText = describeCloseManyFilter(input);
+        const principal = c.get('principal');
+        const closedSoFar: string[] = [];
+        let journaledChunks = 0;
+        // 閉じられなかった id の打ち消しの行: 先の行は「閉じる id」を全部並べているので、実際に閉じた id との差を言う。印（humanAction）を持たないので、クローンに「人間がした」と学ばせない。
+        const undoUnclosed = (chunk: CloseManyChunk, unclosed: readonly string[], why: string) =>
+          appendJournalOrDrop(
+            stores,
+            unclosed.length === chunk.ids.length
+              ? undoneByHumanEntry(
+                  '引き受けた仕事を絞り込みで一括して片付ける',
+                  `${String(chunk.number)}/${String(chunk.total)} 塊目の ${String(unclosed.length)} 件を閉じる操作`,
+                  why,
+                )
+              : {
+                  type: 'decision',
+                  decision:
+                    `直前の一括の片付けの行（${String(chunk.number)}/${String(chunk.total)} 塊目）のうち、` +
+                    `${String(unclosed.length)} 件は効いていない（閉じていない）。理由: ${why}\n` +
+                    `閉じていない id: ${unclosed.join(' ')}`,
+                  grounds:
+                    '日誌を先に書いたが、一部の行は状態を変える操作が実行されなかったため打ち消す',
+                },
+            '引き受けた仕事を絞り込みで一括して片付ける日誌の打ち消し',
+            `chunk=${String(chunk.number)}/${String(chunk.total)} count=${String(unclosed.length)}`,
+          );
+        try {
+          await closeManyInChunks(
+            stores.commitments,
+            targets.map((entry) => entry.id),
+            { reason, by: 'human', at: new Date().toISOString() },
+            {
+              // 先の行に humanAction を付けない: 印は効いた後の行（下）だけが持つ。閉じられなかった操作を、クローンに「人間がした」と学ばせないため。
+              before: async (chunk) => {
+                try {
+                  await stores.journal.append({
+                    type: 'decision',
+                    decision:
+                      `人間が引き受けた仕事を絞り込みで一括して片付ける` +
+                      `（${String(chunk.number)}/${String(chunk.total)} 塊目、この塊は ${String(chunk.ids.length)} 件）: ${reason}\n` +
+                      `絞り込み: ${filterText}\n` +
+                      `閉じる id: ${chunk.ids.join(' ')}`,
+                    grounds: '人間が直接 API から閉じようとしている',
+                  });
+                } catch (error) {
+                  noteDroppedRecord(
+                    '引き受けた仕事を一括して片付ける日誌（この塊は閉じていない）',
+                    `chunk=${String(chunk.number)}/${String(chunk.total)} count=${String(chunk.ids.length)}`,
+                    kindOfError(error),
+                  );
+                  throw new CloseManyJournalError();
+                }
+              },
+              closeFailed: async (chunk) => {
+                await undoUnclosed(chunk, chunk.ids, '台帳の閉じる操作が失敗した');
+              },
+              after: async (chunk, closed) => {
+                closedSoFar.push(...closed);
+                const closedSet = new Set(closed);
+                const unclosed = chunk.ids.filter((id) => !closedSet.has(id));
+                if (unclosed.length > 0) {
+                  await undoUnclosed(
+                    chunk,
+                    unclosed,
+                    '閉じる直前に行が無くなっていた・既に閉じられていた・閉じる書き込みが通らなかった',
+                  );
+                }
+                const first = closed[0];
+                // 1件も閉じられなかった塊は、効いた後の行を書かない（打ち消しだけが残る）
+                if (first === undefined) return;
+                journaledChunks += 1;
+                // 件数は文の先頭の近くに置く: 次のターンの頭の名指しは decision の先頭 160 字だけを抜粋する（`HUMAN_ACTION_DECISION_EXCERPT`）。印は塊ごとに1行で、対象は塊の先頭の id（件数は文が言う）
+                // 片付けること自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
+                await appendJournalOrDrop(
+                  stores,
+                  {
+                    type: 'decision',
+                    decision:
+                      `人間が引き受けた仕事を絞り込みで一括して片付けた` +
+                      `（${String(chunk.number)}/${String(chunk.total)} 塊目、この塊は ${String(closed.length)} 件）: ${reason}\n` +
+                      `絞り込み: ${filterText}\n` +
+                      `閉じた id: ${closed.join(' ')}`,
+                    grounds: '人間が直接 API から閉じた',
+                    ...humanActionOf(principal, 'commitment_close', first),
+                  },
+                  '引き受けた仕事を一括して片付けた日誌',
+                  `chunk=${String(chunk.number)}/${String(chunk.total)} count=${String(closed.length)}`,
+                );
+              },
+            },
+          );
+        } catch (error) {
+          if (!(error instanceof CloseManyJournalError)) throw error;
+          return c.json(
+            commitmentCloseManyStoppedResponseSchema.parse({
+              ...journalWriteFailedBody(),
+              closed: closedSoFar.length,
+              closedIds: closedSoFar,
+            }),
+            500,
+          );
+        }
+
+        const shownClosed = closedSoFar.slice(0, CLOSE_MANY_IDS_SHOWN);
+        return c.json(
+          commitmentCloseManyResponseSchema.parse({
+            ok: true,
+            dryRun: false,
+            funnel,
+            matched: matched.length,
+            targeted: targets.length,
+            closed: closedSoFar.length,
+            chunks: journaledChunks,
+            remaining: selection.rest,
+            ids: shownClosed,
+            idsOmitted: closedSoFar.length - shownClosed.length,
+            oldestAt: targets[0]?.at,
+            newestAt: targets[targets.length - 1]?.at,
+            raced: targets.length - closedSoFar.length,
+            trimmedJustClosed: await countTrimmedJustClosed(
+              stores.commitments,
+              closedSoFar,
+              selection.trimmedClosed,
+            ),
+            unreadable: selection.unreadableCount,
+          }),
+        );
       },
     )
 

@@ -92,6 +92,7 @@ export interface NoteRunnerSwapDeps {
     type: 'decision';
     decision: string;
     grounds: string;
+    routine?: true;
   }) => Promise<unknown>;
   readonly wake: ((text: string) => void) | undefined;
   readonly warn: (message: string) => void;
@@ -146,7 +147,13 @@ export async function noteRunnerSwap(deps: NoteRunnerSwapDeps): Promise<void> {
     `。元の知らせ: ${deps.notice}`;
 
   try {
-    await deps.journal({ type: 'decision', decision: decisionText, grounds });
+    // クローンを起こさなかった回（対象 0 本）だけ定型の行として印を付ける。起こした回は次の手のきっかけなので付けない
+    await deps.journal({
+      type: 'decision',
+      decision: decisionText,
+      grounds,
+      ...(decision.wake ? {} : { routine: true }),
+    });
   } catch (error: unknown) {
     deps.warn(`器の入れ替えの判断を日誌へ残せませんでした: ${reasonOf(error)}\n  ${decisionText}`);
   }

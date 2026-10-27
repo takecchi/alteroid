@@ -182,6 +182,8 @@ export async function foldArchiveOnce(
           `${ARCHIVE_FOLD_EVERY_ENV} による定期実行。requireContainment: true ` +
           '（新しい行が古い行を先頭から丸ごと含むと証明できた行だけを畳んだ。' +
           '読めるものは1バイトも減っていない）。',
+        // 途中で消せない行に当たって止めた塊は判断の材料なので印を付けない
+        ...(removeFailure === undefined ? { routine: true } : {}),
       });
     } catch (error) {
       journalDroppedIds.push(...foldedThisChunk);

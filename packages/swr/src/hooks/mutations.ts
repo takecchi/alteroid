@@ -410,7 +410,16 @@ export function useSendManagerMessage() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (id: string, body: { text: string; requestId?: string; decision?: 'allow' | 'deny' }) => {
+    async (
+      id: string,
+      body: {
+        text: string;
+        requestId?: string;
+        decision?: 'allow' | 'deny';
+        // 確認への回答（requestId / decision あり）には添えない（デーモンが 400 を返す）
+        attachments?: string[];
+      },
+    ) => {
       const result = await api.api
         .POST('/managers/{id}/messages', { params: { path: { id } }, body })
         .then(unwrap);

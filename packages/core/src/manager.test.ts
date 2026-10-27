@@ -7672,13 +7672,14 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       'stopped',
     );
     const decisions = await stores.journal.list({ types: ['decision'] });
-    expect(
-      decisions.some(
-        (entry) =>
-          'decision' in entry &&
-          entry.decision.includes('鍵の回転で起こし直す前に、pids が飽和した runner=runner-a'),
-      ),
-    ).toBe(true);
+    const beforeWake = decisions.filter(
+      (entry) =>
+        'decision' in entry &&
+        entry.decision.includes('鍵の回転で起こし直す前に、pids が飽和した runner=runner-a'),
+    );
+    expect(beforeWake.length).toBeGreaterThan(0);
+    // 集計の行は定型: 要約の一覧から外す印が付く
+    for (const line of beforeWake) expect(line).toMatchObject({ routine: true });
 
     await pool.stop();
     await registry.stop();
@@ -8168,6 +8169,9 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       const summary = await periodicLinesOf(stores);
       expect(summary).toHaveLength(1);
       expect(JSON.stringify(summary[0])).toContain('畳んだ 1 本・候補 1 本');
+      // 見回りの集計の行は定型: 要約の一覧から外す印が付く。畳んだ担当ごとの行は担当の状態変化なので付かない
+      expect(summary[0]).toMatchObject({ routine: true });
+      for (const line of await foldLinesOf(stores, id)) expect(line).not.toHaveProperty('routine');
 
       await pool.stop();
       await registry.stop();

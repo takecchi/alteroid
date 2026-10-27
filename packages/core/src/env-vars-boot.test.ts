@@ -286,6 +286,10 @@ describe('migrateEnvBaseCredentialsOnce', () => {
     expect(stderr).toContain('GH_TOKEN');
     const journal = JSON.stringify(await stores.journal.list());
     expect(journal).toContain('GH_TOKEN');
+    // 1回きりの定型の移行: 要約の一覧から外す印が付く
+    const rows = await stores.journal.list({ types: ['decision'] });
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row).toMatchObject({ routine: true });
     for (const value of ['ghp_dummy_gh', 'ghp_dummy_github', 'sk-dummy-codex']) {
       expect(stderr).not.toContain(value);
       expect(journal).not.toContain(value);
