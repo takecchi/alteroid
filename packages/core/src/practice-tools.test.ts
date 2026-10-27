@@ -228,6 +228,12 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     expect(entry.decision).toContain('書き直した');
     expect(entry.decision).not.toContain('作った');
     expect(entry.grounds).toContain('書き直した');
+    // 内部の issue 番号を日誌の文に残さない（読み手にとって番号は意味がない）。全文で固定する
+    expect(entry.grounds).toBe(
+      'やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、' +
+        '前の本文は版の履歴（practice_history）に残る）',
+    );
+    expect(entry.grounds).not.toMatch(/#\d+/);
     expect(entry.target).toEqual({ kind: 'practice', slug: 'daily' });
   });
 

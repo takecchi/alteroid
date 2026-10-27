@@ -1280,7 +1280,7 @@ export async function noteIntegrationAttachmentUsage(
     {
       type: 'decision',
       decision: text,
-      grounds: `keyId=${keyId} totalBytes=${String(total)} threshold=${String(threshold)}（#4005）`,
+      grounds: `keyId=${keyId} totalBytes=${String(total)} threshold=${String(threshold)}`,
     },
     '連携の鍵の添付の閾値の知らせ',
     `keyId=${keyId}`,
@@ -4466,7 +4466,7 @@ export function createApp(deps: AppDeps) {
             : before === null
               ? '人間が直接 API から新しいやり方を器に置いた'
               : '人間が直接 API からやり方を書き直した（全文置換。前の本文は' +
-                'GET /practices/:slug/versions の版の履歴に残る——#1309）',
+                'GET /practices/:slug/versions の版の履歴に残る）',
           target: { kind: 'practice', slug },
           // 新しく置いた回には付けない: 取り消しでも書き換えでもなく、直しの合図として薄いため
           ...(rewriting ? humanActionOf(c.get('principal'), 'practice_write', slug) : {}),

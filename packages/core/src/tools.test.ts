@@ -3975,6 +3975,15 @@ describe('クローンの道具', () => {
       expect(() => createCloneTools(wiringForgotten())).toThrow(/ToolContext/);
     });
 
+    it('落ちるときのメッセージに内部の issue 番号を残さず、全文で固定する', () => {
+      expect(() => createCloneTools(wiringForgotten())).toThrow(
+        'conversationId が届いていない。ToolContext を組む側で明示すること' +
+          '（既定値へ倒すと、ask_human が積む承認が会話 id を持てなくなり、' +
+          '承認への回答を受けたターンのクローンの返答が会話に紐づかなくなる）。',
+      );
+      expect(() => createCloneTools(wiringForgotten())).not.toThrow(/#\d+/);
+    });
+
     it('⭐ 型の側: conversationId を省いた ToolContext は、そもそも型として組めない', () => {
       const wontTypeCheck = () =>
         // @ts-expect-error conversationId は必須。省いた形は型として組めない。

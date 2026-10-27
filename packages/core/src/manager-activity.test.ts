@@ -212,13 +212,36 @@ describe('describeManagerActivityForFlush — flush が配る短い1行', () => 
   it('stalled-turn-end は ⚠ を出す', () => {
     const line = describeManagerActivityForFlush('stalled-turn-end');
     expect(line).toContain('⚠');
-    expect(line).toContain('#567');
   });
 
   it('stalled-tool-use は ⚠ を出す', () => {
     const line = describeManagerActivityForFlush('stalled-tool-use');
     expect(line).toContain('⚠');
-    expect(line).toContain('#572');
+  });
+
+  // クローンの入力に入る文なので、全文で固定する。内部の issue 番号は読み手にとって意味がないので入れない
+  it('定期の知らせの文は、全状態で全文が決まっていて、`#数字` を含まない', () => {
+    const expected: Record<ManagerActivityKind, string> = {
+      'stalled-turn-end':
+        ' ⚠ この委譲はターンが終わっているらしいのに、報告がまだ届いていない。' +
+        'manager_list で `turnEndedAt` / `turnEndReason` を確かめること。',
+      'stalled-tool-use':
+        ' ⚠ この委譲は道具の応答待ちのまま、誰もその応答を待っていない。' +
+        'manager_list で `toolUseStallPending` を確かめること。',
+      'tool-running':
+        ' 道具を実行中。止まっている兆候ではない。' +
+        'manager_list で `toolUseStallPending` の name を確かめること。急かさなくてよい。',
+      unknown:
+        ' 進んでいるか止まっているかは判定できない（観測がまだ無い）。' +
+        '急かさず、次の一覧まで待つこと。',
+      active: ' 進んでいる（止まっている兆候は無い）。急かさなくてよい。',
+    };
+    const kinds = Object.keys(ALL_MANAGER_ACTIVITY_KINDS) as ManagerActivityKind[];
+    expect(kinds.length).toBe(Object.keys(expected).length);
+    for (const kind of kinds) {
+      expect(describeManagerActivityForFlush(kind)).toBe(expected[kind]);
+      expect(describeManagerActivityForFlush(kind)).not.toMatch(/#\d+/);
+    }
   });
 
   it('active は「進んでいる」と読める字を出す。⚠ は付けない（警告ではない）', () => {

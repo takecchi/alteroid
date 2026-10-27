@@ -1156,7 +1156,7 @@ const JOURNAL_PAGE = 8_000;
 // クローンが書いた「根拠なし」と同じ文字列にしない: 日誌を読む人間が「根拠を持たずに実行した」と「根拠が記録経路から落ちた」を区別できなくなるため
 export const GROUNDS_NOT_DELIVERED =
   '（根拠は記録されていない —— 呼び出しに grounds が届かなかった。' +
-  'クローンが「根拠なし」と書いたのではない。issue #1338）';
+  'クローンが「根拠なし」と書いたのではない）';
 
 const APPROVAL_LIST_BUDGET = 8_000;
 // `APPROVAL_LIST_BUDGET` を使い回さない: 由来が違い、「ふつう数本だから溢れない」を根拠にすると外れたときに一覧が丸ごと使えなくなるため
@@ -2792,7 +2792,7 @@ export function createCloneTools(context: ToolContext) {
     throw new Error(
       'conversationId が届いていない。ToolContext を組む側で明示すること' +
         '（既定値へ倒すと、ask_human が積む承認が会話 id を持てなくなり、' +
-        '#768 の穴が再発する）。',
+        '承認への回答を受けたターンのクローンの返答が会話に紐づかなくなる）。',
     );
   }
   const getConversationId = context.conversationId;
@@ -3746,7 +3746,7 @@ export function createCloneTools(context: ToolContext) {
           if (toBefore === null) {
             throw new Error(
               '到達しないはずの分岐: toBefore が無いのに toAppend が0件になった' +
-                '（#1230 の冪等化ロジックの前提が崩れている）。',
+                '（やり直しても重複させない冪等化の前提が崩れている）。',
             );
           }
           // 追記そのものを行わない: 空文字列を `persona.append` に渡すと fs/pg どちらも書き込みが起き、末尾に空行が増え `updatedAt` が進むため
@@ -3901,7 +3901,7 @@ export function createCloneTools(context: ToolContext) {
           noteDroppedRecord(
             '判断の根拠（journal_write の grounds）',
             `decision.chars=${decision.length}`,
-            new Error('呼び出しに grounds が届かなかった（issue #1338）'),
+            new Error('呼び出しに grounds が届かなかった'),
           );
         }
         const entry = await appendJournalOrThrow(
@@ -7109,11 +7109,11 @@ export function createCloneTools(context: ToolContext) {
               : `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
             grounds: beforeWasUnreadable
               ? '読めない形で入っていたやり方を書き直した（全文置換。前の本文は読めなかった' +
-                'ため分からない。版の履歴には今回の内容だけが新しい版として積まれる——#1309）'
+                'ため分からない。版の履歴には今回の内容だけが新しい版として積まれる）'
               : before === null
                 ? '新しいやり方を器に置いた'
                 : 'やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、' +
-                  '前の本文は版の履歴（practice_history）に残る——#1309）',
+                  '前の本文は版の履歴（practice_history）に残る）',
             target: { kind: 'practice', slug },
           },
           'act-completed',

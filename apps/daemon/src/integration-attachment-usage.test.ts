@@ -70,6 +70,8 @@ describe('noteIntegrationAttachmentUsage（連携の鍵の預かりの閾値の�
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('連携の鍵 k1');
     expect(lines[0]).toContain('上げることは断っていない');
+    // 日誌の根拠の文に内部の issue 番号を残さない。全文で固定する
+    expect(lines[0]).toContain('"grounds":"keyId=k1 totalBytes=1100 threshold=1000"');
   });
 
   it('上げる前から越えていれば鳴らない（越えるのは一度きり）', async () => {
