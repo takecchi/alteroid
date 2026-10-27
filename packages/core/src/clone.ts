@@ -578,6 +578,52 @@ export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env
   return Math.floor(parsed);
 }
 
+// 既定 2.5 秒: 報告・外部の合図のバーストが1束に収まる桁で、人間以外の合図にだけ掛かる遅延として許せる上限のため
+const INBOX_SETTLE_MS = 2500;
+
+// 範囲外の上限: 長すぎる待ちは、マネージャーの報告や外部の合図の返事をいつまでも遅らせるため
+const INBOX_SETTLE_MS_MAX = 10_000;
+
+export const INBOX_SETTLE_MS_ENV_KEY = 'ALTEROID_INBOX_SETTLE_MS';
+
+const INBOX_SETTLE_MS_UNREADABLE_WHAT = '暇なときの束ね待ちの設定';
+
+// 0 は無効（従来どおり、届いた合図が即ターンになる）
+export function resolveInboxSettleMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[INBOX_SETTLE_MS_ENV_KEY];
+  if (raw === undefined) return INBOX_SETTLE_MS;
+  const trimmed = raw.trim();
+  if (trimmed === '') return INBOX_SETTLE_MS;
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    noteUnreadableRecord(
+      INBOX_SETTLE_MS_UNREADABLE_WHAT,
+      `${INBOX_SETTLE_MS_ENV_KEY} chars=${String(trimmed.length)}`,
+      new Error(`数値として読めない。既定の ${String(INBOX_SETTLE_MS)}ms で走る`),
+    );
+    return INBOX_SETTLE_MS;
+  }
+  if (parsed < 0 || parsed > INBOX_SETTLE_MS_MAX) {
+    noteUnreadableRecord(
+      INBOX_SETTLE_MS_UNREADABLE_WHAT,
+      `${INBOX_SETTLE_MS_ENV_KEY} chars=${String(trimmed.length)}`,
+      new Error(
+        `0〜${String(INBOX_SETTLE_MS_MAX)}ms の外は待ちにならない。既定の ${String(INBOX_SETTLE_MS)}ms で走る`,
+      ),
+    );
+    return INBOX_SETTLE_MS;
+  }
+  return Math.floor(parsed);
+}
+
+// 待つのはマネージャーの報告と外部の合図だけ: 人間・許可確認・質問・timer・蒸留・自発・デーモン自身の知らせは待たせない
+function isSettleCandidate(event: InboxEvent): boolean {
+  if (event.type === 'manager_message') return event.kind === 'report';
+  if (event.type === 'external') return !isDaemonSelfNotice(event);
+  return false;
+}
+
 // 失敗のたびに後退する: 毎分1ターンにしないため
 const FAILED_TURN_RETRY_DELAYS_MS: readonly number[] = [10, 30, 120, 360, 720].map(
   (minutes) => minutes * 60_000,
@@ -728,6 +774,8 @@ export interface CloneOptions {
   permissionMode?: PermissionModeName;
   humanPriority?: boolean;
   mergedBatchLimit?: number;
+  /** 暇なときに届いた報告・外部の合図を、束ねるために待つ長さ（ms）。0 で無効。省略は環境変数→既定 */
+  inboxSettleMs?: number;
   dailyReportRetryDelaysMs?: readonly number[];
   restoreUnreadRetryDelaysMs?: readonly number[];
   contextUsageTimeoutMs?: number;
@@ -958,6 +1006,7 @@ class Clone implements CloneHost {
   readonly #permissionMode: PermissionModeName;
   readonly #humanPriority: boolean;
   readonly #mergedBatchLimit: number;
+  readonly #inboxSettleMs: number;
   readonly #dailyReportRetryDelays: readonly number[];
   readonly #restoreUnreadRetryDelays: readonly number[];
   readonly #contextUsageTimeoutMs: number;
@@ -1207,6 +1256,7 @@ class Clone implements CloneHost {
       permissionMode,
       humanPriority,
       mergedBatchLimit,
+      inboxSettleMs,
       dailyReportRetryDelaysMs,
       restoreUnreadRetryDelaysMs,
       contextUsageTimeoutMs,
@@ -1248,6 +1298,7 @@ class Clone implements CloneHost {
     this.#permissionMode = permissionMode ?? resolveClonePermissionMode(envSource);
     this.#humanPriority = humanPriority ?? resolveCloneHumanPriority(envSource);
     this.#mergedBatchLimit = mergedBatchLimit ?? resolveMergedBatchSizeLimit(envSource);
+    this.#inboxSettleMs = inboxSettleMs ?? resolveInboxSettleMs(envSource);
     this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
     this.#restoreUnreadRetryDelays = restoreUnreadRetryDelaysMs ?? RESTORE_UNREAD_RETRY_DELAYS_MS;
     this.#contextUsageTimeoutMs = contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
@@ -2087,6 +2138,8 @@ class Clone implements CloneHost {
 
     for await (const event of this.#delivery.inbox) {
       this.#inFlight = { events: [event], started: false };
+      // 印は必ず消費する（判定の結果にかかわらず）: 残すと、後で配り直された同じ合図が暇なときの新着に見えるため
+      const arrivedWhileIdle = this.#delivery.inbox.consumeBypass(event);
       // 枠の解除は `post()` からでなくここでだけ行う: ここだけが直前の合図の後始末（`#settleInboxEvent`）の終わりを言える地点で、
       // `post()` で降ろすと、下の `finally` が `defer: false` を決めて保持したはずの合図が `#forget` され再起動でも戻らない、
       // または `#deferred` へ積まれる前に読まれて、この合図がこのプロセスで二度と処理されなくなるため（`clone-quota-hold.test.ts`）。
@@ -2191,6 +2244,18 @@ class Clone implements CloneHost {
         await this.#settleInboxEvent(event, false);
         this.#inFlight = null;
         continue;
+      }
+
+      // 暇なときに最初に届いた報告・外部の合図だけ、短く待ってから束ねる: 待ち行列を素通りして単独で即ターンになると、直後に続く合図が「1件目だけ単独 + 残りの束」で余計に1ターン走るため
+      // 待ちの間、`#inFlight` は立てたまま・順番待ちの時計は束が決まった後で作る（`arrivedAt` は合図の `at`）ので、この待ちは turn_timing の `queue` 段に乗る
+      // 人間起点の合図が届いたら待ちを打ち切る（`Inbox#settle`）。枠が閉じている回は上で短絡済みで、ここへは来ない
+      if (
+        arrivedWhileIdle &&
+        this.#inboxSettleMs > 0 &&
+        !this.#delivery.inbox.closed &&
+        isSettleCandidate(event)
+      ) {
+        await this.#delivery.inbox.settle(this.#inboxSettleMs, isHumanOriginated);
       }
 
       // まとめ読みの判定を呼ぶ前に必ずリセットする: `#drainMergeableWithinLimit` は対象外の起点では呼ばれず、戻さないと前の反復で切ったときの断り書きが持ち越されるため。判定の呼び出しより下に置かない: 立った印を拭き取り、`external` の束でだけ断り書きが黙って消えるため

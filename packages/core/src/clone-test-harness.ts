@@ -255,10 +255,14 @@ export function setup(
     contextUsageTimeoutMs?: number;
     onFirstTurnToolSearch?: (line: string) => Promise<void>;
     permissionRuleService?: DelegatedPermissionRuleService;
+    inboxSettleMs?: number;
   } = {},
 ): Setup {
   const { fn, calls } = fakeSdk(reply, sdkOptions);
   const clone = createClone({
+    // 暇なときの束ね待ち（2.5秒）は既定で切る: 単発の報告・外部の合図を投げる試験が、実時間で毎回2.5秒止まるため。試すときは cloneOptions で上書きする
+    // env では切らない: クローンの env は子プロセスの env へ流れ、Options の写しに載るため
+    inboxSettleMs: 0,
     ...cloneOptions,
     redeliveryGate: ALWAYS_REDELIVER,
     stores,

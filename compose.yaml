@@ -212,6 +212,11 @@ x-shared-env: &shared-env
   # 差し替える。**未設定なら既定を使う**——読むのは `env[WITHHELD_REPORT_FLUSH_MS_ENV_KEY]`
   # で、空・空白は数値として読めずに既定へ倒れる（`resolveWithheldReportFlushMs` の doc）。
   ALTEROID_WITHHELD_REPORT_FLUSH_MS: ${ALTEROID_WITHHELD_REPORT_FLUSH_MS:-}
+  # `packages/core/src/clone.ts` の `INBOX_SETTLE_MS`（既定2.5秒）を差し替える。暇なときに
+  # 最初に届いたマネージャーの報告・外部の合図だけ、この間だけ待って続く合図と1ターンに束ねる
+  # （人間の発言・許可確認・質問などは待たない）。0 で無効。**未設定なら既定を使う**——
+  # 空・空白・範囲外（0〜10000 の外）は既定へ倒れる（`resolveInboxSettleMs` の doc）。
+  ALTEROID_INBOX_SETTLE_MS: ${ALTEROID_INBOX_SETTLE_MS:-}
   # 退避済み生ログの古い写しを自動で畳む周期（分）。issue #698。**未設定なら
   # 既定を使う**（`apps/daemon/src/archive-folder.ts` の
   # `DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES`）——空・空白は分数として読めずに

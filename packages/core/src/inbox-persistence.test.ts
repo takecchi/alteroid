@@ -78,6 +78,7 @@ function bootClone(
     stores,
     queryFn: fake.fn,
     env: {},
+    inboxSettleMs: 0,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
@@ -164,6 +165,7 @@ function bootGatedClone(stores: Stores): Fake & { clone: CloneHost; release: () 
     stores,
     queryFn: fake.fn,
     env: {},
+    inboxSettleMs: 0,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
@@ -1172,6 +1174,7 @@ describe('redeliveryGate（Issue #783 続き）: 配り直すその瞬間の usa
       stores,
       queryFn: fn,
       env: {},
+      inboxSettleMs: 0,
       runners: createRunnerRegistry([
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
@@ -1700,6 +1703,7 @@ describe('消した合図は配達されない（issue #1049）', () => {
       stores: gatedStores,
       queryFn: fake.fn,
       env: {},
+      inboxSettleMs: 0,
       runners: createRunnerRegistry([
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
@@ -1795,6 +1799,7 @@ describe('枠で保持している合図も落とす（issue #1049。#deferred �
       stores,
       queryFn: fake.fn,
       env: {},
+      inboxSettleMs: 0,
       runners: createRunnerRegistry([
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),

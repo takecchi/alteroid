@@ -82,6 +82,7 @@ function boot(managers: ManagerPool, stores: Stores = createMemoryStores()) {
     stores,
     queryFn: fn,
     env: {},
+    inboxSettleMs: 0,
     managers,
     redeliveryGate: ALWAYS_REDELIVER,
   });

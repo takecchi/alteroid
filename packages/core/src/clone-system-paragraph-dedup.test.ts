@@ -93,6 +93,7 @@ function boot(script: Script = {}): Boot {
     stores: createMemoryStores(),
     queryFn: fn,
     env: {},
+    inboxSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
     ...(script.mergedBatchLimit === undefined ? {} : { mergedBatchLimit: script.mergedBatchLimit }),
     runners: createRunnerRegistry([
