@@ -2748,6 +2748,10 @@
                           },
                           "required": ["kind", "target", "via"],
                           "additionalProperties": false
+                        },
+                        "routine": {
+                          "type": "boolean",
+                          "const": true
                         }
                       },
                       "required": ["type", "id", "at", "decision", "grounds"],
@@ -8502,6 +8506,10 @@
                                 },
                                 "required": ["kind", "target", "via"],
                                 "additionalProperties": false
+                              },
+                              "routine": {
+                                "type": "boolean",
+                                "const": true
                               }
                             },
                             "required": ["type", "id", "at", "decision", "grounds"],
@@ -10766,6 +10774,10 @@
                           },
                           "required": ["kind", "target", "via"],
                           "additionalProperties": false
+                        },
+                        "routine": {
+                          "type": "boolean",
+                          "const": true
                         }
                       },
                       "required": ["type", "id", "at", "decision", "grounds"],
@@ -15282,6 +15294,10 @@
                                   },
                                   "required": ["kind", "target", "via"],
                                   "additionalProperties": false
+                                },
+                                "routine": {
+                                  "type": "boolean",
+                                  "const": true
                                 }
                               },
                               "required": ["type", "id", "at", "decision", "grounds"],
@@ -17411,6 +17427,10 @@
                                   },
                                   "required": ["kind", "target", "via"],
                                   "additionalProperties": false
+                                },
+                                "routine": {
+                                  "type": "boolean",
+                                  "const": true
                                 }
                               },
                               "required": ["type", "id", "at", "decision", "grounds"],
@@ -19540,6 +19560,10 @@
                                 },
                                 "required": ["kind", "target", "via"],
                                 "additionalProperties": false
+                              },
+                              "routine": {
+                                "type": "boolean",
+                                "const": true
                               }
                             },
                             "required": ["type", "id", "at", "decision", "grounds"],
@@ -21660,6 +21684,10 @@
                                 },
                                 "required": ["kind", "target", "via"],
                                 "additionalProperties": false
+                              },
+                              "routine": {
+                                "type": "boolean",
+                                "const": true
                               }
                             },
                             "required": ["type", "id", "at", "decision", "grounds"],
