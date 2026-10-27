@@ -8194,6 +8194,32 @@ describe('クローンの道具', () => {
     expect(found?.description).toContain('done');
   });
 
+  it('manager_send の説明文は、答え方の細則を確認の本文へ指し、requestId 無しの decision を付けない規則を残す（本文との二重化を外した後）', () => {
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const description = tools.find((entry) => entry.name === 'manager_send')?.description ?? '';
+
+    // 指し先: 細則は届いた確認の本文・拒否の報告の本文が言う
+    expect(description).toContain('答え方の細則は、届いた確認の本文が言う');
+    expect(description).toContain('答え方は報告の本文が言う');
+    // 2種類の区別と、確認として届かない合図への答え
+    expect(description).toContain('toolu_…');
+    expect(description).toContain('UUID');
+    expect(description).toContain('requestId が無く、許可として答える口は無い');
+    // requestId 無しの decision を付けない（別の確認へ当たる事故の防止）
+    expect(description).toContain('requestId 無しの decision は付けないこと');
+    expect(description).toContain('許可確認への回答では decision を必ず付けること');
+    expect(description).toContain('decision を付けない追加指示で送ること');
+    // 確認の本文と二重になる細則は、ここへ戻さない
+    expect(description).not.toContain('10分以内に1回だけ');
+    expect(description).not.toContain('迂回・敵対');
+    expect(description).not.toContain('入力を1字も変えないこと');
+  });
+
   it('委譲先が無い場面（蒸留の内部ターン）は、黙らずにそう返す', async () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({
