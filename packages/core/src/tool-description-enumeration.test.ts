@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { z } from 'zod';
+import { z } from 'zod';
 
 import { ATTACHMENT_FROM_CLASSES } from './attachment.js';
 import { CLONE_REMOVABLE_INBOX_EVENT_TYPES } from './inbox-backlog.js';
@@ -292,34 +292,49 @@ describe('配列の欄の説明の先頭の例（#5312）', () => {
   });
 });
 
-// 内部の issue 番号・段の番号（`#1394 段④⑥⑦`・`#315` など）は、クローンが道具を使うのに要らず、後で古くなる。範囲は直した道具だけに限る（他の道具の説明文には番号がまだ在る）
-const NUMBER_FREE_TOOLS = ['runner_list', 'manager_list'] as const;
+// 内部の issue 番号・段の番号（`#1394 段④⑥⑦`・`#315` など）は、クローンが道具を使うのに要らず、後で古くなる。全道具を走査し、番号を残してよい道具だけを許可リストで明示する
+const NUMBER_ALLOWED: Readonly<Record<string, string>> = {
+  manager_report:
+    'マネージャー報告の束は別の担当（TOKEN-1）が持つ。説明文に `#323` が残っている。そちらで外すときにこの行を消す',
+};
 
-function fieldDescriptionsOf(tool: string): string[] {
-  const tools = createCloneTools({
+function allToolsForNumberScan() {
+  return createCloneTools({
     stores: createMemoryStores(),
     emit: () => undefined,
     memoryCause: () => 'clone',
     conversationId: () => undefined,
   });
-  const schema = tools.find((entry) => entry.name === tool)?.inputSchema as unknown as
-    z.ZodObject<Record<string, z.ZodTypeAny>> | undefined;
-  return Object.values(schema?.shape ?? {}).map((field) => field.description ?? '');
 }
 
 describe('説明文に内部の issue 番号を残さない', () => {
-  describe.each(NUMBER_FREE_TOOLS)('%s', (tool) => {
-    it('道具の説明文と欄の説明に `#<数字>` が無い', () => {
-      const texts = [descriptionOf(tool), ...fieldDescriptionsOf(tool)];
-      expect(texts[0], `${tool} の description が取れない`).not.toBe('');
-      const found = texts.flatMap((text) => text.match(/#\d+/g) ?? []);
+  const tools = allToolsForNumberScan();
+
+  it('許可リストの道具は実在する（消えた道具の許可を残さない）', () => {
+    const names = tools.map((entry) => entry.name);
+    expect(Object.keys(NUMBER_ALLOWED).filter((name) => !names.includes(name))).toEqual([]);
+  });
+
+  it.each(tools.filter((entry) => NUMBER_ALLOWED[entry.name] === undefined).map((t) => t.name))(
+    '%s の説明文と欄の説明（入れ子を含む）に `#<数字>` が無い',
+    (name) => {
+      const entry = tools.find((candidate) => candidate.name === name)!;
+      expect(entry.description, `${name} の description が取れない`).not.toBe('');
+      // 欄の説明は入れ子（配列の要素・オブジェクトの欄）も含めて JSON Schema から拾う
+      const schemaText = JSON.stringify(
+        z.toJSONSchema(entry.inputSchema as z.ZodType, { unrepresentable: 'any' }),
+      );
+      const found = [
+        ...(entry.description.match(/#\d+/g) ?? []),
+        ...(schemaText.match(/#\d+/g) ?? []),
+      ];
       expect(
         found,
-        `【赤の意味】${tool} の説明に内部の issue 番号が入っている: ${found.join(' / ')}。` +
+        `【赤の意味】${name} の説明に内部の issue 番号が入っている: ${found.join(' / ')}。` +
           '履歴はコードのコメントと Issue・PR に残す。使い方に効く規則だけを番号なしの文で書くこと。',
       ).toEqual([]);
-    });
-  });
+    },
+  );
 });
 
 describe('実装が持つ一覧と、クローンへ渡る説明文', () => {

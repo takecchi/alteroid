@@ -709,7 +709,7 @@ describe('renderManagerList', () => {
       const text = renderManagerList([
         manager({ toolUseStallPending: [{ id: 'toolu_2', name: 'Bash' }] }),
       ]);
-      expect(text).toContain('道具を実行中（矛盾ではない。Issue #2173）');
+      expect(text).toContain('道具を実行中（矛盾ではない）');
       expect(text).not.toContain('⚠ 道具の応答待ち');
     });
 

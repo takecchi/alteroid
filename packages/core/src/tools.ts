@@ -1481,7 +1481,7 @@ async function describeCommitmentNotOnLedger(
   if (recorded.length > 0) {
     return (
       `${notOnLedger}**ただしこの id を機械が名乗った記録は日誌に在る**` +
-      `（${recorded[0]?.at} の行）。⟹ 台帳に載った後に行が消えたということである（#856 本体）。` +
+      `（${recorded[0]?.at} の行）。⟹ 台帳に載った後に行が消えたということである。` +
       'id の取り違えではない。'
     );
   }
@@ -1825,7 +1825,7 @@ export function describeTurnEnd(
 
   const stopSequenceNote =
     manager.turnEndReason === 'stop_sequence'
-      ? '**枠の壁（利用上限）の可能性が高い** — Issue #567 の「報告が配られない」とは別の原因である。 '
+      ? '**枠の壁（利用上限）の可能性が高い** — 「報告が配られない」症状とは別の原因である。 '
       : '';
   const tailNote =
     manager.turnEndTail === undefined || manager.turnEndTail === ''
@@ -1872,7 +1872,7 @@ export function describeToolUseStall(
 
   if (activity === 'tool-running') {
     return (
-      '  道具を実行中（矛盾ではない。Issue #2173）。' +
+      '  道具を実行中（矛盾ではない）。' +
       '生ログの末尾の assistant 行が stop_reason: tool_use で、対応する tool_result が生ログに無く、' +
       'デーモン側の返事待ち（waiting）も空だが、未応答の道具はどれも応答をデーモンだけが返す種類' +
       '（AskUserQuestion 等）ではない — 既定の permissionMode: auto ではこれらの道具の確認は' +
@@ -1901,7 +1901,7 @@ export function describeToolUseStall(
     '(3) その末尾に isApiErrorMessage: true の行（この repo ではなく CLI が生ログへ書く欄。' +
     '枠の壁などで API が返した文言を合成した行）が在れば、この委譲は既に死んでいる — ' +
     'manager_stop して引き継ぐこと。' +
-    '(4) それが無いなら #572 の症状そのもの — 確認はクローンの受信箱に一度も現れていない。' +
+    '(4) それが無いなら、確認がクローンの受信箱に一度も現れない症状そのものである。' +
     '確認の本文を生ログから写して Issue へ置いてから manager_stop して引き継ぐこと' +
     '（写さずに止めると、質問は誰にも読まれないまま消える）。' +
     RESTART_BEFORE_CHECK_ADVICE
@@ -1970,7 +1970,7 @@ function describeTokenGeneration(manager: ManagerSummary): string | null {
     '普通に起こる——それ自体は症状ではない）。' +
     describeBackgroundTasksForStaleToken(manager) +
     '委譲が done なら、manager_send の時点で畳んで新しい鍵で起こし直す' +
-    '（背景処理・確認待ちが残っていれば断る。Issue #2851）。' +
+    '（背景処理・確認待ちが残っていれば断る）。' +
     '背景処理・確認待ちが無いのにこの行が消えないまま 429 が続くようなら、' +
     `起こし直すこと。${STALE_TOKEN_RESTART_ADVICE}`
   );
@@ -4296,7 +4296,7 @@ export function createCloneTools(context: ToolContext) {
               '人間の回答をこの確認へ返すために必要なので、managerId と必ず対で渡すこと。' +
               '⚠️ 通るのは受信箱に確認として届いた requestId だけである。分類器の拒否の確認では toolu_… の形のことがあるが、' +
               '生ログから拾った toolu_…（tool_use_id）や req_…（API の request id）は、確認として届いていなければ通らない。' +
-              '受信箱に届いていない確認に、生ログから答える手段は無い（#572）',
+              '受信箱に届いていない確認に、生ログから答える手段は無い',
           ),
       },
       async ({ question, context: background, questions, managerId, requestId }) => {
@@ -6151,7 +6151,7 @@ export function createCloneTools(context: ToolContext) {
       [
         '受信箱（`InboxStore`）の未読を、**絞り込みを渡してまとめて畳む（消す）**。',
         '1件ずつ消す道具（内部の `remove()`）はこの器から呼べない——同じ失敗の写しが',
-        '数千件積もると、1ターン1件のペースでの排出それ自体が文脈窓を食い潰す（issue #972）。',
+        '数千件積もると、1ターン1件のペースでの排出それ自体が文脈窓を食い潰す。',
         '**既定は試算（dryRun）で、1件も消さない。** 実際に消すには `dryRun: false` を明示すること——',
         '消した合図を戻す道具はこの器に無いので、撃ち間違えは道具では戻せない。',
         `**\`types\` は必須で、選べる5種類（${CLONE_REMOVABLE_INBOX_EVENT_TYPES.join(' / ')}）を` +
@@ -6159,7 +6159,7 @@ export function createCloneTools(context: ToolContext) {
           '（「全部消す」を1回で撃てる形は作らない——それは `POST /reset` の役目である）。',
         '**人間起点の合図（`human_message` / `human_answer`）はそもそも選べない。**' +
           'あなたは自分の側の都合で溜まった合図だけを畳める——人間から届いた合図を' +
-          '自分の判断で畳む口は、この道具には無い（オーナー判断。issue #972）。',
+          '自分の判断で畳む口は、この道具には無い（オーナー判断）。',
         '**行は消える。** `commitment_close_many` の「閉じる（closedAt を付けるだけで行は残る）」とは違い、',
         '受信箱は「まだ処理し終えていない」という事実だけを持つ器で、片付いた後の記録を残す場所ではない',
         '（`InboxStore` の doc）。**消した id は全部日誌に残る。**',
@@ -6328,7 +6328,7 @@ export function createCloneTools(context: ToolContext) {
               '**1件も消していない。** 配達の待ち行列から落とす口が渡されていないので、' +
                 'この道具は消し込みを拒んだ。',
               '消しても、既にクローンのメモリ上の待ち行列へ載った合図は配られ続ける' +
-                '（issue #1049）。「消した」と名乗って配達が続く状態を作らないために、' +
+                '。「消した」と名乗って配達が続く状態を作らないために、' +
                 'ここで止めている。',
               '⚠️ これは配線の不備である（本番の `ToolContext` は2箇所とも' +
                 '`dropQueuedInboxEvents` を渡している）。人間へ上げること。',
@@ -6994,7 +6994,7 @@ export function createCloneTools(context: ToolContext) {
       'practice_history',
       [
         'やり方1件の、追記専用の版の履歴を返す（本文は返さない。版番号・種類・題・',
-        '文字数・書かれた時刻だけ——#1309）。',
+        '文字数・書かれた時刻だけ）。',
         '**write のたびに版が1つ増える。remove しても版は消えない**——消した slug を',
         '同じ名前で作り直しても、版番号は消える前の続きから振られる。',
         '中身が要るなら practice_read slug=<slug> version=<版番号> で開くこと。',
@@ -7364,7 +7364,7 @@ export function createCloneTools(context: ToolContext) {
         '自分（クローン）が記録・読み出しをしそこねた跡（`noteDroppedRecord` 等が',
         'stderr へ残す行）を、このプロセスの中から読み戻す。',
         '器の外（Railway 等のホスティング先のログ）へ出ている生の stderr の代わりではない',
-        '——そちらは既に人間が読める（#242）。ここは、器の中からは1行も遡れなかった',
+        '——そちらは既に人間が読める。ここは、器の中からは1行も遡れなかった',
         '穴を塞ぐためのものである。',
         'このプロセスが生きているあいだの直近の分だけを持つ（帳面の保持件数は',
         `${RECENT_TRACE_LIMIT} 件。それより古い分はこのプロセスの中には無く、器の外の`,
@@ -7386,7 +7386,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             `直近から数えて何件をスキップしてから見るか（${formatIntRangeJa({ min: 0, max: RECENT_TRACE_LIMIT })}。既定 0＝最新から）。` +
-              '#662。前回の応答の断り書きに出た offset をそのまま渡せば、' +
+              '前回の応答の断り書きに出た offset をそのまま渡せば、' +
               '予算や limit で切れて省略された古い側へ実際に進める。',
           ),
       },
@@ -7598,10 +7598,10 @@ export function createCloneTools(context: ToolContext) {
           '（クローンの allow や担当の伝言は人間の確認と見なされない。通すには人間が中身を見て誤検知だと確かめる必要がある）。' +
           'allow の後は、同じ入力で撃ち直しても分類器にまた止められうるので、' +
           '続けて同じ入力を撃たず別の手（入力を変える・手順を分ける・人間に頼む）を取るよう、' +
-          'decision を付けない追加指示で伝えること（#4904）。' +
+          'decision を付けない追加指示で伝えること。' +
           'ただし Bash で、command に * と改行を含まない呼び出しなら、allow すると同じ入力の1回だけを10分通す一時規則が' +
           'そのセッションに足される（そのセッションの他の作業者にも効く。確認の本文がそう言う）。' +
-          'そのときは「撃ち直すなら入力を1字も変えないこと。それでも拒否されたら別の手を取ること」と伝えること（#4905）。' +
+          'そのときは「撃ち直すなら入力を1字も変えないこと。それでも拒否されたら別の手を取ること」と伝えること。' +
           '(2) それ以外の許可確認（requestId は UUID の形。分類器の拒否が続いて通常の確認へ落ちた回を含む）: ' +
           'allow すれば、その呼び出しがそのまま通る（撃ち直しは要らない）。',
         // 答える先の無い合図に decision を付けさせない: requestId 無しの decision は待ちが1件ならその1件へ当たり、無関係の確認を許可してしまうため
@@ -7647,7 +7647,7 @@ export function createCloneTools(context: ToolContext) {
               '1本のマネージャーが複数を同時に待つことがあるので、回答では必ず添えること。' +
               '⚠️ 通るのは受信箱に確認として届いた requestId だけである。分類器の拒否の確認では toolu_… の形のことがあるが、' +
               '生ログから拾った toolu_…（tool_use_id）や req_…（API の request id）は、確認として届いていなければ通らない。' +
-              '受信箱に届いていない確認に、生ログから答える手段は無い（#572）',
+              '受信箱に届いていない確認に、生ログから答える手段は無い',
           ),
       },
       async ({ managerId, message, decision, requestId, attachments }) => {
@@ -8985,7 +8985,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             `人間との往復を何件遡るか（${formatIntRangeJa({ min: 1, max: 10_000 })}。既定 2000。マネージャーとの往復・内部ターンは` +
-              '数えない。issue #418。conversationId を指定したときは、その会話の人間との往復だけを数える）。遡り切れたかは応答の注記で分かる',
+              '数えない。conversationId を指定したときは、その会話の人間との往復だけを数える）。遡り切れたかは応答の注記で分かる',
           ),
         limit: z
           .number()
@@ -9567,14 +9567,14 @@ export function createCloneTools(context: ToolContext) {
           return text(
             '消せない——いまは委譲の道具が配線されていない内部ターンで、走行中の' +
               'マネージャーがこの退避を使っているかどうかを確かめる材料が無い' +
-              '（安全側に倒して拒む。#698）。',
+              '（安全側に倒して拒む）。',
           );
         }
         if (guard.kind === 'denied') {
           return text(
             `消せない——マネージャー ${guard.managerId} がいま走行中で、この退避を使っている` +
               '（走行中の委譲を追う最後の手段が消えるため。それでも消すなら overrideReason に' +
-              '理由を書くこと。#698）。',
+              '理由を書くこと）。',
           );
         }
         // 本文は消すと戻らないので、日誌を先に書いてから消す（`removeArchiveJournalFirst`）。書けなければ消さない（`act-not-performed`）。
@@ -10006,8 +10006,8 @@ export function createCloneTools(context: ToolContext) {
           overview.autoFolded === undefined
             ? ''
             : overview.autoFolded.length === 0
-              ? '\n（pids 逼迫を検出したが、この呼び出しでは畳む候補が無かった。#1394 段④⑥⑦）'
-              : `\n⚠ この呼び出しで自動畳み（#1394 段④⑥⑦）が働いた:\n${overview.autoFolded
+              ? '\n（pids 逼迫を検出したが、この呼び出しでは畳む候補が無かった）'
+              : `\n⚠ この呼び出しで自動畳みが働いた:\n${overview.autoFolded
                   .map((entry) => `  - [${entry.managerId}] ${entry.outcome}: ${entry.detail}`)
                   .join('\n')}`;
 
@@ -10322,7 +10322,7 @@ export function createCloneTools(context: ToolContext) {
             'pids について: **pids の現在値/上限そのものは今も器の合計であって内訳ではない。** ' +
               'この2つの数字だけからは、何がその数を持っているかは分からない。' +
               '**対応している runner なら、その内訳（ゾンビ/生存・ゾンビの comm 別・' +
-              'いちばん古いゾンビの年齢）が器ごとのブロックに出る**（#315 の可視化。' +
+              'いちばん古いゾンビの年齢）が器ごとのブロックに出る**（' +
               '対応していない runner——古い版——では内訳の行自体が出ない）。' +
               '**空き（上限 − 現在値）は「次に何本置けるか」を意味しない**——実測では ' +
               'vitest が1本立ち上がるだけで pids が +131 跳ねている。',

@@ -7182,7 +7182,7 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('症状ではない）');
     });
 
-    it('turnEndReason が stop_sequence のときは枠の壁（利用上限）の可能性を言い添え、#567 とは別原因だと言い分ける', async () => {
+    it('turnEndReason が stop_sequence のときは枠の壁（利用上限）の可能性を言い添え、「報告が配られない」症状とは別原因だと言い分ける', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0];
@@ -7195,8 +7195,8 @@ describe('クローンの道具', () => {
       expect(reply).toContain('⚠ ターンは');
       expect(reply).toContain('枠の壁');
       expect(reply).toContain('利用上限');
-      expect(reply).toContain('Issue #567');
-      expect(reply).toContain('とは別の原因である');
+      expect(reply).toContain('「報告が配られない」症状とは別の原因である');
+      expect(reply).not.toMatch(/#\d+/);
     });
 
     it('turnEndTail が長いときは抜粋され、全文はそのまま出ない', async () => {
@@ -8695,6 +8695,66 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('この cursor は読めない');
     expect(reply).toContain('mgr-idle');
     expect(reply).toContain('folded');
+  });
+
+  it('自動畳みの注記は、候補が無かった回も働いた回も、内部の番号を含まず「畳んだ・見送った」を名乗る', async () => {
+    const runner = {
+      label: 'runner-a',
+      revision: { status: 'unknown' as const },
+      state: 'connected' as const,
+      since: '2026-01-01T00:00:00.000Z',
+      runnerId: 'runner-a',
+      managers: [],
+    };
+    const base = {
+      runners: [runner],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' as const },
+    };
+
+    const none = harness();
+    none.setRunnersOverview({ ...base, autoFolded: [] });
+    const noneReply = await none.call('runner_list', {});
+    expect(noneReply).toContain('（pids 逼迫を検出したが、この呼び出しでは畳む候補が無かった）');
+    expect(noneReply).not.toMatch(/#\d+/);
+
+    const folded = harness();
+    folded.setRunnersOverview({
+      ...base,
+      autoFolded: [
+        { managerId: 'mgr-idle', runnerId: 'runner-a', outcome: 'folded', detail: '畳んだ' },
+      ],
+    });
+    const foldedReply = await folded.call('runner_list', {});
+    expect(foldedReply).toContain(
+      '⚠ この呼び出しで自動畳みが働いた:\n  - [mgr-idle] folded: 畳んだ',
+    );
+    expect(foldedReply).not.toMatch(/#\d+/);
+  });
+
+  it('resources: true の pids の注記は、内訳が出る条件と出ない版を言い、内部の番号を含まない', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unknown' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    expect(reply).toContain(
+      'いちばん古いゾンビの年齢）が器ごとのブロックに出る**（対応していない runner——古い版——では内訳の行自体が出ない）',
+    );
+    expect(reply).not.toMatch(/#\d+/);
   });
 
   it('デーモンの版と runner の版を、同じ出力に並べて出す', async () => {
@@ -15513,7 +15573,8 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
 
     expect(reply).toContain('台帳に無い');
     expect(reply).toContain('機械が名乗った記録は日誌に在る');
-    expect(reply).toContain('#856 本体');
+    expect(reply).toContain('台帳に載った後に行が消えたということである');
+    expect(reply).not.toMatch(/#\d+/);
     expect(reply).toContain('id の取り違えではない');
   });
 
