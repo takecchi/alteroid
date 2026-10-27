@@ -1843,10 +1843,9 @@ export function describeMemorySessionDelta(input: {
   if (injectedMemoryChars === null) {
     return (
       `いまの記憶の総量（現在値）: ${formatMemoryCharCount(afterChars)} 文字。` +
-      ' ⚠️ これはセッション構築時点との差ではなく現在値である' +
-      '——セッション構築時点の値（`self_status` が「システムプロンプトへ焼き込んだ' +
+      ' ⚠️ セッション構築時点の値（`self_status` が「システムプロンプトへ焼き込んだ' +
       '記憶の文字数」として出す数）がこの呼び出しからは引けなかったため、' +
-      '代わりに現在値だけを出している。'
+      'これはセッション構築時点との差ではなく現在値である。'
     );
   }
 

@@ -750,6 +750,138 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('memory_frontmatter_set');
     });
 
+    // 応答の重複の直し（#5359）: 意図して入れた差分・床・見込み・セッション差・順位は残し、重複と条件外の文だけを削る
+    describe('応答の重複（#5359）', () => {
+      const seedPremises = async (h: Harness): Promise<void> => {
+        for (let i = 0; i < 20; i += 1) {
+          await h.stores.persona.write(
+            `prem-${i}`,
+            `---\ntype: premise\ndescription: 前提${i}\n---\n# 前提${i}\n${'## 節\n本文\n'.repeat(i + 1)}`,
+          );
+        }
+      };
+      const count = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
+
+      it('新規 fact の書き込みと追記には premise の順位が出ない（premise が20件在っても）', async () => {
+        const h = harness();
+        await seedPremises(h);
+
+        const created = await h.call('memory_write', {
+          slug: 'fact-new',
+          content: '---\ntype: fact\ndescription: 事実\n---\n# 事実\n本文',
+          summary: '新規',
+        });
+        const appended = await h.call('memory_append', {
+          slug: 'fact-new',
+          content: '追記',
+          summary: '追記',
+        });
+
+        for (const reply of [created, appended]) {
+          expect(reply).not.toContain('premise の大きさの順位');
+          expect(reply).toContain('毎ターンの床');
+          expect(reply).toContain('次のターンの会話へ載る見込み');
+          expect(reply).toContain('いまの記憶の総量');
+        }
+        expect(created.length).toBeLessThan(700);
+        expect(appended.length).toBeLessThan(600);
+      });
+
+      it('premise の書き込みには順位が出る', async () => {
+        const h = harness();
+        await seedPremises(h);
+
+        const created = await h.call('memory_write', {
+          slug: 'prem-new',
+          content: '# 新\n本文',
+          summary: '新規',
+        });
+        const appended = await h.call('memory_append', {
+          slug: 'prem-0',
+          content: '追記',
+          summary: '追記',
+        });
+
+        expect(created).toContain('premise の大きさの順位（大きい順、全 21 件）');
+        expect(appended).toContain('premise の大きさの順位（大きい順、全 21 件）');
+      });
+
+      it('fact の書き込みでも、premise の並びが変わる（premise から fact へ落とす）ときは順位が出る', async () => {
+        const h = harness();
+        await seedPremises(h);
+
+        const reply = await writeBased(h, {
+          slug: 'prem-19',
+          content: '---\ntype: fact\ndescription: 落とした\n---\n# 前提19\n本文',
+          summary: 'fact へ',
+        });
+
+        expect(reply).toContain('premise の大きさの順位（大きい順、全 19 件）');
+      });
+
+      it('新規作成の応答は「新規作成」を1回だけ言い、「更新した」と言わない（write / append・fact / premise）', async () => {
+        const h = harness();
+        const factReply = await h.call('memory_write', {
+          slug: 'fact-new',
+          content: '---\ntype: fact\n---\n# 事実',
+          summary: '新規',
+        });
+        const premiseReply = await h.call('memory_write', {
+          slug: 'prem-new',
+          content: '# 前提',
+          summary: '新規',
+        });
+        const appendReply = await h.call('memory_append', {
+          slug: 'appended-new',
+          content: '最初の1行',
+          summary: '新規',
+        });
+
+        for (const reply of [factReply, premiseReply, appendReply]) {
+          expect(count(reply, '新規作成')).toBe(1);
+          expect(reply).not.toContain('更新した');
+          expect(reply).not.toContain('追記した');
+        }
+        expect(factReply).toContain('記憶 fact-new を作った（');
+      });
+
+      it('既存文書の書き換えは従来どおり「更新した」と差分を言う', async () => {
+        const h = harness();
+        await h.stores.persona.write('doc', '# 総論\n本文');
+
+        const reply = await writeBased(h, {
+          slug: 'doc',
+          content: '# 総論\n本文を増やした',
+          summary: 'x',
+        });
+
+        expect(reply).toContain('記憶 doc を更新した。');
+        expect(reply).toContain('→');
+        expect(reply).not.toContain('新規作成');
+      });
+
+      it('予測の注意文は、見込みを出した応答に1回だけ付く', async () => {
+        const h = harness();
+        await seedPremises(h);
+
+        for (const reply of [
+          await h.call('memory_write', { slug: 'prem-new', content: '# 新', summary: 'x' }),
+          await h.call('memory_append', { slug: 'prem-0', content: '追記', summary: 'x' }),
+        ]) {
+          expect(count(reply, '予測であって実測ではない')).toBe(1);
+        }
+      });
+
+      it('セッション構築時点の値が引けない回の現在値の断りは、現在値の語を重ねない', async () => {
+        const h = harness();
+
+        const reply = await h.call('memory_write', { slug: 'a', content: '# a', summary: 'x' });
+
+        expect(reply).toContain('現在値である');
+        expect(count(reply, '現在値だけを出している')).toBe(0);
+      });
+    });
+
     it('memory_append の新規作成でも同じ3要素が出る（premise）', async () => {
       const h = harness();
 
@@ -1034,7 +1166,20 @@ describe('クローンの道具', () => {
       expect(idxMedium).toBeLessThan(idxSmall);
     });
 
-    it('premise がまだ無ければ、順位ではなくその旨を出す', async () => {
+    it('最後の premise を fact へ落とした回は、順位ではなく premise がもう無い旨を出す', async () => {
+      const h = harness(() => RUNTIME_BASE);
+      await h.stores.persona.write('only-premise', '# 唯一の前提\n本文');
+      const reply = await writeBased(h, {
+        slug: 'only-premise',
+        content: '---\ntype: fact\ndescription: 事実\n---\n# 事実\n本文',
+        summary: 'fact へ',
+      });
+
+      expect(reply).toContain('premise の大きさの順位');
+      expect(reply).toContain('premise はまだ無い');
+    });
+
+    it('premise がまだ無い状態で fact を書いても、順位は出ない（fact は順位の対象外）', async () => {
       const h = harness(() => RUNTIME_BASE);
       const reply = await writeBased(h, {
         slug: 'fact-only',
@@ -1042,8 +1187,7 @@ describe('クローンの道具', () => {
         summary: '新規',
       });
 
-      expect(reply).toContain('premise の大きさの順位');
-      expect(reply).toContain('premise はまだ無い');
+      expect(reply).not.toContain('premise の大きさの順位');
     });
 
     it('⭐ premise が多いと、順位は文字数の予算で切り、省いた件数を言う', async () => {
@@ -14552,7 +14696,9 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
   const UPDATED_AT_PATTERN = /更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z/;
   const ID_AND_NAME_PATTERN = /^\s*-\s+\S+\s+\S/;
   const TIMESTAMP_PAIR_PATTERN =
-    /作成: (?:\d{4}-\d{2}-\d{2}T[\d:.]+Z|不明) \/ 更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z/;
+    /作成: (?:\d{4}-\d{2}-\d{2}T[\d:.]+Z|不明)(?: \/ 更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z)?/;
+  // 更新が作成と常に（未了の行は）同じ一覧は、同じ値のとき更新を出さない（#5352。説明文が「出ないときは作成と同じ」と言う）
+  const OMITS_UPDATED_WHEN_SAME = new Set(['approvals_list', 'commitment_list']);
 
   function hasSummaryBeyondTimestamps(entry: string): boolean {
     const withoutTimestamps = entry.replace(TIMESTAMP_PAIR_PATTERN, '');
@@ -14562,11 +14708,11 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     return hasSummaryLine || hasInlineSummary;
   }
 
-  function fiveFieldViolations(entry: string): string[] {
+  function fiveFieldViolations(entry: string, updatedMayBeOmitted = false): string[] {
     const violations: string[] = [];
     const firstLine = entry.split('\n')[0] ?? '';
     if (!CREATED_AT_PATTERN.test(entry)) violations.push('作成 が無い');
-    if (!UPDATED_AT_PATTERN.test(entry)) violations.push('更新 が無い');
+    if (!updatedMayBeOmitted && !UPDATED_AT_PATTERN.test(entry)) violations.push('更新 が無い');
     if (!ID_AND_NAME_PATTERN.test(firstLine)) violations.push('id + 名前 が先頭行に無い');
     if (!hasSummaryBeyondTimestamps(entry))
       violations.push('概要 が無い（3行目も、1行目の — の後ろも空）');
@@ -14596,7 +14742,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       expect(entries.length).toBeGreaterThan(0);
 
       for (const entry of entries) {
-        expect(fiveFieldViolations(entry)).toEqual([]);
+        expect(fiveFieldViolations(entry, OMITS_UPDATED_WHEN_SAME.has(name))).toEqual([]);
       }
     },
   );
@@ -14853,7 +14999,9 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         if (!line.startsWith('- ')) continue;
         expect(line).toMatch(/^- \S+ \S/);
         expect(lines[index + 1]).toMatch(
-          /^ {2}作成: \d{4}-\d{2}-\d{2}T[\d:.]+Z \/ 更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z$/,
+          OMITS_UPDATED_WHEN_SAME.has(name)
+            ? /^ {2}作成: \d{4}-\d{2}-\d{2}T[\d:.]+Z(?: \/ 更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z)?$/
+            : /^ {2}作成: \d{4}-\d{2}-\d{2}T[\d:.]+Z \/ 更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z$/,
         );
         expect(lines[index + 2]).toMatch(/^ {2}\S/);
       }
@@ -15610,7 +15758,11 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
 
     const lines = (await h.call('commitment_list', { includeClosed: true })).split('\n');
 
-    expect(lines).toContain('  作成: 2026-02-01T00:00:00.000Z / 更新: 2026-02-01T00:00:00.000Z');
+    // 未了の行は更新が作成と同じなので、更新は出ない（#5352）
+    expect(lines).toContain('  作成: 2026-02-01T00:00:00.000Z');
+    expect(lines).not.toContain(
+      '  作成: 2026-02-01T00:00:00.000Z / 更新: 2026-02-01T00:00:00.000Z',
+    );
     expect(lines).toContain('  作成: 2026-02-02T00:00:00.000Z / 更新: 2026-02-03T00:00:00.000Z');
   });
 
@@ -15644,7 +15796,7 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
     expect(titleLine).toBe('- ap-leading-newline 先頭が改行の質問');
   });
 
-  it('approvals_list は作成と更新を出す（回答待ちだけの一覧なので両方が一致する）', async () => {
+  it('approvals_list は作成だけを出す（回答待ちだけの一覧なので更新は常に作成と同じ。読み方は説明文が言う）', async () => {
     const h = harness();
     await h.stores.jobs.putApproval({
       id: 'ap-1',
@@ -15654,10 +15806,8 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
 
     const reply = await h.call('approvals_list', {});
 
-    expect(reply.split('\n')).toContain(
-      '  作成: 2026-04-01T00:00:00.000Z / 更新: 2026-04-01T00:00:00.000Z',
-    );
-    expect(reply).toContain('更新＝この1件が最後に変わった時刻');
+    expect(reply.split('\n')).toContain('  作成: 2026-04-01T00:00:00.000Z');
+    expect(reply).not.toContain('更新');
   });
 });
 
@@ -16536,8 +16686,9 @@ describe('commitment_list に origin の絞りを足す（issue #426）', () => 
   it('origin を指定した省略の断り書きは、絞った後の件数だと分かる形で言う（数え違いを「絞る前の全体」と誤読させない）', async () => {
     const h = harness();
     const long = 'あ'.repeat(500);
-    const managerCount = 25;
-    const selfCount = 25;
+    // 行ごとの同じ時刻・札を出さなくなって1行が短くなったので、予算（8000字）を超える件数にしてある（#5352）
+    const managerCount = 40;
+    const selfCount = 40;
     for (let index = 0; index < managerCount; index += 1) {
       await h.stores.commitments.open({
         id: `manager-${index}`,
@@ -16589,7 +16740,8 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
   it('T2: 予算で切れたら次に打つ cursor がそのまま案内される', async () => {
     const h = harness();
     const long = 'あ'.repeat(500);
-    for (let index = 0; index < 25; index += 1) {
+    // 行ごとの同じ時刻・札を出さなくなって1行が短くなったので、予算（8000字）を超える件数にしてある（#5352）
+    for (let index = 0; index < 40; index += 1) {
       await h.stores.commitments.open({
         id: `c-${String(index).padStart(3, '0')}`,
         at: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
@@ -16880,7 +17032,8 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     async () => {
       const h = harness();
       const long = 'あ'.repeat(500);
-      for (let index = 0; index < 25; index += 1) {
+      // 行が短くなったので予算（8000字）を超える件数にしてある（#5352）
+      for (let index = 0; index < 40; index += 1) {
         const originValue = index % 2 === 0 ? ('human' as const) : ('manager' as const);
         await h.stores.commitments.open({
           id: `c-${String(index).padStart(3, '0')}`,
@@ -17147,7 +17300,8 @@ describe('commitment_list に order（並び順）を足す', () => {
   it('order: newest は予算で切る前に効く——台帳が膨らんでも直近の行へ届く（今回直した事故そのもの）', async () => {
     const h = harness();
     const long = 'あ'.repeat(500);
-    for (let index = 0; index < 25; index += 1) {
+    // 行が短くなったので予算（8000字）を超える件数にしてある（#5352）
+    for (let index = 0; index < 40; index += 1) {
       await h.stores.commitments.open({
         id: `old-${String(index).padStart(3, '0')}`,
         at: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
@@ -20054,7 +20208,7 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
   it('新規作成は版なしで書けるが、読んだ後に誰かが作っていれば書かない', async () => {
     const h = harness();
     expect(await h.call('memory_write', { slug: 'fresh', content: '新', summary: 'n' })).toContain(
-      '更新した',
+      '作った',
     );
   });
 

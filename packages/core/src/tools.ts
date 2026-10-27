@@ -239,7 +239,6 @@ import {
   JOURNAL_ENTRY_TYPES,
   PERMISSION_GRANT_CONSENT_PHRASE,
   approvalQuestionSchema,
-  approvalUpdatedAt,
   describeAnsweredVia,
   commitmentOriginSchema,
   commitmentUpdatedAt,
@@ -1117,7 +1116,7 @@ async function describeMissingReport(
 }
 
 const COMMITMENT_LIST_BUDGET = 8_000;
-const COMMITMENT_BODY_LIMIT = 240;
+export const COMMITMENT_BODY_LIMIT = 240;
 const UNREADABLE_COMMITMENT_IDS_SHOWN = 20;
 // 定数は道具と HTTP で共有するので `commitment-close-many.ts` に在る。外へ出していた名前はここから変えない
 export { CLOSE_MANY_LIMIT_MAX, CLOSE_MANY_JOURNAL_ID_CHARS };
@@ -2499,9 +2498,13 @@ function memoryFloorNote(
 }
 
 // `memoryFloorNote` と混ぜない: 引数の形が違い、既存の糊を条件分岐だらけにしないため
+// 順位は premise が動いたときだけ出す: fact は焼き込みの対象外で、順位は fact を書いた回の読み手に関係しないため
+// 書いた文書が fact でも順位の文字列が前後で変わっていれば出す（premise → fact への変更で順位から落ちた回を黙らせない）
 function memorySessionGrowthNote(
+  memoryBefore: readonly MemoryPart[],
   memoryAfter: readonly MemoryPart[],
   runtime: CloneRuntimeFacts | undefined,
+  writtenContents: readonly string[],
 ): string {
   const afterChars = measureMemoryFloor(memoryAfter).totalChars;
   const sessionDelta = describeMemorySessionDelta({
@@ -2509,6 +2512,12 @@ function memorySessionGrowthNote(
     injectedMemoryChars: runtime?.injectedMemoryChars ?? null,
   });
   const ranking = describeMemoryPremiseRanking(memoryAfter);
+  const touchesPremise = writtenContents.some(
+    (content) => resolveMemoryDocKind(parseMemoryFrontmatter(content)) === 'premise',
+  );
+  if (!touchesPremise && ranking === describeMemoryPremiseRanking(memoryBefore)) {
+    return sessionDelta;
+  }
   return [sessionDelta, ranking].join('\n\n');
 }
 
@@ -3073,13 +3082,18 @@ export function createCloneTools(context: ToolContext) {
           memoryAfter,
           seenBefore(slug, before),
         );
-        const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
+        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
+          written.content,
+        ]);
         const tokenDiff = describeTokenDiff(
           before === null ? null : before.content,
           written.content,
         );
+        // 新規作成は「新規作成」を床の行の1回だけにする: 「更新した」と言わず、差分の要約にも同じ語を重ねない
         return text(
-          `記憶 ${slug} を更新した。\n\n${diff}` +
+          (before === null
+            ? `記憶 ${slug} を作った（${written.content.length.toLocaleString('en-US')} 文字）。`
+            : `記憶 ${slug} を更新した。\n\n${diff}`) +
             (tokenDiff === null ? '' : `\n${tokenDiff}`) +
             `\n\n${floor}\n\n${reinjection}\n\n${growth}\n\n${versionLine(written.content)}`,
         );
@@ -3148,10 +3162,14 @@ export function createCloneTools(context: ToolContext) {
           memoryAfter,
           seenBefore(slug, before),
         );
-        const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
-        return text(
-          `記憶 ${slug} に追記した。\n\n${diff}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
-        );
+        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
+          written.content,
+        ]);
+        const head =
+          before === null
+            ? `記憶 ${slug} を作った（${written.content.length.toLocaleString('en-US')} 文字）。`
+            : `記憶 ${slug} に追記した。\n\n${diff}`;
+        return text(`${head}\n\n${floor}\n\n${reinjection}\n\n${growth}`);
       },
     ),
 
@@ -3406,7 +3424,9 @@ export function createCloneTools(context: ToolContext) {
           memoryAfter,
           seenBefore(slug, existing),
         );
-        const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
+        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
+          written.content,
+        ]);
 
         return text(
           `記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
@@ -3796,7 +3816,10 @@ export function createCloneTools(context: ToolContext) {
           memoryAfter,
           new Map([...seenBefore(toSlug, toBefore), ...seenBefore(fromSlug, existing)]),
         );
-        const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
+        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
+          toWritten.content,
+          fromWritten.content,
+        ]);
 
         // 古い本文を1文字も出さない: 出せば文脈に入り、この道具の存在理由が消えるため
         const listing = renderListing(
@@ -4406,6 +4429,7 @@ export function createCloneTools(context: ToolContext) {
         'いま人間の回答を待っている件の一覧。',
         '人間が席に居ないあいだに溜まる。溜まっていても他の仕事は進めてよい。',
         '一覧の質問は抜粋で、全文が要る1件は id を渡して取る。',
+        '一覧の各件は作成時刻だけを出す（回答待ちだけの一覧なので、更新はいつも作成と同じ）。',
       ].join(' '),
       {
         id: z
@@ -4481,9 +4505,8 @@ export function createCloneTools(context: ToolContext) {
           renderListingEntry({
             id: approval.id,
             title: approvalTitle(approval.question),
-            // 更新は `createdAt` をそのまま出す: 回答待ちだけの一覧では「まだ一度も変わっていない」という観測で、値を作らないため
+            // 更新は出さない: 回答待ちだけの一覧では `approvalUpdatedAt` が常に `createdAt` と同じで、同じ時刻の2回目は情報にならないため（読み方は説明文が持つ）
             createdAt: approval.createdAt,
-            updatedAt: approvalUpdatedAt(approval),
             summary: excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT),
             extra: [
               approval.questions === undefined || approval.questions.length === 0
@@ -4498,7 +4521,6 @@ export function createCloneTools(context: ToolContext) {
         );
         const notes = [
           '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
-          '（更新＝この1件が最後に変わった時刻。回答待ちだけを出す一覧なので、常に作成と同じになる）',
           ...(unreadableNote === null ? [] : [unreadableNote]),
         ];
         // 詳細が予算に入りきれば、今どおり作成の古い順に全件の詳細を出す
@@ -5153,6 +5175,7 @@ export function createCloneTools(context: ToolContext) {
         '**載っているものは、あなたが閉じるまで消えない。**',
         'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
         '1件の全文（依頼本文と、片付けたならその理由）が要るなら id を渡す。片付いた件も id で読める。',
+        '一覧の各件で更新が出ないときは作成と同じ（更新＝最後に変わった時刻）。includeClosed なしは全件が未了で、状態の札は行に付かない。',
         'origin で出所を絞れる（他の絞りと併用できる）。',
         'q で本文・出所を語で探せる（他の絞りと併用できる）。',
         'order で新しい順に変えられる（台帳が膨らんで予算で切れるとき、直近の行へ届くにはこちらを使う）。',
@@ -5355,12 +5378,17 @@ export function createCloneTools(context: ToolContext) {
             id: entry.id,
             title: commitmentOriginBadge(entry),
             createdAt: entry.at,
-            updatedAt: commitmentUpdatedAt(entry),
+            // 作成と違うときだけ更新を出す（未了の行は常に同じ）: 同じ時刻の2回目は情報にならないため
+            updatedAt:
+              commitmentUpdatedAt(entry) === entry.at ? undefined : commitmentUpdatedAt(entry),
             summary: excerptLine(entry.body, COMMITMENT_BODY_LIMIT),
             extra: [
-              entry.closedAt === undefined
-                ? '  状態: 未了'
-                : `  状態: ${entry.closedAt} に片付けた（${excerptLine(entry.closedReason ?? '', 120)}）`,
+              entry.closedAt !== undefined
+                ? `  状態: ${entry.closedAt} に片付けた（${excerptLine(entry.closedReason ?? '', 120)}）`
+                : // 片付けた分を出さない呼びでは全行が未了で、先頭の1行が言う: 行ごとの同じ札を積まないため
+                  includeClosed === true
+                  ? '  状態: 未了'
+                  : null,
             ],
           }),
         );
@@ -5412,9 +5440,8 @@ export function createCloneTools(context: ToolContext) {
                     const shownOrderNote = effectiveOrder === 'newest' ? '新しい順に' : '古い順に';
                     return (
                       `…ほか ${rest} 件は省略（${scopeNote}${countNote}、${shownOrderNote} ${shown} 件だけ` +
-                      `出した。${directionNote}続きは commitment_list cursor=${nextCursor} で取れる` +
-                      `（includeClosed=${includeClosed === true} / order=${effectiveOrder} のまま呼ぶこと）。` +
-                      '1件の全文は commitment_list id=<id> で取れる）。'
+                      `出した。${directionNote}続きは commitment_list cursor=${nextCursor} で取れる。` +
+                      `includeClosed=${includeClosed === true} / order=${effectiveOrder} のまま呼ぶこと）。`
                     );
                   },
                 }),
@@ -5422,9 +5449,9 @@ export function createCloneTools(context: ToolContext) {
         // `entries` ではなく `view` で見る: 最後の頁で1件も出していないのにこの2行だけが付くのを避けるため
         if (view.length > 0) {
           lines.push(
-            '（本文は240字の抜粋。1件の全文は commitment_list id=<id> で取れる。片付いた件も読める）',
-            '（更新＝この1件が最後に変わった時刻。まだ片付けていなければ、受け取った時刻と同じ）',
+            `（本文は${COMMITMENT_BODY_LIMIT}字の抜粋。1件の全文は commitment_list id=<id> で取れる。片付いた件も読める）`,
           );
+          if (includeClosed !== true) lines.unshift('（以下はすべて未了）');
         }
         if (unreadable.length > 0) {
           const idsAll = unreadable
@@ -6971,6 +6998,7 @@ export function createCloneTools(context: ToolContext) {
         '**write のたびに版が1つ増える。remove しても版は消えない**——消した slug を',
         '同じ名前で作り直しても、版番号は消える前の続きから振られる。',
         '中身が要るなら practice_read slug=<slug> version=<版番号> で開くこと。',
+        '各版は作成時刻だけを出す（版は追記専用なので、更新はいつも作成と同じ）。',
       ].join(' '),
       {
         slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
@@ -6992,7 +7020,7 @@ export function createCloneTools(context: ToolContext) {
             title: `[${entry.kind}] ${entry.title}`,
             summary: `${String(entry.chars)} 文字`,
             createdAt: entry.at,
-            updatedAt: entry.at,
+            // 更新は出さない: 版は追記専用で、書かれた時刻が作成でも更新でもあるため（同じ値の2回目を積まない）
           }),
         );
         return text(
@@ -7947,7 +7975,7 @@ export function createCloneTools(context: ToolContext) {
           'この道具（manager_list）自身は畳まない——ここは表示だけである。' +
           '畳むのは runner_list を resources: true で呼んだときだけで、その器の pids が' +
           '逼迫していれば（上限の80%以上）、同じ候補の判定を満たす委譲をデーモンが自動で畳む' +
-          '（未 push の実装・未コミットの変更が無いことも確かめたうえで。#1394 段④⑥⑦）。' +
+          '（未 push の実装・未コミットの変更が無いことも確かめたうえで）。' +
           '何を畳んだ・見送ったかは runner_list の応答と日誌（journal_read、decision）に出る。',
         '走行中・返事待ち（running / waiting_human）を先に出し、次に lost（前のセッションへ戻れなかったもの。' +
           '成果がリモートに届いているかを誰も確かめていない＝判断待ちである）、' +
@@ -7963,7 +7991,7 @@ export function createCloneTools(context: ToolContext) {
           `429 が続いたまま消えないなら、起こし直すこと。${STALE_TOKEN_RESTART_ADVICE}` +
           '世代が測れていないときも行は出る——' +
           '「分からない」の理由（プール未配線／未観測／デーモンの再起動をまたいだ引き取り）を' +
-          '名乗る（Issue #988）。再起動をまたいだ場合だけ manager_stop → manager_start が効く。',
+          '名乗る。再起動をまたいだ場合だけ manager_stop → manager_start が効く。',
         '429 で落ちたとき、SDK が返す文言に書かれていた resets 時刻を、認証トークンの' +
           'プールの各鍵の冷却期限と突き合わせた行も出ることがある。「世代ずれの疑い」なら、' +
           'この委譲は現役ではない古い鍵を掴んだまま走っている可能性が高い——鍵が通る状態へ' +
@@ -7971,7 +7999,7 @@ export function createCloneTools(context: ToolContext) {
           '「待てば戻る」なら、現役の鍵自身がいま冷却中なだけで世代ずれではなく、対処は要らない。' +
           '行が出ないのは「健全」ではなく「まだ判定できない」という意味である——' +
           '429 の通知がまだ届いていないか、文言・プールのどちらとも一致しなかったかのどちらか。' +
-          '世代番号の比較（提案1）が既に食い違いを名指ししているときは、二重に鳴らさないので' +
+          '上の世代番号の比較が既に食い違いを名指ししているときは、二重に鳴らさないので' +
           'この行は出ない。',
       ].join(' '),
       {
@@ -9880,7 +9908,7 @@ export function createCloneTools(context: ToolContext) {
           '送っても届かないことの証明ではない（manager_send は resume を試みる）。' +
           '仕事が終わったという意味でもない。',
         'マネージャーの字面の直後に ⚠世代N≠現役M が付くことがある——この委譲が抱えている' +
-          '認証トークンの世代（N）と、いまの現役の世代（M）が食い違っている（Issue #914）。' +
+          '認証トークンの世代（N）と、いまの現役の世代（M）が食い違っている。' +
           '回した直後の短い遅れなら自然に消える。429 が続いたまま消えないなら起こし直すこと。' +
           `${STALE_TOKEN_RESTART_ADVICE}詳しい文面は manager_list に出る。` +
           '一致している・材料が無い（プールを使っていない構成）ときはこの印自体が出ない。',
@@ -9890,7 +9918,7 @@ export function createCloneTools(context: ToolContext) {
           'いま走っている版がその主張と同じかを見ること。',
         '版が「不明」（器が自分の版を知らない）と「未確認」（名乗りをまだ聞けていない）は' +
           '別物で、疑う先が違う（前者は器の設定、後者は登録とネットワーク）。' +
-          'state が lost の器の版は黙る前に聞いた古い値である（#1949）。' +
+          'state が lost の器の版は黙る前に聞いた古い値である。' +
           '鍵・プロファイル・MCP の登録の指紋（fingerprints: true）も、聞いていない' +
           '（繋がっていないので聞いていない）／聞いたが失敗した／聞いて0件・無しだった、' +
           'を同じ文言に潰さない——「確かめていない」と出たときは鍵が配られていない証拠には' +
@@ -9904,21 +9932,21 @@ export function createCloneTools(context: ToolContext) {
           '「失敗」は自分から諦めずに挑み直すので、次に見たときには直っていることがある' +
           '（人間が手で繋ぎ直す必要は無い）。まだ一度も試みていない種類は行ごと出ない。',
         'resources: true を渡すと器ごとの pids（プロセス数）の現在値/上限も出る' +
-          '（#315 案1）。**pids の現在値/上限そのものは今も器の合計である**——何が' +
+          '。**pids の現在値/上限そのものは今も器の合計である**——何が' +
           'その数を持っているかはこの2つの数字からは分からない。空き（上限 − ' +
           '現在値）も、次に何本置けるかを意味しない——実測では vitest が1本立ち' +
           '上がるだけで pids が +131 跳ねている。**対応している runner なら、' +
           'その合計の内訳（ゾンビ/生存の内訳・ゾンビの comm 別集計・いちばん古い' +
-          'ゾンビの年齢）が別行で出る**（#315 の可視化）——対応していない runner' +
+          'ゾンビの年齢）が別行で出る**——対応していない runner' +
           '（古い版）ではこの内訳の行自体が出ない。pids が出ない器は、理由ごとに別の' +
-          '文言で出る（#2426）——「確かめていない」（繋がっていないので聞いていない）・' +
+          '文言で出る——「確かめていない」（繋がっていないので聞いていない）・' +
           '「訊いたが失敗した: 理由」（resources() が落ちた）・「確かめられない」' +
           '（この runner は口を持たない古い版）・「訊けたが pids が読めない」' +
           '（cgroup を持たない器）。どれも数字が出ない点は同じだが、疑う先' +
           '（接続・器の RPC・runner の版・器の cgroup 構成）が違う。**そしてこの pids は、いまは配置の材料でもある**' +
-          '（#712。点数は「メモリの余り × プロセス数の余り × 新しい1本が受け取る CPU」で、' +
-          '最後の項の分母には抱えている本数に加えて直近に起動が失敗した本数も足す——' +
-          '落ちて空いた器が「空いている」ように見えて次も吸い込む輪を切るため）——' +
+          '（点数は「メモリの余り × プロセス数の余り × 新しい1本が受け取る CPU」で、' +
+          '最後の項の分母には抱えている本数に加えて直近に起動が失敗した本数も足すので、' +
+          '落ちた直後の器は空いて見えても選ばれにくい）——' +
           'pids が枯れた器は自動配置で選ばれにくくなる。**ただし断る材料ではない**——' +
           '枯れていても置き先としては返るので、「置けない」と読まないこと。' +
           '**加えて、新しいプロセスを起こせない器（pids 飽和）は、飽和していない器が1台でも' +
@@ -9935,7 +9963,7 @@ export function createCloneTools(context: ToolContext) {
           '「畳む候補」（manager_list の ⚠ と同じ5条件——done・背景処理待ちの印なし・' +
           '器がその印を送る版だと名乗っている・状態の判定が active・最後のターン終了から' +
           '一定時間経過）を、デーモンが自動で manager_stop 相当（非 force）で畳む' +
-          '（#1394 段④⑥⑦）。**未 push の実装・未コミットの変更が1件でもある' +
+          '。**未 push の実装・未コミットの変更が1件でもある' +
           '（または確認できなかった）委譲は畳まない**——安全側に倒す。' +
           '何を畳んだ・見送ったかはこの応答の先頭に出て、日誌にも decision として残る' +
           '（journal_read）。**新しい周期処理ではない**——この道具をこの引数で呼んだ、' +
@@ -9957,7 +9985,7 @@ export function createCloneTools(context: ToolContext) {
             '器ごとの pids（プロセス数）と、対応している runner ならその内訳' +
               '（ゾンビ/生存の内訳・ゾンビの comm 別集計・いちばん古いゾンビの年齢）を' +
               '出すか。既定は出さない——このためにネットワーク往復を足さない側に' +
-              '倒してある。頼んだときだけ各 runner の /health を叩く（#315 の可視化）。',
+              '倒してある。頼んだときだけ各 runner の /health を叩く。',
           ),
         cursor: z
           .string()
