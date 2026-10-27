@@ -7696,9 +7696,8 @@ export function createCloneTools(context: ToolContext) {
           // 毎回返る文なので短く保つ（理由の詳しい説明は道具の説明文の側に1回だけ置く）: 送るたびにクローンの文脈へ積まれ、読み直しの費用になるため
           return text(
             `[${managerId}] ${result.detail}${unusedNote}\n` +
-              '（「届けた」は「読んで動いた」ではない。読んだかは1度も見ていない。' +
-              '直後の manager_list が lost でも「届かなかった」の証拠にはならない。' +
-              '同じ本文で新しい委譲を立てないこと。読まれたかは manager_report で見る）',
+              '（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。' +
+              '同じ本文で新しい委譲を立てないこと）',
           );
         }
         return text(result.detail);

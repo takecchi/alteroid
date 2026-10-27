@@ -4809,12 +4809,22 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_send', { managerId: 'mgr-1', message: '続けて' });
 
     expect(reply).toContain('追加指示として届けた。');
-    expect(reply).toContain('「読んで動いた」ではない');
-    expect(reply).toContain('読んだかは1度も見ていない');
-    expect(reply).toContain('「届かなかった」の証拠にはならない');
-    expect(reply).toContain('同じ本文で新しい委譲を立てないこと');
-    expect(reply).toContain('manager_report');
+    const note =
+      '（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）';
+    expect(reply).toBe(`[mgr-1] 追加指示として届けた。\n${note}`);
+    expect(reply.split('同じ本文で新しい委譲を立てないこと')).toHaveLength(2);
     expect(reply).not.toContain('届かない');
+  });
+
+  it('manager_send の delivered の注記は、旧 3 行注記（約 120 字）より短い（#5354）', async () => {
+    const h = harness();
+    h.setSendResult({ outcome: 'delivered', detail: '追加指示として届けた。' });
+
+    const reply = await h.call('manager_send', { managerId: 'mgr-1', message: '続けて' });
+
+    const note = reply.slice(reply.indexOf('\n') + 1);
+    expect(note.length).toBeLessThan(80);
+    expect(reply).not.toContain('読んで動いた');
   });
 
   it('manager_send は decision と requestId を添えて、宛先を指して答えられる', async () => {
