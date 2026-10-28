@@ -66,6 +66,22 @@ describe('窓より前に終端した failed は、別の1行に畳む', () => {
     expect(section).not.toContain('boom');
   });
 
+  // ALTEROID_TOKEN_SAVING_EXCERPT=0（Clone は trimHistory: false を渡す）: 節約の前の形に戻り、窓より前の failed も1本ずつ出る
+  it('⭐ trimHistory: false なら、窓より前に終端した failed も1本ずつ出る（畳まない）', async () => {
+    const stores = createMemoryStores();
+    await put(stores, 'old-failed-a', 'failed', releasedAgo(14 * DAY));
+    await put(stores, 'old-failed-b', 'failed', failureAgo(14 * DAY));
+
+    const section = sectionOf(
+      await buildActivityDigest(stores, window(), undefined, undefined, { trimHistory: false }),
+      '## マネージャー',
+    );
+
+    expect(section).toMatch(/- old-failed-a \[/u);
+    expect(section).toMatch(/- old-failed-b \[/u);
+    expect(section).not.toContain('終端して窓より前の failed');
+  });
+
   it('窓の中で終端した failed は1本ずつ出る', async () => {
     const stores = createMemoryStores();
     await put(stores, 'new-failed', 'failed', releasedAgo(60_000));

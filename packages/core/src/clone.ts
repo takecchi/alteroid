@@ -6594,13 +6594,9 @@ class Clone implements CloneHost {
     const digest =
       range === null || axes === null
         ? await this.#recentDigestBare()
-        : await buildActivityDigest(
-            this.#stores,
-            range,
-            axes.liveness,
-            axes.awaitingBackground,
-            { trimHistory: this.#tokenSaving.excerpt },
-          ).catch((error: unknown) => `（この日の記録をまとめられなかった: ${reasonOf(error)}）`);
+        : await buildActivityDigest(this.#stores, range, axes.liveness, axes.awaitingBackground, {
+            trimHistory: this.#tokenSaving.excerpt,
+          }).catch((error: unknown) => `（この日の記録をまとめられなかった: ${reasonOf(error)}）`);
 
     // digest の全文は日誌に書かない（`turn-input.ts` の doc）。
     await this.#journal(turnInputEntry({ type: 'daily_report', date, cause, digest }));

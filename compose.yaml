@@ -224,6 +224,12 @@ x-shared-env: &shared-env
   # `ALTEROID_INBOX_SETTLE_MS` のまま。0 で無効。**未設定なら既定を使う**——
   # 空・空白・範囲外（0〜120000 の外）は既定へ倒れる（`resolveReportSettleMs` の doc）。
   ALTEROID_REPORT_SETTLE_MS: ${ALTEROID_REPORT_SETTLE_MS:-}
+  # トークン節約の系統別の入り切り（`packages/core/src/token-saving-switches.ts`、docs/architecture.md
+  # 「トークン節約の入り切り」）。**未設定なら既定を使う**（固定文の畳み・畳み後の再表示は切り、抜粋は入り）。
+  # 空・空白は既定へ倒れる。on/1/true と off/0/false。起動時に1回だけ読むので、変えたらデーモンの再起動が要る。
+  ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: ${ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT:-}
+  ALTEROID_TOKEN_SAVING_COMPACTION: ${ALTEROID_TOKEN_SAVING_COMPACTION:-}
+  ALTEROID_TOKEN_SAVING_EXCERPT: ${ALTEROID_TOKEN_SAVING_EXCERPT:-}
   # 退避済み生ログの古い写しを自動で畳む周期（分）。issue #698。**未設定なら
   # 既定を使う**（`apps/daemon/src/archive-folder.ts` の
   # `DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES`）——空・空白は分数として読めずに

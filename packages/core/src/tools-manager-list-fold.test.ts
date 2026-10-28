@@ -491,3 +491,97 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
     expect(second).not.toContain('依頼文の全文と managerId への部分一致');
   });
 });
+
+// ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT が無効（既定）のとき、Clone は `new DigestSessionDelta({ disabled: true })` を使う。
+// その控えを通る manager_list / runner_list の固定の説明（件数行・「…ほか N 件」・行の印・受信箱の滞留・絞り込み・起点の会話・runner の注）が、何度呼んでも全文であること。
+describe('畳みを切った delta（disabled）では、固定の説明が毎回全文で出る', () => {
+  const scenarios: {
+    name: string;
+    managers: () => ManagerSummary[];
+    extra?: { inbox?: unknown[]; queued?: number; ledger?: string[] };
+    args?: Record<string, unknown>;
+    tool?: string;
+    // 畳みが有効なときに2回目から消える固定の説明の一節（その場面が畳みを通ることの確認にも使う）
+    phrase: string;
+  }[] = [
+    {
+      name: '通常時',
+      managers: normal,
+      phrase: '**「走行中」は「進んでいる」ではない**',
+    },
+    {
+      name: '異常時（lost・枠・runner 消失）',
+      managers: abnormal,
+      phrase: '**「戻れなかった(lost)」は「終わった」ではない**',
+    },
+    {
+      name: '受信箱の滞留',
+      managers: normal,
+      extra: { inbox: stuckInbox(), queued: 5 },
+      phrase: '門が畳んだ行はターンが1度も起きないまま数だけ増える',
+    },
+    {
+      name: '絞り込みの注記',
+      managers: normal,
+      args: { status: ['done'], q: 'mgr-00' },
+      phrase: 'すぐ上の件数は絞る前の全体である',
+    },
+    {
+      name: 'runner_list の注',
+      managers: normal,
+      args: { resources: true },
+      tool: 'runner_list',
+      phrase: '名簿（Registry）はインメモリなので',
+    },
+  ];
+
+  it.each(scenarios)(
+    '⭐ $name: 2回目も1回目と同じ全文（有効な delta なら固定の説明が消える場面）',
+    async (s) => {
+      const enabled = harness(s.managers, new DigestSessionDelta(), s.extra);
+      const enabledFirst = await enabled(s.args, s.tool);
+      const enabledSecond = await enabled(s.args, s.tool);
+      // この場面が畳みの口を通ることの確認: 有効なら2回目から固定の説明が消える（消えない場面なら、この試験は何も守らない）
+      expect(enabledFirst).toContain(s.phrase);
+      expect(enabledSecond).not.toContain(s.phrase);
+
+      const call = harness(s.managers, new DigestSessionDelta({ disabled: true }), s.extra);
+      const first = await call(s.args, s.tool);
+      const second = await call(s.args, s.tool);
+      const plain = await harness(s.managers, null, s.extra)(s.args, s.tool);
+
+      expect(first).toContain(s.phrase);
+      expect(second).toContain(s.phrase);
+      expect(second.length).toBe(first.length);
+      expect(first.length).toBe(plain.length);
+    },
+  );
+
+  it('⭐ 前回と同じ行の畳み・起点の会話の使い方・行の印の意味も、毎回全文', async () => {
+    const hint = '（報告を人間へ知らせるなら、この会話へ書く）';
+    const rows = (): ManagerSummary[] => [
+      summary(1),
+      summary(2),
+      summary(3, { status: 'lost' }),
+      summary(4, { status: 'lost' }),
+    ];
+    const ledger = ['mgr-001', 'mgr-002', 'mgr-003', 'mgr-004'];
+    // 場面の確認: 有効な delta なら、2回目は前回と同じ行が畳まれる（畳まれない場面なら、この試験は何も守らない）
+    const enabled = harness(rows, new DigestSessionDelta(), { ledger });
+    await enabled();
+    expect(await enabled()).toContain('前回と同じ');
+
+    const call = harness(rows, new DigestSessionDelta({ disabled: true }), { ledger });
+
+    const first = await call();
+    const second = await call();
+    // refetch で畳みを外した版とも同じ: 畳んでいなければ、外す必要が無い
+    const refetched = await call({ refetch: true });
+
+    expect(second).toBe(first);
+    expect(refetched).toBe(first);
+    expect(first.split(hint).length - 1).toBe(rows().length - 2 + 2);
+    expect(first).toContain('**戻れたかどうかしか見ていない**');
+    expect(first).not.toContain('前回と同じ');
+  });
+});

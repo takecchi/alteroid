@@ -976,7 +976,10 @@ export async function buildActivityDigest(
 
   if (settled.length > 0) {
     sections.push('', '## この期間に片付けた仕事');
-    const shownSettled = settled.slice(0, options.trimHistory === false ? MAX_ITEMS : DIGEST_SETTLED_LIMIT);
+    const shownSettled = settled.slice(
+      0,
+      options.trimHistory === false ? MAX_ITEMS : DIGEST_SETTLED_LIMIT,
+    );
     for (const entry of shownSettled) {
       sections.push(
         `- ${brief(entry.body, 120)}\n  片付いたとした理由: ${brief(entry.closedReason ?? '', 120)}`,

@@ -24,6 +24,8 @@ interface SdkScript {
   noUsage?: boolean;
   failResultAt?: number;
   after?: (inputCount: number) => SDKMessage[];
+  // クローンの env。既定は畳みを有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）
+  env?: NodeJS.ProcessEnv;
 }
 
 interface Boot {
@@ -93,7 +95,7 @@ function boot(script: SdkScript = {}): Boot {
     reportSettleMs: 2500,
     stores: createMemoryStores(),
     queryFn: fn,
-    env: TOKEN_SAVING_ENABLED_ENV,
+    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
     redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),
@@ -168,6 +170,24 @@ describe('human_answer の末尾は、同じ会話の2回目から基準の指�
     process.stderr.write(
       `[#5301 測定] human_answer の末尾 1回目 ${String(first.length)} 字 → 2回目 ${String(tailOf(secondInput).length)} 字\n`,
     );
+    await s.clone.stop();
+  });
+
+  it('⭐ 畳みが切り（既定）なら、2回目以降も基準の指示が全文のまま', async () => {
+    const s = boot({ env: {} });
+    const inputs = [
+      await deliver(s, answer(1)),
+      await deliver(s, answer(2)),
+      await deliver(s, answer(3)),
+    ];
+    const first = tailOf(inputs[0] ?? '');
+    for (const input of inputs) {
+      const text = tailOf(input);
+      expect(text).toContain(EXPLANATION);
+      expect(text).toContain(REWRITE_DETAIL);
+      expect(text).toContain(CRITERIA_RULE);
+      expect(text.length).toBe(first.length);
+    }
     await s.clone.stop();
   });
 
