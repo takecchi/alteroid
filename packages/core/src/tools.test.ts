@@ -11257,7 +11257,7 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
 
     expect(reply).toContain('broken-a: 退避された ref は無い');
     expect(reply).toContain('push に失敗した');
-    expect(reply).toContain('退避できていない作業ツリー 1 本（失われうる。push-failed 1）');
+    expect(reply).toContain('退避できていない作業ツリー 1 本（失われうる。push に失敗した 1）');
     expect(reply).toContain('消した ref: ');
   });
 
@@ -11277,7 +11277,8 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
     const reply = await h.call('manager_report', { managerId: 'mgr-r' });
 
     expect(reply).toContain('生きている ref 2 本');
-    expect(reply).toContain('うち消せなかった/送り先無し 2 本');
+    expect(reply).toContain('うち消せなかった 1 本');
+    expect(reply).toContain('うち送り先が台帳に無く自動では消せない 1 本（手で消す）');
   });
 
   // 退避 ref が約60本ある委譲（mgr-4fe12f7e の形）: 種類を混ぜる
@@ -11335,8 +11336,9 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
     const all = await h.call('manager_report', { managerId: 'mgr-r', rescueAll: true });
 
     expect(reply).toContain('作業ツリー 60 本');
-    expect(reply).toContain('生きている ref 22 本');
-    expect(reply).toContain('生きている間に消えた 6 本');
+    // 生きている ref = live 20 + 作業ツリーが消えて ref だけ残る 6 + 消せなかった 2 + 未追跡つき 1
+    expect(reply).toContain('生きている ref 29 本');
+    expect(reply).toContain('ref だけ残っている 6 本');
     expect(reply).toContain('送るもの無し 7 本');
     expect(reply).toContain('manager_report を rescueAll: true で読む');
     // 最新の生きている ref の1件（live-1）は名前つきで出るが、他の ref 名は出ない
@@ -11355,9 +11357,29 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
     const reply = await h.call('manager_report', { managerId: 'mgr-r' });
 
     expect(reply).toContain(
-      '退避できていない作業ツリー 4 本（失われうる。push-failed 1・未追跡 1・too-large 1・submodule 1）',
+      '退避できていない作業ツリー 4 本（失われうる。push に失敗した 1・未追跡 1・差分が判定の上限を超えたため送らなかった 1・submodule 1）',
     );
     expect(reply).toContain('unsaved-pf-1: 退避された ref は無い。直近の回: push に失敗した');
+  });
+
+  it('作業ツリーが消えて退避 ref だけが残る委譲は、ref が残ることと本数を既定の出力に出す', async () => {
+    const h = harness();
+    h.running.push(
+      rescueOf([
+        tree('gone-a', { pushed: pushedOf('gone-a'), goneAt: AT }),
+        tree('gone-b', { pushed: pushedOf('gone-b'), goneAt: AT }),
+        tree('gone-c', { pushed: pushedOf('gone-c', { at: AT, reason: 'landed' }), goneAt: AT }),
+        tree('live-a', { pushed: pushedOf('live-a') }),
+      ]),
+    );
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-r' });
+
+    // ref が残っているのは gone-a・gone-b・live-a の3本。消し終えた gone-c は「消した ref」の側
+    expect(reply).toContain('生きている ref 3 本');
+    expect(reply).toContain('作業ツリーが生きている間に消えて ref だけ残っている 2 本');
+    expect(reply).toContain('消した ref: 内容が origin の枝に入っていた 1 本');
+    expect(reply).toContain('refs/alteroid-rescue/mgr-r/');
   });
 
   it('生きている間に消えた作業ツリーでも、未追跡が失われうるなら件数に埋めず退避できていない側に数える', async () => {
@@ -11374,7 +11396,7 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
 
     const reply = await h.call('manager_report', { managerId: 'mgr-r' });
 
-    expect(reply).toContain('生きている間に消えた 1 本');
+    expect(reply).toContain('生きている間に消えた（ref は無い） 1 本');
     expect(reply).toContain('退避できていない作業ツリー 1 本（失われうる。未追跡 1）');
     expect(reply).toContain('gone-dirty: ');
     expect(reply).toContain('lost.txt');

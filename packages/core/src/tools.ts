@@ -2432,13 +2432,7 @@ type RescueTree = NonNullable<ManagerSummary['lastRescue']>['worktrees'][number]
 
 // manager_report の既定は件数に畳む。畳まないのは、退避できていない（push 失敗・未追跡・submodule で、失われうる）作業ツリーの存在だけ:
 // 件数と代表の1本を必ず残す。生きている ref・消せなかった ref・生きている間に消えた作業ツリーは、読み手が何もできないか、ref 名が要るのは取り戻すときだけなので件数でよい（#5028 の続き）
-type RescueTreeKind =
-  | { kind: 'unsaved' }
-  | { kind: 'gone' }
-  | { kind: 'live-ref'; stuckRemoval: boolean }
-  | { kind: 'removed'; reason: RescueRemovalReason }
-  | { kind: 'nothing-to-send' };
-
+// 軸は独立に数える（排他の分類にしない）: 作業ツリーが消えても、退避できていないものが在っても、ref が残っていれば「生きている ref」に数えるため
 function isUnsavedRescueTree(tree: RescueTree): boolean {
   return (
     tree.untracked !== undefined ||
@@ -2447,15 +2441,9 @@ function isUnsavedRescueTree(tree: RescueTree): boolean {
   );
 }
 
-function classifyRescueTree(tree: RescueTree): RescueTreeKind {
-  if (isUnsavedRescueTree(tree)) return { kind: 'unsaved' };
-  if (tree.goneAt !== undefined) return { kind: 'gone' };
+function hasLiveRescueRef(tree: RescueTree): boolean {
   const removal = tree.pushed?.removal;
-  if (tree.pushed !== undefined && (removal === undefined || removal.failureKind !== undefined)) {
-    return { kind: 'live-ref', stuckRemoval: removal !== undefined };
-  }
-  if (removal !== undefined) return { kind: 'removed', reason: removal.reason };
-  return { kind: 'nothing-to-send' };
+  return tree.pushed !== undefined && (removal === undefined || removal.failureKind !== undefined);
 }
 
 function describeRescueTreeRows(tree: RescueTree): string[] {
@@ -2509,18 +2497,28 @@ function representativeUnsavedTree(unsaved: RescueTree[]): RescueTree | undefine
 }
 
 function describeRescueReport(rescue: NonNullable<ManagerSummary['lastRescue']>): string[] {
-  const kinds = rescue.worktrees.map((tree) => ({ tree, fold: classifyRescueTree(tree) }));
-  const unsaved = kinds.filter((k) => k.fold.kind === 'unsaved').map((k) => k.tree);
-  const liveTrees = kinds.filter((k) => k.fold.kind === 'live-ref').map((k) => k.tree);
-  const stuckRemovals = kinds.filter(
-    (k) => k.fold.kind === 'live-ref' && k.fold.stuckRemoval,
+  const trees = rescue.worktrees;
+  const unsaved = trees.filter(isUnsavedRescueTree);
+  const liveTrees = trees.filter(hasLiveRescueRef);
+  const rest = trees.filter((tree) => !hasLiveRescueRef(tree));
+  const goneWithRef = liveTrees.filter((tree) => tree.goneAt !== undefined).length;
+  const stuckFailed = liveTrees.filter(
+    (tree) => tree.pushed?.removal !== undefined && tree.pushed.removal.failureKind !== 'no-remote',
   ).length;
-  const gone = kinds.filter((k) => k.fold.kind === 'gone').length;
-  const nothing = kinds.filter((k) => k.fold.kind === 'nothing-to-send').length;
+  const noRemote = liveTrees.filter(
+    (tree) => tree.pushed?.removal?.failureKind === 'no-remote',
+  ).length;
+  // ref が無い側の内訳: 消し終えた ref は理由ごと、消えた作業ツリーで ref が最初から無いもの、送るもの無し
+  const goneNoRef = rest.filter(
+    (tree) => tree.goneAt !== undefined && tree.pushed === undefined,
+  ).length;
+  const nothing = rest.filter(
+    (tree) => tree.goneAt === undefined && tree.pushed === undefined && !isUnsavedRescueTree(tree),
+  ).length;
   const removedGroups = (Object.keys(RESCUE_REMOVAL_REASON_TEXT) as RescueRemovalReason[])
     .map((reason) => ({
       reason,
-      count: kinds.filter((k) => k.fold.kind === 'removed' && k.fold.reason === reason).length,
+      count: rest.filter((tree) => tree.pushed?.removal?.reason === reason).length,
     }))
     .filter((group) => group.count > 0)
     .map((group) => `${RESCUE_REMOVAL_REASON_TEXT[group.reason]} ${String(group.count)} 本`);
@@ -2535,9 +2533,15 @@ function describeRescueReport(rescue: NonNullable<ManagerSummary['lastRescue']>)
     latestLive === undefined
       ? null
       : `生きている ref ${String(liveTrees.length)} 本（最新: ${describeRescuePushed(latestLive)}）` +
-        (stuckRemovals === 0 ? '' : `・うち消せなかった/送り先無し ${String(stuckRemovals)} 本`),
+        (goneWithRef === 0
+          ? ''
+          : `・うち作業ツリーが生きている間に消えて ref だけ残っている ${String(goneWithRef)} 本（取り戻す材料）`) +
+        (stuckFailed === 0 ? '' : `・うち消せなかった ${String(stuckFailed)} 本`) +
+        (noRemote === 0
+          ? ''
+          : `・うち送り先が台帳に無く自動では消せない ${String(noRemote)} 本（手で消す）`),
     removedGroups.length === 0 ? null : `消した ref: ${removedGroups.join('・')}`,
-    gone === 0 ? null : `生きている間に消えた ${String(gone)} 本`,
+    goneNoRef === 0 ? null : `生きている間に消えた（ref は無い） ${String(goneNoRef)} 本`,
     nothing === 0 ? null : `送るもの無し ${String(nothing)} 本`,
   ].filter((part): part is string => part !== null);
   const lines = [
@@ -2551,7 +2555,7 @@ function describeRescueReport(rescue: NonNullable<ManagerSummary['lastRescue']>)
     for (const tree of unsaved) {
       const causes = [
         tree.notPushed !== undefined && tree.notPushed.reason !== 'nothing-tracked'
-          ? tree.notPushed.reason
+          ? RESCUE_NOT_PUSHED_TEXT[tree.notPushed.reason]
           : null,
         tree.untracked === undefined ? null : '未追跡',
         tree.submoduleCount === undefined ? null : 'submodule',
