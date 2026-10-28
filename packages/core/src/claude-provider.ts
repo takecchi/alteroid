@@ -1041,6 +1041,17 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
     ];
   }
 
+  // 生ログのミラーが1束を捨てた合図。本流（subpath が無い）の会話の欠けだけを運ぶ: 副次の鍵（subagents）の欠けは、会話の全文が載っているかどうかに関わらない
+  // 会話の id が読めない形は0個にする: 作り物の id を主張しないため
+  if (subtype === 'mirror_error') {
+    const key = (message as { key?: { sessionId?: unknown; subpath?: unknown } }).key;
+    if (typeof key !== 'object' || key === null) return [];
+    if (key.subpath !== undefined && key.subpath !== '') return [];
+    return typeof key.sessionId === 'string'
+      ? [{ type: 'transcript_mirror_failed', sessionId: key.sessionId }]
+      : [];
+  }
+
   // 拒否（safeguards 等）の構造の合図を中立の `refusal` へ畳む: 末尾の `said` の分岐で黙って捨てると、降格して再試行した拒否が日誌に跡を残さないため
   // 付帯の欄（category・explanation・original_model）が読めない形でも `refusal` 自体は返す: 合図は在り、読めないのは欄だけで、欄は省く（作り物を載せない）
   if (subtype === 'model_refusal_no_fallback' || subtype === 'model_refusal_fallback') {

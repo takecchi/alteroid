@@ -869,6 +869,30 @@ describe('foldClaudeMessage — compact_boundary', () => {
   });
 });
 
+describe('foldClaudeMessage — 生ログのミラーの欠け（mirror_error）', () => {
+  it('本流の鍵（subpath なし・空）の失敗は、その会話の id を運ぶ', () => {
+    for (const key of [
+      { projectKey: 'p', sessionId: 'sess-1' },
+      { projectKey: 'p', sessionId: 'sess-1', subpath: '' },
+    ]) {
+      expect(only(sdk({ type: 'system', subtype: 'mirror_error', error: 'x', key }))).toEqual({
+        type: 'transcript_mirror_failed',
+        sessionId: 'sess-1',
+      });
+    }
+  });
+
+  it('副次の鍵（subagents など）の失敗・読めない形は運ばない（作り物の id を主張しない）', () => {
+    const fold = (key: unknown) =>
+      foldClaudeMessage(sdk({ type: 'system', subtype: 'mirror_error', error: 'x', key }));
+    expect(fold({ projectKey: 'p', sessionId: 'sess-1', subpath: 'subagents/agent-1' })).toEqual(
+      [],
+    );
+    expect(fold({ projectKey: 'p', sessionId: 5 })).toEqual([]);
+    expect(fold(undefined)).toEqual([]);
+  });
+});
+
 describe('foldClaudeMessage — 拒否（model_refusal_no_fallback / model_refusal_fallback）', () => {
   it('再試行せずに終わった拒否は fellBack: false の refusal になる。category・explanation・元のモデルを運ぶ', () => {
     expect(

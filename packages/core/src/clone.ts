@@ -1086,6 +1086,9 @@ class Clone implements CloneHost {
   #prevFold: FoldState | null = null;
   // 預け先に控えがあるかもしれない（不明を含む）か。無いと分かっていれば消しに行かない
   #foldStoreMayHold = true;
+  // 生ログのミラーが1束を捨てた会話の id（`transcript_mirror_failed`）。その会話の控えは預けない・預けた分は消す: 生ログに欠けがあれば、控えが「会話にある」と言う全文が再起動後の resume に載っているとは言えないため。
+  // 検出できるのは SDK が `mirror_error` を返した回だけで、返す前にプロセスが落ちた回は分からない（`#prevFold` の注と同じ限界）
+  readonly #mirrorGapSessions = new Set<string>();
   #foldLastWritten: string | null = null;
   #foldWrites: Promise<void> = Promise.resolve();
   // 全文へ戻した理由を、このターンで日誌へ書いたか（1ターン1行。`#pump` の先頭で下ろす。観測のみ）
@@ -3924,7 +3927,10 @@ class Clone implements CloneHost {
     const current = this.#captureFold();
     const confirmed = this.#prevFold;
     const raw =
-      confirmed === null || current === null || confirmed.sessionId !== current.sessionId
+      confirmed === null ||
+      current === null ||
+      confirmed.sessionId !== current.sessionId ||
+      this.#mirrorGapSessions.has(current.sessionId)
         ? null
         : serializeFoldState({
             ...confirmed,
@@ -3944,9 +3950,10 @@ class Clone implements CloneHost {
   }
 
   /**
-   * 起動後の最初の束で1回だけ、預けた控えを読み戻す。次の4つがすべて揃ったときだけ使う。1つでも欠ければ今までどおり空から始める（全文）:
+   * 起動後の最初の束で1回だけ、預けた控えを読み戻す。次の5つがすべて揃ったときだけ使う。1つでも欠ければ今までどおり空から始める（全文）:
    * (1) 預けた控えが読めて形が合う (2) 控えの sessionId が、保存してある resume 用の id と一致する (3) 大きすぎる resume として捨てられない（`#resumeCandidateWithinBudget`）
-   * (4) 控えの使用量の観測から「要約が走りうる」と言われない（`#fullReasonThisTurn`）。
+   * (4) その会話の生ログが実在する（`#rawLogBytes` が測れて 0 より大きい。測れない・0 は全文）
+   * (5) 控えの使用量の観測から「要約が走りうる」と言われない（`#fullReasonThisTurn`）。
    * 使えなかった控えは預け先からも消す: 残すと、次の起動が同じ古い控えを読み直す。
    * 周期の数えは1つ進めて戻す（預けたのは1ターン前の控えなので、実際の数えは進んでいる）: 20ターンごとの全文が遅れる側へ倒れない。
    */
@@ -3968,6 +3975,13 @@ class Clone implements CloneHost {
       const resume = await this.#resumeCandidateWithinBudget(storedSessionId);
       this.#resumeVerdict = { stored: storedSessionId, resume };
       if (resume !== storedSessionId) {
+        this.#forgetFoldState();
+        return;
+      }
+      // 生ログが実在するときだけ読み戻す: `#resumeCandidateWithinBudget` は「測れない」も「0 バイト」も resume してよいとみなす（能力を削らないため）が、
+      // その resume が空の会話を開くなら、畳んだ最初の入力（「前と変化なし」）が指す全文はどこにも載っていない
+      const rawLogBytes = await this.#rawLogBytes(storedSessionId);
+      if (rawLogBytes === null || rawLogBytes <= 0) {
         this.#forgetFoldState();
         return;
       }
@@ -6853,6 +6867,20 @@ class Clone implements CloneHost {
   // SDK セッション
   // -------------------------------------------------------------------------
 
+  // 読み戻しの条件のための計測。測れない（預け先が無い・`projectKey` が不明・計測の失敗・`null`）は `null`。`#resumeCandidateWithinBudget` と違い、測れないことを「あってよい」へ倒さない: 倒れ側は全文
+  async #rawLogBytes(sessionId: string): Promise<number | null> {
+    const tail = this.#stores.sessionTranscriptTail;
+    if (tail === undefined) return null;
+    try {
+      const projectKey = this.#projectKey ?? (await this.#stores.sessions.getProjectKey());
+      if (projectKey === null) return null;
+      return await tail.measureSize({ projectKey, sessionId });
+    } catch (error) {
+      noteDroppedRecord('畳みの控えの読み戻し前の生ログの計測', sessionId, error);
+      return null;
+    }
+  }
+
   // `load()` には触れない: 大きすぎる鍵は `load()` を呼ばないことで SDK の契約（返す内容は削れない）を守るため。
   // 測れないとき（預け先が無い・`projectKey` が不明・計測の失敗）は黙って resume する側へ倒す: 能力を削らないためと、通常の起動のたびに同じ1行が日誌に積もるのを避けるため（`#noteLostSession` と同じ）。予算を超えたときだけ日誌へ1行残す。
   // 古い resume 素材を捨てない: 次のセッションの `init` が `session_started` を新しい id で上書きするため。
@@ -8452,6 +8480,13 @@ class Clone implements CloneHost {
           preTokens: event.preTokens,
           ...(event.postTokens === undefined ? {} : { postTokens: event.postTokens }),
         });
+        return;
+      }
+
+      case 'transcript_mirror_failed': {
+        this.#mirrorGapSessions.add(event.sessionId);
+        // 既に預けた控えも捨てる（預けた後に届いた欠けを含む）。以後の預け入れは `#persistFoldStateAfterTurn` が止める
+        if (event.sessionId === this.#situationExplainedSessionId) this.#forgetFoldState();
         return;
       }
 
