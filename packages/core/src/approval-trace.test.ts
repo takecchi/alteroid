@@ -6,7 +6,11 @@ import {
   traceApproval,
   type ApprovalTrace,
 } from './approval-trace.js';
-import { FOLD_READBACK_SKIPPED_JOURNAL_HEAD } from './exchange-kind.js';
+import {
+  FOLD_READBACK_SKIPPED_JOURNAL_HEAD,
+  MEMORY_INDEX_NOT_REINJECTED_JOURNAL_HEAD,
+  MEMORY_INDEX_REINJECTED_JOURNAL_HEAD,
+} from './exchange-kind.js';
 import { journalEntrySchema, type JournalEntryInput, type PendingApproval } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -250,6 +254,32 @@ describe('traceApproval — 対を読む（issue #847 の案B）', () => {
       with: 'self',
       role: 'outbound',
       text: `${FOLD_READBACK_SKIPPED_JOURNAL_HEAD}生ログ0`,
+    });
+    expect((await trace(stores, 'ap-1')).state).toBe('no_actions');
+  });
+
+  it('記憶の索引を載せ直した観測の行は、区間の中でも行動に数えない（印も持たない）', async () => {
+    const stores = createMemoryStores();
+    await answered(stores, 'ap-1');
+    await stores.journal.append(turnStart('ap-1', true));
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `${MEMORY_INDEX_REINJECTED_JOURNAL_HEAD}（要約後。違った文書 1 件: values（内容が変わった））。載せ直した文字数 10。全文書数 2`,
+    });
+    expect((await trace(stores, 'ap-1')).state).toBe('no_actions');
+  });
+
+  it('記憶の索引は載せ直さなかった観測の行は、区間の中でも行動に数えない（印も持たない）', async () => {
+    const stores = createMemoryStores();
+    await answered(stores, 'ap-1');
+    await stores.journal.append(turnStart('ap-1', true));
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `${MEMORY_INDEX_NOT_REINJECTED_JOURNAL_HEAD}（要約後。焼いた時点から変わっていない）。載せ直した文字数 0。全文書数 2`,
     });
     expect((await trace(stores, 'ap-1')).state).toBe('no_actions');
   });
