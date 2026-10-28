@@ -26,7 +26,18 @@ describe('マネージャーに届く文に「クローン」の語が残って�
   it('本番デプロイ起動の拒否の理由', () => {
     const verdict = inspectReleaseProdDispatch('gh workflow run release-prod.yml');
     expect(verdict.matched).toBe(true);
-    if (verdict.matched) expect(verdict.reason).not.toContain(WORD);
+    if (verdict.matched) {
+      expect(verdict.reason).not.toContain(WORD);
+      // ask ではクローンが、deny ではマネージャーが読む。どちらにも「ユーザーへ回せ」と読ませない
+      expect(verdict.reason).not.toContain('ユーザー');
+    }
+  });
+
+  it('1回だけの許可で分類器の拒否を上書いたときの allow の reason（ソースの当該ブロックを読む）', () => {
+    const source = readSource('runner.ts');
+    const at = source.indexOf("kind: 'allow',");
+    expect(at).toBeGreaterThan(-1);
+    expect(source.slice(at, at + 120)).not.toContain(WORD);
   });
 
   it('分類器の拒否が続いたときの担当への知らせ', () => {
