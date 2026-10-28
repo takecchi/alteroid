@@ -3938,7 +3938,7 @@ class Clone implements CloneHost {
   #resetDigestDelta(reason: 'full' | 'compaction', label: DigestResetLabel): void {
     // 預けた控えも同じ条件で捨てる: 畳んだ記録を捨てたのに預け先だけが「畳んである」と言い続けると、次の起動が会話に無い全文を畳むため
     this.#forgetFoldState();
-    // 要約直後の軽い全文（`isLean`）は系統4のスイッチが無効なら使わない: 要約が走りうる／走った回も完全な全文へ倒す
+    // 要約直後の軽い全文（`isLean`）は系統4のスイッチだけで決まる（畳みの系統2が無効でも効く）。系統4が無効なら、要約が走りうる／走った回も完全な全文へ倒す
     if (!this.#digestDelta.reset(this.#tokenSaving.compaction ? reason : 'full')) return;
     // 1ターン1行: 入力を押し込んだ後（commit 済み）に失敗などで戻す回は、同じターンの先頭で書いた行の理由に含める
     if (this.#digestResetLoggedThisTurn) return;

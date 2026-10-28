@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DigestSessionDelta } from './digest-session-delta.js';
+import { DigestSessionDelta, LEAN_DROPPED_SECTIONS } from './digest-session-delta.js';
 
 // DigestSessionDelta({ disabled: true }) = ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT が無効（既定）のときの形。
 // どの口も、2回目以降も全文を返し、控えを持たない。
@@ -88,6 +88,59 @@ describe('DigestSessionDelta: 畳みを切った形', () => {
     const second = off.renderDigest(digest, now);
     expect(second.text).toBe(digest);
     expect(second.fullChars).toBe(digest.length);
+  });
+
+  // 系統4（要約直後の軽い全文）は系統2（畳み）の disabled に縛られない
+  it('⭐ 畳みが切りでも、要約が走った reset のあとは軽い全文（省く節の参照）になり、畳みの参照は出ない', () => {
+    const dropped = LEAN_DROPPED_SECTIONS[0];
+    if (dropped === undefined) throw new Error('LEAN_DROPPED_SECTIONS が空');
+    const digest = [
+      '## 状況',
+      '- a',
+      '',
+      `## ${dropped.name}`,
+      '- 省かれる行',
+      '',
+      '## マネージャー',
+      '- b',
+      '',
+    ].join('\n');
+    const now = new Date();
+    const off = build(true);
+
+    // 起動直後は完全な全文。確定すると、全文へ倒す理由が消える
+    expect(off.isLean()).toBe(false);
+    expect(off.renderDigest(digest, now).text).toBe(digest);
+    off.commit();
+
+    off.reset('compaction');
+    expect(off.isLean()).toBe(true);
+    const lean = off.renderDigest(digest, now);
+    expect(lean.text).not.toContain('省かれる行');
+    expect(lean.text).toContain(dropped.ref);
+    expect(lean.text).toContain('- a');
+    expect(lean.text).toContain('- b');
+    // 畳み（前回と同じ・節ごとの参照）は出ない
+    expect(lean.text).not.toContain('全文は会話の上にある');
+    expect(lean.fullChars).toBe(digest.length);
+
+    // 軽い全文が会話に載ったら、次は通常の全文
+    off.commit();
+    expect(off.isLean()).toBe(false);
+    expect(off.renderDigest(digest, now).text).toBe(digest);
+  });
+
+  it('⭐ reset("full") のあとは、畳みが切りでも軽い全文にならない', () => {
+    const dropped = LEAN_DROPPED_SECTIONS[0];
+    if (dropped === undefined) throw new Error('LEAN_DROPPED_SECTIONS が空');
+    const digest = `## 状況\n- a\n\n## ${dropped.name}\n- 省かれる行\n`;
+    const off = build(true);
+    off.renderDigest(digest, new Date());
+    off.commit();
+    off.reset('compaction');
+    off.reset('full');
+    expect(off.isLean()).toBe(false);
+    expect(off.renderDigest(digest, new Date()).text).toBe(digest);
   });
 
   it('foldStandingRows: 入力をそのまま返す', () => {

@@ -13,6 +13,7 @@ export const TOKEN_SAVING_EXCERPT_ENV = 'ALTEROID_TOKEN_SAVING_EXCERPT';
 
 const ENABLED_SPELLINGS: readonly string[] = ['on', '1', 'true'];
 const DISABLED_SPELLINGS: readonly string[] = ['off', '0', 'false'];
+const notedUnreadable = new Set<string>();
 
 export interface TokenSavingSwitches {
   readonly foldFixedText: boolean;
@@ -32,14 +33,24 @@ function resolveSwitch(
   if (trimmed === '') return defaultEnabled;
   if (ENABLED_SPELLINGS.includes(trimmed)) return true;
   if (DISABLED_SPELLINGS.includes(trimmed)) return false;
-  noteUnreadableRecord(
-    what,
-    `${name} chars=${String(trimmed.length)}`,
-    new Error(
-      `on / 1 / true か off / 0 / false だけが読める。既定の ${defaultEnabled ? '有効' : '無効'}で走る`,
-    ),
-  );
+  // セッションを組むたび（`autoCompactWindowSettings`）に呼ばれるので、同じ名前・同じ値の痕跡は1プロセスで1回だけ残す
+  const noteKey = `${name}=${trimmed}`;
+  if (!notedUnreadable.has(noteKey)) {
+    notedUnreadable.add(noteKey);
+    noteUnreadableRecord(
+      what,
+      `${name} chars=${String(trimmed.length)}`,
+      new Error(
+        `on / 1 / true か off / 0 / false だけが読める。既定の ${defaultEnabled ? '有効' : '無効'}で走る`,
+      ),
+    );
+  }
   return defaultEnabled;
+}
+
+/** テスト用: 読めない綴りの痕跡の「1回だけ」の控えを空にする。 */
+export function clearTokenSavingNotesForTesting(): void {
+  notedUnreadable.clear();
 }
 
 export function resolveTokenSavingFoldFixedText(env: NodeJS.ProcessEnv = process.env): boolean {

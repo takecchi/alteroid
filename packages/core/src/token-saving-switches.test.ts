@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { clearRecentTracesForTesting, recentDroppedTraces } from './dropped-record.js';
 import {
+  clearTokenSavingNotesForTesting,
   resolveTokenSavingCompaction,
   resolveTokenSavingExcerpt,
   resolveTokenSavingFoldFixedText,
@@ -13,6 +14,7 @@ import {
 
 afterEach(() => {
   clearRecentTracesForTesting();
+  clearTokenSavingNotesForTesting();
 });
 
 describe('トークン節約スイッチの既定', () => {
@@ -54,5 +56,13 @@ describe.each([
     const traces = recentDroppedTraces();
     expect(traces).toHaveLength(1);
     expect(traces[0]).toContain(name);
+  });
+
+  it('⭐ 同じ読めない値を何度読んでも、痕跡は1回だけ（セッションを組むたびに増えない）', () => {
+    for (let i = 0; i < 5; i += 1) expect(resolve({ [name]: 'yes' })).toBe(defaultEnabled);
+    expect(recentDroppedTraces()).toHaveLength(1);
+    // 別の綴りは別に残す
+    resolve({ [name]: 'maybe' });
+    expect(recentDroppedTraces()).toHaveLength(2);
   });
 });

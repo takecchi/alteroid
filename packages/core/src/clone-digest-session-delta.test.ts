@@ -1996,4 +1996,45 @@ describe('畳み後の再表示の系統（ALTEROID_TOKEN_SAVING_COMPACTION）�
     expect(digestOf(third).length).toBeLessThan(digestOf(first).length);
     await s.clone.stop();
   });
+
+  // 系統4の軽い再掲は、系統2（畳み）が無効でも COMPACTION だけで入り切りする
+  it.each([undefined, '0', 'off'])(
+    '⭐ 畳みが切り（%j）でも、COMPACTION=1 なら要約のあとは軽い全文になる',
+    async (fold) => {
+      const s = boot({
+        after: (n) => (n === 2 ? [compactBoundary] : []),
+        env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: fold, ALTEROID_TOKEN_SAVING_COMPACTION: '1' },
+      });
+      await seed(s.stores);
+      await seedSettledAndMemory(s.stores);
+
+      const first = await selfTick(s);
+      const second = await selfTick(s);
+      const third = await selfTick(s);
+
+      // 畳みは効かない: 2回目は1回目と同じ完全な全文
+      expect(second).not.toContain('全文は会話の上にある');
+      expect(digestOf(second).length).toBeGreaterThanOrEqual(digestOf(first).length - 50);
+      expectLeanFull(third, { withSettledAndMemory: true });
+      expect(digestOf(third).length).toBeLessThan(digestOf(first).length);
+      await s.clone.stop();
+    },
+  );
+
+  it('⭐ 畳みが切りで COMPACTION も切りなら、要約のあとも完全な全文（軽い全文にならない）', async () => {
+    const s = boot({
+      after: (n) => (n === 2 ? [compactBoundary] : []),
+      env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0', ALTEROID_TOKEN_SAVING_COMPACTION: '0' },
+    });
+    await seed(s.stores);
+    await seedSettledAndMemory(s.stores);
+
+    await selfTick(s);
+    await selfTick(s);
+    const third = await selfTick(s);
+
+    expectCompleteFull(third);
+    expect(third).not.toContain('この節は省いた');
+    await s.clone.stop();
+  });
 });

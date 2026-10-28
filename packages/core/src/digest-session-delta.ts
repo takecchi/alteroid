@@ -193,6 +193,8 @@ export interface DigestSessionDeltaOptions {
    * 真なら何も畳まず、何も控えない: 全入口が毎回の全文を返す（`ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT` が無効の既定）。
    * 入口ごとに分岐を足さず、控えの書き込み口（`#stage` / `#committed` への書き込み）を持つ入口をここで止める: 控えが空のままなら、
    * `exportState` の永続化・読み戻しも、`forgetFixed` などの控えを消す口も、何も起こさない。
+   * 例外: 要約直後の軽い全文（`isLean` と `renderDigest` の lean の分岐。系統4）は畳みの入り切りと別の系統で、`reset('compaction')` を呼ぶ側（Clone）が決める。
+   * 畳みが無効でも、軽い全文の回は省く節の参照だけが出て、前回との差分や節ごとの参照は出ない。
    */
   readonly disabled?: boolean;
 }
@@ -231,7 +233,7 @@ export class DigestSessionDelta {
    */
   reset(reason: 'full' | 'compaction' = 'full'): boolean {
     const hadRecord =
-      this.#committed.sections !== null ||
+      (!this.#disabled && this.#committed.sections !== null) ||
       this.#committed.fixed.size > 0 ||
       this.#committed.requests.size > 0 ||
       this.#committed.paragraphs.size > 0 ||
@@ -298,7 +300,7 @@ export class DigestSessionDelta {
 
   /** 次の要約が軽い全文か: 要約が走りうる／走った理由の reset があり、完全な全文へ倒す理由の reset が（確定した全文の後に）無いとき。 */
   isLean(): boolean {
-    return !this.#disabled && this.#compactionReset && !this.#fullForced;
+    return this.#compactionReset && !this.#fullForced;
   }
 
   /** 前の回の持ち越しを捨てる（入力が入らなかった回の全文を、次の回へ引き継がない）。 */
@@ -492,12 +494,18 @@ export class DigestSessionDelta {
    * `fixedPhrases` に当たる固定の注記は、会話で1回だけ全文にする。
    */
   renderDigest(digest: string, now: Date): RenderedDigest {
-    if (this.#disabled) return { text: digest, fullChars: digest.length };
     const parsed = parseDigest(digest);
     if (parsed.sections.length === 0) return { text: digest, fullChars: digest.length };
 
-    const previous = this.#committed.sections;
+    // 畳み（系統2）が無効でも、要約直後の軽い全文（系統4）は `isLean` だけで決まる。畳みの無効のときは、前回との差分・節ごとの参照・固定の注記の参照を全て使わず、軽い全文の省略だけを掛ける
+    const folding = !this.#disabled;
+    const previous = folding ? this.#committed.sections : null;
     const lean = this.isLean();
+    if (!folding && !lean) {
+      // 軽い全文でない回は全文のまま。全文が会話に載ったことだけ控える（確定で全文へ倒す理由が消える）
+      this.#stage().sections = { at: now, sections: new Map() };
+      return { text: digest, fullChars: digest.length };
+    }
     const fullSections = new Map<string, string>();
     // 件数の行は、同じ会話の2回目以降は項目名を参照にする（数字は毎回出す）。全文へ戻す条件は `fixed()` の控えと同じ
     const out: string[] = parsed.preamble.map((line) => {
@@ -537,9 +545,9 @@ export class DigestSessionDelta {
           continue;
         }
       }
-      fullSections.set(section.heading, bodyText);
+      fullSections.set(section.heading, folding ? bodyText : '');
       const before = previous?.sections.get(section.heading);
-      if (section.heading.startsWith(STANDING_SECTION_HEADING_HEAD)) {
+      if (folding && section.heading.startsWith(STANDING_SECTION_HEADING_HEAD)) {
         // 全文で出した行は、会話でいちばん新しい版になる: 定期の tick の控え（`foldStandingRows`）に残った古い版を、後で「前回と同じ」と畳ませない。出た版で置き換える（同じ版なら控えは変わらず、畳みは続く）。
         // 前回から変わらず畳んだ行（節ごと畳む回を含む）は、控えが別の版を指していれば捨てる（B→A→B→A のように戻る流れで、控えが会話の上の全文とずれないため）
         const beforeItems = new Set(
