@@ -264,6 +264,30 @@ export function describeUnmeteredUsage(rows: readonly UsageUnmeteredRow[] | unde
   ];
 }
 
+// 数え直しが1回以上ある基準だけ1行ずつ出す（0 回は出さない: 出力を増やさない。Issue #5409）。日付に依らない現在値
+// 数え直しの判定は推定で、回数が増え続けるときは誤判定（過大）か取りこぼしの前触れかもしれない、と一言添える
+export function describeUsageResets(
+  rows:
+    | readonly {
+        readonly layer: string;
+        readonly managerId: string;
+        readonly resets: number;
+        readonly lastResetAt?: string | undefined;
+      }[]
+    | undefined,
+): string[] {
+  const reset = (rows ?? []).filter((row) => row.resets > 0);
+  if (reset.length === 0) return [];
+  return [
+    '累積の数え直し（日付に依らない現在値。判定は推定で、誤判定も取りこぼしもありうる）:',
+    ...reset.map(
+      (row) =>
+        `  ${row.layer}層 ${row.managerId}: ${row.resets.toLocaleString('en-US')}回` +
+        (row.lastResetAt === undefined ? '' : `（最後 ${row.lastResetAt}）`),
+    ),
+  ];
+}
+
 // $1 未満は 4 桁まで出す: 2 桁に丸めると `$0.00` になり「使っていない」と読めるため
 export function formatUsd(usd: number): string {
   return `$${usd < 1 ? usd.toFixed(4) : usd.toFixed(2)}`;

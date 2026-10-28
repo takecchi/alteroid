@@ -8,6 +8,7 @@ import {
   describeUnreadableUsageRows,
   describeUnrecordedManagers,
   describeUsageDateOrder,
+  describeUsageResets,
   describeWebSearchRequests,
   formatUsd,
   summarizeUsage,
@@ -116,6 +117,7 @@ export function renderUsage(view: UsageView): string {
   } = view;
   const unreadableRowsLines = describeUnreadableUsageRows(view.unreadableRows);
   const unmeteredLines = describeUnmeteredUsage(view.unmeteredRows);
+  const resetLines = describeUsageResets(view.resets);
 
   const accountLines = () => [
     '',
@@ -144,6 +146,7 @@ export function renderUsage(view: UsageView): string {
     lines.push('その範囲には記録が無い。');
     lines.push(...unreadableRowsLines);
     lines.push(...unmeteredLines);
+    lines.push(...resetLines);
     lines.push('', ...describeUnrecordedManagers(unrecordedManagers));
   } else {
     // 足し直さない: 口ごとに数字が食い違うと信用を失うため
@@ -160,6 +163,7 @@ export function renderUsage(view: UsageView): string {
     lines.push(...describeUnreadableUsage(summary.total));
     lines.push(...unreadableRowsLines);
     lines.push(...unmeteredLines);
+    lines.push(...resetLines);
     lines.push(...describeUnrecordedManagers(unrecordedManagers));
 
     const axis = (title: string, entries: Array<{ label: string; costUsd: number }>) => {

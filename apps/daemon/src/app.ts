@@ -4958,7 +4958,12 @@ export function createApp(deps: AppDeps) {
           'そのときの `breakdown.byToken` は `tokenId: null` の1件だけを返す。' +
           'それは「1本のトークンで全部使った」ではなく「帰属が取れていない」である。' +
           '`unrecordedManagers` は消費の記録が1件も無い委譲（Issue #98）——' +
-          '`from` / `to` などの絞り込みには影響されない（全期間で判定する）。',
+          '`from` / `to` などの絞り込みには影響されない（全期間で判定する）。' +
+          '`resets` は累積の数え直し（resume / `/clear` などで SDK 側の累積が 0 から始まったとみなした回数）を、' +
+          '層 × マネージャーの基準ごとに返す（`resets` は回数、`lastResetAt` は最後の時刻で、0 回なら無い）。' +
+          '基準が1件も無いときは欄ごと無い。**日付に依らない現在値**で、`from` / `to` / `site` / `tokenId` では絞らず、' +
+          '`layer` / `managerId` だけで絞る。判定は推定で、誤って数え直しとみなす・拾えない、のどちらもありうる' +
+          '（回数が増え続けていないかを見張る口）。',
         responses: {
           200: {
             description: '台帳の集計。',

@@ -626,6 +626,52 @@ const EXPECTED_WITHOUT_UNMETERED = [
   '  まだ取りに行っていない（起動直後）。0 ではなく、分からない。',
 ].join('\n');
 
+describe('renderUsage の数え直し（resets。Issue #5409）', () => {
+  const base = { rows: [row({ managerId: 'm1', costUsd: 1 })] };
+
+  it('1回以上ある基準だけ1行ずつ出す（0 回の基準は出さない）', () => {
+    const text = renderUsage(
+      aggregate({
+        ...base,
+        resets: [
+          { layer: 'clone', managerId: 'clone', resets: 0 },
+          {
+            layer: 'manager',
+            managerId: 'mgr-1',
+            resets: 3,
+            lastResetAt: '2026-08-14T11:00:00.000Z',
+          },
+          { layer: 'manager', managerId: 'mgr-2', resets: 1 },
+        ],
+      }),
+    );
+    expect(text).toContain('累積の数え直し');
+    expect(text).toContain('  manager層 mgr-1: 3回（最後 2026-08-14T11:00:00.000Z）');
+    expect(text).toContain('  manager層 mgr-2: 1回');
+    expect(text).not.toContain('clone層 clone:');
+    expect(text.indexOf('合計 $1.00')).toBeLessThan(text.indexOf('累積の数え直し'));
+    expect(text.indexOf('累積の数え直し')).toBeLessThan(text.indexOf('日別:'));
+  });
+
+  it('記録の行が0件でも出す', () => {
+    const text = renderUsage(
+      aggregate({ rows: [], resets: [{ layer: 'manager', managerId: 'mgr-1', resets: 2 }] }),
+    );
+    expect(text).toContain('  manager層 mgr-1: 2回');
+  });
+
+  it('対照: 欄が無い・空配列・全部 0 回なら、出力は導入前と1文字も変わらない', () => {
+    const without = renderUsage(aggregate(base));
+    expect(renderUsage(aggregate({ ...base, resets: [] }))).toBe(without);
+    expect(
+      renderUsage(
+        aggregate({ ...base, resets: [{ layer: 'manager', managerId: 'm1', resets: 0 }] }),
+      ),
+    ).toBe(without);
+    expect(without).not.toContain('数え直し');
+  });
+});
+
 describe('renderUsage の無報告の provider（unmeteredRows）', () => {
   const UNMETERED = [
     {

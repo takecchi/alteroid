@@ -15,6 +15,7 @@ import type {
   UsageUnreadableCounts,
   UsageUnreadableField,
 } from './usage-format.js';
+import { compareCodeUnits } from './code-unit-order.js';
 import { settleWithin } from './usage-probe.js';
 
 // 台帳（自分で数えた推定値）とアカウント全体の残り枠・支出上限（向こうが言っている値、`usage-snapshot.ts`）を足したり混ぜたりしない: 一致する保証がないため
@@ -36,6 +37,7 @@ export {
   addUnreadableCounts,
   describeAccountUsage,
   describeUnmeteredUsage,
+  describeUsageResets,
   describeUnreadableUsage,
   describeUnreadableUsageRows,
   describeUnrecordedManagers,
@@ -593,7 +595,39 @@ export const unreadableUsageRowSchema = z.object({
   fields: z.array(z.string()),
 }) satisfies z.ZodType<UnreadableUsageRow>;
 
-// `since` を必ず添える・始点を黙って隠さない: 台帳が始まる前を照会されたら 0 ではなく「記録が無い」と言えるようにするため。過去分の掘り起こしはしない: 単価を自前で掛けて二重に推定し直すことになるため
+// 基準（層 × actor）ごとの数え直しの回数と最終時刻（Issue #5409）。台帳の `usage_baseline` の現在値で、日付を持たない: `from` / `to` や `site` / `tokenId` では絞らない（絞るのは `layer` / `managerId` だけ）
+// 0 回の基準も載せる（回数 0・`lastResetAt` 無し）: 「数え直しが無い」と「基準が無い」を区別するため。判定は推定で、誤って数え直しとみなす（過大）も拾えない（過少）もありうる。回数が増え続けていないかを見張る口
+export const usageResetRowSchema = z.object({
+  layer: usageLayerSchema,
+  managerId: z.string(),
+  resets: z.number().int().nonnegative(),
+  lastResetAt: isoDateTime.optional(),
+});
+
+export type UsageResetRow = z.infer<typeof usageResetRowSchema>;
+
+// 3実装（インメモリ / fs / pg）が同じ関数で作る: 絞り込みと並びを実装ごとに書き写さないため
+export function resetRowsOfBaselines(
+  baselines: Iterable<Pick<UsageBaseline, 'layer' | 'managerId' | 'resets' | 'lastResetAt'>>,
+  query: Pick<UsageQuery, 'layer' | 'managerId'>,
+): UsageResetRow[] {
+  const out: UsageResetRow[] = [];
+  for (const baseline of baselines) {
+    if (query.layer !== undefined && baseline.layer !== query.layer) continue;
+    if (query.managerId !== undefined && baseline.managerId !== query.managerId) continue;
+    out.push({
+      layer: baseline.layer,
+      managerId: baseline.managerId,
+      resets: baseline.resets,
+      ...(baseline.lastResetAt === undefined ? {} : { lastResetAt: baseline.lastResetAt }),
+    });
+  }
+  return out.sort(
+    (a, b) => compareCodeUnits(a.layer, b.layer) || compareCodeUnits(a.managerId, b.managerId),
+  );
+}
+
+// `since` を必ず添える・始点を黙って隠さない:台帳が始まる前を照会されたら 0 ではなく「記録が無い」と言えるようにするため。過去分の掘り起こしはしない: 単価を自前で掛けて二重に推定し直すことになるため
 export const usageAggregateSchema = z.object({
   rows: z.array(usageRowSchema),
   since: isoDateTime.nullable(),
@@ -616,6 +650,8 @@ export const usageAggregateSchema = z.object({
   unreadableRows: z.array(unreadableUsageRowSchema).optional(),
   // 1行でもあるときだけ載せる: Claude だけの器の応答を変えないため。合計には足さない
   unmeteredRows: z.array(usageUnmeteredRowSchema).optional(),
+  // 基準が1件でもあるときだけ載せる: 台帳が空の器の応答を変えないため。日付に依らない現在値（`usageResetRowSchema`）
+  resets: z.array(usageResetRowSchema).optional(),
   notice: z.literal(USAGE_ESTIMATE_NOTICE),
 });
 

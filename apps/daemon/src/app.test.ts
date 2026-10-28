@@ -1968,6 +1968,57 @@ describe('HTTP API', () => {
     expect(onlyDistill.rows.map((row) => row.site)).toEqual(['distill']);
   });
 
+  it('利用状況に、基準ごとの数え直しの回数と最終時刻が載る（Issue #5409。日付に依らず、layer / managerId で絞れる）', async () => {
+    const record = async (
+      layer: 'clone' | 'manager',
+      managerId: string,
+      at: string,
+      usd: number,
+    ) => {
+      await stores.usage.record({
+        layer,
+        site: 'session',
+        accumulation: 'cumulative',
+        managerId,
+        date: '2026-08-14',
+        at,
+        snapshot: {
+          models: {
+            'claude-opus-5': {
+              inputTokens: 1,
+              outputTokens: 1,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              webSearchRequests: 0,
+              costUsd: usd,
+            },
+          },
+        },
+      });
+    };
+    type ResetsBody = {
+      resets?: { layer: string; managerId: string; resets: number; lastResetAt?: string }[];
+    };
+    expect(((await (await app.request('/usage')).json()) as ResetsBody).resets).toBeUndefined();
+
+    await record('manager', 'mgr-1', '2026-08-14T10:00:00.000Z', 5);
+    await record('manager', 'mgr-1', '2026-08-14T11:00:00.000Z', 2);
+    await record('clone', 'clone', '2026-08-14T12:00:00.000Z', 3);
+
+    const all = (await (await app.request('/usage')).json()) as ResetsBody;
+    expect(all.resets).toEqual([
+      { layer: 'clone', managerId: 'clone', resets: 0 },
+      { layer: 'manager', managerId: 'mgr-1', resets: 1, lastResetAt: '2026-08-14T11:00:00.000Z' },
+    ]);
+
+    const onlyManager = (await (await app.request('/usage?layer=manager')).json()) as ResetsBody;
+    expect(onlyManager.resets?.map((row) => row.managerId)).toEqual(['mgr-1']);
+    const byId = (await (await app.request('/usage?managerId=clone')).json()) as ResetsBody;
+    expect(byId.resets?.map((row) => row.managerId)).toEqual(['clone']);
+    const farFuture = (await (await app.request('/usage?from=2099-01-01')).json()) as ResetsBody;
+    expect(farFuture.resets).toEqual(all.resets);
+  });
+
   it('読めない層・場所は 400（黙って全件を返さない）', async () => {
     expect((await app.request('/usage?layer=worker')).status).toBe(400);
     expect((await app.request('/usage?site=compaction')).status).toBe(400);

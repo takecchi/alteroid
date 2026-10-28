@@ -10,6 +10,7 @@ import {
   addUnreadableCounts,
   foldRecordForStore,
   isRealUsageDate,
+  resetRowsOfBaselines,
   usageAggregateSchema,
   usageBaselineSchema,
   usageDate,
@@ -500,10 +501,13 @@ export class FsUsageStore implements UsageStore {
       ...toUnreadableRows('usage_turns', unreadable.turns, query),
     ];
 
+    const resets = resetRowsOfBaselines(Object.values(file.baselines), query);
+
     return usageAggregateSchema.parse({
       rows,
       ...(unreadableRows.length === 0 ? {} : { unreadableRows }),
       ...(unmeteredRows.length === 0 ? {} : { unmeteredRows }),
+      ...(resets.length === 0 ? {} : { resets }),
       since: file.startedAt,
       layersSince: file.layeredAt,
       tokensSince: file.tokensAt,

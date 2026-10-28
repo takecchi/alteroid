@@ -5,6 +5,7 @@ import {
   stripNulFromUsageQuery,
   stripNulFromUsageRecord,
   foldRecordForStore,
+  resetRowsOfBaselines,
   isRealUsageDate,
   usageDate,
   usageLayerSchema,
@@ -418,10 +419,42 @@ export class PgUsageStore implements UsageStore {
 
     const readableUnmeteredRows = unmeteredRows.flatMap((row) => this.#toUnmeteredRow(row) ?? []);
 
+    // 基準は日付を持たないので `from` / `to` では絞らない（`layer` / `managerId` だけ）。層が読めない行は外す: 基準の1行で集計ごと読めなくならないように
+    const baselineRows = await this.#db
+      .select({
+        layer: usageBaseline.layer,
+        managerId: usageBaseline.managerId,
+        resets: usageBaseline.resets,
+        lastResetAt: usageBaseline.lastResetAt,
+      })
+      .from(usageBaseline)
+      .where(
+        and(
+          ...(query.layer === undefined ? [] : [eq(usageBaseline.layer, query.layer)]),
+          ...(query.managerId === undefined ? [] : [eq(usageBaseline.managerId, query.managerId)]),
+        ),
+      );
+    const resets = resetRowsOfBaselines(
+      baselineRows.flatMap((row) => {
+        const layer = usageLayerSchema.safeParse(row.layer);
+        if (!layer.success) return [];
+        return [
+          {
+            layer: layer.data,
+            managerId: row.managerId,
+            resets: row.resets,
+            lastResetAt: optionalIso(row.lastResetAt),
+          },
+        ];
+      }),
+      query,
+    );
+
     return {
       rows: readableRows,
       ...(unreadableRows.length === 0 ? {} : { unreadableRows }),
       ...(readableUnmeteredRows.length === 0 ? {} : { unmeteredRows: readableUnmeteredRows }),
+      ...(resets.length === 0 ? {} : { resets }),
       since,
       layersSince,
       tokensSince,

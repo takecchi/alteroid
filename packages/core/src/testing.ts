@@ -173,6 +173,7 @@ import { assertValidActiveToken, prepareTokensForReplace } from './token-pool-in
 import {
   addUnreadableCounts,
   foldRecordForStore,
+  resetRowsOfBaselines,
   USAGE_ESTIMATE_NOTICE,
   usageDate,
   ZERO_USAGE,
@@ -1819,9 +1820,11 @@ export function createMemoryStores(): Stores {
             compareCodeUnits(a.provider, b.provider) ||
             compareCodeUnits(a.tokenId ?? '\uffff', b.tokenId ?? '\uffff'),
         );
+      const resets = resetRowsOfBaselines(usageBaselines.values(), query);
       return {
         rows,
         ...(unmeteredRows.length === 0 ? {} : { unmeteredRows }),
+        ...(resets.length === 0 ? {} : { resets }),
         since: usageStartedAt,
         layersSince: usageLayeredAt,
         tokensSince: usageTokensAt,

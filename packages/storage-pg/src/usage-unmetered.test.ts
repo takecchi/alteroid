@@ -140,6 +140,8 @@ describe('PgUsageStore.recordUnmetered（無報告の provider のターン）',
         'beforeTurns',
         'layersSince',
         'notice',
+        // 基準が1件でもあれば載る（Issue #5409）。unmeteredRows とは別の欄
+        'resets',
         'rows',
         'since',
         'tokensSince',
