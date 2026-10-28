@@ -86,6 +86,7 @@ function boot(managers: ManagerPool) {
   const { fn, calls } = fakeSdk();
   const stores = createMemoryStores();
   const clone: CloneHost = createClone({
+    reportSettleMs: 2500,
     stores,
     queryFn: fn,
     env: {},
@@ -310,6 +311,7 @@ describe('戻った担当の5時間枠の知らせを、ターンを起こさず
     });
     const stores = createMemoryStores();
     const clone = createClone({
+      reportSettleMs: 2500,
       stores,
       queryFn: fn,
       env: {},

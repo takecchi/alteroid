@@ -644,6 +644,47 @@ export function resolveInboxSettleMs(env: NodeJS.ProcessEnv = process.env): numb
   return Math.floor(parsed);
 }
 
+// 報告だけ外部の合図より長く待つ（#5400）: 報告は 44 秒間隔で届く連鎖が多く、2.5 秒では束ならない（batchSize=1 が 8 割強）。
+// 固定窓（先頭の報告が着いてから W だけ。後続で延ばさない）: 延ばすと、報告が続く限り返事がいつまでも返らないため。
+// 外部の合図の待ちには広げない: 外部は人間が待つ返事に近いものが混ざり、2.5 秒の桁で足りているため
+const REPORT_SETTLE_MS = 30_000;
+
+// 範囲外の上限: 2 分を超える待ちは、担当が「報告→返事待ち」で進む作業の全体を止めるため
+const REPORT_SETTLE_MS_MAX = 120_000;
+
+export const REPORT_SETTLE_MS_ENV_KEY = 'ALTEROID_REPORT_SETTLE_MS';
+
+const REPORT_SETTLE_MS_UNREADABLE_WHAT = '暇なときの報告の束ね待ちの設定';
+
+// 0 は無効（報告も、届いた時点で即ターンになる。外部の合図の待ちは `resolveInboxSettleMs` が別に持つ）
+export function resolveReportSettleMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[REPORT_SETTLE_MS_ENV_KEY];
+  if (raw === undefined) return REPORT_SETTLE_MS;
+  const trimmed = raw.trim();
+  if (trimmed === '') return REPORT_SETTLE_MS;
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    noteUnreadableRecord(
+      REPORT_SETTLE_MS_UNREADABLE_WHAT,
+      `${REPORT_SETTLE_MS_ENV_KEY} chars=${String(trimmed.length)}`,
+      new Error(`数値として読めない。既定の ${String(REPORT_SETTLE_MS)}ms で走る`),
+    );
+    return REPORT_SETTLE_MS;
+  }
+  if (parsed < 0 || parsed > REPORT_SETTLE_MS_MAX) {
+    noteUnreadableRecord(
+      REPORT_SETTLE_MS_UNREADABLE_WHAT,
+      `${REPORT_SETTLE_MS_ENV_KEY} chars=${String(trimmed.length)}`,
+      new Error(
+        `0〜${String(REPORT_SETTLE_MS_MAX)}ms の外は待ちにならない。既定の ${String(REPORT_SETTLE_MS)}ms で走る`,
+      ),
+    );
+    return REPORT_SETTLE_MS;
+  }
+  return Math.floor(parsed);
+}
+
 // 待つのはマネージャーの報告と外部の合図だけ: 人間・許可確認・質問・timer・蒸留・自発・token-pool の「鍵が戻った」は待たせない
 // runner-registry・attachment-usage の知らせは待つ: 器の入れ替えの知らせの直後に restored の報告が続くと、先頭の知らせが単独ターンになるため
 // token-pool は待たない: 枠の解除は `post()` の印と `unshift` が担い待ちには依らないが、復帰の合図そのものを遅らせない（直前に1件へ絞られていて束ねる相手も少ない）
@@ -651,6 +692,21 @@ function isSettleCandidate(event: InboxEvent): boolean {
   if (event.type === 'manager_message') return event.kind === 'report';
   if (event.type === 'external') return !tokenPoolReopenedSourceOf(event);
   return false;
+}
+
+// 待ちの長さは待たされる合図の種別で選ぶ: 報告だけ長い窓、外部の合図は従来の窓
+// 報告の長い窓の打ち切りは「待ち候補以外が届いたら」へ広げる（人間起点だけにしない）: 人間以外の割り込み
+// （質問・許可確認・自発や定期の tick・shutdown の蒸留）が最大 30 秒待たされ、`stop()` は shutdown の蒸留の完了を待つので同じだけ止まるため。
+// 短い窓（外部）は従来どおり人間起点だけで切る
+function settleWaitFor(
+  event: InboxEvent,
+  reportMs: number,
+  externalMs: number,
+): { ms: number; interruptWhen: (queued: InboxEvent) => boolean } {
+  if (event.type === 'manager_message') {
+    return { ms: reportMs, interruptWhen: (queued) => !isSettleCandidate(queued) };
+  }
+  return { ms: externalMs, interruptWhen: isHumanOriginated };
 }
 
 // 失敗のたびに後退する: 毎分1ターンにしないため
@@ -803,8 +859,10 @@ export interface CloneOptions {
   permissionMode?: PermissionModeName;
   humanPriority?: boolean;
   mergedBatchLimit?: number;
-  /** 暇なときに届いた報告・外部の合図を、束ねるために待つ長さ（ms）。0 で無効。省略は環境変数→既定 */
+  /** 暇なときに届いた外部の合図を、束ねるために待つ長さ（ms）。0 で無効。省略は環境変数→既定 */
   inboxSettleMs?: number;
+  /** 暇なときに届いた報告を、束ねるために待つ長さ（ms。固定窓）。0 で無効。省略は環境変数→既定（30 秒） */
+  reportSettleMs?: number;
   dailyReportRetryDelaysMs?: readonly number[];
   restoreUnreadRetryDelaysMs?: readonly number[];
   contextUsageTimeoutMs?: number;
@@ -1038,6 +1096,7 @@ class Clone implements CloneHost {
   readonly #humanPriority: boolean;
   readonly #mergedBatchLimit: number;
   readonly #inboxSettleMs: number;
+  readonly #reportSettleMs: number;
   readonly #dailyReportRetryDelays: readonly number[];
   readonly #restoreUnreadRetryDelays: readonly number[];
   readonly #contextUsageTimeoutMs: number;
@@ -1288,6 +1347,7 @@ class Clone implements CloneHost {
       humanPriority,
       mergedBatchLimit,
       inboxSettleMs,
+      reportSettleMs,
       dailyReportRetryDelaysMs,
       restoreUnreadRetryDelaysMs,
       contextUsageTimeoutMs,
@@ -1330,6 +1390,7 @@ class Clone implements CloneHost {
     this.#humanPriority = humanPriority ?? resolveCloneHumanPriority(envSource);
     this.#mergedBatchLimit = mergedBatchLimit ?? resolveMergedBatchSizeLimit(envSource);
     this.#inboxSettleMs = inboxSettleMs ?? resolveInboxSettleMs(envSource);
+    this.#reportSettleMs = reportSettleMs ?? resolveReportSettleMs(envSource);
     this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
     this.#restoreUnreadRetryDelays = restoreUnreadRetryDelaysMs ?? RESTORE_UNREAD_RETRY_DELAYS_MS;
     this.#contextUsageTimeoutMs = contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
@@ -2280,13 +2341,10 @@ class Clone implements CloneHost {
       // 暇なときに最初に届いた報告・外部の合図だけ、短く待ってから束ねる: 待ち行列を素通りして単独で即ターンになると、直後に続く合図が「1件目だけ単独 + 残りの束」で余計に1ターン走るため
       // 待ちの間、`#inFlight` は立てたまま・順番待ちの時計は束が決まった後で作る（`arrivedAt` は合図の `at`）ので、この待ちは turn_timing の `queue` 段に乗る
       // 人間起点の合図が届いたら待ちを打ち切る（`Inbox#settle`）。枠が閉じている回は上で短絡済みで、ここへは来ない
-      if (
-        arrivedWhileIdle &&
-        this.#inboxSettleMs > 0 &&
-        !this.#delivery.inbox.closed &&
-        isSettleCandidate(event)
-      ) {
-        await this.#delivery.inbox.settle(this.#inboxSettleMs, isHumanOriginated);
+      // 報告の窓は固定窓で `#reportSettleMs`、外部の合図の窓は `#inboxSettleMs`（`settleWaitFor`）。閉じれば `Inbox#close` が待ちを即座に畳む
+      if (arrivedWhileIdle && !this.#delivery.inbox.closed && isSettleCandidate(event)) {
+        const wait = settleWaitFor(event, this.#reportSettleMs, this.#inboxSettleMs);
+        if (wait.ms > 0) await this.#delivery.inbox.settle(wait.ms, wait.interruptWhen);
       }
 
       // まとめ読みの判定を呼ぶ前に必ずリセットする: `#drainMergeableWithinLimit` は対象外の起点では呼ばれず、戻さないと前の反復で切ったときの断り書きが持ち越されるため。判定の呼び出しより下に置かない: 立った印を拭き取り、`external` の束でだけ断り書きが黙って消えるため

@@ -95,6 +95,7 @@ function boot(script: SdkScript = {}): Boot {
     queryFn: fn,
     env: {},
     inboxSettleMs: 0,
+    reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),

@@ -99,6 +99,7 @@ function boot(script: SdkScript = {}): Boot {
 
   const stores = createMemoryStores();
   const clone = createClone({
+    reportSettleMs: 2500,
     stores,
     queryFn: fn,
     env: {},

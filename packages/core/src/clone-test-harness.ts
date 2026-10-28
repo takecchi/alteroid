@@ -256,6 +256,7 @@ export function setup(
     onFirstTurnToolSearch?: (line: string) => Promise<void>;
     permissionRuleService?: DelegatedPermissionRuleService;
     inboxSettleMs?: number;
+    reportSettleMs?: number;
   } = {},
 ): Setup {
   const { fn, calls } = fakeSdk(reply, sdkOptions);
@@ -263,6 +264,8 @@ export function setup(
     // 暇なときの束ね待ち（2.5秒）は既定で切る: 単発の報告・外部の合図を投げる試験が、実時間で毎回2.5秒止まるため。試すときは cloneOptions で上書きする
     // env では切らない: クローンの env は子プロセスの env へ流れ、Options の写しに載るため
     inboxSettleMs: 0,
+    // 報告の束ね待ち（30秒）も既定で切る: 理由は上と同じ。報告の窓を試す試験は cloneOptions の `reportSettleMs` で上書きする
+    reportSettleMs: 0,
     ...cloneOptions,
     redeliveryGate: ALWAYS_REDELIVER,
     stores,

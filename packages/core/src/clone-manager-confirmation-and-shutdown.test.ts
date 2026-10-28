@@ -73,6 +73,7 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     const manager = fakeManagerSdk();
     const { fn, calls } = fakeSdk(reply);
     const clone = createClone({
+      reportSettleMs: 2500,
       redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
@@ -274,6 +275,7 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     };
 
     const clone = createClone({
+      reportSettleMs: 2500,
       redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,

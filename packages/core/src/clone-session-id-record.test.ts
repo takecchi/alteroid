@@ -98,6 +98,7 @@ function failingSetCloneSessionId(
 
 function bootClone(stores: Stores, fake: Fake): { clone: CloneHost } {
   const clone = createClone({
+    reportSettleMs: 2500,
     stores,
     queryFn: fake.fn,
     env: {},

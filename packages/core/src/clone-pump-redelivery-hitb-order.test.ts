@@ -44,6 +44,7 @@ describe('Clone#pump — #noteRedeliveryPredicateHitB の位置（characterizati
         return 'わかった';
       });
       const clone = createClone({
+        reportSettleMs: 2500,
         redeliveryGate: ALWAYS_REDELIVER,
         stores,
         queryFn: fn,

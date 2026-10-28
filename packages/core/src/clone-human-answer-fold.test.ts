@@ -90,6 +90,7 @@ function boot(script: SdkScript = {}): Boot {
   }) as unknown as typeof sdkQuery;
 
   const clone = createClone({
+    reportSettleMs: 2500,
     stores: createMemoryStores(),
     queryFn: fn,
     env: {},

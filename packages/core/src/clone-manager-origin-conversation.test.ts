@@ -58,6 +58,7 @@ function setupReportTurn(stores: Stores, inTurn: (context: ToolContext) => Promi
     queryFn: fn,
     env: {},
     inboxSettleMs: 0,
+    reportSettleMs: 0,
     mcpServerFactory: (context) => {
       captured = context;
       return createCloneMcpServer(context);

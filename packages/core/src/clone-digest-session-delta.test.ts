@@ -191,6 +191,7 @@ function boot(script: SdkScript = {}): Boot {
     ...(script.unavailableDriver === true ? { driver: unavailableDriver } : { queryFn: fn }),
     env: {},
     inboxSettleMs: 0,
+    reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),
@@ -1047,6 +1048,7 @@ function bootWithHooks(): Boot & { fire: () => Promise<void> } {
     queryFn: fn,
     env: {},
     inboxSettleMs: 0,
+    reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),

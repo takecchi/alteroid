@@ -147,6 +147,7 @@ function bootClone(
 ): Fake & { clone: CloneHost } {
   const fake = fakeSdk();
   const clone = createClone({
+    reportSettleMs: 2500,
     stores,
     queryFn: fake.fn,
     env: {},
@@ -626,6 +627,7 @@ describe('状況の節と manager_list は、メモリの配達待ち行列を�
     }) as unknown as typeof sdkQuery;
 
     const clone = createClone({
+      reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -767,6 +769,7 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       }) as unknown as Query;
     }) as unknown as typeof sdkQuery;
     const clone = createClone({
+      reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -832,6 +835,7 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       }) as unknown as Query;
     }) as unknown as typeof sdkQuery;
     const clone = createClone({
+      reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -905,6 +909,7 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       }) as unknown as Query;
     }) as unknown as typeof sdkQuery;
     const clone = createClone({
+      reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},

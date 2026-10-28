@@ -80,6 +80,7 @@ function boot(managers: ManagerPool) {
     queryFn: fn,
     env: {},
     inboxSettleMs: 0,
+    reportSettleMs: 0,
     managers,
     redeliveryGate: ALWAYS_REDELIVER,
   });

@@ -88,6 +88,7 @@ function boot(script: Script = {}): Boot {
     queryFn: fn,
     env: {},
     inboxSettleMs: 0,
+    reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
     mcpServerFactory: (context) => {
       captured = context;

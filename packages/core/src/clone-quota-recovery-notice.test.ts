@@ -82,6 +82,7 @@ function stubPool(list: () => Promise<ManagerSummary[]>): ManagerPool {
 function boot(managers: ManagerPool, sdkOptions: Parameters<typeof fakeSdk>[1] = {}) {
   const { fn, calls } = fakeSdk(undefined, sdkOptions);
   const clone: CloneHost = createClone({
+    reportSettleMs: 2500,
     stores: createMemoryStores(),
     queryFn: fn,
     env: {},
@@ -198,6 +199,7 @@ describe('枠で止まった知らせを配る直前に、担当の回復を添�
         turnIndex < 2 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
     });
     const clone = createClone({
+      reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},

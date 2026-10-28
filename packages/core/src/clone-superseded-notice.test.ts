@@ -113,6 +113,7 @@ function stubPool(managers: ManagerSummary[]): ManagerPool {
 function bootClone(stores: Stores, managers: ManagerPool): Fake & { clone: CloneHost } {
   const fake = fakeSdk();
   const clone = createClone({
+    reportSettleMs: 2500,
     stores,
     queryFn: fake.fn,
     env: {},

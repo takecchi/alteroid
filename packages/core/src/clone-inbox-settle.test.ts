@@ -9,8 +9,9 @@ import { captureStderr, humanMessage } from './testing.js';
 // 偽の時計で進める（実時間の待ちを足さない: scripts/wallclock-waits-ratchet.test.ts）
 // `waitFor` は実時間の setTimeout を使うので、ここでは使わず `advance` で時計を進めて確かめる
 const SETTLE_MS = 2500;
-const ON = { inboxSettleMs: SETTLE_MS };
-const OFF = { inboxSettleMs: 0 };
+// 報告の窓も 2.5 秒に固定する: 既定は 30 秒（`clone-report-settle.test.ts`）で、ここは 2.5 秒の窓そのものの振る舞いを測る（期待は変えていない）
+const ON = { inboxSettleMs: SETTLE_MS, reportSettleMs: SETTLE_MS };
+const OFF = { inboxSettleMs: 0, reportSettleMs: 0 };
 
 const report = (id: string, text: string): InboxEvent => ({
   type: 'manager_message',

@@ -78,6 +78,7 @@ function boot(managers: ManagerPool) {
   const { fn, calls } = fakeSdk();
   const stores = createMemoryStores();
   const clone: CloneHost = createClone({
+    reportSettleMs: 2500,
     stores,
     queryFn: fn,
     env: {},
