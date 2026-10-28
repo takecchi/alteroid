@@ -11193,13 +11193,27 @@ function journalAttachmentHead(
   return kept + refused;
 }
 
-// 一覧の本文の抜粋。turn_usage だけはモデルごとの行を別々に切る: 全体を1行に潰して切ると、1つ目のモデルの行（cache 内訳つき）で字数が尽き、2つ目以降のモデルが一覧に出ないため
+const JOURNAL_LISTING_MODELS = 3;
+
+// 一覧の本文の抜粋。turn_usage だけは、先頭のモデルの行（本文の先頭から models の数だけ）を行ごとに切り、残り（数え直し・文脈・compaction の行）はこれまでどおりまとめて1本の上限で切る:
+// 全部を1行に潰して切ると、1つ目のモデルの行（cache 内訳つき）で字数が尽き、2つ目以降のモデルが一覧に出ないため。
+// モデルの行は JOURNAL_LISTING_MODELS 本まで。超えた分は「…ほか N モデル」に畳む（全部は id 指定の全文読みで出る）ので、行の長さは「モデル最大3行 + 残り120字」で頭打ちになる
 function journalListingBody(entry: JournalEntry, body: string): string {
   if (entry.type !== 'turn_usage') return excerptRow(body, JOURNAL_TEXT_EXCERPT);
-  return body
-    .split('\n')
-    .map((line) => excerptRow(line, JOURNAL_TEXT_EXCERPT))
-    .join(' / ');
+  const modelCount = Object.keys(entry.models).length;
+  const lines = body.split('\n');
+  const modelLines = lines.slice(0, modelCount);
+  const rest = lines.slice(modelCount).join('\n');
+  const shown = modelLines
+    .slice(0, JOURNAL_LISTING_MODELS)
+    .map((line) => excerptRow(line, JOURNAL_TEXT_EXCERPT));
+  const hidden = modelLines.length - shown.length;
+  const parts = [
+    ...shown,
+    ...(hidden > 0 ? [`…ほか ${hidden} モデル`] : []),
+    ...(rest.trim() === '' ? [] : [excerptRow(rest, JOURNAL_TEXT_EXCERPT)]),
+  ];
+  return parts.join(' / ');
 }
 
 // 凡例の札は `conv#N`: 実在の会話 id（UUID など）と取り違えない形にする。札にしない id は行にそのまま出る
