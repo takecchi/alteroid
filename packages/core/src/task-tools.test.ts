@@ -184,6 +184,72 @@ describe('task_* 道具', () => {
     expect(await h.call('task_list', { id: first, offset: -1 })).toContain('offset');
   });
 
+  it('task_list は予算で切れたら続きの cursor を案内し、辿ると全件が1度ずつ出る', async () => {
+    const h = harness();
+    const long = 'あ'.repeat(300);
+    for (let i = 0; i < 80; i++) {
+      const pad = String(i).padStart(3, '0');
+      await h.call('task_add', { title: `件${pad}`, body: `${long}${pad}` });
+    }
+    const all = await h.ids();
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const out = await h.call('task_list', cursor === undefined ? {} : { cursor });
+      for (const id of all) if (out.includes(id)) seen.push(id);
+      const next = /task_list cursor=([A-Za-z0-9_-]+) で取れる/.exec(out);
+      if (next === null) break;
+      expect(out).not.toContain('この一覧に続きを取る口はまだ無い');
+      cursor = next[1];
+    }
+    expect(seen).toEqual(all);
+  });
+
+  it('task_list の cursor は、壊れたもの・includeClosed の食い違い・錨が消えたものを黙って別の続きにしない', async () => {
+    const h = harness();
+    const long = 'あ'.repeat(300);
+    for (let i = 0; i < 80; i++) await h.call('task_add', { title: `件${i}`, body: long });
+    const first = await h.call('task_list', {});
+    const cursor = /task_list cursor=([A-Za-z0-9_-]+) で取れる/.exec(first)![1]!;
+    expect(await h.call('task_list', { cursor: 'xxxx' })).toContain('壊れている');
+    expect(await h.call('task_list', { cursor, includeClosed: true })).toContain('includeClosed');
+    const anchor = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')).id as string;
+    await h.call('task_set_status', { taskId: anchor, status: 'done', reason: '済み' });
+    expect(await h.call('task_list', { cursor })).toContain('いまの一覧に居ない');
+  });
+
+  it('閉じた件の開き直しは日誌が先: 日誌が落ちたら閉じたままで、閉じた記録が残る', async () => {
+    const stores = createMemoryStores();
+    const realAppend = stores.journal.append.bind(stores.journal);
+    let failing = false;
+    stores.journal.append = async (entry) => {
+      if (failing) throw new Error('journal down');
+      return realAppend(entry);
+    };
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      conversationId: () => undefined,
+      memoryCause: () => 'clone',
+      managers: {} as unknown as ManagerPool,
+    });
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const found = tools.find((entry) => entry.name === name)!;
+      return found.handler(args as never, {});
+    };
+    await call('task_add', { title: 'a', body: 'a' });
+    const [task] = (await stores.tasks.list()).entries;
+    await call('task_set_status', { taskId: task!.id, status: 'done', reason: '終わった理由' });
+    failing = true;
+    await expect(
+      call('task_set_status', { taskId: task!.id, status: 'queued', reason: '戻す' }),
+    ).rejects.toThrow('行為は起きていない');
+    const after = await stores.tasks.get(task!.id);
+    expect(after?.status).toBe('done');
+    expect(after?.closedReason).toBe('終わった理由');
+    expect(after?.closedBy).toBe('clone');
+  });
+
   it('task が1件も無いとき、空と言う', async () => {
     const h = harness();
     expect(await h.call('task_list', {})).toContain('task は無い');

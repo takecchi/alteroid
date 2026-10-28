@@ -1274,7 +1274,7 @@ export interface TaskStore {
 
   /**
    * 状態を変える。遷移の規則は `planTaskTransition`。同じ状態は `unchanged`、不正な遷移は `rejected`（例外にしない）。
-   * `by` は必須（`CommitmentStore.close` と同じ理由）。閉じた行を queued に戻すと閉じた記録を外して並びの末尾側から置き直すので、
+   * `by` は必須（`CommitmentStore.close` と同じ理由）。閉じた行を queued に戻すと閉じた記録を外し、既定の規則（`placeTask` の既定の置き場所。human 起点は開いている human 起点の最後の直後、それ以外は末尾）で置き直すので、
    * 呼び出し側は `before` を日誌へ逐語で残すこと。読めない行は `UnreadableTaskError`。
    */
   setStatus(

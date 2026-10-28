@@ -14452,7 +14452,8 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       /…ほか \d+ 件は詳細を省略（新しい順に先頭から \d+ 件だけ出した。残りは上の索引の id で approvals_list id=<id> として開ける）。/,
     schedule_list: /…ほか \d+ 件は省略（継続中の依頼は \d+ 件あり、\d+ 件だけ出した。/,
     commitment_list: /…ほか \d+ 件は省略（未了は \d+ 件あり、古い順に \d+ 件だけ出した。/,
-    task_list: /…ほか \d+ 件は省略（task は \d+ 件あり、並びの先頭から \d+ 件だけ出した。/,
+    task_list:
+      /…ほか \d+ 件は省略（task は \d+ 件あり、並びの \d+ 番目から \d+ 件だけ出した。.*続きは task_list cursor=[A-Za-z0-9_-]+ で取れる/,
     token_list: /…ほか \d+ 件は省略（プールは \d+ 件あり、order の昇順に \d+ 件だけ出した）。/,
     permission_grant_list:
       /…ほか \d+ 件は省略（許可の記録は \d+ 件あり、grantedAt の昇順に \d+ 件だけ出した）。/,
@@ -19081,6 +19082,45 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           conversationId: () => undefined,
         });
         return callExpectingError(tools, 'task_move', { taskId: 't-move-test', to: 'front' });
+      },
+    },
+    {
+      // 閉じた件の開き直しは日誌が先（#5176 と同じ線）: 日誌が落ちたら閉じたまま、閉じた記録も残る
+      tool: 'task_set_status',
+      firstLine: ACT_NOT_PERFORMED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-13g');
+        const at = '2026-01-01T00:00:00.000Z';
+        await stores.tasks.add({
+          id: 't-reopen-test',
+          createdAt: at,
+          updatedAt: at,
+          status: 'queued',
+          origin: 'self',
+          title: '開き直す件',
+          body: '本文',
+        });
+        await stores.tasks.setStatus('t-reopen-test', 'done', {
+          reason: '終わった',
+          by: 'clone',
+          at: '2026-01-01T01:00:00.000Z',
+        });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        const outcome = await callExpectingError(tools, 'task_set_status', {
+          taskId: 't-reopen-test',
+          status: 'queued',
+          reason: 'まだ終わっていなかった',
+        });
+        const after = await stores.tasks.get('t-reopen-test');
+        expect(after?.status).toBe('done');
+        expect(after?.closedReason).toBe('終わった');
+        expect(after?.closedBy).toBe('clone');
+        return outcome;
       },
     },
     {
