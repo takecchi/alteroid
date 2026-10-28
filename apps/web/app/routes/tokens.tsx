@@ -41,6 +41,7 @@ import type {
   TokenRecovery,
   TokenRotationEntry,
   TokenRotationSettings,
+  TokensActive,
   TokensRowsUnreadable,
 } from '@alteroid/logic';
 
@@ -211,6 +212,9 @@ function PoolAndSettings() {
             tokens={data.tokens}
             targetTokenId={targetTokenId}
             rowsUnreadable={data.rowsUnreadable}
+            active={data.active}
+            activeNever={data.activeNever === true}
+            activeUnreadable={data.activeUnreadable}
           />
           {data.settings === undefined ? (
             // 既定値では埋めない: off にしてあった回転を既定として見せることになるため
@@ -321,10 +325,16 @@ function PoolCard({
   tokens,
   targetTokenId,
   rowsUnreadable,
+  active,
+  activeNever,
+  activeUnreadable,
 }: {
   tokens: readonly AgentTokenView[];
   targetTokenId?: string;
   rowsUnreadable?: TokensRowsUnreadable;
+  active?: TokensActive;
+  activeNever: boolean;
+  activeUnreadable?: { reason: string };
 }) {
   const sorted = [...tokens].sort((a, b) => a.order - b.order);
   // 「既に無い」は行ではなく一覧側に持つ: hook は断る前に一覧を取り直すので、行の state に置くと断りの文言も一緒に消えるため
@@ -346,6 +356,7 @@ function PoolCard({
         </WarnNote>
       )}
       {gone !== undefined && <TokenWriteError error={gone} className="m-4" />}
+      <ActiveNote active={active} never={activeNever} unreadable={activeUnreadable} />
       {rowsUnreadable !== undefined && <UnreadableRowsNote unreadable={rowsUnreadable} />}
       {sorted.length === 0 ? (
         rowsUnreadable !== undefined ? (
@@ -366,6 +377,7 @@ function PoolCard({
               key={token.id}
               token={token}
               highlighted={token.id === targetTokenId}
+              isActive={active?.tokenId === token.id}
               onGone={setGone}
             />
           ))}
@@ -373,6 +385,43 @@ function PoolCard({
       )}
     </Card>
   );
+}
+
+// 現役の指名の3状態を別々に言う: 「まだ一度も無い」と「読めない」を空欄や 0 で潰さないため。どの欄も無いのは現役を返さない古いデーモンで、何も言わない（「無い」と偽らない）
+function ActiveNote({
+  active,
+  never,
+  unreadable,
+}: {
+  active?: TokensActive;
+  never: boolean;
+  unreadable?: { reason: string };
+}) {
+  if (active !== undefined) {
+    return (
+      <p className="mx-4 mt-3 text-sm" data-testid="active-note">
+        現役の指名: <code className="font-mono break-all">{active.tokenId}</code>（世代{' '}
+        {active.generation}、{formatDateTime(active.rotatedAt)}）
+      </p>
+    );
+  }
+  if (unreadable !== undefined) {
+    return (
+      <div data-testid="active-note">
+        <WarnNote className="m-4">
+          現役の指名は読めない（{unreadable.reason}）。一覧のどれが現役かは言えない。
+        </WarnNote>
+      </div>
+    );
+  }
+  if (never) {
+    return (
+      <p className="mx-4 mt-3 text-sm text-muted-foreground" data-testid="active-note">
+        現役の指名: まだ一度も無い（器の環境変数のまま走っている）
+      </p>
+    );
+  }
+  return null;
 }
 
 // 一覧を書き換える操作は読めない行を捨てずに持ち越す: PUT /tokens は全文置換だが読めない行は残し、消すのは id を指す消すボタンだけのため
@@ -455,11 +504,13 @@ function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }
 function TokenRow({
   token,
   highlighted = false,
+  isActive = false,
   onGone,
 }: {
   token: AgentTokenView;
   onGone: (error: TokenNotFoundError | undefined) => void;
   highlighted?: boolean;
+  isActive?: boolean;
 }) {
   const availability = tokenAvailabilityAt(token);
   const state = describeAvailability(availability);
@@ -527,6 +578,8 @@ function TokenRow({
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium break-all">{token.label}</span>
         <Badge tone={state.tone}>{state.label}</Badge>
+        {/* 状態の印とは別に出す: 「使用可能」は現役の意味ではないため */}
+        {isActive && <Badge tone="ok">現役</Badge>}
         <span className="text-xs text-muted-foreground">order {token.order}</span>
       </div>
 

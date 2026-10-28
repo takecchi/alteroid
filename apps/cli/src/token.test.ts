@@ -230,6 +230,81 @@ describe('alteroid token list', () => {
     expect(text).toContain('first');
   });
 
+  describe('現役の指名（#5457）', () => {
+    const POOL = [
+      { id: 'tok-a', label: 'first', order: 0, sha256: 'aaaaaaaaaaaa' },
+      { id: 'tok-b', label: 'second', order: 1, sha256: 'bbbbbbbbbbbb' },
+    ];
+    const linesOf = (text: string) => text.split('\n');
+
+    it('現役が在る応答: 指名を言い、「← 現役」の印は現役の鍵の行にだけ付く', async () => {
+      setReply('GET', '/tokens', {
+        status: 200,
+        body: {
+          tokens: POOL,
+          settings: EMPTY_SETTINGS,
+          active: { tokenId: 'tok-b', generation: 3, rotatedAt: '2026-10-29T00:00:00.000Z' },
+        },
+      });
+      const read = captureStdout();
+
+      await tokenListCommand();
+
+      const text = read();
+      expect(text).toContain('現役の指名: tok-b（世代 3、2026-10-29T00:00:00.000Z）');
+      expect(text.match(/← 現役/g)).toHaveLength(1);
+      expect(linesOf(text).find((line) => line.includes('id=tok-b'))).toContain('← 現役');
+      expect(linesOf(text).find((line) => line.includes('id=tok-a'))).not.toContain('← 現役');
+    });
+
+    it('まだ一度も無い応答: 「まだ一度も無い」と言い、どの行にも印は付かない', async () => {
+      setReply('GET', '/tokens', {
+        status: 200,
+        body: { tokens: POOL, settings: EMPTY_SETTINGS, activeNever: true },
+      });
+      const read = captureStdout();
+
+      await tokenListCommand();
+
+      const text = read();
+      expect(text).toContain('現役の指名: まだ一度も無い（器の環境変数のまま走っている）');
+      expect(text).not.toContain('← 現役');
+      expect(text).not.toContain('読めない');
+    });
+
+    it('読めない応答: 「読めない」と理由を言い、「まだ一度も無い」とは言わず、印も付けず、一覧は出る', async () => {
+      setReply('GET', '/tokens', {
+        status: 200,
+        body: {
+          tokens: POOL,
+          settings: EMPTY_SETTINGS,
+          activeUnreadable: { reason: 'generation が数値でない（テスト用）' },
+        },
+      });
+      const read = captureStdout();
+
+      await tokenListCommand();
+
+      const text = read();
+      expect(text).toContain('現役の指名は読めない（generation が数値でない（テスト用））');
+      expect(text).not.toContain('まだ一度も無い');
+      expect(text).not.toContain('← 現役');
+      expect(text).toContain('id=tok-a');
+      expect(text).toContain('id=tok-b');
+    });
+
+    it('対照: 現役を返さない版（どの欄も無い）は、現役について1文字も言わない', async () => {
+      setReply('GET', '/tokens', { status: 200, body: { tokens: POOL, settings: EMPTY_SETTINGS } });
+      const read = captureStdout();
+
+      await tokenListCommand();
+
+      const text = read();
+      expect(text).not.toContain('現役');
+      expect(text).toContain('id=tok-a');
+    });
+  });
+
   it('読めない行が在り、読めた行が0件のとき、「登録されていません」「一切効きません」と言わない（#2346）', async () => {
     setReply('GET', '/tokens', {
       status: 200,

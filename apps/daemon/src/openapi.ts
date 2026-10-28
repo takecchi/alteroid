@@ -1427,6 +1427,22 @@ export const tokensResponseSchema = z.object({
   version: z.string().optional(),
 });
 
+// `GET /tokens` だけが持つ現役の指名（道具 `token_list` の「現役の指名」と同じ読み口）。3つの状態を別の欄で言う:
+// `active` = 指名が在る / `activeNever: true` = まだ一度も無い（器の環境変数のまま） / `activeUnreadable` = 読めない。
+// どれも無い応答は、現役を返さない古いデーモンのもの（「無い」と読まない）。0 や空の指名では偽らない。
+// PUT 系の応答（`tokensResponseSchema` を継ぐ）へは足さない: 書いた直後の応答に載せると、読み直した値かどうかが曖昧になるため。
+export const tokensListResponseSchema = tokensResponseSchema.extend({
+  active: z
+    .object({
+      tokenId: z.string(),
+      generation: z.number().int().nonnegative(),
+      rotatedAt: z.string(),
+    })
+    .optional(),
+  activeNever: z.literal(true).optional(),
+  activeUnreadable: z.object({ reason: z.string() }).optional(),
+});
+
 // 表示の読み直しに失敗したときは `tokens` を載せない: 空の `tokens` は「プールが空」と読めてしまうため。
 export const tokensReplaceResponseSchema = tokensResponseSchema.extend({
   tokens: z.array(agentTokenViewSchema).optional(),

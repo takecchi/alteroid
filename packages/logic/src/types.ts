@@ -89,6 +89,7 @@ export type AgentTokenView = TokensState['tokens'][number];
 export type TokenRotationSettings = NonNullable<TokensState['settings']>;
 export type TokensSettingsUnreadable = NonNullable<TokensState['settingsUnreadable']>;
 export type TokensRowsUnreadable = NonNullable<TokensState['rowsUnreadable']>;
+export type TokensActive = NonNullable<TokensState['active']>;
 export type TokenAvailability = 'disabled' | 'invalidated' | 'cooling' | 'ready';
 export type TokenRecovery = NonNullable<AgentTokenView['recovery']>;
 export type TokenRotationEntry = Extract<JournalEntry, { type: 'token_rotation' }>;
