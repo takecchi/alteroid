@@ -277,7 +277,8 @@ export function classifyUnobservedOutcome(
   return { reportState, rank };
 }
 
-function describeReportState(state: UnobservedReportState): string {
+// `manager_list` が行の中の固定の一文を畳むとき、行の字面と突き合わせるために出す（字面をあちらで写さない）
+export function describeReportState(state: UnobservedReportState): string {
   switch (state) {
     case 'none':
       return (

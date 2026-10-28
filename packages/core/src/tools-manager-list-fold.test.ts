@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { describeReportState } from './digest.js';
 import { DigestSessionDelta } from './digest-session-delta.js';
 import type { ManagerPool, ManagerSummary } from './manager.js';
 import { createMemoryStores } from './testing.js';
@@ -89,9 +90,10 @@ const stuckInbox = (): unknown[] =>
 function harness(
   managers: () => ManagerSummary[],
   delta: DigestSessionDelta | null,
-  extra: { inbox?: unknown[]; queued?: number } = {},
+  extra: { inbox?: unknown[]; queued?: number; ledger?: string[] } = {},
 ) {
   const stores = createMemoryStores();
+  const ledger = extra.ledger ?? [];
   if (extra.inbox !== undefined) {
     const entries = extra.inbox;
     (stores.inbox as { peekPending: () => Promise<unknown> }).peekPending = async () => ({
@@ -113,6 +115,17 @@ function harness(
   return async (args: Record<string, unknown> = {}, tool = 'manager_list'): Promise<string> => {
     const found = tools.find((entry) => entry.name === tool);
     if (!found) throw new Error(`${tool} が無い`);
+    for (const id of ledger) {
+      await stores.jobs.putJob({
+        id,
+        managerId: id,
+        createdAt: '2026-10-27T00:00:00.000Z',
+        updatedAt: '2026-10-27T00:00:00.000Z',
+        status: 'done',
+        summary: '依頼',
+        conversationId: `conv-${id}`,
+      });
+    }
     const result = await found.handler(args as never, {});
     return (result.content ?? [])
       .map((block) => (block.type === 'text' ? block.text : ''))
@@ -370,6 +383,86 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
     expect(second).toContain('デーモンの再起動で作り直される');
     expect(second).toContain('runner は1台のみ登録されている');
     expect(second.length).toBeLessThan(first.length - 150);
+  });
+
+  it('⭐ 行の中の起点の会話の使い方: 出ている行の2行目から短くなり、会話の id は毎行出る', async () => {
+    const hint = '（報告を人間へ知らせるなら、この会話へ書く）';
+    const rows = (): ManagerSummary[] => [summary(1), summary(2), summary(3)];
+    const ledger = ['mgr-001', 'mgr-002', 'mgr-003'];
+    const call = harness(rows, new DigestSessionDelta(), { ledger });
+
+    const first = await call();
+    const second = await call();
+
+    // 1回目: 最初の行だけ全文、残りは参照。2回目: 全部参照（全文は会話の上に在る）
+    expect(first.split(hint).length - 1).toBe(1);
+    expect(second.split(hint).length - 1).toBe(0);
+    for (const text of [first, second]) {
+      for (const id of ledger) expect(text).toContain(`起点の会話: conv-${id}`);
+      expect(text.split('（知らせるならこの会話へ）').length - 1).toBe(text === first ? 2 : 3);
+    }
+    expect(second.length).toBeLessThan(first.length);
+    // 口が無い器は全行が全文
+    const plain = await harness(rows, null, { ledger })();
+    expect(plain.split(hint).length - 1).toBe(3);
+  });
+
+  it('⭐ 行の中の「本文は届いているが…」「本文が1文字も届いていない」: 2行目から短くなり、結論は残る', async () => {
+    const delivered = '⚠ 本文は届いているが、完遂した報告とは限らない。';
+    const none = '⚠ 終端までに本文が1文字も届いていない。';
+    const rows = (): ManagerSummary[] => [
+      summary(1, { status: 'lost' }),
+      summary(2, { status: 'lost' }),
+      summary(3, { status: 'lost', lastReport: undefined, lastReportAt: undefined }),
+      summary(4, { status: 'lost', lastReport: undefined, lastReportAt: undefined }),
+    ];
+    const call = harness(rows, new DigestSessionDelta());
+
+    const first = await call();
+    const second = await call();
+
+    const count = (text: string, phrase: string): number => text.split(phrase).length - 1;
+    expect(
+      count(first, '終端の直前に「喋っただけの本文」がそのまま報告として出る経路が runner に在り'),
+    ).toBe(1);
+    expect(count(first, 'この委譲が何をしたかは、この一覧からは1文字も読めない')).toBe(1);
+    expect(
+      count(second, '終端の直前に「喋っただけの本文」がそのまま報告として出る経路が runner に在り'),
+    ).toBe(0);
+    expect(count(second, 'この委譲が何をしたかは、この一覧からは1文字も読めない')).toBe(0);
+    // 参照にも結論が残る: 行ごとに付く（行を消さない）
+    for (const text of [first, second]) {
+      expect(
+        count(text, delivered.slice(0, '⚠ 本文は届いているが、完遂した報告とは限らない'.length)),
+      ).toBe(2);
+      expect(count(text, none.slice(0, '⚠ 終端までに本文が1文字も届いていない'.length))).toBe(2);
+    }
+    expect(second).toContain('台帳では区別できない');
+    expect(second).toContain('何をしたかはこの一覧から読めない');
+    expect(second.length).toBeLessThan(first.length - 150);
+  });
+
+  it('報告の抜粋の中に同じ字面が在っても書き換えない（畳むのは manager_list が組んだ行だけ）', async () => {
+    const hint = '（報告を人間へ知らせるなら、この会話へ書く）';
+    const delivered = describeReportState('delivered');
+    const rows = (): ManagerSummary[] => [
+      summary(1, { lastReport: `引用: ${hint}` }),
+      summary(2, { lastReport: `引用: ${hint}` }),
+      summary(3, { lastReport: `引用: ${delivered}` }),
+      summary(4, { lastReport: `引用: ${delivered}` }),
+    ];
+    const call = harness(rows, new DigestSessionDelta(), {
+      ledger: ['mgr-001', 'mgr-002', 'mgr-003', 'mgr-004'],
+    });
+
+    await call();
+    const second = await call();
+
+    // 起点の行は参照になり、報告の抜粋の4本は全文のまま
+    expect(second.split(hint).length - 1).toBe(2);
+    expect(second.split(delivered).length - 1).toBe(2);
+    expect(second).toContain(`直近の報告（2026-10-27T01:00:00.000Z 受信）: 引用: ${hint}`);
+    expect(second).toContain(`直近の報告（2026-10-27T01:00:00.000Z 受信）: 引用: ${delivered}`);
   });
 
   it('口が無い器（テスト・蒸留）は何度呼んでも全文', async () => {
