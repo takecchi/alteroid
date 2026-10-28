@@ -12,6 +12,41 @@ export function containsShellMetacharacters(value: string): boolean {
   return SHELL_METACHARACTERS.test(value);
 }
 
+// 二重引用符の中でも bash が解釈する文字（展開・エスケープ）。`;&|()<>` は二重引用符の中では字面どおりになる。
+const DOUBLE_QUOTE_ACTIVE = /[$`\\]/;
+
+/**
+ * コマンド側の判定。引用符の中の区切り文字は字面どおりの文字なので数えない: `--subject "feat: x (#6354)"` のように
+ * 引数の本文へ `(` が入るだけで不一致にすると、人間が承認した許可が通らず分類器へ回る（#5431）。
+ * 単一引用符の中は全部が字面、二重引用符の中は `$` `` ` `` `\` だけが効く。閉じていない引用符は解釈できないので真に倒す。
+ * 引用符の外の `#` も数える: bash は語頭の `#` から行末までをコメントとして捨てるので、`#'` の後ろの引用符を
+ * 開始と数えて改行を字面として飛ばすと、次の行が単独のコマンドとして走る穴になる（#5432 のレビュー）。
+ * 改行・復帰は引用符の中でも数える: 走査が bash とずれたときの被害を行の境界で止める安全側の倒し方で、
+ * 本文に改行が要るときは `--body-file` に任せる。
+ * 規則側（{@link containsShellMetacharacters}）は引用符を許さず従来どおり: 規則は広がる方向の検算の基準だから。
+ */
+export function hasUnquotedShellMetacharacters(command: string): boolean {
+  let quote: "'" | '"' | null = null;
+  for (const ch of command) {
+    if (ch === '\n' || ch === '\r') return true;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      else if (DOUBLE_QUOTE_ACTIVE.test(ch)) return true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === '#' || SHELL_METACHARACTERS.test(ch)) return true;
+  }
+  return quote !== null;
+}
+
 export type PermissionRuleKind = 'exact' | 'prefix';
 
 export interface ParsedPermissionRule {
@@ -51,7 +86,7 @@ export function parsePermissionRule(rule: string): PermissionRuleParseResult {
 
 /** 不一致は `deny` を意味しない（呼び出し側が「何も決めない」か「要求の拒否」かを選ぶ）。 */
 export function matchPermissionRule(rule: string, command: string): boolean {
-  if (containsShellMetacharacters(command)) return false;
+  if (hasUnquotedShellMetacharacters(command)) return false;
   const parsed = parsePermissionRule(rule);
   if (!parsed.ok) return false;
   if (parsed.kind === 'exact') return command === parsed.command;

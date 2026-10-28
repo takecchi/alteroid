@@ -84,6 +84,53 @@ describe('matchPermissionRule', () => {
     expect(matchPermissionRule('Bash(gh pr view)', 'gh pr view; echo done')).toBe(false);
   });
 
+  it('pr-merge スキルの標準形（件名に (#N)・本文に区切り文字）は、引用符の中なので一致する（#5431）', () => {
+    const rule = 'Bash(gh pr merge:*)';
+    expect(
+      matchPermissionRule(
+        rule,
+        'gh pr merge 6354 --squash --match-head-commit abc123 --subject "fix: x (#6354)" --body "a; b && c (d) | e"',
+      ),
+    ).toBe(true);
+    expect(matchPermissionRule(rule, 'gh pr merge 6354 --squash --body-file /tmp/body.md')).toBe(
+      true,
+    );
+    expect(matchPermissionRule(rule, "gh pr merge 6354 --squash --body 'a $(x) `y` \\z'")).toBe(
+      true,
+    );
+  });
+
+  it('引用符の外・引用符を閉じた後の区切りや、二重引用符内の展開は一致しない', () => {
+    const rule = 'Bash(gh pr merge:*)';
+    expect(matchPermissionRule(rule, 'gh pr merge 1 --body "x"; rm -rf /')).toBe(false);
+    expect(matchPermissionRule(rule, 'gh pr merge 1 --body "x" && rm -rf /')).toBe(false);
+    expect(matchPermissionRule(rule, 'gh pr merge 1 --body "$(whoami)"')).toBe(false);
+    expect(matchPermissionRule(rule, 'gh pr merge 1 --body "`whoami`"')).toBe(false);
+    expect(matchPermissionRule(rule, 'gh pr merge 1 --body "a\\"; rm -rf /; echo \\""')).toBe(
+      false,
+    );
+  });
+
+  it.each(["'", '"'])(
+    '引用符の外の # は bash ではコメントなので、後ろの %s を引用符の始まりと数えて次の行を隠す形は一致しない（#5432 レビュー）',
+    (q) => {
+      const rule = 'Bash(gh pr merge:*)';
+      expect(matchPermissionRule(rule, `gh pr merge 1 #${q}\necho PWNED\n#${q}`)).toBe(false);
+      expect(matchPermissionRule(rule, `gh pr merge 1 #${q} x ${q}`)).toBe(false);
+    },
+  );
+
+  it('改行・復帰は引用符の中でも一致しない（本文に改行が要るときは --body-file）', () => {
+    const rule = 'Bash(gh pr merge:*)';
+    expect(matchPermissionRule(rule, 'gh pr merge 1 --body "a\nb"')).toBe(false);
+    expect(matchPermissionRule(rule, "gh pr merge 1 --body 'a\rb'")).toBe(false);
+  });
+
+  it('閉じていない引用符は解釈できないので一致しない', () => {
+    expect(matchPermissionRule('Bash(gh pr merge:*)', 'gh pr merge 1 --body "x (y)')).toBe(false);
+    expect(matchPermissionRule('Bash(gh pr merge:*)', "gh pr merge 1 --body 'x (y)")).toBe(false);
+  });
+
   it('規則が不正なら常に不一致', () => {
     expect(matchPermissionRule('gh pr view', 'gh pr view')).toBe(false);
     expect(matchPermissionRule('Bash()', 'anything')).toBe(false);

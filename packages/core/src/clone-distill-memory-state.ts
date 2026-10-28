@@ -1,3 +1,7 @@
+import {
+  MEMORY_INDEX_NOT_REINJECTED_PHRASE,
+  MEMORY_INDEX_REINJECTED_PHRASE,
+} from './exchange-kind.js';
 import type { MemoryDocument } from './schema.js';
 
 /**
@@ -33,9 +37,8 @@ export interface BakedMemoryDiff {
   readonly removed: readonly string[];
 }
 
-// 日誌の検索 q で引く固定の語。変えると過去の行と引けなくなる。
-export const MEMORY_INDEX_REINJECTED_PHRASE = '記憶の索引を載せ直した';
-export const MEMORY_INDEX_NOT_REINJECTED_PHRASE = '記憶の索引は載せ直さなかった';
+// 語の持ち主は exchange-kind.ts（承認の追跡が行頭の定数で除外するため）。ここからも引けるように再 export する。
+export { MEMORY_INDEX_NOT_REINJECTED_PHRASE, MEMORY_INDEX_REINJECTED_PHRASE };
 
 // 並べる slug の上限: 文書が多い記憶で1行が長くならないため。超えた分は「ほか M 件」にする。
 const REFRESH_DIFF_SLUG_LIMIT = 10;

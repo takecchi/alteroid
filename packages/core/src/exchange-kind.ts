@@ -11,6 +11,16 @@ export const DIGEST_RESET_JOURNAL_HEAD = `${EXCHANGE_KIND_DECISION_PREFIX}固定
 /** 預けた控えを読み戻さなかった回に clone が残す観測の1行の頭（`理由=<label>` が続く）。行動ではないので承認の追跡は数えない。 */
 export const FOLD_READBACK_SKIPPED_JOURNAL_HEAD = `${EXCHANGE_KIND_GAUGE_PREFIX}畳みの控えを読み戻さなかった: 理由=`;
 
+// 日誌の検索 q で引く固定の語。変えると過去の行と引けなくなる（`describeMemoryIndexRefresh` が本文の頭に置く）。
+export const MEMORY_INDEX_REINJECTED_PHRASE = '記憶の索引を載せ直した';
+export const MEMORY_INDEX_NOT_REINJECTED_PHRASE = '記憶の索引は載せ直さなかった';
+
+/** 要約後に記憶の索引を載せ直した回に clone が残す観測の1行の頭。行動ではないので承認の追跡は数えない。 */
+export const MEMORY_INDEX_REINJECTED_JOURNAL_HEAD = `${EXCHANGE_KIND_GAUGE_PREFIX}${MEMORY_INDEX_REINJECTED_PHRASE}`;
+
+/** 要約後に記憶の索引を載せ直さなかった回に clone が残す観測の1行の頭。行動ではないので承認の追跡は数えない。 */
+export const MEMORY_INDEX_NOT_REINJECTED_JOURNAL_HEAD = `${EXCHANGE_KIND_GAUGE_PREFIX}${MEMORY_INDEX_NOT_REINJECTED_PHRASE}`;
+
 export type ExchangeKind = 'reply' | 'decision' | 'thinning' | 'failure' | 'recovery' | 'gauge';
 
 export const EXCHANGE_KIND_PREFIXES: ReadonlyArray<{

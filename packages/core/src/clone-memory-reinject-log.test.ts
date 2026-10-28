@@ -7,7 +7,11 @@ import {
   MEMORY_INDEX_NOT_REINJECTED_PHRASE,
   MEMORY_INDEX_REINJECTED_PHRASE,
 } from './clone-distill-memory-state.js';
-import { EXCHANGE_KIND_GAUGE_PREFIX } from './exchange-kind.js';
+import {
+  EXCHANGE_KIND_GAUGE_PREFIX,
+  MEMORY_INDEX_NOT_REINJECTED_JOURNAL_HEAD,
+  MEMORY_INDEX_REINJECTED_JOURNAL_HEAD,
+} from './exchange-kind.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, wireEvents, waitForDone } from './clone-test-harness.js';
@@ -81,6 +85,7 @@ describe('クローン — 要約後の記憶の索引の載せ直しを日誌�
     const lines = await gaugeTexts(stores, MEMORY_INDEX_REINJECTED_PHRASE);
     expect(lines).toHaveLength(1);
     const line = lines[0] as string;
+    expect(line.startsWith(MEMORY_INDEX_REINJECTED_JOURNAL_HEAD)).toBe(true);
     expect(line).toContain('values（内容が変わった）');
     expect(line).toContain('newcomer（焼いた時点に無かった）');
     expect(line).toContain('habits（消えた）');
@@ -109,6 +114,7 @@ describe('クローン — 要約後の記憶の索引の載せ直しを日誌�
 
     const lines = await gaugeTexts(stores, MEMORY_INDEX_NOT_REINJECTED_PHRASE);
     expect(lines).toHaveLength(1);
+    expect(lines[0]?.startsWith(MEMORY_INDEX_NOT_REINJECTED_JOURNAL_HEAD)).toBe(true);
     expect(lines[0]).toContain('載せ直した文字数 0');
     expect(lines[0]).toContain('全文書数 2');
     expect(await gaugeTexts(stores, MEMORY_INDEX_REINJECTED_PHRASE)).toHaveLength(0);

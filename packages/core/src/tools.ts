@@ -92,6 +92,7 @@ import {
   classifyUnobservedOutcome,
   describeManagerState,
   describeSessionMissingKind,
+  describeReportState,
   describeUnobservedOutcome,
   isManagerAwaitingJudgement,
   isManagerInFlight,
@@ -3211,8 +3212,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             '読んだ時点の版（memory_read / memory_outline / 直前の memory_write の応答に出る base_version）。' +
-              '**既存の文書を書き換えるときは必須。** 読んだ後に人間や別のターンが書いていたら、書かずに「その間に変わった」と返す。' +
-              '新規作成（その slug がまだ無い）では省略してよい（版なしで通る）。焼き込みの索引だけでは版は分からない——先に memory_read か memory_outline を呼ぶこと。',
+              '**既存の文書を書き換えるときは必須**。',
           ),
       },
       async ({ slug, content, summary, base_version: baseVersion }) => {
@@ -3387,7 +3387,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            '読んだ時点の版（memory_read / memory_outline / 直前の書き込みの応答に出る base_version）。**必須**——無ければ何も消さずに読み直しを促す。焼き込みの索引だけでは版は分からない。',
+            '読んだ時点の版（memory_read / memory_outline / 直前の書き込みの応答に出る base_version）。**必須**。',
           ),
       },
       async ({ slug, summary, base_version: baseVersion }) => {
@@ -3473,7 +3473,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            '読んだ時点の版（memory_read / memory_outline / 直前の書き込みの応答に出る base_version）。**必須**——無ければ何も書かずに読み直しを促す。焼き込みの索引だけでは版は分からない。',
+            '読んだ時点の版（memory_read / memory_outline / 直前の書き込みの応答に出る base_version）。**必須**。',
           ),
       },
       async ({ slug, description, type, parent, summary, base_version: baseVersion }) => {
@@ -4497,9 +4497,7 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             'マネージャーからの確認を人間に回す場合、受信箱に届いた requestId。' +
               '人間の回答をこの確認へ返すために必要なので、managerId と必ず対で渡すこと。' +
-              '⚠️ 通るのは受信箱に確認として届いた requestId だけである。分類器の拒否の確認では toolu_… の形のことがあるが、' +
-              '生ログから拾った toolu_…（tool_use_id）や req_…（API の request id）は、確認として届いていなければ通らない。' +
-              '受信箱に届いていない確認に、生ログから答える手段は無い',
+              '⚠️ 通るのは受信箱に確認として届いた requestId だけである（生ログから拾った id は通らない。形の詳細は manager_send の requestId）',
           ),
       },
       async ({ question, context: background, questions, managerId, requestId }) => {
@@ -7190,8 +7188,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             '読んだ時点の版（practice_read / 直前の practice_write の応答に出る base_version）。' +
-              '**既存のやり方を書き換えるときは必須。** 読んだ後に人間や別のターンが書いていたら、書かずに「その間に変わった」と返す。' +
-              '新規作成（その slug がまだ無い）では省略してよい（版なしで通る）。焼き込みの索引だけでは版は分からない——先に practice_read を呼ぶこと。',
+              '**既存のやり方を書き換えるときは必須**。',
           ),
       },
       async ({ slug, kind, title, content, base_version: baseVersion }) => {
@@ -7283,7 +7280,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            '読んだ時点の版（practice_read / 直前の practice_write の応答に出る base_version）。**必須**——無ければ何も消さずに読み直しを促す。焼き込みの索引だけでは版は分からない。',
+            '読んだ時点の版（practice_read / 直前の practice_write の応答に出る base_version）。**必須**。',
           ),
       },
       async ({ slug, base_version: baseVersion }) => {
@@ -8420,102 +8417,105 @@ export function createCloneTools(context: ToolContext) {
         ).length;
         return text(
           dedupeRestartAdvice(
-            [
-              // 本数は一覧の外に出す: 一覧は予算で打ち切られ、出ている行を数えても全体の本数にならないため。件数は絞る前の全件で出す: 絞りのせいで全体の実像が見えなくなる形にしないため
-              describeManagerCounts(managers, fold),
-              unreadableJobNote,
-              // 絞り込みの注記の固定の言い回しは `fold` に包む。絞りの値・件数は毎回出す
-              // 絞ったことは件数の行とは別の行で言う: 混ぜると「絞る前の全体」と「絞った後」がどちらの数なのかを読み分ける負担が読み手に移るため
-              // `status: []` は「絞らなかった」と言う: 黙って無視しないため
-              status === undefined
-                ? null
-                : filtering
-                  ? `絞り込み: status: ${status.join(',')} に当たるのは ${statusView.length} 件で、` +
-                    `この一覧は${queryFiltering ? 'その中の q にも当たるものだけ' : 'その中だけ'}を出している` +
-                    fold(
-                      'manager-list:filter-status-scope',
-                      FILTER_COUNTS_SCOPE_FULL,
-                      FILTER_COUNTS_SCOPE_REF,
-                    )
-                  : '絞り込み: status に空の配列が渡ったので、絞らずに全件を出した' +
-                    fold(
-                      'manager-list:filter-status-empty',
-                      FILTER_STATUS_EMPTY_FULL,
-                      FILTER_STATUS_EMPTY_REF,
-                    ),
-              // `q` の注記も件数の行とは別の行で言う。空白だけの `q` は黙って無視せず、絞らなかったと言う
-              q === undefined
-                ? null
-                : queryFiltering
-                  ? `絞り込み: q: ${JSON.stringify(q)}` +
-                    fold('manager-list:filter-q-match', FILTER_Q_MATCH_FULL, FILTER_Q_MATCH_REF) +
-                    `に当たるのは ${view.length} 件` +
-                    `${filtering ? `（status で絞った ${statusView.length} 件の中）` : `（全 ${managers.length} 本の中）`}で、` +
-                    'この一覧はその中だけを出している' +
-                    fold(
-                      'manager-list:filter-q-scope',
-                      FILTER_COUNTS_SCOPE_FULL,
-                      FILTER_COUNTS_SCOPE_REF,
-                    )
-                  : '絞り込み: q が空（または空白だけ）だったので、q では絞らなかった' +
-                    fold('manager-list:filter-q-empty', FILTER_Q_EMPTY_FULL, FILTER_Q_EMPTY_REF),
-              // 絞った結果が0件なのと委譲が1本も無いのを分ける: 「無い」と読めると、絞りが厳しかっただけなのに台帳の側を疑うことになるため
-              view.length === 0
-                ? queryFiltering
-                  ? `（${filtering ? 'この status と ' : ''}q: ${JSON.stringify(q)} の絞り込みに当たる委譲は0件だった。絞る前の件数は上の行に在る）`
-                  : '（この status の絞り込みに当たる委譲は無い。絞る前の件数は上の行に在る）'
-                : // cursor で辿り切った最後の頁を、絞り込みの0件とは別の文にする
-                  paged.length === 0
-                  ? '（cursor より後ろの、この絞り込みに当たる委譲は無い。これが最後の頁）'
-                  : renderFilledListing(rowLines, secondFill, {
-                      // `status` の有無ではなく `filtering` で分ける: `status: []` は絞っていないので、有無で分けると渡した文字が無いのに絞ったと言う嘘になるため
-                      // 母数は `renderListing` が渡す `total` ではなく `view.length` を使う: 頁が進んでも変わらない数にするため
-                      omitted: ({ rest, shown }) => {
-                        const total = view.length;
-                        const lastShown = paged[shown - 1]!;
-                        const nextCursor = encodeManagerCursor({
-                          ...managerPositionOf(lastShown),
-                          status: cursorStatus === null ? null : [...cursorStatus],
-                          q: cursorQuery,
-                        });
-                        const statusArg = filtering ? ` status=${JSON.stringify(status)}` : '';
-                        const queryArg = queryFiltering ? ` q=${JSON.stringify(q)}` : '';
-                        const narrowed = [
-                          filtering ? `status: ${status.join(',')}` : null,
-                          queryFiltering ? `q: ${JSON.stringify(q)}` : null,
-                        ].filter((part): part is string => part !== null);
-                        return (
-                          `…ほか ${rest} 件は省略（` +
-                          (narrowed.length > 0
-                            ? `${narrowed.join(' と ')} に絞った ${total} 件のうち ${shown} 件を出した`
-                            : `全 ${total} 件`) +
-                          '）。' +
-                          fold(
-                            'manager-list:omitted-order',
-                            OMITTED_ORDER_FULL,
-                            OMITTED_ORDER_REF,
-                          ) +
-                          // cursor は毎回変わる（位置・絞りを含む）ので畳まない: 畳むと続きが取れなくなる
-                          `続きは manager_list cursor=${nextCursor}${statusArg}${queryArg} で取れる（status と q は同じまま呼ぶこと）。` +
-                          fold(
-                            'manager-list:omitted-paging',
-                            OMITTED_PAGING_FULL,
-                            OMITTED_PAGING_REF,
-                          )
-                        );
-                      },
-                    }),
-              foldedRows === 0
-                ? null
-                : `前回と同じ行 ${foldedRows} 本は省いた（上の「${MANAGER_ROW_SAME_MARK}」の行。順序は変えていない）。` +
-                  '全文は manager_report <managerId>、一覧を丸ごと引き直すなら manager_list に refetch: true',
-              '（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）',
-              noteBlock === '' ? null : noteBlock,
-              renderInboxBacklog(),
-              runnerBacklog,
-            ]
-              .filter((line): line is string => line !== null)
-              .join('\n'),
+            foldRowPhrases(
+              [
+                // 本数は一覧の外に出す: 一覧は予算で打ち切られ、出ている行を数えても全体の本数にならないため。件数は絞る前の全件で出す: 絞りのせいで全体の実像が見えなくなる形にしないため
+                describeManagerCounts(managers, fold),
+                unreadableJobNote,
+                // 絞り込みの注記の固定の言い回しは `fold` に包む。絞りの値・件数は毎回出す
+                // 絞ったことは件数の行とは別の行で言う: 混ぜると「絞る前の全体」と「絞った後」がどちらの数なのかを読み分ける負担が読み手に移るため
+                // `status: []` は「絞らなかった」と言う: 黙って無視しないため
+                status === undefined
+                  ? null
+                  : filtering
+                    ? `絞り込み: status: ${status.join(',')} に当たるのは ${statusView.length} 件で、` +
+                      `この一覧は${queryFiltering ? 'その中の q にも当たるものだけ' : 'その中だけ'}を出している` +
+                      fold(
+                        'manager-list:filter-status-scope',
+                        FILTER_COUNTS_SCOPE_FULL,
+                        FILTER_COUNTS_SCOPE_REF,
+                      )
+                    : '絞り込み: status に空の配列が渡ったので、絞らずに全件を出した' +
+                      fold(
+                        'manager-list:filter-status-empty',
+                        FILTER_STATUS_EMPTY_FULL,
+                        FILTER_STATUS_EMPTY_REF,
+                      ),
+                // `q` の注記も件数の行とは別の行で言う。空白だけの `q` は黙って無視せず、絞らなかったと言う
+                q === undefined
+                  ? null
+                  : queryFiltering
+                    ? `絞り込み: q: ${JSON.stringify(q)}` +
+                      fold('manager-list:filter-q-match', FILTER_Q_MATCH_FULL, FILTER_Q_MATCH_REF) +
+                      `に当たるのは ${view.length} 件` +
+                      `${filtering ? `（status で絞った ${statusView.length} 件の中）` : `（全 ${managers.length} 本の中）`}で、` +
+                      'この一覧はその中だけを出している' +
+                      fold(
+                        'manager-list:filter-q-scope',
+                        FILTER_COUNTS_SCOPE_FULL,
+                        FILTER_COUNTS_SCOPE_REF,
+                      )
+                    : '絞り込み: q が空（または空白だけ）だったので、q では絞らなかった' +
+                      fold('manager-list:filter-q-empty', FILTER_Q_EMPTY_FULL, FILTER_Q_EMPTY_REF),
+                // 絞った結果が0件なのと委譲が1本も無いのを分ける: 「無い」と読めると、絞りが厳しかっただけなのに台帳の側を疑うことになるため
+                view.length === 0
+                  ? queryFiltering
+                    ? `（${filtering ? 'この status と ' : ''}q: ${JSON.stringify(q)} の絞り込みに当たる委譲は0件だった。絞る前の件数は上の行に在る）`
+                    : '（この status の絞り込みに当たる委譲は無い。絞る前の件数は上の行に在る）'
+                  : // cursor で辿り切った最後の頁を、絞り込みの0件とは別の文にする
+                    paged.length === 0
+                    ? '（cursor より後ろの、この絞り込みに当たる委譲は無い。これが最後の頁）'
+                    : renderFilledListing(rowLines, secondFill, {
+                        // `status` の有無ではなく `filtering` で分ける: `status: []` は絞っていないので、有無で分けると渡した文字が無いのに絞ったと言う嘘になるため
+                        // 母数は `renderListing` が渡す `total` ではなく `view.length` を使う: 頁が進んでも変わらない数にするため
+                        omitted: ({ rest, shown }) => {
+                          const total = view.length;
+                          const lastShown = paged[shown - 1]!;
+                          const nextCursor = encodeManagerCursor({
+                            ...managerPositionOf(lastShown),
+                            status: cursorStatus === null ? null : [...cursorStatus],
+                            q: cursorQuery,
+                          });
+                          const statusArg = filtering ? ` status=${JSON.stringify(status)}` : '';
+                          const queryArg = queryFiltering ? ` q=${JSON.stringify(q)}` : '';
+                          const narrowed = [
+                            filtering ? `status: ${status.join(',')}` : null,
+                            queryFiltering ? `q: ${JSON.stringify(q)}` : null,
+                          ].filter((part): part is string => part !== null);
+                          return (
+                            `…ほか ${rest} 件は省略（` +
+                            (narrowed.length > 0
+                              ? `${narrowed.join(' と ')} に絞った ${total} 件のうち ${shown} 件を出した`
+                              : `全 ${total} 件`) +
+                            '）。' +
+                            fold(
+                              'manager-list:omitted-order',
+                              OMITTED_ORDER_FULL,
+                              OMITTED_ORDER_REF,
+                            ) +
+                            // cursor は毎回変わる（位置・絞りを含む）ので畳まない: 畳むと続きが取れなくなる
+                            `続きは manager_list cursor=${nextCursor}${statusArg}${queryArg} で取れる（status と q は同じまま呼ぶこと）。` +
+                            fold(
+                              'manager-list:omitted-paging',
+                              OMITTED_PAGING_FULL,
+                              OMITTED_PAGING_REF,
+                            )
+                          );
+                        },
+                      }),
+                foldedRows === 0
+                  ? null
+                  : `前回と同じ行 ${foldedRows} 本は省いた（上の「${MANAGER_ROW_SAME_MARK}」の行。順序は変えていない）。` +
+                    '全文は manager_report <managerId>、一覧を丸ごと引き直すなら manager_list に refetch: true',
+                '（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）',
+                noteBlock === '' ? null : noteBlock,
+                renderInboxBacklog(),
+                runnerBacklog,
+              ]
+                .filter((line): line is string => line !== null)
+                .join('\n'),
+              fold,
+            ),
           ),
         );
       },
@@ -10659,6 +10659,40 @@ function dedupeRestartAdvice(response: string): string {
     response.slice(0, head) +
     response.slice(head).replaceAll(RESTART_BEFORE_CHECK_ADVICE, RESTART_ADVICE_AGAIN)
   );
+}
+
+// 行の中の固定の一文（起点の会話の使い方・lost などの行の「本文は届いているが…」）を、出ている行だけ畳む。
+// 行を組む時点では畳まない: 予算で出ない行が先に「全文を出した」と控えられ、会話の上に無い全文を参照してしまうため。
+// 畳むのは `manager_list` が組んだ行の形に厳密に合う行だけ: 報告の抜粋の中に同じ字面が在っても書き換えないため。
+// 1応答の中の2行目以降も参照になる（`fold` は id ごとに最初の1回だけ全文を返す）
+const ORIGIN_HINT_FULL = '（報告を人間へ知らせるなら、この会話へ書く）';
+const ORIGIN_HINT_REF = '（知らせるならこの会話へ）';
+const ORIGIN_LINE_PREFIX = '  起点の会話: ';
+const UNOBSERVED_NONE_LINE = `  ${describeReportState('none')}`;
+const UNOBSERVED_NONE_REF =
+  '  ⚠ 終端までに本文が1文字も届いていない（何をしたかはこの一覧から読めない。全文は最初の一覧のとおり）。';
+const UNOBSERVED_DELIVERED_LINE = `  ${describeReportState('delivered')}`;
+const UNOBSERVED_DELIVERED_REF =
+  '  ⚠ 本文は届いているが、完遂した報告とは限らない（台帳では区別できない。理由は最初の一覧のとおり）。';
+function foldRowPhrases(response: string, fold: FixedFold): string {
+  return response
+    .split('\n')
+    .map((line) => {
+      if (line === UNOBSERVED_NONE_LINE) {
+        return fold('manager-list:row-unobserved-none', line, UNOBSERVED_NONE_REF);
+      }
+      if (line === UNOBSERVED_DELIVERED_LINE) {
+        return fold('manager-list:row-unobserved-delivered', line, UNOBSERVED_DELIVERED_REF);
+      }
+      if (line.startsWith(ORIGIN_LINE_PREFIX) && line.endsWith(ORIGIN_HINT_FULL)) {
+        return (
+          line.slice(0, line.length - ORIGIN_HINT_FULL.length) +
+          fold('manager-list:row-origin-hint', ORIGIN_HINT_FULL, ORIGIN_HINT_REF)
+        );
+      }
+      return line;
+    })
+    .join('\n');
 }
 
 // 件数の行の固定の読み方。2回目から参照にする（`describeManagerCounts`）。参照にも要点（読み違えると打つ手が変わる点）を残す
