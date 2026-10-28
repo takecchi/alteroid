@@ -227,8 +227,8 @@ describe.each(cases)('$name は固定の文言を、同じ会話の2回目から
   });
 });
 
-describe('memory_append: 数・名指しは畳まない', () => {
-  it('消えた見出しがあれば、2回目でも件数と名前で出る（札は固定語句だけ）', async () => {
+describe('memory_append: 数は畳まない', () => {
+  it('2回目でも床の文字数の遷移は数で出る（札になるのは見出しの固定語句だけ）', async () => {
     const h = harness(new DigestSessionDelta());
     await h.stores.persona.write('notes', '---\ndescription: 要旨\ntype: indexed\n---\n# 題\n', {
       ifMatch: null,
