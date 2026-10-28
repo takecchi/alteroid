@@ -517,6 +517,12 @@ export interface ToolContext {
    * 無い器（テスト・蒸留）は常に全文を返す口と同じ: 参照が指す先（会話の上の全文）が無いので、安全側に倒す。
    */
   foldFixed?: (id: string, full: string, ref: string) => string;
+  /**
+   * この道具の呼びがサブエージェント（作業者）のものか。`foldFixed` と `managerReportShownAt` が指す「会話の上の全文」は本体の会話にしか無いので、サブエージェントの呼びは畳まず、控えも更新しない（#5428）。
+   * 引数は呼びの tool_use_id（取れなければ `undefined`）。取れないときの倒し方は実装が決める（クローンは本体扱い＋警告）。
+   * 無い器（テスト・蒸留）は常に本体と同じ。
+   */
+  isSubagentCall?: (toolUseId: string | undefined) => boolean;
   profile?: ProfileService;
   accountUsage?: () => AccountUsageState;
   runtime?: () => CloneRuntimeFacts;
@@ -8138,9 +8144,12 @@ export function createCloneTools(context: ToolContext) {
               'status と q はカーソルを取った呼びと揃えること（食い違うと明示のエラーになる）。',
           ),
       },
-      async ({ status, q, cursor }) => {
+      async ({ status, q, cursor }, extra: unknown) => {
         if (!context.managers) return NO_POOL;
-        const fold = context.foldFixed ?? NO_FIXED_FOLD;
+        // サブエージェントの呼びは全文で返し、控えも更新しない: 札が指す全文はサブエージェントの文脈にしか載らず、本体の控えが「出した」になるのを防ぐ
+        const fold = isSubagentCaller(context, extra)
+          ? NO_FIXED_FOLD
+          : (context.foldFixed ?? NO_FIXED_FOLD);
         const managers = await context.managers.list();
         // この一覧ぜんぶで同じ「いま」を使う: 行ごとに `new Date()` を呼ぶと、同じ応答の中で判定の基準がずれるため
         const now = new Date();
@@ -8499,7 +8508,10 @@ export function createCloneTools(context: ToolContext) {
             '真なら、報告の全文が既に会話の上に載っていても本文を必ず返す（既定は、載っているときは注記だけ返す）',
           ),
       },
-      async ({ managerId, part = 'report', offset = 0, rescueAll = false, refetch = false }) => {
+      async (
+        { managerId, part = 'report', offset = 0, rescueAll = false, refetch = false },
+        extra: unknown,
+      ) => {
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         if (!context.managers) return NO_POOL;
@@ -8631,7 +8643,7 @@ export function createCloneTools(context: ToolContext) {
           withheldReportsNote === null ? '' : `${withheldReportsNote}\n\n`;
         // 本文だけを畳む: 状態の注記（失敗・拒否・退避 ref など）は発言の後に変わりうるので残す。依頼文・頁送り（offset > 0）・refetch は従来どおり本文を出す
         const shownAt =
-          part === 'report' && offset === 0 && !refetch
+          part === 'report' && offset === 0 && !refetch && !isSubagentCaller(context, extra)
             ? (context.managerReportShownAt?.(managerId, body) ?? null)
             : null;
         if (shownAt !== null) {
@@ -10137,7 +10149,7 @@ export function createCloneTools(context: ToolContext) {
               '（自分で組み立てない）。省略すると先頭から。',
           ),
       },
-      async ({ fingerprints, resources, cursor }) => {
+      async ({ fingerprints, resources, cursor }, extra: unknown) => {
         if (!context.managers) return NO_POOL;
         const overview = await context.managers.runners({
           ...(fingerprints === undefined ? {} : { fingerprints }),
@@ -10455,7 +10467,9 @@ export function createCloneTools(context: ToolContext) {
         if (autoFoldedNote !== '') tail.push(autoFoldedNote.trimStart());
         // 「この状態になった」の注記は器ごとに繰り返さず末尾に1度だけ添える: 名簿はインメモリで再起動すると `since` が巻き戻り、「ずっと保持されている記録」と誤読されないため
         // 末尾の固定の2文は、同じ会話の2回目から札にする（`manager_list` と同じ口。札にも結論を残す）。返す直前のここで1度だけ呼ぶ
-        const foldRunnerTail = context.foldFixed ?? NO_FIXED_FOLD;
+        const foldRunnerTail = isSubagentCaller(context, extra)
+          ? NO_FIXED_FOLD
+          : (context.foldFixed ?? NO_FIXED_FOLD);
         tail.push(
           foldRunnerTail(
             'runner-list:since-note',
@@ -10562,6 +10576,23 @@ function compareManagerAttention(a: ManagerSummary, b: ManagerSummary): number {
 // 固定の文言を畳む口（`ToolContext.foldFixed`）。無ければ全文のまま
 type FixedFold = NonNullable<ToolContext['foldFixed']>;
 const NO_FIXED_FOLD: FixedFold = (_id, full) => full;
+
+/** CLI が MCP 呼びの `_meta` に積む tool_use_id のキー。SDK の型に無い CLI の内部実装で、公開契約ではない（#5428）。 */
+export const TOOL_USE_ID_META_KEY = 'claudecode/toolUseId';
+
+/** handler の第2引数（SDK 型では `unknown`）から呼びの tool_use_id を読む。文字列でなければ `undefined`。 */
+export function toolUseIdFromExtra(extra: unknown): string | undefined {
+  if (typeof extra !== 'object' || extra === null) return undefined;
+  const meta = (extra as { _meta?: unknown })._meta;
+  if (typeof meta !== 'object' || meta === null) return undefined;
+  const id = (meta as Record<string, unknown>)[TOOL_USE_ID_META_KEY];
+  return typeof id === 'string' && id !== '' ? id : undefined;
+}
+
+/** サブエージェントの呼びか。口の無い器は本体と同じ（`false`）。 */
+function isSubagentCaller(context: ToolContext, extra: unknown): boolean {
+  return context.isSubagentCall?.(toolUseIdFromExtra(extra)) ?? false;
+}
 
 // 1応答に最大5回出る RESTART_BEFORE_CHECK_ADVICE（件数の行の lost・消失、印の意味、失敗の行ごと）を、初出の1回だけ全文にする。
 // 2回目以降は結論（確かめる前に起こし直さない）を短く残して「上と同じ」と言う: 行ごとの失敗の説明は別の行として読まれるため、消さずに短くする
