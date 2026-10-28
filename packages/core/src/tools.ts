@@ -37,6 +37,7 @@ import {
   encodeConversationCursor,
   humanExchanges,
   InvalidConversationCursorError,
+  lookupWithdrawnForMessages,
   readConversationPage,
   readConversationWindow,
   readConversationWindowPage,
@@ -9330,6 +9331,7 @@ export function createCloneTools(context: ToolContext) {
         '人間は送信済みの発言を編集できる（チャットの「メッセージを編集する」機能）。' +
           'conversationId を指定した既定の応答は編集後の版だけを返すが、畳まれた版が' +
           '在れば件数を注記する。旧版と旧版への応答も読むには includeSuperseded: true を指定する。',
+        '人間が送ったあとクローンへ届く前に取り下げた発言は、conversationId・q の読みでは外さず「（取り下げた発言。クローンへは届いていない）」と付けて出す（依頼として扱わない。会話の一覧の件数はこれを除く）。取り下げの印を読めなかった回は、有無を判定できなかったと言う。',
         '**ここに出ないもの**（知らずに引くと「無かった」と読むので、先に言う）:',
         '① **ask_human への人間の回答は、この道具では出ない。**',
         '回答の本文は日誌の escalation にしか無いので journal_read types=["escalation"] で読むこと',
@@ -9595,12 +9597,19 @@ export function createCloneTools(context: ToolContext) {
               ].join('\n'),
             );
           }
+          const withdrawnReading = describeWithdrawnReading(
+            await lookupWithdrawnForMessages(stores.journal, conversationId, matched),
+            matched,
+          );
           const lines = matched.map(
             (message) =>
               `${message.at} [${roleLabel(message.role)}] id=${message.id}` +
               (message.supersededBy === undefined
                 ? ''
                 : `（畳み込み済み。編集後は id=${message.supersededBy}）`) +
+              (message.role === 'inbound' && withdrawnReading.isWithdrawn(message)
+                ? WITHDRAWN_MESSAGE_MARK
+                : '') +
               `\n  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}` +
               attachmentLines(message.attachments, '  '),
           );
@@ -9630,6 +9639,7 @@ export function createCloneTools(context: ToolContext) {
                 '（本文は抜粋。全文は id=<id>）',
               ),
               ...(supersededNote === undefined ? [] : [supersededNote]),
+              ...withdrawnReading.notes,
               ...cursorIgnoredNote,
               scanNote,
             ].join('\n'),
@@ -9646,10 +9656,19 @@ export function createCloneTools(context: ToolContext) {
                 : `"${q}" は、この窓には無い（判定できない）。`) + `\n${scanNote}`,
             );
           }
+          // 会話をまたぐ検索なので、会話を問わず印を引く（一覧の読みと同じ）
+          const withdrawnReading = describeWithdrawnReading(
+            await lookupWithdrawnForMessages(stores.journal, undefined, matched),
+            matched,
+          );
           const lines = matched.map(
             (message) =>
               `${message.at} [${roleLabel(message.role)}] id=${message.id}` +
-              ` conversation=${message.conversationId ?? '(無し)'}\n` +
+              ` conversation=${message.conversationId ?? '(無し)'}` +
+              (message.role === 'inbound' && withdrawnReading.isWithdrawn(message)
+                ? WITHDRAWN_MESSAGE_MARK
+                : '') +
+              '\n' +
               `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}` +
               attachmentLines(message.attachments, '  '),
           );
@@ -9667,6 +9686,7 @@ export function createCloneTools(context: ToolContext) {
                 '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
                 '（本文は抜粋。全文は id=<id>）',
               ),
+              ...withdrawnReading.notes,
               ...cursorIgnoredNote,
               scanNote,
             ].join('\n'),
@@ -11064,6 +11084,49 @@ function describeManagerCounts(
 function roleLabel(role: 'inbound' | 'outbound'): string {
   return role === 'inbound' ? '人間' : 'クローン';
 }
+
+// 取り下げた発言は外さず注記つきで出す（`GET /conversations/:id` の `delivery: 'withdrawn'` と同じ向き）。
+// 印を引けなかった回は「取り下げていない」と言わない: 空の集合へ倒すと、取り下げた発言が生きた依頼に見える（#5456）
+function describeWithdrawnReading(
+  lookup: Awaited<ReturnType<typeof lookupWithdrawnForMessages>>,
+  messages: readonly { role: 'inbound' | 'outbound'; clientMessageId?: string | undefined }[],
+): {
+  isWithdrawn: (message: { clientMessageId?: string | undefined }) => boolean;
+  notes: string[];
+} {
+  if (lookup.kind === 'unknown') {
+    const unverifiable = messages.filter(
+      (message) => message.role === 'inbound' && message.clientMessageId !== undefined,
+    ).length;
+    return {
+      isWithdrawn: () => false,
+      notes: [
+        `（取り下げの有無を判定できなかった: 取り下げの印を日誌から読めなかった（${lookup.reason}）。` +
+          `人間の発言 ${unverifiable} 件は、取り下げていないとは言えない。` +
+          'クローンへ届いていない発言が混じっているかもしれないので、実行の根拠にする前に人間へ確かめること）',
+      ],
+    };
+  }
+  const ids = lookup.ids;
+  const isWithdrawn = (message: { clientMessageId?: string | undefined }): boolean =>
+    message.clientMessageId !== undefined && ids.has(message.clientMessageId);
+  const count = messages.filter(
+    (message) => message.role === 'inbound' && isWithdrawn(message),
+  ).length;
+  return {
+    isWithdrawn,
+    notes:
+      count === 0
+        ? []
+        : [
+            `（取り下げた発言が ${count} 件ある。人間が送ったあとクローンへ届く前に取り下げたもので、` +
+              'クローンへは届いていない。依頼として扱わないこと。会話の一覧の件数はこれを除いて数えるので、' +
+              'ここに出ている行数とは合わない）',
+          ],
+  };
+}
+
+const WITHDRAWN_MESSAGE_MARK = '（取り下げた発言。クローンへは届いていない）';
 
 // 型を写さず `JournalEntry` の union から取り出す: 写した側が古いままでも気づけないため
 type ContextUsageRow = NonNullable<Extract<JournalEntry, { type: 'turn_usage' }>['contextUsage']>;

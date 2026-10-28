@@ -240,6 +240,35 @@ export async function readWithdrawnClientMessageIds(
   }
 }
 
+/**
+ * 発言を並べる読み（`conversation_read` の会話指定・語の検索）が、人間が取り下げた発言を見分けるための引き。
+ * 印を引く窓の始点は、取り下げうる発言（`clientMessageId` を持つ人間の発言）の最古の `at`（`GET /conversations/:id` と同じ決め方）。
+ * 取り下げうる発言が1つも無ければ印を引かない（引いても結果は変わらない）。
+ * 印を引けなかったときは `unknown`: 空の集合へ倒すと「取り下げていない」と断定することになる。
+ */
+export type WithdrawnLookup =
+  { kind: 'ok'; ids: ReadonlySet<string> } | { kind: 'unknown'; reason: string };
+
+export async function lookupWithdrawnForMessages(
+  journal: Pick<JournalStore, 'listPage' | 'withdrawnClientMessageIds'>,
+  conversationId: string | undefined,
+  messages: readonly Pick<ConversationMessage, 'role' | 'at' | 'clientMessageId'>[],
+): Promise<WithdrawnLookup> {
+  const withdrawable = messages.filter(
+    (message) => message.role === 'inbound' && message.clientMessageId !== undefined,
+  );
+  if (withdrawable.length === 0) return { kind: 'ok', ids: new Set() };
+  const since = withdrawable.reduce(
+    (oldest, message) => (message.at < oldest ? message.at : oldest),
+    withdrawable[0]!.at,
+  );
+  try {
+    return { kind: 'ok', ids: await readWithdrawnClientMessageIds(journal, conversationId, since) };
+  } catch (error) {
+    return { kind: 'unknown', reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 const EMPTY_VIEW: ConversationReadView = { baseline: null, positions: {} };
 
 /** 会話の一覧の判定に要る欄。全文の `Exchange` と、本文を持たない `ConversationWindowRow` の両方が満たす。 */
