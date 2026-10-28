@@ -8,6 +8,7 @@ import {
   describeUnreadableUsageRows,
   isCloneActor,
   foldOneshotUsage,
+  foldRecordForStore,
   foldUsageSnapshot,
   isSuccessResult,
   modelUsageOf,
@@ -107,14 +108,68 @@ describe('累積スナップショットを増分へ畳む', () => {
       });
     });
 
-    it('基準にあったモデルが消えたことも数え直しである', () => {
+    // 反転した試験: 以前は「基準にあったモデルが消えたことも数え直しである」だった。載るモデルの組は呼び出しごとに食い違いうる（本番 2026-10-26T23:16Z に haiku を含まない累積が来て opus 約 108 億 cache_read が二重に積まれた）ため、消えたモデルは「変化なし」へ改めた
+    it('基準にあったモデルが今回に無いことは数え直しではない（変化なしとして基準へ引き継ぐ）', () => {
       const fold = foldUsageSnapshot(
         baseline({ opus: totals({ costUsd: 5 }) }),
         { models: { sonnet: totals({ costUsd: 1 }) } },
         LATER,
       );
-      expect(fold.reset).toBeDefined();
+      expect(fold.reset).toBeUndefined();
       expect(fold.delta).toEqual({ sonnet: totals({ costUsd: 1 }) });
+      expect(nextBaseline(fold).models).toEqual({
+        opus: totals({ costUsd: 5 }),
+        sonnet: totals({ costUsd: 1 }),
+      });
+    });
+
+    it('今回にもあるモデルが減れば、他のモデルが消えていても数え直しで、基準は今回の累積だけになる', () => {
+      const fold = foldUsageSnapshot(
+        baseline({ opus: totals({ costUsd: 5 }), haiku: totals({ costUsd: 1 }) }),
+        { models: { opus: totals({ costUsd: 2 }) } },
+        LATER,
+      );
+      expect(fold.reset).toBeDefined();
+      expect(fold.delta).toEqual({ opus: totals({ costUsd: 2 }) });
+      expect(nextBaseline(fold).models).toEqual({ opus: totals({ costUsd: 2 }) });
+    });
+
+    describe('累積に載るモデルの組が食い違う（2026-10-26 の二重計上）', () => {
+      const A = totals({ cacheReadInputTokens: 10_000_000_000, costUsd: 100 });
+      const A2 = totals({ cacheReadInputTokens: 10_500_000_000, costUsd: 105 });
+      const A3 = totals({ cacheReadInputTokens: 10_800_000_000, costUsd: 108 });
+      const h = totals({ outputTokens: 809, costUsd: 0.5 });
+
+      it('haiku が現れた次に haiku の無い累積が来ても数え直しにならず、opus の差分だけが積まれる', () => {
+        const appeared = foldUsageSnapshot(
+          baseline({ opus: A }),
+          { models: { opus: A2, haiku: h } },
+          AT,
+        );
+        expect(appeared.reset).toBeUndefined();
+        const without = foldUsageSnapshot(nextBaseline(appeared), { models: { opus: A3 } }, LATER);
+        expect(without.reset).toBeUndefined();
+        expect(without.delta).toEqual({
+          opus: totals({ cacheReadInputTokens: 300_000_000, costUsd: 3 }),
+        });
+      });
+
+      it('消えた haiku が戻ったとき、積まれるのは差分だけである（全量ではない）', () => {
+        const appeared = foldUsageSnapshot(
+          baseline({ opus: A }),
+          { models: { opus: A2, haiku: h } },
+          AT,
+        );
+        const without = foldUsageSnapshot(nextBaseline(appeared), { models: { opus: A3 } }, AT);
+        const h2 = totals({ outputTokens: 900, costUsd: 0.75 });
+        const back = foldUsageSnapshot(
+          nextBaseline(without),
+          { models: { opus: A3, haiku: h2 } },
+          LATER,
+        );
+        expect(back.reset).toBeUndefined();
+        expect(back.delta).toEqual({ haiku: totals({ outputTokens: 91, costUsd: 0.25 }) });
+      });
     });
 
     it('数え直しを数えて時刻を残す（黙って数え直さない）', () => {
@@ -202,6 +257,54 @@ describe('累積スナップショットを増分へ畳む', () => {
       expect(fold.delta).toEqual({});
       expect(nextBaseline(fold).models).toEqual({});
     });
+  });
+});
+
+describe('台帳へ畳む（foldRecordForStore）で累積に載るモデルの組が食い違う', () => {
+  const store = (
+    base: UsageBaseline | null,
+    models: Record<string, UsageTotals>,
+    runner?: { id: string; superseded: boolean },
+  ) =>
+    foldRecordForStore(base, {
+      layer: 'manager',
+      managerId: 'm1',
+      snapshot: { models },
+      at: AT,
+      accumulation: 'cumulative',
+      ...(runner === undefined ? {} : { runner }),
+    });
+
+  const opus = (n: number) => totals({ cacheReadInputTokens: n, costUsd: n });
+  const haiku = (n: number) => totals({ outputTokens: n, costUsd: n });
+
+  it('現役の runner: haiku の無い累積で数え直しにならず、戻った haiku は差分だけ（控えにも引き継ぐ）', () => {
+    const runner = { id: 'r1', superseded: false };
+    const first = store(null, { opus: opus(100) }, runner);
+    const appeared = store(first.nextBaseline, { opus: opus(150), haiku: haiku(8) }, runner);
+    const without = store(appeared.nextBaseline, { opus: opus(180) }, runner);
+    expect(without.fold.reset).toBeUndefined();
+    expect(without.fold.delta).toEqual({ opus: opus(30) });
+    expect(without.nextBaseline?.models).toEqual({ opus: opus(180), haiku: haiku(8) });
+    expect(without.nextBaseline?.byRunner?.r1).toEqual({ opus: opus(180), haiku: haiku(8) });
+
+    const back = store(without.nextBaseline, { opus: opus(180), haiku: haiku(10) }, runner);
+    expect(back.fold.reset).toBeUndefined();
+    expect(back.fold.delta).toEqual({ haiku: haiku(2) });
+  });
+
+  it('古い runner（superseded）: 控えにあったモデルが今回に無くても skipped にならず差分だけ積む', () => {
+    const old = { id: 'r1', superseded: false };
+    const first = store(null, { opus: opus(100), haiku: haiku(8) }, old);
+    const moved = store(
+      first.nextBaseline,
+      { opus: opus(120), haiku: haiku(8) },
+      { id: 'r2', superseded: false },
+    );
+    const stale = store(moved.nextBaseline, { opus: opus(110) }, { id: 'r1', superseded: true });
+    expect(stale.fold.skipped).toBeUndefined();
+    expect(stale.fold.delta).toEqual({ opus: opus(10) });
+    expect(stale.nextBaseline?.byRunner?.r1).toEqual({ opus: opus(110), haiku: haiku(8) });
   });
 });
 

@@ -170,13 +170,14 @@ function sumCostUsd(models: Record<string, UsageTotals>): number {
 }
 
 // session id は見ない: resume は同じ id のまま 0 に戻るため
+// 前回にあって今回に無いモデルは「変化なし」で、数え直しにしない: 載るモデルの組は呼び出しごとに食い違いうる（セッションを畳む直前の `sessionModelUsage()` とターン末の `result.modelUsage` など）ため、無いことを数え直しと読むと記録済みの累積が全量でもう一度積まれる
 function detectReset(
   prev: Record<string, UsageTotals>,
   next: Record<string, UsageTotals>,
 ): boolean {
   for (const [model, before] of Object.entries(prev)) {
     const after = next[model];
-    if (after === undefined) return true;
+    if (after === undefined) continue;
     if (
       after.inputTokens < before.inputTokens ||
       after.outputTokens < before.outputTokens ||
@@ -272,7 +273,8 @@ export function foldUsageSnapshot(
       layer: baseline?.layer ?? 'manager',
       managerId: baseline?.managerId ?? '',
       sessionId: snapshot.sessionId ?? baseline?.sessionId,
-      models: next,
+      // 今回に無かったモデルの前回値を引き継ぐ: 落とすと、そのモデルが次に現れたときの差分が全量になり二重に積まれるため。数え直しのときだけ引き継がない（古い累積は無効）
+      models: reset ? next : { ...prev, ...next },
       updatedAt: at,
       resets: (baseline?.resets ?? 0) + (reset ? 1 : 0),
       lastResetAt: reset ? at : baseline?.lastResetAt,
@@ -338,12 +340,22 @@ export function foldRecordForStore(
   if (input.accumulation === 'oneshot') {
     return { fold: foldOneshotUsage(input.snapshot), nextBaseline: null };
   }
-  const withRunnerMemory = (base: UsageBaseline, runnerId: string | undefined): UsageBaseline => {
+  // 数え直しでないとき、控えにも今回に無かったモデルの前回値を引き継ぐ: 基準（`models`）と同じ理由で、落とすとそのモデルが次に現れたときに全量が積まれるため
+  const withRunnerMemory = (
+    base: UsageBaseline,
+    runnerId: string | undefined,
+    reset: boolean,
+  ): UsageBaseline => {
     const carried = baseline?.byRunner;
     const next =
       runnerId === undefined || !hasAnyUsage(input.snapshot.models)
         ? carried
-        : { ...carried, [runnerId]: input.snapshot.models };
+        : {
+            ...carried,
+            [runnerId]: reset
+              ? input.snapshot.models
+              : { ...carried?.[runnerId], ...input.snapshot.models },
+          };
     const rest: UsageBaseline = { ...base };
     delete rest.byRunner;
     return next === undefined ? rest : { ...rest, byRunner: next };
@@ -359,7 +371,7 @@ export function foldRecordForStore(
     }
     const previous = baseline.byRunner?.[input.runner.id];
     const keep = (skipped?: UsageFold['skipped'], delta: UsageFold['delta'] = {}) => {
-      const nextBaseline = withRunnerMemory(baseline, input.runner?.id);
+      const nextBaseline = withRunnerMemory(baseline, input.runner?.id, skipped !== undefined);
       return {
         fold: {
           delta,
@@ -387,7 +399,11 @@ export function foldRecordForStore(
 
   const fold = foldUsageSnapshot(baseline, input.snapshot, input.at);
   if (fold.baseline === null) return { fold, nextBaseline: null };
-  const nextBaseline = withRunnerMemory({ ...fold.baseline, ...identity }, input.runner?.id);
+  const nextBaseline = withRunnerMemory(
+    { ...fold.baseline, ...identity },
+    input.runner?.id,
+    fold.reset !== undefined,
+  );
   return { fold, nextBaseline };
 }
 
