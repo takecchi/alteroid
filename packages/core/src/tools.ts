@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { createSdkMcpServer, tool as sdkTool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
@@ -131,6 +131,7 @@ import {
   excerptLine,
   fillListingBudget,
   page,
+  renderFilledListing,
   renderListing,
   renderListingEntry,
   renderListingFromEnd,
@@ -518,7 +519,7 @@ export interface ToolContext {
    * 固定の文言を、同じ会話の2回目から短い参照にする口（`manager_list` の件数行・「…ほか N 件」の固定文）。
    * 無い器（テスト・蒸留）は常に全文を返す口と同じ: 参照が指す先（会話の上の全文）が無いので、安全側に倒す。
    */
-  foldFixed?: (id: string, full: string, ref: string) => string;
+  foldFixed?: (id: string, full: string, ref: string, supersedes?: string) => string;
   /**
    * この道具の呼びがサブエージェント（作業者）のものか。`foldFixed` と `managerReportShownAt` が指す「会話の上の全文」は本体の会話にしか無いので、サブエージェントの呼びは畳まず、控えも更新しない（#5428）。
    * 引数は呼びの tool_use_id（取れなければ `undefined`）。取れないときの倒し方は実装が決める（クローンは本体扱い＋警告）。
@@ -767,6 +768,34 @@ const MANAGER_STOP_FOLDED_TURN_EXCERPT = 240;
 // runner 側のキャップを根拠にしない: `AskUserQuestion` は `brief` を通らないため、出す側で締める
 const LIST_WAITING_EXCERPT = 200;
 const LIST_BUDGET = 8_000;
+
+// 同じ会話で前回に全文で出した行と1字も違わない行を、managerId だけの短い1行にする。判定は行の全文の完全一致（可変部を含む）。
+// 鍵に行の指紋を入れ、同じ担当の古い版は捨てる（`foldFixed` の supersedes）: A→B→A と変わったとき、2回前の A を「前回と同じ」と言わないため。
+// 控えは `DigestSessionDelta.fixed` に乗るので、reset・compaction・失敗ターン・20ターン保険（forgetFixed）で全文へ戻る
+const MANAGER_LIST_ROW_FOLD_PREFIX = 'manager-list:row:';
+const MANAGER_ROW_SAME_MARK = '前回と同じ';
+
+function rowFingerprint(row: string): string {
+  return createHash('sha256').update(row).digest('hex').slice(0, 24);
+}
+
+function managerRowRef(manager: ManagerSummary): string {
+  return `- ${manager.managerId} ${MANAGER_ROW_SAME_MARK}`;
+}
+
+// 見落とすと困る行は、前回と同じでも全文で出す。lost・失敗・枠で止まっている・runner 消失／セッション無し・⚠ の行
+function managerRowAlwaysFull(manager: ManagerSummary, row: string): boolean {
+  return (
+    manager.status === 'lost' ||
+    manager.status === 'failed' ||
+    manager.lastFailure !== undefined ||
+    manager.usageStoppedAt !== undefined ||
+    manager.runnerVanished !== undefined ||
+    manager.runnerLostSince !== undefined ||
+    manager.sessionMissingSince !== undefined ||
+    row.includes('⚠')
+  );
+}
 
 // 行ごとに同じ長い固定文を繰り返さず、行には印だけを置いて意味は一覧の末尾に1回だけ書く（#5347）。
 // 429 の波で runner が一斉に黙る・lost が並ぶときに、同じ文が行の数だけ積まれて LIST_BUDGET が尽き、後続の行が省略されるため
@@ -8090,6 +8119,7 @@ export function createCloneTools(context: ToolContext) {
           'いまの時刻と見比べて自分で出すこと。時刻が付かないのは「そう名乗られていない」' +
           '場合であって「待ち始めていない」ではない（この印が立つ条件は直前の断りと同じ）。',
         '依頼文と報告は抜粋なので、全文が要るなら manager_report で取ること。',
+        `同じ会話で前回に全文で出した行と1字も変わらない行は「- <managerId> ${MANAGER_ROW_SAME_MARK}」の1行に畳む（⚠・lost・失敗の行は畳まない）。畳んだ件数は一覧に出る。全部を全文で引き直すなら refetch: true。`,
         '「runner にセッションが無い」は、10秒ごとの生存確認が runner に一覧を' +
           '聞いて観測する（走行中・返事待ちのものだけを見る）。誰かが manager_send を' +
           '打つのを待たない。ただし観測できた回にだけ立つので、**行が出ないことを' +
@@ -8176,8 +8206,14 @@ export function createCloneTools(context: ToolContext) {
               '（自分で組み立てない）。省略すると先頭から。' +
               'status と q はカーソルを取った呼びと揃えること（食い違うと明示のエラーになる）。',
           ),
+        refetch: z
+          .boolean()
+          .optional()
+          .describe(
+            `真なら、前回と変わらず「${MANAGER_ROW_SAME_MARK}」に畳まれる行も全文で出し直す（会話の上の全文を見失ったとき）`,
+          ),
       },
-      async ({ status, q, cursor }, extra: unknown) => {
+      async ({ status, q, cursor, refetch }, extra: unknown) => {
         if (!context.managers) return NO_POOL;
         // サブエージェントの呼びは全文で返し、控えも更新しない: 札が指す全文はサブエージェントの文脈にしか載らず、本体の控えが「出した」になるのを防ぐ
         const fold = isSubagentCaller(context, extra)
@@ -8382,7 +8418,7 @@ export function createCloneTools(context: ToolContext) {
               // `describeWithheldReports` はここには足さない: 「背景処理待ち×N」の `tasks` と並べると別行でも混同が起き、行を増やしても読み手の次の一手は変わらないため
             ],
           });
-          return { entry, marks };
+          return { entry, marks, manager };
         });
         const itemTexts = items.map((item) => item.entry);
         // 末尾の注は予算の内側で数える: 外に置くと lost が多い一覧で LIST_BUDGET を越える。出る行が減れば要る注も減るので、2回目の締めは1回目の部分集合で収まる
@@ -8400,6 +8436,21 @@ export function createCloneTools(context: ToolContext) {
           items.slice(0, secondFill.shown).map((item) => item.marks),
           fold,
         );
+        // 前回と変わらない行を短い1行にする。対象は予算の内側で全文のまま出る行だけ（省略された行・切り詰めた先頭行は「出した」と控えない）
+        const rowLines = secondFill.lines.map((line, index) => {
+          const item = items[index]!;
+          if (line !== item.entry || managerRowAlwaysFull(item.manager, line)) return line;
+          const folded = fold(
+            `${MANAGER_LIST_ROW_FOLD_PREFIX}${item.manager.managerId}\u0000${rowFingerprint(line)}`,
+            line,
+            managerRowRef(item.manager),
+            `${MANAGER_LIST_ROW_FOLD_PREFIX}${item.manager.managerId}\u0000`,
+          );
+          return refetch === true ? line : folded;
+        });
+        const foldedRows = rowLines.filter(
+          (line, index) => line !== secondFill.lines[index],
+        ).length;
         return text(
           dedupeRestartAdvice(
             foldRowPhrases(
@@ -8450,8 +8501,7 @@ export function createCloneTools(context: ToolContext) {
                   : // cursor で辿り切った最後の頁を、絞り込みの0件とは別の文にする
                     paged.length === 0
                     ? '（cursor より後ろの、この絞り込みに当たる委譲は無い。これが最後の頁）'
-                    : renderListing(itemTexts, {
-                        budget: Math.max(0, LIST_BUDGET - firstNotes.length),
+                    : renderFilledListing(rowLines, secondFill, {
                         // `status` の有無ではなく `filtering` で分ける: `status: []` は絞っていないので、有無で分けると渡した文字が無いのに絞ったと言う嘘になるため
                         // 母数は `renderListing` が渡す `total` ではなく `view.length` を使う: 頁が進んでも変わらない数にするため
                         omitted: ({ rest, shown }) => {
@@ -8489,6 +8539,10 @@ export function createCloneTools(context: ToolContext) {
                           );
                         },
                       }),
+                foldedRows === 0
+                  ? null
+                  : `前回と同じ行 ${foldedRows} 本は省いた（上の「${MANAGER_ROW_SAME_MARK}」の行。順序は変えていない）。` +
+                    '全文は manager_report <managerId>、一覧を丸ごと引き直すなら manager_list に refetch: true',
                 '（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）',
                 noteBlock === '' ? null : noteBlock,
                 renderInboxBacklog(),

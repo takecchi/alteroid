@@ -392,7 +392,8 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
     const call = harness(rows, new DigestSessionDelta(), { ledger });
 
     const first = await call();
-    const second = await call();
+    // 行の畳み（前回と同じ行）は tools-manager-list-unchanged-rows.test.ts が守る。ここは行の中身を見るので refetch: true で畳みを外す
+    const second = await call({ refetch: true });
 
     // 1回目: 最初の行だけ全文、残りは参照。2回目: 全部参照（全文は会話の上に在る）
     expect(first.split(hint).length - 1).toBe(1);
@@ -456,7 +457,8 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
     });
 
     await call();
-    const second = await call();
+    // 行の畳み（前回と同じ行）は tools-manager-list-unchanged-rows.test.ts が守る。ここは行の中身を見るので refetch: true で畳みを外す
+    const second = await call({ refetch: true });
 
     // 起点の行は参照になり、報告の抜粋の4本は全文のまま
     expect(second.split(hint).length - 1).toBe(2);

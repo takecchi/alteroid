@@ -7270,7 +7270,13 @@ class Clone implements CloneHost {
       flushReply: () => this.#flushReply(),
       managers: this.#managers,
       managerReportShownAt: (managerId, text) => this.#digestDelta.reportShownAt(managerId, text),
-      foldFixed: (id, full, ref) => this.#digestDelta.fixedInTurn(`tool:${id}`, full, ref),
+      foldFixed: (id, full, ref, supersedes) =>
+        this.#digestDelta.fixedInTurn(
+          `tool:${id}`,
+          full,
+          ref,
+          supersedes === undefined ? undefined : `tool:${supersedes}`,
+        ),
       isSubagentCall: (toolUseId, probe) => this.#isSubagentCall(toolUseId, probe),
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),

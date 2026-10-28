@@ -7,6 +7,7 @@ import {
   type ApprovalTrace,
 } from './approval-trace.js';
 import {
+  EXCHANGE_KIND_GAUGE_PREFIX,
   FOLD_READBACK_SKIPPED_JOURNAL_HEAD,
   MEMORY_INDEX_NOT_REINJECTED_JOURNAL_HEAD,
   MEMORY_INDEX_REINJECTED_JOURNAL_HEAD,
@@ -282,6 +283,48 @@ describe('traceApproval — 対を読む（issue #847 の案B）', () => {
       text: `${MEMORY_INDEX_NOT_REINJECTED_JOURNAL_HEAD}（要約後。焼いた時点から変わっていない）。載せ直した文字数 0。全文書数 2`,
     });
     expect((await trace(stores, 'ap-1')).state).toBe('no_actions');
+  });
+
+  it('個別の除外に無い計器の行（未読の拾い直し・枠の通知・消費の数え直し）も、区間の中で行動に数えない', async () => {
+    const stores = createMemoryStores();
+    await answered(stores, 'ap-1');
+    await stores.journal.append(turnStart('ap-1', true));
+    for (const body of [
+      '未読の拾い直しを始める（claimPending が返した総数 3 件）',
+      '利用上限に当たった（枠の通知）',
+      '自分の消費の累積が数え直された（1.0000 → 0.5000）',
+    ]) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${EXCHANGE_KIND_GAUGE_PREFIX}${body}`,
+      });
+    }
+    const found = await trace(stores, 'ap-1');
+    expect(found.state).toBe('no_actions');
+    expect(found.unstampedInTurn).toBe(0);
+  });
+
+  it('計器の頭で始まらない outbound の行動は、区間の中で印が無ければ数える（計器の除外が広がりすぎない）', async () => {
+    const stores = createMemoryStores();
+    await answered(stores, 'ap-1');
+    await stores.journal.append(turnStart('ap-1', true));
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを始める（claimPending が返した総数 3 件）`,
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '[応答] 承知しました。進めます',
+    });
+    const found = await trace(stores, 'ap-1');
+    expect(found.state).toBe('unstamped_actions');
+    expect(found.unstampedInTurn).toBe(1);
   });
 
   it('取り下げた件は withdrawn', async () => {
