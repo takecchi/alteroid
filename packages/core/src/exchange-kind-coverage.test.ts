@@ -200,7 +200,8 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // 2026-10-28: 固定文を全文へ戻した理由の観測の1行（`#resetDigestDelta`、接頭辞 DECISION）を足したので 83 -> 84
   // 2026-10-28: 要約後の記憶の索引を載せ直したか／載せ直さなかったかの観測の2行（`#withFreshMemory`、接頭辞 GAUGE）を足したので 84 -> 86
   // 2026-10-28: 畳みの控えを読み戻さなかった理由の観測の1行（`#restoreFoldStateOnce`、接頭辞 GAUGE）を足したので 86 -> 87
-  'clone.ts': 87,
+  // 2026-10-28: サブエージェント呼びの計器の日誌1行（`#noteCallerGauge`、接頭辞 GAUGE。hook 側と handler 側の2経路が同じ1箇所から書く）を足したので 87 -> 88
+  'clone.ts': 88,
   // 2026-10-23 #5195: 新しい世代が黙っている間の古い世代の報告を配る日誌1行（`#deliverReportFromUnreplacedSession`、接頭辞 REPLY）を足したので 66 -> 67
   'manager.ts': 67,
 };
