@@ -1,9 +1,4 @@
-import {
-  DIGEST_RESET_JOURNAL_HEAD,
-  FOLD_READBACK_SKIPPED_JOURNAL_HEAD,
-  MEMORY_INDEX_NOT_REINJECTED_JOURNAL_HEAD,
-  MEMORY_INDEX_REINJECTED_JOURNAL_HEAD,
-} from './exchange-kind.js';
+import { DIGEST_RESET_JOURNAL_HEAD, EXCHANGE_KIND_GAUGE_PREFIX } from './exchange-kind.js';
 import { excerptLine, renderListing } from './excerpt.js';
 import { scanJournalPages } from './journal-scan.js';
 import { wrapJournalStore } from './journal-wrap.js';
@@ -99,11 +94,10 @@ function isCloneAction(entry: JournalEntry): boolean {
     case 'tool_use':
       return entry.actor === CLONE_ACTOR_ID || entry.actor.startsWith(CLONE_SUB_ACTOR_PREFIX);
     case 'exchange':
-      // 固定文を全文へ戻した観測の行は行動でない（印も持たない）
+      // 計器の行は丸ごと行動でない: 個別に除くと、新しい計器の行を足すたびに行動へ数えられる誤りが戻るため
+      if (entry.text.startsWith(EXCHANGE_KIND_GAUGE_PREFIX)) return false;
+      // 固定文を全文へ戻した観測の行は行動でない（`[判断]` の頭なので計器の除外では拾えない）
       if (entry.text.startsWith(DIGEST_RESET_JOURNAL_HEAD)) return false;
-      if (entry.text.startsWith(FOLD_READBACK_SKIPPED_JOURNAL_HEAD)) return false;
-      if (entry.text.startsWith(MEMORY_INDEX_REINJECTED_JOURNAL_HEAD)) return false;
-      if (entry.text.startsWith(MEMORY_INDEX_NOT_REINJECTED_JOURNAL_HEAD)) return false;
       return entry.role === 'outbound' && (entry.with === 'human' || entry.with === 'self');
     default:
       return false;
