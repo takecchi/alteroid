@@ -3594,24 +3594,38 @@ class Clone implements CloneHost {
     const closeSkeleton =
       '**片付いたら `commitment_close` で閉じること** — 返事をしただけでは閉じない。' +
       '雑談や、その場で答えて終わる話なら、答えたうえですぐ閉じてよい。';
+    // 閉じ方の参照と末尾の参照が両方とも参照になる回は、2つの参照を末尾の1行にまとめる（指し先は同じ: `commitment_close` と `commitment_list`）。どちらかが全文の回は従来どおり別々に出す
+    const bundled = mine.length > 1;
+    const closeRef = bundled
+      ? '（閉じ方は会話の上と同じ: まとめて答えても id ごとに `commitment_close`）'
+      : '（閉じ方は会話の上と同じ: `commitment_close`）';
+    const closeText =
+      mine.length === 0
+        ? undefined
+        : bundled
+          ? this.#digestDelta.fixed(
+              'commitment-notice-close-bundle',
+              `**まとめて1つの応答で答えても、閉じるのは id ごとである。**${closeSkeleton}`,
+              closeRef,
+            )
+          : this.#digestDelta.fixed('commitment-notice-close', closeSkeleton, closeRef);
+    const tailFull =
+      '全文と齢は `commitment_list` で見られる。**どれを先にやるかは、記憶にある目的と価値観に照らして毎回決め直すこと**' +
+      '（台帳は順序を持たない。溜まっている順に片付ける決まりは無い）。';
+    const tailRef =
+      '（全文と齢は `commitment_list`。どれを先にやるかは毎回決め直す、という固定の断りは会話の上と同じ）';
+    // 固定の1文は同じ会話で1回だけ全文（#4937）
+    const tailText = this.#digestDelta.fixed('commitment-notice-tail', tailFull, tailRef);
+    const mergeRefs = closeText === closeRef && tailText === tailRef;
     const lines = [
       countLine,
       ...(mine.length === 0
         ? []
         : [
-            mine.length === 1
-              ? `いま届いたこの一件も台帳に載せた（id: ${idList}）。` +
-                this.#digestDelta.fixed(
-                  'commitment-notice-close',
-                  closeSkeleton,
-                  '（閉じ方は会話の上と同じ: `commitment_close`）',
-                )
-              : `いま届いたこの ${mine.length} 件も台帳に載せた（id: ${idList}）。` +
-                this.#digestDelta.fixed(
-                  'commitment-notice-close-bundle',
-                  `**まとめて1つの応答で答えても、閉じるのは id ごとである。**${closeSkeleton}`,
-                  '（閉じ方は会話の上と同じ: まとめて答えても id ごとに `commitment_close`）',
-                ),
+            (bundled
+              ? `いま届いたこの ${mine.length} 件も台帳に載せた（id: ${idList}）。`
+              : `いま届いたこの一件も台帳に載せた（id: ${idList}）。`) +
+              (mergeRefs ? '' : (closeText ?? '')),
           ]),
       // 分母は `events.length` でなく `outcomes.size`: `events` には台帳と無関係な合図も混じり、母数が大きくなって「このうち何件」の比率が嘘になるため
       ...(missingConfirmed.length === 0
@@ -3645,13 +3659,9 @@ class Clone implements CloneHost {
             `**読めない行が ${list.unreadable.length} 件ある（片付いたのではない）。**` +
               '`commitment_list` の一覧に件数として出る（本文はここでは取れない）。',
           ]),
-      // 固定の1文は同じ会話で1回だけ全文（#4937）
-      this.#digestDelta.fixed(
-        'commitment-notice-tail',
-        '全文と齢は `commitment_list` で見られる。**どれを先にやるかは、記憶にある目的と価値観に照らして毎回決め直すこと**' +
-          '（台帳は順序を持たない。溜まっている順に片付ける決まりは無い）。',
-        '（全文と齢は `commitment_list`。どれを先にやるかは毎回決め直す、という固定の断りは会話の上と同じ）',
-      ),
+      mergeRefs
+        ? `（全文と齢は \`commitment_list\`、閉じ方は${bundled ? 'まとめて答えても id ごとに ' : ' '}\`commitment_close\`。どれを先にやるかは毎回決め直す、という固定の断りは会話の上と同じ）`
+        : tailText,
       '',
       '---',
       '',
@@ -6493,12 +6503,17 @@ class Clone implements CloneHost {
       ...(windowFull
         ? ['（日誌の直近の窓だけを見た。窓の外にもあるかもしれない。これで全部とは限らない）']
         : []),
-      '人間が自分の手で直したのは、あなたの判断か進め方のどこかが人間の考えとずれていたからである。' +
-        '何が変わったかを確かめ、そこから読み取れる基準があれば記憶に書くこと。' +
-        '人間が取り消したものを、同じ形でやり直さないこと。' +
-        'なぜそうしたのかが読み取れなければ、人間に聞いてよい。' +
-        '経路は監査の記録であって、人間がした証拠ではない' +
-        '（持ち主のトークンや認証を切った構成では、あなたの Bash からも同じ口を叩ける）。',
+      // 操作の内容は毎回出し、判断基準の段落だけ同じ会話の2回目から参照にする（#4937 の `fixed()`）
+      this.#digestDelta.fixed(
+        'human-action-guidance',
+        '人間が自分の手で直したのは、あなたの判断か進め方のどこかが人間の考えとずれていたからである。' +
+          '何が変わったかを確かめ、そこから読み取れる基準があれば記憶に書くこと。' +
+          '人間が取り消したものを、同じ形でやり直さないこと。' +
+          'なぜそうしたのかが読み取れなければ、人間に聞いてよい。' +
+          '経路は監査の記録であって、人間がした証拠ではない' +
+          '（持ち主のトークンや認証を切った構成では、あなたの Bash からも同じ口を叩ける）。',
+        '（読み方は会話の上と同じ: ずれた理由を確かめて基準を記憶に書く・取り消されたものを同じ形でやり直さない・分からなければ人間に聞く・経路は監査の記録で人間がした証拠ではない）',
+      ),
     ];
   }
 

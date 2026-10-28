@@ -30,7 +30,7 @@ interface Boot {
   inputs: string[];
 }
 
-function boot(script: SdkScript = {}): Boot {
+function boot(script: SdkScript = {}, stores = createMemoryStores()): Boot {
   const inputs: string[] = [];
   let usageIndex = 0;
   const fn = ((params: { prompt: unknown; options?: Options }) => {
@@ -89,7 +89,7 @@ function boot(script: SdkScript = {}): Boot {
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
   const clone = createClone({
-    stores: createMemoryStores(),
+    stores,
     queryFn: fn,
     env: {},
     redeliveryGate: ALWAYS_REDELIVER,
@@ -154,8 +154,8 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
       expect(lines).toContain(`${SHORT_COUNT_HEAD}${String(count)} 件（最古 `);
       expect(lines).toMatch(/最古 \d{4}-\d{2}-\d{2}T[\d:.]+Z、\d{2}:\d{2}:\d{2}Z 時点）/u);
       expect(lines).toContain(`いま届いたこの一件も台帳に載せた（id: \`${turn.id}\`）。`);
-      // 閉じる道具の名前は短い形にも残る
-      expect(lines).toContain('commitment_close');
+      // 閉じる道具の名前は短い形にも残る（閉じ方の参照は末尾の参照と1行にまとまっている）
+      expect(turn.input).toContain('`commitment_close`');
       expect(lines).not.toContain(FULL_COUNT_HEAD);
       expect(lines).not.toContain(SKELETON);
       expect(lines.length).toBeLessThan(firstLines.length * 0.7);
@@ -169,6 +169,81 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
 
     process.stderr.write(
       `[#5297 測定] 台帳の2行 1回目 ${String(firstLines.length)} 字 → 2回目 ${String(ledgerLines(second.input).length)} 字\n`,
+    );
+    await s.clone.stop();
+  });
+
+  it('⭐ 2回目以降は、閉じ方の参照と末尾の参照が1行にまとまる（指し先の道具は残る）', async () => {
+    const s = boot();
+    const first = await humanTurn(s);
+    const second = await humanTurn(s);
+
+    // 1回目は全文: 閉じ方の骨組みと末尾の固定文が別々に在る
+    expect(first.input).toContain(SKELETON);
+    expect(first.input).toContain('全文と齢は `commitment_list` で見られる');
+    // 2回目: 参照は1行だけ。`commitment_list` と `commitment_close` の両方を指す
+    const refLines = second.input.split('\n').filter((line) => line.includes('会話の上と同じ'));
+    expect(refLines).toHaveLength(1);
+    expect(refLines[0]).toContain('`commitment_list`');
+    expect(refLines[0]).toContain('`commitment_close`');
+    expect(refLines[0]).toContain('毎回決め直す');
+    expect(second.input).not.toContain('閉じ方は会話の上と同じ');
+
+    const tailOf = (input: string): number =>
+      input
+        .split('\n')
+        .filter(
+          (line) =>
+            line.includes('会話の上と同じ') ||
+            (line.startsWith('いま届いたこの') && line.includes('台帳に載せた')),
+        )
+        .join('\n').length;
+    process.stderr.write(
+      `[台帳の参照 測定] 2回目の「この一件」行+参照行 ${String(tailOf(second.input))} 字（統合前は別 2 行の参照を含む）\n`,
+    );
+    await s.clone.stop();
+  });
+
+  it('⭐ 人間操作の節の末尾段落: 1回目は全文・同じ会話の2回目は参照（操作の内容は毎回出る）・要約の後は全文', async () => {
+    const stores = createMemoryStores();
+    const s = boot({ after: (n) => (n === 4 ? [compactBoundary] : []) }, stores);
+    const act = (target: string) =>
+      stores.journal.append({
+        type: 'decision',
+        decision: `${target} を人間が操作した`,
+        grounds: 'API',
+        humanAction: {
+          kind: 'practice_remove',
+          target,
+          via: { kind: 'operator', auth: 'operator-token' },
+        },
+      });
+    const FULL = '経路は監査の記録であって、人間がした証拠ではない';
+    const REF = '読み方は会話の上と同じ';
+    await humanTurn(s);
+    await act('way-a');
+    const second = await humanTurn(s);
+    await act('way-b');
+    const third = await humanTurn(s);
+    await act('way-c');
+    const fourth = await humanTurn(s);
+    await act('way-d');
+    const fifth = await humanTurn(s);
+
+    expect(second.input).toContain(FULL);
+    expect(second.input).toContain('やり方を消した: way-a');
+    expect(third.input).not.toContain(FULL);
+    expect(third.input).toContain(REF);
+    expect(third.input).toContain('やり方を消した: way-b');
+    expect(fourth.input).toContain(REF);
+    expect(fourth.input).toContain('やり方を消した: way-c');
+    // compact_boundary は4本目の入力の処理中に届く: 5本目は全文へ戻る
+    expect(fifth.input).toContain(FULL);
+    expect(fifth.input).toContain('やり方を消した: way-d');
+    const paragraph = (input: string): string =>
+      input.split('\n').find((line) => line.includes(FULL) || line.includes(REF)) ?? '';
+    process.stderr.write(
+      `[人間操作の末尾段落 測定] 全文 ${String(paragraph(second.input).length)} 字 → 参照 ${String(paragraph(third.input).length)} 字\n`,
     );
     await s.clone.stop();
   });
@@ -270,7 +345,7 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
     expect(secondBundle).toContain('いま届いたこの 2 件も台帳に載せた（id: ');
     expect(secondBundle).toContain('evt-束B1');
     expect(secondBundle).toContain('evt-束B2');
-    expect(secondBundle).toContain('commitment_close');
+    expect(s.inputs[2]).toContain('まとめて答えても id ごとに `commitment_close`');
     expect(secondBundle).toContain(`${SHORT_COUNT_HEAD}5 件（最古 `);
     expect(secondBundle).not.toContain(BUNDLE_SKELETON);
     expect(secondBundle).not.toContain(SKELETON);
