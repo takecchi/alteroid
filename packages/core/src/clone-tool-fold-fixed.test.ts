@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
-import { waitFor } from './clone-test-harness.js';
+import { flushPendingMicrotasks, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -122,7 +122,8 @@ async function turn(s: Boot): Promise<void> {
   });
   await waitFor(() => s.inputs.length > before, `入力 ${before + 1} 本目`);
   // ターンの後始末（失敗の reset・要約の reset）が済むまで待つ
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  // 壁時計ではなく microtask を進める（待ちの相手は journal・使用量の読み取りの microtask の連鎖）
+  await flushPendingMicrotasks();
 }
 
 const fold = (s: Boot): string | undefined => s.context().foldFixed?.('probe', '全文', '参照');
