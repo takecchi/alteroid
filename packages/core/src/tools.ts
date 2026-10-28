@@ -5116,6 +5116,9 @@ export function createCloneTools(context: ToolContext) {
         if (stripNul(request).length === 0) {
           return text('request が空文字は使えない（依頼の本文を渡すこと）。');
         }
+        // 空白だけの本文も空と同じ: 毎回届く依頼に中身が無くなる（既存の置き換えは本文を渡すので、この検査で断られる呼び方は無い）
+        const requestBlankError = describeBlankViolation('request', request);
+        if (requestBlankError !== null) return text(requestBlankError);
         if (RESERVED_SCHEDULE_KINDS.includes(parsedKind.data)) {
           return text(
             `${parsedKind.data} は既定の定期ジョブの名前なので使えない（別の名前を付けること）。` +
@@ -9633,6 +9636,11 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ archiveId, summary, overrideReason }) => {
+        // 消す・日誌を書くより前に断る（`archive_remove_many` と同じ2検査）: 理由が空の「本文を消す」行が日誌に残るため
+        const summaryError =
+          describeStringLengthViolation('summary', summary, { min: 1 }) ??
+          describeBlankViolation('summary', summary);
+        if (summaryError !== null) return text(summaryError);
         const guard = guardArchiveRemoval(context.managers, archiveId, overrideReason);
         if (guard.kind === 'unknown') {
           return text(

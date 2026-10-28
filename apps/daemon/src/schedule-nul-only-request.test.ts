@@ -68,6 +68,15 @@ describe('POST /schedule の request が NUL だけのとき（#3438）', () => 
     expect(res.status).toBe(400);
   });
 
+  it('空白だけの request も 400 で断り、日誌にも保存層にも何も残さない（#5388）', async () => {
+    for (const request of ['  ', ' \n\t ', ' \u0000 ']) {
+      const res = await app.request('/schedule', send({ kind: 'k1', request, spec }));
+      expect(res.status).toBe(400);
+    }
+    expect(await stores.journal.list({})).toEqual([]);
+    expect(await stores.schedules.get('k1')).toBeNull();
+  });
+
   it('NUL が混じっても中身が残る request は受け、NUL を落として保存する', async () => {
     const res = await app.request(
       '/schedule',

@@ -727,11 +727,8 @@ const abortBody = z.object({
 });
 const scheduleBody = z.object({
   kind: scheduleKindSchema,
-  // 「空」は NUL を落とした後で見る: 落とす前の長さで見ると NUL だけの `request` が検査を抜け、ハンドラが日誌へ書いた後で 500 になる。
-  request: z
-    .string()
-    .min(1)
-    .refine((value) => stripNul(value).length > 0),
+  // 「空」は NUL を落とした後で、空白だけも空として見る（道具 `schedule_create` と同じ判定）: 落とす前の長さで見ると NUL だけの `request` が検査を抜け、ハンドラが日誌へ書いた後で 500 になる。空白だけは中身の無い依頼が毎回届く。
+  request: nonBlankString,
   spec: scheduleSpecSchema,
   ifMatch: z.string().nullable().optional(),
 });
