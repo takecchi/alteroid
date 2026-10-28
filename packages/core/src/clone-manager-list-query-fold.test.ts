@@ -356,6 +356,37 @@ describe('manager_list を q で引く呼びの固定の文言の畳み', () => 
     await s.clone.stop();
   });
 
+  it('⭐ A → B（読めない行あり）→ A の3回目は全文（読めない行の回も控えを最新にする）', async () => {
+    const s = boot();
+    s.setManagers(fleet());
+    s.setInbox(stuckInbox(12));
+    await turn(s);
+    await managerList(s, q);
+    s.setInbox(stuckInbox(5), [{ id: 'bad-1', reason: '壊れた行' }]);
+    expect(await managerList(s, q)).toContain('種類: human_message');
+    s.setInbox(stuckInbox(12));
+
+    expect(await managerList(s, q)).toContain(INBOX_FULL);
+    await s.clone.stop();
+  });
+
+  it.each([
+    ['空', [] as unknown[], [] as unknown[]],
+    ['読めない行だけ', [] as unknown[], [{ id: 'bad-1', reason: '壊れた行' }]],
+  ])('⭐ A → %s → A の3回目は全文（空の回で控えを捨てる）', async (_name, entries, unreadable) => {
+    const s = boot();
+    s.setManagers(fleet());
+    s.setInbox(stuckInbox(12));
+    await turn(s);
+    await managerList(s, q);
+    s.setInbox(entries, unreadable);
+    await managerList(s, q);
+    s.setInbox(stuckInbox(12));
+
+    expect(await managerList(s, q)).toContain(INBOX_FULL);
+    await s.clone.stop();
+  });
+
   it('⭐ 受信箱の内訳が A→B→A と変わったとき、2回前の A を「同じ」と畳まない', async () => {
     const s = boot();
     s.setManagers(fleet());

@@ -922,6 +922,11 @@ function describeInboxBacklog(
   const rows = peek.entries;
   const queuedLine = describeInboxBacklogQueuedInMemory(queuedInMemory, fold);
   const noReadable = describeNoReadableInboxEvents(peek.unreadable);
+  // 行が無い回は、会話に出した内訳の控えを捨てる: A→空→A の3回目を、空の回を挟んだのに「前回と同じ」と畳まないため
+  // 控えを捨てる口は `supersedes` だけなので、全文を出す回の形（前置きで始まる控えを消して1件足す）で呼ぶ。この鍵は内訳の指紋と衝突しない
+  if (rows.length === 0) {
+    fold(`${MANAGER_LIST_INBOX_BREAKDOWN_PREFIX}none`, '', '', MANAGER_LIST_INBOX_BREAKDOWN_PREFIX);
+  }
   if (rows.length === 0 && noReadable !== null) {
     return queuedLine === null ? noReadable : `${noReadable}\n${queuedLine}`;
   }
@@ -935,16 +940,16 @@ function describeInboxBacklog(
   const humanOriginatedAlert = describeHumanOriginatedInboxAlert(breakdown, fold);
   const fullBreakdown = describeInboxBacklogBreakdown(breakdown, fold);
   // 内訳（人間起点の行と内訳の本体）が、同じ会話で前回に全文で出した版と同じ中身なら1行ずつにする。
-  // 件数と最も古い時刻の見出しは毎回出す。読めない行が在る回は畳まない（⚠ を落とさない）
+  // 件数と最も古い時刻の見出しは毎回出す。読めない行が在る回も `fold` は呼んで控えを最新にするが、出力は全文（⚠ を落とさない）。
+  // `&&` で呼びを飛ばさない: 飛ばすと控えが古いまま残り、A→B（読めない行あり）→A の3回目を「前回と同じ」と畳む
   const sameAsShown =
-    breakdown.unreadable === undefined &&
     fold(
       `${MANAGER_LIST_INBOX_BREAKDOWN_PREFIX}${inboxBreakdownFingerprint(breakdown)}`,
       fullBreakdown,
       describeInboxBreakdownRef(breakdown),
       MANAGER_LIST_INBOX_BREAKDOWN_PREFIX,
     ) !== fullBreakdown;
-  const folded = sameAsShown && !refetch;
+  const folded = sameAsShown && !refetch && breakdown.unreadable === undefined;
   const humanOriginatedLine =
     humanOriginatedAlert === ''
       ? ''

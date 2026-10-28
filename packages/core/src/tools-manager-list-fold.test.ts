@@ -218,7 +218,7 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
     }
   });
 
-  it('⭐ 受信箱の滞留: 2回目は固定の言い回しだけが札になり、数・時刻・内訳は毎回出る。札にも結論が残る', async () => {
+  it('⭐ 受信箱の滞留: 同じ内訳の2回目は内訳が1行になり、見出し・件数・人間起点の滞留は毎回出る。札にも結論が残る', async () => {
     const delta = new DigestSessionDelta();
     const call = harness(normal, delta, { inbox: stuckInbox(), queued: 5 });
 
