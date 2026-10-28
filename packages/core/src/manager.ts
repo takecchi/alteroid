@@ -180,6 +180,7 @@ import type {
   RescueRemovalFailureKind,
   RescueRemovalReason,
   TextMarkup,
+  TaskStatus,
   UnpushedWorkObservationSource,
   WorkspaceLocator,
   ExternalOutput,
@@ -192,6 +193,7 @@ import {
   type RescueStashEntry,
 } from './schema.js';
 import { describeUnreadableManagerRow, UnreadableJobError, type Stores } from './store.js';
+import { isTaskClosed, taskStatusForJob } from './task.js';
 import {
   markRescueGoneWhileAlive,
   pruneRescueLedger,
@@ -250,6 +252,11 @@ export interface ManagerStartInput {
    * から読んだ値をそのまま `Job.conversationId` へ写すだけ。
    */
   conversationId?: string;
+  /**
+   * この委譲が結び付く task（`manager_start` の `taskId`）。台帳の `Job.taskId` へ写し、委譲の状態に合わせてデーモンが task の状態を動かす（#5469 P3）。
+   * 存在と開いているかの確認は呼び出し元（道具）が済ませる。ここでは確かめない: task が見つからなければ状態を追わせないだけで、委譲は止めない。
+   */
+  taskId?: string;
   /**
    * 記憶・日誌には中身を写さない（日誌にはメタデータの参照だけ）。runner が
    * `manager-attachments` を名乗らなければ断る: 欄が黙って捨てられるため。
@@ -2164,6 +2171,12 @@ interface ManagerRecord {
   waiting: RunnerWaiting[];
   attached: boolean;
   /**
+   * 結び付いた task へ最後に写した状態（#5469 P3）。**メモリだけで持つ**。`undefined` は「この像では写していない」で、
+   * デーモンの再起動で引き取り直した委譲がそうなる。そのときは、終わった委譲の task が `waiting` に取り残された分だけを直し、
+   * クローンが動かした task の状態は戻さない（`#syncTask`）。
+   */
+  taskSyncedStatus?: TaskStatus;
+  /**
    * **メモリだけで持つ**（台帳へは書かない）。`undefined` は「追っていない」であって「世代が無い」ではない。
    * **resume を出している最中**も立てない: 応答を受け取れなかった resume は受理されたか分からないので、
    * 古い値を残して新しいセッションの出来事を捨てる側へ倒さない。
@@ -3776,6 +3789,7 @@ class Pool implements ManagerPool {
         updatedAt: at,
         status: 'running',
         ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+        ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
         summary: brief({ request: input.request }),
         request: input.request,
         ...(input.supersedes === undefined ? {} : { supersedes: input.supersedes }),
@@ -3824,6 +3838,8 @@ class Pool implements ManagerPool {
     }
     // 名簿を引き直さず、この回に貸し出しを立てた相手を写す。`undefined` で上書きしない: 一度名乗った器の値まで消えて以後判定できなくなる。
     if (lease.instanceId !== undefined) record.job.sessionInstanceId = lease.instanceId;
+    // 起こした直後は「待ち」へ動かす（`#persist` の同期が最初の1回で `running` → `waiting` を写す）。起こし直しではなく新しい委譲なので、動かしてよいと分かっている値から始める
+    if (input.taskId !== undefined) record.taskSyncedStatus = 'queued';
 
     await this.#persist(record);
     await this.#journal({
@@ -13457,6 +13473,53 @@ class Pool implements ManagerPool {
     } catch (error) {
       // ジョブ台帳が書けなくてもマネージャーは走らせるが、黙って消さない: 失敗は台帳にも日誌にも跡を残さない。
       noteDroppedRecord('ジョブ台帳', `job id=${record.job.id} status=${record.job.status}`, error);
+    }
+    await this.#syncTask(record);
+  }
+
+  /**
+   * 委譲の状態を、結び付いた task（`Job.taskId`）へ写す（#5469 P3）。委譲が終わった（done / failed / lost / stopped）task は
+   * `needs_decision` へ戻り、クローンの判断を待つ。受信箱の合図が消えても、task が残るので拾える。
+   * 書き込みの1本の口（`#persist`）に置く: 委譲の状態を変える経路は多く、個別に呼ぶと1つ漏れた経路の task だけが動かない。
+   * best-effort: task が書けなくても委譲と台帳は止めない（落とした跡は日誌へ）。
+   */
+  async #syncTask(record: ManagerRecord): Promise<void> {
+    const taskId = record.job.taskId;
+    if (taskId === undefined) return;
+    const target = taskStatusForJob(record.job.status);
+    if (record.taskSyncedStatus === target) return;
+    const known = record.taskSyncedStatus !== undefined;
+    try {
+      const task = await this.#stores.tasks.get(taskId);
+      // 閉じた task は動かさない（`planTaskTransition` も拒むが、日誌を汚さない）。見つからない task は、書けない相手なので追わない
+      if (task === null || isTaskClosed(task.status)) {
+        record.taskSyncedStatus = target;
+        return;
+      }
+      // 像が無い（再起動で引き取り直した）回は、終わった委譲の task が待ちに取り残された分だけ直す。
+      // クローンが `queued` へ戻した task を、同じ委譲の次の書き込みで戻さないため
+      if (!known && !(target === 'needs_decision' && task.status === 'waiting')) {
+        record.taskSyncedStatus = target;
+        return;
+      }
+      const result = await this.#stores.tasks.setStatus(taskId, target, {
+        by: 'daemon',
+        at: new Date(this.#now()).toISOString(),
+      });
+      record.taskSyncedStatus = target;
+      if (result.kind === 'changed') {
+        await this.#journal({
+          type: 'decision',
+          decision: `[${record.job.id}] task ${taskId} を ${result.before.status} から ${target} にした（委譲が ${record.job.status}）`,
+          grounds: '委譲の状態に結び付いた task を追わせる（#5469 P3）',
+        });
+      }
+    } catch (error) {
+      noteDroppedRecord(
+        'task の状態の追従',
+        `job id=${record.job.id} task=${taskId} status=${record.job.status}`,
+        error,
+      );
     }
   }
 

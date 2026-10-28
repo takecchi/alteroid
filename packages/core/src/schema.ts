@@ -1459,6 +1459,9 @@ export const jobSchema = z.object({
   status: jobStatusSchema,
   // `commitmentId` のような専用の欄を足さず、`ToolContext.conversationId` を自動で写す: クローンが手で維持する欄を足すと、クローンはそれを忘れるため
   conversationId: z.string().optional(),
+  // この委譲が結び付いた task（`manager_start` の `taskId`）。委譲の状態が変わると、デーモンが task の状態を追わせる（#5469 P3）。
+  // 起点の会話と違って呼び出し文脈から自動で写さない: 文脈には「いま扱っている task」がまだ無い（P5 以降）。クローンが渡す欄だが、渡し忘れても委譲は走る（結び付かないだけ）
+  taskId: z.string().optional(),
   managerId: z.string().optional(),
   sessionId: z.string().optional(),
   // `projectKey` + `sessionId` の対で持つ: ローカルのトランスクリプトはコンテナと一緒に消え、無いと器を作り直した後に生ログを引き当てられないため
