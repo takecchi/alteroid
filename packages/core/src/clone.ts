@@ -74,6 +74,7 @@ import {
   type ManagerLiveness,
 } from './digest.js';
 import { clockLabel, DigestSessionDelta } from './digest-session-delta.js';
+import { parseFoldState, serializeFoldState, type FoldState } from './fold-state.js';
 import {
   describeAnthropicRoute,
   describeToolSearch,
@@ -1074,6 +1075,19 @@ class Clone implements CloneHost {
    * 全文へ戻す（`reset()`）のは、会話が変わった・要約が走りうる／走った・PreCompact・記録が無いとき。「20ターンごとに全文」は入れない（重複の除去であって判断ではない）。
    */
   readonly #digestDelta = new DigestSessionDelta();
+  // 畳みの控え（上の2つ＋周期の数え）を再起動をまたいで resume に付ける仕組み（`fold-state.ts`）。
+  // 読み戻しは起動後の最初の束で1回だけ（`#restoreFoldStateOnce`）。読み戻した控えが指す会話の usage だけが、最初のターンの「要約が走りうるか」の判定の材料になる
+  #foldRestoreAttempted = false;
+  #restoredFold: Pick<FoldState, 'sessionId' | 'usage' | 'growthTokens'> | null = null;
+  // 読み戻しで測った resume の判定を `#ensureQuery` へ渡す（予算超過の行を日誌へ2度書かないため）
+  #resumeVerdict: { stored: string; resume: string | null } | null = null;
+  // 1ターン前の終わりの控え。預けるのは常にこちら（今の控えではない）: 今のターンの入力が生ログに載りきる前に落ちると、今のターンで初めて出した全文を「会話にある」と言い張る控えが残るため。
+  // 生ログがいつ書かれるかは確かめられない（pg の預け先は非同期に書く）ので、後続のターンまで終わったなら1つ前の入力は載っていると見なす安全側の仮定を置く。代償: 再起動の直後は1ターン分だけ余計に全文が出る
+  #prevFold: FoldState | null = null;
+  // 預け先に控えがあるかもしれない（不明を含む）か。無いと分かっていれば消しに行かない
+  #foldStoreMayHold = true;
+  #foldLastWritten: string | null = null;
+  #foldWrites: Promise<void> = Promise.resolve();
   // 全文へ戻した理由を、このターンで日誌へ書いたか（1ターン1行。`#pump` の先頭で下ろす。観測のみ）
   #digestResetLoggedThisTurn = false;
   readonly #sessionStore: SessionStore | undefined;
@@ -2393,6 +2407,8 @@ class Clone implements CloneHost {
       // 前の回の持ち越しを捨て、全文へ戻す条件に当たれば記録も消す（#4937）: 台帳の断りより先に行う（断りの固定の1文もこの記録を使うため）
       this.#digestDelta.discardStaged();
       this.#digestResetLoggedThisTurn = false;
+      // 預けた控えの読み戻し（起動後の最初の束だけ）: 次の全文へ戻す判定より前に行う
+      await this.#restoreFoldStateOnce();
       // #4941: 入力を閉じて作り直しを待っている窓（`query` は非 null のまま）も新しい会話になる。使用量の観測が取れない回も全文（安全側）
       this.#resetDigestDeltaIfNewConversation();
       this.#notices.set('redelivery', this.#redeliveryNoticeFor(batch));
@@ -3819,9 +3835,17 @@ class Clone implements CloneHost {
    * それ以外は `'full'`（完全な全文）: 会話が変わった・作り直しの窓（会話の上に何も残らない）、使用量の観測が無い・閾値や量が不明（要約の有無が確かめられない。安全側）。
    */
   #fullReasonThisTurn(): { reason: 'full' | 'compaction'; label: DigestResetLabel } | null {
-    if (this.#sdkSession.query === null) return { reason: 'full', label: 'query_null' };
+    // 読み戻した控えがあるあいだ（起動後の最初のターンで、`#ensureQuery` が resume を開くまで）は、`query === null` を会話が変わった理由にしない:
+    // resume が同じ id で戻ると確かめた上で読み戻しており、会話の上には控えの全文が残っている。使用量は再起動で消えているので、預けた時点の観測で判定する
+    const restored = this.#sdkSession.query === null ? this.#restoredFold : null;
+    if (this.#sdkSession.query === null && restored === null) {
+      return { reason: 'full', label: 'query_null' };
+    }
     if (this.#sdkSession.inputEndedForRecycle) return { reason: 'full', label: 'recycle_window' };
-    const label = digestUsageResetReason(this.#lastContextUsage, this.#lastContextGrowthTokens);
+    const label = digestUsageResetReason(
+      restored === null ? this.#lastContextUsage : restored.usage,
+      restored === null ? this.#lastContextGrowthTokens : restored.growthTokens,
+    );
     if (label === null) return null;
     return { reason: label === 'compaction_likely' ? 'compaction' : 'full', label };
   }
@@ -3832,6 +3856,8 @@ class Clone implements CloneHost {
    * 待たない・握る: 同期の呼び出し元から呼ぶため。`#journal` は投げないので、書き込みの失敗はターンを落とさない。
    */
   #resetDigestDelta(reason: 'full' | 'compaction', label: DigestResetLabel): void {
+    // 預けた控えも同じ条件で捨てる: 畳んだ記録を捨てたのに預け先だけが「畳んである」と言い続けると、次の起動が会話に無い全文を畳むため
+    this.#forgetFoldState();
     if (!this.#digestDelta.reset(reason)) return;
     // 1ターン1行: 入力を押し込んだ後（commit 済み）に失敗などで戻す回は、同じターンの先頭で書いた行の理由に含める
     if (this.#digestResetLoggedThisTurn) return;
@@ -3842,6 +3868,127 @@ class Clone implements CloneHost {
       role: 'outbound',
       text: `${EXCHANGE_KIND_DECISION_PREFIX}固定文を全文へ戻す: 理由=${label}`,
     });
+  }
+
+  // 待たない・握る: 同期の呼び出し元から呼び、書き込みの失敗はターンを落とさない（`#journal` と同じ扱い）。書き込みは1本の鎖に並べる: 消す・書くの順が入れ替わると、捨てたはずの控えが残るため
+  #enqueueFoldWrite(raw: string | null): void {
+    this.#foldWrites = this.#foldWrites
+      .then(() => this.#stores.sessions.setFoldState(raw))
+      .catch((error: unknown) => {
+        noteDroppedRecord('畳みの控えの保存', 'clone', error);
+      });
+  }
+
+  /** 預けた控えと、1ターン前の控えの写しを捨てる。預け先に無いと分かっていれば何も書かない。 */
+  #forgetFoldState(): void {
+    this.#prevFold = null;
+    this.#foldLastWritten = null;
+    if (!this.#foldStoreMayHold) return;
+    this.#foldStoreMayHold = false;
+    this.#enqueueFoldWrite(null);
+  }
+
+  // 控えは確定した分だけ写す（staged は会話に載ったと言えない）。id が分からない（init が来ていない）なら写さない
+  #captureFold(): FoldState | null {
+    const sessionId = this.#situationExplainedSessionId;
+    if (sessionId === undefined) return null;
+    const usage = this.#lastContextUsage;
+    return {
+      v: 1,
+      sessionId,
+      situation: [...this.#situationExplained],
+      turnsSinceFull: this.#situationTurnsSinceFull,
+      digest: this.#digestDelta.exportState(),
+      usage:
+        usage === null
+          ? null
+          : {
+              ...(usage.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
+              ...(usage.autoCompactThreshold === undefined
+                ? {}
+                : { autoCompactThreshold: usage.autoCompactThreshold }),
+              ...(usage.isAutoCompactEnabled === undefined
+                ? {}
+                : { isAutoCompactEnabled: usage.isAutoCompactEnabled }),
+              ...(usage.error === undefined ? {} : { error: usage.error }),
+            },
+      growthTokens: this.#lastContextGrowthTokens,
+    };
+  }
+
+  /**
+   * 成功したターンの終わりに、控えを預ける（`turn_ended`。入力は押し込め済みで、確定した控えが今のターンまで進んでいる）。
+   * 預けるのは1ターン前の控え（`#prevFold`）に、今の使用量の観測を載せたもの。同じ会話の控えでなければ預けない。
+   */
+  #persistFoldStateAfterTurn(): void {
+    const current = this.#captureFold();
+    const confirmed = this.#prevFold;
+    const raw =
+      confirmed === null || current === null || confirmed.sessionId !== current.sessionId
+        ? null
+        : serializeFoldState({
+            ...confirmed,
+            usage: current.usage,
+            growthTokens: current.growthTokens,
+          });
+    if (raw === null) {
+      this.#forgetFoldState();
+      this.#prevFold = current;
+      return;
+    }
+    this.#prevFold = current;
+    if (raw === this.#foldLastWritten) return;
+    this.#foldLastWritten = raw;
+    this.#foldStoreMayHold = true;
+    this.#enqueueFoldWrite(raw);
+  }
+
+  /**
+   * 起動後の最初の束で1回だけ、預けた控えを読み戻す。次の4つがすべて揃ったときだけ使う。1つでも欠ければ今までどおり空から始める（全文）:
+   * (1) 預けた控えが読めて形が合う (2) 控えの sessionId が、保存してある resume 用の id と一致する (3) 大きすぎる resume として捨てられない（`#resumeCandidateWithinBudget`）
+   * (4) 控えの使用量の観測から「要約が走りうる」と言われない（`#fullReasonThisTurn`）。
+   * 使えなかった控えは預け先からも消す: 残すと、次の起動が同じ古い控えを読み直す。
+   * 周期の数えは1つ進めて戻す（預けたのは1ターン前の控えなので、実際の数えは進んでいる）: 20ターンごとの全文が遅れる側へ倒れない。
+   */
+  async #restoreFoldStateOnce(): Promise<void> {
+    if (this.#foldRestoreAttempted) return;
+    this.#foldRestoreAttempted = true;
+    try {
+      const raw = await this.#stores.sessions.getFoldState();
+      if (raw === null) {
+        this.#foldStoreMayHold = false;
+        return;
+      }
+      const state = parseFoldState(raw);
+      const storedSessionId = await this.#stores.sessions.getCloneSessionId();
+      if (state === null || storedSessionId === null || state.sessionId !== storedSessionId) {
+        this.#forgetFoldState();
+        return;
+      }
+      const resume = await this.#resumeCandidateWithinBudget(storedSessionId);
+      this.#resumeVerdict = { stored: storedSessionId, resume };
+      if (resume !== storedSessionId) {
+        this.#forgetFoldState();
+        return;
+      }
+      this.#situationExplained.clear();
+      for (const [key, text] of state.situation) {
+        // 知らない鍵は `get` に引かれないだけで害が無い（形の検査は `parseFoldState`）
+        this.#situationExplained.set(key as Parameters<SituationExplained['set']>[0], text);
+      }
+      this.#situationTurnsSinceFull = state.turnsSinceFull + 1;
+      this.#digestDelta.importState(state.digest);
+      this.#situationExplainedSessionId = state.sessionId;
+      this.#restoredFold = {
+        sessionId: state.sessionId,
+        usage: state.usage,
+        growthTokens: state.growthTokens,
+      };
+      this.#foldLastWritten = raw;
+    } catch (error) {
+      noteDroppedRecord('畳みの控えの読み戻し', 'clone', error);
+      this.#forgetFoldState();
+    }
   }
 
   /** 全文へ戻す条件に当たれば、tick の要約の差分の記録を消す。`#pump` の先頭と、要約を組む直前（組む前の `await` の間に窓が開きうる）から呼ぶ。 */
@@ -6757,8 +6904,24 @@ class Clone implements CloneHost {
 
     const storedResume = await this.#stores.sessions.getCloneSessionId();
     // `load()` を呼ぶ前に大きさを測る: 超えた resume を読むと OOM になるため（`#resumeCandidateWithinBudget`）
+    // 読み戻しが同じ id で測っていればその判定を使う（予算超過の行を2度書かない）
+    const verdict = this.#resumeVerdict;
+    this.#resumeVerdict = null;
     const resume =
-      storedResume === null ? null : await this.#resumeCandidateWithinBudget(storedResume);
+      storedResume === null
+        ? null
+        : verdict?.stored === storedResume
+          ? verdict.resume
+          : await this.#resumeCandidateWithinBudget(storedResume);
+    // 読み戻した控えが指す会話と違う会話を開くなら捨てる（読み戻した後に id が捨てられた回。通常は起きない）。この回の断り書きは既に組んである
+    const restored = this.#restoredFold;
+    this.#restoredFold = null;
+    if (restored !== null && resume !== restored.sessionId) {
+      this.#situationExplained.clear();
+      this.#situationTurnsSinceFull = 0;
+      this.#situationExplainedSessionId = undefined;
+      this.#resetDigestDelta('full', 'session_changed');
+    }
     this.#sdkSession.beginSession(resume);
     this.#sessionOrdinal += 1;
     // 以下はセッションごとに戻す: 持ち越すと、別セッションの生ログを今の名前で退避する／暴走の止めが前のセッションの成功で解ける／畳みの敷居へ近い状態から始まる
@@ -8427,6 +8590,8 @@ class Clone implements CloneHost {
         // 答えの返った合図を `defer` し、次の合図で同じ発言が二重実行される。
         // `rate_limit_event` の `rejected` でも課金枠（overage）に落ちてターンは成功しうる（通常の遷移）。
         // `#notices` は降ろさない: 同じ文言を二度書かないための別の関心。
+        // 控えの預け入れは成功したターンの後だけ: 失敗したターンの入力が履歴に残るかは SDK の挙動に頼らない（`turn_failed` の reset と同じ）
+        this.#persistFoldStateAfterTurn();
         this.#usageBlocked = null;
         // 抑止した再武装・畳んだ内部の失敗の件数も0へ戻す: この解除は `#pump` 先頭の解除ブロックを経由せず、古い件数が次の枠当たりへ残るため。
         this.#usageBlockSuppressedRearms = 0;

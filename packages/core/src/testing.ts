@@ -298,6 +298,7 @@ export function createMemoryStores(): Stores {
   >();
   const inboxStore = createMemoryInboxStore();
   let cloneSessionId: string | null = null;
+  let foldState: string | null = null;
   let transcriptGrave: TranscriptGrave | null = null;
   let lostSessionGrave: LostSessionGrave | null = null;
   // 枠の後ろの順番待ち（#4884）
@@ -1042,6 +1043,14 @@ export function createMemoryStores(): Stores {
     async setCloneSessionId(sessionId) {
       if (sessionId !== null) assertNoNul('session.cloneSessionId', sessionId);
       cloneSessionId = sessionId;
+      if (sessionId === null) foldState = null;
+    },
+    async getFoldState() {
+      return foldState;
+    },
+    async setFoldState(state) {
+      if (state !== null) assertNoNul('session.foldState', state);
+      foldState = state;
     },
     async getTranscriptGrave() {
       return transcriptGrave;
@@ -1127,7 +1136,7 @@ export function createMemoryStores(): Stores {
     },
     async clear() {
       const removed =
-        [cloneSessionId, transcriptGrave, lostSessionGrave, projectKey].filter(
+        [cloneSessionId, foldState, transcriptGrave, lostSessionGrave, projectKey].filter(
           (value) => value !== null,
         ).length +
         [transcriptGraveQueue.length, lostSessionGraveQueue.length].filter((n) => n > 0).length +
@@ -1136,6 +1145,7 @@ export function createMemoryStores(): Stores {
       distillFailureRecords.transcript = {};
       distillFailureRecords.lost_session = {};
       cloneSessionId = null;
+      foldState = null;
       transcriptGrave = null;
       lostSessionGrave = null;
       transcriptGraveQueue = [];

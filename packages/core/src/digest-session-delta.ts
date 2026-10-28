@@ -79,6 +79,15 @@ interface Staged {
   readonly reports: Map<string, ReportShown>;
 }
 
+/** `DigestSessionDelta` の確定した控えを JSON にできる形にしたもの（`exportState` / `importState`）。 */
+export interface DigestDeltaState {
+  sections: { at: string; sections: [string, string][] } | null;
+  fixed: string[];
+  requests: [string, { text: string; at: string }][];
+  paragraphs: string[];
+  reports: [string, { key: string; chars: number; at: string }][];
+}
+
 export interface RenderedDigest {
   /** モデルへ渡す形（差分にしたもの）。 */
   readonly text: string;
@@ -196,6 +205,51 @@ export class DigestSessionDelta {
     };
     this.#staged = null;
     return hadRecord;
+  }
+
+  /**
+   * 確定した控え（committed）だけを、JSON にできる形で写す。押し込めていない分（staged）は含めない: 会話に載ったと言えるのは確定した分だけのため。
+   * 再起動をまたいで resume するときの読み戻し用（`fold-state.ts`）。日時は ISO 文字列。
+   */
+  exportState(): DigestDeltaState {
+    const { sections, fixed, requests, paragraphs, reports } = this.#committed;
+    return {
+      sections:
+        sections === null
+          ? null
+          : { at: sections.at.toISOString(), sections: [...sections.sections] },
+      fixed: [...fixed],
+      requests: [...requests].map(([kind, r]) => [kind, { text: r.text, at: r.at.toISOString() }]),
+      paragraphs: [...paragraphs],
+      reports: [...reports].map(([id, r]) => [
+        id,
+        { key: r.key, chars: r.chars, at: r.at.toISOString() },
+      ]),
+    };
+  }
+
+  /**
+   * `exportState` の写しから控えを組み直す（形の検査は呼び出し側）。読み戻した回の挙動:
+   * 要約を1度でも全文で出していた（sections がある）なら、完全な全文へ倒す理由は消える。無ければ起動直後と同じ（最初の要約は完全な全文）。
+   */
+  importState(state: DigestDeltaState): void {
+    this.#committed = {
+      sections:
+        state.sections === null
+          ? null
+          : { at: new Date(state.sections.at), sections: new Map(state.sections.sections) },
+      fixed: new Set(state.fixed),
+      requests: new Map(
+        state.requests.map(([kind, r]) => [kind, { text: r.text, at: new Date(r.at) }]),
+      ),
+      paragraphs: new Set(state.paragraphs),
+      reports: new Map(
+        state.reports.map(([id, r]) => [id, { key: r.key, chars: r.chars, at: new Date(r.at) }]),
+      ),
+    };
+    this.#staged = null;
+    this.#fullForced = state.sections === null;
+    this.#compactionReset = false;
   }
 
   /** 次の要約が軽い全文か: 要約が走りうる／走った理由の reset があり、完全な全文へ倒す理由の reset が（確定した全文の後に）無いとき。 */

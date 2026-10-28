@@ -39,6 +39,8 @@ function parseStoredJson<T>(
 }
 
 const CLONE_SESSION_KEY = 'clone_session_id';
+// 畳みの控え。id と別の key に置く（fs と同じ）。行が無ければ「控え無し」なので、古い版のデータはそのまま読め、migrate は要らない
+const CLONE_FOLD_STATE_KEY = 'clone_fold_state';
 // 墓標を別の key に置く: fs 側は同居させると丸ごと消えるため、器で振る舞いが変わらないよう両方とも別の欄に揃える。
 const CLONE_TRANSCRIPT_GRAVE_KEY = 'clone_transcript_grave';
 const CLONE_LOST_SESSION_KEY = 'clone_lost_session';
@@ -165,13 +167,38 @@ export class PgSessionRegistry implements SessionRegistry {
   async setCloneSessionId(sessionId: string | null): Promise<void> {
     if (sessionId !== null) assertNoNul('session.cloneSessionId', sessionId);
     if (sessionId === null) {
-      await this.#db.delete(daemonState).where(eq(daemonState.key, CLONE_SESSION_KEY));
+      // 控えも同じ文で消す: id だけが消えて控えが残る窓を作らない
+      await this.#db
+        .delete(daemonState)
+        .where(inArray(daemonState.key, [CLONE_SESSION_KEY, CLONE_FOLD_STATE_KEY]));
       return;
     }
     await this.#db
       .insert(daemonState)
       .values({ key: CLONE_SESSION_KEY, value: sessionId })
       .onConflictDoUpdate({ target: daemonState.key, set: { value: sessionId } });
+  }
+
+  // 中身を解釈しない（壊れていれば呼び出し側が捨てる）。`daemon_state` は key/value なので migrate は要らない
+  async getFoldState(): Promise<string | null> {
+    const rows = await this.#db
+      .select({ value: daemonState.value })
+      .from(daemonState)
+      .where(eq(daemonState.key, CLONE_FOLD_STATE_KEY))
+      .limit(1);
+    return rows[0]?.value ?? null;
+  }
+
+  async setFoldState(state: string | null): Promise<void> {
+    if (state === null) {
+      await this.#db.delete(daemonState).where(eq(daemonState.key, CLONE_FOLD_STATE_KEY));
+      return;
+    }
+    assertNoNul('session.foldState', state);
+    await this.#db
+      .insert(daemonState)
+      .values({ key: CLONE_FOLD_STATE_KEY, value: state })
+      .onConflictDoUpdate({ target: daemonState.key, set: { value: state } });
   }
 
   async getTranscriptGrave(): Promise<TranscriptGrave | null> {
@@ -443,6 +470,7 @@ export class PgSessionRegistry implements SessionRegistry {
       .where(
         inArray(daemonState.key, [
           CLONE_SESSION_KEY,
+          CLONE_FOLD_STATE_KEY,
           CLONE_TRANSCRIPT_GRAVE_KEY,
           CLONE_LOST_SESSION_KEY,
           CLONE_TRANSCRIPT_GRAVE_QUEUE_KEY,
