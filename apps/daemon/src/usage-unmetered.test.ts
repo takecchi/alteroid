@@ -17,6 +17,8 @@ const PRE_S3_KEYS = [
   'breakdown',
   'layersSince',
   'notice',
+  // 基準が1件でもあれば載る（Issue #5409）。unmeteredRows とは別の欄で、この試験が測る「無報告の鍵が無い」には関わらない
+  'resets',
   'rows',
   'since',
   'today',
