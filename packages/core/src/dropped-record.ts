@@ -164,6 +164,18 @@ export function noteWithheldReportsDiscarded(
 }
 
 /**
+ * クローンの道具の呼びから tool_use_id（`_meta` の `claudecode/toolUseId`）が取れなかったことを stderr へ1行残す（#5428）。
+ * 呼び手を判定できないので本体の呼びとして畳む（サブエージェントの呼びが本体の控えを更新しうる）。1セッション1回は呼び元が守る。
+ */
+export function noteToolUseIdMissing(): void {
+  note(
+    'クローンの道具の呼びから tool_use_id（_meta の claudecode/toolUseId）が取れなかった。' +
+      '呼び手を判定できないので本体の呼びとして畳む（サブエージェントの呼びが本体の控えを更新しうる）。' +
+      'このセッションでは以後この警告を出さない',
+  );
+}
+
+/**
  * `abort()` が「止めた」と確かめた後に `send()` 側の resume が runner へ届いてしまい、畳み直しが
  * `'stopped'` 以外を返したことを stderr へ1行だけ残す。
  *

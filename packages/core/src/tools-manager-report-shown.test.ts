@@ -28,7 +28,10 @@ function pool(managers: ManagerSummary[]): ManagerPool {
   } as unknown as ManagerPool;
 }
 
-function harness(shownAt: (managerId: string, text: string) => Date | null) {
+function harness(
+  shownAt: (managerId: string, text: string) => Date | null,
+  isSubagentCall?: (toolUseId: string | undefined) => boolean,
+) {
   const summary: ManagerSummary = {
     managerId: 'mgr-1',
     status: 'done',
@@ -48,12 +51,13 @@ function harness(shownAt: (managerId: string, text: string) => Date | null) {
     conversationId: () => undefined,
     managers: pool([summary]),
     managerReportShownAt: shownAt,
+    ...(isSubagentCall === undefined ? {} : { isSubagentCall }),
   });
   return {
-    async call(args: Record<string, unknown>): Promise<string> {
+    async call(args: Record<string, unknown>, extra: unknown = {}): Promise<string> {
       const found = tools.find((entry) => entry.name === 'manager_report');
       if (!found) throw new Error('manager_report が無い');
-      const result = await found.handler(args as never, {});
+      const result = await found.handler(args as never, extra as never);
       return (result.content ?? [])
         .map((block) => (block.type === 'text' ? block.text : ''))
         .join('');
@@ -105,6 +109,47 @@ describe('manager_report は、全文が既に発言に載っている報告を�
     expect(page).toContain('結論と根拠が続く。');
     expect(page).not.toContain('の発言に載っている');
     expect(request).toContain('依頼の説明。');
+  });
+
+  it('⭐ サブエージェントの呼びは控えがあっても全文を返し、控えを引きもしない（#5428）', async () => {
+    const asked: string[] = [];
+    const h = harness(
+      (id, text) => {
+        asked.push(id);
+        return seen(id, text);
+      },
+      (toolUseId) => toolUseId === 'tu-sub',
+    );
+
+    const sub = await h.call(
+      { managerId: 'mgr-1' },
+      { _meta: { 'claudecode/toolUseId': 'tu-sub' } },
+    );
+    expect(sub).toContain(REPORT.slice(0, 200));
+    expect(sub).not.toContain('の発言に載っている');
+    expect(asked).toEqual([]);
+
+    const main = await h.call(
+      { managerId: 'mgr-1' },
+      { _meta: { 'claudecode/toolUseId': 'tu-main' } },
+    );
+    expect(main).toContain('の発言に載っている');
+  });
+
+  it('extra から tool_use_id が読めない（_meta 無し・型違い・空）ときは undefined を口へ渡す', async () => {
+    const received: unknown[] = [];
+    const h = harness(seen, (toolUseId) => {
+      received.push(toolUseId);
+      return false;
+    });
+
+    await h.call({ managerId: 'mgr-1' }, {});
+    await h.call({ managerId: 'mgr-1' }, undefined);
+    await h.call({ managerId: 'mgr-1' }, { _meta: { 'claudecode/toolUseId': 7 } });
+    await h.call({ managerId: 'mgr-1' }, { _meta: { 'claudecode/toolUseId': '' } });
+    await h.call({ managerId: 'mgr-1' }, { _meta: { 'claudecode/toolUseId': 'tu-1' } });
+
+    expect(received).toEqual([undefined, undefined, undefined, undefined, 'tu-1']);
   });
 
   it('口が無い器（テスト・蒸留）は従来どおり全文', async () => {
