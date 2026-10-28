@@ -95,6 +95,8 @@ export class Inbox {
   // 待っている間に届いたものは通常どおり待ち行列へ積まれる（`next()` の待ち手は居ない）。タイマーは戻る前に必ず片付ける。
   settle(ms: number, interruptWhen: (event: InboxEvent) => boolean): Promise<void> {
     if (this.#closed || ms <= 0) return Promise.resolve();
+    // 待ちに入る前に積まれていた割り込みも見る: 取り出してから待ちに入るまでに await が挟まり、その間に届いた人間の発言・蒸留は `onPush` を通らず、窓の長さぶん待たされるため
+    if (this.#queue.some(interruptWhen)) return Promise.resolve();
     // 同時に2つは待たない: 取り出しは直列で、2つ目が来たら先の待ちを畳む
     this.#settleWatcher?.finish();
     return new Promise<void>((resolve) => {
