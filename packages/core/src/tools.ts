@@ -98,6 +98,7 @@ import {
   isManagerInFlight,
   isManagerOutcomeUnobserved,
   JUDGEMENT_RANK_NOT_APPLICABLE,
+  renderStandingRow,
 } from './digest.js';
 import {
   approvalShape,
@@ -525,6 +526,11 @@ export interface ToolContext {
    * （道具の応答で見えた版と、控えの版がずれるため。次の定期の tick は全文）。無い器（テスト・蒸留）は何もしない。サブエージェントの呼びでも捨てる（捨てるのは安全側）。
    */
   forgetStandingRow?: (kind: string) => void;
+  /**
+   * `schedule_list` が継続中の依頼 `kind` の行を見せた（`rowFullText` は定期の tick の行と同じ字面）。控えがその版と同じなら残し、違う・無いなら `forgetStandingRow` と同じく捨てる。
+   * 無い器（テスト・蒸留）は何もしない（`forgetStandingRow` も無いので控えが無い）。
+   */
+  keepStandingRowIfSame?: (kind: string, rowFullText: string) => void;
   /**
    * この道具の呼びがサブエージェント（作業者）のものか。`foldFixed` と `managerReportShownAt` が指す「会話の上の全文」は本体の会話にしか無いので、サブエージェントの呼びは畳まず、控えも更新しない（#5428）。
    * 引数は呼びの tool_use_id（取れなければ `undefined`）。取れないときの倒し方は実装が決める（クローンは本体扱い＋警告）。
@@ -5095,8 +5101,8 @@ export function createCloneTools(context: ToolContext) {
             );
           }
           if (!plan) return text(`継続中の依頼 ${kind} は無い（kind が違うか、もう外してある）。`);
-          // 行をこの応答で見せた: 定期の tick が会話の上の別の版を「最後に全文で出した版」と畳まないよう、その kind の控えを捨てる
-          context.forgetStandingRow?.(plan.kind);
+          // 行をこの応答で見せた: 定期の tick が会話の上の別の版を「最後に全文で出した版」と畳まないよう、控えがこの版と違えば捨てる（同じなら残す）
+          context.keepStandingRowIfSame?.(plan.kind, renderStandingRow(plan));
           const head =
             `${plan.kind}（${describeScheduleSpec(plan.spec)}）` +
             ` 前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}` +
@@ -5128,8 +5134,9 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         const view = cursorOutcome.view;
-        // 一覧で見せた行の kind も、上と同じ理由で控えを捨てる（予算で切れて載らなかった行まで捨てるのは安全側）
-        for (const plan of view) context.forgetStandingRow?.(plan.kind);
+        // 一覧で見せた行の kind も、上と同じ理由で控えを捨てる（予算で切れて載らなかった行まで捨てるのは安全側）。控えと同じ版なら残す
+        for (const plan of view)
+          context.keepStandingRowIfSame?.(plan.kind, renderStandingRow(plan));
         const items = view.map((plan) =>
           renderListingEntry({
             id: plan.kind,
