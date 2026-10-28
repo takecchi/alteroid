@@ -20,12 +20,18 @@ type Hook = (input: never, id: undefined, options: never) => Promise<unknown>;
 interface Boot {
   clone: CloneHost;
   inputs: string[];
+  stores: ReturnType<typeof createMemoryStores>;
+  /** 次のターンの頭で、別の session_id の init を流す。 */
+  switchSession: (id: string) => void;
   context: () => ToolContext;
   hooks: () => { pre: Hook; post: Hook; failure: Hook; stop: Hook };
 }
 
 function boot(): Boot {
   const inputs: string[] = [];
+  const stores = createMemoryStores();
+  let sessionId = 'sess-fake';
+  let pendingSession: string | undefined;
   let captured: ToolContext | undefined;
   let options: Options | undefined;
   const fn = ((params: { prompt: unknown; options?: Options }) => {
@@ -41,11 +47,22 @@ function boot(): Boot {
         message: { content: unknown };
       }>) {
         inputs.push(String(message.message.content));
+        if (pendingSession !== undefined) {
+          // 会話が替わったことを、次のターンの頭の init で知らせる
+          sessionId = pendingSession;
+          pendingSession = undefined;
+          yield {
+            type: 'system',
+            subtype: 'init',
+            session_id: sessionId,
+            uuid: `uuid-init-${sessionId}`,
+          } as unknown as SDKMessage;
+        }
         yield {
           type: 'result',
           subtype: 'success',
           result: 'ok',
-          session_id: 'sess-fake',
+          session_id: sessionId,
           uuid: `uuid-result-${String(inputs.length)}`,
         } as unknown as SDKMessage;
       }
@@ -65,7 +82,7 @@ function boot(): Boot {
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
   const clone = createClone({
-    stores: createMemoryStores(),
+    stores,
     queryFn: fn,
     env: {},
     inboxSettleMs: 0,
@@ -82,6 +99,10 @@ function boot(): Boot {
   return {
     clone,
     inputs,
+    stores,
+    switchSession: (id) => {
+      pendingSession = id;
+    },
     context: () => {
       if (captured === undefined) throw new Error('道具の context がまだ組まれていない');
       return captured;
@@ -177,7 +198,7 @@ describe('固定の文言の畳みの呼び手の区別（#5428）', () => {
     await s.clone.stop();
   });
 
-  it('⭐ (c) tool_use_id が取れないときは今までどおり畳み、警告は1セッションで1回だけ', async () => {
+  it('⭐ (c) tool_use_id が取れないときは今までどおり畳み、警告はデーモン1回につき1回だけ', async () => {
     const s = boot();
     await turn(s);
 
@@ -192,6 +213,21 @@ describe('固定の文言の畳みの呼び手の区別（#5428）', () => {
 
     const warnings = lines.filter((line) => line.includes('tool_use_id'));
     expect(warnings.length).toBe(1);
+    await s.clone.stop();
+  });
+
+  it('⭐ (c2) 会話（セッション）が替わっても、tool_use_id が取れない警告は2回目が出ない', async () => {
+    const s = boot();
+    await turn(s);
+
+    const lines = await captureStderr(async () => {
+      await runnerList(s, {});
+      s.switchSession('sess-second');
+      await turn(s);
+      await runnerList(s, {});
+    });
+
+    expect(lines.filter((line) => line.includes('tool_use_id')).length).toBe(1);
     await s.clone.stop();
   });
 
@@ -226,6 +262,40 @@ describe('固定の文言の畳みの呼び手の区別（#5428）', () => {
       await turn(s);
       await s.hooks().pre(preOf('tu-1', ''), undefined, {} as never);
       expect(isSub(s, 'tu-1')).toBe(false);
+      await s.clone.stop();
+    });
+
+    it('空の agent_id の呼びは本体の呼びとして畳まれる（サブの呼びのように全文にならない）', async () => {
+      const s = boot();
+      await turn(s);
+      const { pre } = s.hooks();
+      await pre(preOf('tu-1', ''), undefined, {} as never);
+      await pre(preOf('tu-2', ''), undefined, {} as never);
+      const first = await runnerList(s, metaOf('tu-1'));
+      const second = await runnerList(s, metaOf('tu-2'));
+      expect(first).toContain(FULL_MARK);
+      expect(second).not.toContain(FULL_MARK);
+      await s.clone.stop();
+    });
+
+    it('印が上限を超えると古い順に落ち、落ちたことが日誌に残る（新しい印は残る）', async () => {
+      const s = boot();
+      await turn(s);
+      const { pre } = s.hooks();
+      const limit = 4096;
+      for (let i = 0; i <= limit; i += 1) {
+        await pre(preOf(`tu-${String(i)}`, 'agent-1'), undefined, {} as never);
+      }
+      expect(isSub(s, 'tu-0')).toBe(false);
+      expect(isSub(s, 'tu-1')).toBe(true);
+      expect(isSub(s, `tu-${String(limit)}`)).toBe(true);
+      await flushPendingMicrotasks();
+      const entries = (await s.stores.journal.list({ types: ['exchange'] })) as Array<{
+        text?: string;
+      }>;
+      expect(
+        entries.some((e) => e.text?.includes('サブエージェントの呼びの印が上限') === true),
+      ).toBe(true);
       await s.clone.stop();
     });
 
