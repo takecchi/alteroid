@@ -596,6 +596,9 @@ const RECENT_DENIAL_LIMIT = 32;
 
 const ALLOWED_BY_GRANT_MEMORY_LIMIT = 512;
 
+// 同時に走るサブエージェントの呼びは多くて数十本。その百倍ほどに取る: 溢れて印が落ちると、サブの呼びが本体扱いになり本体の畳みの控えを更新してしまうため
+const SUBAGENT_TOOL_USE_MEMORY_LIMIT = 4096;
+
 // コマンド本文を持たない: 覚える必要があるのは人間が承認済みの規則（`grant.rule`）とその行の id だけのため
 interface AllowedByGrantRecord {
   readonly grantId: string;
@@ -1201,8 +1204,23 @@ class Clone implements CloneHost {
     limit: DENIED_TOOL_USE_MEMORY_LIMIT,
   });
   // サブエージェントが呼んでいる道具の tool_use_id → agentId（#5428）。`#onPreToolUse` で足し、決着（`#onPostToolUse` / `#onPostToolUseFailure`）と `#onSubagentStop` で消す。hook は handler より先に走るので、handler が `ToolContext.isSubagentCall` で引ける
-  readonly #subagentToolUses = new Map<string, string>();
-  // tool_use_id が取れなかった事実を stderr へ出したか。1セッション1回だけ（本体扱いに倒すので、黙ると畳みの前提が崩れていても気づけない）
+  // 無制限には覚えない: 決着の hook が来ない呼びが残り続けても伸びないように。忘れたら `onForget` で日誌へ残す
+  readonly #subagentToolUses = createRecentMap<string>({
+    limit: SUBAGENT_TOOL_USE_MEMORY_LIMIT,
+    onForget: (ids) => {
+      void this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'inbound',
+        text:
+          `${EXCHANGE_KIND_THINNING_PREFIX}サブエージェントの呼びの印が上限` +
+          `（${SUBAGENT_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
+          `${ids.join(', ')}。この tool_use_id の呼びが後から道具に届くと、` +
+          '本体の呼びとして扱われ、固定の文言の畳みの控えを更新しうる。',
+      });
+    },
+  });
+  // tool_use_id が取れなかった事実を stderr へ出したか。デーモン1回につき1回だけ（セッションが替わっても戻さない: 取れない器は会話が替わっても取れないままで、同じ事実を会話ごとに繰り返さないため。本体扱いに倒すので、黙ると畳みの前提が崩れていても気づけない）
   #toolUseIdMissingWarned = false;
   // 決着（`#onPostToolUse` / `#onPostToolUseFailure`）で消す: その後は拒否が来ないため。上限で忘れた id への拒否は検出できず、`onForget` がその代償を日誌へ残す
   readonly #allowedByGrantToolUses = createRecentMap<AllowedByGrantRecord>({
@@ -7391,7 +7409,7 @@ class Clone implements CloneHost {
 
   /**
    * `ToolContext.isSubagentCall` の実装（#5428）。tool_use_id が取れないときは本体扱い（`false`）に倒す: 全文に倒すと畳みの節約が全部消えるため。
-   * ただし取れなかった事実は捨てず、1セッションで1回だけ stderr へ出す（取れない器では、サブエージェントの呼びが本体の控えを更新しうる）。
+   * ただし取れなかった事実は捨てず、デーモン1回につき1回だけ stderr へ出す（取れない器では、サブエージェントの呼びが本体の控えを更新しうる）。
    */
   #isSubagentCall(toolUseId: string | undefined): boolean {
     if (toolUseId === undefined) {

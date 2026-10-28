@@ -165,13 +165,13 @@ export function noteWithheldReportsDiscarded(
 
 /**
  * クローンの道具の呼びから tool_use_id（`_meta` の `claudecode/toolUseId`）が取れなかったことを stderr へ1行残す（#5428）。
- * 呼び手を判定できないので本体の呼びとして畳む（サブエージェントの呼びが本体の控えを更新しうる）。1セッション1回は呼び元が守る。
+ * 呼び手を判定できないので本体の呼びとして畳む（サブエージェントの呼びが本体の控えを更新しうる）。デーモン1回につき1回は呼び元が守る。
  */
 export function noteToolUseIdMissing(): void {
   note(
     'クローンの道具の呼びから tool_use_id（_meta の claudecode/toolUseId）が取れなかった。' +
       '呼び手を判定できないので本体の呼びとして畳む（サブエージェントの呼びが本体の控えを更新しうる）。' +
-      'このセッションでは以後この警告を出さない',
+      'このデーモンが動いている間は、以後この警告を出さない',
   );
 }
 
