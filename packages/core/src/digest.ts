@@ -170,6 +170,27 @@ export const DIGEST_COUNTS_TOOLS_NOTE =
   '引き受けた仕事は `commitment_list`、回答待ちは `approvals_list`、' +
   '決めたこと・エスカレーション・記憶の更新・外部イベントは `journal_read`、使った分は `usage_read`）';
 
+/** 手が止まっている担当の行の次に出す固定の1行（依頼と直近の報告を載せていないことを名乗る）。 */
+export const DIGEST_IDLE_MANAGERS_NOTE =
+  '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。';
+
+/**
+ * 件数の形（`shape: 'counts'`）の固定の文言を、同じ会話の2回目以降は短い参照にする（#5392）。`text` は全文側の定数と1字も違わない。
+ * `DIGEST_FIXED_PHRASES` とは別にする: あちらは `renderDigest`（自発の tick の差分）の対象で、件数の形は `renderDigest` を通らない（節の控えを上書きしないため）。
+ */
+export const DIGEST_COUNTS_FIXED_PHRASES: readonly { id: string; text: string; ref: string }[] = [
+  {
+    id: 'timer-counts-tools-note',
+    text: DIGEST_COUNTS_TOOLS_NOTE,
+    ref: '（#4938: 件数だけの節の引き口は会話の上と同じ。`commitment_list`・`approvals_list`・`journal_read`・`usage_read`）',
+  },
+  {
+    id: 'timer-counts-idle-managers-note',
+    text: DIGEST_IDLE_MANAGERS_NOTE,
+    ref: '依頼と直近の報告は載せていない。引き口は `manager_list` / `manager_report`（会話の上と同じ）。',
+  },
+];
+
 export type UnobservedReportState = 'none' | 'failure-wrapped' | 'delivered';
 
 export type JudgementRank = 0 | 1 | 2;
@@ -728,7 +749,7 @@ export async function buildActivityDigest(
       lines.push(
         `- 手が止まっている担当（done・stopped）${foldedManagers.length} 本: ${foldedIds.join(', ')}` +
           (foldedRest === 0 ? '' : ` …ほか ${foldedRest} 件`),
-        '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。',
+        DIGEST_IDLE_MANAGERS_NOTE,
       );
     }
     if (oldFailedManagers.length > 0) {

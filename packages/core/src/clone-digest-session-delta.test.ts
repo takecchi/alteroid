@@ -740,6 +740,151 @@ describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
   });
 });
 
+// 定期の tick（件数の形）の固定の説明文（#5392）。全文と参照は全文一致で固定する
+const COUNTS_TOOLS_NOTE_FULL =
+  '（#4938: 定期の依頼の回なので、担当と継続中の依頼のほかは件数だけにしている。中身は道具で引ける —— ' +
+  '引き受けた仕事は `commitment_list`、回答待ちは `approvals_list`、' +
+  '決めたこと・エスカレーション・記憶の更新・外部イベントは `journal_read`、使った分は `usage_read`）';
+const COUNTS_TOOLS_NOTE_REF =
+  '（#4938: 件数だけの節の引き口は会話の上と同じ。`commitment_list`・`approvals_list`・`journal_read`・`usage_read`）';
+const IDLE_MANAGERS_NOTE_FULL =
+  '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。';
+const IDLE_MANAGERS_NOTE_REF =
+  '依頼と直近の報告は載せていない。引き口は `manager_list` / `manager_report`（会話の上と同じ）。';
+const COUNTS_LINE =
+  '- 引き受けた仕事 14 / 回答待ち 4 / エスカレーション 0 / 聞かずに決めたこと 6 / 記憶の更新 0' +
+  ' / 外部イベント 20 / 片付けた仕事 0 / 人間からの発言 0';
+const IDLE_LINE = '- 手が止まっている担当（done・stopped）1 本: mgr-done';
+
+async function seedIdleManager(stores: Stores): Promise<void> {
+  const now = new Date().toISOString();
+  await stores.jobs.putJob({
+    id: 'mgr-done',
+    createdAt: now,
+    updatedAt: now,
+    status: 'done',
+    summary: '終わった担当',
+    request: '終わった担当の依頼',
+    lastReport: '終わった担当の報告',
+  });
+}
+
+function expectCountsFull(text: string): void {
+  expect(text).toContain(COUNTS_TOOLS_NOTE_FULL);
+  expect(text).toContain(IDLE_MANAGERS_NOTE_FULL);
+  expect(text).not.toContain(COUNTS_TOOLS_NOTE_REF);
+  expect(text).not.toContain(IDLE_MANAGERS_NOTE_REF);
+}
+
+describe('定期の tick（件数の形）の固定の説明文は、同じ会話の2回目から参照になる（#5392）', () => {
+  it('⭐ 1回目は全文、2回目以降は参照になる。件数と行（可変部）は毎回出る', async () => {
+    const s = boot();
+    await seed(s.stores);
+    await seedIdleManager(s.stores);
+
+    const first = await timerTick(s);
+    const second = await timerTick(s);
+    const third = await timerTick(s);
+
+    expectCountsFull(first);
+    for (const text of [second, third]) {
+      expect(text).toContain(COUNTS_TOOLS_NOTE_REF);
+      expect(text).toContain(IDLE_MANAGERS_NOTE_REF);
+      expect(text).not.toContain(COUNTS_TOOLS_NOTE_FULL);
+      expect(text).not.toContain(IDLE_MANAGERS_NOTE_FULL);
+    }
+    for (const text of [first, second, third]) {
+      expect(text).toContain(COUNTS_LINE);
+      expect(text).toContain(IDLE_LINE);
+    }
+    expect(second.length).toBeLessThan(first.length);
+    await s.clone.stop();
+  });
+
+  it('⭐ 自動の要約が走った（compact_boundary）あとの tick は全文へ戻る', async () => {
+    const s = boot({ after: (n) => (n === 2 ? [compactBoundary] : []) });
+    await seed(s.stores);
+    await seedIdleManager(s.stores);
+
+    await timerTick(s);
+    const second = await timerTick(s);
+    const third = await timerTick(s);
+
+    expect(second).toContain(COUNTS_TOOLS_NOTE_REF);
+    expectCountsFull(third);
+    expect(third).toContain(COUNTS_LINE);
+    await s.clone.stop();
+  });
+
+  it('⭐ 会話が変わった（init の session_id が変わった）あとの tick は全文へ戻る', async () => {
+    const changedSession = {
+      type: 'system',
+      subtype: 'init',
+      session_id: 'sess-other',
+      uuid: 'uuid-init-2',
+    } as unknown as SDKMessage;
+    const s = boot({ after: (n) => (n === 2 ? [changedSession] : []) });
+    await seed(s.stores);
+    await seedIdleManager(s.stores);
+
+    await timerTick(s);
+    const second = await timerTick(s);
+    const third = await timerTick(s);
+
+    expect(second).toContain(COUNTS_TOOLS_NOTE_REF);
+    expectCountsFull(third);
+    await s.clone.stop();
+  });
+
+  it('⭐ 入力を SDK へ押し込めなかった回（起動の失敗）では控えが進まず、次も全文', async () => {
+    const s = boot({ failFirstStarts: 1 });
+    await seed(s.stores);
+    await seedIdleManager(s.stores);
+
+    // 1回目は起動に失敗して入力が入らない。2回目が会話の最初の入力になる
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer-fail',
+      at: new Date().toISOString(),
+      kind: TIMER_KIND,
+      cause: 'manual',
+    });
+    await waitFor(async () => {
+      const rows = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+      return rows.some((row) => row.text.startsWith('ターンの入力: timer'));
+    }, '失敗する tick の入力の行');
+    expect(s.inputs).toEqual([]);
+    const first = await timerTick(s);
+    const second = await timerTick(s);
+
+    expectCountsFull(first);
+    expect(second).toContain(COUNTS_TOOLS_NOTE_REF);
+    await s.clone.stop();
+  });
+
+  it('⭐ 自発の tick は変わらない: 要約の全体のまま、件数の形の参照は出ず、定期の tick を挟んでも差分の基準は動かない', async () => {
+    const s = boot();
+    await seed(s.stores);
+    await seedIdleManager(s.stores);
+
+    const firstSelf = await selfTick(s);
+    await timerTick(s);
+    await timerTick(s);
+    const secondSelf = await selfTick(s);
+
+    for (const text of [firstSelf, secondSelf]) {
+      expect(text).not.toContain(COUNTS_TOOLS_NOTE_FULL);
+      expect(text).not.toContain(COUNTS_TOOLS_NOTE_REF);
+      expect(text).not.toContain(IDLE_MANAGERS_NOTE_REF);
+    }
+    // 要約の全体の側の文言は変わらない（1回目の自発の tick は全文）
+    expect(firstSelf).toContain(IDLE_MANAGERS_NOTE_FULL);
+    // 基準は前の自発の tick のまま: 変わらない担当の行は出ない
+    expect(secondSelf).not.toContain('担当 7 の途中経過');
+    await s.clone.stop();
+  });
+});
+
 function bootWithHooks(): Boot & { fire: () => Promise<void> } {
   const captured: { options: Options | undefined } = { options: undefined };
   const inputs: string[] = [];

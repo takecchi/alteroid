@@ -68,6 +68,7 @@ import {
 } from './denial-shape.js';
 import {
   buildActivityDigest,
+  DIGEST_COUNTS_FIXED_PHRASES,
   type DigestShape,
   type ManagerAwaitingBackgroundMap,
   type ManagerLiveness,
@@ -5652,6 +5653,14 @@ class Clone implements CloneHost {
         const firedAt = new Date();
         // 組む直前にも判定し直す（#4941）: `#pump` の判定の後の `await` の間に、作り直しの窓が開きうる
         this.#resetDigestDeltaIfNewConversation();
+        // 件数の形の固定の説明文も、同じ会話の2回目以降は短い参照にする（#5392）。`fixed()` だけを呼ぶ: `renderDigest` と違い節の控えには触れず、自発の tick の差分の基準は動かない。件数・行は毎回出す
+        let foldedDigest = timerDigest;
+        for (const phrase of DIGEST_COUNTS_FIXED_PHRASES) {
+          if (!foldedDigest.includes(phrase.text)) continue;
+          foldedDigest = foldedDigest
+            .split(phrase.text)
+            .join(this.#digestDelta.fixed(phrase.id, phrase.text, phrase.ref));
+        }
         const instructionRef = '（固定の指示は会話の上と同じ）';
         const timerInstruction =
           plan === null
@@ -5685,7 +5694,7 @@ class Clone implements CloneHost {
           ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
           // 走りかけていた可能性があることを隠さない: 二重に手を出さないため
           ...(plan?.pendingRun === undefined ? {} : { unfinishedAt: plan.pendingRun.at }),
-          digest: timerDigest,
+          digest: foldedDigest,
           fixedInstruction: timerInstruction,
           ...(seenRequestAt === null
             ? {}
@@ -5694,7 +5703,7 @@ class Clone implements CloneHost {
               }),
         });
         // 長さの上限で末尾が切られたら、控えを進めない: 会話に載っていない文を「上にある」と言わないため
-        if (!timerPrompt.endsWith(timerDigest)) this.#digestDelta.discardStaged();
+        if (!timerPrompt.endsWith(foldedDigest)) this.#digestDelta.discardStaged();
         const outcome = await this.#runInternal(timerPrompt);
 
         // 完了の記録は claim とは別に、ここで行う: ここまで来ないうちに器が落ちたら印が残って配り直される
