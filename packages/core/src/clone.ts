@@ -1072,7 +1072,9 @@ class Clone implements CloneHost {
   /**
    * tick の要約・固定の文言・依頼の本文のうち、この会話で全文を出したものの控え（#4937）。`#situationExplained` と同じ作り:
    * 組んだ時点では確定せず（staged）、入力を SDK へ押し込めた後（`#runTurn`）に確定する。
-   * 全文へ戻す（`reset()`）のは、会話が変わった・要約が走りうる／走った・PreCompact・記録が無いとき。「20ターンごとに全文」は入れない（重複の除去であって判断ではない）。
+   * 全文へ戻す（`reset()`）のは、会話が変わった・要約が走りうる／走った・PreCompact・記録が無いとき。
+   * 加えて、固定の文言の控え（`fixed`）だけは `SITUATION_FULL_EVERY_TURNS` ターンごとにも捨てる（`forgetFixed()`。`#situationNoticeFor`）: 要約の合図を取りこぼしても、全文が会話から消えたまま札だけが続く長さに上限を置く保険（以前は「20ターンごとは入れない」だった）。
+   * 段落・報告の控えは周期の対象外（#5422 の対象外。周期が要るかは別に判断する）。
    */
   readonly #digestDelta = new DigestSessionDelta();
   // 畳みの控え（上の2つ＋周期の数え）を再起動をまたいで resume に付ける仕組み（`fold-state.ts`）。
