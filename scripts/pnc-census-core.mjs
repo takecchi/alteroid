@@ -1,5 +1,5 @@
 // 日誌（GET /journal の書き出し）から、クローンの 1 ターンの「要求の本数 N・平均の文脈 C・要約直後の床 P」を起点別に集計する（読むだけ）。#5469 P8 前段。
-// 純関数だけを置く。ファイルを読む口は `pnc-census.mjs`。ネットワークへは出ない。本文（発言・報告・道具の引数や結果）は読まず、数と道具の名前だけを出す。
+// 純関数だけを置く。ファイルを読む口は `pnc-census.mjs`。ネットワークへは出ない。本文（発言・報告・道具の引数や結果）は読まず、数と道具の名前だけを出す。入力の `external_event` は `summary` に外部の本文を含むが、読むのは `source` と `at` だけ。
 //
 // 使う欄（`packages/core/src/schema.ts` の journalEntrySchema）:
 //   turn_timing: at / succeeded / triggers / kinds / sdk.numTurns / tools{count,totalMs,top[]} / tokens{input,cacheRead,cacheCreation,output} / contextTokens
@@ -30,7 +30,7 @@ export const ASSUMPTIONS = {
 /** 仮定と実測の差を「概ね一致」と見る幅。 */
 export const AGREEMENT_TOLERANCE = 0.25;
 
-/** 枠の知らせ（デーモンの runner 登録簿が出す外部の合図）の source。`daemon-self-notice.ts` の DAEMON_RUNNER_REGISTRY_SOURCE と同じ値。 */
+/** 枠の知らせ（デーモンの runner 登録簿が出す外部の合図）の source。復旧の知らせも同じ source で出るので、枠の知らせの推定は多めに出うる。`daemon-self-notice.ts` の DAEMON_RUNNER_REGISTRY_SOURCE と同じ値。 */
 export const QUOTA_SOURCE = 'runner-registry';
 
 /** 行を turn_timing へ結ぶ最大の時間差（ms）。同じターンの終わりの記帳は数 ms〜数秒の差に収まる。 */
@@ -48,7 +48,7 @@ export const CLASS_LABELS = {
   other: 'その他',
 };
 
-/** 本文を持たない型だけ読む。 */
+/** 読む型は 4 つ。`external_event` は `summary` に外部の本文を含むが、`source` と `at` しか読まない。 */
 const NEEDED_TYPES = new Set(['turn_timing', 'turn_usage', 'context_usage', 'external_event']);
 
 // ---------------------------------------------------------------------------------------------
