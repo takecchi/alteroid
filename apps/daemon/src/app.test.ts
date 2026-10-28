@@ -10621,6 +10621,8 @@ describe('認証トークンのプール', () => {
       settings: { rotateOn: 'free_exhausted', cooldownMs: 5 * 60 * 60 * 1000 },
       // 空のプールにも版が付く（PUT /tokens の ifMatch へ渡す。#4591）
       version: expect.any(String),
+      // 空のプールの既定構成は「現役の指名がまだ一度も無い」状態でもある（#5457。欄の追加だけで、既存の欄は変えない）
+      activeNever: true,
     });
   });
 

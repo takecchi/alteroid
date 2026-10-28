@@ -191,6 +191,7 @@ import {
   tokenRotationSettingsSchema,
   toRowsUnreadable,
   traceApproval,
+  UnreadableActiveTokenError,
   UnreadableApprovalError,
   usageDate,
   usageDateSchema,
@@ -389,6 +390,7 @@ import {
   scheduleListResponseSchema,
   tokensPolicyUpdateRequestSchema,
   tokensConflictResponseSchema,
+  tokensListResponseSchema,
   tokensReplaceResponseSchema,
   tokensResponseSchema,
   tokensUnreadableRemoveRequestSchema,
@@ -9358,14 +9360,19 @@ export function createApp(deps: AppDeps) {
           'プールの行が読めない（版ずれ・手編集）ものが在るときだけ、`rowsUnreadable`' +
           '（件数と、id・ラベル・不正な欄名。**値は含まない**）が載る。**壊れた行であって、' +
           '消されたトークンではない。** `tokens` が空でも `rowsUnreadable` が在れば' +
-          '「登録されていない」ではない。0件なら鍵ごと無い（issue #2346）。',
+          '「登録されていない」ではない。0件なら鍵ごと無い（issue #2346）。' +
+          '現役の指名（いま効いている鍵）は3つの状態を別の欄で返す: 在るとき `active`' +
+          '（`tokenId`・`generation`・`rotatedAt`）、まだ一度も無い（器の環境変数のまま走っている）ときは' +
+          ' `activeNever: true`、読めないときは `activeUnreadable.reason`。どれも無いのは現役を返さない' +
+          '古いデーモン。読めなくても一覧は道連れにしない。',
         responses: {
           200: {
             description:
               'プール（値は出さない）と設定。設定が読めないときは `settings` の代わりに' +
               '`settingsUnreadable: { reason }` を返す（プールの一覧は道連れにしない）。' +
-              '行が読めないものが在るときは `rowsUnreadable` も載る。',
-            content: { 'application/json': { schema: resolver(tokensResponseSchema) } },
+              '行が読めないものが在るときは `rowsUnreadable` も載る。' +
+              '現役の指名は `active` / `activeNever` / `activeUnreadable` のどれか1つが載る。',
+            content: { 'application/json': { schema: resolver(tokensListResponseSchema) } },
           },
           403: {
             description:
@@ -9381,7 +9388,20 @@ export function createApp(deps: AppDeps) {
             tokensResponseSchema.parse({ tokens: [], settings: DEFAULT_TOKEN_ROTATION_SETTINGS }),
           );
         }
-        return c.json(tokensResponseSchema.parse(await deps.tokens.list()));
+        const view = await deps.tokens.list();
+        // `list()` と素の `Promise.all` にしない: 現役が読めないだけで一覧まで道連れにしないため（道具 `token_list` と同じ作法）。読めないとき `activeNever` へ倒さない: 「まだ一度も無い」という別の意味になるため
+        let activeFields: Pick<
+          z.infer<typeof tokensListResponseSchema>,
+          'active' | 'activeNever' | 'activeUnreadable'
+        >;
+        try {
+          const active = await deps.stores.tokens.readActive();
+          activeFields = active === null ? { activeNever: true } : { active };
+        } catch (error) {
+          if (!(error instanceof UnreadableActiveTokenError)) throw error;
+          activeFields = { activeUnreadable: { reason: error.message } };
+        }
+        return c.json(tokensListResponseSchema.parse({ ...view, ...activeFields }));
       },
     )
 

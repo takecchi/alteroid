@@ -39,6 +39,10 @@ interface TokensView {
     rows: { id?: string; label?: string; reason: string }[];
     carriedOver?: true;
   };
+  // 現役の指名。3つの状態は別の欄で来る（`activeNever` / `activeUnreadable`）。どれも無いのは現役を返さない古いデーモン
+  active?: { tokenId: string; generation: number; rotatedAt: string };
+  activeNever?: true;
+  activeUnreadable?: { reason: string };
   // プールの版。読んだ一覧で全文置換するときに `ifMatch` として返す（古いデーモンは返さない）
   version?: string;
 }
@@ -61,6 +65,20 @@ export function describeSettingsUnreadable(reason: string | undefined): string {
     `直すには、回す契機と冷却の既定の両方を指定して保存し直す（片方だけでは保存できない）:\n` +
     `  ${SETTINGS_UNREADABLE_FIX_COMMAND}\n`
   );
+}
+
+// 返さない版（どの欄も無い）は一行も出さない: 「まだ一度も無い」と偽らないため
+export function describeActive(view: TokensView): string {
+  if (view.active !== undefined) {
+    return `現役の指名: ${view.active.tokenId}（世代 ${String(view.active.generation)}、${view.active.rotatedAt}）\n`;
+  }
+  if (view.activeUnreadable !== undefined) {
+    return `現役の指名は読めない（${view.activeUnreadable.reason}）。下の一覧のどれが現役かは言えない。\n`;
+  }
+  if (view.activeNever === true) {
+    return '現役の指名: まだ一度も無い（器の環境変数のまま走っている）\n';
+  }
+  return '';
 }
 
 export function describeRowsUnreadable(
@@ -159,6 +177,7 @@ export async function tokenListCommand(): Promise<void> {
     );
   }
 
+  stdout.write(describeActive(view));
   stdout.write(describeRowsUnreadable(view.rowsUnreadable));
 
   if (view.tokens.length === 0 && view.rowsUnreadable !== undefined) {
@@ -183,7 +202,10 @@ export async function tokenListCommand(): Promise<void> {
   stdout.write('\n');
   for (const token of [...view.tokens].sort((a, b) => a.order - b.order)) {
     const identity = `sha256=${token.sha256 ?? '（指紋が取れていない）'}`;
-    stdout.write(`${String(token.order)}. ${token.label}  id=${token.id}  ${identity}\n`);
+    const activeMark = view.active?.tokenId === token.id ? '  ← 現役' : '';
+    stdout.write(
+      `${String(token.order)}. ${token.label}  id=${token.id}  ${identity}${activeMark}\n`,
+    );
     const stamps = describeStamps(token);
     if (stamps !== null) stdout.write(`   ${stamps}\n`);
     const status = describeStatus(token, now);
