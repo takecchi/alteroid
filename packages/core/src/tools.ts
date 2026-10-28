@@ -2430,43 +2430,144 @@ function describeRescueBrief(
 
 type RescueTree = NonNullable<ManagerSummary['lastRescue']>['worktrees'][number];
 
-// 畳んでよいのは、読み手がもう何もできない作業ツリーだけにする: 生きている ref・退避されなかったもの・送れなかった失敗は、畳むと「全部退避できた」と読めるため
-type RescueTreeFold =
-  | { kind: 'shown' }
+// manager_report の既定は件数に畳む。畳まないのは、退避できていない（push 失敗・未追跡・submodule で、失われうる）作業ツリーの存在だけ:
+// 件数と代表の1本を必ず残す。生きている ref・消せなかった ref・生きている間に消えた作業ツリーは、読み手が何もできないか、ref 名が要るのは取り戻すときだけなので件数でよい（#5028 の続き）
+type RescueTreeKind =
+  | { kind: 'unsaved' }
+  | { kind: 'gone' }
+  | { kind: 'live-ref'; stuckRemoval: boolean }
   | { kind: 'removed'; reason: RescueRemovalReason }
   | { kind: 'nothing-to-send' };
 
-function classifyRescueTree(tree: RescueTree): RescueTreeFold {
+function isUnsavedRescueTree(tree: RescueTree): boolean {
+  return (
+    tree.untracked !== undefined ||
+    tree.submoduleCount !== undefined ||
+    (tree.notPushed !== undefined && tree.notPushed.reason !== 'nothing-tracked')
+  );
+}
+
+function classifyRescueTree(tree: RescueTree): RescueTreeKind {
+  if (isUnsavedRescueTree(tree)) return { kind: 'unsaved' };
+  if (tree.goneAt !== undefined) return { kind: 'gone' };
   const removal = tree.pushed?.removal;
-  const liveRef =
-    tree.pushed !== undefined && (removal === undefined || removal.failureKind !== undefined);
-  if (liveRef) return { kind: 'shown' };
-  if (tree.untracked !== undefined || tree.submoduleCount !== undefined) return { kind: 'shown' };
-  if (tree.notPushed !== undefined && tree.notPushed.reason !== 'nothing-tracked') {
-    return { kind: 'shown' };
+  if (tree.pushed !== undefined && (removal === undefined || removal.failureKind !== undefined)) {
+    return { kind: 'live-ref', stuckRemoval: removal !== undefined };
   }
   if (removal !== undefined) return { kind: 'removed', reason: removal.reason };
   return { kind: 'nothing-to-send' };
 }
 
-function describeRescueFolded(folded: RescueTreeFold[]): string | null {
-  if (folded.length === 0) return null;
+function describeRescueTreeRows(tree: RescueTree): string[] {
+  const rows: string[] = [];
+  const parts: string[] = [];
+  if (tree.pushed !== undefined) {
+    parts.push(describeRescuePushed(tree.pushed));
+  } else {
+    parts.push('退避された ref は無い');
+  }
+  if (tree.notPushed !== undefined) {
+    parts.push(
+      `直近の回: ${RESCUE_NOT_PUSHED_TEXT[tree.notPushed.reason]}${rescueNotPushedDetail(tree.notPushed)}` +
+        (tree.notPushed.since === undefined || tree.notPushed.reason === 'nothing-tracked'
+          ? ''
+          : `（${tree.notPushed.since} から続いている）`),
+    );
+  }
+  // 消さず印を添える: 台帳の項目は退避の記録そのもので、生きている間に消えた作業ツリーの ref も取り戻す材料として残す
+  if (tree.goneAt !== undefined) {
+    parts.push(`生きている間に消えた（観測 ${tree.goneAt}）`);
+  }
+  rows.push(`    ${tree.relativePath}: ${parts.join('。')}`);
+  const unsaved: string[] = [];
+  if (tree.untracked !== undefined) {
+    const shown = tree.untracked.paths.slice(0, 5).join(', ');
+    const rest = tree.untracked.count - Math.min(5, tree.untracked.paths.length);
+    unsaved.push(
+      `未追跡 ${tree.untracked.count} 件（${shown}${rest > 0 ? ` ほか ${rest} 件` : ''}）`,
+    );
+  }
+  if (tree.submoduleCount !== undefined) {
+    unsaved.push(`submodule ${tree.submoduleCount} 本（中の変更は退避されない）`);
+  }
+  if (unsaved.length > 0) rows.push(`      退避されなかったもの: ${unsaved.join('、')}`);
+  return rows;
+}
+
+// 代表は、いまも担当が手を打てる（消えていない）ものの中でいちばん長く続いているもの。無ければ消えたものから選ぶ
+function representativeUnsavedTree(unsaved: RescueTree[]): RescueTree | undefined {
+  const pool = unsaved.some((tree) => tree.goneAt === undefined)
+    ? unsaved.filter((tree) => tree.goneAt === undefined)
+    : unsaved;
+  return pool.reduce<RescueTree | undefined>(
+    (best, tree) =>
+      best === undefined || rescueNotPushedSinceOf(tree) < rescueNotPushedSinceOf(best)
+        ? tree
+        : best,
+    undefined,
+  );
+}
+
+function describeRescueReport(rescue: NonNullable<ManagerSummary['lastRescue']>): string[] {
+  const kinds = rescue.worktrees.map((tree) => ({ tree, fold: classifyRescueTree(tree) }));
+  const unsaved = kinds.filter((k) => k.fold.kind === 'unsaved').map((k) => k.tree);
+  const liveTrees = kinds.filter((k) => k.fold.kind === 'live-ref').map((k) => k.tree);
+  const stuckRemovals = kinds.filter(
+    (k) => k.fold.kind === 'live-ref' && k.fold.stuckRemoval,
+  ).length;
+  const gone = kinds.filter((k) => k.fold.kind === 'gone').length;
+  const nothing = kinds.filter((k) => k.fold.kind === 'nothing-to-send').length;
   const removedGroups = (Object.keys(RESCUE_REMOVAL_REASON_TEXT) as RescueRemovalReason[])
     .map((reason) => ({
       reason,
-      count: folded.filter((f) => f.kind === 'removed' && f.reason === reason).length,
+      count: kinds.filter((k) => k.fold.kind === 'removed' && k.fold.reason === reason).length,
     }))
     .filter((group) => group.count > 0)
     .map((group) => `${RESCUE_REMOVAL_REASON_TEXT[group.reason]} ${String(group.count)} 本`);
-  const nothing = folded.filter((f) => f.kind === 'nothing-to-send').length;
-  const breakdown = [
+  const latestLive = liveTrees.reduce<RescuePushed | undefined>(
+    (best, tree) =>
+      tree.pushed !== undefined && (best === undefined || tree.pushed.at > best.at)
+        ? tree.pushed
+        : best,
+    undefined,
+  );
+  const counts = [
+    latestLive === undefined
+      ? null
+      : `生きている ref ${String(liveTrees.length)} 本（最新: ${describeRescuePushed(latestLive)}）` +
+        (stuckRemovals === 0 ? '' : `・うち消せなかった/送り先無し ${String(stuckRemovals)} 本`),
     removedGroups.length === 0 ? null : `消した ref: ${removedGroups.join('・')}`,
+    gone === 0 ? null : `生きている間に消えた ${String(gone)} 本`,
     nothing === 0 ? null : `送るもの無し ${String(nothing)} 本`,
   ].filter((part): part is string => part !== null);
-  return (
-    `    ほか ${String(folded.length)} 本の作業ツリーは畳んだ（${breakdown.join('、')}）。` +
-    '全部は manager_report を rescueAll: true で読む'
-  );
+  const lines = [
+    `  退避 ref（走行中に自動で push。${rescue.at} に最後に更新）: 作業ツリー ${String(rescue.worktrees.length)} 本`,
+  ];
+  if (counts.length > 0) lines.push(`    ${counts.join('、')}`);
+  const representative = representativeUnsavedTree(unsaved);
+  if (representative !== undefined) {
+    // 種類ごとの本数も添える: 代表の1本だけだと、残りが別の種類（too-large など担当が打てる手が違うもの）でも見えないため
+    const causeCounts = new Map<string, number>();
+    for (const tree of unsaved) {
+      const causes = [
+        tree.notPushed !== undefined && tree.notPushed.reason !== 'nothing-tracked'
+          ? tree.notPushed.reason
+          : null,
+        tree.untracked === undefined ? null : '未追跡',
+        tree.submoduleCount === undefined ? null : 'submodule',
+      ];
+      for (const cause of causes) {
+        if (cause !== null) causeCounts.set(cause, (causeCounts.get(cause) ?? 0) + 1);
+      }
+    }
+    const causes = [...causeCounts].map(([cause, count]) => `${cause} ${String(count)}`).join('・');
+    lines.push(
+      `    ⚠ 退避できていない作業ツリー ${String(unsaved.length)} 本（失われうる。${causes}）。代表の1本:`,
+      ...describeRescueTreeRows(representative).map((row) => `  ${row}`),
+    );
+  }
+  lines.push('    全部は manager_report を rescueAll: true で読む');
+  return lines;
 }
 
 export function describeRescue(
@@ -2477,50 +2578,9 @@ export function describeRescue(
   const rescue = manager.lastRescue;
   if (rescue === undefined || rescue.worktrees.length === 0) return null;
   if (mode === 'brief') return describeRescueBrief(rescue, now);
+  if (mode === 'report') return describeRescueReport(rescue).join('\n');
   const lines = [`  退避 ref（走行中に自動で push。${rescue.at} に最後に更新）:`];
-  const folded: RescueTreeFold[] = [];
-  for (const tree of rescue.worktrees) {
-    if (mode === 'report') {
-      const fold = classifyRescueTree(tree);
-      if (fold.kind !== 'shown') {
-        folded.push(fold);
-        continue;
-      }
-    }
-    const parts: string[] = [];
-    if (tree.pushed !== undefined) {
-      parts.push(describeRescuePushed(tree.pushed));
-    } else {
-      parts.push('退避された ref は無い');
-    }
-    if (tree.notPushed !== undefined) {
-      parts.push(
-        `直近の回: ${RESCUE_NOT_PUSHED_TEXT[tree.notPushed.reason]}${rescueNotPushedDetail(tree.notPushed)}` +
-          (tree.notPushed.since === undefined || tree.notPushed.reason === 'nothing-tracked'
-            ? ''
-            : `（${tree.notPushed.since} から続いている）`),
-      );
-    }
-    // 消さず印を添える: 台帳の項目は退避の記録そのもので、生きている間に消えた作業ツリーの ref も取り戻す材料として残す
-    if (tree.goneAt !== undefined) {
-      parts.push(`生きている間に消えた（観測 ${tree.goneAt}）`);
-    }
-    lines.push(`    ${tree.relativePath}: ${parts.join('。')}`);
-    const unsaved: string[] = [];
-    if (tree.untracked !== undefined) {
-      const shown = tree.untracked.paths.slice(0, 5).join(', ');
-      const rest = tree.untracked.count - Math.min(5, tree.untracked.paths.length);
-      unsaved.push(
-        `未追跡 ${tree.untracked.count} 件（${shown}${rest > 0 ? ` ほか ${rest} 件` : ''}）`,
-      );
-    }
-    if (tree.submoduleCount !== undefined) {
-      unsaved.push(`submodule ${tree.submoduleCount} 本（中の変更は退避されない）`);
-    }
-    if (unsaved.length > 0) lines.push(`      退避されなかったもの: ${unsaved.join('、')}`);
-  }
-  const foldedLine = describeRescueFolded(folded);
-  if (foldedLine !== null) lines.push(foldedLine);
+  for (const tree of rescue.worktrees) lines.push(...describeRescueTreeRows(tree));
   return lines.join('\n');
 }
 
@@ -8789,10 +8849,10 @@ export function createCloneTools(context: ToolContext) {
       [
         'マネージャーの依頼文・直近の報告を全文で読む。',
         'manager_list は抜粋なので、欠落に気づいたらここで全部読むこと。',
-        'manager_list の行は退避 ref を件数と最新の1件しか出さない。ここ（manager_report）は報告の本文の前に、作業ツリーごとの退避 ref を既定では畳んで出す:',
-        '生きている退避 ref（消していない・消せなかった・送り先が無い）・退避されなかったもの（未追跡・submodule）・送れなかった失敗（送るもの無し以外）の作業ツリーは1行ずつ出し、',
-        '退避 ref を消し終えたもの（消した理由ごと）と送るもの無しのものは件数にまとめた1行になる。',
-        '全部（消した ref も送るもの無しも1行ずつ）は rescueAll: true で読む。',
+        'manager_list の行は退避 ref を件数と最新の1件しか出さない。ここ（manager_report）も報告の本文の前に、退避 ref を既定では種類ごとの本数に畳んで出す:',
+        '生きている退避 ref（最新の1件つき）・消し終えた ref（消した理由ごと）・生きている間に消えた作業ツリー・送るもの無しは本数だけで、',
+        '退避できていない（失われうる）作業ツリー（未追跡・submodule・送れなかった失敗）は、本数と代表の1本の行を必ず出す。',
+        '全部（ref 名・退避できていない作業ツリーのすべて）は rescueAll: true で作業ツリーごとに読む。',
         '長い場合は続きの取り方が末尾に出るので、最後まで読み切ること。',
         'それでも足りない（報告に書かれていない中身を確かめたい）ときは manager_transcript で生ログまで降りられる。',
         '直近の報告の全文が既にあなたの発言（会話の上）に載っているときは、本文を繰り返さず、載っている時刻を示す注記だけを返す。引き直したいときは refetch: true を付ける（offset で頁を送る・依頼文は影響を受けない）。',
@@ -8816,7 +8876,7 @@ export function createCloneTools(context: ToolContext) {
           .boolean()
           .optional()
           .describe(
-            '真なら退避 ref を畳まず作業ツリーごとに全部出す（既定は、消し終えた ref と送るもの無しの作業ツリーを件数にまとめる）',
+            '真なら退避 ref を畳まず作業ツリーごとに全部出す（既定は、種類ごとの本数と、退避できていない作業ツリーの本数・代表の1本だけ）',
           ),
         refetch: z
           .boolean()
