@@ -109,8 +109,8 @@ describe('累積スナップショットを増分へ畳む', () => {
     });
 
     // 反転した試験: 以前は「基準にあったモデルが消えたことも数え直しである」だった。載るモデルの組は呼び出しごとに食い違いうる（本番 2026-10-26T23:16Z に haiku を含まない累積が来て opus 約 108 億 cache_read が二重に積まれた）ため、消えたモデルは「変化なし」へ改めた
-    // Issue #5405 で sonnet の cost を 1 から 6 へ改めた: 前回の合計（5）より今回の合計が小さい形は、数え直し直後に主なモデルが載らない場面と区別できず、数え直しとして扱う（下の #5405 の試験）。ここは「合計が減らない」形に限る
-    it('基準にあったモデルが今回に無くても、合計が減らなければ数え直しではない（変化なしとして基準へ引き継ぐ）', () => {
+    // Issue #5405 で sonnet の cost を 1 から 6 へ改めた: 元の形（基準 opus 5・今回 sonnet 1）は、欠けた opus（5）が今回の合計（1）より大きく、数え直し直後に主なモデルが載らない形そのもので、数え直しとして扱う（下の #5405 の試験）。ここは欠落ぶんが今回の合計以下の形に限る
+    it('基準にあったモデルが今回に無くても、欠落ぶんが今回の合計以下なら数え直しではない（変化なしとして基準へ引き継ぐ）', () => {
       const fold = foldUsageSnapshot(
         baseline({ opus: totals({ costUsd: 5 }) }),
         { models: { sonnet: totals({ costUsd: 6 }) } },
@@ -124,11 +124,11 @@ describe('累積スナップショットを増分へ畳む', () => {
       });
     });
 
-    describe('合計 cost が減ったら数え直し（Issue #5405。数え直し直後に主なモデルが載らない）', () => {
+    describe('欠落したモデルが支配的なら数え直し（Issue #5405。数え直し直後に主なモデルが載らない）', () => {
       const opus = (n: number) => totals({ cacheReadInputTokens: n, costUsd: n });
       const haiku = (n: number) => totals({ outputTokens: n, costUsd: n });
 
-      it('今回に主なモデルが無く、載ったモデルが前回以上でも、合計が減れば数え直しで、全量が増分・基準は今回だけになる', () => {
+      it('今回に主なモデルが無く、載ったモデルが前回以上でも、欠落ぶんが支配的なら数え直しで、全量が増分・基準は今回だけになる', () => {
         const fold = foldUsageSnapshot(
           baseline({ opus: opus(100), haiku: haiku(2) }),
           { models: { haiku: haiku(3) } },
@@ -168,7 +168,7 @@ describe('累積スナップショットを増分へ畳む', () => {
         expect(grown.delta).toEqual({ opus: opus(5), haiku: haiku(1) });
       });
 
-      it('今回に無いモデルがあるだけで他が伸びていれば（合計が減らない）数え直しにならない', () => {
+      it('今回に無いモデルがあるだけで他が伸びていれば数え直しにならない', () => {
         const fold = foldUsageSnapshot(
           baseline({ opus: opus(100), haiku: haiku(2) }),
           { models: { opus: opus(103) } },
@@ -178,7 +178,18 @@ describe('累積スナップショットを増分へ畳む', () => {
         expect(fold.delta).toEqual({ opus: opus(3) });
       });
 
-      it('同じ累積の再送（合計が等しい）は数え直しにならず、増分も空', () => {
+      // #5402 の本番事象の形: haiku が載った直後に haiku の無い累積が来る。opus がほぼ増えず合計が haiku ぶん減っても数え直しにしない
+      it('haiku の欠落だけで opus が再送（同じ値）でも微増でも、数え直しにならない', () => {
+        const before = baseline({ opus: opus(100), haiku: haiku(2) });
+        const resend = foldUsageSnapshot(before, { models: { opus: opus(100) } }, LATER);
+        expect(resend.reset).toBeUndefined();
+        expect(resend.delta).toEqual({});
+        const slight = foldUsageSnapshot(before, { models: { opus: opus(101) } }, LATER);
+        expect(slight.reset).toBeUndefined();
+        expect(slight.delta).toEqual({ opus: opus(1) });
+      });
+
+      it('同じ累積の再送は数え直しにならず、増分も空', () => {
         const before = baseline({ opus: opus(100), haiku: haiku(2) });
         const fold = foldUsageSnapshot(
           before,
@@ -189,7 +200,7 @@ describe('累積スナップショットを増分へ畳む', () => {
         expect(fold.delta).toEqual({});
       });
 
-      it('今回に cost の読めなかった欄が在るときは、合計の減少で数え直しとしない', () => {
+      it('今回に cost の読めなかった欄が在るときは、欠落ぶんの比べで数え直しとしない', () => {
         const fold = foldUsageSnapshot(
           baseline({ opus: opus(100), haiku: haiku(2) }),
           { models: { haiku: { ...haiku(3), unreadable: { costUsd: 1 } } } },
@@ -383,8 +394,8 @@ describe('台帳へ畳む（foldRecordForStore）で累積に載るモデルの�
     expect(stale.nextBaseline?.byRunner?.r1).toEqual({ opus: opus(110), haiku: haiku(8) });
   });
 
-  // Issue #5405: 数え直し直後に主なモデルが載らず、載ったモデルが前回以上でも、合計が減れば数え直し
-  it('現役の runner: 合計が減れば数え直しで、全量を積み、基準と控えは今回だけになる', () => {
+  // Issue #5405: 数え直し直後に主なモデルが載らず、載ったモデルが前回以上でも、欠落ぶんが支配的なら数え直し
+  it('現役の runner: 欠落ぶんが支配的なら数え直しで、全量を積み、基準と控えは今回だけになる', () => {
     const runner = { id: 'r1', superseded: false };
     const first = store(null, { opus: opus(100), haiku: haiku(2) }, runner);
     const reset = store(first.nextBaseline, { haiku: haiku(3) }, runner);
@@ -398,7 +409,7 @@ describe('台帳へ畳む（foldRecordForStore）で累積に載るモデルの�
     expect(appeared.fold.delta).toEqual({ opus: opus(7) });
   });
 
-  it('古い runner（superseded）: 合計が減れば数え直しとして積まず（skipped: decreased）、控えを今回だけにする', () => {
+  it('古い runner（superseded）: 欠落ぶんが支配的なら数え直しとして積まず（skipped: decreased）、控えを今回だけにする', () => {
     const old = { id: 'r1', superseded: false };
     const first = store(null, { opus: opus(100), haiku: haiku(2) }, old);
     const moved = store(
