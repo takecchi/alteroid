@@ -139,7 +139,7 @@ describe('クローン本セッションへ渡す Options', () => {
     );
   }, 60_000);
 
-  it('畳みの系統が切り（既定）なら、settings に自動の要約の窓を載せない', async () => {
+  it('compaction の系統が切り（既定）なら、settings に自動の要約の窓を載せない', async () => {
     const { fn, calls } = fakeCloneSdk();
     const clone = createClone({
       stores: createMemoryStores(),
@@ -377,7 +377,7 @@ describe('マネージャー（runner）へ渡す Options', () => {
     await host?.shutdown().catch(() => undefined);
   });
 
-  it('畳みの系統が切り（既定）なら、マネージャーの settings に自動の要約の窓を載せない', async () => {
+  it('compaction の系統が切り（既定）なら、マネージャーの settings に自動の要約の窓を載せない', async () => {
     const { fn, started } = fakeRunnerSdk();
     host = createRunnerHost({
       runnerId: 'runner-primary',

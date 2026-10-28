@@ -2278,7 +2278,7 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
     });
 
     it.each(sessions)(
-      '%s: 畳みの系統が切り（既定）なら、窓を載せない（SDK の既定のまま）',
+      '%s: compaction の系統が切り（既定）なら、窓を載せない（SDK の既定のまま）',
       (_, build) => {
         expect(build({ PATH: '/bin' }).settings).not.toHaveProperty('autoCompactWindow');
         for (const off of ['0', 'off', 'false', '']) {
