@@ -84,14 +84,17 @@ describe('matchPermissionRule', () => {
     expect(matchPermissionRule('Bash(gh pr view)', 'gh pr view; echo done')).toBe(false);
   });
 
-  it('pr-merge スキルの標準形（件名に (#N)・本文に区切り文字と改行）は、引用符の中なので一致する（#5431）', () => {
+  it('pr-merge スキルの標準形（件名に (#N)・本文に区切り文字）は、引用符の中なので一致する（#5431）', () => {
     const rule = 'Bash(gh pr merge:*)';
     expect(
       matchPermissionRule(
         rule,
-        'gh pr merge 6354 --squash --match-head-commit abc123 --subject "fix: x (#6354)" --body "a; b && c\n(d) | e"',
+        'gh pr merge 6354 --squash --match-head-commit abc123 --subject "fix: x (#6354)" --body "a; b && c (d) | e"',
       ),
     ).toBe(true);
+    expect(matchPermissionRule(rule, 'gh pr merge 6354 --squash --body-file /tmp/body.md')).toBe(
+      true,
+    );
     expect(matchPermissionRule(rule, "gh pr merge 6354 --squash --body 'a $(x) `y` \\z'")).toBe(
       true,
     );
@@ -106,6 +109,21 @@ describe('matchPermissionRule', () => {
     expect(matchPermissionRule(rule, 'gh pr merge 1 --body "a\\"; rm -rf /; echo \\""')).toBe(
       false,
     );
+  });
+
+  it.each(["'", '"'])(
+    '引用符の外の # は bash ではコメントなので、後ろの %s を引用符の始まりと数えて次の行を隠す形は一致しない（#5432 レビュー）',
+    (q) => {
+      const rule = 'Bash(gh pr merge:*)';
+      expect(matchPermissionRule(rule, `gh pr merge 1 #${q}\necho PWNED\n#${q}`)).toBe(false);
+      expect(matchPermissionRule(rule, `gh pr merge 1 #${q} x ${q}`)).toBe(false);
+    },
+  );
+
+  it('改行・復帰は引用符の中でも一致しない（本文に改行が要るときは --body-file）', () => {
+    const rule = 'Bash(gh pr merge:*)';
+    expect(matchPermissionRule(rule, 'gh pr merge 1 --body "a\nb"')).toBe(false);
+    expect(matchPermissionRule(rule, "gh pr merge 1 --body 'a\rb'")).toBe(false);
   });
 
   it('閉じていない引用符は解釈できないので一致しない', () => {
