@@ -449,6 +449,82 @@ describe('alteroid inbox remove — サーバの断りをそのまま投げる',
     );
   });
 
+  it('500 で removedIds が複数: 消えた件数と id と droppedFromDelivery を出し、途中で止まったと伝えて投げる', async () => {
+    const out = captureStdout();
+    replies = [
+      {
+        status: 500,
+        body: {
+          error: '記録（日誌）が書けなかったので、変更していません',
+          removedIds: ['evt-1', 'evt-2'],
+          droppedFromDelivery: 1,
+        },
+      },
+    ];
+
+    const error = await inboxRemoveCommand({ types: 'timer', reason: 'r', execute: true }).catch(
+      (caught: unknown) => caught as Error,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('2 件は消えています');
+    expect((error as Error).message).toContain('alteroid inbox');
+    expect((error as Error).message).not.toContain('変更していません');
+    const text = out();
+    expect(text).toContain('途中で止まった');
+    expect(text).toContain('2 件を消した');
+    expect(text).toContain('evt-1');
+    expect(text).toContain('evt-2');
+    expect(text).toContain('配達の待ち行列からも外したのは 1 件');
+    expect(text).toContain('残りは受信箱に在る');
+    expect(text).toContain('alteroid inbox で現状を確かめ');
+  });
+
+  it('500 で removedIds が空・欄が無い・読めない本文は従来の文言のまま（何も出さない）', async () => {
+    const out = captureStdout();
+    const unchanged = '受信箱を畳めませんでした（500）: 記録が書けなかった';
+    const bodies: unknown[] = [
+      { error: '記録が書けなかった', removedIds: [], droppedFromDelivery: 0 },
+      { error: '記録が書けなかった' },
+      { error: '記録が書けなかった', removedIds: 'evt-1' },
+      { error: '記録が書けなかった', removedIds: ['evt-1', 2] },
+    ];
+    for (const body of bodies) {
+      replies = [{ status: 500, body }];
+      await expect(
+        inboxRemoveCommand({ types: 'timer', reason: 'r', execute: true }),
+      ).rejects.toThrow(unchanged);
+    }
+
+    globalThis.fetch = (() =>
+      Promise.resolve(new Response('<html>oops</html>', { status: 500 }))) as typeof fetch;
+    await expect(
+      inboxRemoveCommand({ types: 'timer', reason: 'r', execute: true }),
+    ).rejects.toThrow(/^受信箱を畳めませんでした（500）$/);
+    expect(out()).not.toContain('途中で止まった');
+  });
+
+  it('500 で removedIds が多いときは先頭の数件と「ほか N 件」だけを並べる', async () => {
+    const out = captureStdout();
+    const ids = Array.from(
+      { length: 25 },
+      (_, index) => `evt-${String(index + 1).padStart(3, '0')}`,
+    );
+    replies = [{ status: 500, body: { error: 'x', removedIds: ids, droppedFromDelivery: 0 } }];
+
+    await expect(
+      inboxRemoveCommand({ types: 'timer', reason: 'r', execute: true }),
+    ).rejects.toThrow('25 件は消えています');
+
+    const text = out();
+    expect(text).toContain('25 件を消した');
+    expect(text).toContain('evt-001');
+    expect(text).toContain('evt-010');
+    expect(text).not.toContain('evt-011');
+    expect(text).not.toContain('evt-025');
+    expect(text).toContain('ほか 15 件');
+  });
+
   it('繋がらない（fetch そのものが失敗する）も投げる', async () => {
     globalThis.fetch = (() => Promise.reject(new Error('fetch failed'))) as unknown as typeof fetch;
 

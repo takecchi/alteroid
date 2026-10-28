@@ -100,12 +100,61 @@ async function post(target: Target, body: Record<string, unknown>): Promise<Inbo
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
+    // 本文を1度だけ読む: 部分失敗の判定と、従来の文言（withErrorReason）の両方が同じ本文を要るため
+    const errorBody: unknown = await response.json().catch(() => null);
+    if (response.status === 500) {
+      const stopped = readStoppedRemoval(errorBody);
+      if (stopped !== null) reportStoppedRemoval(stopped);
+    }
     throw new Error(
-      await withErrorReason(`受信箱を畳めませんでした（${response.status}）`, response),
+      await withErrorReason(`受信箱を畳めませんでした（${response.status}）`, {
+        json: () => Promise.resolve(errorBody),
+      }),
     );
   }
 
   return (await response.json()) as InboxRemoveManyResult;
+}
+
+/** 並べる id の上限: 数百件の id で端末と、ログへ写された出力を埋めないため（全件は日誌の `decision` 行に在る）。 */
+const STOPPED_REMOVAL_IDS_SHOWN = 10;
+
+interface StoppedRemoval {
+  removedIds: string[];
+  droppedFromDelivery: number | undefined;
+}
+
+// daemon の `inboxRemoveManyStoppedResponseSchema` の読み側: CLI は daemon の実行時コードを取り込まない（型だけ）ので、必要な 2 欄だけを手で読む。
+// 空の `removedIds`・欄の無い本文は null: 何も消えていない 500 は従来の「畳めませんでした」のままにするため。
+function readStoppedRemoval(body: unknown): StoppedRemoval | null {
+  if (typeof body !== 'object' || body === null || !('removedIds' in body)) return null;
+  const { removedIds } = body;
+  if (!Array.isArray(removedIds) || removedIds.length === 0) return null;
+  if (!removedIds.every((id): id is string => typeof id === 'string')) return null;
+  const dropped = 'droppedFromDelivery' in body ? body.droppedFromDelivery : undefined;
+  return {
+    removedIds,
+    droppedFromDelivery: typeof dropped === 'number' ? dropped : undefined,
+  };
+}
+
+function reportStoppedRemoval(stopped: StoppedRemoval): never {
+  const count = stopped.removedIds.length;
+  const shown = stopped.removedIds.slice(0, STOPPED_REMOVAL_IDS_SHOWN);
+  stdout.write(`⚠ 途中で止まった。ここまでに ${count} 件を消した（取り消せない）。消した id:\n`);
+  for (const id of shown) stdout.write(`  ${redactError(id)}\n`);
+  if (count > shown.length) stdout.write(`  ほか ${count - shown.length} 件\n`);
+  if (stopped.droppedFromDelivery !== undefined) {
+    stdout.write(`配達の待ち行列からも外したのは ${stopped.droppedFromDelivery} 件。\n`);
+  }
+  stdout.write(
+    '止まった塊より先は消していない（残りは受信箱に在る）。' +
+      '打ち直す前に alteroid inbox で現状を確かめること（打ち直すと対象は選び直しになる）。\n',
+  );
+  // 出力のあとで非0にする: スクリプトの `&&` が成功と読まないため（runners vacate と同じ作法）
+  throw new Error(
+    `受信箱の一括削除が途中で止まりました（500）。${count} 件は消えています。alteroid inbox で現状を確かめてから打ち直してください`,
+  );
 }
 
 function report(
