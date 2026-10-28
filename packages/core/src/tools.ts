@@ -130,6 +130,7 @@ import {
   describePage,
   excerpt,
   excerptLine,
+  excerptRow,
   fillListingBudget,
   page,
   renderFilledListing,
@@ -4494,7 +4495,7 @@ export function createCloneTools(context: ToolContext) {
         }
 
         // 予算を先に決めて入るところまで積む: 件数から出力量を決めると何件で壊れるかが運任せになるため
-        // 同じ会話の行が2つ以上あるときだけ、長い id を凡例に1回書いて行では短い札（c1, c2…）にする: 会話 id（UUID）が exchange の行ごとに出て、一覧の約17%を占めるため。1回しか出ない id は札にしない（凡例の方が長くなる）
+        // 同じ会話の行が2つ以上あるときだけ、長い id を凡例に1回書いて行では短い札（conv#1, conv#2…）にする: 会話 id（UUID）が exchange の行ごとに出て、一覧の約17%を占めるため。1回しか出ない id は札にしない（凡例の方が長くなる）
         const conversationLegend = journalConversationLegend(entries);
         const items = entries.map((entry) => {
           const { head, body } = renderJournalEntry(
@@ -4504,7 +4505,7 @@ export function createCloneTools(context: ToolContext) {
           );
           return (
             `${entry.at} ${head} id=${entry.id}` +
-            (body === '' ? '' : `\n  ${excerptLine(body, JOURNAL_TEXT_EXCERPT)}`)
+            (body === '' ? '' : `\n  ${journalListingBody(entry, body)}`)
           );
         });
 
@@ -9615,7 +9616,7 @@ export function createCloneTools(context: ToolContext) {
               (message.supersededBy === undefined
                 ? ''
                 : `（畳み込み済み。編集後は id=${message.supersededBy}）`) +
-              `\n  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}` +
+              `\n  ${excerptRow(message.text, CONVERSATION_EXCHANGE_EXCERPT)}` +
               attachmentLines(message.attachments, '  '),
           );
           // 会話は新しい側から積む: 予算で切るとき落とすのは古い側にし、会話を開く動機である直近の続きを残すため
@@ -9664,7 +9665,7 @@ export function createCloneTools(context: ToolContext) {
             (message) =>
               `${message.at} [${roleLabel(message.role)}] id=${message.id}` +
               ` conversation=${message.conversationId ?? '(無し)'}\n` +
-              `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}` +
+              `  ${excerptRow(message.text, CONVERSATION_EXCHANGE_EXCERPT)}` +
               attachmentLines(message.attachments, '  '),
           );
           return text(
@@ -11190,6 +11191,15 @@ function journalAttachmentHead(
           .map((r) => `${excerptLine(r.name, 80)}（${excerptLine(r.reason, 80)}）`)
           .join('; ')}${more(rejected.length)}]`;
   return kept + refused;
+}
+
+// 一覧の本文の抜粋。turn_usage だけはモデルごとの行を別々に切る: 全体を1行に潰して切ると、1つ目のモデルの行（cache 内訳つき）で字数が尽き、2つ目以降のモデルが一覧に出ないため
+function journalListingBody(entry: JournalEntry, body: string): string {
+  if (entry.type !== 'turn_usage') return excerptRow(body, JOURNAL_TEXT_EXCERPT);
+  return body
+    .split('\n')
+    .map((line) => excerptRow(line, JOURNAL_TEXT_EXCERPT))
+    .join(' / ');
 }
 
 // 凡例の札は `conv#N`: 実在の会話 id（UUID など）と取り違えない形にする。札にしない id は行にそのまま出る
