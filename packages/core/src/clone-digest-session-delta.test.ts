@@ -1002,6 +1002,301 @@ describe('定期の tick（件数の形）の固定の説明文は、同じ会�
   });
 });
 
+// 定期の tick の「継続中の依頼」の行は、前回の入力と1字も違わなければ、同じ会話の2回目から1行の参照にまとめる
+const STANDING_FOLD_HEAD = '件は前回の入力と1字も変わっていない: ';
+const EXTRA_KINDS = ['extra-a', 'extra-b', 'extra-c'] as const;
+
+async function putStanding(stores: Stores, kind: string, request: string): Promise<void> {
+  await stores.schedules.put({
+    kind,
+    spec: { type: 'daily', at: '10:00' },
+    request,
+    createdAt: '2026-08-11T00:00:00.000Z',
+    updatedAt: '2026-08-11T00:00:00.000Z',
+  });
+}
+
+async function seedExtraStanding(stores: Stores): Promise<void> {
+  for (const kind of EXTRA_KINDS) {
+    await putStanding(stores, kind, `${kind} の依頼。${'説明が続く。'.repeat(20)}`);
+  }
+}
+
+/** 行が全文で載っているか（kind の行の頭は `- <kind>（`）。 */
+function hasStandingRow(text: string, kind: string): boolean {
+  return text.includes(`\n- ${kind}（`);
+}
+
+/** 畳んだ行の kind の並び。畳んだ行が無ければ空。 */
+function foldedStandingKinds(text: string): string[] {
+  const line = text.split('\n').find((row) => row.includes(STANDING_FOLD_HEAD));
+  if (line === undefined) return [];
+  const after = line.slice(line.indexOf(STANDING_FOLD_HEAD) + STANDING_FOLD_HEAD.length);
+  return after.slice(0, after.indexOf('。')).split('・');
+}
+
+function expectAllStandingRowsFull(text: string): void {
+  for (const kind of [TIMER_KIND, ...EXTRA_KINDS]) expect(hasStandingRow(text, kind)).toBe(true);
+  expect(text).not.toContain(STANDING_FOLD_HEAD);
+}
+
+describe('定期の tick の継続中の依頼の行は、前回から変わらなければ同じ会話の2回目から畳む', () => {
+  it('⭐ 1回目は全行が全文。2回目は変わらない行が1行にまとまり（件数と kind と引き直しの道具つき）、動いた行だけ全文', async () => {
+    const s = boot();
+    await seed(s.stores);
+    await seedExtraStanding(s.stores);
+
+    const first = await timerTick(s);
+    const second = await timerTick(s);
+
+    expectAllStandingRowsFull(first);
+    // 動かした依頼の行は「前回動いた時刻」が進むので全文のまま
+    expect(hasStandingRow(second, TIMER_KIND)).toBe(true);
+    for (const kind of EXTRA_KINDS) expect(hasStandingRow(second, kind)).toBe(false);
+    expect(foldedStandingKinds(second)).toEqual([...EXTRA_KINDS]);
+    expect(second).toContain(`継続中の依頼 ${String(EXTRA_KINDS.length)} 件は前回の入力と1字も`);
+    expect(second).toContain('引き直しは `schedule_list`');
+    expect(second.length).toBeLessThan(first.length);
+    await s.clone.stop();
+  });
+
+  it('⭐ 1行だけ変わると、その行だけが全文で出る（ほかは畳んだまま）', async () => {
+    const s = boot();
+    await seed(s.stores);
+    await seedExtraStanding(s.stores);
+
+    await timerTick(s);
+    await putStanding(s.stores, 'extra-b', 'extra-b の依頼が書き換わった。');
+    const second = await timerTick(s);
+
+    expect(hasStandingRow(second, 'extra-b')).toBe(true);
+    expect(second).toContain('extra-b の依頼が書き換わった。');
+    expect(foldedStandingKinds(second)).toEqual(['extra-a', 'extra-c']);
+    await s.clone.stop();
+  });
+
+  it('⭐ ⚠ を含む行は、前回と同じでも毎回全文', async () => {
+    const s = boot();
+    await seed(s.stores);
+    await seedExtraStanding(s.stores);
+    await putStanding(s.stores, 'extra-b', '⚠️ 枠が閉じていたら動かさない。');
+
+    await timerTick(s);
+    const second = await timerTick(s);
+    const third = await timerTick(s);
+
+    for (const text of [second, third]) {
+      expect(hasStandingRow(text, 'extra-b')).toBe(true);
+      expect(foldedStandingKinds(text)).toEqual(['extra-a', 'extra-c']);
+    }
+    await s.clone.stop();
+  });
+
+  it('⭐ 前回の入力に全文で出していない行（間に増えた依頼）は「前回と同じ」と言わず全文で出し、その次から畳む', async () => {
+    const s = boot();
+    await seed(s.stores);
+    await putStanding(s.stores, 'extra-a', 'extra-a の依頼。');
+
+    await timerTick(s);
+    await putStanding(s.stores, 'extra-b', 'extra-b の依頼。');
+    const second = await timerTick(s);
+    const third = await timerTick(s);
+
+    expect(hasStandingRow(second, 'extra-b')).toBe(true);
+    expect(foldedStandingKinds(second)).toEqual(['extra-a']);
+    expect(foldedStandingKinds(third)).toEqual(['extra-a', 'extra-b']);
+    await s.clone.stop();
+  });
+
+  it('⭐ 自動の要約が走った（compact_boundary）あとの tick は全行が全文へ戻る', async () => {
+    const s = boot({ after: (n) => (n === 2 ? [compactBoundary] : []) });
+    await seed(s.stores);
+    await seedExtraStanding(s.stores);
+
+    await timerTick(s);
+    const second = await timerTick(s);
+    const third = await timerTick(s);
+
+    expect(foldedStandingKinds(second)).toEqual([...EXTRA_KINDS]);
+    expectAllStandingRowsFull(third);
+    await s.clone.stop();
+  });
+
+  it('⭐ 会話が変わった（init の session_id が変わった）あとの tick は全行が全文へ戻る', async () => {
+    const changedSession = {
+      type: 'system',
+      subtype: 'init',
+      session_id: 'sess-other',
+      uuid: 'uuid-init-2',
+    } as unknown as SDKMessage;
+    const s = boot({ after: (n) => (n === 2 ? [changedSession] : []) });
+    await seed(s.stores);
+    await seedExtraStanding(s.stores);
+
+    await timerTick(s);
+    const second = await timerTick(s);
+    const third = await timerTick(s);
+
+    expect(foldedStandingKinds(second)).toEqual([...EXTRA_KINDS]);
+    expectAllStandingRowsFull(third);
+    await s.clone.stop();
+  });
+
+  it('⭐ 失敗したターンの次の tick は全行が全文。成功したターンの次は畳んだまま', async () => {
+    const s = boot({ failResultAt: 2 });
+    await seed(s.stores);
+    await seedExtraStanding(s.stores);
+
+    await timerTick(s);
+    const second = await timerTick(s);
+    const third = await timerTick(s);
+    const fourth = await timerTick(s);
+
+    expect(foldedStandingKinds(second)).toEqual([...EXTRA_KINDS]);
+    expectAllStandingRowsFull(third);
+    expect(foldedStandingKinds(fourth)).toEqual([...EXTRA_KINDS]);
+    await s.clone.stop();
+  });
+
+  it('⭐ 使用量の観測が取れない回の tick は、毎回全行が全文', async () => {
+    const s = boot({ noUsage: true });
+    await seed(s.stores);
+    await seedExtraStanding(s.stores);
+
+    await timerTick(s);
+    const second = await timerTick(s);
+
+    expectAllStandingRowsFull(second);
+    await s.clone.stop();
+  });
+
+  it('⭐ 入力を SDK へ押し込めなかった回（起動の失敗）では控えが進まず、次も全行が全文', async () => {
+    const s = boot({ failFirstStarts: 1 });
+    await seed(s.stores);
+    await seedExtraStanding(s.stores);
+
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer-fail-standing',
+      at: new Date().toISOString(),
+      kind: TIMER_KIND,
+      cause: 'manual',
+    });
+    await waitFor(async () => {
+      const rows = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+      return rows.some((row) => row.text.startsWith('ターンの入力: timer'));
+    }, '失敗する tick の入力の行');
+    const first = await timerTick(s);
+    const second = await timerTick(s);
+
+    expectAllStandingRowsFull(first);
+    expect(foldedStandingKinds(second)).toEqual([...EXTRA_KINDS]);
+    await s.clone.stop();
+  });
+
+  it('⭐ 畳みが続いても、20ターンごとの全文戻し（forgetFixed）で全行が全文へ戻る', async () => {
+    const s = boot();
+    await seed(s.stores);
+    await seedExtraStanding(s.stores);
+
+    const texts: string[] = [];
+    for (let i = 0; i < 24; i += 1) texts.push(await timerTick(s));
+
+    // 全文へ戻る回が、24回の中に2回目以降でも在る（周期の保険）
+    const refullIndex = texts.findIndex((text, i) => i > 0 && !text.includes(STANDING_FOLD_HEAD));
+    expect(refullIndex).toBeGreaterThan(1);
+    expect(refullIndex).toBeLessThanOrEqual(21);
+    expectAllStandingRowsFull(texts[refullIndex] ?? '');
+    for (let i = 1; i < refullIndex; i += 1) {
+      expect(foldedStandingKinds(texts[i] ?? '')).toEqual([...EXTRA_KINDS]);
+    }
+    await s.clone.stop();
+  });
+});
+
+describe('DigestSessionDelta.foldStandingRows（単体）', () => {
+  const row = (kind: string, last = '（まだ一度も動いていない）', request = `${kind} の依頼`) =>
+    `- ${kind}（毎日 09:00）${request}\n  前回動いた時刻: ${last}`;
+  const digestOf = (rows: string[], tail: string[] = []) =>
+    [
+      '期間: x',
+      '',
+      '## 継続中の依頼（時刻が来れば届く。前回からの続きがあるか見ること）',
+      ...rows,
+      ...tail,
+      '',
+      '- 件数',
+    ].join('\n');
+
+  it('全行が前回と同じなら、2回目は全行が1行にまとまる。全文の行は出ない', () => {
+    const delta = new DigestSessionDelta();
+    const digest = digestOf([row('a'), row('b')]);
+    expect(delta.foldStandingRows(digest)).toBe(digest);
+    delta.commit();
+    const folded = delta.foldStandingRows(digest);
+    expect(folded).not.toContain('- a（');
+    expect(folded).toContain('継続中の依頼 2 件は前回の入力と1字も変わっていない: a・b。');
+    expect(folded).toContain('## 継続中の依頼');
+    expect(folded.endsWith('\n\n- 件数')).toBe(true);
+  });
+
+  it('commit しなければ控えは進まない（押し込めなかった回の次は全文）', () => {
+    const delta = new DigestSessionDelta();
+    const digest = digestOf([row('a')]);
+    delta.foldStandingRows(digest);
+    delta.discardStaged();
+    expect(delta.foldStandingRows(digest)).toBe(digest);
+  });
+
+  it('A→B→A と変わったとき、2回前の A を「前回と同じ」と言わない', () => {
+    const delta = new DigestSessionDelta();
+    const a = digestOf([row('a', '1')]);
+    const b = digestOf([row('a', '2')]);
+    delta.foldStandingRows(a);
+    delta.commit();
+    expect(delta.foldStandingRows(b)).toBe(b);
+    delta.commit();
+    expect(delta.foldStandingRows(a)).toBe(a);
+  });
+
+  it('reset（full・compaction とも）と forgetFixed の後は全文', () => {
+    const digest = digestOf([row('a')]);
+    for (const clear of [
+      (d: DigestSessionDelta) => d.reset('full'),
+      (d: DigestSessionDelta) => d.reset('compaction'),
+      (d: DigestSessionDelta) => d.forgetFixed(),
+    ]) {
+      const delta = new DigestSessionDelta();
+      delta.foldStandingRows(digest);
+      delta.commit();
+      clear(delta);
+      expect(delta.foldStandingRows(digest)).toBe(digest);
+    }
+  });
+
+  it('読めない行の注記・「…ほか N 件」・⚠ の行は、同じでも常に全文', () => {
+    const delta = new DigestSessionDelta();
+    const digest = digestOf(
+      [row('a'), row('warn', '（まだ一度も動いていない）', '⚠️ 注意')],
+      ['- …ほか 3 件（`schedule_list` で全部見える）', '- 読めない継続中の依頼の注記'],
+    );
+    delta.foldStandingRows(digest);
+    delta.commit();
+    const folded = delta.foldStandingRows(digest);
+    expect(folded).toContain('- warn（');
+    expect(folded).toContain('- …ほか 3 件');
+    expect(folded).toContain('- 読めない継続中の依頼の注記');
+    expect(folded).not.toContain('- a（');
+  });
+
+  it('継続中の依頼の節が無い要約は、そのまま返す', () => {
+    const delta = new DigestSessionDelta();
+    expect(delta.foldStandingRows('期間: x\n\n## マネージャー\n- m')).toBe(
+      '期間: x\n\n## マネージャー\n- m',
+    );
+  });
+});
+
 // 自発の tick の件数の行の項目名（固定ラベル）は、同じ会話の2回目から参照になる。数字は毎回出る
 const COUNTS_LABEL_REF_HEAD = '- 件数（項目は会話の上の件数の行と同じ。載せていない項目は 0）: ';
 

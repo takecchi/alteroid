@@ -191,6 +191,10 @@ export const DIGEST_COUNTS_FIXED_PHRASES: readonly { id: string; text: string; r
   },
 ];
 
+/** 継続中の依頼の節の見出しの先頭と、1件の2行目（状態の行）の前置き。節の組み立て（`standingSection`）と、定期の tick の行の畳み（`foldStandingRows`）が同じ文字列を使い、ずれないようにする。 */
+export const STANDING_SECTION_HEADING_HEAD = '## 継続中の依頼';
+export const STANDING_LAST_RUN_LABEL = '前回動いた時刻: ';
+
 /** 全文の要約の件数の行（先頭）。 */
 export const DIGEST_COUNTS_LINE_HEAD = '- 件数: ';
 
@@ -749,12 +753,15 @@ export async function buildActivityDigest(
   // 担当の節と継続中の依頼の節は、全体の形と定期の依頼の形（`counts`）で同じものを使う: 2つの形で文面がずれると、同じ担当が別の言い方で出るため
   const standingSection = (): string[] => {
     if (standing.length === 0 && unreadableStandingNote === null) return [];
-    const lines = ['', '## 継続中の依頼（時刻が来れば届く。前回からの続きがあるか見ること）'];
+    const lines = [
+      '',
+      `${STANDING_SECTION_HEADING_HEAD}（時刻が来れば届く。前回からの続きがあるか見ること）`,
+    ];
     const shownStanding = standing.slice(0, MAX_ITEMS);
     for (const plan of shownStanding) {
       lines.push(
         `- ${plan.kind}（${describeScheduleSpec(plan.spec)}）${brief(plan.request)}` +
-          `\n  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
+          `\n  ${STANDING_LAST_RUN_LABEL}${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
       );
     }
     if (standing.length > 0) {

@@ -6036,7 +6036,8 @@ class Clone implements CloneHost {
         // 組む直前にも判定し直す（#4941）: `#pump` の判定の後の `await` の間に、作り直しの窓が開きうる
         this.#resetDigestDeltaIfNewConversation();
         // 件数の形の固定の説明文も、同じ会話の2回目以降は短い参照にする（#5392）。`fixed()` だけを呼ぶ: `renderDigest` と違い節の控えには触れず、自発の tick の差分の基準は動かない。件数・行は毎回出す
-        let foldedDigest = timerDigest;
+        // 継続中の依頼の行も、前回の入力と1字も違わない行は1行の参照にする。変わった行（前回動いた時刻が進んだ行など）・⚠ の行・前回に全文で出していない行は全文のまま
+        let foldedDigest = this.#digestDelta.foldStandingRows(timerDigest);
         for (const phrase of DIGEST_COUNTS_FIXED_PHRASES) {
           if (!foldedDigest.includes(phrase.text)) continue;
           foldedDigest = foldedDigest
