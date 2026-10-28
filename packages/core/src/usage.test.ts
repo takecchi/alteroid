@@ -109,17 +109,93 @@ describe('累積スナップショットを増分へ畳む', () => {
     });
 
     // 反転した試験: 以前は「基準にあったモデルが消えたことも数え直しである」だった。載るモデルの組は呼び出しごとに食い違いうる（本番 2026-10-26T23:16Z に haiku を含まない累積が来て opus 約 108 億 cache_read が二重に積まれた）ため、消えたモデルは「変化なし」へ改めた
-    it('基準にあったモデルが今回に無いことは数え直しではない（変化なしとして基準へ引き継ぐ）', () => {
+    // Issue #5405 で sonnet の cost を 1 から 6 へ改めた: 前回の合計（5）より今回の合計が小さい形は、数え直し直後に主なモデルが載らない場面と区別できず、数え直しとして扱う（下の #5405 の試験）。ここは「合計が減らない」形に限る
+    it('基準にあったモデルが今回に無くても、合計が減らなければ数え直しではない（変化なしとして基準へ引き継ぐ）', () => {
       const fold = foldUsageSnapshot(
         baseline({ opus: totals({ costUsd: 5 }) }),
-        { models: { sonnet: totals({ costUsd: 1 }) } },
+        { models: { sonnet: totals({ costUsd: 6 }) } },
         LATER,
       );
       expect(fold.reset).toBeUndefined();
-      expect(fold.delta).toEqual({ sonnet: totals({ costUsd: 1 }) });
+      expect(fold.delta).toEqual({ sonnet: totals({ costUsd: 6 }) });
       expect(nextBaseline(fold).models).toEqual({
         opus: totals({ costUsd: 5 }),
-        sonnet: totals({ costUsd: 1 }),
+        sonnet: totals({ costUsd: 6 }),
+      });
+    });
+
+    describe('合計 cost が減ったら数え直し（Issue #5405。数え直し直後に主なモデルが載らない）', () => {
+      const opus = (n: number) => totals({ cacheReadInputTokens: n, costUsd: n });
+      const haiku = (n: number) => totals({ outputTokens: n, costUsd: n });
+
+      it('今回に主なモデルが無く、載ったモデルが前回以上でも、合計が減れば数え直しで、全量が増分・基準は今回だけになる', () => {
+        const fold = foldUsageSnapshot(
+          baseline({ opus: opus(100), haiku: haiku(2) }),
+          { models: { haiku: haiku(3) } },
+          LATER,
+        );
+        expect(fold.reset).toEqual({
+          at: LATER,
+          fromCostUsd: 102,
+          toCostUsd: 3,
+          fromSessionId: undefined,
+          toSessionId: undefined,
+        });
+        expect(fold.delta).toEqual({ haiku: haiku(3) });
+        expect(nextBaseline(fold).models).toEqual({ haiku: haiku(3) });
+        expect(nextBaseline(fold).resets).toBe(1);
+      });
+
+      it('その次に主なモデルが現れて累積しても、積まれるのは差分だけ（二重計上しない）', () => {
+        const reset = foldUsageSnapshot(
+          baseline({ opus: opus(100), haiku: haiku(2) }),
+          { models: { haiku: haiku(3) } },
+          AT,
+        );
+        const appeared = foldUsageSnapshot(
+          nextBaseline(reset),
+          { models: { opus: opus(7), haiku: haiku(3) } },
+          LATER,
+        );
+        expect(appeared.reset).toBeUndefined();
+        expect(appeared.delta).toEqual({ opus: opus(7) });
+        const grown = foldUsageSnapshot(
+          nextBaseline(appeared),
+          { models: { opus: opus(12), haiku: haiku(4) } },
+          LATER,
+        );
+        expect(grown.reset).toBeUndefined();
+        expect(grown.delta).toEqual({ opus: opus(5), haiku: haiku(1) });
+      });
+
+      it('今回に無いモデルがあるだけで他が伸びていれば（合計が減らない）数え直しにならない', () => {
+        const fold = foldUsageSnapshot(
+          baseline({ opus: opus(100), haiku: haiku(2) }),
+          { models: { opus: opus(103) } },
+          LATER,
+        );
+        expect(fold.reset).toBeUndefined();
+        expect(fold.delta).toEqual({ opus: opus(3) });
+      });
+
+      it('同じ累積の再送（合計が等しい）は数え直しにならず、増分も空', () => {
+        const before = baseline({ opus: opus(100), haiku: haiku(2) });
+        const fold = foldUsageSnapshot(
+          before,
+          { models: { opus: opus(100), haiku: haiku(2) } },
+          LATER,
+        );
+        expect(fold.reset).toBeUndefined();
+        expect(fold.delta).toEqual({});
+      });
+
+      it('今回に cost の読めなかった欄が在るときは、合計の減少で数え直しとしない', () => {
+        const fold = foldUsageSnapshot(
+          baseline({ opus: opus(100), haiku: haiku(2) }),
+          { models: { haiku: { ...haiku(3), unreadable: { costUsd: 1 } } } },
+          LATER,
+        );
+        expect(fold.reset).toBeUndefined();
       });
     });
 
@@ -305,6 +381,39 @@ describe('台帳へ畳む（foldRecordForStore）で累積に載るモデルの�
     expect(stale.fold.skipped).toBeUndefined();
     expect(stale.fold.delta).toEqual({ opus: opus(10) });
     expect(stale.nextBaseline?.byRunner?.r1).toEqual({ opus: opus(110), haiku: haiku(8) });
+  });
+
+  // Issue #5405: 数え直し直後に主なモデルが載らず、載ったモデルが前回以上でも、合計が減れば数え直し
+  it('現役の runner: 合計が減れば数え直しで、全量を積み、基準と控えは今回だけになる', () => {
+    const runner = { id: 'r1', superseded: false };
+    const first = store(null, { opus: opus(100), haiku: haiku(2) }, runner);
+    const reset = store(first.nextBaseline, { haiku: haiku(3) }, runner);
+    expect(reset.fold.reset).toBeDefined();
+    expect(reset.fold.delta).toEqual({ haiku: haiku(3) });
+    expect(reset.nextBaseline?.models).toEqual({ haiku: haiku(3) });
+    expect(reset.nextBaseline?.byRunner?.r1).toEqual({ haiku: haiku(3) });
+
+    const appeared = store(reset.nextBaseline, { opus: opus(7), haiku: haiku(3) }, runner);
+    expect(appeared.fold.reset).toBeUndefined();
+    expect(appeared.fold.delta).toEqual({ opus: opus(7) });
+  });
+
+  it('古い runner（superseded）: 合計が減れば数え直しとして積まず（skipped: decreased）、控えを今回だけにする', () => {
+    const old = { id: 'r1', superseded: false };
+    const first = store(null, { opus: opus(100), haiku: haiku(2) }, old);
+    const moved = store(
+      first.nextBaseline,
+      { opus: opus(120), haiku: haiku(2) },
+      { id: 'r2', superseded: false },
+    );
+    const stale = store(moved.nextBaseline, { haiku: haiku(3) }, { id: 'r1', superseded: true });
+    expect(stale.fold.skipped).toEqual({
+      reason: 'decreased',
+      fromCostUsd: 102,
+      toCostUsd: 3,
+    });
+    expect(stale.fold.delta).toEqual({});
+    expect(stale.nextBaseline?.byRunner?.r1).toEqual({ haiku: haiku(3) });
   });
 });
 

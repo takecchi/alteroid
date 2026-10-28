@@ -189,7 +189,15 @@ function detectReset(
       return true;
     }
   }
+  // 合計 cost が減ったときも数え直しとする（Issue #5405）: 数え直し直後の最初の累積に主なモデルが載らず別のモデルだけが載ると、載ったモデルが前回以上で上の判定に掛からず、基準に残った前回の主なモデルに追いつくまでの消費が積まれない
+  // 比べるのは基準の全モデル（今回に無いモデルの前回値を含む）の合計と今回の合計: 今回に無いモデルがあるだけで他が伸びていれば合計は減らず、数え直しにならない。等しい（再送）も数え直しにしない
+  // 今回に cost の読めなかった欄が在るときは見ない: 読めない cost は 0 で書かれ、合計が見かけ上減るため
+  if (!hasUnreadableCost(next) && sumCostUsd(next) < sumCostUsd(prev)) return true;
   return false;
+}
+
+function hasUnreadableCost(models: Record<string, UsageTotals>): boolean {
+  return Object.values(models).some((m) => (m.unreadable?.costUsd ?? 0) > 0);
 }
 
 function subtract(after: UsageTotals, before: UsageTotals): UsageTotals {
