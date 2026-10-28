@@ -14180,6 +14180,21 @@ describe('同文の繰り返しを削った後も、残す1か所に全文が在
     },
   );
 
+  it.each([
+    ['memory_write', '版が無ければ何も書かずに断る'],
+    ['memory_delete', '版が無ければ何も消さずに断る'],
+    ['memory_frontmatter_set', '版が無ければ何も書かずに断る'],
+    ['practice_write', '版が無ければ何も書かずに断る'],
+    ['practice_remove', '版が無ければ何も消さずに断る'],
+  ])(
+    '%s: 「版が無ければ何もせずに断る」は説明文に在り、param には繰り返さない（#5433 のレビュー指摘）',
+    (tool, sentence) => {
+      const description = cloneTools().find((entry) => entry.name === tool)?.description ?? '';
+      expect(description).toContain(sentence);
+      expect(paramDescription(tool, 'base_version')).not.toContain('断る');
+    },
+  );
+
   it('requestId の「通るのは受信箱に確認として届いた requestId だけ」の全文（形の詳細）は manager_send に在り、ask_human は短く指す', () => {
     const send = paramDescription('manager_send', 'requestId');
     expect(send).toContain(
