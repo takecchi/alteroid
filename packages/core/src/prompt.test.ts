@@ -52,13 +52,44 @@ describe('マネージャーのシステムプロンプト — 委譲の指針',
     expect(prompt).toContain('実装に限らず');
   });
 
-  it('ユーザーがクローンであることは残っている（この改修で落としていない）', () => {
-    expect(prompt).toContain('価値観をコピーしたクローン');
+  it('ユーザーを人間と同じ相手として扱わせる — 相手がクローンだとは明かさない', () => {
+    expect(prompt).toContain('Claude Code を使う人間と同じ相手である');
+    expect(prompt).not.toContain('価値観をコピーした');
+    expect(prompt).not.toContain('人間ではなく');
+  });
+
+  it('どの組み合わせの節を足しても「クローン」という語がマネージャーに届かない', () => {
+    const variants = [
+      buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' }),
+      buildManagerSystemPrompt({
+        managerId: 'mgr-test',
+        workerName: 'worker',
+        peer: { models: ['gpt-5.5'] },
+        managerTools: true,
+        reportAttach: true,
+        bashGuards: { waitGuard: true, mutationGuard: true } as never,
+      }),
+    ];
+    for (const variant of variants) {
+      expect(variant).not.toContain('クローン');
+    }
+  });
+
+  it('質問や許可確認の返事に時間がかかりうるという運用の事実は残している', () => {
+    expect(prompt).toContain('返事までに時間がかかることがある');
+    expect(prompt).toContain('ユーザーへ届くのはターンの最後の発言だけ');
   });
 });
 
 describe('クローンのシステムプロンプト — 道具と委譲', () => {
   const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+
+  it('マネージャーへの依頼文では人間と同じ書き方をし、AI・クローン・代理と名乗らないと言う（#5469 P1）', () => {
+    expect(prompt).toContain('人間が Claude Code に書くのと同じ書き方で書く');
+    expect(prompt).toContain(
+      '自分が AI・クローン・人間の代理・オーナーの代わりであることは、依頼文にも質問への返事にも書かない',
+    );
+  });
 
   it('委譲が原則であることを方針として書いている', () => {
     expect(prompt).toContain('原則としてマネージャーへ委ねる');
@@ -574,8 +605,9 @@ describe('auto-memory についての事実の告知（#1189）', () => {
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
     expect(prompt).toContain('auto-memory');
     expect(prompt).toContain('既定で閉じてある');
+    // マネージャーには相手を「クローン」と呼ばない（P1 / #5469）。作業者の文言は下のとおり据え置き
     expect(prompt).toContain(
-      'ここで書いた記憶はクローンにも次の器にも届かない。学びは報告に書くこと。',
+      'ここで書いた記憶はユーザーにも次の器にも届かない。学びは報告に書くこと。',
     );
   });
 
