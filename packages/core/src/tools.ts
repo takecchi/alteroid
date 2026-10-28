@@ -8157,7 +8157,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            '依頼文の全文・managerId・直近の報告の本文・未 push の観測にある枝の名前に部分一致で絞る（例: 依頼文の札 "WORLDBUILD-7"、PR 番号 "#6387"、枝 "feat/mob-add-kinds"）。' +
+            '依頼文の全文・managerId・直近の報告の本文・未 push の観測にある枝の名前に部分一致で絞る（例: 依頼文の札 "WORLDBUILD-7"、PR の番号 "6387"、枝 "feat/mob-add-kinds"）。' +
               '大文字小文字は区別せず、全角と半角は NFKC で揃えて比べる（【】と [] のような別の字は揃わない）。' +
               'status と併用できる（両方に当たるものだけが出る）。' +
               '省略・空文字・空白だけは絞らない（応答にその旨が出る）。' +
@@ -10778,8 +10778,9 @@ const FILTER_STATUS_EMPTY_FULL =
 const FILTER_STATUS_EMPTY_REF =
   '（[] は絞らない扱い。**journal_read・commitment_list の [] は0件で、この道具だけ逆**）。';
 const FILTER_Q_MATCH_FULL =
-  '（依頼文の全文と managerId への部分一致。大文字小文字と全角半角は区別しない）';
-const FILTER_Q_MATCH_REF = '（依頼文の全文と managerId への部分一致）';
+  '（依頼文の全文・managerId・直近の報告の本文・未 push の観測にある枝の名前への部分一致。大文字小文字と全角半角は区別しない）';
+const FILTER_Q_MATCH_REF =
+  '（依頼文の全文・managerId・直近の報告の本文・未 push の観測にある枝の名前への部分一致）';
 const FILTER_Q_EMPTY_FULL = '（渡さなかったのと同じ結果である。status: [] と同じ倒し方）。';
 const FILTER_Q_EMPTY_REF = '（絞らない扱い）。';
 

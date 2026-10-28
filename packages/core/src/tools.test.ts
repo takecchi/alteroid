@@ -10835,7 +10835,7 @@ describe('manager_list（絞った先）に継続点（cursor）を足す（#662
   });
 });
 
-describe('manager_list は q で依頼文の全文と managerId を絞れる（#5020）', () => {
+describe('manager_list は q で依頼文の全文・managerId・報告の本文・枝名を絞れる（#5020・#5449）', () => {
   const NEWEST = Date.parse('2026-10-17T12:00:00.000Z');
   const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
 
@@ -10989,6 +10989,21 @@ describe('manager_list は q で依頼文の全文と managerId を絞れる（#
     expect(reply).toContain('件数: 全 3 本');
     expect(reply).toContain('絞り込み: q: "WORLDBUILD-7"');
     expect(reply).toContain('に当たるのは 1 件');
+  });
+
+  it('絞り込みの行は、報告の本文・枝名まで含む新しい当たり先を名乗る（短い参照版は fold の試験）', async () => {
+    const h = pool([
+      { ...entry('mgr-pr', 'done', 1, '仕事A'), lastReport: 'PR 6387 を出した' },
+      entry('mgr-o', 'done', 2, '別の仕事'),
+    ]);
+    const scope =
+      '依頼文の全文・managerId・直近の報告の本文・未 push の観測にある枝の名前への部分一致';
+
+    const reply = await h.call('manager_list', { q: '6387' });
+
+    expect(reply).toContain('mgr-pr');
+    expect(reply).toContain(`絞り込み: q: "6387"（${scope}。`);
+    expect(reply).not.toContain('依頼文の全文と managerId への部分一致');
   });
 
   it('0件のときは0件だったと、q の値つきで言う（委譲が居ないとは言わない）', async () => {

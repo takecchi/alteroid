@@ -476,4 +476,18 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
     expect(second).toBe(first);
     expect(first).toContain('**「走行中」は「進んでいる」ではない**');
   });
+
+  it('絞り込みの行は、報告の本文・枝名まで含む新しい当たり先を名乗る（1回目の全文版も、2回目の参照版も）', async () => {
+    const call = harness(normal, new DigestSessionDelta());
+    const scope =
+      '依頼文の全文・managerId・直近の報告の本文・未 push の観測にある枝の名前への部分一致';
+
+    const first = await call({ q: '報告 7。' });
+    const second = await call({ q: '報告 7。' });
+
+    expect(first).toContain(`（${scope}。大文字小文字と全角半角は区別しない）`);
+    expect(second).toContain(`（${scope}）`);
+    expect(second).not.toContain('大文字小文字と全角半角は区別しない）');
+    expect(second).not.toContain('依頼文の全文と managerId への部分一致');
+  });
 });
