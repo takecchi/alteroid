@@ -9003,10 +9003,10 @@ function managerPrompt(
     .filter((line) => line !== '')
     .join('\n');
   const guideRef = [
-    `（応じ方は前の${label}と同じ。会話の上にある。返事は \`manager_send\`、宛先: ${to}）`,
+    // 返事（`manager_send`）と根拠が無いとき（`ask_human`）は同じ宛先を取るので、宛先は1回だけ書く。
+    // `ask_human` の添え損ねが再開できなくなる点は、短い形にも残す。
+    `（応じ方は前の${label}と同じ。会話の上にある）返事は \`manager_send\`、根拠が無ければ \`ask_human\`。どちらにも宛先 ${to} を添える（\`ask_human\` で添え損ねると人間が答えても再開できない）。`,
     event.kind === 'permission' ? decisionLine : '',
-    // 根拠が無いときの宛先の添え方は、添え損ねると人間が答えても再開できないので短い形にも残す
-    `根拠が無ければ \`ask_human\` に ${to} を対で添える（添え損ねると人間が答えても再開できない）。`,
   ]
     .filter((line) => line !== '')
     .join('\n');
