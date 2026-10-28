@@ -306,7 +306,7 @@ describe('根拠が無いときの ask_human の宛先の指定は、短い形�
     const second = guideOf(await deliver(s, confirmation(kind, 'rq2')));
     expect(second).not.toContain(SKELETON);
     expect(second).toContain(
-      `\`ask_human\` に managerId: "${MANAGER_ID}", requestId: "rq2" を対で添える`,
+      `返事は \`manager_send\`、根拠が無ければ \`ask_human\`。どちらにも宛先 managerId: "${MANAGER_ID}", requestId: "rq2" を添える`,
     );
     expect(second).toContain('添え損ねると人間が答えても再開できない');
     await s.clone.stop();
