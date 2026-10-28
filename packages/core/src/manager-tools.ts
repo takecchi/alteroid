@@ -103,7 +103,7 @@ export function createManagerToolsMcpServer(deps: {
         OUTPUT_RECORD_TOOL_NAME,
         'コード以外で外へ出した成果（メールの送信・予定の登録・投稿・外部サービスへの保存など）を、' +
           '委譲の記録に1件残す。出すたびに1回呼ぶ。外へは何も送らない（記録するだけ）。' +
-          'クローンは manager_report でこれを読み、器が消えたあとも成果の在りかを辿れる。' +
+          'ユーザーは manager_report でこれを読み、器が消えたあとも成果の在りかを辿れる。' +
           'git に push したものは記録しなくてよい（作業ツリーは別に観測される）。鍵や秘密の値は書かないこと。',
         {
           kind: z
