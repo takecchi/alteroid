@@ -9399,7 +9399,10 @@ export function createApp(deps: AppDeps) {
           activeFields = active === null ? { activeNever: true } : { active };
         } catch (error) {
           if (!(error instanceof UnreadableActiveTokenError)) throw error;
-          activeFields = { activeUnreadable: { reason: error.message } };
+          // `redactErrorText` を通す: 理由は Web・CLI がそのまま出す。`reasonOf` は型名で包むので使わない
+          activeFields = {
+            activeUnreadable: { reason: redactErrorText(error.message, process.env) },
+          };
         }
         return c.json(tokensListResponseSchema.parse({ ...view, ...activeFields }));
       },
