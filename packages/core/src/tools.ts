@@ -346,7 +346,7 @@ import {
   matchesInboxRemoveManyFilter,
   summarizeInboxBacklog,
 } from './inbox-backlog.js';
-import type { InboxRemoveManyFilter } from './inbox-backlog.js';
+import type { InboxBacklogBreakdown, InboxRemoveManyFilter } from './inbox-backlog.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
   ACCOUNT_USAGE_TITLE,
@@ -916,6 +916,8 @@ function describeInboxBacklog(
   now: number,
   queuedInMemory: number | undefined,
   fold: FixedFold = NO_FIXED_FOLD,
+  // 真なら、前回と同じ内訳も全文で出し直す（控えは更新する）
+  refetch = false,
 ): string {
   const rows = peek.entries;
   const queuedLine = describeInboxBacklogQueuedInMemory(queuedInMemory, fold);
@@ -931,13 +933,54 @@ function describeInboxBacklog(
   const oldest =
     breakdown.oldestAt === undefined ? '' : `（最も古いものは ${breakdown.oldestAt} から）`;
   const humanOriginatedAlert = describeHumanOriginatedInboxAlert(breakdown, fold);
-  const humanOriginatedLine = humanOriginatedAlert === '' ? '' : `${humanOriginatedAlert}\n`;
+  const fullBreakdown = describeInboxBacklogBreakdown(breakdown, fold);
+  // 内訳（人間起点の行と内訳の本体）が、同じ会話で前回に全文で出した版と同じ中身なら1行ずつにする。
+  // 件数と最も古い時刻の見出しは毎回出す。読めない行が在る回は畳まない（⚠ を落とさない）
+  const sameAsShown =
+    breakdown.unreadable === undefined &&
+    fold(
+      `${MANAGER_LIST_INBOX_BREAKDOWN_PREFIX}${inboxBreakdownFingerprint(breakdown)}`,
+      fullBreakdown,
+      describeInboxBreakdownRef(breakdown),
+      MANAGER_LIST_INBOX_BREAKDOWN_PREFIX,
+    ) !== fullBreakdown;
+  const folded = sameAsShown && !refetch;
+  const humanOriginatedLine =
+    humanOriginatedAlert === ''
+      ? ''
+      : `${folded ? describeHumanOriginatedAlertRef(breakdown) : humanOriginatedAlert}\n`;
   const queuedSuffix = queuedLine === null ? '' : `\n${queuedLine}`;
   return (
     `${humanOriginatedLine}` +
     `⚠ クローンの受信箱に未処理の合図が ${breakdown.total} 件ある${oldest}\n` +
-    describeInboxBacklogBreakdown(breakdown, fold) +
+    (folded ? describeInboxBreakdownRef(breakdown) : fullBreakdown) +
     queuedSuffix
+  );
+}
+
+// 受信箱の内訳の控え。鍵に内訳の指紋を入れ、古い版は捨てる（`foldFixed` の supersedes）: A→B→A と変わったとき、2回前の A を「前回と同じ」と言わないため。
+// 指紋は観測時刻（毎回変わる）を除いた内訳の全文: 件数・種類・送信元・齢の段（段が動けば別の版）が1つでも変われば全文へ戻る
+const MANAGER_LIST_INBOX_BREAKDOWN_PREFIX = 'manager-list:inbox-breakdown:';
+function inboxBreakdownFingerprint(breakdown: InboxBacklogBreakdown): string {
+  const stable = { ...breakdown, observedAt: '' };
+  return rowFingerprint(
+    `${describeHumanOriginatedInboxAlert(stable)}\n${describeInboxBacklogBreakdown(stable)}`,
+  );
+}
+
+function describeInboxBreakdownRef(breakdown: InboxBacklogBreakdown): string {
+  return (
+    `内訳（計 ${breakdown.total} 件）は前回と同じ（観測 ${breakdown.observedAt} 時点の値。` +
+    '種類・送信元・齢の全文は前の一覧のとおり。引き直しは manager_list に refetch: true。' +
+    '⚠ 器の入れ替え回数は配られた回数ではない。同一本文の件数: この数は上下どちらへもぶれる）'
+  );
+}
+
+function describeHumanOriginatedAlertRef(breakdown: InboxBacklogBreakdown): string {
+  const h = breakdown.humanOriginated;
+  return (
+    `⚠ 人間起点（human_message / human_answer）の滞留が ${h.total} 件ある` +
+    `（うち、いまの器になってから積まれ、まだ片付いていない分が ${h.undelivered} 件。配達されていないとは言えない。前回と同じ）。`
   );
 }
 
@@ -8437,7 +8480,7 @@ export function createCloneTools(context: ToolContext) {
           .boolean()
           .optional()
           .describe(
-            `真なら、前回と変わらず「${MANAGER_ROW_SAME_MARK}」に畳まれる行も全文で出し直す（会話の上の全文を見失ったとき）`,
+            `真なら、前回と変わらず「${MANAGER_ROW_SAME_MARK}」に畳まれる行・受信箱の内訳も全文で出し直す（会話の上の全文を見失ったとき）`,
           ),
       },
       async ({ status, q, cursor, refetch }, extra: unknown) => {
@@ -8455,7 +8498,7 @@ export function createCloneTools(context: ToolContext) {
         const inboxPeekedAt = Date.now();
         const inboxQueued = context.queuedInMemory?.();
         const renderInboxBacklog = (): string =>
-          describeInboxBacklog(inboxPeek, inboxPeekedAt, inboxQueued, fold);
+          describeInboxBacklog(inboxPeek, inboxPeekedAt, inboxQueued, fold, refetch === true);
         // `?.() ?? []` で読まない: 「この口を持たない実装」と「持っているが1件も観測していない」を同じ `[]` へ畳み、この一覧が区別しようとしているものを潰すため
         const runnerBacklog = describeRunnerBacklog(context.managers.runnerBacklog());
         const origins = await readJobOrigins(context.stores);
