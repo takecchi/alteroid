@@ -10906,6 +10906,62 @@ describe('manager_list は q で依頼文の全文と managerId を絞れる（#
     expect(reply).not.toContain('mgr-beta-2');
   });
 
+  it('直近の報告の本文（PR 番号など）で絞れる。全角半角・大小を揃えて当たる', async () => {
+    const h = pool([
+      {
+        ...entry('mgr-pr', 'done', 1, '仕事A'),
+        lastReport: `${'い'.repeat(600)} PR #6387 を出した。head は ABC123`,
+      },
+      { ...entry('mgr-nopr', 'done', 2, '仕事B'), lastReport: 'PR #1 を出した' },
+      entry('mgr-noreport', 'done', 3, '仕事C'),
+    ]);
+
+    for (const q of ['#6387', '＃6387', 'abc123']) {
+      const reply = await h.call('manager_list', { q });
+      expect(reply, `q=${q} で mgr-pr が出ない`).toContain('mgr-pr');
+      expect(reply, `q=${q} で関係ない委譲まで出た`).not.toContain('mgr-nopr');
+      expect(reply, `q=${q} で報告の無い委譲まで出た`).not.toContain('mgr-noreport');
+    }
+  });
+
+  it('未 push の観測にある枝の名前で絞れる。名前の無い行・観測できなかった回は枝として扱わない', async () => {
+    const worktree = (branch: string | null) => ({ relativePath: 'repo', branch });
+    const h = pool([
+      {
+        ...entry('mgr-branch', 'running', 1, '仕事A'),
+        lastUnpushedWorkObservation: {
+          kind: 'observed',
+          at: minutesBefore(1),
+          cwd: '/workspace/repo',
+          worktrees: [worktree(null), worktree('feat/mob-add-kinds')],
+        },
+      },
+      {
+        ...entry('mgr-other-branch', 'running', 2, '仕事B'),
+        lastUnpushedWorkObservation: {
+          kind: 'observed',
+          at: minutesBefore(2),
+          cwd: '/workspace/repo',
+          worktrees: [worktree('fix/other')],
+        },
+      },
+      {
+        ...entry('mgr-unavailable', 'running', 3, '仕事C'),
+        lastUnpushedWorkObservation: {
+          kind: 'unavailable',
+          at: minutesBefore(3),
+          reason: 'feat/mob-add-kinds は読めなかった',
+        },
+      },
+    ]);
+
+    const reply = await h.call('manager_list', { q: 'FEAT/MOB-ADD-KINDS' });
+
+    expect(reply).toContain('mgr-branch');
+    expect(reply).not.toContain('mgr-other-branch');
+    expect(reply).not.toContain('mgr-unavailable');
+  });
+
   it('status と併用できる（両方に当たるものだけが出る）', async () => {
     const h = pool([
       worldbuild('mgr-wb-run', 'running', 1),
@@ -11017,7 +11073,9 @@ describe('manager_list は q で依頼文の全文と managerId を絞れる（#
       conversationId: () => undefined,
     });
     const description = tools.find((entry) => entry.name === 'manager_list')?.description;
-    expect(description).toContain('q で依頼文の全文と managerId を部分一致で探せる');
+    expect(description).toContain(
+      'q で依頼文の全文・managerId・直近の報告の本文・未 push の観測にある枝の名前を部分一致で探せる',
+    );
   });
 });
 
