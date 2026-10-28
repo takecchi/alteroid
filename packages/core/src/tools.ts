@@ -4336,8 +4336,8 @@ export function createCloneTools(context: ToolContext) {
             return text(
               [
                 `"${q}" に当たる日誌は無い（この条件の中では）。` +
-                  `ただし ${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対象に入っていないので、` +
-                  'そこにだけ書かれている語はここでは当たらない。',
+                  `ただし ${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対象外で、` +
+                  'そこにだけ書かれた語は当たらない。',
                 ...(q === ''
                   ? []
                   : [
@@ -4943,7 +4943,10 @@ export function createCloneTools(context: ToolContext) {
               'そのまま渡す（自分で組み立てない）。省略すると先頭から',
           ),
       },
-      async ({ from, to, managerId, layer, site, tokenId, axis, cursor }) => {
+      async ({ from, to, managerId, layer, site, tokenId, axis, cursor }, extra: unknown) => {
+        const fold = isSubagentCaller(context, extra)
+          ? NO_FIXED_FOLD
+          : (context.foldFixed ?? NO_FIXED_FOLD);
         const tokenIdError = describeStringLengthViolation('tokenId', tokenId, { min: 1 });
         if (tokenIdError !== null) return text(tokenIdError);
         // `from` / `to` は形を確かめてから店へ渡す: 店は日付を文字列の大小で比べるだけで、`2026-02-30` などが黙って絞り込みになるため
@@ -4972,7 +4975,7 @@ export function createCloneTools(context: ToolContext) {
           dateOrderNotice === null ? body : `${dateOrderNotice}\n${body}`;
         // 軸モードでは続きの1軸だけを返す: 続きを辿るほど同じ全体が積み増しで返ってくるのを避けるため
         if (axis !== undefined) {
-          return text(withNotice(renderUsage(aggregate, { axis, cursor })));
+          return text(withNotice(renderUsage(aggregate, { axis, cursor, fold })));
         }
         const unrecordedManagers = await unrecordedManagersLines(context, stores, aggregate.since);
         return text(
@@ -4981,7 +4984,7 @@ export function createCloneTools(context: ToolContext) {
               renderAccountUsage(context.accountUsage?.() ?? { state: 'unknown' }),
               '',
               '## alteroid が使った分（台帳）',
-              renderUsage(aggregate, { unrecordedManagers }),
+              renderUsage(aggregate, { unrecordedManagers, fold }),
             ].join('\n'),
           ),
         );
@@ -5827,11 +5830,14 @@ export function createCloneTools(context: ToolContext) {
             `速度と見込みを数える窓の長さ（時間。有限の正数。省略時は ${String(DEFAULT_PROGRESS_WINDOW_HOURS)}）`,
           ),
       },
-      async ({ windowHours }) => {
+      async ({ windowHours }, extra: unknown) => {
+        const fold = isSubagentCaller(context, extra)
+          ? NO_FIXED_FOLD
+          : (context.foldFixed ?? NO_FIXED_FOLD);
         try {
-          return text(
-            describeProgress(await readProgress(stores, { now: new Date(), windowHours })),
-          );
+          // 読み終えてから文にする: 読みが落ちる回に `fold` を呼ぶと、出していない全文を「出した」と控えるため
+          const view = await readProgress(stores, { now: new Date(), windowHours });
+          return text(describeProgress(view, fold));
         } catch (error) {
           if (error instanceof InvalidProgressWindowError) {
             throw new Error(error.message, { cause: error });
@@ -6610,7 +6616,10 @@ export function createCloneTools(context: ToolContext) {
               '（自分で組み立てない）。省略すると先頭から。',
           ),
       },
-      async ({ cursor }) => {
+      async ({ cursor }, extra: unknown) => {
+        const fold = isSubagentCaller(context, extra)
+          ? NO_FIXED_FOLD
+          : (context.foldFixed ?? NO_FIXED_FOLD);
         // `readSettings()` と `readActive()` を素の `Promise.all` に入れない: どちらかが壊れているだけで一覧まで道連れになり、`token_list` そのものが使えなくなるため
         const allTokens = await stores.tokens.list();
         // 読めなかった行を言う: `list()` は読めない行を飛ばすので、プールが「空」に見えても壊れた行が在るかもしれないため
@@ -6675,7 +6684,11 @@ export function createCloneTools(context: ToolContext) {
                     '読めたトークンの行は無い。**プールが空だとは言えない**——読めない行が在り、' +
                       'それが使えるかどうかはここから分からない。',
                   ]),
-              '登録は人間の手で（`alteroid token add --label <名前> --file <path>`）。',
+              fold(
+                'token-list:empty-register',
+                '登録は人間の手で（`alteroid token add --label <名前> --file <path>`）。',
+                '登録は人間の手で（`alteroid token add`）。',
+              ),
             ].join('\n'),
           );
         }
@@ -6725,9 +6738,17 @@ export function createCloneTools(context: ToolContext) {
               },
             }),
             // 欄の意味を出力に書く: 「作成と更新が同じ」は値を作ったのではなく一度も変わっていないという観測のため
-            '（作成 = 行を足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。' +
-              'どちらも「記録が無い」ことがある——この2列より前に置かれた行である）',
-            '（止まった理由は抜粋。全文は journal_read types=token_rotation の noticeText に在る）',
+            fold(
+              'token-list:footnote-times',
+              '（作成 = 行を足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。' +
+                'どちらも「記録が無い」ことがある——この2列より前に置かれた行である）',
+              '（作成 = 足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。「記録が無い」の行がある）',
+            ),
+            fold(
+              'token-list:footnote-reason',
+              '（止まった理由は抜粋。全文は journal_read types=token_rotation の noticeText に在る）',
+              '（止まった理由は抜粋。全文は journal_read types=token_rotation）',
+            ),
           ].join('\n'),
         );
       },
@@ -7380,7 +7401,11 @@ export function createCloneTools(context: ToolContext) {
               'そのまま渡す（自分で組み立てない。実行時の事実・記憶の大きさは出ない）',
           ),
       },
-      async ({ ledgerCursor }) => {
+      async ({ ledgerCursor }, extra: unknown) => {
+        // サブエージェントの呼びは全文で返し、控えも更新しない（manager_list と同じ）
+        const fold = isSubagentCaller(context, extra)
+          ? NO_FIXED_FOLD
+          : (context.foldFixed ?? NO_FIXED_FOLD);
         const runtime = context.runtime?.();
         if (runtime === undefined) {
           return text(
@@ -7436,24 +7461,34 @@ export function createCloneTools(context: ToolContext) {
               ),
           ]);
 
+        // 非同期の読みは `fold` を呼ぶ前に済ませる: 途中で落ちると、出していない全文を「出した」と控えてしまうため
+        const peerReach = await renderPeerReach(context.managers);
         return text(
           [
-            describeCloneRuntime({
-              ...runtime,
-              ...(runnerModels === undefined ? {} : { runnerModels }),
-              ...(runnerAnthropicRoutes === undefined ? {} : { runnerAnthropicRoutes }),
-            }),
+            describeCloneRuntime(
+              {
+                ...runtime,
+                ...(runnerModels === undefined ? {} : { runnerModels }),
+                ...(runnerAnthropicRoutes === undefined ? {} : { runnerAnthropicRoutes }),
+              },
+              fold,
+            ),
             ...(codexAuth === null ? [] : [codexAuth]),
             '',
             // クローンの文脈へ実際に載る形で数える: 本文だけを足すと、見出しのぶんだけ本当より少ない数を名乗るため
-            renderMemorySize(documents, memoryDocuments, renderMemoryDocuments(memoryDocuments)),
+            renderMemorySize(
+              documents,
+              memoryDocuments,
+              renderMemoryDocuments(memoryDocuments),
+              fold,
+            ),
             '',
             renderLedgerCrossReference(runtime.sdkModel, aggregate),
             '',
             turnTiming,
             '',
             httpTiming,
-            ...(await renderPeerReach(context.managers)),
+            ...peerReach,
           ].join('\n'),
         );
       },
@@ -9168,19 +9203,25 @@ export function createCloneTools(context: ToolContext) {
               'supersededBy が付く）。false のままでも、畳まれた版が在れば件数を注記する',
           ),
       },
-      async ({
-        conversationId: conversationIdInput,
-        q,
-        speaker = 'both',
-        since: sinceInput,
-        until: untilInput,
-        scan,
-        limit,
-        cursor: cursorInput,
-        id,
-        offset = 0,
-        includeSuperseded = false,
-      }) => {
+      async (
+        {
+          conversationId: conversationIdInput,
+          q,
+          speaker = 'both',
+          since: sinceInput,
+          until: untilInput,
+          scan,
+          limit,
+          cursor: cursorInput,
+          id,
+          offset = 0,
+          includeSuperseded = false,
+        },
+        extra: unknown,
+      ) => {
+        const fold = isSubagentCaller(context, extra)
+          ? NO_FIXED_FOLD
+          : (context.foldFixed ?? NO_FIXED_FOLD);
         const scanError = describeIntRangeViolation('scan', scan, { min: 1, max: 10_000 });
         if (scanError !== null) return text(scanError);
         const limitError = describeIntRangeViolation('limit', limit, { min: 1, max: 200 });
@@ -9385,7 +9426,11 @@ export function createCloneTools(context: ToolContext) {
                   `…この会話の**古い側** ${rest} 件は省略（この窓に ${total} 件あり、` +
                   `新しい側から ${shown} 件だけ出した）。古い側を見るには until で窓を古い方へずらすこと。`,
               }),
-              '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
+              fold(
+                'conversation-read:excerpt-note',
+                '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
+                '（本文は抜粋。全文は id=<id>）',
+              ),
               ...(supersededNote === undefined ? [] : [supersededNote]),
               ...cursorIgnoredNote,
               scanNote,
@@ -9419,7 +9464,11 @@ export function createCloneTools(context: ToolContext) {
                   '省いたのは**古い側**である。scan を増やしても出てこない（当たりが増えるだけで、' +
                   '切られる側は変わらない）ので、until で窓を古い方へずらすこと。',
               }),
-              '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
+              fold(
+                'conversation-read:excerpt-note',
+                '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
+                '（本文は抜粋。全文は id=<id>）',
+              ),
               ...cursorIgnoredNote,
               scanNote,
             ].join('\n'),
@@ -9445,7 +9494,11 @@ export function createCloneTools(context: ToolContext) {
           ];
           return [
             `続きを読むには: conversation_read ${args.join(' ')}` +
-              '（limit の上限や窓の外もこれで辿れる。続きが無くなれば、この行は出ない）',
+              fold(
+                'conversation-read:continuation-note',
+                '（limit の上限や窓の外もこれで辿れる。続きが無くなれば、この行は出ない）',
+                '（窓の外もこれで辿れる。続きが無ければ行は出ない）',
+              ),
           ];
         };
         if (conversations.length === 0) {
@@ -9495,7 +9548,13 @@ export function createCloneTools(context: ToolContext) {
               : listing.positions.get(lastShown.conversationId)) ?? listing.next)
           : listing.next;
         notes.push(...continuation(resume));
-        notes.push('（各会話の中身は conversation_read conversationId=<id> で古い順に読める）');
+        notes.push(
+          fold(
+            'conversation-read:list-open-note',
+            '（各会話の中身は conversation_read conversationId=<id> で古い順に読める）',
+            '（中身は conversationId=<id> で読める）',
+          ),
+        );
         if (speaker !== 'both') {
           notes.push(
             `（speaker=${speaker} はこの一覧には効いていない。会話が在るかどうかは誰が喋ったかで` +
@@ -11336,8 +11395,11 @@ function renderUsage(
     cursor?: string;
     // `undefined` は「軸モードなので出さない」であって「取りこぼしが無い」ではない
     unrecordedManagers?: readonly string[];
+    // 脚注（毎回同文の注記）を同じ会話の2回目から参照にする口。無ければ全文
+    fold?: FixedFold;
   } = {},
 ): string {
+  const fold = view.fold ?? NO_FIXED_FOLD;
   const {
     rows,
     turnRows,
@@ -11357,7 +11419,11 @@ function renderUsage(
   if (since === null) {
     return [
       '台帳にはまだ1件も記録が無い。',
-      '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
+      fold(
+        'usage-read:empty-ledger-note',
+        '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
+        '（記録は機能を入れた時点から。それ以前は残っていない）',
+      ),
       ...unreadableRowsLines,
       ...unmeteredLines,
       ...(view.unrecordedManagers === undefined ? [] : ['', ...view.unrecordedManagers]),
@@ -11473,7 +11539,11 @@ function renderUsage(
     if (summary.turns !== undefined) {
       lines.push(
         '',
-        'モデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。',
+        fold(
+          'usage-read:model-turns-note',
+          'モデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。',
+          'モデル別に回数は出さない（回数をモデルへ帰属させられない）。',
+        ),
       );
     }
   }
@@ -11521,7 +11591,7 @@ function renderUsage(
         'その分の回数は **0 ではなく「取れていない」**。',
     );
   }
-  lines.push(notice);
+  lines.push(fold('usage-read:estimate-notice', notice, '推定値であり請求明細ではない。'));
   return lines.join('\n');
 }
 
@@ -11537,6 +11607,7 @@ function renderMemorySize(
   documents: MemoryDocumentMeta[],
   memoryDocuments: readonly MemoryPart[],
   totalMemory: string,
+  fold: FixedFold = NO_FIXED_FOLD,
 ): string {
   const lines = [
     '## 記憶の大きさ（いま stores.persona を読み直した値）',
@@ -11589,9 +11660,9 @@ function renderMemorySize(
         'カードを落とし、1行になっている（節の目次は焼かれていない。' +
         '落ちた文書の名前と直し方は焼き込みの断り書きに在り、節は memory_outline で開ける）';
   lines.push(
-    `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン「要旨＋節の目次」が焼かれる${demotedSuffix}）`,
-    `- indexed 合計: ${floor.indexedChars.toLocaleString('en-US')} 文字（${floor.indexedDocs} 文書。毎ターン要旨だけが焼かれる。節の目次は焼かれない）`,
-    `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
+    `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。${fold('self-status:memory-premise', '毎ターン「要旨＋節の目次」が焼かれる', '要旨＋節の目次が焼かれる')}${demotedSuffix}）`,
+    `- indexed 合計: ${floor.indexedChars.toLocaleString('en-US')} 文字（${floor.indexedDocs} 文書。${fold('self-status:memory-indexed', '毎ターン要旨だけが焼かれる。節の目次は焼かれない', '要旨だけが焼かれる')}）`,
+    `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。${fold('self-status:memory-fact', '目次の1行だけが焼かれる', '目次の1行だけ')}）`,
   );
   return lines.join('\n');
 }
