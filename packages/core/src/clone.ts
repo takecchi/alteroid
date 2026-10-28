@@ -272,7 +272,11 @@ import {
 } from './tools.js';
 import { CloneDelivery } from './clone-delivery.js';
 import { CloneProgress } from './clone-progress.js';
-import { CloneDistillMemoryState, type ReopenArchive } from './clone-distill-memory-state.js';
+import {
+  CloneDistillMemoryState,
+  describeMemoryIndexRefresh,
+  type ReopenArchive,
+} from './clone-distill-memory-state.js';
 import { describeReopenArchive, describeReopenNotice } from './clone-reopen.js';
 import {
   REFUSAL_AUTO_REOPEN_ACTOR,
@@ -6640,6 +6644,22 @@ class Clone implements CloneHost {
     // 要約の後でも、記憶がシステムプロンプトに焼いた時点から変わっていなければ全文は載せない: システムプロンプトは要約で消えず、同じ索引を会話へもう一度積むと次の要約まで全要求に二重で乗るため（#5305）。
     // 比べる相手は焼いた時点だけにする（最後に載せた時点ではない）: 要約の前に載せた差分は要約に畳まれて消えており、焼いた時点との差はまだ文脈のどこにも載っていないため。
     if (refreshIndex && this.#distillMemory.matchesBakedMemory(documents)) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          EXCHANGE_KIND_GAUGE_PREFIX +
+          redactErrorText(
+            describeMemoryIndexRefresh({
+              reinjected: false,
+              diff: { changed: [], added: [], removed: [] },
+              renderedChars: 0,
+              totalDocuments: documents.length,
+            }),
+            this.#env,
+          ),
+      });
       return [
         ...(resumeNotice === null ? [] : [resumeNotice, '']),
         MEMORY_UNCHANGED_SINCE_BAKED_NOTICE,
@@ -6648,6 +6668,27 @@ class Clone implements CloneHost {
         '',
         text,
       ].join('\n');
+    }
+
+    // 載せる文字列を先に作って長さを日誌へ残す: 数える対象が実際に会話へ載る文字列そのものになるため。
+    const reinjectedIndex = refreshIndex ? renderMemoryDocuments(documents) : null;
+    if (reinjectedIndex !== null) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          EXCHANGE_KIND_GAUGE_PREFIX +
+          redactErrorText(
+            describeMemoryIndexRefresh({
+              reinjected: true,
+              diff: this.#distillMemory.diffAgainstBaked(documents),
+              renderedChars: reinjectedIndex.length,
+              totalDocuments: documents.length,
+            }),
+            this.#env,
+          ),
+      });
     }
 
     const attribution = refreshIndex
@@ -6668,8 +6709,8 @@ class Clone implements CloneHost {
       head,
       ...attribution,
       // 索引の載せ直しは `seenContent` を渡さない: 渡すと「変わった範囲だけ」に縮み、潰された分を埋められないため。
-      ...(refreshIndex
-        ? ['', renderMemoryDocuments(documents)]
+      ...(reinjectedIndex !== null
+        ? ['', reinjectedIndex]
         : changed.length === 0
           ? []
           : ['', renderMemoryDocuments(changed, { presentInMemory: documents, seenContent })]),

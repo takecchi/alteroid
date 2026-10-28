@@ -26,6 +26,50 @@ export interface ReopenRecord {
   initPending: boolean;
 }
 
+/** 焼いた時点との差の文書の slug（本文は持たない）。 */
+export interface BakedMemoryDiff {
+  readonly changed: readonly string[];
+  readonly added: readonly string[];
+  readonly removed: readonly string[];
+}
+
+// 日誌の検索 q で引く固定の語。変えると過去の行と引けなくなる。
+export const MEMORY_INDEX_REINJECTED_PHRASE = '記憶の索引を載せ直した';
+export const MEMORY_INDEX_NOT_REINJECTED_PHRASE = '記憶の索引は載せ直さなかった';
+
+// 並べる slug の上限: 文書が多い記憶で1行が長くならないため。超えた分は「ほか M 件」にする。
+const REFRESH_DIFF_SLUG_LIMIT = 10;
+
+/**
+ * 要約後の索引の載せ直しの日誌1行の本文（接頭辞は書き手の `text:` に置く）。
+ * slug・違いの種類・文字数・件数だけを書く: 記憶の本文・要旨は日誌に写さないため。
+ */
+export function describeMemoryIndexRefresh(input: {
+  readonly reinjected: boolean;
+  readonly diff: BakedMemoryDiff;
+  readonly renderedChars: number;
+  readonly totalDocuments: number;
+}): string {
+  if (!input.reinjected) {
+    return (
+      `${MEMORY_INDEX_NOT_REINJECTED_PHRASE}（要約後。焼いた時点から変わっていない）。` +
+      `載せ直した文字数 0。全文書数 ${input.totalDocuments}`
+    );
+  }
+  const entries = [
+    ...input.diff.changed.map((slug) => `${slug}（内容が変わった）`),
+    ...input.diff.added.map((slug) => `${slug}（焼いた時点に無かった）`),
+    ...input.diff.removed.map((slug) => `${slug}（消えた）`),
+  ];
+  const shown = entries.slice(0, REFRESH_DIFF_SLUG_LIMIT).join(' / ');
+  const rest = entries.length - REFRESH_DIFF_SLUG_LIMIT;
+  return (
+    `${MEMORY_INDEX_REINJECTED_PHRASE}（要約後。違った文書 ${entries.length} 件: ` +
+    `${shown}${rest > 0 ? ` ほか ${rest} 件` : ''}）。` +
+    `載せ直した文字数 ${input.renderedChars}。全文書数 ${input.totalDocuments}`
+  );
+}
+
 export class CloneDistillMemoryState {
   #systemPromptChars = 0;
   // `#memoryOnRecord` の合計で代用しない: 走行中に人間が記憶を直せば動き、`CloneRuntimeFacts.injectedMemoryChars` が名乗る「セッションを組み立てた時点」の値が嘘になるため
@@ -185,10 +229,26 @@ export class CloneDistillMemoryState {
     this.#bakedMemory = new Map(documents.map((doc) => [doc.slug, doc.content]));
   }
 
+  // 焼いた控えが無いときは全文書を `added`（焼いた時点に無かった）に数える: 一致とは言えず、載せ直す側へ倒す `matchesBakedMemory` と同じ向きのため。
+  diffAgainstBaked(documents: readonly MemoryDocument[]): BakedMemoryDiff {
+    const baked = this.#bakedMemory ?? new Map<string, string>();
+    const changed: string[] = [];
+    const added: string[] = [];
+    for (const doc of documents) {
+      const was = baked.get(doc.slug);
+      if (was === undefined) added.push(doc.slug);
+      else if (was !== doc.content) changed.push(doc.slug);
+    }
+    const present = new Set(documents.map((doc) => doc.slug));
+    const removed = [...baked.keys()].filter((slug) => !present.has(slug));
+    return { changed, added, removed };
+  }
+
+  // 差が空でも、焼いた控えが無ければ一致としない（`null` は全文を載せる側）
   matchesBakedMemory(documents: readonly MemoryDocument[]): boolean {
-    const baked = this.#bakedMemory;
-    if (baked === null || baked.size !== documents.length) return false;
-    return documents.every((doc) => baked.get(doc.slug) === doc.content);
+    if (this.#bakedMemory === null) return false;
+    const diff = this.diffAgainstBaked(documents);
+    return diff.changed.length === 0 && diff.added.length === 0 && diff.removed.length === 0;
   }
 
   #resumedHistoryHasMemory = false;
