@@ -5,6 +5,9 @@
  * (1) SDK へ渡ったシステムプロンプトと道具、(2) ターンごとに SDK へ押し込まれた入力そのもの、を取る。
  * ターンの入力の内訳は `composeTurnInputText` と `buildActivityDigest` を包んで取る（包みは `context-size-measure.test.ts` の `vi.mock`）。
  * 取れないもの（SDK 本体の組み込み道具・CLAUDE.md・skills の一覧・会話の履歴）は測らず、出力の表に「測れなかった」と書く。
+ *
+ * **試験専用（本番へ出さない）。** `clone-test-harness.ts` 経由で vitest を引くので、本番の入口（`index.ts`・`tsup.config.ts` の entry・`package.json` の exports）から
+ * 辿れてはならない。辿れないことは `context-size-measure.test.ts` の「本番の入口から引かれない」が確かめる。
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -117,6 +120,8 @@ export interface SessionSample {
   self: Size;
   /** 残り = テンプレート本体（と節の継ぎ目）。引き算で出す。 */
   template: Size;
+  /** システムプロンプトが記憶の索引・自己認識の文字列をそのまま含むか（引き算で出した内訳が、実在する部分文字列の分け方になっている確認）。 */
+  contains: { memory: boolean; self: boolean };
 }
 
 export interface ToolsSample {
@@ -269,6 +274,12 @@ export async function measureKind(kind: TurnKind, config: FixtureConfig): Promis
   contextSizeRecorder.reset();
   const now = Date.now();
   const stores = await buildStores(config, now);
+  // 積んだ日誌の最後の行の時刻より、器の起動の時刻を必ず後ろにする: 同じミリ秒だと「起きる前の活動」として数えられず（`distill-gap.ts` の `at < until`）、
+  // 1 本目の入力から「蒸留が移りきっていない」の断り書き（約 600 字）が出たり出なかったりして、同じ条件の測りが揺れる。時間に賭けず、時計が進むのを条件にして待つ
+  const seededAt = Date.now();
+  while (Date.now() <= seededAt) {
+    // 時計が次のミリ秒へ進むまで（高々 1ms）
+  }
   const booted = bootClone(stores);
   const samples: TurnSample[] = [];
   try {
@@ -277,13 +288,13 @@ export async function measureKind(kind: TurnKind, config: FixtureConfig): Promis
       booted.clone.post(eventFor(kind, index, config));
       await waitFor(
         () =>
-          (booted.calls[0]?.inputs.length ?? 0) >= index && booted.clone.activeTurn?.() === null,
+          (booted.calls.find((candidate) => candidate.kind === 'session')?.inputs.length ?? 0) >=
+            index && booted.clone.activeTurn?.() === null,
         `${kind} の ${String(index)} 本目のターンが終わる`,
       );
-      // ターンが終わった直後の後始末（受信箱の消し込み）を待つ: 次の合図が前の束に混ざらないため
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // 時間では待たない: 次の合図が前の束に混ざれば、下の「入力の本数が合わない」が声を出して落ちる
     }
-    const call = booted.calls[0];
+    const call = booted.calls.find((candidate) => candidate.kind === 'session');
     if (call === undefined) throw new Error('本流のセッションが起きなかった');
     const recorded = contextSizeRecorder.composed;
     if (recorded.length !== call.inputs.length) {
@@ -334,6 +345,10 @@ export async function measureKind(kind: TurnKind, config: FixtureConfig): Promis
           Buffer.byteLength(selfText, 'utf8'),
         tokens: 0,
       },
+      contains: {
+        memory: systemPrompt.includes(memoryText),
+        self: systemPrompt.includes(selfText),
+      },
     };
     session.template.tokens = Math.ceil(session.template.bytes / APPROX_BYTES_PER_TOKEN);
 
@@ -381,6 +396,63 @@ export async function measureTools(context: ToolContext): Promise<ToolsSample> {
     };
   } finally {
     await client.close();
+  }
+}
+
+export interface ToolCallSpec {
+  name: string;
+  args: Record<string, unknown>;
+}
+
+export interface ToolResultSample {
+  call: ToolCallSpec;
+  isError: boolean;
+  /** 会話の履歴（tool_result）へ載る本文。 */
+  result: Size;
+  /** 呼び出し側（tool_use の入力）の JSON。 */
+  callInput: Size;
+}
+
+/**
+ * 道具の返り値が会話の履歴へ積む量（#5469 P8 前段）。本物の道具サーバ（`createCloneMcpServer`）へ MCP Client から呼んで、返った本文を測る。
+ * 偽データ（`FixtureConfig`）の本文は同じ日本語文の繰り返しなので、トークン近似は実文より大きめに出うる。上限は各道具の予算（`tools.ts` の `*_BUDGET`・`*_PAGE` = 8,000 字）で決まる。
+ * 呼び出しは 1 回ずつ順に行い、状態を変える道具（commitment_close など）は呼び出しの並びの中で効く。
+ */
+export async function measureToolResults(
+  config: FixtureConfig,
+  calls: readonly ToolCallSpec[],
+): Promise<ToolResultSample[]> {
+  const now = Date.now();
+  const stores = await buildStores(config, now);
+  const booted = bootClone(stores);
+  try {
+    booted.clone.post(eventFor('human', 1, config));
+    await waitFor(() => booted.toolContext() !== undefined, 'ToolContext が捕まる');
+    const server = createCloneMcpServer(booted.toolContext()!);
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.instance.connect(serverSide);
+    const client = new Client({ name: 'context-size-measure-results', version: '0' });
+    await client.connect(clientSide);
+    try {
+      const samples: ToolResultSample[] = [];
+      for (const call of calls) {
+        const response = await client.callTool({ name: call.name, arguments: call.args });
+        const body = (response.content as { type: string; text?: string }[])
+          .map((block) => block.text ?? '')
+          .join('');
+        samples.push({
+          call,
+          isError: response.isError === true,
+          result: sizeOf(body),
+          callInput: sizeOf(JSON.stringify(call.args)),
+        });
+      }
+      return samples;
+    } finally {
+      await client.close();
+    }
+  } finally {
+    await booted.clone.stop();
   }
 }
 
