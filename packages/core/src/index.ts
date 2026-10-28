@@ -1668,7 +1668,10 @@ export {
   type AttachmentCopy,
   type AttachmentFetchResult,
 } from './attachment-fetch.js';
-export { describeAttachmentForJournal } from './file-tools.js';
+export {
+  describeAttachmentAlreadyGoneRetraction,
+  describeAttachmentForJournal,
+} from './file-tools.js';
 export {
   composeAttachmentInput,
   defaultRunnerAttachmentsRoot,

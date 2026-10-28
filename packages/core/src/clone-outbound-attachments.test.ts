@@ -691,3 +691,38 @@ describe('file_delete: 中身を置き場から消せなかったとき（#4814�
     expect(last).toContain('置き場への削除を断られた');
   });
 });
+
+describe('file_delete: 「消す」の行を書いた後で添付が無くなっていた回', () => {
+  it('打ち消しの行を日誌へ足し、結果は「無い」のまま', async () => {
+    const h = toolsFor();
+    const meta = await putBytes(h.stores, 'a.txt', 5);
+    vi.spyOn(h.stores.attachments, 'remove').mockResolvedValue(false);
+
+    const out = await h.call('file_delete', { id: meta.id });
+
+    expect(out).toContain('は無い');
+    const entries = await h.stores.journal.list({ limit: 10, order: 'asc' });
+    expect(entries).toHaveLength(2);
+    expect(JSON.stringify(entries[0])).toContain('添付の中身と控えを消す');
+    expect(JSON.stringify(entries[1])).toContain('直前の添付の削除の行は効いていない');
+    expect(JSON.stringify(entries[1])).toContain(meta.id);
+  });
+
+  it('打ち消しの行が書けなくても、結果は「無い」のまま', async () => {
+    const h = toolsFor();
+    const meta = await putBytes(h.stores, 'a.txt', 5);
+    vi.spyOn(h.stores.attachments, 'remove').mockResolvedValue(false);
+    const append = h.stores.journal.append.bind(h.stores.journal);
+    let calls = 0;
+    vi.spyOn(h.stores.journal, 'append').mockImplementation(async (entry) => {
+      calls += 1;
+      if (calls >= 2) throw new Error('journal down');
+      return append(entry);
+    });
+
+    const out = await h.call('file_delete', { id: meta.id });
+
+    expect(out).toContain('は無い');
+    expect(calls).toBe(2);
+  });
+});

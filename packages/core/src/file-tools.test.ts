@@ -1,7 +1,82 @@
-import { describe, expect, it } from 'vitest';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { describe, expect, it, vi } from 'vitest';
 
 import { emptyAttachmentUsage } from './attachment.js';
-import { renderFileUsage } from './file-tools.js';
+import { MemoryAttachmentStore } from './attachment-memory.js';
+import {
+  deleteFile,
+  describeAttachmentAlreadyGoneRetraction,
+  renderFileUsage,
+} from './file-tools.js';
+
+const COPIES_DIR = join(tmpdir(), 'alteroid-file-tools-test-copies-none');
+
+async function putOne(store: MemoryAttachmentStore) {
+  return store.put({ name: 'a.txt', mediaType: 'text/plain', bytes: new Uint8Array(3).fill(65) });
+}
+
+describe('deleteFile: 「消す」の行を書いた後で添付が無くなっていた回', () => {
+  it('meta 在りで remove が false: 打ち消しの口が呼ばれ、結果は「無い」のまま', async () => {
+    const attachments = new MemoryAttachmentStore();
+    const meta = await putOne(attachments);
+    vi.spyOn(attachments, 'remove').mockResolvedValue(false);
+    const before = vi.fn(async () => {});
+    const gone = vi.fn(async () => {});
+    const result = await deleteFile({ attachments }, COPIES_DIR, meta.id, before, undefined, gone);
+    expect(before).toHaveBeenCalledTimes(1);
+    expect(gone).toHaveBeenCalledTimes(1);
+    expect(gone).toHaveBeenCalledWith(meta);
+    expect(result).toContain('は無い');
+    expect(result).not.toContain('日誌に残る');
+  });
+
+  it('meta 無しで remove が false: 打ち消しの口は呼ばれない', async () => {
+    const attachments = new MemoryAttachmentStore();
+    const gone = vi.fn(async () => {});
+    const before = vi.fn(async () => {});
+    const result = await deleteFile(
+      { attachments },
+      COPIES_DIR,
+      'no-such',
+      before,
+      undefined,
+      gone,
+    );
+    expect(before).not.toHaveBeenCalled();
+    expect(gone).not.toHaveBeenCalled();
+    expect(result).toContain('は無い');
+  });
+
+  it('meta 無しで remove が true: 成功文に「日誌に残る」が付かない', async () => {
+    const attachments = new MemoryAttachmentStore();
+    const meta = await putOne(attachments);
+    vi.spyOn(attachments, 'getMeta').mockResolvedValue(undefined);
+    const before = vi.fn(async () => {});
+    const result = await deleteFile({ attachments }, COPIES_DIR, meta.id, before);
+    expect(before).not.toHaveBeenCalled();
+    expect(result).toContain('中身を消した');
+    expect(result).not.toContain('日誌に残る');
+  });
+
+  it('meta 在りで remove が true: 成功文に「日誌に残る」が付く', async () => {
+    const attachments = new MemoryAttachmentStore();
+    const meta = await putOne(attachments);
+    const result = await deleteFile({ attachments }, COPIES_DIR, meta.id, async () => {});
+    expect(result).toContain('日誌に残る');
+  });
+
+  it('文言の共通関数: actor を付けると grounds の先頭に入る', async () => {
+    const attachments = new MemoryAttachmentStore();
+    const meta = await putOne(attachments);
+    const plain = describeAttachmentAlreadyGoneRetraction(meta);
+    const withActor = describeAttachmentAlreadyGoneRetraction(meta, '人間');
+    expect(plain.decision).toBe(withActor.decision);
+    expect(plain.decision).toContain(meta.id);
+    expect(withActor.grounds).toBe(`人間。${plain.grounds}`);
+  });
+});
 
 function usageWithKeys(keys: Record<string, { count: number; totalBytes: number }>) {
   return { ...emptyAttachmentUsage(), byIntegrationKey: keys };

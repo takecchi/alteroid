@@ -12,7 +12,13 @@ import {
   type AttachmentLimits,
 } from './attachment.js';
 import { putLocalFile } from './file-put.js';
-import { deleteFile, describeAttachmentForJournal, keepFile, listFiles } from './file-tools.js';
+import {
+  deleteFile,
+  describeAttachmentAlreadyGoneRetraction,
+  describeAttachmentForJournal,
+  keepFile,
+  listFiles,
+} from './file-tools.js';
 import {
   checkAndBindOutboundAttachments,
   releaseOutboundAttachments,
@@ -8900,6 +8906,13 @@ export function createCloneTools(context: ToolContext) {
                   type: 'decision',
                   decision: `添付の中身を置き場から消せなかったので、消していない（控えも残した）: ${meta === undefined ? `id=${id}` : `${meta.name}（id=${meta.id}）`}`,
                   grounds: `理由: ${reason}。直前の「消す」の行は実行されていない。もう一度 file_delete で再試行できる。`,
+                });
+              },
+              async (meta) => {
+                // 控えを読んだ後に別の手で消えていた回: 先に書いた「消す」の行はこの呼びでは実行されていない。書けなくても「無い」の結果は変えない
+                await appendJournalOrDrop('file_delete', stores.journal, {
+                  type: 'decision',
+                  ...describeAttachmentAlreadyGoneRetraction(meta),
                 });
               },
             ),

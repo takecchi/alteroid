@@ -627,7 +627,7 @@ export function resetRowsOfBaselines(
   );
 }
 
-// `since` を必ず添える・始点を黙って隠さない:台帳が始まる前を照会されたら 0 ではなく「記録が無い」と言えるようにするため。過去分の掘り起こしはしない: 単価を自前で掛けて二重に推定し直すことになるため
+// `since` を必ず添える・始点を黙って隠さない: 台帳が始まる前を照会されたら 0 ではなく「記録が無い」と言えるようにするため。過去分の掘り起こしはしない: 単価を自前で掛けて二重に推定し直すことになるため
 export const usageAggregateSchema = z.object({
   rows: z.array(usageRowSchema),
   since: isoDateTime.nullable(),
