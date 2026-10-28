@@ -11045,14 +11045,14 @@ class Pool implements ManagerPool {
             // `#tokenIdentity?.()` を読み直さない: 回した後に届いた前のセッションぶんの消費が新しいトークンに付く。無いときは渡さない。
             ...(tokenIdentity === undefined ? {} : { tokenId: tokenIdentity.tokenId }),
           });
-        } catch {
+        } catch (error) {
           usageTicket?.release();
-          // 台帳に積めないことで仕事は止めない。ただし黙って消さない。
+          // 台帳に積めないことで仕事は止めない。ただし黙って消さない。理由を本文に添える: 無いと後から原因を辿れない。
           await this.#journal({
             type: 'exchange',
             with: 'manager',
             role: 'inbound',
-            text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 消費を台帳へ記録できなかった（この分は集計に出ない）`,
+            text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
           });
           return;
         }
@@ -11176,12 +11176,12 @@ class Pool implements ManagerPool {
               models: fold.delta,
             });
           }
-        } catch {
+        } catch (error) {
           await this.#journal({
             type: 'exchange',
             with: 'manager',
             role: 'inbound',
-            text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] peer（${event.provider}）の消費を台帳へ記録できなかった（この分は集計に出ない）`,
+            text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] peer（${event.provider}）の消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
           });
         }
         return;
@@ -12477,12 +12477,12 @@ class Pool implements ManagerPool {
         accumulation: 'cumulative',
         runner: { id: fromRunnerId, superseded: true },
       });
-    } catch {
+    } catch (error) {
       await this.#journal({
         type: 'exchange',
         with: 'manager',
         role: 'inbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 移った後に届いた消費を台帳へ記録できなかった（この分は集計に出ない）`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 移った後に届いた消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
       });
       return;
     }

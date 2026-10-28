@@ -196,6 +196,43 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     await s.clone.stop();
   });
 
+  it('台帳へ積めなかった日誌の本文に、例外の名前と message の先頭を1行・200字までで添える', async () => {
+    class LedgerDownError extends Error {
+      override name = 'LedgerDownError';
+    }
+    const stores = createMemoryStores();
+    stores.usage.record = () =>
+      Promise.reject(
+        new LedgerDownError(`台帳が落ちた ${'x'.repeat(500)}\nparams: SECRET-ROW-VALUE`),
+      );
+
+    const s = setup(undefined, stores, {
+      modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      text: string;
+    }[];
+    const dropped = exchanges.find(
+      (entry) => entry.with === 'self' && entry.text.includes('消費を台帳へ記録できなかった'),
+    );
+    const marker = '（この分は集計に出ない）: ';
+    const reason = (dropped?.text ?? '').slice(
+      (dropped?.text ?? '').indexOf(marker) + marker.length,
+    );
+    expect(reason.startsWith('LedgerDownError: 台帳が落ちた xxx')).toBe(true);
+    expect(reason).not.toContain('\n');
+    expect(reason).not.toContain('SECRET-ROW-VALUE');
+    expect(reason).toHaveLength(201);
+    expect(reason.endsWith('…')).toBe(true);
+
+    await s.clone.stop();
+  });
+
   it('台帳の記録も日誌への追記も両方失敗しても、throw が外へ出ずターンが畳まれる', async () => {
     const stores = createMemoryStores();
     stores.usage.record = () => Promise.reject(new Error('台帳が書けない'));

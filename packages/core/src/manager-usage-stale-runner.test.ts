@@ -352,4 +352,34 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
     expect(await costOf(stores)).toBe(13);
     await after.pool.stop();
   });
+
+  it('台帳へ積めなかったときの日誌の本文に、例外の名前と message の先頭を1行・200字までで添える', async () => {
+    const s = await setupRelocated();
+    const { stores, runnerA } = s;
+    await relocate(s);
+
+    class LedgerDownError extends Error {
+      override name = 'LedgerDownError';
+    }
+    stores.usage.record = () =>
+      Promise.reject(
+        new LedgerDownError(`台帳が落ちた ${'x'.repeat(500)}\nparams: SECRET-ROW-VALUE`),
+      );
+    runnerA.emit?.(usageEvent(10));
+    await settle();
+
+    const entries = await stores.journal.list({ limit: 50 });
+    const dropped = entries.find(
+      (entry) =>
+        'text' in entry && entry.text.includes('移った後に届いた消費を台帳へ記録できなかった'),
+    );
+    if (dropped === undefined || !('text' in dropped)) throw new Error('日誌に失敗の行が無い');
+    const marker = '（この分は集計に出ない）: ';
+    const reason = dropped.text.slice(dropped.text.indexOf(marker) + marker.length);
+    expect(reason.startsWith('LedgerDownError: 台帳が落ちた xxx')).toBe(true);
+    expect(reason).not.toContain('\n');
+    expect(reason).not.toContain('SECRET-ROW-VALUE');
+    expect(reason).toHaveLength(201);
+    expect(reason.endsWith('…')).toBe(true);
+  });
 });

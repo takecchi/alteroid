@@ -7858,7 +7858,7 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}[site=${site}] 消費を台帳へ記録できなかった（この分は集計に出ない）`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}[site=${site}] 消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
       });
     }
   }

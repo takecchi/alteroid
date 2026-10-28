@@ -247,3 +247,73 @@ describe('peer の消費（#486 S7）', () => {
     await s.pool.stop();
   });
 });
+
+describe('台帳へ記録できなかった理由を日誌の本文に添える', () => {
+  class LedgerDownError extends Error {
+    override name = 'LedgerDownError';
+  }
+
+  async function failedBodyOf(
+    stores: Stores,
+    needle: string,
+    reasonMarker = '（この分は集計に出ない）: ',
+  ): Promise<string> {
+    let found: string | undefined;
+    await expect
+      .poll(
+        async () => {
+          const entries = await stores.journal.list({ limit: 50 });
+          for (const entry of entries) {
+            if ('text' in entry && entry.text.includes(needle)) found = entry.text;
+          }
+          return found !== undefined;
+        },
+        { timeout: 2000 },
+      )
+      .toBe(true);
+    const text = found ?? '';
+    return text.slice(text.indexOf(reasonMarker) + reasonMarker.length);
+  }
+
+  function expectShortReason(reason: string): void {
+    expect(reason.startsWith('LedgerDownError: 台帳が落ちた xxx')).toBe(true);
+    expect(reason).not.toContain('\n');
+    expect(reason).not.toContain('SECRET-ROW-VALUE');
+    expect(reason).toHaveLength(201);
+    expect(reason.endsWith('…')).toBe(true);
+  }
+
+  const failure = () =>
+    Promise.reject(
+      new LedgerDownError(`台帳が落ちた ${'x'.repeat(500)}\nparams: SECRET-ROW-VALUE`),
+    );
+
+  it('マネージャー本体（session）の消費', async () => {
+    const stores = createMemoryStores();
+    stores.usage.record = failure;
+    const s = await setup({ stores });
+    s.fake.usage({ opus: totals({ costUsd: 1 }) });
+    expectShortReason(await failedBodyOf(stores, '[mgr-tok] 消費を台帳へ記録できなかった'));
+    await s.pool.stop();
+  });
+
+  it('peer の消費', async () => {
+    const stores = createMemoryStores();
+    stores.usage.record = failure;
+    const s = await setup({ stores });
+    s.fake.peerUsage({ 'gpt-5': totals({ inputTokens: 1 }) });
+    expectShortReason(await failedBodyOf(stores, 'peer（codex）の消費を台帳へ記録できなかった'));
+    await s.pool.stop();
+  });
+
+  it('例外でない値は String() で添える', async () => {
+    const stores = createMemoryStores();
+    stores.usage.record = () => Promise.reject('文字列のまま落ちた');
+    const s = await setup({ stores });
+    s.fake.usage({ opus: totals({ costUsd: 1 }) });
+    expect(await failedBodyOf(stores, '[mgr-tok] 消費を台帳へ記録できなかった')).toBe(
+      '文字列のまま落ちた',
+    );
+    await s.pool.stop();
+  });
+});
