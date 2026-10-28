@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { waitFor } from './clone-test-harness.js';
 import { ALWAYS_REDELIVER, createClone, SITUATION_FULL_EVERY_TURNS } from './clone.js';
+import { FOLD_READBACK_SKIPPED_JOURNAL_HEAD } from './exchange-kind.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import type { Stores } from './store.js';
@@ -12,6 +13,7 @@ import { createMemoryStores as createBaseMemoryStores } from './testing.js';
 // 読み戻しは生ログが実在する（測れて 0 より大きい）ときだけなので、読み戻す試験はこの既定で動く
 type MeasureSize = () => Promise<number | null>;
 let measureRawLog: MeasureSize = () => Promise.resolve(4096);
+let measureCalls = 0;
 function createMemoryStores(): Stores {
   const stores = createBaseMemoryStores();
   stores.sessions.getProjectKey = () => Promise.resolve('proj');
@@ -19,9 +21,26 @@ function createMemoryStores(): Stores {
     ...stores,
     sessionTranscriptTail: {
       readTail: () => Promise.resolve(null),
-      measureSize: () => measureRawLog(),
+      measureSize: () => {
+        measureCalls += 1;
+        return measureRawLog();
+      },
     },
   };
+}
+
+// 読み戻さなかった理由の観測の行（`[計器] 畳みの控えを読み戻さなかった: 理由=…`）。待たずに書かれるので、出るまで待つ
+// 頭は承認の追跡が行動に数えない印（`isCloneAction`）と同じ定数を使う: clone.ts の逐語とずれたら、この試験が落ちる
+const SKIPPED_HEAD = FOLD_READBACK_SKIPPED_JOURNAL_HEAD;
+async function skippedLines(stores: Stores): Promise<string[]> {
+  const entries = (await stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+  return entries.map((entry) => entry.text).filter((text) => text.startsWith(SKIPPED_HEAD));
+}
+async function waitForSkippedLine(stores: Stores, reason: string): Promise<void> {
+  await waitFor(
+    async () => (await skippedLines(stores)).includes(`${SKIPPED_HEAD}${reason}`),
+    `読み戻さなかった理由の行（${reason}）`,
+  );
 }
 
 // 再起動（クローンを作り直す）と resume をまたいで、「いまの全体」の畳みが続くこと。
@@ -111,6 +130,7 @@ interface Boot {
 const live: CloneHost[] = [];
 afterEach(async () => {
   measureRawLog = () => Promise.resolve(4096);
+  measureCalls = 0;
   for (const clone of live.splice(0)) await clone.stop();
 });
 
@@ -276,6 +296,8 @@ describe('畳みの控えを resume をまたいで続ける（再起動）', ()
       expect(first).toContain(READINGS_HEAD);
       expect(first).not.toContain(FOLDED_SITUATION);
       await waitForNoFoldState(stores, '生ログ無しの控えの削除');
+      await waitForSkippedLine(stores, '生ログ0');
+      expect(await skippedLines(stores)).toHaveLength(1);
     });
 
     it('⭐ measureSize が null（測れない）なら、読み戻さず全文', async () => {
@@ -289,6 +311,7 @@ describe('畳みの控えを resume をまたいで続ける（再起動）', ()
       expect(b.resumes).toEqual(['sess-fake']);
       expect(first).toContain(READINGS_HEAD);
       await waitForNoFoldState(stores, '測れない控えの削除');
+      await waitForSkippedLine(stores, '測れない');
     });
 
     it('⭐ measureSize が投げても、読み戻さず全文（起動は止まらない）', async () => {
@@ -300,18 +323,66 @@ describe('畳みの控えを resume をまたいで続ける（再起動）', ()
       const first = await humanTurn(b, 'B1');
 
       expect(first).toContain(READINGS_HEAD);
+      await waitForSkippedLine(stores, '計測失敗');
     });
 
-    it('⭐ measureSize が正の値なら、読み戻して畳んだまま続く', async () => {
+    it('⭐ 預け先（sessionTranscriptTail）が無ければ、読み戻さず全文で、理由は「預け先なし」', async () => {
+      const stores = createMemoryStores();
+      await runTurns(stores, 2);
+
+      const b = boot({ ...stores, sessionTranscriptTail: undefined });
+      const first = await humanTurn(b, 'B1');
+
+      expect(first).toContain(READINGS_HEAD);
+      await waitForSkippedLine(stores, '預け先なし');
+    });
+
+    it('⭐ projectKey が不明なら、読み戻さず全文で、理由は「projectKey なし」', async () => {
+      const stores = createMemoryStores();
+      await runTurns(stores, 2);
+      stores.sessions.getProjectKey = () => Promise.resolve(null);
+
+      const b = boot(stores);
+      const first = await humanTurn(b, 'B1');
+
+      expect(first).toContain(READINGS_HEAD);
+      await waitForSkippedLine(stores, 'projectKey なし');
+    });
+
+    it('⭐ measureSize が正の値なら、読み戻して畳んだまま続く（理由の行は出ない）', async () => {
       const stores = createMemoryStores();
       await runTurns(stores, 2);
       measureRawLog = () => Promise.resolve(1);
 
       const b = boot(stores);
       const first = await humanTurn(b, 'B1');
+      await humanTurn(b, 'B2');
 
       expect(first).toContain(FOLDED_SITUATION);
       expect(first).not.toContain(READINGS_HEAD);
+      expect(await skippedLines(stores)).toEqual([]);
+    });
+
+    it('⭐ 預けた控えが無い再起動では、理由の行は出ない（そもそも読むものが無い）', async () => {
+      const stores = createMemoryStores();
+
+      const b = boot(stores);
+      await humanTurn(b, 'B1');
+      await humanTurn(b, 'B2');
+
+      expect(await skippedLines(stores)).toEqual([]);
+    });
+
+    it('⭐ 起動直後の最初の束で、生ログの大きさを測るのは1回だけ（resume の可否と読み戻しで測りを使い回す）', async () => {
+      const stores = createMemoryStores();
+      await runTurns(stores, 2);
+      measureCalls = 0;
+
+      const b = boot(stores);
+      await humanTurn(b, 'B1');
+
+      expect(b.resumes).toEqual(['sess-fake']);
+      expect(measureCalls).toBe(1);
     });
   });
 

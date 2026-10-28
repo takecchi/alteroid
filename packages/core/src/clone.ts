@@ -486,6 +486,31 @@ export type DigestResetLabel =
   | 'session_changed'
   | 'compact_boundary';
 
+/** 生ログの大きさの測りの結果。測れなかった理由を分けて持つ（読み戻さなかった理由の日誌のため）。 */
+type RawLogMeasure =
+  | { readonly state: 'measured'; readonly bytes: number | null }
+  | { readonly state: 'no_store' }
+  | { readonly state: 'no_project_key' }
+  | { readonly state: 'failed' };
+
+/**
+ * 読み戻さない理由の日誌の語。読み戻してよい（生ログが実在する）なら `null`。
+ * 測れない・0 は全文へ倒す（`#resumeCandidateWithinBudget` は resume してよいとみなすが、読み戻しは倒れ側が逆）。
+ */
+function foldReadbackSkipLabel(measure: RawLogMeasure): string | null {
+  switch (measure.state) {
+    case 'no_store':
+      return '預け先なし';
+    case 'no_project_key':
+      return 'projectKey なし';
+    case 'failed':
+      return '計測失敗';
+    case 'measured':
+      if (measure.bytes === null) return '測れない';
+      return measure.bytes <= 0 ? '生ログ0' : null;
+  }
+}
+
 /**
  * 起動時の拾い直しで、同じ墓標の蒸留が続けて失敗しても日誌へ書く回数の上限（#4752）。
  * 上限を超えた後は成功するまで、その墓標の「拾い直す」「失敗した」の行と蒸留の入力（`pre_compact_distill`）の行を書かない: 枠以外の理由で失敗し続けると、起動のたびに同じ行（入力は生ログの末尾まるごと）が積もるため。
@@ -3976,7 +4001,9 @@ class Clone implements CloneHost {
         this.#forgetFoldState();
         return;
       }
-      const resume = await this.#resumeCandidateWithinBudget(storedSessionId);
+      // 測りは1回だけ。resume の可否と読み戻しの条件の両方へ渡す（`#measureRawLog`）
+      const measured = await this.#measureRawLog(storedSessionId);
+      const resume = await this.#resumeCandidateWithinBudget(storedSessionId, measured);
       this.#resumeVerdict = { stored: storedSessionId, resume };
       if (resume !== storedSessionId) {
         this.#forgetFoldState();
@@ -3984,9 +4011,16 @@ class Clone implements CloneHost {
       }
       // 生ログが実在するときだけ読み戻す: `#resumeCandidateWithinBudget` は「測れない」も「0 バイト」も resume してよいとみなす（能力を削らないため）が、
       // その resume が空の会話を開くなら、畳んだ最初の入力（「前と変化なし」）が指す全文はどこにも載っていない
-      const rawLogBytes = await this.#rawLogBytes(storedSessionId);
-      if (rawLogBytes === null || rawLogBytes <= 0) {
+      const notRestoredLabel = foldReadbackSkipLabel(measured);
+      if (notRestoredLabel !== null) {
         this.#forgetFoldState();
+        // 待たない・握る: 起動の最初の束を遅らせず、書き込みの失敗でターンを落とさない（`#journal` は投げない）。1回の起動で1行（この関数は起動後1回だけ走る）
+        void this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text: `${EXCHANGE_KIND_GAUGE_PREFIX}畳みの控えを読み戻さなかった: 理由=${notRestoredLabel}`,
+        });
         return;
       }
       this.#situationExplained.clear();
@@ -6908,37 +6942,34 @@ class Clone implements CloneHost {
   // SDK セッション
   // -------------------------------------------------------------------------
 
-  // 読み戻しの条件のための計測。測れない（預け先が無い・`projectKey` が不明・計測の失敗・`null`）は `null`。`#resumeCandidateWithinBudget` と違い、測れないことを「あってよい」へ倒さない: 倒れ側は全文
-  async #rawLogBytes(sessionId: string): Promise<number | null> {
+  // 生ログの大きさを1回測る。resume の可否（`#resumeCandidateWithinBudget`）と読み戻しの条件（`#restoreFoldStateOnce`）が同じ測りを使う: 起動直後の最初の束で2度測らないため。
+  // 値は呼び出し側の1回の呼び出しの中だけで持ち回し、フィールドへは置かない: 置くと、生ログが育った後の古い値で次の判定をするため。
+  // `getProjectKey` の失敗は握らず呼び出し側へ返す（resume の可否の判定は、これまでもそこで落ちていた）
+  async #measureRawLog(sessionId: string): Promise<RawLogMeasure> {
     const tail = this.#stores.sessionTranscriptTail;
-    if (tail === undefined) return null;
+    if (tail === undefined) return { state: 'no_store' };
+
+    const projectKey = this.#projectKey ?? (await this.#stores.sessions.getProjectKey());
+    if (projectKey === null) return { state: 'no_project_key' };
+
     try {
-      const projectKey = this.#projectKey ?? (await this.#stores.sessions.getProjectKey());
-      if (projectKey === null) return null;
-      return await tail.measureSize({ projectKey, sessionId });
+      return { state: 'measured', bytes: await tail.measureSize({ projectKey, sessionId }) };
     } catch (error) {
-      noteDroppedRecord('畳みの控えの読み戻し前の生ログの計測', sessionId, error);
-      return null;
+      noteDroppedRecord('resume 前のセッションの大きさの計測', sessionId, error);
+      return { state: 'failed' };
     }
   }
 
   // `load()` には触れない: 大きすぎる鍵は `load()` を呼ばないことで SDK の契約（返す内容は削れない）を守るため。
   // 測れないとき（預け先が無い・`projectKey` が不明・計測の失敗）は黙って resume する側へ倒す: 能力を削らないためと、通常の起動のたびに同じ1行が日誌に積もるのを避けるため（`#noteLostSession` と同じ）。予算を超えたときだけ日誌へ1行残す。
   // 古い resume 素材を捨てない: 次のセッションの `init` が `session_started` を新しい id で上書きするため。
-  async #resumeCandidateWithinBudget(sessionId: string): Promise<string | null> {
-    const tail = this.#stores.sessionTranscriptTail;
-    if (tail === undefined) return sessionId;
-
-    const projectKey = this.#projectKey ?? (await this.#stores.sessions.getProjectKey());
-    if (projectKey === null) return sessionId;
-
-    let bytes: number | null;
-    try {
-      bytes = await tail.measureSize({ projectKey, sessionId });
-    } catch (error) {
-      noteDroppedRecord('resume 前のセッションの大きさの計測', sessionId, error);
-      return sessionId;
-    }
+  async #resumeCandidateWithinBudget(
+    sessionId: string,
+    measured?: RawLogMeasure,
+  ): Promise<string | null> {
+    const measure = measured ?? (await this.#measureRawLog(sessionId));
+    if (measure.state !== 'measured') return sessionId;
+    const bytes = measure.bytes;
     if (bytes === null) return sessionId;
     if (bytes <= RESUME_SIZE_BUDGET_BYTES) return sessionId;
 

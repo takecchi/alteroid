@@ -8,6 +8,9 @@ export const EXCHANGE_KIND_GAUGE_PREFIX = '[計器] ';
 /** 固定文を全文へ戻した回に clone が残す観測の1行の頭（`理由=<label>` が続く）。行動ではないので承認の追跡は数えない。 */
 export const DIGEST_RESET_JOURNAL_HEAD = `${EXCHANGE_KIND_DECISION_PREFIX}固定文を全文へ戻す: 理由=`;
 
+/** 預けた控えを読み戻さなかった回に clone が残す観測の1行の頭（`理由=<label>` が続く）。行動ではないので承認の追跡は数えない。 */
+export const FOLD_READBACK_SKIPPED_JOURNAL_HEAD = `${EXCHANGE_KIND_GAUGE_PREFIX}畳みの控えを読み戻さなかった: 理由=`;
+
 export type ExchangeKind = 'reply' | 'decision' | 'thinning' | 'failure' | 'recovery' | 'gauge';
 
 export const EXCHANGE_KIND_PREFIXES: ReadonlyArray<{
