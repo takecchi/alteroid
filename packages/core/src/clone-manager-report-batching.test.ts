@@ -3,6 +3,7 @@ import type { InboxEvent } from './schema.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, lineStartingWith, waitFor } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
+import { MANAGER_REPORT_BODY_LIMIT } from './clone.js';
 
 // 3つの describe で共有する: 定義を describe ごとに置くと、実時間の待ちの数（scripts/wallclock-waits-baseline.json、#2146）が describe の数だけ増えるため
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));
@@ -70,7 +71,7 @@ describe('クローン — 同じマネージャーの連続する report をま
   }, 15_000);
 
   it(
-    '巨大な報告5件（各1.5万字。件ごとは予算未満だが合計は予算超過）の束は予算に収まり、' +
+    '巨大な報告8件（各1.5万字。1件の上限で頭だけになるが、合計はなお予算超過）の束は予算に収まり、' +
       '切った件数と journal_read での取り方を名乗る。省いた分の全文は journal_read で実際に引ける（issue #955）',
     async () => {
       const s = setup();
@@ -79,7 +80,7 @@ describe('クローン — 同じマネージャーの連続する report をま
       await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
 
       const huge = (label: string): string => `${label}先頭` + 'x'.repeat(15_000) + `${label}末尾`;
-      for (let i = 1; i <= 5; i += 1) {
+      for (let i = 1; i <= 8; i += 1) {
         s.clone.post(managerMessage(`huge${i}`, 'mgr-huge', huge(`報告${i}`)));
       }
 
@@ -97,14 +98,16 @@ describe('クローン — 同じマネージャーの連続する report をま
 
       expect(merged.length).toBeLessThan(60_000);
 
-      expect(merged).toContain(huge('報告5'));
-      expect(merged).not.toContain(huge('報告1'));
+      // 最新の報告は頭だけが出る（1件の上限）。末尾は切れる
+      expect(merged).toContain('報告8先頭');
+      expect(merged).not.toContain('報告8末尾');
+      expect(merged).not.toContain('報告1先頭');
 
       const noticeLine = lineStartingWith(merged, '⚠ 本文の合計が文字数の予算');
       expect(noticeLine).toContain('journal_read');
       expect(noticeLine).toContain('types: ["exchange"]');
       expect(noticeLine).toMatch(
-        /古い \d+ 件（5 件中、新しい \d+ 件だけを本文つきで出した）は本文を省いた/,
+        /古い \d+ 件（8 件中、新しい \d+ 件だけを本文つきで出した）は本文を省いた/,
       );
 
       const sinceMatch = /since: "([^"]+)"/.exec(noticeLine);
@@ -118,14 +121,14 @@ describe('クローン — 同じマネージャーの連続する report をま
         limit: 200,
       })) as { text: string }[];
       expect(exchanges.some((entry) => entry.text.includes(huge('報告1')))).toBe(true);
-      expect(exchanges.some((entry) => entry.text.includes(huge('報告5')))).toBe(true);
+      expect(exchanges.some((entry) => entry.text.includes(huge('報告8')))).toBe(true);
 
       await s.clone.stop();
     },
     20_000,
   );
 
-  it('巨大な単発の報告（6万字）は予算で切り、全文の取り方を名乗る。その取り方で全文が引ける（issue #955）', async () => {
+  it('巨大な単発の報告（6万字）は1件の上限で頭だけにし、全体の字数と全文の取り方を名乗る。その取り方で全文が引ける（issue #955）', async () => {
     const s = setup();
     const huge = '単発先頭' + 'y'.repeat(60_000) + '単発末尾';
     s.clone.post(managerMessage('huge-single', 'mgr-single', huge));
@@ -142,10 +145,14 @@ describe('クローン — 同じマネージャーの連続する report をま
         text.includes('マネージャー mgr-single から届いた。（報告）'),
       ) ?? '';
 
-    expect(input.length).toBeLessThan(60_000);
+    expect(input.length).toBeLessThan(11_000);
     expect(input).toContain('単発先頭');
     expect(input).not.toContain('単発末尾');
-    const notice = lineStartingWith(input, '⚠ 本文が文字数の予算');
+    const notice = lineStartingWith(input, '⚠ 本文が長いので');
+    // 全体の字数（'単発先頭' 4 ＋ 60,000 ＋ '単発末尾' 4）と、直近は manager_report・それ以前は journal_read の両方
+    expect(notice).toContain('全体 60,008 字');
+    expect(notice).toContain('manager_report');
+    expect(notice).toContain('managerId: "mgr-single"');
     expect(notice).toContain('journal_read');
     const since = /since: "([^"]+)"/.exec(notice)?.[1] ?? '';
     expect(since).not.toBe('');
@@ -170,10 +177,78 @@ describe('クローン — 同じマネージャーの連続する report をま
     const input =
       (s.calls[0] as FakeCall).inputs.find((text) => text.includes('小さな報告の本文')) ?? '';
     expect(input).not.toContain('文字数の予算');
+    expect(input).not.toContain('本文が長いので');
     await s.clone.stop();
   });
 
-  it('束の最新1件だけで予算を超える回も、全文の取り方を名乗る（issue #955）', async () => {
+  it('1件の上限ちょうどの報告は1文字も切らない', async () => {
+    const s = setup();
+    const exact = `ちょうど先頭${'y'.repeat(MANAGER_REPORT_BODY_LIMIT - 12)}ちょうど末尾`;
+    expect(exact.length).toBe(MANAGER_REPORT_BODY_LIMIT);
+    s.clone.post(managerMessage('exact', 'mgr-exact', exact));
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('ちょうど先頭')),
+      '単発の報告のターンが投げられる',
+    );
+    const input =
+      (s.calls[0] as FakeCall).inputs.find((text) => text.includes('ちょうど先頭')) ?? '';
+    expect(input).toContain(exact);
+    expect(input).not.toContain('本文が長いので');
+    await s.clone.stop();
+  });
+
+  it('質問・許可確認は、1件の上限を超えても切らない（返事を書くのに本文が要る）', async () => {
+    const s = setup();
+    const longQuestion = `質問の先頭${'q'.repeat(MANAGER_REPORT_BODY_LIMIT * 2)}質問の末尾`;
+    s.clone.post(managerMessage('long-q', 'mgr-q', longQuestion, 'question', 'req-q'));
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('質問の先頭')),
+      '質問のターンが投げられる',
+    );
+    await settle();
+    const question =
+      (s.calls[0] as FakeCall).inputs.find((text) => text.includes('質問の先頭')) ?? '';
+    expect(question).toContain(longQuestion);
+    expect(question).not.toContain('本文が長いので');
+
+    const longPermission = `許可の先頭${'p'.repeat(MANAGER_REPORT_BODY_LIMIT * 2)}許可の末尾`;
+    s.clone.post(managerMessage('long-p', 'mgr-p', longPermission, 'permission', 'req-p'));
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('許可の先頭')),
+      '許可確認のターンが投げられる',
+    );
+    await settle();
+    const permission =
+      (s.calls[0] as FakeCall).inputs.find((text) => text.includes('許可の先頭')) ?? '';
+    expect(permission).toContain(longPermission);
+    expect(permission).not.toContain('本文が長いので');
+
+    await s.clone.stop();
+  }, 20_000);
+
+  it('切った報告でも、本文の末尾に付く「途中の発言を含む全文」の案内は消えない', async () => {
+    const s = setup();
+    const tail =
+      '\n\n（途中の発言を含む全文 99999 字は manager_report managerId=mgr-tail で読める。' +
+      'これはターンの最後の発言だけである）';
+    s.clone.post(
+      managerMessage(
+        'tail',
+        'mgr-tail',
+        `案内先頭${'t'.repeat(MANAGER_REPORT_BODY_LIMIT * 2)}${tail}`,
+      ),
+    );
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('案内先頭')),
+      '単発の報告のターンが投げられる',
+    );
+    const input = (s.calls[0] as FakeCall).inputs.find((text) => text.includes('案内先頭')) ?? '';
+    expect(input).toContain('本文が長いので');
+    expect(input).toContain(tail);
+    await s.clone.stop();
+  });
+
+  it('束の中の巨大な報告も1件ずつ頭だけになり、小さい報告は落ちない（issue #955）', async () => {
     const s = setup();
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
@@ -189,12 +264,14 @@ describe('クローン — 同じマネージャーの連続する report をま
     await settle();
     const merged =
       (s.calls[0] as FakeCall).inputs.find((input) => input.includes(batchHeadline)) ?? '';
-    expect(merged.length).toBeLessThan(60_000);
+    expect(merged.length).toBeLessThan(20_000);
     expect(merged).toContain('最新先頭');
     expect(merged).not.toContain('最新末尾');
-    const notice = lineStartingWith(merged, '⚠ 本文の合計が文字数の予算');
+    const notice = lineStartingWith(merged, '⚠ 本文が長いので');
     expect(notice).toContain('journal_read');
-    expect(merged).not.toContain('小さい報告');
+    expect(notice).toContain('manager_report');
+    expect(merged).toContain('小さい報告');
+    expect(merged).not.toContain('本文の合計が');
     await s.clone.stop();
   }, 20_000);
 
@@ -1154,10 +1231,11 @@ describe('クローン — 起点の違う合図をまとめて読む', () => {
 
     const inputs = (s.calls[0] as FakeCall).inputs;
     expect(inputs).toHaveLength(3);
-    expect(inputs[1] ?? '').toContain(big('大A'));
-    expect(inputs[1] ?? '').toContain(big('大B'));
+    // 束の分け方は届いた本文の字数で決まる（20,000 字 × 3 は予算 47,500 字を超える）。各件の表示は 1 件の上限（`MANAGER_REPORT_BODY_LIMIT`）で頭だけになる
+    expect(inputs[1] ?? '').toContain('大A');
+    expect(inputs[1] ?? '').toContain('大B');
     expect(inputs[1] ?? '').not.toContain('大C');
-    expect(inputs[2] ?? '').toContain(big('大C'));
+    expect(inputs[2] ?? '').toContain('大C');
 
     await s.clone.stop();
   }, 15_000);
@@ -1323,9 +1401,9 @@ describe('クローン — 起点の違う合図をまとめて読む', () => {
 
     const inputs = (s.calls[0] as FakeCall).inputs;
     expect(inputs).toHaveLength(3);
-    expect(inputs[1] ?? '').toContain(big('大A2'));
+    expect(inputs[1] ?? '').toContain('大A2');
     expect(inputs[1] ?? '').not.toContain('大B1');
-    expect(inputs[2] ?? '').toContain(big('大B1'));
+    expect(inputs[2] ?? '').toContain('大B1');
 
     await s.clone.stop();
   }, 15_000);

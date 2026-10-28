@@ -9496,13 +9496,29 @@ function managerReportRetrievalHint(event: ManagerReportMessage): string {
  */
 const MANAGER_REPORT_BATCH_BODY_BUDGET = 47_500;
 
+/**
+ * 報告 1 件の本文の上限（字）。これを超える報告は頭の側だけを出し、全文は日誌と `manager_report` から引く。
+ * 質問・許可確認（`question` / `permission`）には掛けない: 返事を書くのに本文が要るため（`managerPrompt` の `report` 以外の枝は本文をそのまま出す）。
+ * 頭を残す: 担当への規約が「最終の報告は結論・PR 番号・SHA・残りを先に書く」で、届く本文は担当のターンの最後の発言のため。
+ * 値は 2026-10-29 のクローンの手元の観測（直近の報告の全文が 522〜3,517 字でほとんど 1〜4K 字）から 8,000 字。本番の分布を測ったら、ここだけ直す。
+ */
+export const MANAGER_REPORT_BODY_LIMIT = 8_000;
+
+// `reportDeliveryTextOf`（manager.ts）が本文の末尾に足す「途中の発言を含む全文…」の段落。頭を切るとこの段落も消えるので、切るときは本文と分けて残す
+const REPORT_DELIVERY_TAIL_MARK = '\n\n（途中の発言を含む全文 ';
+
 /** 切ったのに全文の取り方を言わないと、読めるものを減らしたことになる（listing-and-detail の性質2）。 */
 function boundedReportBody(event: ManagerReportMessage): string[] {
-  if (event.text.length <= MANAGER_REPORT_BATCH_BODY_BUDGET) return [event.text];
+  if (event.text.length <= MANAGER_REPORT_BODY_LIMIT) return [event.text];
+  const tailAt = event.text.lastIndexOf(REPORT_DELIVERY_TAIL_MARK);
+  const main = tailAt === -1 ? event.text : event.text.slice(0, tailAt);
+  const tail = tailAt === -1 ? '' : event.text.slice(tailAt);
+  if (main.length <= MANAGER_REPORT_BODY_LIMIT) return [event.text];
   return [
-    excerpt(event.text, MANAGER_REPORT_BATCH_BODY_BUDGET),
+    excerpt(main, MANAGER_REPORT_BODY_LIMIT) + tail,
     '',
-    `⚠ 本文が文字数の予算（${MANAGER_REPORT_BATCH_BODY_BUDGET.toLocaleString('en-US')} 文字）を超えたので、ここでは先頭だけを出した。 ${managerReportRetrievalHint(event)}`,
+    `⚠ 本文が長いので、頭の ${MANAGER_REPORT_BODY_LIMIT.toLocaleString('en-US')} 字だけを出した（全体 ${main.length.toLocaleString('en-US')} 字）。` +
+      `全文は、この担当の直近の報告なら \`manager_report\`（managerId: "${event.managerId}"）、それ以前の報告なら \`journal_read\` で引ける。 ${managerReportRetrievalHint(event)}`,
   ];
 }
 
@@ -9531,7 +9547,7 @@ export function managerReportBatchPrompt(
       `**(${index + 1})** ${describeReportAge(event.at, now)}`,
       '',
       ...(attachmentLines.length === 0 ? [] : [...attachmentLines, '']),
-      event.text,
+      ...boundedReportBody(event),
       ...(closed === null ? [] : ['', closed]),
     ].join('\n');
   });
