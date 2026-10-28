@@ -6810,6 +6810,7 @@ class Clone implements CloneHost {
       flushReply: () => this.#flushReply(),
       managers: this.#managers,
       managerReportShownAt: (managerId, text) => this.#digestDelta.reportShownAt(managerId, text),
+      foldFixed: (id, full, ref) => this.#digestDelta.fixedInTurn(`tool:${id}`, full, ref),
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),

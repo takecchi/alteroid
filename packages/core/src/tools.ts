@@ -505,6 +505,11 @@ export interface ToolContext {
    * 無い器（テスト・蒸留）は常に `null` と同じ: 引き直せば全文が返る（安全側）。
    */
   managerReportShownAt?: (managerId: string, text: string) => Date | null;
+  /**
+   * 固定の文言を、同じ会話の2回目から短い参照にする口（`manager_list` の件数行・「…ほか N 件」の固定文）。
+   * 無い器（テスト・蒸留）は常に全文を返す口と同じ: 参照が指す先（会話の上の全文）が無いので、安全側に倒す。
+   */
+  foldFixed?: (id: string, full: string, ref: string) => string;
   profile?: ProfileService;
   accountUsage?: () => AccountUsageState;
   runtime?: () => CloneRuntimeFacts;
@@ -8107,6 +8112,7 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ status, q, cursor }) => {
         if (!context.managers) return NO_POOL;
+        const fold = context.foldFixed ?? NO_FIXED_FOLD;
         const managers = await context.managers.list();
         // この一覧ぜんぶで同じ「いま」を使う: 行ごとに `new Date()` を呼ぶと、同じ応答の中で判定の基準がずれるため
         const now = new Date();
@@ -8324,7 +8330,7 @@ export function createCloneTools(context: ToolContext) {
         return text(
           [
             // 本数は一覧の外に出す: 一覧は予算で打ち切られ、出ている行を数えても全体の本数にならないため。件数は絞る前の全件で出す: 絞りのせいで全体の実像が見えなくなる形にしないため
-            describeManagerCounts(managers),
+            describeManagerCounts(managers, fold),
             unreadableJobNote,
             // 絞ったことは件数の行とは別の行で言う: 混ぜると「絞る前の全体」と「絞った後」がどちらの数なのかを読み分ける負担が読み手に移るため
             // `status: []` は「絞らなかった」と言う: 黙って無視しないため
@@ -8379,12 +8385,11 @@ export function createCloneTools(context: ToolContext) {
                         (narrowed.length > 0
                           ? `${narrowed.join(' と ')} に絞った ${total} 件のうち ${shown} 件を出した`
                           : `全 ${total} 件`) +
-                        '）。走行中・返事待ちを先に出し、次に lost（判断待ち）、そのあとに残りを出す。' +
-                        '各群の中は startedAt の新しい順である。' +
-                        '**省略されたのは終端したもの（またはより古いもの）の側である。**' +
+                        '）。' +
+                        fold('manager-list:omitted-order', OMITTED_ORDER_FULL, OMITTED_ORDER_REF) +
+                        // cursor は毎回変わる（位置・絞りを含む）ので畳まない: 畳むと続きが取れなくなる
                         `続きは manager_list cursor=${nextCursor}${statusArg}${queryArg} で取れる（status と q は同じまま呼ぶこと）。` +
-                        '委譲の台帳には保持期間も掃除の機構も無いので、辿る頁数は台帳の本数に比例して増える。' +
-                        'status や q で絞れば頁数を減らせる。'
+                        fold('manager-list:omitted-paging', OMITTED_PAGING_FULL, OMITTED_PAGING_REF)
                       );
                     },
                   }),
@@ -10478,7 +10483,70 @@ function compareManagerAttention(a: ManagerSummary, b: ManagerSummary): number {
 // 一覧を数えて答えさせない: 一覧は予算で打ち切られ、`status` だけを数えると上振れする（`running` は終端へ勝手には行かない）ため2軸で数える
 // 0 の行は作らない: 「切断 0本」と書くと、観測して 0 だったのか数えていないのかが読めなくなるため、在るときだけ書く
 // `usageStopped` を上の内訳へ足し合わせない: `status` と独立の横断する軸で、同じ委譲を2回数えることになるため
-function describeManagerCounts(managers: readonly ManagerSummary[]): string {
+// 固定の文言を畳む口（`ToolContext.foldFixed`）。無ければ全文のまま
+type FixedFold = NonNullable<ToolContext['foldFixed']>;
+const NO_FIXED_FOLD: FixedFold = (_id, full) => full;
+
+// 件数の行の固定の読み方。2回目から参照にする（`describeManagerCounts`）。参照にも要点（読み違えると打つ手が変わる点）を残す
+const COUNTS_RUNNING_FULL =
+  '**「走行中」は「進んでいる」ではない** — 宛先の器が黙って消えても ' +
+  'status は running のままで、それを終端へ動かす経路はデーモンに無い。' +
+  'いま何本動いているかを数えるなら、走行中の本数ではなく' +
+  '「話しかけられる」ほうを見ること。';
+const COUNTS_RUNNING_REF =
+  '（読み方は前の一覧の全文のとおり: 「走行中」は「進んでいる」ではない。動いている本数は「話しかけられる」ほうで数える）';
+const COUNTS_LOST_FULL =
+  ' **「戻れなかった(lost)」は「終わった」ではない** — 前のセッションへ戻れたかだけを' +
+  '見ていて、成果が既に外へ出ていることがある（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）。' +
+  'この一覧の本文は文字数の予算で切れるので、名指しで引くなら status: ["lost"] を渡すこと' +
+  '（絞りは予算より前に効く）。' +
+  // 残りへ辿る綴りは `lost` が在るときだけ置く: 「全部見た」と読みかけるときだけで、それぞれの行には既に ⚠ が付くため
+  '**ただし lost を全部確かめても、落ちた委譲を全部見たことにはならない** — ' +
+  '宛先の器が黙って消えた委譲は running のまま残り、直近のターンが失敗で終わった委譲は ' +
+  'done のまま残る。前者は status: ["running"]、後者は status: ["done"] で引き、' +
+  '行に付く ⚠ を見ること。' +
+  RESTART_BEFORE_CHECK_ADVICE;
+const COUNTS_LOST_REF =
+  ' （lost は「終わった」ではなく、成果が外へ出ていることがある。名指しは status: ["lost"]。' +
+  'ただし lost を確かめても全部ではない: running のまま残る委譲は status: ["running"]、' +
+  '失敗で終わった委譲は status: ["done"] で引き、行の ⚠ を見る。' +
+  `${RESTART_BEFORE_CHECK_ADVICE}全文は前の一覧のとおり）`;
+const COUNTS_USAGE_STOPPED_FULL =
+  ' **「枠(利用上限)で止まっている」は status の分割ではなく横断する軸である** — ' +
+  '走行中・返事待ち・戻れなかった(lost)・手が空いている（done）等のどれとも重なりうるので、' +
+  '上の内訳には足し合わせない。名指しで絞る綴りは無い（`status` の値ではないため）——' +
+  'この一覧の各行に付く注記（⚠ 枠(利用上限)で止まっている）を見て、どの委譲かを辿ること。';
+const COUNTS_USAGE_STOPPED_REF =
+  ' （「枠(利用上限)で止まっている」は横断する軸で、他の内訳に足し合わせない。' +
+  '絞る綴りは無いので、各行の ⚠ 枠(利用上限)で止まっている から辿る）';
+const COUNTS_RUNNER_VANISHED_FULL =
+  ' **「宛先の runner が名簿から消えている」は status の分割ではなく横断する軸である** — ' +
+  '必ず「走行中」の内側に座るが、`lost`（戻れなかった）とは別の集合で、' +
+  '`manager_list status: ["lost"]` の絞りでは拾えない。名指しで絞る綴りは無い' +
+  '（`status` の値ではないため）——この一覧の各行に付く注記' +
+  '（⚠ 宛先の runner が名簿から消えている）を見て、どの委譲かを辿ること。' +
+  RESTART_BEFORE_CHECK_ADVICE;
+const COUNTS_RUNNER_VANISHED_REF =
+  ' （「宛先の runner が名簿から消えている」は横断する軸で、走行中の内側にあり lost とは別の集合。' +
+  '`status: ["lost"]` では拾えず、絞る綴りも無いので、各行の ⚠ 宛先の runner が名簿から消えている から辿る。' +
+  `${RESTART_BEFORE_CHECK_ADVICE}）`;
+
+// 「…ほか N 件は省略」の固定の文。続きの取り方（cursor）は毎回変わるので畳まず、その前後の固定の2文だけを畳む
+const OMITTED_ORDER_FULL =
+  '走行中・返事待ちを先に出し、次に lost（判断待ち）、そのあとに残りを出す。' +
+  '各群の中は startedAt の新しい順である。' +
+  '**省略されたのは終端したもの（またはより古いもの）の側である。**';
+const OMITTED_ORDER_REF =
+  '（並びは前の一覧のとおり: 走行中・返事待ち → lost → 残り、群の中は startedAt の新しい順。省略されたのは終端したもの・より古いものの側である）';
+const OMITTED_PAGING_FULL =
+  '委譲の台帳には保持期間も掃除の機構も無いので、辿る頁数は台帳の本数に比例して増える。' +
+  'status や q で絞れば頁数を減らせる。';
+const OMITTED_PAGING_REF = '（頁数は台帳の本数に比例して増える。status や q で絞れば減らせる）';
+
+function describeManagerCounts(
+  managers: readonly ManagerSummary[],
+  fold: FixedFold = NO_FIXED_FOLD,
+): string {
   const live = managers.filter((m) => m.live).length;
   const parts = [`全 ${managers.length} 本`];
   // `m.status === 'running'` を直書きしない: 将来「実行中」を意味する新しい値が足されてもこの行の件数からだけ静かに漏れるため
@@ -10510,38 +10578,25 @@ function describeManagerCounts(managers: readonly ManagerSummary[]): string {
     );
   return (
     `件数: ${parts.join(' / ')}。話しかけられる委譲は全体で ${live} 本である。` +
-    '**「走行中」は「進んでいる」ではない** — 宛先の器が黙って消えても ' +
-    'status は running のままで、それを終端へ動かす経路はデーモンに無い。' +
-    'いま何本動いているかを数えるなら、走行中の本数ではなく' +
-    '「話しかけられる」ほうを見ること。' +
+    fold('manager-list:counts-running', COUNTS_RUNNING_FULL, COUNTS_RUNNING_REF) +
     // `lost` が在るときだけ足す: 本数だけだと「終わった本数」と読まれ、`lost` は確かめるまで終われない側のため
-    (lost === 0
-      ? ''
-      : ' **「戻れなかった(lost)」は「終わった」ではない** — 前のセッションへ戻れたかだけを' +
-        '見ていて、成果が既に外へ出ていることがある（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）。' +
-        'この一覧の本文は文字数の予算で切れるので、名指しで引くなら status: ["lost"] を渡すこと' +
-        '（絞りは予算より前に効く）。' +
-        // 残りへ辿る綴りは `lost` が在るときだけ置く: 「全部見た」と読みかけるときだけで、それぞれの行には既に ⚠ が付くため
-        '**ただし lost を全部確かめても、落ちた委譲を全部見たことにはならない** — ' +
-        '宛先の器が黙って消えた委譲は running のまま残り、直近のターンが失敗で終わった委譲は ' +
-        'done のまま残る。前者は status: ["running"]、後者は status: ["done"] で引き、' +
-        '行に付く ⚠ を見ること。' +
-        RESTART_BEFORE_CHECK_ADVICE) +
+    // 畳むのも足したときだけ: 足さない回に `fold` を呼ぶと、出していない全文を「出した」と控えてしまうため
+    (lost === 0 ? '' : fold('manager-list:counts-lost', COUNTS_LOST_FULL, COUNTS_LOST_REF)) +
     (usageStopped === 0
       ? ''
-      : ' **「枠(利用上限)で止まっている」は status の分割ではなく横断する軸である** — ' +
-        '走行中・返事待ち・戻れなかった(lost)・手が空いている（done）等のどれとも重なりうるので、' +
-        '上の内訳には足し合わせない。名指しで絞る綴りは無い（`status` の値ではないため）——' +
-        'この一覧の各行に付く注記（⚠ 枠(利用上限)で止まっている）を見て、どの委譲かを辿ること。') +
+      : fold(
+          'manager-list:counts-usage-stopped',
+          COUNTS_USAGE_STOPPED_FULL,
+          COUNTS_USAGE_STOPPED_REF,
+        )) +
     // `lost` を条件に混ぜない: `lost` が 0 のまま器が黙って消えた委譲だけが在る回を取りこぼすため
     (runnerVanished === 0
       ? ''
-      : ' **「宛先の runner が名簿から消えている」は status の分割ではなく横断する軸である** — ' +
-        '必ず「走行中」の内側に座るが、`lost`（戻れなかった）とは別の集合で、' +
-        '`manager_list status: ["lost"]` の絞りでは拾えない。名指しで絞る綴りは無い' +
-        '（`status` の値ではないため）——この一覧の各行に付く注記' +
-        '（⚠ 宛先の runner が名簿から消えている）を見て、どの委譲かを辿ること。' +
-        RESTART_BEFORE_CHECK_ADVICE)
+      : fold(
+          'manager-list:counts-runner-vanished',
+          COUNTS_RUNNER_VANISHED_FULL,
+          COUNTS_RUNNER_VANISHED_REF,
+        ))
   );
 }
 

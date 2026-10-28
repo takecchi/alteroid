@@ -270,6 +270,18 @@ export class DigestSessionDelta {
   }
 
   /**
+   * ターンの途中（道具の応答）で出す固定の文言。`fixed` と同じ判定で、控えへの確定だけが違う。
+   * `fixed` にしない理由: 控えの確定（`commit`）は入力を押し込めた直後の1回きりで、道具の呼び出しはその後に起きる。
+   * `fixed` で足した控えは次の回の頭の `discardStaged` に捨てられ、道具の応答は永久に全文のままになる。
+   * 道具の応答は返した時点で会話に載るので、確定を待たずに控える。失敗したターンの後・会話が変わった・要約が走りうる回の `reset` は同じ口で効く。
+   */
+  fixedInTurn(id: string, full: string, ref: string): string {
+    if (this.#committed.fixed.has(id)) return ref;
+    this.#committed.fixed.add(id);
+    return full;
+  }
+
+  /**
    * 今回の依頼の本文（timer）。同じ会話で同じ kind・同じ本文を全文で出していれば、その時刻を返す。
    * 返ったら呼び出し側は全文を出さない。返らなければ全文を出す前提で控えに足す。
    */
