@@ -2697,6 +2697,14 @@ class Clone implements CloneHost {
     const fold = this.#fixedTextFold();
     const items: string[] = [];
     const origins = new Set<string | null>();
+    const shownInBatch = new Set<string>();
+    const batchFold: FixedTextFold = (id, full, ref) => {
+      if (shownInBatch.has(id)) return ref;
+      shownInBatch.add(id);
+      return fold(id, full, ref);
+    };
+    let referenceChosen = false;
+    let referenceOriginId: string | null = null;
     for (const event of events) {
       await this.#journalIncomingBody(event);
       if (event.type === 'external') {
@@ -2719,12 +2727,30 @@ class Clone implements CloneHost {
         await this.#noteRedeliveryPredicateHitA(event.managerId);
       }
       const origin = await this.#managerOrigin(event.managerId);
-      origins.add(originConversationIdOf(origin));
+      const originId = originConversationIdOf(origin);
+      origins.add(originId);
       const sent =
         event.kind === 'permission'
           ? { ...event, text: this.#foldConfirmationText(event.text) }
           : event;
-      items.push(managerPrompt(sent, origin, liveness, settlement, now, [], fold));
+      // 枠を畳むのは、束の最初のマネージャーの件と起点の会話が同じ2件目以降だけ: 起点が違う件は全文のまま（起点の取り違えを避ける）。
+      // 束の中の畳み: `fold` の控えは前のターンまでのものなので、同じ束の中の2件目は全文のままになる。束の中で出したものを自分で数える。
+      const isReference = !referenceChosen;
+      referenceChosen = true;
+      if (isReference) referenceOriginId = originId;
+      const compact = !isReference && originId !== null && originId === referenceOriginId;
+      items.push(
+        managerPrompt(
+          sent,
+          origin,
+          liveness,
+          settlement,
+          now,
+          [],
+          isReference || compact ? batchFold : fold,
+          compact,
+        ),
+      );
     }
     // 同じ担当の報告が隣り合って2件以上続く所は塊にする（見出しと「補足・訂正がある可能性」の注意を保つ）。質問・確認・external・別の担当を挟んだ報告は塊にしない: 順序を入れ替えないため
     const grouped: MixedBatchItem[] = [];
@@ -8726,7 +8752,7 @@ function closedConfirmationNotice(settlement: ReportSettlement, label: string): 
  * 壊れた・未来の `at` には `NaN` や負の経過を出さず、測れない理由を書く。
  * `now` は引数で受ける: `managerPrompt` を純関数に保つ。
  */
-function describeReportAge(at: string, now: Date): string {
+function describeReportAge(at: string, now: Date, compact = false): string {
   const receivedMs = Date.parse(at);
   if (Number.isNaN(receivedMs)) {
     return `受け取った時刻（${at}）を解析できないため、経過は測れない。`;
@@ -8735,6 +8761,8 @@ function describeReportAge(at: string, now: Date): string {
   if (elapsedMs < 0) {
     return `受け取った時刻（${at}）が現在時刻より未来のため、経過は測れない。`;
   }
+  // 短い形でも「受け取ってから」「経過」と丸めた値・`at` は残す（測れない場合の文は上のとおり全文）
+  if (compact) return `受け取り ${at}（${formatElapsed(elapsedMs)}経過）`;
   return `受け取ってから${formatElapsed(elapsedMs)}経過（受け取った時刻: ${at}）。`;
 }
 
@@ -8809,8 +8837,13 @@ function managerPrompt(
   now: Date = new Date(),
   attachmentLines: readonly string[] = [],
   fold: FixedTextFold = NO_FOLD,
+  compact = false,
 ): string {
-  const head = `[system] マネージャー ${event.managerId} から届いた。`;
+  // `compact` は混合の束で、起点の会話が束の最初のマネージャーの件と同じ2件目以降だけ真になる。
+  // 固定の枠（「から届いた」・「受け取ってから…経過」の言い回し）だけを縮め、マネージャー名・時刻・経過・id・本文は毎回出す。
+  const head = compact
+    ? `[system] マネージャー ${event.managerId}`
+    : `[system] マネージャー ${event.managerId} から届いた。`;
 
   if (event.kind === 'report') {
     const closed = closedReportNotice(settlement);
@@ -8823,7 +8856,7 @@ function managerPrompt(
       ...boundedReportBody({ ...event, kind: 'report' }),
       '',
       // 経過も印も本文の後ろに置く: 前に置くと「読まなくてよい」と読まれて本文を飛ばされる。
-      describeReportAge(event.at, now),
+      describeReportAge(event.at, now, compact),
       describeManagerOrigin(origin, fold),
       '',
       ...(closed === null ? [] : [closed, '']),
