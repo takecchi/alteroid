@@ -1481,19 +1481,38 @@ function formatCloseManyStoppedMessage(args: {
   journaledIds: readonly string[];
   entry: JournalEntryInput;
   cause: unknown;
+  /** この呼びで閉じる対象の件数（競合で閉じられなかった分を数えるため） */
+  targetCount: number;
+  /** 1回の上限に収まらず対象にしなかった件数と、その上限 */
+  restCount: number;
+  limit: number;
 }): string {
-  const { failed, journaledIds, entry, cause } = args;
+  const { failed, journaledIds, entry, cause, targetCount, restCount, limit } = args;
   const shape = journalEntryShape(entry);
   const reason = collapseErrorCause(cause);
   const shownPrior = chunkIdsByChars(journaledIds, CLOSE_MANY_JOURNAL_ID_CHARS)[0] ?? [];
   const hiddenPrior = journaledIds.length - shownPrior.length;
   const remainingChunks = failed.chunk.total - failed.chunk.number;
+  const closedTotal = journaledIds.length + failed.closed.length;
+  // 最後の塊では全件を処理し終えている: 「閉じていない」と言うと、同じ絞り込みで呼び直されて上限の外の行や間に届いた行まで閉じるため
+  const lastChunk = remainingChunks === 0;
+  const raced = targetCount - closedTotal;
   return [
-    '⚠⚠ 一括は途中で止まった・この塊の日誌が未記録・残りの塊は閉じていない',
-    `commitment_close_many は途中で止まった（全件は閉じていない。「完了した」ではない）。` +
-      `${failed.chunk.number}/${failed.chunk.total} 塊目まで閉じたところで、この塊の日誌を書けなかった。`,
-    `ここまでに閉じた id は ${journaledIds.length + failed.closed.length} 件` +
+    lastChunk
+      ? '⚠⚠ 全件を閉じ終えた・最後の塊の日誌が未記録・閉じ直し禁止'
+      : '⚠⚠ 一括は途中で止まった・この塊の日誌が未記録・残りの塊は閉じていない',
+    lastChunk
+      ? `commitment_close_many は対象の全件を処理し終えた（閉じた行は戻らない）。` +
+        `最後の ${failed.chunk.number}/${failed.chunk.total} 塊目の日誌を書けなかった。`
+      : `commitment_close_many は途中で止まった（全件は閉じていない。「完了した」ではない）。` +
+        `${failed.chunk.number}/${failed.chunk.total} 塊目まで閉じたところで、この塊の日誌を書けなかった。`,
+    `ここまでに閉じた id は ${closedTotal} 件` +
       `（前の塊の ${journaledIds.length} 件は日誌に記録済み、この塊の ${failed.closed.length} 件は未記録）。`,
+    ...(lastChunk && raced > 0
+      ? [
+          `⚠ 対象 ${targetCount} 件のうち ${raced} 件は閉じられなかった（この呼びの最中に他の経路が先に閉じた）。`,
+        ]
+      : []),
     `この塊の閉じた id（日誌に無い）: ${failed.closed.join(' ')}`,
     ...(journaledIds.length === 0
       ? []
@@ -1502,9 +1521,15 @@ function formatCloseManyStoppedMessage(args: {
             hiddenPrior > 0 ? ` …ほか ${hiddenPrior} 件は省略（日誌に残してある）` : ''
           }`,
         ]),
-    remainingChunks === 0
-      ? '残りの塊は無い（この塊が最後だった）。'
+    lastChunk
+      ? '残りの塊は無い。この呼びの対象は閉じ終えているので、やり直さないこと（呼び直すと、この呼びの対象の外にあった行や間に届いた行まで閉じかねない）。'
       : `残りの ${remainingChunks} 塊は閉じていない。同じ絞り込みでもう一度呼べば続きを閉じられる（閉じた行は未了から外れているので、閉じ直しにはならない）。`,
+    ...(restCount === 0
+      ? []
+      : [
+          `1回の上限（${limit} 件）に収まらず対象にしなかった ${restCount} 件は、そもそもこの呼びでは閉じていない` +
+            (lastChunk ? '（journal_write で記録を書き直した後に、別の呼びで閉じること）。' : '。'),
+        ]),
     `記録できなかったエントリ: ${shape}`,
     `理由: ${reason}`,
     'journal_write で、この塊の閉じた id を記録に書き直すこと。閉じ直さないこと。',
@@ -6337,6 +6362,9 @@ export function createCloneTools(context: ToolContext) {
                 journaledIds,
                 entry: error.entry,
                 cause: error.journalCause,
+                targetCount: targets.length,
+                restCount: remainingCount,
+                limit: effectiveLimit,
               }),
             );
           }

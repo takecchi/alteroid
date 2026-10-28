@@ -116,6 +116,67 @@ describe('commitment_close_many: 塊の日誌が落ちた回は「途中で止�
     expect(text).toContain('journal_write');
   });
 
+  it('⭐ 最後の塊（3/3 塊目）で落ちる: 「途中で止まった」「全件は閉じていない」「残りの塊は閉じていない」と言わず、全件閉じ済み・閉じ直し禁止を言う', async () => {
+    const stores = failingJournalAppendAt(3);
+    const ids = await openMany(stores);
+    const chunks = chunkIdsByChars(ids, CLOSE_MANY_JOURNAL_ID_CHARS);
+
+    const { text, threw } = await call(stores);
+
+    expect(threw).toBe(true);
+    expect(text.split('\n')[0]).toBe('⚠⚠ 全件を閉じ終えた・最後の塊の日誌が未記録・閉じ直し禁止');
+    expect(text).not.toContain('途中で止まった');
+    expect(text).not.toContain('全件は閉じていない');
+    expect(text).not.toContain('閉じていない。同じ絞り込み');
+    expect(text).not.toContain('完了した');
+    expect(text).toContain('3/3 塊目');
+    expect(text).toContain('やり直さないこと');
+    expect(text).toContain('journal_write');
+    for (const id of chunks[2] ?? []) expect(text, `3 塊目の id ${id}`).toContain(id);
+    expect(text).not.toContain(SECRET_REASON);
+
+    // 台帳: 全件が閉じ済み
+    expect((await stores.commitments.list()).entries).toHaveLength(0);
+  });
+
+  it('1 塊に収まる回の日誌が落ちる: 全件を閉じ終えたと言い、「途中で止まった」とは言わない', async () => {
+    const stores = failingJournalAppendAt(1);
+    for (let index = 0; index < 10; index += 1) await stores.commitments.open(external(index));
+
+    const { text, threw } = await call(stores);
+
+    expect(threw).toBe(true);
+    expect(text.split('\n')[0]).toBe('⚠⚠ 全件を閉じ終えた・最後の塊の日誌が未記録・閉じ直し禁止');
+    expect(text).not.toContain('途中で止まった');
+    expect(text).not.toContain('全件は閉じていない');
+    expect((await stores.commitments.list()).entries).toHaveLength(0);
+  });
+
+  it('上限（limit）の外に残した行がある回の最後の塊で落ちる: 残した件数を言い、台帳にその分が残る', async () => {
+    const stores = failingJournalAppendAt(1);
+    for (let index = 0; index < 10; index += 1) await stores.commitments.open(external(index));
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const found = tools.find((entry) => entry.name === 'commitment_close_many');
+    let text = '';
+    try {
+      await found?.handler(
+        { origin: ['external'], reason: 'r', dryRun: false, limit: 4 } as never,
+        {} as never,
+      );
+    } catch (error) {
+      text = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(text).toContain('全件を閉じ終えた');
+    expect(text).toContain('上限（4 件）に収まらず対象にしなかった 6 件');
+    expect((await stores.commitments.list()).entries).toHaveLength(6);
+  });
+
   it('全部成功する回: 応答は従来どおり（「N 件を片付けた」、止まった旨も警告の先頭行も無い）', async () => {
     const stores = createMemoryStores();
     await openMany(stores);

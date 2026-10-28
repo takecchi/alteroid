@@ -18908,8 +18908,8 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
     {
       tool: 'commitment_close_many',
       // 反転（#5452）: 以前は ACT_COMPLETED で「完了した・やり直さないこと」と返し、残りの塊を閉じていないことも閉じた id も伝えなかった。
-      // いまは「途中で止まった」を名乗る（個別の歯は commitment-close-many-partial-journal.test.ts）
-      firstLine: '⚠⚠ 一括は途中で止まった・この塊の日誌が未記録・残りの塊は閉じていない',
+      // いまは、塊が 1 つ（最後の塊）なので全件を閉じ終えたと名乗る（残りの塊がある回は「途中で止まった」。個別の歯は commitment-close-many-partial-journal.test.ts）
+      firstLine: '⚠⚠ 全件を閉じ終えた・最後の塊の日誌が未記録・閉じ直し禁止',
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-13b');
         await stores.commitments.open({
