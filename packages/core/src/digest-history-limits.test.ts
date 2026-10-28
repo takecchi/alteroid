@@ -89,6 +89,7 @@ describe('同じ会話の2回目の差分（DigestSessionDelta）が新しい行
     expect(renderedSecond.text.length).toBeLessThan(second.length);
     // 本文の形（保持した標本）を含む外部イベントの節は、変わっていなければ節ごと畳まれる
     expect(first).toContain('…ほか 2 件');
-    expect(renderedSecond.text).toContain('## 届いた外部イベント\n（前回（');
+    expect(renderedSecond.text).toMatch(/変わらない節: 届いた外部イベント・使った分。/u);
+    expect(renderedSecond.text).not.toContain('発行元（source）別の件数');
   });
 });

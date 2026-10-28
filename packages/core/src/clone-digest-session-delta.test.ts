@@ -306,8 +306,8 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     expect(second).not.toContain(SELF_INSTRUCTION_HEAD);
     expect(second).toContain(INSTRUCTION_REF);
     expect(second).not.toContain('担当 7 の途中経過');
-    // 見出しは残る（節の件数の行はまえがきに残る）
-    expect(second).toContain('## 届いた外部イベント');
+    // 節の名前は1行にまとめた参照に残る（節の件数の行はまえがきに残る）
+    expect(second).toMatch(/変わらない節: .*届いた外部イベント/u);
     expect(second).toContain('外部イベント（日誌の行数）20 /');
     expect(second).toContain('未了の仕事 14 /');
     // 固定の注記は1回だけ全文
@@ -831,7 +831,9 @@ describe('DigestSessionDelta（単体）', () => {
     delta.renderDigest(digest, at);
     delta.commit();
     const third = delta.renderDigest(digest, at).text;
-    expect(third).toContain('前回（12:34Z）の要約から変わっていない');
+    expect(third).toContain(
+      '（前回（12:34Z）の要約から変わらない節: マネージャー・使った分。各節の全文は会話の上にある）',
+    );
     expect(third).not.toContain('仕事A');
   });
 
@@ -864,6 +866,73 @@ describe('DigestSessionDelta（単体）', () => {
     delta.commit();
     const out = delta.renderDigest(digest.replace('$1', '$2'), at).text;
     expect(out).toContain('- 合計: $2');
+  });
+
+  describe('2節以上が同時に前回と同じなら、参照を1行にまとめる（#5393）', () => {
+    const ledger = ['## 引き受けたまま終わっていない仕事（自分の台帳）', '- c1 仕事C', ''];
+    const sameDigest = [
+      '期間: x',
+      '',
+      ...ledger,
+      '## 継続中の依頼（時刻が来れば届く。前回からの続きがあるか見ること）',
+      '- timer 毎朝',
+      '',
+      '## マネージャー（走行中・返事待ちから先に出す）',
+      '- a [running] 仕事A',
+      '',
+      '## 使った分',
+      '- 合計: $1',
+    ].join('\n');
+
+    it('⭐ 同じ節が3つ（台帳を除く）なら、節の名前を残した1行にまとまり、台帳は節ごとの参照のまま。出力は全文一致', () => {
+      const delta = new DigestSessionDelta();
+      expect(delta.renderDigest(sameDigest, at).text).toBe(sameDigest);
+      delta.commit();
+      expect(delta.renderDigest(sameDigest, at).text).toBe(
+        [
+          '期間: x',
+          '',
+          '## 引き受けたまま終わっていない仕事（自分の台帳）',
+          '（前回（12:34Z）の要約から変わっていない。全文は会話の上にある）',
+          '',
+          '（前回（12:34Z）の要約から変わらない節: 継続中の依頼・マネージャー・使った分。各節の全文は会話の上にある）',
+          '',
+        ].join('\n'),
+      );
+    });
+
+    it('⭐ 同じ節が1つだけの回は、従来どおり節ごとの参照のまま', () => {
+      const delta = new DigestSessionDelta();
+      delta.renderDigest(sameDigest, at);
+      delta.commit();
+      const out = delta.renderDigest(
+        sameDigest.replace('- 合計: $1', '- 合計: $2').replace('仕事A', '仕事Z'),
+        at,
+      ).text;
+      expect(out).not.toContain('変わらない節');
+      expect(out).toContain(
+        '## 継続中の依頼（時刻が来れば届く。前回からの続きがあるか見ること）\n（前回（12:34Z）の要約から変わっていない。全文は会話の上にある）',
+      );
+      expect(out).toContain('- 合計: $2');
+    });
+
+    it('⭐ 変わった節は全文・差分のまま出て、同じ節だけが1行にまとまる', () => {
+      const delta = new DigestSessionDelta();
+      delta.renderDigest(sameDigest, at);
+      delta.commit();
+      const out = delta.renderDigest(sameDigest.replace('- 合計: $1', '- 合計: $2'), at).text;
+      expect(out).toContain('変わらない節: 継続中の依頼・マネージャー。');
+      expect(out).toContain('## 使った分\n- 合計: $2');
+      expect(out).not.toContain('仕事A');
+    });
+
+    it('⭐ 要約後（reset）の回は全文', () => {
+      const delta = new DigestSessionDelta();
+      delta.renderDigest(sameDigest, at);
+      delta.commit();
+      delta.reset();
+      expect(delta.renderDigest(sameDigest, at).text).toBe(sameDigest);
+    });
   });
 });
 
@@ -931,7 +1000,9 @@ describe('DigestSessionDelta（軽い全文。要約が走りうる／走った�
     expect(next).not.toContain('この節は省いた');
     // 軽い全文で全文を出した節は畳まれる
     expect(next).not.toContain('決めたことY');
-    expect(next).toContain('前回（12:34Z）の要約から変わっていない');
+    expect(next).toContain(
+      '（前回（12:34Z）の要約から変わらない節: マネージャー・聞かずに決めたこと。各節の全文は会話の上にある）',
+    );
   });
 
   it('⭐ 完全な全文へ倒す理由の reset（既定）は、軽い全文にしない。先に full があれば、後の compaction でも倒れたまま', () => {

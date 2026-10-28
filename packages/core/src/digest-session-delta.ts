@@ -33,6 +33,7 @@ export const LEAN_DROPPED_SECTIONS: readonly { name: string; ref: string }[] = [
 export const LEAN_EXTERNAL_TALLY_REF =
   '（発行元別の件数と本文の形は省いた。`journal_read` に types=["external_event"] を渡すと引ける）';
 const EXTERNAL_SECTION_NAME = '届いた外部イベント';
+const LEDGER_SECTION_NAME = '引き受けたまま終わっていない仕事';
 
 /** 段落として畳む最小の長さ（文字数）。これより短い段落は、参照にしても得が小さく読みにくくなるだけなので常に全文。 */
 export const SYSTEM_PARAGRAPH_MIN_CHARS = 200;
@@ -131,6 +132,14 @@ function groupBody(content: readonly string[]): ({ item: string } | { other: str
     } else out.push({ other: line });
   }
   return out;
+}
+
+/** 「前回と同じ」を1行にまとめてよい節の名前（見出しの `（` より前）。台帳の節（#5297 の領域）は `null`。 */
+function foldableSameSectionName(heading: string): string | null {
+  const name = heading.replace(SECTION_HEADING, '');
+  if (name.startsWith(LEDGER_SECTION_NAME)) return null;
+  const paren = name.indexOf('（');
+  return paren >= 0 ? name.slice(0, paren) : name;
 }
 
 function isListSection(heading: string): boolean {
@@ -292,6 +301,18 @@ export class DigestSessionDelta {
     const lean = this.isLean();
     const fullSections = new Map<string, string>();
     const out: string[] = [...parsed.preamble];
+    // 2節以上が同時に前回と同じなら、節ごとの参照を1行にまとめる。軽い全文の回は畳まない（省いた節の跡と混ざるため）。台帳の節はまとめない（別の参照のまま）
+    const foldedNames: string[] = [];
+    if (previous !== null && !lean) {
+      for (const section of parsed.sections) {
+        const name = foldableSameSectionName(section.heading);
+        if (name === null) continue;
+        const { content } = splitTrailingBlank(section.body);
+        if (previous.sections.get(section.heading) === content.join('\n')) foldedNames.push(name);
+      }
+    }
+    const foldSame = foldedNames.length >= 2;
+    let foldedLineWritten = false;
     for (const section of parsed.sections) {
       const { content, trailing } = splitTrailingBlank(section.body);
       const bodyText = content.join('\n');
@@ -315,6 +336,21 @@ export class DigestSessionDelta {
       }
       fullSections.set(section.heading, bodyText);
       const before = previous?.sections.get(section.heading);
+      if (
+        foldSame &&
+        previous !== null &&
+        before === bodyText &&
+        foldableSameSectionName(section.heading) !== null
+      ) {
+        if (!foldedLineWritten) {
+          foldedLineWritten = true;
+          out.push(
+            `（前回（${clockLabel(previous.at)}）の要約から変わらない節: ${foldedNames.join('・')}。各節の全文は会話の上にある）`,
+            ...trailing,
+          );
+        }
+        continue;
+      }
       out.push(section.heading);
       if (previous === null || before === undefined) {
         out.push(...this.#foldFixed(content));
