@@ -3183,8 +3183,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             '読んだ時点の版（memory_read / memory_outline / 直前の memory_write の応答に出る base_version）。' +
-              '**既存の文書を書き換えるときは必須。** 読んだ後に人間や別のターンが書いていたら、書かずに「その間に変わった」と返す。' +
-              '新規作成（その slug がまだ無い）では省略してよい（版なしで通る）。焼き込みの索引だけでは版は分からない——先に memory_read か memory_outline を呼ぶこと。',
+              '**既存の文書を書き換えるときは必須**。',
           ),
       },
       async ({ slug, content, summary, base_version: baseVersion }) => {
@@ -3359,7 +3358,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            '読んだ時点の版（memory_read / memory_outline / 直前の書き込みの応答に出る base_version）。**必須**——無ければ何も消さずに読み直しを促す。焼き込みの索引だけでは版は分からない。',
+            '読んだ時点の版（memory_read / memory_outline / 直前の書き込みの応答に出る base_version）。**必須**。',
           ),
       },
       async ({ slug, summary, base_version: baseVersion }) => {
@@ -3445,7 +3444,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            '読んだ時点の版（memory_read / memory_outline / 直前の書き込みの応答に出る base_version）。**必須**——無ければ何も書かずに読み直しを促す。焼き込みの索引だけでは版は分からない。',
+            '読んだ時点の版（memory_read / memory_outline / 直前の書き込みの応答に出る base_version）。**必須**。',
           ),
       },
       async ({ slug, description, type, parent, summary, base_version: baseVersion }) => {
@@ -4469,9 +4468,7 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             'マネージャーからの確認を人間に回す場合、受信箱に届いた requestId。' +
               '人間の回答をこの確認へ返すために必要なので、managerId と必ず対で渡すこと。' +
-              '⚠️ 通るのは受信箱に確認として届いた requestId だけである。分類器の拒否の確認では toolu_… の形のことがあるが、' +
-              '生ログから拾った toolu_…（tool_use_id）や req_…（API の request id）は、確認として届いていなければ通らない。' +
-              '受信箱に届いていない確認に、生ログから答える手段は無い',
+              '⚠️ 通るのは受信箱に確認として届いた requestId だけである（生ログから拾った id は通らない。形の詳細は manager_send の requestId）',
           ),
       },
       async ({ question, context: background, questions, managerId, requestId }) => {
@@ -7162,8 +7159,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             '読んだ時点の版（practice_read / 直前の practice_write の応答に出る base_version）。' +
-              '**既存のやり方を書き換えるときは必須。** 読んだ後に人間や別のターンが書いていたら、書かずに「その間に変わった」と返す。' +
-              '新規作成（その slug がまだ無い）では省略してよい（版なしで通る）。焼き込みの索引だけでは版は分からない——先に practice_read を呼ぶこと。',
+              '**既存のやり方を書き換えるときは必須**。',
           ),
       },
       async ({ slug, kind, title, content, base_version: baseVersion }) => {
@@ -7255,7 +7251,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            '読んだ時点の版（practice_read / 直前の practice_write の応答に出る base_version）。**必須**——無ければ何も消さずに読み直しを促す。焼き込みの索引だけでは版は分からない。',
+            '読んだ時点の版（practice_read / 直前の practice_write の応答に出る base_version）。**必須**。',
           ),
       },
       async ({ slug, base_version: baseVersion }) => {

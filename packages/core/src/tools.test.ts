@@ -14119,6 +14119,80 @@ describe('システムプロンプトの道具一覧', () => {
   });
 });
 
+// 固定文の純粋な繰り返しを削った後も、残す1か所に全文が在ることを固定する（#5436）
+describe('同文の繰り返しを削った後も、残す1か所に全文が在る（#5436）', () => {
+  function cloneTools() {
+    return createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+  }
+  function paramDescription(tool: string, param: string): string {
+    // `.shape` を読む: 道具の入力は strict な object に包んで渡しているため
+    const schema = cloneTools().find((entry) => entry.name === tool)?.inputSchema as unknown as
+      z.ZodObject<Record<string, z.ZodTypeAny>> | undefined;
+    return schema?.shape[param]?.description ?? '';
+  }
+
+  it('「人間が後から読んで否定できることが最終承認の実体」は「人間に確認するかどうか」の1か所だけに全文が在る', () => {
+    const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+    expect(prompt.split('最終承認の実体').length - 1).toBe(1);
+    const section = prompt.split('# 人間に確認するかどうか')[1]?.split('# 仕事の起点')[0] ?? '';
+    expect(section).toContain('人間が後から読んで否定できることが最終承認の実体である');
+    // 人間が居ないあいだの判断も日誌へ残す（取り消せない行いを人間が追う手段）は、残る
+    const origin = prompt.split('# 仕事の起点')[1]?.split('## 続きのある依頼を受けたら')[0] ?? '';
+    expect(origin).toContain('人間が居ないあいだに決めたことも、同じく必ず `journal_write` に残す');
+  });
+
+  it('記憶の索引化の経緯（日付つきの決定・実測のトークン数）は毎ターンのプロンプトに載せない', () => {
+    const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+    expect(prompt).not.toContain('人間の決定 2026-09-08');
+    expect(prompt).not.toContain('約 41 万トークン');
+    // 規則そのもの（本文は載っていない・開かずに根拠が無いと結論しない）は残る
+    expect(prompt).toContain('**どの区分も本文は載っていない。**');
+    expect(prompt).toContain('開かずに『記憶に根拠が無い』と結論しない');
+  });
+
+  it.each([
+    ['memory_write', '既存の文書を書き換えるときは、先に memory_read'],
+    [
+      'memory_delete',
+      '先に memory_read（または memory_outline）で読んで、応答に出る base_version を渡すこと（必須）',
+    ],
+    [
+      'memory_frontmatter_set',
+      '先に memory_read（または memory_outline）で読んで、応答に出る base_version を渡すこと（必須）',
+    ],
+    ['practice_write', '既存のやり方を書き換えるときは、先に practice_read'],
+    ['practice_remove', '既存のやり方を消すときは、先に practice_read'],
+  ])(
+    '%s: 「先に読んで base_version を渡す・焼き込みの索引だけでは書けない」の全文は説明文に在り、param には繰り返さない',
+    (tool, lead) => {
+      const description = cloneTools().find((entry) => entry.name === tool)?.description ?? '';
+      expect(description).toContain(lead);
+      expect(description).toContain('焼き込みの索引');
+      expect(description).toContain('その間に変わった');
+      const param = paramDescription(tool, 'base_version');
+      expect(param).toMatch(/\*\*.*必須.*\*\*/);
+      expect(param).not.toContain('焼き込みの索引');
+    },
+  );
+
+  it('requestId の「通るのは受信箱に確認として届いた requestId だけ」の全文（形の詳細）は manager_send に在り、ask_human は短く指す', () => {
+    const send = paramDescription('manager_send', 'requestId');
+    expect(send).toContain(
+      '通るのは受信箱に確認として届いた requestId だけである。分類器の拒否の確認では toolu_… の形のことがある',
+    );
+    expect(send).toContain('生ログから答える手段は無い');
+    const ask = paramDescription('ask_human', 'requestId');
+    expect(ask).toContain('通るのは受信箱に確認として届いた requestId だけである');
+    expect(ask).toContain('manager_send の requestId');
+    expect(ask).not.toContain('toolu_');
+  });
+});
+
 // #5288: プロンプトの「# 道具」から外した、道具1つの使い方の規則。外した行の正本は道具の説明文である。
 // プロンプトが索引へ縮んでも規則が読まれなくなっていないことを、説明文の側で固定する
 describe('プロンプトの索引から外した規則は、道具の説明文に在る（#5288）', () => {
