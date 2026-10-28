@@ -7,7 +7,12 @@
 // 「20ターンごとに全文」は入れない（状況の節との違い）: 判断ではなく重複の除去なので、会話が続く限り前の全文は上にある。全文へ戻すのは会話が変わった・要約が走りうる・記録が無いときだけ（`reset()`）。
 // 段落の重複の除去（#4943）も同じ控えに載せる: 全文へ戻す条件（reset）・入力を押し込めた後の確定（commit）・押し込めなかった回の持ち越しの破棄（discardStaged）を1つの口にし、呼び忘れが出ないようにするため。
 import { createHash } from 'node:crypto';
-import { DIGEST_FIXED_PHRASES, DIGEST_LIST_SECTION_NAMES, SOURCE_TALLY_HEADING } from './digest.js';
+import {
+  DIGEST_FIXED_PHRASES,
+  DIGEST_LIST_SECTION_NAMES,
+  SOURCE_TALLY_HEADING,
+  foldDigestCountsLine,
+} from './digest.js';
 
 /**
  * 要約が走りうる／走った回の軽い全文（案 A）で、中身を省いて1行の参照にする節（見出しの先頭が一致するもの）と、その引き口。
@@ -320,7 +325,11 @@ export class DigestSessionDelta {
     const previous = this.#committed.sections;
     const lean = this.isLean();
     const fullSections = new Map<string, string>();
-    const out: string[] = [...parsed.preamble];
+    // 件数の行は、同じ会話の2回目以降は項目名を参照にする（数字は毎回出す）。全文へ戻す条件は `fixed()` の控えと同じ
+    const out: string[] = parsed.preamble.map((line) => {
+      const folded = foldDigestCountsLine(line);
+      return folded === null ? line : this.fixed('digest:counts-line-labels', line, folded);
+    });
     // 2節以上が同時に前回と同じなら、節ごとの参照を1行にまとめる。軽い全文の回は畳まない（省いた節の跡と混ざるため）。台帳の節はまとめない（別の参照のまま）
     const foldedNames: string[] = [];
     if (previous !== null && !lean) {

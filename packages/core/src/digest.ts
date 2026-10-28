@@ -191,6 +191,58 @@ export const DIGEST_COUNTS_FIXED_PHRASES: readonly { id: string; text: string; r
   },
 ];
 
+/** 全文の要約の件数の行（先頭）。 */
+export const DIGEST_COUNTS_LINE_HEAD = '- 件数: ';
+
+// 件数の行の項目。行の組み立て（`countItem`）と、同じ会話の2回目以降の畳み（`foldDigestCountsLine`）が同じ表を使い、文言がずれないようにする
+const COUNT_ITEMS: readonly { prefix: string; suffix: string }[] = [
+  { prefix: '人間の発言 ', suffix: '' },
+  { prefix: '回答待ち ', suffix: '' },
+  { prefix: 'エスカレーション ', suffix: '' },
+  { prefix: '委譲（この期間に動いた）', suffix: ' 本' },
+  { prefix: '自分で決めたこと ', suffix: '' },
+  { prefix: '記憶の更新 ', suffix: '' },
+  { prefix: '外部イベント（日誌の行数）', suffix: '' },
+  { prefix: '委譲側のツール実行 ', suffix: '' },
+  { prefix: '自分の手（委譲せず使った道具）', suffix: '' },
+  { prefix: '継続中の依頼 ', suffix: '' },
+  { prefix: '未了の仕事 ', suffix: '' },
+  { prefix: '片付けた仕事 ', suffix: '' },
+  { prefix: '読めない未了の行 ', suffix: '' },
+  { prefix: '物理削除された片付き行（累計）', suffix: '' },
+];
+
+function countItem(index: number, value: number): string {
+  const item = COUNT_ITEMS[index];
+  if (item === undefined) throw new Error(`件数の項目が無い: ${String(index)}`);
+  return `${item.prefix}${String(value)}${item.suffix}`;
+}
+
+/**
+ * 件数の行（全文）を、2回目以降用の短い行にする。0 でない項目だけ名前つきで残し、0 の項目は「省いた = 0」と名乗る（位置だけの数字列にしない: 並びの読み違いを防ぐため）。
+ * 行が想定の形でない・短くならないときは `null`（呼び出し側は全文のまま出す）。
+ */
+export function foldDigestCountsLine(line: string): string | null {
+  if (!line.startsWith(DIGEST_COUNTS_LINE_HEAD)) return null;
+  const parts = line.slice(DIGEST_COUNTS_LINE_HEAD.length).split(' / ');
+  if (parts.length !== COUNT_ITEMS.length) return null;
+  const nonZero: string[] = [];
+  for (const [index, part] of parts.entries()) {
+    const item = COUNT_ITEMS[index];
+    if (item === undefined || !part.startsWith(item.prefix) || !part.endsWith(item.suffix)) {
+      return null;
+    }
+    const value = part.slice(item.prefix.length, part.length - item.suffix.length);
+    if (!/^\d+$/.test(value)) return null;
+    if (value !== '0') nonZero.push(part);
+  }
+  const folded =
+    nonZero.length === 0
+      ? '- 件数: すべて 0（項目は会話の上の件数の行と同じ）'
+      : `- 件数（項目は会話の上の件数の行と同じ。載せていない項目は 0）: ${nonZero.join(' / ')}`;
+  return folded.length < line.length ? folded : null;
+}
+
 export type UnobservedReportState = 'none' | 'failure-wrapped' | 'delivered';
 
 export type JudgementRank = 0 | 1 | 2;
@@ -804,21 +856,21 @@ export async function buildActivityDigest(
     '',
     // 件数は1行にまとめる（毎回同じ14行・約370字の枠を畳む）。0 も書く: 取れている軸の 0 は「無かった」という情報で、行ごと消すと取れていないのと区別が付かないため。
     // 次の行動のきっかけになる件数（回答待ち・エスカレーション）は先頭側に置く。`externals.length` ではなく `externalsCount` を出す: 上限に当たっている回に、黙って少なく出るため
-    `- 件数: ${[
-      `人間の発言 ${humanTurnsCount}`,
-      `回答待ち ${pending.length}`,
-      `エスカレーション ${escalationGroups.length}`,
-      `委譲（この期間に動いた）${managers.length} 本`,
-      `自分で決めたこと ${decisionsCount}`,
-      `記憶の更新 ${memoryUpdatesCount}`,
-      `外部イベント（日誌の行数）${externalsCount}`,
-      `委譲側のツール実行 ${delegatedToolUsesCount}`,
-      `自分の手（委譲せず使った道具）${cloneToolUsesCount}`,
-      `継続中の依頼 ${standing.length}`,
-      `未了の仕事 ${commitments.length}`,
-      `片付けた仕事 ${settled.length}`,
-      `読めない未了の行 ${unreadableCommitments.length}`,
-      `物理削除された片付き行（累計）${trimmedClosedCount}`,
+    `${DIGEST_COUNTS_LINE_HEAD}${[
+      countItem(0, humanTurnsCount),
+      countItem(1, pending.length),
+      countItem(2, escalationGroups.length),
+      countItem(3, managers.length),
+      countItem(4, decisionsCount),
+      countItem(5, memoryUpdatesCount),
+      countItem(6, externalsCount),
+      countItem(7, delegatedToolUsesCount),
+      countItem(8, cloneToolUsesCount),
+      countItem(9, standing.length),
+      countItem(10, commitments.length),
+      countItem(11, settled.length),
+      countItem(12, unreadableCommitments.length),
+      countItem(13, trimmedClosedCount),
     ].join(' / ')}`,
     ...(escalationRetainCapped ? [ESCALATION_RETAIN_CAPPED_NOTICE] : []),
     // 0件のときは行を作らない: 0 の行は「読めない行は無い」と読めてしまうため

@@ -331,7 +331,7 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     // 節の名前は1行にまとめた参照に残る（節の件数の行はまえがきに残る）
     expect(second).toMatch(/変わらない節: .*届いた外部イベント/u);
     expect(second).toContain('外部イベント（日誌の行数）20 /');
-    expect(second).toContain('未了の仕事 14 /');
+    expect(second).toContain('未了の仕事 14');
     // 固定の注記は1回だけ全文
     expect(first).toContain('この件数は届いた合図の実数ではない');
     expect(second).not.toContain('この件数は届いた合図の実数ではない');
@@ -1002,6 +1002,51 @@ describe('定期の tick（件数の形）の固定の説明文は、同じ会�
   });
 });
 
+// 自発の tick の件数の行の項目名（固定ラベル）は、同じ会話の2回目から参照になる。数字は毎回出る
+const COUNTS_LABEL_REF_HEAD = '- 件数（項目は会話の上の件数の行と同じ。載せていない項目は 0）: ';
+
+function countsLineOf(text: string): string {
+  return text.split('\n').find((line) => line.startsWith('- 件数')) ?? '';
+}
+
+describe('自発の tick の件数の行は、同じ会話の2回目から項目名が参照になる', () => {
+  it('⭐ 1回目は全文、2回目以降は 0 でない項目だけ名前つきで出る（数字は毎回出る）', async () => {
+    const s = boot();
+    await seed(s.stores);
+
+    const first = await selfTick(s);
+    const second = await selfTick(s);
+    const third = await selfTick(s);
+
+    const full = countsLineOf(first);
+    expect(full).toContain('- 件数: 人間の発言 0 / 回答待ち 4 / ');
+    expect(full).toContain('外部イベント（日誌の行数）20');
+    for (const text of [second, third]) {
+      const line = countsLineOf(text);
+      expect(line.startsWith(COUNTS_LABEL_REF_HEAD)).toBe(true);
+      expect(line).toContain('回答待ち 4');
+      expect(line).toContain('外部イベント（日誌の行数）20');
+      expect(line).not.toContain('人間の発言');
+      expect(line).not.toContain('エスカレーション');
+      expect(line.length).toBeLessThan(full.length);
+    }
+    await s.clone.stop();
+  });
+
+  it('⭐ 自動の要約が走った（compact_boundary）あとの tick は件数の行も全文へ戻る', async () => {
+    const s = boot({ after: (n) => (n === 2 ? [compactBoundary] : []) });
+    await seed(s.stores);
+
+    await selfTick(s);
+    const second = await selfTick(s);
+    const third = await selfTick(s);
+
+    expect(countsLineOf(second).startsWith(COUNTS_LABEL_REF_HEAD)).toBe(true);
+    expect(countsLineOf(third).startsWith('- 件数: 人間の発言 0 / ')).toBe(true);
+    await s.clone.stop();
+  });
+});
+
 function bootWithHooks(): Boot & { fire: () => Promise<void> } {
   const captured: { options: Options | undefined } = { options: undefined };
   const inputs: string[] = [];
@@ -1129,6 +1174,65 @@ describe('DigestSessionDelta（単体）', () => {
     delta.commit();
     const out = delta.renderDigest(digest.replace('$1', '$2'), at).text;
     expect(out).toContain('- 合計: $2');
+  });
+
+  describe('件数の行の項目名の参照', () => {
+    const counts = (values: number[]): string =>
+      `- 件数: ${[
+        `人間の発言 ${values[0]}`,
+        `回答待ち ${values[1]}`,
+        `エスカレーション ${values[2]}`,
+        `委譲（この期間に動いた）${values[3]} 本`,
+        `自分で決めたこと ${values[4]}`,
+        `記憶の更新 ${values[5]}`,
+        `外部イベント（日誌の行数）${values[6]}`,
+        `委譲側のツール実行 ${values[7]}`,
+        `自分の手（委譲せず使った道具）${values[8]}`,
+        `継続中の依頼 ${values[9]}`,
+        `未了の仕事 ${values[10]}`,
+        `片付けた仕事 ${values[11]}`,
+        `読めない未了の行 ${values[12]}`,
+        `物理削除された片付き行（累計）${values[13]}`,
+      ].join(' / ')}`;
+    const withCounts = (line: string): string =>
+      ['期間: x', line, '', '## 使った分', '- 合計: $1'].join('\n');
+
+    it('⭐ 2回目は 0 でない項目だけ名前つき。全部 0 なら「すべて 0」。commit 前は全文のまま', () => {
+      const delta = new DigestSessionDelta();
+      const first = counts([0, 2, 0, 1, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0]);
+      expect(delta.renderDigest(withCounts(first), at).text).toContain(first);
+      // commit しない → 次も全文
+      expect(delta.renderDigest(withCounts(first), at).text).toContain(first);
+      delta.commit();
+      const second = delta.renderDigest(
+        withCounts(counts([0, 5, 0, 1, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0])),
+        at,
+      ).text;
+      expect(second).toContain(
+        '- 件数（項目は会話の上の件数の行と同じ。載せていない項目は 0）: 回答待ち 5 / 委譲（この期間に動いた）1 本 / 未了の仕事 3',
+      );
+      expect(second).not.toContain('人間の発言');
+      delta.commit();
+      const zero = delta.renderDigest(withCounts(counts(Array(14).fill(0) as number[])), at).text;
+      expect(zero).toContain('- 件数: すべて 0（項目は会話の上の件数の行と同じ）');
+    });
+
+    it('形が想定と違う件数の行は、畳まず全文のまま', () => {
+      const delta = new DigestSessionDelta();
+      delta.renderDigest(withCounts(counts(Array(14).fill(0) as number[])), at);
+      delta.commit();
+      const odd = '- 件数: 人間の発言 0 / 回答待ち x';
+      expect(delta.renderDigest(withCounts(odd), at).text).toContain(odd);
+    });
+
+    it('reset のあとは全文へ戻る', () => {
+      const delta = new DigestSessionDelta();
+      const line = counts(Array(14).fill(0) as number[]);
+      delta.renderDigest(withCounts(line), at);
+      delta.commit();
+      delta.reset();
+      expect(delta.renderDigest(withCounts(line), at).text).toContain(line);
+    });
   });
 
   describe('2節以上が同時に前回と同じなら、参照を1行にまとめる（#5393）', () => {
