@@ -248,6 +248,32 @@ describe('クローン — 同じマネージャーの連続する report をま
     await s.clone.stop();
   });
 
+  it('全文の案内が無い長い報告でも、在庫・重複の注記（配っていない報告の冒頭の一覧）は切らない', async () => {
+    const s = setup();
+    const withheldNote =
+      '\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を 3 本配っていない（最初 A / 最後 B）。' +
+      '全文は日誌に在る。\n畳んだ報告の冒頭（古い順）:\n- 畳報告の冒頭XYZ\n）';
+    const dupNote =
+      '\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を 2 束（通数 4 件）配っていない。' +
+      '全文は日誌に在る（`journal_read`）。）';
+    s.clone.post(
+      managerMessage(
+        'inv',
+        'mgr-inv',
+        `在庫先頭${'i'.repeat(MANAGER_REPORT_BODY_LIMIT * 2)}${withheldNote}${dupNote}`,
+      ),
+    );
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('在庫先頭')),
+      '単発の報告のターンが投げられる',
+    );
+    const input = (s.calls[0] as FakeCall).inputs.find((text) => text.includes('在庫先頭')) ?? '';
+    expect(input).toContain('本文が長いので');
+    expect(input).toContain(withheldNote + dupNote);
+    expect(input).toContain('畳報告の冒頭XYZ');
+    await s.clone.stop();
+  });
+
   it('束の中の巨大な報告も1件ずつ頭だけになり、小さい報告は落ちない（issue #955）', async () => {
     const s = setup();
     s.clone.post(humanMessage('先客'));
