@@ -1450,6 +1450,10 @@ type JournalFailureOutcome = 'act-completed' | 'act-not-performed' | 'act-partia
 
 // ガードで握り潰して成功として返さない: `isError: true` は依頼者がその場で気づける唯一の合図のため、跡を残してから投げ直す
 class JournalNotRecordedError extends Error {
+  // 呼び手が作り直す応答のために持つ（本文は `journalEntryShape` と `collapseErrorCause` を通した文だけを使う）
+  readonly entry: JournalEntryInput;
+  readonly journalCause: unknown;
+
   constructor(
     tool: CloneToolName,
     entry: JournalEntryInput,
@@ -1458,7 +1462,53 @@ class JournalNotRecordedError extends Error {
   ) {
     super(formatJournalNotRecordedMessage(tool, entry, outcome, cause));
     this.name = 'JournalNotRecordedError';
+    this.entry = entry;
+    this.journalCause = cause;
   }
+}
+
+class CloseManyStoppedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CloseManyStoppedError';
+  }
+}
+
+// 「完了した」と言わない: 塊の途中で止まった回に `act-completed` の定型（「完了した・やり直さないこと」）を返すと、残りの塊を閉じないまま終わったと読まれるため
+// 前の塊の id は先頭の1塊ぶん（日誌と同じ文字数の予算）だけ出す: 全件を並べると件数で応答が溢れる。この塊の id は日誌に無く書き直す材料がここにしか無いので、省略しない
+function formatCloseManyStoppedMessage(args: {
+  failed: { chunk: { number: number; total: number }; closed: readonly string[] };
+  journaledIds: readonly string[];
+  entry: JournalEntryInput;
+  cause: unknown;
+}): string {
+  const { failed, journaledIds, entry, cause } = args;
+  const shape = journalEntryShape(entry);
+  const reason = collapseErrorCause(cause);
+  const shownPrior = chunkIdsByChars(journaledIds, CLOSE_MANY_JOURNAL_ID_CHARS)[0] ?? [];
+  const hiddenPrior = journaledIds.length - shownPrior.length;
+  const remainingChunks = failed.chunk.total - failed.chunk.number;
+  return [
+    '⚠⚠ 一括は途中で止まった・この塊の日誌が未記録・残りの塊は閉じていない',
+    `commitment_close_many は途中で止まった（全件は閉じていない。「完了した」ではない）。` +
+      `${failed.chunk.number}/${failed.chunk.total} 塊目まで閉じたところで、この塊の日誌を書けなかった。`,
+    `ここまでに閉じた id は ${journaledIds.length + failed.closed.length} 件` +
+      `（前の塊の ${journaledIds.length} 件は日誌に記録済み、この塊の ${failed.closed.length} 件は未記録）。`,
+    `この塊の閉じた id（日誌に無い）: ${failed.closed.join(' ')}`,
+    ...(journaledIds.length === 0
+      ? []
+      : [
+          `前の塊の閉じた id（先頭 ${shownPrior.length} 件）: ${shownPrior.join(' ')}${
+            hiddenPrior > 0 ? ` …ほか ${hiddenPrior} 件は省略（日誌に残してある）` : ''
+          }`,
+        ]),
+    remainingChunks === 0
+      ? '残りの塊は無い（この塊が最後だった）。'
+      : `残りの ${remainingChunks} 塊は閉じていない。同じ絞り込みでもう一度呼べば続きを閉じられる（閉じた行は未了から外れているので、閉じ直しにはならない）。`,
+    `記録できなかったエントリ: ${shape}`,
+    `理由: ${reason}`,
+    'journal_write で、この塊の閉じた id を記録に書き直すこと。閉じ直さないこと。',
+  ].join('\n');
 }
 
 function formatJournalNotRecordedMessage(
@@ -6241,34 +6291,57 @@ export function createCloneTools(context: ToolContext) {
         // 塊ごとに「閉じる → その塊の id を日誌へ書く」を交互に回す: まとめて閉じてから日誌を書くと、器が落ちたとき閉じたのに記録が無い行が最大 `CLOSE_MANY_LIMIT_DEFAULT` 件できるため
         // 「日誌に N 件」は実際に書いた件数で数える: 塊の数で言うと、塊が丸ごと競合になった回に無い日誌の行を名乗るため
         let journaledChunks = 0;
-        const closedIds = await closeManyInChunks(
-          stores.commitments,
-          targets.map((entry) => entry.id),
-          { reason, by: 'clone', at: new Date().toISOString() },
-          {
-            after: async (chunk, closed) => {
-              // 1件も閉じられなかった塊では日誌へ書かない: 抜けている塊番号そのものが「その塊は1件も閉じなかった」を意味するため
-              if (closed.length === 0) return;
-              journaledChunks += 1;
-              await appendJournalOrThrow(
-                'commitment_close_many',
-                stores.journal,
-                {
-                  type: 'decision',
-                  decision:
-                    `引き受けた仕事を絞り込みで一括して片付けた` +
-                    `（${chunk.number}/${chunk.total} 塊目、この塊は ${closed.length} 件）: ${reason}\n` +
-                    `絞り込み: ${filterText}\n` +
-                    `閉じた id: ${closed.join(' ')}`,
-                  // `grounds` には id を置かない: この欄は操作の由来を名乗る文で、控えを置く場所ではないため
-                  grounds:
-                    'クローン自身が commitment_close_many で絞り込んで閉じた（人間はこれを読んで後から否定する）',
-                },
-                'act-completed',
-              );
+        // 日誌が塊の途中で落ちたとき、閉じた id を応答へ出すために持つ（`closeManyInChunks` は例外で抜けると id を返さない）
+        const journaledIds: string[] = [];
+        let unjournaled:
+          { chunk: { number: number; total: number }; closed: readonly string[] } | undefined;
+        let closedIds: string[];
+        try {
+          closedIds = await closeManyInChunks(
+            stores.commitments,
+            targets.map((entry) => entry.id),
+            { reason, by: 'clone', at: new Date().toISOString() },
+            {
+              after: async (chunk, closed) => {
+                // 1件も閉じられなかった塊では日誌へ書かない: 抜けている塊番号そのものが「その塊は1件も閉じなかった」を意味するため
+                if (closed.length === 0) return;
+                journaledChunks += 1;
+                unjournaled = { chunk, closed };
+                await appendJournalOrThrow(
+                  'commitment_close_many',
+                  stores.journal,
+                  {
+                    type: 'decision',
+                    decision:
+                      `引き受けた仕事を絞り込みで一括して片付けた` +
+                      `（${chunk.number}/${chunk.total} 塊目、この塊は ${closed.length} 件）: ${reason}\n` +
+                      `絞り込み: ${filterText}\n` +
+                      `閉じた id: ${closed.join(' ')}`,
+                    // `grounds` には id を置かない: この欄は操作の由来を名乗る文で、控えを置く場所ではないため
+                    grounds:
+                      'クローン自身が commitment_close_many で絞り込んで閉じた（人間はこれを読んで後から否定する）',
+                  },
+                  'act-completed',
+                );
+                journaledIds.push(...closed);
+                unjournaled = undefined;
+              },
             },
-          },
-        );
+          );
+        } catch (error) {
+          // 日誌が落ちた回だけ作り直す: 閉じる側の失敗（`closeMany` の例外）はこれまでどおり投げ直す
+          if (error instanceof JournalNotRecordedError && unjournaled !== undefined) {
+            throw new CloseManyStoppedError(
+              formatCloseManyStoppedMessage({
+                failed: unjournaled,
+                journaledIds,
+                entry: error.entry,
+                cause: error.journalCause,
+              }),
+            );
+          }
+          throw error;
+        }
 
         // 閉じたと言った行が刈られていたら言う（理由は `countTrimmedJustClosed`）
         const trimmedJustClosed = await countTrimmedJustClosed(

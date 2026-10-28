@@ -18907,7 +18907,9 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
     },
     {
       tool: 'commitment_close_many',
-      firstLine: ACT_COMPLETED,
+      // 反転（#5452）: 以前は ACT_COMPLETED で「完了した・やり直さないこと」と返し、残りの塊を閉じていないことも閉じた id も伝えなかった。
+      // いまは「途中で止まった」を名乗る（個別の歯は commitment-close-many-partial-journal.test.ts）
+      firstLine: '⚠⚠ 一括は途中で止まった・この塊の日誌が未記録・残りの塊は閉じていない',
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-13b');
         await stores.commitments.open({
