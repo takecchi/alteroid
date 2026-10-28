@@ -6,7 +6,23 @@ import { ALWAYS_REDELIVER, createClone, SITUATION_FULL_EVERY_TURNS } from './clo
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import type { Stores } from './store.js';
-import { createMemoryStores } from './testing.js';
+import { createMemoryStores as createBaseMemoryStores } from './testing.js';
+
+// 生ログの大きさを返す預け先（pg の `measureSize` の代わり）。既定は「生ログが実在する」。
+// 読み戻しは生ログが実在する（測れて 0 より大きい）ときだけなので、読み戻す試験はこの既定で動く
+type MeasureSize = () => Promise<number | null>;
+let measureRawLog: MeasureSize = () => Promise.resolve(4096);
+function createMemoryStores(): Stores {
+  const stores = createBaseMemoryStores();
+  stores.sessions.getProjectKey = () => Promise.resolve('proj');
+  return {
+    ...stores,
+    sessionTranscriptTail: {
+      readTail: () => Promise.resolve(null),
+      measureSize: () => measureRawLog(),
+    },
+  };
+}
 
 // 再起動（クローンを作り直す）と resume をまたいで、「いまの全体」の畳みが続くこと。
 // 控えは `stores.sessions` の `setFoldState` に預け、resume で同じ session_id が戻ったときだけ読み戻す（`fold-state.ts`）。
@@ -77,6 +93,9 @@ interface BootOptions {
   sessionId?: string;
   /** この番号（セッション内で1始まり）の入力の後に compact_boundary を流す。 */
   compactAfterInput?: number;
+  /** この番号の入力の result の前に、生ログのミラーが1束を捨てた合図（mirror_error）を流す。`subpath` を付けると副次の鍵の欠け。 */
+  mirrorErrorAtInput?: number;
+  mirrorErrorSubpath?: string;
   /** この番号の入力を、失敗した result で終える。 */
   failAtInput?: number;
   /** ターンの終わりの文脈量（閾値 200,000）。呼び出し順（1始まり）で変えられる。 */
@@ -91,6 +110,7 @@ interface Boot {
 
 const live: CloneHost[] = [];
 afterEach(async () => {
+  measureRawLog = () => Promise.resolve(4096);
   for (const clone of live.splice(0)) await clone.stop();
 });
 
@@ -121,6 +141,22 @@ function boot(stores: Stores, options: BootOptions = {}): Boot {
             compact_metadata: { trigger: 'auto', pre_tokens: 100_000 },
             session_id: sessionId,
             uuid: `uuid-compact-${String(sessionInputs)}`,
+          } as unknown as SDKMessage;
+        }
+        if (options.mirrorErrorAtInput === sessionInputs) {
+          yield {
+            type: 'system',
+            subtype: 'mirror_error',
+            error: '書けない',
+            key: {
+              projectKey: 'proj',
+              sessionId,
+              ...(options.mirrorErrorSubpath === undefined
+                ? {}
+                : { subpath: options.mirrorErrorSubpath }),
+            },
+            session_id: sessionId,
+            uuid: `uuid-mirror-${String(sessionInputs)}`,
           } as unknown as SDKMessage;
         }
         const failed = options.failAtInput === sessionInputs;
@@ -222,6 +258,96 @@ describe('畳みの控えを resume をまたいで続ける（再起動）', ()
     expect(b.resumes).toEqual(['sess-fake']);
     expect(third).toContain(FOLDED_SITUATION);
     expect(third).not.toContain(READINGS_HEAD);
+  });
+
+  // 読み戻しの前に、その会話の生ログの大きさを測る。pg の `measureSize` は該当行が無いと 0 を返し、`#resumeCandidateWithinBudget` は 0 も null も resume してよいとみなす。
+  // その resume が空の会話を開くなら、畳んだ最初の入力（「前と変化なし」）が指す全文はどこにも載っていない
+  describe('生ログが実在するときだけ読み戻す（measureSize）', () => {
+    it('⭐ measureSize が 0（該当行なし）なら、読み戻さず全文（控えは預け先から消える）', async () => {
+      const stores = createMemoryStores();
+      await runTurns(stores, 2);
+      measureRawLog = () => Promise.resolve(0);
+
+      const b = boot(stores);
+      const first = await humanTurn(b, 'B1');
+
+      // resume 自体は今までどおり同じ id で開く（`#resumeCandidateWithinBudget` は変えない）
+      expect(b.resumes).toEqual(['sess-fake']);
+      expect(first).toContain(READINGS_HEAD);
+      expect(first).not.toContain(FOLDED_SITUATION);
+      await waitForNoFoldState(stores, '生ログ無しの控えの削除');
+    });
+
+    it('⭐ measureSize が null（測れない）なら、読み戻さず全文', async () => {
+      const stores = createMemoryStores();
+      await runTurns(stores, 2);
+      measureRawLog = () => Promise.resolve(null);
+
+      const b = boot(stores);
+      const first = await humanTurn(b, 'B1');
+
+      expect(b.resumes).toEqual(['sess-fake']);
+      expect(first).toContain(READINGS_HEAD);
+      await waitForNoFoldState(stores, '測れない控えの削除');
+    });
+
+    it('⭐ measureSize が投げても、読み戻さず全文（起動は止まらない）', async () => {
+      const stores = createMemoryStores();
+      await runTurns(stores, 2);
+      measureRawLog = () => Promise.reject(new Error('測れない'));
+
+      const b = boot(stores);
+      const first = await humanTurn(b, 'B1');
+
+      expect(first).toContain(READINGS_HEAD);
+    });
+
+    it('⭐ measureSize が正の値なら、読み戻して畳んだまま続く', async () => {
+      const stores = createMemoryStores();
+      await runTurns(stores, 2);
+      measureRawLog = () => Promise.resolve(1);
+
+      const b = boot(stores);
+      const first = await humanTurn(b, 'B1');
+
+      expect(first).toContain(FOLDED_SITUATION);
+      expect(first).not.toContain(READINGS_HEAD);
+    });
+  });
+
+  // 生ログのミラー（SessionStore への書き込み）が1束を捨てると、SDK が `mirror_error` を返す。
+  // その会話の生ログには欠けがあるので、控えは預けない・預けた分は消す
+  describe('生ログのミラーが落ちた会話は読み戻さない', () => {
+    it('⭐ 本流のミラーが落ちた回の後は、控えを預けず、再起動しても全文', async () => {
+      const stores = createMemoryStores();
+      const { a } = await runTurns(stores, 2, { mirrorErrorAtInput: 3 });
+      await humanTurn(a, 'A3');
+      await waitForNoFoldState(stores, 'ミラー失敗で控えが消える');
+      // 落ちた後のターンでも預けない（預ければ、欠けた生ログを指す控えが復活する）
+      await humanTurn(a, 'A4');
+      await humanTurn(a, 'A5');
+      expect(await stores.sessions.getFoldState()).toBeNull();
+
+      const b = boot(stores);
+      const first = await humanTurn(b, 'B1');
+
+      expect(first).toContain(READINGS_HEAD);
+    });
+
+    it('副次の鍵（subpath 付き）のミラーが落ちても、本流の控えは読み戻す', async () => {
+      const stores = createMemoryStores();
+      const { a } = await runTurns(stores, 2, {
+        mirrorErrorAtInput: 3,
+        mirrorErrorSubpath: 'subagents/agent-1',
+      });
+      await humanTurn(a, 'A3');
+      await waitForPersistedCounter(stores, 1);
+
+      const b = boot(stores);
+      const first = await humanTurn(b, 'B1');
+
+      expect(first).toContain(FOLDED_SITUATION);
+    });
   });
 
   it('預けた控えが無い再起動では、最初のターンは今までどおり全文', async () => {

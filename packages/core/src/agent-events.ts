@@ -139,6 +139,13 @@ export interface AgentCompactionStarted {
   type: 'compaction_started';
 }
 
+// 生ログのミラー（SessionStore への書き込み）が、リトライの後に1束を捨てた合図。`sessionId` はそのログの会話。
+// 預け先の生ログは、その会話について欠けている（読み戻した控えが指す全文が載っているとは言えない）
+export interface AgentTranscriptMirrorFailed {
+  type: 'transcript_mirror_failed';
+  sessionId: string;
+}
+
 // 安全分類器などによる拒否の合図。`category` は provider が付けた分類（'cyber' 等）で、付かなければ null。
 // `fellBack` は降格して再試行した回（true）か、再試行せずに終わった回（false）か
 export interface AgentRefusalEvent {
@@ -176,5 +183,6 @@ export type AgentEvent =
   | AgentBackgroundTasksEvent
   | AgentCompactionStarted
   | AgentCompactionEvent
+  | AgentTranscriptMirrorFailed
   | AgentRefusalEvent
   | AgentTurnEnded;

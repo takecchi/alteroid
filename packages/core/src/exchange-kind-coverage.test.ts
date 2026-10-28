@@ -198,7 +198,8 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // 2026-10-17 #4798: plugin の展開し直しの日誌1行を足したので 81 -> 82（main 取り込み後の以前の期待値は 81）
   // 2026-10-18 #5048: 担当が戻っていた知らせを畳んだ日誌1行（`#foldRecoveredNotice`、接頭辞 THINNING）を足したので 82 -> 83
   // 2026-10-28: 固定文を全文へ戻した理由の観測の1行（`#resetDigestDelta`、接頭辞 DECISION）を足したので 83 -> 84
-  'clone.ts': 84,
+  // 2026-10-28: 要約後の記憶の索引を載せ直したか／載せ直さなかったかの観測の2行（`#withFreshMemory`、接頭辞 GAUGE）を足したので 84 -> 86
+  'clone.ts': 86,
   // 2026-10-23 #5195: 新しい世代が黙っている間の古い世代の報告を配る日誌1行（`#deliverReportFromUnreplacedSession`、接頭辞 REPLY）を足したので 66 -> 67
   'manager.ts': 67,
 };

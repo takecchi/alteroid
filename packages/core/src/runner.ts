@@ -4290,6 +4290,10 @@ class RunnerSession {
       case 'compaction_started':
         return;
 
+      // 生ログのミラーの欠けは、クローン層が畳みの控えを読み戻してよいかの判定に使う。委譲層は控えを持たない
+      case 'transcript_mirror_failed':
+        return;
+
       // 拒否の合図は委譲層では見ない: 数えて開き直すのはクローン層の仕事で、作業者のセッションは使い捨てのため
       case 'refusal':
         return;

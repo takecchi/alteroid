@@ -275,6 +275,28 @@ describe('CloneDistillMemoryState — 焼いた時点の記憶（#5305）', () =
     expect(s.matchesBakedMemory([doc('a', 'A'), doc('b', 'B'), doc('c', 'C')])).toBe(false);
   });
 
+  it('diffAgainstBaked は、内容が変わった・焼いた時点に無かった・消えた slug を分けて返す', () => {
+    const s = new CloneDistillMemoryState();
+    s.recordBakedMemory([doc('a', 'A'), doc('b', 'B'), doc('c', 'C')]);
+    expect(s.diffAgainstBaked([doc('a', 'A'), doc('b', 'B2'), doc('d', 'D')])).toEqual({
+      changed: ['b'],
+      added: ['d'],
+      removed: ['c'],
+    });
+  });
+
+  it('diffAgainstBaked は、焼いた控えが無ければ全文書を「焼いた時点に無かった」に数える', () => {
+    const s = new CloneDistillMemoryState();
+    expect(s.diffAgainstBaked([doc('a', 'A')])).toEqual({ changed: [], added: ['a'], removed: [] });
+  });
+
+  it('焼いた控えが空で、記憶も空なら一致（差が無い）。控えが無い（null）なら空でも不一致', () => {
+    const s = new CloneDistillMemoryState();
+    expect(s.matchesBakedMemory([])).toBe(false);
+    s.recordBakedMemory([]);
+    expect(s.matchesBakedMemory([])).toBe(true);
+  });
+
   it('commitMemory しても焼いた控えは動かない（載せた差分は要約で畳まれるため）', () => {
     const s = new CloneDistillMemoryState();
     s.recordBakedMemory([doc('a', 'A')]);
