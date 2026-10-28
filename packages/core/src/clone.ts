@@ -110,6 +110,15 @@ import {
   EXCHANGE_KIND_THINNING_PREFIX,
 } from './exchange-kind.js';
 import {
+  CallerGauge,
+  hookGaugeLabel,
+  MAIN_GAUGE_LIMIT,
+  SUBAGENT_GAUGE_LIMIT,
+  toolKindOf,
+  verdictGaugeLabel,
+  type ToolUseIdProbe,
+} from './subagent-caller-gauge.js';
+import {
   DAEMON_ATTACHMENT_USAGE_SOURCE,
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
@@ -1204,6 +1213,8 @@ class Clone implements CloneHost {
   readonly #subagentToolUses = new Map<string, string>();
   // tool_use_id が取れなかった事実を stderr へ出したか。1セッション1回だけ（本体扱いに倒すので、黙ると畳みの前提が崩れていても気づけない）
   #toolUseIdMissingWarned = false;
+  // 呼び手の判定の計器（種類ごとに最初の N 回だけ日誌へ書く。理由は `CallerGauge`）。1デーモン1つ
+  readonly #callerGauge = new CallerGauge();
   // 決着（`#onPostToolUse` / `#onPostToolUseFailure`）で消す: その後は拒否が来ないため。上限で忘れた id への拒否は検出できず、`onForget` がその代償を日誌へ残す
   readonly #allowedByGrantToolUses = createRecentMap<AllowedByGrantRecord>({
     limit: ALLOWED_BY_GRANT_MEMORY_LIMIT,
@@ -7242,7 +7253,7 @@ class Clone implements CloneHost {
       managers: this.#managers,
       managerReportShownAt: (managerId, text) => this.#digestDelta.reportShownAt(managerId, text),
       foldFixed: (id, full, ref) => this.#digestDelta.fixedInTurn(`tool:${id}`, full, ref),
-      isSubagentCall: (toolUseId) => this.#isSubagentCall(toolUseId),
+      isSubagentCall: (toolUseId, probe) => this.#isSubagentCall(toolUseId, probe),
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
@@ -7355,6 +7366,12 @@ class Clone implements CloneHost {
     if (typeof record.toolUseId === 'string' && typeof record.agentId === 'string') {
       if (record.agentId !== '') this.#subagentToolUses.set(record.toolUseId, record.agentId);
     }
+    // 本体の呼びは agent_id が欠ける（空文字とは限らない）ので、非空だけをサブとし、残りは基準の「本体」として数える
+    const isSubagent = typeof record.agentId === 'string' && record.agentId !== '';
+    this.#noteCallerGauge(
+      hookGaugeLabel(isSubagent, toolKindOf(record.toolName ?? '')),
+      isSubagent ? SUBAGENT_GAUGE_LIMIT : MAIN_GAUGE_LIMIT,
+    );
     if (record.toolName !== 'Bash') return { kind: 'continue' };
 
     const toolInput = record.toolInput as { command?: unknown } | null | undefined;
@@ -7393,15 +7410,38 @@ class Clone implements CloneHost {
    * `ToolContext.isSubagentCall` の実装（#5428）。tool_use_id が取れないときは本体扱い（`false`）に倒す: 全文に倒すと畳みの節約が全部消えるため。
    * ただし取れなかった事実は捨てず、1セッションで1回だけ stderr へ出す（取れない器では、サブエージェントの呼びが本体の控えを更新しうる）。
    */
-  #isSubagentCall(toolUseId: string | undefined): boolean {
+  #isSubagentCall(toolUseId: string | undefined, probe?: ToolUseIdProbe): boolean {
+    let subagent = false;
     if (toolUseId === undefined) {
       if (!this.#toolUseIdMissingWarned) {
         this.#toolUseIdMissingWarned = true;
         noteToolUseIdMissing();
       }
-      return false;
+    } else {
+      subagent = this.#subagentToolUses.has(toolUseId);
     }
-    return this.#subagentToolUses.has(toolUseId);
+    // 判定の後に計器を残す: 計器は判定を変えない（書けなくても `subagent` はそのまま返る）
+    const seen = probe ?? (toolUseId === undefined ? 'missing' : 'present');
+    this.#noteCallerGauge(
+      verdictGaugeLabel(seen, subagent),
+      subagent ? SUBAGENT_GAUGE_LIMIT : MAIN_GAUGE_LIMIT,
+    );
+    return subagent;
+  }
+
+  /**
+   * 計器の1行を日誌へ（`CallerGauge` が間引いた残りだけ）。同期の判定から呼ぶので待たない: `#journal` は失敗しても投げない（stderr に跡を残す）。
+   * 行全体を `redactErrorText` に通す: 値は元から入れないが、将来ラベルが増えても鍵の形が出ない網として。
+   */
+  #noteCallerGauge(label: string, limit: number): void {
+    const body = this.#callerGauge.note(label, limit);
+    if (body === undefined) return;
+    void this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `${EXCHANGE_KIND_GAUGE_PREFIX}${redactErrorText(body, this.#env)}`,
+    });
   }
 
   /**
