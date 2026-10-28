@@ -4,11 +4,13 @@ import { fileURLToPath } from 'node:url';
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { DISTILL_GAP_NOTICE_HEAD } from './distill-gap.js';
 import {
   BASELINE,
   addSizes,
   buildReport,
   measureAllKinds,
+  measureKind,
   renderDaily,
   renderSensitivity,
   renderSessionTable,
@@ -130,6 +132,18 @@ describe('文脈量の測り（#5469 P0）', () => {
       );
     }
   }, 60_000);
+
+  // 2 回比べるだけでは、積んだ日誌の最終行と器の起動が同じミリ秒に重なる確率（1 測りあたり数 %）を踏まないことが多く、揺れが緑のまま見えない。
+  // 重なると 1 本目の入力の蒸留の断り書き（約 600 字）が消える（全部が同じミリ秒）か、数える行が減って桁が変わる（一部が同じミリ秒）。何度も測って、毎回断り書きが出て長さが同じことを確かめる
+  it('同じ条件を何度測っても、1 本目の入力に蒸留の断り書きが毎回載り、長さが揺れない', async () => {
+    const lengths = new Set<string>();
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const run = await measureKind('human', SMALL);
+      expect(run.inputs[0], `${String(attempt + 1)} 回目`).toContain(DISTILL_GAP_NOTICE_HEAD);
+      lengths.add(run.turns.map((turn) => turn.total.chars).join(','));
+    }
+    expect([...lengths]).toHaveLength(1);
+  }, 120_000);
 
   it('固定文は同じ会話の 2 本目から畳まれ、発意の tick は 1 本目より 2 本目が小さい', () => {
     const runs = smallRuns.filter((run) => run.kind === 'human' || run.kind === 'initiative');
