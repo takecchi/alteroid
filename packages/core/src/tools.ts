@@ -521,6 +521,11 @@ export interface ToolContext {
    */
   foldFixed?: (id: string, full: string, ref: string, supersedes?: string) => string;
   /**
+   * 継続中の依頼 `kind` を、この呼びで書き換えた・外した・一覧で見せた。定期の tick の要約が「会話で最後に全文で出した版と同じ」と畳む控えのうち、その kind の分を捨てる
+   * （道具の応答で見えた版と、控えの版がずれるため。次の定期の tick は全文）。無い器（テスト・蒸留）は何もしない。サブエージェントの呼びでも捨てる（捨てるのは安全側）。
+   */
+  forgetStandingRow?: (kind: string) => void;
+  /**
    * この道具の呼びがサブエージェント（作業者）のものか。`foldFixed` と `managerReportShownAt` が指す「会話の上の全文」は本体の会話にしか無いので、サブエージェントの呼びは畳まず、控えも更新しない（#5428）。
    * 引数は呼びの tool_use_id（取れなければ `undefined`）。取れないときの倒し方は実装が決める（クローンは本体扱い＋警告）。
    * 無い器（テスト・蒸留）は常に本体と同じ。
@@ -5090,6 +5095,8 @@ export function createCloneTools(context: ToolContext) {
             );
           }
           if (!plan) return text(`継続中の依頼 ${kind} は無い（kind が違うか、もう外してある）。`);
+          // 行をこの応答で見せた: 定期の tick が会話の上の別の版を「最後に全文で出した版」と畳まないよう、その kind の控えを捨てる
+          context.forgetStandingRow?.(plan.kind);
           const head =
             `${plan.kind}（${describeScheduleSpec(plan.spec)}）` +
             ` 前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}` +
@@ -5121,6 +5128,8 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         const view = cursorOutcome.view;
+        // 一覧で見せた行の kind も、上と同じ理由で控えを捨てる（予算で切れて載らなかった行まで捨てるのは安全側）
+        for (const plan of view) context.forgetStandingRow?.(plan.kind);
         const items = view.map((plan) =>
           renderListingEntry({
             id: plan.kind,
@@ -5339,6 +5348,8 @@ export function createCloneTools(context: ToolContext) {
             throw error;
           }
         }
+        // 書き換えた版は応答（置き換えなら旧版も）で会話に載る: 定期の tick の控えが古い版のまま「最後に全文で出した版と同じ」と畳まないよう、その kind の控えを捨てる
+        context.forgetStandingRow?.(parsedKind.data);
         await appendJournalOrDrop('schedule_create', stores.journal, {
           type: 'decision',
           decision:
@@ -5394,6 +5405,8 @@ export function createCloneTools(context: ToolContext) {
         }
         // 外せなかった（先に読んだ後で消えていた）: 打ち消しの行は helper が足してある
         if (result.kind !== 'removed') return text(`継続中の依頼 ${kind} は無い。`);
+        // 外した行の控えも捨てる: 同じ kind が後で別の本文で作り直されても、古い版を「前回と同じ」と畳まないため
+        context.forgetStandingRow?.(kind);
         return text(`${kind} を外した。`);
       },
     ),

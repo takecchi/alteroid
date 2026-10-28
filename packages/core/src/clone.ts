@@ -7304,6 +7304,7 @@ class Clone implements CloneHost {
           ref,
           supersedes === undefined ? undefined : `tool:${supersedes}`,
         ),
+      forgetStandingRow: (kind) => this.#digestDelta.forgetStandingRow(kind),
       isSubagentCall: (toolUseId, probe) => this.#isSubagentCall(toolUseId, probe),
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
