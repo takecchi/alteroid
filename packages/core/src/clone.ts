@@ -695,19 +695,23 @@ function isSettleCandidate(event: InboxEvent): boolean {
 }
 
 // 待ちの長さは待たされる合図の種別で選ぶ: 報告だけ長い窓、外部の合図は従来の窓
-// 報告の長い窓の打ち切りは「報告以外が届いたら」へ広げる（人間起点だけにしない・外部の合図も待ち候補にしない）: 人間以外の割り込み
-// （質問・許可確認・失敗の知らせ・runner-registry など外部の合図・自発や定期の tick・shutdown の蒸留）が最大 30 秒待たされ、`stop()` は shutdown の蒸留の完了を待つので同じだけ止まるため。
+// 長い窓の対象は「機構が合成していない報告」だけ（`synthesized` な報告は対象外）: 担当の失敗・停止の知らせ（世代の 409・停止・quotaStop）は
+// manager.ts の `#emit` が `kind: 'report'`・`synthesized: true` で出すので、報告として数えると 30 秒待たされる。対象外の合成の報告は
+// 従来どおり待ち候補のまま短い窓（外部と同じ 2.5 秒・人間起点だけで切る）で扱い、振る舞いを変えない
+// 報告の長い窓の打ち切りは「合成していない報告以外が届いたら」へ広げる（人間起点だけにしない）: 人間以外の割り込み
+// （質問・許可確認・合成の失敗の知らせ・外部の合図・自発や定期の tick・shutdown の蒸留）が最大 30 秒待たされ、`stop()` は shutdown の蒸留の完了を待つので同じだけ止まるため。
 // 短い窓（外部）は従来どおり人間起点だけで切る
+function isPlainReport(event: InboxEvent): boolean {
+  return event.type === 'manager_message' && event.kind === 'report' && event.synthesized !== true;
+}
+
 function settleWaitFor(
   event: InboxEvent,
   reportMs: number,
   externalMs: number,
 ): { ms: number; interruptWhen: (queued: InboxEvent) => boolean } {
-  if (event.type === 'manager_message') {
-    return {
-      ms: reportMs,
-      interruptWhen: (queued) => !(queued.type === 'manager_message' && queued.kind === 'report'),
-    };
+  if (isPlainReport(event)) {
+    return { ms: reportMs, interruptWhen: (queued) => !isPlainReport(queued) };
   }
   return { ms: externalMs, interruptWhen: isHumanOriginated };
 }

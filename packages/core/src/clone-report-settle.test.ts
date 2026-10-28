@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { REPORT_SETTLE_MS_ENV_KEY, resolveReportSettleMs } from './clone.js';
 import { setup } from './clone-test-harness.js';
+import { Inbox } from './inbox.js';
 import type { Setup } from './clone-test-harness.js';
 import type { InboxEvent } from './schema.js';
 import { captureStderr, humanMessage } from './testing.js';
@@ -28,6 +29,16 @@ const managerKind = (id: string, kind: 'question' | 'permission'): InboxEvent =>
   kind,
   text: `${kind}の本文`,
   ...(kind === 'permission' ? { requestId: `req-${id}` } : {}),
+});
+
+const synthesizedReport = (id: string, text: string): InboxEvent => ({
+  type: 'manager_message',
+  id,
+  at: new Date().toISOString(),
+  managerId: 'mgr-report-settle',
+  kind: 'report',
+  text,
+  synthesized: true,
 });
 
 const external = (id: string, text: string, source = 'ci'): InboxEvent => ({
@@ -136,17 +147,70 @@ describe('クローン — 暇なときの報告の束ね待ち（固定窓 30 �
     await s.clone.stop();
   });
 
-  it('窓の途中で外部の合図（runner-registry の知らせ・失敗の知らせ）が届くと、窓を打ち切って即ターンになる', async () => {
-    for (const source of ['runner-registry', 'ci-failure']) {
-      const s = setup(undefined, undefined, {}, {}, ON);
-      s.clone.post(report('r1', '報告1本目'));
-      await advance(5000);
-      expect(turnInputs(s)).toHaveLength(0);
-      s.clone.post(external('e1', `${source}の知らせ`, source));
-      await advance(500);
-      expect(turnInputs(s).length).toBeGreaterThanOrEqual(1);
-      await s.clone.stop();
+  it('窓の途中で外部の合図（runner-registry の知らせ）が届くと、窓を打ち切って即ターンになる', async () => {
+    const s = setup(undefined, undefined, {}, {}, ON);
+    s.clone.post(report('r1', '報告1本目'));
+    await advance(5000);
+    expect(turnInputs(s)).toHaveLength(0);
+    s.clone.post(external('e1', 'runner-registryの知らせ', 'runner-registry'));
+    await advance(500);
+    expect(turnInputs(s).length).toBeGreaterThanOrEqual(1);
+    await s.clone.stop();
+  });
+
+  // 機構が合成した担当の失敗・停止の知らせの本物の形（manager.ts の `#emit`）: manager_message・kind: 'report'・synthesized: true
+  it('窓の途中で合成の失敗の知らせ（kind: report・synthesized: true）が届くと、窓を打ち切って即ターンになる', async () => {
+    const s = setup(undefined, undefined, {}, {}, ON);
+    s.clone.post(report('r1', '報告1本目'));
+    await advance(5000);
+    expect(turnInputs(s)).toHaveLength(0);
+    s.clone.post(synthesizedReport('f1', '担当が落ちた'));
+    await advance(500);
+    expect(turnInputs(s).length).toBeGreaterThanOrEqual(1);
+    await s.clone.stop();
+  });
+
+  it('合成の失敗の知らせが先に届いても 30 秒の窓では待たない（従来の 2.5 秒の窓のまま）', async () => {
+    const s = setup(undefined, undefined, {}, {}, ON);
+    s.clone.post(synthesizedReport('f1', '担当が落ちた'));
+    await advance(EXTERNAL_MS - 500);
+    expect(turnInputs(s)).toHaveLength(0);
+    await advance(1000);
+    await settleAsync();
+    expect(turnInputs(s)).toHaveLength(1);
+    await s.clone.stop();
+  });
+
+  it('待ちに入る前に待ち行列へ積まれていた人間の発言・蒸留・合成の知らせでは、待たずに戻る', async () => {
+    // 報告の窓の述語（`!isPlainReport`）と同じ形
+    const notPlainReport = (event: InboxEvent): boolean =>
+      event.type !== 'manager_message' || event.kind !== 'report' || event.synthesized === true;
+    const cases: [string, InboxEvent][] = [
+      ['人間の発言', humanMessage('先に届いた発言')],
+      ['蒸留', { type: 'distill', id: 'd1', at: new Date().toISOString(), reason: 'shutdown' }],
+      ['合成の失敗の知らせ', synthesizedReport('f1', '担当が落ちた')],
+    ];
+    for (const [, event] of cases) {
+      const inbox = new Inbox();
+      inbox.push(event);
+      let settled = false;
+      void inbox.settle(REPORT_MS, notPlainReport).then(() => {
+        settled = true;
+      });
+      await advance(1);
+      expect(settled).toBe(true);
     }
+    // 当たらないものが積まれているだけなら、期限まで待つ
+    const inbox = new Inbox();
+    inbox.push(report('r2', '先に積まれた報告'));
+    let settled = false;
+    void inbox.settle(REPORT_MS, notPlainReport).then(() => {
+      settled = true;
+    });
+    await advance(REPORT_MS - 1);
+    expect(settled).toBe(false);
+    await advance(2);
+    expect(settled).toBe(true);
   });
 
   it('報告の窓を 0 にすると、従来どおり最初の1件が単独で即ターンになる', async () => {
