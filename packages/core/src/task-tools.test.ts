@@ -37,7 +37,10 @@ async function journalText(h: ReturnType<typeof harness>): Promise<string> {
 
 describe('resolveTaskPlacement', () => {
   it('to を省くと既定の位置（placement なし）', () => {
-    expect(resolveTaskPlacement(undefined, undefined)).toEqual({ kind: 'ok', placement: undefined });
+    expect(resolveTaskPlacement(undefined, undefined)).toEqual({
+      kind: 'ok',
+      placement: undefined,
+    });
   });
   it('before / after には anchorId が要り、front / back には付けられない', () => {
     expect(resolveTaskPlacement('before', undefined).kind).toBe('invalid');
@@ -146,9 +149,7 @@ describe('task_* 道具', () => {
     const closed = await h.stores.tasks.get(a!);
     expect(closed?.closedBy).toBe('clone');
     expect(closed?.closedReason).toBe('やめた理由');
-    expect(await h.call('task_set_status', { taskId: a, status: 'waiting' })).toContain(
-      '移せない',
-    );
+    expect(await h.call('task_set_status', { taskId: a, status: 'waiting' })).toContain('移せない');
     expect((await h.stores.tasks.get(a!))?.status).toBe('cancelled');
     const out = await h.call('task_set_status', { taskId: a, status: 'queued', reason: '戻す' });
     expect(out).toContain('日誌に残してある');

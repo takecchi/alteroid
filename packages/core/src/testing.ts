@@ -904,7 +904,10 @@ export function createMemoryStores(): Stores {
   let taskRows: TaskRow[] = [];
   const taskStore: TaskStore = {
     async list(options) {
-      return { entries: listTaskRows(taskRows, options?.includeClosed === true).map(isolate), unreadable: [] };
+      return {
+        entries: listTaskRows(taskRows, options?.includeClosed === true).map(isolate),
+        unreadable: [],
+      };
     },
     async get(id) {
       const found = taskRows.find((row) => row.task.id === id);

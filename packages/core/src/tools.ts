@@ -6059,7 +6059,9 @@ export function createCloneTools(context: ToolContext) {
         id: z
           .string()
           .optional()
-          .describe('この1件を全文で読む（一覧に出ている id）。閉じた件も読める。他の条件は無視される'),
+          .describe(
+            'この1件を全文で読む（一覧に出ている id）。閉じた件も読める。他の条件は無視される',
+          ),
         offset: z
           .number()
           .optional()
@@ -6081,11 +6083,14 @@ export function createCloneTools(context: ToolContext) {
             task = await stores.tasks.get(id);
           } catch (error) {
             if (error instanceof UnreadableTaskError) {
-              return text(`task ${id} は読めない形で入っている（無いのとは違う）。本文はここでは取れない。`);
+              return text(
+                `task ${id} は読めない形で入っている（無いのとは違う）。本文はここでは取れない。`,
+              );
             }
             throw error;
           }
-          if (task === null) return text(`task ${id} は無い（task_list で実在する id を確かめること）。`);
+          if (task === null)
+            return text(`task ${id} は無い（task_list で実在する id を確かめること）。`);
           const head = [
             `${id} ${task.title}`,
             `${commitmentOriginBadge({ origin: task.origin, source: task.source })}`,
@@ -6097,7 +6102,9 @@ export function createCloneTools(context: ToolContext) {
           ].join('\n');
           // 閉じた理由を本文より先に置く: 本文が長いと2ページ目へ落ちるため
           const body = [
-            ...(task.closedAt === undefined ? [] : [`閉じた理由: ${describeTaskClosedRecord(task)}`]),
+            ...(task.closedAt === undefined
+              ? []
+              : [`閉じた理由: ${describeTaskClosedRecord(task)}`]),
             `本文（全文）: ${task.body}`,
           ].join('\n\n');
           const part = page(body, offset, TASK_PAGE);
@@ -6179,7 +6186,9 @@ export function createCloneTools(context: ToolContext) {
         to: z
           .enum(TASK_PLACEMENT_TARGETS)
           .optional()
-          .describe('置き場所（front=先頭 / back=末尾 / before・after=anchorId の直前・直後）。省くと既定の位置'),
+          .describe(
+            '置き場所（front=先頭 / back=末尾 / before・after=anchorId の直前・直後）。省くと既定の位置',
+          ),
         anchorId: z
           .string()
           .optional()
@@ -6274,7 +6283,9 @@ export function createCloneTools(context: ToolContext) {
         anchorId: z
           .string()
           .optional()
-          .describe('to が before / after のときの基準の task の id（開いている件だけ。自分自身は不可）'),
+          .describe(
+            'to が before / after のときの基準の task の id（開いている件だけ。自分自身は不可）',
+          ),
       },
       async ({ taskId, to, anchorId }) => {
         const resolved = resolveTaskPlacement(to, anchorId);
@@ -6292,7 +6303,9 @@ export function createCloneTools(context: ToolContext) {
           throw error;
         }
         if (moved.kind === 'not-found') {
-          return text(`task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`);
+          return text(
+            `task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`,
+          );
         }
         if (moved.kind === 'closed') {
           return text(
@@ -6329,7 +6342,9 @@ export function createCloneTools(context: ToolContext) {
         '閉じた件から戻せるのは queued だけ（開き直し。閉じた記録は行から外れ、日誌へ逐語で残る）。同じ状態への変更は何もしない。',
       ].join(' '),
       {
-        taskId: z.string().describe('task_list に出ている id（開き直すなら includeClosed で出る閉じた件）'),
+        taskId: z
+          .string()
+          .describe('task_list に出ている id（開き直すなら includeClosed で出る閉じた件）'),
         status: z.enum(taskStatusSchema.options).describe('移す先の状態'),
         reason: z
           .string()
@@ -6341,7 +6356,9 @@ export function createCloneTools(context: ToolContext) {
       async ({ taskId, status, reason }) => {
         const closing = status === 'done' || status === 'cancelled';
         if (closing && reason === undefined) {
-          return text(`status=${status} には reason が要る（何をもって終わりとしたか、なぜ取りやめたか）。`);
+          return text(
+            `status=${status} には reason が要る（何をもって終わりとしたか、なぜ取りやめたか）。`,
+          );
         }
         const reasonError =
           describeStringLengthViolation('reason', reason, { min: 1 }) ??
@@ -6363,7 +6380,9 @@ export function createCloneTools(context: ToolContext) {
           throw error;
         }
         if (result.kind === 'not-found') {
-          return text(`task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`);
+          return text(
+            `task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`,
+          );
         }
         if (result.kind === 'unchanged') {
           return text(`task ${taskId} は既に ${status}。何もしていない。`);

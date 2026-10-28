@@ -105,9 +105,7 @@ export function placeTask(
 function defaultPlacement(open: readonly TaskRankRow[], origin: CommitmentOrigin): TaskPlacement {
   if (origin !== 'human') return { kind: 'back' };
   const lastHuman = open.findLast((row) => row.origin === 'human');
-  return lastHuman === undefined
-    ? { kind: 'front' }
-    : { kind: 'after', anchorId: lastHuman.id };
+  return lastHuman === undefined ? { kind: 'front' } : { kind: 'after', anchorId: lastHuman.id };
 }
 
 function insertionIndex(
@@ -196,9 +194,7 @@ export function prepareTask(entry: Task): Task {
 
 export type TaskAddResult =
   /** 同じ id が既に在った（読めない行を含む）。何も書いていない。 */
-  | { readonly kind: 'existed' }
-  | { readonly kind: 'added' }
-  | { readonly kind: 'anchor-not-found' };
+  { readonly kind: 'existed' } | { readonly kind: 'added' } | { readonly kind: 'anchor-not-found' };
 
 export function addTaskRow(
   rows: readonly TaskRow[],

@@ -159,9 +159,7 @@ export class PgTaskStore implements TaskStore {
     );
   }
 
-  async #mutate<T>(
-    run: (loaded: Loaded) => { rows: TaskRow[]; result: T },
-  ): Promise<T> {
+  async #mutate<T>(run: (loaded: Loaded) => { rows: TaskRow[]; result: T }): Promise<T> {
     return this.#db.transaction(async (tx) => {
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${TASK_LOCK_NAMESPACE}), hashtext('rows'))`,

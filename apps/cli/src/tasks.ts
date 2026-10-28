@@ -77,7 +77,9 @@ export async function tasksCommand(options: TasksOptions = {}): Promise<void> {
   });
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
-    throw new Error(described ?? `task の一覧を読めませんでした（HTTP ${String(response.status)}）`);
+    throw new Error(
+      described ?? `task の一覧を読めませんでした（HTTP ${String(response.status)}）`,
+    );
   }
   const view = (await response.json()) as TasksView;
   stdout.write(`${redactBody(renderTasks(view))}\n`);

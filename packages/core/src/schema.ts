@@ -1065,7 +1065,13 @@ export type UnreadableCommitment = z.infer<typeof unreadableCommitmentSchema>;
 // 台帳（Commitment）と並べて新設した「順序と状態を持つ待ち行列」の1行（#5469 方針案1。P2 は型・ストア・道具まで）。
 // waiting = 委譲または人間の返事待ち、needs_decision = 委譲が終わった/失敗した/lost になってクローンの判断待ち。
 // P2 では状態を設定できるだけで、委譲の終わりからの自動遷移は P3 の仕事。
-export const taskStatusSchema = z.enum(['queued', 'waiting', 'needs_decision', 'done', 'cancelled']);
+export const taskStatusSchema = z.enum([
+  'queued',
+  'waiting',
+  'needs_decision',
+  'done',
+  'cancelled',
+]);
 
 // 書き込み側だけをこの enum で縛る（`commitmentClosedBySchema` と同じ理由）: 保存層に使うと未知の値1つで一覧が丸ごと読めなくなる
 export const taskClosedBySchema = z.enum(['clone', 'human', 'daemon']);
@@ -1093,7 +1099,9 @@ export const taskSchema = z.object({
   closedBy: z
     .string()
     .optional()
-    .describe("既知の値は 'clone' | 'human' | 'daemon'（taskClosedBySchema）。未知の値も保持する。"),
+    .describe(
+      "既知の値は 'clone' | 'human' | 'daemon'（taskClosedBySchema）。未知の値も保持する。",
+    ),
   // P5 の `task_keep`（返答しても自動で閉じない印）の欄だけ先に置く。P2 には立てる道具が無い。
   // 後から足すと、欄の無い古い行と区別が付かなくなるので、読める形を先に確定させる
   keep: z.literal(true).optional(),

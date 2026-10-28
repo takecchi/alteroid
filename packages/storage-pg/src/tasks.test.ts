@@ -55,7 +55,9 @@ describe('TaskStore（pg）', () => {
 
   it('読めない行は書き込みの後も生の値のまま残る', async () => {
     await stores.tasks.add(make('ok'));
-    await db.insert(tasks).values({ id: 'broken', rank: 5, task: { id: 'broken', status: 'weird' } });
+    await db
+      .insert(tasks)
+      .values({ id: 'broken', rank: 5, task: { id: 'broken', status: 'weird' } });
     await stores.tasks.setStatus('ok', 'waiting', { by: 'clone', at: NOW });
     const raw = await db.execute(sql`select task from tasks where id = 'broken'`);
     const rows = Array.isArray(raw) ? raw : ((raw as { rows?: unknown[] }).rows ?? []);
@@ -64,9 +66,7 @@ describe('TaskStore（pg）', () => {
   });
 
   it('同時の add が同じ rank を割り当てず、並びが一意に決まる（advisory lock）', async () => {
-    await Promise.all(
-      Array.from({ length: 8 }, (_, index) => stores.tasks.add(make(`p${index}`))),
-    );
+    await Promise.all(Array.from({ length: 8 }, (_, index) => stores.tasks.add(make(`p${index}`))));
     const ranks = (await db.select({ rank: tasks.rank }).from(tasks)).map((row) => row.rank);
     expect(new Set(ranks).size).toBe(8);
     expect((await stores.tasks.list()).entries).toHaveLength(8);

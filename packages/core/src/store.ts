@@ -1277,7 +1277,11 @@ export interface TaskStore {
    * `by` は必須（`CommitmentStore.close` と同じ理由）。閉じた行を queued に戻すと閉じた記録を外して並びの末尾側から置き直すので、
    * 呼び出し側は `before` を日誌へ逐語で残すこと。読めない行は `UnreadableTaskError`。
    */
-  setStatus(id: string, status: TaskStatus, options: SetTaskStatusOptions): Promise<TaskSetStatusResult>;
+  setStatus(
+    id: string,
+    status: TaskStatus,
+    options: SetTaskStatusOptions,
+  ): Promise<TaskSetStatusResult>;
 
   /** 全件を消す（ワークスペースのリセット専用）。読めない行も含め、消した件数を返す。 */
   clear(): Promise<number>;

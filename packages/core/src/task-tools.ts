@@ -36,7 +36,10 @@ export function resolveTaskPlacement(
   }
   if (to === 'before' || to === 'after') {
     if (anchorId === undefined || anchorId.length === 0) {
-      return { kind: 'invalid', message: `to=${to} には anchorId（基準にする task の id）が要る。` };
+      return {
+        kind: 'invalid',
+        message: `to=${to} には anchorId（基準にする task の id）が要る。`,
+      };
     }
     return { kind: 'ok', placement: { kind: to, anchorId } };
   }

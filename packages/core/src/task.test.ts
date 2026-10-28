@@ -59,9 +59,28 @@ describe('Task の位置（placeTask）', () => {
     const result = placeTask([row('a', a), row('b', b)], { kind: 'after', anchorId: 'a' }, 'self');
     if (result.kind !== 'placed') throw new Error('置けない');
     expect(result.renumber.map((item) => item.id)).toEqual(['a', 'b']);
-    const rankOf = (id: string) => result.renumber.find((item) => item.id === id)?.rank ?? result.rank;
+    const rankOf = (id: string) =>
+      result.renumber.find((item) => item.id === id)?.rank ?? result.rank;
     expect(rankOf('a')).toBeLessThan(result.rank);
     expect(result.rank).toBeLessThan(rankOf('b'));
+  });
+
+  it('既定の置き場所: human 起点は開いている human 起点の最後の直後（無ければ先頭）、それ以外は末尾', () => {
+    const open = [row('s1', 1000), row('h1', 2000, 'human'), row('s2', 3000)];
+    const human = placeTask(open, undefined, 'human');
+    if (human.kind !== 'placed') throw new Error('置けない');
+    expect(human.rank).toBeGreaterThan(2000);
+    expect(human.rank).toBeLessThan(3000);
+
+    const noHuman = placeTask([row('s1', 1000)], undefined, 'human');
+    if (noHuman.kind !== 'placed') throw new Error('置けない');
+    expect(noHuman.rank).toBeLessThan(1000);
+
+    for (const origin of ['self', 'manager', 'external'] as const) {
+      const other = placeTask(open, undefined, origin);
+      if (other.kind !== 'placed') throw new Error('置けない');
+      expect(other.rank, origin).toBeGreaterThan(3000);
+    }
   });
 
   it('無いアンカーは置けない', () => {
