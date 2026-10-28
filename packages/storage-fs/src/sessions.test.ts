@@ -410,3 +410,55 @@ describe('FsSessionRegistry — 墓標の蒸留失敗回数（#4752）', () => {
     expect(await sessions.noteGraveDistillFailure('transcript', 'a')).toBe(1);
   });
 });
+
+describe('FsSessionRegistry — 畳みの控え（fold-state.json）', () => {
+  it('未記録なら null、置くと読み戻せ、null で消える', async () => {
+    const registry = new FsSessionRegistry(dir);
+    expect(await registry.getFoldState()).toBeNull();
+
+    await registry.setFoldState('{"v":1}');
+    expect(await registry.getFoldState()).toBe('{"v":1}');
+
+    await registry.setFoldState(null);
+    expect(await registry.getFoldState()).toBeNull();
+  });
+
+  it('⭐ セッション id を捨てる（setCloneSessionId(null)）と控えも消え、id を置き直すだけでは消えない', async () => {
+    const registry = new FsSessionRegistry(dir);
+    await registry.setCloneSessionId('sess-1');
+    await registry.setFoldState('{"v":1}');
+
+    await registry.setCloneSessionId('sess-2');
+    expect(await registry.getFoldState()).toBe('{"v":1}');
+
+    await registry.setCloneSessionId(null);
+    expect(await registry.getFoldState()).toBeNull();
+  });
+
+  it('clear() は控えも消して数える', async () => {
+    const registry = new FsSessionRegistry(dir);
+    await registry.setCloneSessionId('sess-1');
+    await registry.setFoldState('{"v":1}');
+
+    expect(await registry.clear()).toBe(2);
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it('千切れた JSON を読んだときは跡を残して null を返す（起動を止めない）', async () => {
+    await writeFile(join(dir, 'fold-state.json'), '{"state":"abc', 'utf8');
+    const registry = new FsSessionRegistry(dir);
+    let value: string | null = 'sentinel';
+    const lines = await captureStderr(async () => {
+      value = await registry.getFoldState();
+    });
+    expect(value).toBeNull();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('畳みの控え');
+  });
+
+  it('NUL を含む値は断る', async () => {
+    const registry = new FsSessionRegistry(dir);
+    await expect(registry.setFoldState('a\u0000b')).rejects.toThrow();
+    expect(await registry.getFoldState()).toBeNull();
+  });
+});

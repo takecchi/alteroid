@@ -1865,6 +1865,14 @@ export interface SessionRegistry {
   /** NUL を含む id は `NulNotAllowedError` で断る。墓標は JSON 文字列で持つので NUL を含んでも往復する。 */
   setCloneSessionId(sessionId: string | null): Promise<void>;
   /**
+   * 畳みの控え（`clone.ts` の `FoldState` を JSON にしたもの）を、セッション id とは別の欄に置く不透明な文字列として預かる。無ければ `null`。
+   * 中身の形と、読み戻してよいかの判定（sessionId の一致・安全条件）は呼び出し側が持つ: ここは壊れた中身を解釈せず、そのまま返す。
+   * `setCloneSessionId(null)`（resume 素材を捨てる）はこの欄も消す: セッションが無いのに「その会話に全文が載っている」という控えだけが残らないため。
+   * NUL を含む値は `NulNotAllowedError` で断る。
+   */
+  getFoldState(): Promise<string | null>;
+  setFoldState(state: string | null): Promise<void>;
+  /**
    * 墓標を読む。**高々1つしか持たない。**
    * 代償: 2回続けて蒸留に失敗すると古い方が失われる。数える単位を増やす（列にする）と、拾い切れなかった墓標が積もる側の面倒が入れ替わりで増える。
    */
@@ -1921,7 +1929,7 @@ export interface SessionRegistry {
   setProjectKey(projectKey: string): Promise<void>;
 
   /**
-   * ここが持つ欄（クローンのセッション id・2つの墓標とその順番待ちの列・墓標ごとの蒸留の失敗回数・生ログの scope）をすべて消す（ワークスペースのリセット専用）。
+   * ここが持つ欄（クローンのセッション id・畳みの控え・2つの墓標とその順番待ちの列・墓標ごとの蒸留の失敗回数・生ログの scope）をすべて消す（ワークスペースのリセット専用）。
    * resume を諦める操作で、失うのは走っていたセッションへ戻る手段だけ（クローンの同一性は記憶に宿るので、次のターンから記憶を通じて再構成される。`architecture.md`「寿命モデル」）。
    * 消した欄の数（実際に値があって消したものだけ。失敗回数は種類ごとに1欄）を返す。
    */
