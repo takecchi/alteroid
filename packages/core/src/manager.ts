@@ -2730,8 +2730,13 @@ export function resolveWithheldReportFlushMs(env: NodeJS.ProcessEnv = process.en
 
 const WITHHELD_REPORT_EXCERPT = 240;
 
-/** 畳んだ報告の冒頭の一覧に使う字数の予算。件数では締めない（件数だけだと何件で溢れるかが運任せになる）。 */
-const WITHHELD_REPORT_LISTING_BUDGET = 1500;
+/**
+ * 畳んだ報告の冒頭の一覧に使う字数の予算。件数では締めない（件数だけだと何件で溢れるかが運任せになる）。
+ * 600 にしてある理由: この注記は直後に本報告が続く回に付き、冒頭の抜粋は本報告と重なることが多い。1500 では 240 字の行が 5〜6 本
+ * （約 1,700 字）載っていた。240 字の行は 2 本（約 530 字）までで、新しい側が残り、古い側は「古い N 本」の 1 行へ回る。
+ * 全文は日誌に在るので、落ちた分は `journal_read` で読める。
+ */
+const WITHHELD_REPORT_LISTING_BUDGET = 600;
 
 function withheldExcerptItem(entry: { at: string; line: string }): string {
   return `- ${entry.at} ${entry.line}`;
@@ -13053,10 +13058,12 @@ class Pool implements ManagerPool {
         exempt = false;
         foldable = undefined;
         // `'flush'` でも抜粋を付ける: 件数だけだと、マージの報告のような本文がクローンから見えないまま日誌にだけ残る。
+        // 「少し前・少し後」と書く: 日誌の `exchange` は在庫を積む（`firstAt` / `lastAt`）より前に書かれ、`until` は含まないため、端の時刻そのままだと両端の報告を外す。
         outgoing =
           `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
           `${String(withheld.count)} 本配っていない（最初 ${withheld.firstAt} / ` +
-          `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read\`）。\n` +
+          `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read q=${managerId}\` ` +
+          `since=最初の少し前 until=最後の少し後）。\n` +
           `畳んだ報告の冒頭（古い順）:\n${renderWithheldExcerpts(withheld.excerpts, withheld.count)}\n）`;
       }
     }

@@ -1103,6 +1103,49 @@ describe('畳んだ報告の冒頭は、配る知らせから消えない（最�
 
     await pool.stop();
   });
+
+  // トークン節約: 注記は直後の本報告と重なることが多いので、抜粋は新しい側の2本までに絞る
+  it('240字超の報告を6本畳んでも、抜粋は新しい側の2本だけで、注記は900字を超えない。古い4本は1行に回る', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup();
+
+    for (let n = 1; n <= 6; n += 1) {
+      fake.report('mgr-withhold', `報告${String(n).padStart(2, '0')} ${'あ'.repeat(300)}`, 'done', {
+        awaitingBackground: AWAITING,
+      });
+    }
+    await withheldDecisions(stores, 6);
+
+    fake.report('mgr-withhold', '本物の報告', 'done');
+    const text = await lastReportText(inbox, '本物の報告');
+    const note = text.slice(text.indexOf('（この間に'));
+    expect(note.length).toBeLessThan(900);
+    expect(note.split('\n').filter((line) => line.startsWith('- 20'))).toHaveLength(2);
+    expect(note).toContain('報告06 ');
+    expect(note).toContain('報告05 ');
+    expect(note).not.toContain('報告04 ');
+    expect(note).toContain('古い 4 本の冒頭は字数の予算で省いた');
+    expect(note).toContain('6 本配っていない');
+
+    // 落とした分の全文は日誌に在る（注記から引ける）
+    const exchanged = await stores.journal.list({ types: ['exchange'] });
+    expect(
+      exchanged.some((entry) => JSON.stringify(entry).includes(`報告01 ${'あ'.repeat(300)}`)),
+    ).toBe(true);
+
+    await pool.stop();
+  });
+
+  it('注記に、日誌を managerId と最初・最後の時刻で引く案内が載る', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '畳んだ1本目', 'done', { awaitingBackground: AWAITING });
+    await withheldDecisions(stores, 1);
+    fake.report('mgr-withhold', '本物の報告', 'done');
+    const text = await lastReportText(inbox, '本物の報告');
+    expect(text).toContain('`journal_read q=mgr-withhold` since=最初の少し前 until=最後の少し後');
+
+    await pool.stop();
+  });
 });
 
 describe('外へ出した成果を含む報告は、背景処理の完了待ちでも畳まずに配る', () => {
