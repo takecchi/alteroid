@@ -15,7 +15,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { cloneMcpServers, DEFAULT_AUTO_COMPACT_WINDOW_TOKENS } from './claude-provider.js';
+import {
+  cloneMcpServers,
+  DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
+  MANAGER_AUTO_COMPACT_WINDOW_TOKENS,
+} from './claude-provider.js';
 import {
   CLONE_TOOL_RELAY_SOCKET_ENV,
   CLONE_TOOL_RELAY_TOKEN_ENV,
@@ -393,7 +397,7 @@ describe('マネージャー（runner）へ渡す Options', () => {
 
     expect(options.settings).toEqual({
       attribution: { commit: '', pr: '' },
-      autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
+      autoCompactWindow: MANAGER_AUTO_COMPACT_WINDOW_TOKENS,
       autoMemoryEnabled: false,
     });
   });
@@ -413,7 +417,7 @@ describe('マネージャー（runner）へ渡す Options', () => {
 
     expect(options.settings).toEqual({
       attribution: { commit: '', pr: '' },
-      autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
+      autoCompactWindow: MANAGER_AUTO_COMPACT_WINDOW_TOKENS,
     });
   });
 

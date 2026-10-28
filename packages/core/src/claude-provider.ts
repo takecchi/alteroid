@@ -537,12 +537,26 @@ export const AUTO_COMPACT_WINDOW_ENV_KEY = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW';
 export const DEFAULT_AUTO_COMPACT_WINDOW_TOKENS = 300_000;
 
 /**
+ * マネージャー（と、その配下の作業者）の自動の要約の窓。クローンの {@link DEFAULT_AUTO_COMPACT_WINDOW_TOKENS} より小さくする。
+ *
+ * 本番の `turn_usage`（2026-10-28）で、マネージャーの1回の cache_read は 93万〜107万、クローンは 46万〜63万、文脈は 195K〜200K 対 148K〜171K だった。
+ * 費用はほぼ「文脈の長さ × 呼び出し回数」で、マネージャー層は cache_read の大きい側。
+ * マネージャーの作業は枝・PR・報告に区切られ、細部はそこに残るので、要約で失うものが小さい。
+ * クローンは据え置く: クローンの判断は会話の文脈に依り、縮めたときの判断の質を測れないため（オーナーの決め: トークンより速度、ただし品質は落とさない）。
+ */
+export const MANAGER_AUTO_COMPACT_WINDOW_TOKENS = 200_000;
+
+/**
  * 自動の要約の窓を `Options.settings` へ載せる分。人間が env に窓を置いていれば何も載せない。
  * `Options.settings` は利用者の設定の中で最も優先されるので、載せると人間の指定より勝ってしまうため（north_star 禁止2: 方針は設定で開けられること）。
+ * 層ごとの既定は `windowTokens` で渡す（省くとクローンの既定）。
  */
-export function autoCompactWindowSettings(env: NodeJS.ProcessEnv): { autoCompactWindow?: number } {
+export function autoCompactWindowSettings(
+  env: NodeJS.ProcessEnv,
+  windowTokens: number = DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
+): { autoCompactWindow?: number } {
   if ((env[AUTO_COMPACT_WINDOW_ENV_KEY] ?? '').trim() !== '') return {};
-  return { autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS };
+  return { autoCompactWindow: windowTokens };
 }
 
 export interface CloneSessionOptionsRequest {
@@ -844,7 +858,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     // Preferred language for Claude responses and voice dictation (e.g., "japanese", "spanish")
     settings: {
       ...NO_ATTRIBUTION_SETTINGS,
-      ...autoCompactWindowSettings(env),
+      ...autoCompactWindowSettings(env, MANAGER_AUTO_COMPACT_WINDOW_TOKENS),
       ...(managerAutoMemoryEnabled ? {} : { autoMemoryEnabled: false }),
       ...(sdkLanguage === undefined ? {} : { language: sdkLanguage }),
     },

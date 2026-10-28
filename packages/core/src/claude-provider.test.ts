@@ -28,6 +28,7 @@ import {
   buildCloneSessionOptions,
   buildManagerSessionOptions,
   DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
+  MANAGER_AUTO_COMPACT_WINDOW_TOKENS,
   foldClaudeMessage,
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
   withNoModelFallbackEnv,
@@ -2245,18 +2246,22 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
   // 同じ describe に置く: 3つの builder の組み立て（`cloneOptions` / `distillOptions` / `managerOptions`）をそのまま使うため
   describe('自動の要約の窓（autoCompactWindow）', () => {
     const sessions = [
-      ['クローン本体', cloneOptions],
-      ['マネージャー', managerOptions],
+      ['クローン本体', cloneOptions, DEFAULT_AUTO_COMPACT_WINDOW_TOKENS],
+      ['マネージャー', managerOptions, MANAGER_AUTO_COMPACT_WINDOW_TOKENS],
     ] as const;
 
     it.each(sessions)(
-      '%s: 人間が窓を置いていなければ、既定の窓を settings に載せる',
-      (_, build) => {
-        expect(build({ PATH: '/bin' }).settings).toMatchObject({
-          autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
-        });
+      '%s: 人間が窓を置いていなければ、層ごとの既定の窓を settings に載せる',
+      (_, build, expected) => {
+        expect(build({ PATH: '/bin' }).settings).toMatchObject({ autoCompactWindow: expected });
       },
     );
+
+    it('マネージャーの窓はクローンより小さい（クローンは判断の質のため据え置き）', () => {
+      expect(MANAGER_AUTO_COMPACT_WINDOW_TOKENS).toBeLessThan(DEFAULT_AUTO_COMPACT_WINDOW_TOKENS);
+      expect(DEFAULT_AUTO_COMPACT_WINDOW_TOKENS).toBe(300_000);
+      expect(MANAGER_AUTO_COMPACT_WINDOW_TOKENS).toBe(200_000);
+    });
 
     it.each(sessions)(
       '%s: 人間が env に窓を置いていれば settings に載せず、env はそのまま渡す（settings は env より優先されうるため）',
@@ -2267,9 +2272,9 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
       },
     );
 
-    it.each(sessions)('%s: 空文字・空白だけは「置いていない」と読む', (_, build) => {
+    it.each(sessions)('%s: 空文字・空白だけは「置いていない」と読む', (_, build, expected) => {
       expect(build({ [AUTO_COMPACT_WINDOW_ENV_KEY]: '  ' }).settings).toMatchObject({
-        autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
+        autoCompactWindow: expected,
       });
     });
 
@@ -2284,8 +2289,13 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
     });
 
     it('既定は SDK が受ける範囲（100000〜1000000）の中にある', () => {
-      expect(DEFAULT_AUTO_COMPACT_WINDOW_TOKENS).toBeGreaterThanOrEqual(100_000);
-      expect(DEFAULT_AUTO_COMPACT_WINDOW_TOKENS).toBeLessThanOrEqual(1_000_000);
+      for (const tokens of [
+        DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
+        MANAGER_AUTO_COMPACT_WINDOW_TOKENS,
+      ]) {
+        expect(tokens).toBeGreaterThanOrEqual(100_000);
+        expect(tokens).toBeLessThanOrEqual(1_000_000);
+      }
     });
   });
 });
