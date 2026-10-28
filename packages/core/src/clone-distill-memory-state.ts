@@ -247,6 +247,11 @@ export class CloneDistillMemoryState {
     return { changed, added, removed };
   }
 
+  // 差分だけを載せてよいのは焼いた控えが在るときだけ: 無いと `diffAgainstBaked` は全文書を `added` に数えるが、「ここに出ていない文書はシステムプロンプトのまま」とは言えない（焼いた覚えが無い）ため。
+  hasBakedMemory(): boolean {
+    return this.#bakedMemory !== null;
+  }
+
   // 差が空でも、焼いた控えが無ければ一致としない（`null` は全文を載せる側）
   matchesBakedMemory(documents: readonly MemoryDocument[]): boolean {
     if (this.#bakedMemory === null) return false;

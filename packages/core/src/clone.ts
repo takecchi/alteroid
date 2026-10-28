@@ -6757,7 +6757,24 @@ class Clone implements CloneHost {
     }
 
     // 載せる文字列を先に作って長さを日誌へ残す: 数える対象が実際に会話へ載る文字列そのものになるため。
-    const reinjectedIndex = refreshIndex ? renderMemoryDocuments(documents) : null;
+    // 載せるのは焼いた時点と違う文書（変わった・増えた）だけにする: 焼き込みは要約でも消えず、全文書の索引をもう一度積むと同じ内容が二重に載るため（実測: 要約44回のうち22回が全文で、平均約3.5万字。#5426）。
+    // 焼いた控えが無いときは従来どおり全文: 「出ていない文書はシステムプロンプトのまま」と言える根拠が無いため。
+    // 削除は焼いた時点との差からも名前で伝える: 全文を載せなくなると、載っていないことが「消えた」の合図でなくなり、システムプロンプトに残る記載が生きていると読まれるため。
+    const bakedDiff = refreshIndex ? this.#distillMemory.diffAgainstBaked(documents) : null;
+    const diffOnly = bakedDiff !== null && this.#distillMemory.hasBakedMemory();
+    const changedVsBaked = diffOnly
+      ? documents.filter(
+          (doc) => bakedDiff.changed.includes(doc.slug) || bakedDiff.added.includes(doc.slug),
+        )
+      : [];
+    const reinjectedIndex = !refreshIndex
+      ? null
+      : diffOnly
+        ? changedVsBaked.length === 0
+          ? ''
+          : renderMemoryDocuments(changedVsBaked, { presentInMemory: documents })
+        : renderMemoryDocuments(documents);
+    const removedNames = diffOnly ? [...new Set([...removed, ...bakedDiff.removed])] : removed;
     if (reinjectedIndex !== null) {
       await this.#journal({
         type: 'exchange',
@@ -6768,7 +6785,7 @@ class Clone implements CloneHost {
           redactErrorText(
             describeMemoryIndexRefresh({
               reinjected: true,
-              diff: this.#distillMemory.diffAgainstBaked(documents),
+              diff: bakedDiff ?? { changed: [], added: [], removed: [] },
               renderedChars: reinjectedIndex.length,
               totalDocuments: documents.length,
             }),
@@ -6782,11 +6799,18 @@ class Clone implements CloneHost {
       : await this.#memoryEditAttribution([...changed.map((doc) => doc.slug), ...removed], since);
 
     const head = refreshIndex
-      ? '[system] この会話の文脈が要約に潰された。**それまでに載せた記憶の差分も、その要約の中へ' +
-        '畳まれている**（残っているとは限らない）。だから**いまの索引を丸ごと載せ直す** —— ' +
-        '下に在るのが現在の記憶の全体（要旨と節の目次）であり、システムプロンプト側の' +
-        '「現在の記憶」より新しい。食い違ったら下を採ること。' +
-        '**節の本文はどこにも載っていない——要るなら `memory_section_read` で開くこと。**'
+      ? diffOnly
+        ? '[system] この会話の文脈が要約に潰された。**システムプロンプトの記憶は要約で消えていない。**' +
+          '下に在るのは、**システムプロンプトに焼いた時点から変わった文書（変わったもの・増えたもの）だけ**であり、' +
+          '**ここに出ていない文書は、システムプロンプトの記載のままである**（焼いた時点から変わっていない）。' +
+          'それまでに載せた記憶の差分は要約の中へ畳まれているが、焼いた時点との差はこの下にすべて載っている。' +
+          '食い違ったら下を採ること。' +
+          '**節の本文は載っていない——要るなら `memory_section_read` で開くこと。**'
+        : '[system] この会話の文脈が要約に潰された。**それまでに載せた記憶の差分も、その要約の中へ' +
+          '畳まれている**（残っているとは限らない）。だから**いまの索引を丸ごと載せ直す** —— ' +
+          '下に在るのが現在の記憶の全体（要旨と節の目次）であり、システムプロンプト側の' +
+          '「現在の記憶」より新しい。食い違ったら下を採ること。' +
+          '**節の本文はどこにも載っていない——要るなら `memory_section_read` で開くこと。**'
       : // 同じ会話の2回目から参照にする（#5301）。「ここに出ていない文書は変わっていない」（誤読防止）と `memory_section_read` の案内は短い形にも残す。
         this.#fixedTextFold()('memory-update-head', MEMORY_UPDATE_HEAD, MEMORY_UPDATE_HEAD_REF);
 
@@ -6796,16 +6820,18 @@ class Clone implements CloneHost {
       ...attribution,
       // 索引の載せ直しは `seenContent` を渡さない: 渡すと「変わった範囲だけ」に縮み、潰された分を埋められないため。
       ...(reinjectedIndex !== null
-        ? ['', reinjectedIndex]
+        ? reinjectedIndex === ''
+          ? []
+          : ['', reinjectedIndex]
         : changed.length === 0
           ? []
           : ['', renderMemoryDocuments(changed, { presentInMemory: documents, seenContent })]),
-      ...(removed.length === 0
+      ...(removedNames.length === 0
         ? []
         : [
             '',
             `削除された記憶: ${excerptLine(
-              removed.map((slug) => `${slug}.md`).join(' / '),
+              removedNames.map((slug) => `${slug}.md`).join(' / '),
               CLONE_ID_LIST_EXCERPT,
             )}`,
           ]),

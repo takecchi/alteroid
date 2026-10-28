@@ -58,7 +58,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
   const VALUES_V2 = '---\ntype: premise\ndescription: 価値観の要旨\n---\n## VALUES-HEAD-V2\n本文\n';
   const VALUES_V3 = '---\ntype: premise\ndescription: 価値観の要旨\n---\n## VALUES-HEAD-V3\n本文\n';
 
-  it('⭐ 潰された次のターンでは、変わっていない文書も含めて索引の全体が載る（焼いた時点から差がある）', async () => {
+  it('⭐ 潰された次のターンでは、焼いた時点から変わった文書だけが載り、変わっていない文書は載らない（#5426）', async () => {
     const stores = await twoPremises();
     const s = setup(undefined, stores);
     s.clone.post(humanMessage('1回目'));
@@ -73,10 +73,81 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
     const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
     expect(input).toContain('この会話の文脈が要約に潰された');
-    expect(input).toContain('いまの索引を丸ごと載せ直す');
-    expect(input).toContain('## VALUES-HEAD');
-    expect(input).toContain('## HABITS-HEAD');
+    expect(input).toContain('システムプロンプトの記憶は要約で消えていない');
+    expect(input).toContain('ここに出ていない文書は、システムプロンプトの記載のまま');
+    expect(input).not.toContain('いまの索引を丸ごと載せ直す');
+    expect(input).toContain('## VALUES-HEAD-V2');
+    expect(input).not.toContain('## HABITS-HEAD');
+    expect(input).not.toContain('習慣の要旨');
     expect(input).toContain('memory_section_read');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 焼いた時点に無かった文書（増えた）も載り、他は載らない', async () => {
+    const stores = await twoPremises();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await stores.persona.write(
+      'newcomer',
+      '---\ntype: premise\ndescription: 新参の要旨\n---\n## NEW-HEAD\n本文\n',
+    );
+    await firePreCompact(s);
+
+    const { events } = wireEvents(s.clone, 'conv-2');
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+
+    const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(input).toContain('## NEW-HEAD');
+    expect(input).not.toContain('## VALUES-HEAD');
+    expect(input).not.toContain('## HABITS-HEAD');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 削除だけのときは索引を載せず、名前だけが載る（本文も他の文書も載らない）', async () => {
+    const stores = await twoPremises();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await stores.persona.remove('habits');
+    await firePreCompact(s);
+
+    const { events } = wireEvents(s.clone, 'conv-2');
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+
+    const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(input).toContain('削除された記憶: habits.md');
+    expect(input).not.toContain('## HABITS-HEAD');
+    expect(input).not.toContain('## VALUES-HEAD');
+    expect(input).not.toContain(MEMORY_UNCHANGED_SINCE_BAKED_NOTICE);
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 要約の前に消えた文書も、焼いた時点との差として名前で載る（載らないことが消えた合図でなくなったため）', async () => {
+    const stores = await twoPremises();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await stores.persona.remove('habits');
+    const { events: second } = wireEvents(s.clone, 'conv-2');
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(second);
+
+    await firePreCompact(s);
+    const { events: third } = wireEvents(s.clone, 'conv-3');
+    s.clone.post(humanMessage('3回目', 'conv-3'));
+    await waitForDone(third);
+
+    const input = (s.calls[0] as FakeCall).inputs[2] ?? '';
+    expect(input).toContain('削除された記憶: habits.md');
 
     await s.clone.stop();
   });
@@ -127,7 +198,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
     await s.clone.stop();
   });
 
-  it('⭐ 要約の前に差分を載せ済みで、要約後も焼いた時点との差が残るなら全文が載る（差分は要約に畳まれたため）', async () => {
+  it('⭐ 要約の前に差分を載せ済みで、要約後も焼いた時点との差が残るなら、その差が載り直る（差分は要約に畳まれたため）', async () => {
     const stores = await twoPremises();
     const s = setup(undefined, stores);
     s.clone.post(humanMessage('1回目'));
@@ -146,9 +217,9 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
     await waitForDone(third);
 
     const input = (s.calls[0] as FakeCall).inputs[2] ?? '';
-    expect(input).toContain('いまの索引を丸ごと載せ直す');
+    expect(input).toContain('焼いた時点から変わった文書');
     expect(input).toContain('## VALUES-HEAD-V2');
-    expect(input).toContain('## HABITS-HEAD');
+    expect(input).not.toContain('## HABITS-HEAD');
     expect(input).not.toContain(MEMORY_UNCHANGED_SINCE_BAKED_NOTICE);
 
     await s.clone.stop();

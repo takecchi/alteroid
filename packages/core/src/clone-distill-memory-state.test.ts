@@ -297,6 +297,13 @@ describe('CloneDistillMemoryState — 焼いた時点の記憶（#5305）', () =
     expect(s.matchesBakedMemory([])).toBe(true);
   });
 
+  it('hasBakedMemory は、焼いた控えが在るときだけ真（空の記憶を焼いたときも真。差分だけを載せてよい根拠）', () => {
+    const s = new CloneDistillMemoryState();
+    expect(s.hasBakedMemory()).toBe(false);
+    s.recordBakedMemory([]);
+    expect(s.hasBakedMemory()).toBe(true);
+  });
+
   it('commitMemory しても焼いた控えは動かない（載せた差分は要約で畳まれるため）', () => {
     const s = new CloneDistillMemoryState();
     s.recordBakedMemory([doc('a', 'A')]);

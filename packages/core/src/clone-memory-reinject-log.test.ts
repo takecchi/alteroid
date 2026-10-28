@@ -80,7 +80,7 @@ describe('クローン — 要約後の記憶の索引の載せ直しを日誌�
     await waitForDone(events);
 
     const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
-    expect(input).toContain('いまの索引を丸ごと載せ直す');
+    expect(input).toContain('焼いた時点から変わった文書');
 
     const lines = await gaugeTexts(stores, MEMORY_INDEX_REINJECTED_PHRASE);
     expect(lines).toHaveLength(1);
@@ -176,7 +176,7 @@ describe('クローン — 要約後の記憶の索引の載せ直しを日誌�
       s.clone.post(humanMessage('3回目', 'conv-3'));
       await waitForDone(third);
       const input = (s.calls[0] as FakeCall).inputs[2] ?? '';
-      expect(input).toContain('いまの索引を丸ごと載せ直す');
+      expect(input).toContain('焼いた時点から変わった文書');
       expect(input).toContain('## VALUES-HEAD-V2');
       expect(input).toContain('3回目');
 
