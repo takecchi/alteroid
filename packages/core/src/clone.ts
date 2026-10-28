@@ -605,7 +605,7 @@ export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env
   return Math.floor(parsed);
 }
 
-// 既定 2.5 秒: 報告・外部の合図のバーストが1束に収まる桁で、人間以外の合図にだけ掛かる遅延として許せる上限のため
+// 外部の合図の窓（と、合成した報告の窓）の既定 2.5 秒: 外部の合図のバーストが1束に収まる桁で、人間以外の合図にだけ掛かる遅延として許せる上限のため。報告の窓は別（`REPORT_SETTLE_MS`）
 const INBOX_SETTLE_MS = 2500;
 
 // 範囲外の上限: 長すぎる待ちは、マネージャーの報告や外部の合図の返事をいつまでも遅らせるため
@@ -2347,7 +2347,7 @@ class Clone implements CloneHost {
 
       // 暇なときに最初に届いた報告・外部の合図だけ、短く待ってから束ねる: 待ち行列を素通りして単独で即ターンになると、直後に続く合図が「1件目だけ単独 + 残りの束」で余計に1ターン走るため
       // 待ちの間、`#inFlight` は立てたまま・順番待ちの時計は束が決まった後で作る（`arrivedAt` は合図の `at`）ので、この待ちは turn_timing の `queue` 段に乗る
-      // 人間起点の合図が届いたら待ちを打ち切る（`Inbox#settle`）。枠が閉じている回は上で短絡済みで、ここへは来ない
+      // 待ちを打ち切る合図は窓で違う（`settleWaitFor` の `interruptWhen`、`Inbox#settle`）: 報告の窓は「合成していない報告（`isPlainReport`）以外」が届くと切れ（合成の報告を含む）、外部の窓は人間起点（`isHumanOriginated`）だけで切れる。待ちに入る前に待ち行列に積まれていた割り込みも見る（`Inbox#settle` の冒頭）。枠が閉じている回は上で短絡済みで、ここへは来ない
       // 報告の窓は固定窓で `#reportSettleMs`、外部の合図の窓は `#inboxSettleMs`（`settleWaitFor`）。閉じれば `Inbox#close` が待ちを即座に畳む
       if (arrivedWhileIdle && !this.#delivery.inbox.closed && isSettleCandidate(event)) {
         const wait = settleWaitFor(event, this.#reportSettleMs, this.#inboxSettleMs);

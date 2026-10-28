@@ -170,7 +170,12 @@ function sumCostUsd(models: Record<string, UsageTotals>): number {
 }
 
 // session id は見ない: resume は同じ id のまま 0 に戻るため
-// 前回にあって今回に無いモデルは「変化なし」で、数え直しにしない: 載るモデルの組は呼び出しごとに食い違いうる（セッションを畳む直前の `sessionModelUsage()` とターン末の `result.modelUsage` など）ため、無いことを数え直しと読むと記録済みの累積が全量でもう一度積まれる
+// 前回にあって今回に無いモデルは、原則「変化なし」で数え直しにしない: 載るモデルの組は呼び出しごとに食い違いうる（セッションを畳む直前の `sessionModelUsage()` とターン末の `result.modelUsage` など）ため、無いことを数え直しと読むと記録済みの累積が全量でもう一度積まれる
+// 例外は、欠けたモデルの前回 cost の合計（欠落ぶん）が、今回の全モデルの cost 合計より大きいとき（欠落が支配的）だけ reset とする。haiku のような小さな欠落は変化なし（下の判定を参照）
+// 向きの違う誤りが両方ある（どちらも台帳は推定値で、完全には避けられない）:
+// - 過大に数える側: 数え直しでない読みで opus が丸ごと欠け、他のモデルだけが載ると、欠落ぶんが今回の合計を上回って誤って reset になる。基準は今回だけになるので、次の累積で opus が戻ると、差分ではなく opus の全量が増分に積まれ、二重計上になる（#5402 と同じ規模）
+// - 少なく数える側: 欠落が支配的でない数え直し（合計が前回以上になる、など）は拾えず、基準に残った前回の値に追いつくまでの消費が積まれない
+// reset の発生は日誌で見張れる: `turn_usage` 行の `reset`（fromCostUsd / toCostUsd）と、reset 時に出る gauge の exchange（「自分の消費の累積が数え直された」）
 function detectReset(
   prev: Record<string, UsageTotals>,
   next: Record<string, UsageTotals>,
