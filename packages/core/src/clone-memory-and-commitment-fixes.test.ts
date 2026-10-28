@@ -313,7 +313,9 @@ describe('クローン — 記憶を二重に載せない', () => {
     await s.clone.stop();
   });
 
-  it('大量の記憶を一度に消しても、削除された記憶の列挙は抜粋の合図で締まる', async () => {
+  // 以前は「抜粋の合図で締まる」（400 字で切って「省略」と言う）を固定していた。全文を載せなくなってからは、省略に落ちた名前の文書が
+  // システムプロンプトに記載を残したまま「まだ在る」と読まれるので、切らずに全部出す形へ反転した（期待値の反転。名前の列挙が出ることの保証は強くなっている）
+  it('大量の記憶を一度に消しても、削除された記憶の列挙は名前を1つも省略しない', async () => {
     const stores = createMemoryStores();
     const slugs = Array.from({ length: 60 }, (_, index) => `doc-${index}`);
     for (const slug of slugs) {
@@ -330,8 +332,8 @@ describe('クローン — 記憶を二重に載せない', () => {
 
     const line = second.split('\n').find((entry) => entry.startsWith('削除された記憶:'));
     expect(line).toBeDefined();
-    expect(line!.length).toBeLessThan(600);
-    expect(line).toMatch(/省略/);
+    for (const slug of slugs) expect(line).toContain(`${slug}.md`);
+    expect(line).not.toMatch(/省略/);
 
     await s.clone.stop();
   });

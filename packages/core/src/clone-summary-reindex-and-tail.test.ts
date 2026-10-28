@@ -126,6 +126,39 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
     expect(input).not.toContain('## HABITS-HEAD');
     expect(input).not.toContain('## VALUES-HEAD');
     expect(input).not.toContain(MEMORY_UNCHANGED_SINCE_BAKED_NOTICE);
+    // 見出しが「変わったもの・増えたものだけ」と言う回でも、消えた文書は名前で載ると断る（削除だけの回の誤読を減らす）
+    expect(input).toContain('消えた文書は本文ではなく名前で載る');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 多数の文書が消えても、削除された記憶の名前は1つも省略されない（省略された名前の文書が生きていると読まれないため）', async () => {
+    const stores = createMemoryStores();
+    const slugs = Array.from(
+      { length: 80 },
+      (_, index) => `removed-document-with-a-long-name-${String(index).padStart(3, '0')}`,
+    );
+    for (const slug of slugs) {
+      await stores.persona.write(
+        slug,
+        `---\ntype: premise\ndescription: ${slug} の要旨\n---\n## ${slug}\n本文\n`,
+      );
+    }
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    for (const slug of slugs) await stores.persona.remove(slug);
+    await firePreCompact(s);
+    const { events } = wireEvents(s.clone, 'conv-2');
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+
+    const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    const line = input.split('\n').find((entry) => entry.startsWith('削除された記憶:'));
+    expect(line).toBeDefined();
+    for (const slug of slugs) expect(line).toContain(`${slug}.md`);
+    expect(line).not.toMatch(/省略/);
 
     await s.clone.stop();
   });
