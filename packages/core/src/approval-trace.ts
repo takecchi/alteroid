@@ -95,7 +95,8 @@ function isCloneAction(entry: JournalEntry): boolean {
       return entry.actor === CLONE_ACTOR_ID || entry.actor.startsWith(CLONE_SUB_ACTOR_PREFIX);
     case 'exchange':
       // 計器の行は丸ごと行動でない: 個別に除くと、新しい計器の行を足すたびに行動へ数えられる誤りが戻るため
-      if (entry.text.startsWith(EXCHANGE_KIND_GAUGE_PREFIX)) return false;
+      // `with: 'human'` は除かない: 計器の行は `self` / `manager` でしか書かれず、人間への返事はモデルの本文が接頭辞なしで書かれるので、返事が `[計器] ` で始まっても行動である
+      if (entry.with !== 'human' && entry.text.startsWith(EXCHANGE_KIND_GAUGE_PREFIX)) return false;
       // 固定文を全文へ戻した観測の行は行動でない（`[判断]` の頭なので計器の除外では拾えない）
       if (entry.text.startsWith(DIGEST_RESET_JOURNAL_HEAD)) return false;
       return entry.role === 'outbound' && (entry.with === 'human' || entry.with === 'self');

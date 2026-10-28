@@ -327,6 +327,21 @@ describe('traceApproval — 対を読む（issue #847 の案B）', () => {
     expect(found.unstampedInTurn).toBe(1);
   });
 
+  it('人間への返事（with: human）の本文が計器の頭で始まっても、行動に数える（計器の行は self / manager でしか書かれない）', async () => {
+    const stores = createMemoryStores();
+    await answered(stores, 'ap-1');
+    await stores.journal.append(turnStart('ap-1', true));
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: `${EXCHANGE_KIND_GAUGE_PREFIX}承知しました。進めます`,
+    });
+    const found = await trace(stores, 'ap-1');
+    expect(found.state).toBe('unstamped_actions');
+    expect(found.unstampedInTurn).toBe(1);
+  });
+
   it('取り下げた件は withdrawn', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putApproval({
