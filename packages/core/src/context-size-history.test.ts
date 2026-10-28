@@ -35,6 +35,10 @@ describe('会話の履歴の式（#5469 P8 前段）', () => {
     const base = solveHistoryModel(PROD_2026_10_27);
     const same = cacheReadWithWindow(PROD_2026_10_27, base, DEFAULT_AUTO_COMPACT_WINDOW_TOKENS);
     expect(same.cycleTurns).toBeCloseTo(base.cycleTurns, 6);
+    // 同じ窓での出力どうしを比べる: 実測（メインループの cache_read）と比べる相手は N × C の項。要約の費用は別の項で、実測の 71万 には入っていない
+    expect(same.mainLoopCacheRead).toBeCloseTo(PROD_2026_10_27.cacheReadPerTurn, 3);
+    expect(same.compactionCacheRead).toBeCloseTo(base.thresholdTokens / base.cycleTurns, 6);
+    expect(same.cacheReadPerTurn).toBeCloseTo(same.mainLoopCacheRead + same.compactionCacheRead, 6);
     const lower = cacheReadWithWindow(PROD_2026_10_27, base, 200_000);
     expect(lower.cycleTurns).toBeLessThan(base.cycleTurns);
     expect(lower.cacheReadPerTurn).toBeLessThan(same.cacheReadPerTurn);
