@@ -52,7 +52,7 @@ export function describeProgress(view: ProgressViewInput, fold: ProgressFold = F
   const legend = fold(
     'progress:legend',
     '',
-    '（見出しは短縮してある。全文はこの会話の最初の progress_read）',
+    '（見出しは短縮。全文は最初の progress_read）',
   );
   if (legend !== '') lines.push(legend);
 

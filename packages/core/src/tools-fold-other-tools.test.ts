@@ -121,7 +121,7 @@ const cases: Case[] = [
       '未了: 1 件',
       '（basis: updatedAt。更新時刻での近似）',
       '（重なりうる）',
-      '全文はこの会話の最初の progress_read',
+      '（見出しは短縮。全文は最初の progress_read）',
     ],
     always: [
       '観測時刻:',
