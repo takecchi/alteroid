@@ -12,21 +12,21 @@
 
 ## ファイル一覧（`AGENTS.md` の節との対応）
 
-| ファイル                  | `AGENTS.md` の節                                                   |
-| ------------------------- | ------------------------------------------------------------------ |
-| `first-read.md`           | まず読む                                                           |
-| `where-to-write.md`       | 書く先を決める                                                     |
-| `reporting.md`            | 報告の形                                                           |
-| `out-of-scope.md`         | 範囲外でも気づいたことは上げる                                     |
-| `verify-assumptions.md`   | 依頼者の見立てを検証する                                           |
-| `unverified-in-issues.md` | Issue の「確かめていないこと」は、注意書きではなく仕事の指定である |
-| `delegation.md`           | 作業者へ切り出す                                                   |
-| `tests.md`                | テストを弱めずに直す                                               |
-| `silent-failures.md`      | 静かに失敗する道具                                                 |
-| `secrets.md`              | 秘密の扱い                                                         |
-| `repo-conventions.md`     | リポジトリの約束                                                   |
-| `this-container.md`       | 自分が走っている器                                                 |
-| `ci-wait.md`              | CI の完了を待つ形                                                  |
-| `memory-index.md`         | （対応する節は無い。クローンのプロンプト「現在の記憶」の索引化）   |
+| ファイル                  | `AGENTS.md` の節                                                       |
+| ------------------------- | ---------------------------------------------------------------------- |
+| `first-read.md`           | まず読む                                                               |
+| `where-to-write.md`       | 書く先を決める                                                         |
+| `reporting.md`            | 報告の形                                                               |
+| `out-of-scope.md`         | 範囲外でも気づいたことは上げる                                         |
+| `verify-assumptions.md`   | 依頼者の見立てを検証する                                               |
+| `unverified-in-issues.md` | Issue の「確かめていないこと」は、注意書きではなく仕事の指定である     |
+| `delegation.md`           | 作業者へ切り出す                                                       |
+| `tests.md`                | テストを弱めずに直す                                                   |
+| `silent-failures.md`      | 静かに失敗する道具                                                     |
+| `secrets.md`              | 秘密の扱い                                                             |
+| `repo-conventions.md`     | リポジトリの約束                                                       |
+| `this-container.md`       | 自分が走っている器                                                     |
+| `ci-wait.md`              | CI の完了を待つ形                                                      |
+| `memory-index.md`         | 対応する節なし（`packages/core/src/prompt.ts` の「現在の記憶」の規則） |
 
-各ファイルの冒頭に、その節の実例と実測であることと「規則そのものは `AGENTS.md` の同じ節に在る」ことを書いてある。ブロックごとの小見出しは、それがどの規則の根拠かが分かる形にしてある。
+`memory-index.md` を除く各ファイルの冒頭に、その節の実例と実測であることと「規則そのものは `AGENTS.md` の同じ節に在る」ことを書いてある。`memory-index.md` だけは `AGENTS.md` の規則ではなく製品のプロンプトの規則の根拠で、規則の側（`prompt.ts` の「現在の記憶」の節）のコメントから辿れる。ブロックごとの小見出しは、それがどの規則の根拠かが分かる形にしてある。
