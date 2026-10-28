@@ -1486,13 +1486,13 @@ function formatCloseManyStoppedMessage(args: {
   journaledIds: readonly string[];
   entry: JournalEntryInput;
   cause: unknown;
-  /** この呼びで閉じる対象の件数（競合で閉じられなかった分を数えるため） */
-  targetCount: number;
+  /** ここまでに処理した件数（この塊までの塊の id の合計）。競合で閉じられなかった分を数える母数で、まだ処理していない塊は含めない */
+  processedCount: number;
   /** 1回の上限に収まらず対象にしなかった件数と、その上限 */
   restCount: number;
   limit: number;
 }): string {
-  const { failed, journaledIds, entry, cause, targetCount, restCount, limit } = args;
+  const { failed, journaledIds, entry, cause, processedCount, restCount, limit } = args;
   const shape = journalEntryShape(entry);
   const reason = collapseErrorCause(cause);
   const shownPrior = chunkIdsByChars(journaledIds, CLOSE_MANY_JOURNAL_ID_CHARS)[0] ?? [];
@@ -1501,7 +1501,8 @@ function formatCloseManyStoppedMessage(args: {
   const closedTotal = journaledIds.length + failed.closed.length;
   // 最後の塊では全件を処理し終えている: 「閉じていない」と言うと、同じ絞り込みで呼び直されて上限の外の行や間に届いた行まで閉じるため
   const lastChunk = remainingChunks === 0;
-  const raced = targetCount - closedTotal;
+  // 競合の数は処理した塊だけで数える: 対象の総数との差にすると、まだ処理していない塊の分まで競合に混ざる
+  const raced = processedCount - closedTotal;
   return [
     lastChunk
       ? '⚠⚠ 全件を閉じ終えた・最後の塊の日誌が未記録・閉じ直し禁止'
@@ -1513,9 +1514,9 @@ function formatCloseManyStoppedMessage(args: {
         `${failed.chunk.number}/${failed.chunk.total} 塊目まで閉じたところで、この塊の日誌を書けなかった。`,
     `ここまでに閉じた id は ${closedTotal} 件` +
       `（前の塊の ${journaledIds.length} 件は日誌に記録済み、この塊の ${failed.closed.length} 件は未記録）。`,
-    ...(lastChunk && raced > 0
+    ...(raced > 0
       ? [
-          `⚠ 対象 ${targetCount} 件のうち ${raced} 件は閉じられなかった（この呼びの最中に他の経路が先に閉じた）。`,
+          `⚠ ここまでに処理した ${processedCount} 件のうち ${raced} 件は閉じられなかった（この呼びの最中に他の経路が先に閉じた）。`,
         ]
       : []),
     `この塊の閉じた id（日誌に無い）: ${failed.closed.join(' ')}`,
@@ -1538,6 +1539,53 @@ function formatCloseManyStoppedMessage(args: {
     `記録できなかったエントリ: ${shape}`,
     `理由: ${reason}`,
     'journal_write で、この塊の閉じた id を記録に書き直すこと。閉じ直さないこと。',
+  ].join('\n');
+}
+
+// 閉じる側（台帳の書き込み）が投げた回: 日誌が落ちた回（`formatCloseManyStoppedMessage`）と違い、この塊は閉じていない。ここまでに閉じた分は前の塊で、日誌に記録済み
+function formatCloseManyCloseFailedMessage(args: {
+  failedChunk: { number: number; total: number };
+  journaledIds: readonly string[];
+  cause: unknown;
+  /** この塊より前に処理した件数（競合で閉じられなかった分を数える母数。この塊と、まだ処理していない塊は含めない） */
+  processedCount: number;
+  restCount: number;
+  limit: number;
+}): string {
+  const { failedChunk, journaledIds, cause, processedCount, restCount, limit } = args;
+  const reason = collapseErrorCause(cause);
+  const shownPrior = chunkIdsByChars(journaledIds, CLOSE_MANY_JOURNAL_ID_CHARS)[0] ?? [];
+  const hiddenPrior = journaledIds.length - shownPrior.length;
+  const unclosedChunks = failedChunk.total - failedChunk.number + 1;
+  const raced = processedCount - journaledIds.length;
+  return [
+    '⚠⚠ 一括は途中で止まった・この塊の台帳の書き込みが失敗した・この塊以降は閉じていない',
+    `commitment_close_many は途中で止まった（全件は閉じていない。「完了した」ではない）。` +
+      `${failedChunk.number}/${failedChunk.total} 塊目の台帳の書き込みが失敗した（この塊は閉じていない）。`,
+    journaledIds.length === 0
+      ? 'ここまでに閉じた id は 0 件（1 塊目で失敗したので、1件も閉じていない）。'
+      : `ここまでに閉じた id は ${journaledIds.length} 件（前の塊の分。日誌に記録済み）。`,
+    ...(raced > 0
+      ? [
+          `⚠ ここまでに処理した ${processedCount} 件のうち ${raced} 件は閉じられなかった（この呼びの最中に他の経路が先に閉じた）。`,
+        ]
+      : []),
+    ...(journaledIds.length === 0
+      ? []
+      : [
+          `前の塊の閉じた id（先頭 ${shownPrior.length} 件）: ${shownPrior.join(' ')}${
+            hiddenPrior > 0 ? ` …ほか ${hiddenPrior} 件は省略（日誌に残してある）` : ''
+          }`,
+        ]),
+    `この塊以降の ${unclosedChunks} 塊は閉じていない。同じ絞り込みでもう一度呼べば続きを閉じられる（閉じた行は未了から外れているので、閉じ直しにはならない）。` +
+      '失敗した塊の中身は commitment_list で確かめること。',
+    ...(restCount === 0
+      ? []
+      : [
+          `1回の上限（${limit} 件）に収まらず対象にしなかった ${restCount} 件は、そもそもこの呼びでは閉じていない。`,
+        ]),
+    `理由: ${reason}`,
+    '閉じた id の日誌は書き込み済みなので、journal_write で書き直す必要は無い。',
   ].join('\n');
 }
 
@@ -6333,6 +6381,9 @@ export function createCloneTools(context: ToolContext) {
         const journaledIds: string[] = [];
         let unjournaled:
           { chunk: { number: number; total: number }; closed: readonly string[] } | undefined;
+        // 処理し終えた塊の id の合計: 競合で閉じられなかった件数は、まだ処理していない塊を混ぜずに数えるため
+        let processedCount = 0;
+        let closeFailure: { chunk: { number: number; total: number }; error: unknown } | undefined;
         let closedIds: string[];
         try {
           closedIds = await closeManyInChunks(
@@ -6340,7 +6391,11 @@ export function createCloneTools(context: ToolContext) {
             targets.map((entry) => entry.id),
             { reason, by: 'clone', at: new Date().toISOString() },
             {
+              closeFailed: async (chunk, error) => {
+                closeFailure = { chunk, error };
+              },
               after: async (chunk, closed) => {
+                processedCount += chunk.ids.length;
                 // 1件も閉じられなかった塊では日誌へ書かない: 抜けている塊番号そのものが「その塊は1件も閉じなかった」を意味するため
                 if (closed.length === 0) return;
                 journaledChunks += 1;
@@ -6367,7 +6422,19 @@ export function createCloneTools(context: ToolContext) {
             },
           );
         } catch (error) {
-          // 日誌が落ちた回だけ作り直す: 閉じる側の失敗（`closeMany` の例外）はこれまでどおり投げ直す
+          // 閉じる側の失敗（`closeMany` の例外）: この塊は閉じていない。前の塊の分は日誌に記録済み
+          if (closeFailure !== undefined) {
+            throw new CloseManyStoppedError(
+              formatCloseManyCloseFailedMessage({
+                failedChunk: closeFailure.chunk,
+                journaledIds,
+                cause: closeFailure.error,
+                processedCount,
+                restCount: remainingCount,
+                limit: effectiveLimit,
+              }),
+            );
+          }
           if (error instanceof JournalNotRecordedError && unjournaled !== undefined) {
             throw new CloseManyStoppedError(
               formatCloseManyStoppedMessage({
@@ -6375,7 +6442,7 @@ export function createCloneTools(context: ToolContext) {
                 journaledIds,
                 entry: error.entry,
                 cause: error.journalCause,
-                targetCount: targets.length,
+                processedCount,
                 restCount: remainingCount,
                 limit: effectiveLimit,
               }),
