@@ -5821,10 +5821,11 @@ describe('クローンの道具', () => {
       expect(count(reply, '話しかけることは塞いでいない')).toBe(1);
       expect(count(reply, '（runner がそう答えた。聞けなかったのではない）')).toBe(1);
       expect(count(reply, '戻れたかどうかしか見ていない')).toBe(1);
-      // 件数の行（行の外）に在る1回と、末尾の注の1回。行の本数では増えない（変更前は行ごとに2回ずつだった）
+      // 全文は応答の中の初出（件数の行）の1回だけ。末尾の注は結論を短く残す（Issue #5422。以前は件数の行と末尾の注で2回、さらに前は行ごとに2回ずつだった）。行の本数では増えない
       const advice = '確かめる前に manager_start で起こし直さないこと';
-      expect(count(reply, advice)).toBe(2);
-      expect(count(await listWithLost(2), advice)).toBe(2);
+      expect(count(reply, advice)).toBe(1);
+      expect(count(reply, '確かめる前に起こし直さないこと**（上と同じ）')).toBe(1);
+      expect(count(await listWithLost(2), advice)).toBe(1);
     });
 
     it('行には印と、その行に固有の値（since・runnerId・由来）が残る', async () => {

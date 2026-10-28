@@ -4069,6 +4069,8 @@ class Clone implements CloneHost {
     ) {
       this.#situationExplained.clear();
       this.#situationTurnsSinceFull = 0;
+      // 固定の文言の控え（道具の応答 `manager_list` ・報告の包み）も同じ周期で全文へ戻す: 同じ線にしないと、周期の保険が situation にしか無いため
+      this.#digestDelta.forgetFixed();
     }
     try {
       const managers = await this.#managers.list();

@@ -319,6 +319,7 @@ import {
 import type { ArchiveEntry, InboxPeek, JournalStore, Stores } from './store.js';
 import {
   RESTART_BEFORE_CHECK_ADVICE,
+  RESTART_BEFORE_CHECK_ADVICE_CORE,
   STALE_TOKEN_RESTART_ADVICE,
   limitRecoveryOf,
   limitRecoveryOfAssistantError,
@@ -780,6 +781,18 @@ const MANAGER_LIST_NOTE_BODIES: Record<ManagerListNoteMark, string> = {
     'コミットまで届いていることがある）。まずそこを確かめ、続きが要ると' +
     '判断したときだけ manager_start で起こし直すこと。',
 };
+// 2回目からの札。安全上の結論（失われたという意味ではない・終わったかは分からない）は札にも残し、全文は同じ会話の最初の一覧を指す
+const MANAGER_LIST_NOTE_REFS: Record<ManagerListNoteMark, string> = {
+  'runner-lost':
+    '宛先の器が名乗っていない。**この委譲が失われたという意味ではない**（器の中で走っていることもある）。' +
+    '話しかけることは塞いでいない（全文は最初の一覧のとおり）。',
+  'session-missing':
+    'runner がこの委譲のセッションを持っていなかった。**この委譲が失われたという意味ではない**。' +
+    'まず manager_report を見る（全文は最初の一覧のとおり）。',
+  lost:
+    '前のセッションへ戻れなかっただけで、**終わったかは分からない**（成果が外へ出ていることがある）。' +
+    'まず成果を確かめ、続きが要るときだけ manager_start（全文は最初の一覧のとおり）。',
+};
 const MANAGER_LIST_NOTE_ORDER: readonly ManagerListNoteMark[] = [
   'runner-lost',
   'session-missing',
@@ -788,11 +801,16 @@ const MANAGER_LIST_NOTE_ORDER: readonly ManagerListNoteMark[] = [
 
 // 出ている行が使った印の分だけ書く（使われなければ1文字も足さない）。RESTART_BEFORE_CHECK_ADVICE は
 // runner 消失・セッション無しの両方に掛かるので、並べずここで1回だけ言う
-function managerListNotes(rowMarks: readonly ReadonlySet<ManagerListNoteMark>[]): string {
+// `fold` は返す文に載せるときだけ渡す（呼んだ時点で「会話に出した」と控えるため、予算を測るだけの呼びには渡さない）
+function managerListNotes(
+  rowMarks: readonly ReadonlySet<ManagerListNoteMark>[],
+  fold: FixedFold = NO_FIXED_FOLD,
+): string {
   const used = MANAGER_LIST_NOTE_ORDER.filter((mark) => rowMarks.some((marks) => marks.has(mark)));
   if (used.length === 0) return '';
   const lines = used.map(
-    (mark) => `${MANAGER_LIST_NOTE_MARKS[mark]} ${MANAGER_LIST_NOTE_BODIES[mark]}`,
+    (mark) =>
+      `${MANAGER_LIST_NOTE_MARKS[mark]} ${fold(`manager-list:note-${mark}`, MANAGER_LIST_NOTE_BODIES[mark], MANAGER_LIST_NOTE_REFS[mark])}`,
   );
   if (used.includes('runner-lost') || used.includes('session-missing')) {
     lines.splice(
@@ -841,9 +859,10 @@ function describeInboxBacklog(
   peek: InboxPeek,
   now: number,
   queuedInMemory: number | undefined,
+  fold: FixedFold = NO_FIXED_FOLD,
 ): string {
   const rows = peek.entries;
-  const queuedLine = describeInboxBacklogQueuedInMemory(queuedInMemory);
+  const queuedLine = describeInboxBacklogQueuedInMemory(queuedInMemory, fold);
   const noReadable = describeNoReadableInboxEvents(peek.unreadable);
   if (rows.length === 0 && noReadable !== null) {
     return queuedLine === null ? noReadable : `${noReadable}\n${queuedLine}`;
@@ -855,13 +874,13 @@ function describeInboxBacklog(
   const breakdown = summarizeInboxBacklog(rows, now, peek.unreadable);
   const oldest =
     breakdown.oldestAt === undefined ? '' : `（最も古いものは ${breakdown.oldestAt} から）`;
-  const humanOriginatedAlert = describeHumanOriginatedInboxAlert(breakdown);
+  const humanOriginatedAlert = describeHumanOriginatedInboxAlert(breakdown, fold);
   const humanOriginatedLine = humanOriginatedAlert === '' ? '' : `${humanOriginatedAlert}\n`;
   const queuedSuffix = queuedLine === null ? '' : `\n${queuedLine}`;
   return (
     `${humanOriginatedLine}` +
     `⚠ クローンの受信箱に未処理の合図が ${breakdown.total} 件ある${oldest}\n` +
-    describeInboxBacklogBreakdown(breakdown) +
+    describeInboxBacklogBreakdown(breakdown, fold) +
     queuedSuffix
   );
 }
@@ -8120,11 +8139,12 @@ export function createCloneTools(context: ToolContext) {
         // この一覧ぜんぶで同じ「いま」を使う: 行ごとに `new Date()` を呼ぶと、同じ応答の中で判定の基準がずれるため
         const now = new Date();
         // 受信箱の滞留は早期リターンの前に確かめる: マネージャーが1本も居なくても合図が溜まっていることがあるため
-        const inboxBacklog = describeInboxBacklog(
-          await context.stores.inbox.peekPending(),
-          Date.now(),
-          context.queuedInMemory?.(),
-        );
+        // 文にするのは返す直前: 固定の言い回しの `fold` は呼んだ時点で「会話に出した」と控えるので、cursor の誤りなどで返す別の応答の手前で呼ぶと、出していない全文を出したことにしてしまうため
+        const inboxPeek = await context.stores.inbox.peekPending();
+        const inboxPeekedAt = Date.now();
+        const inboxQueued = context.queuedInMemory?.();
+        const renderInboxBacklog = (): string =>
+          describeInboxBacklog(inboxPeek, inboxPeekedAt, inboxQueued, fold);
         // `?.() ?? []` で読まない: 「この口を持たない実装」と「持っているが1件も観測していない」を同じ `[]` へ畳み、この一覧が区別しようとしているものを潰すため
         const runnerBacklog = describeRunnerBacklog(context.managers.runnerBacklog());
         const origins = await readJobOrigins(context.stores);
@@ -8139,7 +8159,7 @@ export function createCloneTools(context: ToolContext) {
                 ? '（マネージャーは1本も居ない）'
                 : '（読めたマネージャーは無い。居ないとは言えない）',
               unreadableJobNote,
-              inboxBacklog,
+              renderInboxBacklog(),
               runnerBacklog,
             ]
               .filter((line): line is string => line !== null)
@@ -8327,82 +8347,107 @@ export function createCloneTools(context: ToolContext) {
           Math.max(0, LIST_BUDGET - firstNotes.length),
           false,
         );
+        // 予算は全文の長さで測り（畳んだ分は余るだけ）、畳む呼びはこの1回だけにする
         const noteBlock = managerListNotes(
           items.slice(0, secondFill.shown).map((item) => item.marks),
+          fold,
         );
         return text(
-          [
-            // 本数は一覧の外に出す: 一覧は予算で打ち切られ、出ている行を数えても全体の本数にならないため。件数は絞る前の全件で出す: 絞りのせいで全体の実像が見えなくなる形にしないため
-            describeManagerCounts(managers, fold),
-            unreadableJobNote,
-            // 絞ったことは件数の行とは別の行で言う: 混ぜると「絞る前の全体」と「絞った後」がどちらの数なのかを読み分ける負担が読み手に移るため
-            // `status: []` は「絞らなかった」と言う: 黙って無視しないため
-            status === undefined
-              ? null
-              : filtering
-                ? `絞り込み: status: ${status.join(',')} に当たるのは ${statusView.length} 件で、` +
-                  `この一覧は${queryFiltering ? 'その中の q にも当たるものだけ' : 'その中だけ'}を出している（すぐ上の件数は絞る前の全体である）。`
-                : '絞り込み: status に空の配列が渡ったので、絞らずに全件を出した' +
-                  '（渡さなかったのと同じ結果である。人間の GET /managers に揃えてある——' +
-                  '0件へ倒すと絞りを解除した呼びが「マネージャーが消えた」ように見えるため）。' +
-                  '**journal_read の types / commitment_list の origin は [] を0件として扱うので、' +
-                  'この道具だけ倒し方が違う**（理由は tools.ts の doc に在る）。',
-            // `q` の注記も件数の行とは別の行で言う。空白だけの `q` は黙って無視せず、絞らなかったと言う
-            q === undefined
-              ? null
-              : queryFiltering
-                ? `絞り込み: q: ${JSON.stringify(q)}（依頼文の全文と managerId への部分一致。` +
-                  `大文字小文字と全角半角は区別しない）に当たるのは ${view.length} 件` +
-                  `${filtering ? `（status で絞った ${statusView.length} 件の中）` : `（全 ${managers.length} 本の中）`}で、` +
-                  'この一覧はその中だけを出している（すぐ上の件数は絞る前の全体である）。'
-                : '絞り込み: q が空（または空白だけ）だったので、q では絞らなかった' +
-                  '（渡さなかったのと同じ結果である。status: [] と同じ倒し方）。',
-            // 絞った結果が0件なのと委譲が1本も無いのを分ける: 「無い」と読めると、絞りが厳しかっただけなのに台帳の側を疑うことになるため
-            view.length === 0
-              ? queryFiltering
-                ? `（${filtering ? 'この status と ' : ''}q: ${JSON.stringify(q)} の絞り込みに当たる委譲は0件だった。絞る前の件数は上の行に在る）`
-                : '（この status の絞り込みに当たる委譲は無い。絞る前の件数は上の行に在る）'
-              : // cursor で辿り切った最後の頁を、絞り込みの0件とは別の文にする
-                paged.length === 0
-                ? '（cursor より後ろの、この絞り込みに当たる委譲は無い。これが最後の頁）'
-                : renderListing(itemTexts, {
-                    budget: Math.max(0, LIST_BUDGET - firstNotes.length),
-                    // `status` の有無ではなく `filtering` で分ける: `status: []` は絞っていないので、有無で分けると渡した文字が無いのに絞ったと言う嘘になるため
-                    // 母数は `renderListing` が渡す `total` ではなく `view.length` を使う: 頁が進んでも変わらない数にするため
-                    omitted: ({ rest, shown }) => {
-                      const total = view.length;
-                      const lastShown = paged[shown - 1]!;
-                      const nextCursor = encodeManagerCursor({
-                        ...managerPositionOf(lastShown),
-                        status: cursorStatus === null ? null : [...cursorStatus],
-                        q: cursorQuery,
-                      });
-                      const statusArg = filtering ? ` status=${JSON.stringify(status)}` : '';
-                      const queryArg = queryFiltering ? ` q=${JSON.stringify(q)}` : '';
-                      const narrowed = [
-                        filtering ? `status: ${status.join(',')}` : null,
-                        queryFiltering ? `q: ${JSON.stringify(q)}` : null,
-                      ].filter((part): part is string => part !== null);
-                      return (
-                        `…ほか ${rest} 件は省略（` +
-                        (narrowed.length > 0
-                          ? `${narrowed.join(' と ')} に絞った ${total} 件のうち ${shown} 件を出した`
-                          : `全 ${total} 件`) +
-                        '）。' +
-                        fold('manager-list:omitted-order', OMITTED_ORDER_FULL, OMITTED_ORDER_REF) +
-                        // cursor は毎回変わる（位置・絞りを含む）ので畳まない: 畳むと続きが取れなくなる
-                        `続きは manager_list cursor=${nextCursor}${statusArg}${queryArg} で取れる（status と q は同じまま呼ぶこと）。` +
-                        fold('manager-list:omitted-paging', OMITTED_PAGING_FULL, OMITTED_PAGING_REF)
-                      );
-                    },
-                  }),
-            '（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）',
-            noteBlock === '' ? null : noteBlock,
-            inboxBacklog,
-            runnerBacklog,
-          ]
-            .filter((line): line is string => line !== null)
-            .join('\n'),
+          dedupeRestartAdvice(
+            [
+              // 本数は一覧の外に出す: 一覧は予算で打ち切られ、出ている行を数えても全体の本数にならないため。件数は絞る前の全件で出す: 絞りのせいで全体の実像が見えなくなる形にしないため
+              describeManagerCounts(managers, fold),
+              unreadableJobNote,
+              // 絞り込みの注記の固定の言い回しは `fold` に包む。絞りの値・件数は毎回出す
+              // 絞ったことは件数の行とは別の行で言う: 混ぜると「絞る前の全体」と「絞った後」がどちらの数なのかを読み分ける負担が読み手に移るため
+              // `status: []` は「絞らなかった」と言う: 黙って無視しないため
+              status === undefined
+                ? null
+                : filtering
+                  ? `絞り込み: status: ${status.join(',')} に当たるのは ${statusView.length} 件で、` +
+                    `この一覧は${queryFiltering ? 'その中の q にも当たるものだけ' : 'その中だけ'}を出している` +
+                    fold(
+                      'manager-list:filter-status-scope',
+                      FILTER_COUNTS_SCOPE_FULL,
+                      FILTER_COUNTS_SCOPE_REF,
+                    )
+                  : '絞り込み: status に空の配列が渡ったので、絞らずに全件を出した' +
+                    fold(
+                      'manager-list:filter-status-empty',
+                      FILTER_STATUS_EMPTY_FULL,
+                      FILTER_STATUS_EMPTY_REF,
+                    ),
+              // `q` の注記も件数の行とは別の行で言う。空白だけの `q` は黙って無視せず、絞らなかったと言う
+              q === undefined
+                ? null
+                : queryFiltering
+                  ? `絞り込み: q: ${JSON.stringify(q)}` +
+                    fold('manager-list:filter-q-match', FILTER_Q_MATCH_FULL, FILTER_Q_MATCH_REF) +
+                    `に当たるのは ${view.length} 件` +
+                    `${filtering ? `（status で絞った ${statusView.length} 件の中）` : `（全 ${managers.length} 本の中）`}で、` +
+                    'この一覧はその中だけを出している' +
+                    fold(
+                      'manager-list:filter-q-scope',
+                      FILTER_COUNTS_SCOPE_FULL,
+                      FILTER_COUNTS_SCOPE_REF,
+                    )
+                  : '絞り込み: q が空（または空白だけ）だったので、q では絞らなかった' +
+                    fold('manager-list:filter-q-empty', FILTER_Q_EMPTY_FULL, FILTER_Q_EMPTY_REF),
+              // 絞った結果が0件なのと委譲が1本も無いのを分ける: 「無い」と読めると、絞りが厳しかっただけなのに台帳の側を疑うことになるため
+              view.length === 0
+                ? queryFiltering
+                  ? `（${filtering ? 'この status と ' : ''}q: ${JSON.stringify(q)} の絞り込みに当たる委譲は0件だった。絞る前の件数は上の行に在る）`
+                  : '（この status の絞り込みに当たる委譲は無い。絞る前の件数は上の行に在る）'
+                : // cursor で辿り切った最後の頁を、絞り込みの0件とは別の文にする
+                  paged.length === 0
+                  ? '（cursor より後ろの、この絞り込みに当たる委譲は無い。これが最後の頁）'
+                  : renderListing(itemTexts, {
+                      budget: Math.max(0, LIST_BUDGET - firstNotes.length),
+                      // `status` の有無ではなく `filtering` で分ける: `status: []` は絞っていないので、有無で分けると渡した文字が無いのに絞ったと言う嘘になるため
+                      // 母数は `renderListing` が渡す `total` ではなく `view.length` を使う: 頁が進んでも変わらない数にするため
+                      omitted: ({ rest, shown }) => {
+                        const total = view.length;
+                        const lastShown = paged[shown - 1]!;
+                        const nextCursor = encodeManagerCursor({
+                          ...managerPositionOf(lastShown),
+                          status: cursorStatus === null ? null : [...cursorStatus],
+                          q: cursorQuery,
+                        });
+                        const statusArg = filtering ? ` status=${JSON.stringify(status)}` : '';
+                        const queryArg = queryFiltering ? ` q=${JSON.stringify(q)}` : '';
+                        const narrowed = [
+                          filtering ? `status: ${status.join(',')}` : null,
+                          queryFiltering ? `q: ${JSON.stringify(q)}` : null,
+                        ].filter((part): part is string => part !== null);
+                        return (
+                          `…ほか ${rest} 件は省略（` +
+                          (narrowed.length > 0
+                            ? `${narrowed.join(' と ')} に絞った ${total} 件のうち ${shown} 件を出した`
+                            : `全 ${total} 件`) +
+                          '）。' +
+                          fold(
+                            'manager-list:omitted-order',
+                            OMITTED_ORDER_FULL,
+                            OMITTED_ORDER_REF,
+                          ) +
+                          // cursor は毎回変わる（位置・絞りを含む）ので畳まない: 畳むと続きが取れなくなる
+                          `続きは manager_list cursor=${nextCursor}${statusArg}${queryArg} で取れる（status と q は同じまま呼ぶこと）。` +
+                          fold(
+                            'manager-list:omitted-paging',
+                            OMITTED_PAGING_FULL,
+                            OMITTED_PAGING_REF,
+                          )
+                        );
+                      },
+                    }),
+              '（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）',
+              noteBlock === '' ? null : noteBlock,
+              renderInboxBacklog(),
+              runnerBacklog,
+            ]
+              .filter((line): line is string => line !== null)
+              .join('\n'),
+          ),
         );
       },
     ),
@@ -10396,20 +10441,30 @@ export function createCloneTools(context: ToolContext) {
         const tail: string[] = [];
         if (autoFoldedNote !== '') tail.push(autoFoldedNote.trimStart());
         // 「この状態になった」の注記は器ごとに繰り返さず末尾に1度だけ添える: 名簿はインメモリで再起動すると `since` が巻き戻り、「ずっと保持されている記録」と誤読されないため
+        // 末尾の固定の2文は、同じ会話の2回目から札にする（`manager_list` と同じ口。札にも結論を残す）。返す直前のここで1度だけ呼ぶ
+        const foldRunnerTail = context.foldFixed ?? NO_FIXED_FOLD;
         tail.push(
-          '「この状態になった」は名簿の値。名簿（Registry）はインメモリなので、' +
-            'デーモンを再起動すると作り直される。',
+          foldRunnerTail(
+            'runner-list:since-note',
+            '「この状態になった」は名簿の値。名簿（Registry）はインメモリなので、' +
+              'デーモンを再起動すると作り直される。',
+            '「この状態になった」は名簿の値で、デーモンの再起動で作り直される。',
+          ),
         );
         // pids を出したなら、その数字が言えないことを必ず添える: 言えないことを書いていない計器は、読む側が言えると思い込むため
         if (resources === true) {
           tail.push(
-            'pids について: **pids の現在値/上限そのものは今も器の合計であって内訳ではない。** ' +
-              'この2つの数字だけからは、何がその数を持っているかは分からない。' +
-              '**対応している runner なら、その内訳（ゾンビ/生存・ゾンビの comm 別・' +
-              'いちばん古いゾンビの年齢）が器ごとのブロックに出る**（' +
-              '対応していない runner——古い版——では内訳の行自体が出ない）。' +
-              '**空き（上限 − 現在値）は「次に何本置けるか」を意味しない**——実測では ' +
-              'vitest が1本立ち上がるだけで pids が +131 跳ねている。',
+            foldRunnerTail(
+              'runner-list:pids-note',
+              'pids について: **pids の現在値/上限そのものは今も器の合計であって内訳ではない。** ' +
+                'この2つの数字だけからは、何がその数を持っているかは分からない。' +
+                '**対応している runner なら、その内訳（ゾンビ/生存・ゾンビの comm 別・' +
+                'いちばん古いゾンビの年齢）が器ごとのブロックに出る**（' +
+                '対応していない runner——古い版——では内訳の行自体が出ない）。' +
+                '**空き（上限 − 現在値）は「次に何本置けるか」を意味しない**——実測では ' +
+                'vitest が1本立ち上がるだけで pids が +131 跳ねている。',
+              'pids について: **現在値/上限は器の合計であって内訳ではない。空きは「次に何本置けるか」を意味しない**（内訳は対応する runner のブロックに出る）。',
+            ),
           );
         }
         if (overview.unassigned.length > 0) {
@@ -10495,6 +10550,19 @@ function compareManagerAttention(a: ManagerSummary, b: ManagerSummary): number {
 type FixedFold = NonNullable<ToolContext['foldFixed']>;
 const NO_FIXED_FOLD: FixedFold = (_id, full) => full;
 
+// 1応答に最大5回出る RESTART_BEFORE_CHECK_ADVICE（件数の行の lost・消失、印の意味、失敗の行ごと）を、初出の1回だけ全文にする。
+// 2回目以降は結論（確かめる前に起こし直さない）を短く残して「上と同じ」と言う: 行ごとの失敗の説明は別の行として読まれるため、消さずに短くする
+const RESTART_ADVICE_AGAIN = '**確かめる前に起こし直さないこと**（上と同じ）。';
+function dedupeRestartAdvice(response: string): string {
+  const first = response.indexOf(RESTART_BEFORE_CHECK_ADVICE);
+  if (first < 0) return response;
+  const head = first + RESTART_BEFORE_CHECK_ADVICE.length;
+  return (
+    response.slice(0, head) +
+    response.slice(head).replaceAll(RESTART_BEFORE_CHECK_ADVICE, RESTART_ADVICE_AGAIN)
+  );
+}
+
 // 件数の行の固定の読み方。2回目から参照にする（`describeManagerCounts`）。参照にも要点（読み違えると打つ手が変わる点）を残す
 const COUNTS_RUNNING_FULL =
   '**「走行中」は「進んでいる」ではない** — 宛先の器が黙って消えても ' +
@@ -10516,9 +10584,8 @@ const COUNTS_LOST_FULL =
   RESTART_BEFORE_CHECK_ADVICE;
 const COUNTS_LOST_REF =
   ' （lost は「終わった」ではなく、成果が外へ出ていることがある。名指しは status: ["lost"]。' +
-  'ただし lost を確かめても全部ではない: running のまま残る委譲は status: ["running"]、' +
-  '失敗で終わった委譲は status: ["done"] で引き、行の ⚠ を見る。' +
-  `${RESTART_BEFORE_CHECK_ADVICE}全文は前の一覧のとおり）`;
+  '全部ではない: running のまま残る委譲は status: ["running"]、失敗で終わった委譲は status: ["done"] で引き、行の ⚠ を見る。' +
+  `${RESTART_BEFORE_CHECK_ADVICE_CORE}。全文は最初の一覧のとおり）`;
 const COUNTS_USAGE_STOPPED_FULL =
   ' **「枠(利用上限)で止まっている」は status の分割ではなく横断する軸である** — ' +
   '走行中・返事待ち・戻れなかった(lost)・手が空いている（done）等のどれとも重なりうるので、' +
@@ -10536,8 +10603,24 @@ const COUNTS_RUNNER_VANISHED_FULL =
   RESTART_BEFORE_CHECK_ADVICE;
 const COUNTS_RUNNER_VANISHED_REF =
   ' （「宛先の runner が名簿から消えている」は横断する軸で、走行中の内側にあり lost とは別の集合。' +
-  '`status: ["lost"]` では拾えず、絞る綴りも無いので、各行の ⚠ 宛先の runner が名簿から消えている から辿る。' +
-  `${RESTART_BEFORE_CHECK_ADVICE}）`;
+  '`status: ["lost"]` では拾えず、各行の ⚠ 宛先の runner が名簿から消えている から辿る。' +
+  `${RESTART_BEFORE_CHECK_ADVICE_CORE}）`;
+
+// 絞り込みの注記の固定の言い回し。絞りの値・件数は畳まず、言い回しだけを2回目から札にする
+const FILTER_COUNTS_SCOPE_FULL = '（すぐ上の件数は絞る前の全体である）。';
+const FILTER_COUNTS_SCOPE_REF = '（上の件数は絞る前の全体）。';
+const FILTER_STATUS_EMPTY_FULL =
+  '（渡さなかったのと同じ結果である。人間の GET /managers に揃えてある——' +
+  '0件へ倒すと絞りを解除した呼びが「マネージャーが消えた」ように見えるため）。' +
+  '**journal_read の types / commitment_list の origin は [] を0件として扱うので、' +
+  'この道具だけ倒し方が違う**（理由は tools.ts の doc に在る）。';
+const FILTER_STATUS_EMPTY_REF =
+  '（[] は絞らない扱い。**journal_read・commitment_list の [] は0件で、この道具だけ逆**）。';
+const FILTER_Q_MATCH_FULL =
+  '（依頼文の全文と managerId への部分一致。大文字小文字と全角半角は区別しない）';
+const FILTER_Q_MATCH_REF = '（依頼文の全文と managerId への部分一致）';
+const FILTER_Q_EMPTY_FULL = '（渡さなかったのと同じ結果である。status: [] と同じ倒し方）。';
+const FILTER_Q_EMPTY_REF = '（絞らない扱い）。';
 
 // 「…ほか N 件は省略」の固定の文。続きの取り方（cursor）は毎回変わるので畳まず、その前後の固定の2文だけを畳む
 const OMITTED_ORDER_FULL =

@@ -358,6 +358,14 @@ export class DigestSessionDelta {
   }
 
   /**
+   * 固定の文言の控えだけを捨てる（次の回は全文）。一定ターンごとの全文戻し（situation の `SITUATION_FULL_EVERY_TURNS` と同じ線）用で、`reset` とは違い
+   * 要約の軽い全文への切り替え（`#fullForced` / `#compactionReset`）には触れない: 要約の合図を取りこぼしても、全文が会話から消えたまま参照だけが続く長さに上限を置くための保険のため。
+   */
+  forgetFixed(): void {
+    this.#committed.fixed.clear();
+  }
+
+  /**
    * 今回の依頼の本文（timer）。同じ会話で同じ kind・同じ本文を全文で出していれば、その時刻を返す。
    * 返ったら呼び出し側は全文を出さない。返らなければ全文を出す前提で控えに足す。
    */

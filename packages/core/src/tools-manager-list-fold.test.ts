@@ -4,6 +4,7 @@ import { DigestSessionDelta } from './digest-session-delta.js';
 import type { ManagerPool, ManagerSummary } from './manager.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
+import { RESTART_BEFORE_CHECK_ADVICE } from './usage-limits.js';
 
 // manager_list の固定の説明（件数行・「…ほか N 件」）を、同じ会話の2回目から短い参照にする（DigestSessionDelta.fixedInTurn）
 
@@ -20,6 +21,22 @@ function pool(managers: ManagerSummary[]): ManagerPool {
     },
     runnerBacklog() {
       return [];
+    },
+    async runners() {
+      return {
+        daemonRevision: { status: 'unheard' },
+        unassigned: [],
+        runners: [
+          {
+            label: 'r1',
+            state: 'connected',
+            runnerId: 'runner-1',
+            since: '2026-10-27T00:00:00.000Z',
+            managers: [],
+            revision: { status: 'unheard' },
+          },
+        ],
+      };
     },
     unpushedWork: async () => ({ kind: 'none' }),
     start: notUsed,
@@ -57,20 +74,45 @@ const abnormal = (): ManagerSummary[] => [
   summary(102, { status: 'running', runnerVanished: true }),
 ];
 
-function harness(managers: () => ManagerSummary[], delta: DigestSessionDelta | null) {
+// 受信箱の滞留12件（人間起点を含む）。器の行の形は inbox-backlog.test.ts と同じ
+const stuckInbox = (): unknown[] =>
+  Array.from({ length: 12 }, (_, i) => ({
+    id: `ev${String(i)}`,
+    at: new Date(Date.UTC(2026, 9, 27, 0, 0, 0) - i * 3_600_000).toISOString(),
+    deliveries: i % 3,
+    event:
+      i % 2 === 1
+        ? { type: 'human_message', text: 'x', conversationId: 'c1' }
+        : { type: 'manager_message', managerId: `mgr-${String(i)}`, text: 'y' },
+  }));
+
+function harness(
+  managers: () => ManagerSummary[],
+  delta: DigestSessionDelta | null,
+  extra: { inbox?: unknown[]; queued?: number } = {},
+) {
+  const stores = createMemoryStores();
+  if (extra.inbox !== undefined) {
+    const entries = extra.inbox;
+    (stores.inbox as { peekPending: () => Promise<unknown> }).peekPending = async () => ({
+      entries,
+      unreadable: [],
+    });
+  }
   const tools = createCloneTools({
-    stores: createMemoryStores(),
+    stores,
     emit: () => undefined,
     memoryCause: () => 'clone',
     conversationId: () => undefined,
+    ...(extra.queued === undefined ? {} : { queuedInMemory: () => extra.queued }),
     managers: pool(managers()),
     ...(delta === null
       ? {}
       : { foldFixed: (id: string, full: string, ref: string) => delta.fixedInTurn(id, full, ref) }),
   });
-  return async (args: Record<string, unknown> = {}): Promise<string> => {
-    const found = tools.find((entry) => entry.name === 'manager_list');
-    if (!found) throw new Error('manager_list が無い');
+  return async (args: Record<string, unknown> = {}, tool = 'manager_list'): Promise<string> => {
+    const found = tools.find((entry) => entry.name === tool);
+    if (!found) throw new Error(`${tool} が無い`);
     const result = await found.handler(args as never, {});
     return (result.content ?? [])
       .map((block) => (block.type === 'text' ? block.text : ''))
@@ -161,6 +203,173 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
 
       expect(afterReset).toBe(first);
     }
+  });
+
+  it('⭐ 受信箱の滞留: 2回目は固定の言い回しだけが札になり、数・時刻・内訳は毎回出る。札にも結論が残る', async () => {
+    const delta = new DigestSessionDelta();
+    const call = harness(normal, delta, { inbox: stuckInbox(), queued: 5 });
+
+    const first = await call();
+    const second = await call();
+
+    for (const phrase of [
+      '門が畳んだ行はターンが1度も起きないまま数だけ増える',
+      'PendingInboxEvent.at の doc',
+      'ストアに残っている行を見ているだけで、配達されていないとは言えない',
+      '内訳を割る口は無い',
+      'source/managerIdを持つ型のみ',
+      '向きと理由は inboxBacklogDedupeKey の doc',
+      '齢は相対値なので、この行を写すときは基準点も一緒に写すこと',
+    ]) {
+      expect(first).toContain(phrase);
+      expect(second).not.toContain(phrase);
+    }
+    // 札に残る結論
+    expect(second).toContain('配られた回数ではない');
+    expect(second).toContain('配達されていないとは言えない');
+    expect(second).toContain('足しても引いても意味が無い');
+    expect(second).toContain('この数は上下どちらへもぶれる');
+    // 数・時刻・内訳は毎回出る
+    for (const text of [first, second]) {
+      expect(text).toContain('未処理の合図が 12 件ある');
+      expect(text).toContain('人間起点（human_message / human_answer）の滞留が 6 件ある');
+      expect(text).toContain('メモリの配達待ち行列 5 件');
+      expect(text).toContain('内訳（計 12 件）:');
+      expect(text).toContain('種類: ');
+      expect(text).toContain('器の入れ替え回数: 0回＝いまの器になってから積まれた');
+      expect(text).toContain('齢（観測 ');
+    }
+    expect(second.length).toBeLessThan(first.length - 300);
+  });
+
+  it('⭐ 絞り込みの注記: 2回目は言い回しだけが札になり、絞りの値と件数は毎回出る', async () => {
+    const call = harness(normal, new DigestSessionDelta());
+    const args = { status: ['done'], q: 'mgr-00' };
+
+    const first = await call(args);
+    const second = await call(args);
+
+    for (const phrase of [
+      '大文字小文字と全角半角は区別しない',
+      'すぐ上の件数は絞る前の全体である',
+    ]) {
+      expect(first).toContain(phrase);
+      expect(second).not.toContain(phrase);
+    }
+    expect(second).toContain('件数は絞る前の全体');
+    for (const text of [first, second]) {
+      expect(text).toContain('絞り込み: status: done に当たるのは 40 件');
+      expect(text).toContain('絞り込み: q: "mgr-00"');
+      expect(text).toContain('に当たるのは 9 件（status で絞った 40 件の中）');
+    }
+
+    const empty = harness(normal, new DigestSessionDelta());
+    const emptyFirst = await empty({ status: [], q: '  ' });
+    const emptySecond = await empty({ status: [], q: '  ' });
+    expect(emptyFirst).toContain('人間の GET /managers に揃えてある');
+    expect(emptySecond).not.toContain('人間の GET /managers に揃えてある');
+    // 札にも「この道具だけ [] の倒し方が逆」が残る
+    expect(emptySecond).toContain('この道具だけ逆');
+    expect(emptySecond).toContain('絞り込み: status に空の配列が渡ったので、絞らずに全件を出した');
+  });
+
+  it('⭐ 行の印の意味: 2回目は札になるが、失われたという意味ではない・終わったかは分からない、が残る', async () => {
+    const marks = (): ManagerSummary[] => [
+      summary(1, { status: 'lost' }),
+      summary(2, { status: 'running', runnerLostSince: '2026-10-27T00:10:00.000Z' }),
+      summary(3, { status: 'running', sessionMissingSince: '2026-10-27T00:10:00.000Z' }),
+    ];
+    const call = harness(marks, new DigestSessionDelta());
+
+    const first = await call();
+    const second = await call();
+
+    expect(first).toContain('**戻れたかどうかしか見ていない**');
+    expect(first).toContain('器そのものは runner_list で見る');
+    expect(second).not.toContain('**戻れたかどうかしか見ていない**');
+    expect(second).not.toContain('器そのものは runner_list で見る');
+    expect(second).toContain(
+      '［lost］ 前のセッションへ戻れなかっただけで、**終わったかは分からない**',
+    );
+    expect(second).toContain(
+      '［runner 消失］ 宛先の器が名乗っていない。**この委譲が失われたという意味ではない**',
+    );
+    expect(second).toContain(
+      '［セッション無し］ runner がこの委譲のセッションを持っていなかった。**この委譲が失われたという意味ではない**',
+    );
+    for (const text of [first, second]) {
+      expect(text).toContain('行の印の意味（同じ文を行ごとには繰り返さない）:');
+      expect(text).toContain('［runner 消失］［セッション無し］ **確かめる前に');
+    }
+  });
+
+  it('⭐ 件数の行の参照にも結論が残る（lost は終わったではない・走行中は進んでいるではない）', async () => {
+    const call = harness(abnormal, new DigestSessionDelta());
+    await call();
+    const second = await call();
+
+    expect(second).toContain('lost は「終わった」ではなく');
+    expect(second).toContain('「走行中」は「進んでいる」ではない');
+  });
+
+  it('⭐ cursor は2回目も出る（畳むと続きが取れなくなる）。取れた続きの頁も数・id が出る', async () => {
+    const call = harness(normal, new DigestSessionDelta(), { inbox: stuckInbox() });
+    await call();
+    const second = await call();
+    const cursor = /manager_list cursor=(\S+)/.exec(second)?.[1];
+
+    expect(cursor).toBeDefined();
+    const next = await call({ cursor });
+    expect(next).toContain('件数: 全 41 本');
+    expect(next).toMatch(/- mgr-0\d\d/);
+  });
+
+  it('⭐ 返さなかった応答の手前で全文を「出した」と控えない（cursor の誤りで返したあとの最初の一覧は全文）', async () => {
+    const call = harness(abnormal, new DigestSessionDelta(), { inbox: stuckInbox() });
+
+    const bad = await call({ cursor: 'not-a-cursor' });
+    const first = await call();
+
+    expect(bad).toContain('cursor が壊れている');
+    expect(first).toContain('門が畳んだ行はターンが1度も起きないまま数だけ増える');
+    expect(first).toContain('**戻れたかどうかしか見ていない**');
+  });
+
+  it('⭐ RESTART_BEFORE_CHECK_ADVICE は1応答に全文で1回だけ（以降は結論を短く残して「上と同じ」）', async () => {
+    const withFailure = (): ManagerSummary[] => [
+      ...abnormal(),
+      summary(103, {
+        lastFailure: { code: 'rate_limit', via: 'assistant_error', at: '2026-10-27T00:20:00.000Z' },
+      }),
+      summary(104, { status: 'running', runnerLostSince: '2026-10-27T00:10:00.000Z' }),
+    ];
+    const call = harness(withFailure, null);
+
+    const text = await call({ status: ['lost', 'running', 'done'], q: 'mgr-1' });
+
+    expect(text.split(RESTART_BEFORE_CHECK_ADVICE).length - 1).toBe(1);
+    expect(text).toContain('（上と同じ）');
+    // 結論は残る: 初出より後ろの失敗の行にも「確かめる前に起こし直さない」が付く
+    const failureRow = text
+      .split('\n')
+      .find((line) => line.includes('直近のターンは報告ではなく失敗'));
+    expect(failureRow).toContain('確かめる前に起こし直さないこと');
+  });
+
+  it('⭐ runner_list の pids 注と末尾の文: 2回目は札になり、結論が残る', async () => {
+    const call = harness(normal, new DigestSessionDelta());
+
+    const first = await call({ resources: true }, 'runner_list');
+    const second = await call({ resources: true }, 'runner_list');
+
+    expect(first).toContain('vitest が1本立ち上がるだけで pids が +131 跳ねている');
+    expect(first).toContain('名簿（Registry）はインメモリなので');
+    expect(second).not.toContain('vitest が1本立ち上がるだけで pids が +131 跳ねている');
+    expect(second).not.toContain('名簿（Registry）はインメモリなので');
+    expect(second).toContain('空きは「次に何本置けるか」を意味しない');
+    expect(second).toContain('デーモンの再起動で作り直される');
+    expect(second).toContain('runner は1台のみ登録されている');
+    expect(second.length).toBeLessThan(first.length - 150);
   });
 
   it('口が無い器（テスト・蒸留）は何度呼んでも全文', async () => {

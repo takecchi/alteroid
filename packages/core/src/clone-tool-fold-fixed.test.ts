@@ -1,7 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { ALWAYS_REDELIVER, SITUATION_FULL_EVERY_TURNS, createClone } from './clone.js';
 import { flushPendingMicrotasks, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -160,6 +160,23 @@ describe('道具の応答の固定の文言の控え（ToolContext.foldFixed）'
     await turn(s);
 
     expect(fold(s)).toBe('全文');
+    await s.clone.stop();
+  });
+
+  it('⭐ 一定ターン（situation と同じ SITUATION_FULL_EVERY_TURNS）ごとに全文へ戻る（要約の合図を取りこぼしたときの保険）', async () => {
+    const s = boot();
+    await turn(s);
+    expect(fold(s)).toBe('全文');
+
+    // 最初の全文の回の次から数えて、周期の手前までは参照のまま
+    for (let n = 2; n <= SITUATION_FULL_EVERY_TURNS; n += 1) {
+      await turn(s);
+      expect(fold(s)).toBe('参照');
+    }
+    await turn(s);
+
+    expect(fold(s)).toBe('全文');
+    expect(fold(s)).toBe('参照');
     await s.clone.stop();
   });
 
