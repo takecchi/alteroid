@@ -68,7 +68,7 @@ describe('journal_read', () => {
     expect(reply).toContain('[exchange manager/inbound]');
     expect(reply).toContain(`id=${entry.id}`);
     expect(reply).toContain('[mgr-7f4206d8/report]');
-    expect(reply).toContain('文字省略');
+    expect(reply).toContain('…（全 5,022 字）');
   });
 
   it('until で過去の一点へ届く（新しい分に押し流されない）', async () => {

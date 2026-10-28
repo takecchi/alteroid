@@ -52,6 +52,15 @@ export function excerptLine(text: string, limit: number): string {
   return excerpt(text.replace(/\s+/g, ' ').trim(), limit);
 }
 
+// 一覧の行ごとに付く注記は短くする: 120 字の抜粋に「…（480 文字省略。全 600 文字）」を毎行付けると、行の数だけ同じ言い回しが増えるため。
+// 切れたことは「…」と全体の字数で分かり、省いた分は 全 − 抜粋の字数 で引ける。1 回の文の中に埋まる抜粋は `excerptLine` のまま（省いた分量を文で言う）
+export function excerptRow(text: string, limit: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= limit) return flat;
+  const end = codePointBoundary(flat, limit);
+  return `${flat.slice(0, end)}…（全 ${count(flat.length)} 字）`;
+}
+
 export interface Page {
   body: string;
   from: number;
