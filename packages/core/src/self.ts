@@ -150,7 +150,30 @@ function describeLastTurnContextUsage(lastContextUsage: ContextUsageObservation 
 
 export const CLONE_RUNTIME_ITEM_LABELS: readonly string[] = Object.values(CLONE_RUNTIME_ITEMS);
 
-export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
+/** 固定の文言を、同じ会話の2回目から参照にする口（`ToolContext.foldFixed` と同じ型）。 */
+export type FixedFoldFn = (id: string, full: string, ref: string) => string;
+/** 畳まない口。HTTP・CLI・蒸留など、参照が指す先（会話の上の全文）が無い面はこれ。 */
+export const NO_FOLD: FixedFoldFn = (_id, full) => full;
+
+// 版を2回言わない: フルの sha は直上のリビジョンの行にあるので、差の数え方の行は「上のフル」と指す（貼る値の出所は同じ行のまま）。
+// 前後2行は固定文で、2回目から1行の参照にする（`main` の先端とは限らない、という結論は参照にも残す）
+const REVISION_NOTE_FULL = [
+  '  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか ' +
+    'alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いて' +
+    'いない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの' +
+    '隙間があるため）。',
+  '  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`' +
+    '（リポジトリを見るのはマネージャーの領域——デーモン' +
+    '自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list ' +
+    '--workflow=release-prod.yml` で測り直すこと）。',
+].join('\n');
+const REVISION_NOTE_REF =
+  '  この版が `main` の先端とは限らない（理由と差の数え方は、この会話の最初の self_status の全文を見よ）。';
+
+export function describeCloneRuntime(
+  facts: CloneRuntimeFacts,
+  fold: FixedFoldFn = NO_FOLD,
+): string {
   // `null`（未観測）と `[]`（観測できた0本）を同じ文言に畳まない: 「MCP 連携が1本も無い」という取れた事実が「まだ分からない」に化けるため
   const mcpServers =
     facts.mcpServers === null
@@ -171,16 +194,8 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     `- ${CLONE_RUNTIME_ITEMS.buildAge}: ${describeBuildAge(facts.buildTime.builtAt)}`,
     // 次の2行の行頭を `- ` にしない: `tools.test.ts` の歯が `line.startsWith('- ')` で拾い、項目数の不一致で落ちるため
     // 「これより前のものは全部入っている」とは書かない: 反映と焼き込みの間に隙間があり、その保証はできないため
-    '  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか ' +
-      'alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いて' +
-      'いない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの' +
-      '隙間があるため）。',
     // 実測の数字は焼かない: 数字は腐っても赤くならないため
-    `  差を数えるには \`gh api repos/takecchi/alteroid/compare/${
-      facts.revision.commit ?? '<上のリビジョン>'
-    }...main --jq .ahead_by\`（リポジトリを見るのはマネージャーの領域——デーモン` +
-      '自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list ' +
-      '--workflow=release-prod.yml` で測り直すこと）。',
+    fold('self-status:revision-note', REVISION_NOTE_FULL, REVISION_NOTE_REF),
     // 「既定と同じ値か」で言わない: `ALTEROID_CLONE_MODEL=opus` を明示的に置いた場合に「既定のまま」と嘘になるため
     `- ${CLONE_RUNTIME_ITEMS.declaredModel}: ${facts.declaredModel}（` +
       (facts.modelOverridden
@@ -198,13 +213,13 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     `- ${CLONE_RUNTIME_ITEMS.permissionMode}: ${facts.permissionMode ?? unknownBecause(INIT_NOT_OBSERVED)}`,
     `- ${CLONE_RUNTIME_ITEMS.requestedPermissionMode}: ${facts.requestedPermissionMode}`,
     `- ${CLONE_RUNTIME_ITEMS.mcpServers}: ${mcpServers}`,
-    `- ${CLONE_RUNTIME_ITEMS.sessionId}: ${facts.sessionId ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- ${fold('self-status:label-session-id', CLONE_RUNTIME_ITEMS.sessionId, 'SDK セッション id（本体の値。蒸留は別）')}: ${facts.sessionId ?? unknownBecause(INIT_NOT_OBSERVED)}`,
     `- ${CLONE_RUNTIME_ITEMS.resumedFrom}: ${facts.resumedFrom ?? '（新規に開いた。前のセッションを引き継いでいない）'}`,
     // 既存の文言・区切りは変えず `文字` の直後に注記を足す: `clone-self-status-and-memory-cause.test.ts` が `toContain` で固定しているため
-    `- ${CLONE_RUNTIME_ITEMS.injectedMemoryChars}: ${facts.injectedMemoryChars.toLocaleString('en-US')} 文字（トークンの近似。実トークンは下の2行）`,
-    `- ${CLONE_RUNTIME_ITEMS.systemPromptChars}: ${facts.systemPromptChars.toLocaleString('en-US')} 文字（トークンの近似）`,
-    `- ${CLONE_RUNTIME_ITEMS.lastTurnUsedTokens}: ${lastTurnContextUsage.used}`,
-    `- ${CLONE_RUNTIME_ITEMS.lastTurnUnusedTokens}: ${lastTurnContextUsage.unused}`,
+    `- ${fold('self-status:label-injected', CLONE_RUNTIME_ITEMS.injectedMemoryChars, 'システムプロンプトへ焼き込んだ記憶の文字数')}: ${facts.injectedMemoryChars.toLocaleString('en-US')} 文字${fold('self-status:approx-injected', '（トークンの近似。実トークンは下の2行）', '（近似）')}`,
+    `- ${fold('self-status:label-system-prompt', CLONE_RUNTIME_ITEMS.systemPromptChars, 'システムプロンプト全体の文字数')}: ${facts.systemPromptChars.toLocaleString('en-US')} 文字${fold('self-status:approx-system-prompt', '（トークンの近似）', '（近似）')}`,
+    `- ${fold('self-status:label-last-used', CLONE_RUNTIME_ITEMS.lastTurnUsedTokens, '直近に終わったターンの実入力（SDK の実トークン。いま走っているターンの分ではない）')}: ${lastTurnContextUsage.used}`,
+    `- ${fold('self-status:label-last-unused', CLONE_RUNTIME_ITEMS.lastTurnUnusedTokens, '同じ観測のうち払っていない枠（free / buffer / deferred / 分類不能）')}: ${lastTurnContextUsage.unused}`,
     // **項目ではない**（行頭を `- ` にしない。`tools.test.ts` の項目名の歯が拾わない形）。
     ...(facts.runnerModels === undefined || facts.runnerModels.length === 0
       ? []

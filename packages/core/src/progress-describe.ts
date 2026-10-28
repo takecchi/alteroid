@@ -35,14 +35,27 @@ export type ProgressViewInput = Omit<ProgressView, 'backlog'> & {
   };
 };
 
-export function describeProgress(view: ProgressViewInput): string {
+/**
+ * 固定の文言を参照にする口（`ToolContext.foldFixed` と同じ型）。数・時刻・id・理由は畳まない。
+ * 既定は全文を返す口: CLI・HTTP・web は同じ関数を使い、参照が指す先（会話の上の全文）を持たないため。
+ */
+export type ProgressFold = (id: string, full: string, ref: string) => string;
+const FULL: ProgressFold = (_id, full) => full;
+
+export function describeProgress(view: ProgressViewInput, fold: ProgressFold = FULL): string {
   const { window, backlog, inProgress, throughput, forecast, github, observedAt } = view;
   const now = new Date(observedAt).getTime();
   const lines: string[] = [];
 
   lines.push(`観測時刻: ${observedAt}`);
+  // 見出しを縮めた回にだけ、全文の在りかを1行で指す（全文の回は空）
+  const legend = fold('progress:legend', '', '（見出しは短縮。全文は最初の progress_read）');
+  if (legend !== '') lines.push(legend);
 
-  lines.push('', `積み上がり（台帳の未了）: ${String(backlog.total)} 件`);
+  lines.push(
+    '',
+    `${fold('progress:head-backlog', '積み上がり（台帳の未了）', '未了')}: ${String(backlog.total)} 件`,
+  );
   const origin = backlog.byOrigin;
   lines.push(
     `  起点別: 人間 ${String(origin.human)} / マネージャー ${String(origin.manager)} / ` +
@@ -53,16 +66,23 @@ export function describeProgress(view: ProgressViewInput): string {
   );
   const buckets = backlog.age.buckets;
   lines.push(
-    `    1時間未満 ${String(buckets.under1h)} / 24時間未満 ${String(buckets.under24h)} / ` +
-      `7日未満 ${String(buckets.under7d)} / 7日以上 ${String(buckets.over7d)}`,
+    fold(
+      'progress:age-buckets',
+      `    1時間未満 ${String(buckets.under1h)} / 24時間未満 ${String(buckets.under24h)} / ` +
+        `7日未満 ${String(buckets.under7d)} / 7日以上 ${String(buckets.over7d)}`,
+      `    <1h ${String(buckets.under1h)} / <24h ${String(buckets.under24h)} / ` +
+        `<7d ${String(buckets.under7d)} / >=7d ${String(buckets.over7d)}`,
+    ),
   );
   const state = backlog.byState;
   lines.push(
-    `  状態別: 未着手 ${String(state.untouched)} / 返答済み・未クローズ ${String(state.responded)} / ` +
-      `委譲あり ${String(state.delegated)}（他と重なりうる） / 人間起点でない ${String(state.notApplicable)}` +
+    `  状態別: 未着手 ${String(state.untouched)} / ` +
+      `返答済み・未クローズ ${String(state.responded)} / ` +
+      `委譲あり ${String(state.delegated)}${fold('progress:state-overlap', '（他と重なりうる）', '（重なりうる）')} / ` +
+      `人間起点でない ${String(state.notApplicable)}` +
       (state.unjudgeable === undefined
         ? ''
-        : ` / 判定できない（会話に結んでいない） ${String(state.unjudgeable)}`),
+        : ` / ${fold('progress:state-unjudgeable', '判定できない（会話に結んでいない）', '判定できない（未結合）')} ${String(state.unjudgeable)}`),
   );
 
   lines.push('', '実施中（委譲）');
@@ -70,21 +90,34 @@ export function describeProgress(view: ProgressViewInput): string {
     `  実行中 ${String(inProgress.running)} / 人間待ち ${String(inProgress.awaitingHuman)} / ` +
       `行方不明 ${String(inProgress.lost)}`,
   );
+  const lastReportTimes =
+    `最古 ${at(inProgress.lastReport.oldestAt, now)} / ` +
+    `最新 ${at(inProgress.lastReport.newestAt, now)} / `;
+  const withoutReport = String(inProgress.lastReport.withoutReport);
   lines.push(
-    `  実行中の最終報告: 最古 ${at(inProgress.lastReport.oldestAt, now)} / ` +
-      `最新 ${at(inProgress.lastReport.newestAt, now)} / 報告無し ${String(inProgress.lastReport.withoutReport)} 件`,
+    fold(
+      'progress:last-report',
+      `  実行中の最終報告: ${lastReportTimes}報告無し ${withoutReport} 件`,
+      `  最終報告: ${lastReportTimes}無し ${withoutReport} 件`,
+    ),
   );
 
+  const windowSpan = `${String(window.hours)} 時間: ${window.from} 〜 ${window.to}）`;
   lines.push(
     '',
-    `窓の中の消化（直近 ${String(window.hours)} 時間: ${window.from} 〜 ${window.to}）`,
+    fold('progress:head-window', `窓の中の消化（直近 ${windowSpan}`, `窓（直近 ${windowSpan}`),
   );
   lines.push(
     `  台帳: 受けた ${String(throughput.commitmentsOpened)} 件 / 閉じた ${String(throughput.commitmentsClosed)} 件`,
   );
+  const endedBasis = throughput.delegationsEnded.basis;
   lines.push(
     `  委譲の終了: ${String(throughput.delegationsEnded.count)} 件` +
-      `（basis: ${throughput.delegationsEnded.basis} — 終端時刻の欄が無いので更新時刻での近似）`,
+      fold(
+        'progress:ended-basis',
+        `（basis: ${endedBasis} — 終端時刻の欄が無いので更新時刻での近似）`,
+        `（basis: ${endedBasis}。更新時刻での近似）`,
+      ),
   );
 
   lines.push('', '見込み');
@@ -108,8 +141,13 @@ export function describeProgress(view: ProgressViewInput): string {
       break;
   }
   lines.push(
-    `  根拠: 未了 ${String(basis.open)} / 窓で閉じた ${String(basis.closedInWindow)} / ` +
-      `窓で受けた ${String(basis.openedInWindow)} / 窓 ${String(basis.windowHours)} 時間 / ${basis.method}`,
+    fold(
+      'progress:basis',
+      `  根拠: 未了 ${String(basis.open)} / 窓で閉じた ${String(basis.closedInWindow)} / ` +
+        `窓で受けた ${String(basis.openedInWindow)} / 窓 ${String(basis.windowHours)} 時間 / ${basis.method}`,
+      `  根拠: 未了 ${String(basis.open)} / 閉 ${String(basis.closedInWindow)} / ` +
+        `受 ${String(basis.openedInWindow)} / 窓 ${String(basis.windowHours)} 時間 / ${basis.method}`,
+    ),
   );
 
   const { unreadable, trimmedClosed, unreadableJobs } = backlog.completeness;
@@ -131,7 +169,11 @@ export function describeProgress(view: ProgressViewInput): string {
   if (github.state !== 'not_observed') {
     lines.push(
       '',
-      'GitHub: 観測した側の申告（デーモンは GitHub を見に行かず、値を確かめていない。古さは判定しない）',
+      fold(
+        'progress:github-heading',
+        'GitHub: 観測した側の申告（デーモンは GitHub を見に行かず、値を確かめていない。古さは判定しない）',
+        'GitHub: 観測した側の申告（値は未確認・古さは判定しない）',
+      ),
     );
     for (const row of github.repos) {
       lines.push(`  ${row.repo}`);
