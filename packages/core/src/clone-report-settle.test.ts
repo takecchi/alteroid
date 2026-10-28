@@ -30,11 +30,11 @@ const managerKind = (id: string, kind: 'question' | 'permission'): InboxEvent =>
   ...(kind === 'permission' ? { requestId: `req-${id}` } : {}),
 });
 
-const external = (id: string, text: string): InboxEvent => ({
+const external = (id: string, text: string, source = 'ci'): InboxEvent => ({
   type: 'external',
   id,
   at: new Date().toISOString(),
-  source: 'ci',
+  source,
   payload: { text },
 });
 
@@ -134,6 +134,19 @@ describe('クローン — 暇なときの報告の束ね待ち（固定窓 30 �
     await advance(500);
     expect(turnInputs(s).length).toBeGreaterThanOrEqual(1);
     await s.clone.stop();
+  });
+
+  it('窓の途中で外部の合図（runner-registry の知らせ・失敗の知らせ）が届くと、窓を打ち切って即ターンになる', async () => {
+    for (const source of ['runner-registry', 'ci-failure']) {
+      const s = setup(undefined, undefined, {}, {}, ON);
+      s.clone.post(report('r1', '報告1本目'));
+      await advance(5000);
+      expect(turnInputs(s)).toHaveLength(0);
+      s.clone.post(external('e1', `${source}の知らせ`, source));
+      await advance(500);
+      expect(turnInputs(s).length).toBeGreaterThanOrEqual(1);
+      await s.clone.stop();
+    }
   });
 
   it('報告の窓を 0 にすると、従来どおり最初の1件が単独で即ターンになる', async () => {

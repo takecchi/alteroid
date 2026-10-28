@@ -7,6 +7,7 @@ export const APP_ENV_VAR_DEFAULTS: readonly { name: string; value: string }[] = 
   { name: 'ALTEROID_ACCESS_TOKEN_TTL_DAYS', value: '30' },
   { name: 'ALTEROID_WITHHELD_REPORT_FLUSH_MS', value: '1800000' },
   { name: 'ALTEROID_INBOX_SETTLE_MS', value: '2500' },
+  { name: 'ALTEROID_REPORT_SETTLE_MS', value: '30000' },
   { name: 'ALTEROID_MEMORY_TIDY_AT', value: '03:00' },
   { name: 'ALTEROID_REPORT_LOOKBACK_DAYS', value: '3' },
 ];

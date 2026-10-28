@@ -695,8 +695,8 @@ function isSettleCandidate(event: InboxEvent): boolean {
 }
 
 // 待ちの長さは待たされる合図の種別で選ぶ: 報告だけ長い窓、外部の合図は従来の窓
-// 報告の長い窓の打ち切りは「待ち候補以外が届いたら」へ広げる（人間起点だけにしない）: 人間以外の割り込み
-// （質問・許可確認・自発や定期の tick・shutdown の蒸留）が最大 30 秒待たされ、`stop()` は shutdown の蒸留の完了を待つので同じだけ止まるため。
+// 報告の長い窓の打ち切りは「報告以外が届いたら」へ広げる（人間起点だけにしない・外部の合図も待ち候補にしない）: 人間以外の割り込み
+// （質問・許可確認・失敗の知らせ・runner-registry など外部の合図・自発や定期の tick・shutdown の蒸留）が最大 30 秒待たされ、`stop()` は shutdown の蒸留の完了を待つので同じだけ止まるため。
 // 短い窓（外部）は従来どおり人間起点だけで切る
 function settleWaitFor(
   event: InboxEvent,
@@ -704,7 +704,10 @@ function settleWaitFor(
   externalMs: number,
 ): { ms: number; interruptWhen: (queued: InboxEvent) => boolean } {
   if (event.type === 'manager_message') {
-    return { ms: reportMs, interruptWhen: (queued) => !isSettleCandidate(queued) };
+    return {
+      ms: reportMs,
+      interruptWhen: (queued) => !(queued.type === 'manager_message' && queued.kind === 'report'),
+    };
   }
   return { ms: externalMs, interruptWhen: isHumanOriginated };
 }
