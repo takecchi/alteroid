@@ -386,6 +386,7 @@ import { formatElapsedAgo } from './format-elapsed.js';
 import { RESCUE_NOT_PUSHED_TEXT, rescueNotPushedDetail } from './workspace-swap-hints.js';
 import { strictToolInput } from './strict-tool-input.js';
 import { chunkIdsByChars } from './chunk-ids.js';
+import type { ToolUseIdProbe } from './subagent-caller-gauge.js';
 import {
   CLOSE_MANY_IDS_SHOWN,
   CLOSE_MANY_JOURNAL_ID_CHARS,
@@ -523,7 +524,7 @@ export interface ToolContext {
    * 引数は呼びの tool_use_id（取れなければ `undefined`）。取れないときの倒し方は実装が決める（クローンは本体扱い＋警告）。
    * 無い器（テスト・蒸留）は常に本体と同じ。
    */
-  isSubagentCall?: (toolUseId: string | undefined) => boolean;
+  isSubagentCall?: (toolUseId: string | undefined, probe?: ToolUseIdProbe) => boolean;
   profile?: ProfileService;
   accountUsage?: () => AccountUsageState;
   runtime?: () => CloneRuntimeFacts;
@@ -10589,9 +10590,21 @@ export function toolUseIdFromExtra(extra: unknown): string | undefined {
   return typeof id === 'string' && id !== '' ? id : undefined;
 }
 
+/** 計器用: tool_use_id が「取れた／無かった／あったが文字列でない（空文字を含む）」のどれか。値は返さない。 */
+export function toolUseIdProbeFromExtra(extra: unknown): ToolUseIdProbe {
+  if (typeof extra !== 'object' || extra === null) return 'missing';
+  const meta = (extra as { _meta?: unknown })._meta;
+  if (typeof meta !== 'object' || meta === null) return 'missing';
+  const id = (meta as Record<string, unknown>)[TOOL_USE_ID_META_KEY];
+  if (id === undefined) return 'missing';
+  return typeof id === 'string' && id !== '' ? 'present' : 'wrongType';
+}
+
 /** サブエージェントの呼びか。口の無い器は本体と同じ（`false`）。 */
 function isSubagentCaller(context: ToolContext, extra: unknown): boolean {
-  return context.isSubagentCall?.(toolUseIdFromExtra(extra)) ?? false;
+  return (
+    context.isSubagentCall?.(toolUseIdFromExtra(extra), toolUseIdProbeFromExtra(extra)) ?? false
+  );
 }
 
 // 1応答に最大5回出る RESTART_BEFORE_CHECK_ADVICE（件数の行の lost・消失、印の意味、失敗の行ごと）を、初出の1回だけ全文にする。
