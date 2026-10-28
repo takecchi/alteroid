@@ -915,7 +915,7 @@ describe('runner-swap の一言は作業ツリーごとの未 push・退避 ref 
     expect(at('repo-57')).toBeLessThan(at('repo-59'));
     expect(at('repo-59')).toBeLessThan(at('repo-58'));
     expect(at('repo-58')).toBeLessThan(at('repo-00'));
-    expect(message).toContain('クローンの manager_list');
+    expect(message).toContain('ユーザー側の manager_list');
   });
 
   it('作業ツリーが多くても一覧は予算に収まり、危ない作業ツリーが先に出て、溢れは件数で言う', async () => {

@@ -8,7 +8,7 @@ export type ReleaseProdVerdict =
 
 const REASON =
   '本番デプロイ（release-prod）を起動する形である（`gh workflow run … release-prod…` / ' +
-  '`gh api …/workflows/…release-prod…/dispatches`）。**取り返しがつきにくい**ので、クローンの確認が要る。' +
+  '`gh api …/workflows/…release-prod…/dispatches`）。**取り返しがつきにくい**ので、ユーザーの確認が要る。' +
   '起動してよいか、いつ起動するか（夜の自動反映に任せてよいか）を確かめてから許可すること。';
 
 const SEGMENT_SPLIT_RE = /[;&|\n\r()`]+/;
