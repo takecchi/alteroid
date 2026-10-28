@@ -9,7 +9,7 @@ import {
 } from './clone.js';
 import type { AgentCloneDriver } from './agent-clone-session.js';
 import { ClaudeCloneDriver } from './claude-clone-driver.js';
-import { waitFor } from './clone-test-harness.js';
+import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import { EXCHANGE_KIND_DECISION_PREFIX } from './exchange-kind.js';
 import type { CloneHost } from './host.js';
 import { SOURCE_TALLY_HEADING } from './digest.js';
@@ -189,7 +189,7 @@ function boot(script: SdkScript = {}): Boot {
   const clone = createClone({
     stores,
     ...(script.unavailableDriver === true ? { driver: unavailableDriver } : { queryFn: fn }),
-    env: {},
+    env: TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
@@ -1424,7 +1424,7 @@ function bootWithHooks(): Boot & { fire: () => Promise<void> } {
   const clone = createClone({
     stores,
     queryFn: fn,
-    env: {},
+    env: TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,

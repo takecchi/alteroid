@@ -53,6 +53,7 @@ import type { PermissionModeName } from './permission-mode.js';
 import type { ReportLanguageMode } from './report-language.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
 import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
+import { resolveTokenSavingCompaction } from './token-saving-switches.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
 import { classifyUsageNotice, toRateLimitFacts } from './usage-limits.js';
 import { toAccountApiKeySource } from './usage-snapshot.js';
@@ -541,6 +542,8 @@ export const DEFAULT_AUTO_COMPACT_WINDOW_TOKENS = 300_000;
  * `Options.settings` は利用者の設定の中で最も優先されるので、載せると人間の指定より勝ってしまうため（north_star 禁止2: 方針は設定で開けられること）。
  */
 export function autoCompactWindowSettings(env: NodeJS.ProcessEnv): { autoCompactWindow?: number } {
+  // 系統4の節約スイッチ（`ALTEROID_TOKEN_SAVING_COMPACTION`）が無効の既定では窓を設定しない＝SDK の既定のまま
+  if (!resolveTokenSavingCompaction(env)) return {};
   if ((env[AUTO_COMPACT_WINDOW_ENV_KEY] ?? '').trim() !== '') return {};
   return { autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS };
 }

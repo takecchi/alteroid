@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, SITUATION_FULL_EVERY_TURNS, createClone } from './clone.js';
-import { flushPendingMicrotasks, waitFor } from './clone-test-harness.js';
+import { flushPendingMicrotasks, TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -86,7 +86,7 @@ function boot(script: Script = {}): Boot {
   const clone = createClone({
     stores: createMemoryStores(),
     queryFn: fn,
-    env: {},
+    env: TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,

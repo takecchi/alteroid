@@ -6,7 +6,7 @@ import {
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
 } from './classifier-denial-streak.js';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
-import { waitFor } from './clone-test-harness.js';
+import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import {
   DigestSessionDelta,
@@ -92,7 +92,7 @@ function boot(script: Script = {}): Boot {
   const clone = createClone({
     stores: createMemoryStores(),
     queryFn: fn,
-    env: {},
+    env: TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,

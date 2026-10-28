@@ -1,7 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { waitFor } from './clone-test-harness.js';
+import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import {
   ALWAYS_REDELIVER,
   compactionLikelyThisTurn,
@@ -150,7 +150,7 @@ function bootClone(
     reportSettleMs: 2500,
     stores,
     queryFn: fake.fn,
-    env: {},
+    env: TOKEN_SAVING_ENABLED_ENV,
     managers,
     redeliveryGate: ALWAYS_REDELIVER,
     ...(mergedBatchLimit === undefined ? {} : { mergedBatchLimit }),
@@ -630,7 +630,7 @@ describe('状況の節と manager_list は、メモリの配達待ち行列を�
       reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
-      env: {},
+      env: TOKEN_SAVING_ENABLED_ENV,
       managers: busyPool(),
       redeliveryGate: ALWAYS_REDELIVER,
       // 束の上限を1にする: 上の試験と同じ理由（別々の担当の報告が A のターンへまとまり、待ち行列に残らないため）
@@ -772,7 +772,7 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
-      env: {},
+      env: TOKEN_SAVING_ENABLED_ENV,
       managers: busyPool(),
       redeliveryGate: ALWAYS_REDELIVER,
     });
@@ -838,7 +838,7 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
-      env: {},
+      env: TOKEN_SAVING_ENABLED_ENV,
       managers: busyPool(),
       redeliveryGate: ALWAYS_REDELIVER,
     });
@@ -912,7 +912,7 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
-      env: {},
+      env: TOKEN_SAVING_ENABLED_ENV,
       managers: busyPool(),
       redeliveryGate: ALWAYS_REDELIVER,
     });

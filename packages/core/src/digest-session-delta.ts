@@ -188,7 +188,22 @@ function standingRowKind(item: string): string | null {
   return open > 2 ? head.slice(2, open) : null;
 }
 
+export interface DigestSessionDeltaOptions {
+  /**
+   * 真なら何も畳まず、何も控えない: 全入口が毎回の全文を返す（`ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT` が無効の既定）。
+   * 入口ごとに分岐を足さず、控えの書き込み口（`#stage` / `#committed` への書き込み）を持つ入口をここで止める: 控えが空のままなら、
+   * `exportState` の永続化・読み戻しも、`forgetFixed` などの控えを消す口も、何も起こさない。
+   */
+  readonly disabled?: boolean;
+}
+
 export class DigestSessionDelta {
+  readonly #disabled: boolean;
+
+  constructor(options: DigestSessionDeltaOptions = {}) {
+    this.#disabled = options.disabled ?? false;
+  }
+
   #committed: {
     sections: SectionRecord | null;
     fixed: Set<string>;
@@ -260,6 +275,8 @@ export class DigestSessionDelta {
    * 要約を1度でも全文で出していた（sections がある）なら、完全な全文へ倒す理由は消える。無ければ起動直後と同じ（最初の要約は完全な全文）。
    */
   importState(state: DigestDeltaState): void {
+    // 無効の器へ、有効だった頃の控えを読み戻さない: 読み戻すと畳みが復活する
+    if (this.#disabled) return;
     this.#committed = {
       sections:
         state.sections === null
@@ -281,7 +298,7 @@ export class DigestSessionDelta {
 
   /** 次の要約が軽い全文か: 要約が走りうる／走った理由の reset があり、完全な全文へ倒す理由の reset が（確定した全文の後に）無いとき。 */
   isLean(): boolean {
-    return this.#compactionReset && !this.#fullForced;
+    return !this.#disabled && this.#compactionReset && !this.#fullForced;
   }
 
   /** 前の回の持ち越しを捨てる（入力が入らなかった回の全文を、次の回へ引き継がない）。 */
@@ -337,12 +354,13 @@ export class DigestSessionDelta {
    * 担当ごとに最新の1件だけ持つ: 台帳が持つのも最新の1件のため。
    */
   reportShown(managerId: string, text: string, at: Date): void {
-    if (text.length < REPORT_SHOWN_MIN_CHARS) return;
+    if (this.#disabled || text.length < REPORT_SHOWN_MIN_CHARS) return;
     this.#stage().reports.set(managerId, { key: paragraphKey(text), chars: text.length, at });
   }
 
   /** 確定した控えがあれば、全文を発言に載せた時刻。無ければ（reset 後・押し込めなかった回・別の本文）`null` で、呼び手は全文を返す。 */
   reportShownAt(managerId: string, text: string): Date | null {
+    if (this.#disabled) return null;
     const shown = this.#committed.reports.get(managerId);
     if (shown === undefined || shown.chars !== text.length) return null;
     return shown.key === paragraphKey(text) ? shown.at : null;
@@ -356,7 +374,7 @@ export class DigestSessionDelta {
    * 結合は `join('\n\n')` で元に戻せる形にしてあり、畳まない段落は1字も変えない。
    */
   foldParagraphs(text: string, eligible: (paragraph: string) => boolean = () => true): string {
-    if (text.length < SYSTEM_PARAGRAPH_MIN_CHARS) return text;
+    if (this.#disabled || text.length < SYSTEM_PARAGRAPH_MIN_CHARS) return text;
     return text
       .split('\n\n')
       .map((paragraph) => {
@@ -376,6 +394,7 @@ export class DigestSessionDelta {
    * @param ref 会話の上に出したことを名乗る短い参照
    */
   fixed(id: string, full: string, ref: string): string {
+    if (this.#disabled) return full;
     if (this.#committed.fixed.has(id)) return ref;
     this.#stage().fixed.add(id);
     return full;
@@ -388,6 +407,7 @@ export class DigestSessionDelta {
    * 全文へ戻す条件（会話が変わった・要約が走りうる・失敗したターンの後・起動直後・使用量が観測できない回・20ターンごと）は固定の文言と同じ線になる。
    */
   foldStandingRows(digest: string): string {
+    if (this.#disabled) return digest;
     const lines = digest.split('\n');
     const start = lines.findIndex((line) => line.startsWith(STANDING_SECTION_HEADING_HEAD));
     if (start < 0) return digest;
@@ -436,6 +456,7 @@ export class DigestSessionDelta {
    * @param supersedes 全文を出すとき、この前置きで始まる既存の控えを捨てる。同じ対象の「最新の1版」だけを控えたいとき（`manager_list` の行: A→B→A と変わったとき、2回前の A を「前回と同じ」と言わない）。
    */
   fixedInTurn(id: string, full: string, ref: string, supersedes?: string): string {
+    if (this.#disabled) return full;
     if (this.#committed.fixed.has(id)) return ref;
     if (supersedes !== undefined) {
       for (const key of [...this.#committed.fixed]) {
@@ -459,6 +480,7 @@ export class DigestSessionDelta {
    * 返ったら呼び出し側は全文を出さない。返らなければ全文を出す前提で控えに足す。
    */
   requestSeenAt(kind: string, text: string, now: Date): Date | null {
+    if (this.#disabled) return null;
     const seen = this.#committed.requests.get(kind);
     // 差分にした回も記録の時刻を進める: 「前回の発火」を名乗るため。本文は同じなので、会話の上の全文は変わらない
     this.#stage().requests.set(kind, { text, at: now });
@@ -470,6 +492,7 @@ export class DigestSessionDelta {
    * `fixedPhrases` に当たる固定の注記は、会話で1回だけ全文にする。
    */
   renderDigest(digest: string, now: Date): RenderedDigest {
+    if (this.#disabled) return { text: digest, fullChars: digest.length };
     const parsed = parseDigest(digest);
     if (parsed.sections.length === 0) return { text: digest, fullChars: digest.length };
 
