@@ -656,8 +656,8 @@ describe('クローン — ターンの失敗の跡', () => {
     const outbound = lines.filter(
       (line) => line.includes('日誌を記録できませんでした') && line.includes('role=outbound'),
     );
-    // 外した合図の日誌の行（#4633 の案C）のぶん、1本増えて3本になる
-    expect(outbound).toHaveLength(3);
+    // 外した合図の日誌の行（#4633 の案C）のぶん、1本増えて3本になる。固定文を全文へ戻した理由の観測の1行（turn_failed）も同じ書き込みの失敗に当たるので4本
+    expect(outbound).toHaveLength(4);
     for (const line of outbound) {
       expect(line).toContain('器が閉じている');
       expect(line).toMatch(/role=outbound chars=[1-9]\d*/u);

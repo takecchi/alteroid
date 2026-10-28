@@ -335,6 +335,12 @@ describe('クローン — マネージャーの確認がいまも待たれて�
 describe('クローン — shutdown 蒸留の重複防止', () => {
   const DISTILL_MARKER = '記憶へ移すべきものがあるか確認せよ';
 
+  // 固定文を全文へ戻した理由の観測の行（`固定文を全文へ戻す`）は数えない: この試験が数えるのは蒸留の見送りの行で、観測の行は待たずに書かれるため数が揺れる
+  async function journalCountWithoutDigestReset(stores: Stores): Promise<number> {
+    const entries = (await stores.journal.list({})) as { type: string; text?: string }[];
+    return entries.filter((entry) => !(entry.text ?? '').includes('固定文を全文へ戻す')).length;
+  }
+
   async function skippedDistillEntries(
     stores: Stores,
   ): Promise<{ text: string; with: string; role: string }[]> {
@@ -426,9 +432,9 @@ describe('クローン — shutdown 蒸留の重複防止', () => {
     await waitForDone(s.events);
     await flushPendingMicrotasks();
 
-    const journalCountBefore = (await s.stores.journal.list({})).length;
+    const journalCountBefore = await journalCountWithoutDigestReset(s.stores);
     await s.clone.endConversation('conv-1');
-    const journalCountAfter = (await s.stores.journal.list({})).length;
+    const journalCountAfter = await journalCountWithoutDigestReset(s.stores);
 
     const inputs = (s.calls[0] as FakeCall).inputs;
     expect(inputs.filter((input) => input.includes(DISTILL_MARKER)).length).toBe(0);
@@ -441,7 +447,7 @@ describe('クローン — shutdown 蒸留の重複防止', () => {
 
     const journalCountBeforeSecond = journalCountAfter;
     await s.clone.endConversation('conv-1');
-    const journalCountAfterSecond = (await s.stores.journal.list({})).length;
+    const journalCountAfterSecond = await journalCountWithoutDigestReset(s.stores);
     expect(journalCountAfterSecond).toBe(journalCountBeforeSecond + 1);
     expect((await skippedDistillEntries(s.stores)).length).toBe(2);
 
@@ -462,9 +468,9 @@ describe('クローン — shutdown 蒸留の重複防止', () => {
 
     await flushPendingMicrotasks();
 
-    const journalCountBefore = (await s.stores.journal.list({})).length;
+    const journalCountBefore = await journalCountWithoutDigestReset(s.stores);
     await s.clone.endConversation('conv-1');
-    const journalCountAfter = (await s.stores.journal.list({})).length;
+    const journalCountAfter = await journalCountWithoutDigestReset(s.stores);
 
     expect(journalCountAfter).toBe(journalCountBefore);
     expect(await skippedDistillEntries(s.stores)).toEqual([]);

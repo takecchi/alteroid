@@ -159,11 +159,18 @@ export class DigestSessionDelta {
   #compactionReset = false;
 
   /**
+   * 戻り値は「畳んだ記録が実際に残っていて捨てたか」（観測用。挙動は変えない）。
    * 差分の記録を全て捨てる（次の回は全文）。会話が変わった（作り直しの窓を含む）・要約が走りうる・見込みの材料が無い・走った・失敗したターンの後・起動直後（#4941）。段落の控え（#4943）も同じ口で消える。
    * `reason`: `'full'`（既定。区別できない箇所はここへ倒す）は会話の上に何も残っていない回で、次の要約は完全な全文。
    * `'compaction'` は要約が走りうる／走った回で、次の要約は判断の節だけの軽い全文にしてよい（`renderDigest`）。ただし先に `'full'` の reset があって、その全文がまだ確定していなければ完全な全文のまま。
    */
-  reset(reason: 'full' | 'compaction' = 'full'): void {
+  reset(reason: 'full' | 'compaction' = 'full'): boolean {
+    const hadRecord =
+      this.#committed.sections !== null ||
+      this.#committed.fixed.size > 0 ||
+      this.#committed.requests.size > 0 ||
+      this.#committed.paragraphs.size > 0 ||
+      this.#committed.reports.size > 0;
     if (reason === 'full') this.#fullForced = true;
     else this.#compactionReset = true;
     this.#committed = {
@@ -174,6 +181,7 @@ export class DigestSessionDelta {
       reports: new Map(),
     };
     this.#staged = null;
+    return hadRecord;
   }
 
   /** 次の要約が軽い全文か: 要約が走りうる／走った理由の reset があり、完全な全文へ倒す理由の reset が（確定した全文の後に）無いとき。 */

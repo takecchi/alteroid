@@ -1,3 +1,4 @@
+import { DIGEST_RESET_JOURNAL_HEAD } from './exchange-kind.js';
 import { excerptLine, renderListing } from './excerpt.js';
 import { scanJournalPages } from './journal-scan.js';
 import { wrapJournalStore } from './journal-wrap.js';
@@ -93,6 +94,8 @@ function isCloneAction(entry: JournalEntry): boolean {
     case 'tool_use':
       return entry.actor === CLONE_ACTOR_ID || entry.actor.startsWith(CLONE_SUB_ACTOR_PREFIX);
     case 'exchange':
+      // 固定文を全文へ戻した観測の行は行動でない（印も持たない）
+      if (entry.text.startsWith(DIGEST_RESET_JOURNAL_HEAD)) return false;
       return entry.role === 'outbound' && (entry.with === 'human' || entry.with === 'self');
     default:
       return false;

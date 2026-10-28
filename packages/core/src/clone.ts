@@ -439,20 +439,46 @@ export function compactionLikelyOrUnknownThisTurn(
     totalTokens?: number;
     autoCompactThreshold?: number;
     isAutoCompactEnabled?: boolean;
+    error?: string;
   } | null,
   lastGrowthTokens: number,
 ): boolean {
-  if (usage === null) return true;
-  if (usage.isAutoCompactEnabled === false) return false;
+  return digestUsageResetReason(usage, lastGrowthTokens) !== null;
+}
+
+/** 使用量の観測から固定文を全文へ戻す理由のラベル（日誌の計測用。`compactionLikelyOrUnknownThisTurn` の判定と同じ分岐）。戻さない回は null。 */
+export type DigestUsageResetReason =
+  'usage_null' | 'usage_error' | 'usage_threshold_missing' | 'compaction_likely';
+
+export function digestUsageResetReason(
+  usage: {
+    totalTokens?: number;
+    autoCompactThreshold?: number;
+    isAutoCompactEnabled?: boolean;
+    error?: string;
+  } | null,
+  lastGrowthTokens: number,
+): DigestUsageResetReason | null {
+  if (usage === null) return 'usage_null';
+  if (usage.isAutoCompactEnabled === false) return null;
   if (
     usage.isAutoCompactEnabled === undefined ||
     usage.totalTokens === undefined ||
     usage.autoCompactThreshold === undefined
   ) {
-    return true;
+    return usage.error === undefined ? 'usage_threshold_missing' : 'usage_error';
   }
-  return compactionLikelyThisTurn(usage, lastGrowthTokens);
+  return compactionLikelyThisTurn(usage, lastGrowthTokens) ? 'compaction_likely' : null;
 }
+
+/** 固定文を全文へ戻した理由（日誌の計測用）。 */
+export type DigestResetLabel =
+  | DigestUsageResetReason
+  | 'query_null'
+  | 'recycle_window'
+  | 'turn_failed'
+  | 'session_changed'
+  | 'compact_boundary';
 
 /**
  * 起動時の拾い直しで、同じ墓標の蒸留が続けて失敗しても日誌へ書く回数の上限（#4752）。
@@ -982,6 +1008,8 @@ class Clone implements CloneHost {
    * 全文へ戻す（`reset()`）のは、会話が変わった・要約が走りうる／走った・PreCompact・記録が無いとき。「20ターンごとに全文」は入れない（重複の除去であって判断ではない）。
    */
   readonly #digestDelta = new DigestSessionDelta();
+  // 全文へ戻した理由を、このターンで日誌へ書いたか（1ターン1行。`#pump` の先頭で下ろす。観測のみ）
+  #digestResetLoggedThisTurn = false;
   readonly #sessionStore: SessionStore | undefined;
   // `cwd` から計算し直さない: SDK の sanitize（200 文字超は切って djb2 のハッシュを足す）の再実装は静かにずれるため
   #projectKey: string | null = null;
@@ -2298,6 +2326,7 @@ class Clone implements CloneHost {
 
       // 前の回の持ち越しを捨て、全文へ戻す条件に当たれば記録も消す（#4937）: 台帳の断りより先に行う（断りの固定の1文もこの記録を使うため）
       this.#digestDelta.discardStaged();
+      this.#digestResetLoggedThisTurn = false;
       // #4941: 入力を閉じて作り直しを待っている窓（`query` は非 null のまま）も新しい会話になる。使用量の観測が取れない回も全文（安全側）
       this.#resetDigestDeltaIfNewConversation();
       this.#notices.set('redelivery', this.#redeliveryNoticeFor(batch));
@@ -2367,7 +2396,7 @@ class Clone implements CloneHost {
         this.#situationExplainedStaged = null;
         this.#digestDelta.discardStaged();
         // #4941: 失敗したターン（枠・API の失敗・中断・`turn.rejected`。すべて `#reportFailure` を通る）の入力が SDK の履歴に残るかは SDK の挙動に頼らない: 次の回は全文にする
-        if (this.#pumpTurnFailed) this.#digestDelta.reset();
+        if (this.#pumpTurnFailed) this.#resetDigestDelta('full', 'turn_failed');
         // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
         const defer = this.#usageBlocked !== null;
         const failedOutsideUsage = !defer && this.#pumpTurnFailed;
@@ -3688,20 +3717,36 @@ class Clone implements CloneHost {
    * 全文へ戻す理由（案 A）。`'compaction'` は「要約が走るという見込みが材料から立つ」ときだけ: 会話の上には前の全文の元が残る（要約された姿で）ので、判断の節だけの軽い全文でよい。
    * それ以外は `'full'`（完全な全文）: 会話が変わった・作り直しの窓（会話の上に何も残らない）、使用量の観測が無い・閾値や量が不明（要約の有無が確かめられない。安全側）。
    */
-  #fullReasonThisTurn(): 'full' | 'compaction' | null {
-    if (this.#sdkSession.query === null || this.#sdkSession.inputEndedForRecycle) return 'full';
-    if (!compactionLikelyOrUnknownThisTurn(this.#lastContextUsage, this.#lastContextGrowthTokens)) {
-      return null;
-    }
-    return compactionLikelyThisTurn(this.#lastContextUsage, this.#lastContextGrowthTokens)
-      ? 'compaction'
-      : 'full';
+  #fullReasonThisTurn(): { reason: 'full' | 'compaction'; label: DigestResetLabel } | null {
+    if (this.#sdkSession.query === null) return { reason: 'full', label: 'query_null' };
+    if (this.#sdkSession.inputEndedForRecycle) return { reason: 'full', label: 'recycle_window' };
+    const label = digestUsageResetReason(this.#lastContextUsage, this.#lastContextGrowthTokens);
+    if (label === null) return null;
+    return { reason: label === 'compaction_likely' ? 'compaction' : 'full', label };
+  }
+
+  /**
+   * 差分の記録を捨てる口（観測つき）。畳んだ記録が実際に残っていて捨てた回（`reset()` が真）だけ、理由を日誌へ1行残す（本番で畳めた割合を数えるため）。
+   * 同じターンで理由が重なっても、2回目以降は捨てる記録が無いので書かない（最初に当たった理由だけ）。起動直後の最初の全文は、捨てる記録が無いので書かない。
+   * 待たない・握る: 同期の呼び出し元から呼ぶため。`#journal` は投げないので、書き込みの失敗はターンを落とさない。
+   */
+  #resetDigestDelta(reason: 'full' | 'compaction', label: DigestResetLabel): void {
+    if (!this.#digestDelta.reset(reason)) return;
+    // 1ターン1行: 入力を押し込んだ後（commit 済み）に失敗などで戻す回は、同じターンの先頭で書いた行の理由に含める
+    if (this.#digestResetLoggedThisTurn) return;
+    this.#digestResetLoggedThisTurn = true;
+    void this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `${EXCHANGE_KIND_DECISION_PREFIX}固定文を全文へ戻す: 理由=${label}`,
+    });
   }
 
   /** 全文へ戻す条件に当たれば、tick の要約の差分の記録を消す。`#pump` の先頭と、要約を組む直前（組む前の `await` の間に窓が開きうる）から呼ぶ。 */
   #resetDigestDeltaIfNewConversation(): void {
-    const reason = this.#fullReasonThisTurn();
-    if (reason !== null) this.#digestDelta.reset(reason);
+    const found = this.#fullReasonThisTurn();
+    if (found !== null) this.#resetDigestDelta(found.reason, found.label);
   }
 
   /**
@@ -7400,7 +7445,7 @@ class Clone implements CloneHost {
     // 退避や蒸留の try より前に印を立てる: あちらが落ちても索引の載せ直しは行われなければならないため。
     this.#distillMemory.armMemoryIndexRefresh();
     // 要約の直前: この後の会話は潰れるので、tick の要約の差分の記録を捨てる（#4937）。理由は要約なので、次の要約は軽い全文でよい（案 A）
-    this.#digestDelta.reset('compaction');
+    this.#resetDigestDelta('compaction', 'compact_boundary');
 
     if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) {
       return;
@@ -7919,7 +7964,7 @@ class Clone implements CloneHost {
           this.#situationExplainedSessionId !== event.sessionId
         ) {
           this.#situationExplained.clear();
-          this.#digestDelta.reset();
+          this.#resetDigestDelta('full', 'session_changed');
         }
         this.#situationExplainedSessionId = event.sessionId;
         // 投げない: 控えの失敗でセッションを殺さない。跡は残す: 諦め方が「素材が無かった」正常な経路と区別できなくなるため。
@@ -8122,7 +8167,7 @@ class Clone implements CloneHost {
         this.#sdkSession.turn?.timer?.compactionEnded();
         // 要約で前の全文は会話から消えうるので、次のターンの「いまの全体」は説明文を全文で出す
         this.#situationExplained.clear();
-        this.#digestDelta.reset('compaction');
+        this.#resetDigestDelta('compaction', 'compact_boundary');
         // ターンの外で届いた分は捨てる: 対応する `turn_usage` の行が無く、持ち帰る先が無いため。
         this.#sdkSession.turn?.compactions.push({
           trigger: event.trigger,

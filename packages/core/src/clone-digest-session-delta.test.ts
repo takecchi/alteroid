@@ -7,7 +7,10 @@ import {
   REPORT_FOLLOW_UP_GUIDE,
   REPORT_FOLLOW_UP_GUIDE_REF,
 } from './clone.js';
+import type { AgentCloneDriver } from './agent-clone-session.js';
+import { ClaudeCloneDriver } from './claude-clone-driver.js';
 import { waitFor } from './clone-test-harness.js';
+import { EXCHANGE_KIND_DECISION_PREFIX } from './exchange-kind.js';
 import type { CloneHost } from './host.js';
 import { SOURCE_TALLY_HEADING } from './digest.js';
 import { DigestSessionDelta, LEAN_EXTERNAL_TALLY_REF } from './digest-session-delta.js';
@@ -43,6 +46,8 @@ interface SdkScript {
   failFirstStarts?: number;
   /** 使用量の観測を取れなくする（`getContextUsage` を持たない）。既定は閾値から遠い観測を返す（#4941）。 */
   noUsage?: boolean;
+  /** 文脈の使用状況を出せない駆動役（`providesContextUsage: false`）で開く。 */
+  unavailableDriver?: boolean;
   /** n 番目（1始まり）の入力を、成功ではなく失敗の result で終える。 */
   failResultAt?: number;
   /** 入力の受け付けが終わった後、この Promise が解けるまで出来事の列を閉じない（作り直しの窓を開けておく）。 */
@@ -165,9 +170,25 @@ function boot(script: SdkScript = {}): Boot {
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
   const stores = createMemoryStores();
+  // 文脈の使用状況を出せない駆動役（Codex 相当。`providesContextUsage: false`）: 最初の1回は error、2回目以降は観測が無い（null）
+  const inner = new ClaudeCloneDriver({ queryFn: fn });
+  const unavailableDriver: AgentCloneDriver = {
+    providerId: 'claude',
+    providesContextUsage: false,
+    open: (spec) => {
+      const session = inner.open(spec);
+      return {
+        readEvents: (onEvent) => session.readEvents(onEvent),
+        interrupt: () => session.interrupt(),
+        close: () => session.close(),
+        contextUsage: () => Promise.reject(new Error('取れない')),
+        sessionModelUsage: () => session.sessionModelUsage(),
+      };
+    },
+  };
   const clone = createClone({
     stores,
-    queryFn: fn,
+    ...(script.unavailableDriver === true ? { driver: unavailableDriver } : { queryFn: fn }),
     env: {},
     inboxSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
@@ -642,6 +663,101 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     expect(fourth).not.toContain(SELF_INSTRUCTION_HEAD);
     expect(fourth).not.toContain('担当 7 の途中経過');
     await s.clone.stop();
+  });
+
+  describe('全文へ戻した理由が日誌に1行残る（畳めた割合を本番で数えるための観測）', () => {
+    const RESET_LINE = '固定文を全文へ戻す';
+
+    async function resetLines(s: Boot): Promise<string[]> {
+      const rows = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+      return rows.map((row) => row.text).filter((text) => text.includes(RESET_LINE));
+    }
+
+    // 日誌への書き込みは待たない（void）: 書かれていないことを確かめる前に少し待つ
+    // 実時間の待ちを増やさない（#2146）: メモリ上の日誌への書き込みは、イベントループを数周回せば済む
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 20; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+    };
+    const line = (reason: string): string =>
+      `${EXCHANGE_KIND_DECISION_PREFIX}${RESET_LINE}: 理由=${reason}`;
+
+    it('使用量を返さない駆動役: 最初の全文は書かず、観測が無くなった回に usage_null の1行が出る', async () => {
+      const s = boot({ unavailableDriver: true });
+      await seed(s.stores);
+      await selfTick(s);
+      await settle();
+      expect(await resetLines(s)).toEqual([]);
+      // 2回目: 1回目の観測は error（usage_error）
+      await selfTick(s);
+      await waitFor(async () => (await resetLines(s)).length >= 1, 'usage_error の行');
+      // 3回目: 以後は観測が無い（null）
+      await selfTick(s);
+      await waitFor(async () => (await resetLines(s)).length >= 2, 'usage_null の行');
+      const lines = await resetLines(s);
+      // 並びは見ない（日誌の書き込みは待たないため、同じ時刻の行の並びが揺れうる）
+      expect([...lines].sort()).toEqual([line('usage_error'), line('usage_null')].sort());
+      await s.clone.stop();
+    });
+
+    it('使用量の取得に失敗する回（getContextUsage が無い）は usage_error の1行', async () => {
+      const s = boot({ noUsage: true });
+      await seed(s.stores);
+      await selfTick(s);
+      await selfTick(s);
+      await waitFor(async () => (await resetLines(s)).length >= 1, 'usage_error の行');
+      await settle();
+      expect(await resetLines(s)).toEqual([line('usage_error')]);
+      // 測った字数（`[判断] ` つきの journal の text 全体）
+      expect((await resetLines(s))[0]?.length).toBe(30);
+      expect(line('usage_threshold_missing').length).toBe(42); // 最長のラベル
+      await s.clone.stop();
+    });
+
+    it('使用量が取れて閾値の手前なら畳まれ、行は出ない', async () => {
+      const s = boot({ contextTotals: [50_000, 60_000, 70_000] });
+      await seed(s.stores);
+      await selfTick(s);
+      await selfTick(s);
+      await selfTick(s);
+      await settle();
+      expect(await resetLines(s)).toEqual([]);
+      await s.clone.stop();
+    });
+
+    it('閾値に届く見込みの回は compaction_likely の1行', async () => {
+      const s = boot({ contextTotals: [150_000, 180_000, 185_000] });
+      await seed(s.stores);
+      await selfTick(s);
+      await selfTick(s);
+      await selfTick(s);
+      await waitFor(async () => (await resetLines(s)).length >= 1, 'compaction_likely の行');
+      await settle();
+      expect(await resetLines(s)).toEqual([line('compaction_likely')]);
+      await s.clone.stop();
+    });
+
+    it('失敗したターンの次に turn_failed の1行が出る', async () => {
+      const s = boot({ failResultAt: 2 });
+      await seed(s.stores);
+      await selfTick(s);
+      await selfTick(s);
+      await waitFor(async () => (await resetLines(s)).length >= 1, 'turn_failed の行');
+      await selfTick(s);
+      await settle();
+      expect(await resetLines(s)).toEqual([line('turn_failed')]);
+      await s.clone.stop();
+    });
+
+    it('同じターンに複数の理由が重なっても1行だけ（先頭で usage_error、失敗後の turn_failed は書かない）', async () => {
+      const s = boot({ noUsage: true, failResultAt: 2 });
+      await seed(s.stores);
+      await selfTick(s);
+      await selfTick(s);
+      await waitFor(async () => (await resetLines(s)).length >= 1, 'usage_error の行');
+      await settle();
+      expect(await resetLines(s)).toEqual([line('usage_error')]);
+      await s.clone.stop();
+    });
   });
 
   it('日報は全文のまま（差分にしない）', async () => {
