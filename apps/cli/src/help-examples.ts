@@ -34,6 +34,10 @@ export const HELP_EXAMPLES = {
     'alteroid progress                       # 既定の窓で',
     'alteroid progress --window-hours 24     # 直近24時間の消化で見込みを出す',
   ),
+  tasks: examples(
+    'alteroid tasks                          # 開いている task を、先にやる順に',
+    'alteroid tasks --all                    # 閉じた task も後ろに足す',
+  ),
   attachmentsPut: examples(
     'alteroid attachments put ./run.log           # 上げて id を出す（1 時間以内に発言へ添える）',
     'alteroid attachments put ./run.log --keep    # 保存して上げる（期限なし。消すのは rm）',

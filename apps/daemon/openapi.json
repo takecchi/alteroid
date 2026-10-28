@@ -26366,6 +26366,146 @@
         }
       }
     },
+    "/tasks": {
+      "get": {
+        "operationId": "getTasks",
+        "tags": ["tasks"],
+        "summary": "task（順序と状態を持つ待ち行列）の一覧",
+        "description": "クローンの `task_list` と同じものを人間の側から読む。**`entries` の並びが優先順**（先頭が先にやるもの）で、数値の優先度・締切は持たない。既定は開いている行（`queued` / `waiting` / `needs_decision`）だけで、`includeClosed=true` を付けると閉じた行（`done` / `cancelled`）が後ろに新しい順で続く。本文は切らずに返す。`unreadable` は読めなかった行で、「無い」でも「終わった」でもない第3の状態（0件でも欄は返る）。引き受けた仕事の台帳（`/commitments`）とは別の器で、台帳から自動では載らない。",
+        "responses": {
+          "200": {
+            "description": "task の一覧。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["queued", "waiting", "needs_decision", "done", "cancelled"]
+                          },
+                          "origin": {
+                            "type": "string",
+                            "enum": ["human", "manager", "external", "self"]
+                          },
+                          "source": {
+                            "type": "string"
+                          },
+                          "originConversationId": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "body": {
+                            "type": "string"
+                          },
+                          "closedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "closedReason": {
+                            "type": "string"
+                          },
+                          "closedBy": {
+                            "description": "既知の値は 'clone' | 'human' | 'daemon'（taskClosedBySchema）。未知の値も保持する。",
+                            "type": "string"
+                          },
+                          "keep": {
+                            "type": "boolean",
+                            "const": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "createdAt",
+                          "updatedAt",
+                          "status",
+                          "origin",
+                          "title",
+                          "body"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "unreadable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["reason"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["entries", "unreadable"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "クエリが不正（`includeClosed` は `true` / `false` だけ）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "includeClosed",
+            "schema": {
+              "default": "false",
+              "type": "string",
+              "enum": ["true", "false"]
+            }
+          }
+        ]
+      }
+    },
     "/commitments/{id}": {
       "get": {
         "operationId": "getCommitmentsById",
@@ -37806,7 +37946,7 @@
         "operationId": "postReset",
         "tags": ["system"],
         "summary": "トークン情報以外のワークスペースを全部消す",
-        "description": "記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・引き受けた仕事・仕事のやり方・アーカイブ・セッション・実行環境プロファイル・添付（保存したファイルを含む）・利用状況の台帳を全部消す。**認証トークンのプール・マネージャーへ降ろす環境変数・Web UI のログインアカウントは消さない。** 取り消せない。",
+        "description": "記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・引き受けた仕事・task（順序と状態を持つ待ち行列）・仕事のやり方・アーカイブ・セッション・実行環境プロファイル・添付（保存したファイルを含む）・利用状況の台帳を全部消す。**認証トークンのプール・マネージャーへ降ろす環境変数・Web UI のログインアカウントは消さない。** 取り消せない。",
         "responses": {
           "200": {
             "description": "消した件数の内訳。",
@@ -37854,6 +37994,11 @@
                           "maximum": 9007199254740991
                         },
                         "commitments": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "tasks": {
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
@@ -37918,6 +38063,7 @@
                         "schedulePhases",
                         "inbox",
                         "commitments",
+                        "tasks",
                         "practices",
                         "archive",
                         "sessions",

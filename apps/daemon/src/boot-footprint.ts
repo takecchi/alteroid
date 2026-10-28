@@ -38,6 +38,7 @@ function namedTextBytesOf(footprint: StorageFootprint): NamedTextBytes[] {
     { name: 'jobs', textBytes: footprint.jobs.textBytes },
     { name: 'commitments.open', textBytes: footprint.commitments.open.textBytes },
     { name: 'commitments.closed', textBytes: footprint.commitments.closed.textBytes },
+    { name: 'tasks', textBytes: footprint.tasks.textBytes },
     { name: 'inbox_events', textBytes: footprint.inboxEvents.textBytes },
     { name: 'journal.all', textBytes: footprint.journal.all.textBytes },
     { name: 'archive', textBytes: footprint.archive.textBytes },
@@ -121,6 +122,7 @@ export function describeBootFootprint(
     describeStat('jobs', footprint.jobs),
     describeStat('commitments.open', footprint.commitments.open),
     describeStat('commitments.closed', footprint.commitments.closed),
+    describeStat('tasks', footprint.tasks),
     `inbox_events(rows=${rowsOrNull(footprint.inboxEvents.rows)} ` +
       `stored=${statOrNull(footprint.inboxEvents.storedBytes)} text=${statOrNull(footprint.inboxEvents.textBytes)} ` +
       `maxStored=${statOrNull(footprint.inboxEvents.maxStoredBytes)} maxText=${statOrNull(footprint.inboxEvents.maxTextBytes)} ` +

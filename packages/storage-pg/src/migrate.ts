@@ -294,6 +294,14 @@ export const STATEMENTS = [
        and m.top >= case when s.is_called then s.last_value + 1 else s.last_value end`,
   `alter table commitments alter column seq set default nextval('commitments_seq_seq')`,
 
+  // 順序と状態を持つ待ち行列（#5469 P2）。台帳（commitments）とは別の表で、台帳から自動では移さない。
+  // rank は double precision（fractional rank）。隙間が尽きたときの振り直しは core の `placeTask` が決める。
+  `create table if not exists tasks (
+     id text primary key,
+     rank double precision not null,
+     task jsonb not null
+   )`,
+
   // human guard の派生値。null は unknown（守る側）に落ちるので安全な既定。実体は日誌（memory_update.cause）。
   `alter table memory add column if not exists human_touched_at timestamptz`,
   `alter table memory add column if not exists content_sha256 text`,

@@ -113,6 +113,7 @@ import type {
   PermissionGrantStore,
   ProfileStore,
   CommitmentStore,
+  TaskStore,
   PracticeStore,
   ScheduleStore,
   LostSessionGrave,
@@ -151,6 +152,14 @@ import {
   type AgentToken,
   type TokenRotationSettings,
 } from './token-pool.js';
+import {
+  addTaskRow,
+  listTaskRows,
+  moveTaskRow,
+  prepareTask,
+  setTaskRowStatus,
+  type TaskRow,
+} from './task.js';
 import { assertValidCredentialEntries } from './credential-input.js';
 import {
   stripNulFromUnmeteredRecord,
@@ -887,6 +896,44 @@ export function createMemoryStores(): Stores {
     async clear() {
       const removed = commitments.size;
       commitments.clear();
+      return removed;
+    },
+  };
+
+  // 規則は `task.ts` の関数が持つ（fs / pg と共有）。ここは行の置き場だけ。各操作は同期区間で読んで書く（間に await を挟まない）
+  let taskRows: TaskRow[] = [];
+  const taskStore: TaskStore = {
+    async list(options) {
+      return {
+        entries: listTaskRows(taskRows, options?.includeClosed === true).map(isolate),
+        unreadable: [],
+      };
+    },
+    async get(id) {
+      const found = taskRows.find((row) => row.task.id === id);
+      return found === undefined ? null : isolate(found.task);
+    },
+    async add(entry, placement) {
+      const prepared = prepareTask(entry);
+      const { rows, result } = addTaskRow(taskRows, isolate(prepared), placement);
+      taskRows = rows;
+      return result;
+    },
+    async move(id, placement) {
+      const { rows, result } = moveTaskRow(taskRows, id, placement);
+      taskRows = rows;
+      return result;
+    },
+    async setStatus(id, status, options) {
+      const { rows, result } = setTaskRowStatus(taskRows, id, status, options);
+      taskRows = rows;
+      return result.kind === 'changed'
+        ? { ...result, before: isolate(result.before), task: isolate(result.task) }
+        : result;
+    },
+    async clear() {
+      const removed = taskRows.length;
+      taskRows = [];
       return removed;
     },
   };
@@ -1992,6 +2039,7 @@ export function createMemoryStores(): Stores {
     jobs: jobStore,
     schedules: scheduleStore,
     commitments: commitmentStore,
+    tasks: taskStore,
     practices: practiceStore,
     inbox: inboxStore,
     archive,

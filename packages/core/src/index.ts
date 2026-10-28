@@ -482,6 +482,30 @@ export {
   isArchiveRefId,
 } from './archive-ref.js';
 export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archive-session-id.js';
+// Task（#5469 P2）。状態遷移・並び・行の操作は純関数で、メモリ・fs・pg の3実装が共有する
+export {
+  TASK_RANK_STEP,
+  addTaskRow,
+  isTaskClosed,
+  listTaskRows,
+  moveTaskRow,
+  placeTask,
+  planTaskTransition,
+  prepareTask,
+  setTaskRowStatus,
+} from './task.js';
+export type {
+  SetTaskStatusOptions,
+  TaskAddResult,
+  TaskMoveResult,
+  TaskPlacement,
+  TaskPlacementResult,
+  TaskRankRow,
+  TaskRow,
+  TaskSetStatusResult,
+  TaskTransition,
+} from './task.js';
+export { verifyTaskStoreContract } from './task-store-contract.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 export { verifyCommitmentAutoCloseMarkContract } from './commitment-auto-close-mark-contract.js';

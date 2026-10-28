@@ -19,6 +19,7 @@ function emptyFootprint(): StorageFootprint {
   return {
     jobs: emptyStats(),
     commitments: { open: emptyStats(), closed: emptyStats() },
+    tasks: emptyStats(),
     inboxEvents: { ...emptyStats(), maxDeliveries: 0 },
     journal: {
       all: { rows: 0, storedBytes: 0, textBytes: 0 },

@@ -217,7 +217,7 @@ describe('分類器の拒否が続いた担当の事情を、クローンへの�
     expect(notice).toContain('auto mode の分類器があなたの操作を続けて 3 回止めた');
     expect(notice).toContain('新しい作業者に、何をなぜするかを書いて渡す');
     expect(notice).toContain(
-      '区切りが付いたら報告して止まり、クローンに後継の担当を起こしてもらう',
+      '区切りが付いたら報告して止まり、ユーザーに後継の担当を起こしてもらう',
     );
     expect(notice).toContain('回り込んで通そうとしないこと');
     // 2回目は添えない

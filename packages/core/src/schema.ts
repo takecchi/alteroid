@@ -1062,6 +1062,63 @@ export const unreadableCommitmentSchema = z.object({
 });
 export type UnreadableCommitment = z.infer<typeof unreadableCommitmentSchema>;
 
+// 台帳（Commitment）と並べて新設した「順序と状態を持つ待ち行列」の1行（#5469 方針案1。P2 は型・ストア・道具まで）。
+// waiting = 委譲または人間の返事待ち、needs_decision = 委譲が終わった/失敗した/lost になってクローンの判断待ち。
+// P2 では状態を設定できるだけで、委譲の終わりからの自動遷移は P3 の仕事。
+export const taskStatusSchema = z.enum([
+  'queued',
+  'waiting',
+  'needs_decision',
+  'done',
+  'cancelled',
+]);
+
+// 書き込み側だけをこの enum で縛る（`commitmentClosedBySchema` と同じ理由）: 保存層に使うと未知の値1つで一覧が丸ごと読めなくなる
+export const taskClosedBySchema = z.enum(['clone', 'human', 'daemon']);
+
+// 並び（位置）を行の欄にしない: 位置は他の行との関係で決まるので、行を書き直すたびに隣の行と食い違いうる。ストアが持つ（`task.ts` の placeTask）
+// 優先度・締切の数値も持たない: 持つのは並びだけ（#5469 方針案1。数値を持つと「やることの一覧」の判断がクローンから器へ移る）
+export const taskSchema = z.object({
+  id: z.string(),
+  createdAt: isoDateTime,
+  // 状態・閉じた記録の更新で動く。本文の版には使わない
+  updatedAt: isoDateTime,
+  status: taskStatusSchema,
+  origin: commitmentOriginSchema,
+  source: z.string().optional(),
+  // P2 では任意: 台帳から自動で task を作らない（二重書き込みをしない）ので、起点の会話が定まらない task が生まれるため。
+  // 必須にするのは P4（`task_say` で会話の宛先を task に固定するとき）。それまで必須にすると、起点の無い task を作る道具が嘘の会話 id を要求する
+  originConversationId: z.string().optional(),
+  // 短い一行。一覧にはこれと要旨だけを出し、全文は id 指定の口へ回す（listing-and-detail）
+  title: z.string(),
+  // 要約にしない: 器が要約を持つと「頼まれた内容そのもの」が二度と取れなくなるため（`commitmentSchema.body` と同じ）
+  body: z.string(),
+  closedAt: isoDateTime.optional(),
+  closedReason: z.string().optional(),
+  // `z.enum` にしない（`commitmentSchema.closedBy` と同じ理由）
+  closedBy: z
+    .string()
+    .optional()
+    .describe(
+      "既知の値は 'clone' | 'human' | 'daemon'（taskClosedBySchema）。未知の値も保持する。",
+    ),
+  // P5 の `task_keep`（返答しても自動で閉じない印）の欄だけ先に置く。P2 には立てる道具が無い。
+  // 後から足すと、欄の無い古い行と区別が付かなくなるので、読める形を先に確定させる
+  keep: z.literal(true).optional(),
+});
+
+export type TaskStatus = z.infer<typeof taskStatusSchema>;
+export type TaskClosedBy = z.infer<typeof taskClosedBySchema>;
+export type Task = z.infer<typeof taskSchema>;
+
+// `reason` に本文を載せない理由は `unreadableCommitmentSchema` と同じ
+export const unreadableTaskSchema = z.object({
+  id: z.string().optional(),
+  createdAt: isoDateTime.optional(),
+  reason: z.string(),
+});
+export type UnreadableTask = z.infer<typeof unreadableTaskSchema>;
+
 export function commitmentUpdatedAt(entry: Pick<Commitment, 'at' | 'closedAt'>): string {
   return entry.closedAt ?? entry.at;
 }
