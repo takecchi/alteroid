@@ -297,7 +297,7 @@ export function describeTokenSituation(input: {
           (TOKEN_COOLDOWN_SOURCE_LABEL[row.cooldownSource ?? 'unrecorded'] ?? '出所の記録が無い') +
           '）'
         : '';
-    return '現役は「' + row.label + '」（記録の上では ' + TOKEN_STATE_LABEL[state] + until + '）';
+    return '現役は「' + row.label + '」（記録上は ' + TOKEN_STATE_LABEL[state] + until + '）';
   })();
 
   return (
@@ -305,7 +305,7 @@ export function describeTokenSituation(input: {
     current +
     '。プール ' +
     String(input.tokens.length) +
-    ' 本: いま使える ' +
+    ' 本: 使える ' +
     String(ready.length) +
     ' / 冷却中 ' +
     String(cooling.length) +
@@ -462,7 +462,7 @@ export function describeSituation(input: {
   const lastStartClause =
     latestStart === undefined
       ? ''
-      : `（最後に起こしたのは ${formatElapsedSinceLastStart(at - latestStart)}）`;
+      : `（最後の起動は ${formatElapsedSinceLastStart(at - latestStart)}）`;
   const showTokens = !(input.tokens === undefined && input.active === undefined);
   // lost は「その他」の直前に置く: lost はそこから切り出したもので、隣に並べば「その他が減って lost が増えた」と読めるため
   // 経過の句だけ引数にする: 経過は時刻の流れだけで毎回変わるので、「変化なし」の比較（`materials`）には入れず、出す行にだけ入れるため
@@ -470,7 +470,7 @@ export function describeSituation(input: {
     `委譲 全 ${counts.total} 本: 走行中 ${counts.running} / 返事待ち ${counts.waitingHuman} / ` +
     `背景処理待ち ${counts.awaitingBackground} / 手が空いている ${counts.idle} / ` +
     (counts.lost === 0 ? '' : `${LOST_LABEL} ${counts.lost} / `) +
-    `その他 ${counts.other}。話しかけられるのは ${counts.reachable} 本。` +
+    `その他 ${counts.other}。話しかけられる ${counts.reachable} 本。` +
     // 横断する軸は分割の後ろに置く: 区分の並びの中へ差し込むと、足せば total になる数の列に別の軸が混ざるため
     (counts.lastTurnFailed === 0
       ? ''
@@ -488,7 +488,7 @@ export function describeSituation(input: {
       : `${RUNNER_VANISHED_LABEL}のは ${counts.runnerVanished} 本` +
         '（必ず「走行中」の内側。上の区分とは足し合わせない）。') +
     // 0 本でも出す: 0 が合図で、閾値も ⚠ も持たないため
-    `直近${RECENT_MANAGER_START_WINDOW_HOURS}時間に新しく起こした委譲: ${recentStarts} 本${startClause}。`;
+    `直近${RECENT_MANAGER_START_WINDOW_HOURS}時間に起こした ${recentStarts} 本${startClause}。`;
   const runnerLine = `器 ${input.runners.length} 台${runnerBreakdown === '' ? '' : `: ${runnerBreakdown}`}。`;
   // 鍵の行は不変条件を除いて比べる: 不変条件は固定の説明文で、畳むかどうかは `tokenInvariant` の控えが決めるため
   const tokenMaterialLine = showTokens
@@ -518,7 +518,7 @@ export function describeSituation(input: {
   // 鍵の行の不変条件も同じ控えで畳む: 鍵の行そのもの（数）は毎回出す
   const tokenInvariantShown = showTokens && explain('tokenInvariant', TOKEN_INVARIANT).length > 0;
   const lines = [
-    `${SITUATION_HEAD}（${readAtLabel(at)} に数えた材料だけ。ここから何をするかは決めない）。`,
+    `${SITUATION_HEAD}（${readAtLabel(at)} に数えた材料だけ。何をするかは決めない）。`,
     delegationLineWith(lastStartClause),
     // 断りは本数の直後に並べる: 数と、そこから何を確かめるかを離すと数だけが読まれるため。0 のときは1文字も出さない
     ...(counts.lost === 0 ? [] : explain('lost', LOST_NOTICE)),
@@ -531,7 +531,7 @@ export function describeSituation(input: {
   // 畳んだ説明文は要点だけを1行にまとめ、元の場所（器の行の直後）に置く: 参照だけでは毎ターンの判断に効かないため
   if (folded.length > 0) {
     lines.push(
-      `（読み方の注意書きは、この会話で前に出した全文から変わっていないので要点だけにした: ` +
+      `（読み方の注意書きは会話に出した全文と同じなので要点だけにした: ` +
         `${folded.map((key) => EXPLANATION_GIST[key]).join(' ')}）`,
     );
   }

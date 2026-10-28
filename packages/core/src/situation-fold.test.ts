@@ -75,6 +75,26 @@ describe('同じ会話で一度出した「いまの全体」の説明文は、�
     expect(second.length).toBeLessThan(first.length / 2);
   });
 
+  it('⭐ 変化ありの固定語句は短い形のままで、要点の行は消えていない（トークン節約）', () => {
+    const explained: SituationExplained = new Map();
+    const managers = [summary('mgr-1', 'done'), summary('mgr-2', 'running')];
+    situation(managers, explained);
+    const second = situation([...managers, summary('mgr-3', 'running')], explained);
+
+    expect(second).toContain('に数えた材料だけ。何をするかは決めない）。');
+    expect(second).toContain('話しかけられる ');
+    expect(second).toContain('（読み方の注意書きは会話に出した全文と同じなので要点だけにした: ');
+    expect(second).toContain('認証トークン: 現役は「鍵A」（記録上は 使える）');
+    expect(second).toContain('プール 1 本: 使える 1 /');
+    // 旧い長い言い回しへ戻さない（要点そのものは上の試験が守る）
+    expect(second).not.toContain('ここから何をするかは決めない');
+    expect(second).not.toContain('話しかけられるのは');
+    expect(second).not.toContain('新しく起こした委譲');
+    expect(second).not.toContain('この会話で前に出した全文');
+    expect(second).not.toContain('記録の上では');
+    expect(second).not.toContain('いま使える');
+  });
+
   it('新しく出てきた注意書き（lost）は全文で出し、変わっていないものだけ畳む', () => {
     const explained: SituationExplained = new Map();
     situation([summary('mgr-1', 'done')], explained);
@@ -144,7 +164,7 @@ describe('材料の行が前回と同じなら、1行にする（#5295）', () =
       at: AT + 7 * 60 * 1000,
       explained,
     });
-    // 「最後に起こしたのは N分前」の経過は動くが、起動そのものは同じなので変化とは数えない
+    // 「最後の起動は N分前」の経過は動くが、起動そのものは同じなので変化とは数えない
     expect(later).toContain(`${UNCHANGED_HEAD}（04:07:00Z に数え直した）`);
   });
 

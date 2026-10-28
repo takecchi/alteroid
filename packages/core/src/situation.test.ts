@@ -394,7 +394,7 @@ describe('describeSituation', () => {
     expect(text).toContain('背景処理待ち 0');
     expect(text).toContain('手が空いている 0');
     expect(text).toContain('その他 0');
-    expect(text).toContain('話しかけられるのは 1 本');
+    expect(text).toContain('話しかけられる 1 本');
   });
 
   it('数えた本数がそのまま出る（背景処理待ちと手が空いているを取り違えない）', () => {
@@ -431,7 +431,7 @@ describe('describeSituation', () => {
     expect(text).toContain('手が空いている 1');
     expect(text).toContain('戻れなかった(lost) 5');
     expect(text).toContain('その他 6');
-    expect(text).toContain('話しかけられるのは 10 本');
+    expect(text).toContain('話しかけられる 10 本');
   });
 
   it('⭐ lost が在れば本数と、リモートを確かめる順序と、名指しの引き方が出る', () => {
@@ -481,7 +481,7 @@ describe('describeSituation', () => {
       at: AT,
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
-    expect(countsLine).toContain('直近3時間に新しく起こした委譲: 2 本');
+    expect(countsLine).toContain('直近3時間に起こした 2 本');
   });
 
   it('⭐ 直近3時間の開始が0本でも「0 本」と出る（行が消えない）', () => {
@@ -497,7 +497,7 @@ describe('describeSituation', () => {
       at: AT,
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
-    expect(countsLine).toContain('直近3時間に新しく起こした委譲: 0 本');
+    expect(countsLine).toContain('直近3時間に起こした 0 本');
   });
 
   it('⭐ 0 本のときも、最後に起こした経過が括弧で添えられる（issue本文の実測どおり）', () => {
@@ -509,9 +509,7 @@ describe('describeSituation', () => {
       at: AT,
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
-    expect(countsLine).toContain(
-      '直近3時間に新しく起こした委譲: 0 本（最後に起こしたのは 4時間36分前）。',
-    );
+    expect(countsLine).toContain('直近3時間に起こした 0 本（最後の起動は 4時間36分前）。');
   });
 
   it('⭐ 1本以上のときも、最後に起こした経過が括弧で添えられる（分だけの粒度）', () => {
@@ -531,9 +529,7 @@ describe('describeSituation', () => {
       at: AT,
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
-    expect(countsLine).toContain(
-      '直近3時間に新しく起こした委譲: 2 本（最後に起こしたのは 12分前）。',
-    );
+    expect(countsLine).toContain('直近3時間に起こした 2 本（最後の起動は 12分前）。');
   });
 
   it('⭐ 最後の開始が1分未満前なら「1分未満前」と出る', () => {
@@ -546,9 +542,7 @@ describe('describeSituation', () => {
       at: AT,
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
-    expect(countsLine).toContain(
-      '直近3時間に新しく起こした委譲: 1 本（最後に起こしたのは 1分未満前）。',
-    );
+    expect(countsLine).toContain('直近3時間に起こした 1 本（最後の起動は 1分未満前）。');
   });
 
   it('⭐ 最後の開始が観測時刻より未来（時計のずれ）でも「1分未満前」に丸まる', () => {
@@ -564,14 +558,14 @@ describe('describeSituation', () => {
       at: AT,
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
-    expect(countsLine).toContain('（最後に起こしたのは 1分未満前）。');
+    expect(countsLine).toContain('（最後の起動は 1分未満前）。');
   });
 
   it('⭐ 委譲が0本なら括弧は出ない', () => {
     const AT = Date.parse('2026-09-16T14:51:00.000Z');
     const text = describeSituation({ managers: [], runners: [], at: AT });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
-    expect(countsLine).toContain('直近3時間に新しく起こした委譲: 0 本。');
+    expect(countsLine).toContain('直近3時間に起こした 0 本。');
     expect(countsLine).not.toContain('（');
   });
 
@@ -586,7 +580,7 @@ describe('describeSituation', () => {
       at: AT,
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
-    expect(countsLine).toContain('直近3時間に新しく起こした委譲: 0 本。');
+    expect(countsLine).toContain('直近3時間に起こした 0 本。');
     expect(countsLine).not.toContain('（');
   });
 
@@ -830,7 +824,7 @@ describe('describeSituation', () => {
     for (const forbidden of ['始める', '置くこと', '委譲を出', 'べきである', 'しなさい']) {
       expect(text, `指図（${forbidden}）が混ざっている`).not.toContain(forbidden);
     }
-    expect(text).toContain('ここから何をするかは決めない');
+    expect(text).toContain('何をするかは決めない');
   });
 
   it('末尾は本文と区切られている（--- で終わる）', () => {
@@ -936,7 +930,7 @@ describe('枠を理由に見送らせない（describeTokenSituation）', () => 
     });
 
     expect(line).toContain('現役は「staging@example」');
-    expect(line).toContain('記録の上では 使える');
+    expect(line).toContain('記録上は 使える');
   });
 
   it('⭐ 冷却中でも「見送らない」の1行が付く（ここが事故の本体）', () => {
@@ -946,7 +940,7 @@ describe('枠を理由に見送らせない（describeTokenSituation）', () => 
       at: AT,
     });
 
-    expect(line).toContain('記録の上では 冷却中');
+    expect(line).toContain('記録上は 冷却中');
     expect(line).toContain('冷却明けは 2026-09-07T10:45:00.000Z');
     expect(line).toContain('枠を理由に仕事を見送らないこと');
     expect(line).toContain('書ける状況では必ず偽');
@@ -972,7 +966,7 @@ describe('枠を理由に見送らせない（describeTokenSituation）', () => 
       at: AT,
     });
 
-    expect(line).toContain('プール 5 本: いま使える 2 / 冷却中 1 / 人間が外している 1 / 失効 1');
+    expect(line).toContain('プール 5 本: 使える 2 / 冷却中 1 / 人間が外している 1 / 失効 1');
     expect(line).not.toContain('外されている');
   });
 
@@ -1012,7 +1006,7 @@ describe('枠を理由に見送らせない（describeTokenSituation）', () => 
     });
     expect(line).not.toContain('プールを読めなかった');
     expect(line).toContain('現役の指名を読めなかった');
-    expect(line).toContain('プール 2 本: いま使える 2 / 冷却中 0 / 人間が外している 0 / 失効 0');
+    expect(line).toContain('プール 2 本: 使える 2 / 冷却中 0 / 人間が外している 0 / 失効 0');
     expect(line).toContain('枠を理由に仕事を見送らないこと');
   });
 

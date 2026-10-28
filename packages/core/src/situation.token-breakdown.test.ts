@@ -29,7 +29,7 @@ describe('describeTokenSituation のプール内訳（#1794 人間が外した�
     expect(line).not.toContain('外されている');
     expect(line).toContain('人間が外している 1');
     expect(line).toContain('失効 1');
-    expect(line).toContain('いま使える 1');
+    expect(line).toContain('使える 1');
     expect(line).toContain('冷却中 0');
   });
 
@@ -62,7 +62,7 @@ describe('describeTokenSituation のプール内訳（#1794 人間が外した�
       at: AT,
     });
 
-    expect(line).toContain('プール 1 本: いま使える 1 / 冷却中 0 / 人間が外している 0 / 失効 0');
+    expect(line).toContain('プール 1 本: 使える 1 / 冷却中 0 / 人間が外している 0 / 失効 0');
     expect(line).not.toContain('外されている');
   });
 
@@ -91,7 +91,7 @@ describe('describeTokenSituation のプール内訳（#1794 人間が外した�
       at: AT,
     });
 
-    expect(line).toContain('記録の上では 人間が外している');
+    expect(line).toContain('記録上は 人間が外している');
     expect(line).toContain('人間が外している 1');
   });
 });
