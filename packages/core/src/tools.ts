@@ -222,7 +222,7 @@ import {
   scanMemorySections,
 } from './memory.js';
 import { stripNul } from './nul-guard.js';
-import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
+import type { MemoryFold, MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
 import { redactProfileFailure } from './profile.js';
 import { renderAccountList } from './account-list.js';
 import { renderPermissionGrantList } from './permission-grant-list.js';
@@ -2578,6 +2578,7 @@ function memoryFloorNote(
   slug: string,
   writtenContent: string,
   created: boolean,
+  fold?: MemoryFold,
 ): string {
   return describeMemoryFloor({
     before: measureMemoryFloor(memoryBefore),
@@ -2585,6 +2586,7 @@ function memoryFloorNote(
     slug,
     kind: resolveMemoryDocKind(parseMemoryFrontmatter(writtenContent)),
     created,
+    ...(fold === undefined ? {} : { fold }),
   });
 }
 
@@ -2596,11 +2598,13 @@ function memorySessionGrowthNote(
   memoryAfter: readonly MemoryPart[],
   runtime: CloneRuntimeFacts | undefined,
   writtenContents: readonly string[],
+  fold?: MemoryFold,
 ): string {
   const afterChars = measureMemoryFloor(memoryAfter).totalChars;
   const sessionDelta = describeMemorySessionDelta({
     afterChars,
     injectedMemoryChars: runtime?.injectedMemoryChars ?? null,
+    ...(fold === undefined ? {} : { fold }),
   });
   const ranking = describeMemoryPremiseRanking(memoryAfter);
   const touchesPremise = writtenContents.some(
@@ -3309,7 +3313,7 @@ export function createCloneTools(context: ToolContext) {
           .describe(`追記する Markdown（${formatStringLengthJa({ min: 1 })}。空白だけは断る）`),
         summary: z.string().describe('何を追記したかの一行要約（日誌に残る）'),
       },
-      async ({ slug, content, summary }) => {
+      async ({ slug, content, summary }, extra: unknown) => {
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
@@ -3345,21 +3349,29 @@ export function createCloneTools(context: ToolContext) {
           before === null ? null : before.content,
           written.content,
         );
+        // 見出し・注記の固定語句だけを、同じ会話の2回目から札にする（数・slug・消えた見出しの名指しは畳まない）。応答を返す直前のここで1度だけ呼ぶ
+        const fold = foldFixedFor(context, extra);
         const floor = memoryFloorNote(
           memoryBefore,
           memoryAfter,
           slug,
           written.content,
           before === null,
+          fold,
         );
         const reinjection = describeMemoryReinjectionEstimate(
           [written],
           memoryAfter,
           seenBefore(slug, before),
+          fold,
         );
-        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
-          written.content,
-        ]);
+        const growth = memorySessionGrowthNote(
+          memoryBefore,
+          memoryAfter,
+          context.runtime?.(),
+          [written.content],
+          fold,
+        );
         const head =
           before === null
             ? `記憶 ${slug} を作った（${written.content.length.toLocaleString('en-US')} 文字）。`
@@ -4643,7 +4655,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(`id で全文を読むとき、何文字目から読むか（${formatIntRangeJa({ min: 0 })}）`),
       },
-      async ({ id, offset = 0 }) => {
+      async ({ id, offset = 0 }, extra: unknown) => {
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         if (id !== undefined) {
@@ -4721,8 +4733,15 @@ export function createCloneTools(context: ToolContext) {
             ],
           }),
         );
+        // 末尾の固定の注記は、同じ会話の2回目から札にする（質問が抜粋であること・並びの向きは札にも残す）。
+        // 件ごとの行（`（詳細は approvals_list id=<id>）`）は畳まない: 予算で出ない件が先に「全文を出した」と控えられるため
+        const fold = foldFixedFor(context, extra);
         const notes = [
-          '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
+          NO_FIXED_FOLD(
+            'approvals-list:note-excerpt',
+            '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
+            '（質問は抜粋。全文は id=<id> で取れる）',
+          ),
           ...(unreadableNote === null ? [] : [unreadableNote]),
         ];
         // 詳細が予算に入りきれば、今どおり作成の古い順に全件の詳細を出す
@@ -4731,7 +4750,11 @@ export function createCloneTools(context: ToolContext) {
             [
               renderListing(items, { budget: APPROVAL_LIST_BUDGET, omitted: () => '' }),
               ...notes,
-              '（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）',
+              fold(
+                'approvals-list:order-note',
+                '（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）',
+                '（並び: 作成時刻の昇順、同着は id の昇順）',
+              ),
             ].join('\n'),
           );
         }
@@ -4765,7 +4788,11 @@ export function createCloneTools(context: ToolContext) {
                 `…ほか ${rest} 件は詳細を省略（新しい順に先頭から ${shown} 件だけ出した。残りは上の索引の id で approvals_list id=<id> として開ける）。`,
             }),
             ...notes,
-            '（索引の並び: 作成時刻の昇順。同じ作成時刻なら id の昇順。詳細はその逆順。保存先の実装には依存しない）',
+            fold(
+              'approvals-list:order-note-indexed',
+              '（索引の並び: 作成時刻の昇順。同じ作成時刻なら id の昇順。詳細はその逆順。保存先の実装には依存しない）',
+              '（索引は作成時刻の昇順、同着は id の昇順。詳細はその逆順）',
+            ),
           ].join('\n'),
         );
       },
@@ -7772,7 +7799,7 @@ export function createCloneTools(context: ToolContext) {
           ),
         closes: CLOSES_SCHEMA,
       },
-      async ({ managerId, message, decision, requestId, attachments, closes }) => {
+      async ({ managerId, message, decision, requestId, attachments, closes }, extra: unknown) => {
         // 閉じる指定の誤りは、送る前に丸ごと断る（送ってから閉じる側だけ断ると、半分だけ済んだ呼びになるため）
         const closesError = describeClosesViolation(closes);
         if (closesError !== null) return text(closesError);
@@ -7858,12 +7885,15 @@ export function createCloneTools(context: ToolContext) {
         // 「同じ本文で立て直さないこと」は落とさない: 送った直後の `manager_list` が `lost` のままで、クローンが指示を失ったと判断し出し直した実害があるため
         if (result.outcome === 'delivered') {
           // 毎回返る文なので短く保つ（理由の詳しい説明は道具の説明文の側に1回だけ置く）: 送るたびにクローンの文脈へ積まれ、読み直しの費用になるため
+          // 脚注は同じ会話の2回目から札にする（結論の「同じ本文で新しい委譲を立てない」は札にも残す）。返す直前のここで呼ぶ
+          const deliveredNote = foldFixedFor(context, extra)(
+            'manager-send:delivered-note',
+            '（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。' +
+              '同じ本文で新しい委譲を立てないこと）',
+            '（届けたのは resume の口まで。同じ本文で新しい委譲を立てないこと）',
+          );
           return finishWithCloses(
-            text(
-              `[${managerId}] ${result.detail}${unusedNote}\n` +
-                '（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。' +
-                '同じ本文で新しい委譲を立てないこと）',
-            ),
+            text(`[${managerId}] ${result.detail}${unusedNote}\n${deliveredNote}`),
             closes,
             sent,
             'manager_send',
@@ -10659,6 +10689,11 @@ function isSubagentCaller(context: ToolContext, extra: unknown): boolean {
   return (
     context.isSubagentCall?.(toolUseIdFromExtra(extra), toolUseIdProbeFromExtra(extra)) ?? false
   );
+}
+
+/** 固定文を畳む口。サブエージェントの呼びと口の無い器は全文のまま（`foldFixed` の説明のとおり）。 */
+function foldFixedFor(context: ToolContext, extra: unknown): FixedFold {
+  return isSubagentCaller(context, extra) ? NO_FIXED_FOLD : (context.foldFixed ?? NO_FIXED_FOLD);
 }
 
 // 1応答に最大5回出る RESTART_BEFORE_CHECK_ADVICE（件数の行の lost・消失、印の意味、失敗の行ごと）を、初出の1回だけ全文にする。
