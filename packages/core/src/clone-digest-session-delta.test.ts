@@ -1003,7 +1003,7 @@ describe('定期の tick（件数の形）の固定の説明文は、同じ会�
 });
 
 // 定期の tick の「継続中の依頼」の行は、前回の入力と1字も違わなければ、同じ会話の2回目から1行の参照にまとめる
-const STANDING_FOLD_HEAD = '件は前回の入力と1字も変わっていない: ';
+const STANDING_FOLD_HEAD = '件は、この会話で最後に全文で出した版と1字も変わっていない: ';
 const EXTRA_KINDS = ['extra-a', 'extra-b', 'extra-c'] as const;
 
 async function putStanding(stores: Stores, kind: string, request: string): Promise<void> {
@@ -1054,7 +1054,9 @@ describe('定期の tick の継続中の依頼の行は、前回から変わら�
     expect(hasStandingRow(second, TIMER_KIND)).toBe(true);
     for (const kind of EXTRA_KINDS) expect(hasStandingRow(second, kind)).toBe(false);
     expect(foldedStandingKinds(second)).toEqual([...EXTRA_KINDS]);
-    expect(second).toContain(`継続中の依頼 ${String(EXTRA_KINDS.length)} 件は前回の入力と1字も`);
+    expect(second).toContain(
+      `継続中の依頼 ${String(EXTRA_KINDS.length)} 件は、この会話で最後に全文で出した版と1字も`,
+    );
     expect(second).toContain('引き直しは `schedule_list`');
     expect(second.length).toBeLessThan(first.length);
     await s.clone.stop();
@@ -1105,6 +1107,26 @@ describe('定期の tick の継続中の依頼の行は、前回から変わら�
     expect(hasStandingRow(second, 'extra-b')).toBe(true);
     expect(foldedStandingKinds(second)).toEqual(['extra-a']);
     expect(foldedStandingKinds(third)).toEqual(['extra-a', 'extra-b']);
+    await s.clone.stop();
+  });
+
+  it('⭐ 定期 A → 自発 B → 定期 A: 自発の tick で別の版が全文で出たあと、A に戻った行を「前回と同じ」と畳まない', async () => {
+    const s = boot();
+    await seed(s.stores);
+    await seedExtraStanding(s.stores);
+    const original = `extra-a の依頼。${'説明が続く。'.repeat(20)}`;
+
+    const first = await timerTick(s);
+    expect(hasStandingRow(first, 'extra-a')).toBe(true);
+    await putStanding(s.stores, 'extra-a', 'extra-a は B に書き換わった。');
+    const self = await selfTick(s);
+    expect(self).toContain('extra-a は B に書き換わった。');
+    await putStanding(s.stores, 'extra-a', original);
+    const third = await timerTick(s);
+
+    expect(hasStandingRow(third, 'extra-a')).toBe(true);
+    expect(third).toContain(original);
+    expect(foldedStandingKinds(third)).toEqual(['extra-b', 'extra-c']);
     await s.clone.stop();
   });
 
@@ -1235,7 +1257,9 @@ describe('DigestSessionDelta.foldStandingRows（単体）', () => {
     delta.commit();
     const folded = delta.foldStandingRows(digest);
     expect(folded).not.toContain('- a（');
-    expect(folded).toContain('継続中の依頼 2 件は前回の入力と1字も変わっていない: a・b。');
+    expect(folded).toContain(
+      '継続中の依頼 2 件は、この会話で最後に全文で出した版と1字も変わっていない: a・b。',
+    );
     expect(folded).toContain('## 継続中の依頼');
     expect(folded.endsWith('\n\n- 件数')).toBe(true);
   });
@@ -1257,6 +1281,20 @@ describe('DigestSessionDelta.foldStandingRows（単体）', () => {
     expect(delta.foldStandingRows(b)).toBe(b);
     delta.commit();
     expect(delta.foldStandingRows(a)).toBe(a);
+  });
+
+  it('自発の tick（renderDigest）で同じ kind の別の版が全文で出たら、控えの古い版を畳まない', () => {
+    const delta = new DigestSessionDelta();
+    const a = digestOf([row('a', '1'), row('b', '1')]);
+    const b = digestOf([row('a', '1', 'a は別の版'), row('b', '1')]);
+    delta.foldStandingRows(a);
+    delta.commit();
+    delta.renderDigest(b, new Date('2026-10-28T00:00:00.000Z'));
+    delta.commit();
+    const folded = delta.foldStandingRows(a);
+    expect(folded).toContain('- a（');
+    expect(folded).not.toContain('- b（');
+    expect(folded).toContain('継続中の依頼 1 件は、');
   });
 
   it('reset（full・compaction とも）と forgetFixed の後は全文', () => {
