@@ -184,6 +184,20 @@ export function describeAttachmentForJournal(meta: AttachmentMeta): string {
   ].join(' ');
 }
 
+/**
+ * 「消す」の行を書いた後で、添付がすでに無かった（期限切れ・別の手で消された）回に足す打ち消しの行の文言。
+ * `file_delete` と `DELETE /attachments/:id` で同じ文言にする。`actor` は grounds の先頭に付ける（無ければ付けない）。
+ */
+export function describeAttachmentAlreadyGoneRetraction(
+  meta: AttachmentMeta,
+  actor?: string,
+): { readonly decision: string; readonly grounds: string } {
+  return {
+    decision: `直前の添付の削除の行は効いていない（この呼びでは消していない）: ${meta.name}（id=${meta.id}）`,
+    grounds: `${actor === undefined ? '' : `${actor}。`}消す直前に、添付が置き場から無くなっていた（期限切れ・別の手で消された）`,
+  };
+}
+
 export async function deleteFile(
   stores: { readonly attachments: AttachmentStore },
   copiesDir: string,
@@ -193,6 +207,9 @@ export async function deleteFile(
   // 中身を置き場から消せずに断ったとき（`beforeRemove` が「消そうとしている」と書いた後）に、「消せなかった」を日誌へ足す口。
   // 書いた後に断ると、日誌だけが消したように読めるため（#4814）。落ちても断りの結果は変えないこと
   afterRefused?: (meta: AttachmentMeta | undefined, reason: string) => Promise<void>,
+  // `beforeRemove` が「消す」と書いた後で、`remove` が false（控えを読んだ後に添付が無くなっていた）のとき、
+  // 「消す」の行は効いていないと日誌へ足す口。meta が在るときだけ呼ぶ。落ちても「無い」の結果は変えないこと
+  afterAlreadyGone?: (meta: AttachmentMeta) => Promise<void>,
 ): Promise<string> {
   const meta = await stores.attachments.getMeta(id);
   if (meta !== undefined && beforeRemove !== undefined) await beforeRemove(meta);
@@ -211,14 +228,17 @@ export async function deleteFile(
   // 写しは本体が無かったときも消す（`DELETE /attachments/:id` と同じ。本体だけ先に消えて取り残された写しを片付ける）
   await removeAttachmentCopy(copiesDir, id);
   if (!removed) {
+    // 「消す」の行を書いたのは、meta が在って口が渡された回だけ
+    if (meta !== undefined && beforeRemove !== undefined) await afterAlreadyGone?.(meta);
     return `添付 ${id} は無い（保持期限が過ぎて消えた、または id の誤り）。取り出していた写しがあれば消した。`;
   }
+  const journaled = meta !== undefined && beforeRemove !== undefined;
   const what =
     meta === undefined
       ? `id=${id}`
       : `${meta.name}（id=${id}、${formatAttachmentSize(meta.size)}）`;
   return (
     `${what} の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。` +
-    '消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。'
+    (journaled ? '消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。' : '')
   );
 }

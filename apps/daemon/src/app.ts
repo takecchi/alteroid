@@ -51,6 +51,7 @@ import {
   composedFingerprints,
   composeProfileScript,
   createPluginPreviewStore,
+  describeAttachmentAlreadyGoneRetraction,
   describeAttachmentForJournal,
   isValidPluginName,
   mcpServerNames,
@@ -2774,11 +2775,7 @@ export function createApp(deps: AppDeps) {
           if (meta !== undefined) {
             await appendJournalOrDrop(
               stores,
-              {
-                type: 'decision',
-                decision: `直前の添付の削除の行は効いていない（この呼びでは消していない）: ${meta.name}（id=${id}）`,
-                grounds: `${actor}。消す直前に、添付が置き場から無くなっていた（期限切れ・別の手で消された）`,
-              },
+              { type: 'decision', ...describeAttachmentAlreadyGoneRetraction(meta, actor) },
               '添付の削除の打ち消しの日誌',
               `id=${id}`,
             );
