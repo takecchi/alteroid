@@ -110,6 +110,20 @@ export function fillListingBudget(
   return { lines, shown: lines.length, rest: items.length - lines.length, total: items.length };
 }
 
+/**
+ * 予算の締めを済ませた行（`fillListingBudget` の結果）を、表示用に差し替えた行で組む。
+ * 予算は差し替える前の長さで測り終えている: 短くした行のぶん余った字で、控えていない行が増えて出ることを避けるため。
+ */
+export function renderFilledListing(
+  lines: readonly string[],
+  fill: ListingFill,
+  { omitted }: Pick<ListingBudget, 'omitted'>,
+): string {
+  const out = [...lines];
+  if (fill.rest > 0) out.push(omitted({ rest: fill.rest, shown: fill.shown, total: fill.total }));
+  return out.join('\n');
+}
+
 export function renderListing(
   items: readonly string[],
   { budget, omitted }: ListingBudget,

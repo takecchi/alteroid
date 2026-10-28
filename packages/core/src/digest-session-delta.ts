@@ -354,8 +354,16 @@ export class DigestSessionDelta {
    * `fixed` で足した控えは次の回の頭の `discardStaged` に捨てられ、道具の応答は永久に全文のままになる。
    * 道具の応答は返した時点で会話に載るので、確定を待たずに控える。失敗したターンの後・会話が変わった・要約が走りうる回の `reset` は同じ口で効く。
    */
-  fixedInTurn(id: string, full: string, ref: string): string {
+  /**
+   * @param supersedes 全文を出すとき、この前置きで始まる既存の控えを捨てる。同じ対象の「最新の1版」だけを控えたいとき（`manager_list` の行: A→B→A と変わったとき、2回前の A を「前回と同じ」と言わない）。
+   */
+  fixedInTurn(id: string, full: string, ref: string, supersedes?: string): string {
     if (this.#committed.fixed.has(id)) return ref;
+    if (supersedes !== undefined) {
+      for (const key of [...this.#committed.fixed]) {
+        if (key.startsWith(supersedes)) this.#committed.fixed.delete(key);
+      }
+    }
     this.#committed.fixed.add(id);
     return full;
   }
