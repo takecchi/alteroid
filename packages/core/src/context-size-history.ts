@@ -55,20 +55,40 @@ export function solveHistoryModel(input: HistoryModelInput): HistoryModel {
 
 /**
  * 窓だけを変えたときの 1 ターンの cache_read（伸び g と要求の本数 N は変えない）。
- * 要約そのものの費用（閾値ぶんを 1 回読む）を 1 ターンあたりに均して足す。蒸留・アーカイブの追加の費用と、要約で落ちる細部は入らない。
+ *
+ * 2 つの項に分けて返す（実測と比べる相手を取り違えないため）:
+ * - `mainLoopCacheRead` = N × C。メインループの cache_read で、実測（`turn_timing.tokens.cacheRead` = `result.usage`）と同じ量。窓が `input.windowTokens` と同じなら `input.cacheReadPerTurn` に戻る。
+ * - `compactionCacheRead` = 閾値 / 周期。要約の呼び出しが閾値ぶんの文脈を 1 回読む費用を 1 ターンへ均した分。
+ *
+ * 二重計上ではない（コードで確かめた）: `solveHistoryModel` の N は「メインループの cache_read ÷ 平均の文脈」の逆算で、
+ * 入力の `cacheReadPerTurn` は `result.usage`（`claude-provider.ts` の `mainLoopUsageOf`。SDK の型定義は「MAIN AGENT LOOP ONLY — excludes Task subagent, sidechain, and auxiliary model calls」）の値である。
+ * 要約の呼び出しは `modelUsage` の側（「internal calls such as compaction」を含む）にだけ載り、`result.usage` には入らないと型定義は読める（入るかは実データで未確認）。
+ * よって N × C は要約の費用を含まず、要約の費用を別に足しても数えるのは 1 回。以前の版は 2 つを足した 1 つの値だけを返し、窓を同じにしても約 72万（71万 + 約 1万）になって、実測の 71万 に戻らなかった。差の 約 1万 は要約の費用そのもの。
+ * 請求（modelUsage）と比べるときは `cacheReadPerTurn`（2 項の和）、メインループの実測と比べるときは `mainLoopCacheRead` を使う。
+ * 蒸留・アーカイブの追加の費用と、要約で落ちる細部は入らない。
  */
 export function cacheReadWithWindow(
   input: HistoryModelInput,
   base: HistoryModel,
   windowTokens: number,
-): { thresholdTokens: number; cycleTurns: number; cacheReadPerTurn: number } {
+): {
+  thresholdTokens: number;
+  cycleTurns: number;
+  mainLoopCacheRead: number;
+  compactionCacheRead: number;
+  cacheReadPerTurn: number;
+} {
   const thresholdTokens = windowTokens - input.bufferTokens;
   if (thresholdTokens <= input.floorTokens) throw new Error('閾値が床以下');
   const cycleTurns = (thresholdTokens - input.floorTokens) / base.growthPerTurn;
   const mean = (input.floorTokens + thresholdTokens) / 2;
+  const mainLoopCacheRead = base.requestsPerTurn * mean;
+  const compactionCacheRead = thresholdTokens / cycleTurns;
   return {
     thresholdTokens,
     cycleTurns,
-    cacheReadPerTurn: base.requestsPerTurn * mean + thresholdTokens / cycleTurns,
+    mainLoopCacheRead,
+    compactionCacheRead,
+    cacheReadPerTurn: mainLoopCacheRead + compactionCacheRead,
   };
 }
