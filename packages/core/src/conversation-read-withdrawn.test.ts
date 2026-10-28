@@ -157,6 +157,93 @@ describe('conversation_read — 取り下げた発言（#5456）', () => {
     expect(lineOf(out, '本番の X を消して')).toContain(MARK);
   });
 
+  it('id 指定の全文の読み: 取り下げた発言には注記が付き、取り下げていない発言には付かない', async () => {
+    const stores = createMemoryStores();
+    const withdrawn = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '本番の X を消して',
+      conversationId: 'conv-w',
+      clientMessageId: 'cm-withdrawn',
+    });
+    await markWithdrawn(stores, 'conv-w', 'cm-withdrawn');
+    const live = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: 'やっぱり Y を確認して',
+      conversationId: 'conv-w',
+      clientMessageId: 'cm-live',
+    });
+    const read = tools(stores);
+    const out = await read({ id: withdrawn.id });
+    expect(out).toContain('本番の X を消して');
+    expect(out.split('\n')[0]).toContain(MARK);
+    expect(out).toContain('クローンへは届いていない。依頼として扱わないこと');
+    const liveOut = await read({ id: live.id });
+    expect(liveOut).toContain('やっぱり Y を確認して');
+    expect(liveOut).not.toContain(MARK);
+    expect(liveOut).not.toContain('依頼として扱わないこと');
+    expect(liveOut).not.toContain('判定できなかった');
+  });
+
+  it('id 指定の頁送り（offset）でも注記が付く', async () => {
+    const stores = createMemoryStores();
+    const long = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: 'あ'.repeat(20_000),
+      conversationId: 'conv-w',
+      clientMessageId: 'cm-long',
+    });
+    await markWithdrawn(stores, 'conv-w', 'cm-long');
+    const read = tools(stores);
+    const first = await read({ id: long.id });
+    expect(first).toContain('conversation_read id=');
+    expect(first.split('\n')[0]).toContain(MARK);
+    const second = await read({ id: long.id, offset: 8_000 });
+    expect(second.split('\n')[0]).toContain(MARK);
+    expect(second).toContain('依頼として扱わないこと');
+  });
+
+  it('id 指定で印を引く口が投げる回: 判定できなかったと言い、取り下げていないとは断定しない', async () => {
+    const stores = await seeded();
+    const target = (
+      await stores.journal.listPage({ types: ['exchange'], with: ['human'] })
+    ).entries.find((entry) => entry.type === 'exchange' && entry.text === '本番の X を消して');
+    if (target === undefined) throw new Error('対象の発言が無い');
+    stores.journal.withdrawnClientMessageIds = async () => {
+      throw new Error('印の読みが落ちた');
+    };
+    const out = await tools(stores)({ id: target.id });
+    expect(out).toContain('本番の X を消して');
+    expect(out).toContain('取り下げの有無を判定できなかった');
+    expect(out).toContain('印の読みが落ちた');
+    expect(out).toContain('取り下げていないとは言えない');
+    expect(out).not.toContain(MARK);
+  });
+
+  it('予算で省いた行も数に入れるので「うち表示 k 件」を添える（conversationId・q）', async () => {
+    const stores = createMemoryStores();
+    await inbound(stores, 'conv-b', `古い取り下げ ${'あ'.repeat(300)}`, 'cm-old');
+    await markWithdrawn(stores, 'conv-b', 'cm-old');
+    for (let index = 0; index < 60; index += 1) {
+      await inbound(stores, 'conv-b', `生きた ${index} ${'い'.repeat(300)}`, `cm-live-${index}`);
+    }
+    await inbound(stores, 'conv-b', `新しい取り下げ ${'う'.repeat(300)}`, 'cm-new');
+    await markWithdrawn(stores, 'conv-b', 'cm-new');
+    const read = tools(stores);
+    const byConversation = await read({ conversationId: 'conv-b' });
+    expect(byConversation).toContain('省略');
+    expect(byConversation).toContain('取り下げた発言が 2 件');
+    expect(byConversation).toContain('うち表示 1 件');
+    const bySearch = await read({ q: '取り下げ' });
+    expect(bySearch).toContain('取り下げた発言が 2 件');
+    expect(bySearch).not.toContain('うち表示');
+  });
+
   it('クローン側の発言だけを読む（speaker: clone）ときは、印を引かず注記も出さない', async () => {
     const stores = await seeded();
     stores.journal.withdrawnClientMessageIds = async () => {

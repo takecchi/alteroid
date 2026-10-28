@@ -9524,13 +9524,24 @@ export function createCloneTools(context: ToolContext) {
               `${id} は会話の発言ではない。日誌の中身を見るなら journal_read id=${id} を使うこと。`,
             );
           }
+          // 一覧は本文を抜粋して「全文は id で取れる」と案内するので、案内先でも取り下げを言う: 言わないと長い取り下げ済みの指示が生きた依頼に見える（#5456）。続きの頁（offset）でも毎回引く
+          const withdrawnReading = describeWithdrawnReading(
+            await lookupWithdrawnForMessages(stores.journal, entry.conversationId, [entry]),
+            [entry],
+            { single: true },
+          );
           const part = page(entry.text, offset, CONVERSATION_PAGE);
           const tail = part.more
             ? `\n\n…（ここで切れている。続きは conversation_read id=${entry.id} offset=${part.to}）`
             : '';
           return text(
-            `${entry.at} [${roleLabel(entry.role)}] id=${entry.id}（${describePage(part)}）` +
-              `\n\n${part.body}${tail}${attachmentLines(entry.attachments, '')}`,
+            `${entry.at} [${roleLabel(entry.role)}] id=${entry.id}` +
+              (entry.role === 'inbound' && withdrawnReading.isWithdrawn(entry)
+                ? WITHDRAWN_MESSAGE_MARK
+                : '') +
+              `（${describePage(part)}）` +
+              `\n\n${part.body}${tail}${attachmentLines(entry.attachments, '')}` +
+              withdrawnReading.notes.map((note) => `\n${note}`).join(''),
           );
         }
 
@@ -9678,10 +9689,13 @@ export function createCloneTools(context: ToolContext) {
               ].join('\n'),
             );
           }
-          const withdrawnReading = describeWithdrawnReading(
-            await lookupWithdrawnForMessages(stores.journal, conversationId, matched),
+          const withdrawnLookup = await lookupWithdrawnForMessages(
+            stores.journal,
+            conversationId,
             matched,
           );
+          const withdrawnReading = describeWithdrawnReading(withdrawnLookup, matched);
+          let shownCount = matched.length;
           const lines = matched.map(
             (message) =>
               `${message.at} [${roleLabel(message.role)}] id=${message.id}` +
@@ -9704,23 +9718,31 @@ export function createCloneTools(context: ToolContext) {
                   'なので含めて表示している）'
                 : `（この会話には畳まれた版が ${supersededCount} 件ある。読むには ` +
                   `conversation_read conversationId=${conversationId} includeSuperseded=true を指定する）`;
+          const renderedFromEnd = renderListingFromEnd(lines, {
+            budget: CONVERSATION_LIST_BUDGET,
+            // どちら側を落としたかを言う: 「N 件省略」だけだと続きの取り方を間違えるため
+            omitted: ({ rest, shown, total }) => {
+              shownCount = shown;
+              return (
+                `…この会話の**古い側** ${rest} 件は省略（この窓に ${total} 件あり、` +
+                `新しい側から ${shown} 件だけ出した）。古い側を見るには until で窓を古い方へずらすこと。`
+              );
+            },
+          });
+          const withdrawnNotes = describeWithdrawnReading(withdrawnLookup, matched, {
+            shown: shownCount === 0 ? [] : matched.slice(-shownCount),
+          }).notes;
           return text(
             [
               ...resolvedNoteLines,
-              renderListingFromEnd(lines, {
-                budget: CONVERSATION_LIST_BUDGET,
-                // どちら側を落としたかを言う: 「N 件省略」だけだと続きの取り方を間違えるため
-                omitted: ({ rest, shown, total }) =>
-                  `…この会話の**古い側** ${rest} 件は省略（この窓に ${total} 件あり、` +
-                  `新しい側から ${shown} 件だけ出した）。古い側を見るには until で窓を古い方へずらすこと。`,
-              }),
+              renderedFromEnd,
               fold(
                 'conversation-read:excerpt-note',
                 '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
                 '（本文は抜粋。全文は id=<id>）',
               ),
               ...(supersededNote === undefined ? [] : [supersededNote]),
-              ...withdrawnReading.notes,
+              ...withdrawnNotes,
               ...cursorIgnoredNote,
               scanNote,
             ].join('\n'),
@@ -9738,10 +9760,13 @@ export function createCloneTools(context: ToolContext) {
             );
           }
           // 会話をまたぐ検索なので、会話を問わず印を引く（一覧の読みと同じ）
-          const withdrawnReading = describeWithdrawnReading(
-            await lookupWithdrawnForMessages(stores.journal, undefined, matched),
+          const withdrawnLookup = await lookupWithdrawnForMessages(
+            stores.journal,
+            undefined,
             matched,
           );
+          const withdrawnReading = describeWithdrawnReading(withdrawnLookup, matched);
+          let shownCount = matched.length;
           const lines = matched.map(
             (message) =>
               `${message.at} [${roleLabel(message.role)}] id=${message.id}` +
@@ -9753,21 +9778,29 @@ export function createCloneTools(context: ToolContext) {
               `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}` +
               attachmentLines(message.attachments, '  '),
           );
+          const renderedMatches = renderListing(lines, {
+            budget: CONVERSATION_LIST_BUDGET,
+            omitted: ({ rest, shown, total }) => {
+              shownCount = shown;
+              return (
+                `…ほか ${rest} 件は省略（"${q}" に ${total} 件当たり、新しい順に ${shown} 件だけ出した）。` +
+                '省いたのは**古い側**である。scan を増やしても出てこない（当たりが増えるだけで、' +
+                '切られる側は変わらない）ので、until で窓を古い方へずらすこと。'
+              );
+            },
+          });
+          const withdrawnNotes = describeWithdrawnReading(withdrawnLookup, matched, {
+            shown: matched.slice(0, shownCount),
+          }).notes;
           return text(
             [
-              renderListing(lines, {
-                budget: CONVERSATION_LIST_BUDGET,
-                omitted: ({ rest, shown, total }) =>
-                  `…ほか ${rest} 件は省略（"${q}" に ${total} 件当たり、新しい順に ${shown} 件だけ出した）。` +
-                  '省いたのは**古い側**である。scan を増やしても出てこない（当たりが増えるだけで、' +
-                  '切られる側は変わらない）ので、until で窓を古い方へずらすこと。',
-              }),
+              renderedMatches,
               fold(
                 'conversation-read:excerpt-note',
                 '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
                 '（本文は抜粋。全文は id=<id>）',
               ),
-              ...withdrawnReading.notes,
+              ...withdrawnNotes,
               ...cursorIgnoredNote,
               scanNote,
             ].join('\n'),
@@ -11171,19 +11204,37 @@ function roleLabel(role: 'inbound' | 'outbound'): string {
 function describeWithdrawnReading(
   lookup: Awaited<ReturnType<typeof lookupWithdrawnForMessages>>,
   messages: readonly { role: 'inbound' | 'outbound'; clientMessageId?: string | undefined }[],
+  // 予算で省いた行を含めて数えるので、実際に表示した行（`messages` の一部）を渡せば「うち表示 k 件」を添える。1件を id で読む回は `single`
+  options: {
+    shown?: readonly { role: 'inbound' | 'outbound'; clientMessageId?: string | undefined }[];
+    single?: boolean;
+  } = {},
 ): {
   isWithdrawn: (message: { clientMessageId?: string | undefined }) => boolean;
   notes: string[];
 } {
+  const shownOf = (
+    count: (message: {
+      role: 'inbound' | 'outbound';
+      clientMessageId?: string | undefined;
+    }) => boolean,
+  ): string =>
+    options.shown === undefined || options.shown.length === messages.length
+      ? ''
+      : `（省いた行を含む数。うち表示 ${options.shown.filter(count).length} 件）`;
+  const isHumanSendable = (message: {
+    role: 'inbound' | 'outbound';
+    clientMessageId?: string | undefined;
+  }): boolean => message.role === 'inbound' && message.clientMessageId !== undefined;
   if (lookup.kind === 'unknown') {
-    const unverifiable = messages.filter(
-      (message) => message.role === 'inbound' && message.clientMessageId !== undefined,
-    ).length;
+    const unverifiable = messages.filter(isHumanSendable).length;
     return {
       isWithdrawn: () => false,
       notes: [
         `（取り下げの有無を判定できなかった: 取り下げの印を日誌から読めなかった（${lookup.reason}）。` +
-          `人間の発言 ${unverifiable} 件は、取り下げていないとは言えない。` +
+          (options.single
+            ? 'この発言は、取り下げていないとは言えない。'
+            : `人間の発言 ${unverifiable} 件${shownOf(isHumanSendable)}は、取り下げていないとは言えない。`) +
           'クローンへ届いていない発言が混じっているかもしれないので、実行の根拠にする前に人間へ確かめること）',
       ],
     };
@@ -11200,9 +11251,11 @@ function describeWithdrawnReading(
       count === 0
         ? []
         : [
-            `（取り下げた発言が ${count} 件ある。人間が送ったあとクローンへ届く前に取り下げたもので、` +
-              'クローンへは届いていない。依頼として扱わないこと。会話の一覧の件数はこれを除いて数えるので、' +
-              'ここに出ている行数とは合わない）',
+            options.single
+              ? '（この発言は、人間が送ったあとクローンへ届く前に取り下げたもので、クローンへは届いていない。依頼として扱わないこと）'
+              : `（取り下げた発言が ${count} 件${shownOf((message) => message.role === 'inbound' && isWithdrawn(message))}ある。人間が送ったあとクローンへ届く前に取り下げたもので、` +
+                'クローンへは届いていない。依頼として扱わないこと。会話の一覧の件数はこれを除いて数えるので、' +
+                'ここに出ている行数とは合わない）',
           ],
   };
 }
