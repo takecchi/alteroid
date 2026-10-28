@@ -900,18 +900,40 @@ describe('alteroid conversations delete（#4218）', () => {
     expect(deletes()).toHaveLength(0);
   });
 
-  it('incomplete が空でなければ警告として出す', async () => {
+  it('incomplete が空でなければ、警告を出した上で非0にする（#5416。同じコマンドではやり直せない）', async () => {
     const read = captureStdout();
     replies.push({
       status: 200,
       body: { ...DELETED, incomplete: ['受信箱の未処理の発言を外せなかった'] },
     });
 
-    await conversationsDeleteCommand('conv-1', { yes: true });
+    const error = await failureOf(conversationsDeleteCommand('conv-1', { yes: true }));
 
     const text = read();
     expect(text).toContain('警告: 会話は読めなくなっていますが');
     expect(text).toContain('  - 受信箱の未処理の発言を外せなかった');
+    expect(text).toContain('  - 蒸留済みの記憶・日報');
+    expect(error.message).toContain('後始末が終わっていません');
+    expect(error.message).toContain('404');
+  });
+
+  it('incomplete が空なら、非0にしない', async () => {
+    captureStdout();
+    replies.push({ status: 200, body: { ...DELETED, incomplete: [] } });
+
+    await expect(conversationsDeleteCommand('conv-1', { yes: true })).resolves.toBeUndefined();
+  });
+
+  it('remainsIn だけで incomplete が空なら、今までどおり非0にしない', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { ...DELETED, incomplete: [], remainsIn: ['蒸留済みの記憶・日報'] },
+    });
+
+    await expect(conversationsDeleteCommand('conv-1', { yes: true })).resolves.toBeUndefined();
+
+    expect(read()).toContain('  - 蒸留済みの記憶・日報');
   });
 
   it('404 は daemon の error をそのまま出して落ちる', async () => {
