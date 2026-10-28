@@ -187,6 +187,8 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
     expect(refLines[0]).toContain('`commitment_list`');
     expect(refLines[0]).toContain('`commitment_close`');
     expect(refLines[0]).toContain('毎回決め直す');
+    // 参照行は短く保つ（毎ターン載るため）。以前は 82 字だった
+    expect(refLines[0]?.length).toBeLessThanOrEqual(75);
     expect(second.input).not.toContain('閉じ方は会話の上と同じ');
 
     const tailOf = (input: string): number =>
@@ -341,6 +343,13 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
     expect(firstBundle).toContain(BUNDLE_SKELETON);
     expect(firstBundle).toContain(SKELETON);
     expect(firstBundle).toContain(`${SHORT_COUNT_HEAD}3 件（最古 `);
+    // 末尾の固定文は先客の入力で全文が載っているので、この束の入力では参照だけになる（閉じ方は全文のまま別に出る）
+    const tailRefLine = (s.inputs[1] ?? '')
+      .split('\n')
+      .find((line) => line.includes('会話の上と同じ'));
+    expect(tailRefLine).toContain('`commitment_list`');
+    expect(tailRefLine).toContain('毎回決め直す');
+    expect(tailRefLine?.length).toBeLessThanOrEqual(50);
     // 2つ目の束: 骨組みは参照。件数と id の列は出る
     expect(secondBundle).toContain('いま届いたこの 2 件も台帳に載せた（id: ');
     expect(secondBundle).toContain('evt-束B1');

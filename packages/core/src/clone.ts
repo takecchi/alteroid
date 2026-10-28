@@ -3733,8 +3733,7 @@ class Clone implements CloneHost {
     const tailFull =
       '全文と齢は `commitment_list` で見られる。**どれを先にやるかは、記憶にある目的と価値観に照らして毎回決め直すこと**' +
       '（台帳は順序を持たない。溜まっている順に片付ける決まりは無い）。';
-    const tailRef =
-      '（全文と齢は `commitment_list`。どれを先にやるかは毎回決め直す、という固定の断りは会話の上と同じ）';
+    const tailRef = '（全文と齢は `commitment_list`。着手順は毎回決め直す。断りは会話の上と同じ）';
     // 固定の1文は同じ会話で1回だけ全文（#4937）
     const tailText = this.#digestDelta.fixed('commitment-notice-tail', tailFull, tailRef);
     const mergeRefs = closeText === closeRef && tailText === tailRef;
@@ -3781,7 +3780,7 @@ class Clone implements CloneHost {
               '`commitment_list` の一覧に件数として出る（本文はここでは取れない）。',
           ]),
       mergeRefs
-        ? `（全文と齢は \`commitment_list\`、閉じ方は${bundled ? 'まとめて答えても id ごとに ' : ' '}\`commitment_close\`。どれを先にやるかは毎回決め直す、という固定の断りは会話の上と同じ）`
+        ? `（\`commitment_list\` で全文と齢、${bundled ? 'まとめて答えても id ごとに ' : ''}\`commitment_close\` で閉じる。着手順は毎回決め直す。断りは会話の上と同じ）`
         : tailText,
       '',
       '---',
