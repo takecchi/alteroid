@@ -4,7 +4,7 @@ import { scanJournalPages } from './journal-scan.js';
 // 型だけを取る: `manager.ts` との間に実行時の循環を作らないため
 import type { ManagerAwaitingBackground, SessionMissingKind } from './manager.js';
 import { describeScheduleSpec } from './schedule.js';
-import type { Job, JobStatus, JournalEntry, PendingApproval } from './schema.js';
+import type { Job, JobStatus, JournalEntry, PendingApproval, ScheduledRequest } from './schema.js';
 import {
   UnreadableApprovalError,
   describeUnreadableApprovals,
@@ -194,6 +194,19 @@ export const DIGEST_COUNTS_FIXED_PHRASES: readonly { id: string; text: string; r
 /** 継続中の依頼の節の見出しの先頭と、1件の2行目（状態の行）の前置き。節の組み立て（`standingSection`）と、定期の tick の行の畳み（`foldStandingRows`）が同じ文字列を使い、ずれないようにする。 */
 export const STANDING_SECTION_HEADING_HEAD = '## 継続中の依頼';
 export const STANDING_LAST_RUN_LABEL = '前回動いた時刻: ';
+
+/**
+ * 継続中の依頼の節の1件（2行）。節の組み立て（`standingSection`）と、`schedule_list` が「一覧で見せた版は定期の tick の控えと同じか」を比べる行が同じ字面を使う
+ * （別々に組むと、同じ版なのに字面がずれて、控えが毎回捨てられる）。
+ */
+export function renderStandingRow(
+  plan: Pick<ScheduledRequest, 'kind' | 'spec' | 'request' | 'lastRunAt'>,
+): string {
+  return (
+    `- ${plan.kind}（${describeScheduleSpec(plan.spec)}）${brief(plan.request)}` +
+    `\n  ${STANDING_LAST_RUN_LABEL}${plan.lastRunAt ?? '（まだ一度も動いていない）'}`
+  );
+}
 
 /** 全文の要約の件数の行（先頭）。 */
 export const DIGEST_COUNTS_LINE_HEAD = '- 件数: ';
@@ -758,12 +771,7 @@ export async function buildActivityDigest(
       `${STANDING_SECTION_HEADING_HEAD}（時刻が来れば届く。前回からの続きがあるか見ること）`,
     ];
     const shownStanding = standing.slice(0, MAX_ITEMS);
-    for (const plan of shownStanding) {
-      lines.push(
-        `- ${plan.kind}（${describeScheduleSpec(plan.spec)}）${brief(plan.request)}` +
-          `\n  ${STANDING_LAST_RUN_LABEL}${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
-      );
-    }
+    for (const plan of shownStanding) lines.push(renderStandingRow(plan));
     if (standing.length > 0) {
       lines.push(...omitted(standing.length, shownStanding.length, '`schedule_list` で全部見える'));
     }

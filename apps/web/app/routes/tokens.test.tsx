@@ -33,6 +33,8 @@ function stubScreen(options: {
   };
   tokensStatus?: number;
   journalEntries?: unknown[];
+  // 現役の指名の欄（active / activeNever / activeUnreadable）。省くと現役を返さない版のデーモンの応答になる
+  activeFields?: Record<string, unknown>;
 }) {
   const {
     tokens = [],
@@ -41,6 +43,7 @@ function stubScreen(options: {
     rowsUnreadable,
     tokensStatus = 200,
     journalEntries = [],
+    activeFields = {},
   } = options;
   return stubFetch((url) => {
     if (url.includes('/tokens')) {
@@ -49,8 +52,8 @@ function stubScreen(options: {
       }
       const rows = rowsUnreadable === undefined ? {} : { rowsUnreadable };
       return settingsUnreadable === undefined
-        ? json({ tokens, settings, ...rows })
-        : json({ tokens, settingsUnreadable, ...rows });
+        ? json({ tokens, settings, ...rows, ...activeFields })
+        : json({ tokens, settingsUnreadable, ...rows, ...activeFields });
     }
     if (url.includes('/journal')) return json({ entries: journalEntries });
     return undefined;
@@ -406,6 +409,74 @@ describe('/tokens 画面 — 休止は原文と絶対時刻の両方を出す', 
       expect(screen.getByText(one.text), one.source).toBeTruthy();
       view.unmount();
     }
+  });
+});
+
+describe('/tokens 画面 — 現役の指名（#5457）', () => {
+  const POOL = [
+    { id: 'tok-a', label: 'first', order: 0, sha256: 'aaaaaaaaaaaa', source: 'stored' },
+    { id: 'tok-b', label: 'second', order: 1, sha256: 'bbbbbbbbbbbb', source: 'stored' },
+  ];
+  const rowOf = (label: string) => screen.getByText(label).closest('li') as HTMLElement;
+
+  it('現役が在るとき: 指名を言い、「現役」の印は現役の鍵の行にだけ付く（使用可能とは別の印）', async () => {
+    stubScreen({
+      tokens: POOL,
+      activeFields: {
+        active: { tokenId: 'tok-b', generation: 3, rotatedAt: '2026-10-29T00:00:00.000Z' },
+      },
+    });
+
+    renderTokens();
+
+    await waitForPoolLoaded();
+    const note = await screen.findByTestId('active-note');
+    expect(note.textContent).toContain('現役の指名: tok-b');
+    expect(note.textContent).toContain('世代 3');
+    expect(within(rowOf('second')).getByText('現役')).toBeTruthy();
+    expect(within(rowOf('first')).queryByText('現役')).toBeNull();
+    // 両方とも「使用可能」だが、印が付くのは現役だけ
+    expect(within(rowOf('first')).getByText('使用可能')).toBeTruthy();
+  });
+
+  it('まだ一度も無いとき: 「まだ一度も無い」と言い、どの行にも印は付かない', async () => {
+    stubScreen({ tokens: POOL, activeFields: { activeNever: true } });
+
+    renderTokens();
+
+    await waitForPoolLoaded();
+    const note = await screen.findByTestId('active-note');
+    expect(note.textContent).toContain('まだ一度も無い');
+    expect(screen.queryByText('現役')).toBeNull();
+  });
+
+  it('読めないとき: 理由を言い、「まだ一度も無い」とは言わず、印は付けず、一覧は出る', async () => {
+    stubScreen({
+      tokens: POOL,
+      activeFields: { activeUnreadable: { reason: 'generation が数値でない（テスト用）' } },
+    });
+
+    renderTokens();
+
+    await waitForPoolLoaded();
+    const note = await screen.findByTestId('active-note');
+    expect(note.textContent).toContain('現役の指名は読めない');
+    expect(note.textContent).toContain('generation が数値でない（テスト用）');
+    expect(note.textContent).not.toContain('まだ一度も無い');
+    expect(screen.queryByText('現役')).toBeNull();
+    expect(screen.getByText('first')).toBeTruthy();
+    expect(screen.getByText('second')).toBeTruthy();
+  });
+
+  it('対照: 現役を返さない版のデーモンでは、現役について何も言わない', async () => {
+    stubScreen({ tokens: POOL });
+
+    renderTokens();
+
+    await waitForPoolLoaded();
+    expect(screen.getByText('first')).toBeTruthy();
+    expect(screen.queryByTestId('active-note')).toBeNull();
+    expect(screen.queryByText('現役')).toBeNull();
   });
 });
 

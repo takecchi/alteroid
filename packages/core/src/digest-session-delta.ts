@@ -603,6 +603,22 @@ export class DigestSessionDelta {
     }
   }
 
+  /**
+   * `schedule_list` が継続中の依頼 `kind` の行 `rowFullText`（定期の tick の行と同じ字面。`renderStandingRow`）を見せた。
+   * 控えがちょうどその版 1 つだけなら残す（会話の上に同じ版の全文が既にあり、一覧が新しい版を載せたわけではない。畳みが続く）。
+   * それ以外（控えが無い・別の版・別の版が押し込み前の控えに混じる）は `forgetStandingRow` と同じく捨てる（安全側）。
+   * `schedule_list` は畳んだ行が引き直しに指す道具で、呼ぶたびに全 kind の控えを捨てると畳みが効かなくなるため。
+   */
+  keepStandingRowIfSame(kind: string, rowFullText: string): void {
+    const prefix = standingKindPrefixOf(kind);
+    const own = `${prefix}${paragraphKey(rowFullText)}`;
+    const keys = [...this.#committed.fixed, ...(this.#staged?.fixed ?? [])].filter((key) =>
+      key.startsWith(prefix),
+    );
+    if (keys.length > 0 && keys.every((key) => key === own)) return;
+    this.forgetStandingRow(kind);
+  }
+
   #foldFixed(lines: readonly string[]): string[] {
     let text = lines.join('\n');
     for (const phrase of DIGEST_FIXED_PHRASES) {

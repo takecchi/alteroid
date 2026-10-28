@@ -25,6 +25,7 @@ function harness() {
     conversationId: () => 'conv-1',
     workConversationId: () => 'conv-1',
     forgetStandingRow: (kind: string) => delta.forgetStandingRow(kind),
+    keepStandingRowIfSame: (kind: string, row: string) => delta.keepStandingRowIfSame(kind, row),
   });
   const call = async (tool: string, args: Record<string, unknown>): Promise<string> => {
     const found = tools.find((entry) => entry.name === tool);
@@ -119,6 +120,42 @@ describe('道具で継続中の依頼の版を見た・変えたら、定期の 
     const next = await h.timerInput();
 
     expect(next).toContain(`\n- ${KIND}（`);
+  });
+
+  // schedule_list は畳んだ行が引き直しに指す道具。見せた版が控え（最後に全文で出した版）と同じなら、会話の上の全文と食い違わないので控えを残す。
+  // 呼ぶたびに全 kind の控えを捨てると、一覧を頻繁に呼ぶ会話で畳みが効かなくなる。違う版・控えの無い kind は、従来どおり捨てる（安全側）
+  it('⭐ schedule_list（一覧・kind 指定）で、控えと同じ版を見せた kind は控えが残り、次の定期の tick で畳まれる', async () => {
+    const h = harness();
+    await h.put(KIND, REQUEST_A);
+    await h.put(OTHER_KIND, 'other');
+    await h.timerInput();
+
+    expect(await h.call('schedule_list', {})).toContain('A の依頼');
+    expect(await h.call('schedule_list', { kind: OTHER_KIND })).toContain('other');
+    const next = await h.timerInput();
+
+    expect(next).not.toContain(`\n- ${KIND}（`);
+    expect(next).not.toContain(`\n- ${OTHER_KIND}（`);
+    expect(next).toContain(`2 ${FOLD_HEAD}${OTHER_KIND}・${KIND}`);
+  });
+
+  it('⭐ schedule_list で控えと違う版を見せた kind だけ控えが捨てられ、同じ版の別の kind は触らない', async () => {
+    const h = harness();
+    await h.put(KIND, REQUEST_A);
+    await h.put(OTHER_KIND, 'other');
+    await h.timerInput();
+
+    // 外から A → B に変わった後に一覧を呼ぶ。一覧は B を見せるので、控え（A）のままにすると、B → A と戻されたとき A を「前回と同じ」と畳んでしまう
+    await h.put(KIND, REQUEST_B);
+    expect(await h.call('schedule_list', {})).toContain('B の依頼');
+    await h.put(KIND, REQUEST_A);
+    const next = await h.timerInput();
+
+    expect(next).toContain(`\n- ${KIND}（`);
+    expect(next).toContain(REQUEST_A);
+    // 見せた版が控えと同じ other-job は畳んだまま
+    expect(next).not.toContain(`\n- ${OTHER_KIND}（`);
+    expect(next).toContain(`${FOLD_HEAD}${OTHER_KIND}`);
   });
 
   it('⭐ schedule_remove で外した後、同じ kind が A で作り直されたら、次の定期の tick は A を全文で出す', async () => {

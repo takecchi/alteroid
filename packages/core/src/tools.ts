@@ -99,6 +99,7 @@ import {
   isManagerInFlight,
   isManagerOutcomeUnobserved,
   JUDGEMENT_RANK_NOT_APPLICABLE,
+  renderStandingRow,
 } from './digest.js';
 import {
   approvalShape,
@@ -526,6 +527,11 @@ export interface ToolContext {
    * （道具の応答で見えた版と、控えの版がずれるため。次の定期の tick は全文）。無い器（テスト・蒸留）は何もしない。サブエージェントの呼びでも捨てる（捨てるのは安全側）。
    */
   forgetStandingRow?: (kind: string) => void;
+  /**
+   * `schedule_list` が継続中の依頼 `kind` の行を見せた（`rowFullText` は定期の tick の行と同じ字面）。控えがその版と同じなら残し、違う・無いなら `forgetStandingRow` と同じく捨てる。
+   * 無い器（テスト・蒸留）は何もしない（`forgetStandingRow` も無いので控えが無い）。
+   */
+  keepStandingRowIfSame?: (kind: string, rowFullText: string) => void;
   /**
    * この道具の呼びがサブエージェント（作業者）のものか。`foldFixed` と `managerReportShownAt` が指す「会話の上の全文」は本体の会話にしか無いので、サブエージェントの呼びは畳まず、控えも更新しない（#5428）。
    * 引数は呼びの tool_use_id（取れなければ `undefined`）。取れないときの倒し方は実装が決める（クローンは本体扱い＋警告）。
@@ -1487,13 +1493,13 @@ function formatCloseManyStoppedMessage(args: {
   journaledIds: readonly string[];
   entry: JournalEntryInput;
   cause: unknown;
-  /** この呼びで閉じる対象の件数（競合で閉じられなかった分を数えるため） */
-  targetCount: number;
+  /** ここまでに処理した件数（この塊までの塊の id の合計）。競合で閉じられなかった分を数える母数で、まだ処理していない塊は含めない */
+  processedCount: number;
   /** 1回の上限に収まらず対象にしなかった件数と、その上限 */
   restCount: number;
   limit: number;
 }): string {
-  const { failed, journaledIds, entry, cause, targetCount, restCount, limit } = args;
+  const { failed, journaledIds, entry, cause, processedCount, restCount, limit } = args;
   const shape = journalEntryShape(entry);
   const reason = collapseErrorCause(cause);
   const shownPrior = chunkIdsByChars(journaledIds, CLOSE_MANY_JOURNAL_ID_CHARS)[0] ?? [];
@@ -1502,7 +1508,8 @@ function formatCloseManyStoppedMessage(args: {
   const closedTotal = journaledIds.length + failed.closed.length;
   // 最後の塊では全件を処理し終えている: 「閉じていない」と言うと、同じ絞り込みで呼び直されて上限の外の行や間に届いた行まで閉じるため
   const lastChunk = remainingChunks === 0;
-  const raced = targetCount - closedTotal;
+  // 競合の数は処理した塊だけで数える: 対象の総数との差にすると、まだ処理していない塊の分まで競合に混ざる
+  const raced = processedCount - closedTotal;
   return [
     lastChunk
       ? '⚠⚠ 全件を閉じ終えた・最後の塊の日誌が未記録・閉じ直し禁止'
@@ -1514,9 +1521,9 @@ function formatCloseManyStoppedMessage(args: {
         `${failed.chunk.number}/${failed.chunk.total} 塊目まで閉じたところで、この塊の日誌を書けなかった。`,
     `ここまでに閉じた id は ${closedTotal} 件` +
       `（前の塊の ${journaledIds.length} 件は日誌に記録済み、この塊の ${failed.closed.length} 件は未記録）。`,
-    ...(lastChunk && raced > 0
+    ...(raced > 0
       ? [
-          `⚠ 対象 ${targetCount} 件のうち ${raced} 件は閉じられなかった（この呼びの最中に他の経路が先に閉じた）。`,
+          `⚠ ここまでに処理した ${processedCount} 件のうち ${raced} 件は閉じられなかった（この呼びの最中に他の経路が先に閉じた）。`,
         ]
       : []),
     `この塊の閉じた id（日誌に無い）: ${failed.closed.join(' ')}`,
@@ -1539,6 +1546,53 @@ function formatCloseManyStoppedMessage(args: {
     `記録できなかったエントリ: ${shape}`,
     `理由: ${reason}`,
     'journal_write で、この塊の閉じた id を記録に書き直すこと。閉じ直さないこと。',
+  ].join('\n');
+}
+
+// 閉じる側（台帳の書き込み）が投げた回: 日誌が落ちた回（`formatCloseManyStoppedMessage`）と違い、この塊は閉じていない。ここまでに閉じた分は前の塊で、日誌に記録済み
+function formatCloseManyCloseFailedMessage(args: {
+  failedChunk: { number: number; total: number };
+  journaledIds: readonly string[];
+  cause: unknown;
+  /** この塊より前に処理した件数（競合で閉じられなかった分を数える母数。この塊と、まだ処理していない塊は含めない） */
+  processedCount: number;
+  restCount: number;
+  limit: number;
+}): string {
+  const { failedChunk, journaledIds, cause, processedCount, restCount, limit } = args;
+  const reason = collapseErrorCause(cause);
+  const shownPrior = chunkIdsByChars(journaledIds, CLOSE_MANY_JOURNAL_ID_CHARS)[0] ?? [];
+  const hiddenPrior = journaledIds.length - shownPrior.length;
+  const unclosedChunks = failedChunk.total - failedChunk.number + 1;
+  const raced = processedCount - journaledIds.length;
+  return [
+    '⚠⚠ 一括は途中で止まった・この塊の台帳の書き込みが失敗した・この塊以降は閉じていない',
+    `commitment_close_many は途中で止まった（全件は閉じていない。「完了した」ではない）。` +
+      `${failedChunk.number}/${failedChunk.total} 塊目の台帳の書き込みが失敗した（この塊は閉じていない）。`,
+    journaledIds.length === 0
+      ? 'ここまでに閉じた id は 0 件（1 塊目で失敗したので、1件も閉じていない）。'
+      : `ここまでに閉じた id は ${journaledIds.length} 件（前の塊の分。日誌に記録済み）。`,
+    ...(raced > 0
+      ? [
+          `⚠ ここまでに処理した ${processedCount} 件のうち ${raced} 件は閉じられなかった（この呼びの最中に他の経路が先に閉じた）。`,
+        ]
+      : []),
+    ...(journaledIds.length === 0
+      ? []
+      : [
+          `前の塊の閉じた id（先頭 ${shownPrior.length} 件）: ${shownPrior.join(' ')}${
+            hiddenPrior > 0 ? ` …ほか ${hiddenPrior} 件は省略（日誌に残してある）` : ''
+          }`,
+        ]),
+    `この塊以降の ${unclosedChunks} 塊は閉じていない。同じ絞り込みでもう一度呼べば続きを閉じられる（閉じた行は未了から外れているので、閉じ直しにはならない）。` +
+      '失敗した塊の中身は commitment_list で確かめること。',
+    ...(restCount === 0
+      ? []
+      : [
+          `1回の上限（${limit} 件）に収まらず対象にしなかった ${restCount} 件は、そもそもこの呼びでは閉じていない。`,
+        ]),
+    `理由: ${reason}`,
+    '閉じた id の日誌は書き込み済みなので、journal_write で書き直す必要は無い。',
   ].join('\n');
 }
 
@@ -4489,8 +4543,14 @@ export function createCloneTools(context: ToolContext) {
         }
 
         // 予算を先に決めて入るところまで積む: 件数から出力量を決めると何件で壊れるかが運任せになるため
+        // 同じ会話の行が2つ以上あるときだけ、長い id を凡例に1回書いて行では短い札（c1, c2…）にする: 会話 id（UUID）が exchange の行ごとに出て、一覧の約17%を占めるため。1回しか出ない id は札にしない（凡例の方が長くなる）
+        const conversationLegend = journalConversationLegend(entries);
         const items = entries.map((entry) => {
-          const { head, body } = renderJournalEntry(entry, JOURNAL_LISTING_ATTACHMENTS);
+          const { head, body } = renderJournalEntry(
+            entry,
+            JOURNAL_LISTING_ATTACHMENTS,
+            conversationLegend.labels,
+          );
           return (
             `${entry.at} ${head} id=${entry.id}` +
             (body === '' ? '' : `\n  ${excerptLine(body, JOURNAL_TEXT_EXCERPT)}`)
@@ -4543,6 +4603,7 @@ export function createCloneTools(context: ToolContext) {
         return text(
           [
             ...coverageHead,
+            ...conversationLegend.lines,
             listing,
             ...(cursor === null ? [] : [describeJournalContinuation(cursor, order)]),
             '（本文は抜粋。全文は journal_read id=<id> で取れる）',
@@ -5171,8 +5232,8 @@ export function createCloneTools(context: ToolContext) {
             );
           }
           if (!plan) return text(`継続中の依頼 ${kind} は無い（kind が違うか、もう外してある）。`);
-          // 行をこの応答で見せた: 定期の tick が会話の上の別の版を「最後に全文で出した版」と畳まないよう、その kind の控えを捨てる
-          context.forgetStandingRow?.(plan.kind);
+          // 行をこの応答で見せた: 定期の tick が会話の上の別の版を「最後に全文で出した版」と畳まないよう、控えがこの版と違えば捨てる（同じなら残す）
+          context.keepStandingRowIfSame?.(plan.kind, renderStandingRow(plan));
           const head =
             `${plan.kind}（${describeScheduleSpec(plan.spec)}）` +
             ` 前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}` +
@@ -5204,8 +5265,9 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         const view = cursorOutcome.view;
-        // 一覧で見せた行の kind も、上と同じ理由で控えを捨てる（予算で切れて載らなかった行まで捨てるのは安全側）
-        for (const plan of view) context.forgetStandingRow?.(plan.kind);
+        // 一覧で見せた行の kind も、上と同じ理由で控えを捨てる（予算で切れて載らなかった行まで捨てるのは安全側）。控えと同じ版なら残す
+        for (const plan of view)
+          context.keepStandingRowIfSame?.(plan.kind, renderStandingRow(plan));
         const items = view.map((plan) =>
           renderListingEntry({
             id: plan.kind,
@@ -6334,6 +6396,9 @@ export function createCloneTools(context: ToolContext) {
         const journaledIds: string[] = [];
         let unjournaled:
           { chunk: { number: number; total: number }; closed: readonly string[] } | undefined;
+        // 処理し終えた塊の id の合計: 競合で閉じられなかった件数は、まだ処理していない塊を混ぜずに数えるため
+        let processedCount = 0;
+        let closeFailure: { chunk: { number: number; total: number }; error: unknown } | undefined;
         let closedIds: string[];
         try {
           closedIds = await closeManyInChunks(
@@ -6341,7 +6406,11 @@ export function createCloneTools(context: ToolContext) {
             targets.map((entry) => entry.id),
             { reason, by: 'clone', at: new Date().toISOString() },
             {
+              closeFailed: async (chunk, error) => {
+                closeFailure = { chunk, error };
+              },
               after: async (chunk, closed) => {
+                processedCount += chunk.ids.length;
                 // 1件も閉じられなかった塊では日誌へ書かない: 抜けている塊番号そのものが「その塊は1件も閉じなかった」を意味するため
                 if (closed.length === 0) return;
                 journaledChunks += 1;
@@ -6368,7 +6437,19 @@ export function createCloneTools(context: ToolContext) {
             },
           );
         } catch (error) {
-          // 日誌が落ちた回だけ作り直す: 閉じる側の失敗（`closeMany` の例外）はこれまでどおり投げ直す
+          // 閉じる側の失敗（`closeMany` の例外）: この塊は閉じていない。前の塊の分は日誌に記録済み
+          if (closeFailure !== undefined) {
+            throw new CloseManyStoppedError(
+              formatCloseManyCloseFailedMessage({
+                failedChunk: closeFailure.chunk,
+                journaledIds,
+                cause: closeFailure.error,
+                processedCount,
+                restCount: remainingCount,
+                limit: effectiveLimit,
+              }),
+            );
+          }
           if (error instanceof JournalNotRecordedError && unjournaled !== undefined) {
             throw new CloseManyStoppedError(
               formatCloseManyStoppedMessage({
@@ -6376,7 +6457,7 @@ export function createCloneTools(context: ToolContext) {
                 journaledIds,
                 entry: error.entry,
                 cause: error.journalCause,
-                targetCount: targets.length,
+                processedCount,
                 restCount: remainingCount,
                 limit: effectiveLimit,
               }),
@@ -11241,14 +11322,39 @@ function journalAttachmentHead(
   return kept + refused;
 }
 
+// 凡例の札は `conv#N`: 実在の会話 id（UUID など）と取り違えない形にする。札にしない id は行にそのまま出る
+function journalConversationLegend(entries: readonly JournalEntry[]): {
+  labels: ReadonlyMap<string, string>;
+  lines: string[];
+} {
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.type === 'exchange' && entry.conversationId !== undefined) {
+      counts.set(entry.conversationId, (counts.get(entry.conversationId) ?? 0) + 1);
+    }
+  }
+  const labels = new Map<string, string>();
+  const lines: string[] = [];
+  for (const [conversationId, count] of counts) {
+    if (count < 2) continue;
+    const label = `conv#${labels.size + 1}`;
+    labels.set(conversationId, label);
+    lines.push(`（${label} = conversation ${conversationId}）`);
+  }
+  return { labels, lines };
+}
+
 function renderJournalEntry(
   entry: JournalEntry,
   attachmentLimit: number = Number.POSITIVE_INFINITY,
+  conversationLabels?: ReadonlyMap<string, string>,
 ): { head: string; body: string } {
   switch (entry.type) {
     case 'exchange': {
       const conversation =
-        entry.conversationId === undefined ? '' : ` conversation=${entry.conversationId}`;
+        entry.conversationId === undefined
+          ? ''
+          : ` conversation=${conversationLabels?.get(entry.conversationId) ?? entry.conversationId}`;
       return {
         head: `[exchange ${entry.with}/${entry.role}]${conversation}${journalAttachmentHead(entry.attachments, entry.rejectedAttachments, attachmentLimit)}`,
         body: entry.text,
