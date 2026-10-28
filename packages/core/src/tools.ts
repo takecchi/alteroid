@@ -4408,8 +4408,14 @@ export function createCloneTools(context: ToolContext) {
         }
 
         // 予算を先に決めて入るところまで積む: 件数から出力量を決めると何件で壊れるかが運任せになるため
+        // 同じ会話の行が2つ以上あるときだけ、長い id を凡例に1回書いて行では短い札（c1, c2…）にする: 会話 id（UUID）が exchange の行ごとに出て、一覧の約17%を占めるため。1回しか出ない id は札にしない（凡例の方が長くなる）
+        const conversationLegend = journalConversationLegend(entries);
         const items = entries.map((entry) => {
-          const { head, body } = renderJournalEntry(entry, JOURNAL_LISTING_ATTACHMENTS);
+          const { head, body } = renderJournalEntry(
+            entry,
+            JOURNAL_LISTING_ATTACHMENTS,
+            conversationLegend.labels,
+          );
           return (
             `${entry.at} ${head} id=${entry.id}` +
             (body === '' ? '' : `\n  ${excerptLine(body, JOURNAL_TEXT_EXCERPT)}`)
@@ -4462,6 +4468,7 @@ export function createCloneTools(context: ToolContext) {
         return text(
           [
             ...coverageHead,
+            ...conversationLegend.lines,
             listing,
             ...(cursor === null ? [] : [describeJournalContinuation(cursor, order)]),
             '（本文は抜粋。全文は journal_read id=<id> で取れる）',
@@ -11064,14 +11071,39 @@ function journalAttachmentHead(
   return kept + refused;
 }
 
+// 凡例の札は `conv#N`: 実在の会話 id（UUID など）と取り違えない形にする。札にしない id は行にそのまま出る
+function journalConversationLegend(entries: readonly JournalEntry[]): {
+  labels: ReadonlyMap<string, string>;
+  lines: string[];
+} {
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.type === 'exchange' && entry.conversationId !== undefined) {
+      counts.set(entry.conversationId, (counts.get(entry.conversationId) ?? 0) + 1);
+    }
+  }
+  const labels = new Map<string, string>();
+  const lines: string[] = [];
+  for (const [conversationId, count] of counts) {
+    if (count < 2) continue;
+    const label = `conv#${labels.size + 1}`;
+    labels.set(conversationId, label);
+    lines.push(`（${label} = conversation ${conversationId}）`);
+  }
+  return { labels, lines };
+}
+
 function renderJournalEntry(
   entry: JournalEntry,
   attachmentLimit: number = Number.POSITIVE_INFINITY,
+  conversationLabels?: ReadonlyMap<string, string>,
 ): { head: string; body: string } {
   switch (entry.type) {
     case 'exchange': {
       const conversation =
-        entry.conversationId === undefined ? '' : ` conversation=${entry.conversationId}`;
+        entry.conversationId === undefined
+          ? ''
+          : ` conversation=${conversationLabels?.get(entry.conversationId) ?? entry.conversationId}`;
       return {
         head: `[exchange ${entry.with}/${entry.role}]${conversation}${journalAttachmentHead(entry.attachments, entry.rejectedAttachments, attachmentLimit)}`,
         body: entry.text,
