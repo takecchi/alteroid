@@ -188,6 +188,9 @@ export async function verifyTaskStoreContract(
   await addOk(make('nul-body', 'self', { title: 'a\u0000b', body: 'c\u0000d' }));
   const stripped = await store.get('nul-body');
   if (stripped?.title !== 'ab' || stripped.body !== 'cd') fail('title / body の NUL が落ちて残らない');
+  await addOk(make('lone-surrogate', 'self', { body: 'x\ud800y' }));
+  if ((await store.get('lone-surrogate'))?.body !== 'x�y')
+    fail('孤立サロゲートが3実装で同じ形に直らない（pg は jsonb に入れる前に必ず直す）');
 
   // 読めない行は専用エラー・一覧の unreadable。一覧を丸ごと潰さない
   if (options.plantUnreadable !== undefined) {

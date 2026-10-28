@@ -1,4 +1,4 @@
-import { assertNoNul, stripNul } from './nul-guard.js';
+import { assertNoNul, stripNulWellFormed as cleanText } from './nul-guard.js';
 import { taskSchema } from './schema.js';
 import type { CommitmentOrigin, Task, TaskClosedBy, TaskStatus } from './schema.js';
 import { compareIsoInstant } from './iso-instant.js';
@@ -183,13 +183,14 @@ export function prepareTask(entry: Task): Task {
   assertNoNul('task.id', entry.id);
   return taskSchema.parse({
     ...entry,
-    title: stripNul(entry.title),
-    body: stripNul(entry.body),
-    ...(entry.source === undefined ? {} : { source: stripNul(entry.source) }),
+    // NUL に加えて孤立サロゲートも直す: pg の `stripNulls` が jsonb へ入れる前に必ず直すので、揃えないと器によって読み戻した本文が違う
+    title: cleanText(entry.title),
+    body: cleanText(entry.body),
+    ...(entry.source === undefined ? {} : { source: cleanText(entry.source) }),
     ...(entry.originConversationId === undefined
       ? {}
-      : { originConversationId: stripNul(entry.originConversationId) }),
-    ...(entry.closedReason === undefined ? {} : { closedReason: stripNul(entry.closedReason) }),
+      : { originConversationId: cleanText(entry.originConversationId) }),
+    ...(entry.closedReason === undefined ? {} : { closedReason: cleanText(entry.closedReason) }),
   });
 }
 
@@ -289,7 +290,7 @@ export function setTaskRowStatus(
       updatedAt: options.at,
       closedAt: options.at,
       closedBy: options.by,
-      ...(options.reason === undefined ? {} : { closedReason: stripNul(options.reason) }),
+      ...(options.reason === undefined ? {} : { closedReason: cleanText(options.reason) }),
     };
     return {
       rows: rows.map((row) => (row === target ? { rank: row.rank, task: closed } : row)),

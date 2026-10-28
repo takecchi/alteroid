@@ -130,6 +130,15 @@ export const commitments = pgTable(
   ],
 );
 
+// 順序と状態を持つ待ち行列（#5469 P2）。並びは行の欄（`task` jsonb）ではなく専用の列 `rank`（fractional rank）に持つ。
+// `rank` を jsonb の中に入れない: 並びは他の行との関係で決まる値で、`taskSchema` の「行そのもの」に混ぜると、
+// 行を読み書きする経路すべてが rank の整合を意識することになる。索引は張らない（開いている行が一覧の全件で、メモリ上で並べる）。
+export const tasks = pgTable('tasks', {
+  id: text('id').primaryKey(),
+  rank: doublePrecision('rank').notNull(),
+  task: jsonb('task').notNull(),
+});
+
 // `id` を主キーにする: 同じ合図が二重に積まれないため。
 export const inboxEvents = pgTable(
   'inbox_events',
