@@ -375,6 +375,13 @@ export async function conversationsDeleteCommand(
     );
   }
   stdout.write(`${lines.join('\n')}\n`);
+  if (result.incomplete.length > 0) {
+    // 出力のあとで非0にする: スクリプトの `&&` が成功と読まないため（runners vacate・credential の failOnPartialPush と同じ作法）。
+    // daemon は 200 のまま返す（Web が 200 前提）ので、失敗の扱いは CLI が持つ。
+    throw new Error(
+      '後始末が終わっていません（会話は読めなくなっています）。この会話はもう 404 になるので、同じコマンドではやり直せません。上の警告の各行を手で片付けてください',
+    );
+  }
 }
 
 /**
