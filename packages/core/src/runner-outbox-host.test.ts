@@ -4,10 +4,13 @@ import { join } from 'node:path';
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { makeTempDir } from '../../../vitest.tmpdir.js';
+import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { RUNNER_CAPABILITIES, RUNNER_CAPABILITY_MANAGER_OUTBOX } from './runner-protocol.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, EMITTED_PICKUP_STALE_MS, type RunnerHost } from './runner.js';
+
+// 作業場に実在の /workspace を渡さない: 畳むときの rescue が本物の git 作業ツリーを走査し、未追跡のファイルを rescue_files として預けて pendingPickups を増やすため
+const WORK = makeTempDirSync('runner-outbox-host-work-');
 
 function fakeSdk(onTurn: () => Promise<void>): { fn: typeof sdkQuery; options: Options[] } {
   const options: Options[] = [];
@@ -64,7 +67,7 @@ describe('Host: 出し箱（Issue #4126 P2a）', () => {
     });
     const host = createRunnerHost({
       runnerId: 'runner-outbox',
-      workspacePath: '/workspace',
+      workspacePath: WORK,
       emit: (event) => events.push(event),
       queryFn: fake.fn,
       env: { PATH: '/usr/bin' },
@@ -73,10 +76,10 @@ describe('Host: 出し箱（Issue #4126 P2a）', () => {
       scratchSweep: false,
       cwdExistsFn: () => true,
       readCgroupEventCountersFn: async () => ({}),
-      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+      finishUnpushedWorkFn: async () => ({ cwd: WORK, worktrees: [] }),
     });
     hosts.push(host);
-    await host.start({ managerId: 'mgr-abc123', request: '依頼', cwd: '/workspace' });
+    await host.start({ managerId: 'mgr-abc123', request: '依頼', cwd: WORK });
     await vi.waitFor(() => expect(fake.options).toHaveLength(1));
     const env = fake.options[0]?.env as Record<string, string | undefined>;
     outboxDir = join(outboxRoot, 'mgr-abc123');
@@ -116,7 +119,7 @@ describe('Host: 出し箱（Issue #4126 P2a）', () => {
     const fake = fakeSdk(async () => undefined);
     const host = createRunnerHost({
       runnerId: 'runner-outbox-child',
-      workspacePath: '/workspace',
+      workspacePath: WORK,
       emit: () => undefined,
       queryFn: fake.fn,
       env: { PATH: '/usr/bin' },
@@ -127,10 +130,10 @@ describe('Host: 出し箱（Issue #4126 P2a）', () => {
       scratchSweep: false,
       cwdExistsFn: () => true,
       readCgroupEventCountersFn: async () => ({}),
-      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+      finishUnpushedWorkFn: async () => ({ cwd: WORK, worktrees: [] }),
     });
     hosts.push(host);
-    await host.start({ managerId: 'mgr-abc123', request: '依頼', cwd: '/workspace' });
+    await host.start({ managerId: 'mgr-abc123', request: '依頼', cwd: WORK });
     const dir = join(outboxRoot, 'mgr-abc123');
     expect((await stat(dir)).mode & 0o7777).toBe(0o2770);
     await mkdir(join(dir, 'sub'));
@@ -183,7 +186,7 @@ describe('Host: 報告の前に畳まれた担当の出し箱（#4675）', () =>
     });
     const host = createRunnerHost({
       runnerId: 'runner-outbox-close',
-      workspacePath: '/workspace',
+      workspacePath: WORK,
       emit: (event) => events.push(event),
       queryFn: fake.fn,
       env: { PATH: '/usr/bin' },
@@ -192,10 +195,10 @@ describe('Host: 報告の前に畳まれた担当の出し箱（#4675）', () =>
       scratchSweep: false,
       cwdExistsFn: () => true,
       readCgroupEventCountersFn: async () => ({}),
-      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+      finishUnpushedWorkFn: async () => ({ cwd: WORK, worktrees: [] }),
     });
     hosts.push(host);
-    await host.start({ managerId: 'mgr-close1', request: '依頼', cwd: '/workspace' });
+    await host.start({ managerId: 'mgr-close1', request: '依頼', cwd: WORK });
     outboxDir = join(outboxRoot, 'mgr-close1');
     await vi.waitFor(() => expect(written).toBe(true));
 
@@ -223,7 +226,7 @@ describe('Host: 報告の前に畳まれた担当の出し箱（#4675）', () =>
     });
     const host = createRunnerHost({
       runnerId: 'runner-outbox-close-empty',
-      workspacePath: '/workspace',
+      workspacePath: WORK,
       emit: (event) => events.push(event),
       queryFn: fake.fn,
       env: { PATH: '/usr/bin' },
@@ -232,10 +235,10 @@ describe('Host: 報告の前に畳まれた担当の出し箱（#4675）', () =>
       scratchSweep: false,
       cwdExistsFn: () => true,
       readCgroupEventCountersFn: async () => ({}),
-      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+      finishUnpushedWorkFn: async () => ({ cwd: WORK, worktrees: [] }),
     });
     hosts.push(host);
-    await host.start({ managerId: 'mgr-close2', request: '依頼', cwd: '/workspace' });
+    await host.start({ managerId: 'mgr-close2', request: '依頼', cwd: WORK });
     await vi.waitFor(() => expect(started).toBe(true));
     await host.stop('mgr-close2');
     expect(events.some((e) => e.type === 'report')).toBe(false);
@@ -254,7 +257,7 @@ describe('Host: 畳み（shutdown）で預けた物の数（#4699）', () => {
     });
     const host = createRunnerHost({
       runnerId: 'runner-pickups',
-      workspacePath: '/workspace',
+      workspacePath: WORK,
       emit: (event) => events.push(event),
       queryFn: fake.fn,
       env: { PATH: '/usr/bin' },
@@ -263,10 +266,10 @@ describe('Host: 畳み（shutdown）で預けた物の数（#4699）', () => {
       scratchSweep: false,
       cwdExistsFn: () => true,
       readCgroupEventCountersFn: async () => ({}),
-      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+      finishUnpushedWorkFn: async () => ({ cwd: WORK, worktrees: [] }),
     });
     hosts.push(host);
-    await host.start({ managerId, request: '依頼', cwd: '/workspace' });
+    await host.start({ managerId, request: '依頼', cwd: WORK });
     await vi.waitFor(() => expect(written).toBe(true));
     return { host, events };
   }
@@ -319,7 +322,7 @@ describe('Host: 畳み始める前に退避先へ置いた物も待ちに入る�
     });
     const host = createRunnerHost({
       runnerId: 'runner-emitted',
-      workspacePath: '/workspace',
+      workspacePath: WORK,
       emit: (event) => events.push(event),
       queryFn: fake.fn,
       env: { PATH: '/usr/bin' },
@@ -329,10 +332,10 @@ describe('Host: 畳み始める前に退避先へ置いた物も待ちに入る�
       scratchSweep: false,
       cwdExistsFn: () => true,
       readCgroupEventCountersFn: async () => ({}),
-      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+      finishUnpushedWorkFn: async () => ({ cwd: WORK, worktrees: [] }),
     });
     hosts.push(host);
-    await host.start({ managerId: 'mgr-early', request: '依頼', cwd: '/workspace' });
+    await host.start({ managerId: 'mgr-early', request: '依頼', cwd: WORK });
     await vi.waitFor(() => expect(events.some((e) => e.type === 'report')).toBe(true));
     const report = events.find((e) => e.type === 'report');
     if (report?.type !== 'report') throw new Error('report が無い');
@@ -396,7 +399,7 @@ describe('Host: 畳み始める前に退避先へ置いた物も待ちに入る�
     await writeFile(join(outboxStagedRoot, 'mgr-old', OUTBOX_ID), '前の残り');
     const host = createRunnerHost({
       runnerId: 'runner-none',
-      workspacePath: '/workspace',
+      workspacePath: WORK,
       emit: () => undefined,
       queryFn: fakeSdk(async () => undefined).fn,
       env: { PATH: '/usr/bin' },
@@ -406,7 +409,7 @@ describe('Host: 畳み始める前に退避先へ置いた物も待ちに入る�
       scratchSweep: false,
       cwdExistsFn: () => true,
       readCgroupEventCountersFn: async () => ({}),
-      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+      finishUnpushedWorkFn: async () => ({ cwd: WORK, worktrees: [] }),
     });
     hosts.push(host);
     await host.shutdown();

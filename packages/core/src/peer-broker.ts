@@ -919,7 +919,7 @@ export function describePeerTurnResult(result: PeerTurnResult): string {
       `内容: ${pending.summary}`,
       '',
       'peer_approve に approval_id と decision を渡して答えること' +
-        '（allow=その場で許可 / deny=拒否 / escalate=判断できないのでクローンへ回す）。' +
+        '（allow=その場で許可 / deny=拒否 / escalate=判断できないのでユーザーへ回す）。' +
         '答えるまで相手のターンは止まっている（ほかの peer セッションを起こしても、この確認は閉じない。' +
         'セッションが終わる・あなたが止まると拒否として閉じる）。',
     );
@@ -1371,13 +1371,13 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
           tool(
             'peer_approve',
             '相手のセッションの確認待ち（peer_run / peer_reply / peer_approve が返した approval_id）に答え、続きを受け取る。' +
-              'allow / deny はあなたがその場で答える。判断できないときは escalate でクローンへ回す' +
-              '（クローンの答えが出るまでこの呼び出しは返らない。出所は peer と印が付く）。',
+              'allow / deny はあなたがその場で答える。判断できないときは escalate でユーザーへ回す' +
+              '（ユーザーの答えが出るまでこの呼び出しは返らない。出所は peer と印が付く）。',
             {
               approval_id: z.string().min(1).describe('確認待ちの approval_id'),
               decision: z
                 .enum(PEER_APPROVAL_DECISIONS)
-                .describe('allow=許可 / deny=拒否 / escalate=クローンへ回す'),
+                .describe('allow=許可 / deny=拒否 / escalate=ユーザーへ回す'),
               message: z
                 .string()
                 .min(1)

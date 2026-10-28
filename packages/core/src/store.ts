@@ -17,6 +17,13 @@ import type {
 import type { CredentialEntry } from './credentials.js';
 import type { McpServers, StoredMcpServers, WriteMcpServersOptions } from './mcp-servers.js';
 import type { PluginInput, PluginSummary, StoredPlugin } from './plugins.js';
+import type {
+  SetTaskStatusOptions,
+  TaskAddResult,
+  TaskMoveResult,
+  TaskPlacement,
+  TaskSetStatusResult,
+} from './task.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
@@ -39,7 +46,10 @@ import type {
   SchedulePhase,
   ScheduledRequest,
   ScheduleSpec,
+  Task,
+  TaskStatus,
   UnreadableApproval,
+  UnreadableTask,
   UnreadableCommitment,
   UnreadableInboxEvent,
   UnreadableJob,
@@ -1219,6 +1229,65 @@ export interface CommitmentStore {
 }
 
 /**
+ * `TaskStore.get(id)` などが、その行を `taskSchema` として読めなかったときに投げる（`UnreadableCommitmentError` と同じ理由・同じ作法）。
+ * `instanceof` で見分ける: 器の障害と台帳の1行の破損は返し方が違う。
+ */
+export class UnreadableTaskError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnreadableTaskError';
+  }
+}
+
+/** `TaskStore.list` の返り値。`CommitmentList` と同じ理由で、読めない行を `unreadable` として別に返す（一覧を丸ごと潰さない）。 */
+export interface TaskList {
+  /** 開いている行は並び順（先頭が最優先）。`includeClosed` のときは、その後ろに閉じた行が新しい順で続く。 */
+  entries: Task[];
+  /** 読めなかった行。「無い」でも「片付いた」でもない第3の状態。 */
+  unreadable: UnreadableTask[];
+}
+
+/**
+ * 順序と状態を持つ待ち行列（`schema.ts` の `Task`）。`CommitmentStore` と並べて新設した（#5469 P2）。台帳から自動では移さない。
+ *
+ * 並びは行の欄ではなくストアが持つ位置で、規則は `task.ts`（`placeTask` / `setTaskRowStatus`）に1本だけある。3実装はそれを呼ぶだけで、
+ * 規則を自前で持たない。契約は `task-store-contract.ts` が3実装に同じ歯を当てて測る。
+ *
+ * NUL: 書く口は id の NUL を `NulNotAllowedError` で断り、本文系（title / body / source / originConversationId / closedReason）の NUL は落として残す。
+ * 読む口（`get`・`move`・`setStatus` の id）は NUL を含む id でも断らず「無い」と同じ結果を返す。
+ */
+export interface TaskStore {
+  /** 並び順で返す。`includeClosed` を省くと開いている行（queued / waiting / needs_decision）だけ。 */
+  list(options?: { includeClosed?: boolean }): Promise<TaskList>;
+
+  /** 1件を読む。無ければ `null`、読めない行は `UnreadableTaskError`（`CommitmentStore.get` と同じ）。 */
+  get(id: string): Promise<Task | null>;
+
+  /**
+   * 追加する。`placement` を省くと既定の挿入（human 起点は「開いている human 起点の最後の直後」、それ以外は末尾。`placeTask`）。
+   * 同じ id が既に在れば何も書かず `existed`（読めない行も在るものとして数える）。判定と書き込みは1操作に畳む。
+   */
+  add(entry: Task, placement?: TaskPlacement): Promise<TaskAddResult>;
+
+  /** 開いている行を動かす。閉じた行・アンカーが開いていない行・自分自身をアンカーにした指定は何も書かない。読めない行は `UnreadableTaskError`。 */
+  move(id: string, placement: TaskPlacement): Promise<TaskMoveResult>;
+
+  /**
+   * 状態を変える。遷移の規則は `planTaskTransition`。同じ状態は `unchanged`、不正な遷移は `rejected`（例外にしない）。
+   * `by` は必須（`CommitmentStore.close` と同じ理由）。閉じた行を queued に戻すと閉じた記録を外し、既定の規則（`placeTask` の既定の置き場所。human 起点は開いている human 起点の最後の直後、それ以外は末尾）で置き直すので、
+   * 呼び出し側は `before` を日誌へ逐語で残すこと。読めない行は `UnreadableTaskError`。
+   */
+  setStatus(
+    id: string,
+    status: TaskStatus,
+    options: SetTaskStatusOptions,
+  ): Promise<TaskSetStatusResult>;
+
+  /** 全件を消す（ワークスペースのリセット専用）。読めない行も含め、消した件数を返す。 */
+  clear(): Promise<number>;
+}
+
+/**
  * まだ処理し終えていない受信箱の合図（PRD「可観測性」/ architecture.md「同時実行モデル」）。
  *
  * 受信箱そのものはインメモリでよい。ここが持つのは「まだ終えていない」という事実だけ。
@@ -2214,6 +2283,12 @@ export interface Stores {
    * **省略可能にしないこと**（`inbox` と同じ理由）。ここが任意だと、片方の器でだけ「その場で着手しなかった依頼が黙って消える」という能力差が生まれる。
    */
   commitments: CommitmentStore;
+  /**
+   * 順序と状態を持つ待ち行列（#5469 P2。台帳と並べて動く）。
+   *
+   * **省略可能にしないこと**（`commitments` と同じ理由）。ここが任意だと、片方の器でだけ task が使えないという能力差が生まれる（north_star 禁止1）。
+   */
+  tasks: TaskStore;
   /**
    * 仕事のやり方。
    *

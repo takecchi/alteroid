@@ -37,6 +37,7 @@ import { PgProfileStore } from './profile.js';
 import { PgScheduleStore } from './schedules.js';
 import { PgSessionRegistry } from './sessions.js';
 import { PgSessionStore } from './session-store.js';
+import { PgTaskStore } from './tasks.js';
 import { PgTokenPoolStore } from './token-pool.js';
 import { PgUsageStore } from './usage.js';
 
@@ -69,6 +70,7 @@ export { PgProfileStore } from './profile.js';
 export { PgScheduleStore } from './schedules.js';
 export { PgSessionRegistry } from './sessions.js';
 export { PgSessionStore } from './session-store.js';
+export { PgTaskStore } from './tasks.js';
 export { PgTokenPoolStore } from './token-pool.js';
 export { PgUsageStore } from './usage.js';
 export * from './footprint.js';
@@ -137,6 +139,8 @@ const LONG_QUERY_METHODS = {
   attachments: ['put', 'open', 'get', 'prune', 'clear'],
   plugins: ['get', 'put'],
   commitments: ['list', 'removeForConversation', 'clear'],
+  // 件数で締めずに表を走査する（全行を読んで並びを作る）。advisory lock の待ちも含めるので、書く口も延ばす
+  tasks: ['list', 'add', 'move', 'setStatus', 'clear'],
   inbox: ['claimPending', 'pending', 'peekPending', 'clear'],
   jobs: ['listJobs', 'clear'],
 } as const;
@@ -171,6 +175,7 @@ export function createPgStoresFromDb(
     jobs: extendLongQueries(new PgJobStore(db), LONG_QUERY_METHODS.jobs),
     schedules: new PgScheduleStore(db),
     commitments: extendLongQueries(new PgCommitmentStore(db), LONG_QUERY_METHODS.commitments),
+    tasks: extendLongQueries(new PgTaskStore(db), LONG_QUERY_METHODS.tasks),
     practices: new PgPracticeStore(db),
     inbox: extendLongQueries(new PgInboxStore(db), LONG_QUERY_METHODS.inbox),
     archive: extendLongQueries(new PgTranscriptArchive(db), LONG_QUERY_METHODS.archive),

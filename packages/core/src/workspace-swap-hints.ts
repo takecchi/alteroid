@@ -167,7 +167,7 @@ function recoveryCommand(live: LiveRescue & { kind: 'ok' }): string {
 function rescueHeadline(live: LiveRescue): string {
   return live.kind === 'ok'
     ? `退避 ref ${live.ref}（${live.commit.slice(0, 8)}, ${live.at}）が最後の退避。`
-    : `退避 ref の記録の形が不正（${live.at} に退避したことになっている）なので、手順は出さない。台帳（クローンの manager_list の「退避 ref」）を確かめよ。`;
+    : `退避 ref の記録の形が不正（${live.at} に退避したことになっている）なので、手順は出さない。台帳（ユーザー側の manager_list の「退避 ref」）を確かめよ。`;
 }
 
 function recoverySteps(live: LiveRescue): string {
@@ -384,7 +384,7 @@ export function formatWorkspaceCloneHintLines(
   const rest = ordered.length - lines.length;
   if (rest > 0) {
     lines.push(
-      `…ほか ${rest} 本は省略（全 ${ordered.length} 本。全部はクローンの manager_list の「未push観測」「退避 ref」にある）。`,
+      `…ほか ${rest} 本は省略（全 ${ordered.length} 本。全部はユーザー側の manager_list の「未push観測」「退避 ref」にある）。`,
     );
   }
   return lines.join('\n');

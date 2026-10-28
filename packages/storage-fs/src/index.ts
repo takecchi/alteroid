@@ -24,6 +24,7 @@ import { FsProfileStore } from './profile.js';
 import { resolvePaths, type AlteroidPaths } from './paths.js';
 import { FsScheduleStore } from './schedules.js';
 import { FsSessionRegistry } from './sessions.js';
+import { FsTaskStore } from './tasks.js';
 import { FsTokenPoolStore } from './token-pool.js';
 import { FsUsageStore } from './usage.js';
 
@@ -48,6 +49,7 @@ export { FsPracticeStore } from './practices.js';
 export { FsProfileStore } from './profile.js';
 export { FsScheduleStore } from './schedules.js';
 export { FsSessionRegistry } from './sessions.js';
+export { FsTaskStore } from './tasks.js';
 export { FsTokenPoolStore } from './token-pool.js';
 export { FsUsageStore } from './usage.js';
 export { ALTEROID_HOME_ENV, defaultRoot, resolvePaths, type AlteroidPaths } from './paths.js';
@@ -65,6 +67,7 @@ export function createFsStores(
     jobs: new FsJobStore(paths.jobs),
     schedules: new FsScheduleStore(paths.jobs),
     commitments: new FsCommitmentStore(paths.jobs),
+    tasks: new FsTaskStore(paths.jobs),
     practices: new FsPracticeStore(paths.jobs),
     inbox: new FsInboxStore(paths.jobs),
     archive: new FsTranscriptArchive(paths.archive),
@@ -148,7 +151,7 @@ alteroid のクローンの人格データ。**すべて人間が直接読んで
 | --- | --- |
 | \`memory/\` | 記憶。クローンの価値観と学び。ここを書き換えると次の会話から反映される |
 | \`journal/\` | 日誌。追記専用の記録（JSONL）。クローンが聞かずに実行した判断もここに残る |
-| \`jobs/\` | ジョブと承認待ちキュー、継続中の依頼（\`schedules.json\`）、引き受けたまま終わっていない仕事（\`commitments.json\`） |
+| \`jobs/\` | ジョブと承認待ちキュー、継続中の依頼（\`schedules.json\`）、引き受けたまま終わっていない仕事（\`commitments.json\`）、順序と状態を持つ task（\`tasks.json\`） |
 | \`archive/\` | セッションの生ログ（compaction 前に退避したもの） |
 | \`state/\` | デーモンの内部状態（セッション id など。消してもクローンは記憶から戻る） |
 | \`auth/\` | ログインしたアカウントと、alteroid を使ってよいかの許可。**手で編集しない**（許可の付与は \`alteroid access grant\`） |

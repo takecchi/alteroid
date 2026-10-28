@@ -110,6 +110,22 @@ const EXEMPT: readonly Exemption[] = [
     tool: 'commitment_reopen',
     why: '説明文が名乗る一覧（enum・配列）が無い（言うのは外れる欄の名前と closedBy の例だけ）。ふるまいの歯は commitment-reopen.test.ts が持つ',
   },
+  {
+    tool: 'task_list',
+    why: '説明文が名乗る一覧（配列）が無い（開いている3状態と閉じた2状態の名前は散文）。ふるまいの歯は task-tools.test.ts が持つ',
+  },
+  {
+    tool: 'task_add',
+    why: '説明文が名乗る一覧（配列）が無い（置き場所 to の値は zod の enum が引数定義として名乗る）。ふるまいの歯は task-tools.test.ts が持つ',
+  },
+  {
+    tool: 'task_move',
+    why: '説明文が名乗る一覧（配列）が無い（置き場所 to の値は zod の enum が引数定義として名乗る）。ふるまいの歯は task-tools.test.ts が持つ',
+  },
+  {
+    tool: 'task_set_status',
+    why: '説明文が名乗る一覧（配列）が無い（状態の値は zod の enum = taskStatusSchema が引数定義として名乗る）。ふるまいの歯は task-tools.test.ts が持つ',
+  },
   { tool: 'memory_read', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'memory_write', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'memory_append', why: '実装側に、説明文が数え直すような一覧が無い' },

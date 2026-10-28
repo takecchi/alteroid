@@ -48,6 +48,15 @@ describe('resetWorkspaceState', () => {
       body: 'b',
       origin: 'self',
     });
+    await stores.tasks.add({
+      id: 'task-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      status: 'queued',
+      origin: 'self',
+      title: 't',
+      body: 'b',
+    });
     await stores.practices.write({
       slug: 'implementation',
       kind: '実装',
@@ -104,6 +113,7 @@ describe('resetWorkspaceState', () => {
       schedulePhases: 1,
       inbox: 1,
       commitments: 1,
+      tasks: 1,
       practices: 1,
       archive: 1,
       sessions: 1,
@@ -128,6 +138,7 @@ describe('resetWorkspaceState', () => {
     expect(await stores.schedules.getPhase('daily_report')).toBeNull();
     expect((await stores.inbox.peekPending()).entries.length).toBe(0);
     expect((await stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
+    expect((await stores.tasks.list({ includeClosed: true })).entries).toEqual([]);
     expect((await stores.practices.list()).entries).toEqual([]);
     expect(await stores.archive.list()).toEqual([]);
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
@@ -174,6 +185,7 @@ describe('resetWorkspaceState', () => {
       schedulePhases: 0,
       inbox: 0,
       commitments: 0,
+      tasks: 0,
       practices: 0,
       archive: 0,
       sessions: 0,

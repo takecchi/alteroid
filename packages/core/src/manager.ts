@@ -1982,7 +1982,7 @@ const PEER_CLOSE_REASON_LABELS = {
   expired: '鍵の付け替えで畳んだ担当が戻らないまま、預かりの期限が来た',
   replaced: '同じ担当の peer を預かり直した',
   shutdown: '器を畳んだ',
-  stopped: '人間・クローンが止めた',
+  stopped: 'ユーザーが止めた',
 } as const;
 
 type PeerCloseReason = keyof typeof PEER_CLOSE_REASON_LABELS;
@@ -13934,7 +13934,7 @@ function rescueStashKeys(entry: Pick<RescueStashEntry, 'worktree' | 'path'>): st
  * 器が入れ替わった後の再開の文・後継の最初の依頼文へ足す段落（#4863 案A その2）。預かりが空なら `undefined`（1文字も足さない）。
  * `restorable` は、この担当が走る器が `rescue_restore` を名乗っているか: 名乗らない器へ呼べない道具を指さない。
  */
-function rescueStashClause(
+export function rescueStashClause(
   stash: readonly RescueStashEntry[] | undefined,
   options: { restorable: boolean; from?: string },
 ): string | undefined {
@@ -13954,7 +13954,7 @@ function rescueStashClause(
     ? `${subject} ${String(stash.length)} 件ある（${list}）。作業場に無ければ、${call}` +
         '（預かりが添付として次の入力で届く。元の場所に別の中身のファイルが在るなら、上書きする前に確かめること）。'
     : `${subject} ${String(stash.length)} 件ある（${list}）。この器には \`rescue_restore\` の道具が無いので、` +
-        'クローンに取り戻しを頼むこと（manager_report で預かりの件数が分かる）。';
+        'ユーザーに取り戻しを頼むこと（manager_report で預かりの件数が分かる）。';
 }
 
 // `restartNudge` をそのまま呼ばない: 末尾の「続きを進めよ」が、直後に続く人間・クローンの指示と二重の指図になる。

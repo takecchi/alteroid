@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { toNumber } from './db.js';
-import { archive, commitments, inboxEvents, jobs, journal } from './schema.js';
+import { archive, commitments, inboxEvents, jobs, journal, tasks } from './schema.js';
 
 export const STATEMENT_TIMEOUT_MS = 3000;
 
@@ -21,6 +21,9 @@ export interface CommitmentsFootprint {
   open: TableSizeStats;
   closed: TableSizeStats;
 }
+
+// tasks は 1 操作ごとに全行を読む（並びの計算が全行を要る）ので、行数と大きさをここで見張る
+export type TasksFootprint = TableSizeStats;
 
 export interface InboxEventsFootprint extends TableSizeStats {
   maxDeliveries: number | null;
@@ -42,6 +45,7 @@ export type ArchiveFootprint = TableSizeStats;
 export interface StorageFootprint {
   jobs: JobsFootprint;
   commitments: CommitmentsFootprint;
+  tasks: TasksFootprint;
   inboxEvents: InboxEventsFootprint;
   journal: JournalFootprint;
   archive: ArchiveFootprint;
@@ -165,6 +169,34 @@ async function measureCommitmentsFootprint(
     });
   } catch {
     return { open: { ...UNMEASURABLE }, closed: { ...UNMEASURABLE } };
+  }
+}
+
+async function measureTasksFootprint(db: Db, statementTimeoutMs: number): Promise<TasksFootprint> {
+  try {
+    return await withStatementTimeout(db, statementTimeoutMs, async (tx) => {
+      const [row] = await tx
+        .select({
+          rows: sql<number | string>`count(*)`,
+          storedBytes: sql<number | string | null>`sum(pg_column_size(${tasks.task}))`,
+          textBytes: sql<number | string | null>`sum(octet_length(${tasks.task}::text))`,
+          maxStoredBytes: sql<number | string | null>`max(pg_column_size(${tasks.task}))`,
+          maxTextBytes: sql<number | string | null>`max(octet_length(${tasks.task}::text))`,
+        })
+        .from(tasks);
+      if (row === undefined) {
+        return { rows: 0, storedBytes: 0, textBytes: 0, maxStoredBytes: 0, maxTextBytes: 0 };
+      }
+      return {
+        rows: toNumber(row.rows),
+        storedBytes: zeroIfNull(row.storedBytes),
+        textBytes: zeroIfNull(row.textBytes),
+        maxStoredBytes: zeroIfNull(row.maxStoredBytes),
+        maxTextBytes: zeroIfNull(row.maxTextBytes),
+      };
+    });
+  } catch {
+    return { ...UNMEASURABLE };
   }
 }
 
@@ -297,12 +329,14 @@ export async function measureStorageFootprint(
   const [
     jobsFootprint,
     commitmentsFootprint,
+    tasksFootprint,
     inboxEventsFootprint,
     journalFootprint,
     archiveFootprint,
   ] = await Promise.all([
     measureJobsFootprint(db, statementTimeoutMs),
     measureCommitmentsFootprint(db, statementTimeoutMs),
+    measureTasksFootprint(db, statementTimeoutMs),
     measureInboxEventsFootprint(db, statementTimeoutMs),
     measureJournalFootprint(db, statementTimeoutMs),
     measureArchiveFootprint(db, statementTimeoutMs),
@@ -310,6 +344,7 @@ export async function measureStorageFootprint(
   return {
     jobs: jobsFootprint,
     commitments: commitmentsFootprint,
+    tasks: tasksFootprint,
     inboxEvents: inboxEventsFootprint,
     journal: journalFootprint,
     archive: archiveFootprint,
