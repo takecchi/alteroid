@@ -90,6 +90,7 @@ import {
   tokenRemoveUnreadableCommand,
 } from './token.js';
 import { progressCommand } from './progress.js';
+import { tasksCommand } from './tasks.js';
 import type { AttachmentsListOptions } from './attachments.js';
 import { HELP_EXAMPLES } from './help-examples.js';
 import { describeCliVersion } from './version.js';
@@ -391,6 +392,15 @@ program
   .option('--window-hours <n>', '消化と見込みを数える窓の長さ（時間。既定は daemon が決める）')
   .action(async (options: { windowHours?: string }) => {
     await progressCommand(options);
+  });
+
+program
+  .command('tasks')
+  .addHelpText('after', HELP_EXAMPLES.tasks)
+  .description('task（順序と状態を持つ待ち行列）を、並び順に見る（読むだけ）')
+  .option('--all', '閉じた task（done / cancelled）も後ろに足す')
+  .action(async (options: { all?: boolean }) => {
+    await tasksCommand(options);
   });
 
 const inboxCommand = program

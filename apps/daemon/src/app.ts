@@ -303,6 +303,7 @@ import {
   commitmentCloseManyResponseSchema,
   commitmentCloseManyStoppedResponseSchema,
   commitmentListResponseSchema,
+  taskListResponseSchema,
   progressResponseSchema,
   commitmentOpenedResponseSchema,
   conversationDetailResponseSchema,
@@ -762,6 +763,11 @@ const commitmentsQuery = z.object({
   includeClosed: z.enum(['true', 'false']).default('false'),
   limit: z.coerce.number().int().min(1).optional(),
   cursor: z.string().optional(),
+});
+
+// `GET /tasks` は `includeClosed` だけを受ける: 並べ替えは器が持つ並び（store の position）が唯一で、窓や絞り込みは必要が出てから足す。
+const tasksQuery = z.object({
+  includeClosed: z.enum(['true', 'false']).default('false'),
 });
 
 // 文字列のまま受ける: `z.coerce.number()` だと空文字が 0 になり、「渡していない」「空を渡した」「0 を渡した」が区別できない。
@@ -6798,6 +6804,40 @@ export function createApp(deps: AppDeps) {
           }
         }
         return c.json(commitmentListResponseSchema.parse(responseBody));
+      },
+    )
+
+    // 読むだけ（書く口は P2 では HTTP に出さない）: 書く経路を増やすと「CLI でできないこと」「クローンの道具と違う規則」が生まれる前に、読み口で並びの見え方を確かめたいため（#5469）。
+    // 資格は `/commitments` と同じ `authenticate` だけ。
+    .get(
+      '/tasks',
+      describeRoute({
+        tags: ['tasks'],
+        summary: 'task（順序と状態を持つ待ち行列）の一覧',
+        description:
+          'クローンの `task_list` と同じものを人間の側から読む。**`entries` の並びが優先順**（先頭が先にやるもの）で、' +
+          '数値の優先度・締切は持たない。既定は開いている行（`queued` / `waiting` / `needs_decision`）だけで、' +
+          '`includeClosed=true` を付けると閉じた行（`done` / `cancelled`）が後ろに新しい順で続く。' +
+          '本文は切らずに返す。`unreadable` は読めなかった行で、「無い」でも「終わった」でもない第3の状態（0件でも欄は返る）。' +
+          '引き受けた仕事の台帳（`/commitments`）とは別の器で、台帳から自動では載らない。',
+        responses: {
+          200: {
+            description: 'task の一覧。',
+            content: { 'application/json': { schema: resolver(taskListResponseSchema) } },
+          },
+          400: {
+            description: 'クエリが不正（`includeClosed` は `true` / `false` だけ）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      queryParams(tasksQuery),
+      async (c) => {
+        const { includeClosed } = c.req.valid('query');
+        const { entries, unreadable } = await stores.tasks.list(
+          includeClosed === 'true' ? { includeClosed: true } : undefined,
+        );
+        return c.json(taskListResponseSchema.parse({ entries, unreadable }));
       },
     )
 

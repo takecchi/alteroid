@@ -42,6 +42,7 @@ import {
   runnerProfileFingerprintSchema,
   scheduledRequestSchema,
   scheduleSpecSchema,
+  taskSchema,
   tokenRotationPolicySchema,
   tokenRotationSettingsSchema,
   unreadableApprovalSchema,
@@ -50,6 +51,7 @@ import {
   unreadableJobSchema,
   unreadablePracticeSchema,
   unreadableScheduleSchema,
+  unreadableTaskSchema,
   unreadableTokenSchema,
   usageAggregateSchema,
   usageBreakdownSchema,
@@ -620,6 +622,14 @@ export const commitmentListResponseSchema = z.object({
 });
 
 export const commitmentDetailResponseSchema = z.object({ entry: commitmentViewSchema });
+
+// 位置は行の欄ではなく並び（`entries` の順序）で表す: 数値の優先度を外へ出すと、器が順序を数値で決めているように読める。
+// 台帳（`commitmentListResponseSchema`）と違い窓・導出値を持たない: P2 は読むだけの口で、足すのは必要が出てからでよい。
+export const taskListResponseSchema = z.object({
+  entries: z.array(taskSchema),
+  // 窓では切らない: 読めない行は「無い」でも「終わった」でもない第3の状態
+  unreadable: z.array(unreadableTaskSchema),
+});
 
 // 返さないと閉じられない: 閉じる口は id を取るので、返さないと人間は積めるが自分で閉じられない片道の口になる。
 export const commitmentOpenedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
@@ -1810,6 +1820,7 @@ export const resetResponseSchema = z.object({
     schedulePhases: z.number().int(),
     inbox: z.number().int(),
     commitments: z.number().int(),
+    tasks: z.number().int(),
     // ここへ足し忘れると静かに落ちる: zod は未知のキーを黙って捨て、器は消したのに申告には出ない形になるため。
     practices: z.number().int(),
     archive: z.number().int(),

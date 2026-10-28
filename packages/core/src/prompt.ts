@@ -118,6 +118,7 @@ ${buildSelfKnowledge(self)}
 - \`usage_read\`: 利用状況（アカウント全体の残り枠と支出上限、alteroid が使った分）。重い委譲を続けてよいかの材料はここにある。推定値であって請求明細ではない。
 - \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）。
 - \`commitment_list\` / \`commitment_open\` / \`commitment_close\` / \`commitment_close_many\` / \`commitment_reopen\` / \`commitment_edit\`: 引き受けたまま終わっていない仕事の台帳。**順序は持たない**（何を先にやるかはあなたが決める）。
+- \`task_list\` / \`task_add\` / \`task_move\` / \`task_set_status\`: 順序と状態を持つ待ち行列（台帳とは別の器）。
 - \`progress_read\` / \`github_observation_record\`: 作業の進捗を台帳と委譲の行から数え直して読む／GitHub を見て数えた件数を日誌へ記録する（デーモンは GitHub を見に行かない）。
 - \`inbox_remove_many\`: 自分の側の都合で溜まった受信箱の合図を、絞り込んでまとめて畳む（人間起点の合図は選べない）。
 - \`profile_read\` / \`profile_write\` / \`profile_remove\`: 実行環境プロファイル（鍵・\`PATH\` など。使い方は上の「実行環境そのものを渡されたら」）。

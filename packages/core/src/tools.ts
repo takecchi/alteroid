@@ -263,9 +263,23 @@ import {
   scheduleKindSchema,
   SCHEDULE_EVERY_MINUTES_MAX,
   scheduleSpecSchema,
+  taskStatusSchema,
 } from './schema.js';
+import {
+  TASK_BODY_LIMIT,
+  TASK_LIST_BUDGET,
+  TASK_PAGE,
+  TASK_PLACEMENT_TARGETS,
+  TASK_TITLE_MAX,
+  UNREADABLE_TASK_IDS_SHOWN,
+  describeTaskClosedRecord,
+  describeTaskPlacement,
+  resolveTaskPlacement,
+  taskStatusLine,
+} from './task-tools.js';
 import type {
   AttachmentRef,
+  Task,
   ChatStreamEvent,
   Commitment,
   CommitmentOrigin,
@@ -308,6 +322,7 @@ import {
   UnreadableJournalEntryError,
   UnreadablePracticeError,
   UnreadableScheduleError,
+  UnreadableTaskError,
   ScheduleConflictError,
   UnreadableTokenSettingsError,
   describeUnreadableApprovals,
@@ -606,6 +621,10 @@ export const CLONE_TOOL_NAMES = [
   'commitment_close_many',
   'commitment_reopen',
   'commitment_edit',
+  'task_list',
+  'task_add',
+  'task_move',
+  'task_set_status',
   'progress_read',
   'github_observation_record',
   'inbox_remove_many',
@@ -656,6 +675,9 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'commitment_close_many',
   'commitment_reopen',
   'commitment_edit',
+  'task_add',
+  'task_move',
+  'task_set_status',
   'inbox_remove_many',
   'profile_write',
   'profile_remove',
@@ -686,6 +708,7 @@ export const TRACELESS_CLONE_TOOLS = [
   'usage_read',
   'schedule_list',
   'commitment_list',
+  'task_list',
   'progress_read',
   'profile_read',
   'practice_list',
@@ -747,6 +770,9 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   commitment_close_many: false,
   commitment_reopen: false,
   commitment_edit: false,
+  task_add: false,
+  task_move: false,
+  task_set_status: false,
   inbox_remove_many: false,
   profile_write: true,
   profile_remove: false,
@@ -6017,6 +6043,357 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         return text(`${id} を開き直した（閉じた記録は日誌に残してある）。`);
+      },
+    ),
+
+    // 台帳（commitment_*）とは別の器: 台帳から自動では移さない（二重書き込みをしない）。ここだけが順序と状態を持つ
+    tool(
+      'task_list',
+      [
+        'task（順序と状態を持つ待ち行列）の一覧。**先頭が先にやるもの**で、並びは器が持つ（数値の優先度・締切は無い）。',
+        '各件はタイトルと本文の抜粋だけを出す。1件の全文（本文と、閉じたなら理由）が要るなら id を渡す。閉じた件も id で読める。',
+        '既定は開いている件（queued / waiting / needs_decision）だけ。includeClosed で閉じた件（done / cancelled）を後ろに足す。',
+        '引き受けた仕事の台帳（commitment_list）とは別の器で、台帳から自動では載らない。',
+      ].join(' '),
+      {
+        id: z
+          .string()
+          .optional()
+          .describe('この1件を全文で読む（一覧に出ている id）。閉じた件も読める。他の条件は無視される'),
+        offset: z
+          .number()
+          .optional()
+          .describe(
+            `id で全文を読むとき、何文字目から読むか（文字数。${formatIntRangeJa({ min: 0 })}）`,
+          ),
+        includeClosed: z
+          .boolean()
+          .optional()
+          .describe('閉じた件（done / cancelled）も後ろに足す（既定は開いている件だけ）'),
+      },
+      async ({ id, offset = 0, includeClosed }) => {
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
+        if (id !== undefined) {
+          // `UnreadableTaskError` だけを3値目として返す: 器の障害まで飲み込むと「壊れている」に化けて見えなくなるため
+          let task: Task | null;
+          try {
+            task = await stores.tasks.get(id);
+          } catch (error) {
+            if (error instanceof UnreadableTaskError) {
+              return text(`task ${id} は読めない形で入っている（無いのとは違う）。本文はここでは取れない。`);
+            }
+            throw error;
+          }
+          if (task === null) return text(`task ${id} は無い（task_list で実在する id を確かめること）。`);
+          const head = [
+            `${id} ${task.title}`,
+            `${commitmentOriginBadge({ origin: task.origin, source: task.source })}`,
+            `作成: ${task.createdAt} / 更新: ${task.updatedAt}`,
+            taskStatusLine(task),
+            ...(task.originConversationId === undefined
+              ? []
+              : [`起点の会話: ${task.originConversationId}`]),
+          ].join('\n');
+          // 閉じた理由を本文より先に置く: 本文が長いと2ページ目へ落ちるため
+          const body = [
+            ...(task.closedAt === undefined ? [] : [`閉じた理由: ${describeTaskClosedRecord(task)}`]),
+            `本文（全文）: ${task.body}`,
+          ].join('\n\n');
+          const part = page(body, offset, TASK_PAGE);
+          const tail = part.more
+            ? `\n\n…（ここで切れている。続きは task_list id=${task.id} offset=${part.to}）`
+            : '';
+          return text(`${head}（${describePage(part)}）\n\n${part.body}${tail}`);
+        }
+
+        const { entries, unreadable } = await stores.tasks.list(
+          includeClosed === true ? { includeClosed: true } : undefined,
+        );
+        if (entries.length === 0 && unreadable.length === 0) {
+          return text('（task は無い）');
+        }
+        const items = entries.map((task, index) =>
+          renderListingEntry({
+            id: task.id,
+            title: task.title,
+            summary: excerptLine(task.body, TASK_BODY_LIMIT),
+            createdAt: task.createdAt,
+            updatedAt: task.updatedAt,
+            extra: [`  ${index + 1}番目 / ${taskStatusLine(task)}`],
+          }),
+        );
+        const lines: string[] = [];
+        if (entries.length === 0) {
+          lines.push('（読める task は無い）');
+        } else {
+          lines.push(
+            includeClosed === true
+              ? '（上から並び順。開いている件の後ろに、閉じた件が新しい順で続く）'
+              : '（以下はすべて開いている件。上が先）',
+            renderListing(items, {
+              budget: TASK_LIST_BUDGET,
+              omitted: ({ rest, shown, total }) =>
+                `…ほか ${rest} 件は省略（task は ${total} 件あり、並びの先頭から ${shown} 件だけ出した。` +
+                '残りは並びの後ろ側で、この一覧に続きを取る口はまだ無い。1件ずつ task_list id=<id> で読める）。',
+            }),
+            `（本文は${TASK_BODY_LIMIT}字の抜粋。1件の全文は task_list id=<id> で取れる）`,
+          );
+        }
+        if (unreadable.length > 0) {
+          const idsAll = unreadable
+            .map((entry) => entry.id)
+            .filter((value): value is string => value !== undefined);
+          const ids = idsAll.slice(0, UNREADABLE_TASK_IDS_SHOWN);
+          const idsRest = idsAll.length - ids.length;
+          lines.push(
+            `**読めない行が ${unreadable.length} 件ある${
+              ids.length > 0
+                ? `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`
+                : ''
+            }。終わったのではない。**`,
+          );
+        }
+        return text(lines.join('\n'));
+      },
+    ),
+
+    tool(
+      'task_add',
+      [
+        '順序と状態を持つ task を1件足す。起点は自分（self）として載る。',
+        '置き場所を省くと既定の位置に入る（自分で足した件は末尾）。to で先頭・末尾・特定の task の前後を指せる。',
+        '引き受けた仕事の台帳（commitment_open）とは別の器で、片方に足してももう片方には載らない。',
+      ].join(' '),
+      {
+        title: z
+          .string()
+          .describe(
+            `一行のタイトル（${formatStringLengthJa({ min: 1, max: TASK_TITLE_MAX })}。改行は使えない）。一覧にはこれと本文の抜粋だけが出る`,
+          ),
+        body: z
+          .string()
+          .describe(
+            `何をするか。後日のあなたが読んでそのまま動ける粒度で、要約せず逐語で書く（${formatStringLengthJa({ min: 1 })}）`,
+          ),
+        to: z
+          .enum(TASK_PLACEMENT_TARGETS)
+          .optional()
+          .describe('置き場所（front=先頭 / back=末尾 / before・after=anchorId の直前・直後）。省くと既定の位置'),
+        anchorId: z
+          .string()
+          .optional()
+          .describe('to が before / after のときの基準の task の id（開いている件だけ指せる）'),
+        originConversationId: z
+          .string()
+          .optional()
+          .describe('この task の起点になった会話の id（分かるときだけ）'),
+        source: z
+          .string()
+          .optional()
+          .describe('関係する相手や出所（マネージャー id など。分かるときだけ）'),
+      },
+      async ({ title, body, to, anchorId, originConversationId, source }) => {
+        const titleError =
+          describeStringLengthViolation('title', title, { min: 1, max: TASK_TITLE_MAX }) ??
+          describeBlankViolation('title', title);
+        if (titleError !== null) return text(titleError);
+        if (/[\r\n]/.test(title)) return text('title は使えない（改行を含まない一行のみ）。');
+        const bodyError =
+          describeStringLengthViolation('body', body, { min: 1 }) ??
+          describeBlankViolation('body', body);
+        if (bodyError !== null) return text(bodyError);
+        for (const [field, value] of [
+          ['originConversationId', originConversationId],
+          ['source', source],
+        ] as const) {
+          if (value !== undefined && stripNul(value).trim().length === 0) {
+            return text(
+              `${field} が空です。分かるときだけ実のある文字列で渡し、無いなら省略してください。`,
+            );
+          }
+        }
+        const resolved = resolveTaskPlacement(to, anchorId);
+        if (resolved.kind === 'invalid') return text(resolved.message);
+        const now = new Date().toISOString();
+        const entry: Task = {
+          id: randomUUID(),
+          createdAt: now,
+          updatedAt: now,
+          status: 'queued',
+          origin: 'self',
+          ...(source === undefined ? {} : { source }),
+          ...(originConversationId === undefined ? {} : { originConversationId }),
+          title,
+          body,
+        };
+        const added = await stores.tasks.add(entry, resolved.placement);
+        if (added.kind === 'anchor-not-found') {
+          return text(
+            `anchorId ${anchorId} は開いている task に無い（閉じた件・無い id は基準にできない）。何も足していない。task_list で確かめること。`,
+          );
+        }
+        // 「足した」と名乗る前に読み直して確かめる: 書き込みが静かに失敗しても呼び出し側からは例外が見えないため
+        let confirmed: Task | null;
+        try {
+          confirmed = await stores.tasks.get(entry.id);
+        } catch (error) {
+          if (!(error instanceof UnreadableTaskError)) throw error;
+          confirmed = null;
+        }
+        if (added.kind === 'existed' || confirmed === null) {
+          return text(
+            `task を書き込んだが、直後に読み直しても ${entry.id} を確認できなかった。**「足した」とは言えない。** ` +
+              `task_list id=${entry.id} で確かめ、無ければ同じ内容でもう一度 task_add を試すこと。`,
+          );
+        }
+        await appendJournalOrThrow(
+          'task_add',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `task を足した（${entry.id}）: ${title}`,
+            grounds: `自分で task_add した。置き場所: ${describeTaskPlacement(resolved.placement)}。本文: ${body}`,
+          },
+          'act-completed',
+        );
+        return text(`task を足した（${entry.id}）。位置は task_list で確かめられる。`);
+      },
+    ),
+
+    tool(
+      'task_move',
+      [
+        '開いている task の並びを変える。先頭が先にやるもの。',
+        'to=front（先頭）/ back（末尾）/ before・after（anchorId の直前・直後）。',
+        '閉じた件は動かせない（並びから外れている）。開き直したいなら task_set_status で queued にする。',
+      ].join(' '),
+      {
+        taskId: z.string().describe('task_list に出ている、開いている件の id'),
+        to: z.enum(TASK_PLACEMENT_TARGETS).describe('置き場所'),
+        anchorId: z
+          .string()
+          .optional()
+          .describe('to が before / after のときの基準の task の id（開いている件だけ。自分自身は不可）'),
+      },
+      async ({ taskId, to, anchorId }) => {
+        const resolved = resolveTaskPlacement(to, anchorId);
+        if (resolved.kind === 'invalid') return text(resolved.message);
+        const placement = resolved.placement!;
+        let moved;
+        try {
+          moved = await stores.tasks.move(taskId, placement);
+        } catch (error) {
+          if (error instanceof UnreadableTaskError) {
+            return text(
+              `task ${taskId} は読めない形で入っている。読めない形のまま書き直さないので、動かしていない。`,
+            );
+          }
+          throw error;
+        }
+        if (moved.kind === 'not-found') {
+          return text(`task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`);
+        }
+        if (moved.kind === 'closed') {
+          return text(
+            `task ${taskId} は閉じている（並びに載っていない）ので動かせない。戻すなら task_set_status で queued にする。`,
+          );
+        }
+        if (moved.kind === 'anchor-is-self') {
+          return text('anchorId に動かす task 自身は指せない。何もしていない。');
+        }
+        if (moved.kind === 'anchor-not-found') {
+          return text(
+            `anchorId ${anchorId} は開いている task に無い（閉じた件・無い id は基準にできない）。何も動かしていない。`,
+          );
+        }
+        await appendJournalOrThrow(
+          'task_move',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `task の並びを変えた（${taskId}）: ${describeTaskPlacement(placement)}へ`,
+            grounds: '自分で task_move した',
+          },
+          'act-completed',
+        );
+        return text(`task ${taskId} を${describeTaskPlacement(placement)}へ動かした。`);
+      },
+    ),
+
+    tool(
+      'task_set_status',
+      [
+        'task の状態を変える。queued / waiting / needs_decision（開いている3つ）は互いに行き来できる。',
+        'done / cancelled（閉じる）へはどの状態からも行ける。**閉じるときは reason が要る**（何をもって終わりとしたか、なぜ取りやめたか。人間が読んで後から否定する）。',
+        '閉じた件から戻せるのは queued だけ（開き直し。閉じた記録は行から外れ、日誌へ逐語で残る）。同じ状態への変更は何もしない。',
+      ].join(' '),
+      {
+        taskId: z.string().describe('task_list に出ている id（開き直すなら includeClosed で出る閉じた件）'),
+        status: z.enum(taskStatusSchema.options).describe('移す先の状態'),
+        reason: z
+          .string()
+          .optional()
+          .describe(
+            `理由（${formatStringLengthJa({ min: 1 })}）。done / cancelled では必須、開き直し（閉じた件を queued にする）でも日誌に残すので付ける`,
+          ),
+      },
+      async ({ taskId, status, reason }) => {
+        const closing = status === 'done' || status === 'cancelled';
+        if (closing && reason === undefined) {
+          return text(`status=${status} には reason が要る（何をもって終わりとしたか、なぜ取りやめたか）。`);
+        }
+        const reasonError =
+          describeStringLengthViolation('reason', reason, { min: 1 }) ??
+          describeBlankViolation('reason', reason);
+        if (reasonError !== null) return text(reasonError);
+        let result;
+        try {
+          result = await stores.tasks.setStatus(taskId, status, {
+            ...(reason === undefined ? {} : { reason }),
+            by: 'clone',
+            at: new Date().toISOString(),
+          });
+        } catch (error) {
+          if (error instanceof UnreadableTaskError) {
+            return text(
+              `task ${taskId} は読めない形で入っている。読めない形のまま書き直さないので、状態を変えていない。`,
+            );
+          }
+          throw error;
+        }
+        if (result.kind === 'not-found') {
+          return text(`task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`);
+        }
+        if (result.kind === 'unchanged') {
+          return text(`task ${taskId} は既に ${status}。何もしていない。`);
+        }
+        if (result.kind === 'rejected') {
+          return text(
+            `${result.from} から ${result.to} へは移せない（閉じた件から戻せるのは queued だけ）。何もしていない。`,
+          );
+        }
+        // 開き直しは閉じた記録を行から外すので、外す前の値を日誌へ逐語で残す（残さないと誰がいつ何と言って閉じたかが読めなくなる）
+        const reopened = result.before.closedAt !== undefined;
+        await appendJournalOrThrow(
+          'task_set_status',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `task の状態を変えた（${taskId}）: ${result.before.status} → ${status}${
+              reason === undefined ? '' : `（${reason}）`
+            }`,
+            grounds: reopened
+              ? `自分で task_set_status した。開き直す前の記録: ${describeTaskClosedRecord(result.before)}`
+              : '自分で task_set_status した',
+          },
+          'act-completed',
+        );
+        return text(
+          `task ${taskId} を ${result.before.status} から ${status} へ移した${
+            reopened ? '（閉じた記録は日誌に残してある）' : ''
+          }。`,
+        );
       },
     ),
 

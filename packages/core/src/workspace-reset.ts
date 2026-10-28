@@ -10,6 +10,7 @@ export interface WorkspaceResetSummary {
   schedulePhases: number;
   inbox: number;
   commitments: number;
+  tasks: number;
   practices: number;
   archive: number;
   sessions: number;
@@ -34,6 +35,7 @@ export const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetS
   { label: '継続中の依頼', keys: ['schedules', 'schedulePhases'] },
   { label: '受信箱', keys: ['inbox'] },
   { label: '引き受けた仕事', keys: ['commitments'] },
+  { label: 'task（順序と状態を持つ待ち行列）', keys: ['tasks'] },
   { label: '仕事のやり方', keys: ['practices'] },
   { label: 'アーカイブ', keys: ['archive'] },
   { label: 'セッション', keys: ['sessions'] },
@@ -64,6 +66,7 @@ export async function resetWorkspaceState(
   const schedulesResult = await stores.schedules.clear();
   const inbox = await stores.inbox.clear();
   const commitments = await stores.commitments.clear();
+  const tasks = await stores.tasks.clear();
   const practices = await stores.practices.clear();
   const archive = await stores.archive.clear();
   const sessions = await stores.sessions.clear();
@@ -82,6 +85,7 @@ export async function resetWorkspaceState(
     schedulePhases: schedulesResult.phases,
     inbox,
     commitments,
+    tasks,
     practices,
     archive,
     sessions,
