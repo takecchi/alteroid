@@ -1500,7 +1500,7 @@ describe('断り書きは待ち行列の1行になる（#5469 P6c）', () => {
     await s.clone.stop();
   });
 
-  it('旧台帳にだけ開いている行（同じ id の task が無い）の件数が1行出る。いま届いた分や task のある行は数えない', async () => {
+  it('旧台帳にだけ開いている行（同じ id の task が無い）の件数が1行出る。人間の依頼は同じ id の task があるので数えない', async () => {
     const stores = createMemoryStores();
     await stores.commitments.open({
       id: 'only-ledger',
