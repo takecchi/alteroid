@@ -256,7 +256,7 @@ describe('POST /tasks/:id/close', () => {
 describe('POST /tasks/:id/reopen', () => {
   it('queued へ戻し、閉じた記録を外す。日誌には開き直す前の記録が逐語で残り、印は task_reopen', async () => {
     await stores.tasks.add(task('a'));
-    await stores.tasks.setStatus('a', 'done', { reason: '終わった理由', by: 'self', at: AT });
+    await stores.tasks.setStatus('a', 'done', { reason: '終わった理由', by: 'clone', at: AT });
     const { send } = build();
     const res = await send('POST', '/tasks/a/reopen', { reason: 'まだ残っていた' });
     expect(res.status).toBe(200);

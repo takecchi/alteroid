@@ -216,13 +216,17 @@ export async function verifyTaskStoreContract(
   const beforeEdit = await store.get('x1');
   const orderBeforeEdit = await ids();
   const editedAt = at();
-  const edited = await store.edit('x1', { title: '直した題', body: '直した\u0000本文' }, { at: editedAt });
+  const edited = await store.edit(
+    'x1',
+    { title: '直した題', body: '直した\u0000本文' },
+    { at: editedAt },
+  );
   if (edited.kind !== 'edited') return fail(`edit できない: ${edited.kind}`);
   if (edited.before.title !== 'title-x1' || edited.before.body !== 'body-x1')
     fail('edit の before が編集前の行の写しでない');
   const afterEdit = await store.get('x1');
-  if (afterEdit?.title !== '直した題' || afterEdit.body !== '直した本文')
-    fail(`edit が title / body（NUL は落とす）を書かない: ${JSON.stringify(afterEdit)}`);
+  if (afterEdit === null || afterEdit.title !== '直した題' || afterEdit.body !== '直した本文')
+    return fail(`edit が title / body（NUL は落とす）を書かない: ${JSON.stringify(afterEdit)}`);
   if (afterEdit.editedAt !== editedAt) fail('edit が editedAt を立てない');
   if (afterEdit.updatedAt !== beforeEdit?.updatedAt || afterEdit.status !== beforeEdit.status)
     fail('edit が updatedAt / status を動かした');
@@ -231,7 +235,11 @@ export async function verifyTaskStoreContract(
   if (titleOnly.kind !== 'edited' || titleOnly.task.body !== '直した本文')
     fail('title だけの edit が body を変えた');
   // 版（editedAt ?? createdAt）が合わなければ何も書かない。合えば書く
-  const stale = await store.edit('x1', { body: '古い版からの上書き' }, { at: at(), ifMatch: 'stale' });
+  const stale = await store.edit(
+    'x1',
+    { body: '古い版からの上書き' },
+    { at: at(), ifMatch: 'stale' },
+  );
   if (stale.kind !== 'conflict' || stale.current.title !== '題だけ')
     fail(`版違いの edit が conflict にならない: ${stale.kind}`);
   if ((await store.get('x1'))?.body !== '直した本文') fail('conflict の edit が行を書き換えた');
@@ -244,7 +252,8 @@ export async function verifyTaskStoreContract(
   if (matched.kind !== 'edited') fail(`版が合う edit が通らない: ${matched.kind}`);
   // 閉じた件は直さない（閉じた記録の本文を後から書き換えない）
   const closedEdit = await store.edit('s2', { body: '閉じた件の書き換え' }, { at: at() });
-  if (closedEdit.kind !== 'closed') fail(`閉じた件の edit が closed にならない: ${closedEdit.kind}`);
+  if (closedEdit.kind !== 'closed')
+    fail(`閉じた件の edit が closed にならない: ${closedEdit.kind}`);
   if ((await store.get('s2'))?.body !== 'body-s2') fail('閉じた件の edit が行を書き換えた');
   if ((await store.edit('nope', { body: 'x' }, { at: at() })).kind !== 'not-found')
     fail('無い id の edit が not-found にならない');

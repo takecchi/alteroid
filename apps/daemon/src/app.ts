@@ -91,7 +91,6 @@ import {
   UnreadableAccountError,
   UnreadableCommitmentError,
   UnreadableTaskError,
-  taskBodyVersion,
   TASK_TITLE_MAX,
   describeTaskPlacement,
   isTaskClosed,
@@ -1373,16 +1372,14 @@ async function readTask(
   stores: Pick<Stores, 'tasks'>,
   id: string,
 ): Promise<
-  | { kind: 'found'; task: Task }
-  | { kind: 'absent' }
-  | { kind: 'unreadable'; error: UnreadableTaskError }
+  { kind: 'found'; task: Task } | { kind: 'absent' } | { kind: 'unreadable'; reason: string }
 > {
   try {
     const task = await stores.tasks.get(id);
     return task === null ? { kind: 'absent' } : { kind: 'found', task };
   } catch (error) {
     if (!(error instanceof UnreadableTaskError)) throw error;
-    return { kind: 'unreadable', error };
+    return { kind: 'unreadable', reason: reasonOf(error) };
   }
 }
 
@@ -7072,7 +7069,7 @@ export function createApp(deps: AppDeps) {
       }),
       async (c) => {
         const read = await readTask(stores, c.req.param('id'));
-        if (read.kind === 'unreadable') return c.json({ error: reasonOf(read.error) }, 409);
+        if (read.kind === 'unreadable') return c.json({ error: read.reason }, 409);
         if (read.kind === 'absent') return c.json({ error: 'not found' as const }, 404);
         return c.json(taskDetailResponseSchema.parse({ entry: read.task }));
       },
@@ -7190,7 +7187,7 @@ export function createApp(deps: AppDeps) {
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
           return c.json(
-            { error: `${reasonOf(read.error)}。読めない形のまま書き直さないので、閉じていない。` },
+            { error: `${read.reason}。読めない形のまま書き直さないので、閉じていない。` },
             409,
           );
         }
@@ -7322,7 +7319,7 @@ export function createApp(deps: AppDeps) {
         if (read.kind === 'unreadable') {
           return c.json(
             {
-              error: `${reasonOf(read.error)}。読めない形のまま書き直さないので、開き直していない。`,
+              error: `${read.reason}。読めない形のまま書き直さないので、開き直していない。`,
             },
             409,
           );
@@ -7447,7 +7444,7 @@ export function createApp(deps: AppDeps) {
         if (read.kind === 'unreadable') {
           return c.json(
             {
-              error: `${reasonOf(read.error)}。読めない形のまま書き直さないので、動かしていない。`,
+              error: `${read.reason}。読めない形のまま書き直さないので、動かしていない。`,
             },
             409,
           );
@@ -7593,7 +7590,7 @@ export function createApp(deps: AppDeps) {
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
           return c.json(
-            { error: `${reasonOf(read.error)}。読めない形のまま書き直さないので、直していない。` },
+            { error: `${read.reason}。読めない形のまま書き直さないので、直していない。` },
             409,
           );
         }
