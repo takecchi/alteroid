@@ -5,12 +5,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import {
-  createProfileApplier,
-  createProfileVessel,
-  fingerprintOf,
-  type ProfileApplier,
-} from './profile.js';
+import { fingerprintOf } from './credentials.js';
+import { createProfileApplier, createProfileVessel, type ProfileApplier } from './profile.js';
 import {
   composedFingerprints,
   composeProfileScript,
@@ -489,6 +485,19 @@ describe('合成（composeProfileScript）', () => {
       clone: { sha256: fingerprintOf('export A=1\n'), bytes: 11 },
       runner: { sha256: fingerprintOf('export A=1\n'), bytes: 11 },
     });
+  });
+
+  // 指紋は UTF-8 の sha256 の先頭12桁で、資格情報の指紋（credentials の fingerprintOf）と同じ値になる
+  it('指紋は sha256 の先頭12桁（資格情報の指紋と同じ求め方）', () => {
+    expect(composedFingerprints([row('default', 'export A=1\n', 'all')]).runner?.sha256).toBe(
+      '8cb53e8a30d5',
+    );
+    expect(composedFingerprints([row('default', 'export JP=日本語\n', 'all')]).runner).toEqual({
+      sha256: fingerprintOf('export JP=日本語\n'),
+      bytes: Buffer.byteLength('export JP=日本語\n'),
+    });
+    expect(fingerprintOf('')).toBe('e3b0c44298fc');
+    expect(fingerprintOf('日本語')).toBe('77710aedc74e');
   });
 
   it('撒く先の掛かる側が0の指紋は欠ける', () => {
