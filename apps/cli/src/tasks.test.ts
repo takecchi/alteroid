@@ -16,22 +16,40 @@ const { tasksCommand, renderTasks, tasksMigrateCommand, renderMigrationPlan } =
   await import('./tasks.js');
 
 let sent: string[] = [];
+let sentCalls: { method: string; url: string; body: string }[] = [];
 let originalFetch: typeof fetch;
 let reply: { status: number; body: unknown } = { status: 200, body: {} };
+// 実行（POST）だけ別の応答を返したいとき。指定が無ければ `reply` を全部の呼びへ返す
+let postReply: { status: number; body: unknown } | null = null;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   sent = [];
+  sentCalls = [];
   reply = { status: 200, body: { entries: [], unreadable: [] } };
-  globalThis.fetch = ((input: unknown) => {
-    const request = input as { url?: string };
-    sent.push(typeof input === 'string' ? input : (request.url ?? String(input)));
-    return Promise.resolve(
-      new Response(JSON.stringify(reply.body), {
-        status: reply.status,
-        headers: { 'content-type': 'application/json' },
-      }),
-    );
+  postReply = null;
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+    // 呼び出しは `fetch(Request)` でも `fetch(url, init)` でも来うる
+    const request = input as Request;
+    const url = typeof input === 'string' ? input : (request.url ?? String(input));
+    sent.push(url);
+    const method = (
+      init?.method ??
+      (typeof input === 'string' ? undefined : request.method) ??
+      'GET'
+    ).toUpperCase();
+    const rawBody =
+      typeof init?.body === 'string'
+        ? init.body
+        : method === 'POST' && typeof input !== 'string'
+          ? await request.clone().text()
+          : '';
+    sentCalls.push({ method, url, body: rawBody });
+    const chosen = method === 'POST' && postReply !== null ? postReply : reply;
+    return new Response(JSON.stringify(chosen.body), {
+      status: chosen.status,
+      headers: { 'content-type': 'application/json' },
+    });
   }) as typeof fetch;
 });
 
@@ -139,9 +157,14 @@ describe('alteroid tasks', () => {
   });
 });
 
+const FINGERPRINT = 'f'.repeat(64);
+
 const planView = {
   dryRun: true,
+  fingerprint: FINGERPRINT,
+  unresolvedOriginIds: ['h8'],
   summary: {
+    originConversation: { fromConversation: 1, fromApproval: 0, unresolved: 1 },
     total: 6,
     toTask: 2,
     closeOnly: 1,
@@ -163,10 +186,103 @@ const planView = {
 };
 
 describe('alteroid tasks migrate', () => {
-  it('--dry-run なしは通信せずにエラーにし、実行は P7 本体で配線すると案内する', async () => {
-    await expect(tasksMigrateCommand()).rejects.toThrow(/P7 本体/);
-    await expect(tasksMigrateCommand({ dryRun: false })).rejects.toThrow(/--dry-run/);
+  // P7a は「--dry-run なしはエラーで、実行は P7 本体で配線すると案内する」を固定していた。P7b が実行を配線したので反転した:
+  // --dry-run なしは計画を取って表を出し、--yes が無ければ書かずに止まる（POST を1本も送らない）。
+  it('--dry-run なし・--yes なしは、計画を出して書かずに止まる（POST を送らない）', async () => {
+    reply = { status: 200, body: planView };
+    const read = captureStdout();
+    await tasksMigrateCommand();
+    const out = read();
+    expect(sentCalls.map((call) => `${call.method} ${new URL(call.url).pathname}`)).toEqual([
+      'GET /tasks/migration-plan',
+    ]);
+    expect(out).toMatch(/移す（task にして台帳を閉じる）\s+2 件/);
+    expect(out).toContain('まだ何も書いていない');
+    expect(out).toContain('--yes');
+    expect(out).toContain(FINGERPRINT);
+  });
+
+  it('--dry-run と --yes は同時に使えない（通信しない）', async () => {
+    await expect(tasksMigrateCommand({ dryRun: true, yes: true })).rejects.toThrow(/同時/);
     expect(sent).toEqual([]);
+  });
+
+  it('--yes は、いま見た計画の指紋を付けて POST /tasks/migrate を送り、結果を件数と id で出す', async () => {
+    reply = { status: 200, body: planView };
+    postReply = {
+      status: 200,
+      body: {
+        ...planView,
+        dryRun: false,
+        execution: {
+          migrated: 2,
+          closeOnly: 1,
+          retired: 2,
+          alreadyClosed: 0,
+          ids: {
+            migrated: ['h1', 'h2'],
+            closeOnly: ['h9'],
+            retired: ['m1', 'x1'],
+            alreadyClosed: [],
+          },
+          originConversation: { fromConversation: 1, fromApproval: 0, unresolvedIds: ['h2'] },
+          failed: [],
+        },
+      },
+    };
+    const read = captureStdout();
+    await tasksMigrateCommand({ yes: true });
+    const out = read();
+    expect(sentCalls.map((call) => `${call.method} ${new URL(call.url).pathname}`)).toEqual([
+      'GET /tasks/migration-plan',
+      'POST /tasks/migrate',
+    ]);
+    expect(JSON.parse(sentCalls[1]?.body ?? '{}')).toEqual({ fingerprint: FINGERPRINT });
+    expect(out).toMatch(/移した.*\s2 件: h1, h2/);
+    expect(out).toMatch(/畳んだ.*\s2 件: m1, x1/);
+    expect(out).toMatch(/既に移した.*\s1 件: h9/);
+    expect(out).toMatch(/失敗\s+0 件/);
+    expect(out).toContain('引けず付けなかった 1 件: h2');
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  it('--yes で 409（計画が動いた）なら、何も書かれていないと言って失敗にする', async () => {
+    reply = { status: 200, body: planView };
+    postReply = { status: 409, body: { error: '計画が dry-run のときから変わっている' } };
+    const read = captureStdout();
+    await expect(tasksMigrateCommand({ yes: true })).rejects.toThrow(/何も書かずに断られ/);
+    read();
+  });
+
+  it('--yes で失敗した行があれば、id と段階を出して終了コードを非 0 にする', async () => {
+    reply = { status: 200, body: planView };
+    postReply = {
+      status: 200,
+      body: {
+        ...planView,
+        dryRun: false,
+        execution: {
+          migrated: 1,
+          closeOnly: 0,
+          retired: 0,
+          alreadyClosed: 0,
+          ids: { migrated: ['h1'], closeOnly: [], retired: [], alreadyClosed: [] },
+          originConversation: { fromConversation: 1, fromApproval: 0, unresolvedIds: [] },
+          failed: [{ id: 'h2', step: 'journal', error: 'Error' }],
+        },
+      },
+    };
+    const read = captureStdout();
+    const before = process.exitCode;
+    try {
+      await tasksMigrateCommand({ yes: true });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = before;
+    }
+    const out = read();
+    expect(out).toMatch(/失敗\s+1 件/);
+    expect(out).toContain('h2: journal の段階で Error');
   });
 
   it('--dry-run は GET /tasks/migration-plan だけを叩き、内訳を出す', async () => {

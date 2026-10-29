@@ -80,6 +80,67 @@ describe('planCommitmentMigration（純関数）', () => {
   });
 });
 
+describe('計画の指紋（純関数）', () => {
+  const at = (n: number) => `2026-10-0${String(n)}T00:00:00.000Z`;
+  const base = [row('h1', at(1), 'human'), row('m1', at(2), 'manager')];
+
+  it('入力の並びに依らず同じ計画なら同じ指紋', () => {
+    const a = planCommitmentMigration(base, new Set()).fingerprint;
+    const b = planCommitmentMigration([...base].reverse(), new Set()).fingerprint;
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('閉じた行は指紋に入らない（閉じた行が増えても同じ）', () => {
+    const closed = row('c1', at(3), 'human', { closedAt: at(4) });
+    expect(planCommitmentMigration([...base, closed], new Set()).fingerprint).toBe(
+      planCommitmentMigration(base, new Set()).fingerprint,
+    );
+  });
+
+  it('行の増減・動作の違い・起点の会話の違いで指紋が変わる', () => {
+    const plain = planCommitmentMigration(base, new Set()).fingerprint;
+    expect(
+      planCommitmentMigration([...base, row('h2', at(3), 'human')], new Set()).fingerprint,
+    ).not.toBe(plain);
+    // 同じ行でも、Task が在って close-only になれば動作が違う
+    expect(planCommitmentMigration(base, new Set(['h1'])).fingerprint).not.toBe(plain);
+    const viaConversation = planCommitmentMigration(
+      base,
+      new Set(),
+      new Map([['h1', { conversationId: 'c', via: 'conversation' as const }]]),
+    ).fingerprint;
+    const viaApproval = planCommitmentMigration(
+      base,
+      new Set(),
+      new Map([['h1', { conversationId: 'c', via: 'approval' as const }]]),
+    ).fingerprint;
+    const otherConversation = planCommitmentMigration(
+      base,
+      new Set(),
+      new Map([['h1', { conversationId: 'd', via: 'conversation' as const }]]),
+    ).fingerprint;
+    expect(new Set([plain, viaConversation, viaApproval, otherConversation]).size).toBe(4);
+  });
+
+  it('起点の会話の内訳は task の行だけを数え、合計が toTask になる', () => {
+    const plan = planCommitmentMigration(
+      [row('h1', at(1), 'human'), row('h2', at(2), 'human'), row('h3', at(3), 'human')],
+      new Set(['h3']),
+      new Map([
+        ['h1', { conversationId: 'c', via: 'conversation' as const }],
+        ['h3', { conversationId: 'c', via: 'approval' as const }],
+      ]),
+    );
+    expect(plan.summary.originConversation).toEqual({
+      fromConversation: 1,
+      fromApproval: 0,
+      unresolved: 1,
+    });
+    expect(plan.summary.toTask).toBe(2);
+  });
+});
+
 describe('migrationTaskTitle', () => {
   it('先頭の空でない行を60字までに切る。空なら（本文なし）', () => {
     expect(migrationTaskTitle('\n  最初の行  \n二行目')).toBe('最初の行');
@@ -89,6 +150,16 @@ describe('migrationTaskTitle', () => {
     expect(migrationTaskTitle('  \n ')).toBe('（本文なし）');
   });
 });
+
+// 実行は dry-run の指紋が要る: dry-run → その指紋で実行、を1回で踏む
+async function execute(stores: ReturnType<typeof createMemoryStores>, now: string) {
+  const plan = await migrateCommitmentsToTasks(stores, { dryRun: true, now });
+  return migrateCommitmentsToTasks(stores, {
+    dryRun: false,
+    now,
+    expectedFingerprint: plan.fingerprint,
+  });
+}
 
 describe('台帳→Task の移行（メモリ）', () => {
   it('3実装共通の契約を満たす', async () => {
@@ -101,7 +172,7 @@ describe('台帳→Task の移行（メモリ）', () => {
       row('h1', '2026-10-01T00:00:00.000Z', 'human', { body: '逐語\n本文' }),
     );
     await stores.commitments.open(row('m1', '2026-10-01T01:00:00.000Z', 'manager'));
-    await migrateCommitmentsToTasks(stores, { dryRun: false, now: '2026-10-29T00:00:00.000Z' });
+    await execute(stores, '2026-10-29T00:00:00.000Z');
     const decisions = (await stores.journal.list()).flatMap((entry) =>
       entry.type === 'decision' ? [entry] : [],
     );
@@ -119,10 +190,7 @@ describe('台帳→Task の移行（メモリ）', () => {
       const at = new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString();
       await stores.commitments.open(row(`h${String(index).padStart(3, '0')}`, at, 'human'));
     }
-    const report = await migrateCommitmentsToTasks(stores, {
-      dryRun: false,
-      now: '2026-10-29T00:00:00.000Z',
-    });
+    const report = await execute(stores, '2026-10-29T00:00:00.000Z');
     expect(report.execution?.migrated).toBe(200);
     const ids = (await stores.tasks.list()).entries.map((task) => task.id);
     expect(ids).toEqual([...ids].sort());

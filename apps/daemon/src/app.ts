@@ -51,6 +51,8 @@ import {
   composedFingerprints,
   composeProfileScript,
   migrateCommitmentsToTasks,
+  MigrationPlanChangedError,
+  OriginConversationLookupError,
   createPluginPreviewStore,
   describeAttachmentAlreadyGoneRetraction,
   describeAttachmentForJournal,
@@ -306,6 +308,8 @@ import {
   commitmentListResponseSchema,
   taskListResponseSchema,
   taskMigrationPlanResponseSchema,
+  taskMigrateRequestSchema,
+  taskMigrationResultResponseSchema,
   progressResponseSchema,
   commitmentOpenedResponseSchema,
   conversationDetailResponseSchema,
@@ -6843,7 +6847,7 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 台帳→Task の移行の計画（#5469 P7a）。dryRun 固定で**何も書かない**: 実行の口は HTTP にも CLI にも出さない（P7 本体が配線する）。
+    // 台帳→Task の移行の計画（#5469 P7a）。dryRun 固定で**何も書かない**。実行は同じ時に HTTP と CLI の両方へ出した `POST /tasks/migrate`（P7b）。
     // `/tasks/:id` が無いので `/tasks` と衝突しない（将来 `:id` を足すときはこの固定のパスを先に置くこと）。
     .get(
       '/tasks/migration-plan',
@@ -6855,20 +6859,94 @@ export function createApp(deps: AppDeps) {
           '`items[].action` は `task`（task を作って台帳を閉じる）・`close-only`（同じ id の task が既に在る。台帳を閉じるだけ）・' +
           '`retire`（human 以外。task にせず台帳を閉じる）・`skip-closed`（閉じた行。移さない）。' +
           '`summary.oldestAt` / `newestAt` は `task` の行の最古/最新。本文は載せない（`task` の行はタイトルだけ）。' +
-          '`unreadableCommitments` は読めない台帳の行で、id だけを返し触らない。`unreadableTaskCollisions` は、開いている human 行と同じ id の読めない task の行。',
+          '`unreadableCommitments` は読めない台帳の行で、id だけを返し触らない。`unreadableTaskCollisions` は、開いている human 行と同じ id の読めない task の行。' +
+          '`task` の行は、台帳の `source`（会話 id か承認の id）から移す task の起点の会話を引く: ' +
+          '`summary.originConversation` が会話から・承認から・引けないの内訳、`unresolvedOriginIds` が引けなかった行の id（付けずに移す）。' +
+          '**`fingerprint` は計画の指紋で、実行（`POST /tasks/migrate`）へそのまま渡す。**',
         responses: {
           200: {
             description: '移行の計画。',
             content: { 'application/json': { schema: resolver(taskMigrationPlanResponseSchema) } },
           },
+          500: {
+            description:
+              '起点の会話を引く読みが失敗したので、計画を立てなかった（誤った宛先を付けないため。何も書いていない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       async (c) => {
-        const report = await migrateCommitmentsToTasks(stores, {
-          dryRun: true,
-          now: new Date().toISOString(),
-        });
-        return c.json(taskMigrationPlanResponseSchema.parse(report));
+        try {
+          const report = await migrateCommitmentsToTasks(stores, {
+            dryRun: true,
+            now: new Date().toISOString(),
+          });
+          return c.json(taskMigrationPlanResponseSchema.parse(report));
+        } catch (error) {
+          if (!(error instanceof OriginConversationLookupError)) throw error;
+          return c.json({ error: reasonOf(error) }, 500);
+        }
+      },
+    )
+
+    // 台帳→Task の移行の実行（#5469 P7b）。`GET /tasks/migration-plan` が返した指紋を必須で受け取り、**実行時に計画を組み直して**指紋が違えば何も書かずに 409 で断る
+    // （古い dry-run を見て実行する事故を防ぐ）。CLI（`alteroid tasks migrate --yes`）と同時に出した口で、Web には出さない。起動時にも道具にも繋がない。
+    .post(
+      '/tasks/migrate',
+      describeRoute({
+        tags: ['tasks'],
+        summary: '台帳→task の移行を実行する（dry-run の指紋が必須）',
+        description:
+          '開いている台帳の行のうち `origin: human` だけを、古い順の `queued` の task にして台帳を閉じ、それ以外は task にせず台帳を `daemon` が閉じる（本文は日誌へ逐語で残す）。' +
+          '**`fingerprint` は `GET /tasks/migration-plan` が返した計画の指紋で必須。** 実行時に計画を組み直し、指紋が違えば（台帳・task・会話が dry-run のあとに動いた）何も書かずに 409 で断る。' +
+          'task の id は元の台帳の行の id と同じ。起点の会話は、`source` が実在する会話 id ならそれを、承認の id ならその承認の会話 id を付け、' +
+          'どちらとも引けなければ付けずに移す（`execution.originConversation.unresolvedIds`）。日誌が書けなければ台帳は閉じない。' +
+          '1行の失敗は `execution.failed`（id・段階・例外の型名だけ）に数えて次へ進む。**閉じた台帳の行を戻す口は `POST /commitments/{id}/reopen` の1件ずつだけ。**',
+        responses: {
+          200: {
+            description:
+              '実行の結果。`failed` が空でなければ、その行は移っていない（再実行で続きから進む）。',
+            content: {
+              'application/json': { schema: resolver(taskMigrationResultResponseSchema) },
+            },
+          },
+          400: {
+            description:
+              '本文が JSON として不正、または `fingerprint` が無い・空。何も書いていない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '計画が dry-run のときから変わっている（指紋が違う）。何も書いていない。dry-run をやり直すこと。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description:
+              '起点の会話を引く読みが失敗したので、実行しなかった（誤った宛先を付けないため。何も書いていない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(taskMigrateRequestSchema, (where) => ({
+        error: 'body の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const { fingerprint } = c.req.valid('json');
+        try {
+          const report = await migrateCommitmentsToTasks(stores, {
+            dryRun: false,
+            now: new Date().toISOString(),
+            expectedFingerprint: fingerprint,
+          });
+          return c.json(taskMigrationResultResponseSchema.parse(report));
+        } catch (error) {
+          if (error instanceof MigrationPlanChangedError)
+            return c.json({ error: reasonOf(error) }, 409);
+          if (error instanceof OriginConversationLookupError) {
+            return c.json({ error: reasonOf(error) }, 500);
+          }
+          throw error;
+        }
       },
     )
 

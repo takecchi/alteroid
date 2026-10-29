@@ -406,9 +406,12 @@ const tasksProgram = program
 tasksProgram
   .command('migrate')
   .addHelpText('after', HELP_EXAMPLES.tasksMigrate)
-  .description('引き受けた仕事の台帳を task へ移す計画を見る（今は --dry-run だけ。何も書かない）')
-  .option('--dry-run', '計画と内訳だけを出す（必須。実行の口はまだ無い）')
-  .action(async (options: { dryRun?: boolean }) => {
+  .description(
+    '引き受けた仕事の台帳を task へ移す（計画を出して止まる。--yes で、いま見た計画を実行する）',
+  )
+  .option('--dry-run', '計画と内訳だけを出す（何も書かない。--yes なしでも同じく書かない）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(async (options: { dryRun?: boolean; yes?: boolean }) => {
     await tasksMigrateCommand(options);
   });
 

@@ -1,11 +1,21 @@
-import { migrateCommitmentsToTasks } from './commitment-task-migration.js';
+import {
+  MigrationPlanChangedError,
+  OriginConversationLookupError,
+  migrateCommitmentsToTasks,
+} from './commitment-task-migration.js';
 import type { CommitmentMigrationStores } from './commitment-task-migration.js';
 import type { Commitment, Task } from './schema.js';
+import type { JobStore } from './store.js';
 
 // vitest に依存しない素の関数にする（`verifyTaskStoreContract` と同じ理由）。
 // 台帳 → Task の移行（#5469 P7a）の契約を、メモリ・fs・pg の3実装で揃える。シナリオごとに空のストアを作り直す。
+// 本体は承認を読むだけ（`getApproval`）。契約は承認を仕込むので `putApproval` も要る
+type ContractStores = CommitmentMigrationStores & {
+  readonly jobs: Pick<JobStore, 'getApproval' | 'putApproval'>;
+};
+
 export interface CommitmentMigrationFixture {
-  readonly stores: CommitmentMigrationStores;
+  readonly stores: ContractStores;
   /** 読めない台帳の行を器に直接仕込む。渡さない実装では「読めない行」の歯だけを飛ばす。 */
   readonly plantUnreadableCommitment?: (id: string) => Promise<void>;
   /** 読めない Task の行を器に直接仕込む。同上。 */
@@ -56,6 +66,15 @@ export async function verifyCommitmentTaskMigrationContract(
     origin: Commitment['origin'],
     extra: Partial<Commitment> = {},
   ): Commitment => ({ id, at, origin, body: `本文-${id}`, ...extra });
+  // 実行は dry-run の指紋を必須で受け取る。ここは「見てから実行する」の正しい手順（dry-run → その指紋で実行）を1回で踏む
+  const execute = async (stores: CommitmentMigrationStores, now: string = NOW) => {
+    const plan = await migrateCommitmentsToTasks(stores, { dryRun: true, now });
+    return migrateCommitmentsToTasks(stores, {
+      dryRun: false,
+      now,
+      expectedFingerprint: plan.fingerprint,
+    });
+  };
   const taskIds = async (stores: CommitmentMigrationStores): Promise<string> =>
     (await stores.tasks.list({ includeClosed: true })).entries.map((task) => task.id).join(',');
   const decisions = async (stores: CommitmentMigrationStores) =>
@@ -83,7 +102,7 @@ export async function verifyCommitmentTaskMigrationContract(
     await stores.commitments.open(entry('hc', '2026-09-30T00:00:00.000Z', 'human'));
     await stores.commitments.close('hc', '2026-09-30T01:00:00.000Z', '元の理由', 'human');
 
-    const report = await migrateCommitmentsToTasks(stores, { dryRun: false, now: NOW });
+    const report = await execute(stores);
 
     if ((await taskIds(stores)) !== 'h1,h2') fail(`Task が h1,h2 でなく ${await taskIds(stores)}`);
     const tasks = (await stores.tasks.list()).entries;
@@ -144,12 +163,9 @@ export async function verifyCommitmentTaskMigrationContract(
   await scenario('2回目は何も増えない（閉じた行は移さない）', async ({ stores }) => {
     await stores.commitments.open(entry('h1', '2026-10-01T00:00:00.000Z', 'human'));
     await stores.commitments.open(entry('m1', '2026-10-01T01:00:00.000Z', 'manager'));
-    await migrateCommitmentsToTasks(stores, { dryRun: false, now: NOW });
+    await execute(stores);
     const after = await snapshot(stores);
-    const second = await migrateCommitmentsToTasks(stores, {
-      dryRun: false,
-      now: '2026-10-30T00:00:00.000Z',
-    });
+    const second = await execute(stores, '2026-10-30T00:00:00.000Z');
     if ((await snapshot(stores)) !== after) fail('2回目で状態が変わった');
     const e = second.execution;
     if (e === undefined || e.migrated + e.retired + e.closeOnly + e.failed.length !== 0) {
@@ -178,7 +194,7 @@ export async function verifyCommitmentTaskMigrationContract(
         reason: '済んだ',
       });
 
-      const report = await migrateCommitmentsToTasks(stores, { dryRun: false, now: NOW });
+      const report = await execute(stores);
 
       if ((await taskIds(stores)) !== 'h2,h1')
         fail(`Task が二重になった/欠けた: ${await taskIds(stores)}`);
@@ -222,11 +238,11 @@ export async function verifyCommitmentTaskMigrationContract(
       },
     });
     const flaky: CommitmentMigrationStores = { ...stores, journal };
-    const report = await migrateCommitmentsToTasks(flaky, { dryRun: false, now: NOW });
+    const report = await execute(flaky);
     if (report.execution?.failed.length !== 2) fail('日誌の失敗を failed として数えていない');
     if ((await stores.commitments.list()).entries.length !== 2) fail('日誌が無いのに台帳を閉じた');
     broken = false;
-    const again = await migrateCommitmentsToTasks(flaky, { dryRun: false, now: NOW });
+    const again = await execute(flaky);
     if ((await stores.commitments.list()).entries.length !== 0) fail('復旧後に閉じていない');
     if ((await taskIds(stores)) !== 'h1') fail('復旧で Task が二重になった');
     if (again.execution?.closeOnly !== 1 || again.execution.retired !== 1) {
@@ -246,10 +262,7 @@ export async function verifyCommitmentTaskMigrationContract(
           ? Promise.reject(new Error('close down'))
           : stores.commitments.close(id, at, reason, by),
     });
-    const report = await migrateCommitmentsToTasks(
-      { ...stores, commitments },
-      { dryRun: false, now: NOW },
-    );
+    const report = await execute({ ...stores, commitments });
     const failed = report.execution?.failed ?? [];
     if (failed.length !== 1 || failed[0]?.id !== 'b')
       fail(`失敗の数え方が違う: ${JSON.stringify(failed)}`);
@@ -272,7 +285,7 @@ export async function verifyCommitmentTaskMigrationContract(
     await stores.tasks.add(base('S0', 'self'));
     await stores.commitments.open(entry('h2', '2026-10-02T00:00:00.000Z', 'human'));
     await stores.commitments.open(entry('h1', '2026-10-01T00:00:00.000Z', 'human'));
-    await migrateCommitmentsToTasks(stores, { dryRun: false, now: NOW });
+    await execute(stores);
     const order = (await stores.tasks.list()).entries.map((task) => task.id).join(',');
     // human 起点は「開いている human 起点の最後の直後」なので、既存の self 起点の前に入る（P2 の既定）
     if (order !== 'H0,h1,h2,S0') fail(`並びが H0,h1,h2,S0 でなく ${order}`);
@@ -285,7 +298,7 @@ export async function verifyCommitmentTaskMigrationContract(
       if (plantUnreadableCommitment === undefined) return;
       await stores.commitments.open(entry('h1', '2026-10-01T00:00:00.000Z', 'human'));
       await plantUnreadableCommitment('broken-c');
-      const report = await migrateCommitmentsToTasks(stores, { dryRun: false, now: NOW });
+      const report = await execute(stores);
       if (report.unreadableCommitments.map((row) => row.id).join(',') !== 'broken-c') {
         fail(`読めない行の id を報告していない: ${JSON.stringify(report.unreadableCommitments)}`);
       }
@@ -307,10 +320,200 @@ export async function verifyCommitmentTaskMigrationContract(
       if (plan.summary.closeOnly !== 1 || plan.summary.toTask !== 0)
         fail('読めない Task を在るものとして数えていない');
       if (plan.unreadableTaskCollisions.join(',') !== 'h1') fail('衝突した id を報告していない');
-      const report = await migrateCommitmentsToTasks(stores, { dryRun: false, now: NOW });
+      const report = await execute(stores);
       if (report.execution?.closeOnly !== 1) fail('読めない Task があるのに Task を作ろうとした');
       if ((await stores.commitments.list()).entries.length !== 0) fail('台帳を閉じていない');
       if ((await stores.tasks.list()).unreadable.length !== 1) fail('読めない Task を触った');
+    },
+  );
+
+  const humanExchange = (stores: CommitmentMigrationStores, conversationId: string) =>
+    stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: `発言-${conversationId}`,
+      conversationId,
+    });
+  const approval = (stores: ContractStores, id: string, conversationId: string | undefined) =>
+    stores.jobs.putApproval({
+      id,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      question: `質問-${id}`,
+      ...(conversationId === undefined ? {} : { conversationId }),
+    });
+
+  await scenario(
+    '起点の会話: 会話 id から・承認から・引けない行を分け、引けない行は付けずに移す',
+    async ({ stores }) => {
+      await humanExchange(stores, 'conv-A');
+      await humanExchange(stores, 'conv-B');
+      await approval(stores, 'apr-1', 'conv-B');
+      // 承認の会話が日誌に無い（消えた/一度も無い）: 宛先を作らず引けない扱い
+      await approval(stores, 'apr-gone', 'conv-gone');
+      await approval(stores, 'apr-noconv', undefined);
+      const rows: [string, string, string | undefined][] = [
+        ['h1', '2026-10-01T00:00:00.000Z', 'conv-A'],
+        ['h2', '2026-10-02T00:00:00.000Z', 'apr-1'],
+        ['h3', '2026-10-03T00:00:00.000Z', 'apr-gone'],
+        ['h4', '2026-10-04T00:00:00.000Z', 'apr-noconv'],
+        ['h5', '2026-10-05T00:00:00.000Z', 'nowhere'],
+        ['h6', '2026-10-06T00:00:00.000Z', undefined],
+      ];
+      for (const [id, at, source] of rows) {
+        await stores.commitments.open(
+          entry(id, at, 'human', source === undefined ? {} : { source }),
+        );
+      }
+      // human 以外は Task にならないので、source が会話でも起点の会話の数に入らない
+      await stores.commitments.open(
+        entry('m1', '2026-10-01T12:00:00.000Z', 'manager', { source: 'conv-A' }),
+      );
+
+      const plan = await migrateCommitmentsToTasks(stores, { dryRun: true, now: NOW });
+      const counts = plan.summary.originConversation;
+      if (counts.fromConversation !== 1 || counts.fromApproval !== 1 || counts.unresolved !== 4) {
+        fail(`計画の内訳が違う: ${JSON.stringify(counts)}`);
+      }
+      if (plan.unresolvedOriginIds.join(',') !== 'h3,h4,h5,h6') {
+        fail(`引けなかった id が違う: ${plan.unresolvedOriginIds.join(',')}`);
+      }
+      const via = (id: string) => plan.items.find((item) => item.id === id)?.originConversation;
+      if (via('h1')?.via !== 'conversation' || via('h2')?.via !== 'approval') {
+        fail('計画の行に引き方が無い');
+      }
+
+      const report = await execute(stores);
+      const origin = async (id: string) => (await stores.tasks.get(id))?.originConversationId;
+      if ((await origin('h1')) !== 'conv-A') fail('会話 id が起点の会話にならなかった');
+      if ((await origin('h2')) !== 'conv-B') fail('承認の会話 id が起点の会話にならなかった');
+      for (const id of ['h3', 'h4', 'h5', 'h6']) {
+        const task = await stores.tasks.get(id);
+        if (task === null) fail(`${id} が移っていない（引けなくても移す）`);
+        if (task.originConversationId !== undefined) fail(`${id} に宛先を付けた`);
+      }
+      const done = report.execution?.originConversation;
+      if (
+        done?.fromConversation !== 1 ||
+        done.fromApproval !== 1 ||
+        done.unresolvedIds.join(',') !== 'h3,h4,h5,h6'
+      ) {
+        fail(`実行の内訳が違う: ${JSON.stringify(done)}`);
+      }
+      // source は Task の source へ写すだけ（承認 id のままでよい）
+      if ((await stores.tasks.get('h2'))?.source !== 'apr-1') fail('source を書き換えた');
+    },
+  );
+
+  await scenario(
+    '起点の会話を引く読みが失敗したら、その行だけ付けずに移さず、計画全体を止める（何も書かない）',
+    async ({ stores }) => {
+      await humanExchange(stores, 'conv-A');
+      await stores.commitments.open(
+        entry('h1', '2026-10-01T00:00:00.000Z', 'human', { source: 'conv-A' }),
+      );
+      await stores.commitments.open(
+        entry('h2', '2026-10-02T00:00:00.000Z', 'human', { source: 'apr-bad' }),
+      );
+      await stores.commitments.open(entry('m1', '2026-10-03T00:00:00.000Z', 'manager'));
+      const before = await snapshot(stores);
+      const jobs = override(stores.jobs, {
+        getApproval: (id) =>
+          id === 'apr-bad' ? Promise.reject(new Error('jobs down')) : stores.jobs.getApproval(id),
+      });
+      const broken: CommitmentMigrationStores = { ...stores, jobs };
+      for (const run of [
+        () => migrateCommitmentsToTasks(broken, { dryRun: true, now: NOW }),
+        () =>
+          migrateCommitmentsToTasks(broken, {
+            dryRun: false,
+            now: NOW,
+            expectedFingerprint: 'x',
+          }),
+      ]) {
+        const error = await run().then(
+          () => null,
+          (thrown: unknown) => thrown,
+        );
+        if (!(error instanceof OriginConversationLookupError)) {
+          fail(`読みの失敗が OriginConversationLookupError で止まらない: ${String(error)}`);
+        }
+        if (error.commitmentId !== 'h2') fail('どの行で失敗したかを言っていない');
+      }
+      if ((await snapshot(stores)) !== before) fail('読みが失敗したのに何かを書いた');
+    },
+  );
+
+  await scenario(
+    '指紋: 同じ計画なら一致して実行できる。計画が動いていたら何も書かずに断る',
+    async ({ stores }) => {
+      await humanExchange(stores, 'conv-A');
+      await stores.commitments.open(
+        entry('h1', '2026-10-01T00:00:00.000Z', 'human', { source: 'conv-A' }),
+      );
+      await stores.commitments.open(entry('m1', '2026-10-01T01:00:00.000Z', 'manager'));
+      const plan = await migrateCommitmentsToTasks(stores, { dryRun: true, now: NOW });
+      const again = await migrateCommitmentsToTasks(stores, { dryRun: true, now: NOW });
+      if (plan.fingerprint !== again.fingerprint) fail('同じ状態で指紋が変わった');
+      // `now` は書く時刻であって計画ではない
+      const later = await migrateCommitmentsToTasks(stores, {
+        dryRun: true,
+        now: '2026-12-01T00:00:00.000Z',
+      });
+      if (plan.fingerprint !== later.fingerprint) fail('now が指紋に混ざった');
+
+      const refused = async (fingerprint: string, why: string) => {
+        const before = await snapshot(stores);
+        const error = await migrateCommitmentsToTasks(stores, {
+          dryRun: false,
+          now: NOW,
+          expectedFingerprint: fingerprint,
+        }).then(
+          () => null,
+          (thrown: unknown) => thrown,
+        );
+        if (!(error instanceof MigrationPlanChangedError)) fail(`${why}: 断られなかった`);
+        if ((await snapshot(stores)) !== before) fail(`${why}: 断ったのに書いた`);
+      };
+
+      await refused('', '空の指紋');
+      await refused('0'.repeat(64), '知らない指紋');
+
+      // 見たあとに人間の依頼が増えた
+      await stores.commitments.open(entry('h2', '2026-10-02T00:00:00.000Z', 'human'));
+      await refused(plan.fingerprint, '行が増えた');
+      const afterAdd = await migrateCommitmentsToTasks(stores, { dryRun: true, now: NOW });
+      if (afterAdd.fingerprint === plan.fingerprint) fail('行が増えたのに指紋が同じ');
+
+      // 見たあとに、人間が台帳の行を閉じた（動作が task → 閉じた行へ変わる）
+      await stores.commitments.close('h2', '2026-10-02T01:00:00.000Z', '人間が閉じた', 'human');
+      await refused(afterAdd.fingerprint, '行が閉じた');
+
+      // 見たあとに、起点の会話の引き方が変わった（宛先が変わる計画を同じ指紋で実行しない）
+      await stores.commitments.open(
+        entry('h3', '2026-10-03T00:00:00.000Z', 'human', { source: 'conv-late' }),
+      );
+      const beforeConversation = await migrateCommitmentsToTasks(stores, {
+        dryRun: true,
+        now: NOW,
+      });
+      await humanExchange(stores, 'conv-late');
+      await refused(beforeConversation.fingerprint, '起点の会話の引き方が変わった');
+
+      // 最新の指紋なら実行できる。報告の指紋は検証した指紋
+      const fresh = await migrateCommitmentsToTasks(stores, { dryRun: true, now: NOW });
+      const report = await migrateCommitmentsToTasks(stores, {
+        dryRun: false,
+        now: NOW,
+        expectedFingerprint: fresh.fingerprint,
+      });
+      if (report.fingerprint !== fresh.fingerprint) fail('実行の報告の指紋が違う');
+      if (report.execution?.migrated !== 2 || (await taskIds(stores)) !== 'h1,h3') {
+        fail(`最新の指紋で実行できていない: ${await taskIds(stores)}`);
+      }
+      if ((await stores.tasks.get('h3'))?.originConversationId !== 'conv-late') {
+        fail('実行時に引いた起点の会話が付いていない');
+      }
     },
   );
 }

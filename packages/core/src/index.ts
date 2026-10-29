@@ -508,10 +508,13 @@ export type {
   TaskTransition,
 } from './task.js';
 export { verifyTaskStoreContract } from './task-store-contract.js';
-// 台帳 → Task の移行（#5469 P7a。純関数と dryRun。起動時・道具には繋がない）
+// 台帳 → Task の移行（#5469 P7。純関数・dryRun・指紋つきの実行。起動時・道具には繋がない）
 export {
+  commitmentMigrationFingerprint,
+  MigrationPlanChangedError,
   migrateCommitmentsToTasks,
   migrationTaskTitle,
+  OriginConversationLookupError,
   planCommitmentMigration,
   taskFromCommitment,
 } from './commitment-task-migration.js';
@@ -519,6 +522,7 @@ export type {
   CommitmentMigrationAction,
   CommitmentMigrationExecution,
   CommitmentMigrationFailure,
+  CommitmentMigrationOriginConversationCounts,
   CommitmentMigrationPlan,
   CommitmentMigrationPlanItem,
   CommitmentMigrationPlanRow,
@@ -526,6 +530,7 @@ export type {
   CommitmentMigrationStores,
   CommitmentMigrationSummary,
   MigrateCommitmentsOptions,
+  OriginConversationResolution,
 } from './commitment-task-migration.js';
 export { verifyCommitmentTaskMigrationContract } from './commitment-task-migration-contract.js';
 export type { CommitmentMigrationFixture } from './commitment-task-migration-contract.js';
