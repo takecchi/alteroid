@@ -100,8 +100,8 @@ async function settle(): Promise<void> {
 }
 
 /** `poolStores` を渡すと、プールだけがそちらを見る（task ストアを壊した版を渡すため）。確かめは `stores` で読む。 */
-async function setup(poolStores?: (stores: Stores) => Stores) {
-  const stores = createMemoryStores();
+async function setup(poolStores?: (stores: Stores) => Stores, existing?: Stores) {
+  const stores = existing ?? createMemoryStores();
   const fake = fakeRunner();
   const registry = createRunnerRegistry([fake.runner]);
   const inbox: InboxEvent[] = [];
@@ -222,6 +222,39 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
     await settle();
     expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('running');
     expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+  });
+
+  it('⭐ failed で像が外れた委譲を resume しても、判断待ちの task は待ちへ戻る（像のメモに頼らない）', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    s.fake.push(report(started.managerId, 'failed'));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+
+    await s.pool.send(started.managerId, '続きをお願い');
+    await settle();
+    expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('running');
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+  });
+
+  it('⭐ 再起動した後（別のプールが台帳から像を作る）の resume でも、task は待ちへ戻る', async () => {
+    const before = await setup();
+    await before.stores.tasks.add(task('t-1'));
+    const started = await before.pool.start({ request: '調べる', taskId: 't-1' });
+    before.fake.push(report(started.managerId, 'failed'));
+    await settle();
+
+    await before.stores.jobs.updateJob(started.managerId, (job) => ({
+      ...job,
+      sessionId: 'sess-1',
+    }));
+
+    const after = await setup(undefined, before.stores);
+    await after.pool.send(started.managerId, '続きをお願い');
+    await settle();
+    expect((await after.stores.jobs.getJob(started.managerId))?.status).toBe('running');
+    expect(await taskStatus(after.stores, 't-1')).toBe('waiting');
   });
 
   it('クローンが閉じた task は、委譲が終わっても動かさない', async () => {
