@@ -124,7 +124,6 @@ describe('本番スキャン（このファイル自身も含め、repo 全体�
     expect(helperPaths).toEqual(
       expect.arrayContaining([
         'scripts/git-child-env.ts',
-        '.github/scripts/git-child-env.ts',
         'packages/core/src/git-child-env.test-support.ts',
       ]),
     );

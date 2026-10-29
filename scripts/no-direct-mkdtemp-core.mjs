@@ -2,11 +2,7 @@
 // 対象は `*.test.ts` と名指しした helper だけ: helper 自身は正当に `mkdtemp` を呼んでよく、広げると helper を書くたびに誤爆するため。
 // 許可リストは古びたら赤くする（`stale`）: 許可リストへ書き戻したファイルの消し忘れに気づけるようにするため。
 
-export const HELPER_GLOBS = [
-  '**/*.test-support.ts',
-  'scripts/git-child-env.ts',
-  '.github/scripts/git-child-env.ts',
-];
+export const HELPER_GLOBS = ['**/*.test-support.ts', 'scripts/git-child-env.ts'];
 
 const MKDTEMP_CALL_RE = /\bmkdtemp(Sync)?\s*\(/g;
 

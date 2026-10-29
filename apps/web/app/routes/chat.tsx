@@ -565,19 +565,15 @@ function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
 }
 
 function isSettledApproval(approval: PendingApproval): boolean {
-  return (
-    (approval.answeredAt !== undefined && approval.answeredAt !== null) ||
-    (approval.withdrawnAt !== undefined && approval.withdrawnAt !== null)
-  );
+  return isApprovalAnswered(approval) || isApprovalWithdrawn(approval);
 }
 
 function describeFoldedApproval(approval: PendingApproval): string {
-  const settled =
-    approval.withdrawnAt !== undefined && approval.withdrawnAt !== null
-      ? '（取り下げ済み）'
-      : approval.answer
-        ? `（回答: ${approval.answer}）`
-        : '（回答済み）';
+  const settled = isApprovalWithdrawn(approval)
+    ? '（取り下げ済み）'
+    : approval.answer
+      ? `（回答: ${approval.answer}）`
+      : '（回答済み）';
   return `${approval.question}${settled}`;
 }
 

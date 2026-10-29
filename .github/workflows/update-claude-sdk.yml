@@ -67,16 +67,7 @@ jobs:
           # 見るので、履歴が要る（浅い clone だと祖先関係が引けない）。
           fetch-depth: 0
           persist-credentials: false
-      # Node と pnpm の版は mise.toml が持つ（CI と同じ）
-      - uses: jdx/mise-action@v5
-      - id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v6
-        with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-pnpm-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - id: update
         name: SDK を最新へ

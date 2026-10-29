@@ -5,12 +5,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+import { gitChildEnv } from '../../scripts/git-child-env.js';
 import { makeTempDirSync } from '../../vitest.tmpdir.js';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import { STEPS } from '../../scripts/verify-core.mjs';
-
-import { gitChildEnv } from './git-child-env.js';
 
 type Step = { name: string; cmd: string; args: string[] };
 

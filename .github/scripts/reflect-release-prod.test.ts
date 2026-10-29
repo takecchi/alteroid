@@ -6,9 +6,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+import { gitChildEnv } from '../../scripts/git-child-env.js';
 import { makeTempDirSync } from '../../vitest.tmpdir.js';
-
-import { gitChildEnv } from './git-child-env.js';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'reflect-release-prod.sh');
 
