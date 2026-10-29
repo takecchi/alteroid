@@ -3,6 +3,13 @@ import { constants } from 'node:fs';
 import { access, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 
+// 1 チャンクずつ文字列にしない: チャンクの境目で割れた多バイト文字が化けるため
+export async function readAllText(input: AsyncIterable<Uint8Array>): Promise<string> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of input) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 export async function readInputFile(path: string, flag: string, how: string): Promise<string> {
   try {
     return await readFile(path, 'utf8');

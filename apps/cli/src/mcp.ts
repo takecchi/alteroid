@@ -11,7 +11,12 @@ import { confirmIrreversible } from './confirm.js';
 import { createClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
-import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
+import {
+  keepDraftOnFailure,
+  openEditorKeepingEdits,
+  readAllText,
+  readInputFile,
+} from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
 interface McpServerEntry {
@@ -110,7 +115,7 @@ export async function mcpSetCommand(file: string, options: { yes?: boolean } = {
   if (target.note !== null) throw new Error(target.note);
   const text =
     file === '-'
-      ? await readAll()
+      ? await readAllText(stdin)
       : await readInputFile(file, '引数 <file>', '<file>（.mcp.json）、または標準入力（-）');
   const servers = parseMcpJson(text);
   const before = await read(target);
@@ -349,10 +354,4 @@ async function fail(
     );
   }
   throw new Error(`/mcp-servers が失敗しました (${String(response.status)})`);
-}
-
-async function readAll(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString('utf8');
 }

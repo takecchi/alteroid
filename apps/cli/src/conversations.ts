@@ -11,7 +11,8 @@ import {
 } from './conversation-approvals.js';
 import { defaultIo as defaultConfirmIo, type ConfirmIo } from './confirm.js';
 import { errorReason, formatElapsedAgo, withErrorReason } from './format.js';
-import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { connect } from './connect.js';
+import { describeAuthFailure, type Target } from './target.js';
 import { redactBody } from './redact.js';
 import { withdrawnMessageText } from './withdrawn-message.js';
 
@@ -50,7 +51,7 @@ export async function conversationsListCommand(
   options: ConversationsListOptions = {},
   now: number = Date.now(),
 ): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('read');
   if (conn === null) return;
   const { client, target } = conn;
   // `query` は常に渡す: hono/client の型は `.default()` 付きでも `query` キー自体を必須にする。
@@ -169,7 +170,7 @@ export async function conversationsShowCommand(
   id: string,
   options: ConversationsShowOptions = {},
 ): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('read');
   if (conn === null) return;
   const { client, target } = conn;
   const response = await client.conversations[':id'].$get({
@@ -431,17 +432,4 @@ export async function markConversationReadAfterReply(
     const reason = error instanceof Error ? error.message : String(error);
     stdout.write(`  （この会話を既読にできませんでした: ${redactBody(reason)}）\n`);
   }
-}
-
-/** 読む口では繋げない理由を例外にしない: 人間向けの案内が例外の見た目になる。 */
-async function connect(
-  access: 'read' | 'write' = 'read',
-): Promise<{ client: DaemonClient; target: Target } | null> {
-  const target = await resolveTarget();
-  if (target.note !== null) {
-    if (access === 'write') throw new Error(target.note);
-    stdout.write(`${target.note}\n`);
-    return null;
-  }
-  return { client: createClient(target.baseUrl, target.headers), target };
 }

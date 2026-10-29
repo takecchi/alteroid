@@ -5,11 +5,17 @@ import { stdin } from 'node:process';
 import { PRACTICE_SLUG_RULE, describeSlugViolation } from '@alteroid/core/cli-light';
 import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
-import { createClient, type DaemonClient } from './client.js';
+import type { DaemonClient } from './client.js';
+import { connect } from './connect.js';
 import { withErrorReason } from './format.js';
 import { redactBody } from './redact.js';
-import { describeAuthFailure, resolveTarget, type Target } from './target.js';
-import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
+import { describeAuthFailure, type Target } from './target.js';
+import {
+  keepDraftOnFailure,
+  openEditorKeepingEdits,
+  readAllText,
+  readInputFile,
+} from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
 // `kind` を固定の選択肢にしない: `practiceKindSchema` が自由文字列で、列挙ではないため
@@ -270,7 +276,7 @@ export async function practiceSetCommand(
 
   const content =
     options.file === undefined || options.file === '-'
-      ? await readAll()
+      ? await readAllText(stdin)
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   if (options.allowEmpty !== true && content.trim().length === 0) {
     throw new Error(emptyBodyMessage(slug));
@@ -364,18 +370,6 @@ async function readVersionForRemove(
   }
   const body = await response.json();
   return 'version' in body && typeof body.version === 'string' ? body.version : undefined;
-}
-
-async function connect(
-  access: 'read' | 'write',
-): Promise<{ client: DaemonClient; target: Target } | null> {
-  const target = await resolveTarget();
-  if (target.note !== null) {
-    if (access === 'write') throw new Error(target.note);
-    stdout.write(`${target.note}\n`);
-    return null;
-  }
-  return { client: createClient(target.baseUrl, target.headers), target };
 }
 
 // `null` は 404 と 400 だけにする: 他の失敗を `null` にすると、読めていないだけの既存のやり方を無いものとして扱うため
@@ -495,12 +489,6 @@ async function write(
       ? `新規作成しました: ${slug}（同じ slug の既存のやり方は無かったので、置き換えではありません）\n`
       : `書き換えました: ${slug}\n`,
   );
-}
-
-async function readAll(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString('utf8');
 }
 
 // 雛形に「何をしてよいかの表」を書かせない: `permissions.yaml` 的な一覧にしないため

@@ -17,7 +17,12 @@ import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeScope } from './credential.js';
 import { redactError } from './redact.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
-import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
+import {
+  keepDraftOnFailure,
+  openEditorKeepingEdits,
+  readAllText,
+  readInputFile,
+} from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
 const ERROR_LIMIT = 512;
@@ -238,7 +243,7 @@ export async function profileSetCommand(
   }
   const script =
     options.file === undefined || options.file === '-'
-      ? await readAll()
+      ? await readAllText(stdin)
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   if (script.trim().length === 0) throw new Error(EMPTY_BODY_MESSAGE);
   await put(name, script, target, scope, profile.legacy, readVersionOf(profile, name));
@@ -420,12 +425,6 @@ function report(label: string, result: ApplyResult): void {
   if (output.trim().length > 0) {
     for (const line of output.trimEnd().split('\n')) stdout.write(`    | ${line}\n`);
   }
-}
-
-async function readAll(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString('utf8');
 }
 
 async function request(target: Target, path: string, init: RequestInit = {}): Promise<unknown> {
