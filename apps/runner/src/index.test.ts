@@ -147,11 +147,13 @@ describe('reclaimScanOf（孤児の観測を切る口）', () => {
   const CHILD = { uid: 1001, gid: 1001 };
 
   const view = {
-    liveSessionPidsOf: () => new Set<number>(),
-    knownTerminatedSessionPidsOf: () => new Set<number>(),
-    ownerListedSessionPidsOf: () => new Set<number>(),
-    abandonedOwnerListedSessionPidsOf: () => new Set<number>(),
-    anyTrackedDelegationsOf: () => true,
+    snapshot: () => ({
+      live: new Set<number>(),
+      knownTerminated: new Set<number>(),
+      ownerListed: new Set<number>(),
+      abandonedOwnerListed: new Set<number>(),
+      anyTrackedDelegations: true,
+    }),
   };
 
   it('未設定なら reclaim（撃つ）として観測し、view はそのまま乗る', () => {
