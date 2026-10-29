@@ -105,7 +105,11 @@ async function settle(): Promise<void> {
 }
 
 /** `poolStores` を渡すと、プールだけがそちらを見る（task ストアを壊した版を渡すため）。確かめは `stores` で読む。 */
-async function setup(poolStores?: (stores: Stores) => Stores, existing?: Stores) {
+async function setup(
+  poolStores?: (stores: Stores) => Stores,
+  existing?: Stores,
+  now?: () => number,
+) {
   const stores = existing ?? createMemoryStores();
   const fake = fakeRunner();
   const registry = createRunnerRegistry([fake.runner]);
@@ -116,6 +120,7 @@ async function setup(poolStores?: (stores: Stores) => Stores, existing?: Stores)
     post: (event) => inbox.push(event),
     runners: registry,
     profile: createProfileService({ stores: seen, runners: registry }),
+    ...(now === undefined ? {} : { now }),
   });
   await pool.restore();
   return { pool, fake, stores };
@@ -356,7 +361,9 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
   });
 
   it('endedAt は終端へ入ったときに1回だけ書き、終わった後の書き込みでは進めず、動き出すと消す', async () => {
-    const s = await setup();
+    // 時計を注入して、実時間を待たずに「あとの書き込みで時刻が進んでも endedAt は動かない」を確かめる
+    const clock = { at: Date.parse('2026-10-29T00:00:00.000Z') };
+    const s = await setup(undefined, undefined, () => clock.at);
     await s.stores.tasks.add(task('t-1'));
     const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
     expect((await s.stores.jobs.getJob(started.managerId))?.endedAt).toBeUndefined();
@@ -366,7 +373,7 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
     const first = (await s.stores.jobs.getJob(started.managerId))?.endedAt;
     expect(first).toBeDefined();
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    clock.at += 60_000;
     s.fake.push(report(started.managerId));
     await settle();
     expect((await s.stores.jobs.getJob(started.managerId))?.endedAt).toBe(first);
