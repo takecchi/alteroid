@@ -4599,7 +4599,7 @@ class Clone implements CloneHost {
     }
 
     if (reconciled > 0) {
-      // 新しい `type: 'exchange'` の書き込み箇所は増やさず `type: 'decision'` を使う: `exchange-kind-coverage.test.ts` の網羅の件数を動かさないため
+      // 新しい `type: 'exchange'` の書き込み箇所は増やさず `type: 'decision'` を使う: `exchange-kind-coverage.test.ts` の分類表（`KINDS_BY_ENCLOSING`）に行を足さずに済ませるため
       await this.#journal({
         type: 'decision',
         decision: `回答済みで未配達の承認を拾い直した（${reconciled} 件）`,
@@ -8947,7 +8947,7 @@ class Clone implements CloneHost {
 
   /**
    * 返答のうち未記録の分を、人間との outbound の `exchange` として1件書く。
-   * `type: 'exchange'` の書き込みはここ1か所だけにする: `exchange-kind-coverage.test.ts` の数え方を崩さず、2つの経路（`turn_ended` と `flushReply`）で欄を食い違わせないため。
+   * `type: 'exchange'` の書き込みはここ1か所だけにする: `exchange-kind-coverage.test.ts` の分類表（`KINDS_BY_ENCLOSING`）の1行で済ませ、2つの経路（`turn_ended` と `flushReply`）で欄を食い違わせないため。
    * 割れた各行に同じ欄を付ける（`approval-trace` が `answeredApprovalId` で対にする）。失敗の前置きは `failed` の行にだけ付く。
    */
   async #journalReply(turn: Turn, failed: boolean): Promise<void> {

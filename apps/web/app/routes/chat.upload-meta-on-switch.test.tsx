@@ -12,6 +12,7 @@ import {
   sse,
   storeTestBaseUrl,
   stubFetch,
+  untilReplySettled,
 } from '~/test-support';
 
 import Chat from './chat';
@@ -66,7 +67,7 @@ describe('上げ終えた添付の印は、会話を移っても元の会話の�
     });
     const uploadedNames: string[] = [];
     let uploadCalls = 0;
-    stubFetch((url) => {
+    const stub = stubFetch((url) => {
       if (url.includes('/attachments?')) {
         const name = decodeURIComponent(/name=([^&]*)/.exec(url)?.[1] ?? '');
         if (uploadCalls === 2) return new Response('boom', { status: 500 });
@@ -136,6 +137,9 @@ describe('上げ終えた添付の印は、会話を移っても元の会話の�
 
     fireEvent.click(await screen.findByRole('button', { name: 'メッセージを送信' }));
     await waitFor(() => expect(uploadedNames).toHaveLength(3));
+    // 上げの後に /chat の POST が出てから待つ: 上げを待っている間は「考えている…」がまだ出ておらず、その前に待つと何も待たずに通る
+    await waitFor(() => expect(stub.calls.filter((url) => url.endsWith('/chat'))).toHaveLength(1));
+    await untilReplySettled();
     await act(async () => undefined);
     expect(uploadedNames).toEqual(['first.txt', 'second.txt', 'second.txt']);
   });
