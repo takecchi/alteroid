@@ -1,6 +1,11 @@
 import { stdout } from './terminal-out.js';
 
-import { describeUnreadableRowsList, formatElapsedAgo, withErrorReason } from './format.js';
+import {
+  describeUnreadableRowsList,
+  formatElapsedAgo,
+  withErrorReason,
+  type RowsUnreadable,
+} from './format.js';
 import {
   describeAuthFailure,
   fetchDaemon,
@@ -42,7 +47,7 @@ export async function accessListCommand(now: number = Date.now()): Promise<void>
   const target = await resolveTarget();
   const { accounts, rowsUnreadable } = (await request(target, '/access')) as {
     accounts: AccountView[];
-    rowsUnreadable?: { count: number; rows: { id: string; reason: string }[] };
+    rowsUnreadable?: RowsUnreadable;
   };
   stdout.write(
     describeUnreadableRowsList({
@@ -109,7 +114,7 @@ export async function accessRevokeCommand(
   // 読めない行（`rowsUnreadable`）に在る id は「無い」と言わない: 確認へ進み、POST の 409 の案内に任せる。
   const { accounts, rowsUnreadable } = (await request(target, '/access')) as {
     accounts: AccountView[];
-    rowsUnreadable?: { count: number; rows: { id: string; reason: string }[] };
+    rowsUnreadable?: RowsUnreadable;
   };
   const exists =
     accounts.some((account) => account.id === accountId) ||

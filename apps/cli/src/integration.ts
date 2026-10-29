@@ -3,7 +3,12 @@ import { stderr, stdout } from './terminal-out.js';
 import { createClient } from './client.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
-import { describeUnreadableRowsList, errorReason, describeFailedResponse } from './format.js';
+import {
+  describeUnreadableRowsList,
+  errorReason,
+  describeFailedResponse,
+  type RowsUnreadable,
+} from './format.js';
 import { redactError } from './redact.js';
 
 interface IntegrationKeyView {
@@ -17,11 +22,6 @@ interface IntegrationKeyView {
   revokedAt: string | null;
   lastUsedAt: string | null;
   limits: { maxBodyBytes: number; ratePerMinute: number };
-}
-
-interface RowsUnreadable {
-  count: number;
-  rows: { id: string; reason: string }[];
 }
 
 export type IntegrationKeyStatus = 'active' | 'revoked' | 'expired';

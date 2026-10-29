@@ -41,11 +41,16 @@ export async function describeFailedResponse(
   return describeAuthFailure(response.status, target) ?? (await withErrorReason(message, response));
 }
 
+export interface RowsUnreadable {
+  count: number;
+  rows: { id: string; reason: string }[];
+}
+
 export function describeUnreadableRowsList(params: {
   noun: string;
   removeCommand: string;
   file: string;
-  rowsUnreadable: { count: number; rows: { id: string; reason: string }[] } | undefined;
+  rowsUnreadable: RowsUnreadable | undefined;
 }): string {
   const unreadable = params.rowsUnreadable;
   if (unreadable === undefined || unreadable.count === 0) return '';

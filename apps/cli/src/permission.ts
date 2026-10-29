@@ -9,7 +9,11 @@ import type { PermissionGrant } from '@alteroid/core';
 
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { createClient } from './client.js';
-import { describeUnreadableRowsList, describeFailedResponse } from './format.js';
+import {
+  describeUnreadableRowsList,
+  describeFailedResponse,
+  type RowsUnreadable,
+} from './format.js';
 import { redactBody } from './redact.js';
 import { resolveTarget } from './target.js';
 
@@ -38,7 +42,7 @@ export async function permissionListCommand(options: PermissionListOptions = {})
   }
   const { grants, rowsUnreadable } = (await response.json()) as {
     grants: PermissionGrant[];
-    rowsUnreadable?: { count: number; rows: { id: string; reason: string }[] };
+    rowsUnreadable?: RowsUnreadable;
   };
   // 読めない行は一覧の前に言う（0件なら何も出ない）。読めない行しか無いのに「許可は無い」と言わないために、下の「無い」の文言もこれで言い分ける。
   stdout.write(
@@ -108,7 +112,7 @@ export async function permissionRevokeCommand(
   }
   const { grants, rowsUnreadable } = (await listing.json()) as {
     grants: PermissionGrant[];
-    rowsUnreadable?: { count: number; rows: { id: string; reason: string }[] };
+    rowsUnreadable?: RowsUnreadable;
   };
   const exists =
     grants.some((grant) => grant.id === id) ||
