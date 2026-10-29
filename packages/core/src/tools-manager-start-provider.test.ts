@@ -54,7 +54,7 @@ function fingerprint(tool: { description: string; inputSchema: unknown }): strin
 // request の説明に「1文字以上。空白だけは断る」を足した版（#5076）: 引数の並びと provider 引数を持たないことは変えていない。
 // taskId を足した版（#5469 P3）: 引数の並びの末尾に足しただけで、provider 引数を持たないことは変えていない。
 // 前の値は e11f6f88f9b2b2e29a9e826402ec79796f28866c3592450a6276a1734bb24286
-const BASELINE = '906ad03c9ad9e3ff928f413abf9ebb1a10f757467ac72e7dc5f435c57d8ccb57';
+const BASELINE = '45404ad261f30d4974ae8cba692fbee201603704d624f79eacad359543865427';
 
 describe('manager_start の provider 引数（撤去済み）', () => {
   it('provider 引数を持たず、スキーマと説明文は PEERS が閉じていたときと同一', () => {

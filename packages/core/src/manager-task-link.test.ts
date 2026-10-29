@@ -8,10 +8,11 @@ import {
   type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerEvent,
+  type RunnerManagerState,
   type RunnerProfileFingerprint,
   type RunnerProfileResult,
 } from './runner-protocol.js';
-import type { InboxEvent, Task } from './schema.js';
+import type { InboxEvent, Job, Task } from './schema.js';
 import type { Stores } from './store.js';
 import { taskStatusForJob } from './task.js';
 import { createMemoryStores } from './testing.js';
@@ -35,6 +36,7 @@ function task(id: string, status: Task['status'] = 'queued'): Task {
 
 function fakeRunner() {
   let emit: ((event: RunnerEvent) => void) | null = null;
+  const alive: RunnerManagerState[] = [];
   const runner: RunnerClient = {
     runnerId: 'runner-primary',
     runnerIdKnown: true,
@@ -59,7 +61,7 @@ function fakeRunner() {
       /* この検証では使わない */
     },
     async list() {
-      return [];
+      return [...alive];
     },
     async transcript() {
       return null;
@@ -82,6 +84,7 @@ function fakeRunner() {
   };
   return {
     runner,
+    alive,
     push(event: RunnerEvent): void {
       if (emit === null) throw new Error('connect されていない');
       emit(event);
@@ -96,16 +99,18 @@ async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-async function setup() {
+/** `poolStores` を渡すと、プールだけがそちらを見る（task ストアを壊した版を渡すため）。確かめは `stores` で読む。 */
+async function setup(poolStores?: (stores: Stores) => Stores) {
   const stores = createMemoryStores();
   const fake = fakeRunner();
   const registry = createRunnerRegistry([fake.runner]);
   const inbox: InboxEvent[] = [];
+  const seen = poolStores === undefined ? stores : poolStores(stores);
   const pool = createManagerPool({
-    stores,
+    stores: seen,
     post: (event) => inbox.push(event),
     runners: registry,
-    profile: createProfileService({ stores, runners: registry }),
+    profile: createProfileService({ stores: seen, runners: registry }),
   });
   await pool.restore();
   return { pool, fake, stores };
@@ -113,6 +118,31 @@ async function setup() {
 
 function report(managerId: string, status: 'done' | 'failed' = 'done'): RunnerEvent {
   return { type: 'report', managerId, text: '終わった', status } as RunnerEvent;
+}
+
+async function taskStatus(stores: Stores, id: string): Promise<Task['status'] | undefined> {
+  return (await stores.tasks.get(id))?.status;
+}
+
+async function decisions(stores: Stores): Promise<string[]> {
+  return (await stores.journal.list({ types: ['decision'] })).map((e) =>
+    e.type === 'decision' ? e.decision : '',
+  );
+}
+
+function ledgerJob(id: string, status: Job['status'], taskId: string): Job {
+  return {
+    id,
+    createdAt: AT,
+    updatedAt: AT,
+    status,
+    summary: '調べ物',
+    request: '調べて',
+    cwd: '/work/project',
+    sessionId: `sess-${id}`,
+    runnerId: 'runner-primary',
+    taskId,
+  };
 }
 
 describe('委譲の状態 → task の状態', () => {
@@ -135,11 +165,11 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
 
     const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
     expect((await s.stores.jobs.getJob(started.managerId))?.taskId).toBe('t-1');
-    expect((await s.stores.tasks.get('t-1'))?.status).toBe('waiting');
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
 
     s.fake.push(report(started.managerId));
     await settle();
-    expect((await s.stores.tasks.get('t-1'))?.status).toBe('needs_decision');
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
     expect((await s.stores.tasks.get('t-1'))?.closedAt).toBeUndefined();
   });
 
@@ -150,7 +180,48 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
 
     s.fake.push(report(started.managerId, 'failed'));
     await settle();
-    expect((await s.stores.tasks.get('t-1'))?.status).toBe('needs_decision');
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+
+  it('⭐ stopped（manager_stop）で終わった委譲の task も判断待ちに戻る', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+
+    await s.pool.abort(started.managerId);
+    await settle();
+    expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('stopped');
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+
+  it('⭐ lost になった委譲の task も判断待ちに戻る', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+
+    s.fake.push({
+      type: 'closed',
+      managerId: started.managerId,
+      status: 'lost',
+      reason: '器から消えた',
+    } as RunnerEvent);
+    await settle();
+    expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('lost');
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+
+  it('⭐ resume（終わった委譲へ send）で、判断待ちの task は待ちへ戻る', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    s.fake.push(report(started.managerId));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+
+    await s.pool.send(started.managerId, '続きをお願い');
+    await settle();
+    expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('running');
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
   });
 
   it('クローンが閉じた task は、委譲が終わっても動かさない', async () => {
@@ -185,7 +256,7 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
     const started = await s.pool.start({ request: '調べる' });
     s.fake.push(report(started.managerId));
     await settle();
-    expect((await s.stores.tasks.get('t-1'))?.status).toBe('queued');
+    expect(await taskStatus(s.stores, 't-1')).toBe('queued');
   });
 
   it('委譲が終わったあと、クローンが queued へ戻した task は、同じ委譲の次の書き込みで戻さない', async () => {
@@ -199,7 +270,90 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
     // 状態の変わらない書き込み（2度目の同じ報告）
     s.fake.push(report(started.managerId));
     await settle();
-    expect((await s.stores.tasks.get('t-1'))?.status).toBe('queued');
+    expect(await taskStatus(s.stores, 't-1')).toBe('queued');
+  });
+
+  it('⭐ 委譲が走っている間にクローンが queued へ戻した task は、走っている最中の書き込みで待ちへ戻さない', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    await s.stores.tasks.setStatus('t-1', 'queued', { by: 'clone', at: AT });
+
+    await s.pool.send(started.managerId, '追加の指示');
+    await settle();
+    expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('running');
+    expect(await taskStatus(s.stores, 't-1')).toBe('queued');
+  });
+
+  it('⭐ 遷移は日誌に decision で残る（動かさなかったときは残らない）', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    s.fake.push(report(started.managerId));
+    await settle();
+
+    const lines = (await decisions(s.stores)).filter((line) => line.includes('task t-1'));
+    expect(lines).toHaveLength(2);
+    expect(lines.some((line) => line.includes('queued から waiting'))).toBe(true);
+    expect(lines.some((line) => line.includes('waiting から needs_decision'))).toBe(true);
+
+    s.fake.push(report(started.managerId));
+    await settle();
+    expect((await decisions(s.stores)).filter((line) => line.includes('task t-1'))).toHaveLength(2);
+  });
+});
+
+describe('終端の同期が失敗したとき・デーモンが落ちたとき', () => {
+  function failingTasks(stores: Stores): Stores {
+    return {
+      ...stores,
+      tasks: {
+        ...stores.tasks,
+        setStatus: async (id, status, options) => {
+          if (status === 'needs_decision') throw new Error('task ストアが落ちている');
+          return stores.tasks.setStatus(id, status, options);
+        },
+      },
+    };
+  }
+
+  it('⭐ task ストアが投げても委譲は終わり、失敗は日誌に残る', async () => {
+    const s = await setup(failingTasks);
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+
+    s.fake.push(report(started.managerId));
+    await settle();
+    expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('done');
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    expect((await decisions(s.stores)).some((line) => line.includes('合わせられなかった'))).toBe(
+      true,
+    );
+  });
+
+  it('⭐ 起動時に、終わった委譲に結び付いたまま waiting の task を needs_decision へ直す', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1', 'waiting'));
+    await s.stores.jobs.putJob(ledgerJob('mgr-old', 'done', 't-1'));
+
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    expect((await decisions(s.stores)).some((line) => line.includes('起動時の直し'))).toBe(true);
+  });
+
+  it('起動時の直しは、走っている委譲が結び付いた task・クローンが動かした task には触れない', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-run', 'waiting'));
+    await s.stores.tasks.add(task('t-req', 'queued'));
+    await s.stores.tasks.add(task('t-none', 'waiting'));
+    await s.stores.jobs.putJob(ledgerJob('mgr-done', 'done', 't-run'));
+    await s.stores.jobs.putJob(ledgerJob('mgr-run', 'running', 't-run'));
+    await s.stores.jobs.putJob(ledgerJob('mgr-done-2', 'done', 't-req'));
+
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-run')).toBe('waiting');
+    expect(await taskStatus(s.stores, 't-req')).toBe('queued');
+    expect(await taskStatus(s.stores, 't-none')).toBe('waiting');
   });
 });
 
@@ -255,6 +409,29 @@ describe('道具: manager_start の taskId', () => {
     const reply = await b.call({ request: '調べる', taskId: 't-1' });
     expect(reply).toContain('task t-1 は閉じている');
     expect(b.started).toHaveLength(0);
+  });
+
+  it('⭐ 走っている委譲が結び付いた task は、どの委譲が走っているかを添えて断る', async () => {
+    const stores = createMemoryStores();
+    await stores.tasks.add(task('t-1', 'waiting'));
+    await stores.jobs.putJob(ledgerJob('mgr-run', 'running', 't-1'));
+    await stores.jobs.putJob(ledgerJob('mgr-ask', 'waiting_human', 't-1'));
+    const b = build(stores);
+    const reply = await b.call({ request: '調べる', taskId: 't-1' });
+    expect(reply).toContain('走っている委譲がある');
+    expect(reply).toContain('mgr-run');
+    expect(reply).toContain('mgr-ask');
+    expect(b.started).toHaveLength(0);
+  });
+
+  it('終わった委譲しか結び付いていない task、別の task の走っている委譲は断らない', async () => {
+    const stores = createMemoryStores();
+    await stores.tasks.add(task('t-1', 'needs_decision'));
+    await stores.jobs.putJob(ledgerJob('mgr-done', 'done', 't-1'));
+    await stores.jobs.putJob(ledgerJob('mgr-other', 'running', 't-2'));
+    const b = build(stores);
+    await b.call({ request: '続き', taskId: 't-1' });
+    expect(b.started).toHaveLength(1);
   });
 
   it('taskId を渡さなければ、これまでどおり起こす', async () => {

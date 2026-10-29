@@ -59,6 +59,7 @@ import {
 import { isCronExpression } from './cron.js';
 import { isRunningJobStatus } from './job-status-running.js';
 import { journalWindowCrossesHorizon } from './journal-horizon.js';
+import { taskStatusForJob } from './task.js';
 import { filterTranscriptLinesYielding } from './transcript-filter.js';
 import {
   TranscriptPageCache,
@@ -8379,7 +8380,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             'この委譲を結び付ける task の id（task_list）。渡すと task は待ちになり、委譲が終わる・失敗する・lost になると' +
-              '判断待ち（needs_decision）に戻って、報告にもこの id が付く。閉じた task は断られる。',
+              '判断待ち（needs_decision）に戻って、報告にもこの id が付く。閉じた task と、走っている委譲が既にある task は断られる（1つの task に走らせる委譲は同時に1本まで）。',
           ),
       },
       async (rawArgs) => {
@@ -8421,6 +8422,17 @@ export function createCloneTools(context: ToolContext) {
           if (linked.status === 'done' || linked.status === 'cancelled') {
             return text(
               `task ${taskId} は閉じている（${linked.status}）。続きを頼むなら先に task_set_status で queued へ戻すこと。マネージャーは起こしていない。`,
+            );
+          }
+          // 1つの task に同時に走る委譲は1本まで: 2本目が先に終わると、1本目が走っているのに task が判断待ちへ倒れる
+          const running = (await stores.jobs.listJobs()).filter(
+            (job) => job.taskId === taskId && taskStatusForJob(job.status) === 'waiting',
+          );
+          if (running.length > 0) {
+            return text(
+              `task ${taskId} には走っている委譲がある（${running.map((job) => `${job.id}: ${job.status}`).join('、')}）。` +
+                '1つの task に同時に走らせる委譲は1本までなので、マネージャーは起こしていない。' +
+                'その委譲が終わるのを待つか、manager_stop で止めてから頼むこと。',
             );
           }
         }
