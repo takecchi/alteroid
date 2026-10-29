@@ -14,6 +14,7 @@ import {
   CLONE_MODEL_ENV_KEY,
   CLONE_PERMISSION_MODE_ENV_KEY,
   createClone,
+  placedCloneModel,
   placedClonePermissionMode,
   resolveCloneModel,
   resolveClonePermissionMode,
@@ -1042,6 +1043,13 @@ describe('クローン', () => {
     expect(placedClonePermissionMode({ [CLONE_PERMISSION_MODE_ENV_KEY]: '  ' })).toBeNull();
     expect(placedClonePermissionMode({ [CLONE_PERMISSION_MODE_ENV_KEY]: ' auto ' })).toBe('auto');
     expect(placedClonePermissionMode({ [CLONE_PERMISSION_MODE_ENV_KEY]: 'strict' })).toBe('strict');
+  });
+
+  it('クローンのモデル帯も、置かれたかどうかは「既定と違うか」で言い換えない', () => {
+    expect(placedCloneModel({})).toBeNull();
+    expect(placedCloneModel({ [CLONE_MODEL_ENV_KEY]: '' })).toBeNull();
+    expect(placedCloneModel({ [CLONE_MODEL_ENV_KEY]: '  ' })).toBeNull();
+    expect(placedCloneModel({ [CLONE_MODEL_ENV_KEY]: ` ${CLONE_MODEL} ` })).toBe(CLONE_MODEL);
   });
 
   it('人間が置いた権限モードが実際にセッションへ渡る', async () => {
