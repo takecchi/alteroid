@@ -2278,7 +2278,7 @@ class Clone implements CloneHost {
       });
       return;
     }
-    // 委譲先へ配る（#4952）。載せない許可（前方一致など）では配らない: 一覧は変わらないため
+    // 委譲先へ配る（#4952）。前方一致も載せる（#5435）。載せない形の許可（`*` を含む prefix・空の prefix など）では配らない: 一覧は変わらないため
     // 待たない: 人間への回答という主作用を runner との往復で遅らせないため。配れなくても許可の記録は済んでいる（配れなかったことはサービスが日誌に残す）
     if (delegatedPermissionRuleOf(grant.rule) !== undefined) {
       void this.#permissionRuleService

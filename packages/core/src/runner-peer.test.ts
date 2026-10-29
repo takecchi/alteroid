@@ -546,6 +546,21 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await s.host.shutdown();
   });
 
+  it('⭐ 鍵の付け替えの停止（keepPeers）の最中に人が止めたら、後から預けられた peer も期限を待たず stopped で閉じる（#5508）', async () => {
+    const s = await setupPeerCall();
+    await s.approve('allow');
+    await waitFor(() => s.decisions.length === 1);
+    // 1本目は畳みの途中で peer を預ける。2本目（印なし）はその時点では預かりが無く、進行中の畳みを待つ
+    const keeping = s.host.stop('mgr-1', { keepPeers: true });
+    const stopping = s.host.stop('mgr-1');
+    await Promise.all([keeping, stopping]);
+    const closed = s.events.flatMap((e) => (e.type === 'parked_peers_closed' ? [e] : []));
+    expect(closed.map((e) => e.reason)).toEqual(['stopped']);
+    expect(closed[0]?.peers).toHaveLength(1);
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
   it('⭐ 預けた peer を期限で閉じたら、閉じた peer と、途中で終わった背景ターンの止まりどころを parked_peers_closed で運ぶ（#4885）', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
