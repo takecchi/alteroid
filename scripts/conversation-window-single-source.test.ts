@@ -16,8 +16,10 @@ const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-r
 // `journal-deleted-conversation-contract.ts` も同じ理由: 削除した会話を外す絞りがストアの `list` の各分岐（`with` 無し・`limit` だけ）で効くことを、ストアを直に呼んで測る道具である。
 // `journal-withdrawn-contract.ts` も同じ理由: 取り下げの印の行（`with: 'self'`。人間との往復の窓には入らない）が各ストアの `list` で書き戻せることを、ストアを直に呼んで測る道具である。
 // `journal-conversation-id-contract.ts` も同じ理由: `conversationId` の絞りが `limit` より前に効くことを、ストアの `list` を直に呼んで測る道具である。
+// `initiative-gate.ts` も窓ではない: 発意 tick の門（#5469 P6a）が「直近24時間に tick のターンを回したか」を日誌の `with: 'self'` の行（人間との往復の窓には入らない）から1件探すだけで、会話の窓を組み立てていない。
 const ALLOWED_FILES = new Set([
   'packages/core/src/conversation.ts',
+  'packages/core/src/initiative-gate.ts',
   'packages/core/src/journal-conversation-id-contract.ts',
   'packages/core/src/journal-with-contract.ts',
   'packages/core/src/journal-deleted-conversation-contract.ts',
