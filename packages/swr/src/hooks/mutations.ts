@@ -240,15 +240,25 @@ export function useDeletePractice() {
   );
 }
 
-export function useAnswerApproval() {
-  const api = useApi();
+function useRefreshApprovals() {
   const { mutate } = useSWRConfig();
   return useCallback(
+    () =>
+      refreshWithin(
+        Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]),
+        APPROVALS_REFRESH_WAIT_MS,
+      ),
+    [mutate],
+  );
+}
+
+export function useAnswerApproval() {
+  const api = useApi();
+  const refreshApprovals = useRefreshApprovals();
+  return useCallback(
     async (id: string, answer: string | undefined, selections?: ApprovalSelection[]) => {
-      // 失敗しても一覧を取り直す（409 に限らない）: 裏で先に片付いていると、例外で抜けた分カードが未回答の見た目で残るため
-      // 取り直しの失敗で元の失敗を上書きしない: 呼び出し側へ伝えるのは「なぜ答えられなかったか」
-      let answerError: unknown;
-      try {
+      // 失敗しても取り直す（409 に限らない）: 裏で先に片付いていると、例外で抜けた分カードが未回答の見た目で残るため
+      await writeThenRefresh(async () => {
         await answerWithin(APPROVAL_ANSWER_TIMEOUT_MS, (signal) =>
           api.api
             .POST('/approvals/{id}/answer', {
@@ -261,26 +271,15 @@ export function useAnswerApproval() {
             })
             .then(unwrap),
         );
-      } catch (caught) {
-        answerError = caught;
-      }
-      try {
-        await refreshWithin(
-          Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]),
-          APPROVALS_REFRESH_WAIT_MS,
-        );
-      } catch (refreshError) {
-        if (answerError === undefined) throw refreshError;
-      }
-      if (answerError !== undefined) throw answerError;
+      }, refreshApprovals);
     },
-    [api, mutate],
+    [api, refreshApprovals],
   );
 }
 
 export function useAnswerApprovals() {
   const api = useApi();
-  const { mutate } = useSWRConfig();
+  const refreshApprovals = useRefreshApprovals();
   return useCallback(
     async (answers: { id: string; answer?: string; selections?: ApprovalSelection[] }[]) => {
       // 失敗しても取り直す: 届いて応答だけ失われた書き込みは、取り直さないとカードが未回答のまま残り、送り直しが 409 になるため
@@ -289,19 +288,12 @@ export function useAnswerApprovals() {
           api.api.POST('/approvals/answer', { body: { answers }, signal }).then(unwrap),
         );
       let results: Awaited<ReturnType<typeof post>>['results'] = [];
-      await writeThenRefresh(
-        async () => {
-          ({ results } = await post());
-        },
-        () =>
-          refreshWithin(
-            Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]),
-            APPROVALS_REFRESH_WAIT_MS,
-          ),
-      );
+      await writeThenRefresh(async () => {
+        ({ results } = await post());
+      }, refreshApprovals);
       return results;
     },
-    [api, mutate],
+    [api, refreshApprovals],
   );
 }
 
