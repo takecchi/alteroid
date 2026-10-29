@@ -55,15 +55,7 @@ import {
   type ReclaimSessionView,
 } from './tasks.js';
 
-export {
-  createRunnerApp,
-  formatOutboxShutdownReport,
-  Outbox,
-  type OutboxPendingGroup,
-  type OutboxShutdownSnapshot,
-  type RunnerAppDeps,
-  type RunnerAppType,
-} from './app.js';
+export { createRunnerApp, Outbox } from './app.js';
 
 /** 入口で作る HTTP サーバ。要求の期限と keep-alive の持ち時間を掛けて返す（試験で配線を縛るために入口から切り出した。#4915）。 */
 export function createRunnerHttpServer(
@@ -101,13 +93,13 @@ const SHUTDOWN_GRACE_MS = 60_000;
 // `SHUTDOWN_GRACE_MS` ちょうどにしない: 猶予が切れる時刻には SIGKILL が来て、自分の意思で `exit` する最後の口が負けるため。
 const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
 
-export const DRAIN_WAIT_MS = 3_000;
+const DRAIN_WAIT_MS = 3_000;
 
 // 預けた物が取られるのを待つ上限（SIGTERM から）。forced exit（`FORCED_EXIT_MS`）より 5 秒手前にする: 待ち終えた後に口を閉じて exit する分を残すため
-export const PICKUP_WAIT_LIMIT_MS = FORCED_EXIT_MS - 5_000;
+const PICKUP_WAIT_LIMIT_MS = FORCED_EXIT_MS - 5_000;
 
 // 預けた生ログがここまでに取られなければ、本文を載せて送り直す（SIGTERM から。#4896）。上限（`PICKUP_WAIT_LIMIT_MS`）の 20 秒手前: 大きい本文を SSE で流し切る時間を残すため
-export const ARCHIVE_INLINE_AFTER_MS = PICKUP_WAIT_LIMIT_MS - 20_000;
+const ARCHIVE_INLINE_AFTER_MS = PICKUP_WAIT_LIMIT_MS - 20_000;
 
 // 畳みの時間の積み上げ（#4925。Railway の猶予 `SHUTDOWN_GRACE_MS` 60秒 → `FORCED_EXIT_MS` 55秒 → `PICKUP_WAIT_LIMIT_MS` 50秒）:
 //   0秒 SIGTERM → 30秒 `ARCHIVE_INLINE_AFTER_MS`（`shutdown()` の途中でも、並行のタイマーが退避を送り直す）
@@ -149,12 +141,11 @@ export async function shutdownHandingOver(deps: {
   startedAt?: number;
   drainWaitMs?: number;
   pickupWaitLimitMs?: number;
-  inlineArchivesAfterMs?: number;
   write?: (line: string) => void;
 }): Promise<void> {
   const startedAt = deps.startedAt ?? Date.now();
   const limitMs = deps.pickupWaitLimitMs ?? PICKUP_WAIT_LIMIT_MS;
-  const inlineAtMs = Math.min(deps.inlineArchivesAfterMs ?? ARCHIVE_INLINE_AFTER_MS, limitMs);
+  const inlineAtMs = Math.min(ARCHIVE_INLINE_AFTER_MS, limitMs);
   const afterMs = (atMs: number): number => Math.max(0, startedAt + atMs - Date.now());
 
   // 送り直しの判定を `shutdown()` と並べて走らせる（#4925）: `shutdown()` が長引いても、SIGTERM から `inlineAtMs` で、
@@ -279,9 +270,7 @@ export function childUserOf(
 }
 
 // `Number(env ?? '')` で読まない: `Number('')` は 0 で、UID 未設定でも uid 0 へ chown しに行くため。
-export function socketOwnerOf(
-  env: NodeJS.ProcessEnv = process.env,
-): { uid: number; gid: number } | undefined {
+export function socketOwnerOf(env: NodeJS.ProcessEnv): { uid: number; gid: number } | undefined {
   const rawUid = envValue(env, 'ALTEROID_RUNNER_SOCKET_UID');
   if (rawUid === undefined) return undefined;
   const uid = Number(rawUid);
@@ -318,7 +307,7 @@ const DEFAULT_DONE_TREE_REAP_AFTER_MINUTES = 360;
 
 // 終わって久しい done の担当の CLI の木を回収が撃ち始めるまでの期限（ms。#5157）。`off`（`undefined`）は撃たない旧来の挙動。
 // 知らない値は既定へ倒さず落とす: `0` や `6h` と書いて旧来のまま溜まり続けても、「置いた」と「効いている」が食い違ったまま気づけないため。
-export function doneTreeReapAfterMsOf(env: NodeJS.ProcessEnv = process.env): number | undefined {
+export function doneTreeReapAfterMsOf(env: NodeJS.ProcessEnv): number | undefined {
   const raw = envValue(env, DONE_TREE_REAP_AFTER_MINUTES_ENV_KEY);
   if (raw === undefined) return DEFAULT_DONE_TREE_REAP_AFTER_MINUTES * 60_000;
   if (raw === 'off') return undefined;
@@ -336,8 +325,8 @@ export function doneTreeReapAfterMsOf(env: NodeJS.ProcessEnv = process.env): num
 // 委譲の CLI の引き取り手（`tini -s`）を PATH から探す（#4494）。子の UID へ降ろさない構成では使わない: 委譲を自前で起こす経路（`spawnProcess`）がそもそも無いため。
 // 見つからなければ `undefined`（CLI を直に起こす）。起動ログに出すので黙っては倒れない。
 export function delegationSubreaperOf(
-  env: NodeJS.ProcessEnv = process.env,
-  childUser: RunnerChildUser | undefined = childUserOf(env),
+  env: NodeJS.ProcessEnv,
+  childUser: RunnerChildUser | undefined,
   isExecutable: (path: string) => boolean = executableFile,
 ): string | undefined {
   if (childUser === undefined) return undefined;

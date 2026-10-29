@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { CGROUP_ROOT } from '@alteroid/core';
 
 // 生きているプロセスの素性は含めない: 他のマネージャーの仕事が覗ける形にしないため。`cmdline` / `cwd` / `environ` は読まず、`stat` と `uptime` と所有 UID だけを使う。
-export interface TaskBreakdown {
+interface TaskBreakdown {
   threads: number;
   processes: number;
   zombies: number;
@@ -14,10 +14,10 @@ export interface TaskBreakdown {
   reclaim?: ReclaimObservation;
 }
 
-export type ReclaimMode = 'observe' | 'reclaim';
+type ReclaimMode = 'observe' | 'reclaim';
 
 // 名前・コマンド・パスで候補を選ばない: 素性を読まない約束と、パターンでプロセスを選ばない規約の両方に反するため。
-export interface ReclaimObservation {
+interface ReclaimObservation {
   mode: ReclaimMode;
   // 委譲の CLI の引き取り手（#4494）。`null` は探したが無かった。起動ログにしか出ないと、クローンから効いているかを確かめられないため。
   subreaper?: { command: string | null };
@@ -63,7 +63,7 @@ export interface ReclaimSessionView {
   anyTrackedDelegationsOf: () => boolean;
 }
 
-export interface ReclaimHeldCounts {
+interface ReclaimHeldCounts {
   sidUnknown: number;
   sidLive: number;
   sidLeaderPresent: number;
@@ -71,13 +71,13 @@ export interface ReclaimHeldCounts {
 }
 
 // 合計は `sidUnrecognised` と一致する。数えるだけで、撃つ判定には使わない（#5157）。
-export interface UnrecognisedOwnerSplit {
+interface UnrecognisedOwnerSplit {
   ownerLive: number;
   ownerListed: number;
   ownerUnknown: number;
 }
 
-export interface ReclaimNotFired {
+interface ReclaimNotFired {
   outsideRoots: {
     total: number;
     parentInScan: number;
@@ -87,7 +87,7 @@ export interface ReclaimNotFired {
   observeOnly?: number;
 }
 
-export interface TaskBreakdownOptions {
+interface TaskBreakdownOptions {
   procRoot?: string;
   clockTicksPerSecond?: number;
   // `/proc` の全走査は O(pids) で、`/health` は頻繁に叩かれる: 毎回数え直すと heartbeat を遅くするためメモを持つ。
@@ -193,8 +193,7 @@ export class TaskBreakdownReader {
 // デーモンの heartbeat（`HEARTBEAT_INTERVAL_MS`）と同じ間隔にする: 揃えておけば、デーモンが居ない間の掃除の遅れを heartbeat と同じ尺で読めるため。
 const RECLAIM_SWEEP_INTERVAL_MS = 10_000;
 
-export interface ReclaimSweepOptions {
-  intervalMs?: number;
+interface ReclaimSweepOptions {
   setIntervalFn?: (callback: () => void, ms: number) => { unref?: () => unknown };
   clearIntervalFn?: (handle: { unref?: () => unknown }) => void;
 }
@@ -204,7 +203,7 @@ export function startReclaimSweep(
   reader: Pick<TaskBreakdownReader, 'sweepIfStale'>,
   options: ReclaimSweepOptions = {},
 ): () => void {
-  const intervalMs = options.intervalMs ?? RECLAIM_SWEEP_INTERVAL_MS;
+  const intervalMs = RECLAIM_SWEEP_INTERVAL_MS;
   const setIntervalFn: NonNullable<ReclaimSweepOptions['setIntervalFn']> =
     options.setIntervalFn ?? ((callback, ms) => setInterval(callback, ms));
   const clearIntervalFn: NonNullable<ReclaimSweepOptions['clearIntervalFn']> =
