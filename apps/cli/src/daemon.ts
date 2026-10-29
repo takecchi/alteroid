@@ -85,39 +85,31 @@ async function verify(info: DaemonRuntimeInfo): Promise<Presence> {
   }
 }
 
-export async function storageOf(info: DaemonRuntimeInfo | null): Promise<string | null> {
-  if (!info) return null;
-  try {
-    const response = await fetch(`${baseUrl(info)}/status`, {
-      headers: { authorization: `Bearer ${info.token}` },
-      signal: AbortSignal.timeout(1500),
-    });
-    if (!response.ok) return null;
-    const body = (await response.json()) as { storage?: unknown };
-    return typeof body.storage === 'string' && body.storage.length > 0 ? body.storage : null;
-  } catch {
-    return null;
-  }
+export interface StatusDetails {
+  storage: string | null;
+  sessionRefusal: SessionRefusal | null;
 }
 
 /**
- * クローンのセッションが安全分類器に弾かれ続けている状況を `/status` から取る。
- * 無い・聞けない・形が読めないときは `null`（作り物の「弾かれている」を出さない）。
+ * 記憶の置き場と、クローンのセッションが安全分類器に弾かれ続けている状況を、1回の `/status` から取る。
+ * 無い・聞けない・形が読めない欄は `null`（作り物の「弾かれている」を出さない）。
  */
-export async function sessionRefusalOf(
-  info: DaemonRuntimeInfo | null,
-): Promise<SessionRefusal | null> {
-  if (!info) return null;
+export async function statusDetailsOf(info: DaemonRuntimeInfo | null): Promise<StatusDetails> {
+  const unknown: StatusDetails = { storage: null, sessionRefusal: null };
+  if (!info) return unknown;
   try {
     const response = await fetch(`${baseUrl(info)}/status`, {
       headers: { authorization: `Bearer ${info.token}` },
       signal: AbortSignal.timeout(1500),
     });
-    if (!response.ok) return null;
-    const body = (await response.json()) as { cloneSessionRefusal?: unknown };
-    return readSessionRefusal(body.cloneSessionRefusal);
+    if (!response.ok) return unknown;
+    const body = (await response.json()) as { storage?: unknown; cloneSessionRefusal?: unknown };
+    return {
+      storage: typeof body.storage === 'string' && body.storage.length > 0 ? body.storage : null,
+      sessionRefusal: readSessionRefusal(body.cloneSessionRefusal),
+    };
   } catch {
-    return null;
+    return unknown;
   }
 }
 

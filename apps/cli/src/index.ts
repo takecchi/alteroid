@@ -233,13 +233,12 @@ export async function daemonStatusCommand(now: number = Date.now()): Promise<voi
   }
   // 聞けなかったときにローカルのパスへ落とさない: クラウド構成では PostgreSQL にあり、人間が器を取り違えるため
   if (presence === 'present') {
-    const storage = await daemon.storageOf(info);
+    const { storage, sessionRefusal } = await daemon.statusDetailsOf(info);
     stdout.write(
       `  記憶: ${storage ?? '取得できません（デーモンが答えない、または資格が通らない）'}\n`,
     );
     // 弾かれているときだけ1行（無い・聞けないときは何も出さない）
-    const refusal = await daemon.sessionRefusalOf(info);
-    if (refusal !== null) stdout.write(describeSessionRefusalLine(refusal));
+    if (sessionRefusal !== null) stdout.write(describeSessionRefusalLine(sessionRefusal));
   } else {
     stdout.write(`  記憶: ${alteroidRoot()}\n`);
   }

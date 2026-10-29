@@ -10,8 +10,7 @@ vi.mock('./daemon.js', () => ({
   start: vi.fn(),
   stop: vi.fn(),
   status: vi.fn(),
-  storageOf: vi.fn(),
-  sessionRefusalOf: vi.fn(),
+  statusDetailsOf: vi.fn(),
   startWithRecovery: vi.fn(),
 }));
 
@@ -28,7 +27,7 @@ const { SETTINGS_UNREADABLE_FIX_COMMAND } = await import('./token.js');
 
 beforeEach(() => {
   // 既定は「弾かれていない」（欄が無い）
-  vi.mocked(daemon.sessionRefusalOf).mockResolvedValue(null);
+  vi.mocked(daemon.statusDetailsOf).mockResolvedValue({ storage: null, sessionRefusal: null });
 });
 
 afterEach(() => {
@@ -278,7 +277,10 @@ describe('alteroid daemon status', () => {
       presence: 'present',
       info: { pid: 99, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
     });
-    vi.mocked(daemon.storageOf).mockResolvedValue('postgres://example');
+    vi.mocked(daemon.statusDetailsOf).mockResolvedValue({
+      storage: 'postgres://example',
+      sessionRefusal: null,
+    });
     const read = captureStdout();
 
     await daemonStatusCommand();
@@ -295,13 +297,15 @@ describe('alteroid daemon status', () => {
       presence: 'present',
       info: { pid: 99, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
     });
-    vi.mocked(daemon.storageOf).mockResolvedValue('postgres://example');
-    vi.mocked(daemon.sessionRefusalOf).mockResolvedValue({
-      streak: 2,
-      category: 'cyber',
-      since: '2026-10-08T00:00:00.000Z',
-      sessionId: 's-1',
-      autoReopen: 'halted',
+    vi.mocked(daemon.statusDetailsOf).mockResolvedValue({
+      storage: 'postgres://example',
+      sessionRefusal: {
+        streak: 2,
+        category: 'cyber',
+        since: '2026-10-08T00:00:00.000Z',
+        sessionId: 's-1',
+        autoReopen: 'halted',
+      },
     });
     const read = captureStdout();
 
@@ -322,7 +326,10 @@ describe('alteroid daemon status', () => {
       presence: 'present',
       info: { pid: 99, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
     });
-    vi.mocked(daemon.storageOf).mockResolvedValue('postgres://example');
+    vi.mocked(daemon.statusDetailsOf).mockResolvedValue({
+      storage: 'postgres://example',
+      sessionRefusal: null,
+    });
     const read = captureStdout();
 
     await daemonStatusCommand();
@@ -335,7 +342,10 @@ describe('alteroid daemon status', () => {
       presence: 'present',
       info: { pid: 99, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
     });
-    vi.mocked(daemon.storageOf).mockResolvedValue('postgres://example');
+    vi.mocked(daemon.statusDetailsOf).mockResolvedValue({
+      storage: 'postgres://example',
+      sessionRefusal: null,
+    });
     const read = captureStdout();
 
     await daemonStatusCommand(new Date('2026-08-25T00:00:00.000Z').getTime());
@@ -349,7 +359,7 @@ describe('alteroid daemon status', () => {
       presence: 'present',
       info: { pid: 99, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
     });
-    vi.mocked(daemon.storageOf).mockResolvedValue(null);
+    vi.mocked(daemon.statusDetailsOf).mockResolvedValue({ storage: null, sessionRefusal: null });
     const read = captureStdout();
 
     await daemonStatusCommand();
@@ -368,7 +378,7 @@ describe('alteroid daemon status', () => {
     const text = read();
     expect(text).toContain('停止中');
     expect(text).toContain('記憶: /home/test/.alteroid');
-    expect(daemon.storageOf).not.toHaveBeenCalled();
+    expect(daemon.statusDetailsOf).not.toHaveBeenCalled();
   });
 
   it('確かめられなかった（presence: unknown）なら「停止中」とは言わず、確認できないと言う', async () => {
@@ -384,7 +394,7 @@ describe('alteroid daemon status', () => {
     expect(text).not.toContain('停止中');
     expect(text).not.toContain('稼働中');
     expect(text).toContain('確認できません');
-    expect(daemon.storageOf).not.toHaveBeenCalled();
+    expect(daemon.statusDetailsOf).not.toHaveBeenCalled();
   });
 });
 

@@ -29,10 +29,9 @@ import {
   ensureRunning,
   start,
   startWithRecovery,
-  sessionRefusalOf,
   status,
+  statusDetailsOf,
   stop,
-  storageOf,
   stopDaemon,
   type DaemonRuntimeInfo,
   type Presence,
@@ -725,14 +724,14 @@ describe('startWithRecovery() — --force の中身（Issue #1851）', () => {
   });
 });
 
-describe('storageOf（記憶の置き場を /status から取る）', () => {
+describe('statusDetailsOf（記憶の置き場を /status から取る）', () => {
   it('状態ファイルのトークンを付けて GET /status を打ち、storage を返す', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue({ ok: true, json: async () => ({ storage: 'PostgreSQL db:5432/app' }) });
     vi.stubGlobal('fetch', fetchMock);
 
-    expect(await storageOf(INFO)).toBe('PostgreSQL db:5432/app');
+    expect((await statusDetailsOf(INFO)).storage).toBe('PostgreSQL db:5432/app');
     const [url, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
     expect(url).toBe('http://127.0.0.1:4517/status');
     expect(init.headers.authorization).toBe('Bearer token-of-the-real-daemon');
@@ -740,19 +739,19 @@ describe('storageOf（記憶の置き場を /status から取る）', () => {
 
   it('資格が通らない（401）・古いデーモン（404）・例外・空の storage は null', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
-    expect(await storageOf(INFO)).toBeNull();
+    expect((await statusDetailsOf(INFO)).storage).toBeNull();
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
-    expect(await storageOf(INFO)).toBeNull();
+    expect((await statusDetailsOf(INFO)).storage).toBeNull();
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({ ok: true, json: async () => ({ storage: '' }) }),
     );
-    expect(await storageOf(INFO)).toBeNull();
-    expect(await storageOf(null)).toBeNull();
+    expect((await statusDetailsOf(INFO)).storage).toBeNull();
+    expect((await statusDetailsOf(null)).storage).toBeNull();
   });
 });
 
-describe('sessionRefusalOf（安全分類器に弾かれ続けている状況を /status から取る）', () => {
+describe('statusDetailsOf（安全分類器に弾かれ続けている状況を /status から取る）', () => {
   const refusal = {
     streak: 2,
     category: 'cyber',
@@ -761,15 +760,14 @@ describe('sessionRefusalOf（安全分類器に弾かれ続けている状況を
     autoReopen: 'enabled',
   };
 
-  it('cloneSessionRefusal を読んで返す', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ storage: 'x', cloneSessionRefusal: refusal }),
-      }),
-    );
-    expect(await sessionRefusalOf(INFO)).toEqual(refusal);
+  it('cloneSessionRefusal を読んで返す。storage と合わせて、/status は1回しか打たない', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ storage: 'x', cloneSessionRefusal: refusal }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await statusDetailsOf(INFO)).toEqual({ storage: 'x', sessionRefusal: refusal });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('欄が無い・形が読めない・聞けない・資格が通らないときは null（作り物を返さない）', async () => {
@@ -777,7 +775,7 @@ describe('sessionRefusalOf（安全分類器に弾かれ続けている状況を
       'fetch',
       vi.fn().mockResolvedValue({ ok: true, json: async () => ({ storage: 'x' }) }),
     );
-    expect(await sessionRefusalOf(INFO)).toBeNull();
+    expect((await statusDetailsOf(INFO)).sessionRefusal).toBeNull();
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -785,11 +783,11 @@ describe('sessionRefusalOf（安全分類器に弾かれ続けている状況を
         json: async () => ({ cloneSessionRefusal: { ...refusal, autoReopen: 'weird' } }),
       }),
     );
-    expect(await sessionRefusalOf(INFO)).toBeNull();
+    expect((await statusDetailsOf(INFO)).sessionRefusal).toBeNull();
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
-    expect(await sessionRefusalOf(INFO)).toBeNull();
+    expect((await statusDetailsOf(INFO)).sessionRefusal).toBeNull();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
-    expect(await sessionRefusalOf(INFO)).toBeNull();
-    expect(await sessionRefusalOf(null)).toBeNull();
+    expect((await statusDetailsOf(INFO)).sessionRefusal).toBeNull();
+    expect((await statusDetailsOf(null)).sessionRefusal).toBeNull();
   });
 });
