@@ -899,6 +899,14 @@ describe('CodexManagerDriver: close', () => {
     expect(h.server.kills).toEqual(['SIGTERM']);
   });
 
+  // 止める経路は close の1本だけ: AgentManagerSession に無い口（interrupt）を足すと、呼び手の無い2本目の経路になる
+  it('セッションの口は AgentManagerSession のものだけで、ターンを止めるのは close である', async () => {
+    const module = await import('./codex-manager-driver.js');
+    expect(Object.keys(module)).not.toContain('openCodexSession');
+    const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
+    expect('interrupt' in h.session).toBe(false);
+  });
+
   it('ターンが無ければ interrupt は送らず、二度呼んでも投げない', async () => {
     const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
     const done = h.run();
