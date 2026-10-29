@@ -88,7 +88,7 @@ describe('マネージャーからの一件は、委譲の起点の会話を名�
     const input = await inputOf(s.calls, 'Hoge の調査が終わった');
 
     expect(input).toContain('起点の会話: conv-hoge');
-    expect(input).toContain('`conversation_post` でこの会話へ書く');
+    expect(input).toContain('`task_say` でこの会話の task へ書く');
     await s.clone.stop();
   });
 

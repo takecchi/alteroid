@@ -690,7 +690,7 @@ describe('報告は、委譲が結び付いた task を名乗る', () => {
 
   it('結び付いていなければ、行そのものを出さない', () => {
     expect(describeManagerOrigin({ kind: 'conversation', conversationId: 'conv-1' })).not.toContain(
-      'task',
+      '結び付いた task',
     );
     expect(describeManagerOrigin({ kind: 'none' })).not.toContain('結び付いた task');
   });

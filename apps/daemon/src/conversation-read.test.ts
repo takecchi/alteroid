@@ -56,7 +56,7 @@ describe('会話の既読', () => {
     expect(unreadOf(await list(), 'old')).toBe(0);
 
     tick(20);
-    await say('new', 'outbound', 'クローンが始めた会話（conversation_post）');
+    await say('new', 'outbound', 'クローンが始めた会話（task_say）');
     tick(30);
     await say('old', 'outbound', '基準時刻のあとの返答');
     tick(40);

@@ -978,7 +978,7 @@ export interface Turn {
    * 内部ターンの仕事が属する会話（委譲の起点）。マネージャーからの一件のターンだけが、その委譲の
    * `Job.conversationId` を載せる。会話のあるターンでは null（属する会話は `conversationId` そのもの）。
    */
-  // `conversationId` に入れない: 入れると返答がその会話へ書かれ、`conversation_post` がその会話を「いまの会話」として断るため
+  // `conversationId` に入れない: 入れると返答がその会話へ書かれ、`task_say` がその会話を「いまの会話」として断るため
   originConversationId: string | null;
   /**
    * このターンが承認待ちへの回答（`human_answer`）から起きたものであれば、その承認の id。それ以外は null。
@@ -9145,7 +9145,7 @@ export function humanConversationHeader(conversationId: string, previous: string
   if (previous === null || previous === conversationId) return `[system] 会話 ${conversationId}`;
   return (
     `[system] 会話 ${conversationId}（直前の人間の発言は別の会話 ${previous} だった。` +
-    'この会話に関係しない件〔別の会話で頼まれた委譲の報告など〕は、ここへ混ぜずにその起点の会話へ `conversation_post` で書くこと）'
+    'この会話に関係しない件〔別の会話で頼まれた委譲の報告など〕は、ここへ混ぜずにその起点の会話の task へ `task_say` で書くこと）'
   );
 }
 
@@ -9477,7 +9477,7 @@ export const HUMAN_ANSWER_CRITERIA_GUIDE_REF =
 /** 起点の会話の扱いの説明（会話の id は畳まない。説明の括弧の中だけを、同じ会話の2回目から参照にする）。 */
 export const ORIGIN_CONVERSATION_GUIDE =
   '（この委譲はこの会話で頼まれた。人間へ知らせるなら ' +
-  '`conversation_post` でこの会話へ書く。このターンで続きを委譲・確認すると、同じ会話に結びつく）';
+  '`task_say` でこの会話の task へ書く。このターンで続きを委譲・確認すると、同じ会話に結びつく）';
 export const ORIGIN_CONVERSATION_GUIDE_REF =
   '（扱いは前に出した案内と同じ: 知らせるならこの会話へ）';
 export const ORIGIN_NONE_GUIDE =
