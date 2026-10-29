@@ -37,6 +37,20 @@ async function seedLikeIssue(stores: Stores): Promise<void> {
       body: `引き受けた仕事 ${i}。${'本文が続く。'.repeat(20)}`,
     });
   }
+  // 待ち行列（#5469 P6b）: 開いている 5 件（queued 3 / waiting 1 / needs_decision 1）。件数の形は件数の1行だけで、先頭の描画は出さない
+  for (const [i, status] of (
+    ['needs_decision', 'queued', 'queued', 'waiting', 'queued'] as const
+  ).entries()) {
+    await stores.tasks.add({
+      id: `task-${i}`,
+      createdAt: new Date(Date.parse('2026-01-01T00:00:00.000Z') + i * 1000).toISOString(),
+      updatedAt: new Date(Date.parse('2026-01-01T00:00:00.000Z') + i * 1000).toISOString(),
+      status,
+      origin: i === 0 ? 'human' : 'self',
+      title: `待ち行列の ${i}`,
+      body: `待ち行列の本文 ${i}`,
+    });
+  }
   for (let i = 0; i < 4; i += 1) {
     await stores.jobs.putApproval({
       id: `ap-${i}`,
@@ -206,8 +220,22 @@ describe('件数の形の要約（#4938 の案2）', () => {
     expect(counts).not.toContain('記憶を直した 0');
     expect(counts).not.toContain('届いた出来事 0');
     expect(counts).toContain(
-      '- 引き受けた仕事 14 / 回答待ち 4 / エスカレーション 0 / 聞かずに決めたこと 0' +
-        ' / 記憶の更新 50 / 外部イベント 20 / 片付けた仕事 0 / 人間からの発言 0',
+      '- 回答待ち 4 / エスカレーション 0 / 聞かずに決めたこと 0' +
+        ' / 記憶の更新 50 / 外部イベント 20 / 人間からの発言 0',
+    );
+    // 待ち行列は件数の1行だけ（先頭の描画・節は出さない）。旧台帳は開いている行が残る間だけ件数の1行（節ではない）
+    expect(counts).toContain(
+      '- 待ち行列: 開いている 5 件（queued 3 / waiting 1 / needs_decision 1）',
+    );
+    expect(counts).not.toContain('待ち行列の 0');
+    expect(counts).not.toContain('## 待ち行列');
+    expect(counts).toContain(
+      '- 旧台帳に開いている 14 件。台帳は廃止予定で、人間の依頼は Task に移っている（引き口は `commitment_list`）',
+    );
+    // 全文の形には先頭の3件が出る（件数の形との差）
+    expect(full).toContain('## 待ち行列の先頭');
+    expect(full).toContain(
+      '- task-0（状態: needs_decision（決めてほしい） / origin: human）待ち行列の 0',
     );
     // 中身を出した2節と重なる数（担当の status 別・継続中の依頼の数）は、件数の行に重ねない
     expect(counts).not.toContain('担当 running');

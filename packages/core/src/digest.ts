@@ -13,6 +13,11 @@ import {
 } from './store.js';
 import type { Stores } from './store.js';
 import {
+  TASK_QUEUE_HEAD_LIMIT,
+  describeTaskQueueCount,
+  describeTaskQueueHead,
+} from './task-tools.js';
+import {
   describeUnmeteredUsage,
   describeUnreadableUsageRows,
   formatUsd,
@@ -30,8 +35,6 @@ export interface DigestWindow {
 export const MAX_ITEMS = 15;
 
 // 履歴の性格の節は `MAX_ITEMS` より短くする: 次の判断の材料ではなく、毎回全文で出すと入力が嵩むため（省略の行から辿れる）
-// 片付けた仕事は `commitments.list({ includeClosed: true })` が `closedAt` の新しい順で返すので、先頭から切ると新しい側が残る
-export const DIGEST_SETTLED_LIMIT = 5;
 export const DIGEST_BODY_SHAPE_LIMIT = 5;
 
 // `MAX_ITEMS` を保持の上限にしない: `omitted()` へ渡す「実際に保持できた件数」との差を確かめる余地が無くなるため
@@ -167,7 +170,7 @@ export interface ActivityDigestOptions {
   shape?: DigestShape;
   /**
    * 履歴の節を抑える節約（#5331 の窓より前に終端した担当の畳み・#5332 の履歴系の節の上限）を掛けるか。省略は掛ける。
-   * `false` は節約の前の形: 片付けた仕事と本文の形を `MAX_ITEMS` 件まで、失敗の印が付いた担当は終端の時刻を問わず1本ずつ出す。
+   * `false` は節約の前の形: 本文の形を `MAX_ITEMS` 件まで、失敗の印が付いた担当は終端の時刻を問わず1本ずつ出す。
    */
   trimHistory?: boolean;
 }
@@ -175,7 +178,7 @@ export interface ActivityDigestOptions {
 /** 件数の形の要約（#4938 の案2）で、件数だけにした節の中身は道具で引けることを名乗る1行。 */
 export const DIGEST_COUNTS_TOOLS_NOTE =
   '（#4938: 定期の依頼の回なので、担当と継続中の依頼のほかは件数だけにしている。中身は道具で引ける —— ' +
-  '引き受けた仕事は `commitment_list`、回答待ちは `approvals_list`、' +
+  '待ち行列は `task_list`、旧台帳は `commitment_list`、回答待ちは `approvals_list`、' +
   '決めたこと・エスカレーション・記憶の更新・外部イベントは `journal_read`、使った分は `usage_read`）';
 
 /** 手が止まっている担当の行の次に出す固定の1行（依頼と直近の報告を載せていないことを名乗る）。 */
@@ -190,7 +193,7 @@ export const DIGEST_COUNTS_FIXED_PHRASES: readonly { id: string; text: string; r
   {
     id: 'timer-counts-tools-note',
     text: DIGEST_COUNTS_TOOLS_NOTE,
-    ref: '（#4938: 件数だけの節の引き口は会話の上と同じ。`commitment_list`・`approvals_list`・`journal_read`・`usage_read`）',
+    ref: '（#4938: 件数だけの節の引き口は会話の上と同じ。`task_list`・`commitment_list`・`approvals_list`・`journal_read`・`usage_read`）',
   },
   {
     id: 'timer-counts-idle-managers-note',
@@ -231,10 +234,6 @@ const COUNT_ITEMS: readonly { prefix: string; suffix: string }[] = [
   { prefix: '委譲側のツール実行 ', suffix: '' },
   { prefix: '自分の手（委譲せず使った道具）', suffix: '' },
   { prefix: '継続中の依頼 ', suffix: '' },
-  { prefix: '未了の仕事 ', suffix: '' },
-  { prefix: '片付けた仕事 ', suffix: '' },
-  { prefix: '読めない未了の行 ', suffix: '' },
-  { prefix: '物理削除された片付き行（累計）', suffix: '' },
 ];
 
 function countItem(index: number, value: number): string {
@@ -559,8 +558,6 @@ const ESCALATION_RETAIN_CAPPED_NOTICE =
   '- ⚠ エスカレーションの件数は少なく出ている可能性がある（保持の上限に当たり、束ねた元の行を全部は読んでいない）';
 
 // 以下は要約の中の固定の注記（#4937）。文言を変えずに定数へ出しただけで、`digest-session-delta.ts` が同じ会話で2回目以降を短い参照に置き換える
-const COMMITMENT_ORDER_NOTE =
-  '**順序はここには無い。** どれを先にやるかは記憶にある目的と価値観に照らして決めること。';
 const EXTERNAL_EVENT_NOTE =
   'この件数は届いた合図の実数ではない —— 受信箱を通った合図は配達のたびに1行' +
   '書かれ（配り直し・畳んでターンを起こさない回も含む）、デーモンが受信箱を' +
@@ -581,11 +578,6 @@ const BODY_SHAPE_NOTE_TAIL =
  */
 export const DIGEST_FIXED_PHRASES: readonly { id: string; text: string; ref: string }[] = [
   {
-    id: 'commitment-order',
-    text: COMMITMENT_ORDER_NOTE,
-    ref: '（順序についての固定の注記は会話の上と同じ）',
-  },
-  {
     id: 'external-event-note',
     text: EXTERNAL_EVENT_NOTE,
     ref: '（外部イベントの件数についての固定の注記は会話の上と同じ）',
@@ -604,9 +596,7 @@ export const DIGEST_FIXED_PHRASES: readonly { id: string; text: string; ref: str
 
 /** 行が項目の節（見出しの先頭が一致するもの）。同じ会話の2回目以降は、前回と同じ行を省く（#4937）。見出しと固定の注記は行の差分の対象外。 */
 export const DIGEST_LIST_SECTION_NAMES: readonly string[] = [
-  '引き受けたまま終わっていない仕事',
   '継続中の依頼',
-  'この期間に片付けた仕事',
   'マネージャー',
   '聞かずに決めたこと',
   'エスカレーション',
@@ -614,6 +604,23 @@ export const DIGEST_LIST_SECTION_NAMES: readonly string[] = [
   '記憶の更新',
   '届いた外部イベント',
 ];
+
+/**
+ * 待ち行列の先頭の節の見出しの先頭（#5469 P6b）。`digest-session-delta.ts` が同じ文字列で「この節は差分にせず毎回全文」を判定する。
+ * 一覧の節（`DIGEST_LIST_SECTION_NAMES`）に入れない: 先頭の3件は「前回と同じ」と畳まず、tick のたびに目の前に出すため。
+ */
+export const TASK_QUEUE_SECTION_HEADING_HEAD = '## 待ち行列の先頭';
+
+// 旧台帳に開いている行が残る間だけ出す1行（節ではなく件数だけ）。台帳の移行（P7）が済めばこの1行ごと撤去する。
+// 0件でも読めない行だけは在りうるので、両方0のときだけ出さない（読めない行を 0 に丸めない）
+function describeLegacyLedgerLine(open: number, unreadable: number): string[] {
+  if (open === 0 && unreadable === 0) return [];
+  const unreadablePart = unreadable > 0 ? `（読めない ${unreadable} 件。片付いたのではない）` : '';
+  return [
+    `- 旧台帳に開いている ${open} 件${unreadablePart}。台帳は廃止予定で、人間の依頼は Task に移っている` +
+      '（引き口は `commitment_list`）',
+  ];
+}
 
 // `liveness` を必須にしない: 省略時は全件 `/セッション不明` になり、黙って「繋がっている」と名乗らないため
 // `awaitingBackground` を必須にしない: 省略時は何も書き足さず、取れていないことを「手が空いている」と偽らないため
@@ -640,16 +647,13 @@ export async function buildActivityDigest(
   const standingList = await stores.schedules.list();
   const standing = standingList.entries;
   const unreadableStandingNote = describeUnreadableSchedules(standingList.unreadable);
-  // 継続中の依頼・未了を期間で切らない: 切ると、2日前に頼まれてまだ手を付けていない仕事だけが静かに落ちるため
-  const commitmentList = await stores.commitments.list();
-  const commitments = commitmentList.entries;
-  const unreadableCommitments = commitmentList.unreadable;
-  const trimmedClosedCount = commitmentList.trimmedClosed;
-  const settled = (await stores.commitments.list({ includeClosed: true })).entries.filter(
-    (entry) =>
-      entry.closedAt !== undefined &&
-      compareIsoInstant(entry.closedAt, window.since.toISOString()) >= 0 &&
-      compareIsoInstant(entry.closedAt, until.toISOString()) < 0,
+  // 継続中の依頼・待ち行列・旧台帳の未了を期間で切らない: 切ると、2日前に頼まれてまだ手を付けていない仕事だけが静かに落ちるため
+  // 待ち行列は `list()` の並びのまま持つ（器は並べ直さない）。旧台帳は件数だけを使う（節は出さない）
+  const taskList = await stores.tasks.list();
+  const legacyLedger = await stores.commitments.list();
+  const legacyLedgerLine = describeLegacyLedgerLine(
+    legacyLedger.entries.length,
+    legacyLedger.unreadable.length,
   );
 
   // 境界を JS 側で切り直す: `JournalQuery.until` は含む側で `DigestWindow.until` は含まない。クエリ側を外すと OOM に戻り、JS 側を外すと境界のミリ秒が1件ずれるため
@@ -851,10 +855,10 @@ export async function buildActivityDigest(
   // 依頼ごとに節を選ぶ欄は足さない: 共通の既定にする決め（2026-10-18）で、依頼の側に節の名前を覚えさせないため。
   // 件数の行に担当の status 別の数・継続中の依頼の数を重ねて載せない: 中身を出した2節と二重になり、食い違って見えるため
   if (options.shape === 'counts') {
-    // 担当・継続中の依頼の読めない行は、上の2節が自分の断りを持っている
+    // 担当・継続中の依頼の読めない行は、上の2節が自分の断りを持っている。旧台帳の読めない行は旧台帳の1行が持つ
     const unreadableParts = [
       ['承認待ち', approvalList.unreadable.length],
-      ['引き受けた仕事', unreadableCommitments.length],
+      ['待ち行列の task', taskList.unreadable.length],
     ] as const;
     const unreadableLine = unreadableParts
       .filter(([, count]) => count > 0)
@@ -866,11 +870,14 @@ export async function buildActivityDigest(
       ...standingSection(),
       ...managersSection(),
       '',
-      `- 引き受けた仕事 ${commitments.length} / 回答待ち ${pending.length}` +
+      `- 回答待ち ${pending.length}` +
         ` / エスカレーション ${escalationGroups.length}` +
         ` / 聞かずに決めたこと ${decisionsCount} / 記憶の更新 ${memoryUpdatesCount}` +
-        ` / 外部イベント ${externalsCount} / 片付けた仕事 ${settled.length}` +
+        ` / 外部イベント ${externalsCount}` +
         ` / 人間からの発言 ${humanTurnsCount}`,
+      // 定期の依頼は仕事の一覧を前提にしない: 件数の1行だけで、先頭の描画は出さない
+      `- ${describeTaskQueueCount(taskList)}`,
+      ...legacyLedgerLine,
       // 0件のときは行を作らない: 0 の行は「読めない行は無い」と読めてしまうため
       ...(unreadableLine === ''
         ? []
@@ -896,10 +903,6 @@ export async function buildActivityDigest(
       countItem(7, delegatedToolUsesCount),
       countItem(8, cloneToolUsesCount),
       countItem(9, standing.length),
-      countItem(10, commitments.length),
-      countItem(11, settled.length),
-      countItem(12, unreadableCommitments.length),
-      countItem(13, trimmedClosedCount),
     ].join(' / ')}`,
     ...(escalationRetainCapped ? [ESCALATION_RETAIN_CAPPED_NOTICE] : []),
     // 0件のときは行を作らない: 0 の行は「読めない行は無い」と読めてしまうため
@@ -918,81 +921,17 @@ export async function buildActivityDigest(
         ]),
   ];
 
-  // `commitments.length` だけを出し分けの条件にしない: 0件でも読めない行だけは在りうるため
-  if (commitments.length > 0 || unreadableCommitments.length > 0) {
-    sections.push(
-      '',
-      '## 引き受けたまま終わっていない仕事' +
-        '（古い側と新しい側の両端。入り切らない分は真ん中を省く。' +
-        '片付いたら `commitment_close` で閉じる）',
-      COMMITMENT_ORDER_NOTE,
-    );
-    if (unreadableCommitments.length > 0) {
-      // 「片付いたのではない」を落とさない: 落とすと、読めない行が静かに未了から消えたのと区別が付かなくなるため
-      const idsAll = unreadableCommitments
-        .map((entry) => entry.id)
-        .filter((id): id is string => id !== undefined);
-      // id の列にも上限を付ける: 台帳が壊れるほど digest が伸びるため
-      const ids = idsAll.slice(0, MAX_ITEMS);
-      const idsExtra =
-        idsAll.length > ids.length
-          ? `（…ほか ${idsAll.length - ids.length} 件。id は commitment_list（id を指定しない一覧モード）を呼べば読めない行の id が全部出る）`
-          : '';
-      sections.push(
-        `**読めない行が ${unreadableCommitments.length} 件ある（片付いたのではない）。**` +
-          (ids.length === 0 ? '' : ` id: ${ids.join(', ')}${idsExtra}。`) +
-          // 「全文が見られる」と書かない: `commitment_list id=<id>` は読めない行で本文を返さないため
-          '`commitment_list id=<id>` で状態は確かめられる（本文はここでは取れない）。',
-      );
-    }
-    // 両端を出す（合計は `MAX_ITEMS` のまま）: 古い未了を押し出すと放置されているものが見えず、新しい側が1件も見えないのも困るため
-    const oldestCount = Math.min(commitments.length, Math.ceil(MAX_ITEMS / 2));
-    const newestCount = Math.min(commitments.length - oldestCount, MAX_ITEMS - oldestCount);
-    const shownOldest = commitments.slice(0, oldestCount);
-    const shownNewest =
-      newestCount === 0 ? [] : commitments.slice(commitments.length - newestCount);
-    const shownTotal = shownOldest.length + shownNewest.length;
-    const renderCommitment = (entry: (typeof commitments)[number]) =>
-      `- ${entry.id}（${entry.at} / ${entry.origin}${entry.source === undefined ? '' : ` / ${entry.source}`}）` +
-      `\n  ${brief(entry.body)}`;
-    for (const entry of shownOldest) {
-      sections.push(renderCommitment(entry));
-    }
-    // 省略の断り書きは古い側と新しい側の列の間に置く: 末尾に置くと「新しい側の続きを省いた」に見えるため
-    sections.push(
-      ...omitted(
-        commitments.length,
-        shownTotal,
-        '真ん中を省いている。`commitment_list`（古い順で辿れる）でその区間も見られる。' +
-          'あちらも入る分までで、残りの件数が本文に出る',
-      ),
-    );
-    for (const entry of shownNewest) {
-      sections.push(renderCommitment(entry));
-    }
-  }
+  // 旧台帳に開いている行が残る間だけ、件数の1行（節ではなく件数だけ）。撤去は P7
+  sections.push(...legacyLedgerLine);
+
+  // 待ち行列の先頭（#5469 P6b）。並びは `stores.tasks.list()` のまま。0件でも件数の行は出す（0 は「無かった」という情報）
+  sections.push(
+    '',
+    TASK_QUEUE_SECTION_HEADING_HEAD,
+    ...describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT }),
+  );
 
   sections.push(...standingSection());
-
-  if (settled.length > 0) {
-    sections.push('', '## この期間に片付けた仕事');
-    const shownSettled = settled.slice(
-      0,
-      options.trimHistory === false ? MAX_ITEMS : DIGEST_SETTLED_LIMIT,
-    );
-    for (const entry of shownSettled) {
-      sections.push(
-        `- ${brief(entry.body, 120)}\n  片付いたとした理由: ${brief(entry.closedReason ?? '', 120)}`,
-      );
-    }
-    sections.push(
-      ...omitted(
-        settled.length,
-        shownSettled.length,
-        '`commitment_list` に includeClosed=true を渡すと辿れる',
-      ),
-    );
-  }
 
   sections.push(...managersSection());
 

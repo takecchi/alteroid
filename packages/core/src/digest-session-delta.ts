@@ -16,20 +16,17 @@ import {
   SOURCE_TALLY_HEADING,
   STANDING_LAST_RUN_LABEL,
   STANDING_SECTION_HEADING_HEAD,
+  TASK_QUEUE_SECTION_HEADING_HEAD,
   foldDigestCountsLine,
 } from './digest.js';
 
 /**
  * 要約が走りうる／走った回の軽い全文（案 A）で、中身を省いて1行の参照にする節（見出しの先頭が一致するもの）と、その引き口。
- * 引き口は `tools.ts` に実在する道具と引数だけを書く: `commitment_list`（`includeClosed`）・`journal_read`（`types`）・`usage_read`。
+ * 引き口は `tools.ts` に実在する道具と引数だけを書く: `journal_read`（`types`）・`usage_read`。
  * 先頭の件数行（まえがき）は節の外なので、省いた節の件数もそのまま残る。
- * 残す節（人間の回答待ち・エスカレーション・担当・自分の台帳の未了・聞かずに決めたこと・継続中の依頼・読めない行の注記）はここに無い。
+ * 残す節（人間の回答待ち・エスカレーション・担当・待ち行列の先頭・聞かずに決めたこと・継続中の依頼・読めない行の注記）はここに無い。
  */
 export const LEAN_DROPPED_SECTIONS: readonly { name: string; ref: string }[] = [
-  {
-    name: 'この期間に片付けた仕事',
-    ref: '（この節は省いた。`commitment_list` に includeClosed=true を渡すと引ける）',
-  },
   {
     name: '記憶の更新',
     ref: '（この節は省いた。`journal_read` に types=["memory_update"] を渡すと引ける）',
@@ -43,7 +40,6 @@ export const LEAN_DROPPED_SECTIONS: readonly { name: string; ref: string }[] = [
 export const LEAN_EXTERNAL_TALLY_REF =
   '（発行元別の件数と本文の形は省いた。`journal_read` に types=["external_event"] を渡すと引ける）';
 const EXTERNAL_SECTION_NAME = '届いた外部イベント';
-const LEDGER_SECTION_NAME = '引き受けたまま終わっていない仕事';
 
 /** 段落として畳む最小の長さ（文字数）。これより短い段落は、参照にしても得が小さく読みにくくなるだけなので常に全文。 */
 export const SYSTEM_PARAGRAPH_MIN_CHARS = 200;
@@ -153,10 +149,10 @@ function groupBody(content: readonly string[]): ({ item: string } | { other: str
   return out;
 }
 
-/** 「前回と同じ」を1行にまとめてよい節の名前（見出しの `（` より前）。台帳の節（#5297 の領域）は `null`。 */
+/** 「前回と同じ」を1行にまとめてよい節の名前（見出しの `（` より前）。待ち行列の先頭の節は `null`（毎回全文で出す。`renderDigest`）。 */
 function foldableSameSectionName(heading: string): string | null {
   const name = heading.replace(SECTION_HEADING, '');
-  if (name.startsWith(LEDGER_SECTION_NAME)) return null;
+  if (heading.startsWith(TASK_QUEUE_SECTION_HEADING_HEAD)) return null;
   const paren = name.indexOf('（');
   return paren >= 0 ? name.slice(0, paren) : name;
 }
@@ -513,7 +509,7 @@ export class DigestSessionDelta {
       const folded = foldDigestCountsLine(line);
       return folded === null ? line : this.fixed('digest:counts-line-labels', line, folded);
     });
-    // 2節以上が同時に前回と同じなら、節ごとの参照を1行にまとめる。軽い全文の回は畳まない（省いた節の跡と混ざるため）。台帳の節はまとめない（別の参照のまま）
+    // 2節以上が同時に前回と同じなら、節ごとの参照を1行にまとめる。軽い全文の回は畳まない（省いた節の跡と混ざるため）。待ち行列の先頭の節はまとめない（毎回全文）
     const foldedNames: string[] = [];
     if (previous !== null && !lean) {
       for (const section of parsed.sections) {
@@ -545,6 +541,11 @@ export class DigestSessionDelta {
           out.push(section.heading, ...this.#foldFixed(kept), LEAN_EXTERNAL_TALLY_REF, ...trailing);
           continue;
         }
+      }
+      // 待ち行列の先頭は毎回全文: 3件と案内の1行で短く、「前回と同じ」と畳むと tick の入力から先頭が消える。節の控えにも入れない（比べないので）
+      if (section.heading.startsWith(TASK_QUEUE_SECTION_HEADING_HEAD)) {
+        out.push(section.heading, ...content, ...trailing);
+        continue;
       }
       // 畳みが無効の間は節を控えない: 控えると、保存して FOLD を有効にして再起動した後に、本文が空の節を「前回から変わっていない」と誤って言いうる
       if (folding) fullSections.set(section.heading, bodyText);

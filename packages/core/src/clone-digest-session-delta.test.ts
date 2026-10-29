@@ -77,6 +77,18 @@ async function seed(stores: Stores): Promise<void> {
       body: `引き受けた仕事 ${i}。${'本文が続く。'.repeat(20)}`,
     });
   }
+  // 待ち行列（#5469 P6b）: 開いている 4 件。先頭の3件が自発の tick の入力に載る
+  for (let i = 0; i < 4; i += 1) {
+    await stores.tasks.add({
+      id: `task-${i}`,
+      createdAt: new Date(Date.parse('2026-01-01T00:00:00.000Z') + i * 1000).toISOString(),
+      updatedAt: new Date(Date.parse('2026-01-01T00:00:00.000Z') + i * 1000).toISOString(),
+      status: 'queued',
+      origin: 'self',
+      title: `待ち行列の仕事 ${i}`,
+      body: `待ち行列の本文 ${i}`,
+    });
+  }
   for (let i = 0; i < 4; i += 1) {
     await stores.jobs.putApproval({
       id: `ap-${i}`,
@@ -239,17 +251,9 @@ const compactBoundary = {
   uuid: 'uuid-compact',
 } as unknown as SDKMessage;
 
-async function seedSettledAndMemory(stores: Stores): Promise<void> {
-  // 片付けた時刻が要約の窓（直近）に入るよう、いまの時刻にする
-  const at = new Date().toISOString();
+// 「この期間に片付けた仕事」の節は #5469 P6b で無くなったので、記憶の更新だけを仕込む（軽い全文で省く節の歯）
+async function seedMemory(stores: Stores): Promise<void> {
   for (let i = 0; i < 3; i += 1) {
-    await stores.commitments.open({
-      id: `done-${i}`,
-      at,
-      origin: 'human',
-      body: `片付けた仕事 ${i}`,
-    });
-    await stores.commitments.close(`done-${i}`, at, `理由 ${i}`, 'clone');
     await stores.journal.append({
       type: 'memory_update',
       slug: 'values',
@@ -267,10 +271,10 @@ function expectCompleteFull(text: string): void {
 }
 
 /** 軽い全文（案 A）の形: 判断の節は全文、省く節は引き口を名指しした1行の参照。 */
-function expectLeanFull(text: string, options: { withSettledAndMemory?: boolean } = {}): void {
+function expectLeanFull(text: string, options: { withMemory?: boolean } = {}): void {
   // 残す
-  expect(text).toContain('## 引き受けたまま終わっていない仕事');
-  expect(text).toContain('引き受けた仕事 0');
+  expect(text).toContain('## 待ち行列の先頭');
+  expect(text).toContain('待ち行列の仕事 0');
   expect(text).toContain('## 人間の回答待ち');
   expect(text).toContain('人間への問い 0');
   expect(text).toContain('## 聞かずに決めたこと');
@@ -280,7 +284,7 @@ function expectLeanFull(text: string, options: { withSettledAndMemory?: boolean 
   expect(text).toContain('届いた出来事 19');
   // 先頭の件数行は節の外で、省いた節の件数も残る
   expect(text).toContain('外部イベント（日誌の行数）20');
-  expect(text).toMatch(/片付けた仕事 \d+ \//);
+  expect(text).toContain('旧台帳に開いている 14 件。');
   // 省く
   expect(text).toContain('## 使った分\n（この節は省いた。`usage_read` で引ける）');
   expect(text).toContain(
@@ -288,14 +292,11 @@ function expectLeanFull(text: string, options: { withSettledAndMemory?: boolean 
   );
   expect(text).not.toContain('発行元（source）別の件数');
   expect(text).not.toContain('本文の形（保持した');
-  if (options.withSettledAndMemory === true) {
-    expect(text).toContain(
-      '## この期間に片付けた仕事\n（この節は省いた。`commitment_list` に includeClosed=true',
-    );
+  expect(text).not.toContain('## この期間に片付けた仕事');
+  if (options.withMemory === true) {
     expect(text).toContain(
       '## 記憶の更新\n（この節は省いた。`journal_read` に types=["memory_update"]',
     );
-    expect(text).not.toContain('片付けた仕事 0');
     expect(text).not.toContain('記憶の更新の要旨 0');
   }
 }
@@ -333,7 +334,12 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     // 節の名前は1行にまとめた参照に残る（節の件数の行はまえがきに残る）
     expect(second).toMatch(/変わらない節: .*届いた外部イベント/u);
     expect(second).toContain('外部イベント（日誌の行数）20 /');
-    expect(second).toContain('未了の仕事 14');
+    // 旧台帳の件数の1行は毎回出る（件数の行の外。数字は毎回出す）
+    expect(second).toContain('旧台帳に開いている 14 件。');
+    // 待ち行列の先頭は「前回と同じ」と畳まず、2回目も全文で出る（先頭の3件は tick の入力から消えない）
+    expect(first).toContain('- task-0（状態: queued（待ち行列） / origin: self）待ち行列の仕事 0');
+    expect(second).toContain('- task-0（状態: queued（待ち行列） / origin: self）待ち行列の仕事 0');
+    expect(second).not.toMatch(/変わらない節: .*待ち行列/u);
     // 固定の注記は1回だけ全文
     expect(first).toContain('この件数は届いた合図の実数ではない');
     expect(second).not.toContain('この件数は届いた合図の実数ではない');
@@ -431,20 +437,19 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
   it('⭐ 軽い全文の次の回は、省いた節を「前と同じ」と畳まず全文で出す（差分の整合）', async () => {
     const s = boot({ after: (n) => (n === 2 ? [compactBoundary] : []) });
     await seed(s.stores);
-    await seedSettledAndMemory(s.stores);
+    await seedMemory(s.stores);
 
     const full = await selfTick(s);
     await selfTick(s);
     const lean = await selfTick(s);
     const next = await selfTick(s);
 
-    expectLeanFull(lean, { withSettledAndMemory: true });
+    expectLeanFull(lean, { withMemory: true });
     const digestOf = (text: string): string => text.slice(text.indexOf('期間:'));
     process.stderr.write(
       `[案A 測定2] 要約の部分 完全な全文 ${digestOf(full).length} 字 → 軽い全文 ${digestOf(lean).length} 字\n`,
     );
     // 参照先の無い畳みを出さない: 省いた節は全文で出る
-    expect(next).toContain('片付けた仕事 0');
     expect(next).toContain('記憶の更新の要旨 0');
     expect(next).toContain('## 使った分');
     expect(next).not.toContain('この節は省いた');
@@ -453,7 +458,10 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     // 軽い全文で全文を出した節は、通常どおり畳まれる
     expect(next).not.toContain('担当 7 の途中経過');
     expect(next).not.toContain('聞かずに決めたこと 0');
-    expect(next).toMatch(/前回（\d\d:\d\dZ）の要約から変わっていない/u);
+    // 台帳の節（単独で「変わっていない」の参照になっていた）が無くなったので、畳んだ節は「変わらない節」の1行に並ぶ
+    expect(next).toMatch(/前回（\d\d:\d\dZ）の要約から変わらない節: .*聞かずに決めたこと/u);
+    // 待ち行列の先頭は畳まず、この回も全文で出る
+    expect(next).toContain('- task-0（');
     expect(next).not.toContain(SELF_INSTRUCTION_HEAD);
     await s.clone.stop();
   });
@@ -461,7 +469,7 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
   it('⭐ 軽い全文を挟んでも、その次の回までに起きた変化は漏れない（省いた節の新しい行も出る）', async () => {
     const s = boot({ after: (n) => (n === 2 ? [compactBoundary] : []) });
     await seed(s.stores);
-    await seedSettledAndMemory(s.stores);
+    await seedMemory(s.stores);
 
     await selfTick(s);
     await selfTick(s);
@@ -803,10 +811,13 @@ describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
     expect(timer).toContain('## 継続中の依頼');
     expect(timer).toContain(`- ${TIMER_KIND}（`);
     // 他の節は件数の行だけ。重なる数（担当の status 別・継続中の依頼の数）は件数の行に載らない
-    expect(timer).toContain(
-      '- 引き受けた仕事 14 / 回答待ち 4 / エスカレーション 0 / 聞かずに決めたこと 6 / 記憶の更新 0' +
-        ' / 外部イベント 20 / 片付けた仕事 0 / 人間からの発言 0',
-    );
+    expect(timer).toContain(COUNTS_LINE);
+    // 待ち行列は件数の1行だけ。先頭の描画（task の行・案内・節）は出さない。旧台帳は件数の1行（節ではない）
+    expect(timer).toContain(QUEUE_COUNT_LINE);
+    expect(timer).toContain(LEGACY_LEDGER_LINE);
+    expect(timer).not.toContain('待ち行列の仕事 0');
+    expect(timer).not.toContain('先頭が先にやるもの');
+    expect(timer).not.toContain('## 待ち行列');
     expect(timer).not.toContain('担当 running');
     expect(timer.match(/^## /gmu)).toHaveLength(2);
     expect(timer).not.toContain('人間への問い 0');
@@ -826,7 +837,14 @@ describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
     expect(self).toContain('## 人間の回答待ち');
     expect(self).toContain('人間への問い 0');
     expect(self).toContain('## 届いた外部イベント');
-    expect(self).not.toContain('- 引き受けた仕事 14 / 回答待ち 4 /');
+    expect(self).not.toContain('- 回答待ち 4 /');
+    // 発意の tick には待ち行列の先頭（先頭の3件＋案内）が付く。4件目は件数の断りだけ
+    expect(self).toContain('## 待ち行列の先頭');
+    expect(self).toContain(QUEUE_COUNT_LINE);
+    for (const i of [0, 1, 2]) expect(self).toContain(`- task-${i}（`);
+    expect(self).not.toContain('- task-3（');
+    expect(self).toContain('- …ほか 1 件（task_list で全部見える）');
+    expect(self).toContain('先頭が先にやるもの');
     await s.clone.stop();
   });
 
@@ -862,17 +880,21 @@ describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
 // 定期の tick（件数の形）の固定の説明文（#5392）。全文と参照は全文一致で固定する
 const COUNTS_TOOLS_NOTE_FULL =
   '（#4938: 定期の依頼の回なので、担当と継続中の依頼のほかは件数だけにしている。中身は道具で引ける —— ' +
-  '引き受けた仕事は `commitment_list`、回答待ちは `approvals_list`、' +
+  '待ち行列は `task_list`、旧台帳は `commitment_list`、回答待ちは `approvals_list`、' +
   '決めたこと・エスカレーション・記憶の更新・外部イベントは `journal_read`、使った分は `usage_read`）';
 const COUNTS_TOOLS_NOTE_REF =
-  '（#4938: 件数だけの節の引き口は会話の上と同じ。`commitment_list`・`approvals_list`・`journal_read`・`usage_read`）';
+  '（#4938: 件数だけの節の引き口は会話の上と同じ。`task_list`・`commitment_list`・`approvals_list`・`journal_read`・`usage_read`）';
 const IDLE_MANAGERS_NOTE_FULL =
   '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。';
 const IDLE_MANAGERS_NOTE_REF =
   '依頼と直近の報告は載せていない。引き口は `manager_list` / `manager_report`（会話の上と同じ）。';
 const COUNTS_LINE =
-  '- 引き受けた仕事 14 / 回答待ち 4 / エスカレーション 0 / 聞かずに決めたこと 6 / 記憶の更新 0' +
-  ' / 外部イベント 20 / 片付けた仕事 0 / 人間からの発言 0';
+  '- 回答待ち 4 / エスカレーション 0 / 聞かずに決めたこと 6 / 記憶の更新 0' +
+  ' / 外部イベント 20 / 人間からの発言 0';
+// 待ち行列と旧台帳の件数の1行（#5469 P6b）。件数の形は先頭の描画を出さない
+const QUEUE_COUNT_LINE = '- 待ち行列: 開いている 4 件（queued 4 / waiting 0 / needs_decision 0）';
+const LEGACY_LEDGER_LINE =
+  '- 旧台帳に開いている 14 件。台帳は廃止予定で、人間の依頼は Task に移っている（引き口は `commitment_list`）';
 const IDLE_LINE = '- 手が止まっている担当（done・stopped）1 本: mgr-done';
 
 async function seedIdleManager(stores: Stores): Promise<void> {
@@ -1524,45 +1546,58 @@ describe('DigestSessionDelta（単体）', () => {
         `委譲側のツール実行 ${values[7]}`,
         `自分の手（委譲せず使った道具）${values[8]}`,
         `継続中の依頼 ${values[9]}`,
-        `未了の仕事 ${values[10]}`,
-        `片付けた仕事 ${values[11]}`,
-        `読めない未了の行 ${values[12]}`,
-        `物理削除された片付き行（累計）${values[13]}`,
       ].join(' / ')}`;
+    // 台帳の4項目（10〜13）を消したあとの項目数（#5469 P6b）。数字は位置で並ぶので、項目を足し引きしたらここを必ず合わせる
+    const ITEM_COUNT = 10;
     const withCounts = (line: string): string =>
       ['期間: x', line, '', '## 使った分', '- 合計: $1'].join('\n');
 
     it('⭐ 2回目は 0 でない項目だけ名前つき。全部 0 なら「すべて 0」。commit 前は全文のまま', () => {
       const delta = new DigestSessionDelta();
-      const first = counts([0, 2, 0, 1, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0]);
+      const first = counts([0, 2, 0, 1, 0, 0, 0, 0, 0, 3]);
       expect(delta.renderDigest(withCounts(first), at).text).toContain(first);
       // commit しない → 次も全文
       expect(delta.renderDigest(withCounts(first), at).text).toContain(first);
       delta.commit();
       const second = delta.renderDigest(
-        withCounts(counts([0, 5, 0, 1, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0])),
+        withCounts(counts([0, 5, 0, 1, 0, 0, 0, 0, 0, 3])),
         at,
       ).text;
+      // 末尾の項目（継続中の依頼。台帳の4項目を消す前は 10 番目だった）も、位置がずれずに名前つきで残る
       expect(second).toContain(
-        '- 件数（項目は会話の上の件数の行と同じ。載せていない項目は 0）: 回答待ち 5 / 委譲（この期間に動いた）1 本 / 未了の仕事 3',
+        '- 件数（項目は会話の上の件数の行と同じ。載せていない項目は 0）: 回答待ち 5 / 委譲（この期間に動いた）1 本 / 継続中の依頼 3',
       );
       expect(second).not.toContain('人間の発言');
       delta.commit();
-      const zero = delta.renderDigest(withCounts(counts(Array(14).fill(0) as number[])), at).text;
+      const zero = delta.renderDigest(
+        withCounts(counts(Array(ITEM_COUNT).fill(0) as number[])),
+        at,
+      ).text;
       expect(zero).toContain('- 件数: すべて 0（項目は会話の上の件数の行と同じ）');
     });
 
     it('形が想定と違う件数の行は、畳まず全文のまま', () => {
       const delta = new DigestSessionDelta();
-      delta.renderDigest(withCounts(counts(Array(14).fill(0) as number[])), at);
+      delta.renderDigest(withCounts(counts(Array(ITEM_COUNT).fill(0) as number[])), at);
       delta.commit();
       const odd = '- 件数: 人間の発言 0 / 回答待ち x';
       expect(delta.renderDigest(withCounts(odd), at).text).toContain(odd);
     });
 
+    // 版ずれ: 台帳の4項目を消す前の版が出した件数の行（14項目）が、いまの表（10項目）で位置を読み違えて別の項目へ化けない。畳まず全文のまま出る
+    it('⭐ 14項目の古い版の件数の行は、位置をずらして読まず、畳まず全文のまま', () => {
+      const delta = new DigestSessionDelta();
+      delta.renderDigest(withCounts(counts(Array(ITEM_COUNT).fill(0) as number[])), at);
+      delta.commit();
+      const oldFormat = `${counts([0, 5, 0, 1, 0, 0, 0, 0, 0, 3])} / 未了の仕事 7 / 片付けた仕事 0 / 読めない未了の行 0 / 物理削除された片付き行（累計）0`;
+      const out = delta.renderDigest(withCounts(oldFormat), at).text;
+      expect(out).toContain(oldFormat);
+      expect(out).not.toContain('載せていない項目は 0');
+    });
+
     it('reset のあとは全文へ戻る', () => {
       const delta = new DigestSessionDelta();
-      const line = counts(Array(14).fill(0) as number[]);
+      const line = counts(Array(ITEM_COUNT).fill(0) as number[]);
       delta.renderDigest(withCounts(line), at);
       delta.commit();
       delta.reset();
@@ -1571,11 +1606,17 @@ describe('DigestSessionDelta（単体）', () => {
   });
 
   describe('2節以上が同時に前回と同じなら、参照を1行にまとめる（#5393）', () => {
-    const ledger = ['## 引き受けたまま終わっていない仕事（自分の台帳）', '- c1 仕事C', ''];
+    // 待ち行列の先頭の節（#5469 P6b）は毎回全文: 前回と同じでも参照にせず、「変わらない節」の1行にも数えない
+    const queue = [
+      '## 待ち行列の先頭',
+      '- 待ち行列: 開いている 1 件（queued 1 / waiting 0 / needs_decision 0）',
+      '- t1（状態: queued（待ち行列） / origin: human）仕事C',
+      '',
+    ];
     const sameDigest = [
       '期間: x',
       '',
-      ...ledger,
+      ...queue,
       '## 継続中の依頼（時刻が来れば届く。前回からの続きがあるか見ること）',
       '- timer 毎朝',
       '',
@@ -1586,7 +1627,7 @@ describe('DigestSessionDelta（単体）', () => {
       '- 合計: $1',
     ].join('\n');
 
-    it('⭐ 同じ節が3つ（台帳を除く）なら、節の名前を残した1行にまとまり、台帳は節ごとの参照のまま。出力は全文一致', () => {
+    it('⭐ 同じ節が3つ（待ち行列の先頭を除く）なら、節の名前を残した1行にまとまり、待ち行列の先頭は毎回全文のまま。出力は全文一致', () => {
       const delta = new DigestSessionDelta();
       expect(delta.renderDigest(sameDigest, at).text).toBe(sameDigest);
       delta.commit();
@@ -1594,9 +1635,7 @@ describe('DigestSessionDelta（単体）', () => {
         [
           '期間: x',
           '',
-          '## 引き受けたまま終わっていない仕事（自分の台帳）',
-          '（前回（12:34Z）の要約から変わっていない。全文は会話の上にある）',
-          '',
+          ...queue,
           '（前回（12:34Z）の要約から変わらない節: 継続中の依頼・マネージャー・使った分。各節の全文は会話の上にある）',
           '',
         ].join('\n'),
@@ -1643,13 +1682,14 @@ describe('DigestSessionDelta（軽い全文。要約が走りうる／走った�
   const digest = [
     '期間: x',
     '',
-    '- この期間に片付けた仕事: 1 件',
+    '- 旧台帳に開いている 1 件。台帳は廃止予定で、人間の依頼は Task に移っている',
+    '',
+    '## 待ち行列の先頭',
+    '- 待ち行列: 開いている 1 件（queued 1 / waiting 0 / needs_decision 0）',
+    '- t1（状態: queued（待ち行列） / origin: human）仕事T',
     '',
     '## マネージャー（走行中・返事待ちから先に出す）',
     '- a [running] 仕事A',
-    '',
-    '## この期間に片付けた仕事',
-    '- 片付いた仕事X',
     '',
     '## 聞かずに決めたこと',
     '- 決めたことY',
@@ -1674,15 +1714,14 @@ describe('DigestSessionDelta（軽い全文。要約が走りうる／走った�
     delta.reset('compaction');
     expect(delta.isLean()).toBe(true);
     const out = delta.renderDigest(digest, at).text;
-    expect(out).toContain('- この期間に片付けた仕事: 1 件');
+    expect(out).toContain('- 旧台帳に開いている 1 件。');
+    // 待ち行列の先頭は判断の節: 軽い全文でも省かない
+    expect(out).toContain('## 待ち行列の先頭\n- 待ち行列: 開いている 1 件');
+    expect(out).toContain('仕事T');
     expect(out).toContain('- a [running] 仕事A');
     expect(out).toContain('- 決めたことY');
-    expect(out).not.toContain('片付いた仕事X');
     expect(out).not.toContain('更新Z');
     expect(out).not.toContain('合計: $1');
-    expect(out).toContain(
-      '## この期間に片付けた仕事\n（この節は省いた。`commitment_list` に includeClosed=true',
-    );
     expect(out).toContain(
       '## 記憶の更新\n（この節は省いた。`journal_read` に types=["memory_update"]',
     );
@@ -1696,7 +1735,7 @@ describe('DigestSessionDelta（軽い全文。要約が走りうる／走った�
     delta.commit();
     expect(delta.isLean()).toBe(false);
     const next = delta.renderDigest(digest, at).text;
-    expect(next).toContain('片付いた仕事X');
+    expect(next).toContain('仕事T');
     expect(next).toContain('更新Z');
     expect(next).toContain('合計: $1');
     expect(next).not.toContain('この節は省いた');
@@ -1923,35 +1962,28 @@ describe('畳みが切り（既定）なら、tick・報告の包みの固定文
 });
 
 // ALTEROID_TOKEN_SAVING_EXCERPT: Clone は要約を組むとき trimHistory をこの系統から渡す（切ると、履歴の節の件数の上限が節約の前の形に戻る）
+// 以前は「この期間に片付けた仕事」の節の件数（5 / 8）で測っていた。その節は #5469 P6b で無くなったので、同じ trimHistory が効く履歴の節（外部イベントの本文の形。DIGEST_BODY_SHAPE_LIMIT = 5 / MAX_ITEMS）で測る
 describe('抜粋の系統（ALTEROID_TOKEN_SAVING_EXCERPT）は、自発の tick の要約の履歴の節の件数に効く', () => {
-  async function settledShown(env: NodeJS.ProcessEnv): Promise<number> {
+  async function bodyShapeShown(env: NodeJS.ProcessEnv): Promise<number> {
     const s = boot({ env });
-    const at = new Date().toISOString();
     for (let i = 0; i < 8; i += 1) {
-      await s.stores.commitments.open({
-        id: `lim-${i}`,
-        at,
-        origin: 'human',
-        body: `上限の仕事 ${i}`,
+      await s.stores.journal.append({
+        type: 'external_event',
+        source: `lim-src-${i}`,
+        summary: `上限の出来事 ${i}`,
       });
-      await s.stores.commitments.close(`lim-${i}`, at, `理由 ${i}`, 'clone');
     }
     const text = await selfTick(s);
     await s.clone.stop();
-    const start = text.indexOf('## この期間に片付けた仕事');
-    expect(start).toBeGreaterThanOrEqual(0);
-    const rest = text.slice(start);
-    const end = rest.indexOf('\n## ');
-    const section = end === -1 ? rest : rest.slice(0, end);
     return Array.from({ length: 8 }, (_, i) => i).filter((i) =>
-      section.includes(`- 上限の仕事 ${i}\n`),
+      text.includes(`- lim-src-${i}: 同じ本文は`),
     ).length;
   }
 
-  it('⭐ 既定（入り）は新しい5件、切り（0）は8件すべてが出る', async () => {
-    expect(await settledShown({})).toBe(5);
-    expect(await settledShown({ ALTEROID_TOKEN_SAVING_EXCERPT: '0' })).toBe(8);
-    expect(await settledShown({ ALTEROID_TOKEN_SAVING_EXCERPT: 'off' })).toBe(8);
+  it('⭐ 既定（入り）は 5 件、切り（0）は 8 件すべてが出る', async () => {
+    expect(await bodyShapeShown({})).toBe(5);
+    expect(await bodyShapeShown({ ALTEROID_TOKEN_SAVING_EXCERPT: '0' })).toBe(8);
+    expect(await bodyShapeShown({ ALTEROID_TOKEN_SAVING_EXCERPT: 'off' })).toBe(8);
   });
 });
 
@@ -1965,7 +1997,7 @@ describe('畳み後の再表示の系統（ALTEROID_TOKEN_SAVING_COMPACTION）�
       env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '1' },
     });
     await seed(s.stores);
-    await seedSettledAndMemory(s.stores);
+    await seedMemory(s.stores);
 
     const first = await selfTick(s);
     await selfTick(s);
@@ -1973,7 +2005,6 @@ describe('畳み後の再表示の系統（ALTEROID_TOKEN_SAVING_COMPACTION）�
 
     expectCompleteFull(third);
     expect(third).toContain('担当 7 の途中経過');
-    expect(third).toContain('片付けた仕事 0');
     expect(third).toContain('記憶の更新の要旨 0');
     expect(third).not.toContain('この節は省いた');
     expect(digestOf(third).length).toBeGreaterThanOrEqual(digestOf(first).length - 50);
@@ -1986,13 +2017,13 @@ describe('畳み後の再表示の系統（ALTEROID_TOKEN_SAVING_COMPACTION）�
       env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '1', ALTEROID_TOKEN_SAVING_COMPACTION: '1' },
     });
     await seed(s.stores);
-    await seedSettledAndMemory(s.stores);
+    await seedMemory(s.stores);
 
     const first = await selfTick(s);
     await selfTick(s);
     const third = await selfTick(s);
 
-    expectLeanFull(third, { withSettledAndMemory: true });
+    expectLeanFull(third, { withMemory: true });
     expect(digestOf(third).length).toBeLessThan(digestOf(first).length);
     await s.clone.stop();
   });
@@ -2006,7 +2037,7 @@ describe('畳み後の再表示の系統（ALTEROID_TOKEN_SAVING_COMPACTION）�
         env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: fold, ALTEROID_TOKEN_SAVING_COMPACTION: '1' },
       });
       await seed(s.stores);
-      await seedSettledAndMemory(s.stores);
+      await seedMemory(s.stores);
 
       const first = await selfTick(s);
       const second = await selfTick(s);
@@ -2015,7 +2046,7 @@ describe('畳み後の再表示の系統（ALTEROID_TOKEN_SAVING_COMPACTION）�
       // 畳みは効かない: 2回目は1回目と同じ完全な全文
       expect(second).not.toContain('全文は会話の上にある');
       expect(digestOf(second).length).toBeGreaterThanOrEqual(digestOf(first).length - 50);
-      expectLeanFull(third, { withSettledAndMemory: true });
+      expectLeanFull(third, { withMemory: true });
       expect(digestOf(third).length).toBeLessThan(digestOf(first).length);
       await s.clone.stop();
     },
@@ -2027,7 +2058,7 @@ describe('畳み後の再表示の系統（ALTEROID_TOKEN_SAVING_COMPACTION）�
       env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0', ALTEROID_TOKEN_SAVING_COMPACTION: '0' },
     });
     await seed(s.stores);
-    await seedSettledAndMemory(s.stores);
+    await seedMemory(s.stores);
 
     await selfTick(s);
     await selfTick(s);

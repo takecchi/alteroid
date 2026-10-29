@@ -1,89 +1,29 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  buildActivityDigest,
-  DIGEST_BODY_SHAPE_LIMIT,
-  DIGEST_SETTLED_LIMIT,
-  MAX_ITEMS,
-} from './digest.js';
+import { buildActivityDigest, DIGEST_BODY_SHAPE_LIMIT, MAX_ITEMS } from './digest.js';
 import { DigestSessionDelta } from './digest-session-delta.js';
-import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-// 履歴の性格の節（片付けた仕事・本文の形）は、判断の材料の節より短く切る
+// 履歴の性格の節（本文の形）は、判断の材料の節より短く切る。
+// 「この期間に片付けた仕事」の節（DIGEST_SETTLED_LIMIT 件までの歯）は #5469 P6b で節ごと無くなった。
+// 閉じた件は `task_list includeClosed` と日誌で読み返せる。ここに残る「新しい行数でも差分化が壊れない」歯は、同じ作りの一覧の節（聞かずに決めたこと）で測る
 
 const since = () => new Date(Date.now() - 600_000);
 
-// i が大きいほど新しく閉じる（closedAt が 1 秒ずつ進む）
-async function seedSettled(stores: Stores, count: number, from = 0): Promise<void> {
-  const base = Date.now() - 300_000;
-  for (let i = from; i < from + count; i += 1) {
-    const at = new Date(base + i * 1000).toISOString();
-    await stores.commitments.open({ id: `st-${i}`, at, origin: 'human', body: `片付け ${i}` });
-    await stores.commitments.close(`st-${i}`, at, `理由 ${i}`, 'clone');
-  }
-}
-
-function settledSection(digest: string): string {
-  const start = digest.indexOf('## この期間に片付けた仕事');
+function decisionsSection(digest: string): string {
+  const start = digest.indexOf('## 聞かずに決めたこと');
   const end = digest.indexOf('\n## ', start + 1);
   return digest.slice(start, end === -1 ? undefined : end);
 }
 
-describe('この期間に片付けた仕事の一覧は DIGEST_SETTLED_LIMIT 件まで', () => {
-  it('上限を超えるとき、新しい側の DIGEST_SETTLED_LIMIT 件だけが出て、省略の行が件数と引き方を名乗る', async () => {
-    const stores = createMemoryStores();
-    const total = DIGEST_SETTLED_LIMIT + 6;
-    await seedSettled(stores, total);
-
-    const digest = await buildActivityDigest(stores, { since: since() });
-    const section = settledSection(digest);
-
-    expect(digest).toContain(`片付けた仕事 ${total} /`);
-    const shown = Array.from({ length: total }, (_, i) => i).filter((i) =>
-      section.includes(`- 片付け ${i}\n`),
-    );
-    expect(shown).toEqual(
-      Array.from({ length: DIGEST_SETTLED_LIMIT }, (_, k) => total - 1 - k).reverse(),
-    );
-    expect(section).toContain(`…ほか ${total - DIGEST_SETTLED_LIMIT} 件（`);
-    expect(section).toContain('`commitment_list` に includeClosed=true を渡すと辿れる');
-  });
-
-  // ALTEROID_TOKEN_SAVING_EXCERPT=0（Clone は trimHistory: false を渡す）: 節約の前の上限（MAX_ITEMS）へ戻る
-  it('⭐ trimHistory: false なら、上限は MAX_ITEMS（節約の前の件数）へ戻る', async () => {
-    const stores = createMemoryStores();
-    const total = DIGEST_SETTLED_LIMIT + 6;
-    expect(total).toBeLessThanOrEqual(MAX_ITEMS);
-    await seedSettled(stores, total);
-
-    const digest = await buildActivityDigest(stores, { since: since() }, undefined, undefined, {
-      trimHistory: false,
-    });
-    const section = settledSection(digest);
-
-    for (let i = 0; i < total; i += 1) expect(section).toContain(`- 片付け ${i}\n`);
-    expect(section).not.toContain('…ほか');
-  });
-
-  it('上限以下なら全件が出て、省略の行は出ない', async () => {
-    const stores = createMemoryStores();
-    await seedSettled(stores, DIGEST_SETTLED_LIMIT);
-
-    const digest = await buildActivityDigest(stores, { since: since() });
-    const section = settledSection(digest);
-
-    expect(digest).toContain(`片付けた仕事 ${DIGEST_SETTLED_LIMIT} /`);
-    for (let i = 0; i < DIGEST_SETTLED_LIMIT; i += 1) expect(section).toContain(`- 片付け ${i}\n`);
-    expect(section).not.toContain('…ほか');
-  });
-});
-
 describe('同じ会話の2回目の差分（DigestSessionDelta）が新しい行数でも壊れない', () => {
-  it('片付けた仕事が増えて新しい5件へ入れ替わっても、新しい行と省略の行が出て、変わらない行は畳まれる', async () => {
+  it('一覧の節の行が増えて新しい MAX_ITEMS 件へ入れ替わっても、新しい行と省略の行が出て、変わらない行は畳まれる', async () => {
     const stores = createMemoryStores();
     const delta = new DigestSessionDelta();
-    await seedSettled(stores, DIGEST_SETTLED_LIMIT + 3);
+    const seeded = MAX_ITEMS + 3;
+    for (let i = 0; i < seeded; i += 1) {
+      await stores.journal.append({ type: 'decision', decision: `決めた ${i}`, grounds: '記憶' });
+    }
     for (let i = 0; i < DIGEST_BODY_SHAPE_LIMIT + 2; i += 1) {
       await stores.journal.append({
         type: 'external_event',
@@ -97,15 +37,18 @@ describe('同じ会話の2回目の差分（DigestSessionDelta）が新しい行
     delta.commit();
     expect(renderedFirst.text).toBe(first);
 
-    await seedSettled(stores, 1, DIGEST_SETTLED_LIMIT + 3);
+    await stores.journal.append({
+      type: 'decision',
+      decision: `決めた ${seeded}`,
+      grounds: '記憶',
+    });
     const second = await buildActivityDigest(stores, { since: since() });
     const renderedSecond = delta.renderDigest(second, new Date());
 
-    const newest = DIGEST_SETTLED_LIMIT + 3;
-    const section = settledSection(renderedSecond.text);
-    expect(section).toContain(`- 片付け ${newest}\n`);
-    expect(section).toContain(`…ほか ${newest + 1 - DIGEST_SETTLED_LIMIT} 件`);
-    expect(section).toContain(`ほかの ${DIGEST_SETTLED_LIMIT - 1} 件は前回`);
+    const section = decisionsSection(renderedSecond.text);
+    expect(section).toContain(`決めた ${seeded}（`);
+    expect(section).toContain(`…ほか ${seeded + 1 - MAX_ITEMS} 件`);
+    expect(section).toContain(`ほかの ${MAX_ITEMS - 1} 件は前回`);
     expect(renderedSecond.fullChars).toBe(second.length);
     expect(renderedSecond.text.length).toBeLessThan(second.length);
     // 本文の形（保持した標本）を含む外部イベントの節は、変わっていなければ節ごと畳まれる

@@ -1,5 +1,8 @@
+import { excerptLine } from './excerpt.js';
+import { isTaskClosed } from './task.js';
 import type { TaskPlacement } from './task.js';
 import type { JournalEntryInput, Task, TaskStatus } from './schema.js';
+import type { TaskList } from './store.js';
 
 // task_* 道具の入力の解釈と表示だけを置く（登録と日誌は tools.ts）。規則（遷移・並び）は task.ts が1本だけ持つ。
 
@@ -64,6 +67,50 @@ export function taskStatusLine(task: Pick<Task, 'status' | 'closedAt'>): string 
   return task.closedAt === undefined
     ? `状態: ${task.status}（${label}）`
     : `状態: ${task.status}（${label}）/ ${task.closedAt} に閉じた`;
+}
+
+/** 発意 tick の入力に載せる待ち行列の先頭の件数（初期値。多すぎる・少なすぎるは運用で見て変える）。 */
+export const TASK_QUEUE_HEAD_LIMIT = 3;
+
+const TASK_QUEUE_HEAD_TITLE_LIMIT = 120;
+const OPEN_TASK_STATUSES = ['queued', 'waiting', 'needs_decision'] as const;
+
+/** 待ち行列の件数の1行（開いている件の合計と状態別の内訳）。閉じた件は数えない。 */
+export function describeTaskQueueCount(list: Pick<TaskList, 'entries'>): string {
+  const open = list.entries.filter((task) => !isTaskClosed(task.status));
+  const breakdown = OPEN_TASK_STATUSES.map(
+    (status) => `${status} ${open.filter((task) => task.status === status).length}`,
+  ).join(' / ');
+  return `待ち行列: 開いている ${open.length} 件（${breakdown}）`;
+}
+
+/**
+ * 発意 tick の入力の「待ち行列の先頭」の行。件数の1行・読めない行の断り・先頭 `limit` 件・1行の案内。
+ * 並びは `list.entries` のまま（器は並べ直さない。先頭が先にやるもの）。読めない行は 0 に丸めず件数で断る（終わったのではない）。
+ * 開いている件が無ければ件数の行（と読めない行の断り）だけで、案内は出さない。
+ */
+export function describeTaskQueueHead(list: TaskList, options: { limit: number }): string[] {
+  const open = list.entries.filter((task) => !isTaskClosed(task.status));
+  const lines = [`- ${describeTaskQueueCount(list)}`];
+  if (list.unreadable.length > 0) {
+    lines.push(
+      `- 読めない task の行が ${list.unreadable.length} 件ある（上の件数には入っていない。終わったのではない）`,
+    );
+  }
+  if (open.length === 0) return lines;
+  const shown = open.slice(0, options.limit);
+  for (const task of shown) {
+    lines.push(
+      `- ${task.id}（${taskStatusLine(task)} / origin: ${task.origin}）${excerptLine(task.title, TASK_QUEUE_HEAD_TITLE_LIMIT)}`,
+    );
+  }
+  if (open.length > shown.length) {
+    lines.push(`- …ほか ${open.length - shown.length} 件（task_list で全部見える）`);
+  }
+  lines.push(
+    '（先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）',
+  );
+  return lines;
 }
 
 // task の並びは行の欄ではなくストアが持つ位置（rank）で、rank は読む側に出ない。続きの錨は「最後に出した件の id」にする:
