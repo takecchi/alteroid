@@ -1,21 +1,9 @@
 import { MemoryTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
-import { useId, useState } from 'react';
-import { useBeforeUnloadGuard } from '~/lib/leave-guard';
-import { Link, Outlet, useNavigate, useParams } from 'react-router';
+import { NewSlugForm } from '~/components/new-slug-form';
+import { Link, Outlet, useParams } from 'react-router';
 
-import {
-  Page,
-  Button,
-  Empty,
-  FieldHint,
-  Input,
-  ListDetail,
-  ListDetailItems,
-  Spinner,
-  WarnNote,
-  cn,
-} from '@alteroid/ui';
+import { Page, Empty, ListDetail, ListDetailItems, Spinner, WarnNote } from '@alteroid/ui';
 import { usePractices } from '@alteroid/swr';
 import { formatRelative, redactBody } from '@alteroid/logic';
 import type { UnreadablePractice } from '@alteroid/logic';
@@ -52,22 +40,13 @@ export function practiceKindLabel(kind: string): string {
   return kind;
 }
 
-const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
-
 // 種類（kind）をプルダウンの固定リストにしない: practiceKindSchema は自由文字列で、列挙にすると仕事の型を実装専用に狭めるため
 export default function Practices() {
   const { data, error, isLoading, isValidating, mutate } = usePractices();
-  const navigate = useNavigate();
-  const slugId = useId();
-  const [slug, setSlug] = useState('');
   const { slug: selectedSlug } = useParams();
-  // 移動の確認（useBlocker）は置かない: ルーターのブロッカーは1つで、子の経路（practice-detail.tsx）が持つため
-  useBeforeUnloadGuard(slug !== '' && slug !== selectedSlug);
 
   const practices = data?.practices ?? [];
   const unreadable = data?.unreadable ?? [];
-  const hintId = useId();
-  const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
   // 取れなかったのを0件と描かない: 「正常な状態」は言い切りになるため
   const listUnavailable = data === undefined && error !== undefined;
 
@@ -79,47 +58,11 @@ export default function Practices() {
       className="overflow-hidden p-0 md:p-0"
     >
       <div className="flex h-full flex-col">
-        <div
-          className={cn(
-            'shrink-0 border-b border-border px-4 py-3 md:px-6',
-            selectedSlug !== undefined && 'hidden md:block',
-          )}
-        >
-          <div className="md:flex md:items-end md:gap-6">
-            <div className="md:shrink-0">
-              <p className="mb-2 text-sm font-medium md:mb-1">新しいやり方を書く</p>
-              <label htmlFor={slugId} className="mb-1 block text-xs text-muted-foreground md:mb-0">
-                名前（半角の英小文字・数字・. _ - のみ）
-              </label>
-            </div>
-            <div className="flex gap-2 md:w-96">
-              <Input
-                id={slugId}
-                aria-describedby={hintId}
-                value={slug}
-                placeholder="例: work-style"
-                onChange={(event) => setSlug(event.target.value)}
-                submitDisabled={!valid}
-                onSubmitShortcut={() => void navigate(`/practices/${slug}`)}
-              />
-              <Button
-                variant="primary"
-                disabled={!valid}
-                onClick={() => void navigate(`/practices/${slug}`)}
-              >
-                開く
-              </Button>
-            </div>
-          </div>
-          <FieldHint id={hintId} className="mt-1.5">
-            先頭は英数字で、128 文字まで。
-          </FieldHint>
-          {slug !== '' && !valid && (
-            <p className="mt-1.5 text-xs text-destructive">
-              使えるのは半角の英小文字・数字と . _ - で、先頭は英数字。128 文字まで。
-            </p>
-          )}
-        </div>
+        <NewSlugForm
+          heading="新しいやり方を書く"
+          basePath="/practices"
+          selectedSlug={selectedSlug}
+        />
 
         <ListDetail
           className="min-h-0 flex-1"
