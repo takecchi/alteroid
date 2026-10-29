@@ -12,6 +12,8 @@ import {
   writeStderrLine,
 } from '@alteroid/core';
 
+import { readEveryMinutes, type EveryMinutesConfig } from './env-every-minutes.js';
+
 export const ARCHIVE_FOLD_EVERY_ENV = 'ALTEROID_ARCHIVE_FOLD_EVERY';
 
 export const DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES = 60;
@@ -25,43 +27,13 @@ export const MAX_ARCHIVE_FOLD_INTERVAL_MS = 2_147_483_647;
 // 下限は 1 分: これを許すと `0.00001` のような値で `setTimeout` が 1ms へ倒れ、畳み込みが全行走査を休みなく回すため。切り上げて採るのではなく既定へ倒す（添付の掃除の読み取りと同じ作法）。
 export const MIN_ARCHIVE_FOLD_EVERY_MINUTES = 1;
 
-// 綴りは `schedule.ts` の `OFF` と揃える: 綴りが割れると人間が覚えることが増えるため。
-const OFF = new Set(['off', 'none', 'false', '0']);
-
-function value(raw: string | undefined): string | undefined {
-  return raw !== undefined && raw.trim().length > 0 ? raw.trim() : undefined;
-}
-
-export interface ArchiveFoldConfig {
-  readonly everyMinutes: number | null;
-  readonly notes: string[];
-}
+export type ArchiveFoldConfig = EveryMinutesConfig;
 
 export function readArchiveFoldConfig(env: NodeJS.ProcessEnv = process.env): ArchiveFoldConfig {
-  const notes: string[] = [];
-  const raw = value(env[ARCHIVE_FOLD_EVERY_ENV]);
-  let everyMinutes: number | null = DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES;
-  if (raw !== undefined) {
-    if (OFF.has(raw.toLowerCase())) {
-      everyMinutes = null;
-    } else {
-      const parsed = Number(raw);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        notes.push(
-          `${ARCHIVE_FOLD_EVERY_ENV}="${raw}" は分数として読めないので既定 ` +
-            `${DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES} を使う`,
-        );
-      } else if (parsed < MIN_ARCHIVE_FOLD_EVERY_MINUTES) {
-        notes.push(
-          `${ARCHIVE_FOLD_EVERY_ENV}="${raw}" は下限 ${MIN_ARCHIVE_FOLD_EVERY_MINUTES} 分を下回っているので既定 ` +
-            `${DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES} を使う`,
-        );
-      } else {
-        everyMinutes = parsed;
-      }
-    }
-  }
-  return { everyMinutes, notes };
+  return readEveryMinutes(env, ARCHIVE_FOLD_EVERY_ENV, {
+    defaultMinutes: DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES,
+    minMinutes: MIN_ARCHIVE_FOLD_EVERY_MINUTES,
+  });
 }
 
 export interface FoldArchiveOnceResult {

@@ -1,5 +1,7 @@
 import { pruneAttachmentCopies, reasonOf, writeStderrLine, type Stores } from '@alteroid/core';
 
+import { readEveryMinutes, type EveryMinutesConfig } from './env-every-minutes.js';
+
 export const ATTACHMENT_PRUNE_EVERY_ENV = 'ALTEROID_ATTACHMENT_PRUNE_EVERY';
 
 export const DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES = 60;
@@ -13,40 +15,15 @@ export const MIN_ATTACHMENT_PRUNE_EVERY_MINUTES = 1;
 /** 控えの無い blob の掃除（バケットの列挙）は、前回から 24 時間経つまで呼ばない。 */
 export const ATTACHMENT_BLOB_SWEEP_EVERY_MS = 24 * 60 * 60_000;
 
-const OFF = new Set(['off', 'none', 'false', '0']);
-
-export interface AttachmentPruneConfig {
-  readonly everyMinutes: number | null;
-  readonly notes: string[];
-}
+export type AttachmentPruneConfig = EveryMinutesConfig;
 
 export function readAttachmentPruneConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): AttachmentPruneConfig {
-  const notes: string[] = [];
-  const raw = env[ATTACHMENT_PRUNE_EVERY_ENV]?.trim();
-  let everyMinutes: number | null = DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES;
-  if (raw !== undefined && raw.length > 0) {
-    if (OFF.has(raw.toLowerCase())) {
-      everyMinutes = null;
-    } else {
-      const parsed = Number(raw);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        notes.push(
-          `${ATTACHMENT_PRUNE_EVERY_ENV}="${raw}" は分数として読めないので既定 ` +
-            `${DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES} を使う`,
-        );
-      } else if (parsed < MIN_ATTACHMENT_PRUNE_EVERY_MINUTES) {
-        notes.push(
-          `${ATTACHMENT_PRUNE_EVERY_ENV}="${raw}" は下限 ${MIN_ATTACHMENT_PRUNE_EVERY_MINUTES} 分を下回っているので既定 ` +
-            `${DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES} を使う`,
-        );
-      } else {
-        everyMinutes = parsed;
-      }
-    }
-  }
-  return { everyMinutes, notes };
+  return readEveryMinutes(env, ATTACHMENT_PRUNE_EVERY_ENV, {
+    defaultMinutes: DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES,
+    minMinutes: MIN_ATTACHMENT_PRUNE_EVERY_MINUTES,
+  });
 }
 
 /**

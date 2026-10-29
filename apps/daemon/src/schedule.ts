@@ -8,6 +8,8 @@ import {
   type TimeOfDay,
 } from '@alteroid/core';
 
+import { envValue, OFF_SPELLINGS } from './env-every-minutes.js';
+
 export interface ScheduleConfig {
   dailyReportAt: TimeOfDay | null;
   initiativeEveryMinutes: number | null;
@@ -33,15 +35,13 @@ export const DEFAULT_REPORT_LOOKBACK_DAYS = 3;
 // 後追いで遡る日数の上限（#4723）: 上限が無いと、遡る起点の日付が Invalid Date になり後追いが壊れるため。1年より前の日報を後から書かせる理由は無い
 export const MAX_REPORT_LOOKBACK_DAYS = 365;
 
-const OFF = new Set(['off', 'none', 'false', '0']);
-
 export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): ScheduleConfig {
   const notes: string[] = [];
 
-  const rawAt = value(env.ALTEROID_DAILY_REPORT_AT);
+  const rawAt = envValue(env.ALTEROID_DAILY_REPORT_AT);
   let dailyReportAt: TimeOfDay | null = parseTimeOfDay(DEFAULT_DAILY_REPORT_AT);
   if (rawAt !== undefined) {
-    if (OFF.has(rawAt.toLowerCase())) {
+    if (OFF_SPELLINGS.has(rawAt.toLowerCase())) {
       dailyReportAt = null;
     } else {
       const parsed = parseTimeOfDay(rawAt);
@@ -55,10 +55,10 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
     }
   }
 
-  const rawTidyAt = value(env.ALTEROID_MEMORY_TIDY_AT);
+  const rawTidyAt = envValue(env.ALTEROID_MEMORY_TIDY_AT);
   let memoryTidyAt: TimeOfDay | null = parseTimeOfDay(DEFAULT_MEMORY_TIDY_AT);
   if (rawTidyAt !== undefined) {
-    if (OFF.has(rawTidyAt.toLowerCase())) {
+    if (OFF_SPELLINGS.has(rawTidyAt.toLowerCase())) {
       memoryTidyAt = null;
     } else {
       const parsed = parseTimeOfDay(rawTidyAt);
@@ -72,10 +72,10 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
     }
   }
 
-  const rawEvery = value(env.ALTEROID_INITIATIVE_EVERY);
+  const rawEvery = envValue(env.ALTEROID_INITIATIVE_EVERY);
   let initiativeEveryMinutes: number | null = DEFAULT_INITIATIVE_EVERY_MINUTES;
   if (rawEvery !== undefined) {
-    if (OFF.has(rawEvery.toLowerCase())) {
+    if (OFF_SPELLINGS.has(rawEvery.toLowerCase())) {
       initiativeEveryMinutes = null;
     } else {
       const parsed = Number(rawEvery);
@@ -104,7 +104,7 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
     }
   }
 
-  const rawLookback = value(env.ALTEROID_REPORT_LOOKBACK_DAYS);
+  const rawLookback = envValue(env.ALTEROID_REPORT_LOOKBACK_DAYS);
   let reportLookbackDays = DEFAULT_REPORT_LOOKBACK_DAYS;
   if (rawLookback !== undefined) {
     const parsed = Number(rawLookback);
@@ -136,8 +136,4 @@ export function buildSchedule(config: ScheduleConfig): ScheduleEntry[] {
     entries.push(memoryTidyEntry({ at: config.memoryTidyAt }));
   }
   return entries;
-}
-
-function value(raw: string | undefined): string | undefined {
-  return raw !== undefined && raw.trim().length > 0 ? raw.trim() : undefined;
 }
