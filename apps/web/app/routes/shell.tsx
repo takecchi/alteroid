@@ -245,7 +245,7 @@ function AuthedShell({
     baseUrl,
     typeof window === 'undefined' ? null : window.location.href,
   );
-  const { data: approvals, error: approvalsError } = useApprovals(true, polling);
+  const { data: approvals, error: approvalsError } = useApprovals(polling);
   // 形の違う応答は「0件」ではなく「読めていない」へ倒す: 版がずれうる上、?.length ?? 0 で黙らせると読めていないのに0件（札無し）に見えるため
   const approvalsList = Array.isArray(approvals?.approvals) ? approvals.approvals : undefined;
   const approvalsMalformed = approvals !== undefined && approvalsList === undefined;

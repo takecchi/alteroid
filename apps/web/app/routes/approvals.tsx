@@ -52,7 +52,7 @@ export default function Approvals() {
    * **未回答だけを読む**（`GET /approvals?pending=true`）。回答済み・取り下げ済みは別のページ
    * （`approvals-answered.tsx`。タブの「回答済み」）で、日付ごとに読む。
    */
-  const { data, error, isLoading, isValidating, mutate } = useApprovals(true);
+  const { data, error, isLoading, isValidating, mutate } = useApprovals();
   /**
    * **形の違う応答（`approvals` が配列でない）は「0件」ではなく「読めていない」へ倒す**
    * （外枠 `shell.tsx` と同じ判断）。デーモンと画面は別デプロイで
