@@ -15,6 +15,7 @@ import {
   reasonOf,
   type AttachmentLimits,
   type Stores,
+  type TurnImageLimits,
   writeStderrLine,
 } from '@alteroid/core';
 import { AUTH_WITHHELD_ENV_KEYS } from './auth.js';
@@ -38,7 +39,7 @@ export interface Storage {
    * （未設定・不正・fs の構成）は `maxLargeFileBytes` が 0。置き場も `createApp`・クローンの道具・担い手のプールも、
    * 環境変数を読み直さずこの値を使う（env だけで大きいファイルの枠が開く不整合を作らない）。
    */
-  attachmentLimits: AttachmentLimits;
+  attachmentLimits: AttachmentLimits & TurnImageLimits;
   sessionStore?: SessionStore;
   // 記憶ストアへ到達するのに自分が使った鍵を子へ配らない: 渡さなければ到達経路が存在しない、という構造的な強制のため。
   withheldEnvKeys: string[];
@@ -158,7 +159,7 @@ export function planAttachmentBlobs(
 ): {
   config:
     Extract<ReturnType<typeof readAttachmentBlobConfig>, { kind: 'on' }>['config'] | undefined;
-  limits: AttachmentLimits;
+  limits: AttachmentLimits & TurnImageLimits;
 } {
   const blob = readAttachmentBlobConfig(env);
   const limits = readAttachmentLimits(env).limits;
