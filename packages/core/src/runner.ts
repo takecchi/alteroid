@@ -2097,6 +2097,11 @@ class Host implements RunnerHost {
       options.keepPeers === true ? { keepPeers: true } : {},
     );
     await Promise.all([closingParked, stopping]);
+    // 待ち終えた後にもう一度閉じる（#5508）: 進行中の keepPeers の畳みは自分の畳みの中で peer を預けるので、先頭の閉じ（その時点の預かりだけ）には載らず、期限まで開いたまま残るため。
+    // 印を立てて `#parkPeers` に預けさせない形は取らない: 鍵の付け替えの経路も通るので、印の立て下ろしと次の resume との競りを新しく持つことになる
+    if (options.keepPeers !== true) {
+      await this.#closeParkedPeers(managerId, 'stopped', '人間・クローンが止めた');
+    }
   }
 
   #parkPeers(managerId: string, parked: ParkedPeers): void {
