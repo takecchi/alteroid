@@ -3,8 +3,8 @@ import { stderr, stdout } from './terminal-out.js';
 import { createClient } from './client.js';
 import { describeFailedResponse } from './format.js';
 import { redactBody, redactError } from './redact.js';
+import { readSSE } from './sse-frame.js';
 import { resolveTarget } from './target.js';
-import { readSSE } from './tui/sse.js';
 
 export interface TopologyView {
   observedAt: string;

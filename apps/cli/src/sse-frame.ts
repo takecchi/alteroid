@@ -27,3 +27,26 @@ export function parseSSEChunk(chunk: string): SSEEvent | null {
     },
   };
 }
+
+export async function* readSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEvent> {
+  const decoder = new TextDecoder();
+  const reader = body.getReader();
+  let buffer = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary !== -1) {
+        const chunk = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const parsed = parseSSEChunk(chunk);
+        if (parsed) yield parsed;
+        boundary = buffer.indexOf('\n\n');
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}

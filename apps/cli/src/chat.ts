@@ -104,7 +104,7 @@ import { redactBody, redactError } from './redact.js';
 import { turnFailureHint } from './turn-failure.js';
 import { withdrawnMessageText } from './withdrawn-message.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
-import { parseSSEChunk, type SSEEvent } from './sse-frame.js';
+import { readSSE, type SSEEvent } from './sse-frame.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { describeUsageDateOrder, narrowUsageAxis, renderUsage } from './usage.js';
 
@@ -1033,29 +1033,6 @@ async function renderChatEvents(
     await markConversationReadAfterReply(target, nextConversationId, signal);
   }
   return nextConversationId;
-}
-
-export { parseSSEChunk, type SSEEvent };
-
-async function* readSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEvent> {
-  const decoder = new TextDecoder();
-  const reader = body.getReader();
-  let buffer = '';
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    let boundary = buffer.indexOf('\n\n');
-    while (boundary !== -1) {
-      const chunk = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const parsed = parseSSEChunk(chunk);
-      if (parsed) yield parsed;
-      boundary = buffer.indexOf('\n\n');
-    }
-  }
 }
 
 const RESUME_PROBE_LIMIT = 5;

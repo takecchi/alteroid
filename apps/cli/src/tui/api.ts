@@ -30,8 +30,8 @@ import { requestInterruptOutcome } from '../interrupt.js';
 import type { MemorySummary } from '../memory.js';
 import { type Target } from '../target.js';
 import { redactError } from '../redact.js';
+import { readSSE } from '../sse-frame.js';
 import type { InterruptOutcome, InterruptTarget } from './interrupt-outcome.js';
-import { readSSE } from './sse.js';
 
 export type ChatEvent =
   | { type: 'open'; conversationId: string; inProgress?: boolean }
