@@ -9,6 +9,7 @@ import {
   pendingApprovalSchema,
   UnreadableApprovalError,
   UnreadableJobError,
+  summarizeInvalidFields,
   writeStderrLine,
 } from '@alteroid/core';
 import type {
@@ -27,14 +28,6 @@ import { approvals, jobs } from './schema.js';
 
 // `migrate.ts` の `approvals_conversation_id_idx` と同じ式にする: 違うと索引が効かないため。
 const CONVERSATION_ID_EXPR = sql`(${approvals.approval}->>'conversationId')`;
-
-// `issue.message` を使わない: zod の既定メッセージが将来 `received`（実際の値）を含む形に変わっても値が漏れないようにするため。
-function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
-  const fields = [
-    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
-  ];
-  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
-}
 
 // id 以外の値を載せない: job の欄には人間の依頼文・マネージャーの報告が入りうるため。
 function describeUnreadableJobRow(params: { id: string; reason: string }): string {

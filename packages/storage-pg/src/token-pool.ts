@@ -12,6 +12,7 @@ import {
   type TokenPoolStore,
   type TokenRotationSettings,
   type UnreadableToken,
+  summarizeInvalidFields,
 } from '@alteroid/core';
 import { asc, eq } from 'drizzle-orm';
 
@@ -23,14 +24,6 @@ const SETTINGS_ID = 'default';
 const ACTIVE_ID = 'default';
 
 type AgentTokenRow = typeof agentTokens.$inferSelect;
-
-// `issue.message` を使わない: zod の既定メッセージが将来 `received`（実際の値）を含む形に変わっても値が漏れないようにするため。
-function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
-  const fields = [
-    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
-  ];
-  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
-}
 
 function toRow(token: AgentToken) {
   return {
