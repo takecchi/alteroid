@@ -1,7 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { waitFor } from './clone-test-harness.js';
+import { waitFor, withoutQueueNotice } from './clone-test-harness.js';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
@@ -161,8 +161,10 @@ describe('起動時の未読の読み直しが落ちても、拾えるまでや�
     booted.clone.post(humanMessage('evt-sentinel', '目印の発言（#4647）'));
     await waitFor(() => booted.inputs.some((input) => input.includes('目印の発言')), '目印の配達');
     // 束ねて1つのターンに入ることがあるので、入力の数ではなく出てきた回数で数える
+    // 待ち行列の節（#5469 P6c）には積まれた task の題が出るので、節を落として数える（配達の回数を数えたいため）
     const occurrences = booted.inputs.reduce(
-      (total, input) => total + input.split('やり直しの間に届いた発言').length - 1,
+      (total, input) =>
+        total + withoutQueueNotice(input).split('やり直しの間に届いた発言').length - 1,
       0,
     );
     expect(occurrences).toBe(1);
