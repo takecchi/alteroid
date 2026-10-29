@@ -388,6 +388,71 @@ describe('終端の同期が失敗したとき・デーモンが落ちたとき'
     expect(await taskStatus(s.stores, 't-req')).toBe('queued');
     expect(await taskStatus(s.stores, 't-none')).toBe('waiting');
   });
+
+  it('⭐ 起動時の直しは、委譲が終わった後にクローンが置いた waiting（task_set_status）を戻さない', async () => {
+    const s = await setup();
+    // 委譲は 09:00 に終わり、クローンが 10:00 に waiting へ置いた
+    await s.stores.tasks.add({
+      ...task('t-1', 'waiting'),
+      updatedAt: '2026-10-29T10:00:00.000Z',
+    });
+    await s.stores.jobs.putJob({
+      ...ledgerJob('mgr-old', 'done', 't-1'),
+      updatedAt: '2026-10-29T09:00:00.000Z',
+    });
+
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+  });
+
+  it('⭐ 起動時の直しは、結び付いた委譲のうち最後に終わったものの後に動いていない task だけ直す', async () => {
+    const s = await setup();
+    // 古い委譲 09:00 → クローンが 10:00 に waiting へ → 新しい委譲 11:00 が終わった（task は取り残された）
+    await s.stores.tasks.add({
+      ...task('t-1', 'waiting'),
+      updatedAt: '2026-10-29T10:00:00.000Z',
+    });
+    await s.stores.jobs.putJob({
+      ...ledgerJob('mgr-old', 'done', 't-1'),
+      updatedAt: '2026-10-29T09:00:00.000Z',
+    });
+    await s.stores.jobs.putJob({
+      ...ledgerJob('mgr-new', 'failed', 't-1'),
+      updatedAt: '2026-10-29T11:00:00.000Z',
+    });
+
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+});
+
+describe('resume で同じ task に2本が走るとき', () => {
+  it('⭐ 先に終わった1本は、走っている別の委譲がある間は task を判断待ちへ倒さない', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const a = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    s.fake.push(report(a.managerId));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+
+    // A が終わったあとに B を同じ task へ起こし、A を resume する（入口の断りを通らない経路）
+    const b = await s.pool.start({ request: '別の調べ物', taskId: 't-1' });
+    await s.pool.send(a.managerId, '続きをお願い');
+    await settle();
+    expect((await s.stores.jobs.getJob(a.managerId))?.status).toBe('running');
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+
+    // B が先に終わっても、A が走っている間は待ちのまま
+    s.fake.push(report(b.managerId));
+    await settle();
+    expect((await s.stores.jobs.getJob(b.managerId))?.status).toBe('done');
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+
+    // 最後の1本が終わると判断待ちへ
+    s.fake.push(report(a.managerId));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
 });
 
 describe('道具: manager_start の taskId', () => {

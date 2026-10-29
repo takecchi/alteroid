@@ -8000,9 +8000,9 @@ class Pool implements ManagerPool {
       finished = resolve;
     });
     try {
+      if (!this.#stopped) await this.#repairStrandedTasks();
       const restored = await this.#restoreJobs();
       this.#rebuildWithheldFromLedger();
-      await this.#repairStrandedTasks();
       return restored;
     } finally {
       this.#restoring = null;
@@ -13500,7 +13500,22 @@ class Pool implements ManagerPool {
       const task = await this.#stores.tasks.get(taskId);
       // 閉じた task は動かさない（`planTaskTransition` も拒むが、日誌を汚さない）。見つからない task は、書けない相手なので追わない
       if (task === null || isTaskClosed(task.status)) return;
-      if (target === 'needs_decision' && task.status !== 'waiting') return;
+      if (target === 'needs_decision') {
+        if (task.status !== 'waiting') return;
+        // 同じ task に走っている別の委譲が台帳に居れば動かさない: resume で、終わった委譲が同じ task の別の委譲と同時に走ることがある
+        // （入口の断りは `manager_start` だけで、`manager_send` や枠の自動の起こし直しは止めない）
+        const others = await this.#stores.jobs.listJobs();
+        if (
+          others.some(
+            (job) =>
+              job.id !== record.job.id &&
+              job.taskId === taskId &&
+              taskStatusForJob(job.status) === 'waiting',
+          )
+        ) {
+          return;
+        }
+      }
       await this.#moveTask(taskId, target, record.job.id, `委譲が ${record.job.status}`);
     } catch (error) {
       noteDroppedRecord(
@@ -13534,25 +13549,36 @@ class Pool implements ManagerPool {
   /**
    * 終わった委譲にしか結び付いていないのに `waiting` のままの task を `needs_decision` へ直す（#5469 P3）。
    * 終端の同期に失敗した、または同期の前にデーモンが落ちた task が戻れなくなるのを防ぐ。起動時（`restore()`）に1回走る。
-   * 走っている委譲が1本でも結び付いていれば直さない。読めない・書けないときは見送って stderr に残す（次の起動でもう一度見る）。
+   * 走っている委譲が1本でも結び付いていれば直さない。結び付いた委譲のうち最後に終わったもの（`updatedAt` が最も新しい）より後に
+   * task が更新されていれば、クローンが置いた `waiting`（`task_set_status`）なので直さない。
+   * 読めない・書けないときは見送って stderr に残す（次の起動でもう一度見る）。
+   * 起動の最初（この起動で台帳へ書く前）に走らせる: この起動の書き込みで委譲の `updatedAt` が進むと、上の「後」の判定が狂う。
    */
   async #repairStrandedTasks(): Promise<void> {
     try {
       const active = new Set<string>();
-      const finished = new Map<string, string>();
+      const lastFinished = new Map<string, { id: string; at: number }>();
       for (const job of await this.#stores.jobs.listJobs()) {
         if (job.taskId === undefined) continue;
-        if (taskStatusForJob(job.status) === 'waiting') active.add(job.taskId);
-        else finished.set(job.taskId, job.id);
+        if (taskStatusForJob(job.status) === 'waiting') {
+          active.add(job.taskId);
+          continue;
+        }
+        const at = Date.parse(job.updatedAt);
+        const seen = lastFinished.get(job.taskId);
+        if (seen === undefined || at > seen.at) lastFinished.set(job.taskId, { id: job.id, at });
       }
-      if (finished.size === 0) return;
+      if (lastFinished.size === 0) return;
       for (const task of (await this.#stores.tasks.list()).entries) {
-        const jobId = finished.get(task.id);
-        if (jobId === undefined || active.has(task.id) || task.status !== 'waiting') continue;
+        const last = lastFinished.get(task.id);
+        if (last === undefined || active.has(task.id) || task.status !== 'waiting') continue;
+        // 日時が読めないときは直さない（クローンの置いた状態を潰す側へ倒さない）
+        const taskAt = Date.parse(task.updatedAt);
+        if (Number.isNaN(taskAt) || Number.isNaN(last.at) || taskAt > last.at) continue;
         await this.#moveTask(
           task.id,
           'needs_decision',
-          jobId,
+          last.id,
           '終わった委譲に結び付いたまま waiting だった（起動時の直し）',
         );
       }
