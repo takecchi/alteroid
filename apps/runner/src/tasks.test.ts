@@ -1848,6 +1848,32 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
     ]);
   });
 
+  it('掃除は 10 秒ごとに起き、10 秒より古い写しだけを走査し直す', () => {
+    const intervals: number[] = [];
+    const maxAges: number[] = [];
+    let timerCallback: (() => void) | undefined;
+    startReclaimSweep(
+      {
+        sweepIfStale: (maxAgeMs) => {
+          maxAges.push(maxAgeMs);
+          return Promise.resolve();
+        },
+      },
+      {
+        setIntervalFn: (callback, ms) => {
+          intervals.push(ms);
+          timerCallback = callback;
+          return { unref: () => undefined };
+        },
+      },
+    );
+
+    timerCallback?.();
+
+    expect(intervals).toEqual([SWEEP_MS]);
+    expect(maxAges).toEqual([SWEEP_MS]);
+  });
+
   it('停止関数を呼んだ後は走査されない', async () => {
     const { calls, clock, tick, stop, cleared } = setup();
     await tick();
