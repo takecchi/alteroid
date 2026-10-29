@@ -52,34 +52,27 @@ function createFakeHost(input: {
 }
 
 describe('decideResumeRecoveryOutcome — 3値の判定（純関数）', () => {
-  it('投げた resume が無ければ、progressed / record の値によらず not-a-resume-failure', () => {
-    expect(
-      decideResumeRecoveryOutcome({ hadAttempt: false, progressed: false, record: 'x' }),
-    ).toEqual({ outcome: 'not-a-resume-failure' });
-    expect(
-      decideResumeRecoveryOutcome({ hadAttempt: false, progressed: true, record: null }),
-    ).toEqual({ outcome: 'not-a-resume-failure' });
+  // 「投げた resume が無い」は、純関数に入る前に `recoverFromFailedResume` が `takeResumeAttempt() === null` で返す（下の手順の歯が見ている）
+  it('既に手が動いていれば not-a-resume-failure（unresumable と混ぜない）', () => {
+    expect(decideResumeRecoveryOutcome({ progressed: true, record: 'x' })).toEqual({
+      outcome: 'not-a-resume-failure',
+    });
+    expect(decideResumeRecoveryOutcome({ progressed: true, record: null })).toEqual({
+      outcome: 'not-a-resume-failure',
+    });
   });
 
-  it('resume を投げていて、既に手が動いていれば not-a-resume-failure（unresumable と混ぜない）', () => {
-    expect(
-      decideResumeRecoveryOutcome({ hadAttempt: true, progressed: true, record: 'x' }),
-    ).toEqual({ outcome: 'not-a-resume-failure' });
-    expect(
-      decideResumeRecoveryOutcome({ hadAttempt: true, progressed: true, record: null }),
-    ).toEqual({ outcome: 'not-a-resume-failure' });
+  it('手が動いておらず、生ログから記録が組み立てられなければ unresumable', () => {
+    expect(decideResumeRecoveryOutcome({ progressed: false, record: null })).toEqual({
+      outcome: 'unresumable',
+    });
   });
 
-  it('resume を投げていて、手が動いておらず、生ログから記録が組み立てられなければ unresumable', () => {
-    expect(
-      decideResumeRecoveryOutcome({ hadAttempt: true, progressed: false, record: null }),
-    ).toEqual({ outcome: 'unresumable' });
-  });
-
-  it('resume を投げていて、手が動いておらず、生ログから記録が組み立てられれば recovered（記録を運ぶ）', () => {
-    expect(
-      decideResumeRecoveryOutcome({ hadAttempt: true, progressed: false, record: '記録' }),
-    ).toEqual({ outcome: 'recovered', record: '記録' });
+  it('手が動いておらず、生ログから記録が組み立てられれば recovered（記録を運ぶ）', () => {
+    expect(decideResumeRecoveryOutcome({ progressed: false, record: '記録' })).toEqual({
+      outcome: 'recovered',
+      record: '記録',
+    });
   });
 });
 
