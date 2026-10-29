@@ -106,6 +106,27 @@ describe('台帳の「片付けたものも見る」を URL に持つ（#4016）
     expect(screen.queryByText('もう終わった')).toBeNull();
   });
 
+  // 文字数はコードポイントで数える: サロゲートペアの途中で切らない
+  it('知らない値が長すぎるときは、40文字で切って出す', async () => {
+    stubCommitments();
+    renderAt(`/commitments?closed=${encodeURIComponent('😀'.repeat(41))}`);
+    await screen.findByText('まだ終わっていない');
+    expect(
+      screen.getByText(
+        `指定された値（${'😀'.repeat(40)}…）は読めないので、未了だけで表示しています`,
+      ),
+    ).toBeTruthy();
+  });
+
+  it('ちょうど40文字なら切らない', async () => {
+    stubCommitments();
+    renderAt(`/commitments?closed=${'x'.repeat(40)}`);
+    await screen.findByText('まだ終わっていない');
+    expect(
+      screen.getByText(`指定された値（${'x'.repeat(40)}）は読めないので、未了だけで表示しています`),
+    ).toBeTruthy();
+  });
+
   it('重複は先頭の値を使うと言う', async () => {
     stubCommitments();
     renderAt('/commitments?closed=1&closed=0');
