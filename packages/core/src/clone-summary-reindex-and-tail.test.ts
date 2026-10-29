@@ -519,19 +519,6 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
   });
 });
 
-describe('CloneOptions.redeliveryGate は必須 — 省いた形は型として組めない（Issue #845）', () => {
-  it('redeliveryGate を省いた CloneOptions は型として組めない（対照: 明示すれば組める）', () => {
-    const wontTypeCheck = () =>
-      // @ts-expect-error redeliveryGate は必須。省いた形は型として組めない
-      createClone({ stores: createMemoryStores() });
-    expect(typeof wontTypeCheck).toBe('function');
-
-    expect(() =>
-      createClone({ stores: createMemoryStores(), redeliveryGate: ALWAYS_REDELIVER }),
-    ).not.toThrow();
-  });
-});
-
 describe('待ちの経路に壁時計が無い（#1220）', () => {
   // vi.useRealTimers() は finally で必ず戻す: 偽の時計を掛けたまま抜けると、誰も進めないので永久に返らない状態が後続へ漏れるため
   function fakeHost(): { host: CloneHost; emit: (event: ChatStreamEvent) => void } {

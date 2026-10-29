@@ -852,20 +852,6 @@ const UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE =
   '文脈が伸びきっている。それまでのやりとりは消えていない（記録は残っている）が、' +
   '私はその続きを覚えていない状態で始まるので、必要なら読み直す。';
 
-// 述語は注入する: 門の実体は `apps/daemon` に在り、`packages/core` はそこへ依存できないため
-// `usageBlocked` などは1件ごとに読み直す: ループは1件ごとに `await` するので、前の件の評価時から変わっていることがあるため
-export type RedeliveryGate = (
-  event: InboxEvent,
-  context: {
-    usageBlocked: boolean;
-    releasePending: boolean;
-    usageBlockedResetsAt: number | undefined;
-    usageBlockedTokenId: string | undefined;
-  },
-) => boolean;
-
-export const ALWAYS_REDELIVER: RedeliveryGate = () => true;
-
 function withNoticeTextResetsAt(notice: UsageLimitNotice, at: number): UsageLimitNotice {
   if (notice.resetsAt !== undefined) return notice;
   const resetsAt = parseNoticeResetAt(notice.text, { at, withinMs: DEFAULT_TOKEN_COOLDOWN_MS });
@@ -975,8 +961,6 @@ export interface CloneOptions {
    */
   mcpServerFactory?: typeof createCloneMcpServer;
   cloneToolRelaySocketDir?: string;
-  // 省略可能にしない: 書き手ごとに同じ意図の無名関数が散らばるため（全件配るなら `ALWAYS_REDELIVER`）
-  redeliveryGate: RedeliveryGate;
 }
 
 export type Listener = (event: ChatStreamEvent) => void;
@@ -1443,7 +1427,6 @@ class Clone implements CloneHost {
   readonly #onScheduledRunNotStarted: ((kind: string, delayMs?: number) => void) | undefined;
   readonly #onScheduledRunClaimed: ((kind: string, at: string) => void) | undefined;
   readonly #timerTurnRetries = new Map<string, { at: string; attempts: number }>();
-  readonly #redeliveryGate: RedeliveryGate;
 
   constructor(options: CloneOptions) {
     const {
@@ -1491,7 +1474,6 @@ class Clone implements CloneHost {
       self,
       mcpServerFactory,
       cloneToolRelaySocketDir,
-      redeliveryGate,
     } = options;
     this.#stores = stores;
     this.#permissionRuleService = permissionRuleService;
@@ -1543,7 +1525,6 @@ class Clone implements CloneHost {
       envSource,
     );
     this.#cloneToolRelaySocketDir = cloneToolRelaySocketDir ?? DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR;
-    this.#redeliveryGate = redeliveryGate;
     this.#managers =
       managers ??
       createManagerPool({
@@ -3181,35 +3162,6 @@ class Clone implements CloneHost {
     }
     // 印も残したまま跡だけ残して進む: 印を消すと「もう消せている」と嘘をつくことになるため
     noteDroppedRecord('未読の消し込み（一括）', `${chunk.length} 件: ${ids.join(', ')}`, last);
-  }
-
-  // `#forget` は呼ばない: この畳み込みは「いまは配る意味が無い」という一時的な判定なので、行を残して次の起動で判定し直すため
-  // 「畳んだ」の1行は record ごとに書かない: 未読を N 件拾い直して M 件が畳まれると M 行が1秒未満に並ぶので、`sink` へ積んで1パス1本へ畳む（本文追記は record ごとに即座に書く）
-  async #foldGatedRedelivery(record: PendingInboxEvent, sink: PendingInboxEvent[]): Promise<void> {
-    await this.#journalIncomingBody(record.event);
-    sink.push(record);
-  }
-
-  // 各件の合図の形は最大値・最古の時刻へ要約せず1件も欠かさず列挙する: 人間が後から読み返す日誌のため。時間の窓や件数の上限は持ち込まない。1件のときの文言は変えない: `inbox-persistence.test.ts` が逐語で見るため
-  #gatedRedeliveryFoldHeadline(records: readonly PendingInboxEvent[]): string {
-    if (records.length === 1) {
-      const record = records[0];
-      if (record === undefined) return '';
-      return (
-        `配り直しの門がいま配る意味は無いと答えたので、ターンを起こさずに畳んだ` +
-        `（モデルへは1文字も渡していない。合図も台帳の行も消していない——次の起動で` +
-        `また拾い直され、そのときの状態であらためて判定される）: ${inboxEventShape(record.event)}`
-      );
-    }
-
-    const details = records
-      .map((record, index) => `[${index + 1}] ${inboxEventShape(record.event)}`)
-      .join('\n');
-    return (
-      `配り直しの門がいま配る意味は無いと答えたので、まとめて${records.length}件、ターンを` +
-      `起こさずに畳んだ（モデルへは1文字も渡していない。合図も台帳の行も消していない——` +
-      `次の起動でまた拾い直され、そのときの状態であらためて判定される）:\n${details}`
-    );
   }
 
   // 配達のたびに書く: 配り直しの回でも畳んでターンを起こさない回でも同じものを書く。1本にまとめる: 別々に書くと、`retrievalHintFor` が案内する「処理されるたびに全文が日誌へ書かれる」約束がどれか1つの経路でだけ静かに破れ、気づく手掛かりが残らないため
@@ -4866,25 +4818,9 @@ class Clone implements CloneHost {
       }
     };
 
-    // 溜めるのは journal の材料だけ: 本文は `#foldGatedRedelivery` の中で record ごとに即座に書く。合図を消すかどうかはここでも扱わない
-    const gatedRecordsThisPass: PendingInboxEvent[] = [];
-
-    const flushGatedFoldHeadline = async (): Promise<void> => {
-      if (gatedRecordsThisPass.length === 0) return;
-      const batch = gatedRecordsThisPass.splice(0, gatedRecordsThisPass.length);
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_THINNING_PREFIX}${this.#gatedRedeliveryFoldHeadline(batch)}`,
-      });
-    };
-
     for (const [restoreUnreadPassIndex, { record, verdict }] of decided.entries()) {
       if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
         await flushStaleRemovalBuffer();
-        // `staleBuffer` と同じ理由でここでも先に空にする: 積んだ「畳んだ」を return 前に書き切らないと、journal に一度も現れず黙って失われるため
-        await flushGatedFoldHeadline();
         await this.#journalRestoreUnreadPassEnd(decided, restoreUnreadPassIndex, {
           interrupted: true,
         });
@@ -4907,7 +4843,6 @@ class Clone implements CloneHost {
       // 積む直前にもう一度見る: 日誌を書いているあいだに片付けが始まっていることがあり、`Inbox#push` は閉じた後だと投げるため
       if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
         await flushStaleRemovalBuffer();
-        await flushGatedFoldHeadline();
         // stale の record は直上の `flushStaleRemovalBuffer` でストアから消えているので「処理した」に入れ、live の record はまだストアに残るので入れない
         await this.#journalRestoreUnreadPassEnd(
           decided,
@@ -4944,35 +4879,13 @@ class Clone implements CloneHost {
       // 記帳もやり直す: `open` は冪等で、やり直さないと `post` の受理後に `open` が届く前に落ちた合図が未読として残るのに台帳から永久に漏れるため
       this.#commit(record.event);
 
-      // 門より先に「そもそもまだ意味が在るか」を訊く: 門は `usageBlocked` という揺れる値で「いま配るか」を決めて行を残すが、こちらは合図の性質だけで「もう要らないか」を決めて消すので、消し込みを揺れる値に預けないため（`restoredInboxEventVerdict` は `usageBlocked` を受け取らない）
+      // 配るかどうかは合図の性質だけで決める（`restoredInboxEventVerdict` は `usageBlocked` を受け取らない）: 消し込みを揺れる値に預けないため。`usageBlocked` で行を残して見送る門は置かない
       if (verdict === 'stale') {
-        continue;
-      }
-
-      // `usageBlocked` はその瞬間に評価し、ループの外で1回だけ評価して使い回さない: このループは1件ごとに `await` するので、並行する `#pump` が途中で動かしうるため（`usageBlockedResetsAt` / `usageBlockedTokenId` も同じ瞬間に読む）
-      let worthRedelivering: boolean;
-      try {
-        worthRedelivering = this.#redeliveryGate(record.event, {
-          usageBlocked: this.usageBlocked,
-          releasePending: this.usageReleasePending,
-          usageBlockedResetsAt: this.usageBlockedResetsAt,
-          usageBlockedTokenId: this.usageBlockedTokenId,
-        });
-      } catch (error) {
-        // 判定できないときは配る側へ倒す: 雑音であって喪失ではない側のため
-        noteDroppedRecord('配り直しの門の判定', inboxEventShape(record.event), error);
-        worthRedelivering = true;
-      }
-
-      if (!worthRedelivering) {
-        // **`#inbox.push` をしない ＝ ターンを起こさない。** 受信箱の行も台帳の行も消さない: 次の起動でまた拾い、その時点の `usageBlocked` で判定し直すため
-        await this.#foldGatedRedelivery(record, gatedRecordsThisPass);
         continue;
       }
 
       // `post` を通さない: tick の畳み込みで落ちた行が器に残り続けるため。ただし人間優先（`insertAfterLast`）まで落とさない: 避けたいのは畳み込みだけで、割り込みの規則ではないため
       // 拾い直しているあいだに消された合図は積まない: `dropQueuedInboxEvents` は「その瞬間に待ち行列に居るもの」しか外せず、このループは日誌・台帳の `await` を挟みながらこれから積むので、消された後に積む順序が起きるため
-      // 門より後ろに置く: 逆にすると、消された合図に対して「次の起動でまた拾う」と書く跡が残り、拾えないのに拾えると書くことになるため
       // `#forget` は呼ばない: 器の行は消し込んだ側が既に消しており、空振りの `remove` で `settled` を二重に数えるため
       if (this.#droppedWhileRestoring.has(record.event.id)) {
         this.#delivery.deleteUnread(record.event.id);
@@ -4997,7 +4910,6 @@ class Clone implements CloneHost {
     }
 
     await flushStaleRemovalBuffer();
-    await flushGatedFoldHeadline();
     await this.#journalRestoreUnreadPassEnd(decided, decided.length, { interrupted: false });
     return claimedIds;
   }

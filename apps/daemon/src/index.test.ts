@@ -2,16 +2,11 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import type { InboxEvent } from '@alteroid/core';
-
 import {
   createCloneWakeGate,
   describeReopenedTokenNotice,
-  isTokenPoolReopenedNotice,
   reopenedTokenOf,
   tokenRotationStream,
-  TOKEN_POOL_REOPENED_SOURCE,
-  worthDeliveringNow,
   reportRetiredLayerProviderEnv,
 } from './index.js';
 import type { CloneWakeGate } from './index.js';
@@ -467,104 +462,6 @@ describe('createCloneWakeGate', () => {
       kind: 'wake',
       folded: 2,
     });
-  });
-});
-
-// `source` を引数で受ける: 呼び出し側で `{ ...tokenPoolEvent(), source }` とスプレッドすると、union の `source` を持たない枝に対して `TS2322` で落ちるため。
-function tokenPoolEvent(source: string = TOKEN_POOL_REOPENED_SOURCE): InboxEvent {
-  return {
-    type: 'external',
-    id: 'evt-token-pool-1',
-    at: '2026-09-07T00:00:00.000Z',
-    source,
-    payload: { text: 'ダミー' },
-  };
-}
-
-describe('isTokenPoolReopenedNotice', () => {
-  it('external かつ source が token-pool なら真', () => {
-    expect(isTokenPoolReopenedNotice(tokenPoolEvent())).toBe(true);
-  });
-
-  it('external でも source が違えば偽', () => {
-    const event = tokenPoolEvent('runner-registry');
-    expect(isTokenPoolReopenedNotice(event)).toBe(false);
-  });
-
-  it('external 以外は真になりようがない（型で弾かれる）', () => {
-    const event: InboxEvent = {
-      type: 'human_message',
-      id: 'evt-human-1',
-      at: '2026-09-07T00:00:00.000Z',
-      text: 'こんにちは',
-      conversationId: 'conv-1',
-    };
-    expect(isTokenPoolReopenedNotice(event)).toBe(false);
-  });
-});
-
-describe('歯1: CloneWakeGate.decide と redeliveryGate は同じ答えを返す', () => {
-  const redeliveryGate = (
-    event: InboxEvent,
-    context: { usageBlocked: boolean; releasePending: boolean },
-  ): boolean =>
-    isTokenPoolReopenedNotice(event)
-      ? worthDeliveringNow(context.usageBlocked, context.releasePending)
-      : true;
-
-  it.each([
-    [true, true],
-    [true, false],
-    [false, true],
-    [false, false],
-  ] as const)(
-    'usageBlocked=%s / releasePending=%s のとき、wake の判定と一致する',
-    (blocked, releasePending) => {
-      const gate = createCloneWakeGate();
-
-      const wakeSaysWake = gate.decide(reopened('tok-a'), blocked, releasePending).kind === 'wake';
-      const gateSaysDeliver = redeliveryGate(tokenPoolEvent(), {
-        usageBlocked: blocked,
-        releasePending,
-      });
-
-      expect(gateSaysDeliver).toBe(wakeSaysWake);
-    },
-  );
-
-  it('token-pool 以外の合図は usageBlocked / releasePending に関わらず常に配る（wake 側の対象外）', () => {
-    const other = tokenPoolEvent('runner-registry');
-    expect(redeliveryGate(other, { usageBlocked: true, releasePending: false })).toBe(true);
-    expect(redeliveryGate(other, { usageBlocked: false, releasePending: false })).toBe(true);
-    expect(redeliveryGate(other, { usageBlocked: true, releasePending: true })).toBe(true);
-    expect(redeliveryGate(other, { usageBlocked: false, releasePending: true })).toBe(true);
-  });
-});
-
-describe('本番の配線: redeliveryGate は wake() と同じ部品を呼ぶ', () => {
-  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
-
-  it('redeliveryGate が isTokenPoolReopenedNotice と worthDeliveringNow を呼ぶ', () => {
-    const at = source.indexOf('redeliveryGate: (');
-    expect(at).toBeGreaterThan(-1);
-    const block = source.slice(at, source.indexOf('\n  });', at));
-
-    expect(block).toContain('isTokenPoolReopenedNotice(event)');
-    expect(block).toContain('worthDeliveringNow(usageBlocked, releasePending)');
-  });
-
-  it('redeliveryGate が staleObservedRecoveryNoticeEvent を呼び、必要な4つの材料を渡す', () => {
-    const at = source.indexOf('redeliveryGate: (');
-    expect(at).toBeGreaterThan(-1);
-    const block = source.slice(at, source.indexOf('\n  });', at));
-
-    expect(block).toContain('staleObservedRecoveryNoticeEvent(');
-    expect(block).toContain('usageBlockedResetsAt');
-    expect(block).toContain('usageBlockedTokenId');
-    expect(block).toContain(
-      'worthDeliveringNow(usageBlocked, releasePending) &&\n' +
-        '          !staleObservedRecoveryNoticeEvent(event, usageBlockedResetsAt, usageBlockedTokenId)',
-    );
   });
 });
 

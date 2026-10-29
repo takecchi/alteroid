@@ -1287,7 +1287,6 @@ export {
   resolveCloneToolRelayChildEntry,
 } from './clone-tools-transport.js';
 export {
-  ALWAYS_REDELIVER,
   DAILY_REPORT_RETRY_DELAYS_MS,
   CLONE_MODEL,
   CLONE_MODEL_ENV_KEY,
@@ -1309,7 +1308,6 @@ export {
   staleObservedRecoveryNoticeEvent,
   tokenPoolReopenedPayload,
   type CloneOptions,
-  type RedeliveryGate,
   type TokenPoolReopenedPayload,
   ApprovalAlreadySettledError,
   InvalidApprovalSelectionsError,

@@ -54,13 +54,11 @@ import {
   resolveCloneModel,
   retiredLayerProviderNotices,
   staleObservedRecoveryForBlockedKey,
-  staleObservedRecoveryNoticeEvent,
   WITHHELD_ENV_KEYS,
   writeStderrSync,
   describeLoopStall,
   markStreamWrites,
   startLoopStallWatch,
-  type InboxEvent,
   type RunnerClient,
   type RunnerPlacementResources,
   type RunnerSource,
@@ -355,10 +353,6 @@ export function worthDeliveringNow(blocked: boolean, releasePending: boolean): b
 
 // 値の正本を core 側に置く: `packages/core` は `apps/daemon` に依存できないため。
 export const TOKEN_POOL_REOPENED_SOURCE = DAEMON_TOKEN_POOL_REOPENED_SOURCE;
-
-export function isTokenPoolReopenedNotice(event: InboxEvent): boolean {
-  return event.type === 'external' && event.source === TOKEN_POOL_REOPENED_SOURCE;
-}
 
 // 時間の窓や件数の上限で畳まず、最後に配った合図の身元を状態として持つ: 恣意的な定数は本物の合図を黙って失わせるため。
 // `restore()` / `resumeStoppedByUsage()` はこの門に通さない: マネージャーはクローンと独立に枠で止まりうるため。
@@ -893,15 +887,6 @@ export async function main(): Promise<void> {
       });
     },
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
-    // `wake()` と同じ関数を呼ぶ: `#restoreUnread` は `post()` を通らず、同じ鍵・同じ resetsAt への使い回しを畳む条件が自動では掛からないため。
-    redeliveryGate: (
-      event,
-      { usageBlocked, releasePending, usageBlockedResetsAt, usageBlockedTokenId },
-    ) =>
-      isTokenPoolReopenedNotice(event)
-        ? worthDeliveringNow(usageBlocked, releasePending) &&
-          !staleObservedRecoveryNoticeEvent(event, usageBlockedResetsAt, usageBlockedTokenId)
-        : true,
   });
 
   // 写しを読み直してから見る: 非同期で読むため、空のまま見ると正本に置かれた接続先を見落とす。
