@@ -231,6 +231,58 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
     await s.clone.stop();
   });
 
+  // ALTEROID_TOKEN_SAVING_COMPACTION が切り（本番の既定）なら、#5305 / #5426 の前の形: 要約の後は記憶の索引を全文で載せ直す
+  it.each([
+    // setup の既定は節約を有効にした env なので、未設定は `undefined` で明示して上書きする
+    ['未設定', { ALTEROID_TOKEN_SAVING_COMPACTION: undefined }],
+    ['0', { ALTEROID_TOKEN_SAVING_COMPACTION: '0' }],
+    ['off', { ALTEROID_TOKEN_SAVING_COMPACTION: 'off' }],
+  ] as const)(
+    '⭐ 畳み後の再表示の系統が切り（%s）なら、焼いた時点から変わっていなくても、要約の後は索引を丸ごと載せ直す',
+    async (_name, env) => {
+      const s = setup(undefined, await twoPremises(), {}, env);
+      s.clone.post(humanMessage('1回目'));
+      await waitForDone(s.events);
+
+      await firePreCompact(s);
+
+      const { events } = wireEvents(s.clone, 'conv-2');
+      s.clone.post(humanMessage('2回目', 'conv-2'));
+      await waitForDone(events);
+
+      const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
+      expect(input).toContain('いまの索引を丸ごと載せ直す');
+      expect(input).toContain('## VALUES-HEAD');
+      expect(input).toContain('## HABITS-HEAD');
+      expect(input).not.toContain(MEMORY_UNCHANGED_SINCE_BAKED_NOTICE);
+      expect(input).not.toContain('システムプロンプトの記憶は要約で消えていない');
+
+      await s.clone.stop();
+    },
+  );
+
+  it('⭐ 畳み後の再表示の系統が切りなら、要約の前に差分を載せ済みでも、要約後は全文の索引（焼いた時点との差の分だけにしない）', async () => {
+    const stores = await twoPremises();
+    const s = setup(undefined, stores, {}, { ALTEROID_TOKEN_SAVING_COMPACTION: '0' });
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await stores.persona.write('values', VALUES_V2);
+    await firePreCompact(s);
+
+    const { events } = wireEvents(s.clone, 'conv-2');
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+
+    const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(input).toContain('いまの索引を丸ごと載せ直す');
+    expect(input).toContain('## VALUES-HEAD-V2');
+    expect(input).toContain('## HABITS-HEAD');
+    expect(input).not.toContain('システムプロンプトの記憶は要約で消えていない');
+
+    await s.clone.stop();
+  });
+
   it('⭐ 要約の前に差分を載せ済みで、要約後も焼いた時点との差が残るなら、その差が載り直る（差分は要約に畳まれたため）', async () => {
     const stores = await twoPremises();
     const s = setup(undefined, stores);

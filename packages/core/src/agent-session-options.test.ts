@@ -16,6 +16,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { cloneMcpServers, DEFAULT_AUTO_COMPACT_WINDOW_TOKENS } from './claude-provider.js';
+import { TOKEN_SAVING_COMPACTION_ENV } from './token-saving-switches.js';
 import {
   CLONE_TOOL_RELAY_SOCKET_ENV,
   CLONE_TOOL_RELAY_TOKEN_ENV,
@@ -138,10 +139,33 @@ describe('クローン本セッションへ渡す Options', () => {
     );
   }, 60_000);
 
+  it('compaction の系統が切り（既定）なら、settings に自動の要約の窓を載せない', async () => {
+    const { fn, calls } = fakeCloneSdk();
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+    const { options } = calls[0] as { options: Options };
+    expect(options.settings).toEqual({ attribution: { commit: '', pr: '' } });
+
+    await clone.stop();
+  });
+
   it('既定のモデル帯・道具の配置・許可モードを固定する', async () => {
     const { fn, calls } = fakeCloneSdk();
     const stores = createMemoryStores();
-    const clone = createClone({ stores, queryFn: fn, env: {}, redeliveryGate: ALWAYS_REDELIVER });
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: { [TOKEN_SAVING_COMPACTION_ENV]: '1' },
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
 
     clone.post(humanMessage('やあ'));
     await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
@@ -353,7 +377,7 @@ describe('マネージャー（runner）へ渡す Options', () => {
     await host?.shutdown().catch(() => undefined);
   });
 
-  it('既定のモデル帯・道具の配置・許可モードを固定する', async () => {
+  it('compaction の系統が切り（既定）なら、マネージャーの settings に自動の要約の窓を載せない', async () => {
     const { fn, started } = fakeRunnerSdk();
     host = createRunnerHost({
       runnerId: 'runner-primary',
@@ -361,6 +385,25 @@ describe('マネージャー（runner）へ渡す Options', () => {
       emit: () => undefined,
       queryFn: fn,
       env: {},
+    });
+
+    await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const { options } = started[0] as Started;
+
+    expect(options.settings).toEqual({
+      attribution: { commit: '', pr: '' },
+      autoMemoryEnabled: false,
+    });
+  });
+
+  it('既定のモデル帯・道具の配置・許可モードを固定する', async () => {
+    const { fn, started } = fakeRunnerSdk();
+    host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: dir,
+      emit: () => undefined,
+      queryFn: fn,
+      env: { [TOKEN_SAVING_COMPACTION_ENV]: '1' },
     });
 
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
@@ -405,7 +448,7 @@ describe('マネージャー（runner）へ渡す Options', () => {
       workspacePath: dir,
       emit: () => undefined,
       queryFn: fn,
-      env: { [MANAGER_AUTO_MEMORY_ENV_KEY]: 'true' },
+      env: { [MANAGER_AUTO_MEMORY_ENV_KEY]: 'true', [TOKEN_SAVING_COMPACTION_ENV]: '1' },
     });
 
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });

@@ -506,6 +506,27 @@ export type {
   TaskTransition,
 } from './task.js';
 export { verifyTaskStoreContract } from './task-store-contract.js';
+// 台帳 → Task の移行（#5469 P7a。純関数と dryRun。起動時・道具には繋がない）
+export {
+  migrateCommitmentsToTasks,
+  migrationTaskTitle,
+  planCommitmentMigration,
+  taskFromCommitment,
+} from './commitment-task-migration.js';
+export type {
+  CommitmentMigrationAction,
+  CommitmentMigrationExecution,
+  CommitmentMigrationFailure,
+  CommitmentMigrationPlan,
+  CommitmentMigrationPlanItem,
+  CommitmentMigrationPlanRow,
+  CommitmentMigrationReport,
+  CommitmentMigrationStores,
+  CommitmentMigrationSummary,
+  MigrateCommitmentsOptions,
+} from './commitment-task-migration.js';
+export { verifyCommitmentTaskMigrationContract } from './commitment-task-migration-contract.js';
+export type { CommitmentMigrationFixture } from './commitment-task-migration-contract.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 export { verifyCommitmentAutoCloseMarkContract } from './commitment-auto-close-mark-contract.js';

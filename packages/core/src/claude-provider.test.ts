@@ -33,6 +33,7 @@ import {
   withNoModelFallbackEnv,
   withNoSessionTitleEnv,
 } from './claude-provider.js';
+import { TOKEN_SAVING_COMPACTION_ENV } from './token-saving-switches.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
 import { WORKER_AGENT_NAME } from './runner.js';
@@ -2249,10 +2250,13 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
       ['マネージャー', managerOptions],
     ] as const;
 
+    // 窓は「畳み」の系統の入り切り（ALTEROID_TOKEN_SAVING_COMPACTION）の下にある。既定は切りなので、窓を見る試験は明示して入れる
+    const ON = { [TOKEN_SAVING_COMPACTION_ENV]: '1' };
+
     it.each(sessions)(
       '%s: 人間が窓を置いていなければ、既定の窓を settings に載せる',
       (_, build) => {
-        expect(build({ PATH: '/bin' }).settings).toMatchObject({
+        expect(build({ PATH: '/bin', ...ON }).settings).toMatchObject({
           autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
         });
       },
@@ -2261,20 +2265,43 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
     it.each(sessions)(
       '%s: 人間が env に窓を置いていれば settings に載せず、env はそのまま渡す（settings は env より優先されうるため）',
       (_, build) => {
-        const options = build({ [AUTO_COMPACT_WINDOW_ENV_KEY]: '500k' });
+        const options = build({ [AUTO_COMPACT_WINDOW_ENV_KEY]: '500k', ...ON });
         expect(options.settings).not.toHaveProperty('autoCompactWindow');
         expect(options.env).toMatchObject({ [AUTO_COMPACT_WINDOW_ENV_KEY]: '500k' });
       },
     );
 
     it.each(sessions)('%s: 空文字・空白だけは「置いていない」と読む', (_, build) => {
-      expect(build({ [AUTO_COMPACT_WINDOW_ENV_KEY]: '  ' }).settings).toMatchObject({
+      expect(build({ [AUTO_COMPACT_WINDOW_ENV_KEY]: '  ', ...ON }).settings).toMatchObject({
         autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
       });
     });
 
+    it.each(sessions)(
+      '%s: compaction の系統が切り（既定）なら、窓を載せない（SDK の既定のまま）',
+      (_, build) => {
+        expect(build({ PATH: '/bin' }).settings).not.toHaveProperty('autoCompactWindow');
+        for (const off of ['0', 'off', 'false', '']) {
+          expect(
+            build({ [TOKEN_SAVING_COMPACTION_ENV]: off }).settings,
+            `ALTEROID_TOKEN_SAVING_COMPACTION='${off}' で窓が載っている`,
+          ).not.toHaveProperty('autoCompactWindow');
+        }
+      },
+    );
+
+    it.each(sessions)(
+      '%s: 系統が入りでも、人間の CLAUDE_CODE_AUTO_COMPACT_WINDOW が勝つ',
+      (_, build) => {
+        const options = build({ [AUTO_COMPACT_WINDOW_ENV_KEY]: '250000', ...ON });
+        expect(options.settings).not.toHaveProperty('autoCompactWindow');
+        expect(options.env).toMatchObject({ [AUTO_COMPACT_WINDOW_ENV_KEY]: '250000' });
+      },
+    );
+
     it('帰属を消す settings は窓と一緒に残る（窓を足して帰属の設定を落とさない）', () => {
       for (const build of [cloneOptions, managerOptions]) {
+        expect(build({ ...ON }).settings).toMatchObject({ attribution: { commit: '', pr: '' } });
         expect(build({}).settings).toMatchObject({ attribution: { commit: '', pr: '' } });
       }
     });

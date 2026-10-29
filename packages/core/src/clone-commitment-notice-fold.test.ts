@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
-import { waitFor } from './clone-test-harness.js';
+import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -23,6 +23,8 @@ interface SdkScript {
   /** n 番目（1始まり）の入力の結果を、この Promise が解けるまで返さない（次の入力を束ねさせるため）。 */
   holdResultAt?: Readonly<Record<number, Promise<void>>>;
   after?: (inputCount: number) => SDKMessage[];
+  // クローンの env。既定は畳みを有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）
+  env?: NodeJS.ProcessEnv;
 }
 
 interface Boot {
@@ -91,7 +93,7 @@ function boot(script: SdkScript = {}, stores = createMemoryStores()): Boot {
   const clone = createClone({
     stores,
     queryFn: fn,
-    env: {},
+    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
     redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),
@@ -173,6 +175,24 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
     await s.clone.stop();
   });
 
+  it('⭐ 畳みが切り（既定）なら、台帳の2行も末尾の固定文も2回目以降も全文のまま', async () => {
+    const s = boot({ env: {} });
+    const first = await humanTurn(s);
+    const second = await humanTurn(s);
+    const third = await humanTurn(s);
+
+    for (const turn of [first, second, third]) {
+      const lines = ledgerLines(turn.input);
+      expect(lines).toContain(`${FULL_COUNT_HEAD}（`);
+      expect(lines).toContain(SKELETON);
+      expect(lines).toContain(`いま届いたこの一件も台帳に載せた（id: \`${turn.id}\`）。`);
+      expect(turn.input).toContain('全文と齢は `commitment_list` で見られる');
+      expect(turn.input).not.toContain('会話の上と同じ');
+      expect(lines).not.toContain(SHORT_COUNT_HEAD);
+    }
+    await s.clone.stop();
+  });
+
   it('⭐ 2回目以降は、閉じ方の参照と末尾の参照が1行にまとまる（指し先の道具は残る）', async () => {
     const s = boot();
     const first = await humanTurn(s);
@@ -247,6 +267,41 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
     process.stderr.write(
       `[人間操作の末尾段落 測定] 全文 ${String(paragraph(second.input).length)} 字 → 参照 ${String(paragraph(third.input).length)} 字\n`,
     );
+    await s.clone.stop();
+  });
+
+  it('⭐ 畳みが切り（既定）なら、人間操作の節の末尾段落も毎回全文', async () => {
+    const stores = createMemoryStores();
+    const s = boot({ env: {} }, stores);
+    const act = (target: string) =>
+      stores.journal.append({
+        type: 'decision',
+        decision: `${target} を人間が操作した`,
+        grounds: 'API',
+        humanAction: {
+          kind: 'practice_remove',
+          target,
+          via: { kind: 'operator', auth: 'operator-token' },
+        },
+      });
+    const FULL = '経路は監査の記録であって、人間がした証拠ではない';
+    await humanTurn(s);
+    await act('way-a');
+    const second = await humanTurn(s);
+    await act('way-b');
+    const third = await humanTurn(s);
+    await act('way-c');
+    const fourth = await humanTurn(s);
+
+    for (const [turn, target] of [
+      [second, 'way-a'],
+      [third, 'way-b'],
+      [fourth, 'way-c'],
+    ] as const) {
+      expect(turn.input).toContain(FULL);
+      expect(turn.input).toContain(`やり方を消した: ${target}`);
+      expect(turn.input).not.toContain('読み方は会話の上と同じ');
+    }
     await s.clone.stop();
   });
 

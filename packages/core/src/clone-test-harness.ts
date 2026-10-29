@@ -9,6 +9,10 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
+import {
+  TOKEN_SAVING_COMPACTION_ENV,
+  TOKEN_SAVING_FOLD_FIXED_TEXT_ENV,
+} from './token-saving-switches.js';
 
 function contentText(content: unknown): string {
   if (!Array.isArray(content)) return String(content);
@@ -245,11 +249,18 @@ export function waitForEventsOf(events: ChatStreamEvent[], label: string): Setup
   return waitForEvents;
 }
 
+// 畳み・compaction まわりの節約は本番の既定では無効（`token-saving-switches.ts`）。既存の試験は節約が有効な挙動を測っているので、harness は env で明示して有効にする。
+// 既定の無効を測る試験は、`setup` の `env` に '0' を置いて上書きする。
+export const TOKEN_SAVING_ENABLED_ENV: NodeJS.ProcessEnv = {
+  [TOKEN_SAVING_FOLD_FIXED_TEXT_ENV]: '1',
+  [TOKEN_SAVING_COMPACTION_ENV]: '1',
+};
+
 export function setup(
   reply?: (input: string) => string,
   stores: Stores = createMemoryStores(),
   sdkOptions: Parameters<typeof fakeSdk>[1] = {},
-  // 既定は空にする: 手元の ALTEROID_CLONE_MODEL の有無でテストの結果を変えないため
+  // 既定は節約の有効だけ: 手元の ALTEROID_CLONE_MODEL の有無でテストの結果を変えないため
   env: NodeJS.ProcessEnv = {},
   cloneOptions: {
     contextUsageTimeoutMs?: number;
@@ -270,7 +281,7 @@ export function setup(
     redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
-    env,
+    env: { ...TOKEN_SAVING_ENABLED_ENV, ...env },
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),

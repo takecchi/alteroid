@@ -1,7 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { waitFor } from './clone-test-harness.js';
+import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import {
   ALWAYS_REDELIVER,
   compactionLikelyThisTurn,
@@ -144,13 +144,14 @@ function bootClone(
   stores: Stores,
   managers: ManagerPool,
   mergedBatchLimit?: number,
+  env: NodeJS.ProcessEnv = TOKEN_SAVING_ENABLED_ENV,
 ): Fake & { clone: CloneHost } {
   const fake = fakeSdk();
   const clone = createClone({
     reportSettleMs: 2500,
     stores,
     queryFn: fake.fn,
-    env: {},
+    env,
     managers,
     redeliveryGate: ALWAYS_REDELIVER,
     ...(mergedBatchLimit === undefined ? {} : { mergedBatchLimit }),
@@ -630,7 +631,7 @@ describe('状況の節と manager_list は、メモリの配達待ち行列を�
       reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
-      env: {},
+      env: TOKEN_SAVING_ENABLED_ENV,
       managers: busyPool(),
       redeliveryGate: ALWAYS_REDELIVER,
       // 束の上限を1にする: 上の試験と同じ理由（別々の担当の報告が A のターンへまとまり、待ち行列に残らないため）
@@ -708,6 +709,48 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
     await s.clone.stop();
   });
 
+  // ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT が未設定（既定）・無効の綴りなら、2ターン目も全文
+  it.each([
+    ['未設定', {}],
+    ['0', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0' }],
+    ['off', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'off' }],
+    ['false', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'false' }],
+  ] as const)('⭐ 畳みが切り（%s）なら、2ターン目も状況の全文が出る', async (_name, env) => {
+    const s = bootClone(createMemoryStores(), busyPool(), undefined, env);
+
+    const first = await humanTurn(s, 1);
+    const second = await humanTurn(s, 2);
+
+    for (const text of [first, second]) {
+      expect(text).toContain(READINGS_HEAD);
+      expect(text).toContain('委譲 全 3 本');
+      expect(text).toContain('器 2 台: connected 1 / vacating 1。');
+    }
+    expect(second).not.toContain('いまの全体: 前のターンと変化なし');
+    await s.clone.stop();
+  });
+
+  it('⭐ 畳みの入り切りで、同じ場面の2ターン目の字数がどう変わるか（実測）', async () => {
+    const lengths: Record<string, number[]> = {};
+    for (const [label, env] of [
+      ['切り（既定）', {}],
+      ['入り', TOKEN_SAVING_ENABLED_ENV],
+    ] as const) {
+      const s = bootClone(createMemoryStores(), busyPool(), undefined, env);
+      const first = await humanTurn(s, 1);
+      const second = await humanTurn(s, 2);
+      lengths[label] = [first.length, second.length];
+      await s.clone.stop();
+    }
+    const off = lengths['切り（既定）'] as number[];
+    const on = lengths['入り'] as number[];
+    console.log(
+      `[畳みの入り切り 測定] 状況 1ターン目→2ターン目: 切り ${String(off[0])}→${String(off[1])} 字 / 入り ${String(on[0])}→${String(on[1])} 字`,
+    );
+    expect(off[0]).toBe(on[0]);
+    expect(off[1]).toBeGreaterThan(on[1] as number);
+  });
+
   it(`全文を出してから ${String(SITUATION_FULL_EVERY_TURNS)} ターン目に全文へ戻す`, async () => {
     const s = bootClone(createMemoryStores(), busyPool());
 
@@ -772,7 +815,7 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
-      env: {},
+      env: TOKEN_SAVING_ENABLED_ENV,
       managers: busyPool(),
       redeliveryGate: ALWAYS_REDELIVER,
     });
@@ -838,7 +881,7 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
-      env: {},
+      env: TOKEN_SAVING_ENABLED_ENV,
       managers: busyPool(),
       redeliveryGate: ALWAYS_REDELIVER,
     });
@@ -912,7 +955,7 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
-      env: {},
+      env: TOKEN_SAVING_ENABLED_ENV,
       managers: busyPool(),
       redeliveryGate: ALWAYS_REDELIVER,
     });

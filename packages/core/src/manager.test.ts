@@ -253,6 +253,8 @@ interface SetupOptions {
   // 省略時は渡さない: 本番と同じ既定（3000ms）のまま走らせるため。
   // 窓の後に届く知らせの中身を測る試験だけが `TEST_NOTICE_WINDOW_MS` を渡す。
   synthesizedNoticeWindowMs?: number;
+  // 省略時は渡さない: プールが環境変数 ALTEROID_TOKEN_SAVING_EXCERPT（既定は入り）を読む本番と同じ形のまま走らせるため。
+  tokenSavingExcerpt?: boolean;
 }
 
 // 窓の満了を待つ試験だけ既定より短く取る。0 に近づけすぎない: 1回の `restore()` で
@@ -302,6 +304,9 @@ function setup(
     ...(options.synthesizedNoticeWindowMs === undefined
       ? {}
       : { synthesizedNoticeWindowMs: options.synthesizedNoticeWindowMs }),
+    ...(options.tokenSavingExcerpt === undefined
+      ? {}
+      : { tokenSavingExcerpt: options.tokenSavingExcerpt }),
   });
   return { pool, stores, sessions, inbox, runner };
 }
@@ -3907,6 +3912,32 @@ describe('マネージャーの報告を黙って落とさない', () => {
       expect(listed?.lastReport).toContain(section);
       expect(journal).toContain(section);
     }
+
+    await s.pool.stop();
+  });
+
+  it('⭐ 抜粋の系統を切る（ALTEROID_TOKEN_SAVING_EXCERPT=0）と、受信箱へも途中の発言を含む全文が届く（最後の発言だけにしない）', async () => {
+    const s = setup(undefined, { tokenSavingExcerpt: false });
+    const { managerId } = await s.pool.start({ request: '6セクションで報告して' });
+    const session = s.sessions[0] as FakeSession;
+
+    await session.say('## 1\n本文1\n\n## 2\n本文2\n\n## 3\n本文3');
+    await session.say('## 4\n本文4\n\n## 5\n本文5\n\n## 6\n本文6');
+    await session.report('## 5\n本文5\n\n## 6\n本文6');
+
+    const reports = await vi.waitFor(() => {
+      const found = s.inbox.filter(
+        (event) => event.type === 'manager_message' && event.kind === 'report',
+      );
+      if (found.length === 0) throw new Error('報告がまだ届いていない');
+      return found;
+    });
+    const delivered = reports.map((event) => (event as { text: string }).text).join('\n');
+
+    for (const section of ['## 1', '## 2', '## 3', '## 4', '## 5', '## 6']) {
+      expect(delivered).toContain(section);
+    }
+    expect(delivered).not.toContain(`manager_report managerId=${managerId}`);
 
     await s.pool.stop();
   });

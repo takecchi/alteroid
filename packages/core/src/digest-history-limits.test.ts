@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildActivityDigest, DIGEST_BODY_SHAPE_LIMIT, DIGEST_SETTLED_LIMIT } from './digest.js';
+import {
+  buildActivityDigest,
+  DIGEST_BODY_SHAPE_LIMIT,
+  DIGEST_SETTLED_LIMIT,
+  MAX_ITEMS,
+} from './digest.js';
 import { DigestSessionDelta } from './digest-session-delta.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -43,6 +48,22 @@ describe('この期間に片付けた仕事の一覧は DIGEST_SETTLED_LIMIT 件
     );
     expect(section).toContain(`…ほか ${total - DIGEST_SETTLED_LIMIT} 件（`);
     expect(section).toContain('`commitment_list` に includeClosed=true を渡すと辿れる');
+  });
+
+  // ALTEROID_TOKEN_SAVING_EXCERPT=0（Clone は trimHistory: false を渡す）: 節約の前の上限（MAX_ITEMS）へ戻る
+  it('⭐ trimHistory: false なら、上限は MAX_ITEMS（節約の前の件数）へ戻る', async () => {
+    const stores = createMemoryStores();
+    const total = DIGEST_SETTLED_LIMIT + 6;
+    expect(total).toBeLessThanOrEqual(MAX_ITEMS);
+    await seedSettled(stores, total);
+
+    const digest = await buildActivityDigest(stores, { since: since() }, undefined, undefined, {
+      trimHistory: false,
+    });
+    const section = settledSection(digest);
+
+    for (let i = 0; i < total; i += 1) expect(section).toContain(`- 片付け ${i}\n`);
+    expect(section).not.toContain('…ほか');
   });
 
   it('上限以下なら全件が出て、省略の行は出ない', async () => {

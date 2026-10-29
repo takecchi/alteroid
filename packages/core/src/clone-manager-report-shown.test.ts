@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
-import { waitFor } from './clone-test-harness.js';
+import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -23,6 +23,8 @@ interface Script {
   after?: (inputCount: number) => SDKMessage[];
   failFirstStarts?: number;
   failResultAt?: number;
+  // クローンの env。既定は畳みを有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）
+  env?: NodeJS.ProcessEnv;
 }
 
 const compactBoundary = {
@@ -88,7 +90,7 @@ function boot(script: Script = {}): Boot {
   const clone = createClone({
     stores,
     queryFn: fn,
-    env: {},
+    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
@@ -143,6 +145,17 @@ describe('報告の全文を発言に載せたことの控え', () => {
     expect(shownAt).toBeInstanceOf(Date);
     expect(s.context().managerReportShownAt?.('mgr-b', text)).toBeNull();
     expect(s.context().managerReportShownAt?.('mgr-a', `${text}違う`)).toBeNull();
+    await s.clone.stop();
+  });
+
+  it('⭐ 畳みが切り（既定）なら、全文を載せた報告も控えず、manager_report は毎回全文を返す側になる', async () => {
+    const s = boot({ env: {} });
+    const text = body('5K字の報告', 5_000);
+
+    const input = await report(s, 'mgr-a', text);
+
+    expect(input).toContain(text);
+    expect(s.context().managerReportShownAt?.('mgr-a', text)).toBeNull();
     await s.clone.stop();
   });
 

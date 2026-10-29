@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
-import { waitFor } from './clone-test-harness.js';
+import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { buildExternalEventPrompt, EXTERNAL_EVENT_FRAMING } from './prompt.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -25,6 +25,8 @@ interface SdkScript {
   noUsage?: boolean;
   failResultAt?: number;
   after?: (inputCount: number) => SDKMessage[];
+  // クローンの env。既定は畳みを有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）
+  env?: NodeJS.ProcessEnv;
 }
 
 interface Boot {
@@ -93,7 +95,7 @@ function boot(script: SdkScript = {}): Boot {
   const clone = createClone({
     stores: createMemoryStores(),
     queryFn: fn,
-    env: {},
+    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
@@ -168,6 +170,32 @@ describe('外部イベントの2行の指示は、同じ会話の2回目から�
     process.stderr.write(
       `[#5301 測定] 外部イベントの2行の指示 1回目 ${String(first.length)} 字 → 2回目 ${String(instructionOf(secondInput).length)} 字\n`,
     );
+    await s.clone.stop();
+  });
+
+  it('⭐ 畳みが切り（既定）なら、単発も束ねた入力も、2回目以降も2行の指示が全文のまま', async () => {
+    const s = boot({ env: {} });
+    const inputs = [
+      await deliver(s, externalEvent(1)),
+      await deliver(s, externalEvent(2)),
+      await deliver(s, externalEvent(3)),
+    ];
+    for (const input of inputs) {
+      const text = instructionOf(input);
+      expect(text).toContain(INSTRUCTION_HEAD);
+      expect(text).toContain(INSTRUCTION_TAIL);
+      expect(input).toContain(EXTERNAL_EVENT_FRAMING);
+    }
+    expect(instructionOf(inputs[1] ?? '')).toBe(instructionOf(inputs[0] ?? ''));
+
+    const before = s.inputs.length;
+    s.clone.post(externalEvent(4) as never);
+    s.clone.post(externalEvent(4) as never);
+    await waitFor(() => s.inputs.length > before, '束の入力');
+    const merged = s.inputs[before] ?? '';
+    expect(merged, '同じ tick に積んだ2件は束の入力になる').toContain('まとめて渡す');
+    expect(merged).toContain(INSTRUCTION_HEAD);
+    expect(merged).toContain(INSTRUCTION_TAIL);
     await s.clone.stop();
   });
 

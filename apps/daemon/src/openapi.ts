@@ -631,6 +631,46 @@ export const taskListResponseSchema = z.object({
   unreadable: z.array(unreadableTaskSchema),
 });
 
+// 台帳→Task の移行の計画（#5469 P7a）。dryRun の結果だけで、実行の結果（`execution`）は載せない: 書く口は P7 本体が配線する。
+// 行ごとの本文は載せない（タイトルと id だけ。全文は台帳に在る）。読めない台帳の行は id だけで、理由も出さない。
+const taskMigrationCountsSchema = z.object({
+  toTask: z.number().int().nonnegative(),
+  closeOnly: z.number().int().nonnegative(),
+  retire: z.number().int().nonnegative(),
+  skipClosed: z.number().int().nonnegative(),
+});
+
+export const taskMigrationPlanResponseSchema = z.object({
+  dryRun: z.literal(true),
+  summary: z.object({
+    total: z.number().int().nonnegative(),
+    toTask: z.number().int().nonnegative(),
+    closeOnly: z.number().int().nonnegative(),
+    retire: z.number().int().nonnegative(),
+    skipClosed: z.number().int().nonnegative(),
+    byOrigin: z.object({
+      human: taskMigrationCountsSchema,
+      manager: taskMigrationCountsSchema,
+      external: taskMigrationCountsSchema,
+      self: taskMigrationCountsSchema,
+    }),
+    oldestAt: isoDateTimeSchema.nullable(),
+    newestAt: isoDateTimeSchema.nullable(),
+  }),
+  items: z.array(
+    z.object({
+      id: z.string(),
+      action: z.enum(['task', 'close-only', 'retire', 'skip-closed']),
+      origin: commitmentOriginSchema,
+      at: isoDateTimeSchema,
+      title: z.string().optional(),
+    }),
+  ),
+  unreadableCommitments: z.array(z.object({ id: z.string().optional() })),
+  unreadableTasks: z.number().int().nonnegative(),
+  unreadableTaskCollisions: z.array(z.string()),
+});
+
 // 返さないと閉じられない: 閉じる口は id を取るので、返さないと人間は積めるが自分で閉じられない片道の口になる。
 export const commitmentOpenedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
 

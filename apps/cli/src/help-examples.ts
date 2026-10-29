@@ -38,6 +38,9 @@ export const HELP_EXAMPLES = {
     'alteroid tasks                          # 開いている task を、先にやる順に',
     'alteroid tasks --all                    # 閉じた task も後ろに足す',
   ),
+  tasksMigrate: examples(
+    'alteroid tasks migrate --dry-run        # 台帳のどれが task になり、どれが畳まれるかを見る（何も書かない）',
+  ),
   attachmentsPut: examples(
     'alteroid attachments put ./run.log           # 上げて id を出す（1 時間以内に発言へ添える）',
     'alteroid attachments put ./run.log --keep    # 保存して上げる（期限なし。消すのは rm）',

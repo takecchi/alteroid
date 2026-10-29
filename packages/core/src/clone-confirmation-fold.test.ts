@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
-import { waitFor } from './clone-test-harness.js';
+import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -21,6 +21,8 @@ interface SdkScript {
   noUsage?: boolean;
   failResultAt?: number;
   after?: (inputCount: number) => SDKMessage[];
+  // クローンの env。既定は畳みを有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）
+  env?: NodeJS.ProcessEnv;
 }
 
 interface Boot {
@@ -130,7 +132,7 @@ function boot(script: SdkScript = {}): Boot {
   const clone = createClone({
     stores: createMemoryStores(),
     queryFn: fn,
-    env: {},
+    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
     managers,
     redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
@@ -206,6 +208,29 @@ describe('マネージャーの質問・許可確認の応じ方は、同じ会�
       `[#5299 測定] 質問の応じ方 1回目 ${String(first.length)} 字 → 2回目 ${String(second.length)} 字\n`,
     );
     await s.clone.stop();
+  });
+
+  it('⭐ 畳みが切り（既定）なら、質問も許可確認も2回目以降も応じ方が全文のまま', async () => {
+    for (const kind of ['question', 'permission'] as const) {
+      const s = boot({ env: {} });
+      const first = guideOf(await deliver(s, confirmation(kind, 'rq1')));
+      const second = guideOf(await deliver(s, confirmation(kind, 'rq2')));
+      const third = guideOf(await deliver(s, confirmation(kind, 'rq3')));
+
+      for (const [text, requestId] of [
+        [first, 'rq1'],
+        [second, 'rq2'],
+        [third, 'rq3'],
+      ] as const) {
+        expect(text).toContain(SKELETON);
+        expect(text).toContain(ASK_HUMAN_SKELETON);
+        expect(text).toContain(`managerId: "${MANAGER_ID}", requestId: "${requestId}"`);
+        if (kind === 'permission') expect(text).toContain(DECISION);
+      }
+      expect(second.length).toBe(first.length);
+      expect(third.length).toBe(first.length);
+      await s.clone.stop();
+    }
   });
 
   it('⭐ 許可確認も同じ。decision（allow / deny）の指定は短い形にも残る', async () => {
