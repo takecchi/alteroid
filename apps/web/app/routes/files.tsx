@@ -1,9 +1,9 @@
 import { File as FileIcon, Search } from 'lucide-react';
 import { useEffect, useRef, useState, type DragEvent } from 'react';
-import { useSearchParams } from 'react-router';
 
 import { LoadError } from '~/components/load-error';
 import { saveBlob } from '~/lib/save-blob';
+import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import { useSearchParamDraft } from '~/lib/use-search-param-draft';
 import {
   ApiError,
@@ -68,7 +68,7 @@ function isGone(error: unknown): boolean {
 
 export default function Files() {
   // 絞り込みの正本は URL（開き直しても戻るでも消えず、リンクで共有できる）。操作ごとに履歴を積まないよう replace: true
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, replaceParams] = useReplaceSearchParams();
   const keptParam = searchParams.get(KEPT_PARAM);
   const kept = keptParam === '1' ? true : keptParam === '0' ? false : undefined;
   const fromParam = searchParams.get(FROM_PARAM);
@@ -78,15 +78,10 @@ export default function Files() {
   const [draft, setDraft, committed] = useSearchParamDraft(SEARCH_PARAM);
 
   function setParam(name: string, value: string | undefined) {
-    setSearchParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        if (value === undefined || value === '') next.delete(name);
-        else next.set(name, value);
-        return next;
-      },
-      { replace: true },
-    );
+    replaceParams((next) => {
+      if (value === undefined || value === '') next.delete(name);
+      else next.set(name, value);
+    });
   }
 
   // 頁の数は絞り込みごとに先頭へ戻す（絞り込みが変わったのに前の頁数のまま辿らない）

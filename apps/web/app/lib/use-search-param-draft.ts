@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router';
+
+import { useReplaceSearchParams } from './use-replace-search-params';
 
 // 打鍵ごとに撃たない: 検索はストア全体を舐めうるため
 const SEARCH_DEBOUNCE_MS = 300;
@@ -9,7 +10,7 @@ const SEARCH_DEBOUNCE_MS = 300;
 export function useSearchParamDraft(
   param: string,
 ): readonly [draft: string, setDraft: (value: string) => void, committed: string] {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, replaceParams] = useReplaceSearchParams();
   const committed = searchParams.get(param) ?? '';
   const [draft, setDraft] = useState(committed);
   // 自分が URL へ書いた語を持つ: 外からの変更（ナビのリンク・戻る）と区別しないと、打鍵中の入力を自分の書き込みの反映で巻き戻すため
@@ -27,19 +28,14 @@ export function useSearchParamDraft(
     if (draft === committed) return;
     const timer = setTimeout(() => {
       setWritten(draft);
-      setSearchParams(
-        (previous) => {
-          const next = new URLSearchParams(previous);
-          if (draft === '') next.delete(param);
-          else next.set(param, draft);
-          return next;
-        },
-        { replace: true },
-      );
+      replaceParams((next) => {
+        if (draft === '') next.delete(param);
+        else next.set(param, draft);
+      });
     }, SEARCH_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [draft, committed, param, setSearchParams]);
+  }, [draft, committed, param, replaceParams]);
   return [draft, setDraft, committed];
 }

@@ -2,7 +2,6 @@ import { LoadError } from '~/components/load-error';
 import { JournalTabs } from '~/components/group-tabs';
 import { Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router';
 import { Virtualizer, type VirtualizerHandle } from 'virtua';
 
 import {
@@ -26,6 +25,7 @@ import {
   shiftForPrepend,
 } from '@alteroid/logic';
 import { JournalEntryLinks } from '~/lib/journal-links';
+import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import { useSearchParamDraft } from '~/lib/use-search-param-draft';
 import type { JournalEntryType } from '@alteroid/logic';
 
@@ -60,7 +60,7 @@ export default function Journal() {
   // 絞り込みを画面の state に閉じ込めない（正本は URL）: 開き直すと消え、戻るで戻れず、リンクで共有できないため
   // replace: true にする: 打鍵やチップの操作ごとに履歴が積まれると「戻る」が使えなくなるため
   // チップは debounce しない: 1回のクリックがそのまま1回の意図した操作で、検索語のような「入力の途中」が無いため
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, replaceParams] = useReplaceSearchParams();
   const [draft, setDraft, committed] = useSearchParamDraft(SEARCH_PARAM);
   const [retryNonce, setRetryNonce] = useState(0);
   // useMemo で包み、生の文字列が変わらない限り同じ参照を返す: 描画のたびに selected が新しい配列になり、useJournalWindow の effect が毎回走り直すため
@@ -68,30 +68,20 @@ export default function Journal() {
   const selected = useMemo(() => parseSelectedTypes(rawTypes), [rawTypes]);
 
   function toggle(type: JournalEntryType) {
-    setSearchParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        const current = parseSelectedTypes(next.get(TYPES_SEARCH_PARAM));
-        const updated = current.includes(type)
-          ? current.filter((t) => t !== type)
-          : [...current, type];
-        if (updated.length === 0) next.delete(TYPES_SEARCH_PARAM);
-        else next.set(TYPES_SEARCH_PARAM, updated.join(','));
-        return next;
-      },
-      { replace: true },
-    );
+    replaceParams((next) => {
+      const current = parseSelectedTypes(next.get(TYPES_SEARCH_PARAM));
+      const updated = current.includes(type)
+        ? current.filter((t) => t !== type)
+        : [...current, type];
+      if (updated.length === 0) next.delete(TYPES_SEARCH_PARAM);
+      else next.set(TYPES_SEARCH_PARAM, updated.join(','));
+    });
   }
 
   function clearSelected() {
-    setSearchParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        next.delete(TYPES_SEARCH_PARAM);
-        return next;
-      },
-      { replace: true },
-    );
+    replaceParams((next) => {
+      next.delete(TYPES_SEARCH_PARAM);
+    });
   }
 
   return (
