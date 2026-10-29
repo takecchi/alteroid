@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 
-import { readSse } from './sse.js';
+import { readJsonSse, readSse } from './sse.js';
 
 function bodyOf(...chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -51,4 +51,26 @@ it('区切り無しで終わった最後のメッセージも捨てない', asyn
 
 it('CRLF でも切れる', async () => {
   expect(await collect(bodyOf('event: a\r\ndata: 1\r\n\r\n'))).toEqual([{ event: 'a', data: '1' }]);
+});
+
+it('readJsonSse — data を JSON として読む。data が空なら undefined（id は運ばない）', async () => {
+  const out = [];
+  for await (const message of readJsonSse(
+    bodyOf('event: open\ndata: {"conversationId":"c-1"}\nid: 3\n\n', 'event: done\n\n'),
+  )) {
+    out.push(message);
+  }
+  expect(out).toEqual([
+    { event: 'open', data: { conversationId: 'c-1' } },
+    { event: 'done', data: undefined },
+  ]);
+});
+
+it('readJsonSse — JSON として読めない data は投げる（黙って捨てない）', async () => {
+  const reading = (async () => {
+    for await (const _message of readJsonSse(bodyOf('event: text\ndata: {壊れた\n\n'))) {
+      // 読み進めるだけ
+    }
+  })();
+  await expect(reading).rejects.toThrow(SyntaxError);
 });
