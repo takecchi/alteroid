@@ -1,6 +1,6 @@
 import {
   createAlteroidClient,
-  readSse,
+  readJsonSse,
   type AlteroidClient,
   type ChatMessage,
   type ChatStreamMessage,
@@ -282,7 +282,7 @@ export function unwrap<T>(result: { data?: T; error?: unknown; response: Respons
 }
 
 // `client.chat()` ではなく `client.api.POST('/chat')` を使う: 手書きの型を足さず、生成 spec のまま `supersedes` を運ぶため。
-// SSE の読み取りは自前で書き直さず `readSse` を使う: `api-client` の実装を二重管理しないため
+// SSE の読み取りは自前で書き直さず `readJsonSse` を使う: `api-client` の実装を二重管理しないため
 export async function* postChat(
   client: AlteroidClient,
   input: {
@@ -309,12 +309,7 @@ export async function* postChat(
   });
   const body = unwrap(result);
   if (body === null) throw new Error('/chat の応答に本文が無い');
-  for await (const message of readSse(body)) {
-    yield {
-      event: message.event,
-      data: message.data === '' ? undefined : JSON.parse(message.data),
-    } as ChatMessage;
-  }
+  yield* readJsonSse(body) as AsyncGenerator<ChatMessage>;
 }
 
 export async function uploadAttachment(
@@ -375,12 +370,7 @@ export async function* getChatStream(
   });
   const body = unwrap(result);
   if (body === null) throw new Error('/chat/:conversationId/stream の応答に本文が無い');
-  for await (const message of readSse(body)) {
-    yield {
-      event: message.event,
-      data: message.data === '' ? undefined : JSON.parse(message.data),
-    } as ChatStreamMessage;
-  }
+  yield* readJsonSse(body) as AsyncGenerator<ChatStreamMessage>;
 }
 
 // `unwrap` ではなく成否だけを見る: `unwrap` は本文が空の 200 を失敗として投げるため、結果を使わない書き込みには合わない
