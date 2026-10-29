@@ -1779,20 +1779,37 @@ class Host implements RunnerHost {
         alive = raced;
         continue;
       }
+      // `#create` が消す戻り待ちの印を覚えておく: 開けずに名簿から外すとき、failed / lost の後の守りを元に戻すため（#5168）
+      const awaitedSince = this.#returnAwaitedSince.get(command.managerId);
       const session = this.#create(command.managerId, command.request, command.cwd);
-      session.checkFence(command.lease);
-      // 鍵の付け替えで預けた peer を引き継ぐ（#4734）。組む道具が新しい窓口を作らないよう resume の前に渡し、預かった知らせは resume の後に回す
-      const parked = this.#takeParkedPeers(command.managerId);
-      if (parked !== undefined) session.adoptPeers(parked);
-      session.resume(
-        command.sessionId,
-        command.entries,
-        resumeInput?.text,
-        resumeInput?.images,
-        command.subagents,
-        command.peers,
-      );
-      if (parked !== undefined) session.releaseAdoptedPeers();
+      let parked: ParkedPeers | undefined;
+      try {
+        session.checkFence(command.lease);
+        // 鍵の付け替えで預けた peer を引き継ぐ（#4734）。組む道具が新しい窓口を作らないよう resume の前に渡し、預かった知らせは resume の後に回す
+        parked = this.#takeParkedPeers(command.managerId);
+        if (parked !== undefined) session.adoptPeers(parked);
+        session.resume(
+          command.sessionId,
+          command.entries,
+          resumeInput?.text,
+          resumeInput?.images,
+          command.subagents,
+          command.peers,
+        );
+        if (parked !== undefined) session.releaseAdoptedPeers();
+      } catch (error) {
+        // 開けなかったセッションを名簿に残さない: 残すと次の resume が「生きている」と答え、start は「既に走っている」で断られ続けるため（`start` の失敗と揃える）
+        if (this.#sessions.get(command.managerId) === session) {
+          this.#sessions.delete(command.managerId);
+        }
+        if (awaitedSince !== undefined)
+          this.#returnAwaitedSince.set(command.managerId, awaitedSince);
+        // 取り出した peer は閉じずに預け直す: 次の resume が引き継げるように。`adoptPeers` が付け替えた窓口の持ち主（開けなかったセッション）は、預かり中は知らせを溜めるだけで動かないため戻さなくてよい（`binding.parked` は release まで立ったまま）
+        // 預け直しの note は事実どおり（peer は預かったまま）なので、そのまま `#parkPeers` を使う
+        if (parked !== undefined) this.#parkPeers(command.managerId, parked);
+        // 添付は消さない: 上の「置いた添付は消さない」と同じ理由
+        throw error;
+      }
       return { cwd: session.cwd, reusedLiveSession: false, ...this.#generationOf(session) };
     }
   }
