@@ -1,3 +1,5 @@
+import { selectNewestWithinBudget } from './resume-budget.js';
+
 /**
  * 担当の resume で戻す peer（Codex）の会話の記録。
  * 預かり先（SessionStore）では、担当の主の記録と同じ `projectKey` / `sessionId` に `subpath: 'peers/<peerId>'` を足した鍵で持つ。
@@ -49,25 +51,6 @@ export function isPeerMetaEntry(entry: unknown): entry is PeerMetaEntry {
   );
 }
 
-function charsOf(entries: readonly unknown[]): number {
-  let total = 0;
-  for (const entry of entries) total += (JSON.stringify(entry) ?? '').length;
-  return total;
-}
-
-function recencyOf(entries: readonly unknown[]): number {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (typeof entry !== 'object' || entry === null) continue;
-    const stamp = (entry as { timestamp?: unknown }).timestamp;
-    if (typeof stamp === 'string') {
-      const parsed = Date.parse(stamp);
-      if (!Number.isNaN(parsed)) return parsed;
-    }
-  }
-  return Number.NEGATIVE_INFINITY;
-}
-
 /**
  * 預かった行から印を取り出して peer の記録に組む。印が無い・読めなければ `undefined`（置き場が作れない）。
  * 印は最後の1件を採る（続きから起こした回に重ねて預けるため）。印の行は `entries` から外す。
@@ -92,33 +75,10 @@ export function buildPeerTranscript(
   };
 }
 
-/** 新しい順に、合計が上限に収まるぶんだけ選ぶ。落としたものの peerId は `omitted` に返す（呼び出し側が日誌へ残す）。 */
+/** 選び方は `selectNewestWithinBudget` のとおり。落としたものの peerId は `omitted` に返す。 */
 export function selectPeersWithinBudget(
   candidates: readonly ResumePeerTranscript[],
   budgetChars: number = RESUME_PEER_BUDGET_CHARS,
 ): { included: ResumePeerTranscript[]; omitted: string[] } {
-  const ranked = candidates
-    .map((candidate) => ({ candidate, recency: recencyOf(candidate.entries) }))
-    .sort(
-      (a, b) =>
-        b.recency - a.recency ||
-        (a.candidate.peerId < b.candidate.peerId
-          ? 1
-          : a.candidate.peerId > b.candidate.peerId
-            ? -1
-            : 0),
-    );
-  const included: ResumePeerTranscript[] = [];
-  const omitted: string[] = [];
-  let used = 0;
-  for (const { candidate } of ranked) {
-    const size = charsOf(candidate.entries);
-    if (used + size > budgetChars) {
-      omitted.push(candidate.peerId);
-      continue;
-    }
-    used += size;
-    included.push(candidate);
-  }
-  return { included, omitted };
+  return selectNewestWithinBudget(candidates, (candidate) => candidate.peerId, budgetChars);
 }
