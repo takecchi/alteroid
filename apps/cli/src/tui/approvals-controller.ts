@@ -17,12 +17,11 @@ import {
   type BuiltAnswer,
   type FormState,
 } from './approvals-form.js';
+import { refreshOnFeed } from './feed-refresh.js';
 import type { HeaderFeed } from './header-feed.js';
 import { affectsApprovals } from './journal-targets.js';
 import { redactedErrorMessage } from '../redact.js';
 import { Store } from './store.js';
-
-export const REFRESH_DEBOUNCE_MS = 700;
 
 export interface ListState {
   readonly status: 'idle' | 'loading' | 'ready' | 'error';
@@ -120,7 +119,6 @@ function cannotAnswerNotice(approval: ApprovalRow): string {
 export class ApprovalsController {
   readonly store = new Store<ApprovalsState>(initialApprovalsState);
   private gen = 0;
-  private timer: ReturnType<typeof setTimeout> | undefined;
   private detach: (() => void) | undefined;
   private feed: HeaderFeed | undefined;
   // 回答済みでも「送っていない」と言い切らない: 応答が無いまま失敗した送信は、デーモンが受けたか分からないため
@@ -138,9 +136,11 @@ export class ApprovalsController {
   attach(feed: HeaderFeed): void {
     this.detach?.();
     this.feed = feed;
-    this.detach = feed.onEvent((type) => {
-      // `open`（張り直し）は取りこぼしがありうるので必ず取り直す
-      if (type === 'open' || affectsApprovals(type)) this.scheduleRefresh();
+    this.detach = refreshOnFeed(feed, {
+      affects: affectsApprovals,
+      idle: () => this.store.getSnapshot().list.status === 'idle',
+      refresh: () => void this.reload(),
+      debounceMs: this.options.debounceMs,
     });
   }
 
@@ -148,18 +148,6 @@ export class ApprovalsController {
     this.detach?.();
     this.detach = undefined;
     this.feed = undefined;
-    clearTimeout(this.timer);
-    this.timer = undefined;
-  }
-
-  private scheduleRefresh(): void {
-    if (this.store.getSnapshot().list.status === 'idle') return;
-    if (this.timer !== undefined) return;
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      if (this.store.getSnapshot().list.status === 'idle') return;
-      void this.reload();
-    }, this.options.debounceMs ?? REFRESH_DEBOUNCE_MS);
   }
 
   private setList(patch: Partial<ListState>): void {
