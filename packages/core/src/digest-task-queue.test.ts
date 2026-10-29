@@ -268,7 +268,7 @@ describe('digest から台帳の節・注記・件数の4項目が消えてい�
   it('旧台帳に開いている行があるとき: 件数の1行だけが出る（節ではない）', async () => {
     const digest = await buildActivityDigest(await ledgerStores(), { since: since() });
     expect(legacyLines(digest)).toEqual([
-      '- 旧台帳に開いている 1 件は未了で、Task には無い。中身は `commitment_list` で読む（人間の回答・自分の記帳・蒸留の未了の問いは、いまも台帳に入る）',
+      '- 旧台帳に開いている 1 件は未了で、Task に同じ id が無い。中身は `commitment_list` で読む（人間の依頼は同じ id で Task にも載り、返答で task が done になっても台帳の行は開いたままなので、数えない。数えるのは task の無い行: 人間の回答・自分の記帳・蒸留の未了の問いなど）',
     ]);
   });
 
@@ -287,6 +287,43 @@ describe('digest から台帳の節・注記・件数の4項目が消えてい�
     );
   });
 
+  it('⭐ 人間の依頼が台帳と Task に同じ id で載るとき、task が done でも数えない。task の無い台帳の行は数える', async () => {
+    const stores = createMemoryStores();
+    const now = new Date().toISOString();
+    // 返答で task だけが done になり、台帳の行は開いたまま
+    await stores.commitments.open({
+      id: 'h-done',
+      at: now,
+      origin: 'human',
+      body: '返答済みの依頼',
+    });
+    await stores.tasks.add(makeTask('h-done', { origin: 'human', status: 'done', closedAt: now }));
+    // task がまだ開いている人間の依頼
+    await stores.commitments.open({ id: 'h-open', at: now, origin: 'human', body: '続く依頼' });
+    await stores.tasks.add(makeTask('h-open', { origin: 'human' }));
+    // task の無い行（人間の回答・自分の記帳など）は数える
+    await stores.commitments.open({
+      id: 'only-ledger',
+      at: now,
+      origin: 'human',
+      body: '台帳だけ',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+    expect(legacyLines(digest)).toHaveLength(1);
+    expect(legacyLines(digest)[0]).toContain(
+      '- 旧台帳に開いている 1 件は未了で、Task に同じ id が無い。',
+    );
+  });
+
+  it('台帳の開いている行がすべて同じ id の task を持つなら、1行も出ない', async () => {
+    const stores = createMemoryStores();
+    const now = new Date().toISOString();
+    await stores.commitments.open({ id: 'h1', at: now, origin: 'human', body: '依頼' });
+    await stores.tasks.add(makeTask('h1', { origin: 'human', status: 'done', closedAt: now }));
+    expect(await buildActivityDigest(stores, { since: since() })).not.toContain('旧台帳');
+  });
+
   it('読めない行だけのとき: 0件で丸めず、読めない件数を断って出る', async () => {
     const stores = createMemoryStores();
     const original = stores.commitments.list.bind(stores.commitments);
@@ -296,7 +333,7 @@ describe('digest から台帳の節・注記・件数の4項目が消えてい�
     });
     const digest = await buildActivityDigest(stores, { since: since() });
     expect(legacyLines(digest)).toEqual([
-      '- 旧台帳に開いている 0 件は未了で、Task には無い。読めない行が 1 件ある（片付いたのではない）。中身は `commitment_list` で読む（人間の回答・自分の記帳・蒸留の未了の問いは、いまも台帳に入る）',
+      '- 旧台帳に開いている 0 件は未了で、Task に同じ id が無い。読めない行が 1 件ある（片付いたのではない）。中身は `commitment_list` で読む（人間の依頼は同じ id で Task にも載り、返答で task が done になっても台帳の行は開いたままなので、数えない。数えるのは task の無い行: 人間の回答・自分の記帳・蒸留の未了の問いなど）',
     ]);
     expect(digest).not.toContain('cm-broken');
   });
@@ -326,7 +363,7 @@ describe('counts 形（定期の依頼の tick・日報以外の件数の形）�
     expect(counts).not.toContain('- t1（');
     expect(counts).not.toContain('先頭が先にやるもの');
     expect(counts).not.toContain('## 待ち行列');
-    expect(counts).toContain('- 旧台帳に開いている 1 件は未了で、Task には無い。');
+    expect(counts).toContain('- 旧台帳に開いている 1 件は未了で、Task に同じ id が無い。');
     expect(counts).not.toContain('台帳の本文');
     expect(counts).not.toMatch(/引き受けた仕事 \d|片付けた仕事/u);
   });
@@ -426,7 +463,14 @@ describe('発意 tick の固定の指示（SELF_INITIATIVE_INSTRUCTIONS）', () 
     expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('離れた所の動ける task');
   });
 
+  it('⭐ 委譲するとき task の id を manager_start の taskId に渡す（渡さないと先頭に残って二重に委譲しうる）', () => {
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('`manager_start`');
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('`taskId`');
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('もう一本委譲しうる');
+  });
+
   it('長さは前の版（約 400 字）と同程度に保つ', () => {
-    expect(SELF_INITIATIVE_INSTRUCTIONS.length).toBeLessThan(700); // 旧台帳の行の扱い（1行）と離れた task の添え書きを足したぶん広げた
+    // 旧台帳の行の扱い・離れた task の添え書き・taskId を渡す指示（各1行）を足したぶん広げた
+    expect(SELF_INITIATIVE_INSTRUCTIONS.length).toBeLessThan(900);
   });
 });

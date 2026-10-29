@@ -618,8 +618,8 @@ function describeLegacyLedgerLine(open: number, unreadable: number): string[] {
   const unreadablePart =
     unreadable > 0 ? `読めない行が ${unreadable} 件ある（片付いたのではない）。` : '';
   return [
-    `- 旧台帳に開いている ${open} 件は未了で、Task には無い。${unreadablePart}中身は \`commitment_list\` で読む` +
-      '（人間の回答・自分の記帳・蒸留の未了の問いは、いまも台帳に入る）',
+    `- 旧台帳に開いている ${open} 件は未了で、Task に同じ id が無い。${unreadablePart}中身は \`commitment_list\` で読む` +
+      '（人間の依頼は同じ id で Task にも載り、返答で task が done になっても台帳の行は開いたままなので、数えない。数えるのは task の無い行: 人間の回答・自分の記帳・蒸留の未了の問いなど）',
   ];
 }
 
@@ -652,10 +652,14 @@ export async function buildActivityDigest(
   // 待ち行列は `list()` の並びのまま持つ（器は並べ直さない）。旧台帳は件数だけを使う（節は出さない）
   const taskList = await stores.tasks.list();
   const legacyLedger = await stores.commitments.list();
-  const legacyLedgerLine = describeLegacyLedgerLine(
-    legacyLedger.entries.length,
-    legacyLedger.unreadable.length,
-  );
+  // 人間の依頼は台帳と Task に同じ id で載り、返答で task だけが done になる（台帳の行は開いたまま）。数えるのは「閉じた task も含めて、同じ id の task が無い」行だけ。
+  // 台帳が空なら task の全件読みは要らない
+  const taskIds =
+    legacyLedger.entries.length === 0
+      ? new Set<string>()
+      : new Set((await stores.tasks.list({ includeClosed: true })).entries.map((task) => task.id));
+  const legacyOnlyOpen = legacyLedger.entries.filter((entry) => !taskIds.has(entry.id)).length;
+  const legacyLedgerLine = describeLegacyLedgerLine(legacyOnlyOpen, legacyLedger.unreadable.length);
 
   // 境界を JS 側で切り直す: `JournalQuery.until` は含む側で `DigestWindow.until` は含まない。クエリ側を外すと OOM に戻り、JS 側を外すと境界のミリ秒が1件ずれるため
   const withinWindow = (entry: JournalEntry): boolean => compareIsoInstant(entry.at, untilIso) < 0;

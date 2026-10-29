@@ -284,7 +284,7 @@ function expectLeanFull(text: string, options: { withMemory?: boolean } = {}): v
   expect(text).toContain('届いた出来事 19');
   // 先頭の件数行は節の外で、省いた節の件数も残る
   expect(text).toContain('外部イベント（日誌の行数）20');
-  expect(text).toContain('旧台帳に開いている 14 件は未了で、Task には無い。');
+  expect(text).toContain('旧台帳に開いている 14 件は未了で、Task に同じ id が無い。');
   // 省く
   expect(text).toContain('## 使った分\n（この節は省いた。`usage_read` で引ける）');
   expect(text).toContain(
@@ -335,7 +335,7 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     expect(second).toMatch(/変わらない節: .*届いた外部イベント/u);
     expect(second).toContain('外部イベント（日誌の行数）20 /');
     // 旧台帳の件数の1行は毎回出る（件数の行の外。数字は毎回出す）
-    expect(second).toContain('旧台帳に開いている 14 件は未了で、Task には無い。');
+    expect(second).toContain('旧台帳に開いている 14 件は未了で、Task に同じ id が無い。');
     // 待ち行列の先頭は「前回と同じ」と畳まず、2回目も全文で出る（先頭の3件は tick の入力から消えない）
     expect(first).toContain('- task-0（状態: queued（待ち行列） / origin: self）待ち行列の仕事 0');
     expect(second).toContain('- task-0（状態: queued（待ち行列） / origin: self）待ち行列の仕事 0');
@@ -894,7 +894,7 @@ const COUNTS_LINE =
 // 待ち行列と旧台帳の件数の1行（#5469 P6b）。件数の形は先頭の描画を出さない
 const QUEUE_COUNT_LINE = '- 待ち行列: 開いている 4 件（queued 4 / waiting 0 / needs_decision 0）';
 const LEGACY_LEDGER_LINE =
-  '- 旧台帳に開いている 14 件は未了で、Task には無い。中身は `commitment_list` で読む（人間の回答・自分の記帳・蒸留の未了の問いは、いまも台帳に入る）';
+  '- 旧台帳に開いている 14 件は未了で、Task に同じ id が無い。中身は `commitment_list` で読む（人間の依頼は同じ id で Task にも載り、返答で task が done になっても台帳の行は開いたままなので、数えない。数えるのは task の無い行: 人間の回答・自分の記帳・蒸留の未了の問いなど）';
 const IDLE_LINE = '- 手が止まっている担当（done・stopped）1 本: mgr-done';
 
 async function seedIdleManager(stores: Stores): Promise<void> {
@@ -1682,7 +1682,7 @@ describe('DigestSessionDelta（軽い全文。要約が走りうる／走った�
   const digest = [
     '期間: x',
     '',
-    '- 旧台帳に開いている 1 件は未了で、Task には無い。中身は `commitment_list` で読む',
+    '- 旧台帳に開いている 1 件は未了で、Task に同じ id が無い。中身は `commitment_list` で読む',
     '',
     '## 待ち行列の先頭',
     '- 待ち行列: 開いている 1 件（queued 1 / waiting 0 / needs_decision 0）',
@@ -1714,7 +1714,7 @@ describe('DigestSessionDelta（軽い全文。要約が走りうる／走った�
     delta.reset('compaction');
     expect(delta.isLean()).toBe(true);
     const out = delta.renderDigest(digest, at).text;
-    expect(out).toContain('- 旧台帳に開いている 1 件は未了で、Task には無い。');
+    expect(out).toContain('- 旧台帳に開いている 1 件は未了で、Task に同じ id が無い。');
     // 待ち行列の先頭は判断の節: 軽い全文でも省かない
     expect(out).toContain('## 待ち行列の先頭\n- 待ち行列: 開いている 1 件');
     expect(out).toContain('仕事T');
