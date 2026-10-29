@@ -3,7 +3,7 @@ import { crc32, deflateSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_ATTACHMENT_LIMITS } from './attachment.js';
-import type { AttachmentLimits } from './attachment.js';
+import type { TurnAttachmentLimits } from './attachment.js';
 import { createClone } from './clone.js';
 import { TOKEN_SAVING_ENABLED_ENV, fakeSdk, waitFor, wireEvents } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
@@ -61,16 +61,15 @@ async function put(stores: Stores, name: string, bytes: Uint8Array): Promise<Att
   };
 }
 
-function inject(extra: Partial<{ maxTurnImages: number }> & Partial<AttachmentLimits> = {}) {
-  const limits = {
+function inject(extra: Partial<TurnAttachmentLimits> = {}): TurnAttachmentLimits {
+  return {
     ...DEFAULT_ATTACHMENT_LIMITS,
     maxImageBytes: INJECTED_MAX_IMAGE_BYTES,
     ...extra,
   };
-  return limits;
 }
 
-function build(attachmentLimits: AttachmentLimits) {
+function build(attachmentLimits: TurnAttachmentLimits) {
   const stores = createMemoryStores();
   const { fn, calls } = fakeSdk(() => 'ok');
   const clone = createClone({
@@ -125,7 +124,7 @@ const report = (id: string, attachments: AttachmentRef[]): InboxEvent => ({
   attachments,
 });
 
-const OVER_INJECTED = '画像の上限（2.9 KiB）を超えるので画像としては渡していない';
+const OVER_INJECTED = '画像の上限（3000 B）を超えるので画像としては渡していない';
 
 describe('clone: 注入した添付の上限がターンの画像の判定に使われる', () => {
   beforeEach(() => {
@@ -204,7 +203,6 @@ describe('clone: 注入した添付の上限がターンの画像の判定に使
   }, 15_000);
 
   it('人間の発言: 注入した maxTurnImages=1 で、2 枚目は上限で外れる', async () => {
-    // AttachmentLimits 型は maxTurnImages を持たない。変数経由で渡して、ターンの上限も注入できる形かを確かめる
     const s = build(inject({ maxTurnImages: 1 }));
     const a = await put(s.stores, 'a.png', realPng(0, 1));
     const b = await put(s.stores, 'b.png', realPng(0, 2));

@@ -315,7 +315,7 @@ import {
 } from './classifier-denial-streak.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
 import { attachmentCopiesDir } from './attachment-fetch.js';
-import type { AttachmentLimits } from './attachment.js';
+import type { TurnAttachmentLimits } from './attachment.js';
 import { resolveTurnAttachmentGroups } from './attachment-turn.js';
 import {
   redactImagesInEntries,
@@ -883,7 +883,7 @@ export interface CloneOptions {
    * 添付の上限の注入口（#4128 段2）。省略時は道具・担い手のプールが `readAttachmentLimits()`（環境変数）を直接読む。
    * 置き場の実際の構成（外部ストレージを使うか）と上限の別枠を揃えたいデーモンは、ここへ置き場と同じ値を渡す。
    */
-  attachmentLimits?: AttachmentLimits;
+  attachmentLimits?: TurnAttachmentLimits;
   runners?: RunnerRegistry;
   sessionStore?: SessionStore;
   managers?: ManagerPool;
@@ -1087,7 +1087,7 @@ class Clone implements CloneHost {
   #firstTurnToolSearchSettled = false;
   readonly #onFirstTurnToolSearch: ((line: string) => Promise<void>) | undefined;
   readonly #cwd: string | undefined;
-  readonly #attachmentLimits: AttachmentLimits | undefined;
+  readonly #attachmentLimits: TurnAttachmentLimits | undefined;
   /** 前回日誌へ書いた plugin の一覧の指紋（`#plugins`）。空は ''。 */
   #lastPluginsDigest = '';
   /** 前回日誌へ書いた、init の plugin の読み込み結果の指紋（`#apply` の `session_started`）。 */
@@ -2772,7 +2772,7 @@ class Clone implements CloneHost {
     const resolvedGroups = await resolveTurnAttachmentGroups(
       this.#stores,
       withAttachments.map((event) => event.attachments ?? []),
-      undefined,
+      this.#attachmentLimits,
       this.#layeredChildEnv(),
     );
     withAttachments.forEach((event, index) => {
@@ -3216,7 +3216,7 @@ class Clone implements CloneHost {
     const resolved = await resolveTurnAttachmentGroups(
       this.#stores,
       groups,
-      undefined,
+      this.#attachmentLimits,
       this.#layeredChildEnv(),
     );
     return {
@@ -3242,7 +3242,7 @@ class Clone implements CloneHost {
         : await resolveTurnAttachmentGroups(
             this.#stores,
             withRefs.map((event) => event.attachments ?? []),
-            undefined,
+            this.#attachmentLimits,
             // 人間の発言・external と同じく、SDK の子プロセスと同じ env で経路の上限を決める（#4709）: 素の `process.env` では、プロファイルや鍵のプールで置いた Bedrock / Vertex が見えないため
             this.#layeredChildEnv(),
           );
@@ -7346,7 +7346,7 @@ class Clone implements CloneHost {
     return this.#cwd === undefined ? {} : { attachmentCopiesDir: attachmentCopiesDir(this.#cwd) };
   }
 
-  #attachmentLimitsEntry(): { attachmentLimits?: AttachmentLimits } {
+  #attachmentLimitsEntry(): { attachmentLimits?: TurnAttachmentLimits } {
     return this.#attachmentLimits === undefined ? {} : { attachmentLimits: this.#attachmentLimits };
   }
 
