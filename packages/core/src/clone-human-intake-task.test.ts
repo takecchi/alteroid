@@ -532,14 +532,8 @@ describe('ask_human を呼んだターンでは、その会話の task を閉じ
     const approvals = (await s.stores.jobs.listApprovals({ pendingOnly: true })).entries;
     expect(approvals).toHaveLength(1);
 
-    s.clone.post({
-      type: 'human_answer',
-      id: 'ans-ask',
-      at: new Date().toISOString(),
-      approvalId: approvals[0]!.id,
-      answer: 'A案で',
-      conversationId: 'conv-1',
-    });
+    // 本物の回答の口（承認待ちの行に答えを書いてから、回答のイベントを積む）を通す
+    await s.clone.answerApproval(approvals[0]!.id, 'A案で');
     await waitFor(
       async () => (await statusOf(s.stores, 'ask-1')) === 'done',
       '回答のターンで閉じる',
@@ -547,7 +541,53 @@ describe('ask_human を呼んだターンでは、その会話の task を閉じ
 
     expect((await s.stores.tasks.get('ask-1'))?.closedBy).toBe('daemon');
     // 回答のイベントからは Task が作られていない
-    expect(await s.stores.tasks.get('ans-ask')).toBeNull();
+    expect(
+      (await s.stores.tasks.list({ includeClosed: true })).entries.map((task) => task.id),
+    ).toEqual(['ask-1']);
+    await s.clone.stop();
+  });
+
+  it('前のターンで出した未回答の問いの会話は、後の別の報告のターンが conversation_post しても閉じない。答えたターンで閉じる', async () => {
+    const s = boot((_turn, input, tool) =>
+      input.includes('承認待ちにしていた質問に人間が答えた')
+        ? say('回答を受けた。進める')
+        : input.includes('LATER-REPORT')
+          ? [
+              ...say('読んだ'),
+              {
+                run: () =>
+                  tool('conversation_post')({ text: '別件の報告です', conversationId: 'conv-1' }),
+              },
+            ]
+          : [
+              ...say('確認します'),
+              { run: () => tool('ask_human')({ question: 'どちらにしますか' }) },
+            ],
+    );
+    s.clone.post(human('ask-2', 'どちらかを選んで進めてほしい'));
+    await waitForTerminal(s.events);
+    const approvals = (await s.stores.jobs.listApprovals({ pendingOnly: true })).entries;
+    expect(approvals).toHaveLength(1);
+
+    s.clone.post(managerReport('rep-later', 'LATER-REPORT'));
+    await waitFor(
+      async () =>
+        (await s.stores.journal.list({ types: ['exchange'], with: ['human'] })).some(
+          (row) => row.type === 'exchange' && row.text.includes('別件の報告です'),
+        ),
+      '別の報告のターンが conversation_post を書く',
+    );
+    await waitFor(
+      async () => (await s.stores.journal.list({ types: ['turn_timing'] })).length >= 2,
+      '報告のターンが終わる',
+    );
+    expect(await statusOf(s.stores, 'ask-2')).toBe('queued');
+
+    await s.clone.answerApproval(approvals[0]!.id, 'A案で');
+    await waitFor(
+      async () => (await statusOf(s.stores, 'ask-2')) === 'done',
+      '答えたターンで閉じる',
+    );
     await s.clone.stop();
   });
 });

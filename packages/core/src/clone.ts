@@ -9054,6 +9054,20 @@ class Clone implements CloneHost {
       for (const pending of (await this.#stores.inbox.peekPending()).entries) {
         unreadSignalIds.add(pending.event.id);
       }
+      for (const row of (await this.#stores.inbox.peekPending()).unreadable) {
+        if (row.id !== undefined) unreadSignalIds.add(row.id);
+      }
+      // 答え待ちの問い（ask_human・request_permission で出して、まだ答えが無いもの）の会話。前のターンで出した問いを含む。
+      // 読めない行があれば、どの会話の問いか分からないので何も閉じない（throw → 外の catch で記録して閉じない）
+      const askedConversationIds = new Set<string>(this.#turnReplies.asked);
+      const approvals = await this.#stores.jobs.listApprovals({ pendingOnly: true });
+      if (approvals.unreadable.length > 0) {
+        throw new Error('読めない承認待ちがあり、答え待ちの会話を確定できない');
+      }
+      for (const approval of approvals.entries) {
+        if (approval.conversationId !== undefined)
+          askedConversationIds.add(approval.conversationId);
+      }
       // task に結び付いた委譲（`Job.taskId`、P3）で、いま走っている（running / waiting_human）もの。前のターンで起こしたものを含む
       const activeJobTaskIds = new Set<string>();
       for (const job of await this.#stores.jobs.listJobs()) {
@@ -9071,7 +9085,7 @@ class Clone implements CloneHost {
           replied,
           readSignalIds: this.#turnReplies.readSignalIds,
           unreadSignalIds,
-          askedConversationIds: this.#turnReplies.asked,
+          askedConversationIds,
           delegatedTaskIds: this.#turnReplies.delegated,
           activeJobTaskIds,
         },

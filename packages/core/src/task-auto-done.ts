@@ -56,7 +56,10 @@ export interface TurnReplyTrace {
    * `conversation_post` と回答のターンの返答は、読んだ合図の id を持たないので、「まだ読んでいない」ものをこれで除く。
    */
   readonly unreadSignalIds: ReadonlySet<string>;
-  /** このターンで問い（`ask_human`・`request_permission`）を出した会話 id。その会話の task は、人間の答え待ちなので閉じない。 */
+  /**
+   * 問い（`ask_human`・`request_permission`）を出して答えが無い会話 id（このターンで出したもの ∪ 閉じる直前に承認待ちの台帳から引いた、前のターンの未回答の問い）。
+   * その会話の task は、人間の答え待ちなので閉じない。答えが付いた問いは台帳から外れるので、答えを受けたターンの返答では閉じる。
+   */
   readonly askedConversationIds: ReadonlySet<string>;
   /** このターンで委譲に頼んだ（`manager_start`・`manager_send`）委譲が結び付いている task の id（`Job.taskId`）。task に結び付けていない委譲は入れない。 */
   readonly delegatedTaskIds: ReadonlySet<string>;
