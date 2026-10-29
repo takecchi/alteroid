@@ -1,4 +1,4 @@
-import { waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 
@@ -160,6 +160,15 @@ export async function untilOpenSettled(
     if (actual !== `/chat/${conversationId}`) {
       throw new Error(`URL がまだ新しい会話へ付け替わっていない: ${actual}`);
     }
+  });
+}
+
+// 試験の最後に、走っている送信が終わるまで待つ: 終わる前に後片付け（unmount）へ進むと、SWR のキャッシュが先に畳まれ、まだ届いていなかった open の枠が recordOwnMessage の mutate を畳まれたキャッシュへ打ち、unhandled rejection になるため
+// 呼ぶ前に「送信が始まった」ことを確かめておく（/chat の POST が出た、など）: 「考えている…」は send が /chat を打つ直前に出るので、添付の上げを待っている間などの表示が出る前に呼ぶと、何も待たずに通る
+// 「考えている…」は送信の瞬間から出て、終わりの合図（done）で消える
+export async function untilReplySettled(): Promise<void> {
+  await waitFor(() => {
+    if (screen.queryByText('考えている…') !== null) throw new Error('送信がまだ終わっていない');
   });
 }
 

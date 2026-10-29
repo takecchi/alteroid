@@ -14,6 +14,7 @@ import {
   sse,
   storeTestBaseUrl,
   stubFetch,
+  untilReplySettled,
 } from '~/test-support';
 
 import Chat from './chat';
@@ -107,10 +108,6 @@ const box = () =>
   screen.findByPlaceholderText(/クローンに話しかける/) as Promise<HTMLTextAreaElement>;
 const NOTICE = /送れたか確かめられなかった/;
 
-// 試験の最後に、走っている送信が終わるまで待つ: 終わる前に後片付け（unmount）へ進むと、SWR のキャッシュが先に畳まれ、まだ読み込み中だった open の枠が recordOwnMessage の mutate を畳まれたキャッシュへ打ち、unhandled rejection になるため
-// 「考えている…」は送信の瞬間から出て、終わりの合図（done）で消える
-const replySettled = () => waitFor(() => expect(screen.queryByText('考えている…')).toBeNull());
-
 async function sentBody(index: number) {
   const entries = stub.entries.filter((e) => e.url.endsWith('/chat') && e.request !== undefined);
   return (await entries[index]?.request?.clone().json()) as {
@@ -144,7 +141,7 @@ describe('確かめられなかった送信の印を、再読み込みの後も�
       text: '送れたか不明な文',
       clientMessageId: firstId,
     });
-    await replySettled();
+    await untilReplySettled();
   });
 
   it('破棄すると、本文も印も消える（再読み込みで復元されない）', async () => {
@@ -235,7 +232,7 @@ describe('添付つきだった印は、戻せなかったことを言う（#370
     expect(resent).toMatchObject({ text: '添付つきの文', clientMessageId: firstId });
     expect((resent as { attachments?: string[] }).attachments ?? []).toEqual([]);
     expect(posts).toBe(2);
-    await replySettled();
+    await untilReplySettled();
   });
 
   it('元の送信が届いていた（履歴に同じ clientMessageId）なら、案内も再送も出さず、二重に送らない', async () => {
@@ -275,7 +272,7 @@ describe('添付つきだった印は、戻せなかったことを言う（#370
     expect(third.clientMessageId).toBeTruthy();
     expect(third.clientMessageId).not.toBe(firstId);
     expect(third.text).toBe('添付つきの文');
-    await replySettled();
+    await untilReplySettled();
     await act(async () => {});
     expect(posts).toBe(3);
   });
