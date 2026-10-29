@@ -64,9 +64,15 @@ describe('新しい会話の添付を上げているあいだに別の会話へ�
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    // 投函の接続が捨てられた合図: 投函は open を受けて recordOwnMessage を打った後に接続を捨てる。その前に後片付け（unmount）へ進むと、畳まれた後の SWR のキャッシュへ mutate を打ち、unhandled rejection になる
+    let replyRead: () => void = () => undefined;
+    const replyReadPromise = new Promise<void>((resolve) => {
+      replyRead = resolve;
+    });
     const stub = stubFetch((url, init) => {
       if (url.includes('/attachments?')) return json(META);
       if (url.endsWith('/chat')) {
+        init?.signal?.addEventListener('abort', () => replyRead(), { once: true });
         return sse(
           [
             { event: 'open', data: { conversationId: NEW_ID } },
@@ -119,6 +125,7 @@ describe('新しい会話の添付を上げているあいだに別の会話へ�
     const chatPosts = () =>
       stub.entries.filter((entry) => entry.url.endsWith('/chat') && entry.request !== undefined);
     await waitFor(() => expect(chatPosts()).toHaveLength(1));
+    await act(async () => replyReadPromise);
     await act(async () => undefined);
     await act(async () => undefined);
 

@@ -3,7 +3,15 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, sse, storeTestBaseUrl, stubFetch, type Route } from '~/test-support';
+import {
+  json,
+  Providers,
+  sse,
+  storeTestBaseUrl,
+  stubFetch,
+  untilReplySettled,
+  type Route,
+} from '~/test-support';
 
 import Chat from './chat';
 
@@ -119,6 +127,7 @@ describe('失敗したターンの行', () => {
       text: '来週の登壇資料を作って',
       conversationId: CONVERSATION,
     });
+    await untilReplySettled();
   });
 
   it('文面が同じでも印が無い行は、普通の返答として描く（再送も出さない）', async () => {

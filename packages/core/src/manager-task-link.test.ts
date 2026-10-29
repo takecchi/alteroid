@@ -15,7 +15,7 @@ import {
 import type { InboxEvent, Job, Task } from './schema.js';
 import type { Stores } from './store.js';
 import { taskStatusForJob } from './task.js';
-import { createMemoryStores } from './testing.js';
+import { captureStderr, createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
 // #5469 P3: 委譲が taskId を持ち、委譲の状態が task の状態を動かす。
@@ -439,6 +439,40 @@ describe('終端の同期が失敗したとき・デーモンが落ちたとき'
     expect((await decisions(s.stores)).some((line) => line.includes('合わせられなかった'))).toBe(
       true,
     );
+  });
+
+  it('⭐ 書く前の状態を読めずに task の同期を見送ったら、stderr に1行残す（task は動かさず、委譲は終わる）', async () => {
+    let unreadable = false;
+    const s = await setup((stores) => ({
+      ...stores,
+      jobs: {
+        ...stores.jobs,
+        getJob: async (id: string) => {
+          if (unreadable) throw new Error('台帳が読めない');
+          return stores.jobs.getJob(id);
+        },
+      },
+    }));
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    unreadable = true;
+
+    const lines = await captureStderr(async () => {
+      s.fake.push(report(started.managerId));
+      await settle();
+    });
+    expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('done');
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    const traces = lines.filter((line) =>
+      line.includes('委譲の書く前の状態を読み出せませんでした'),
+    );
+    // 読めなかった書き込みごとに1行（報告1回で台帳へ書く回数は実装の都合なので、件数は固定しない）
+    expect(traces.length).toBeGreaterThanOrEqual(1);
+    for (const trace of traces) {
+      expect(trace).toContain(`job id=${started.managerId}`);
+      expect(trace).toContain('task=t-1');
+      expect(trace).toContain('台帳が読めない');
+    }
   });
 
   it('⭐ 起動時に、終わった委譲に結び付いたまま waiting の task を needs_decision へ直す', async () => {

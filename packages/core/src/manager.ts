@@ -13474,12 +13474,21 @@ class Pool implements ManagerPool {
       }
     }
     // task へ写すのに、書く前の台帳の状態が要る（結び付いた委譲だけ読む）。読めなければ `undefined`
+    const linkedTaskId = record.job.taskId;
     const before =
-      record.job.taskId === undefined
+      linkedTaskId === undefined
         ? undefined
         : await this.#stores.jobs.getJob(record.job.id).then(
             (stored) => stored?.status ?? null,
-            () => undefined,
+            (error: unknown) => {
+              // 読めないと task の同期と endedAt を見送る。起動時の直しも endedAt が無いと見送るので、跡が無いと後から追えない
+              noteUnreadableRecord(
+                '委譲の書く前の状態',
+                `job id=${record.job.id} task=${linkedTaskId} status=${record.job.status}。task の同期と endedAt を見送った`,
+                error,
+              );
+              return undefined;
+            },
           );
     // 終端へ入った時刻を1回だけ書く（起動時の直しの基準。終わった後の書き込みでは進めない）。動き出したら消す。読めなかった回は触れない
     if (record.job.taskId !== undefined && before !== undefined) {

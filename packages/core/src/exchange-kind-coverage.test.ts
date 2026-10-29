@@ -12,11 +12,42 @@ interface ExchangeWriteSite {
   readonly file: string;
   readonly line: number;
   readonly objectText: string;
+  /** 書き込み箇所を囲むメソッド／関数の名前。行番号と違い、無関係な編集では動かない。 */
+  readonly enclosing: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+const NOT_A_DECLARATION = new Set([
+  'if',
+  'for',
+  'while',
+  'switch',
+  'catch',
+  'return',
+  'function',
+  'await',
+  'throw',
+]);
+const DECLARATION_RE =
+  /^ {0,2}(?:(?:export|default|public|private|protected|static|async|readonly)\s+)*(?:function\s+)?(?:get\s+|set\s+)?(#?[A-Za-z_$][\w$]*)\s*[(<]/;
+
+function enclosingDeclaration(text: string, index: number): string {
+  const lines = text.slice(0, index).split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]!;
+    const m = DECLARATION_RE.exec(line);
+    if (m && !NOT_A_DECLARATION.has(m[1]!) && !line.trimEnd().endsWith(';')) return m[1]!;
+  }
+  return '<top>';
+}
+
+function readCoreSource(file: string): string {
+  return readFileSync(path.join(CORE_SRC_DIR, file), 'utf8');
 }
 
 function findJournalCallObjects(file: string): ExchangeWriteSite[] {
-  const fullPath = path.join(CORE_SRC_DIR, file);
-  const text = readFileSync(fullPath, 'utf8');
+  const text = readCoreSource(file);
   const sites: ExchangeWriteSite[] = [];
   const callRe = /\bjournal(?:\.append)?\(\{/g;
   let m: RegExpExecArray | null;
@@ -31,7 +62,14 @@ function findJournalCallObjects(file: string): ExchangeWriteSite[] {
     const objectText = text.slice(openBraceIndex, end + 1);
     if (!/type:\s*'exchange'/.test(objectText)) continue;
     const line = text.slice(0, m.index).split('\n').length;
-    sites.push({ file, line, objectText });
+    sites.push({
+      file,
+      line,
+      objectText,
+      enclosing: enclosingDeclaration(text, m.index),
+      start: openBraceIndex,
+      end,
+    });
   }
   return sites;
 }
@@ -194,30 +232,198 @@ function textFieldReferencesAnyPrefix(objectText: string): boolean {
   );
 }
 
-const EXPECTED_SITE_COUNT: Record<string, number> = {
-  // 2026-10-17 #4798: plugin の展開し直しの日誌1行を足したので 81 -> 82（main 取り込み後の以前の期待値は 81）
-  // 2026-10-18 #5048: 担当が戻っていた知らせを畳んだ日誌1行（`#foldRecoveredNotice`、接頭辞 THINNING）を足したので 82 -> 83
-  // 2026-10-28: 固定文を全文へ戻した理由の観測の1行（`#resetDigestDelta`、接頭辞 DECISION）を足したので 83 -> 84
-  // 2026-10-28: 要約後の記憶の索引を載せ直したか／載せ直さなかったかの観測の2行（`#withFreshMemory`、接頭辞 GAUGE）を足したので 84 -> 86
-  // 2026-10-28: 畳みの控えを読み戻さなかった理由の観測の1行（`#restoreFoldStateOnce`、接頭辞 GAUGE）を足したので 86 -> 87
-  // 2026-10-28: サブエージェント呼びの計器の日誌1行（`#noteCallerGauge`、接頭辞 GAUGE。hook 側と handler 側の2経路が同じ1箇所から書く）を足したので 87 -> 88
-  // 2026-10-28 #5429 のレビュー指摘: サブエージェントの呼びの印が上限で落ちたことの日誌1行（`#subagentToolUses` の `onForget`、接頭辞 THINNING）を足したので 88 -> 89
-  'clone.ts': 89,
-  // 2026-10-23 #5195: 新しい世代が黙っている間の古い世代の報告を配る日誌1行（`#deliverReportFromUnreplacedSession`、接頭辞 REPLY）を足したので 66 -> 67
-  'manager.ts': 67,
+/**
+ * 分類表: 「type: 'exchange' を書くメソッド／関数」→「そこで使う kind（接頭辞の kind 名、または構造で応答と分かる 'human'）」。
+ *
+ * 書き込み箇所の総数は固定しない（総数は並行する PR が同じ数に触れて、片方が main に入った後でもう片方の CI を落とした）。
+ * 代わりに「どのメソッドが、どの kind で書くか」を持つ。守る性質は3つ:
+ *  - 新しいメソッドに書き込み箇所を足したら、この表に1行足すまで落ちる（分類を忘れた箇所を通さない）
+ *  - 既存メソッドに足した箇所でも、その行に無い kind を使えば落ちる（種別の取り違えを通さない）
+ *  - メソッドから書き込み箇所が無くなったら、その行が残っていて落ちる（表の腐りを通さない）
+ * 同じメソッドに同じ kind の箇所を足す・消すだけなら表は動かさずに通る（数の更新は要らない）。
+ * 行はメソッド名の辞書順に並べる（並行する PR が同じ場所へ行を足して衝突しにくくするため）。
+ * 限界: 複数の kind が並ぶメソッド（`#handleEvent` など）では、その行の kind どうしの取り違えは表では見えない（1箇所ごとの接頭辞の検査だけが守る）。
+ */
+const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
+  'clone.ts': {
+    '#apply': 'decision,gauge',
+    '#buildSessionSpec': 'decision',
+    '#commit': 'decision,failure',
+    '#completeScheduledRun': 'failure',
+    '#dailyReport': 'decision,failure',
+    '#dropPendingCollapse': 'thinning',
+    '#dropStaleRedelivery': 'thinning',
+    '#externalMcpServers': 'failure',
+    '#foldClosedRedelivery': 'thinning',
+    '#foldIntoPendingCollapse': 'thinning',
+    '#foldRecoveredNotice': 'thinning',
+    '#foldRecoveredQuotaNotice': 'thinning',
+    '#handle': 'decision,failure,thinning',
+    '#journalIncomingBody': 'reply',
+    '#journalReply': 'reply',
+    '#journalRestoreUnreadPassEnd': 'gauge',
+    '#journalRestoreUnreadPassStart': 'gauge',
+    '#journalSupersededTokenPoolNotice': 'thinning',
+    '#noteCallerGauge': 'gauge',
+    '#noteDenial': 'decision',
+    '#noteDroppedSignals': 'decision',
+    '#noteExemptNotCommitted': 'decision',
+    '#noteFoldedTick': 'thinning',
+    '#noteGrantFunneled': 'decision',
+    '#noteHeldEscalation': 'decision,human',
+    '#noteRedeliveryPredicateHitA': 'gauge',
+    '#noteRedeliveryPredicateHitB': 'gauge',
+    '#noteRefusal': 'decision',
+    '#noteRefusalToHuman': 'human',
+    '#noteUnproductiveUsageBlockFold': 'decision',
+    '#noteUsageNotice': 'gauge',
+    '#onPreCompact': 'failure,recovery',
+    '#onSubagentStop': 'decision',
+    '#pickUpOneLostSession': 'failure,recovery',
+    '#pickUpOneTranscriptGrave': 'failure,recovery',
+    '#plugins': 'decision,failure',
+    '#pump': 'thinning',
+    '#read': 'decision',
+    '#record': 'human',
+    '#recordUsage': 'failure,gauge',
+    '#recordWorkerLimit': 'decision',
+    '#reopenAnswerDeliveryAfterFailure': 'decision',
+    '#reopenSession': 'decision',
+    '#reportDroppedGraves': 'failure',
+    '#reportFailure': 'failure,human,thinning',
+    '#resetDigestDelta': 'decision',
+    '#restoreFoldStateOnce': 'gauge',
+    '#restoreUnreadPass': 'recovery,thinning',
+    '#resumeCandidateWithinBudget': 'decision',
+    '#salvageTranscript': 'failure,recovery',
+    '#stopRunningTurn': 'decision,failure',
+    '#withFreshMemory': 'gauge',
+    '#withdrawQueued': 'decision',
+    '#workerLimitNotice': 'decision',
+    buildHumanAnswerEvent: 'thinning',
+    dropQueuedInboxEvents: 'thinning',
+  },
+  'manager.ts': {
+    '#appendMirrorRetrying': 'failure',
+    '#askedOf': 'thinning',
+    '#deliverQuotaStopWindow': 'thinning',
+    '#deliverReportFromUnreplacedSession': 'reply',
+    '#deliverRestoredWindow': 'thinning',
+    '#deniedOf': 'thinning',
+    '#endRelocationWindow': 'decision',
+    '#flushPushFailureFold': 'thinning',
+    '#flushPushFailureFolds': 'thinning',
+    '#flushRateLimitJournalFolds': 'thinning',
+    '#flushSynthesizedNoticeFor': 'gauge,thinning',
+    '#handleEvent': 'decision,failure,gauge,recovery,reply,thinning',
+    '#ignoreIfMovedAway': 'decision',
+    '#joinQuotaStopWindow': 'thinning',
+    '#journalPushFailure': 'failure,thinning',
+    '#noteAmbiguousResolved': 'recovery',
+    '#noteAmbiguousSighting': 'failure',
+    '#noteVanishedRunnerGauge': 'gauge',
+    '#notifyRestored': 'recovery,thinning',
+    '#notifyResumeFallback': 'recovery',
+    '#notifyUnresumable': 'failure',
+    '#nudgeForUsageRotationOnce': 'failure,recovery',
+    '#observeResumeConfirmation': 'recovery',
+    '#onResumeConfirmTimeout': 'recovery',
+    '#reattach': 'recovery',
+    '#recordStaleRunnerUsage': 'failure,gauge',
+    '#renotifyStalledDenial': 'thinning',
+    '#reportedOf': 'thinning',
+    '#restoreJobs': 'recovery',
+    '#retire': 'thinning',
+    '#send': 'reply',
+    '#startAfterSupersedeCheck': 'reply',
+    '#usageNoticeMemoryOf': 'thinning',
+    abort: 'reply',
+  },
 };
+
+/**
+ * `journal(` / `journal.append(` の形を取らずに `type: 'exchange'` を書いている箇所の明示の例外表（メソッド名 → 理由）。
+ * 走査が見落とす書き方を黙って通さないための表で、いまは空である。
+ */
+const EXCHANGE_LITERALS_OUTSIDE_JOURNAL_CALLS: Record<string, Record<string, string>> = {
+  'clone.ts': {},
+  'manager.ts': {},
+};
+
+function exchangeLiteralsOutside(
+  file: string,
+  sites: readonly ExchangeWriteSite[],
+): ExchangeWriteSite[] {
+  const text = readCoreSource(file);
+  const outside: ExchangeWriteSite[] = [];
+  const literalRe = /type:\s*'exchange'/g;
+  let m: RegExpExecArray | null;
+  while ((m = literalRe.exec(text)) !== null) {
+    const lineStart = text.lastIndexOf('\n', m.index) + 1;
+    if (/^\s*(\/\/|\*|\/\*)/.test(text.slice(lineStart, m.index))) continue;
+    if (sites.some((site) => site.start <= m!.index && m!.index <= site.end)) continue;
+    outside.push({
+      file,
+      line: text.slice(0, m.index).split('\n').length,
+      objectText: m[0],
+      enclosing: enclosingDeclaration(text, m.index),
+      start: m.index,
+      end: m.index + m[0].length,
+    });
+  }
+  return outside;
+}
+
+/**
+ * 箇所の分類。接頭辞を text に持つならその kind 名、持たず `with: 'human'` の構造で応答と分かるなら 'human'、
+ * どちらでもなければ空（＝分類が漏れている）。
+ */
+function classifyKinds(site: ExchangeWriteSite): string[] {
+  const textValue = extractFieldValue(site.objectText, 'text') ?? '';
+  const kinds = EXCHANGE_KIND_PREFIXES.filter(({ kind }) =>
+    textValue.includes(`EXCHANGE_KIND_${kind.toUpperCase()}_PREFIX`),
+  ).map(({ kind }) => kind as string);
+  if (kinds.length > 0) return kinds.sort();
+  return isLiteralHumanWith(site.objectText) ? ['human'] : [];
+}
+
+function kindsByEnclosing(sites: readonly ExchangeWriteSite[]): Record<string, string> {
+  const merged = new Map<string, Set<string>>();
+  for (const site of sites) {
+    const set = merged.get(site.enclosing) ?? new Set<string>();
+    for (const kind of classifyKinds(site)) set.add(kind);
+    merged.set(site.enclosing, set);
+  }
+  return Object.fromEntries(
+    [...merged.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([name, kinds]) => [name, [...kinds].sort().join(',')]),
+  );
+}
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
   for (const file of ['clone.ts', 'manager.ts']) {
     const sites = findJournalCallObjects(file);
 
-    it(`${file}: 実書き込み箇所の総数が${String(EXPECTED_SITE_COUNT[file])}件（テスト・doc コメント・型抽出・契約テストヘルパー・turn-input.ts は journal( 呼び出しの形を取らないので自然に除外される）`, () => {
-      expect(sites.length).toBe(EXPECTED_SITE_COUNT[file]);
+    it(`${file}: 走査が書き込み箇所を1つも見つけられない状態（走査の故障）を通さない`, () => {
+      expect(sites.length).toBeGreaterThan(0);
+    });
+
+    it(`${file}: journal( の形を取らない type: 'exchange' は明示の例外表にあるものだけ（走査の見落とし口を塞ぐ）`, () => {
+      const allowed = Object.keys(EXCHANGE_LITERALS_OUTSIDE_JOURNAL_CALLS[file] ?? {});
+      const unlisted = exchangeLiteralsOutside(file, sites)
+        .filter((site) => !allowed.includes(site.enclosing))
+        .map((site) => `${site.enclosing}（${file}:${String(site.line)}）`);
+      expect(unlisted).toEqual([]);
+    });
+
+    it(`${file}: 書き込み箇所のあるメソッドがすべて分類表に載り、その kind が表と一致する（載せ忘れ・取り違え・表の腐りを通さない）`, () => {
+      expect(kindsByEnclosing(sites)).toEqual(KINDS_BY_ENCLOSING[file]);
     });
 
     describe(`${file}: 各箇所が「with: 'human'（構造で応答と分かる）」か「6接頭辞のどれかを text に持つ」のどちらか`, () => {
       for (const site of sites) {
-        it(`${file}:${String(site.line)}`, () => {
+        it(`${file}:${String(site.line)}（${site.enclosing}）`, () => {
           if (isLiteralHumanWith(site.objectText)) {
             return;
           }
