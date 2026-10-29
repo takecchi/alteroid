@@ -28,8 +28,7 @@ import { readSessionUsage } from './usage.js';
 export type ClaudeCloneQueryFn = typeof query;
 
 export function toClaudeMcpServerConfig(tools: AgentCloneTools): McpServerConfig {
-  if (tools.kind === 'inproc') return tools.server as McpServerConfig;
-  return { type: 'stdio', command: tools.command, args: tools.args, env: tools.env };
+  return tools.server as McpServerConfig;
 }
 
 async function* toSdkInput(input: AsyncIterable<AgentUserInput>): AsyncGenerator<SDKUserMessage> {

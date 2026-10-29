@@ -1269,7 +1269,7 @@ export {
   type MemoryGuardValue,
   type ToolContext,
 } from './tools.js';
-// デーモンは `clone.ts` の中から使うだけだが、image の検査（ci.yml）が焼いたイメージの中で本物の CLI と繋ぐために外へ出す。
+// runner の peer とマネージャーの道具が core の中で使うだけだが、image の検査（ci.yml）が焼いたイメージの中で本物の CLI と繋ぐために外へ出す。
 export {
   createCloneToolRelayHost,
   DEFAULT_REGISTRATION_TIMEOUT_MS,
@@ -1279,11 +1279,7 @@ export {
   CLONE_TOOL_RELAY_SOCKET_ENV,
   CLONE_TOOL_RELAY_TOKEN_ENV,
 } from './clone-tool-relay-protocol.js';
-export {
-  CLONE_TOOLS_TRANSPORT_ENV_KEY,
-  DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR,
-  resolveCloneToolRelayChildEntry,
-} from './clone-tools-transport.js';
+export { resolveCloneToolRelayChildEntry } from './clone-tools-transport.js';
 export {
   DAILY_REPORT_RETRY_DELAYS_MS,
   CLONE_MODEL,

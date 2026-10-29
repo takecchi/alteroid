@@ -16,14 +16,10 @@ import type { McpServers } from './mcp-servers.js';
 import type { PermissionModeName } from './permission-mode.js';
 import type { UsageTotals } from './usage.js';
 
-export type AgentCloneTools =
-  | { readonly kind: 'inproc'; readonly server: unknown }
-  | {
-      readonly kind: 'stdio';
-      readonly command: string;
-      readonly args: string[];
-      readonly env: Record<string, string>;
-    };
+export interface AgentCloneTools {
+  readonly kind: 'inproc';
+  readonly server: unknown;
+}
 
 export interface AgentClonePlugin {
   path: string;
@@ -78,7 +74,6 @@ export interface AgentCloneDistillSpec {
 
 export interface AgentCloneDriver {
   readonly providerId: AgentProviderId;
-  readonly requiredToolsTransport?: 'stdio';
   readonly providesContextUsage?: false;
   open(spec: AgentCloneSessionSpec): AgentCloneSession;
   readonly distill?: (spec: AgentCloneDistillSpec) => AsyncIterable<AgentEvent>;

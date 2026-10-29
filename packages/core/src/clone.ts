@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { open, readFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 
 import type { query, SessionKey, SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
@@ -33,18 +33,6 @@ import type { AgentInputImage, AgentUserInput } from './agent-session.js';
 import { ClaudeCloneDriver } from './claude-clone-driver.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
-import {
-  CLONE_TOOL_RELAY_SOCKET_ENV,
-  CLONE_TOOL_RELAY_TOKEN_ENV,
-} from './clone-tool-relay-protocol.js';
-import { createCloneToolRelayHost, type CloneToolRelayHost } from './clone-tool-relay-host.js';
-import {
-  CLONE_TOOL_RELAY_SOCKET_FILENAME,
-  DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR,
-  resolveCloneToolRelayChildEntry,
-  resolveCloneToolsTransportFor,
-  type CloneToolsTransport,
-} from './clone-tools-transport.js';
 import {
   CONTEXT_USAGE_CATEGORY_LIMIT,
   CONTEXT_USAGE_READ_TIMEOUT_MS,
@@ -960,7 +948,6 @@ export interface CloneOptions {
    * `createSdkMcpServer` は道具を transport の裏へ隠すので、差し替えて `context` を控えたうえで本物を呼ぶ。
    */
   mcpServerFactory?: typeof createCloneMcpServer;
-  cloneToolRelaySocketDir?: string;
 }
 
 export type Listener = (event: ChatStreamEvent) => void;
@@ -1190,10 +1177,6 @@ class Clone implements CloneHost {
   readonly #dailyReportRetries = new Map<string, number>();
   readonly #dailyReportRetryTimers = new Set<ReturnType<typeof setTimeout>>();
   readonly #mcpServerFactory: typeof createCloneMcpServer;
-  readonly #cloneToolsTransport: CloneToolsTransport;
-  readonly #cloneToolRelaySocketDir: string;
-  #cloneToolRelayHostPromise: Promise<CloneToolRelayHost> | undefined;
-  #cloneToolRelayChildEntry: string | undefined;
 
   // 蒸留のサイドクエリの init はここへ反映しない: 別の SDK セッションのため
   #sdkModel: string | null = null;
@@ -1473,7 +1456,6 @@ class Clone implements CloneHost {
       onScheduledRunClaimed,
       self,
       mcpServerFactory,
-      cloneToolRelaySocketDir,
     } = options;
     this.#stores = stores;
     this.#permissionRuleService = permissionRuleService;
@@ -1519,12 +1501,6 @@ class Clone implements CloneHost {
     this.#onScheduledRunClaimed = onScheduledRunClaimed;
     this.#self = self;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
-    // 駆動役が経路を決めるなら env より優先する: Codex は別プロセスで、インプロセスの MCP を持てないため
-    this.#cloneToolsTransport = resolveCloneToolsTransportFor(
-      this.#driver.requiredToolsTransport,
-      envSource,
-    );
-    this.#cloneToolRelaySocketDir = cloneToolRelaySocketDir ?? DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR;
     this.#managers =
       managers ??
       createManagerPool({
@@ -2302,10 +2278,6 @@ class Clone implements CloneHost {
     this.#sdkSession.closeQuery();
     await this.#sdkSession.reader?.catch(() => undefined);
     await this.#managers.stop(options).catch(() => undefined);
-    if (this.#cloneToolRelayHostPromise !== undefined) {
-      const relayHost = await this.#cloneToolRelayHostPromise.catch(() => undefined);
-      relayHost?.close();
-    }
   }
 
   // `isHumanOriginated` を広げない: `distill` を人間起点の型にすると、蒸留という型そのものが常に割り込む側になり、有界性の根拠を型で支えられなくなるため（割り込ませるかは引数で呼び出し側が決める）
@@ -7283,7 +7255,7 @@ class Clone implements CloneHost {
       modelPlaced: this.#modelOverridden,
       permissionMode: this.#permissionMode,
       input: this.#inputStream(),
-      tools: await this.#cloneToolsFor(this.#toolContext()),
+      tools: this.#cloneToolsFor(this.#toolContext()),
       externalMcpServers: await this.#externalMcpServers(),
       plugins: await this.#plugins(),
       systemPrompt,
@@ -7311,35 +7283,10 @@ class Clone implements CloneHost {
   }
 
   /**
-   * セッションごとに listen し直さず、デーモンの寿命で1つにする: 組み直しのたびに rmSync → mkdirSync → listen → chmodSync が走り、listen〜chmod の窓も毎回開くため（token は使い捨てなので共有して安全）。
+   * 本セッションと蒸留のサイドクエリは必ずここを通す: 片方だけ別の組み立てだと、蒸留だけ ToolContext の構築点が別になる（`#toolContext()` の doc の「片方へ渡し忘れる」穴）。
    */
-  async #ensureCloneToolRelayHost(): Promise<CloneToolRelayHost> {
-    this.#cloneToolRelayHostPromise ??= createCloneToolRelayHost({
-      socketPath: join(this.#cloneToolRelaySocketDir, CLONE_TOOL_RELAY_SOCKET_FILENAME),
-    });
-    return this.#cloneToolRelayHostPromise;
-  }
-
-  /**
-   * 本セッションと蒸留のサイドクエリは必ずここを通す: 片方だけ中継越しだと、蒸留だけ ToolContext の構築点が別になる（`#toolContext()` の doc の「片方へ渡し忘れる」穴）。
-   * `alwaysLoad` はどちらの分岐でも渡さない: in-process の設定には欄が無く、stdio だけに書くと transport の切り替えで道具の読み込みタイミングが変わる（`clone-tools-transport.test.ts` が固定）。
-   */
-  async #cloneToolsFor(context: ToolContext): Promise<AgentCloneTools> {
-    if (this.#cloneToolsTransport === 'sdk') {
-      return { kind: 'inproc', server: this.#mcpServerFactory(context) };
-    }
-    const host = await this.#ensureCloneToolRelayHost();
-    this.#cloneToolRelayChildEntry ??= resolveCloneToolRelayChildEntry(import.meta.url);
-    const token = host.register(() => this.#mcpServerFactory(context).instance);
-    return {
-      kind: 'stdio',
-      command: process.execPath,
-      args: [this.#cloneToolRelayChildEntry],
-      env: {
-        [CLONE_TOOL_RELAY_SOCKET_ENV]: host.socketPath,
-        [CLONE_TOOL_RELAY_TOKEN_ENV]: token,
-      },
-    };
+  #cloneToolsFor(context: ToolContext): AgentCloneTools {
+    return { kind: 'inproc', server: this.#mcpServerFactory(context) };
   }
 
   #attachmentCopiesDirEntry(): { attachmentCopiesDir?: string } {
@@ -8150,8 +8097,8 @@ class Clone implements CloneHost {
     const externalMcpServers = await this.#externalMcpServers();
     const plugins = await this.#plugins();
     // 蒸留のターンにも本セッションと同じ道具と観測値を、`#cloneToolsFor` 経由で渡す: 欠けるとここだけ自分のことが分からないクローンになる。
-    // `await` はここで済ませる（下の `distill({...})` の中は同期）: 身元を `distill` の env（下の `#childEnvWithoutIdentityCapture()`）と同じ瞬間に読むため
-    const tools = await this.#cloneToolsFor({
+    // `await` はここまでで済ませる（ここから下の `distill({...})` までは同期）: 身元を `distill` の env（下の `#childEnvWithoutIdentityCapture()`）と同じ瞬間に読むため
+    const tools = this.#cloneToolsFor({
       stores: this.#stores,
       emit: () => undefined,
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),

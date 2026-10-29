@@ -246,21 +246,6 @@ RUN install -d -m 0711 /run/alteroid/credentials
 # 無い）。ここに用意するのは器だけである。
 RUN install -d -m 0711 /run/alteroid/profile
 
-# クローンの道具の中継（Issue #486 48(a) 案D）の Unix ソケットの置き場。
-#
-# **上の2つ（0711）とは絞りが違う。** あちらはデーモンと別 UID の runner
-# からも読む必要があるが、この中継はデーモンと同じ UID のクローンの子
-# プロセスとしか繋がない（`clone-tool-relay-host.ts` の doc）ので、他の
-# UID には traverse すら要らない——0700 にする。**デーモン起動時にも
-# `createCloneToolRelayHost` が同じ mode で作り直す**（このイメージのぶんは
-# volume の初回コピー用の下地であって、実際の絞り込みは実行時にも重ねて
-# 効く）。
-#
-# **持ち主は node（デーモンが降りた先の主体、uid 1000）にする。** root の持ち物の
-# 0700 だと、デーモンは中へ入れず、`createCloneToolRelayHost` の listen も chmod も
-# 失敗する（落ちるのは stdio のときだけ。既定の sdk ではこの置き場を使わない）。
-RUN install -d -m 0700 -o node -g node /run/alteroid/clone-tool-relay
-
 # マネージャー層の peer 専用ソケット（Issue #486 S7）の置き場。
 #
 # **Codex の資格（ChatGPT ログインか `CODEX_API_KEY`）が1度も届かない器では、この中にソケットは

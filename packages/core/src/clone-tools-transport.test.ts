@@ -6,42 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import {
-  CLONE_TOOLS_TRANSPORT_ENV_KEY,
-  CLONE_TOOLS_TRANSPORTS,
-  DEFAULT_CLONE_TOOLS_TRANSPORT,
-  resolveCloneToolRelayChildEntry,
-  resolveCloneToolsTransport,
-} from './clone-tools-transport.js';
-
-describe('resolveCloneToolsTransport', () => {
-  it('未設定・空・空白は既定（sdk）', () => {
-    expect(resolveCloneToolsTransport({})).toBe(DEFAULT_CLONE_TOOLS_TRANSPORT);
-    expect(resolveCloneToolsTransport({ [CLONE_TOOLS_TRANSPORT_ENV_KEY]: '' })).toBe('sdk');
-    expect(resolveCloneToolsTransport({ [CLONE_TOOLS_TRANSPORT_ENV_KEY]: '   ' })).toBe('sdk');
-  });
-
-  it('sdk / stdio はそのまま通す（前後の空白は落とす）', () => {
-    expect(resolveCloneToolsTransport({ [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'sdk' })).toBe('sdk');
-    expect(resolveCloneToolsTransport({ [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stdio' })).toBe('stdio');
-    expect(resolveCloneToolsTransport({ [CLONE_TOOLS_TRANSPORT_ENV_KEY]: '  stdio  ' })).toBe(
-      'stdio',
-    );
-  });
-
-  it('未知の値は黙って sdio へも sdk へも倒さず、例外にして構築を止める', () => {
-    expect(() => resolveCloneToolsTransport({ [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stido' })).toThrow(
-      /ALTEROID_CLONE_TOOLS_TRANSPORT/,
-    );
-    expect(() =>
-      resolveCloneToolsTransport({ [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'STDIO' }),
-    ).toThrow(); // 大文字小文字も緩めない（`resolvePermissionModeFor` と同じ厳密さ）
-  });
-
-  it('CLONE_TOOLS_TRANSPORTS は sdk / stdio の2値だけを持つ', () => {
-    expect([...CLONE_TOOLS_TRANSPORTS].sort()).toEqual(['sdk', 'stdio']);
-  });
-});
+import { resolveCloneToolRelayChildEntry } from './clone-tools-transport.js';
 
 describe('resolveCloneToolRelayChildEntry', () => {
   it('呼び出し側と同じディレクトリに成果物が在れば、それを返す（本番のバンドル後の並び）', () => {

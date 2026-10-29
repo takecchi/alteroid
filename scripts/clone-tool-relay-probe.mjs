@@ -1,7 +1,8 @@
-// クローンの道具の中継を、**本物の Claude Code CLI**（SDK 同梱の実行体）に
-// 繋がせて確かめる検査。モデルは呼ばない（`claude mcp list` の health check だけを使う）。
+// 道具の中継（runner がマネージャーの peer と alteroid-manager の道具に使う）を、**本物の Claude Code CLI**
+// （SDK 同梱の実行体）に繋がせて確かめる検査。モデルは呼ばない（`claude mcp list` の health check だけを使う）。
+// 中継の向こうには、手元で組めるクローンの道具の MCP サーバを置く（中継はバイトを流すだけなので、向こうの中身は問わない）。
 //
-// 使い方: node clone-tool-relay-probe.mjs <@alteroid/core の dist/index.js> <claude 実行体> <ソケットの置き場>
+// 使い方: node clone-tool-relay-probe.mjs <@alteroid/core の dist/index.js> <claude 実行体>
 // 成功なら exit 0。CLI が中継越しの MCP サーバを「Connected」と言わなければ exit 1。
 import { execFile } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -11,15 +12,14 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
-const [coreEntry, claudeBin, socketDir] = process.argv.slice(2);
-if (!coreEntry || !claudeBin || !socketDir) {
-  process.stderr.write(
-    'usage: clone-tool-relay-probe.mjs <core dist/index.js> <claude> <socket dir>\n',
-  );
+const [coreEntry, claudeBin] = process.argv.slice(2);
+if (!coreEntry || !claudeBin) {
+  process.stderr.write('usage: clone-tool-relay-probe.mjs <core dist/index.js> <claude>\n');
   process.exit(2);
 }
 
 const core = await import(pathToFileURL(coreEntry).href);
+const socketDir = mkdtempSync(join(tmpdir(), 'relay-probe-sock-'));
 const host = await core.createCloneToolRelayHost({ socketPath: join(socketDir, 'probe.sock') });
 const context = {
   stores: core.createMemoryStores(),
@@ -86,4 +86,5 @@ try {
 } finally {
   host.close();
   rmSync(home, { recursive: true, force: true });
+  rmSync(socketDir, { recursive: true, force: true });
 }

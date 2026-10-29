@@ -53,17 +53,6 @@ describe('toClaudeMcpServerConfig（中立の道具 → SDK の McpServerConfig�
     const server = { type: 'sdk', name: 'alteroid', instance: {} };
     expect(toClaudeMcpServerConfig({ kind: 'inproc', server })).toBe(server);
   });
-
-  it('stdio は type / command / args / env をこの順で復元する', () => {
-    const config = toClaudeMcpServerConfig({
-      kind: 'stdio',
-      command: 'node',
-      args: ['relay.js'],
-      env: { K: 'v' },
-    });
-    expect(config).toEqual({ type: 'stdio', command: 'node', args: ['relay.js'], env: { K: 'v' } });
-    expect(Object.keys(config)).toEqual(['type', 'command', 'args', 'env']);
-  });
 });
 
 describe('ClaudeCloneDriver#open', () => {
