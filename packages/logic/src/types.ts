@@ -30,8 +30,6 @@ export type TaskPlacementInput = NonNullable<
   paths['/tasks/{id}/move']['post']['requestBody']
 >['content']['application/json']['placement'];
 
-export type ApprovalAnswerResult = Ok<paths['/approvals/answer']['post']>['results'][number];
-
 export type AnsweredApprovalDate = Ok<paths['/approvals/answered-dates']['get']>['dates'][number];
 
 export type DailyReport = Ok<paths['/reports']['get']>['reports'][number];
@@ -80,8 +78,6 @@ export type ClonePluginLoadObservation = NonNullable<
 >;
 export type PluginLoad = RunnerPluginLoadObservation['pluginLoad'];
 
-export type Health = Ok<paths['/health']['get']>;
-
 export type UsageAggregate = Ok<paths['/usage']['get']>;
 export type UsageRow = UsageAggregate['rows'][number];
 export type UsageTurnRow = UsageAggregate['turnRows'][number];
@@ -94,7 +90,6 @@ export type UnrecordedManager = UsageAggregate['unrecordedManagers'][number];
 export type TokensState = Ok<paths['/tokens']['get']>;
 export type AgentTokenView = TokensState['tokens'][number];
 export type TokenRotationSettings = NonNullable<TokensState['settings']>;
-export type TokensSettingsUnreadable = NonNullable<TokensState['settingsUnreadable']>;
 export type TokensRowsUnreadable = NonNullable<TokensState['rowsUnreadable']>;
 export type TokensActive = NonNullable<TokensState['active']>;
 export type TokenAvailability = 'disabled' | 'invalidated' | 'cooling' | 'ready';
@@ -103,11 +98,9 @@ export type TokenRotationEntry = Extract<JournalEntry, { type: 'token_rotation' 
 
 export type AccessState = Ok<paths['/access']['get']>;
 export type AccessAccount = AccessState['accounts'][number];
-export type AccessRowsUnreadable = NonNullable<AccessState['rowsUnreadable']>;
 
 export type PermissionGrantsState = Ok<paths['/permission-grants']['get']>;
 export type PermissionGrant = PermissionGrantsState['grants'][number];
-export type PermissionGrantsRowsUnreadable = NonNullable<PermissionGrantsState['rowsUnreadable']>;
 
 export type CredentialsState = Ok<paths['/credentials']['get']>;
 /** Codex の ChatGPT ログインの状態。値は持たない。 */
@@ -145,7 +138,6 @@ export type ArchiveListState = Ok<paths['/archive']['get']>;
 export type ArchiveEntry = ArchiveListState['entries'][number];
 export type ArchiveSessionsState = Ok<paths['/archive/sessions']['get']>;
 export type ArchiveSessionSummary = ArchiveSessionsState['sessions'][number];
-export type ArchiveRemoveResult = Ok<paths['/archive/{id}']['delete']>;
 
 export type InboxRemoveManyRequestBody = NonNullable<
   paths['/inbox/remove']['post']['requestBody']
