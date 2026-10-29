@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { errorReason, formatElapsedAgo, withErrorReason } from './format.js';
+import {
+  describeFailedResponse,
+  errorReason,
+  formatElapsedAgo,
+  withErrorReason,
+} from './format.js';
+import { describeAuthFailure } from './target.js';
 
 describe('formatElapsedAgo', () => {
   const NOW = new Date('2026-01-10T00:00:00.000Z').getTime();
@@ -76,5 +82,31 @@ describe('errorReason / withErrorReason', () => {
       expect(await errorReason(response)).toBeNull();
       expect(await withErrorReason('失敗しました（500）', response)).toBe('失敗しました（500）');
     }
+  });
+});
+
+describe('describeFailedResponse', () => {
+  const target = { baseUrl: 'http://127.0.0.1:4517', headers: {}, remote: false, note: null };
+  const response = (status: number, body: unknown) => ({
+    status,
+    json: () => Promise.resolve(body),
+  });
+
+  it('401 は本文の理由より先に、認証の案内を返す', async () => {
+    expect(
+      await describeFailedResponse('失敗しました', response(401, { error: '理由' }), target),
+    ).toBe(describeAuthFailure(401, target));
+  });
+
+  it('認証の案内が無い status は、デーモンの理由を文言の後ろへ足す', async () => {
+    expect(
+      await describeFailedResponse('失敗しました（500）', response(500, { error: '理由' }), target),
+    ).toBe('失敗しました（500）: 理由');
+  });
+
+  it('理由が無ければ、文言をそのまま返す', async () => {
+    expect(await describeFailedResponse('失敗しました（500）', response(500, {}), target)).toBe(
+      '失敗しました（500）',
+    );
   });
 });

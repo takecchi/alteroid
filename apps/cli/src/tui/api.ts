@@ -25,9 +25,9 @@ import {
   fetchConversationApprovals,
   type ConversationApprovalsRead,
 } from '../conversation-approvals.js';
-import { withErrorReason } from '../format.js';
+import { describeFailedResponse } from '../format.js';
 import type { MemorySummary } from '../memory.js';
-import { describeAuthFailure, type Target } from '../target.js';
+import { type Target } from '../target.js';
 import { redactError } from '../redact.js';
 import type { InterruptOutcome, InterruptTarget } from './interrupt-outcome.js';
 import { readSSE } from './sse.js';
@@ -281,10 +281,8 @@ export function createTuiApi(target: Target): TuiApi {
     what: string,
     response: Response | { status: number; json: () => Promise<unknown> },
   ): Promise<ApiError> {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) return new ApiError(described);
     return new ApiError(
-      await withErrorReason(`${what}（HTTP ${String(response.status)}）`, response),
+      await describeFailedResponse(`${what}（HTTP ${String(response.status)}）`, response, target),
     );
   }
 

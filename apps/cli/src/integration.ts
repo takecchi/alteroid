@@ -3,7 +3,7 @@ import { stderr, stdout } from './terminal-out.js';
 import { createClient } from './client.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
-import { describeUnreadableRowsList, errorReason, withErrorReason } from './format.js';
+import { describeUnreadableRowsList, errorReason, describeFailedResponse } from './format.js';
 import { redactError } from './redact.js';
 
 interface IntegrationKeyView {
@@ -291,12 +291,11 @@ export async function integrationRemoveUnreadableCommand(
           'id が取れない行はこの口では消せません）',
       );
     }
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `読めない連携の鍵の行を消せませんでした（${response.status}）`,
         response,
+        target,
       ),
     );
   }

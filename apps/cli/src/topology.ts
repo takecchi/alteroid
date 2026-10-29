@@ -1,9 +1,9 @@
 import { stderr, stdout } from './terminal-out.js';
 
 import { createClient } from './client.js';
-import { withErrorReason } from './format.js';
+import { describeFailedResponse } from './format.js';
 import { redactBody, redactError } from './redact.js';
-import { describeAuthFailure, resolveTarget } from './target.js';
+import { resolveTarget } from './target.js';
 import { readSSE } from './tui/sse.js';
 
 export interface TopologyView {
@@ -258,12 +258,11 @@ export async function topologyCommand(options: TopologyOptions = {}): Promise<vo
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.topology.$get();
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `稼働の地図を読めませんでした（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }
@@ -310,12 +309,11 @@ async function watchTopology(
       });
     }
     if (!response.ok || response.body === null) {
-      const described = describeAuthFailure(response.status, target);
-      if (described !== null) throw new Error(described);
       throw new Error(
-        await withErrorReason(
+        await describeFailedResponse(
           `稼働の地図の購読に失敗しました（HTTP ${String(response.status)}）`,
           response,
+          target,
         ),
       );
     }

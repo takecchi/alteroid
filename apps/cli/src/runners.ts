@@ -12,8 +12,8 @@ import type {
 } from '@alteroid/core';
 
 import { createClient } from './client.js';
-import { formatElapsedAgo, withErrorReason } from './format.js';
-import { describeAuthFailure, resolveTarget } from './target.js';
+import { formatElapsedAgo, describeFailedResponse } from './format.js';
+import { resolveTarget } from './target.js';
 import { redactError } from './redact.js';
 
 export async function runnersCommand(): Promise<void> {
@@ -25,12 +25,11 @@ export async function runnersCommand(): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.runners.$get();
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `runner の一覧を読めませんでした（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }
@@ -46,12 +45,11 @@ export async function runnersVacateCommand(runnerId: string): Promise<void> {
   // 名簿に無い runnerId は立てずに断る: デーモンは同じ 200 を返し、打ち間違いのまま台数を減らして空いていない器を落とすため
   const rosterResponse = await client.runners.$get();
   if (!rosterResponse.ok) {
-    const described = describeAuthFailure(rosterResponse.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `runner の名簿を読めなかったので、runner ${runnerId} を空けると立てていません（HTTP ${String(rosterResponse.status)}）`,
         rosterResponse,
+        target,
       ),
     );
   }
@@ -64,12 +62,11 @@ export async function runnersVacateCommand(runnerId: string): Promise<void> {
   }
   const response = await client.runners.vacate.$post({ json: { runnerId } });
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `runner ${runnerId} を空けると立てられませんでした（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }

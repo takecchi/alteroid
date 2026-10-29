@@ -1,8 +1,8 @@
 import { stdout } from './terminal-out.js';
 
 import { createClient, type DaemonClient } from './client.js';
-import { withErrorReason } from './format.js';
-import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { describeFailedResponse } from './format.js';
+import { resolveTarget, type Target } from './target.js';
 
 export async function interruptCommand(): Promise<void> {
   const target = await resolveTarget();
@@ -31,12 +31,11 @@ export async function requestInterruptOutcome(
     ? client.clone.interrupt.$post()
     : client.clone.interrupt.$post({ json: turn } as never));
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `クローンのターンを止められませんでした（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }

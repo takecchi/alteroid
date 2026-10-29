@@ -31,8 +31,8 @@ import { formatBytes } from '@alteroid/logic';
 import { createClient } from './client.js';
 import { confirmIrreversible } from './confirm.js';
 import { describeCliFailure, isConnectionFailure } from './failure-message.js';
-import { withErrorReason } from './format.js';
-import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { describeFailedResponse } from './format.js';
+import { resolveTarget, type Target } from './target.js';
 
 const MEDIA_TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
   png: 'image/png',
@@ -347,10 +347,12 @@ export async function uploadAttachment(
     );
   }
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(`アップロードできない（HTTP ${response.status}）`, response),
+      await describeFailedResponse(
+        `アップロードできない（HTTP ${response.status}）`,
+        response,
+        target,
+      ),
     );
   }
   return (await response.json()) as UploadedAttachment;
@@ -590,13 +592,12 @@ export async function attachmentsListCommand(options: AttachmentsListOptions): P
       },
     });
     if (!response.ok) {
-      const described = describeAuthFailure(response.status, target);
       throw new Error(
-        described ??
-          (await withErrorReason(
-            `添付の一覧を読めません（HTTP ${response.status}。--cursor の値を確かめてください）`,
-            response,
-          )),
+        await describeFailedResponse(
+          `添付の一覧を読めません（HTTP ${response.status}。--cursor の値を確かめてください）`,
+          response,
+          target,
+        ),
       );
     }
     return response.json();
@@ -651,9 +652,8 @@ async function attachmentFailure(
   if (response.status === 404) {
     return new Error(attachmentNotFoundMessage(id));
   }
-  const described = describeAuthFailure(response.status, target);
   return new Error(
-    described ?? (await withErrorReason(`${what}（HTTP ${response.status}）`, response)),
+    await describeFailedResponse(`${what}（HTTP ${response.status}）`, response, target),
   );
 }
 
@@ -690,10 +690,12 @@ export async function attachmentsMetaCommand(id: string): Promise<void> {
     throw new Error(attachmentNotFoundMessage(id));
   }
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
     throw new Error(
-      described ??
-        (await withErrorReason(`添付の控えを読めません（HTTP ${response.status}）`, response)),
+      await describeFailedResponse(
+        `添付の控えを読めません（HTTP ${response.status}）`,
+        response,
+        target,
+      ),
     );
   }
   const meta = await response.json();
@@ -728,13 +730,12 @@ export async function attachmentsGetCommand(
       throw new Error(attachmentNotFoundMessage(id));
     }
     if (!metaResponse.ok) {
-      const described = describeAuthFailure(metaResponse.status, target);
       throw new Error(
-        described ??
-          (await withErrorReason(
-            `添付の控えを読めません（HTTP ${metaResponse.status}）`,
-            metaResponse,
-          )),
+        await describeFailedResponse(
+          `添付の控えを読めません（HTTP ${metaResponse.status}）`,
+          metaResponse,
+          target,
+        ),
       );
     }
     // `path.join('.', name)` を使わない: `./` を畳んで `-` に戻り、標準出力（`-o -`）と取り違えるため
@@ -748,9 +749,8 @@ export async function attachmentsGetCommand(
     throw new Error(attachmentNotFoundMessage(id));
   }
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
     throw new Error(
-      described ?? (await withErrorReason(`添付を取れません（HTTP ${response.status}）`, response)),
+      await describeFailedResponse(`添付を取れません（HTTP ${response.status}）`, response, target),
     );
   }
   // 本文を溜めない: 2 GiB 級でもメモリに載せず、来た分から書く
