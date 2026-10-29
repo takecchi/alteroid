@@ -23,6 +23,13 @@ export type UnreadableInboxEvent = NonNullable<Ok<paths['/inbox']['get']>['unrea
 export type Commitment = Ok<paths['/commitments']['get']>['entries'][number];
 export type UnreadableCommitment = Ok<paths['/commitments']['get']>['unreadable'][number];
 
+export type Task = Ok<paths['/tasks']['get']>['entries'][number];
+export type TaskStatus = Task['status'];
+export type UnreadableTask = Ok<paths['/tasks']['get']>['unreadable'][number];
+export type TaskPlacementInput = NonNullable<
+  paths['/tasks/{id}/move']['post']['requestBody']
+>['content']['application/json']['placement'];
+
 export type ApprovalAnswerResult = Ok<paths['/approvals/answer']['post']>['results'][number];
 
 export type AnsweredApprovalDate = Ok<paths['/approvals/answered-dates']['get']>['dates'][number];

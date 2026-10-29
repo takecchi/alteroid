@@ -78,6 +78,9 @@ export const KEY = {
   commitments: (includeClosed: boolean) => ({ type: 'commitments', includeClosed }) as const,
   // `type` を `commitments` のまま揃える: 台帳の一覧を無効にする束（日誌の行・変更の後）で、詳細も一緒に取り直されるため
   commitmentById: (id: string) => ({ type: 'commitments', byId: id }) as const,
+  tasks: (includeClosed: boolean) => ({ type: 'tasks', includeClosed }) as const,
+  // `type` を `tasks` のまま揃える: 一覧を無効にする束で、詳細も一緒に取り直されるため
+  taskById: (id: string) => ({ type: 'tasks', byId: id }) as const,
   reports: (limit: number) => ({ type: 'reports', limit }) as const,
   report: (date: string) => ({ type: 'report', date }) as const,
   journal: (limit: number, types: string) => ({ type: 'journal', limit, types }) as const,
@@ -321,6 +324,30 @@ export function useCommitment(id: string | null) {
   const api = useApi();
   return useSWR(id === null ? null : KEY.commitmentById(id), ({ byId }) =>
     api.api.GET('/commitments/{id}', { params: { path: { id: byId } } }).then(unwrap),
+  );
+}
+
+// 画面で並べ直さない: `entries` の順が優先順で、並びの持ち主は器（store）だけ。閉じた行は開いた行の後ろに新しい順で続く
+export function useTasks(includeClosed = false) {
+  const api = useApi();
+  return useSWR(
+    KEY.tasks(includeClosed),
+    ({ includeClosed }) =>
+      api.api
+        .GET('/tasks', {
+          params: { query: { includeClosed: includeClosed ? 'true' : 'false' } },
+        })
+        .then(unwrap),
+    // 別キーになっても前の一覧を出したままにする: スピナーに置き換わると、書きかけの下書きが unmount で消える
+    { keepPreviousData: true },
+  );
+}
+
+// task の1行を全文で読む。`null` の間は取りに行かない
+export function useTask(id: string | null) {
+  const api = useApi();
+  return useSWR(id === null ? null : KEY.taskById(id), ({ byId }) =>
+    api.api.GET('/tasks/{id}', { params: { path: { id: byId } } }).then(unwrap),
   );
 }
 

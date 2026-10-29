@@ -13,6 +13,8 @@ export default [
     route('approvals/answered/:date?/:approvalId?', 'routes/approvals-answered.tsx'),
     route('approvals/item/:approvalId', 'routes/approvals-item.tsx'),
     route('commitments', 'routes/commitments.tsx'),
+    route('tasks', 'routes/tasks.tsx'),
+    route('tasks/:id', 'routes/tasks-detail.tsx'),
     route('reports/:date?/:reportId?', 'routes/reports.tsx'),
     route('usage', 'routes/usage.tsx'),
     route('tokens', 'routes/tokens.tsx'),

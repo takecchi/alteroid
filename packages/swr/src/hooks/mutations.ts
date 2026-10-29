@@ -30,6 +30,8 @@ import type {
   ProfileUpdateResult,
   ScheduleEntry,
   ScheduleSpec,
+  Task,
+  TaskPlacementInput,
   TokenRotationSettings,
 } from '@alteroid/logic';
 import { saveChatDraft, saveChatDraftMark } from '@alteroid/logic';
@@ -396,6 +398,125 @@ export function useEditCommitment() {
             throw new CommitmentConflictError(
               conflict.error ?? '本文が読んだ後に変わっている',
               conflict.current ?? null,
+            );
+          }
+        }
+        expectOk(result);
+      }, refresh);
+    },
+    [api, refresh],
+  );
+}
+
+// task の束（一覧の2つの表示と詳細）を丸ごと取り直す: 閉じる・動かす・開き直すは一覧の見え方（どの欄に居るか・並び）を変え、詳細の状態も変えるため
+function useRefreshTasks() {
+  const { mutate } = useSWRConfig();
+  return useCallback(() => mutate((key) => isKeyOfType(key, 'tasks')), [mutate]);
+}
+
+export type TaskPlacement = TaskPlacementInput;
+
+/** 積んだ行の id を返す。閉じる・動かすの宛先になる。 */
+export function usePushTask() {
+  const api = useApi();
+  const refresh = useRefreshTasks();
+  return useCallback(
+    async (input: { title: string; body: string; placement?: TaskPlacement }) => {
+      let id = '';
+      await writeThenRefresh(async () => {
+        const result = await api.api.POST('/tasks', { body: input });
+        id = unwrap(result).id;
+      }, refresh);
+      return id;
+    },
+    [api, refresh],
+  );
+}
+
+export function useCloseTask() {
+  const api = useApi();
+  const refresh = useRefreshTasks();
+  return useCallback(
+    async (id: string, status: 'done' | 'cancelled', reason: string) => {
+      await writeThenRefresh(async () => {
+        expectOk(
+          await api.api.POST('/tasks/{id}/close', {
+            params: { path: { id } },
+            body: { status, reason },
+          }),
+        );
+      }, refresh);
+    },
+    [api, refresh],
+  );
+}
+
+export function useReopenTask() {
+  const api = useApi();
+  const refresh = useRefreshTasks();
+  return useCallback(
+    async (id: string, reason: string) => {
+      await writeThenRefresh(async () => {
+        expectOk(
+          await api.api.POST('/tasks/{id}/reopen', {
+            params: { path: { id } },
+            body: { reason },
+          }),
+        );
+      }, refresh);
+    },
+    [api, refresh],
+  );
+}
+
+export function useMoveTask() {
+  const api = useApi();
+  const refresh = useRefreshTasks();
+  return useCallback(
+    async (id: string, placement: TaskPlacement) => {
+      await writeThenRefresh(async () => {
+        expectOk(
+          await api.api.POST('/tasks/{id}/move', {
+            params: { path: { id } },
+            body: { placement },
+          }),
+        );
+      }, refresh);
+    },
+    [api, refresh],
+  );
+}
+
+// 可否をここで先回りして弾かない: サーバの規則（human 起点の開いた行だけ）を写すと、サーバ側の線が変わった日に画面だけがずれるため
+/** 読んだ版（`editedAt ?? createdAt`）と違うと断られた。`current` はいまの行。 */
+export class TaskConflictError extends ApiError {
+  readonly current: Task;
+
+  constructor(message: string, current: Task) {
+    super(409, message);
+    this.name = 'TaskConflictError';
+    this.current = current;
+  }
+}
+
+// 版の衝突は本文に `current` の鍵があるかで見分ける: 閉じ済み・読めない行の 409 は `{ error }` だけで、混ぜると「下書きを新しい版に載せ直す」を勧めてしまう。
+// `ifMatch` を送らない呼び出しは後勝ち
+export function useEditTask() {
+  const api = useApi();
+  const refresh = useRefreshTasks();
+  return useCallback(
+    async (id: string, change: { title?: string; body?: string }, ifMatch?: string) => {
+      await writeThenRefresh(async () => {
+        const result = await api.api.PATCH('/tasks/{id}', {
+          params: { path: { id } },
+          body: ifMatch === undefined ? change : { ...change, ifMatch },
+        });
+        if (result.response.status === 409 && typeof result.error === 'object') {
+          const conflict = result.error as { error?: string; current?: Task } | null;
+          if (conflict !== null && conflict.current !== undefined && conflict.current !== null) {
+            throw new TaskConflictError(
+              conflict.error ?? '読んだ後に変わっている',
+              conflict.current,
             );
           }
         }

@@ -14,6 +14,7 @@ export const APPROVALS_TABS: readonly NavTab[] = [
 
 export const WORK_TABS: readonly NavTab[] = [
   { to: '/commitments', label: '未了の仕事' },
+  { to: '/tasks', label: '待ち行列' },
   { to: '/progress', label: '作業の進捗' },
 ];
 

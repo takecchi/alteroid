@@ -111,6 +111,8 @@ const CASES: [string, string][] = [
   ['/approvals/answered/2026-09-30', '承認待ち'],
   ['/approvals/answered/2026-09-30/ap-1', '承認待ち'],
   ['/commitments', '仕事'],
+  ['/tasks', '仕事'],
+  ['/tasks/task-1', '仕事'],
   ['/progress', '仕事'],
   ['/managers', 'マネージャー'],
   ['/managers/mgr-1', 'マネージャー'],
