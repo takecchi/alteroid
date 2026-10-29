@@ -8305,11 +8305,8 @@ class Pool implements ManagerPool {
           this.#scheduleReattach(runner.runnerId);
         } else {
           // `running` のままにしない: resume を実際に試して戻れなかったので、`lost` は確かめた事実。
-          this.#unresumable.add(job.id);
-          record.job.status = 'lost';
-          await this.#persist(record);
-          this.#notifyUnresumable(record, error);
-          this.#retire(job.id);
+          // 直書きしない: resume を待つ間に `abort()` が `stopped` を書いていることがあり、`#confirmLost` は止めた後を動かさない（`#reattach` と同じ入口）。
+          await this.#confirmLost(record, error);
         }
       }
     }
