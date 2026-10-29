@@ -1,5 +1,6 @@
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { clipRawValue } from '~/lib/clip-raw-value';
 import { useMemo, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 
@@ -42,12 +43,6 @@ function parseWindow(raw: string | null): WindowHours {
 /** `searchParams.get` は先頭の値しか返さない。重複を黙って採ると、人が書いた2つ目の指定が無視されたことに気付けない。 */
 function hasDuplicateParam(searchParams: URLSearchParams, name: string): boolean {
   return searchParams.getAll(name).length > 1;
-}
-
-const RAW_VALUE_MAX = 40;
-function clipRawValue(raw: string): string {
-  const chars = Array.from(raw);
-  return chars.length > RAW_VALUE_MAX ? `${chars.slice(0, RAW_VALUE_MAX).join('')}…` : raw;
 }
 
 export default function ProgressPage() {

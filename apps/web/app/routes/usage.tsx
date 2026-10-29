@@ -1,5 +1,6 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { clipRawValue } from '~/lib/clip-raw-value';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { shiftedUsageDate } from '~/lib/usage-dates';
 import {
@@ -121,12 +122,6 @@ function parseUsageLayer(raw: string | null): UsageLayer | '' {
 function parseUsageSite(raw: string | null): UsageSite | '' {
   if (raw === null) return '';
   return (USAGE_SITES as readonly string[]).includes(raw) ? (raw as UsageSite) : '';
-}
-
-const RAW_VALUE_MAX = 40;
-function clipRawValue(raw: string): string {
-  const chars = Array.from(raw);
-  return chars.length > RAW_VALUE_MAX ? `${chars.slice(0, RAW_VALUE_MAX).join('')}…` : raw;
 }
 
 /**

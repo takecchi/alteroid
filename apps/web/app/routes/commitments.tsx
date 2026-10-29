@@ -1,5 +1,6 @@
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { clipRawValue } from '~/lib/clip-raw-value';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
@@ -55,12 +56,6 @@ export default function Commitments() {
 }
 
 const CLOSED_PARAM = 'closed';
-const RAW_VALUE_MAX = 40;
-
-function clipRawValue(raw: string): string {
-  const chars = Array.from(raw);
-  return chars.length > RAW_VALUE_MAX ? `${chars.slice(0, RAW_VALUE_MAX).join('')}…` : raw;
-}
 
 function CommitmentsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
