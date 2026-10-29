@@ -711,6 +711,20 @@ describe('報告は、委譲が結び付いた task を名乗る', () => {
     );
   });
 
+  it('⭐ taskId が無い起点の会話の案内は、manager_list の行と同じ手順・同じ語（task_list で探して task_say、無ければ task_add）', () => {
+    const text = describeManagerOrigin({ kind: 'conversation', conversationId: 'conv-1' });
+    expect(text).toContain(
+      '人間へ知らせるなら、この会話を起点にした task を task_list で探して `task_say` で書く。無ければ task_add で足す。',
+    );
+    expect(text).not.toContain('結び付いた task〔');
+    expect(
+      describeManagerOrigin(
+        { kind: 'conversation', conversationId: 'conv-1' },
+        (_id, _full, ref) => ref,
+      ),
+    ).toContain('task_list で探した task へ task_say で書く。無ければ task_add');
+  });
+
   it('結び付いていなければ、行そのものを出さない', () => {
     expect(describeManagerOrigin({ kind: 'conversation', conversationId: 'conv-1' })).not.toContain(
       '結び付いた task:',

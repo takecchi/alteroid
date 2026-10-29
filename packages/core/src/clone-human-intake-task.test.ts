@@ -481,6 +481,39 @@ describe('起点の会話へ返答したターンの終わりに、queued の ta
     await s.clone.stop();
   });
 
+  it('task_say が task A へ書くと、同じ起点の会話の別の queued の task B も閉じる（返答は task ではなく会話に数えるため。現状の挙動の固定）', async () => {
+    // `postToConversation` は返答を「会話 id」で控え、`selectTasksToAutoClose` は起点の会話が一致する queued の task を、
+    // 未読の合図・「続く」の印・問い・委譲・ターン開始後の到着で除いたうえで全部閉じる。task_say の宛先 task（A）だけには絞らない。
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の依頼',
+      conversationId: 'conv-x',
+    });
+    await stores.tasks.add(seeded('task-a', { originConversationId: 'conv-x' }));
+    await stores.tasks.add(seeded('task-b', { originConversationId: 'conv-x' }));
+    await stores.tasks.add(seeded('task-other', { originConversationId: 'conv-y' }));
+    const s = boot(
+      (_turn, input, tool) =>
+        input.includes('POST-REPORT')
+          ? [
+              ...say('読んだ'),
+              { run: () => tool('task_say')({ taskId: 'task-a', text: 'A の報告です' }) },
+            ]
+          : say('読んだ'),
+      { stores },
+    );
+
+    s.clone.post(managerReport('rep-post', 'POST-REPORT'));
+    await waitFor(async () => (await statusOf(stores, 'task-a')) === 'done', 'A が閉じる');
+    await waitFor(async () => (await statusOf(stores, 'task-b')) === 'done', 'B も閉じる');
+    // 別の会話の task は閉じない
+    expect(await statusOf(stores, 'task-other')).toBe('queued');
+    await s.clone.stop();
+  });
+
   it('同じ合図の再配達（同じ id の再 post）で Task は二重にならない', async () => {
     const s = boot(() => say('返答'));
     s.clone.post(human('evt-once', '一度だけ'));

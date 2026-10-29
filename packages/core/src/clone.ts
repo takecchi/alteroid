@@ -9599,10 +9599,10 @@ export const HUMAN_ANSWER_CRITERIA_GUIDE_REF =
 
 /** 起点の会話の扱いの説明（会話の id は畳まない。説明の括弧の中だけを、同じ会話の2回目から参照にする）。 */
 export const ORIGIN_CONVERSATION_GUIDE =
-  '（この委譲はこの会話で頼まれた。人間へ知らせるなら、結び付いた task〔無ければこの会話を起点にした task を task_list で探し、それも無ければ task_add で足す〕へ ' +
-  '`task_say` で書く。書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、同じ会話に結びつく）';
+  '（この委譲はこの会話で頼まれた。人間へ知らせるなら、この会話を起点にした task を task_list で探して `task_say` で書く。無ければ task_add で足す。' +
+  '書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、同じ会話に結びつく）';
 export const ORIGIN_CONVERSATION_GUIDE_REF =
-  '（扱いは前に出した案内と同じ: 結び付いた task へ task_say で書き、知らせるだけの task は done にする）';
+  '（扱いは前に出した案内と同じ: task_list で探した task へ task_say で書く。無ければ task_add。知らせるだけの task は done にする）';
 export const ORIGIN_NONE_GUIDE =
   '（会話の外〔定期の仕事・外部イベント・自発など〕で起こした委譲。人間へ知らせるなら、task_add で足すと新しい会話ができる。そこへ `task_say` で書き、書いたら done にする）';
 export const ORIGIN_NONE_GUIDE_REF =

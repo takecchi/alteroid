@@ -90,7 +90,7 @@ const stuckInbox = (): unknown[] =>
 function harness(
   managers: () => ManagerSummary[],
   delta: DigestSessionDelta | null,
-  extra: { inbox?: unknown[]; queued?: number; ledger?: string[] } = {},
+  extra: { inbox?: unknown[]; queued?: number; ledger?: string[]; ledgerTaskId?: string } = {},
 ) {
   const stores = createMemoryStores();
   const ledger = extra.ledger ?? [];
@@ -124,6 +124,7 @@ function harness(
         status: 'done',
         summary: '依頼',
         conversationId: `conv-${id}`,
+        ...(extra.ledgerTaskId === undefined ? {} : { taskId: extra.ledgerTaskId }),
       });
     }
     const result = await found.handler(args as never, {});
@@ -417,6 +418,26 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
     expect(second.length).toBeLessThan(first.length);
     // 口が無い器は全行が全文
     const plain = await harness(rows, null, { ledger })();
+    expect(plain.split(hint).length - 1).toBe(3);
+  });
+
+  it('⭐ taskId のある行の起点の会話の使い方も同じ形で畳まれる（2行目から参照）', async () => {
+    const hint = '（報告を人間へ知らせるなら、結び付いた task へ task_say で書く）';
+    const ref = '（知らせるなら結び付いた task へ task_say）';
+    const rows = (): ManagerSummary[] => [summary(1), summary(2), summary(3)];
+    const ledger = ['mgr-001', 'mgr-002', 'mgr-003'];
+    const call = harness(rows, new DigestSessionDelta(), { ledger, ledgerTaskId: 'task-1' });
+
+    const first = await call();
+    const second = await call({ refetch: true });
+
+    expect(first.split(hint).length - 1).toBe(1);
+    expect(first.split(ref).length - 1).toBe(2);
+    expect(second.split(hint).length - 1).toBe(0);
+    expect(second.split(ref).length - 1).toBe(3);
+    expect(second.length).toBeLessThan(first.length);
+    // 口が無い器は全行が全文
+    const plain = await harness(rows, null, { ledger, ledgerTaskId: 'task-1' })();
     expect(plain.split(hint).length - 1).toBe(3);
   });
 
