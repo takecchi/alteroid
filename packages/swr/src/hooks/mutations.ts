@@ -243,11 +243,7 @@ export function useDeletePractice() {
 function useRefreshApprovals() {
   const { mutate } = useSWRConfig();
   return useCallback(
-    () =>
-      refreshWithin(
-        Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]),
-        APPROVALS_REFRESH_WAIT_MS,
-      ),
+    () => refreshWithin(mutate(KEY.approvals), APPROVALS_REFRESH_WAIT_MS),
     [mutate],
   );
 }

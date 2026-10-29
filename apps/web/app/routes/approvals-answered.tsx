@@ -39,7 +39,7 @@ const approvalHref = (date: string, id: string) => `${dayHref(date)}/${encodeURI
 // ここで並べ直さない: 並びはデーモンが決めるため
 // 失敗を先に見る: SWR は失敗しても古い data を残すため
 function UnreadableApprovalsPointer() {
-  const { data, error } = useApprovals(true);
+  const { data, error } = useApprovals();
   if (error !== undefined || !Array.isArray(data?.unreadable) || data.unreadable.length === 0) {
     return null;
   }

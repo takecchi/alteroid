@@ -34,7 +34,7 @@ function UnreadableApprovalsWarn({ count, className }: { count: number; classNam
 
 // 未了の仕事の件数を「人間の番」の件数にしない: API は未了を「人間が動かすもの」と「そうでないもの」に分けて持たないため
 export function AwaitingYou() {
-  const approvals = useApprovals(true);
+  const approvals = useApprovals();
   const progress = useProgress();
   const now = useMinuteNow();
 

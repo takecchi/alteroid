@@ -67,7 +67,8 @@ export const KEY = {
     }) as const,
   manager: (id: string) => ({ type: 'manager', id }) as const,
   transcript: (id: string) => ({ type: 'transcript', id }) as const,
-  approvals: (pending: boolean) => ({ type: 'approvals', pending }) as const,
+  // 未回答の一覧だけ: 回答済みは日付ごとの鍵（`approvalsAnsweredOn`）や会話ごとの鍵で読む
+  approvals: { type: 'approvals', pending: true } as const,
   // 承認系のキーは `type` を `approvals` のまま揃える: `escalation` 受信時の束での無効化から外れると、古いまま取り残されるため
   conversationApprovals: (conversationId: string) =>
     ({ type: 'approvals', pending: false, conversationId }) as const,
@@ -263,13 +264,11 @@ export function useManagerTranscript(id: string | null) {
 // `order` を明示する: 渡さないと生の並びが永続化層ごとに違い（回答のたびに末尾へ動く実装がある）、同じ画面が違う順で出る
 // 窓（`limit` / `cursor`）は作らない: `total` は受け取った配列の長さと一致する冗長な値で、画面には出さない
 // `enabled` が false の間は取りに行かない: 鍵が無いまま出し続けると 401 を叩き続けるため
-export function useApprovals(pending = true, enabled = true) {
+export function useApprovals(enabled = true) {
   const api = useApi();
-  return useSWR(enabled ? KEY.approvals(pending) : null, ({ pending }) =>
+  return useSWR(enabled ? KEY.approvals : null, () =>
     api.api
-      .GET('/approvals', {
-        params: { query: { pending: pending ? 'true' : 'false', order: 'asc' } },
-      })
+      .GET('/approvals', { params: { query: { pending: 'true', order: 'asc' } } })
       .then(unwrap),
   );
 }
