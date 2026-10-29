@@ -74,7 +74,6 @@ export interface AgentCloneDistillSpec {
 
 export interface AgentCloneDriver {
   readonly providerId: AgentProviderId;
-  readonly providesContextUsage?: false;
   open(spec: AgentCloneSessionSpec): AgentCloneSession;
   readonly distill?: (spec: AgentCloneDistillSpec) => AsyncIterable<AgentEvent>;
 }

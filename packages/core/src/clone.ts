@@ -1069,7 +1069,6 @@ class Clone implements CloneHost {
   readonly #stores: Stores;
   readonly #permissionRuleService: DelegatedPermissionRuleService | undefined;
   readonly #driver: AgentCloneDriver;
-  #contextUsageUnavailableNoted = false;
   // 最初の本セッションのターンの終わりで立てる（文脈占有が取れたかに関わらず）: 取れなかった回の次に出すと「最初のターン」の観測でなくなるため。プロセスの起動で数え直す（#4921）
   #firstTurnToolSearchSettled = false;
   readonly #onFirstTurnToolSearch: ((line: string) => Promise<void>) | undefined;
@@ -8207,11 +8206,6 @@ class Clone implements CloneHost {
   async #observeContextUsage(): Promise<ContextUsageObservation | undefined> {
     const q = this.#sdkSession.query;
     if (q === null) return undefined;
-    // 文脈の使用状況を出せない駆動役は最初の1回だけ「取れない」と残し、以後は聞かない: 毎ターン同じ error 付きの行を積まないため。
-    if (this.#driver.providesContextUsage === false) {
-      if (this.#contextUsageUnavailableNoted) return undefined;
-      this.#contextUsageUnavailableNoted = true;
-    }
     const startedAt = Date.now();
     try {
       const usage = await contextUsageWithin(q.contextUsage(), this.#contextUsageTimeoutMs);
