@@ -6,6 +6,7 @@ import {
   hasNul,
   integrationKeyRecordSchema,
   prepareIntegrationKeyForWrite,
+  summarizeInvalidFields,
   writeStderrLine,
 } from '@alteroid/core';
 import type {
@@ -27,14 +28,6 @@ interface KeyFile {
   keys: IntegrationKeyRecord[];
   // 消さずに持ち回る: 次の書き込みで黙って消えないように
   invalidRaw: unknown[];
-}
-
-// `issue.message` は使わない: zod の既定メッセージが将来 `received` を含む形に変わると値が漏れるため
-function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
-  const fields = [
-    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
-  ];
-  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
 }
 
 function rowIdOf(raw: unknown): string | undefined {

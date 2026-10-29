@@ -1,4 +1,9 @@
-import { hasNul, integrationKeyRecordSchema, prepareIntegrationKeyForWrite } from '@alteroid/core';
+import {
+  hasNul,
+  integrationKeyRecordSchema,
+  prepareIntegrationKeyForWrite,
+  summarizeInvalidFields,
+} from '@alteroid/core';
 import type {
   IntegrationKeyRecord,
   IntegrationKeyStore,
@@ -12,14 +17,6 @@ import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { Db } from './db.js';
 import { toIso } from './db.js';
 import { integrationKeys } from './schema.js';
-
-// `issue.message` を使わない: 出すのは「どの欄が」だけにするため。
-function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
-  const fields = [
-    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
-  ];
-  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
-}
 
 function optionalDate(value: string | null): Date | null {
   return value === null ? null : new Date(value);
