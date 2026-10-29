@@ -13,8 +13,7 @@ const UNREACHABLE_TARGET: Target = {
   note: null,
 };
 
-// `runSlashCommand(line, ...slashArgs(client, listed, overrides))` の形で呼ぶ。
-// confirm は既定で拒否する（確認を求める操作は実行しない）。client 系は渡された client を既定にする。
+// confirm の既定を承認にしない: 確認を書き忘れた試験が、戻せない操作の HTTP を黙って叩くため
 export function slashArgs(
   client: Client,
   listed: Listed,

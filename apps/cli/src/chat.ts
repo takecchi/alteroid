@@ -1344,10 +1344,7 @@ export interface Listed {
   messageTexts: Record<string, string>;
 }
 
-// `!response.ok` で例外を投げず `stdout.write` して `'ok'` を返す: 1つの操作の失敗で、無関係な会話の続きまで失わせない。
-// 通信そのものの例外は呼び手のループが受ける。
 export interface SlashContext {
-  // 会話を開いていない間は null（REPL が `let conversationId: string | null` で持つ）。
   conversationId: string | null;
   target: Target;
   confirm: (summary: string) => Promise<boolean>;
@@ -1360,6 +1357,8 @@ export interface SlashContext {
   signal: AbortSignal;
 }
 
+// `!response.ok` で例外を投げず `stdout.write` して `'ok'` を返す: 1つの操作の失敗で、無関係な会話の続きまで失わせない。
+// 通信そのものの例外は呼び手のループが受ける。
 export async function runSlashCommand(
   line: string,
   client: ReturnType<typeof createClient>,
