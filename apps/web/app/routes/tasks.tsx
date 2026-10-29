@@ -106,7 +106,9 @@ function TasksPage() {
             <CardHeader title="開いている" subtitle="先頭が先にやるもの" />
             {open.length === 0 ? (
               <Empty>
-                {unreadable.length > 0 ? '読めた範囲では、開いている task はない。' : '開いている task はない。'}
+                {unreadable.length > 0
+                  ? '読めた範囲では、開いている task はない。'
+                  : '開いている task はない。'}
               </Empty>
             ) : (
               <ol aria-label="開いている task（優先順）">
@@ -195,7 +197,10 @@ function OpenRow({
 
 function TaskTitle({ task }: { task: Task }) {
   return (
-    <Link to={`/tasks/${encodeURIComponent(task.id)}`} className="text-sm font-medium hover:underline">
+    <Link
+      to={`/tasks/${encodeURIComponent(task.id)}`}
+      className="text-sm font-medium hover:underline"
+    >
       {redactBody(task.title)}
     </Link>
   );

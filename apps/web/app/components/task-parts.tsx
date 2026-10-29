@@ -120,13 +120,7 @@ export function AnchorSelect({
 
 // 並びの持ち主は器（store）だけ: 画面は「どこへ」だけを送り、数値の優先度や位置は持たない。
 // 先頭へ・末尾へはその場で動かし、ある行の前／後へは基準の行を選んでから動かす。
-export function TaskMoveControls({
-  task,
-  openTasks,
-}: {
-  task: Task;
-  openTasks: readonly Task[];
-}) {
+export function TaskMoveControls({ task, openTasks }: { task: Task; openTasks: readonly Task[] }) {
   const moveTask = useMoveTask();
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -251,7 +245,9 @@ export function TaskCloseForm({ task, onClosed }: { task: Task; onClosed?: () =>
           <Select
             aria-label={`「${label}」の閉じ方`}
             value={status}
-            onChange={(event) => setStatus(event.target.value === 'cancelled' ? 'cancelled' : 'done')}
+            onChange={(event) =>
+              setStatus(event.target.value === 'cancelled' ? 'cancelled' : 'done')
+            }
           >
             <option value="done">終わった（done）</option>
             <option value="cancelled">取りやめた（cancelled）</option>

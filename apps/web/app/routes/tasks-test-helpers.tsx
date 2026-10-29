@@ -38,16 +38,20 @@ type Placement =
 export function stubTasksServer(initial: Task[]) {
   let rows: Task[] = [...initial];
   const sent: Sent[] = [];
+  const gets: string[] = [];
   let nextId = 1;
   // 次の書く口を決まった応答で断らせる: 403・409 の見せ方を試すため
   let refuseNext: { status: number; body: unknown } | undefined;
   const openRows = () => rows.filter((row) => row.status !== 'done' && row.status !== 'cancelled');
-  const closedRows = () => rows.filter((row) => row.status === 'done' || row.status === 'cancelled');
+  const closedRows = () =>
+    rows.filter((row) => row.status === 'done' || row.status === 'cancelled');
 
   function place(row: Task, placement: Placement | undefined) {
     const others = rows.filter((entry) => entry.id !== row.id);
     const open = others.filter((entry) => entry.status !== 'done' && entry.status !== 'cancelled');
-    const closed = others.filter((entry) => entry.status === 'done' || entry.status === 'cancelled');
+    const closed = others.filter(
+      (entry) => entry.status === 'done' || entry.status === 'cancelled',
+    );
     let index = open.length;
     if (placement?.kind === 'front') index = 0;
     if (placement?.kind === 'before') index = open.findIndex((e) => e.id === placement.anchorId);
@@ -63,11 +67,10 @@ export function stubTasksServer(initial: Task[]) {
     if (match === null) throw new TypeError(`Failed to fetch: ${request.url}`);
     const [, id, verb] = match;
     if (request.method === 'GET') {
+      gets.push(`${url.pathname}${url.search}`);
       if (id !== undefined) {
         const found = rows.find((row) => row.id === id);
-        return found === undefined
-          ? json({ error: 'not found' }, 404)
-          : json({ entry: found });
+        return found === undefined ? json({ error: 'not found' }, 404) : json({ entry: found });
       }
       const includeClosed = url.searchParams.get('includeClosed') === 'true';
       return json({
@@ -106,8 +109,11 @@ export function stubTasksServer(initial: Task[]) {
       return json({ ok: true });
     }
     if (verb === 'reopen') {
-      const { closedAt: _a, closedReason: _r, closedBy: _b, ...rest } = row;
-      place({ ...rest, status: 'queued' }, undefined);
+      const reopened: Task = { ...row, status: 'queued' };
+      delete reopened.closedAt;
+      delete reopened.closedReason;
+      delete reopened.closedBy;
+      place(reopened, undefined);
       return json({ entry: rows.find((entry) => entry.id === id) });
     }
     if (verb === 'move') {
@@ -116,7 +122,10 @@ export function stubTasksServer(initial: Task[]) {
     }
     // PATCH
     if (body.ifMatch !== undefined && body.ifMatch !== (row.editedAt ?? row.createdAt)) {
-      return json({ error: 'task が読んだ後に変わっています（書き換えていません）', current: row }, 409);
+      return json(
+        { error: 'task が読んだ後に変わっています（書き換えていません）', current: row },
+        409,
+      );
     }
     rows[index] = {
       ...row,
@@ -128,8 +137,8 @@ export function stubTasksServer(initial: Task[]) {
   }) as typeof fetch;
 
   return {
-    sent,
-    writes: () => sent.filter((entry) => entry.method !== 'GET'),
+    gets,
+    writes: () => sent,
     rows: () => rows,
     /** 別のタブ・CLI がこの行を書き換えた。 */
     changeBehind: (id: string, change: Partial<Task>) => {

@@ -67,16 +67,15 @@ function Body({ id }: { id: string }) {
   if (notFound && data === undefined) return <NotFound />;
   return (
     <>
-      <LoadError
-        what="task"
-        error={error}
-        onRetry={() => mutate()}
-        retrying={isValidating}
-      />
+      <LoadError what="task" error={error} onRetry={() => mutate()} retrying={isValidating} />
       {isLoading && data === undefined ? (
         <Spinner />
       ) : data === undefined ? null : (
-        <TaskCard task={data.entry} openTasks={list.data?.entries ?? []} listReady={list.data !== undefined} />
+        <TaskCard
+          task={data.entry}
+          openTasks={list.data?.entries ?? []}
+          listReady={list.data !== undefined}
+        />
       )}
     </>
   );
@@ -106,10 +105,8 @@ function TaskCard({
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const closed = isTaskClosed(task);
   const position = openTasks.findIndex((entry) => entry.id === task.id);
-  // 閉じるとページに居たまま行が閉じた側へ移るので、編集欄は開いたままにしない。
-  useEffect(() => {
-    if (closed) setEditing(false);
-  }, [closed]);
+  // 閉じるとページに居たまま行が閉じた側へ移るので、閉じた行には編集欄を出さない。
+  const showEditor = editing && !closed;
 
   function closeEditor() {
     setEditing(false);
@@ -125,7 +122,9 @@ function TaskCard({
           <TaskStatusBadge status={task.status} />
           <TaskOriginBadge origin={task.origin} />
           {!closed && listReady && position >= 0 && (
-            <span>優先順 {position + 1} / {openTasks.length}</span>
+            <span>
+              優先順 {position + 1} / {openTasks.length}
+            </span>
           )}
           {task.editedAt !== undefined && (
             <Badge tone="neutral">編集済み（{formatDateTime(task.editedAt)}）</Badge>
@@ -134,7 +133,7 @@ function TaskCard({
           <span>({formatRelativeAtMinute(task.createdAt, now)})</span>
         </div>
 
-        {editing ? (
+        {showEditor ? (
           <TaskEditor
             task={task}
             onDone={closeEditor}

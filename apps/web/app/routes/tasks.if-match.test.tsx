@@ -81,7 +81,9 @@ describe('task の編集と版の照合', () => {
     expect(server.rows()[0]?.body).toBe('裏で書き換えられた本文');
     expect(body.value).toBe('自分の下書き');
     expect(server.writes()).toHaveLength(1);
-    expect(screen.getByRole('button', { name: 'いまの内容の上で、下書きを保存し直す' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'いまの内容の上で、下書きを保存し直す' }),
+    ).toBeTruthy();
   });
 
   it('「保存し直す」は、裏の版を前提にして下書きを送る', async () => {
@@ -106,7 +108,9 @@ describe('task の編集と版の照合', () => {
     server.changeBehind('t-1', { body: '裏の本文' });
     fireEvent.change(body, { target: { value: '自分の下書き' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
-    fireEvent.click(await screen.findByRole('button', { name: '下書きを捨てて、いまの内容にする' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: '下書きを捨てて、いまの内容にする' }),
+    );
 
     await waitFor(() => expect(body.value).toBe('裏の本文'));
     expect(screen.queryByRole('alert')).toBeNull();

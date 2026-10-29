@@ -67,11 +67,13 @@ describe('/tasks 一覧', () => {
 
     await screen.findByText('先にやる仕事');
     expect(screen.queryByText('終わった仕事')).toBeNull();
-    expect(server.sent.some((entry) => entry.path.endsWith('/tasks'))).toBe(true);
+    expect(server.gets.length).toBeGreaterThan(0);
+    expect(server.gets.some((url) => url.includes('includeClosed=true'))).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: '閉じたものも見る' }));
 
     expect(await screen.findByText('終わった仕事')).toBeTruthy();
+    expect(server.gets.some((url) => url.includes('includeClosed=true'))).toBe(true);
     expect(screen.getByText(/PR #99 をマージした/)).toBeTruthy();
     expect(screen.getByText('完了（done）')).toBeTruthy();
     expect(screen.getByText('取りやめ（cancelled）')).toBeTruthy();
@@ -325,7 +327,9 @@ describe('task を並べ替える', () => {
     fireEvent.change(screen.getByLabelText('「先にやる仕事」を動かす基準の行'), {
       target: { value: 't-b' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '「先にやる仕事」を選んだ行の後ろへ動かす' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: '「先にやる仕事」を選んだ行の後ろへ動かす' }),
+    );
 
     await waitFor(() =>
       expect(openTitles()).toEqual(['返事を待っている仕事', '先にやる仕事', '判断が要る仕事']),
@@ -341,7 +345,9 @@ describe('task を並べ替える', () => {
     await screen.findByText('先にやる仕事');
 
     const select = screen.getByLabelText('「先にやる仕事」を動かす基準の行');
-    const options = within(select).getAllByRole('option').map((o) => o.textContent);
+    const options = within(select)
+      .getAllByRole('option')
+      .map((o) => o.textContent);
     expect(options).toEqual(['基準の行を選ぶ', '2. 返事を待っている仕事', '3. 判断が要る仕事']);
   });
 });
