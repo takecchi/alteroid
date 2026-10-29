@@ -9,20 +9,12 @@ import type {
   SDKMessage,
   query as sdkQuery,
 } from '@anthropic-ai/claude-agent-sdk';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { cloneMcpServers, DEFAULT_AUTO_COMPACT_WINDOW_TOKENS } from './claude-provider.js';
 import { TOKEN_SAVING_COMPACTION_ENV } from './token-saving-switches.js';
-import {
-  CLONE_TOOL_RELAY_SOCKET_ENV,
-  CLONE_TOOL_RELAY_TOKEN_ENV,
-} from './clone-tool-relay-child.js';
-import { buildCloneToolRelayChildDistForTesting } from './clone-tool-relay-child-build.test-support.js';
-import { CLONE_TOOLS_TRANSPORT_ENV_KEY } from './clone-tools-transport.js';
 import { CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { withEffectiveMcpServers } from './mcp-config-file.test-support.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
@@ -37,27 +29,8 @@ import {
   createRunnerHost,
   type RunnerHost,
 } from './runner.js';
-import { CLONE_ALLOWED_TOOLS, CLONE_TOOL_NAMES, MCP_SERVER_NAME } from './tools.js';
+import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
 import { createMemoryStores, humanMessage } from './testing.js';
-
-// vi.hoisted にする: vi.mock が hoist されるので、素の const だとファクトリ実行時に TDZ で例外になるため
-const relayChildEntryDist = vi.hoisted(() => ({ path: undefined as string | undefined }));
-
-vi.mock('./clone-tools-transport.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./clone-tools-transport.js')>();
-  return {
-    ...actual,
-    resolveCloneToolRelayChildEntry: () => {
-      if (relayChildEntryDist.path === undefined) {
-        throw new Error(
-          'clone-tool-relay-child-build.test-support.ts の build がまだ終わっていない' +
-            '（beforeAll の完了前に呼ばれた）',
-        );
-      }
-      return relayChildEntryDist.path;
-    },
-  };
-});
 
 interface CloneSdkCall {
   options: Options;
@@ -133,12 +106,6 @@ function fakeCloneSdk(): { fn: typeof sdkQuery; calls: CloneSdkCall[] } {
 }
 
 describe('クローン本セッションへ渡す Options', () => {
-  beforeAll(async () => {
-    relayChildEntryDist.path = await buildCloneToolRelayChildDistForTesting(
-      'agent-session-options-relay-child-dist-',
-    );
-  }, 60_000);
-
   it('compaction の系統が切り（既定）なら、settings に自動の要約の窓を載せない', async () => {
     const { fn, calls } = fakeCloneSdk();
     const clone = createClone({
@@ -212,14 +179,15 @@ describe('クローン本セッションへ渡す Options', () => {
     await clone.stop();
   });
 
-  it('ALTEROID_CLONE_TOOLS_TRANSPORT 未設定・空・空白は、今日どおり type: sdk のまま（既定固定）', async () => {
-    for (const value of [undefined, '', '   ']) {
+  // 退いた切り替え（#5595）を置いたままの器でも、道具は in-process の1本で渡り、構築も止まらない
+  it('クローンの道具は type: sdk の1本で渡る（ALTEROID_CLONE_TOOLS_TRANSPORT は読まない）', async () => {
+    for (const value of [undefined, 'stdio', 'stido']) {
       const { fn, calls } = fakeCloneSdk();
       const stores = createMemoryStores();
       const clone = createClone({
         stores,
         queryFn: fn,
-        env: value === undefined ? {} : { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: value },
+        env: value === undefined ? {} : { ALTEROID_CLONE_TOOLS_TRANSPORT: value },
       });
 
       clone.post(humanMessage('やあ'));
@@ -234,97 +202,6 @@ describe('クローン本セッションへ渡す Options', () => {
       await clone.stop();
     }
   });
-
-  it('ALTEROID_CLONE_TOOLS_TRANSPORT=stdio のとき、鍵は同じ1本のまま type: stdio へ切り替わる', async () => {
-    const { fn, calls } = fakeCloneSdk();
-    const stores = createMemoryStores();
-    const socketDir = makeTempDirSync('clone-tool-relay-wire-');
-    const clone = createClone({
-      stores,
-      queryFn: fn,
-      env: { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stdio' },
-      cloneToolRelaySocketDir: socketDir,
-    });
-
-    clone.post(humanMessage('やあ'));
-    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
-
-    // 中継の資格（socket・token の env）は stdio 形なので、argv に載る mcpServers ではなくファイルへ回る
-    expect((calls[0] as CloneSdkCall).options.mcpServers).toEqual({});
-    const mcpServers = effectiveMcpServers(calls[0] as CloneSdkCall);
-    expect(Object.keys(mcpServers)).toEqual([MCP_SERVER_NAME]);
-    const own = mcpServers[MCP_SERVER_NAME] as {
-      type?: string;
-      command?: string;
-      args?: string[];
-      env?: Record<string, string>;
-      alwaysLoad?: boolean;
-    };
-    expect(own.type).toBe('stdio');
-    expect(own.command).toBe(process.execPath);
-    expect(own.args).toHaveLength(1);
-    expect(own.args?.[0]).toMatch(/clone-tool-relay-child\.js$/);
-    expect(Object.keys(own.env ?? {}).sort()).toEqual(
-      [CLONE_TOOL_RELAY_SOCKET_ENV, CLONE_TOOL_RELAY_TOKEN_ENV].sort(),
-    );
-    expect(own.alwaysLoad).toBeUndefined();
-
-    await clone.stop();
-  });
-
-  it('ALTEROID_CLONE_TOOLS_TRANSPORT に未知の値を置くと、黙って倒さずに構築そのものを止める', () => {
-    const { fn } = fakeCloneSdk();
-    const stores = createMemoryStores();
-    expect(() =>
-      createClone({
-        stores,
-        queryFn: fn,
-        env: { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stido' },
-      }),
-    ).toThrow(/ALTEROID_CLONE_TOOLS_TRANSPORT/);
-  });
-
-  it(
-    'stdio モードでも clone.ts の配線を通して本物の createCloneMcpServer へ ' +
-      'tools/list が CLONE_TOOL_NAMES の全本数（52本）届く（実際に子プロセスを spawn する）',
-    async () => {
-      const { fn, calls } = fakeCloneSdk();
-      const stores = createMemoryStores();
-      const socketDir = makeTempDirSync('clone-tool-relay-wire-e2e-');
-      const clone = createClone({
-        stores,
-        queryFn: fn,
-        env: { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stdio' },
-        cloneToolRelaySocketDir: socketDir,
-      });
-
-      clone.post(humanMessage('やあ'));
-      await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
-
-      const own = effectiveMcpServers(calls[0] as CloneSdkCall)[MCP_SERVER_NAME] as {
-        command: string;
-        args: string[];
-        env: Record<string, string>;
-      };
-
-      const transport = new StdioClientTransport({
-        command: own.command,
-        args: own.args,
-        env: own.env,
-      });
-      const client = new Client({ name: 'agent-session-options.test', version: '0' });
-      await client.connect(transport);
-      try {
-        const { tools } = await client.listTools();
-        expect(tools.map((tool) => tool.name).sort()).toEqual([...CLONE_TOOL_NAMES].sort());
-      } finally {
-        await client.close();
-      }
-
-      await clone.stop();
-    },
-    20_000,
-  );
 });
 
 interface Started {
