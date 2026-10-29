@@ -492,12 +492,14 @@ export {
   placeTask,
   planTaskTransition,
   prepareTask,
+  setTaskRowKeep,
   setTaskRowStatus,
 } from './task.js';
 export type {
   SetTaskStatusOptions,
   TaskAddResult,
   TaskMoveResult,
+  TaskSetKeepResult,
   TaskPlacement,
   TaskPlacementResult,
   TaskRankRow,

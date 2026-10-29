@@ -592,6 +592,19 @@ async function waitForCommitment(stores: Stores, id: string): Promise<void> {
   await waitFor(async () => (await stores.commitments.get(id)) !== null, `台帳に ${id} が現れる`);
 }
 
+// #5469 P5: manager_message / external は台帳に開かなくなったが、アップグレード前に開いた行と、その合図の未読（受信箱）が残った状態は実在する。
+// 「台帳の行が閉じていれば配り直しを畳む」「開いていれば全文で配る」という保証は、その行の側（人間の合図と同じ配線）に残っているので、
+// 古い版が開いた形の行を直接置いて、同じ歯で測り続ける（歯を外して保証を弱めない）。置く行は古い版の commitmentFor が組んだものと同じ origin・id・at
+async function seedLegacyLedgerRow(stores: Stores, event: InboxEvent): Promise<void> {
+  const origin = event.type === 'external' ? 'external' : 'manager';
+  await stores.commitments.open({
+    id: event.id,
+    at: event.at,
+    origin,
+    body: '（アップグレード前に開いた行）',
+  });
+}
+
 // `commitment_close` を呼ばせず台帳を直接閉じる: `fakeSdk` はツール呼び出しを再現しないため
 describe('片付け済みの配り直し（ターンを起こさずに畳む）', () => {
   it('既に commitment_close で片付けていたら、ターンを1本も起こさない（本文も断り書きもモデルへ渡らない）', async () => {
@@ -621,7 +634,7 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     await idle();
     dying.clone.post(report('CLOSED-REPORT 本文はこれだけ長くしておく', 'evt-closed'));
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await waitForCommitment(stores, 'evt-closed');
+    await seedLegacyLedgerRow(stores, report('CLOSED-REPORT', 'evt-closed'));
 
     expect(
       await stores.commitments.close(
@@ -702,7 +715,7 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
       report('CLOSED-BY-HUMAN-REPORT 本文はこれだけ長くしておく', 'evt-closed-human'),
     );
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await waitForCommitment(stores, 'evt-closed-human');
+    await seedLegacyLedgerRow(stores, report('CLOSED-BY-HUMAN-REPORT', 'evt-closed-human'));
 
     expect(
       await stores.commitments.close(
@@ -760,7 +773,7 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     await idle();
     dying.clone.post(event);
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await waitForCommitment(stores, event.id);
+    await seedLegacyLedgerRow(stores, event);
     expect(
       await stores.commitments.close(event.id, '2026-08-02T00:00:00.000Z', '対応済み', 'clone'),
     ).toBe(true);
@@ -815,7 +828,7 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     await idle();
     dying.clone.post(event);
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await waitForCommitment(stores, event.id);
+    await seedLegacyLedgerRow(stores, event);
     expect(
       await stores.commitments.close(event.id, '2026-08-02T00:00:00.000Z', '対応済み', 'clone'),
     ).toBe(true);
@@ -836,7 +849,7 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     await idle();
     dying.clone.post(report('OPEN-REPORT 本文はこれだけ長くしておく', 'evt-open'));
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await waitForCommitment(stores, 'evt-open');
+    await seedLegacyLedgerRow(stores, report('OPEN-REPORT', 'evt-open'));
 
     const reborn = bootClone(stores);
     // 「入力が来ること」を待つ形にしない: 誤って畳んだ壊れ方が待ちの時間切れとして出て、赤の出どころが自分のアサーションでなくなるため
@@ -875,7 +888,7 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     await idle();
     dying.clone.post(report('THROW-REPORT 本文はこれだけ長くしておく', 'evt-throw'));
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await waitForCommitment(stores, 'evt-throw');
+    await seedLegacyLedgerRow(stores, report('THROW-REPORT', 'evt-throw'));
     expect(
       await stores.commitments.close('evt-throw', new Date().toISOString(), '片付けた', 'clone'),
     ).toBe(true);
@@ -899,6 +912,8 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
     const stores = createMemoryStores();
     const event = externalNotice('GATED-NOTICE 本文はこれだけ長くしておく', 'evt-gated');
     await stores.inbox.put(event, event.at);
+    // #5469 P5: external は台帳に開かなくなったので、「台帳の行も消えない」はアップグレード前に開いた行を置いて測る
+    await seedLegacyLedgerRow(stores, event);
 
     const alwaysFold: RedeliveryGate = () => false;
     const { clone, inputs } = bootClone(stores, 'reply', alwaysFold);
@@ -909,7 +924,6 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
     const remaining = (await stores.inbox.peekPending()).entries;
     expect(remaining.some((r) => r.event.id === event.id)).toBe(true);
 
-    await waitForCommitment(stores, event.id);
     const commitment = await stores.commitments.get(event.id);
     expect(commitment).not.toBeNull();
     expect(commitment?.closedAt).toBeUndefined();
@@ -1392,7 +1406,9 @@ async function waitForCondition(
 }
 
 describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #foldIntoPendingCollapse）', () => {
-  it('429 の再現: 同一マネージャー×同一本文の manager_message を3連投しても、受信箱の未読は1件・台帳も1件のまま', async () => {
+  // #5469 P5: manager_message は台帳に開かなくなったので、「台帳も1件のまま」の半分は「台帳に1件も増えない」になった。
+  // 受信箱の畳み込み（未読が1件）はそのまま測る
+  it('429 の再現: 同一マネージャー×同一本文の manager_message を3連投しても、受信箱の未読は1件で、台帳には1件も開かない', async () => {
     const stores = createMemoryStores();
     const { clone } = bootClone(stores, 'hang');
     await idle();
@@ -1403,15 +1419,18 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     clone.post(report(body, 'evt-429-2'));
     clone.post(report(body, 'evt-429-3'));
 
-    await waitForCommitment(stores, 'evt-429-1');
+    await waitForCondition(
+      async () =>
+        (await stores.inbox.peekPending()).entries.some((r) => r.event.id === 'evt-429-1'),
+      '代表（1件目）が受信箱に残る',
+    );
+    await idle();
 
     const pending = (await stores.inbox.peekPending()).entries;
     expect(pending).toHaveLength(1);
     expect(pending[0]?.event.id).toBe('evt-429-1');
 
-    const open = (await stores.commitments.list()).entries;
-    expect(open).toHaveLength(1);
-    expect(open[0]?.id).toBe('evt-429-1');
+    expect((await stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
   });
 
   it('token-pool の再現: 同一 payload の external（source: token-pool）を3連投しても、受信箱の未読は1件', async () => {

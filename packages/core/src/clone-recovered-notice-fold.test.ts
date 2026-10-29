@@ -74,9 +74,20 @@ function stubPool(list: () => Promise<ManagerSummary[]>): ManagerPool {
   };
 }
 
-function boot(managers: ManagerPool) {
+// #5469 P5: manager_message は台帳に開かなくなった。畳んだ知らせ自身の行を器が閉じる側（#5048/#5235）は、アップグレード前の版が開いた行
+// （同じ id の知らせが未読として残り、配り直されて畳まれる形）に対して残してある。その行を直接置いて、閉じる側の歯を同じ形で測り続ける
+async function seedLegacyRow(stores: Stores, id: string, managerId: string = MANAGER_ID) {
+  await stores.commitments.open({
+    id,
+    at: AT,
+    origin: 'manager',
+    source: managerId,
+    body: '[report] （アップグレード前に開いた行）',
+  });
+}
+
+function boot(managers: ManagerPool, stores: Stores = createMemoryStores()) {
   const { fn, calls } = fakeSdk();
-  const stores = createMemoryStores();
   const clone: CloneHost = createClone({
     reportSettleMs: 2500,
     stores,
@@ -133,7 +144,12 @@ async function expectDelivered(s: ReturnType<typeof boot>, body: string): Promis
 
 describe('担当が戻っていれば畳んでよい印の付いた知らせを、ターンを起こさず畳む（#5048）', () => {
   it('⭐ 起こし直し・セッションの落ちの束（世代の条件なし）: 担当が running・世代一致なら畳み、台帳の行も daemon が閉じる', async () => {
-    const s = boot(stubPool(() => Promise.resolve([summary()])));
+    const stores = createMemoryStores();
+    await seedLegacyRow(stores, 'evt-rewoken');
+    const s = boot(
+      stubPool(() => Promise.resolve([summary()])),
+      stores,
+    );
 
     s.clone.post(notice('evt-rewoken', '新しい鍵で起こし直した REWOKEN-BODY', {}));
     await expectFolded(s, 'evt-rewoken', 'REWOKEN-BODY');
@@ -146,7 +162,12 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
   });
 
   it('⭐ 台帳の行を閉じる瞬間には、器が閉じる日誌の行が既に在る（#5235。日誌が先）', async () => {
-    const s = boot(stubPool(() => Promise.resolve([summary()])));
+    const stores = createMemoryStores();
+    await seedLegacyRow(stores, 'evt-order');
+    const s = boot(
+      stubPool(() => Promise.resolve([summary()])),
+      stores,
+    );
     const decisionsAtClose: string[] = [];
     const realClose = s.stores.commitments.close.bind(s.stores.commitments);
     s.stores.commitments.close = async (id, at, reason, by) => {
@@ -166,7 +187,12 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
   });
 
   it('⭐ 日誌に器が閉じる行を書けないときは、台帳の行を閉じない（#5235。未了のまま残る）', async () => {
-    const s = boot(stubPool(() => Promise.resolve([summary()])));
+    const stores = createMemoryStores();
+    await seedLegacyRow(stores, 'evt-nojournal');
+    const s = boot(
+      stubPool(() => Promise.resolve([summary()])),
+      stores,
+    );
     const realAppend = s.stores.journal.append.bind(s.stores.journal);
     let refused = 0;
     s.stores.journal.append = (entry) => {
@@ -234,7 +260,12 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
   });
 
   it('⭐ 鍵の入れ替えで背景処理を畳んだ起こし直しの知らせ（usage_rewoken_folded）: 戻っていれば畳み、本文（結果は届かない旨）は日誌に残り、台帳の行も daemon が閉じる', async () => {
-    const s = boot(stubPool(() => Promise.resolve([summary()])));
+    const stores = createMemoryStores();
+    await seedLegacyRow(stores, 'evt-folded');
+    const s = boot(
+      stubPool(() => Promise.resolve([summary()])),
+      stores,
+    );
     const body = `[${MANAGER_ID}] 鍵の入れ替えのため、背景処理 2 本を畳んで新しい鍵で起こし直し、結果は届かないので自分で確かめて続きを進めるよう促した`;
 
     s.clone.post(notice('evt-folded', body, {}));
@@ -282,6 +313,8 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
 
     it('⭐ running かつ live の N 本はターン0で畳み、本文は日誌・台帳の行は daemon で閉じる', async () => {
       const ids = ['mgr-1', 'mgr-2', 'mgr-3'];
+      const stores = createMemoryStores();
+      for (const id of ids) await seedLegacyRow(stores, `evt-${id}`, id);
       const s = boot(
         stubPool(() =>
           Promise.resolve(
@@ -290,6 +323,7 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
             ),
           ),
         ),
+        stores,
       );
 
       for (const id of ids) {

@@ -22,6 +22,7 @@ import type {
   TaskAddResult,
   TaskMoveResult,
   TaskPlacement,
+  TaskSetKeepResult,
   TaskSetStatusResult,
 } from './task.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
@@ -1282,6 +1283,11 @@ export interface TaskStore {
     status: TaskStatus,
     options: SetTaskStatusOptions,
   ): Promise<TaskSetStatusResult>;
+
+  /**
+   * 「続く」の印（`keep`）を立てる／外す（#5469 P5。返答しても自動で閉じない task の印）。状態・並びは動かさない。同じ印の状態は `unchanged`。読めない行は `UnreadableTaskError`。
+   */
+  setKeep(id: string, keep: boolean): Promise<TaskSetKeepResult>;
 
   /** 全件を消す（ワークスペースのリセット専用）。読めない行も含め、消した件数を返す。 */
   clear(): Promise<number>;

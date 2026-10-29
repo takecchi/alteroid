@@ -77,6 +77,28 @@ describe('renderTasks', () => {
     expect(out).toContain('済んだ理由');
   });
 
+  it('器が自動で閉じた行は閉じた主体を、「続く」の印の行は印を出す（#5469 P5）', () => {
+    const out = renderTasks(
+      {
+        entries: [
+          row({ id: 'k', title: '続ける件', keep: true }),
+          row({
+            id: 'd',
+            title: '自動で済んだ',
+            status: 'done',
+            closedAt: AT,
+            closedBy: 'daemon',
+            closedReason: '起点の会話へ返答したので自動で閉じた',
+          }),
+        ],
+        unreadable: [],
+      },
+      Date.parse(AT),
+    );
+    expect(out).toContain('続ける件  （続く）');
+    expect(out).toContain(`閉じた: ${AT}（daemon）`);
+  });
+
   it('本文は先頭の一行を80字で切り、全文は出さない', () => {
     const out = renderTasks({
       entries: [row({ body: `${'あ'.repeat(200)}\n二行目の印` })],

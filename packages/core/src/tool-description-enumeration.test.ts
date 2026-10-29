@@ -126,6 +126,10 @@ const EXEMPT: readonly Exemption[] = [
     tool: 'task_set_status',
     why: '説明文が名乗る一覧（配列）が無い（状態の値は zod の enum = taskStatusSchema が引数定義として名乗る）。ふるまいの歯は task-tools.test.ts が持つ',
   },
+  {
+    tool: 'task_keep',
+    why: '説明文が名乗る一覧（配列）が無い（keep は boolean で、閉じる条件は task-auto-done.ts の関数が持つ）。ふるまいの歯は task-auto-done.test.ts と clone-human-intake-task.test.ts が持つ',
+  },
   { tool: 'memory_read', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'memory_write', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'memory_append', why: '実装側に、説明文が数え直すような一覧が無い' },

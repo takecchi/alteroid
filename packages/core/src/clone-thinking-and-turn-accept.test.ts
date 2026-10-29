@@ -240,7 +240,8 @@ describe('クローン — 考えている合図（thinking）', () => {
     await waitFor(async () => (await s.stores.inbox.claimPending()).length === 2, '未読の書き出し');
 
     const open = (await s.stores.commitments.list()).entries;
-    expect(open.map((entry) => entry.origin)).toEqual(['human', 'manager']);
+    // #5469 P5: 台帳へ開くのは人間の合図だけ。マネージャーの報告は台帳には載らないが、未読（上の claimPending が2件）には残る
+    expect(open.map((entry) => entry.origin)).toEqual(['human']);
     expect(open[0]?.body).toContain('ghp_');
   });
 

@@ -278,6 +278,7 @@ import {
   encodeTaskCursor,
   resolveTaskCursor,
   resolveTaskPlacement,
+  taskKeepChangeEntry,
   taskStatusChangeEntry,
   taskStatusLine,
 } from './task-tools.js';
@@ -523,6 +524,17 @@ export interface ToolContext {
   // optional にする: 無い器（テストの ToolContext）は従来どおり `conversationId` だけを見る。クローン本体は必ず渡す
   workConversationId?: () => string | undefined;
   recentDenials?: () => readonly RecentDenial[];
+  /**
+   * `manager_start` が委譲を起こした／`manager_send` が既存の委譲へ頼んだ（その委譲が結び付いた task の id = `Job.taskId`。結び付いていなければ `undefined`）。
+   * いまのターンで頼んだ委譲の task を控え、その task をこのターンの返答で自動 done にしない判定に使う（#5469 P5。判定は `hasDelegationForTask`）。無い器（テスト・蒸留）は何もしない。
+   */
+  noteDelegationStarted?: (taskId: string | undefined) => void;
+  /**
+   * `ask_human` / `request_permission` が人間への問いを積んだ（その問いの会話 id。無ければ `undefined`）。
+   * そのターンでは、その会話の task を自動 done にしない（人間の答え待ちになるため。#5469 P5）。無い器は何もしない。
+   * 前のターンで出した未回答の問いは、器が閉じる直前に承認待ちの台帳（pendingOnly）から引くので、ここで控えるのは「このターンで出した問い」だけ（台帳に書けない回の保険を兼ねる）。
+   */
+  noteQuestionAsked?: (conversationId: string | undefined) => void;
   // 添付があるとき（`attachments`）だけ第3引数を渡す: 添付の無い従来の呼び出しの形を変えないため
   postToConversation?: (
     conversationId: string,
@@ -629,6 +641,7 @@ export const CLONE_TOOL_NAMES = [
   'task_add',
   'task_move',
   'task_set_status',
+  'task_keep',
   'progress_read',
   'github_observation_record',
   'inbox_remove_many',
@@ -682,6 +695,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'task_add',
   'task_move',
   'task_set_status',
+  'task_keep',
   'inbox_remove_many',
   'profile_write',
   'profile_remove',
@@ -777,6 +791,7 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   task_add: false,
   task_move: false,
   task_set_status: false,
+  task_keep: false,
   inbox_remove_many: false,
   profile_write: true,
   profile_remove: false,
@@ -3118,6 +3133,15 @@ export function describePermissionEvidence(
   return `直前の拒否（器が返した原文。クローンの要約ではない。長い欄は ${PERMISSION_EVIDENCE_EXCERPT} 字で切る）: ${parts.join(' / ')}`;
 }
 
+/** 委譲が結び付いた task（`Job.taskId`）。読めない・見つからない・結び付いていないときは `undefined`（その回は委譲に数えない。走っている委譲は、閉じる直前に別に台帳を引いて見る）。 */
+async function jobTaskIdOf(stores: Stores, managerId: string): Promise<string | undefined> {
+  try {
+    return (await stores.jobs.listJobs()).find((job) => job.id === managerId)?.taskId;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 委譲の起点の会話（`Job.conversationId`）。読めない・見つからないときも `undefined`。 */
 // 読めないときに断らない: 起点は承認を会話へ結ぶための手がかりで、無くても従来どおり会話の無い承認として積めるため
 async function jobConversationOf(
@@ -4852,6 +4876,9 @@ export function createCloneTools(context: ToolContext) {
           },
           'act-completed',
         );
+        // 問いを積んだ時点で控える（日誌が書けなかった呼びは上で投げており、ここへ来ない）。
+        // ターンの会話があれば conversationId はそれと同じ（上の連鎖の先頭）なので、1回だけ呼ぶ
+        context.noteQuestionAsked?.(conversationId);
         context.emit({ type: 'ask_human', approvalId: approval.id, question });
         return text(`承認待ちキューに積んだ（${approval.id}）。回答は後から届く。`);
       },
@@ -4927,6 +4954,7 @@ export function createCloneTools(context: ToolContext) {
           },
           'act-completed',
         );
+        context.noteQuestionAsked?.(conversationId);
         context.emit({ type: 'ask_human', approvalId: approval.id, question });
         return text(
           `承認待ちキューに積んだ（${approval.id}）。人間が「${PERMISSION_GRANT_CONSENT_PHRASE}」とちょうど答え、` +
@@ -5710,7 +5738,7 @@ export function createCloneTools(context: ToolContext) {
       'commitment_list',
       [
         '引き受けたまま終わっていない仕事の一覧。既定は古い順に出る。',
-        '人間の依頼・人間の回答（ask_human への答え）・マネージャーからの一件・外部イベント（デーモン自身が自分へ出す合図を除く）は、届いた時点で自動的にここへ載る。',
+        '人間の依頼・人間の回答（ask_human への答え）は、届いた時点で自動的にここへ載る（同じ id で task にも載る）。マネージャーの報告・外部イベントは受信箱には届くが、ここへは自動では載らない（必要なら自分で commitment_open / task_add する）。',
         '**載っているものは、あなたが閉じるまで消えない。**',
         'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
         '1件の全文（依頼本文と、片付けたならその理由）が要るなら id を渡す。片付いた件も id で読める。',
@@ -6175,14 +6203,15 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // 台帳（commitment_*）とは別の器: 台帳から自動では移さない（二重書き込みをしない）。ここだけが順序と状態を持つ
+    // 台帳（commitment_*）とは別の器: ここだけが順序と状態を持つ。台帳から既存の行を移すのは P7（移行）で、人間の依頼だけは届いた時点で両方に載る（#5469 P5。移行期の二重）
     tool(
       'task_list',
       [
         'task（順序と状態を持つ待ち行列）の一覧。**先頭が先にやるもの**で、並びは器が持つ（数値の優先度・締切は無い）。',
         '各件はタイトルと本文の抜粋だけを出す。1件の全文（本文と、閉じたなら理由）が要るなら id を渡す。閉じた件も id で読める。',
         '既定は開いている件（queued / waiting / needs_decision）だけ。includeClosed で閉じた件（done / cancelled）を後ろに足す。',
-        '引き受けた仕事の台帳（commitment_list）とは別の器で、台帳から自動では載らない。',
+        '引き受けた仕事の台帳（commitment_list）とは別の器。人間の発言は、台帳の行と同じ id で届いた時点で自動的に載る（queued）。人間の承認への回答・マネージャーの報告・外部イベントは自動では載らない。',
+        '人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（閉じたものは includeClosed で読み返せる。止めるなら task_keep）。ただし、答えの無い問い（ask_human・request_permission。前のターンのものを含む）が残っている会話の task（不要になった問いは approval_withdraw で取り下げると対象に戻る）、結び付いた委譲（manager_start の taskId）が走っている（running / waiting_human）task は閉じない。',
         '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
       {
@@ -6627,6 +6656,55 @@ export function createCloneTools(context: ToolContext) {
           `task ${taskId} を ${result.before.status} から ${status} へ移した${
             reopened ? '（閉じた記録は日誌に残してある）' : ''
           }。`,
+        );
+      },
+    ),
+
+    tool(
+      'task_keep',
+      [
+        'task に「続く」の印を立てる（keep=true）／外す（keep=false）。',
+        '人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（理由と閉じた主体 daemon が残り、日誌にも書かれる）。',
+        '返答したあとも続ける仕事（返答は途中経過で、まだ終わっていない）は、返答する前にこの印を立てておくと、自動では閉じない。',
+        '印は状態・並びを動かさない。印を立てた task を終えるときは task_set_status で done にすること。',
+        '自動 done が閉じない場合はほかにもある: waiting / needs_decision（待ち・判断待ち）、その会話に答えの無い問い（ask_human・request_permission。前のターンのものを含む。不要になった問いは approval_withdraw で取り下げると対象に戻る）が残っているとき、その task に結び付いた委譲（manager_start の taskId。Job.taskId）が走っている（running / waiting_human。前のターンで起こしたものを含む）か、このターンで manager_send で頼んだとき（委譲を起こすときは taskId を渡すこと。渡さない委譲は task に結び付かず、この判定に数えられない）、まだ読んでいない発言の task、起点の会話が無い task。',
+      ].join(' '),
+      {
+        taskId: z
+          .string()
+          .describe('task_list に出ている id（閉じた件にも立てられる。開き直したときに効く）'),
+        keep: z.boolean().describe('true で立てる、false で外す'),
+      },
+      async ({ taskId, keep }) => {
+        let result;
+        try {
+          result = await stores.tasks.setKeep(taskId, keep);
+        } catch (error) {
+          if (error instanceof UnreadableTaskError) {
+            return text(
+              `task ${taskId} は読めない形で入っている。読めない形のまま書き直さないので、印を変えていない。`,
+            );
+          }
+          throw error;
+        }
+        if (result.kind === 'not-found') {
+          return text(
+            `task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`,
+          );
+        }
+        if (result.kind === 'unchanged') {
+          return text(
+            `task ${taskId} は既に${keep ? '「続く」の印つき' : '印なし'}。何もしていない。`,
+          );
+        }
+        await appendJournalOrThrow(
+          'task_keep',
+          stores.journal,
+          taskKeepChangeEntry(taskId, result.task, keep),
+          'act-completed',
+        );
+        return text(
+          `task ${taskId} の「続く」の印を${keep ? '立てた。返答しても器は自動では done にしない' : '外した'}。`,
         );
       },
     ),
@@ -8492,7 +8570,8 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             'この委譲を結び付ける task の id（task_list）。渡すと task は待ちになり、委譲が終わる・失敗する・lost になると' +
-              '判断待ち（needs_decision）に戻って、報告にもこの id が付く。閉じた task と、走っている委譲が既にある task は断られる（1つの task に走らせる委譲は同時に1本まで）。',
+              '判断待ち（needs_decision）に戻って、報告にもこの id が付く。閉じた task と、走っている委譲が既にある task は断られる（1つの task に走らせる委譲は同時に1本まで）。' +
+              '人間の依頼の task のために委譲するときは渡すこと。渡さないと task に結び付かず、起点の会話へ返答した時点で、器が task を自動で done にする。',
           ),
       },
       async (rawArgs) => {
@@ -8605,6 +8684,8 @@ export function createCloneTools(context: ToolContext) {
           throw error;
         }
 
+        // 日誌より先に控える: 日誌の追記が落ちても、起こした事実は変わらない（自動 done がこの委譲を見落とさない）
+        context.noteDelegationStarted?.(taskId);
         await appendJournalOrDrop('manager_start', stores.journal, {
           type: 'decision',
           decision:
@@ -8753,6 +8834,8 @@ export function createCloneTools(context: ToolContext) {
         if (result.outcome !== 'answered') await retractAnswerJournal(result.detail);
         // 届いた（delivered）か答えた（answered）ときだけ閉じる。それ以外は本来の作業が通っていない
         const sent = result.outcome === 'delivered' || result.outcome === 'answered';
+        // 既存の委譲へ頼んだターンも、委譲に数える（その委譲に結び付いた task〔Job.taskId〕を、このターンの返答で自動 done にしない。#5469 P5）
+        if (sent) context.noteDelegationStarted?.(await jobTaskIdOf(stores, managerId));
         // `session_missing` は必ず言い足す: そのものは居る側なので、`manager_start` で起こし直すと同じ仕事が2本になりうるため
         if (result.outcome === 'session_missing') {
           return notDone(

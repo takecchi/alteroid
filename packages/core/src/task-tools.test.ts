@@ -55,7 +55,7 @@ describe('resolveTaskPlacement', () => {
 
 describe('task_* 道具', () => {
   it('操作の3つは自分で日誌に残す名簿に、task_list は残さない名簿に在る', () => {
-    for (const name of ['task_add', 'task_move', 'task_set_status'] as const) {
+    for (const name of ['task_add', 'task_move', 'task_set_status', 'task_keep'] as const) {
       expect(cloneToolJournalsItself(qualifiedToolName(name))).toBe(true);
     }
     expect(cloneToolJournalsItself(qualifiedToolName('task_list'))).toBe(false);
@@ -118,6 +118,31 @@ describe('task_* 道具', () => {
       '開いている task に無い',
     );
     expect(await h.titles()).toEqual(['a', 'c']);
+  });
+
+  it('task_keep は印を立て／外し、状態と並びを動かさず、日誌に残す。同じ値・無い id は何もしない', async () => {
+    const h = harness();
+    await h.call('task_add', { title: 'a', body: 'a' });
+    await h.call('task_add', { title: 'b', body: 'b' });
+    const [a] = await h.ids();
+    expect(await h.call('task_keep', { taskId: a, keep: true })).toContain('立てた');
+    expect((await h.stores.tasks.get(a!))?.keep).toBe(true);
+    expect((await h.stores.tasks.get(a!))?.status).toBe('queued');
+    expect(await h.titles()).toEqual(['a', 'b']);
+    expect(await journalText(h)).toContain('「続く」の印を立てた');
+    expect(await h.call('task_keep', { taskId: a, keep: true })).toContain('何もしていない');
+    expect(await h.call('task_keep', { taskId: 'nope', keep: true })).toContain('何もしていない');
+    expect(await h.call('task_keep', { taskId: a, keep: false })).toContain('外した');
+    expect('keep' in ((await h.stores.tasks.get(a!)) ?? {})).toBe(false);
+    expect(await journalText(h)).toContain('「続く」の印を外した');
+  });
+
+  it('task_list は印つきの task にそれと分かる表示を出す', async () => {
+    const h = harness();
+    await h.call('task_add', { title: 'a', body: 'a' });
+    const [a] = await h.ids();
+    await h.call('task_keep', { taskId: a, keep: true });
+    expect(await h.call('task_list', {})).toContain('続く');
   });
 
   it('task_set_status は閉じるのに reason を要求し、断ったら何も変えず日誌にも残さない', async () => {

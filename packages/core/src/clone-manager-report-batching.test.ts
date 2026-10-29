@@ -955,17 +955,15 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
 
-    // source は 'token-pool' にしない: commitmentFor がその文字列を台帳を開かない合図として特別扱いし、待っている「台帳に載せた」の断り書きが出なくなるため
+    // 目印は入力の本数と、束に載る届いた時刻にする。#5469 P5 までは「台帳に載せた（id: `limN`）」の断り書きの id を目印にしていたが、
+    // external は台帳に開かなくなり、その断り書きが出なくなった。単発の本文には id も時刻も載らない（中身が同じなので束の外の1件は見分けられず、本数で数える）
     for (let i = 1; i <= 5; i += 1) {
       s.clone.post(
         externalEvent(`lim${i}`, 'ci', { text: '同じ中身' }, `2026-09-01T00:00:0${i}.000Z`),
       );
     }
 
-    await waitFor(
-      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('id: `lim5`')),
-      '5件目ぶんの入力が投げられる',
-    );
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 4, '5件目ぶんの入力が投げられる');
     await settle();
 
     const inputs = (s.calls[0] as FakeCall).inputs;
@@ -975,8 +973,9 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     expect(inputs[3] ?? '').not.toContain('まとめて渡す');
 
     const joined = inputs.join('\n');
-    for (let i = 1; i <= 5; i += 1) {
-      expect(joined).toContain('`lim' + String(i) + '`');
+    // 束に入った4件の時刻は載る。5件目は単発の本文（時刻なし）で、下の「5件とも消し込まれる」と入力が4本であることが失われていない証拠
+    for (let i = 1; i <= 4; i += 1) {
+      expect(joined).toContain(`2026-09-01T00:00:0${String(i)}.000Z`);
     }
 
     await waitFor(
@@ -997,10 +996,7 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     s.clone.post(externalEvent('trunc2', 'ci', { text: '同じ中身' }, '2026-09-01T00:00:02.000Z'));
     s.clone.post(externalEvent('trunc3', 'ci', { text: '同じ中身' }, '2026-09-01T00:00:03.000Z'));
 
-    await waitFor(
-      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('id: `trunc3`')),
-      '3件目（単独）のターンが投げられる',
-    );
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 3, '3件目（単独）のターンが投げられる');
     await settle();
 
     const inputs = (s.calls[0] as FakeCall).inputs;
