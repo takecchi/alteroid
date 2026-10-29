@@ -36,7 +36,6 @@ import {
 import {
   ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   describeGithubCi,
-  codePointBoundary,
   JOURNAL_SEARCH_UNCOVERED_LIST,
 } from '@alteroid/core/cli-light';
 import {
@@ -95,7 +94,7 @@ import {
   interleaveApprovals,
 } from './conversation-approvals.js';
 import { describeCliFailure, isConnectionFailure } from './failure-message.js';
-import { formatElapsedAgo } from './format.js';
+import { formatElapsedAgo, oneLine } from './format.js';
 import {
   describeInterruptOutcome,
   requestInterruptOutcome,
@@ -4268,8 +4267,7 @@ function isJournalDiagnosticsEntry(
 
 function summarizeText(value: string): string {
   // 伏せ字を先に掛ける: 切ってからだとトークンの途中で切れて形が崩れ、取りこぼす。
-  const single = redactBody(value).replace(/\s+/g, ' ').trim();
-  return single.length > 80 ? `${single.slice(0, codePointBoundary(single, 80))}…` : single;
+  return oneLine(redactBody(value), 80);
 }
 
 export interface EditInProgress {

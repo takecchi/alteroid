@@ -7,10 +7,9 @@ import type { FC } from 'react';
 import stringWidth from 'string-width';
 
 import type { ConversationSummary } from './api.js';
-import { formatElapsedAgo } from '../format.js';
+import { formatElapsedAgo, oneLine } from '../format.js';
 import { sanitizeForTerminal } from '../redact.js';
 import type { HeaderState } from './header-feed.js';
-import { oneLine } from './journal-format.js';
 import { TABS, type TabId } from './layout.js';
 import type { DisplayLine } from './log.js';
 import { glyph, logColor, theme, toneColor } from './theme.js';

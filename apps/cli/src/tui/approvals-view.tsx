@@ -7,7 +7,7 @@ import {
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
 
-import { formatElapsedAgo } from '../format.js';
+import { formatElapsedAgo, oneLine } from '../format.js';
 import type { ApprovalRow } from './api.js';
 import { allowsOther, slotsOf } from './approvals-form.js';
 import {
@@ -18,7 +18,6 @@ import {
   type ListState,
 } from './approvals-controller.js';
 import type { AnsweredDateRow } from './api.js';
-import { oneLine } from './journal-format.js';
 import type { DisplayLine } from './log.js';
 import type { RichSpan } from './markdown.js';
 import { glyph, theme } from './theme.js';

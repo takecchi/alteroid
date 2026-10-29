@@ -9,14 +9,13 @@ import {
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
 
-import { formatElapsedAgo } from '../format.js';
+import { formatElapsedAgo, oneLine } from '../format.js';
 import type { LiveStatus } from './header-feed.js';
 import {
   filterText,
   journalDetailText,
   journalEmptyMessage,
   journalListLine,
-  oneLine,
   summarizeJournalEntry,
 } from './journal-format.js';
 import type { JournalState } from './journal-controller.js';

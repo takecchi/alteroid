@@ -7,7 +7,6 @@ import {
   journalDetailText,
   journalEmptyMessage,
   journalListLine,
-  oneLine,
   summarizeJournalEntry,
 } from './journal-format.js';
 import { JOURNAL_DETAIL_CHARS } from './journal-window.js';
@@ -182,11 +181,6 @@ describe('一覧の 1 行と文言', () => {
     expect(filterText([], '')).toBe('すべて');
     expect(filterText(['decision'], '語')).toBe('type=decision 「語」');
   });
-
-  it('oneLine は空白を潰して切る', () => {
-    expect(oneLine('a \n  b', 10)).toBe('a b');
-    expect(oneLine('abcdef', 3)).toBe('abc…');
-  });
 });
 
 describe('詳細の本文', () => {
@@ -222,14 +216,6 @@ describe('語で探すときの断り', () => {
 });
 
 describe('切り詰めはサロゲートペアを割らない（#2592）', () => {
-  const emoji = `a${'😀'.repeat(400)}`;
-
-  it('oneLine は孤立した上位サロゲートを残さない', () => {
-    const out = oneLine(emoji, 300);
-    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
-    expect(out.endsWith('…')).toBe(true);
-  });
-
   it('詳細の本文の予算切りも、ペアの途中で切らない', () => {
     const out = journalDetailText(said(1, `a${'😀'.repeat(JOURNAL_DETAIL_CHARS)}`));
     expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);

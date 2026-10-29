@@ -1,8 +1,7 @@
 import { describeAnsweredVia, summarizeQuestions, type AnsweredVia } from '@alteroid/core';
-import { codePointBoundary } from '@alteroid/core/cli-light';
 
 import type { DaemonClient } from './client.js';
-import { withErrorReason } from './format.js';
+import { oneLine, withErrorReason } from './format.js';
 import { redactBody, redactedErrorMessage } from './redact.js';
 
 export interface ConversationApproval {
@@ -90,31 +89,28 @@ export function interleaveApprovals<M extends { at: string }>(
   return items;
 }
 
-function oneLine(value: string, max: number): string {
-  // 切ってから伏せ字にしない: トークンの途中で切れて形が崩れ、取りこぼすため
-  const single = redactBody(value).replace(/\s+/g, ' ').trim();
-  return single.length > max ? `${single.slice(0, codePointBoundary(single, max))}…` : single;
-}
-
 export function approvalLine(approval: ConversationApproval): string {
   return `? ${approvalText(approval)}`;
 }
 
+// 切ってから伏せ字にしない: トークンの途中で切れて形が崩れ、取りこぼすため
 export function approvalText(approval: ConversationApproval): string {
   const questions = approval.questions ?? [];
   const summary =
-    oneLine(approval.question, 80) +
+    oneLine(redactBody(approval.question), 80) +
     (questions.length > 0 ? `（${summarizeQuestions(questions)}）` : '');
   const head = `[${approval.createdAt}] 確認（承認待ち ${approval.id.slice(0, 8)}）: ${summary}`;
   // 取り下げを先に見る: 回答済みと両方立っていたら取り下げを優先するため
   if (approval.withdrawnAt) {
     const reason = approval.withdrawnReason
-      ? oneLine(approval.withdrawnReason, 120)
+      ? oneLine(redactBody(approval.withdrawnReason), 120)
       : '（理由の記録なし）';
     return `${head} → 取り下げ（${approval.withdrawnAt}）: ${reason}`;
   }
   if (approval.answeredAt) {
-    const answer = approval.answer ? oneLine(approval.answer, 120) : '（回答の記録なし）';
+    const answer = approval.answer
+      ? oneLine(redactBody(approval.answer), 120)
+      : '（回答の記録なし）';
     const via = approval.answeredVia
       ? `（回答経路: ${describeAnsweredVia(approval.answeredVia)}）`
       : '';

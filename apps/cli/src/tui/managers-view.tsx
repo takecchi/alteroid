@@ -2,9 +2,8 @@ import { describeManagerState } from '@alteroid/core';
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
 
-import { formatElapsedAgo } from '../format.js';
+import { formatElapsedAgo, oneLine } from '../format.js';
 import type { ManagerRow, ManagerStatus } from './api.js';
-import { oneLine } from './journal-format.js';
 import { redactBody, sanitizeForTerminal } from '../redact.js';
 import type { DetailState, ListState } from './managers-controller.js';
 import { glyph, theme } from './theme.js';

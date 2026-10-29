@@ -4,9 +4,24 @@ import {
   describeFailedResponse,
   errorReason,
   formatElapsedAgo,
+  oneLine,
   withErrorReason,
 } from './format.js';
 import { describeAuthFailure } from './target.js';
+
+describe('oneLine', () => {
+  it('空白を潰して切る', () => {
+    expect(oneLine('a \n  b', 10)).toBe('a b');
+    expect(oneLine('abcdef', 3)).toBe('abc…');
+  });
+
+  // サロゲートペアを割らない（#2592）
+  it('孤立した上位サロゲートを残さない', () => {
+    const out = oneLine(`a${'😀'.repeat(400)}`, 300);
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(out.endsWith('…')).toBe(true);
+  });
+});
 
 describe('formatElapsedAgo', () => {
   const NOW = new Date('2026-01-10T00:00:00.000Z').getTime();

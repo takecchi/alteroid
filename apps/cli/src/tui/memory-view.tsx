@@ -2,11 +2,10 @@ import { formatBytes } from '@alteroid/logic';
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
 
-import { formatElapsedAgo } from '../format.js';
+import { formatElapsedAgo, oneLine } from '../format.js';
 import type { MemoryRow } from './api.js';
 import { formatCreatedAt, freshnessMarker } from '../memory.js';
 import type { MemoryDetailState, MemoryState } from './memory-controller.js';
-import { oneLine } from './journal-format.js';
 import { sanitizeForTerminal } from '../redact.js';
 import { glyph, theme } from './theme.js';
 
