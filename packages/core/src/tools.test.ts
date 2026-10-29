@@ -11136,13 +11136,17 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
     expect(reply).not.toContain(REF(2));
   });
 
-  it('manager_report は退避 ref を全部出す', async () => {
+  it('manager_report は rescueAll: true で退避 ref を全部出す（既定は本数に畳む）', async () => {
     const h = harness();
     h.running.push({ ...rescued(), lastReport: '報告の本文' });
 
-    const reply = await h.call('manager_report', { managerId: 'mgr-r' });
+    const all = await h.call('manager_report', { managerId: 'mgr-r', rescueAll: true });
+    const brief = await h.call('manager_report', { managerId: 'mgr-r' });
 
-    for (const n of [1, 2, 3]) expect(reply).toContain(REF(n));
+    for (const n of [1, 2, 3]) expect(all).toContain(REF(n));
+    expect(brief).toContain('生きている ref 3 本（最新: ' + REF(3));
+    expect(brief).not.toContain(REF(1));
+    expect(brief).not.toContain(REF(2));
   });
 
   it('退避 ref が無い委譲は1文字も足さない', async () => {
@@ -11189,16 +11193,18 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
       }),
     ]);
 
-  it('manager_report の既定は生きている ref と未追跡の行とまとめの1行だけを出し、消した ref の名前は出さない', async () => {
+  it('manager_report の既定は種類ごとの本数と、退避できていない作業ツリーの本数・代表の1本だけを出し、他の名前は出さない', async () => {
     const h = harness();
     h.running.push(mixed());
 
     const reply = await h.call('manager_report', { managerId: 'mgr-r' });
 
+    expect(reply).toContain('作業ツリー 5 本');
+    expect(reply).toContain('退避できていない作業ツリー 1 本（失われうる。未追跡 1）');
     expect(reply).toContain('live-a: refs/alteroid-rescue/mgr-r/live-a-abcd1234');
     expect(reply).toContain('未追跡 2 件（memo.txt, tmp/x.log）');
     expect(reply).toContain(
-      'ほか 4 本の作業ツリーは畳んだ（消した ref: 内容が origin の枝に入っていた 2 本・委譲が done のまま猶予を過ぎた 1 本、送るもの無し 1 本）',
+      '消した ref: 内容が origin の枝に入っていた 2 本・委譲が done のまま猶予を過ぎた 1 本、送るもの無し 1 本',
     );
     expect(reply).toContain('manager_report を rescueAll: true で読む');
     for (const name of ['landed-a', 'landed-b', 'done-a', 'empty-a']) {
@@ -11216,7 +11222,8 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
       expect(reply).toContain(`${name}: `);
     }
     expect(reply).toContain('退避された ref は無い');
-    expect(reply).not.toContain('畳んだ');
+    expect(reply).not.toContain('作業ツリー 5 本');
+    expect(reply).not.toContain('代表の1本');
   });
 
   it('全部が畳まれる委譲でも、見出しとまとめの1行は出す（記録が無いとは読ませない）', async () => {
@@ -11231,11 +11238,13 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
     const reply = await h.call('manager_report', { managerId: 'mgr-r' });
 
     expect(reply).toContain('退避 ref（走行中に自動で push。');
-    expect(reply).toContain('ほか 2 本の作業ツリーは畳んだ');
+    expect(reply).toContain('作業ツリー 2 本');
+    expect(reply).toContain('送るもの無し 1 本');
     expect(reply).not.toContain('landed-a');
+    expect(reply).not.toContain('退避できていない作業ツリー');
   });
 
-  it('送れなかった失敗は、ref が無くても1行で出す', async () => {
+  it('送れなかった失敗は、ref が無くても退避できていない作業ツリーとして本数と1行を出す', async () => {
     const h = harness();
     h.running.push(
       rescueOf([
@@ -11248,10 +11257,11 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
 
     expect(reply).toContain('broken-a: 退避された ref は無い');
     expect(reply).toContain('push に失敗した');
-    expect(reply).toContain('ほか 1 本の作業ツリーは畳んだ（消した ref: ');
+    expect(reply).toContain('退避できていない作業ツリー 1 本（失われうる。push に失敗した 1）');
+    expect(reply).toContain('消した ref: ');
   });
 
-  it('消せなかった ref と送り先の無い ref は生きている ref として1行で出す', async () => {
+  it('消せなかった ref と送り先の無い ref は、生きている ref の本数に数えて内訳を添える', async () => {
     const h = harness();
     h.running.push(
       rescueOf([
@@ -11266,9 +11276,130 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
 
     const reply = await h.call('manager_report', { managerId: 'mgr-r' });
 
-    expect(reply).toContain('stuck-a: ');
-    expect(reply).toContain('noremote-a: ');
-    expect(reply).not.toContain('畳んだ');
+    expect(reply).toContain('生きている ref 2 本');
+    expect(reply).toContain('うち消せなかった 1 本');
+    expect(reply).toContain('うち送り先が台帳に無く自動では消せない 1 本（手で消す）');
+  });
+
+  // 退避 ref が約60本ある委譲（mgr-4fe12f7e の形）: 種類を混ぜる
+  const sixty = (): ManagerSummary => {
+    const trees: Tree[] = [];
+    const add = (count: number, make: (name: string) => Tree, kind: string) => {
+      for (let n = 1; n <= count; n += 1) trees.push(make(`${kind}-${String(n)}`));
+    };
+    add(20, (name) => tree(name, { pushed: pushedOf(name) }), 'live');
+    add(
+      12,
+      (name) => tree(name, { pushed: pushedOf(name, { at: AT, reason: 'landed' }) }),
+      'landed',
+    );
+    add(6, (name) => tree(name, { pushed: pushedOf(name, { at: AT, reason: 'done' }) }), 'done');
+    add(
+      3,
+      (name) => tree(name, { pushed: pushedOf(name, { at: AT, reason: 'failed' }) }),
+      'failed',
+    );
+    add(
+      6,
+      (name) => tree(name, { pushed: pushedOf(name), goneAt: '2026-10-17T11:30:00.000Z' }),
+      'gone',
+    );
+    add(7, (name) => tree(name, { notPushed: { reason: 'nothing-tracked' } }), 'empty');
+    add(
+      2,
+      (name) =>
+        tree(name, {
+          pushed: pushedOf(name, { at: AT, reason: 'done', failureKind: 'network', attempts: 2 }),
+        }),
+      'stuck',
+    );
+    add(1, (name) => tree(name, { notPushed: { reason: 'push-failed', since: AT } }), 'unsaved-pf');
+    add(
+      1,
+      (name) =>
+        tree(name, {
+          pushed: pushedOf(name),
+          untracked: { count: 2, paths: ['memo.txt', 'tmp/x.log'], omitted: 0 },
+        }),
+      'unsaved-ut',
+    );
+    add(1, (name) => tree(name, { notPushed: { reason: 'too-large', since: AT } }), 'unsaved-tl');
+    add(1, (name) => tree(name, { submoduleCount: 1 }), 'unsaved-sm');
+    return rescueOf(trees);
+  };
+
+  it('退避 ref が60本ある委譲でも、既定の応答は種類ごとの本数と代表の1本だけで、rescueAll の1/5に収まる', async () => {
+    const h = harness();
+    h.running.push(sixty());
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-r' });
+    const all = await h.call('manager_report', { managerId: 'mgr-r', rescueAll: true });
+
+    expect(reply).toContain('作業ツリー 60 本');
+    // 生きている ref = live 20 + 作業ツリーが消えて ref だけ残る 6 + 消せなかった 2 + 未追跡つき 1
+    expect(reply).toContain('生きている ref 29 本');
+    expect(reply).toContain('ref だけ残っている 6 本');
+    expect(reply).toContain('送るもの無し 7 本');
+    expect(reply).toContain('manager_report を rescueAll: true で読む');
+    // 最新の生きている ref の1件（live-1）は名前つきで出るが、他の ref 名は出ない
+    expect(reply).not.toMatch(/live-(?!1-)\d|landed-\d|gone-\d|empty-\d|done-\d|failed-\d/);
+    expect(reply.length).toBeLessThan(all.length / 5);
+    // rescueAll は60本の全部を出す
+    for (const name of ['live-20', 'landed-12', 'done-6', 'failed-3', 'gone-6', 'empty-7']) {
+      expect(all).toContain(`${name}: `);
+    }
+  });
+
+  it('退避できていない作業ツリーは、他がどれだけ多くても本数と代表の1本が必ず残る（種類ごとの本数つき）', async () => {
+    const h = harness();
+    h.running.push(sixty());
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-r' });
+
+    expect(reply).toContain(
+      '退避できていない作業ツリー 4 本（失われうる。push に失敗した 1・未追跡 1・差分が判定の上限を超えたため送らなかった 1・submodule 1）',
+    );
+    expect(reply).toContain('unsaved-pf-1: 退避された ref は無い。直近の回: push に失敗した');
+  });
+
+  it('作業ツリーが消えて退避 ref だけが残る委譲は、ref が残ることと本数を既定の出力に出す', async () => {
+    const h = harness();
+    h.running.push(
+      rescueOf([
+        tree('gone-a', { pushed: pushedOf('gone-a'), goneAt: AT }),
+        tree('gone-b', { pushed: pushedOf('gone-b'), goneAt: AT }),
+        tree('gone-c', { pushed: pushedOf('gone-c', { at: AT, reason: 'landed' }), goneAt: AT }),
+        tree('live-a', { pushed: pushedOf('live-a') }),
+      ]),
+    );
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-r' });
+
+    // ref が残っているのは gone-a・gone-b・live-a の3本。消し終えた gone-c は「消した ref」の側
+    expect(reply).toContain('生きている ref 3 本');
+    expect(reply).toContain('作業ツリーが生きている間に消えて ref だけ残っている 2 本');
+    expect(reply).toContain('消した ref: 内容が origin の枝に入っていた 1 本');
+    expect(reply).toContain('refs/alteroid-rescue/mgr-r/');
+  });
+
+  it('生きている間に消えた作業ツリーでも、未追跡が失われうるなら件数に埋めず退避できていない側に数える', async () => {
+    const h = harness();
+    h.running.push(
+      rescueOf([
+        tree('gone-clean', { pushed: pushedOf('gone-clean'), goneAt: AT }),
+        tree('gone-dirty', {
+          goneAt: AT,
+          untracked: { count: 1, paths: ['lost.txt'], omitted: 0 },
+        }),
+      ]),
+    );
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-r' });
+
+    expect(reply).toContain('生きている間に消えた（ref は無い） 1 本');
+    expect(reply).toContain('退避できていない作業ツリー 1 本（失われうる。未追跡 1）');
+    expect(reply).toContain('gone-dirty: ');
+    expect(reply).toContain('lost.txt');
   });
 
   it('manager_list と manager_report の説明文が、畳み方と rescueAll を書いている', () => {
@@ -11282,7 +11413,11 @@ describe('manager_list の退避 ref は件数と最新の1件だけで、manage
     const list = tools.find((entry) => entry.name === 'manager_list')?.description;
     expect(report).toContain('rescueAll: true');
     expect(report).toContain('畳んで');
+    expect(report).toContain('代表の1本');
     expect(list).toContain('manager_report を rescueAll: true');
+    const schema = tools.find((entry) => entry.name === 'manager_report')
+      ?.inputSchema as unknown as z.ZodObject<Record<string, z.ZodTypeAny>> | undefined;
+    expect(schema?.shape.rescueAll?.description).toContain('代表の1本');
   });
 });
 

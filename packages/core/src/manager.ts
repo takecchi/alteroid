@@ -210,6 +210,7 @@ import {
 } from './workspace-swap-hints.js';
 import { matchNoticeResetAgainstPool, type NoticeResetMatch } from './token-reset-match.js';
 import type { AgentToken } from './token-pool.js';
+import { resolveTokenSavingExcerpt } from './token-saving-switches.js';
 import { describeWorkerLimitKeyMatch, type RememberedWindow } from './worker-limit-key-match.js';
 import {
   describeUsageNotice,
@@ -1789,6 +1790,8 @@ export interface ManagerPoolOptions {
   generateManagerId?: () => string;
   workspace?: WorkspacePolicy;
   withheldReportFlushMs?: number;
+  /** 系統3「抜粋・予算」の節約を掛けるか（既定は掛ける。省略は `process.env` の `ALTEROID_TOKEN_SAVING_EXCERPT`）。 */
+  tokenSavingExcerpt?: boolean;
   synthesizedNoticeWindowMs?: number;
   /** 枠だけの束をプール全体で1通にまとめる固定窓（既定 {@link QUOTA_STOP_WINDOW_MS}）。試験が短くするための口。 */
   quotaStopWindowMs?: number;
@@ -2737,6 +2740,8 @@ const WITHHELD_REPORT_EXCERPT = 240;
  * 全文は日誌に在るので、落ちた分は `journal_read` で読める。
  */
 const WITHHELD_REPORT_LISTING_BUDGET = 600;
+/** #5414 の前の予算。`ALTEROID_TOKEN_SAVING_EXCERPT` が無効のときに戻す値。 */
+const WITHHELD_REPORT_LISTING_BUDGET_BEFORE_SAVING = 1500;
 
 function withheldExcerptItem(entry: { at: string; line: string }): string {
   return `- ${entry.at} ${entry.line}`;
@@ -2750,12 +2755,9 @@ function withheldExcerptItem(entry: { at: string; line: string }): string {
 export function renderWithheldExcerpts(
   excerpts: readonly { at: string; line: string }[],
   total: number = excerpts.length,
+  budget: number = WITHHELD_REPORT_LISTING_BUDGET,
 ): string {
-  const { lines, shown } = fillListingBudget(
-    excerpts.map(withheldExcerptItem),
-    WITHHELD_REPORT_LISTING_BUDGET,
-    true,
-  );
+  const { lines, shown } = fillListingBudget(excerpts.map(withheldExcerptItem), budget, true);
   const omitted = Math.max(0, total - shown);
   if (omitted > 0) {
     lines.unshift(
@@ -2768,12 +2770,9 @@ export function renderWithheldExcerpts(
 // 配るときに予算から溢れる古い冒頭は、積む時点で落とす: 台帳の写し（`Job.withheldReports`）がエピソードの長さに比例して育たないため
 function trimWithheldExcerpts(
   excerpts: readonly { at: string; line: string }[],
+  budget: number,
 ): { at: string; line: string }[] {
-  const { shown } = fillListingBudget(
-    excerpts.map(withheldExcerptItem),
-    WITHHELD_REPORT_LISTING_BUDGET,
-    true,
-  );
+  const { shown } = fillListingBudget(excerpts.map(withheldExcerptItem), budget, true);
   return excerpts.slice(excerpts.length - shown);
 }
 
@@ -3216,6 +3215,8 @@ class Pool implements ManagerPool {
   readonly #leaseTtlMs: number;
   /** 構築時に一度だけ確定し、以後 `process.env` を読み直さない（`#leaseTtlMs` と同じ形）。 */
   readonly #withheldReportFlushMs: number;
+  /** 構築時に一度だけ確定する（`ALTEROID_TOKEN_SAVING_EXCERPT`）。偽なら報告を最後の発言だけにせず、畳んだ報告の抜粋の予算を #5414 の前に戻す。 */
+  readonly #tokenSavingExcerpt: boolean;
   /** 構築時に一度だけ確定し、以後 `process.env` を読み直さない。 */
   readonly #synthesizedNoticeWindowMs: number;
   readonly #quotaStopWindowMs: number;
@@ -3603,6 +3604,7 @@ class Pool implements ManagerPool {
     now,
     leaseTtlMs,
     withheldReportFlushMs,
+    tokenSavingExcerpt,
     synthesizedNoticeWindowMs,
     quotaStopWindowMs,
     resumeConfirmTimeoutMs,
@@ -3654,6 +3656,7 @@ class Pool implements ManagerPool {
     this.#now = now ?? (() => Date.now());
     this.#leaseTtlMs = leaseTtlMs ?? LEASE_TTL_MS;
     this.#withheldReportFlushMs = withheldReportFlushMs ?? resolveWithheldReportFlushMs();
+    this.#tokenSavingExcerpt = tokenSavingExcerpt ?? resolveTokenSavingExcerpt();
     this.#synthesizedNoticeWindowMs =
       synthesizedNoticeWindowMs ?? resolveSynthesizedNoticeWindowMs();
     this.#quotaStopWindowMs = quotaStopWindowMs ?? QUOTA_STOP_WINDOW_MS;
@@ -10723,7 +10726,8 @@ class Pool implements ManagerPool {
           this.#emit(
             event.managerId,
             'report',
-            reportDeliveryTextOf(event),
+            // 系統3の節約が無効なら、途中の発言を含む全文を配る（#5269 の前の形）
+            this.#tokenSavingExcerpt ? reportDeliveryTextOf(event) : reportFullTextOf(event),
             undefined,
             undefined,
             'full',
@@ -12540,16 +12544,25 @@ class Pool implements ManagerPool {
       count: (existing?.count ?? 0) + 1,
       firstAt: existing?.firstAt ?? now,
       lastAt: now,
-      excerpts: trimWithheldExcerpts([
-        ...(existing?.excerpts ?? []),
-        { at: now, line: excerptLine(text, WITHHELD_REPORT_EXCERPT) },
-      ]),
+      excerpts: trimWithheldExcerpts(
+        [
+          ...(existing?.excerpts ?? []),
+          { at: now, line: excerptLine(text, WITHHELD_REPORT_EXCERPT) },
+        ],
+        this.#withheldListingBudget(),
+      ),
       breakdown: awaitingBackground.breakdown,
       // 在り高は足さず上書きする: `awaitingBackground.count` は runner がその回に見た在り高で増分ではなく、足すと二重に数える。
       taskCount: awaitingBackground.count,
       // `flushedAt` は持ち越す: オブジェクトを作り直すので、落とすと `flushWithheldReports()` の「エピソードにつき1本だけ」が壊れる。
       ...(existing?.flushedAt === undefined ? {} : { flushedAt: existing.flushedAt }),
     });
+  }
+
+  #withheldListingBudget(): number {
+    return this.#tokenSavingExcerpt
+      ? WITHHELD_REPORT_LISTING_BUDGET
+      : WITHHELD_REPORT_LISTING_BUDGET_BEFORE_SAVING;
   }
 
   // 在庫を書き換えるのはここだけにする: 台帳の写し（`Job.withheldReports`）を書き忘れる経路を作らないため（#4626）
@@ -13064,7 +13077,7 @@ class Pool implements ManagerPool {
           `${String(withheld.count)} 本配っていない（最初 ${withheld.firstAt} / ` +
           `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read q=${managerId}\` ` +
           `since=最初の少し前 until=最後の少し後）。\n` +
-          `畳んだ報告の冒頭（古い順）:\n${renderWithheldExcerpts(withheld.excerpts, withheld.count)}\n）`;
+          `畳んだ報告の冒頭（古い順）:\n${renderWithheldExcerpts(withheld.excerpts, withheld.count, this.#withheldListingBudget())}\n）`;
       }
     }
     // 何を配ったかに関わらず帳面を消す: 次に同じ本文の知らせが来たら、また1件目として配る（`#flushSynthesizedNoticeFor` だけは直後に新しい署名で `set` し直す）。

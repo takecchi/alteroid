@@ -144,10 +144,13 @@ export function classifyManagerForDigest(
   job: TerminatedAtFields,
   awaitingBackground: ManagerAwaitingBackground | undefined,
   since: Date,
+  foldOldTerminated = true,
 ): ManagerDigestFold {
   if (awaitingBackground !== undefined) return 'listed';
   if (job.status !== 'done' && job.status !== 'stopped' && job.status !== 'failed') return 'listed';
   if (job.status !== 'failed' && job.lastFailure === undefined) return 'idle';
+  // 窓より前に終端した担当を畳むのは #5331 から。畳まない（`ALTEROID_TOKEN_SAVING_EXCERPT` が無効）なら、失敗の印が付いた担当は終端の時刻を問わず1本ずつ出す
+  if (!foldOldTerminated) return 'listed';
   const terminatedAt = managerTerminatedAtMs(job);
   if (terminatedAt === undefined || terminatedAt >= since.getTime()) return 'listed';
   return job.status === 'failed' ? 'old-failed' : 'idle';
@@ -162,6 +165,11 @@ export type DigestShape = 'full' | 'counts';
 export interface ActivityDigestOptions {
   /** 省略は `full`。 */
   shape?: DigestShape;
+  /**
+   * 履歴の節を抑える節約（#5331 の窓より前に終端した担当の畳み・#5332 の履歴系の節の上限）を掛けるか。省略は掛ける。
+   * `false` は節約の前の形: 片付けた仕事と本文の形を `MAX_ITEMS` 件まで、失敗の印が付いた担当は終端の時刻を問わず1本ずつ出す。
+   */
+  trimHistory?: boolean;
 }
 
 /** 件数の形の要約（#4938 の案2）で、件数だけにした節の中身は道具で引けることを名乗る1行。 */
@@ -787,7 +795,12 @@ export async function buildActivityDigest(
     const foldOf = new Map(
       managers.map((job) => [
         job,
-        classifyManagerForDigest(job, awaitingBackground?.get(job.id), window.since),
+        classifyManagerForDigest(
+          job,
+          awaitingBackground?.get(job.id),
+          window.since,
+          options.trimHistory !== false,
+        ),
       ]),
     );
     const foldedManagers = managers.filter((job) => foldOf.get(job) === 'idle');
@@ -963,7 +976,10 @@ export async function buildActivityDigest(
 
   if (settled.length > 0) {
     sections.push('', '## この期間に片付けた仕事');
-    const shownSettled = settled.slice(0, DIGEST_SETTLED_LIMIT);
+    const shownSettled = settled.slice(
+      0,
+      options.trimHistory === false ? MAX_ITEMS : DIGEST_SETTLED_LIMIT,
+    );
     for (const entry of shownSettled) {
       sections.push(
         `- ${brief(entry.body, 120)}\n  片付いたとした理由: ${brief(entry.closedReason ?? '', 120)}`,
@@ -1083,7 +1099,10 @@ export async function buildActivityDigest(
         BODY_SHAPE_NOTE_TAIL,
     );
     const bodyShapeRows = summarizeExternalSources(externals);
-    const shownBodyShapeRows = bodyShapeRows.slice(0, DIGEST_BODY_SHAPE_LIMIT);
+    const shownBodyShapeRows = bodyShapeRows.slice(
+      0,
+      options.trimHistory === false ? MAX_ITEMS : DIGEST_BODY_SHAPE_LIMIT,
+    );
     for (const row of shownBodyShapeRows) {
       sections.push(
         `- ${row.source}: 同じ本文は ${row.distinctSummaries} 種。` +

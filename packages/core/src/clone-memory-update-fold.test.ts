@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
-import { waitFor } from './clone-test-harness.js';
+import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -29,6 +29,8 @@ interface SdkScript {
   noUsage?: boolean;
   failResultAt?: number;
   after?: (inputCount: number) => SDKMessage[];
+  // クローンの env。既定は節約を有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT` / `ALTEROID_TOKEN_SAVING_COMPACTION`）
+  env?: NodeJS.ProcessEnv;
 }
 
 interface Boot {
@@ -102,7 +104,7 @@ function boot(script: SdkScript = {}): Boot {
     reportSettleMs: 2500,
     stores,
     queryFn: fn,
-    env: {},
+    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
     redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),
@@ -180,6 +182,20 @@ describe('記憶更新の頭は、同じ会話の2回目から短い形になる
     process.stderr.write(
       `[#5301 測定] 記憶更新の頭 1回目 ${String(first.length)} 字 → 2回目 ${String(headOf(secondInput).length)} 字\n`,
     );
+    await s.clone.stop();
+  });
+
+  it('⭐ 畳みが切り（既定）なら、2回目以降も記憶更新の頭が全文のまま', async () => {
+    const s = await bootWithBaseline({ env: {} });
+    const inputs = [await s.update(2), await s.update(3), await s.update(4)];
+    const first = headOf(inputs[0] ?? '');
+    for (const input of inputs) {
+      const text = headOf(input);
+      expect(text).toContain(FULL_ONLY);
+      expect(text).toContain(FULL_ONLY_2);
+      expect(text).not.toContain(REF_MARK);
+      expect(text.length).toBe(first.length);
+    }
     await s.clone.stop();
   });
 

@@ -35,10 +35,11 @@ function report(index: number, managerId: string): InboxEvent {
 async function mergedInput(
   jobs: readonly Job[],
   events: readonly InboxEvent[],
+  env: NodeJS.ProcessEnv = {},
 ): Promise<{ merged: string; stop: () => Promise<void> }> {
   const stores = createMemoryStores();
   for (const entry of jobs) await stores.jobs.putJob(entry);
-  const s = setup(undefined, stores);
+  const s = setup(undefined, stores, {}, env);
   s.clone.post(humanMessage('先客'));
   await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
   for (const event of events) s.clone.post(event);
@@ -73,6 +74,30 @@ describe('混合の束 — 同じ起点の会話の2件目以降は固定の枠�
     expect(count(merged, '経過')).toBe(3);
     await stop();
   }, 15_000);
+
+  it.each([
+    // setup の既定は畳みを有効にした env なので、未設定は `undefined` で明示して上書きする
+    ['未設定', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: undefined }],
+    ['0', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0' }],
+    ['off', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'off' }],
+  ] as const)(
+    '⭐ 畳みが切り（%s）なら、起点が同じ3件でも枠と案内と経過を毎件全文で出す',
+    async (_name, env) => {
+      const { merged, stop } = await mergedInput(
+        [job('mgr-A', 'conv-1'), job('mgr-B', 'conv-1'), job('mgr-C', 'conv-1')],
+        [report(1, 'mgr-A'), report(2, 'mgr-B'), report(3, 'mgr-C')],
+        env,
+      );
+
+      expect(count(merged, 'から届いた。')).toBe(3);
+      expect(count(merged, ORIGIN_CONVERSATION_GUIDE)).toBe(3);
+      expect(count(merged, REPORT_FOLLOW_UP_GUIDE)).toBe(3);
+      expect(count(merged, '受け取ってから')).toBe(3);
+      expect(count(merged, '受け取り 20')).toBe(0);
+      await stop();
+    },
+    15_000,
+  );
 
   it('起点が違う件は畳まない: 別の会話の件は枠も案内も全文のまま', async () => {
     const { merged, stop } = await mergedInput(

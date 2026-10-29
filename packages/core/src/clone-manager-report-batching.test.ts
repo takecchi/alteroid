@@ -167,6 +167,21 @@ describe('クローン — 同じマネージャーの連続する report をま
     await s.clone.stop();
   }, 20_000);
 
+  it('⭐ 抜粋の系統を切る（ALTEROID_TOKEN_SAVING_EXCERPT=0）と、巨大な単発の報告も1件の上限で切らず全文で届く', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_TOKEN_SAVING_EXCERPT: '0' });
+    const huge = '単発先頭' + 'y'.repeat(60_000) + '単発末尾';
+    s.clone.post(managerMessage('huge-single-off', 'mgr-single', huge));
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('単発末尾')),
+      '単発の報告のターンが投げられる（末尾まで載る）',
+    );
+    const input = (s.calls[0] as FakeCall).inputs.find((text) => text.includes('単発末尾')) ?? '';
+
+    expect(input).toContain(huge);
+    expect(input).not.toContain('⚠ 本文が長いので');
+    await s.clone.stop();
+  }, 20_000);
+
   it('予算に収まる単発の報告は1文字も変えず、予算の断りも出さない（issue #955）', async () => {
     const s = setup();
     s.clone.post(managerMessage('small-single', 'mgr-small', '小さな報告の本文'));

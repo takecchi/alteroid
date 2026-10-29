@@ -5609,7 +5609,7 @@ class RunnerSession {
 
     return {
       kind: 'allow',
-      reason: 'クローンが分類器の拒否をこの1回だけ上書きした（issue #1105 P1）。',
+      reason: 'ユーザーが分類器の拒否をこの1回だけ上書きした（issue #1105 P1）。',
     };
   }
 

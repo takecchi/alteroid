@@ -6,7 +6,7 @@ import {
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
 } from './classifier-denial-streak.js';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
-import { waitFor } from './clone-test-harness.js';
+import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import {
   DigestSessionDelta,
@@ -34,6 +34,8 @@ interface Script {
   failFirstStarts?: number;
   /** 1ターンへ束ねる合図の上限（`createClone` の `mergedBatchLimit`）。 */
   mergedBatchLimit?: number;
+  /** クローンの env。既定は畳みを有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）。 */
+  env?: NodeJS.ProcessEnv;
 }
 
 function boot(script: Script = {}): Boot {
@@ -92,7 +94,7 @@ function boot(script: Script = {}): Boot {
   const clone = createClone({
     stores: createMemoryStores(),
     queryFn: fn,
-    env: {},
+    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
@@ -180,6 +182,29 @@ describe('システムが作った長い段落は、同じ会話の2回目から
     expect(first.length - second.length).toBeGreaterThanOrEqual(
       DENIAL_ASK_AFTER_ANSWER_PARAGRAPH.length - SYSTEM_PARAGRAPH_REF.length,
     );
+    await s.clone.stop();
+  });
+
+  it('⭐ 畳みが切り（既定）なら、分類器の拒否の確認が何回来ても固定の説明は毎回全文で、参照の行が出ない', async () => {
+    const s = boot({ env: {} });
+
+    const first = await denial(s, '破壊的な操作に見えた（1回目）', 'rm -rf ./a');
+    const second = await denial(s, '外部への送信に見えた（2回目）', 'curl -X POST ./b');
+    const third = await denial(
+      s,
+      '外部への送信に見えた（3回目）',
+      'git push origin c',
+      DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
+    );
+
+    for (const text of [first, second]) {
+      expect(text).toContain(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH);
+    }
+    expect(third).toContain(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE);
+    for (const text of [first, second, third]) {
+      expect(text).not.toContain(SYSTEM_PARAGRAPH_REF);
+    }
+    expect(second).toContain('理由: 外部への送信に見えた（2回目）');
     await s.clone.stop();
   });
 

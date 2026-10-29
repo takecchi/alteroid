@@ -133,7 +133,7 @@ interface ManualSetup {
 
 async function runningManualSetup(
   managerId = 'mgr-withhold',
-  options: { withheldReportFlushMs?: number } = {},
+  options: { withheldReportFlushMs?: number; tokenSavingExcerpt?: boolean } = {},
 ): Promise<ManualSetup> {
   const job: Job = {
     id: managerId,
@@ -168,6 +168,9 @@ async function runningManualSetup(
     runners: registry,
     now: () => clock,
     withheldReportFlushMs: options.withheldReportFlushMs,
+    ...(options.tokenSavingExcerpt === undefined
+      ? {}
+      : { tokenSavingExcerpt: options.tokenSavingExcerpt }),
   });
 
   await pool.restore();
@@ -1131,6 +1134,33 @@ describe('畳んだ報告の冒頭は、配る知らせから消えない（最�
     expect(
       exchanged.some((entry) => JSON.stringify(entry).includes(`報告01 ${'あ'.repeat(300)}`)),
     ).toBe(true);
+
+    await pool.stop();
+  });
+
+  // ALTEROID_TOKEN_SAVING_EXCERPT=0: 注記の字数の予算を節約の前（1,500字）へ戻す。同じ6本で、抜粋が2本を超えて載る
+  it('⭐ 抜粋の系統を切ると、同じ240字超の6本でも注記の予算は 1,500 字になり、抜粋が2本を超えて載る', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup('mgr-withhold', {
+      tokenSavingExcerpt: false,
+    });
+
+    for (let n = 1; n <= 6; n += 1) {
+      fake.report('mgr-withhold', `報告${String(n).padStart(2, '0')} ${'あ'.repeat(300)}`, 'done', {
+        awaitingBackground: AWAITING,
+      });
+    }
+    await withheldDecisions(stores, 6);
+
+    fake.report('mgr-withhold', '本物の報告', 'done');
+    const text = await lastReportText(inbox, '本物の報告');
+    const note = text.slice(text.indexOf('（この間に'));
+    const excerptLines = note.split('\n').filter((line) => line.startsWith('- 20'));
+    expect(excerptLines.length).toBeGreaterThan(2);
+    expect(note).toContain('報告06 ');
+    expect(note).toContain('報告05 ');
+    expect(note).toContain('報告04 ');
+    expect(note.length).toBeGreaterThan(900);
+    expect(note).toContain('6 本配っていない');
 
     await pool.stop();
   });

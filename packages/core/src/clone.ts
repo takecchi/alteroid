@@ -74,6 +74,7 @@ import {
   type ManagerLiveness,
 } from './digest.js';
 import { clockLabel, DigestSessionDelta } from './digest-session-delta.js';
+import { resolveTokenSavingSwitches, type TokenSavingSwitches } from './token-saving-switches.js';
 import { parseFoldState, serializeFoldState, type FoldState } from './fold-state.js';
 import {
   describeAnthropicRoute,
@@ -1118,7 +1119,9 @@ class Clone implements CloneHost {
    * 加えて、固定の文言の控え（`fixed`）だけは `SITUATION_FULL_EVERY_TURNS` ターンごとにも捨てる（`forgetFixed()`。`#situationNoticeFor`）: 要約の合図を取りこぼしても、全文が会話から消えたまま札だけが続く長さに上限を置く保険（以前は「20ターンごとは入れない」だった）。
    * 段落・報告の控えは周期の対象外（#5422 の対象外。周期が要るかは別に判断する）。
    */
-  readonly #digestDelta = new DigestSessionDelta();
+  readonly #digestDelta: DigestSessionDelta;
+  // 節約スイッチ（`token-saving-switches.ts`）。構築時に1回だけ読み、以後 env を読み直さない（`#inboxSettleMs` と同じ形）
+  readonly #tokenSaving: TokenSavingSwitches;
   // 畳みの控え（上の2つ＋周期の数え）を再起動をまたいで resume に付ける仕組み（`fold-state.ts`）。
   // 読み戻しは起動後の最初の束で1回だけ（`#restoreFoldStateOnce`）。読み戻した控えが指す会話の usage だけが、最初のターンの「要約が走りうるか」の判定の材料になる
   #foldRestoreAttempted = false;
@@ -1480,6 +1483,8 @@ class Clone implements CloneHost {
     this.#mergedBatchLimit = mergedBatchLimit ?? resolveMergedBatchSizeLimit(envSource);
     this.#inboxSettleMs = inboxSettleMs ?? resolveInboxSettleMs(envSource);
     this.#reportSettleMs = reportSettleMs ?? resolveReportSettleMs(envSource);
+    this.#tokenSaving = resolveTokenSavingSwitches(envSource);
+    this.#digestDelta = new DigestSessionDelta({ disabled: !this.#tokenSaving.foldFixedText });
     this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
     this.#restoreUnreadRetryDelays = restoreUnreadRetryDelaysMs ?? RESTORE_UNREAD_RETRY_DELAYS_MS;
     this.#contextUsageTimeoutMs = contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
@@ -1529,6 +1534,7 @@ class Clone implements CloneHost {
         ...(syncRunnerToken === undefined ? {} : { syncRunnerToken }),
         ...(agentTokenPushes === undefined ? {} : { agentTokenPushes }),
         ...(attachmentLimits === undefined ? {} : { attachmentLimits }),
+        tokenSavingExcerpt: this.#tokenSaving.excerpt,
       });
     // 握り潰さない: 生き残ると HTTP は答え続け、受信箱は積まれ続けたまま誰も気づかない（落ちて再起動すれば `#restoreUnread` が配り直す）
     // `.catch(...)` まで含めた Promise を保持する: 素の `#pump()` だと、`stop()` が待つより前に投げた分が unhandled rejection になるため
@@ -2819,6 +2825,7 @@ class Clone implements CloneHost {
       new Date(),
       attached?.linesOf,
       this.#fixedTextFold(),
+      this.#reportBodyLimit(),
     );
     this.#stageReportsShown(events, prompt, new Date());
     await this.#runInternal(prompt, 'normal', attached?.images, originConversationIdOf(origin));
@@ -2847,7 +2854,10 @@ class Clone implements CloneHost {
     const items: string[] = [];
     const origins = new Set<string | null>();
     const shownInBatch = new Set<string>();
+    const foldEnabled = this.#tokenSaving.foldFixedText;
     const batchFold: FixedTextFold = (id, full, ref) => {
+      // 固定文の畳みを切っているときは、束の中でも毎回全文を出す
+      if (!foldEnabled) return full;
       if (shownInBatch.has(id)) return ref;
       shownInBatch.add(id);
       return fold(id, full, ref);
@@ -2887,7 +2897,8 @@ class Clone implements CloneHost {
       const isReference = !referenceChosen;
       referenceChosen = true;
       if (isReference) referenceOriginId = originId;
-      const compact = !isReference && originId !== null && originId === referenceOriginId;
+      const compact =
+        foldEnabled && !isReference && originId !== null && originId === referenceOriginId;
       items.push(
         managerPrompt(
           sent,
@@ -2898,6 +2909,7 @@ class Clone implements CloneHost {
           [],
           isReference || compact ? batchFold : fold,
           compact,
+          this.#reportBodyLimit(),
         ),
       );
     }
@@ -3926,7 +3938,8 @@ class Clone implements CloneHost {
   #resetDigestDelta(reason: 'full' | 'compaction', label: DigestResetLabel): void {
     // 預けた控えも同じ条件で捨てる: 畳んだ記録を捨てたのに預け先だけが「畳んである」と言い続けると、次の起動が会話に無い全文を畳むため
     this.#forgetFoldState();
-    if (!this.#digestDelta.reset(reason)) return;
+    // 要約直後の軽い全文（`isLean`）は系統4のスイッチだけで決まる（畳みの系統2が無効でも効く）。系統4が無効なら、要約が走りうる／走った回も完全な全文へ倒す
+    if (!this.#digestDelta.reset(this.#tokenSaving.compaction ? reason : 'full')) return;
     // 1ターン1行: 入力を押し込んだ後（commit 済み）に失敗などで戻す回は、同じターンの先頭で書いた行の理由に含める
     if (this.#digestResetLoggedThisTurn) return;
     this.#digestResetLoggedThisTurn = true;
@@ -4116,6 +4129,11 @@ class Clone implements CloneHost {
     );
   }
 
+  // 系統3のスイッチが無効なら報告の本文を切らない（#5466 の前の形）
+  #reportBodyLimit(): number {
+    return this.#tokenSaving.excerpt ? MANAGER_REPORT_BODY_LIMIT : Number.POSITIVE_INFINITY;
+  }
+
   /**
    * 報告・確認の包みの固定の文言（応じ方の案内・起点の会話の説明）を、同じ会話の2回目から短い参照にする口。
    * 控えは `#digestDelta`（#4937）と同じもの: 全文へ戻す条件（会話が変わった・要約が走りうる／走った・観測が無い）も同じになるため。
@@ -4219,7 +4237,8 @@ class Clone implements CloneHost {
         // このターン自身は引かない: `#pump` が取り出してからここへ来るので、`#inbox.size` は既にこのターンの分を含まないため
         // `#queuedInMemoryCount()` を経由する: `manager_list` 側と件数の出どころを1箇所にするため
         queuedInMemory: this.#queuedInMemoryCount(),
-        explained: staged,
+        // 渡さなければ毎回全文・毎回材料の全体（`describeSituation` の `explained`）。節約が無効の既定はこちら
+        ...(this.#tokenSaving.foldFixedText ? { explained: staged } : {}),
       });
       // 今回書き足した分だけを持つ: 写しの元からある分まで後で控えへ戻すと、その間に控えが空になっていた（要約・会話の切り替え）とき、要点に畳んで全文を出していない分まで「出した」に戻すため
       this.#situationExplainedStaged = new Map(
@@ -5959,6 +5978,8 @@ class Clone implements CloneHost {
             new Date(),
             attached.linesOf.get(event.id),
             this.#fixedTextFold(),
+            false,
+            this.#reportBodyLimit(),
           );
           this.#stageReportsShown([event], prompt, new Date());
           await this.#runInternal(
@@ -5982,6 +6003,8 @@ class Clone implements CloneHost {
           new Date(),
           [],
           this.#fixedTextFold(),
+          false,
+          this.#reportBodyLimit(),
         );
         this.#stageReportsShown([event], prompt, new Date());
         await this.#runInternal(prompt, 'normal', [], originConversationIdOf(origin));
@@ -6476,7 +6499,7 @@ class Clone implements CloneHost {
         { since: new Date(Date.now() - RECENT_DIGEST_WINDOW_MS) },
         axes.liveness,
         axes.awaitingBackground,
-        { shape },
+        { shape, trimHistory: this.#tokenSaving.excerpt },
       );
     } catch (error) {
       return `（直近の状況をまとめられなかった: ${reasonOf(error)}）`;
@@ -6571,12 +6594,9 @@ class Clone implements CloneHost {
     const digest =
       range === null || axes === null
         ? await this.#recentDigestBare()
-        : await buildActivityDigest(
-            this.#stores,
-            range,
-            axes.liveness,
-            axes.awaitingBackground,
-          ).catch((error: unknown) => `（この日の記録をまとめられなかった: ${reasonOf(error)}）`);
+        : await buildActivityDigest(this.#stores, range, axes.liveness, axes.awaitingBackground, {
+            trimHistory: this.#tokenSaving.excerpt,
+          }).catch((error: unknown) => `（この日の記録をまとめられなかった: ${reasonOf(error)}）`);
 
     // digest の全文は日誌に書かない（`turn-input.ts` の doc）。
     await this.#journal(turnInputEntry({ type: 'daily_report', date, cause, digest }));
@@ -7193,7 +7213,8 @@ class Clone implements CloneHost {
 
     // 読み直さず、載せた値そのものを控える: 読み直すと、この間に人間が直した差分を見失う
     this.#distillMemory.commitMemory(documents);
-    this.#distillMemory.recordBakedMemory(documents);
+    // 焼いた控えを持たなければ、要約後は記憶を従来どおり全文で載せ直す（`#withFreshMemory`）。系統4のスイッチが無効の既定
+    if (this.#tokenSaving.compaction) this.#distillMemory.recordBakedMemory(documents);
     this.#memoryCarriedAt = readAt;
     this.#humanActionCarriedAt = readAt;
     this.#distillMemory.setResumedHistoryHasMemory(resume !== null);
@@ -9341,6 +9362,7 @@ function managerPrompt(
   attachmentLines: readonly string[] = [],
   fold: FixedTextFold = NO_FOLD,
   compact = false,
+  bodyLimit: number = MANAGER_REPORT_BODY_LIMIT,
 ): string {
   // `compact` は混合の束で、起点の会話が束の最初のマネージャーの件と同じ2件目以降だけ真になる。
   // 固定の枠（「から届いた」・「受け取ってから…経過」の言い回し）だけを縮め、マネージャー名・時刻・経過・id・本文は毎回出す。
@@ -9356,7 +9378,7 @@ function managerPrompt(
       '',
       ...(attachmentLines.length === 0 ? [] : [...attachmentLines, '']),
       // 本文に束と同じ予算を掛ける: 単発も新しいセッションの最初のターンで文脈窓を越えうる。
-      ...boundedReportBody({ ...event, kind: 'report' }),
+      ...boundedReportBody({ ...event, kind: 'report' }, bodyLimit),
       '',
       // 経過も印も本文の後ろに置く: 前に置くと「読まなくてよい」と読まれて本文を飛ばされる。
       describeReportAge(event.at, now, compact),
@@ -9514,8 +9536,12 @@ const REPORT_DELIVERY_TAIL_MARKS = [
 ] as const;
 
 /** 切ったのに全文の取り方を言わないと、読めるものを減らしたことになる（listing-and-detail の性質2）。 */
-function boundedReportBody(event: ManagerReportMessage): string[] {
-  if (event.text.length <= MANAGER_REPORT_BODY_LIMIT) return [event.text];
+function boundedReportBody(
+  event: ManagerReportMessage,
+  bodyLimit: number = MANAGER_REPORT_BODY_LIMIT,
+): string[] {
+  // 無限なら切らない（`ALTEROID_TOKEN_SAVING_EXCERPT` が無効のとき）。束の予算（`MANAGER_REPORT_BATCH_BODY_BUDGET`）は別の線で、そのまま掛かる
+  if (event.text.length <= bodyLimit) return [event.text];
   // 注記は本文の後ろに並ぶので、いちばん手前の目印から後ろをすべて注記とみなす
   const marks = REPORT_DELIVERY_TAIL_MARKS.map((mark) => event.text.lastIndexOf(mark)).filter(
     (at) => at !== -1,
@@ -9523,11 +9549,11 @@ function boundedReportBody(event: ManagerReportMessage): string[] {
   const tailAt = marks.length === 0 ? -1 : Math.min(...marks);
   const main = tailAt === -1 ? event.text : event.text.slice(0, tailAt);
   const tail = tailAt === -1 ? '' : event.text.slice(tailAt);
-  if (main.length <= MANAGER_REPORT_BODY_LIMIT) return [event.text];
+  if (main.length <= bodyLimit) return [event.text];
   return [
-    `${main.slice(0, MANAGER_REPORT_BODY_LIMIT)}…${tail}`,
+    `${main.slice(0, bodyLimit)}…${tail}`,
     '',
-    `⚠ 本文が長いので、頭の ${MANAGER_REPORT_BODY_LIMIT.toLocaleString('en-US')} 字だけを出した（全体 ${main.length.toLocaleString('en-US')} 字）。` +
+    `⚠ 本文が長いので、頭の ${bodyLimit.toLocaleString('en-US')} 字だけを出した（全体 ${main.length.toLocaleString('en-US')} 字）。` +
       `全文は、この担当の直近の報告なら \`manager_report\`（managerId: "${event.managerId}"）、それ以前の報告なら \`journal_read\` で引ける。 ${managerReportRetrievalHint(event)}`,
   ];
 }
@@ -9545,6 +9571,7 @@ export function managerReportBatchPrompt(
   now: Date,
   attachmentLinesOf: ReadonlyMap<string, readonly string[]> = new Map(),
   fold: FixedTextFold = NO_FOLD,
+  bodyLimit: number = MANAGER_REPORT_BODY_LIMIT,
 ): string {
   const head = events[0];
   if (head === undefined) return '';
@@ -9557,7 +9584,7 @@ export function managerReportBatchPrompt(
       `**(${index + 1})** ${describeReportAge(event.at, now)}`,
       '',
       ...(attachmentLines.length === 0 ? [] : [...attachmentLines, '']),
-      ...boundedReportBody(event),
+      ...boundedReportBody(event, bodyLimit),
       ...(closed === null ? [] : ['', closed]),
     ].join('\n');
   });

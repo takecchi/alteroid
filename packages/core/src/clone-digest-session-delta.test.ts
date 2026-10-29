@@ -9,7 +9,7 @@ import {
 } from './clone.js';
 import type { AgentCloneDriver } from './agent-clone-session.js';
 import { ClaudeCloneDriver } from './claude-clone-driver.js';
-import { waitFor } from './clone-test-harness.js';
+import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import { EXCHANGE_KIND_DECISION_PREFIX } from './exchange-kind.js';
 import type { CloneHost } from './host.js';
 import { SOURCE_TALLY_HEADING } from './digest.js';
@@ -52,6 +52,8 @@ interface SdkScript {
   failResultAt?: number;
   /** 入力の受け付けが終わった後、この Promise が解けるまで出来事の列を閉じない（作り直しの窓を開けておく）。 */
   holdAfterInputEnd?: Promise<void>;
+  /** クローンの env。既定は畳みを有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）。 */
+  env?: NodeJS.ProcessEnv;
 }
 
 async function seed(stores: Stores): Promise<void> {
@@ -189,7 +191,7 @@ function boot(script: SdkScript = {}): Boot {
   const clone = createClone({
     stores,
     ...(script.unavailableDriver === true ? { driver: unavailableDriver } : { queryFn: fn }),
-    env: {},
+    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
@@ -1424,7 +1426,7 @@ function bootWithHooks(): Boot & { fire: () => Promise<void> } {
   const clone = createClone({
     stores,
     queryFn: fn,
-    env: {},
+    env: TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
@@ -1818,6 +1820,221 @@ describe('担当の報告の包みの固定の文言は、同じ会話の中で�
     const second = await report(s, 'mgr-b', '2件目');
 
     expect(second).toContain(REPORT_FOLLOW_UP_GUIDE);
+    await s.clone.stop();
+  });
+});
+
+// ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT が未設定（本番の既定）・無効の綴りなら、どの畳みの出口も止まって、2回目以降も毎回全文になる。
+// 場面は上の「畳みが有効なときの試験」と同じ。ここは `env` だけが違う（有効側が同じ場面で畳むことは、上の試験が守っている）
+describe('畳みが切り（既定）なら、tick・報告の包みの固定文も毎回全文のまま', () => {
+  const OFF_ENVS = [
+    ['未設定', {}],
+    ['0', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0' }],
+    ['off', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'off' }],
+    ['false', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'false' }],
+  ] as const;
+
+  it.each(OFF_ENVS)(
+    '⭐ 定期の tick（%s）: 依頼の本文・固定の指示・件数の形の固定の注記・継続中の依頼の行が毎回全文',
+    async (_name, env) => {
+      const s = boot({ env });
+      await seed(s.stores);
+      await seedIdleManager(s.stores);
+      await seedExtraStanding(s.stores);
+
+      const first = await timerTick(s);
+      const second = await timerTick(s);
+      const third = await timerTick(s);
+
+      expectCountsFull(first);
+      for (const text of [first, second, third]) {
+        // 依頼の本文（requestSeenAt）と固定の指示（fixed）
+        expect(text).toContain(REQUEST_BODY.trim());
+        expect(text).toContain(INSTRUCTION_HEAD);
+        expect(text).not.toContain(INSTRUCTION_REF);
+        expect(text).not.toMatch(/依頼の本文は前回/u);
+        // 件数の形の固定の注記（#5392）
+        expectCountsFull(text);
+        expect(text).not.toContain(COUNTS_TOOLS_NOTE_REF);
+        expect(text).not.toContain(IDLE_MANAGERS_NOTE_REF);
+        // 継続中の依頼の行（foldStandingRows）
+        expectAllStandingRowsFull(text);
+      }
+      // 2回目の字数も1回目と同じ形（前回との差が出るのは「前回動いた時刻」の行だけ）
+      expect(second.length).toBeGreaterThanOrEqual(first.length - 20);
+      await s.clone.stop();
+    },
+  );
+
+  it.each(OFF_ENVS)(
+    '⭐ 自発の tick（%s）: 固定の指示・変わらない節・件数の行の項目名が毎回全文',
+    async (_name, env) => {
+      const s = boot({ env });
+      await seed(s.stores);
+
+      const first = await selfTick(s);
+      const second = await selfTick(s);
+      const third = await selfTick(s);
+
+      for (const text of [first, second, third]) {
+        expect(text).toContain(SELF_INSTRUCTION_HEAD);
+        expect(text).not.toContain(INSTRUCTION_REF);
+        expectCompleteFull(text);
+        expect(text).toContain('担当 7 の途中経過');
+        expect(text).toContain('聞かずに決めたこと 0');
+        expect(text).not.toContain(UNCHANGED_SECTION);
+        expect(text).not.toMatch(/変わらない節:/u);
+        expect(text).toContain('この件数は届いた合図の実数ではない');
+        const line = countsLineOf(text);
+        expect(line).toContain('- 件数: 人間の発言 0 / 回答待ち 4 / ');
+        expect(line.startsWith(COUNTS_LABEL_REF_HEAD)).toBe(false);
+      }
+      await s.clone.stop();
+    },
+  );
+
+  it.each(OFF_ENVS)('⭐ 担当の報告の包み（%s）: 応じ方の案内が毎回全文', async (_name, env) => {
+    const s = boot({ env });
+    const report = async (managerId: string, text: string): Promise<string> => {
+      const before = s.inputs.length;
+      eventSeq += 1;
+      s.clone.post({
+        type: 'manager_message',
+        id: `evt-report-off-${eventSeq}`,
+        at: new Date().toISOString(),
+        managerId,
+        kind: 'report',
+        text,
+      });
+      await waitFor(() => s.inputs.length > before, `報告の入力 ${before + 1} 本目`);
+      return s.inputs[before] ?? '';
+    };
+
+    const first = await report('mgr-a', '1件目の報告の本文');
+    const second = await report('mgr-b', '2件目の報告の本文');
+    const third = await report('mgr-c', '3件目の報告の本文');
+
+    for (const text of [first, second, third]) {
+      expect(text).toContain(REPORT_FOLLOW_UP_GUIDE);
+      expect(text).not.toContain(REPORT_FOLLOW_UP_GUIDE_REF);
+    }
+    await s.clone.stop();
+  });
+});
+
+// ALTEROID_TOKEN_SAVING_EXCERPT: Clone は要約を組むとき trimHistory をこの系統から渡す（切ると、履歴の節の件数の上限が節約の前の形に戻る）
+describe('抜粋の系統（ALTEROID_TOKEN_SAVING_EXCERPT）は、自発の tick の要約の履歴の節の件数に効く', () => {
+  async function settledShown(env: NodeJS.ProcessEnv): Promise<number> {
+    const s = boot({ env });
+    const at = new Date().toISOString();
+    for (let i = 0; i < 8; i += 1) {
+      await s.stores.commitments.open({
+        id: `lim-${i}`,
+        at,
+        origin: 'human',
+        body: `上限の仕事 ${i}`,
+      });
+      await s.stores.commitments.close(`lim-${i}`, at, `理由 ${i}`, 'clone');
+    }
+    const text = await selfTick(s);
+    await s.clone.stop();
+    const start = text.indexOf('## この期間に片付けた仕事');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const rest = text.slice(start);
+    const end = rest.indexOf('\n## ');
+    const section = end === -1 ? rest : rest.slice(0, end);
+    return Array.from({ length: 8 }, (_, i) => i).filter((i) =>
+      section.includes(`- 上限の仕事 ${i}\n`),
+    ).length;
+  }
+
+  it('⭐ 既定（入り）は新しい5件、切り（0）は8件すべてが出る', async () => {
+    expect(await settledShown({})).toBe(5);
+    expect(await settledShown({ ALTEROID_TOKEN_SAVING_EXCERPT: '0' })).toBe(8);
+    expect(await settledShown({ ALTEROID_TOKEN_SAVING_EXCERPT: 'off' })).toBe(8);
+  });
+});
+
+// ALTEROID_TOKEN_SAVING_COMPACTION は畳み（FOLD_FIXED_TEXT）とは別の系統: 畳みを入れて畳み後の再表示だけ切ると、要約が走った後の要約は完全な全文になる
+describe('畳み後の再表示の系統（ALTEROID_TOKEN_SAVING_COMPACTION）が切りなら、要約のあとは軽い全文にしない', () => {
+  const digestOf = (text: string): string => text.slice(text.indexOf('期間:'));
+
+  it('⭐ 既定（切り）: 要約が走った（compact_boundary）あとの自発の tick は完全な全文。軽い全文（省いた節の参照）にならない', async () => {
+    const s = boot({
+      after: (n) => (n === 2 ? [compactBoundary] : []),
+      env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '1' },
+    });
+    await seed(s.stores);
+    await seedSettledAndMemory(s.stores);
+
+    const first = await selfTick(s);
+    await selfTick(s);
+    const third = await selfTick(s);
+
+    expectCompleteFull(third);
+    expect(third).toContain('担当 7 の途中経過');
+    expect(third).toContain('片付けた仕事 0');
+    expect(third).toContain('記憶の更新の要旨 0');
+    expect(third).not.toContain('この節は省いた');
+    expect(digestOf(third).length).toBeGreaterThanOrEqual(digestOf(first).length - 50);
+    await s.clone.stop();
+  });
+
+  it('⭐ 入り: 同じ場面で軽い全文になる（切りとの差）。要約の部分が短くなる', async () => {
+    const s = boot({
+      after: (n) => (n === 2 ? [compactBoundary] : []),
+      env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '1', ALTEROID_TOKEN_SAVING_COMPACTION: '1' },
+    });
+    await seed(s.stores);
+    await seedSettledAndMemory(s.stores);
+
+    const first = await selfTick(s);
+    await selfTick(s);
+    const third = await selfTick(s);
+
+    expectLeanFull(third, { withSettledAndMemory: true });
+    expect(digestOf(third).length).toBeLessThan(digestOf(first).length);
+    await s.clone.stop();
+  });
+
+  // 系統4の軽い再掲は、系統2（畳み）が無効でも COMPACTION だけで入り切りする
+  it.each([undefined, '0', 'off'])(
+    '⭐ 畳みが切り（%j）でも、COMPACTION=1 なら要約のあとは軽い全文になる',
+    async (fold) => {
+      const s = boot({
+        after: (n) => (n === 2 ? [compactBoundary] : []),
+        env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: fold, ALTEROID_TOKEN_SAVING_COMPACTION: '1' },
+      });
+      await seed(s.stores);
+      await seedSettledAndMemory(s.stores);
+
+      const first = await selfTick(s);
+      const second = await selfTick(s);
+      const third = await selfTick(s);
+
+      // 畳みは効かない: 2回目は1回目と同じ完全な全文
+      expect(second).not.toContain('全文は会話の上にある');
+      expect(digestOf(second).length).toBeGreaterThanOrEqual(digestOf(first).length - 50);
+      expectLeanFull(third, { withSettledAndMemory: true });
+      expect(digestOf(third).length).toBeLessThan(digestOf(first).length);
+      await s.clone.stop();
+    },
+  );
+
+  it('⭐ 畳みが切りで COMPACTION も切りなら、要約のあとも完全な全文（軽い全文にならない）', async () => {
+    const s = boot({
+      after: (n) => (n === 2 ? [compactBoundary] : []),
+      env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0', ALTEROID_TOKEN_SAVING_COMPACTION: '0' },
+    });
+    await seed(s.stores);
+    await seedSettledAndMemory(s.stores);
+
+    await selfTick(s);
+    await selfTick(s);
+    const third = await selfTick(s);
+
+    expectCompleteFull(third);
+    expect(third).not.toContain('この節は省いた');
     await s.clone.stop();
   });
 });

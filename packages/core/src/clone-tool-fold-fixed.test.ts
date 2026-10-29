@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, SITUATION_FULL_EVERY_TURNS, createClone } from './clone.js';
-import { flushPendingMicrotasks, waitFor } from './clone-test-harness.js';
+import { flushPendingMicrotasks, TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -19,6 +19,8 @@ interface Boot {
 }
 
 interface Script {
+  // クローンの env。既定は畳みを有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）
+  env?: NodeJS.ProcessEnv;
   after?: (inputCount: number) => SDKMessage[];
   failResultAt?: number;
   usageUnobservable?: boolean;
@@ -86,7 +88,7 @@ function boot(script: Script = {}): Boot {
   const clone = createClone({
     stores: createMemoryStores(),
     queryFn: fn,
-    env: {},
+    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
@@ -138,6 +140,23 @@ describe('道具の応答の固定の文言の控え（ToolContext.foldFixed）'
     expect(fold(s)).toBe('参照');
     await turn(s);
     expect(fold(s)).toBe('参照');
+    await s.clone.stop();
+  });
+
+  it.each([
+    ['未設定', {}],
+    ['0', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0' }],
+    ['off', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'off' }],
+    ['false', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'false' }],
+  ] as const)('⭐ 畳みが切り（%s）なら、何度呼んでもターンをまたいでも全文', async (_name, env) => {
+    const s = boot({ env });
+    await turn(s);
+
+    expect(fold(s)).toBe('全文');
+    expect(fold(s)).toBe('全文');
+    await turn(s);
+    expect(fold(s)).toBe('全文');
+    expect(fold(s)).toBe('全文');
     await s.clone.stop();
   });
 
