@@ -4,7 +4,7 @@ import { stdout } from './terminal-out.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { confirmIrreversible } from './confirm.js';
 import { redactError } from './redact.js';
-import { readInputFile } from './input-errors.js';
+import { readAllText, readInputFile } from './input-errors.js';
 
 interface AgentTokenView {
   id: string;
@@ -275,7 +275,7 @@ export async function tokenAddCommand(options: { label: string; file?: string })
   if (target.note !== null) throw new Error(target.note);
   const raw =
     options.file === undefined || options.file === '-'
-      ? await readAll()
+      ? await readAllText(stdin)
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   const value = raw.trim();
   if (value.length === 0) {
@@ -416,12 +416,6 @@ async function putTokens(
     method: 'PUT',
     body: JSON.stringify({ tokens, ...(ifMatch === undefined ? {} : { ifMatch }) }),
   })) as PutTokensView;
-}
-
-async function readAll(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString('utf8');
 }
 
 async function request(target: Target, path: string, init: RequestInit = {}): Promise<unknown> {

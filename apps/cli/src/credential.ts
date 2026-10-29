@@ -7,7 +7,7 @@ import { hasRunnerPushFailure } from '@alteroid/logic';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
-import { readInputFile } from './input-errors.js';
+import { readAllText, readInputFile } from './input-errors.js';
 
 interface CredentialFingerprint {
   name: string;
@@ -120,7 +120,7 @@ export async function credentialSetCommand(
 
   const raw =
     options.file === undefined || options.file === '-'
-      ? await readAll()
+      ? await readAllText(stdin)
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   // `trim()` しない: 内側の空白は値の一部でありうる（末尾の改行だけ落とす）
   const value = raw.replace(/\r?\n$/, '');
@@ -208,12 +208,6 @@ function reportRunners(view: CredentialsUpdateView): void {
         : `  ${runner.runnerId}: 降ろせませんでした（次に名乗ったときに追いつきます）: ${runner.error === undefined ? '理由不明' : redactError(runner.error)}\n`,
     );
   }
-}
-
-async function readAll(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString('utf8');
 }
 
 async function put(

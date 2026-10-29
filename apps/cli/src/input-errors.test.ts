@@ -12,6 +12,7 @@ import {
   openEditor,
   pickEditor,
   quoteForShell,
+  readAllText,
   readInputFile,
 } from './input-errors.js';
 
@@ -23,6 +24,24 @@ vi.mock('node:child_process', () => ({
     },
   })),
 }));
+
+describe('readAllText（標準入力を読み切る。#5577）', () => {
+  async function* chunksOf(...parts: Uint8Array[]): AsyncGenerator<Uint8Array> {
+    for (const part of parts) yield part;
+  }
+
+  it('チャンクの境目で割れた多バイト文字も、つないでから UTF-8 で読む', async () => {
+    const bytes = Buffer.from('記憶の本文\n2行目', 'utf8');
+
+    await expect(
+      readAllText(chunksOf(bytes.subarray(0, 1), bytes.subarray(1, 4), bytes.subarray(4))),
+    ).resolves.toBe('記憶の本文\n2行目');
+  });
+
+  it('何も来なければ空文字', async () => {
+    await expect(readAllText(chunksOf())).resolves.toBe('');
+  });
+});
 
 describe('readInputFile（#2867）', () => {
   it('無いファイルは、打った名前・パス・次の手を日本語で言う（ENOENT を出さない）', async () => {
