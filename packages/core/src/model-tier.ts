@@ -9,20 +9,12 @@
  * `profile_write` で書けるので、クローンが自分のモデル帯を差し替えられて承認が承認でなくなる。
  */
 
-/**
- * 空・空白のみは「未設定」: compose が `${VAR:-}` で渡す空文字を `!== undefined` で見ると、
- * そのまま SDK へ流れて起動時に落ちる。
- */
-export function placedModelTier(env: NodeJS.ProcessEnv, key: string): string | null {
-  const raw = env[key];
-  const trimmed = raw === undefined ? '' : raw.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
+import { placedEnvValue } from './placed-env.js';
 
 /**
  * 値は検証しない: 既知の別名だけを通すと、SDK が新モデルを増やすたびに人間が選べなくなる
  * （north_star 禁止1）。読めない値は SDK が起動時に弾く。
  */
 export function resolveModelTier(env: NodeJS.ProcessEnv, key: string, fallback: string): string {
-  return placedModelTier(env, key) ?? fallback;
+  return placedEnvValue(env, key) ?? fallback;
 }

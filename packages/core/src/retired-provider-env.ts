@@ -1,4 +1,4 @@
-import { placedModelTier } from './model-tier.js';
+import { placedEnvValue } from './placed-env.js';
 
 /** 黙って無視しない: 置いた人間が「効いている」と思ったままになるので、起動時に名前だけ stderr へ出す。 */
 export const RETIRED_LAYER_PROVIDER_ENV_KEYS = [
@@ -16,14 +16,14 @@ const PEER_OPENS_ON_CREDENTIALS =
 
 export function retiredLayerProviderNotices(env: NodeJS.ProcessEnv, who: string): string[] {
   const layer = RETIRED_LAYER_PROVIDER_ENV_KEYS.filter(
-    (key) => placedModelTier(env, key) !== null,
+    (key) => placedEnvValue(env, key) !== null,
   ).map(
     (key) =>
       `${who}: ${key} はもう読みません（2026-10-07 の決定。層は Claude で動きます。` +
       `${PEER_OPENS_ON_CREDENTIALS}）。この変数は外してください`,
   );
   const peers =
-    placedModelTier(env, MANAGER_PEERS_ENV_KEY) === null
+    placedEnvValue(env, MANAGER_PEERS_ENV_KEY) === null
       ? []
       : [
           `${who}: ${MANAGER_PEERS_ENV_KEY} はもう読みません（2026-10-08 の決定。` +

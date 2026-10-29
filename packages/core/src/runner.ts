@@ -142,7 +142,8 @@ import {
 } from './runner-mcp-config-sweep.js';
 import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
 import type { McpServers } from './mcp-servers.js';
-import { placedModelTier, resolveModelTier } from './model-tier.js';
+import { resolveModelTier } from './model-tier.js';
+import { placedEnvValue } from './placed-env.js';
 import type { AgentClonePlugin } from './agent-clone-session.js';
 import {
   defaultRunnerPluginsRoot,
@@ -361,7 +362,7 @@ export function placedManagerModels(
       { key: WORKER_MODEL_ENV_KEY, fallback: WORKER_MODEL },
     ] as const
   ).flatMap(({ key, fallback }) => {
-    const value = placedModelTier(env, key);
+    const value = placedEnvValue(env, key);
     return value === null ? [] : [{ key, value, fallback }];
   });
 }
@@ -3701,7 +3702,7 @@ class RunnerSession {
     return {
       input: this.#inputStream(),
       model: resolveManagerModel(this.#env),
-      modelPlaced: placedModelTier(this.#env, MANAGER_MODEL_ENV_KEY) !== null,
+      modelPlaced: placedEnvValue(this.#env, MANAGER_MODEL_ENV_KEY) !== null,
       permissionMode: this.#permissionMode,
       systemPromptAppend: withReportLanguageParagraph(
         buildManagerSystemPrompt({

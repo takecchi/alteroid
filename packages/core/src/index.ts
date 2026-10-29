@@ -1311,7 +1311,7 @@ export {
   isReservedEventSource,
   normalizeEventSource,
 } from './daemon-self-notice.js';
-export { placedModelTier, resolveModelTier } from './model-tier.js';
+export { resolveModelTier } from './model-tier.js';
 export {
   ANTHROPIC_ROUTE_NONE_LINE,
   describeAnthropicRoute,
@@ -1360,7 +1360,6 @@ export {
 export {
   DEFAULT_PERMISSION_MODE,
   PERMISSION_MODES,
-  placedPermissionMode,
   resolvePermissionModeFor,
   type PermissionModeName,
 } from './permission-mode.js';

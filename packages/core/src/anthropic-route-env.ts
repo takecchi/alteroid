@@ -34,7 +34,7 @@ const ANTHROPIC_MODEL_ENV = 'ANTHROPIC_MODEL';
 const ANTHROPIC_DEFAULT_MODEL_ENV_PATTERN = /^ANTHROPIC_DEFAULT_([A-Z0-9]+)_MODEL$/;
 
 /**
- * 重ねた結果の実効値と、それを決めた層。空・空白だけは「置かれていない」（`placedModelTier` と同じ）。
+ * 重ねた結果の実効値と、それを決めた層。空・空白だけは「置かれていない」（`placedEnvValue` と同じ）。
  * 後ろの層が空文字を置いたら、実際の env でも空文字が勝つので、前の層の値へ戻らない。
  */
 function effectiveValue(

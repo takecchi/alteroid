@@ -1,3 +1,5 @@
+import { placedEnvValue } from './placed-env.js';
+
 /**
  * 判定を1か所に置くのは、層ごとに書き写すと「綴りの間違いは黙って既定へ倒さず落とす」が
  * 既定へ落とす形に化けるため。型でなく配列で持つのは、値が環境変数で実行時に検査が要るため。
@@ -19,17 +21,10 @@ export type PermissionModeName = (typeof PERMISSION_MODES)[number];
  */
 export const DEFAULT_PERMISSION_MODE: PermissionModeName = 'auto';
 
-/** 既定との比較にしない（既定と同じ値でも「置いた」）。不正な値も `null` にしない（弾くのは {@link resolvePermissionModeFor}）。 */
-export function placedPermissionMode(env: NodeJS.ProcessEnv, key: string): string | null {
-  const raw = env[key];
-  const trimmed = raw === undefined ? '' : raw.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
 /** 不正な値は既定へ倒さず落とす: 綴りを間違えた持ち主が「確認が来ない」ことに気づけなくなるため。 */
 export function resolvePermissionModeFor(env: NodeJS.ProcessEnv, key: string): PermissionModeName {
-  const given = env[key]?.trim();
-  if (given === undefined || given.length === 0) return DEFAULT_PERMISSION_MODE;
+  const given = placedEnvValue(env, key);
+  if (given === null) return DEFAULT_PERMISSION_MODE;
   if ((PERMISSION_MODES as readonly string[]).includes(given)) {
     return given as PermissionModeName;
   }

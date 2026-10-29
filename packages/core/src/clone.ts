@@ -171,13 +171,10 @@ import {
   measureMemoryFloor,
   renderMemoryDocuments,
 } from './memory.js';
-import { placedModelTier, resolveModelTier } from './model-tier.js';
+import { resolveModelTier } from './model-tier.js';
 import { heuristicChars } from './quantity.js';
-import {
-  placedPermissionMode,
-  resolvePermissionModeFor,
-  type PermissionModeName,
-} from './permission-mode.js';
+import { resolvePermissionModeFor, type PermissionModeName } from './permission-mode.js';
+import { placedEnvValue } from './placed-env.js';
 import type { ProfileApplier } from './profile.js';
 import { resolveCredentialRows, type CredentialService } from './credential-service.js';
 import type { McpServerService } from './mcp-server-service.js';
@@ -389,7 +386,7 @@ export function resolveCloneModel(env: NodeJS.ProcessEnv = process.env): string 
 
 // 「既定と違うか」で言い換えない: 置いた値が既定と同じでも「置いた」であり、`self_status` が返すのは承認が置かれているかのため
 export function placedCloneModel(env: NodeJS.ProcessEnv = process.env): string | null {
-  return placedModelTier(env, CLONE_MODEL_ENV_KEY);
+  return placedEnvValue(env, CLONE_MODEL_ENV_KEY);
 }
 
 export const CLONE_PERMISSION_MODE_ENV_KEY = 'ALTEROID_CLONE_PERMISSION_MODE';
@@ -411,7 +408,7 @@ export function resolveClonePermissionMode(
 }
 
 export function placedClonePermissionMode(env: NodeJS.ProcessEnv = process.env): string | null {
-  return placedPermissionMode(env, CLONE_PERMISSION_MODE_ENV_KEY);
+  return placedEnvValue(env, CLONE_PERMISSION_MODE_ENV_KEY);
 }
 
 /** 「いまの全体」の説明文を、変わっていなくても全文へ戻す間隔（ターン数。2026-10-11 のオーナー回答「20ターンごとは全文」）。 */
