@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   describeConnection,
@@ -10,7 +10,6 @@ import {
   parseBuildTimeEndpoints,
   readStoredEndpoints,
   resolveApiBaseUrl,
-  resolveApiBaseUrlOrigin,
   SAME_ORIGIN_BASE_URL,
   sanitizeEndpoints,
   storeApiBaseUrl,
@@ -94,27 +93,6 @@ describe('resolveApiBaseUrl', () => {
   });
 });
 
-describe('resolveApiBaseUrlOrigin', () => {
-  it('何も無ければ同一オリジン（sameOrigin）', () => {
-    expect(resolveApiBaseUrlOrigin(null, undefined)).toBe('sameOrigin');
-  });
-
-  it('ビルド時の値だけがあれば buildTime', () => {
-    expect(resolveApiBaseUrlOrigin(null, 'https://api.example.com')).toBe('buildTime');
-  });
-
-  it('人間が設定した値があれば stored（ビルド時の値があっても勝つ）', () => {
-    expect(resolveApiBaseUrlOrigin('http://127.0.0.1:4517', 'https://api.example.com')).toBe(
-      'stored',
-    );
-  });
-
-  it('空白だけの保存値は「未設定」として扱う（sameOrigin まで倒れる）', () => {
-    expect(resolveApiBaseUrlOrigin('   ', undefined)).toBe('sameOrigin');
-    expect(resolveApiBaseUrlOrigin('   ', 'https://api.example.com')).toBe('buildTime');
-  });
-});
-
 describe('hasStoredApiBaseUrl / storeApiBaseUrl', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -122,9 +100,26 @@ describe('hasStoredApiBaseUrl / storeApiBaseUrl', () => {
 
   afterEach(() => {
     localStorage.clear();
+    vi.unstubAllEnvs();
   });
 
   it('何も保存していなければ false', () => {
+    expect(hasStoredApiBaseUrl()).toBe(false);
+  });
+
+  it('ビルド時の既定があっても、保存が無ければ false（「既定に戻す」を出さない）', () => {
+    vi.stubEnv('VITE_ALTEROID_API_URL', 'https://api.example.com');
+    expect(hasStoredApiBaseUrl()).toBe(false);
+  });
+
+  it('保存した値があれば、ビルド時の既定があっても true', () => {
+    vi.stubEnv('VITE_ALTEROID_API_URL', 'https://api.example.com');
+    storeApiBaseUrl('http://127.0.0.1:4517');
+    expect(hasStoredApiBaseUrl()).toBe(true);
+  });
+
+  it('空白だけの保存値は「未設定」として扱う', () => {
+    localStorage.setItem('alteroid.apiBaseUrl', '   ');
     expect(hasStoredApiBaseUrl()).toBe(false);
   });
 
@@ -206,7 +201,6 @@ describe('parseBuildTimeEndpoints', () => {
   it('ビルド時の値が複数でも、既定になるのは先頭だけ（resolveApiBaseUrl と対）', () => {
     const raw = '本番=https://api.example.com,ローカル=http://127.0.0.1:4517';
     expect(resolveApiBaseUrl(null, raw)).toBe('https://api.example.com');
-    expect(resolveApiBaseUrlOrigin(null, raw)).toBe('buildTime');
   });
 });
 

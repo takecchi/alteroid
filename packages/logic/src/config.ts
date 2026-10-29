@@ -26,7 +26,11 @@ export function resolveApiBaseUrl(
   stored: string | null = readSelected(),
   buildTime: string | undefined = readBuildTime(),
 ): string {
-  return normalize(stored) ?? parseBuildTimeEndpoints(buildTime)[0]?.url ?? SAME_ORIGIN_BASE_URL;
+  return (
+    normalizeEndpointUrl(stored) ??
+    parseBuildTimeEndpoints(buildTime)[0]?.url ??
+    SAME_ORIGIN_BASE_URL
+  );
 }
 
 // `selected` はどこにも載っていなくても必ず一覧に入れる: 入れないと `select` の値がどの `option` とも一致せず、
@@ -48,7 +52,7 @@ export function listEndpoints(
   push({ url: SAME_ORIGIN_BASE_URL }, 'sameOrigin');
   for (const entry of stored) push(entry, 'stored');
 
-  const selectedUrl = normalize(selected);
+  const selectedUrl = normalizeEndpointUrl(selected);
   if (selectedUrl !== undefined) push({ url: selectedUrl }, 'stored');
 
   return entries;
@@ -80,12 +84,12 @@ function parseBuildTimeItem(item: string): StoredEndpoint | undefined {
     const rest = trimmed.slice(separator + 1).trim();
     // 右側が URL に見えるときだけラベル付きとして読む: `https://api.example.com/?x=1` が最初の `=` で切られないように。
     if (label !== '' && looksLikeUrl(rest)) {
-      const url = normalize(rest);
+      const url = normalizeEndpointUrl(rest);
       return url === undefined ? undefined : { url, label };
     }
   }
 
-  const url = normalize(trimmed);
+  const url = normalizeEndpointUrl(trimmed);
   return url === undefined ? undefined : { url };
 }
 
@@ -95,14 +99,10 @@ export function looksLikeUrl(value: string): boolean {
 }
 
 // 空白だけの値は未設定に倒す: `''` を通すと「同一オリジン」と区別が付かないまま設定済み扱いになる。
-function normalize(value: string | null | undefined): string | undefined {
+export function normalizeEndpointUrl(value: string | null | undefined): string | undefined {
   if (value === null || value === undefined) return undefined;
   const trimmed = value.trim().replace(/\/+$/, '');
   return trimmed === '' ? undefined : trimmed;
-}
-
-export function normalizeEndpointUrl(value: string | null | undefined): string | undefined {
-  return normalize(value);
 }
 
 function readSelected(): string | null {
@@ -118,26 +118,15 @@ function readBuildTime(): string | undefined {
 
 export function storeApiBaseUrl(value: string | null): void {
   if (typeof localStorage === 'undefined') return;
-  const normalized = normalize(value);
+  const normalized = normalizeEndpointUrl(value);
   if (normalized === undefined) localStorage.removeItem(SELECTED_KEY);
   else localStorage.setItem(SELECTED_KEY, normalized);
 }
 
-// `Endpoint.origin` とは別の問い: こちらは明示の選択が在るか、`Endpoint.origin` は一覧のどの段に載っているか。
-// 一覧からビルド時の既定を選ぶと、こちらは `'stored'`、その行の `origin` は `'buildTime'` になる。統合しない。
-export type ApiBaseUrlOrigin = 'stored' | 'buildTime' | 'sameOrigin';
-
-export function resolveApiBaseUrlOrigin(
-  stored: string | null = readSelected(),
-  buildTime: string | undefined = readBuildTime(),
-): ApiBaseUrlOrigin {
-  if (normalize(stored) !== undefined) return 'stored';
-  if (parseBuildTimeEndpoints(buildTime).length > 0) return 'buildTime';
-  return 'sameOrigin';
-}
-
+// ビルド時の既定は見ない: 問いは「人間が明示で選んだ値が残っているか」で、`Endpoint.origin`（一覧のどの段に載っているか）とは別。
+// 一覧からビルド時の既定を選ぶと、こちらは true、その行の `origin` は `'buildTime'` になる。
 export function hasStoredApiBaseUrl(): boolean {
-  return resolveApiBaseUrlOrigin() === 'stored';
+  return normalizeEndpointUrl(readSelected()) !== undefined;
 }
 
 // 壊れた行だけ落とし、読めた行は残す: 1行壊れただけで人間の一覧が丸ごと消えるほうが害が大きい。
@@ -159,7 +148,7 @@ export function sanitizeEndpoints(value: unknown[]): StoredEndpoint[] {
   for (const item of value) {
     if (typeof item !== 'object' || item === null) continue;
     const { url, label } = item as { url?: unknown; label?: unknown };
-    const normalized = normalize(typeof url === 'string' ? url : null);
+    const normalized = normalizeEndpointUrl(typeof url === 'string' ? url : null);
     if (normalized === undefined || seen.has(normalized)) continue;
     seen.add(normalized);
     const trimmed = typeof label === 'string' ? label.trim() : '';
@@ -174,7 +163,7 @@ export function storeEndpoints(list: StoredEndpoint[]): void {
 }
 
 export function upsertEndpoint(list: StoredEndpoint[], entry: StoredEndpoint): StoredEndpoint[] {
-  const url = normalize(entry.url);
+  const url = normalizeEndpointUrl(entry.url);
   if (url === undefined) return list;
   const label = entry.label?.trim();
   const next: StoredEndpoint = label === undefined || label === '' ? { url } : { url, label };
@@ -185,14 +174,14 @@ export function upsertEndpoint(list: StoredEndpoint[], entry: StoredEndpoint): S
 }
 
 export function withoutEndpoint(list: StoredEndpoint[], url: string): StoredEndpoint[] {
-  const target = normalize(url);
+  const target = normalizeEndpointUrl(url);
   if (target === undefined) return list;
   return list.filter((item) => item.url !== target);
 }
 
 // 選択中を保存済みの一覧へ写す: `listEndpoints` の補完は表示だけで、別の接続先へ切り替えた瞬間に元の接続先が失われるため。
 export function migrateSelectionIntoStoredEndpoints(): void {
-  const selected = normalize(readSelected());
+  const selected = normalizeEndpointUrl(readSelected());
   if (selected === undefined || selected === SAME_ORIGIN_BASE_URL) return;
   if (parseBuildTimeEndpoints().some((entry) => entry.url === selected)) return;
   const list = readStoredEndpoints();
@@ -213,7 +202,7 @@ export function describeConnection(
   baseUrl: string,
   pageHref: string | null,
 ): ConnectionName {
-  const url = normalize(baseUrl) ?? baseUrl;
+  const url = normalizeEndpointUrl(baseUrl) ?? baseUrl;
   const label = endpoints.find((entry) => entry.url === url)?.label;
   if (label !== undefined && label !== '') return { name: label, title: `${label} — ${url}` };
   const resolved = resolveUrl(url, pageHref);
