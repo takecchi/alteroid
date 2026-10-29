@@ -88,7 +88,8 @@ describe('マネージャーからの一件は、委譲の起点の会話を名�
     const input = await inputOf(s.calls, 'Hoge の調査が終わった');
 
     expect(input).toContain('起点の会話: conv-hoge');
-    expect(input).toContain('`task_say` でこの会話の task へ書く');
+    expect(input).toContain('`task_say` で書く');
+    expect(input).toContain('task_set_status で done にする');
     await s.clone.stop();
   });
 
@@ -232,7 +233,7 @@ describe('道具: 仕事の会話（workConversationId）を委譲と承認へ�
 
   it('manager_list: 委譲ごとに起点の会話を出し、無いものと台帳に無いものを分けて名乗る', async () => {
     const stores = createMemoryStores();
-    await stores.jobs.putJob(job('mgr-hoge', 'conv-hoge'));
+    await stores.jobs.putJob({ ...job('mgr-hoge', 'conv-hoge'), taskId: 't-hoge' });
     await stores.jobs.putJob(job('mgr-cron'));
     const summary = (managerId: string): ManagerSummary => ({
       managerId,
@@ -267,6 +268,8 @@ describe('道具: 仕事の会話（workConversationId）を委譲と承認へ�
       listing.slice(listing.indexOf(managerId)).split(/\n(?=\S)/u)[0] ?? '';
 
     expect(blockOf('mgr-hoge')).toContain('起点の会話: conv-hoge');
+    expect(blockOf('mgr-hoge')).toContain('結び付いた task: t-hoge（task_say で書ける）');
+    expect(blockOf('mgr-cron')).not.toContain('結び付いた task:');
     expect(blockOf('mgr-cron')).toContain('起点の会話: 無し');
     expect(blockOf('mgr-ghost')).toContain('起点の会話: 分からない（台帳にこの委譲が見つからない');
   });

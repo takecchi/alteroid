@@ -14315,7 +14315,8 @@ describe('システムプロンプトの道具一覧', () => {
     // token_list: 枠を理由に仕事を見送らない
     expect(section).toContain('枠を理由に仕事を見送らないこと');
     // 委譲の報告は起点の会話へ（task_say と manager_list をまたぐ）
-    expect(section).toContain('その委譲の起点の会話の task へ書く');
+    expect(section).toContain('「結び付いた task」へ `task_say` で書く');
+    expect(section).toContain('task_set_status` で done にして閉じる');
     // 人間が書いた記憶を統合の走行から守る（memory_* をまたぐ）
     expect(section).toContain('人間が一度でも書いた文書');
     // 台帳は順序を持たない
@@ -20105,7 +20106,7 @@ describe('task_say', () => {
     });
   }
 
-  it('task_add は起点の会話 id を付け（省略時は新しい id）、応答と日誌に出す。引数で渡せばそれを使う', async () => {
+  it('task_add: どちらの会話も無いときは新しい会話 id を付け、応答と日誌に出す', async () => {
     const h = harness();
 
     const reply = await h.call('task_add', { title: 'a', body: 'b' });
@@ -20115,10 +20116,60 @@ describe('task_say', () => {
     expect(reply).toContain(`起点の会話は ${origin ?? ''}`);
     const [decision] = await h.stores.journal.list({ types: ['decision'] });
     expect(JSON.stringify(decision)).toContain(origin ?? 'missing');
+  });
 
-    await h.call('task_add', { title: 'c', body: 'd', originConversationId: 'conv-given' });
-    const all = (await h.stores.tasks.list()).entries;
-    expect(all.map((task) => task.originConversationId)).toContain('conv-given');
+  it('task_add: 人間のターンではそのターンの会話を起点にする', async () => {
+    const h = harness();
+    h.setConversationId('conv-turn');
+
+    await h.call('task_add', { title: 'a', body: 'b' });
+
+    const { entries } = await h.stores.tasks.list();
+    expect(entries[0]?.originConversationId).toBe('conv-turn');
+  });
+
+  it('task_add: 報告のターン（workConversationId が id を返す）では委譲の起点を使う', async () => {
+    const stores = createMemoryStores();
+    const tools = createCloneTools({
+      stores,
+      emit: () => {},
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+      workConversationId: () => 'conv-job-origin',
+    });
+    const found = tools.find((entry) => entry.name === 'task_add');
+
+    await found?.handler({ title: 'a', body: 'b' } as never, {});
+
+    const { entries } = await stores.tasks.list();
+    expect(entries[0]?.originConversationId).toBe('conv-job-origin');
+  });
+
+  it('task_add: 起点の会話は引数で渡せない（渡しても機構が決めた会話になる）', async () => {
+    const h = harness();
+    h.setConversationId('conv-turn');
+
+    await h.call('task_add', { title: 'a', body: 'b', originConversationId: 'conv-given' });
+
+    const { entries } = await h.stores.tasks.list();
+    expect(entries[0]?.originConversationId).toBe('conv-turn');
+  });
+
+  it('task_say: 開いている task には「done にすること」を添え、閉じた task には添えない', async () => {
+    const h = harness();
+    await seedTask(h.stores, 't-open', 'conv-1');
+    await seedTask(h.stores, 't-closed', 'conv-2');
+    await h.stores.tasks.setStatus('t-closed', 'done', {
+      reason: '終わった',
+      by: 'clone',
+      at: '2026-01-01T01:00:00.000Z',
+    });
+
+    const open = await h.call('task_say', { taskId: 't-open', text: '知らせ' });
+    const closed = await h.call('task_say', { taskId: 't-closed', text: '知らせ' });
+
+    expect(open).toContain('task_set_status で done にすること');
+    expect(closed).not.toContain('task_set_status');
   });
 
   it('宛先は task の起点の会話に固定。ターンの返答と同じ形（with: human / role: outbound）で日誌に書き、開いている画面へ流す', async () => {

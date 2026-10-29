@@ -51,7 +51,7 @@ function summary(n: number, extra: Partial<ManagerSummary> = {}): ManagerSummary
 
 const SUBAGENT_TOOL_USE_ID = 'toolu_subagent';
 const MAIN_TOOL_USE_ID = 'toolu_main';
-const hint = '（報告を人間へ知らせるなら、この会話へ書く）';
+const hint = '（報告を人間へ知らせるなら、結び付いた task へ task_say で書く）';
 const delivered = '終端の直前に「喋っただけの本文」がそのまま報告として出る経路が runner に在り';
 
 function harness() {

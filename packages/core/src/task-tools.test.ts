@@ -92,7 +92,7 @@ describe('task_* 道具', () => {
     [{ title: 'a\nb', body: 'x' }, 'title'],
     [{ title: 'ok', body: '' }, 'body'],
     [{ title: 'ok', body: ' \n' }, 'body'],
-    [{ title: 'ok', body: 'x', originConversationId: '\u0000' }, 'originConversationId'],
+    [{ title: 'ok', body: 'x', source: '\u0000' }, 'source'],
     [{ title: 'ok', body: 'x', to: 'before' }, 'anchorId'],
   ])('task_add は不正な入力 %j を断り、何も足さない', async (args, mention) => {
     const h = harness();
