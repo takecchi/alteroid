@@ -613,7 +613,7 @@ export const TASK_QUEUE_SECTION_HEADING_HEAD = '## 待ち行列の先頭';
 
 // 旧台帳に開いている行が残る間だけ出す1行（節ではなく件数だけ）。台帳の移行（P7）が済めばこの1行ごと撤去する。
 // 0件でも読めない行だけは在りうるので、両方0のときだけ出さない（読めない行を 0 に丸めない）
-function describeLegacyLedgerLine(open: number, unreadable: number): string[] {
+export function describeLegacyLedgerLine(open: number, unreadable: number): string[] {
   if (open === 0 && unreadable === 0) return [];
   const unreadablePart =
     unreadable > 0 ? `読めない行が ${unreadable} 件ある（片付いたのではない）。` : '';

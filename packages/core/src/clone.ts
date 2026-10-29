@@ -68,12 +68,15 @@ import {
 } from './denial-shape.js';
 import {
   buildActivityDigest,
+  countLegacyOnlyOpen,
+  describeLegacyLedgerLine,
   DIGEST_COUNTS_FIXED_PHRASES,
   type DigestShape,
   type ManagerAwaitingBackgroundMap,
   type ManagerLiveness,
 } from './digest.js';
 import { clockLabel, DigestSessionDelta } from './digest-session-delta.js';
+import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
 import { resolveTokenSavingSwitches, type TokenSavingSwitches } from './token-saving-switches.js';
 import { parseFoldState, serializeFoldState, type FoldState } from './fold-state.js';
 import {
@@ -1151,6 +1154,8 @@ class Clone implements CloneHost {
   #lastHumanConversationId: string | null = null;
   // 人間の依頼の Task の追加のうち、まだ終わっていないもの（`#openHumanTask`）。返答のターンの終わりが待つ: 届いた直後に返答が終わると、Task がまだ無く閉じ損ねるため
   readonly #taskOpens = new Set<Promise<void>>();
+  // Task に積めなかった人間の発言の id。断り書きが1回だけ名乗って外す（`#commitmentNoticeFor`）: 積めなかった事実を、積んだと偽らないため
+  readonly #humanTaskFailures = new Set<string>();
   // いまのターンの間に起きた会話への返答と委譲の控え（#5469 P5 の自動 done。`#runTurn` が作り直し、`turn_ended` が読む）。
   // `Turn` に載せない: `Turn` は試験が欄を全部書いて作る型で、欄を足すと無関係の試験が壊れるため。ターンは同時に1つしか走らない
   #turnReplies: {
@@ -3617,6 +3622,7 @@ class Clone implements CloneHost {
         () => undefined,
         (error: unknown) => {
           noteDroppedRecord('Task の自動起票', inboxEventShape(event), error);
+          this.#humanTaskFailures.add(event.id);
           return this.#journal({
             type: 'exchange',
             with: 'self',
@@ -3763,6 +3769,17 @@ class Clone implements CloneHost {
               '名乗ったか」を突き合わせられない。',
           ];
 
+    // Task の追加が済むのを待ってから待ち行列を読む: 待たないと、いま届いた発言の Task がまだ無い件数を名乗るため
+    await Promise.all([...this.#taskOpens]);
+    const taskEvents = events.filter(opensHumanTask);
+    const failedTaskEvents = taskEvents.filter((pending) =>
+      this.#humanTaskFailures.delete(pending.id),
+    );
+    const failedTaskIds = new Set(failedTaskEvents.map((pending) => pending.id));
+    const placedTaskEvents = taskEvents.filter((pending) => !failedTaskIds.has(pending.id));
+    const placedTaskIds = new Set(placedTaskEvents.map((pending) => pending.id));
+    const taskQueue = await this.#taskQueueNotice(event, placedTaskEvents, failedTaskEvents);
+
     let list: CommitmentList;
     try {
       list = await this.#stores.commitments.list({ includeClosed: true });
@@ -3776,18 +3793,20 @@ class Clone implements CloneHost {
           '——0 件だったのでも、異常が無かったのでもない。** 読み直す手は ' +
           '`commitment_list` である（同じ理由で失敗するなら、失敗として返る）。',
         ...unrecordedLines,
+        ...taskQueue.head,
+        ...taskQueue.placed,
+        ...taskQueue.failed,
         '',
         '---',
         '',
       ].join('\n');
     }
     const open = list.entries.filter((entry) => entry.closedAt === undefined);
-    // `list()` を読み終えた直後の値を使う: 後で計算すると、数えた対象とは無関係な遅延が乗るため
-    const at = Date.now();
 
     // まとめた件数ぶん渡す: 1件しか渡さないと、残りは id を渡されないまま未了として溜まるため
+    // Task に積んだ発言は除く: その行の閉じ方は「返答で自動 done」であって `commitment_close` ではない
     const ids = new Set(events.map((pending) => pending.id));
-    const mine = open.filter((entry) => ids.has(entry.id));
+    const mine = open.filter((entry) => ids.has(entry.id) && !placedTaskIds.has(entry.id));
     const idList = excerptLine(
       mine.map((entry) => `\`${entry.id}\``).join(', '),
       CLONE_ID_LIST_EXCERPT,
@@ -3834,17 +3853,8 @@ class Clone implements CloneHost {
       missingUnexplained.map((pending) => `\`${pending.id}\``).join(', '),
       CLONE_ID_LIST_EXCERPT,
     );
-    const oldest = open[0];
-    // 台帳の2行は、同じ会話の2回目から骨組みの文だけを参照にする（#5297）。件数・最古の時刻・この一件の id は毎回出す: 数と id は毎ターンの判断に使うため。控えは #4937 の `fixed()`（全文へ戻す条件も、入力を SDK へ入れた後に確定する約束も同じ）
-    const countLine = this.#digestDelta.fixed(
-      'commitment-notice-head',
-      `[system] 引き受けたまま終わっていない仕事は（${readAtLabel(at)} に数えた材料）` +
-        `**${open.length} 件** ある` +
-        (oldest === undefined ? '。' : `（いちばん古いものは ${oldest.at} に受け取ったもの）。`),
-      `[system] 未了 ${open.length} 件（` +
-        (oldest === undefined ? '' : `最古 ${oldest.at}、`) +
-        `${readAtLabel(at)} 時点）`,
-    );
+    // 骨組みの文は、同じ会話の2回目から参照にする（#5297）。待ち行列の件数と先頭・この一件の id は毎回出す: 数と id は毎ターンの判断に使うため。控えは #4937 の `fixed()`（全文へ戻す条件も、入力を SDK へ入れた後に確定する約束も同じ）
+    // Task に積まなかった合図（回答）だけが台帳の閉じ方を要る: Task に積んだ分は返答で器が done にする
     const closeSkeleton =
       '**片付いたら `commitment_close` で閉じること** — 返事をしただけでは閉じない。' +
       '雑談や、その場で答えて終わる話なら、答えたうえですぐ閉じてよい。';
@@ -3863,23 +3873,24 @@ class Clone implements CloneHost {
               closeRef,
             )
           : this.#digestDelta.fixed('commitment-notice-close', closeSkeleton, closeRef);
-    const tailFull =
-      '全文と齢は `commitment_list` で見られる。**どれを先にやるかは、記憶にある目的と価値観に照らして毎回決め直すこと**' +
-      '（台帳は順序を持たない。溜まっている順に片付ける決まりは無い）。';
-    const tailRef = '（全文と齢は `commitment_list`。着手順は毎回決め直す。断りは会話の上と同じ）';
     // 固定の1文は同じ会話で1回だけ全文（#4937）
-    const tailText = this.#digestDelta.fixed('commitment-notice-tail', tailFull, tailRef);
-    const mergeRefs = closeText === closeRef && tailText === tailRef;
+    const tailText = this.#digestDelta.fixed(
+      'commitment-notice-tail',
+      '全文は `task_list`。並べ替えは `task_move`。',
+      '（全文は `task_list`、並べ替えは `task_move`。断りは会話の上と同じ）',
+    );
     const lines = [
-      countLine,
+      ...taskQueue.head,
+      ...taskQueue.placed,
       ...(mine.length === 0
         ? []
         : [
             (bundled
-              ? `いま届いたこの ${mine.length} 件も台帳に載せた（id: ${idList}）。`
-              : `いま届いたこの一件も台帳に載せた（id: ${idList}）。`) +
-              (mergeRefs ? '' : (closeText ?? '')),
+              ? `いま届いたこの ${mine.length} 件は台帳の行として開いた（id: ${idList}）。`
+              : `いま届いたこの一件は台帳の行として開いた（id: ${idList}）。`) +
+              (closeText ?? ''),
           ]),
+      ...taskQueue.failed,
       // 分母は `events.length` でなく `outcomes.size`: `events` には台帳と無関係な合図も混じり、母数が大きくなって「このうち何件」の比率が嘘になるため
       ...(missingConfirmed.length === 0
         ? []
@@ -3912,14 +3923,73 @@ class Clone implements CloneHost {
             `**読めない行が ${list.unreadable.length} 件ある（片付いたのではない）。**` +
               '`commitment_list` の一覧に件数として出る（本文はここでは取れない）。',
           ]),
-      mergeRefs
-        ? `（\`commitment_list\` で全文と齢、${bundled ? 'まとめて答えても id ごとに ' : ''}\`commitment_close\` で閉じる。着手順は毎回決め直す。断りは会話の上と同じ）`
-        : tailText,
+      ...taskQueue.legacy,
+      tailText,
       '',
       '---',
       '',
     ];
     return lines.join('\n');
+  }
+
+  // 断り書きの待ち行列の側（#5469 P6c）。件数と先頭の描き方は digest と同じ `describeTaskQueueHead`、旧台帳だけの行の数え方も digest と同じ `countLegacyOnlyOpen`（写さない）
+  // 待ち行列を読めなかったときは 0 件と書かず、読めなかったと名乗る（台帳の読み失敗の行と同じ流儀）。その回は旧台帳の数も出さない: 同じ理由で読めず、数えると 0 に見えるため
+  async #taskQueueNotice(
+    event: InboxEvent,
+    placed: readonly HumanMessage[],
+    failed: readonly HumanMessage[],
+  ): Promise<{ head: string[]; placed: string[]; failed: string[]; legacy: string[] }> {
+    const idsOf = (list: readonly HumanMessage[]): string =>
+      excerptLine(list.map((pending) => `\`${pending.id}\``).join(', '), CLONE_ID_LIST_EXCERPT);
+    const placedLines =
+      placed.length === 0
+        ? []
+        : [
+            (placed.length > 1
+              ? `いま届いたこの ${placed.length} 件は task ${idsOf(placed)} として積んだ。`
+              : `いま届いたこの一件は task ${idsOf(placed)} として積んだ。`) +
+              this.#digestDelta.fixed(
+                'commitment-notice-task',
+                '返事をしたターンの終わりに自動で done になる。続けるなら `task_keep`、委譲するなら `manager_start` に `taskId`。',
+                '（自動 done・`task_keep`・`manager_start` の `taskId` は会話の上と同じ）',
+              ),
+          ];
+    const failedLines =
+      failed.length === 0
+        ? []
+        : [
+            `**⚠️ いま届いたこの ${failed.length} 件は Task として積めなかった（id: ${idsOf(failed)}）。** ` +
+              '待ち行列には載っていない。必要なら `task_add` で載せ直すこと（理由は日誌に残してある）。',
+          ];
+    let taskList: Awaited<ReturnType<Stores['tasks']['list']>>;
+    try {
+      taskList = await this.#stores.tasks.list();
+    } catch (error) {
+      noteDroppedRecord('待ち行列の読み出し', inboxEventShape(event), error);
+      return {
+        head: [
+          `[system] **待ち行列を読めなかった（${readAtLabel(Date.now())} に試みた材料。理由: ${reasonOf(error)}）。** ` +
+            '⟹ **開いている仕事が何件あるかは、この回は判定できていない——0 件だったのでも、異常が無かったのでもない。** ' +
+            '読み直す手は `task_list` である（同じ理由で失敗するなら、失敗として返る）。',
+        ],
+        placed: placedLines,
+        failed: failedLines,
+        legacy: [],
+      };
+    }
+    const head = [
+      `[system] 待ち行列（${readAtLabel(Date.now())} に数えた材料）`,
+      ...describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT }),
+    ];
+    let legacy: string[];
+    try {
+      const counted = await countLegacyOnlyOpen(this.#stores);
+      legacy = describeLegacyLedgerLine(counted.open, counted.unreadable);
+    } catch (error) {
+      noteDroppedRecord('旧台帳だけの行の数え直し', inboxEventShape(event), error);
+      legacy = [`- 旧台帳だけの行の数を数えられなかった（理由: ${reasonOf(error)}）。0 件だったのではない`];
+    }
+    return { head, placed: placedLines, failed: failedLines, legacy };
   }
 
   // 入力を SDK へ押し込めた直後にだけ呼ぶ: 全文が会話に載ったと言えるのはそのときだけのため
