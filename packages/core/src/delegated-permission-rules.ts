@@ -1,3 +1,7 @@
+import {
+  AUTO_MODE_STRIP_PREDICTION_SDK_VERSION,
+  autoModeStripsDelegatedRule,
+} from './auto-mode-strip-prediction.js';
 import { noteDroppedRecord, reasonOf } from './dropped-record.js';
 import { parsePermissionRule } from './permission-rule.js';
 import {
@@ -15,25 +19,39 @@ import type { Stores } from './store.js';
  * flag 層の allow 規則にも載せる（#4952）。デーモンが一覧を丸ごと各 runner へ配り、runner が #4905 の一時規則と
  * 1つの一覧にまとめて置き直す。
  *
- * 載せるのは、取り消されていない許可のうち完全一致（`Bash(<command>)`）の規則だけである。
- * 前方一致（`Bash(<command>:*)`）は載せない: 委譲先へ広がる範囲が大きく、auto mode は危険な前方一致を捨てる
- * （`stripDangerousPermissionsForAutoMode`）ので載せても効かない規則が出うるため。載せるかはオーナーの判断を待つ（#4952 の「決めてほしいこと」）。
- * `*` と改行を含む command も載せない: #4905 の一時規則と同じ判定（`sessionAllowRuleShapeOf`）を通し、完全一致より広い規則を作らないため。
+ * 載せるのは、取り消されていない許可のうち完全一致（`Bash(<command>)`）と前方一致（`Bash(<prefix>:*)`）の規則である。
+ * 前方一致も載せるのはオーナーの決定（#5435・承認 589d747b。人間が承認した許可は全部効かせる）。
+ * 前方一致の prefix に `*`・改行を含むもの、空の prefix（`Bash(:*)`・`Bash(*)`）は載せない: 規則の文法の上で意図より広くなるため。
+ * 完全一致は #4905 の一時規則と同じ判定（`sessionAllowRuleShapeOf`）を通す。その判定は緩めない（一時規則は完全一致のまま）。
+ *
+ * auto mode は危険な規則（解釈器・シェルの前方一致など）を捨てる（SDK の `stripDangerousPermissionsForAutoMode`）。
+ * 捨てられるのを回り道で防がない（配る一覧から外さない・書き換えない）。代わりに、捨てられる見込みの規則を
+ * 許可 id と規則の名前で日誌に残し、クローンが追えるようにする（`autoModeStripsDelegatedRule`。判定は SDK 0.3.312 の写し）。
  */
 
 export interface DelegatedPermissionRuleSet {
   /** 重複は1つにした規則の一覧。 */
   readonly rules: string[];
-  /** 載せた許可の id（日誌に載せるのは規則の本文ではなくこちら）。 */
+  /** 載せた許可の id（日誌に載せるのは規則の本文ではなくこちら。例外は `autoModeStripped`）。 */
   readonly grantIds: string[];
+  /** 載せた許可のうち、auto mode で SDK に捨てられる見込みのもの（許可 id と規則）。配る一覧からは外していない。 */
+  readonly autoModeStripped: { readonly grantId: string; readonly rule: string }[];
 }
 
-/** 許可の規則（`PermissionGrant.rule`）から、委譲先へ載せる規則を作る。載せない形なら `undefined`。取り消しは見ない（`delegatedPermissionRulesOf` が見る）。 */
+/**
+ * 許可の規則（`PermissionGrant.rule`）から、委譲先へ載せる規則を作る。載せない形なら `undefined`。取り消しは見ない（`delegatedPermissionRulesOf` が見る）。
+ * 前方一致は委譲側だけの形の判定をここで持つ（`sessionAllowRuleShapeOf` は完全一致専用のまま）。
+ */
 export function delegatedPermissionRuleOf(grantRule: string): string | undefined {
   const parsed = parsePermissionRule(grantRule);
-  if (!parsed.ok || parsed.kind !== 'exact') return undefined;
-  const shape = sessionAllowRuleShapeOf('Bash', { command: parsed.command });
-  return shape.kind === 'rule' ? shape.rule : undefined;
+  if (!parsed.ok) return undefined;
+  if (parsed.kind === 'exact') {
+    const shape = sessionAllowRuleShapeOf('Bash', { command: parsed.command });
+    return shape.kind === 'rule' ? shape.rule : undefined;
+  }
+  if (parsed.command.trim() === '' || parsed.command.includes('*')) return undefined;
+  if (/[\r\n]/.test(parsed.command)) return undefined;
+  return `Bash(${parsed.command}:*)`;
 }
 
 export function delegatedPermissionRulesOf(
@@ -41,14 +59,30 @@ export function delegatedPermissionRulesOf(
 ): DelegatedPermissionRuleSet {
   const rules = new Set<string>();
   const grantIds: string[] = [];
+  const autoModeStripped: { grantId: string; rule: string }[] = [];
   for (const grant of grants) {
     if (grant.revokedAt !== undefined) continue;
     const rule = delegatedPermissionRuleOf(grant.rule);
     if (rule === undefined) continue;
     rules.add(rule);
     grantIds.push(grant.id);
+    if (autoModeStripsDelegatedRule(rule)) autoModeStripped.push({ grantId: grant.id, rule });
   }
-  return { rules: [...rules], grantIds };
+  return { rules: [...rules], grantIds, autoModeStripped };
+}
+
+/**
+ * 捨てられる見込みの規則の日誌の文言。ここだけ規則の名前（command）を載せる: 「規則の本文を日誌に載せない」方針の例外で、
+ * 人間が承認した規則そのものであり、捨てられた事実をクローンが名前で追えるようにするため（オーナーの決定、#5435）。
+ * 載せるのは述語に当たった規則だけ。完全一致の本文はこれまでどおり載せない（当たるのは `python` などの全消しだけ）。
+ */
+function autoModeStrippedText(set: DelegatedPermissionRuleSet): string | undefined {
+  if (set.autoModeStripped.length === 0) return undefined;
+  const names = set.autoModeStripped.map((s) => `${s.grantId} \`${s.rule}\``).join(', ');
+  return (
+    `auto mode のセッションでは SDK（${AUTO_MODE_STRIP_PREDICTION_SDK_VERSION} の判定）に捨てられる見込みの規則が在る: ${names}` +
+    '（配る一覧からは外していない。runner の mode はデーモンから見えないので「見込み」）'
+  );
 }
 
 /**
@@ -61,7 +95,7 @@ export function parseDelegatedPermissionRules(input: unknown): string[] {
   input.forEach((rule: unknown, index) => {
     if (typeof rule !== 'string' || !isDelegatableRule(rule)) {
       throw new Error(
-        `許可規則の一覧の ${index} 番目が、載せてよい形（Bash(<command>) の完全一致・\`*\` と改行を含まない）でない（置いていない）`,
+        `許可規則の一覧の ${index} 番目が、載せてよい形（Bash(<command>) の完全一致か Bash(<prefix>:*) の前方一致・\`*\`（前方一致の末尾の :* を除く）と改行を含まず、中身が空でない）でない（置いていない）`,
       );
     }
     rules.add(rule);
@@ -140,6 +174,17 @@ export function createDelegatedPermissionRuleService(
     );
   }
 
+  // 捨てられる見込みの規則を日誌に1本残す（無ければ何もしない）。呼ぶのは一覧が変わったときだけ
+  async function journalAutoModeStripped(
+    set: DelegatedPermissionRuleSet,
+    runnerId: string,
+    trigger: string,
+  ): Promise<void> {
+    const text = autoModeStrippedText(set);
+    if (text === undefined) return;
+    await journal(`${runnerId} へ配った許可規則に、${text}`, `${trigger}（#5435）`);
+  }
+
   // 一覧を読む: 載せる許可が読めなければ投げる（空の一覧へ倒さない: 倒すと読めなかった回に全部の規則を外してしまう）。
   async function currentSet(): Promise<DelegatedPermissionRuleSet> {
     return delegatedPermissionRulesOf(await stores.permissionGrants.list());
@@ -154,7 +199,12 @@ export function createDelegatedPermissionRuleService(
         if (placed.changed) {
           await journal(
             placedText(runner.runnerId, placed.count, set),
-            'runner が名乗った（繋がった・繋ぎ直した）ので、委譲先の許可規則を降ろした（#4952。前方一致は載せていない）',
+            'runner が名乗った（繋がった・繋ぎ直した）ので、委譲先の許可規則を降ろした（#4952。前方一致も載せる: #5435）',
+          );
+          await journalAutoModeStripped(
+            set,
+            runner.runnerId,
+            'runner が名乗った（繋がった・繋ぎ直した）ので、委譲先の許可規則を降ろした',
           );
         }
         return placed;
@@ -203,8 +253,12 @@ export function createDelegatedPermissionRuleService(
           if (result.ok) {
             await journal(
               placedText(result.runnerId, result.count, set),
-              `${trigger}（#4952。前方一致は載せていない）`,
+              `${trigger}（#4952。前方一致も載せる: #5435）`,
             );
+            // 一覧が変わった runner にだけ残す（`syncRunner` と同じ。同じ一覧を何度配っても積まない）
+            if (result.changed !== false) {
+              await journalAutoModeStripped(set, result.runnerId, trigger);
+            }
           } else {
             await journal(
               `${result.runnerId} へ委譲先の許可規則を配れなかった（その runner のセッションには前の一覧が残っている）`,

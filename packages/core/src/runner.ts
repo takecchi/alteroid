@@ -1730,6 +1730,14 @@ class Host implements RunnerHost {
     }
   }
 
+  // await の後で見直す: HTTP の門は入る前の要求しか止めないので、既に待っていた分が畳んだ後の名簿に新しいセッションを開くため（#5506）。
+  // 新しい HTTP の状態は足さず素の Error（500）にする: デーモンは 5xx を「待てば直る」と読んで挑み直す
+  #refuseWhileShuttingDown(managerId: string): void {
+    if (this.#shuttingDown) {
+      throw new Error(`${managerId} のセッションを開かない: runner は畳み中`);
+    }
+  }
+
   async start(command: RunnerStartCommand): Promise<{ cwd: string; sessionGeneration: string }> {
     if (this.#sessions.has(command.managerId)) {
       throw new Error(`${command.managerId} は既に走っている`);
@@ -1740,6 +1748,7 @@ class Host implements RunnerHost {
     if (this.#sessions.has(command.managerId)) {
       throw new Error(`${command.managerId} は既に走っている`);
     }
+    this.#refuseWhileShuttingDown(command.managerId);
     this.#checkRememberedFence(command.managerId, command.lease);
     const session = this.#create(command.managerId, command.request, command.cwd);
     try {
@@ -1788,6 +1797,7 @@ class Host implements RunnerHost {
           } catch {
             // 投げ直さない: 待ちたいのは畳みの完了で、投げ直すと resume 自体が失敗したように見えるため
           }
+          this.#refuseWhileShuttingDown(command.managerId);
           const next = this.#sessions.get(command.managerId);
           if (next === current) {
             this.#sessions.delete(command.managerId);
@@ -1810,6 +1820,7 @@ class Host implements RunnerHost {
         alive = raced;
         continue;
       }
+      this.#refuseWhileShuttingDown(command.managerId);
       // `#create` が消す戻り待ちの印を覚えておく: 開けずに名簿から外すとき、failed / lost の後の守りを元に戻すため（#5168）
       const awaitedSince = this.#returnAwaitedSince.get(command.managerId);
       // 閉じた後の古い世代の起こし直しをここで断る（#5507）: 新しいセッションの `checkFence` は `#fence` が未設定で何でも通すため、持ち越しはこの Map が受け持つ
@@ -2131,6 +2142,11 @@ class Host implements RunnerHost {
       options.keepPeers === true ? { keepPeers: true } : {},
     );
     await Promise.all([closingParked, stopping]);
+    // 待ち終えた後にもう一度閉じる（#5508）: 進行中の keepPeers の畳みは自分の畳みの中で peer を預けるので、先頭の閉じ（その時点の預かりだけ）には載らず、期限まで開いたまま残るため。
+    // 印を立てて `#parkPeers` に預けさせない形は取らない: 鍵の付け替えの経路も通るので、印の立て下ろしと次の resume との競りを新しく持つことになる
+    if (options.keepPeers !== true) {
+      await this.#closeParkedPeers(managerId, 'stopped', '人間・クローンが止めた');
+    }
   }
 
   #parkPeers(managerId: string, parked: ParkedPeers): void {

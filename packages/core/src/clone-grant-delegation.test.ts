@@ -49,11 +49,15 @@ describe('許可の記録の後に委譲先へ配る（#4952）', () => {
     ]);
   });
 
-  it('前方一致の許可では配らない（委譲先の一覧は変わらない）', async () => {
+  // 元は「前方一致の許可では配らない（委譲先の一覧は変わらない）」で triggers が空であることを固定していた。
+  // #5435 で前方一致も委譲先へ載せる（一覧が変わる）ので、完全一致と同じく配る形に反転した。
+  it('前方一致の許可も配る（委譲先の一覧が変わる）', async () => {
     const { service, triggers } = fakeService();
     const grants = await answerPermission('Bash(make:*)', service);
     expect(grants).toHaveLength(1);
-    expect(triggers).toEqual([]);
+    expect(triggers).toEqual([
+      `許可 ${grants[0]?.id ?? ''} が記録された（人間の request_permission への回答）`,
+    ]);
   });
 
   it('配れなくても許可の記録は通る', async () => {

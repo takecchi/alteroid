@@ -125,7 +125,9 @@ async function rig(options: { stores?: Stores; oldRunner?: boolean } = {}): Prom
 }
 
 describe('委譲先の許可規則を HTTP の runner へ降ろす（#4952）', () => {
-  it('runner が繋がると完全一致の許可だけが降り、開いたセッションの許可規則に載る', async () => {
+  // 元の題は「完全一致の許可だけが降り」で前方一致 g-prefix は降りない歯だった。#5435 で前方一致も載せると決まったので、
+  // g-prefix も降りる（完全一致と並んで同じ一覧に載る）形に反転した。
+  it('runner が繋がると完全一致と前方一致の許可が降り、開いたセッションの許可規則に載る', async () => {
     const stores = createMemoryStores();
     await stores.permissionGrants.put(grant('g-exact', 'Bash(gh pr view 1)'));
     await stores.permissionGrants.put(grant('g-prefix', 'Bash(gh pr view:*)'));
@@ -136,9 +138,9 @@ describe('委譲先の許可規則を HTTP の runner へ降ろす（#4952）', 
     // 繋いだときと名乗り（hello）のときの両方で降ろす。中身は同じ
     expect(r.posted.length).toBeGreaterThanOrEqual(1);
     for (const body of r.posted) {
-      expect(JSON.parse(body)).toEqual({ rules: ['Bash(gh pr view 1)'] });
+      expect(JSON.parse(body)).toEqual({ rules: ['Bash(gh pr view 1)', 'Bash(gh pr view:*)'] });
     }
-    expect(r.flagAllows).toEqual([['Bash(gh pr view 1)']]);
+    expect(r.flagAllows).toEqual([['Bash(gh pr view 1)', 'Bash(gh pr view:*)']]);
     expect(r.pool.pushHealthOf('runner-primary')?.permissionRules?.status).toBe('ok');
 
     // 「配った」は一覧が変わった1回だけ日誌に残る（件数と許可の id。規則の本文は書かない）
@@ -146,8 +148,9 @@ describe('委譲先の許可規則を HTTP の runner へ降ろす（#4952）', 
       (entry) => entry.type === 'decision' && entry.decision.includes('委譲先の許可規則を'),
     );
     expect(placed).toHaveLength(1);
-    expect(JSON.stringify(placed)).toContain('runner-primary へ委譲先の許可規則を 1 件配った');
+    expect(JSON.stringify(placed)).toContain('runner-primary へ委譲先の許可規則を 2 件配った');
     expect(JSON.stringify(placed)).toContain('g-exact');
+    expect(JSON.stringify(placed)).toContain('g-prefix');
     expect(JSON.stringify(placed)).not.toContain('gh pr view');
   });
 
@@ -176,9 +179,11 @@ describe('委譲先の許可規則を HTTP の runner へ降ろす（#4952）', 
       changed: true,
     });
 
+    // 元は 'Bash(SECRET-PREFIX:*)'（前方一致そのもの）を断る歯だった。#5435 で前方一致は受けるので、
+    // 前方一致のまま壊れた形（prefix に `*` を含む）を断る歯に反転した。
     let message = '';
     try {
-      await r.client.setPermissionRules?.(['Bash(echo ok)', 'Bash(SECRET-PREFIX:*)']);
+      await r.client.setPermissionRules?.(['Bash(echo ok)', 'Bash(SECRET-PREFIX *:*)']);
     } catch (error) {
       message = String(error);
     }
