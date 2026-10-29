@@ -465,12 +465,19 @@ export async function main(): Promise<void> {
   });
 
   const sessionView: ReclaimSessionView = {
-    liveSessionPidsOf: () => host.delegationSessionPids().live,
-    knownTerminatedSessionPidsOf: () => host.delegationSessionPids().knownTerminated,
-    ownerListedSessionPidsOf: () => host.delegationSessionPids().ownerListed,
-    abandonedOwnerListedSessionPidsOf: () => host.delegationSessionPids().abandonedOwnerListed,
-    // `live` の集合の大きさでは代用しない: `anyTrackedDelegationsOf` の理由と同じ。
-    anyTrackedDelegationsOf: () => host.list().length > 0,
+    snapshot: () => {
+      // 1回だけ呼ぶ: 欄ごとに呼ぶと別々の時点で振り分けられ、同じ pid が2つの欄に入りうるため。
+      const { live, knownTerminated, ownerListed, abandonedOwnerListed } =
+        host.delegationSessionPids();
+      return {
+        live,
+        knownTerminated,
+        ownerListed,
+        abandonedOwnerListed,
+        // `live` の集合の大きさでは代用しない: `ReclaimSessionSnapshot.anyTrackedDelegations` の理由と同じ。
+        anyTrackedDelegations: host.list().length > 0,
+      };
+    },
   };
 
   const reclaimScan = reclaimScanOf(process.env, childUser, sessionView);

@@ -51,16 +51,21 @@ export interface ReclaimScanOptions {
 
 export interface ReclaimSessionView {
   // 値ではなく関数で受ける: `TaskBreakdownReader` は1度だけ構築されて走り続け、値だと起動時点の空集合に固定されるため。
-  liveSessionPidsOf: () => ReadonlySet<number>;
+  // 材料を欄ごとの関数にしない: 欄ごとに呼ぶと別々の時点で計算し直され、境目の時刻をまたぐと同じ pid が2つの欄に入りうるため。1回の走査では頭で1回だけ呼ぶ。
+  snapshot: () => ReclaimSessionSnapshot;
+}
+
+export interface ReclaimSessionSnapshot {
+  live: ReadonlySet<number>;
   // runner プロセスを跨いで持ち越さない: 作り直し直後の古い孤児は「記憶に無い」側に落とし、撃たないため。
-  knownTerminatedSessionPidsOf: () => ReadonlySet<number>;
+  knownTerminated: ReadonlySet<number>;
   // 持ち主が名簿に居るので `knownTerminated` に入れていない CLI の pid。観測の内訳にだけ使い、撃つ判定には渡さない。
-  ownerListedSessionPidsOf: () => ReadonlySet<number>;
+  ownerListed: ReadonlySet<number>;
   // `knownTerminated` の部分集合（#5162）: 鍵の付け替えの畳みで背景処理を畳んだだけで、持ち主はまだ名簿に居る（または戻り待ち）委譲の pid。
   // 引き取り手（tini）を挟む構成では、この sid の木のうち CLI の枝だけを撃つ。空なら絞らない（木を丸ごと撃つ）。
-  abandonedOwnerListedSessionPidsOf: () => ReadonlySet<number>;
-  // `liveSessionPidsOf()` の大きさで代用しない: `childUser` 無しの構成では常に空集合で、生きた委譲があっても分岐1が撃ってしまうため。
-  anyTrackedDelegationsOf: () => boolean;
+  abandonedOwnerListed: ReadonlySet<number>;
+  // `live` の大きさで代用しない: `childUser` 無しの構成では常に空集合で、生きた委譲があっても分岐1が撃ってしまうため。
+  anyTrackedDelegations: boolean;
 }
 
 export interface ReclaimHeldCounts {
@@ -382,9 +387,10 @@ async function observeReclaim(
 
   // 判定材料は1回だけ取る: BFS の途中で値が動くと、同じ回の中で判定がぶれるため。
   const { view, mode } = reclaim;
-  const liveSessionPids = view.liveSessionPidsOf();
-  const knownTerminatedSessionPids = view.knownTerminatedSessionPidsOf();
-  const anyTrackedDelegations = view.anyTrackedDelegationsOf();
+  const snapshot = view.snapshot();
+  const liveSessionPids = snapshot.live;
+  const knownTerminatedSessionPids = snapshot.knownTerminated;
+  const anyTrackedDelegations = snapshot.anyTrackedDelegations;
   // sid と同じ pid が走査に実在するなら撃たない: pid が使い回されて別の委譲の配下が新しいセッションを開いたか、本人がまだ生きているため。
   const scannedPids = new Set(scanned.map((entry) => entry.pid));
 
@@ -401,8 +407,8 @@ async function observeReclaim(
     deps.lineage.set(entry.pid, { starttime: entry.starttime, sid: attribution.sid });
   }
   // 枝は引き取り手（tini）を挟む構成でだけ付ける: 挟まない構成では追跡している pid が CLI そのもので、直の子に枝の区別が無いため。
-  const ownerListedSessionPids = view.ownerListedSessionPidsOf();
-  const abandonedOwnerListedSessionPids = view.abandonedOwnerListedSessionPidsOf();
+  const ownerListedSessionPids = snapshot.ownerListed;
+  const abandonedOwnerListedSessionPids = snapshot.abandonedOwnerListed;
   const tiniInUse = typeof reclaim.delegationSubreaper === 'string';
   const branches = tiniInUse
     ? attributeBranches(
@@ -577,7 +583,7 @@ async function observeReclaim(
 }
 
 // 分岐1（委譲が0本）には pid 使い回しの守りを適用しない: 生きた委譲が無く使い回しの危険が無い上、`setsid nohup` で孤立したサーバの残骸が永久に残るため。
-// 分岐1は `liveSessionPids` の大きさで判定しない: `anyTrackedDelegationsOf` の理由と同じ。
+// 分岐1は `liveSessionPids` の大きさで判定しない: `ReclaimSessionSnapshot.anyTrackedDelegations` の理由と同じ。
 // 終端した委譲の sid が走査に居ない回は、呼び手（`reapVerdictOf`）が先に返す。ここへ来て `knownTerminated` に入っている sid は、走査に居るもの（`sidLeaderPresent`）だけである。
 function reapVerdictFor(
   sid: number | undefined,

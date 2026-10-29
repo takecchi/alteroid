@@ -19,15 +19,25 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 // 実物の `/proc` を読まない: 走らせる器によって値が変わり、固定できないため。
 
-// 本番（`index.ts` の `sessionView`）は5つの欄を必ず渡す。試験は、判定に関わる欄だけを書けるように、残りを「委譲が走っていて、他に何も無い」で埋める。
-function sessionView(overrides: Partial<ReclaimSessionView> = {}): ReclaimSessionView {
+// 本番（`index.ts` の `sessionView`）は5つの欄を必ず返す。試験は、判定に関わる欄だけを書けるように、残りを「委譲が走っていて、他に何も無い」で埋める。
+// 欄は関数で書ける（値が走査の時点で決まる試験のため）。`snapshot` が呼ばれたときに、まとめて1回だけ評価する。
+interface SessionViewParts {
+  liveSessionPidsOf?: () => ReadonlySet<number>;
+  knownTerminatedSessionPidsOf?: () => ReadonlySet<number>;
+  ownerListedSessionPidsOf?: () => ReadonlySet<number>;
+  abandonedOwnerListedSessionPidsOf?: () => ReadonlySet<number>;
+  anyTrackedDelegationsOf?: () => boolean;
+}
+function sessionView(parts: SessionViewParts = {}): ReclaimSessionView {
+  const empty = (): ReadonlySet<number> => new Set<number>();
   return {
-    liveSessionPidsOf: () => new Set<number>(),
-    knownTerminatedSessionPidsOf: () => new Set<number>(),
-    ownerListedSessionPidsOf: () => new Set<number>(),
-    abandonedOwnerListedSessionPidsOf: () => new Set<number>(),
-    anyTrackedDelegationsOf: () => true,
-    ...overrides,
+    snapshot: () => ({
+      live: (parts.liveSessionPidsOf ?? empty)(),
+      knownTerminated: (parts.knownTerminatedSessionPidsOf ?? empty)(),
+      ownerListed: (parts.ownerListedSessionPidsOf ?? empty)(),
+      abandonedOwnerListed: (parts.abandonedOwnerListedSessionPidsOf ?? empty)(),
+      anyTrackedDelegations: (parts.anyTrackedDelegationsOf ?? (() => true))(),
+    }),
   };
 }
 
@@ -265,6 +275,23 @@ describe('走査は1本だけ走る（走査中の要求は相乗りする）', 
     expect(gated.calls).toEqual(['700']);
     expect(b).toBe(a);
     expect(a?.processes).toBe(1);
+  });
+
+  it('1回の走査で、判定材料（snapshot）を取るのは1回だけ（欄ごとに取り直さない）', async () => {
+    placeProcess(root, 710, 'node', 'S', 1, 0);
+    placeProcess(root, 711, 'bash', 'S', 710, 0);
+    placeUptime(root, 1000);
+    const parts = sessionView();
+    const snapshot = vi.fn(parts.snapshot);
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: { snapshot } },
+    });
+
+    const result = await reader.read();
+
+    expect(result?.reclaim).toBeDefined();
+    expect(snapshot).toHaveBeenCalledTimes(1);
   });
 
   it('回収の掃除（sweepIfStale）も、走っている走査に相乗りする', async () => {
@@ -1290,10 +1317,11 @@ describe('撃たれなかった木の内訳（#2352。#2626 で observe も終�
     placeUptime(root, 1000);
   }
 
-  const view = sessionView({
+  const viewParts = {
     liveSessionPidsOf: () => new Set([555]),
     knownTerminatedSessionPidsOf: () => new Set([777, 778]),
-  });
+  };
+  const view = sessionView(viewParts);
 
   // 名簿に居る持ち主（ownerListed）の材料は空なので、sid 未認識は「不明」へ数える。
   const expectedHeld = {
@@ -1378,7 +1406,7 @@ describe('撃たれなかった木の内訳（#2352。#2626 で observe も終�
       reclaim: {
         childUid: OWN_UID,
         mode: 'observe',
-        view: sessionView({ ...view, anyTrackedDelegationsOf: () => false }),
+        view: sessionView({ ...viewParts, anyTrackedDelegationsOf: () => false }),
       },
     }).read();
     expect(calls).toEqual([{ pid: 303, signal: 'SIGTERM' }]);
@@ -2135,11 +2163,16 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
   ): { reader: TaskBreakdownReader; calls: Array<{ pid: number; signal: NodeJS.Signals }> } {
     const { fn, calls } = fakeKillFn();
     const view = (): ReclaimSessionView => ({
-      liveSessionPidsOf: () => new Set(phase().live),
-      knownTerminatedSessionPidsOf: () => new Set(phase().terminated),
-      ownerListedSessionPidsOf: () => new Set(phase().ownerListed),
-      abandonedOwnerListedSessionPidsOf: () => new Set(phase().abandonedOwnerListed),
-      anyTrackedDelegationsOf: () => true,
+      snapshot: () => {
+        const current = phase();
+        return {
+          live: new Set(current.live),
+          knownTerminated: new Set(current.terminated),
+          ownerListed: new Set(current.ownerListed),
+          abandonedOwnerListed: new Set(current.abandonedOwnerListed),
+          anyTrackedDelegations: true,
+        };
+      },
     });
     const reader = new TaskBreakdownReader({
       procRoot: root,
