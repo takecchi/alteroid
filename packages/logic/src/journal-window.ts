@@ -8,24 +8,28 @@ export interface MergeResult {
   freshCount: number;
 }
 
-export function mergeFront(existing: JournalEntry[], incoming: JournalEntry[]): MergeResult {
+// 既知の id を除いた新しい行だけを、前か後ろに積む。新しい行が無ければ元の配列をそのまま返す。
+function mergeEntries(
+  existing: JournalEntry[],
+  incoming: JournalEntry[],
+  side: 'front' | 'back',
+): MergeResult {
   if (incoming.length === 0) return { entries: existing, freshCount: 0 };
   const known = new Set(existing.map((entry) => entry.id));
   const fresh = incoming.filter((entry) => !known.has(entry.id));
+  if (fresh.length === 0) return { entries: existing, freshCount: 0 };
   return {
-    entries: fresh.length === 0 ? existing : [...fresh, ...existing],
+    entries: side === 'front' ? [...fresh, ...existing] : [...existing, ...fresh],
     freshCount: fresh.length,
   };
 }
 
+export function mergeFront(existing: JournalEntry[], incoming: JournalEntry[]): MergeResult {
+  return mergeEntries(existing, incoming, 'front');
+}
+
 export function mergeBack(existing: JournalEntry[], incoming: JournalEntry[]): MergeResult {
-  if (incoming.length === 0) return { entries: existing, freshCount: 0 };
-  const known = new Set(existing.map((entry) => entry.id));
-  const fresh = incoming.filter((entry) => !known.has(entry.id));
-  return {
-    entries: fresh.length === 0 ? existing : [...existing, ...fresh],
-    freshCount: fresh.length,
-  };
+  return mergeEntries(existing, incoming, 'back');
 }
 
 // daemon の zod スキーマを import せず写す: `apps/web` は daemon のスキーマに依存しない設計のため。daemon の上限を変えたら直す。

@@ -401,13 +401,13 @@ function isCollapsible(manager: SceneManager): boolean {
 
 export function collapseIdleManagers(
   managers: readonly SceneManager[],
-  groupKey?: string,
+  groupKey: string,
 ): readonly SceneManager[] {
   const idle = managers.filter(isCollapsible);
   if (idle.length <= IDLE_COLLAPSE_THRESHOLD) return managers;
   const rest = managers.filter((manager) => !isCollapsible(manager));
   const group: SceneManager = {
-    id: groupKey === undefined ? IDLE_GROUP_ID : `${IDLE_GROUP_ID}:${groupKey}`,
+    id: `${IDLE_GROUP_ID}:${groupKey}`,
     ...(idle[0]?.runner === undefined ? {} : { runner: idle[0].runner }),
     label: `仕事なし ${idle.length} 本`,
     task: '手が空いている。札を押すと一覧',
