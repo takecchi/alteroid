@@ -1,7 +1,13 @@
 import { stdin } from 'node:process';
 import { stdout } from './terminal-out.js';
 
-import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import {
+  describeAuthFailure,
+  fetchDaemon,
+  forbiddenError,
+  resolveTarget,
+  type Target,
+} from './target.js';
 import { confirmIrreversible } from './confirm.js';
 import { redactError } from './redact.js';
 import { readInputFile } from './input-errors.js';
@@ -425,35 +431,20 @@ async function readAll(): Promise<string> {
 }
 
 async function request(target: Target, path: string, init: RequestInit = {}): Promise<unknown> {
-  const response = await fetch(`${target.baseUrl}${path}`, {
-    ...init,
-    headers: { ...target.headers, 'content-type': 'application/json' },
-  });
+  const response = await fetchDaemon(target, path, init);
 
   if (!response.ok) {
-    // `not_operator` の枝を消さない: デーモン側で門が戻ったとき `unknown` へ落ちて案内が消えるため
-    // 403 の本文を見ずに固定の文言を出さない: 未 grant の人に直らない手順を勧めてしまうため
     if (response.status === 403) {
-      const body = await response.json().catch(() => ({}));
-      const kind = forbiddenKindOf(body);
-      if (kind === 'not_operator') {
-        throw new Error(
+      // `not_operator` の文言を消さない: デーモン側で門が戻ったとき `unknown` へ落ちて案内が消えるため
+      throw await forbiddenError(response, target, {
+        notOperator:
           '認証トークンのプールを触れるのは、その実行環境の持ち主だけです。\n' +
-            'デーモンが動いているのと同じ環境で実行してください:\n' +
-            '  docker compose exec app alteroid token list\n',
-        );
-      }
-      if (kind === 'not_granted') {
-        throw new Error(
-          describeAuthFailure(403, target) ??
-            'このアカウントには alteroid を使う許可がありません。',
-        );
-      }
-      // `unknown` では解決策を書かない: どちらかを当てずっぽうで出せば半分の状況で嘘になるため
-      throw new Error(
-        '認証トークンのプールへのアクセスが拒否されました（403）。理由を判別できな' +
+          'デーモンが動いているのと同じ環境で実行してください:\n' +
+          '  docker compose exec app alteroid token list\n',
+        unknown:
+          '認証トークンのプールへのアクセスが拒否されました（403）。理由を判別できな' +
           'かったため、次にすべきことは案内しません。',
-      );
+      });
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);

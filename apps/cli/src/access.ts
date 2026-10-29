@@ -1,7 +1,13 @@
 import { stdout } from './terminal-out.js';
 
 import { describeUnreadableRowsList, formatElapsedAgo, withErrorReason } from './format.js';
-import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import {
+  describeAuthFailure,
+  fetchDaemon,
+  forbiddenError,
+  resolveTarget,
+  type Target,
+} from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
 
@@ -149,34 +155,19 @@ async function request(
   init: RequestInit = {},
   notFoundMessage = '該当するアカウントがありません',
 ): Promise<unknown> {
-  const response = await fetch(`${target.baseUrl}${path}`, {
-    ...init,
-    // 本文の無い POST もデーモンは application/json を要求する（ブラウザの単純リクエストで許可を書き換えられないようにするため）。
-    headers: { ...target.headers, 'content-type': 'application/json' },
-  });
+  const response = await fetchDaemon(target, path, init);
 
   if (!response.ok) {
     // `target.remote` から推測しない: 遠隔でも持ち主でないという理由の 403 はあり、その場合に直らない「access grant してください」を案内してしまう。
     if (response.status === 403) {
-      const body = await response.json().catch(() => ({}));
-      const kind = forbiddenKindOf(body);
-      if (kind === 'not_operator') {
-        throw new Error(
+      throw await forbiddenError(response, target, {
+        notOperator:
           'このデーモンの実行環境の持ち主として認識されませんでした。\n' +
-            'デーモンが動いているのと同じ環境（コンテナなら docker compose exec app …）で実行してください。',
-        );
-      }
-      if (kind === 'not_granted') {
-        throw new Error(
-          describeAuthFailure(403, target) ??
-            'このアカウントには alteroid を使う許可がありません。',
-        );
-      }
-      // 理由が判別できないときは解決策を書かない: 「器の中で実行しろ」と「access grant しろ」は正反対で、当てずっぽうだと半分は嘘になる。
-      throw new Error(
-        'アクセス許可の操作が拒否されました（403）。理由を判別できなかったため、' +
+          'デーモンが動いているのと同じ環境（コンテナなら docker compose exec app …）で実行してください。',
+        unknown:
+          'アクセス許可の操作が拒否されました（403）。理由を判別できなかったため、' +
           '次にすべきことは案内しません。',
-      );
+      });
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);

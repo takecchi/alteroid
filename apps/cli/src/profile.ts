@@ -16,7 +16,13 @@ import {
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeScope } from './credential.js';
 import { redactError } from './redact.js';
-import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import {
+  describeAuthFailure,
+  fetchDaemon,
+  forbiddenError,
+  resolveTarget,
+  type Target,
+} from './target.js';
 import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
@@ -429,37 +435,21 @@ async function readAll(): Promise<string> {
 }
 
 async function request(target: Target, path: string, init: RequestInit = {}): Promise<unknown> {
-  const response = await fetch(`${target.baseUrl}${path}`, {
-    ...init,
-    headers: { ...target.headers, 'content-type': 'application/json' },
-  });
+  const response = await fetchDaemon(target, path, init);
 
   if (!response.ok) {
-    // 403 は持ち主でない以外の理由でも返る（ログイン済みだが未 grant）。本文を見ずに固定の文言を出すと、
-    // 未 grant の人に直らない「持ち主だけです」を案内してしまうので、本文で出し分ける。
     if (response.status === 403) {
-      const body = await response.json().catch(() => ({}));
-      const kind = forbiddenKindOf(body);
-      // `not_operator` の枝は、`GET /profile` `PUT /profile` が `requireOperator` のままなので残す。
-      if (kind === 'not_operator') {
-        throw new Error(
+      // `not_operator` の文言は、`GET /profile` `PUT /profile` が `requireOperator` のままなので残す。
+      throw await forbiddenError(response, target, {
+        notOperator:
           '実行環境プロファイルを触れるのは、その実行環境の持ち主だけです。\n' +
-            'デーモンが動いているのと同じ環境で実行してください:\n' +
-            '  docker compose exec app alteroid profile edit\n' +
-            '（人間が ~/.zshenv を直すのも、その人が持っている箱の上である、という線引きです）',
-        );
-      }
-      if (kind === 'not_granted') {
-        throw new Error(
-          describeAuthFailure(403, target) ??
-            'このアカウントには alteroid を使う許可がありません。',
-        );
-      }
-      // 理由が判別できないときは解決策を書かない: 「器の中で実行しろ」と「access grant しろ」は正反対で、当てずっぽうだと半分は嘘になる。
-      throw new Error(
-        '実行環境プロファイルへのアクセスが拒否されました（403）。理由を判別でき' +
+          'デーモンが動いているのと同じ環境で実行してください:\n' +
+          '  docker compose exec app alteroid profile edit\n' +
+          '（人間が ~/.zshenv を直すのも、その人が持っている箱の上である、という線引きです）',
+        unknown:
+          '実行環境プロファイルへのアクセスが拒否されました（403）。理由を判別でき' +
           'なかったため、次にすべきことは案内しません。',
-      );
+      });
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);

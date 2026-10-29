@@ -12,8 +12,15 @@ vi.mock('./credentials.js', async (importActual) => ({
   readCredential: vi.fn(() => Promise.resolve(null)),
 }));
 
-const { describeAuthFailure, forbiddenKindOf, resolveTarget, isRunnerContainer, RUNNER_ID_ENV } =
-  await import('./target.js');
+const {
+  describeAuthFailure,
+  fetchDaemon,
+  forbiddenError,
+  forbiddenKindOf,
+  resolveTarget,
+  isRunnerContainer,
+  RUNNER_ID_ENV,
+} = await import('./target.js');
 const daemon = await import('./daemon.js');
 const credentials = await import('./credentials.js');
 
@@ -60,6 +67,63 @@ describe('describeAuthFailure（403 の案内）', () => {
     expect(message).toContain('alteroid access list');
     expect(message).toContain('alteroid access grant <アカウント id>');
     expect(message).not.toContain('access owner');
+  });
+});
+
+describe('forbiddenError（403 の本文で 3 通りに出し分ける）', () => {
+  const target = { baseUrl: 'http://127.0.0.1:4517', headers: {}, remote: false, note: null };
+  const messages = { notOperator: '持ち主の文', unknown: '判別できない文' };
+  const forbidden = (body: string) => new Response(body, { status: 403 });
+
+  it('not_operator の本文なら、呼び手の持ち主向けの文を出す', async () => {
+    const error = await forbiddenError(
+      forbidden(JSON.stringify(NOT_OPERATOR_BODY)),
+      target,
+      messages,
+    );
+    expect(error.message).toBe('持ち主の文');
+  });
+
+  it('not_granted の本文なら、呼び手の文ではなく access grant を案内する', async () => {
+    const error = await forbiddenError(
+      forbidden(JSON.stringify(NOT_GRANTED_BODY)),
+      target,
+      messages,
+    );
+    expect(error.message).toBe(describeAuthFailure(403, target));
+  });
+
+  it('判別できない本文・JSON でない本文なら、呼び手の判別できない文を出す', async () => {
+    const other = await forbiddenError(
+      forbidden(JSON.stringify({ error: 'なにか別の理由' })),
+      target,
+      messages,
+    );
+    expect(other.message).toBe('判別できない文');
+    const broken = await forbiddenError(forbidden('forbidden'), target, messages);
+    expect(broken.message).toBe('判別できない文');
+  });
+});
+
+describe('fetchDaemon', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('target の宛先と認証に、本文の無い要求でも application/json を足して送る', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('{}')));
+    vi.stubGlobal('fetch', fetchMock);
+    const target = {
+      baseUrl: 'http://127.0.0.1:4517',
+      headers: { authorization: 'Bearer t' },
+      remote: false,
+      note: null,
+    };
+    await fetchDaemon(target, '/tokens', { method: 'POST' });
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4517/tokens', {
+      method: 'POST',
+      headers: { authorization: 'Bearer t', 'content-type': 'application/json' },
+    });
   });
 });
 

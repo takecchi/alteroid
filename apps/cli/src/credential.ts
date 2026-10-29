@@ -4,7 +4,13 @@ import { stderr, stdout } from './terminal-out.js';
 import { CREDENTIAL_NAME } from '@alteroid/core/cli-light';
 import { hasRunnerPushFailure } from '@alteroid/logic';
 
-import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import {
+  describeAuthFailure,
+  fetchDaemon,
+  forbiddenError,
+  resolveTarget,
+  type Target,
+} from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
 import { readInputFile } from './input-errors.js';
@@ -227,27 +233,15 @@ async function put(
 }
 
 async function request(target: Target, path: string, init: RequestInit = {}): Promise<unknown> {
-  const response = await fetch(`${target.baseUrl}${path}`, {
-    ...init,
-    headers: { ...target.headers, 'content-type': 'application/json' },
-  });
+  const response = await fetchDaemon(target, path, init);
 
   if (!response.ok) {
     if (response.status === 403) {
-      // 403 の本文を見ずに固定の文言を出さない: 理由が複数あり、誤った案内になるため
-      const body = await response.json().catch(() => ({}));
-      const kind = forbiddenKindOf(body);
-      if (kind === 'not_granted') {
-        throw new Error(
-          describeAuthFailure(403, target) ??
-            'このアカウントには alteroid を使う許可がありません。',
-        );
-      }
       // `not_operator` と `unknown` は案内を出さずに止める: どの手順で直るか判別できないため
-      throw new Error(
+      const refused =
         'マネージャーへ降ろす環境変数へのアクセスが拒否されました（403）。' +
-          '理由を判別できなかったため、次にすべきことは案内しません。',
-      );
+        '理由を判別できなかったため、次にすべきことは案内しません。';
+      throw await forbiddenError(response, target, { notOperator: refused, unknown: refused });
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);

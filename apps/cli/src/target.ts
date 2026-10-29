@@ -106,6 +106,35 @@ export function forbiddenKindOf(body: unknown): ForbiddenKind {
   return 'unknown';
 }
 
+// 本文を見ずに固定の文言を出さない: 403 は持ち主でない・未 grant のどちらでも返り、直らない手順を勧めてしまうため
+// `unknown` の文言に解決策を書かない: 「器の中で実行しろ」と「access grant しろ」は正反対で、当てずっぽうだと半分は嘘になるため
+export async function forbiddenError(
+  response: Response,
+  target: Target,
+  messages: { notOperator: string; unknown: string },
+): Promise<Error> {
+  const kind = forbiddenKindOf(await response.json().catch(() => ({})));
+  if (kind === 'not_operator') return new Error(messages.notOperator);
+  if (kind === 'not_granted') {
+    return new Error(
+      describeAuthFailure(403, target) ?? 'このアカウントには alteroid を使う許可がありません。',
+    );
+  }
+  return new Error(messages.unknown);
+}
+
+// 本文の無い POST にも application/json を付ける: デーモンが要求する（ブラウザの単純リクエストで書き換えられないようにするため）
+export function fetchDaemon(
+  target: Target,
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  return fetch(`${target.baseUrl}${path}`, {
+    ...init,
+    headers: { ...target.headers, 'content-type': 'application/json' },
+  });
+}
+
 export function describeAuthFailure(status: number, target: Target): string | null {
   if (status === 401) {
     return target.remote

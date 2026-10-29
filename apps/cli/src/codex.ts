@@ -1,6 +1,6 @@
 import { stdout } from './terminal-out.js';
 
-import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { describeAuthFailure, fetchDaemon, resolveTarget, type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
 
@@ -147,10 +147,7 @@ export async function codexLogoutCommand(
 }
 
 async function request(target: Target, path: string, init: RequestInit = {}): Promise<unknown> {
-  const response = await fetch(`${target.baseUrl}${path}`, {
-    ...init,
-    headers: { ...target.headers, 'content-type': 'application/json' },
-  });
+  const response = await fetchDaemon(target, path, init);
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
