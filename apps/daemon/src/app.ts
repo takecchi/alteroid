@@ -576,7 +576,7 @@ function attachmentDisposition(name: string): string {
 }
 
 // トークンや資格そのものは入れない（識別子だけ）。
-function uploaderOf(principal: Principal): string {
+function principalRefOf(principal: Principal): string {
   if (principal.kind === 'operator') return 'operator';
   if (principal.kind === 'integration') return `integration:${principal.keyId}`;
   return `account:${principal.account.id}`;
@@ -1213,13 +1213,6 @@ function describeActor(principal: Principal): string {
     return `連携の鍵「${principal.name}」（${principal.keyId}）による操作`;
   }
   return `許可されたアカウント（${principal.account.id}）による操作`;
-}
-
-// 鍵の値は含めない（識別子だけ）。
-function installerOf(principal: Principal): string {
-  if (principal.kind === 'operator') return 'operator';
-  if (principal.kind === 'integration') return `integration:${principal.keyId}`;
-  return `account:${principal.account.id}`;
 }
 
 function describePluginSource(source: {
@@ -2011,7 +2004,7 @@ export function createApp(deps: AppDeps) {
       unbind: (ids) => stores.attachments.unbind(ids, { externalEventId: eventId }),
       isBoundElsewhere: (meta) => isAttachmentBound(meta),
       conflictMessage: 'すでに別の宛先に結び付いた添付は使えない',
-      onlyUploadedBy: principal.kind === 'integration' ? uploaderOf(principal) : undefined,
+      onlyUploadedBy: principal.kind === 'integration' ? principalRefOf(principal) : undefined,
       serializeKey: `externalEvent:${eventId}`,
     });
   }
@@ -2608,7 +2601,7 @@ export function createApp(deps: AppDeps) {
             mediaType: type,
             body,
             ...(keep === true ? { kept: true } : {}),
-            uploadedBy: uploaderOf(c.get('principal')),
+            uploadedBy: principalRefOf(c.get('principal')),
           });
           if (principal.kind === 'integration') {
             // 応答を待たせない: 知らせは上げた結果を変えず、使用量の集計の時間を鍵の呼び手へ負わせないため
@@ -3838,7 +3831,7 @@ export function createApp(deps: AppDeps) {
                     clone.forgetConversation?.(conversationId),
                 }),
           },
-          { conversationId: id, deletedBy: uploaderOf(c.get('principal')) },
+          { conversationId: id, deletedBy: principalRefOf(c.get('principal')) },
         );
         if (!result.deleted) {
           return c.json(
@@ -9718,7 +9711,7 @@ export function createApp(deps: AppDeps) {
           enableMcp,
           files: fetched.files,
           installedAt: new Date().toISOString(),
-          installedBy: installerOf(c.get('principal')),
+          installedBy: principalRefOf(c.get('principal')),
         };
         // 日誌より前に保存できる形かを確かめる: 保存できないものの「入れようとしている」を残さない。
         try {
