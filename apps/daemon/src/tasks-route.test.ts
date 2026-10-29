@@ -41,6 +41,74 @@ const task = (id: string, overrides: Partial<Task> = {}): Task => ({
   ...overrides,
 });
 
+describe('GET /tasks/migration-plan（台帳→task の移行の dry-run。書かない）', () => {
+  it('計画と集計を返し、台帳・task・日誌は1行も変わらない。本文は載せない', async () => {
+    const { stores, get } = setup();
+    await stores.commitments.open({
+      id: 'h2',
+      at: '2026-10-02T00:00:00.000Z',
+      origin: 'human',
+      body: '二つ目\n秘密の本文',
+    });
+    await stores.commitments.open({
+      id: 'h1',
+      at: '2026-10-01T00:00:00.000Z',
+      origin: 'human',
+      body: '一つ目\n詳細',
+    });
+    await stores.commitments.open({
+      id: 'm1',
+      at: '2026-10-01T01:00:00.000Z',
+      origin: 'manager',
+      body: 'マネージャーの本文',
+    });
+    await stores.commitments.open({
+      id: 'hc',
+      at: '2026-09-01T00:00:00.000Z',
+      origin: 'human',
+      body: '済み',
+    });
+    await stores.commitments.close('hc', '2026-09-02T00:00:00.000Z', '済んだ', 'human');
+    const before = JSON.stringify({
+      c: await stores.commitments.list({ includeClosed: true }),
+      t: await stores.tasks.list({ includeClosed: true }),
+      j: await stores.journal.list(),
+    });
+
+    const response = await get('/tasks/migration-plan');
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    const body = JSON.parse(text) as {
+      dryRun: boolean;
+      summary: { toTask: number; retire: number; skipClosed: number; oldestAt: string };
+      items: { id: string; action: string; title?: string }[];
+    };
+    expect(body.dryRun).toBe(true);
+    expect(body.items.map((item) => `${item.action}:${item.id}`)).toEqual([
+      'skip-closed:hc',
+      'task:h1',
+      'retire:m1',
+      'task:h2',
+    ]);
+    expect(body.items[1]?.title).toBe('一つ目');
+    expect(body.summary).toMatchObject({
+      toTask: 2,
+      retire: 1,
+      skipClosed: 1,
+      oldestAt: '2026-10-01T00:00:00.000Z',
+    });
+    expect(text).not.toContain('秘密の本文');
+    expect(text).not.toContain('execution');
+
+    const after = JSON.stringify({
+      c: await stores.commitments.list({ includeClosed: true }),
+      t: await stores.tasks.list({ includeClosed: true }),
+      j: await stores.journal.list(),
+    });
+    expect(after).toBe(before);
+  });
+});
+
 describe('GET /tasks（読むだけの口）', () => {
   it('開いている行を並び順で返し、閉じた行は includeClosed=true のときだけ後ろに足す', async () => {
     const { stores, get } = setup();
@@ -72,6 +140,18 @@ describe('GET /tasks（読むだけの口）', () => {
   it('includeClosed の不正な値は 400', async () => {
     const { get } = setup();
     expect((await get('/tasks?includeClosed=yes')).status).toBe(400);
+  });
+
+  it('書く口は HTTP に無い（P2 は読むだけ）。移行の計画の口にも書く動詞は無い', async () => {
+    const { app } = setup();
+    for (const method of ['POST', 'PATCH', 'PUT', 'DELETE']) {
+      const response = await app.request('/tasks/migration-plan', {
+        method,
+        headers: { authorization: 'Bearer test-token', 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(response.status, method).toBe(404);
+    }
   });
 
   it('書く口は HTTP に無い（P2 は読むだけ）', async () => {

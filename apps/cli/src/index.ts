@@ -90,7 +90,7 @@ import {
   tokenRemoveUnreadableCommand,
 } from './token.js';
 import { progressCommand } from './progress.js';
-import { tasksCommand } from './tasks.js';
+import { tasksCommand, tasksMigrateCommand } from './tasks.js';
 import type { AttachmentsListOptions } from './attachments.js';
 import { HELP_EXAMPLES } from './help-examples.js';
 import { describeCliVersion } from './version.js';
@@ -394,13 +394,22 @@ program
     await progressCommand(options);
   });
 
-program
+const tasksProgram = program
   .command('tasks')
   .addHelpText('after', HELP_EXAMPLES.tasks)
   .description('task（順序と状態を持つ待ち行列）を、並び順に見る（読むだけ）')
   .option('--all', '閉じた task（done / cancelled）も後ろに足す')
   .action(async (options: { all?: boolean }) => {
     await tasksCommand(options);
+  });
+
+tasksProgram
+  .command('migrate')
+  .addHelpText('after', HELP_EXAMPLES.tasksMigrate)
+  .description('引き受けた仕事の台帳を task へ移す計画を見る（今は --dry-run だけ。何も書かない）')
+  .option('--dry-run', '計画と内訳だけを出す（必須。実行の口はまだ無い）')
+  .action(async (options: { dryRun?: boolean }) => {
+    await tasksMigrateCommand(options);
   });
 
 const inboxCommand = program

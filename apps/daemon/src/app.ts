@@ -50,6 +50,7 @@ import {
   MCP_SERVER_NAME,
   composedFingerprints,
   composeProfileScript,
+  migrateCommitmentsToTasks,
   createPluginPreviewStore,
   describeAttachmentAlreadyGoneRetraction,
   describeAttachmentForJournal,
@@ -304,6 +305,7 @@ import {
   commitmentCloseManyStoppedResponseSchema,
   commitmentListResponseSchema,
   taskListResponseSchema,
+  taskMigrationPlanResponseSchema,
   progressResponseSchema,
   commitmentOpenedResponseSchema,
   conversationDetailResponseSchema,
@@ -6838,6 +6840,35 @@ export function createApp(deps: AppDeps) {
           includeClosed === 'true' ? { includeClosed: true } : undefined,
         );
         return c.json(taskListResponseSchema.parse({ entries, unreadable }));
+      },
+    )
+
+    // 台帳→Task の移行の計画（#5469 P7a）。dryRun 固定で**何も書かない**: 実行の口は HTTP にも CLI にも出さない（P7 本体が配線する）。
+    // `/tasks/:id` が無いので `/tasks` と衝突しない（将来 `:id` を足すときはこの固定のパスを先に置くこと）。
+    .get(
+      '/tasks/migration-plan',
+      describeRoute({
+        tags: ['tasks'],
+        summary: '台帳→task の移行の計画（dry-run。何も書かない）',
+        description:
+          '開いている台帳の行のうち `origin: human` を古い順の `queued` の task にする計画と集計を返す。' +
+          '`items[].action` は `task`（task を作って台帳を閉じる）・`close-only`（同じ id の task が既に在る。台帳を閉じるだけ）・' +
+          '`retire`（human 以外。task にせず台帳を閉じる）・`skip-closed`（閉じた行。移さない）。' +
+          '`summary.oldestAt` / `newestAt` は `task` の行の最古/最新。本文は載せない（`task` の行はタイトルだけ）。' +
+          '`unreadableCommitments` は読めない台帳の行で、id だけを返し触らない。`unreadableTaskCollisions` は、開いている human 行と同じ id の読めない task の行。',
+        responses: {
+          200: {
+            description: '移行の計画。',
+            content: { 'application/json': { schema: resolver(taskMigrationPlanResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const report = await migrateCommitmentsToTasks(stores, {
+          dryRun: true,
+          now: new Date().toISOString(),
+        });
+        return c.json(taskMigrationPlanResponseSchema.parse(report));
       },
     )
 
