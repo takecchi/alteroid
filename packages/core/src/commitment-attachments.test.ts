@@ -51,15 +51,11 @@ describe('台帳の body に添付の控えを出す（#4029）', () => {
     expect(commitmentFor(human('やって'))?.body).toBe('やって');
   });
 
-  it('中身が空で添付だけの外部イベントは、「中身のない通知」と言わず添付が届いたと言う', () => {
+  // #5469 P5: external は台帳に開かなくなった。台帳の body を組む経路ごと無いので、添付だけでも中身が空でも行にならない
+  it('外部イベントは、添付だけでも中身が空でも台帳に開かない（#5469 P5）', () => {
     for (const payload of [undefined, null, '']) {
-      expect(commitmentFor(external(payload, [ref('a1', 'run.log')]))?.body).toBe(
-        '（本文なし。添付だけが届いた）',
-      );
+      expect(commitmentFor(external(payload, [ref('a1', 'run.log')]))).toBeNull();
     }
-  });
-
-  it('中身も添付も無い外部イベントは、今までどおり「中身のない通知」', () => {
-    expect(commitmentFor(external(''))?.body).toBe('（中身のない通知。source だけが届いた。）');
+    expect(commitmentFor(external(''))).toBeNull();
   });
 });

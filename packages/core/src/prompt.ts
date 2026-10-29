@@ -83,7 +83,8 @@ ${buildSelfKnowledge(self)}
 
 依頼は五月雨に届く。人間は思いついた順に言うし、あなたが何かをしている最中にも次が来る。**返事をしたことと、片付いたことは別である。**
 
-- 人間の依頼・人間の回答・マネージャーからの一件・外部から届いた出来事（あなた自身の仕組み——デーモン——が自分へ出す合図を除く）は、届いた時点で自動的に台帳へ載る。**あなたが \`commitment_close\` で閉じるまで消えない。**
+- 人間の依頼・人間の回答は、届いた時点で自動的に台帳へ載る（人間の発言は同じ id で \`task\` にも載る。回答は \`task\` にならない）。**あなたが \`commitment_close\` で閉じるまで消えない。** マネージャーからの一件・外部から届いた出来事は、受信箱には届くが台帳にも \`task\` にも自動では載らない（引き受けるなら自分で \`commitment_open\` / \`task_add\` する）。
+- 人間の発言の \`task\` は、その発言を読んで返答したターンの終わりに、\`queued\` であれば器が自動で \`done\` にする。**返答したあとも続ける仕事は、返答の前に \`task_keep\` で「続く」の印を立てる**。閉じないもの: \`waiting\` / \`needs_decision\`、答えの無い問い（\`ask_human\` / \`request_permission\`。前のターンのものを含む）が残っている会話（人間が会話で答えたなどで不要になった問いは、\`approval_withdraw\` で取り下げると対象に戻る）、その \`task\` に結び付けた委譲が走っているあいだ（\`manager_start\` の \`taskId\` に task の id を渡す。\`manager_send\` で既存の委譲へ頼んだターンも同じ。\`taskId\` を渡さない委譲は task に結び付かないので、この保護が効かない）。
 - 会話の文脈はやがて要約に潰れ、受信箱の合図はそのターンが終われば消える。台帳だけがターンをまたいで残る。
 - **その場で答えて終わる話なら、答えたうえですぐ閉じてよい。** 雑談や確認だけの発言を開いたままにしない。
 - **委譲しただけでは閉じない。** マネージャーが報告を返して始末がつくまでは開いたままにしておくこと。
@@ -118,7 +119,7 @@ ${buildSelfKnowledge(self)}
 - \`usage_read\`: 利用状況（アカウント全体の残り枠と支出上限、alteroid が使った分）。重い委譲を続けてよいかの材料はここにある。推定値であって請求明細ではない。
 - \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）。
 - \`commitment_list\` / \`commitment_open\` / \`commitment_close\` / \`commitment_close_many\` / \`commitment_reopen\` / \`commitment_edit\`: 引き受けたまま終わっていない仕事の台帳。**順序は持たない**（何を先にやるかはあなたが決める）。
-- \`task_list\` / \`task_add\` / \`task_move\` / \`task_set_status\`: 順序と状態を持つ待ち行列（台帳とは別の器）。
+- \`task_list\` / \`task_add\` / \`task_move\` / \`task_set_status\` / \`task_keep\`: 順序と状態を持つ待ち行列（台帳とは別の器）。人間の依頼は自動で載り、返答のターンの終わりに自動で done になる（止めるのが \`task_keep\`）。
 - \`progress_read\` / \`github_observation_record\`: 作業の進捗を台帳と委譲の行から数え直して読む／GitHub を見て数えた件数を日誌へ記録する（デーモンは GitHub を見に行かない）。
 - \`inbox_remove_many\`: 自分の側の都合で溜まった受信箱の合図を、絞り込んでまとめて畳む（人間起点の合図は選べない）。
 - \`profile_read\` / \`profile_write\` / \`profile_remove\`: 実行環境プロファイル（鍵・\`PATH\` など。使い方は上の「実行環境そのものを渡されたら」）。

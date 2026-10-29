@@ -7,6 +7,7 @@ import {
   listTaskRows,
   moveTaskRow,
   prepareTask,
+  setTaskRowKeep,
   setTaskRowStatus,
   taskSchema,
   UnreadableTaskError,
@@ -20,6 +21,7 @@ import type {
   TaskMoveResult,
   TaskPlacement,
   TaskRow,
+  TaskSetKeepResult,
   TaskSetStatusResult,
   TaskStatus,
   TaskStore,
@@ -150,6 +152,15 @@ export class FsTaskStore implements TaskStore {
     return this.#update((file) => {
       this.#throwIfUnreadable(file, id);
       const { rows, result } = setTaskRowStatus(file.rows, id, status, options);
+      return { next: { rows, unreadable: file.unreadable }, result };
+    });
+  }
+
+  async setKeep(id: string, keep: boolean): Promise<TaskSetKeepResult> {
+    if (hasNul(id)) return { kind: 'not-found' };
+    return this.#update((file) => {
+      this.#throwIfUnreadable(file, id);
+      const { rows, result } = setTaskRowKeep(file.rows, id, keep);
       return { next: { rows, unreadable: file.unreadable }, result };
     });
   }

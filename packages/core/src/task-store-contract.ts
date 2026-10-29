@@ -190,6 +190,28 @@ export async function verifyTaskStoreContract(
   const afterCancelled = await store.get('s2');
   if (afterCancelled?.status !== 'cancelled') fail('cancelled の行が読めない');
 
+  // 「続く」の印（keep）: 立てる・外すは状態・並び・updatedAt を動かさず、同じ印は unchanged。閉じた件にも立てられる（#5469 P5）
+  const beforeKeep = await store.get('x1');
+  const orderBeforeKeep = await ids();
+  const kept = await store.setKeep('x1', true);
+  if (kept.kind !== 'changed' || kept.task.keep !== true) fail(`keep を立てられない: ${kept.kind}`);
+  if ((await store.get('x1'))?.keep !== true) fail('立てた keep が読み戻せない');
+  if ((await store.get('x1'))?.updatedAt !== beforeKeep?.updatedAt)
+    fail('keep が updatedAt を動かした');
+  if ((await ids()) !== orderBeforeKeep) fail('keep が並びを動かした');
+  if ((await store.setKeep('x1', true)).kind !== 'unchanged')
+    fail('立っている keep への keep=true が unchanged にならない');
+  const unkept = await store.setKeep('x1', false);
+  if (unkept.kind !== 'changed' || 'keep' in unkept.task) fail('keep を外すと欄ごと消えない');
+  if ((await store.setKeep('x1', false)).kind !== 'unchanged')
+    fail('立っていない keep への keep=false が unchanged にならない');
+  if ((await store.setKeep('nope', true)).kind !== 'not-found')
+    fail('無い id の setKeep が not-found にならない');
+  if ((await store.setKeep('nu\u0000ll', true)).kind !== 'not-found')
+    fail('NUL を含む id の setKeep が not-found にならない');
+  if ((await store.setKeep('s2', true)).kind !== 'changed') fail('閉じた件に keep を立てられない');
+  await store.setKeep('s2', false);
+
   // 隙間が尽きても順序が守られる（同じアンカーの直後へ何度も割り込む）
   await addOk(make('g-left', 'self'), { kind: 'back' });
   await addOk(make('g-right', 'self'), { kind: 'back' });
@@ -234,6 +256,7 @@ export async function verifyTaskStoreContract(
       ['get', () => store.get('broken-1')],
       ['move', () => store.move('broken-1', { kind: 'front' })],
       ['setStatus', () => setStatus('broken-1', 'done', 'r')],
+      ['setKeep', () => store.setKeep('broken-1', true)],
     ] as const) {
       let thrown: unknown;
       try {

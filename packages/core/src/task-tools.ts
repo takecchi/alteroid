@@ -59,11 +59,24 @@ export function describeTaskPlacement(placement: TaskPlacement | undefined): str
   return `${placement.anchorId} の${placement.kind === 'before' ? '直前' : '直後'}`;
 }
 
-export function taskStatusLine(task: Pick<Task, 'status' | 'closedAt'>): string {
+export function taskStatusLine(task: Pick<Task, 'status' | 'closedAt' | 'keep'>): string {
   const label = TASK_STATUS_LABEL[task.status];
-  return task.closedAt === undefined
-    ? `状態: ${task.status}（${label}）`
-    : `状態: ${task.status}（${label}）/ ${task.closedAt} に閉じた`;
+  const state =
+    task.closedAt === undefined
+      ? `状態: ${task.status}（${label}）`
+      : `状態: ${task.status}（${label}）/ ${task.closedAt} に閉じた`;
+  return task.keep === true ? `${state} / 続く（返答しても自動で閉じない）` : state;
+}
+
+/** 「続く」の印を変えた日誌の行。 */
+export function taskKeepChangeEntry(taskId: string, task: Task, keep: boolean): JournalEntryInput {
+  return {
+    type: 'decision',
+    decision: `task の「続く」の印を${keep ? '立てた' : '外した'}（${taskId}: ${task.title}）`,
+    grounds: keep
+      ? '自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）'
+      : '自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の conversation_post と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）',
+  };
 }
 
 // task の並びは行の欄ではなくストアが持つ位置（rank）で、rank は読む側に出ない。続きの錨は「最後に出した件の id」にする:

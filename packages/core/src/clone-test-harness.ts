@@ -474,7 +474,11 @@ export type ScriptedStep =
 
 export function fakeScriptedSdk(
   script: (turnIndex: number, input: string) => ScriptedStep[],
-  options: { resultSubtype?: string } = {},
+  options: {
+    resultSubtype?: string;
+    /** ターンごとに結果を変える（枠に当たる回だけ失敗させる、など）。返さなければ `resultSubtype` に従う。 */
+    resultFor?: (turnIndex: number) => { subtype: string; text: string } | undefined;
+  } = {},
 ) {
   const settled: Promise<unknown>[] = [];
   const fn = ((params: { prompt: unknown }) => {
@@ -543,10 +547,11 @@ export function fakeScriptedSdk(
             settled.push(step.start());
           }
         }
+        const forTurn = options.resultFor?.(idx);
         yield {
           type: 'result',
-          subtype: options.resultSubtype ?? 'success',
-          result: '',
+          subtype: forTurn?.subtype ?? options.resultSubtype ?? 'success',
+          result: forTurn?.text ?? '',
           session_id: 'sess-scripted',
           uuid: 'uuid-result',
         } as unknown as SDKMessage;

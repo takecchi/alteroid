@@ -53,8 +53,9 @@ function fingerprint(tool: { description: string; inputSchema: unknown }): strin
 // supersedes を足した版（#4861）: provider 引数を持たないことは変えていない
 // request の説明に「1文字以上。空白だけは断る」を足した版（#5076）: 引数の並びと provider 引数を持たないことは変えていない。
 // taskId を足した版（#5469 P3）: 引数の並びの末尾に足しただけで、provider 引数を持たないことは変えていない。
-// 前の値は e11f6f88f9b2b2e29a9e826402ec79796f28866c3592450a6276a1734bb24286
-const BASELINE = '45404ad261f30d4974ae8cba692fbee201603704d624f79eacad359543865427';
+// taskId の説明に「渡さないと返答で自動 done になる」を足した版（#5469 P5）: 説明文だけの変更で、provider 引数を持たないことは変えていない。
+// 前の値は 45404ad261f30d4974ae8cba692fbee201603704d624f79eacad359543865427
+const BASELINE = 'c3c72f675a5704f301510d99570121026756216aaa02f1c80da18ff1253d30e9';
 
 describe('manager_start の provider 引数（撤去済み）', () => {
   it('provider 引数を持たず、スキーマと説明文は PEERS が閉じていたときと同一', () => {

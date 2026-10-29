@@ -237,32 +237,12 @@ function managerReportEvent(
   return { type: 'manager_message', id, at, managerId, kind: 'report', text };
 }
 
-describe('commitmentFor と countSupersedingReports の接頭辞の一致（issue #872）', () => {
-  it('commitmentFor が組んだ report 行を countSupersedingReports が superseded として数える', () => {
-    const commitment = commitmentFor(managerReportEvent('r1', '2026-09-09T12:00:00Z'));
-    expect(commitment).not.toBeNull();
-
-    const decision = countSupersedingReports({
-      list: list([commitment as Commitment]),
-      managerId: MANAGER,
-      afterAts: AFTER_ATS,
-      excludeIds: new Set(),
-    });
-
-    const message = [
-      'この歯は commitmentFor（clone.ts）が組む body の接頭辞と、',
-      'countSupersedingReports（superseded.ts）が読む接頭辞が一致していることを守っている。',
-      '他のテストは全部 [report] 接頭辞を手で書き写したフィクスチャを使っており、',
-      'commitmentFor の接頭辞の組み立てが変わってもそちらは赤くならない。',
-      '',
-      `実測: decision = ${JSON.stringify(decision)}`,
-      '',
-      'この歯が赤いなら、commitmentFor と countSupersedingReports の接頭辞が食い違った。',
-    ].join('\n');
-    expect(decision.kind, message).toBe('superseded');
-    if (decision.kind !== 'superseded') throw new Error('unreachable');
-    expect(decision.reports, message).toBe(1);
-    expect(decision.latestAt, message).toBe('2026-09-09T12:00:00Z');
+// #5469 P5: manager_message は台帳に開かなくなり、commitmentFor が [report] 接頭辞の body を組む経路が無くなった。
+// 「commitmentFor が組む接頭辞と countSupersedingReports が読む接頭辞の一致」を測る相手が消えたので、元の歯は外し、
+// 新しい行が増えないことだけをここで測る。countSupersedingReports 自体（既に台帳に残っている古い行を数える）の歯は、上の手書きフィクスチャの試験群が持つ
+describe('manager_message は台帳の行にならない（#5469 P5。issue #872 の接頭辞一致の歯の置き換え）', () => {
+  it('commitmentFor は report を行にしない（もう接頭辞を組む側が無い）', () => {
+    expect(commitmentFor(managerReportEvent('r1', '2026-09-09T12:00:00Z'))).toBeNull();
   });
 });
 

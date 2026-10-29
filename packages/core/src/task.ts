@@ -254,6 +254,35 @@ export function moveTaskRow(
   };
 }
 
+export type TaskSetKeepResult =
+  | { readonly kind: 'changed'; readonly task: Task }
+  /** 既にその印の状態だった。何も書かない。 */
+  | { readonly kind: 'unchanged'; readonly task: Task }
+  | { readonly kind: 'not-found' };
+
+/**
+ * 「続く」の印（`keep`）を立てる／外す。状態・並び・`updatedAt` は動かさない（`updatedAt` は状態と閉じた記録の更新の時刻）。
+ * 閉じた件にも立てられる（開き直したときに効く）。外すときは欄ごと消す（`keep: false` は持たない。型が `true` だけのため）。
+ */
+export function setTaskRowKeep(
+  rows: readonly TaskRow[],
+  id: string,
+  keep: boolean,
+): { rows: TaskRow[]; result: TaskSetKeepResult } {
+  const target = rows.find((row) => row.task.id === id);
+  if (target === undefined) return { rows: [...rows], result: { kind: 'not-found' } };
+  if ((target.task.keep === true) === keep) {
+    return { rows: [...rows], result: { kind: 'unchanged', task: target.task } };
+  }
+  const next: Task = { ...target.task };
+  if (keep) next.keep = true;
+  else delete next.keep;
+  return {
+    rows: rows.map((row) => (row === target ? { rank: row.rank, task: next } : row)),
+    result: { kind: 'changed', task: next },
+  };
+}
+
 export interface SetTaskStatusOptions {
   /** 閉じる理由。done / cancelled のときだけ行に残す。 */
   readonly reason?: string;
