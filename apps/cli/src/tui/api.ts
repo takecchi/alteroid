@@ -26,6 +26,7 @@ import {
   type ConversationApprovalsRead,
 } from '../conversation-approvals.js';
 import { describeFailedResponse } from '../format.js';
+import { requestInterruptOutcome } from '../interrupt.js';
 import type { MemorySummary } from '../memory.js';
 import { type Target } from '../target.js';
 import { redactError } from '../redact.js';
@@ -454,14 +455,8 @@ export function createTuiApi(target: Target): TuiApi {
       if (!response.ok) throw await failure('会話を終えられませんでした', response);
     },
 
-    async interrupt(turn) {
-      const response = await (turn === undefined
-        ? client.clone.interrupt.$post()
-        : client.clone.interrupt.$post({
-            json: { conversationId: turn.conversationId, clientMessageId: turn.clientMessageId },
-          }));
-      if (!response.ok) throw await failure('クローンのターンを止められませんでした', response);
-      return (await response.json()).outcome;
+    interrupt(turn) {
+      return requestInterruptOutcome(client, target, turn);
     },
 
     async headerCounts() {

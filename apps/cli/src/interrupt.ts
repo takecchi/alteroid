@@ -29,7 +29,9 @@ export async function requestInterruptOutcome(
   // 対象を省くと種類を問わず走っているターンを止める（従来どおり）。対象が分からない経路だけが省く。
   const response = await (turn === undefined
     ? client.clone.interrupt.$post()
-    : client.clone.interrupt.$post({ json: turn } as never));
+    : client.clone.interrupt.$post({
+        json: { conversationId: turn.conversationId, clientMessageId: turn.clientMessageId },
+      }));
   if (!response.ok) {
     throw new Error(
       await describeFailedResponse(
