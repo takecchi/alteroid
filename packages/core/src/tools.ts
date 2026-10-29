@@ -532,6 +532,7 @@ export interface ToolContext {
   /**
    * `ask_human` / `request_permission` が人間への問いを積んだ（その問いの会話 id。無ければ `undefined`）。
    * そのターンでは、その会話の task を自動 done にしない（人間の答え待ちになるため。#5469 P5）。無い器は何もしない。
+   * 前のターンで出した未回答の問いは、器が閉じる直前に承認待ちの台帳（pendingOnly）から引くので、ここで控えるのは「このターンで出した問い」だけ（台帳に書けない回の保険を兼ねる）。
    */
   noteQuestionAsked?: (conversationId: string | undefined) => void;
   // 添付があるとき（`attachments`）だけ第3引数を渡す: 添付の無い従来の呼び出しの形を変えないため
@@ -4875,9 +4876,9 @@ export function createCloneTools(context: ToolContext) {
           },
           'act-completed',
         );
-        // 問いを積んだ時点で控える（日誌が書けなかった呼びは上で投げており、ここへ来ない）。ターンの自分の会話も控える: 回す確認の起点が別の会話でも、いまの会話の task を閉じない
+        // 問いを積んだ時点で控える（日誌が書けなかった呼びは上で投げており、ここへ来ない）。
+        // ターンの会話があれば conversationId はそれと同じ（上の連鎖の先頭）なので、1回だけ呼ぶ
         context.noteQuestionAsked?.(conversationId);
-        context.noteQuestionAsked?.(getConversationId());
         context.emit({ type: 'ask_human', approvalId: approval.id, question });
         return text(`承認待ちキューに積んだ（${approval.id}）。回答は後から届く。`);
       },
@@ -6210,7 +6211,7 @@ export function createCloneTools(context: ToolContext) {
         '各件はタイトルと本文の抜粋だけを出す。1件の全文（本文と、閉じたなら理由）が要るなら id を渡す。閉じた件も id で読める。',
         '既定は開いている件（queued / waiting / needs_decision）だけ。includeClosed で閉じた件（done / cancelled）を後ろに足す。',
         '引き受けた仕事の台帳（commitment_list）とは別の器。人間の発言は、台帳の行と同じ id で届いた時点で自動的に載る（queued）。人間の承認への回答・マネージャーの報告・外部イベントは自動では載らない。',
-        '人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（閉じたものは includeClosed で読み返せる。止めるなら task_keep）。ただし、そのターンで人間へ問いを出した（ask_human）会話の task、結び付いた委譲（manager_start の taskId）が走っている（running / waiting_human）task は閉じない。',
+        '人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（閉じたものは includeClosed で読み返せる。止めるなら task_keep）。ただし、答えの無い問い（ask_human・request_permission。前のターンのものを含む）が残っている会話の task（不要になった問いは approval_withdraw で取り下げると対象に戻る）、結び付いた委譲（manager_start の taskId）が走っている（running / waiting_human）task は閉じない。',
         '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
       {
@@ -6666,7 +6667,7 @@ export function createCloneTools(context: ToolContext) {
         '人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（理由と閉じた主体 daemon が残り、日誌にも書かれる）。',
         '返答したあとも続ける仕事（返答は途中経過で、まだ終わっていない）は、返答する前にこの印を立てておくと、自動では閉じない。',
         '印は状態・並びを動かさない。印を立てた task を終えるときは task_set_status で done にすること。',
-        '自動 done が閉じない場合はほかにもある: waiting / needs_decision（待ち・判断待ち）、そのターンで同じ会話へ問い（ask_human）を出したとき、その task に結び付いた委譲（manager_start の taskId。Job.taskId）が走っている（running / waiting_human。前のターンで起こしたものを含む）か、このターンで manager_send で頼んだとき（委譲を起こすときは taskId を渡すこと。渡さない委譲は task に結び付かず、この判定に数えられない）、まだ読んでいない発言の task、起点の会話が無い task。',
+        '自動 done が閉じない場合はほかにもある: waiting / needs_decision（待ち・判断待ち）、その会話に答えの無い問い（ask_human・request_permission。前のターンのものを含む。不要になった問いは approval_withdraw で取り下げると対象に戻る）が残っているとき、その task に結び付いた委譲（manager_start の taskId。Job.taskId）が走っている（running / waiting_human。前のターンで起こしたものを含む）か、このターンで manager_send で頼んだとき（委譲を起こすときは taskId を渡すこと。渡さない委譲は task に結び付かず、この判定に数えられない）、まだ読んでいない発言の task、起点の会話が無い task。',
       ].join(' '),
       {
         taskId: z

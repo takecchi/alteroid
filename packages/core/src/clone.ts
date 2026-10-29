@@ -9051,10 +9051,9 @@ class Clone implements CloneHost {
       // 閉じる直前に測る。測れなければ閉じない（誤って閉じるより、閉じ損ねて次の返答の終わりで拾うほうが安全）
       const unreadSignalIds = new Set<string>(this.#delivery.unreadIds());
       for (const held of this.#delivery.findDeferred(() => true)) unreadSignalIds.add(held.id);
-      for (const pending of (await this.#stores.inbox.peekPending()).entries) {
-        unreadSignalIds.add(pending.event.id);
-      }
-      for (const row of (await this.#stores.inbox.peekPending()).unreadable) {
+      const pendingInbox = await this.#stores.inbox.peekPending();
+      for (const pending of pendingInbox.entries) unreadSignalIds.add(pending.event.id);
+      for (const row of pendingInbox.unreadable) {
         if (row.id !== undefined) unreadSignalIds.add(row.id);
       }
       // 答え待ちの問い（ask_human・request_permission で出して、まだ答えが無いもの）の会話。前のターンで出した問いを含む。

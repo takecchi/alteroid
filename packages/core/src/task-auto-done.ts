@@ -90,7 +90,7 @@ function isAddressedByReply(task: Task, via: TurnReplyVia, trace: TurnReplyTrace
  * - status が queued（waiting / needs_decision は、器が勝手に閉じない。外の返事待ち・判断待ちを返答で終わりにしない）
  * - 起点の会話があり、そこへこのターンが返答した。返答が宛てた発言の task だけ（`isAddressedByReply`）
  * - 「続く」の印（`keep`）が無い
- * - そのターンで、その会話へ問いを出していない（人間の答え待ち）
+ * - その会話に、答えの無い問い（`ask_human`・`request_permission`。前のターンのものを含む）が残っていない（人間の答え待ち。不要になった問いは `approval_withdraw` で取り下げると対象に戻る）
  * - その task に結び付く委譲が無い（`hasDelegationForTask`）
  * - ターンの始まりより前に届いている（返答の最中に届いた task は、返答の宛先になっていない）
  */
