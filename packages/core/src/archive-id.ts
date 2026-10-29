@@ -3,6 +3,22 @@ import { compareIsoInstant } from './iso-instant.js';
 const ARCHIVE_ID_STAMP_SUFFIX_RE =
   /-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)(?:-(\d+))?\.jsonl$/;
 
+// 非可逆: 文字の違う2つの sessionId が同じ名前になりうるので、元の sessionId は ID から復元せず脇の記録から読む
+// pg と fs で同じ置き換えにする: ID の形が器で違うと `archiveIdBranch` が片方の ID を読み違えるため
+export function sanitizeArchiveSessionId(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
+// 枝番を付ける前の土台: `matchArchiveIdStamp` が読めるスタンプの形（`:` と `.` を `-` にした ISO）と揃える
+export function archiveIdBase(sessionId: string, at: Date): string {
+  return `${sanitizeArchiveSessionId(sessionId)}-${at.toISOString().replace(/[:.]/g, '-')}`;
+}
+
+// 1本目は枝番無し、2本目以降を `-2`: `archiveIdBranch` が枝番無しを 1 と読む形に合わせるため
+export function archiveIdCandidate(base: string, attempt: number): string {
+  return attempt === 1 ? `${base}.jsonl` : `${base}-${attempt}.jsonl`;
+}
+
 export interface ArchiveIdStampMatch {
   readonly suffix: string;
   readonly stamp: string;

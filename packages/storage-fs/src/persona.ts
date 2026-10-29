@@ -8,11 +8,13 @@ import {
   ensureTrailingNewline,
   stripNul,
   memorySlugSchema,
+  memoryTitleOf,
   memoryVersionMatches,
   memoryProtectionRebuildDecision,
   nextDescribedState,
   resolveMemoryDescriptionFreshness,
   sha256Hex,
+  stripMemoryContent,
 } from '@alteroid/core';
 import type {
   JournalStore,
@@ -173,7 +175,7 @@ export class FsPersonaStore implements PersonaStore {
       const slug = name.slice(0, -'.md'.length);
       if (!memorySlugSchema.safeParse(slug).success) continue;
       const doc = await this.read(slug);
-      if (doc) metas.push(stripContent(doc));
+      if (doc) metas.push(stripMemoryContent(doc));
     }
     return metas;
   }
@@ -194,7 +196,7 @@ export class FsPersonaStore implements PersonaStore {
       });
       return {
         slug,
-        title: titleOf(content, slug),
+        title: memoryTitleOf(content, slug),
         updatedAt,
         createdAt: toMemoryCreatedAt(index[slug]?.createdAt),
         bytes: stats.size,
@@ -367,31 +369,8 @@ export class FsPersonaStore implements PersonaStore {
   }
 }
 
-function stripContent(doc: MemoryDocument): MemoryDocumentMeta {
-  return {
-    slug: doc.slug,
-    title: doc.title,
-    updatedAt: doc.updatedAt,
-    createdAt: doc.createdAt,
-    bytes: doc.bytes,
-    frontmatter: doc.frontmatter,
-    kind: doc.kind,
-    description: doc.description,
-    parent: doc.parent,
-    descriptionFreshness: doc.descriptionFreshness,
-  };
-}
-
 function toMemoryCreatedAt(at: string | undefined): MemoryCreatedAt {
   return at === undefined ? { kind: 'unknown' } : { kind: 'known', at };
-}
-
-function titleOf(content: string, fallback: string): string {
-  for (const line of content.split('\n')) {
-    const heading = /^#\s+(.+?)\s*$/.exec(line);
-    if (heading?.[1]) return heading[1];
-  }
-  return fallback;
 }
 
 function isNotFound(error: unknown): boolean {

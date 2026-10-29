@@ -3,10 +3,13 @@ import {
   deriveHumanTouchedAtFromJournal,
   deriveMemoryFrontmatter,
   ensureTrailingNewline,
+  memoryHeadingOf,
   memorySlugSchema,
   memoryProtectionRebuildDecision,
+  memoryTitleOf,
   nextDescribedState,
   sha256Hex,
+  stripMemoryContent,
 } from '@alteroid/core';
 import type {
   JournalStore,
@@ -82,7 +85,7 @@ export class PgPersonaStore implements PersonaStore {
         })
         .from(memory)
         .where(inArray(memory.slug, undecided));
-      for (const row of full) metas.set(row.slug, stripContent(toDocument(row)));
+      for (const row of full) metas.set(row.slug, stripMemoryContent(toDocument(row)));
     }
     // 1回目の並びを保つ。2回目までの間に消えた文書は落とす
     return rows.flatMap((row) => {
@@ -472,7 +475,7 @@ function decidedPrefix(head: string, complete: boolean): string | undefined {
   if (lastNewline < 0) return undefined;
   // 途中で切れた最後の行は使わない: 切れた行が見出しや区切りに見えると、全文と違う判定になるため
   const prefix = head.slice(0, lastNewline + 1);
-  if (headingOf(prefix) === undefined) return undefined;
+  if (memoryHeadingOf(prefix) === undefined) return undefined;
   const lines = prefix.split('\n');
   if (lines[0]?.trim() === FRONTMATTER_DELIMITER) {
     const closed = lines.some((line, index) => index > 0 && line.trim() === FRONTMATTER_DELIMITER);
@@ -500,7 +503,7 @@ function metaOf(
   });
   return {
     slug: row.slug,
-    title: titleOf(content, row.slug),
+    title: memoryTitleOf(content, row.slug),
     updatedAt,
     createdAt: toMemoryCreatedAt(row.createdAt),
     bytes: currentBytes,
@@ -532,31 +535,4 @@ function toDocument(row: MemoryRow): MemoryDocument {
 
 function toMemoryCreatedAt(at: Date | string | null): MemoryCreatedAt {
   return at === null ? { kind: 'unknown' } : { kind: 'known', at: toIso(at) };
-}
-
-function stripContent(doc: MemoryDocument): MemoryDocumentMeta {
-  return {
-    slug: doc.slug,
-    title: doc.title,
-    updatedAt: doc.updatedAt,
-    createdAt: doc.createdAt,
-    bytes: doc.bytes,
-    frontmatter: doc.frontmatter,
-    kind: doc.kind,
-    description: doc.description,
-    parent: doc.parent,
-    descriptionFreshness: doc.descriptionFreshness,
-  };
-}
-
-function titleOf(content: string, fallback: string): string {
-  return headingOf(content) ?? fallback;
-}
-
-function headingOf(content: string): string | undefined {
-  for (const line of content.split('\n')) {
-    const heading = /^#\s+(.+?)\s*$/.exec(line);
-    if (heading?.[1]) return heading[1];
-  }
-  return undefined;
 }

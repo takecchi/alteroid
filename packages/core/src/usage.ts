@@ -45,6 +45,7 @@ export {
   describeWebSearchRequests,
   findUnrecordedManagers,
   formatUsd,
+  isBeforeUsageStart,
   isDelegationActorId,
   sumUsageRows,
   summarizeUsage,

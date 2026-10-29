@@ -13,7 +13,7 @@ import {
   resetRowsOfBaselines,
   usageAggregateSchema,
   usageBaselineSchema,
-  usageDate,
+  isBeforeUsageStart,
   usageLayerSchema,
   usageRowSchema,
   usageSiteSchema,
@@ -266,30 +266,6 @@ function addTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
   };
 }
 
-function isBeforeLedger(since: string | null, from: string | undefined): boolean {
-  if (since === null) return true;
-  if (from === undefined) return true;
-  return from < usageDate(new Date(since));
-}
-
-function isBeforeLayers(layeredAt: string | null, from: string | undefined): boolean {
-  if (layeredAt === null) return true;
-  if (from === undefined) return true;
-  return from < usageDate(new Date(layeredAt));
-}
-
-function isBeforeTokens(tokensAt: string | null, from: string | undefined): boolean {
-  if (tokensAt === null) return true;
-  if (from === undefined) return true;
-  return from < usageDate(new Date(tokensAt));
-}
-
-function isBeforeTurns(turnsAt: string | null, from: string | undefined): boolean {
-  if (turnsAt === null) return true;
-  if (from === undefined) return true;
-  return from < usageDate(new Date(turnsAt));
-}
-
 export class FsUsageStore implements UsageStore {
   readonly #dir: string;
   readonly #path: string;
@@ -511,12 +487,12 @@ export class FsUsageStore implements UsageStore {
       since: file.startedAt,
       layersSince: file.layeredAt,
       tokensSince: file.tokensAt,
-      beforeLedger: isBeforeLedger(file.startedAt, query.from),
-      beforeLayers: isBeforeLayers(file.layeredAt, query.from),
-      beforeTokens: isBeforeTokens(file.tokensAt, query.from),
+      beforeLedger: isBeforeUsageStart(file.startedAt, query.from),
+      beforeLayers: isBeforeUsageStart(file.layeredAt, query.from),
+      beforeTokens: isBeforeUsageStart(file.tokensAt, query.from),
       turnRows,
       turnsSince: file.turnsAt,
-      beforeTurns: isBeforeTurns(file.turnsAt, query.from),
+      beforeTurns: isBeforeUsageStart(file.turnsAt, query.from),
       notice: USAGE_ESTIMATE_NOTICE,
     });
   }

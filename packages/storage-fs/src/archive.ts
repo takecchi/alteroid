@@ -3,7 +3,9 @@ import { dirname, join, resolve } from 'node:path';
 
 import {
   MAX_UTF8_BYTES_PER_CODE_POINT,
+  archiveIdBase,
   archiveIdBranch,
+  archiveIdCandidate,
   assertArchivableSessionId,
   hasNul,
   stripNul,
@@ -12,6 +14,7 @@ import {
   createUnreadableRowOnce,
   fingerprintArchiveBody,
   matchArchiveIdStamp,
+  sanitizeArchiveSessionId,
   tailByCodePoints,
   tallyArchiveContinuity,
   type ArchiveContinuity,
@@ -31,12 +34,8 @@ import { withPathLock } from './file-lock.js';
 // 上限を超えたら黙って上書きへ落ちず投げる: 「捨てた」ことが観測できない形を作らないため
 const MAX_ARCHIVE_ID_ATTEMPTS = 1000;
 
-function archiveIdCandidate(base: string, attempt: number): string {
-  return attempt === 1 ? `${base}.jsonl` : `${base}-${attempt}.jsonl`;
-}
-
 // `remove()` は本体を消さず空へ切り詰め、印ファイル（`<id>.removed`）の有無だけで判定する: 空の生ログは正当にありえ、空文字を「消された」の根拠にできないため
-// `sessionId` / `at` は脇の `<id>.meta.json` から読む: `sanitize()` は非可逆で、ファイル名からは pg 版と同じ生の値を復元できないため
+// `sessionId` / `at` は脇の `<id>.meta.json` から読む: `sanitizeArchiveSessionId()` は非可逆で、ファイル名からは pg 版と同じ生の値を復元できないため
 export class FsTranscriptArchive implements TranscriptArchive {
   readonly #dir: string;
   // 壊れた sidecar の知らせは1本につき1回に絞る: 絞ると、同じ行が呼び出しの回数だけ stderr に積もり、他の合図を埋めるため
@@ -57,8 +56,7 @@ export class FsTranscriptArchive implements TranscriptArchive {
       const previous = await this.#findPreviousArchiveForSession(sessionId);
       const fingerprint = fingerprintArchiveBody(transcript);
       const { continuity, comparedTo } = classifyArchiveContinuity(previous, transcript);
-      const stamp = at.toISOString().replace(/[:.]/g, '-');
-      const base = `${sanitize(sessionId)}-${stamp}`;
+      const base = archiveIdBase(sessionId, at);
       // 指紋と連続性は生の本文で取る: pg と同じにするため
       const name = await this.#writeBodyExclusively(base, stripNul(transcript));
       await this.#writeMeta(name, {
@@ -74,7 +72,7 @@ export class FsTranscriptArchive implements TranscriptArchive {
 
   // `.jsonl` / `.meta.json` / `.removed` と拡張子を被らせない: `#listIds()` や `#readMeta` 系に紛れ込むため
   #sessionLockPath(sessionId: string): string {
-    return join(this.#dir, `${sanitize(sessionId)}.session-lock`);
+    return join(this.#dir, `${sanitizeArchiveSessionId(sessionId)}.session-lock`);
   }
 
   async #writeBodyExclusively(base: string, transcript: string): Promise<string> {
@@ -395,11 +393,7 @@ function fallbackMeta(id: string): ArchiveMeta {
   return { sessionId, at };
 }
 
-function sanitize(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]/g, '_');
-}
-
-// `sanitize()` の文字クラスで境界を判定しない: `'.'` / `'..'` が素通りするため
+// `sanitizeArchiveSessionId()` の文字クラスで境界を判定しない: `'.'` / `'..'` が素通りするため
 // 「配下」ではなく「直下」を比べる: 配下を通すと `'<既存の名前>/x'` が境界を通り、`readFile()` が `ENOTDIR` を投げて 404 のはずが 500 になるため
 function isWithinArchiveDir(dir: string, id: string): boolean {
   let resolvedPath: string;

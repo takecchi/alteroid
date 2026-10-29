@@ -586,11 +586,15 @@ export {
 } from './archive-continuity.js';
 /** 同じミリ秒に積んだ行の tie-break に `id` の字面順を使わない: PostgreSQL の collation に依存し、3本以上積むと1本目を直前だと誤認する。 */
 export {
+  archiveIdBase,
   archiveIdBranch,
+  archiveIdCandidate,
   compareArchiveEntriesNewestFirst,
   matchArchiveIdStamp,
+  sanitizeArchiveSessionId,
   type ArchiveIdStampMatch,
 } from './archive-id.js';
+export { memoryHeadingOf, memoryTitleOf, stripMemoryContent } from './memory-document.js';
 /** `storage-fs` / `storage-pg` はパッケージが別なので、このバレルを経由しないと届かない。 */
 export { codePointBoundary, countCodePoints, excerptLine, tailByCodePoints } from './excerpt.js';
 /** 並びを pg の `timestamptz` 順と揃えるため、オフセット付き ISO 時刻は文字列でなく実時刻で比べる。 */
