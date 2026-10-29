@@ -624,12 +624,6 @@ export {
   type SelfFacts,
 } from './self.js';
 export {
-  describeProviderGaps,
-  type LayerProviders,
-  type ProviderGapSubject,
-} from './provider-gaps.js';
-export { DEFAULT_LAYER_PROVIDERS } from './layer-providers.js';
-export {
   resolveBuildRevision,
   describeBuildRevision,
   describeRevisionStatus,
