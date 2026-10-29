@@ -7,6 +7,7 @@ import {
   waitFor,
   waitForTerminal,
   wireEvents,
+  withoutQueueNotice,
 } from './clone-test-harness.js';
 import type { ScriptedStep } from './clone-test-harness.js';
 import { migrateCommitmentsToTasks } from './commitment-task-migration.js';
@@ -624,7 +625,9 @@ describe('閉じるのは、そのターンが読んだ発言の task だけ（�
     const g = gate();
     const s = boot(
       (_turn, input) =>
-        input.includes('H3-BODY') ? [{ run: () => g.promise }, ...say('3')] : say('返答'),
+        withoutQueueNotice(input).includes('H3-BODY')
+          ? [{ run: () => g.promise }, ...say('3')]
+          : say('返答'),
       { mergedBatchLimit: 2 },
     );
     s.clone.post(human('h1', 'H1-BODY'));
@@ -649,7 +652,9 @@ describe('閉じるのは、そのターンが読んだ発言の task だけ（�
   it('待ち行列で同じ会話の発言が別の会話をはさむとき、後ろの発言は先のターンの返答で閉じない', async () => {
     const g = gate();
     const s = boot((_turn, input) =>
-      input.includes('C-BODY') ? [{ run: () => g.promise }, ...say('C')] : say('返答'),
+      withoutQueueNotice(input).includes('C-BODY')
+        ? [{ run: () => g.promise }, ...say('C')]
+        : say('返答'),
     );
     s.clone.post(human('a', 'A-BODY', 'conv-1'));
     s.clone.post(human('b', 'B-BODY', 'conv-2'));

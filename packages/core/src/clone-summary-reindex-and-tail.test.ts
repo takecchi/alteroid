@@ -24,6 +24,7 @@ import {
   lastSessionCall,
   waitFor,
   waitForDone,
+  withoutQueueNotice,
 } from './clone-test-harness.js';
 import type { FakeCall, Setup } from './clone-test-harness.js';
 
@@ -785,9 +786,10 @@ describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue
       redeliveredClosed: 0,
       pendingCollapse: 0,
     });
+    // 待ち行列の節は落としてから見る（#5469 P6c）: 起こし直しの時点で台帳と同じ id の Task が積まれており（P5）、その題は待ち行列の先頭に出る。ここで見たいのは「消された合図が配られていない」こと
     expect(
       sdk.calls.some((call) =>
-        call.inputs.some((text) => text.includes('拾い直しの最中に消される')),
+        call.inputs.some((text) => withoutQueueNotice(text).includes('拾い直しの最中に消される')),
       ),
     ).toBe(false);
 

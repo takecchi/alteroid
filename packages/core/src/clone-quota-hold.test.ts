@@ -15,6 +15,7 @@ import {
   isTerminal,
   waitForTerminal,
   flushPendingMicrotasks,
+  withoutQueueNotice,
 } from './clone-test-harness.js';
 import type { FakeCall, Setup } from './clone-test-harness.js';
 
@@ -100,7 +101,10 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     expect(s.calls.length).toBe(1);
     const inputsAfterSecondPost = (s.calls[0] as FakeCall).inputs.length;
     expect(inputsAfterSecondPost).toBe(inputsBeforeSecondPost + 1);
-    expect((s.calls[0] as FakeCall).inputs.some((text) => text.includes('二件目'))).toBe(false);
+    // 待ち行列の節（#5469 P6c）には積まれた2本目の題が出るので、節を落として「2本目の本文がターンへ渡っていない」ことを見る
+    expect(
+      (s.calls[0] as FakeCall).inputs.some((text) => withoutQueueNotice(text).includes('二件目')),
+    ).toBe(false);
 
     await s.clone.stop();
   });
@@ -291,7 +295,9 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     s.clone.post(humanMessage('二件目'));
     await s.waitForEvents((events) => events.filter(isTerminal).length === 3);
 
-    expect((s.calls[0] as FakeCall).inputs.some((text) => text.includes('二件目'))).toBe(false);
+    expect(
+      (s.calls[0] as FakeCall).inputs.some((text) => withoutQueueNotice(text).includes('二件目')),
+    ).toBe(false);
 
     await s.clone.stop();
   });
@@ -330,7 +336,9 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
 
     s.clone.post(humanMessage('二件目'));
     await s.waitForEvents((events) => events.filter(isTerminal).length === 3);
-    expect((s.calls[0] as FakeCall).inputs.some((text) => text.includes('二件目'))).toBe(false);
+    expect(
+      (s.calls[0] as FakeCall).inputs.some((text) => withoutQueueNotice(text).includes('二件目')),
+    ).toBe(false);
 
     await s.clone.stop();
   });

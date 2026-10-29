@@ -9,7 +9,7 @@ import {
 } from './clone.js';
 import type { AgentCloneDriver } from './agent-clone-session.js';
 import { ClaudeCloneDriver } from './claude-clone-driver.js';
-import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
+import { TOKEN_SAVING_ENABLED_ENV, waitFor, withoutQueueNotice } from './clone-test-harness.js';
 import { EXCHANGE_KIND_DECISION_PREFIX } from './exchange-kind.js';
 import type { CloneHost } from './host.js';
 import { SOURCE_TALLY_HEADING } from './digest.js';
@@ -813,11 +813,13 @@ describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
     // 他の節は件数の行だけ。重なる数（担当の status 別・継続中の依頼の数）は件数の行に載らない
     expect(timer).toContain(COUNTS_LINE);
     // 待ち行列は件数の1行だけ。先頭の描画（task の行・案内・節）は出さない。旧台帳は件数の1行（節ではない）
-    expect(timer).toContain(QUEUE_COUNT_LINE);
-    expect(timer).toContain(LEGACY_LEDGER_LINE);
-    expect(timer).not.toContain('待ち行列の仕事 0');
-    expect(timer).not.toContain('先頭が先にやるもの');
-    expect(timer).not.toContain('## 待ち行列');
+    // #5469 P6c: ターン頭の断り書きの待ち行列の節にも同じ件数・先頭・旧台帳の行が出る。ここで見たいのは要約（digest）の側なので、節を落としてから見る
+    const digestOnly = withoutQueueNotice(timer);
+    expect(digestOnly).toContain(QUEUE_COUNT_LINE);
+    expect(digestOnly).toContain(LEGACY_LEDGER_LINE);
+    expect(digestOnly).not.toContain('待ち行列の仕事 0');
+    expect(digestOnly).not.toContain('先頭が先にやるもの');
+    expect(digestOnly).not.toContain('## 待ち行列');
     expect(timer).not.toContain('担当 running');
     expect(timer.match(/^## /gmu)).toHaveLength(2);
     expect(timer).not.toContain('人間への問い 0');

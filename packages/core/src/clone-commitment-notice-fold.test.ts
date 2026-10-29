@@ -6,15 +6,19 @@ import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
+import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
-// #5297: 台帳の2行（件数の行・いま届いた一件の行）の骨組みを、同じ会話の2回目から参照にする。
+// #5297: 断り書きの骨組みの文を、同じ会話の2回目から参照にする。
 // 全文へ戻す条件は #4937 の控え（`DigestSessionDelta`）そのもの。ここで新しい条件は足していない。
+// #5469 P6c: 骨組みは「待ち行列の先頭・task として積んだ・全文と並べ替え」に替わった（旧: 台帳の件数・commitment_close・commitment_list）。
+// 台帳の閉じ方の骨組み（回答 human_answer のターンにだけ出る）は下の別の describe が同じ畳みを確かめる。
 
-const SKELETON = '返事をしただけでは閉じない';
+const SKELETON = '返事をしたターンの終わりに自動で done になる';
+const TAIL_FULL = '全文は `task_list`。並べ替えは `task_move`。';
+const QUEUE_HEAD = '[system] 待ち行列（';
+const CLOSE_SKELETON = '返事をしただけでは閉じない';
 const BUNDLE_SKELETON = '閉じるのは id ごとである';
-const FULL_COUNT_HEAD = '引き受けたまま終わっていない仕事は';
-const SHORT_COUNT_HEAD = '[system] 未了 ';
 
 interface SdkScript {
   contextTotals?: readonly number[];
@@ -114,15 +118,26 @@ async function humanTurn(s: Boot): Promise<{ input: string; id: string }> {
   return { input: s.inputs[before] ?? '', id: event.id };
 }
 
-/** 台帳の2行（件数の行〜いま届いた一件の行）だけを取り出す。固定の1文（#4937）の手前まで。 */
+/** 断り書きの節（待ち行列の見出し〜次の区切り `---` の手前）だけを取り出す。 */
 function ledgerLines(input: string): string {
   const lines = input.split('\n');
-  const start = lines.findIndex(
-    (line) => line.includes(FULL_COUNT_HEAD) || line.startsWith(SHORT_COUNT_HEAD),
-  );
-  expect(start, '台帳の件数の行が入力に無い').toBeGreaterThanOrEqual(0);
-  const end = lines.findIndex((line, index) => index > start && line.includes('全文と齢'));
+  const start = lines.findIndex((line) => line.startsWith(QUEUE_HEAD));
+  expect(start, '待ち行列の見出しが入力に無い').toBeGreaterThanOrEqual(0);
+  const end = lines.findIndex((line, index) => index > start && line === '---');
   return lines.slice(start, end < 0 ? undefined : end).join('\n');
+}
+
+/** 骨組みの文の行だけ（「task として積んだ」の行と末尾の行）。畳みで短くなるのはここ。件数と先頭は毎回全文なので含めない。 */
+function skeletonLines(input: string): string {
+  return ledgerLines(input)
+    .split('\n')
+    .filter(
+      (line) =>
+        line.startsWith('いま届いたこの') ||
+        line.startsWith('全文は `task_list`') ||
+        line.startsWith('（`task_list`'),
+    )
+    .join('\n');
 }
 
 const compactBoundary = {
@@ -140,37 +155,40 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
     const second = await humanTurn(s);
     const third = await humanTurn(s);
 
-    // (d) 初回は全文（今までと1字も違わない骨組み）
+    // 初回は全文の骨組み
     const firstLines = ledgerLines(first.input);
-    expect(firstLines).toContain(`${FULL_COUNT_HEAD}（`);
-    expect(firstLines).toContain('**1 件** ある（いちばん古いものは ');
-    expect(firstLines).toContain(`いま届いたこの一件も台帳に載せた（id: \`${first.id}\`）。`);
+    expect(firstLines).toContain(
+      '- 待ち行列: 開いている 1 件（queued 1 / waiting 0 / needs_decision 0）',
+    );
+    expect(firstLines).toContain(`いま届いたこの一件は task \`${first.id}\` として積んだ。`);
     expect(firstLines).toContain(SKELETON);
+    expect(firstLines).toContain('`task_keep`');
+    expect(firstLines).toContain('`manager_start` に `taskId`');
+    expect(firstLines).toContain(TAIL_FULL);
 
-    // (a)(b)(e) 2回目以降は短い形。件数は新しい値、最古の時刻は毎回、この一件の id も毎回
+    // 2回目以降は骨組みだけが参照になる。件数は新しい値、先頭の行・この一件の id は毎回出る
     for (const [turn, count] of [
       [second, 2],
       [third, 3],
     ] as const) {
       const lines = ledgerLines(turn.input);
-      expect(lines).toContain(`${SHORT_COUNT_HEAD}${String(count)} 件（最古 `);
-      expect(lines).toMatch(/最古 \d{4}-\d{2}-\d{2}T[\d:.]+Z、\d{2}:\d{2}:\d{2}Z 時点）/u);
-      expect(lines).toContain(`いま届いたこの一件も台帳に載せた（id: \`${turn.id}\`）。`);
-      // 閉じる道具の名前は短い形にも残る（閉じ方の参照は末尾の参照と1行にまとまっている）
-      expect(turn.input).toContain('`commitment_close`');
-      expect(lines).not.toContain(FULL_COUNT_HEAD);
+      expect(lines).toContain(`- 待ち行列: 開いている ${String(count)} 件（`);
+      expect(lines).toContain(`- ${turn.id}（状態: queued`);
+      expect(lines).toContain(`いま届いたこの一件は task \`${turn.id}\` として積んだ。`);
+      // 道具の名前は参照にも残る
+      expect(lines).toContain('`task_keep`');
+      expect(lines).toContain('`manager_start`');
+      expect(lines).toContain('`task_list`');
+      expect(lines).toContain('`task_move`');
       expect(lines).not.toContain(SKELETON);
-      expect(lines.length).toBeLessThan(firstLines.length * 0.7);
+      expect(lines).not.toContain(TAIL_FULL);
+      expect(skeletonLines(turn.input).length).toBeLessThan(
+        skeletonLines(first.input).length * 0.8,
+      );
     }
-    // 最古の時刻は、台帳でいちばん古い行（1件目）のもので、2回目以降も同じ
-    const oldestOf = (text: string): string | undefined => /最古 (\S+?)、/u.exec(text)?.[1];
-    const oldestAtFirst = /いちばん古いものは (\S+) に受け取った/u.exec(firstLines)?.[1];
-    expect(oldestAtFirst).toBeDefined();
-    expect(oldestOf(ledgerLines(second.input))).toBe(oldestAtFirst);
-    expect(oldestOf(ledgerLines(third.input))).toBe(oldestAtFirst);
 
     process.stderr.write(
-      `[#5297 測定] 台帳の2行 1回目 ${String(firstLines.length)} 字 → 2回目 ${String(ledgerLines(second.input).length)} 字\n`,
+      `[#5297 測定] 骨組みの行 1回目 ${String(skeletonLines(first.input).length)} 字 → 2回目 ${String(skeletonLines(second.input).length)} 字\n`,
     );
     await s.clone.stop();
   });
@@ -183,46 +201,28 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
 
     for (const turn of [first, second, third]) {
       const lines = ledgerLines(turn.input);
-      expect(lines).toContain(`${FULL_COUNT_HEAD}（`);
       expect(lines).toContain(SKELETON);
-      expect(lines).toContain(`いま届いたこの一件も台帳に載せた（id: \`${turn.id}\`）。`);
-      expect(turn.input).toContain('全文と齢は `commitment_list` で見られる');
+      expect(lines).toContain(`いま届いたこの一件は task \`${turn.id}\` として積んだ。`);
+      expect(lines).toContain(TAIL_FULL);
       expect(turn.input).not.toContain('会話の上と同じ');
-      expect(lines).not.toContain(SHORT_COUNT_HEAD);
     }
     await s.clone.stop();
   });
 
-  it('⭐ 2回目以降は、閉じ方の参照と末尾の参照が1行にまとまる（指し先の道具は残る）', async () => {
+  it('⭐ 2回目の参照は短く保たれ、指し先の道具は残る（毎ターン載るため）', async () => {
     const s = boot();
-    const first = await humanTurn(s);
+    await humanTurn(s);
     const second = await humanTurn(s);
 
-    // 1回目は全文: 閉じ方の骨組みと末尾の固定文が別々に在る
-    expect(first.input).toContain(SKELETON);
-    expect(first.input).toContain('全文と齢は `commitment_list` で見られる');
-    // 2回目: 参照は1行だけ。`commitment_list` と `commitment_close` の両方を指す
     const refLines = second.input.split('\n').filter((line) => line.includes('会話の上と同じ'));
-    expect(refLines).toHaveLength(1);
-    expect(refLines[0]).toContain('`commitment_list`');
-    expect(refLines[0]).toContain('`commitment_close`');
-    expect(refLines[0]).toContain('毎回決め直す');
-    // 参照行は短く保つ（毎ターン載るため）。以前は 82 字だった
-    expect(refLines[0]?.length).toBeLessThanOrEqual(75);
-    expect(second.input).not.toContain('閉じ方は会話の上と同じ');
-
-    const tailOf = (input: string): number =>
-      input
-        .split('\n')
-        .filter(
-          (line) =>
-            line.includes('会話の上と同じ') ||
-            (line.startsWith('いま届いたこの') && line.includes('台帳に載せた')),
-        )
-        .join('\n').length;
-    process.stderr.write(
-      `[台帳の参照 測定] 2回目の「この一件」行+参照行 ${String(tailOf(second.input))} 字（統合前は別 2 行の参照を含む）\n`,
-    );
+    // 参照は2行だけ: 「task として積んだ」の行の末尾と、末尾の1行
+    expect(refLines).toHaveLength(2);
+    expect(refLines.join('\n')).toContain('`task_keep`');
+    expect(refLines.join('\n')).toContain('`manager_start`');
+    expect(refLines.join('\n')).toContain('`task_list`');
+    expect(refLines.join('\n')).toContain('`task_move`');
+    const tailRef = refLines.find((line) => line.startsWith('（'));
+    expect(tailRef?.length).toBeLessThanOrEqual(40);
     await s.clone.stop();
   });
 
@@ -313,7 +313,7 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
 
     expect(ledgerLines(second.input)).not.toContain(SKELETON);
     expect(ledgerLines(third.input)).toContain(SKELETON);
-    expect(ledgerLines(third.input)).toContain('**3 件** ある');
+    expect(ledgerLines(third.input)).toContain('- 待ち行列: 開いている 3 件（');
     await s.clone.stop();
   });
 
@@ -351,7 +351,7 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
     const second = await humanTurn(s);
 
     expect(ledgerLines(second.input)).toContain(SKELETON);
-    expect(ledgerLines(second.input)).not.toContain(SHORT_COUNT_HEAD);
+    expect(ledgerLines(second.input)).not.toContain('会話の上と同じ');
     await s.clone.stop();
   });
 
@@ -364,7 +364,7 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
     expect(ledgerLines(third.input)).toContain(SKELETON);
     const fourth = await humanTurn(s);
     expect(ledgerLines(fourth.input)).not.toContain(SKELETON);
-    expect(ledgerLines(fourth.input)).toContain(`${SHORT_COUNT_HEAD}4 件（最古 `);
+    expect(ledgerLines(fourth.input)).toContain('- 待ち行列: 開いている 4 件（');
     await s.clone.stop();
   });
 
@@ -393,27 +393,87 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
 
     const firstBundle = ledgerLines(s.inputs[1] ?? '');
     const secondBundle = ledgerLines(s.inputs[2] ?? '');
-    // 束として全文が会話に載るのは1つ目の束が最初（先客の1件は束ではなく、束の骨組みはまだ載っていない）
-    expect(firstBundle).toContain('いま届いたこの 2 件も台帳に載せた（id: ');
-    expect(firstBundle).toContain(BUNDLE_SKELETON);
-    expect(firstBundle).toContain(SKELETON);
-    expect(firstBundle).toContain(`${SHORT_COUNT_HEAD}3 件（最古 `);
-    // 末尾の固定文は先客の入力で全文が載っているので、この束の入力では参照だけになる（閉じ方は全文のまま別に出る）
-    const tailRefLine = (s.inputs[1] ?? '')
-      .split('\n')
-      .find((line) => line.includes('会話の上と同じ'));
-    expect(tailRefLine).toContain('`commitment_list`');
-    expect(tailRefLine).toContain('毎回決め直す');
-    expect(tailRefLine?.length).toBeLessThanOrEqual(50);
-    // 2つ目の束: 骨組みは参照。件数と id の列は出る
-    expect(secondBundle).toContain('いま届いたこの 2 件も台帳に載せた（id: ');
-    expect(secondBundle).toContain('evt-束B1');
-    expect(secondBundle).toContain('evt-束B2');
-    expect(s.inputs[2]).toContain('まとめて答えても id ごとに `commitment_close`');
-    expect(secondBundle).toContain(`${SHORT_COUNT_HEAD}5 件（最古 `);
-    expect(secondBundle).not.toContain(BUNDLE_SKELETON);
-    expect(secondBundle).not.toContain(SKELETON);
-    expect(secondBundle.length).toBeLessThan(firstBundle.length * 0.7);
+    // 先客の入力で骨組みは全文が会話に載っているので、束の入力は束でも参照になる。件数と id の列は毎回出る
+    expect(ledgerLines(s.inputs[0] ?? '')).toContain(SKELETON);
+    for (const [bundle, count, ids] of [
+      [firstBundle, 3, ['evt-束A1', 'evt-束A2']],
+      [secondBundle, 5, ['evt-束B1', 'evt-束B2']],
+    ] as const) {
+      expect(bundle).toContain('いま届いたこの 2 件は task ');
+      for (const id of ids) expect(bundle).toContain(id);
+      expect(bundle).toContain(`- 待ち行列: 開いている ${String(count)} 件（`);
+      expect(bundle).not.toContain(SKELETON);
+      expect(bundle).toContain('`task_keep`');
+      expect(bundle).toContain('`manager_start`');
+    }
+    await s.clone.stop();
+  });
+});
+
+describe('回答（human_answer）のターンは Task に積まず、台帳の閉じ方を出す。骨組みは同じ畳みに乗る', () => {
+  let answerSeq = 0;
+  async function answerTurn(s: Boot): Promise<{ input: string; id: string }> {
+    const before = s.inputs.length;
+    answerSeq += 1;
+    const id = `evt-answer-${String(answerSeq)}`;
+    s.clone.post({
+      type: 'human_answer',
+      id,
+      at: new Date().toISOString(),
+      approvalId: `apv-${String(answerSeq)}`,
+      answer: `回答${String(answerSeq)}`,
+    });
+    await waitFor(() => s.inputs.length > before, `入力 ${String(before + 1)} 本目`);
+    return { input: s.inputs[before] ?? '', id };
+  }
+
+  it('⭐ 1回目は台帳の閉じ方の全文、2回目は参照。Task に積んだとは言わない', async () => {
+    const s = boot();
+    const first = await answerTurn(s);
+    const second = await answerTurn(s);
+
+    expect(first.input).toContain(
+      `いま届いたこの一件は台帳の行として開いた（id: \`${first.id}\`）。`,
+    );
+    expect(first.input).toContain('`commitment_close`');
+    expect(first.input).toContain(CLOSE_SKELETON);
+    expect(first.input).not.toContain('として積んだ');
+
+    expect(second.input).toContain(
+      `いま届いたこの一件は台帳の行として開いた（id: \`${second.id}\`）。`,
+    );
+    expect(second.input).toContain('閉じ方は会話の上と同じ: `commitment_close`');
+    expect(second.input).not.toContain(CLOSE_SKELETON);
+    expect(second.input).not.toContain('として積んだ');
+    await s.clone.stop();
+  });
+
+  it('⭐ Task に積めなかった束（2件）は、台帳の行として開いた＋「id ごとに閉じる」の骨組みを出す（積んだとは言わない）', async () => {
+    const stores = createMemoryStores();
+    const failing: Stores = {
+      ...stores,
+      tasks: {
+        ...stores.tasks,
+        add: () => Promise.reject(new Error('task が積めない（テスト用）')),
+      },
+    };
+    let release1: () => void = () => undefined;
+    const hold1 = new Promise<void>((resolve) => {
+      release1 = resolve;
+    });
+    const s = boot({ holdResultAt: { 1: hold1 } }, failing);
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => s.inputs.length >= 1, '先客の入力');
+    s.clone.post(humanMessage('束B1'));
+    s.clone.post(humanMessage('束B2'));
+    release1();
+    await waitFor(() => s.inputs.length >= 2, '束の入力');
+
+    const bundle = s.inputs[1] ?? '';
+    expect(bundle).toContain('いま届いたこの 2 件は台帳の行として開いた（id: ');
+    expect(bundle).toContain(BUNDLE_SKELETON);
+    expect(bundle).toContain('Task として積めなかった');
+    expect(bundle).not.toContain('として積んだ');
     await s.clone.stop();
   });
 });

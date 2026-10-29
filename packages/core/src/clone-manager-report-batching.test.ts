@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { InboxEvent } from './schema.js';
 import { createMemoryStores, humanMessage } from './testing.js';
-import { setup, lineStartingWith, waitFor } from './clone-test-harness.js';
+import { setup, lineStartingWith, waitFor, withoutQueueNotice } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 import { MANAGER_REPORT_BODY_LIMIT } from './clone.js';
 
@@ -397,9 +397,10 @@ describe('クローン — 同じマネージャーの連続する report をま
 
     expect(inputs[1] ?? '').toContain('A1本目');
     expect(inputs[1] ?? '').toContain('A2本目');
-    expect(inputs[1] ?? '').not.toContain('割り込む人間');
+    // 待ち行列の節には積まれた人間の発言の題が出るので、束の本文を見るときは節を落とす（#5469 P6c。束に混ざっていないことの保証は変わらない）
+    expect(withoutQueueNotice(inputs[1] ?? '')).not.toContain('割り込む人間');
     expect(inputs[1] ?? '').not.toContain('A3本目');
-    expect(inputs[2] ?? '').toContain('割り込む人間');
+    expect(withoutQueueNotice(inputs[2] ?? '')).toContain('割り込む人間');
     expect(inputs[3] ?? '').toContain('A3本目');
     expect(inputs[3] ?? '').not.toContain('A1本目');
     expect(inputs[3] ?? '').not.toContain('A2本目');
@@ -900,7 +901,10 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     s.clone.post(humanMessage('割り込む人間'));
 
     await waitFor(
-      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('割り込む人間')),
+      () =>
+        (s.calls[0]?.inputs ?? []).some((input) =>
+          withoutQueueNotice(input).includes('割り込む人間'),
+        ),
       '人間の発言のターンが投げられる',
     );
     await settle();
@@ -908,8 +912,9 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     const inputs = (s.calls[0] as FakeCall).inputs;
     expect(inputs).toHaveLength(3);
     expect(inputs[1] ?? '').toContain('token-pool');
-    expect(inputs[1] ?? '').not.toContain('割り込む人間');
-    expect(inputs[2] ?? '').toContain('割り込む人間');
+    // 待ち行列の節には積まれた人間の発言の題が出るので、束の本文を見るときは節を落とす（#5469 P6c。束に混ざっていないことの保証は変わらない）
+    expect(withoutQueueNotice(inputs[1] ?? '')).not.toContain('割り込む人間');
+    expect(withoutQueueNotice(inputs[2] ?? '')).toContain('割り込む人間');
     expect(inputs[2] ?? '').not.toContain('token-pool');
 
     await s.clone.stop();
@@ -1162,8 +1167,9 @@ describe('クローン — 起点の違う合図をまとめて読む', () => {
     const inputs = (s.calls[0] as FakeCall).inputs;
     expect(inputs).toHaveLength(4);
     expect(inputs[1] ?? '').toContain('A本文');
-    expect(inputs[1] ?? '').not.toContain('割り込む人間');
-    expect(inputs[2] ?? '').toContain('割り込む人間');
+    // 待ち行列の節には積まれた人間の発言の題が出るので、束の本文を見るときは節を落とす（#5469 P6c。束に混ざっていないことの保証は変わらない）
+    expect(withoutQueueNotice(inputs[1] ?? '')).not.toContain('割り込む人間');
+    expect(withoutQueueNotice(inputs[2] ?? '')).toContain('割り込む人間');
     expect(inputs[3] ?? '').toContain('B本文');
 
     await s.clone.stop();
@@ -1466,8 +1472,9 @@ describe('クローン — 起点の違う合図をまとめて読む', () => {
     const inputs = (s.calls[0] as FakeCall).inputs;
     expect(inputs).toHaveLength(4);
     expect(inputs[1] ?? '').toContain('A2本文');
-    expect(inputs[1] ?? '').not.toContain('割り込む人間');
-    expect(inputs[2] ?? '').toContain('割り込む人間');
+    // 待ち行列の節には積まれた人間の発言の題が出るので、束の本文を見るときは節を落とす（#5469 P6c。束に混ざっていないことの保証は変わらない）
+    expect(withoutQueueNotice(inputs[1] ?? '')).not.toContain('割り込む人間');
+    expect(withoutQueueNotice(inputs[2] ?? '')).toContain('割り込む人間');
     expect(inputs[3] ?? '').toContain('B1本文');
     expect(inputs[3] ?? '').toContain('B2本文');
 

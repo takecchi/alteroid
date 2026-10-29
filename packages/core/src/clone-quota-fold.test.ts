@@ -16,6 +16,10 @@ describe('クローン — 枠に当たり続けたセッションは畳んで�
 
   const BIG_BODY = 'x'.repeat(90_000);
 
+  // id を明示する: `humanMessage` の id は本文から作られるので、9万字の本文だと id も9万字になる。
+  // 待ち行列の先頭の行（#5469 P6c）は task の id をそのまま載せるため、id まで本文と同じ長さだと入力が倍になり、閾値の見積りが崩れる（本番の id は短い）
+  const bigMessage = (id: string): InboxEvent => ({ ...humanMessage(BIG_BODY), id });
+
   async function releaseAttemptCount(stores: Stores): Promise<number> {
     const rows = (await stores.journal.list({ types: ['exchange'] })) as { text: string }[];
     return rows.filter((entry) => entry.text.includes('枠の解除を試す')).length;
@@ -33,7 +37,7 @@ describe('クローン — 枠に当たり続けたセッションは畳んで�
   }
 
   async function driveToTwoAccumulations(stores: Stores, s: Setup): Promise<void> {
-    s.clone.post(humanMessage(BIG_BODY));
+    s.clone.post(bigMessage('evt-big-1'));
     await waitFor(() => s.clone.usageBlocked, '1回目で枠に当たって保持される');
 
     s.clone.post(tick('evt-si-1'));
@@ -101,7 +105,7 @@ describe('クローン — 枠に当たり続けたセッションは畳んで�
     succeedNow = false;
     expect(await stores.sessions.getCloneSessionId()).not.toBeNull();
 
-    s.clone.post(humanMessage(BIG_BODY));
+    s.clone.post(bigMessage('evt-big-2'));
     await waitFor(() => s.clone.usageBlocked, '2本目の枠当たり: 新しい発言だけで枠に当たる');
 
     await new Promise((resolve) => setTimeout(resolve, 80));

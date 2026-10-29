@@ -26,7 +26,7 @@ import { renderMemoryDocuments } from './memory.js';
 import { buildCloneSystemPrompt } from './prompt.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
-import type { ChatStreamEvent, Commitment, InboxEvent } from './schema.js';
+import type { ChatStreamEvent, Commitment, InboxEvent, Task } from './schema.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
 import { createCloneTools } from './tools.js';
@@ -853,12 +853,16 @@ describe('引き受けたまま終わっていない仕事', () => {
     s.clone.post(humanMessage('ひとつめ'));
     await waitForSettled(s.events);
 
+    // #5469 P6c: 台帳の件数・最古・commitment_close・「毎回決め直す」は、待ち行列の件数と先頭・task の積み方・task_list / task_move の案内に替わった。
+    // 「いつ数えた材料か」を名乗ること・件数と先頭が毎ターンの入力に載ることは同じ保証として保つ
     const input = s.calls.flatMap((call) => call.inputs).join('\n');
-    expect(input).toContain('引き受けたまま終わっていない仕事は（');
-    expect(input).toContain('**1 件** ある');
-    expect(input).toMatch(/引き受けたまま終わっていない仕事は（\d{2}:\d{2}:\d{2}Z に数えた材料）/);
-    expect(input).toContain('commitment_close');
-    expect(input).toContain('毎回決め直すこと');
+    expect(input).toMatch(/\[system\] 待ち行列（\d{2}:\d{2}:\d{2}Z に数えた材料）/);
+    expect(input).toContain(
+      '- 待ち行列: 開いている 1 件（queued 1 / waiting 0 / needs_decision 0）',
+    );
+    expect(input).toContain('ひとつめ');
+    expect(input).toContain('として積んだ');
+    expect(input).toContain('全文は `task_list`。並べ替えは `task_move`。');
 
     await s.clone.stop();
   });
@@ -874,7 +878,8 @@ describe('引き受けたまま終わっていない仕事', () => {
 
     const distillInputs = s.calls.flatMap((call) => call.inputs).slice(beforeDistill);
     expect(distillInputs.length).toBeGreaterThan(0);
-    expect(distillInputs.join('\n')).not.toContain('引き受けたまま終わっていない仕事は');
+    expect(distillInputs.join('\n')).not.toContain('[system] 待ち行列（');
+    expect(distillInputs.join('\n')).not.toContain('として積んだ');
 
     await s.clone.stop();
   });
@@ -1337,6 +1342,8 @@ describe('Issue #1145: 台帳を読めなかった回に、断り書きが丸ご
     expect(turn).toContain('台帳を読めなかった');
     expect(turn).toContain('判定できていない');
     expect(turn).not.toContain('引き受けたまま終わっていない仕事は');
+    // 台帳が読めない回は、台帳に載ったかどうかを言わない（待ち行列の側は読めるので別に出る）
+    expect(turn).not.toContain('台帳の行として開いた');
 
     await s.clone.stop();
   });
@@ -1367,7 +1374,7 @@ describe('Issue #1145: 台帳を読めなかった回に、断り書きが丸ご
     await s.clone.stop();
   });
 
-  it('台帳が読める回の断り書きは、これまでどおり件数から始まる（回帰）', async () => {
+  it('台帳が読める回の断り書きは、これまでどおり件数から始まる（回帰。#5469 P6c で件数は待ち行列の件数になった）', async () => {
     const s = setup();
     const inputs = () => s.calls.flatMap((call) => call.inputs);
 
@@ -1375,10 +1382,160 @@ describe('Issue #1145: 台帳を読めなかった回に、断り書きが丸ご
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
     const turn = inputs()[0] ?? '';
-    expect(turn).toContain('引き受けたまま終わっていない仕事は');
-    expect(turn).toContain('いま届いたこの一件も台帳に載せた');
+    expect(turn).toContain('[system] 待ち行列（');
+    expect(turn).toContain('- 待ち行列: 開いている 1 件（');
+    expect(turn).toContain('いま届いたこの一件は task `evt-1145-3` として積んだ');
     expect(turn).not.toContain('台帳を読めなかった');
 
+    await s.clone.stop();
+  });
+});
+
+describe('断り書きは待ち行列の1行になる（#5469 P6c）', () => {
+  let tick = 0;
+  function makeTask(id: string, over: Partial<Task> = {}): Task {
+    tick += 1;
+    const at = new Date(Date.UTC(2026, 0, 1, 0, 0, tick)).toISOString();
+    return {
+      id,
+      createdAt: at,
+      updatedAt: at,
+      status: 'queued',
+      origin: 'self',
+      title: `title-${id}`,
+      body: `body-${id}`,
+      ...over,
+    };
+  }
+  const firstInput = (s: Setup): string => s.calls.flatMap((call) => call.inputs)[0] ?? '';
+
+  it('人間の発言のターン: task として積んだ・返事で自動 done になる・続けるなら task_keep・委譲なら taskId。台帳の閉じ方は出さない', async () => {
+    const s = setup();
+    s.clone.post(humanIntake('調べておいて', 'evt-p6c-h'));
+    await waitFor(() => firstInput(s) !== '', '合図がターンへ渡る');
+
+    const turn = firstInput(s);
+    expect(turn).toContain(
+      'いま届いたこの一件は task `evt-p6c-h` として積んだ。返事をしたターンの終わりに自動で done になる。' +
+        '続けるなら `task_keep`、委譲するなら `manager_start` に `taskId`。',
+    );
+    expect(turn).not.toContain('commitment_close');
+    expect(turn).not.toContain('台帳に載せた');
+    expect(turn).not.toContain('台帳の行として開いた');
+    expect(turn).not.toContain('旧台帳');
+    await s.clone.stop();
+  });
+
+  it('回答（human_answer）のターン: Task には積まず、台帳の行が開いたことと閉じ方（commitment_close）を出す', async () => {
+    const s = setup();
+    s.clone.post({
+      type: 'human_answer',
+      id: 'evt-p6c-a',
+      at: new Date().toISOString(),
+      approvalId: 'apv-p6c',
+      answer: 'いいよ',
+    });
+    await waitFor(() => firstInput(s) !== '', '合図がターンへ渡る');
+
+    const turn = firstInput(s);
+    expect(turn).toContain('いま届いたこの一件は台帳の行として開いた（id: `evt-p6c-a`）。');
+    expect(turn).toContain('**片付いたら `commitment_close` で閉じること**');
+    expect(turn).not.toContain('として積んだ');
+    expect(await s.stores.tasks.get('evt-p6c-a')).toBeNull();
+    await s.clone.stop();
+  });
+
+  it('待ち行列の件数（状態別）と先頭3件が出る。先頭は list の並びのまま、残りは件数で言う', async () => {
+    const stores = createMemoryStores();
+    for (const task of [
+      makeTask('t1'),
+      makeTask('t2', { status: 'waiting' }),
+      makeTask('t3'),
+      makeTask('t4'),
+      makeTask('t5', { status: 'done', closedAt: new Date().toISOString() }),
+    ]) {
+      await stores.tasks.add(task);
+    }
+    const s = setup(stores);
+    s.clone.post(humanIntake('もう1件', 'evt-p6c-q'));
+    await waitFor(() => firstInput(s) !== '', '合図がターンへ渡る');
+
+    const turn = firstInput(s);
+    // 開いている 4 件 + いま積んだ 1 件。閉じた t5 は数えない
+    expect(turn).toContain(
+      '- 待ち行列: 開いている 5 件（queued 4 / waiting 1 / needs_decision 0）',
+    );
+    // 並びはストアの list のまま（器は並べ直さない）。人間の依頼は先頭に積まれる
+    const at = (id: string): number => turn.indexOf(`- ${id}（`);
+    expect(at('evt-p6c-q')).toBeGreaterThan(-1);
+    expect(at('evt-p6c-q')).toBeLessThan(at('t1'));
+    expect(at('t1')).toBeLessThan(at('t2'));
+    expect(at('t3')).toBe(-1);
+    expect(at('t4')).toBe(-1);
+    expect(at('t5')).toBe(-1);
+    expect(turn).toContain('…ほか 2 件（task_list で全部見える）');
+    await s.clone.stop();
+  });
+
+  it('待ち行列を読めなかった回は、0 件と書かず「読めなかった」と名乗る', async () => {
+    const stores = createMemoryStores();
+    const broken: Stores = {
+      ...stores,
+      tasks: {
+        ...stores.tasks,
+        list: () => Promise.reject(new Error('task が読めない（テスト用）')),
+      },
+    };
+    const s = setup(broken);
+    s.clone.post(humanIntake('読めない回の依頼', 'evt-p6c-u'));
+    await waitFor(() => firstInput(s) !== '', '合図がターンへ渡る');
+
+    const turn = firstInput(s);
+    expect(turn).toContain('待ち行列を読めなかった');
+    expect(turn).toContain('task が読めない（テスト用）');
+    expect(turn).toContain('0 件だったのでも、異常が無かったのでもない');
+    expect(turn).not.toContain('- 待ち行列: 開いている');
+    // 読めなくても、積んだ事実（add は成功している）は言える
+    expect(turn).toContain('として積んだ');
+    await s.clone.stop();
+  });
+
+  it('旧台帳にだけ開いている行（同じ id の task が無い）の件数が1行出る。人間の依頼は同じ id の task があるので数えない', async () => {
+    const stores = createMemoryStores();
+    await stores.commitments.open({
+      id: 'only-ledger',
+      at: new Date().toISOString(),
+      origin: 'human',
+      body: '台帳だけの行',
+    });
+    const s = setup(stores);
+    s.clone.post(humanIntake('普通の依頼', 'evt-p6c-l'));
+    await waitFor(() => firstInput(s) !== '', '合図がターンへ渡る');
+
+    const turn = firstInput(s);
+    expect(turn).toContain('- 旧台帳に開いている 1 件は未了で、Task に同じ id が無い。');
+    await s.clone.stop();
+  });
+
+  it('人間の発言を Task に積めなかったときは、1行で断り、台帳の行として開いた＋閉じ方を出す（積んだとは言わない）', async () => {
+    const stores = createMemoryStores();
+    const failing: Stores = {
+      ...stores,
+      tasks: {
+        ...stores.tasks,
+        add: () => Promise.reject(new Error('task が積めない（テスト用）')),
+      },
+    };
+    const s = setup(failing);
+    s.clone.post(humanIntake('積めない依頼', 'evt-p6c-f'));
+    await waitFor(() => firstInput(s) !== '', '合図がターンへ渡る');
+
+    const turn = firstInput(s);
+    expect(turn).toContain('Task として積めなかった（id: `evt-p6c-f`）');
+    expect(turn).toContain('`task_add` で載せ直すこと');
+    expect(turn).toContain('いま届いたこの一件は台帳の行として開いた（id: `evt-p6c-f`）。');
+    expect(turn).toContain('`commitment_close`');
+    expect(turn).not.toContain('として積んだ');
     await s.clone.stop();
   });
 });
