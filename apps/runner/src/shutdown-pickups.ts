@@ -30,7 +30,7 @@ export function gateDuringShutdown(
   };
 }
 
-export const PICKUP_POLL_INTERVAL_MS = 50;
+const PICKUP_POLL_INTERVAL_MS = 50;
 
 /**
  * 預けた物が取られ切るまで待つ。デーモンが繋がっていない（`subscribed` が偽）なら待たない: 取りに来る相手が居ないため。

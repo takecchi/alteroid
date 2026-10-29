@@ -111,23 +111,19 @@ function sha256(value: string): Buffer {
 function matches(header: string | undefined, expectedHex: string): boolean {
   const token = AUTH_SCHEME.exec(header ?? '')?.[1];
   if (token === undefined) return false;
-  let expected: Buffer;
-  try {
-    expected = Buffer.from(expectedHex, 'hex');
-  } catch {
-    return false;
-  }
+  // 不正な hex は例外にならず、切れた Buffer になる（下の長さの検査で落ちる）。
+  const expected = Buffer.from(expectedHex, 'hex');
   if (expected.length !== 32) return false;
   return timingSafeEqual(sha256(token), expected);
 }
 
-export interface OutboxPending {
+interface OutboxPending {
   count: number;
   oldestAt?: string;
 }
 
 // 連番を `RunnerEvent` に載せない: wire の形を変えずに、取りこぼしの手当てを配送層だけで済ませるため。
-export type OutboxSeq = number;
+type OutboxSeq = number;
 
 export interface OutboxPendingGroup {
   type: string;
@@ -426,6 +422,45 @@ async function withDeadline<T>(
   }
 }
 
+// 出し箱と rescue-files の退避先の GET / DELETE の共通部分（違うのは host のどのメソッドを呼ぶかだけ）。
+// `fileId` の形を先に検める: パス区切りや `..` を退避先のパスへ通さないため。
+async function serveSpilledFile(
+  c: Context,
+  open: (
+    managerId: string,
+    fileId: string,
+  ) => Promise<{ stream: Readable; size: number } | undefined>,
+) {
+  const fileId = c.req.param('fileId') ?? '';
+  if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
+  const file = await open(c.req.param('id') ?? '', fileId);
+  if (file === undefined) return c.json({ error: 'not found' as const }, 404);
+  return c.body(Readable.toWeb(file.stream) as ReadableStream, 200, {
+    'content-type': 'application/octet-stream',
+    'content-length': String(file.size),
+  });
+}
+
+async function deleteSpilledFile(
+  c: Context,
+  remove: (managerId: string, fileId: string) => Promise<boolean>,
+) {
+  const fileId = c.req.param('fileId') ?? '';
+  if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
+  if (!(await remove(c.req.param('id') ?? '', fileId))) {
+    return c.json({ error: 'invalid managerId' as const }, 400);
+  }
+  return c.body(null, 204);
+}
+
+// zValidator の既定の 400 を使わない: ZodError の整形が変わった時点で、本文（鍵・スクリプト・依頼文・メッセージ等）が返りうるため。
+function rejectInvalidAs(error: string) {
+  return (result: { success: boolean }, c: Context) => {
+    if (!result.success) return c.json({ ok: false, error }, 400);
+    return undefined;
+  };
+}
+
 export function createRunnerApp(deps: RunnerAppDeps) {
   const { host, outbox } = deps;
   const sseHeartbeatMs = deps.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
@@ -514,51 +549,43 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       });
     })
 
-    // zValidator の既定の 400 を使わない: ZodError の整形が変わった時点で、鍵の値が本文へ流れうるため。
     .post(
       '/credentials',
-      zValidator('json', runnerSetCredentialsCommandSchema, (result, c) => {
-        if (!result.success) {
-          return c.json({ ok: false, error: '鍵の入力の形が不正（置いていない）' }, 400);
-        }
-        return undefined;
-      }),
+      zValidator(
+        'json',
+        runnerSetCredentialsCommandSchema,
+        rejectInvalidAs('鍵の入力の形が不正（置いていない）'),
+      ),
       async (c) => {
         const fingerprints = await host.setCredentials(c.req.valid('json').credentials);
         return c.json({ ok: true, credentials: fingerprints });
       },
     )
 
-    // zValidator の既定の 400 を使わない: ZodError の整形が変わった時点で、鍵を含みうるスクリプトが本文へ流れうるため。
-    // script に大きさの上限を付けない: 共有すべき既存の上限が daemon にも core にも無く、新しい制限を発明することになるため。
+    // script は鍵を含みうる。大きさの上限を付けない: 共有すべき既存の上限が daemon にも core にも無く、新しい制限を発明することになるため。
     .get('/profile', (c) => c.json({ ok: true, profile: host.profile() }))
     .post(
       '/profile',
-      zValidator('json', runnerSetProfileCommandSchema, (result, c) => {
-        if (!result.success) {
-          return c.json({ ok: false, error: 'プロファイルの入力の形が不正（置いていない）' }, 400);
-        }
-        return undefined;
-      }),
+      zValidator(
+        'json',
+        runnerSetProfileCommandSchema,
+        rejectInvalidAs('プロファイルの入力の形が不正（置いていない）'),
+      ),
       async (c) => {
         const result = await host.setProfile(c.req.valid('json').script);
         return c.json(result);
       },
     )
 
-    // zValidator の既定の 400 を使わない: 本文をそのまま返すため。袋の形だけをここで受け、中身の検査は `host.setMcpServers` に任せる。
+    // 袋の形だけをここで受け、中身の検査は `host.setMcpServers` に任せる。
     .get('/mcp-servers', (c) => c.json({ ok: true, mcpServers: host.mcpServers() }))
     .post(
       '/mcp-servers',
-      zValidator('json', runnerSetMcpServersCommandSchema, (result, c) => {
-        if (!result.success) {
-          return c.json(
-            { ok: false, error: 'MCP サーバの登録の袋の形が不正（置いていない）' },
-            400,
-          );
-        }
-        return undefined;
-      }),
+      zValidator(
+        'json',
+        runnerSetMcpServersCommandSchema,
+        rejectInvalidAs('MCP サーバの登録の袋の形が不正（置いていない）'),
+      ),
       (c) => {
         try {
           const placed = host.setMcpServers(c.req.valid('json').mcpServers);
@@ -576,12 +603,11 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      */
     .post(
       '/permission-rules',
-      zValidator('json', runnerSetPermissionRulesCommandSchema, (result, c) => {
-        if (!result.success) {
-          return c.json({ ok: false, error: '許可規則の一覧の袋の形が不正（置いていない）' }, 400);
-        }
-        return undefined;
-      }),
+      zValidator(
+        'json',
+        runnerSetPermissionRulesCommandSchema,
+        rejectInvalidAs('許可規則の一覧の袋の形が不正（置いていない）'),
+      ),
       (c) => {
         try {
           const placed = host.setPermissionRules(c.req.valid('json').rules);
@@ -613,12 +639,11 @@ export function createRunnerApp(deps: RunnerAppDeps) {
             413,
           ),
       }),
-      zValidator('json', runnerSetPluginCommandSchema, (result, c) => {
-        if (!result.success) {
-          return c.json({ ok: false, error: 'plugin の入力の形が不正（置いていない）' }, 400);
-        }
-        return undefined;
-      }),
+      zValidator(
+        'json',
+        runnerSetPluginCommandSchema,
+        rejectInvalidAs('plugin の入力の形が不正（置いていない）'),
+      ),
       async (c) => {
         try {
           const placed = await host.setPlugin(
@@ -644,12 +669,11 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         maxSize: RUNNER_PLUGIN_RETAIN_BODY_LIMIT_BYTES,
         onError: (c) => c.json({ ok: false, error: '本文が大きすぎる（外していない）' }, 413),
       }),
-      zValidator('json', runnerRetainPluginsCommandSchema, (result, c) => {
-        if (!result.success) {
-          return c.json({ ok: false, error: 'plugin の一覧の形が不正（外していない）' }, 400);
-        }
-        return undefined;
-      }),
+      zValidator(
+        'json',
+        runnerRetainPluginsCommandSchema,
+        rejectInvalidAs('plugin の一覧の形が不正（外していない）'),
+      ),
       (c) => {
         const placed = host.retainPlugins(c.req.valid('json').names);
         return c.json({ ok: true, ...(placed === undefined ? {} : { plugins: placed }) });
@@ -659,15 +683,11 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .get('/codex-auth', (c) => c.json({ ok: true, codexAuth: host.codexAuth() }))
     .post(
       '/codex-auth',
-      zValidator('json', runnerSetCodexAuthCommandSchema, (result, c) => {
-        if (!result.success) {
-          return c.json(
-            { ok: false, error: 'Codex の ChatGPT ログインの袋の形が不正（置いていない）' },
-            400,
-          );
-        }
-        return undefined;
-      }),
+      zValidator(
+        'json',
+        runnerSetCodexAuthCommandSchema,
+        rejectInvalidAs('Codex の ChatGPT ログインの袋の形が不正（置いていない）'),
+      ),
       async (c) => {
         try {
           const codexAuth = await host.setCodexAuth(c.req.valid('json').codexAuth);
@@ -681,10 +701,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     // この制御面の口だけ（デーモンだけが叩ける。合鍵のハッシュで守る）。
     .post(
       '/codex-auth/write-back',
-      zValidator('json', runnerTakeCodexAuthWriteBackCommandSchema, (result, c) => {
-        if (!result.success) return c.json({ ok: false, error: '指紋が無い' }, 400);
-        return undefined;
-      }),
+      zValidator('json', runnerTakeCodexAuthWriteBackCommandSchema, rejectInvalidAs('指紋が無い')),
       (c) =>
         c.json({
           ok: true,
@@ -851,16 +868,14 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
     .get('/managers', (c) => c.json({ managers: host.list() }))
 
-    // zValidator の既定の 400 を使わない: ZodError の整形が変わった時点で、依頼文が本文へ流れうるため。
     .post(
       '/managers',
       bodyLimit({ maxSize: attachmentBodyMax, onError: tooLarge }),
-      zValidator('json', runnerStartCommandSchema, (result, c) => {
-        if (!result.success) {
-          return c.json({ ok: false, error: '起動命令の入力の形が不正（置いていない）' }, 400);
-        }
-        return undefined;
-      }),
+      zValidator(
+        'json',
+        runnerStartCommandSchema,
+        rejectInvalidAs('起動命令の入力の形が不正（置いていない）'),
+      ),
       async (c) => {
         try {
           const { cwd, sessionGeneration } = await host.start(c.req.valid('json'));
@@ -874,15 +889,13 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
-    // zValidator の既定の 400 を使わない: 本文（依頼文・メッセージ）が返りうるため。
     .post(
       '/managers/:id/resume',
-      zValidator('json', runnerResumeCommandSchema, (result, c) => {
-        if (!result.success) {
-          return c.json({ ok: false, error: '再開命令の入力の形が不正（置いていない）' }, 400);
-        }
-        return undefined;
-      }),
+      zValidator(
+        'json',
+        runnerResumeCommandSchema,
+        rejectInvalidAs('再開命令の入力の形が不正（置いていない）'),
+      ),
       async (c) => {
         const command = c.req.valid('json');
         // `bodyLimit` を掛けない: 本文の生ログ `entries` は上限が無く大きく、掛けると正当な resume を壊すため。添付の `data` の合計だけを比べる。
@@ -919,16 +932,14 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
-    // zValidator の既定の 400 を使わない: 本文（メッセージ）が返りうるため。
     .post(
       '/managers/:id/messages',
       bodyLimit({ maxSize: attachmentBodyMax, onError: tooLarge }),
-      zValidator('json', runnerMessageCommandSchema, (result, c) => {
-        if (!result.success) {
-          return c.json({ ok: false, error: 'メッセージの入力の形が不正（置いていない）' }, 400);
-        }
-        return undefined;
-      }),
+      zValidator(
+        'json',
+        runnerMessageCommandSchema,
+        rejectInvalidAs('メッセージの入力の形が不正（置いていない）'),
+      ),
       async (c) => {
         const command = c.req.valid('json');
         let delivered: boolean;
@@ -945,15 +956,13 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
-    // zValidator の既定の 400 を使わない: 本文（回答）が返りうるため。
     .post(
       '/managers/:id/answers',
-      zValidator('json', runnerAnswerCommandSchema, (result, c) => {
-        if (!result.success) {
-          return c.json({ ok: false, error: '回答の入力の形が不正（置いていない）' }, 400);
-        }
-        return undefined;
-      }),
+      zValidator(
+        'json',
+        runnerAnswerCommandSchema,
+        rejectInvalidAs('回答の入力の形が不正（置いていない）'),
+      ),
       async (c) => {
         const outcome = await host.answer(c.req.param('id'), c.req.valid('json'));
         return c.json({
@@ -965,15 +974,11 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
     .post(
       '/rescue-refs/delete',
-      zValidator('json', runnerRescueRefDeleteRequestSchema, (result, c) => {
-        if (!result.success) {
-          return c.json(
-            { ok: false, error: '退避 ref の後始末の入力の形が不正（消していない）' },
-            400,
-          );
-        }
-        return undefined;
-      }),
+      zValidator(
+        'json',
+        runnerRescueRefDeleteRequestSchema,
+        rejectInvalidAs('退避 ref の後始末の入力の形が不正（消していない）'),
+      ),
       async (c) => {
         const result = await host.deleteRescueRef(c.req.valid('json'), {
           signal: c.req.raw.signal,
@@ -1021,15 +1026,11 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     // 本文は `bodyLimit` で縛らず、置き場が流しながら数えて `size` と上限で断る。置き先と作法は命令の添付と同じ。
     .put(
       '/managers/:id/attachments/:attachmentId',
-      zValidator('query', attachmentStageQuery, (result, c) => {
-        if (!result.success) {
-          return c.json(
-            { ok: false, error: '別口の添付の控え（クエリ）の形が不正（置いていない）' },
-            400,
-          );
-        }
-        return undefined;
-      }),
+      zValidator(
+        'query',
+        attachmentStageQuery,
+        rejectInvalidAs('別口の添付の控え（クエリ）の形が不正（置いていない）'),
+      ),
       async (c) => {
         const contentType = c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase();
         if (contentType !== 'application/octet-stream') {
@@ -1074,48 +1075,22 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
     // 出し箱の退避先。デーモンが取りに来る向きだけで、runner からは押し上げない。中身は SSE に載せない。
     // `fileId` の形を先に検める: パス区切りや `..` を退避先のパスへ通さないため。
-    .get('/managers/:id/outbox/:fileId', async (c) => {
-      const fileId = c.req.param('fileId');
-      if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
-      const file = await host.openOutboxFile(c.req.param('id'), fileId);
-      if (file === undefined) return c.json({ error: 'not found' as const }, 404);
-      return c.body(Readable.toWeb(file.stream) as ReadableStream, 200, {
-        'content-type': 'application/octet-stream',
-        'content-length': String(file.size),
-      });
-    })
+    .get('/managers/:id/outbox/:fileId', (c) => serveSpilledFile(c, host.openOutboxFile.bind(host)))
 
     // 無くても 204: 受け取った後に消す呼び出しが再送されても同じ結果になる（冪等）
-    .delete('/managers/:id/outbox/:fileId', async (c) => {
-      const fileId = c.req.param('fileId');
-      if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
-      if (!(await host.deleteOutboxFile(c.req.param('id'), fileId))) {
-        return c.json({ error: 'invalid managerId' as const }, 400);
-      }
-      return c.body(null, 204);
-    })
+    .delete('/managers/:id/outbox/:fileId', (c) =>
+      deleteSpilledFile(c, host.deleteOutboxFile.bind(host)),
+    )
 
     // 未追跡のファイルの預かりの退避先（`rescue_files`。#4863）。出し箱の退避先とは別の dir（予算・掃除を共有しない）。
     // デーモンが取りに来る向きだけ。`fileId` の形を先に検める
-    .get('/managers/:id/rescue-files/:fileId', async (c) => {
-      const fileId = c.req.param('fileId');
-      if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
-      const file = await host.openRescueFile(c.req.param('id'), fileId);
-      if (file === undefined) return c.json({ error: 'not found' as const }, 404);
-      return c.body(Readable.toWeb(file.stream) as ReadableStream, 200, {
-        'content-type': 'application/octet-stream',
-        'content-length': String(file.size),
-      });
-    })
+    .get('/managers/:id/rescue-files/:fileId', (c) =>
+      serveSpilledFile(c, host.openRescueFile.bind(host)),
+    )
 
-    .delete('/managers/:id/rescue-files/:fileId', async (c) => {
-      const fileId = c.req.param('fileId');
-      if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
-      if (!(await host.deleteRescueFile(c.req.param('id'), fileId))) {
-        return c.json({ error: 'invalid managerId' as const }, 400);
-      }
-      return c.body(null, 204);
-    })
+    .delete('/managers/:id/rescue-files/:fileId', (c) =>
+      deleteSpilledFile(c, host.deleteRescueFile.bind(host)),
+    )
 
     // 預けた生ログの退避の本文（#4485）。デーモンが取りに来る向きだけで、SSE には載せない。`archiveId` の形を先に検める
     .get('/managers/:id/archive/:archiveId', (c) => {

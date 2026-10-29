@@ -21,7 +21,7 @@ import {
  * 降ろす（起動の後に届く。ログインはさらに後のこともある）。Host が資格の到着を見て、初めて開くときに
  * {@link PeerSocketPlan.openSocket} を1回だけ呼ぶ。資格が1度も届かない器にはソケットを作らない。
  */
-export interface PeerSocketPlan {
+interface PeerSocketPlan {
   readonly openSocket: () => Promise<PeerSocketHost>;
   /** provider ごとに名指しできるモデル名（`ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS`。未設定・空なら既定の一覧）。 */
   readonly models: Partial<Record<AgentProviderId, readonly string[]>>;
