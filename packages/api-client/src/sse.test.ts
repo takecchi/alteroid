@@ -67,10 +67,7 @@ it('readJsonSse — data を JSON として読む。data が空なら undefined�
 });
 
 it('readJsonSse — JSON として読めない data は投げる（黙って捨てない）', async () => {
-  const reading = (async () => {
-    for await (const _message of readJsonSse(bodyOf('event: text\ndata: {壊れた\n\n'))) {
-      // 読み進めるだけ
-    }
-  })();
-  await expect(reading).rejects.toThrow(SyntaxError);
+  await expect(readJsonSse(bodyOf('event: text\ndata: {壊れた\n\n')).next()).rejects.toThrow(
+    SyntaxError,
+  );
 });

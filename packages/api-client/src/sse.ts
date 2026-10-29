@@ -35,6 +35,18 @@ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator
   }
 }
 
+// `data:` が空の件（`event:` だけの行）は `undefined`: `JSON.parse('')` は投げるため。読めない JSON は投げる（黙って捨てない）
+export async function* readJsonSse(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<{ event: string; data: unknown }> {
+  for await (const message of readSse(body)) {
+    yield {
+      event: message.event,
+      data: message.data === '' ? undefined : JSON.parse(message.data),
+    };
+  }
+}
+
 function parseSseChunk(chunk: string): SseMessage | null {
   let event = 'message';
   let id: string | undefined;

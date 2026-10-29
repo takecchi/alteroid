@@ -2,10 +2,10 @@ import { redactedExcerpt } from '@alteroid/core/redact';
 import createClient, { type Client, type ClientOptions } from 'openapi-fetch';
 
 import type { paths } from './generated/openapi.js';
-import { readSse } from './sse.js';
+import { readJsonSse } from './sse.js';
 
 export type { paths } from './generated/openapi.js';
-export { readSse, type SseMessage } from './sse.js';
+export { readJsonSse, readSse, type SseMessage } from './sse.js';
 
 export type ChatStreamEvent =
   paths['/chat']['post']['responses'][200]['content']['text/event-stream'];
@@ -113,13 +113,7 @@ export function createAlteroidClient(options: AlteroidClientOptions): AlteroidCl
       );
     }
     if (response.body === null) throw new Error(`${path} の応答に本文が無い`);
-
-    for await (const message of readSse(response.body)) {
-      yield {
-        event: message.event,
-        data: message.data === '' ? undefined : JSON.parse(message.data),
-      };
-    }
+    yield* readJsonSse(response.body);
   }
 
   return {
