@@ -7,6 +7,7 @@ import {
   stripNul,
   schedulePhaseSchema,
   scheduledRequestSchema,
+  summarizeInvalidFields,
   writeStderrLine,
 } from '@alteroid/core';
 import type {
@@ -38,14 +39,6 @@ function parsePlan(kind: string, value: unknown): ScheduledRequest {
     `継続中の依頼 ${kind} が読めない形で入っている（消されたのではない）: ${parsed.error.message}`,
     { kind },
   );
-}
-
-/** `issue.message` は使わない: zod の既定メッセージが `received`（実際の値）を含む形に変わっても値が漏れないように、欄名だけを出す。 */
-function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
-  const fields = [
-    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
-  ];
-  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
 }
 
 /** kind 以外の値は載せない: `request` には人間の依頼文がそのまま入りうる。 */

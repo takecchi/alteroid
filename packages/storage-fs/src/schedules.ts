@@ -10,6 +10,7 @@ import {
   scheduledRequestSchema,
   scheduleVersionMatches,
   compareCodeUnits,
+  summarizeInvalidFields,
   writeStderrLine,
 } from '@alteroid/core';
 import type {
@@ -53,14 +54,6 @@ const EMPTY: ScheduleFile = {
   phases: [],
   invalidPhasesRaw: [],
 };
-
-/** `issue.message` は使わない: zod の既定メッセージが `received`（実際の値）を含む形に変わっても値が漏れないように、欄名だけを出す。 */
-function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
-  const fields = [
-    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
-  ];
-  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
-}
 
 function extractKind(raw: unknown): string | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;

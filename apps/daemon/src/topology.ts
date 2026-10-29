@@ -354,10 +354,10 @@ export interface TopologyServiceDeps {
     managers: { list(): Promise<ManagerSummary[]> };
   };
   runners?: Pick<RunnerRegistry, 'entries'>;
-  unreadableJobs?: () => Promise<UnreadableJob[]>;
+  unreadableJobs: () => Promise<UnreadableJob[]>;
   activity: TopologyActivityTracker;
   storage: StorageHealthTracker;
-  modelsOf?: (manager: ManagerSummary) => ManagerModels;
+  modelsOf: (manager: ManagerSummary) => ManagerModels;
   cloneModel?: string;
   now?: () => number;
 }
@@ -380,7 +380,7 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
     const nowMs = now();
     notePhase('topology:list');
     const managers = await deps.clone.managers.list();
-    const unreadable = deps.unreadableJobs === undefined ? [] : await deps.unreadableJobs();
+    const unreadable = await deps.unreadableJobs();
     notePhase(`topology:build:${String(managers.length)}`);
     const value = buildTopologySnapshot({
       nowMs,
@@ -392,7 +392,7 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
       managers,
       unreadable,
       activity: deps.activity,
-      ...(deps.modelsOf === undefined ? {} : { modelsOf: deps.modelsOf }),
+      modelsOf: deps.modelsOf,
       ...(deps.cloneModel === undefined ? {} : { cloneModel: deps.cloneModel }),
     });
     notePhase('topology:build-done');

@@ -6,6 +6,7 @@ import {
   preparePermissionGrantForPut,
   UnreadablePermissionGrantError,
   unreadableRowKey,
+  summarizeInvalidFields,
   writeStderrLine,
 } from '@alteroid/core';
 import type {
@@ -20,14 +21,6 @@ import { asc, eq, inArray } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { permissionGrants } from './schema.js';
-
-// `issue.message` を使わない: zod の既定メッセージが将来 `received`（実際の値）を含む形に変わっても値が漏れないようにするため。
-function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
-  const fields = [
-    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
-  ];
-  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
-}
 
 // id 以外の値を載せない: `record` の欄には人間の依頼文・承認の回答の原文が入りうるため。
 function describeUnreadableGrantRow(params: { id: string; reason: string }): string {

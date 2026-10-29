@@ -545,6 +545,54 @@ describe('未読の永続化', () => {
       await reborn.clone.stop();
     });
   });
+
+  // 受信箱へ直に積む（前の器を `post` で動かさない）: `post` した器は処理に入る時点で本文を日誌へ書くので、拾い直しの側が書いた分と区別できなくなるため
+  it('拾い直して配った manager_message の本文が、日誌に1本だけ追記される', async () => {
+    const stores = createMemoryStores();
+    await stores.inbox.put(
+      report('REDELIVERED-REPORT-BODY', 'evt-redelivered-report'),
+      '2026-08-01T00:00:00.000Z',
+    );
+
+    const reborn = bootClone(stores);
+    await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
+
+    const entries = await stores.journal.list({ types: ['exchange'], with: ['manager'] });
+    const bodies = entries.filter(
+      (entry) => entry.type === 'exchange' && entry.text.includes('REDELIVERED-REPORT-BODY'),
+    );
+    expect(bodies).toHaveLength(1);
+    const body = bodies[0];
+    expect(body?.type === 'exchange' ? body.role : undefined).toBe('inbound');
+    expect(body?.type === 'exchange' ? body.managerId : undefined).toBe('mgr-1');
+    expect(body?.type === 'exchange' ? body.text : '').toContain(
+      '[mgr-1/report] REDELIVERED-REPORT-BODY',
+    );
+
+    await reborn.clone.stop();
+  });
+
+  it('拾い直して配った external の本文が、external_event として日誌に1本だけ追記される', async () => {
+    const stores = createMemoryStores();
+    await stores.inbox.put(
+      externalNotice('REDELIVERED-EXTERNAL-BODY', 'evt-redelivered-external'),
+      '2026-08-01T00:00:00.000Z',
+    );
+
+    const reborn = bootClone(stores);
+    await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
+
+    const entries = await stores.journal.list({ types: ['external_event'] });
+    const bodies = entries.filter(
+      (entry) =>
+        entry.type === 'external_event' && entry.summary.includes('REDELIVERED-EXTERNAL-BODY'),
+    );
+    expect(bodies).toHaveLength(1);
+    const body = bodies[0];
+    expect(body?.type === 'external_event' ? body.source : undefined).toBe('redelivery-gate-probe');
+
+    await reborn.clone.stop();
+  });
 });
 
 async function inboundCount(stores: Stores, text: string): Promise<number> {

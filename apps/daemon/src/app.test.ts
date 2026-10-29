@@ -12655,6 +12655,10 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
         },
       }),
       cwd: '/work',
+      withheldEnvKeys: [],
+      env: () => ({}),
+      identity: () => undefined,
+      onState: () => {},
     });
     await poller.refresh();
 
@@ -12688,6 +12692,10 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
         },
       }),
       cwd: '/work',
+      withheldEnvKeys: [],
+      env: () => ({}),
+      identity: () => undefined,
+      onState: () => {},
     });
     await poller.refresh();
 

@@ -1,9 +1,9 @@
 // 畳みの間も口を開けておき、デーモンが取りに来る要求だけを通す（#4699）。
-// 預けた生ログと出し箱の退避先は、SSE で参照を流したあとデーモンが HTTP で取りに来る。先に口を閉じると取りに来られず、器の入れ替えのたびに失われる。
+// 預けた生ログ・出し箱の退避先・rescue の退避先は、SSE で参照を流したあとデーモンが HTTP で取りに来る。先に口を閉じると取りに来られず、器の入れ替えのたびに失われる。
 
-const PICKUP_PATH = /^\/managers\/[^/]+\/(?:archive|outbox)\/[^/]+$/;
+const PICKUP_PATH = /^\/managers\/[^/]+\/(?:archive|outbox|rescue-files)\/[^/]+$/;
 
-/** 畳みの間も通す要求か: 預けた生ログ・出し箱の退避先の取り出し（GET）と、取り終えた後の削除（DELETE）だけ。 */
+/** 畳みの間も通す要求か: 預けた生ログ・出し箱の退避先・rescue の退避先の取り出し（GET）と、取り終えた後の削除（DELETE）だけ。 */
 export function isPickupRequest(method: string, pathname: string): boolean {
   return (method === 'GET' || method === 'DELETE') && PICKUP_PATH.test(pathname);
 }

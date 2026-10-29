@@ -342,6 +342,7 @@ describe('読めなかった委譲の行（#2705）', () => {
       createTopologyService({
         clone: { usageBlocked: false, managers: { list: async () => [] } },
         unreadableJobs: async () => rows,
+        modelsOf: () => ({}),
         activity: createTopologyActivityTracker(),
         storage: { current: () => ({ state: 'unknown' }) },
         now: () => NOW,
@@ -355,6 +356,8 @@ describe('createTopologyService', () => {
   function service(list: () => Promise<ManagerSummary[]>, now: () => number) {
     return createTopologyService({
       clone: { usageBlocked: false, managers: { list } },
+      unreadableJobs: () => Promise.resolve([]),
+      modelsOf: () => ({}),
       activity: createTopologyActivityTracker(),
       storage: { current: () => ({ state: 'unknown' }) },
       now,

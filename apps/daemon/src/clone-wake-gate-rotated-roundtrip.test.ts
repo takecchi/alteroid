@@ -23,7 +23,7 @@ function recoveredOf(tokenId: string) {
 }
 
 function deliver(gate: CloneWakeGate, toTokenId: string) {
-  return gate.decide(rotatedTo(toTokenId, `label-${toTokenId}`), true, false);
+  return gate.decide(rotatedTo(toTokenId, `label-${toTokenId}`), true, false, false);
 }
 
 describe('CloneWakeGate: rotated の往復 A→B→A→B', () => {
@@ -40,26 +40,34 @@ describe('CloneWakeGate: rotated の往復 A→B→A→B', () => {
   it('🔴 #1223 は戻らない: 遷移なしに繰り返される「また通るようになった」は畳む', () => {
     const gate = createCloneWakeGate();
 
-    expect(gate.decide(recoveredOf('tok-b'), true, false)).toEqual({ kind: 'wake', folded: 0 });
+    expect(gate.decide(recoveredOf('tok-b'), true, false, false)).toEqual({
+      kind: 'wake',
+      folded: 0,
+    });
     for (let i = 0; i < 5; i++) {
-      expect(gate.decide(recoveredOf('tok-b'), false, false)).toEqual({ kind: 'fold' });
-      expect(gate.decide(recoveredOf('tok-b'), true, false)).toEqual({ kind: 'fold' });
+      expect(gate.decide(recoveredOf('tok-b'), false, false, false)).toEqual({ kind: 'fold' });
+      expect(gate.decide(recoveredOf('tok-b'), true, false, false)).toEqual({ kind: 'fold' });
     }
   });
 
   it('🔴 回した は他トークンの「また通るようになった」の印を消さない', () => {
     const gate = createCloneWakeGate();
 
-    expect(gate.decide(recoveredOf('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 0 });
+    expect(gate.decide(recoveredOf('tok-a'), true, false, false)).toEqual({
+      kind: 'wake',
+      folded: 0,
+    });
     expect(deliver(gate, 'tok-b')).toEqual({ kind: 'wake', folded: 0 });
-    expect(gate.decide(recoveredOf('tok-a'), true, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(recoveredOf('tok-a'), true, false, false)).toEqual({ kind: 'fold' });
   });
 
   it('回した の直後でも、もう起こしてある（releasePending）なら畳み、母数は数える', () => {
     const gate = createCloneWakeGate();
 
     expect(deliver(gate, 'tok-b')).toEqual({ kind: 'wake', folded: 0 });
-    expect(gate.decide(rotatedTo('tok-b', 'label-tok-b'), true, true)).toEqual({ kind: 'fold' });
+    expect(gate.decide(rotatedTo('tok-b', 'label-tok-b'), true, true, false)).toEqual({
+      kind: 'fold',
+    });
     expect(deliver(gate, 'tok-b')).toEqual({ kind: 'wake', folded: 1 });
   });
 });

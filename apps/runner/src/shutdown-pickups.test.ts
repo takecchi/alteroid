@@ -14,6 +14,11 @@ describe('isPickupRequest（#4699）', () => {
     ['DELETE', '/managers/mgr-1/archive/a1', true],
     ['GET', '/managers/mgr-1/outbox/f1', true],
     ['DELETE', '/managers/mgr-1/outbox/f1', true],
+    // 畳みが待つ物には rescue の預かりも入る（#5518）ので、取りに来る口も通す
+    ['GET', '/managers/m/rescue-files/f', true],
+    ['DELETE', '/managers/m/rescue-files/f', true],
+    ['POST', '/managers/m/rescue-files/f', false],
+    ['GET', '/managers/m/rescue-files/f/extra', false],
     ['POST', '/managers', false],
     ['POST', '/managers/mgr-1/resume', false],
     ['POST', '/managers/mgr-1/messages', false],
@@ -36,6 +41,8 @@ describe('gateDuringShutdown: 畳みの間は取りに来る要求だけを通�
   async function serve(stopping: () => boolean): Promise<string> {
     const app = new Hono()
       .get('/managers/:id/archive/:archiveId', (c) => c.text('生ログ'))
+      .get('/managers/:id/rescue-files/:fileId', (c) => c.text('預かったファイル'))
+      .delete('/managers/:id/rescue-files/:fileId', (c) => c.body(null, 204))
       .post('/managers', (c) => c.json({ ok: true }));
     const server = createAdaptorServer({ fetch: gateDuringShutdown(app.fetch, stopping) });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -52,6 +59,14 @@ describe('gateDuringShutdown: 畳みの間は取りに来る要求だけを通�
     const base = await serve(() => true);
     const response = await fetch(`${base}/managers/mgr-1/archive/a1`);
     expect(await response.text()).toBe('生ログ');
+  });
+
+  it('⭐ 畳みの間も、rescue のファイルの取り出し（GET）と削除（DELETE）は通す（#5518）', async () => {
+    const base = await serve(() => true);
+    const got = await fetch(`${base}/managers/m/rescue-files/f`);
+    expect(await got.text()).toBe('預かったファイル');
+    const deleted = await fetch(`${base}/managers/m/rescue-files/f`, { method: 'DELETE' });
+    expect(deleted.status).toBe(204);
   });
 
   it('⭐ 畳みの間の start は、応答を返さずに繋ぎを壊す（口を閉じていた今までと同じく繋がらない）', async () => {

@@ -361,7 +361,7 @@ export interface CloneWakeGate {
     reopened: ReopenedToken,
     cloneBlocked: boolean,
     releasePending: boolean,
-    staleSameKeyRecovery?: boolean,
+    staleSameKeyRecovery: boolean,
   ): { kind: 'wake'; folded: number } | { kind: 'fold' };
   observeUnusable(): void;
 }
@@ -377,7 +377,7 @@ export function createCloneWakeGate(): CloneWakeGate {
   // 全消去は `observeUnusable()` のときだけにする: `cloneBlocked` が偽の回に消すと、鍵が通らなくなっていないのに同じ合図がもう一度配られるため。
   const told = new Map<string, string>();
   return {
-    decide(reopened, cloneBlocked, releasePending, staleSameKeyRecovery = false) {
+    decide(reopened, cloneBlocked, releasePending, staleSameKeyRecovery) {
       const tokenId = reopened.tokenId;
       // `回した` はこのトークンの印を先に捨てる: `rotated` は `observeUnusable()` を経ないため、A→B→A→B の2回目の起こし直しが畳まれる。
       // 身元に世代を入れない: 身元は受信箱の畳み込み鍵（`payload.identity`）にも使われ、同じ鍵へ回した未読が畳まれなくなるため。

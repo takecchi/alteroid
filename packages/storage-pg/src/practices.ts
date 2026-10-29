@@ -10,6 +10,7 @@ import {
   practiceVersionMatches,
   practiceVersionSchema,
   UnreadablePracticeError,
+  summarizeInvalidFields,
   writeStderrLine,
 } from '@alteroid/core';
 import type {
@@ -28,14 +29,6 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import type { Db } from './db.js';
 import { byteOrder, stripNulls, toIso } from './db.js';
 import { practices, practiceVersions } from './schema.js';
-
-// `issue.message` を使わない: zod の既定メッセージが将来 `received`（実際の値）を含む形に変わっても値が漏れないようにするため。
-function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
-  const fields = [
-    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
-  ];
-  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
-}
 
 // slug 以外の値を載せない: `title` / `content` には自由文が入りうるため。
 function describeSkippedPracticeRow(params: { slug: string; reason: string }): string {

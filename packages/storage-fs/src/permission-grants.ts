@@ -8,6 +8,8 @@ import {
   preparePermissionGrantForPut,
   UnreadablePermissionGrantError,
   unreadableRowKey,
+  extractRowId,
+  summarizeInvalidFields,
   writeStderrLine,
 } from '@alteroid/core';
 import type {
@@ -35,20 +37,6 @@ interface GrantFile {
 }
 
 const EMPTY: GrantFile = { grants: [], invalidGrantsRaw: [] };
-
-// `issue.message` は使わない: zod の既定メッセージが将来 `received`（実際の値）を含む形に変わると値が漏れるため
-function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
-  const fields = [
-    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
-  ];
-  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
-}
-
-function extractRowId(raw: unknown): string | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const id = (raw as Record<string, unknown>).id;
-  return typeof id === 'string' ? id : undefined;
-}
 
 // id 以外の値は載せない: `allows` / `denies` / `answer` には人間の回答の原文がそのまま入りうるため
 function describeSkippedGrantRow(params: { index: number; reason: string; id?: string }): string {

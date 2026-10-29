@@ -331,66 +331,66 @@ describe('createCloneWakeGate', () => {
   it('クローンが枠で止まっているなら配る（畳んでいなければ folded は0）', () => {
     const gate = createCloneWakeGate();
 
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 0 });
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'wake', folded: 0 });
   });
 
   it('クローンが枠で止まっていないなら畳む（配らない）', () => {
     const gate = createCloneWakeGate();
 
-    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), false, false, false)).toEqual({ kind: 'fold' });
   });
 
   it('畳んだ回数を数え、配る回にその数を渡す', () => {
     const gate = createCloneWakeGate();
 
-    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
-    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
-    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 3 });
+    expect(gate.decide(reopened('tok-a'), false, false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), false, false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), false, false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'wake', folded: 3 });
   });
 
   it('配ったら0へ戻る（次に畳み始めたら1から数え直す）', () => {
     const gate = createCloneWakeGate();
 
-    gate.decide(reopened('tok-a'), false, false);
-    gate.decide(reopened('tok-a'), false, false);
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
+    gate.decide(reopened('tok-a'), false, false, false);
+    gate.decide(reopened('tok-a'), false, false, false);
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'wake', folded: 2 });
 
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
-
-    gate.observeUnusable();
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 1 });
-
-    gate.decide(reopened('tok-a'), false, false);
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'fold' });
 
     gate.observeUnusable();
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'wake', folded: 1 });
+
+    gate.decide(reopened('tok-a'), false, false, false);
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'fold' });
+
+    gate.observeUnusable();
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'wake', folded: 2 });
   });
 
   it('トークンごとに独立して数える', () => {
     const gate = createCloneWakeGate();
 
-    gate.decide(reopened('tok-a'), false, false);
-    gate.decide(reopened('tok-a'), false, false);
-    expect(gate.decide(reopened('tok-b'), true, false)).toEqual({ kind: 'wake', folded: 0 });
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
+    gate.decide(reopened('tok-a'), false, false, false);
+    gate.decide(reopened('tok-a'), false, false, false);
+    expect(gate.decide(reopened('tok-b'), true, false, false)).toEqual({ kind: 'wake', folded: 0 });
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'wake', folded: 2 });
   });
 
   it('🔴 不変条件3: 落ちる→戻る→また落ちる→また戻る で2本目の「戻った」も必ず届く', () => {
     const gate = createCloneWakeGate();
 
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 0 });
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'wake', folded: 0 });
 
-    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), false, false, false)).toEqual({ kind: 'fold' });
 
     gate.observeUnusable();
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 1 });
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'wake', folded: 1 });
 
-    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
-    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), false, false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), false, false, false)).toEqual({ kind: 'fold' });
     gate.observeUnusable();
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'wake', folded: 2 });
   });
 
   it('🔴 #1223: 同じ身元が60回続けて来ても、配るのは最初の1回だけ', () => {
@@ -398,7 +398,7 @@ describe('createCloneWakeGate', () => {
 
     const kinds = Array.from(
       { length: 60 },
-      () => gate.decide(reopened('tok-a'), true, false).kind,
+      () => gate.decide(reopened('tok-a'), true, false, false).kind,
     );
 
     expect(kinds[0]).toBe('wake');
@@ -408,20 +408,20 @@ describe('createCloneWakeGate', () => {
   it('🔴 #1223 再発: cloneBlocked が true/false を往復しても、observeUnusable() 無しでは同じ身元を配り直さない', () => {
     const gate = createCloneWakeGate();
 
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 0 });
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'wake', folded: 0 });
 
     for (let i = 0; i < 3; i++) {
-      expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
-      expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
+      expect(gate.decide(reopened('tok-a'), false, false, false)).toEqual({ kind: 'fold' });
+      expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'fold' });
     }
   });
 
   it('別のトークンの配達に挟まれても、先のトークンの重複は畳まれ続ける', () => {
     const gate = createCloneWakeGate();
 
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 0 });
-    expect(gate.decide(reopened('tok-b'), true, false)).toEqual({ kind: 'wake', folded: 0 });
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'wake', folded: 0 });
+    expect(gate.decide(reopened('tok-b'), true, false, false)).toEqual({ kind: 'wake', folded: 0 });
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({ kind: 'fold' });
   });
 
   it('🔴 #1223 再発2: 観測ベースの回復が同じ鍵・resetsAt 未来のままなら、observeUnusable() を挟んでも配らない（20周・配達0・畳み20）', () => {
@@ -768,7 +768,12 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
   }
 
   function emit(gate: CloneWakeGate, clone: ReturnType<typeof fakeClone>, tokenId: string) {
-    const decision = gate.decide(reopened(tokenId), clone.usageBlocked, clone.usageReleasePending);
+    const decision = gate.decide(
+      reopened(tokenId),
+      clone.usageBlocked,
+      clone.usageReleasePending,
+      false,
+    );
     if (decision.kind === 'wake') clone.receiveNotice();
     return decision.kind;
   }
