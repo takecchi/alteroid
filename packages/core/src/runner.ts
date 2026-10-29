@@ -1977,11 +1977,15 @@ class Host implements RunnerHost {
     this.#attachmentRemovals.set(managerId, removal);
   }
 
-  async #awaitAttachmentRemovals(managerId: string): Promise<void> {
+  // 片付けの開始数を返す: 待ちの最後の確認（もう走っている片付けが無い）と同じ同期の区間で読んだ値を
+  // 呼び出し側へ渡すため。呼び出し側が `await` の後に自分で読むと、戻りの `await` が挟む microtask の窓で始まった片付けが
+  // 「置く前に始まっていた」側へ数えられ、置いている間に畳まれたと判定されずに再試行されない
+  async #awaitAttachmentRemovals(managerId: string): Promise<number> {
     for (let removal = this.#attachmentRemovals.get(managerId); removal !== undefined;) {
       await removal;
       removal = this.#attachmentRemovals.get(managerId);
     }
+    return this.#attachmentRemovalStarts.get(managerId) ?? 0;
   }
 
   // 大きいファイルの別口（#4128 段3a）。置き場・置き先・作法は命令の添付（`placeRunnerAttachments`）と同じ部品を通す。
@@ -1990,7 +1994,11 @@ class Host implements RunnerHost {
     meta: RunnerStagedAttachmentMeta,
     body: AsyncIterable<Uint8Array>,
   ): Promise<void> {
-    await this.#awaitAttachmentRemovals(managerId);
+    // 本体は流れてくる body を読むので置き直せない: 待ちを抜けた後の窓で片付けが始まっていたら、始まった分も待ってから置き始める
+    let removalStarts = await this.#awaitAttachmentRemovals(managerId);
+    while (removalStarts !== (this.#attachmentRemovalStarts.get(managerId) ?? 0)) {
+      removalStarts = await this.#awaitAttachmentRemovals(managerId);
+    }
     void pruneStaleAttachmentDirs(
       this.#attachmentsRoot,
       [...this.#sessions.keys(), managerId],
@@ -2018,8 +2026,7 @@ class Host implements RunnerHost {
     // 置いている間に畳みの片付け（`#removeAttachments`）が始まったら、片付けを待って置き直す: 片付けは担当の置き場ごと消すので、
     // 置く途中なら mkdir が ENOENT で投げて resume ごと失敗し（作り直しへ落ちない）、置き終えていても参照だけが残ってファイルが無い
     for (let attempt = 1; ; attempt += 1) {
-      await this.#awaitAttachmentRemovals(managerId);
-      const removalsBefore = this.#attachmentRemovalStarts.get(managerId) ?? 0;
+      const removalsBefore = await this.#awaitAttachmentRemovals(managerId);
       void pruneStaleAttachmentDirs(
         this.#attachmentsRoot,
         [...this.#sessions.keys(), managerId],

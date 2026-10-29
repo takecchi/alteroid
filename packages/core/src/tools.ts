@@ -59,6 +59,7 @@ import {
 import { isCronExpression } from './cron.js';
 import { isRunningJobStatus } from './job-status-running.js';
 import { journalWindowCrossesHorizon } from './journal-horizon.js';
+import { taskStatusForJob } from './task.js';
 import { filterTranscriptLinesYielding } from './transcript-filter.js';
 import {
   TranscriptPageCache,
@@ -8486,14 +8487,22 @@ export function createCloneTools(context: ToolContext) {
               '前任の枠で止まった印を下ろし、自動の起こし直しの対象から外す。' +
               '前任が終わっていなければ断られる（先に manager_stop で止めること）。',
           ),
+        taskId: z
+          .string()
+          .optional()
+          .describe(
+            'この委譲を結び付ける task の id（task_list）。渡すと task は待ちになり、委譲が終わる・失敗する・lost になると' +
+              '判断待ち（needs_decision）に戻って、報告にもこの id が付く。閉じた task と、走っている委譲が既にある task は断られる（1つの task に走らせる委譲は同時に1本まで）。',
+          ),
       },
       async (rawArgs) => {
-        const { request, cwd, runnerId, attachments, supersedes } = rawArgs as unknown as {
+        const { request, cwd, runnerId, attachments, supersedes, taskId } = rawArgs as unknown as {
           request: string;
           supersedes?: string | undefined;
           cwd?: string | undefined;
           attachments?: string[] | undefined;
           runnerId?: string | undefined;
+          taskId?: string | undefined;
         };
         if (!context.managers) return NO_POOL;
         // 空の依頼を断る: 日誌に「起こそうとしている」と書き、runner へ何もしない依頼を渡して1本ぶんの器を使うことになるため
@@ -8503,6 +8512,42 @@ export function createCloneTools(context: ToolContext) {
         if (requestError !== null) return text(`${requestError}起こしていない。`);
         if (stripNul(request).trim().length === 0) {
           return text('request が空白だけなので起こしていない。任せたい仕事を書いて渡すこと。');
+        }
+        // task は日誌にも委譲にも触れる前に確かめる: 結び付かない委譲を黙って走らせると、終わっても task が動かず、渡したつもりのクローンが気づけないため
+        if (taskId !== undefined) {
+          let linked: Task | null;
+          try {
+            linked = await stores.tasks.get(taskId);
+          } catch (error) {
+            if (error instanceof UnreadableTaskError) {
+              return text(
+                `task ${taskId} は読めない形で入っている。マネージャーは起こしていない。`,
+              );
+            }
+            throw error;
+          }
+          if (linked === null) {
+            return text(
+              `task ${taskId} は無い（task_list で実在する id を確かめること）。マネージャーは起こしていない。`,
+            );
+          }
+          if (linked.status === 'done' || linked.status === 'cancelled') {
+            return text(
+              `task ${taskId} は閉じている（${linked.status}）。続きを頼むなら先に task_set_status で queued へ戻すこと。マネージャーは起こしていない。`,
+            );
+          }
+          // 1つの task に同時に走る委譲は1本まで: 2本目が先に終わると、1本目が走っているのに task が判断待ちへ倒れる
+          const running = (await stores.jobs.listJobs()).filter(
+            (job) => job.taskId === taskId && taskStatusForJob(job.status) === 'waiting',
+          );
+          if (running.length > 0) {
+            return text(
+              `task ${taskId} には走っている委譲がある（${running.map((job) => `${job.id}: ${job.status}`).join('、')}）。` +
+                '1つの task に同時に走らせる委譲は1本までなので、マネージャーは起こしていない。' +
+                'その委譲が終わるのを待つか、manager_stop で止めてから頼むこと。' +
+                '止められない（器が消えて running のまま残っている等）ときは、taskId を付けずに起こすか、task_set_status で task を動かすこと。',
+            );
+          }
         }
         // conversationId はクローンに渡させず呼び出し文脈から自動で読む: 手で維持する欄を新しく作らないため
         // 返信の宛先ではなく仕事の会話を読む: 報告を受けた内部ターンで続きを委譲したとき、起点が途切れないため
@@ -8543,6 +8588,7 @@ export function createCloneTools(context: ToolContext) {
             ...(runnerId === undefined ? {} : { runnerId }),
             ...(supersedes === undefined ? {} : { supersedes }),
             ...(conversationId === undefined ? {} : { conversationId }),
+            ...(taskId === undefined ? {} : { taskId }),
             ...(handover.attachments.length === 0 ? {} : { attachments: handover.attachments }),
           });
         } catch (error) {

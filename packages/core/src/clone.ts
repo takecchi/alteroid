@@ -3276,8 +3276,12 @@ class Clone implements CloneHost {
       const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
       if (job === undefined) return { kind: 'missing' };
       return job.conversationId === undefined
-        ? { kind: 'none' }
-        : { kind: 'conversation', conversationId: job.conversationId };
+        ? { kind: 'none', ...(job.taskId === undefined ? {} : { taskId: job.taskId }) }
+        : {
+            kind: 'conversation',
+            conversationId: job.conversationId,
+            ...(job.taskId === undefined ? {} : { taskId: job.taskId }),
+          };
     } catch (error) {
       return { kind: 'unreadable', reason: reasonOf(error) };
     }
@@ -9451,8 +9455,8 @@ function managerPrompt(
 
 /** `missing` / `unreadable` を `none` に畳まない: 起点が在るのに「宛先は自分で選べ」と案内することになるため。 */
 export type ManagerOrigin =
-  | { kind: 'conversation'; conversationId: string }
-  | { kind: 'none' }
+  | { kind: 'conversation'; conversationId: string; taskId?: string }
+  | { kind: 'none'; taskId?: string }
   | { kind: 'missing' }
   | { kind: 'unreadable'; reason: string };
 
@@ -9480,6 +9484,11 @@ export const ORIGIN_NONE_GUIDE =
   '（会話の外〔定期の仕事・外部イベント・自発など〕で起こした委譲。人間へ知らせるなら宛先は自分で選ぶ）';
 export const ORIGIN_NONE_GUIDE_REF = '（会話の外で起こした委譲。宛先は自分で選ぶ）';
 
+/** 委譲が task に結び付いているときだけ出す1行（#5469 P3）。委譲が終わった task は判断待ち（needs_decision）に戻っているので、結果の扱いはその task の上で決める。 */
+function describeOriginTask(taskId: string | undefined): string {
+  return taskId === undefined ? '' : `\n結び付いた task: ${taskId}（task_list で読める）`;
+}
+
 export function describeManagerOrigin(
   origin: ManagerOrigin,
   fold: FixedTextFold = NO_FOLD,
@@ -9488,10 +9497,11 @@ export function describeManagerOrigin(
     case 'conversation':
       return (
         `起点の会話: ${origin.conversationId}` +
-        fold('origin-conversation', ORIGIN_CONVERSATION_GUIDE, ORIGIN_CONVERSATION_GUIDE_REF)
+        fold('origin-conversation', ORIGIN_CONVERSATION_GUIDE, ORIGIN_CONVERSATION_GUIDE_REF) +
+        describeOriginTask(origin.taskId)
       );
     case 'none':
-      return `起点の会話: 無し${fold('origin-none', ORIGIN_NONE_GUIDE, ORIGIN_NONE_GUIDE_REF)}`;
+      return `起点の会話: 無し${fold('origin-none', ORIGIN_NONE_GUIDE, ORIGIN_NONE_GUIDE_REF)}${describeOriginTask(origin.taskId)}`;
     case 'missing':
       return '起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）';
     case 'unreadable':
