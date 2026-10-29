@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  clipWithEllipsis,
   codePointStartBoundary,
   countCodePoints,
   describePage,
@@ -12,6 +13,21 @@ import {
   renderListingFromEnd,
   tailByCodePoints,
 } from './excerpt.js';
+
+describe('clipWithEllipsis（注記なしで「…」だけを付けて切る）', () => {
+  it('上限以下ならそのまま（ちょうど上限も切らない）', () => {
+    expect(clipWithEllipsis('あいう', 3)).toBe('あいう');
+    expect(clipWithEllipsis('', 0)).toBe('');
+  });
+
+  it('上限を超えたら上限で切って … を付ける', () => {
+    expect(clipWithEllipsis('あいうえ', 3)).toBe('あいう…');
+  });
+
+  it('切り口が補助面の文字の途中なら、その手前で切る（高サロゲートを残さない）', () => {
+    expect(clipWithEllipsis('ab😀c', 3)).toBe('ab…');
+  });
+});
 
 describe('excerpt（1つの本文を切る）', () => {
   it('短ければ何も足さない（注記が毎回付くと目印が効かなくなる）', () => {

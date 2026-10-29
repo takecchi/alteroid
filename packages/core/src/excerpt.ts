@@ -40,6 +40,11 @@ export function countCodePoints(text: string): number {
   return count;
 }
 
+// 注記を付けず「…」だけ: 1行の告知や名前の中に埋まる短い抜粋で、省いた分量までは言わない所のため（言うなら `excerpt`）
+export function clipWithEllipsis(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, codePointBoundary(text, limit))}…` : text;
+}
+
 // 短ければ何も足さない: 毎回注記が付くと、本当に切れているときの目印が効かなくなるため
 export function excerpt(text: string, limit: number): string {
   if (text.length <= limit) return text;
