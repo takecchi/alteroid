@@ -1,5 +1,5 @@
 import { fingerprintOf } from './credentials.js';
-import { codePointBoundary } from './excerpt.js';
+import { clipWithEllipsis } from './excerpt.js';
 import type { JournalEntryInput } from './schema.js';
 
 // 新しい型を足さず exchange（with: 'self'）を使う: journalEntrySchema を広げると openapi.json の外向きの API 面が動くため
@@ -83,7 +83,7 @@ const TAG_LIMIT = 64;
 
 function tag(value: string): string {
   const flat = value.replaceAll(/\s+/gu, ' ');
-  return flat.length > TAG_LIMIT ? `${flat.slice(0, codePointBoundary(flat, TAG_LIMIT))}…` : flat;
+  return clipWithEllipsis(flat, TAG_LIMIT);
 }
 
 function size(text: string, name: string): string {

@@ -6,7 +6,7 @@
  */
 
 import type { ConversationReadView } from './conversation-read.js';
-import { codePointBoundary } from './excerpt.js';
+import { clipWithEllipsis, codePointBoundary } from './excerpt.js';
 import { compareIsoInstant } from './iso-instant.js';
 import type { AttachmentRef, JournalEntry, TurnFailureKind } from './schema.js';
 import {
@@ -30,9 +30,7 @@ export const CONVERSATION_PREVIEW = 80;
  */
 export function preview(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length <= CONVERSATION_PREVIEW
-    ? flat
-    : `${flat.slice(0, codePointBoundary(flat, CONVERSATION_PREVIEW))}…`;
+  return clipWithEllipsis(flat, CONVERSATION_PREVIEW);
 }
 
 export interface ConversationSummary {

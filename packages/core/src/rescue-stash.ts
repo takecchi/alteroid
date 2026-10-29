@@ -4,7 +4,7 @@ import { lstat, open, readdir, realpath, rm, stat, type FileHandle } from 'node:
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 
-import { codePointBoundary } from './excerpt.js';
+import { clipWithEllipsis } from './excerpt.js';
 import { credentialSourceRefusal, resolveCredentialSources } from './file-put.js';
 import { secretPatternsInBody } from './redact.js';
 import { claimRunnerRootDirectorySync, ensureOwnDirectorySync } from './runner-outbox.js';
@@ -129,9 +129,7 @@ class Skip extends Error {
 }
 
 function clip(name: string): string {
-  return name.length > SKIPPED_PATH_MAX_LENGTH
-    ? `${name.slice(0, codePointBoundary(name, SKIPPED_PATH_MAX_LENGTH))}…`
-    : name;
+  return clipWithEllipsis(name, SKIPPED_PATH_MAX_LENGTH);
 }
 
 async function stagedBytesOf(dir: string): Promise<number> {

@@ -15,7 +15,7 @@
  */
 
 import { redactErrorText } from './denial-input-head.js';
-import { codePointBoundary } from './excerpt.js';
+import { clipWithEllipsis } from './excerpt.js';
 
 const REDACT_INPUT_LIMIT = 8192;
 
@@ -61,8 +61,8 @@ export function collapseErrorCause(error: unknown): string {
 function levelText(value: unknown, limit: number): string {
   const head =
     value instanceof Error
-      ? clip(safeLine(`${value.name}: ${value.message}`), limit)
-      : clip(safeLine(String(value)), limit);
+      ? clipWithEllipsis(safeLine(`${value.name}: ${value.message}`), limit)
+      : clipWithEllipsis(safeLine(String(value)), limit);
   const fields = structuredFieldsOf(value);
   return fields === '' ? head : `${head} ${fields}`;
 }
@@ -79,15 +79,11 @@ function structuredFieldsOf(value: unknown): string {
   return STRUCTURED_KEYS.flatMap((key) => {
     const raw = record[key];
     return typeof raw === 'string' && raw !== ''
-      ? [`${key}=${clip(safeLine(raw), FIELD_LIMIT)}`]
+      ? [`${key}=${clipWithEllipsis(safeLine(raw), FIELD_LIMIT)}`]
       : [];
   }).join(' ');
 }
 
 function firstLine(text: string): string {
   return text.split('\n', 1)[0] ?? '';
-}
-
-function clip(text: string, limit: number): string {
-  return text.length > limit ? `${text.slice(0, codePointBoundary(text, limit))}…` : text;
 }

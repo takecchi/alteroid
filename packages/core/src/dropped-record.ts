@@ -1,7 +1,7 @@
 import { writeSync } from 'node:fs';
 
 import { collapseErrorCause } from './error-cause.js';
-import { codePointBoundary } from './excerpt.js';
+import { clipWithEllipsis } from './excerpt.js';
 import { notePhase } from './loop-stall.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import type { InboxEvent, JournalEntryInput, PendingApproval } from './schema.js';
@@ -824,16 +824,12 @@ export function reasonOf(error: unknown): string {
 
 /** 列挙値・id を1行に収める（改行を持ち込ませない）。 */
 function tag(value: string): string {
-  return clip(value.replaceAll(/\s+/gu, ' '), TAG_LIMIT);
+  return clipWithEllipsis(value.replaceAll(/\s+/gu, ' '), TAG_LIMIT);
 }
 
 /** 自由文の長さだけを出す。名前を付けられるのは、自由文が2つ以上ある型で `chars=0 chars=0` が何と何か分からなくなるため。 */
 function size(text: string, name?: string): string {
   return `${name === undefined ? '' : `${name}.`}chars=${text.length}`;
-}
-
-function clip(text: string, limit: number): string {
-  return text.length > limit ? `${text.slice(0, codePointBoundary(text, limit))}…` : text;
 }
 
 /**
