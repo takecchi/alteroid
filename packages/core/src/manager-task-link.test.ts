@@ -486,8 +486,9 @@ describe('終端の同期が失敗したとき・デーモンが落ちたとき'
     await s.stores.tasks.add(task('t-1', 'waiting'));
     await s.stores.tasks.add(task('t-2', 'waiting'));
     const withoutEnd = (id: string, taskId: string): Job => {
-      const { endedAt: _unused, ...rest } = ledgerJob(id, 'done', taskId);
-      return rest;
+      const job = ledgerJob(id, 'done', taskId);
+      delete job.endedAt;
+      return job;
     };
     // t-1: 読める行 → 読めない行。t-2: 読めない行 → 読める行（台帳の並びが逆でも見送る）
     await s.stores.jobs.putJob(ledgerJob('mgr-a', 'done', 't-1'));
