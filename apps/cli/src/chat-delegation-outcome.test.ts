@@ -4,7 +4,7 @@ import { PassThrough } from 'node:stream';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { captureStdout } from './test-support.js';
+import { captureStdout, slashArgs } from './test-support.js';
 
 /**
  * デーモンが HTTP 200 で返す「届かなかった・止まらなかった・一部失敗」を成功として扱わない。
@@ -110,12 +110,11 @@ async function runOnce(
   const reasons: string[] = [];
   await runSlashCommand(
     line,
-    createClient(base, {}),
-    listed,
-    null,
-    target,
-    async () => true,
-    (reason) => reasons.push(reason),
+    ...slashArgs(createClient(base, {}), listed, {
+      target,
+      confirm: async () => true,
+      onFailed: (reason) => reasons.push(reason),
+    }),
   );
   return { reasons, text: out() };
 }

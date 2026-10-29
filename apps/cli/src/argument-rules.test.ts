@@ -5,7 +5,7 @@ import { parseJournalSearchTokens, runSlashCommand } from './chat.js';
 import { createClient } from './client.js';
 import { normalizeCommandWord, parseCountArg } from './command-args.js';
 import type { Target } from './target.js';
-import { captureStdout } from './test-support.js';
+import { captureStdout, slashArgs } from './test-support.js';
 import { surplusRefusal } from './tui/app.js';
 
 const target: Target = {
@@ -52,12 +52,9 @@ async function run(line: string): Promise<{ out: string; failed: string[]; urls:
   const failed: string[] = [];
   await runSlashCommand(
     line,
-    createClient(target.baseUrl, target.headers),
-    listed(),
-    null,
-    undefined,
-    undefined,
-    (reason) => failed.push(reason),
+    ...slashArgs(createClient(target.baseUrl, target.headers), listed(), {
+      onFailed: (reason) => failed.push(reason),
+    }),
   );
   return { out: out(), failed, urls };
 }

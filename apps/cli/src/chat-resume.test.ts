@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runResumeCommand, runSlashCommand } from './chat.js';
 import { createClient } from './client.js';
 import type { Target } from './target.js';
-import { captureStdout } from './test-support.js';
+import { captureStdout, slashArgs } from './test-support.js';
 
 const target: Target = {
   baseUrl: 'http://127.0.0.1:4517',
@@ -300,18 +300,21 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
 
   it('/help に載る', async () => {
     const out = captureStdout();
-    await runSlashCommand('/help', createClient(target.baseUrl, target.headers), {
-      approvals: [],
-      managerAnchors: {},
-      commitments: [],
-      conversations: [],
-      managers: [],
-      waiting: [],
-      messages: [],
-      messagesConversationId: null,
-      messageAttachments: {},
-      messageTexts: {},
-    });
+    await runSlashCommand(
+      '/help',
+      ...slashArgs(createClient(target.baseUrl, target.headers), {
+        approvals: [],
+        managerAnchors: {},
+        commitments: [],
+        conversations: [],
+        managers: [],
+        waiting: [],
+        messages: [],
+        messagesConversationId: null,
+        messageAttachments: {},
+        messageTexts: {},
+      }),
+    );
     expect(out()).toContain('/resume [番号|id]');
   });
 
@@ -370,12 +373,9 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
     const failed: string[] = [];
     await runSlashCommand(
       '/conversation scan=500',
-      createClient(target.baseUrl, target.headers),
-      listedWith(['c1']),
-      null,
-      undefined,
-      undefined,
-      (reason) => failed.push(reason),
+      ...slashArgs(createClient(target.baseUrl, target.headers), listedWith(['c1']), {
+        onFailed: (reason) => failed.push(reason),
+      }),
     );
     expect(out()).toBe(
       '使い方の誤り: /conversation は先頭に <番号|id> が要ります。[scan=500] は key=value の形で、参照ではありません（key=value は参照の後ろに書きます）\n',
@@ -394,7 +394,10 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
       '/done k=v 理由',
       '/commit-reopen k=v 理由',
     ]) {
-      await runSlashCommand(line, createClient(target.baseUrl, target.headers), listedWith([]));
+      await runSlashCommand(
+        line,
+        ...slashArgs(createClient(target.baseUrl, target.headers), listedWith([])),
+      );
     }
     expect(out().match(/使い方の誤り: /g)).toHaveLength(5);
     expect(calls).toEqual([]);
@@ -407,12 +410,9 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
     for (const line of ['/journal-show scan=5', '/archive limit=5', '/archive remove k=v 理由']) {
       await runSlashCommand(
         line,
-        createClient(target.baseUrl, target.headers),
-        listedWith([]),
-        null,
-        undefined,
-        undefined,
-        (reason) => failed.push(reason),
+        ...slashArgs(createClient(target.baseUrl, target.headers), listedWith([]), {
+          onFailed: (reason) => failed.push(reason),
+        }),
       );
     }
     expect(out()).toBe(

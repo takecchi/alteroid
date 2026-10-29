@@ -25,7 +25,7 @@ import {
 } from './chat.js';
 import { unreadMark } from './conversations.js';
 import type { Target } from './target.js';
-import { captureStdout } from './test-support.js';
+import { captureStdout, slashArgs } from './test-support.js';
 
 const confirmYes = async (): Promise<boolean> => true;
 
@@ -2016,8 +2016,8 @@ describe('chat の台帳コマンド', () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-x' })] });
 
-    await runSlashCommand('/commitments', client, emptyListed());
-    await runSlashCommand('/commitments all', client, emptyListed());
+    await runSlashCommand('/commitments', ...slashArgs(client, emptyListed()));
+    await runSlashCommand('/commitments all', ...slashArgs(client, emptyListed()));
 
     expect(calls.map((call) => call.route)).toEqual(['GET /commitments', 'GET /commitments']);
     expect(calls[0]?.args).toEqual({ query: {} });
@@ -2029,7 +2029,10 @@ describe('chat の台帳コマンド', () => {
     captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/commit 週明けに設計を見直す', client, emptyListed(), 'conv-7');
+    await runSlashCommand(
+      '/commit 週明けに設計を見直す',
+      ...slashArgs(client, emptyListed(), { conversationId: 'conv-7' }),
+    );
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({
@@ -2042,7 +2045,7 @@ describe('chat の台帳コマンド', () => {
     captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/commit 週明けに設計を見直す', client, emptyListed(), null);
+    await runSlashCommand('/commit 週明けに設計を見直す', ...slashArgs(client, emptyListed()));
 
     expect(calls[0]?.args).toEqual({ json: { body: '週明けに設計を見直す' } });
   });
@@ -2051,7 +2054,10 @@ describe('chat の台帳コマンド', () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/commit', client, emptyListed(), 'conv-7');
+    await runSlashCommand(
+      '/commit',
+      ...slashArgs(client, emptyListed(), { conversationId: 'conv-7' }),
+    );
 
     expect(calls).toEqual([]);
     expect(read()).toContain('使い方: /commit');
@@ -2061,7 +2067,10 @@ describe('chat の台帳コマンド', () => {
     const read = captureStdout();
     const { client } = stubClient({ commitOpenStatus: 404, commitOpenBody: {} });
 
-    await runSlashCommand('/commit 週明けに設計を見直す', client, emptyListed(), 'conv-7');
+    await runSlashCommand(
+      '/commit 週明けに設計を見直す',
+      ...slashArgs(client, emptyListed(), { conversationId: 'conv-7' }),
+    );
 
     expect(read()).toContain('台帳に積めませんでした');
   });
@@ -2074,9 +2083,7 @@ describe('chat の台帳コマンド', () => {
     });
     await runSlashCommand(
       '/commit 週明けに設計を見直す',
-      serverErrorClient,
-      emptyListed(),
-      'conv-7',
+      ...slashArgs(serverErrorClient, emptyListed(), { conversationId: 'conv-7' }),
     );
     const serverErrorText = serverError();
     vi.restoreAllMocks();
@@ -2088,9 +2095,7 @@ describe('chat の台帳コマンド', () => {
     });
     await runSlashCommand(
       '/commit 週明けに設計を見直す',
-      badRequestClient,
-      emptyListed(),
-      'conv-7',
+      ...slashArgs(badRequestClient, emptyListed(), { conversationId: 'conv-7' }),
     );
     const badRequestText = badRequest();
 
@@ -2107,8 +2112,8 @@ describe('chat の台帳コマンド', () => {
     });
     const listed = emptyListed();
 
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/done 2 片付けた', client, listed);
+    await runSlashCommand('/commitments', ...slashArgs(client, listed));
+    await runSlashCommand('/done 2 片付けた', ...slashArgs(client, listed));
 
     const close = calls.find((call) => call.route === 'POST /commitments/:id/close');
     expect(close).toBeDefined();
@@ -2121,9 +2126,9 @@ describe('chat の台帳コマンド', () => {
     const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
     const listed = emptyListed();
 
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/done 1', client, listed);
-    await runSlashCommand('/done 1    ', client, listed);
+    await runSlashCommand('/commitments', ...slashArgs(client, listed));
+    await runSlashCommand('/done 1', ...slashArgs(client, listed));
+    await runSlashCommand('/done 1    ', ...slashArgs(client, listed));
 
     expect(calls.some((call) => call.route === 'POST /commitments/:id/close')).toBe(false);
     expect(out()).toContain('使い方: /done <番号|id> <理由>');
@@ -2134,12 +2139,12 @@ describe('chat の台帳コマンド', () => {
     captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/event ci {"a":1}', client, emptyListed());
-    await runSlashCommand('/event ci [1,"x"]', client, emptyListed());
-    await runSlashCommand('/event ci 42', client, emptyListed());
-    await runSlashCommand('/event ci ビルドが  落ちた', client, emptyListed());
-    await runSlashCommand('/event ci {"a":1', client, emptyListed());
-    await runSlashCommand('/event ci', client, emptyListed());
+    await runSlashCommand('/event ci {"a":1}', ...slashArgs(client, emptyListed()));
+    await runSlashCommand('/event ci [1,"x"]', ...slashArgs(client, emptyListed()));
+    await runSlashCommand('/event ci 42', ...slashArgs(client, emptyListed()));
+    await runSlashCommand('/event ci ビルドが  落ちた', ...slashArgs(client, emptyListed()));
+    await runSlashCommand('/event ci {"a":1', ...slashArgs(client, emptyListed()));
+    await runSlashCommand('/event ci', ...slashArgs(client, emptyListed()));
 
     const sent = calls
       .filter((call) => call.route === 'POST /events')
@@ -2158,7 +2163,7 @@ describe('chat の台帳コマンド', () => {
     const out = captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/event', client, emptyListed());
+    await runSlashCommand('/event', ...slashArgs(client, emptyListed()));
 
     expect(calls.some((call) => call.route === 'POST /events')).toBe(false);
     expect(out()).toContain('使い方: /event');
@@ -2171,8 +2176,8 @@ describe('chat の台帳コマンド', () => {
     });
     const listed = emptyListed();
 
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/commit-edit 2 言い直した本文', client, listed);
+    await runSlashCommand('/commitments', ...slashArgs(client, listed));
+    await runSlashCommand('/commit-edit 2 言い直した本文', ...slashArgs(client, listed));
 
     const edit = calls.find((call) => call.route === 'PATCH /commitments/:id');
     expect(edit).toBeDefined();
@@ -2193,8 +2198,8 @@ describe('chat の台帳コマンド', () => {
     });
     const listed = emptyListed();
 
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/commit-edit 1 直したい', client, listed);
+    await runSlashCommand('/commitments', ...slashArgs(client, listed));
+    await runSlashCommand('/commit-edit 1 直したい', ...slashArgs(client, listed));
 
     expect(out()).toContain("origin:'self'");
     expect(out()).toContain('commitment_edit');
@@ -2205,8 +2210,8 @@ describe('chat の台帳コマンド', () => {
     const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
     const listed = emptyListed();
 
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/commit-edit 1', client, listed);
+    await runSlashCommand('/commitments', ...slashArgs(client, listed));
+    await runSlashCommand('/commit-edit 1', ...slashArgs(client, listed));
 
     expect(calls.some((call) => call.route === 'PATCH /commitments/:id')).toBe(false);
     expect(out()).toContain('使い方');
@@ -2228,8 +2233,11 @@ describe('chat の台帳コマンド', () => {
       });
       const listed = emptyListed();
 
-      await runSlashCommand('/commitments all', client, listed);
-      await runSlashCommand('/commit-reopen 2 まだ終わっていなかった', client, listed);
+      await runSlashCommand('/commitments all', ...slashArgs(client, listed));
+      await runSlashCommand(
+        '/commit-reopen 2 まだ終わっていなかった',
+        ...slashArgs(client, listed),
+      );
 
       const reopen = calls.find((call) => call.route === 'POST /commitments/:id/reopen');
       expect((reopen?.args as { param: { id: string } }).param).toEqual({ id: 'cmt-2' });
@@ -2244,7 +2252,7 @@ describe('chat の台帳コマンド', () => {
       captureStdout();
       const { calls, client } = stubClient();
 
-      await runSlashCommand('/commit-reopen cmt-9 やり直す', client, emptyListed());
+      await runSlashCommand('/commit-reopen cmt-9 やり直す', ...slashArgs(client, emptyListed()));
 
       const reopen = calls.find((call) => call.route === 'POST /commitments/:id/reopen');
       expect((reopen?.args as { param: { id: string } }).param).toEqual({ id: 'cmt-9' });
@@ -2253,13 +2261,13 @@ describe('chat の台帳コマンド', () => {
     it('/commitments all の後に、閉じた行があるときだけ開き直しの案内を出す', async () => {
       const withClosed = captureStdout();
       const { client: closedClient } = stubClient({ commitments: [closed('cmt-1')] });
-      await runSlashCommand('/commitments all', closedClient, emptyListed());
+      await runSlashCommand('/commitments all', ...slashArgs(closedClient, emptyListed()));
       const withClosedText = withClosed();
       vi.restoreAllMocks();
 
       const openOnly = captureStdout();
       const { client: openClient } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
-      await runSlashCommand('/commitments all', openClient, emptyListed());
+      await runSlashCommand('/commitments all', ...slashArgs(openClient, emptyListed()));
       const openOnlyText = openOnly();
 
       expect(withClosedText).toContain('/commit-reopen <番号> <理由> で開き直せます');
@@ -2271,9 +2279,9 @@ describe('chat の台帳コマンド', () => {
       const { calls, client } = stubClient({ commitments: [closed('cmt-1')] });
       const listed = emptyListed();
 
-      await runSlashCommand('/commitments all', client, listed);
-      await runSlashCommand('/commit-reopen 1', client, listed);
-      await runSlashCommand('/commit-reopen 1    ', client, listed);
+      await runSlashCommand('/commitments all', ...slashArgs(client, listed));
+      await runSlashCommand('/commit-reopen 1', ...slashArgs(client, listed));
+      await runSlashCommand('/commit-reopen 1    ', ...slashArgs(client, listed));
 
       expect(calls.some((call) => call.route === 'POST /commitments/:id/reopen')).toBe(false);
       expect(out()).toContain('使い方: /commit-reopen <番号|id> <理由>');
@@ -2287,12 +2295,7 @@ describe('chat の台帳コマンド', () => {
 
       await runSlashCommand(
         '/commit-reopen 3 理由',
-        client,
-        emptyListed(),
-        null,
-        undefined,
-        undefined,
-        (reason) => failed.push(reason),
+        ...slashArgs(client, emptyListed(), { onFailed: (reason) => failed.push(reason) }),
       );
 
       expect(calls).toEqual([]);
@@ -2310,15 +2313,10 @@ describe('chat の台帳コマンド', () => {
       const listed = emptyListed();
       const failed: string[] = [];
 
-      await runSlashCommand('/commitments all', client, listed);
+      await runSlashCommand('/commitments all', ...slashArgs(client, listed));
       await runSlashCommand(
         '/commit-reopen 1 理由',
-        client,
-        listed,
-        null,
-        undefined,
-        undefined,
-        (reason) => failed.push(reason),
+        ...slashArgs(client, listed, { onFailed: (reason) => failed.push(reason) }),
       );
 
       expect(out()).toContain('not found');
@@ -2341,15 +2339,10 @@ describe('chat の台帳コマンド', () => {
       const listed = emptyListed();
       const failed: string[] = [];
 
-      await runSlashCommand('/commitments all', client, listed);
+      await runSlashCommand('/commitments all', ...slashArgs(client, listed));
       await runSlashCommand(
         '/commit-reopen 1 理由',
-        client,
-        listed,
-        null,
-        undefined,
-        undefined,
-        (reason) => failed.push(reason),
+        ...slashArgs(client, listed, { onFailed: (reason) => failed.push(reason) }),
       );
 
       expect(out()).toContain(message);
@@ -2361,7 +2354,7 @@ describe('chat の台帳コマンド', () => {
       const read = captureStdout();
       const { client } = stubClient();
 
-      await runSlashCommand('/help', client, emptyListed());
+      await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
 
       expect(read()).toContain('/commit-reopen <番号|id> <理由>');
     });
@@ -2380,9 +2373,13 @@ describe('chat の台帳コマンド', () => {
       const { client } = stubClient(options);
       const listed = emptyListed();
       const failed: string[] = [];
-      if (needsList) await runSlashCommand('/commitments', client, listed);
-      await runSlashCommand(line, client, listed, 'conv-7', undefined, undefined, (reason) =>
-        failed.push(reason),
+      if (needsList) await runSlashCommand('/commitments', ...slashArgs(client, listed));
+      await runSlashCommand(
+        line,
+        ...slashArgs(client, listed, {
+          conversationId: 'conv-7',
+          onFailed: (reason) => failed.push(reason),
+        }),
       );
       return { text: out(), failed };
     }
@@ -2517,10 +2514,10 @@ describe('chat の台帳コマンド', () => {
       });
       const listed = emptyListed();
 
-      await runSlashCommand('/commitments all', client, listed);
+      await runSlashCommand('/commitments all', ...slashArgs(client, listed));
       const listing = read();
       expect(listing).not.toContain('2行目の末尾');
-      await runSlashCommand('/commitment 2', client, listed);
+      await runSlashCommand('/commitment 2', ...slashArgs(client, listed));
 
       const text = read().slice(listing.length);
       expect(text).toContain('cmt-2');
@@ -2540,7 +2537,7 @@ describe('chat の台帳コマンド', () => {
       const read = captureStdout();
       const { client } = stubClient({ commitments: [commitment({ id: 'cmt-9', body: LONG })] });
 
-      await runSlashCommand('/commitment cmt-9', client, emptyListed());
+      await runSlashCommand('/commitment cmt-9', ...slashArgs(client, emptyListed()));
 
       expect(read()).toContain('2行目の末尾');
     });
@@ -2558,7 +2555,7 @@ describe('chat の台帳コマンド', () => {
         ],
       });
 
-      await runSlashCommand('/commitment cmt-s', client, emptyListed());
+      await runSlashCommand('/commitment cmt-s', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('続き');
@@ -2569,7 +2566,7 @@ describe('chat の台帳コマンド', () => {
       const read = captureStdout();
       const { client } = stubClient({ commitments: [], commitmentDetailStatus: 409 });
 
-      await runSlashCommand('/commitment cmt-bad', client, emptyListed());
+      await runSlashCommand('/commitment cmt-bad', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('台帳に cmt-bad は見つかりません');
@@ -2580,11 +2577,11 @@ describe('chat の台帳コマンド', () => {
       const read = captureStdout();
       const { calls, client } = stubClient({ commitments: [] });
 
-      await runSlashCommand('/commitment nope', client, emptyListed());
+      await runSlashCommand('/commitment nope', ...slashArgs(client, emptyListed()));
       expect(read()).toContain('台帳に nope は見つかりません');
 
       const before = calls.length;
-      await runSlashCommand('/commitment 3', client, emptyListed());
+      await runSlashCommand('/commitment 3', ...slashArgs(client, emptyListed()));
       expect(read()).toContain('[3] は /commitments の一覧にありません');
       expect(calls).toHaveLength(before);
     });
@@ -2593,13 +2590,13 @@ describe('chat の台帳コマンド', () => {
       const read = captureStdout();
       const { calls, client } = stubClient({});
 
-      await runSlashCommand('/commitment', client, emptyListed());
-      await runSlashCommand('/commitment a b', client, emptyListed());
+      await runSlashCommand('/commitment', ...slashArgs(client, emptyListed()));
+      await runSlashCommand('/commitment a b', ...slashArgs(client, emptyListed()));
       expect(read()).toContain('使い方: /commitment <番号|id>');
       expect(calls).toEqual([]);
 
       const help = captureStdout();
-      await runSlashCommand('/help', client, emptyListed());
+      await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
       expect(help()).toContain('/commitment <番号|id>');
     });
   });
@@ -2609,8 +2606,8 @@ describe('chat の台帳コマンド', () => {
     const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
     const listed = emptyListed();
 
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/done 1 PR #99 をマージした', client, listed);
+    await runSlashCommand('/commitments', ...slashArgs(client, listed));
+    await runSlashCommand('/done 1 PR #99 をマージした', ...slashArgs(client, listed));
 
     const close = calls.find((call) => call.route === 'POST /commitments/:id/close');
     expect((close?.args as { json: { reason: string } }).json.reason).toBe('PR #99 をマージした');
@@ -2627,8 +2624,8 @@ describe('chat の台帳コマンド', () => {
       },
     });
     const listedConflict = emptyListed();
-    await runSlashCommand('/commitments', conflictClient, listedConflict);
-    await runSlashCommand('/done 1 片付けた', conflictClient, listedConflict);
+    await runSlashCommand('/commitments', ...slashArgs(conflictClient, listedConflict));
+    await runSlashCommand('/done 1 片付けた', ...slashArgs(conflictClient, listedConflict));
     const conflictText = conflict();
     vi.restoreAllMocks();
 
@@ -2638,8 +2635,8 @@ describe('chat の台帳コマンド', () => {
       closeStatus: 404,
     });
     const listedMissing = emptyListed();
-    await runSlashCommand('/commitments', missingClient, listedMissing);
-    await runSlashCommand('/done 1 片付けた', missingClient, listedMissing);
+    await runSlashCommand('/commitments', ...slashArgs(missingClient, listedMissing));
+    await runSlashCommand('/done 1 片付けた', ...slashArgs(missingClient, listedMissing));
     const missingText = missing();
 
     expect(conflictText).toContain('既に 2026-10-01T00:00:00.000Z に片付いている');
@@ -2656,8 +2653,8 @@ describe('chat の台帳コマンド', () => {
       closeBody: { error: '台帳の書き込みが失敗した（issue #2172 のテスト用）' },
     });
     const listedServerError = emptyListed();
-    await runSlashCommand('/commitments', serverErrorClient, listedServerError);
-    await runSlashCommand('/done 1 片付けた', serverErrorClient, listedServerError);
+    await runSlashCommand('/commitments', ...slashArgs(serverErrorClient, listedServerError));
+    await runSlashCommand('/done 1 片付けた', ...slashArgs(serverErrorClient, listedServerError));
     const serverErrorText = serverError();
     vi.restoreAllMocks();
 
@@ -2668,8 +2665,8 @@ describe('chat の台帳コマンド', () => {
       closeBody: { error: '理由が長すぎる（issue #2172 のテスト用）' },
     });
     const listedBadRequest = emptyListed();
-    await runSlashCommand('/commitments', badRequestClient, listedBadRequest);
-    await runSlashCommand('/done 1 片付けた', badRequestClient, listedBadRequest);
+    await runSlashCommand('/commitments', ...slashArgs(badRequestClient, listedBadRequest));
+    await runSlashCommand('/done 1 片付けた', ...slashArgs(badRequestClient, listedBadRequest));
     const badRequestText = badRequest();
 
     expect(serverErrorText).toContain('台帳の書き込みが失敗した（issue #2172 のテスト用）');
@@ -2686,7 +2683,7 @@ describe('chat の台帳コマンド', () => {
       approvals: ['approval-1'],
     };
 
-    await runSlashCommand('/done 1 片付けた', client, listed);
+    await runSlashCommand('/done 1 片付けた', ...slashArgs(client, listed));
 
     expect(calls).toEqual([]);
     expect(read()).toContain('/commitments の一覧にありません');
@@ -2696,7 +2693,7 @@ describe('chat の台帳コマンド', () => {
     const read = captureStdout();
     const { client } = stubClient();
 
-    await runSlashCommand('/help', client, emptyListed());
+    await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('/commitments');
@@ -2718,8 +2715,12 @@ describe('書き込み系のスラッシュコマンドは HTTP の失敗を onF
     const out = captureStdout();
     const { client } = stubClient(options);
     const failed: string[] = [];
-    await runSlashCommand(line, client, listed, null, undefined, confirmYes, (reason) =>
-      failed.push(reason),
+    await runSlashCommand(
+      line,
+      ...slashArgs(client, listed, {
+        confirm: confirmYes,
+        onFailed: (reason) => failed.push(reason),
+      }),
     );
     return { text: out(), failed };
   }
@@ -2781,8 +2782,12 @@ describe('書き込み系のスラッシュコマンドは HTTP の失敗を onF
         const out = captureStdout();
         const { client, calls } = stubClient({});
         const failed: string[] = [];
-        await runSlashCommand(line, client, emptyListed(), null, undefined, confirmYes, (reason) =>
-          failed.push(reason),
+        await runSlashCommand(
+          line,
+          ...slashArgs(client, emptyListed(), {
+            confirm: confirmYes,
+            onFailed: (reason) => failed.push(reason),
+          }),
         );
 
         expect(out()).toContain('周期は HH:MM');
@@ -2957,40 +2962,14 @@ describe('書き込み系のスラッシュコマンドは HTTP の失敗を onF
 
       await runSlashCommand(
         '/edit 1 直した文',
-        {} as unknown as Parameters<typeof runSlashCommand>[1],
-        listed,
-        null,
-        target,
-        undefined,
-        (reason) => failed.push(reason),
+        ...slashArgs({} as unknown as Parameters<typeof runSlashCommand>[1], listed, {
+          target,
+          onFailed: (reason) => failed.push(reason),
+        }),
       );
 
       const text = out();
       expect(text).toContain('先に /conversation');
-      expect(failed).toEqual([text.trimEnd()]);
-    });
-
-    it('接続先が分からなければ、表示した文のまま失敗として渡す', async () => {
-      const out = captureStdout();
-      const failed: string[] = [];
-      const listed: Listed = {
-        ...emptyListed(),
-        messages: ['m1'],
-        messagesConversationId: 'conv-1',
-      };
-
-      await runSlashCommand(
-        '/edit 1 直した文',
-        {} as unknown as Parameters<typeof runSlashCommand>[1],
-        listed,
-        null,
-        undefined,
-        undefined,
-        (reason) => failed.push(reason),
-      );
-
-      const text = out();
-      expect(text).toContain('編集を送れませんでした（接続先が分かりません）');
       expect(failed).toEqual([text.trimEnd()]);
     });
   });
@@ -3033,7 +3012,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     const read = captureStdout();
     const { client } = stubClient({ approvals: [approval] });
 
-    await runSlashCommand('/approvals', client, emptyListed());
+    await runSlashCommand('/approvals', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('設問 2 件');
@@ -3045,7 +3024,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     const read = captureStdout();
     const { client } = stubClient({ approvals: [approval] });
 
-    await runSlashCommand('/approval 1', client, listedOne());
+    await runSlashCommand('/approval 1', ...slashArgs(client, listedOne()));
 
     const text = read();
     expect(text).toContain('Q1 [id=target] デプロイ先は？（単一選択・その他を書ける）');
@@ -3060,12 +3039,12 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     const { client } = stubClient({
       approvals: [{ ...settled, answeredVia: { kind: 'operator', auth: 'operator-token' } }],
     });
-    await runSlashCommand('/approval 1', client, listedOne());
+    await runSlashCommand('/approval 1', ...slashArgs(client, listedOne()));
     expect(read()).toContain('回答経路: operator（operator token）');
 
     const readPlain = captureStdout();
     const plain = stubClient({ approvals: [settled] });
-    await runSlashCommand('/approval 1', plain.client, listedOne());
+    await runSlashCommand('/approval 1', ...slashArgs(plain.client, listedOne()));
     expect(readPlain()).not.toContain('回答経路');
   });
 
@@ -3073,7 +3052,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ approvals: [approval] });
 
-    await runSlashCommand('/approval ap-q', client, emptyListed());
+    await runSlashCommand('/approval ap-q', ...slashArgs(client, emptyListed()));
 
     expect(calls.map((call) => call.route)).toEqual(['GET /approvals/:id']);
     expect((calls[0]?.args as { param: { id: string } }).param).toEqual({ id: 'ap-q' });
@@ -3084,7 +3063,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     captureStdout();
     const { calls, client } = stubClient({ approvals: [approval] });
 
-    await runSlashCommand('/approval 1', client, listedOne());
+    await runSlashCommand('/approval 1', ...slashArgs(client, listedOne()));
 
     expect(calls.map((call) => call.route)).toEqual(['GET /approvals']);
     expect((calls[0]?.args as { query: unknown }).query).toEqual({
@@ -3096,7 +3075,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
   it('/approval <id>: 404 は見つかりませんでした。他の失敗（409・500）は、見つからないとは言わず読めなかったと言う', async () => {
     const readMissing = captureStdout();
     const missing = stubClient({ approvals: [] });
-    await runSlashCommand('/approval nope', missing.client, emptyListed());
+    await runSlashCommand('/approval nope', ...slashArgs(missing.client, emptyListed()));
     expect(readMissing()).toContain('見つかりませんでした');
 
     for (const status of [409, 500]) {
@@ -3105,7 +3084,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
         approvalByIdStatus: status,
         approvalByIdBody: { error: '読めない行' },
       });
-      await runSlashCommand('/approval ap-q', failed.client, emptyListed());
+      await runSlashCommand('/approval ap-q', ...slashArgs(failed.client, emptyListed()));
       const text = read();
       expect(text, String(status)).toContain('承認待ちを読めませんでした');
       expect(text, String(status)).not.toContain('見つかりませんでした');
@@ -3118,8 +3097,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
 
     await runSlashCommand(
       '/answer 1 --select target=railway --select notify=slack,mail --other target="ただし 来週" 金曜は避けたい',
-      client,
-      listedOne(),
+      ...slashArgs(client, listedOne()),
     );
 
     expect(sentJson(calls)).toEqual({
@@ -3141,8 +3119,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
 
     await runSlashCommand(
       '/answer ap-q --select=target=fly --other=notify=x=y',
-      client,
-      listedOne(),
+      ...slashArgs(client, listedOne()),
     );
 
     expect(sentJson(calls)?.json).toEqual({
@@ -3157,8 +3134,8 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ approvals: [approval] });
 
-    await runSlashCommand('/answer 1 --select target', client, listedOne());
-    await runSlashCommand('/answer 1 --other', client, listedOne());
+    await runSlashCommand('/answer 1 --select target', ...slashArgs(client, listedOne()));
+    await runSlashCommand('/answer 1 --other', ...slashArgs(client, listedOne()));
 
     expect(sentJson(calls)).toBeNull();
     expect(read()).toContain('--select は --select <設問id>=');
@@ -3168,7 +3145,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/answer 1 railway で  お願い', client, listedOne());
+    await runSlashCommand('/answer 1 railway で  お願い', ...slashArgs(client, listedOne()));
 
     expect(sentJson(calls)?.json).toEqual({ answer: 'railway で  お願い' });
   });
@@ -3179,8 +3156,11 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
       approvals: [{ ...approval, questions: undefined }],
     });
 
-    await runSlashCommand('/answer 1 git の --select は "使わない"', client, listedOne());
-    await runSlashCommand('/answer 1 --other a=b を試した', client, listedOne());
+    await runSlashCommand(
+      '/answer 1 git の --select は "使わない"',
+      ...slashArgs(client, listedOne()),
+    );
+    await runSlashCommand('/answer 1 --other a=b を試した', ...slashArgs(client, listedOne()));
 
     const sent = calls
       .filter((call) => call.route === 'POST /approvals/:id/answer')
@@ -3196,7 +3176,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ approvals: [approval], approvalsStatus: 500 });
 
-    await runSlashCommand('/answer 1 --select target=railway', client, listedOne());
+    await runSlashCommand('/answer 1 --select target=railway', ...slashArgs(client, listedOne()));
 
     expect(sentJson(calls)).toBeNull();
     expect(read()).toContain('回答を送っていません');
@@ -3205,14 +3185,20 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
   it('/answer <id> --select は id で1件引く口（GET /approvals/:id）を1回だけ呼び、全件は読まない。番号は従来どおり全件', async () => {
     captureStdout();
     const byId = stubClient({ approvals: [approval] });
-    await runSlashCommand('/answer ap-q --select target=railway', byId.client, emptyListed());
+    await runSlashCommand(
+      '/answer ap-q --select target=railway',
+      ...slashArgs(byId.client, emptyListed()),
+    );
     expect(byId.calls.filter((c) => c.route.startsWith('GET')).map((c) => c.route)).toEqual([
       'GET /approvals/:id',
     ]);
     expect(sentJson(byId.calls)?.param).toEqual({ id: 'ap-q' });
 
     const byNumber = stubClient({ approvals: [approval] });
-    await runSlashCommand('/answer 1 --select target=railway', byNumber.client, listedOne());
+    await runSlashCommand(
+      '/answer 1 --select target=railway',
+      ...slashArgs(byNumber.client, listedOne()),
+    );
     expect(byNumber.calls.filter((c) => c.route.startsWith('GET')).map((c) => c.route)).toEqual([
       'GET /approvals',
     ]);
@@ -3221,14 +3207,17 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
   it('/answer <id> --select: 404 は見つからなかった、409・500 は読めなかったと言い、どちらも送らない', async () => {
     const readMissing = captureStdout();
     const missing = stubClient({ approvals: [] });
-    await runSlashCommand('/answer nope --select a=b', missing.client, emptyListed());
+    await runSlashCommand('/answer nope --select a=b', ...slashArgs(missing.client, emptyListed()));
     expect(readMissing()).toContain('見つからなかった');
     expect(sentJson(missing.calls)).toBeNull();
 
     for (const status of [409, 500]) {
       const read = captureStdout();
       const failed = stubClient({ approvalByIdStatus: status, approvalByIdBody: { error: 'x' } });
-      await runSlashCommand('/answer ap-q --select a=b', failed.client, emptyListed());
+      await runSlashCommand(
+        '/answer ap-q --select a=b',
+        ...slashArgs(failed.client, emptyListed()),
+      );
       const text = read();
       expect(text, String(status)).toContain('承認待ちを読めなかったので、回答を送っていません');
       expect(text, String(status)).not.toContain('見つからなかった');
@@ -3240,7 +3229,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ approvals: [] });
 
-    await runSlashCommand('/answer 1 --select target=railway', client, listedOne());
+    await runSlashCommand('/answer 1 --select target=railway', ...slashArgs(client, listedOne()));
 
     expect(sentJson(calls)).toBeNull();
     expect(read()).toContain('見つからなかった');
@@ -3250,7 +3239,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     captureStdout();
     const { calls, client } = stubClient({ approvals: [approval] });
 
-    await runSlashCommand('/answer 1 ok', client, listedOne());
+    await runSlashCommand('/answer 1 ok', ...slashArgs(client, listedOne()));
 
     expect(calls.some((call) => call.route === 'GET /approvals')).toBe(false);
   });
@@ -3266,7 +3255,10 @@ describe('chat の /answers（まとめて答える）', () => {
     const { calls, client } = stubClient();
     const listed = listedApprovals(['approval-1', 'approval-2']);
 
-    await runSlashCommand('/answers 1 allow 2 "駄目。理由は後で書く"', client, listed);
+    await runSlashCommand(
+      '/answers 1 allow 2 "駄目。理由は後で書く"',
+      ...slashArgs(client, listed),
+    );
 
     const answerCalls = calls.filter((call) => call.route === 'POST /approvals/answer');
     expect(answerCalls).toHaveLength(1);
@@ -3285,7 +3277,7 @@ describe('chat の /answers（まとめて答える）', () => {
     const { calls, client } = stubClient();
     const listed = listedApprovals(['approval-1', 'approval-2', 'approval-3']);
 
-    await runSlashCommand('/answers 2 allow', client, listed);
+    await runSlashCommand('/answers 2 allow', ...slashArgs(client, listed));
 
     const sent = (calls[0]?.args as { json: AnswersRequest }).json.answers;
     expect(sent).toEqual([{ id: 'approval-2', answer: 'allow' }]);
@@ -3296,7 +3288,7 @@ describe('chat の /answers（まとめて答える）', () => {
     const { calls, client } = stubClient();
     const listed = listedApprovals(['approval-1']);
 
-    await runSlashCommand('/answers 9 allow 1 deny', client, listed);
+    await runSlashCommand('/answers 9 allow 1 deny', ...slashArgs(client, listed));
 
     const sent = (calls[0]?.args as { json: AnswersRequest }).json.answers;
     expect(sent).toEqual([{ id: 'approval-1', answer: 'deny' }]);
@@ -3315,7 +3307,7 @@ describe('chat の /answers（まとめて答える）', () => {
     });
     const listed = listedApprovals(['approval-1', 'approval-2']);
 
-    await runSlashCommand('/answers 1 allow 2 deny', client, listed);
+    await runSlashCommand('/answers 1 allow 2 deny', ...slashArgs(client, listed));
 
     const text = read();
     expect(text).toContain('[approval-1] 回答しました');
@@ -3334,12 +3326,10 @@ describe('chat の /answers（まとめて答える）', () => {
       const failed: string[] = [];
       await runSlashCommand(
         line,
-        client,
-        listedApprovals(ids),
-        null,
-        undefined,
-        confirmYes,
-        (reason) => failed.push(reason),
+        ...slashArgs(client, listedApprovals(ids), {
+          confirm: confirmYes,
+          onFailed: (reason) => failed.push(reason),
+        }),
       );
       return { text: out(), failed, calls };
     }
@@ -3394,7 +3384,7 @@ describe('chat の /answers（まとめて答える）', () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/answers', client, listedApprovals(['approval-1']));
+    await runSlashCommand('/answers', ...slashArgs(client, listedApprovals(['approval-1'])));
 
     expect(calls).toEqual([]);
     expect(read()).toContain('使い方: /answers');
@@ -3406,8 +3396,7 @@ describe('chat の /answers（まとめて答える）', () => {
 
     await runSlashCommand(
       '/answers 1 allow 2',
-      client,
-      listedApprovals(['approval-1', 'approval-2']),
+      ...slashArgs(client, listedApprovals(['approval-1', 'approval-2'])),
     );
 
     expect(calls).toEqual([]);
@@ -3418,7 +3407,7 @@ describe('chat の /answers（まとめて答える）', () => {
     const read = captureStdout();
     const { client } = stubClient();
 
-    await runSlashCommand('/help', client, emptyListed());
+    await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('/answers');
   });
@@ -3463,7 +3452,7 @@ describe('chat の /approval-trace', () => {
       },
     });
 
-    await runSlashCommand('/approval-trace appr-1', client, emptyListed());
+    await runSlashCommand('/approval-trace appr-1', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(calls).toContainEqual({
@@ -3480,14 +3469,14 @@ describe('chat の /approval-trace', () => {
       approvalTraceStatus: 200,
       approvalTraceBody: { ...base, state: 'turn_before_recording', actions: [] },
     });
-    await runSlashCommand('/approval-trace appr-1', client, emptyListed());
+    await runSlashCommand('/approval-trace appr-1', ...slashArgs(client, emptyListed()));
     expect(read()).toContain('行動が無いのではなく、記録していない');
   });
 
   it('知らない id は「ありません」', async () => {
     const read = captureStdout();
     const { client } = stubClient();
-    await runSlashCommand('/approval-trace nope', client, emptyListed());
+    await runSlashCommand('/approval-trace nope', ...slashArgs(client, emptyListed()));
     expect(read()).toContain('承認 nope はありません');
   });
 });
@@ -3505,7 +3494,7 @@ describe('chat の /approvals（一覧）', () => {
       ],
     });
 
-    await runSlashCommand('/approvals', client, emptyListed());
+    await runSlashCommand('/approvals', ...slashArgs(client, emptyListed()));
 
     const text = read();
     const lines = text.split('\n');
@@ -3529,7 +3518,7 @@ describe('chat の /approvals（一覧）', () => {
     });
     const listed = emptyListed();
 
-    await runSlashCommand('/approvals', client, listed);
+    await runSlashCommand('/approvals', ...slashArgs(client, listed));
 
     const text = read();
     expect(text).toContain('  [1] 読める質問');
@@ -3543,14 +3532,14 @@ describe('chat の /approvals（一覧）', () => {
     const only = stubClient({
       approvalsUnreadable: [{ id: 'appr-bad', reason: '不正な欄: createdAt' }],
     });
-    await runSlashCommand('/approvals', only.client, emptyListed());
+    await runSlashCommand('/approvals', ...slashArgs(only.client, emptyListed()));
     const text = read();
     expect(text).toContain('（読めた承認待ちはありません）');
     expect(text).not.toContain('（承認待ちはありません）');
     expect(text).toContain('appr-bad');
 
     const none = stubClient({});
-    await runSlashCommand('/approvals', none.client, emptyListed());
+    await runSlashCommand('/approvals', ...slashArgs(none.client, emptyListed()));
     const textNone = read().slice(text.length);
     expect(textNone).toContain('（承認待ちはありません）');
     expect(textNone).not.toContain('読めない');
@@ -3570,7 +3559,7 @@ describe('chat の /approvals（一覧）', () => {
       ],
     });
 
-    await runSlashCommand('/approvals', client, emptyListed());
+    await runSlashCommand('/approvals', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain(
@@ -3602,7 +3591,7 @@ describe('chat の /approvals（一覧）', () => {
       ],
     });
 
-    await runSlashCommand('/approvals', client, emptyListed());
+    await runSlashCommand('/approvals', ...slashArgs(client, emptyListed()));
 
     const text = read();
     const lines = text.split('\n');
@@ -3644,7 +3633,7 @@ describe('chat の /approvals（一覧）', () => {
         ],
       });
 
-      await runSlashCommand('/approvals answered', client, emptyListed());
+      await runSlashCommand('/approvals answered', ...slashArgs(client, emptyListed()));
 
       const call = calls.find((c) => c.route === 'GET /approvals/answered-dates');
       expect((call?.args as { query: Record<string, unknown> }).query).toEqual({ limit: '14' });
@@ -3660,7 +3649,10 @@ describe('chat の /approvals（一覧）', () => {
         approvalsAnsweredDates: [{ date: '2026-09-29', count: 1 }],
       });
 
-      await runSlashCommand('/approvals answered limit=1 before=2026-09-30', client, emptyListed());
+      await runSlashCommand(
+        '/approvals answered limit=1 before=2026-09-30',
+        ...slashArgs(client, emptyListed()),
+      );
 
       const call = calls.find((c) => c.route === 'GET /approvals/answered-dates');
       expect((call?.args as { query: Record<string, unknown> }).query).toEqual({
@@ -3674,7 +3666,7 @@ describe('chat の /approvals（一覧）', () => {
       captureStdout();
       const { client, calls } = stubClient({ approvals: [answered] });
 
-      await runSlashCommand('/approvals answered 2026-09-30', client, emptyListed());
+      await runSlashCommand('/approvals answered 2026-09-30', ...slashArgs(client, emptyListed()));
 
       const call = calls.find((c) => c.route === 'GET /approvals');
       expect((call?.args as { query: Record<string, unknown> }).query).toEqual({
@@ -3686,7 +3678,7 @@ describe('chat の /approvals（一覧）', () => {
       const read = captureStdout();
       const { client } = stubClient({ approvals: [answered, withdrawn] });
 
-      await runSlashCommand('/approvals answered 2026-09-30', client, emptyListed());
+      await runSlashCommand('/approvals answered 2026-09-30', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('2026-09-30 に決着した承認 2 件');
@@ -3706,14 +3698,17 @@ describe('chat の /approvals（一覧）', () => {
           { ...withdrawn, answeredVia: { kind: 'operator', auth: 'disabled' } },
         ],
       });
-      await runSlashCommand('/approvals answered 2026-09-30', client, emptyListed());
+      await runSlashCommand('/approvals answered 2026-09-30', ...slashArgs(client, emptyListed()));
       const text = read();
       expect(text).toContain('回答経路: account（acc-1）');
       expect(text).not.toContain('operator（認証無効）');
 
       const readPlain = captureStdout();
       const plain = stubClient({ approvals: [answered] });
-      await runSlashCommand('/approvals answered 2026-09-30', plain.client, emptyListed());
+      await runSlashCommand(
+        '/approvals answered 2026-09-30',
+        ...slashArgs(plain.client, emptyListed()),
+      );
       expect(readPlain()).not.toContain('回答経路');
     });
 
@@ -3724,7 +3719,7 @@ describe('chat の /approvals（一覧）', () => {
         approvals: [{ ...answered, question: long, answer: long }],
       });
 
-      await runSlashCommand('/approvals answered 2026-09-30', client, emptyListed());
+      await runSlashCommand('/approvals answered 2026-09-30', ...slashArgs(client, emptyListed()));
 
       expect(read()).not.toContain(long);
     });
@@ -3734,7 +3729,7 @@ describe('chat の /approvals（一覧）', () => {
       const { client } = stubClient({ approvals: [answered] });
       const listed = { ...emptyListed(), approvals: ['keep-1', 'keep-2'] };
 
-      await runSlashCommand('/approvals answered 2026-09-30', client, listed);
+      await runSlashCommand('/approvals answered 2026-09-30', ...slashArgs(client, listed));
 
       expect(listed.approvals).toEqual(['keep-1', 'keep-2']);
       expect(read()).not.toMatch(/\[1\]/);
@@ -3743,7 +3738,10 @@ describe('chat の /approvals（一覧）', () => {
     it('その日に無ければ「ありません」、日付が不正（400）ならデーモンの言葉をそのまま出す', async () => {
       const read = captureStdout();
       const empty = stubClient({ approvals: [] });
-      await runSlashCommand('/approvals answered 2026-09-01', empty.client, emptyListed());
+      await runSlashCommand(
+        '/approvals answered 2026-09-01',
+        ...slashArgs(empty.client, emptyListed()),
+      );
       expect(read()).toContain('（2026-09-01 に決着した承認はありません）');
 
       const read2 = captureStdout();
@@ -3751,7 +3749,10 @@ describe('chat の /approvals（一覧）', () => {
         approvalsAnsweredOnStatus: 400,
         approvalsAnsweredOnBody: { error: 'answeredOn は YYYY-MM-DD で指定する' },
       });
-      await runSlashCommand('/approvals answered 2026-02-30', bad.client, emptyListed());
+      await runSlashCommand(
+        '/approvals answered 2026-02-30',
+        ...slashArgs(bad.client, emptyListed()),
+      );
       const text = read2();
       expect(text).toContain('answeredOn は YYYY-MM-DD で指定する');
       expect(text).not.toContain('ありません');
@@ -3763,7 +3764,7 @@ describe('chat の /approvals（一覧）', () => {
         approvalsAnsweredDatesStatus: 500,
         approvalsAnsweredDatesBody: { error: 'boom' },
       });
-      await runSlashCommand('/approvals answered', dates.client, emptyListed());
+      await runSlashCommand('/approvals answered', ...slashArgs(dates.client, emptyListed()));
       expect(read()).not.toContain('まだありません');
       expect(read()).toContain('読めませんでした');
     });
@@ -3771,7 +3772,7 @@ describe('chat の /approvals（一覧）', () => {
     it('help に載っている', async () => {
       const read = captureStdout();
       const { client } = stubClient();
-      await runSlashCommand('/help', client, emptyListed());
+      await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
       expect(read()).toContain('/approvals answered <YYYY-MM-DD>');
     });
   });
@@ -3781,7 +3782,7 @@ describe('chat の /approvals（一覧）', () => {
       captureStdout();
       const { client, calls } = stubClient({ approvals: [] });
 
-      await runSlashCommand('/approvals', client, emptyListed());
+      await runSlashCommand('/approvals', ...slashArgs(client, emptyListed()));
 
       const call = calls.find((c) => c.route === 'GET /approvals');
       const query = (call?.args as { query: Record<string, unknown> }).query;
@@ -3792,7 +3793,7 @@ describe('chat の /approvals（一覧）', () => {
       captureStdout();
       const { client, calls } = stubClient({ approvals: [] });
 
-      await runSlashCommand('/approvals all', client, emptyListed());
+      await runSlashCommand('/approvals all', ...slashArgs(client, emptyListed()));
 
       const call = calls.find((c) => c.route === 'GET /approvals');
       const query = (call?.args as { query: Record<string, unknown> }).query;
@@ -3813,7 +3814,7 @@ describe('chat の /approvals（一覧）', () => {
         ],
       });
 
-      await runSlashCommand('/approvals all', client, emptyListed());
+      await runSlashCommand('/approvals all', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('状態: 取り下げ済み（2026-08-16T11:00:00.000Z）');
@@ -3834,7 +3835,7 @@ describe('chat の /approvals（一覧）', () => {
         ],
       });
 
-      await runSlashCommand('/approvals all', client, emptyListed());
+      await runSlashCommand('/approvals all', ...slashArgs(client, emptyListed()));
 
       expect(read()).toContain('取り下げた理由: （理由の記録なし）');
     });
@@ -3853,7 +3854,7 @@ describe('chat の /approvals（一覧）', () => {
         ],
       });
 
-      await runSlashCommand('/approvals all', client, emptyListed());
+      await runSlashCommand('/approvals all', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('状態: 回答済み（2026-08-16T11:00:00.000Z）');
@@ -3868,7 +3869,7 @@ describe('chat の /schedule <kind> <周期> <本文>（#5374）', () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ schedulePostOkBody: { ok: true, replaced: true } });
 
-    await runSlashCommand('/schedule daily-x 09:00 本文', client, emptyListed());
+    await runSlashCommand('/schedule daily-x 09:00 本文', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('daily-x は既に在ったので置き換えました');
@@ -3884,7 +3885,7 @@ describe('chat の /schedule <kind> <周期> <本文>（#5374）', () => {
     const read = captureStdout();
     const { client } = stubClient({ schedulePostOkBody: { ok: true, replaced: false } });
 
-    await runSlashCommand('/schedule daily-x 09:00 本文', client, emptyListed());
+    await runSlashCommand('/schedule daily-x 09:00 本文', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('daily-x を仕込みました');
   });
@@ -3893,7 +3894,7 @@ describe('chat の /schedule <kind> <周期> <本文>（#5374）', () => {
     const read = captureStdout();
     const { client } = stubClient({ schedulePostOkBody: { ok: true } });
 
-    await runSlashCommand('/schedule daily-x 09:00 本文', client, emptyListed());
+    await runSlashCommand('/schedule daily-x 09:00 本文', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('daily-x を仕込みました');
@@ -3917,7 +3918,7 @@ describe('chat の /schedule', () => {
       ],
     });
 
-    await runSlashCommand('/schedule', client, emptyListed());
+    await runSlashCommand('/schedule', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('依頼: PR #99 の続きを見る');
@@ -3932,7 +3933,7 @@ describe('chat の /schedule', () => {
       ],
     });
 
-    await runSlashCommand('/schedule', client, emptyListed());
+    await runSlashCommand('/schedule', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain(
@@ -3950,7 +3951,7 @@ describe('chat の /schedule', () => {
       scheduleUnreadable: [{ kind: 'broken-1', reason: '不正な欄: spec' }, { reason: '不正な行' }],
     });
 
-    await runSlashCommand('/schedule', client, emptyListed());
+    await runSlashCommand('/schedule', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('daily-report');
@@ -3964,14 +3965,14 @@ describe('chat の /schedule', () => {
     const only = stubClient({
       scheduleUnreadable: [{ kind: 'broken-1', reason: '不正な欄: spec' }],
     });
-    await runSlashCommand('/schedule', only.client, emptyListed());
+    await runSlashCommand('/schedule', ...slashArgs(only.client, emptyListed()));
     const text = read();
     expect(text).toContain('（読めた定期ジョブは仕込まれていません）');
     expect(text).not.toContain('（定期ジョブは仕込まれていません）');
     expect(text).toContain('broken-1');
 
     const none = stubClient({});
-    await runSlashCommand('/schedule', none.client, emptyListed());
+    await runSlashCommand('/schedule', ...slashArgs(none.client, emptyListed()));
     const textNone = read().slice(text.length);
     expect(textNone).toContain('（定期ジョブは仕込まれていません）');
     expect(textNone).not.toContain('読めない');
@@ -3996,7 +3997,7 @@ describe('chat の /schedule-show', () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ scheduleEntries: entries });
 
-    await runSlashCommand('/schedule-show follow-up', client, emptyListed());
+    await runSlashCommand('/schedule-show follow-up', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('follow-up');
@@ -4012,7 +4013,7 @@ describe('chat の /schedule-show', () => {
     const read = captureStdout();
     const { client } = stubClient({ scheduleEntries: entries });
 
-    await runSlashCommand('/schedule-show daily-report', client, emptyListed());
+    await runSlashCommand('/schedule-show daily-report', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('description: 日報');
   });
@@ -4024,11 +4025,11 @@ describe('chat の /schedule-show', () => {
       scheduleUnreadable: [{ kind: 'broken-1', reason: '不正な欄: spec' }],
     });
 
-    await runSlashCommand('/schedule-show nope', client, emptyListed());
+    await runSlashCommand('/schedule-show nope', ...slashArgs(client, emptyListed()));
     const first = read();
     expect(first).toContain('nope という定期ジョブはありません');
 
-    await runSlashCommand('/schedule-show broken-1', client, emptyListed());
+    await runSlashCommand('/schedule-show broken-1', ...slashArgs(client, emptyListed()));
     const text = read().slice(first.length);
     expect(text).toContain('broken-1 は在るが読めない形で入っている');
     expect(text).not.toContain('broken-1 という定期ジョブはありません');
@@ -4038,13 +4039,13 @@ describe('chat の /schedule-show', () => {
     const read = captureStdout();
     const { calls, client } = stubClient({});
 
-    await runSlashCommand('/schedule-show', client, emptyListed());
-    await runSlashCommand('/schedule-show a b', client, emptyListed());
+    await runSlashCommand('/schedule-show', ...slashArgs(client, emptyListed()));
+    await runSlashCommand('/schedule-show a b', ...slashArgs(client, emptyListed()));
     expect(read()).toContain('使い方: /schedule-show <kind>');
     expect(calls).toEqual([]);
 
     const help = captureStdout();
-    await runSlashCommand('/help', client, emptyListed());
+    await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
     expect(help()).toContain('/schedule-show <kind>');
   });
 });
@@ -4066,7 +4067,7 @@ describe('chat の /memory', () => {
       ],
     });
 
-    await runSlashCommand('/memory', client, emptyListed());
+    await runSlashCommand('/memory', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('values');
@@ -4090,7 +4091,7 @@ describe('chat の /memory', () => {
       ],
     });
 
-    await runSlashCommand('/memory', client, emptyListed());
+    await runSlashCommand('/memory', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('作成: 不明 / 更新: 2026-08-12T00:00:00.000Z');
@@ -4101,7 +4102,7 @@ describe('chat の /memory', () => {
     const read = captureStdout();
     const { client } = stubClient({ memoryDocuments: [] });
 
-    await runSlashCommand('/memory', client, emptyListed());
+    await runSlashCommand('/memory', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('記憶はまだ空');
   });
@@ -4116,7 +4117,7 @@ describe('chat の /journal', () => {
       ],
     });
 
-    await runSlashCommand('/journal', client, emptyListed());
+    await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('設計の相談');
@@ -4127,7 +4128,7 @@ describe('chat の /journal', () => {
     const read = captureStdout();
     const { client } = stubClient({ journalEntries: [] });
 
-    await runSlashCommand('/journal', client, emptyListed());
+    await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('日誌はまだ空');
   });
@@ -4145,7 +4146,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal', client, emptyListed());
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('本文-j-1');
@@ -4166,7 +4167,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal type=exchange', client, emptyListed());
+      await runSlashCommand('/journal type=exchange', ...slashArgs(client, emptyListed()));
 
       expect(read()).not.toContain('当たる日誌はありません');
     });
@@ -4182,7 +4183,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal 5', client, emptyListed());
+      await runSlashCommand('/journal 5', ...slashArgs(client, emptyListed()));
 
       expect(read()).toContain('これより古い日誌があるかもしれない');
     });
@@ -4191,7 +4192,7 @@ describe('chat の /journal', () => {
       const read = captureStdout();
       const { client } = stubClient({ journalPages: [{ entries: [], next: null }] });
 
-      await runSlashCommand('/journal', client, emptyListed());
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       expect(read()).toContain('日誌はまだ空');
     });
@@ -4202,7 +4203,7 @@ describe('chat の /journal', () => {
     captureStdout();
     const { calls, client } = stubClient({ journalEntries: [] });
 
-    await runSlashCommand('/journal q=トマト', client, emptyListed());
+    await runSlashCommand('/journal q=トマト', ...slashArgs(client, emptyListed()));
 
     expect(calls).toEqual([
       { route: 'GET /journal', args: { query: { limit: '20', q: 'トマト' } } },
@@ -4213,7 +4214,7 @@ describe('chat の /journal', () => {
     captureStdout();
     const { calls, client } = stubClient({ journalEntries: [] });
 
-    await runSlashCommand('/journal q=トマト の 水やり', client, emptyListed());
+    await runSlashCommand('/journal q=トマト の 水やり', ...slashArgs(client, emptyListed()));
 
     expect(calls).toEqual([
       { route: 'GET /journal', args: { query: { limit: '20', q: 'トマト の 水やり' } } },
@@ -4224,7 +4225,7 @@ describe('chat の /journal', () => {
     captureStdout();
     const { calls, client } = stubClient({ journalEntries: [] });
 
-    await runSlashCommand('/journal 50 q=トマト', client, emptyListed());
+    await runSlashCommand('/journal 50 q=トマト', ...slashArgs(client, emptyListed()));
 
     expect(calls).toEqual([
       { route: 'GET /journal', args: { query: { limit: '50', q: 'トマト' } } },
@@ -4249,7 +4250,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal-show j-9', client, emptyListed());
+      await runSlashCommand('/journal-show j-9', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('id: j-9');
@@ -4272,7 +4273,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal-show j-s', client, emptyListed());
+      await runSlashCommand('/journal-show j-s', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('続き');
@@ -4283,7 +4284,7 @@ describe('chat の /journal', () => {
       const read = captureStdout();
       const { client } = stubClient({ journalEntries: [] });
 
-      await runSlashCommand('/journal-show nope', client, emptyListed());
+      await runSlashCommand('/journal-show nope', ...slashArgs(client, emptyListed()));
 
       expect(read()).toContain('日誌 nope は無い');
     });
@@ -4292,7 +4293,7 @@ describe('chat の /journal', () => {
       const read = captureStdout();
       const { client } = stubClient({ journalByIdStatus: 409 });
 
-      await runSlashCommand('/journal-show bad-1', client, emptyListed());
+      await runSlashCommand('/journal-show bad-1', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('読めない形');
@@ -4303,12 +4304,12 @@ describe('chat の /journal', () => {
       const read = captureStdout();
       const { calls, client } = stubClient({});
 
-      await runSlashCommand('/journal-show', client, emptyListed());
+      await runSlashCommand('/journal-show', ...slashArgs(client, emptyListed()));
       expect(read()).toContain('使い方: /journal-show <id>');
       expect(calls).toEqual([]);
 
       const help = captureStdout();
-      await runSlashCommand('/help', client, emptyListed());
+      await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
       expect(help()).toContain('/journal-show <id>');
     });
   });
@@ -4317,7 +4318,7 @@ describe('chat の /journal', () => {
     captureStdout();
     const { calls, client } = stubClient({ journalEntries: [] });
 
-    await runSlashCommand('/journal 5', client, emptyListed());
+    await runSlashCommand('/journal 5', ...slashArgs(client, emptyListed()));
 
     expect(calls).toEqual([{ route: 'GET /journal', args: { query: { limit: '5' } } }]);
   });
@@ -4326,7 +4327,7 @@ describe('chat の /journal', () => {
     const read = captureStdout();
     const { client } = stubClient({ journalEntries: [] });
 
-    await runSlashCommand('/journal q=ナス', client, emptyListed());
+    await runSlashCommand('/journal q=ナス', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('「ナス」に当たる日誌はありません');
@@ -4342,7 +4343,7 @@ describe('chat の /journal', () => {
       captureStdout();
       const { calls, client } = stubClient({ journalEntries: [] });
 
-      await runSlashCommand('/journal type=decision', client, emptyListed());
+      await runSlashCommand('/journal type=decision', ...slashArgs(client, emptyListed()));
 
       expect(calls).toEqual([
         { route: 'GET /journal', args: { query: { limit: '20', type: 'decision' } } },
@@ -4353,7 +4354,7 @@ describe('chat の /journal', () => {
       captureStdout();
       const { calls, client } = stubClient({ journalEntries: [] });
 
-      await runSlashCommand('/journal type=decision,tool_use', client, emptyListed());
+      await runSlashCommand('/journal type=decision,tool_use', ...slashArgs(client, emptyListed()));
 
       expect(calls).toEqual([
         { route: 'GET /journal', args: { query: { limit: '20', type: 'decision,tool_use' } } },
@@ -4365,7 +4366,7 @@ describe('chat の /journal', () => {
       const read = captureStdout();
       const { calls, client } = stubClient({ journalEntries: [] });
 
-      await runSlashCommand('/journal type=nonsense', client, emptyListed());
+      await runSlashCommand('/journal type=nonsense', ...slashArgs(client, emptyListed()));
 
       expect(calls).toEqual([]);
       const text = read();
@@ -4377,7 +4378,7 @@ describe('chat の /journal', () => {
       captureStdout();
       const { calls, client } = stubClient({ journalEntries: [] });
 
-      await runSlashCommand('/journal 50 type=decision q=a b', client, emptyListed());
+      await runSlashCommand('/journal 50 type=decision q=a b', ...slashArgs(client, emptyListed()));
 
       expect(calls).toEqual([
         {
@@ -4391,7 +4392,7 @@ describe('chat の /journal', () => {
       captureStdout();
       const { calls, client } = stubClient({ journalEntries: [] });
 
-      await runSlashCommand('/journal type=decision 50', client, emptyListed());
+      await runSlashCommand('/journal type=decision 50', ...slashArgs(client, emptyListed()));
 
       expect(calls).toEqual([
         { route: 'GET /journal', args: { query: { limit: '50', type: 'decision' } } },
@@ -4402,7 +4403,7 @@ describe('chat の /journal', () => {
       const read = captureStdout();
       const { client } = stubClient({ journalEntries: [] });
 
-      await runSlashCommand('/journal type=decision', client, emptyListed());
+      await runSlashCommand('/journal type=decision', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('type=decision');
@@ -4414,7 +4415,7 @@ describe('chat の /journal', () => {
       const read = captureStdout();
       const { client } = stubClient({ journalEntries: [] });
 
-      await runSlashCommand('/journal type=decision q=ナス', client, emptyListed());
+      await runSlashCommand('/journal type=decision q=ナス', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('type=decision に絞った上で');
@@ -4425,7 +4426,7 @@ describe('chat の /journal', () => {
       const read = captureStdout();
       const { client } = stubClient();
 
-      await runSlashCommand('/help', client, emptyListed());
+      await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('/journal [件数] [type=');
@@ -4443,7 +4444,7 @@ describe('chat の /journal', () => {
     }));
     const { client } = stubClient({ journalEntries });
 
-    await runSlashCommand('/journal', client, emptyListed());
+    await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('直近 20 件のみ表示している。これより古い日誌があるかもしれない。');
   });
@@ -4454,7 +4455,7 @@ describe('chat の /journal', () => {
       journalEntries: [{ id: 'j-1', at: '2026-08-16T10:00:00.000Z', type: 'decision' }],
     });
 
-    await runSlashCommand('/journal', client, emptyListed());
+    await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
     expect(read()).not.toContain('これより古い日誌があるかもしれない');
   });
@@ -4480,7 +4481,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal', client, emptyListed());
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('[worker_wait]');
@@ -4515,7 +4516,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal', client, emptyListed());
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('[turn_usage]');
@@ -4541,7 +4542,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal', client, emptyListed());
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('[context_usage]');
@@ -4567,7 +4568,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal', client, emptyListed());
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('[inbox_flow]');
@@ -4603,7 +4604,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal', client, emptyListed());
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain(
@@ -4648,7 +4649,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal', client, emptyListed());
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       const lines = read().split('\n');
       const line = (repo: string) => lines.find((l) => l.includes(repo)) ?? '';
@@ -4692,7 +4693,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal', client, emptyListed());
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('CI: 取れなかった — gh failed: Authorization');
@@ -4714,7 +4715,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal', client, emptyListed());
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('進めてよいですか？');
@@ -4743,7 +4744,7 @@ describe('chat の /journal', () => {
         ],
       });
 
-      await runSlashCommand('/journal', client, emptyListed());
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       const text = read();
       expect(text).toContain('この案で進める');
@@ -4758,7 +4759,7 @@ describe('chat の /usage（issue #2079）', () => {
     captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/usage token=tok-1', client, emptyListed());
+    await runSlashCommand('/usage token=tok-1', ...slashArgs(client, emptyListed()));
 
     expect(calls).toEqual([{ route: 'GET /usage', args: { query: { tokenId: 'tok-1' } } }]);
   });
@@ -4769,8 +4770,7 @@ describe('chat の /usage（issue #2079）', () => {
 
     await runSlashCommand(
       '/usage from=2026-08-01 to=2026-08-14 manager=mgr-1 layer=clone site=session token=tok-1',
-      client,
-      emptyListed(),
+      ...slashArgs(client, emptyListed()),
     );
 
     expect(calls).toEqual([
@@ -4794,7 +4794,7 @@ describe('chat の /usage（issue #2079）', () => {
     const read = captureStdout();
     const { client } = stubClient();
 
-    await runSlashCommand('/help', client, emptyListed());
+    await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('[layer=');
@@ -4822,7 +4822,10 @@ describe('chat の /usage（issue #2079）', () => {
       },
     });
 
-    await runSlashCommand('/usage from=2026-09-10 to=2026-09-01', client, emptyListed());
+    await runSlashCommand(
+      '/usage from=2026-09-10 to=2026-09-01',
+      ...slashArgs(client, emptyListed()),
+    );
 
     const text = read();
     expect(
@@ -4851,7 +4854,10 @@ describe('chat の /usage（issue #2079）', () => {
       },
     });
 
-    await runSlashCommand('/usage from=2026-09-01 to=2026-09-01', client, emptyListed());
+    await runSlashCommand(
+      '/usage from=2026-09-01 to=2026-09-01',
+      ...slashArgs(client, emptyListed()),
+    );
 
     expect(read()).not.toContain('より前なので');
   });
@@ -4867,7 +4873,7 @@ describe('chat の /reports（一覧）', () => {
     }));
     const { client } = stubClient({ reports });
 
-    await runSlashCommand('/reports', client, emptyListed());
+    await runSlashCommand('/reports', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('直近 14 件のみ表示している。これより古い日報があるかもしれない。');
   });
@@ -4878,7 +4884,7 @@ describe('chat の /reports（一覧）', () => {
       reports: [{ date: '2026-06-01', at: '2026-06-01T22:00:00.000Z', body: '進捗' }],
     });
 
-    await runSlashCommand('/reports', client, emptyListed());
+    await runSlashCommand('/reports', ...slashArgs(client, emptyListed()));
 
     expect(read()).not.toContain('これより古い日報があるかもしれない');
   });
@@ -4892,7 +4898,7 @@ describe('chat の /reports（一覧）', () => {
     }));
     const { client } = stubClient({ reports });
 
-    await runSlashCommand('/reports 5', client, emptyListed());
+    await runSlashCommand('/reports 5', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('直近 5 件のみ表示している。これより古い日報があるかもしれない。');
   });
@@ -4903,7 +4909,10 @@ describe('chat の /stop', () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/stop mgr-1', client, emptyListed(), null, undefined, confirmYes);
+    await runSlashCommand(
+      '/stop mgr-1',
+      ...slashArgs(client, emptyListed(), { confirm: confirmYes }),
+    );
 
     expect(calls).toEqual([
       { route: 'DELETE /managers/:id', args: { param: { id: 'mgr-1' }, json: {} } },
@@ -4917,11 +4926,7 @@ describe('chat の /stop', () => {
 
     await runSlashCommand(
       '/stop mgr-1 同じ issue に2本立っている',
-      client,
-      emptyListed(),
-      null,
-      undefined,
-      confirmYes,
+      ...slashArgs(client, emptyListed(), { confirm: confirmYes }),
     );
 
     expect(calls[0]?.args).toEqual({
@@ -4934,7 +4939,10 @@ describe('chat の /stop', () => {
     captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/stop mgr-1    ', client, emptyListed(), null, undefined, confirmYes);
+    await runSlashCommand(
+      '/stop mgr-1    ',
+      ...slashArgs(client, emptyListed(), { confirm: confirmYes }),
+    );
 
     expect(calls[0]?.args).toEqual({ param: { id: 'mgr-1' }, json: {} });
   });
@@ -4943,7 +4951,7 @@ describe('chat の /stop', () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/stop', client, emptyListed());
+    await runSlashCommand('/stop', ...slashArgs(client, emptyListed()));
 
     expect(calls).toEqual([]);
     expect(read()).toContain('使い方: /stop');
@@ -4953,7 +4961,10 @@ describe('chat の /stop', () => {
     const read = captureStdout();
     const { client } = stubClient({ abortStatus: 404, abortBody: { error: 'そんな id は無い' } });
 
-    await runSlashCommand('/stop mgr-none', client, emptyListed(), null, undefined, confirmYes);
+    await runSlashCommand(
+      '/stop mgr-none',
+      ...slashArgs(client, emptyListed(), { confirm: confirmYes }),
+    );
 
     const text = read();
     expect(text).toContain('見つかりませんでした');
@@ -4968,11 +4979,7 @@ describe('chat の /stop', () => {
     });
     await runSlashCommand(
       '/stop mgr-1',
-      serverErrorClient,
-      emptyListed(),
-      null,
-      undefined,
-      confirmYes,
+      ...slashArgs(serverErrorClient, emptyListed(), { confirm: confirmYes }),
     );
     const serverErrorText = serverError();
     vi.restoreAllMocks();
@@ -4984,11 +4991,7 @@ describe('chat の /stop', () => {
     });
     await runSlashCommand(
       '/stop mgr-1',
-      badRequestClient,
-      emptyListed(),
-      null,
-      undefined,
-      confirmYes,
+      ...slashArgs(badRequestClient, emptyListed(), { confirm: confirmYes }),
     );
     const badRequestText = badRequest();
 
@@ -5002,7 +5005,7 @@ describe('chat の /stop', () => {
     const read = captureStdout();
     const { client } = stubClient();
 
-    await runSlashCommand('/help', client, emptyListed());
+    await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('/stop ');
   });
@@ -5012,7 +5015,7 @@ describe('chat の /stop', () => {
     const listed: Listed = { ...emptyListed(), managers: ['mgr-a', 'mgr-b'] };
     captureStdout();
 
-    await runSlashCommand('/stop 2', client, listed, null, undefined, confirmYes);
+    await runSlashCommand('/stop 2', ...slashArgs(client, listed, { confirm: confirmYes }));
 
     expect(calls).toEqual([
       { route: 'DELETE /managers/:id', args: { param: { id: 'mgr-b' }, json: {} } },
@@ -5035,7 +5038,7 @@ describe('chat の /conversations と /conversation', () => {
       conversations: [row('conv-unread', 3), row('conv-read', 0), row('conv-unknown')],
     });
 
-    await runSlashCommand('/conversations', client, emptyListed());
+    await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
 
     const lines = read().split('\n');
     expect(lines.find((l) => l.includes('conv-unread'))?.endsWith(unreadMark(3))).toBe(true);
@@ -5058,7 +5061,7 @@ describe('chat の /conversations と /conversation', () => {
       conversationsScanned: 137,
     });
 
-    await runSlashCommand('/conversations', client, emptyListed());
+    await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
 
     expect(calls).toEqual([{ route: 'GET /conversations', args: { query: {} } }]);
     const text = read();
@@ -5090,7 +5093,7 @@ describe('chat の /conversations と /conversation', () => {
       conversationsReachedStart: false,
     });
 
-    await runSlashCommand('/conversations', client, emptyListed());
+    await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('先頭には届いていない');
@@ -5113,7 +5116,7 @@ describe('chat の /conversations と /conversation', () => {
       conversationsHiddenByLimit: 3,
     });
 
-    await runSlashCommand('/conversations', client, emptyListed());
+    await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('…ほか 3 件は省略');
@@ -5125,7 +5128,7 @@ describe('chat の /conversations と /conversation', () => {
     captureStdout();
     const { calls, client } = stubClient({ conversations: [] });
 
-    await runSlashCommand('/conversations cursor=abc.DEF_-1=', client, emptyListed());
+    await runSlashCommand('/conversations cursor=abc.DEF_-1=', ...slashArgs(client, emptyListed()));
 
     expect(calls).toEqual([
       { route: 'GET /conversations', args: { query: { cursor: 'abc.DEF_-1=' } } },
@@ -5149,7 +5152,7 @@ describe('chat の /conversations と /conversation', () => {
       conversationsNextCursor: 'next-token',
     });
 
-    await runSlashCommand('/conversations', client, emptyListed());
+    await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('続きを読むには: /conversations cursor=next-token');
@@ -5160,7 +5163,7 @@ describe('chat の /conversations と /conversation', () => {
     const read = captureStdout();
     const { client } = stubClient({ conversations: [], conversationsScanned: 5 });
 
-    await runSlashCommand('/conversations', client, emptyListed());
+    await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
 
     expect(read()).not.toContain('続きを読むには');
   });
@@ -5169,7 +5172,7 @@ describe('chat の /conversations と /conversation', () => {
     const read = captureStdout();
     const { client } = stubClient({ conversations: [], conversationsScanned: 5000 });
 
-    await runSlashCommand('/conversations', client, emptyListed());
+    await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('会話はまだありません');
@@ -5182,7 +5185,7 @@ describe('chat の /conversations と /conversation', () => {
     it('未読のある会話の総数を出す（一覧の外の分も含む）', async () => {
       const read = captureStdout();
       const { client } = stubClient({ unreadCountBody: { count: 7, capped: false } });
-      await runSlashCommand('/conversations', client, emptyListed());
+      await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
       expect(read()).toContain('未読のある会話 7 件');
       expect(read()).not.toContain('取れませんでした');
     });
@@ -5190,7 +5193,7 @@ describe('chat の /conversations と /conversation', () => {
     it('capped のときは下限として「N 件以上」と言う', async () => {
       const read = captureStdout();
       const { client } = stubClient({ unreadCountBody: { count: 99, capped: true } });
-      await runSlashCommand('/conversations', client, emptyListed());
+      await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
       expect(read()).toContain('未読のある会話 99 件以上');
     });
 
@@ -5208,7 +5211,7 @@ describe('chat の /conversations と /conversation', () => {
         ],
         unreadCountStatus: 500,
       });
-      await runSlashCommand('/conversations', client, emptyListed());
+      await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
       const text = read();
       expect(text).toContain('conv-1');
       expect(text).toContain('未読のある会話の総数は取れませんでした（HTTP 500）');
@@ -5218,7 +5221,7 @@ describe('chat の /conversations と /conversation', () => {
     it('古いデーモン（404）でも一覧は出し、口が無いと言う', async () => {
       const read = captureStdout();
       const { client } = stubClient({ unreadCountStatus: 404 });
-      await runSlashCommand('/conversations', client, emptyListed());
+      await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
       const text = read();
       expect(text).toContain('会話はまだありません');
       expect(text).toContain('古い版');
@@ -5227,7 +5230,7 @@ describe('chat の /conversations と /conversation', () => {
     it('通信が途切れて総数だけ失敗しても、一覧は出す', async () => {
       const read = captureStdout();
       const { client } = stubClient({ unreadCountThrows: new Error('socket hang up') });
-      await runSlashCommand('/conversations', client, emptyListed());
+      await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
       const text = read();
       expect(text).toContain('会話はまだありません');
       expect(text).toContain('取れませんでした（socket hang up）');
@@ -5238,7 +5241,7 @@ describe('chat の /conversations と /conversation', () => {
     captureStdout();
     const { calls, client } = stubClient({ conversations: [], conversationsScanned: 0 });
 
-    await runSlashCommand('/conversations limit=5 scan=9000', client, emptyListed());
+    await runSlashCommand('/conversations limit=5 scan=9000', ...slashArgs(client, emptyListed()));
 
     expect(calls).toEqual([
       { route: 'GET /conversations', args: { query: { limit: '5', scan: '9000' } } },
@@ -5249,7 +5252,7 @@ describe('chat の /conversations と /conversation', () => {
     captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/conversation conv-xyz scan=9000', client, emptyListed());
+    await runSlashCommand('/conversation conv-xyz scan=9000', ...slashArgs(client, emptyListed()));
 
     const detail = calls.find((call) => call.route === 'GET /conversations/:id');
     expect(detail?.args).toEqual({ param: { id: 'conv-xyz' }, query: { scan: '9000' } });
@@ -5277,8 +5280,8 @@ describe('chat の /conversations と /conversation', () => {
     });
     const listed = emptyListed();
 
-    await runSlashCommand('/conversations', client, listed);
-    await runSlashCommand('/conversation 2', client, listed);
+    await runSlashCommand('/conversations', ...slashArgs(client, listed));
+    await runSlashCommand('/conversation 2', ...slashArgs(client, listed));
 
     const detail = calls.find((call) => call.route === 'GET /conversations/:id');
     expect(detail).toBeDefined();
@@ -5294,7 +5297,7 @@ describe('chat の /conversations と /conversation', () => {
       commitments: ['cmt-1'],
     };
 
-    await runSlashCommand('/conversation 1', client, listed);
+    await runSlashCommand('/conversation 1', ...slashArgs(client, listed));
 
     expect(calls).toEqual([]);
     expect(read()).toContain('/conversations の一覧にありません');
@@ -5304,7 +5307,7 @@ describe('chat の /conversations と /conversation', () => {
     captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/conversation conv-xyz', client, emptyListed());
+    await runSlashCommand('/conversation conv-xyz', ...slashArgs(client, emptyListed()));
 
     const detail = calls.find((call) => call.route === 'GET /conversations/:id');
     expect((detail?.args as { param: { id: string } }).param).toEqual({ id: 'conv-xyz' });
@@ -5324,7 +5327,7 @@ describe('chat の /conversations と /conversation', () => {
       },
     });
 
-    await runSlashCommand('/conversation conv-1', client, emptyListed());
+    await runSlashCommand('/conversation conv-1', ...slashArgs(client, emptyListed()));
 
     const text = read();
     const human = text.indexOf('設計どうする？');
@@ -5366,7 +5369,7 @@ describe('chat の /conversations と /conversation', () => {
         ],
       });
 
-      await runSlashCommand('/conversation conv-1', client, emptyListed());
+      await runSlashCommand('/conversation conv-1', ...slashArgs(client, emptyListed()));
 
       const approvalCall = calls.find((call) => call.route === 'GET /approvals');
       expect(approvalCall?.args).toEqual({
@@ -5384,7 +5387,7 @@ describe('chat の /conversations と /conversation', () => {
     it('承認を取れなくても会話は出し、取れなかったことを言う（unreadable も言う）', async () => {
       const read = captureStdout();
       const failing = stubClient({ conversationDetailBody: detail, approvalsStatus: 500 });
-      await runSlashCommand('/conversation conv-1', failing.client, emptyListed());
+      await runSlashCommand('/conversation conv-1', ...slashArgs(failing.client, emptyListed()));
       const failed = read();
       expect(failed).toContain('A案で進めます');
       expect(failed).toContain('この会話の承認待ちは取れませんでした');
@@ -5393,7 +5396,7 @@ describe('chat の /conversations と /conversation', () => {
         conversationDetailBody: detail,
         approvalsUnreadable: [{ id: 'bad-1', reason: 'x' }],
       });
-      await runSlashCommand('/conversation conv-1', unreadable.client, emptyListed());
+      await runSlashCommand('/conversation conv-1', ...slashArgs(unreadable.client, emptyListed()));
       expect(read()).toContain('読めない承認待ちが 1 件');
     });
 
@@ -5404,7 +5407,7 @@ describe('chat の /conversations と /conversation', () => {
         conversationDetailBody: detail,
         approvals: [{ id: 'ap-0000001', createdAt: '2026-10-06T10:01:00.000Z', question: 'q' }],
       });
-      await runSlashCommand('/conversation conv-1', client, listed);
+      await runSlashCommand('/conversation conv-1', ...slashArgs(client, listed));
       expect(listed.messages).toEqual(['m1']);
     });
   });
@@ -5420,7 +5423,7 @@ describe('chat の /conversations と /conversation', () => {
       },
     });
 
-    await runSlashCommand('/conversation conv-1', client, emptyListed());
+    await runSlashCommand('/conversation conv-1', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('判定できません');
@@ -5435,7 +5438,7 @@ describe('chat の /conversations と /conversation', () => {
       conversationDetailBody: undefined,
     });
 
-    await runSlashCommand('/conversation conv-missing', client, emptyListed());
+    await runSlashCommand('/conversation conv-missing', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('そんな会話はありません: conv-missing');
   });
@@ -5444,7 +5447,7 @@ describe('chat の /conversations と /conversation', () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/conversation', client, emptyListed());
+    await runSlashCommand('/conversation', ...slashArgs(client, emptyListed()));
 
     expect(calls).toEqual([]);
     expect(read()).toContain('使い方: /conversation');
@@ -5454,7 +5457,7 @@ describe('chat の /conversations と /conversation', () => {
     const read = captureStdout();
     const { client } = stubClient();
 
-    await runSlashCommand('/help', client, emptyListed());
+    await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('/conversations');
@@ -5474,7 +5477,7 @@ describe('chat の /conversations と /conversation', () => {
       },
     });
 
-    await runSlashCommand('/conversation conv-1', client, emptyListed());
+    await runSlashCommand('/conversation conv-1', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('畳まれた版が 1 件ある');
   });
@@ -5493,7 +5496,7 @@ describe('chat の /conversations と /conversation', () => {
       },
     });
 
-    await runSlashCommand('/conversation conv-1', client, emptyListed());
+    await runSlashCommand('/conversation conv-1', ...slashArgs(client, emptyListed()));
 
     expect(read()).not.toContain('畳まれた版が');
   });
@@ -5533,7 +5536,10 @@ describe('chat の /conversations と /conversation', () => {
     });
     const listed = emptyListed();
 
-    await runSlashCommand('/conversation conv-1 includeSuperseded=true', client, listed);
+    await runSlashCommand(
+      '/conversation conv-1 includeSuperseded=true',
+      ...slashArgs(client, listed),
+    );
 
     const query = calls.find((call) => call.route === 'GET /conversations/:id')?.args as {
       query: Record<string, string>;
@@ -5602,9 +5608,9 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
     const listed = emptyListed();
     captureStdout();
 
-    await runSlashCommand('/conversation conv-1', client, listed);
+    await runSlashCommand('/conversation conv-1', ...slashArgs(client, listed));
     expect(listed.messages).toEqual(['m1']);
-    await runSlashCommand('/edit 1 直した文', client, listed, null, target);
+    await runSlashCommand('/edit 1 直した文', ...slashArgs(client, listed, { target }));
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.url).toBe('http://127.0.0.1:4517/chat');
@@ -5646,10 +5652,10 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
     const listed = emptyListed();
     const read = captureStdout();
 
-    await runSlashCommand('/conversation conv-1', client, listed);
+    await runSlashCommand('/conversation conv-1', ...slashArgs(client, listed));
     expect(read()).toContain('att-1');
-    await runSlashCommand('/edit 1 合計だけ出して', client, listed, null, target);
-    await runSlashCommand('/edit 2 添付は付けない', client, listed, null, target);
+    await runSlashCommand('/edit 1 合計だけ出して', ...slashArgs(client, listed, { target }));
+    await runSlashCommand('/edit 2 添付は付けない', ...slashArgs(client, listed, { target }));
 
     expect(sent).toHaveLength(2);
     expect(sent[0]?.body).toMatchObject({ supersedes: 'm1', attachments: ['att-1', 'att-2'] });
@@ -5662,8 +5668,8 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
     const listed = emptyListed();
     captureStdout();
 
-    await runSlashCommand('/conversation conv-1', client, listed);
-    await runSlashCommand('/edit m1 直した文', client, listed, null, target);
+    await runSlashCommand('/conversation conv-1', ...slashArgs(client, listed));
+    await runSlashCommand('/edit m1 直した文', ...slashArgs(client, listed, { target }));
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.body).toMatchObject({ supersedes: 'm1' });
@@ -5678,10 +5684,10 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
     const listed = emptyListed();
     const read = captureStdout();
 
-    await runSlashCommand('/conversation conv-1', client, listed);
+    await runSlashCommand('/conversation conv-1', ...slashArgs(client, listed));
     expect(listed.messages).toEqual(['m1']);
 
-    await runSlashCommand('/edit m2 それでも編集を試す', client, listed, null, target);
+    await runSlashCommand('/edit m2 それでも編集を試す', ...slashArgs(client, listed, { target }));
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.body).toMatchObject({ supersedes: 'm2' });
@@ -5694,8 +5700,8 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
     const listed = emptyListed();
     const read = captureStdout();
 
-    await runSlashCommand('/conversation conv-1', client, listed);
-    await runSlashCommand('/edit 9 直した文', client, listed, null, target);
+    await runSlashCommand('/conversation conv-1', ...slashArgs(client, listed));
+    await runSlashCommand('/edit 9 直した文', ...slashArgs(client, listed, { target }));
 
     expect(sent).toHaveLength(0);
     expect(read()).toContain('一覧にありません');
@@ -5707,10 +5713,9 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
 
     await runSlashCommand(
       '/edit m1 直した文',
-      {} as unknown as Parameters<typeof runSlashCommand>[1],
-      emptyListed(),
-      null,
-      target,
+      ...slashArgs({} as unknown as Parameters<typeof runSlashCommand>[1], emptyListed(), {
+        target,
+      }),
     );
 
     expect(sent).toHaveLength(0);
@@ -5723,10 +5728,9 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
 
     await runSlashCommand(
       '/edit 1',
-      {} as unknown as Parameters<typeof runSlashCommand>[1],
-      emptyListed(),
-      null,
-      target,
+      ...slashArgs({} as unknown as Parameters<typeof runSlashCommand>[1], emptyListed(), {
+        target,
+      }),
     );
 
     expect(sent).toHaveLength(0);
@@ -5742,7 +5746,7 @@ describe('chat の /managers（番号付き一覧）', () => {
     });
     const listed = emptyListed();
 
-    await runSlashCommand('/managers', client, listed);
+    await runSlashCommand('/managers', ...slashArgs(client, listed));
 
     const text = read();
     expect(text).toContain('[1] mgr-a');
@@ -5755,7 +5759,7 @@ describe('chat の /managers（番号付き一覧）', () => {
     const { calls, client } = stubClient();
     const listed: Listed = { ...emptyListed(), managers: ['mgr-a', 'mgr-b'] };
 
-    await runSlashCommand('/reply 1 わかりました', client, listed);
+    await runSlashCommand('/reply 1 わかりました', ...slashArgs(client, listed));
 
     expect(calls.filter((call) => call.route === 'POST /managers/:id/messages')).toEqual([]);
     expect(read()).toContain('/waiting の一覧にありません');
@@ -5768,7 +5772,7 @@ describe('chat の /managers（番号付き一覧）', () => {
     });
     const listed = emptyListed();
 
-    await runSlashCommand('/managers', client, listed);
+    await runSlashCommand('/managers', ...slashArgs(client, listed));
 
     expect(listed.waiting).toEqual([]);
   });
@@ -5782,7 +5786,7 @@ describe('chat の /managers が読めない委譲を「居ない」と言わな
       managersUnreadable: [{ id: 'mgr-bad', reason: '不正な欄: status' }, { reason: '不正な行' }],
     });
 
-    await runSlashCommand('/managers', client, emptyListed());
+    await runSlashCommand('/managers', ...slashArgs(client, emptyListed()));
 
     const out = read();
     expect(out).toContain('mgr-ok');
@@ -5798,7 +5802,7 @@ describe('chat の /managers が読めない委譲を「居ない」と言わな
       managersUnreadable: [{ id: 'mgr-bad', reason: '不正な欄: status' }],
     });
 
-    await runSlashCommand('/managers', client, emptyListed());
+    await runSlashCommand('/managers', ...slashArgs(client, emptyListed()));
 
     const out = read();
     expect(out).not.toContain('マネージャーは1本も居ません');
@@ -5810,7 +5814,7 @@ describe('chat の /managers が読めない委譲を「居ない」と言わな
     const read = captureStdout();
     const { client } = stubClient({ managers: [] });
 
-    await runSlashCommand('/managers', client, emptyListed());
+    await runSlashCommand('/managers', ...slashArgs(client, emptyListed()));
 
     const out = read();
     expect(out).toContain('（マネージャーは1本も居ません）');
@@ -5824,7 +5828,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     captureStdout();
     const { calls, client } = stubClient({ managers: [manager()] });
 
-    await runSlashCommand('/managers', client, emptyListed());
+    await runSlashCommand('/managers', ...slashArgs(client, emptyListed()));
 
     expect(calls.filter((call) => call.route === 'GET /managers')).toEqual([
       { route: 'GET /managers', args: { query: {} } },
@@ -5835,7 +5839,10 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     captureStdout();
     const { calls, client } = stubClient({ managers: [manager()] });
 
-    await runSlashCommand('/managers status=running,waiting_human limit=20', client, emptyListed());
+    await runSlashCommand(
+      '/managers status=running,waiting_human limit=20',
+      ...slashArgs(client, emptyListed()),
+    );
 
     expect(calls.filter((call) => call.route === 'GET /managers')).toEqual([
       {
@@ -5849,7 +5856,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     const read = captureStdout();
     const { client } = stubClient({ managers: [] });
 
-    await runSlashCommand('/managers status=done', client, emptyListed());
+    await runSlashCommand('/managers status=done', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain(
@@ -5863,7 +5870,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ managers: [manager()] });
 
-    await runSlashCommand('/managers status=runing', client, emptyListed());
+    await runSlashCommand('/managers status=runing', ...slashArgs(client, emptyListed()));
 
     expect(calls.filter((call) => call.route === 'GET /managers')).toEqual([]);
     const text = read();
@@ -5882,8 +5889,8 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     });
     const listed = emptyListed();
 
-    await runSlashCommand('/managers limit=2', client, listed);
-    await runSlashCommand('/managers limit=2 after=2', client, listed);
+    await runSlashCommand('/managers limit=2', ...slashArgs(client, listed));
+    await runSlashCommand('/managers limit=2 after=2', ...slashArgs(client, listed));
 
     const gets = calls.filter((call) => call.route === 'GET /managers');
     expect(gets[1]).toEqual({
@@ -5905,8 +5912,8 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     });
     const listed = emptyListed();
 
-    await runSlashCommand('/managers limit=1', client, listed);
-    await runSlashCommand('/managers limit=1 after=mgr-a', client, listed);
+    await runSlashCommand('/managers limit=1', ...slashArgs(client, listed));
+    await runSlashCommand('/managers limit=1 after=mgr-a', ...slashArgs(client, listed));
 
     const gets = calls.filter((call) => call.route === 'GET /managers');
     expect(gets[1]).toEqual({
@@ -5921,7 +5928,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ managers: [manager({ managerId: 'mgr-a' })] });
 
-    await runSlashCommand('/managers after=mgr-zzz', client, emptyListed());
+    await runSlashCommand('/managers after=mgr-zzz', ...slashArgs(client, emptyListed()));
 
     expect(calls.filter((call) => call.route === 'GET /managers')).toEqual([]);
     expect(read()).toContain('直前の /managers の一覧にありません');
@@ -5931,17 +5938,17 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     const read = captureStdout();
     const first = stubClient({ managers: [manager({ managerId: 'mgr-old' })] });
     const listed = emptyListed();
-    await runSlashCommand('/managers', first.client, listed);
+    await runSlashCommand('/managers', ...slashArgs(first.client, listed));
     expect(listed.managerAnchors).toEqual({ 'mgr-old': '2026-08-16T10:00:00.000Z' });
 
     const second = stubClient({ managers: [manager({ managerId: 'mgr-new' })] });
-    await runSlashCommand('/managers', second.client, listed);
+    await runSlashCommand('/managers', ...slashArgs(second.client, listed));
 
     expect(listed.managerAnchors).toEqual({ 'mgr-new': '2026-08-16T10:00:00.000Z' });
     read();
 
     const third = stubClient({ managers: [manager()] });
-    await runSlashCommand('/managers after=mgr-old', third.client, listed);
+    await runSlashCommand('/managers after=mgr-old', ...slashArgs(third.client, listed));
     expect(third.calls.filter((call) => call.route === 'GET /managers')).toEqual([]);
   });
 
@@ -5951,7 +5958,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
       managers: [manager({ managerId: 'mgr-a' }), manager({ managerId: 'mgr-b' })],
     });
 
-    await runSlashCommand('/managers status=running limit=2', client, emptyListed());
+    await runSlashCommand('/managers status=running limit=2', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('limit=2 件ちょうど返った');
@@ -5962,7 +5969,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     const read = captureStdout();
     const { client } = stubClient({ managers: [manager()] });
 
-    await runSlashCommand('/managers limit=5', client, emptyListed());
+    await runSlashCommand('/managers limit=5', ...slashArgs(client, emptyListed()));
 
     expect(read()).not.toContain('ちょうど返った');
   });
@@ -5971,7 +5978,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     const read = captureStdout();
     const { client } = stubClient({ managers: [manager()] });
 
-    await runSlashCommand('/managers', client, emptyListed());
+    await runSlashCommand('/managers', ...slashArgs(client, emptyListed()));
 
     expect(read()).not.toContain('ちょうど返った');
   });
@@ -5990,7 +5997,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
       managerAnchors: { 'mgr-x': '2026-09-01T00:00:00.000Z' },
     };
 
-    await runSlashCommand('/managers after=mgr-x', client, listed);
+    await runSlashCommand('/managers after=mgr-x', ...slashArgs(client, listed));
 
     expect(read()).toContain('afterId/afterStartedAt が指す行が見当たらない');
   });
@@ -5999,7 +6006,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     const read = captureStdout();
     const { client } = stubClient({ managersStatus: 503, managersBody: { oops: true } });
 
-    await runSlashCommand('/managers', client, emptyListed());
+    await runSlashCommand('/managers', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('HTTP 503');
   });
@@ -6013,7 +6020,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
       managerAnchors: { 'mgr-a': '2026-09-01T00:00:00.000Z' },
     };
 
-    await runSlashCommand('/managers status=runing', client, listed);
+    await runSlashCommand('/managers status=runing', ...slashArgs(client, listed));
 
     expect(listed.managers).toEqual(['mgr-a']);
     expect(listed.managerAnchors).toEqual({ 'mgr-a': '2026-09-01T00:00:00.000Z' });
@@ -6024,7 +6031,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     const read = captureStdout();
     const { client } = stubClient();
 
-    await runSlashCommand('/help', client, emptyListed());
+    await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('/managers [status=');
@@ -6039,7 +6046,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
       managers: [manager({ waiting: [waitingItem()] })],
     });
 
-    await runSlashCommand('/waiting', client, emptyListed());
+    await runSlashCommand('/waiting', ...slashArgs(client, emptyListed()));
 
     expect(calls.filter((call) => call.route === 'GET /managers')).toEqual([
       { route: 'GET /managers', args: { query: {} } },
@@ -6071,7 +6078,7 @@ describe('chat の /waiting', () => {
     });
     const listed = emptyListed();
 
-    await runSlashCommand('/waiting', client, listed);
+    await runSlashCommand('/waiting', ...slashArgs(client, listed));
 
     const text = read();
     expect(text).toContain('[1]');
@@ -6089,7 +6096,7 @@ describe('chat の /waiting', () => {
     const read = captureStdout();
     const { client } = stubClient({ managers: [manager({ waiting: [] })] });
 
-    await runSlashCommand('/waiting', client, emptyListed());
+    await runSlashCommand('/waiting', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('返事待ちのマネージャーはいません');
   });
@@ -6101,10 +6108,10 @@ describe('chat の /waiting', () => {
     const listed = emptyListed();
     captureStdout();
 
-    await runSlashCommand('/waiting', client, listed);
+    await runSlashCommand('/waiting', ...slashArgs(client, listed));
     expect(listed.waiting).toEqual([{ managerId: 'mgr-legacy', requestId: 'req-legacy' }]);
 
-    await runSlashCommand('/reply 1 了解しました', client, listed);
+    await runSlashCommand('/reply 1 了解しました', ...slashArgs(client, listed));
     const sent = calls.find((call) => call.route === 'POST /managers/:id/messages');
     expect(sent?.args).toEqual({
       param: { id: 'mgr-legacy' },
@@ -6118,7 +6125,7 @@ describe('chat の /waiting', () => {
       managers: [manager({ waiting: [waitingItem()] })],
     });
 
-    await runSlashCommand('/waiting', client, emptyListed());
+    await runSlashCommand('/waiting', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('/allow /deny [番号|requestId] [理由]');
@@ -6133,7 +6140,7 @@ describe('chat の /msg（追加指示）', () => {
     const listed: Listed = { ...emptyListed(), managers: ['mgr-a'] };
     captureStdout();
 
-    await runSlashCommand('/msg 1 明日までに終わらせて', client, listed);
+    await runSlashCommand('/msg 1 明日までに終わらせて', ...slashArgs(client, listed));
 
     expect(calls).toEqual([
       {
@@ -6147,7 +6154,7 @@ describe('chat の /msg（追加指示）', () => {
     const { calls, client } = stubClient();
     captureStdout();
 
-    await runSlashCommand('/msg mgr-raw 直接 id を書いた', client, emptyListed());
+    await runSlashCommand('/msg mgr-raw 直接 id を書いた', ...slashArgs(client, emptyListed()));
 
     expect(calls[0]?.args).toEqual({
       param: { id: 'mgr-raw' },
@@ -6159,7 +6166,7 @@ describe('chat の /msg（追加指示）', () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/msg 1', client, emptyListed());
+    await runSlashCommand('/msg 1', ...slashArgs(client, emptyListed()));
 
     expect(calls).toEqual([]);
     expect(read()).toContain('使い方: /msg');
@@ -6171,7 +6178,10 @@ describe('chat の /msg（追加指示）', () => {
       messagesStatus: 404,
       messagesBody: { error: 'そんな id は無い' },
     });
-    await runSlashCommand('/msg mgr-none 明日までに終わらせて', notFoundClient, emptyListed());
+    await runSlashCommand(
+      '/msg mgr-none 明日までに終わらせて',
+      ...slashArgs(notFoundClient, emptyListed()),
+    );
     const notFoundText = notFound();
     vi.restoreAllMocks();
 
@@ -6180,7 +6190,10 @@ describe('chat の /msg（追加指示）', () => {
       messagesStatus: 500,
       messagesBody: { error: '追加指示の配送が失敗した（issue #2172 のテスト用）' },
     });
-    await runSlashCommand('/msg mgr-1 明日までに終わらせて', serverErrorClient, emptyListed());
+    await runSlashCommand(
+      '/msg mgr-1 明日までに終わらせて',
+      ...slashArgs(serverErrorClient, emptyListed()),
+    );
     const serverErrorText = serverError();
     vi.restoreAllMocks();
 
@@ -6189,7 +6202,10 @@ describe('chat の /msg（追加指示）', () => {
       messagesStatus: 400,
       messagesBody: { error: '本文が長すぎる（issue #2172 のテスト用）' },
     });
-    await runSlashCommand('/msg mgr-1 明日までに終わらせて', badRequestClient, emptyListed());
+    await runSlashCommand(
+      '/msg mgr-1 明日までに終わらせて',
+      ...slashArgs(badRequestClient, emptyListed()),
+    );
     const badRequestText = badRequest();
 
     expect(notFoundText).toContain('見つかりませんでした');
@@ -6209,7 +6225,7 @@ describe('chat の /reply（質問への回答）', () => {
     };
     captureStdout();
 
-    await runSlashCommand('/reply 1 明日で大丈夫です', client, listed);
+    await runSlashCommand('/reply 1 明日で大丈夫です', ...slashArgs(client, listed));
 
     expect(calls).toEqual([
       {
@@ -6229,7 +6245,7 @@ describe('chat の /reply（質問への回答）', () => {
     const listed = emptyListed();
     captureStdout();
 
-    await runSlashCommand('/reply req-z 了解です', client, listed);
+    await runSlashCommand('/reply req-z 了解です', ...slashArgs(client, listed));
 
     const sent = calls.find((call) => call.route === 'POST /managers/:id/messages');
     expect(sent?.args).toEqual({
@@ -6250,7 +6266,7 @@ describe('chat の /reply（質問への回答）', () => {
     const listed = emptyListed();
     const read = captureStdout();
 
-    await runSlashCommand('/reply req-dup 許可します', client, listed);
+    await runSlashCommand('/reply req-dup 許可します', ...slashArgs(client, listed));
 
     expect(calls.filter((call) => call.route === 'POST /managers/:id/messages')).toEqual([]);
     const text = read();
@@ -6262,7 +6278,7 @@ describe('chat の /reply（質問への回答）', () => {
     const { calls, client } = stubClient({ managers: [] });
     const read = captureStdout();
 
-    await runSlashCommand('/reply req-none 了解', client, emptyListed());
+    await runSlashCommand('/reply req-none 了解', ...slashArgs(client, emptyListed()));
 
     expect(calls.filter((call) => call.route === 'POST /managers/:id/messages')).toEqual([]);
     expect(read()).toContain('待っているマネージャーは居ません');
@@ -6279,7 +6295,7 @@ describe('chat の /reply（質問への回答）', () => {
       messagesStatus: 404,
       messagesBody: { error: 'そんな id は無い' },
     });
-    await runSlashCommand('/reply 1 了解です', notFoundClient, listed);
+    await runSlashCommand('/reply 1 了解です', ...slashArgs(notFoundClient, listed));
     const notFoundText = notFound();
     vi.restoreAllMocks();
 
@@ -6288,7 +6304,7 @@ describe('chat の /reply（質問への回答）', () => {
       messagesStatus: 500,
       messagesBody: { error: '回答の配送が失敗した（issue #2172 のテスト用）' },
     });
-    await runSlashCommand('/reply 1 了解です', serverErrorClient, listed);
+    await runSlashCommand('/reply 1 了解です', ...slashArgs(serverErrorClient, listed));
     const serverErrorText = serverError();
     vi.restoreAllMocks();
 
@@ -6297,7 +6313,7 @@ describe('chat の /reply（質問への回答）', () => {
       messagesStatus: 400,
       messagesBody: { error: '本文が長すぎる（issue #2172 のテスト用）' },
     });
-    await runSlashCommand('/reply 1 了解です', badRequestClient, listed);
+    await runSlashCommand('/reply 1 了解です', ...slashArgs(badRequestClient, listed));
     const badRequestText = badRequest();
 
     expect(notFoundText).toContain('見つかりませんでした');
@@ -6317,7 +6333,7 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     };
     captureStdout();
 
-    await runSlashCommand('/allow 1', client, listed);
+    await runSlashCommand('/allow 1', ...slashArgs(client, listed));
 
     expect(calls).toEqual([
       {
@@ -6338,7 +6354,7 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     };
     captureStdout();
 
-    await runSlashCommand('/deny 1 危険な操作なので', client, listed);
+    await runSlashCommand('/deny 1 危険な操作なので', ...slashArgs(client, listed));
 
     expect(calls).toEqual([
       {
@@ -6360,7 +6376,7 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     const listed = emptyListed();
     captureStdout();
 
-    await runSlashCommand('/allow', client, listed);
+    await runSlashCommand('/allow', ...slashArgs(client, listed));
 
     expect(calls.filter((call) => call.route === 'POST /managers/:id/messages')).toEqual([
       {
@@ -6380,7 +6396,7 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     const listed = emptyListed();
     const read = captureStdout();
 
-    await runSlashCommand('/allow', client, listed);
+    await runSlashCommand('/allow', ...slashArgs(client, listed));
 
     expect(calls.filter((call) => call.route === 'POST /managers/:id/messages')).toEqual([]);
     const text = read();
@@ -6399,7 +6415,7 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
       messagesStatus: 404,
       messagesBody: { error: 'そんな id は無い' },
     });
-    await runSlashCommand('/allow 1', notFoundClient, listed);
+    await runSlashCommand('/allow 1', ...slashArgs(notFoundClient, listed));
     const notFoundText = notFound();
     vi.restoreAllMocks();
 
@@ -6408,7 +6424,7 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
       messagesStatus: 500,
       messagesBody: { error: '許可の配送が失敗した（issue #2172 のテスト用）' },
     });
-    await runSlashCommand('/allow 1', serverErrorClient, listed);
+    await runSlashCommand('/allow 1', ...slashArgs(serverErrorClient, listed));
     const serverErrorText = serverError();
     vi.restoreAllMocks();
 
@@ -6417,7 +6433,7 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
       messagesStatus: 400,
       messagesBody: { error: '理由が長すぎる（issue #2172 のテスト用）' },
     });
-    await runSlashCommand('/deny 1 だめです', badRequestClient, listed);
+    await runSlashCommand('/deny 1 だめです', ...slashArgs(badRequestClient, listed));
     const badRequestText = badRequest();
 
     expect(notFoundText).toContain('見つかりませんでした');
@@ -6438,7 +6454,7 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
       messagesStatus: 404,
       messagesBody: { error: 'そんな id は無い' },
     });
-    await runSlashCommand('/allow', notFoundClient, emptyListed());
+    await runSlashCommand('/allow', ...slashArgs(notFoundClient, emptyListed()));
     const notFoundText = notFound();
     vi.restoreAllMocks();
 
@@ -6448,7 +6464,7 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
       messagesStatus: 500,
       messagesBody: { error: '許可の配送が失敗した（issue #2172 のテスト用）' },
     });
-    await runSlashCommand('/allow', serverErrorClient, emptyListed());
+    await runSlashCommand('/allow', ...slashArgs(serverErrorClient, emptyListed()));
     const serverErrorText = serverError();
 
     expect(notFoundText).toContain('見つかりませんでした');
@@ -6460,7 +6476,7 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     const read = captureStdout();
     const { client } = stubClient();
 
-    await runSlashCommand('/help', client, emptyListed());
+    await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('/msg ');
@@ -6474,7 +6490,7 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     const read = captureStdout();
     const { client } = stubClient();
 
-    await runSlashCommand('/help', client, emptyListed());
+    await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('/allow [番号|requestId]');
@@ -6513,7 +6529,7 @@ describe('chat の /approvals（並びを実装によらず揃える）', () => 
     captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/approvals', client, emptyListed());
+    await runSlashCommand('/approvals', ...slashArgs(client, emptyListed()));
 
     const listCalls = calls.filter((call) => call.route === 'GET /approvals');
     expect(listCalls).toHaveLength(1);
@@ -6539,7 +6555,7 @@ describe('chat の /archive', () => {
       ],
     });
 
-    await runSlashCommand('/archive', client, emptyListed());
+    await runSlashCommand('/archive', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('sess-1-2026-08-20T00-00-00-000Z.jsonl');
@@ -6562,7 +6578,7 @@ describe('chat の /archive', () => {
       ],
     });
 
-    await runSlashCommand('/archive', client, emptyListed());
+    await runSlashCommand('/archive', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('本文は削除済み');
   });
@@ -6582,7 +6598,7 @@ describe('chat の /archive', () => {
       ],
     });
 
-    await runSlashCommand('/archive sessions', client, emptyListed());
+    await runSlashCommand('/archive sessions', ...slashArgs(client, emptyListed()));
 
     const text = read();
     expect(text).toContain('sess-repeated');
@@ -6597,7 +6613,7 @@ describe('chat の /archive', () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ archiveReadBody: 'RAW LOG\n' });
 
-    await runSlashCommand('/archive sess-1-xyz.jsonl', client, emptyListed());
+    await runSlashCommand('/archive sess-1-xyz.jsonl', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('RAW LOG');
     expect(calls.map((call) => call.route)).toContain('GET /archive/:id');
@@ -6608,7 +6624,7 @@ describe('chat の /archive', () => {
       const read = captureStdout();
       const { calls, client } = stubClient();
 
-      await runSlashCommand('/archive remove', client, emptyListed());
+      await runSlashCommand('/archive remove', ...slashArgs(client, emptyListed()));
 
       expect(read()).toContain('使い方');
       expect(calls.map((call) => call.route)).not.toContain('DELETE /archive/:id');
@@ -6622,11 +6638,7 @@ describe('chat の /archive', () => {
 
       await runSlashCommand(
         '/archive remove sess-1.jsonl',
-        client,
-        emptyListed(),
-        null,
-        undefined,
-        confirmYes,
+        ...slashArgs(client, emptyListed(), { confirm: confirmYes }),
       );
 
       expect(read()).toContain('消しました');
@@ -6647,11 +6659,7 @@ describe('chat の /archive', () => {
 
         await runSlashCommand(
           '/archive remove sess-1.jsonl',
-          client,
-          emptyListed(),
-          null,
-          undefined,
-          confirmYes,
+          ...slashArgs(client, emptyListed(), { confirm: confirmYes }),
         );
 
         expect(read(), `alreadyRemoved=${String(alreadyRemoved)}`).toContain(
@@ -6669,11 +6677,7 @@ describe('chat の /archive', () => {
 
       await runSlashCommand(
         '/archive remove sess-1.jsonl',
-        client,
-        emptyListed(),
-        null,
-        undefined,
-        confirmYes,
+        ...slashArgs(client, emptyListed(), { confirm: confirmYes }),
       );
 
       expect(read()).toContain('前から消されていました');
@@ -6685,11 +6689,7 @@ describe('chat の /archive', () => {
 
       await runSlashCommand(
         '/archive remove no-such-id.jsonl',
-        client,
-        emptyListed(),
-        null,
-        undefined,
-        confirmYes,
+        ...slashArgs(client, emptyListed(), { confirm: confirmYes }),
       );
 
       const text = read();
@@ -6709,11 +6709,7 @@ describe('chat の /archive', () => {
 
       await runSlashCommand(
         '/archive remove sess-1.jsonl',
-        client,
-        emptyListed(),
-        null,
-        undefined,
-        confirmYes,
+        ...slashArgs(client, emptyListed(), { confirm: confirmYes }),
       );
 
       const text = read();
@@ -6730,11 +6726,7 @@ describe('chat の /archive', () => {
       });
       await runSlashCommand(
         '/archive remove sess-1.jsonl',
-        serverErrorClient,
-        emptyListed(),
-        null,
-        undefined,
-        confirmYes,
+        ...slashArgs(serverErrorClient, emptyListed(), { confirm: confirmYes }),
       );
       const serverErrorText = serverError();
       vi.restoreAllMocks();
@@ -6746,11 +6738,7 @@ describe('chat の /archive', () => {
       });
       await runSlashCommand(
         '/archive remove sess-1.jsonl',
-        badRequestClient,
-        emptyListed(),
-        null,
-        undefined,
-        confirmYes,
+        ...slashArgs(badRequestClient, emptyListed(), { confirm: confirmYes }),
       );
       const badRequestText = badRequest();
 
@@ -6774,11 +6762,7 @@ describe('chat の /archive', () => {
 
       await runSlashCommand(
         '/archive remove sess-1.jsonl 本番障害の調査で緊急に消す必要があった',
-        client,
-        emptyListed(),
-        null,
-        undefined,
-        confirmYes,
+        ...slashArgs(client, emptyListed(), { confirm: confirmYes }),
       );
 
       const text = read();
@@ -6804,23 +6788,10 @@ describe('戻せない操作の確認（REPL。#3141）', () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand(line, client, emptyListed(), null, undefined, declined);
+    await runSlashCommand(line, ...slashArgs(client, emptyListed(), { confirm: declined }));
 
     expect(calls.some((entry) => entry.route === route)).toBe(false);
     expect(read()).not.toContain('消しました');
-  });
-
-  it.each([
-    ['/stop mgr-1', 'DELETE /managers/:id'],
-    ['/archive remove sess-1.jsonl', 'DELETE /archive/:id'],
-  ])('%s: 確認の口が渡されていなければ、確認できないので叩かない', async (line, route) => {
-    const read = captureStdout();
-    const { calls, client } = stubClient();
-
-    await runSlashCommand(line, client, emptyListed());
-
-    expect(calls.some((entry) => entry.route === route)).toBe(false);
-    expect(read()).toContain('何も変更していません');
   });
 
   it('確認の文は、何が戻らないかを言う（止める対象・消す対象を含む）', async () => {
@@ -6832,14 +6803,10 @@ describe('戻せない操作の確認（REPL。#3141）', () => {
       return false;
     };
 
-    await runSlashCommand('/stop mgr-1', client, emptyListed(), null, undefined, record);
+    await runSlashCommand('/stop mgr-1', ...slashArgs(client, emptyListed(), { confirm: record }));
     await runSlashCommand(
       '/archive remove sess-1.jsonl',
-      client,
-      emptyListed(),
-      null,
-      undefined,
-      record,
+      ...slashArgs(client, emptyListed(), { confirm: record }),
     );
 
     expect(summaries[0]).toContain('mgr-1');
@@ -6984,12 +6951,7 @@ describe('chat のスラッシュコマンドは、知らないキー・空の�
 
       const result = await runSlashCommand(
         line,
-        client,
-        emptyListed(),
-        null,
-        undefined,
-        undefined,
-        (reason) => reasons.push(reason),
+        ...slashArgs(client, emptyListed(), { onFailed: (reason) => reasons.push(reason) }),
       );
 
       expect(result).toBe('ok');
@@ -7005,7 +6967,7 @@ describe('chat のスラッシュコマンドは、知らないキー・空の�
     captureStdout();
     const { calls, client } = stubClient({ conversations: [], conversationsScanned: 0 });
 
-    await runSlashCommand('/conversations cursor=abc==', client, emptyListed());
+    await runSlashCommand('/conversations cursor=abc==', ...slashArgs(client, emptyListed()));
 
     expect(calls).toEqual([{ route: 'GET /conversations', args: { query: { cursor: 'abc==' } } }]);
   });
@@ -7017,12 +6979,7 @@ describe('chat のスラッシュコマンドは、知らないキー・空の�
 
     await runSlashCommand(
       '/usage layer=nonsense',
-      client,
-      emptyListed(),
-      null,
-      undefined,
-      undefined,
-      (reason) => reasons.push(reason),
+      ...slashArgs(client, emptyListed(), { onFailed: (reason) => reasons.push(reason) }),
     );
 
     expect(calls).toEqual([]);

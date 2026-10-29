@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
-import { captureStderr, captureStdout } from './test-support.js';
+import { captureStderr, captureStdout, slashArgs } from './test-support.js';
 
 class FakeRl extends EventEmitter {
   closed = false;
@@ -139,17 +139,21 @@ describe('#3683: 本文の改行・インデント・連続した空白を潰さ
     };
     await runSlashCommand(
       '/msg mgr1 直して:\n  if x:\n      y',
-      createClient(base, {}),
-      listed,
-      null,
-      { baseUrl: base, headers: {}, remote: false, note: null },
+      ...slashArgs(createClient(base, {}), listed, {
+        target: { baseUrl: base, headers: {}, remote: false, note: null },
+      }),
     );
-    await runSlashCommand('/edit 1 新しい:\n    本文  です', createClient(base, {}), listed, null, {
-      baseUrl: base,
-      headers: {},
-      remote: false,
-      note: null,
-    });
+    await runSlashCommand(
+      '/edit 1 新しい:\n    本文  です',
+      ...slashArgs(createClient(base, {}), listed, {
+        target: {
+          baseUrl: base,
+          headers: {},
+          remote: false,
+          note: null,
+        },
+      }),
+    );
     out();
     expect(calls.find((c) => c.path.endsWith('/messages'))?.body?.text).toBe(
       '直して:\n  if x:\n      y',
@@ -200,23 +204,25 @@ describe('#3685: 非 TTY の /edit・/resume・/attach・/detach の失敗で止
     const reasons: string[] = [];
     await runSlashCommand(
       '/edit m1 本文',
-      createClient(base, {}),
-      {
-        approvals: [],
-        managerAnchors: {},
-        commitments: [],
-        conversations: [],
-        managers: [],
-        waiting: [],
-        messages: [],
-        messagesConversationId: 'c1',
-        messageAttachments: {},
-        messageTexts: {},
-      },
-      null,
-      { baseUrl: base, headers: {}, remote: false, note: null },
-      undefined,
-      (reason) => reasons.push(reason),
+      ...slashArgs(
+        createClient(base, {}),
+        {
+          approvals: [],
+          managerAnchors: {},
+          commitments: [],
+          conversations: [],
+          managers: [],
+          waiting: [],
+          messages: [],
+          messagesConversationId: 'c1',
+          messageAttachments: {},
+          messageTexts: {},
+        },
+        {
+          target: { baseUrl: base, headers: {}, remote: false, note: null },
+          onFailed: (reason) => reasons.push(reason),
+        },
+      ),
     );
     out();
     expect(reasons).toHaveLength(1);
@@ -462,7 +468,7 @@ describe('#3723: /schedule の依頼文と /answer の補足も改行・連続�
     const out = captureStdout();
     const { runSlashCommand } = await import('./chat.js');
     const { createClient } = await import('./client.js');
-    await runSlashCommand(line, createClient(base, {}), listed, null, target);
+    await runSlashCommand(line, ...slashArgs(createClient(base, {}), listed, { target }));
     out();
     return calls;
   };

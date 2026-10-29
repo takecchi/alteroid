@@ -11,7 +11,7 @@ import {
 import type { createClient } from './client.js';
 import { renderConversationDetail } from './conversations.js';
 import { errorReason, withErrorReason } from './format.js';
-import { captureStdout } from './test-support.js';
+import { captureStdout, slashArgs } from './test-support.js';
 
 const TOKEN = `ghp_${'a1B2c3D4e5'.repeat(4)}`;
 const SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -60,7 +60,7 @@ async function run(
   listed: Listed = emptyListed(),
 ): Promise<string> {
   const read = captureStdout();
-  await runSlashCommand(line, routedClient(route), listed);
+  await runSlashCommand(line, ...slashArgs(routedClient(route), listed));
   return read();
 }
 

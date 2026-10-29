@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { runSlashCommand, type Listed } from './chat.js';
 import type { createClient } from './client.js';
-import { captureStdout } from './test-support.js';
+import { captureStdout, slashArgs } from './test-support.js';
 
 function replyingClient(status: number, rawBody: string): ReturnType<typeof createClient> {
   const respond = () =>
@@ -34,7 +34,7 @@ function emptyListed(): Listed {
 
 async function run(line: string, status: number, rawBody: string): Promise<string> {
   const read = captureStdout();
-  await runSlashCommand(line, replyingClient(status, rawBody), emptyListed());
+  await runSlashCommand(line, ...slashArgs(replyingClient(status, rawBody), emptyListed()));
   const text = read();
   vi.restoreAllMocks();
   return text;
@@ -128,12 +128,9 @@ describe('単発の /answer の失敗は、失敗として扱う（#4683）', ()
     const read = captureStdout();
     await runSlashCommand(
       line,
-      replyingClient(status, rawBody),
-      listed,
-      null,
-      undefined,
-      undefined,
-      (reason) => reasons.push(reason),
+      ...slashArgs(replyingClient(status, rawBody), listed, {
+        onFailed: (reason) => reasons.push(reason),
+      }),
     );
     const text = read();
     vi.restoreAllMocks();
