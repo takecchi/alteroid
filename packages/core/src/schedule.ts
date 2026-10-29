@@ -544,7 +544,9 @@ export function selfInitiativeEntry(options: { everyMinutes: number }): Schedule
 
   return {
     kind: SELF_INITIATIVE_KIND,
-    description: `${Math.max(1, Math.floor(everyMinutes))} 分ごとに、記憶にある目的から次にやることを決める`,
+    description:
+      `${Math.max(1, Math.floor(everyMinutes))} 分ごとに確かめ、動ける仕事（待ち行列の queued / needs_decision・旧台帳の未了）があるときと、` +
+      '直近24時間に発意 tick を回していないときだけ、記憶にある目的から次にやることを決める（手で起こした回は常に回す）',
     nextAt(after) {
       return new Date(after.getTime() + interval);
     },

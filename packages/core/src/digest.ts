@@ -623,6 +623,26 @@ function describeLegacyLedgerLine(open: number, unreadable: number): string[] {
   ];
 }
 
+/**
+ * 旧台帳に開いている行のうち、同じ id の task が（閉じたものも含めて）無い行の数と、読めない行の数。digest の1行と発意 tick の門（`initiative-gate.ts`）が同じ数え方を使うための共有。
+ * 人間の依頼は台帳と Task に同じ id で載り、返答で task だけが done になる（台帳の行は開いたまま）ので、その行は数えない。
+ * 読みが失敗したら投げる（丸めない）。台帳が空なら task の全件読みは要らない。
+ * #5469 P7 で台帳を撤去するときに、この関数ごと消える。
+ */
+export async function countLegacyOnlyOpen(
+  stores: Pick<Stores, 'commitments' | 'tasks'>,
+): Promise<{ readonly open: number; readonly unreadable: number }> {
+  const legacyLedger = await stores.commitments.list();
+  const taskIds =
+    legacyLedger.entries.length === 0
+      ? new Set<string>()
+      : new Set((await stores.tasks.list({ includeClosed: true })).entries.map((task) => task.id));
+  return {
+    open: legacyLedger.entries.filter((entry) => !taskIds.has(entry.id)).length,
+    unreadable: legacyLedger.unreadable.length,
+  };
+}
+
 // `liveness` を必須にしない: 省略時は全件 `/セッション不明` になり、黙って「繋がっている」と名乗らないため
 // `awaitingBackground` を必須にしない: 省略時は何も書き足さず、取れていないことを「手が空いている」と偽らないため
 export async function buildActivityDigest(
@@ -651,15 +671,8 @@ export async function buildActivityDigest(
   // 継続中の依頼・待ち行列・旧台帳の未了を期間で切らない: 切ると、2日前に頼まれてまだ手を付けていない仕事だけが静かに落ちるため
   // 待ち行列は `list()` の並びのまま持つ（器は並べ直さない）。旧台帳は件数だけを使う（節は出さない）
   const taskList = await stores.tasks.list();
-  const legacyLedger = await stores.commitments.list();
-  // 人間の依頼は台帳と Task に同じ id で載り、返答で task だけが done になる（台帳の行は開いたまま）。数えるのは「閉じた task も含めて、同じ id の task が無い」行だけ。
-  // 台帳が空なら task の全件読みは要らない
-  const taskIds =
-    legacyLedger.entries.length === 0
-      ? new Set<string>()
-      : new Set((await stores.tasks.list({ includeClosed: true })).entries.map((task) => task.id));
-  const legacyOnlyOpen = legacyLedger.entries.filter((entry) => !taskIds.has(entry.id)).length;
-  const legacyLedgerLine = describeLegacyLedgerLine(legacyOnlyOpen, legacyLedger.unreadable.length);
+  const legacy = await countLegacyOnlyOpen(stores);
+  const legacyLedgerLine = describeLegacyLedgerLine(legacy.open, legacy.unreadable);
 
   // 境界を JS 側で切り直す: `JournalQuery.until` は含む側で `DigestWindow.until` は含まない。クエリ側を外すと OOM に戻り、JS 側を外すと境界のミリ秒が1件ずれるため
   const withinWindow = (entry: JournalEntry): boolean => compareIsoInstant(entry.at, untilIso) < 0;

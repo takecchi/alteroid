@@ -110,6 +110,7 @@ import {
   EXCHANGE_KIND_REPLY_PREFIX,
   EXCHANGE_KIND_THINNING_PREFIX,
 } from './exchange-kind.js';
+import { decideInitiativeTick, type InitiativeGateDecision } from './initiative-gate.js';
 import {
   CallerGauge,
   hookGaugeLabel,
@@ -3057,6 +3058,21 @@ class Clone implements CloneHost {
       text:
         `${EXCHANGE_KIND_THINNING_PREFIX}名指す担当がもう戻っていた知らせなので、ターンを起こさずに畳んだ（モデルへは1文字も渡して` +
         `いない）: ${inboxEventShape(event)}\n\n${notice}`,
+    });
+  }
+
+  // 回さなかった回の跡: 書かないと「tick が来なかった」と「門が畳んだ」が日誌から区別できず、門の判定が間違っていても永久に見えないため
+  async #noteSkippedInitiativeTick(
+    gate: Extract<InitiativeGateDecision, { run: false }>,
+  ): Promise<void> {
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_THINNING_PREFIX}動ける仕事が無い発意 tick なので、ターンを起こさずに畳んだ（モデルへは1文字も渡していない）。` +
+        `待ち行列: queued=${gate.queued} needs_decision=${gate.needsDecision} waiting=${gate.waiting}、` +
+        `直近に発意 tick のターンを回した時刻: ${gate.lastTickAt ?? 'なし'}`,
     });
   }
 
@@ -6202,6 +6218,15 @@ class Clone implements CloneHost {
       }
 
       case 'self_initiative': {
+        // 動ける仕事が無い回は、モデルへ1文字も渡さず畳む（#5469 P6a）。ここで return しても合図は呼び出し元が処理済みにする（配り直されない）
+        const gate = await decideInitiativeTick(this.#stores, {
+          cause: event.cause ?? 'schedule',
+          now: new Date(),
+        });
+        if (!gate.run) {
+          await this.#noteSkippedInitiativeTick(gate);
+          return;
+        }
         const digest = await this.#recentDigest();
         // 同じ会話の2回目以降は前回からの差分にする（#4937）。日誌の1行は差分にする前の全文のまま
         this.#resetDigestDeltaIfNewConversation(); // #4941: 組む直前の判定し直し
