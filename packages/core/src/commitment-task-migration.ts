@@ -90,7 +90,9 @@ export interface CommitmentMigrationPlan {
  * 動作や宛先が見たものと違う計画を、同じ指紋で実行しないため。本文は入れない（台帳の本文は書き換わらず、id で一意に決まる）。
  * 行は計画の並び（at、同じ at は id）のままで、並びも指紋に入る。
  */
-export function commitmentMigrationFingerprint(rows: readonly CommitmentMigrationPlanRow[]): string {
+export function commitmentMigrationFingerprint(
+  rows: readonly CommitmentMigrationPlanRow[],
+): string {
   const lines = rows
     .filter((row) => row.action !== 'skip-closed')
     .map(({ action, commitment, originConversation }) =>

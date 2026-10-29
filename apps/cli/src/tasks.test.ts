@@ -33,7 +33,11 @@ beforeEach(() => {
     const request = input as Request;
     const url = typeof input === 'string' ? input : (request.url ?? String(input));
     sent.push(url);
-    const method = (init?.method ?? (typeof input === 'string' ? undefined : request.method) ?? 'GET').toUpperCase();
+    const method = (
+      init?.method ??
+      (typeof input === 'string' ? undefined : request.method) ??
+      'GET'
+    ).toUpperCase();
     const rawBody =
       typeof init?.body === 'string'
         ? init.body
@@ -215,7 +219,12 @@ describe('alteroid tasks migrate', () => {
           closeOnly: 1,
           retired: 2,
           alreadyClosed: 0,
-          ids: { migrated: ['h1', 'h2'], closeOnly: ['h9'], retired: ['m1', 'x1'], alreadyClosed: [] },
+          ids: {
+            migrated: ['h1', 'h2'],
+            closeOnly: ['h9'],
+            retired: ['m1', 'x1'],
+            alreadyClosed: [],
+          },
           originConversation: { fromConversation: 1, fromApproval: 0, unresolvedIds: ['h2'] },
           failed: [],
         },

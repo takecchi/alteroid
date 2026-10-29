@@ -6904,11 +6904,15 @@ export function createApp(deps: AppDeps) {
           '1行の失敗は `execution.failed`（id・段階・例外の型名だけ）に数えて次へ進む。**閉じた台帳の行を戻す口は `POST /commitments/{id}/reopen` の1件ずつだけ。**',
         responses: {
           200: {
-            description: '実行の結果。`failed` が空でなければ、その行は移っていない（再実行で続きから進む）。',
-            content: { 'application/json': { schema: resolver(taskMigrationResultResponseSchema) } },
+            description:
+              '実行の結果。`failed` が空でなければ、その行は移っていない（再実行で続きから進む）。',
+            content: {
+              'application/json': { schema: resolver(taskMigrationResultResponseSchema) },
+            },
           },
           400: {
-            description: '本文が JSON として不正、または `fingerprint` が無い・空。何も書いていない。',
+            description:
+              '本文が JSON として不正、または `fingerprint` が無い・空。何も書いていない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           409: {
@@ -6936,7 +6940,8 @@ export function createApp(deps: AppDeps) {
           });
           return c.json(taskMigrationResultResponseSchema.parse(report));
         } catch (error) {
-          if (error instanceof MigrationPlanChangedError) return c.json({ error: error.message }, 409);
+          if (error instanceof MigrationPlanChangedError)
+            return c.json({ error: error.message }, 409);
           if (error instanceof OriginConversationLookupError) {
             return c.json({ error: error.message }, 500);
           }

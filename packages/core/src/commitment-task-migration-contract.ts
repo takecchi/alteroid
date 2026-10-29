@@ -335,11 +335,7 @@ export async function verifyCommitmentTaskMigrationContract(
       text: `発言-${conversationId}`,
       conversationId,
     });
-  const approval = (
-    stores: ContractStores,
-    id: string,
-    conversationId: string | undefined,
-  ) =>
+  const approval = (stores: ContractStores, id: string, conversationId: string | undefined) =>
     stores.jobs.putApproval({
       id,
       createdAt: '2026-09-01T00:00:00.000Z',
