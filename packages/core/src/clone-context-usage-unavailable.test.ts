@@ -6,12 +6,11 @@ import { fakeSdk, waitForDone, wireEvents } from './clone-test-harness.js';
 import { createClone } from './clone.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
-async function contextUsageRows(unavailable: boolean): Promise<number> {
+async function contextUsageRows(): Promise<number> {
   const { fn } = fakeSdk();
   const inner = new ClaudeCloneDriver({ queryFn: fn });
   const driver: AgentCloneDriver = {
     providerId: 'claude',
-    ...(unavailable ? { providesContextUsage: false as const } : {}),
     open: (spec) => {
       const session = inner.open(spec);
       return {
@@ -36,12 +35,8 @@ async function contextUsageRows(unavailable: boolean): Promise<number> {
   return rows.length;
 }
 
-describe('クローン — 文脈の使用状況が無い駆動役（Codex）', () => {
-  it('providesContextUsage=false なら、context_usage の error 行は最初の1回だけ', async () => {
-    expect(await contextUsageRows(true)).toBe(1);
-  });
-
-  it('Claude（印なし）は従来どおり毎ターン書く', async () => {
-    expect(await contextUsageRows(false)).toBe(3);
+describe('クローン — 文脈の使用状況が取れない駆動役', () => {
+  it('取れなくても毎ターン聞き、context_usage の error 行を毎ターン書く', async () => {
+    expect(await contextUsageRows()).toBe(3);
   });
 });

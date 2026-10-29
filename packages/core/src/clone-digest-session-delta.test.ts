@@ -1,9 +1,12 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { createClone, REPORT_FOLLOW_UP_GUIDE, REPORT_FOLLOW_UP_GUIDE_REF } from './clone.js';
-import type { AgentCloneDriver } from './agent-clone-session.js';
-import { ClaudeCloneDriver } from './claude-clone-driver.js';
+import {
+  createClone,
+  digestUsageResetReason,
+  REPORT_FOLLOW_UP_GUIDE,
+  REPORT_FOLLOW_UP_GUIDE_REF,
+} from './clone.js';
 import { TOKEN_SAVING_ENABLED_ENV, waitFor, withoutQueueNotice } from './clone-test-harness.js';
 import { EXCHANGE_KIND_DECISION_PREFIX } from './exchange-kind.js';
 import type { CloneHost } from './host.js';
@@ -41,8 +44,6 @@ interface SdkScript {
   failFirstStarts?: number;
   /** 使用量の観測を取れなくする（`getContextUsage` を持たない）。既定は閾値から遠い観測を返す（#4941）。 */
   noUsage?: boolean;
-  /** 文脈の使用状況を出せない駆動役（`providesContextUsage: false`）で開く。 */
-  unavailableDriver?: boolean;
   /** n 番目（1始まり）の入力を、成功ではなく失敗の result で終える。 */
   failResultAt?: number;
   /** 入力の受け付けが終わった後、この Promise が解けるまで出来事の列を閉じない（作り直しの窓を開けておく）。 */
@@ -179,25 +180,9 @@ function boot(script: SdkScript = {}): Boot {
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
   const stores = createMemoryStores();
-  // 文脈の使用状況を出せない駆動役（Codex 相当。`providesContextUsage: false`）: 最初の1回は error、2回目以降は観測が無い（null）
-  const inner = new ClaudeCloneDriver({ queryFn: fn });
-  const unavailableDriver: AgentCloneDriver = {
-    providerId: 'claude',
-    providesContextUsage: false,
-    open: (spec) => {
-      const session = inner.open(spec);
-      return {
-        readEvents: (onEvent) => session.readEvents(onEvent),
-        interrupt: () => session.interrupt(),
-        close: () => session.close(),
-        contextUsage: () => Promise.reject(new Error('取れない')),
-        sessionModelUsage: () => session.sessionModelUsage(),
-      };
-    },
-  };
   const clone = createClone({
     stores,
-    ...(script.unavailableDriver === true ? { driver: unavailableDriver } : { queryFn: fn }),
+    queryFn: fn,
     env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
@@ -686,22 +671,8 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     const line = (reason: string): string =>
       `${EXCHANGE_KIND_DECISION_PREFIX}${RESET_LINE}: 理由=${reason}`;
 
-    it('使用量を返さない駆動役: 最初の全文は書かず、観測が無くなった回に usage_null の1行が出る', async () => {
-      const s = boot({ unavailableDriver: true });
-      await seed(s.stores);
-      await selfTick(s);
-      await settle();
-      expect(await resetLines(s)).toEqual([]);
-      // 2回目: 1回目の観測は error（usage_error）
-      await selfTick(s);
-      await waitFor(async () => (await resetLines(s)).length >= 1, 'usage_error の行');
-      // 3回目: 以後は観測が無い（null）
-      await selfTick(s);
-      await waitFor(async () => (await resetLines(s)).length >= 2, 'usage_null の行');
-      const lines = await resetLines(s);
-      // 並びは見ない（日誌の書き込みは待たないため、同じ時刻の行の並びが揺れうる）
-      expect([...lines].sort()).toEqual([line('usage_error'), line('usage_null')].sort());
-      await s.clone.stop();
+    it('使用量の観測が無い（null の）回の理由は usage_null（預けた控えの観測が null のときなど）', () => {
+      expect(digestUsageResetReason(null, 0)).toBe('usage_null');
     });
 
     it('使用量の取得に失敗する回（getContextUsage が無い）は usage_error の1行', async () => {
