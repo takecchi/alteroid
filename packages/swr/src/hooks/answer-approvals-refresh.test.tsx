@@ -15,7 +15,7 @@ let originalFetch: typeof fetch;
 
 function Probe() {
   // 取り直しの相手（一覧の購読）が居ないと、mutate は何も取り直さない
-  useApprovals(false);
+  useApprovals(true);
   const fn = useAnswerApprovals();
   useEffect(() => {
     answerAll = fn;
