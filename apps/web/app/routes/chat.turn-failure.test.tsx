@@ -119,6 +119,8 @@ describe('失敗したターンの行', () => {
       text: '来週の登壇資料を作って',
       conversationId: CONVERSATION,
     });
+    // 送信が終わるまで待つ: 終わる前に後片付け（unmount）へ進むと、畳まれた後の SWR のキャッシュへ recordOwnMessage の mutate を打ち、unhandled rejection になる。「考えている…」は送信の瞬間から出て、終わりの合図で消える
+    await waitFor(() => expect(screen.queryByText('考えている…')).toBeNull());
   });
 
   it('文面が同じでも印が無い行は、普通の返答として描く（再送も出さない）', async () => {

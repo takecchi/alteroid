@@ -136,6 +136,8 @@ describe('上げ終えた添付の印は、会話を移っても元の会話の�
 
     fireEvent.click(await screen.findByRole('button', { name: 'メッセージを送信' }));
     await waitFor(() => expect(uploadedNames).toHaveLength(3));
+    // 送信が終わるまで待つ: 終わる前に後片付け（unmount）へ進むと、畳まれた後の SWR のキャッシュへ recordOwnMessage の mutate を打ち、unhandled rejection になる。「考えている…」は送信の瞬間から出て、終わりの合図で消える
+    await waitFor(() => expect(screen.queryByText('考えている…')).toBeNull());
     await act(async () => undefined);
     expect(uploadedNames).toEqual(['first.txt', 'second.txt', 'second.txt']);
   });
