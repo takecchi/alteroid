@@ -20,6 +20,8 @@ interface TaskRowView {
   updatedAt: string;
   closedAt?: string | undefined;
   closedReason?: string | undefined;
+  closedBy?: string | undefined;
+  keep?: boolean | undefined;
 }
 
 interface TasksView {
@@ -46,14 +48,17 @@ export function renderTasks(view: TasksView, now: number = Date.now()): string {
   for (const task of view.entries) {
     const closed = task.closedAt !== undefined;
     const mark = closed ? '  ✓' : String(++position).padStart(3, ' ');
-    lines.push(`${mark} [${task.status}] ${task.title}`);
+    // 「続く」の印（返答しても器が自動で done にしない。#5469 P5）はタイトルの後ろに出す
+    lines.push(`${mark} [${task.status}] ${task.title}${task.keep === true ? '  （続く）' : ''}`);
     lines.push(
       `      id: ${task.id}  起点: ${task.origin}${task.source === undefined ? '' : `(${task.source})`}` +
         `  作成: ${task.createdAt}（${formatElapsedAgo(task.createdAt, now)}）  更新: ${task.updatedAt}`,
     );
     lines.push(`      ${excerptOf(task.body)}`);
     if (closed) {
-      lines.push(`      閉じた: ${task.closedAt ?? ''}  ${excerptOf(task.closedReason ?? '')}`);
+      lines.push(
+        `      閉じた: ${task.closedAt ?? ''}${task.closedBy === undefined ? '' : `（${task.closedBy}）`}  ${excerptOf(task.closedReason ?? '')}`,
+      );
     }
   }
   if (view.unreadable.length > 0) {

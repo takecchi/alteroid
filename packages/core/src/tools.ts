@@ -277,6 +277,7 @@ import {
   encodeTaskCursor,
   resolveTaskCursor,
   resolveTaskPlacement,
+  taskKeepChangeEntry,
   taskStatusChangeEntry,
   taskStatusLine,
 } from './task-tools.js';
@@ -522,6 +523,11 @@ export interface ToolContext {
   // optional にする: 無い器（テストの ToolContext）は従来どおり `conversationId` だけを見る。クローン本体は必ず渡す
   workConversationId?: () => string | undefined;
   recentDenials?: () => readonly RecentDenial[];
+  /**
+   * `manager_start` が委譲を起こした（起点の会話 id。起点が無ければ `undefined`）。いまのターンで起こした委譲の起点を控え、
+   * その会話を起点にする task を、このターンの返答で自動 done にしない判定に使う（#5469 P5。P3 で委譲が taskId を持ったら task の id で結ぶ）。無い器（テスト・蒸留）は何もしない。
+   */
+  noteDelegationStarted?: (originConversationId: string | undefined) => void;
   // 添付があるとき（`attachments`）だけ第3引数を渡す: 添付の無い従来の呼び出しの形を変えないため
   postToConversation?: (
     conversationId: string,
@@ -628,6 +634,7 @@ export const CLONE_TOOL_NAMES = [
   'task_add',
   'task_move',
   'task_set_status',
+  'task_keep',
   'progress_read',
   'github_observation_record',
   'inbox_remove_many',
@@ -681,6 +688,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'task_add',
   'task_move',
   'task_set_status',
+  'task_keep',
   'inbox_remove_many',
   'profile_write',
   'profile_remove',
@@ -776,6 +784,7 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   task_add: false,
   task_move: false,
   task_set_status: false,
+  task_keep: false,
   inbox_remove_many: false,
   profile_write: true,
   profile_remove: false,
@@ -5661,7 +5670,7 @@ export function createCloneTools(context: ToolContext) {
       'commitment_list',
       [
         '引き受けたまま終わっていない仕事の一覧。既定は古い順に出る。',
-        '人間の依頼・人間の回答（ask_human への答え）・マネージャーからの一件・外部イベント（デーモン自身が自分へ出す合図を除く）は、届いた時点で自動的にここへ載る。',
+        '人間の依頼・人間の回答（ask_human への答え）は、届いた時点で自動的にここへ載る（同じ id で task にも載る）。マネージャーの報告・外部イベントは受信箱には届くが、ここへは自動では載らない（必要なら自分で commitment_open / task_add する）。',
         '**載っているものは、あなたが閉じるまで消えない。**',
         'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
         '1件の全文（依頼本文と、片付けたならその理由）が要るなら id を渡す。片付いた件も id で読める。',
@@ -6126,14 +6135,15 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // 台帳（commitment_*）とは別の器: 台帳から自動では移さない（二重書き込みをしない）。ここだけが順序と状態を持つ
+    // 台帳（commitment_*）とは別の器: ここだけが順序と状態を持つ。台帳から既存の行を移すのは P7（移行）で、人間の依頼だけは届いた時点で両方に載る（#5469 P5。移行期の二重）
     tool(
       'task_list',
       [
         'task（順序と状態を持つ待ち行列）の一覧。**先頭が先にやるもの**で、並びは器が持つ（数値の優先度・締切は無い）。',
         '各件はタイトルと本文の抜粋だけを出す。1件の全文（本文と、閉じたなら理由）が要るなら id を渡す。閉じた件も id で読める。',
         '既定は開いている件（queued / waiting / needs_decision）だけ。includeClosed で閉じた件（done / cancelled）を後ろに足す。',
-        '引き受けた仕事の台帳（commitment_list）とは別の器で、台帳から自動では載らない。',
+        '引き受けた仕事の台帳（commitment_list）とは別の器。人間の依頼（人間の発言・承認への回答）は、台帳の行と同じ id で届いた時点で自動的に載る（queued）。マネージャーの報告・外部イベントは自動では載らない。',
+        '人間の依頼の task は、起点の会話へ返答したターンの終わりに、queued であれば器が自動で done にする（閉じたものは includeClosed で読み返せる。止めるなら task_keep）。',
         '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
       {
@@ -6578,6 +6588,55 @@ export function createCloneTools(context: ToolContext) {
           `task ${taskId} を ${result.before.status} から ${status} へ移した${
             reopened ? '（閉じた記録は日誌に残してある）' : ''
           }。`,
+        );
+      },
+    ),
+
+    tool(
+      'task_keep',
+      [
+        'task に「続く」の印を立てる（keep=true）／外す（keep=false）。',
+        '人間の依頼の task は、起点の会話へ返答したターンの終わりに、queued であれば器が自動で done にする（理由と閉じた主体 daemon が残り、日誌にも書かれる）。',
+        '返答したあとも続ける仕事（返答は途中経過で、まだ終わっていない）は、返答する前にこの印を立てておくと、自動では閉じない。',
+        '印は状態・並びを動かさない。印を立てた task を終えるときは task_set_status で done にすること。',
+        '自動 done が閉じない場合はほかにもある: waiting / needs_decision（待ち・判断待ち）、そのターンで同じ起点の会話の委譲を起こしたとき、起点の会話が無い task（承認への回答など）。',
+      ].join(' '),
+      {
+        taskId: z
+          .string()
+          .describe('task_list に出ている id（閉じた件にも立てられる。開き直したときに効く）'),
+        keep: z.boolean().describe('true で立てる、false で外す'),
+      },
+      async ({ taskId, keep }) => {
+        let result;
+        try {
+          result = await stores.tasks.setKeep(taskId, keep);
+        } catch (error) {
+          if (error instanceof UnreadableTaskError) {
+            return text(
+              `task ${taskId} は読めない形で入っている。読めない形のまま書き直さないので、印を変えていない。`,
+            );
+          }
+          throw error;
+        }
+        if (result.kind === 'not-found') {
+          return text(
+            `task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`,
+          );
+        }
+        if (result.kind === 'unchanged') {
+          return text(
+            `task ${taskId} は既に${keep ? '「続く」の印つき' : '印なし'}。何もしていない。`,
+          );
+        }
+        await appendJournalOrThrow(
+          'task_keep',
+          stores.journal,
+          taskKeepChangeEntry(taskId, result.task, keep),
+          'act-completed',
+        );
+        return text(
+          `task ${taskId} の「続く」の印を${keep ? '立てた。返答しても器は自動では done にしない' : '外した'}。`,
         );
       },
     ),
@@ -8511,6 +8570,8 @@ export function createCloneTools(context: ToolContext) {
           throw error;
         }
 
+        // 日誌より先に控える: 日誌の追記が落ちても、起こした事実は変わらない（自動 done がこの委譲を見落とさない）
+        context.noteDelegationStarted?.(conversationId);
         await appendJournalOrDrop('manager_start', stores.journal, {
           type: 'decision',
           decision:

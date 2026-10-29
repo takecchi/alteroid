@@ -217,7 +217,9 @@ import {
   recoveredNoticeFoldOf,
   type QuotaRecoverySummary,
 } from './quota-recovery-notice.js';
-import { carriesPartialBeforeFailure, isBareQuotaStopReportText } from './quota-stop-notice.js';
+import { isBareQuotaStopReportText } from './quota-stop-notice.js';
+import { autoCloseRepliedTasks, taskFromHumanIntake } from './task-auto-done.js';
+import type { TurnReplyVia } from './task-auto-done.js';
 import type { AttachmentRef, JobStatus, TurnFailureKind } from './schema.js';
 import { DEFAULT_TOKEN_COOLDOWN_MS, toAgentTokenView } from './token-pool.js';
 import { parseNoticeResetAt } from './usage-reset-text.js';
@@ -1146,6 +1148,16 @@ class Clone implements CloneHost {
   /** 直前に人間の発言のターンを回した会話。会話が切り替わったことを次のターンの入力で名乗るため。 */
   // 永続化しない: 再起動の後はセッションの文脈も作り直されるので、そこで「切り替わった」と言える相手が無いため
   #lastHumanConversationId: string | null = null;
+  // 人間の依頼の Task の追加のうち、まだ終わっていないもの（`#openHumanTask`）。返答のターンの終わりが待つ: 届いた直後に返答が終わると、Task がまだ無く閉じ損ねるため
+  readonly #taskOpens = new Set<Promise<void>>();
+  // いまのターンの間に起きた会話への返答と委譲の控え（#5469 P5 の自動 done。`#runTurn` が作り直し、`turn_ended` が読む）。
+  // `Turn` に載せない: `Turn` は試験が欄を全部書いて作る型で、欄を足すと無関係の試験が壊れるため。ターンは同時に1つしか走らない
+  #turnReplies: { startedAt: string; replied: Map<string, TurnReplyVia>; delegated: Set<string> } =
+    {
+      startedAt: new Date(0).toISOString(),
+      replied: new Map(),
+      delegated: new Set(),
+    };
   // 枠の知らせ（`quotaStop`）で台帳に開いた行のうち、担当が戻ったら器が閉じる候補（#5015）。キーは合図の id
   // 候補そのものは永続化せず、台帳の行の印（`autoCloseWhenBack`）から起動のあと最初の掃除で組み直す（#5164。`#restoreQuotaStopLedgerRows`）。
   // 印の無い古い行は、`origin` が manager で本文が枠の知らせの定型だけ（`isBareQuotaStopReportText`）のものに限って戻す。
@@ -3508,7 +3520,9 @@ class Clone implements CloneHost {
   }
 
   // 合図の id をそのまま未了の id にする: 配り直しでも同じ id になり、`CommitmentStore.open` の冪等性が「二度開かない・閉じたものを開き直さない」になるため
-  // `timer` と `self_initiative` では開かない: 起こされたこと自体で、開くと発意 tick のたびに未了が1件増えて台帳が数時間で読めなくなるため。`external` でもデーモン自身の合図（`isDaemonSelfNotice`）では開かない
+  // 開くのは人間の合図（human_message・human_answer）だけ（#5469 P5）: マネージャーの報告・外部の出来事・timer・self_initiative は受信箱と日誌には届くが、台帳にも Task にも積まない。
+  // 報告や外部の出来事まで積むと、読み手が閉じ忘れた行が積み上がり、枠の知らせ・デーモンの知らせが台帳を埋めて読めなくなっていたため
+  // 台帳の行と同じ id で Task も積む（`#openHumanTask`）。移行期（台帳が P7 で廃止されるまで）は人間の依頼が両方に載る
   // 読んでから書く形へ戻さない: 重複判定は `CommitmentStore.open` の中で行う。アプリ層の排他はプロセスを跨げず、同じストアを指す2つのデーモンが両方「重複なし」と読んで台帳が2行に割れるため
   // 失敗しても post を落とさない
   // 種別は `decision` にしない: 器が受信箱の合図から機械的に開いた行を混ぜると、クローンが自分で決めて引き受けた判断という面の意味が変わるため
@@ -3516,32 +3530,13 @@ class Clone implements CloneHost {
   // `#journal` を経由せず直接 append する: 通常の `#journal` だと失敗が stderr に沈んで「記録が無い」と「名乗っていない」を区別できず、日誌の失敗から日誌へ書き直す循環も作るため。失敗したら `'unrecorded'` を返す
   #commit(event: InboxEvent): void {
     const entry = commitmentFor(event);
-    if (entry === null) {
-      // 印で開かなかった回だけ日誌へ残す: 型で開かない合図（timer 等）は毎回書くと雑音になるが、受信箱の合図なのに台帳に無い理由は後から取れないと困るため
-      if (event.type === 'manager_message' && event.commitmentExempt === true) {
-        void this.#noteExemptNotCommitted(event);
-      }
-      return;
-    }
-    const quotaStopRow =
-      event.type === 'manager_message' &&
-      event.quotaStop === true &&
-      !carriesPartialBeforeFailure(event.text)
-        ? { eventId: event.id, managerId: event.managerId, at: event.at }
-        : undefined;
+    if (entry === null) return;
+    this.#openHumanTask(event, entry);
     this.#delivery.setCommitted(
       event.id,
       this.#stores.commitments.open(entry).then(
         async (result): Promise<CommitOutcome> => {
-          if (!result.opened) {
-            // 台帳に在る行（まだ閉じていないかは掃除の `close` の戻り値が決める）を、担当が戻ったら閉じる候補に覚える
-            if (!result.folded && quotaStopRow !== undefined) {
-              this.#quotaStopLedgerRows.set(quotaStopRow.eventId, quotaStopRow);
-            }
-            return result.folded ? 'folded' : 'existed';
-          }
-          if (quotaStopRow !== undefined)
-            this.#quotaStopLedgerRows.set(quotaStopRow.eventId, quotaStopRow);
+          if (!result.opened) return result.folded ? 'folded' : 'existed';
           try {
             await this.#stores.journal.append({
               type: 'exchange',
@@ -3579,21 +3574,30 @@ class Clone implements CloneHost {
     );
   }
 
-  // 受信箱には届いたが台帳に開かなかった理由を日誌へ1行残す（#5015）。`#commit` の「台帳に開いた」行と同じ形で、失敗しても post を落とさない
-  async #noteExemptNotCommitted(event: InboxEvent): Promise<void> {
-    try {
-      await this.#stores.journal.append({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_DECISION_PREFIX}受信箱の合図だが、引き受けた仕事としては台帳に開かなかった（id: ${event.id}）。` +
-          '理由: 枠で落ちていた委譲を新しい鍵で起こし直した知らせで、その委譲には supersedes でつながる後継が居ないため、' +
-          `クローンが手を打つことが無い。合図: ${inboxEventShape(event)}`,
+  // 人間の依頼を Task としても積む（#5469 P5）。id は台帳の行（＝受信箱の合図）と同じで、`TaskStore.add` の existed が配り直し・P7a の移行との二重を防ぐ。
+  // 台帳の記帳（`CommitOutcome`）には混ぜず、失敗しても post を落とさない。進行中の追加は `#taskOpens` で控え、返答のターンの終わりが待つ
+  // 日誌へは「積んだ」行を書かない: 合図そのものが `#record` で日誌に在り、Task の id がその合図の id と同じなので辿れるため。失敗だけは stderr と日誌に残す
+  #openHumanTask(event: InboxEvent, entry: Commitment): void {
+    const opening = this.#stores.tasks
+      .add(taskFromHumanIntake(entry, event, new Date().toISOString()))
+      .then(
+        () => undefined,
+        (error: unknown) => {
+          noteDroppedRecord('Task の自動起票', inboxEventShape(event), error);
+          return this.#journal({
+            type: 'exchange',
+            with: 'self',
+            role: 'outbound',
+            text:
+              `${EXCHANGE_KIND_FAILURE_PREFIX}人間の依頼を Task として積めなかった（id: ${event.id}）。` +
+              `必要なら \`task_add\` で載せ直すこと（理由: ${reasonOf(error)}）。`,
+          });
+        },
+      )
+      .finally(() => {
+        this.#taskOpens.delete(opening);
       });
-    } catch (error) {
-      noteDroppedRecord('台帳に開かなかった理由の記帳', inboxEventShape(event), error);
-    }
+    this.#taskOpens.add(opening);
   }
 
   // 開いている行のうち、印（`autoCloseWhenBack`）のあるもの、または印の無い古い行で本文が定型だけのものを、閉じる候補へ戻す（#5164）
@@ -4803,8 +4807,14 @@ class Clone implements CloneHost {
         return claimedIds;
       }
 
-      // 型で先読みして分岐を作らず、`commitmentFor` の結果（`!== null`）を毎回見る: `null` を返すのは型で決まる3つだけでなく、デーモン自身の `external` も同じため
-      if (commitmentFor(record.event) !== null) {
+      // 台帳の行を持ちうる型は、いま新しく開く型（人間の2つ）だけではない: #5469 P5 より前の版が開いた manager_message / external の行が、
+      // アップグレード後の未読にも残っている。その行が閉じていれば配り直しを畳む保証を落とさないため、`commitmentFor` の結果ではなく型で見る（行が無ければ `get` は null で、読みが1回増えるだけ）
+      if (
+        record.event.type === 'human_message' ||
+        record.event.type === 'human_answer' ||
+        record.event.type === 'manager_message' ||
+        record.event.type === 'external'
+      ) {
         try {
           const commitment = await this.#stores.commitments.get(record.event.id);
           if (commitment !== null && commitment.closedAt !== undefined) {
@@ -6225,6 +6235,12 @@ class Clone implements CloneHost {
     const timer = this.#turnTimer;
     timer?.turnStarted(kind, conversationId);
 
+    this.#turnReplies = {
+      startedAt: new Date().toISOString(),
+      replied: new Map(),
+      delegated: new Set(),
+    };
+
     // ターンはセッションを起こす前に登録する: セッションの生成が失敗したり読み取りが即死したりしても、待っているターンを必ず誰かが解放できるようにするため
     let turn!: Turn;
     const done = new Promise<void>((resolve) => {
@@ -7348,7 +7364,16 @@ class Clone implements CloneHost {
         return turn?.conversationId ?? turn?.originConversationId ?? undefined;
       },
       recentDenials: () => this.#recentDenials.list(),
+      // 起点の無い委譲は控えない（どの task の起点にも一致しない）
+      noteDelegationStarted: (originConversationId) => {
+        if (originConversationId !== undefined)
+          this.#turnReplies.delegated.add(originConversationId);
+      },
       postToConversation: (conversationId, text, attachments) => {
+        // 日誌へ書けた `conversation_post` だけがここへ来る（書けなければ呼ばれない）。自動 done の「返答」に数える
+        if (!this.#turnReplies.replied.has(conversationId)) {
+          this.#turnReplies.replied.set(conversationId, 'conversation_post');
+        }
         if (text.length > 0) this.#emit(conversationId, { type: 'text', text });
         if (attachments !== undefined && attachments.length > 0) {
           this.#emit(conversationId, { type: 'attachments', attachments: [...attachments] });
@@ -8867,6 +8892,8 @@ class Clone implements CloneHost {
         this.#autoReopenHalted = false;
         // 降ろさないと、次の `reached` で前回までの積算から数え直して早く畳む。
         this.#usageBlockedAccumulatedChars = 0;
+        // `done` を出す前に済ませる: 人間が返答を読み終えた時点で、閉じた task が `task_list` に出ているため
+        if (turn) await this.#autoCloseRepliedTasks(turn);
         this.#emit(turn?.conversationId ?? null, { type: 'done' });
         this.#finishTurn();
         return;
@@ -8974,6 +9001,48 @@ class Clone implements CloneHost {
         : { approvalId: turn.approvalId }),
       ...(turn.approvalId === null ? {} : { answeredApprovalId: turn.approvalId }),
     });
+  }
+
+  /**
+   * 返答したターンの終わりに、起点の会話がその返答の宛先である queued の人間の task を `done` にする（#5469 P5）。成功したターンの終わりだけで呼ぶ（失敗したターンの本文は返答ではない）。
+   * 「返答」に数えるもの: (1) 会話のあるターン自身が、その会話へ本文か添付を返した (2) `conversation_post` が日誌へ書けた宛先。
+   * 数えないもの: `ask_human`（問いであって返答でない）、機構が `#journal` へ直接書く「直近の人間の会話」への一行（安全分類器の拒否・畳み直しの通知）。
+   * 閉じるかどうかの判定は `task-auto-done.ts` の `selectTasksToAutoClose` が持つ。投げない（閉じ損ねても返答は届いている。次の返答の終わりで拾う）。
+   */
+  async #autoCloseRepliedTasks(turn: Turn): Promise<void> {
+    if (turn.kind !== 'normal') return;
+    const replied = new Map(this.#turnReplies.replied);
+    // 経路が重なったら、そのターン自身の返答を名乗る（日誌の「どの返答か」）。`conversation_post` は自分の会話へは書けないので、重なるのは異常系だけ
+    if (
+      turn.conversationId !== null &&
+      (turn.reply.trim().length > 0 || turn.replyAttachments.length > 0)
+    ) {
+      replied.set(turn.conversationId, 'turn_reply');
+    }
+    if (replied.size === 0) return;
+    try {
+      // 追加の最中の起票を待つ: 待たないと、届いた直後に終わった返答が、まだ無い task を取り逃がす
+      await Promise.all([...this.#taskOpens]);
+      const outcome = await autoCloseRepliedTasks(
+        this.#stores,
+        {
+          startedAt: this.#turnReplies.startedAt,
+          replied,
+          delegatedOriginConversationIds: this.#turnReplies.delegated,
+        },
+        new Date().toISOString(),
+      );
+      for (const failure of outcome.failed) {
+        noteDroppedRecord(
+          failure.step === 'close' ? 'task の自動 done' : 'task の自動 done の日誌',
+          // id は出さない: id は受信箱の合図の id で、器の外から来た文字列が混じりうる（stderr へは本文に当たるものを出さない方針）
+          failure.step === 'close' ? '閉じられなかった' : '閉じたが日誌を書けなかった',
+          new Error('書き込みに失敗した'),
+        );
+      }
+    } catch (error) {
+      noteDroppedRecord('task の自動 done', '', error);
+    }
   }
 
   /**
@@ -9820,10 +9889,10 @@ function retrievalHintFor(event: InboxEvent): string {
 }
 
 /**
- * 合図から、台帳へ開く未了を作る。開かないものは `null`（基準は「誰かが渡してきたか」。理由は `Clone#commit` の doc）。
- * `external` は型だけでは決まらない: デーモン自身が出す合図（`isDaemonSelfNotice`）には引き受ける相手が居ないため `source` まで見る。
+ * 合図から、台帳へ開く未了を作る。開くのは人間の合図（human_message・human_answer）だけで、残りは `null`（#5469 P5。理由は `Clone#commit` の doc）。
+ * 同じ合図から Task も積む（`taskFromHumanIntake`）ので、`null` かどうかは Task を積むかどうかも決める。
  * 本文は全文を入れる: `body` を要約にすると頼まれた内容が二度と取れない（切るのは表示側）。
- * `manager_message` の接頭辞の形式（`[kind] text`）の持ち主はここで、表示側（`commitments.tsx`）がその形式を再パースしている。
+ * 表示側（`commitments.tsx`）は、台帳に残っている古い manager の行の本文 `[kind] text` の形式を再パースしている。この関数はもうその形の行を作らないが、読む側は消さない。
  */
 export function commitmentFor(event: InboxEvent): Commitment | null {
   const base = { id: event.id, at: event.at };
@@ -9843,31 +9912,10 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
         source: event.approvalId,
         body: `承認待ち ${event.approvalId} への回答: ${event.answer}`,
       };
+    // 人間の合図以外は開かない（#5469 P5）。マネージャーの報告・外部の出来事は受信箱と日誌には届くが、台帳にも Task にも自動では積まない
+    // （報告の読み手が台帳の行を閉じ忘れて積み上がる、デーモンの知らせが台帳を埋める、を入口で断つ）。必要ならクローンが `task_add` / `commitment_open` で自分で積む
     case 'manager_message':
-      // 機構が「クローンが手を打つことの無い知らせ」と印を付けたものは開かない（#5015。受信箱と日誌には届いている）
-      if (event.commitmentExempt === true) return null;
-      return {
-        ...base,
-        origin: 'manager',
-        source: event.managerId,
-        body: `[${event.kind}] ${event.text}`,
-        // `bodyMarkup` は接頭辞を除いた `event.text` を指す（表示側は接頭辞を剥がしてから当てる）。
-        // 印が無いときは既定へ倒さず立てない（`textMarkupSchema` の doc）。
-        ...(event.markup === undefined ? {} : { bodyMarkup: event.markup }),
-        // 進み具合が書かれた知らせ（失敗する前に出ていた本文付き）には付けない: 器が閉じると読まれないまま消えるため
-        ...(event.quotaStop === true && !carriesPartialBeforeFailure(event.text)
-          ? { autoCloseWhenBack: { managerId: event.managerId } }
-          : {}),
-      };
     case 'external':
-      // デーモン自身が出した合図には始末をつける相手が居ない（`isDaemonSelfNotice` の doc）。
-      if (isDaemonSelfNotice(event)) return null;
-      return {
-        ...base,
-        origin: 'external',
-        source: event.source,
-        body: renderPayload(event.payload, event.at, event.attachments),
-      };
     case 'timer':
     case 'self_initiative':
     case 'distill':

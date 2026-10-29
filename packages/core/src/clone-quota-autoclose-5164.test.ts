@@ -168,31 +168,28 @@ async function seedMarked(
   });
 }
 
-describe('枠の知らせで開いた行に印が付く（#5164）', () => {
-  it('枠の知らせの行には名指す担当を持つ印が付き、枠の知らせでない行には付かない', () => {
-    expect(commitmentFor(quotaNotice('e1'))?.autoCloseWhenBack).toEqual({ managerId: MANAGER_ID });
-    expect(commitmentFor(plainReport('e2'))?.autoCloseWhenBack).toBeUndefined();
-  });
-
-  it('失敗する前に出ていた本文が付いた知らせには、印を付けない', () => {
-    const withPartial = quotaNotice(
-      'e3',
-      `${BARE_TEXT}\n\n${FAILED_REPORT_PARTIAL_MARKER}\nここまで進んだ`,
-    );
-    const entry = commitmentFor(withPartial);
-    expect(entry?.id).toBe('e3');
-    expect(entry?.autoCloseWhenBack).toBeUndefined();
+// #5469 P5: 枠の知らせは台帳に開かなくなった（以前は印 autoCloseWhenBack つきで開いた）。印を付ける側の歯は、付ける相手が無くなったので外し、
+// 開かないことをここで測る。印のついた行を読んで閉じる側の歯は、アップグレード前の版が開いた行を直接置いて、以降の節が同じ形で測り続ける
+describe('枠の知らせは台帳に開かない（#5164 の「印が付く」の歯の置き換え。#5469 P5）', () => {
+  it('枠の知らせも、失敗する前に出ていた本文が付いた知らせも、ふつうの報告も行にならない', () => {
+    expect(commitmentFor(quotaNotice('e1'))).toBeNull();
+    expect(commitmentFor(plainReport('e2'))).toBeNull();
+    expect(
+      commitmentFor(
+        quotaNotice('e3', `${BARE_TEXT}\n\n${FAILED_REPORT_PARTIAL_MARKER}\nここまで進んだ`),
+      ),
+    ).toBeNull();
   });
 });
 
 describe('失敗する前に出ていた本文付きの知らせは、担当が戻っても閉じない（#5164）', () => {
-  it('同じプロセスで記帳した行も、再起動の後に読み直した行も、候補に入らない', async () => {
+  it('印の無い古い行（本文に失敗前の本文が付いている）は、再起動の前も後も候補に入らない', async () => {
     const partialText = `${BARE_TEXT}\n\n${FAILED_REPORT_PARTIAL_MARKER}\nここまで進んだ`;
-    const first = boot(stubPool(() => Promise.resolve([summary()])));
-    first.clone.post(quotaNotice('evt-pt1', partialText));
-    await waitFor(
-      async () => (await first.stores.commitments.get('evt-pt1')) !== null,
-      '台帳に開く',
+    const seeded = createMemoryStores();
+    await seedLegacy(seeded, 'evt-pt1', { body: `[report] ${partialText}` });
+    const first = boot(
+      stubPool(() => Promise.resolve([summary()])),
+      seeded,
     );
     first.clone.post(plainReport('evt-pt2'));
     await waitForTurnWith(first, 'PLAIN-evt-pt2');
@@ -213,15 +210,16 @@ describe('失敗する前に出ていた本文付きの知らせは、担当が�
 describe('再起動で候補を台帳から組み直す（#5164）', () => {
   it('⭐ 新しい Clone を同じストアで起こすと、印のある開いた行が候補に戻り、担当が戻っていれば閉じる', async () => {
     let managers: ManagerSummary[] = [summary({ usageStoppedAt: AT })];
-    const first = boot(stubPool(() => Promise.resolve(managers)));
-    first.clone.post(quotaNotice('evt-r1', `枠に当たって止まった R1`));
-    await waitFor(
-      async () => (await first.stores.commitments.get('evt-r1')) !== null,
-      '台帳に開く',
+    // 前の版が開いた行（印つき）を置く。以前は1つ目の Clone に枠の知らせを post して開かせていた（#5469 P5 で開かなくなった）
+    const seeded = createMemoryStores();
+    await seedMarked(seeded, 'evt-r1', MANAGER_ID, '[report] 枠に当たって止まった R1');
+    const first = boot(
+      stubPool(() => Promise.resolve(managers)),
+      seeded,
     );
-    expect((await first.stores.commitments.get('evt-r1'))?.autoCloseWhenBack).toEqual({
-      managerId: MANAGER_ID,
-    });
+    first.clone.post(plainReport('evt-p0'));
+    await waitForTurnWith(first, 'PLAIN-evt-p0');
+    expect((await first.stores.commitments.get('evt-r1'))?.closedAt).toBeUndefined();
     await first.clone.stop();
 
     managers = [summary()];
@@ -383,15 +381,16 @@ describe('開き直した行は、器が自動でまた閉じない（#5271）',
 
   it('⭐ 筋書き A: 器が閉じた印ありの行を開き直し、再起動の後の掃除が走っても未了のまま', async () => {
     let managers: ManagerSummary[] = [summary({ usageStoppedAt: AT })];
-    const first = boot(stubPool(() => Promise.resolve(managers)));
-    // 本文は定型だけ（実際の枠の知らせの形）: 開き直しで印が外れても、本文の形で古い行の道に当たる
-    first.clone.post(quotaNotice('evt-a1'));
-    await waitFor(
-      async () => (await first.stores.commitments.get('evt-a1')) !== null,
-      '台帳に開く',
+    // 本文は定型だけ（実際の枠の知らせの形）: 開き直しで印が外れても、本文の形で古い行の道に当たる。前の版が開いた行を置く（#5469 P5 で開かなくなった）
+    const seeded = createMemoryStores();
+    await seedMarked(seeded, 'evt-a1', MANAGER_ID, `[report] ${BARE_TEXT}`);
+    const first = boot(
+      stubPool(() => Promise.resolve(managers)),
+      seeded,
     );
     // 担当が戻っていない掃除を1回通してから戻す（同じターンへ束ねられると、戻った後の掃除が走らない）
-    await waitForTurnWith(first, SDK_TEXT);
+    first.clone.post(plainReport('evt-pa0'));
+    await waitForTurnWith(first, 'PLAIN-evt-pa0');
     managers = [summary()];
     first.clone.post(plainReport('evt-pa1'));
     await waitClosedByDaemon(first.stores, 'evt-a1');
@@ -435,14 +434,13 @@ describe('開き直した行は、器が自動でまた閉じない（#5271）',
       summary({ usageStoppedAt: AT }),
       summary({ managerId: 'mgr-ctl', usageStoppedAt: AT }),
     ];
-    const s = boot(stubPool(() => Promise.resolve(managers)));
-    s.clone.post(quotaNotice('evt-b1', `枠に当たって止まった B1`));
-    s.clone.post(quotaNotice('evt-b1-ctl', `枠に当たって止まった B1ctl`, 'mgr-ctl'));
-    await waitFor(
-      async () =>
-        (await s.stores.commitments.get('evt-b1')) !== null &&
-        (await s.stores.commitments.get('evt-b1-ctl')) !== null,
-      '台帳に開く',
+    // 前の版が開いた行（印つき）を置く（#5469 P5 で開かなくなった）
+    const stores = createMemoryStores();
+    await seedMarked(stores, 'evt-b1', MANAGER_ID, '[report] 枠に当たって止まった B1');
+    await seedMarked(stores, 'evt-b1-ctl', 'mgr-ctl', '[report] 枠に当たって止まった B1ctl');
+    const s = boot(
+      stubPool(() => Promise.resolve(managers)),
+      stores,
     );
     // 担当が戻っていない掃除を1回通して、候補が Map に載った後にする
     s.clone.post(plainReport('evt-pb1'));

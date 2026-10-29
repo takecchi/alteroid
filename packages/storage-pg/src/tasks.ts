@@ -4,6 +4,7 @@ import {
   listTaskRows,
   moveTaskRow,
   prepareTask,
+  setTaskRowKeep,
   setTaskRowStatus,
   taskSchema,
   UnreadableTaskError,
@@ -17,6 +18,7 @@ import type {
   TaskMoveResult,
   TaskPlacement,
   TaskRow,
+  TaskSetKeepResult,
   TaskSetStatusResult,
   TaskStatus,
   TaskStore,
@@ -140,6 +142,14 @@ export class PgTaskStore implements TaskStore {
     return this.#mutate((loaded) => {
       this.#throwIfUnreadable(loaded, id);
       return setTaskRowStatus(loaded.rows, id, status, options);
+    });
+  }
+
+  async setKeep(id: string, keep: boolean): Promise<TaskSetKeepResult> {
+    if (hasNul(id)) return { kind: 'not-found' };
+    return this.#mutate((loaded) => {
+      this.#throwIfUnreadable(loaded, id);
+      return setTaskRowKeep(loaded.rows, id, keep);
     });
   }
 

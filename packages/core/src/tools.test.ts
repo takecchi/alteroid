@@ -18611,13 +18611,10 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       return events.filter((event) => commitmentFor(event) !== null).map((event) => event.type);
     }
 
-    it('実装側: 台帳を開く出所は4つである', () => {
-      expect(openingEventTypes()).toEqual([
-        'human_message',
-        'human_answer',
-        'manager_message',
-        'external',
-      ]);
+    // #5469 P5: 台帳へ自動で載る出所は人間の2つだけ（manager_message / external は台帳にも Task にも自動では載せない）。
+    // 説明文の側の歯（下）は、人間の回答が載ることを引き続き測る。manager/external は載らないことを、実装側のこの列挙が測る
+    it('実装側: 台帳を開く出所は人間の2つだけである', () => {
+      expect(openingEventTypes()).toEqual(['human_message', 'human_answer']);
     });
 
     it('説明文が、人間の回答（ask_human の答え）も自動で載ると言っている', () => {
@@ -19255,6 +19252,35 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
         expect(after?.status).toBe('done');
         expect(after?.closedReason).toBe('終わった');
         expect(after?.closedBy).toBe('clone');
+        return outcome;
+      },
+    },
+    {
+      tool: 'task_keep',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-13k');
+        const at = '2026-01-01T00:00:00.000Z';
+        await stores.tasks.add({
+          id: 't-keep-test',
+          createdAt: at,
+          updatedAt: at,
+          status: 'queued',
+          origin: 'self',
+          title: '続く件',
+          body: '本文',
+        });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        const outcome = await callExpectingError(tools, 'task_keep', {
+          taskId: 't-keep-test',
+          keep: true,
+        });
+        expect((await stores.tasks.get('t-keep-test'))?.keep).toBe(true);
         return outcome;
       },
     },

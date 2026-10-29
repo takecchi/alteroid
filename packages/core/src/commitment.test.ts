@@ -131,6 +131,12 @@ function managerMessage(text: string, id = 'evt-mgr'): InboxEvent {
   };
 }
 
+// #5469 P5: 台帳へ自動で開くのは人間の合図だけになった。台帳の記帳の観測（載っていない断り・trim・読めない行・記録の欠落）は、
+// 開く経路が同じ `#commit` を通る人間の合図で測り続ける（以前は manager_message で測っていた。保証は開く型に依らない）。id と at を指せる
+function humanIntake(text: string, id: string, at: string = new Date().toISOString()): InboxEvent {
+  return { type: 'human_message', id, at, text, conversationId: 'conv-1' };
+}
+
 describe('引き受けたまま終わっていない仕事', () => {
   it('人間の依頼は、返事をしただけでは台帳から消えない（着手しなかった依頼が失われない）', async () => {
     const s = setup();
@@ -542,15 +548,15 @@ describe('引き受けたまま終わっていない仕事', () => {
     });
   });
 
-  it('渡されたものは起点を問わず載り、起こされただけの合図は載らない', async () => {
+  // #5469 P5: 台帳へ自動で載るのは人間の2つだけ。以前は「渡されたものは起点を問わず載り」で manager_message / external も載った
+  it('台帳に載るのは人間の合図（発言・承認への回答）だけで、マネージャーの報告・外部の合図・起こされただけの合図は載らない', async () => {
     const at = new Date().toISOString();
 
     expect(commitmentFor(humanMessage('やって'))?.origin).toBe('human');
-    expect(commitmentFor(managerMessage('終わった'))?.origin).toBe('manager');
+    expect(commitmentFor(managerMessage('終わった'))).toBeNull();
     expect(
-      commitmentFor({ type: 'external', id: 'e1', at, source: 'github', payload: 'CI failed' })
-        ?.origin,
-    ).toBe('external');
+      commitmentFor({ type: 'external', id: 'e1', at, source: 'github', payload: 'CI failed' }),
+    ).toBeNull();
     expect(
       commitmentFor({ type: 'human_answer', id: 'e2', at, approvalId: 'ap-1', answer: 'いいよ' })
         ?.origin,
@@ -656,7 +662,9 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(isDaemonSelfNotice(humanMessage('やって'))).toBe(false);
   });
 
-  it('external は source がデーモン自身の合図（token-pool / runner-registry）のときだけ台帳を開かない', () => {
+  // #5469 P5: 以前は「デーモン自身の合図（token-pool / runner-registry）だけ台帳を開かず、他の source の external は開く」だった。
+  // external は source によらず開かなくなったので、「他の source は開く」側を「どの source も開かない」へ反転した（デーモン自身の合図の2つが開かないことも同じ表に残る）
+  it('external は source によらず台帳を開かない（デーモン自身の合図も、他の source も）', () => {
     const at = new Date().toISOString();
 
     expect(
@@ -684,155 +692,29 @@ describe('引き受けたまま終わっていない仕事', () => {
     ];
     for (const { source, payload } of others) {
       const event: InboxEvent = { type: 'external', id: `e-${source}`, at, source, payload };
-      const entry = commitmentFor(event);
-      expect(entry, `source: ${JSON.stringify(source)} は台帳を開くはず`).not.toBeNull();
-      expect(entry?.origin).toBe('external');
-      expect(entry?.source).toBe(source);
+      expect(commitmentFor(event), `source: ${JSON.stringify(source)} は台帳を開かない`).toBeNull();
     }
   });
 
-  it('manager_message.markup は Commitment.bodyMarkup へそのまま持ち越る', () => {
-    const at = new Date().toISOString();
-
-    const withMarkup = commitmentFor({
-      type: 'manager_message',
-      id: 'evt-mgr-marked',
-      at,
-      managerId: 'mgr-1',
-      kind: 'report',
-      text: '*思いつきで* 止めた',
-      markup: 'none',
-    });
-    expect(withMarkup?.bodyMarkup).toBe('none');
-
-    const withoutMarkup = commitmentFor(managerMessage('終わった'));
-    expect(withoutMarkup?.bodyMarkup).toBeUndefined();
-  });
-
-  it('マネージャーからの報告も台帳に載る（受け取っただけでは始末がついていない）', async () => {
+  // #5469 P5: 以前ここに居た次の6本は、manager_message が台帳に開く（開いたうえで同一マネージャー×同一本文を畳む）ことを Clone 越しに測っていた。
+  //   - manager.markup が Commitment.bodyMarkup へ持ち越る
+  //   - マネージャーの報告も台帳に載る
+  //   - 429 連投の3連投は台帳で1行に畳まれる
+  //   - #1041: 同一ストアを共有する2つの Clone の同時 post でも台帳は1行
+  //   - 陰性対照: 本文が違えば畳まれない／別のマネージャーなら畳まれない
+  // manager_message は台帳に開かなくなり、開く経路も、開いてから畳む経路も Clone に無くなったので、Clone 越しには再現できない。外した理由と、保証が弱まらない理由:
+  //   (a) 開かないこと自体は、上の commitmentFor の表と下の「マネージャーの報告は受信箱には届くが台帳は開かない」が測る。
+  //   (b) 畳み込みの規則（同一マネージャー×同一本文×未了だけ畳む・本文が違えば畳まない・別マネージャーなら畳まない・閉じた後は畳まない・同時でも1行）は、
+  //       台帳ストアの `open` の契約で、この下の describe が回す verifyCommitmentFoldContract（memory）と fs / pg の契約試験が測り続ける。Clone は規則の置き場ではなく呼ぶだけだった。
+  //   (c) 受信箱の側の畳み込み（未読1件）は inbox-persistence.test.ts の 429 の再現が測り続ける。
+  it('マネージャーからの報告は受信箱（ターン）には届くが、台帳の行にはならない（#5469 P5）', async () => {
     const s = setup();
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
 
     s.clone.post(managerMessage('PR を出した。レビュー待ち'));
-    await waitFor(
-      async () => (await s.stores.commitments.list()).entries.length > 0,
-      'マネージャーの記帳',
-    );
+    await waitFor(() => inputs().some((text) => text.includes('レビュー待ち')), 'ターンへ渡る');
 
-    const open = (await s.stores.commitments.list()).entries;
-    expect(open[0]?.origin).toBe('manager');
-    expect(open[0]?.source).toBe('mgr-1');
-
-    await s.clone.stop();
-  });
-
-  it('429 連投の再現: 同一マネージャー×同一本文の3連投は台帳で1行に畳まれる', async () => {
-    const s = setup();
-    const body = "You've hit your session limit · resets 5:10pm (UTC)";
-    const inputs = () => s.calls.flatMap((call) => call.inputs);
-
-    s.clone.post(managerMessage(body, 'evt-429-1'));
-    await waitFor(() => inputs().length >= 1, '1件目がターンへ渡る');
-    await waitFor(
-      async () => (await s.stores.commitments.list()).entries.length === 1,
-      '1件目の記帳',
-    );
-
-    s.clone.post(managerMessage(body, 'evt-429-2'));
-    await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る');
-
-    s.clone.post(managerMessage(body, 'evt-429-3'));
-    await waitFor(() => inputs().length >= 3, '3件目がターンへ渡る');
-
-    expect((await s.stores.inbox.peekPending()).entries).toHaveLength(0);
-
-    const open = (await s.stores.commitments.list()).entries;
-    expect(open).toHaveLength(1);
-    expect(open[0]?.origin).toBe('manager');
-    expect(open[0]?.source).toBe('mgr-1');
-    expect(open[0]?.body).toContain(body);
-    expect(open[0]?.id).toBe('evt-429-1');
-
-    await s.clone.stop();
-  });
-
-  it('⭐ Issue #1041: 同一ストアを共有する2つの Clone インスタンスが同時に post しても、台帳は1行のままである', async () => {
-    const stores = createMemoryStores();
-    const body = "You've hit your session limit · resets 5:10pm (UTC)";
-
-    const a = setup(stores);
-    const b = setup(stores);
-
-    // await を挟まない: 同じ同期区間から2つの #commit を起こさないと、重複確認が互いの書き込みより先に走る窓ができないため
-    a.clone.post(managerMessage(body, 'evt-1041-a'));
-    b.clone.post(managerMessage(body, 'evt-1041-b'));
-
-    // 固定の待ち（setTimeout）を使わない: 時間で揺れると、赤くなったときに本物か揺れかが分からなくなるため。台帳の件数を条件にしない: 競合が直ると成立しない、または1件目で抜けて2件目の決着を見ないため
-    await waitFor(
-      () => a.calls.length > 0 && b.calls.length > 0,
-      '2つのインスタンスのターンが両方とも入力を読むこと',
-    );
-
-    const open = (await stores.commitments.list()).entries;
-
-    expect(open).toHaveLength(1);
-
-    await a.clone.stop();
-    await b.clone.stop();
-  });
-
-  it('⭐ 陰性対照: 同じマネージャーでも本文が違えば畳まれない（2行とも残る）', async () => {
-    const s = setup();
-    const inputs = () => s.calls.flatMap((call) => call.inputs);
-
-    s.clone.post(managerMessage('1件目の報告', 'evt-diff-1'));
-    await waitFor(() => inputs().length >= 1, '1件目がターンへ渡る');
-    await waitFor(
-      async () => (await s.stores.commitments.list()).entries.length === 1,
-      '1件目の記帳',
-    );
-
-    s.clone.post(managerMessage('2件目の別の報告', 'evt-diff-2'));
-    await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る');
-    await waitFor(
-      async () => (await s.stores.commitments.list()).entries.length === 2,
-      '2件目の記帳（畳まれず別行として載る）',
-    );
-
-    const bodies = (await s.stores.commitments.list()).entries.map((entry) => entry.body).sort();
-    expect(bodies).toEqual(['[report] 1件目の報告', '[report] 2件目の別の報告']);
-
-    await s.clone.stop();
-  });
-
-  it('⭐ 陰性対照: 同じ本文でも別のマネージャーなら畳まれない（2行とも残る）', async () => {
-    const s = setup();
-    const at = new Date().toISOString();
-    const sameText = (managerId: string, id: string): InboxEvent => ({
-      type: 'manager_message',
-      id,
-      at,
-      managerId,
-      kind: 'report',
-      text: '同じ文言の報告',
-    });
-    const inputs = () => s.calls.flatMap((call) => call.inputs);
-
-    s.clone.post(sameText('mgr-a', 'evt-mgr-a'));
-    await waitFor(() => inputs().length >= 1, 'mgr-a の報告がターンへ渡る');
-    await waitFor(
-      async () => (await s.stores.commitments.list()).entries.length === 1,
-      'mgr-a の記帳',
-    );
-
-    s.clone.post(sameText('mgr-b', 'evt-mgr-b'));
-    await waitFor(() => inputs().length >= 2, 'mgr-b の報告がターンへ渡る');
-    await waitFor(
-      async () => (await s.stores.commitments.list()).entries.length === 2,
-      'mgr-b の記帳（畳まれず別行として載る）',
-    );
-
-    const sources = (await s.stores.commitments.list()).entries.map((entry) => entry.source).sort();
-    expect(sources).toEqual(['mgr-a', 'mgr-b']);
+    expect((await s.stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
 
     await s.clone.stop();
   });
@@ -863,38 +745,8 @@ describe('引き受けたまま終わっていない仕事', () => {
     await s.clone.stop();
   });
 
-  it('閉じたあとの同文は畳まれない——もう一度報告できる', async () => {
-    const s = setup();
-    const inputs = () => s.calls.flatMap((call) => call.inputs);
-
-    s.clone.post(managerMessage('繰り返す報告', 'evt-repeat-1'));
-    await waitFor(() => inputs().length >= 1, '1件目がターンへ渡る');
-    await waitFor(
-      async () => (await s.stores.commitments.list()).entries.length === 1,
-      '1件目の記帳',
-    );
-
-    s.clone.post(managerMessage('繰り返す報告', 'evt-repeat-2'));
-    await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る');
-    expect((await s.stores.commitments.list()).entries).toHaveLength(1);
-
-    await s.stores.commitments.close('evt-repeat-1', new Date().toISOString(), '対応した', 'clone');
-    expect((await s.stores.commitments.list()).entries).toHaveLength(0);
-
-    s.clone.post(managerMessage('繰り返す報告', 'evt-repeat-3'));
-    await waitFor(() => inputs().length >= 3, '3件目がターンへ渡る');
-    await waitFor(
-      async () => (await s.stores.commitments.list()).entries.length === 1,
-      '3件目の記帳（閉じた後なので新しい未了として載る）',
-    );
-
-    const open = (await s.stores.commitments.list()).entries;
-    expect(open[0]?.id).toBe('evt-repeat-3');
-
-    await s.clone.stop();
-  });
-
-  it('台帳の読み（list()）が壊れていても、記帳は通り、畳み込みも効く（#1041 で意味が変わった歯）', async () => {
+  // #5469 P5: 「閉じたあとの同文は畳まれない」は manager_message の畳み込みの歯で、上のコメントの (b)（台帳ストアの契約）が測り続ける。Clone 越しには再現できないので外した
+  it('台帳の読み（list()）が壊れていても、人間の合図の記帳は通る（#1041 で意味が変わった歯。畳み込みの半分は manager 専用なので外した）', async () => {
     const stores = createMemoryStores();
     const broken: Stores = {
       ...stores,
@@ -905,27 +757,20 @@ describe('引き受けたまま終わっていない仕事', () => {
     };
     const s = setup(broken);
 
-    s.clone.post(managerMessage('list が壊れていても届く報告', 'evt-list-broken'));
+    s.clone.post(humanIntake('list が壊れていても届く依頼', 'evt-list-broken'));
     await waitFor(
       async () => (await broken.commitments.get('evt-list-broken')) !== null,
       '`list()` が壊れていても未了として開かれる',
     );
 
     const entry = await broken.commitments.get('evt-list-broken');
-    expect(entry?.origin).toBe('manager');
-    expect(entry?.body).toContain('list が壊れていても届く報告');
-
-    // 別のインスタンスから同文を打つ: 同一インスタンスでは受信箱側の壁が先に畳むため
-    const other = setup(broken);
-    other.clone.post(managerMessage('list が壊れていても届く報告', 'evt-list-broken-2'));
-    await waitFor(() => other.calls.length > 0, '2つ目のインスタンスのターンが入力を読むこと');
-    expect(await broken.commitments.get('evt-list-broken-2')).toBeNull();
+    expect(entry?.origin).toBe('human');
+    expect(entry?.body).toContain('list が壊れていても届く依頼');
 
     await s.clone.stop();
-    await other.clone.stop();
   });
 
-  it('token-pool の external は受信箱には届くが台帳は開かない。他の source の external は開く', async () => {
+  it('external は受信箱には届くが、source によらず台帳は開かない（#5469 P5。以前は予約語ではない source の external は開いた）', async () => {
     const s = setup();
     const at = new Date().toISOString();
 
@@ -950,15 +795,11 @@ describe('引き受けたまま終わっていない仕事', () => {
       payload: { action: 'review_requested' },
     });
     await waitFor(
-      async () => (await s.stores.commitments.list()).entries.length > 0,
-      '予約語ではない external の記帳',
+      () =>
+        s.calls.flatMap((call) => call.inputs).some((input) => input.includes('review_requested')),
+      'github の合図もターンへ渡る（受信箱には届く）',
     );
-
-    const open = (await s.stores.commitments.list()).entries;
-    expect(open).toHaveLength(1);
-    expect(open[0]?.origin).toBe('external');
-    expect(open[0]?.source).toBe('github');
-    expect(open[0]?.body).toContain('review_requested');
+    expect((await s.stores.commitments.list({ includeClosed: true })).entries).toHaveLength(0);
 
     await s.clone.stop();
   });
@@ -1102,7 +943,7 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     const inputs = () => s.calls.flatMap((call) => call.inputs);
 
     const lines = await captureStderr(async () => {
-      s.clone.post(managerMessage('落ちる報告', 'evt-open-fail'));
+      s.clone.post(humanIntake('落ちる依頼', 'evt-open-fail'));
       await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
     });
 
@@ -1147,7 +988,7 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     const s = setup(broken);
     const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-    s.clone.post(managerMessage('幽霊になる報告', 'evt-ghost'));
+    s.clone.post(humanIntake('幽霊になる依頼', 'evt-ghost'));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
     expect(await stores.commitments.get('evt-ghost')).not.toBeNull();
@@ -1160,35 +1001,14 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     await s.clone.stop();
   });
 
-  it('⭐ 陰性対照: 畳んだ（#954/#1035 の重複）は「台帳に載っていない」と断らない', async () => {
-    const s = setup();
-    const inputs = () => s.calls.flatMap((call) => call.inputs);
-    const body = '同じ報告（畳む対象）';
-
-    s.clone.post(managerMessage(body, 'evt-fold-1'));
-    await waitFor(() => inputs().length >= 1, '1件目がターンへ渡る');
-    await waitFor(
-      async () => (await s.stores.commitments.list()).entries.length === 1,
-      '1件目の記帳',
-    );
-
-    s.clone.post(managerMessage(body, 'evt-fold-2'));
-    await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る');
-
-    expect((await s.stores.commitments.list()).entries).toHaveLength(1);
-
-    const secondTurn = inputs()[1] ?? '';
-    expect(secondTurn).not.toContain('台帳に載っていない');
-    expect(secondTurn).not.toContain('載せ直しが要る');
-
-    await s.clone.stop();
-  });
-
+  // #5469 P5: 「陰性対照: 畳んだ（#954/#1035 の重複）は『台帳に載っていない』と断らない」は外した。畳む（folded）のは同一マネージャー×同一本文の manager_message だけで、
+  // manager_message が台帳に開かなくなった以上、畳んだ結果は Clone 越しに起きない。畳んだ結果を「載っていない」と断らない区別は、台帳の記帳の結果（existed / folded）を
+  // 見る側（`#commit` の outcome）の実装のままで、畳みが起きる入力は台帳ストアの契約の歯（verifyCommitmentFoldContract）が測る。
   it('⭐ 陰性対照2: 片付けた後に同じ id が配り直されても「台帳に載っていない」と断らない（open() の冪等性）', async () => {
     const s = setup();
     const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-    s.clone.post(managerMessage('片付ける報告', 'evt-redeliver-1'));
+    s.clone.post(humanIntake('片付ける依頼', 'evt-redeliver-1'));
     await waitFor(() => inputs().length >= 1, '1件目がターンへ渡る');
     await waitFor(
       async () => (await s.stores.commitments.list()).entries.length === 1,
@@ -1203,7 +1023,7 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     );
     expect((await s.stores.commitments.list()).entries).toHaveLength(0);
 
-    s.clone.post(managerMessage('片付ける報告', 'evt-redeliver-1'));
+    s.clone.post(humanIntake('片付ける依頼', 'evt-redeliver-1'));
     await waitFor(() => inputs().length >= 2, '配り直された2件目がターンへ渡る');
 
     expect((await s.stores.commitments.list()).entries).toHaveLength(0);
@@ -1239,7 +1059,7 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     const s = setup(wrapped);
     const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-    s.clone.post(managerMessage('配達より先に閉じられる報告', targetId));
+    s.clone.post(humanIntake('配達より先に閉じられる依頼', targetId));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
     const closedRow = await stores.commitments.get(targetId);
@@ -1277,7 +1097,7 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     const s = setup(wrapped);
     const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-    s.clone.post(managerMessage('読めなくなる報告', targetId));
+    s.clone.post(humanIntake('読めなくなる依頼', targetId));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
     const turn = inputs()[0] ?? '';
@@ -1289,16 +1109,8 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
   });
 });
 
-function managerMessageAt(text: string, id: string, at: string): InboxEvent {
-  return {
-    type: 'manager_message',
-    id,
-    at,
-    managerId: 'mgr-1',
-    kind: 'report',
-    text,
-  };
-}
+const humanIntakeAt = (text: string, id: string, at: string): InboxEvent =>
+  humanIntake(text, id, at);
 
 function withTrimmedView(
   stores: Stores,
@@ -1342,7 +1154,7 @@ describe('Issue #1148: trim による物理削除と本当の欠落を区別す�
       const s = setup(wrapped);
       const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-      s.clone.post(managerMessageAt('trim より新しい報告', targetId, new Date().toISOString()));
+      s.clone.post(humanIntakeAt('trim より新しい報告', targetId, new Date().toISOString()));
       await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
       const turn = inputs()[0] ?? '';
@@ -1368,7 +1180,7 @@ describe('Issue #1148: trim による物理削除と本当の欠落を区別す�
       const s = setup(wrapped);
       const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-      s.clone.post(managerMessageAt('trim より古い報告', targetId, '2019-01-01T00:00:00.000Z'));
+      s.clone.post(humanIntakeAt('trim より古い報告', targetId, '2019-01-01T00:00:00.000Z'));
       await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
       const turn = inputs()[0] ?? '';
@@ -1388,7 +1200,7 @@ describe('Issue #1148: trim による物理削除と本当の欠落を区別す�
     const s = setup(wrapped);
     const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-    s.clone.post(managerMessageAt('trim していない台帳の報告', targetId, new Date().toISOString()));
+    s.clone.post(humanIntakeAt('trim していない台帳の報告', targetId, new Date().toISOString()));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
     const turn = inputs()[0] ?? '';
@@ -1405,7 +1217,7 @@ describe('Issue #1060 段1: 受信箱から自動で台帳を開いた id を、
     const s = setup();
     const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-    s.clone.post(managerMessage('段1で記録される報告', 'evt-1060-recorded'));
+    s.clone.post(humanIntake('段1で記録される依頼', 'evt-1060-recorded'));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
     await waitFor(
       async () => (await s.stores.commitments.list()).entries.length === 1,
@@ -1429,32 +1241,25 @@ describe('Issue #1060 段1: 受信箱から自動で台帳を開いた id を、
     await s.clone.stop();
   });
 
-  it('量の上限は「台帳に開いた行1本につき日誌1行」——畳んだ（folded）id は記録が増えない', async () => {
+  // #5469 P5: 「畳んだ（folded）id は記録が増えない」は manager_message の畳み込みの歯で、畳みが Clone 越しに起きなくなったので外した（理由は上の (b)）。
+  // 同じ id の配り直し（existed）が日誌を増やさないことは、下に置いた
+  it('量の上限は「台帳に開いた行1本につき日誌1行」——同じ id の配り直し（existed）は記録が増えない', async () => {
     const s = setup();
     const inputs = () => s.calls.flatMap((call) => call.inputs);
-    const body = '同じ報告（畳む対象、#1060用）';
 
-    s.clone.post(managerMessage(body, 'evt-1060-fold-1'));
+    s.clone.post(humanIntake('同じ id で2回届く依頼（#1060用）', 'evt-1060-again'));
     await waitFor(() => inputs().length >= 1, '1件目がターンへ渡る');
     await waitFor(
       async () => (await s.stores.commitments.list()).entries.length === 1,
       '1件目の記帳',
     );
+    s.clone.post(humanIntake('同じ id で2回届く依頼（#1060用）', 'evt-1060-again'));
+    await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る');
 
-    s.clone.post(managerMessage(body, 'evt-1060-fold-2'));
-    await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る（畳まれる）');
-
-    expect((await s.stores.commitments.list()).entries).toHaveLength(1);
-
-    const openedRows = await s.stores.journal.list({ q: 'evt-1060-fold-1' });
+    const rows = await s.stores.journal.list({ q: 'evt-1060-again' });
     expect(
-      openedRows.some((row) => row.type === 'exchange' && row.text.includes('台帳に開いた')),
-    ).toBe(true);
-
-    const foldedRows = await s.stores.journal.list({ q: 'evt-1060-fold-2' });
-    expect(
-      foldedRows.some((row) => row.type === 'exchange' && row.text.includes('台帳に開いた')),
-    ).toBe(false);
+      rows.filter((row) => row.type === 'exchange' && row.text.includes('台帳に開いた')),
+    ).toHaveLength(1);
 
     await s.clone.stop();
   });
@@ -1494,7 +1299,7 @@ describe('Issue #1060 段2: 記録そのものが落ちたことを黙らせな�
     const s = setup(broken);
     const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-    s.clone.post(managerMessage('記録が落ちる報告', 'evt-1060-unrecorded-2'));
+    s.clone.post(humanIntake('記録が落ちる依頼', 'evt-1060-unrecorded-2'));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
     expect(await stores.commitments.get('evt-1060-unrecorded-2')).not.toBeNull();
@@ -1525,7 +1330,7 @@ describe('Issue #1145: 台帳を読めなかった回に、断り書きが丸ご
     const s = setup(withUnreadableList(stores));
     const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-    s.clone.post(managerMessage('台帳が読めない回の報告', 'evt-1145-1'));
+    s.clone.post(humanIntake('台帳が読めない回の依頼', 'evt-1145-1'));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
     const turn = inputs()[0] ?? '';
@@ -1548,7 +1353,7 @@ describe('Issue #1145: 台帳を読めなかった回に、断り書きが丸ご
     const s = setup(broken);
     const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-    s.clone.post(managerMessage('記録も台帳の再読も落ちる報告', 'evt-1145-2'));
+    s.clone.post(humanIntake('記録も台帳の再読も落ちる依頼', 'evt-1145-2'));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
     expect(await stores.commitments.get('evt-1145-2')).not.toBeNull();
@@ -1566,7 +1371,7 @@ describe('Issue #1145: 台帳を読めなかった回に、断り書きが丸ご
     const s = setup();
     const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-    s.clone.post(managerMessage('普通の報告', 'evt-1145-3'));
+    s.clone.post(humanIntake('普通の依頼', 'evt-1145-3'));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
     const turn = inputs()[0] ?? '';
