@@ -28,11 +28,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       path: Parameters<typeof actual.rm>[0],
       options?: Parameters<typeof actual.rm>[1],
     ) => {
-      if (
-        gate.open !== null &&
-        options?.recursive === true &&
-        String(path).endsWith('mgr-sd')
-      ) {
+      if (gate.open !== null && options?.recursive === true && String(path).endsWith('mgr-sd')) {
         gate.blocked += 1;
         const finished = (async () => {
           await gate.open;
