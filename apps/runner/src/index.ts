@@ -282,8 +282,8 @@ export const RECLAIM_ENV_KEY = 'ALTEROID_RUNNER_RECLAIM';
 
 // 切れる口を残す: 回収は人間が PC でできること（長時間のバックグラウンドジョブ）を器が奪いうるため。
 export function reclaimScanOf(
-  env: NodeJS.ProcessEnv = process.env,
-  childUser: RunnerChildUser | undefined = childUserOf(env),
+  env: NodeJS.ProcessEnv,
+  childUser: RunnerChildUser | undefined,
   view: ReclaimSessionView,
 ): ReclaimScanOptions | undefined {
   const raw = envValue(env, RECLAIM_ENV_KEY) ?? 'reclaim';

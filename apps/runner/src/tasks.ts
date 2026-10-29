@@ -356,6 +356,16 @@ async function ownerUidOrDegraded(
   }
 }
 
+function childrenByPpidOf(scanned: readonly ScannedProcess[]): Map<number, ScannedProcess[]> {
+  const children = new Map<number, ScannedProcess[]>();
+  for (const entry of scanned) {
+    const siblings = children.get(entry.ppid);
+    if (siblings === undefined) children.set(entry.ppid, [entry]);
+    else siblings.push(entry);
+  }
+  return children;
+}
+
 async function observeReclaim(
   scanned: readonly ScannedProcess[],
   reclaim: ReclaimScanOptions,
@@ -371,12 +381,7 @@ async function observeReclaim(
     branches: Map<number, BranchEntry>;
   },
 ): Promise<ReclaimObservation> {
-  const children = new Map<number, ScannedProcess[]>();
-  for (const entry of scanned) {
-    const siblings = children.get(entry.ppid);
-    if (siblings === undefined) children.set(entry.ppid, [entry]);
-    else siblings.push(entry);
-  }
+  const children = childrenByPpidOf(scanned);
 
   // root が所有する `ppid == 1` のプロセス（runner 自身など）を種にしない: その部分木に居る生きたセッションまで候補に入るため。
   const roots = scanned.filter(
@@ -534,7 +539,6 @@ async function observeReclaim(
     fireCandidates,
     stillPresentStarttimes,
     nowMs,
-    DEFAULT_REAP_GRACE_MS,
     deps.killFn,
   );
 
@@ -708,12 +712,7 @@ function attributeBranches(
   ledger: ReadonlyMap<number, BranchEntry>,
 ): Map<number, Branch> {
   const byPid = new Map(scanned.map((entry) => [entry.pid, entry]));
-  const childrenByPpid = new Map<number, ScannedProcess[]>();
-  for (const entry of scanned) {
-    const siblings = childrenByPpid.get(entry.ppid);
-    if (siblings === undefined) childrenByPpid.set(entry.ppid, [entry]);
-    else siblings.push(entry);
-  }
+  const childrenByPpid = childrenByPpidOf(scanned);
   const cliChildOf = new Map<number, number>();
   for (const pid of trackedPids) {
     const oldest = (childrenByPpid.get(pid) ?? [])
@@ -767,7 +766,7 @@ function reapVerdictOf(
   knownTerminatedSessionPids: ReadonlySet<number>,
   anyTrackedDelegations: boolean,
   scannedPids: ReadonlySet<number>,
-  narrowToCliBranch?: CliBranchNarrowing,
+  narrowToCliBranch: CliBranchNarrowing | undefined,
 ): ReapVerdict {
   const { sid } = entry;
   if (sid !== undefined && !liveSessionPids.has(sid)) {
@@ -827,7 +826,6 @@ function reconcileReaper(
   fireCandidates: readonly { pid: number; starttime: number; numThreads: number }[],
   stillPresentStarttimes: ReadonlyMap<number, number>,
   nowMs: number,
-  graceMs: number,
   killFn: (pid: number, signal: NodeJS.Signals) => void,
 ): { signalled: number; killed: number; freedThreads: number } {
   let freedThreads = 0;
@@ -858,7 +856,7 @@ function reconcileReaper(
   const fireByPid = new Map(fireCandidates.map((candidate) => [candidate.pid, candidate]));
   for (const [pid, entry] of reaper) {
     if (entry.sigkillAt !== undefined) continue;
-    if (nowMs - entry.sigtermAt < graceMs) continue;
+    if (nowMs - entry.sigtermAt < DEFAULT_REAP_GRACE_MS) continue;
     if (fireByPid.get(pid)?.starttime !== entry.starttime) continue;
     try {
       killFn(pid, 'SIGKILL');
