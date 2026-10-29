@@ -20,7 +20,7 @@ import { usageDateSchema, type UsageUnmeteredRow } from './usage.js';
 import { toAccountUsage, type AccountUsageState } from './usage-snapshot.js';
 
 describe('isBeforeUsageStart — 台帳の記録開始より前か（pg・fs・インメモリが同じ3分岐）', () => {
-  const start = new Date(2026, 7, 14, 12, 0).toISOString();
+  const start = '2026-08-14T12:00:00.000Z';
   const startDate = usageDate(new Date(start));
 
   it('記録開始が無い（null）と前', () => {
