@@ -73,26 +73,27 @@ describe('describeInterruptOutcome（対象を渡したときの値。#3956）',
   });
 });
 
-describe('requestInterrupt', () => {
+describe('requestInterruptOutcome', () => {
   it('対象を渡すと、conversationId と clientMessageId を本文に載せる。省くと本文は対象を持たない', async () => {
-    const { requestInterrupt } = await import('./interrupt.js');
+    const { requestInterruptOutcome } = await import('./interrupt.js');
     const { createClient } = await import('./client.js');
     const resolved = { baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false };
     const client = createClient(resolved.baseUrl);
 
     replies.push({ status: 200, body: { outcome: 'withdrawn' } });
-    const message = await requestInterrupt(client, resolved, {
+    const outcome = await requestInterruptOutcome(client, resolved, {
       conversationId: 'c1',
       clientMessageId: 'm1',
     });
-    expect(message).toContain('取り下げました');
+    expect(outcome).toBe('withdrawn');
+    expect(describeInterruptOutcome(outcome)).toContain('取り下げました');
     expect(JSON.parse(sent[0]?.body ?? 'null')).toEqual({
       conversationId: 'c1',
       clientMessageId: 'm1',
     });
 
     replies.push({ status: 200, body: { outcome: 'interrupted' } });
-    await requestInterrupt(client, resolved);
+    await requestInterruptOutcome(client, resolved);
     expect(JSON.parse(sent[1]?.body ?? '{}')).not.toHaveProperty('conversationId');
   });
 });

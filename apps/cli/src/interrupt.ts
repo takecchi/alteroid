@@ -8,7 +8,7 @@ export async function interruptCommand(): Promise<void> {
   const target = await resolveTarget();
   if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
-  stdout.write(`${await requestInterrupt(client, target)}\n`);
+  stdout.write(`${describeInterruptOutcome(await requestInterruptOutcome(client, target))}\n`);
 }
 
 export type InterruptOutcome =
@@ -18,14 +18,6 @@ export type InterruptOutcome =
 export interface InterruptTarget {
   conversationId: string;
   clientMessageId: string;
-}
-
-export async function requestInterrupt(
-  client: DaemonClient,
-  target: Target,
-  turn?: InterruptTarget,
-): Promise<string> {
-  return describeInterruptOutcome(await requestInterruptOutcome(client, target, turn));
 }
 
 /** 文にする前の outcome。呼び手が `withdrawn` で後始末をするために分けてある。 */

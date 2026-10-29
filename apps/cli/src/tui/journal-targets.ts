@@ -25,16 +25,16 @@ export function affectsApprovals(type: string): boolean {
   return type === 'escalation';
 }
 
-// 本体が無い（`entry` が `null`・未指定）ときは「動くかもしれない」に倒す: 件数が古いまま残るより、取り直しが1回増えるほうが安いため
-export function affectsManagers(type: string, entry?: JournalEntry | null): boolean {
+// 本体が無い（`entry` が `null`）ときは「動くかもしれない」に倒す: 件数が古いまま残るより、取り直しが1回増えるほうが安いため
+export function affectsManagers(type: string, entry: JournalEntry | null): boolean {
   if (NEVER_MOVES_MANAGERS.has(type)) return false;
-  if (entry === null || entry === undefined) return true;
+  if (entry === null) return true;
   // クローン自身の `tool_use` は委譲を動かさない。`lost` への遷移は `decision` として積まれるので、`decision` は落とさない
   if (entry.type === 'tool_use') return !isCloneActor(entry.actor);
   if (entry.type === 'exchange') return entry.with === 'manager';
   return true;
 }
 
-export function affectsCounts(type: string, entry?: JournalEntry | null): boolean {
+export function affectsCounts(type: string, entry: JournalEntry | null): boolean {
   return affectsApprovals(type) || affectsManagers(type, entry);
 }

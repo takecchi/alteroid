@@ -579,13 +579,14 @@ describe('chat: 未送信の表示とスラッシュコマンドの失敗', () =
   });
 });
 
-describe('continuesLine', () => {
+describe('foldTrailingBackslashes の continues', () => {
   it('奇数個の \\ で終わるときだけ続ける', async () => {
-    const { continuesLine } = await import('./chat.js');
-    expect(continuesLine('a\\')).toBe(true);
-    expect(continuesLine('a\\\\')).toBe(false);
-    expect(continuesLine('a\\\\\\')).toBe(true);
-    expect(continuesLine('a')).toBe(false);
-    expect(continuesLine('')).toBe(false);
+    const { foldTrailingBackslashes } = await import('./chat.js');
+    const continues = (line: string): boolean => foldTrailingBackslashes(line).continues;
+    expect(continues('a\\')).toBe(true);
+    expect(continues('a\\\\')).toBe(false);
+    expect(continues('a\\\\\\')).toBe(true);
+    expect(continues('a')).toBe(false);
+    expect(continues('')).toBe(false);
   });
 });

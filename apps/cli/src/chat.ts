@@ -740,11 +740,6 @@ export function foldTrailingBackslashes(line: string): { text: string; continues
   };
 }
 
-export function continuesLine(line: string): boolean {
-  const trailing = /\\+$/.exec(line);
-  return trailing !== null && trailing[0].length % 2 === 1;
-}
-
 export async function sendMessage(
   target: Target,
   text: string,

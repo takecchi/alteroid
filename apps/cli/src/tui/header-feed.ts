@@ -32,7 +32,7 @@ const QUIET_TYPES = new Set([
 ]);
 
 // 件数を取り直す種別: 各画面へ知らせる `QUIET_TYPES` とは別にする。記憶の画面は `memory_update` を受けるが、件数は動かさないため
-export function affectsHeader(type: string, entry?: JournalEntry | null): boolean {
+export function affectsHeader(type: string, entry: JournalEntry | null): boolean {
   return !QUIET_TYPES.has(type) && affectsCounts(type, entry);
 }
 

@@ -13,12 +13,12 @@ describe('retryDelay（指数バックオフ）', () => {
 
 describe('affectsHeader', () => {
   it('件数に響かない量の多い種別だけを除く', () => {
-    expect(affectsHeader('escalation')).toBe(true);
-    expect(affectsHeader('exchange')).toBe(true);
-    expect(affectsHeader('tool_use')).toBe(true);
-    expect(affectsHeader('turn_usage')).toBe(false);
-    expect(affectsHeader('context_usage')).toBe(false);
-    expect(affectsHeader('inbox_flow')).toBe(false);
+    expect(affectsHeader('escalation', null)).toBe(true);
+    expect(affectsHeader('exchange', null)).toBe(true);
+    expect(affectsHeader('tool_use', null)).toBe(true);
+    expect(affectsHeader('turn_usage', null)).toBe(false);
+    expect(affectsHeader('context_usage', null)).toBe(false);
+    expect(affectsHeader('inbox_flow', null)).toBe(false);
   });
 });
 

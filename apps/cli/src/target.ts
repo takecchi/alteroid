@@ -27,17 +27,6 @@ export const RUNNER_NO_AUTOSTART_MESSAGE =
   '本番を見るなら ALTEROID_URL を指定して alteroid login してください。\n' +
   'どうしてもこの器にデーモンを立てるなら、明示の alteroid daemon start を使ってください。';
 
-export async function resolveTargetWithoutStarting(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<Target | null> {
-  const remote = remoteUrl(env);
-  if (remote !== null) return remoteTarget(remote);
-
-  const { info } = await daemon.status();
-  if (info === null) return null;
-  return localTarget(daemon.baseUrl(info), info.token);
-}
-
 // runner の器の中では暗黙に起こさない: 空のデーモンを本番と誤認し、器に残り続け、子の HOME に資格ファイルが作られるため
 export async function resolveTarget(env: NodeJS.ProcessEnv = process.env): Promise<Target> {
   const remote = remoteUrl(env);

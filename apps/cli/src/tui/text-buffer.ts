@@ -9,8 +9,6 @@ export interface TextBuffer {
   readonly cursor: number;
 }
 
-export const INPUT_MAX_ROWS = 6;
-
 const clamp = (n: number, lo: number, hi: number): number => Math.min(Math.max(n, lo), hi);
 
 export function emptyBuffer(): TextBuffer {
