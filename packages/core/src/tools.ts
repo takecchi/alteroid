@@ -8496,7 +8496,8 @@ export function createCloneTools(context: ToolContext) {
             return text(
               `task ${taskId} には走っている委譲がある（${running.map((job) => `${job.id}: ${job.status}`).join('、')}）。` +
                 '1つの task に同時に走らせる委譲は1本までなので、マネージャーは起こしていない。' +
-                'その委譲が終わるのを待つか、manager_stop で止めてから頼むこと。',
+                'その委譲が終わるのを待つか、manager_stop で止めてから頼むこと。' +
+                '止められない（器が消えて running のまま残っている等）ときは、taskId を付けずに起こすか、task_set_status で task を動かすこと。',
             );
           }
         }

@@ -13481,6 +13481,15 @@ class Pool implements ManagerPool {
             (stored) => stored?.status ?? null,
             () => undefined,
           );
+    // 終端へ入った時刻を1回だけ書く（起動時の直しの基準。終わった後の書き込みでは進めない）。動き出したら消す。読めなかった回は触れない
+    if (record.job.taskId !== undefined && before !== undefined) {
+      const wasActive = before !== null && taskStatusForJob(before) === 'waiting';
+      if (taskStatusForJob(record.job.status) === 'waiting') {
+        if (!wasActive) delete record.job.endedAt;
+      } else if (before === null || wasActive) {
+        record.job.endedAt = new Date(this.#now()).toISOString();
+      }
+    }
     try {
       await this.#stores.jobs.putJob(record.job);
     } catch (error) {
@@ -13493,8 +13502,8 @@ class Pool implements ManagerPool {
   /**
    * 委譲の状態を、結び付いた task（`Job.taskId`）へ写す（#5469 P3）。**状態を持たない規則**で、台帳に書く前の委譲の状態（`before`）と task の今の状態だけで決める:
    * - 動き出す（台帳に無かった／終わっていた委譲が `running` へ入る: 起こした直後・resume）: 閉じていない task を `waiting` にする
-   * - 終わる（done / failed / lost / stopped）: `waiting` の task だけを `needs_decision` にする。クローンが `queued` へ戻した task や、閉じた task には触れない
-   * 動いている最中の書き込み（報告・確認要求など）では何もしない。クローンが動かした task を、委譲の次の書き込みで戻さないため。
+   * - 終わる（動いていた／台帳に無かった委譲が done / failed / lost / stopped へ入る）: `waiting` の task だけを `needs_decision` にする。クローンが `queued` へ戻した task や、閉じた task には触れない
+   * 動いている最中の書き込み（報告・確認要求など）と、終わった後の書き込みでは何もしない。クローンが動かした task を、委譲の次の書き込みで戻さないため。
    * 書き込みの1本の口（`#persist`）に置く: 委譲の状態を変える経路は多く、個別に呼ぶと1つ漏れた経路の task だけが動かない。
    * best-effort: task が書けなくても委譲と台帳は止めない。失敗は日誌へ残し、終わった委譲に結び付いたまま `waiting` の task は
    * 次の起動で `#repairStrandedTasks` が直す。
@@ -13508,6 +13517,12 @@ class Pool implements ManagerPool {
       const entering =
         before === null || (before !== undefined && taskStatusForJob(before) !== 'waiting');
       if (!entering) return;
+    } else {
+      // 終わる側も、動いていた（または台帳に無かった）委譲が終端へ入る書き込みだけで動かす。終わった後の書き込み
+      // （2度目の報告・restore の引き取り・預かりの掃除など）では、クローンが置いた `waiting` を倒さない。読めなかった回は見送る
+      const ending =
+        before === null || (before !== undefined && taskStatusForJob(before) === 'waiting');
+      if (!ending) return;
     }
     try {
       const task = await this.#stores.tasks.get(taskId);
@@ -13561,15 +13576,18 @@ class Pool implements ManagerPool {
 
   /**
    * 終わった委譲にしか結び付いていないのに `waiting` のままの task を `needs_decision` へ直す（#5469 P3）。
-   * 終端の同期に失敗した、または同期の前にデーモンが落ちた task が戻れなくなるのを防ぐ。起動時（`restore()`）に1回走る。
-   * 走っている委譲が1本でも結び付いていれば直さない。結び付いた委譲のうち最後に終わったもの（`updatedAt` が最も新しい）より後に
+   * 終端の同期に失敗した、または同期の前にデーモンが落ちた task が戻れなくなるのを防ぐ。`restore()` が呼ばれるたびに走る
+   * （起動のほか、takeOver・トークンの回復からも呼ばれる）ので、何度走っても同じ結果になるよう書いてある。
+   * 走っている委譲が1本でも結び付いていれば直さない。結び付いた委譲のうち最後に終端へ入ったもの（`Job.endedAt` が最も新しい）より後に
    * task が更新されていれば、クローンが置いた `waiting`（`task_set_status`）なので直さない。
-   * 読めない・書けないときは見送って stderr に残す（次の起動でもう一度見る）。
-   * 起動の最初（この起動で台帳へ書く前）に走らせる: この起動の書き込みで委譲の `updatedAt` が進むと、上の「後」の判定が狂う。
+   * `updatedAt` は使わない: 終わった後の書き込みでも進むので、基準にすると呼ばれるたびに判定が狂う。
+   * 結び付いた終端の委譲に `endedAt` が無い・読めない行が1つでもある task は、並び順によらず見送る（クローンの置いた状態を潰す側へ倒さない）。
+   * 読めない・書けないときは見送って stderr に残す（次に呼ばれたときにもう一度見る）。
    */
   async #repairStrandedTasks(): Promise<void> {
     try {
       const active = new Set<string>();
+      const skip = new Set<string>();
       const lastFinished = new Map<string, { id: string; at: number }>();
       for (const job of await this.#stores.jobs.listJobs()) {
         if (job.taskId === undefined) continue;
@@ -13577,17 +13595,21 @@ class Pool implements ManagerPool {
           active.add(job.taskId);
           continue;
         }
-        const at = Date.parse(job.updatedAt);
+        const at = job.endedAt === undefined ? Number.NaN : Date.parse(job.endedAt);
+        if (Number.isNaN(at)) {
+          skip.add(job.taskId);
+          continue;
+        }
         const seen = lastFinished.get(job.taskId);
         if (seen === undefined || at > seen.at) lastFinished.set(job.taskId, { id: job.id, at });
       }
       if (lastFinished.size === 0) return;
       for (const task of (await this.#stores.tasks.list()).entries) {
         const last = lastFinished.get(task.id);
-        if (last === undefined || active.has(task.id) || task.status !== 'waiting') continue;
-        // 日時が読めないときは直さない（クローンの置いた状態を潰す側へ倒さない）
+        if (last === undefined || skip.has(task.id) || active.has(task.id)) continue;
+        if (task.status !== 'waiting') continue;
         const taskAt = Date.parse(task.updatedAt);
-        if (Number.isNaN(taskAt) || Number.isNaN(last.at) || taskAt > last.at) continue;
+        if (Number.isNaN(taskAt) || taskAt > last.at) continue;
         await this.#moveTask(
           task.id,
           'needs_decision',

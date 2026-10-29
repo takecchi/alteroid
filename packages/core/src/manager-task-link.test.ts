@@ -34,6 +34,11 @@ function task(id: string, status: Task['status'] = 'queued'): Task {
   };
 }
 
+/** 委譲が終わった（実時間の）後にクローンが task を動かした時刻。 */
+function afterNow(): string {
+  return new Date(Date.now() + 60_000).toISOString();
+}
+
 function fakeRunner() {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
@@ -142,6 +147,7 @@ function ledgerJob(id: string, status: Job['status'], taskId: string): Job {
     sessionId: `sess-${id}`,
     runnerId: 'runner-primary',
     taskId,
+    ...(status === 'running' || status === 'waiting_human' ? {} : { endedAt: AT }),
   };
 }
 
@@ -306,6 +312,70 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
     expect(await taskStatus(s.stores, 't-1')).toBe('queued');
   });
 
+  it('⭐ 終わった後にクローンが waiting を置いた task は、同じ委譲の2度目の報告で needs_decision へ倒さない', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    s.fake.push(report(started.managerId));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    await s.stores.tasks.setStatus('t-1', 'waiting', { by: 'clone', at: afterNow() });
+
+    s.fake.push(report(started.managerId));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+  });
+
+  it('⭐ runner が done のセッションを持ったまま restore しても、クローンが置いた waiting を倒さない', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    s.fake.push(report(started.managerId));
+    await settle();
+    await s.stores.tasks.setStatus('t-1', 'waiting', { by: 'clone', at: afterNow() });
+    // 再起動した別のプール。runner は done のセッションを持っている
+    const rebooted = fakeRunner();
+    rebooted.alive.push({
+      managerId: started.managerId,
+      status: 'done',
+      cwd: '/work/project',
+      request: '調べる',
+      waiting: [],
+    });
+    const registry = createRunnerRegistry([rebooted.runner]);
+    const pool = createManagerPool({
+      stores: s.stores,
+      post: () => undefined,
+      runners: registry,
+      profile: createProfileService({ stores: s.stores, runners: registry }),
+    });
+    await pool.restore();
+    await settle();
+    expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('done');
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+  });
+
+  it('endedAt は終端へ入ったときに1回だけ書き、終わった後の書き込みでは進めず、動き出すと消す', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    expect((await s.stores.jobs.getJob(started.managerId))?.endedAt).toBeUndefined();
+
+    s.fake.push(report(started.managerId));
+    await settle();
+    const first = (await s.stores.jobs.getJob(started.managerId))?.endedAt;
+    expect(first).toBeDefined();
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    s.fake.push(report(started.managerId));
+    await settle();
+    expect((await s.stores.jobs.getJob(started.managerId))?.endedAt).toBe(first);
+
+    await s.pool.send(started.managerId, '続きをお願い');
+    await settle();
+    expect((await s.stores.jobs.getJob(started.managerId))?.endedAt).toBeUndefined();
+  });
+
   it('⭐ 委譲が走っている間にクローンが queued へ戻した task は、走っている最中の書き込みで待ちへ戻さない', async () => {
     const s = await setup();
     await s.stores.tasks.add(task('t-1'));
@@ -396,13 +466,38 @@ describe('終端の同期が失敗したとき・デーモンが落ちたとき'
       ...task('t-1', 'waiting'),
       updatedAt: '2026-10-29T10:00:00.000Z',
     });
+    // 終わった後も updatedAt は進む（task より新しい）。基準は endedAt
     await s.stores.jobs.putJob({
       ...ledgerJob('mgr-old', 'done', 't-1'),
-      updatedAt: '2026-10-29T09:00:00.000Z',
+      updatedAt: '2026-10-29T12:00:00.000Z',
+      endedAt: '2026-10-29T09:00:00.000Z',
     });
 
     await s.pool.restore();
     expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    // 2回目以降の restore（takeOver・トークンの回復）でも同じ
+    await s.pool.restore();
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+  });
+
+  it('⭐ 結び付いた終端の委譲に endedAt が読めない行が1つでもある task は、並び順によらず見送る', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1', 'waiting'));
+    await s.stores.tasks.add(task('t-2', 'waiting'));
+    const withoutEnd = (id: string, taskId: string): Job => {
+      const { endedAt: _unused, ...rest } = ledgerJob(id, 'done', taskId);
+      return rest;
+    };
+    // t-1: 読める行 → 読めない行。t-2: 読めない行 → 読める行（台帳の並びが逆でも見送る）
+    await s.stores.jobs.putJob(ledgerJob('mgr-a', 'done', 't-1'));
+    await s.stores.jobs.putJob(withoutEnd('mgr-b', 't-1'));
+    await s.stores.jobs.putJob(withoutEnd('mgr-c', 't-2'));
+    await s.stores.jobs.putJob(ledgerJob('mgr-d', 'done', 't-2'));
+
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    expect(await taskStatus(s.stores, 't-2')).toBe('waiting');
   });
 
   it('⭐ 起動時の直しは、結び付いた委譲のうち最後に終わったものの後に動いていない task だけ直す', async () => {
@@ -414,11 +509,11 @@ describe('終端の同期が失敗したとき・デーモンが落ちたとき'
     });
     await s.stores.jobs.putJob({
       ...ledgerJob('mgr-old', 'done', 't-1'),
-      updatedAt: '2026-10-29T09:00:00.000Z',
+      endedAt: '2026-10-29T09:00:00.000Z',
     });
     await s.stores.jobs.putJob({
       ...ledgerJob('mgr-new', 'failed', 't-1'),
-      updatedAt: '2026-10-29T11:00:00.000Z',
+      endedAt: '2026-10-29T11:00:00.000Z',
     });
 
     await s.pool.restore();
