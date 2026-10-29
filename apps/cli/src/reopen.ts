@@ -2,8 +2,8 @@ import { stdout } from './terminal-out.js';
 
 import { createClient, type DaemonClient } from './client.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
-import { withErrorReason } from './format.js';
-import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { describeFailedResponse } from './format.js';
+import { resolveTarget, type Target } from './target.js';
 
 export interface ReopenOptions {
   yes?: boolean;
@@ -59,12 +59,11 @@ export async function requestReopen(
     },
   });
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `クローンのセッションを開き直せませんでした（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }

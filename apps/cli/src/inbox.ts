@@ -8,7 +8,7 @@ import {
 } from '@alteroid/core';
 
 import { createClient } from './client.js';
-import { withErrorReason } from './format.js';
+import { withErrorReason, describeFailedResponse } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
 import { shellQuote } from './shell-quote.js';
@@ -234,10 +234,12 @@ export async function inboxShowCommand(): Promise<void> {
   const response = await client.inbox.$get();
   if (!response.ok) {
     // 失敗を stdout へ書いて正常終了しない: cron やスクリプトからは成功に見えるため
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(`受信箱の内訳を読めませんでした（${response.status}）`, response),
+      await describeFailedResponse(
+        `受信箱の内訳を読めませんでした（${response.status}）`,
+        response,
+        target,
+      ),
     );
   }
   const breakdown = (await response.json()) as InboxBacklogBreakdown;

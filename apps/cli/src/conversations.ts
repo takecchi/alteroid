@@ -10,9 +10,14 @@ import {
   type ConversationApprovalsRead,
 } from './conversation-approvals.js';
 import { defaultIo as defaultConfirmIo, type ConfirmIo } from './confirm.js';
-import { errorReason, formatElapsedAgo, withErrorReason } from './format.js';
+import {
+  errorReason,
+  formatElapsedAgo,
+  withErrorReason,
+  describeFailedResponse,
+} from './format.js';
 import { connect } from './connect.js';
-import { describeAuthFailure, type Target } from './target.js';
+import { type Target } from './target.js';
 import { redactBody } from './redact.js';
 import { withdrawnMessageText } from './withdrawn-message.js';
 
@@ -63,12 +68,11 @@ export async function conversationsListCommand(
     },
   });
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `会話の一覧を読めませんでした（HTTP ${String(response.status)}。--limit / --scan / --cursor の値を確かめてください）`,
         response,
+        target,
       ),
     );
   }
@@ -184,12 +188,11 @@ export async function conversationsShowCommand(
     throw new Error(`そんな会話はありません: ${id}`);
   }
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `会話を読めませんでした（HTTP ${String(response.status)}。--scan の値を確かめてください）`,
         response,
+        target,
       ),
     );
   }
@@ -272,10 +275,12 @@ export async function conversationsReadCommand(id: string): Promise<void> {
   const detail = await client.conversations[':id'].$get({ param: { id }, query: {} });
   if (detail.status === 404) throw new Error(`そんな会話はありません: ${id}`);
   if (!detail.ok) {
-    const described = describeAuthFailure(detail.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(`会話を読めませんでした（HTTP ${String(detail.status)}）`, detail),
+      await describeFailedResponse(
+        `会話を読めませんでした（HTTP ${String(detail.status)}）`,
+        detail,
+        target,
+      ),
     );
   }
   const body = await detail.json();
@@ -298,10 +303,12 @@ export async function conversationsReadCommand(id: string): Promise<void> {
     json: { through: latest.id },
   });
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(`既読にできませんでした（HTTP ${String(response.status)}）`, response),
+      await describeFailedResponse(
+        `既読にできませんでした（HTTP ${String(response.status)}）`,
+        response,
+        target,
+      ),
     );
   }
   const { unreadCount } = await response.json();
@@ -345,12 +352,11 @@ export async function conversationsDeleteCommand(
     throw new Error(reason ?? `そんな会話はありません: ${id}`);
   }
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `会話を削除できませんでした（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }

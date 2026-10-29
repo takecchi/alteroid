@@ -8,9 +8,9 @@ import {
 import type { DroppedTraceOrigin } from '@alteroid/core';
 
 import { createClient } from './client.js';
-import { withErrorReason } from './format.js';
+import { describeFailedResponse } from './format.js';
 import { redactBody } from './redact.js';
-import { describeAuthFailure, resolveTarget } from './target.js';
+import { resolveTarget } from './target.js';
 
 export async function droppedCommand(): Promise<void> {
   const target = await resolveTarget();
@@ -28,12 +28,11 @@ export async function droppedCommand(): Promise<void> {
     );
   }
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `握り潰しの跡を読めませんでした（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }

@@ -7,9 +7,9 @@ import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import type { DaemonClient } from './client.js';
 import { connect } from './connect.js';
-import { withErrorReason } from './format.js';
+import { withErrorReason, describeFailedResponse } from './format.js';
 import { redactBody } from './redact.js';
-import { describeAuthFailure, type Target } from './target.js';
+import { type Target } from './target.js';
 import {
   keepDraftOnFailure,
   openEditorKeepingEdits,
@@ -34,12 +34,11 @@ export async function practiceListCommand(): Promise<void> {
   const { client, target } = conn;
   const response = await client.practices.$get();
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `やり方の一覧を読めませんでした（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }
@@ -99,12 +98,11 @@ export async function practiceShowCommand(
       if (response.status === 404) {
         throw new Error(`そんな版はありません: ${slug} 版${String(options.version)}`);
       }
-      const described = describeAuthFailure(response.status, target);
-      if (described !== null) throw new Error(described);
       throw new Error(
-        await withErrorReason(
+        await describeFailedResponse(
           `版を読めませんでした: ${slug} 版${String(options.version)}（HTTP ${String(response.status)}）`,
           response,
+          target,
         ),
       );
     }
@@ -134,12 +132,11 @@ export async function practiceHistoryCommand(slug: string): Promise<void> {
   const { client, target } = conn;
   const response = await client.practices[':slug'].versions.$get({ param: { slug } });
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `版の履歴を読めませんでした（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }
@@ -337,12 +334,11 @@ export async function practiceRemoveCommand(
     if (response.status === 404) {
       throw new Error(`そんなやり方はありません: ${slug}`);
     }
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `やり方を消せませんでした: ${slug}（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }
@@ -359,12 +355,11 @@ async function readVersionForRemove(
     return undefined;
   }
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `やり方を読めませんでした: ${slug}（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }
@@ -395,12 +390,11 @@ async function read(
   if (response.status === 404 || response.status === 400) return null;
   if (response.status === 409 && options?.acceptUnreadable === true) return 'unreadable';
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `やり方を読めませんでした: ${slug}（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }
@@ -473,12 +467,11 @@ async function write(
         `書き換えられませんでした: ${slug}（種類・題・スラッグのどれかが不正かもしれません）`,
       );
     }
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `書き換えられませんでした: ${slug}（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }

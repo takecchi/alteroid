@@ -7,9 +7,9 @@ import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import type { DaemonClient } from './client.js';
 import { connect } from './connect.js';
-import { formatElapsedAgo, withErrorReason } from './format.js';
+import { formatElapsedAgo, withErrorReason, describeFailedResponse } from './format.js';
 import { redactBody } from './redact.js';
-import { describeAuthFailure, type Target } from './target.js';
+import { type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import {
   keepDraftOnFailure,
@@ -63,12 +63,11 @@ export async function memoryListCommand(now: number = Date.now()): Promise<void>
   const { client, target } = conn;
   const response = await client.memory.$get();
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `記憶の一覧を読めませんでした（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }
@@ -346,12 +345,11 @@ export async function memoryRemoveCommand(
     if (response.status === 404) {
       throw new Error(`そんな記憶はありません: ${slug}`);
     }
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `記憶を消せませんでした: ${slug}（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }
@@ -371,12 +369,11 @@ async function readDoc(
     return null;
   }
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `記憶を読めませんでした: ${slug}（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }
@@ -417,12 +414,11 @@ async function write(
     if (response.status === 400) {
       throw new Error(`書き換えられませんでした: ${slug}（記憶の名前が不正かもしれません）`);
     }
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `書き換えられませんでした: ${slug}（HTTP ${String(response.status)}）`,
         response,
+        target,
       ),
     );
   }

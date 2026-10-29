@@ -1,5 +1,6 @@
 export { formatElapsedAgo } from '@alteroid/core/cli-light';
 import { redactError } from './redact.js';
+import { describeAuthFailure, type Target } from './target.js';
 
 export async function errorReason(response: {
   json: () => Promise<unknown>;
@@ -22,6 +23,15 @@ export async function withErrorReason(
 ): Promise<string> {
   const reason = await errorReason(response);
   return reason === null ? message : `${message}: ${reason}`;
+}
+
+// `target.ts` に置かない: `./target.js` を丸ごと差し替える試験が、差し替えた `describeAuthFailure` で文言を確かめているため
+export async function describeFailedResponse(
+  message: string,
+  response: { status: number; json: () => Promise<unknown> },
+  target: Target,
+): Promise<string> {
+  return describeAuthFailure(response.status, target) ?? (await withErrorReason(message, response));
 }
 
 export function describeUnreadableRowsList(params: {

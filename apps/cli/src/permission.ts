@@ -9,9 +9,9 @@ import type { PermissionGrant } from '@alteroid/core';
 
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { createClient } from './client.js';
-import { describeUnreadableRowsList, withErrorReason } from './format.js';
+import { describeUnreadableRowsList, describeFailedResponse } from './format.js';
 import { redactBody } from './redact.js';
-import { describeAuthFailure, resolveTarget } from './target.js';
+import { resolveTarget } from './target.js';
 
 export interface PermissionListOptions {
   all?: boolean;
@@ -28,10 +28,12 @@ export async function permissionListCommand(options: PermissionListOptions = {})
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['permission-grants'].$get();
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(`許可の一覧を読めませんでした（${response.status}）`, response),
+      await describeFailedResponse(
+        `許可の一覧を読めませんでした（${response.status}）`,
+        response,
+        target,
+      ),
     );
   }
   const { grants, rowsUnreadable } = (await response.json()) as {
@@ -96,10 +98,12 @@ export async function permissionRevokeCommand(
   // 読めない行（`rowsUnreadable`）に在る id は「無い」と言わない: 確認へ進み、POST の 409 の案内（持ち主はデーモン）に任せる。
   const listing = await client['permission-grants'].$get();
   if (!listing.ok) {
-    const described = describeAuthFailure(listing.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(`許可の一覧を読めませんでした（${listing.status}）`, listing),
+      await describeFailedResponse(
+        `許可の一覧を読めませんでした（${listing.status}）`,
+        listing,
+        target,
+      ),
     );
   }
   const { grants, rowsUnreadable } = (await listing.json()) as {
@@ -119,10 +123,12 @@ export async function permissionRevokeCommand(
   // 失敗を握り潰さない: 取り消しは安全側への操作なので、「取り消せたか」を終了コードで確実に区別する（`access.ts` の revoke / `inbox.ts` の remove と同じ判断）。
   if (!response.ok) {
     if (response.status === 404) throw new Error(`該当する許可がありません: ${id}`);
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(`許可を取り消せませんでした（${response.status}）`, response),
+      await describeFailedResponse(
+        `許可を取り消せませんでした（${response.status}）`,
+        response,
+        target,
+      ),
     );
   }
   stdout.write(`許可を取り消しました: ${id}\n`);
@@ -152,10 +158,12 @@ export async function permissionRemoveUnreadableCommand(
           'id が取れない行はこの口では消せません）',
       );
     }
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(`読めない許可の行を消せませんでした（${response.status}）`, response),
+      await describeFailedResponse(
+        `読めない許可の行を消せませんでした（${response.status}）`,
+        response,
+        target,
+      ),
     );
   }
   const result = (await response.json()) as { removedIds: string[] };

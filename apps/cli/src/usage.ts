@@ -22,8 +22,8 @@ import {
 } from '@alteroid/core';
 
 import { createClient } from './client.js';
-import { withErrorReason } from './format.js';
-import { describeAuthFailure, resolveTarget } from './target.js';
+import { describeFailedResponse } from './format.js';
+import { resolveTarget } from './target.js';
 
 export interface UsageOptions {
   from?: string;
@@ -73,12 +73,11 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
   });
   if (!response.ok) {
     // 認証切れ（401/403）を「クエリの形を確かめてください」と案内しない
-    const described = describeAuthFailure(response.status, target);
-    if (described !== null) throw new Error(described);
     throw new Error(
-      await withErrorReason(
+      await describeFailedResponse(
         `利用状況を読めませんでした（HTTP ${String(response.status)}。クエリの形を確かめてください）`,
         response,
+        target,
       ),
     );
   }
