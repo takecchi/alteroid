@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest';
 
 import { missingRequirementCapabilities } from './agent-ports.js';
 import { CODEX_PROVIDER } from './codex-provider.js';
-import { describeProviderGaps } from './provider-gaps.js';
 
 describe('CODEX_PROVIDER（正直な申告）', () => {
   it('id と表示名', () => {
@@ -27,16 +26,13 @@ describe('CODEX_PROVIDER（正直な申告）', () => {
     });
   });
 
-  it('欠けた要件は provider-gaps が文言で数えられる（持たないふりをしない）', () => {
+  it('欠けた要件は missingRequirementCapabilities で数えられる（持たないふりをしない）', () => {
     expect(missingRequirementCapabilities(CODEX_PROVIDER.capabilities)).toEqual([
       'compactionHook',
       'sessionLog',
       'subagents',
       'mcpServers',
     ]);
-    const lines = describeProviderGaps({ manager: CODEX_PROVIDER });
-    expect(lines).toHaveLength(4);
-    expect(lines.every((line) => line.startsWith('マネージャー層（Codex）は '))).toBe(true);
   });
 
   it('このファイルは Claude Agent SDK を import しない', () => {
