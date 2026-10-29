@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
-import { flushPendingMicrotasks, waitFor } from './clone-test-harness.js';
+import { flushPendingMicrotasks, TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary } from './manager.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -62,6 +62,7 @@ interface Boot {
 }
 
 interface Script {
+  env?: NodeJS.ProcessEnv;
   after?: (inputCount: number) => SDKMessage[];
   failResultAt?: number;
 }
@@ -147,7 +148,8 @@ function boot(script: Script = {}): Boot {
   const clone = createClone({
     stores,
     queryFn: fn,
-    env: {},
+    // 既定は畳みを有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）
+    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
     redeliveryGate: ALWAYS_REDELIVER,
@@ -257,6 +259,23 @@ describe('manager_list を q で引く呼びの固定の文言の畳み', () => 
     expect(second).toContain('mgr-target');
     expect(second).toContain('動いている本数は「話しかけられる」ほうで数える');
     expect(second.length).toBeLessThan(first.length);
+    await s.clone.stop();
+  });
+
+  it('⭐ 畳みが切り（env が空＝本番の既定）なら、同じ内訳で何度呼んでも全文', async () => {
+    const s = boot({ env: {} });
+    s.setManagers(fleet());
+    s.setInbox(stuckInbox());
+    await turn(s);
+
+    const first = await managerList(s, q);
+    const second = await managerList(s, q);
+
+    for (const text of [first, second]) {
+      expect(text).toContain(RUNNING_FULL);
+      expect(text).toContain(INBOX_FULL);
+      expect(text).not.toContain('は前回と同じ');
+    }
     await s.clone.stop();
   });
 
