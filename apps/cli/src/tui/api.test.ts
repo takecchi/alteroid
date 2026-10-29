@@ -195,6 +195,35 @@ describe('chat（POST /chat の SSE）', () => {
   });
 });
 
+describe('chatStream（GET /chat/:id/stream の SSE）', () => {
+  it('会話 id を道に埋めて GET し、chat と同じく型付きで渡して未知のイベントは無視する', async () => {
+    replies.push(
+      sse(
+        [
+          'event: text\ndata: {"type":"text","text":"続き"}',
+          'event: future_thing\ndata: {"type":"future_thing"}',
+          'event: done\ndata: {"type":"done"}',
+        ].join('\n\n') + '\n\n',
+      ),
+    );
+    const events = await collect(
+      createTuiApi(target).chatStream('c/1', new AbortController().signal),
+    );
+    expect(sent[0]).toMatchObject({
+      url: 'http://127.0.0.1:4517/chat/c%2F1/stream',
+      method: 'GET',
+    });
+    expect(events).toEqual([{ type: 'text', text: '続き' }, { type: 'done' }]);
+  });
+
+  it('失敗は戻れない旨とデーモンの理由で失敗する', async () => {
+    replies.push(json({ error: '理由です' }, 500));
+    await expect(
+      collect(createTuiApi(target).chatStream('c1', new AbortController().signal)),
+    ).rejects.toThrow(/進行中の応答に戻れませんでした（HTTP 500）.*理由です/);
+  });
+});
+
 describe('JSON の口（hono/client）', () => {
   it('会話の一覧・中身・終了・中断', async () => {
     const api = createTuiApi(target);
