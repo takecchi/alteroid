@@ -1,8 +1,8 @@
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { clipRawValue } from '~/lib/clip-raw-value';
+import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import { useMemo, useState, type ReactNode } from 'react';
-import { useSearchParams } from 'react-router';
 
 import {
   Badge,
@@ -46,7 +46,7 @@ function hasDuplicateParam(searchParams: URLSearchParams, name: string): boolean
 }
 
 export default function ProgressPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, replaceParams] = useReplaceSearchParams();
   const rawWindow = searchParams.get(WINDOW_PARAM);
   const hasDuplicateWindow = hasDuplicateParam(searchParams, WINDOW_PARAM);
   const windowHours = useMemo(() => parseWindow(rawWindow), [rawWindow]);
@@ -62,14 +62,9 @@ export default function ProgressPage() {
   const showsOtherWindow = error !== undefined && okWindow !== windowHours;
 
   function selectWindow(next: WindowHours) {
-    setSearchParams(
-      (previous) => {
-        const params = new URLSearchParams(previous);
-        params.set(WINDOW_PARAM, String(next));
-        return params;
-      },
-      { replace: true },
-    );
+    replaceParams((params) => {
+      params.set(WINDOW_PARAM, String(next));
+    });
   }
 
   return (

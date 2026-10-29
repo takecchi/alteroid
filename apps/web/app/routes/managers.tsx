@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Link, Outlet, useLocation, useParams, useSearchParams } from 'react-router';
+import { Link, Outlet, useLocation, useParams } from 'react-router';
 
 import {
   AgentModelTag,
@@ -18,6 +18,7 @@ import { formatRelative, redactBody, STATUS_SEARCH_PARAM } from '@alteroid/logic
 import { terminalFailureNote } from '~/lib/manager-failure-note';
 import { LoadError } from '~/components/load-error';
 import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
+import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import type { ManagerDenial, ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/logic';
 
 // 「居ないのでも、畳まれたのでもない」を落とさない: 落とすと行が消えたのと区別が付かないため
@@ -268,36 +269,26 @@ export default function Managers() {
   // 絞りを画面の state に閉じ込めない（正本は URL）: 開き直すと消え、戻るで戻れず、リンクで共有できないため
   // replace: true にする: チップの操作ごとに履歴が積まれると「戻る」が使えなくなるため
   // debounce しない: チップのクリックは1回で完結した操作で、検索語のような「入力の途中」が無いため
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, replaceParams] = useReplaceSearchParams();
   // useMemo で包む: 描画のたびに selected が新しい配列になり、それに依存する effect・memo が毎回走り直すため
   const rawStatus = searchParams.get(STATUS_SEARCH_PARAM);
   const selected = useMemo(() => parseSelectedStatuses(rawStatus), [rawStatus]);
 
   function toggle(status: ManagerStatus) {
-    setSearchParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        const current = parseSelectedStatuses(next.get(STATUS_SEARCH_PARAM));
-        const updated = current.includes(status)
-          ? current.filter((s) => s !== status)
-          : [...current, status];
-        if (updated.length === 0) next.delete(STATUS_SEARCH_PARAM);
-        else next.set(STATUS_SEARCH_PARAM, updated.join(','));
-        return next;
-      },
-      { replace: true },
-    );
+    replaceParams((next) => {
+      const current = parseSelectedStatuses(next.get(STATUS_SEARCH_PARAM));
+      const updated = current.includes(status)
+        ? current.filter((s) => s !== status)
+        : [...current, status];
+      if (updated.length === 0) next.delete(STATUS_SEARCH_PARAM);
+      else next.set(STATUS_SEARCH_PARAM, updated.join(','));
+    });
   }
 
   function clearSelected() {
-    setSearchParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        next.delete(STATUS_SEARCH_PARAM);
-        return next;
-      },
-      { replace: true },
-    );
+    replaceParams((next) => {
+      next.delete(STATUS_SEARCH_PARAM);
+    });
   }
 
   const all = useManagers({ status: [], limit: MANAGERS_PAGE });

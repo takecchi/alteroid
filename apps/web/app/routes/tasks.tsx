@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { Link, useLocation, useSearchParams } from 'react-router';
+import { Link, useLocation } from 'react-router';
 
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
@@ -17,6 +17,7 @@ import {
 } from '~/components/task-parts';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
+import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import { unsentInput } from '~/lib/unsent-input';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 
@@ -53,18 +54,13 @@ export default function Tasks() {
 }
 
 function TasksPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, replaceParams] = useReplaceSearchParams();
   const showClosed = searchParams.get(CLOSED_PARAM) === '1';
   const toggleClosed = () =>
-    setSearchParams(
-      (previous) => {
-        const params = new URLSearchParams(previous);
-        if (showClosed) params.delete(CLOSED_PARAM);
-        else params.set(CLOSED_PARAM, '1');
-        return params;
-      },
-      { replace: true },
-    );
+    replaceParams((params) => {
+      if (showClosed) params.delete(CLOSED_PARAM);
+      else params.set(CLOSED_PARAM, '1');
+    });
   const { data, error, isLoading, isValidating, mutate } = useTasks(showClosed);
 
   // ここで並べ直さない: `entries` の順が優先順で、並べ直すと CLI・クローンの見え方と食い違う。

@@ -3,6 +3,7 @@ import { LoadError } from '~/components/load-error';
 import { clipRawValue } from '~/lib/clip-raw-value';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { shiftedUsageDate } from '~/lib/usage-dates';
+import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import {
   describeUnmeteredUsage,
   describeUnreadableUsage,
@@ -20,7 +21,7 @@ import {
   type UnreadableUsageRow,
 } from '@alteroid/core/usage';
 import { useId, useState, type ReactNode } from 'react';
-import { Link, useSearchParams } from 'react-router';
+import { Link } from 'react-router';
 
 import {
   Page,
@@ -220,7 +221,7 @@ function CandidateSelect({
 
 export default function Usage() {
   // 絞り込みの正本は URL。state に閉じ込めると、開き直すと消える・共有できない。
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, replaceParams] = useReplaceSearchParams();
   // `from` が URL に無いときだけ直近 30 日にする。`from=`（空）は全期間で、欄を空にするとそうなる。
   // 既定を API に持たせない: CLI や他の口の「指定なし＝全期間」を変えないため。開いた時点の日で固定し、分ごとに描き直さない
   const [defaultFrom] = useState(() =>
@@ -272,16 +273,11 @@ export default function Usage() {
   ];
 
   function setFilter(param: string, value: string) {
-    setSearchParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        // 開始日だけは消さずに空で残す: 消すと既定（直近 30 日）に戻り、全期間を選べなくなる
-        if (value === '' && param !== FROM_PARAM) next.delete(param);
-        else next.set(param, value);
-        return next;
-      },
-      { replace: true },
-    );
+    replaceParams((next) => {
+      // 開始日だけは消さずに空で残す: 消すと既定（直近 30 日）に戻り、全期間を選べなくなる
+      if (value === '' && param !== FROM_PARAM) next.delete(param);
+      else next.set(param, value);
+    });
   }
 
   const query: UsageQuery = {
