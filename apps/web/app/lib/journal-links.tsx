@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 
 import type { JournalEntry } from '@alteroid/logic';
 
-export interface JournalLink {
+interface JournalLink {
   to: string;
   label: string;
   short: string;

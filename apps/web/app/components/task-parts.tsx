@@ -57,7 +57,7 @@ export function TaskOriginBadge({ origin }: { origin: string }) {
   return <Badge tone={origin === 'human' ? 'accent' : 'neutral'}>{label}</Badge>;
 }
 
-export function taskLabel(task: Task): string {
+function taskLabel(task: Task): string {
   const flat = redactBody(task.title).replace(/\s+/g, ' ').trim();
   return Array.from(flat).length > 20 ? `${Array.from(flat).slice(0, 20).join('')}…` : flat;
 }
@@ -200,7 +200,7 @@ export function TaskMoveControls({ task, openTasks }: { task: Task; openTasks: r
 type CloseStatus = 'done' | 'cancelled';
 
 // 理由なしでは閉じられない: 「閉じた」だけが残ると、人間が後から否定できない（HTTP も空の理由を 400 で断る）。
-export function TaskCloseForm({ task, onClosed }: { task: Task; onClosed?: () => void }) {
+export function TaskCloseForm({ task }: { task: Task }) {
   const closeTask = useCloseTask();
   const reasonId = useId();
   const hintId = useId();
@@ -218,7 +218,6 @@ export function TaskCloseForm({ task, onClosed }: { task: Task; onClosed?: () =>
     setFailure(undefined);
     try {
       await closeTask(task.id, status, reason.trim());
-      onClosed?.();
     } catch (caught) {
       setFailure(caught);
     } finally {

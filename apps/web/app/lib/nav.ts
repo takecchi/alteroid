@@ -92,7 +92,7 @@ export function isNavItemActive(item: NavItemDef, pathname: string): boolean {
   return item.paths.some((base) => isUnder(pathname, base));
 }
 
-export const SETTINGS_GROUP_LABEL = '設定';
+const SETTINGS_GROUP_LABEL = '設定';
 
 export function settingsDocumentTitle(to: string): string {
   const tab = SETTINGS_TABS.find((t) => t.to === to);

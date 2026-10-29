@@ -550,7 +550,7 @@ function hasHumanWithClientMessageId(lines: Line[], clientMessageId: string): bo
   return lines.some((line) => line.role === 'human' && line.clientMessageId === clientMessageId);
 }
 
-export interface EditedVersion {
+interface EditedVersion {
   text: string;
   hiddenFollowUps: { role: 'human' | 'clone' | 'approval'; text: string }[];
   /** その版の発言に付いていた添付。無ければ欄ごと無い（版によって添付を外したり足したりするので、最新の版の添付で代えない）。 */
@@ -595,7 +595,7 @@ function foldedSpans(messages: readonly ConversationMessage[]): { start: string;
 
 // 畳み込み規則はここで持たない（サーバの computeSupersededIds が持つ。AGENTS.md「畳み込み規則を web 側に再実装しないこと」）。
 // 祖先が窓の外へ落ちていたらそこで打ち切る: 遡れない先を捏造しない
-export function buildEditVersions(
+function buildEditVersions(
   messages: ConversationMessage[],
   headId: string,
   approvals: readonly PendingApproval[] = [],

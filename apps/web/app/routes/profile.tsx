@@ -1,5 +1,6 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { describeScope, SCOPE_OPTIONS } from '~/lib/scope-labels';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
 import { useRef, useState } from 'react';
@@ -43,26 +44,6 @@ import type {
 } from '@alteroid/logic';
 
 const SMALL_NOTE = 'text-[11px] text-muted-foreground';
-
-function describeScope(scope: ProfileScope): { label: string; tone: 'neutral' | 'accent' } {
-  switch (scope) {
-    case 'all':
-      return { label: '共通', tone: 'accent' };
-    case 'app':
-      return { label: 'クローンだけ', tone: 'neutral' };
-    case 'runner':
-      return { label: 'マネージャーだけ', tone: 'neutral' };
-    default:
-      // 投げずに「未知」とそのまま出す: web とデーモンは別々に配られ、サーバのほうが新しい窓が必ず在るため
-      return { label: `未知の渡す先（${String(scope)}）`, tone: 'neutral' };
-  }
-}
-
-const SCOPE_OPTIONS: { value: ProfileScope; label: string }[] = [
-  { value: 'all', label: '共通（クローン・マネージャー両方。既定）' },
-  { value: 'app', label: 'クローンだけ' },
-  { value: 'runner', label: 'マネージャーだけ' },
-];
 
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 

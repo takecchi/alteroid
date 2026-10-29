@@ -1,6 +1,7 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { describeScope, SCOPE_OPTIONS } from '~/lib/scope-labels';
 import { EllipsisVertical } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { unsentInput } from '~/lib/unsent-input';
@@ -53,20 +54,6 @@ export default function EnvVars() {
       </LeaveGuardScope>
     </Page>
   );
-}
-
-function describeScope(scope: EnvVarScope): { label: string; tone: 'neutral' | 'accent' } {
-  switch (scope) {
-    case 'all':
-      return { label: '共通', tone: 'accent' };
-    case 'app':
-      return { label: 'クローンだけ', tone: 'neutral' };
-    case 'runner':
-      return { label: 'マネージャーだけ', tone: 'neutral' };
-    default:
-      // 投げずに「未知」とそのまま出す: web とデーモンは別に配られ、サーバのほうが新しい窓が必ず在るため
-      return { label: `未知の渡す先（${String(scope)}）`, tone: 'neutral' };
-  }
 }
 
 // 行ごとの flex にしない: 列の開始位置を全行で揃えるため、一覧全体で列幅を共有する（各行は subgrid で受ける）
@@ -507,12 +494,6 @@ function SecretValueInput({
     </div>
   );
 }
-
-const SCOPE_OPTIONS: { value: EnvVarScope; label: string }[] = [
-  { value: 'all', label: '共通（クローン・マネージャー両方。既定）' },
-  { value: 'app', label: 'クローンだけ' },
-  { value: 'runner', label: 'マネージャーだけ' },
-];
 
 // 括弧の注記を除いた短い形
 function scopeShortLabel(scope: EnvVarScope): string {

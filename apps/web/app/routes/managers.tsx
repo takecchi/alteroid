@@ -64,7 +64,7 @@ export function ManagerStatusBadge({ status }: { status: ManagerStatus }) {
 // 切ったことは必ず言う: 黙って落とすと「3種類しか止められていない」に見えるため
 const LIST_DENIED_TOOLS = 3;
 
-export function summarizeDenials(denials: ManagerDenial[]) {
+function summarizeDenials(denials: ManagerDenial[]) {
   // 末尾から採る: デーモンは古い順で返し、読む側が知りたいのはいま止まっているものだから
   const recent = [...denials].reverse();
   return {
@@ -126,7 +126,7 @@ export function ManagerDenialNote({
 }
 
 // 札を「失敗」へ倒さない: 支出上限に当たった回もセッションは生きていて、台帳の status は done のままのため
-export function ManagerFailureNote({
+function ManagerFailureNote({
   failure,
   status,
   lastFoldedTurn,
