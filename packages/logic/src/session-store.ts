@@ -17,6 +17,31 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+// 鍵を読んで、レコード（配列でないオブジェクト）として返す。無い・壊れている・レコードでない・保存先が投げた、のどれでも `undefined`。
+// 欄ごとの判定（何を捨て、何を残すか）は呼ぶ側に置く。
+export function readStoredRecord(key: string): Record<string, unknown> | undefined {
+  try {
+    const raw = storage()?.getItem(key);
+    if (raw === null || raw === undefined) return undefined;
+    const value: unknown = JSON.parse(raw);
+    return isRecord(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// `undefined` なら鍵を消し、そうでなければ書く。保存先が無ければ何もしない。投げない: 残せなくても呼ぶ側は state だけで動く。
+export function writeStored(key: string, value: string | undefined): void {
+  try {
+    const target = storage();
+    if (target === null) return;
+    if (value === undefined) target.removeItem(key);
+    else target.setItem(key, value);
+  } catch {
+    // 黙る。
+  }
+}
+
 // 会話の無い入力欄は `new` の鍵に置く。
 export function draftKey(prefix: string, conversationId: string | undefined): string {
   return `${prefix}${conversationId ?? 'new'}`;
