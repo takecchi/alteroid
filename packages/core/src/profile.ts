@@ -1,8 +1,9 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { chown, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+import { fingerprintOf } from './credentials.js';
 import { redactErrorText } from './denial-input-head.js';
 
 /**
@@ -63,10 +64,6 @@ const EPHEMERAL_ENV_KEYS = new Set(['_', 'PWD', 'OLDPWD', 'SHLVL', PROFILE_SOURC
 export function normalizeProfileScript(script: string): string {
   if (script.trim().length === 0) return '';
   return script.endsWith('\n') ? script : `${script}\n`;
-}
-
-export function fingerprintOf(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 12);
 }
 
 /** 置いてあるプロファイルの同一性。本文は出さない。 */

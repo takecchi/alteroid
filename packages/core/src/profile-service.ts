@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 
+import { fingerprintOf } from './credentials.js';
 import { redactErrorText } from './denial-input-head.js';
 import { reasonOf } from './dropped-record.js';
 import {
-  fingerprintOf,
   normalizeProfileScript,
   type PreparedProfile,
   type ProfileApplier,
