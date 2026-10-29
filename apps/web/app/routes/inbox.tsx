@@ -1,6 +1,7 @@
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
+import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
 import { useMemo, useRef, useState } from 'react';
 
 import { Page, Badge, Button, Card, CardHeader, ErrorNote, Input, WarnNote } from '@alteroid/ui';
@@ -75,19 +76,14 @@ function InboxBacklogCard() {
 }
 
 // 「処理済みで消えたのではない」を落とさない: 落とすと、行が消えたのと区別が付かないため
-const UNREADABLE_INBOX_IDS_SHOWN = 20;
-
 function UnreadableInboxNote({ unreadable }: { unreadable: UnreadableInboxEvent[] }) {
   if (unreadable.length === 0) return null;
   const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
-  const ids = idsAll.slice(0, UNREADABLE_INBOX_IDS_SHOWN);
-  const idsRest = idsAll.length - ids.length;
   return (
     <WarnNote small>
       読めない合図が {unreadable.length} 件ある
-      {ids.length > 0 &&
-        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
-      。<strong>壊れた行であって、処理済みで消えたのではない。</strong>
+      {unreadableIdsNote('id', idsAll)}。
+      <strong>壊れた行であって、処理済みで消えたのではない。</strong>
       下の内訳には載っていない。配られてもいない。
     </WarnNote>
   );

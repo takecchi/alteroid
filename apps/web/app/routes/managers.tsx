@@ -17,9 +17,8 @@ import { MANAGERS_PAGE, useManagers, useManagersWindow } from '@alteroid/swr';
 import { formatRelative, redactBody, STATUS_SEARCH_PARAM } from '@alteroid/logic';
 import { terminalFailureNote } from '~/lib/manager-failure-note';
 import { LoadError } from '~/components/load-error';
+import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
 import type { ManagerDenial, ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/logic';
-
-const UNREADABLE_JOB_IDS_SHOWN = 20;
 
 // 「居ないのでも、畳まれたのでもない」を落とさない: 落とすと行が消えたのと区別が付かないため
 export function UnreadableJobNote({
@@ -31,14 +30,11 @@ export function UnreadableJobNote({
 }) {
   if (unreadable.length === 0) return null;
   const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
-  const ids = idsAll.slice(0, UNREADABLE_JOB_IDS_SHOWN);
-  const idsRest = idsAll.length - ids.length;
   return (
     <WarnNote className={className}>
       読めない委譲が {unreadable.length} 件ある
-      {ids.length > 0 &&
-        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
-      。<strong>壊れた行であって、居ないのでも、畳まれたのでもない。</strong>
+      {unreadableIdsNote('id', idsAll)}。
+      <strong>壊れた行であって、居ないのでも、畳まれたのでもない。</strong>
       この一覧には載っていない。
     </WarnNote>
   );

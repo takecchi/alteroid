@@ -1,5 +1,6 @@
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
 import { unsentInput } from '~/lib/unsent-input';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
@@ -39,8 +40,6 @@ import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
 import type { ScheduleEntry, ScheduleSpec, UnreadableSchedule } from '@alteroid/logic';
 
 // 「消された依頼ではない」を落とさない: 落とすと行が消えたのと区別が付かないため
-const UNREADABLE_SCHEDULE_KINDS_SHOWN = 20;
-
 export function UnreadableScheduleNote({
   unreadable,
   className,
@@ -52,14 +51,11 @@ export function UnreadableScheduleNote({
   const kindsAll = unreadable
     .map((entry) => entry.kind)
     .filter((kind): kind is string => kind != null);
-  const kinds = kindsAll.slice(0, UNREADABLE_SCHEDULE_KINDS_SHOWN);
-  const kindsRest = kindsAll.length - kinds.length;
   return (
     <WarnNote className={className}>
       読めない継続中の依頼が {unreadable.length} 件ある
-      {kinds.length > 0 &&
-        `（kind: ${kinds.join(', ')}${kindsRest > 0 ? ` …ほか ${kindsRest} 件は省略` : ''}）`}
-      。<strong>壊れた行であって、消された依頼ではない。</strong>
+      {unreadableIdsNote('kind', kindsAll)}。
+      <strong>壊れた行であって、消された依頼ではない。</strong>
       この一覧には載っていない。
     </WarnNote>
   );

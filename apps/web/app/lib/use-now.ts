@@ -68,21 +68,8 @@ function getMinuteSnapshot(): number {
   return minuteSnapshot;
 }
 
-function getMinuteSnapshotPassive(): number {
-  // 購読しない呼び手は stale を下ろさない: 下ろすと、あとで購読する画面の最初の描画が古くなるため
-  return minuteSnapshot;
-}
-
-function subscribeNothing(): () => void {
-  return () => {};
-}
-
-export function useMinuteNow(enabled = true): number {
-  return useSyncExternalStore(
-    enabled ? subscribeMinute : subscribeNothing,
-    enabled ? getMinuteSnapshot : getMinuteSnapshotPassive,
-    () => minuteServerSnapshot,
-  );
+export function useMinuteNow(): number {
+  return useSyncExternalStore(subscribeMinute, getMinuteSnapshot, () => minuteServerSnapshot);
 }
 
 /** 1分未満だけ先の時刻を now と見る: 分の時計の値は最大1分古く、更新直後の時刻が「まもなく」と出るため。 */

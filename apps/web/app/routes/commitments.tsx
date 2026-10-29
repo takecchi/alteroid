@@ -4,6 +4,7 @@ import { clipRawValue } from '~/lib/clip-raw-value';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
+import { UNREADABLE_IDS_SHOWN, unreadableIdsNote } from '~/lib/unreadable-ids-note';
 import { unsentInput } from '~/lib/unsent-input';
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Tabs } from 'radix-ui';
@@ -227,8 +228,6 @@ function isClosed(commitment: Commitment): boolean {
   return commitment.closedAt !== undefined && commitment.closedAt !== null;
 }
 
-const UNREADABLE_IDS_SHOWN = 20;
-
 // 「無い」でも「片付いた」でもない第3の状態を `Empty` の顔にしない: `Empty` は「無い」を表す部品なので、読めない行を混ぜると「特に何も無い」に見えるため。
 // 0件なら描かない: 常に出る断りは、出ていることが情報にならない。
 function UnreadableNote({
@@ -244,17 +243,13 @@ function UnreadableNote({
   const unclosed = useCommitments(false).data?.unreadable;
   if (unreadable.length === 0) return null;
   const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
-  const ids = idsAll.slice(0, UNREADABLE_IDS_SHOWN);
-  const idsRest = idsAll.length - ids.length;
   const closable = idsAll
     .filter((id) => unclosed?.some((entry) => entry.id === id))
     .slice(0, UNREADABLE_IDS_SHOWN);
   return (
     <WarnNote className="mb-4" block>
       読めない行が {unreadable.length} 件ある
-      {ids.length > 0 &&
-        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
-      。<strong>片付いたのではない。</strong>
+      {unreadableIdsNote('id', idsAll)}。<strong>片付いたのではない。</strong>
       {closable.length > 0 && (
         <>
           <p className="mt-2 text-xs">
@@ -303,14 +298,10 @@ function UnreadableClose({
 function UnreadableJobsNote({ unreadableJobs }: { unreadableJobs: readonly UnreadableJob[] }) {
   if (unreadableJobs.length === 0) return null;
   const idsAll = unreadableJobs.map((entry) => entry.id).filter((id): id is string => id != null);
-  const ids = idsAll.slice(0, UNREADABLE_IDS_SHOWN);
-  const idsRest = idsAll.length - ids.length;
   return (
     <WarnNote className="mb-4">
       読めない委譲が {unreadableJobs.length} 件ある
-      {ids.length > 0 &&
-        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
-      。<strong>どの行に紐づくかは分からない</strong>
+      {unreadableIdsNote('id', idsAll)}。<strong>どの行に紐づくかは分からない</strong>
       ——「進行中（委譲あり）」の印が無い行の中に、本当は委譲が走っているものがあるかもしれない。
     </WarnNote>
   );

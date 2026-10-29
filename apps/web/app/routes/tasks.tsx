@@ -16,6 +16,7 @@ import {
   placementOf,
 } from '~/components/task-parts';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
+import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
 import { unsentInput } from '~/lib/unsent-input';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 
@@ -40,7 +41,6 @@ import { formatDateTime, redactBody } from '@alteroid/logic';
 import type { Task, UnreadableTask } from '@alteroid/logic';
 
 const CLOSED_PARAM = 'closed';
-const UNREADABLE_IDS_SHOWN = 20;
 
 /** 優先度や締切の数値の札を足さない: 並びが優先順のすべてで、数値を持つと「やることの一覧」の判断が器へ移るため。 */
 export default function Tasks() {
@@ -151,14 +151,10 @@ function TasksPage() {
 function UnreadableNote({ unreadable }: { unreadable: readonly UnreadableTask[] }) {
   if (unreadable.length === 0) return null;
   const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
-  const ids = idsAll.slice(0, UNREADABLE_IDS_SHOWN);
-  const idsRest = idsAll.length - ids.length;
   return (
     <WarnNote className="mb-4" block>
       読めない行が {unreadable.length} 件ある
-      {ids.length > 0 &&
-        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
-      。<strong>閉じたのではない。</strong>
+      {unreadableIdsNote('id', idsAll)}。<strong>閉じたのではない。</strong>
     </WarnNote>
   );
 }

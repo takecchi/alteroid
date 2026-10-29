@@ -9,8 +9,8 @@ import { useMinuteNow } from './use-now';
 const START = new Date('2026-10-07T12:00:00.000Z').getTime();
 const CREATED = new Date(START).toISOString();
 
-function Label({ enabled = true }: { enabled?: boolean }) {
-  const now = useMinuteNow(enabled);
+function Label() {
+  const now = useMinuteNow();
   return <p data-testid="label">{formatRelative(CREATED, now)}</p>;
 }
 
@@ -52,15 +52,6 @@ describe('useMinuteNow', () => {
     expect(vi.getTimerCount()).toBe(1);
     second.unmount();
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it('enabled が偽のあいだは回さない', () => {
-    render(<Label enabled={false} />);
-    expect(vi.getTimerCount()).toBe(0);
-    act(() => {
-      vi.advanceTimersByTime(5 * 60_000);
-    });
-    expect(label()).toBe('たった今');
   });
 
   it('タブが隠れているあいだは回さず、見えた瞬間に追いつく', () => {
