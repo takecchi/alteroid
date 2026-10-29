@@ -12,8 +12,18 @@ vi.mock('./target.js', async () => {
   };
 });
 
-const { tasksCommand, renderTasks, tasksMigrateCommand, renderMigrationPlan } =
-  await import('./tasks.js');
+const {
+  tasksCommand,
+  renderTasks,
+  tasksMigrateCommand,
+  renderMigrationPlan,
+  tasksShowCommand,
+  tasksAddCommand,
+  tasksCloseCommand,
+  tasksReopenCommand,
+  tasksMoveCommand,
+  tasksEditCommand,
+} = await import('./tasks.js');
 
 let sent: string[] = [];
 let sentCalls: { method: string; url: string; body: string }[] = [];
@@ -41,11 +51,12 @@ beforeEach(() => {
     const rawBody =
       typeof init?.body === 'string'
         ? init.body
-        : method === 'POST' && typeof input !== 'string'
+        : (method === 'POST' || method === 'PATCH') && typeof input !== 'string'
           ? await request.clone().text()
           : '';
     sentCalls.push({ method, url, body: rawBody });
-    const chosen = method === 'POST' && postReply !== null ? postReply : reply;
+    const chosen =
+      (method === 'POST' || method === 'PATCH') && postReply !== null ? postReply : reply;
     return new Response(JSON.stringify(chosen.body), {
       status: chosen.status,
       headers: { 'content-type': 'application/json' },
@@ -325,5 +336,137 @@ describe('renderMigrationPlan', () => {
       unreadableTaskCollisions: [],
     });
     expect(out).toContain('移す行: 無い');
+  });
+});
+
+describe('alteroid tasks show', () => {
+  it('GET /tasks/:id を叩き、全文と編集に使う版を出す', async () => {
+    reply = {
+      status: 200,
+      body: {
+        entry: row({ id: 'abc', body: '長い本文\n二行目', editedAt: '2026-10-02T00:00:00.000Z' }),
+      },
+    };
+    const read = captureStdout();
+    await tasksShowCommand('abc');
+    const out = read();
+    expect(sentCalls[0]?.method).toBe('GET');
+    expect(sentCalls[0]?.url).toContain('/tasks/abc');
+    expect(out).toContain('二行目');
+    expect(out).toContain('版（--if-match）: 2026-10-02T00:00:00.000Z');
+  });
+
+  it('404 は黙らず例外にする', async () => {
+    reply = { status: 404, body: { error: 'not found' } };
+    await expect(tasksShowCommand('x')).rejects.toThrow(/HTTP 404.*not found/);
+  });
+});
+
+describe('alteroid tasks add', () => {
+  it('POST /tasks に題・本文・置き場所・起点を送り、id を出す', async () => {
+    postReply = { status: 200, body: { ok: true, id: 'new-1' } };
+    const read = captureStdout();
+    await tasksAddCommand({ title: '題', body: '本文', front: true, source: 'conv-1' });
+    expect(read()).toContain('new-1');
+    expect(sentCalls[0]?.method).toBe('POST');
+    expect(JSON.parse(sentCalls[0]?.body ?? '{}')).toEqual({
+      title: '題',
+      body: '本文',
+      source: 'conv-1',
+      placement: { kind: 'front' },
+    });
+  });
+
+  it('題か本文が無ければ、通信せずに断る。置き場所を2つ指定しても断る', async () => {
+    await expect(tasksAddCommand({ body: 'b' })).rejects.toThrow(/--title/);
+    await expect(tasksAddCommand({ title: 't' })).rejects.toThrow(/--body/);
+    await expect(
+      tasksAddCommand({ title: 't', body: 'b', front: true, after: 'x' }),
+    ).rejects.toThrow(/1つだけ/);
+    expect(sentCalls).toEqual([]);
+  });
+
+  it('400 は daemon の理由つきで例外にする', async () => {
+    postReply = { status: 400, body: { error: 'placement の anchorId は開いている task に無い' } };
+    await expect(tasksAddCommand({ title: 't', body: 'b', after: 'zz' })).rejects.toThrow(
+      /HTTP 400.*anchorId/,
+    );
+  });
+});
+
+describe('alteroid tasks close / reopen', () => {
+  it('close は POST /tasks/:id/close に status と reason を送る', async () => {
+    postReply = { status: 200, body: { ok: true } };
+    const read = captureStdout();
+    await tasksCloseCommand('abc', { status: 'cancelled', reason: '不要' });
+    expect(read()).toContain('cancelled');
+    expect(sentCalls[0]?.url).toContain('/tasks/abc/close');
+    expect(JSON.parse(sentCalls[0]?.body ?? '{}')).toEqual({ status: 'cancelled', reason: '不要' });
+  });
+
+  it('close は status が done / cancelled でなければ、reason が無ければ、通信せずに断る', async () => {
+    await expect(tasksCloseCommand('a', { status: 'queued', reason: 'r' })).rejects.toThrow(
+      /--status/,
+    );
+    await expect(tasksCloseCommand('a', { status: 'done' })).rejects.toThrow(/--reason/);
+    expect(sentCalls).toEqual([]);
+  });
+
+  it('close の 409（既に閉じている）は例外にする', async () => {
+    postReply = { status: 409, body: { error: 'abc は既に閉じている' } };
+    await expect(tasksCloseCommand('abc', { status: 'done', reason: 'r' })).rejects.toThrow(
+      /HTTP 409.*既に閉じている/,
+    );
+  });
+
+  it('reopen は POST /tasks/:id/reopen に reason を送る。reason が無ければ通信しない', async () => {
+    postReply = { status: 200, body: { entry: row({}) } };
+    const read = captureStdout();
+    await tasksReopenCommand('abc', { reason: 'まだ' });
+    read();
+    expect(sentCalls[0]?.url).toContain('/tasks/abc/reopen');
+    expect(JSON.parse(sentCalls[0]?.body ?? '{}')).toEqual({ reason: 'まだ' });
+    sentCalls = [];
+    await expect(tasksReopenCommand('abc', {})).rejects.toThrow(/--reason/);
+    expect(sentCalls).toEqual([]);
+  });
+});
+
+describe('alteroid tasks move / edit', () => {
+  it('move は POST /tasks/:id/move に placement を送る。置き場所が無ければ通信しない', async () => {
+    postReply = { status: 200, body: { ok: true } };
+    const read = captureStdout();
+    await tasksMoveCommand('abc', { before: 'xyz' });
+    read();
+    expect(sentCalls[0]?.url).toContain('/tasks/abc/move');
+    expect(JSON.parse(sentCalls[0]?.body ?? '{}')).toEqual({
+      placement: { kind: 'before', anchorId: 'xyz' },
+    });
+    sentCalls = [];
+    await expect(tasksMoveCommand('abc', {})).rejects.toThrow(/置き場所/);
+    expect(sentCalls).toEqual([]);
+  });
+
+  it('move の 409（閉じている）は例外にする', async () => {
+    postReply = { status: 409, body: { error: '閉じていて動かせない' } };
+    await expect(tasksMoveCommand('abc', { back: true })).rejects.toThrow(/HTTP 409/);
+  });
+
+  it('edit は PATCH /tasks/:id に、渡した項目だけと ifMatch を送る', async () => {
+    postReply = { status: 200, body: { ok: true } };
+    const read = captureStdout();
+    await tasksEditCommand('abc', { title: '新題', ifMatch: AT });
+    read();
+    expect(sentCalls[0]?.method).toBe('PATCH');
+    expect(JSON.parse(sentCalls[0]?.body ?? '{}')).toEqual({ title: '新題', ifMatch: AT });
+  });
+
+  it('edit は title も body も無ければ通信せずに断る。403 / 409 は例外にする', async () => {
+    await expect(tasksEditCommand('abc', {})).rejects.toThrow(/--title か --body/);
+    expect(sentCalls).toEqual([]);
+    postReply = { status: 403, body: { error: "origin:'self' の行は直せない" } };
+    await expect(tasksEditCommand('abc', { body: 'b' })).rejects.toThrow(/HTTP 403/);
+    postReply = { status: 409, body: { error: 'task が読んだ後に変わっています' } };
+    await expect(tasksEditCommand('abc', { body: 'b', ifMatch: AT })).rejects.toThrow(/HTTP 409/);
   });
 });

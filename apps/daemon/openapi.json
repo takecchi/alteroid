@@ -2703,6 +2703,9 @@
                                 "manager_message",
                                 "commitment_close",
                                 "commitment_reopen",
+                                "task_close",
+                                "task_reopen",
+                                "task_move",
                                 "schedule_remove",
                                 "practice_remove",
                                 "practice_write"
@@ -8469,6 +8472,9 @@
                                       "manager_message",
                                       "commitment_close",
                                       "commitment_reopen",
+                                      "task_close",
+                                      "task_reopen",
+                                      "task_move",
                                       "schedule_remove",
                                       "practice_remove",
                                       "practice_write"
@@ -10737,6 +10743,9 @@
                                 "manager_message",
                                 "commitment_close",
                                 "commitment_reopen",
+                                "task_close",
+                                "task_reopen",
+                                "task_move",
                                 "schedule_remove",
                                 "practice_remove",
                                 "practice_write"
@@ -15284,6 +15293,9 @@
                                         "manager_message",
                                         "commitment_close",
                                         "commitment_reopen",
+                                        "task_close",
+                                        "task_reopen",
+                                        "task_move",
                                         "schedule_remove",
                                         "practice_remove",
                                         "practice_write"
@@ -17417,6 +17429,9 @@
                                         "manager_message",
                                         "commitment_close",
                                         "commitment_reopen",
+                                        "task_close",
+                                        "task_reopen",
+                                        "task_move",
                                         "schedule_remove",
                                         "practice_remove",
                                         "practice_write"
@@ -19550,6 +19565,9 @@
                                       "manager_message",
                                       "commitment_close",
                                       "commitment_reopen",
+                                      "task_close",
+                                      "task_reopen",
+                                      "task_move",
                                       "schedule_remove",
                                       "practice_remove",
                                       "practice_write"
@@ -21674,6 +21692,9 @@
                                       "manager_message",
                                       "commitment_close",
                                       "commitment_reopen",
+                                      "task_close",
+                                      "task_reopen",
+                                      "task_move",
                                       "schedule_remove",
                                       "practice_remove",
                                       "practice_write"
@@ -26433,6 +26454,11 @@
                           "keep": {
                             "type": "boolean",
                             "const": true
+                          },
+                          "editedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                           }
                         },
                         "required": [
@@ -26504,6 +26530,129 @@
             }
           }
         ]
+      },
+      "post": {
+        "operationId": "postTasks",
+        "tags": ["tasks"],
+        "summary": "task を積む",
+        "description": "クローンの `task_add` と同じものを人間の手から。**積むだけで、クローンのターンは起こさない**（いま考えさせたいなら `POST /chat` か `POST /events`）。`origin` は `human` で固定、id と時刻はここで振る。`placement` を省くと既定の置き場所（開いている human 起点の最後の直後）で、指すなら `{ kind: front | back | before | after, anchorId? }`（before / after は開いている task の id が要る）。`source` を渡すと起点の会話の id として `source` と `originConversationId` の両方に入る（台帳の `POST /commitments` の `source` と同じ扱い。無ければ付けない）。",
+        "responses": {
+          "200": {
+            "description": "積んだ。返る id が閉じる・動かすときの宛先になる。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["ok", "id"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正（`title` は一行・200字まで・空白だけは不可、`body` は空にできない）、または `placement` の基準が開いている task に無い（何も積んでいない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "body": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "source": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "placement": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "front"
+                          }
+                        },
+                        "required": ["kind"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "back"
+                          }
+                        },
+                        "required": ["kind"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "before"
+                          },
+                          "anchorId": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": ["kind", "anchorId"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "after"
+                          },
+                          "anchorId": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": ["kind", "anchorId"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["title", "body"]
+              }
+            }
+          }
+        }
       }
     },
     "/tasks/migration-plan": {
@@ -27336,6 +27485,872 @@
             }
           }
         }
+      }
+    },
+    "/tasks/{id}": {
+      "get": {
+        "operationId": "getTasksById",
+        "tags": ["tasks"],
+        "summary": "task を1件、全文で読む",
+        "description": "task の1行を、`title`・`body` を切らずに返す（`GET /tasks` と同じ形の行）。並びの位置は一覧の `entries` の順で見る。",
+        "responses": {
+          "200": {
+            "description": "task の1行。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entry": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": ["queued", "waiting", "needs_decision", "done", "cancelled"]
+                        },
+                        "origin": {
+                          "type": "string",
+                          "enum": ["human", "manager", "external", "self"]
+                        },
+                        "source": {
+                          "type": "string"
+                        },
+                        "originConversationId": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "body": {
+                          "type": "string"
+                        },
+                        "closedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "closedReason": {
+                          "type": "string"
+                        },
+                        "closedBy": {
+                          "description": "既知の値は 'clone' | 'human' | 'daemon'（taskClosedBySchema）。未知の値も保持する。",
+                          "type": "string"
+                        },
+                        "keep": {
+                          "type": "boolean",
+                          "const": true
+                        },
+                        "editedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "createdAt",
+                        "updatedAt",
+                        "status",
+                        "origin",
+                        "title",
+                        "body"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["entry"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当する行が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "行は在るが、読めない形で入っている（消されたのではない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patchTasksById",
+        "tags": ["tasks"],
+        "summary": "task の title / body を後から直す",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "body": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ifMatch": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "description": "編集できるのは `origin` が `human` でまだ閉じていない行の `title` と `body`（どちらか1つ以上）だけ。クローン（`self`）やマネージャー（`manager`）・外部（`external`）が立てた行は人間からは直せない。状態・並び・起点・閉じた記録は変わらない。編集の前後の本文は日誌（`decision`）へ逐語で残る。日誌を先に書き、書けなければ書き直さずに 500。任意の `ifMatch`（`GET /tasks` で読んだ行の `editedAt ?? createdAt`）を付けると、版が違うときは書かずに 409。省略は後勝ち。",
+        "responses": {
+          "200": {
+            "description": "直した。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正（`title` は一行・200字まで・空白だけは不可、`body` は空にできない、どちらも無いのも不可）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "origin が human ではない——クローン・マネージャー・外部が立てた行は人間からは直せない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その id は task に無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "次の3つ。(1) 既に閉じている。(2) 行が読めない形で入っている（書き直さない）。(3) `ifMatch` がいまの版と違う（何も書いていない。`current` にいまの行を返す。(3) だけが `current` の鍵を持つ）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "current": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "createdAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            "updatedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": ["queued", "waiting", "needs_decision", "done", "cancelled"]
+                            },
+                            "origin": {
+                              "type": "string",
+                              "enum": ["human", "manager", "external", "self"]
+                            },
+                            "source": {
+                              "type": "string"
+                            },
+                            "originConversationId": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            },
+                            "body": {
+                              "type": "string"
+                            },
+                            "closedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            "closedReason": {
+                              "type": "string"
+                            },
+                            "closedBy": {
+                              "description": "既知の値は 'clone' | 'human' | 'daemon'（taskClosedBySchema）。未知の値も保持する。",
+                              "type": "string"
+                            },
+                            "keep": {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            "editedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "createdAt",
+                            "updatedAt",
+                            "status",
+                            "origin",
+                            "title",
+                            "body"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["error", "current"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**書き直していない**。行の本文は元のまま）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/tasks/{id}/close": {
+      "post": {
+        "operationId": "postTasksByIdClose",
+        "tags": ["tasks"],
+        "summary": "task を閉じる（done か cancelled）",
+        "description": "クローンの `task_set_status` で done / cancelled にするのと同じものを人間の手から。`status` は `done`（終わった）か `cancelled`（取りやめた）、`reason` は必須で、人間はこれを読んで後から否定する。`closedBy` は `human`。行は消さない（閉じた行は `GET /tasks?includeClosed=true` で見える）。日誌を先に書き、書けなければ閉じずに 500 を返す。効いた後に、人間の操作の印（`humanAction.kind = task_close`）を持つ行を足す。",
+        "responses": {
+          "200": {
+            "description": "閉じた。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正（`status` は done か cancelled、`reason` は空にできない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その id は task に無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "既に閉じている（いつ・どう閉じたかを本文に入れて返す。done と cancelled の付け替えもここで断る）。行が読めない形で入っている（書き直さない）。または閉じる直前に状態が変わって閉じられなかった。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "閉じる前の日誌が書けなかった（**閉じていない**）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": ["done", "cancelled"]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["status", "reason"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/tasks/{id}/reopen": {
+      "post": {
+        "operationId": "postTasksByIdReopen",
+        "tags": ["tasks"],
+        "summary": "閉じた task を queued へ開き直す",
+        "description": "閉じた task（done / cancelled）を名指しして `queued` へ戻す。作成時刻・起点・本文はそのままで、`closedAt` / `closedReason` / `closedBy` が外れ、開いている human 起点の最後の直後（既定の置き場所）に並び直す。`reason` は必須で、開き直す前の閉じた記録とともに日誌（`decision`）へ逐語で残る。日誌を先に書き、書けなければ開き直さずに 500。効いた後に、人間の操作の印（`humanAction.kind = task_reopen`）を持つ行を足す。",
+        "responses": {
+          "200": {
+            "description": "開き直した。開いている一覧に戻る。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entry": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": ["queued", "waiting", "needs_decision", "done", "cancelled"]
+                        },
+                        "origin": {
+                          "type": "string",
+                          "enum": ["human", "manager", "external", "self"]
+                        },
+                        "source": {
+                          "type": "string"
+                        },
+                        "originConversationId": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "body": {
+                          "type": "string"
+                        },
+                        "closedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "closedReason": {
+                          "type": "string"
+                        },
+                        "closedBy": {
+                          "description": "既知の値は 'clone' | 'human' | 'daemon'（taskClosedBySchema）。未知の値も保持する。",
+                          "type": "string"
+                        },
+                        "keep": {
+                          "type": "boolean",
+                          "const": true
+                        },
+                        "editedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "createdAt",
+                        "updatedAt",
+                        "status",
+                        "origin",
+                        "title",
+                        "body"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["entry"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正（`reason` は空にできない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その id は task に無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "まだ閉じていない（何もしない）。行が読めない形で入っている（書き直さない）。または開き直す直前に状態が変わった。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**開き直していない**。行は閉じたまま）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["reason"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/tasks/{id}/move": {
+      "post": {
+        "operationId": "postTasksByIdMove",
+        "tags": ["tasks"],
+        "summary": "開いている task の並びを変える",
+        "description": "開いている task を `placement`（`{ kind: front | back | before | after, anchorId? }`。before / after は開いている別の task の id）へ動かす。先頭が先にやるもの。閉じた task は並びから外れているので動かせない（開き直すなら `POST /tasks/{id}/reopen`）。優先度・締切の数値は持たない。日誌を先に書き、動かせなければ打ち消す。効いた後に、人間の操作の印（`humanAction.kind = task_move`）を持つ行を足す。",
+        "responses": {
+          "200": {
+            "description": "動かした。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正、または基準（`anchorId`）が開いている task に無い・自分自身を基準にした（何も動かしていない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その id は task に無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "閉じていて動かせない。行が読めない形で入っている。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "動かす前の日誌が書けなかった（**動かしていない**）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "placement": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "front"
+                          }
+                        },
+                        "required": ["kind"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "back"
+                          }
+                        },
+                        "required": ["kind"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "before"
+                          },
+                          "anchorId": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": ["kind", "anchorId"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "after"
+                          },
+                          "anchorId": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": ["kind", "anchorId"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["placement"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
       }
     },
     "/commitments/{id}": {

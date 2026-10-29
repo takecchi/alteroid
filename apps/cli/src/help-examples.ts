@@ -38,6 +38,29 @@ export const HELP_EXAMPLES = {
     'alteroid tasks                          # 開いている task を、先にやる順に',
     'alteroid tasks --all                    # 閉じた task も後ろに足す',
   ),
+  tasksShow: examples(
+    'alteroid tasks show <id>                # 全文と、編集の --if-match に使う版を見る（閉じた行も）',
+  ),
+  tasksAdd: examples(
+    'alteroid tasks add --title 直す --body "手順は…"                 # 既定の置き場所に積む（human 起点。クローンは起こさない）',
+    'alteroid tasks add --title 急ぎ --body "…" --front               # 先頭へ',
+    'alteroid tasks add --title 次 --body "…" --after <id>            # 開いている task の直後へ',
+  ),
+  tasksClose: examples(
+    'alteroid tasks close <id> --status done --reason "直した"        # 終わった',
+    'alteroid tasks close <id> --status cancelled --reason "不要に"   # 取りやめた',
+  ),
+  tasksReopen: examples(
+    'alteroid tasks reopen <id> --reason "まだ残っていた"             # 閉じた task を queued へ戻す',
+  ),
+  tasksMove: examples(
+    'alteroid tasks move <id> --front        # 先頭へ',
+    'alteroid tasks move <id> --before <id2> # 開いている別の task の直前へ',
+  ),
+  tasksEdit: examples(
+    'alteroid tasks edit <id> --title 新しい題                        # 題だけ直す',
+    'alteroid tasks edit <id> --body "…" --if-match <版>              # show で読んだ版が変わっていれば書かずに断る',
+  ),
   tasksMigrate: examples(
     'alteroid tasks migrate --dry-run        # 台帳のどれが task になり、どれが畳まれるかを見る（何も書かない）',
     'alteroid tasks migrate                  # 同じ計画を出して止まる（--yes が無いので何も書かない）',

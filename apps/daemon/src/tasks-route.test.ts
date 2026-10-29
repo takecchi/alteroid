@@ -270,9 +270,9 @@ describe('GET /tasks（読むだけの口）', () => {
     expect((await get('/tasks?includeClosed=yes')).status).toBe(400);
   });
 
-  it('書く口は HTTP に無い（P2 は読むだけ）。移行の計画の口にも書く動詞は無い', async () => {
+  it('移行の計画の口に書く動詞は無い（POST / PUT / DELETE は 404。PATCH は P7c-1 で `/tasks/:id` が持つ）', async () => {
     const { app } = setup();
-    for (const method of ['POST', 'PATCH', 'PUT', 'DELETE']) {
+    for (const method of ['POST', 'PUT', 'DELETE']) {
       const response = await app.request('/tasks/migration-plan', {
         method,
         headers: { authorization: 'Bearer test-token', 'content-type': 'application/json' },
@@ -282,9 +282,9 @@ describe('GET /tasks（読むだけの口）', () => {
     }
   });
 
-  it('書く口は HTTP に無い（P2 は読むだけ）', async () => {
+  it('`/tasks` の集合に PATCH / PUT / DELETE は無い（POST は P7c-1 で積む口になった）', async () => {
     const { app } = setup();
-    for (const method of ['POST', 'PATCH', 'PUT', 'DELETE']) {
+    for (const method of ['PATCH', 'PUT', 'DELETE']) {
       const response = await app.request('/tasks', {
         method,
         headers: { authorization: 'Bearer test-token', 'content-type': 'application/json' },

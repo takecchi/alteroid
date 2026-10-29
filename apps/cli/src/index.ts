@@ -90,7 +90,23 @@ import {
   tokenRemoveUnreadableCommand,
 } from './token.js';
 import { progressCommand } from './progress.js';
-import { tasksCommand, tasksMigrateCommand } from './tasks.js';
+import {
+  tasksAddCommand,
+  tasksCloseCommand,
+  tasksCommand,
+  tasksEditCommand,
+  tasksMigrateCommand,
+  tasksMoveCommand,
+  tasksReopenCommand,
+  tasksShowCommand,
+} from './tasks.js';
+import type {
+  TaskPlacementOptions,
+  TasksAddOptions,
+  TasksCloseOptions,
+  TasksEditOptions,
+  TasksReopenOptions,
+} from './tasks.js';
 import type { AttachmentsListOptions } from './attachments.js';
 import { HELP_EXAMPLES } from './help-examples.js';
 import { describeCliVersion } from './version.js';
@@ -397,7 +413,9 @@ program
 const tasksProgram = program
   .command('tasks')
   .addHelpText('after', HELP_EXAMPLES.tasks)
-  .description('task（順序と状態を持つ待ち行列）を、並び順に見る（読むだけ）')
+  .description(
+    'task（順序と状態を持つ待ち行列）を、並び順に見る。書くのは show / add / close / reopen / move / edit',
+  )
   .option('--all', '閉じた task（done / cancelled）も後ろに足す')
   .action(async (options: { all?: boolean }) => {
     await tasksCommand(options);
@@ -413,6 +431,73 @@ tasksProgram
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (options: { dryRun?: boolean; yes?: boolean }) => {
     await tasksMigrateCommand(options);
+  });
+
+// 人間が task を書く口（#5469 P7c-1）。HTTP の口と1対1
+const placementOption = (command: Command): Command =>
+  command
+    .option('--front', '先頭へ（先にやるもの）')
+    .option('--back', '最後へ')
+    .option('--before <id>', '開いている別の task の直前へ')
+    .option('--after <id>', '開いている別の task の直後へ');
+
+tasksProgram
+  .command('show <id>')
+  .addHelpText('after', HELP_EXAMPLES.tasksShow)
+  .description('task を1件、全文で見る（閉じた行も。編集の --if-match に使う版も出す）')
+  .action(async (id: string) => {
+    await tasksShowCommand(id);
+  });
+
+placementOption(
+  tasksProgram
+    .command('add')
+    .addHelpText('after', HELP_EXAMPLES.tasksAdd)
+    .description('task を積む（積むだけで、クローンのターンは起こさない）')
+    .requiredOption('--title <text>', '題（一行・200字まで）')
+    .requiredOption('--body <text>', '本文')
+    .option('--source <conversationId>', '起点の会話の id'),
+).action(async (options: TasksAddOptions) => {
+  await tasksAddCommand(options);
+});
+
+tasksProgram
+  .command('close <id>')
+  .addHelpText('after', HELP_EXAMPLES.tasksClose)
+  .description('task を閉じる（done か cancelled。理由は必須。行は消えない）')
+  .requiredOption('--status <status>', 'done（終わった）か cancelled（取りやめた）')
+  .requiredOption('--reason <text>', '閉じる理由')
+  .action(async (id: string, options: TasksCloseOptions) => {
+    await tasksCloseCommand(id, options);
+  });
+
+tasksProgram
+  .command('reopen <id>')
+  .addHelpText('after', HELP_EXAMPLES.tasksReopen)
+  .description('閉じた task を queued へ開き直す（理由は必須）')
+  .requiredOption('--reason <text>', '開き直す理由')
+  .action(async (id: string, options: TasksReopenOptions) => {
+    await tasksReopenCommand(id, options);
+  });
+
+placementOption(
+  tasksProgram
+    .command('move <id>')
+    .addHelpText('after', HELP_EXAMPLES.tasksMove)
+    .description('開いている task の並びを変える（置き場所を1つ指定する）'),
+).action(async (id: string, options: TaskPlacementOptions) => {
+  await tasksMoveCommand(id, options);
+});
+
+tasksProgram
+  .command('edit <id>')
+  .addHelpText('after', HELP_EXAMPLES.tasksEdit)
+  .description('human 起点で開いている task の題・本文を直す（編集前の本文は日誌に残る）')
+  .option('--title <text>', '新しい題')
+  .option('--body <text>', '新しい本文')
+  .option('--if-match <version>', '`tasks show` で読んだ版。違えば書かずに断る')
+  .action(async (id: string, options: TasksEditOptions) => {
+    await tasksEditCommand(id, options);
   });
 
 const inboxCommand = program

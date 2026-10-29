@@ -631,6 +631,15 @@ export const taskListResponseSchema = z.object({
   unreadable: z.array(unreadableTaskSchema),
 });
 
+// 1件を全文で読む口（`GET /tasks/{id}`）。一覧と同じ形の行を `entry` に入れる（本文は一覧も切らない）
+export const taskDetailResponseSchema = z.object({ entry: taskSchema });
+
+// 返さないと閉じられない: 閉じる・動かす口は id を取るので、返さないと人間は積めるが自分で閉じられない片道の口になる
+export const taskAddedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
+
+// `current` は読んだ後に変わった行。`ifMatch` の版は `editedAt ?? createdAt`
+export const taskConflictResponseSchema = z.object({ error: z.string(), current: taskSchema });
+
 // 台帳→Task の移行（#5469 P7）。計画（dry-run。P7a）と、指紋つきの実行（P7b）。
 // 行ごとの本文は載せない（タイトルと id だけ。全文は台帳に在る）。読めない台帳の行は id だけで、理由も出さない。
 const taskMigrationCountsSchema = z.object({
