@@ -95,7 +95,8 @@ export interface CodexUsageForPricing {
 
 const PER_MILLION = 1_000_000;
 
-function isCount(n: unknown): n is number {
+/** 使用量の欄が数として読めるか（0 以上の有限の数。端数も読む）。台帳への写し（`codex-usage-ledger.ts`）も同じ判定を使う。 */
+export function isCount(n: unknown): n is number {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0;
 }
 

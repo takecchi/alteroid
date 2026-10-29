@@ -1,6 +1,7 @@
 import {
   computeCodexAggregatedCostUSD,
   computeCodexRequestsCostUSD,
+  isCount,
   type CodexUsageForPricing,
 } from './codex-pricing.js';
 import type { UsageTotals } from './usage.js';
@@ -9,10 +10,6 @@ import type { UsageUnreadableCounts } from './usage-format.js';
 export type CodexUsageInput =
   | { kind: 'requests'; requests: readonly CodexUsageForPricing[] }
   | { kind: 'aggregated'; usage: CodexUsageForPricing };
-
-function isCount(n: unknown): n is number {
-  return typeof n === 'number' && Number.isFinite(n) && n >= 0;
-}
 
 export function codexUsageToLedgerTotals(
   model: string | undefined,
