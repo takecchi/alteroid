@@ -1,26 +1,12 @@
 // キーワードと参照のあいだにコロン無しの空白（`Closes #10`）もコロン（`Closes: #10`）も許す、`GH-123` と issue URL も拾う: GitHub が閉じる形の見逃しのほうが実害があるため。
 // コード・引用・HTML コメントの中を安全とは扱わない: GitHub はバッククォートで囲んだ形でも閉じるため。
-// タイトル・本文・コミットメッセージのどれかが読めなかったら赤くする（`unreadable`）: 「無い」と区別するため。
-// repo のファイルも git の履歴も走査しない: この門のテストの fixture が逐語を持つため、走査すると自己参照で誤検出する。
-
-export const CLOSING_KEYWORDS = [
-  'close',
-  'closes',
-  'closed',
-  'fix',
-  'fixes',
-  'fixed',
-  'resolve',
-  'resolves',
-  'resolved',
-];
 
 const KEYWORD_ALTERNATION = 'closed|closes|close|fixed|fixes|fix|resolved|resolves|resolve';
 const KEYWORD_SOURCE = `\\b(?:${KEYWORD_ALTERNATION})\\b`;
 
 const GAP_SOURCE = '(?:\\s*:\\s*|\\s+)';
 
-export const REFERENCE_SOURCE =
+const REFERENCE_SOURCE =
   '(?:https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/\\d+' +
   '|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\\d+' +
   '|GH-\\d+' +
