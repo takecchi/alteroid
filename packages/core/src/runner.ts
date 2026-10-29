@@ -264,6 +264,7 @@ import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
 import { WorkerToolWatch, type WorkerToolWatchClock } from './runner-worker-tool-watch.js';
+import { RunnerFenceError } from './runner-protocol.js';
 import type {
   RunnerAnswerCommand,
   RunnerAnswerOutcome,
@@ -531,6 +532,8 @@ export interface RunnerHostOptions {
   codexHome?: string;
   codexAuthCheckIntervalMs?: number;
   attachmentsRoot?: string;
+  // 閉じた担当の lease の世代を覚える数の上限。省略は `FENCE_MEMORY_MAX`。主にテスト用
+  fenceMemoryMax?: number;
   // 別口で受ける1つの大きいファイルの最大バイト（#4128 段3a）。省略は `readRunnerAttachmentStageLimit(env)`。主にテスト用
   attachmentStageLimit?: number;
   // 出し箱（担い手 → クローンへのファイルの受け渡し。`runner-outbox.ts`）。置き場は下りの添付と同じ作法で、テストで差し替える
@@ -847,6 +850,9 @@ class Host implements RunnerHost {
   #attachmentPruning: Promise<void> | null = null;
   #outboxPruning: Promise<void> | null = null;
   readonly #knownManagerIds = new Set<string>();
+  // 担当ごとに受け入れた lease の最大の世代。セッションが閉じても消さない: 世代の確かめはセッション単位で、閉じると古い世代の起こし直しが素通しになるため（#5507）
+  readonly #fenceMemory = new Map<string, number>();
+  readonly #fenceMemoryMax: number;
   // `knownTerminated` を固定の集合として持たない: resume で同じ `managerId` が戻っても古い pid が「終端済み」のままになるため
   readonly #liveDelegationPids = new Set<number>();
   readonly #pidOwnerManagerId = new Map<number, string>();
@@ -911,6 +917,7 @@ class Host implements RunnerHost {
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
     this.#attachmentsRoot = options.attachmentsRoot ?? defaultRunnerAttachmentsRoot();
+    this.#fenceMemoryMax = options.fenceMemoryMax ?? FENCE_MEMORY_MAX;
     this.attachmentStageLimit =
       options.attachmentStageLimit ?? readRunnerAttachmentStageLimit(this.#env);
     this.#outboxRoot = options.outboxRoot ?? defaultRunnerOutboxRoot();
@@ -1702,6 +1709,27 @@ class Host implements RunnerHost {
     return session;
   }
 
+  // 新しいセッションを作る前に比べる: 作ってから断ると CLI を開いて閉じる無駄が出る。lease を伴わない命令は判定しない（`checkFence` と同じ）
+  #checkRememberedFence(managerId: string, lease: RunnerLease | undefined): void {
+    if (lease === undefined) return;
+    const remembered = this.#fenceMemory.get(managerId);
+    if (remembered !== undefined && lease.fence < remembered) {
+      throw new RunnerFenceError({ managerId, expected: remembered, given: lease.fence });
+    }
+  }
+
+  // 受け入れた後に覚える（断った命令は覚えない）。入れ直して新しさの順を保ち、上限を超えたら最も古い担当から落とす
+  #rememberFence(managerId: string, lease: RunnerLease | undefined): void {
+    if (lease === undefined) return;
+    const fence = Math.max(lease.fence, this.#fenceMemory.get(managerId) ?? lease.fence);
+    this.#fenceMemory.delete(managerId);
+    this.#fenceMemory.set(managerId, fence);
+    if (this.#fenceMemory.size > this.#fenceMemoryMax) {
+      const oldest = this.#fenceMemory.keys().next().value;
+      if (oldest !== undefined) this.#fenceMemory.delete(oldest);
+    }
+  }
+
   async start(command: RunnerStartCommand): Promise<{ cwd: string; sessionGeneration: string }> {
     if (this.#sessions.has(command.managerId)) {
       throw new Error(`${command.managerId} は既に走っている`);
@@ -1712,9 +1740,11 @@ class Host implements RunnerHost {
     if (this.#sessions.has(command.managerId)) {
       throw new Error(`${command.managerId} は既に走っている`);
     }
+    this.#checkRememberedFence(command.managerId, command.lease);
     const session = this.#create(command.managerId, command.request, command.cwd);
     try {
       session.checkFence(command.lease);
+      this.#rememberFence(command.managerId, command.lease);
       session.begin(input.text, input.images);
     } catch (error) {
       this.#sessions.delete(command.managerId);
@@ -1734,6 +1764,7 @@ class Host implements RunnerHost {
     for (;;) {
       if (alive) {
         alive.checkFence(command.lease);
+        this.#rememberFence(command.managerId, command.lease);
         let current: RunnerSession | undefined = alive;
         while (current !== undefined) {
           if (!current.stopping) {
@@ -1781,10 +1812,13 @@ class Host implements RunnerHost {
       }
       // `#create` が消す戻り待ちの印を覚えておく: 開けずに名簿から外すとき、failed / lost の後の守りを元に戻すため（#5168）
       const awaitedSince = this.#returnAwaitedSince.get(command.managerId);
+      // 閉じた後の古い世代の起こし直しをここで断る（#5507）: 新しいセッションの `checkFence` は `#fence` が未設定で何でも通すため、持ち越しはこの Map が受け持つ
+      this.#checkRememberedFence(command.managerId, command.lease);
       const session = this.#create(command.managerId, command.request, command.cwd);
       let parked: ParkedPeers | undefined;
       try {
         session.checkFence(command.lease);
+        this.#rememberFence(command.managerId, command.lease);
         // 鍵の付け替えで預けた peer を引き継ぐ（#4734）。組む道具が新しい窓口を作らないよう resume の前に渡し、預かった知らせは resume の後に回す
         parked = this.#takeParkedPeers(command.managerId);
         if (parked !== undefined) session.adoptPeers(parked);
@@ -2265,6 +2299,10 @@ class Host implements RunnerHost {
 
 // task id → 作業者を呼んだ tool_use id の対応を覚える数の上限。超えたら古いものから捨てる（#4996）
 const TASK_TOOL_USE_IDS_MAX = 1_000;
+
+// 閉じた担当の lease の世代を覚える数の上限（#5507）。1件は数値1つで、超えたら最も古い担当から忘れる: 古い担当ほど古い世代の命令が今さら届く見込みが薄く、
+// 忘れた担当は今までどおり（世代を覚えるだけで拒まない）に戻るだけで、誤って断る側には倒れない
+const FENCE_MEMORY_MAX = 10_000;
 
 // 送ったまま取られていない出し箱・預かりを覚える数の上限（#4912）
 const EMITTED_PICKUPS_MAX = 10_000;
