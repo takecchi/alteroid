@@ -283,6 +283,61 @@ export function setTaskRowKeep(
   };
 }
 
+/** 本文（title / body）の「版」。`editedAt ?? createdAt`（`commitmentBodyVersion` と同じ作り）。`updatedAt` は状態の更新で動くので本文の版に使えない。 */
+export function taskBodyVersion(task: Pick<Task, 'createdAt' | 'editedAt'>): string {
+  return task.editedAt ?? task.createdAt;
+}
+
+export interface TaskEditPatch {
+  readonly title?: string;
+  readonly body?: string;
+}
+
+export interface EditTaskOptions {
+  /** 編集の時刻。`editedAt` に入る。 */
+  readonly at: string;
+  /** 読んだ版（`taskBodyVersion`）。合わなければ何も書かず `conflict`。省略は後勝ち。 */
+  readonly ifMatch?: string;
+}
+
+export type TaskEditResult =
+  /** `before` は書き換える前の行。編集の前の本文は行に残らないので、日誌へ逐語で残す材料はここにしか無い。 */
+  | { readonly kind: 'edited'; readonly before: Task; readonly task: Task }
+  /** 閉じた行は直さない（閉じた記録の本文を後から書き換えると、何を片付けたかが追えなくなる）。 */
+  | { readonly kind: 'closed'; readonly task: Task }
+  | { readonly kind: 'conflict'; readonly current: Task }
+  | { readonly kind: 'not-found' };
+
+/**
+ * title / body だけを書き換える。`status` / `updatedAt` / 並び / 起点 / 閉じた記録には触れない。
+ * 版の比較と書き込みは1操作（読んでから書く形にしない）: 3実装が同じ排他の中でこれを呼ぶ。
+ */
+export function editTaskRow(
+  rows: readonly TaskRow[],
+  id: string,
+  patch: TaskEditPatch,
+  options: EditTaskOptions,
+): { rows: TaskRow[]; result: TaskEditResult } {
+  const target = rows.find((row) => row.task.id === id);
+  if (target === undefined) return { rows: [...rows], result: { kind: 'not-found' } };
+  if (isTaskClosed(target.task.status)) {
+    return { rows: [...rows], result: { kind: 'closed', task: target.task } };
+  }
+  if (options.ifMatch !== undefined && taskBodyVersion(target.task) !== options.ifMatch) {
+    return { rows: [...rows], result: { kind: 'conflict', current: target.task } };
+  }
+  const next: Task = {
+    ...target.task,
+    ...(patch.title === undefined ? {} : { title: cleanText(patch.title) }),
+    ...(patch.body === undefined ? {} : { body: cleanText(patch.body) }),
+    editedAt: options.at,
+  };
+  return {
+    rows: rows.map((row) => (row === target ? { rank: row.rank, task: next } : row)),
+    result: { kind: 'edited', before: target.task, task: next },
+  };
+}
+
 export interface SetTaskStatusOptions {
   /** 閉じる理由。done / cancelled のときだけ行に残す。 */
   readonly reason?: string;

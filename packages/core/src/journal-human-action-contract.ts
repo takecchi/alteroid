@@ -7,6 +7,9 @@ export type JournalStoreHumanActionContractSubject = Pick<JournalStore, 'append'
 const SAMPLES: readonly HumanAction[] = [
   { kind: 'manager_message', target: 'mgr-1', via: { kind: 'operator', auth: 'operator-token' } },
   { kind: 'commitment_close', target: 'c-1', via: { kind: 'operator', auth: 'disabled' } },
+  { kind: 'task_close', target: 't-1', via: { kind: 'operator', auth: 'disabled' } },
+  { kind: 'task_reopen', target: 't-1', via: { kind: 'operator', auth: 'disabled' } },
+  { kind: 'task_move', target: 't-1', via: { kind: 'account', accountId: 'acc-1' } },
   { kind: 'schedule_remove', target: 'daily-x', via: { kind: 'account', accountId: 'acc-1' } },
   { kind: 'practice_remove', target: 'daily', via: { kind: 'account', accountId: 'acc-1' } },
   { kind: 'practice_write', target: 'daily', via: { kind: 'operator', auth: 'operator-token' } },

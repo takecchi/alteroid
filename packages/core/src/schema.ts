@@ -135,6 +135,10 @@ export const humanActionKindSchema = z.enum([
   'manager_message',
   'commitment_close',
   'commitment_reopen',
+  // task（待ち行列）の側の人間の操作（#5469 P7c-1）。`commitment_*` は古い日誌の行を読むために残す。積む・編集は台帳の側にも印が無いので足さない
+  'task_close',
+  'task_reopen',
+  'task_move',
   'schedule_remove',
   'practice_remove',
   'practice_write',
@@ -144,7 +148,7 @@ export type HumanActionKind = z.infer<typeof humanActionKindSchema>;
 
 export const humanActionSchema = z.object({
   kind: humanActionKindSchema,
-  // 委譲の id・台帳の行の id・定期の依頼の kind・やり方の slug。種類ごとに指すものが違うので、型を分けず文字列で持つ
+  // 委譲の id・台帳の行の id・task の id・定期の依頼の kind・やり方の slug。種類ごとに指すものが違うので、型を分けず文字列で持つ
   target: z.string().min(1),
   via: answeredViaSchema,
 });
@@ -1105,6 +1109,9 @@ export const taskSchema = z.object({
   // P5 の `task_keep`（返答しても自動で閉じない印）の欄だけ先に置く。P2 には立てる道具が無い。
   // 後から足すと、欄の無い古い行と区別が付かなくなるので、読める形を先に確定させる
   keep: z.literal(true).optional(),
+  // 人間が title / body を直した時刻（#5469 P7c-1）。本文の版は `editedAt ?? createdAt`（`taskBodyVersion`）。`updatedAt` は状態の更新で動くので版に使えない。
+  // 欄を足すだけで読める形は変わらない（欄の無い古い行は「直していない」）
+  editedAt: isoDateTime.optional(),
 });
 
 export type TaskStatus = z.infer<typeof taskStatusSchema>;

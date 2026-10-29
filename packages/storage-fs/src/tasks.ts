@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import {
   addTaskRow,
+  editTaskRow,
   hasNul,
   listTaskRows,
   moveTaskRow,
@@ -14,7 +15,10 @@ import {
   unreadableTaskSchema,
 } from '@alteroid/core';
 import type {
+  EditTaskOptions,
   SetTaskStatusOptions,
+  TaskEditPatch,
+  TaskEditResult,
   Task,
   TaskAddResult,
   TaskList,
@@ -161,6 +165,15 @@ export class FsTaskStore implements TaskStore {
     return this.#update((file) => {
       this.#throwIfUnreadable(file, id);
       const { rows, result } = setTaskRowKeep(file.rows, id, keep);
+      return { next: { rows, unreadable: file.unreadable }, result };
+    });
+  }
+
+  async edit(id: string, patch: TaskEditPatch, options: EditTaskOptions): Promise<TaskEditResult> {
+    if (hasNul(id)) return { kind: 'not-found' };
+    return this.#update((file) => {
+      this.#throwIfUnreadable(file, id);
+      const { rows, result } = editTaskRow(file.rows, id, patch, options);
       return { next: { rows, unreadable: file.unreadable }, result };
     });
   }

@@ -486,6 +486,8 @@ export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archi
 export {
   TASK_RANK_STEP,
   addTaskRow,
+  editTaskRow,
+  taskBodyVersion,
   isTaskClosed,
   listTaskRows,
   moveTaskRow,
@@ -497,6 +499,9 @@ export {
 } from './task.js';
 export type {
   SetTaskStatusOptions,
+  EditTaskOptions,
+  TaskEditPatch,
+  TaskEditResult,
   TaskAddResult,
   TaskMoveResult,
   TaskSetKeepResult,

@@ -1,5 +1,6 @@
 import {
   addTaskRow,
+  editTaskRow,
   hasNul,
   listTaskRows,
   moveTaskRow,
@@ -11,7 +12,10 @@ import {
   unreadableTaskSchema,
 } from '@alteroid/core';
 import type {
+  EditTaskOptions,
   SetTaskStatusOptions,
+  TaskEditPatch,
+  TaskEditResult,
   Task,
   TaskAddResult,
   TaskList,
@@ -150,6 +154,14 @@ export class PgTaskStore implements TaskStore {
     return this.#mutate((loaded) => {
       this.#throwIfUnreadable(loaded, id);
       return setTaskRowKeep(loaded.rows, id, keep);
+    });
+  }
+
+  async edit(id: string, patch: TaskEditPatch, options: EditTaskOptions): Promise<TaskEditResult> {
+    if (hasNul(id)) return { kind: 'not-found' };
+    return this.#mutate((loaded) => {
+      this.#throwIfUnreadable(loaded, id);
+      return editTaskRow(loaded.rows, id, patch, options);
     });
   }
 

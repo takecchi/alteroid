@@ -18,7 +18,10 @@ import type { CredentialEntry } from './credentials.js';
 import type { McpServers, StoredMcpServers, WriteMcpServersOptions } from './mcp-servers.js';
 import type { PluginInput, PluginSummary, StoredPlugin } from './plugins.js';
 import type {
+  EditTaskOptions,
   SetTaskStatusOptions,
+  TaskEditPatch,
+  TaskEditResult,
   TaskAddResult,
   TaskMoveResult,
   TaskPlacement,
@@ -1288,6 +1291,13 @@ export interface TaskStore {
    * 「続く」の印（`keep`）を立てる／外す（#5469 P5。返答しても自動で閉じない task の印）。状態・並びは動かさない。同じ印の状態は `unchanged`。読めない行は `UnreadableTaskError`。
    */
   setKeep(id: string, keep: boolean): Promise<TaskSetKeepResult>;
+
+  /**
+   * title / body だけを書き換える（#5469 P7c-1。台帳の `editBody` に当たる）。状態・並び・`updatedAt`・起点には触れず、`editedAt` を `options.at` にする。
+   * 閉じた行は `closed`（直さない）。`options.ifMatch`（`taskBodyVersion`）が合わなければ何も書かず `conflict`。比較と書き込みは1操作。
+   * 書き換える前の本文は行に残らない: 呼び出し側は `before` を日誌へ逐語で残すこと。読めない行は `UnreadableTaskError`。
+   */
+  edit(id: string, patch: TaskEditPatch, options: EditTaskOptions): Promise<TaskEditResult>;
 
   /** 全件を消す（ワークスペースのリセット専用）。読めない行も含め、消した件数を返す。 */
   clear(): Promise<number>;

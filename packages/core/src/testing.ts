@@ -158,6 +158,7 @@ import {
   moveTaskRow,
   prepareTask,
   setTaskRowKeep,
+  editTaskRow,
   setTaskRowStatus,
   type TaskRow,
 } from './task.js';
@@ -936,6 +937,16 @@ export function createMemoryStores(): Stores {
       const { rows, result } = setTaskRowKeep(taskRows, id, keep);
       taskRows = rows;
       return result.kind === 'not-found' ? result : { ...result, task: isolate(result.task) };
+    },
+    async edit(id, patch, options) {
+      const { rows, result } = editTaskRow(taskRows, id, patch, options);
+      taskRows = rows;
+      if (result.kind === 'edited') {
+        return { ...result, before: isolate(result.before), task: isolate(result.task) };
+      }
+      if (result.kind === 'closed') return { ...result, task: isolate(result.task) };
+      if (result.kind === 'conflict') return { ...result, current: isolate(result.current) };
+      return result;
     },
     async clear() {
       const removed = taskRows.length;
