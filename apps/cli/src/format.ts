@@ -1,6 +1,13 @@
 export { formatElapsedAgo } from '@alteroid/core/cli-light';
+import { codePointBoundary } from '@alteroid/core/cli-light';
 import { redactError } from './redact.js';
 import { describeAuthFailure, type Target } from './target.js';
+
+// 伏せ字をここで掛けない: 呼び手ごとに `redactBody` と `sanitizeForTerminal` のどちらを掛けるかが違うため
+export function oneLine(text: string, limit: number): string {
+  const single = text.replace(/\s+/g, ' ').trim();
+  return single.length > limit ? `${single.slice(0, codePointBoundary(single, limit))}…` : single;
+}
 
 export async function errorReason(response: {
   json: () => Promise<unknown>;

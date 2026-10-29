@@ -3,6 +3,7 @@ import { codePointBoundary } from '@alteroid/core/cli-light';
 import type { JournalEntry } from '@alteroid/core';
 
 import { JOURNAL_DETAIL_CHARS } from './journal-window.js';
+import { oneLine } from '../format.js';
 import { redactBody, sanitizeForTerminal } from '../redact.js';
 
 export type JournalType = JournalEntry['type'];
@@ -17,11 +18,6 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
   }
   const unknown: { type: string } = entry;
   return sanitizeForTerminal(`（この画面が知らない種別: ${unknown.type}）`);
-}
-
-export function oneLine(text: string, limit: number): string {
-  const single = text.replace(/\s+/g, ' ').trim();
-  return single.length > limit ? `${single.slice(0, codePointBoundary(single, limit))}…` : single;
 }
 
 // 一覧 1 行の要旨に字数の上限を置く: 長い本文を毎フレーム渡さないため
