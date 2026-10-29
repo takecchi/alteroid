@@ -22,11 +22,13 @@ import type {
   AgentSessionStartRecord,
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
+import { NO_CAPABILITIES, missingRequirementCapabilities } from './agent-ports.js';
 import {
   AUTO_COMPACT_WINDOW_ENV_KEY,
   buildCloneDistillOptions,
   buildCloneSessionOptions,
   buildManagerSessionOptions,
+  CLAUDE_PROVIDER,
   DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
   foldClaudeMessage,
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
@@ -48,6 +50,18 @@ function only(message: SDKMessage): AgentEvent {
   expect(events).toHaveLength(1);
   return events[0]!;
 }
+
+describe('CLAUDE_PROVIDER（能力の申告）', () => {
+  it('CLAUDE_PROVIDER.capabilities のキーは AgentCapabilities の全キーと一致する（番人）', () => {
+    expect(Object.keys(CLAUDE_PROVIDER.capabilities).sort()).toEqual(
+      Object.keys(NO_CAPABILITIES).sort(),
+    );
+  });
+
+  it('Claude は要件を担う能力を欠かない', () => {
+    expect(missingRequirementCapabilities(CLAUDE_PROVIDER.capabilities)).toEqual([]);
+  });
+});
 
 describe('foldClaudeMessage — system', () => {
   it('init はセッションの開始と実行時の事実になる', () => {
