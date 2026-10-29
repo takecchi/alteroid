@@ -42,21 +42,26 @@ export interface ReclaimObservation {
 export interface ReclaimScanOptions {
   // 降ろす UID が分からない器では観測しない: 常設物と alteroid の子を所有 UID で分けられず、候補が `ppid == 1` の全部になるため。
   childUid: number;
-  reap?: ReclaimReapOptions;
-  sessions?: ReclaimSessionView;
+  // `reclaim` は撃つ。`observe` は、委譲が0本のときの全員（`fireNoDelegations`）を撃たずに `observeOnly` へ数える。
+  mode: ReclaimMode;
+  view: ReclaimSessionView;
   // 起動時に決まった委譲の引き取り手（`delegationSubreaperOf`）。`null` は探したが無かった。省略は「観測に載せない」。
   delegationSubreaper?: string | null;
 }
 
-export type ReclaimSessionView = Pick<
-  ReclaimReapOptions,
-  | 'liveSessionPidsOf'
-  | 'knownTerminatedSessionPidsOf'
-  | 'ownerListedSessionPidsOf'
-  | 'abandonedOwnerListedSessionPidsOf'
-  | 'anyTrackedDelegationsOf'
-  | 'graceMs'
->;
+export interface ReclaimSessionView {
+  // 値ではなく関数で受ける: `TaskBreakdownReader` は1度だけ構築されて走り続け、値だと起動時点の空集合に固定されるため。
+  liveSessionPidsOf: () => ReadonlySet<number>;
+  // runner プロセスを跨いで持ち越さない: 作り直し直後の古い孤児は「記憶に無い」側に落とし、撃たないため。
+  knownTerminatedSessionPidsOf: () => ReadonlySet<number>;
+  // 持ち主が名簿に居るので `knownTerminated` に入れていない CLI の pid。観測の内訳にだけ使い、撃つ判定には渡さない。
+  ownerListedSessionPidsOf: () => ReadonlySet<number>;
+  // `knownTerminated` の部分集合（#5162）: 鍵の付け替えの畳みで背景処理を畳んだだけで、持ち主はまだ名簿に居る（または戻り待ち）委譲の pid。
+  // 引き取り手（tini）を挟む構成では、この sid の木のうち CLI の枝だけを撃つ。空なら絞らない（木を丸ごと撃つ）。
+  abandonedOwnerListedSessionPidsOf: () => ReadonlySet<number>;
+  // `liveSessionPidsOf()` の大きさで代用しない: `childUser` 無しの構成では常に空集合で、生きた委譲があっても分岐1が撃ってしまうため。
+  anyTrackedDelegationsOf: () => boolean;
+}
 
 export interface ReclaimHeldCounts {
   sidUnknown: number;
@@ -80,21 +85,6 @@ export interface ReclaimNotFired {
   };
   held?: ReclaimHeldCounts & { unrecognisedBy?: UnrecognisedOwnerSplit };
   observeOnly?: number;
-}
-
-export interface ReclaimReapOptions {
-  // 値ではなく関数で受ける: `TaskBreakdownReader` は1度だけ構築されて走り続け、値だと起動時点の空集合に固定されるため。
-  liveSessionPidsOf: () => ReadonlySet<number>;
-  // runner プロセスを跨いで持ち越さない: 作り直し直後の古い孤児は「記憶に無い」側に落とし、撃たないため。
-  knownTerminatedSessionPidsOf: () => ReadonlySet<number>;
-  // 持ち主が名簿に居るので `knownTerminated` に入れていない CLI の pid。観測の内訳にだけ使い、撃つ判定には渡さない。省略は「内訳を出さない」（0に潰さない）。
-  ownerListedSessionPidsOf?: () => ReadonlySet<number>;
-  // `knownTerminated` の部分集合（#5162）: 鍵の付け替えの畳みで背景処理を畳んだだけで、持ち主はまだ名簿に居る（または戻り待ち）委譲の pid。
-  // 引き取り手（tini）を挟む構成では、この sid の木のうち CLI の枝だけを撃つ。省略は「絞らない」（今までどおり木を丸ごと撃つ）。
-  abandonedOwnerListedSessionPidsOf?: () => ReadonlySet<number>;
-  // `liveSessionPidsOf()` の大きさで代用しない: `childUser` 無しの構成では常に空集合で、生きた委譲があっても分岐1が撃ってしまうため。省略時は安全側の `true`。
-  anyTrackedDelegationsOf?: () => boolean;
-  graceMs?: number;
 }
 
 export interface TaskBreakdownOptions {
@@ -391,48 +381,40 @@ async function observeReclaim(
   );
 
   // 判定材料は1回だけ取る: BFS の途中で値が動くと、同じ回の中で判定がぶれるため。
-  const view: ReclaimSessionView | undefined = reclaim.reap ?? reclaim.sessions;
-  const liveSessionPids = view?.liveSessionPidsOf() ?? new Set<number>();
-  const knownTerminatedSessionPids = view?.knownTerminatedSessionPidsOf() ?? new Set<number>();
-  const anyTrackedDelegations = view?.anyTrackedDelegationsOf?.() ?? true;
+  const { view, mode } = reclaim;
+  const liveSessionPids = view.liveSessionPidsOf();
+  const knownTerminatedSessionPids = view.knownTerminatedSessionPidsOf();
+  const anyTrackedDelegations = view.anyTrackedDelegationsOf();
   // sid と同じ pid が走査に実在するなら撃たない: pid が使い回されて別の委譲の配下が新しいセッションを開いたか、本人がまだ生きているため。
   const scannedPids = new Set(scanned.map((entry) => entry.pid));
 
-  const attributions =
-    view === undefined
-      ? new Map<number, SidAttribution>()
-      : attributeSids(scanned, liveSessionPids, knownTerminatedSessionPids, deps.lineage);
-  if (view !== undefined) {
-    deps.lineage.clear();
-    for (const entry of scanned) {
-      const attribution = attributions.get(entry.pid);
-      if (attribution === undefined || attribution.source === 'own') continue;
-      deps.lineage.set(entry.pid, { starttime: entry.starttime, sid: attribution.sid });
-    }
+  const attributions = attributeSids(
+    scanned,
+    liveSessionPids,
+    knownTerminatedSessionPids,
+    deps.lineage,
+  );
+  deps.lineage.clear();
+  for (const entry of scanned) {
+    const attribution = attributions.get(entry.pid);
+    if (attribution === undefined || attribution.source === 'own') continue;
+    deps.lineage.set(entry.pid, { starttime: entry.starttime, sid: attribution.sid });
   }
   // 枝は引き取り手（tini）を挟む構成でだけ付ける: 挟まない構成では追跡している pid が CLI そのもので、直の子に枝の区別が無いため。
-  const ownerListedSessionPids = view?.ownerListedSessionPidsOf?.();
-  const abandonedOwnerListedSessionPids =
-    view?.abandonedOwnerListedSessionPidsOf?.() ?? new Set<number>();
+  const ownerListedSessionPids = view.ownerListedSessionPidsOf();
+  const abandonedOwnerListedSessionPids = view.abandonedOwnerListedSessionPidsOf();
   const tiniInUse = typeof reclaim.delegationSubreaper === 'string';
-  if (view !== undefined) {
-    const branches = tiniInUse
-      ? attributeBranches(
-          scanned,
-          new Set([
-            ...liveSessionPids,
-            ...knownTerminatedSessionPids,
-            ...(ownerListedSessionPids ?? []),
-          ]),
-          deps.branches,
-        )
-      : new Map<number, Branch>();
-    deps.branches.clear();
-    for (const entry of scanned) {
-      const branch = branches.get(entry.pid);
-      if (branch !== undefined)
-        deps.branches.set(entry.pid, { starttime: entry.starttime, branch });
-    }
+  const branches = tiniInUse
+    ? attributeBranches(
+        scanned,
+        new Set([...liveSessionPids, ...knownTerminatedSessionPids, ...ownerListedSessionPids]),
+        deps.branches,
+      )
+    : new Map<number, Branch>();
+  deps.branches.clear();
+  for (const entry of scanned) {
+    const branch = branches.get(entry.pid);
+    if (branch !== undefined) deps.branches.set(entry.pid, { starttime: entry.starttime, branch });
   }
   const narrowToCliBranch: CliBranchNarrowing | undefined =
     tiniInUse && abandonedOwnerListedSessionPids.size > 0
@@ -452,19 +434,15 @@ async function observeReclaim(
       narrowToCliBranch,
     );
   const firesVerdict = (verdict: ReapVerdict): boolean =>
-    verdict === 'fireNoDelegations' ? reclaim.reap !== undefined : isFireVerdict(verdict);
-  // 内訳は材料が渡った回だけ数える: 無い回を0に潰すと「持ち主不明が0」と読めるため。
-  const heldUnrecognisedBy =
-    ownerListedSessionPids === undefined ? undefined : emptyUnrecognisedSplit();
-  const outsideUnrecognisedBy =
-    ownerListedSessionPids === undefined ? undefined : emptyUnrecognisedSplit();
+    verdict === 'fireNoDelegations' ? mode === 'reclaim' : isFireVerdict(verdict);
+  const heldUnrecognisedBy = emptyUnrecognisedSplit();
+  const outsideUnrecognisedBy = emptyUnrecognisedSplit();
   // 撃たずに残した abandonTree の木の引き取られた枝も「持ち主が名簿に居るので守っている」に数える（#5162）
-  const ownerListedForSplit =
-    ownerListedSessionPids === undefined
-      ? new Set<number>()
-      : new Set([...ownerListedSessionPids, ...abandonedOwnerListedSessionPids]);
-  const noteUnrecognised = (split: UnrecognisedOwnerSplit | undefined, entry: ScannedProcess) => {
-    if (split === undefined || ownerListedSessionPids === undefined) return;
+  const ownerListedForSplit = new Set([
+    ...ownerListedSessionPids,
+    ...abandonedOwnerListedSessionPids,
+  ]);
+  const noteUnrecognised = (split: UnrecognisedOwnerSplit, entry: ScannedProcess) => {
     split[
       unrecognisedOwnerKindOf(
         entry,
@@ -503,22 +481,20 @@ async function observeReclaim(
           oldestStarttime = entry.starttime;
         }
 
-        if (view !== undefined) {
-          const verdict = verdictOf(entry);
-          if (isFireVerdict(verdict)) {
-            if (firesVerdict(verdict)) {
-              fireCandidates.push({
-                pid: entry.pid,
-                starttime: entry.starttime,
-                numThreads: entry.numThreads,
-              });
-            } else {
-              observeOnly += 1;
-            }
+        const verdict = verdictOf(entry);
+        if (isFireVerdict(verdict)) {
+          if (firesVerdict(verdict)) {
+            fireCandidates.push({
+              pid: entry.pid,
+              starttime: entry.starttime,
+              numThreads: entry.numThreads,
+            });
           } else {
-            held[verdict] += 1;
-            if (verdict === 'sidUnrecognised') noteUnrecognised(heldUnrecognisedBy, entry);
+            observeOnly += 1;
           }
+        } else {
+          held[verdict] += 1;
+          if (verdict === 'sidUnrecognised') noteUnrecognised(heldUnrecognisedBy, entry);
         }
       }
 
@@ -539,32 +515,26 @@ async function observeReclaim(
     if (entry.ownerUid !== reclaim.childUid || RECLAIM_EXCLUDED_STATES.has(entry.state)) continue;
     outsideRoots.total += 1;
     if (scannedPids.has(entry.ppid)) outsideRoots.parentInScan += 1;
-    if (view !== undefined) {
-      const verdict = verdictOf(entry);
-      if (isFireVerdict(verdict)) outsideBySid.wouldFire += 1;
-      else {
-        outsideBySid[verdict] += 1;
-        if (verdict === 'sidUnrecognised') noteUnrecognised(outsideUnrecognisedBy, entry);
-      }
+    const verdict = verdictOf(entry);
+    if (isFireVerdict(verdict)) outsideBySid.wouldFire += 1;
+    else {
+      outsideBySid[verdict] += 1;
+      if (verdict === 'sidUnrecognised') noteUnrecognised(outsideUnrecognisedBy, entry);
     }
   }
 
-  // 判定材料が無ければ `reconcileReaper` を呼ばない: `process.kill` に触れる経路そのものを存在させないため。
   const stillPresentStarttimes = new Map(scanned.map((entry) => [entry.pid, entry.starttime]));
-  const fired =
-    view === undefined
-      ? { signalled: 0, killed: 0, freedThreads: 0 }
-      : reconcileReaper(
-          deps.reaper,
-          fireCandidates,
-          stillPresentStarttimes,
-          nowMs,
-          view.graceMs ?? DEFAULT_REAP_GRACE_MS,
-          deps.killFn,
-        );
+  const fired = reconcileReaper(
+    deps.reaper,
+    fireCandidates,
+    stillPresentStarttimes,
+    nowMs,
+    DEFAULT_REAP_GRACE_MS,
+    deps.killFn,
+  );
 
   const observation: ReclaimObservation = {
-    mode: reclaim.reap === undefined ? 'observe' : 'reclaim',
+    mode,
     ...(reclaim.delegationSubreaper === undefined
       ? {}
       : { subreaper: { command: reclaim.delegationSubreaper } }),
@@ -578,27 +548,12 @@ async function observeReclaim(
     freedThreads: fired.freedThreads,
     lastRunAt: nowMs,
     notFired: {
-      outsideRoots:
-        view === undefined
-          ? outsideRoots
-          : {
-              ...outsideRoots,
-              bySid: {
-                ...outsideBySid,
-                ...(outsideUnrecognisedBy === undefined
-                  ? {}
-                  : { unrecognisedBy: outsideUnrecognisedBy }),
-              },
-            },
-      ...(view === undefined
-        ? {}
-        : {
-            held: {
-              ...held,
-              ...(heldUnrecognisedBy === undefined ? {} : { unrecognisedBy: heldUnrecognisedBy }),
-            },
-          }),
-      ...(view !== undefined && reclaim.reap === undefined ? { observeOnly } : {}),
+      outsideRoots: {
+        ...outsideRoots,
+        bySid: { ...outsideBySid, unrecognisedBy: outsideUnrecognisedBy },
+      },
+      held: { ...held, unrecognisedBy: heldUnrecognisedBy },
+      ...(mode === 'observe' ? { observeOnly } : {}),
     },
   };
 
@@ -623,18 +578,17 @@ async function observeReclaim(
 
 // 分岐1（委譲が0本）には pid 使い回しの守りを適用しない: 生きた委譲が無く使い回しの危険が無い上、`setsid nohup` で孤立したサーバの残骸が永久に残るため。
 // 分岐1は `liveSessionPids` の大きさで判定しない: `anyTrackedDelegationsOf` の理由と同じ。
+// 終端した委譲の sid が走査に居ない回は、呼び手（`reapVerdictOf`）が先に返す。ここへ来て `knownTerminated` に入っている sid は、走査に居るもの（`sidLeaderPresent`）だけである。
 function reapVerdictFor(
   sid: number | undefined,
   liveSessionPids: ReadonlySet<number>,
   knownTerminatedSessionPids: ReadonlySet<number>,
   anyTrackedDelegations: boolean,
-  scannedPids: ReadonlySet<number>,
-): 'fire' | keyof ReclaimHeldCounts {
-  if (!anyTrackedDelegations) return 'fire';
+): 'fireNoDelegations' | keyof ReclaimHeldCounts {
+  if (!anyTrackedDelegations) return 'fireNoDelegations';
   if (sid === undefined) return 'sidUnknown';
   if (liveSessionPids.has(sid)) return 'sidLive';
-  if (knownTerminatedSessionPids.has(sid))
-    return scannedPids.has(sid) ? 'sidLeaderPresent' : 'fire';
+  if (knownTerminatedSessionPids.has(sid)) return 'sidLeaderPresent';
   return 'sidUnrecognised';
 }
 
@@ -829,15 +783,7 @@ function reapVerdictOf(
       return attribution.source === 'ledger' ? 'fireLedger' : 'fireInherited';
     }
   }
-  const base = reapVerdictFor(
-    sid,
-    liveSessionPids,
-    knownTerminatedSessionPids,
-    anyTrackedDelegations,
-    scannedPids,
-  );
-  if (base !== 'fire') return base;
-  return anyTrackedDelegations ? 'fireTerminated' : 'fireNoDelegations';
+  return reapVerdictFor(sid, liveSessionPids, knownTerminatedSessionPids, anyTrackedDelegations);
 }
 
 function emptyUnrecognisedSplit(): UnrecognisedOwnerSplit {

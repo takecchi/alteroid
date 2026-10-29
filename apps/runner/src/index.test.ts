@@ -16,7 +16,6 @@ import {
   reportRetiredLayerProviderEnv,
   socketOwnerOf,
   tokenSha256Of,
-  withTerminatedReclaimSessions,
 } from './index.js';
 
 const run = promisify(execFile);
@@ -145,92 +144,47 @@ describe('器の起動スクリプト', () => {
 describe('reclaimScanOf（孤児の観測を切る口）', () => {
   const CHILD = { uid: 1001, gid: 1001 };
 
-  it('未設定なら観測する（降ろす UID が候補の判定に使われる）', () => {
-    expect(reclaimScanOf({}, CHILD)).toEqual({ childUid: 1001 });
-  });
-
-  it('未設定なら reclaim として扱い、reap を渡せばそのまま乗る（observe / off を明示すれば従う）', () => {
-    const reap = {
-      liveSessionPidsOf: () => new Set<number>(),
-      knownTerminatedSessionPidsOf: () => new Set<number>(),
-    };
-    expect(reclaimScanOf({}, CHILD, reap)).toEqual({ childUid: 1001, reap });
-    expect(reclaimScanOf({}, CHILD, reap)).toEqual(
-      reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD, reap),
-    );
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'observe' }, CHILD, reap)).toEqual({
-      childUid: 1001,
-    });
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'off' }, CHILD, reap)).toBeUndefined();
-  });
-
-  it('空文字も未設定と同じく reclaim', () => {
-    const reap = {
-      liveSessionPidsOf: () => new Set<number>(),
-      knownTerminatedSessionPidsOf: () => new Set<number>(),
-    };
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: '' }, CHILD, reap)).toEqual({ childUid: 1001, reap });
-  });
-
-  it('off なら欄ごと出さない（undefined）', () => {
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'off' }, CHILD)).toBeUndefined();
-  });
-
-  it('observe を明示しても観測する', () => {
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'observe' }, CHILD)).toEqual({ childUid: 1001 });
-  });
-
-  it('知らない値なら落とす（黙って既定へ倒れない）', () => {
-    expect(() => reclaimScanOf({ [RECLAIM_ENV_KEY]: 'Off' }, CHILD)).toThrow(/知らない値/);
-  });
-
-  it('reclaim は受け付けるが、reap を渡さなければ reap の無い形が返る', () => {
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD)).toEqual({ childUid: 1001 });
-  });
-
-  it('reclaim に reap を渡すと、そのまま ReclaimScanOptions.reap に乗る', () => {
-    const reap = {
-      liveSessionPidsOf: () => new Set<number>(),
-      knownTerminatedSessionPidsOf: () => new Set<number>(),
-    };
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD, reap)).toEqual({
-      childUid: 1001,
-      reap,
-    });
-  });
-
-  it('observe のときは reap を渡していても乗らない', () => {
-    const reap = {
-      liveSessionPidsOf: () => new Set<number>(),
-      knownTerminatedSessionPidsOf: () => new Set<number>(),
-    };
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'observe' }, CHILD, reap)).toEqual({
-      childUid: 1001,
-    });
-  });
-
-  it('降ろす UID が無い器では観測しない（取れない軸に数を作らない）', () => {
-    expect(reclaimScanOf({}, undefined)).toBeUndefined();
-  });
-});
-
-describe('withTerminatedReclaimSessions（観測専用の判定材料を足す）', () => {
   const view = {
     liveSessionPidsOf: () => new Set<number>(),
     knownTerminatedSessionPidsOf: () => new Set<number>(),
+    ownerListedSessionPidsOf: () => new Set<number>(),
+    abandonedOwnerListedSessionPidsOf: () => new Set<number>(),
+    anyTrackedDelegationsOf: () => true,
   };
 
-  it('reap の無い構えには sessions だけを足し、reap は足さない', () => {
-    const out = withTerminatedReclaimSessions({ childUid: 1001 }, view);
-    expect(out?.sessions).toBeDefined();
-    expect(out?.reap).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(out, 'reap')).toBe(false);
+  it('未設定なら reclaim（撃つ）として観測し、view はそのまま乗る', () => {
+    expect(reclaimScanOf({}, CHILD, view)).toEqual({ childUid: 1001, mode: 'reclaim', view });
+    expect(reclaimScanOf({}, CHILD, view)).toEqual(
+      reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD, view),
+    );
   });
 
-  it('reap のある構え（撃つ）と、観測しない構え（undefined）はそのまま返す', () => {
-    const scan = { childUid: 1001, reap: view };
-    expect(withTerminatedReclaimSessions(scan, view)).toBe(scan);
-    expect(withTerminatedReclaimSessions(undefined, view)).toBeUndefined();
+  it('observe を明示すれば、同じ view のまま撃たない構えになる', () => {
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'observe' }, CHILD, view)).toEqual({
+      childUid: 1001,
+      mode: 'observe',
+      view,
+    });
+  });
+
+  it('空文字も未設定と同じく reclaim', () => {
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: '' }, CHILD, view)).toEqual({
+      childUid: 1001,
+      mode: 'reclaim',
+      view,
+    });
+  });
+
+  it('off なら欄ごと出さない（undefined）', () => {
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'off' }, CHILD, view)).toBeUndefined();
+  });
+
+  it('知らない値なら落とす（黙って既定へ倒れない）', () => {
+    expect(() => reclaimScanOf({ [RECLAIM_ENV_KEY]: 'Off' }, CHILD, view)).toThrow(/知らない値/);
+  });
+
+  it('降ろす UID が無い器では観測しない（取れない軸に数を作らない）', () => {
+    expect(reclaimScanOf({}, undefined, view)).toBeUndefined();
   });
 });
 

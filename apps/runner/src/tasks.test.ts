@@ -9,13 +9,8 @@ import { runnerExecutionResourcesSchema } from '@alteroid/core';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { RECLAIM_ENV_KEY, reclaimScanOf, withTerminatedReclaimSessions } from './index.js';
-import {
-  startReclaimSweep,
-  TaskBreakdownReader,
-  type ReclaimReapOptions,
-  type ReclaimSessionView,
-} from './tasks.js';
+import { RECLAIM_ENV_KEY, reclaimScanOf } from './index.js';
+import { startReclaimSweep, TaskBreakdownReader, type ReclaimSessionView } from './tasks.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -23,6 +18,18 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 
 // 実物の `/proc` を読まない: 走らせる器によって値が変わり、固定できないため。
+
+// 本番（`index.ts` の `sessionView`）は5つの欄を必ず渡す。試験は、判定に関わる欄だけを書けるように、残りを「委譲が走っていて、他に何も無い」で埋める。
+function sessionView(overrides: Partial<ReclaimSessionView> = {}): ReclaimSessionView {
+  return {
+    liveSessionPidsOf: () => new Set<number>(),
+    knownTerminatedSessionPidsOf: () => new Set<number>(),
+    ownerListedSessionPidsOf: () => new Set<number>(),
+    abandonedOwnerListedSessionPidsOf: () => new Set<number>(),
+    anyTrackedDelegationsOf: () => true,
+    ...overrides,
+  };
+}
 
 let root: string;
 
@@ -245,7 +252,7 @@ describe('走査は1本だけ走る（走査中の要求は相乗りする）', 
     const gated = gatedOwnerUid();
     const reader = new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
       ownerUidOf: gated.ownerUidOf,
     });
 
@@ -266,7 +273,7 @@ describe('走査は1本だけ走る（走査中の要求は相乗りする）', 
     const gated = gatedOwnerUid();
     const reader = new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
       ownerUidOf: gated.ownerUidOf,
     });
 
@@ -302,13 +309,14 @@ describe('走査は1本だけ走る（走査中の要求は相乗りする）', 
       ownerUidOf: () => Promise.resolve(OWN_UID),
       reclaim: {
         childUid: OWN_UID,
-        sessions: {
+        mode: 'observe',
+        view: sessionView({
           liveSessionPidsOf: () => {
             if (fail) throw new Error('帳面が読めない');
             return new Set();
           },
           knownTerminatedSessionPidsOf: () => new Set(),
-        },
+        }),
       },
     });
 
@@ -353,7 +361,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     placeProcess(root, 20, 'node', 'S', 7, 0, 999);
     placeUptime(root, 1000);
 
-    const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
+    });
     const result = await reader.read();
 
     expect(result?.reclaim?.candidates).toBe(3);
@@ -372,7 +383,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     const childUid = OWN_UID + 1;
     const reader = new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid },
+      reclaim: { childUid, mode: 'observe', view: sessionView() },
       ownerUidOf: (_procRoot, pid) => Promise.resolve(pid === '6' ? 0 : childUid),
     });
     const result = await reader.read();
@@ -388,7 +399,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     const reader = new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID + 1 },
+      reclaim: { childUid: OWN_UID + 1, mode: 'observe', view: sessionView() },
     });
     const result = await reader.read();
 
@@ -402,7 +413,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     placeProcess(root, 62, 'sh', 'Z', 1, 0, 1);
     placeUptime(root, 1000);
 
-    const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
+    });
     const result = await reader.read();
 
     expect(result?.reclaim?.candidates).toBe(1);
@@ -418,7 +432,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     const reader = new TaskBreakdownReader({
       procRoot: root,
       clockTicksPerSecond: 100,
-      reclaim: { childUid: OWN_UID },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
     });
     const result = await reader.read();
 
@@ -429,7 +443,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     placeProcess(root, 80, 'node', 'S', 3, 0, 999);
     placeUptime(root, 1000);
 
-    const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
+    });
     const result = await reader.read();
 
     expect(result?.reclaim?.candidates).toBe(0);
@@ -445,7 +462,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
       placeProcess(root, 13, 'sh', 'S', 1, 0, 11);
       placeUptime(root, 1000);
 
-      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
+      });
       const result = await reader.read();
 
       expect(result?.reclaim?.candidates).toBe(4);
@@ -460,7 +480,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
       placeProcess(root, 22, 'c', 'S', 1, 0, 1);
       placeUptime(root, 1000);
 
-      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
+      });
       const result = await reader.read();
 
       expect(result?.reclaim?.candidates).toBe(3);
@@ -480,7 +503,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
       placeProcess(root, 41, 'b', 'S', 1, 0, 1);
       placeUptime(root, 1000);
 
-      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
+      });
       const result = await reader.read();
 
       expect(result?.reclaim?.candidates).toBe(8);
@@ -493,7 +519,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
       placeProcess(root, 60, 'dd', 'D', 1, 0, 1);
       placeUptime(root, 1000);
 
-      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
+      });
       const result = await reader.read();
 
       expect(result?.reclaim?.candidates).toBe(0);
@@ -517,7 +546,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
       const reader = new TaskBreakdownReader({
         procRoot: root,
         clockTicksPerSecond: ticks,
-        reclaim: { childUid: OWN_UID },
+        reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
       });
       const result = await reader.read();
 
@@ -547,7 +576,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
       const reader = new TaskBreakdownReader({
         procRoot: root,
         clockTicksPerSecond: ticks,
-        reclaim: { childUid: OWN_UID },
+        reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
       });
       const result = await reader.read();
 
@@ -559,7 +588,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
       placeProcess(root, 700, 'node', 'S', 3, 0, 999);
       placeUptime(root, 1000);
 
-      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
+      });
       const result = await reader.read();
 
       expect(result?.reclaim?.candidates).toBe(0);
@@ -572,7 +604,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     it('uptime が読めなければ medianAgeSec / ageBuckets / oldestAgeSec が全部欄ごと出ない', async () => {
       placeProcess(root, 710, 'pnpm', 'S', 1, 0, 1);
 
-      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
+      });
       const result = await reader.read();
 
       expect(result?.reclaim?.candidates).toBe(1);
@@ -588,7 +623,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     placeProcess(root, 802, 'orphan-secret-cmd', 'S', 2, 0, 801);
     placeUptime(root, 1000);
 
-    const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
+    });
     const result = await reader.read();
 
     expect(result?.reclaim?.candidates).toBeGreaterThanOrEqual(1);
@@ -607,6 +645,8 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
         procRoot: root,
         reclaim: {
           childUid: OWN_UID,
+          mode: 'observe',
+          view: sessionView(),
           ...(delegationSubreaper === undefined ? {} : { delegationSubreaper }),
         },
       }).read();
@@ -625,7 +665,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
     try {
-      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
+      });
       const result = await reader.read();
 
       expect(result?.reclaim?.candidates).toBe(2);
@@ -644,7 +687,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     placeProcess(root, 95, 'node', 'S', 1, 0, 999);
     placeUptime(root, 1000);
 
-    const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
+    });
     const result = await reader.read();
 
     expect(Object.prototype.hasOwnProperty.call(result?.reclaim, 'signalled')).toBe(true);
@@ -659,7 +705,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     const reader = new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
       cgroupRoot,
       procCgroupPath,
     });
@@ -675,7 +721,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     const reader = new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
       cgroupRoot,
       procCgroupPath,
     });
@@ -692,7 +738,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     const before = await new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
     }).read();
     expect(before?.reclaim?.candidates).toBe(1);
 
@@ -700,7 +746,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     const after = await new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
     }).read();
 
     expect(after?.reclaim).toBeUndefined();
@@ -715,7 +761,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     const result = await new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
     }).read();
 
     expect(result?.reclaim?.candidates).toBe(1);
@@ -728,7 +774,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     const result = await new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
     }).read();
 
     expect(result?.reclaim?.candidates).toBe(1);
@@ -742,7 +788,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     const reader = new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
       ttlMs: 1000,
       now: () => now,
     });
@@ -760,7 +806,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
   });
 });
 
-describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡したときだけ撃つ）', () => {
+describe('孤児プロセス木の回収（#1334 段1。mode が reclaim のときだけ、委譲が0本の孤児も撃つ）', () => {
   const OWN_UID = process.getuid?.() ?? 0;
 
   function fakeKillFn(): {
@@ -781,11 +827,12 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       killFn,
       reclaim: {
         childUid: OWN_UID,
-        reap: {
+        mode: 'reclaim',
+        view: sessionView({
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
           anyTrackedDelegationsOf: () => false,
-        },
+        }),
       },
     });
     const result = await reader.read();
@@ -805,34 +852,12 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       killFn,
       reclaim: {
         childUid: OWN_UID,
-        reap: {
+        mode: 'reclaim',
+        view: sessionView({
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
           anyTrackedDelegationsOf: () => true,
-        },
-      },
-    });
-    const result = await reader.read();
-
-    expect(result?.reclaim?.candidates).toBe(1);
-    expect(result?.reclaim?.signalled).toBe(0);
-    expect(calls).toEqual([]);
-  });
-
-  it('anyTrackedDelegationsOf を省略した既定は true（安全側）——分岐1を無条件には発火させない', async () => {
-    placeProcess(root, 202, 'pnpm', 'S', 3, 0, 1, 999);
-    placeUptime(root, 1000);
-    const { fn: killFn, calls } = fakeKillFn();
-
-    const reader = new TaskBreakdownReader({
-      procRoot: root,
-      killFn,
-      reclaim: {
-        childUid: OWN_UID,
-        reap: {
-          liveSessionPidsOf: () => new Set(),
-          knownTerminatedSessionPidsOf: () => new Set(),
-        },
+        }),
       },
     });
     const result = await reader.read();
@@ -852,10 +877,11 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       killFn,
       reclaim: {
         childUid: OWN_UID,
-        reap: {
+        mode: 'reclaim',
+        view: sessionView({
           liveSessionPidsOf: () => new Set([555]),
           knownTerminatedSessionPidsOf: () => new Set(),
-        },
+        }),
       },
     });
     const result = await reader.read();
@@ -875,10 +901,11 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       killFn,
       reclaim: {
         childUid: OWN_UID,
-        reap: {
+        mode: 'reclaim',
+        view: sessionView({
           liveSessionPidsOf: () => new Set([999]),
           knownTerminatedSessionPidsOf: () => new Set([777]),
-        },
+        }),
       },
     });
     const result = await reader.read();
@@ -897,10 +924,11 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       killFn,
       reclaim: {
         childUid: OWN_UID,
-        reap: {
+        mode: 'reclaim',
+        view: sessionView({
           liveSessionPidsOf: () => new Set([999]),
           knownTerminatedSessionPidsOf: () => new Set([777]),
-        },
+        }),
       },
     });
     const result = await reader.read();
@@ -921,10 +949,11 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       killFn,
       reclaim: {
         childUid: OWN_UID,
-        reap: {
+        mode: 'reclaim',
+        view: sessionView({
           liveSessionPidsOf: () => new Set([555]),
           knownTerminatedSessionPidsOf: () => new Set([777]),
-        },
+        }),
       },
     });
     const result = await reader.read();
@@ -947,12 +976,12 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       now: () => now,
       reclaim: {
         childUid: OWN_UID,
-        reap: {
+        mode: 'reclaim',
+        view: sessionView({
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
           anyTrackedDelegationsOf: () => false,
-          graceMs: 10_000,
-        },
+        }),
       },
     });
 
@@ -989,11 +1018,12 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       now: () => now,
       reclaim: {
         childUid: OWN_UID,
-        reap: {
+        mode: 'reclaim',
+        view: sessionView({
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
           anyTrackedDelegationsOf: () => false,
-        },
+        }),
       },
     });
 
@@ -1025,12 +1055,12 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       now: () => now,
       reclaim: {
         childUid: OWN_UID,
-        reap: {
+        mode: 'reclaim',
+        view: sessionView({
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
           anyTrackedDelegationsOf: () => false,
-          graceMs: 10_000,
-        },
+        }),
       },
     });
 
@@ -1055,12 +1085,12 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
         now,
         reclaim: {
           childUid: OWN_UID,
-          reap: {
+          mode: 'reclaim',
+          view: sessionView({
             liveSessionPidsOf: () => new Set(),
             knownTerminatedSessionPidsOf: () => new Set(),
             anyTrackedDelegationsOf: () => false,
-            graceMs: 10_000,
-          },
+          }),
         },
       });
       return { reader, calls };
@@ -1114,7 +1144,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
     });
   });
 
-  it('reap を渡していなければ mode は observe のまま、reap があれば候補0本でも reclaim を名乗る', async () => {
+  it('mode が reclaim なら、候補0本でも reclaim を名乗る', async () => {
     placeProcess(root, 280, 'node', 'S', 1, 0, 999);
     placeUptime(root, 1000);
 
@@ -1122,10 +1152,11 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       procRoot: root,
       reclaim: {
         childUid: OWN_UID,
-        reap: {
+        mode: 'reclaim',
+        view: sessionView({
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
-        },
+        }),
       },
     });
     const result = await reader.read();
@@ -1144,11 +1175,12 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       killFn: () => undefined,
       reclaim: {
         childUid: OWN_UID,
-        reap: {
+        mode: 'reclaim',
+        view: sessionView({
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
           anyTrackedDelegationsOf: () => false,
-        },
+        }),
       },
     });
     const result = await reader.read();
@@ -1171,10 +1203,11 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
         killFn,
         reclaim: {
           childUid: OWN_UID,
-          reap: {
+          mode: 'reclaim',
+          view: sessionView({
             liveSessionPidsOf: () => new Set([999]),
             knownTerminatedSessionPidsOf: () => new Set([777]),
-          },
+          }),
         },
       });
       const result = await reader.read();
@@ -1194,10 +1227,11 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
         killFn,
         reclaim: {
           childUid: OWN_UID,
-          reap: {
+          mode: 'reclaim',
+          view: sessionView({
             liveSessionPidsOf: () => new Set([999]),
             knownTerminatedSessionPidsOf: () => new Set([777]),
-          },
+          }),
         },
       });
       const result = await reader.read();
@@ -1217,11 +1251,12 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
         killFn,
         reclaim: {
           childUid: OWN_UID,
-          reap: {
+          mode: 'reclaim',
+          view: sessionView({
             liveSessionPidsOf: () => new Set(),
             knownTerminatedSessionPidsOf: () => new Set(),
             anyTrackedDelegationsOf: () => false,
-          },
+          }),
         },
       });
       const result = await reader.read();
@@ -1255,37 +1290,50 @@ describe('撃たれなかった木の内訳（#2352。#2626 で observe も終�
     placeUptime(root, 1000);
   }
 
-  const view = {
+  const view = sessionView({
     liveSessionPidsOf: () => new Set([555]),
     knownTerminatedSessionPidsOf: () => new Set([777, 778]),
-    anyTrackedDelegationsOf: () => true,
-  };
+  });
 
-  const expectedHeld = { sidUnknown: 1, sidLive: 1, sidLeaderPresent: 1, sidUnrecognised: 1 };
+  // 名簿に居る持ち主（ownerListed）の材料は空なので、sid 未認識は「不明」へ数える。
+  const expectedHeld = {
+    sidUnknown: 1,
+    sidLive: 1,
+    sidLeaderPresent: 1,
+    sidUnrecognised: 1,
+    unrecognisedBy: { ownerLive: 0, ownerListed: 0, ownerUnknown: 1 },
+  };
   const expectedOutside = {
     total: 3,
     parentInScan: 1,
-    bySid: { wouldFire: 1, sidUnknown: 0, sidLive: 1, sidLeaderPresent: 1, sidUnrecognised: 0 },
+    bySid: {
+      wouldFire: 1,
+      sidUnknown: 0,
+      sidLive: 1,
+      sidLeaderPresent: 1,
+      sidUnrecognised: 0,
+      unrecognisedBy: { ownerLive: 0, ownerListed: 0, ownerUnknown: 0 },
+    },
   };
 
   it('観測の出力は core の runner-protocol の schema を通り、notFired が落ちずに残る', async () => {
     placeLayout();
     const result = await new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID, sessions: view },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: view },
     }).read();
     const schema = runnerExecutionResourcesSchema.shape.tasks.unwrap().shape.reclaim.unwrap();
     const parsed = schema.parse(result?.reclaim);
     expect(parsed.notFired).toEqual(result?.reclaim?.notFired);
   });
 
-  it('observe + sessions: 理由別に数える。撃つのは終端した委譲の木（303）だけで、素性の分からない孤児は撃たない', async () => {
+  it('observe: 理由別に数える。撃つのは終端した委譲の木（303）だけで、素性の分からない孤児は撃たない', async () => {
     placeLayout();
     const { fn: killFn, calls } = fakeKillFn();
     const reader = new TaskBreakdownReader({
       procRoot: root,
       killFn,
-      reclaim: { childUid: OWN_UID, sessions: view },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: view },
     });
     const result = await reader.read();
 
@@ -1300,13 +1348,13 @@ describe('撃たれなかった木の内訳（#2352。#2626 で observe も終�
     });
   });
 
-  it('reclaim + reap: 同じ配置で撃つのは fire 判定の1本だけ。内訳は observe と一致し、observeOnly は出ない', async () => {
+  it('reclaim: 同じ配置で撃つのは fire 判定の1本だけ。内訳は observe と一致し、observeOnly は出ない', async () => {
     placeLayout();
     const { fn: killFn, calls } = fakeKillFn();
     const reader = new TaskBreakdownReader({
       procRoot: root,
       killFn,
-      reclaim: { childUid: OWN_UID, reap: view },
+      reclaim: { childUid: OWN_UID, mode: 'reclaim', view: view },
     });
     const result = await reader.read();
 
@@ -1321,39 +1369,17 @@ describe('撃たれなかった木の内訳（#2352。#2626 で observe も終�
     );
   });
 
-  it('sessions を渡す前後で、reap 側の発砲（pid と signal）が変わらない', async () => {
-    placeLayout();
-    const without = fakeKillFn();
-    await new TaskBreakdownReader({
-      procRoot: root,
-      killFn: without.fn,
-      reclaim: { childUid: OWN_UID, reap: view },
-    }).read();
-    const withSessions = fakeKillFn();
-    await new TaskBreakdownReader({
-      procRoot: root,
-      killFn: withSessions.fn,
-      reclaim: {
-        childUid: OWN_UID,
-        reap: view,
-        sessions: {
-          liveSessionPidsOf: () => new Set(),
-          knownTerminatedSessionPidsOf: () => new Set([555, 4242, 999]),
-          anyTrackedDelegationsOf: () => false,
-        },
-      },
-    }).read();
-    expect(withSessions.calls).toEqual(without.calls);
-    expect(withSessions.calls).toEqual([{ pid: 303, signal: 'SIGTERM' }]);
-  });
-
   it('委譲が0本(anyTracked=false)なら全部 fire 判定: observe は held が全部0。終端した委譲の木（303）は撃ち、残り4本は observeOnly', async () => {
     placeLayout();
     const { fn: killFn, calls } = fakeKillFn();
     const result = await new TaskBreakdownReader({
       procRoot: root,
       killFn,
-      reclaim: { childUid: OWN_UID, sessions: { ...view, anyTrackedDelegationsOf: () => false } },
+      reclaim: {
+        childUid: OWN_UID,
+        mode: 'observe',
+        view: sessionView({ ...view, anyTrackedDelegationsOf: () => false }),
+      },
     }).read();
     expect(calls).toEqual([{ pid: 303, signal: 'SIGTERM' }]);
     expect(result?.reclaim?.notFired?.held).toEqual({
@@ -1361,22 +1387,10 @@ describe('撃たれなかった木の内訳（#2352。#2626 で observe も終�
       sidLive: 0,
       sidLeaderPresent: 0,
       sidUnrecognised: 0,
+      unrecognisedBy: { ownerLive: 0, ownerListed: 0, ownerUnknown: 0 },
     });
     expect(result?.reclaim?.notFired?.observeOnly).toBe(4);
     expect(result?.reclaim?.notFired?.outsideRoots.bySid?.wouldFire).toBe(3);
-  });
-
-  it('判定材料が無い observe は、理由別を欄ごと出さない（0の行を作らない）。孤児ルート外の本数は走査だけで出る', async () => {
-    placeLayout();
-    const result = await new TaskBreakdownReader({
-      procRoot: root,
-      reclaim: { childUid: OWN_UID },
-    }).read();
-    const notFired = result?.reclaim?.notFired;
-    expect(notFired?.outsideRoots).toEqual({ total: 3, parentInScan: 1 });
-    expect(Object.prototype.hasOwnProperty.call(notFired, 'held')).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(notFired, 'observeOnly')).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(notFired?.outsideRoots, 'bySid')).toBe(false);
   });
 
   it('D / Z の孤児ルート外プロセスと、降ろす UID 以外は outsideRoots に数えない', async () => {
@@ -1385,12 +1399,12 @@ describe('撃たれなかった木の内訳（#2352。#2626 で observe も終�
     placeUptime(root, 1000);
     const result = await new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionView() },
     }).read();
-    expect(result?.reclaim?.notFired?.outsideRoots).toEqual({ total: 0, parentInScan: 0 });
+    expect(result?.reclaim?.notFired?.outsideRoots).toMatchObject({ total: 0, parentInScan: 0 });
     const other = await new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID + 1 },
+      reclaim: { childUid: OWN_UID + 1, mode: 'observe', view: sessionView() },
     }).read();
     expect(other?.reclaim?.notFired?.outsideRoots.total).toBe(0);
   });
@@ -1412,18 +1426,16 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
       live: number[];
       terminated: number[];
       any: boolean;
-      graceMs: number;
     }> = {},
   ): ReclaimSessionView {
-    return {
+    return sessionView({
       liveSessionPidsOf: () => new Set(overrides.live ?? [555]),
       knownTerminatedSessionPidsOf: () => new Set(overrides.terminated ?? [777]),
       anyTrackedDelegationsOf: () => overrides.any ?? true,
-      ...(overrides.graceMs === undefined ? {} : { graceMs: overrides.graceMs }),
-    };
+    });
   }
 
-  it('終端した委譲の sid の木は、observe（reap 無し）でも撃つ。mode は observe のまま', async () => {
+  it('終端した委譲の sid の木は、observe でも撃つ。mode は observe のまま', async () => {
     placeProcess(root, 240, 'a', 'S', 1, 0, 1, 777);
     placeProcess(root, 241, 'a', 'S', 1, 0, 240, 777);
     placeUptime(root, 1000);
@@ -1431,7 +1443,7 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     const result = await new TaskBreakdownReader({
       procRoot: root,
       killFn,
-      reclaim: { childUid: OWN_UID, sessions: sessionsOf() },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionsOf() },
     }).read();
 
     expect(result?.reclaim?.mode).toBe('observe');
@@ -1452,7 +1464,7 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     const observed = await new TaskBreakdownReader({
       procRoot: root,
       killFn: observe.fn,
-      reclaim: { childUid: OWN_UID, sessions: view },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: view },
     }).read();
     expect(observe.calls).toEqual([]);
     expect(observed?.reclaim?.signalled).toBe(0);
@@ -1462,7 +1474,7 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     const reclaimed = await new TaskBreakdownReader({
       procRoot: root,
       killFn: reclaim.fn,
-      reclaim: { childUid: OWN_UID, reap: view },
+      reclaim: { childUid: OWN_UID, mode: 'reclaim', view: view },
     }).read();
     expect(reclaim.calls).toEqual([{ pid: 200, signal: 'SIGTERM' }]);
     expect(reclaimed?.reclaim?.mode).toBe('reclaim');
@@ -1477,7 +1489,7 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     const result = await new TaskBreakdownReader({
       procRoot: root,
       killFn,
-      reclaim: { childUid: OWN_UID, sessions: sessionsOf() },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionsOf() },
     }).read();
 
     expect(calls).toEqual([{ pid: 261, signal: 'SIGTERM' }]);
@@ -1494,7 +1506,7 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     const result = await new TaskBreakdownReader({
       procRoot: root,
       killFn,
-      reclaim: { childUid: OWN_UID, sessions: sessionsOf() },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionsOf() },
     }).read();
 
     expect(calls.map((call) => call.pid).sort()).toEqual([250, 251, 252]);
@@ -1509,7 +1521,7 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     await new TaskBreakdownReader({
       procRoot: root,
       killFn,
-      reclaim: { childUid: OWN_UID, sessions: sessionsOf() },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionsOf() },
     }).read();
     expect(calls).toEqual([]);
   });
@@ -1523,7 +1535,7 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     await new TaskBreakdownReader({
       procRoot: root,
       killFn,
-      reclaim: { childUid: OWN_UID, sessions: sessionsOf() },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionsOf() },
     }).read();
     expect(calls).toEqual([]);
   });
@@ -1552,11 +1564,12 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
         ttlMs: 0,
         reclaim: {
           childUid: OWN_UID,
-          sessions: {
+          mode: 'observe',
+          view: sessionView({
             liveSessionPidsOf: () => new Set(live),
             knownTerminatedSessionPidsOf: () => new Set(terminated),
             anyTrackedDelegationsOf: () => true,
-          },
+          }),
         },
       });
 
@@ -1578,7 +1591,11 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
       const result = await new TaskBreakdownReader({
         procRoot: root,
         killFn,
-        reclaim: { childUid: OWN_UID, sessions: sessionsOf({ live: [], terminated: [100] }) },
+        reclaim: {
+          childUid: OWN_UID,
+          mode: 'observe',
+          view: sessionsOf({ live: [], terminated: [100] }),
+        },
       }).read();
       expect(calls).toEqual([]);
       expect(result?.reclaim?.notFired?.held?.sidUnrecognised).toBe(1);
@@ -1595,11 +1612,12 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
         ttlMs: 0,
         reclaim: {
           childUid: OWN_UID,
-          sessions: {
+          mode: 'observe',
+          view: sessionView({
             liveSessionPidsOf: () => new Set(live),
             knownTerminatedSessionPidsOf: () => new Set(terminated),
             anyTrackedDelegationsOf: () => true,
-          },
+          }),
         },
       });
       await reader.read();
@@ -1618,7 +1636,7 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     });
   });
 
-  it('猶予（graceMs）を過ぎてもまだ居れば SIGKILL へ昇格する（observe でも同じ手順）', async () => {
+  it('猶予（10 秒）を過ぎてもまだ居れば SIGKILL へ昇格する（observe でも同じ手順）', async () => {
     placeProcess(root, 290, 'a', 'S', 1, 0, 1, 777);
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
@@ -1628,10 +1646,10 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
       killFn,
       ttlMs: 0,
       now: () => nowMs,
-      reclaim: { childUid: OWN_UID, sessions: sessionsOf({ graceMs: 5_000 }) },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: sessionsOf() },
     });
     await reader.read();
-    nowMs += 4_999;
+    nowMs += 9_999;
     await reader.read();
     expect(calls).toEqual([{ pid: 290, signal: 'SIGTERM' }]);
     nowMs += 1;
@@ -1643,17 +1661,10 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     expect(result?.reclaim?.killed).toBe(1);
   });
 
-  it('観測そのものを切った構え（reclaim 欄なし）と、sessions の無い構えは撃たない', async () => {
+  it('観測そのものを切った構え（reclaim 欄なし）は撃たない', async () => {
     placeProcess(root, 295, 'a', 'S', 1, 0, 1, 777);
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
-    const result = await new TaskBreakdownReader({
-      procRoot: root,
-      killFn,
-      reclaim: { childUid: OWN_UID },
-    }).read();
-    expect(calls).toEqual([]);
-    expect(result?.reclaim?.signalled).toBe(0);
     await new TaskBreakdownReader({ procRoot: root, killFn }).read();
     expect(calls).toEqual([]);
   });
@@ -1680,18 +1691,16 @@ describe('既定の構え（未設定 ⟹ reclaim）でも、走っている委�
     placeUptime(root, 1000);
   }
 
-  function reapOf(delegationRunning: boolean): ReclaimReapOptions {
-    return {
+  function viewOf(delegationRunning: boolean): ReclaimSessionView {
+    return sessionView({
       liveSessionPidsOf: () => new Set(delegationRunning ? [555] : []),
-      knownTerminatedSessionPidsOf: () => new Set(),
       anyTrackedDelegationsOf: () => delegationRunning,
-    };
+    });
   }
 
   async function scanWith(env: NodeJS.ProcessEnv, delegationRunning: boolean) {
-    const reap = reapOf(delegationRunning);
     const { fn: killFn, calls } = fakeKillFn();
-    const reclaim = withTerminatedReclaimSessions(reclaimScanOf(env, CHILD, reap), reap);
+    const reclaim = reclaimScanOf(env, CHILD, viewOf(delegationRunning));
     const result = await new TaskBreakdownReader({
       procRoot: root,
       killFn,
@@ -1762,11 +1771,12 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
       killFn: (pid, signal) => calls.push({ pid, signal }),
       reclaim: {
         childUid: OWN_UID,
-        sessions: {
+        mode: 'observe',
+        view: sessionView({
           liveSessionPidsOf: () => new Set([555]),
           knownTerminatedSessionPidsOf: () => new Set([777]),
           anyTrackedDelegationsOf: () => true,
-        },
+        }),
       },
     });
     let timerCallback: (() => void) | undefined;
@@ -1890,15 +1900,12 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
     return { fn: (pid, signal) => calls.push({ pid, signal }), calls };
   }
 
-  function viewOf(ownerListed: number[] | undefined, live = LIVE): ReclaimSessionView {
-    return {
+  function viewOf(ownerListed: number[], live = LIVE): ReclaimSessionView {
+    return sessionView({
       liveSessionPidsOf: () => new Set(live),
       knownTerminatedSessionPidsOf: () => new Set(TERMINATED),
-      ...(ownerListed === undefined
-        ? {}
-        : { ownerListedSessionPidsOf: () => new Set(ownerListed) }),
-      anyTrackedDelegationsOf: () => true,
-    };
+      ownerListedSessionPidsOf: () => new Set(ownerListed),
+    });
   }
 
   // 孤児ルートの中: 各 sid は live / 終端のどちらでもなく、判定は sidUnrecognised になる
@@ -1927,7 +1934,7 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
     const result = await new TaskBreakdownReader({
       procRoot: root,
       killFn: fakeKillFn().fn,
-      reclaim: { childUid: OWN_UID, sessions: viewOf(LISTED) },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: viewOf(LISTED) },
     }).read();
 
     const { held, outsideRoots } = result?.reclaim?.notFired ?? { outsideRoots: undefined };
@@ -1946,7 +1953,7 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
     const result = await new TaskBreakdownReader({
       procRoot: root,
       killFn: fakeKillFn().fn,
-      reclaim: { childUid: OWN_UID, sessions: viewOf(LISTED) },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: viewOf(LISTED) },
     }).read();
     const sum = (split: { ownerLive: number; ownerListed: number; ownerUnknown: number }): number =>
       split.ownerLive + split.ownerListed + split.ownerUnknown;
@@ -1978,12 +1985,13 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
       ttlMs: 0,
       reclaim: {
         childUid: OWN_UID,
-        sessions: {
+        mode: 'observe',
+        view: sessionView({
           liveSessionPidsOf: () => new Set(live),
           knownTerminatedSessionPidsOf: () => new Set(),
           ownerListedSessionPidsOf: () => new Set(listed),
           anyTrackedDelegationsOf: () => true,
-        },
+        }),
       },
     });
     await reader.read();
@@ -2011,8 +2019,7 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
   });
 
   it('⭐ 判定は割る前と同じ: ownerListed の入力をどう変えても、撃つ pid の集合・held の既存の数・孤児ルート外の数は変わらない', async () => {
-    const variants: Array<number[] | undefined> = [
-      undefined,
+    const variants: number[][] = [
       [],
       LISTED,
       [100, 555, 777, 902, 903, 4000, 5000, 6000, 6001, 810, 811, 820, 830, 860],
@@ -2030,8 +2037,8 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
           killFn: fn,
           reclaim:
             mode === 'observe'
-              ? { childUid: OWN_UID, sessions: view }
-              : { childUid: OWN_UID, reap: view },
+              ? { childUid: OWN_UID, mode: 'observe', view: view }
+              : { childUid: OWN_UID, mode: 'reclaim', view: view },
         }).read();
         const notFired = result?.reclaim?.notFired;
         const { unrecognisedBy: heldSplit, ...held } = notFired?.held ?? {};
@@ -2055,27 +2062,12 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
     }
   });
 
-  it('材料（ownerListedSessionPidsOf）が渡らない構えでは内訳の欄を出さない（0に潰さない）。既存の合計は残る', async () => {
-    placeLayout();
-    const result = await new TaskBreakdownReader({
-      procRoot: root,
-      killFn: fakeKillFn().fn,
-      reclaim: { childUid: OWN_UID, sessions: viewOf(undefined) },
-    }).read();
-    const notFired = result?.reclaim?.notFired;
-    expect(notFired?.held?.sidUnrecognised).toBe(3);
-    expect(Object.prototype.hasOwnProperty.call(notFired?.held, 'unrecognisedBy')).toBe(false);
-    expect(
-      Object.prototype.hasOwnProperty.call(notFired?.outsideRoots.bySid, 'unrecognisedBy'),
-    ).toBe(false);
-  });
-
   it('観測の出力は schema を通り、内訳が落ちずに残る。内訳の無い古い形も通る', async () => {
     placeLayout();
     const result = await new TaskBreakdownReader({
       procRoot: root,
       killFn: fakeKillFn().fn,
-      reclaim: { childUid: OWN_UID, sessions: viewOf(LISTED) },
+      reclaim: { childUid: OWN_UID, mode: 'observe', view: viewOf(LISTED) },
     }).read();
     const schema = runnerExecutionResourcesSchema.shape.tasks.unwrap().shape.reclaim.unwrap();
     const parsed = schema.parse(result?.reclaim);
@@ -2092,16 +2084,6 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
       },
     };
     expect(schema.parse(old).notFired?.held?.sidUnrecognised).toBe(2);
-  });
-
-  it('withTerminatedReclaimSessions は ownerListedSessionPidsOf を運ぶ（あれば）。無ければキーを作らない', () => {
-    const base = { childUid: OWN_UID };
-    const carried = withTerminatedReclaimSessions(base, viewOf(LISTED));
-    expect(carried?.sessions?.ownerListedSessionPidsOf?.()).toEqual(new Set(LISTED));
-    const bare = withTerminatedReclaimSessions(base, viewOf(undefined));
-    expect(Object.prototype.hasOwnProperty.call(bare?.sessions, 'ownerListedSessionPidsOf')).toBe(
-      false,
-    );
   });
 });
 
@@ -2149,7 +2131,7 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
   }
   function readerOf(
     phase: () => Phase,
-    options: { subreaper?: string | null; reap?: boolean } = {},
+    options: { subreaper?: string | null; reclaim?: boolean } = {},
   ): { reader: TaskBreakdownReader; calls: Array<{ pid: number; signal: NodeJS.Signals }> } {
     const { fn, calls } = fakeKillFn();
     const view = (): ReclaimSessionView => ({
@@ -2165,7 +2147,8 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
       ttlMs: 0,
       reclaim: {
         childUid: OWN_UID,
-        ...(options.reap === true ? { reap: view() } : { sessions: view() }),
+        mode: options.reclaim === true ? 'reclaim' : 'observe',
+        view: view(),
         delegationSubreaper: options.subreaper === undefined ? TINI : options.subreaper,
       },
     });
@@ -2234,33 +2217,6 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
     const { reader, calls } = readerOf(() => phase, { subreaper: null });
     await reader.read();
     phase = ABANDONED_LISTED;
-    foldTini();
-    await reader.read();
-    expect(firedPids(calls)).toEqual([702, 703, 710, 711, 715]);
-  });
-
-  it('abandonedOwnerListedSessionPidsOf を渡さない構えは、絞らず木を丸ごと撃つ（今どおり）', async () => {
-    placeTiniTree();
-    const { fn, calls } = fakeKillFn();
-    let terminated: number[] = [];
-    let live = [TINI_PID];
-    const reader = new TaskBreakdownReader({
-      procRoot: root,
-      killFn: fn,
-      ttlMs: 0,
-      reclaim: {
-        childUid: OWN_UID,
-        delegationSubreaper: TINI,
-        sessions: {
-          liveSessionPidsOf: () => new Set(live),
-          knownTerminatedSessionPidsOf: () => new Set(terminated),
-          anyTrackedDelegationsOf: () => true,
-        },
-      },
-    });
-    await reader.read();
-    live = [];
-    terminated = [TINI_PID];
     foldTini();
     await reader.read();
     expect(firedPids(calls)).toEqual([702, 703, 710, 711, 715]);
@@ -2347,31 +2303,10 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
     expect(firedPids(calls)).not.toContain(702);
   });
 
-  it('withTerminatedReclaimSessions は abandonedOwnerListedSessionPidsOf を運ぶ（あれば）。無ければキーを作らない', () => {
-    const base = { childUid: OWN_UID };
-    const view = (withField: boolean): ReclaimSessionView => ({
-      liveSessionPidsOf: () => new Set(),
-      knownTerminatedSessionPidsOf: () => new Set(),
-      ...(withField ? { abandonedOwnerListedSessionPidsOf: () => new Set([700]) } : {}),
-    });
-    expect(
-      withTerminatedReclaimSessions(
-        base,
-        view(true),
-      )?.sessions?.abandonedOwnerListedSessionPidsOf?.(),
-    ).toEqual(new Set([700]));
-    expect(
-      Object.prototype.hasOwnProperty.call(
-        withTerminatedReclaimSessions(base, view(false))?.sessions,
-        'abandonedOwnerListedSessionPidsOf',
-      ),
-    ).toBe(false);
-  });
-
-  it('reap（reclaim）でも同じ: 引き取られた枝は撃たず、CLI の枝は撃つ', async () => {
+  it('mode が reclaim でも同じ: 引き取られた枝は撃たず、CLI の枝は撃つ', async () => {
     placeTiniTree();
     let phase = LIVE;
-    const { reader, calls } = readerOf(() => phase, { reap: true });
+    const { reader, calls } = readerOf(() => phase, { reclaim: true });
     await reader.read();
     phase = ABANDONED_LISTED;
     foldTini();

@@ -51,7 +51,6 @@ import { gateDuringShutdown, waitForPickups } from './shutdown-pickups.js';
 import {
   startReclaimSweep,
   TaskBreakdownReader,
-  type ReclaimReapOptions,
   type ReclaimScanOptions,
   type ReclaimSessionView,
 } from './tasks.js';
@@ -303,7 +302,7 @@ export const RECLAIM_ENV_KEY = 'ALTEROID_RUNNER_RECLAIM';
 export function reclaimScanOf(
   env: NodeJS.ProcessEnv = process.env,
   childUser: RunnerChildUser | undefined = childUserOf(env),
-  reap?: ReclaimReapOptions,
+  view: ReclaimSessionView,
 ): ReclaimScanOptions | undefined {
   const raw = envValue(env, RECLAIM_ENV_KEY) ?? 'reclaim';
   if (raw === 'off') return undefined;
@@ -316,7 +315,7 @@ export function reclaimScanOf(
     );
   }
   if (childUser === undefined) return undefined;
-  return { childUid: childUser.uid, ...(raw === 'reclaim' && reap !== undefined ? { reap } : {}) };
+  return { childUid: childUser.uid, mode: raw, view };
 }
 
 // 委譲の CLI の引き取り手（`tini -s`）を PATH から探す（#4494）。子の UID へ降ろさない構成では使わない: 委譲を自前で起こす経路（`spawnProcess`）がそもそも無いため。
@@ -342,30 +341,6 @@ function executableFile(path: string): boolean {
   } catch {
     return false;
   }
-}
-
-// `off`（`undefined`）はそのまま返す: 観測ごと止める切れる口のため。
-export function withTerminatedReclaimSessions(
-  scan: ReclaimScanOptions | undefined,
-  view: ReclaimSessionView,
-): ReclaimScanOptions | undefined {
-  if (scan === undefined || scan.reap !== undefined) return scan;
-  return {
-    ...scan,
-    sessions: {
-      liveSessionPidsOf: view.liveSessionPidsOf,
-      knownTerminatedSessionPidsOf: view.knownTerminatedSessionPidsOf,
-      ...(view.ownerListedSessionPidsOf === undefined
-        ? {}
-        : { ownerListedSessionPidsOf: view.ownerListedSessionPidsOf }),
-      ...(view.abandonedOwnerListedSessionPidsOf === undefined
-        ? {}
-        : { abandonedOwnerListedSessionPidsOf: view.abandonedOwnerListedSessionPidsOf }),
-      ...(view.anyTrackedDelegationsOf === undefined
-        ? {}
-        : { anyTrackedDelegationsOf: view.anyTrackedDelegationsOf }),
-    },
-  };
 }
 
 export async function main(): Promise<void> {
@@ -471,7 +446,7 @@ export async function main(): Promise<void> {
     readPidsFn: async () => (await readExecutionResources()).pids,
   });
 
-  const reap: ReclaimReapOptions = {
+  const sessionView: ReclaimSessionView = {
     liveSessionPidsOf: () => host.delegationSessionPids().live,
     knownTerminatedSessionPidsOf: () => host.delegationSessionPids().knownTerminated,
     ownerListedSessionPidsOf: () => host.delegationSessionPids().ownerListed,
@@ -480,10 +455,7 @@ export async function main(): Promise<void> {
     anyTrackedDelegationsOf: () => host.list().length > 0,
   };
 
-  const reclaimScan = withTerminatedReclaimSessions(
-    reclaimScanOf(process.env, childUser, reap),
-    reap,
-  );
+  const reclaimScan = reclaimScanOf(process.env, childUser, sessionView);
 
   // 既定（`app.ts` 側の `new TaskBreakdownReader()`）に任せない: 降ろす UID を知らず、観測が動かないため。
   // 引き取り手（#4494）も観測に載せる: 起動ログにしか出ないと、クローンから効いているかを確かめられないため。走査があるのは子の UID へ降ろす構成だけなので、`null` は「探したが無かった」である
@@ -586,7 +558,7 @@ export async function main(): Promise<void> {
       ` / 孤児の観測: ${
         reclaimScan === undefined
           ? '切'
-          : reclaimScan.reap === undefined
+          : reclaimScan.mode === 'observe'
             ? 'observe（終端した委譲の木だけ畳む。素性の分からない孤児は撃たない）'
             : '回収（撃つ。既定）'
       }` +
