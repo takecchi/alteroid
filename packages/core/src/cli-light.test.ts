@@ -69,4 +69,8 @@ describe('@alteroid/core/cli-light（issue #2860）', () => {
     expect(light.REMOVE_MANY_LIMIT_MAX).toBe(2000);
     expect(typeof light.formatElapsedAgo).toBe('function');
   });
+
+  it('切り詰めは core と同じ clipWithEllipsis を出す（CLI に式を写させない）', () => {
+    expect(light.clipWithEllipsis('あいうえ', 3)).toBe('あいう…');
+  });
 });
