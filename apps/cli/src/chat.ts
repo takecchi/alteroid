@@ -1753,7 +1753,8 @@ export async function runSlashCommand(
         return 'ok';
       }
       const entry = (await response.json()) as Record<string, unknown>;
-      stdout.write(`${formatJournalEntryFull(entry)}\n`);
+      const heading = `  ${String(entry.at)}  [${String(entry.type)}]\n      id: ${String(entry.id)}`;
+      stdout.write(`${formatEntryFull(heading, entry, ['at', 'type', 'id'])}\n`);
       return 'ok';
     }
 
@@ -4210,24 +4211,6 @@ function summarize(entry: Record<string, unknown>): string {
     );
   }
   return '';
-}
-
-function formatJournalEntryFull(entry: Record<string, unknown>): string {
-  const lines = [`  ${String(entry.at)}  [${String(entry.type)}]`, `      id: ${String(entry.id)}`];
-  for (const [key, value] of Object.entries(entry)) {
-    if (key === 'at' || key === 'type' || key === 'id') continue;
-    if (typeof value === 'string') {
-      const body = redactBody(value);
-      if (!body.includes('\n')) {
-        lines.push(`      ${key}: ${body}`);
-        continue;
-      }
-      lines.push(`      ${key}:`, ...body.split('\n').map((line) => `        ${line}`));
-    } else {
-      lines.push(`      ${key}: ${redactBody(JSON.stringify(value) ?? String(value))}`);
-    }
-  }
-  return lines.join('\n');
 }
 
 function summarizeGithubObservation(entry: Record<string, unknown>): string {

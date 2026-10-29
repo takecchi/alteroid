@@ -4260,6 +4260,37 @@ describe('chat の /journal', () => {
       expect(calls).toEqual([{ route: 'GET /journal/:id', args: { param: { id: 'j-9' } } }]);
     });
 
+    it('見出し・id・残りの欄の順に並べ、複数行の欄は字下げし、文字列でない欄は JSON で出す', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        journalEntries: [
+          {
+            type: 'decision',
+            decision: '自分で決めた',
+            id: 'j-9',
+            grounds: '1行目\n2行目',
+            at: '2026-08-16T10:00:00.000Z',
+            refs: ['a', 1],
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal-show j-9', ...slashArgs(client, emptyListed()));
+
+      expect(read()).toBe(
+        [
+          '  2026-08-16T10:00:00.000Z  [decision]',
+          '      id: j-9',
+          '      decision: 自分で決めた',
+          '      grounds:',
+          '        1行目',
+          '        2行目',
+          '      refs: ["a",1]',
+          '',
+        ].join('\n'),
+      );
+    });
+
     it('伏せ字を一覧と同じく掛ける（秘密は出ない）', async () => {
       const read = captureStdout();
       const { client } = stubClient({
