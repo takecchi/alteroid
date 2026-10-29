@@ -93,6 +93,20 @@ interface Case {
   seed?: (stores: ReturnType<typeof createMemoryStores>) => Promise<void>;
 }
 
+async function seedSayTask(stores: ReturnType<typeof createMemoryStores>): Promise<void> {
+  const at = '2026-01-01T00:00:00.000Z';
+  await stores.tasks.add({
+    id: 't1',
+    createdAt: at,
+    updatedAt: at,
+    status: 'queued',
+    origin: 'self',
+    originConversationId: 'conv-1',
+    title: '件',
+    body: '本文',
+  });
+}
+
 const cases: Case[] = [
   {
     label: 'memory_outline.q（文字列 .min(1)）',
@@ -250,31 +264,24 @@ const cases: Case[] = [
     hint: formatStringLengthJa({ min: 1 }),
   },
   {
-    label: 'conversation_post.text（文字列 .min(1)）',
-    tool: 'conversation_post',
-    base: {},
+    label: 'task_say.text（文字列 .min(1)）',
+    tool: 'task_say',
+    base: { taskId: 't1' },
     field: 'text',
     invalid: '',
     valid: 'こんにちは',
     hint: formatStringLengthJa({ min: 1 }),
+    seed: seedSayTask,
   },
   {
-    label: 'conversation_post.conversationId（文字列 .min(1)）',
-    tool: 'conversation_post',
+    label: 'task_say.taskId（文字列 .min(1)）',
+    tool: 'task_say',
     base: { text: 'こんにちは' },
-    field: 'conversationId',
+    field: 'taskId',
     invalid: '',
-    valid: '11111111-1111-1111-1111-111111111111',
+    valid: 't1',
     hint: formatStringLengthJa({ min: 1 }),
-    seed: async (stores) => {
-      await stores.journal.append({
-        type: 'exchange',
-        with: 'human',
-        role: 'inbound',
-        text: '人間の発言',
-        conversationId: '11111111-1111-1111-1111-111111111111',
-      });
-    },
+    seed: seedSayTask,
   },
   {
     label: 'archive_remove_many.sessionIds（配列 .min(1)。要素は別に測る）',

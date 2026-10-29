@@ -445,7 +445,7 @@ describe('起点の会話へ返答したターンの終わりに、queued の ta
     await s.clone.stop();
   });
 
-  it('内部ターン（報告の読み）が conversation_post で起点の会話へ書いたら閉じる。書かなければ閉じない', async () => {
+  it('内部ターン（報告の読み）が task_say で task の起点の会話へ書いたら、その会話の task が閉じる。書かなければ閉じない', async () => {
     const stores = createMemoryStores();
     await stores.journal.append({
       type: 'exchange',
@@ -460,10 +460,7 @@ describe('起点の会話へ返答したターンの終わりに、queued の ta
         input.includes('POST-REPORT')
           ? [
               ...say('読んだ'),
-              {
-                run: () =>
-                  tool('conversation_post')({ text: '終わりました', conversationId: 'conv-9' }),
-              },
+              { run: () => tool('task_say')({ taskId: 't9', text: '終わりました' }) },
             ]
           : say('読んだ'),
       { stores },
@@ -477,13 +474,10 @@ describe('起点の会話へ返答したターンの終わりに、queued の ta
     expect(await statusOf(stores, 't9')).toBe('queued');
 
     s.clone.post(managerReport('rep-post', 'POST-REPORT'));
-    await waitFor(
-      async () => (await statusOf(stores, 't9')) === 'done',
-      'conversation_post で閉じる',
-    );
+    await waitFor(async () => (await statusOf(stores, 't9')) === 'done', 'task_say で閉じる');
 
     const written = (await decisions(stores)).filter((text) => text.includes('t9'));
-    expect(written.some((text) => text.includes('conversation_post'))).toBe(true);
+    expect(written.some((text) => text.includes('task_say'))).toBe(true);
     await s.clone.stop();
   });
 
@@ -547,17 +541,14 @@ describe('ask_human を呼んだターンでは、その会話の task を閉じ
     await s.clone.stop();
   });
 
-  it('前のターンで出した未回答の問いの会話は、後の別の報告のターンが conversation_post しても閉じない。答えたターンで閉じる', async () => {
+  it('前のターンで出した未回答の問いの会話は、後の別の報告のターンが task_say しても閉じない。答えたターンで閉じる', async () => {
     const s = boot((_turn, input, tool) =>
       input.includes('承認待ちにしていた質問に人間が答えた')
         ? say('回答を受けた。進める')
         : input.includes('LATER-REPORT')
           ? [
               ...say('読んだ'),
-              {
-                run: () =>
-                  tool('conversation_post')({ text: '別件の報告です', conversationId: 'conv-1' }),
-              },
+              { run: () => tool('task_say')({ taskId: 'ask-2', text: '別件の報告です' }) },
             ]
           : [
               ...say('確認します'),
@@ -575,7 +566,7 @@ describe('ask_human を呼んだターンでは、その会話の task を閉じ
         (await s.stores.journal.list({ types: ['exchange'], with: ['human'] })).some(
           (row) => row.type === 'exchange' && row.text.includes('別件の報告です'),
         ),
-      '別の報告のターンが conversation_post を書く',
+      '別の報告のターンが task_say を書く',
     );
     await waitFor(
       async () => (await s.stores.journal.list({ types: ['turn_timing'] })).length >= 2,
@@ -638,8 +629,10 @@ describe('閉じるのは、そのターンが読んだ発言の task だけ（�
     await s.clone.stop();
   });
 
-  it('枠で保持中の発言は、別のターンの conversation_post で閉じない', async () => {
+  it('枠で保持中の発言は、別のターンの task_say で閉じない', async () => {
     const g = gate();
+    const stores = createMemoryStores();
+    await stores.tasks.add(seeded('say-target', { originConversationId: 'conv-1' }));
     let reportTurns = 0;
     const s = boot(
       (_turn, input, tool) => {
@@ -649,10 +642,7 @@ describe('閉じるのは、そのターンが読んだ発言の task だけ（�
             ? say('枠に当たる回')
             : [
                 ...say('読んだ'),
-                {
-                  run: () =>
-                    tool('conversation_post')({ text: '終わりました', conversationId: 'conv-1' }),
-                },
+                { run: () => tool('task_say')({ taskId: 'say-target', text: '終わりました' }) },
               ];
         }
         return input.includes('HELD-BODY')
@@ -660,6 +650,7 @@ describe('閉じるのは、そのターンが読んだ発言の task だけ（�
           : say('返答');
       },
       {
+        stores,
         env: { ALTEROID_CLONE_HUMAN_PRIORITY: 'off' },
         resultFor: (turnIndex) =>
           turnIndex === 0 ? { subtype: 'error_during_execution', text: SPEND_LIMIT } : undefined,
@@ -672,13 +663,13 @@ describe('閉じるのは、そのターンが読んだ発言の task だけ（�
 
     // 枠が開いたことを試す合図。保持していた報告が先に配り直され、その返答が conv-1 へ書く
     s.clone.post(human('probe', 'PROBE', 'conv-2'));
-    await waitFor(() => reportTurns >= 2, '報告のターンが conversation_post まで進む');
+    await waitFor(() => reportTurns >= 2, '報告のターンが task_say まで進む');
     await waitFor(
       async () =>
         (await s.stores.journal.list({ types: ['exchange'], with: ['human'] })).some(
           (row) => row.type === 'exchange' && row.text.includes('終わりました'),
         ),
-      'conversation_post が書かれる',
+      'task_say が書かれる',
     );
 
     // held-1 はまだ配り直されて読まれていない（自分のターンはゲートで止まっている）
@@ -691,22 +682,21 @@ describe('閉じるのは、そのターンが読んだ発言の task だけ（�
     await s.clone.stop();
   });
 
-  it('ALTEROID_CLONE_HUMAN_PRIORITY を切ると、先の報告のターンの conversation_post で、後ろの発言を閉じない', async () => {
+  it('ALTEROID_CLONE_HUMAN_PRIORITY を切ると、先の報告のターンの task_say で、後ろの発言を閉じない', async () => {
     const g = gate();
+    const stores = createMemoryStores();
+    await stores.tasks.add(seeded('say-target', { originConversationId: 'conv-1' }));
     const s = boot(
       (_turn, input, tool) =>
         input.includes('PRIO-REPORT')
           ? [
               ...say('読んだ'),
-              {
-                run: () =>
-                  tool('conversation_post')({ text: '終わりました', conversationId: 'conv-1' }),
-              },
+              { run: () => tool('task_say')({ taskId: 'say-target', text: '終わりました' }) },
             ]
           : input.includes('PRIO-BODY')
             ? [{ run: () => g.promise }, ...say('返答')]
             : say('返答'),
-      { env: { ALTEROID_CLONE_HUMAN_PRIORITY: 'off' } },
+      { stores, env: { ALTEROID_CLONE_HUMAN_PRIORITY: 'off' } },
     );
     s.clone.post(managerReport('rep-prio', 'PRIO-REPORT'));
     s.clone.post(human('prio-1', 'PRIO-BODY', 'conv-1'));
@@ -715,7 +705,7 @@ describe('閉じるのは、そのターンが読んだ発言の task だけ（�
         (await s.stores.journal.list({ types: ['exchange'], with: ['human'] })).some(
           (row) => row.type === 'exchange' && row.text.includes('終わりました'),
         ),
-      'conversation_post が書かれる',
+      'task_say が書かれる',
     );
 
     expect(await statusOf(s.stores, 'prio-1')).toBe('queued');

@@ -55,9 +55,9 @@ describe('NUL だけの理由・本文を、道具が空として残す', () => 
     expect((await h.stores.jobs.getApproval('ap1'))?.withdrawnReason).toBeUndefined();
   });
 
-  it('conversation_post: text が NUL だけなら、空の発言を日誌へ残さない', async () => {
+  it('task_say: text が NUL だけなら、空の発言を日誌へ残さない', async () => {
     const h = harness();
-    const out = await h.call('conversation_post', { text: '\u0000' });
+    const out = await h.call('task_say', { taskId: 't1', text: '\u0000' });
     expect(out).toContain('text は使えない');
     const rows = await h.stores.journal.list({ types: ['exchange'] });
     expect(rows).toEqual([]);
@@ -111,9 +111,9 @@ describe('NUL が混じっても中身が残る値は今までどおり通る', 
     expect((await h.stores.jobs.getApproval('ap1'))?.withdrawnReason).toBe('x');
   });
 
-  it('conversation_post: text は長さ検査を通る', async () => {
+  it('task_say: text は長さ検査を通る', async () => {
     const h = harness();
-    const out = await h.call('conversation_post', { text: 'こん\u0000にちは' });
+    const out = await h.call('task_say', { taskId: 't1', text: 'こん\u0000にちは' });
     expect(out).not.toContain('text は使えない');
   });
 

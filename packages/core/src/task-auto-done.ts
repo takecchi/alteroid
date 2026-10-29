@@ -32,8 +32,8 @@ export function taskFromHumanIntake(
 export type TurnReplyVia =
   /** このターン自身の返答（人間の発言で起きたターンが、その会話へ返した） */
   | 'turn_reply'
-  /** `conversation_post` で別の会話へ書いた */
-  | 'conversation_post';
+  /** `task_say` で task の起点の会話へ書いた */
+  | 'task_say';
 
 /**
  * 1ターンの間に起きた「会話への返答」と「委譲」の控え。ターンの始まりで作り直し、終わりで `autoCloseRepliedTasks` に渡す。
@@ -53,7 +53,7 @@ export interface TurnReplyTrace {
   readonly readSignalIds: ReadonlySet<string>;
   /**
    * 受信箱にまだ残っている合図の id（器の未読 ∪ 受信箱ストアの未処理）。呼び出し側が閉じる直前に測る。
-   * `conversation_post` と回答のターンの返答は、読んだ合図の id を持たないので、「まだ読んでいない」ものをこれで除く。
+   * `task_say` と回答のターンの返答は、読んだ合図の id を持たないので、「まだ読んでいない」ものをこれで除く。
    */
   readonly unreadSignalIds: ReadonlySet<string>;
   /**
@@ -81,7 +81,7 @@ export function hasDelegationForTask(task: Task, trace: TurnReplyTrace): boolean
 function isAddressedByReply(task: Task, via: TurnReplyVia, trace: TurnReplyTrace): boolean {
   // 人間の発言で起きたターン: 読んだ発言の task だけ
   if (via === 'turn_reply' && trace.readSignalIds.size > 0) return trace.readSignalIds.has(task.id);
-  // 回答のターンの返答・conversation_post: 受信箱にまだ残っている合図の task は、まだ読んでいないので除く
+  // 回答のターンの返答・task_say: 受信箱にまだ残っている合図の task は、まだ読んでいないので除く
   return !trace.unreadSignalIds.has(task.id);
 }
 
@@ -155,7 +155,7 @@ export async function autoCloseRepliedTasks(
         type: 'decision',
         decision: `task を自動で done にした（${task.id}: ${task.title}）: 起点の会話 ${conversationId} へ返答したターンが終わった`,
         grounds:
-          `返答の経路: ${via === 'turn_reply' ? 'そのターン自身の返答' : 'conversation_post'}。` +
+          `返答の経路: ${via === 'turn_reply' ? 'そのターン自身の返答' : 'task_say'}。` +
           'queued で、「続く」の印が無く、問いを出しておらず、結び付く委譲も走っていないため（#5469 P5）。本文は書かない（task_list id で読める）',
       });
     } catch {

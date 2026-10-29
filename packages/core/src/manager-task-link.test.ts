@@ -688,10 +688,33 @@ describe('報告は、委譲が結び付いた task を名乗る', () => {
     );
   });
 
+  it('⭐ 起点の会話が無くても taskId があれば、「task_say で書く」案内を出し、task 無しの手順（task_add で新しい会話を作る）は出さない', () => {
+    const none = describeManagerOrigin({ kind: 'none', taskId: 't-1' });
+    expect(none).toContain('結び付いた task へ `task_say` で書く');
+    expect(none).toContain('task_set_status で done にする');
+    expect(none).not.toContain('task_add で足すと新しい会話ができる');
+    const conv = describeManagerOrigin({
+      kind: 'conversation',
+      conversationId: 'conv-1',
+      taskId: 't-1',
+    });
+    expect(conv).toContain('結び付いた task へ `task_say` で書く');
+    expect(conv).not.toContain('task_list で探し');
+  });
+
+  it('taskId が無い委譲は、task_list で探す・task_add で足す手順を出す', () => {
+    expect(describeManagerOrigin({ kind: 'conversation', conversationId: 'conv-1' })).toContain(
+      'task_list で探し',
+    );
+    expect(describeManagerOrigin({ kind: 'none' })).toContain(
+      'task_add で足すと新しい会話ができる',
+    );
+  });
+
   it('結び付いていなければ、行そのものを出さない', () => {
     expect(describeManagerOrigin({ kind: 'conversation', conversationId: 'conv-1' })).not.toContain(
-      'task',
+      '結び付いた task:',
     );
-    expect(describeManagerOrigin({ kind: 'none' })).not.toContain('結び付いた task');
+    expect(describeManagerOrigin({ kind: 'none' })).not.toContain('結び付いた task:');
   });
 });

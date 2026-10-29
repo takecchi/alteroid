@@ -4,7 +4,7 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-// クローンの道具は、一意に決まる 8 文字以上の会話 id の先頭を受け付ける（#5130）。conversation_post 以外の口と、いまのターンの会話
+// クローンの道具は、一意に決まる 8 文字以上の会話 id の先頭を受け付ける（#5130）。読む側の口と、task_say のいまのターンの会話の断り
 
 const FULL = 'c60b1940-93d2-4f22-b2dc-9fd99662d4f3';
 
@@ -85,30 +85,24 @@ describe('会話 id の先頭を受け付ける道具の口（#5130）', () => {
     );
   });
 
-  it('conversation_post: いまのターンの会話を先頭で渡しても、読み替えた後の id で断る', async () => {
+  it('task_say: 起点の会話がいまのターンの会話なら、1通目が日誌に載る前でも断る', async () => {
     const h = setup(FULL);
-    await seed(h.stores, FULL, 'いまの会話の発言');
-
-    const result = await h.call('conversation_post', {
-      conversationId: 'c60b1940',
-      text: '知らせ',
+    const at = '2026-01-01T00:00:00.000Z';
+    await h.stores.tasks.add({
+      id: 't1',
+      createdAt: at,
+      updatedAt: at,
+      status: 'queued',
+      origin: 'self',
+      originConversationId: FULL,
+      title: '件',
+      body: '本文',
     });
 
+    const result = await h.call('task_say', { taskId: 't1', text: '知らせ' });
+
     expect(result.isError).toBe(true);
-    expect(result.text).toContain(
-      `会話 ${FULL} はいまのターンの会話なので、この道具では書かなかった`,
-    );
+    expect(result.text).toContain(`${FULL} はいまのターンの会話なので、この道具では書かなかった`);
     expect(h.posted).toEqual([]);
-  });
-
-  it('conversation_post: いまのターンの会話は、1通目が日誌に載る前でも、そのままの id なら同じ文言で断る', async () => {
-    const h = setup(FULL);
-
-    const result = await h.call('conversation_post', { conversationId: FULL, text: '知らせ' });
-
-    expect(result.isError).toBe(true);
-    expect(result.text).toContain(
-      `会話 ${FULL} はいまのターンの会話なので、この道具では書かなかった`,
-    );
   });
 });

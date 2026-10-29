@@ -394,7 +394,8 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
   });
 
   it('⭐ 行の中の起点の会話の使い方: 出ている行の2行目から短くなり、会話の id は毎行出る', async () => {
-    const hint = '（報告を人間へ知らせるなら、この会話へ書く）';
+    const hint =
+      '（報告を人間へ知らせるなら、この会話を起点にした task を task_list で探して task_say で書く。無ければ task_add で足す）';
     const rows = (): ManagerSummary[] => [summary(1), summary(2), summary(3)];
     const ledger = ['mgr-001', 'mgr-002', 'mgr-003'];
     const call = harness(rows, new DigestSessionDelta(), { ledger });
@@ -408,7 +409,10 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
     expect(second.split(hint).length - 1).toBe(0);
     for (const text of [first, second]) {
       for (const id of ledger) expect(text).toContain(`起点の会話: conv-${id}`);
-      expect(text.split('（知らせるならこの会話へ）').length - 1).toBe(text === first ? 2 : 3);
+      expect(
+        text.split('（知らせるなら task_list で探した task へ task_say。無ければ task_add）')
+          .length - 1,
+      ).toBe(text === first ? 2 : 3);
     }
     expect(second.length).toBeLessThan(first.length);
     // 口が無い器は全行が全文
@@ -452,7 +456,8 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
   });
 
   it('報告の抜粋の中に同じ字面が在っても書き換えない（畳むのは manager_list が組んだ行だけ）', async () => {
-    const hint = '（報告を人間へ知らせるなら、この会話へ書く）';
+    const hint =
+      '（報告を人間へ知らせるなら、この会話を起点にした task を task_list で探して task_say で書く。無ければ task_add で足す）';
     const delivered = describeReportState('delivered');
     const rows = (): ManagerSummary[] => [
       summary(1, { lastReport: `引用: ${hint}` }),
@@ -566,7 +571,8 @@ describe('畳みを切った delta（disabled）では、固定の説明が毎�
   );
 
   it('⭐ 前回と同じ行の畳み・起点の会話の使い方・行の印の意味も、毎回全文', async () => {
-    const hint = '（報告を人間へ知らせるなら、この会話へ書く）';
+    const hint =
+      '（報告を人間へ知らせるなら、この会話を起点にした task を task_list で探して task_say で書く。無ければ task_add で足す）';
     const rows = (): ManagerSummary[] => [
       summary(1),
       summary(2),

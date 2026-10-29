@@ -14,7 +14,7 @@ describe('人間の発言のターンは、どの会話の発言かを名乗る�
     const header = humanConversationHeader('conv-fuga', 'conv-hoge');
     expect(header.startsWith('[system] 会話 conv-fuga')).toBe(true);
     expect(header).toContain('直前の人間の発言は別の会話 conv-hoge だった');
-    expect(header).toContain('`conversation_post`');
+    expect(header).toContain('`task_say`');
   });
 
   it('クローンのターンの入力: 名乗りは本文の前に置かれ、切り替わった回だけ切り替わりを言う', async () => {

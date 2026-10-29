@@ -14310,12 +14310,13 @@ describe('システムプロンプトの道具一覧', () => {
   it('プロンプトに1か所だけ残した、複数の道具にまたがる・人間の安全に関わる規則が在る', () => {
     const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
     const section = prompt.split('# 道具')[1]?.split('# 委譲')[0] ?? '';
-    // 資格・鍵を人間へ渡さない（file_put / reply_attach / conversation_post の attachments をまたぐ）
+    // 資格・鍵を人間へ渡さない（file_put / reply_attach / task_say の attachments をまたぐ）
     expect(section).toContain('資格・鍵を含むファイル');
     // token_list: 枠を理由に仕事を見送らない
     expect(section).toContain('枠を理由に仕事を見送らないこと');
-    // 委譲の報告は起点の会話へ（conversation_post と manager_list をまたぐ）
-    expect(section).toContain('その委譲の起点の会話へ書く');
+    // 委譲の報告は起点の会話へ（task_say と manager_list をまたぐ）
+    expect(section).toContain('「結び付いた task」へ `task_say` で書く');
+    expect(section).toContain('task_set_status` で done にして閉じる');
     // 人間が書いた記憶を統合の走行から守る（memory_* をまたぐ）
     expect(section).toContain('人間が一度でも書いた文書');
     // 台帳は順序を持たない
@@ -14448,8 +14449,8 @@ describe('プロンプトの索引から外した規則は、道具の説明文�
     ['file_put', '資格・鍵を含むファイルは入れない'],
     ['file_put', '1時間で消える'],
     ['reply_attach', '資格・鍵を含むファイルは添えないこと'],
-    ['conversation_post', 'いまのターンの会話へは書けない'],
-    ['conversation_post', 'ask_human を使うこと'],
+    ['task_say', 'いまのターンの会話へは書けない'],
+    ['task_say', 'ask_human を使うこと'],
     ['approval_withdraw', 'manager_send（decision 付き）'],
     ['usage_read', '「取れなかった」と「0」は分けて出る'],
     ['commitment_edit', '`origin` が `self`'],
@@ -19018,27 +19019,31 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      tool: 'conversation_post',
+      tool: 'task_say',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
-        // 書く先の会話は在らせておく（無い会話は日誌へ書く前に断るので append の失敗まで届かない）
+        // 書く先の task は在らせておく（無い task は日誌へ書く前に断るので append の失敗まで届かない）
         const inner = createMemoryStores();
-        await inner.journal.append({
-          type: 'exchange',
-          with: 'human',
-          role: 'inbound',
-          text: '人間の発言',
-          conversationId: 'conv-1',
+        const at = '2026-01-01T00:00:00.000Z';
+        await inner.tasks.add({
+          id: 't-say-test',
+          createdAt: at,
+          updatedAt: at,
+          status: 'queued',
+          origin: 'self',
+          originConversationId: 'conv-1',
+          title: '知らせる件',
+          body: '本文',
         });
-        const stores = failingJournalAppend(inner, 'boom-case-conversation-post');
+        const stores = failingJournalAppend(inner, 'boom-case-task-say');
         const tools = createCloneTools({
           stores,
           emit: () => {},
           memoryCause: () => 'clone',
           conversationId: () => undefined,
         });
-        return callExpectingError(tools, 'conversation_post', {
-          conversationId: 'conv-1',
+        return callExpectingError(tools, 'task_say', {
+          taskId: 't-say-test',
           text: '知らせ',
         });
       },
@@ -20107,28 +20112,102 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
   });
 });
 
-describe('conversation_post', () => {
-  /** 書く先の会話を日誌に在らせる（在る会話へしか書けない。断る側の歯は `conversation-post-unknown-id.test.ts`）。 */
-  async function seedConversation(stores: Stores, conversationId: string): Promise<void> {
-    await stores.journal.append({
-      type: 'exchange',
-      with: 'human',
-      role: 'inbound',
-      text: '人間の発言',
-      conversationId,
+describe('task_say', () => {
+  /** 起点の会話つき（または無し）の task を足す。 */
+  async function seedTask(
+    stores: Stores,
+    id: string,
+    originConversationId: string | undefined,
+  ): Promise<void> {
+    const at = '2026-01-01T00:00:00.000Z';
+    await stores.tasks.add({
+      id,
+      createdAt: at,
+      updatedAt: at,
+      status: 'queued',
+      origin: 'self',
+      ...(originConversationId === undefined ? {} : { originConversationId }),
+      title: '知らせる件',
+      body: '本文',
     });
   }
 
-  it('指定した会話へ、ターンの返答と同じ形（with: human / role: outbound）で日誌に書き、開いている画面へ流す', async () => {
+  it('task_add: どちらの会話も無いときは新しい会話 id を付け、応答と日誌に出す', async () => {
     const h = harness();
-    await seedConversation(h.stores, 'conv-1');
 
-    const reply = await h.call('conversation_post', {
-      conversationId: 'conv-1',
+    const reply = await h.call('task_add', { title: 'a', body: 'b' });
+    const { entries } = await h.stores.tasks.list();
+    const origin = entries[0]?.originConversationId;
+    expect(origin).toMatch(/^[0-9a-f-]{36}$/);
+    expect(reply).toContain(`起点の会話は ${origin ?? ''}`);
+    const [decision] = await h.stores.journal.list({ types: ['decision'] });
+    expect(JSON.stringify(decision)).toContain(origin ?? 'missing');
+  });
+
+  it('task_add: 人間のターンではそのターンの会話を起点にする', async () => {
+    const h = harness();
+    h.setConversationId('conv-turn');
+
+    await h.call('task_add', { title: 'a', body: 'b' });
+
+    const { entries } = await h.stores.tasks.list();
+    expect(entries[0]?.originConversationId).toBe('conv-turn');
+  });
+
+  it('task_add: 報告のターン（workConversationId が id を返す）では委譲の起点を使う', async () => {
+    const stores = createMemoryStores();
+    const tools = createCloneTools({
+      stores,
+      emit: () => {},
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+      workConversationId: () => 'conv-job-origin',
+    });
+    const found = tools.find((entry) => entry.name === 'task_add');
+
+    await found?.handler({ title: 'a', body: 'b' } as never, {});
+
+    const { entries } = await stores.tasks.list();
+    expect(entries[0]?.originConversationId).toBe('conv-job-origin');
+  });
+
+  it('task_add: 起点の会話は引数で渡せない（渡しても機構が決めた会話になる）', async () => {
+    const h = harness();
+    h.setConversationId('conv-turn');
+
+    await h.call('task_add', { title: 'a', body: 'b', originConversationId: 'conv-given' });
+
+    const { entries } = await h.stores.tasks.list();
+    expect(entries[0]?.originConversationId).toBe('conv-turn');
+  });
+
+  it('task_say: 開いている task には「done にすること」を添え、閉じた task には添えない', async () => {
+    const h = harness();
+    await seedTask(h.stores, 't-open', 'conv-1');
+    await seedTask(h.stores, 't-closed', 'conv-2');
+    await h.stores.tasks.setStatus('t-closed', 'done', {
+      reason: '終わった',
+      by: 'clone',
+      at: '2026-01-01T01:00:00.000Z',
+    });
+
+    const open = await h.call('task_say', { taskId: 't-open', text: '知らせ' });
+    const closed = await h.call('task_say', { taskId: 't-closed', text: '知らせ' });
+
+    expect(open).toContain('task_set_status で done にすること');
+    expect(closed).not.toContain('task_set_status');
+  });
+
+  it('宛先は task の起点の会話に固定。ターンの返答と同じ形（with: human / role: outbound）で日誌に書き、開いている画面へ流す', async () => {
+    const h = harness();
+    await seedTask(h.stores, 't1', 'conv-1');
+
+    const reply = await h.call('task_say', {
+      taskId: 't1',
       text: '定期の確認で、PR が1本赤くなっていた。',
     });
 
-    expect(reply).toContain('会話 conv-1 へ書いた');
+    expect(reply).toContain('起点の会話 conv-1 へ書いた');
     const [entry] = await h.stores.journal.list({ types: ['exchange'] });
     expect(entry).toMatchObject({
       type: 'exchange',
@@ -20142,28 +20221,76 @@ describe('conversation_post', () => {
     ]);
   });
 
-  it('conversationId を省くと新しい会話を始め、振った id を応答で返す（日誌と画面へ同じ id で届く）', async () => {
+  it('task_add が付けた起点の会話へ task_say で書ける（日誌と画面へ同じ id で届く）', async () => {
     const h = harness();
+    await h.call('task_add', { title: 'a', body: 'b' });
+    const task = (await h.stores.tasks.list()).entries[0]!;
 
-    const reply = await h.call('conversation_post', { text: '新しく知らせたいことがある。' });
-
-    const [entry] = await h.stores.journal.list({ types: ['exchange'] });
-    const id = entry?.type === 'exchange' ? entry.conversationId : undefined;
-    expect(id).toBeDefined();
-    expect(reply).toContain(`新しい会話 ${id ?? ''} を始めて書いた`);
-    expect(h.posted).toEqual([{ conversationId: id, text: '新しく知らせたいことがある。' }]);
-  });
-
-  it('いまのターンの会話へは書かない（返答と2通並ぶので）。日誌にも画面にも何も出さない', async () => {
-    const h = harness();
-    h.setConversationId('conv-now');
-
-    const reply = await h.call('conversation_post', {
-      conversationId: 'conv-now',
-      text: '重ねて書く',
+    const reply = await h.call('task_say', {
+      taskId: task.id,
+      text: '新しく知らせたいことがある。',
     });
 
+    expect(reply).toContain(`起点の会話 ${task.originConversationId ?? ''} へ書いた`);
+    expect(h.posted).toEqual([
+      { conversationId: task.originConversationId, text: '新しく知らせたいことがある。' },
+    ]);
+  });
+
+  it('閉じた task にも書ける（報告を後から出すため）', async () => {
+    const h = harness();
+    await seedTask(h.stores, 't-closed', 'conv-1');
+    await h.stores.tasks.setStatus('t-closed', 'done', {
+      reason: '終わった',
+      by: 'clone',
+      at: '2026-01-01T01:00:00.000Z',
+    });
+
+    await h.call('task_say', { taskId: 't-closed', text: '後からの報告' });
+
+    expect(h.posted).toEqual([{ conversationId: 'conv-1', text: '後からの報告' }]);
+  });
+
+  it('存在しない task には何も書かず断る', async () => {
+    const h = harness();
+
+    const reply = await h.call('task_say', { taskId: 'no-such', text: '知らせ' });
+
+    expect(reply).toContain('task no-such は無い');
+    expect(await h.stores.journal.list({ types: ['exchange'] })).toEqual([]);
+    expect(h.posted).toEqual([]);
+  });
+
+  it('起点の会話を持たない古い task には何も書かず断り、task_add での足し直しを案内する', async () => {
+    const h = harness();
+    await seedTask(h.stores, 't-old', undefined);
+
+    const reply = await h.call('task_say', { taskId: 't-old', text: '知らせ' });
+
+    expect(reply).toContain('起点の会話を持たない古い task');
+    expect(reply).toContain('task_add');
+    expect(await h.stores.journal.list({ types: ['exchange'] })).toEqual([]);
+    expect(h.posted).toEqual([]);
+  });
+
+  it('宛先は引数で選べない（会話 id の引数は無視される）', async () => {
+    const h = harness();
+    await seedTask(h.stores, 't1', 'conv-1');
+
+    await h.call('task_say', { taskId: 't1', text: '知らせ', conversationId: 'conv-other' });
+
+    expect(h.posted).toEqual([{ conversationId: 'conv-1', text: '知らせ' }]);
+  });
+
+  it('起点の会話がいまのターンの会話なら書かない（返答と2通並ぶので）。日誌にも画面にも何も出さない', async () => {
+    const h = harness();
+    await seedTask(h.stores, 't1', 'conv-now');
+    h.setConversationId('conv-now');
+
+    const reply = await h.call('task_say', { taskId: 't1', text: '重ねて書く' });
+
     expect(reply).toContain('いまのターンの会話なので、この道具では書かなかった');
+    expect(reply).toContain('このターンの返答として書けば');
     expect(await h.stores.journal.list({ types: ['exchange'] })).toEqual([]);
     expect(h.posted).toEqual([]);
   });
@@ -20171,7 +20298,7 @@ describe('conversation_post', () => {
   it('日誌へ書けなかったら、開いている画面へも流さない（記録に無い発言を画面にだけ出さない）', async () => {
     const posted: { conversationId: string; text: string }[] = [];
     const stores = createMemoryStores();
-    await seedConversation(stores, 'conv-1');
+    await seedTask(stores, 't1', 'conv-1');
     const tools = createCloneTools({
       stores: failingJournalAppend(stores, 'boom-post'),
       emit: () => {},
@@ -20179,30 +20306,27 @@ describe('conversation_post', () => {
       conversationId: () => undefined,
       postToConversation: (id, body) => posted.push({ conversationId: id, text: body }),
     });
-    const found = tools.find((entry) => entry.name === 'conversation_post');
+    const found = tools.find((entry) => entry.name === 'task_say');
 
     let message: string;
     try {
-      const result = await found?.handler(
-        { conversationId: 'conv-1', text: '知らせ' } as never,
-        {},
-      );
+      const result = await found?.handler({ taskId: 't1', text: '知らせ' } as never, {});
       message = (result?.content ?? [])
         .map((block) => (block.type === 'text' ? block.text : ''))
         .join('');
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
-    expect(message).toContain('conversation_post');
+    expect(message).toContain('task_say');
     expect(posted).toEqual([]);
   });
 
-  it('いまのターンが別の会話なら、名指しした会話へは書ける', async () => {
+  it('いまのターンが別の会話なら、task の起点の会話へは書ける', async () => {
     const h = harness();
     h.setConversationId('conv-now');
-    await seedConversation(h.stores, 'conv-other');
+    await seedTask(h.stores, 't1', 'conv-other');
 
-    await h.call('conversation_post', { conversationId: 'conv-other', text: '別の会話への知らせ' });
+    await h.call('task_say', { taskId: 't1', text: '別の会話への知らせ' });
 
     expect(h.posted).toEqual([{ conversationId: 'conv-other', text: '別の会話への知らせ' }]);
   });

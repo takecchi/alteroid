@@ -59,7 +59,7 @@ import {
 import { isCronExpression } from './cron.js';
 import { isRunningJobStatus } from './job-status-running.js';
 import { journalWindowCrossesHorizon } from './journal-horizon.js';
-import { taskStatusForJob } from './task.js';
+import { isTaskClosed, taskStatusForJob } from './task.js';
 import { filterTranscriptLinesYielding } from './transcript-filter.js';
 import {
   TranscriptPageCache,
@@ -620,7 +620,6 @@ export const CLONE_TOOL_NAMES = [
   'file_keep',
   'file_delete',
   'reply_attach',
-  'conversation_post',
   'ask_human',
   'request_permission',
   'approvals_list',
@@ -642,6 +641,7 @@ export const CLONE_TOOL_NAMES = [
   'task_move',
   'task_set_status',
   'task_keep',
+  'task_say',
   'progress_read',
   'github_observation_record',
   'inbox_remove_many',
@@ -680,7 +680,6 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'memory_frontmatter_set',
   'memory_section_move',
   'journal_write',
-  'conversation_post',
   'ask_human',
   'request_permission',
   'approval_withdraw',
@@ -696,6 +695,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'task_move',
   'task_set_status',
   'task_keep',
+  'task_say',
   'inbox_remove_many',
   'profile_write',
   'profile_remove',
@@ -776,7 +776,6 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   memory_frontmatter_set: false,
   memory_section_move: false,
   journal_write: false,
-  conversation_post: false,
   ask_human: false,
   request_permission: false,
   approval_withdraw: false,
@@ -792,6 +791,7 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   task_move: false,
   task_set_status: false,
   task_keep: false,
+  task_say: false,
   inbox_remove_many: false,
   profile_write: true,
   profile_remove: false,
@@ -3178,9 +3178,15 @@ function describeJobOrigin(origins: JobOrigins, managerId: string): string {
   if (job === undefined) {
     return '  起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）';
   }
-  return job.conversationId === undefined
-    ? '  起点の会話: 無し（会話の外で起こした委譲）'
-    : `  起点の会話: ${job.conversationId}（報告を人間へ知らせるなら、この会話へ書く）`;
+  // 「結び付いた task へ」と出すのは taskId があるときだけ。無い委譲は task_list で探す・task_add で足す手順
+  const hint = job.taskId === undefined ? ORIGIN_HINT_NO_TASK_FULL : ORIGIN_HINT_FULL;
+  const origin =
+    job.conversationId === undefined
+      ? '  起点の会話: 無し（会話の外で起こした委譲）'
+      : `  起点の会話: ${job.conversationId}${hint}`;
+  return job.taskId === undefined
+    ? origin
+    : `${origin}\n  結び付いた task: ${job.taskId}（task_say で書ける。task_list で読める）`;
 }
 
 export function createCloneTools(context: ToolContext) {
@@ -6314,7 +6320,12 @@ export function createCloneTools(context: ToolContext) {
             summary: excerptLine(task.body, TASK_BODY_LIMIT),
             createdAt: task.createdAt,
             updatedAt: task.updatedAt,
-            extra: [`  ${firstPosition + index + 1}番目 / ${taskStatusLine(task)}`],
+            extra: [
+              `  ${firstPosition + index + 1}番目 / ${taskStatusLine(task)}`,
+              ...(task.originConversationId === undefined
+                ? []
+                : [`  起点の会話: ${task.originConversationId}`]),
+            ],
           }),
         );
         const lines: string[] = [];
@@ -6368,6 +6379,8 @@ export function createCloneTools(context: ToolContext) {
       'task_add',
       [
         '順序と状態を持つ task を1件足す。起点は自分（self）として載る。',
+        '起点の会話は、いまのターンの会話か、報告を読んでいる委譲の起点に自動で結ばれる。どちらも無ければ新しい会話ができる（task_say の宛先になる）。',
+        '知らせるためだけに足した task は、書いたら done にして閉じる。続ける仕事の task は、その会話への返答で器が自動で done にしないよう、task_keep で「続く」の印を付ける。',
         '置き場所を省くと既定の位置に入る（自分で足した件は末尾）。to で先頭・末尾・特定の task の前後を指せる。',
         '引き受けた仕事の台帳（commitment_open）とは別の器で、片方に足してももう片方には載らない。',
       ].join(' '),
@@ -6392,16 +6405,12 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('to が before / after のときの基準の task の id（開いている件だけ指せる）'),
-        originConversationId: z
-          .string()
-          .optional()
-          .describe('この task の起点になった会話の id（分かるときだけ）'),
         source: z
           .string()
           .optional()
           .describe('関係する相手や出所（マネージャー id など。分かるときだけ）'),
       },
-      async ({ title, body, to, anchorId, originConversationId, source }) => {
+      async ({ title, body, to, anchorId, source }) => {
         const titleError =
           describeStringLengthViolation('title', title, { min: 1, max: TASK_TITLE_MAX }) ??
           describeBlankViolation('title', title);
@@ -6411,10 +6420,7 @@ export function createCloneTools(context: ToolContext) {
           describeStringLengthViolation('body', body, { min: 1 }) ??
           describeBlankViolation('body', body);
         if (bodyError !== null) return text(bodyError);
-        for (const [field, value] of [
-          ['originConversationId', originConversationId],
-          ['source', source],
-        ] as const) {
+        for (const [field, value] of [['source', source]] as const) {
           if (value !== undefined && stripNul(value).trim().length === 0) {
             return text(
               `${field} が空です。分かるときだけ実のある文字列で渡し、無いなら省略してください。`,
@@ -6424,6 +6430,8 @@ export function createCloneTools(context: ToolContext) {
         const resolved = resolveTaskPlacement(to, anchorId);
         if (resolved.kind === 'invalid') return text(resolved.message);
         const now = new Date().toISOString();
+        // 新しい task は必ず起点の会話 id を持つ（task_say の宛先）。機構が決める: いまのターンの会話か、報告を読んでいる委譲の起点。どちらも無いときだけ新しい id
+        const originId = getWorkConversationId() ?? randomUUID();
         const entry: Task = {
           id: randomUUID(),
           createdAt: now,
@@ -6431,7 +6439,7 @@ export function createCloneTools(context: ToolContext) {
           status: 'queued',
           origin: 'self',
           ...(source === undefined ? {} : { source }),
-          ...(originConversationId === undefined ? {} : { originConversationId }),
+          originConversationId: originId,
           title,
           body,
         };
@@ -6461,11 +6469,13 @@ export function createCloneTools(context: ToolContext) {
           {
             type: 'decision',
             decision: `task を足した（${entry.id}）: ${title}`,
-            grounds: `自分で task_add した。置き場所: ${describeTaskPlacement(resolved.placement)}。本文: ${body}`,
+            grounds: `自分で task_add した。置き場所: ${describeTaskPlacement(resolved.placement)}。起点の会話: ${originId}。本文: ${body}`,
           },
           'act-completed',
         );
-        return text(`task を足した（${entry.id}）。位置は task_list で確かめられる。`);
+        return text(
+          `task を足した（${entry.id}）。起点の会話は ${originId}（task_say taskId=${entry.id} でここへ書ける）。位置は task_list で確かめられる。`,
+        );
       },
     ),
 
@@ -9723,33 +9733,32 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // 遡り切れていない窓で「無い」と言い切らない: 遡った件数と先頭に届いたかを必ず出す
     // いまのターンの会話そのものへは書かない: ターンの返答が届くので、道具で書くと同じ画面に返答が2通並ぶため
+    // 宛先は task の起点の会話に固定する（会話 id の引数・新規会話の生成は持たない）。閉じた task にも書ける（報告を後から出すため）
     tool(
-      'conversation_post',
+      'task_say',
       [
-        '人間の会話へ1通書く。いまのターンが人間の発言で起きたものでなくても届く（定期の仕事・外部イベント・委譲の報告を人間へ知らせる口）。',
-        'conversationId を指定するとその会話へ、省略すると新しい会話を始めて、その id を返す。',
-        '指定した conversationId の会話が無ければ、何も書かずに断る（その文字列で新しい会話は作らない）。',
-        'conversationId は、1つの会話に決まる 8 文字以上の先頭でもよい（例 c60b1940。読み替えた完全な id を応答に出す）。2つ以上の会話に当たる先頭は、何も書かずに断って候補を返す。',
-        'いまのターンの会話へは書けない（そこへは普通に返答すれば届く）。',
+        'task の起点の会話へ1通書く。宛先は task の起点の会話に固定で、会話 id は選べない。いまのターンが人間の発言で起きたものでなくても届く（定期の仕事・外部イベント・委譲の報告を人間へ知らせる口）。',
+        '閉じた task にも書ける（報告を後から出すため）。',
+        'task が無い、または起点の会話を持たない古い task なら、何も書かずに断る（古い task は task_add で足し直す）。',
+        'いまのターンの会話へは書けない（そこへは普通に返答すれば届く。添付なら reply_attach）。',
         '知らせるだけで、答えは待たない。確認や承認が要るなら ask_human を使うこと。',
         '人間へファイルを渡すなら、先に file_put で置き場へ入れ、その id を attachments に渡す（添付があれば text は空でもよい。どちらも空の発言は書かない）。',
         '添付の検査（存在・個数・合計の上限）に1つでも落ちたら、何も書かずに断る。',
+        '知らせるためだけに足した task は、書いたら done にして閉じる。続ける仕事の task は、書いた会話が返答に数えられて器が自動で done にしないよう、task_keep で「続く」の印を付ける（queued で印の無い task は、このターンの終わりに自動で done になりうる）。',
         '日誌には人間との往復（あなたの発言）として残る。',
       ].join(' '),
       {
+        taskId: z
+          .string()
+          .describe(
+            `書く先の task の id（task_list に出ている id。閉じた件も可。${formatStringLengthJa({ min: 1 })}）`,
+          ),
         text: z
           .string()
           .optional()
           .describe(
             `人間へ届ける本文（添付が無いとき必須。${formatStringLengthJa({ min: 1 })}。添付があれば省略か空でもよい）`,
-          ),
-        conversationId: z
-          .string()
-          .optional()
-          .describe(
-            `書く先の既存の会話 id（conversation_read の一覧で分かる完全な id か、1つの会話に決まる 8 文字以上の先頭。${formatStringLengthJa({ min: 1 })}）。省略すると新しい会話`,
           ),
         attachments: z
           .array(z.string().min(1))
@@ -9759,7 +9768,7 @@ export function createCloneTools(context: ToolContext) {
               'どこにも結ばれていない添付は、この発言の会話へ結ばれる',
           ),
       },
-      async ({ text: rawBody, conversationId, attachments: attachmentIds }) => {
+      async ({ taskId, text: rawBody, attachments: attachmentIds }) => {
         const withAttachments = attachmentIds !== undefined && attachmentIds.length > 0;
         if (!withAttachments) {
           if (rawBody === undefined) {
@@ -9769,51 +9778,49 @@ export function createCloneTools(context: ToolContext) {
           if (textError !== null) return text(textError);
         }
         const body = rawBody ?? '';
-        const conversationIdError = describeStringLengthViolation(
-          'conversationId',
-          conversationId,
-          {
-            min: 1,
-          },
-        );
-        if (conversationIdError !== null) return text(conversationIdError);
-        const current = getConversationId();
-        const refuseCurrentTurn = (id: string, note: string) => ({
-          ...text(
-            `${note}会話 ${id} はいまのターンの会話なので、この道具では書かなかった。` +
-              (withAttachments
-                ? 'このターンの返答に添付を添えるなら reply_attach を使う。'
-                : 'このターンの返答として書けば、その会話へ届く。'),
-          ),
-          isError: true,
-        });
-        // 解決より先に、そのままの一致で断る: いまのターンの会話は、1通目がまだ日誌に載っていないことがあり、解決に回すと「無い」と取り違えるため
-        if (conversationId !== undefined && conversationId === current) {
-          return refuseCurrentTurn(conversationId, '');
-        }
-        // 一意に決まる 8 文字以上の前方一致だけ読み替える（#5130）。2つ以上・無いは書かずに断る（conversation-lookup.ts の resolveConversationId）
-        let resolvedId: string | undefined;
-        let resolvedNote = '';
-        if (conversationId !== undefined) {
-          const resolution = await resolveConversationId(stores.journal, conversationId);
-          if (resolution.kind === 'missing' || resolution.kind === 'ambiguous') {
+        const taskIdError = describeStringLengthViolation('taskId', taskId, { min: 1 });
+        if (taskIdError !== null) return text(taskIdError);
+        let task: Task | null;
+        try {
+          task = await stores.tasks.get(taskId);
+        } catch (error) {
+          if (error instanceof UnreadableTaskError) {
             return {
-              ...text(
-                `会話へは書かなかった。${describeUnresolvedConversation(conversationId, resolution)}`,
-              ),
+              ...text(`task ${taskId} は読めない形で入っている。何も書かなかった。`),
               isError: true,
             };
           }
-          resolvedId = resolution.id;
-          if (resolution.kind === 'prefix') {
-            resolvedNote = describeResolvedConversationPrefix(conversationId, resolution.id);
-          }
+          throw error;
         }
-        // 読み替えた後の id でも比べる: 先頭だけ渡された、いまのターンの会話も断るため
-        if (resolvedId !== undefined && resolvedId === current) {
-          return refuseCurrentTurn(resolvedId, resolvedNote);
+        if (task === null) {
+          return {
+            ...text(
+              `task ${taskId} は無いので、何も書かなかった（task_list で実在する id を確かめること）。`,
+            ),
+            isError: true,
+          };
         }
-        const target = resolvedId ?? randomUUID();
+        const target = task.originConversationId;
+        if (target === undefined) {
+          return {
+            ...text(
+              `task ${taskId} は起点の会話を持たない古い task なので、何も書かなかった。task_add で足し直すと起点の会話が付く。`,
+            ),
+            isError: true,
+          };
+        }
+        // 解決を挟まず、そのままの一致で断る: いまのターンの会話は、1通目がまだ日誌に載っていないことがあるため
+        if (target === getConversationId()) {
+          return {
+            ...text(
+              `task ${taskId} の起点の会話 ${target} はいまのターンの会話なので、この道具では書かなかった。` +
+                (withAttachments
+                  ? 'このターンの返答に添付を添えるなら reply_attach を使う。'
+                  : 'このターンの返答として書けば、その会話へ届く。'),
+            ),
+            isError: true,
+          };
+        }
         const attached = withAttachments
           ? await checkAndBindOutboundAttachments(stores, attachmentIds, {
               conversationId: target,
@@ -9824,7 +9831,7 @@ export function createCloneTools(context: ToolContext) {
         let entry;
         try {
           entry = await appendJournalOrThrow(
-            'conversation_post',
+            'task_say',
             stores.journal,
             {
               type: 'exchange',
@@ -9848,9 +9855,10 @@ export function createCloneTools(context: ToolContext) {
         const withNote =
           attached.refs.length === 0 ? '' : `（添付 ${attached.refs.length} 件つき）`;
         return text(
-          conversationId === undefined
-            ? `新しい会話 ${target} を始めて書いた${withNote}（${entry.id}）。`
-            : `${resolvedNote}会話 ${target} へ書いた${withNote}（${entry.id}）。`,
+          `task ${taskId} の起点の会話 ${target} へ書いた${withNote}（${entry.id}）。` +
+            (!isTaskClosed(task.status)
+              ? '\n知らせるだけの task なら task_set_status で done にすること。'
+              : ''),
         );
       },
     ),
@@ -9859,7 +9867,7 @@ export function createCloneTools(context: ToolContext) {
       'file_put',
       [
         'あなたの手元（デーモンの側）のファイルを、添付の置き場へ入れる。人間へファイルを渡す最初の段で、',
-        '返る id を reply_attach（いまのターンの返信に添える）か conversation_post の attachments（別の会話へ書く）に渡すと、人間の画面に添付として出る。',
+        '返る id を reply_attach（いまのターンの返信に添える）か task_say の attachments（task の起点の会話へ書く）に渡すと、人間の画面に添付として出る。',
         '返信に添えるまで、この添付はどこにも結ばれていないので **1時間で消える**。入れたらすぐ添えること。',
         '後で使うために取っておくなら keep: true で入れる（保存の印つき。期限なし・1時間の掃除にも掛からない。消えるのは file_delete したときだけ）。入れた後から付けるなら file_keep、置き場の一覧は file_list。',
         '通常のファイルだけ入れられる（ディレクトリ・特殊ファイルは断る）。大きさの上限は人間の添付と同じ（その他の上限を超えるものは読まずに断る）。画像の上限を超える画像は、画像ではなくファイル（application/octet-stream）として入れる（人間はダウンロードして開く）。',
@@ -9894,8 +9902,8 @@ export function createCloneTools(context: ToolContext) {
             (result.note === undefined ? '' : `${result.note}\n`) +
             (keep === true
               ? '保存の印つきで入れた（期限なし・1時間の掃除にも掛からない。消すのは file_delete）。' +
-                '人間へ渡すなら reply_attach か conversation_post の attachments に id を渡す。'
-              : '会話に添える（reply_attach、または conversation_post の attachments）まで、この添付は1時間で消える。' +
+                '人間へ渡すなら reply_attach か task_say の attachments に id を渡す。'
+              : '会話に添える（reply_attach、または task_say の attachments）まで、この添付は1時間で消える。' +
                 '取っておくなら file_keep id=<id> keep=true。'),
         );
       },
@@ -9932,7 +9940,7 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ kept, from, conversationId: conversationIdInput, query, cursor }) => {
         try {
-          // 一意に決まる 8 文字以上の前方一致だけ読み替える（#5130。conversation_post と同じ線）。当たらない id は今どおりそのまま絞る
+          // 一意に決まる 8 文字以上の前方一致だけ読み替える（#5130）。当たらない id は今どおりそのまま絞る
           let conversationId = conversationIdInput;
           let resolvedNote = '';
           if (conversationIdInput !== undefined) {
@@ -10047,7 +10055,7 @@ export function createCloneTools(context: ToolContext) {
         '同じターンで複数回呼んでも、個数・合計は合わせて数える（人間の1発言と同じ上限）。1つでも検査に落ちたら、何も添えずに、どれがなぜかを返す。',
         'どこにも結ばれていない添付はこの会話へ結ばれる。すでに別の会話に結ばれている添付は結び直さず、そのまま添える。',
         '本文が空で添付だけの返信でも、返信として残る。',
-        'いまのターンに会話が無いとき（定期の仕事・外部イベントが起点で返信先が無い）は使えない。別の会話へ渡すなら conversation_post の attachments を使う。',
+        'いまのターンに会話が無いとき（定期の仕事・外部イベントが起点で返信先が無い）は使えない。task の起点の会話へ渡すなら task_say の attachments を使う。',
         '資格・鍵を含むファイルは添えないこと。',
       ].join(' '),
       {
@@ -10062,7 +10070,7 @@ export function createCloneTools(context: ToolContext) {
           return {
             ...text(
               'いまのターンには返信先の会話が無いので、返信には添えられない（何も添えていない）。' +
-                '人間へ渡すなら conversation_post の attachments に id を渡す。',
+                '人間へ渡すなら task_say の attachments に id を渡す。',
             ),
             isError: true,
           };
@@ -10305,7 +10313,7 @@ export function createCloneTools(context: ToolContext) {
             ? undefined
             : (normalizeJournalTimeBoundary(untilInput) ?? undefined);
 
-        // 一意に決まる 8 文字以上の前方一致だけ読み替える（#5130。conversation_post と同じ線）。
+        // 一意に決まる 8 文字以上の前方一致だけ読み替える（#5130）。
         // 当たらない id は今どおり窓の中で読み、「無い／この窓には無い」で答える（解決できなかったことでは断らない）
         let conversationId = conversationIdInput;
         const resolvedNoteLines: string[] = [];
@@ -11776,8 +11784,13 @@ function dedupeRestartAdvice(response: string): string {
 // 行を組む時点では畳まない: 予算で出ない行が先に「全文を出した」と控えられ、会話の上に無い全文を参照してしまうため。
 // 畳むのは `manager_list` が組んだ行の形に厳密に合う行だけ: 報告の抜粋の中に同じ字面が在っても書き換えないため。
 // 1応答の中の2行目以降も参照になる（`fold` は id ごとに最初の1回だけ全文を返す）
-const ORIGIN_HINT_FULL = '（報告を人間へ知らせるなら、この会話へ書く）';
-const ORIGIN_HINT_REF = '（知らせるならこの会話へ）';
+const ORIGIN_HINT_FULL = '（報告を人間へ知らせるなら、結び付いた task へ task_say で書く）';
+const ORIGIN_HINT_REF = '（知らせるなら結び付いた task へ task_say）';
+// 委譲に task が結び付いていないとき
+const ORIGIN_HINT_NO_TASK_FULL =
+  '（報告を人間へ知らせるなら、この会話を起点にした task を task_list で探して task_say で書く。無ければ task_add で足す）';
+const ORIGIN_HINT_NO_TASK_REF =
+  '（知らせるなら task_list で探した task へ task_say。無ければ task_add）';
 const ORIGIN_LINE_PREFIX = '  起点の会話: ';
 const UNOBSERVED_NONE_LINE = `  ${describeReportState('none')}`;
 const UNOBSERVED_NONE_REF =
@@ -11799,6 +11812,16 @@ function foldRowPhrases(response: string, fold: FixedFold): string {
         return (
           line.slice(0, line.length - ORIGIN_HINT_FULL.length) +
           fold('manager-list:row-origin-hint', ORIGIN_HINT_FULL, ORIGIN_HINT_REF)
+        );
+      }
+      if (line.startsWith(ORIGIN_LINE_PREFIX) && line.endsWith(ORIGIN_HINT_NO_TASK_FULL)) {
+        return (
+          line.slice(0, line.length - ORIGIN_HINT_NO_TASK_FULL.length) +
+          fold(
+            'manager-list:row-origin-hint-no-task',
+            ORIGIN_HINT_NO_TASK_FULL,
+            ORIGIN_HINT_NO_TASK_REF,
+          )
         );
       }
       return line;

@@ -63,7 +63,7 @@ const ENTRIES: Record<string, unknown>[] = [
       totalMs: 100,
       top: [
         { name: 'journal_read', count: 2, totalMs: 60, maxMs: 40 },
-        { name: 'conversation_post', count: 2, totalMs: 40, maxMs: 30 },
+        { name: 'task_say', count: 2, totalMs: 40, maxMs: 30 },
       ],
     },
   }),
@@ -411,7 +411,7 @@ describe('analyze（合成データ。手計算と一致）', () => {
     ]);
     expect(report.toolsTop).toEqual([
       { name: 'journal_read', count: 3, totalMs: 80 },
-      { name: 'conversation_post', count: 2, totalMs: 40 },
+      { name: 'task_say', count: 2, totalMs: 40 },
       { name: 'manager_report', count: 1, totalMs: 30 },
     ]);
   });

@@ -157,8 +157,8 @@ const EXEMPT: readonly Exemption[] = [
     why: '実装側に一覧が無い。approvals_list との線引き（答えの本文を持つか）はふるまいの歯を tools.test.ts に置いた',
   },
   {
-    tool: 'conversation_post',
-    why: '実装側に一覧が無い（宛先の会話 id と本文を受けるだけ）。ふるまいの歯は tools.test.ts に置いた（#1393）',
+    tool: 'task_say',
+    why: '実装側に一覧が無い（task の id と本文を受けるだけ。宛先は task の起点の会話）。ふるまいの歯は tools.test.ts に置いた（旧 conversation_post は #1393）',
   },
   { tool: 'ask_human', why: '実装側に、説明文が数え直すような一覧が無い' },
   {

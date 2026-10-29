@@ -550,33 +550,41 @@ describe('reply_attach', () => {
     expect((await h.stores.attachments.getMeta(a.id))?.conversationId).toBeUndefined();
   });
 
-  it('返信先の会話が無いターンでは断り、conversation_post を案内する', async () => {
+  it('返信先の会話が無いターンでは断り、task_say を案内する', async () => {
     const h = toolsFor({ conversationId: () => undefined });
     const meta = await putBytes(h.stores, 'a.txt', 5);
     const out = await h.call('reply_attach', { ids: [meta.id] });
-    expect(out).toContain('conversation_post');
+    expect(out).toContain('task_say');
     expect(h.attached).toEqual([]);
   });
 });
 
-describe('conversation_post の attachments', () => {
-  /** 書く先の会話を日誌に在らせる（在る会話へしか書けない）。 */
-  async function seedConversation(stores: ReturnType<typeof createMemoryStores>, id: string) {
-    await stores.journal.append({
-      type: 'exchange',
-      with: 'human',
-      role: 'inbound',
-      text: '人間の発言',
-      conversationId: id,
+describe('task_say の attachments', () => {
+  /** 書く先の task を足す（宛先は task の起点の会話）。 */
+  async function seedTask(
+    stores: ReturnType<typeof createMemoryStores>,
+    id: string,
+    originConversationId?: string,
+  ) {
+    const at = '2026-01-01T00:00:00.000Z';
+    await stores.tasks.add({
+      id,
+      createdAt: at,
+      updatedAt: at,
+      status: 'queued',
+      origin: 'self',
+      ...(originConversationId === undefined ? {} : { originConversationId }),
+      title: '知らせる件',
+      body: '本文',
     });
   }
 
   it('本文が空でも添付があれば書き、日誌の outbound exchange に控えが載り、画面へも流れる', async () => {
     const h = toolsFor();
-    await seedConversation(h.stores, 'conv-1');
+    await seedTask(h.stores, 't1', 'conv-1');
     const meta = await putBytes(h.stores, 'a.txt', 5);
-    const out = await h.call('conversation_post', {
-      conversationId: 'conv-1',
+    const out = await h.call('task_say', {
+      taskId: 't1',
       attachments: [meta.id],
     });
     expect(out).toContain('添付 1 件つき');
@@ -591,33 +599,37 @@ describe('conversation_post の attachments', () => {
 
   it('本文も添付も無ければ断り、日誌に書かない', async () => {
     const h = toolsFor();
-    expect(await h.call('conversation_post', { conversationId: 'conv-1' })).toContain('どちらか');
-    expect(await h.call('conversation_post', { text: '', attachments: [] })).toContain('text');
+    await seedTask(h.stores, 't1', 'conv-1');
+    expect(await h.call('task_say', { taskId: 't1' })).toContain('どちらか');
+    expect(await h.call('task_say', { taskId: 't1', text: '', attachments: [] })).toContain('text');
     expect(await h.stores.journal.list({ types: ['exchange'] })).toEqual([]);
   });
 
   it('存在しない添付があれば何も書かない', async () => {
     const h = toolsFor();
-    await seedConversation(h.stores, 'conv-1');
-    const out = await h.call('conversation_post', {
-      conversationId: 'conv-1',
+    await seedTask(h.stores, 't1', 'conv-1');
+    const out = await h.call('task_say', {
+      taskId: 't1',
       text: 'hi',
       attachments: ['ghost'],
     });
     expect(out).toContain('ghost');
-    expect(await h.stores.journal.list({ types: ['exchange'], with: ['human'] })).toHaveLength(1);
+    expect(await h.stores.journal.list({ types: ['exchange'], with: ['human'] })).toEqual([]);
     expect(h.posted).toEqual([]);
   });
 
-  it('無い会話の id へ添付を添えようとしたら断り、添付をその id へ結ばない（#4149）', async () => {
+  it('無い task・起点の会話を持たない古い task へ添付を添えようとしたら断り、添付をどの会話へも結ばない', async () => {
     const h = toolsFor();
+    await seedTask(h.stores, 't-old');
     const meta = await putBytes(h.stores, 'a.txt', 5);
-    const out = await h.call('conversation_post', {
-      conversationId: 'conv-missing',
+    const missing = await h.call('task_say', {
+      taskId: 'no-such',
       text: 'hi',
       attachments: [meta.id],
     });
-    expect(out).toContain('会話 conv-missing は無い');
+    expect(missing).toContain('task no-such は無い');
+    const old = await h.call('task_say', { taskId: 't-old', text: 'hi', attachments: [meta.id] });
+    expect(old).toContain('古い task');
     expect(await h.stores.journal.list({ types: ['exchange'] })).toEqual([]);
     expect(h.posted).toEqual([]);
     expect((await h.stores.attachments.getMeta(meta.id))?.conversationId).toBeUndefined();
