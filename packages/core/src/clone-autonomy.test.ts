@@ -298,6 +298,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         id: 'evt-diff-2',
         at: new Date().toISOString(),
         reason: '2本目',
+        cause: 'manual', // 門（#5469 P6a）を通す: 動ける仕事の無い定期 tick は畳まれ、差分の試験が2回目に届かないため
       });
       await waitFor(() => (call()?.inputs.length ?? 0) === 2, '2本目の入力');
       const secondText = call()?.inputs[1] ?? '';
@@ -336,6 +337,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         id: 'evt-under-2',
         at: new Date().toISOString(),
         reason: '2本目',
+        cause: 'manual', // 門（#5469 P6a）を通す
       });
       await waitFor(() => (call()?.inputs.length ?? 0) === 2, '2本目の入力');
       const secondText = call()?.inputs[1] ?? '';
@@ -374,6 +376,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         id: 'evt-exact-2',
         at: new Date().toISOString(),
         reason: '2本目',
+        cause: 'manual', // 門（#5469 P6a）を通す
       });
       await waitFor(() => (call()?.inputs.length ?? 0) === 2, '2本目の入力');
       expect(call()?.inputs[1] ?? '').toContain(
@@ -447,6 +450,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         id: 'evt-rebase-2',
         at: new Date().toISOString(),
         reason: '2本目のtick',
+        cause: 'manual', // 門（#5469 P6a）を通す
       });
       await waitFor(() => flatInputs().length === 3, '2本目のtickが届く');
       expect(flatInputs().at(-1)).toContain(
@@ -1225,6 +1229,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         id: `evt-self-${i}`,
         at: new Date().toISOString(),
         reason: '定期 tick',
+        cause: 'manual', // 門（#5469 P6a）を通す: 畳み込みの試験で、門で畳まれた分を数えないため
       });
     }
 

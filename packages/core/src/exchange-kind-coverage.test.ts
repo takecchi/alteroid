@@ -274,6 +274,7 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#noteRedeliveryPredicateHitB': 'gauge',
     '#noteRefusal': 'decision',
     '#noteRefusalToHuman': 'human',
+    '#noteSkippedInitiativeTick': 'thinning',
     '#noteUnproductiveUsageBlockFold': 'decision',
     '#noteUsageNotice': 'gauge',
     '#onPreCompact': 'failure,recovery',
