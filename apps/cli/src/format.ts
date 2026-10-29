@@ -9,6 +9,10 @@ export function oneLine(text: string, limit: number): string {
   return single.length > limit ? `${single.slice(0, codePointBoundary(single, limit))}…` : single;
 }
 
+export function shortId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 12)}…` : id;
+}
+
 export async function errorReason(response: {
   json: () => Promise<unknown>;
 }): Promise<string | null> {

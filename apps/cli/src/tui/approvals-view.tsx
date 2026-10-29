@@ -7,7 +7,7 @@ import {
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
 
-import { formatElapsedAgo, oneLine } from '../format.js';
+import { formatElapsedAgo, oneLine, shortId } from '../format.js';
 import type { ApprovalRow } from './api.js';
 import { allowsOther, slotsOf } from './approvals-form.js';
 import {
@@ -23,10 +23,6 @@ import type { RichSpan } from './markdown.js';
 import { glyph, theme } from './theme.js';
 import { redactBody, sanitizeForTerminal } from '../redact.js';
 import { LINE_BREAK, wrapLogical } from './wrap.js';
-
-export function shortId(id: string): string {
-  return id.length > 12 ? `${id.slice(0, 12)}…` : id;
-}
 
 export const originOf = (row: ApprovalRow): string =>
   row.jobId !== undefined ? `マネージャー ${shortId(row.jobId)}` : 'クローン';

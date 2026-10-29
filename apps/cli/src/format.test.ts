@@ -5,9 +5,17 @@ import {
   errorReason,
   formatElapsedAgo,
   oneLine,
+  shortId,
   withErrorReason,
 } from './format.js';
 import { describeAuthFailure } from './target.js';
+
+describe('shortId', () => {
+  it('12 字以下はそのまま、超えたら 12 字で切って … を付ける', () => {
+    expect(shortId('abcdefghijkl')).toBe('abcdefghijkl');
+    expect(shortId('abcdefghijklm')).toBe('abcdefghijkl…');
+  });
+});
 
 describe('oneLine', () => {
   it('空白を潰して切る', () => {

@@ -2,7 +2,7 @@ import { describeManagerState } from '@alteroid/core';
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
 
-import { formatElapsedAgo, oneLine } from '../format.js';
+import { formatElapsedAgo, oneLine, shortId } from '../format.js';
 import type { ManagerRow, ManagerStatus } from './api.js';
 import { redactBody, sanitizeForTerminal } from '../redact.js';
 import type { DetailState, ListState } from './managers-controller.js';
@@ -22,10 +22,6 @@ const STATUS_LABEL: Record<ManagerStatus, string> = {
 
 export function filterLabel(filter: ManagerStatus | null): string {
   return filter === null ? 'すべて' : (STATUS_LABEL[filter] ?? filter);
-}
-
-export function shortId(id: string): string {
-  return id.length > 12 ? `${id.slice(0, 12)}…` : id;
 }
 
 export function stateText(row: ManagerRow): string {
