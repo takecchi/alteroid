@@ -26511,7 +26511,7 @@
         "operationId": "getTasksMigrationPlan",
         "tags": ["tasks"],
         "summary": "台帳→task の移行の計画（dry-run。何も書かない）",
-        "description": "開いている台帳の行のうち `origin: human` を古い順の `queued` の task にする計画と集計を返す。`items[].action` は `task`（task を作って台帳を閉じる）・`close-only`（同じ id の task が既に在る。台帳を閉じるだけ）・`retire`（human 以外。task にせず台帳を閉じる）・`skip-closed`（閉じた行。移さない）。`summary.oldestAt` / `newestAt` は `task` の行の最古/最新。本文は載せない（`task` の行はタイトルだけ）。`unreadableCommitments` は読めない台帳の行で、id だけを返し触らない。`unreadableTaskCollisions` は、開いている human 行と同じ id の読めない task の行。",
+        "description": "開いている台帳の行のうち `origin: human` を古い順の `queued` の task にする計画と集計を返す。`items[].action` は `task`（task を作って台帳を閉じる）・`close-only`（同じ id の task が既に在る。台帳を閉じるだけ）・`retire`（human 以外。task にせず台帳を閉じる）・`skip-closed`（閉じた行。移さない）。`summary.oldestAt` / `newestAt` は `task` の行の最古/最新。本文は載せない（`task` の行はタイトルだけ）。`unreadableCommitments` は読めない台帳の行で、id だけを返し触らない。`unreadableTaskCollisions` は、開いている human 行と同じ id の読めない task の行。`task` の行は、台帳の `source`（会話 id か承認の id）から移す task の起点の会話を引く: `summary.originConversation` が会話から・承認から・引けないの内訳、`unresolvedOriginIds` が引けなかった行の id（付けずに移す）。**`fingerprint` は計画の指紋で、実行（`POST /tasks/migrate`）へそのまま渡す。**",
         "responses": {
           "200": {
             "description": "移行の計画。",
@@ -26523,6 +26523,10 @@
                     "dryRun": {
                       "type": "boolean",
                       "const": true
+                    },
+                    "fingerprint": {
+                      "type": "string",
+                      "description": "計画の指紋。dry-run の値を `POST /tasks/migrate` の `fingerprint` へそのまま渡す"
                     },
                     "summary": {
                       "type": "object",
@@ -26667,6 +26671,29 @@
                           "required": ["human", "manager", "external", "self"],
                           "additionalProperties": false
                         },
+                        "originConversation": {
+                          "type": "object",
+                          "properties": {
+                            "fromConversation": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "fromApproval": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "unresolved": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["fromConversation", "fromApproval", "unresolved"],
+                          "additionalProperties": false,
+                          "description": "`toTask` の行の起点の会話の引き方の内訳（会話 id から・承認から・引けない。合計が `toTask`）"
+                        },
                         "oldestAt": {
                           "anyOf": [
                             {
@@ -26699,6 +26726,7 @@
                         "retire",
                         "skipClosed",
                         "byOrigin",
+                        "originConversation",
                         "oldestAt",
                         "newestAt"
                       ],
@@ -26727,11 +26755,32 @@
                           },
                           "title": {
                             "type": "string"
+                          },
+                          "originConversation": {
+                            "type": "object",
+                            "properties": {
+                              "conversationId": {
+                                "type": "string"
+                              },
+                              "via": {
+                                "type": "string",
+                                "enum": ["conversation", "approval"]
+                              }
+                            },
+                            "required": ["conversationId", "via"],
+                            "additionalProperties": false
                           }
                         },
                         "required": ["id", "action", "origin", "at"],
                         "additionalProperties": false
                       }
+                    },
+                    "unresolvedOriginIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "`task` の行のうち、起点の会話を引けなかった行の id（付けずに移す）"
                     },
                     "unreadableCommitments": {
                       "type": "array",
@@ -26759,14 +26808,530 @@
                   },
                   "required": [
                     "dryRun",
+                    "fingerprint",
                     "summary",
                     "items",
+                    "unresolvedOriginIds",
                     "unreadableCommitments",
                     "unreadableTasks",
                     "unreadableTaskCollisions"
                   ],
                   "additionalProperties": false
                 }
+              }
+            }
+          },
+          "500": {
+            "description": "起点の会話を引く読みが失敗したので、計画を立てなかった（誤った宛先を付けないため。何も書いていない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/migrate": {
+      "post": {
+        "operationId": "postTasksMigrate",
+        "tags": ["tasks"],
+        "summary": "台帳→task の移行を実行する（dry-run の指紋が必須）",
+        "description": "開いている台帳の行のうち `origin: human` だけを、古い順の `queued` の task にして台帳を閉じ、それ以外は task にせず台帳を `daemon` が閉じる（本文は日誌へ逐語で残す）。**`fingerprint` は `GET /tasks/migration-plan` が返した計画の指紋で必須。** 実行時に計画を組み直し、指紋が違えば（台帳・task・会話が dry-run のあとに動いた）何も書かずに 409 で断る。task の id は元の台帳の行の id と同じ。起点の会話は、`source` が実在する会話 id ならそれを、承認の id ならその承認の会話 id を付け、どちらとも引けなければ付けずに移す（`execution.originConversation.unresolvedIds`）。日誌が書けなければ台帳は閉じない。1行の失敗は `execution.failed`（id・段階・例外の型名だけ）に数えて次へ進む。**閉じた台帳の行を戻す口は `POST /commitments/{id}/reopen` の1件ずつだけ。**",
+        "responses": {
+          "200": {
+            "description": "実行の結果。`failed` が空でなければ、その行は移っていない（再実行で続きから進む）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "dryRun": {
+                      "type": "boolean",
+                      "const": false
+                    },
+                    "fingerprint": {
+                      "type": "string",
+                      "description": "計画の指紋。dry-run の値を `POST /tasks/migrate` の `fingerprint` へそのまま渡す"
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "toTask": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "closeOnly": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "retire": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "skipClosed": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "byOrigin": {
+                          "type": "object",
+                          "properties": {
+                            "human": {
+                              "type": "object",
+                              "properties": {
+                                "toTask": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "closeOnly": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "retire": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "skipClosed": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["toTask", "closeOnly", "retire", "skipClosed"],
+                              "additionalProperties": false
+                            },
+                            "manager": {
+                              "type": "object",
+                              "properties": {
+                                "toTask": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "closeOnly": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "retire": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "skipClosed": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["toTask", "closeOnly", "retire", "skipClosed"],
+                              "additionalProperties": false
+                            },
+                            "external": {
+                              "type": "object",
+                              "properties": {
+                                "toTask": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "closeOnly": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "retire": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "skipClosed": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["toTask", "closeOnly", "retire", "skipClosed"],
+                              "additionalProperties": false
+                            },
+                            "self": {
+                              "type": "object",
+                              "properties": {
+                                "toTask": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "closeOnly": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "retire": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "skipClosed": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["toTask", "closeOnly", "retire", "skipClosed"],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": ["human", "manager", "external", "self"],
+                          "additionalProperties": false
+                        },
+                        "originConversation": {
+                          "type": "object",
+                          "properties": {
+                            "fromConversation": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "fromApproval": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "unresolved": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["fromConversation", "fromApproval", "unresolved"],
+                          "additionalProperties": false,
+                          "description": "`toTask` の行の起点の会話の引き方の内訳（会話 id から・承認から・引けない。合計が `toTask`）"
+                        },
+                        "oldestAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "newestAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "toTask",
+                        "closeOnly",
+                        "retire",
+                        "skipClosed",
+                        "byOrigin",
+                        "originConversation",
+                        "oldestAt",
+                        "newestAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "action": {
+                            "type": "string",
+                            "enum": ["task", "close-only", "retire", "skip-closed"]
+                          },
+                          "origin": {
+                            "type": "string",
+                            "enum": ["human", "manager", "external", "self"]
+                          },
+                          "at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "originConversation": {
+                            "type": "object",
+                            "properties": {
+                              "conversationId": {
+                                "type": "string"
+                              },
+                              "via": {
+                                "type": "string",
+                                "enum": ["conversation", "approval"]
+                              }
+                            },
+                            "required": ["conversationId", "via"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["id", "action", "origin", "at"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "unresolvedOriginIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "`task` の行のうち、起点の会話を引けなかった行の id（付けずに移す）"
+                    },
+                    "unreadableCommitments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "unreadableTasks": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "unreadableTaskCollisions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "execution": {
+                      "type": "object",
+                      "properties": {
+                        "migrated": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "closeOnly": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "retired": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "alreadyClosed": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "ids": {
+                          "type": "object",
+                          "properties": {
+                            "migrated": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "closeOnly": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "retired": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "alreadyClosed": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["migrated", "closeOnly", "retired", "alreadyClosed"],
+                          "additionalProperties": false
+                        },
+                        "originConversation": {
+                          "type": "object",
+                          "properties": {
+                            "fromConversation": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "fromApproval": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "unresolvedIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["fromConversation", "fromApproval", "unresolvedIds"],
+                          "additionalProperties": false
+                        },
+                        "failed": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "step": {
+                                "type": "string",
+                                "enum": ["task", "journal", "close"]
+                              },
+                              "error": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "step", "error"],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "migrated",
+                        "closeOnly",
+                        "retired",
+                        "alreadyClosed",
+                        "ids",
+                        "originConversation",
+                        "failed"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "dryRun",
+                    "fingerprint",
+                    "summary",
+                    "items",
+                    "unresolvedOriginIds",
+                    "unreadableCommitments",
+                    "unreadableTasks",
+                    "unreadableTaskCollisions",
+                    "execution"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正、または `fingerprint` が無い・空。何も書いていない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "計画が dry-run のときから変わっている（指紋が違う）。何も書いていない。dry-run をやり直すこと。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "起点の会話を引く読みが失敗したので、実行しなかった（誤った宛先を付けないため。何も書いていない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fingerprint": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "dry-run（`GET /tasks/migration-plan`）が返した計画の指紋。必須"
+                  }
+                },
+                "required": ["fingerprint"]
               }
             }
           }

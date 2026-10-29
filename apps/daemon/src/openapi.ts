@@ -631,7 +631,7 @@ export const taskListResponseSchema = z.object({
   unreadable: z.array(unreadableTaskSchema),
 });
 
-// 台帳→Task の移行の計画（#5469 P7a）。dryRun の結果だけで、実行の結果（`execution`）は載せない: 書く口は P7 本体が配線する。
+// 台帳→Task の移行（#5469 P7）。計画（dry-run。P7a）と、指紋つきの実行（P7b）。
 // 行ごとの本文は載せない（タイトルと id だけ。全文は台帳に在る）。読めない台帳の行は id だけで、理由も出さない。
 const taskMigrationCountsSchema = z.object({
   toTask: z.number().int().nonnegative(),
@@ -640,8 +640,10 @@ const taskMigrationCountsSchema = z.object({
   skipClosed: z.number().int().nonnegative(),
 });
 
-export const taskMigrationPlanResponseSchema = z.object({
-  dryRun: z.literal(true),
+const taskMigrationBaseShape = {
+  fingerprint: z
+    .string()
+    .describe('計画の指紋。dry-run の値を `POST /tasks/migrate` の `fingerprint` へそのまま渡す'),
   summary: z.object({
     total: z.number().int().nonnegative(),
     toTask: z.number().int().nonnegative(),
@@ -654,6 +656,15 @@ export const taskMigrationPlanResponseSchema = z.object({
       external: taskMigrationCountsSchema,
       self: taskMigrationCountsSchema,
     }),
+    originConversation: z
+      .object({
+        fromConversation: z.number().int().nonnegative(),
+        fromApproval: z.number().int().nonnegative(),
+        unresolved: z.number().int().nonnegative(),
+      })
+      .describe(
+        '`toTask` の行の起点の会話の引き方の内訳（会話 id から・承認から・引けない。合計が `toTask`）',
+      ),
     oldestAt: isoDateTimeSchema.nullable(),
     newestAt: isoDateTimeSchema.nullable(),
   }),
@@ -664,11 +675,55 @@ export const taskMigrationPlanResponseSchema = z.object({
       origin: commitmentOriginSchema,
       at: isoDateTimeSchema,
       title: z.string().optional(),
+      originConversation: z
+        .object({ conversationId: z.string(), via: z.enum(['conversation', 'approval']) })
+        .optional(),
     }),
   ),
+  unresolvedOriginIds: z
+    .array(z.string())
+    .describe('`task` の行のうち、起点の会話を引けなかった行の id（付けずに移す）'),
   unreadableCommitments: z.array(z.object({ id: z.string().optional() })),
   unreadableTasks: z.number().int().nonnegative(),
   unreadableTaskCollisions: z.array(z.string()),
+};
+
+export const taskMigrationPlanResponseSchema = z.object({
+  dryRun: z.literal(true),
+  ...taskMigrationBaseShape,
+});
+
+// 本文・例外のメッセージは載せない（`failed[].error` は例外の型名だけ）
+export const taskMigrationResultResponseSchema = z.object({
+  dryRun: z.literal(false),
+  ...taskMigrationBaseShape,
+  execution: z.object({
+    migrated: z.number().int().nonnegative(),
+    closeOnly: z.number().int().nonnegative(),
+    retired: z.number().int().nonnegative(),
+    alreadyClosed: z.number().int().nonnegative(),
+    ids: z.object({
+      migrated: z.array(z.string()),
+      closeOnly: z.array(z.string()),
+      retired: z.array(z.string()),
+      alreadyClosed: z.array(z.string()),
+    }),
+    originConversation: z.object({
+      fromConversation: z.number().int().nonnegative(),
+      fromApproval: z.number().int().nonnegative(),
+      unresolvedIds: z.array(z.string()),
+    }),
+    failed: z.array(
+      z.object({ id: z.string(), step: z.enum(['task', 'journal', 'close']), error: z.string() }),
+    ),
+  }),
+});
+
+export const taskMigrateRequestSchema = z.object({
+  fingerprint: z
+    .string()
+    .min(1)
+    .describe('dry-run（`GET /tasks/migration-plan`）が返した計画の指紋。必須'),
 });
 
 // 返さないと閉じられない: 閉じる口は id を取るので、返さないと人間は積めるが自分で閉じられない片道の口になる。

@@ -71,7 +71,10 @@ export function renderTasks(view: TasksView, now: number = Date.now()): string {
 }
 
 export interface TasksMigrateOptions {
+  /** 計画を出すだけ。`yes` と一緒には渡せない。 */
   dryRun?: boolean;
+  /** 計画を出したあと、確認なしで実行する（指紋つき）。 */
+  yes?: boolean;
 }
 
 interface OriginCounts {
@@ -82,6 +85,7 @@ interface OriginCounts {
 }
 
 interface MigrationPlanView {
+  fingerprint: string;
   summary: {
     total: number;
     toTask: number;
@@ -89,12 +93,26 @@ interface MigrationPlanView {
     retire: number;
     skipClosed: number;
     byOrigin: Record<string, OriginCounts>;
+    originConversation: { fromConversation: number; fromApproval: number; unresolved: number };
     oldestAt: string | null;
     newestAt: string | null;
   };
+  unresolvedOriginIds: string[];
   unreadableCommitments: { id?: string | undefined }[];
   unreadableTasks: number;
   unreadableTaskCollisions: string[];
+}
+
+interface MigrationResultView extends MigrationPlanView {
+  execution: {
+    migrated: number;
+    closeOnly: number;
+    retired: number;
+    alreadyClosed: number;
+    ids: { migrated: string[]; closeOnly: string[]; retired: string[]; alreadyClosed: string[] };
+    originConversation: { fromConversation: number; fromApproval: number; unresolvedIds: string[] };
+    failed: { id: string; step: string; error: string }[];
+  };
 }
 
 const ORIGIN_ORDER = ['human', 'manager', 'external', 'self'];
@@ -103,10 +121,12 @@ function pad(value: string | number, width: number): string {
   return String(value).padStart(width, ' ');
 }
 
-export function renderMigrationPlan(view: MigrationPlanView): string {
+const PLAN_TITLE = '台帳 → task の移行の計画（dry-run。何も書いていない）';
+
+export function renderMigrationPlan(view: MigrationPlanView, title: string = PLAN_TITLE): string {
   const { summary } = view;
   const lines = [
-    '台帳 → task の移行の計画（dry-run。何も書いていない）',
+    title,
     `  移す（task にして台帳を閉じる）            ${String(summary.toTask)} 件`,
     `  畳む（human 以外。台帳を閉じるだけ）        ${String(summary.retire)} 件`,
     `  既に移した（task が在る。台帳を閉じるだけ）  ${String(summary.closeOnly)} 件`,
@@ -128,6 +148,18 @@ export function renderMigrationPlan(view: MigrationPlanView): string {
       ? '  移す行: 無い'
       : `  移す行の at: 最古 ${summary.oldestAt} / 最新 ${summary.newestAt ?? ''}`,
   );
+  if (summary.toTask > 0) {
+    const origin = summary.originConversation;
+    lines.push(
+      `  移す行の起点の会話: 会話から ${String(origin.fromConversation)} 件 / 承認から ${String(origin.fromApproval)} 件 / 引けない ${String(origin.unresolved)} 件`,
+    );
+    if (view.unresolvedOriginIds.length > 0) {
+      lines.push(
+        `  起点の会話を引けない行（付けずに移す。task_say は書けない）: ${view.unresolvedOriginIds.join(', ')}`,
+      );
+    }
+  }
+  lines.push(`  計画の指紋: ${view.fingerprint}`);
   const unreadableIds = view.unreadableCommitments
     .map((row) => row.id)
     .filter((id): id is string => id !== undefined);
@@ -147,11 +179,49 @@ export function renderMigrationPlan(view: MigrationPlanView): string {
   return lines.join('\n');
 }
 
-// 実行の口は公開しない: 書く経路を CLI だけ・HTTP だけに先に作ると「片方でしかできないこと」が生まれる。実行は P7 本体が HTTP と CLI の両方へ同時に配線する（#5469）。
+const idList = (ids: readonly string[]): string => (ids.length === 0 ? '' : `: ${ids.join(', ')}`);
+
+export function renderMigrationResult(view: MigrationResultView): string {
+  const { execution } = view;
+  const lines = [
+    '台帳 → task の移行を実行した',
+    `  移した（task にして台帳を閉じた）  ${String(execution.migrated)} 件${idList(execution.ids.migrated)}`,
+    `  畳んだ（human 以外。台帳を閉じた）  ${String(execution.retired)} 件${idList(execution.ids.retired)}`,
+    `  既に移した（台帳を閉じただけ）      ${String(execution.closeOnly)} 件${idList(execution.ids.closeOnly)}`,
+    `  既に閉じていた（別の書き手が先に）  ${String(execution.alreadyClosed)} 件${idList(execution.ids.alreadyClosed)}`,
+    `  失敗                                ${String(execution.failed.length)} 件`,
+  ];
+  for (const failure of execution.failed) {
+    lines.push(`    ${failure.id}: ${failure.step} の段階で ${failure.error}`);
+  }
+  const origin = execution.originConversation;
+  lines.push(
+    `  作った task の起点の会話: 会話から ${String(origin.fromConversation)} 件 / 承認から ${String(origin.fromApproval)} 件 / 引けず付けなかった ${String(origin.unresolvedIds.length)} 件${idList(origin.unresolvedIds)}`,
+  );
+  if (execution.failed.length > 0) {
+    lines.push(
+      '  失敗した行は移っていない（台帳は開いたまま）。原因を直して、dry-run からやり直すと続きから進む。',
+    );
+  }
+  lines.push(`  計画の指紋: ${view.fingerprint}`);
+  return lines.join('\n');
+}
+
+async function failureText(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    return typeof body.error === 'string' ? `: ${body.error}` : '';
+  } catch {
+    return '';
+  }
+}
+
+// 実行の口は HTTP（`POST /tasks/migrate`）と同時に出した（片方でしかできないことを作らない）。
+// `--yes` が無ければ計画を出して書かずに止まる。`--yes` があれば、いま見た計画の指紋を付けて実行する（見たあとに台帳が動いていれば daemon が 409 で断る）。
 export async function tasksMigrateCommand(options: TasksMigrateOptions = {}): Promise<void> {
-  if (options.dryRun !== true) {
+  if (options.dryRun === true && options.yes === true) {
     throw new Error(
-      '--dry-run を付けてください。移行の実行はまだ公開していません（実行は P7 本体で配線します）。計画は `alteroid tasks migrate --dry-run` で見られます。',
+      '--dry-run と --yes は同時に使えません（--dry-run は何も書かない。実行するなら --yes だけを付けてください）。',
     );
   }
   const target = await resolveTarget();
@@ -164,11 +234,41 @@ export async function tasksMigrateCommand(options: TasksMigrateOptions = {}): Pr
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
     throw new Error(
-      described ?? `台帳→task の移行の計画を読めませんでした（HTTP ${String(response.status)}）`,
+      described ??
+        `台帳→task の移行の計画を読めませんでした（HTTP ${String(response.status)}）${await failureText(response)}`,
     );
   }
   const view = (await response.json()) as MigrationPlanView;
-  stdout.write(`${redactBody(renderMigrationPlan(view))}\n`);
+  if (options.dryRun === true) {
+    stdout.write(`${redactBody(renderMigrationPlan(view))}\n`);
+    return;
+  }
+  if (options.yes !== true) {
+    stdout.write(
+      `${redactBody(renderMigrationPlan(view, '台帳 → task の移行の計画（まだ何も書いていない）'))}\n\n` +
+        '実行するには `alteroid tasks migrate --yes` を打ってください（いま見た計画の指紋を付けて実行します。' +
+        '見たあとに台帳が動いていれば、何も書かずに断ります）。\n',
+    );
+    return;
+  }
+  stdout.write(
+    `${redactBody(renderMigrationPlan(view, '台帳 → task の移行の計画（この計画を、指紋を付けて実行する）'))}\n\n`,
+  );
+  const executed = await client.tasks.migrate.$post({ json: { fingerprint: view.fingerprint } });
+  if (!executed.ok) {
+    const described = describeAuthFailure(executed.status, target);
+    if (described !== null) throw new Error(described);
+    const detail = await failureText(executed);
+    throw new Error(
+      executed.status === 409
+        ? `何も書かずに断られました（計画が変わっています）${detail}`
+        : `台帳→task の移行を実行できませんでした（HTTP ${String(executed.status)}）${detail}`,
+    );
+  }
+  const result = (await executed.json()) as MigrationResultView;
+  stdout.write(`${redactBody(renderMigrationResult(result))}\n`);
+  // 失敗が1行でもあれば非 0: 「全部移った」とスクリプトから読ませないため
+  if (result.execution.failed.length > 0) process.exitCode = 1;
 }
 
 export async function tasksCommand(options: TasksOptions = {}): Promise<void> {

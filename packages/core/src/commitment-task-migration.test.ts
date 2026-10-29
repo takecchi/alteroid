@@ -151,6 +151,16 @@ describe('migrationTaskTitle', () => {
   });
 });
 
+// 実行は dry-run の指紋が要る: dry-run → その指紋で実行、を1回で踏む
+async function execute(stores: ReturnType<typeof createMemoryStores>, now: string) {
+  const plan = await migrateCommitmentsToTasks(stores, { dryRun: true, now });
+  return migrateCommitmentsToTasks(stores, {
+    dryRun: false,
+    now,
+    expectedFingerprint: plan.fingerprint,
+  });
+}
+
 describe('台帳→Task の移行（メモリ）', () => {
   it('3実装共通の契約を満たす', async () => {
     await verifyCommitmentTaskMigrationContract(async () => ({ stores: createMemoryStores() }));
@@ -162,7 +172,7 @@ describe('台帳→Task の移行（メモリ）', () => {
       row('h1', '2026-10-01T00:00:00.000Z', 'human', { body: '逐語\n本文' }),
     );
     await stores.commitments.open(row('m1', '2026-10-01T01:00:00.000Z', 'manager'));
-    await migrateCommitmentsToTasks(stores, { dryRun: false, now: '2026-10-29T00:00:00.000Z' });
+    await execute(stores, '2026-10-29T00:00:00.000Z');
     const decisions = (await stores.journal.list()).flatMap((entry) =>
       entry.type === 'decision' ? [entry] : [],
     );
@@ -180,10 +190,7 @@ describe('台帳→Task の移行（メモリ）', () => {
       const at = new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString();
       await stores.commitments.open(row(`h${String(index).padStart(3, '0')}`, at, 'human'));
     }
-    const report = await migrateCommitmentsToTasks(stores, {
-      dryRun: false,
-      now: '2026-10-29T00:00:00.000Z',
-    });
+    const report = await execute(stores, '2026-10-29T00:00:00.000Z');
     expect(report.execution?.migrated).toBe(200);
     const ids = (await stores.tasks.list()).entries.map((task) => task.id);
     expect(ids).toEqual([...ids].sort());

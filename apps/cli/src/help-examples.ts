@@ -40,6 +40,8 @@ export const HELP_EXAMPLES = {
   ),
   tasksMigrate: examples(
     'alteroid tasks migrate --dry-run        # 台帳のどれが task になり、どれが畳まれるかを見る（何も書かない）',
+    'alteroid tasks migrate                  # 同じ計画を出して止まる（--yes が無いので何も書かない）',
+    'alteroid tasks migrate --yes            # いま見た計画（指紋つき）を実行する。見たあとに台帳が動いていれば断る',
   ),
   attachmentsPut: examples(
     'alteroid attachments put ./run.log           # 上げて id を出す（1 時間以内に発言へ添える）',

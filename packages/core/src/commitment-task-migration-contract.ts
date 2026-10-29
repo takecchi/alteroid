@@ -5,11 +5,17 @@ import {
 } from './commitment-task-migration.js';
 import type { CommitmentMigrationStores } from './commitment-task-migration.js';
 import type { Commitment, Task } from './schema.js';
+import type { JobStore } from './store.js';
 
 // vitest に依存しない素の関数にする（`verifyTaskStoreContract` と同じ理由）。
 // 台帳 → Task の移行（#5469 P7a）の契約を、メモリ・fs・pg の3実装で揃える。シナリオごとに空のストアを作り直す。
+// 本体は承認を読むだけ（`getApproval`）。契約は承認を仕込むので `putApproval` も要る
+type ContractStores = CommitmentMigrationStores & {
+  readonly jobs: Pick<JobStore, 'getApproval' | 'putApproval'>;
+};
+
 export interface CommitmentMigrationFixture {
-  readonly stores: CommitmentMigrationStores;
+  readonly stores: ContractStores;
   /** 読めない台帳の行を器に直接仕込む。渡さない実装では「読めない行」の歯だけを飛ばす。 */
   readonly plantUnreadableCommitment?: (id: string) => Promise<void>;
   /** 読めない Task の行を器に直接仕込む。同上。 */
@@ -330,7 +336,7 @@ export async function verifyCommitmentTaskMigrationContract(
       conversationId,
     });
   const approval = (
-    stores: CommitmentMigrationStores,
+    stores: ContractStores,
     id: string,
     conversationId: string | undefined,
   ) =>

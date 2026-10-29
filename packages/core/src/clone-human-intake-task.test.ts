@@ -279,9 +279,12 @@ describe('人間の依頼は台帳の行と同じ id で Task としても積ま
     await waitFor(async () => (await s.stores.tasks.get('evt-mig')) !== null, 'Task');
     await waitFor(async () => (await s.stores.commitments.get('evt-mig')) !== null, '台帳');
 
+    const now = new Date().toISOString();
+    const plan = await migrateCommitmentsToTasks(s.stores, { dryRun: true, now });
     const report = await migrateCommitmentsToTasks(s.stores, {
       dryRun: false,
-      now: new Date().toISOString(),
+      now,
+      expectedFingerprint: plan.fingerprint,
     });
 
     expect(report.summary.closeOnly).toBe(1);

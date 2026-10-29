@@ -312,6 +312,8 @@ export interface CommitmentMigrationExecution {
   retired: number;
   /** 閉じようとしたら既に閉じていた行（別の書き手が先に閉じた）。 */
   alreadyClosed: number;
+  /** 上の件数の行の id（人間が結果を台帳・task と突き合わせるため。本文は無い）。 */
+  ids: { migrated: string[]; closeOnly: string[]; retired: string[]; alreadyClosed: string[] };
   /** Task を実際に作った行（`migrated` のうち台帳を閉じる前に落ちた行も含む）の、起点の会話の引き方の内訳。 */
   originConversation: {
     fromConversation: number;
@@ -414,6 +416,7 @@ export async function migrateCommitmentsToTasks(
     closeOnly: 0,
     retired: 0,
     alreadyClosed: 0,
+    ids: { migrated: [], closeOnly: [], retired: [], alreadyClosed: [] },
     originConversation: { fromConversation: 0, fromApproval: 0, unresolvedIds: [] },
     failed: [],
   };
@@ -450,10 +453,19 @@ export async function migrateCommitmentsToTasks(
         closeReason(effective, commitment),
         'daemon',
       );
-      if (!closed) execution.alreadyClosed += 1;
-      else if (effective === 'task') execution.migrated += 1;
-      else if (effective === 'close-only') execution.closeOnly += 1;
-      else execution.retired += 1;
+      if (!closed) {
+        execution.alreadyClosed += 1;
+        execution.ids.alreadyClosed.push(commitment.id);
+      } else if (effective === 'task') {
+        execution.migrated += 1;
+        execution.ids.migrated.push(commitment.id);
+      } else if (effective === 'close-only') {
+        execution.closeOnly += 1;
+        execution.ids.closeOnly.push(commitment.id);
+      } else {
+        execution.retired += 1;
+        execution.ids.retired.push(commitment.id);
+      }
     } catch (error) {
       execution.failed.push({
         id: commitment.id,
