@@ -1,12 +1,12 @@
 import { codePointBoundary } from '@alteroid/core/cli-light';
 
 import type { MemoryDoc, MemoryRow, TuiApi } from './api.js';
+import { refreshOnFeed } from './feed-refresh.js';
 import type { HeaderFeed } from './header-feed.js';
 import type { LogEntry } from './log.js';
 import { redactedErrorMessage, sanitizeForTerminal } from '../redact.js';
 import { Store } from './store.js';
 
-export const MEMORY_REFRESH_DEBOUNCE_MS = 700;
 export const MEMORY_DETAIL_CHARS = 60_000;
 
 export interface MemoryDetailState {
@@ -47,7 +47,6 @@ export class MemoryController {
   private listGen = 0;
   private detailGen = 0;
   private seq = 0;
-  private timer: ReturnType<typeof setTimeout> | undefined;
   private detach: (() => void) | undefined;
 
   constructor(
@@ -61,28 +60,21 @@ export class MemoryController {
 
   attach(feed: HeaderFeed): void {
     this.detach?.();
-    this.detach = feed.onEvent((type) => {
-      if (type === 'memory_update' || type === 'open') this.scheduleRefresh();
+    this.detach = refreshOnFeed(feed, {
+      affects: (type) => type === 'memory_update',
+      idle: () => this.store.getSnapshot().status === 'idle',
+      refresh: () => {
+        const current = this.store.getSnapshot();
+        void this.refreshList();
+        if (current.view === 'detail' && current.detail !== null) void this.refreshDetail();
+      },
+      debounceMs: this.options.debounceMs,
     });
   }
 
   dispose(): void {
     this.detach?.();
     this.detach = undefined;
-    clearTimeout(this.timer);
-    this.timer = undefined;
-  }
-
-  private scheduleRefresh(): void {
-    if (this.store.getSnapshot().status === 'idle') return;
-    if (this.timer !== undefined) return;
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      const current = this.store.getSnapshot();
-      if (current.status === 'idle') return;
-      void this.refreshList();
-      if (current.view === 'detail' && current.detail !== null) void this.refreshDetail();
-    }, this.options.debounceMs ?? MEMORY_REFRESH_DEBOUNCE_MS);
   }
 
   enter(): void {

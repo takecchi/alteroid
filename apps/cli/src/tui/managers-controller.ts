@@ -1,5 +1,6 @@
 // 取り直しで錨を持ち回らない: 読み込み済みの件数と同じ `limit` で先頭から読めば、古い頁を読み足していても 1 回で揃うため
 import { type ManagerRow, type ManagerStatus, type TuiApi, type UnreadableManager } from './api.js';
+import { refreshOnFeed } from './feed-refresh.js';
 import type { HeaderFeed } from './header-feed.js';
 import { affectsManagers } from './journal-targets.js';
 import type { LogEntry } from './log.js';
@@ -9,7 +10,6 @@ import { Store } from './store.js';
 
 export const MANAGERS_PAGE = 50;
 export const MANAGERS_LIMIT_MAX = 1_000;
-export const REFRESH_DEBOUNCE_MS = 700;
 
 export const FILTER_CYCLE: readonly (ManagerStatus | null)[] = [
   null,
@@ -82,7 +82,6 @@ export class ManagersController {
   readonly store = new Store<ManagersState>(initialManagersState);
   private listGen = 0;
   private detailGen = 0;
-  private timer: ReturnType<typeof setTimeout> | undefined;
   private detach: (() => void) | undefined;
 
   constructor(
@@ -96,30 +95,21 @@ export class ManagersController {
 
   attach(feed: HeaderFeed): void {
     this.detach?.();
-    this.detach = feed.onEvent((type, entry) => {
-      // `open`（張り直し）は取りこぼしがありうるので必ず取り直す
-      if (type === 'open' || affectsManagers(type, entry)) this.scheduleRefresh();
+    this.detach = refreshOnFeed(feed, {
+      affects: affectsManagers,
+      idle: () => this.store.getSnapshot().list.status === 'idle',
+      refresh: () => {
+        const current = this.store.getSnapshot();
+        void this.refreshList();
+        if (current.view === 'detail' && current.detail !== null) void this.refreshDetail();
+      },
+      debounceMs: this.options.debounceMs,
     });
   }
 
   dispose(): void {
     this.detach?.();
     this.detach = undefined;
-    clearTimeout(this.timer);
-    this.timer = undefined;
-  }
-
-  private scheduleRefresh(): void {
-    const s = this.store.getSnapshot();
-    if (s.list.status === 'idle') return;
-    if (this.timer !== undefined) return;
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      const current = this.store.getSnapshot();
-      if (current.list.status === 'idle') return;
-      void this.refreshList();
-      if (current.view === 'detail' && current.detail !== null) void this.refreshDetail();
-    }, this.options.debounceMs ?? REFRESH_DEBOUNCE_MS);
   }
 
   private setList(patch: Partial<ListState>): void {
