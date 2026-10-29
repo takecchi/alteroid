@@ -3,8 +3,8 @@ import type { ReactNode } from 'react';
 import { Button } from '@alteroid/ui';
 import { formatDateTime, redactBody } from '@alteroid/logic';
 
-// 記憶の詳細ともやり方の詳細が、保存・削除の 409 で同じ形の帯を出す。違うのは名詞（`noun`）と、
-// 「いまの内容」の見せ方（やり方だけ種類と題の行を足す。`summary`）だけなので、ここへ寄せた。
+// 記憶の詳細とやり方の詳細は、保存・削除が 409 になったとき同じ形の帯を出す。違うのは名詞（`noun`）と、
+// 「いまの内容」の見せ方（やり方だけ種類と題の行を足す。`summary`）だけ。
 
 /** 衝突の相手方（ほかで書かれた、いまの内容）。消されていたら `null`。 */
 export type ConflictCurrent = { updatedAt: string; content: string };
