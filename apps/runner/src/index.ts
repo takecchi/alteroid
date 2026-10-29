@@ -144,8 +144,7 @@ export async function drainAndReportOutbox(
  * 畳みの間に入ってくる要求は、入口の門（`gateDuringShutdown`）が取りに来る分だけに絞る。
  */
 export async function shutdownHandingOver(deps: {
-  host: Pick<RunnerHost, 'shutdown' | 'pendingPickups'> &
-    Partial<Pick<RunnerHost, 'inlineUnpickedArchives'>>;
+  host: Pick<RunnerHost, 'shutdown' | 'pendingPickups' | 'inlineUnpickedArchives'>;
   outbox: Outbox;
   closeListener: () => void;
   startedAt?: number;
@@ -161,20 +160,20 @@ export async function shutdownHandingOver(deps: {
 
   // 送り直しの判定を `shutdown()` と並べて走らせる（#4925）: `shutdown()` が長引いても、SIGTERM から `inlineAtMs` で、
   // まだ取られていない退避を送り直す。二度は送らない: `inlineUnpickedArchives` が送った分を預かりから外す
-  const inlineTimer = setTimeout(() => {
-    if (
-      !deps.outbox.subscribed ||
-      deps.host.inlineUnpickedArchives === undefined ||
-      deps.host.pendingPickups() === 0
-    ) {
-      return;
-    }
+  // 送った件数を返し、1件でも送ったら日誌（stderr）へ書く。`lead` だけが呼び手ごとに違う
+  const inlineAndReport = (lead: string): number => {
     const sent = deps.host.inlineUnpickedArchives();
     if (sent > 0) {
       (deps.write ?? writeStderrSync)(
-        `alteroid-runner: 畳みの途中で、デーモンが取りに来なかった生ログの退避 ${String(sent)} 件を、本文を載せて送り直した\n`,
+        `alteroid-runner: ${lead}デーモンが取りに来なかった生ログの退避 ${String(sent)} 件を、本文を載せて送り直した\n`,
       );
     }
+    return sent;
+  };
+
+  const inlineTimer = setTimeout(() => {
+    if (!deps.outbox.subscribed || deps.host.pendingPickups() === 0) return;
+    inlineAndReport('畳みの途中で、');
   }, afterMs(inlineAtMs));
 
   // `shutdown()` の完了を待つのは、従来どおり待ちの上限（`limitMs`）まで: 終わる前に口を閉じて exit すると、
@@ -209,14 +208,8 @@ export async function shutdownHandingOver(deps: {
       subscribed: () => deps.outbox.subscribed,
       deadlineAt: startedAt + inlineAtMs,
     });
-    if (left > 0 && deps.outbox.subscribed && deps.host.inlineUnpickedArchives !== undefined) {
-      const sent = deps.host.inlineUnpickedArchives();
-      if (sent > 0) {
-        (deps.write ?? writeStderrSync)(
-          `alteroid-runner: デーモンが取りに来なかった生ログの退避 ${String(sent)} 件を、本文を載せて送り直した\n`,
-        );
-        await waitForOutboxDrain(deps.outbox, deps.drainWaitMs ?? DRAIN_WAIT_MS);
-      }
+    if (left > 0 && deps.outbox.subscribed && inlineAndReport('') > 0) {
+      await waitForOutboxDrain(deps.outbox, deps.drainWaitMs ?? DRAIN_WAIT_MS);
     }
     // 2段目: 残り（出し箱の退避先など）を上限まで待つ
     left = await waitForPickups({

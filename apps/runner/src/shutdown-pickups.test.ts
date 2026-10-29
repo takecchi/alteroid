@@ -113,6 +113,7 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
         }, 30);
       },
       pendingPickups: () => pending,
+      inlineUnpickedArchives: () => 0,
     };
 
     await shutdownHandingOver({
@@ -134,7 +135,11 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
     let closed = false;
 
     await shutdownHandingOver({
-      host: { shutdown: async () => undefined, pendingPickups: () => 1 },
+      host: {
+        shutdown: async () => undefined,
+        pendingPickups: () => 1,
+        inlineUnpickedArchives: () => 0,
+      },
       outbox,
       closeListener: () => (closed = true),
       drainWaitMs: 0,
@@ -289,6 +294,7 @@ describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() 
             finishShutdown = resolve;
           }),
         pendingPickups: () => 0,
+        inlineUnpickedArchives: () => 0,
       },
       outbox,
       closeListener: () => (closed = true),
@@ -311,7 +317,11 @@ describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() 
     const detach = outbox.attach(() => undefined);
 
     const done = shutdownHandingOver({
-      host: { shutdown: () => new Promise<void>(() => undefined), pendingPickups: () => 0 },
+      host: {
+        shutdown: () => new Promise<void>(() => undefined),
+        pendingPickups: () => 0,
+        inlineUnpickedArchives: () => 0,
+      },
       outbox,
       closeListener: () => (closed = true),
       drainWaitMs: 0,

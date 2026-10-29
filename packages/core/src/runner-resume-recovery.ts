@@ -15,14 +15,12 @@
 export type ResumeRecoveryOutcome = 'recovered' | 'unresumable' | 'not-a-resume-failure';
 
 export function decideResumeRecoveryOutcome(input: {
-  readonly hadAttempt: boolean;
   readonly progressed: boolean;
   readonly record: string | null;
 }):
   | { readonly outcome: 'not-a-resume-failure' }
   | { readonly outcome: 'unresumable' }
   | { readonly outcome: 'recovered'; readonly record: string } {
-  if (!input.hadAttempt) return { outcome: 'not-a-resume-failure' };
   if (input.progressed) return { outcome: 'not-a-resume-failure' };
   return input.record === null
     ? { outcome: 'unresumable' }
@@ -57,7 +55,7 @@ export function recoverFromFailedResume(
 
   const progressed = host.hasProgressed();
   const record = host.renderSeedRecord();
-  const decision = decideResumeRecoveryOutcome({ hadAttempt: true, progressed, record });
+  const decision = decideResumeRecoveryOutcome({ progressed, record });
 
   if (decision.outcome === 'not-a-resume-failure') return decision.outcome;
 
