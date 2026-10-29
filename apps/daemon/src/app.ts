@@ -6884,7 +6884,7 @@ export function createApp(deps: AppDeps) {
           return c.json(taskMigrationPlanResponseSchema.parse(report));
         } catch (error) {
           if (!(error instanceof OriginConversationLookupError)) throw error;
-          return c.json({ error: error.message }, 500);
+          return c.json({ error: reasonOf(error) }, 500);
         }
       },
     )
@@ -6941,9 +6941,9 @@ export function createApp(deps: AppDeps) {
           return c.json(taskMigrationResultResponseSchema.parse(report));
         } catch (error) {
           if (error instanceof MigrationPlanChangedError)
-            return c.json({ error: error.message }, 409);
+            return c.json({ error: reasonOf(error) }, 409);
           if (error instanceof OriginConversationLookupError) {
-            return c.json({ error: error.message }, 500);
+            return c.json({ error: reasonOf(error) }, 500);
           }
           throw error;
         }
