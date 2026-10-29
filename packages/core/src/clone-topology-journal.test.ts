@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createMemoryStores, humanMessage } from './testing.js';
@@ -10,7 +10,6 @@ describe('稼働の地図の材料（activeTurn と exchange.managerId）', () =
     const stores = createMemoryStores();
     const { fn, calls, release } = fakeGatedSdk();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

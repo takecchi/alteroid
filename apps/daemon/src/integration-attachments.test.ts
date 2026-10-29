@@ -1,6 +1,5 @@
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
-  ALWAYS_REDELIVER,
   captureStderr,
   createAuthProviderRegistry,
   createAuthService,
@@ -91,7 +90,6 @@ function setup(
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn, env: {} }),
     ]),
-    redeliveryGate: ALWAYS_REDELIVER,
   });
   const host = new Proxy(clone, {
     get(target, key) {

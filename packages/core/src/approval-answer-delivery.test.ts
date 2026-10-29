@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { setup, waitFor } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -72,7 +72,6 @@ function bootClone(
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
-    redeliveryGate: ALWAYS_REDELIVER,
   });
   return { ...fake, clone };
 }

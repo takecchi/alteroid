@@ -7,7 +7,7 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import type { AgentCloneDriver } from './agent-clone-session.js';
 import { ClaudeCloneDriver } from './claude-clone-driver.js';
 import { fakeSdk, waitForDone, wireEvents } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
 describe('クローン — 駆動役の口（#486 M7 の前段）', () => {
@@ -24,7 +24,7 @@ describe('クローン — 駆動役の口（#486 M7 の前段）', () => {
       distill: (spec) => inner.distill(spec),
     };
     const stores = createMemoryStores();
-    const clone = createClone({ stores, driver, env: {}, redeliveryGate: ALWAYS_REDELIVER });
+    const clone = createClone({ stores, driver, env: {} });
     const { events } = wireEvents(clone, 'conv-1');
     clone.post(humanMessage('やあ'));
     await waitForDone(events);
@@ -38,7 +38,7 @@ describe('クローン — 駆動役の口（#486 M7 の前段）', () => {
     const inner = new ClaudeCloneDriver({ queryFn: fn });
     const driver: AgentCloneDriver = { providerId: 'claude', open: (spec) => inner.open(spec) };
     const stores = createMemoryStores();
-    const clone = createClone({ stores, driver, env: {}, redeliveryGate: ALWAYS_REDELIVER });
+    const clone = createClone({ stores, driver, env: {} });
     const { events } = wireEvents(clone, 'conv-1');
     clone.post(humanMessage('やあ'));
     await waitForDone(events);

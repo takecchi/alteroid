@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
-import { ALWAYS_REDELIVER, CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
+import { CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { ChatStreamEvent } from './schema.js';
@@ -243,7 +243,6 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
         modelUsage: () => usage('claude-fable-5', ++nth * 0.5),
       });
       const clone = createClone({
-        redeliveryGate: ALWAYS_REDELIVER,
         stores,
         queryFn: fn,
         env: {},

@@ -23,7 +23,7 @@ import {
 } from './clone-tool-relay-child.js';
 import { buildCloneToolRelayChildDistForTesting } from './clone-tool-relay-child-build.test-support.js';
 import { CLONE_TOOLS_TRANSPORT_ENV_KEY } from './clone-tools-transport.js';
-import { ALWAYS_REDELIVER, CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
+import { CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { withEffectiveMcpServers } from './mcp-config-file.test-support.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
@@ -145,7 +145,6 @@ describe('クローン本セッションへ渡す Options', () => {
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     clone.post(humanMessage('やあ'));
@@ -164,7 +163,6 @@ describe('クローン本セッションへ渡す Options', () => {
       stores,
       queryFn: fn,
       env: { [TOKEN_SAVING_COMPACTION_ENV]: '1' },
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     clone.post(humanMessage('やあ'));
@@ -201,7 +199,6 @@ describe('クローン本セッションへ渡す Options', () => {
     const { fn, calls } = fakeCloneSdk();
     const stores = createMemoryStores();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: { [CLONE_MODEL_ENV_KEY]: 'opus' },
@@ -223,7 +220,6 @@ describe('クローン本セッションへ渡す Options', () => {
         stores,
         queryFn: fn,
         env: value === undefined ? {} : { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: value },
-        redeliveryGate: ALWAYS_REDELIVER,
       });
 
       clone.post(humanMessage('やあ'));
@@ -248,7 +244,6 @@ describe('クローン本セッションへ渡す Options', () => {
       queryFn: fn,
       env: { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stdio' },
       cloneToolRelaySocketDir: socketDir,
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     clone.post(humanMessage('やあ'));
@@ -285,7 +280,6 @@ describe('クローン本セッションへ渡す Options', () => {
         stores,
         queryFn: fn,
         env: { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stido' },
-        redeliveryGate: ALWAYS_REDELIVER,
       }),
     ).toThrow(/ALTEROID_CLONE_TOOLS_TRANSPORT/);
   });
@@ -302,7 +296,6 @@ describe('クローン本セッションへ渡す Options', () => {
         queryFn: fn,
         env: { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stdio' },
         cloneToolRelaySocketDir: socketDir,
-        redeliveryGate: ALWAYS_REDELIVER,
       });
 
       clone.post(humanMessage('やあ'));
@@ -555,7 +548,7 @@ describe('クローンの蒸留サイドクエリへ渡す Options', () => {
   it('persistSession: false、PostToolUse はあるが PreCompact は無い', async () => {
     const { fn, calls } = fakeCloneSdk();
     const stores = createMemoryStores();
-    const clone = createClone({ stores, queryFn: fn, env: {}, redeliveryGate: ALWAYS_REDELIVER });
+    const clone = createClone({ stores, queryFn: fn, env: {} });
 
     clone.post(humanMessage('やあ'));
     await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
@@ -594,7 +587,7 @@ describe('人間の MCP 連携の登録をクローンへ渡す（#325 段2）',
     await stores.mcpServers.write({
       github: { command: 'gh-mcp', env: { TOKEN: 'dummy' } },
     });
-    const clone = createClone({ stores, queryFn: fn, env: {}, redeliveryGate: ALWAYS_REDELIVER });
+    const clone = createClone({ stores, queryFn: fn, env: {} });
 
     clone.post(humanMessage('やあ'));
     await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
@@ -647,7 +640,7 @@ describe('人間の MCP 連携の登録をクローンへ渡す（#325 段2）',
         write: base.mcpServers.write.bind(base.mcpServers),
       },
     };
-    const clone = createClone({ stores, queryFn: fn, env: {}, redeliveryGate: ALWAYS_REDELIVER });
+    const clone = createClone({ stores, queryFn: fn, env: {} });
 
     clone.post(humanMessage('やあ'));
     await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
@@ -848,7 +841,6 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
       queryFn: fn,
       env: {},
       cwd: root,
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     clone.post(humanMessage('やあ'));
@@ -885,7 +877,6 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
       queryFn: fn,
       env: {},
       cwd: root,
-      redeliveryGate: ALWAYS_REDELIVER,
     });
     clone.post(humanMessage('やあ'));
     await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
@@ -911,7 +902,6 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
       queryFn: fn,
       env: {},
       cwd: root,
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     clone.post(humanMessage('やあ'));
@@ -934,7 +924,6 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
       queryFn: fn,
       env: {},
       cwd: root,
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     clone.post(humanMessage('やあ'));
@@ -974,7 +963,6 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
       queryFn: fn,
       env: {},
       cwd: root,
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     clone.post(humanMessage('やあ'));
@@ -1015,7 +1003,6 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
       queryFn: fn,
       env: {},
       cwd: root,
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     clone.post(humanMessage('やあ'));
@@ -1041,7 +1028,6 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
       queryFn: fn,
       env: {},
       cwd: root,
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     clone.post(humanMessage('やあ'));
@@ -1073,7 +1059,6 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
       queryFn: fn,
       env: {},
       cwd: root,
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     clone.post(humanMessage('やあ'));

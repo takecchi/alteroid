@@ -1,7 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { waitFor } from './clone-test-harness.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -90,7 +90,6 @@ describe('Clone#handle — 未着手だった分岐の順序（characterization�
 
     const fn = markingSdk(order, 'model-input');
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -144,7 +143,6 @@ describe('Clone#handle — 未着手だった分岐の順序（characterization�
 
     const fn = markingSdk(order, 'model-input');
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -184,7 +182,6 @@ describe('Clone#handle — 未着手だった分岐の順序（characterization�
 
     const fn = markingSdk(order, 'model-input');
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

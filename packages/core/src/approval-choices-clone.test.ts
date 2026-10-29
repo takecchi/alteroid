@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { waitFor } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone, InvalidApprovalSelectionsError } from './clone.js';
+import { createClone, InvalidApprovalSelectionsError } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -65,7 +65,6 @@ function boot(stores: Stores): { clone: CloneHost; inputs: string[] } {
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
-    redeliveryGate: ALWAYS_REDELIVER,
   });
   return { clone, inputs: sdk.inputs };
 }

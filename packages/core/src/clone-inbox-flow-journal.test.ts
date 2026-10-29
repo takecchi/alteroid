@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALWAYS_REDELIVER, commitmentFor, createClone } from './clone.js';
+import { commitmentFor, createClone } from './clone.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { Commitment } from './schema.js';
@@ -231,7 +231,6 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
 
     const { fn, calls, release } = fakeGatedSdk();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

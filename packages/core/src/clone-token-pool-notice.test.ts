@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { query as sdkQuery, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { ALWAYS_REDELIVER, createClone, DAEMON_TOKEN_POOL_REOPENED_SOURCE } from './clone.js';
+import { createClone, DAEMON_TOKEN_POOL_REOPENED_SOURCE } from './clone.js';
 import type { InboxEvent, JournalEntry } from './schema.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { createLocalRunner } from './runner-local.js';
@@ -195,7 +195,6 @@ describe('クローン — token-pool の「戻った」通知は同時に未処
     }) as unknown as typeof sdkQuery;
     const stores = createMemoryStores();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

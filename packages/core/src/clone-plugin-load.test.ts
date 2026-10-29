@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createMemoryStores, humanMessage } from './testing.js';
@@ -16,7 +16,6 @@ describe('クローン — plugin の読み込み結果（init の plugins / plu
     const { fn } = fakeSdk(undefined, fakeSdkOptions);
     const stores = createMemoryStores();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

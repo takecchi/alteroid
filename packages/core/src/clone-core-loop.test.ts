@@ -10,7 +10,6 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import {
-  ALWAYS_REDELIVER,
   CLONE_MODEL,
   CLONE_MODEL_ENV_KEY,
   CLONE_PERMISSION_MODE_ENV_KEY,
@@ -1208,7 +1207,6 @@ describe('クローン', () => {
         runners: createRunnerRegistry([
           createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),
         ]),
-        redeliveryGate: ALWAYS_REDELIVER,
       });
       const { events } = wireEvents(clone, 'conv-1');
       return { clone, events, calls };
@@ -2427,7 +2425,6 @@ describe('クローン', () => {
       let captured: ToolContext | undefined;
       const { fn, calls } = fakeSdk(undefined, { delayMs: 200 });
       const clone = createClone({
-        redeliveryGate: ALWAYS_REDELIVER,
         stores,
         queryFn: fn,
         env: {},

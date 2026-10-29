@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createMemoryStores, humanMessage } from './testing.js';
@@ -77,7 +77,6 @@ function build(
   const stores = createMemoryStores();
   const sdk = gatedSdk(interrupt);
   const clone = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: sdk.fn,
     env: {},

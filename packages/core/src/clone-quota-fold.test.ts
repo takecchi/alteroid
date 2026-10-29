@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALWAYS_REDELIVER, DAEMON_TOKEN_POOL_REOPENED_SOURCE, createClone } from './clone.js';
+import { DAEMON_TOKEN_POOL_REOPENED_SOURCE, createClone } from './clone.js';
 import { EXCHANGE_KIND_FAILURE_PREFIX } from './exchange-kind.js';
 import { countsAsUndistilledActivity } from './distill-gap.js';
 import { humanExchanges } from './conversation.js';
@@ -245,7 +245,6 @@ describe('クローン — 枠の回復予定時刻（resetsAt）より前は再
         rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour', resetsAt }),
       });
       const clone = createClone({
-        redeliveryGate: ALWAYS_REDELIVER,
         stores,
         queryFn: fn,
         env: {},
@@ -492,7 +491,6 @@ describe('クローン — 回復予定時刻より前で鍵が枠に当たっ�
           },
     );
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

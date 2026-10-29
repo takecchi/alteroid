@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { fakeSdk } from './clone-test-harness.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -26,7 +26,6 @@ function setupWithRetry(
         : undefined,
   });
   const clone = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
     env: {},

@@ -7,7 +7,7 @@ import type {
   Query,
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { ManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -74,7 +74,6 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     const { fn, calls } = fakeSdk(reply);
     const clone = createClone({
       reportSettleMs: 2500,
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       runners: createRunnerRegistry([
@@ -276,7 +275,6 @@ describe('クローン — マネージャーの確認がいまも待たれて�
 
     const clone = createClone({
       reportSettleMs: 2500,
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       managers: throwingPool,

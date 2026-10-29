@@ -14,7 +14,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import { fakeSdk, waitFor } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { seedCommitments, seedJobs, seedJournal, seedMemory } from './context-size-fixtures.js';
 import { contextSizeRecorder } from './context-size-recorder.js';
 import type { MemoryFixtureSize } from './context-size-fixtures.js';
@@ -239,7 +239,6 @@ function bootClone(stores: Stores): BootedClone {
   const clone = createClone({
     inboxSettleMs: 0,
     reportSettleMs: 0,
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
     env: {},

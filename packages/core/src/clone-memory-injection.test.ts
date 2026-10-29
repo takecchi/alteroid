@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { waitFor } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
@@ -85,7 +85,7 @@ interface Setup {
 
 function setup(stores: Stores = createMemoryStores()): Setup {
   const { fn, calls } = fakeSdk();
-  const clone = createClone({ stores, queryFn: fn, env: {}, redeliveryGate: ALWAYS_REDELIVER });
+  const clone = createClone({ stores, queryFn: fn, env: {} });
   const events: ChatStreamEvent[] = [];
   clone.subscribe('conv-1', (event) => events.push(event));
   return { clone, stores, calls, events };

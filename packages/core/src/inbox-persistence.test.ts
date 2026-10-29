@@ -3,12 +3,10 @@ import { describe, expect, it } from 'vitest';
 
 import { waitFor } from './clone-test-harness.js';
 import {
-  ALWAYS_REDELIVER,
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   createClone,
 } from './clone.js';
-import type { RedeliveryGate } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -71,7 +69,6 @@ function fakeSdk(behavior: 'reply' | 'hang' = 'reply'): Fake {
 function bootClone(
   stores: Stores,
   behavior: 'reply' | 'hang' = 'reply',
-  redeliveryGate: RedeliveryGate = ALWAYS_REDELIVER,
 ): Fake & { clone: CloneHost } {
   const fake = fakeSdk(behavior);
   const clone = createClone({
@@ -83,7 +80,6 @@ function bootClone(
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
-    redeliveryGate,
   });
   return { ...fake, clone };
 }
@@ -171,7 +167,6 @@ function bootGatedClone(stores: Stores): Fake & { clone: CloneHost; release: () 
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
-    redeliveryGate: ALWAYS_REDELIVER,
   });
   return { ...fake, clone };
 }
@@ -907,130 +902,8 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
   });
 });
 
-describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () => {
-  it('述語が偽を返しても、受信箱の行も台帳の行も消えない（次の起動でまた配り直しの対象になる）', async () => {
-    const stores = createMemoryStores();
-    const event = externalNotice('GATED-NOTICE 本文はこれだけ長くしておく', 'evt-gated');
-    await stores.inbox.put(event, event.at);
-    // #5469 P5: external は台帳に開かなくなったので、「台帳の行も消えない」はアップグレード前に開いた行を置いて測る
-    await seedLegacyLedgerRow(stores, event);
-
-    const alwaysFold: RedeliveryGate = () => false;
-    const { clone, inputs } = bootClone(stores, 'reply', alwaysFold);
-    await waitForJournal(stores, 'ターンを起こさずに畳んだ');
-
-    expect(inputs).toEqual([]);
-
-    const remaining = (await stores.inbox.peekPending()).entries;
-    expect(remaining.some((r) => r.event.id === event.id)).toBe(true);
-
-    const commitment = await stores.commitments.get(event.id);
-    expect(commitment).not.toBeNull();
-    expect(commitment?.closedAt).toBeUndefined();
-
-    await clone.stop();
-  });
-
-  it('畳んだ跡が日誌に残る（型ごとの本文追記と「畳んだ」の1行の両方）', async () => {
-    const stores = createMemoryStores();
-    const event = externalNotice('GATED-NOTICE-2 本文はこれだけ長くしておく', 'evt-gated-2');
-    await stores.inbox.put(event, event.at);
-
-    const alwaysFold: RedeliveryGate = () => false;
-    const { clone } = bootClone(stores, 'reply', alwaysFold);
-    await waitForJournal(stores, 'ターンを起こさずに畳んだ');
-
-    const externalEvents = await stores.journal.list({ types: ['external_event'] });
-    expect(
-      externalEvents.some(
-        (entry) =>
-          entry.type === 'external_event' &&
-          entry.source === 'redelivery-gate-probe' &&
-          entry.summary.includes('GATED-NOTICE-2 本文はこれだけ長くしておく'),
-      ),
-    ).toBe(true);
-
-    const exchanges = await stores.journal.list({ types: ['exchange'] });
-    const folded = exchanges.find(
-      (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
-    );
-    const foldedText = folded && folded.type === 'exchange' ? folded.text : '';
-    expect(foldedText).toContain('配り直しの門がいま配る意味は無いと答えた');
-    expect(foldedText).toContain('モデルへは1文字も渡していない');
-    expect(foldedText).toContain('合図も台帳の行も消していない');
-
-    await clone.stop();
-  });
-
-  describe('N件の gated な未読を一括で拾い直すときの「畳んだ」の畳み方', () => {
-    it('「畳んだ」行は1本だけである（N本でもN+1本でもない）', async () => {
-      const stores = createMemoryStores();
-      const ids = ['evt-gatefold-a', 'evt-gatefold-b', 'evt-gatefold-c'];
-      for (const [i, id] of ids.entries()) {
-        const at = `2026-08-10T00:00:0${i}.000Z`;
-        await stores.inbox.put(report(`門畳みテスト ${i}`, id), at);
-      }
-
-      const alwaysFold: RedeliveryGate = () => false;
-      const { clone } = bootClone(stores, 'reply', alwaysFold);
-      await waitForJournal(stores, '門畳みテスト 2');
-
-      const exchanges = await stores.journal.list({ types: ['exchange'] });
-      const matches = exchanges.filter(
-        (entry) =>
-          entry.type === 'exchange' &&
-          entry.with === 'self' &&
-          entry.text.includes('ターンを起こさずに畳んだ'),
-      );
-      expect(matches.length).toBe(1);
-
-      await clone.stop();
-    });
-
-    it('その1本から、N件それぞれの合図の形・畳んだ理由・件数のどれも失われていない', async () => {
-      const stores = createMemoryStores();
-      const items = [
-        { id: 'evt-gatefold-detail-a', text: 'A'.repeat(5), at: '2026-08-10T01:00:00.000Z' },
-        { id: 'evt-gatefold-detail-b', text: 'B'.repeat(9), at: '2026-08-10T01:00:01.000Z' },
-        { id: 'evt-gatefold-detail-c', text: 'C'.repeat(13), at: '2026-08-10T01:00:02.000Z' },
-      ];
-      for (const item of items) {
-        await stores.inbox.put(report(item.text, item.id), item.at);
-      }
-
-      const alwaysFold: RedeliveryGate = () => false;
-      const { clone } = bootClone(stores, 'reply', alwaysFold);
-      await waitForJournal(stores, `chars=${items[2]?.text.length}`);
-
-      const exchanges = await stores.journal.list({ types: ['exchange'] });
-      const folded = exchanges.find(
-        (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
-      );
-      const text = folded && folded.type === 'exchange' ? folded.text : '';
-
-      expect(text).toContain('まとめて3件');
-      for (const item of items) {
-        expect(text).toContain(`chars=${item.text.length}`);
-      }
-      expect(text).toContain('[1]');
-      expect(text).toContain('[2]');
-      expect(text).toContain('[3]');
-      expect(text).toContain('配り直しの門がいま配る意味は無いと答えた');
-      expect(text).toContain('モデルへは1文字も渡していない');
-      expect(text).toContain('合図も台帳の行も消していない');
-      expect(text).toContain('次の起動でまた拾い直され');
-
-      const bodies = exchanges.filter(
-        (entry) =>
-          entry.type === 'exchange' && entry.with === 'manager' && entry.role === 'inbound',
-      );
-      expect(bodies.length).toBe(3);
-
-      await clone.stop();
-    });
-  });
-
-  it('述語を渡さなければ、フォールドされそうな形の合図も含めて全件配られる（既定の挙動を1文字も変えない）', async () => {
+describe('`#restoreUnread` は stale でない合図を全件配る（Issue #783 続き）', () => {
+  it('token-pool 以外の external は、同じ形が何件並んでいても全件配られる', async () => {
     const stores = createMemoryStores();
     const a = externalNotice(
       'WOULD-BE-GATED-IF-CONFIGURED',
@@ -1047,170 +920,6 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
     expect(inputs.some((i) => i.includes('WOULD-BE-GATED-IF-CONFIGURED'))).toBe(true);
 
     await waitForNoUnread(stores);
-    await clone.stop();
-  });
-
-  it('述語が投げても、配る側へ倒れて全文でターンが起きる（判定できないのは雑音であって喪失ではない）', async () => {
-    const stores = createMemoryStores();
-    const event = externalNotice('THROW-GATE-NOTICE 本文はこれだけ長くしておく', 'evt-throw-gate');
-    await stores.inbox.put(event, event.at);
-
-    const throwingGate: RedeliveryGate = () => {
-      throw new Error('判定できない（テスト用）');
-    };
-
-    const lines = await captureStderr(async () => {
-      const { clone, inputs } = bootClone(stores, 'reply', throwingGate);
-      await waitFor(
-        () => inputs.some((i) => i.includes('THROW-GATE-NOTICE')),
-        '配る側へ倒れて処理に入る',
-      );
-      await clone.stop();
-    });
-
-    expect(lines.some((line) => line.includes('配り直しの門の判定'))).toBe(true);
-  });
-
-  it('畳まれた合図はモデルへ1文字も渡らない（配られる合図と混在させて確かめる）', async () => {
-    const stores = createMemoryStores();
-    const folded = externalNotice(
-      'FOLDED-UNIQUE-PAYLOAD',
-      'evt-mix-fold',
-      '2026-08-01T00:00:00.000Z',
-    );
-    const delivered = externalNotice(
-      'DELIVERED-UNIQUE-PAYLOAD',
-      'evt-mix-deliver',
-      '2026-08-01T00:00:01.000Z',
-    );
-    await stores.inbox.put(folded, folded.at);
-    await stores.inbox.put(delivered, delivered.at);
-
-    const gate: RedeliveryGate = (event) => event.id !== folded.id;
-    const { clone, inputs } = bootClone(stores, 'reply', gate);
-
-    await waitFor(
-      () => inputs.some((i) => i.includes('DELIVERED-UNIQUE-PAYLOAD')),
-      '配られる側が処理に入る',
-    );
-    await waitForJournal(stores, 'ターンを起こさずに畳んだ');
-
-    expect(inputs.some((i) => i.includes('DELIVERED-UNIQUE-PAYLOAD'))).toBe(true);
-    expect(inputs.join('')).not.toContain('FOLDED-UNIQUE-PAYLOAD');
-
-    await clone.stop();
-  });
-});
-
-describe('redeliveryGate（Issue #783 続き）: 配り直すその瞬間の usageBlocked で評価する', () => {
-  const spendLimitMessage = "You've hit your individual spend limit for this account.";
-
-  function fakeSdkWithResultFor(
-    resultFor: (turnIndex: number) => { subtype: string; text: string } | undefined,
-  ): Fake {
-    const inputs: string[] = [];
-    let turnIndex = 0;
-    const fn = ((params: { prompt: unknown; options?: Options }) => {
-      async function* generate(): AsyncGenerator<SDKMessage, void> {
-        yield {
-          type: 'system',
-          subtype: 'init',
-          session_id: 'sess-fake',
-          uuid: 'uuid-init',
-        } as unknown as SDKMessage;
-
-        for await (const message of params.prompt as AsyncIterable<{
-          message: { content: unknown };
-        }>) {
-          inputs.push(String(message.message.content));
-          const override = resultFor(turnIndex);
-          turnIndex += 1;
-          yield {
-            type: 'assistant',
-            message: { content: [{ type: 'text', text: 'ok' }] },
-            parent_tool_use_id: null,
-            session_id: 'sess-fake',
-            uuid: 'uuid-assistant',
-          } as unknown as SDKMessage;
-          yield {
-            type: 'result',
-            subtype: override?.subtype ?? 'success',
-            result: override?.text ?? 'ok',
-            session_id: 'sess-fake',
-            uuid: 'uuid-result',
-          } as unknown as SDKMessage;
-        }
-      }
-
-      const generator = generate();
-      return Object.assign(generator, {
-        close: () => undefined,
-        interrupt: async () => undefined,
-      }) as unknown as Query;
-    }) as unknown as typeof sdkQuery;
-
-    return { fn, inputs };
-  }
-
-  it('ループの途中で usageBlocked が変わると、同じ起動の中で前半と後半で扱いが変わる（ループの外で1回だけ評価する実装だと赤くなる）', async () => {
-    const base = createMemoryStores();
-    const first = externalNotice(
-      'FIRST-GATE-TIMING',
-      'evt-timing-first',
-      '2026-08-01T00:00:00.000Z',
-    );
-    const second = externalNotice(
-      'SECOND-GATE-TIMING',
-      'evt-timing-second',
-      '2026-08-01T00:00:01.000Z',
-    );
-    await base.inbox.put(first, first.at);
-    await base.inbox.put(second, second.at);
-
-    const stores: Stores = {
-      ...base,
-      commitments: {
-        ...base.commitments,
-        async get(id) {
-          if (id === second.id) {
-            await new Promise((resolve) => setTimeout(resolve, 300));
-          }
-          return base.commitments.get(id);
-        },
-      },
-    };
-
-    const { fn, inputs } = fakeSdkWithResultFor((turnIndex) =>
-      turnIndex === 0 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
-    );
-
-    const gate: RedeliveryGate = (_event, { usageBlocked }) => !usageBlocked;
-
-    const clone = createClone({
-      stores,
-      queryFn: fn,
-      env: {},
-      inboxSettleMs: 0,
-      reportSettleMs: 0,
-      runners: createRunnerRegistry([
-        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
-      ]),
-      redeliveryGate: gate,
-    });
-
-    await waitFor(() => inputs.some((i) => i.includes('FIRST-GATE-TIMING')), '1件目が処理に入る');
-
-    await waitForJournal(stores, 'ターンを起こさずに畳んだ');
-
-    expect(inputs.some((i) => i.includes('FIRST-GATE-TIMING'))).toBe(true);
-    expect(inputs.join('')).not.toContain('SECOND-GATE-TIMING');
-
-    const journal = await stores.journal.list({ types: ['exchange'] });
-    const foldedCount = journal.filter(
-      (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
-    ).length;
-    expect(foldedCount).toBe(1);
-
     await clone.stop();
   });
 });
@@ -1261,7 +970,7 @@ describe('拾い直した token-pool の合図の消し込み（Issue #783 段1�
     await clone.stop();
   });
 
-  it('同じ起動の中で token-pool だけが消え、runner-registry と自由文字列の external は受信箱に残る（門は常に畳む設定に固定——門の気分ではなく合図の性質で決めていることの確認）', async () => {
+  it('同じ起動の中で token-pool だけが消え、runner-registry と自由文字列の external は配られる（合図の性質だけで決めていることの確認）', async () => {
     const stores = createMemoryStores();
     const tokenPool: InboxEvent = {
       type: 'external',
@@ -1288,49 +997,19 @@ describe('拾い直した token-pool の合図の消し込み（Issue #783 段1�
     await stores.inbox.put(runnerRegistry, runnerRegistry.at);
     await stores.inbox.put(freeform, freeform.at);
 
-    const alwaysFold: RedeliveryGate = () => false;
-    const { clone, inputs } = bootClone(stores, 'reply', alwaysFold);
+    const { clone, inputs } = bootClone(stores, 'reply');
 
     await waitForAbsentFromPending(stores, tokenPool.id);
-    await waitForJournal(stores, 'まとめて2件');
-
-    const exchanges = await stores.journal.list({ types: ['exchange'] });
-    const folded = exchanges.filter(
-      (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
+    await waitFor(
+      () =>
+        inputs.join('').includes('MIX-RUNNER-REGISTRY-PAYLOAD') &&
+        inputs.join('').includes('MIX-FREEFORM-PAYLOAD'),
+      'runner-registry と自由文字列の external が配られて処理に入る',
     );
-    expect(folded).toHaveLength(1);
-    const foldedText = folded[0] && folded[0].type === 'exchange' ? folded[0].text : '';
-    expect(foldedText).toContain(`source.chars=${DAEMON_RUNNER_REGISTRY_SOURCE.length}`);
-    expect(foldedText).toContain(`source.chars=${'webhook-from-somewhere-outside'.length}`);
 
-    const remaining = (await stores.inbox.peekPending()).entries;
-    const remainingIds = remaining.map((r) => r.event.id);
-    expect(remainingIds).not.toContain(tokenPool.id);
-    expect(remainingIds).toContain(runnerRegistry.id);
-    expect(remainingIds).toContain(freeform.id);
+    expect(inputs.join('')).not.toContain('MIX-TOKEN-POOL-PAYLOAD');
 
-    expect(inputs).toEqual([]);
-
-    await clone.stop();
-  });
-
-  it('redeliveryGate を省略した既定のクローンでも token-pool の合図は消える（消し込みは門の設定と独立である）', async () => {
-    const stores = createMemoryStores();
-    const event: InboxEvent = {
-      type: 'external',
-      id: 'evt-token-pool-no-gate',
-      at: '2026-08-01T00:00:00.000Z',
-      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
-      payload: 'NO-GATE-TOKEN-POOL-PAYLOAD',
-    };
-    await stores.inbox.put(event, event.at);
-
-    const { clone, inputs } = bootClone(stores, 'reply');
-    await waitForJournal(stores, 'ターンを起こさずに消した');
-    await waitForAbsentFromPending(stores, event.id);
-
-    expect(inputs).toEqual([]);
-
+    await waitForNoUnread(stores);
     await clone.stop();
   });
 });
@@ -1730,7 +1409,6 @@ describe('消した合図は配達されない（issue #1049）', () => {
       runners: createRunnerRegistry([
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     await waitFor(() => gated, '拾い直しが1件目の日誌で止まる');
@@ -1827,7 +1505,6 @@ describe('枠で保持している合図も落とす（issue #1049。#deferred �
       runners: createRunnerRegistry([
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     clone.post(report('枠で保持される報告', 'evt-held'));

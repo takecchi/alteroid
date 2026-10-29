@@ -1,6 +1,5 @@
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
-  ALWAYS_REDELIVER,
   createAuthProviderRegistry,
   createAuthService,
   createClone,
@@ -68,7 +67,6 @@ function setupApp() {
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn, env: {} }),
     ]),
-    redeliveryGate: ALWAYS_REDELIVER,
   });
   const app = createApp({ clone, stores, token: 'test-token', shutdown: () => undefined });
   return { app, stores, inputs };
@@ -221,7 +219,6 @@ describe('POST /chat の clientMessageId', () => {
       runners: createRunnerRegistry([
         createLocalRunner({ workspacePath: '/work', queryFn, env: {} }),
       ]),
-      redeliveryGate: ALWAYS_REDELIVER,
     });
     const reborn = createApp({
       clone,
@@ -439,7 +436,6 @@ describe('POST /chat の clientMessageId', () => {
         runners: createRunnerRegistry([
           createLocalRunner({ workspacePath: '/work', queryFn, env: {} }),
         ]),
-        redeliveryGate: ALWAYS_REDELIVER,
       });
       const reborn = createApp({
         clone,
@@ -667,7 +663,6 @@ describe('GET /client-messages/:clientMessageId（受け取った会話を引く
         runners: createRunnerRegistry([
           createLocalRunner({ workspacePath: '/work', queryFn, env: {} }),
         ]),
-        redeliveryGate: ALWAYS_REDELIVER,
       }),
       stores: first.stores,
       token: 'test-token',

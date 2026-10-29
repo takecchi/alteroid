@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import {
-  ALWAYS_REDELIVER,
   compactionLikelyThisTurn,
   createClone,
   SITUATION_COMPACTION_GROWTH_FLOOR_TOKENS,
@@ -153,7 +152,6 @@ function bootClone(
     queryFn: fake.fn,
     env,
     managers,
-    redeliveryGate: ALWAYS_REDELIVER,
     ...(mergedBatchLimit === undefined ? {} : { mergedBatchLimit }),
   });
   return { ...fake, clone };
@@ -633,7 +631,6 @@ describe('状況の節と manager_list は、メモリの配達待ち行列を�
       queryFn: fn,
       env: TOKEN_SAVING_ENABLED_ENV,
       managers: busyPool(),
-      redeliveryGate: ALWAYS_REDELIVER,
       // 束の上限を1にする: 上の試験と同じ理由（別々の担当の報告が A のターンへまとまり、待ち行列に残らないため）
       mergedBatchLimit: 1,
       mcpServerFactory: (context) => {
@@ -817,7 +814,6 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       queryFn: fn,
       env: TOKEN_SAVING_ENABLED_ENV,
       managers: busyPool(),
-      redeliveryGate: ALWAYS_REDELIVER,
     });
     const s = { fn, inputs, clone };
 
@@ -883,7 +879,6 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       queryFn: fn,
       env: TOKEN_SAVING_ENABLED_ENV,
       managers: busyPool(),
-      redeliveryGate: ALWAYS_REDELIVER,
     });
     return { inputs, clone, fn };
   }
@@ -957,7 +952,6 @@ describe('同じ会話の2ターン目からは、説明文を要点に畳み、
       queryFn: fn,
       env: TOKEN_SAVING_ENABLED_ENV,
       managers: busyPool(),
-      redeliveryGate: ALWAYS_REDELIVER,
     });
     const s = { fn, inputs, clone };
     const answer = {

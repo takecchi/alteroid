@@ -1,6 +1,6 @@
 import { afterEach, expect } from 'vitest';
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { DelegatedPermissionRuleService } from './delegated-permission-rules.js';
 import type { CloneHost } from './host.js';
 import { renderMemoryDocuments } from './memory.js';
@@ -278,7 +278,6 @@ export function setup(
     // 報告の束ね待ち（30秒）も既定で切る: 理由は上と同じ。報告の窓を試す試験は cloneOptions の `reportSettleMs` で上書きする
     reportSettleMs: 0,
     ...cloneOptions,
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
     env: { ...TOKEN_SAVING_ENABLED_ENV, ...env },

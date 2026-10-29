@@ -1,6 +1,5 @@
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
-  ALWAYS_REDELIVER,
   createClone,
   createLocalRunner,
   createMemoryStores,
@@ -63,7 +62,6 @@ function setupApp(stores: Stores = createMemoryStores()) {
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn, env: {} }),
     ]),
-    redeliveryGate: ALWAYS_REDELIVER,
   });
   const app = createApp({ clone, stores, token: 'test-token', shutdown: () => undefined });
   return { app, stores };

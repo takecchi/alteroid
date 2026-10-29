@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import {
   fakeSdk,
   fakeScriptedSdk,
@@ -145,7 +145,6 @@ function boot(
     ...(options.resultFor === undefined ? {} : { resultFor: options.resultFor }),
   });
   const clone = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
     env: options.env ?? {},

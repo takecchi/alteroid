@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
 import type { ToolContext } from './tools.js';
 import { createMemoryStores, humanMessage } from './testing.js';
@@ -21,7 +21,6 @@ function setup(script: (ask: () => Promise<unknown>) => ScriptedStep[]) {
   };
   const { fn } = fakeScriptedSdk(() => script(ask));
   const clone = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
     env: {},

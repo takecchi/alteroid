@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeSdk, fakeScriptedSdk, waitForTerminal, wireEvents } from './clone-test-harness.js';
 import type { ScriptedStep } from './clone-test-harness.js';
@@ -13,7 +13,6 @@ async function run(steps: ScriptedStep[]) {
   const stores = createMemoryStores();
   const { fn } = fakeScriptedSdk(() => steps);
   const clone = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
     env: {},

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone, REDELIVERY_COUNT_PREFIX_B } from './clone.js';
+import { createClone, REDELIVERY_COUNT_PREFIX_B } from './clone.js';
 import { fakeSdk, waitFor } from './clone-test-harness.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -45,7 +45,6 @@ describe('Clone#pump — #noteRedeliveryPredicateHitB の位置（characterizati
       });
       const clone = createClone({
         reportSettleMs: 2500,
-        redeliveryGate: ALWAYS_REDELIVER,
         stores,
         queryFn: fn,
         env: {},

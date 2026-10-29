@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALWAYS_REDELIVER, createClone, humanTurnText } from './clone.js';
+import { createClone, humanTurnText } from './clone.js';
 import type { HumanMessage } from './clone.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -105,7 +105,6 @@ describe('編集ターン（supersedes）—— #record と #runHumanTurn の配
     const stores = createMemoryStores();
     const { fn, calls } = fakeSdk(reply);
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -264,7 +263,6 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
     const stores = createMemoryStores();
     const { fn, calls } = fakeSdk(reply, sdkOptions);
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { fakeSdk, waitFor } from './clone-test-harness.js';
 import type { ManagerStartInput, ManagerSummary } from './manager.js';
 import type { InboxEvent, Job } from './schema.js';
@@ -53,7 +53,6 @@ function setupReportTurn(stores: Stores, inTurn: (context: ToolContext) => Promi
     return '読んだ';
   });
   const clone = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
     env: {},

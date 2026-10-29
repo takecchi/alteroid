@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -19,7 +19,6 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
     const seen: TokenRotatorObservation[] = [];
     const { fn, calls } = fakeSdk(undefined, input.sdkOptions ?? {});
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -345,7 +344,6 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
   function setupRecycle(sdkOptions: Parameters<typeof fakeSdk>[1] = {}) {
     const { fn, calls } = fakeSdk(undefined, sdkOptions);
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -425,7 +423,6 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
 
   function cloneWith(fn: typeof sdkQuery, onTokenSessionRecycled?: () => void) {
     return createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -598,7 +595,6 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
     const recycled: string[] = [];
     const stores = createMemoryStores();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -701,7 +697,6 @@ describe('作り直しで入力を閉じた古いセッションが終わりき�
   it('鍵の回転: 次の会話のターンは失敗せず、新しいセッションで走る', async () => {
     const { fn, sessions } = slowCloseSdk(30, 150);
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -744,7 +739,6 @@ describe('作り直しで入力を閉じた古いセッションが終わりき�
 
   function slowCloseClone(fn: typeof sdkQuery) {
     return createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},

@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { traceApproval } from './approval-trace.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { JournalEntry } from './schema.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
@@ -98,7 +98,6 @@ describe('クローン — 答えのターンの行へ承認の印を立てる�
       return '人間への返事';
     });
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

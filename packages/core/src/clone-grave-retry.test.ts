@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
@@ -48,7 +48,6 @@ function build(options: {
   const keyRef =
     options.keyRef ?? (options.keyId === undefined ? undefined : { id: options.keyId });
   const clone = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: sdk.fn,
     env: {},

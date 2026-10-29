@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentProvider } from './agent-ports.js';
 import { NO_CAPABILITIES } from './agent-ports.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { fakeSdk, wireEvents, waitForDone, waitForTerminal } from './clone-test-harness.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -23,7 +23,6 @@ function build(
   const stores = createMemoryStores();
   const { fn } = fakeSdk(undefined, sdkOptions);
   const clone = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
     env: {},

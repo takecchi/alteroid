@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -68,7 +68,6 @@ describe('クローン — 考えている合図（thinking）', () => {
     const { fn, calls } = fakeScriptedSdk(turns);
     const stores = createMemoryStores();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -343,7 +342,6 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
   function setupGated(stores: Stores = createMemoryStores()): Gated {
     const { fn, calls, release } = fakeGatedSdk();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

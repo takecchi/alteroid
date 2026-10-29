@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
 import type { ToolContext } from './tools.js';
 import { createMemoryStores, humanMessage } from './testing.js';
@@ -17,7 +17,6 @@ function setupWithToolCalls(callInTurn: (context: ToolContext) => Promise<unknow
     return '確認を積んだ';
   });
   const clone = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
     env: {},

@@ -1,7 +1,7 @@
 import type { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { UnreadableApprovalError } from './store.js';
@@ -17,7 +17,6 @@ function boot() {
     stores,
     queryFn: neverCalled,
     env: {},
-    redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: neverCalled, env: {} }),
     ]),

@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { waitFor } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
@@ -118,7 +118,6 @@ function bootClone(stores: Stores, managers: ManagerPool): Fake & { clone: Clone
     queryFn: fake.fn,
     env: {},
     managers,
-    redeliveryGate: ALWAYS_REDELIVER,
   });
   return { ...fake, clone };
 }

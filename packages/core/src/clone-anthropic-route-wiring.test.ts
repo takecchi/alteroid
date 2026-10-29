@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { ManagerPool } from './manager.js';
 import { RUNNER_ROUTE_UNREPORTED_LABEL } from './manager-models.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -93,7 +93,6 @@ function boot(childEnvBase: NodeJS.ProcessEnv, credentials?: () => Record<string
   const { fn } = fakeSdk();
   let captured: ToolContext | undefined;
   const clone = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores: createMemoryStores(),
     queryFn: fn,
     env: {},

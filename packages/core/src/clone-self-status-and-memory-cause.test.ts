@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
-import { ALWAYS_REDELIVER, CLONE_MODEL, CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
+import { CLONE_MODEL, CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -23,7 +23,6 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     const { fn, calls } = fakeSdk(undefined, fakeSdkOptions);
     let captured: ToolContext | undefined;
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env,
@@ -155,7 +154,6 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     }) as unknown as typeof sdkQuery;
 
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: { [CLONE_MODEL_ENV_KEY]: 'まだ無いモデル' },
@@ -287,7 +285,6 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     }) as unknown as typeof sdkQuery;
 
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -504,7 +501,6 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     let tools: ReturnType<typeof createCloneTools> | undefined;
     const stores = createMemoryStores();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -602,7 +598,6 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     const stores = createMemoryStores();
     await stores.persona.write('values', '# 価値観\n\n（下書き）\n');
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

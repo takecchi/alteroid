@@ -1,11 +1,5 @@
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import {
-  ALWAYS_REDELIVER,
-  createClone,
-  createLocalRunner,
-  createRunnerRegistry,
-  type Stores,
-} from '@alteroid/core';
+import { createClone, createLocalRunner, createRunnerRegistry, type Stores } from '@alteroid/core';
 import { createPgStoresFromDb } from '@alteroid/storage-pg';
 import type { PGlite } from '@electric-sql/pglite';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -46,7 +40,6 @@ function appOver(stores: Stores) {
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: quietSdk, env: {} }),
     ]),
-    redeliveryGate: ALWAYS_REDELIVER,
   });
   return createApp({ clone, stores, token: 'test-token', shutdown: () => undefined });
 }

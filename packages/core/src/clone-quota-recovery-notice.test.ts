@@ -7,7 +7,7 @@ import {
   wireEvents,
   type FakeCall,
 } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
@@ -87,7 +87,6 @@ function boot(managers: ManagerPool, sdkOptions: Parameters<typeof fakeSdk>[1] =
     queryFn: fn,
     env: {},
     managers,
-    redeliveryGate: ALWAYS_REDELIVER,
   });
   return { clone, calls };
 }
@@ -204,7 +203,6 @@ describe('枠で止まった知らせを配る直前に、担当の回復を添�
       queryFn: fn,
       env: {},
       managers: stubPool(() => Promise.resolve([summary()])),
-      redeliveryGate: ALWAYS_REDELIVER,
     });
     const { events } = wireEvents(clone, 'conv-1');
 

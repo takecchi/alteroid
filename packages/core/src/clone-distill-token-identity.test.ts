@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createMemoryStores, humanMessage } from './testing.js';
@@ -14,7 +14,6 @@ describe('クローン — 蒸留のセッションを組んでも本セッシ�
     let currentKey = 'key-A';
     const { fn, calls } = fakeSdk();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},

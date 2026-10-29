@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeSdk, fakeScriptedSdk, waitForTerminal, wireEvents } from './clone-test-harness.js';
@@ -22,7 +22,6 @@ function setup(script: (turnIndex: number, clone: () => CloneHost) => ScriptedSt
   const stores = createMemoryStores();
   const { fn } = fakeScriptedSdk((turnIndex) => script(turnIndex, () => clone));
   const clone: CloneHost = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
     env: {},

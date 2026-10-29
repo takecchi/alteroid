@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { CloneProgress } from './clone-progress.js';
 import { fakeSdk, wireEvents, waitForDone } from './clone-test-harness.js';
 import type { FakeCall, Setup } from './clone-test-harness.js';
@@ -142,7 +142,6 @@ describe('Clone#attach — いままでの分を渡し、続きを購読する�
   function setupGated(finish: 'success' | 'error' | 'no-result') {
     const sdk = gatedSdk({ finish });
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: sdk.fn,
       env: {},

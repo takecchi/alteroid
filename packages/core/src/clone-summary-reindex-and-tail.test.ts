@@ -3,7 +3,6 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import {
-  ALWAYS_REDELIVER,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   MEMORY_UNCHANGED_SINCE_BAKED_NOTICE,
   commitmentFor,
@@ -437,7 +436,6 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
         turnIndex === 1 ? { subtype: 'success', isError: true, text: tooLong } : undefined,
     });
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -620,7 +618,6 @@ describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue
 
     const { fn, calls, release } = fakeGatedSdk();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -670,7 +667,6 @@ describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue
 
     const { fn, calls, release } = fakeGatedSdk();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -736,7 +732,6 @@ describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue
 
     const sdk = fakeSdk();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: sdk.fn,
       env: {},

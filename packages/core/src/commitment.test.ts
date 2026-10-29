@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 import { waitFor } from './clone-test-harness.js';
 import {
-  ALWAYS_REDELIVER,
   closedRedeliveryNotice,
   commitmentFor,
   createClone,
@@ -98,7 +97,6 @@ function setup(
 ): Setup {
   const { fn, calls } = fakeSdk(reply, sdkOptions);
   const clone = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
     env: {},

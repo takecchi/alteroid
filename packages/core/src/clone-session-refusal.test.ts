@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { EXCHANGE_KIND_DECISION_PREFIX, EXCHANGE_KIND_FAILURE_PREFIX } from './exchange-kind.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -69,7 +69,6 @@ describe('クローン — 安全分類器に弾かれ続けたセッション',
       return sdk.fn(args);
     };
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn,
       env: options.env ?? {},

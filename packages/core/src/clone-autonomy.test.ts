@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { EXCHANGE_KIND_REPLY_PREFIX } from './exchange-kind.js';
 import type { ManagerPool, ManagerSummary } from './manager.js';
 import { measureMemoryFloor } from './memory.js';
@@ -168,7 +168,6 @@ describe('クローン — 自律（人間以外の起点）', () => {
       stores,
       queryFn: fn,
       managers: pool,
-      redeliveryGate: ALWAYS_REDELIVER,
     });
 
     clone.post({

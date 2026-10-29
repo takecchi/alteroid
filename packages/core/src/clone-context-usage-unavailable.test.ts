@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentCloneDriver } from './agent-clone-session.js';
 import { ClaudeCloneDriver } from './claude-clone-driver.js';
 import { fakeSdk, waitForDone, wireEvents } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
 async function contextUsageRows(unavailable: boolean): Promise<number> {
@@ -24,7 +24,7 @@ async function contextUsageRows(unavailable: boolean): Promise<number> {
     },
   };
   const stores = createMemoryStores();
-  const clone = createClone({ stores, driver, env: {}, redeliveryGate: ALWAYS_REDELIVER });
+  const clone = createClone({ stores, driver, env: {} });
   const { events } = wireEvents(clone, 'conv-1');
   for (let i = 0; i < 3; i += 1) {
     events.length = 0;

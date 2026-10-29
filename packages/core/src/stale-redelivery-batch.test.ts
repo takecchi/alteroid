@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { waitFor } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, DAEMON_TOKEN_POOL_REOPENED_SOURCE, createClone } from './clone.js';
+import { DAEMON_TOKEN_POOL_REOPENED_SOURCE, createClone } from './clone.js';
 import { EXCHANGE_KIND_GAUGE_PREFIX } from './exchange-kind.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
@@ -68,7 +68,6 @@ function bootClone(stores: Stores): Fake & { clone: CloneHost } {
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
-    redeliveryGate: ALWAYS_REDELIVER,
   });
   return { ...fake, clone };
 }

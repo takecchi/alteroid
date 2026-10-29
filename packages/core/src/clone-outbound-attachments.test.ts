@@ -8,7 +8,7 @@ import { AttachmentContentRemoveError } from './attachment.js';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { fakeScriptedSdk, fakeSdk, waitForTerminal, wireEvents } from './clone-test-harness.js';
 import type { ScriptedStep } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { credentialSourceRefusal, guessMediaTypeFromPath } from './file-put.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -651,7 +651,6 @@ describe('reply_attach をクローンのターンの中で呼ぶ', () => {
     ];
     const { fn, settled } = fakeScriptedSdk(() => steps);
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

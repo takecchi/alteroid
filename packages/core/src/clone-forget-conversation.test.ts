@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { fakeSdk } from './clone-test-harness.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -10,7 +10,6 @@ import { createMemoryStores } from './testing.js';
 function setup() {
   const { fn } = fakeSdk(() => '了解');
   const clone = createClone({
-    redeliveryGate: ALWAYS_REDELIVER,
     stores: createMemoryStores(),
     queryFn: fn,
     env: {},

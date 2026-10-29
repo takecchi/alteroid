@@ -1,12 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import {
-  ALWAYS_REDELIVER,
-  createClone,
-  REPORT_FOLLOW_UP_GUIDE,
-  REPORT_FOLLOW_UP_GUIDE_REF,
-} from './clone.js';
+import { createClone, REPORT_FOLLOW_UP_GUIDE, REPORT_FOLLOW_UP_GUIDE_REF } from './clone.js';
 import type { AgentCloneDriver } from './agent-clone-session.js';
 import { ClaudeCloneDriver } from './claude-clone-driver.js';
 import { TOKEN_SAVING_ENABLED_ENV, waitFor, withoutQueueNotice } from './clone-test-harness.js';
@@ -206,7 +201,6 @@ function boot(script: SdkScript = {}): Boot {
     env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
-    redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),
     ]),
@@ -1453,7 +1447,6 @@ function bootWithHooks(): Boot & { fire: () => Promise<void> } {
     env: TOKEN_SAVING_ENABLED_ENV,
     inboxSettleMs: 0,
     reportSettleMs: 0,
-    redeliveryGate: ALWAYS_REDELIVER,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),
     ]),

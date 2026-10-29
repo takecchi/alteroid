@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALWAYS_REDELIVER, DAEMON_TOKEN_POOL_REOPENED_SOURCE, createClone } from './clone.js';
+import { DAEMON_TOKEN_POOL_REOPENED_SOURCE, createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -35,7 +35,6 @@ describe('usageBlocked（クローンがいま枠で止まっているかを読�
           : { subtype: 'error_during_execution', text: spendLimitMessage },
     });
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -76,7 +75,6 @@ describe('usageBlockedResetsAt / usageBlockedTokenId（止まりの resetsAt と
       rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour', resetsAt }),
     });
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -100,7 +98,6 @@ describe('usageBlockedResetsAt / usageBlockedTokenId（止まりの resetsAt と
       resultText: spendLimitMessage,
     });
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -120,7 +117,6 @@ describe('usageBlockedResetsAt / usageBlockedTokenId（止まりの resetsAt と
   it('tokenIdentity を渡した器では、枠に当たっていなくても usageBlockedTokenId が読める（セッションが起きた瞬間の身元）', async () => {
     const { fn } = fakeSdk();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -172,7 +168,6 @@ describe('usageReleasePending（再開の印がまだ使われずに立ってい
           : { subtype: 'error_during_execution', text: spendLimitMessage },
     });
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -208,7 +203,6 @@ describe('usageReleasePending（再開の印がまだ使われずに立ってい
           : { subtype: 'error_during_execution', text: spendLimitMessage },
     });
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -244,7 +238,6 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
     const stores = createMemoryStores();
     const { fn, calls } = fakeSdk(undefined, sdkOptions);
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

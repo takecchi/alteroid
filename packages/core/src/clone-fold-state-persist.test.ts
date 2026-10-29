@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone, SITUATION_FULL_EVERY_TURNS } from './clone.js';
+import { createClone, SITUATION_FULL_EVERY_TURNS } from './clone.js';
 import { FOLD_READBACK_SKIPPED_JOURNAL_HEAD } from './exchange-kind.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
@@ -213,7 +213,6 @@ function boot(stores: Stores, options: BootOptions = {}): Boot {
     queryFn: fn,
     env: TOKEN_SAVING_ENABLED_ENV,
     managers: pool(),
-    redeliveryGate: ALWAYS_REDELIVER,
   });
   live.push(clone);
   return { clone, inputs, resumes };

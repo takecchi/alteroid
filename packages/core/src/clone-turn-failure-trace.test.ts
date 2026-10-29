@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { EXCHANGE_KIND_FAILURE_PREFIX } from './exchange-kind.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -162,7 +162,6 @@ describe('クローン — ターンの失敗の跡', () => {
         return fn(args);
       };
       const clone = createClone({
-        redeliveryGate: ALWAYS_REDELIVER,
         stores,
         queryFn,
         env: {},

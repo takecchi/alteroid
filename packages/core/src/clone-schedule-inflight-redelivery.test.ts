@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { fakeSdk, flushPendingMicrotasks, waitFor } from './clone-test-harness.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -30,7 +30,6 @@ describe('定期の依頼 — 実行中の回を、長引いただけで配り�
     // eslint-disable-next-line prefer-const -- 前方参照（デーモンの index.ts と同じ形）
     let scheduler: ReturnType<typeof createScheduler>;
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: sdk.fn,
       env: {},

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { fakeSdk, waitFor, type FakeCall } from './clone-test-harness.js';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
@@ -94,7 +94,6 @@ function boot(managers: ManagerPool, stores: Stores = createMemoryStores()) {
     queryFn: fn,
     env: {},
     managers,
-    redeliveryGate: ALWAYS_REDELIVER,
   });
   return { clone, calls, stores };
 }

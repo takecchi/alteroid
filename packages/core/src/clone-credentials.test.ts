@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
@@ -15,7 +15,6 @@ describe('credentials（SDK 子プロセスへ重ねる鍵の現在値）', () =
   }) {
     const { fn, calls } = fakeSdk();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: input.env ?? {},
@@ -126,7 +125,6 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
       vaultSnapshot: () => input.vault ?? [],
     } as unknown as Parameters<typeof createClone>[0]['credentialService'];
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: input.env ?? {},
@@ -159,7 +157,6 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
   it('credentialService を渡さなければ、既定の構成の挙動を変えない', async () => {
     const { fn, calls } = fakeSdk();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: { GH_TOKEN: 'from-container-env' },
@@ -319,7 +316,6 @@ describe('childEnvBase（子の env の土台は、書き写す前のスナッ�
     const { fn, calls } = fakeSdk();
     const vault = input.vault ?? [];
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: input.env,
@@ -404,7 +400,6 @@ describe('withheldEnvKeys（SDK 子プロセスへ渡さない鍵。Issue #1495 
   }) {
     const { fn, calls } = fakeSdk();
     const clone = createClone({
-      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: input.env ?? {},

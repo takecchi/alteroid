@@ -1,7 +1,7 @@
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import { CloneNotices } from './clone-notices.js';
 import type { TurnNoticeKey } from './clone-notices.js';
 import { createLocalRunner } from './runner-local.js';
@@ -81,7 +81,6 @@ describe('Issue #1744: Clone#pump — #notices.set の呼び出し順（characte
       const stores = createMemoryStores();
       const { fn } = fakeSdk();
       const clone = createClone({
-        redeliveryGate: ALWAYS_REDELIVER,
         stores,
         queryFn: fn,
         env: {},
