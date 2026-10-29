@@ -7,15 +7,12 @@ import process from 'node:process';
 
 import { BUDGET_HISTORY, judgeAgentsMdSize } from './check-agents-md-size-core.mjs';
 import { log, logError } from './cli-log.mjs';
+import { formatBytes } from './small-helpers-core.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 const AGENTS_MD_PATH = join(ROOT, 'AGENTS.md');
 const SKILLS_DIR = join(ROOT, '.claude', 'skills');
 const ISSUE_URL = 'https://github.com/takecchi/alteroid/issues/1192';
-
-function formatBytes(n) {
-  return n.toLocaleString('en-US') + ' B';
-}
 
 function formatPercent(n) {
   return (Math.round(n * 10) / 10).toString() + '%';

@@ -13,13 +13,10 @@ import {
 } from './check-web-bundle-size-core.mjs';
 import { log, logError } from './cli-log.mjs';
 import { listFilesWithExt } from './list-files-with-ext.mjs';
+import { formatBytes } from './small-helpers-core.mjs';
 
 const ASSETS_DIR = join(import.meta.dirname, '..', 'apps', 'web', 'build', 'client', 'assets');
 const ISSUE_URL = 'https://github.com/takecchi/alteroid/issues/335';
-
-function formatBytes(n) {
-  return n.toLocaleString('en-US') + ' B';
-}
 
 function formatPercent(n) {
   return Math.round(n) + '%';

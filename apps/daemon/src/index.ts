@@ -366,7 +366,7 @@ export interface CloneWakeGate {
   observeUnusable(): void;
 }
 
-// 区切りに制御文字を使わず長さを前置きする: エスケープのつもりの NUL が実バイトで保存され、CI の `check-tracked-nul-bytes` が落ちたため。
+// 区切りに制御文字を使わず長さを前置きする: エスケープのつもりの NUL が実バイトで保存され、`scripts/check-tracked-nul-bytes.test.ts`（CI の vitest）が落ちたため。
 function deliveredIdentity(reopened: ReopenedToken): string {
   return `${String(reopened.tokenId.length)}:${reopened.tokenId}${reopened.how}`;
 }

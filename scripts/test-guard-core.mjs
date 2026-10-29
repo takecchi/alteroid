@@ -8,6 +8,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 
+import { isFlagLike, stripAnsi, todayUtc } from './small-helpers-core.mjs';
+
 // `process.cwd()` に依存しない: `pnpm --filter <pkg> test` では cwd がそのパッケージ配下になるため。
 export const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -46,11 +48,6 @@ const VALUE_TAKING_FLAGS = new Set([
   // `--shard` を載せる: `--shard=1/3` が通るのに `--shard 1/3`（空白区切り）だけテストが 1 本も走らず断られる非対称を無くすため。
   '--shard',
 ]);
-
-// `-` で始まるものは値として飲まない: 位置引数側へ回るだけで安全側に倒れるため。
-function isFlagLike(arg) {
-  return arg === undefined || arg.startsWith('-');
-}
 
 // 手で足す一覧だけにせず vitest 自身の CLI 定義（`vitest/node` の `createCLI`）を実行時に読む: 次の vitest の版で同じ漏れが出るため。
 export async function loadVitestFlagInfo() {
@@ -297,12 +294,6 @@ export function formatDeadlineMessage(deadlineSeconds) {
     '集計行は出ていない——通ったのでも落ちたのでもない。分けて回す: ' +
     '.claude/skills/test-in-chunks/SKILL.md'
   );
-}
-
-// マッチの前に必ず剥がす: GitHub Actions では集計行が色付きで出て、`^\s*Test Files` がエスケープシーケンスを空白と読まず、緑のテストが「判定できない」に誤って倒れたため。
-function stripAnsi(s) {
-  // eslint-disable-next-line no-control-regex -- ANSI エスケープの検出そのものが目的
-  return s.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
 export function parseAggregateLines(rawOutput) {
@@ -637,10 +628,6 @@ export async function runStaticSkipGuard(root = ROOT) {
   const files = readFilesForScan(root, matchedPaths);
   const hits = findUnconditionalSkips(files);
   return judgeStaticSkipScan(matchedPaths, hits);
-}
-
-function todayUtc() {
-  return new Date().toISOString().slice(0, 10);
 }
 
 export async function runObservationGuard(root = ROOT, today = todayUtc()) {

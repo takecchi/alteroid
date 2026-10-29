@@ -893,6 +893,10 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
     await mkdir(join(dir, 'scripts'), { recursive: true });
     copyFileSync(join(SCRIPTS_DIR, 'verify.mjs'), join(dir, 'scripts', 'verify.mjs'));
     copyFileSync(join(SCRIPTS_DIR, 'verify-core.mjs'), join(dir, 'scripts', 'verify-core.mjs'));
+    copyFileSync(
+      join(SCRIPTS_DIR, 'small-helpers-core.mjs'),
+      join(dir, 'scripts', 'small-helpers-core.mjs'),
+    );
     await writeFile(join(dir, 'a.txt'), 'one\n');
     git('add', '-A');
     git('commit', '-qm', 'init');

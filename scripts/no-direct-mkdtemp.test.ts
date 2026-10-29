@@ -8,7 +8,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない test-guard の中核）を読む
 } from './test-guard-core.mjs';
 import {
-  ALLOWLIST,
   findDirectMkdtempCalls,
   HELPER_GLOBS,
   judgeMkdtempScan,
@@ -77,44 +76,29 @@ describe('findDirectMkdtempCalls（純粋関数）', () => {
 
 describe('judgeMkdtempScan（純粋関数、3値）', () => {
   it('走査対象が0ファイルなら「判定できない」', () => {
-    const result = judgeMkdtempScan([], [], new Map());
+    const result = judgeMkdtempScan([], []);
     expect(result.ok).toBe(false);
     expect(result.kind).toBe('scan-empty');
   });
 
-  it('許可リストに無い hit が在れば「検出」', () => {
-    const hits = [{ path: 'not-allowlisted.test.ts', line: 1, matched: callText('mkdtemp') }];
-    const result = judgeMkdtempScan(['not-allowlisted.test.ts'], hits, new Map());
+  it('hit が在れば「検出」', () => {
+    const hits = [{ path: 'direct-call.test.ts', line: 1, matched: callText('mkdtemp') }];
+    const result = judgeMkdtempScan(['direct-call.test.ts'], hits);
     expect(result.ok).toBe(false);
     expect(result.kind).toBe('violation');
-    expect(result.message).toContain('not-allowlisted.test.ts');
-  });
-
-  it('hit が全部許可リストに載っていれば合格', () => {
-    const hits = [{ path: 'legacy.test.ts', line: 1, matched: callText('mkdtemp') }];
-    const allowlist = new Map([['legacy.test.ts', '移行待ち']]);
-    const result = judgeMkdtempScan(['legacy.test.ts'], hits, allowlist);
-    expect(result.ok).toBe(true);
-  });
-
-  it('許可リストに載っているのに hit が無い（stale）と「検出」', () => {
-    const allowlist = new Map([['already-migrated.test.ts', '移行待ち（のはずだった）']]);
-    const result = judgeMkdtempScan(['already-migrated.test.ts'], [], allowlist);
-    expect(result.ok).toBe(false);
-    expect(result.kind).toBe('stale-allowlist');
-    expect(result.message).toContain('already-migrated.test.ts');
+    expect(result.message).toContain('direct-call.test.ts');
   });
 });
 
 describe('本番スキャン（このファイル自身も含め、repo 全体を実際に走査する）', () => {
-  it('include に一致するテストファイルの直接呼び出しは、全部許可リストで説明できる', async () => {
+  it('include に一致するテストファイルに、直接呼び出しが1件も無い', async () => {
     const includeGlobs = await readIncludeGlobs(ROOT);
     const matchedPaths = collectMatchingTestFiles(ROOT, includeGlobs);
     expect(matchedPaths.length).toBeGreaterThan(0);
 
     const files = readFilesForScan(ROOT, matchedPaths);
     const hits = findDirectMkdtempCalls(files);
-    const result = judgeMkdtempScan(matchedPaths, hits, ALLOWLIST);
+    const result = judgeMkdtempScan(matchedPaths, hits);
 
     expect(result.ok, result.ok ? undefined : result.message).toBe(true);
   });
@@ -129,7 +113,7 @@ describe('本番スキャン（このファイル自身も含め、repo 全体�
     );
 
     const hits = findDirectMkdtempCalls(readFilesForScan(ROOT, helperPaths));
-    const result = judgeMkdtempScan(helperPaths, hits, ALLOWLIST);
+    const result = judgeMkdtempScan(helperPaths, hits);
 
     expect(result.ok, result.ok ? undefined : result.message).toBe(true);
   });
@@ -138,25 +122,24 @@ describe('本番スキャン（このファイル自身も含め、repo 全体�
     const path = 'packages/core/src/fake.test-support.ts';
     const files = [{ path, content: `const d = ${callText('mkdtempSync')}join(tmpdir(), 'x-'));` }];
     const hits = findDirectMkdtempCalls(files);
-    const result = judgeMkdtempScan([path], hits, ALLOWLIST);
+    const result = judgeMkdtempScan([path], hits);
     expect(result.ok).toBe(false);
     expect(result.kind).toBe('violation');
   });
 
-  it('許可リストに載っている間接呼び出し専用ファイル（cli-stub.ts）は *.test.ts ではないので、走査自体の対象に入らない', async () => {
+  it('間接呼び出し専用ファイル（cli-stub.ts）は *.test.ts ではないので、走査自体の対象に入らない', async () => {
     const includeGlobs = await readIncludeGlobs(ROOT);
     const matchedPaths = collectMatchingTestFiles(ROOT, includeGlobs);
     expect(matchedPaths).not.toContain('railway/cli-stub.ts');
   });
 
-  it('railway/scale-runners.test.ts は cli-stub.ts 経由の間接呼び出しだけなので、許可リストに無くても検出されない', async () => {
+  it('railway/scale-runners.test.ts は cli-stub.ts 経由の間接呼び出しだけなので、検出されない', async () => {
     const includeGlobs = await readIncludeGlobs(ROOT);
     const matchedPaths = collectMatchingTestFiles(ROOT, includeGlobs);
     const files = readFilesForScan(ROOT, matchedPaths).filter(
       (f: { path: string }) => f.path === 'railway/scale-runners.test.ts',
     );
     expect(files).toHaveLength(1);
-    expect(ALLOWLIST.has('railway/scale-runners.test.ts')).toBe(false);
     expect(findDirectMkdtempCalls(files)).toHaveLength(0);
   });
 });

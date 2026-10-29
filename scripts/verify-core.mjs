@@ -13,6 +13,8 @@ import {
 import { join } from 'node:path';
 import process from 'node:process';
 
+import { isFlagLike, stripAnsi, todayUtc } from './small-helpers-core.mjs';
+
 // 指紋が読めなければ `null` を返し、呼ぶ側は必ず走る側へ倒す: 「判定できない」を「変わっていない」へ倒さないため。
 // モードも畳む: 実行ビットだけの変更も `git diff` は差分として見せるが、中身だけでは指紋から漏れるため。
 // symlink は追いかけず行き先の文字列を畳む: `readFileSync` は symlink を追い、行き先を差し替えても中身が同じなら指紋が動かないため。
@@ -127,10 +129,6 @@ export function writeTreeFor(repo) {
 }
 
 // `new Date()` は `decideSkip` の既定引数の中だけで呼ぶ: 純粋なロジック（`decideRecord` / `recordFor`）では呼ばない。日付依存の検査を数え上げる形は、スイートの内側の日付依存テストまで数え切れず閉じないため、「記録した日」と「いま」を突き合わせて日が変わったら走り直す。
-function todayUtc() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 // 倒す先は常に「走る」: 「判定できない」を「変わっていない」へ倒すと、いちばん危ないときに黙って緑を名乗るため。旧形式の記録（`day` を持たない）も同じ側へ倒す。
 export function decideSkip({ repo, recordPath, force = false, today = todayUtc() }) {
   const current = fingerprint(repo);
@@ -160,12 +158,6 @@ export function decideSkip({ repo, recordPath, force = false, today = todayUtc()
   } catch {
     return { skip: false, reason: 'broken-record', fingerprint: current };
   }
-}
-
-// マッチの前に ANSI を剥がす: 色が付くと `^\s*Test Files` が行頭の SGR に一致せず、完走して緑でも「1本も走っていない」に化けるため。
-function stripAnsi(s) {
-  // eslint-disable-next-line no-control-regex -- ANSI エスケープの検出そのものが目的
-  return s.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
 // 探す語（`Test Files` / `Tests`）は緩めない: 緩めると、集計行が本当に無い入力でも「走った」と読めてしまうため。
@@ -340,10 +332,6 @@ export const TEST_ARGS_THAT_DO_NOT_NARROW = [
   { flag: '--no-color', takesValue: false },
   { flag: '--color', takesValue: false },
 ];
-
-function isFlagLike(arg) {
-  return arg === undefined || arg.startsWith('-');
-}
 
 export function classifyTestScope(passthrough) {
   const narrowing = [];
