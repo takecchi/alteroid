@@ -3877,7 +3877,7 @@ class Clone implements CloneHost {
     const tailText = this.#digestDelta.fixed(
       'commitment-notice-tail',
       '全文は `task_list`。並べ替えは `task_move`。',
-      '（全文は `task_list`、並べ替えは `task_move`。断りは会話の上と同じ）',
+      '（`task_list`・`task_move` は会話の上と同じ）',
     );
     const lines = [
       ...taskQueue.head,
@@ -3887,8 +3887,7 @@ class Clone implements CloneHost {
         : [
             (bundled
               ? `いま届いたこの ${mine.length} 件は台帳の行として開いた（id: ${idList}）。`
-              : `いま届いたこの一件は台帳の行として開いた（id: ${idList}）。`) +
-              (closeText ?? ''),
+              : `いま届いたこの一件は台帳の行として開いた（id: ${idList}）。`) + (closeText ?? ''),
           ]),
       ...taskQueue.failed,
       // 分母は `events.length` でなく `outcomes.size`: `events` には台帳と無関係な合図も混じり、母数が大きくなって「このうち何件」の比率が嘘になるため
@@ -3923,7 +3922,7 @@ class Clone implements CloneHost {
             `**読めない行が ${list.unreadable.length} 件ある（片付いたのではない）。**` +
               '`commitment_list` の一覧に件数として出る（本文はここでは取れない）。',
           ]),
-      ...taskQueue.legacy,
+      ...(await this.#legacyLedgerNotice(event)),
       tailText,
       '',
       '---',
@@ -3933,12 +3932,12 @@ class Clone implements CloneHost {
   }
 
   // 断り書きの待ち行列の側（#5469 P6c）。件数と先頭の描き方は digest と同じ `describeTaskQueueHead`、旧台帳だけの行の数え方も digest と同じ `countLegacyOnlyOpen`（写さない）
-  // 待ち行列を読めなかったときは 0 件と書かず、読めなかったと名乗る（台帳の読み失敗の行と同じ流儀）。その回は旧台帳の数も出さない: 同じ理由で読めず、数えると 0 に見えるため
+  // 待ち行列を読めなかったときは 0 件と書かず、読めなかったと名乗る（台帳の読み失敗の行と同じ流儀）
   async #taskQueueNotice(
     event: InboxEvent,
     placed: readonly HumanMessage[],
     failed: readonly HumanMessage[],
-  ): Promise<{ head: string[]; placed: string[]; failed: string[]; legacy: string[] }> {
+  ): Promise<{ head: string[]; placed: string[]; failed: string[] }> {
     const idsOf = (list: readonly HumanMessage[]): string =>
       excerptLine(list.map((pending) => `\`${pending.id}\``).join(', '), CLONE_ID_LIST_EXCERPT);
     const placedLines =
@@ -3951,7 +3950,7 @@ class Clone implements CloneHost {
               this.#digestDelta.fixed(
                 'commitment-notice-task',
                 '返事をしたターンの終わりに自動で done になる。続けるなら `task_keep`、委譲するなら `manager_start` に `taskId`。',
-                '（自動 done・`task_keep`・`manager_start` の `taskId` は会話の上と同じ）',
+                '（自動 done・`task_keep`・`manager_start` は会話の上と同じ）',
               ),
           ];
     const failedLines =
@@ -3974,22 +3973,26 @@ class Clone implements CloneHost {
         ],
         placed: placedLines,
         failed: failedLines,
-        legacy: [],
       };
     }
     const head = [
       `[system] 待ち行列（${readAtLabel(Date.now())} に数えた材料）`,
       ...describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT }),
     ];
-    let legacy: string[];
+    return { head, placed: placedLines, failed: failedLines };
+  }
+
+  // 台帳が読めた回だけ呼ぶ（読めない回は断りが別に出る）。数えられなかったときは 0 件と書かず、数えられなかったと名乗る
+  async #legacyLedgerNotice(event: InboxEvent): Promise<string[]> {
     try {
       const counted = await countLegacyOnlyOpen(this.#stores);
-      legacy = describeLegacyLedgerLine(counted.open, counted.unreadable);
+      return describeLegacyLedgerLine(counted.open, counted.unreadable);
     } catch (error) {
       noteDroppedRecord('旧台帳だけの行の数え直し', inboxEventShape(event), error);
-      legacy = [`- 旧台帳だけの行の数を数えられなかった（理由: ${reasonOf(error)}）。0 件だったのではない`];
+      return [
+        `- 旧台帳だけの行の数を数えられなかった（理由: ${reasonOf(error)}）。0 件だったのではない`,
+      ];
     }
-    return { head, placed: placedLines, failed: failedLines, legacy };
   }
 
   // 入力を SDK へ押し込めた直後にだけ呼ぶ: 全文が会話に載ったと言えるのはそのときだけのため

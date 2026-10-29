@@ -296,6 +296,16 @@ export function lineStartingWith(text: string, prefix: string): string {
   return matches[0]!;
 }
 
+// 断り書きの待ち行列の節（`[system] 待ち行列（` の行から次の `---` の行まで）を落とす（#5469 P6c）。
+// 待ち行列は会話をまたいで全件の先頭を載せるので、「この入力の束に、その発言の本文が入っていない」を見る試験は、待ち行列の節に出る task の題を数えないためにこれで落としてから見る
+export function withoutQueueNotice(input: string): string {
+  const lines = input.split('\n');
+  const start = lines.findIndex((line) => line.startsWith('[system] 待ち行列（'));
+  if (start < 0) return input;
+  const end = lines.findIndex((line, index) => index > start && line === '---');
+  return [...lines.slice(0, start), ...(end < 0 ? [] : lines.slice(end + 1))].join('\n');
+}
+
 // calls の末尾を使わず種類で指す: 蒸留のサイドクエリは畳みの後に遅れて積まれ、末尾が本流である保証が無いため
 export function lastSessionCall(calls: FakeCall[]): FakeCall {
   for (let i = calls.length - 1; i >= 0; i -= 1) {

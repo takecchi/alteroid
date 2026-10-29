@@ -242,7 +242,8 @@ describe('クローン — 定期の棚卸し（scheduled な蒸留）', () => {
     (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
   ).join('\n')}`;
 
-  const COMMITMENT_NOTICE = '[system] 引き受けたまま終わっていない仕事は';
+  // 断り書きの見出し（#5469 P6c で台帳の件数の行から待ち行列の見出しに替わった）。蒸留のターンに載らないことの印として使う
+  const COMMITMENT_NOTICE = '[system] 待ち行列（';
   const SITUATION_NOTICE = '[system] いまの全体';
 
   function tidyEvent(): InboxEvent {

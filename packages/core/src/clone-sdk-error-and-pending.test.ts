@@ -4,7 +4,13 @@ import type { CloneHost } from './host.js';
 import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
-import { setup, lineStartingWith, waitFor, waitForDone } from './clone-test-harness.js';
+import {
+  setup,
+  lineStartingWith,
+  waitFor,
+  waitForDone,
+  withoutQueueNotice,
+} from './clone-test-harness.js';
 import type { Setup } from './clone-test-harness.js';
 
 describe('クローン — SDK のエラーを応答として扱わない（日報がエラー文になる穴）', () => {
@@ -254,7 +260,8 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
     await settle();
 
     expect(s.calls[0]?.inputs).toHaveLength(4);
-    const second = s.calls[0]?.inputs[1] ?? '';
+    // 待ち行列の節には全会話の task の題が並ぶので、束の本文を見るときは節を落としてから見る（束に混ざっていないことの保証は変わらない）
+    const second = withoutQueueNotice(s.calls[0]?.inputs[1] ?? '');
     expect(second).toContain('こちら1');
     expect(second).not.toContain('あちら');
     expect(second).not.toContain('こちら2');
@@ -321,10 +328,12 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
     await settle();
 
     const merged = s.calls[0]?.inputs[1] ?? '';
-    expect(merged).toContain('2 件も台帳に載せた');
+    // #5469 P6c: 人間の発言は Task として積まれ、閉じ方は「返事をしたターンの終わりに自動で done」になった（`commitment_close` の束の骨組みは台帳だけの合図の回に出る）
+    expect(merged).toContain('いま届いたこの 2 件は task ');
+    expect(merged).toContain('として積んだ');
     expect(merged).toContain('evt-続き1');
     expect(merged).toContain('evt-続き2');
-    expect(merged).toContain('閉じるのは id ごとである');
+    expect(merged).toContain('返事をしたターンの終わりに自動で done になる');
 
     await s.clone.stop();
   }, 15_000);
@@ -344,8 +353,8 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
     await settle();
 
     const merged = s.calls[0]?.inputs[1] ?? '';
-    expect(merged).toContain(`${count} 件も台帳に載せた`);
-    const line = merged.split('\n').find((entry) => entry.includes('台帳に載せた（id:'));
+    expect(merged).toContain(`いま届いたこの ${count} 件は task `);
+    const line = merged.split('\n').find((entry) => entry.includes('として積んだ'));
     expect(line).toBeDefined();
     expect(line!.length).toBeLessThan(600);
     expect(line).toMatch(/省略/);
