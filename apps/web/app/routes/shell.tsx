@@ -262,24 +262,13 @@ function AuthedShell({
   const [navOpen, setNavOpen] = useState(false);
   const closeNav = () => setNavOpen(false);
 
-  const approvalsBadge: ReactNode = approvalsUnavailable ? (
-    // warn にしない: 「少数の承認待ちがある」と紛れるため
-    <Badge tone="danger" aria-label="承認待ちを読めていない" title="承認待ちを読めていない">
-      ?
-    </Badge>
-  ) : (
-    <>
-      {pending > 0 && <Badge tone="warn">{pending}</Badge>}
-      {unreadableApprovals > 0 && (
-        <Badge
-          tone="warn"
-          aria-label={`読めない承認待ちが ${unreadableApprovals} 件ある`}
-          title={`読めない承認待ちが ${unreadableApprovals} 件ある`}
-        >
-          !
-        </Badge>
-      )}
-    </>
+  const approvalsBadges = (inTopBar: boolean) => (
+    <ApprovalsBadges
+      pending={pending}
+      unreadable={unreadableApprovals}
+      unavailable={approvalsUnavailable}
+      inTopBar={inTopBar}
+    />
   );
 
   const { data: unread, error: unreadError } = useUnreadConversationCount(polling);
@@ -313,7 +302,7 @@ function AuthedShell({
     label: def.label,
     icon: ICONS[def.to] ?? Activity,
     ...(def.section === undefined ? {} : { section: def.section }),
-    ...(def.to === '/approvals' ? { badge: approvalsBadge } : {}),
+    ...(def.to === '/approvals' ? { badge: approvalsBadges(false) } : {}),
     ...(def.to === '/chat' ? { badge: chatBadge } : {}),
   }));
   const defByTo = new Map(NAV_ITEMS.map((def) => [def.to, def]));
@@ -369,23 +358,7 @@ function AuthedShell({
                           : `承認待ち ${pending} 件`
                     }
                   >
-                    {approvalsUnavailable ? (
-                      <Badge tone="danger" title="承認待ちを読めていない">
-                        承認待ち ?
-                      </Badge>
-                    ) : (
-                      <>
-                        {pending > 0 && <Badge tone="warn">承認待ち {pending}</Badge>}
-                        {unreadableApprovals > 0 && (
-                          <Badge
-                            tone="warn"
-                            title={`読めない承認待ちが ${unreadableApprovals} 件ある`}
-                          >
-                            読めない {unreadableApprovals}
-                          </Badge>
-                        )}
-                      </>
-                    )}
+                    {approvalsBadges(true)}
                   </NavLink>
                 )
               }
@@ -422,6 +395,48 @@ function AuthedShell({
         </main>
       </div>
     </JournalFeedProvider>
+  );
+}
+
+// サイドバーと上帯で分け方を別々に書かない: 片方だけ変えると、同じ承認待ちが場所によって違って見えるため
+// 上帯では札に aria-label を付けない: 札を包むリンクが名前を持つので、付けると同じことを2回読み上げるため
+function ApprovalsBadges({
+  pending,
+  unreadable,
+  unavailable,
+  inTopBar,
+}: {
+  pending: number;
+  unreadable: number;
+  unavailable: boolean;
+  inTopBar: boolean;
+}) {
+  if (unavailable) {
+    return (
+      // warn にしない: 「少数の承認待ちがある」と紛れるため
+      <Badge
+        tone="danger"
+        aria-label={inTopBar ? undefined : '承認待ちを読めていない'}
+        title="承認待ちを読めていない"
+      >
+        {inTopBar ? '承認待ち ?' : '?'}
+      </Badge>
+    );
+  }
+  const unreadableText = `読めない承認待ちが ${unreadable} 件ある`;
+  return (
+    <>
+      {pending > 0 && <Badge tone="warn">{inTopBar ? `承認待ち ${pending}` : pending}</Badge>}
+      {unreadable > 0 && (
+        <Badge
+          tone="warn"
+          aria-label={inTopBar ? undefined : unreadableText}
+          title={unreadableText}
+        >
+          {inTopBar ? `読めない ${unreadable}` : '!'}
+        </Badge>
+      )}
+    </>
   );
 }
 
