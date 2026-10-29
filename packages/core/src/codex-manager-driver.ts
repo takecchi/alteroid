@@ -194,23 +194,12 @@ export class CodexManagerDriver implements AgentManagerDriver {
   }
 }
 
-export interface CodexSession extends AgentManagerSession {
-  interrupt(): Promise<void>;
-}
-
-export function openCodexSession(
-  spec: AgentManagerSessionSpec,
-  options: CodexManagerDriverOptions = {},
-): CodexSession {
-  return new CodexManagerSession(spec, options);
-}
-
 interface QueuedEvent {
   readonly event: AgentEvent;
   readonly done: Deferred<void>;
 }
 
-class CodexManagerSession implements CodexSession {
+class CodexManagerSession implements AgentManagerSession {
   readonly #spec: AgentManagerSessionSpec;
   readonly #options: CodexManagerDriverOptions;
   readonly #abort = new AbortController();
@@ -310,16 +299,6 @@ class CodexManagerSession implements CodexSession {
     }
     this.#shutdown(interrupted ? (this.#options.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS) : 0);
     this.#releaseQueue();
-  }
-
-  async interrupt(): Promise<void> {
-    const client = this.#client;
-    const threadId = this.#threadId;
-    const turnId = this.#turn?.id;
-    if (client === undefined || client.isClosed || threadId === undefined || turnId === undefined) {
-      return;
-    }
-    await this.#guard(client.request('turn/interrupt', { threadId, turnId }));
   }
 
   async contextUsage(): Promise<AgentContextUsage> {

@@ -5,12 +5,18 @@ import { stdin } from 'node:process';
 import { MEMORY_SLUG_RULE, describeSlugViolation } from '@alteroid/core/cli-light';
 import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
-import { createClient, type DaemonClient } from './client.js';
+import type { DaemonClient } from './client.js';
+import { connect } from './connect.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { redactBody } from './redact.js';
-import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { describeAuthFailure, type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
-import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
+import {
+  keepDraftOnFailure,
+  openEditorKeepingEdits,
+  readAllText,
+  readInputFile,
+} from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
 export type MemoryDescriptionDrift =
@@ -261,7 +267,7 @@ export async function memorySetCommand(
   }
   const content =
     options.file === undefined || options.file === '-'
-      ? await readAll()
+      ? await readAllText(stdin)
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   if (options.allowEmpty !== true && content.trim().length === 0) {
     throw new Error(`記憶 ${slug}: ${EMPTY_BODY_MESSAGE}`);
@@ -352,19 +358,6 @@ export async function memoryRemoveCommand(
   stdout.write(`消しました: ${slug}\n`);
 }
 
-// 書き込み系では未ログインの note を例外にする: 何もせず 0 で返すと、cron などが「済んだ」と誤読するため
-async function connect(
-  access: 'read' | 'write',
-): Promise<{ client: DaemonClient; target: Target } | null> {
-  const target = await resolveTarget();
-  if (target.note !== null) {
-    if (access === 'write') throw new Error(target.note);
-    stdout.write(`${target.note}\n`);
-    return null;
-  }
-  return { client: createClient(target.baseUrl, target.headers), target };
-}
-
 // `null` は 404 と 400 だけにする: 他の失敗を `null` にすると、`edit` が読めていない既存の記憶を空の雛形で上書きするため
 async function readDoc(
   client: DaemonClient,
@@ -441,12 +434,6 @@ async function write(
       : `書き換えました: ${slug}\n`,
   );
   stdout.write('（次の会話からクローンの判断に入ります）\n');
-}
-
-async function readAll(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString('utf8');
 }
 
 // 雛形に「何をしてよいかの表」を書かせない: 記憶は判断の根拠を置く場所で、許可する行為の一覧ではないため

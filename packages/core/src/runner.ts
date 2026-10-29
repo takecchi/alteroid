@@ -153,7 +153,6 @@ import {
 import { parseRunnerPlugin, pluginsFingerprintOf } from './plugins.js';
 import {
   DEFAULT_PERMISSION_MODE,
-  PERMISSION_MODES,
   resolvePermissionModeFor,
   type PermissionModeName,
 } from './permission-mode.js';
@@ -450,11 +449,9 @@ export interface RunnerChildUser {
   home?: string;
 }
 
-// 既定を `default` にしない: 層を下りた途端に `Read` や `grep` で止まるのはデグレードのため（north_star 禁止1）
-export const MANAGER_PERMISSION_MODES = PERMISSION_MODES;
-
 export type ManagerPermissionMode = PermissionModeName;
 
+// 既定を `default` にしない: 層を下りた途端に `Read` や `grep` で止まるのはデグレードのため（north_star 禁止1）
 export { DEFAULT_PERMISSION_MODE };
 
 export const PERMISSION_MODE_ENV_KEY = 'ALTEROID_MANAGER_PERMISSION_MODE';
