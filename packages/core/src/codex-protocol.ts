@@ -622,8 +622,6 @@ export const CODEX_UNHANDLED_SERVER_REQUEST_METHODS = [
   'account/chatgptAuthTokens/refresh',
 ] as const;
 
-export const CODEX_CLIENT_NOTIFICATION_INITIALIZED = 'initialized';
-
 export const CODEX_CLIENT_REQUESTS = {
   initialize: { params: 'InitializeParams', result: 'InitializeResponse' },
   'thread/start': { params: 'v2/ThreadStartParams', result: 'v2/ThreadStartResponse' },

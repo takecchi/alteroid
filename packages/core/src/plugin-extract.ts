@@ -383,14 +383,6 @@ function planExtraction(plugin: ExtractablePlugin): {
   return { outputs, removed };
 }
 
-/** 展開の本体と同じ計画を通す: 確認で見せたものと実際に落ちるものをずらさないため。 */
-export function planPluginExtractionRemovals(
-  plugin: Pick<StoredPlugin, 'name' | 'files'>,
-  flags: { enableHooks: boolean; enableMcp: boolean },
-): readonly RemovedItem[] {
-  return planPluginExtraction(plugin, flags).removed;
-}
-
 /** プレビューの検査も、実際に書かれる内容（許可したキーだけで作り直した frontmatter）を見るために使う。 */
 export function planPluginExtraction(
   plugin: Pick<StoredPlugin, 'name' | 'files'>,
