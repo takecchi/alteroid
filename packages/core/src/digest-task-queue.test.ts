@@ -103,6 +103,54 @@ describe('describeTaskQueueHead（純関数）', () => {
     ]);
   });
 
+  describe('先頭が waiting だけで埋まるとき（task_set_status で waiting にしても rank は動かない）', () => {
+    const waiting = (id: string) => makeTask(id, { status: 'waiting' });
+
+    it('⭐ 表示した先頭に queued も needs_decision も無ければ、最初の動ける1件を「先頭から離れている」断り付きで足す', () => {
+      const entries = [
+        waiting('w1'),
+        waiting('w2'),
+        waiting('w3'),
+        waiting('w4'),
+        makeTask('q1'),
+        makeTask('q2'),
+        makeTask('n1', { status: 'needs_decision' }),
+      ];
+      const lines = describeTaskQueueHead(list(entries), { limit: 3 });
+      const extra = lines.filter((line) => line.includes('先頭から離れている'));
+      expect(extra).toHaveLength(1);
+      expect(extra[0]).toContain('q1（状態: queued');
+      // 先頭の3件は waiting のまま、足した1件の分だけ「ほか」が減る（7 - 3 - 1 = 3）
+      expect(lines).toContain('- …ほか 3 件（task_list で全部見える）');
+      expect(lines.join('\n')).not.toContain('- q2（');
+    });
+
+    it('needs_decision が最初の動ける件なら、それを足す', () => {
+      const entries = [
+        waiting('w1'),
+        waiting('w2'),
+        waiting('w3'),
+        makeTask('n1', { status: 'needs_decision' }),
+      ];
+      const lines = describeTaskQueueHead(list(entries), { limit: 3 });
+      expect(lines.find((line) => line.includes('先頭から離れている'))).toContain('n1（');
+      expect(lines.some((line) => line.startsWith('- …ほか'))).toBe(false);
+    });
+
+    it('先頭3件に queued か needs_decision が1件でも在れば、足さない', () => {
+      const entries = [waiting('w1'), makeTask('q1'), waiting('w2'), makeTask('q2')];
+      const lines = describeTaskQueueHead(list(entries), { limit: 3 });
+      expect(lines.join('\n')).not.toContain('先頭から離れている');
+    });
+
+    it('動ける件が無ければ（全部 waiting）、足さない', () => {
+      const entries = [waiting('w1'), waiting('w2'), waiting('w3'), waiting('w4')];
+      const lines = describeTaskQueueHead(list(entries), { limit: 3 });
+      expect(lines.join('\n')).not.toContain('先頭から離れている');
+      expect(lines).toContain('- …ほか 1 件（task_list で全部見える）');
+    });
+  });
+
   it('閉じた件（done / cancelled）は数えず、先頭にも出さない', () => {
     const entries = [
       makeTask('open-1'),
@@ -220,7 +268,7 @@ describe('digest から台帳の節・注記・件数の4項目が消えてい�
   it('旧台帳に開いている行があるとき: 件数の1行だけが出る（節ではない）', async () => {
     const digest = await buildActivityDigest(await ledgerStores(), { since: since() });
     expect(legacyLines(digest)).toEqual([
-      '- 旧台帳に開いている 1 件。台帳は廃止予定で、人間の依頼は Task に移っている（引き口は `commitment_list`）',
+      '- 旧台帳に開いている 1 件は未了で、Task には無い。中身は `commitment_list` で読む（人間の回答・自分の記帳・蒸留の未了の問いは、いまも台帳に入る）',
     ]);
   });
 
@@ -248,7 +296,7 @@ describe('digest から台帳の節・注記・件数の4項目が消えてい�
     });
     const digest = await buildActivityDigest(stores, { since: since() });
     expect(legacyLines(digest)).toEqual([
-      '- 旧台帳に開いている 0 件（読めない 1 件。片付いたのではない）。台帳は廃止予定で、人間の依頼は Task に移っている（引き口は `commitment_list`）',
+      '- 旧台帳に開いている 0 件は未了で、Task には無い。読めない行が 1 件ある（片付いたのではない）。中身は `commitment_list` で読む（人間の回答・自分の記帳・蒸留の未了の問いは、いまも台帳に入る）',
     ]);
     expect(digest).not.toContain('cm-broken');
   });
@@ -278,7 +326,7 @@ describe('counts 形（定期の依頼の tick・日報以外の件数の形）�
     expect(counts).not.toContain('- t1（');
     expect(counts).not.toContain('先頭が先にやるもの');
     expect(counts).not.toContain('## 待ち行列');
-    expect(counts).toContain('- 旧台帳に開いている 1 件。');
+    expect(counts).toContain('- 旧台帳に開いている 1 件は未了で、Task には無い。');
     expect(counts).not.toContain('台帳の本文');
     expect(counts).not.toMatch(/引き受けた仕事 \d|片付けた仕事/u);
   });
@@ -341,9 +389,7 @@ describe('件数の行の位置の対応（#4937 の畳みが項目を消して�
     const second = await buildActivityDigest(stores, { since: since() });
     const rendered = delta.renderDigest(second, new Date()).text;
 
-    expect(rendered).toContain(
-      '- 件数: すべて 0（項目は会話の上の件数の行と同じ）'.replace('すべて 0', 'すべて 0'),
-    );
+    expect(rendered).toContain('- 件数: すべて 0（項目は会話の上の件数の行と同じ）');
     expect(rendered).not.toContain(countsLineOf(second));
     // 先頭が入れ替わったことが、畳まれずに出る
     const rows = rendered.split('\n').filter((line) => /^- t\d（/u.test(line));
@@ -374,7 +420,13 @@ describe('発意 tick の固定の指示（SELF_INITIATIVE_INSTRUCTIONS）', () 
     expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('何もしないという結論でよい');
   });
 
+  it('⭐ 旧台帳に開いている行の扱い（commitment_list で読む）と、先頭が待ちばかりのときの添え書きを言う', () => {
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('旧台帳に開いている');
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('`commitment_list`');
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('離れた所の動ける task');
+  });
+
   it('長さは前の版（約 400 字）と同程度に保つ', () => {
-    expect(SELF_INITIATIVE_INSTRUCTIONS.length).toBeLessThan(550);
+    expect(SELF_INITIATIVE_INSTRUCTIONS.length).toBeLessThan(700); // 旧台帳の行の扱い（1行）と離れた task の添え書きを足したぶん広げた
   });
 });

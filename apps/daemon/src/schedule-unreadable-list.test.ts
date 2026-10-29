@@ -201,7 +201,8 @@ describe.each([
         digest = await buildActivityDigest(stores, { since: since() });
       });
 
-      expect(digest).toContain('継続中の依頼 1 /');
+      // 件数の行の最後の項目になった（#5469 P6b で後ろの台帳の項目を外した）ので、行末も許す。「1」を 0 や他の数に取り違えない断言は同じ
+      expect(digest).toMatch(/継続中の依頼 1(?: \/|$)/mu);
       expect(digest).toContain(
         '- 読めない継続中の依頼（壊れた行。上の件数には入っていない）: 1 件',
       );

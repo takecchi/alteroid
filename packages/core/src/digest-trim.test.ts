@@ -230,7 +230,7 @@ describe('件数の形の要約（#4938 の案2）', () => {
     expect(counts).not.toContain('待ち行列の 0');
     expect(counts).not.toContain('## 待ち行列');
     expect(counts).toContain(
-      '- 旧台帳に開いている 14 件。台帳は廃止予定で、人間の依頼は Task に移っている（引き口は `commitment_list`）',
+      '- 旧台帳に開いている 14 件は未了で、Task には無い。中身は `commitment_list` で読む（人間の回答・自分の記帳・蒸留の未了の問いは、いまも台帳に入る）',
     );
     // 全文の形には先頭の3件が出る（件数の形との差）
     expect(full).toContain('## 待ち行列の先頭');

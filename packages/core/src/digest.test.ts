@@ -1287,7 +1287,7 @@ describe('台帳の節は digest から消えている（#5469 P6b）', () => {
     expect(digest).not.toContain('## 引き受けたまま終わっていない仕事');
     expect(digest).not.toContain('cm-edge-');
     expect(digest).not.toContain('順序はここには無い');
-    expect(digest).toContain(`旧台帳に開いている ${MAX_ITEMS + 25} 件。`);
+    expect(digest).toContain(`旧台帳に開いている ${MAX_ITEMS + 25} 件は未了で、Task には無い。`);
   });
 });
 

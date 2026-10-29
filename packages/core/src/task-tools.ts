@@ -104,8 +104,21 @@ export function describeTaskQueueHead(list: TaskList, options: { limit: number }
       `- ${task.id}（${taskStatusLine(task)} / origin: ${task.origin}）${excerptLine(task.title, TASK_QUEUE_HEAD_TITLE_LIMIT)}`,
     );
   }
-  if (open.length > shown.length) {
-    lines.push(`- …ほか ${open.length - shown.length} 件（task_list で全部見える）`);
+  // 先頭が waiting だけで埋まると、動ける task が見えなくなる（waiting にしても rank は動かない）。最初の queued / needs_decision を1件添える
+  const movable = (task: Task): boolean =>
+    task.status === 'queued' || task.status === 'needs_decision';
+  let extra: Task | undefined;
+  if (!shown.some(movable)) {
+    extra = open.slice(shown.length).find(movable);
+    if (extra) {
+      lines.push(
+        `- 先頭から離れている（先頭は待ちばかり）: ${extra.id}（${taskStatusLine(extra)} / origin: ${extra.origin}）${excerptLine(extra.title, TASK_QUEUE_HEAD_TITLE_LIMIT)}`,
+      );
+    }
+  }
+  const rest = open.length - shown.length - (extra ? 1 : 0);
+  if (rest > 0) {
+    lines.push(`- …ほか ${rest} 件（task_list で全部見える）`);
   }
   lines.push(
     '（先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）',

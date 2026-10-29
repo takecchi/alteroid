@@ -320,7 +320,8 @@ export interface SelfInitiativePromptInput {
 export const SELF_INITIATIVE_INSTRUCTIONS = `記憶にある目的と、いまの状況を見て、次にやることがあるかを決めよ。
 
 - 状況の「待ち行列の先頭」が先にやるもの。動かせるなら先頭から始める。実作業なら \`manager_start\` で委譲する。
-- 先頭を動かせない（外の返事待ち）なら \`task_set_status\` で waiting にして次へ。順序が違うと思えば \`task_move\` で並べ替える。
+- 先頭を動かせない（外の返事待ち）なら \`task_set_status\` で waiting にして次へ。順序が違うと思えば \`task_move\` で並べ替える。先頭が waiting ばかりのときは、離れた所の動ける task が1件添えてある。
+- 「旧台帳に開いている N 件」と出ていたら、それは Task に無い未了である。\`commitment_list\` で読み、順序は待ち行列の先頭とは別に、あなたが目的に照らして決める。
 - 走っている仕事の様子が気になるなら \`manager_list\` で見て、必要なら \`manager_send\` で追う。
 - 人間に確かめたいことができたら \`ask_human\` に積む（人間が居なくても、そこで止まるのはその件だけである）。
 - **何もしないという結論でよい。** そのときは何もせず「今回は動かない」とだけ答えよ。無理に仕事を作らないこと。

@@ -1594,7 +1594,7 @@ describe('未了の見え方', () => {
     });
 
     // #5469 P6b: 行ごとの本文は出さず、旧台帳の件数の1行だけが残る（窓で切らない保証は件数で保つ）
-    expect(digest).toContain('旧台帳に開いている 1 件。');
+    expect(digest).toContain('旧台帳に開いている 1 件は未了で、Task には無い。');
     expect(digest).not.toContain('10 日前に頼まれてまだやっていないこと');
   });
 

@@ -615,10 +615,11 @@ export const TASK_QUEUE_SECTION_HEADING_HEAD = '## 待ち行列の先頭';
 // 0件でも読めない行だけは在りうるので、両方0のときだけ出さない（読めない行を 0 に丸めない）
 function describeLegacyLedgerLine(open: number, unreadable: number): string[] {
   if (open === 0 && unreadable === 0) return [];
-  const unreadablePart = unreadable > 0 ? `（読めない ${unreadable} 件。片付いたのではない）` : '';
+  const unreadablePart =
+    unreadable > 0 ? `読めない行が ${unreadable} 件ある（片付いたのではない）。` : '';
   return [
-    `- 旧台帳に開いている ${open} 件${unreadablePart}。台帳は廃止予定で、人間の依頼は Task に移っている` +
-      '（引き口は `commitment_list`）',
+    `- 旧台帳に開いている ${open} 件は未了で、Task には無い。${unreadablePart}中身は \`commitment_list\` で読む` +
+      '（人間の回答・自分の記帳・蒸留の未了の問いは、いまも台帳に入る）',
   ];
 }
 
