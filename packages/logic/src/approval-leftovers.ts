@@ -4,6 +4,7 @@ import {
   loadApprovalDrafts,
   saveApprovalDrafts,
 } from './approval-drafts.js';
+import { APPROVAL_LEFTOVERS_KEY, isRecord, storage } from './session-store.js';
 
 export interface LeftoverQuestion {
   id: string;
@@ -105,19 +106,7 @@ export function describeApprovalLeftover(
 
 export type ApprovalLeftoverSources = Record<string, ApprovalLeftoverSource>;
 
-const KEY = 'alteroid.approvalLeftovers';
-
-function storage(): Storage | null {
-  try {
-    return typeof sessionStorage === 'undefined' ? null : sessionStorage;
-  } catch {
-    return null;
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
+const KEY = APPROVAL_LEFTOVERS_KEY;
 
 function parseQuestion(value: unknown): LeftoverQuestion | null {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.prompt !== 'string') {

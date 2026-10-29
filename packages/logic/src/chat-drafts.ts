@@ -1,3 +1,4 @@
+import { APPROVAL_LEFTOVERS_KEY, draftKey, storage } from './session-store.js';
 import type { MessageAttachment } from './types.js';
 
 // `sessionStorage` に置く: 端末に平文で残す期間を短くするため（別タブへは引き継がない）。
@@ -5,7 +6,6 @@ const PREFIX = 'alteroid.chatDraft:';
 const MARK_PREFIX = 'alteroid.chatDraftMark:';
 const EDIT_PREFIX = 'alteroid.editDraft:';
 export const APPROVAL_DRAFTS_KEY = 'alteroid.approvalDrafts';
-const APPROVAL_LEFTOVERS_KEY = 'alteroid.approvalLeftovers';
 
 // ログアウトのたびに増やす: 間引きで書き出しを待っている側が、待つ間にログアウトされたと気づかないと、消したはずの本文が書き戻る。
 let clearEpoch = 0;
@@ -15,16 +15,7 @@ export function chatDraftEpoch(): number {
 }
 
 function keyFor(conversationId: string | undefined): string {
-  return `${PREFIX}${conversationId ?? 'new'}`;
-}
-
-function storage(): Storage | null {
-  try {
-    return typeof sessionStorage === 'undefined' ? null : sessionStorage;
-  } catch {
-    // 保存先へ触るだけで投げる環境がある。
-    return null;
-  }
+  return draftKey(PREFIX, conversationId);
 }
 
 export function loadChatDraft(conversationId: string | undefined): string {
@@ -62,7 +53,7 @@ export interface ChatDraftMark {
 
 export function loadChatDraftMark(conversationId: string | undefined): ChatDraftMark | undefined {
   try {
-    const raw = storage()?.getItem(`${MARK_PREFIX}${conversationId ?? 'new'}`);
+    const raw = storage()?.getItem(draftKey(MARK_PREFIX, conversationId));
     if (raw === null || raw === undefined) return undefined;
     const value: unknown = JSON.parse(raw);
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
@@ -112,7 +103,7 @@ export function saveChatDraftMark(
 ): void {
   const target = storage();
   if (target === null) return;
-  const key = `${MARK_PREFIX}${conversationId ?? 'new'}`;
+  const key = draftKey(MARK_PREFIX, conversationId);
   try {
     if (mark === undefined) target.removeItem(key);
     else target.setItem(key, JSON.stringify({ v: 1, ...mark }));
@@ -138,7 +129,7 @@ export function loadPendingAttachmentsNote(
   conversationId: string | undefined,
 ): PendingAttachmentsNote | undefined {
   try {
-    const raw = storage()?.getItem(`${PENDING_ATTACHMENTS_PREFIX}${conversationId ?? 'new'}`);
+    const raw = storage()?.getItem(draftKey(PENDING_ATTACHMENTS_PREFIX, conversationId));
     if (raw === null || raw === undefined) return undefined;
     const value: unknown = JSON.parse(raw);
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
@@ -163,7 +154,7 @@ export function savePendingAttachmentsNote(
 ): void {
   const target = storage();
   if (target === null) return;
-  const key = `${PENDING_ATTACHMENTS_PREFIX}${conversationId ?? 'new'}`;
+  const key = draftKey(PENDING_ATTACHMENTS_PREFIX, conversationId);
   try {
     if (note === undefined || note.count <= 0) target.removeItem(key);
     else {

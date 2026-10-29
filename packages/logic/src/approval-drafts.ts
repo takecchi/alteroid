@@ -1,4 +1,5 @@
 import { APPROVAL_DRAFTS_KEY, chatDraftEpoch } from './chat-drafts.js';
+import { isRecord, storage } from './session-store.js';
 
 // `@alteroid/ui` の `ApprovalQuestionsDraft` と同じ形を写す: logic は ui を import できないため。
 export interface StoredQuestionDraft {
@@ -21,19 +22,6 @@ const KEY = APPROVAL_DRAFTS_KEY;
 
 export function emptyApprovalDrafts(): ApprovalDrafts {
   return { texts: {}, questions: {} };
-}
-
-function storage(): Storage | null {
-  try {
-    return typeof sessionStorage === 'undefined' ? null : sessionStorage;
-  } catch {
-    // アクセスしただけで投げる環境（クッキー無効など）がある。
-    return null;
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function parseQuestionDraft(value: unknown): StoredQuestionDraft | null {
