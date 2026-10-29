@@ -14,8 +14,3 @@ export function isSubmitShortcut(event: KeyboardEvent): boolean {
   if (isImeConfirmEnter(event)) return false;
   return (event.metaKey || event.ctrlKey) && event.key === 'Enter';
 }
-
-export function isPlatformSubmitShortcut(event: KeyboardEvent, mac: boolean): boolean {
-  if (!isSubmitShortcut(event)) return false;
-  return mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
-}

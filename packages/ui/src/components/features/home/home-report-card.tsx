@@ -10,8 +10,6 @@ import {
 import { Card } from '../../common';
 
 // `min-w-0` を枠にも本文にも置く: 広い表や長い行がある日報で、親の grid を押し広げないため
-export const HOME_REPORT_MAX_HEIGHT = '24rem';
-
 export function HomeReportCard({
   icon: Icon,
   title,
