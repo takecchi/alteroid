@@ -1,5 +1,5 @@
 import {
-  codePointBoundary,
+  clipWithEllipsis,
   notePhase,
   type CloneHost,
   type ManagerModels,
@@ -37,9 +37,7 @@ export const TOPOLOGY_WORKERS_PER_MANAGER = 20;
 export const TOPOLOGY_MANAGERS_CHAR_BUDGET = 40_000;
 
 function clipLine(text: string, limit: number): string {
-  const line = text.replace(/\s+/g, ' ').trim();
-  if (line.length <= limit) return line;
-  return `${line.slice(0, codePointBoundary(line, limit))}…`;
+  return clipWithEllipsis(text.replace(/\s+/g, ' ').trim(), limit);
 }
 
 function isActiveStatus(status: ManagerSummary['status']): boolean {

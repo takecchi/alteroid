@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { reasonOf } from './dropped-record.js';
-import { codePointBoundary } from './excerpt.js';
+import { clipWithEllipsis } from './excerpt.js';
 import { redactSecretsInBody, secretPatternsInBody, type SecretPatternName } from './redact.js';
 import {
   newRescueStashCycle,
@@ -741,9 +741,7 @@ function isAborted(signal: AbortSignal | undefined): boolean {
 }
 
 function clipPath(name: string): string {
-  return name.length > PATH_NAME_MAX_LENGTH
-    ? `${name.slice(0, codePointBoundary(name, PATH_NAME_MAX_LENGTH))}…`
-    : name;
+  return clipWithEllipsis(name, PATH_NAME_MAX_LENGTH);
 }
 
 export async function runRescue(cwd: string, options: RunRescueOptions): Promise<RescueWorktree[]> {

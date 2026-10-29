@@ -1,4 +1,4 @@
-import { codePointBoundary } from './excerpt.js';
+import { clipWithEllipsis } from './excerpt.js';
 import type { InboxEvent } from './schema.js';
 
 /**
@@ -25,9 +25,7 @@ export const DROPPED_SIGNAL_NOTICE_MAX = 20;
 
 function head(text: string): string {
   const flat = text.replaceAll(/\s+/gu, ' ').trim();
-  return flat.length > DROPPED_SIGNAL_HEAD_CHARS
-    ? `${flat.slice(0, codePointBoundary(flat, DROPPED_SIGNAL_HEAD_CHARS))}…`
-    : flat;
+  return clipWithEllipsis(flat, DROPPED_SIGNAL_HEAD_CHARS);
 }
 
 function payloadHead(payload: unknown): string {

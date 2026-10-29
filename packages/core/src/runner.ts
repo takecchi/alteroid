@@ -134,7 +134,7 @@ import {
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { compareCodeUnits } from './code-unit-order.js';
 import { subreapedProcess, underSubreaper } from './delegation-subreaper.js';
-import { codePointBoundary, excerptLine } from './excerpt.js';
+import { clipWithEllipsis, codePointBoundary, excerptLine } from './excerpt.js';
 import { relocateMcpConfigArgs } from './mcp-config-arg.js';
 import {
   RUNNER_MCP_CONFIG_DIR_PREFIX,
@@ -7368,7 +7368,7 @@ function oneShotAllowKey(actor: string, tool: string, digest: string): string {
 export function brief(value: unknown, limit = 200): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
   if (text === undefined) return '';
-  return text.length > limit ? `${text.slice(0, codePointBoundary(text, limit))}…` : text;
+  return clipWithEllipsis(text, limit);
 }
 
 // プロファイル評価と共有する: 評価だけ root で走らせると、降りた先では読めないプロファイルを「置けた」と報告するため

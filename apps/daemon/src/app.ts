@@ -576,7 +576,7 @@ function attachmentDisposition(name: string): string {
 }
 
 // トークンや資格そのものは入れない（識別子だけ）。
-function uploaderOf(principal: Principal): string {
+function principalRefOf(principal: Principal): string {
   if (principal.kind === 'operator') return 'operator';
   if (principal.kind === 'integration') return `integration:${principal.keyId}`;
   return `account:${principal.account.id}`;
@@ -1213,13 +1213,6 @@ function describeActor(principal: Principal): string {
     return `連携の鍵「${principal.name}」（${principal.keyId}）による操作`;
   }
   return `許可されたアカウント（${principal.account.id}）による操作`;
-}
-
-// 鍵の値は含めない（識別子だけ）。
-function installerOf(principal: Principal): string {
-  if (principal.kind === 'operator') return 'operator';
-  if (principal.kind === 'integration') return `integration:${principal.keyId}`;
-  return `account:${principal.account.id}`;
 }
 
 function describePluginSource(source: {
@@ -2011,7 +2004,7 @@ export function createApp(deps: AppDeps) {
       unbind: (ids) => stores.attachments.unbind(ids, { externalEventId: eventId }),
       isBoundElsewhere: (meta) => isAttachmentBound(meta),
       conflictMessage: 'すでに別の宛先に結び付いた添付は使えない',
-      onlyUploadedBy: principal.kind === 'integration' ? uploaderOf(principal) : undefined,
+      onlyUploadedBy: principal.kind === 'integration' ? principalRefOf(principal) : undefined,
       serializeKey: `externalEvent:${eventId}`,
     });
   }
@@ -2143,8 +2136,8 @@ export function createApp(deps: AppDeps) {
     tokenTtlDays: 30,
     description: '認証は無効（未設定）',
   };
-  const integrationClock = deps.now ?? (() => new Date());
-  const integrationRateLimiter = createFixedWindowRateLimiter(() => integrationClock().getTime());
+  const clock = deps.now ?? (() => new Date());
+  const integrationRateLimiter = createFixedWindowRateLimiter(() => clock().getTime());
   // 鍵の値は出さない（id だけ）。
   function noteIntegrationRefusal(
     c: Context,
@@ -2354,7 +2347,7 @@ export function createApp(deps: AppDeps) {
     const key = await resolveIntegrationKey({
       store: stores.integrationKeys,
       bearer: presented,
-      now: integrationClock(),
+      now: clock(),
     });
     if (key === null) {
       refuse(401, '未知・失効・期限切れ');
@@ -2608,7 +2601,7 @@ export function createApp(deps: AppDeps) {
             mediaType: type,
             body,
             ...(keep === true ? { kept: true } : {}),
-            uploadedBy: uploaderOf(c.get('principal')),
+            uploadedBy: principalRefOf(c.get('principal')),
           });
           if (principal.kind === 'integration') {
             // 応答を待たせない: 知らせは上げた結果を変えず、使用量の集計の時間を鍵の呼び手へ負わせないため
@@ -2791,11 +2784,7 @@ export function createApp(deps: AppDeps) {
       jsonBody(attachmentKeptBodySchema),
       async (c) => {
         const { kept } = c.req.valid('json');
-        const meta = await stores.attachments.setKept(
-          c.req.param('id'),
-          kept,
-          (deps.now ?? (() => new Date()))(),
-        );
+        const meta = await stores.attachments.setKept(c.req.param('id'), kept, clock());
         if (meta === undefined) return c.json({ error: 'not found' as const }, 404);
         return c.json(meta);
       },
@@ -3518,7 +3507,7 @@ export function createApp(deps: AppDeps) {
         // 数え方は `collectConversations` が持つ: ここで数え直さない。
         const readView = await loadConversationReadView(
           stores.conversationReads,
-          (deps.now ?? (() => new Date()))().toISOString(),
+          clock().toISOString(),
         );
         // 窓の組み立てを手組みし直さない: `with` を絞り忘れる余地が生まれる。クローンの道具（`conversation_read`）と同じ規則を通すので、人間には見えるがクローンには見えない、が増えない。
         let page: Awaited<ReturnType<typeof readConversationPage>>;
@@ -3581,7 +3570,7 @@ export function createApp(deps: AppDeps) {
         const result = await countUnreadConversations({
           journal: stores.journal,
           reads: stores.conversationReads,
-          now: (deps.now ?? (() => new Date()))().toISOString(),
+          now: clock().toISOString(),
         });
         return c.json(result);
       },
@@ -3688,7 +3677,7 @@ export function createApp(deps: AppDeps) {
         }
         const readView = await loadConversationReadView(
           stores.conversationReads,
-          (deps.now ?? (() => new Date()))().toISOString(),
+          clock().toISOString(),
         );
         const readThrough = effectiveReadThrough(readView, id);
         return c.json({
@@ -3769,7 +3758,7 @@ export function createApp(deps: AppDeps) {
             400,
           );
         }
-        const now = (deps.now ?? (() => new Date()))().toISOString();
+        const now = clock().toISOString();
         // 基準時刻が無ければ先に決める: 位置より後に基準時刻が決まる順を作らない。
         await stores.conversationReads.ensureBaseline(now);
         await stores.conversationReads.advance(id, target.at);
@@ -3838,7 +3827,7 @@ export function createApp(deps: AppDeps) {
                     clone.forgetConversation?.(conversationId),
                 }),
           },
-          { conversationId: id, deletedBy: uploaderOf(c.get('principal')) },
+          { conversationId: id, deletedBy: principalRefOf(c.get('principal')) },
         );
         if (!result.deleted) {
           return c.json(
@@ -5106,7 +5095,7 @@ export function createApp(deps: AppDeps) {
           account: deps.accountUsage?.() ?? { state: 'unknown' as const },
           unrecordedManagers,
           // 台帳の `date` を書くのと同じ関数・同じ TZ で評価する: ブラウザの TZ で「今日」を決めると台帳の日とずれる。
-          today: usageDate((deps.now ?? (() => new Date()))()),
+          today: usageDate(clock()),
         });
       },
     )
@@ -6042,7 +6031,7 @@ export function createApp(deps: AppDeps) {
         const input = c.req.valid('json');
         // daemon 自身が使う予約語の source の鍵は作らない: 外から名乗れる鍵になる。
         if (isReservedEventSource(input.source)) return c.json(RESERVED_SOURCE_KEY_BODY, 400);
-        const at = integrationClock();
+        const at = clock();
         if (input.expiresAt !== undefined && !(Date.parse(input.expiresAt) > at.getTime())) {
           return c.json({ error: 'expiresAt が過去（何も作っていない）' as const }, 400);
         }
@@ -6173,10 +6162,7 @@ export function createApp(deps: AppDeps) {
         }
         let result;
         try {
-          result = await stores.integrationKeys.revokeIntegrationKey(
-            id,
-            integrationClock().toISOString(),
-          );
+          result = await stores.integrationKeys.revokeIntegrationKey(id, clock().toISOString());
         } catch (error) {
           await appendJournalOrDrop(
             stores,
@@ -9718,7 +9704,7 @@ export function createApp(deps: AppDeps) {
           enableMcp,
           files: fetched.files,
           installedAt: new Date().toISOString(),
-          installedBy: installerOf(c.get('principal')),
+          installedBy: principalRefOf(c.get('principal')),
         };
         // 日誌より前に保存できる形かを確かめる: 保存できないものの「入れようとしている」を残さない。
         try {
