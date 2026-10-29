@@ -1,5 +1,5 @@
 import { APPROVAL_DRAFTS_KEY, chatDraftEpoch } from './chat-drafts.js';
-import { isRecord, storage } from './session-store.js';
+import { isRecord, readStoredRecord, writeStored } from './session-store.js';
 
 // `@alteroid/ui` の `ApprovalQuestionsDraft` と同じ形を写す: logic は ui を import できないため。
 export interface StoredQuestionDraft {
@@ -51,24 +51,19 @@ export function isEmptyQuestionsDraft(draft: StoredQuestionsDraft): boolean {
 
 export function loadApprovalDrafts(): ApprovalDrafts {
   const result = emptyApprovalDrafts();
-  try {
-    const raw = storage()?.getItem(KEY);
-    if (raw === null || raw === undefined) return result;
-    const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed)) return result;
-    if (isRecord(parsed.texts)) {
-      for (const [id, text] of Object.entries(parsed.texts)) {
-        if (typeof text === 'string' && text !== '') result.texts[id] = text;
-      }
+  // 投げない: 壊れていても呼ぶ側は空の下書きで動く。
+  const parsed = readStoredRecord(KEY);
+  if (parsed === undefined) return result;
+  if (isRecord(parsed.texts)) {
+    for (const [id, text] of Object.entries(parsed.texts)) {
+      if (typeof text === 'string' && text !== '') result.texts[id] = text;
     }
-    if (isRecord(parsed.questions)) {
-      for (const [id, value] of Object.entries(parsed.questions)) {
-        const draft = parseQuestionsDraft(value);
-        if (draft !== null && !isEmptyQuestionsDraft(draft)) result.questions[id] = draft;
-      }
+  }
+  if (isRecord(parsed.questions)) {
+    for (const [id, value] of Object.entries(parsed.questions)) {
+      const draft = parseQuestionsDraft(value);
+      if (draft !== null && !isEmptyQuestionsDraft(draft)) result.questions[id] = draft;
     }
-  } catch {
-    // 投げない: 壊れていても呼ぶ側は空の下書きで動く。
   }
   return result;
 }
@@ -76,15 +71,7 @@ export function loadApprovalDrafts(): ApprovalDrafts {
 // `epoch` がログアウトを挟んで古ければ何もしない: 消したはずの書きかけが書き戻らないようにするため。
 export function saveApprovalDrafts(drafts: ApprovalDrafts, epoch?: number): void {
   if (epoch !== undefined && epoch !== chatDraftEpoch()) return;
-  try {
-    const store = storage();
-    if (store === null) return;
-    if (Object.keys(drafts.texts).length === 0 && Object.keys(drafts.questions).length === 0) {
-      store.removeItem(KEY);
-    } else {
-      store.setItem(KEY, JSON.stringify(drafts));
-    }
-  } catch {
-    // 投げない: 保存できなくても呼ぶ側は state だけで動く。
-  }
+  const empty =
+    Object.keys(drafts.texts).length === 0 && Object.keys(drafts.questions).length === 0;
+  writeStored(KEY, empty ? undefined : JSON.stringify(drafts));
 }

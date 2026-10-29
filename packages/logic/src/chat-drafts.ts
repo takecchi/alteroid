@@ -1,4 +1,10 @@
-import { APPROVAL_LEFTOVERS_KEY, draftKey, storage } from './session-store.js';
+import {
+  APPROVAL_LEFTOVERS_KEY,
+  draftKey,
+  readStoredRecord,
+  storage,
+  writeStored,
+} from './session-store.js';
 import type { MessageAttachment } from './types.js';
 
 // `sessionStorage` に置く: 端末に平文で残す期間を短くするため（別タブへは引き継がない）。
@@ -27,14 +33,7 @@ export function loadChatDraft(conversationId: string | undefined): string {
 }
 
 export function saveChatDraft(conversationId: string | undefined, text: string): void {
-  const target = storage();
-  if (target === null) return;
-  try {
-    if (text === '') target.removeItem(keyFor(conversationId));
-    else target.setItem(keyFor(conversationId), text);
-  } catch {
-    // 投げない: 残せなくても入力欄は動く。
-  }
+  writeStored(keyFor(conversationId), text === '' ? undefined : text);
 }
 
 export interface ChatDraftMark {
@@ -52,64 +51,53 @@ export interface ChatDraftMark {
 }
 
 export function loadChatDraftMark(conversationId: string | undefined): ChatDraftMark | undefined {
-  try {
-    const raw = storage()?.getItem(draftKey(MARK_PREFIX, conversationId));
-    if (raw === null || raw === undefined) return undefined;
-    const value: unknown = JSON.parse(raw);
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-    const {
-      clientMessageId,
-      unconfirmed,
-      supersedes,
-      attachmentCount,
-      attachmentNames,
-      attachments,
-    } = value as Record<string, unknown>;
-    const mark: ChatDraftMark = {};
-    if (typeof clientMessageId === 'string' && clientMessageId !== '') {
-      mark.clientMessageId = clientMessageId;
-    }
-    if (unconfirmed === true) mark.unconfirmed = true;
-    if (typeof supersedes === 'string' && supersedes !== '') mark.supersedes = supersedes;
-    if (
-      typeof attachmentCount === 'number' &&
-      Number.isInteger(attachmentCount) &&
-      attachmentCount > 0
-    ) {
-      mark.attachmentCount = attachmentCount;
-      if (Array.isArray(attachmentNames)) {
-        mark.attachmentNames = attachmentNames
-          .filter((name): name is string => typeof name === 'string')
-          .slice(0, 5);
-      }
-    }
-    if (
-      mark.supersedes !== undefined &&
-      Array.isArray(attachments) &&
-      attachments.length > 0 &&
-      attachments.every(isAttachmentMeta)
-    ) {
-      mark.attachments = attachments;
-    }
-    return mark.unconfirmed === true || mark.supersedes !== undefined ? mark : undefined;
-  } catch {
-    return undefined;
+  const value = readStoredRecord(draftKey(MARK_PREFIX, conversationId));
+  if (value === undefined) return undefined;
+  const {
+    clientMessageId,
+    unconfirmed,
+    supersedes,
+    attachmentCount,
+    attachmentNames,
+    attachments,
+  } = value;
+  const mark: ChatDraftMark = {};
+  if (typeof clientMessageId === 'string' && clientMessageId !== '') {
+    mark.clientMessageId = clientMessageId;
   }
+  if (unconfirmed === true) mark.unconfirmed = true;
+  if (typeof supersedes === 'string' && supersedes !== '') mark.supersedes = supersedes;
+  if (
+    typeof attachmentCount === 'number' &&
+    Number.isInteger(attachmentCount) &&
+    attachmentCount > 0
+  ) {
+    mark.attachmentCount = attachmentCount;
+    if (Array.isArray(attachmentNames)) {
+      mark.attachmentNames = attachmentNames
+        .filter((name): name is string => typeof name === 'string')
+        .slice(0, 5);
+    }
+  }
+  if (
+    mark.supersedes !== undefined &&
+    Array.isArray(attachments) &&
+    attachments.length > 0 &&
+    attachments.every(isAttachmentMeta)
+  ) {
+    mark.attachments = attachments;
+  }
+  return mark.unconfirmed === true || mark.supersedes !== undefined ? mark : undefined;
 }
 
 export function saveChatDraftMark(
   conversationId: string | undefined,
   mark: ChatDraftMark | undefined,
 ): void {
-  const target = storage();
-  if (target === null) return;
-  const key = draftKey(MARK_PREFIX, conversationId);
-  try {
-    if (mark === undefined) target.removeItem(key);
-    else target.setItem(key, JSON.stringify({ v: 1, ...mark }));
-  } catch {
-    // 投げない: 残せなくても入力欄は動く。
-  }
+  writeStored(
+    draftKey(MARK_PREFIX, conversationId),
+    mark === undefined ? undefined : JSON.stringify({ v: 1, ...mark }),
+  );
 }
 
 /**
@@ -128,48 +116,34 @@ const PENDING_ATTACHMENT_NAMES_SHOWN = 5;
 export function loadPendingAttachmentsNote(
   conversationId: string | undefined,
 ): PendingAttachmentsNote | undefined {
-  try {
-    const raw = storage()?.getItem(draftKey(PENDING_ATTACHMENTS_PREFIX, conversationId));
-    if (raw === null || raw === undefined) return undefined;
-    const value: unknown = JSON.parse(raw);
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-    const { count, names } = value as Record<string, unknown>;
-    if (typeof count !== 'number' || !Number.isInteger(count) || count <= 0) return undefined;
-    return {
-      count,
-      names: Array.isArray(names)
-        ? names
-            .filter((name): name is string => typeof name === 'string')
-            .slice(0, PENDING_ATTACHMENT_NAMES_SHOWN)
-        : [],
-    };
-  } catch {
-    return undefined;
-  }
+  const value = readStoredRecord(draftKey(PENDING_ATTACHMENTS_PREFIX, conversationId));
+  if (value === undefined) return undefined;
+  const { count, names } = value;
+  if (typeof count !== 'number' || !Number.isInteger(count) || count <= 0) return undefined;
+  return {
+    count,
+    names: Array.isArray(names)
+      ? names
+          .filter((name): name is string => typeof name === 'string')
+          .slice(0, PENDING_ATTACHMENT_NAMES_SHOWN)
+      : [],
+  };
 }
 
 export function savePendingAttachmentsNote(
   conversationId: string | undefined,
   note: PendingAttachmentsNote | undefined,
 ): void {
-  const target = storage();
-  if (target === null) return;
-  const key = draftKey(PENDING_ATTACHMENTS_PREFIX, conversationId);
-  try {
-    if (note === undefined || note.count <= 0) target.removeItem(key);
-    else {
-      target.setItem(
-        key,
-        JSON.stringify({
+  writeStored(
+    draftKey(PENDING_ATTACHMENTS_PREFIX, conversationId),
+    note === undefined || note.count <= 0
+      ? undefined
+      : JSON.stringify({
           v: 1,
           count: note.count,
           names: note.names.slice(0, PENDING_ATTACHMENT_NAMES_SHOWN),
         }),
-      );
-    }
-  } catch {
-    // 投げない: 残せなくても入力欄は動く。
-  }
+  );
 }
 
 export interface StoredEditDraft {
@@ -184,19 +158,13 @@ function isAttachmentMeta(value: unknown): value is MessageAttachment {
   return typeof v.id === 'string' && typeof v.name === 'string' && typeof v.size === 'number';
 }
 
-function parseEditDraft(raw: string): StoredEditDraft | undefined {
-  try {
-    const value: unknown = JSON.parse(raw);
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-    const { text, attachments, lostNames } = value as Record<string, unknown>;
-    if (typeof text !== 'string') return undefined;
-    const list = Array.isArray(attachments) ? attachments : [];
-    if (!list.every(isAttachmentMeta)) return undefined;
-    const lost = Array.isArray(lostNames) ? lostNames.filter((n) => typeof n === 'string') : [];
-    return { text, attachments: list, ...(lost.length > 0 ? { lostNames: lost } : {}) };
-  } catch {
-    return undefined;
-  }
+function parseEditDraft(value: Record<string, unknown>): StoredEditDraft | undefined {
+  const { text, attachments, lostNames } = value;
+  if (typeof text !== 'string') return undefined;
+  const list = Array.isArray(attachments) ? attachments : [];
+  if (!list.every(isAttachmentMeta)) return undefined;
+  const lost = Array.isArray(lostNames) ? lostNames.filter((n) => typeof n === 'string') : [];
+  return { text, attachments: list, ...(lost.length > 0 ? { lostNames: lost } : {}) };
 }
 
 export function loadEditDrafts(): Map<string, StoredEditDraft> {
@@ -207,8 +175,8 @@ export function loadEditDrafts(): Map<string, StoredEditDraft> {
     for (let index = 0; index < target.length; index += 1) {
       const key = target.key(index);
       if (key === null || !key.startsWith(EDIT_PREFIX)) continue;
-      const raw = target.getItem(key);
-      const parsed = raw === null ? undefined : parseEditDraft(raw);
+      const record = readStoredRecord(key);
+      const parsed = record === undefined ? undefined : parseEditDraft(record);
       if (parsed !== undefined) result.set(key.slice(EDIT_PREFIX.length), parsed);
     }
   } catch {
@@ -218,14 +186,10 @@ export function loadEditDrafts(): Map<string, StoredEditDraft> {
 }
 
 export function saveEditDraft(messageKey: string, draft: StoredEditDraft | undefined): void {
-  const target = storage();
-  if (target === null) return;
-  try {
-    if (draft === undefined) target.removeItem(`${EDIT_PREFIX}${messageKey}`);
-    else target.setItem(`${EDIT_PREFIX}${messageKey}`, JSON.stringify(draft));
-  } catch {
-    // 投げない: 残せなくても入力欄は動く。
-  }
+  writeStored(
+    `${EDIT_PREFIX}${messageKey}`,
+    draft === undefined ? undefined : JSON.stringify(draft),
+  );
 }
 
 export function clearChatDrafts(): void {

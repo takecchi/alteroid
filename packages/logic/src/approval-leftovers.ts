@@ -4,7 +4,12 @@ import {
   loadApprovalDrafts,
   saveApprovalDrafts,
 } from './approval-drafts.js';
-import { APPROVAL_LEFTOVERS_KEY, isRecord, storage } from './session-store.js';
+import {
+  APPROVAL_LEFTOVERS_KEY,
+  isRecord,
+  readStoredRecord,
+  writeStored,
+} from './session-store.js';
 
 export interface LeftoverQuestion {
   id: string;
@@ -130,36 +135,24 @@ function parseQuestion(value: unknown): LeftoverQuestion | null {
 
 export function loadApprovalLeftoverSources(): ApprovalLeftoverSources {
   const result: ApprovalLeftoverSources = {};
-  try {
-    const raw = storage()?.getItem(KEY);
-    if (raw === null || raw === undefined) return result;
-    const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed)) return result;
-    for (const [id, value] of Object.entries(parsed)) {
-      if (!isRecord(value) || typeof value.question !== 'string') continue;
-      const questions = Array.isArray(value.questions)
-        ? value.questions.map(parseQuestion).filter((q): q is LeftoverQuestion => q !== null)
-        : undefined;
-      const origin = value.origin === 'conflict' || value.origin === 'gone' ? value.origin : null;
-      result[id] = {
-        ...(origin === null ? {} : { origin }),
-        question: value.question,
-        ...(questions === undefined ? {} : { questions }),
-      };
-    }
-  } catch {
-    // 投げない: 壊れていても呼ぶ側は空の控えで動く。
+  // 投げない: 壊れていても呼ぶ側は空の控えで動く。
+  const parsed = readStoredRecord(KEY);
+  if (parsed === undefined) return result;
+  for (const [id, value] of Object.entries(parsed)) {
+    if (!isRecord(value) || typeof value.question !== 'string') continue;
+    const questions = Array.isArray(value.questions)
+      ? value.questions.map(parseQuestion).filter((q): q is LeftoverQuestion => q !== null)
+      : undefined;
+    const origin = value.origin === 'conflict' || value.origin === 'gone' ? value.origin : null;
+    result[id] = {
+      ...(origin === null ? {} : { origin }),
+      question: value.question,
+      ...(questions === undefined ? {} : { questions }),
+    };
   }
   return result;
 }
 
 export function saveApprovalLeftoverSources(sources: ApprovalLeftoverSources): void {
-  try {
-    const store = storage();
-    if (store === null) return;
-    if (Object.keys(sources).length === 0) store.removeItem(KEY);
-    else store.setItem(KEY, JSON.stringify(sources));
-  } catch {
-    // 投げない: 保存できなくても呼ぶ側は state だけで動く。
-  }
+  writeStored(KEY, Object.keys(sources).length === 0 ? undefined : JSON.stringify(sources));
 }
