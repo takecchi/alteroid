@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
-import {
-  describeDenialFollowUp as coreDescribeDenialFollowUp,
-  describeSessionMissingKind,
-} from '@alteroid/core';
+import { describeSessionMissingKind } from '@alteroid/core';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -11,11 +8,7 @@ import { MANAGERS_PAGE } from '@alteroid/swr';
 import type { ManagerSummary } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
-import Managers, {
-  ManagerRunnerVanishedNote,
-  describeDenialFollowUp,
-  describeSessionMissingKindNote,
-} from './managers';
+import Managers, { ManagerRunnerVanishedNote, describeSessionMissingKindNote } from './managers';
 
 // 画面全体で見ない: 札と同じ言葉がチップのボタンとしても画面に現れ、「この札は出ていない」を画面全体で見るとチップに当たってしまうため
 function row() {
@@ -172,20 +165,6 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
     expect(screen.getByText(/Write 1件/)).toBeTruthy();
     expect(screen.getByText(/クローンには回ってきていない/)).toBeTruthy();
     expect(screen.queryByText(/手が止まっている。/)).toBeNull();
-  });
-
-  it('describeDenialFollowUp の写しは core と3値すべてで同じ字面を返す（#1455）', () => {
-    const cases: [{ lastAt?: string }[], string | undefined][] = [
-      [[], undefined],
-      [[{ lastAt: '2026-09-24T07:00:00.000Z' }], '2026-09-24T07:10:00.000Z'],
-      [[{ lastAt: '2026-09-24T07:20:00.000Z' }], '2026-09-24T07:10:00.000Z'],
-      [[{ lastAt: '2026-09-24T07:00:00.000Z' }, {}], '2026-09-24T07:10:00.000Z'],
-    ];
-    for (const [denials, lastReportAt] of cases) {
-      expect(describeDenialFollowUp(denials, lastReportAt)).toBe(
-        coreDescribeDenialFollowUp(denials, lastReportAt),
-      );
-    }
   });
 
   it('一覧の拒否の注記に「止められた後に報告が届いたか」が載る（#1455）', async () => {

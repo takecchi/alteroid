@@ -597,6 +597,7 @@ export {
 export { memoryHeadingOf, memoryTitleOf, stripMemoryContent } from './memory-document.js';
 /** `storage-fs` / `storage-pg` はパッケージが別なので、このバレルを経由しないと届かない。 */
 export { codePointBoundary, countCodePoints, excerptLine, tailByCodePoints } from './excerpt.js';
+export { denialActorTag, describeDenialFollowUp } from './denial-format.js';
 /** 並びを pg の `timestamptz` 順と揃えるため、オフセット付き ISO 時刻は文字列でなく実時刻で比べる。 */
 export { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 export {
@@ -722,7 +723,6 @@ export {
   type ManagerSummary,
   type ManagerTranscript,
   type ManagerUnpushedWork,
-  describeDenialFollowUp,
   decisionUnusedNote,
   guardArchiveRemoval,
   type ArchiveRemovalGuard,

@@ -765,7 +765,7 @@ export interface ManagerDenial {
    */
   actor?: 'manager' | 'worker';
   /**
-   * 「止められた後に委譲が進んだか」を読む材料（{@link describeDenialFollowUp}）。
+   * 「止められた後に委譲が進んだか」を読む材料（`denial-format.ts` の `describeDenialFollowUp`）。
    * 無いことは「取れていない」であって「古い」ではない。
    */
   lastAt?: string;
@@ -784,30 +784,6 @@ export interface ManagerDenial {
    * `/managers` へは流さない（`reasonType` と同じ判断）。
    */
   inputHead?: string;
-}
-
-/**
- * 時刻の取れていない拒否が1件でも在れば判定できない: どちらへも畳まない（判定できないという
- * 3つ目の状態を持つ）。報告が届いたことは止められた道具を別の手で越えたことを意味しないので、
- * 文面もそこで止める。`status` の値は増やさない。
- */
-export function describeDenialFollowUp(
-  denials: readonly Pick<ManagerDenial, 'lastAt'>[],
-  lastReportAt: string | undefined,
-): string | null {
-  if (denials.length === 0) return null;
-  const times = denials.map((denial) => denial.lastAt);
-  if (times.some((time) => time === undefined)) {
-    return '最後に止められた時刻が取れていない拒否が在るので、止められた後に報告が届いたかは判定できない';
-  }
-  const latest = (times as string[]).reduce((a, b) => (a > b ? a : b));
-  if (lastReportAt !== undefined && lastReportAt > latest) {
-    return (
-      `最後に止められた（${latest}）後にも報告が届いている（${lastReportAt}）。` +
-      '止められた道具を別の手で越えたかまでは見ていない'
-    );
-  }
-  return `最後に止められた（${latest}）後の報告はまだ届いていない`;
 }
 
 /** どちらの接頭辞にも一致しない文字列は推測でどちらかへ倒さず「取れていない」とする（`ManagerDenial.actor` の doc）。 */

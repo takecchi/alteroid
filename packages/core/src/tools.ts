@@ -176,9 +176,9 @@ import {
   selectArchiveRemovalTargets,
 } from './archive-prune.js';
 import type { ArchiveRemoveManyFilter } from './archive-prune.js';
+import { denialActorTag, describeDenialFollowUp } from './denial-format.js';
 import {
   decisionUnusedNote,
-  describeDenialFollowUp,
   guardArchiveRemoval,
   HELD_MESSAGE_TTL_MS,
   tokenGenerationMismatched,
@@ -1866,11 +1866,6 @@ async function appendJournalOrDrop(
     noteDroppedRecord(`日誌（${tool}）`, journalEntryShape(entry), error);
     return undefined;
   }
-}
-
-// 3値を3値のまま出す: 層が取れていない `undefined` をマネージャー側へ混ぜない
-function denialActorTag(actor: ManagerDenial['actor']): string {
-  return actor === 'manager' ? ' [マネージャー]' : actor === 'worker' ? ' [作業者]' : ' [層不明]';
 }
 
 // 長さの上限もエスケープも掛けない: journal 側に無い制約をここにだけ足す理由が無いため

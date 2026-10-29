@@ -58,13 +58,12 @@ import {
   isEmptyCompleteUnpushedWorkObservation,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from '@alteroid/core/unpushed-work-observation-format';
+import { denialActorTag, describeDenialFollowUp } from '@alteroid/core/denial-format';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '@alteroid/logic';
 
 import type { Route } from './+types/manager-detail';
 // 注記は書き写さず一覧から借りる: 文言の核はクローン・CLI と逐語で揃える約束なので、写すと片方だけ直る。
 import {
-  denialActorTag,
-  describeDenialFollowUp,
   ManagerAwaitingBackgroundNote,
   ManagerRunnerLostNote,
   ManagerRunnerVanishedNote,
