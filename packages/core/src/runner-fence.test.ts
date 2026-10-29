@@ -54,7 +54,7 @@ afterEach(async () => {
   hosts = [];
 });
 
-function setup(options: Pick<RunnerHostOptions, 'enforceLease'> = {}): {
+function setup(options: Pick<RunnerHostOptions, 'enforceLease' | 'fenceMemoryMax'> = {}): {
   host: RunnerHost;
   events: RunnerEvent[];
   fake: ReturnType<typeof fakeSdk>;
@@ -216,6 +216,110 @@ describe('resume の世代（fencing token）', () => {
         lease: { fence: 8, ttlMs: 60_000 },
       }),
     ).rejects.toMatchObject({ expected: 9, given: 8 });
+  });
+});
+
+// 閉じたセッションが最後に受けた世代を、同じ managerId の次の start / resume へ持ち越す（#5507）。外から見える結果（reject・queryFn の呼び出し回数・list）で測る
+describe('閉じた後の resume の世代（持ち越し）', () => {
+  const resumeWith = (managerId: string, fence: number) => ({
+    managerId,
+    sessionId: 'sess-old',
+    cwd: '/work/project',
+    request: '再開の依頼',
+    lease: { fence, ttlMs: 60_000 },
+  });
+  const startWith = (managerId: string, fence: number) => ({
+    managerId,
+    request: '最初の依頼',
+    cwd: '/work/project',
+    lease: { fence, ttlMs: 60_000 },
+  });
+
+  it('閉じた後の古い世代の resume は拒まれ、新しいセッションを開かない', async () => {
+    const { host, fake } = setup();
+    await host.start(startWith('mgr-1', 5));
+    await host.stop('mgr-1');
+    expect(host.list()).toHaveLength(0);
+
+    const rejection = host.resume(resumeWith('mgr-1', 4));
+    await expect(rejection).rejects.toBeInstanceOf(RunnerFenceError);
+    await expect(rejection).rejects.toMatchObject({ managerId: 'mgr-1', expected: 5, given: 4 });
+    expect(fake.callCount()).toBe(1);
+    expect(host.list()).toHaveLength(0);
+  });
+
+  it('閉じた後の古い世代の start も拒まれる', async () => {
+    const { host, fake } = setup();
+    await host.start(startWith('mgr-1', 5));
+    await host.stop('mgr-1');
+
+    await expect(host.start(startWith('mgr-1', 2))).rejects.toMatchObject({
+      expected: 5,
+      given: 2,
+    });
+    expect(fake.callCount()).toBe(1);
+    expect(host.list()).toHaveLength(0);
+  });
+
+  it('対照: 閉じた後でも、同じ世代・大きい世代の resume は受ける', async () => {
+    const { host, fake } = setup();
+    await host.start(startWith('mgr-1', 5));
+    await host.stop('mgr-1');
+    await host.resume(resumeWith('mgr-1', 5));
+    expect(fake.callCount()).toBe(2);
+    await host.stop('mgr-1');
+    await host.resume(resumeWith('mgr-1', 6));
+    expect(fake.callCount()).toBe(3);
+    await host.stop('mgr-1');
+    await expect(host.resume(resumeWith('mgr-1', 5))).rejects.toMatchObject({
+      expected: 6,
+      given: 5,
+    });
+  });
+
+  it('対照: 別の managerId の世代には影響されない', async () => {
+    const { host } = setup();
+    await host.start(startWith('mgr-1', 5));
+    await host.stop('mgr-1');
+    await host.resume(resumeWith('mgr-2', 1));
+    expect(host.list().map((state) => state.managerId)).toEqual(['mgr-2']);
+  });
+
+  it('生きたセッションへ合流した resume の世代も覚える', async () => {
+    const { host } = setup();
+    await host.start(startWith('mgr-1', 1));
+    await host.resume(resumeWith('mgr-1', 7));
+    await host.stop('mgr-1');
+    await expect(host.resume(resumeWith('mgr-1', 6))).rejects.toMatchObject({
+      expected: 7,
+      given: 6,
+    });
+  });
+
+  it('lease を伴わない resume は、覚えた世代があっても今までどおり動く', async () => {
+    const { host, fake } = setup();
+    await host.start(startWith('mgr-1', 5));
+    await host.stop('mgr-1');
+    await host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-old',
+      cwd: '/work/project',
+      request: '再開の依頼',
+    });
+    expect(fake.callCount()).toBe(2);
+  });
+
+  it('覚える数を超えたら、最も古いものから忘れる', async () => {
+    const { host } = setup({ fenceMemoryMax: 2 });
+    for (const id of ['mgr-a', 'mgr-b', 'mgr-c']) {
+      await host.start(startWith(id, 5));
+      await host.stop(id);
+    }
+    // mgr-a は押し出された（受ける）。mgr-b・mgr-c は覚えている
+    await expect(host.resume(resumeWith('mgr-b', 1))).rejects.toBeInstanceOf(RunnerFenceError);
+    await expect(host.resume(resumeWith('mgr-c', 1))).rejects.toBeInstanceOf(RunnerFenceError);
+    await host.resume(resumeWith('mgr-a', 1));
+    expect(host.list().map((state) => state.managerId)).toEqual(['mgr-a']);
   });
 });
 
