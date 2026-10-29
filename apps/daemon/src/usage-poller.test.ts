@@ -3,6 +3,15 @@ import type { UsageProbeHandle, UsageProbeQuery } from '@alteroid/core';
 import { describe, expect, it, vi } from 'vitest';
 
 import { intervalForState, startUsagePolling } from './usage-poller.js';
+import type { UsagePollerOptions } from './usage-poller.js';
+
+// 必須の4つは、特に確かめない試験では「何も足さない」値で渡す。確かめる試験は、後ろで上書きする。
+const REQUIRED: Pick<UsagePollerOptions, 'withheldEnvKeys' | 'env' | 'identity' | 'onState'> = {
+  withheldEnvKeys: [],
+  env: () => ({}),
+  identity: () => undefined,
+  onState: () => {},
+};
 
 function probe(answers: () => { account?: unknown; usage?: unknown }): {
   queryFn: UsageProbeQuery;
@@ -111,14 +120,14 @@ describe('#681: 聞く間隔は「取れないと分かったか」で決まる'
 describe('アカウント全体の利用状況を取り直す', () => {
   it('立ち上げた直後は「まだ分からない」（0 ではない）', () => {
     const { queryFn } = probe(() => LOGGED_IN);
-    const poller = startUsagePolling({ queryFn, cwd: '/work', intervalMs: 10_000 });
+    const poller = startUsagePolling({ ...REQUIRED, queryFn, cwd: '/work', intervalMs: 10_000 });
     expect(poller.state()).toEqual({ state: 'unknown' });
     poller.stop();
   });
 
   it('取れたら持つ', async () => {
     const { queryFn } = probe(() => LOGGED_IN);
-    const poller = startUsagePolling({ queryFn, cwd: '/work', intervalMs: 10_000 });
+    const poller = startUsagePolling({ ...REQUIRED, queryFn, cwd: '/work', intervalMs: 10_000 });
 
     const state = await poller.refresh();
     expect(state.state).toBe('ok');
@@ -129,7 +138,7 @@ describe('アカウント全体の利用状況を取り直す', () => {
   it('一時的に取れなくなっても、取れていた値を捨てない', async () => {
     let ok = true;
     const { queryFn } = probe(() => (ok ? LOGGED_IN : { account: undefined, usage: undefined }));
-    const poller = startUsagePolling({ queryFn, cwd: '/work', intervalMs: 10_000 });
+    const poller = startUsagePolling({ ...REQUIRED, queryFn, cwd: '/work', intervalMs: 10_000 });
 
     await poller.refresh();
     expect(poller.state().state).toBe('ok');
@@ -145,6 +154,7 @@ describe('アカウント全体の利用状況を取り直す', () => {
     let loggedIn = false;
     const { queryFn } = probe(() => (loggedIn ? LOGGED_IN : NOT_LOGGED_IN));
     const poller = startUsagePolling({
+      ...REQUIRED,
       queryFn,
       cwd: '/work',
       intervalMs: 10_000,
@@ -169,6 +179,7 @@ describe('アカウント全体の利用状況を取り直す', () => {
     let recovered = false;
     const { queryFn } = probe(() => (recovered ? LOGGED_IN : UNDETERMINED));
     const poller = startUsagePolling({
+      ...REQUIRED,
       queryFn,
       cwd: '/work',
       intervalMs: 5,
@@ -187,7 +198,7 @@ describe('アカウント全体の利用状況を取り直す', () => {
 
   it('取得を重ねない（遅い probe でサブプロセスを積み上げない）', async () => {
     const { queryFn, calls } = probe(() => LOGGED_IN);
-    const poller = startUsagePolling({ queryFn, cwd: '/work', intervalMs: 10_000 });
+    const poller = startUsagePolling({ ...REQUIRED, queryFn, cwd: '/work', intervalMs: 10_000 });
 
     // 起動直後の1回を先に落ち着かせる: 飛んでいる間はこちらの3本も合流し、何本に畳まれたかを数えられないため。
     await poller.refresh();
@@ -201,7 +212,7 @@ describe('アカウント全体の利用状況を取り直す', () => {
 
   it('止めたら以後取りに行かない', async () => {
     const { queryFn, calls } = probe(() => LOGGED_IN);
-    const poller = startUsagePolling({ queryFn, cwd: '/work', intervalMs: 5 });
+    const poller = startUsagePolling({ ...REQUIRED, queryFn, cwd: '/work', intervalMs: 5 });
     await poller.refresh();
     poller.stop();
 
@@ -234,6 +245,7 @@ describe('usage-poller — withheldEnvKeys を fetchAccountUsage まで届ける
     try {
       const { queryFn, captured } = capturingProbe();
       const poller = startUsagePolling({
+        ...REQUIRED,
         queryFn,
         cwd: '/work',
         intervalMs: 10_000,
@@ -251,16 +263,6 @@ describe('usage-poller — withheldEnvKeys を fetchAccountUsage まで届ける
       else process.env.ALTEROID_DATABASE_URL = original;
     }
   });
-
-  it('withheldEnvKeys を渡さないと（既定）、Options.env 自体が省略される（#431 が直す前の形）', async () => {
-    const { queryFn, captured } = capturingProbe();
-    const poller = startUsagePolling({ queryFn, cwd: '/work', intervalMs: 10_000 });
-    await poller.refresh();
-    poller.stop();
-
-    const options = captured[0] as Record<string, unknown>;
-    expect('env' in options).toBe(false);
-  });
 });
 
 describe('#2752: 保持は「同じ鍵での一時的な失敗」に限る', () => {
@@ -272,6 +274,7 @@ describe('#2752: 保持は「同じ鍵での一時的な失敗」に限る', () 
     let identity = KEY_A;
     const { queryFn } = probe(() => (ok ? LOGGED_IN : { account: undefined, usage: undefined }));
     const poller = startUsagePolling({
+      ...REQUIRED,
       queryFn,
       cwd: '/work',
       intervalMs: 10_000,
@@ -293,6 +296,7 @@ describe('#2752: 保持は「同じ鍵での一時的な失敗」に限る', () 
     let identity = KEY_A;
     const { queryFn } = probe(() => LOGGED_IN);
     const poller = startUsagePolling({
+      ...REQUIRED,
       queryFn,
       cwd: '/work',
       intervalMs: 10_000,
@@ -310,6 +314,7 @@ describe('#2752: 保持は「同じ鍵での一時的な失敗」に限る', () 
     let ok = true;
     const { queryFn } = probe(() => (ok ? LOGGED_IN : { account: undefined, usage: undefined }));
     const poller = startUsagePolling({
+      ...REQUIRED,
       queryFn,
       cwd: '/work',
       intervalMs: 10_000,
@@ -352,6 +357,7 @@ describe('usage-poller — 現役のトークンで測る', () => {
   it('env を渡すと、probe へ渡す Options.env にその値が載る', async () => {
     const { queryFn, captured } = capturingProbe();
     const poller = startUsagePolling({
+      ...REQUIRED,
       queryFn,
       cwd: '/work',
       intervalMs: 10_000,
@@ -367,6 +373,7 @@ describe('usage-poller — 現役のトークンで測る', () => {
   it('env が空を返すなら Options.env 自体を作らない（既定の構成を1文字も変えない）', async () => {
     const { queryFn, captured } = capturingProbe();
     const poller = startUsagePolling({
+      ...REQUIRED,
       queryFn,
       cwd: '/work',
       intervalMs: 10_000,
@@ -383,6 +390,7 @@ describe('usage-poller — 現役のトークンで測る', () => {
     let key = 'first';
     const { queryFn, captured } = capturingProbe();
     const poller = startUsagePolling({
+      ...REQUIRED,
       queryFn,
       cwd: '/work',
       intervalMs: 10_000,
@@ -404,6 +412,7 @@ describe('usage-poller — 現役のトークンで測る', () => {
     const { queryFn } = probe(() => (ok ? LOGGED_IN : { account: undefined, usage: undefined }));
     const seen: string[] = [];
     const poller = startUsagePolling({
+      ...REQUIRED,
       queryFn,
       cwd: '/work',
       intervalMs: 10_000,
@@ -441,6 +450,7 @@ describe('usage-poller — 現役のトークンで測る', () => {
     });
     const seen: Array<{ tokenId: string; generation: number } | undefined> = [];
     const poller = startUsagePolling({
+      ...REQUIRED,
       queryFn,
       cwd: '/work',
       intervalMs: 10_000,
@@ -466,6 +476,7 @@ describe('usage-poller — 現役のトークンで測る', () => {
   it('onState が投げてもポーリングを止めない', async () => {
     const { queryFn, calls } = probe(() => LOGGED_IN);
     const poller = startUsagePolling({
+      ...REQUIRED,
       queryFn,
       cwd: '/work',
       intervalMs: 10_000,
@@ -488,6 +499,7 @@ describe('起動直後の「鍵が無い」は、鍵が届いたら長い間隔�
     const key: { identity?: { tokenId: string; generation: number } } = {};
     const { queryFn } = probe(() => (key.identity === undefined ? NOT_LOGGED_IN : LOGGED_IN));
     const poller = startUsagePolling({
+      ...REQUIRED,
       queryFn,
       cwd: '/work',
       intervalMs: 5,
@@ -508,6 +520,7 @@ describe('起動直後の「鍵が無い」は、鍵が届いたら長い間隔�
     try {
       const { queryFn, calls } = probe(() => NOT_LOGGED_IN);
       const poller = startUsagePolling({
+        ...REQUIRED,
         queryFn,
         cwd: '/work',
         intervalMs: 5,

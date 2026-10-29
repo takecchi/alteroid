@@ -61,13 +61,10 @@ export interface UsagePollerOptions {
   unavailableIntervalMs?: number;
   signal?: AbortSignal;
   // `storage.withheldEnvKeys` をそのまま渡す: 省略すると SDK の既定で `process.env` をそのまま子へ継承し、一番広く晒す経路になるため。
-  withheldEnvKeys?: readonly string[];
-  env?: () => NodeJS.ProcessEnv;
-  identity?: () => { tokenId: string; generation: number } | undefined;
-  onState?: (
-    state: AccountUsageState,
-    measuredBy?: { tokenId: string; generation: number },
-  ) => void;
+  withheldEnvKeys: readonly string[];
+  env: () => NodeJS.ProcessEnv;
+  identity: () => { tokenId: string; generation: number } | undefined;
+  onState: (state: AccountUsageState, measuredBy?: { tokenId: string; generation: number }) => void;
 }
 
 // どちらも身元を持たない構成は同じ鍵として扱う: 箱が空＝器の環境変数の鍵のままで、回せない構成のため。
@@ -109,34 +106,27 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
   const refresh = async (): Promise<AccountUsageState> => {
     if (inFlight !== null) return inFlight;
     // 空なら渡さない: 空の `env` を渡すと `fetchAccountUsage` が `env` を組み立ててしまい、既定の構成の挙動が変わりうるため。
-    const env = options.env?.();
-    const measuredBy = options.identity?.();
+    const env = options.env();
+    const measuredBy = options.identity();
     lastMeasuredBy = measuredBy;
     inFlight = fetchAccountUsage(options.queryFn, {
       cwd: options.cwd,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
-      ...(env === undefined || Object.keys(env).length === 0 ? {} : { env }),
-      ...(options.withheldEnvKeys === undefined
-        ? {}
-        : { withheldEnvKeys: options.withheldEnvKeys }),
+      ...(Object.keys(env).length === 0 ? {} : { env }),
+      withheldEnvKeys: options.withheldEnvKeys,
     })
       .then((next) => {
         // 知らせるのは「この回に取れたもの」で、`current` ではない: `current` は古い `ok` を保つので、渡すと同じ観測を何度も新しい観測として渡すことになるため。
         // 切り離して呼ぶ: 待つと聞き手が遅いぶん次の probe が遅れるため。
-        if (options.onState !== undefined) {
-          const notify = options.onState;
-          const handoff = setTimeout(() => {
-            // 投げてもポーリングを止めず、黙らせず跡を残す。
-            try {
-              notify(next, measuredBy);
-            } catch (error) {
-              writeStderrLine(
-                `alteroidd: 枠の観測を見張りへ渡せませんでした: ${reasonOf(error)}\n`,
-              );
-            }
-          }, 0);
-          handoff.unref?.();
-        }
+        const handoff = setTimeout(() => {
+          // 投げてもポーリングを止めず、黙らせず跡を残す。
+          try {
+            options.onState(next, measuredBy);
+          } catch (error) {
+            writeStderrLine(`alteroidd: 枠の観測を見張りへ渡せませんでした: ${reasonOf(error)}\n`);
+          }
+        }, 0);
+        handoff.unref?.();
         // 取れた値は同じ鍵での一時的な失敗のときだけ保つ: 失敗のたびに表示が消えると、使い切ったのか観測できないのかを区別できないため。鍵が変わったら捨てる（降りた鍵の枠をいまの枠として語らない）。
         if (next.state === 'ok') {
           current = next;
