@@ -51,21 +51,30 @@ function isYes(answer: string): boolean {
   return answer.trim().toLowerCase() === 'yes';
 }
 
+async function confirmOnce(
+  summary: string,
+  options: { yes?: boolean },
+  io: ConfirmIo,
+  irreversible: boolean,
+): Promise<true> {
+  if (options.yes === true) return true;
+  if (!io.isTTY) {
+    throw new Error(
+      `${summary}\n${irreversible ? '取り消せない操作です。' : ''}端末ではなく対話で確認できないので、実行しません` +
+        '（何も変更していません）。確認を省くには --yes を付けてください。',
+    );
+  }
+  io.write(irreversible ? `${summary}\n取り消せません。\n` : `${summary}\n`);
+  if (isYes(await io.ask(PROMPT))) return true;
+  throw new ConfirmDeclinedError();
+}
+
 export async function confirmIrreversible(
   summary: string,
   options: { yes?: boolean },
   io: ConfirmIo = defaultIo(),
 ): Promise<true> {
-  if (options.yes === true) return true;
-  if (!io.isTTY) {
-    throw new Error(
-      `${summary}\n取り消せない操作です。端末ではなく対話で確認できないので、実行しません` +
-        '（何も変更していません）。確認を省くには --yes を付けてください。',
-    );
-  }
-  io.write(`${summary}\n取り消せません。\n`);
-  if (isYes(await io.ask(PROMPT))) return true;
-  throw new ConfirmDeclinedError();
+  return confirmOnce(summary, options, io, true);
 }
 
 // 「取り消せません」と言わない: 外せば元に戻る操作（`plugin add`）に、取り消せないという誤った重さを付けないため
@@ -74,16 +83,7 @@ export async function confirmProceed(
   options: { yes?: boolean },
   io: ConfirmIo = defaultIo(),
 ): Promise<true> {
-  if (options.yes === true) return true;
-  if (!io.isTTY) {
-    throw new Error(
-      `${summary}\n端末ではなく対話で確認できないので、実行しません（何も変更していません）。` +
-        '確認を省くには --yes を付けてください。',
-    );
-  }
-  io.write(`${summary}\n`);
-  if (isYes(await io.ask(PROMPT))) return true;
-  throw new ConfirmDeclinedError();
+  return confirmOnce(summary, options, io, false);
 }
 
 export async function confirmInRepl(

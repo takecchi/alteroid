@@ -113,6 +113,48 @@ describe('confirmIrreversible（#3141。形は alteroid reset の確認に揃え
   });
 });
 
+describe('取り消せるかで文言だけが変わる（流れは同じ。#5572）', () => {
+  it('端末でないと、どちらも全文が決まった形で投げる。「取り消せない」は confirmIrreversible だけ', async () => {
+    const tail =
+      '端末ではなく対話で確認できないので、実行しません（何も変更していません）。確認を省くには --yes を付けてください。';
+
+    const irreversible = await confirmIrreversible(
+      '消します。',
+      {},
+      fakeIo({ isTTY: false }).io,
+    ).catch((e: unknown) => e);
+    const proceed = await confirmProceed('入れます。', {}, fakeIo({ isTTY: false }).io).catch(
+      (e: unknown) => e,
+    );
+
+    expect((irreversible as Error).message).toBe(`消します。\n取り消せない操作です。${tail}`);
+    expect((proceed as Error).message).toBe(`入れます。\n${tail}`);
+  });
+
+  it('端末で yes なら、どちらも進む。見せる文の「取り消せません」は confirmIrreversible だけ', async () => {
+    const irreversible = fakeIo({ answer: 'yes' });
+    const proceed = fakeIo({ answer: 'yes' });
+
+    await expect(confirmIrreversible('消します。', {}, irreversible.io)).resolves.toBe(true);
+    await expect(confirmProceed('入れます。', {}, proceed.io)).resolves.toBe(true);
+
+    expect(irreversible.written).toEqual(['消します。\n取り消せません。\n']);
+    expect(proceed.written).toEqual(['入れます。\n']);
+    expect(proceed.asked).toEqual(['続けるなら yes と入力してください: ']);
+  });
+
+  it('confirmProceed も --yes なら聞かず、yes の全文でなければ ConfirmDeclinedError', async () => {
+    const skipped = fakeIo({ isTTY: false });
+    await expect(confirmProceed('入れます。', { yes: true }, skipped.io)).resolves.toBe(true);
+    expect(skipped.asked).toEqual([]);
+
+    const error = await confirmProceed('入れます。', {}, fakeIo({ answer: 'y' }).io).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(ConfirmDeclinedError);
+  });
+});
+
 describe('confirmInRepl（REPL の readline で聞く。#3141）', () => {
   it('yes なら進む', async () => {
     const written: string[] = [];
