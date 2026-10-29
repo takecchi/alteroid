@@ -2,7 +2,9 @@
 export const SINGLE_CHUNK_MAX_BYTES = 262_144;
 
 // 1.25 MiB。2026-10-07 オーナー決定。main が予算の 99% に来ていて、画面を足す PR が全部落ちる状態だったため。
-export const TOTAL_MAX_BYTES = 1_310_720;
+// 2026-10-29 オーナー決定で一時的に 4 KiB 上げた（1_310_720 → 1_314_816）。台帳（commitments）と task の画面が並ぶのは移行の間だけのため。
+// #5469 P7e で台帳の画面（commitments のチャンク約 23 KB）を消したら 1_310_720 へ戻す。
+export const TOTAL_MAX_BYTES = 1_314_816;
 
 export function judgeBundleSize(files) {
   const sorted = [...files].sort((a, b) => b.bytes - a.bytes);
