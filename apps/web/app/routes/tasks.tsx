@@ -9,13 +9,12 @@ import {
   TaskCloseForm,
   TaskMoveControls,
   TaskOriginBadge,
+  TaskReopenForm,
   TaskStatusBadge,
   excerptOf,
   isTaskClosed,
   placementOf,
-  taskLabel,
 } from '~/components/task-parts';
-import { ReopenForm } from '~/components/reopen-form';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
 import { unsentInput } from '~/lib/unsent-input';
@@ -37,7 +36,7 @@ import {
   Textarea,
   WarnNote,
 } from '@alteroid/ui';
-import { useTasks, usePushTask, useReopenTask, type TaskPlacement } from '@alteroid/swr';
+import { useTasks, usePushTask, type TaskPlacement } from '@alteroid/swr';
 import { formatDateTime, redactBody } from '@alteroid/logic';
 import type { Task, UnreadableTask } from '@alteroid/logic';
 
@@ -204,7 +203,6 @@ function TaskTitle({ task }: { task: Task }) {
 }
 
 function ClosedRow({ task }: { task: Task }) {
-  const reopenTask = useReopenTask();
   const reason = task.closedReason === undefined ? undefined : redactBody(task.closedReason);
   return (
     <li className="border-b border-border px-4 py-3 text-muted-foreground last:border-b-0">
@@ -222,11 +220,7 @@ function ClosedRow({ task }: { task: Task }) {
           {reason}
         </p>
       )}
-      <ReopenForm
-        dirtyId={`task-reopen-reason:${task.id}`}
-        label={taskLabel(task)}
-        onReopen={(reason) => reopenTask(task.id, reason)}
-      />
+      <TaskReopenForm task={task} />
     </li>
   );
 }

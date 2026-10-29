@@ -1,10 +1,11 @@
 import { useId, useState } from 'react';
 
 import { Badge, Button, ErrorNote, FieldHint, Input, Select } from '@alteroid/ui';
-import { useCloseTask, useMoveTask } from '@alteroid/swr';
+import { useCloseTask, useMoveTask, useReopenTask } from '@alteroid/swr';
 import { redactBody } from '@alteroid/logic';
 import type { Task, TaskPlacementInput } from '@alteroid/logic';
 
+import { ReopenForm } from '~/components/reopen-form';
 import { useReportDirty } from '~/lib/leave-guard';
 
 // 状態の言い換えに生の値を併記する: 画面の語と CLI・クローンが使う語（queued など）を結べなくならないように。
@@ -57,7 +58,7 @@ export function TaskOriginBadge({ origin }: { origin: string }) {
   return <Badge tone={origin === 'human' ? 'accent' : 'neutral'}>{label}</Badge>;
 }
 
-export function taskLabel(task: Task): string {
+function taskLabel(task: Task): string {
   const flat = redactBody(task.title).replace(/\s+/g, ' ').trim();
   return Array.from(flat).length > 20 ? `${Array.from(flat).slice(0, 20).join('')}…` : flat;
 }
@@ -290,5 +291,17 @@ export function TaskCloseForm({ task }: { task: Task }) {
       </FieldHint>
       <ErrorNote error={failure} className="mt-2" />
     </div>
+  );
+}
+
+// 一覧と詳細で同じ離脱ガードの id を使う: 呼び元ごとに書くと、片方だけ id がずれて書きかけの検出が食い違うため
+export function TaskReopenForm({ task }: { task: Task }) {
+  const reopenTask = useReopenTask();
+  return (
+    <ReopenForm
+      dirtyId={`task-reopen-reason:${task.id}`}
+      label={taskLabel(task)}
+      onReopen={(reason) => reopenTask(task.id, reason)}
+    />
   );
 }

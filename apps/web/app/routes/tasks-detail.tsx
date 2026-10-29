@@ -6,11 +6,10 @@ import {
   TaskCloseForm,
   TaskMoveControls,
   TaskOriginBadge,
+  TaskReopenForm,
   TaskStatusBadge,
   isTaskClosed,
-  taskLabel,
 } from '~/components/task-parts';
-import { ReopenForm } from '~/components/reopen-form';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 
@@ -30,14 +29,7 @@ import {
   SubmitHint,
   Textarea,
 } from '@alteroid/ui';
-import {
-  ApiError,
-  TaskConflictError,
-  useEditTask,
-  useReopenTask,
-  useTask,
-  useTasks,
-} from '@alteroid/swr';
+import { ApiError, TaskConflictError, useEditTask, useTask, useTasks } from '@alteroid/swr';
 import { formatDateTime, redactBody } from '@alteroid/logic';
 import type { Task } from '@alteroid/logic';
 
@@ -108,7 +100,6 @@ function TaskCard({
   listReady: boolean;
 }) {
   const now = useMinuteNow();
-  const reopenTask = useReopenTask();
   const [editing, setEditing] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
@@ -172,11 +163,7 @@ function TaskCard({
                 {task.closedAt !== undefined && `（${formatDateTime(task.closedAt)}）`}
               </p>
             )}
-            <ReopenForm
-              dirtyId={`task-reopen-reason:${task.id}`}
-              label={taskLabel(task)}
-              onReopen={(reason) => reopenTask(task.id, reason)}
-            />
+            <TaskReopenForm task={task} />
           </>
         ) : (
           <>
