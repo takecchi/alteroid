@@ -967,7 +967,7 @@ describe('上限で切ったことを黙らない', () => {
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain(`（読めない ${MAX_ITEMS + 1} 件。片付いたのではない）`);
+    expect(digest).toContain(`読めない行が ${MAX_ITEMS + 1} 件ある（片付いたのではない）`);
     expect(digest).not.toContain('cm-unreadable-');
     expect(digest.split('\n').filter((line) => line.includes('旧台帳'))).toHaveLength(1);
   });
