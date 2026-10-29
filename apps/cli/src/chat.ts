@@ -94,7 +94,7 @@ import {
   interleaveApprovals,
 } from './conversation-approvals.js';
 import { describeCliFailure, isConnectionFailure } from './failure-message.js';
-import { formatElapsedAgo, oneLine } from './format.js';
+import { errorReason, formatElapsedAgo, oneLine } from './format.js';
 import {
   describeInterruptOutcome,
   requestInterruptOutcome,
@@ -3719,16 +3719,7 @@ function reportOutcome(
 }
 
 async function errorDetail(response: { status: number; json: () => Promise<unknown> }) {
-  try {
-    const body: unknown = await response.json();
-    if (typeof body === 'object' && body !== null && 'error' in body) {
-      const { error } = body as { error?: unknown };
-      if (typeof error === 'string' && error.length > 0) return redactError(error);
-    }
-  } catch {
-    // 本文が JSON でない（プロキシの HTML 等）。状態コードへ倒す。
-  }
-  return `HTTP ${response.status}（理由は読めませんでした）`;
+  return (await errorReason(response)) ?? `HTTP ${response.status}（理由は読めませんでした）`;
 }
 
 // 要求が通ってから「蒸留しています」と言う: 失敗したときに、走っていない蒸留を走っているとは言わない。
