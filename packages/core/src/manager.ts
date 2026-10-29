@@ -10706,6 +10706,10 @@ class Pool implements ManagerPool {
               `本文冒頭: ${excerptLine(event.text, WITHHELD_REPORT_EXCERPT)}`,
             routine: true,
           });
+          // 畳む前に像と状態を見直す: 上の `await` の間に `abort()` / `#retire()` が走り切ると在庫が消えており、ここで積むと止めた委譲の報告を `flushWithheldReports()` が受信箱へ配ってしまう（#5504）。日誌の `decision` は事実として残す。
+          if (this.#records.get(event.managerId) !== record || record.job.status === 'stopped') {
+            return;
+          }
           this.#withholdBackgroundReport(event.managerId, event.text, awaitingBackground);
           return;
         }
