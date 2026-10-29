@@ -141,8 +141,14 @@ describe('resume 中に abort で止めた委譲を、resume の失敗が lost �
     expect(aborted.outcome).toBe('stopped');
     gate.release();
     await restoring;
-    // 合流窓（20ms）を十分に越えて待ってから、知らせが出ていないことを見る。
-    await new Promise((r) => setTimeout(r, 300));
+    // 見送りの枝は `#notifyUnresumable` より前に戻るので、その decision が日誌に在れば、知らせが後から来ることは無い。
+    await vi.waitFor(
+      async () => {
+        const entries = await stores.journal.list({ types: ['decision'] });
+        expect(JSON.stringify(entries)).toContain('戻せなかったとして確定するのを見送った');
+      },
+      { timeout: 5_000 },
+    );
     expect((await stores.jobs.getJob('mgr-1'))?.status).toBe('stopped');
     expect(unresumableNotices(inbox)).toEqual([]);
     await pool.stop();
