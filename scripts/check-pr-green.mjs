@@ -17,6 +17,7 @@ import {
   isFullCommitSha,
   pickLatestRunPerWorkflow,
 } from './check-pr-green-core.mjs';
+import { log, logError } from './cli-log.mjs';
 
 const DECLARATION_PATH = join(import.meta.dirname, '..', '.github', 'required-status-checks.json');
 
@@ -35,14 +36,6 @@ function loadRequiredContexts() {
   } catch (error) {
     return { contexts: null, error: `${DECLARATION_PATH} を読めない: ${String(error)}` };
   }
-}
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
 }
 
 function parseArgs(argv) {

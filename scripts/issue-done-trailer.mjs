@@ -8,14 +8,7 @@ import { execFileSync } from 'node:child_process';
 import process from 'node:process';
 
 import { evaluateIssueDoneTrailer, formatEvaluation } from './issue-done-trailer-core.mjs';
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
-}
+import { log, logError } from './cli-log.mjs';
 
 function parseArgs(argv) {
   const result = {};

@@ -11,16 +11,9 @@ import {
   evaluateRetentionSources,
   parseGitGrepMatches,
 } from './branch-deletable-core.mjs';
+import { log, logError } from './cli-log.mjs';
 
 const MAIN_REV = 'origin/main';
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
-}
 
 function parseArgs(argv) {
   const flags = {};

@@ -9,16 +9,9 @@ import {
   findRestartBeforeCheckAdviceHits,
   listScannableSources,
 } from './check-restart-before-check-advice-core.mjs';
+import { log, logError } from './cli-log.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
-}
 
 function main() {
   let paths;

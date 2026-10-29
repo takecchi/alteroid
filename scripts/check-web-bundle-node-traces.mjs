@@ -2,32 +2,20 @@
 // lint（`@alteroid/core` の値 import 禁止）に絞らず生成物も見る: lint は経路を `@alteroid/core` に固定した歯で、別の依存からの混入には鳴らないため。
 // `process.env` を検査語にしない: markdown チャンクなど正当なコードに含まれる文字列で誤検知する恐れがあるため。
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
 import { findNodeTraceHits, PATTERNS } from './check-web-bundle-node-traces-core.mjs';
+import { log, logError } from './cli-log.mjs';
+import { listFilesWithExt } from './list-files-with-ext.mjs';
 
 const ASSETS_DIR = join(import.meta.dirname, '..', 'apps', 'web', 'build', 'client', 'assets');
-
-function listJsFiles(dir) {
-  return readdirSync(dir)
-    .map((name) => join(dir, name))
-    .filter((path) => statSync(path).isFile() && path.endsWith('.js'));
-}
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
-}
 
 function main() {
   let paths;
   try {
-    paths = listJsFiles(ASSETS_DIR);
+    paths = listFilesWithExt(ASSETS_DIR, '.js');
   } catch (error) {
     logError(
       `check-web-bundle-node-traces: ${ASSETS_DIR} を読めない（先に \`pnpm build\` を走らせたか）: ${error}`,

@@ -13,16 +13,9 @@ import {
   resolveSdkTypes,
   MARKER,
 } from './check-sdk-quotes-core.mjs';
+import { log, logError } from './cli-log.mjs';
 
 const REPO_ROOT = `${import.meta.dirname}/..`;
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
-}
 
 function main() {
   let sdk;

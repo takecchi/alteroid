@@ -12,19 +12,12 @@ import {
   isBranchNotProtected,
   resolveLiveRequiredChecks,
 } from './check-required-status-checks-core.mjs';
+import { log, logError } from './cli-log.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 const DECLARATION_PATH = join(ROOT, '.github', 'required-status-checks.json');
 const PROTECTION_PATH = 'repos/takecchi/alteroid/branches/main/protection';
 const RULES_PATH = 'repos/takecchi/alteroid/rules/branches/main';
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
-}
 
 // `absent` は 404 `Branch not protected` のときだけ: それ以外の失敗は `error` として理由を捨てない。
 function ghGet(path, { allowAbsent }) {

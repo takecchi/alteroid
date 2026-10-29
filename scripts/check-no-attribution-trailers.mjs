@@ -10,14 +10,7 @@ import {
   evaluateNoAttributionTrailers,
   formatVerdict,
 } from './check-no-attribution-trailers-core.mjs';
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
-}
+import { log, logError } from './cli-log.mjs';
 
 function parseArgs(argv) {
   const result = {};

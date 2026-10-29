@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 使い方: pnpm check:web-css-no-inline-fonts（`pnpm build` の後に走らせる）
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
@@ -11,27 +11,15 @@ import {
   findInlineFontHits,
   PATTERNS,
 } from './check-web-css-no-inline-fonts-core.mjs';
+import { log, logError } from './cli-log.mjs';
+import { listFilesWithExt } from './list-files-with-ext.mjs';
 
 const ASSETS_DIR = join(import.meta.dirname, '..', 'apps', 'web', 'build', 'client', 'assets');
-
-function listCssFiles(dir) {
-  return readdirSync(dir)
-    .map((name) => join(dir, name))
-    .filter((path) => statSync(path).isFile() && path.endsWith('.css'));
-}
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
-}
 
 function main() {
   let paths;
   try {
-    paths = listCssFiles(ASSETS_DIR);
+    paths = listFilesWithExt(ASSETS_DIR, '.css');
   } catch (error) {
     logError(
       `check-web-css-no-inline-fonts: ${ASSETS_DIR} を読めない（先に \`pnpm build\` を走らせたか）: ${error}`,

@@ -1,8 +1,6 @@
 // `extractJobBlock` / `extractJobIf` / `extractPullRequestTypes` / `isInsideYamlComment` は共有しない: 要らない側まで共有すると、片方の都合で他方が壊れる依存を作るため。
-// `buildJobToWorkflowFiles` は配列で返す: 同じジョブ名が2つの workflow に在る状態を例外で落とさず値として表し、呼び出し側に委ねるため。
 
-import { readFileSync, readdirSync } from 'node:fs';
-import path from 'node:path';
+import { readdirSync } from 'node:fs';
 
 export function listWorkflowFiles(workflowsDir) {
   return readdirSync(workflowsDir)
@@ -19,17 +17,4 @@ export function extractJobsSection(workflowYamlText) {
 
 export function extractJobNames(jobsSection) {
   return [...jobsSection.matchAll(/^ {2}([A-Za-z0-9_-]+):/gm)].map((m) => m[1]);
-}
-
-export function buildJobToWorkflowFiles(workflowsDir) {
-  const map = new Map();
-  for (const file of listWorkflowFiles(workflowsDir)) {
-    const text = readFileSync(path.join(workflowsDir, file), 'utf8');
-    const section = extractJobsSection(text);
-    for (const name of extractJobNames(section)) {
-      const existing = map.get(name) ?? [];
-      map.set(name, [...existing, file]);
-    }
-  }
-  return map;
 }

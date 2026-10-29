@@ -6,19 +6,12 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { BUDGET_HISTORY, judgeAgentsMdSize } from './check-agents-md-size-core.mjs';
+import { log, logError } from './cli-log.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 const AGENTS_MD_PATH = join(ROOT, 'AGENTS.md');
 const SKILLS_DIR = join(ROOT, '.claude', 'skills');
 const ISSUE_URL = 'https://github.com/takecchi/alteroid/issues/1192';
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
-}
 
 function formatBytes(n) {
   return n.toLocaleString('en-US') + ' B';

@@ -8,16 +8,9 @@ import { pathToFileURL } from 'node:url';
 
 import { compareVerifiedHead, formatVerdict } from './check-verified-head-core.mjs';
 import { recordPathFor } from './verify-core.mjs';
+import { log, logError } from './cli-log.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
-}
 
 function parseArgs(argv) {
   const positional = argv.find((a) => !a.startsWith('-'));

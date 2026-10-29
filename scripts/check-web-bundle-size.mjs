@@ -2,7 +2,7 @@
 // 閾値を単一チャンクと総量の2本立てにする: 事故の形が1ルートだけの桁違いの膨張で、総量だけだと1本の暴走が埋もれ、単一だけだとじわじわの増加を取り逃すため。
 // 落ちたときは超過したチャンク・全チャンクの一覧・使用率・「閾値を上げる前に原因を特定すること」を出す: 「予算超過」だけだと原因を見ずに閾値を上げて通してしまうため。
 
-import { readdirSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
@@ -11,23 +11,11 @@ import {
   SINGLE_CHUNK_MAX_BYTES,
   TOTAL_MAX_BYTES,
 } from './check-web-bundle-size-core.mjs';
+import { log, logError } from './cli-log.mjs';
+import { listFilesWithExt } from './list-files-with-ext.mjs';
 
 const ASSETS_DIR = join(import.meta.dirname, '..', 'apps', 'web', 'build', 'client', 'assets');
 const ISSUE_URL = 'https://github.com/takecchi/alteroid/issues/335';
-
-function listJsFiles(dir) {
-  return readdirSync(dir)
-    .map((name) => join(dir, name))
-    .filter((path) => statSync(path).isFile() && path.endsWith('.js'));
-}
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
-}
 
 function formatBytes(n) {
   return n.toLocaleString('en-US') + ' B';
@@ -44,7 +32,7 @@ function basename(path) {
 function main() {
   let paths;
   try {
-    paths = listJsFiles(ASSETS_DIR);
+    paths = listFilesWithExt(ASSETS_DIR, '.js');
   } catch (error) {
     logError(
       `check-web-bundle-size: ${ASSETS_DIR} を読めない（先に \`pnpm build\` を走らせたか）: ${error}`,

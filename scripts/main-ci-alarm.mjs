@@ -17,14 +17,7 @@ import {
   findOpenAlarmIssue,
   shouldAlarm,
 } from './main-ci-alarm-core.mjs';
-
-function log(text) {
-  process.stdout.write(text + '\n');
-}
-
-function logError(text) {
-  process.stderr.write(text + '\n');
-}
+import { log, logError } from './cli-log.mjs';
 
 function parseArgs(argv) {
   const out = {};
