@@ -566,6 +566,9 @@ export interface RunnerHostOptions {
   spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
   // 委譲の CLI を `<この実行ファイル> -s --` の子として起こす（tini の絶対パス。#4494）。無ければ CLI を直に起こす: tini の無い手元の構成でも動かすため
   delegationSubreaper?: string;
+  // 終わって（CLI が全部終わり、done・待ち無し・背景処理無し）これだけ経った担当の CLI の木を、回収が CLI の枝だけ撃つ側へ回す期限（ms。#5157）。
+  // 既定で有効にしない: 引き取り手を挟まない構成には絞りが無く、撃つと担当の切り離したサーバーまで木ごと撃つため。試験や同一プロセスの `runner-local` は渡さない
+  doneTreeReapAfterMs?: number;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
   handOverMcpConfigDirFn?: HandOverResumeConfigDir;
   // 委譲の CLI の MCP 設定を置く親と、その掃き（`scratchSweep` の周期）の親。既定は `tmpdir()`。試験が本物の /tmp に触れないための口
@@ -688,6 +691,7 @@ export interface RunnerHost {
   // 溜まりうるのは、切り離したサーバーを resume のたびに新しく起こす担当。名簿に居る間は残るので、#5159 の内訳（unrecognisedBy.ownerListed）と runner_list の pids で見張る。
   // ownerListed は観測の内訳用（#5157）: 持ち主が名簿に居る（または鍵の付け替えの戻り待ち）ので knownTerminated に入れていない CLI の pid。撃つ判定には使わない
   // abandonedOwnerListed は knownTerminated の部分集合（#5162）: 鍵の付け替えの畳みで背景処理を畳んだ（abandonTree）か failed / lost で閉じた（#5168）pid のうち、持ち主がまだ名簿に居る（または戻り待ち）もの。回収は CLI の枝だけを撃つ
+  // 例外として、終わって久しい done の担当（CLI が全部終わって doneTreeReapAfterMs 以上、待ち・背景処理無し）の pid も ownerListed から abandonedOwnerListed へ回す（#5157）。引き取り手を挟む構成だけ: 挟まないと絞りが効かず木を丸ごと撃つ。resume で CLI が起きれば守る側へ戻る
   delegationSessionPids(): {
     live: ReadonlySet<number>;
     knownTerminated: ReadonlySet<number>;
@@ -856,6 +860,8 @@ class Host implements RunnerHost {
   // `knownTerminated` を固定の集合として持たない: resume で同じ `managerId` が戻っても古い pid が「終端済み」のままになるため
   readonly #liveDelegationPids = new Set<number>();
   readonly #pidOwnerManagerId = new Map<number, string>();
+  // CLI の pid が終わった時刻（ms）。担当が done になって久しいかを見る材料（#5157）。所有者の記録と同じ上限・同じ使い回しで忘れる
+  readonly #delegationPidExitedAt = new Map<number, number>();
   // 上限で忘れた件数の累計（runner を起こしてから。pid の再利用による付け替えは忘れたに数えない）
   #pidOwnerForgottenTotal = 0;
   // failed / lost / abandonTree で閉じたセッションが起こした pid: 同じ `managerId` を resume しても撃つ側に残す（落ちた CLI の木が pid を占め続けるため。#2352・#1334）。
@@ -867,6 +873,7 @@ class Host implements RunnerHost {
   readonly #spawnAgentProcessFn:
     ((options: SpawnAgentProcessOptions) => DelegationProcessHandle) | undefined;
   readonly #delegationSubreaper: string | undefined;
+  readonly #doneTreeReapAfterMs: number | undefined;
   readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir | undefined;
   readonly #handOverMcpConfigDirFn: HandOverResumeConfigDir | undefined;
   readonly #mcpConfigTmpRoot: string;
@@ -934,6 +941,7 @@ class Host implements RunnerHost {
     this.#enforceLease = options.enforceLease ?? false;
     this.#spawnAgentProcessFn = options.spawnAgentProcessFn;
     this.#delegationSubreaper = options.delegationSubreaper;
+    this.#doneTreeReapAfterMs = options.doneTreeReapAfterMs;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn;
     this.#handOverMcpConfigDirFn = options.handOverMcpConfigDirFn;
     this.#mcpConfigTmpRoot = options.mcpConfigTmpRoot ?? tmpdir();
@@ -1168,12 +1176,37 @@ class Host implements RunnerHost {
     const ownerListed = new Set<number>();
     const abandonedOwnerListed = new Set<number>();
     const now = Date.now();
+    const doneOwnerCache = new Map<string, boolean>();
+    const liveOwners = new Set<string>();
+    for (const pid of this.#liveDelegationPids) {
+      const owner = this.#pidOwnerManagerId.get(pid);
+      if (owner !== undefined) liveOwners.add(owner);
+    }
+    const lastExitedAt = new Map<string, number>();
+    for (const [pid, exitedAt] of this.#delegationPidExitedAt) {
+      const owner = this.#pidOwnerManagerId.get(pid);
+      if (owner === undefined) continue;
+      lastExitedAt.set(owner, Math.max(lastExitedAt.get(owner) ?? exitedAt, exitedAt));
+    }
+    const ownerDoneLongAgo = (managerId: string): boolean => {
+      const cached = doneOwnerCache.get(managerId);
+      if (cached !== undefined) return cached;
+      const result = this.#doneOwnerReapable(managerId, now, liveOwners, lastExitedAt);
+      doneOwnerCache.set(managerId, result);
+      return result;
+    };
     for (const [pid, managerId] of this.#pidOwnerManagerId) {
       if (this.#liveDelegationPids.has(pid)) continue;
       const ownerIsListed = this.#sessions.has(managerId) || this.#awaitingReturn(managerId, now);
       // failed / lost / abandonTree で閉じた CLI の pid は、同じ managerId が戻っていても ownerListed へ移さない: 落ちた CLI の木（CLI の枝）を守ると resume のたびに pid が溜まるため（#4433）
       if (ownerIsListed && !this.#abandonedDelegationPids.has(pid)) {
-        ownerListed.add(pid);
+        // 終わって久しい done の担当の CLI の木は守らない（#5157）: done の担当が名簿に残る限り過去の CLI の木が溜まるため。撃つのは CLI の枝だけ（下の abandonedOwnerListed と同じ絞り）
+        if (!ownerDoneLongAgo(managerId)) {
+          ownerListed.add(pid);
+          continue;
+        }
+        abandonedOwnerListed.add(pid);
+        knownTerminated.add(pid);
         continue;
       }
       // 持ち主が名簿に居る間は knownTerminated に残したまま `abandonedOwnerListed` にも入れる（#5162・#5168）:
@@ -1188,6 +1221,29 @@ class Host implements RunnerHost {
       ownerListed,
       abandonedOwnerListed,
     };
+  }
+
+  // 引き取り手を挟まない構成には絞りが無く、撃つと木を丸ごと撃つ（担当の切り離したサーバーまで）ので、決して回さない。
+  // 状態が読めない・時刻の記録が無いものは守る側に倒す
+  #doneOwnerReapable(
+    managerId: string,
+    now: number,
+    liveOwners: ReadonlySet<string>,
+    lastExitedAt: ReadonlyMap<string, number>,
+  ): boolean {
+    const afterMs = this.#doneTreeReapAfterMs;
+    if (afterMs === undefined || this.#delegationSubreaper === undefined) return false;
+    const session = this.#sessions.get(managerId);
+    if (session === undefined || liveOwners.has(managerId)) return false;
+    const exitedAt = lastExitedAt.get(managerId);
+    if (exitedAt === undefined || now - exitedAt < afterMs) return false;
+    const state = session.state();
+    return (
+      state.status === 'done' &&
+      state.waiting.length === 0 &&
+      (state.liveBackgroundTasks ?? 0) === 0 &&
+      (state.liveBackgroundPeers ?? 0) === 0
+    );
   }
 
   // 鍵の付け替えの畳み（`stop(…, { keepPeers: true })`）と failed / lost の閉じは終端ではない: 名簿から消えてから resume で戻るまでの窓に走査が当たると、
@@ -1209,6 +1265,8 @@ class Host implements RunnerHost {
     this.#pidOwnerManagerId.set(pid, managerId);
     // 使い回された pid は新しい CLI のもの: 残すと生きている新しい CLI の木を撃つ側へ回すため
     this.#abandonedDelegationPids.delete(pid);
+    // 終了時刻も使い回しで捨てる: 古い終了時刻が新しい CLI のものとして残ると、生きた木の期限を誤って数えるため
+    this.#delegationPidExitedAt.delete(pid);
     while (this.#pidOwnerManagerId.size > PID_OWNER_MANAGER_ID_CAP) {
       const oldestPid = this.#pidOwnerManagerId.keys().next().value;
       if (oldestPid === undefined) break;
@@ -1216,11 +1274,14 @@ class Host implements RunnerHost {
       this.#pidOwnerForgottenTotal += 1;
       // 所有者を忘れた pid は覚えない: 集合が際限なく育つため
       this.#abandonedDelegationPids.delete(oldestPid);
+      this.#delegationPidExitedAt.delete(oldestPid);
     }
   }
 
   #noteDelegationProcessExited(pid: number): void {
     this.#liveDelegationPids.delete(pid);
+    // 所有者を忘れた pid は記録しない: 上限で忘れた後に exit が来ても `#delegationPidExitedAt` が際限なく育たないため
+    if (this.#pidOwnerManagerId.has(pid)) this.#delegationPidExitedAt.set(pid, Date.now());
     // 所有者の記録（`#pidOwnerManagerId`）を消さない: 後で委譲が本当に終端したとき、この pid を `knownTerminated` へ回す手がかりが無くなるため
   }
 

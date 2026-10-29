@@ -1240,3 +1240,436 @@ describe('委譲の観測の内訳の材料（#5157。撃つ判定の集合は�
     await host.shutdown();
   });
 });
+
+// done まで進められ、背景処理と確認待ちも作れる偽の SDK
+interface ControllableSession {
+  options: Options;
+  finish(): Promise<void>;
+  setBackgroundTasks(count: number): Promise<void>;
+  ask(): void;
+}
+
+function doneCapableSdk(sessions: ControllableSession[]): typeof sdkQuery {
+  return ((params: { prompt: unknown; options?: Options }) => {
+    const queue: SDKMessage[] = [];
+    let wake: (() => void) | null = null;
+    let closed = false;
+    const push = (message: SDKMessage): void => {
+      queue.push(message);
+      wake?.();
+    };
+    const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+    sessions.push({
+      options: params.options ?? {},
+      async finish() {
+        push({
+          type: 'result',
+          subtype: 'success',
+          result: '済んだ',
+          session_id: 'sess-fake',
+          uuid: `uuid-result-${String(Math.random())}`,
+        } as unknown as SDKMessage);
+        await settle();
+      },
+      async setBackgroundTasks(count) {
+        push({
+          type: 'system',
+          subtype: 'background_tasks_changed',
+          tasks: Array.from({ length: count }, (_, i) => ({
+            task_id: `bg-${String(i)}`,
+            task_type: 'local_bash',
+            description: '',
+          })),
+          session_id: 'sess-fake',
+          uuid: `uuid-bg-${String(Math.random())}`,
+        } as unknown as SDKMessage);
+        await settle();
+      },
+      ask() {
+        // await しない: 誰も答えないので、待つと waiting_human のままになる
+        void params.options?.canUseTool?.('Bash', { command: 'echo hi' }, {
+          signal: new AbortController().signal,
+          toolUseID: `tool-${String(Math.random())}`,
+          requestId: `req-${String(Math.random())}`,
+        } as never);
+      },
+    });
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-fake',
+        uuid: 'uuid-init',
+      } as unknown as SDKMessage;
+      void (async () => {
+        for await (const message of params.prompt as AsyncIterable<unknown>) void message;
+      })();
+      for (;;) {
+        const next = queue.shift();
+        if (next !== undefined) {
+          yield next;
+          continue;
+        }
+        if (closed) return;
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+        wake = null;
+      }
+    }
+    return Object.assign(generate(), {
+      close: () => {
+        closed = true;
+        wake?.();
+      },
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof sdkQuery;
+}
+
+describe('終わって久しい done の担当の CLI の木を、CLI の枝だけ撃つ側へ回す（#5157。doneTreeReapAfterMs）', () => {
+  const AFTER_MS = 6 * 60 * 60_000;
+  const TINI = '/usr/bin/tini';
+  const T0 = new Date('2026-10-20T21:00:00Z');
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  interface Rig {
+    host: RunnerHost;
+    session: ControllableSession;
+    processes: ReturnType<typeof fakeDelegationProcess>[];
+    spawn: () => void;
+    // CLI を起こして終わらせる（終了時刻は今）
+    runAndExitCli: () => void;
+  }
+
+  async function rig(
+    options: { doneTreeReapAfterMs?: number | null; subreaper?: string | null } = {},
+  ): Promise<Rig> {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+    const sessions: ControllableSession[] = [];
+    const processes: ReturnType<typeof fakeDelegationProcess>[] = [];
+    let nextPid = 555;
+    const afterMs =
+      options.doneTreeReapAfterMs === undefined ? AFTER_MS : options.doneTreeReapAfterMs;
+    const subreaper = options.subreaper === undefined ? TINI : options.subreaper;
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: doneCapableSdk(sessions),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnAgentProcessFn: () => {
+        const process = fakeDelegationProcess(nextPid);
+        nextPid += 1;
+        processes.push(process);
+        return process.handle;
+      },
+      ...(subreaper === null ? {} : { delegationSubreaper: subreaper }),
+      ...(afterMs === null ? {} : { doneTreeReapAfterMs: afterMs }),
+    });
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    await vi.waitFor(() => {
+      expect(sessions).toHaveLength(1);
+    });
+    const session = sessions[0] as ControllableSession;
+    const spawn = (): void => {
+      session.options.spawnClaudeCodeProcess?.({
+        command: 'claude',
+        args: [],
+        env: {},
+        signal: new AbortController().signal,
+      });
+    };
+    return {
+      host,
+      session,
+      processes,
+      spawn,
+      runAndExitCli: () => {
+        spawn();
+        (processes[processes.length - 1] as { emitExit: () => void }).emitExit();
+      },
+    };
+  }
+
+  const advance = (ms: number): void => {
+    vi.setSystemTime(new Date(Date.now() + ms));
+  };
+
+  async function makeDone(r: Rig): Promise<void> {
+    // `vi.waitFor` は偽の時計を進める（Date まで動く）ので、前後で今を戻す: 期限の境目を1ms 単位で測るため
+    const before = Date.now();
+    await r.session.finish();
+    await vi.waitFor(() => {
+      expect(r.host.list()[0]?.status).toBe('done');
+    });
+    vi.setSystemTime(before);
+  }
+
+  const reaped = { knownTerminated: new Set([555]), abandonedOwnerListed: new Set([555]) };
+
+  function reapedSets(host: RunnerHost): {
+    knownTerminated: ReadonlySet<number>;
+    abandonedOwnerListed: ReadonlySet<number>;
+    ownerListed: ReadonlySet<number>;
+  } {
+    const { knownTerminated, abandonedOwnerListed, ownerListed } = host.delegationSessionPids();
+    return { knownTerminated, abandonedOwnerListed, ownerListed };
+  }
+
+  it('⭐ tini 有り・名簿に居る・done・待ち無し・背景処理無し・CLI 全終了・期限以上前なら、abandonedOwnerListed と knownTerminated に入る', async () => {
+    const r = await rig();
+    r.runAndExitCli();
+    await makeDone(r);
+    advance(AFTER_MS);
+
+    expect(reapedSets(r.host)).toEqual({ ...reaped, ownerListed: new Set() });
+    await r.host.shutdown();
+  });
+
+  it('期限の1ms前は ownerListed のまま（守る）', async () => {
+    const r = await rig();
+    r.runAndExitCli();
+    await makeDone(r);
+    advance(AFTER_MS - 1);
+
+    expect(reapedSets(r.host)).toEqual({
+      knownTerminated: new Set(),
+      abandonedOwnerListed: new Set(),
+      ownerListed: new Set([555]),
+    });
+    await r.host.shutdown();
+  });
+
+  it('status が done でない（ターン中）なら期限が過ぎても ownerListed のまま', async () => {
+    const r = await rig();
+    r.runAndExitCli();
+    advance(AFTER_MS);
+
+    expect(r.host.list()[0]?.status).not.toBe('done');
+    expect(reapedSets(r.host).ownerListed).toEqual(new Set([555]));
+    expect(reapedSets(r.host).knownTerminated).toEqual(new Set());
+    await r.host.shutdown();
+  });
+
+  it('確認待ち（waiting）が在れば ownerListed のまま', async () => {
+    const r = await rig();
+    r.runAndExitCli();
+    r.session.ask();
+    await r.session.finish();
+    await vi.waitFor(() => {
+      expect(r.host.list()[0]?.waiting.length).toBe(1);
+    });
+    advance(AFTER_MS);
+
+    expect(reapedSets(r.host).ownerListed).toEqual(new Set([555]));
+    expect(reapedSets(r.host).knownTerminated).toEqual(new Set());
+    await r.host.shutdown();
+  });
+
+  it('背景処理（liveBackgroundTasks）が残っていれば、done でも ownerListed のまま', async () => {
+    const r = await rig();
+    r.runAndExitCli();
+    await r.session.setBackgroundTasks(1);
+    await makeDone(r);
+    expect(r.host.list()[0]?.liveBackgroundTasks).toBe(1);
+    advance(AFTER_MS);
+
+    expect(reapedSets(r.host).ownerListed).toEqual(new Set([555]));
+    expect(reapedSets(r.host).knownTerminated).toEqual(new Set());
+    await r.host.shutdown();
+  });
+
+  it('担当のどれかの CLI が生きていれば、古い CLI の pid も ownerListed のまま（live の CLI は live）', async () => {
+    const r = await rig();
+    r.runAndExitCli();
+    await makeDone(r);
+    advance(AFTER_MS);
+    r.spawn();
+
+    const pids = r.host.delegationSessionPids();
+    expect(pids.live).toEqual(new Set([556]));
+    expect(pids.ownerListed).toEqual(new Set([555]));
+    expect(pids.knownTerminated).toEqual(new Set());
+    await r.host.shutdown();
+  });
+
+  it('tini を挟まない構成（delegationSubreaper 無し）は、期限が過ぎても決して回さない（絞りが無く木を丸ごと撃つため）', async () => {
+    const r = await rig({ subreaper: null });
+    r.runAndExitCli();
+    await makeDone(r);
+    advance(AFTER_MS * 100);
+
+    expect(reapedSets(r.host).ownerListed).toEqual(new Set([555]));
+    expect(reapedSets(r.host).knownTerminated).toEqual(new Set());
+    expect(reapedSets(r.host).abandonedOwnerListed).toEqual(new Set());
+    await r.host.shutdown();
+  });
+
+  it('期限を渡さない（無効。off と同じ）なら回さない', async () => {
+    const r = await rig({ doneTreeReapAfterMs: null });
+    r.runAndExitCli();
+    await makeDone(r);
+    advance(AFTER_MS * 100);
+
+    expect(reapedSets(r.host).ownerListed).toEqual(new Set([555]));
+    expect(reapedSets(r.host).knownTerminated).toEqual(new Set());
+    await r.host.shutdown();
+  });
+
+  it('持ち主が名簿に居ない（stop 済み）担当は、この経路ではなく今までどおり knownTerminated（ownerListed に残らない）', async () => {
+    const r = await rig();
+    r.runAndExitCli();
+    await makeDone(r);
+    advance(AFTER_MS);
+    await r.host.stop('mgr-1');
+
+    expect(reapedSets(r.host)).toEqual({
+      knownTerminated: new Set([555]),
+      abandonedOwnerListed: new Set(),
+      ownerListed: new Set(),
+    });
+    await r.host.shutdown();
+  });
+
+  it('⭐ 回された後に新しい CLI が起きる（resume 相当）と守る側へ戻り、その CLI が終わっても期限は終了時刻から数え直す', async () => {
+    const r = await rig();
+    r.runAndExitCli();
+    await makeDone(r);
+    advance(AFTER_MS);
+    expect(reapedSets(r.host).abandonedOwnerListed).toEqual(new Set([555]));
+
+    r.spawn();
+    expect(r.host.delegationSessionPids().live).toEqual(new Set([556]));
+    expect(reapedSets(r.host)).toEqual({
+      knownTerminated: new Set(),
+      abandonedOwnerListed: new Set(),
+      ownerListed: new Set([555]),
+    });
+
+    (r.processes[1] as { emitExit: () => void }).emitExit();
+    advance(AFTER_MS - 1);
+    expect(reapedSets(r.host).ownerListed).toEqual(new Set([555, 556]));
+    expect(reapedSets(r.host).knownTerminated).toEqual(new Set());
+
+    advance(1);
+    expect(reapedSets(r.host).knownTerminated).toEqual(new Set([555, 556]));
+    expect(reapedSets(r.host).abandonedOwnerListed).toEqual(new Set([555, 556]));
+    await r.host.shutdown();
+  });
+
+  it('担当の「最後の終了時刻」は pid ごとの終了時刻の最大: 新しい CLI が最近終わっていれば、古い pid も期限前は守る', async () => {
+    const r = await rig();
+    r.runAndExitCli();
+    advance(AFTER_MS);
+    r.runAndExitCli();
+    await makeDone(r);
+
+    expect(reapedSets(r.host).ownerListed).toEqual(new Set([555, 556]));
+    expect(reapedSets(r.host).knownTerminated).toEqual(new Set());
+    await r.host.shutdown();
+  });
+
+  it('pid の使い回し: 同じ pid の新しい CLI が起きると古い終了時刻は捨てられ、終わった時刻から数え直す', async () => {
+    const sessions: ControllableSession[] = [];
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+    const fake = [fakeDelegationProcess(777), fakeDelegationProcess(777)];
+    let call = 0;
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: doneCapableSdk(sessions),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnAgentProcessFn: () => (fake[call++] as (typeof fake)[number]).handle,
+      delegationSubreaper: TINI,
+      doneTreeReapAfterMs: AFTER_MS,
+    });
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    await vi.waitFor(() => {
+      expect(sessions).toHaveLength(1);
+    });
+    const session = sessions[0] as ControllableSession;
+    const spawn = (): void => {
+      session.options.spawnClaudeCodeProcess?.({
+        command: 'claude',
+        args: [],
+        env: {},
+        signal: new AbortController().signal,
+      });
+    };
+    spawn();
+    (fake[0] as (typeof fake)[number]).emitExit();
+    await session.finish();
+    await vi.waitFor(() => {
+      expect(host.list()[0]?.status).toBe('done');
+    });
+    advance(AFTER_MS);
+    expect(host.delegationSessionPids().abandonedOwnerListed).toEqual(new Set([777]));
+
+    // 同じ pid の新しい CLI（古い終了時刻が残っていれば、終わった直後に期限切れとして回ってしまう）
+    spawn();
+    (fake[1] as (typeof fake)[number]).emitExit();
+    expect(host.delegationSessionPids().abandonedOwnerListed).toEqual(new Set());
+    expect(host.delegationSessionPids().ownerListed).toEqual(new Set([777]));
+    await host.shutdown();
+  });
+
+  it('上限（4096）で所有者を忘れた pid は、終了時刻も含めてどの集合にも出ない。残りは期限後に回る', async () => {
+    const sessions: ControllableSession[] = [];
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+    let next = 10_000;
+    const exits: (() => void)[] = [];
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: doneCapableSdk(sessions),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnAgentProcessFn: () => {
+        next += 1;
+        const process = fakeDelegationProcess(next);
+        exits.push(process.emitExit);
+        return process.handle;
+      },
+      delegationSubreaper: TINI,
+      doneTreeReapAfterMs: AFTER_MS,
+    });
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    await vi.waitFor(() => {
+      expect(sessions).toHaveLength(1);
+    });
+    const session = sessions[0] as ControllableSession;
+    for (let i = 0; i < 4097; i += 1) {
+      session.options.spawnClaudeCodeProcess?.({
+        command: 'claude',
+        args: [],
+        env: {},
+        signal: new AbortController().signal,
+      });
+    }
+    for (const emitExit of exits) emitExit();
+    await session.finish();
+    await vi.waitFor(() => {
+      expect(host.list()[0]?.status).toBe('done');
+    });
+    advance(AFTER_MS);
+
+    const { abandonedOwnerListed, knownTerminated } = host.delegationSessionPids();
+    expect(host.delegationPidOwnerRecords().forgottenTotal).toBe(1);
+    expect(abandonedOwnerListed.has(10_001)).toBe(false);
+    expect(knownTerminated.has(10_001)).toBe(false);
+    expect(abandonedOwnerListed.size).toBe(4096);
+    expect(knownTerminated.size).toBe(4096);
+    await host.shutdown();
+  });
+});

@@ -11,6 +11,8 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import {
   childUserOf,
+  DONE_TREE_REAP_AFTER_MINUTES_ENV_KEY,
+  doneTreeReapAfterMsOf,
   RECLAIM_ENV_KEY,
   reclaimScanOf,
   reportRetiredLayerProviderEnv,
@@ -212,6 +214,31 @@ describe('reclaimScanOf（孤児の観測を切る口）', () => {
   it('降ろす UID が無い器では観測しない（取れない軸に数を作らない）', () => {
     expect(reclaimScanOf({}, undefined)).toBeUndefined();
   });
+});
+
+describe('doneTreeReapAfterMsOf（終わって久しい done の担当の木を撃つ期限。#5157）', () => {
+  const key = DONE_TREE_REAP_AFTER_MINUTES_ENV_KEY;
+
+  it('置かない・空文字は既定の6時間', () => {
+    expect(doneTreeReapAfterMsOf({})).toBe(6 * 60 * 60_000);
+    expect(doneTreeReapAfterMsOf({ [key]: '' })).toBe(6 * 60 * 60_000);
+  });
+
+  it('off は無効（undefined）', () => {
+    expect(doneTreeReapAfterMsOf({ [key]: 'off' })).toBeUndefined();
+  });
+
+  it('正の整数は分として ms に直す', () => {
+    expect(doneTreeReapAfterMsOf({ [key]: '1' })).toBe(60_000);
+    expect(doneTreeReapAfterMsOf({ [key]: '90' })).toBe(90 * 60_000);
+  });
+
+  it.each(['0', '-5', '1.5', '6h', 'Off', 'abc', ' 10', '1e3', '99999999999999999999'])(
+    '正の整数でも off でもない値（%s）は黙って既定へ倒さず落とす',
+    (value) => {
+      expect(() => doneTreeReapAfterMsOf({ [key]: value })).toThrow(/知らない値/);
+    },
+  );
 });
 
 describe('withTerminatedReclaimSessions（観測専用の判定材料を足す）', () => {

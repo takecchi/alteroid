@@ -319,6 +319,28 @@ export function reclaimScanOf(
   return { childUid: childUser.uid, ...(raw === 'reclaim' && reap !== undefined ? { reap } : {}) };
 }
 
+export const DONE_TREE_REAP_AFTER_MINUTES_ENV_KEY = 'ALTEROID_RUNNER_DONE_TREE_REAP_AFTER_MINUTES';
+
+// 6時間: マネージャーの畳み候補（`MANAGER_FOLD_CANDIDATE_IDLE_THRESHOLD_MS`）と同じ長さの「放置された」
+const DEFAULT_DONE_TREE_REAP_AFTER_MINUTES = 360;
+
+// 終わって久しい done の担当の CLI の木を回収が撃ち始めるまでの期限（ms。#5157）。`off`（`undefined`）は撃たない旧来の挙動。
+// 知らない値は既定へ倒さず落とす: `0` や `6h` と書いて旧来のまま溜まり続けても、「置いた」と「効いている」が食い違ったまま気づけないため。
+export function doneTreeReapAfterMsOf(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const raw = envValue(env, DONE_TREE_REAP_AFTER_MINUTES_ENV_KEY);
+  if (raw === undefined) return DEFAULT_DONE_TREE_REAP_AFTER_MINUTES * 60_000;
+  if (raw === 'off') return undefined;
+  const minutes = Number(raw);
+  if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(minutes)) {
+    throw new Error(
+      `${DONE_TREE_REAP_AFTER_MINUTES_ENV_KEY} に知らない値が置かれている: ${JSON.stringify(raw)}` +
+        '（この版が受け付けるのは正の整数（分）と off だけである。' +
+        '黙って既定へ倒れると「置いた」と「効いている」が食い違ったまま残る）',
+    );
+  }
+  return minutes * 60_000;
+}
+
 // 委譲の CLI の引き取り手（`tini -s`）を PATH から探す（#4494）。子の UID へ降ろさない構成では使わない: 委譲を自前で起こす経路（`spawnProcess`）がそもそも無いため。
 // 見つからなければ `undefined`（CLI を直に起こす）。起動ログに出すので黙っては倒れない。
 export function delegationSubreaperOf(
@@ -437,6 +459,8 @@ export async function main(): Promise<void> {
   // こちらは資格を待たずに開く: どの器のマネージャーにも出す道具のため
   const managerToolsHost = await openManagerToolsSocket(childUser);
   const delegationSubreaper = delegationSubreaperOf(process.env, childUser);
+  // 起動時に読む: 不正な値は走り出してから気づかせず、ここで落とす
+  const doneTreeReapAfterMs = doneTreeReapAfterMsOf(process.env);
   const outbox = new Outbox();
   const host = createRunnerHost({
     runnerId,
@@ -467,6 +491,7 @@ export async function main(): Promise<void> {
     // 起動時に、前の runner が落ちて残した委譲の MCP 設定（資格入り）を掃く（#5186）。/tmp を他の runner と共有しないこの器だけが有効にする
     sweepMcpConfigOnStart: true,
     ...(delegationSubreaper === undefined ? {} : { delegationSubreaper }),
+    ...(doneTreeReapAfterMs === undefined ? {} : { doneTreeReapAfterMs }),
     // 器の pids が上限に近いとき、走っている担当に知らせる（runner-pids-pressure.ts）。cgroup が読めない器では `undefined` で、何も添えない
     readPidsFn: async () => (await readExecutionResources()).pids,
   });
