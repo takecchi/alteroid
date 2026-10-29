@@ -75,7 +75,7 @@ export function taskKeepChangeEntry(taskId: string, task: Task, keep: boolean): 
     decision: `task の「続く」の印を${keep ? '立てた' : '外した'}（${taskId}: ${task.title}）`,
     grounds: keep
       ? '自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）'
-      : '自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の conversation_post と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）',
+      : '自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）',
   };
 }
 

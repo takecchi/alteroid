@@ -122,7 +122,7 @@ describe('selectTasksToAutoClose: 何を閉じ、何を閉じないか', () => {
     expect(
       selectTasksToAutoClose(
         tasks,
-        trace({ 'conv-1': 'turn_reply', 'conv-2': 'conversation_post' }, [], { asked: ['conv-1'] }),
+        trace({ 'conv-1': 'turn_reply', 'conv-2': 'task_say' }, [], { asked: ['conv-1'] }),
       ).map((t) => t.id),
     ).toEqual(['b']);
   });
@@ -136,12 +136,12 @@ describe('selectTasksToAutoClose: 何を閉じ、何を閉じないか', () => {
     ).toEqual(['read']);
   });
 
-  it('conversation_post: 受信箱にまだ残っている合図の task を除く', () => {
+  it('task_say: 受信箱にまだ残っている合図の task を除く', () => {
     const tasks = [task('done-reading'), task('still-in-inbox')];
     expect(
       selectTasksToAutoClose(
         tasks,
-        trace({ 'conv-1': 'conversation_post' }, [], { unread: ['still-in-inbox'] }),
+        trace({ 'conv-1': 'task_say' }, [], { unread: ['still-in-inbox'] }),
       ).map((t) => t.id),
     ).toEqual(['done-reading']);
   });
@@ -181,15 +181,15 @@ describe('autoCloseRepliedTasks: 閉じて日誌に残す', () => {
     expect(decisions[0]?.grounds).toContain('そのターン自身の返答');
   });
 
-  it('返答の経路（conversation_post）を日誌に書き分ける', async () => {
+  it('返答の経路（task_say）を日誌に書き分ける', async () => {
     const stores = createMemoryStores();
     await stores.tasks.add(task('a'));
-    await autoCloseRepliedTasks(stores, trace({ 'conv-1': 'conversation_post' }), NOW);
+    await autoCloseRepliedTasks(stores, trace({ 'conv-1': 'task_say' }), NOW);
     const [entry] = (await stores.journal.list({ types: ['decision'] })) as Extract<
       JournalEntry,
       { type: 'decision' }
     >[];
-    expect(entry?.grounds).toContain('conversation_post');
+    expect(entry?.grounds).toContain('task_say');
   });
 
   it('返答が無ければ何も読まず何も書かない', async () => {

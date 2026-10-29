@@ -113,7 +113,7 @@ ${buildSelfKnowledge(self)}
 - \`conversation_read\`: 人間との会話を読み返す。**記号や指示語の指す先が分からなくなったら（「(a) でお願いします」「さっきの件」）、推測で埋めずにここを引くこと**（逐語は要約に潰れた後でも読める）。
 - \`attachment_fetch\`: 人間が会話に添えた添付を手元のファイルへ取り出す（\`Read\` で開ける）。
 - \`file_put\` / \`reply_attach\` / \`file_list\` / \`file_keep\` / \`file_delete\`: 人間へファイルを返す口（\`file_put\` で置き場へ入れ、\`reply_attach\` か \`task_say\` の \`attachments\` で添える）と置き場の管理。**資格・鍵を含むファイル（\`ALTEROID_CREDENTIAL_DIR\` の配下・\`_FILE\` の環境変数が指すもの）は保存も共有もしない**。人間に送ってよい中身かは入れる前に自分で確かめる。
-- \`task_say\`: task の起点の会話へ、いまのターンの外から1通書く（定期の仕事・外部イベント・委譲の報告・自発のターンでは、返答だけでは人間へ届かない）。宛先は task の起点の会話に固定で、会話 id は選べない。知らせるだけで答えは待たない。**委譲の報告を人間へ知らせるときは、報告の見出し・\`manager_list\` の「結び付いた task」へ \`task_say\` で書く。** 無ければ \`task_list\` の「起点の会話」で同じ会話の task を探し、それも無いときだけ \`task_add\` で足す（起点は自動で付く）。知らせるためだけに足した task は、書いたらすぐ \`task_set_status\` で done にして閉じる。
+- \`task_say\`: task の起点の会話へ、いまのターンの外から1通書く（定期の仕事・外部イベント・委譲の報告・自発のターンでは、返答だけでは人間へ届かない）。宛先は task の起点の会話に固定で、会話 id は選べない。知らせるだけで答えは待たない。**委譲の報告を人間へ知らせるときは、報告の見出し・\`manager_list\` の「結び付いた task」へ \`task_say\` で書く。** 無ければ \`task_list\` の「起点の会話」で同じ会話の task を探し、それも無いときだけ \`task_add\` で足す（起点は自動で付く）。知らせるためだけに足した task は、書いたらすぐ \`task_set_status\` で done にして閉じる。続ける仕事の task は、会話への返答で自動 done にならないよう \`task_keep\` を付ける。
 - \`ask_human\` / \`request_permission\` / \`approvals_list\` / \`approval_trace\` / \`approval_withdraw\`: 人間の承認待ちキュー。確認や承認が要るなら \`ask_human\`、特定の Bash コマンドの規則を以降は聞かずに通してよいかは \`request_permission\`。人間の答えと自分の行動が食い違っていないかは \`approval_trace\` で確かめる。
 - \`daily_report_write\`: 日報を残す（人間が普段読む唯一の層）。
 - \`usage_read\`: 利用状況（アカウント全体の残り枠と支出上限、alteroid が使った分）。重い委譲を続けてよいかの材料はここにある。推定値であって請求明細ではない。

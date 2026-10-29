@@ -7394,9 +7394,9 @@ class Clone implements CloneHost {
         if (conversationId !== undefined) this.#turnReplies.asked.add(conversationId);
       },
       postToConversation: (conversationId, text, attachments) => {
-        // 日誌へ書けた `conversation_post` だけがここへ来る（書けなければ呼ばれない）。自動 done の「返答」に数える
+        // 日誌へ書けた `task_say` だけがここへ来る（書けなければ呼ばれない）。自動 done の「返答」に数える
         if (!this.#turnReplies.replied.has(conversationId)) {
-          this.#turnReplies.replied.set(conversationId, 'conversation_post');
+          this.#turnReplies.replied.set(conversationId, 'task_say');
         }
         if (text.length > 0) this.#emit(conversationId, { type: 'text', text });
         if (attachments !== undefined && attachments.length > 0) {
@@ -9029,15 +9029,15 @@ class Clone implements CloneHost {
 
   /**
    * 返答したターンの終わりに、起点の会話がその返答の宛先である queued の人間の task を `done` にする（#5469 P5）。成功したターンの終わりだけで呼ぶ（失敗したターンの本文は返答ではない）。
-   * 「返答」に数えるもの: (1) 会話のあるターン自身が、その会話へ本文か添付を返した (2) `conversation_post` が日誌へ書けた宛先。
+   * 「返答」に数えるもの: (1) 会話のあるターン自身が、その会話へ本文か添付を返した (2) `task_say` が日誌へ書けた宛先。
    * 数えないもの: `ask_human`（問いであって返答でない。そのターンで問いを出した会話の task は閉じない）、機構が `#journal` へ直接書く「直近の人間の会話」への一行（安全分類器の拒否・畳み直しの通知）。
-   * 閉じるのは、返答が宛てた発言の task だけ（そのターンが読んだ発言の id。`conversation_post` と回答のターンは「受信箱にまだ残っていない」もの）。走っている委譲がある会話の task も閉じない。
+   * 閉じるのは、返答が宛てた発言の task だけ（そのターンが読んだ発言の id。`task_say` と回答のターンは「受信箱にまだ残っていない」もの）。走っている委譲がある会話の task も閉じない。
    * 閉じるかどうかの判定は `task-auto-done.ts` の `selectTasksToAutoClose` が持つ。投げない（閉じ損ねても返答は届いている。次の返答の終わりで拾う）。
    */
   async #autoCloseRepliedTasks(turn: Turn): Promise<void> {
     if (turn.kind !== 'normal') return;
     const replied = new Map(this.#turnReplies.replied);
-    // 経路が重なったら、そのターン自身の返答を名乗る（日誌の「どの返答か」）。`conversation_post` は自分の会話へは書けないので、重なるのは異常系だけ
+    // 経路が重なったら、そのターン自身の返答を名乗る（日誌の「どの返答か」）。`task_say` は自分の会話へは書けないので、重なるのは異常系だけ
     if (
       turn.conversationId !== null &&
       (turn.reply.trim().length > 0 || turn.replyAttachments.length > 0)
@@ -9608,9 +9608,17 @@ export const ORIGIN_NONE_GUIDE =
 export const ORIGIN_NONE_GUIDE_REF =
   '（会話の外で起こした委譲。知らせるなら task_add で足して task_say で書き、書いたら done にする）';
 
+/** 委譲が task に結び付いているときの案内（起点の会話の有無によらず同じ。task が宛先を持つ）。 */
+export const ORIGIN_TASK_GUIDE =
+  '（人間へ知らせるなら、結び付いた task へ `task_say` で書く。書いたら、知らせるだけの task は task_set_status で done にする）';
+export const ORIGIN_TASK_GUIDE_REF =
+  '（扱いは前に出した案内と同じ: 結び付いた task へ task_say で書き、知らせるだけの task は done にする）';
+
 /** 委譲が task に結び付いているときだけ出す1行（#5469 P3）。委譲が終わった task は判断待ち（needs_decision）に戻っているので、結果の扱いはその task の上で決める。 */
 function describeOriginTask(taskId: string | undefined): string {
-  return taskId === undefined ? '' : `\n結び付いた task: ${taskId}（task_list で読める）`;
+  return taskId === undefined
+    ? ''
+    : `\n結び付いた task: ${taskId}（task_say で書ける。task_list で読める）`;
 }
 
 export function describeManagerOrigin(
@@ -9621,11 +9629,19 @@ export function describeManagerOrigin(
     case 'conversation':
       return (
         `起点の会話: ${origin.conversationId}` +
-        fold('origin-conversation', ORIGIN_CONVERSATION_GUIDE, ORIGIN_CONVERSATION_GUIDE_REF) +
+        (origin.taskId === undefined
+          ? fold('origin-conversation', ORIGIN_CONVERSATION_GUIDE, ORIGIN_CONVERSATION_GUIDE_REF)
+          : fold('origin-task', ORIGIN_TASK_GUIDE, ORIGIN_TASK_GUIDE_REF)) +
         describeOriginTask(origin.taskId)
       );
     case 'none':
-      return `起点の会話: 無し${fold('origin-none', ORIGIN_NONE_GUIDE, ORIGIN_NONE_GUIDE_REF)}${describeOriginTask(origin.taskId)}`;
+      return (
+        '起点の会話: 無し' +
+        (origin.taskId === undefined
+          ? fold('origin-none', ORIGIN_NONE_GUIDE, ORIGIN_NONE_GUIDE_REF)
+          : fold('origin-task', ORIGIN_TASK_GUIDE, ORIGIN_TASK_GUIDE_REF)) +
+        describeOriginTask(origin.taskId)
+      );
     case 'missing':
       return '起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）';
     case 'unreadable':

@@ -59,7 +59,7 @@ import {
 import { isCronExpression } from './cron.js';
 import { isRunningJobStatus } from './job-status-running.js';
 import { journalWindowCrossesHorizon } from './journal-horizon.js';
-import { taskStatusForJob } from './task.js';
+import { isTaskClosed, taskStatusForJob } from './task.js';
 import { filterTranscriptLinesYielding } from './transcript-filter.js';
 import {
   TranscriptPageCache,
@@ -3178,13 +3178,15 @@ function describeJobOrigin(origins: JobOrigins, managerId: string): string {
   if (job === undefined) {
     return '  起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）';
   }
+  // 「結び付いた task へ」と出すのは taskId があるときだけ。無い委譲は task_list で探す・task_add で足す手順
+  const hint = job.taskId === undefined ? ORIGIN_HINT_NO_TASK_FULL : ORIGIN_HINT_FULL;
   const origin =
     job.conversationId === undefined
       ? '  起点の会話: 無し（会話の外で起こした委譲）'
-      : `  起点の会話: ${job.conversationId}${ORIGIN_HINT_FULL}`;
+      : `  起点の会話: ${job.conversationId}${hint}`;
   return job.taskId === undefined
     ? origin
-    : `${origin}\n  結び付いた task: ${job.taskId}（task_say で書ける）`;
+    : `${origin}\n  結び付いた task: ${job.taskId}（task_say で書ける。task_list で読める）`;
 }
 
 export function createCloneTools(context: ToolContext) {
@@ -6378,7 +6380,7 @@ export function createCloneTools(context: ToolContext) {
       [
         '順序と状態を持つ task を1件足す。起点は自分（self）として載る。',
         '起点の会話は、いまのターンの会話か、報告を読んでいる委譲の起点に自動で結ばれる。どちらも無ければ新しい会話ができる（task_say の宛先になる）。',
-        '知らせるためだけに足した task は、書いたら done にして閉じる。',
+        '知らせるためだけに足した task は、書いたら done にして閉じる。続ける仕事の task は、その会話への返答で器が自動で done にしないよう、task_keep で「続く」の印を付ける。',
         '置き場所を省くと既定の位置に入る（自分で足した件は末尾）。to で先頭・末尾・特定の task の前後を指せる。',
         '引き受けた仕事の台帳（commitment_open）とは別の器で、片方に足してももう片方には載らない。',
       ].join(' '),
@@ -9743,7 +9745,7 @@ export function createCloneTools(context: ToolContext) {
         '知らせるだけで、答えは待たない。確認や承認が要るなら ask_human を使うこと。',
         '人間へファイルを渡すなら、先に file_put で置き場へ入れ、その id を attachments に渡す（添付があれば text は空でもよい。どちらも空の発言は書かない）。',
         '添付の検査（存在・個数・合計の上限）に1つでも落ちたら、何も書かずに断る。',
-        '知らせるためだけに足した task は、書いたら done にして閉じる。',
+        '知らせるためだけに足した task は、書いたら done にして閉じる。続ける仕事の task は、書いた会話が返答に数えられて器が自動で done にしないよう、task_keep で「続く」の印を付ける（queued で印の無い task は、このターンの終わりに自動で done になりうる）。',
         '日誌には人間との往復（あなたの発言）として残る。',
       ].join(' '),
       {
@@ -9852,11 +9854,11 @@ export function createCloneTools(context: ToolContext) {
         else context.postToConversation?.(target, body, attached.refs);
         const withNote =
           attached.refs.length === 0 ? '' : `（添付 ${attached.refs.length} 件つき）`;
-        const stillOpen =
-          task.status === 'queued' || task.status === 'waiting' || task.status === 'needs_decision';
         return text(
           `task ${taskId} の起点の会話 ${target} へ書いた${withNote}（${entry.id}）。` +
-            (stillOpen ? '\n知らせるだけの task なら task_set_status で done にすること。' : ''),
+            (!isTaskClosed(task.status)
+              ? '\n知らせるだけの task なら task_set_status で done にすること。'
+              : ''),
         );
       },
     ),
@@ -11784,6 +11786,11 @@ function dedupeRestartAdvice(response: string): string {
 // 1応答の中の2行目以降も参照になる（`fold` は id ごとに最初の1回だけ全文を返す）
 const ORIGIN_HINT_FULL = '（報告を人間へ知らせるなら、結び付いた task へ task_say で書く）';
 const ORIGIN_HINT_REF = '（知らせるなら結び付いた task へ task_say）';
+// 委譲に task が結び付いていないとき
+const ORIGIN_HINT_NO_TASK_FULL =
+  '（報告を人間へ知らせるなら、この会話を起点にした task を task_list で探して task_say で書く。無ければ task_add で足す）';
+const ORIGIN_HINT_NO_TASK_REF =
+  '（知らせるなら task_list で探した task へ task_say。無ければ task_add）';
 const ORIGIN_LINE_PREFIX = '  起点の会話: ';
 const UNOBSERVED_NONE_LINE = `  ${describeReportState('none')}`;
 const UNOBSERVED_NONE_REF =
@@ -11805,6 +11812,16 @@ function foldRowPhrases(response: string, fold: FixedFold): string {
         return (
           line.slice(0, line.length - ORIGIN_HINT_FULL.length) +
           fold('manager-list:row-origin-hint', ORIGIN_HINT_FULL, ORIGIN_HINT_REF)
+        );
+      }
+      if (line.startsWith(ORIGIN_LINE_PREFIX) && line.endsWith(ORIGIN_HINT_NO_TASK_FULL)) {
+        return (
+          line.slice(0, line.length - ORIGIN_HINT_NO_TASK_FULL.length) +
+          fold(
+            'manager-list:row-origin-hint-no-task',
+            ORIGIN_HINT_NO_TASK_FULL,
+            ORIGIN_HINT_NO_TASK_REF,
+          )
         );
       }
       return line;

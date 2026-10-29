@@ -235,6 +235,8 @@ describe('道具: 仕事の会話（workConversationId）を委譲と承認へ�
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...job('mgr-hoge', 'conv-hoge'), taskId: 't-hoge' });
     await stores.jobs.putJob(job('mgr-cron'));
+    await stores.jobs.putJob(job('mgr-notask', 'conv-notask'));
+    await stores.jobs.putJob({ ...job('mgr-crontask'), taskId: 't-cron' });
     const summary = (managerId: string): ManagerSummary => ({
       managerId,
       status: 'done',
@@ -247,7 +249,7 @@ describe('道具: 仕事の会話（workConversationId）を委譲と承認へ�
     });
     const managers = {
       async list() {
-        return ['mgr-hoge', 'mgr-cron', 'mgr-ghost'].map(summary);
+        return ['mgr-hoge', 'mgr-cron', 'mgr-ghost', 'mgr-notask', 'mgr-crontask'].map(summary);
       },
       denials: () => [],
       runnerBacklog: () => [],
@@ -268,7 +270,15 @@ describe('道具: 仕事の会話（workConversationId）を委譲と承認へ�
       listing.slice(listing.indexOf(managerId)).split(/\n(?=\S)/u)[0] ?? '';
 
     expect(blockOf('mgr-hoge')).toContain('起点の会話: conv-hoge');
-    expect(blockOf('mgr-hoge')).toContain('結び付いた task: t-hoge（task_say で書ける）');
+    expect(blockOf('mgr-hoge')).toContain('結び付いた task: t-hoge（task_say で書ける。');
+    expect(blockOf('mgr-hoge')).toContain('結び付いた task へ task_say で書く');
+    // task が結び付いていない委譲の行は「結び付いた task へ」と言わず、task_list で探す・task_add の手順を出す
+    expect(blockOf('mgr-notask')).toContain('起点の会話: conv-notask');
+    expect(blockOf('mgr-notask')).not.toContain('結び付いた task');
+    expect(blockOf('mgr-notask')).toContain('task_list で探して task_say で書く');
+    // 起点の会話が無くても taskId があれば、結び付いた task の行を出す
+    expect(blockOf('mgr-crontask')).toContain('起点の会話: 無し');
+    expect(blockOf('mgr-crontask')).toContain('結び付いた task: t-cron（task_say で書ける。');
     expect(blockOf('mgr-cron')).not.toContain('結び付いた task:');
     expect(blockOf('mgr-cron')).toContain('起点の会話: 無し');
     expect(blockOf('mgr-ghost')).toContain('起点の会話: 分からない（台帳にこの委譲が見つからない');
