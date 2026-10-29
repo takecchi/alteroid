@@ -58,24 +58,20 @@ export interface TurnReplyTrace {
   readonly unreadSignalIds: ReadonlySet<string>;
   /** このターンで問い（`ask_human`・`request_permission`）を出した会話 id。その会話の task は、人間の答え待ちなので閉じない。 */
   readonly askedConversationIds: ReadonlySet<string>;
-  /** このターンで委譲に頼んだ（`manager_start`・`manager_send`）委譲の起点の会話 id。起点が無い委譲は入れない。 */
-  readonly delegatedOriginConversationIds: ReadonlySet<string>;
-  /** 閉じる時点で走っている（running / waiting_human）委譲の起点の会話 id。前のターンで起こした委譲もここに入る。 */
-  readonly activeJobConversationIds: ReadonlySet<string>;
+  /** このターンで委譲に頼んだ（`manager_start`・`manager_send`）委譲が結び付いている task の id（`Job.taskId`）。task に結び付けていない委譲は入れない。 */
+  readonly delegatedTaskIds: ReadonlySet<string>;
+  /** 閉じる時点で走っている（running / waiting_human）委譲が結び付いている task の id（`Job.taskId`）。前のターンで起こした委譲もここに入る。 */
+  readonly activeJobTaskIds: ReadonlySet<string>;
 }
 
 /**
- * その task に結び付く委譲が、走っているか・このターンで頼んだか。あれば task は閉じない（委譲の報告を読んでから閉じる）。
- * いまは `Job.conversationId`（委譲の起点の会話）と task の `originConversationId` の一致で見る。
- * **P3（#5482）で `Job.taskId` が入ったら、この関数だけを `task.id` と `Job.taskId` の一致へ置き換える**（唯一の判定点）。
- * 会話の一致だと、同じ会話の別の task のために起こした委譲でも「結び付いた」と数えて閉じない側へ倒れる（閉じ損ねる向き。勝手に閉じるより安全）。
+ * その task に結び付いた委譲（`Job.taskId`、#5469 P3）が、走っている（running / waiting_human）か、このターンで頼んだものか。あれば task は閉じない（委譲の報告を読んでから閉じる）。
+ * 判定は task の id と `Job.taskId` の一致だけ。会話の一致では見ない（同じ会話の別の task のために起こした委譲に巻き込まれない）。
+ * `manager_start` に taskId を渡さなかった委譲は、どの task にも結び付かないので、ここでは数えない。
+ * 委譲が終わった（done / failed / lost / stopped）後は P3 が task を needs_decision へ戻すので、queued でなくなり自動 done の対象外になる。
  */
 export function hasDelegationForTask(task: Task, trace: TurnReplyTrace): boolean {
-  const origin = task.originConversationId;
-  return (
-    origin !== undefined &&
-    (trace.delegatedOriginConversationIds.has(origin) || trace.activeJobConversationIds.has(origin))
-  );
+  return trace.delegatedTaskIds.has(task.id) || trace.activeJobTaskIds.has(task.id);
 }
 
 /** 返答の経路ごとの「この task は、この返答が宛てた発言のものか」。 */

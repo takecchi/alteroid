@@ -1155,6 +1155,7 @@ class Clone implements CloneHost {
   #turnReplies: {
     startedAt: string;
     replied: Map<string, TurnReplyVia>;
+    /** このターンで委譲に頼んだ（manager_start・manager_send）委譲の `Job.taskId`。 */
     delegated: Set<string>;
     /** このターンが入力として読んだ人間の発言の id（task の id と同じ）。 */
     readSignalIds: ReadonlySet<string>;
@@ -7385,10 +7386,9 @@ class Clone implements CloneHost {
         return turn?.conversationId ?? turn?.originConversationId ?? undefined;
       },
       recentDenials: () => this.#recentDenials.list(),
-      // 起点の無い委譲は控えない（どの task の起点にも一致しない）
-      noteDelegationStarted: (originConversationId) => {
-        if (originConversationId !== undefined)
-          this.#turnReplies.delegated.add(originConversationId);
+      // task に結び付けていない委譲は控えない（どの task にも一致しない）
+      noteDelegationStarted: (taskId) => {
+        if (taskId !== undefined) this.#turnReplies.delegated.add(taskId);
       },
       noteQuestionAsked: (conversationId) => {
         if (conversationId !== undefined) this.#turnReplies.asked.add(conversationId);
@@ -9054,14 +9054,14 @@ class Clone implements CloneHost {
       for (const pending of (await this.#stores.inbox.peekPending()).entries) {
         unreadSignalIds.add(pending.event.id);
       }
-      // 起点の会話が同じで走っている委譲（前のターンで起こしたものを含む）。P3（#5482）で Job.taskId が入ったら `hasDelegationForTask` ごと task id の判定へ置き換える
-      const activeJobConversationIds = new Set<string>();
+      // task に結び付いた委譲（`Job.taskId`、P3）で、いま走っている（running / waiting_human）もの。前のターンで起こしたものを含む
+      const activeJobTaskIds = new Set<string>();
       for (const job of await this.#stores.jobs.listJobs()) {
         if (
           (job.status === 'running' || job.status === 'waiting_human') &&
-          job.conversationId !== undefined
+          job.taskId !== undefined
         ) {
-          activeJobConversationIds.add(job.conversationId);
+          activeJobTaskIds.add(job.taskId);
         }
       }
       const outcome = await autoCloseRepliedTasks(
@@ -9072,8 +9072,8 @@ class Clone implements CloneHost {
           readSignalIds: this.#turnReplies.readSignalIds,
           unreadSignalIds,
           askedConversationIds: this.#turnReplies.asked,
-          delegatedOriginConversationIds: this.#turnReplies.delegated,
-          activeJobConversationIds,
+          delegatedTaskIds: this.#turnReplies.delegated,
+          activeJobTaskIds,
         },
         new Date().toISOString(),
       );

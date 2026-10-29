@@ -46,8 +46,8 @@ function trace(
     readSignalIds: new Set(extra.read ?? []),
     unreadSignalIds: new Set(extra.unread ?? []),
     askedConversationIds: new Set(extra.asked ?? []),
-    delegatedOriginConversationIds: new Set(delegated),
-    activeJobConversationIds: new Set(extra.active ?? []),
+    delegatedTaskIds: new Set(delegated),
+    activeJobTaskIds: new Set(extra.active ?? []),
   };
 }
 
@@ -77,13 +77,13 @@ describe('selectTasksToAutoClose: 何を閉じ、何を閉じないか', () => {
     expect(selectTasksToAutoClose(tasks, trace())).toEqual([]);
   });
 
-  it('そのターンで同じ起点の会話の委譲を起こしていれば閉じない', () => {
+  it('そのターンでその task に結び付けた委譲を頼んでいれば閉じない（task の id の一致だけで見る）', () => {
+    expect(selectTasksToAutoClose([task('a')], trace({ 'conv-1': 'turn_reply' }, ['a']))).toEqual(
+      [],
+    );
+    // 別の task のための委譲では、この task は閉じる。同じ会話でも task が違えば巻き込まない
     expect(
-      selectTasksToAutoClose([task('a')], trace({ 'conv-1': 'turn_reply' }, ['conv-1'])),
-    ).toEqual([]);
-    // 別の会話を起点にした委譲では、この task は閉じる
-    expect(
-      selectTasksToAutoClose([task('a')], trace({ 'conv-1': 'turn_reply' }, ['conv-2'])).map(
+      selectTasksToAutoClose([task('a'), task('b')], trace({ 'conv-1': 'turn_reply' }, ['b'])).map(
         (t) => t.id,
       ),
     ).toEqual(['a']);
@@ -95,24 +95,26 @@ describe('selectTasksToAutoClose: 何を閉じ、何を閉じないか', () => {
     expect(selectTasksToAutoClose([late, exact], trace()).map((t) => t.id)).toEqual(['exact']);
   });
 
-  it('委譲の判定は1つの関数（P3 で task.id との一致へ置き換える点）にまとまっている', () => {
-    expect(hasDelegationForTask(task('a'), trace({}, ['conv-1']))).toBe(true);
+  it('委譲の判定は task.id と Job.taskId の一致だけ（hasDelegationForTask）', () => {
+    expect(hasDelegationForTask(task('a'), trace({}, ['a']))).toBe(true);
+    expect(hasDelegationForTask(task('a'), trace({}, ['b']))).toBe(false);
     expect(hasDelegationForTask(task('a'), trace({}, []))).toBe(false);
-    expect(
-      hasDelegationForTask(task('a', { originConversationId: undefined }), trace({}, ['conv-1'])),
-    ).toBe(false);
     // 前のターンで起こして、いまも走っている委譲（このターンの控えには無い）
-    expect(hasDelegationForTask(task('a'), trace({}, [], { active: ['conv-1'] }))).toBe(true);
-    expect(hasDelegationForTask(task('a'), trace({}, [], { active: ['conv-2'] }))).toBe(false);
+    expect(hasDelegationForTask(task('a'), trace({}, [], { active: ['a'] }))).toBe(true);
+    expect(hasDelegationForTask(task('a'), trace({}, [], { active: ['b'] }))).toBe(false);
+    // 会話 id では見ない
+    expect(hasDelegationForTask(task('a'), trace({}, ['conv-1'], { active: ['conv-1'] }))).toBe(
+      false,
+    );
   });
 
-  it('前のターンで起こして走っている委譲（running / waiting_human）の会話の task は、次の返答でも閉じない', () => {
+  it('前のターンで起こして走っている委譲（running / waiting_human）が結び付いた task は、次の返答でも閉じない', () => {
     expect(
       selectTasksToAutoClose(
-        [task('a')],
-        trace({ 'conv-1': 'turn_reply' }, [], { active: ['conv-1'] }),
-      ),
-    ).toEqual([]);
+        [task('a'), task('b')],
+        trace({ 'conv-1': 'turn_reply' }, [], { active: ['a'] }),
+      ).map((t) => t.id),
+    ).toEqual(['b']);
   });
 
   it('そのターンで問い（ask_human）を出した会話の task は閉じない。別の会話の task は閉じる', () => {

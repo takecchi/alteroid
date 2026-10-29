@@ -332,7 +332,24 @@ describe('起点の会話へ返答したターンの終わりに、queued の ta
     expect(await statusOf(s.stores, 'evt-silent')).toBe('queued');
   });
 
-  it('そのターンで同じ起点の会話の委譲（manager_start）を起こしたら閉じない', async () => {
+  it('そのターンで task に結び付けた委譲（manager_start の taskId）を起こしたら閉じない', async () => {
+    const started: ManagerStartInput[] = [];
+    const s = boot(
+      (_turn, _input, tool) => [
+        ...say('委譲した'),
+        { run: () => tool('manager_start')({ request: '重い調査', taskId: 'evt-d' }) },
+      ],
+      { managers: stubPool(started) },
+    );
+    s.clone.post(human('evt-d', '重い調査を頼みたい'));
+    await waitForTerminal(s.events);
+
+    expect(started[0]?.taskId).toBe('evt-d');
+    expect(await statusOf(s.stores, 'evt-d')).toBe('queued');
+    await s.clone.stop();
+  });
+
+  it('taskId を渡さない委譲（manager_start）は task に結び付かないので、同じ会話の task も閉じる', async () => {
     const started: ManagerStartInput[] = [];
     const s = boot(
       (_turn, _input, tool) => [
@@ -341,11 +358,12 @@ describe('起点の会話へ返答したターンの終わりに、queued の ta
       ],
       { managers: stubPool(started) },
     );
-    s.clone.post(human('evt-d', '重い調査を頼みたい'));
+    s.clone.post(human('evt-nt', '重い調査を頼みたい'));
     await waitForTerminal(s.events);
 
     expect(started[0]?.conversationId).toBe('conv-1');
-    expect(await statusOf(s.stores, 'evt-d')).toBe('queued');
+    expect(started[0]?.taskId).toBeUndefined();
+    expect(await statusOf(s.stores, 'evt-nt')).toBe('done');
     await s.clone.stop();
   });
 
@@ -670,36 +688,53 @@ describe('閉じるのは、そのターンが読んだ発言の task だけ（�
   });
 });
 
-describe('走っている委譲がある会話の task は、次の返答でも閉じない', () => {
-  function job(id: string, status: Job['status'], conversationId: string): Job {
-    return { id, createdAt: AT, updatedAt: AT, status, conversationId, summary: 's' };
+describe('その task に結び付いた委譲（Job.taskId）が走っている task は、次の返答でも閉じない', () => {
+  function job(id: string, status: Job['status'], conversationId: string, taskId?: string): Job {
+    return {
+      id,
+      createdAt: AT,
+      updatedAt: AT,
+      status,
+      conversationId,
+      summary: 's',
+      ...(taskId === undefined ? {} : { taskId }),
+    };
   }
 
-  it('前のターンで起こした委譲が running / waiting_human のあいだは閉じず、別の会話の task は閉じる', async () => {
+  it('結び付いた委譲が running / waiting_human のあいだは閉じない。結び付かない委譲・同じ会話の別の task は閉じる', async () => {
     const stores = createMemoryStores();
-    await stores.jobs.putJob(job('m-run', 'running', 'conv-1'));
-    await stores.jobs.putJob(job('m-wait', 'waiting_human', 'conv-3'));
+    await stores.jobs.putJob(job('m-run', 'running', 'conv-1', 'd-run'));
+    await stores.jobs.putJob(job('m-wait', 'waiting_human', 'conv-3', 'd-wait'));
+    // taskId の無い委譲（会話は同じ）。task に結び付かないので数えない
+    await stores.jobs.putJob(job('m-free', 'running', 'conv-2'));
+    // 結び付いた委譲が終わっている（done）なら閉じる対象のまま
+    await stores.jobs.putJob(job('m-done', 'done', 'conv-4', 'd-ended'));
     const s = boot(() => say('返答'), { stores });
     s.clone.post(human('d-run', '走っている委譲がある', 'conv-1'));
     s.clone.post(human('d-wait', '人間待ちの委譲がある', 'conv-3'));
-    s.clone.post(human('d-free', '委譲の無い会話', 'conv-2'));
+    s.clone.post(human('d-free', '結び付かない委譲だけの会話', 'conv-2'));
+    s.clone.post(human('d-ended', '委譲は終わっている', 'conv-4'));
+    s.clone.post(human('d-sibling', '同じ会話の別の task', 'conv-1'));
     await waitFor(
-      async () => (await statusOf(stores, 'd-free')) === 'done',
-      '委譲の無い会話は閉じる',
+      async () =>
+        (await statusOf(stores, 'd-free')) === 'done' &&
+        (await statusOf(stores, 'd-ended')) === 'done',
+      '結び付く委譲の無い task は閉じる',
     );
     await waitFor(
-      async () => (await stores.journal.list({ types: ['turn_timing'] })).length >= 3,
-      '3つのターンが終わる',
+      async () => (await stores.journal.list({ types: ['turn_timing'] })).length >= 5,
+      '5つのターンが終わる',
     );
 
     expect(await statusOf(stores, 'd-run')).toBe('queued');
     expect(await statusOf(stores, 'd-wait')).toBe('queued');
+    expect(await statusOf(stores, 'd-sibling')).toBe('done');
     await s.clone.stop();
   });
 
-  it('manager_send で既存の委譲へ頼んだターンも、委譲に数える（委譲が走っていなくても閉じない）', async () => {
+  it('manager_send で既存の委譲へ頼んだターンも、その委譲の taskId の task を閉じない（委譲が走っていなくても）', async () => {
     const stores = createMemoryStores();
-    await stores.jobs.putJob(job('m-old', 'done', 'conv-1'));
+    await stores.jobs.putJob(job('m-old', 'done', 'conv-1', 'd-send'));
     const sent: string[] = [];
     const pool = stubPool([], {
       send: (managerId) => {
