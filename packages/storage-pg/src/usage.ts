@@ -7,7 +7,7 @@ import {
   foldRecordForStore,
   resetRowsOfBaselines,
   isRealUsageDate,
-  usageDate,
+  isBeforeUsageStart,
   usageLayerSchema,
   usageSiteSchema,
   writeStderrLine,
@@ -72,30 +72,6 @@ function unreadableCountsOf(row: {
     unreadable.costUsd = toNumber(row.unreadableCostUsd);
   }
   return Object.keys(unreadable).length > 0 ? { unreadable } : {};
-}
-
-function isBeforeLedger(since: string | null, from: string | undefined): boolean {
-  if (since === null) return true;
-  if (from === undefined) return true;
-  return from < usageDate(new Date(since));
-}
-
-function isBeforeLayers(layersSince: string | null, from: string | undefined): boolean {
-  if (layersSince === null) return true;
-  if (from === undefined) return true;
-  return from < usageDate(new Date(layersSince));
-}
-
-function isBeforeTokens(tokensSince: string | null, from: string | undefined): boolean {
-  if (tokensSince === null) return true;
-  if (from === undefined) return true;
-  return from < usageDate(new Date(tokensSince));
-}
-
-function isBeforeTurns(turnsSince: string | null, from: string | undefined): boolean {
-  if (turnsSince === null) return true;
-  if (from === undefined) return true;
-  return from < usageDate(new Date(turnsSince));
 }
 
 export class PgUsageStore implements UsageStore {
@@ -458,12 +434,12 @@ export class PgUsageStore implements UsageStore {
       since,
       layersSince,
       tokensSince,
-      beforeLedger: isBeforeLedger(since, query.from),
-      beforeLayers: isBeforeLayers(layersSince, query.from),
-      beforeTokens: isBeforeTokens(tokensSince, query.from),
+      beforeLedger: isBeforeUsageStart(since, query.from),
+      beforeLayers: isBeforeUsageStart(layersSince, query.from),
+      beforeTokens: isBeforeUsageStart(tokensSince, query.from),
       turnRows: readableTurnRows,
       turnsSince,
-      beforeTurns: isBeforeTurns(turnsSince, query.from),
+      beforeTurns: isBeforeUsageStart(turnsSince, query.from),
       notice: USAGE_ESTIMATE_NOTICE,
     };
   }

@@ -302,6 +302,13 @@ export function usageDate(at: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+// 器（fs / pg / インメモリ）ごとに書かない: 器だけ違う判断をすると、同じ照会で本物と違う結果を返すため
+export function isBeforeUsageStart(start: string | null, from: string | undefined): boolean {
+  if (start === null) return true;
+  if (from === undefined) return true;
+  return from < usageDate(new Date(start));
+}
+
 // zod を持ち込まない: ブラウザ向けの軽い口から出ており、画面が書き写しを持たずに済むため
 export const USAGE_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 

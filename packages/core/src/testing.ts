@@ -186,7 +186,7 @@ import {
   foldRecordForStore,
   resetRowsOfBaselines,
   USAGE_ESTIMATE_NOTICE,
-  usageDate,
+  isBeforeUsageStart,
   ZERO_USAGE,
   type UsageBaseline,
   type UsageLayer,
@@ -221,13 +221,6 @@ function usageTurnKey(
   tokenId: string | undefined,
 ): string {
   return `${date}\u0000${managerId}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
-}
-
-/** ドライバ（fs / pg の `isBeforeLedger`）と同じ3分岐にする: 器だけ違う判断をすると本物と違う結果を返す。 */
-function isBeforeUsageStart(start: string | null, from: string | undefined): boolean {
-  if (start === null) return true;
-  if (from === undefined) return true;
-  return from < usageDate(new Date(start));
 }
 
 /** `TranscriptArchive` にメソッドを足さない: 足すと3実装すべてに要る。この裏口は `seedFingerprintlessArchiveRow` 専用。 */

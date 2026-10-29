@@ -1,5 +1,7 @@
 import {
+  archiveIdBase,
   archiveIdBranch,
+  archiveIdCandidate,
   assertArchivableSessionId,
   hasNul,
   classifyArchiveContinuityYielding,
@@ -25,10 +27,6 @@ const MAX_ARCHIVE_ID_ATTEMPTS = 1000;
 // 別の advisory lock を足すなら別の名前空間文字列を選ぶ: 鍵空間が衝突するため。
 const ARCHIVE_SESSION_LOCK_NAMESPACE = 'alteroid.archive.session';
 
-function archiveIdCandidate(base: string, attempt: number): string {
-  return attempt === 1 ? `${base}.jsonl` : `${base}-${attempt}.jsonl`;
-}
-
 export class PgTranscriptArchive implements TranscriptArchive {
   readonly #db: Db;
 
@@ -52,8 +50,7 @@ export class PgTranscriptArchive implements TranscriptArchive {
       );
       // `at` をロックの前で決めない: ロック待ちの順と `at` の順がずれ、`comparedTo` の鎖が `at` の並びと一致しなくなるため。
       const at = new Date();
-      const stamp = at.toISOString().replace(/[:.]/g, '-');
-      const base = `${sanitize(sessionId)}-${stamp}`;
+      const base = archiveIdBase(sessionId, at);
       const candidateRows = await tx
         .select({
           id: archive.id,
@@ -257,8 +254,4 @@ export class PgTranscriptArchive implements TranscriptArchive {
     const removed = await this.#db.delete(archive).returning({ id: archive.id });
     return removed.length;
   }
-}
-
-function sanitize(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]/g, '_');
 }

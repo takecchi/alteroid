@@ -8,14 +8,35 @@ import {
   describeUsageDateOrder,
   describeWebSearchRequests,
   findUnrecordedManagers,
+  isBeforeUsageStart,
   isDelegationActorId,
   isRealUsageDate,
   USAGE_DATE_PATTERN,
+  usageDate,
   ZERO_USAGE,
   type UnrecordedManagerCandidate,
 } from './usage-format.js';
 import { usageDateSchema, type UsageUnmeteredRow } from './usage.js';
 import { toAccountUsage, type AccountUsageState } from './usage-snapshot.js';
+
+describe('isBeforeUsageStart — 台帳の記録開始より前か（pg・fs・インメモリが同じ3分岐）', () => {
+  const start = new Date(2026, 7, 14, 12, 0).toISOString();
+  const startDate = usageDate(new Date(start));
+
+  it('記録開始が無い（null）と前', () => {
+    expect(isBeforeUsageStart(null, '2026-08-14')).toBe(true);
+  });
+
+  it('from が無いと前', () => {
+    expect(isBeforeUsageStart(start, undefined)).toBe(true);
+  });
+
+  it('from が開始日より前なら前、開始日と同じ日・後なら前ではない', () => {
+    expect(isBeforeUsageStart(start, '2026-08-13')).toBe(true);
+    expect(isBeforeUsageStart(start, startDate)).toBe(false);
+    expect(isBeforeUsageStart(start, '2026-08-15')).toBe(false);
+  });
+});
 
 describe('isRealUsageDate / usageDateSchema — 暦の上に実在する日だけを通す（Issue #2156）', () => {
   const cases: ReadonlyArray<[string, boolean]> = [

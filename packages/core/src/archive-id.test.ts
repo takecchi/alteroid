@@ -1,10 +1,39 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  archiveIdBase,
   archiveIdBranch,
+  archiveIdCandidate,
   compareArchiveEntriesNewestFirst,
   matchArchiveIdStamp,
+  sanitizeArchiveSessionId,
 } from './archive-id.js';
+
+describe('archiveIdBase / archiveIdCandidate / sanitizeArchiveSessionId — pg と fs が同じ形の ID を作る', () => {
+  const at = new Date('2026-09-23T13:27:27.123Z');
+
+  it('枝番 1 は枝番無し、2 以降は -N を付ける', () => {
+    const base = archiveIdBase('session-a', at);
+    expect(archiveIdCandidate(base, 1)).toBe('session-a-2026-09-23T13-27-27-123Z.jsonl');
+    expect(archiveIdCandidate(base, 2)).toBe('session-a-2026-09-23T13-27-27-123Z-2.jsonl');
+    expect(archiveIdCandidate(base, 10)).toBe('session-a-2026-09-23T13-27-27-123Z-10.jsonl');
+  });
+
+  it('作った ID を archiveIdBranch / matchArchiveIdStamp が読み戻せる', () => {
+    const base = archiveIdBase('session-42', at);
+    expect(archiveIdBranch(archiveIdCandidate(base, 1))).toBe(1);
+    expect(archiveIdBranch(archiveIdCandidate(base, 2))).toBe(2);
+    expect(matchArchiveIdStamp(archiveIdCandidate(base, 3))?.stamp).toBe(
+      '2026-09-23T13-27-27-123Z',
+    );
+  });
+
+  it('許す文字（英数字・. _ -）以外は _ に置き換わり、許す文字はそのまま残る', () => {
+    expect(sanitizeArchiveSessionId('a/b c:d')).toBe('a_b_c_d');
+    expect(sanitizeArchiveSessionId('Az09._-')).toBe('Az09._-');
+    expect(archiveIdBase('a/b', at)).toBe('a_b-2026-09-23T13-27-27-123Z');
+  });
+});
 
 describe('archiveIdBranch（#908）', () => {
   it('枝番が無い id（1本目）は1', () => {
