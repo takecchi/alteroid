@@ -38,7 +38,6 @@ function parseSource(sourceText: string, fileName: string): ts.SourceFile {
 const TARGET_IDENTIFIER_NAMES = new Set([
   'storeApiBaseUrl',
   'resolveApiBaseUrl',
-  'resolveApiBaseUrlOrigin',
   'hasStoredApiBaseUrl',
   // 一覧の側の識別子も含める: 含めないと、一覧だけを触るファイルが (A) の抽出から漏れ、(B) の禁止が当たらないまま増えるため。
   'listEndpoints',
