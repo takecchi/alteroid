@@ -34,6 +34,7 @@ import {
   useReleaseLeaveGuard,
   useReportDirty,
 } from '~/lib/leave-guard';
+import { ConflictNotice, DeleteConflictNotice } from '~/components/conflict-notice';
 import { useLatest } from '~/lib/use-latest';
 
 import type { Route } from './+types/practice-detail';
@@ -50,6 +51,16 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
     <LeaveGuardScope key={loaderData.slug}>
       <PracticeDetailBody slug={loaderData.slug} />
     </LeaveGuardScope>
+  );
+}
+
+function PracticeConflictSummary({ practice }: { practice: { kind: string; title: string } }) {
+  return (
+    <p className="mt-1 text-xs break-words">
+      種類: {practiceKindLabel(practice.kind)} / 題:{' '}
+      {/* 伏せる: 本体の表示（<Markdown>）と揃える。下書きは編集欄に生のまま残っている */}
+      {redactBody(practice.title)}
+    </p>
   );
 }
 
@@ -294,72 +305,30 @@ function PracticeDetailBody({ slug }: { slug: string }) {
       )}
       <ErrorNote error={failure} className="mb-3" />
       {deleteConflict !== undefined && (
-        <div role="alert" className="mb-3 rounded-lg border border-destructive/50 p-3 text-sm">
-          <p className="font-medium text-destructive">
-            {deleteConflict.current === null
-              ? '読んだ後に、このやり方はほかで消された。こちらでは消していない。'
-              : '読んだ後に、このやり方がほかで書き換えられた。消していない。'}
-          </p>
-          {deleteConflict.current !== null && (
-            <>
-              <p className="mt-2 text-xs text-muted-foreground">
-                いまの内容（{formatDateTime(deleteConflict.current.practice.updatedAt)} に更新）
-              </p>
-              <p className="mt-1 text-xs break-words">
-                種類: {practiceKindLabel(deleteConflict.current.practice.kind)} / 題:{' '}
-                {/* 伏せる: 本体の表示（<Markdown>）と揃える。下書きは編集欄に生のまま残っている */}
-                {redactBody(deleteConflict.current.practice.title)}
-              </p>
-              <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
-                {redactBody(deleteConflict.current.practice.content)}
-              </pre>
-              <p className="mt-2 text-xs text-muted-foreground">
-                この内容でも消すなら、もう一度「削除」を押して確認してください。
-              </p>
-            </>
-          )}
-          <div className="mt-3">
-            <Button size="sm" onClick={() => setDeleteConflict(undefined)}>
-              閉じる
-            </Button>
-          </div>
-        </div>
+        <DeleteConflictNotice
+          noun="やり方"
+          current={deleteConflict.current === null ? null : deleteConflict.current.practice}
+          summary={
+            deleteConflict.current !== null && (
+              <PracticeConflictSummary practice={deleteConflict.current.practice} />
+            )
+          }
+          onClose={() => setDeleteConflict(undefined)}
+        />
       )}
       {conflict !== undefined && (
-        <div role="alert" className="mb-3 rounded-lg border border-destructive/50 p-3 text-sm">
-          <p className="font-medium text-destructive">
-            {conflict.current === null
-              ? '読んだ後に、このやり方がほかで消された。保存していない（下書きはそのまま残してある）。'
-              : '読んだ後に、このやり方がほかで書き換えられた。保存していない（下書きはそのまま残してある）。'}
-          </p>
-          {conflict.current !== null && (
-            <>
-              <p className="mt-2 text-xs text-muted-foreground">
-                いまの内容（{formatDateTime(conflict.current.practice.updatedAt)} に更新）
-              </p>
-              <p className="mt-1 text-xs break-words">
-                種類: {practiceKindLabel(conflict.current.practice.kind)} / 題:{' '}
-                {redactBody(conflict.current.practice.title)}
-              </p>
-              <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
-                {redactBody(conflict.current.practice.content)}
-              </pre>
-            </>
-          )}
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="danger"
-              disabled={busy}
-              onClick={() => save(conflict.current === null ? null : conflict.current.version)}
-            >
-              自分の内容で上書きする
-            </Button>
-            <Button size="sm" disabled={busy} onClick={discardDraft}>
-              自分の下書きを捨てて、いまの内容を読み直す
-            </Button>
-          </div>
-        </div>
+        <ConflictNotice
+          noun="やり方"
+          current={conflict.current === null ? null : conflict.current.practice}
+          summary={
+            conflict.current !== null && (
+              <PracticeConflictSummary practice={conflict.current.practice} />
+            )
+          }
+          busy={busy}
+          onOverwrite={() => save(conflict.current === null ? null : conflict.current.version)}
+          onDiscard={discardDraft}
+        />
       )}
 
       {isLoading && !missing ? (
