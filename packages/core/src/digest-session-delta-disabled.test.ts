@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { DigestSessionDelta, LEAN_DROPPED_SECTIONS } from './digest-session-delta.js';
 
 // DigestSessionDelta({ disabled: true }) = ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT が無効（既定）のときの形。
-// どの口も、2回目以降も全文を返し、控えを持たない。
+// どの口も、2回目以降も全文を返し、畳みの控え（固定文・段落・節・依頼・報告）を持たない。
+// 要約直後の軽い全文（系統4）だけは別の系統で、reset('compaction') のあとに限って省く節の参照が出る（節の控えは持たない）。
 
 const PARAGRAPH = `${'同じ段落の本文。'.repeat(40)}`;
 const REF = '（参照）';
@@ -148,7 +149,29 @@ describe('DigestSessionDelta: 畳みを切った形', () => {
     expect(build(true).foldStandingRows(digest)).toBe(digest);
   });
 
-  it('isLean は常に false、exportState は空の控え、importState は何も起こさない', () => {
+  it('⭐ 軽い全文を出した回を確定しても、節の控えは保存されない。FOLD を有効にした器へ読み戻しても「前回から変わっていない」と言わない', () => {
+    const dropped = LEAN_DROPPED_SECTIONS[0];
+    if (dropped === undefined) throw new Error('LEAN_DROPPED_SECTIONS が空');
+    const digest = `## 状況\n- a\n\n## マネージャー\n- b\n\n## ${dropped.name}\n- x\n`;
+    const now = new Date();
+    const off = build(true);
+    off.renderDigest(digest, now);
+    off.commit();
+    off.reset('compaction');
+    off.renderDigest(digest, now);
+    off.commit();
+
+    const saved = off.exportState();
+    expect(saved.sections).toBeNull();
+
+    const on = build(false);
+    on.importState(saved);
+    const rendered = on.renderDigest(digest, now).text;
+    expect(rendered).toBe(digest);
+    expect(rendered).not.toContain('変わっていない');
+  });
+
+  it('isLean は要約が走った reset のあとだけ真、exportState は節の控えを持たず、importState は何も起こさない', () => {
     const off = build(true);
     expect(off.isLean()).toBe(false);
     off.fixed('a', 'FULL', REF);

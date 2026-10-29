@@ -314,7 +314,8 @@ export class DigestSessionDelta {
     if (staged === null) return;
     this.#staged = null;
     if (staged.sections !== null) {
-      this.#committed.sections = staged.sections;
+      // 畳みが無効なら節の控えは持たない（全文が載ったことだけを下の旗に反映する）
+      if (!this.#disabled) this.#committed.sections = staged.sections;
       // 要約が会話に載った: 次の reset の理由からやり直す
       this.#fullForced = false;
       this.#compactionReset = false;
@@ -545,7 +546,8 @@ export class DigestSessionDelta {
           continue;
         }
       }
-      fullSections.set(section.heading, folding ? bodyText : '');
+      // 畳みが無効の間は節を控えない: 控えると、保存して FOLD を有効にして再起動した後に、本文が空の節を「前回から変わっていない」と誤って言いうる
+      if (folding) fullSections.set(section.heading, bodyText);
       const before = previous?.sections.get(section.heading);
       if (folding && section.heading.startsWith(STANDING_SECTION_HEADING_HEAD)) {
         // 全文で出した行は、会話でいちばん新しい版になる: 定期の tick の控え（`foldStandingRows`）に残った古い版を、後で「前回と同じ」と畳ませない。出た版で置き換える（同じ版なら控えは変わらず、畳みは続く）。
