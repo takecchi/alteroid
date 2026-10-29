@@ -5812,7 +5812,7 @@ export function createApp(deps: AppDeps) {
           '許可の取り消しの日誌',
           `id=${id}`,
         );
-        // 委譲先へ配る（#4952）。載せていなかった許可（前方一致など）・既に取り消し済みでは配らない: 一覧は変わらないため
+        // 委譲先へ配る（#4952）。載せない形の許可（`*` を含む prefix など。前方一致も載せる: #5435）・既に取り消し済みでは配らない: 一覧は変わらないため
         // 応答の前に配り終える: 「取り消した」が人間に返った後も委譲先で規則が効き続ける窓を、配れた runner については閉じるため。配れなくても取り消しは効いている（配れなかったことはサービスが日誌に残す）
         if (!alreadyRevoked && delegatedPermissionRuleOf(grant.rule) !== undefined) {
           await deps.permissionRules

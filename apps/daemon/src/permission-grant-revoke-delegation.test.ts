@@ -88,9 +88,11 @@ describe('POST /permission-grants/:id/revoke の後に委譲先へ配る（#4952
     expect(triggers).toEqual(['許可 g1 が取り消された（POST /permission-grants/:id/revoke）']);
   });
 
-  it('前方一致の許可の取り消しでは配らない（委譲先の一覧は変わらない）', async () => {
+  // 元は「前方一致の許可の取り消しでは配らない（委譲先の一覧は変わらない）」で triggers が空であることを固定していた。
+  // #5435 で前方一致も委譲先へ載せる（取り消すと一覧が変わる）ので、完全一致と同じく配る形に反転した。
+  it('前方一致の許可の取り消しも配る（委譲先の一覧が変わる）', async () => {
     const { triggers } = await revoke('Bash(make:*)');
-    expect(triggers).toEqual([]);
+    expect(triggers).toEqual(['許可 g1 が取り消された（POST /permission-grants/:id/revoke）']);
   });
 
   it('配れなくても取り消しは通る', async () => {
