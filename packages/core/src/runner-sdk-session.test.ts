@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentManagerSession } from './agent-session.js';
 
-import { RunnerFenceError } from './runner-protocol.js';
 import { RunnerSdkSession } from './runner-sdk-session.js';
 
 function fakeQuery(): AgentManagerSession {
@@ -146,53 +145,41 @@ describe('RunnerSdkSession — unclassifiedFailures（生の Map を渡すだけ
   });
 });
 
-describe('RunnerSdkSession — checkFence（fencing token の検査と記録。roadmap M5 PR4）', () => {
+// 世代（fence）の比べは Host に一本化した（#5514）。世代を比べる歯は `runner-fence.test.ts` にある
+// （古い世代の拒否・RunnerFenceError の中身 → 『古い世代の resume は拒まれ…』、同じ世代 → 『同じ世代の resume は受ける』、
+// 新しい世代 → 『新しい世代の resume は世代を更新し…』、初回は覚えるだけ → 『この Host インスタンスにとって初めての resume は…』）。ここは ttl だけ
+describe('RunnerSdkSession — acceptLease（自己失効が読む lease の ttl を受け取るだけ。roadmap M5 PR4）', () => {
   it('lease が undefined なら何もしない', () => {
     const s = new RunnerSdkSession();
-    expect(() => s.checkFence(undefined, 'mgr-1')).not.toThrow();
+    expect(() => s.acceptLease(undefined)).not.toThrow();
     expect(s.leaseTtlMs).toBeUndefined();
   });
 
-  it('まだ世代を覚えていなければ、拒まずに覚えるだけ', () => {
+  it('lease を受けたら ttl を覚える', () => {
     const s = new RunnerSdkSession();
-    s.checkFence({ fence: 5, ttlMs: 60_000 }, 'mgr-1');
+    s.acceptLease({ fence: 5, ttlMs: 60_000 });
     expect(s.leaseTtlMs).toBe(60_000);
   });
 
-  it('同じ世代は再送として受ける（更新も拒否もしない）', () => {
+  it('同じ世代の再送でも ttl は新しい値になる', () => {
     const s = new RunnerSdkSession();
-    s.checkFence({ fence: 5, ttlMs: 60_000 }, 'mgr-1');
-    expect(() => s.checkFence({ fence: 5, ttlMs: 70_000 }, 'mgr-1')).not.toThrow();
+    s.acceptLease({ fence: 5, ttlMs: 60_000 });
+    s.acceptLease({ fence: 5, ttlMs: 70_000 });
     expect(s.leaseTtlMs).toBe(70_000);
   });
 
-  it('新しい世代は覚え直す', () => {
+  it('新しい世代の ttl へ覚え直す', () => {
     const s = new RunnerSdkSession();
-    s.checkFence({ fence: 5, ttlMs: 60_000 }, 'mgr-1');
-    s.checkFence({ fence: 6, ttlMs: 90_000 }, 'mgr-1');
+    s.acceptLease({ fence: 5, ttlMs: 60_000 });
+    s.acceptLease({ fence: 6, ttlMs: 90_000 });
     expect(s.leaseTtlMs).toBe(90_000);
   });
 
-  it('古い世代は RunnerFenceError を投げ、何も書き換えない', () => {
+  it('lease の無い呼び出しは、覚えた ttl を消さない', () => {
     const s = new RunnerSdkSession();
-    s.checkFence({ fence: 5, ttlMs: 60_000 }, 'mgr-1');
-    expect(() => s.checkFence({ fence: 4, ttlMs: 1 }, 'mgr-1')).toThrow(RunnerFenceError);
+    s.acceptLease({ fence: 5, ttlMs: 60_000 });
+    s.acceptLease(undefined);
     expect(s.leaseTtlMs).toBe(60_000);
-  });
-
-  it('RunnerFenceError は managerId / expected / given を運ぶ', () => {
-    const s = new RunnerSdkSession();
-    s.checkFence({ fence: 5, ttlMs: 60_000 }, 'mgr-1');
-    try {
-      s.checkFence({ fence: 3, ttlMs: 1 }, 'mgr-1');
-      expect.unreachable();
-    } catch (error) {
-      expect(error).toBeInstanceOf(RunnerFenceError);
-      const fenceError = error as RunnerFenceError;
-      expect(fenceError.managerId).toBe('mgr-1');
-      expect(fenceError.expected).toBe(5);
-      expect(fenceError.given).toBe(3);
-    }
   });
 });
 

@@ -1709,7 +1709,8 @@ class Host implements RunnerHost {
     return session;
   }
 
-  // 新しいセッションを作る前に比べる: 作ってから断ると CLI を開いて閉じる無駄が出る。lease を伴わない命令は判定しない（`checkFence` と同じ）
+  // 世代を比べるのはここだけ（start・resume の作り直し・生きたセッションへの合流の3経路が通る。#5514）。
+  // 新しいセッションを作る前に比べる: 作ってから断ると CLI を開いて閉じる無駄が出る。lease を伴わない命令は判定しない
   #checkRememberedFence(managerId: string, lease: RunnerLease | undefined): void {
     if (lease === undefined) return;
     const remembered = this.#fenceMemory.get(managerId);
@@ -1725,8 +1726,12 @@ class Host implements RunnerHost {
     this.#fenceMemory.delete(managerId);
     this.#fenceMemory.set(managerId, fence);
     if (this.#fenceMemory.size > this.#fenceMemoryMax) {
-      const oldest = this.#fenceMemory.keys().next().value;
-      if (oldest !== undefined) this.#fenceMemory.delete(oldest);
+      // 生きたセッションの担当は忘れない（全員が生きていれば上限を一時的に超える）: 忘れると合流の比べるものが無くなり、断るべき古い世代を通すため
+      for (const candidate of this.#fenceMemory.keys()) {
+        if (this.#sessions.has(candidate)) continue;
+        this.#fenceMemory.delete(candidate);
+        break;
+      }
     }
   }
 
@@ -1752,7 +1757,7 @@ class Host implements RunnerHost {
     this.#checkRememberedFence(command.managerId, command.lease);
     const session = this.#create(command.managerId, command.request, command.cwd);
     try {
-      session.checkFence(command.lease);
+      session.acceptLease(command.lease);
       this.#rememberFence(command.managerId, command.lease);
       session.begin(input.text, input.images);
     } catch (error) {
@@ -1772,7 +1777,8 @@ class Host implements RunnerHost {
     let alive = this.#sessions.get(command.managerId);
     for (;;) {
       if (alive) {
-        alive.checkFence(command.lease);
+        this.#checkRememberedFence(command.managerId, command.lease);
+        alive.acceptLease(command.lease);
         this.#rememberFence(command.managerId, command.lease);
         let current: RunnerSession | undefined = alive;
         while (current !== undefined) {
@@ -1823,12 +1829,12 @@ class Host implements RunnerHost {
       this.#refuseWhileShuttingDown(command.managerId);
       // `#create` が消す戻り待ちの印を覚えておく: 開けずに名簿から外すとき、failed / lost の後の守りを元に戻すため（#5168）
       const awaitedSince = this.#returnAwaitedSince.get(command.managerId);
-      // 閉じた後の古い世代の起こし直しをここで断る（#5507）: 新しいセッションの `checkFence` は `#fence` が未設定で何でも通すため、持ち越しはこの Map が受け持つ
+      // 閉じた後の古い世代の起こし直しをここで断る（#5507）: 新しいセッションは世代を持たないので、持ち越しはこの Map が受け持つ
       this.#checkRememberedFence(command.managerId, command.lease);
       const session = this.#create(command.managerId, command.request, command.cwd);
       let parked: ParkedPeers | undefined;
       try {
-        session.checkFence(command.lease);
+        session.acceptLease(command.lease);
         this.#rememberFence(command.managerId, command.lease);
         // 鍵の付け替えで預けた peer を引き継ぐ（#4734）。組む道具が新しい窓口を作らないよう resume の前に渡し、預かった知らせは resume の後に回す
         parked = this.#takeParkedPeers(command.managerId);
@@ -2873,9 +2879,9 @@ class RunnerSession {
     return this.#cwd;
   }
 
-  // `lease` が無ければ何もしない: 名乗らない古いデーモンの命令は素通しするため
-  checkFence(lease: RunnerLease | undefined): void {
-    this.#sdkSession.checkFence(lease, this.#id);
+  // `lease` が無ければ何もしない: 名乗らない古いデーモンの命令は素通しするため。世代は比べない（Host が比べる）
+  acceptLease(lease: RunnerLease | undefined): void {
+    this.#sdkSession.acceptLease(lease);
   }
 
   begin(request: string, images?: readonly AgentInputImage[]): void {

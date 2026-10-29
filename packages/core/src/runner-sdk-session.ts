@@ -1,6 +1,6 @@
 import type { AgentManagerSession, AgentUserInput } from './agent-session.js';
 import { RunnerBackgroundWaiters } from './runner-background-waiters.js';
-import { RunnerFenceError, type RunnerLease } from './runner-protocol.js';
+import { type RunnerLease } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
 
 export class RunnerSdkSession {
@@ -113,24 +113,15 @@ export class RunnerSdkSession {
     return this.#unclassifiedFailures;
   }
 
-  /** `undefined` は lease を伴わずに起こされた状態。判定せず、常に受ける。 */
-  #fence: number | undefined;
   #leaseTtlMs: number | undefined;
 
   get leaseTtlMs(): number | undefined {
     return this.#leaseTtlMs;
   }
 
-  checkFence(lease: RunnerLease | undefined, managerId: string): void {
+  /** 世代（fence）は比べない: 比べるのは Host の1か所だけ（#5514）。ここは自己失効が読む ttl を受け取るだけ。 */
+  acceptLease(lease: RunnerLease | undefined): void {
     if (lease === undefined) return;
-    if (this.#fence !== undefined && lease.fence < this.#fence) {
-      throw new RunnerFenceError({
-        managerId,
-        expected: this.#fence,
-        given: lease.fence,
-      });
-    }
-    this.#fence = lease.fence;
     this.#leaseTtlMs = lease.ttlMs;
   }
 

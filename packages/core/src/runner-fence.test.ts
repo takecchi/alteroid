@@ -321,6 +321,33 @@ describe('閉じた後の resume の世代（持ち越し）', () => {
     await host.resume(resumeWith('mgr-a', 1));
     expect(host.list().map((state) => state.managerId)).toEqual(['mgr-a']);
   });
+
+  // 比べるのは Host の1か所だけ（#5514）: 生きたセッションの担当を忘れると、合流する経路で古い世代を通してしまう
+  it('覚える数を超えても、生きたセッションの担当の世代は忘れない', async () => {
+    const { host, fake } = setup({ fenceMemoryMax: 2 });
+    await host.start(startWith('mgr-a', 5));
+    for (const id of ['mgr-b', 'mgr-c']) {
+      await host.start(startWith(id, 5));
+      await host.stop(id);
+    }
+    // mgr-a が最も古いが生きているので残り、代わりに生きていない mgr-b が落ちる
+    const rejection = host.resume(resumeWith('mgr-a', 1));
+    await expect(rejection).rejects.toBeInstanceOf(RunnerFenceError);
+    await expect(rejection).rejects.toMatchObject({ managerId: 'mgr-a', expected: 5, given: 1 });
+    await expect(host.resume(resumeWith('mgr-c', 1))).rejects.toBeInstanceOf(RunnerFenceError);
+    await host.resume(resumeWith('mgr-b', 1));
+    expect(fake.callCount()).toBe(4);
+  });
+
+  it('全員が生きているときは、上限を一時的に超えても誰の世代も忘れない', async () => {
+    const { host } = setup({ fenceMemoryMax: 2 });
+    for (const id of ['mgr-a', 'mgr-b', 'mgr-c']) {
+      await host.start(startWith(id, 5));
+    }
+    for (const id of ['mgr-a', 'mgr-b', 'mgr-c']) {
+      await expect(host.resume(resumeWith(id, 1))).rejects.toMatchObject({ expected: 5, given: 1 });
+    }
+  });
 });
 
 describe('貸し出し期限の自己失効（enforceLease）', () => {
