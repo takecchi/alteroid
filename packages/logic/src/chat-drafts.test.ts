@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { storeCredential } from './auth.js';
 import { loadApprovalDrafts, saveApprovalDrafts } from './approval-drafts.js';
+import { loadApprovalLeftoverSources, saveApprovalLeftoverSources } from './approval-leftovers.js';
 import {
   chatDraftEpoch,
   clearChatDrafts,
@@ -108,6 +109,14 @@ describe('承認カードの書きかけもログアウトで消す（#3706）',
     expect(sessionStorage.getItem('alteroid.approvalLeftovers')).toBeNull();
     expect(loadApprovalDrafts()).toEqual({ texts: {}, questions: {} });
     expect(sessionStorage.getItem('other')).toBe('keep');
+  });
+
+  it('clearChatDrafts は approval-leftovers.ts が書いた置き土産も消す', () => {
+    saveApprovalLeftoverSources({ 'ap-1': { question: '前の人の質問' } });
+    expect(loadApprovalLeftoverSources()).toEqual({ 'ap-1': { question: '前の人の質問' } });
+    clearChatDrafts();
+    expect(loadApprovalLeftoverSources()).toEqual({});
+    expect(sessionStorage.getItem('alteroid.approvalLeftovers')).toBeNull();
   });
 
   it('待っている書き込みは、決めた時点の epoch が今と違えば（ログアウトを挟んだ）書かない', () => {
