@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 
 import { Badge, Button, ErrorNote, FieldHint, Input, Select } from '@alteroid/ui';
-import { useCloseTask, useMoveTask, useReopenTask } from '@alteroid/swr';
+import { useCloseTask, useMoveTask } from '@alteroid/swr';
 import { redactBody } from '@alteroid/logic';
 import type { Task, TaskPlacementInput } from '@alteroid/logic';
 
@@ -57,7 +57,7 @@ export function TaskOriginBadge({ origin }: { origin: string }) {
   return <Badge tone={origin === 'human' ? 'accent' : 'neutral'}>{label}</Badge>;
 }
 
-function taskLabel(task: Task): string {
+export function taskLabel(task: Task): string {
   const flat = redactBody(task.title).replace(/\s+/g, ' ').trim();
   return Array.from(flat).length > 20 ? `${Array.from(flat).slice(0, 20).join('')}…` : flat;
 }
@@ -290,81 +290,5 @@ export function TaskCloseForm({ task }: { task: Task }) {
       </FieldHint>
       <ErrorNote error={failure} className="mt-2" />
     </div>
-  );
-}
-
-// 閉じた主体（器が自動で閉じた行も含む）で出し分けない: 否定できる相手を画面の側で狭めると、サーバの規則が変わった日に画面だけがずれる。
-export function TaskReopenForm({ task }: { task: Task }) {
-  const reopenTask = useReopenTask();
-  const reasonId = useId();
-  const [opened, setOpened] = useState(false);
-  const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
-  const label = taskLabel(task);
-  useReportDirty(`task-reopen-reason:${task.id}`, reason.trim() !== '');
-
-  async function submit() {
-    if (busy || reason.trim() === '') return;
-    setBusy(true);
-    setFailure(undefined);
-    try {
-      await reopenTask(task.id, reason.trim());
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (!opened) {
-    return (
-      <div className="mt-1.5 text-[11px]">
-        <Button size="sm" aria-label={`「${label}」を開き直す`} onClick={() => setOpened(true)}>
-          開き直す
-        </Button>
-      </div>
-    );
-  }
-  return (
-    <>
-      <label htmlFor={reasonId} className="mt-2 block text-xs font-medium text-muted-foreground">
-        開き直す理由
-      </label>
-      <div className="mt-1 flex items-center gap-2">
-        <Input
-          id={reasonId}
-          value={reason}
-          aria-label={`「${label}」を開き直す理由`}
-          placeholder="例: まだ終わっていなかった"
-          onChange={(event) => setReason(event.target.value)}
-          onSubmitShortcut={() => void submit()}
-        />
-        <Button
-          variant="primary"
-          size="sm"
-          className="shrink-0"
-          loading={busy}
-          disabled={reason.trim() === ''}
-          aria-label={`「${label}」の開き直しを確定`}
-          onClick={() => void submit()}
-        >
-          開き直す
-        </Button>
-        <Button
-          size="sm"
-          className="shrink-0"
-          disabled={busy}
-          onClick={() => {
-            setOpened(false);
-            setReason('');
-            setFailure(undefined);
-          }}
-        >
-          やめる
-        </Button>
-      </div>
-      <ErrorNote error={failure} className="mt-2" />
-    </>
   );
 }
