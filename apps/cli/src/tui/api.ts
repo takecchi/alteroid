@@ -326,6 +326,19 @@ export function createTuiApi(target: Target): TuiApi {
     }
   }
 
+  async function* openChatStream(
+    path: string,
+    init: { method: string; body?: string },
+    what: string,
+    signal: AbortSignal,
+  ): AsyncGenerator<ChatEvent> {
+    for await (const event of openStream(path, init, what, signal)) {
+      if (!CHAT_EVENT_NAMES.has(event.name)) continue;
+      const data = event.json<Record<string, unknown>>() ?? {};
+      yield { ...data, type: event.name } as ChatEvent;
+    }
+  }
+
   return {
     baseUrl: target.baseUrl,
 
@@ -339,16 +352,7 @@ export function createTuiApi(target: Target): TuiApi {
           ? {}
           : { attachments: input.attachments }),
       });
-      for await (const event of openStream(
-        '/chat',
-        { method: 'POST', body },
-        '送信できませんでした',
-        signal,
-      )) {
-        if (!CHAT_EVENT_NAMES.has(event.name)) continue;
-        const data = event.json<Record<string, unknown>>() ?? {};
-        yield { ...data, type: event.name } as ChatEvent;
-      }
+      yield* openChatStream('/chat', { method: 'POST', body }, '送信できませんでした', signal);
     },
 
     async findClientMessage(clientMessageId) {
@@ -399,16 +403,12 @@ export function createTuiApi(target: Target): TuiApi {
     },
 
     async *chatStream(conversationId, signal) {
-      for await (const event of openStream(
+      yield* openChatStream(
         `/chat/${encodeURIComponent(conversationId)}/stream`,
         { method: 'GET' },
         '進行中の応答に戻れませんでした',
         signal,
-      )) {
-        if (!CHAT_EVENT_NAMES.has(event.name)) continue;
-        const data = event.json<Record<string, unknown>>() ?? {};
-        yield { ...data, type: event.name } as ChatEvent;
-      }
+      );
     },
 
     async listConversations(cursor) {
