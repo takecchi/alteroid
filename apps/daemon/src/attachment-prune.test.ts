@@ -58,6 +58,20 @@ describe('添付ファイルの定期掃除（#3111）', () => {
     expect(read('0').notes).toEqual([]);
   });
 
+  it('読めない値の注意は全文で固定し、前後の空白は落として読む。空白だけは未設定と同じ（#5606）', () => {
+    const read = (raw: string) =>
+      readAttachmentPruneConfig({ ALTEROID_ATTACHMENT_PRUNE_EVERY: raw });
+    expect(read('soon').notes).toEqual([
+      'ALTEROID_ATTACHMENT_PRUNE_EVERY="soon" は分数として読めないので既定 60 を使う',
+    ]);
+    expect(read('  15  ')).toEqual({ everyMinutes: 15, notes: [] });
+    expect(read(' off ').everyMinutes).toBeNull();
+    expect(read('   ')).toEqual({
+      everyMinutes: DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES,
+      notes: [],
+    });
+  });
+
   it('1周で期限切れ・未結び付けを消し、結び付いた期限内のものは残す', async () => {
     const stores = createMemoryStores();
     const stale = await stores.attachments.put({

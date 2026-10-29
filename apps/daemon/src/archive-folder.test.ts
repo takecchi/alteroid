@@ -422,6 +422,16 @@ describe('readArchiveFoldConfig（issue #698）', () => {
     expect(read('0').everyMinutes).toBeNull();
     expect(read('0').notes).toEqual([]);
   });
+
+  it('読めない値の注意は全文で固定し、前後の空白は落として読む。空白だけは未設定と同じ（#5606）', () => {
+    const read = (raw: string) => readArchiveFoldConfig({ [ARCHIVE_FOLD_EVERY_ENV]: raw });
+    expect(read('soon').notes).toEqual([
+      'ALTEROID_ARCHIVE_FOLD_EVERY="soon" は分数として読めないので既定 60 を使う',
+    ]);
+    expect(read('  15  ')).toEqual({ everyMinutes: 15, notes: [] });
+    expect(read(' off ').everyMinutes).toBeNull();
+    expect(read('   ')).toEqual({ everyMinutes: DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES, notes: [] });
+  });
 });
 
 describe('startArchiveFolding（issue #698）', () => {
