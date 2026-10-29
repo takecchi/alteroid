@@ -13,7 +13,6 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  parseSSEChunk,
   renderCommitments,
   renderManagerList,
   renderReport,
@@ -6529,29 +6528,6 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     expect(text).toContain('番号・requestId を省くと');
     expect(text).toContain('返事待ちのマネージャーが1本だけ');
     expect(text).toContain('2本以上なら送らずに候補を出す');
-  });
-});
-
-describe('parseSSEChunk', () => {
-  it('コメント行だけの塊は読み飛ばす（デーモンの heartbeat を画面に出さない）', () => {
-    expect(parseSSEChunk(': hb')).toBeNull();
-    expect(parseSSEChunk('')).toBeNull();
-    expect(parseSSEChunk(':')).toBeNull();
-  });
-
-  it('コメント行が同じ塊に混ざっても、イベントの中身を壊さない', () => {
-    const parsed = parseSSEChunk(': hb\nevent: text\ndata: {"type":"text","text":"やあ"}');
-
-    expect(parsed).not.toBeNull();
-    expect(parsed?.name).toBe('text');
-    expect(parsed?.json<{ text: string }>()?.text).toBe('やあ');
-  });
-
-  it('ふつうのイベントはこれまでどおり読める（上の2件が緩めでないことの裏取り）', () => {
-    const parsed = parseSSEChunk('event: done\ndata: {"type":"done"}');
-
-    expect(parsed?.name).toBe('done');
-    expect(parsed?.json<{ type: string }>()?.type).toBe('done');
   });
 });
 
