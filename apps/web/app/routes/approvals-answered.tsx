@@ -1,6 +1,7 @@
 import { describeAnsweredVia } from '@alteroid/core/answered-via';
 import { Link } from 'react-router';
 
+import { approvalStateOf } from '~/components/approval-answer-card';
 import { ApprovalEntry } from '~/components/approval-entry';
 import { ApprovalsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
@@ -217,11 +218,7 @@ function DayBody({ date, approvalId }: { date: string; approvalId: string | unde
               return (
                 <li key={approval.id}>
                   <AnsweredApprovalRow
-                    state={
-                      approval.withdrawnAt != null && approval.answeredAt == null
-                        ? 'withdrawn'
-                        : 'answered'
-                    }
+                    state={approvalStateOf(approval) === 'withdrawn' ? 'withdrawn' : 'answered'}
                     time={at === undefined ? '' : formatDateTime(at)}
                     question={redactBody(approval.question)}
                     {...(approval.answer != null ? { answer: redactBody(approval.answer) } : {})}

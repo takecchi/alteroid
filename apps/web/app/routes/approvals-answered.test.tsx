@@ -535,6 +535,36 @@ describe('取り下げ済み', () => {
   });
 });
 
+// 台帳が answeredAt と withdrawnAt を両方持つ行（古い版の書き戻しが作りうる）を、一覧の行もカードも取り下げとして出す（#5593）
+describe('回答も取り下げも立っている行は取り下げとして出す（#5593）', () => {
+  const BOTH = approval({
+    id: 'a-both',
+    question: '両方立った確認',
+    answeredAt: '2026-09-30T10:00:00.000Z',
+    answer: '遅れて届いた答え',
+    withdrawnAt: '2026-09-30T05:00:00.000Z',
+    withdrawnReason: '先に取り下げていた',
+  });
+
+  it('一覧の行は取り下げ済の札で、回答済の札は付かない', async () => {
+    stubApi({ dates: DATES, days: { '2026-09-30': [BOTH] } });
+    renderAt('/approvals/answered/2026-09-30');
+
+    const row = (await screen.findByText('両方立った確認')).closest('a')!;
+    expect(row.textContent).toContain('取り下げ済');
+    expect(row.textContent).not.toContain('回答済');
+  });
+
+  it('詳細のカードは取り下げ済み（理由つき・入力欄なし）', async () => {
+    stubApi({ dates: DATES, days: { '2026-09-30': [BOTH] } });
+    renderAt('/approvals/answered/2026-09-30/a-both');
+
+    expect(await screen.findByText('先に取り下げていた')).toBeTruthy();
+    expect(screen.getByText('取り下げた理由')).toBeTruthy();
+    expect(screen.queryByPlaceholderText(/答える/)).toBeNull();
+  });
+});
+
 describe('取れなかったのを0件と描かない', () => {
   const fail500: Respond = () => json({ error: 'internal' }, 500);
   const failNetwork: Respond = () => Promise.reject(new TypeError('Failed to fetch'));

@@ -81,6 +81,7 @@ import type {
 import {
   ApprovalAnswerCard,
   approvalDetailPath,
+  approvalStateOf,
   isApprovalAnswered,
   isApprovalWithdrawn,
 } from '~/components/approval-answer-card';
@@ -3036,13 +3037,7 @@ export function ChatPane({
                       <li
                         key={line.key}
                         data-approval-card={approvalId}
-                        data-approval-state={
-                          isApprovalWithdrawn(line.approval)
-                            ? 'withdrawn'
-                            : isApprovalAnswered(line.approval)
-                              ? 'answered'
-                              : 'unanswered'
-                        }
+                        data-approval-state={approvalStateOf(line.approval)}
                       >
                         <ApprovalAnswerCard
                           approval={line.approval}

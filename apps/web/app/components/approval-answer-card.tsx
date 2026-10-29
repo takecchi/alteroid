@@ -30,6 +30,14 @@ export function isApprovalWithdrawn(approval: PendingApproval): boolean {
   return approval.withdrawnAt !== undefined && approval.withdrawnAt !== null;
 }
 
+/** 承認の状態は画面ごとに導かず、ここで決める。両方立った行は取り下げ（`isApprovalWithdrawn` が先）。 */
+export function approvalStateOf(
+  approval: PendingApproval,
+): 'withdrawn' | 'answered' | 'unanswered' {
+  if (isApprovalWithdrawn(approval)) return 'withdrawn';
+  return isApprovalAnswered(approval) ? 'answered' : 'unanswered';
+}
+
 /** 日付なしの入口を返す。回答済み詳細の日付はデーモンの `localDate()` で決まり id だけでは組めないので、入口が正しい日へ replace で移す。 */
 export function approvalDetailPath(approvalId: string): string {
   return `/approvals/item/${encodeURIComponent(approvalId)}`;
@@ -84,9 +92,7 @@ export function ApprovalAnswerCard({
   const currentDraft = draft ?? ownDraft;
   const changeDraft = onDraftChange ?? setOwnDraft;
 
-  const answered = isApprovalAnswered(approval);
-  const withdrawn = isApprovalWithdrawn(approval);
-  const state = withdrawn ? 'withdrawn' : answered ? 'answered' : 'unanswered';
+  const state = approvalStateOf(approval);
 
   async function send(request: () => Promise<void>, sent: SentApprovalDraft) {
     // 送信中（このカード・まとめ送信・アンマウント前の別のカード）は何もしない: 同じ承認を二重に送らない。
