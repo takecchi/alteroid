@@ -371,7 +371,8 @@ export function summarizeInboxBacklog(
 // `distinct` は改名せず断り書きを足す: 名前は計算しているものを正確に言っており、誤読は名前から引く推論の側で起きるため
 // 人間起点の行で「配達されていない」と断定しない: 見ているのはストアに残っている行で、メモリ上の待ち行列ではないため
 // 固定の言い回しを畳む口（`ToolContext.foldFixed` と同じ形）。無ければ全文のまま（situation・CLI は畳まない）。
-// 数・時刻・種類の内訳は畳まない: 毎回の値であり、固定の言い回しだけを `fold` に包む
+// この関数群の中では、数・時刻・種類の内訳は畳まず固定の言い回しだけを `fold` に包む。
+// 内訳そのものの「前回と同じ」は呼び出し側（tools.ts の `describeInboxBacklog`）が、内訳の指紋で畳む
 export type InboxBacklogFold = (id: string, full: string, ref: string) => string;
 const NO_INBOX_FOLD: InboxBacklogFold = (_id, full) => full;
 

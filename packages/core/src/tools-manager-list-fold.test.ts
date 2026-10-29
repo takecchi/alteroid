@@ -218,7 +218,7 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
     }
   });
 
-  it('⭐ 受信箱の滞留: 2回目は固定の言い回しだけが札になり、数・時刻・内訳は毎回出る。札にも結論が残る', async () => {
+  it('⭐ 受信箱の滞留: 同じ内訳の2回目は内訳が1行になり、見出し・件数・人間起点の滞留は毎回出る。札にも結論が残る', async () => {
     const delta = new DigestSessionDelta();
     const call = harness(normal, delta, { inbox: stuckInbox(), queued: 5 });
 
@@ -242,16 +242,24 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
     expect(second).toContain('配達されていないとは言えない');
     expect(second).toContain('足しても引いても意味が無い');
     expect(second).toContain('この数は上下どちらへもぶれる');
-    // 数・時刻・内訳は毎回出る
+    // 件数・見出し・人間起点の滞留・配達待ち行列は毎回出る
     for (const text of [first, second]) {
       expect(text).toContain('未処理の合図が 12 件ある');
       expect(text).toContain('人間起点（human_message / human_answer）の滞留が 6 件ある');
       expect(text).toContain('メモリの配達待ち行列 5 件');
-      expect(text).toContain('内訳（計 12 件）:');
-      expect(text).toContain('種類: ');
-      expect(text).toContain('器の入れ替え回数: 0回＝いまの器になってから積まれた');
-      expect(text).toContain('齢（観測 ');
     }
+    // 内訳の値は初回だけ全文で、同じ内訳の2回目は1行になる（値が変わったときは全文に戻る: clone-manager-list-query-fold.test.ts）。
+    // 元の期待（内訳も毎回全文）を反転した: 同じ中身を毎回全文で出すと、q で1件引くだけの呼びでも応答の大半を占めたため
+    for (const line of [
+      '内訳（計 12 件）:',
+      '種類: ',
+      '器の入れ替え回数: 0回＝いまの器になってから積まれた',
+      '齢（観測 ',
+    ]) {
+      expect(first).toContain(line);
+      expect(second).not.toContain(line);
+    }
+    expect(second).toContain('内訳（計 12 件）は前回と同じ');
     expect(second.length).toBeLessThan(first.length - 300);
   });
 
