@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router';
 
 import { LoadError } from '~/components/load-error';
 import { saveBlob } from '~/lib/save-blob';
+import { useSearchParamDraft } from '~/lib/use-search-param-draft';
 import {
   ApiError,
   AttachmentGoneError,
@@ -47,7 +48,6 @@ import {
 } from '@alteroid/ui';
 
 const PAGE_SIZE = 50;
-const SEARCH_DEBOUNCE_MS = 300;
 
 const KEPT_PARAM = 'kept';
 const FROM_PARAM = 'from';
@@ -73,38 +73,9 @@ export default function Files() {
   const kept = keptParam === '1' ? true : keptParam === '0' ? false : undefined;
   const fromParam = searchParams.get(FROM_PARAM);
   const from = isAttachmentFrom(fromParam) ? fromParam : undefined;
-  const committed = searchParams.get(SEARCH_PARAM) ?? '';
   const conversationId = searchParams.get(CONVERSATION_PARAM) ?? undefined;
 
-  const [draft, setDraft] = useState(committed);
-  // 自分が URL へ書いた語を持つ: 外からの変更（ナビのリンク・戻る）と区別しないと、打鍵中の入力を自分の書き込みの反映で巻き戻すため
-  const [written, setWritten] = useState<string | null>(null);
-  const [seen, setSeen] = useState(committed);
-  // 外からの変更を描画中に draft へ取り込む（日誌の #3985 と同じ）: 取り込まないと、debounce の後に古い draft で URL を書き戻し、
-  // リンクで検索を外せない・別の語へ移っても元の語に戻る
-  if (committed !== seen) {
-    setSeen(committed);
-    setWritten(null);
-    if (committed !== written) setDraft(committed);
-  }
-  useEffect(() => {
-    if (draft === committed) return;
-    const timer = setTimeout(() => {
-      setWritten(draft);
-      setSearchParams(
-        (previous) => {
-          const next = new URLSearchParams(previous);
-          if (draft === '') next.delete(SEARCH_PARAM);
-          else next.set(SEARCH_PARAM, draft);
-          return next;
-        },
-        { replace: true },
-      );
-    }, SEARCH_DEBOUNCE_MS);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [draft, committed, setSearchParams]);
+  const [draft, setDraft, committed] = useSearchParamDraft(SEARCH_PARAM);
 
   function setParam(name: string, value: string | undefined) {
     setSearchParams(
