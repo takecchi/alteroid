@@ -1,6 +1,6 @@
 import { assertNoNul, stripNulWellFormed as cleanText } from './nul-guard.js';
 import { taskSchema } from './schema.js';
-import type { CommitmentOrigin, Task, TaskClosedBy, TaskStatus } from './schema.js';
+import type { CommitmentOrigin, JobStatus, Task, TaskClosedBy, TaskStatus } from './schema.js';
 import { compareIsoInstant } from './iso-instant.js';
 
 // Task の状態遷移と並びの規則。純関数だけを置き、メモリ・fs・pg の3実装が同じものを呼ぶ。
@@ -8,6 +8,15 @@ import { compareIsoInstant } from './iso-instant.js';
 
 export function isTaskClosed(status: TaskStatus): boolean {
   return status === 'done' || status === 'cancelled';
+}
+
+/**
+ * 結び付いた委譲の状態に対応する task の状態（#5469 P3）。
+ * 動いている間と、人間の返事待ち（`waiting_human`）は `waiting`。終わった委譲（done / failed / lost / stopped）は `needs_decision`:
+ * 結果をどうするか（次の委譲・人間への報告・閉じる）はクローンが決める。`done` でも task は閉じない。
+ */
+export function taskStatusForJob(status: JobStatus): TaskStatus {
+  return status === 'running' || status === 'waiting_human' ? 'waiting' : 'needs_decision';
 }
 
 export type TaskTransition =

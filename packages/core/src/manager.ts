@@ -180,6 +180,7 @@ import type {
   RescueRemovalFailureKind,
   RescueRemovalReason,
   TextMarkup,
+  TaskStatus,
   UnpushedWorkObservationSource,
   WorkspaceLocator,
   ExternalOutput,
@@ -192,6 +193,7 @@ import {
   type RescueStashEntry,
 } from './schema.js';
 import { describeUnreadableManagerRow, UnreadableJobError, type Stores } from './store.js';
+import { isTaskClosed, taskStatusForJob } from './task.js';
 import {
   markRescueGoneWhileAlive,
   pruneRescueLedger,
@@ -251,6 +253,11 @@ export interface ManagerStartInput {
    * から読んだ値をそのまま `Job.conversationId` へ写すだけ。
    */
   conversationId?: string;
+  /**
+   * この委譲が結び付く task（`manager_start` の `taskId`）。台帳の `Job.taskId` へ写し、委譲の状態に合わせてデーモンが task の状態を動かす（#5469 P3）。
+   * 存在と開いているかの確認は呼び出し元（道具）が済ませる。ここでは確かめない: task が見つからなければ状態を追わせないだけで、委譲は止めない。
+   */
+  taskId?: string;
   /**
    * 記憶・日誌には中身を写さない（日誌にはメタデータの参照だけ）。runner が
    * `manager-attachments` を名乗らなければ断る: 欄が黙って捨てられるため。
@@ -3779,6 +3786,7 @@ class Pool implements ManagerPool {
         updatedAt: at,
         status: 'running',
         ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+        ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
         summary: brief({ request: input.request }),
         request: input.request,
         ...(input.supersedes === undefined ? {} : { supersedes: input.supersedes }),
@@ -3827,7 +3835,6 @@ class Pool implements ManagerPool {
     }
     // 名簿を引き直さず、この回に貸し出しを立てた相手を写す。`undefined` で上書きしない: 一度名乗った器の値まで消えて以後判定できなくなる。
     if (lease.instanceId !== undefined) record.job.sessionInstanceId = lease.instanceId;
-
     await this.#persist(record);
     await this.#journal({
       type: 'exchange',
@@ -7996,6 +8003,7 @@ class Pool implements ManagerPool {
       finished = resolve;
     });
     try {
+      if (!this.#stopped) await this.#repairStrandedTasks();
       const restored = await this.#restoreJobs();
       this.#rebuildWithheldFromLedger();
       return restored;
@@ -13465,11 +13473,152 @@ class Pool implements ManagerPool {
         record.job.lease = touchLease(lease, this.#now());
       }
     }
+    // task へ写すのに、書く前の台帳の状態が要る（結び付いた委譲だけ読む）。読めなければ `undefined`
+    const before =
+      record.job.taskId === undefined
+        ? undefined
+        : await this.#stores.jobs.getJob(record.job.id).then(
+            (stored) => stored?.status ?? null,
+            () => undefined,
+          );
+    // 終端へ入った時刻を1回だけ書く（起動時の直しの基準。終わった後の書き込みでは進めない）。動き出したら消す。読めなかった回は触れない
+    if (record.job.taskId !== undefined && before !== undefined) {
+      const wasActive = before !== null && taskStatusForJob(before) === 'waiting';
+      if (taskStatusForJob(record.job.status) === 'waiting') {
+        if (!wasActive) delete record.job.endedAt;
+      } else if (before === null || wasActive) {
+        record.job.endedAt = new Date(this.#now()).toISOString();
+      }
+    }
     try {
       await this.#stores.jobs.putJob(record.job);
     } catch (error) {
       // ジョブ台帳が書けなくてもマネージャーは走らせるが、黙って消さない: 失敗は台帳にも日誌にも跡を残さない。
       noteDroppedRecord('ジョブ台帳', `job id=${record.job.id} status=${record.job.status}`, error);
+    }
+    await this.#syncTask(record, before);
+  }
+
+  /**
+   * 委譲の状態を、結び付いた task（`Job.taskId`）へ写す（#5469 P3）。**状態を持たない規則**で、台帳に書く前の委譲の状態（`before`）と task の今の状態だけで決める:
+   * - 動き出す（台帳に無かった／終わっていた委譲が `running` へ入る: 起こした直後・resume）: 閉じていない task を `waiting` にする
+   * - 終わる（動いていた／台帳に無かった委譲が done / failed / lost / stopped へ入る）: `waiting` の task だけを `needs_decision` にする。クローンが `queued` へ戻した task や、閉じた task には触れない
+   * 動いている最中の書き込み（報告・確認要求など）と、終わった後の書き込みでは何もしない。クローンが動かした task を、委譲の次の書き込みで戻さないため。
+   * 書き込みの1本の口（`#persist`）に置く: 委譲の状態を変える経路は多く、個別に呼ぶと1つ漏れた経路の task だけが動かない。
+   * best-effort: task が書けなくても委譲と台帳は止めない。失敗は日誌へ残し、終わった委譲に結び付いたまま `waiting` の task は
+   * 次の起動で `#repairStrandedTasks` が直す。
+   * `before` が `undefined` のとき（直前の状態を読めなかった）は動き出しの側を見送る: 読めないまま task を `waiting` に戻すと、クローンの動かした状態を潰しうる。
+   */
+  async #syncTask(record: ManagerRecord, before: JobStatus | null | undefined): Promise<void> {
+    const taskId = record.job.taskId;
+    if (taskId === undefined) return;
+    const target = taskStatusForJob(record.job.status);
+    if (target === 'waiting') {
+      const entering =
+        before === null || (before !== undefined && taskStatusForJob(before) !== 'waiting');
+      if (!entering) return;
+    } else {
+      // 終わる側も、動いていた（または台帳に無かった）委譲が終端へ入る書き込みだけで動かす。終わった後の書き込み
+      // （2度目の報告・restore の引き取り・預かりの掃除など）では、クローンが置いた `waiting` を倒さない。読めなかった回は見送る
+      const ending =
+        before === null || (before !== undefined && taskStatusForJob(before) === 'waiting');
+      if (!ending) return;
+    }
+    try {
+      const task = await this.#stores.tasks.get(taskId);
+      // 閉じた task は動かさない（`planTaskTransition` も拒むが、日誌を汚さない）。見つからない task は、書けない相手なので追わない
+      if (task === null || isTaskClosed(task.status)) return;
+      if (target === 'needs_decision') {
+        if (task.status !== 'waiting') return;
+        // 同じ task に走っている別の委譲が台帳に居れば動かさない: resume で、終わった委譲が同じ task の別の委譲と同時に走ることがある
+        // （入口の断りは `manager_start` だけで、`manager_send` や枠の自動の起こし直しは止めない）
+        const others = await this.#stores.jobs.listJobs();
+        if (
+          others.some(
+            (job) =>
+              job.id !== record.job.id &&
+              job.taskId === taskId &&
+              taskStatusForJob(job.status) === 'waiting',
+          )
+        ) {
+          return;
+        }
+      }
+      await this.#moveTask(taskId, target, record.job.id, `委譲が ${record.job.status}`);
+    } catch (error) {
+      noteDroppedRecord(
+        'task の状態の追従',
+        `job id=${record.job.id} task=${taskId} status=${record.job.status}`,
+        error,
+      );
+      await this.#journal({
+        type: 'decision',
+        decision: `[${record.job.id}] task ${taskId} の状態を委譲（${record.job.status}）に合わせられなかった`,
+        grounds:
+          '委譲は止めない。終わった委譲に結び付いたまま waiting の task は、次の起動で needs_decision へ直す（#5469 P3）',
+      });
+    }
+  }
+
+  /** task を `by: 'daemon'` で動かし、動いたときだけ遷移を日誌へ残す。投げるのは task ストアの失敗だけ。 */
+  async #moveTask(taskId: string, to: TaskStatus, jobId: string, why: string): Promise<void> {
+    const result = await this.#stores.tasks.setStatus(taskId, to, {
+      by: 'daemon',
+      at: new Date(this.#now()).toISOString(),
+    });
+    if (result.kind !== 'changed') return;
+    await this.#journal({
+      type: 'decision',
+      decision: `[${jobId}] task ${taskId} を ${result.before.status} から ${to} にした（${why}）`,
+      grounds: '委譲の状態に結び付いた task を追わせる（#5469 P3）',
+    });
+  }
+
+  /**
+   * 終わった委譲にしか結び付いていないのに `waiting` のままの task を `needs_decision` へ直す（#5469 P3）。
+   * 終端の同期に失敗した、または同期の前にデーモンが落ちた task が戻れなくなるのを防ぐ。`restore()` が呼ばれるたびに走る
+   * （起動のほか、takeOver・トークンの回復からも呼ばれる）ので、何度走っても同じ結果になるよう書いてある。
+   * 走っている委譲が1本でも結び付いていれば直さない。結び付いた委譲のうち最後に終端へ入ったもの（`Job.endedAt` が最も新しい）より後に
+   * task が更新されていれば、クローンが置いた `waiting`（`task_set_status`）なので直さない。
+   * `updatedAt` は使わない: 終わった後の書き込みでも進むので、基準にすると呼ばれるたびに判定が狂う。
+   * 結び付いた終端の委譲に `endedAt` が無い・読めない行が1つでもある task は、並び順によらず見送る（クローンの置いた状態を潰す側へ倒さない）。
+   * 読めない・書けないときは見送って stderr に残す（次に呼ばれたときにもう一度見る）。
+   */
+  async #repairStrandedTasks(): Promise<void> {
+    try {
+      const active = new Set<string>();
+      const skip = new Set<string>();
+      const lastFinished = new Map<string, { id: string; at: number }>();
+      for (const job of await this.#stores.jobs.listJobs()) {
+        if (job.taskId === undefined) continue;
+        if (taskStatusForJob(job.status) === 'waiting') {
+          active.add(job.taskId);
+          continue;
+        }
+        const at = job.endedAt === undefined ? Number.NaN : Date.parse(job.endedAt);
+        if (Number.isNaN(at)) {
+          skip.add(job.taskId);
+          continue;
+        }
+        const seen = lastFinished.get(job.taskId);
+        if (seen === undefined || at > seen.at) lastFinished.set(job.taskId, { id: job.id, at });
+      }
+      if (lastFinished.size === 0) return;
+      for (const task of (await this.#stores.tasks.list()).entries) {
+        const last = lastFinished.get(task.id);
+        if (last === undefined || skip.has(task.id) || active.has(task.id)) continue;
+        if (task.status !== 'waiting') continue;
+        const taskAt = Date.parse(task.updatedAt);
+        if (Number.isNaN(taskAt) || taskAt > last.at) continue;
+        await this.#moveTask(
+          task.id,
+          'needs_decision',
+          last.id,
+          '終わった委譲に結び付いたまま waiting だった（起動時の直し）',
+        );
+      }
+    } catch (error) {
+      noteDroppedRecord('終わった委譲の task の直し', '', error);
     }
   }
 

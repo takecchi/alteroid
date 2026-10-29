@@ -120,6 +120,18 @@ async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+// 実時計（`Date.now()`。fake timers で進めた Date にも追随する）を、呼ぶたびに必ず 1ms 以上進む時計にする。
+// 担当が「新しいターンを始めたか」は `Job.turnStartedAt` の ISO 文字列が変わったかで見ている。pool.restore() の組み直しと
+// 試験の send() が実時計で同じミリ秒に当たると値が変わらず、印が下りない（CI で稀に落ちた）。
+// 本番は変えない: 人間やクローンの send が起動と同じミリ秒に当たることは実運用では無く、試験の時計だけが同一ミリ秒を作る。
+function strictlyIncreasingNow(): () => number {
+  let last = 0;
+  return () => {
+    last = Math.max(Date.now(), last + 1);
+    return last;
+  };
+}
+
 async function setup(
   options: {
     availability?: ManagerPoolOptions['tokenAvailability'];
@@ -139,6 +151,7 @@ async function setup(
     profile: createProfileService({ stores, runners: registry }),
     tokenIdentity: () => ({ tokenId: 'tok-279', generation: 279 }),
     tokenAvailability: options.availability ?? (async () => 'ready'),
+    now: strictlyIncreasingNow(),
     onUsageObservation: async (observation) => {
       observations.push(observation);
     },
@@ -310,6 +323,27 @@ describe('作業者の落ちで手を止めた担当を起こす（#5030）', ()
     expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
     expect(s.fake.delivered).toEqual([]);
     await s.pool.stop();
+  });
+
+  it('⭐ 実時計が止まっていて（起動と続きの送りが同じミリ秒）も、続きを送った担当は新しいターンとして印を下ろす', async () => {
+    // 実時計が同じミリ秒に当たる揺れ（CI で稀に落ちた）を、時計を止めて毎回起こす
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() });
+    try {
+      const s = await setup({ availability: async () => 'cooling' });
+      s.fake.push(workerLimitNote(false));
+      s.fake.push(doneReport());
+      await settle();
+      expect((await s.pool.send(JOB.id, '続きをお願い')).outcome).toBe('delivered');
+      s.fake.delivered.length = 0;
+      s.fake.push(doneReport());
+      await settle();
+
+      expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+      expect(s.fake.delivered).toEqual([]);
+      await s.pool.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('後継へ引き継がれた担当は起こさない', async () => {
