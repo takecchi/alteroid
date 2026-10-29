@@ -4,8 +4,9 @@ import { commitmentFor } from './clone.js';
 import {
   autoCloseRepliedTasks,
   selectTasksToAutoClose,
+  hasDelegationForTask,
+  opensHumanTask,
   taskFromHumanIntake,
-  turnDelegatedForTask,
 } from './task-auto-done.js';
 import type { TurnReplyTrace, TurnReplyVia } from './task-auto-done.js';
 import type { InboxEvent, JournalEntry, Task } from './schema.js';
@@ -32,11 +33,21 @@ function task(id: string, overrides: Partial<Task> = {}): Task {
 function trace(
   replied: Record<string, TurnReplyVia> = { 'conv-1': 'turn_reply' },
   delegated: string[] = [],
+  extra: {
+    read?: string[];
+    unread?: string[];
+    asked?: string[];
+    active?: string[];
+  } = {},
 ): TurnReplyTrace {
   return {
     startedAt: TURN_START,
     replied: new Map(Object.entries(replied)),
+    readSignalIds: new Set(extra.read ?? []),
+    unreadSignalIds: new Set(extra.unread ?? []),
+    askedConversationIds: new Set(extra.asked ?? []),
     delegatedOriginConversationIds: new Set(delegated),
+    activeJobConversationIds: new Set(extra.active ?? []),
   };
 }
 
@@ -85,11 +96,62 @@ describe('selectTasksToAutoClose: 何を閉じ、何を閉じないか', () => {
   });
 
   it('委譲の判定は1つの関数（P3 で task.id との一致へ置き換える点）にまとまっている', () => {
-    expect(turnDelegatedForTask(task('a'), trace({}, ['conv-1']))).toBe(true);
-    expect(turnDelegatedForTask(task('a'), trace({}, []))).toBe(false);
+    expect(hasDelegationForTask(task('a'), trace({}, ['conv-1']))).toBe(true);
+    expect(hasDelegationForTask(task('a'), trace({}, []))).toBe(false);
     expect(
-      turnDelegatedForTask(task('a', { originConversationId: undefined }), trace({}, ['conv-1'])),
+      hasDelegationForTask(task('a', { originConversationId: undefined }), trace({}, ['conv-1'])),
     ).toBe(false);
+    // 前のターンで起こして、いまも走っている委譲（このターンの控えには無い）
+    expect(hasDelegationForTask(task('a'), trace({}, [], { active: ['conv-1'] }))).toBe(true);
+    expect(hasDelegationForTask(task('a'), trace({}, [], { active: ['conv-2'] }))).toBe(false);
+  });
+
+  it('前のターンで起こして走っている委譲（running / waiting_human）の会話の task は、次の返答でも閉じない', () => {
+    expect(
+      selectTasksToAutoClose(
+        [task('a')],
+        trace({ 'conv-1': 'turn_reply' }, [], { active: ['conv-1'] }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('そのターンで問い（ask_human）を出した会話の task は閉じない。別の会話の task は閉じる', () => {
+    const tasks = [task('a'), task('b', { originConversationId: 'conv-2' })];
+    expect(
+      selectTasksToAutoClose(
+        tasks,
+        trace({ 'conv-1': 'turn_reply', 'conv-2': 'conversation_post' }, [], { asked: ['conv-1'] }),
+      ).map((t) => t.id),
+    ).toEqual(['b']);
+  });
+
+  it('turn_reply: そのターンが読んだ発言の id の task だけ閉じる（同じ会話のまだ読んでいない発言は閉じない）', () => {
+    const tasks = [task('read'), task('unread')];
+    expect(
+      selectTasksToAutoClose(tasks, trace({ 'conv-1': 'turn_reply' }, [], { read: ['read'] })).map(
+        (t) => t.id,
+      ),
+    ).toEqual(['read']);
+  });
+
+  it('conversation_post: 受信箱にまだ残っている合図の task を除く', () => {
+    const tasks = [task('done-reading'), task('still-in-inbox')];
+    expect(
+      selectTasksToAutoClose(
+        tasks,
+        trace({ 'conv-1': 'conversation_post' }, [], { unread: ['still-in-inbox'] }),
+      ).map((t) => t.id),
+    ).toEqual(['done-reading']);
+  });
+
+  it('回答のターン（読んだ発言が無い）の返答: 受信箱にまだ残っている合図の task を除いて閉じる', () => {
+    const tasks = [task('asker'), task('later')];
+    expect(
+      selectTasksToAutoClose(
+        tasks,
+        trace({ 'conv-1': 'turn_reply' }, [], { unread: ['later'] }),
+      ).map((t) => t.id),
+    ).toEqual(['asker']);
   });
 });
 
@@ -165,7 +227,7 @@ describe('autoCloseRepliedTasks: 閉じて日誌に残す', () => {
 
 describe('taskFromHumanIntake: 台帳の行と同じ id の Task', () => {
   const at = '2026-10-29T01:00:00.000Z';
-  const message: InboxEvent = {
+  const message: Extract<InboxEvent, { type: 'human_message' }> = {
     type: 'human_message',
     id: 'evt-1',
     at,
@@ -178,6 +240,7 @@ describe('taskFromHumanIntake: 台帳の行と同じ id の Task', () => {
     at,
     approvalId: 'appr-1',
     answer: 'はい',
+    conversationId: 'conv-9',
   };
 
   it('human_message: id・source は台帳の行と同じ、起点の会話付き、title は先頭行60字', () => {
@@ -197,12 +260,11 @@ describe('taskFromHumanIntake: 台帳の行と同じ id の Task', () => {
     expect(built.body).toBe(entry?.body);
   });
 
-  it('human_answer: 起点の会話は付けない（会話 id が無い）', () => {
-    const entry = commitmentFor(answer);
-    const built = taskFromHumanIntake(entry!, answer, NOW);
-    expect(built.id).toBe('evt-2');
-    expect(built.source).toBe('appr-1');
-    expect(built.originConversationId).toBeUndefined();
+  it('human_answer は Task を作る合図ではない（台帳の行は載るが、Task は作らない。回答のイベントは会話 id を持つ）', () => {
+    expect(opensHumanTask(answer)).toBe(false);
+    expect(opensHumanTask(message)).toBe(true);
+    // 台帳には移行期のあいだ載る
+    expect(commitmentFor(answer)?.origin).toBe('human');
   });
 });
 

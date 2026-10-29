@@ -528,6 +528,11 @@ export interface ToolContext {
    * その会話を起点にする task を、このターンの返答で自動 done にしない判定に使う（#5469 P5。P3 で委譲が taskId を持ったら task の id で結ぶ）。無い器（テスト・蒸留）は何もしない。
    */
   noteDelegationStarted?: (originConversationId: string | undefined) => void;
+  /**
+   * `ask_human` / `request_permission` が人間への問いを積んだ（その問いの会話 id。無ければ `undefined`）。
+   * そのターンでは、その会話の task を自動 done にしない（人間の答え待ちになるため。#5469 P5）。無い器は何もしない。
+   */
+  noteQuestionAsked?: (conversationId: string | undefined) => void;
   // 添付があるとき（`attachments`）だけ第3引数を渡す: 添付の無い従来の呼び出しの形を変えないため
   postToConversation?: (
     conversationId: string,
@@ -4860,6 +4865,9 @@ export function createCloneTools(context: ToolContext) {
           },
           'act-completed',
         );
+        // 問いを積んだ時点で控える（日誌が書けなかった呼びは上で投げており、ここへ来ない）。ターンの自分の会話も控える: 回す確認の起点が別の会話でも、いまの会話の task を閉じない
+        context.noteQuestionAsked?.(conversationId);
+        context.noteQuestionAsked?.(getConversationId());
         context.emit({ type: 'ask_human', approvalId: approval.id, question });
         return text(`承認待ちキューに積んだ（${approval.id}）。回答は後から届く。`);
       },
@@ -4935,6 +4943,7 @@ export function createCloneTools(context: ToolContext) {
           },
           'act-completed',
         );
+        context.noteQuestionAsked?.(conversationId);
         context.emit({ type: 'ask_human', approvalId: approval.id, question });
         return text(
           `承認待ちキューに積んだ（${approval.id}）。人間が「${PERMISSION_GRANT_CONSENT_PHRASE}」とちょうど答え、` +
@@ -6190,8 +6199,8 @@ export function createCloneTools(context: ToolContext) {
         'task（順序と状態を持つ待ち行列）の一覧。**先頭が先にやるもの**で、並びは器が持つ（数値の優先度・締切は無い）。',
         '各件はタイトルと本文の抜粋だけを出す。1件の全文（本文と、閉じたなら理由）が要るなら id を渡す。閉じた件も id で読める。',
         '既定は開いている件（queued / waiting / needs_decision）だけ。includeClosed で閉じた件（done / cancelled）を後ろに足す。',
-        '引き受けた仕事の台帳（commitment_list）とは別の器。人間の依頼（人間の発言・承認への回答）は、台帳の行と同じ id で届いた時点で自動的に載る（queued）。マネージャーの報告・外部イベントは自動では載らない。',
-        '人間の依頼の task は、起点の会話へ返答したターンの終わりに、queued であれば器が自動で done にする（閉じたものは includeClosed で読み返せる。止めるなら task_keep）。',
+        '引き受けた仕事の台帳（commitment_list）とは別の器。人間の発言は、台帳の行と同じ id で届いた時点で自動的に載る（queued）。人間の承認への回答・マネージャーの報告・外部イベントは自動では載らない。',
+        '人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（閉じたものは includeClosed で読み返せる。止めるなら task_keep）。ただし、そのターンで人間へ問いを出した（ask_human）会話、走っている委譲（running / waiting_human）がある会話の task は閉じない。',
         '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
       {
@@ -6644,10 +6653,10 @@ export function createCloneTools(context: ToolContext) {
       'task_keep',
       [
         'task に「続く」の印を立てる（keep=true）／外す（keep=false）。',
-        '人間の依頼の task は、起点の会話へ返答したターンの終わりに、queued であれば器が自動で done にする（理由と閉じた主体 daemon が残り、日誌にも書かれる）。',
+        '人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（理由と閉じた主体 daemon が残り、日誌にも書かれる）。',
         '返答したあとも続ける仕事（返答は途中経過で、まだ終わっていない）は、返答する前にこの印を立てておくと、自動では閉じない。',
         '印は状態・並びを動かさない。印を立てた task を終えるときは task_set_status で done にすること。',
-        '自動 done が閉じない場合はほかにもある: waiting / needs_decision（待ち・判断待ち）、そのターンで同じ起点の会話の委譲を起こしたとき、起点の会話が無い task（承認への回答など）。',
+        '自動 done が閉じない場合はほかにもある: waiting / needs_decision（待ち・判断待ち）、そのターンで同じ会話へ問い（ask_human）を出したとき、同じ起点の会話で走っている委譲（running / waiting_human。前のターンで起こしたものを含む。manager_send で既存の委譲へ頼んだターンも）があるとき、まだ読んでいない発言の task、起点の会話が無い task。',
       ].join(' '),
       {
         taskId: z
@@ -8768,6 +8777,8 @@ export function createCloneTools(context: ToolContext) {
         if (result.outcome !== 'answered') await retractAnswerJournal(result.detail);
         // 届いた（delivered）か答えた（answered）ときだけ閉じる。それ以外は本来の作業が通っていない
         const sent = result.outcome === 'delivered' || result.outcome === 'answered';
+        // 既存の委譲へ頼んだターンも、委譲に数える（その委譲の起点の会話の task を、このターンの返答で自動 done にしない。#5469 P5。P3 で委譲が taskId を持ったら task の id で結ぶ）
+        if (sent) context.noteDelegationStarted?.(await jobConversationOf(stores, managerId));
         // `session_missing` は必ず言い足す: そのものは居る側なので、`manager_start` で起こし直すと同じ仕事が2本になりうるため
         if (result.outcome === 'session_missing') {
           return notDone(

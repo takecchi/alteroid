@@ -218,7 +218,7 @@ import {
   type QuotaRecoverySummary,
 } from './quota-recovery-notice.js';
 import { isBareQuotaStopReportText } from './quota-stop-notice.js';
-import { autoCloseRepliedTasks, taskFromHumanIntake } from './task-auto-done.js';
+import { autoCloseRepliedTasks, opensHumanTask, taskFromHumanIntake } from './task-auto-done.js';
 import type { TurnReplyVia } from './task-auto-done.js';
 import type { AttachmentRef, JobStatus, TurnFailureKind } from './schema.js';
 import { DEFAULT_TOKEN_COOLDOWN_MS, toAgentTokenView } from './token-pool.js';
@@ -1152,12 +1152,21 @@ class Clone implements CloneHost {
   readonly #taskOpens = new Set<Promise<void>>();
   // いまのターンの間に起きた会話への返答と委譲の控え（#5469 P5 の自動 done。`#runTurn` が作り直し、`turn_ended` が読む）。
   // `Turn` に載せない: `Turn` は試験が欄を全部書いて作る型で、欄を足すと無関係の試験が壊れるため。ターンは同時に1つしか走らない
-  #turnReplies: { startedAt: string; replied: Map<string, TurnReplyVia>; delegated: Set<string> } =
-    {
-      startedAt: new Date(0).toISOString(),
-      replied: new Map(),
-      delegated: new Set(),
-    };
+  #turnReplies: {
+    startedAt: string;
+    replied: Map<string, TurnReplyVia>;
+    delegated: Set<string>;
+    /** このターンが入力として読んだ人間の発言の id（task の id と同じ）。 */
+    readSignalIds: ReadonlySet<string>;
+    /** このターンで問い（ask_human・request_permission）を出した会話。 */
+    asked: Set<string>;
+  } = {
+    startedAt: new Date(0).toISOString(),
+    replied: new Map(),
+    delegated: new Set(),
+    readSignalIds: new Set(),
+    asked: new Set(),
+  };
   // 枠の知らせ（`quotaStop`）で台帳に開いた行のうち、担当が戻ったら器が閉じる候補（#5015）。キーは合図の id
   // 候補そのものは永続化せず、台帳の行の印（`autoCloseWhenBack`）から起動のあと最初の掃除で組み直す（#5164。`#restoreQuotaStopLedgerRows`）。
   // 印の無い古い行は、`origin` が manager で本文が枠の知らせの定型だけ（`isBareQuotaStopReportText`）のものに限って戻す。
@@ -2789,6 +2798,8 @@ class Clone implements CloneHost {
       'normal',
       null,
       images,
+      null,
+      events.map((event) => event.id),
     );
   }
 
@@ -3522,7 +3533,7 @@ class Clone implements CloneHost {
   // 合図の id をそのまま未了の id にする: 配り直しでも同じ id になり、`CommitmentStore.open` の冪等性が「二度開かない・閉じたものを開き直さない」になるため
   // 開くのは人間の合図（human_message・human_answer）だけ（#5469 P5）: マネージャーの報告・外部の出来事・timer・self_initiative は受信箱と日誌には届くが、台帳にも Task にも積まない。
   // 報告や外部の出来事まで積むと、読み手が閉じ忘れた行が積み上がり、枠の知らせ・デーモンの知らせが台帳を埋めて読めなくなっていたため
-  // 台帳の行と同じ id で Task も積む（`#openHumanTask`）。移行期（台帳が P7 で廃止されるまで）は人間の依頼が両方に載る
+  // 人間の発言（human_message）は、台帳の行と同じ id で Task も積む（`#openHumanTask`）。移行期（台帳が P7 で廃止されるまで）は両方に載る。回答（human_answer）は台帳だけで Task にしない
   // 読んでから書く形へ戻さない: 重複判定は `CommitmentStore.open` の中で行う。アプリ層の排他はプロセスを跨げず、同じストアを指す2つのデーモンが両方「重複なし」と読んで台帳が2行に割れるため
   // 失敗しても post を落とさない
   // 種別は `decision` にしない: 器が受信箱の合図から機械的に開いた行を混ぜると、クローンが自分で決めて引き受けた判断という面の意味が変わるため
@@ -3531,7 +3542,8 @@ class Clone implements CloneHost {
   #commit(event: InboxEvent): void {
     const entry = commitmentFor(event);
     if (entry === null) return;
-    this.#openHumanTask(event, entry);
+    // Task は人間の発言だけ。回答（human_answer）は台帳に載っても Task を作らない（問いを出した側の task が回答を受けたターンの返答で閉じる）
+    if (opensHumanTask(event)) this.#openHumanTask(event, entry);
     this.#delivery.setCommitted(
       event.id,
       this.#stores.commitments.open(entry).then(
@@ -3577,7 +3589,7 @@ class Clone implements CloneHost {
   // 人間の依頼を Task としても積む（#5469 P5）。id は台帳の行（＝受信箱の合図）と同じで、`TaskStore.add` の existed が配り直し・P7a の移行との二重を防ぐ。
   // 台帳の記帳（`CommitOutcome`）には混ぜず、失敗しても post を落とさない。進行中の追加は `#taskOpens` で控え、返答のターンの終わりが待つ
   // 日誌へは「積んだ」行を書かない: 合図そのものが `#record` で日誌に在り、Task の id がその合図の id と同じなので辿れるため。失敗だけは stderr と日誌に残す
-  #openHumanTask(event: InboxEvent, entry: Commitment): void {
+  #openHumanTask(event: HumanMessage, entry: Commitment): void {
     const opening = this.#stores.tasks
       .add(taskFromHumanIntake(entry, event, new Date().toISOString()))
       .then(
@@ -4513,7 +4525,8 @@ class Clone implements CloneHost {
   }
 
   // 枠以外の理由で失敗したターンに渡した回答は、配達の印を `'pending'` へ戻して起動時の拾い直し（`#reconcileUndeliveredAnswers`）に載せる（#4633）。
-  // 回答だけを戻す: 人間の発言や報告は消えても台帳（commitments）に残るが、回答は消えると、確認を出して止まった担当を再開させる経路そのものが切れるため。
+  // 回答だけを戻す: 人間の発言は消えても台帳（移行期のあいだ）と Task に残るが、回答は消えると、確認を出して止まった担当を再開させる経路そのものが切れるため。
+  // 報告（manager_message）は P5 から台帳にも Task にも載らない: 報告を読むターンが例外で終わって合図が受信箱から消えると、拾い直す台帳の網はもう無い（#5469 P5。既知の限界）。
   // 回数の上限は置かない: 決定的に失敗する回答は器の入れ替えのたびにターンを1本焼くが、戻すたびに日誌へ1行残し、人間が気づけるようにする（オーナーの判断、2026-10-14）。
   // 戻すのは、いまの行がこの合図を `'delivered'` にした回答のままのときだけ: その間に取り下げ・2回目の回答が入っていれば、古い合図で巻き戻さないため
   async #reopenAnswerDeliveryAfterFailure(
@@ -6228,6 +6241,8 @@ class Clone implements CloneHost {
     images: readonly AgentInputImage[] = [],
     /** 内部ターンの仕事が属する会話（{@link Turn.originConversationId}）。 */
     originConversationId: string | null = null,
+    /** このターンの入力として読む人間の発言の id（自動 done が、読んだ発言の task だけを閉じるため）。 */
+    readSignalIds: readonly string[] = [],
   ): Promise<TurnOutcome> {
     if (kind !== 'distill') this.#distillMemory.markActivity();
 
@@ -6239,6 +6254,8 @@ class Clone implements CloneHost {
       startedAt: new Date().toISOString(),
       replied: new Map(),
       delegated: new Set(),
+      readSignalIds: new Set(readSignalIds),
+      asked: new Set(),
     };
 
     // ターンはセッションを起こす前に登録する: セッションの生成が失敗したり読み取りが即死したりしても、待っているターンを必ず誰かが解放できるようにするため
@@ -7368,6 +7385,9 @@ class Clone implements CloneHost {
       noteDelegationStarted: (originConversationId) => {
         if (originConversationId !== undefined)
           this.#turnReplies.delegated.add(originConversationId);
+      },
+      noteQuestionAsked: (conversationId) => {
+        if (conversationId !== undefined) this.#turnReplies.asked.add(conversationId);
       },
       postToConversation: (conversationId, text, attachments) => {
         // 日誌へ書けた `conversation_post` だけがここへ来る（書けなければ呼ばれない）。自動 done の「返答」に数える
@@ -9006,7 +9026,8 @@ class Clone implements CloneHost {
   /**
    * 返答したターンの終わりに、起点の会話がその返答の宛先である queued の人間の task を `done` にする（#5469 P5）。成功したターンの終わりだけで呼ぶ（失敗したターンの本文は返答ではない）。
    * 「返答」に数えるもの: (1) 会話のあるターン自身が、その会話へ本文か添付を返した (2) `conversation_post` が日誌へ書けた宛先。
-   * 数えないもの: `ask_human`（問いであって返答でない）、機構が `#journal` へ直接書く「直近の人間の会話」への一行（安全分類器の拒否・畳み直しの通知）。
+   * 数えないもの: `ask_human`（問いであって返答でない。そのターンで問いを出した会話の task は閉じない）、機構が `#journal` へ直接書く「直近の人間の会話」への一行（安全分類器の拒否・畳み直しの通知）。
+   * 閉じるのは、返答が宛てた発言の task だけ（そのターンが読んだ発言の id。`conversation_post` と回答のターンは「受信箱にまだ残っていない」もの）。走っている委譲がある会話の task も閉じない。
    * 閉じるかどうかの判定は `task-auto-done.ts` の `selectTasksToAutoClose` が持つ。投げない（閉じ損ねても返答は届いている。次の返答の終わりで拾う）。
    */
   async #autoCloseRepliedTasks(turn: Turn): Promise<void> {
@@ -9023,12 +9044,32 @@ class Clone implements CloneHost {
     try {
       // 追加の最中の起票を待つ: 待たないと、届いた直後に終わった返答が、まだ無い task を取り逃がす
       await Promise.all([...this.#taskOpens]);
+      // 閉じる直前に測る。測れなければ閉じない（誤って閉じるより、閉じ損ねて次の返答の終わりで拾うほうが安全）
+      const unreadSignalIds = new Set<string>(this.#delivery.unreadIds());
+      for (const held of this.#delivery.findDeferred(() => true)) unreadSignalIds.add(held.id);
+      for (const pending of (await this.#stores.inbox.peekPending()).entries) {
+        unreadSignalIds.add(pending.event.id);
+      }
+      // 起点の会話が同じで走っている委譲（前のターンで起こしたものを含む）。P3（#5482）で Job.taskId が入ったら `hasDelegationForTask` ごと task id の判定へ置き換える
+      const activeJobConversationIds = new Set<string>();
+      for (const job of await this.#stores.jobs.listJobs()) {
+        if (
+          (job.status === 'running' || job.status === 'waiting_human') &&
+          job.conversationId !== undefined
+        ) {
+          activeJobConversationIds.add(job.conversationId);
+        }
+      }
       const outcome = await autoCloseRepliedTasks(
         this.#stores,
         {
           startedAt: this.#turnReplies.startedAt,
           replied,
+          readSignalIds: this.#turnReplies.readSignalIds,
+          unreadSignalIds,
+          askedConversationIds: this.#turnReplies.asked,
           delegatedOriginConversationIds: this.#turnReplies.delegated,
+          activeJobConversationIds,
         },
         new Date().toISOString(),
       );

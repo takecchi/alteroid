@@ -127,6 +127,11 @@ export class CloneDelivery {
     return this.#unread.size;
   }
 
+  /** 器の未読の合図の id（まだ片付いていない合図。待ち行列・保持中・処理中を含む）。 */
+  unreadIds(): string[] {
+    return [...this.#unread.keys()];
+  }
+
   readonly #pendingCollapse = new Map<string, PendingCollapseEntry>();
 
   // `Map` が持つ実体をそのまま返す: 呼び出し側が `existing.collapsed += 1` と直接書くため

@@ -15,7 +15,7 @@ import type { RunnerFleetOverview } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
-import type { InboxEvent, JournalEntry, Task } from './schema.js';
+import type { InboxEvent, Job, JournalEntry, Task } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
@@ -54,7 +54,10 @@ function seeded(id: string, overrides: Partial<Task> = {}): Task {
   };
 }
 
-function stubPool(started: ManagerStartInput[] = []): ManagerPool {
+function stubPool(
+  started: ManagerStartInput[] = [],
+  overrides: Partial<ManagerPool> = {},
+): ManagerPool {
   const notImplemented = () => {
     throw new Error('not implemented');
   };
@@ -107,6 +110,7 @@ function stubPool(started: ManagerStartInput[] = []): ManagerPool {
     settleStalledUsageWakes: () => Promise.resolve([]),
     renotifyStalledDenials: () => Promise.resolve(),
     stop: () => Promise.resolve(),
+    ...overrides,
   };
 }
 
@@ -119,7 +123,14 @@ type Tools = (name: string) => (args: Record<string, unknown>) => Promise<unknow
 
 function boot(
   script: (turnIndex: number, input: string, tool: Tools) => ScriptedStep[],
-  options: { stores?: Stores; managers?: ManagerPool; resultSubtype?: string } = {},
+  options: {
+    stores?: Stores;
+    managers?: ManagerPool;
+    resultSubtype?: string;
+    resultFor?: (turnIndex: number) => { subtype: string; text: string } | undefined;
+    env?: NodeJS.ProcessEnv;
+    mergedBatchLimit?: number;
+  } = {},
 ) {
   const stores = options.stores ?? createMemoryStores();
   let captured: ToolContext | undefined;
@@ -128,15 +139,18 @@ function boot(
     if (found === undefined) throw new Error(`${name} が無い`);
     return found.handler(args as never, {});
   };
-  const { fn } = fakeScriptedSdk(
-    (turnIndex, input) => script(turnIndex, input, tool),
-    options.resultSubtype === undefined ? {} : { resultSubtype: options.resultSubtype },
-  );
+  const { fn } = fakeScriptedSdk((turnIndex, input) => script(turnIndex, input, tool), {
+    ...(options.resultSubtype === undefined ? {} : { resultSubtype: options.resultSubtype }),
+    ...(options.resultFor === undefined ? {} : { resultFor: options.resultFor }),
+  });
   const clone = createClone({
     redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
-    env: {},
+    env: options.env ?? {},
+    ...(options.mergedBatchLimit === undefined
+      ? {}
+      : { mergedBatchLimit: options.mergedBatchLimit }),
     inboxSettleMs: 0,
     reportSettleMs: 0,
     managers: options.managers ?? stubPool(),
@@ -202,7 +216,7 @@ describe('人間の依頼は台帳の行と同じ id で Task としても積ま
     await s.clone.stop();
   });
 
-  it('human_answer: 台帳の行と同じ id の Task になるが、起点の会話は付かない', async () => {
+  it('human_answer: 台帳には載る（移行期）が、Task は作らない（回答は新しい依頼ではない）', async () => {
     const s = boot(() => say('承認の回答を受けた'));
     s.clone.post({
       type: 'human_answer',
@@ -210,14 +224,13 @@ describe('人間の依頼は台帳の行と同じ id で Task としても積ま
       at: new Date().toISOString(),
       approvalId: 'appr-1',
       answer: '進めてよい',
+      conversationId: 'conv-1',
     });
-    await waitFor(async () => (await s.stores.tasks.get('ans-1')) !== null, 'Task が積まれる');
+    await waitFor(async () => (await s.stores.commitments.get('ans-1')) !== null, '台帳に載る');
+    await waitForTerminal(s.events);
 
-    const created = await s.stores.tasks.get('ans-1');
-    expect(created?.origin).toBe('human');
-    expect(created?.source).toBe('appr-1');
-    expect(created?.originConversationId).toBeUndefined();
-    expect((await s.stores.commitments.get('ans-1'))?.id).toBe('ans-1');
+    expect((await s.stores.commitments.get('ans-1'))?.origin).toBe('human');
+    expect((await s.stores.tasks.list({ includeClosed: true })).entries).toEqual([]);
     await s.clone.stop();
   });
 
@@ -337,29 +350,33 @@ describe('起点の会話へ返答したターンの終わりに、queued の ta
   });
 
   it('task_keep で印を立てた task は閉じない。外した後の返答では閉じる', async () => {
+    // 発言の id と task の id を同じにして、ターンがその発言を読むようにする（読んだ発言の task だけが閉じる）
     const stores = createMemoryStores();
     await stores.tasks.add(seeded('kept'));
+    await stores.tasks.add(seeded('kept-2', { keep: true }));
     const s = boot(
       (turn, _input, tool) =>
         turn === 0
           ? [...say('途中経過'), { run: () => tool('task_keep')({ taskId: 'kept', keep: true }) }]
-          : [...say('終わった'), { run: () => tool('task_keep')({ taskId: 'kept', keep: false }) }],
+          : [
+              ...say('終わった'),
+              { run: () => tool('task_keep')({ taskId: 'kept-2', keep: false }) },
+            ],
       { stores },
     );
-    s.clone.post(human('evt-1', 'ひとつめ'));
+    s.clone.post(human('kept', 'ひとつめ'));
     await waitForTerminal(s.events);
     expect((await stores.tasks.get('kept'))?.keep).toBe(true);
     // 立てたターンで返答しても閉じない（task_keep は返答と同じターンの中で呼ばれた）
     expect(await statusOf(stores, 'kept')).toBe('queued');
-    expect(await statusOf(stores, 'evt-1')).toBe('done');
 
     s.events.length = 0;
-    s.clone.post(human('evt-2', 'ふたつめ'));
+    s.clone.post(human('kept-2', 'ふたつめ'));
     await waitForTerminal(s.events);
 
-    // 2ターン目は keep を外したのは返答の後（ターンの中の道具）なので、このターンの終わりの判定では外れている
-    expect(await statusOf(stores, 'kept')).toBe('done');
-    const kept = await stores.tasks.get('kept');
+    // 2ターン目は keep をターンの中で外したので、このターンの終わりの判定では外れている
+    expect(await statusOf(stores, 'kept-2')).toBe('done');
+    const kept = await stores.tasks.get('kept-2');
     expect(kept?.closedBy).toBe('daemon');
     expect((await decisions(stores)).some((text) => text.includes('「続く」の印を立てた'))).toBe(
       true,
@@ -369,16 +386,18 @@ describe('起点の会話へ返答したターンの終わりに、queued の ta
 
   it('waiting / needs_decision の task は、起点の会話へ返答しても閉じない', async () => {
     const stores = createMemoryStores();
+    // 発言の id と task の id を同じにする: 読んだ発言の task であっても、waiting / needs_decision は閉じない
     await stores.tasks.add(seeded('w', { status: 'waiting' }));
     await stores.tasks.add(seeded('n', { status: 'needs_decision' }));
     await stores.tasks.add(seeded('q'));
     const s = boot(() => say('返答'), { stores });
-    s.clone.post(human('evt-x', '別件'));
-    await waitForTerminal(s.events);
+    s.clone.post(human('w', '待ち'));
+    s.clone.post(human('n', '判断待ち'));
+    s.clone.post(human('q', '普通'));
+    await waitFor(async () => (await statusOf(stores, 'q')) === 'done', 'q が閉じる');
 
     expect(await statusOf(stores, 'w')).toBe('waiting');
     expect(await statusOf(stores, 'n')).toBe('needs_decision');
-    expect(await statusOf(stores, 'q')).toBe('done');
     await s.clone.stop();
   });
 
@@ -464,5 +483,242 @@ describe('起点の会話へ返答したターンの終わりに、queued の ta
         (task) => task.id === 'evt-once',
       ),
     ).toHaveLength(1);
+  });
+});
+
+function gate() {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+}
+
+const SPEND_LIMIT = "You've hit your individual spend limit for this account.";
+
+describe('ask_human を呼んだターンでは、その会話の task を閉じない（人間の答え待ち）', () => {
+  it('問いを出したターンの返答では閉じず、回答を受けたターンの返答で閉じる。回答では Task を作らない', async () => {
+    const s = boot((_turn, input, tool) =>
+      input.includes('承認待ちにしていた質問に人間が答えた')
+        ? say('回答を受けた。進める')
+        : [
+            ...say('確認します'),
+            { run: () => tool('ask_human')({ question: 'どちらにしますか' }) },
+          ],
+    );
+    s.clone.post(human('ask-1', 'どちらかを選んで進めてほしい'));
+    await waitForTerminal(s.events);
+
+    // 問いを出したターンの返答では閉じない
+    expect(await statusOf(s.stores, 'ask-1')).toBe('queued');
+    const approvals = (await s.stores.jobs.listApprovals({ pendingOnly: true })).entries;
+    expect(approvals).toHaveLength(1);
+
+    s.clone.post({
+      type: 'human_answer',
+      id: 'ans-ask',
+      at: new Date().toISOString(),
+      approvalId: approvals[0]!.id,
+      answer: 'A案で',
+      conversationId: 'conv-1',
+    });
+    await waitFor(
+      async () => (await statusOf(s.stores, 'ask-1')) === 'done',
+      '回答のターンで閉じる',
+    );
+
+    expect((await s.stores.tasks.get('ask-1'))?.closedBy).toBe('daemon');
+    // 回答のイベントからは Task が作られていない
+    expect(await s.stores.tasks.get('ans-ask')).toBeNull();
+    await s.clone.stop();
+  });
+});
+
+describe('閉じるのは、そのターンが読んだ発言の task だけ（まだ読んでいない同じ会話の発言は閉じない）', () => {
+  it('束ねる数の上限で束から外れた残りは、先のターンの返答で閉じない', async () => {
+    const g = gate();
+    const s = boot(
+      (_turn, input) =>
+        input.includes('H3-BODY') ? [{ run: () => g.promise }, ...say('3')] : say('返答'),
+      { mergedBatchLimit: 2 },
+    );
+    s.clone.post(human('h1', 'H1-BODY'));
+    s.clone.post(human('h2', 'H2-BODY'));
+    s.clone.post(human('h3', 'H3-BODY'));
+    await waitFor(
+      async () =>
+        (await statusOf(s.stores, 'h1')) === 'done' && (await statusOf(s.stores, 'h2')) === 'done',
+      '束に入った2件が閉じる',
+    );
+
+    // h3 は束から外れて、まだ読まれていない
+    expect(await statusOf(s.stores, 'h3')).toBe('queued');
+    g.open();
+    await waitFor(
+      async () => (await statusOf(s.stores, 'h3')) === 'done',
+      'h3 は自分のターンで閉じる',
+    );
+    await s.clone.stop();
+  });
+
+  it('待ち行列で同じ会話の発言が別の会話をはさむとき、後ろの発言は先のターンの返答で閉じない', async () => {
+    const g = gate();
+    const s = boot((_turn, input) =>
+      input.includes('C-BODY') ? [{ run: () => g.promise }, ...say('C')] : say('返答'),
+    );
+    s.clone.post(human('a', 'A-BODY', 'conv-1'));
+    s.clone.post(human('b', 'B-BODY', 'conv-2'));
+    s.clone.post(human('c', 'C-BODY', 'conv-1'));
+    await waitFor(async () => (await statusOf(s.stores, 'a')) === 'done', 'a が閉じる');
+
+    expect(await statusOf(s.stores, 'c')).toBe('queued');
+    g.open();
+    await waitFor(
+      async () => (await statusOf(s.stores, 'c')) === 'done',
+      'c は自分のターンで閉じる',
+    );
+    await s.clone.stop();
+  });
+
+  it('枠で保持中の発言は、別のターンの conversation_post で閉じない', async () => {
+    const g = gate();
+    let reportTurns = 0;
+    const s = boot(
+      (_turn, input, tool) => {
+        if (input.includes('MHELD')) {
+          reportTurns += 1;
+          return reportTurns === 1
+            ? say('枠に当たる回')
+            : [
+                ...say('読んだ'),
+                {
+                  run: () =>
+                    tool('conversation_post')({ text: '終わりました', conversationId: 'conv-1' }),
+                },
+              ];
+        }
+        return input.includes('HELD-BODY')
+          ? [{ run: () => g.promise }, ...say('held')]
+          : say('返答');
+      },
+      {
+        env: { ALTEROID_CLONE_HUMAN_PRIORITY: 'off' },
+        resultFor: (turnIndex) =>
+          turnIndex === 0 ? { subtype: 'error_during_execution', text: SPEND_LIMIT } : undefined,
+      },
+    );
+    s.clone.post(managerReport('rep-held', 'MHELD'));
+    s.clone.post(human('held-1', 'HELD-BODY', 'conv-1'));
+    await waitForTerminal(s.events);
+    await waitFor(async () => (await s.stores.tasks.get('held-1')) !== null, 'held-1 の Task');
+
+    // 枠が開いたことを試す合図。保持していた報告が先に配り直され、その返答が conv-1 へ書く
+    s.clone.post(human('probe', 'PROBE', 'conv-2'));
+    await waitFor(() => reportTurns >= 2, '報告のターンが conversation_post まで進む');
+    await waitFor(
+      async () =>
+        (await s.stores.journal.list({ types: ['exchange'], with: ['human'] })).some(
+          (row) => row.type === 'exchange' && row.text.includes('終わりました'),
+        ),
+      'conversation_post が書かれる',
+    );
+
+    // held-1 はまだ配り直されて読まれていない（自分のターンはゲートで止まっている）
+    expect(await statusOf(s.stores, 'held-1')).toBe('queued');
+    g.open();
+    await waitFor(
+      async () => (await statusOf(s.stores, 'held-1')) === 'done',
+      'held-1 は自分のターンで閉じる',
+    );
+    await s.clone.stop();
+  });
+
+  it('ALTEROID_CLONE_HUMAN_PRIORITY を切ると、先の報告のターンの conversation_post で、後ろの発言を閉じない', async () => {
+    const g = gate();
+    const s = boot(
+      (_turn, input, tool) =>
+        input.includes('PRIO-REPORT')
+          ? [
+              ...say('読んだ'),
+              {
+                run: () =>
+                  tool('conversation_post')({ text: '終わりました', conversationId: 'conv-1' }),
+              },
+            ]
+          : input.includes('PRIO-BODY')
+            ? [{ run: () => g.promise }, ...say('返答')]
+            : say('返答'),
+      { env: { ALTEROID_CLONE_HUMAN_PRIORITY: 'off' } },
+    );
+    s.clone.post(managerReport('rep-prio', 'PRIO-REPORT'));
+    s.clone.post(human('prio-1', 'PRIO-BODY', 'conv-1'));
+    await waitFor(
+      async () =>
+        (await s.stores.journal.list({ types: ['exchange'], with: ['human'] })).some(
+          (row) => row.type === 'exchange' && row.text.includes('終わりました'),
+        ),
+      'conversation_post が書かれる',
+    );
+
+    expect(await statusOf(s.stores, 'prio-1')).toBe('queued');
+    g.open();
+    await waitFor(
+      async () => (await statusOf(s.stores, 'prio-1')) === 'done',
+      'prio-1 は自分のターンで閉じる',
+    );
+    await s.clone.stop();
+  });
+});
+
+describe('走っている委譲がある会話の task は、次の返答でも閉じない', () => {
+  function job(id: string, status: Job['status'], conversationId: string): Job {
+    return { id, createdAt: AT, updatedAt: AT, status, conversationId, summary: 's' };
+  }
+
+  it('前のターンで起こした委譲が running / waiting_human のあいだは閉じず、別の会話の task は閉じる', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job('m-run', 'running', 'conv-1'));
+    await stores.jobs.putJob(job('m-wait', 'waiting_human', 'conv-3'));
+    const s = boot(() => say('返答'), { stores });
+    s.clone.post(human('d-run', '走っている委譲がある', 'conv-1'));
+    s.clone.post(human('d-wait', '人間待ちの委譲がある', 'conv-3'));
+    s.clone.post(human('d-free', '委譲の無い会話', 'conv-2'));
+    await waitFor(
+      async () => (await statusOf(stores, 'd-free')) === 'done',
+      '委譲の無い会話は閉じる',
+    );
+    await waitFor(
+      async () => (await stores.journal.list({ types: ['turn_timing'] })).length >= 3,
+      '3つのターンが終わる',
+    );
+
+    expect(await statusOf(stores, 'd-run')).toBe('queued');
+    expect(await statusOf(stores, 'd-wait')).toBe('queued');
+    await s.clone.stop();
+  });
+
+  it('manager_send で既存の委譲へ頼んだターンも、委譲に数える（委譲が走っていなくても閉じない）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job('m-old', 'done', 'conv-1'));
+    const sent: string[] = [];
+    const pool = stubPool([], {
+      send: (managerId) => {
+        sent.push(managerId);
+        return Promise.resolve({ outcome: 'delivered' as const, detail: '届けた' });
+      },
+    });
+    const s = boot(
+      (_turn, _input, tool) => [
+        ...say('続きを頼んだ'),
+        { run: () => tool('manager_send')({ managerId: 'm-old', message: '続きを頼む' }) },
+      ],
+      { stores, managers: pool },
+    );
+    s.clone.post(human('d-send', '前の委譲の続きを頼みたい', 'conv-1'));
+    await waitForTerminal(s.events);
+
+    expect(sent).toEqual(['m-old']);
+    expect(await statusOf(stores, 'd-send')).toBe('queued');
+    await s.clone.stop();
   });
 });

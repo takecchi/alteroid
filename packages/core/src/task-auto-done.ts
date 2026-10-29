@@ -6,14 +6,26 @@ import type { Stores } from './store.js';
 // 人間の依頼を Task として積む（#5469 P5 の自動起票）と、起点の会話へ返答したターンの終わりに queued の task を自動で done にする（自動 done）。
 // 純関数と、Task ストア・日誌への書き込みだけを置く。いつ呼ぶかは clone.ts（`#commit` と `turn_ended`）。
 
-/** 台帳へ開く行（`commitmentFor`）と同じ合図から、同じ id の Task を作る。human_message だけが起点の会話を持つ（human_answer の会話 id は承認の側にあり、task の起点ではない）。 */
-export function taskFromHumanIntake(entry: Commitment, event: InboxEvent, now: string): Task {
+/**
+ * Task を作る合図は人間の発言（human_message）だけ。回答（human_answer）では作らない:
+ * 回答は「問いを出した側の task」への答えであり、新しい依頼ではない（問いを出した側の task は ask_human のターンで開いたまま残り、回答を受けたターンの返答で閉じる）。
+ * 回答は台帳には移行期のあいだ載る（`commitmentFor`）が、Task の元にはならない。
+ */
+export function opensHumanTask(event: InboxEvent): event is HumanMessageEvent {
+  return event.type === 'human_message';
+}
+
+type HumanMessageEvent = Extract<InboxEvent, { type: 'human_message' }>;
+
+/** 台帳へ開く行（`commitmentFor`）と同じ発言から、同じ id の Task を作る。起点の会話は発言の会話。 */
+export function taskFromHumanIntake(
+  entry: Commitment,
+  event: HumanMessageEvent,
+  now: string,
+): Task {
   // id・source・title・body・status・置き場所は P7a の移行（`taskFromCommitment`）と同じ規則を使う:
   // id が元の台帳の行と同じなので、移行が `existed` で二重に作らず、自動起票も移行済みの行を二重に作らない
-  const task = taskFromCommitment(entry, now);
-  return event.type === 'human_message'
-    ? { ...task, originConversationId: event.conversationId }
-    : task;
+  return { ...taskFromCommitment(entry, now), originConversationId: event.conversationId };
 }
 
 /** 返答の経路。日誌に「どの返答で閉じたか」として残す。 */
@@ -25,7 +37,7 @@ export type TurnReplyVia =
 
 /**
  * 1ターンの間に起きた「会話への返答」と「委譲」の控え。ターンの始まりで作り直し、終わりで `autoCloseRepliedTasks` に渡す。
- * 数えない返答: `ask_human`（返答ではなく問い。task は人間の答え待ちになるべきで、閉じる理由にならない）、
+ * 数えない返答: `ask_human`（返答ではなく問い。task は人間の答え待ちになるべきで、閉じる理由にならない。問いを出した会話の task は `askedConversationIds` で閉じない）、
  * 機構が自分で書く一行（安全分類器の拒否・畳み直しの通知。`Clone#journal` へ直接書き、このターンの返答として積まれない）。
  */
 export interface TurnReplyTrace {
@@ -33,41 +45,71 @@ export interface TurnReplyTrace {
   readonly startedAt: string;
   /** 返答した会話 id → その経路（同じ会話へ複数回返したら、先の経路を残す）。 */
   readonly replied: ReadonlyMap<string, TurnReplyVia>;
-  /** このターンで起こした委譲（`manager_start`）の起点の会話 id。起点が無い委譲は入れない。 */
+  /**
+   * このターンが入力として読んだ人間の発言（human_message）の id（task の id と同じ）。
+   * 人間の発言で起きたターンの返答（`turn_reply`）が閉じられるのは、この id の task だけ。同じ会話でも、まだ読んでいない発言（束ねる上限で外れた残り・待ち行列で別の会話をはさんだ分・枠で保持中の分）の task は閉じない。
+   * 空なら回答（human_answer）で起きたターン（人間の発言を読んでいない）。
+   */
+  readonly readSignalIds: ReadonlySet<string>;
+  /**
+   * 受信箱にまだ残っている合図の id（器の未読 ∪ 受信箱ストアの未処理）。呼び出し側が閉じる直前に測る。
+   * `conversation_post` と回答のターンの返答は、読んだ合図の id を持たないので、「まだ読んでいない」ものをこれで除く。
+   */
+  readonly unreadSignalIds: ReadonlySet<string>;
+  /** このターンで問い（`ask_human`・`request_permission`）を出した会話 id。その会話の task は、人間の答え待ちなので閉じない。 */
+  readonly askedConversationIds: ReadonlySet<string>;
+  /** このターンで委譲に頼んだ（`manager_start`・`manager_send`）委譲の起点の会話 id。起点が無い委譲は入れない。 */
   readonly delegatedOriginConversationIds: ReadonlySet<string>;
+  /** 閉じる時点で走っている（running / waiting_human）委譲の起点の会話 id。前のターンで起こした委譲もここに入る。 */
+  readonly activeJobConversationIds: ReadonlySet<string>;
 }
 
 /**
- * このターンで、その task に結び付く委譲を起こしたか。
+ * その task に結び付く委譲が、走っているか・このターンで頼んだか。あれば task は閉じない（委譲の報告を読んでから閉じる）。
  * いまは `Job.conversationId`（委譲の起点の会話）と task の `originConversationId` の一致で見る。
- * P3（#5482）で `Job.taskId` が入ったら、ここだけを `task.id` との一致へ置き換える（この関数が唯一の判定点）。
+ * **P3（#5482）で `Job.taskId` が入ったら、この関数だけを `task.id` と `Job.taskId` の一致へ置き換える**（唯一の判定点）。
  * 会話の一致だと、同じ会話の別の task のために起こした委譲でも「結び付いた」と数えて閉じない側へ倒れる（閉じ損ねる向き。勝手に閉じるより安全）。
  */
-export function turnDelegatedForTask(task: Task, trace: TurnReplyTrace): boolean {
+export function hasDelegationForTask(task: Task, trace: TurnReplyTrace): boolean {
+  const origin = task.originConversationId;
   return (
-    task.originConversationId !== undefined &&
-    trace.delegatedOriginConversationIds.has(task.originConversationId)
+    origin !== undefined &&
+    (trace.delegatedOriginConversationIds.has(origin) || trace.activeJobConversationIds.has(origin))
   );
+}
+
+/** 返答の経路ごとの「この task は、この返答が宛てた発言のものか」。 */
+function isAddressedByReply(task: Task, via: TurnReplyVia, trace: TurnReplyTrace): boolean {
+  // 人間の発言で起きたターン: 読んだ発言の task だけ
+  if (via === 'turn_reply' && trace.readSignalIds.size > 0) return trace.readSignalIds.has(task.id);
+  // 回答のターンの返答・conversation_post: 受信箱にまだ残っている合図の task は、まだ読んでいないので除く
+  return !trace.unreadSignalIds.has(task.id);
 }
 
 /**
  * 閉じる対象。次をすべて満たす task だけ:
  * - status が queued（waiting / needs_decision は、器が勝手に閉じない。外の返事待ち・判断待ちを返答で終わりにしない）
- * - 起点の会話があり、そこへこのターンが返答した
+ * - 起点の会話があり、そこへこのターンが返答した。返答が宛てた発言の task だけ（`isAddressedByReply`）
  * - 「続く」の印（`keep`）が無い
- * - このターンで、その task に結び付く委譲を起こしていない（`turnDelegatedForTask`）
+ * - そのターンで、その会話へ問いを出していない（人間の答え待ち）
+ * - その task に結び付く委譲が無い（`hasDelegationForTask`）
  * - ターンの始まりより前に届いている（返答の最中に届いた task は、返答の宛先になっていない）
  */
 export function selectTasksToAutoClose(tasks: readonly Task[], trace: TurnReplyTrace): Task[] {
-  return tasks.filter(
-    (task) =>
+  return tasks.filter((task) => {
+    const origin = task.originConversationId;
+    if (origin === undefined) return false;
+    const via = trace.replied.get(origin);
+    return (
+      via !== undefined &&
       task.status === 'queued' &&
       task.keep !== true &&
-      task.originConversationId !== undefined &&
-      trace.replied.has(task.originConversationId) &&
+      !trace.askedConversationIds.has(origin) &&
+      isAddressedByReply(task, via, trace) &&
       compareIsoInstant(task.createdAt, trace.startedAt) <= 0 &&
-      !turnDelegatedForTask(task, trace),
-  );
+      !hasDelegationForTask(task, trace)
+    );
+  });
 }
 
 export function autoCloseReason(conversationId: string): string {
@@ -115,7 +157,7 @@ export async function autoCloseRepliedTasks(
         decision: `task を自動で done にした（${task.id}: ${task.title}）: 起点の会話 ${conversationId} へ返答したターンが終わった`,
         grounds:
           `返答の経路: ${via === 'turn_reply' ? 'そのターン自身の返答' : 'conversation_post'}。` +
-          'queued で、「続く」の印が無く、そのターンで結び付く委譲も起こしていないため（#5469 P5）。本文は書かない（task_list id で読める）',
+          'queued で、「続く」の印が無く、問いを出しておらず、結び付く委譲も走っていないため（#5469 P5）。本文は書かない（task_list id で読める）',
       });
     } catch {
       failed.push({ id: task.id, step: 'journal' });
