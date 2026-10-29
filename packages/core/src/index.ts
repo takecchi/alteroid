@@ -1327,11 +1327,7 @@ export {
   type ToolSearchInspection,
 } from './anthropic-route-env.js';
 export type { AgentProviderId } from './agent-ports.js';
-export {
-  DEFAULT_AGENT_PROVIDER_ID,
-  agentProviderOf,
-  placedAgentProvider,
-} from './agent-provider-selection.js';
+export { DEFAULT_AGENT_PROVIDER_ID, agentProviderOf } from './agent-provider-selection.js';
 export {
   MANAGER_PEERS_ENV_KEY,
   RETIRED_LAYER_PROVIDER_ENV_KEYS,
