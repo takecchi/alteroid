@@ -65,7 +65,7 @@ import type {
 
 const AXIS_LIMIT = 20;
 
-/** 0件・欄なし（古いデーモン）なら描かない。文言は core が出した行をそのまま並べる。 */
+/** 0件・欄なし（core は1行でも外したときだけこの欄を載せ、0件なら鍵ごと無い）なら描かない。文言は core が出した行をそのまま並べる。 */
 export function UnreadableUsageRowsNote({
   rows,
   className,
@@ -78,7 +78,7 @@ export function UnreadableUsageRowsNote({
   return <WarnNote className={className}>{lines.join(' ')}</WarnNote>;
 }
 
-/** 0 ではなく「取れなかった」と言う。0件・欄なしなら描かない。文言は core をそのまま並べる。 */
+/** 0 ではなく「取れなかった」と言う。0件・欄なし（core は1行でもあるときだけこの欄を載せる）なら描かない。文言は core をそのまま並べる。 */
 export function UnmeteredUsageNote({
   rows,
   className,

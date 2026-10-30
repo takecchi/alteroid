@@ -162,7 +162,7 @@ export function ManagerRunnerVanishedNote({
 }
 
 // 札を差し替えず状態に添える: status は done のままで、握り潰しの分岐より前に書き換わるため台帳の軸では区別が付かないため
-// undefined のとき何も描かない: runner がこの欄を名乗らない版では、実際に待っていても立たないため
+// undefined のとき何も描かない: この欄は握り潰しが在るときだけ載る。常に載せると「待っていない」と「この器では観測していない」が同じ形になるため
 export function ManagerAwaitingBackgroundNote({
   awaitingBackground,
   className = 'mt-1 text-[11px] text-muted-foreground',
