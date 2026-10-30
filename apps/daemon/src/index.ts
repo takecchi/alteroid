@@ -476,14 +476,7 @@ export async function main(): Promise<void> {
       runners.entries().some((entry) => entry.label === lost.label && entry.state === 'connected'),
     // 全台が名乗り直していて未了の委譲が 0 本なら送らない（日誌にだけ残す）。数えられなければ送る。
     listJobs: () => stores.jobs.listJobs(),
-    aliveRunnerIds: () =>
-      new Set(
-        runners
-          .entries()
-          .flatMap((entry) =>
-            entry.state === 'connected' && entry.runnerId !== undefined ? [entry.runnerId] : [],
-          ),
-      ),
+    aliveRunnerIds,
     recordSkipped: (entry) => stores.journal.append({ type: 'decision', ...entry, routine: true }),
     warn: (message) => writeStderrLine(`alteroidd: ${message}\n`),
   });
@@ -495,6 +488,16 @@ export async function main(): Promise<void> {
       readonly resources: RunnerPlacementResources | undefined;
     }[],
   ) => void = () => {};
+  // 名乗りが済んでいる台の runnerId（`runners` は下で作るが、呼ばれるのは作った後）
+  function aliveRunnerIds(): ReadonlySet<string> {
+    return new Set(
+      runners
+        .entries()
+        .flatMap((entry) =>
+          entry.state === 'connected' && entry.runnerId !== undefined ? [entry.runnerId] : [],
+        ),
+    );
+  }
   const runners = createRunnerRegistry([], {
     notify: ({ label, error }) => {
       announce(
@@ -524,14 +527,7 @@ export async function main(): Promise<void> {
         notice: text,
         runnerId,
         listJobs: () => stores.jobs.listJobs(),
-        aliveRunnerIds: () =>
-          new Set(
-            runners
-              .entries()
-              .flatMap((entry) =>
-                entry.state === 'connected' && entry.runnerId !== undefined ? [entry.runnerId] : [],
-              ),
-          ),
+        aliveRunnerIds,
         journal: (entry) => stores.journal.append(entry),
         wake: postToClone,
         warn: (message) => writeStderrLine(`alteroidd: ${message}\n`),
