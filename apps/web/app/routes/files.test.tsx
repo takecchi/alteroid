@@ -484,6 +484,50 @@ describe('ファイル画面: 操作', () => {
     expect(server.log.filter((c) => c.method === 'DELETE')).toHaveLength(1);
   });
 
+  async function deleteFile(name: string) {
+    fireEvent.click(screen.getByRole('button', { name: `${name} を削除` }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '削除する' }),
+    );
+    await waitFor(() => expect(screen.queryByText(name)).toBeNull());
+  }
+
+  it('削除が通って行が消えたら、焦点は次の行の「削除」へ移る（body に落ちない）', async () => {
+    server.items = ['a', 'b', 'c'].map((id) => item(id, { name: `${id}.txt` }));
+    renderFiles();
+    await screen.findByText('a.txt');
+
+    await deleteFile('b.txt');
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'c.txt を削除' })),
+    );
+  });
+
+  it('いちばん下の行を削除したら、焦点は前の行の「削除」へ移る', async () => {
+    server.items = ['a', 'b'].map((id) => item(id, { name: `${id}.txt` }));
+    renderFiles();
+    await screen.findByText('a.txt');
+
+    await deleteFile('b.txt');
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'a.txt を削除' })),
+    );
+  });
+
+  it('最後の1行を削除したら、焦点は一覧の見出しへ移る', async () => {
+    server.items = [item('a', { name: 'a.txt' })];
+    renderFiles();
+    await screen.findByText('a.txt');
+
+    await deleteFile('a.txt');
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByText('一覧', { selector: 'h2 > span' })),
+    );
+  });
+
   it('削除の確認を Esc で閉じたら、焦点は押していた「削除」へ戻る（body に落ちない）', async () => {
     server.items = [item('a', { name: 'a.txt' })];
     renderFiles();
