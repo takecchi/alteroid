@@ -931,8 +931,6 @@ const MANAGER_WAITING_LIST_LIMIT = 10;
 const LIST_DENIED_TOOLS = 3;
 const LIST_TOOL_USE_STALL_LIMIT = 3;
 
-type ManagerWaitingItem = ManagerSummary['waiting'][number];
-
 // `asc` のときだけ `order=asc` を名乗る: afterId の「次」は返る順序の次なので、order を揃えないと逆向き（desc）に読み継いでしまう。desc の文言は変えない
 function describeJournalContinuation(
   cursor: { id: string; at: string },
@@ -943,11 +941,6 @@ function describeJournalContinuation(
     (order === 'asc' ? ' order=asc' : '') +
     ' （ほかの絞りは同じものを渡す）'
   );
-}
-
-// 無いときは `-` 等で埋めない: 取れない軸に意味の決まった値を作らないため
-function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
-  return askedAt === undefined ? '' : `${askedAt} から`;
 }
 
 // 「未処理の合図は無い」は、器の行も読めない行もメモリの待ち行列も0件のときにしか言わない
@@ -9329,16 +9322,14 @@ export function createCloneTools(context: ToolContext) {
               describeDenialStreakForList(manager.classifierDenials),
               peerApprovalsLine(manager.pendingPeerApprovals),
               // 待ちの要約も抜粋を通す: `AskUserQuestion` の経路は質問文を連ねて runner 側のキャップを通らないため
-              // 欠けていても「実行許可」「undefined から」と嘘をつかず、`種別不明` にして時刻の断片を落とす
               // 件数にも上限を置く: `manager.waiting` は増える一方で、伸びると1本のマネージャーが予算を占有し他が押し出されるため
-              ...manager.waiting.slice(0, MANAGER_WAITING_LIST_LIMIT).map((item) => {
-                const askedAtNote = describeAskedAt(item.askedAt);
-                return (
-                  `  返事待ち(requestId: ${item.requestId}, ${describeWaitingKind(item.kind)}` +
-                  `${askedAtNote === '' ? '' : `, ${askedAtNote}`}): ` +
-                  excerptLine(item.summary, LIST_WAITING_EXCERPT)
-                );
-              }),
+              ...manager.waiting
+                .slice(0, MANAGER_WAITING_LIST_LIMIT)
+                .map(
+                  (item) =>
+                    `  返事待ち(requestId: ${item.requestId}, ${describeWaitingKind(item.kind)}, ` +
+                    `${item.askedAt} から): ${excerptLine(item.summary, LIST_WAITING_EXCERPT)}`,
+                ),
               manager.waiting.length > MANAGER_WAITING_LIST_LIMIT
                 ? `  …ほか ${manager.waiting.length - MANAGER_WAITING_LIST_LIMIT} 件の返事待ちは省略` +
                   `（全 ${manager.waiting.length} 件。manager_send に requestId を渡せば個別に答えられる）。`

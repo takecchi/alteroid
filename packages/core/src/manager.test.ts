@@ -4527,7 +4527,14 @@ describe('止めた結果を確かめる', () => {
       status: 'waiting_human',
       cwd: job.cwd,
       request: job.request,
-      waiting: [{ requestId: 'req-1', summary: '本番に触ってよいか' }],
+      waiting: [
+        {
+          requestId: 'req-1',
+          summary: '本番に触ってよいか',
+          kind: 'question',
+          askedAt: '2026-10-30T00:00:00.000Z',
+        },
+      ],
       sessionId: job.sessionId,
     });
     const s = setup(undefined, { stores, runner: fake.runner });
@@ -4547,7 +4554,7 @@ describe('止めた結果を確かめる', () => {
 
   // 前のデーモンが `ask` を台帳へ書いた後、受信箱へ投函し終える前に落ちると、確認はクローンへ届かないまま runner の中で待ち続ける。
   // runner は `ask` を送り直さないので、引き取りの側で配り直さないと委譲が返事待ちのまま詰まる。
-  it('再起動の引き取りで、runner に残っている返事待ちをクローンへ配り直す（kind の欠けた旧 runner の分は question として）', async () => {
+  it('再起動の引き取りで、runner に残っている返事待ちをクローンへ配り直す（kind ごと）', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...job, status: 'waiting_human' });
     const fake = swappableRunner();
@@ -4558,8 +4565,18 @@ describe('止めた結果を確かめる', () => {
       cwd: job.cwd,
       request: job.request,
       waiting: [
-        { requestId: 'req-perm', summary: 'Bash: git push', kind: 'permission' },
-        { requestId: 'req-old', summary: '本番に触ってよいか' },
+        {
+          requestId: 'req-perm',
+          summary: 'Bash: git push',
+          kind: 'permission',
+          askedAt: '2026-10-30T00:00:00.000Z',
+        },
+        {
+          requestId: 'req-old',
+          summary: '本番に触ってよいか',
+          kind: 'question',
+          askedAt: '2026-10-30T00:00:00.000Z',
+        },
       ],
       sessionId: job.sessionId,
     });
@@ -4590,7 +4607,14 @@ describe('止めた結果を確かめる', () => {
       status: 'waiting_human',
       cwd: job.cwd,
       request: job.request,
-      waiting: [{ requestId: 'req-1', summary: '本番に触ってよいか', kind: 'question' }],
+      waiting: [
+        {
+          requestId: 'req-1',
+          summary: '本番に触ってよいか',
+          kind: 'question',
+          askedAt: '2026-10-30T00:00:00.000Z',
+        },
+      ],
       sessionId: job.sessionId,
     });
     const s = setup(undefined, { stores, runner: fake.runner });

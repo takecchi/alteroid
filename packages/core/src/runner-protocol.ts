@@ -43,15 +43,14 @@ export const waitingKindSchema = z.enum(['question', 'permission']);
 export type WaitingKind = z.infer<typeof waitingKindSchema>;
 
 /**
- * `kind` と `askedAt` を必須にしない: 旧 runner の `/managers` 応答にこの2つが乗らない窓があり、必須だと
- * `HttpRunner#list()` の `safeParse` が要素ごと黙って捨て、待っていた確認まで消えるため。
- * 欠けたまま運び、デーモン側で既定値は作らない（`askedAt` を「取れなければいま」で埋めると値の意味が経路で変わる）。
+ * `kind` と `askedAt` は必須（#346 以前の runner は送らず、`HttpRunner#list()` の `safeParse` が要素ごと捨てる）。
+ * デーモン側で既定値は作らない（`askedAt` を「取れなければいま」で埋めると値の意味が経路で変わる）。
  */
 export const runnerWaitingSchema = z.object({
   requestId: z.string(),
   summary: z.string(),
-  kind: waitingKindSchema.optional(),
-  askedAt: isoDateTime.optional(),
+  kind: waitingKindSchema,
+  askedAt: isoDateTime,
 });
 
 export type RunnerWaiting = z.infer<typeof runnerWaitingSchema>;
@@ -984,11 +983,9 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     /** セッションの世代（`sessionGenerationSchema`）。 */
     sessionGeneration: sessionGenerationSchema,
     requestId: z.string(),
-    /** `kind` は元から必須（旧 runner も送っていた）なので optional にしない。 */
     kind: waitingKindSchema,
     summary: z.string(),
-    /** `runnerWaitingSchema.askedAt` と同じ理由で `.optional()`（旧 runner は送らない）。 */
-    askedAt: isoDateTime.optional(),
+    askedAt: isoDateTime,
     /**
      * 印は `summary` の先頭にも必ず書く（`【peer: <provider>】`）: 旧いデーモンはこの欄を落とすので、本文の印が無いと
      * 印の無い承認が作られる。判定はこの欄の有無で行い、文言では行わない。

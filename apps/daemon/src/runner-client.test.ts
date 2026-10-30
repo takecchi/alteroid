@@ -641,50 +641,9 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
   });
 });
 
-describe('旧 runner への問い合わせ（kind / askedAt を持たない /managers 応答）', () => {
-  function fetchLegacyManagers(): typeof fetch {
-    return (async (input: string | URL | Request) => {
-      const path = new URL(typeof input === 'string' ? input : input.toString()).pathname;
-      if (path === '/health') {
-        return Response.json({ runnerId: 'runner-legacy', workspacePath: '/workspace' });
-      }
-      if (path === '/managers') {
-        return Response.json({
-          managers: [
-            {
-              managerId: 'mgr-legacy',
-              status: 'waiting_human',
-              cwd: '/workspace/mgr-legacy',
-              request: '古い runner からの引き継ぎ',
-              waiting: [{ requestId: 'req-legacy', summary: '許可してよいか' }],
-              liveBackgroundTasks: 0,
-            },
-          ],
-        });
-      }
-      throw new Error(`このテストの偽 runner が想定していないパス: ${path}`);
-    }) as typeof fetch;
-  }
-
-  it('kind / askedAt を持たない waiting も list() から捨てられない', async () => {
-    const client = await createHttpRunner({
-      baseUrl: 'http://legacy.test',
-      token: TOKEN,
-      fetchFn: fetchLegacyManagers(),
-    });
-
-    const managers = await client.list();
-
-    expect(managers).toHaveLength(1);
-    const manager = managers.find((m) => m.managerId === 'mgr-legacy');
-    expect(manager?.waiting).toHaveLength(1);
-    expect(manager?.waiting[0]?.requestId).toBe('req-legacy');
-    expect(manager?.waiting[0]?.summary).toBe('許可してよいか');
-    expect(manager?.waiting[0]?.kind).toBeUndefined();
-    expect(manager?.waiting[0]?.askedAt).toBeUndefined();
-  });
-
-  it('kind / askedAt を持つ通常の waiting は今までどおり値ごと届く（回帰なし）', async () => {
+// 欄の無い waiting を持つ旧 runner の応答は読めないものとして数える（runner-client-list-dropped.test.ts, #5771）
+describe('runner への問い合わせ（kind / askedAt を持つ /managers 応答）', () => {
+  it('kind / askedAt を持つ waiting は値ごと届く', async () => {
     const fetchFn = (async (input: string | URL | Request) => {
       const path = new URL(typeof input === 'string' ? input : input.toString()).pathname;
       if (path === '/health') {

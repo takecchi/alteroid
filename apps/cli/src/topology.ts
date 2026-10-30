@@ -22,7 +22,7 @@ export interface TopologyView {
     startedAt: string;
     updatedAt: string;
     lastReportAt?: string;
-    waiting: { requestId: string; kind?: string; summary: string; askedAt?: string }[];
+    waiting: { requestId: string; kind: string; summary: string; askedAt: string }[];
     waitingOmitted?: number;
     awaitingBackground?: {
       tasks: number;
@@ -176,10 +176,8 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
         lines.push(`        最後の報告 ${formatAge(manager.lastReportAt, now)}`);
       }
       for (const waiting of manager.waiting) {
-        const asked =
-          waiting.askedAt === undefined ? '' : `（${formatAge(waiting.askedAt, now)}から）`;
         lines.push(
-          `        返事待ち ${waiting.kind ?? '種別不明'}${asked}: ${redactBody(waiting.summary)}`,
+          `        返事待ち ${waiting.kind}（${formatAge(waiting.askedAt, now)}から）: ${redactBody(waiting.summary)}`,
         );
       }
       if (manager.waitingOmitted !== undefined) {

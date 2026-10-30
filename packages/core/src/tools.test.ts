@@ -6023,27 +6023,6 @@ describe('クローンの道具', () => {
     expect(reply).toMatch(/…ほか \d+ 件の返事待ちは省略/);
   });
 
-  it('manager_list は kind/askedAt が無くても「実行許可」と決めつけない（#334 の追加コメント）', async () => {
-    const h = harness();
-    await h.call('manager_start', { request: 'A' });
-    const target = h.running[0];
-    if (!target) throw new Error('準備に失敗');
-    target.waiting = [
-      {
-        requestId: 'req-legacy',
-        summary: 'これでよいか',
-      },
-    ];
-
-    const reply = await h.call('manager_list', {});
-
-    expect(reply).toContain('req-legacy');
-    expect(reply).not.toContain('実行許可');
-    expect(reply).toContain('種別不明');
-    expect(reply).not.toContain('undefined');
-    expect(reply).not.toMatch(/,\s*から/);
-  });
-
   it('manager_list は runnerId を出す（未記録なら空欄にせずそう言う）', async () => {
     const h = harness();
     h.setAutoRunnerId('runner-shown');
