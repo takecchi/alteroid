@@ -7,12 +7,13 @@ import {
   PEER_PROVIDER_IDS,
   PEER_SOCKET_FILENAME,
   managerPeerModelsEnvKey,
-  resolvePeerModels,
   resolvePeerModelsOf,
   type AgentProviderId,
   type PeerSocketHost,
   type RunnerChildUser,
 } from '@alteroid/core';
+
+import { childUserIds } from './child-user-ids.js';
 
 /**
  * マネージャーの peer 専用ソケットを開く口と、名指しできるモデル。
@@ -39,9 +40,11 @@ export function planPeerSocket(
   dir: string = DEFAULT_PEER_SOCKET_DIR,
 ): PeerSocketPlan {
   // 綴りの不正は起動時に止める（資格が届いてからでは、誰も見ていないところで落ちる）
-  const models = resolvePeerModels(env, peerDefaultModelsOf);
+  // provider ごとに1回だけ解く: モデルの一覧と案内の文は同じ解決（出所つき）から作る。
+  const models: Partial<Record<AgentProviderId, readonly string[]>> = {};
   const notices = PEER_PROVIDER_IDS.map((provider) => {
     const open = resolvePeerModelsOf(env, provider, peerDefaultModelsOf);
+    if (open !== undefined) models[provider] = open.models;
     return (
       `alteroid-runner: peer（${provider}）は、${provider} の資格（ログインか CODEX_API_KEY）が` +
       `この器に届いたら開きます（再起動は要りません）。` +
@@ -53,13 +56,12 @@ export function planPeerSocket(
             : `（${managerPeerModelsEnvKey(provider)}）`))
     );
   });
+  const owner = childUserIds(childUser);
   return {
     openSocket: () =>
       createPeerSocketHost({
         socketPath: join(dir, PEER_SOCKET_FILENAME),
-        ...(childUser === undefined
-          ? {}
-          : { childUser: { uid: childUser.uid, gid: childUser.gid } }),
+        ...(owner === undefined ? {} : { childUser: owner }),
       }),
     models,
     notices,
