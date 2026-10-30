@@ -604,6 +604,7 @@ export {
   tailByCodePoints,
 } from './excerpt.js';
 export { denialActorTag, describeDenialFollowUp } from './denial-format.js';
+export { describeWaitingKind } from './waiting-kind-format.js';
 /** 並びを pg の `timestamptz` 順と揃えるため、オフセット付き ISO 時刻は文字列でなく実時刻で比べる。 */
 export { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 export {
