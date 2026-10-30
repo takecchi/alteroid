@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -44,7 +44,6 @@ describe('App が全 route を伏せ字の provider で包む', () => {
                     type="exchange"
                     summary={`x ${TOKEN} y ${SHA}`}
                     raw={{ text: TOKEN }}
-                    defaultOpen
                   />
                 </>
               ),
@@ -55,6 +54,9 @@ describe('App が全 route を伏せ字の provider で包む', () => {
       { initialEntries: ['/'] },
     );
     const { container } = render(<RouterProvider router={router} />);
+    // 日誌の行は閉じて描かれる: 本文（raw）は行を開く操作の後に出る
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByRole('button', { expanded: true })).toBeTruthy();
     expect(screen.getByText(/401/)).toBeTruthy();
     expect(container.textContent).toContain(SHA);
     expect(container.textContent).not.toContain(TOKEN);

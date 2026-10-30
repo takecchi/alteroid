@@ -23,7 +23,6 @@ export function JournalEntryRow({
   links,
   raw,
   isLast = false,
-  defaultOpen = false,
   rawBar = true,
 }: {
   at?: string;
@@ -37,11 +36,10 @@ export function JournalEntryRow({
   links?: ReactNode;
   raw: unknown;
   isLast?: boolean;
-  defaultOpen?: boolean;
   rawBar?: boolean;
 }) {
   const { body } = useDisplayText();
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useState(false);
 
   return (
     <div className={cn('px-4 py-2', !isLast && 'border-b border-border')}>
