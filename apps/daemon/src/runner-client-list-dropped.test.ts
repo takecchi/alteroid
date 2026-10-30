@@ -68,6 +68,48 @@ describe('HttpRunner#list() は飛ばした委譲の跡を残す（#1661）', ()
   });
 });
 
+describe('kind / askedAt を持たない waiting は読めないものとして数える（#5771）', () => {
+  const LEGACY_WAITING = [
+    {
+      managerId: 'mgr-legacy-waiting',
+      status: 'waiting_human',
+      cwd: '/workspace/c',
+      request: '古い runner',
+      waiting: [{ requestId: 'req-legacy', summary: '許可してよいか' }],
+    },
+  ];
+
+  it('欄の無い waiting を持つ委譲は list() から外れ、stderr に飛ばした跡が残る', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://legacy.test',
+      token: TOKEN,
+      fetchFn: fetchWithManagers([MANAGERS[0], ...LEGACY_WAITING]),
+    });
+
+    let managers: Awaited<ReturnType<typeof client.list>> = [];
+    const lines = await captureStderr(async () => {
+      managers = await client.list();
+    });
+
+    expect(managers.map((m) => m.managerId)).toEqual(['mgr-ok']);
+    expect(lines.join('\n')).toContain('managerId=mgr-legacy-waiting');
+  });
+
+  it('listRunnerManagers は欄の無い waiting の委譲を unreadableIds に載せる', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://legacy.test',
+      token: TOKEN,
+      fetchFn: fetchWithManagers(LEGACY_WAITING),
+    });
+
+    await captureStderr(async () => {
+      const result = await listRunnerManagers(client);
+      expect(result.states).toEqual([]);
+      expect(result.unreadableIds).toEqual(['mgr-legacy-waiting']);
+    });
+  });
+});
+
 describe('HttpRunner#listWithUnreadable() は、読めなかった委譲の managerId を返す（#1661）', () => {
   it('スキーマに落ちた委譲も、managerId だけは unreadableIds に載る（Pool が「居る」側に数える材料）', async () => {
     const client = await createHttpRunner({
