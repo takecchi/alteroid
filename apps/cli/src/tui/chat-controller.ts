@@ -34,6 +34,7 @@ import {
   interleaveApprovals,
   type ConversationApprovalsRead,
 } from '../conversation-approvals.js';
+import { EDIT_EMPTY_MESSAGE } from '../edit-empty-message.js';
 import { redactBody, redactedErrorMessage, redactError } from '../redact.js';
 import { resolveCommand } from './commands.js';
 import { Store } from './store.js';
@@ -72,9 +73,6 @@ function unansweredIds(read: ConversationApprovalsRead): string[] {
     .sort((a, b) => time(a.createdAt) - time(b.createdAt))
     .map((a) => a.id);
 }
-
-export const EDIT_EMPTY_MESSAGE =
-  '本文も添付も無いので送っていない（本文を打つか、/attach で添付を足す。やめるなら /edit-cancel）';
 
 interface EditInProgress {
   readonly id: string;

@@ -104,6 +104,7 @@ import {
   type InterruptTarget,
 } from './interrupt.js';
 import { redactBody, redactError } from './redact.js';
+import { EDIT_EMPTY_MESSAGE } from './edit-empty-message.js';
 import { turnFailureHint } from './turn-failure.js';
 import { withdrawnMessageText } from './withdrawn-message.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
@@ -4177,9 +4178,6 @@ export function retireListedMessage(listed: Listed, id: string): void {
     `（編集を受け付けました。${index >= 0 ? `[${String(index + 1)}] は` : 'その発言は'}置き換えた前の発言なので、もう指せません。新しい並びは /conversation で読み直してください）\n`,
   );
 }
-
-export const EDIT_EMPTY_MESSAGE =
-  '本文も添付も無いので送っていません（本文を打つか、/attach で添付を足してください。やめるなら /edit-cancel）';
 
 // 添えかけに別の添付が残っているときは始めない: 元の添付と混ざり、取り消しで巻き添えにする。
 export function runEditDraftCommand(
