@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApprovalEntry } from '~/components/approval-entry';
 import {
@@ -23,29 +23,20 @@ import {
 } from '@alteroid/ui';
 import { ApiError, useAnswerApprovals, useApprovals } from '@alteroid/swr';
 import {
+  omitKey,
+  useApprovalDraftState,
+  usePersistApprovalDrafts,
+} from '~/lib/use-approval-draft-state';
+import {
   chatDraftEpoch,
   describeApprovalLeftover,
-  isEmptyQuestionsDraft,
-  loadApprovalDrafts,
-  loadApprovalLeftoverSources,
-  saveApprovalDrafts,
   saveApprovalLeftoverSources,
-  settleApprovalDraft,
   settleStoredApprovalDraft,
-  type ApprovalDrafts,
   type ApprovalLeftoverSource,
   type ApprovalLeftoverSources,
   type PendingApproval,
   type UnreadableApproval,
 } from '@alteroid/logic';
-
-/** `Record` から1つの key を落とした新しい `Record` を作る（同じ参照は返さない）。 */
-function without<T>(record: Record<string, T>, key: string): Record<string, T> {
-  if (!(key in record)) return record;
-  const next = { ...record };
-  delete next[key];
-  return next;
-}
 
 export default function Approvals() {
   /**
@@ -84,21 +75,10 @@ export default function Approvals() {
    *
    * **`sessionStorage` にも写す**。「回答済み」タブへ移るとこのページは unmount
    * されるので、state だけでは書きかけが黙って消える。初期値は保存したものから読む。
+   * 持ち方（epoch・畳み方）は会話の画面と同じ `useApprovalDraftState` が持つ。
    */
-  const [drafts, setDraftsState] = useState<ApprovalDrafts>(loadApprovalDrafts);
-  /**
-   * 書きかけを最後に決めた時点の `chatDraftEpoch()`。ログアウトで消したあとに、メモリに残った
-   * 書きかけが書き戻らないよう、保存はこの値が今と同じときだけ行う。
-   */
-  const draftsEpoch = useRef(chatDraftEpoch());
-  const setDrafts = useCallback((update: React.SetStateAction<ApprovalDrafts>) => {
-    draftsEpoch.current = chatDraftEpoch();
-    setDraftsState(update);
-  }, []);
-  /** 答えが通った承認の、本文と設問の控え（残った下書きを見せるため）。 */
-  const [leftoverSources, setLeftoverSources] = useState<ApprovalLeftoverSources>(
-    loadApprovalLeftoverSources,
-  );
+  const draftState = useApprovalDraftState();
+  const { drafts, leftoverSources } = draftState;
   /** 直前のまとめ送信で駄目だった id ごとの理由。カードの下に出す。 */
   const [bulkErrors, setBulkErrors] = useState<Record<string, string>>({});
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -124,43 +104,19 @@ export default function Approvals() {
   }
 
   function setDraft(id: string, text: string): void {
-    setDrafts((current) => ({
-      ...current,
-      texts: text === '' ? without(current.texts, id) : { ...current.texts, [id]: text },
-    }));
+    draftState.setText(id, text);
   }
 
   function setQuestionsDraft(id: string, draft: ApprovalQuestionsDraft): void {
-    setDrafts((current) => ({
-      ...current,
-      questions: isEmptyQuestionsDraft(draft)
-        ? without(current.questions, id)
-        : { ...current.questions, [id]: draft },
-    }));
+    draftState.setQuestions(id, draft);
   }
 
-  /**
-   * 答えが通った。**送った時点の下書き（`sent`）と同じ項目だけ**畳み、応答を待つ間に打ち足した
-   * 分は残す。残したものは、承認が未回答の一覧から消えたあとも
-   * 「送らなかった下書きが残っている」として見せる（`leftovers`）。
-   */
   function settleDraft(approval: PendingApproval, sent: SentApprovalDraft): void {
-    setDrafts((current) => settleApprovalDraft(current, approval.id, sent));
-    setLeftoverSources((current) => ({
-      ...current,
-      [approval.id]: { question: approval.question, questions: approval.questions ?? undefined },
-    }));
-    setBulkErrors((current) => without(current, approval.id));
+    draftState.settle(approval.id, approval, sent);
+    setBulkErrors((current) => omitKey(current, approval.id));
   }
 
-  /** 残った下書きを使い手が閉じる（写し終えた・要らない）。 */
-  function discardLeftover(id: string): void {
-    setDrafts((current) => ({
-      texts: without(current.texts, id),
-      questions: without(current.questions, id),
-    }));
-    setLeftoverSources((current) => without(current, id));
-  }
+  const discardLeftover = draftState.discard;
 
   // 今読み込めている未回答の一覧に実在するものだけを対象にする。別経路で
   // 先に片付いた下書きを、まとめ送信の対象へ混ぜないため。
@@ -175,9 +131,7 @@ export default function Approvals() {
   );
   // 一覧に無い id の下書きも保存先から落とさない。一覧から外れたのが決着なのか、取り直しの前の
   // 古い一覧なのか（チャットで書いた新しい承認）を、この画面は区別できないため。
-  useEffect(() => {
-    saveApprovalDrafts(drafts, draftsEpoch.current);
-  }, [drafts]);
+  usePersistApprovalDrafts(draftState);
   /** 一覧で最後に見た承認（外れたあとも本文を見せるため）。 */
   const [seenApprovals, setSeenApprovals] = useState<ApprovalLeftoverSources>({});
   const unseen = (approvalsList ?? []).filter((approval) => !(approval.id in seenApprovals));
@@ -381,14 +335,7 @@ export default function Approvals() {
                 onFailed={(caught) => {
                   // 409 は先に決着していた。取り直しでカードごと消えるので、書いた答えを残りの下書きへ移す。
                   if (caught instanceof ApiError && caught.status === 409) {
-                    setLeftoverSources((current) => ({
-                      ...current,
-                      [approval.id]: {
-                        origin: 'conflict',
-                        question: approval.question,
-                        questions: approval.questions ?? undefined,
-                      },
-                    }));
+                    draftState.noteConflict(approval.id, approval);
                   }
                 }}
                 bulkError={bulkErrors[approval.id]}
