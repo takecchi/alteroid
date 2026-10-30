@@ -19,7 +19,6 @@ export default defineConfig({
     'src/attachment-usage-keys.ts',
     'src/redact.ts',
     'src/manager-activity.ts',
-    'src/job-status-running.ts',
     'src/cgroup-events-format.ts',
     'src/system-error-format.ts',
     'src/unpushed-work-observation-format.ts',
