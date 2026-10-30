@@ -89,6 +89,18 @@ describe('progress_read — 作業の進捗を読む道具（#2241 の 3）', ()
     expect(describeProgress(withJobs(2))).toContain('読めない委譲の行が 2 件ある');
   });
 
+  it('状態別の「判定できない」は 0 件でも数つきで出す（#5773）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+    const view = await readProgress(await seed(), { now: NOW });
+    const withUnjudgeable = (unjudgeable: number) => ({
+      ...view,
+      backlog: { ...view.backlog, byState: { ...view.backlog.byState, unjudgeable } },
+    });
+    expect(describeProgress(withUnjudgeable(0))).toContain('判定できない（会話に結んでいない） 0');
+    expect(describeProgress(withUnjudgeable(3))).toContain('判定できない（会話に結んでいない） 3');
+  });
+
   it('windowHours の既定は 168、指定するとその窓になる', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(NOW);

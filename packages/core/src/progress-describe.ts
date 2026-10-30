@@ -24,13 +24,6 @@ function at(iso: string | null, now: number): string {
   return `${iso}（${formatElapsedAgo(iso, now)}）`;
 }
 
-/** `byState.unjudgeable` を任意にする: 古いデーモンの応答には無く、CLI は応答を型で検査せず渡すから。無いものは 0 と書かず出さない。 */
-export type ProgressViewInput = Omit<ProgressView, 'backlog'> & {
-  backlog: Omit<ProgressView['backlog'], 'byState'> & {
-    byState: Omit<ProgressView['backlog']['byState'], 'unjudgeable'> & { unjudgeable?: number };
-  };
-};
-
 /**
  * 固定の文言を参照にする口（`ToolContext.foldFixed` と同じ型）。数・時刻・id・理由は畳まない。
  * 既定は全文を返す口: CLI・HTTP・web は同じ関数を使い、参照が指す先（会話の上の全文）を持たないため。
@@ -38,7 +31,7 @@ export type ProgressViewInput = Omit<ProgressView, 'backlog'> & {
 export type ProgressFold = (id: string, full: string, ref: string) => string;
 const FULL: ProgressFold = (_id, full) => full;
 
-export function describeProgress(view: ProgressViewInput, fold: ProgressFold = FULL): string {
+export function describeProgress(view: ProgressView, fold: ProgressFold = FULL): string {
   const { window, backlog, inProgress, throughput, forecast, github, observedAt } = view;
   const now = new Date(observedAt).getTime();
   const lines: string[] = [];
@@ -75,10 +68,8 @@ export function describeProgress(view: ProgressViewInput, fold: ProgressFold = F
     `  状態別: 未着手 ${String(state.untouched)} / ` +
       `返答済み・未クローズ ${String(state.responded)} / ` +
       `委譲あり ${String(state.delegated)}${fold('progress:state-overlap', '（他と重なりうる）', '（重なりうる）')} / ` +
-      `人間起点でない ${String(state.notApplicable)}` +
-      (state.unjudgeable === undefined
-        ? ''
-        : ` / ${fold('progress:state-unjudgeable', '判定できない（会話に結んでいない）', '判定できない（未結合）')} ${String(state.unjudgeable)}`),
+      `人間起点でない ${String(state.notApplicable)} / ` +
+      `${fold('progress:state-unjudgeable', '判定できない（会話に結んでいない）', '判定できない（未結合）')} ${String(state.unjudgeable)}`,
   );
 
   lines.push('', '実施中（委譲）');
