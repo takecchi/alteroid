@@ -7,7 +7,8 @@ import type { CommitmentOrigin } from '@alteroid/core';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 import { formatDateTime, type Commitment } from '@alteroid/logic';
 
-import Commitments, { readableExternalBody } from './commitments';
+import Commitments from './commitments';
+import { readableExternalBody } from './commitments-body';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

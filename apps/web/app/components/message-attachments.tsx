@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { fetchAttachment, useApi } from '@alteroid/swr';
 import { formatBytes, isPreviewableImage } from '@alteroid/logic';
@@ -7,10 +7,11 @@ import { Button, ZoomableImage } from '@alteroid/ui';
 
 import { describeAttachmentFailure } from '~/lib/error-text';
 import { saveBlob } from '~/lib/save-blob';
+import { useAttachmentObjectUrl } from '~/lib/use-attachment-object-url';
 
 /**
  * `React.lazy` で読み込む（`routes/chat.tsx`）: バンドル予算 1.125 MiB のため、最初の読み込みへ入れない。
- * `<img src>` に URL を直接入れない: Bearer を運べないので、fetch した `Blob` を `blob:` URL にする。
+ * 画像は `blob:` URL にして出す（取り方は `useAttachmentObjectUrl`）。
  */
 export default function MessageAttachments({
   attachments,
@@ -37,25 +38,7 @@ function describe(error: unknown): string {
 }
 
 function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
-  const api = useApi();
-  const [state, setState] = useState<{ url: string } | { error: string } | undefined>();
-  useEffect(() => {
-    const controller = new AbortController();
-    let created: string | undefined;
-    fetchAttachment(api, attachment.id, { signal: controller.signal }).then(
-      (blob) => {
-        created = URL.createObjectURL(blob);
-        setState({ url: created });
-      },
-      (error: unknown) => {
-        if (!controller.signal.aborted) setState({ error: describe(error) });
-      },
-    );
-    return () => {
-      controller.abort();
-      if (created !== undefined) URL.revokeObjectURL(created);
-    };
-  }, [api, attachment.id]);
+  const state = useAttachmentObjectUrl(attachment.id);
   if (state === undefined) {
     return (
       <span className="block size-24 animate-pulse rounded-md bg-muted" role="status">
@@ -69,7 +52,7 @@ function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
         role="alert"
         className="block max-w-full min-w-0 rounded-md border border-border px-2 py-1 text-xs break-words"
       >
-        {attachment.name}: {state.error}
+        {attachment.name}: {describe(state.error)}
       </span>
     );
   }

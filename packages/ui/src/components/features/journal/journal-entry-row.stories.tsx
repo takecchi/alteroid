@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
+import { userEvent, within } from 'storybook/test';
 
 import { Card } from '../../common';
 
@@ -39,10 +40,14 @@ export const Decision: Story = {
   },
 };
 
+// 行を開く操作（要旨の左のボタンを押す）で開いた状態を見せる
+async function openRow({ canvasElement }: { canvasElement: HTMLElement }) {
+  await userEvent.click(within(canvasElement).getByRole('button', { expanded: false }));
+}
+
 export const Open: Story = {
   args: {
     ...Decision.args,
-    defaultOpen: true,
     links: (
       <p className="text-xs">
         <a href="#" className="font-mono text-primary hover:underline">
@@ -51,6 +56,7 @@ export const Open: Story = {
       </p>
     ),
   } as Story['args'],
+  play: openRow,
 };
 
 export const List: Story = {
@@ -83,6 +89,6 @@ export const PlainTimeWithoutRawBar: Story = {
   args: {
     ...Decision.args,
     rawBar: false,
-    defaultOpen: true,
   },
+  play: openRow,
 };
