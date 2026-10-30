@@ -242,8 +242,7 @@ function UsageCard({
         count: number;
         totalBytes: number;
         byFrom: Record<AttachmentFrom, { count: number; totalBytes: number }>;
-        // 別デプロイの古いデーモンの応答には無いことがある（無ければ鍵の一覧は出さない）
-        byIntegrationKey?: Record<string, { count: number; totalBytes: number }> | undefined;
+        byIntegrationKey: Record<string, { count: number; totalBytes: number }>;
       }
     | undefined;
 }) {

@@ -51,7 +51,7 @@ function baseBody(overrides: Record<string, unknown> = {}) {
         medianHours: 30.25,
         buckets: { under1h: 1, under24h: 4, under7d: 6, over7d: 1 },
       },
-      byState: { untouched: 6, responded: 3, delegated: 2, notApplicable: 4 },
+      byState: { untouched: 6, responded: 3, delegated: 2, notApplicable: 4, unjudgeable: 0 },
       completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs: 0 },
     },
     inProgress: {
@@ -68,6 +68,7 @@ function baseBody(overrides: Record<string, unknown> = {}) {
       commitmentsOpened: 4,
       commitmentsClosed: 9,
       delegationsEnded: { count: 7, basis: 'updatedAt' },
+      mayBeUndercounted: false,
     },
     forecast: {
       state: 'estimated',
@@ -144,6 +145,23 @@ describe('/progress 画面 — 4枚', () => {
       ),
     ).toBeTruthy();
     expect(backlog.queryByText(/数が実際より少ない可能性/)).toBeNull();
+  });
+
+  it('進み具合に、会話に結べず判定できない件数も出す', async () => {
+    stubProgress({
+      body: baseBody({
+        backlog: {
+          ...baseBody().backlog,
+          byState: { untouched: 6, responded: 3, delegated: 2, notApplicable: 4, unjudgeable: 5 },
+        },
+      }),
+    });
+    renderPage();
+
+    const backlog = within(await card('未完了の仕事'));
+    expect(
+      backlog.getByText(/人間からの依頼ではない 4 \/ 判定できない（会話に結んでいない） 5/),
+    ).toBeTruthy();
   });
 
   it('実施中: 実行中・返答待ち・連絡が取れないと、最後の報告の古さ・まだ報告が無い依頼を出す', async () => {
@@ -391,17 +409,12 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     expect(within(await card('未完了の仕事')).queryByText(/数が実際より少ない可能性/)).toBeNull();
   });
 
-  it('対照: mayBeUndercounted が偽、または欄が無い（古いデーモン）なら、完了の速度に注記を出さず、落ちない（#3698）', async () => {
+  it('対照: mayBeUndercounted が偽なら、完了の速度に注記を出さない（#3698）', async () => {
     stubProgress({
       body: baseBody({
         throughput: { ...baseBody().throughput, mayBeUndercounted: false },
       }),
     });
-    renderPage();
-    expect(within(await card('完了の速度')).queryByText(/実際より少ない可能性/)).toBeNull();
-    cleanup();
-
-    stubProgress();
     renderPage();
     expect(within(await card('完了の速度')).queryByText(/実際より少ない可能性/)).toBeNull();
   });
